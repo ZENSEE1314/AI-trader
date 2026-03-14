@@ -1,0 +1,15 @@
+{
+  "version": 2,
+  "name": "cryptobot",
+  "functions": {
+    "api/monitor.js": {
+      "maxDuration": 60
+    }
+  },
+  "crons": [
+    {
+      "path": "/api/monitor",
+      "schedule": "*/30 * * * *"
+    }
+  ]
+}
