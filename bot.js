@@ -1,6 +1,7 @@
 // ============================================================
 // Autonomous Crypto Trading Bot — Render.com (24/7 persistent)
 // Telegram commands: /status /close /pause /resume /next /bal
+// All USDT pairs, 5m timeframe, RSI enabled
 // ============================================================
 
 const { USDMClient } = require('binance');
@@ -20,9 +21,13 @@ const CONFIG = {
   SL_PCT:        0.015,
   RISK_PCT:      0.92,
   MIN_BALANCE:   2,
-  MIN_VOL_M:     50,
-  MIN_SCORE:     10,
+  MIN_VOL_M:     10,        // Lowered to catch more coins
+  MIN_SCORE:     15,        // Slightly higher with RSI
   MAX_POSITIONS: 1,
+  RSI_PERIOD:    14,
+  RSI_BUY_MAX:   45,        // Buy when RSI < 45 (oversold/near oversold)
+  CANDLE_INTERVAL: '5m',    // 5-minute candles (closest to 10min request)
+  SCAN_LIMIT:    150,       // Scan top 150 by volume (more coins)
   BLACKLIST: [
     'ALPACAUSDT','BNXUSDT','ALPHAUSDT','BANANAS31USDT',
     'LYNUSDT','PORT3USDT','RVVUSDT','BSWUSDT',
@@ -43,6 +48,26 @@ function now() {
   });
 }
 function log(msg) { console.log(`[${now()}] ${msg}`); }
+
+// Calculate RSI
+function calculateRSI(closes, period = 14) {
+  if (closes.length < period + 1) return 50;
+  
+  let gains = 0, losses = 0;
+  
+  for (let i = 1; i <= period; i++) {
+    const change = closes[closes.length - i] - closes[closes.length - i - 1];
+    if (change >= 0) gains += change;
+    else losses -= change;
+  }
+  
+  const avgGain = gains / period;
+  const avgLoss = losses / period;
+  
+  if (avgLoss === 0) return 100;
+  const rs = avgGain / avgLoss;
+  return 100 - (100 / (1 + rs));
+}
 
 // ── GET PUBLIC IP ────────────────────────────────────────────
 async function getPublicIP() {
@@ -154,10 +179,8 @@ async function closeAllPositions(client) {
     const side = amt > 0 ? 'SELL' : 'BUY';
     const qty  = Math.abs(amt);
 
-    // Cancel open orders first
     try { await client.cancelAllOpenOrders({ symbol: sym }); } catch(_) {}
 
-    // Market close
     await client.submitNewOrder({ symbol: sym, side, type: 'MARKET', quantity: qty, reduceOnly: 'true' });
     log(`Closed ${sym} ${qty}`);
     await notify(`✅ *Position Closed*\n${sym} | qty=${qty}\nClosed at market price.`);
@@ -213,78 +236,117 @@ async function findBestTrade(client) {
   log('Scanning market...');
   const tickers = await client.get24hrChangeStatistics();
 
-  const candidates = tickers.filter(t =>
-    t.symbol.endsWith('USDT') &&
-    !CONFIG.BLACKLIST.includes(t.symbol) &&
-    parseFloat(t.quoteVolume) > CONFIG.MIN_VOL_M * 1e6 &&
-    parseFloat(t.priceChangePercent) > 0
-  );
+  // Get all USDT pairs with volume > MIN_VOL_M, sorted by volume
+  const candidates = tickers
+    .filter(t =>
+      t.symbol.endsWith('USDT') &&
+      !CONFIG.BLACKLIST.includes(t.symbol) &&
+      parseFloat(t.quoteVolume) > CONFIG.MIN_VOL_M * 1e6 &&
+      parseFloat(t.priceChangePercent) > -5  // Allow small dips too
+    )
+    .sort((a, b) => parseFloat(b.quoteVolume) - parseFloat(a.quoteVolume))
+    .slice(0, CONFIG.SCAN_LIMIT);
 
-  const top40 = candidates
-    .sort((a,b) => parseFloat(b.quoteVolume) - parseFloat(a.quoteVolume))
-    .slice(0, 40);
-
-  log(`Analyzing ${top40.length} candidates...`);
+  log(`Analyzing ${candidates.length} candidates...`);
   const scored = [];
 
-  for (const t of top40) {
+  for (const t of candidates) {
     const sym = t.symbol;
     try {
       const brackets = await client.getLeverageBrackets({ symbol: sym });
       if (!brackets?.length) continue;
       const maxLev = brackets[0]?.brackets[0]?.initialLeverage || 20;
 
-      const klines = await client.getKlines({ symbol: sym, interval: '15m', limit: 16 });
+      // Use 5m candles for faster signals
+      const klines = await client.getKlines({ 
+        symbol: sym, 
+        interval: CONFIG.CANDLE_INTERVAL, 
+        limit: 20 
+      });
+      
       const closes = klines.map(k => parseFloat(k[4]));
       const opens  = klines.map(k => parseFloat(k[1]));
+      const highs  = klines.map(k => parseFloat(k[2]));
+      const lows   = klines.map(k => parseFloat(k[3]));
       const vols   = klines.map(k => parseFloat(k[5]));
 
+      // Calculate RSI
+      const rsi = calculateRSI(closes, CONFIG.RSI_PERIOD);
+
+      // Green candle streak
       let streak = 0;
       for (let i = closes.length-1; i >= 0; i--) {
         if (closes[i] > opens[i]) streak++;
         else break;
       }
 
-      const recentVol = vols.slice(-2).reduce((a,b)=>a+b,0);
-      const prevVol   = vols.slice(-4,-2).reduce((a,b)=>a+b,0);
-      const volRising = recentVol > prevVol;
+      // Volume trend
+      const recentVol = vols.slice(-3).reduce((a,b)=>a+b,0) / 3;
+      const prevVol   = vols.slice(-6,-3).reduce((a,b)=>a+b,0) / 3;
+      const volRising = recentVol > prevVol * 1.1;
+
+      // Price action
       const n         = closes.length;
-      const mom1h     = (closes[n-1] - closes[n-5]) / closes[n-5] * 100;
-      const mom30m    = (closes[n-1] - closes[n-3]) / closes[n-3] * 100;
+      const mom1h     = (closes[n-1] - closes[n-12]) / closes[n-12] * 100;  // ~1h momentum
+      const mom30m    = (closes[n-1] - closes[n-6]) / closes[n-6] * 100;    // ~30m momentum
       const chg24h    = parseFloat(t.priceChangePercent);
       const price     = parseFloat(t.lastPrice);
-      const high      = parseFloat(t.highPrice);
-      const distHigh  = (price - high) / high * 100;
+      const high24    = parseFloat(t.highPrice);
+      const distHigh  = (price - high24) / high24 * 100;
 
+      // Funding rate
       const funding   = await client.getFundingRate({ symbol: sym, limit: 1 });
       const fundRate  = funding.length ? parseFloat(funding[0].fundingRate)*100 : 0;
 
+      // SCORING SYSTEM
       let score = 0;
-      score += Math.min(chg24h, 20) * 0.3;
-      score += mom1h   * 4;
-      score += mom30m  * 2;
-      score += streak  * 5;
-      if (volRising)       score += 6;
-      if (distHigh > -2)   score += 8;
-      if (distHigh > -0.5) score += 5;
-      if (fundRate < 0)    score += 5;
-      if (fundRate > 0.03) score -= 12;
-      if (chg24h > 50)     score -= 20;
+      
+      // RSI scoring (buy when oversold/near oversold)
+      if (rsi < 30) score += 25;           // Deep oversold - strong buy
+      else if (rsi < 40) score += 15;      // Oversold - good buy
+      else if (rsi < CONFIG.RSI_BUY_MAX) score += 8;  // Near oversold
+      else if (rsi > 70) score -= 20;      // Overbought - avoid
+      
+      score += Math.min(chg24h, 20) * 0.4;
+      score += mom1h * 3;
+      score += mom30m * 2;
+      score += streak * 4;
+      if (volRising)       score += 8;
+      if (distHigh > -2)   score += 6;
+      if (distHigh > -0.5) score += 4;
+      if (fundRate < 0)    score += 4;
+      if (fundRate > 0.05) score -= 10;
+      if (chg24h > 50)     score -= 15;
 
-      scored.push({ sym, price, chg24h, mom1h, mom30m, streak,
-        distHigh, fundRate, volRising, score,
-        leverage: Math.min(CONFIG.LEVERAGE, maxLev) });
+      // Skip if RSI too high (already pumped)
+      if (rsi > CONFIG.RSI_BUY_MAX + 10) {
+        score -= 30;
+      }
+
+      scored.push({ 
+        sym, price, chg24h, mom1h, mom30m, streak,
+        distHigh, fundRate, volRising, score, rsi,
+        leverage: Math.min(CONFIG.LEVERAGE, maxLev) 
+      });
     } catch(_) {}
   }
 
   if (!scored.length) return null;
   scored.sort((a,b) => b.score - a.score);
 
-  log('Top 5:');
-  scored.slice(0,5).forEach((s,i) =>
-    log(`  ${i+1}. ${s.sym} score=${s.score.toFixed(1)} 24h=${s.chg24h.toFixed(2)}% 1h=${s.mom1h.toFixed(2)}% streak=${s.streak}`)
+  log('Top 10:');
+  scored.slice(0,10).forEach((s,i) =>
+    log(`  ${i+1}. ${s.sym} score=${s.score.toFixed(1)} RSI=${s.rsi.toFixed(1)} 24h=${s.chg24h.toFixed(2)}%`)
   );
-  return scored[0];
+  
+  // Return best if score >= MIN_SCORE
+  if (scored[0].score >= CONFIG.MIN_SCORE) {
+    return scored[0];
+  }
+  
+  // Return null but log the best
+  log(`Best candidate ${scored[0].sym} score=${scored[0].score.toFixed(1)} (below threshold ${CONFIG.MIN_SCORE})`);
+  return null;
 }
 
 // ── OPEN TRADE ───────────────────────────────────────────────
@@ -371,11 +433,11 @@ async function cycle(client, forced = false) {
 
     const pick = await findBestTrade(client);
 
-    if (!pick || pick.score < CONFIG.MIN_SCORE) {
+    if (!pick) {
       await notify(
         `🔍 *Bot — ${now()}*\n` +
         `No strong setup found. Waiting...\n` +
-        `Best: *${pick?.sym||'none'}* (score: ${pick?.score?.toFixed(1)||'0'})\n` +
+        `Scanned ${CONFIG.SCAN_LIMIT}+ coins, none met criteria\n` +
         `💰 Wallet: *$${wallet.toFixed(4)} USDT*`
       );
       return;
@@ -390,7 +452,7 @@ async function cycle(client, forced = false) {
       `Qty: \`${result.qty}\`\n` +
       `🎯 TP: \`$${result.tp}\` (+4%)\n` +
       `🛑 SL: \`$${result.sl}\` (-1.5%)\n\n` +
-      `Signal: 24h=*${pick.chg24h.toFixed(2)}%* | 1h=*${pick.mom1h.toFixed(2)}%* | streak=*${pick.streak}* candles\n` +
+      `Signal: RSI=*${pick.rsi.toFixed(1)}* | 24h=*${pick.chg24h.toFixed(2)}%* | 1h=*${pick.mom1h.toFixed(2)}%*\n` +
       `💰 Wallet: *$${avail.toFixed(4)} USDT*\n\n` +
       `_Commands: /status /close /pause /help_`
     );
@@ -418,8 +480,10 @@ async function start() {
   const ip = await getPublicIP();
   log(`====================================`);
   log(`  CryptoBot Starting`);
-  log(`  Interval: ${INTERVAL_MIN} min | Leverage: ${CONFIG.LEVERAGE}x`);
+  log(`  Interval: ${INTERVAL_MIN} min | Timeframe: ${CONFIG.CANDLE_INTERVAL}`);
+  log(`  Leverage: ${CONFIG.LEVERAGE}x | RSI Buy < ${CONFIG.RSI_BUY_MAX}`);
   log(`  TP: +${CONFIG.TP_PCT*100}% | SL: -${CONFIG.SL_PCT*100}%`);
+  log(`  Scanning: ${CONFIG.SCAN_LIMIT} coins | Min Vol: $${CONFIG.MIN_VOL_M}M`);
   log(`  Server IP: ${ip}`);
   log(`====================================`);
 
@@ -428,7 +492,8 @@ async function start() {
   await notify(
     `🤖 *CryptoBot Online — ${now()}*\n\n` +
     `Strategy: LONG x${CONFIG.LEVERAGE} | TP +${CONFIG.TP_PCT*100}% | SL -${CONFIG.SL_PCT*100}%\n` +
-    `Scanning every *${INTERVAL_MIN} minutes*\n` +
+    `Timeframe: *${CONFIG.CANDLE_INTERVAL}* | RSI Buy < *${CONFIG.RSI_BUY_MAX}*\n` +
+    `Scanning *${CONFIG.SCAN_LIMIT}+* coins every *${INTERVAL_MIN} min*\n` +
     `🌐 Server IP: \`${ip}\`\n\n` +
     `*Commands:*\n` +
     `/status — position & PnL\n` +
