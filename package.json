@@ -2,10 +2,10 @@
   "name": "cryptobot",
   "version": "1.0.0",
   "description": "Autonomous Binance Futures Trading Bot",
-  "main": "index.js",
+  "main": "bot.js",
   "scripts": {
-    "dev": "node api/monitor.js",
-    "start": "node api/monitor.js"
+    "start": "node bot.js",
+    "dev": "node bot.js"
   },
   "dependencies": {
     "binance": "^2.8.0",

@@ -1,0 +1,18 @@
+services:
+  - type: worker
+    name: cryptobot
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: node bot.js
+    envVars:
+      - key: BINANCE_API_KEY
+        sync: false
+      - key: BINANCE_API_SECRET
+        sync: false
+      - key: TELEGRAM_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
+      - key: INTERVAL_MIN
+        value: "30"
