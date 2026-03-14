@@ -14,6 +14,9 @@ const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const TELEGRAM_CHAT  = process.env.TELEGRAM_CHAT_ID;
 const INTERVAL_MIN   = parseInt(process.env.INTERVAL_MIN || '30');
 
+// Startup check
+console.log(`[BOOT] API_KEY set: ${!!API_KEY} | TELEGRAM set: ${!!TELEGRAM_TOKEN} | CHAT_ID: ${TELEGRAM_CHAT} | Interval: ${INTERVAL_MIN}min`);
+
 // ── STRATEGY CONFIG ──────────────────────────────────────────
 const CONFIG = {
   LEVERAGE:     20,
