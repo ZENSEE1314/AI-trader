@@ -231,6 +231,76 @@ async function sendStatus(client) {
   }
 }
 
+// ── PRICE SPIKE ALERT (5% in 3 min) ─────────────────────────
+const priceSnapshots = [];             // [{ ts, prices: Map<sym,price> }]
+const spikeAlertCooldown = new Map();  // sym -> last alert timestamp
+const SPIKE_PCT        = 5;
+const SPIKE_WINDOW_MS  = 3 * 60 * 1000;   // 3 minutes reference window
+const SPIKE_COOLDOWN_MS = 10 * 60 * 1000; // same coin won't re-alert for 10 min
+
+async function checkPriceSpikes() {
+  try {
+    const res  = await fetch('https://fapi.binance.com/fapi/v1/ticker/price');
+    const data = await res.json();
+    const ts   = Date.now();
+
+    const currentPrices = new Map();
+    for (const t of data) {
+      if (t.symbol.endsWith('USDT')) {
+        currentPrices.set(t.symbol, parseFloat(t.price));
+      }
+    }
+
+    // Store snapshot
+    priceSnapshots.push({ ts, prices: currentPrices });
+    while (priceSnapshots.length > 10) priceSnapshots.shift(); // keep ~10 min
+
+    if (priceSnapshots.length < 2) return;
+
+    // Find snapshot closest to 3 min ago
+    const targetTs = ts - SPIKE_WINDOW_MS;
+    let ref = priceSnapshots[0];
+    for (const snap of priceSnapshots) {
+      if (Math.abs(snap.ts - targetTs) < Math.abs(ref.ts - targetTs)) ref = snap;
+    }
+
+    // Skip if reference is too fresh (< 2 min old)
+    if (ts - ref.ts < 2 * 60 * 1000) return;
+
+    const alerts = [];
+    for (const [sym, curPrice] of currentPrices) {
+      const refPrice = ref.prices.get(sym);
+      if (!refPrice) continue;
+
+      const pct = ((curPrice - refPrice) / refPrice) * 100;
+      if (Math.abs(pct) < SPIKE_PCT) continue;
+
+      const lastAlert = spikeAlertCooldown.get(sym) || 0;
+      if (ts - lastAlert < SPIKE_COOLDOWN_MS) continue;
+
+      spikeAlertCooldown.set(sym, ts);
+      alerts.push({ sym, pct, curPrice });
+    }
+
+    // Sort biggest move first, cap at 5 alerts per check
+    alerts.sort((a, b) => Math.abs(b.pct) - Math.abs(a.pct));
+    for (const a of alerts.slice(0, 5)) {
+      const dir  = a.pct > 0 ? '🚀 PUMP' : '📉 DUMP';
+      const sign = a.pct > 0 ? '+' : '';
+      await notify(
+        `⚡ *Price Spike — ${now()}*\n\n` +
+        `${dir}: *${a.sym}*\n` +
+        `Move: *${sign}${a.pct.toFixed(2)}%* in 3 min\n` +
+        `Price: \`$${a.curPrice}\``
+      );
+    }
+    if (alerts.length) log(`Spike alerts sent: ${alerts.length}`);
+
+  } catch(e) {
+    log(`Spike check error: ${e.message}`);
+  }
+}
+
 // ── MARKET SCANNER ───────────────────────────────────────────
 async function findBestTrade(client) {
   log('Scanning market...');
@@ -510,6 +580,10 @@ async function start() {
 
   // Poll commands every 5 seconds
   setInterval(() => pollCommands(client), 5000);
+
+  // Price spike check every 1 minute (detects 5%+ moves in 3 min window)
+  setInterval(() => checkPriceSpikes(), 60 * 1000);
+  checkPriceSpikes(); // seed first snapshot immediately
 
   // Trade cycle every INTERVAL_MIN
   setInterval(() => cycle(client), INTERVAL_MIN * 60 * 1000);
