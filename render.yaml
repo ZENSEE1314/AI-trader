@@ -1,19 +1,15 @@
 services:
   - type: worker
-    name: cryptobot
+    name: bitunix-scanner-bot
     runtime: node
     plan: starter
+    region: singapore
     buildCommand: npm install
     startCommand: node bot.js
-    region: singapore
     envVars:
-      - key: BINANCE_API_KEY
-        sync: false
-      - key: BINANCE_API_SECRET
-        sync: false
       - key: TELEGRAM_TOKEN
         sync: false
       - key: TELEGRAM_CHAT_ID
         sync: false
       - key: INTERVAL_MIN
-        value: "30"
+        value: "10"
