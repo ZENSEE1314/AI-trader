@@ -1,16 +1,13 @@
 {
-  "name": "bitunix-scanner-bot",
-  "version": "2.0.0",
-  "description": "Bitunix USDT-M Perpetual Market Scanner Bot with Telegram",
+  "name": "crypto-signal-scanner",
+  "version": "4.0.0",
+  "description": "Crypto signal scanner bot — Binance Futures + Telegram",
   "main": "bot.js",
   "scripts": {
-    "start": "node bot.js",
-    "dev": "node bot.js"
+    "start": "node bot.js"
   },
   "dependencies": {
-    "node-fetch": "^2.7.0",
-    "canvas": "^2.11.2",
-    "form-data": "^4.0.0"
+    "node-fetch": "^2.7.0"
   },
   "engines": {
     "node": ">=18"
