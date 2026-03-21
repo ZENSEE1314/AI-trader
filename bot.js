@@ -13,7 +13,7 @@ const TELEGRAM_TOKEN  = process.env.TELEGRAM_TOKEN;
 const TELEGRAM_CHAT   = process.env.TELEGRAM_CHAT_ID;
 const INTERVAL_MIN    = parseInt(process.env.INTERVAL_MIN || '30');
 const TOP_COINS       = 40;
-const REQUEST_TIMEOUT = 15000;
+const REQUEST_TIMEOUT = 30000;
 
 console.log(`[BOOT] Telegram:${!!TELEGRAM_TOKEN} Chat:${TELEGRAM_CHAT} Interval:${INTERVAL_MIN}min`);
 
@@ -328,7 +328,6 @@ async function runScan(forced = false) {
 
   } catch(e) {
     log(`Scan err: ${e.message}`);
-    await tgSend(`❌ *Scan Error — ${now()}*\n\`${e.message}\``);
   }
   log('── Scan end ──\n');
 }
