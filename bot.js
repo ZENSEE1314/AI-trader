@@ -1,8 +1,9 @@
 // ==========================================================
 // Crypto Signal Scanner — Render.com (24/7)
 // Binance Futures public API — zero credentials needed
-// Signals: Strong Buy / Buy / Sell / Strong Sell
-// TradingView link per coin
+// Signals: Strong Buy / Buy / Neutral / Sell / Strong Sell
+// ⚡ 5-min spike alert: ±5% in 5 min
+// Bitunix trade link per coin
 // Telegram: /scan /pause /resume /help
 // ==========================================================
 
@@ -38,10 +39,14 @@ function fmtPrice(p) {
   return p.toFixed(8);
 }
 
-// TradingView link for Binance USDT perpetual futures
-function tvLink(symbol) {
-  return `https://www.tradingview.com/chart/?symbol=BINANCE:${symbol}PERP`;
+// Bitunix futures trade link
+function tradeLink(symbol) {
+  return `https://www.bitunix.com/futures-trade/${symbol}`;
 }
+
+// Spike alert state (10-min cooldown per coin)
+const spikeCooldown = new Map();
+const SPIKE_COOLDOWN_MS = 10 * 60 * 1000;
 
 // ── TECHNICAL INDICATORS ─────────────────────────────────────
 function calcEMA(prices, period) {
@@ -73,11 +78,60 @@ async function fetchTickers() {
   return res.json();
 }
 
-async function fetchKlines(symbol) {
-  const url = `https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=1h&limit=30`;
+async function fetchKlines(symbol, interval = '1h', limit = 30) {
+  const url = `https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`;
   const res  = await fetch(url, { timeout: REQUEST_TIMEOUT });
   if (!res.ok) return null;
   return res.json();
+}
+
+// ── 5-MIN SPIKE ALERT ────────────────────────────────────────
+async function checkSpikes() {
+  if (paused) return;
+  try {
+    const tickers = await fetchTickers();
+    const top = tickers
+      .filter(t => t.symbol.endsWith('USDT') && !t.symbol.includes('_'))
+      .sort((a, b) => parseFloat(b.quoteVolume) - parseFloat(a.quoteVolume))
+      .slice(0, 60);
+
+    const now_ts = Date.now();
+    const alerts = [];
+
+    const BATCH = 8;
+    for (let i = 0; i < top.length; i += BATCH) {
+      const batch = top.slice(i, i + BATCH);
+      await Promise.all(batch.map(async t => {
+        try {
+          const klines = await fetchKlines(t.symbol, '5m', 3);
+          if (!klines || klines.length < 2) return;
+          const open  = parseFloat(klines[0][1]);   // open of first candle
+          const close = parseFloat(klines[klines.length - 1][4]); // close of last
+          if (!open || !close || open === 0) return;
+          const pct = ((close - open) / open) * 100;
+          if (Math.abs(pct) < 5) return;
+          if (now_ts - (spikeCooldown.get(t.symbol) || 0) < SPIKE_COOLDOWN_MS) return;
+          spikeCooldown.set(t.symbol, now_ts);
+          alerts.push({ symbol: t.symbol, pct, price: close });
+        } catch(_) {}
+      }));
+      await sleep(150);
+    }
+
+    alerts.sort((a, b) => Math.abs(b.pct) - Math.abs(a.pct));
+    for (const a of alerts.slice(0, 5)) {
+      const coin = a.symbol.replace('USDT', '');
+      const dir  = a.pct > 0 ? '🚀 PUMP' : '📉 DUMP';
+      const sign = a.pct > 0 ? '+' : '';
+      await tgSend(
+        `⚡ *5-Min Spike — ${now()}*\n\n` +
+        `${dir}: [${coin}/USDT](${tradeLink(a.symbol)})\n` +
+        `Move: *${sign}${a.pct.toFixed(2)}%* in 5 min\n` +
+        `Price: \`$${fmtPrice(a.price)}\``
+      );
+    }
+    if (alerts.length) log(`Spike alerts: ${alerts.length}`);
+  } catch(e) { log(`spike err: ${e.message}`); }
 }
 
 // ── SIGNAL ANALYSIS ──────────────────────────────────────────
@@ -221,53 +275,55 @@ async function runScan(forced = false) {
     // Group by signal strength
     const strongBuy  = results.filter(r => r.score >= 5).sort((a, b) => b.score - a.score);
     const buy        = results.filter(r => r.score >= 2 && r.score < 5).sort((a, b) => b.score - a.score);
+    const neutral    = results.filter(r => r.score > -2 && r.score < 2).sort((a, b) => b.score - a.score);
     const sell       = results.filter(r => r.score <= -2 && r.score > -5).sort((a, b) => a.score - b.score);
     const strongSell = results.filter(r => r.score <= -5).sort((a, b) => a.score - b.score);
-    const neutral    = results.length - strongBuy.length - buy.length - sell.length - strongSell.length;
 
-    log(`StrongBuy:${strongBuy.length} Buy:${buy.length} Sell:${sell.length} StrongSell:${strongSell.length}`);
+    log(`StrongBuy:${strongBuy.length} Buy:${buy.length} Neutral:${neutral.length} Sell:${sell.length} StrongSell:${strongSell.length}`);
 
-    // Build message lines
+    // Format a group with full coin rows
     const formatGroup = (label, emoji, coins) => {
       if (!coins.length) return '';
       let s = `${emoji} *${label}* (${coins.length})\n`;
       for (const c of coins) {
-        const coin = c.symbol.replace('USDT', '');
+        const coin    = c.symbol.replace('USDT', '');
         const chgSign = parseFloat(c.chg24h) >= 0 ? '+' : '';
-        s += `• [${coin}/USDT](${tvLink(c.symbol)}) \`$${fmtPrice(c.lastPrice)}\` RSI:${c.rsi} ${chgSign}${c.chg24h}%\n`;
+        s += `• [${coin}/USDT](${tradeLink(c.symbol)}) \`$${fmtPrice(c.lastPrice)}\` RSI:${c.rsi} ${chgSign}${c.chg24h}%\n`;
       }
       return s + '\n';
     };
 
-    let msg =
-      `📊 *Signal Summary — ${now()}*\n` +
-      `_Top ${TOP_COINS} coins · RSI + EMA trend_\n\n`;
-
-    msg += formatGroup('STRONG BUY',  '🟢🟢', strongBuy);
-    msg += formatGroup('BUY',          '🟢',   buy);
-    msg += formatGroup('SELL',         '🔴',   sell);
-    msg += formatGroup('STRONG SELL', '🔴🔴', strongSell);
-
-    msg += `⚪ Neutral: ${neutral} coins\n\n`;
-    msg += `_Click any coin name to open TradingView chart_\n`;
-    msg += `_Next scan in ${INTERVAL_MIN} min · /scan to refresh_`;
-
-    // Send in chunks if near 4096 char limit
-    if (msg.length <= 4000) {
-      await tgSend(msg);
-    } else {
-      const sections = [
-        `📊 *Signal Summary — ${now()}*\n_Top ${TOP_COINS} coins · RSI + EMA trend_\n\n` +
-        formatGroup('STRONG BUY', '🟢🟢', strongBuy) +
-        formatGroup('BUY', '🟢', buy),
-
-        formatGroup('SELL', '🔴', sell) +
-        formatGroup('STRONG SELL', '🔴🔴', strongSell) +
-        `⚪ Neutral: ${neutral}\n_/scan to refresh_`,
-      ];
-      for (const s of sections) {
-        if (s.trim()) { await tgSend(s); await sleep(500); }
+    // Neutral group — compact rows (name + price only)
+    const formatNeutral = (coins) => {
+      if (!coins.length) return '';
+      let s = `⚪ *NEUTRAL* (${coins.length})\n`;
+      for (const c of coins) {
+        const coin = c.symbol.replace('USDT', '');
+        s += `• [${coin}/USDT](${tradeLink(c.symbol)}) \`$${fmtPrice(c.lastPrice)}\`\n`;
       }
+      return s + '\n';
+    };
+
+    const header  = `📊 *Signal Summary — ${now()}*\n_Top ${TOP_COINS} coins · RSI + EMA · click to trade on Bitunix_\n\n`;
+    const footer  = `_Next scan in ${INTERVAL_MIN} min · /scan to refresh_`;
+
+    const part1 = header +
+      formatGroup('STRONG BUY',  '🟢🟢', strongBuy) +
+      formatGroup('BUY',          '🟢',   buy);
+
+    const part2 =
+      formatNeutral(neutral) +
+      formatGroup('SELL',         '🔴',   sell) +
+      formatGroup('STRONG SELL', '🔴🔴', strongSell) +
+      footer;
+
+    // Send as 1 or 2 messages depending on length
+    if ((part1 + part2).length <= 3900) {
+      await tgSend(part1 + part2);
+    } else {
+      await tgSend(part1);
+      await sleep(500);
+      await tgSend(part2);
     }
 
   } catch(e) {
@@ -287,12 +343,13 @@ async function start() {
 
   await tgSend(
     `🤖 *Crypto Signal Bot Online — ${now()}*\n\n` +
-    `Scanning top *${TOP_COINS}* USDT futures every *${INTERVAL_MIN} min*\n` +
-    `Signals: 🟢🟢 Strong Buy · 🟢 Buy · 🔴 Sell · 🔴🔴 Strong Sell\n` +
-    `Based on: RSI(14) + EMA(9/21) + momentum\n\n` +
+    `📊 Signal scan: top *${TOP_COINS}* coins every *${INTERVAL_MIN} min*\n` +
+    `⚡ Spike alert: ±5% in 5 min (checked every 5 min)\n` +
+    `Signals: 🟢🟢 Strong Buy · 🟢 Buy · ⚪ Neutral · 🔴 Sell · 🔴🔴 Strong Sell\n` +
+    `Links open Bitunix to trade directly\n\n` +
     `*Commands:*\n` +
     `/scan — scan now\n` +
-    `/pause — pause\n` +
+    `/pause — pause all\n` +
     `/resume — resume\n` +
     `/help — all commands\n\n` +
     `Running 24/7 on Render ✅`
@@ -302,6 +359,7 @@ async function start() {
 
   setInterval(pollCommands, 5000);
   setInterval(() => runScan(), INTERVAL_MIN * 60 * 1000);
+  setInterval(() => checkSpikes(), 5 * 60 * 1000); // spike check every 5 min
 }
 
 start().catch(err => {
