@@ -152,6 +152,7 @@ async function handleCommand(text) {
     await tgSend(
       `🤖 <b>Crypto Signal Bot</b>\n\n` +
       `/scan — Force signal scan now\n` +
+      `/smc — SMC signal scan (top 10 coins, 4H)\n` +
       `/pause — Pause auto scan\n` +
       `/resume — Resume auto scan\n` +
       `/help — Show this menu\n\n` +
@@ -163,6 +164,9 @@ async function handleCommand(text) {
   } else if (cmd === '/resume' || cmd === 'resume') {
     paused = false;
     await tgSend(`▶️ <b>Bot Resumed</b>\nNext scan in ≤${INTERVAL_MIN} min.`);
+  } else if (cmd === '/smc' || cmd === 'smc') {
+    await tgSend(`🎯 <b>SMC Scan — Top 10 coins (4H structure)...</b>`);
+    await runSMCScan(true);
   } else if (cmd === '/scan' || cmd === 'scan') {
     await tgSend(`🔍 <b>Scanning top ${TOP_COINS} coins...</b>`);
     await runScan(true);
@@ -317,6 +321,225 @@ async function runScan(forced = false) {
   log('── Scan end ──\n');
 }
 
+// ── SMC MODULE ───────────────────────────────────────────────
+// SMC concepts: CHoCH, BMS, SMS, Premium/Discount zones
+// Entry, SL, TP prediction based on structure + ATR
+
+function calcATR(klines, period = 14) {
+  if (!klines || klines.length < period + 1) return null;
+  const trs = [];
+  for (let i = 1; i < klines.length; i++) {
+    const high  = parseFloat(klines[i][2]);
+    const low   = parseFloat(klines[i][3]);
+    const pClose= parseFloat(klines[i - 1][4]);
+    trs.push(Math.max(high - low, Math.abs(high - pClose), Math.abs(low - pClose)));
+  }
+  return trs.slice(-period).reduce((a, b) => a + b, 0) / period;
+}
+
+function detectSMC(klines) {
+  // We use the last 30 bars to detect structure
+  // Swing highs/lows based on 5-bar pivot
+  const n = klines.length;
+  if (n < 15) return null;
+
+  const highs  = klines.map(k => parseFloat(k[2]));
+  const lows   = klines.map(k => parseFloat(k[3]));
+  const closes = klines.map(k => parseFloat(k[4]));
+
+  // Find swing highs/lows (simple 3-bar pivot)
+  const swingHighs = [];
+  const swingLows  = [];
+  for (let i = 2; i < n - 2; i++) {
+    if (highs[i] > highs[i-1] && highs[i] > highs[i-2] && highs[i] > highs[i+1] && highs[i] > highs[i+2]) {
+      swingHighs.push({ idx: i, val: highs[i] });
+    }
+    if (lows[i] < lows[i-1] && lows[i] < lows[i-2] && lows[i] < lows[i+1] && lows[i] < lows[i+2]) {
+      swingLows.push({ idx: i, val: lows[i] });
+    }
+  }
+
+  if (swingHighs.length < 2 || swingLows.length < 2) return null;
+
+  const lastClose = closes[n - 1];
+  const prevClose = closes[n - 2];
+
+  // Last 2 swing highs and lows
+  const sh1 = swingHighs[swingHighs.length - 1]; // most recent swing high
+  const sh2 = swingHighs[swingHighs.length - 2]; // previous swing high
+  const sl1 = swingLows[swingLows.length - 1];   // most recent swing low
+  const sl2 = swingLows[swingLows.length - 2];   // previous swing low
+
+  // Structure range (current)
+  const rangeHigh = sh1.val;
+  const rangeLow  = sl1.val;
+  const rangeSize = rangeHigh - rangeLow;
+
+  // Premium/Discount zones (top/bottom 25% of range)
+  const premiumTop    = rangeHigh;
+  const premiumBot    = rangeHigh - rangeSize * 0.25;
+  const discountTop   = rangeLow  + rangeSize * 0.25;
+  const discountBot   = rangeLow;
+  const equilibrium   = rangeLow  + rangeSize * 0.5;
+
+  // Zone classification
+  let zone = 'equilibrium';
+  if (lastClose >= premiumBot) zone = 'premium';
+  else if (lastClose <= discountTop) zone = 'discount';
+
+  // CHoCH: price breaks ABOVE previous swing high (bullish reversal)
+  //         or BELOW previous swing low (bearish reversal)
+  let signal    = null;
+  let structure = null;
+
+  // Bullish CHoCH: last close breaks above sh2 (older high) after being bearish
+  if (lastClose > sh2.val && prevClose <= sh2.val) {
+    signal    = 'BUY';
+    structure = 'CHoCH';
+  }
+  // Bearish CHoCH: last close breaks below sl2 (older low) after being bullish
+  else if (lastClose < sl2.val && prevClose >= sl2.val) {
+    signal    = 'SELL';
+    structure = 'CHoCH';
+  }
+  // BMS (Break of Market Structure) — continuation
+  else if (lastClose > sh1.val && sh1.val > sh2.val) {
+    signal    = 'BUY';
+    structure = 'BMS';
+  }
+  else if (lastClose < sl1.val && sl1.val < sl2.val) {
+    signal    = 'SELL';
+    structure = 'BMS';
+  }
+  // SMS (Shift of Market Structure) — first break
+  else if (lastClose > sh1.val && sh1.val <= sh2.val) {
+    signal    = 'BUY';
+    structure = 'SMS';
+  }
+  else if (lastClose < sl1.val && sl1.val >= sl2.val) {
+    signal    = 'SELL';
+    structure = 'SMS';
+  }
+
+  if (!signal) return null;
+
+  const atr = calcATR(klines, 14) || rangeSize * 0.02;
+
+  // Entry, SL, TP calculation
+  let entry, sl, tp1, tp2;
+  if (signal === 'BUY') {
+    entry = zone === 'discount' ? lastClose : discountTop; // ideal entry in discount
+    sl    = sl1.val - atr * 0.5;                           // below last swing low + buffer
+    tp1   = entry + (entry - sl) * 1.5;                   // 1.5R
+    tp2   = entry + (entry - sl) * 2.5;                   // 2.5R
+  } else {
+    entry = zone === 'premium' ? lastClose : premiumBot;   // ideal entry in premium
+    sl    = sh1.val + atr * 0.5;                           // above last swing high + buffer
+    tp1   = entry - (sl - entry) * 1.5;                   // 1.5R
+    tp2   = entry - (sl - entry) * 2.5;                   // 2.5R
+  }
+
+  const slPct  = ((Math.abs(entry - sl)  / entry) * 100).toFixed(2);
+  const tp1Pct = ((Math.abs(tp1 - entry) / entry) * 100).toFixed(2);
+  const tp2Pct = ((Math.abs(tp2 - entry) / entry) * 100).toFixed(2);
+
+  return {
+    signal, structure, zone,
+    entry, sl, tp1, tp2,
+    slPct, tp1Pct, tp2Pct,
+    swingHigh: sh1.val, swingLow: sl1.val,
+    premiumTop, premiumBot, discountTop, discountBot, equilibrium,
+  };
+}
+
+function tvLink(symbol) {
+  return `https://www.tradingview.com/chart/?symbol=BINANCE:${symbol}`;
+}
+
+async function runSMCScan(forced = false) {
+  log(`── SMC Scan start${forced ? ' (forced)' : ''} ──`);
+  if (paused && !forced) { log('Paused.'); return; }
+
+  try {
+    const tickers = await fetchTickers();
+    // Top 10 by volume
+    const top10 = tickers
+      .filter(t => t.symbol.endsWith('USDT') && !t.symbol.includes('_'))
+      .sort((a, b) => parseFloat(b.quoteVolume) - parseFloat(a.quoteVolume))
+      .slice(0, 10);
+
+    const smcResults = [];
+    for (const ticker of top10) {
+      try {
+        // Use 4h klines for SMC (more reliable structure)
+        const klines = await fetchKlines(ticker.symbol, '4h', 50);
+        if (!klines || klines.length < 15) continue;
+
+        const closes = klines.map(k => parseFloat(k[4]));
+        const rsi    = calcRSI(closes);
+        const ema9   = calcEMA(closes, 9);
+        const ema21  = calcEMA(closes, 21);
+        const lastPrice = parseFloat(ticker.lastPrice);
+
+        const smc = detectSMC(klines);
+        if (!smc) continue;
+
+        smcResults.push({
+          symbol: ticker.symbol,
+          lastPrice,
+          rsi: rsi.toFixed(0),
+          ema9Above: ema9 > ema21,
+          chg24h: parseFloat(ticker.priceChangePercent).toFixed(2),
+          ...smc,
+        });
+
+        await sleep(100);
+      } catch (_) {}
+    }
+
+    if (!smcResults.length) {
+      if (forced) await tgSend(`🎯 <b>SMC Scan</b> — No clear SMC signals found in top 10 coins right now.`);
+      log('SMC: no signals');
+      return;
+    }
+
+    // Send one message per signal (more readable)
+    for (const r of smcResults) {
+      const coin     = r.symbol.replace('USDT', '');
+      const signalEmoji = r.signal === 'BUY' ? '🟢' : '🔴';
+      const zoneEmoji   = r.zone === 'discount' ? '💚 Discount (Good entry)' : r.zone === 'premium' ? '❤️ Premium (Caution)' : '🟡 Equilibrium';
+      const emaStatus   = r.ema9Above ? '✅ EMA9 > EMA21' : '⚠️ EMA9 < EMA21';
+      const rsiStatus   = parseInt(r.rsi) < 35 ? '🟢 Oversold' : parseInt(r.rsi) > 65 ? '🔴 Overbought' : '⚪ Neutral';
+      const chgSign     = parseFloat(r.chg24h) >= 0 ? '+' : '';
+
+      const msg =
+        `🎯 <b>SMC Signal — ${coin}/USDT</b>\n` +
+        `━━━━━━━━━━━━━━━━━━\n` +
+        `${signalEmoji} <b>Signal: ${r.structure} → ${r.signal}</b>\n` +
+        `Zone: ${zoneEmoji}\n\n` +
+        `💰 <b>Entry:</b> <code>$${fmtPrice(r.entry)}</code>\n` +
+        `🛑 <b>SL:</b> <code>$${fmtPrice(r.sl)}</code> (-${r.slPct}%)\n` +
+        `🎯 <b>TP1:</b> <code>$${fmtPrice(r.tp1)}</code> (+${r.tp1Pct}%)\n` +
+        `🎯 <b>TP2:</b> <code>$${fmtPrice(r.tp2)}</code> (+${r.tp2Pct}%)\n\n` +
+        `📈 <b>Indicators:</b>\n` +
+        `• RSI(14): <b>${r.rsi}</b> ${rsiStatus}\n` +
+        `• ${emaStatus}\n` +
+        `• 24h Change: <b>${chgSign}${r.chg24h}%</b>\n` +
+        `• Swing High: <code>$${fmtPrice(r.swingHigh)}</code>\n` +
+        `• Swing Low: <code>$${fmtPrice(r.swingLow)}</code>\n\n` +
+        `📊 <a href="${tvLink(r.symbol)}">TradingView Chart</a>  |  ` +
+        `🔗 <a href="${tradeLink(r.symbol)}">Trade on Bitunix</a>\n` +
+        `<i>Price: $${fmtPrice(r.lastPrice)} · Scan: ${now()}</i>`;
+
+      await tgSend(msg);
+      await sleep(500);
+    }
+
+    log(`SMC: sent ${smcResults.length} signals`);
+  } catch (err) { log(`SMC scan err: ${err.message}`); }
+  log('── SMC Scan end ──\n');
+}
+
 // ── START ────────────────────────────────────────────────────
 async function start() {
   log('===================================');
@@ -335,13 +558,17 @@ async function start() {
     `/pause — pause all\n` +
     `/resume — resume\n` +
     `/help — all commands\n\n` +
+    `🎯 /smc — SMC signal scan (CHoCH, BMS, SMS + Entry/SL/TP)\n\n` +
     `Running 24/7 on Render ✅`
   );
 
   await runScan();
+  await sleep(3000);
+  await runSMCScan(); // initial SMC scan alongside regular scan
 
   setInterval(pollCommands, 5000);
   setInterval(() => runScan(), INTERVAL_MIN * 60 * 1000);
+  setInterval(() => runSMCScan(), INTERVAL_MIN * 60 * 1000); // SMC runs same interval
   setInterval(() => checkSpikes(), 5 * 60 * 1000);
 }
 
