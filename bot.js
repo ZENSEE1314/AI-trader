@@ -155,6 +155,7 @@ async function handleCommand(text) {
       `🤖 <b>Crypto Signal Bot</b>\n\n` +
       `/scan — Force signal scan now\n` +
       `/smc — SMC signal scan (top 10 coins, 4H)\n` +
+      `/trader — Trader-style signals (CryptoNinjas/LuxAlgo/AltFINS)\n` +
       `/pause — Pause auto scan\n` +
       `/resume — Resume auto scan\n` +
       `/help — Show this menu\n\n` +
@@ -169,6 +170,9 @@ async function handleCommand(text) {
   } else if (cmd === '/smc' || cmd === 'smc') {
     await tgSend(`🎯 <b>SMC Scan — Top 10 coins (4H structure)...</b>`);
     await runSMCScan(true);
+  } else if (cmd === '/trader' || cmd === 'trader') {
+    await tgSend(`🧠 <b>Trader Scan — Top 30 coins, multi-indicator confluence...</b>`);
+    await runTraderScan(true);
   } else if (cmd === '/scan' || cmd === 'scan') {
     await tgSend(`🔍 <b>Scanning top ${TOP_COINS} coins...</b>`);
     await runScan(true);
@@ -512,6 +516,267 @@ function tvLink(symbol) {
   return `https://www.tradingview.com/chart/?symbol=BINANCE:${symbol}`;
 }
 
+// ── TRADER-STYLE SIGNAL ENGINE ───────────────────────────────
+// Mimics the logic of top Telegram trader groups + AI platforms:
+// CryptoNinjas  — high accuracy, futures focus, confluence-based
+// Bitcoin Bullets — quality > quantity, high-conviction only
+// Evening Trader — spot + futures, volume + momentum
+// LuxAlgo        — kNN-style momentum + structure
+// AltFINS        — smart money accumulation / breakout
+// Dash2Trade     — sentiment + volume spike detection
+
+function calcBBands(closes, period = 20, mult = 2) {
+  if (closes.length < period) return null;
+  const slice = closes.slice(-period);
+  const mean  = slice.reduce((a, b) => a + b, 0) / period;
+  const sd    = Math.sqrt(slice.reduce((s, v) => s + Math.pow(v - mean, 2), 0) / period);
+  return { upper: mean + mult * sd, mid: mean, lower: mean - mult * sd, sd };
+}
+
+function calcMACD(closes, fast = 12, slow = 26, signal = 9) {
+  if (closes.length < slow + signal) return null;
+  const emaFast   = calcEMA(closes.slice(-fast - 10), fast);
+  const emaSlow   = calcEMA(closes.slice(-slow - 10), slow);
+  const macdLine  = emaFast - emaSlow;
+  // signal line: EMA of last `signal` MACD values (approximate)
+  const macdVals  = [];
+  for (let i = signal; i >= 1; i--) {
+    const sf = calcEMA(closes.slice(-(fast + i + 5)), fast);
+    const ss = calcEMA(closes.slice(-(slow + i + 5)), slow);
+    macdVals.push(sf - ss);
+  }
+  macdVals.push(macdLine);
+  const signalLine = calcEMA(macdVals, signal);
+  return { macd: macdLine, signal: signalLine, hist: macdLine - signalLine };
+}
+
+function calcStoch(klines, period = 14) {
+  if (!klines || klines.length < period) return null;
+  const slice = klines.slice(-period);
+  const highMax = Math.max(...slice.map(k => parseFloat(k[2])));
+  const lowMin  = Math.min(...slice.map(k => parseFloat(k[3])));
+  const lastClose = parseFloat(klines[klines.length - 1][4]);
+  if (highMax === lowMin) return null;
+  const k = ((lastClose - lowMin) / (highMax - lowMin)) * 100;
+  return k;
+}
+
+function calcVolumeRatio(klines, period = 10) {
+  if (!klines || klines.length < period + 1) return 1;
+  const vols   = klines.map(k => parseFloat(k[5]));
+  const avgVol = vols.slice(-(period + 1), -1).reduce((a, b) => a + b, 0) / period;
+  const lastVol = vols[vols.length - 1];
+  return avgVol > 0 ? lastVol / avgVol : 1;
+}
+
+// Score-based system: each "trader style" adds weight to BUY or SELL
+function traderScore(closes, klines) {
+  let buyScore  = 0;
+  let sellScore = 0;
+  const signals = [];
+
+  const last  = closes[closes.length - 1];
+  const rsi   = calcRSI(closes, 14);
+  const ema9  = calcEMA(closes, 9);
+  const ema21 = calcEMA(closes, 21);
+  const ema50 = calcEMA(closes, 50);
+  const bb    = calcBBands(closes, 20, 2);
+  const macd  = calcMACD(closes);
+  const stoch = calcStoch(klines, 14);
+  const volR  = calcVolumeRatio(klines, 10);
+
+  // ── CryptoNinjas style: multi-indicator confluence ──
+  // RSI
+  if (rsi < 30) { buyScore += 3; signals.push('RSI Oversold'); }
+  else if (rsi < 40) { buyScore += 2; signals.push('RSI Low'); }
+  else if (rsi > 70) { sellScore += 3; signals.push('RSI Overbought'); }
+  else if (rsi > 60) { sellScore += 2; signals.push('RSI High'); }
+
+  // EMA cross (LuxAlgo / Evening Trader style)
+  if (ema9 > ema21 && ema21 > ema50) { buyScore += 3; signals.push('EMA Bullish Stack'); }
+  else if (ema9 > ema21) { buyScore += 2; signals.push('EMA9 > EMA21'); }
+  else if (ema9 < ema21 && ema21 < ema50) { sellScore += 3; signals.push('EMA Bearish Stack'); }
+  else if (ema9 < ema21) { sellScore += 2; signals.push('EMA9 < EMA21'); }
+
+  // Bollinger Bands (AltFINS squeeze / breakout)
+  if (bb) {
+    if (last < bb.lower) { buyScore += 3; signals.push('BB Oversold'); }
+    else if (last > bb.upper) { sellScore += 3; signals.push('BB Overbought'); }
+    else if (last > bb.mid && last < bb.upper * 0.98) { buyScore += 1; signals.push('BB Mid-Upper'); }
+    else if (last < bb.mid && last > bb.lower * 1.02) { sellScore += 1; }
+  }
+
+  // MACD (Bitcoin Bullets / CryptoNinjas momentum)
+  if (macd) {
+    if (macd.hist > 0 && macd.macd > macd.signal) { buyScore += 2; signals.push('MACD Bullish'); }
+    else if (macd.hist < 0 && macd.macd < macd.signal) { sellScore += 2; signals.push('MACD Bearish'); }
+    // Golden cross (histogram just turned positive)
+    if (macd.hist > 0 && macd.hist < 0.001 * last) { buyScore += 1; signals.push('MACD Cross Up'); }
+  }
+
+  // Stochastic (Evening Trader + Dash2Trade)
+  if (stoch !== null) {
+    if (stoch < 20) { buyScore += 2; signals.push('Stoch Oversold'); }
+    else if (stoch > 80) { sellScore += 2; signals.push('Stoch Overbought'); }
+  }
+
+  // Volume spike — Dash2Trade / AltFINS smart money
+  if (volR > 2.5) {
+    if (buyScore > sellScore) { buyScore += 2; signals.push(`Vol Spike x${volR.toFixed(1)}`); }
+    else if (sellScore > buyScore) { sellScore += 2; signals.push(`Vol Spike x${volR.toFixed(1)}`); }
+  } else if (volR > 1.5) {
+    if (buyScore > sellScore) { buyScore += 1; signals.push(`Vol Up x${volR.toFixed(1)}`); }
+    else if (sellScore > buyScore) { sellScore += 1; }
+  }
+
+  return { buyScore, sellScore, signals, rsi, ema9, ema21, ema50, bb, macd, stoch, volR };
+}
+
+// Categorise a coin — Bitcoin Bullets style (high conviction only)
+// Returns null if not high conviction
+async function analyzeTrader(ticker, timeframe = '4h') {
+  try {
+    const klines = await fetchKlines(ticker.symbol, timeframe, 80);
+    if (!klines || klines.length < 30) return null;
+
+    const closes = klines.map(k => parseFloat(k[4]));
+    const atr    = calcATR(klines, 14) || parseFloat(ticker.lastPrice) * 0.02;
+    const smc    = detectSMC(klines);
+
+    const { buyScore, sellScore, signals, rsi, ema9, ema21, volR, bb } = traderScore(closes, klines);
+
+    // SMC bonus
+    let smcTag = '';
+    if (smc) {
+      if (smc.signal === 'BUY')  { buyScore  += 3; smcTag = `SMC ${smc.structure} BUY`; }
+      if (smc.signal === 'SELL') { sellScore += 3; smcTag = `SMC ${smc.structure} SELL`; }
+      if (smcTag) signals.unshift(smcTag);
+    }
+
+    const net      = buyScore - sellScore;
+    const last     = parseFloat(ticker.lastPrice);
+    const chg24h   = parseFloat(ticker.priceChangePercent);
+
+    // Only fire if strong conviction: net ≥ 6 either way
+    if (Math.abs(net) < 6) return null;
+
+    const isBuy = net > 0;
+
+    // Entry / SL / TP
+    let entry, sl, tp1, tp2, tp3;
+    if (isBuy) {
+      entry = last;
+      sl    = entry - atr * 1.5;
+      tp1   = entry + atr * 2;
+      tp2   = entry + atr * 3.5;
+      tp3   = entry + atr * 5.5;
+    } else {
+      entry = last;
+      sl    = entry + atr * 1.5;
+      tp1   = entry - atr * 2;
+      tp2   = entry - atr * 3.5;
+      tp3   = entry - atr * 5.5;
+    }
+
+    const slPct  = (Math.abs(sl  - entry) / entry * 100).toFixed(2);
+    const tp1Pct = (Math.abs(tp1 - entry) / entry * 100).toFixed(2);
+    const tp2Pct = (Math.abs(tp2 - entry) / entry * 100).toFixed(2);
+    const tp3Pct = (Math.abs(tp3 - entry) / entry * 100).toFixed(2);
+
+    return {
+      symbol: ticker.symbol, lastPrice: last, chg24h,
+      signal: isBuy ? 'BUY' : 'SELL',
+      conviction: Math.abs(net),
+      buyScore, sellScore, signals: signals.slice(0, 5),
+      rsi: rsi.toFixed(0), ema9Above: ema9 > ema21,
+      volR: volR.toFixed(1),
+      entry, sl, tp1, tp2, tp3,
+      slPct, tp1Pct, tp2Pct, tp3Pct,
+      timeframe,
+    };
+  } catch (_) { return null; }
+}
+
+const traderCooldown = new Map();
+const TRADER_COOLDOWN = 60 * 60 * 1000; // 1 hour per coin
+
+async function runTraderScan(forced = false) {
+  log(`── Trader Scan start${forced ? ' (forced)' : ''} ──`);
+  if (paused && !forced) { log('Paused.'); return; }
+
+  try {
+    const tickers = await fetchTickers();
+    // Top 30 coins by volume
+    const top30 = tickers
+      .filter(t => t.symbol.endsWith('USDT') && !t.symbol.includes('_'))
+      .sort((a, b) => parseFloat(b.quoteVolume) - parseFloat(a.quoteVolume))
+      .slice(0, 30);
+
+    const results = [];
+    const now_ts  = Date.now();
+
+    for (const ticker of top30) {
+      if (!forced && now_ts - (traderCooldown.get(ticker.symbol) || 0) < TRADER_COOLDOWN) continue;
+      const r = await analyzeTrader(ticker, '4h');
+      if (r) {
+        results.push(r);
+        traderCooldown.set(ticker.symbol, now_ts);
+      }
+      await sleep(120);
+    }
+
+    if (!results.length) {
+      if (forced) await tgSend(`🧠 <b>Trader Scan</b> — No high-conviction signals right now.\n<i>Bot requires 6+ indicator confluence to fire.</i>`);
+      log('Trader: no signals');
+      return;
+    }
+
+    // Sort by conviction score desc
+    results.sort((a, b) => b.conviction - a.conviction);
+
+    for (const r of results.slice(0, 6)) {
+      const coin      = r.symbol.replace('USDT', '');
+      const isBuy     = r.signal === 'BUY';
+      const sEmoji    = isBuy ? '🟢' : '🔴';
+      const chgSign   = r.chg24h >= 0 ? '+' : '';
+      const slDir     = isBuy ? '-' : '+';
+      const tpDir     = isBuy ? '+' : '-';
+      const rsiInt    = parseInt(r.rsi);
+      const rsiStr    = rsiInt < 35 ? '🟢 Oversold' : rsiInt > 65 ? '🔴 Overbought' : '⚪ Neutral';
+      const emaStr    = r.ema9Above ? '✅ EMA Bullish' : '⚠️ EMA Bearish';
+      const volStr    = parseFloat(r.volR) > 2 ? `🔥 Vol x${r.volR}` : `Vol x${r.volR}`;
+
+      // Conviction label (Bitcoin Bullets quality tier)
+      const convLabel = r.conviction >= 12 ? '⭐⭐⭐ VERY HIGH' :
+                        r.conviction >= 9  ? '⭐⭐ HIGH' : '⭐ MODERATE';
+
+      const signalList = r.signals.map(s => `  • ${s}`).join('\n');
+
+      const msg =
+        `🧠 <b>Trader Signal — ${coin}/USDT</b>\n` +
+        `━━━━━━━━━━━━━━━━━━\n` +
+        `${sEmoji} <b>${r.signal}</b>  Conviction: ${convLabel}\n` +
+        `Timeframe: <b>${r.timeframe.toUpperCase()}</b>  |  24h: <b>${chgSign}${r.chg24h.toFixed(2)}%</b>\n\n` +
+        `💰 <b>Entry:</b> <code>$${fmtPrice(r.entry)}</code>\n` +
+        `🛑 <b>SL:</b> <code>$${fmtPrice(r.sl)}</code> (${slDir}${r.slPct}%)\n` +
+        `🎯 <b>TP1:</b> <code>$${fmtPrice(r.tp1)}</code> (${tpDir}${r.tp1Pct}%)\n` +
+        `🎯 <b>TP2:</b> <code>$${fmtPrice(r.tp2)}</code> (${tpDir}${r.tp2Pct}%)\n` +
+        `🎯 <b>TP3:</b> <code>$${fmtPrice(r.tp3)}</code> (${tpDir}${r.tp3Pct}%)\n\n` +
+        `📈 <b>Signals fired:</b>\n${signalList}\n\n` +
+        `RSI: <b>${r.rsi}</b> ${rsiStr}  |  ${emaStr}  |  ${volStr}\n\n` +
+        `📊 <a href="${tvLink(r.symbol)}">TradingView</a>  |  ` +
+        `🔗 <a href="${tradeLink(r.symbol)}">Trade Bitunix</a>\n` +
+        `<i>Style: CryptoNinjas · BitcoinBullets · LuxAlgo · AltFINS · ${now()}</i>`;
+
+      await tgSend(msg);
+      await sleep(400);
+    }
+
+    log(`Trader: sent ${Math.min(results.length, 6)} signals`);
+  } catch (err) { log(`trader scan err: ${err.message}`); }
+  log('── Trader Scan end ──\n');
+}
+
 async function runSMCScan(forced = false) {
   log(`── SMC Scan start${forced ? ' (forced)' : ''} ──`);
   if (paused && !forced) { log('Paused.'); return; }
@@ -614,18 +879,22 @@ async function start() {
     `/pause — pause all\n` +
     `/resume — resume\n` +
     `/help — all commands\n\n` +
-    `🎯 /smc — SMC signal scan (CHoCH, BMS, SMS + Entry/SL/TP)\n\n` +
+    `🎯 /smc — SMC signals (CHoCH, BMS, SMS + Entry/SL/TP)\n` +
+    `🧠 /trader — Trader signals (CryptoNinjas/LuxAlgo/AltFINS style)\n\n` +
     `Running 24/7 on Render ✅`
   );
 
   await runScan();
   await sleep(3000);
-  await runSMCScan(); // initial SMC scan alongside regular scan
+  await runSMCScan();    // initial SMC scan alongside regular scan
+  await sleep(3000);
+  await runTraderScan(); // initial trader scan
 
   setInterval(pollCommands, 5000);
-  setInterval(() => runScan(), INTERVAL_MIN * 60 * 1000);
-  setInterval(() => runSMCScan(), INTERVAL_MIN * 60 * 1000); // SMC runs same interval
-  setInterval(() => checkSpikes(), SPIKE_INTERVAL); // every 1 min
+  setInterval(() => runScan(),        INTERVAL_MIN * 60 * 1000);
+  setInterval(() => runSMCScan(),     INTERVAL_MIN * 60 * 1000);
+  setInterval(() => runTraderScan(),  INTERVAL_MIN * 60 * 1000); // same cadence
+  setInterval(() => checkSpikes(),    SPIKE_INTERVAL); // every 1 min
 }
 
 start().catch(err => {
