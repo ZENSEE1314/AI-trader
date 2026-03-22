@@ -76,16 +76,45 @@ function calcRSI(closes, period = 14) {
 }
 
 // ── BINANCE PUBLIC API ────────────────────────────────────────
+// Retry fetch up to 3 times with exponential backoff — silently swallows ETIMEDOUT
+async function fetchWithRetry(url, opts = {}, retries = 3) {
+  for (let i = 0; i < retries; i++) {
+    try {
+      const res = await fetch(url, { timeout: REQUEST_TIMEOUT, ...opts });
+      if (res.ok) return res;
+      if (res.status === 429) { await sleep(2000 * (i + 1)); continue; } // rate limit
+      return res; // other HTTP errors: return as-is
+    } catch (err) {
+      const isTimeout = err.message && (
+        err.message.includes('ETIMEDOUT') ||
+        err.message.includes('ECONNRESET') ||
+        err.message.includes('ECONNREFUSED') ||
+        err.message.includes('network timeout')
+      );
+      if (isTimeout && i < retries - 1) {
+        log(`Retry ${i + 1}/${retries - 1} for ${url.substring(0, 60)}...`);
+        await sleep(1500 * (i + 1));
+        continue;
+      }
+      // Final retry failed or non-network error — log quietly, don't throw
+      log(`Fetch failed (${err.message.substring(0, 60)}): ${url.substring(0, 60)}`);
+      return null;
+    }
+  }
+  return null;
+}
+
 async function fetchTickers() {
-  const res = await fetch('https://fapi.binance.com/fapi/v1/ticker/24hr', { timeout: REQUEST_TIMEOUT });
+  const res = await fetchWithRetry('https://fapi.binance.com/fapi/v1/ticker/24hr');
+  if (!res) throw new Error('Ticker fetch failed after retries');
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.json();
 }
 
 async function fetchKlines(symbol, interval = '1h', limit = 30) {
   const url = `https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`;
-  const res  = await fetch(url, { timeout: REQUEST_TIMEOUT });
-  if (!res.ok) return null;
+  const res  = await fetchWithRetry(url);
+  if (!res || !res.ok) return null;
   return res.json();
 }
 
@@ -300,7 +329,7 @@ async function checkSpikes() {
       await sleep(300);
     }
     if (alerts.length) log(`1-min spike alerts: ${alerts.length}`);
-  } catch(err) { log(`spike err: ${err.message}`); }
+  } catch(err) { log(`spike err (silent): ${err.message}`); }
 }
 
 // ── MAIN SCAN ────────────────────────────────────────────────
@@ -377,7 +406,7 @@ async function runScan(forced = false) {
       await tgSend(part2);
     }
 
-  } catch(err) { log(`scan err: ${err.message}`); }
+  } catch(err) { log(`scan err (silent): ${err.message}`); }
   log('── Scan end ──\n');
 }
 
@@ -806,7 +835,7 @@ async function runTraderScan(forced = false) {
     }
 
     log(`Trader: sent ${Math.min(results.length, 6)} signals`);
-  } catch (err) { log(`trader scan err: ${err.message}`); }
+  } catch (err) { log(`trader scan err (silent): ${err.message}`); }
   log('── Trader Scan end ──\n');
 }
 
@@ -890,7 +919,7 @@ async function runSMCScan(forced = false) {
     }
 
     log(`SMC: sent ${smcResults.length} signals`);
-  } catch (err) { log(`SMC scan err: ${err.message}`); }
+  } catch (err) { log(`SMC scan err (silent): ${err.message}`); }
   log('── SMC Scan end ──\n');
 }
 
@@ -931,6 +960,6 @@ async function start() {
 }
 
 start().catch(err => {
-  console.error('Fatal:', err);
+  console.error('Fatal (no TG alert):', err.message);
   process.exit(1);
 });
