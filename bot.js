@@ -21,7 +21,9 @@ let paused       = false;
 let lastUpdateId = 0;
 
 const spikeCooldown   = new Map();
-const SPIKE_COOLDOWN  = 10 * 60 * 1000; // 10 min per coin
+const SPIKE_COOLDOWN  = 2 * 60 * 1000;  // 2 min cooldown per coin (was 10 min)
+const SPIKE_PCT       = 3;              // alert threshold: ±3% in 1 min
+const SPIKE_INTERVAL  = 60 * 1000;     // check every 1 min
 
 // ── HELPERS ──────────────────────────────────────────────────
 function now() {
@@ -195,7 +197,7 @@ async function pollCommands() {
   } catch(err) { log(`poll err: ${err.message}`); }
 }
 
-// ── 5-MIN SPIKE ALERT ────────────────────────────────────────
+// ── 1-MIN SPIKE ALERT (±3%) ──────────────────────────────────
 async function checkSpikes() {
   if (paused) return;
   try {
@@ -212,16 +214,46 @@ async function checkSpikes() {
     for (let i = 0; i < top.length; i += BATCH) {
       await Promise.all(top.slice(i, i + BATCH).map(async t => {
         try {
-          const klines = await fetchKlines(t.symbol, '5m', 3);
+          // Use 1m klines: last 2 bars = last 1 min movement
+          const klines = await fetchKlines(t.symbol, '1m', 3);
           if (!klines || klines.length < 2) return;
-          const open  = parseFloat(klines[0][1]);
-          const close = parseFloat(klines[klines.length - 1][4]);
+          const open  = parseFloat(klines[klines.length - 2][1]); // prev bar open
+          const close = parseFloat(klines[klines.length - 1][4]); // latest close
           if (!open || open === 0) return;
           const pct = ((close - open) / open) * 100;
-          if (Math.abs(pct) < 5) return;
+          if (Math.abs(pct) < SPIKE_PCT) return;
           if (now_ts - (spikeCooldown.get(t.symbol) || 0) < SPIKE_COOLDOWN) return;
           spikeCooldown.set(t.symbol, now_ts);
-          alerts.push({ symbol: t.symbol, pct, price: close });
+
+          // Quick RSI + EMA for signal quality
+          const klines30 = await fetchKlines(t.symbol, '1h', 30);
+          let rsi = 50; let ema9 = close; let ema21 = close;
+          if (klines30 && klines30.length >= 15) {
+            const closes = klines30.map(k => parseFloat(k[4]));
+            rsi   = calcRSI(closes);
+            ema9  = calcEMA(closes, 9);
+            ema21 = calcEMA(closes, 21);
+          }
+
+          // ATR-based SL/TP
+          const atr = Math.abs(close * 0.015); // fallback 1.5% ATR
+          let entry, sl, tp1, tp2;
+          if (pct > 0) { // PUMP → consider BUY
+            entry = close;
+            sl    = close - atr * 1.5;
+            tp1   = close + atr * 2;
+            tp2   = close + atr * 3.5;
+          } else { // DUMP → consider SELL/SHORT
+            entry = close;
+            sl    = close + atr * 1.5;
+            tp1   = close - atr * 2;
+            tp2   = close - atr * 3.5;
+          }
+
+          alerts.push({
+            symbol: t.symbol, pct, price: close, rsi: rsi.toFixed(0),
+            ema9Above: ema9 > ema21, entry, sl, tp1, tp2,
+          });
         } catch(_) {}
       }));
       await sleep(150);
@@ -229,17 +261,41 @@ async function checkSpikes() {
 
     alerts.sort((a, b) => Math.abs(b.pct) - Math.abs(a.pct));
     for (const a of alerts.slice(0, 5)) {
-      const coin = a.symbol.replace('USDT', '');
-      const dir  = a.pct > 0 ? '🚀 PUMP' : '📉 DUMP';
-      const sign = a.pct > 0 ? '+' : '';
+      const coin    = a.symbol.replace('USDT', '');
+      const isPump  = a.pct > 0;
+      const dir     = isPump ? '🚀 PUMP' : '📉 DUMP';
+      const signal  = isPump ? '🟢 BUY' : '🔴 SELL/SHORT';
+      const sign    = isPump ? '+' : '';
+      const slDir   = isPump ? '-' : '+';
+      const tp1Dir  = isPump ? '+' : '-';
+      const emaStr  = a.ema9Above ? '✅ EMA9 > EMA21' : '⚠️ EMA9 < EMA21';
+      const rsiInt  = parseInt(a.rsi);
+      const rsiStr  = rsiInt < 35 ? '🟢 Oversold' : rsiInt > 65 ? '🔴 Overbought' : '⚪ Neutral';
+      const slPct   = (Math.abs(a.sl - a.entry) / a.entry * 100).toFixed(2);
+      const tp1Pct  = (Math.abs(a.tp1 - a.entry) / a.entry * 100).toFixed(2);
+      const tp2Pct  = (Math.abs(a.tp2 - a.entry) / a.entry * 100).toFixed(2);
+
+      // TradingView public chart link (uses BINANCE:XXXUSDT)
+      const tvUrl = `https://www.tradingview.com/chart/?symbol=BINANCE:${a.symbol}`;
+
       await tgSend(
-        `⚡ <b>5-Min Spike — ${now()}</b>\n\n` +
-        `${dir}: <a href="${tradeLink(a.symbol)}">${coin}/USDT</a>\n` +
-        `Move: <b>${sign}${a.pct.toFixed(2)}%</b> in 5 min\n` +
-        `Price: <code>$${fmtPrice(a.price)}</code>`
+        `⚡ <b>1-Min Spike Alert — ${now()}</b>\n` +
+        `━━━━━━━━━━━━━━━━━━\n` +
+        `${dir}: <b>${coin}/USDT</b>\n` +
+        `Move: <b>${sign}${a.pct.toFixed(2)}%</b> in 1 min\n` +
+        `Signal: <b>${signal}</b>\n\n` +
+        `💰 <b>Entry:</b> <code>$${fmtPrice(a.entry)}</code>\n` +
+        `🛑 <b>SL:</b> <code>$${fmtPrice(a.sl)}</code> (${slDir}${slPct}%)\n` +
+        `🎯 <b>TP1:</b> <code>$${fmtPrice(a.tp1)}</code> (${tp1Dir}${tp1Pct}%)\n` +
+        `🎯 <b>TP2:</b> <code>$${fmtPrice(a.tp2)}</code> (${tp1Dir}${tp2Pct}%)\n\n` +
+        `📈 RSI: <b>${a.rsi}</b> ${rsiStr}\n` +
+        `${emaStr}\n\n` +
+        `📊 <a href="${tvUrl}">TradingView Chart</a>  |  ` +
+        `🔗 <a href="${tradeLink(a.symbol)}">Trade Bitunix</a>`
       );
+      await sleep(300);
     }
-    if (alerts.length) log(`Spike alerts: ${alerts.length}`);
+    if (alerts.length) log(`1-min spike alerts: ${alerts.length}`);
   } catch(err) { log(`spike err: ${err.message}`); }
 }
 
@@ -550,7 +606,7 @@ async function start() {
   await tgSend(
     `🤖 <b>Crypto Signal Bot Online — ${now()}</b>\n\n` +
     `📊 Signal scan: top <b>${TOP_COINS}</b> coins every <b>${INTERVAL_MIN} min</b>\n` +
-    `⚡ Spike alert: ±5% in 5 min (checked every 5 min)\n` +
+    `⚡ Spike alert: ±3% in 1 min (checked every 1 min)\n` +
     `Signals: 🟢🟢 Strong Buy · 🟢 Buy · ⚪ Neutral · 🔴 Sell · 🔴🔴 Strong Sell\n` +
     `Tap any coin name to open Bitunix and trade\n\n` +
     `<b>Commands:</b>\n` +
@@ -569,7 +625,7 @@ async function start() {
   setInterval(pollCommands, 5000);
   setInterval(() => runScan(), INTERVAL_MIN * 60 * 1000);
   setInterval(() => runSMCScan(), INTERVAL_MIN * 60 * 1000); // SMC runs same interval
-  setInterval(() => checkSpikes(), 5 * 60 * 1000);
+  setInterval(() => checkSpikes(), SPIKE_INTERVAL); // every 1 min
 }
 
 start().catch(err => {
