@@ -570,10 +570,11 @@ function calcVolumeRatio(klines, period = 10) {
 }
 
 // Score-based system: each "trader style" adds weight to BUY or SELL
+// Returns full indicator breakdown for display
 function traderScore(closes, klines) {
   let buyScore  = 0;
   let sellScore = 0;
-  const signals = [];
+  const rows = []; // { name, verdict, buy, sell, source }
 
   const last  = closes[closes.length - 1];
   const rsi   = calcRSI(closes, 14);
@@ -585,51 +586,81 @@ function traderScore(closes, klines) {
   const stoch = calcStoch(klines, 14);
   const volR  = calcVolumeRatio(klines, 10);
 
-  // ── CryptoNinjas style: multi-indicator confluence ──
-  // RSI
-  if (rsi < 30) { buyScore += 3; signals.push('RSI Oversold'); }
-  else if (rsi < 40) { buyScore += 2; signals.push('RSI Low'); }
-  else if (rsi > 70) { sellScore += 3; signals.push('RSI Overbought'); }
-  else if (rsi > 60) { sellScore += 2; signals.push('RSI High'); }
+  // ── RSI (CryptoNinjas, Evening Trader) ──
+  {
+    let v, b = 0, s = 0;
+    if      (rsi < 30) { v = `🟢 Oversold (${rsi.toFixed(0)})`;  b = 3; }
+    else if (rsi < 40) { v = `🟢 Low (${rsi.toFixed(0)})`;        b = 2; }
+    else if (rsi < 50) { v = `🟡 Mild Low (${rsi.toFixed(0)})`;   b = 1; }
+    else if (rsi > 70) { v = `🔴 Overbought (${rsi.toFixed(0)})`; s = 3; }
+    else if (rsi > 60) { v = `🔴 High (${rsi.toFixed(0)})`;       s = 2; }
+    else if (rsi > 50) { v = `🟡 Mild High (${rsi.toFixed(0)})`;  s = 1; }
+    else               { v = `⚪ Neutral (${rsi.toFixed(0)})`;            }
+    buyScore += b; sellScore += s;
+    rows.push({ name: 'RSI(14)', verdict: v, source: 'CryptoNinjas · EveningTrader' });
+  }
 
-  // EMA cross (LuxAlgo / Evening Trader style)
-  if (ema9 > ema21 && ema21 > ema50) { buyScore += 3; signals.push('EMA Bullish Stack'); }
-  else if (ema9 > ema21) { buyScore += 2; signals.push('EMA9 > EMA21'); }
-  else if (ema9 < ema21 && ema21 < ema50) { sellScore += 3; signals.push('EMA Bearish Stack'); }
-  else if (ema9 < ema21) { sellScore += 2; signals.push('EMA9 < EMA21'); }
+  // ── EMA Stack (LuxAlgo, Evening Trader) ──
+  {
+    let v, b = 0, s = 0;
+    if      (ema9 > ema21 && ema21 > ema50) { v = '🟢 Bullish Stack 9>21>50'; b = 3; }
+    else if (ema9 > ema21)                  { v = '🟢 EMA9 > EMA21';           b = 2; }
+    else if (ema9 < ema21 && ema21 < ema50) { v = '🔴 Bearish Stack 9<21<50'; s = 3; }
+    else if (ema9 < ema21)                  { v = '🔴 EMA9 < EMA21';           s = 2; }
+    else                                    { v = '⚪ Equal';                         }
+    buyScore += b; sellScore += s;
+    rows.push({ name: 'EMA 9/21/50', verdict: v, source: 'LuxAlgo · EveningTrader' });
+  }
 
-  // Bollinger Bands (AltFINS squeeze / breakout)
+  // ── Bollinger Bands (AltFINS) ──
   if (bb) {
-    if (last < bb.lower) { buyScore += 3; signals.push('BB Oversold'); }
-    else if (last > bb.upper) { sellScore += 3; signals.push('BB Overbought'); }
-    else if (last > bb.mid && last < bb.upper * 0.98) { buyScore += 1; signals.push('BB Mid-Upper'); }
-    else if (last < bb.mid && last > bb.lower * 1.02) { sellScore += 1; }
+    let v, b = 0, s = 0;
+    const pct = ((last - bb.lower) / (bb.upper - bb.lower) * 100).toFixed(0);
+    if      (last < bb.lower)             { v = `🟢 Below Lower BB (${pct}%)`;  b = 3; }
+    else if (last > bb.upper)             { v = `🔴 Above Upper BB (${pct}%)`;  s = 3; }
+    else if (last < bb.mid)               { v = `🟡 Below Mid BB (${pct}%)`;    b = 1; }
+    else                                  { v = `🟡 Above Mid BB (${pct}%)`;    s = 1; }
+    buyScore += b; sellScore += s;
+    rows.push({ name: 'Bollinger Bands', verdict: v, source: 'AltFINS' });
   }
 
-  // MACD (Bitcoin Bullets / CryptoNinjas momentum)
+  // ── MACD (Bitcoin Bullets, CryptoNinjas) ──
   if (macd) {
-    if (macd.hist > 0 && macd.macd > macd.signal) { buyScore += 2; signals.push('MACD Bullish'); }
-    else if (macd.hist < 0 && macd.macd < macd.signal) { sellScore += 2; signals.push('MACD Bearish'); }
-    // Golden cross (histogram just turned positive)
-    if (macd.hist > 0 && macd.hist < 0.001 * last) { buyScore += 1; signals.push('MACD Cross Up'); }
+    let v, b = 0, s = 0;
+    const histSign = macd.hist > 0 ? '+' : '';
+    if      (macd.hist > 0 && macd.macd > macd.signal) { v = `🟢 Bullish (hist ${histSign}${macd.hist.toFixed(4)})`;  b = 2; }
+    else if (macd.hist < 0 && macd.macd < macd.signal) { v = `🔴 Bearish (hist ${histSign}${macd.hist.toFixed(4)})`; s = 2; }
+    else                                                { v = `⚪ Mixed (hist ${histSign}${macd.hist.toFixed(4)})`; }
+    buyScore += b; sellScore += s;
+    rows.push({ name: 'MACD(12,26,9)', verdict: v, source: 'BitcoinBullets · CryptoNinjas' });
   }
 
-  // Stochastic (Evening Trader + Dash2Trade)
+  // ── Stochastic (Evening Trader, Dash2Trade) ──
   if (stoch !== null) {
-    if (stoch < 20) { buyScore += 2; signals.push('Stoch Oversold'); }
-    else if (stoch > 80) { sellScore += 2; signals.push('Stoch Overbought'); }
+    let v, b = 0, s = 0;
+    if      (stoch < 20) { v = `🟢 Oversold (${stoch.toFixed(0)})`;  b = 2; }
+    else if (stoch < 40) { v = `🟡 Low (${stoch.toFixed(0)})`;        b = 1; }
+    else if (stoch > 80) { v = `🔴 Overbought (${stoch.toFixed(0)})`; s = 2; }
+    else if (stoch > 60) { v = `🟡 High (${stoch.toFixed(0)})`;       s = 1; }
+    else                 { v = `⚪ Neutral (${stoch.toFixed(0)})`;            }
+    buyScore += b; sellScore += s;
+    rows.push({ name: 'Stochastic(14)', verdict: v, source: 'EveningTrader · Dash2Trade' });
   }
 
-  // Volume spike — Dash2Trade / AltFINS smart money
-  if (volR > 2.5) {
-    if (buyScore > sellScore) { buyScore += 2; signals.push(`Vol Spike x${volR.toFixed(1)}`); }
-    else if (sellScore > buyScore) { sellScore += 2; signals.push(`Vol Spike x${volR.toFixed(1)}`); }
-  } else if (volR > 1.5) {
-    if (buyScore > sellScore) { buyScore += 1; signals.push(`Vol Up x${volR.toFixed(1)}`); }
-    else if (sellScore > buyScore) { sellScore += 1; }
+  // ── Volume Ratio (Dash2Trade, AltFINS Smart Money) ──
+  {
+    let v, b = 0, s = 0;
+    if      (volR > 3)   { v = `🔥 Huge Spike x${volR.toFixed(1)}`;  b = 2; s = 2; } // spike boosts whichever side is winning
+    else if (volR > 2)   { v = `🔥 Big Spike x${volR.toFixed(1)}`;   b = 1; s = 1; }
+    else if (volR > 1.3) { v = `🟡 Above Avg x${volR.toFixed(1)}`;                 }
+    else if (volR < 0.7) { v = `⚪ Low Volume x${volR.toFixed(1)}`;                }
+    else                 { v = `⚪ Normal x${volR.toFixed(1)}`;                     }
+    // Volume amplifies the leading direction only
+    if (b > 0) { if (buyScore > sellScore) buyScore += b; else sellScore += s; }
+    rows.push({ name: 'Volume Ratio', verdict: v, source: 'Dash2Trade · AltFINS' });
   }
 
-  return { buyScore, sellScore, signals, rsi, ema9, ema21, ema50, bb, macd, stoch, volR };
+  return { buyScore, sellScore, rows, rsi, ema9, ema21, ema50, bb, macd, stoch, volR };
 }
 
 // Categorise a coin — Bitcoin Bullets style (high conviction only)
@@ -643,22 +674,23 @@ async function analyzeTrader(ticker, timeframe = '4h') {
     const atr    = calcATR(klines, 14) || parseFloat(ticker.lastPrice) * 0.02;
     const smc    = detectSMC(klines);
 
-    const { buyScore, sellScore, signals, rsi, ema9, ema21, volR, bb } = traderScore(closes, klines);
+    const scored = traderScore(closes, klines);
+    let { buyScore, sellScore, rows, rsi, ema9, ema21, volR } = scored;
 
-    // SMC bonus
-    let smcTag = '';
+    // SMC bonus row
     if (smc) {
-      if (smc.signal === 'BUY')  { buyScore  += 3; smcTag = `SMC ${smc.structure} BUY`; }
-      if (smc.signal === 'SELL') { sellScore += 3; smcTag = `SMC ${smc.structure} SELL`; }
-      if (smcTag) signals.unshift(smcTag);
+      if (smc.signal === 'BUY')  { buyScore  += 3; rows.unshift({ name: 'SMC Structure', verdict: `🟢 ${smc.structure} → BUY (zone: ${smc.zone})`, source: 'Smart Money Concepts' }); }
+      if (smc.signal === 'SELL') { sellScore += 3; rows.unshift({ name: 'SMC Structure', verdict: `🔴 ${smc.structure} → SELL (zone: ${smc.zone})`, source: 'Smart Money Concepts' }); }
+    } else {
+      rows.unshift({ name: 'SMC Structure', verdict: '⚪ No clear structure break', source: 'Smart Money Concepts' });
     }
 
     const net      = buyScore - sellScore;
     const last     = parseFloat(ticker.lastPrice);
     const chg24h   = parseFloat(ticker.priceChangePercent);
 
-    // Only fire if strong conviction: net ≥ 6 either way
-    if (Math.abs(net) < 6) return null;
+    // Fire all signals — no minimum threshold
+    if (net === 0) return null; // skip only if completely neutral
 
     const isBuy = net > 0;
 
@@ -687,7 +719,7 @@ async function analyzeTrader(ticker, timeframe = '4h') {
       symbol: ticker.symbol, lastPrice: last, chg24h,
       signal: isBuy ? 'BUY' : 'SELL',
       conviction: Math.abs(net),
-      buyScore, sellScore, signals: signals.slice(0, 5),
+      buyScore, sellScore, rows,
       rsi: rsi.toFixed(0), ema9Above: ema9 > ema21,
       volR: volR.toFixed(1),
       entry, sl, tp1, tp2, tp3,
@@ -717,6 +749,7 @@ async function runTraderScan(forced = false) {
 
     for (const ticker of top30) {
       if (!forced && now_ts - (traderCooldown.get(ticker.symbol) || 0) < TRADER_COOLDOWN) continue;
+      
       const r = await analyzeTrader(ticker, '4h');
       if (r) {
         results.push(r);
@@ -746,27 +779,28 @@ async function runTraderScan(forced = false) {
       const emaStr    = r.ema9Above ? '✅ EMA Bullish' : '⚠️ EMA Bearish';
       const volStr    = parseFloat(r.volR) > 2 ? `🔥 Vol x${r.volR}` : `Vol x${r.volR}`;
 
-      // Conviction label (Bitcoin Bullets quality tier)
-      const convLabel = r.conviction >= 12 ? '⭐⭐⭐ VERY HIGH' :
-                        r.conviction >= 9  ? '⭐⭐ HIGH' : '⭐ MODERATE';
+      // Score summary
+      const convLabel = `🟢 BUY ${r.buyScore}pt  vs  🔴 SELL ${r.sellScore}pt`;
 
-      const signalList = r.signals.map(s => `  • ${s}`).join('\n');
+      // All indicator rows
+      const indicatorList = r.rows.map(row =>
+        `<b>${row.name}</b>: ${row.verdict}\n  <i>${row.source}</i>`
+      ).join('\n');
 
       const msg =
         `🧠 <b>Trader Signal — ${coin}/USDT</b>\n` +
         `━━━━━━━━━━━━━━━━━━\n` +
-        `${sEmoji} <b>${r.signal}</b>  Conviction: ${convLabel}\n` +
+        `${sEmoji} <b>Overall: ${r.signal}</b>  |  ${convLabel}\n` +
         `Timeframe: <b>${r.timeframe.toUpperCase()}</b>  |  24h: <b>${chgSign}${r.chg24h.toFixed(2)}%</b>\n\n` +
         `💰 <b>Entry:</b> <code>$${fmtPrice(r.entry)}</code>\n` +
-        `🛑 <b>SL:</b> <code>$${fmtPrice(r.sl)}</code> (${slDir}${r.slPct}%)\n` +
-        `🎯 <b>TP1:</b> <code>$${fmtPrice(r.tp1)}</code> (${tpDir}${r.tp1Pct}%)\n` +
-        `🎯 <b>TP2:</b> <code>$${fmtPrice(r.tp2)}</code> (${tpDir}${r.tp2Pct}%)\n` +
-        `🎯 <b>TP3:</b> <code>$${fmtPrice(r.tp3)}</code> (${tpDir}${r.tp3Pct}%)\n\n` +
-        `📈 <b>Signals fired:</b>\n${signalList}\n\n` +
-        `RSI: <b>${r.rsi}</b> ${rsiStr}  |  ${emaStr}  |  ${volStr}\n\n` +
-        `📊 <a href="${tvLink(r.symbol)}">TradingView</a>  |  ` +
-        `🔗 <a href="${tradeLink(r.symbol)}">Trade Bitunix</a>\n` +
-        `<i>Style: CryptoNinjas · BitcoinBullets · LuxAlgo · AltFINS · ${now()}</i>`;
+        `🛑 <b>SL:</b>    <code>$${fmtPrice(r.sl)}</code>    (${slDir}${r.slPct}%)\n` +
+        `🎯 <b>TP1:</b>   <code>$${fmtPrice(r.tp1)}</code>   (${tpDir}${r.tp1Pct}%)\n` +
+        `🎯 <b>TP2:</b>   <code>$${fmtPrice(r.tp2)}</code>   (${tpDir}${r.tp2Pct}%)\n` +
+        `🎯 <b>TP3:</b>   <code>$${fmtPrice(r.tp3)}</code>   (${tpDir}${r.tp3Pct}%)\n\n` +
+        `📊 <b>All Indicators:</b>\n${indicatorList}\n\n` +
+        `<a href="${tvLink(r.symbol)}">📈 TradingView Chart</a>  |  ` +
+        `<a href="${tradeLink(r.symbol)}">🔗 Trade Bitunix</a>\n` +
+        `<i>${now()}</i>`;
 
       await tgSend(msg);
       await sleep(400);
