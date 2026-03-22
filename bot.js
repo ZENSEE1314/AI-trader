@@ -749,7 +749,6 @@ async function runTraderScan(forced = false) {
 
     for (const ticker of top30) {
       if (!forced && now_ts - (traderCooldown.get(ticker.symbol) || 0) < TRADER_COOLDOWN) continue;
-      
       const r = await analyzeTrader(ticker, '4h');
       if (r) {
         results.push(r);
