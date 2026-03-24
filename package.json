@@ -7,6 +7,7 @@
     "start": "node bot.js"
   },
   "dependencies": {
+    "binance": "^2.0.0",
     "node-fetch": "^2.7.0"
   },
   "engines": {

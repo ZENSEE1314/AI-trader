@@ -483,8 +483,7 @@ function getClient() {
 
 async function run() {
   log(`Token set: ${!!TELEGRAM_TOKEN} | Chats: ${TELEGRAM_CHATS.join(', ') || 'NONE'}`);
-  await notify(`🤖 *Smart Trader v3 — ${now()}*\nBot started. Running cycle...`);
   await main();
 }
 
-run();
+module.exports = { run };

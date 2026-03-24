@@ -8,9 +8,11 @@
 // ==========================================================
 
 const fetch = require('node-fetch');
+const { run: runTrader } = require('./cycle');
 
 const TELEGRAM_TOKEN  = process.env.TELEGRAM_TOKEN;
 const TELEGRAM_CHAT   = process.env.TELEGRAM_CHAT_ID;
+const TRADE_INTERVAL_MIN = parseInt(process.env.TRADE_INTERVAL_MIN || '30');
 const INTERVAL_MIN    = parseInt(process.env.INTERVAL_MIN || '30');
 const TOP_COINS       = 40;
 const REQUEST_TIMEOUT = 30000;
@@ -955,8 +957,16 @@ async function start() {
   setInterval(pollCommands, 5000);
   setInterval(() => runScan(),        INTERVAL_MIN * 60 * 1000);
   setInterval(() => runSMCScan(),     INTERVAL_MIN * 60 * 1000);
-  setInterval(() => runTraderScan(),  INTERVAL_MIN * 60 * 1000); // same cadence
-  setInterval(() => checkSpikes(),    SPIKE_INTERVAL); // every 1 min
+  setInterval(() => runTraderScan(),  INTERVAL_MIN * 60 * 1000);
+  setInterval(() => checkSpikes(),    SPIKE_INTERVAL);
+
+  // ── AUTO TRADER (cycle.js) ──────────────────────────────────
+  log(`Auto trader: first run in 60s, then every ${TRADE_INTERVAL_MIN} min`);
+  setTimeout(async () => {
+    await runTrader().catch(e => log(`Trader cycle error: ${e.message}`));
+    setInterval(() => runTrader().catch(e => log(`Trader cycle error: ${e.message}`)),
+      TRADE_INTERVAL_MIN * 60 * 1000);
+  }, 60 * 1000); // wait 60s after startup before first trade cycle
 }
 
 start().catch(err => {
