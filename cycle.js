@@ -10,7 +10,8 @@ const fetch = require('node-fetch');
 const API_KEY        = process.env.BINANCE_API_KEY    || '';
 const API_SECRET     = process.env.BINANCE_API_SECRET || '';
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN     || '';
-const TELEGRAM_CHAT  = process.env.TELEGRAM_CHAT_ID   || '';
+// Supports multiple chat IDs separated by comma, e.g. "-1001003740693659,123456789"
+const TELEGRAM_CHATS = (process.env.TELEGRAM_CHAT_ID || '').split(',').map(s => s.trim()).filter(Boolean);
 
 // ── RISK CONFIG ───────────────────────────────────────────────
 // Edit these to tune the bot. Never set LEVERAGE above 20.
@@ -56,17 +57,15 @@ function fmtPrice(p) {
 }
 
 // ── TELEGRAM ──────────────────────────────────────────────────
-async function notify(msg, retries = 3) {
-  log(`>> ${msg.replace(/\*/g,'').replace(/`/g,'').substring(0, 100)}`);
-  if (!TELEGRAM_TOKEN || !TELEGRAM_CHAT) return;
+async function sendToChat(chatId, msg, retries = 3) {
   for (let i = 0; i < retries; i++) {
     try {
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 10000); // 10s timeout
+      const timer = setTimeout(() => controller.abort(), 10000);
       await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ chat_id: TELEGRAM_CHAT, text: msg, parse_mode: 'Markdown' }),
+        body: JSON.stringify({ chat_id: chatId, text: msg, parse_mode: 'Markdown' }),
         signal: controller.signal,
       });
       clearTimeout(timer);
@@ -76,10 +75,16 @@ async function notify(msg, retries = 3) {
         e.message.includes('ETIMEDOUT') || e.message.includes('ECONNRESET') ||
         e.message.includes('ECONNREFUSED') || e.message.includes('aborted')
       );
-      log(`Telegram ${isNet ? 'timeout' : 'error'} (attempt ${i+1}/${retries}): ${e.message.substring(0,80)}`);
+      log(`Telegram ${isNet ? 'timeout' : 'error'} chat=${chatId} (attempt ${i+1}/${retries}): ${e.message.substring(0,80)}`);
       if (i < retries - 1) await sleep(2000 * (i + 1));
     }
   }
+}
+
+async function notify(msg) {
+  log(`>> ${msg.replace(/\*/g,'').replace(/`/g,'').substring(0, 100)}`);
+  if (!TELEGRAM_TOKEN || !TELEGRAM_CHATS.length) return;
+  await Promise.all(TELEGRAM_CHATS.map(id => sendToChat(id, msg)));
 }
 
 // ── INDICATORS ────────────────────────────────────────────────
