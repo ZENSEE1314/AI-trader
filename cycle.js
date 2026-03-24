@@ -150,7 +150,7 @@ function calcMACD(closes, fast = 12, slow = 26, signal = 9) {
 }
 
 // ── SCORING SYSTEM ────────────────────────────────────────────
-async function analyzeSymbol(client, ticker) {
+async function analyzeSymbol(client, ticker, fundRates = {}) {
   const sym = ticker.symbol;
   try {
     // Get 15m klines (for main analysis)
@@ -211,19 +211,9 @@ async function analyzeSymbol(client, ticker) {
     const high24h  = parseFloat(ticker.highPrice);
     const distHigh = (price - high24h) / high24h * 100;
 
-    // Funding rate
-    let fundRate = 0;
-    try {
-      const funding = await client.getFundingRate({ symbol: sym, limit: 1 });
-      fundRate = funding.length ? parseFloat(funding[0].fundingRate) * 100 : 0;
-    } catch (_) {}
-
-    // Max leverage
-    let maxLev = CONFIG.MAX_LEVERAGE;
-    try {
-      const brackets = await client.getLeverageBrackets({ symbol: sym });
-      maxLev = brackets[0]?.brackets[0]?.initialLeverage || CONFIG.MAX_LEVERAGE;
-    } catch (_) {}
+    // Funding rate — passed in from batch fetch to avoid per-symbol API calls
+    const fundRate = fundRates[sym] || 0;
+    const maxLev   = CONFIG.MAX_LEVERAGE; // fixed — no per-symbol bracket call
 
     // ── SCORE ──────────────────────────────────────────────
     let score = 0;
@@ -278,24 +268,31 @@ async function findBestTrade(client) {
     t.symbol.endsWith('USDT') &&
     !CONFIG.BLACKLIST.includes(t.symbol) &&
     parseFloat(t.quoteVolume) > CONFIG.MIN_VOL_M * 1e6 &&
-    parseFloat(t.priceChangePercent) >= 1 &&    // at least 1% up today
-    parseFloat(t.priceChangePercent) < 40        // not already pumped 40%+
+    parseFloat(t.priceChangePercent) >= 1 &&
+    parseFloat(t.priceChangePercent) < 40
   );
 
-  // Sort by 24h volume — most liquid first
-  const top50 = candidates
+  // Top 20 by volume — fewer calls = safer on rate limits
+  const top20 = candidates
     .sort((a, b) => parseFloat(b.quoteVolume) - parseFloat(a.quoteVolume))
-    .slice(0, 50);
+    .slice(0, 20);
 
-  log(`Analyzing ${top50.length} candidates with full indicator suite...`);
+  // Batch-fetch ALL funding rates in ONE call instead of per-symbol
+  const fundRates = {};
+  try {
+    const allFunding = await client.getFundingRate({});
+    for (const f of allFunding) fundRates[f.symbol] = parseFloat(f.fundingRate) * 100;
+  } catch (_) {}
+
+  log(`Analyzing ${top20.length} candidates (1 funding call total)...`);
 
   const scored = [];
-  const BATCH = 5; // small batches to avoid rate limit
-  for (let i = 0; i < top50.length; i += BATCH) {
-    const batch = top50.slice(i, i + BATCH);
-    const results = await Promise.all(batch.map(t => analyzeSymbol(client, t)));
+  const BATCH = 3; // smaller batches, more spacing
+  for (let i = 0; i < top20.length; i += BATCH) {
+    const batch = top20.slice(i, i + BATCH);
+    const results = await Promise.all(batch.map(t => analyzeSymbol(client, t, fundRates)));
     results.forEach(r => { if (r && r.score >= CONFIG.MIN_SCORE) scored.push(r); });
-    await sleep(300);
+    await sleep(600); // 600ms between batches
   }
 
   if (!scored.length) return null;

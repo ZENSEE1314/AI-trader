@@ -23,9 +23,9 @@ let paused       = false;
 let lastUpdateId = 0;
 
 const spikeCooldown   = new Map();
-const SPIKE_COOLDOWN  = 2 * 60 * 1000;  // 2 min cooldown per coin (was 10 min)
+const SPIKE_COOLDOWN  = 5 * 60 * 1000;  // 5 min cooldown per coin
 const SPIKE_PCT       = 3;              // alert threshold: ±3% in 1 min
-const SPIKE_INTERVAL  = 60 * 1000;     // check every 1 min
+const SPIKE_INTERVAL  = 2 * 60 * 1000; // check every 2 min (was 1 min — too many calls)
 
 // ── HELPERS ──────────────────────────────────────────────────
 function now() {
@@ -246,12 +246,12 @@ async function checkSpikes() {
     const top = tickers
       .filter(t => t.symbol.endsWith('USDT') && !t.symbol.includes('_'))
       .sort((a, b) => parseFloat(b.quoteVolume) - parseFloat(a.quoteVolume))
-      .slice(0, 60);
+      .slice(0, 30); // was 60 — halved to cut API calls
 
     const now_ts = Date.now();
     const alerts = [];
 
-    const BATCH = 8;
+    const BATCH = 5;
     for (let i = 0; i < top.length; i += BATCH) {
       await Promise.all(top.slice(i, i + BATCH).map(async t => {
         try {
