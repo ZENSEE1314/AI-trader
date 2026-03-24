@@ -56,16 +56,30 @@ function fmtPrice(p) {
 }
 
 // ── TELEGRAM ──────────────────────────────────────────────────
-async function notify(msg) {
+async function notify(msg, retries = 3) {
   log(`>> ${msg.replace(/\*/g,'').replace(/`/g,'').substring(0, 100)}`);
   if (!TELEGRAM_TOKEN || !TELEGRAM_CHAT) return;
-  try {
-    await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chat_id: TELEGRAM_CHAT, text: msg, parse_mode: 'Markdown' }),
-    });
-  } catch (e) { log(`Telegram error: ${e.message}`); }
+  for (let i = 0; i < retries; i++) {
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 10000); // 10s timeout
+      await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat_id: TELEGRAM_CHAT, text: msg, parse_mode: 'Markdown' }),
+        signal: controller.signal,
+      });
+      clearTimeout(timer);
+      return;
+    } catch (e) {
+      const isNet = e.message && (
+        e.message.includes('ETIMEDOUT') || e.message.includes('ECONNRESET') ||
+        e.message.includes('ECONNREFUSED') || e.message.includes('aborted')
+      );
+      log(`Telegram ${isNet ? 'timeout' : 'error'} (attempt ${i+1}/${retries}): ${e.message.substring(0,80)}`);
+      if (i < retries - 1) await sleep(2000 * (i + 1));
+    }
+  }
 }
 
 // ── INDICATORS ────────────────────────────────────────────────
@@ -136,8 +150,6 @@ async function analyzeSymbol(client, ticker) {
 
     const closes = klines15.map(k => parseFloat(k[4]));
     const opens  = klines15.map(k => parseFloat(k[1]));
-    const highs  = klines15.map(k => parseFloat(k[2]));
-    const lows   = klines15.map(k => parseFloat(k[3]));
     const vols   = klines15.map(k => parseFloat(k[5]));
 
     const price = closes[closes.length - 1];
@@ -348,7 +360,6 @@ async function checkTrailingStop(client) {
         // Cancel existing SL and set new one
         try {
           await client.cancelAllOpenOrders({ symbol: sym });
-          const lev = parseInt(p.leverage);
           const tp  = parseFloat((entry * (1 + CONFIG.TP_PCT)).toFixed(6));
           await client.submitNewOrder({
             symbol: sym, side: 'SELL', type: 'TAKE_PROFIT_MARKET',
