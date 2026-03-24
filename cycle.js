@@ -381,8 +381,27 @@ async function checkTrailingStop(client) {
   } catch (e) { log(`checkTrailingStop err: ${e.message}`); }
 }
 
+// ── BAN DETECTION ─────────────────────────────────────────────
+let banUntil = 0;
+
+function checkBanError(err) {
+  const m = String(err?.message || err).match(/banned until (\d+)/);
+  if (!m) return false;
+  banUntil = parseInt(m[1]);
+  const mins = Math.ceil((banUntil - Date.now()) / 60000);
+  log(`IP BANNED — pausing trader for ${mins} min`);
+  notify(`🚫 *Binance IP Banned*\nTrader paused *${mins} min*. Resumes automatically.`);
+  return true;
+}
+
 // ── MAIN ──────────────────────────────────────────────────────
 async function main() {
+  if (banUntil > Date.now()) {
+    const mins = Math.ceil((banUntil - Date.now()) / 60000);
+    log(`Still banned for ${mins} min — skipping cycle`);
+    return;
+  }
+
   log('=== Smart Trader v3 Cycle Start ===');
   const client = getClient();
 
@@ -467,6 +486,7 @@ async function main() {
     );
 
   } catch (err) {
+    if (checkBanError(err)) return; // IP ban — already notified, skip generic error
     log(`ERROR: ${err.message}`);
     await notify(`❌ *Bot Error — ${now()}*\n\`${err.message}\``);
   }

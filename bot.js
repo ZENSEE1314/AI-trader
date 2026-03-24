@@ -21,6 +21,7 @@ console.log(`[BOOT] Telegram:${!!TELEGRAM_TOKEN} Chats:${TELEGRAM_CHATS.join(','
 
 let paused       = false;
 let lastUpdateId = 0;
+let banUntil     = 0; // epoch ms — no API calls until this time
 
 const spikeCooldown   = new Map();
 const SPIKE_COOLDOWN  = 5 * 60 * 1000;  // 5 min cooldown per coin
@@ -77,28 +78,49 @@ function calcRSI(closes, period = 14) {
   return 100 - (100 / (1 + avgGain / avgLoss));
 }
 
+// ── BAN DETECTION ─────────────────────────────────────────────
+function parseBanUntil(text) {
+  const m = String(text).match(/banned until (\d+)/);
+  return m ? parseInt(m[1]) : 0;
+}
+
+function isBanned() {
+  if (banUntil <= Date.now()) return false;
+  const mins = Math.ceil((banUntil - Date.now()) / 60000);
+  log(`IP still banned for ${mins} more min — skipping API call`);
+  return true;
+}
+
 // ── BINANCE PUBLIC API ────────────────────────────────────────
-// Retry fetch up to 3 times with exponential backoff — silently swallows ETIMEDOUT
 async function fetchWithRetry(url, opts = {}, retries = 3) {
+  if (isBanned()) return null;
   for (let i = 0; i < retries; i++) {
     try {
       const res = await fetch(url, { timeout: REQUEST_TIMEOUT, ...opts });
+      // 418 = IP banned, 429 = rate limited
+      if (res.status === 418 || res.status === 429) {
+        const body = await res.json().catch(() => ({}));
+        const until = parseBanUntil(body.msg || '');
+        if (until > Date.now()) {
+          banUntil = until;
+          const mins = Math.ceil((until - Date.now()) / 60000);
+          log(`BANNED until ${new Date(until).toLocaleString()} (${mins} min)`);
+          await tgSend(`🚫 <b>Binance IP Banned</b>\nBot paused for <b>${mins} min</b>.\nResumes automatically at ${new Date(until).toLocaleTimeString('en-GB', { timeZone: 'Asia/Kuala_Lumpur' })}`);
+        }
+        return null;
+      }
       if (res.ok) return res;
-      if (res.status === 429) { await sleep(2000 * (i + 1)); continue; } // rate limit
-      return res; // other HTTP errors: return as-is
+      return res;
     } catch (err) {
       const isTimeout = err.message && (
-        err.message.includes('ETIMEDOUT') ||
-        err.message.includes('ECONNRESET') ||
-        err.message.includes('ECONNREFUSED') ||
-        err.message.includes('network timeout')
+        err.message.includes('ETIMEDOUT') || err.message.includes('ECONNRESET') ||
+        err.message.includes('ECONNREFUSED') || err.message.includes('network timeout')
       );
       if (isTimeout && i < retries - 1) {
         log(`Retry ${i + 1}/${retries - 1} for ${url.substring(0, 60)}...`);
         await sleep(1500 * (i + 1));
         continue;
       }
-      // Final retry failed or non-network error — log quietly, don't throw
       log(`Fetch failed (${err.message.substring(0, 60)}): ${url.substring(0, 60)}`);
       return null;
     }
