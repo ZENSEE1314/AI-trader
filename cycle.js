@@ -62,14 +62,18 @@ async function sendToChat(chatId, msg, retries = 3) {
     try {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 10000);
-      await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
+      const res = await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ chat_id: chatId, text: msg, parse_mode: 'Markdown' }),
         signal: controller.signal,
       });
       clearTimeout(timer);
-      return;
+      const json = await res.json();
+      if (!json.ok) {
+        log(`Telegram API error chat=${chatId}: ${json.error_code} — ${json.description}`);
+      }
+      return; // don't retry HTTP errors (bad token/chat ID won't fix on retry)
     } catch (e) {
       const isNet = e.message && (
         e.message.includes('ETIMEDOUT') || e.message.includes('ECONNRESET') ||
@@ -477,4 +481,10 @@ function getClient() {
   return new USDMClient({ api_key: API_KEY, api_secret: API_SECRET });
 }
 
-main();
+async function run() {
+  log(`Token set: ${!!TELEGRAM_TOKEN} | Chats: ${TELEGRAM_CHATS.join(', ') || 'NONE'}`);
+  await notify(`🤖 *Smart Trader v3 — ${now()}*\nBot started. Running cycle...`);
+  await main();
+}
+
+run();
