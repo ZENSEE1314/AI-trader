@@ -11,13 +11,13 @@ const fetch = require('node-fetch');
 const { run: runTrader } = require('./cycle');
 
 const TELEGRAM_TOKEN  = process.env.TELEGRAM_TOKEN;
-const TELEGRAM_CHAT   = process.env.TELEGRAM_CHAT_ID;
+const TELEGRAM_CHATS  = (process.env.TELEGRAM_CHAT_ID || '').split(',').map(s => s.trim()).filter(Boolean);
 const TRADE_INTERVAL_MIN = parseInt(process.env.TRADE_INTERVAL_MIN || '30');
 const INTERVAL_MIN    = parseInt(process.env.INTERVAL_MIN || '30');
 const TOP_COINS       = 40;
 const REQUEST_TIMEOUT = 30000;
 
-console.log(`[BOOT] Telegram:${!!TELEGRAM_TOKEN} Chat:${TELEGRAM_CHAT} Interval:${INTERVAL_MIN}min`);
+console.log(`[BOOT] Telegram:${!!TELEGRAM_TOKEN} Chats:${TELEGRAM_CHATS.join(',')||'NONE'} Interval:${INTERVAL_MIN}min`);
 
 let paused       = false;
 let lastUpdateId = 0;
@@ -160,22 +160,28 @@ async function analyzeSymbol(ticker) {
 }
 
 // ── TELEGRAM (HTML mode) ──────────────────────────────────────
-async function tgSend(html) {
-  log(`TG: ${html.replace(/<[^>]+>/g, '').substring(0, 80)}`);
-  if (!TELEGRAM_TOKEN || !TELEGRAM_CHAT) return;
+async function tgSendTo(chatId, html) {
   try {
-    await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
+    const res  = await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        chat_id:                  TELEGRAM_CHAT,
+        chat_id:                  chatId,
         text:                     html,
         parse_mode:               'HTML',
         disable_web_page_preview: true,
       }),
       timeout: REQUEST_TIMEOUT,
     });
-  } catch(err) { log(`tgSend err: ${err.message}`); }
+    const json = await res.json();
+    if (!json.ok) log(`tgSend error chat=${chatId}: ${json.error_code} — ${json.description}`);
+  } catch(err) { log(`tgSend err chat=${chatId}: ${err.message}`); }
+}
+
+async function tgSend(html) {
+  log(`TG: ${html.replace(/<[^>]+>/g, '').substring(0, 80)}`);
+  if (!TELEGRAM_TOKEN || !TELEGRAM_CHATS.length) return;
+  await Promise.all(TELEGRAM_CHATS.map(id => tgSendTo(id, html)));
 }
 
 // ── COMMAND HANDLER ──────────────────────────────────────────
@@ -214,7 +220,7 @@ async function handleCommand(text) {
 
 // ── TELEGRAM POLL ────────────────────────────────────────────
 async function pollCommands() {
-  if (!TELEGRAM_TOKEN || !TELEGRAM_CHAT) return;
+  if (!TELEGRAM_TOKEN || !TELEGRAM_CHATS.length) return;
   try {
     const res  = await fetch(
       `https://api.telegram.org/bot${TELEGRAM_TOKEN}/getUpdates?offset=${lastUpdateId + 1}&timeout=1`,
@@ -225,7 +231,7 @@ async function pollCommands() {
       lastUpdateId = u.update_id;
       const msg = u.message;
       if (!msg?.text) continue;
-      if (String(msg.chat.id) !== String(TELEGRAM_CHAT)) continue;
+      if (!TELEGRAM_CHATS.includes(String(msg.chat.id))) continue;
       log(`CMD: ${msg.text}`);
       await handleCommand(msg.text);
     }
