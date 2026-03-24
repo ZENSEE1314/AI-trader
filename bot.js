@@ -683,11 +683,11 @@ function traderScore(closes, klines) {
   // ── EMA Stack (LuxAlgo, Evening Trader) ──
   {
     let v, b = 0, s = 0;
-    if      (ema9 > ema21 && ema21 > ema50) { v = '🟢 Bullish Stack 9>21>50'; b = 3; }
-    else if (ema9 > ema21)                  { v = '🟢 EMA9 > EMA21';           b = 2; }
-    else if (ema9 < ema21 && ema21 < ema50) { v = '🔴 Bearish Stack 9<21<50'; s = 3; }
-    else if (ema9 < ema21)                  { v = '🔴 EMA9 < EMA21';           s = 2; }
-    else                                    { v = '⚪ Equal';                         }
+    if      (ema9 > ema21 && ema21 > ema50) { v = '🟢 Bullish Stack 9&gt;21&gt;50'; b = 3; }
+    else if (ema9 > ema21)                  { v = '🟢 EMA9 &gt; EMA21';             b = 2; }
+    else if (ema9 < ema21 && ema21 < ema50) { v = '🔴 Bearish Stack 9&lt;21&lt;50'; s = 3; }
+    else if (ema9 < ema21)                  { v = '🔴 EMA9 &lt; EMA21';             s = 2; }
+    else                                    { v = '⚪ Equal';                               }
     buyScore += b; sellScore += s;
     rows.push({ name: 'EMA 9/21/50', verdict: v, source: 'LuxAlgo · EveningTrader' });
   }
@@ -853,10 +853,6 @@ async function runTraderScan(forced = false) {
       const chgSign   = r.chg24h >= 0 ? '+' : '';
       const slDir     = isBuy ? '-' : '+';
       const tpDir     = isBuy ? '+' : '-';
-      const rsiInt    = parseInt(r.rsi);
-      const rsiStr    = rsiInt < 35 ? '🟢 Oversold' : rsiInt > 65 ? '🔴 Overbought' : '⚪ Neutral';
-      const emaStr    = r.ema9Above ? '✅ EMA Bullish' : '⚠️ EMA Bearish';
-      const volStr    = parseFloat(r.volR) > 2 ? `🔥 Vol x${r.volR}` : `Vol x${r.volR}`;
 
       // Score summary
       const convLabel = `🟢 BUY ${r.buyScore}pt  vs  🔴 SELL ${r.sellScore}pt`;
