@@ -196,8 +196,26 @@ async function tgSendTo(chatId, html) {
       timeout: REQUEST_TIMEOUT,
     });
     const json = await res.json();
-    if (!json.ok) log(`tgSend error chat=${chatId}: ${json.error_code} — ${json.description}`);
-  } catch(err) { log(`tgSend err chat=${chatId}: ${err.message}`); }
+    if (!json.ok) {
+      log(`tgSend error chat=${chatId}: ${json.error_code} — ${json.description}`);
+      return { ok: false, error: `${json.error_code}: ${json.description}` };
+    }
+    return { ok: true };
+  } catch(err) {
+    log(`tgSend err chat=${chatId}: ${err.message}`);
+    return { ok: false, error: err.message };
+  }
+}
+
+async function testChats(replyTo) {
+  let report = `🔍 <b>Chat Test — ${now()}</b>\n\n`;
+  report += `Token set: <b>${TELEGRAM_TOKEN ? '✅' : '❌ MISSING'}</b>\n`;
+  report += `Chats configured: <b>${TELEGRAM_CHATS.length ? TELEGRAM_CHATS.join(', ') : '❌ NONE'}</b>\n\n`;
+  for (const id of TELEGRAM_CHATS) {
+    const r = await tgSendTo(id, `🧪 Test from bot — ${now()}`);
+    report += `Chat <code>${id}</code>: ${r.ok ? '✅ Delivered' : `❌ ${e(r.error)}`}\n`;
+  }
+  await tgSendTo(replyTo, report);
 }
 
 async function tgSend(html) {
@@ -207,9 +225,11 @@ async function tgSend(html) {
 }
 
 // ── COMMAND HANDLER ──────────────────────────────────────────
-async function handleCommand(text) {
+async function handleCommand(text, fromChatId) {
   const cmd = text.trim().split(/\s+/)[0].toLowerCase();
-  if (cmd === '/help' || cmd === 'help') {
+  if (cmd === '/testchat' || cmd === 'testchat') {
+    await testChats(fromChatId);
+  } else if (cmd === '/help' || cmd === 'help') {
     await tgSend(
       `🤖 <b>Crypto Signal Bot</b>\n\n` +
       `/scan — Force signal scan now\n` +
@@ -217,6 +237,7 @@ async function handleCommand(text) {
       `/trader — Trader-style signals (CryptoNinjas/LuxAlgo/AltFINS)\n` +
       `/pause — Pause auto scan\n` +
       `/resume — Resume auto scan\n` +
+      `/testchat — Test all configured chat IDs\n` +
       `/help — Show this menu\n\n` +
       `<i>Auto scan every ${INTERVAL_MIN} min</i>`
     );
@@ -255,7 +276,7 @@ async function pollCommands() {
       if (!msg?.text) continue;
       if (!TELEGRAM_CHATS.includes(String(msg.chat.id))) continue;
       log(`CMD: ${msg.text}`);
-      await handleCommand(msg.text);
+      await handleCommand(msg.text, String(msg.chat.id));
     }
   } catch(err) { log(`poll err: ${err.message}`); }
 }
