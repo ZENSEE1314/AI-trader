@@ -5,10 +5,10 @@
 const { USDMClient } = require('binance');
 const fetch = require('node-fetch');
 
-const API_KEY        = '7HhYLNDs71lPZuzwut6BgydtRgT2fbkxbghJ9V0hOfuMvh7yN4mYclvCdhGwKCen';
-const API_SECRET     = 'WjYQoIk0UIoaeexrqtMTzP5JdyTNhLh77XNk5oFk60JiArzf1ldBhlxxVz8N1nn5';
-const TELEGRAM_TOKEN = '8615239475:AAFdfaYjWB3tvheg9G4kklWABE41arF_vus';
-const TELEGRAM_CHAT  = '6689118331';
+const API_KEY        = process.env.BINANCE_API_KEY        || '';
+const API_SECRET     = process.env.BINANCE_API_SECRET     || '';
+const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN         || '';
+const TELEGRAM_CHAT  = process.env.TELEGRAM_CHAT_ID       || '';
 
 const CONFIG = {
   LEVERAGE:    20,
