@@ -17,16 +17,19 @@ const TELEGRAM_CHATS = (process.env.TELEGRAM_CHAT_ID || '').split(',').map(s => 
 // Edit these to tune the bot. Never set LEVERAGE above 20.
 const CONFIG = {
   LEVERAGE:       20,
-  TP_PCT:         0.045,    // 4.5% take profit
-  SL_PCT:         0.012,    // 1.2% stop loss (tight)
+  TP_PCT:         0.035,    // 3.5% take profit (3-5% range, grows volume steadily)
+  SL_PCT:         0.010,    // 1.0% stop loss (tight)
   TRAIL_PCT:      0.008,    // 0.8% trailing stop activation
-  RISK_PCT:       0.40,     // only use 40% of balance per trade (safer)
+  RISK_PCT:       0.40,     // only use 40% of balance per trade
   MAX_LEVERAGE:   20,
   MIN_BALANCE:    5,        // min USDT to trade
-  MIN_VOL_M:      100,      // min $100M 24h volume (higher = more liquid)
-  MIN_SCORE:      18,       // minimum score to open trade (higher = stricter)
-  RSI_MAX:        68,       // don't buy if RSI above this (overbought)
-  RSI_MIN:        35,       // don't buy if RSI below this (downtrend)
+  MIN_VOL_M:      100,      // min $100M 24h volume
+  MIN_SCORE:      18,       // minimum score to open trade
+  RSI_MAX:        68,       // LONG: skip if RSI above (overbought)
+  RSI_MIN:        35,       // LONG: skip if RSI below (downtrend)
+  RSI_SHORT_MIN:  58,       // SHORT: only short if RSI above this
+  RSI_SHORT_MAX:  85,       // SHORT: skip if RSI extremely overbought (might keep pumping)
+  TAKER_FEE:      0.0004,   // Binance taker fee: 0.04% per side (standard)
   EMA_FAST:       9,
   EMA_SLOW:       21,
   BLACKLIST: [
@@ -191,126 +194,138 @@ function detectStructure(klines) {
   return { trend, marketStructure: `${shLabel}+${slLabel}`, eql, eqh, sh1, sl1 };
 }
 
-// ── SCORING SYSTEM ────────────────────────────────────────────
+// ── SCORING SYSTEM (LONG + SHORT) ─────────────────────────────
 async function analyzeSymbol(client, ticker, fundRates = {}) {
   const sym = ticker.symbol;
   try {
-    // Get 15m klines (for main analysis)
     const klines15 = await client.getKlines({ symbol: sym, interval: '15m', limit: 50 });
     if (klines15.length < 30) return null;
 
-    const closes = klines15.map(k => parseFloat(k[4]));
-    const opens  = klines15.map(k => parseFloat(k[1]));
-    const vols   = klines15.map(k => parseFloat(k[5]));
-
-    const price = closes[closes.length - 1];
-
-    // RSI filter — skip overbought/oversold
-    const rsi = calcRSI(closes, 14);
-    if (rsi === null) return null;
-    if (rsi > CONFIG.RSI_MAX || rsi < CONFIG.RSI_MIN) return null;
-
-    // Market structure — only buy in uptrend (HH+HL) or after bullish CHoCH
-    const struct = detectStructure(klines15);
-    if (struct.trend === 'downtrend' || struct.trend === 'bearish') return null;
-    // EQL sweep BUY: if equal lows swept and price reclaimed them, allow entry
+    const closes  = klines15.map(k => parseFloat(k[4]));
+    const opens   = klines15.map(k => parseFloat(k[1]));
+    const vols    = klines15.map(k => parseFloat(k[5]));
+    const price   = closes[closes.length - 1];
     const lastLow = parseFloat(klines15[klines15.length - 1][3]);
-    const eqlSweep = struct.eql && lastLow < struct.eql && price > struct.eql;
-    if (struct.trend === 'ranging' && !eqlSweep) return null; // skip ranging unless EQL sweep
+    const lastHigh= parseFloat(klines15[klines15.length - 1][2]);
 
-    // EMA trend filter — only trade when fast EMA above slow EMA
-    const emaFast = calcEMA(closes, CONFIG.EMA_FAST);
-    const emaSlow = calcEMA(closes, CONFIG.EMA_SLOW);
+    const rsi      = calcRSI(closes, 14);
+    if (rsi === null) return null;
+
+    const struct   = detectStructure(klines15);
+    const emaFast  = calcEMA(closes, CONFIG.EMA_FAST);
+    const emaSlow  = calcEMA(closes, CONFIG.EMA_SLOW);
     if (!emaFast || !emaSlow) return null;
-    const inUptrend = emaFast > emaSlow;
-    if (!inUptrend) return null;
 
-    // MACD
-    const macd = calcMACD(closes);
-    const macdBullish = macd?.positive;
+    const macd     = calcMACD(closes);
+    const bb       = calcBollingerBands(closes);
+    const bbPos    = bb ? (price - bb.lower) / (bb.upper - bb.lower) : 0.5;
+    const atr      = calcATR(klines15);
+    const atrPct   = atr ? (atr / price) * 100 : 0;
+    if (atrPct > 3) return null;
 
-    // Bollinger Bands — price near lower band = good entry, near upper = skip
-    const bb = calcBollingerBands(closes);
-    const bbPosition = bb ? (price - bb.lower) / (bb.upper - bb.lower) : 0.5;
-    if (bbPosition > 0.80) return null; // too close to upper band
-
-    // ATR for volatility
-    const atr = calcATR(klines15);
-    const atrPct = atr ? (atr / price) * 100 : 0;
-    if (atrPct > 3) return null; // too volatile, skip
-
-    // Volume confirmation
     const recentVol = vols.slice(-3).reduce((a, b) => a + b, 0) / 3;
     const prevVol   = vols.slice(-8, -3).reduce((a, b) => a + b, 0) / 5;
     const volRatio  = prevVol > 0 ? recentVol / prevVol : 1;
-    if (volRatio < 1.2) return null; // need volume confirmation
+    if (volRatio < 1.2) return null;
 
-    // Green candle streak
+    const chg24h  = parseFloat(ticker.priceChangePercent);
+    const fundRate= fundRates[sym] || 0;
+    const leverage= CONFIG.MAX_LEVERAGE;
+
+    // Candle streak (positive = green, negative = red)
     let streak = 0;
     for (let i = closes.length - 1; i >= 0; i--) {
-      if (closes[i] > opens[i]) streak++;
-      else break;
+      if (closes[i] > opens[i]) { if (streak >= 0) streak++; else break; }
+      else                      { if (streak <= 0) streak--; else break; }
     }
 
-    // Momentum
-    const mom1h  = closes.length >= 5  ? (price - closes[closes.length - 5])  / closes[closes.length - 5]  * 100 : 0;
-    const mom30m = closes.length >= 3  ? (price - closes[closes.length - 3])  / closes[closes.length - 3]  * 100 : 0;
-
-    // 24h stats
-    const chg24h   = parseFloat(ticker.priceChangePercent);
-    const high24h  = parseFloat(ticker.highPrice);
+    const mom1h  = closes.length >= 5 ? (price - closes[closes.length - 5]) / closes[closes.length - 5] * 100 : 0;
+    const mom30m = closes.length >= 3 ? (price - closes[closes.length - 3]) / closes[closes.length - 3] * 100 : 0;
+    const high24h = parseFloat(ticker.highPrice);
     const distHigh = (price - high24h) / high24h * 100;
 
-    // Funding rate — passed in from batch fetch to avoid per-symbol API calls
-    const fundRate = fundRates[sym] || 0;
-    const maxLev   = CONFIG.MAX_LEVERAGE; // fixed — no per-symbol bracket call
+    // ── Decide direction from structure ────────────────────
+    // EQL sweep: wick below equal lows + close above = LONG
+    const eqlSweep = struct.eql && lastLow < struct.eql && price > struct.eql;
+    // EQH sweep: wick above equal highs + close below = SHORT
+    const eqhSweep = struct.eqh && lastHigh > struct.eqh && price < struct.eqh;
 
-    // ── SCORE ──────────────────────────────────────────────
-    let score = 0;
+    const isLongTrend  = struct.trend === 'uptrend' || struct.trend === 'bullish' || eqlSweep;
+    const isShortTrend = struct.trend === 'downtrend' || struct.trend === 'bearish' || eqhSweep;
 
-    // Trend strength
-    score += Math.min(chg24h, 15) * 0.4;         // 24h change (max 6pts)
-    score += mom1h  * 3;                           // 1h momentum
-    score += mom30m * 2;                           // 30m momentum
-    score += streak * 4;                           // green streak (max ~20)
+    if (!isLongTrend && !isShortTrend) return null; // ranging with no sweep — skip
 
-    // Indicators
-    if (macdBullish) score += 6;                   // MACD bullish
-    if (rsi >= 45 && rsi <= 62) score += 5;        // RSI in ideal zone
-    if (bbPosition < 0.35) score += 8;             // near lower BB = good entry
-    if (volRatio >= 1.5) score += 6;               // strong volume
-    if (atrPct >= 0.5 && atrPct <= 1.8) score += 4; // healthy volatility
+    // ── LONG filters ───────────────────────────────────────
+    if (isLongTrend) {
+      if (rsi > CONFIG.RSI_MAX || rsi < CONFIG.RSI_MIN) return null;
+      if (emaFast < emaSlow) return null;
+      if (bbPos > 0.80) return null; // near upper BB — bad long entry
 
-    // Position in range
-    if (distHigh > -3  && distHigh <= 0) score += 5;  // near day high = strength
-    if (distHigh > -8  && distHigh <= -3) score += 2;
+      let score = 0;
+      score += Math.min(chg24h, 15) * 0.4;
+      score += mom1h * 3;
+      score += mom30m * 2;
+      score += Math.max(streak, 0) * 4;             // only count green streaks
+      if (macd?.positive) score += 6;
+      if (rsi >= 45 && rsi <= 62) score += 5;
+      if (bbPos < 0.35) score += 8;
+      if (volRatio >= 1.5) score += 6;
+      if (atrPct >= 0.5 && atrPct <= 1.8) score += 4;
+      if (distHigh > -3 && distHigh <= 0) score += 5;
+      if (fundRate < 0) score += 4;
+      if (fundRate > 0.05) score -= 15;
+      if (chg24h > 40) score -= 15;
+      if (streak > 6) score -= 10;
 
-    // Funding
-    if (fundRate < 0)     score += 4;   // longs get paid = bullish
-    if (fundRate > 0.05)  score -= 15;  // too expensive to hold long
+      let confidence = 'LOW';
+      if (score >= 25) confidence = 'HIGH';
+      else if (score >= 20) confidence = 'MEDIUM';
 
-    // Penalties
-    if (chg24h > 40)   score -= 15;    // already pumped too much
-    if (streak > 6)    score -= 10;    // over-extended streak
+      return {
+        sym, price, score, confidence, direction: 'LONG',
+        chg24h, mom1h, mom30m, streak,
+        rsi, macdBullish: macd?.positive, bbPosition: bbPos, volRatio, atrPct,
+        distHigh, fundRate, leverage,
+        marketStructure: struct.marketStructure, trend: struct.trend,
+        eql: struct.eql, eqh: struct.eqh,
+      };
+    }
 
-    const leverage = Math.min(CONFIG.MAX_LEVERAGE, maxLev);
+    // ── SHORT filters ──────────────────────────────────────
+    if (isShortTrend) {
+      if (rsi < CONFIG.RSI_SHORT_MIN || rsi > CONFIG.RSI_SHORT_MAX) return null;
+      if (emaFast > emaSlow) return null;   // EMA still bullish — skip short
+      if (bbPos < 0.20) return null;        // near lower BB — bad short entry
 
-    // Confidence tier
-    let confidence = 'LOW';
-    if (score >= 25) confidence = 'HIGH';
-    else if (score >= 20) confidence = 'MEDIUM';
+      let score = 0;
+      score += Math.abs(Math.min(chg24h, 0)) * 0.4; // negative 24h = adds points for short
+      score += Math.abs(Math.min(mom1h, 0)) * 3;    // negative 1h momentum
+      score += Math.abs(Math.min(mom30m, 0)) * 2;
+      score += Math.abs(Math.min(streak, 0)) * 4;   // red candle streak
+      if (macd && !macd.positive) score += 6;        // MACD bearish
+      if (rsi >= 62 && rsi <= 78) score += 5;        // RSI in overbought zone
+      if (bbPos > 0.65) score += 8;                  // near upper BB = good short entry
+      if (volRatio >= 1.5) score += 6;
+      if (atrPct >= 0.5 && atrPct <= 1.8) score += 4;
+      if (fundRate > 0.05) score += 6;               // expensive funding → longs will close
+      if (fundRate < -0.02) score -= 10;             // negative funding = bearish shorts risky
+      if (chg24h < -40) score -= 15;                 // already dumped too much
 
-    return {
-      sym, price, score, confidence,
-      chg24h, mom1h, mom30m, streak,
-      rsi, macdBullish, bbPosition, volRatio, atrPct,
-      distHigh, fundRate, leverage,
-      marketStructure: struct.marketStructure,
-      trend: struct.trend,
-      eql: struct.eql,
-      eqh: struct.eqh,
-    };
+      let confidence = 'LOW';
+      if (score >= 25) confidence = 'HIGH';
+      else if (score >= 20) confidence = 'MEDIUM';
 
+      return {
+        sym, price, score, confidence, direction: 'SHORT',
+        chg24h, mom1h, mom30m, streak,
+        rsi, macdBullish: macd?.positive, bbPosition: bbPos, volRatio, atrPct,
+        distHigh, fundRate, leverage,
+        marketStructure: struct.marketStructure, trend: struct.trend,
+        eql: struct.eql, eqh: struct.eqh,
+      };
+    }
+
+    return null;
   } catch (_) { return null; }
 }
 
@@ -360,9 +375,10 @@ async function findBestTrade(client) {
   return scored[0];
 }
 
-// ── OPEN TRADE ────────────────────────────────────────────────
+// ── OPEN TRADE (LONG or SHORT) ────────────────────────────────
 async function openTrade(client, pick, availUsdt) {
-  const { sym, price, leverage, confidence } = pick;
+  const { sym, price, leverage, confidence, direction } = pick;
+  const isLong = direction !== 'SHORT';
 
   await client.setLeverage({ symbol: sym, leverage });
   try {
@@ -374,59 +390,94 @@ async function openTrade(client, pick, availUsdt) {
   const qtyPrec   = sinfo.quantityPrecision;
   const pricePrec = sinfo.pricePrecision;
 
-  // Dynamic sizing: use more for HIGH confidence, less for MEDIUM
   const riskMultiplier = confidence === 'HIGH' ? CONFIG.RISK_PCT : CONFIG.RISK_PCT * 0.6;
   const qty = Math.floor((availUsdt * riskMultiplier * leverage / price) * Math.pow(10, qtyPrec)) / Math.pow(10, qtyPrec);
 
-  const order = await client.submitNewOrder({ symbol: sym, side: 'BUY', type: 'MARKET', quantity: qty });
+  // ── Fee validation ─────────────────────────────────────
+  // Total fees = notional × taker_fee × 2 sides
+  const notional     = qty * price;
+  const totalFees    = notional * CONFIG.TAKER_FEE * 2;
+  const expectedProfit = notional * CONFIG.TP_PCT;
+  const feeRatioPct  = (totalFees / notional * 100).toFixed(4);
+  log(`Fee check: notional=$${notional.toFixed(2)} fees=$${totalFees.toFixed(4)} (${feeRatioPct}%) profit@TP=$${expectedProfit.toFixed(4)}`);
+  if (expectedProfit < totalFees * 2) {
+    // TP profit is less than 2× fees — not worth it
+    throw new Error(`Trade rejected: TP profit $${expectedProfit.toFixed(4)} < 2× fees $${totalFees.toFixed(4)}`);
+  }
 
-  const tp = parseFloat((price * (1 + CONFIG.TP_PCT)).toFixed(pricePrec));
-  const sl = parseFloat((price * (1 - CONFIG.SL_PCT)).toFixed(pricePrec));
+  const entrySide = isLong ? 'BUY' : 'SELL';
+  const closeSide = isLong ? 'SELL' : 'BUY';
+
+  const order = await client.submitNewOrder({ symbol: sym, side: entrySide, type: 'MARKET', quantity: qty });
+
+  const tp = parseFloat((isLong
+    ? price * (1 + CONFIG.TP_PCT)
+    : price * (1 - CONFIG.TP_PCT)
+  ).toFixed(pricePrec));
+
+  const sl = parseFloat((isLong
+    ? price * (1 - CONFIG.SL_PCT)
+    : price * (1 + CONFIG.SL_PCT)
+  ).toFixed(pricePrec));
 
   try {
     await client.submitNewOrder({
-      symbol: sym, side: 'SELL', type: 'TAKE_PROFIT_MARKET',
+      symbol: sym, side: closeSide, type: 'TAKE_PROFIT_MARKET',
       stopPrice: tp, closePosition: 'true', workingType: 'MARK_PRICE', priceProtect: 'TRUE',
     });
   } catch (e) { log(`TP warn: ${e.message}`); }
 
   try {
     await client.submitNewOrder({
-      symbol: sym, side: 'SELL', type: 'STOP_MARKET',
+      symbol: sym, side: closeSide, type: 'STOP_MARKET',
       stopPrice: sl, closePosition: 'true', workingType: 'MARK_PRICE', priceProtect: 'TRUE',
     });
   } catch (e) { log(`SL warn: ${e.message}`); }
 
-  return { sym, qty, entry: price, leverage, tp, sl, confidence, orderId: order.orderId };
+  return { sym, qty, entry: price, leverage, tp, sl, confidence, direction, orderId: order.orderId };
 }
 
-// ── CHECK TRAILING STOP ───────────────────────────────────────
+// ── CHECK TRAILING STOP (LONG + SHORT) ────────────────────────
 async function checkTrailingStop(client) {
   try {
     const account   = await client.getAccountInformation();
-    const positions = account.positions.filter(p => parseFloat(p.positionAmt) > 0);
+    const positions = account.positions.filter(p => parseFloat(p.positionAmt) !== 0);
 
     for (const p of positions) {
       const sym    = p.symbol;
       const entry  = parseFloat(p.entryPrice);
+      const amt    = parseFloat(p.positionAmt);
+      const isLong = amt > 0;
       const ticker = await client.getSymbolPriceTicker({ symbol: sym });
       const cur    = parseFloat(ticker.price);
-      const gain   = (cur - entry) / entry;
 
-      // If price moved up TRAIL_PCT, tighten stop loss
+      // Gain direction depends on trade direction
+      const gain = isLong
+        ? (cur - entry) / entry
+        : (entry - cur) / entry;
+
       if (gain >= CONFIG.TRAIL_PCT) {
-        const newSl = parseFloat((cur * (1 - CONFIG.SL_PCT * 0.5)).toFixed(6));
-        log(`Trailing stop for ${sym}: moved SL to $${newSl} (gain: ${(gain*100).toFixed(2)}%)`);
-        // Cancel existing SL and set new one
+        // Tighten SL to lock in profit
+        const newSl = isLong
+          ? parseFloat((cur * (1 - CONFIG.SL_PCT * 0.5)).toFixed(6))
+          : parseFloat((cur * (1 + CONFIG.SL_PCT * 0.5)).toFixed(6));
+
+        const tp = isLong
+          ? parseFloat((entry * (1 + CONFIG.TP_PCT)).toFixed(6))
+          : parseFloat((entry * (1 - CONFIG.TP_PCT)).toFixed(6));
+
+        const closeSide = isLong ? 'SELL' : 'BUY';
+        const label     = isLong ? 'LONG' : 'SHORT';
+        log(`Trailing stop [${label}] ${sym}: SL → $${newSl} (gain: ${(gain*100).toFixed(2)}%)`);
+
         try {
           await client.cancelAllOpenOrders({ symbol: sym });
-          const tp  = parseFloat((entry * (1 + CONFIG.TP_PCT)).toFixed(6));
           await client.submitNewOrder({
-            symbol: sym, side: 'SELL', type: 'TAKE_PROFIT_MARKET',
+            symbol: sym, side: closeSide, type: 'TAKE_PROFIT_MARKET',
             stopPrice: tp, closePosition: 'true', workingType: 'MARK_PRICE', priceProtect: 'TRUE',
           });
           await client.submitNewOrder({
-            symbol: sym, side: 'SELL', type: 'STOP_MARKET',
+            symbol: sym, side: closeSide, type: 'STOP_MARKET',
             stopPrice: newSl, closePosition: 'true', workingType: 'MARK_PRICE', priceProtect: 'TRUE',
           });
         } catch (e) { log(`Trailing update warn: ${e.message}`); }
@@ -480,10 +531,11 @@ async function main() {
         const lev   = parseInt(p.leverage);
         const ticker = await client.getSymbolPriceTicker({ symbol: sym });
         const cur   = parseFloat(ticker.price);
-        const pct   = ((cur - entry) / entry) * 100 * lev;
-        const side  = amt > 0 ? '🟢 LONG' : '🔴 SHORT';
-        const tp    = parseFloat((entry * (1 + CONFIG.TP_PCT)).toFixed(6));
-        const sl    = parseFloat((entry * (1 - CONFIG.SL_PCT)).toFixed(6));
+        const isLong = amt > 0;
+        const pct   = (isLong ? (cur - entry) : (entry - cur)) / entry * 100 * lev;
+        const side  = isLong ? '🟢 LONG' : '🔴 SHORT';
+        const tp    = parseFloat((isLong ? entry * (1 + CONFIG.TP_PCT) : entry * (1 - CONFIG.TP_PCT)).toFixed(6));
+        const sl    = parseFloat((isLong ? entry * (1 - CONFIG.SL_PCT) : entry * (1 + CONFIG.SL_PCT)).toFixed(6));
 
         await notify(
           `📊 *Position Update — ${now()}*\n\n` +
@@ -521,23 +573,33 @@ async function main() {
     const result = await openTrade(client, pick, avail);
     const riskUsdt = (avail * CONFIG.RISK_PCT).toFixed(2);
 
+    const isLongTrade  = result.direction !== 'SHORT';
+    const dirEmoji     = isLongTrade ? '🟢' : '🔴';
+    const tpSign       = isLongTrade ? '+' : '-';
+    const slSign       = isLongTrade ? '-' : '+';
+    const streakLabel  = pick.streak > 0 ? `${pick.streak} 🟢 green` : `${Math.abs(pick.streak)} 🔴 red`;
+    // Fee info for transparency
+    const notional     = result.qty * result.entry;
+    const totalFees    = notional * CONFIG.TAKER_FEE * 2;
+    const netProfit    = notional * CONFIG.TP_PCT - totalFees;
+
     await notify(
       `🚀 *NEW TRADE — ${now()}*\n\n` +
       `Coin: *${result.sym}*\n` +
-      `Direction: *LONG x${result.leverage}*\n` +
+      `Direction: ${dirEmoji} *${result.direction} x${result.leverage}*\n` +
       `Confidence: *${result.confidence}* ⭐\n` +
       `Entry: \`$${fmtPrice(result.entry)}\`\n` +
       `Qty: \`${result.qty}\`\n` +
-      `🎯 TP: \`$${fmtPrice(result.tp)}\` (+4.5%)\n` +
-      `🛑 SL: \`$${fmtPrice(result.sl)}\` (-1.2%)\n\n` +
+      `🎯 TP: \`$${fmtPrice(result.tp)}\` (${tpSign}3.5%)\n` +
+      `🛑 SL: \`$${fmtPrice(result.sl)}\` (${slSign}1.0%)\n` +
+      `💸 Fees: \`$${totalFees.toFixed(4)}\` | Net profit: \`$${netProfit.toFixed(4)}\`\n\n` +
       `📊 *Signals:*\n` +
       `• Structure: \`${pick.marketStructure}\` (${pick.trend})\n` +
-      (pick.eql ? `• EQL: \`$${fmtPrice(pick.eql)}\` (liquidity below)\n` : '') +
-      (pick.eqh ? `• EQH: \`$${fmtPrice(pick.eqh)}\` (liquidity above)\n` : '') +
-      `• RSI: \`${pick.rsi?.toFixed(1)}\` | MACD: ${pick.macdBullish ? '✅ Bullish' : '⚠️'}\n` +
-      `• 1H: \`${pick.mom1h.toFixed(2)}%\` | Streak: \`${pick.streak}\` green\n` +
-      `• Volume surge: \`${pick.volRatio.toFixed(1)}x\`\n` +
-      `• BB position: \`${(pick.bbPosition * 100).toFixed(0)}%\` (lower=better)\n` +
+      (pick.eql ? `• EQL: \`$${fmtPrice(pick.eql)}\` (liq. below)\n` : '') +
+      (pick.eqh ? `• EQH: \`$${fmtPrice(pick.eqh)}\` (liq. above)\n` : '') +
+      `• RSI: \`${pick.rsi?.toFixed(1)}\` | MACD: ${pick.macdBullish ? '✅' : '❌'}\n` +
+      `• Streak: ${streakLabel} | 1H: \`${pick.mom1h.toFixed(2)}%\`\n` +
+      `• Volume: \`${pick.volRatio.toFixed(1)}x\` | BB: \`${(pick.bbPosition * 100).toFixed(0)}%\`\n` +
       `• Score: \`${pick.score.toFixed(1)}\`\n\n` +
       `💰 Risk: *$${riskUsdt} USDT* | Wallet: *$${avail.toFixed(4)}*`
     );
