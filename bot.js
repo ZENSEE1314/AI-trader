@@ -478,105 +478,120 @@ function calcATR(klines, period = 14) {
 }
 
 function detectSMC(klines) {
-  // We use the last 30 bars to detect structure
-  // Swing highs/lows based on 5-bar pivot
   const n = klines.length;
-  if (n < 15) return null;
+  if (n < 20) return null;
 
   const highs  = klines.map(k => parseFloat(k[2]));
   const lows   = klines.map(k => parseFloat(k[3]));
   const closes = klines.map(k => parseFloat(k[4]));
 
-  // Find swing highs/lows (simple 3-bar pivot)
+  // ── Swing Pivot Detection (3-bar confirmation) ────────────────
   const swingHighs = [];
   const swingLows  = [];
   for (let i = 2; i < n - 2; i++) {
-    if (highs[i] > highs[i-1] && highs[i] > highs[i-2] && highs[i] > highs[i+1] && highs[i] > highs[i+2]) {
+    if (highs[i] > highs[i-1] && highs[i] > highs[i-2] && highs[i] > highs[i+1] && highs[i] > highs[i+2])
       swingHighs.push({ idx: i, val: highs[i] });
-    }
-    if (lows[i] < lows[i-1] && lows[i] < lows[i-2] && lows[i] < lows[i+1] && lows[i] < lows[i+2]) {
+    if (lows[i] < lows[i-1] && lows[i] < lows[i-2] && lows[i] < lows[i+1] && lows[i] < lows[i+2])
       swingLows.push({ idx: i, val: lows[i] });
-    }
   }
-
   if (swingHighs.length < 2 || swingLows.length < 2) return null;
 
   const lastClose = closes[n - 1];
   const prevClose = closes[n - 2];
 
-  // Last 2 swing highs and lows
-  const sh1 = swingHighs[swingHighs.length - 1]; // most recent swing high
-  const sh2 = swingHighs[swingHighs.length - 2]; // previous swing high
-  const sl1 = swingLows[swingLows.length - 1];   // most recent swing low
-  const sl2 = swingLows[swingLows.length - 2];   // previous swing low
+  const sh1 = swingHighs[swingHighs.length - 1];
+  const sh2 = swingHighs[swingHighs.length - 2];
+  const sl1 = swingLows[swingLows.length - 1];
+  const sl2 = swingLows[swingLows.length - 2];
 
-  // Structure range (current)
-  const rangeHigh = sh1.val;
-  const rangeLow  = sl1.val;
-  const rangeSize = rangeHigh - rangeLow;
+  // ── Market Structure: HH / HL / LH / LL ─────────────────────
+  // HH = new swing high > previous swing high (bullish)
+  // HL = new swing low  > previous swing low  (bullish)
+  // LH = new swing high < previous swing high (bearish)
+  // LL = new swing low  < previous swing low  (bearish)
+  const shLabel = sh1.val > sh2.val ? 'HH' : 'LH'; // latest high structure
+  const slLabel = sl1.val > sl2.val ? 'HL' : 'LL'; // latest low structure
 
-  // Premium/Discount zones (top/bottom 25% of range)
-  const premiumTop    = rangeHigh;
-  const premiumBot    = rangeHigh - rangeSize * 0.25;
-  const discountTop   = rangeLow  + rangeSize * 0.25;
-  const discountBot   = rangeLow;
-  const equilibrium   = rangeLow  + rangeSize * 0.5;
+  let trend = 'ranging';
+  if (shLabel === 'HH' && slLabel === 'HL') trend = 'uptrend';
+  else if (shLabel === 'LH' && slLabel === 'LL') trend = 'downtrend';
+  else if (shLabel === 'HH') trend = 'bullish';
+  else if (shLabel === 'LH' && slLabel === 'HL') trend = 'weakening';
+  else if (shLabel === 'LH') trend = 'bearish';
 
-  // Zone classification
+  // ── EQL / EQH — Equal Lows / Equal Highs (liquidity zones) ──
+  // Two swing lows/highs within 0.3% = equal level = liquidity pool
+  const EQ_TOL = 0.003;
+  let eql = null; // Equal Lows price
+  let eqh = null; // Equal Highs price
+
+  if (Math.abs(sl1.val - sl2.val) / sl2.val < EQ_TOL)
+    eql = (sl1.val + sl2.val) / 2;
+  if (Math.abs(sh1.val - sh2.val) / sh2.val < EQ_TOL)
+    eqh = (sh1.val + sh2.val) / 2;
+
+  // ── Premium / Discount Zones ──────────────────────────────────
+  const rangeHigh   = sh1.val;
+  const rangeLow    = sl1.val;
+  const rangeSize   = rangeHigh - rangeLow;
+  const premiumBot  = rangeHigh - rangeSize * 0.25;
+  const discountTop = rangeLow  + rangeSize * 0.25;
+  const equilibrium = rangeLow  + rangeSize * 0.5;
+
   let zone = 'equilibrium';
   if (lastClose >= premiumBot) zone = 'premium';
   else if (lastClose <= discountTop) zone = 'discount';
 
-  // CHoCH: price breaks ABOVE previous swing high (bullish reversal)
-  //         or BELOW previous swing low (bearish reversal)
-  let signal    = null;
-  let structure = null;
+  // ── Signal Detection ──────────────────────────────────────────
+  let signal = null, structure = null, structureLabel = '';
 
-  // Bullish CHoCH: last close breaks above sh2 (older high) after being bearish
-  if (lastClose > sh2.val && prevClose <= sh2.val) {
-    signal    = 'BUY';
-    structure = 'CHoCH';
+  // CHoCH BUY: downtrend/bearish structure → price breaks above last LH
+  // Only valid when trend was bearish — this is the reversal signal
+  if ((trend === 'downtrend' || trend === 'bearish') && lastClose > sh1.val && prevClose <= sh1.val) {
+    signal = 'BUY'; structure = 'CHoCH';
+    structureLabel = `${shLabel}+${slLabel} → Bullish Reversal`;
   }
-  // Bearish CHoCH: last close breaks below sl2 (older low) after being bullish
-  else if (lastClose < sl2.val && prevClose >= sl2.val) {
-    signal    = 'SELL';
-    structure = 'CHoCH';
+  // CHoCH SELL: uptrend/bullish structure → price breaks below last HL
+  else if ((trend === 'uptrend' || trend === 'bullish') && lastClose < sl1.val && prevClose >= sl1.val) {
+    signal = 'SELL'; structure = 'CHoCH';
+    structureLabel = `${shLabel}+${slLabel} → Bearish Reversal`;
   }
-  // BMS (Break of Market Structure) — continuation
-  else if (lastClose > sh1.val && sh1.val > sh2.val) {
-    signal    = 'BUY';
-    structure = 'BMS';
+  // BMS BUY: uptrend continuation — HH+HL, break above last HH
+  else if (trend === 'uptrend' && lastClose > sh1.val) {
+    signal = 'BUY'; structure = 'BMS';
+    structureLabel = 'HH+HL Continuation';
   }
-  else if (lastClose < sl1.val && sl1.val < sl2.val) {
-    signal    = 'SELL';
-    structure = 'BMS';
+  // BMS SELL: downtrend continuation — LH+LL, break below last LL
+  else if (trend === 'downtrend' && lastClose < sl1.val) {
+    signal = 'SELL'; structure = 'BMS';
+    structureLabel = 'LH+LL Continuation';
   }
-  // SMS (Shift of Market Structure) — first break
-  else if (lastClose > sh1.val && sh1.val <= sh2.val) {
-    signal    = 'BUY';
-    structure = 'SMS';
+  // EQL Sweep BUY: price sweeps equal lows (liquidity grab) then closes above
+  else if (eql && lows[n-1] < eql && lastClose > eql) {
+    signal = 'BUY'; structure = 'EQL Sweep';
+    structureLabel = `Equal Lows $${fmtPrice(eql)} swept`;
   }
-  else if (lastClose < sl1.val && sl1.val >= sl2.val) {
-    signal    = 'SELL';
-    structure = 'SMS';
+  // EQH Sweep SELL: price sweeps equal highs (liquidity grab) then closes below
+  else if (eqh && highs[n-1] > eqh && lastClose < eqh) {
+    signal = 'SELL'; structure = 'EQH Sweep';
+    structureLabel = `Equal Highs $${fmtPrice(eqh)} swept`;
   }
 
   if (!signal) return null;
 
   const atr = calcATR(klines, 14) || rangeSize * 0.02;
 
-  // Entry, SL, TP calculation
   let entry, sl, tp1, tp2;
   if (signal === 'BUY') {
-    entry = zone === 'discount' ? lastClose : discountTop; // ideal entry in discount
-    sl    = sl1.val - atr * 0.5;                           // below last swing low + buffer
-    tp1   = entry + (entry - sl) * 1.5;                   // 1.5R
-    tp2   = entry + (entry - sl) * 2.5;                   // 2.5R
+    entry = zone === 'discount' ? lastClose : discountTop;
+    sl    = sl1.val - atr * 0.5;
+    tp1   = entry + (entry - sl) * 1.5;
+    tp2   = entry + (entry - sl) * 2.5;
   } else {
-    entry = zone === 'premium' ? lastClose : premiumBot;   // ideal entry in premium
-    sl    = sh1.val + atr * 0.5;                           // above last swing high + buffer
-    tp1   = entry - (sl - entry) * 1.5;                   // 1.5R
-    tp2   = entry - (sl - entry) * 2.5;                   // 2.5R
+    entry = zone === 'premium' ? lastClose : premiumBot;
+    sl    = sh1.val + atr * 0.5;
+    tp1   = entry - (sl - entry) * 1.5;
+    tp2   = entry - (sl - entry) * 2.5;
   }
 
   const slPct  = ((Math.abs(entry - sl)  / entry) * 100).toFixed(2);
@@ -584,11 +599,12 @@ function detectSMC(klines) {
   const tp2Pct = ((Math.abs(tp2 - entry) / entry) * 100).toFixed(2);
 
   return {
-    signal, structure, zone,
+    signal, structure, structureLabel, zone, trend,
+    marketStructure: `${shLabel}+${slLabel}`,
     entry, sl, tp1, tp2,
     slPct, tp1Pct, tp2Pct,
     swingHigh: sh1.val, swingLow: sl1.val,
-    premiumTop, premiumBot, discountTop, discountBot, equilibrium,
+    eql, eqh, premiumBot, discountTop, equilibrium,
   };
 }
 
@@ -757,12 +773,23 @@ async function analyzeTrader(ticker, timeframe = '4h') {
     const scored = traderScore(closes, klines);
     let { buyScore, sellScore, rows, rsi, ema9, ema21, volR } = scored;
 
-    // SMC bonus row
+    // SMC bonus row — includes HH/HL/LH/LL, EQL/EQH, trend, zone
     if (smc) {
-      if (smc.signal === 'BUY')  { buyScore  += 3; rows.unshift({ name: 'SMC Structure', verdict: `🟢 ${smc.structure} → BUY (zone: ${smc.zone})`, source: 'Smart Money Concepts' }); }
-      if (smc.signal === 'SELL') { sellScore += 3; rows.unshift({ name: 'SMC Structure', verdict: `🔴 ${smc.structure} → SELL (zone: ${smc.zone})`, source: 'Smart Money Concepts' }); }
+      const eqInfo = [
+        smc.eql ? `EQL $${fmtPrice(smc.eql)}` : null,
+        smc.eqh ? `EQH $${fmtPrice(smc.eqh)}` : null,
+      ].filter(Boolean).join(' | ');
+      const structLine = `${smc.structure} | ${smc.marketStructure} | ${smc.trend} | zone:${smc.zone}` +
+        (eqInfo ? ` | ${eqInfo}` : '');
+      if (smc.signal === 'BUY') {
+        buyScore += 3;
+        rows.unshift({ name: 'SMC Structure', verdict: `🟢 ${structLine}\n  <i>${e(smc.structureLabel)}</i>`, source: 'Smart Money Concepts' });
+      } else {
+        sellScore += 3;
+        rows.unshift({ name: 'SMC Structure', verdict: `🔴 ${structLine}\n  <i>${e(smc.structureLabel)}</i>`, source: 'Smart Money Concepts' });
+      }
     } else {
-      rows.unshift({ name: 'SMC Structure', verdict: '⚪ No clear structure break', source: 'Smart Money Concepts' });
+      rows.unshift({ name: 'SMC Structure', verdict: '⚪ No structure break / trend unclear', source: 'Smart Money Concepts' });
     }
 
     const net      = buyScore - sellScore;

@@ -145,8 +145,50 @@ function calcMACD(closes, fast = 12, slow = 26, signal = 9) {
   const emaSlow = calcEMA(closes, slow);
   if (!emaFast || !emaSlow) return null;
   const macdLine = emaFast - emaSlow;
-  // simplified signal: EMA of last macd values
   return { macd: macdLine, positive: macdLine > 0 };
+}
+
+// ── MARKET STRUCTURE ──────────────────────────────────────────
+// Returns trend direction from HH/HL/LH/LL + detects EQL/EQH
+function detectStructure(klines) {
+  const n = klines.length;
+  if (n < 20) return { trend: 'ranging', marketStructure: '?', eql: null, eqh: null };
+
+  const highs  = klines.map(k => parseFloat(k[2]));
+  const lows   = klines.map(k => parseFloat(k[3]));
+
+  const swingHighs = [];
+  const swingLows  = [];
+  for (let i = 2; i < n - 2; i++) {
+    if (highs[i] > highs[i-1] && highs[i] > highs[i-2] && highs[i] > highs[i+1] && highs[i] > highs[i+2])
+      swingHighs.push(highs[i]);
+    if (lows[i] < lows[i-1] && lows[i] < lows[i-2] && lows[i] < lows[i+1] && lows[i] < lows[i+2])
+      swingLows.push(lows[i]);
+  }
+
+  if (swingHighs.length < 2 || swingLows.length < 2)
+    return { trend: 'ranging', marketStructure: '?', eql: null, eqh: null };
+
+  const sh1 = swingHighs[swingHighs.length - 1];
+  const sh2 = swingHighs[swingHighs.length - 2];
+  const sl1 = swingLows[swingLows.length - 1];
+  const sl2 = swingLows[swingLows.length - 2];
+
+  const shLabel = sh1 > sh2 ? 'HH' : 'LH';
+  const slLabel = sl1 > sl2 ? 'HL' : 'LL';
+
+  let trend = 'ranging';
+  if (shLabel === 'HH' && slLabel === 'HL') trend = 'uptrend';
+  else if (shLabel === 'LH' && slLabel === 'LL') trend = 'downtrend';
+  else if (shLabel === 'HH') trend = 'bullish';
+  else if (shLabel === 'LH') trend = 'bearish';
+
+  // Equal Lows/Highs — liquidity zones
+  const EQ_TOL = 0.003;
+  const eql = Math.abs(sl1 - sl2) / sl2 < EQ_TOL ? (sl1 + sl2) / 2 : null;
+  const eqh = Math.abs(sh1 - sh2) / sh2 < EQ_TOL ? (sh1 + sh2) / 2 : null;
+
+  return { trend, marketStructure: `${shLabel}+${slLabel}`, eql, eqh, sh1, sl1 };
 }
 
 // ── SCORING SYSTEM ────────────────────────────────────────────
@@ -168,12 +210,20 @@ async function analyzeSymbol(client, ticker, fundRates = {}) {
     if (rsi === null) return null;
     if (rsi > CONFIG.RSI_MAX || rsi < CONFIG.RSI_MIN) return null;
 
-    // EMA trend filter — only trade when fast EMA above slow EMA (uptrend)
+    // Market structure — only buy in uptrend (HH+HL) or after bullish CHoCH
+    const struct = detectStructure(klines15);
+    if (struct.trend === 'downtrend' || struct.trend === 'bearish') return null;
+    // EQL sweep BUY: if equal lows swept and price reclaimed them, allow entry
+    const lastLow = parseFloat(klines15[klines15.length - 1][3]);
+    const eqlSweep = struct.eql && lastLow < struct.eql && price > struct.eql;
+    if (struct.trend === 'ranging' && !eqlSweep) return null; // skip ranging unless EQL sweep
+
+    // EMA trend filter — only trade when fast EMA above slow EMA
     const emaFast = calcEMA(closes, CONFIG.EMA_FAST);
     const emaSlow = calcEMA(closes, CONFIG.EMA_SLOW);
     if (!emaFast || !emaSlow) return null;
     const inUptrend = emaFast > emaSlow;
-    if (!inUptrend) return null; // only trade with trend
+    if (!inUptrend) return null;
 
     // MACD
     const macd = calcMACD(closes);
@@ -255,6 +305,10 @@ async function analyzeSymbol(client, ticker, fundRates = {}) {
       chg24h, mom1h, mom30m, streak,
       rsi, macdBullish, bbPosition, volRatio, atrPct,
       distHigh, fundRate, leverage,
+      marketStructure: struct.marketStructure,
+      trend: struct.trend,
+      eql: struct.eql,
+      eqh: struct.eqh,
     };
 
   } catch (_) { return null; }
@@ -477,6 +531,9 @@ async function main() {
       `🎯 TP: \`$${fmtPrice(result.tp)}\` (+4.5%)\n` +
       `🛑 SL: \`$${fmtPrice(result.sl)}\` (-1.2%)\n\n` +
       `📊 *Signals:*\n` +
+      `• Structure: \`${pick.marketStructure}\` (${pick.trend})\n` +
+      (pick.eql ? `• EQL: \`$${fmtPrice(pick.eql)}\` (liquidity below)\n` : '') +
+      (pick.eqh ? `• EQH: \`$${fmtPrice(pick.eqh)}\` (liquidity above)\n` : '') +
       `• RSI: \`${pick.rsi?.toFixed(1)}\` | MACD: ${pick.macdBullish ? '✅ Bullish' : '⚠️'}\n` +
       `• 1H: \`${pick.mom1h.toFixed(2)}%\` | Streak: \`${pick.streak}\` green\n` +
       `• Volume surge: \`${pick.volRatio.toFixed(1)}x\`\n` +
