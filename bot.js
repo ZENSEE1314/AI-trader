@@ -847,8 +847,184 @@ async function analyzeTrader(ticker, timeframe = '4h') {
   } catch (_) { return null; }
 }
 
+// ── SIGNAL TRACKER — monitors TP/SL after posting ────────────
+// Map: symbol → { signal, entry, tp1, tp2, tp3, sl, timeframe, tpHit, slHit }
+const signalTracker  = new Map();
 const traderCooldown = new Map();
 const TRADER_COOLDOWN = 60 * 60 * 1000; // 1 hour per coin
+
+// Generate a chart image via QuickChart.io (free, no API key needed)
+// Returns a URL pointing to a PNG of the price line + entry/TP/SL levels
+async function generateChartUrl(symbol, interval, entry, tp, sl, hitType) {
+  try {
+    const klines = await fetchKlines(symbol, interval, 60);
+    if (!klines || klines.length < 10) return null;
+
+    const closes = klines.map(k => parseFloat(k[4]));
+    const labels  = closes.map((_, i) => i + 1);
+
+    const chart = {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [
+          {
+            label: symbol,
+            data: closes,
+            borderColor: '#00e5ff',
+            borderWidth: 2,
+            fill: false,
+            pointRadius: 0,
+          },
+          {
+            label: hitType === 'TP' ? '🎯 TP HIT' : 'TP',
+            data: labels.map(() => tp),
+            borderColor: '#00e676',
+            borderWidth: 1.5,
+            borderDash: [6, 4],
+            pointRadius: 0,
+            fill: false,
+          },
+          {
+            label: 'Entry',
+            data: labels.map(() => entry),
+            borderColor: '#ffd740',
+            borderWidth: 1.5,
+            borderDash: [3, 3],
+            pointRadius: 0,
+            fill: false,
+          },
+          {
+            label: hitType === 'SL' ? '🛑 SL HIT' : 'SL',
+            data: labels.map(() => sl),
+            borderColor: '#ff1744',
+            borderWidth: 1.5,
+            borderDash: [6, 4],
+            pointRadius: 0,
+            fill: false,
+          },
+        ],
+      },
+      options: {
+        plugins: {
+          title: {
+            display: true,
+            text: `${symbol} ${interval.toUpperCase()} — ${hitType === 'TP' ? '🎯 TARGET HIT' : '🛑 STOP LOSS HIT'}`,
+            color: '#ffffff',
+          },
+          legend: { labels: { color: '#ffffff' } },
+        },
+        scales: {
+          x: { ticks: { color: '#888' } },
+          y: { ticks: { color: '#888' } },
+        },
+      },
+    };
+
+    const res = await fetch('https://quickchart.io/chart/create', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chart, width: 800, height: 420, format: 'png', backgroundColor: '#1a1a2e' }),
+      timeout: 15000,
+    });
+    if (!res.ok) return null;
+    const json = await res.json();
+    return json.url || null;
+  } catch (e) {
+    log(`generateChartUrl err: ${e.message}`);
+    return null;
+  }
+}
+
+// Send a photo to all chats
+async function tgSendPhotoTo(chatId, photoUrl, caption) {
+  try {
+    const res  = await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendPhoto`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: chatId, photo: photoUrl, caption, parse_mode: 'HTML', disable_web_page_preview: true }),
+      timeout: REQUEST_TIMEOUT,
+    });
+    const json = await res.json();
+    if (!json.ok) log(`tgSendPhoto error chat=${chatId}: ${json.description}`);
+  } catch (e) { log(`tgSendPhoto err: ${e.message}`); }
+}
+
+async function tgSendPhoto(photoUrl, caption) {
+  log(`TG Photo: ${caption.replace(/<[^>]+>/g, '').substring(0, 80)}`);
+  if (!TELEGRAM_TOKEN || !TELEGRAM_CHATS.length || !photoUrl) {
+    if (!photoUrl) await tgSend(caption); // fallback: text only
+    return;
+  }
+  const wait = MSG_INTERVAL - (Date.now() - lastMsgAt);
+  if (wait > 0) await sleep(wait);
+  lastMsgAt = Date.now();
+  await Promise.all(TELEGRAM_CHATS.map(id => tgSendPhotoTo(id, photoUrl, caption)));
+}
+
+// Check all tracked signals — if TP or SL hit, send chart + alert
+async function checkSignalTargets() {
+  if (!signalTracker.size || isBanned()) return;
+  const toRemove = [];
+
+  for (const [sym, sig] of signalTracker) {
+    try {
+      // Expire signals older than 48h
+      if (Date.now() - sig.postedAt > 48 * 60 * 60 * 1000) { toRemove.push(sym); continue; }
+
+      const res = await fetchWithRetry(`https://fapi.binance.com/fapi/v1/ticker/price?symbol=${sym}`);
+      if (!res) continue;
+      const { price: ps } = await res.json();
+      const cur    = parseFloat(ps);
+      const isBuy  = sig.signal === 'BUY';
+      const coin   = sym.replace('USDT', '');
+
+      // ── SL hit ──────────────────────────────────────────
+      const slHit = isBuy ? cur <= sig.sl : cur >= sig.sl;
+      if (slHit) {
+        log(`Signal tracker: SL hit ${sym} @ $${cur}`);
+        const chartUrl = await generateChartUrl(sym, sig.timeframe, sig.entry, sig.tp1, sig.sl, 'SL');
+        const loss = (Math.abs(sig.sl - sig.entry) / sig.entry * 100).toFixed(2);
+        const caption =
+          `🛑 <b>Stop Loss Hit — ${coin}/USDT</b>\n` +
+          `Entry: <code>$${fmtPrice(sig.entry)}</code>\n` +
+          `SL triggered at: <code>$${fmtPrice(cur)}</code> (-${loss}%)\n` +
+          `<i>Signal closed · ${now()}</i>`;
+        await tgSendPhoto(chartUrl, caption);
+        toRemove.push(sym);
+        continue;
+      }
+
+      // ── TP hit (check TP1 → TP2 → TP3 in order) ────────
+      const tps = [sig.tp1, sig.tp2, sig.tp3];
+      for (let i = sig.tpHit; i < tps.length; i++) {
+        const tpHit = isBuy ? cur >= tps[i] : cur <= tps[i];
+        if (tpHit) {
+          log(`Signal tracker: TP${i+1} hit ${sym} @ $${cur}`);
+          const chartUrl = await generateChartUrl(sym, sig.timeframe, sig.entry, tps[i], sig.sl, 'TP');
+          const gain = (Math.abs(tps[i] - sig.entry) / sig.entry * 100).toFixed(2);
+          const hasNext = i < tps.length - 1;
+          const caption =
+            `🎯 <b>Target ${i+1} Hit — ${coin}/USDT</b>\n` +
+            `Entry: <code>$${fmtPrice(sig.entry)}</code>\n` +
+            `TP${i+1} reached: <code>$${fmtPrice(cur)}</code> (+${gain}%)\n` +
+            (hasNext
+              ? `⏭ Next target TP${i+2}: <code>$${fmtPrice(tps[i+1])}</code>\n`
+              : `✅ <b>All targets hit!</b>\n`) +
+            `<i>${now()}</i>`;
+          await tgSendPhoto(chartUrl, caption);
+          sig.tpHit = i + 1;
+          if (!hasNext) toRemove.push(sym);
+          break;
+        }
+      }
+    } catch (e) { log(`checkSignalTargets ${sym}: ${e.message}`); }
+    await sleep(300);
+  }
+
+  toRemove.forEach(s => signalTracker.delete(s));
+  if (toRemove.length) log(`Signal tracker: closed ${toRemove.join(', ')}`);
+}
 
 async function runTraderScan(forced = false) {
   log(`── Trader Scan start${forced ? ' (forced)' : ''} ──`);
@@ -916,10 +1092,21 @@ async function runTraderScan(forced = false) {
         `<i>${now()}</i>`;
 
       await tgSend(msg);
-      await sleep(400);
+
+      // Track this signal for TP/SL monitoring
+      signalTracker.set(r.symbol, {
+        signal:    r.signal,
+        entry:     r.entry,
+        tp1: r.tp1, tp2: r.tp2, tp3: r.tp3,
+        sl:        r.sl,
+        timeframe: r.timeframe,
+        postedAt:  Date.now(),
+        tpHit:     0,
+        slHit:     false,
+      });
     }
 
-    log(`Trader: sent ${Math.min(results.length, 6)} signals`);
+    log(`Trader: sent ${Math.min(results.length, 6)} signals · tracking ${signalTracker.size} active`);
   } catch (err) { log(`trader scan err (silent): ${err.message}`); }
   log('── Trader Scan end ──\n');
 }
@@ -1038,10 +1225,11 @@ async function start() {
   await runTraderScan(); // initial trader scan
 
   setInterval(pollCommands, 5000);
-  setInterval(() => runScan(),        INTERVAL_MIN * 60 * 1000);
-  setInterval(() => runSMCScan(),     INTERVAL_MIN * 60 * 1000);
-  setInterval(() => runTraderScan(),  INTERVAL_MIN * 60 * 1000);
-  setInterval(() => checkSpikes(),    SPIKE_INTERVAL);
+  setInterval(() => runScan(),              INTERVAL_MIN * 60 * 1000);
+  setInterval(() => runSMCScan(),           INTERVAL_MIN * 60 * 1000);
+  setInterval(() => runTraderScan(),        INTERVAL_MIN * 60 * 1000);
+  setInterval(() => checkSpikes(),          SPIKE_INTERVAL);
+  setInterval(() => checkSignalTargets(),   3 * 60 * 1000); // check TP/SL every 3 min
 
   // ── AUTO TRADER (cycle.js) ──────────────────────────────────
   log(`Auto trader: first run in 60s, then every ${TRADE_INTERVAL_MIN} min`);
