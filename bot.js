@@ -220,7 +220,7 @@ async function testChats(replyTo) {
 
 // ── MESSAGE RATE LIMITER — 30s between sends ──────────────────
 let lastMsgAt = 0;
-const MSG_INTERVAL = 30 * 1000; // 30 seconds
+const MSG_INTERVAL = 3 * 1000; // 3 seconds
 
 async function tgSend(html) {
   log(`TG: ${html.replace(/<[^>]+>/g, '').substring(0, 80)}`);
