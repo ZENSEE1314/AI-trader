@@ -218,9 +218,20 @@ async function testChats(replyTo) {
   await tgSendTo(replyTo, report);
 }
 
+// ── MESSAGE RATE LIMITER — 30s between sends ──────────────────
+let lastMsgAt = 0;
+const MSG_INTERVAL = 30 * 1000; // 30 seconds
+
 async function tgSend(html) {
   log(`TG: ${html.replace(/<[^>]+>/g, '').substring(0, 80)}`);
   if (!TELEGRAM_TOKEN || !TELEGRAM_CHATS.length) return;
+
+  const wait = MSG_INTERVAL - (Date.now() - lastMsgAt);
+  if (wait > 0) {
+    log(`Rate limit: waiting ${(wait / 1000).toFixed(0)}s before next message`);
+    await sleep(wait);
+  }
+  lastMsgAt = Date.now();
   await Promise.all(TELEGRAM_CHATS.map(id => tgSendTo(id, html)));
 }
 
