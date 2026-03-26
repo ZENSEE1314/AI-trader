@@ -393,8 +393,8 @@ async function pollCommands() {
       // ── Regular command message ────────────────────────
       const msg = u.message;
       if (!msg?.text) continue;
-      if (!TELEGRAM_CHATS.includes(String(msg.chat.id))) continue;
-      log(`CMD: ${msg.text}`);
+      if (!msg.text.startsWith('/')) continue; // only handle slash commands
+      log(`CMD [${msg.chat.id}]: ${msg.text}`);
       await handleCommand(msg.text, String(msg.chat.id));
     }
   } catch(err) { log(`poll err: ${err.message}`); }
