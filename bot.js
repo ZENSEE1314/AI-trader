@@ -337,12 +337,20 @@ async function welcomeMember(channelId, user) {
   const name = user.first_name || user.username || 'there';
   let msg =
     `👋 <b>Welcome, ${e(name)}!</b>\n\n` +
-    `You've joined <b>AI Signal</b> — a 24/7 automated crypto signal bot.\n\n` +
-    `📊 <b>What you'll get:</b>\n` +
+    `━━━━━━━━━━━━━━━━━━\n` +
+    `💎 <b>You've just entered an exclusive circle.</b>\n\n` +
+    `This group is <b>limited to only 1,000 VIP members worldwide.</b>\n\n` +
+    `You now have privileged access to our <b>Millionaires Crypto Traders Signals</b> — built on advanced <b>Smart Money Concept (SMC)</b> strategies and crafted for those who demand precision and elite performance.\n\n` +
+    `📈 Position yourself to generate <b>up to 5% daily</b>\n` +
+    `💰 Unlock our private referral privilege — earn <b>$200/month</b> for each active member you personally introduce\n\n` +
+    `⚠️ Once all 1,000 positions are secured, <b>access will be permanently closed.</b>\n\n` +
+    `<i>This is not for everyone — only for those ready to move like the top 1%.</i>\n` +
+    `━━━━━━━━━━━━━━━━━━\n\n` +
+    `📊 <b>What you'll get here:</b>\n` +
     `• Live BUY/SELL signals with Entry, TP1/TP2/TP3 &amp; SL\n` +
     `• 🎯 Target Hit alerts with chart screenshot\n` +
-    `• ⚡ Spike alerts when coins move ±3% fast\n` +
-    `• Signals based on RSI, EMA, MACD, Bollinger Bands &amp; SMC structure\n\n`;
+    `• ⚡ Spike alerts when coins move fast\n` +
+    `• Signals powered by SMC, RSI, EMA, MACD &amp; Bollinger Bands\n\n`;
 
   if (lastSignalSummary) {
     msg += `📌 <b>Latest Signal:</b>\n${lastSignalSummary}\n\n`;
@@ -350,12 +358,12 @@ async function welcomeMember(channelId, user) {
 
   msg +=
     `━━━━━━━━━━━━━━━━━━\n` +
-    `💼 <b>Want to trade &amp; earn together with your friends?</b>\n\n` +
-    `Join me on <b>Bitunix</b> — the platform I use for futures trading.\n` +
+    `🚀 <b>Ready to trade &amp; earn together?</b>\n\n` +
+    `Join on <b>Bitunix</b> — the platform we use for futures trading.\n` +
     `👉 <a href="https://www.bitunix.com/register?vipCode=Signalme">Sign up here (my referral link)</a>\n\n` +
     `✅ After signing up, send me your <b>UID</b> — I'll set you as my partner.\n` +
     `💰 Earn <b>3% rebate on your own trades</b>.\n` +
-    `🤝 Share your link with friends and earn from <b>their trades too</b>!\n\n` +
+    `🤝 Refer friends — earn from <b>their trades too</b>!\n\n` +
     `━━━━━━━━━━━━━━━━━━\n` +
     `📌 <b>Useful commands:</b>\n` +
     `/signup — Sign up guide + referral link\n` +
