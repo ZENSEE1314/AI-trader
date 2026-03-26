@@ -1132,8 +1132,6 @@ async function runTraderScan(forced = false) {
       await tgSend(msg);
 
       // Cache latest signal for welcome message
-      const coin = r.symbol.replace('USDT', '');
-      const isBuy = r.signal === 'BUY';
       lastSignalSummary =
         `${isBuy ? '🟢' : '🔴'} <b>${r.signal} ${coin}/USDT</b> @ <code>$${fmtPrice(r.entry)}</code>\n` +
         `🎯 TP1: <code>$${fmtPrice(r.tp1)}</code>  🛑 SL: <code>$${fmtPrice(r.sl)}</code>\n` +
