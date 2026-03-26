@@ -209,6 +209,77 @@ function detectStructure(klines) {
   return { trend, shLabel, slLabel, marketStructure: `${shLabel}+${slLabel}`, eql, eqh, sh1, sl1, choch };
 }
 
+// ── ORDER BLOCK DETECTION ─────────────────────────────────────
+// An Order Block is the last bearish candle before a strong bullish impulse.
+// Rule 2: price returns to OB + LL formed there + reversal sign = LONG allowed
+function detectOrderBlock(klines) {
+  const n = klines.length;
+  if (n < 20) return null;
+
+  const opens  = klines.map(k => parseFloat(k[1]));
+  const highs  = klines.map(k => parseFloat(k[2]));
+  const lows   = klines.map(k => parseFloat(k[3]));
+  const closes = klines.map(k => parseFloat(k[4]));
+
+  // Find the strongest bullish impulse in the last 40 candles (min 2.5% in 3 bars)
+  let obZone = null;
+  for (let i = 5; i < Math.min(n - 3, 40); i++) {
+    const impulse = (closes[i] - closes[i - 3]) / closes[i - 3] * 100;
+    if (impulse < 2.5) continue; // not a strong enough move
+
+    // Walk back to find the last bearish candle before this impulse
+    for (let j = i - 1; j >= Math.max(0, i - 5); j--) {
+      if (closes[j] < opens[j]) { // bearish candle = the OB
+        obZone = {
+          high: Math.max(opens[j], closes[j]), // OB top
+          low:  Math.min(opens[j], closes[j]), // OB bottom (entry zone)
+          full_high: highs[j],
+          full_low:  lows[j],
+        };
+        break;
+      }
+    }
+    if (obZone) break; // use the most recent impulse
+  }
+
+  return obZone;
+}
+
+// Detect bullish reversal candle patterns at current price
+function detectReversalSign(klines) {
+  const n = klines.length;
+  if (n < 3) return { found: false, type: null };
+
+  const opens  = klines.map(k => parseFloat(k[1]));
+  const highs  = klines.map(k => parseFloat(k[2]));
+  const lows   = klines.map(k => parseFloat(k[3]));
+  const closes = klines.map(k => parseFloat(k[4]));
+
+  const i = n - 1; // latest candle
+  const body     = Math.abs(closes[i] - opens[i]);
+  const fullRange= highs[i] - lows[i];
+  const lowerWick= Math.min(opens[i], closes[i]) - lows[i];
+  const upperWick= highs[i] - Math.max(opens[i], closes[i]);
+
+  // ── Hammer / Pin Bar: long lower wick rejection ──────────
+  const isHammer = lowerWick > body * 2 && upperWick < body * 0.5 && fullRange > 0;
+
+  // ── Bullish Engulfing: current green candle engulfs prev red ─
+  const prevBody  = Math.abs(closes[i-1] - opens[i-1]);
+  const prevBear  = closes[i-1] < opens[i-1];
+  const curBull   = closes[i] > opens[i];
+  const isEngulfing = curBull && prevBear && closes[i] > opens[i-1] && opens[i] < closes[i-1] && body > prevBody;
+
+  // ── Wick Rejection (strong lower wick even if not full hammer) ─
+  const isWickRejection = lowerWick > fullRange * 0.55 && closes[i] > opens[i];
+
+  if (isHammer)        return { found: true, type: 'Hammer/Pin Bar' };
+  if (isEngulfing)     return { found: true, type: 'Bullish Engulfing' };
+  if (isWickRejection) return { found: true, type: 'Wick Rejection' };
+
+  return { found: false, type: null };
+}
+
 // ── SCORING SYSTEM (LONG + SHORT) ─────────────────────────────
 async function analyzeSymbol(client, ticker, fundRates = {}) {
   const sym = ticker.symbol;
@@ -259,39 +330,58 @@ async function analyzeSymbol(client, ticker, fundRates = {}) {
     const high24h = parseFloat(ticker.highPrice);
     const distHigh = (price - high24h) / high24h * 100;
 
-    // ── Rule 1: LH = NO LONG. Period. ──────────────────────
-    // If the latest swing high is a Lower High, price is in bearish structure.
-    // Going long against a LH is chasing — the bot is blocked from LONG.
+    // ── Rule 1: LH = NO LONG (unless Rule 2 exception applies) ─
     const lhFormed = struct.shLabel === 'LH';
     const llFormed = struct.slLabel === 'LL'; // LH+LL = confirmed downtrend
+
+    // ── Rule 2: LL at Order Block + reversal sign = LONG allowed ─
+    // Even in bearish structure (LH), if price reaches a strong OB zone,
+    // forms a LL there, and shows a reversal candle → institutional reversal setup
+    const ob       = detectOrderBlock(klines15);
+    const reversal = detectReversalSign(klines15);
+    const atOB     = ob && price >= ob.full_low * 0.998 && price <= ob.high * 1.002; // within 0.2%
+    const rule2Long = lhFormed && llFormed && atOB && reversal.found && rsi < 45;    // all 4 conditions
 
     // EQH sweep: wick above equal highs + close below = SHORT confirmation
     const eqhSweep = struct.eqh && lastHigh > struct.eqh && price < struct.eqh;
 
     // EQL sweep: wick below equal lows + close above = LONG signal
-    // Only valid when NOT in LH structure (Rule 1)
-    const eqlSweep = struct.eql && lastLow < struct.eql && price > struct.eql && !lhFormed;
+    // Only valid when NOT in LH structure (unless Rule 2 unlocks it)
+    const eqlSweep = struct.eql && lastLow < struct.eql && price > struct.eql && (!lhFormed || rule2Long);
 
-    // CHoCH bearish (uptrend → close below last HL) also forces SHORT
+    // CHoCH bearish/bullish
     const chochBearish = struct.choch === 'bearish';
     const chochBullish = struct.choch === 'bullish';
 
-    const isLongTrend  = !lhFormed && (struct.trend === 'uptrend' || struct.trend === 'bullish' || eqlSweep || chochBullish);
-    const isShortTrend = lhFormed  || struct.trend === 'downtrend' || struct.trend === 'bearish' || eqhSweep || chochBearish;
+    // Rule 2 can unlock LONG even in LH structure (OB reversal exception)
+    const isLongTrend  = rule2Long ||
+                         (!lhFormed && (struct.trend === 'uptrend' || struct.trend === 'bullish' || eqlSweep || chochBullish));
+    const isShortTrend = !rule2Long &&
+                         (lhFormed || struct.trend === 'downtrend' || struct.trend === 'bearish' || eqhSweep || chochBearish);
 
-    if (!isLongTrend && !isShortTrend) return null; // ranging, no structure — skip
+    if (!isLongTrend && !isShortTrend) return null;
 
-    // ── LONG filters (only when HH structure confirmed) ────
+    // ── LONG filters ───────────────────────────────────────
     if (isLongTrend) {
-      if (rsi > CONFIG.RSI_MAX || rsi < CONFIG.RSI_MIN) return null;
-      if (emaFast < emaSlow) return null;
-      if (bbPos > 0.80) return null; // near upper BB — bad long entry
+      // Rule 2 OB reversal: use relaxed RSI (oversold OK), EMA can be bearish
+      if (!rule2Long) {
+        if (rsi > CONFIG.RSI_MAX || rsi < CONFIG.RSI_MIN) return null;
+        if (emaFast < emaSlow) return null;
+      }
+      if (bbPos > 0.80) return null;
 
       let score = 0;
+      // Rule 2 bonus: institutional OB reversal
+      if (rule2Long) {
+        score += 15;                                  // strong base score for OB reversal
+        if (reversal.type === 'Bullish Engulfing') score += 8;
+        else if (reversal.type === 'Hammer/Pin Bar') score += 6;
+        else if (reversal.type === 'Wick Rejection') score += 4;
+      }
       score += Math.min(chg24h, 15) * 0.4;
       score += mom1h * 3;
       score += mom30m * 2;
-      score += Math.max(streak, 0) * 4;             // only count green streaks
+      score += Math.max(streak, 0) * 4;
       if (macd?.positive) score += 6;
       if (rsi >= 45 && rsi <= 62) score += 5;
       if (bbPos < 0.35) score += 8;
@@ -301,7 +391,7 @@ async function analyzeSymbol(client, ticker, fundRates = {}) {
       if (fundRate < 0) score += 4;
       if (fundRate > 0.05) score -= 15;
       if (chg24h > 40) score -= 15;
-      if (streak > 6) score -= 10;
+      if (streak > 6 && !rule2Long) score -= 10;
 
       let confidence = 'LOW';
       if (score >= 25) confidence = 'HIGH';
@@ -314,6 +404,7 @@ async function analyzeSymbol(client, ticker, fundRates = {}) {
         distHigh, fundRate, leverage,
         marketStructure: struct.marketStructure, trend: struct.trend,
         eql: struct.eql, eqh: struct.eqh,
+        rule2Long, obZone: ob, reversalType: reversal.type,
       };
     }
 
@@ -617,14 +708,16 @@ async function main() {
       `🚀 *NEW TRADE — ${now()}*\n\n` +
       `Coin: *${result.sym}*\n` +
       `Direction: ${dirEmoji} *${result.direction} x${result.leverage}*\n` +
+      (pick.rule2Long ? `🏦 *Rule 2 — OB Reversal* (${pick.reversalType})\n` : '') +
       `Confidence: *${result.confidence}* ⭐\n` +
       `Entry: \`$${fmtPrice(result.entry)}\`\n` +
       `Qty: \`${result.qty}\`\n` +
       `🎯 TP: \`$${fmtPrice(result.tp)}\` (${tpSign}3.5%)\n` +
       `🛑 SL: \`$${fmtPrice(result.sl)}\` (${slSign}1.0%)\n` +
-      `💸 Fees: \`$${totalFees.toFixed(4)}\` | Net profit: \`$${netProfit.toFixed(4)}\`\n\n` +
+      `💸 Fees: \`$${totalFees.toFixed(4)}\` | Net: \`$${netProfit.toFixed(4)}\`\n\n` +
       `📊 *Signals:*\n` +
       `• Structure: \`${pick.marketStructure}\` (${pick.trend})\n` +
+      (pick.rule2Long && pick.obZone ? `• OB zone: \`$${fmtPrice(pick.obZone.low)}\`–\`$${fmtPrice(pick.obZone.high)}\`\n` : '') +
       (pick.eql ? `• EQL: \`$${fmtPrice(pick.eql)}\` (liq. below)\n` : '') +
       (pick.eqh ? `• EQH: \`$${fmtPrice(pick.eqh)}\` (liq. above)\n` : '') +
       `• RSI: \`${pick.rsi?.toFixed(1)}\` | MACD: ${pick.macdBullish ? '✅' : '❌'}\n` +
