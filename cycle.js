@@ -153,46 +153,60 @@ function calcMACD(closes, fast = 12, slow = 26, signal = 9) {
 }
 
 // ── MARKET STRUCTURE ──────────────────────────────────────────
-// Returns trend direction from HH/HL/LH/LL + detects EQL/EQH
+// Detects HH/HL/LH/LL, EQL/EQH, BMS and CHoCH
+// Rule 1 (from user): LH formed → NO LONG. SHORT bias only.
 function detectStructure(klines) {
   const n = klines.length;
-  if (n < 20) return { trend: 'ranging', marketStructure: '?', eql: null, eqh: null };
+  if (n < 20) return { trend: 'ranging', shLabel: '?', slLabel: '?', marketStructure: '?', eql: null, eqh: null, choch: null };
 
   const highs  = klines.map(k => parseFloat(k[2]));
   const lows   = klines.map(k => parseFloat(k[3]));
+  const closes = klines.map(k => parseFloat(k[4]));
 
-  const swingHighs = [];
+  // ── Swing points (need 2 bars each side to confirm) ──────
+  const swingHighs = []; // { price, idx }
   const swingLows  = [];
   for (let i = 2; i < n - 2; i++) {
     if (highs[i] > highs[i-1] && highs[i] > highs[i-2] && highs[i] > highs[i+1] && highs[i] > highs[i+2])
-      swingHighs.push(highs[i]);
+      swingHighs.push({ price: highs[i], idx: i });
     if (lows[i] < lows[i-1] && lows[i] < lows[i-2] && lows[i] < lows[i+1] && lows[i] < lows[i+2])
-      swingLows.push(lows[i]);
+      swingLows.push({ price: lows[i], idx: i });
   }
 
   if (swingHighs.length < 2 || swingLows.length < 2)
-    return { trend: 'ranging', marketStructure: '?', eql: null, eqh: null };
+    return { trend: 'ranging', shLabel: '?', slLabel: '?', marketStructure: '?', eql: null, eqh: null, choch: null };
 
-  const sh1 = swingHighs[swingHighs.length - 1];
-  const sh2 = swingHighs[swingHighs.length - 2];
-  const sl1 = swingLows[swingLows.length - 1];
-  const sl2 = swingLows[swingLows.length - 2];
+  const sh1 = swingHighs[swingHighs.length - 1].price;
+  const sh2 = swingHighs[swingHighs.length - 2].price;
+  const sl1 = swingLows[swingLows.length - 1].price;
+  const sl2 = swingLows[swingLows.length - 2].price;
 
-  const shLabel = sh1 > sh2 ? 'HH' : 'LH';
-  const slLabel = sl1 > sl2 ? 'HL' : 'LL';
+  const shLabel = sh1 > sh2 ? 'HH' : 'LH'; // Higher High or Lower High
+  const slLabel = sl1 > sl2 ? 'HL' : 'LL'; // Higher Low or Lower Low
 
+  // ── Trend from structure ──────────────────────────────────
   let trend = 'ranging';
-  if (shLabel === 'HH' && slLabel === 'HL') trend = 'uptrend';
+  if      (shLabel === 'HH' && slLabel === 'HL') trend = 'uptrend';
   else if (shLabel === 'LH' && slLabel === 'LL') trend = 'downtrend';
-  else if (shLabel === 'HH') trend = 'bullish';
-  else if (shLabel === 'LH') trend = 'bearish';
+  else if (shLabel === 'HH')                     trend = 'bullish';
+  else if (shLabel === 'LH')                     trend = 'bearish';
 
-  // Equal Lows/Highs — liquidity zones
-  const EQ_TOL = 0.003;
-  const eql = Math.abs(sl1 - sl2) / sl2 < EQ_TOL ? (sl1 + sl2) / 2 : null;
-  const eqh = Math.abs(sh1 - sh2) / sh2 < EQ_TOL ? (sh1 + sh2) / 2 : null;
+  // ── CHoCH: Change of Character ────────────────────────────
+  // Bearish CHoCH: was uptrend, price closes below last HL → trend flipping
+  // Bullish CHoCH: was downtrend, price closes above last LH → trend flipping
+  const lastClose = closes[closes.length - 1];
+  let choch = null;
+  if ((trend === 'uptrend' || trend === 'bullish') && lastClose < sl1)
+    choch = 'bearish'; // price broke below last HL → CHoCH bearish
+  if ((trend === 'downtrend' || trend === 'bearish') && lastClose > sh1)
+    choch = 'bullish'; // price broke above last LH → CHoCH bullish
 
-  return { trend, marketStructure: `${shLabel}+${slLabel}`, eql, eqh, sh1, sl1 };
+  // ── Equal Lows / Equal Highs (liquidity pools) ───────────
+  const EQ_TOL = 0.003; // within 0.3% = equal
+  const eql = Math.abs(sl1 - sl2) / sl2 < EQ_TOL ? (sl1 + sl2) / 2 : null; // EQL — SHORT target
+  const eqh = Math.abs(sh1 - sh2) / sh2 < EQ_TOL ? (sh1 + sh2) / 2 : null; // EQH — LONG target
+
+  return { trend, shLabel, slLabel, marketStructure: `${shLabel}+${slLabel}`, eql, eqh, sh1, sl1, choch };
 }
 
 // ── SCORING SYSTEM (LONG + SHORT) ─────────────────────────────
@@ -245,18 +259,29 @@ async function analyzeSymbol(client, ticker, fundRates = {}) {
     const high24h = parseFloat(ticker.highPrice);
     const distHigh = (price - high24h) / high24h * 100;
 
-    // ── Decide direction from structure ────────────────────
-    // EQL sweep: wick below equal lows + close above = LONG
-    const eqlSweep = struct.eql && lastLow < struct.eql && price > struct.eql;
-    // EQH sweep: wick above equal highs + close below = SHORT
+    // ── Rule 1: LH = NO LONG. Period. ──────────────────────
+    // If the latest swing high is a Lower High, price is in bearish structure.
+    // Going long against a LH is chasing — the bot is blocked from LONG.
+    const lhFormed = struct.shLabel === 'LH';
+    const llFormed = struct.slLabel === 'LL'; // LH+LL = confirmed downtrend
+
+    // EQH sweep: wick above equal highs + close below = SHORT confirmation
     const eqhSweep = struct.eqh && lastHigh > struct.eqh && price < struct.eqh;
 
-    const isLongTrend  = struct.trend === 'uptrend' || struct.trend === 'bullish' || eqlSweep;
-    const isShortTrend = struct.trend === 'downtrend' || struct.trend === 'bearish' || eqhSweep;
+    // EQL sweep: wick below equal lows + close above = LONG signal
+    // Only valid when NOT in LH structure (Rule 1)
+    const eqlSweep = struct.eql && lastLow < struct.eql && price > struct.eql && !lhFormed;
 
-    if (!isLongTrend && !isShortTrend) return null; // ranging with no sweep — skip
+    // CHoCH bearish (uptrend → close below last HL) also forces SHORT
+    const chochBearish = struct.choch === 'bearish';
+    const chochBullish = struct.choch === 'bullish';
 
-    // ── LONG filters ───────────────────────────────────────
+    const isLongTrend  = !lhFormed && (struct.trend === 'uptrend' || struct.trend === 'bullish' || eqlSweep || chochBullish);
+    const isShortTrend = lhFormed  || struct.trend === 'downtrend' || struct.trend === 'bearish' || eqhSweep || chochBearish;
+
+    if (!isLongTrend && !isShortTrend) return null; // ranging, no structure — skip
+
+    // ── LONG filters (only when HH structure confirmed) ────
     if (isLongTrend) {
       if (rsi > CONFIG.RSI_MAX || rsi < CONFIG.RSI_MIN) return null;
       if (emaFast < emaSlow) return null;
@@ -299,18 +324,22 @@ async function analyzeSymbol(client, ticker, fundRates = {}) {
       if (bbPos < 0.20) return null;        // near lower BB — bad short entry
 
       let score = 0;
-      score += Math.abs(Math.min(chg24h, 0)) * 0.4; // negative 24h = adds points for short
-      score += Math.abs(Math.min(mom1h, 0)) * 3;    // negative 1h momentum
+      if (lhFormed && llFormed) score += 10;         // Rule 1: confirmed LH+LL downtrend = strong short bias
+      else if (lhFormed)        score += 6;          // LH alone = short bias
+      if (chochBearish)         score += 8;          // CHoCH bearish = structure just flipped
+      if (eqhSweep)             score += 7;          // swept EQH liquidity = shorts entering
+      score += Math.abs(Math.min(chg24h, 0)) * 0.4;
+      score += Math.abs(Math.min(mom1h, 0)) * 3;
       score += Math.abs(Math.min(mom30m, 0)) * 2;
       score += Math.abs(Math.min(streak, 0)) * 4;   // red candle streak
-      if (macd && !macd.positive) score += 6;        // MACD bearish
-      if (rsi >= 62 && rsi <= 78) score += 5;        // RSI in overbought zone
+      if (macd && !macd.positive) score += 6;
+      if (rsi >= 55 && rsi <= 75) score += 5;        // RSI in bearish pullback zone
       if (bbPos > 0.65) score += 8;                  // near upper BB = good short entry
       if (volRatio >= 1.5) score += 6;
       if (atrPct >= 0.5 && atrPct <= 1.8) score += 4;
       if (fundRate > 0.05) score += 6;               // expensive funding → longs will close
-      if (fundRate < -0.02) score -= 10;             // negative funding = bearish shorts risky
-      if (chg24h < -40) score -= 15;                 // already dumped too much
+      if (fundRate < -0.02) score -= 10;
+      if (chg24h < -40) score -= 15;
 
       let confidence = 'LOW';
       if (score >= 25) confidence = 'HIGH';
