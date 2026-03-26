@@ -272,17 +272,55 @@ async function handleCommand(text, fromChatId) {
   }
 }
 
+// ── LAST SIGNALS CACHE (for welcome message) ─────────────────
+let lastSignalSummary = null; // set each time a trader signal is posted
+
+// ── WELCOME NEW CHANNEL MEMBER ───────────────────────────────
+async function welcomeMember(channelId, user) {
+  const name = user.first_name || user.username || 'there';
+  let msg =
+    `👋 <b>Welcome, ${e(name)}!</b>\n\n` +
+    `You've joined <b>AI Signal</b> — a 24/7 automated crypto signal bot.\n\n` +
+    `📊 <b>What you'll get:</b>\n` +
+    `• Live BUY/SELL signals with Entry, TP1/TP2/TP3 &amp; SL\n` +
+    `• 🎯 Target Hit alerts with chart screenshot\n` +
+    `• ⚡ Spike alerts when coins move ±3% fast\n` +
+    `• Signals based on RSI, EMA, MACD, Bollinger Bands &amp; SMC structure\n\n`;
+
+  if (lastSignalSummary) {
+    msg += `📌 <b>Latest Signal:</b>\n${lastSignalSummary}\n\n`;
+  }
+
+  msg += `<i>Signals are for educational purposes. Always manage your own risk.</i>`;
+
+  await tgSendTo(channelId, msg);
+}
+
 // ── TELEGRAM POLL ────────────────────────────────────────────
 async function pollCommands() {
   if (!TELEGRAM_TOKEN || !TELEGRAM_CHATS.length) return;
   try {
     const res  = await fetch(
-      `https://api.telegram.org/bot${TELEGRAM_TOKEN}/getUpdates?offset=${lastUpdateId + 1}&timeout=1`,
+      `https://api.telegram.org/bot${TELEGRAM_TOKEN}/getUpdates?offset=${lastUpdateId + 1}&timeout=1&allowed_updates=["message","chat_member"]`,
       { timeout: 8000 }
     );
     const data = await res.json();
     for (const u of (data.result || [])) {
       lastUpdateId = u.update_id;
+
+      // ── New member joined a channel the bot is in ──────
+      if (u.chat_member) {
+        const cm = u.chat_member;
+        const isJoin = cm.new_chat_member?.status === 'member' &&
+                       (cm.old_chat_member?.status === 'left' || cm.old_chat_member?.status === 'kicked');
+        if (isJoin) {
+          log(`New member: ${cm.new_chat_member.user.username || cm.new_chat_member.user.id} joined ${cm.chat.id}`);
+          await welcomeMember(String(cm.chat.id), cm.new_chat_member.user);
+        }
+        continue;
+      }
+
+      // ── Regular command message ────────────────────────
       const msg = u.message;
       if (!msg?.text) continue;
       if (!TELEGRAM_CHATS.includes(String(msg.chat.id))) continue;
@@ -1092,6 +1130,14 @@ async function runTraderScan(forced = false) {
         `<i>${now()}</i>`;
 
       await tgSend(msg);
+
+      // Cache latest signal for welcome message
+      const coin = r.symbol.replace('USDT', '');
+      const isBuy = r.signal === 'BUY';
+      lastSignalSummary =
+        `${isBuy ? '🟢' : '🔴'} <b>${r.signal} ${coin}/USDT</b> @ <code>$${fmtPrice(r.entry)}</code>\n` +
+        `🎯 TP1: <code>$${fmtPrice(r.tp1)}</code>  🛑 SL: <code>$${fmtPrice(r.sl)}</code>\n` +
+        `<i>${now()}</i>`;
 
       // Track this signal for TP/SL monitoring
       signalTracker.set(r.symbol, {

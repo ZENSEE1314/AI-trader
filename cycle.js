@@ -10,8 +10,9 @@ const fetch = require('node-fetch');
 const API_KEY        = process.env.BINANCE_API_KEY    || '';
 const API_SECRET     = process.env.BINANCE_API_SECRET || '';
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN     || '';
-// Supports multiple chat IDs separated by comma, e.g. "-1001003740693659,123456789"
-const TELEGRAM_CHATS = (process.env.TELEGRAM_CHAT_ID || '').split(',').map(s => s.trim()).filter(Boolean);
+// Trade alerts go ONLY to private chats (positive IDs), NOT to public channels
+const TELEGRAM_CHATS   = (process.env.TELEGRAM_CHAT_ID || '').split(',').map(s => s.trim()).filter(Boolean);
+const PRIVATE_CHATS    = TELEGRAM_CHATS.filter(id => !id.startsWith('-'));
 
 // ── RISK CONFIG ───────────────────────────────────────────────
 // Edit these to tune the bot. Never set LEVERAGE above 20.
@@ -90,8 +91,8 @@ async function sendToChat(chatId, msg, retries = 3) {
 
 async function notify(msg) {
   log(`>> ${msg.replace(/\*/g,'').replace(/`/g,'').substring(0, 100)}`);
-  if (!TELEGRAM_TOKEN || !TELEGRAM_CHATS.length) return;
-  await Promise.all(TELEGRAM_CHATS.map(id => sendToChat(id, msg)));
+  if (!TELEGRAM_TOKEN || !PRIVATE_CHATS.length) return;
+  await Promise.all(PRIVATE_CHATS.map(id => sendToChat(id, msg))); // private only — not channel
 }
 
 // ── INDICATORS ────────────────────────────────────────────────
