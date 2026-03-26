@@ -652,6 +652,11 @@ async function findBestTrade(client) {
   return scored[0];
 }
 
+// ── TRADE STATE (multi-TP management) ─────────────────────────
+// Persists TP levels + which TPs have been hit across cycles
+const tradeState = new Map();
+// sym → { entry, tp1, tp2, tp3, sl, qty, isLong, tpHit1, tpHit2, pricePrec, qtyPrec }
+
 // ── OPEN TRADE (LONG or SHORT) ────────────────────────────────
 async function openTrade(client, pick, wallet) {
   const { sym, price, leverage, confidence, direction, slPrice } = pick;
@@ -667,82 +672,121 @@ async function openTrade(client, pick, wallet) {
   const qtyPrec   = sinfo.quantityPrecision;
   const pricePrec = sinfo.pricePrecision;
 
-  // ── SL from 15m swing point (0.1% buffer) ──────────────
-  const sl = parseFloat(slPrice.toFixed(pricePrec));
-  const slDist = Math.abs(price - sl) / price; // SL distance as % of price
+  const floorQ = (q) => Math.floor(q * Math.pow(10, qtyPrec)) / Math.pow(10, qtyPrec);
+  const fmtP   = (p) => parseFloat(p.toFixed(pricePrec));
 
-  // ── Position size by fixed wallet risk (1% of wallet) ──
-  // Risk $ = wallet × WALLET_RISK_PCT
-  // Qty = Risk$ / SL_distance_in_price
+  // ── SL from 15m swing point (0.1% buffer) ──────────────
+  const sl     = fmtP(slPrice);
+  const slDist = Math.abs(price - sl) / price;
+
+  // ── Position size: 1% of wallet at risk ────────────────
+  // Sized from actual wallet so it scales automatically as balance grows/shrinks
   const riskUsdt = wallet * CONFIG.WALLET_RISK_PCT;
-  const rawQty   = riskUsdt / (slDist * price);
-  const qty = Math.floor(rawQty * Math.pow(10, qtyPrec)) / Math.pow(10, qtyPrec);
+  const qty      = floorQ(riskUsdt / (slDist * price));
   if (qty <= 0) throw new Error(`Qty too small: ${qty} for ${sym}`);
 
-  // ── TP: use PDL/PDH if available (Rule 3), else 3× RR ──
-  let tpDist, tp;
-  if (pick.tpLevel) {
-    tp     = parseFloat(pick.tpLevel.toFixed(pricePrec));
-    tpDist = Math.abs(tp - price) / price;
-    log(`TP set to PDL/PDH: $${fmtPrice(tp)} (${(tpDist*100).toFixed(2)}% away)`);
-  } else {
-    tpDist = slDist * CONFIG.TP_RR;
-    tp     = parseFloat((isLong ? price * (1 + tpDist) : price * (1 - tpDist)).toFixed(pricePrec));
-  }
+  // ── Three TP levels ─────────────────────────────────────
+  // Full distance: PDL/PDH if available, else 3× RR
+  // Divide into thirds: TP1 = 1/3, TP2 = 2/3, TP3 = full
+  const tpFullDist = pick.tpLevel
+    ? Math.abs(pick.tpLevel - price) / price
+    : slDist * CONFIG.TP_RR;
+  const tp1 = fmtP(isLong ? price * (1 + tpFullDist / 3)     : price * (1 - tpFullDist / 3));
+  const tp2 = fmtP(isLong ? price * (1 + tpFullDist * 2 / 3) : price * (1 - tpFullDist * 2 / 3));
+  const tp3 = fmtP(isLong ? price * (1 + tpFullDist)         : price * (1 - tpFullDist));
 
-  // ── Fee check ──────────────────────────────────────────
+  // ── Fee check against TP1 (worst case — smallest profit) ─
   const notional  = qty * price;
   const totalFees = notional * CONFIG.TAKER_FEE * 2;
-  const tpProfit  = notional * tpDist;
-  log(`Fee check: notional=$${notional.toFixed(2)} fees=$${totalFees.toFixed(4)} TP profit=$${tpProfit.toFixed(4)} SL%=${(slDist*100).toFixed(3)}%`);
-  if (tpProfit < totalFees * 1.5) throw new Error(`Trade rejected: TP $${tpProfit.toFixed(4)} < 1.5× fees $${totalFees.toFixed(4)}`);
+  const tp1Profit = notional * (tpFullDist / 3) * 0.5; // 50% qty at TP1
+  log(`Fee check: notional=$${notional.toFixed(2)} fees=$${totalFees.toFixed(4)} TP1 profit=$${tp1Profit.toFixed(4)} SL%=${(slDist*100).toFixed(3)}%`);
+  if (tp1Profit < totalFees * 1.5) throw new Error(`Trade rejected: TP1 profit $${tp1Profit.toFixed(4)} < 1.5× fees $${totalFees.toFixed(4)}`);
 
-  const entrySide = isLong ? 'BUY' : 'SELL';
+  const entrySide = isLong ? 'BUY'  : 'SELL';
   const closeSide = isLong ? 'SELL' : 'BUY';
 
+  // Qty split: TP1 = 50%, TP2 = 25%, TP3 = remainder (closePosition)
+  const qty1 = floorQ(qty * 0.50);
+  const qty2 = floorQ(qty * 0.25);
+
+  // Market entry
   const order = await client.submitNewOrder({ symbol: sym, side: entrySide, type: 'MARKET', quantity: qty });
 
+  // TP1 — close 50% of position
   try {
     await client.submitNewOrder({
       symbol: sym, side: closeSide, type: 'TAKE_PROFIT_MARKET',
-      stopPrice: tp, closePosition: 'true', workingType: 'MARK_PRICE', priceProtect: 'TRUE',
+      stopPrice: tp1, quantity: qty1, reduceOnly: 'true',
+      workingType: 'MARK_PRICE', priceProtect: 'TRUE',
     });
-  } catch (e) { log(`TP warn: ${e.message}`); }
+  } catch (e) { log(`TP1 warn: ${e.message}`); }
 
+  // TP2 — close 25% of position
+  try {
+    await client.submitNewOrder({
+      symbol: sym, side: closeSide, type: 'TAKE_PROFIT_MARKET',
+      stopPrice: tp2, quantity: qty2, reduceOnly: 'true',
+      workingType: 'MARK_PRICE', priceProtect: 'TRUE',
+    });
+  } catch (e) { log(`TP2 warn: ${e.message}`); }
+
+  // TP3 — close remaining position entirely
+  try {
+    await client.submitNewOrder({
+      symbol: sym, side: closeSide, type: 'TAKE_PROFIT_MARKET',
+      stopPrice: tp3, closePosition: 'true',
+      workingType: 'MARK_PRICE', priceProtect: 'TRUE',
+    });
+  } catch (e) { log(`TP3 warn: ${e.message}`); }
+
+  // SL — protect full position initially
   try {
     await client.submitNewOrder({
       symbol: sym, side: closeSide, type: 'STOP_MARKET',
-      stopPrice: sl, closePosition: 'true', workingType: 'MARK_PRICE', priceProtect: 'TRUE',
+      stopPrice: sl, closePosition: 'true',
+      workingType: 'MARK_PRICE', priceProtect: 'TRUE',
     });
   } catch (e) { log(`SL warn: ${e.message}`); }
 
-  return { sym, qty, entry: price, leverage, tp, sl, slDist, tpDist, confidence, direction, orderId: order.orderId };
+  // Store state for TP monitoring
+  tradeState.set(sym, { entry: price, tp1, tp2, tp3, sl, qty, isLong, tpHit1: false, tpHit2: false, pricePrec, qtyPrec });
+
+  return { sym, qty, entry: price, leverage, tp1, tp2, tp3, sl, slDist, tpFullDist, confidence, direction, orderId: order.orderId };
 }
 
-// ── CHECK TRAILING STOP (LONG + SHORT) ────────────────────────
+// ── CHECK MULTI-TP + EXIT RULES ────────────────────────────────
 async function checkTrailingStop(client) {
   try {
     const account   = await client.getAccountInformation({ omitZeroBalances: false });
     const positions = account.positions.filter(p => parseFloat(p.positionAmt) !== 0);
 
-    for (const p of positions) {
-      const sym    = p.symbol;
-      const entry  = parseFloat(p.entryPrice);
-      const amt    = parseFloat(p.positionAmt);
-      const isLong = amt > 0;
-      const ticker = await client.getSymbolPriceTicker({ symbol: sym });
-      const cur    = parseFloat(ticker.price);
-      const gain   = isLong ? (cur - entry) / entry : (entry - cur) / entry;
-      const closeSide = isLong ? 'SELL' : 'BUY';
+    // Clean up state for any positions that are now fully closed
+    for (const sym of tradeState.keys()) {
+      if (!positions.find(p => p.symbol === sym)) {
+        log(`${sym} fully closed — clearing trade state`);
+        tradeState.delete(sym);
+      }
+    }
 
-      // ── Exit Rule: 15m next swing formed + liquidity swept ──
+    for (const p of positions) {
+      const sym       = p.symbol;
+      const entry     = parseFloat(p.entryPrice);
+      const amt       = parseFloat(p.positionAmt);
+      const isLong    = amt > 0;
+      const ticker    = await client.getSymbolPriceTicker({ symbol: sym });
+      const cur       = parseFloat(ticker.price);
+      const closeSide = isLong ? 'SELL' : 'BUY';
+      const gain      = isLong ? (cur - entry) / entry : (entry - cur) / entry;
+
+      // ── 15m swing exit: next swing formed + liquidity swept ─
       try {
         const klines15 = await client.getKlines({ symbol: sym, interval: '15m', limit: 50 });
-        const struct15  = detectStructure(klines15);
+        const struct15 = detectStructure(klines15);
         if (shouldExit15m(struct15, entry, isLong ? 'LONG' : 'SHORT')) {
-          log(`Exit signal [${isLong?'LONG':'SHORT'}] ${sym}: 15m swing formed + liquidity swept`);
+          log(`Exit [${isLong?'LONG':'SHORT'}] ${sym}: 15m swing + liquidity swept`);
           await client.cancelAllOpenOrders({ symbol: sym });
           await client.submitNewOrder({ symbol: sym, side: closeSide, type: 'MARKET', closePosition: 'true' });
+          tradeState.delete(sym);
           await notify(
             `✅ *Exit: 15m Swing + Liquidity Swept*\n` +
             `*${sym}* ${isLong ? '🟢 LONG' : '🔴 SHORT'}\n` +
@@ -753,27 +797,74 @@ async function checkTrailingStop(client) {
         }
       } catch (_) {}
 
-      // ── Trailing stop: tighten SL when gain ≥ TRAIL_PCT ────
-      if (gain >= CONFIG.TRAIL_PCT) {
-        const slDist  = Math.abs(entry - (isLong ? entry * 0.99 : entry * 1.01)) / entry;
-        const newSl   = isLong
-          ? parseFloat((cur * (1 - slDist * 0.5)).toFixed(6))
-          : parseFloat((cur * (1 + slDist * 0.5)).toFixed(6));
-        log(`Trailing stop [${isLong?'LONG':'SHORT'}] ${sym}: SL → $${newSl} (gain: ${(gain*100).toFixed(2)}%)`);
+      const state = tradeState.get(sym);
+      if (!state) continue; // no state — let Binance orders manage it
+
+      const origQty   = Math.abs(state.qty);
+      const curQty    = Math.abs(amt);
+      const reduction = 1 - (curQty / origQty); // 0 = nothing closed, 0.5 = 50% closed
+      const floorQ    = (q) => Math.floor(q * Math.pow(10, state.qtyPrec)) / Math.pow(10, state.qtyPrec);
+
+      // ── TP2 hit: ~75% of position closed → SL to TP1 ───────
+      if (state.tpHit1 && !state.tpHit2 && reduction >= 0.65) {
+        state.tpHit2 = true;
+        const newSl = parseFloat(state.tp1.toFixed(state.pricePrec));
+        log(`TP2 hit ${sym}: SL → $${fmtPrice(newSl)} (TP1 = locked profit)`);
         try {
           await client.cancelAllOpenOrders({ symbol: sym });
-          // Re-place TP at same 3× RR from entry
-          const tpDist = slDist * CONFIG.TP_RR;
-          const tp = parseFloat((isLong ? entry * (1 + tpDist) : entry * (1 - tpDist)).toFixed(6));
           await client.submitNewOrder({
             symbol: sym, side: closeSide, type: 'TAKE_PROFIT_MARKET',
-            stopPrice: tp, closePosition: 'true', workingType: 'MARK_PRICE', priceProtect: 'TRUE',
+            stopPrice: state.tp3, closePosition: 'true',
+            workingType: 'MARK_PRICE', priceProtect: 'TRUE',
           });
           await client.submitNewOrder({
             symbol: sym, side: closeSide, type: 'STOP_MARKET',
-            stopPrice: newSl, closePosition: 'true', workingType: 'MARK_PRICE', priceProtect: 'TRUE',
+            stopPrice: newSl, closePosition: 'true',
+            workingType: 'MARK_PRICE', priceProtect: 'TRUE',
           });
-        } catch (e) { log(`Trailing update warn: ${e.message}`); }
+        } catch (e) { log(`TP2 SL update warn: ${e.message}`); }
+        await notify(
+          `🎯 *TP2 Hit!* — *${sym}* ${isLong ? '🟢 LONG' : '🔴 SHORT'}\n` +
+          `25% closed @ \`$${fmtPrice(cur)}\`\n` +
+          `SL moved to TP1: \`$${fmtPrice(newSl)}\` ✅ profit locked\n` +
+          `Riding last 25% → TP3: \`$${fmtPrice(state.tp3)}\``
+        );
+        continue;
+      }
+
+      // ── TP1 hit: ~50% of position closed → SL to break even ─
+      if (!state.tpHit1 && reduction >= 0.40) {
+        state.tpHit1 = true;
+        const newSl = parseFloat(state.entry.toFixed(state.pricePrec));
+        const qty2  = floorQ(origQty * 0.25);
+        log(`TP1 hit ${sym}: SL → $${fmtPrice(newSl)} (break even)`);
+        try {
+          await client.cancelAllOpenOrders({ symbol: sym });
+          // Re-place TP2 (25% qty) and TP3 (close remaining)
+          await client.submitNewOrder({
+            symbol: sym, side: closeSide, type: 'TAKE_PROFIT_MARKET',
+            stopPrice: state.tp2, quantity: qty2, reduceOnly: 'true',
+            workingType: 'MARK_PRICE', priceProtect: 'TRUE',
+          });
+          await client.submitNewOrder({
+            symbol: sym, side: closeSide, type: 'TAKE_PROFIT_MARKET',
+            stopPrice: state.tp3, closePosition: 'true',
+            workingType: 'MARK_PRICE', priceProtect: 'TRUE',
+          });
+          // SL at break even — worst case: no loss
+          await client.submitNewOrder({
+            symbol: sym, side: closeSide, type: 'STOP_MARKET',
+            stopPrice: newSl, closePosition: 'true',
+            workingType: 'MARK_PRICE', priceProtect: 'TRUE',
+          });
+        } catch (e) { log(`TP1 SL update warn: ${e.message}`); }
+        await notify(
+          `🎯 *TP1 Hit!* — *${sym}* ${isLong ? '🟢 LONG' : '🔴 SHORT'}\n` +
+          `50% closed @ \`$${fmtPrice(cur)}\`\n` +
+          `SL moved to break even: \`$${fmtPrice(newSl)}\` ✅ no-loss zone\n` +
+          `TP2: \`$${fmtPrice(state.tp2)}\`  |  TP3: \`$${fmtPrice(state.tp3)}\``
+        );
+        continue;
       }
     }
   } catch (e) { log(`checkTrailingStop err: ${e.message}`); }
@@ -867,11 +958,13 @@ async function main() {
     const riskUsdt  = (wallet * CONFIG.WALLET_RISK_PCT).toFixed(2);
     const isLongT   = result.direction !== 'SHORT';
     const dirEmoji  = isLongT ? '🟢' : '🔴';
-    const tpPct     = (result.tpDist * 100).toFixed(2);
+    const tp1Pct    = (Math.abs(result.tp1 - result.entry) / result.entry * 100).toFixed(2);
+    const tp2Pct    = (Math.abs(result.tp2 - result.entry) / result.entry * 100).toFixed(2);
+    const tp3Pct    = (Math.abs(result.tp3 - result.entry) / result.entry * 100).toFixed(2);
     const slPct     = (result.slDist * 100).toFixed(3);
     const notional  = result.qty * result.entry;
     const totalFees = notional * CONFIG.TAKER_FEE * 2;
-    const netProfit = notional * result.tpDist - totalFees;
+    const netProfit = notional * result.tpFullDist - totalFees;
     const streakLabel = pick.streak > 0 ? `${pick.streak} 🟢` : `${Math.abs(pick.streak)} 🔴`;
 
     await notify(
@@ -880,9 +973,11 @@ async function main() {
       (pick.rule2Long ? `🏦 *Rule 2 — OB Reversal* (${pick.reversalType})\n` : '') +
       `Confidence: *${result.confidence}* ⭐\n` +
       `Entry: \`$${fmtPrice(result.entry)}\` | Qty: \`${result.qty}\`\n` +
-      `🎯 TP: \`$${fmtPrice(result.tp)}\` (+${tpPct}% · 1:${CONFIG.TP_RR}R)\n` +
+      `🎯 TP1 (50%): \`$${fmtPrice(result.tp1)}\` (+${tp1Pct}%) → SL to break even\n` +
+      `🎯 TP2 (25%): \`$${fmtPrice(result.tp2)}\` (+${tp2Pct}%) → SL to TP1\n` +
+      `🎯 TP3 (25%): \`$${fmtPrice(result.tp3)}\` (+${tp3Pct}%) → full close\n` +
       `🛑 SL: \`$${fmtPrice(result.sl)}\` (-${slPct}% · swing point)\n` +
-      `💸 Fees: \`$${totalFees.toFixed(4)}\` | Net@TP: \`$${netProfit.toFixed(4)}\`\n\n` +
+      `💸 Fees: \`$${totalFees.toFixed(4)}\` | Net@TP3: \`$${netProfit.toFixed(4)}\`\n\n` +
       `📊 *Structure:*\n` +
       `• 15m: \`${pick.marketStructure}\` (${pick.trend})\n` +
       `• 1m: \`${pick.entry1m?.reason || 'confirmed'}\`\n` +
