@@ -105,7 +105,7 @@ async function fetchWithRetry(url, opts = {}, retries = 3) {
           banUntil = until;
           const mins = Math.ceil((until - Date.now()) / 60000);
           log(`BANNED until ${new Date(until).toLocaleString()} (${mins} min)`);
-          await tgSend(`🚫 <b>Binance IP Banned</b>\nBot paused for <b>${mins} min</b>.\nResumes automatically at ${new Date(until).toLocaleTimeString('en-GB', { timeZone: 'Asia/Kuala_Lumpur' })}`);
+          await tgSendPrivate(`🚫 <b>Binance IP Banned</b>\nBot paused for <b>${mins} min</b>.\nResumes automatically at ${new Date(until).toLocaleTimeString('en-GB', { timeZone: 'Asia/Kuala_Lumpur' })}`);
         }
         return null;
       }
@@ -233,6 +233,14 @@ async function tgSend(html) {
   }
   lastMsgAt = Date.now();
   await Promise.all(TELEGRAM_CHATS.map(id => tgSendTo(id, html)));
+}
+
+// Send only to private chats (not channels) — for internal bot alerts
+async function tgSendPrivate(html) {
+  log(`TG(private): ${html.replace(/<[^>]+>/g, '').substring(0, 80)}`);
+  if (!TELEGRAM_TOKEN || !TELEGRAM_CHATS.length) return;
+  const privateChats = TELEGRAM_CHATS.filter(id => !id.startsWith('-'));
+  await Promise.all(privateChats.map(id => tgSendTo(id, html)));
 }
 
 // ── SHARED REPLY MESSAGES ─────────────────────────────────────
