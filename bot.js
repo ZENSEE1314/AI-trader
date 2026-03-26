@@ -291,7 +291,38 @@ async function welcomeMember(channelId, user) {
     msg += `📌 <b>Latest Signal:</b>\n${lastSignalSummary}\n\n`;
   }
 
-  msg += `<i>Signals are for educational purposes. Always manage your own risk.</i>`;
+  msg +=
+    `━━━━━━━━━━━━━━━━━━\n` +
+    `💼 <b>Want to trade &amp; earn together?</b>\n\n` +
+    `Join me on <b>Bitunix</b> — the platform I use for futures trading.\n` +
+    `👉 <a href="https://www.bitunix.com/register?vipCode=Signalme">Sign up here (referral link)</a>\n\n` +
+    `✅ Once you sign up, <b>send me your UID</b> and I'll set you as my partner.\n` +
+    `💰 You earn <b>3% rebate on your own trades</b>.\n` +
+    `🤝 Share your referral link with friends — earn from <b>their trades too</b>!\n\n` +
+    `━━━━━━━━━━━━━━━━━━\n` +
+    `📖 <b>How to get started on Bitunix:</b>\n\n` +
+    `<b>Step 1 — Sign Up</b>\n` +
+    `1. Tap the link above or go to bitunix.com\n` +
+    `2. Click <b>Register</b> → enter your email &amp; password\n` +
+    `3. Verify your email (check spam if not received)\n` +
+    `4. Complete KYC identity verification (takes ~5 min)\n\n` +
+    `<b>Step 2 — Deposit USDT</b>\n` +
+    `1. Log in → tap <b>Assets</b> → <b>Deposit</b>\n` +
+    `2. Choose <b>USDT</b> as the coin\n` +
+    `3. Select network: <b>TRC20</b> (cheapest fee) or <b>BEP20</b>\n` +
+    `4. Copy your deposit address\n` +
+    `5. Send USDT from your wallet/exchange to that address\n` +
+    `6. Wait ~1–5 min for confirmation\n\n` +
+    `<b>Step 3 — Start Futures Trading</b>\n` +
+    `1. Tap <b>Trade</b> → <b>Futures</b> → <b>USDT-M Perpetual</b>\n` +
+    `2. Transfer funds: <b>Assets → Transfer → to Futures wallet</b>\n` +
+    `3. Pick a coin (e.g. BTC/USDT)\n` +
+    `4. Set your leverage (start low — 5x–10x if new)\n` +
+    `5. Choose <b>Long</b> (price going up) or <b>Short</b> (price going down)\n` +
+    `6. Set your position size → tap <b>Open Long / Open Short</b>\n` +
+    `7. Always set a <b>Stop Loss</b> to protect your funds!\n\n` +
+    `⚠️ <i>Futures trading involves risk. Start small, follow signals, manage your SL.</i>\n\n` +
+    `<i>Questions? Just ask in the group. Good luck and trade safe! 🚀</i>`;
 
   await tgSendTo(channelId, msg);
 }
