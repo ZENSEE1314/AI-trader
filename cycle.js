@@ -15,24 +15,36 @@ const TELEGRAM_CHATS   = (process.env.TELEGRAM_CHAT_ID || '').split(',').map(s =
 const PRIVATE_CHATS    = TELEGRAM_CHATS.filter(id => !id.startsWith('-'));
 
 // ── RISK CONFIG ───────────────────────────────────────────────
-// Edit these to tune the bot. Never set LEVERAGE above 20.
 const CONFIG = {
-  LEVERAGE:       20,
-  TP_PCT:         0.035,    // 3.5% take profit (3-5% range, grows volume steadily)
-  SL_PCT:         0.010,    // 1.0% stop loss (tight)
-  TRAIL_PCT:      0.008,    // 0.8% trailing stop activation
-  RISK_PCT:       0.40,     // only use 40% of balance per trade
-  MAX_LEVERAGE:   20,
-  MIN_BALANCE:    5,        // min USDT to trade
-  MIN_VOL_M:      100,      // min $100M 24h volume
-  MIN_SCORE:      18,       // minimum score to open trade
-  RSI_MAX:        68,       // LONG: skip if RSI above (overbought)
-  RSI_MIN:        35,       // LONG: skip if RSI below (downtrend)
-  RSI_SHORT_MIN:  58,       // SHORT: only short if RSI above this
-  RSI_SHORT_MAX:  85,       // SHORT: skip if RSI extremely overbought (might keep pumping)
-  TAKER_FEE:      0.0004,   // Binance taker fee: 0.04% per side (standard)
-  EMA_FAST:       9,
-  EMA_SLOW:       21,
+  // Leverage: BTC/ETH = 100x (tight SL so risk is controlled), alts = 20x
+  LEVERAGE_HIGH:   100,
+  LEVERAGE_LOW:    20,
+  HIGH_LEV_COINS:  ['BTCUSDT', 'ETHUSDT'],
+
+  // SL placed 0.1% beyond the 15m swing point (user rule)
+  SL_BUFFER:       0.001,   // 0.1% buffer past swing point
+
+  // TP: initial = 3× SL distance (1:3 RR). Bot also monitors for 15m swing exit.
+  TP_RR:           3,       // risk:reward ratio for initial TP order
+
+  // Trailing stop: once price moves in our favour by TRAIL_PCT, tighten SL
+  TRAIL_PCT:       0.008,   // 0.8% activation
+
+  // Position sizing: risk 1% of wallet per trade (sized by SL distance)
+  WALLET_RISK_PCT: 0.01,    // 1% of total wallet at risk per trade
+
+  MIN_BALANCE:     5,
+  MIN_VOL_M:       100,     // min $100M 24h volume
+  MIN_SCORE:       12,      // relaxed — structure + 1m confirmation does heavy filtering
+
+  RSI_MAX:         68,
+  RSI_MIN:         32,
+  RSI_SHORT_MIN:   55,
+  RSI_SHORT_MAX:   85,
+  TAKER_FEE:       0.0004,
+  EMA_FAST:        9,
+  EMA_SLOW:        21,
+
   BLACKLIST: [
     'ALPACAUSDT','BNXUSDT','ALPHAUSDT','BANANAS31USDT',
     'LYNUSDT','PORT3USDT','RVVUSDT','BSWUSDT',
@@ -280,6 +292,55 @@ function detectReversalSign(klines) {
   return { found: false, type: null };
 }
 
+// ── 1-MIN ENTRY CONFIRMATION ──────────────────────────────────
+// After 15m structure is confirmed, drop to 1m to find the actual entry.
+// LONG:  15m HH+HL formed → price pulls back to 15m HL → 1m shows HH (momentum shift up)
+// SHORT: 15m LH+LL formed → price pulls back to 15m LH → 1m shows LH (momentum shift down)
+function detect1mEntry(klines1m, targetLevel, direction) {
+  if (!klines1m || klines1m.length < 10) return { valid: false, reason: 'not enough 1m data' };
+
+  const struct1m   = detectStructure(klines1m);
+  const closes1m   = klines1m.map(k => parseFloat(k[4]));
+  const price      = closes1m[closes1m.length - 1];
+
+  // Price must be within 0.5% of the 15m swing level we're waiting at
+  const nearTarget = Math.abs(price - targetLevel) / targetLevel < 0.005;
+  if (!nearTarget) return { valid: false, reason: `not near target $${fmtPrice(targetLevel)}` };
+
+  if (direction === 'LONG') {
+    // On 1m: HH formed (momentum shifted bullish) OR bullish CHoCH after pullback
+    const bullish1m = struct1m.shLabel === 'HH' || struct1m.choch === 'bullish';
+    return {
+      valid:  bullish1m,
+      reason: bullish1m ? `1m ${struct1m.marketStructure} at HL` : `1m structure not ready (${struct1m.shLabel})`,
+      struct: struct1m,
+    };
+  } else {
+    // On 1m: LH formed (momentum shifted bearish) OR bearish CHoCH after pullback
+    const bearish1m = struct1m.shLabel === 'LH' || struct1m.choch === 'bearish';
+    return {
+      valid:  bearish1m,
+      reason: bearish1m ? `1m ${struct1m.marketStructure} at LH` : `1m structure not ready (${struct1m.shLabel})`,
+      struct: struct1m,
+    };
+  }
+}
+
+// ── SHOULD EXIT — 15m next swing formed + liquidity swept ─────
+// Exit when: the NEXT swing point on 15m has formed beyond our entry, AND
+//            price has swept through an equal high/low (liquidity taken)
+function shouldExit15m(struct15, entryPrice, direction) {
+  if (direction === 'LONG') {
+    const newSwingAboveEntry = struct15.sh1 && struct15.sh1 > entryPrice * 1.005;
+    const liqSwept = struct15.eqh && struct15.eqh > 0; // EQH exists = longs already swept
+    return newSwingAboveEntry && liqSwept;
+  } else {
+    const newSwingBelowEntry = struct15.sl1 && struct15.sl1 < entryPrice * 0.995;
+    const liqSwept = struct15.eql && struct15.eql > 0;
+    return newSwingBelowEntry && liqSwept;
+  }
+}
+
 // ── SCORING SYSTEM (LONG + SHORT) ─────────────────────────────
 async function analyzeSymbol(client, ticker, fundRates = {}) {
   const sym = ticker.symbol;
@@ -302,6 +363,12 @@ async function analyzeSymbol(client, ticker, fundRates = {}) {
     const emaSlow  = calcEMA(closes, CONFIG.EMA_SLOW);
     if (!emaFast || !emaSlow) return null;
 
+    // ── 1-min klines for entry timing ──────────────────────
+    let klines1m = null;
+    try { klines1m = await client.getKlines({ symbol: sym, interval: '1m', limit: 30 }); } catch (_) {}
+    const entry1mLong  = detect1mEntry(klines1m, struct.sl1 || price, 'LONG');   // near 15m HL
+    const entry1mShort = detect1mEntry(klines1m, struct.sh1 || price, 'SHORT');  // near 15m LH
+
     const macd     = calcMACD(closes);
     const bb       = calcBollingerBands(closes);
     const bbPos    = bb ? (price - bb.lower) / (bb.upper - bb.lower) : 0.5;
@@ -316,7 +383,7 @@ async function analyzeSymbol(client, ticker, fundRates = {}) {
 
     const chg24h  = parseFloat(ticker.priceChangePercent);
     const fundRate= fundRates[sym] || 0;
-    const leverage= CONFIG.MAX_LEVERAGE;
+
 
     // Candle streak (positive = green, negative = red)
     let streak = 0;
@@ -354,10 +421,11 @@ async function analyzeSymbol(client, ticker, fundRates = {}) {
     const chochBullish = struct.choch === 'bullish';
 
     // Rule 2 can unlock LONG even in LH structure (OB reversal exception)
-    const isLongTrend  = rule2Long ||
-                         (!lhFormed && (struct.trend === 'uptrend' || struct.trend === 'bullish' || eqlSweep || chochBullish));
-    const isShortTrend = !rule2Long &&
-                         (lhFormed || struct.trend === 'downtrend' || struct.trend === 'bearish' || eqhSweep || chochBearish);
+    // 1m entry confirmation: price must be near the 15m swing level + 1m structure aligned
+    const isLongTrend  = (rule2Long || (!lhFormed && (struct.trend === 'uptrend' || struct.trend === 'bullish' || eqlSweep || chochBullish)))
+                         && entry1mLong.valid;  // 1m must confirm entry at HL
+    const isShortTrend = (!rule2Long && (lhFormed || struct.trend === 'downtrend' || struct.trend === 'bearish' || eqhSweep || chochBearish))
+                         && entry1mShort.valid; // 1m must confirm entry at LH
 
     if (!isLongTrend && !isShortTrend) return null;
 
@@ -397,6 +465,10 @@ async function analyzeSymbol(client, ticker, fundRates = {}) {
       if (score >= 25) confidence = 'HIGH';
       else if (score >= 20) confidence = 'MEDIUM';
 
+      // SL = 0.1% below last swing low (HL on 15m) — user Rule
+      const slPrice  = struct.sl1 ? struct.sl1 * (1 - CONFIG.SL_BUFFER) : price * 0.988;
+      const leverage = CONFIG.HIGH_LEV_COINS.includes(sym) ? CONFIG.LEVERAGE_HIGH : CONFIG.LEVERAGE_LOW;
+
       return {
         sym, price, score, confidence, direction: 'LONG',
         chg24h, mom1h, mom30m, streak,
@@ -405,6 +477,9 @@ async function analyzeSymbol(client, ticker, fundRates = {}) {
         marketStructure: struct.marketStructure, trend: struct.trend,
         eql: struct.eql, eqh: struct.eqh,
         rule2Long, obZone: ob, reversalType: reversal.type,
+        slPrice,
+        entry1m: entry1mLong,
+        swingRef: struct.sl1,
       };
     }
 
@@ -436,6 +511,10 @@ async function analyzeSymbol(client, ticker, fundRates = {}) {
       if (score >= 25) confidence = 'HIGH';
       else if (score >= 20) confidence = 'MEDIUM';
 
+      // SL = 0.1% above last swing high (LH) — user Rule
+      const slPrice = struct.sh1 ? struct.sh1 * (1 + CONFIG.SL_BUFFER) : price * 1.012;
+      const leverage = CONFIG.HIGH_LEV_COINS.includes(sym) ? CONFIG.LEVERAGE_HIGH : CONFIG.LEVERAGE_LOW;
+
       return {
         sym, price, score, confidence, direction: 'SHORT',
         chg24h, mom1h, mom30m, streak,
@@ -443,6 +522,9 @@ async function analyzeSymbol(client, ticker, fundRates = {}) {
         distHigh, fundRate, leverage,
         marketStructure: struct.marketStructure, trend: struct.trend,
         eql: struct.eql, eqh: struct.eqh,
+        slPrice,
+        entry1m: entry1mShort,
+        swingRef: struct.sh1,
       };
     }
 
@@ -497,8 +579,8 @@ async function findBestTrade(client) {
 }
 
 // ── OPEN TRADE (LONG or SHORT) ────────────────────────────────
-async function openTrade(client, pick, availUsdt) {
-  const { sym, price, leverage, confidence, direction } = pick;
+async function openTrade(client, pick, wallet) {
+  const { sym, price, leverage, confidence, direction, slPrice } = pick;
   const isLong = direction !== 'SHORT';
 
   await client.setLeverage({ symbol: sym, leverage });
@@ -511,35 +593,36 @@ async function openTrade(client, pick, availUsdt) {
   const qtyPrec   = sinfo.quantityPrecision;
   const pricePrec = sinfo.pricePrecision;
 
-  const riskMultiplier = confidence === 'HIGH' ? CONFIG.RISK_PCT : CONFIG.RISK_PCT * 0.6;
-  const qty = Math.floor((availUsdt * riskMultiplier * leverage / price) * Math.pow(10, qtyPrec)) / Math.pow(10, qtyPrec);
+  // ── SL from 15m swing point (0.1% buffer) ──────────────
+  const sl = parseFloat(slPrice.toFixed(pricePrec));
+  const slDist = Math.abs(price - sl) / price; // SL distance as % of price
 
-  // ── Fee validation ─────────────────────────────────────
-  // Total fees = notional × taker_fee × 2 sides
-  const notional     = qty * price;
-  const totalFees    = notional * CONFIG.TAKER_FEE * 2;
-  const expectedProfit = notional * CONFIG.TP_PCT;
-  const feeRatioPct  = (totalFees / notional * 100).toFixed(4);
-  log(`Fee check: notional=$${notional.toFixed(2)} fees=$${totalFees.toFixed(4)} (${feeRatioPct}%) profit@TP=$${expectedProfit.toFixed(4)}`);
-  if (expectedProfit < totalFees * 2) {
-    // TP profit is less than 2× fees — not worth it
-    throw new Error(`Trade rejected: TP profit $${expectedProfit.toFixed(4)} < 2× fees $${totalFees.toFixed(4)}`);
-  }
+  // ── Position size by fixed wallet risk (1% of wallet) ──
+  // Risk $ = wallet × WALLET_RISK_PCT
+  // Qty = Risk$ / SL_distance_in_price
+  const riskUsdt = wallet * CONFIG.WALLET_RISK_PCT;
+  const rawQty   = riskUsdt / (slDist * price);
+  const qty = Math.floor(rawQty * Math.pow(10, qtyPrec)) / Math.pow(10, qtyPrec);
+  if (qty <= 0) throw new Error(`Qty too small: ${qty} for ${sym}`);
+
+  // ── TP at 3× SL distance (1:3 RR) ─────────────────────
+  const tpDist = slDist * CONFIG.TP_RR;
+  const tp = parseFloat((isLong
+    ? price * (1 + tpDist)
+    : price * (1 - tpDist)
+  ).toFixed(pricePrec));
+
+  // ── Fee check ──────────────────────────────────────────
+  const notional  = qty * price;
+  const totalFees = notional * CONFIG.TAKER_FEE * 2;
+  const tpProfit  = notional * tpDist;
+  log(`Fee check: notional=$${notional.toFixed(2)} fees=$${totalFees.toFixed(4)} TP profit=$${tpProfit.toFixed(4)} SL%=${(slDist*100).toFixed(3)}%`);
+  if (tpProfit < totalFees * 1.5) throw new Error(`Trade rejected: TP $${tpProfit.toFixed(4)} < 1.5× fees $${totalFees.toFixed(4)}`);
 
   const entrySide = isLong ? 'BUY' : 'SELL';
   const closeSide = isLong ? 'SELL' : 'BUY';
 
   const order = await client.submitNewOrder({ symbol: sym, side: entrySide, type: 'MARKET', quantity: qty });
-
-  const tp = parseFloat((isLong
-    ? price * (1 + CONFIG.TP_PCT)
-    : price * (1 - CONFIG.TP_PCT)
-  ).toFixed(pricePrec));
-
-  const sl = parseFloat((isLong
-    ? price * (1 - CONFIG.SL_PCT)
-    : price * (1 + CONFIG.SL_PCT)
-  ).toFixed(pricePrec));
 
   try {
     await client.submitNewOrder({
@@ -555,13 +638,13 @@ async function openTrade(client, pick, availUsdt) {
     });
   } catch (e) { log(`SL warn: ${e.message}`); }
 
-  return { sym, qty, entry: price, leverage, tp, sl, confidence, direction, orderId: order.orderId };
+  return { sym, qty, entry: price, leverage, tp, sl, slDist, tpDist, confidence, direction, orderId: order.orderId };
 }
 
 // ── CHECK TRAILING STOP (LONG + SHORT) ────────────────────────
 async function checkTrailingStop(client) {
   try {
-    const account   = await client.getAccountInformation();
+    const account   = await client.getAccountInformation({ omitZeroBalances: false });
     const positions = account.positions.filter(p => parseFloat(p.positionAmt) !== 0);
 
     for (const p of positions) {
@@ -571,28 +654,39 @@ async function checkTrailingStop(client) {
       const isLong = amt > 0;
       const ticker = await client.getSymbolPriceTicker({ symbol: sym });
       const cur    = parseFloat(ticker.price);
+      const gain   = isLong ? (cur - entry) / entry : (entry - cur) / entry;
+      const closeSide = isLong ? 'SELL' : 'BUY';
 
-      // Gain direction depends on trade direction
-      const gain = isLong
-        ? (cur - entry) / entry
-        : (entry - cur) / entry;
+      // ── Exit Rule: 15m next swing formed + liquidity swept ──
+      try {
+        const klines15 = await client.getKlines({ symbol: sym, interval: '15m', limit: 50 });
+        const struct15  = detectStructure(klines15);
+        if (shouldExit15m(struct15, entry, isLong ? 'LONG' : 'SHORT')) {
+          log(`Exit signal [${isLong?'LONG':'SHORT'}] ${sym}: 15m swing formed + liquidity swept`);
+          await client.cancelAllOpenOrders({ symbol: sym });
+          await client.submitNewOrder({ symbol: sym, side: closeSide, type: 'MARKET', closePosition: 'true' });
+          await notify(
+            `✅ *Exit: 15m Swing + Liquidity Swept*\n` +
+            `*${sym}* ${isLong ? '🟢 LONG' : '🔴 SHORT'}\n` +
+            `Entry: \`$${fmtPrice(entry)}\` → Exit: \`$${fmtPrice(cur)}\`\n` +
+            `Gain: *${gain >= 0 ? '+' : ''}${(gain * 100).toFixed(2)}%*`
+          );
+          continue;
+        }
+      } catch (_) {}
 
+      // ── Trailing stop: tighten SL when gain ≥ TRAIL_PCT ────
       if (gain >= CONFIG.TRAIL_PCT) {
-        // Tighten SL to lock in profit
-        const newSl = isLong
-          ? parseFloat((cur * (1 - CONFIG.SL_PCT * 0.5)).toFixed(6))
-          : parseFloat((cur * (1 + CONFIG.SL_PCT * 0.5)).toFixed(6));
-
-        const tp = isLong
-          ? parseFloat((entry * (1 + CONFIG.TP_PCT)).toFixed(6))
-          : parseFloat((entry * (1 - CONFIG.TP_PCT)).toFixed(6));
-
-        const closeSide = isLong ? 'SELL' : 'BUY';
-        const label     = isLong ? 'LONG' : 'SHORT';
-        log(`Trailing stop [${label}] ${sym}: SL → $${newSl} (gain: ${(gain*100).toFixed(2)}%)`);
-
+        const slDist  = Math.abs(entry - (isLong ? entry * 0.99 : entry * 1.01)) / entry;
+        const newSl   = isLong
+          ? parseFloat((cur * (1 - slDist * 0.5)).toFixed(6))
+          : parseFloat((cur * (1 + slDist * 0.5)).toFixed(6));
+        log(`Trailing stop [${isLong?'LONG':'SHORT'}] ${sym}: SL → $${newSl} (gain: ${(gain*100).toFixed(2)}%)`);
         try {
           await client.cancelAllOpenOrders({ symbol: sym });
+          // Re-place TP at same 3× RR from entry
+          const tpDist = slDist * CONFIG.TP_RR;
+          const tp = parseFloat((isLong ? entry * (1 + tpDist) : entry * (1 - tpDist)).toFixed(6));
           await client.submitNewOrder({
             symbol: sym, side: closeSide, type: 'TAKE_PROFIT_MARKET',
             stopPrice: tp, closePosition: 'true', workingType: 'MARK_PRICE', priceProtect: 'TRUE',
@@ -632,7 +726,7 @@ async function main() {
   const client = getClient();
 
   try {
-    const account   = await client.getAccountInformation();
+    const account   = await client.getAccountInformation({ omitZeroBalances: false });
     const wallet    = parseFloat(account.totalWalletBalance);
     const avail     = parseFloat(account.availableBalance);
     const upnl      = parseFloat(account.totalUnrealizedProfit);
@@ -691,39 +785,35 @@ async function main() {
       return;
     }
 
-    const result = await openTrade(client, pick, avail);
-    const riskUsdt = (avail * CONFIG.RISK_PCT).toFixed(2);
-
-    const isLongTrade  = result.direction !== 'SHORT';
-    const dirEmoji     = isLongTrade ? '🟢' : '🔴';
-    const tpSign       = isLongTrade ? '+' : '-';
-    const slSign       = isLongTrade ? '-' : '+';
-    const streakLabel  = pick.streak > 0 ? `${pick.streak} 🟢 green` : `${Math.abs(pick.streak)} 🔴 red`;
-    // Fee info for transparency
-    const notional     = result.qty * result.entry;
-    const totalFees    = notional * CONFIG.TAKER_FEE * 2;
-    const netProfit    = notional * CONFIG.TP_PCT - totalFees;
+    const result    = await openTrade(client, pick, wallet);
+    const riskUsdt  = (wallet * CONFIG.WALLET_RISK_PCT).toFixed(2);
+    const isLongT   = result.direction !== 'SHORT';
+    const dirEmoji  = isLongT ? '🟢' : '🔴';
+    const tpPct     = (result.tpDist * 100).toFixed(2);
+    const slPct     = (result.slDist * 100).toFixed(3);
+    const notional  = result.qty * result.entry;
+    const totalFees = notional * CONFIG.TAKER_FEE * 2;
+    const netProfit = notional * result.tpDist - totalFees;
+    const streakLabel = pick.streak > 0 ? `${pick.streak} 🟢` : `${Math.abs(pick.streak)} 🔴`;
 
     await notify(
       `🚀 *NEW TRADE — ${now()}*\n\n` +
-      `Coin: *${result.sym}*\n` +
-      `Direction: ${dirEmoji} *${result.direction} x${result.leverage}*\n` +
+      `*${result.sym}* ${dirEmoji} *${result.direction} x${result.leverage}*\n` +
       (pick.rule2Long ? `🏦 *Rule 2 — OB Reversal* (${pick.reversalType})\n` : '') +
       `Confidence: *${result.confidence}* ⭐\n` +
-      `Entry: \`$${fmtPrice(result.entry)}\`\n` +
-      `Qty: \`${result.qty}\`\n` +
-      `🎯 TP: \`$${fmtPrice(result.tp)}\` (${tpSign}3.5%)\n` +
-      `🛑 SL: \`$${fmtPrice(result.sl)}\` (${slSign}1.0%)\n` +
-      `💸 Fees: \`$${totalFees.toFixed(4)}\` | Net: \`$${netProfit.toFixed(4)}\`\n\n` +
-      `📊 *Signals:*\n` +
-      `• Structure: \`${pick.marketStructure}\` (${pick.trend})\n` +
-      (pick.rule2Long && pick.obZone ? `• OB zone: \`$${fmtPrice(pick.obZone.low)}\`–\`$${fmtPrice(pick.obZone.high)}\`\n` : '') +
-      (pick.eql ? `• EQL: \`$${fmtPrice(pick.eql)}\` (liq. below)\n` : '') +
-      (pick.eqh ? `• EQH: \`$${fmtPrice(pick.eqh)}\` (liq. above)\n` : '') +
-      `• RSI: \`${pick.rsi?.toFixed(1)}\` | MACD: ${pick.macdBullish ? '✅' : '❌'}\n` +
-      `• Streak: ${streakLabel} | 1H: \`${pick.mom1h.toFixed(2)}%\`\n` +
-      `• Volume: \`${pick.volRatio.toFixed(1)}x\` | BB: \`${(pick.bbPosition * 100).toFixed(0)}%\`\n` +
-      `• Score: \`${pick.score.toFixed(1)}\`\n\n` +
+      `Entry: \`$${fmtPrice(result.entry)}\` | Qty: \`${result.qty}\`\n` +
+      `🎯 TP: \`$${fmtPrice(result.tp)}\` (+${tpPct}% · 1:${CONFIG.TP_RR}R)\n` +
+      `🛑 SL: \`$${fmtPrice(result.sl)}\` (-${slPct}% · swing point)\n` +
+      `💸 Fees: \`$${totalFees.toFixed(4)}\` | Net@TP: \`$${netProfit.toFixed(4)}\`\n\n` +
+      `📊 *Structure:*\n` +
+      `• 15m: \`${pick.marketStructure}\` (${pick.trend})\n` +
+      `• 1m: \`${pick.entry1m?.reason || 'confirmed'}\`\n` +
+      `• Swing ref: \`$${fmtPrice(pick.swingRef)}\`\n` +
+      (pick.rule2Long && pick.obZone ? `• OB: \`$${fmtPrice(pick.obZone.low)}\`–\`$${fmtPrice(pick.obZone.high)}\`\n` : '') +
+      (pick.eql ? `• EQL: \`$${fmtPrice(pick.eql)}\`\n` : '') +
+      (pick.eqh ? `• EQH: \`$${fmtPrice(pick.eqh)}\`\n` : '') +
+      `• RSI: \`${pick.rsi?.toFixed(1)}\` | MACD: ${pick.macdBullish ? '✅' : '❌'} | Vol: \`${pick.volRatio.toFixed(1)}x\`\n` +
+      `• Streak: ${streakLabel} | Score: \`${pick.score.toFixed(1)}\`\n\n` +
       `💰 Risk: *$${riskUsdt} USDT* | Wallet: *$${avail.toFixed(4)}*`
     );
 
