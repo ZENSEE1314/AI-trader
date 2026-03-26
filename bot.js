@@ -1064,6 +1064,142 @@ async function checkSignalTargets() {
   if (toRemove.length) log(`Signal tracker: closed ${toRemove.join(', ')}`);
 }
 
+// ── SMC RULE VALIDATOR ────────────────────────────────────────
+// Applies all 3 rules before a signal is posted.
+// Returns { pass, reason, badges } — only pass:true signals get posted.
+async function smcValidate(symbol, signalDir) {
+  try {
+    // 15m structure
+    const klines15 = await fetchKlines(symbol, '15m', 50);
+    if (!klines15 || klines15.length < 20) return { pass: true, reason: 'no 15m data', badges: [] };
+    const smc = detectSMC(klines15);
+    if (!smc) return { pass: true, reason: 'no structure', badges: [] };
+
+    const lhFormed = smc.shLabel === 'LH';
+    const llFormed = smc.slLabel === 'LL';
+    const hhFormed = smc.shLabel === 'HH';
+    const hlFormed = smc.slLabel === 'HL';
+    const badges   = [];
+
+    // ── Rule 1: LH formed → block BUY ──────────────────────
+    if (lhFormed && signalDir === 'BUY') {
+      // Rule 2 exception: LL at OB + reversal allows BUY
+      const closes = klines15.map(k => parseFloat(k[4]));
+      const opens  = klines15.map(k => parseFloat(k[1]));
+      const highs  = klines15.map(k => parseFloat(k[2]));
+      const lows   = klines15.map(k => parseFloat(k[3]));
+      const price  = closes[closes.length - 1];
+      const rsi    = calcRSI(closes);
+
+      // Detect OB: last bearish candle before strongest bullish impulse
+      let atOB = false;
+      for (let i = 5; i < Math.min(klines15.length - 3, 40); i++) {
+        const impulse = (closes[i] - closes[i - 3]) / closes[i - 3] * 100;
+        if (impulse < 2.5) continue;
+        for (let j = i - 1; j >= Math.max(0, i - 5); j--) {
+          if (closes[j] < opens[j]) {
+            const obLow  = Math.min(opens[j], closes[j]) * 0.998;
+            const obHigh = Math.max(opens[j], closes[j]) * 1.002;
+            atOB = price >= obLow && price <= obHigh;
+            break;
+          }
+        }
+        if (atOB) break;
+      }
+
+      // Reversal sign
+      const lastI    = closes.length - 1;
+      const body     = Math.abs(closes[lastI] - opens[lastI]);
+      const fullR    = highs[lastI] - lows[lastI];
+      const lwk      = Math.min(opens[lastI], closes[lastI]) - lows[lastI];
+      const prevBear = closes[lastI-1] < opens[lastI-1];
+      const curBull  = closes[lastI] > opens[lastI];
+      const hammer   = lwk > body * 2 && fullR > 0;
+      const engulf   = curBull && prevBear && closes[lastI] > opens[lastI-1];
+      const reversal = hammer || engulf;
+
+      if (llFormed && atOB && reversal && rsi < 45) {
+        badges.push('🏦 Rule 2 — OB Reversal');
+        return { pass: true, reason: 'Rule 2 OB exception', badges };
+      }
+      return { pass: false, reason: `Rule 1: LH formed — BUY blocked (${smc.marketStructure})`, badges };
+    }
+
+    // ── Rule 1: HH+HL only uptrend → block SELL ────────────
+    if (hhFormed && hlFormed && signalDir === 'SELL') {
+      return { pass: false, reason: `Rule 1: HH+HL uptrend — SELL blocked (${smc.marketStructure})`, badges };
+    }
+
+    // ── Rule 3: SELL confluence check ──────────────────────
+    if (signalDir === 'SELL') {
+      badges.push(`📐 ${smc.marketStructure}`);
+
+      const klines1m = await fetchKlines(symbol, '1m', 250);
+      const closes1m = klines1m ? klines1m.map(k => parseFloat(k[4])) : [];
+      const price    = parseFloat(klines15[klines15.length - 1][4]);
+      const TOLS     = 0.003;
+
+      // VWAP upper band
+      let vwapUpper = null;
+      if (klines1m && klines1m.length >= 5) {
+        let sumPV = 0, sumV = 0;
+        const typs = [];
+        for (const k of klines1m) {
+          const tp = (parseFloat(k[2]) + parseFloat(k[3]) + parseFloat(k[4])) / 3;
+          const v  = parseFloat(k[5]);
+          sumPV += tp * v; sumV += v; typs.push(tp);
+        }
+        if (sumV > 0) {
+          const vwap = sumPV / sumV;
+          const std  = Math.sqrt(typs.reduce((s, p) => s + Math.pow(p - vwap, 2), 0) / typs.length);
+          vwapUpper = vwap + 1.5 * std;
+        }
+      }
+
+      // 200 EMA on 1m
+      let ema200 = null;
+      if (closes1m.length >= 200) {
+        const k = 2 / 201;
+        let v = closes1m.slice(0, 200).reduce((a, b) => a + b, 0) / 200;
+        for (let i = 200; i < closes1m.length; i++) v = closes1m[i] * k + v * (1 - k);
+        ema200 = v;
+      }
+
+      // Daily session open
+      let sessionOpen = null;
+      try {
+        const d = await fetchKlines(symbol, '1d', 2);
+        if (d && d.length >= 1) sessionOpen = parseFloat(d[d.length - 1][1]);
+      } catch (_) {}
+
+      const nearVWAP    = vwapUpper  && Math.abs(price - vwapUpper)  / price < TOLS;
+      const nearEMA200  = ema200     && Math.abs(price - ema200)      / price < TOLS;
+      const nearSessOp  = sessionOpen && Math.abs(price - sessionOpen) / price < TOLS;
+      const confCount   = [nearVWAP, nearEMA200, nearSessOp].filter(Boolean).length;
+
+      if (confCount >= 2) badges.push(`🎯 Rule 3 Confluence (${confCount}/3)`);
+      if (nearVWAP)   badges.push('  └ Upper VWAP ✅');
+      if (nearEMA200) badges.push('  └ 200 EMA ✅');
+      if (nearSessOp) badges.push('  └ Session Open ✅');
+
+      if (lhFormed && llFormed) badges.push('📉 LH+LL Downtrend');
+      else if (lhFormed)        badges.push('📉 LH Bearish');
+    }
+
+    // ── Rule 3: BUY confluence check ───────────────────────
+    if (signalDir === 'BUY' && (hhFormed || hlFormed)) {
+      badges.push(`📐 ${smc.marketStructure}`);
+      if (hhFormed && hlFormed) badges.push('📈 HH+HL Uptrend');
+      else if (hhFormed)        badges.push('📈 HH Bullish');
+    }
+
+    return { pass: true, reason: 'ok', badges };
+  } catch (e) {
+    log(`smcValidate err ${symbol}: ${e.message}`);
+    return { pass: true, reason: 'error — allow', badges: [] };
+  }
+}
+
 async function runTraderScan(forced = false) {
   log(`── Trader Scan start${forced ? ' (forced)' : ''} ──`);
   if (paused && !forced) { log('Paused.'); return; }
@@ -1082,10 +1218,18 @@ async function runTraderScan(forced = false) {
     for (const ticker of top30) {
       if (!forced && now_ts - (traderCooldown.get(ticker.symbol) || 0) < TRADER_COOLDOWN) continue;
       const r = await analyzeTrader(ticker, '4h');
-      if (r) {
-        results.push(r);
-        traderCooldown.set(ticker.symbol, now_ts);
+      if (!r) { await sleep(120); continue; }
+
+      // ── Apply SMC Rules before posting ──────────────────
+      const smc = await smcValidate(ticker.symbol, r.signal);
+      if (!smc.pass) {
+        log(`Signal filtered [${ticker.symbol} ${r.signal}]: ${smc.reason}`);
+        await sleep(120);
+        continue;
       }
+      r.smcBadges = smc.badges;
+      results.push(r);
+      traderCooldown.set(ticker.symbol, now_ts);
       await sleep(120);
     }
 
@@ -1124,6 +1268,7 @@ async function runTraderScan(forced = false) {
         `🎯 <b>TP1:</b>   <code>$${fmtPrice(r.tp1)}</code>   (${tpDir}${r.tp1Pct}%)\n` +
         `🎯 <b>TP2:</b>   <code>$${fmtPrice(r.tp2)}</code>   (${tpDir}${r.tp2Pct}%)\n` +
         `🎯 <b>TP3:</b>   <code>$${fmtPrice(r.tp3)}</code>   (${tpDir}${r.tp3Pct}%)\n\n` +
+        (r.smcBadges?.length ? `🏛 <b>SMC Rules:</b>\n${r.smcBadges.map(b => e(b)).join('\n')}\n\n` : '') +
         `📊 <b>All Indicators:</b>\n${indicatorList}\n\n` +
         `<a href="${tvLink(r.symbol)}">📈 TradingView Chart</a>  |  ` +
         `<a href="${tradeLink(r.symbol)}">🔗 Trade Bitunix</a>\n` +
