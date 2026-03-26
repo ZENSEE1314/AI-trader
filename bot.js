@@ -235,23 +235,72 @@ async function tgSend(html) {
   await Promise.all(TELEGRAM_CHATS.map(id => tgSendTo(id, html)));
 }
 
+// ── SHARED REPLY MESSAGES ─────────────────────────────────────
+const MSG_SIGNUP =
+  `🚀 <b>Join Bitunix — Trade &amp; Earn Together!</b>\n\n` +
+  `👉 <a href="https://www.bitunix.com/register?vipCode=Signalme">Sign up here (my referral link)</a>\n\n` +
+  `<b>How to sign up:</b>\n` +
+  `1. Tap the link above\n` +
+  `2. Enter your <b>email</b> and set a <b>password</b>\n` +
+  `3. Verify your email (check spam if not in inbox)\n` +
+  `4. Done — you're in! No KYC required to start.\n\n` +
+  `✅ After signing up, <b>send me your UID</b> — I'll set you as my partner.\n` +
+  `💰 You earn <b>3% rebate on all your own trades</b>.\n` +
+  `🤝 Share your own referral link to friends and earn from <b>their trades too</b>!\n\n` +
+  `<i>Any questions? Just ask here. Let's grow together 🚀</i>`;
+
+const MSG_TUT =
+  `📖 <b>Bitunix — How to Top Up &amp; Start Trading</b>\n\n` +
+  `<b>Step 1 — Deposit USDT</b>\n` +
+  `1. Log in → tap <b>Assets</b> → <b>Deposit</b>\n` +
+  `2. Select coin: <b>USDT</b>\n` +
+  `3. Choose network: <b>TRC20</b> (cheapest) or <b>BEP20</b>\n` +
+  `4. Copy your deposit address\n` +
+  `5. Send USDT from your exchange/wallet to that address\n` +
+  `6. Wait ~1–5 min — funds will appear in your spot wallet\n\n` +
+  `<b>Step 2 — Transfer to Futures Wallet</b>\n` +
+  `1. Go to <b>Assets → Transfer</b>\n` +
+  `2. From: <b>Spot</b> → To: <b>Futures</b>\n` +
+  `3. Enter amount → confirm\n\n` +
+  `<b>Step 3 — Open a Futures Trade</b>\n` +
+  `1. Tap <b>Trade → Futures → USDT-M Perpetual</b>\n` +
+  `2. Pick a coin (e.g. BTC/USDT)\n` +
+  `3. Set your <b>leverage</b> (start with 5x–10x if you're new)\n` +
+  `4. Choose <b>Long</b> (price going up) or <b>Short</b> (price going down)\n` +
+  `5. Enter your position size → tap <b>Open Long / Open Short</b>\n` +
+  `6. ⚠️ Always set a <b>Stop Loss</b> to protect your funds!\n\n` +
+  `💡 <b>Tips:</b>\n` +
+  `• Follow this channel's signals for entry, TP &amp; SL levels\n` +
+  `• Never risk more than you can afford to lose\n` +
+  `• Start small and scale up as you learn\n\n` +
+  `<i>Need help? Ask in the group anytime 🙌</i>`;
+
 // ── COMMAND HANDLER ──────────────────────────────────────────
 async function handleCommand(text, fromChatId) {
-  const cmd = text.trim().split(/\s+/)[0].toLowerCase();
+  const cmd = text.trim().split(/\s+/)[0].toLowerCase().replace(/@\w+$/, '');
   if (cmd === '/testchat' || cmd === 'testchat') {
     await testChats(fromChatId);
   } else if (cmd === '/help' || cmd === 'help') {
-    await tgSend(
-      `🤖 <b>Crypto Signal Bot</b>\n\n` +
-      `/scan — Force signal scan now\n` +
-      `/smc — SMC signal scan (top 10 coins, 4H)\n` +
-      `/trader — Trader-style signals (CryptoNinjas/LuxAlgo/AltFINS)\n` +
+    await tgSendTo(fromChatId,
+      `🤖 <b>AI Signal Bot — Commands</b>\n\n` +
+      `📈 <b>Signals</b>\n` +
+      `/scan — Force full signal scan now\n` +
+      `/smc — SMC structure scan (top 10 coins, 4H)\n` +
+      `/trader — Multi-indicator trader signals\n\n` +
+      `🎓 <b>Getting Started</b>\n` +
+      `/signup — How to sign up on Bitunix + my referral link\n` +
+      `/tut — How to top up USDT &amp; start futures trading\n\n` +
+      `⚙️ <b>Bot Control</b>\n` +
       `/pause — Pause auto scan\n` +
       `/resume — Resume auto scan\n` +
       `/testchat — Test all configured chat IDs\n` +
       `/help — Show this menu\n\n` +
       `<i>Auto scan every ${INTERVAL_MIN} min</i>`
     );
+  } else if (cmd === '/signup' || cmd === 'signup') {
+    await tgSendTo(fromChatId, MSG_SIGNUP);
+  } else if (cmd === '/tut' || cmd === 'tut' || cmd === '/tutorial' || cmd === 'tutorial') {
+    await tgSendTo(fromChatId, MSG_TUT);
   } else if (cmd === '/pause' || cmd === 'pause') {
     paused = true;
     await tgSend(`⏸ <b>Bot Paused</b>\nSend /resume to restart.`);
@@ -268,7 +317,7 @@ async function handleCommand(text, fromChatId) {
     await tgSend(`🔍 <b>Scanning top ${TOP_COINS} coins...</b>`);
     await runScan(true);
   } else {
-    await tgSend(`❓ Unknown: <code>${e(text)}</code>\nSend /help for commands.`);
+    await tgSendTo(fromChatId, `❓ Unknown command: <code>${e(cmd)}</code>\nSend /help for all commands.`);
   }
 }
 
@@ -293,36 +342,18 @@ async function welcomeMember(channelId, user) {
 
   msg +=
     `━━━━━━━━━━━━━━━━━━\n` +
-    `💼 <b>Want to trade &amp; earn together?</b>\n\n` +
+    `💼 <b>Want to trade &amp; earn together with your friends?</b>\n\n` +
     `Join me on <b>Bitunix</b> — the platform I use for futures trading.\n` +
-    `👉 <a href="https://www.bitunix.com/register?vipCode=Signalme">Sign up here (referral link)</a>\n\n` +
-    `✅ Once you sign up, <b>send me your UID</b> and I'll set you as my partner.\n` +
-    `💰 You earn <b>3% rebate on your own trades</b>.\n` +
-    `🤝 Share your referral link with friends — earn from <b>their trades too</b>!\n\n` +
+    `👉 <a href="https://www.bitunix.com/register?vipCode=Signalme">Sign up here (my referral link)</a>\n\n` +
+    `✅ After signing up, send me your <b>UID</b> — I'll set you as my partner.\n` +
+    `💰 Earn <b>3% rebate on your own trades</b>.\n` +
+    `🤝 Share your link with friends and earn from <b>their trades too</b>!\n\n` +
     `━━━━━━━━━━━━━━━━━━\n` +
-    `📖 <b>How to get started on Bitunix:</b>\n\n` +
-    `<b>Step 1 — Sign Up</b>\n` +
-    `1. Tap the link above or go to bitunix.com\n` +
-    `2. Click <b>Register</b> → enter your email &amp; password\n` +
-    `3. Verify your email (check spam if not received)\n` +
-    `4. Complete KYC identity verification (takes ~5 min)\n\n` +
-    `<b>Step 2 — Deposit USDT</b>\n` +
-    `1. Log in → tap <b>Assets</b> → <b>Deposit</b>\n` +
-    `2. Choose <b>USDT</b> as the coin\n` +
-    `3. Select network: <b>TRC20</b> (cheapest fee) or <b>BEP20</b>\n` +
-    `4. Copy your deposit address\n` +
-    `5. Send USDT from your wallet/exchange to that address\n` +
-    `6. Wait ~1–5 min for confirmation\n\n` +
-    `<b>Step 3 — Start Futures Trading</b>\n` +
-    `1. Tap <b>Trade</b> → <b>Futures</b> → <b>USDT-M Perpetual</b>\n` +
-    `2. Transfer funds: <b>Assets → Transfer → to Futures wallet</b>\n` +
-    `3. Pick a coin (e.g. BTC/USDT)\n` +
-    `4. Set your leverage (start low — 5x–10x if new)\n` +
-    `5. Choose <b>Long</b> (price going up) or <b>Short</b> (price going down)\n` +
-    `6. Set your position size → tap <b>Open Long / Open Short</b>\n` +
-    `7. Always set a <b>Stop Loss</b> to protect your funds!\n\n` +
-    `⚠️ <i>Futures trading involves risk. Start small, follow signals, manage your SL.</i>\n\n` +
-    `<i>Questions? Just ask in the group. Good luck and trade safe! 🚀</i>`;
+    `📌 <b>Useful commands:</b>\n` +
+    `/signup — Sign up guide + referral link\n` +
+    `/tut — How to top up USDT &amp; start futures trading\n` +
+    `/help — All bot commands\n\n` +
+    `<i>Questions? Just ask. Good luck and trade safe! 🚀</i>`;
 
   await tgSendTo(channelId, msg);
 }
