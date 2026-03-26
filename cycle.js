@@ -155,6 +155,27 @@ function calcBollingerBands(closes, period = 20, stdMult = 2) {
   return { upper: mean + stdMult * std, middle: mean, lower: mean - stdMult * std };
 }
 
+// ── VWAP + BANDS ──────────────────────────────────────────────
+// Volume Weighted Average Price calculated from provided klines
+// Upper band = VWAP + 1.5σ, Lower band = VWAP - 1.5σ
+function calcVWAP(klines) {
+  if (!klines || klines.length < 5) return null;
+  let sumPV = 0, sumVol = 0;
+  const typicals = [];
+  for (const k of klines) {
+    const typical = (parseFloat(k[2]) + parseFloat(k[3]) + parseFloat(k[4])) / 3;
+    const vol     = parseFloat(k[5]);
+    sumPV   += typical * vol;
+    sumVol  += vol;
+    typicals.push(typical);
+  }
+  if (sumVol === 0) return null;
+  const vwap = sumPV / sumVol;
+  const variance = typicals.reduce((s, p) => s + Math.pow(p - vwap, 2), 0) / typicals.length;
+  const std = Math.sqrt(variance);
+  return { vwap, upper: vwap + 1.5 * std, lower: vwap - 1.5 * std };
+}
+
 function calcMACD(closes, fast = 12, slow = 26, signal = 9) {
   if (closes.length < slow + signal) return null;
   const emaFast = calcEMA(closes, fast);
@@ -363,11 +384,50 @@ async function analyzeSymbol(client, ticker, fundRates = {}) {
     const emaSlow  = calcEMA(closes, CONFIG.EMA_SLOW);
     if (!emaFast || !emaSlow) return null;
 
-    // ── 1-min klines for entry timing ──────────────────────
+    // ── 1-min klines (250 bars for 200 EMA + VWAP) ─────────
     let klines1m = null;
-    try { klines1m = await client.getKlines({ symbol: sym, interval: '1m', limit: 30 }); } catch (_) {}
-    const entry1mLong  = detect1mEntry(klines1m, struct.sl1 || price, 'LONG');   // near 15m HL
-    const entry1mShort = detect1mEntry(klines1m, struct.sh1 || price, 'SHORT');  // near 15m LH
+    try { klines1m = await client.getKlines({ symbol: sym, interval: '1m', limit: 250 }); } catch (_) {}
+
+    // ── Daily klines for PDL, PDH, session opening price ───
+    let dailyLevels = null;
+    try {
+      const klines1d = await client.getKlines({ symbol: sym, interval: '1d', limit: 3 });
+      if (klines1d.length >= 2) {
+        dailyLevels = {
+          todayOpen: parseFloat(klines1d[klines1d.length - 1][1]), // session opening price
+          pdl:       parseFloat(klines1d[klines1d.length - 2][3]), // prev day low
+          pdh:       parseFloat(klines1d[klines1d.length - 2][2]), // prev day high
+        };
+      }
+    } catch (_) {}
+
+    // ── VWAP + 200 EMA on 1m ───────────────────────────────
+    const vwap1m    = calcVWAP(klines1m);
+    const closes1m  = klines1m ? klines1m.map(k => parseFloat(k[4])) : [];
+    const ema200_1m = closes1m.length >= 200 ? calcEMA(closes1m, 200) : null;
+
+    // ── Rule 3: SHORT confluence check ─────────────────────
+    // "Rejection at OP + upper VWAP + 200 EMA — 2 of 3 must align at LH"
+    const CONF_TOL = 0.003; // within 0.3% counts as "at the level"
+    const nearUpperVWAP  = vwap1m   && Math.abs(price - vwap1m.upper)       / price < CONF_TOL;
+    const near200EMA     = ema200_1m && Math.abs(price - ema200_1m)          / price < CONF_TOL;
+    const nearSessionOpen= dailyLevels && Math.abs(price - dailyLevels.todayOpen) / price < CONF_TOL;
+    const confluenceCount = [nearUpperVWAP, near200EMA, nearSessionOpen].filter(Boolean).length;
+    const rule3Confluence = confluenceCount >= 2; // strong short confluence
+
+    // For LONG: lower VWAP band / 200 EMA as dynamic support
+    const nearLowerVWAP  = vwap1m   && Math.abs(price - vwap1m.lower)       / price < CONF_TOL;
+    const longConfluence = [nearLowerVWAP, near200EMA, nearSessionOpen].filter(Boolean).length >= 2;
+
+    // TP target: PDL for shorts, PDH for longs (if reachable within 10%)
+    const tpPDL = dailyLevels && dailyLevels.pdl < price * 0.99 && dailyLevels.pdl > price * 0.90
+      ? dailyLevels.pdl : null;
+    const tpPDH = dailyLevels && dailyLevels.pdh > price * 1.01 && dailyLevels.pdh < price * 1.10
+      ? dailyLevels.pdh : null;
+
+    // ── 1m entry confirmation ──────────────────────────────
+    const entry1mLong  = detect1mEntry(klines1m, struct.sl1 || price, 'LONG');
+    const entry1mShort = detect1mEntry(klines1m, struct.sh1 || price, 'SHORT');
 
     const macd     = calcMACD(closes);
     const bb       = calcBollingerBands(closes);
@@ -460,12 +520,14 @@ async function analyzeSymbol(client, ticker, fundRates = {}) {
       if (fundRate > 0.05) score -= 15;
       if (chg24h > 40) score -= 15;
       if (streak > 6 && !rule2Long) score -= 10;
+      // Rule 3 LONG: lower VWAP band / 200 EMA / session open = dynamic support confluence
+      if (longConfluence) score += 10;
+      else if (nearLowerVWAP || near200EMA) score += 5;
 
       let confidence = 'LOW';
       if (score >= 25) confidence = 'HIGH';
       else if (score >= 20) confidence = 'MEDIUM';
 
-      // SL = 0.1% below last swing low (HL on 15m) — user Rule
       const slPrice  = struct.sl1 ? struct.sl1 * (1 - CONFIG.SL_BUFFER) : price * 0.988;
       const leverage = CONFIG.HIGH_LEV_COINS.includes(sym) ? CONFIG.LEVERAGE_HIGH : CONFIG.LEVERAGE_LOW;
 
@@ -477,9 +539,14 @@ async function analyzeSymbol(client, ticker, fundRates = {}) {
         marketStructure: struct.marketStructure, trend: struct.trend,
         eql: struct.eql, eqh: struct.eqh,
         rule2Long, obZone: ob, reversalType: reversal.type,
-        slPrice,
-        entry1m: entry1mLong,
-        swingRef: struct.sl1,
+        slPrice, entry1m: entry1mLong, swingRef: struct.sl1,
+        // Rule 3
+        confluenceCount: longConfluence ? 2 : 0,
+        nearVWAP: nearLowerVWAP, near200EMA, nearSessionOpen,
+        vwap: vwap1m?.vwap, ema200: ema200_1m,
+        tpLevel: tpPDH || null, // PDH as TP for longs
+        pdl: dailyLevels?.pdl, pdh: dailyLevels?.pdh,
+        sessionOpen: dailyLevels?.todayOpen,
       };
     }
 
@@ -503,15 +570,17 @@ async function analyzeSymbol(client, ticker, fundRates = {}) {
       if (bbPos > 0.65) score += 8;                  // near upper BB = good short entry
       if (volRatio >= 1.5) score += 6;
       if (atrPct >= 0.5 && atrPct <= 1.8) score += 4;
-      if (fundRate > 0.05) score += 6;               // expensive funding → longs will close
+      if (fundRate > 0.05) score += 6;
       if (fundRate < -0.02) score -= 10;
       if (chg24h < -40) score -= 15;
+      // Rule 3 SHORT: rejection at upper VWAP + 200 EMA + session open = strong confluence
+      if (rule3Confluence) score += 12;              // 2+ levels rejecting = very strong
+      else if (nearUpperVWAP || near200EMA) score += 5;
 
       let confidence = 'LOW';
       if (score >= 25) confidence = 'HIGH';
       else if (score >= 20) confidence = 'MEDIUM';
 
-      // SL = 0.1% above last swing high (LH) — user Rule
       const slPrice = struct.sh1 ? struct.sh1 * (1 + CONFIG.SL_BUFFER) : price * 1.012;
       const leverage = CONFIG.HIGH_LEV_COINS.includes(sym) ? CONFIG.LEVERAGE_HIGH : CONFIG.LEVERAGE_LOW;
 
@@ -522,9 +591,14 @@ async function analyzeSymbol(client, ticker, fundRates = {}) {
         distHigh, fundRate, leverage,
         marketStructure: struct.marketStructure, trend: struct.trend,
         eql: struct.eql, eqh: struct.eqh,
-        slPrice,
-        entry1m: entry1mShort,
-        swingRef: struct.sh1,
+        slPrice, entry1m: entry1mShort, swingRef: struct.sh1,
+        // Rule 3
+        rule3Confluence, confluenceCount,
+        nearVWAP: nearUpperVWAP, near200EMA, nearSessionOpen,
+        vwap: vwap1m?.vwap, ema200: ema200_1m,
+        tpLevel: tpPDL || null,  // PDL as TP for shorts
+        pdl: dailyLevels?.pdl, pdh: dailyLevels?.pdh,
+        sessionOpen: dailyLevels?.todayOpen,
       };
     }
 
@@ -605,12 +679,16 @@ async function openTrade(client, pick, wallet) {
   const qty = Math.floor(rawQty * Math.pow(10, qtyPrec)) / Math.pow(10, qtyPrec);
   if (qty <= 0) throw new Error(`Qty too small: ${qty} for ${sym}`);
 
-  // ── TP at 3× SL distance (1:3 RR) ─────────────────────
-  const tpDist = slDist * CONFIG.TP_RR;
-  const tp = parseFloat((isLong
-    ? price * (1 + tpDist)
-    : price * (1 - tpDist)
-  ).toFixed(pricePrec));
+  // ── TP: use PDL/PDH if available (Rule 3), else 3× RR ──
+  let tpDist, tp;
+  if (pick.tpLevel) {
+    tp     = parseFloat(pick.tpLevel.toFixed(pricePrec));
+    tpDist = Math.abs(tp - price) / price;
+    log(`TP set to PDL/PDH: $${fmtPrice(tp)} (${(tpDist*100).toFixed(2)}% away)`);
+  } else {
+    tpDist = slDist * CONFIG.TP_RR;
+    tp     = parseFloat((isLong ? price * (1 + tpDist) : price * (1 - tpDist)).toFixed(pricePrec));
+  }
 
   // ── Fee check ──────────────────────────────────────────
   const notional  = qty * price;
@@ -812,6 +890,12 @@ async function main() {
       (pick.rule2Long && pick.obZone ? `• OB: \`$${fmtPrice(pick.obZone.low)}\`–\`$${fmtPrice(pick.obZone.high)}\`\n` : '') +
       (pick.eql ? `• EQL: \`$${fmtPrice(pick.eql)}\`\n` : '') +
       (pick.eqh ? `• EQH: \`$${fmtPrice(pick.eqh)}\`\n` : '') +
+      (pick.rule3Confluence ? `• 🎯 *Rule 3 Confluence* (${pick.confluenceCount}/3 levels)\n` : '') +
+      (pick.nearVWAP    ? `  └ Upper VWAP: \`$${fmtPrice(pick.vwap)}\` ✅\n` : '') +
+      (pick.near200EMA  ? `  └ 200 EMA: \`$${fmtPrice(pick.ema200)}\` ✅\n` : '') +
+      (pick.nearSessionOpen ? `  └ Session Open: \`$${fmtPrice(pick.sessionOpen)}\` ✅\n` : '') +
+      (pick.tpLevel     ? `• TP = ${isLongT ? 'PDH' : 'PDL'}: \`$${fmtPrice(pick.tpLevel)}\`\n` : '') +
+      (pick.pdl         ? `• PDL: \`$${fmtPrice(pick.pdl)}\` | PDH: \`$${fmtPrice(pick.pdh)}\`\n` : '') +
       `• RSI: \`${pick.rsi?.toFixed(1)}\` | MACD: ${pick.macdBullish ? '✅' : '❌'} | Vol: \`${pick.volRatio.toFixed(1)}x\`\n` +
       `• Streak: ${streakLabel} | Score: \`${pick.score.toFixed(1)}\`\n\n` +
       `💰 Risk: *$${riskUsdt} USDT* | Wallet: *$${avail.toFixed(4)}*`
