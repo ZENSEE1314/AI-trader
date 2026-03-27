@@ -35,11 +35,11 @@ const CONFIG = {
 
   MIN_BALANCE:     5,
   MIN_VOL_M:       100,     // min $100M 24h volume
-  MIN_SCORE:       12,      // relaxed — structure + 1m confirmation does heavy filtering
+  MIN_SCORE:       8,       // structure + 1m confirmation does the heavy filtering
 
   RSI_MAX:         68,
   RSI_MIN:         32,
-  RSI_SHORT_MIN:   55,
+  RSI_SHORT_MIN:   48,
   RSI_SHORT_MAX:   85,
   TAKER_FEE:       0.0004,
   EMA_FAST:        9,
@@ -324,8 +324,8 @@ function detect1mEntry(klines1m, targetLevel, direction) {
   const closes1m   = klines1m.map(k => parseFloat(k[4]));
   const price      = closes1m[closes1m.length - 1];
 
-  // Price must be within 0.5% of the 15m swing level we're waiting at
-  const nearTarget = Math.abs(price - targetLevel) / targetLevel < 0.005;
+  // Price must be within 2% of the 15m swing level we're waiting at
+  const nearTarget = Math.abs(price - targetLevel) / targetLevel < 0.02;
   if (!nearTarget) return { valid: false, reason: `not near target $${fmtPrice(targetLevel)}` };
 
   if (direction === 'LONG') {
@@ -434,12 +434,12 @@ async function analyzeSymbol(client, ticker, fundRates = {}) {
     const bbPos    = bb ? (price - bb.lower) / (bb.upper - bb.lower) : 0.5;
     const atr      = calcATR(klines15);
     const atrPct   = atr ? (atr / price) * 100 : 0;
-    if (atrPct > 3) return null;
+    if (atrPct > 8) return null; // only reject extreme volatility
 
     const recentVol = vols.slice(-3).reduce((a, b) => a + b, 0) / 3;
     const prevVol   = vols.slice(-8, -3).reduce((a, b) => a + b, 0) / 5;
     const volRatio  = prevVol > 0 ? recentVol / prevVol : 1;
-    if (volRatio < 1.2) return null;
+    // volume scored but not a hard filter — don't block setups in quiet markets
 
     const chg24h  = parseFloat(ticker.priceChangePercent);
     const fundRate= fundRates[sym] || 0;
@@ -618,10 +618,10 @@ async function findBestTrade(client) {
     Math.abs(parseFloat(t.priceChangePercent)) < 40 // exclude extreme pumps/dumps only
   );
 
-  // Top 20 by volume — fewer calls = safer on rate limits
-  const top20 = candidates
+  // Top 40 by volume — sorted by 24h volume to match TradingView ranking
+  const top40 = candidates
     .sort((a, b) => parseFloat(b.quoteVolume) - parseFloat(a.quoteVolume))
-    .slice(0, 20);
+    .slice(0, 40);
 
   // Batch-fetch ALL funding rates in ONE call instead of per-symbol
   const fundRates = {};
@@ -630,15 +630,15 @@ async function findBestTrade(client) {
     for (const f of allFunding) fundRates[f.symbol] = parseFloat(f.fundingRate) * 100;
   } catch (_) {}
 
-  log(`Analyzing ${top20.length} candidates (1 funding call total)...`);
+  log(`Analyzing ${top40.length} candidates (1 funding call total)...`);
 
   const scored = [];
-  const BATCH = 3; // smaller batches, more spacing
-  for (let i = 0; i < top20.length; i += BATCH) {
-    const batch = top20.slice(i, i + BATCH);
+  const BATCH = 3;
+  for (let i = 0; i < top40.length; i += BATCH) {
+    const batch = top40.slice(i, i + BATCH);
     const results = await Promise.all(batch.map(t => analyzeSymbol(client, t, fundRates)));
     results.forEach(r => { if (r && r.score >= CONFIG.MIN_SCORE) scored.push(r); });
-    await sleep(600); // 600ms between batches
+    await sleep(600);
   }
 
   if (!scored.length) return null;
