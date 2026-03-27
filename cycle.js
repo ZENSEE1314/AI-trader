@@ -1046,7 +1046,11 @@ async function main() {
       return;
     }
 
-    const result    = await openTrade(client, pick, wallet);
+    const result = await openTrade(client, pick, wallet);
+    if (!result) {
+      log(`openTrade returned null for ${pick.sym} — skipping cycle`);
+      return;
+    }
     const riskUsdt  = (wallet * CONFIG.WALLET_RISK_PCT).toFixed(2);
     const isLongT   = result.direction !== 'SHORT';
     const dirEmoji  = isLongT ? '🟢' : '🔴';
