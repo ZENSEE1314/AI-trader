@@ -1147,7 +1147,27 @@ async function checkSignalTargets() {
 // Returns { pass, reason, badges } — only pass:true signals get posted.
 async function smcValidate(symbol, signalDir) {
   try {
-    // 15m structure
+    // ── 1h trend: must align with signal direction ──────────
+    // Same rule as trading bot — don't post BUY into bearish 1h, or SELL into bullish 1h
+    let trend1h = 'neutral';
+    try {
+      const klines1h = await fetchKlines(symbol, '1h', 30);
+      if (klines1h && klines1h.length >= 21) {
+        const c1h   = klines1h.map(k => parseFloat(k[4]));
+        const k2    = 2 / 10;  // EMA9
+        const k3    = 2 / 22;  // EMA21
+        let e9 = c1h.slice(0, 9).reduce((a, b) => a + b, 0) / 9;
+        let e21 = c1h.slice(0, 21).reduce((a, b) => a + b, 0) / 21;
+        for (let i = 9;  i < c1h.length; i++) e9  = c1h[i] * k2 + e9  * (1 - k2);
+        for (let i = 21; i < c1h.length; i++) e21 = c1h[i] * k3 + e21 * (1 - k3);
+        trend1h = e9 > e21 ? 'bullish' : 'bearish';
+      }
+    } catch (_) {}
+
+    if (trend1h === 'bearish' && signalDir === 'BUY')  return { pass: false, reason: '1h bearish — BUY blocked', badges: [] };
+    if (trend1h === 'bullish' && signalDir === 'SELL') return { pass: false, reason: '1h bullish — SELL blocked', badges: [] };
+
+    // ── 15m structure ───────────────────────────────────────
     const klines15 = await fetchKlines(symbol, '15m', 50);
     if (!klines15 || klines15.length < 20) return { pass: true, reason: 'no 15m data', badges: [] };
     const smc = detectSMC(klines15);

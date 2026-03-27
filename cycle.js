@@ -330,29 +330,33 @@ function detect1mEntry(klines1m, targetLevel, direction) {
   if (!nearTarget) return { valid: false, reason: `not near target $${fmtPrice(targetLevel)}` };
 
   if (direction === 'SHORT') {
-    // Step 1: 1m must have formed a LL (confirms downward momentum)
-    // Step 2: 1m must then show a LH (pullback = short entry point)
-    // Both must be true — LL confirms the push down, LH is the entry candle
+    // 15m shows LH (bearish) → on 1m:
+    //   • LL forms (momentum pushes down) — confirmed by slLabel === 'LL'
+    //   • Then LH forms on 1m (price pulls back = SHORT entry point)
+    // Accept if BOTH LL+LH present, OR if bearish CHoCH on 1m (structure flipped down)
     const llFormed1m = struct1m.slLabel === 'LL';
     const lhFormed1m = struct1m.shLabel === 'LH';
-    const valid = llFormed1m && lhFormed1m;
+    const valid = (llFormed1m && lhFormed1m) || struct1m.choch === 'bearish';
     return {
       valid,
       reason: valid
-        ? `1m LL+LH confirmed — short entry`
-        : `1m not ready: need LL+LH, got (SH:${struct1m.shLabel} SL:${struct1m.slLabel})`,
+        ? `1m ${llFormed1m && lhFormed1m ? 'LL+LH' : 'CHoCH bearish'} — short entry`
+        : `1m not ready: need LL+LH or CHoCH, got (SH:${struct1m.shLabel} SL:${struct1m.slLabel})`,
       struct: struct1m,
     };
   } else {
-    // LONG: 1m HH formed (upward momentum) + 1m HL (pullback = entry point)
+    // 15m shows HL (bullish) → on 1m:
+    //   • HH forms (momentum pushes up)
+    //   • Then HL forms on 1m (pullback = LONG entry point)
+    // Accept if BOTH HH+HL present, OR if bullish CHoCH on 1m
     const hhFormed1m = struct1m.shLabel === 'HH';
     const hlFormed1m = struct1m.slLabel === 'HL';
-    const valid = hhFormed1m && hlFormed1m;
+    const valid = (hhFormed1m && hlFormed1m) || struct1m.choch === 'bullish';
     return {
       valid,
       reason: valid
-        ? `1m HH+HL confirmed — long entry`
-        : `1m not ready: need HH+HL, got (SH:${struct1m.shLabel} SL:${struct1m.slLabel})`,
+        ? `1m ${hhFormed1m && hlFormed1m ? 'HH+HL' : 'CHoCH bullish'} — long entry`
+        : `1m not ready: need HH+HL or CHoCH, got (SH:${struct1m.shLabel} SL:${struct1m.slLabel})`,
       struct: struct1m,
     };
   }
