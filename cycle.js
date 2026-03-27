@@ -612,10 +612,10 @@ async function findBestTrade(client) {
 
   const candidates = tickers.filter(t =>
     t.symbol.endsWith('USDT') &&
+    !t.symbol.includes('_') &&
     !CONFIG.BLACKLIST.includes(t.symbol) &&
     parseFloat(t.quoteVolume) > CONFIG.MIN_VOL_M * 1e6 &&
-    parseFloat(t.priceChangePercent) >= 1 &&
-    parseFloat(t.priceChangePercent) < 40
+    Math.abs(parseFloat(t.priceChangePercent)) < 40 // exclude extreme pumps/dumps only
   );
 
   // Top 20 by volume — fewer calls = safer on rate limits
@@ -916,19 +916,21 @@ async function main() {
         const ticker = await client.getSymbolPriceTicker({ symbol: sym });
         const cur   = parseFloat(ticker.price);
         const isLong = amt > 0;
-        const pct   = (isLong ? (cur - entry) : (entry - cur)) / entry * 100 * lev;
-        const side  = isLong ? '🟢 LONG' : '🔴 SHORT';
-        const tp    = parseFloat((isLong ? entry * (1 + CONFIG.TP_PCT) : entry * (1 - CONFIG.TP_PCT)).toFixed(6));
-        const sl    = parseFloat((isLong ? entry * (1 - CONFIG.SL_PCT) : entry * (1 + CONFIG.SL_PCT)).toFixed(6));
+        const pct    = (isLong ? (cur - entry) : (entry - cur)) / entry * 100 * lev;
+        const side   = isLong ? '🟢 LONG' : '🔴 SHORT';
+        const state  = tradeState.get(sym);
+        const tp1Str = state ? `TP1: \`$${fmtPrice(state.tp1)}\`  TP2: \`$${fmtPrice(state.tp2)}\`  TP3: \`$${fmtPrice(state.tp3)}\`` : '(TP managed by orders)';
+        const slStr  = state ? `\`$${fmtPrice(state.sl)}\`` : '(managed)';
+        const tpHits = state ? ` [${state.tpHit1 ? 'TP1✅' : 'TP1⏳'}${state.tpHit2 ? ' TP2✅' : ' TP2⏳'}]` : '';
 
         await notify(
           `📊 *Position Update — ${now()}*\n\n` +
-          `*${sym}* ${side} x${lev}\n` +
+          `*${sym}* ${side} x${lev}${tpHits}\n` +
           `Entry: \`$${fmtPrice(entry)}\` → Now: \`$${fmtPrice(cur)}\`\n` +
           `PnL: ${pnl >= 0 ? '🟢' : '🔴'} *${pnl >= 0 ? '+' : ''}$${pnl.toFixed(4)}* (${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%)\n` +
-          `🎯 TP: \`$${fmtPrice(tp)}\`  🛑 SL: \`$${fmtPrice(sl)}\`\n` +
-          `💰 Wallet: *$${wallet.toFixed(4)} USDT*\n` +
-          `_Trailing stop active ✅_`
+          `🎯 ${tp1Str}\n` +
+          `🛑 SL: ${slStr}\n` +
+          `💰 Wallet: *$${wallet.toFixed(4)} USDT*`
         );
       }
       log('=== Cycle End (holding) ===');
