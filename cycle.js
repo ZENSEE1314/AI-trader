@@ -18,7 +18,7 @@ const PRIVATE_CHATS    = TELEGRAM_CHATS.filter(id => !id.startsWith('-'));
 const CONFIG = {
   // Leverage: BTC/ETH = 100x (tight SL so risk is controlled), alts = 20x
   LEVERAGE_HIGH:   100,
-  LEVERAGE_LOW:    20,
+  LEVERAGE_LOW:    10,       // 10x for alts — liq distance ~10% (was 20x = ~5%)
   HIGH_LEV_COINS:  ['BTCUSDT', 'ETHUSDT'],
 
   // SL placed 0.1% beyond the 15m swing point (user rule)
@@ -710,39 +710,17 @@ async function openTrade(client, pick, wallet) {
   const entrySide = isLong ? 'BUY'  : 'SELL';
   const closeSide = isLong ? 'SELL' : 'BUY';
 
-  // Qty split: TP1 = 50%, TP2 = 25%, TP3 = remainder (closePosition)
-  const qty1 = floorQ(qty * 0.50);
-  const qty2 = floorQ(qty * 0.25);
-
   // Market entry
   const order = await client.submitNewOrder({ symbol: sym, side: entrySide, type: 'MARKET', quantity: qty });
 
-  // TP1 — close 50% of position
-  try {
-    await client.submitNewOrder({
-      symbol: sym, side: closeSide, type: 'TAKE_PROFIT_MARKET',
-      stopPrice: tp1, quantity: qty1, reduceOnly: 'true',
-      workingType: 'MARK_PRICE', priceProtect: 'TRUE',
-    });
-  } catch (e) { log(`TP1 warn: ${e.message}`); }
-
-  // TP2 — close 25% of position
-  try {
-    await client.submitNewOrder({
-      symbol: sym, side: closeSide, type: 'TAKE_PROFIT_MARKET',
-      stopPrice: tp2, quantity: qty2, reduceOnly: 'true',
-      workingType: 'MARK_PRICE', priceProtect: 'TRUE',
-    });
-  } catch (e) { log(`TP2 warn: ${e.message}`); }
-
-  // TP3 — close remaining position entirely
+  // TP3 — full-position safety net (Binance manages this one)
   try {
     await client.submitNewOrder({
       symbol: sym, side: closeSide, type: 'TAKE_PROFIT_MARKET',
       stopPrice: tp3, closePosition: 'true',
       workingType: 'MARK_PRICE', priceProtect: 'TRUE',
     });
-  } catch (e) { log(`TP3 warn: ${e.message}`); }
+  } catch (e) { log(`TP3 order warn: ${e.message}`); }
 
   // SL — protect full position initially
   try {
@@ -751,9 +729,10 @@ async function openTrade(client, pick, wallet) {
       stopPrice: sl, closePosition: 'true',
       workingType: 'MARK_PRICE', priceProtect: 'TRUE',
     });
-  } catch (e) { log(`SL warn: ${e.message}`); }
+  } catch (e) { log(`SL order warn: ${e.message}`); }
 
-  // Store state for TP monitoring
+  // TP1 & TP2 are managed by price monitoring in checkTrailingStop
+  // using market orders — more reliable than Binance quantity-based conditional orders
   tradeState.set(sym, { entry: price, tp1, tp2, tp3, sl, qty, isLong, tpHit1: false, tpHit2: false, pricePrec, qtyPrec });
 
   return { sym, qty, entry: price, leverage, tp1, tp2, tp3, sl, slDist, tpFullDist, confidence, direction, orderId: order.orderId };
@@ -803,73 +782,84 @@ async function checkTrailingStop(client) {
       } catch (_) {}
 
       const state = tradeState.get(sym);
-      if (!state) continue; // no state — let Binance orders manage it
+      if (!state) continue;
 
-      const origQty   = Math.abs(state.qty);
-      const curQty    = Math.abs(amt);
-      const reduction = 1 - (curQty / origQty); // 0 = nothing closed, 0.5 = 50% closed
-      const floorQ    = (q) => Math.floor(q * Math.pow(10, state.qtyPrec)) / Math.pow(10, state.qtyPrec);
+      const fmtP  = (p) => parseFloat(p.toFixed(state.pricePrec));
+      const floorQ = (q) => Math.floor(q * Math.pow(10, state.qtyPrec)) / Math.pow(10, state.qtyPrec);
+      const origQty = Math.abs(state.qty);
 
-      // ── TP2 hit: ~75% of position closed → SL to TP1 ───────
-      if (state.tpHit1 && !state.tpHit2 && reduction >= 0.65) {
-        state.tpHit2 = true;
-        const newSl = parseFloat(state.tp1.toFixed(state.pricePrec));
-        log(`TP2 hit ${sym}: SL → $${fmtPrice(newSl)} (TP1 = locked profit)`);
-        try {
-          await client.cancelAllOpenOrders({ symbol: sym });
-          await client.submitNewOrder({
-            symbol: sym, side: closeSide, type: 'TAKE_PROFIT_MARKET',
-            stopPrice: state.tp3, closePosition: 'true',
-            workingType: 'MARK_PRICE', priceProtect: 'TRUE',
-          });
-          await client.submitNewOrder({
-            symbol: sym, side: closeSide, type: 'STOP_MARKET',
-            stopPrice: newSl, closePosition: 'true',
-            workingType: 'MARK_PRICE', priceProtect: 'TRUE',
-          });
-        } catch (e) { log(`TP2 SL update warn: ${e.message}`); }
-        await notify(
-          `🎯 *TP2 Hit!* — *${sym}* ${isLong ? '🟢 LONG' : '🔴 SHORT'}\n` +
-          `25% closed @ \`$${fmtPrice(cur)}\`\n` +
-          `SL moved to TP1: \`$${fmtPrice(newSl)}\` ✅ profit locked\n` +
-          `Riding last 25% → TP3: \`$${fmtPrice(state.tp3)}\``
-        );
-        continue;
+      // ── TP1 hit: price crossed TP1 → market close 50%, SL to BE ─
+      if (!state.tpHit1) {
+        const tp1Hit = isLong ? cur >= state.tp1 : cur <= state.tp1;
+        if (tp1Hit) {
+          state.tpHit1 = true;
+          const closeQty = floorQ(origQty * 0.5);
+          const newSl    = fmtP(state.entry);
+          log(`TP1 hit ${sym} @ $${fmtPrice(cur)}: closing 50% (${closeQty}), SL → break even $${fmtPrice(newSl)}`);
+          try {
+            await client.cancelAllOpenOrders({ symbol: sym });
+            // Market close 50%
+            if (closeQty > 0) {
+              await client.submitNewOrder({ symbol: sym, side: closeSide, type: 'MARKET', quantity: closeQty, reduceOnly: 'true' });
+            }
+            // SL at break even
+            await client.submitNewOrder({
+              symbol: sym, side: closeSide, type: 'STOP_MARKET',
+              stopPrice: newSl, closePosition: 'true',
+              workingType: 'MARK_PRICE', priceProtect: 'TRUE',
+            });
+            // TP3 safety net back on
+            await client.submitNewOrder({
+              symbol: sym, side: closeSide, type: 'TAKE_PROFIT_MARKET',
+              stopPrice: state.tp3, closePosition: 'true',
+              workingType: 'MARK_PRICE', priceProtect: 'TRUE',
+            });
+          } catch (e) { log(`TP1 exec warn: ${e.message}`); state.tpHit1 = false; }
+          await notify(
+            `🎯 *TP1 Hit!* — *${sym}* ${isLong ? '🟢 LONG' : '🔴 SHORT'}\n` +
+            `50% closed @ \`$${fmtPrice(cur)}\`\n` +
+            `SL → break even: \`$${fmtPrice(newSl)}\` ✅ no-loss zone\n` +
+            `TP2: \`$${fmtPrice(state.tp2)}\`  |  TP3: \`$${fmtPrice(state.tp3)}\``
+          );
+          continue;
+        }
       }
 
-      // ── TP1 hit: ~50% of position closed → SL to break even ─
-      if (!state.tpHit1 && reduction >= 0.40) {
-        state.tpHit1 = true;
-        const newSl = parseFloat(state.entry.toFixed(state.pricePrec));
-        const qty2  = floorQ(origQty * 0.25);
-        log(`TP1 hit ${sym}: SL → $${fmtPrice(newSl)} (break even)`);
-        try {
-          await client.cancelAllOpenOrders({ symbol: sym });
-          // Re-place TP2 (25% qty) and TP3 (close remaining)
-          await client.submitNewOrder({
-            symbol: sym, side: closeSide, type: 'TAKE_PROFIT_MARKET',
-            stopPrice: state.tp2, quantity: qty2, reduceOnly: 'true',
-            workingType: 'MARK_PRICE', priceProtect: 'TRUE',
-          });
-          await client.submitNewOrder({
-            symbol: sym, side: closeSide, type: 'TAKE_PROFIT_MARKET',
-            stopPrice: state.tp3, closePosition: 'true',
-            workingType: 'MARK_PRICE', priceProtect: 'TRUE',
-          });
-          // SL at break even — worst case: no loss
-          await client.submitNewOrder({
-            symbol: sym, side: closeSide, type: 'STOP_MARKET',
-            stopPrice: newSl, closePosition: 'true',
-            workingType: 'MARK_PRICE', priceProtect: 'TRUE',
-          });
-        } catch (e) { log(`TP1 SL update warn: ${e.message}`); }
-        await notify(
-          `🎯 *TP1 Hit!* — *${sym}* ${isLong ? '🟢 LONG' : '🔴 SHORT'}\n` +
-          `50% closed @ \`$${fmtPrice(cur)}\`\n` +
-          `SL moved to break even: \`$${fmtPrice(newSl)}\` ✅ no-loss zone\n` +
-          `TP2: \`$${fmtPrice(state.tp2)}\`  |  TP3: \`$${fmtPrice(state.tp3)}\``
-        );
-        continue;
+      // ── TP2 hit: price crossed TP2 → market close 25%, SL to TP1 ─
+      if (state.tpHit1 && !state.tpHit2) {
+        const tp2Hit = isLong ? cur >= state.tp2 : cur <= state.tp2;
+        if (tp2Hit) {
+          state.tpHit2 = true;
+          const closeQty = floorQ(origQty * 0.25);
+          const newSl    = fmtP(state.tp1);
+          log(`TP2 hit ${sym} @ $${fmtPrice(cur)}: closing 25% (${closeQty}), SL → TP1 $${fmtPrice(newSl)}`);
+          try {
+            await client.cancelAllOpenOrders({ symbol: sym });
+            // Market close 25%
+            if (closeQty > 0) {
+              await client.submitNewOrder({ symbol: sym, side: closeSide, type: 'MARKET', quantity: closeQty, reduceOnly: 'true' });
+            }
+            // SL locked at TP1 (guaranteed profit)
+            await client.submitNewOrder({
+              symbol: sym, side: closeSide, type: 'STOP_MARKET',
+              stopPrice: newSl, closePosition: 'true',
+              workingType: 'MARK_PRICE', priceProtect: 'TRUE',
+            });
+            // TP3 final target
+            await client.submitNewOrder({
+              symbol: sym, side: closeSide, type: 'TAKE_PROFIT_MARKET',
+              stopPrice: state.tp3, closePosition: 'true',
+              workingType: 'MARK_PRICE', priceProtect: 'TRUE',
+            });
+          } catch (e) { log(`TP2 exec warn: ${e.message}`); state.tpHit2 = false; }
+          await notify(
+            `🎯 *TP2 Hit!* — *${sym}* ${isLong ? '🟢 LONG' : '🔴 SHORT'}\n` +
+            `25% closed @ \`$${fmtPrice(cur)}\`\n` +
+            `SL → TP1: \`$${fmtPrice(newSl)}\` ✅ profit locked\n` +
+            `Riding last 25% → TP3: \`$${fmtPrice(state.tp3)}\``
+          );
+          continue;
+        }
       }
     }
   } catch (e) { log(`checkTrailingStop err: ${e.message}`); }
