@@ -614,8 +614,9 @@ async function findBestTrade(client) {
     t.symbol.endsWith('USDT') &&
     !t.symbol.includes('_') &&
     !CONFIG.BLACKLIST.includes(t.symbol) &&
+    !CONFIG.HIGH_LEV_COINS.includes(t.symbol) && // alts only — skip BTC & ETH (too expensive per qty)
     parseFloat(t.quoteVolume) > CONFIG.MIN_VOL_M * 1e6 &&
-    Math.abs(parseFloat(t.priceChangePercent)) < 40 // exclude extreme pumps/dumps only
+    Math.abs(parseFloat(t.priceChangePercent)) < 40
   );
 
   // Top 40 by volume — sorted by 24h volume to match TradingView ranking
@@ -682,8 +683,12 @@ async function openTrade(client, pick, wallet) {
   // ── Position size: 1% of wallet at risk ────────────────
   // Sized from actual wallet so it scales automatically as balance grows/shrinks
   const riskUsdt = wallet * CONFIG.WALLET_RISK_PCT;
-  const qty      = floorQ(riskUsdt / (slDist * price));
-  if (qty <= 0) throw new Error(`Qty too small: ${qty} for ${sym}`);
+  const rawQty   = riskUsdt / (slDist * price);
+  const qty      = floorQ(rawQty);
+  if (qty <= 0) {
+    log(`Qty too small for ${sym} (raw=${rawQty.toFixed(6)}, wallet=$${wallet.toFixed(2)}) — skipping`);
+    return null; // skip this coin, try next candidate
+  }
 
   // ── Three TP levels ─────────────────────────────────────
   // Full distance: PDL/PDH if available, else 3× RR
