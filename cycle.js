@@ -688,6 +688,20 @@ async function findBestTrade(client) {
   return scored[0];
 }
 
+// ── SIGNAL QUEUE (injected from bot.js signal scanner) ────────
+// When bot.js posts a validated signal, it calls queueSignal()
+// cycle.js processes this queue first before doing its own scan
+const signalQueue = [];
+
+function queueSignal(sig) {
+  // sig = { symbol, direction:'LONG'|'SHORT', slPrice, tpLevel, smcBadges }
+  const exists = signalQueue.find(s => s.symbol === sig.symbol);
+  if (!exists) {
+    signalQueue.push({ ...sig, queuedAt: Date.now() });
+    log(`Signal queued for trade: ${sig.symbol} ${sig.direction}`);
+  }
+}
+
 // ── TRADE STATE (multi-TP management) ─────────────────────────
 // Persists TP levels + which TPs have been hit across cycles
 const tradeState = new Map();
@@ -974,15 +988,54 @@ async function main() {
       return;
     }
 
-    const pick = await findBestTrade(client);
+    // ── Check signal queue first (from bot.js validated signals) ─
+    // Expire signals older than 15 min — stale entries shouldn't trade
+    const now_ms = Date.now();
+    while (signalQueue.length && now_ms - signalQueue[0].queuedAt > 15 * 60 * 1000) {
+      const expired = signalQueue.shift();
+      log(`Signal expired (>15m): ${expired.symbol} ${expired.direction}`);
+    }
+
+    let pick = null;
+
+    if (signalQueue.length > 0) {
+      const sig = signalQueue.shift();
+      log(`Trading queued signal: ${sig.symbol} ${sig.direction}`);
+      // Get current price and build a minimal pick object from the signal
+      try {
+        const ticker = await client.getSymbolPriceTicker({ symbol: sig.symbol });
+        const price  = parseFloat(ticker.price);
+        const leverage = CONFIG.HIGH_LEV_COINS.includes(sig.symbol) ? CONFIG.LEVERAGE_HIGH : CONFIG.LEVERAGE_LOW;
+        // SL from signal's slPrice, or fallback 0.5% from price
+        const slPrice = sig.slPrice || (sig.direction === 'LONG' ? price * 0.995 : price * 1.005);
+        pick = {
+          sym: sig.symbol, price, leverage,
+          direction: sig.direction,
+          slPrice,
+          tpLevel: sig.tpLevel || null,
+          confidence: 'SIGNAL',
+          score: 99,
+          marketStructure: sig.smcBadges?.join(', ') || 'Signal Bot',
+          trend: sig.direction === 'LONG' ? 'bullish' : 'bearish',
+          entry1m: { reason: 'queued from signal bot' },
+          swingRef: slPrice,
+          rule2Long: false, rsi: null, macdBullish: true,
+          volRatio: 1, streak: 0, mom1h: 0, mom30m: 0,
+          chg24h: 0, fundRate: 0, atrPct: 0, distHigh: 0,
+          bbPosition: 0.5, eql: null, eqh: null,
+          confluenceCount: 0, nearVWAP: false, near200EMA: false,
+          nearSessionOpen: false, vwap: null, ema200: null,
+          pdl: null, pdh: null, sessionOpen: null,
+        };
+      } catch (e) {
+        log(`Queued signal error ${sig.symbol}: ${e.message} — falling back to scan`);
+      }
+    }
+
+    if (!pick) pick = await findBestTrade(client);
 
     if (!pick) {
-      await notify(
-        `🔍 *Smart Scan — ${now()}*\n` +
-        `No setup passed all filters.\n` +
-        `(RSI, EMA trend, volume, BB position all checked)\n` +
-        `💰 Wallet: *$${wallet.toFixed(4)} USDT* — waiting for better entry.`
-      );
+      log('No trade setup found this cycle — waiting.');
       return;
     }
 
@@ -1046,4 +1099,4 @@ async function run() {
   await main();
 }
 
-module.exports = { run };
+module.exports = { run, queueSignal };

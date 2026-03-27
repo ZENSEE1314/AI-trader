@@ -8,7 +8,7 @@
 // ==========================================================
 
 const fetch = require('node-fetch');
-const { run: runTrader } = require('./cycle');
+const { run: runTrader, queueSignal } = require('./cycle');
 
 const TELEGRAM_TOKEN  = process.env.TELEGRAM_TOKEN;
 const TELEGRAM_CHATS  = (process.env.TELEGRAM_CHAT_ID || '').split(',').map(s => s.trim()).filter(Boolean);
@@ -1384,6 +1384,16 @@ async function runTraderScan(forced = false) {
         `<i>${now()}</i>`;
 
       await tgSend(msg);
+
+      // ── Queue this signal for the trading bot to execute ──
+      // cycle.js will trade it on its next cycle (within 30 min)
+      queueSignal({
+        symbol:    r.symbol,
+        direction: isBuy ? 'LONG' : 'SHORT',
+        slPrice:   r.sl,
+        tpLevel:   r.tp3,  // use TP3 as full target
+        smcBadges: r.smcBadges || [],
+      });
 
       // Cache latest signal for welcome message
       lastSignalSummary =
