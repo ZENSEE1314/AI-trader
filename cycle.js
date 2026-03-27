@@ -314,34 +314,45 @@ function detectReversalSign(klines) {
 }
 
 // ── 1-MIN ENTRY CONFIRMATION ──────────────────────────────────
-// After 15m structure is confirmed, drop to 1m to find the actual entry.
-// LONG:  15m HH+HL formed → price pulls back to 15m HL → 1m shows HH (momentum shift up)
-// SHORT: 15m LH+LL formed → price pulls back to 15m LH → 1m shows LH (momentum shift down)
+// SHORT sequence (user rule):
+//   15m LH confirmed → drop to 1m → wait for 1m LL to form → then wait for 1m LH → SHORT entry
+// LONG sequence (mirror):
+//   15m HL confirmed → drop to 1m → wait for 1m HH to form → then wait for 1m HL → LONG entry
 function detect1mEntry(klines1m, targetLevel, direction) {
   if (!klines1m || klines1m.length < 10) return { valid: false, reason: 'not enough 1m data' };
 
-  const struct1m   = detectStructure(klines1m);
-  const closes1m   = klines1m.map(k => parseFloat(k[4]));
-  const price      = closes1m[closes1m.length - 1];
+  const struct1m = detectStructure(klines1m);
+  const closes1m = klines1m.map(k => parseFloat(k[4]));
+  const price    = closes1m[closes1m.length - 1];
 
   // Price must be within 2% of the 15m swing level we're waiting at
   const nearTarget = Math.abs(price - targetLevel) / targetLevel < 0.02;
   if (!nearTarget) return { valid: false, reason: `not near target $${fmtPrice(targetLevel)}` };
 
-  if (direction === 'LONG') {
-    // On 1m: HH formed (momentum shifted bullish) OR bullish CHoCH after pullback
-    const bullish1m = struct1m.shLabel === 'HH' || struct1m.choch === 'bullish';
+  if (direction === 'SHORT') {
+    // Step 1: 1m must have formed a LL (confirms downward momentum)
+    // Step 2: 1m must then show a LH (pullback = short entry point)
+    // Both must be true — LL confirms the push down, LH is the entry candle
+    const llFormed1m = struct1m.slLabel === 'LL';
+    const lhFormed1m = struct1m.shLabel === 'LH';
+    const valid = llFormed1m && lhFormed1m;
     return {
-      valid:  bullish1m,
-      reason: bullish1m ? `1m ${struct1m.marketStructure} at HL` : `1m structure not ready (${struct1m.shLabel})`,
+      valid,
+      reason: valid
+        ? `1m LL+LH confirmed — short entry`
+        : `1m not ready: need LL+LH, got (SH:${struct1m.shLabel} SL:${struct1m.slLabel})`,
       struct: struct1m,
     };
   } else {
-    // On 1m: LH formed (momentum shifted bearish) OR bearish CHoCH after pullback
-    const bearish1m = struct1m.shLabel === 'LH' || struct1m.choch === 'bearish';
+    // LONG: 1m HH formed (upward momentum) + 1m HL (pullback = entry point)
+    const hhFormed1m = struct1m.shLabel === 'HH';
+    const hlFormed1m = struct1m.slLabel === 'HL';
+    const valid = hhFormed1m && hlFormed1m;
     return {
-      valid:  bearish1m,
-      reason: bearish1m ? `1m ${struct1m.marketStructure} at LH` : `1m structure not ready (${struct1m.shLabel})`,
+      valid,
+      reason: valid
+        ? `1m HH+HL confirmed — long entry`
+        : `1m not ready: need HH+HL, got (SH:${struct1m.shLabel} SL:${struct1m.slLabel})`,
       struct: struct1m,
     };
   }
