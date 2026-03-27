@@ -1283,12 +1283,23 @@ async function runTraderScan(forced = false) {
   if (paused && !forced) { log('Paused.'); return; }
 
   try {
+    const BOT_BLACKLIST = [
+      'ALPACAUSDT','BNXUSDT','ALPHAUSDT','BANANAS31USDT',
+      'LYNUSDT','PORT3USDT','RVVUSDT','BSWUSDT',
+      'NEIROETHUSDT','COSUSDT','YALAUSDT','TANSSIUSDT','EPTUSDT',
+      'LEVERUSDT','AGLDUSDT','LOOKSUSDT',
+    ];
     const tickers = await fetchTickers();
-    // Top 30 coins by volume
+    // Top 40 coins by volume — exclude blacklist and extreme movers (>50% 24h)
     const top30 = tickers
-      .filter(t => t.symbol.endsWith('USDT') && !t.symbol.includes('_'))
+      .filter(t =>
+        t.symbol.endsWith('USDT') &&
+        !t.symbol.includes('_') &&
+        !BOT_BLACKLIST.includes(t.symbol) &&
+        Math.abs(parseFloat(t.priceChangePercent)) <= 50
+      )
       .sort((a, b) => parseFloat(b.quoteVolume) - parseFloat(a.quoteVolume))
-      .slice(0, 30);
+      .slice(0, 40);
 
     const results = [];
     const now_ts  = Date.now();

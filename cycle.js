@@ -395,6 +395,22 @@ async function analyzeSymbol(client, ticker, fundRates = {}) {
     const emaSlow  = calcEMA(closes, CONFIG.EMA_SLOW);
     if (!emaFast || !emaSlow) return null;
 
+    // ── Filter extreme 24h movers early (pumps/dumps = unreliable signals) ─
+    const chg24hRaw = parseFloat(ticker.priceChangePercent);
+    if (Math.abs(chg24hRaw) > 50) return null;
+
+    // ── 1h trend: must align with trade direction ────────────
+    // LONG only when 1h is bullish (EMA9 > EMA21), SHORT only when 1h is bearish.
+    // This stops trading counter-trend bounces on 15m against the bigger move.
+    let trend1h = 'neutral';
+    try {
+      const klines1h  = await client.getKlines({ symbol: sym, interval: '1h', limit: 30 });
+      const closes1h  = klines1h.map(k => parseFloat(k[4]));
+      const ema9_1h   = calcEMA(closes1h, 9);
+      const ema21_1h  = calcEMA(closes1h, 21);
+      if (ema9_1h && ema21_1h) trend1h = ema9_1h > ema21_1h ? 'bullish' : 'bearish';
+    } catch (_) {}
+
     // ── 1-min klines (250 bars for 200 EMA + VWAP) ─────────
     let klines1m = null;
     try { klines1m = await client.getKlines({ symbol: sym, interval: '1m', limit: 250 }); } catch (_) {}
@@ -502,6 +518,8 @@ async function analyzeSymbol(client, ticker, fundRates = {}) {
 
     // ── LONG filters ───────────────────────────────────────
     if (isLongTrend) {
+      // 1h must be bullish — don't buy into a downtrend
+      if (trend1h === 'bearish' && !rule2Long) return null;
       // Rule 2 OB reversal: use relaxed RSI (oversold OK), EMA can be bearish
       if (!rule2Long) {
         if (rsi > CONFIG.RSI_MAX || rsi < CONFIG.RSI_MIN) return null;
@@ -563,6 +581,8 @@ async function analyzeSymbol(client, ticker, fundRates = {}) {
 
     // ── SHORT filters ──────────────────────────────────────
     if (isShortTrend) {
+      // 1h must be bearish — don't short into an uptrend
+      if (trend1h === 'bullish') return null;
       if (rsi < CONFIG.RSI_SHORT_MIN || rsi > CONFIG.RSI_SHORT_MAX) return null;
       if (emaFast > emaSlow) return null;   // EMA still bullish — skip short
       if (bbPos < 0.20) return null;        // near lower BB — bad short entry
