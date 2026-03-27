@@ -731,12 +731,19 @@ async function openTrade(client, pick, wallet) {
 
   // ── Position size: 1% of wallet at risk ────────────────
   // Sized from actual wallet so it scales automatically as balance grows/shrinks
+  const MIN_NOTIONAL = 5.5; // Binance minimum is $5 — use $5.5 for safety margin
   const riskUsdt = wallet * CONFIG.WALLET_RISK_PCT;
   const rawQty   = riskUsdt / (slDist * price);
-  const qty      = floorQ(rawQty);
+  let   qty      = floorQ(rawQty);
+
+  // Bump qty up to meet $5 minimum notional if needed
+  if (qty * price < MIN_NOTIONAL) {
+    qty = Math.ceil(MIN_NOTIONAL / price * Math.pow(10, qtyPrec)) / Math.pow(10, qtyPrec);
+    log(`Qty bumped to ${qty} to meet $${MIN_NOTIONAL} min notional for ${sym}`);
+  }
   if (qty <= 0) {
-    log(`Qty too small for ${sym} (raw=${rawQty.toFixed(6)}, wallet=$${wallet.toFixed(2)}) — skipping`);
-    return null; // skip this coin, try next candidate
+    log(`Qty too small for ${sym} even after bump — skipping`);
+    return null;
   }
 
   // ── Three TP levels ─────────────────────────────────────
