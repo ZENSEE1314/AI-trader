@@ -18,7 +18,7 @@ const PRIVATE_CHATS    = TELEGRAM_CHATS.filter(id => !id.startsWith('-'));
 const CONFIG = {
   // Leverage: BTC/ETH = 100x (tight SL so risk is controlled), alts = 20x
   LEVERAGE_HIGH:   100,
-  LEVERAGE_LOW:    10,       // 10x for alts — liq distance ~10% (was 20x = ~5%)
+  LEVERAGE_LOW:    20,       // 20x for alts
   HIGH_LEV_COINS:  ['BTCUSDT', 'ETHUSDT'],
 
   // SL placed 0.1% beyond the 15m swing point (user rule)
@@ -996,11 +996,11 @@ async function main() {
     }
 
     // ── Check signal queue first (from bot.js validated signals) ─
-    // Expire signals older than 15 min — stale entries shouldn't trade
+    // Expire signals older than 45 min — stale entries shouldn't trade
     const now_ms = Date.now();
-    while (signalQueue.length && now_ms - signalQueue[0].queuedAt > 15 * 60 * 1000) {
+    while (signalQueue.length && now_ms - signalQueue[0].queuedAt > 45 * 60 * 1000) {
       const expired = signalQueue.shift();
-      log(`Signal expired (>15m): ${expired.symbol} ${expired.direction}`);
+      log(`Signal expired (>45m): ${expired.symbol} ${expired.direction}`);
     }
 
     let pick = null;
@@ -1093,9 +1093,25 @@ async function main() {
     );
 
   } catch (err) {
-    if (checkBanError(err)) return; // IP ban — already notified, skip generic error
-    log(`ERROR: ${err.message}`);
-    await notify(`❌ *Bot Error — ${now()}*\n\`${err.message}\``);
+    if (checkBanError(err)) return;
+    const msg = String(err?.message || err);
+    // Binance account hasn't signed Futures/Perps agreement — user action required
+    if (msg.toLowerCase().includes('tradfi') || msg.toLowerCase().includes('perps') || msg.toLowerCase().includes('agreement')) {
+      log(`Binance agreement required: ${msg}`);
+      await notify(
+        `⚠️ *Action Required — Binance Futures Agreement*\n\n` +
+        `Your Binance account has not signed the USDT-M Perpetual Futures agreement.\n\n` +
+        `*Fix:*\n` +
+        `1. Open Binance app or website\n` +
+        `2. Go to *Derivatives → USDT-M Futures*\n` +
+        `3. Accept the agreement / terms popup\n` +
+        `4. Bot will resume trading automatically\n\n` +
+        `_This is a one-time account activation on Binance._`
+      );
+      return;
+    }
+    log(`ERROR: ${msg}`);
+    await notify(`❌ *Bot Error — ${now()}*\n\`${msg.substring(0, 200)}\``);
   }
 
   log('=== Cycle End ===');

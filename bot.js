@@ -1385,15 +1385,16 @@ async function runTraderScan(forced = false) {
 
       await tgSend(msg);
 
-      // ── Queue this signal for the trading bot to execute ──
-      // cycle.js will trade it on its next cycle (within 30 min)
+      // ── Queue signal and trigger trade cycle immediately ──
       queueSignal({
         symbol:    r.symbol,
         direction: isBuy ? 'LONG' : 'SHORT',
         slPrice:   r.sl,
-        tpLevel:   r.tp3,  // use TP3 as full target
+        tpLevel:   r.tp3,
         smcBadges: r.smcBadges || [],
       });
+      // Fire trade cycle now instead of waiting up to 30 min
+      setTimeout(() => runTrader().catch(e => log(`Immediate trade cycle err: ${e.message}`)), 2000);
 
       // Cache latest signal for welcome message
       lastSignalSummary =
