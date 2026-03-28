@@ -218,7 +218,6 @@ async function fetchKlines(symbol, interval = '1h', limit = 30) {
 async function analyzeSymbol(ticker) {
   try {
     const symbol = ticker.symbol;
-    const chg24h = parseFloat(ticker.priceChangePercent);
     const klines = await fetchKlines(symbol, '1h', 30);
     if (!klines || klines.length < 15) return null;
 
@@ -229,6 +228,11 @@ async function analyzeSymbol(ticker) {
     const last   = closes[closes.length - 1];
     const prev   = closes[closes.length - 2];
     const chg1h  = ((last - prev) / prev) * 100;
+
+    // Today's change: use 1D kline open (00:00 UTC) vs current price
+    const daily  = await fetchKlines(symbol, '1d', 1);
+    const dayOpen = daily && daily.length ? parseFloat(daily[0][1]) : last;
+    const chg24h  = ((last - dayOpen) / dayOpen) * 100;
 
     let score = 0;
     if      (rsi < 30) score += 3;
@@ -795,10 +799,9 @@ async function runScan(forced = false) {
       if (!coins.length) return '';
       let s = `${emoji} <b>${label}</b> (${coins.length})\n`;
       for (const c of coins) {
-        const coin     = c.symbol.replace('USDT', '');
-        const chg1Sign = parseFloat(c.chg1h) >= 0 ? '+' : '';
-        const chg24Sign = parseFloat(c.chg24h) >= 0 ? '+' : '';
-        s += `• <a href="${tradeLink(c.symbol)}">${coin}/USDT</a>  <code>$${fmtPrice(c.lastPrice)}</code>  RSI:${c.rsi}  1h:${chg1Sign}${e(c.chg1h)}%  24h:${chg24Sign}${e(c.chg24h)}%\n`;
+        const coin    = c.symbol.replace('USDT', '');
+        const chgSign = parseFloat(c.chg24h) >= 0 ? '+' : '';
+        s += `• <a href="${tradeLink(c.symbol)}">${coin}/USDT</a>  <code>$${fmtPrice(c.lastPrice)}</code>  RSI:${c.rsi}  ${chgSign}${e(c.chg24h)}%\n`;
       }
       return s + '\n';
     };
