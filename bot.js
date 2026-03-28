@@ -63,15 +63,37 @@ function trackSignal(sig) {
   log(`CSV: tracked ${sig.symbol} ${sig.signal} [${sig.source}]`);
 }
 
-function loadSignals(dateFilter) {
+// Report window: 9PM SG (13:00 UTC) today back to 9PM SG yesterday
+// SG = UTC+8, so 9PM SG = 13:00 UTC
+function getReportWindow() {
+  const now = new Date();
+  const utcH = now.getUTCHours();
+  // If before 13:00 UTC (9PM SG), window started yesterday 13:00 UTC
+  // If after 13:00 UTC, window started today 13:00 UTC
+  const start = new Date(now);
+  start.setUTCMinutes(0, 0, 0);
+  if (utcH < 13) {
+    start.setUTCDate(start.getUTCDate() - 1);
+  }
+  start.setUTCHours(13);
+  return start;
+}
+
+function loadSignals(windowFilter) {
   if (!fs.existsSync(CSV_FILE)) return [];
   const lines = fs.readFileSync(CSV_FILE, 'utf-8').split('\n').filter(l => l.trim() && !l.startsWith('Date'));
+  const windowStart = windowFilter ? getReportWindow() : null;
   return lines.map(line => {
     const [date, time, symbol, signal, source, entry, sl, tp1, tp2, tp3, status, pnl, result] = line.split(SEP);
     return { date, time, symbol, signal, source, entry: parseFloat(entry), sl: parseFloat(sl),
       tp1: parseFloat(tp1), tp2: tp2 ? parseFloat(tp2) : null, tp3: tp3 ? parseFloat(tp3) : null,
       status, pnl: parseFloat(pnl) || 0, result };
-  }).filter(s => !dateFilter || s.date === dateFilter);
+  }).filter(s => {
+    if (!windowStart) return true;
+    // Parse signal datetime (date=YYYY-MM-DD, time=HH:MM:SS in SG time)
+    const sigUtc = new Date(`${s.date}T${s.time}+08:00`); // SG is UTC+8
+    return sigUtc >= windowStart;
+  });
 }
 
 function updateSignalCsv(signals) {
@@ -361,15 +383,15 @@ const MSG_TUT =
 
 // ── REPORT — Signal P&L Tracker (CSV-backed) ───────────────
 async function runReport(chatId) {
+  const sendFn = chatId ? (msg) => tgSendTo(chatId, msg) : tgSend;
   try {
-    const today = new Date().toISOString().slice(0, 10);
-    const signals = loadSignals(today);
+    const signals = loadSignals(true); // true = use 9PM SG window
 
     if (!signals.length) {
-      await tgSendTo(chatId,
+      await sendFn(
         `📋 <b>Daily Signal Report — ${now()}</b>\n` +
         `━━━━━━━━━━━━━━━━━━\n` +
-        `<i>No signals sent today yet. Run /scan /trader or /smc first.</i>`
+        `<i>No signals in current session (9PM–9PM SG).</i>`
       );
       return;
     }
@@ -473,15 +495,15 @@ async function runReport(chatId) {
       const part1 = msg.substring(0, msg.indexOf('📝')) +
         `📝 <b>Signals (1/2):</b>\n` + rows.slice(0, mid).join('\n');
       const part2 = `📝 <b>Signals (2/2):</b>\n` + rows.slice(mid).join('\n');
-      await tgSendTo(chatId, part1);
+      await sendFn(part1);
       await sleep(500);
-      await tgSendTo(chatId, part2);
+      await sendFn(part2);
     } else {
-      await tgSendTo(chatId, msg);
+      await sendFn(msg);
     }
   } catch (err) {
     log(`Report err: ${err.message}`);
-    await tgSendTo(chatId, `❌ <b>Report Error</b>\n<code>${e(err.message)}</code>`);
+    await sendFn(`❌ <b>Report Error</b>\n<code>${e(err.message)}</code>`);
   }
 }
 
@@ -1801,6 +1823,9 @@ async function start() {
   setInterval(() => runTraderScan(),        INTERVAL_MIN * 60 * 1000);
   setInterval(() => checkSpikes(),          SPIKE_INTERVAL);
   setInterval(() => checkSignalTargets(),   3 * 60 * 1000); // check TP/SL every 3 min
+
+  // ── AUTO REPORT: every 1 hour, sent to all channels ──────
+  setInterval(() => runReport(null).catch(err => log(`Auto report err: ${err.message}`)), 60 * 60 * 1000);
 
   // ── AUTO TRADER (cycle.js) ──────────────────────────────────
   log(`Auto trader: first run in 60s, then every ${TRADE_INTERVAL_MIN} min`);
