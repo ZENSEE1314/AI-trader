@@ -795,9 +795,10 @@ async function runScan(forced = false) {
       if (!coins.length) return '';
       let s = `${emoji} <b>${label}</b> (${coins.length})\n`;
       for (const c of coins) {
-        const coin    = c.symbol.replace('USDT', '');
-        const chgSign = parseFloat(c.chg24h) >= 0 ? '+' : '';
-        s += `• <a href="${tradeLink(c.symbol)}">${coin}/USDT</a>  <code>$${fmtPrice(c.lastPrice)}</code>  RSI:${c.rsi}  ${chgSign}${e(c.chg24h)}%\n`;
+        const coin     = c.symbol.replace('USDT', '');
+        const chg1Sign = parseFloat(c.chg1h) >= 0 ? '+' : '';
+        const chg24Sign = parseFloat(c.chg24h) >= 0 ? '+' : '';
+        s += `• <a href="${tradeLink(c.symbol)}">${coin}/USDT</a>  <code>$${fmtPrice(c.lastPrice)}</code>  RSI:${c.rsi}  1h:${chg1Sign}${e(c.chg1h)}%  24h:${chg24Sign}${e(c.chg24h)}%\n`;
       }
       return s + '\n';
     };
