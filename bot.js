@@ -8,6 +8,8 @@
 // ==========================================================
 
 const fetch = require('node-fetch');
+const fs    = require('fs');
+const path  = require('path');
 const { run: runTrader, queueSignal } = require('./cycle');
 
 const TELEGRAM_TOKEN  = process.env.TELEGRAM_TOKEN;
@@ -27,6 +29,67 @@ const spikeCooldown   = new Map();
 const SPIKE_COOLDOWN  = 5 * 60 * 1000;  // 5 min cooldown per coin
 const SPIKE_PCT       = 3;              // alert threshold: ±3% in 1 min
 const SPIKE_INTERVAL  = 2 * 60 * 1000; // check every 2 min (was 1 min — too many calls)
+
+// ── SIGNAL CSV TRACKER (for /report + Excel history) ────────
+const DATA_DIR  = fs.existsSync('/data') ? '/data' : path.join(__dirname, 'data');
+const CSV_FILE  = path.join(DATA_DIR, 'signals.csv');
+const CSV_HEADER = 'Date,Time,Symbol,Signal,Source,Entry,SL,TP1,TP2,TP3,Status,PnL%,Result';
+
+if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+if (!fs.existsSync(CSV_FILE)) fs.writeFileSync(CSV_FILE, CSV_HEADER + '\n');
+
+function csvEscape(v) { return v == null ? '' : String(v).replace(/,/g, ''); }
+
+function trackSignal(sig) {
+  const d = new Date();
+  const date = d.toISOString().slice(0, 10);
+  const time = d.toLocaleTimeString('en-GB', { timeZone: 'Asia/Jakarta', hour12: false });
+  const row = [
+    date, time,
+    sig.symbol, sig.signal, sig.source,
+    sig.entry, sig.sl, sig.tp1, sig.tp2 || '', sig.tp3 || '',
+    'OPEN', '0', '',
+  ].map(csvEscape).join(',');
+  fs.appendFileSync(CSV_FILE, row + '\n');
+  log(`CSV: tracked ${sig.symbol} ${sig.signal} [${sig.source}]`);
+}
+
+function loadSignals(dateFilter) {
+  if (!fs.existsSync(CSV_FILE)) return [];
+  const lines = fs.readFileSync(CSV_FILE, 'utf-8').split('\n').filter(l => l.trim() && !l.startsWith('Date,'));
+  return lines.map(line => {
+    const [date, time, symbol, signal, source, entry, sl, tp1, tp2, tp3, status, pnl, result] = line.split(',');
+    return { date, time, symbol, signal, source, entry: parseFloat(entry), sl: parseFloat(sl),
+      tp1: parseFloat(tp1), tp2: tp2 ? parseFloat(tp2) : null, tp3: tp3 ? parseFloat(tp3) : null,
+      status, pnl: parseFloat(pnl) || 0, result };
+  }).filter(s => !dateFilter || s.date === dateFilter);
+}
+
+function updateSignalCsv(signals) {
+  const allLines = fs.existsSync(CSV_FILE)
+    ? fs.readFileSync(CSV_FILE, 'utf-8').split('\n').filter(l => l.trim())
+    : [CSV_HEADER];
+  const header = allLines[0];
+  const dataLines = allLines.slice(1);
+  const updateMap = new Map();
+  for (const s of signals) {
+    updateMap.set(`${s.date},${s.symbol},${s.signal},${s.source}`, s);
+  }
+  const updated = dataLines.map(line => {
+    const parts = line.split(',');
+    const key = `${parts[0]},${parts[2]},${parts[3]},${parts[4]}`;
+    const upd = updateMap.get(key);
+    if (upd) {
+      updateMap.delete(key);
+      parts[10] = upd.status;
+      parts[11] = upd.pnl.toFixed(2);
+      parts[12] = upd.result;
+      return parts.join(',');
+    }
+    return line;
+  });
+  fs.writeFileSync(CSV_FILE, header + '\n' + updated.join('\n') + '\n');
+}
 
 // ── HELPERS ──────────────────────────────────────────────────
 function now() {
@@ -283,6 +346,173 @@ const MSG_TUT =
   `• Start small and scale up as you learn\n\n` +
   `<i>Need help? Ask in the group anytime 🙌</i>`;
 
+// ── REPORT — Signal P&L Tracker (CSV-backed) ───────────────
+async function runReport(chatId) {
+  try {
+    const today = new Date().toISOString().slice(0, 10);
+    const signals = loadSignals(today);
+
+    if (!signals.length) {
+      await tgSendTo(chatId,
+        `📋 <b>Daily Signal Report — ${now()}</b>\n` +
+        `━━━━━━━━━━━━━━━━━━\n` +
+        `<i>No signals sent today yet. Run /scan /trader or /smc first.</i>`
+      );
+      return;
+    }
+
+    let wins = 0, losses = 0, openTrades = 0;
+    let totalPnlPct = 0;
+    let tp1Hits = 0, tp2Hits = 0, tp3Hits = 0, slHits = 0;
+    const rows = [];
+
+    for (const sig of signals) {
+      try {
+        const klines = await fetchKlines(sig.symbol, '5m', 300);
+        if (!klines || !klines.length) continue;
+
+        const isBuy = sig.signal === 'BUY';
+        const coin  = sig.symbol.replace('USDT', '');
+        let status  = 'OPEN';
+        let pnlPct  = 0;
+        let result  = '';
+        let hitTp3  = false, hitTp2 = false, hitTp1 = false, hitSl = false;
+
+        for (const k of klines) {
+          const high = parseFloat(k[2]);
+          const low  = parseFloat(k[3]);
+          if (isBuy) {
+            if (low <= sig.sl)               { hitSl = true; break; }
+            if (sig.tp3 && high >= sig.tp3)  { hitTp3 = true; break; }
+            if (sig.tp2 && high >= sig.tp2)    hitTp2 = true;
+            if (high >= sig.tp1)               hitTp1 = true;
+          } else {
+            if (high >= sig.sl)              { hitSl = true; break; }
+            if (sig.tp3 && low <= sig.tp3)   { hitTp3 = true; break; }
+            if (sig.tp2 && low <= sig.tp2)     hitTp2 = true;
+            if (low <= sig.tp1)                hitTp1 = true;
+          }
+        }
+
+        if (hitSl) {
+          pnlPct = -(Math.abs(sig.sl - sig.entry) / sig.entry * 100);
+          status = 'SL HIT'; result = 'LOSS';
+          losses++; slHits++;
+        } else if (hitTp3) {
+          pnlPct = Math.abs(sig.tp3 - sig.entry) / sig.entry * 100;
+          status = 'TP3 HIT'; result = 'WIN';
+          wins++; tp3Hits++;
+        } else if (hitTp2) {
+          pnlPct = Math.abs(sig.tp2 - sig.entry) / sig.entry * 100;
+          status = 'TP2 HIT'; result = 'WIN';
+          wins++; tp2Hits++;
+        } else if (hitTp1) {
+          pnlPct = Math.abs(sig.tp1 - sig.entry) / sig.entry * 100;
+          status = 'TP1 HIT'; result = 'WIN';
+          wins++; tp1Hits++;
+        } else {
+          const lastClose = parseFloat(klines[klines.length - 1][4]);
+          pnlPct = isBuy
+            ? ((lastClose - sig.entry) / sig.entry) * 100
+            : ((sig.entry - lastClose) / sig.entry) * 100;
+          status = 'OPEN'; result = pnlPct >= 0 ? 'PROFIT' : 'LOSS';
+          openTrades++;
+        }
+
+        sig.status = status;
+        sig.pnl    = pnlPct;
+        sig.result = result;
+
+        totalPnlPct += pnlPct;
+        const sign = pnlPct >= 0 ? '+' : '';
+        const emoji = result === 'WIN' ? '🟢' : result === 'LOSS' ? '🔴' : '🟡';
+        rows.push(
+          `• <b>${coin}</b> ${sig.signal} [${sig.source}]\n` +
+          `  Entry: <code>$${fmtPrice(sig.entry)}</code> → ${emoji} ${status} (${sign}${pnlPct.toFixed(2)}%)`
+        );
+      } catch (_) {}
+      await sleep(100);
+    }
+
+    updateSignalCsv(signals);
+
+    const totalSignals = signals.length;
+    const winRate = (wins + losses) > 0 ? ((wins / (wins + losses)) * 100).toFixed(0) : '0';
+    const pnlSign = totalPnlPct >= 0 ? '+' : '';
+    const pnlEmoji = totalPnlPct >= 0 ? '🟢' : '🔴';
+    const resultEmoji = totalPnlPct >= 0 ? '✅ WINNING DAY' : '❌ LOSING DAY';
+
+    let msg =
+      `📋 <b>Daily Signal Report — ${now()}</b>\n` +
+      `━━━━━━━━━━━━━━━━━━\n` +
+      `${pnlEmoji} <b>Total P&amp;L: ${pnlSign}${totalPnlPct.toFixed(2)}%</b>\n` +
+      `${resultEmoji}\n\n` +
+      `📊 <b>Summary:</b>\n` +
+      `Signals: <b>${totalSignals}</b> | Wins: <b>${wins}</b> | Losses: <b>${losses}</b> | Open: <b>${openTrades}</b>\n` +
+      `Win Rate: <b>${winRate}%</b>\n` +
+      `🎯 TP1: ${tp1Hits} | TP2: ${tp2Hits} | TP3: ${tp3Hits} | 🛑 SL: ${slHits}\n\n` +
+      `📝 <b>All Signals Today:</b>\n`;
+
+    msg += rows.join('\n') || '<i>No data</i>';
+
+    if (msg.length > 3900) {
+      const mid = Math.ceil(rows.length / 2);
+      const part1 = msg.substring(0, msg.indexOf('📝')) +
+        `📝 <b>Signals (1/2):</b>\n` + rows.slice(0, mid).join('\n');
+      const part2 = `📝 <b>Signals (2/2):</b>\n` + rows.slice(mid).join('\n');
+      await tgSendTo(chatId, part1);
+      await sleep(500);
+      await tgSendTo(chatId, part2);
+    } else {
+      await tgSendTo(chatId, msg);
+    }
+  } catch (err) {
+    log(`Report err: ${err.message}`);
+    await tgSendTo(chatId, `❌ <b>Report Error</b>\n<code>${e(err.message)}</code>`);
+  }
+}
+
+// ── DOWNLOAD CSV ────────────────────────────────────────────
+async function sendCsvFile(chatId) {
+  try {
+    if (!fs.existsSync(CSV_FILE)) {
+      await tgSendTo(chatId, `⚠️ No signal history yet. Run some scans first.`);
+      return;
+    }
+    const lines = fs.readFileSync(CSV_FILE, 'utf-8').split('\n').filter(l => l.trim());
+    const totalRows = lines.length - 1;
+    const csvData = fs.readFileSync(CSV_FILE);
+    const filename = `signals_${new Date().toISOString().slice(0, 10)}.csv`;
+    const boundary = '----FormBoundary' + Date.now().toString(36);
+
+    const body = Buffer.concat([
+      Buffer.from(
+        `--${boundary}\r\n` +
+        `Content-Disposition: form-data; name="chat_id"\r\n\r\n${chatId}\r\n` +
+        `--${boundary}\r\n` +
+        `Content-Disposition: form-data; name="caption"\r\n\r\n` +
+        `📁 Signal History — ${totalRows} trades\nOpen in Excel to view/filter\r\n` +
+        `--${boundary}\r\n` +
+        `Content-Disposition: form-data; name="document"; filename="${filename}"\r\n` +
+        `Content-Type: text/csv\r\n\r\n`
+      ),
+      csvData,
+      Buffer.from(`\r\n--${boundary}--\r\n`),
+    ]);
+
+    await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendDocument`, {
+      method: 'POST',
+      headers: { 'Content-Type': `multipart/form-data; boundary=${boundary}` },
+      body,
+      timeout: REQUEST_TIMEOUT,
+    });
+    log(`CSV sent: ${totalRows} rows`);
+  } catch (err) {
+    log(`CSV download err: ${err.message}`);
+    await tgSendTo(chatId, `❌ <b>Download Error</b>\n<code>${e(err.message)}</code>`);
+  }
+}
+
 // ── COMMAND HANDLER ──────────────────────────────────────────
 async function handleCommand(text, fromChatId) {
   const cmd = text.trim().split(/\s+/)[0].toLowerCase().replace(/@\w+$/, '');
@@ -295,6 +525,9 @@ async function handleCommand(text, fromChatId) {
       `/scan — Force full signal scan now\n` +
       `/smc — SMC structure scan (top 10 coins, 4H)\n` +
       `/trader — Multi-indicator trader signals\n\n` +
+      `📊 <b>Reports</b>\n` +
+      `/report — Today's signal P&amp;L summary\n` +
+      `/download — Download signal history (CSV/Excel)\n\n` +
       `🎓 <b>Getting Started</b>\n` +
       `/signup — How to sign up on Bitunix + my referral link\n` +
       `/tut — How to top up USDT &amp; start futures trading\n\n` +
@@ -321,6 +554,10 @@ async function handleCommand(text, fromChatId) {
   } else if (cmd === '/trader' || cmd === 'trader') {
     await tgSend(`🧠 <b>Trader Scan — Top 30 coins, multi-indicator confluence...</b>`);
     await runTraderScan(true);
+  } else if (cmd === '/report' || cmd === 'report') {
+    await runReport(fromChatId);
+  } else if (cmd === '/download' || cmd === 'download') {
+    await sendCsvFile(fromChatId);
   } else if (cmd === '/scan' || cmd === 'scan') {
     await tgSend(`🔍 <b>Scanning top ${TOP_COINS} coins...</b>`);
     await runScan(true);
@@ -504,6 +741,10 @@ async function checkSpikes() {
         `📊 <a href="${tvUrl}">TradingView Chart</a>  |  ` +
         `🔗 <a href="${tradeLink(a.symbol)}">Trade Bitunix</a>`
       );
+      trackSignal({
+        symbol: a.symbol, signal: isPump ? 'BUY' : 'SELL', entry: a.entry,
+        sl: a.sl, tp1: a.tp1, tp2: a.tp2, tp3: null, source: 'Spike',
+      });
       await sleep(300);
     }
     if (alerts.length) log(`1-min spike alerts: ${alerts.length}`);
@@ -1384,6 +1625,10 @@ async function runTraderScan(forced = false) {
         `<i>${now()}</i>`;
 
       await tgSend(msg);
+      trackSignal({
+        symbol: r.symbol, signal: r.signal, entry: r.entry,
+        sl: r.sl, tp1: r.tp1, tp2: r.tp2, tp3: r.tp3, source: 'Trader',
+      });
 
       // ── Queue signal and trigger trade cycle immediately ──
       queueSignal({
@@ -1496,6 +1741,10 @@ async function runSMCScan(forced = false) {
         `<i>Price: $${fmtPrice(r.lastPrice)} · Scan: ${now()}</i>`;
 
       await tgSend(msg);
+      trackSignal({
+        symbol: r.symbol, signal: r.signal, entry: r.entry,
+        sl: r.sl, tp1: r.tp1, tp2: r.tp2, tp3: null, source: 'SMC',
+      });
       await sleep(500);
     }
 
