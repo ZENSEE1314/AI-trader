@@ -51,8 +51,8 @@ if (!fs.existsSync(CSV_FILE)) {
 
 function trackSignal(sig) {
   const d = new Date();
-  const date = d.toISOString().slice(0, 10);
-  const time = d.toLocaleTimeString('en-GB', { timeZone: 'Asia/Jakarta', hour12: false });
+  const date = d.toLocaleDateString('en-CA', { timeZone: 'Asia/Singapore' }); // YYYY-MM-DD in SG
+  const time = d.toLocaleTimeString('en-GB', { timeZone: 'Asia/Singapore', hour12: false }); // HH:MM:SS in SG
   const row = [
     date, time,
     sig.symbol, sig.signal, sig.source,
