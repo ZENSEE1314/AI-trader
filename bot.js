@@ -33,12 +33,21 @@ const SPIKE_INTERVAL  = 2 * 60 * 1000; // check every 2 min (was 1 min — too m
 // ── SIGNAL CSV TRACKER (for /report + Excel history) ────────
 const DATA_DIR  = fs.existsSync('/data') ? '/data' : path.join(__dirname, 'data');
 const CSV_FILE  = path.join(DATA_DIR, 'signals.csv');
-const CSV_HEADER = 'Date,Time,Symbol,Signal,Source,Entry,SL,TP1,TP2,TP3,Status,PnL%,Result';
+const SEP = '\t';
+const CSV_HEADER = ['Date','Time','Symbol','Signal','Source','Entry','SL','TP1','TP2','TP3','Status','PnL%','Result'].join(SEP);
 
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-if (!fs.existsSync(CSV_FILE)) fs.writeFileSync(CSV_FILE, CSV_HEADER + '\n');
-
-function csvEscape(v) { return v == null ? '' : String(v).replace(/,/g, ''); }
+if (!fs.existsSync(CSV_FILE)) {
+  fs.writeFileSync(CSV_FILE, CSV_HEADER + '\n');
+} else {
+  // Migrate old comma-separated data to tab-separated
+  const raw = fs.readFileSync(CSV_FILE, 'utf-8');
+  if (raw.includes(',') && !raw.includes('\t')) {
+    const migrated = raw.split('\n').map(l => l.replace(/,/g, '\t')).join('\n');
+    fs.writeFileSync(CSV_FILE, migrated);
+    console.log('[BOOT] Migrated signals.csv from comma to tab format');
+  }
+}
 
 function trackSignal(sig) {
   const d = new Date();
@@ -49,16 +58,16 @@ function trackSignal(sig) {
     sig.symbol, sig.signal, sig.source,
     sig.entry, sig.sl, sig.tp1, sig.tp2 || '', sig.tp3 || '',
     'OPEN', '0', '',
-  ].map(csvEscape).join(',');
+  ].join(SEP);
   fs.appendFileSync(CSV_FILE, row + '\n');
   log(`CSV: tracked ${sig.symbol} ${sig.signal} [${sig.source}]`);
 }
 
 function loadSignals(dateFilter) {
   if (!fs.existsSync(CSV_FILE)) return [];
-  const lines = fs.readFileSync(CSV_FILE, 'utf-8').split('\n').filter(l => l.trim() && !l.startsWith('Date,'));
+  const lines = fs.readFileSync(CSV_FILE, 'utf-8').split('\n').filter(l => l.trim() && !l.startsWith('Date'));
   return lines.map(line => {
-    const [date, time, symbol, signal, source, entry, sl, tp1, tp2, tp3, status, pnl, result] = line.split(',');
+    const [date, time, symbol, signal, source, entry, sl, tp1, tp2, tp3, status, pnl, result] = line.split(SEP);
     return { date, time, symbol, signal, source, entry: parseFloat(entry), sl: parseFloat(sl),
       tp1: parseFloat(tp1), tp2: tp2 ? parseFloat(tp2) : null, tp3: tp3 ? parseFloat(tp3) : null,
       status, pnl: parseFloat(pnl) || 0, result };
@@ -73,18 +82,18 @@ function updateSignalCsv(signals) {
   const dataLines = allLines.slice(1);
   const updateMap = new Map();
   for (const s of signals) {
-    updateMap.set(`${s.date},${s.symbol},${s.signal},${s.source}`, s);
+    updateMap.set(`${s.date}|${s.symbol}|${s.signal}|${s.source}`, s);
   }
   const updated = dataLines.map(line => {
-    const parts = line.split(',');
-    const key = `${parts[0]},${parts[2]},${parts[3]},${parts[4]}`;
+    const parts = line.split(SEP);
+    const key = `${parts[0]}|${parts[2]}|${parts[3]}|${parts[4]}`;
     const upd = updateMap.get(key);
     if (upd) {
       updateMap.delete(key);
       parts[10] = upd.status;
       parts[11] = upd.pnl.toFixed(2);
       parts[12] = upd.result;
-      return parts.join(',');
+      return parts.join(SEP);
     }
     return line;
   });
@@ -482,7 +491,7 @@ async function sendCsvFile(chatId) {
     const lines = fs.readFileSync(CSV_FILE, 'utf-8').split('\n').filter(l => l.trim());
     const totalRows = lines.length - 1;
     const csvData = fs.readFileSync(CSV_FILE);
-    const filename = `signals_${new Date().toISOString().slice(0, 10)}.csv`;
+    const filename = `signals_${new Date().toISOString().slice(0, 10)}.xls`;
     const boundary = '----FormBoundary' + Date.now().toString(36);
 
     const body = Buffer.concat([
