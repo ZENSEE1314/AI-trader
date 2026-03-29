@@ -431,15 +431,21 @@
                 oninput="document.getElementById('maxpos-val-${k.id}').textContent=this.value"
                 aria-label="Max concurrent positions">
             </div>
-            <div class="form-group" style="margin-bottom:0">
-              <label class="form-label" for="allowed-${k.id}">Only Trade These Coins</label>
-              <input class="form-input text-mono" type="text" id="allowed-${k.id}" placeholder="e.g. BTCUSDT,ETHUSDT (empty = all)" value="${escapeHtml(allowedCoins)}" style="font-size:0.8rem;">
-              <div style="font-size:0.65rem;color:var(--color-text-muted);margin-top:2px;">Comma-separated. Leave empty to trade all coins.</div>
+            <div class="form-group" style="margin-bottom:0;grid-column:1/-1;">
+              <label class="form-label">Only Trade These Coins <span style="font-weight:400;color:var(--color-text-muted);">(empty = all)</span></label>
+              <div class="coin-chips" id="allowed-chips-${k.id}">${buildChips(allowedCoins, k.id, 'allowed')}</div>
+              <div style="position:relative;">
+                <input class="form-input text-mono" type="text" id="allowed-search-${k.id}" placeholder="Search coin..." autocomplete="off" style="font-size:0.8rem;" oninput="window.CryptoBot.searchCoins(this,${k.id},'allowed')" onfocus="window.CryptoBot.searchCoins(this,${k.id},'allowed')">
+                <div class="coin-dropdown hidden" id="allowed-dropdown-${k.id}"></div>
+              </div>
             </div>
-            <div class="form-group" style="margin-bottom:0">
-              <label class="form-label" for="banned-${k.id}">Ban These Coins</label>
-              <input class="form-input text-mono" type="text" id="banned-${k.id}" placeholder="e.g. DOGEUSDT,SHIBUSDT" value="${escapeHtml(bannedCoins)}" style="font-size:0.8rem;">
-              <div style="font-size:0.65rem;color:var(--color-text-muted);margin-top:2px;">Comma-separated. These coins will never be traded.</div>
+            <div class="form-group" style="margin-bottom:0;grid-column:1/-1;">
+              <label class="form-label">Ban These Coins</label>
+              <div class="coin-chips" id="banned-chips-${k.id}">${buildChips(bannedCoins, k.id, 'banned')}</div>
+              <div style="position:relative;">
+                <input class="form-input text-mono" type="text" id="banned-search-${k.id}" placeholder="Search coin to ban..." autocomplete="off" style="font-size:0.8rem;" oninput="window.CryptoBot.searchCoins(this,${k.id},'banned')" onfocus="window.CryptoBot.searchCoins(this,${k.id},'banned')">
+                <div class="coin-dropdown hidden" id="banned-dropdown-${k.id}"></div>
+              </div>
             </div>
             <div style="display:flex;align-items:flex-end;">
               <label class="toggle">
@@ -476,8 +482,8 @@
     const maxLossUsdt = parseInt($(`#maxloss-${keyId}`).value);
     const maxPositions = parseInt($(`#maxpos-${keyId}`).value);
     const enabled = $(`#enabled-${keyId}`).checked;
-    const allowedCoins = ($(`#allowed-${keyId}`).value || '').toUpperCase().replace(/\s/g, '');
-    const bannedCoins = ($(`#banned-${keyId}`).value || '').toUpperCase().replace(/\s/g, '');
+    const allowedCoins = getChipValues(`allowed-chips-${keyId}`);
+    const bannedCoins = getChipValues(`banned-chips-${keyId}`);
 
     try {
       await api('PUT', `/api/keys/${keyId}/settings`, {
@@ -917,6 +923,80 @@
       .catch(err => showToast(err.message, 'error'));
   }
 
+  // ----- Coin list + autocomplete chips -----
+  let coinList = [];
+  let coinListLoading = false;
+
+  async function loadCoinList() {
+    if (coinList.length || coinListLoading) return;
+    coinListLoading = true;
+    try {
+      coinList = await api('GET', '/api/coins');
+    } catch { coinList = []; }
+    coinListLoading = false;
+  }
+
+  function buildChips(coinStr, keyId, type) {
+    if (!coinStr) return '';
+    return coinStr.split(',').filter(Boolean).map(c =>
+      `<span class="coin-chip">${escapeHtml(c.trim())} <span class="coin-chip-x" onclick="window.CryptoBot.removeCoin('${type}-chips-${keyId}','${escapeHtml(c.trim())}')">&times;</span></span>`
+    ).join('');
+  }
+
+  function getChipValues(containerId) {
+    const el = $(`#${containerId}`);
+    if (!el) return '';
+    const chips = el.querySelectorAll('.coin-chip');
+    return Array.from(chips).map(c => c.textContent.replace('×', '').trim()).join(',');
+  }
+
+  function addCoin(containerId, coin, keyId, type) {
+    const el = $(`#${containerId}`);
+    if (!el) return;
+    const existing = getChipValues(containerId).split(',').filter(Boolean);
+    if (existing.includes(coin)) return;
+    el.innerHTML += `<span class="coin-chip">${escapeHtml(coin)} <span class="coin-chip-x" onclick="window.CryptoBot.removeCoin('${containerId}','${escapeHtml(coin)}')">&times;</span></span>`;
+    const searchInput = $(`#${type}-search-${keyId}`);
+    if (searchInput) { searchInput.value = ''; }
+    const dd = $(`#${type}-dropdown-${keyId}`);
+    if (dd) dd.classList.add('hidden');
+  }
+
+  function removeCoin(containerId, coin) {
+    const el = $(`#${containerId}`);
+    if (!el) return;
+    const chips = el.querySelectorAll('.coin-chip');
+    chips.forEach(c => {
+      if (c.textContent.replace('×', '').trim() === coin) c.remove();
+    });
+  }
+
+  function searchCoins(input, keyId, type) {
+    loadCoinList();
+    const q = (input.value || '').toUpperCase().trim();
+    const dd = $(`#${type}-dropdown-${keyId}`);
+    if (!dd) return;
+
+    if (!q) { dd.classList.add('hidden'); return; }
+
+    const existing = getChipValues(`${type}-chips-${keyId}`).split(',').filter(Boolean);
+    const matches = coinList.filter(c => c.includes(q) && !existing.includes(c)).slice(0, 8);
+
+    if (!matches.length) { dd.classList.add('hidden'); return; }
+
+    dd.innerHTML = matches.map(c =>
+      `<div class="coin-dropdown-item" onclick="window.CryptoBot.addCoin('${type}-chips-${keyId}','${c}',${keyId},'${type}')">${c.replace('USDT', '')}/<span style="opacity:0.5">USDT</span></div>`
+    ).join('');
+    dd.classList.remove('hidden');
+  }
+
+  // Close dropdowns on click outside
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('.coin-dropdown') && !e.target.matches('[id*="-search-"]')) {
+      $$('.coin-dropdown').forEach(d => d.classList.add('hidden'));
+    }
+  });
+
   // ----- Platform change (show Bitunix IP info) -----
   let serverIpLoaded = false;
 
@@ -943,6 +1023,7 @@
     payWithWallet, payBankTransfer, payStripe, requestWithdraw,
     adminAction, adminSub, adminWd, saveAdminSettings, adminEditWallet,
     goToAuth, selectPlan, showLoginForm, onPlatformChange,
+    searchCoins, addCoin, removeCoin,
   };
 
   // ----- Init -----

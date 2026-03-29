@@ -19,6 +19,26 @@ app.use('/api/wallet', require('./routes/wallet'));
 // Stripe webhook needs raw body — mount before json parser catches it
 // (already handled inside subscription.js with express.raw)
 
+// Available trading pairs (cached 1 hour)
+let coinListCache = { data: null, ts: 0 };
+app.get('/api/coins', async (req, res) => {
+  try {
+    if (coinListCache.data && Date.now() - coinListCache.ts < 3600000) {
+      return res.json(coinListCache.data);
+    }
+    const fetch = require('node-fetch');
+    const r = await fetch('https://fapi.binance.com/fapi/v1/ticker/24hr', { timeout: 10000 });
+    const tickers = await r.json();
+    const coins = tickers
+      .filter(t => t.symbol.endsWith('USDT') && !t.symbol.includes('_'))
+      .sort((a, b) => parseFloat(b.quoteVolume) - parseFloat(a.quoteVolume))
+      .slice(0, 200)
+      .map(t => t.symbol);
+    coinListCache = { data: coins, ts: Date.now() };
+    res.json(coins);
+  } catch { res.json([]); }
+});
+
 // Health check
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
