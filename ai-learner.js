@@ -57,10 +57,25 @@ db.exec(`
     created_at TEXT DEFAULT (datetime('now'))
   );
 
+  CREATE TABLE IF NOT EXISTS ai_versions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    version TEXT NOT NULL,
+    trade_count INTEGER NOT NULL,
+    win_rate REAL,
+    avg_pnl REAL,
+    total_pnl REAL,
+    params TEXT NOT NULL,
+    setup_weights TEXT,
+    avoided_coins TEXT,
+    changes TEXT,
+    created_at TEXT DEFAULT (datetime('now'))
+  );
+
   CREATE INDEX IF NOT EXISTS idx_trades_symbol ON trades(symbol);
   CREATE INDEX IF NOT EXISTS idx_trades_setup ON trades(setup);
   CREATE INDEX IF NOT EXISTS idx_trades_session ON trades(session);
   CREATE INDEX IF NOT EXISTS idx_trades_created ON trades(created_at);
+  CREATE INDEX IF NOT EXISTS idx_versions_created ON ai_versions(created_at);
 `);
 
 // ── Prepared Statements ──────────────────────────────────────
@@ -90,6 +105,7 @@ const MIN_TRADES_FOR_LEARNING = 20;
 const RECALC_INTERVAL = 10;
 const MAX_WEIGHT_SHIFT = 0.05;
 const EMA_ALPHA = 0.3; // weight recent trades more heavily
+let lastVersionTradeCount = 0; // track when to snapshot
 
 // ── Current Session Detection ────────────────────────────────
 
@@ -128,6 +144,13 @@ function recordTrade(data) {
     marketStructure: data.marketStructure || null,
     closedAt: new Date().toISOString(),
   });
+
+  // Check if we should snapshot a new AI version
+  const totalTrades = db.prepare('SELECT COUNT(*) as c FROM trades WHERE pnl_pct IS NOT NULL').get().c;
+  if (totalTrades >= MIN_TRADES_FOR_LEARNING && totalTrades - lastVersionTradeCount >= RECALC_INTERVAL) {
+    lastVersionTradeCount = totalTrades;
+    saveVersion(totalTrades);
+  }
 }
 
 // ── Weight Calculations (EMA-based) ──────────────────────────
@@ -312,6 +335,89 @@ function logParamChange(name, oldVal, newVal, reason, tradeCount) {
   });
 }
 
+// ── Version Snapshots ────────────────────────────────────────
+
+function saveVersion(tradeCount) {
+  const overall = db.prepare(`
+    SELECT
+      AVG(is_win) as win_rate,
+      AVG(pnl_pct) as avg_pnl,
+      SUM(pnl_pct) as total_pnl
+    FROM trades WHERE pnl_pct IS NOT NULL
+  `).get();
+
+  const params = getOptimalParams();
+
+  // Collect setup weights
+  const setups = db.prepare(`
+    SELECT setup, COUNT(*) as total,
+      ROUND(AVG(CASE WHEN is_win = 1 THEN 1.0 ELSE 0.0 END), 3) as win_rate
+    FROM trades WHERE pnl_pct IS NOT NULL
+    GROUP BY setup HAVING total >= 3
+  `).all();
+  const setupWeights = {};
+  for (const s of setups) {
+    setupWeights[s.setup] = { trades: s.total, winRate: s.win_rate, weight: getSetupWeight(s.setup) };
+  }
+
+  // Collect avoided coins
+  const allSymbols = db.prepare(`
+    SELECT DISTINCT symbol FROM trades WHERE pnl_pct IS NOT NULL
+  `).all().map(r => r.symbol);
+  const avoided = allSymbols.filter(s => shouldAvoidCoin(s));
+
+  // Detect what changed vs previous version
+  const prevVersion = db.prepare(`
+    SELECT params FROM ai_versions ORDER BY id DESC LIMIT 1
+  `).get();
+  const changes = [];
+  if (prevVersion) {
+    const prev = JSON.parse(prevVersion.params);
+    for (const [key, val] of Object.entries(params)) {
+      if (prev[key] !== undefined && prev[key] !== val) {
+        changes.push(`${key}: ${prev[key]} → ${val}`);
+      }
+    }
+  }
+
+  // Generate version number: v1.0, v1.1, v1.2... major bumps every 50 trades
+  const major = Math.floor(tradeCount / 50) + 1;
+  const minor = Math.floor((tradeCount % 50) / RECALC_INTERVAL);
+  const version = `v${major}.${minor}`;
+
+  db.prepare(`
+    INSERT INTO ai_versions (version, trade_count, win_rate, avg_pnl, total_pnl, params, setup_weights, avoided_coins, changes)
+    VALUES (@version, @tradeCount, @winRate, @avgPnl, @totalPnl, @params, @setupWeights, @avoidedCoins, @changes)
+  `).run({
+    version,
+    tradeCount,
+    winRate: overall.win_rate || 0,
+    avgPnl: overall.avg_pnl || 0,
+    totalPnl: overall.total_pnl || 0,
+    params: JSON.stringify(params),
+    setupWeights: JSON.stringify(setupWeights),
+    avoidedCoins: avoided.join(','),
+    changes: changes.length ? changes.join(' | ') : 'initial snapshot',
+  });
+
+  console.log(`[AI] Version ${version} saved — ${tradeCount} trades, ${((overall.win_rate || 0) * 100).toFixed(0)}% WR, ${changes.length} param changes`);
+}
+
+function getVersions(limit = 50) {
+  return db.prepare(`
+    SELECT id, version, trade_count, win_rate, avg_pnl, total_pnl,
+           params, setup_weights, avoided_coins, changes, created_at
+    FROM ai_versions
+    ORDER BY id DESC
+    LIMIT ?
+  `).all(limit);
+}
+
+function getCurrentVersion() {
+  const row = db.prepare('SELECT version FROM ai_versions ORDER BY id DESC LIMIT 1').get();
+  return row ? row.version : 'v0.0';
+}
+
 // ── Stats for Telegram /stats Command ────────────────────────
 
 function getStats() {
@@ -444,5 +550,7 @@ module.exports = {
   getDirectionPreference,
   getAIScoreModifier,
   getCurrentSession,
+  getVersions,
+  getCurrentVersion,
   DEFAULT_PARAMS,
 };

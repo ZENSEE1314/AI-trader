@@ -45,6 +45,7 @@ app.get('/health', (req, res) => res.json({ status: 'ok' }));
 // Bot logs endpoint (live dashboard)
 const { getLogs, getRecentLogs } = require('./bot-logger');
 const { authMiddleware } = require('./middleware/auth');
+const aiLearner = require('./ai-learner');
 
 app.get('/api/logs', authMiddleware, (req, res) => {
   const since = parseFloat(req.query.since) || 0;
@@ -56,6 +57,15 @@ app.get('/api/logs', authMiddleware, (req, res) => {
   } else {
     res.json(getRecentLogs(count, category));
   }
+});
+
+// AI version history
+app.get('/api/ai/versions', authMiddleware, (req, res) => {
+  const limit = parseInt(req.query.limit) || 50;
+  res.json({
+    current: aiLearner.getCurrentVersion(),
+    versions: aiLearner.getVersions(limit),
+  });
 });
 
 // Server outbound IP (for Bitunix API key IP binding)

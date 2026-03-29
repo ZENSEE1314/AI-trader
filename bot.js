@@ -389,6 +389,9 @@ async function main() {
     bLog.ai(msg);
   }
 
+  const aiVersion = aiLearner.getCurrentVersion();
+  bLog.ai(`Current AI version: ${aiVersion}`);
+
   await tgSendPrivate(
     `<b>AI Trading Bot v4 Online</b>\n` +
     `SMC Strategy + Self-Learning + Sentiment\n` +
