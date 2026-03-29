@@ -1832,6 +1832,49 @@ async function start() {
   // ── AUTO REPORT: every 1 hour, sent to all channels ──────
   setInterval(() => runReport(null).catch(err => log(`Auto report err: ${err.message}`)), 60 * 60 * 1000);
 
+  // ── AUTO KICK EXPIRED SIGNAL SUBSCRIBERS ───────────────────
+  async function kickExpiredSignalSubs() {
+    try {
+      const db = require('./db');
+      // Find users with telegram_id whose signal sub expired
+      const expired = await db.query(
+        `SELECT DISTINCT u.id, u.telegram_id, u.email FROM users u
+         WHERE u.telegram_id IS NOT NULL AND u.telegram_id != ''
+         AND NOT EXISTS (
+           SELECT 1 FROM subscriptions s
+           WHERE s.user_id = u.id AND s.plan = 'signal' AND s.status = 'active' AND s.expires_at > NOW()
+         )
+         AND EXISTS (
+           SELECT 1 FROM subscriptions s2
+           WHERE s2.user_id = u.id AND s2.plan = 'signal'
+         )`
+      );
+
+      const VIP_CHANNEL = process.env.VIP_CHANNEL_ID;
+      if (!VIP_CHANNEL || !expired.length) return;
+
+      for (const user of expired) {
+        try {
+          await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/banChatMember`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ chat_id: VIP_CHANNEL, user_id: parseInt(user.telegram_id) }),
+          });
+          // Unban so they can rejoin if they renew
+          await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/unbanChatMember`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ chat_id: VIP_CHANNEL, user_id: parseInt(user.telegram_id), only_if_banned: true }),
+          });
+          log(`Kicked expired signal sub: ${user.email} (TG: ${user.telegram_id})`);
+        } catch (e) { log(`Kick error ${user.email}: ${e.message}`); }
+      }
+    } catch (err) { log(`kickExpiredSignalSubs error: ${err.message}`); }
+  }
+
+  // Check every hour
+  setInterval(() => kickExpiredSignalSubs().catch(e => log(`Kick check err: ${e.message}`)), 60 * 60 * 1000);
+
   // ── AUTO TRADER (cycle.js) ──────────────────────────────────
   log(`Auto trader: first run in 60s, then every ${TRADE_INTERVAL_MIN} min`);
   setTimeout(async () => {

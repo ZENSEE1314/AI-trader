@@ -3,6 +3,14 @@ const { query } = require('../db');
 const { authMiddleware } = require('../middleware/auth');
 
 const router = express.Router();
+// Public endpoint — no auth needed (for landing page)
+router.get('/prices', async (req, res) => {
+  try {
+    const settings = await getSettings();
+    res.json({ price: settings.price, signal_price: settings.signal_price });
+  } catch { res.json({ price: 29.99, signal_price: 500 }); }
+});
+
 router.use(authMiddleware);
 
 const BANK_DETAILS = {
@@ -17,6 +25,7 @@ async function getSettings() {
   for (const r of rows) s[r.key] = r.value;
   return {
     price: parseFloat(s.sub_price) || 29.99,
+    signal_price: parseFloat(s.signal_price) || 500,
     tier1: parseFloat(s.commission_tier1) || 0,
     tier2: parseFloat(s.commission_tier2) || 0,
     tier3: parseFloat(s.commission_tier3) || 0,
@@ -24,12 +33,12 @@ async function getSettings() {
 }
 
 // Extend subscription by N days — stacks on existing time
-async function extendSubscription(userId, days, amount, method) {
-  // Find existing active sub
+async function extendSubscription(userId, days, amount, method, plan = 'monthly') {
+  // Find existing active sub for this plan
   const existing = await query(
-    `SELECT id, expires_at FROM subscriptions WHERE user_id = $1 AND status = 'active' AND expires_at > NOW()
+    `SELECT id, expires_at FROM subscriptions WHERE user_id = $1 AND status = 'active' AND plan = $2 AND expires_at > NOW()
      ORDER BY expires_at DESC LIMIT 1`,
-    [userId]
+    [userId, plan]
   );
 
   const now = new Date();
@@ -46,8 +55,8 @@ async function extendSubscription(userId, days, amount, method) {
     newExpiry.setDate(newExpiry.getDate() + days);
     await query(
       `INSERT INTO subscriptions (user_id, plan, status, amount, payment_method, starts_at, expires_at)
-       VALUES ($1, 'monthly', 'active', $2, $3, $4, $5)`,
-      [userId, amount, method, now, newExpiry]
+       VALUES ($1, $2, 'active', $3, $4, $5, $6)`,
+      [userId, plan, amount, method, now, newExpiry]
     );
   }
 
@@ -63,7 +72,14 @@ router.get('/status', async (req, res) => {
        ORDER BY expires_at DESC LIMIT 1`,
       [req.userId]
     );
-    const user = await query('SELECT wallet_balance FROM users WHERE id = $1', [req.userId]);
+    const user = await query('SELECT wallet_balance, telegram_id FROM users WHERE id = $1', [req.userId]);
+
+    // Check signal sub separately
+    const signalSub = await query(
+      `SELECT * FROM subscriptions WHERE user_id = $1 AND status = 'active' AND plan = 'signal' AND expires_at > NOW()
+       ORDER BY expires_at DESC LIMIT 1`,
+      [req.userId]
+    );
 
     let days_left = 0;
     if (sub.length) {
@@ -72,12 +88,24 @@ router.get('/status', async (req, res) => {
       days_left = Math.max(0, Math.ceil((exp - now) / (1000 * 60 * 60 * 24)));
     }
 
+    let signal_days_left = 0;
+    if (signalSub.length) {
+      const now = new Date();
+      const exp = new Date(signalSub[0].expires_at);
+      signal_days_left = Math.max(0, Math.ceil((exp - now) / (1000 * 60 * 60 * 24)));
+    }
+
     res.json({
       active: sub.length > 0,
       subscription: sub[0] || null,
       days_left,
+      signal_active: signalSub.length > 0,
+      signal_sub: signalSub[0] || null,
+      signal_days_left,
       price: settings.price,
+      signal_price: settings.signal_price,
       wallet_balance: parseFloat(user[0]?.wallet_balance || 0),
+      telegram_id: user[0]?.telegram_id || '',
       bank_details: BANK_DETAILS,
     });
   } catch (err) {
@@ -86,17 +114,39 @@ router.get('/status', async (req, res) => {
   }
 });
 
+// Save Telegram ID
+router.post('/telegram-id', async (req, res) => {
+  try {
+    const { telegram_id } = req.body;
+    if (!telegram_id) return res.status(400).json({ error: 'Telegram ID required' });
+    await query('UPDATE users SET telegram_id = $1 WHERE id = $2', [telegram_id.trim(), req.userId]);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Telegram ID error:', err.message);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // Pay via bank transfer (submit proof)
 router.post('/bank-transfer', async (req, res) => {
   try {
     const settings = await getSettings();
-    const { proof_url } = req.body;
+    const { proof_url, plan } = req.body;
     if (!proof_url) return res.status(400).json({ error: 'Payment proof URL required' });
+
+    const isSignal = plan === 'signal';
+    const amount = isSignal ? settings.signal_price : settings.price;
+    const planName = isSignal ? 'signal' : 'monthly';
+
+    if (isSignal) {
+      const user = await query('SELECT telegram_id FROM users WHERE id = $1', [req.userId]);
+      if (!user[0]?.telegram_id) return res.status(400).json({ error: 'Set your Telegram ID first' });
+    }
 
     await query(
       `INSERT INTO subscriptions (user_id, plan, status, amount, payment_method, proof_url)
-       VALUES ($1, 'monthly', 'pending', $2, 'bank_transfer', $3)`,
-      [req.userId, settings.price, proof_url]
+       VALUES ($1, $2, 'pending', $3, 'bank_transfer', $4)`,
+      [req.userId, planName, amount, proof_url]
     );
     res.json({ ok: true, message: 'Payment submitted. Waiting for admin approval.' });
   } catch (err) {
@@ -109,23 +159,33 @@ router.post('/bank-transfer', async (req, res) => {
 router.post('/pay-wallet', async (req, res) => {
   try {
     const settings = await getSettings();
+    const { plan } = req.body;
+    const isSignal = plan === 'signal';
+    const amount = isSignal ? settings.signal_price : settings.price;
+    const planName = isSignal ? 'signal' : 'monthly';
+
+    if (isSignal) {
+      const u = await query('SELECT telegram_id FROM users WHERE id = $1', [req.userId]);
+      if (!u[0]?.telegram_id) return res.status(400).json({ error: 'Set your Telegram ID first' });
+    }
+
     const user = await query('SELECT wallet_balance FROM users WHERE id = $1', [req.userId]);
     const balance = parseFloat(user[0]?.wallet_balance || 0);
 
-    if (balance < settings.price) {
-      return res.status(400).json({ error: `Insufficient balance. Need $${settings.price}, have $${balance.toFixed(2)}` });
+    if (balance < amount) {
+      return res.status(400).json({ error: `Insufficient balance. Need $${amount}, have $${balance.toFixed(2)}` });
     }
 
-    await query('UPDATE users SET wallet_balance = wallet_balance - $1 WHERE id = $2', [settings.price, req.userId]);
+    await query('UPDATE users SET wallet_balance = wallet_balance - $1 WHERE id = $2', [amount, req.userId]);
     await query(
-      `INSERT INTO wallet_transactions (user_id, type, amount, description) VALUES ($1, 'subscription', $2, 'Monthly subscription payment')`,
-      [req.userId, -settings.price]
+      `INSERT INTO wallet_transactions (user_id, type, amount, description) VALUES ($1, 'subscription', $2, $3)`,
+      [req.userId, -amount, `${isSignal ? 'Signal' : 'Bot'} subscription payment`]
     );
 
-    const expires = await extendSubscription(req.userId, 30, settings.price, 'wallet');
-    await payReferralCommission(req.userId, settings);
+    const expires = await extendSubscription(req.userId, 30, amount, 'wallet', planName);
+    await payReferralCommission(req.userId, { ...settings, price: amount });
 
-    res.json({ ok: true, message: `Subscription active until ${expires.toISOString().slice(0, 10)}!` });
+    res.json({ ok: true, message: `${isSignal ? 'Signal' : 'Bot'} subscription active until ${expires.toISOString().slice(0, 10)}!` });
   } catch (err) {
     console.error('Wallet pay error:', err.message);
     res.status(500).json({ error: 'Server error' });

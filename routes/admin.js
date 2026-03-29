@@ -200,10 +200,11 @@ router.get('/settings', async (req, res) => {
 // Update settings
 router.put('/settings', async (req, res) => {
   try {
-    const { sub_price, commission_tier1, commission_tier2, commission_tier3 } = req.body;
+    const { sub_price, signal_price, commission_tier1, commission_tier2, commission_tier3 } = req.body;
 
     const updates = [
       ['sub_price', sub_price],
+      ['signal_price', signal_price],
       ['commission_tier1', commission_tier1],
       ['commission_tier2', commission_tier2],
       ['commission_tier3', commission_tier3],

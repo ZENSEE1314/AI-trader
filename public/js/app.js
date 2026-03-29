@@ -13,6 +13,7 @@
     tradesPage: 1,
     tradesTotal: 0,
     tradesPages: 1,
+    selectedPlan: 'bot', // 'bot' or 'signal'
   };
 
   // ----- DOM References -----
@@ -117,10 +118,17 @@
 
   function showSection(name) {
     els.loadingScreen.classList.add('hidden');
-    if (name === 'auth') {
+    const landing = $('#section-landing');
+    if (name === 'landing') {
+      if (landing) landing.classList.remove('hidden');
+      els.sectionAuth.classList.add('hidden');
+      els.sectionApp.classList.add('hidden');
+    } else if (name === 'auth') {
+      if (landing) landing.classList.add('hidden');
       els.sectionAuth.classList.remove('hidden');
       els.sectionApp.classList.add('hidden');
     } else {
+      if (landing) landing.classList.add('hidden');
       els.sectionAuth.classList.add('hidden');
       els.sectionApp.classList.remove('hidden');
     }
@@ -159,8 +167,12 @@
       showSection('app');
       switchTab('dashboard');
     } catch {
-      showSection('auth');
+      showSection('landing');
     }
+  }
+
+  function goToAuth() {
+    showSection('auth');
   }
 
   function setupAuthTabs() {
@@ -548,63 +560,106 @@
       const el = $('#sub-status-text');
       const paySection = $('#sub-pay-section');
 
+      // Build status display for both plans
+      let statusHtml = '';
+
+      // Bot plan status
       if (data.active) {
         const exp = new Date(data.subscription.expires_at);
         const days = data.days_left;
         const expStr = exp.toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' });
         const daysColor = days <= 5 ? 'var(--color-danger)' : days <= 10 ? '#f0a030' : 'var(--color-accent)';
-
-        el.innerHTML =
-          `<div style="display:flex;align-items:center;gap:var(--space-4);flex-wrap:wrap;">` +
-            `<div>` +
-              `<span style="color:var(--color-accent);font-size:1.1rem;">&#10003; Active</span><br>` +
-              `<span style="color:var(--color-text-muted);font-size:0.85rem;">Expires: ${expStr}</span>` +
-            `</div>` +
-            `<div style="text-align:center;">` +
-              `<span style="font-size:2rem;font-weight:700;color:${daysColor};font-family:var(--font-display);">${days}</span><br>` +
-              `<span style="color:var(--color-text-muted);font-size:0.8rem;">days left</span>` +
-            `</div>` +
-          `</div>`;
-
-        // Still show pay section so they can top up early
-        paySection.classList.remove('hidden');
-        $('#sub-wallet-bal').textContent = `$${data.wallet_balance.toFixed(2)}`;
-        const bankInfo = data.bank_details;
-        $('#sub-bank-info').textContent = `${bankInfo.bank} | ${bankInfo.account} | ${bankInfo.name}`;
+        statusHtml += `<div style="display:flex;align-items:center;gap:var(--space-4);flex-wrap:wrap;margin-bottom:var(--space-3);">` +
+          `<div><span style="color:var(--color-accent);font-size:1rem;">&#10003; Auto Trading Bot</span><br>` +
+          `<span style="color:var(--color-text-muted);font-size:0.8rem;">Expires: ${expStr}</span></div>` +
+          `<div style="text-align:center;"><span style="font-size:1.8rem;font-weight:700;color:${daysColor};font-family:var(--font-display);">${days}</span><br>` +
+          `<span style="color:var(--color-text-muted);font-size:0.75rem;">days left</span></div></div>`;
       } else {
-        el.innerHTML = `<span style="color:var(--color-danger);font-size:1.1rem;">&#10007; No Active Subscription</span><br>` +
-          `<span style="color:var(--color-text-muted);font-size:0.85rem;">Subscribe for $${data.price}/month to enable auto-trading</span>`;
-        paySection.classList.remove('hidden');
-        $('#sub-wallet-bal').textContent = `$${data.wallet_balance.toFixed(2)}`;
-        const bankInfo = data.bank_details;
-        $('#sub-bank-info').textContent = `${bankInfo.bank} | ${bankInfo.account} | ${bankInfo.name}`;
+        statusHtml += `<div style="margin-bottom:var(--space-3);"><span style="color:var(--color-danger);">&#10007; Auto Trading Bot — Inactive</span></div>`;
       }
+
+      // Signal plan status
+      if (data.signal_active) {
+        const exp = new Date(data.signal_sub.expires_at);
+        const days = data.signal_days_left;
+        const expStr = exp.toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' });
+        const daysColor = days <= 5 ? 'var(--color-danger)' : days <= 10 ? '#f0a030' : '#d4af37';
+        statusHtml += `<div style="display:flex;align-items:center;gap:var(--space-4);flex-wrap:wrap;">` +
+          `<div><span style="color:#d4af37;font-size:1rem;">&#10003; VIP Telegram Signals</span><br>` +
+          `<span style="color:var(--color-text-muted);font-size:0.8rem;">Expires: ${expStr}</span></div>` +
+          `<div style="text-align:center;"><span style="font-size:1.8rem;font-weight:700;color:${daysColor};font-family:var(--font-display);">${days}</span><br>` +
+          `<span style="color:var(--color-text-muted);font-size:0.75rem;">days left</span></div></div>`;
+      }
+
+      if (!data.active && !data.signal_active) {
+        statusHtml = `<span style="color:var(--color-danger);font-size:1.1rem;">&#10007; No Active Subscription</span><br>` +
+          `<span style="color:var(--color-text-muted);font-size:0.85rem;">Choose a plan below to get started</span>`;
+      }
+
+      el.innerHTML = statusHtml;
+
+      // Update prices on plan cards
+      const botPriceEl = $('#sub-bot-price');
+      const sigPriceEl = $('#sub-signal-price');
+      if (botPriceEl) botPriceEl.textContent = `$${data.price}/mo`;
+      if (sigPriceEl) sigPriceEl.textContent = `$${data.signal_price}/mo`;
+
+      // Pre-fill telegram ID
+      const tgInput = $('#sub-telegram-id');
+      if (tgInput && data.telegram_id) tgInput.value = data.telegram_id;
+
+      paySection.classList.remove('hidden');
+      $('#sub-wallet-bal').textContent = `$${data.wallet_balance.toFixed(2)}`;
+      const bankInfo = data.bank_details;
+      $('#sub-bank-info').textContent = `${bankInfo.bank} | ${bankInfo.account} | ${bankInfo.name}`;
     } catch (err) {
       showToast('Failed to load subscription.', 'error');
     }
   }
 
-  async function payWithWallet() {
+  function selectPlan(plan) {
+    state.selectedPlan = plan;
+    const botCard = $('#plan-card-bot');
+    const sigCard = $('#plan-card-signal');
+    const tgSection = $('#sub-telegram-section');
+    if (botCard) botCard.style.borderColor = plan === 'bot' ? 'var(--color-accent)' : 'var(--color-border-muted)';
+    if (sigCard) sigCard.style.borderColor = plan === 'signal' ? '#d4af37' : 'var(--color-border-muted)';
+    if (tgSection) tgSection.classList.toggle('hidden', plan !== 'signal');
+  }
+
+  async function saveTelegramId() {
+    const tid = $('#sub-telegram-id').value.trim();
+    if (!tid) return showToast('Enter your Telegram ID', 'error');
     try {
-      const data = await api('POST', '/api/subscription/pay-wallet');
+      await api('POST', '/api/subscription/telegram-id', { telegram_id: tid });
+      showToast('Telegram ID saved', 'success');
+    } catch (err) { showToast(err.message, 'error'); }
+  }
+
+  async function payWithWallet() {
+    if (state.selectedPlan === 'signal') await saveTelegramId();
+    try {
+      const data = await api('POST', '/api/subscription/pay-wallet', { plan: state.selectedPlan });
       showToast(data.message, 'success');
       loadSubscription();
     } catch (err) { showToast(err.message, 'error'); }
   }
 
   async function payBankTransfer() {
+    if (state.selectedPlan === 'signal') await saveTelegramId();
     const proof = $('#sub-proof-url').value.trim();
     if (!proof) return showToast('Paste proof URL first', 'error');
     try {
-      const data = await api('POST', '/api/subscription/bank-transfer', { proof_url: proof });
+      const data = await api('POST', '/api/subscription/bank-transfer', { proof_url: proof, plan: state.selectedPlan });
       showToast(data.message, 'success');
       $('#sub-proof-url').value = '';
     } catch (err) { showToast(err.message, 'error'); }
   }
 
   async function payStripe() {
+    if (state.selectedPlan === 'signal') await saveTelegramId();
     try {
-      const data = await api('POST', '/api/subscription/stripe-checkout');
+      const data = await api('POST', '/api/subscription/stripe-checkout', { plan: state.selectedPlan });
       if (data.url) window.location.href = data.url;
     } catch (err) { showToast(err.message, 'error'); }
   }
@@ -673,6 +728,7 @@
       renderAdminWithdrawals(wds);
       // Fill settings fields
       $('#admin-price').value = settings.sub_price || '29.99';
+      $('#admin-signal-price').value = settings.signal_price || '500';
       $('#admin-tier1').value = settings.commission_tier1 || '20';
       $('#admin-tier2').value = settings.commission_tier2 || '10';
       $('#admin-tier3').value = settings.commission_tier3 || '5';
@@ -683,6 +739,7 @@
     try {
       await api('PUT', '/api/admin/settings', {
         sub_price: $('#admin-price').value,
+        signal_price: $('#admin-signal-price').value,
         commission_tier1: $('#admin-tier1').value,
         commission_tier2: $('#admin-tier2').value,
         commission_tier3: $('#admin-tier3').value,
@@ -767,6 +824,7 @@
     toggleSettings, saveSettings, deleteKey, showToast,
     payWithWallet, payBankTransfer, payStripe, requestWithdraw,
     adminAction, adminSub, adminWd, saveAdminSettings,
+    goToAuth, selectPlan,
   };
 
   // ----- Init -----
@@ -786,6 +844,14 @@
       const refInput = $('#signup-referral');
       if (refInput) refInput.value = ref;
     }
+
+    // Load landing page prices
+    fetch('/api/subscription/prices').then(r => r.json()).then(data => {
+      const bp = $('#landing-bot-price');
+      const sp = $('#landing-signal-price');
+      if (bp && data.price) bp.innerHTML = `$${data.price}<span>/month</span>`;
+      if (sp && data.signal_price) sp.innerHTML = `$${data.signal_price}<span>/month</span>`;
+    }).catch(() => {});
 
     checkSession();
   }
