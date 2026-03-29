@@ -1,5 +1,6 @@
 const express = require('express');
 const { USDMClient } = require('binance');
+const { BitunixClient } = require('../bitunix-client');
 const { query } = require('../db');
 const { encrypt, decrypt } = require('../crypto-utils');
 const { authMiddleware } = require('../middleware/auth');
@@ -11,7 +12,7 @@ router.use(authMiddleware);
 router.get('/', async (req, res) => {
   try {
     const rows = await query(
-      `SELECT id, platform, label, leverage, risk_pct, max_loss_usdt, enabled,
+      `SELECT id, platform, label, leverage, risk_pct, max_loss_usdt, max_positions, enabled,
               substring(api_key_enc, 1, 8) as key_preview, created_at
        FROM api_keys WHERE user_id = $1 ORDER BY created_at`,
       [req.userId]
@@ -30,6 +31,9 @@ router.post('/', async (req, res) => {
     if (!apiKey || !apiSecret) return res.status(400).json({ error: 'API key and secret required' });
     if (!platform) return res.status(400).json({ error: 'Platform required' });
 
+    const validPlatforms = ['binance', 'bitunix'];
+    if (!validPlatforms.includes(platform)) return res.status(400).json({ error: 'Unsupported platform' });
+
     // Check max 3 keys
     const count = await query('SELECT COUNT(*) as cnt FROM api_keys WHERE user_id = $1', [req.userId]);
     if (parseInt(count[0].cnt) >= 3) return res.status(400).json({ error: 'Maximum 3 API keys allowed' });
@@ -41,6 +45,13 @@ router.post('/', async (req, res) => {
         await client.getAccountInformation();
       } catch (e) {
         return res.status(400).json({ error: `Binance API test failed: ${e.message}` });
+      }
+    } else if (platform === 'bitunix') {
+      try {
+        const client = new BitunixClient({ apiKey, apiSecret });
+        await client.getAccount();
+      } catch (e) {
+        return res.status(400).json({ error: `Bitunix API test failed: ${e.message}` });
       }
     }
 
@@ -66,14 +77,16 @@ router.post('/', async (req, res) => {
 // Update settings for a key
 router.put('/:id/settings', async (req, res) => {
   try {
-    const { leverage, risk_pct, max_loss_usdt, enabled } = req.body;
+    const { leverage, risk_pct, max_loss_usdt, max_positions, enabled } = req.body;
 
-    // Validate
     if (leverage !== undefined && (leverage < 1 || leverage > 125)) {
       return res.status(400).json({ error: 'Leverage must be 1-125' });
     }
     if (risk_pct !== undefined && (risk_pct < 0.01 || risk_pct > 0.20)) {
       return res.status(400).json({ error: 'Risk % must be 1-20%' });
+    }
+    if (max_positions !== undefined && (max_positions < 1 || max_positions > 10)) {
+      return res.status(400).json({ error: 'Max positions must be 1-10' });
     }
 
     // Verify ownership
@@ -85,9 +98,10 @@ router.put('/:id/settings', async (req, res) => {
         leverage = COALESCE($1, leverage),
         risk_pct = COALESCE($2, risk_pct),
         max_loss_usdt = COALESCE($3, max_loss_usdt),
-        enabled = COALESCE($4, enabled)
-       WHERE id = $5 AND user_id = $6`,
-      [leverage, risk_pct, max_loss_usdt, enabled, req.params.id, req.userId]
+        max_positions = COALESCE($4, max_positions),
+        enabled = COALESCE($5, enabled)
+       WHERE id = $6 AND user_id = $7`,
+      [leverage, risk_pct, max_loss_usdt, max_positions, enabled, req.params.id, req.userId]
     );
 
     res.json({ ok: true });

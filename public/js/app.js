@@ -350,6 +350,7 @@
       const leverage = k.leverage || 10;
       const riskPct = k.risk_pct != null ? (parseFloat(k.risk_pct) * 100).toFixed(0) : '5';
       const maxLoss = k.max_loss_usdt || 50;
+      const maxPos = k.max_positions || 1;
 
       return `<div class="key-card" data-key-id="${k.id}">
         <div class="key-card-main">
@@ -393,6 +394,15 @@
               <label class="form-label" for="maxloss-${k.id}">Max Loss (USDT)</label>
               <input class="form-input text-mono" type="number" id="maxloss-${k.id}" min="1" max="100000" step="1" value="${maxLoss}">
             </div>
+            <div class="slider-group">
+              <div class="slider-header">
+                <label class="form-label" for="maxpos-${k.id}">Max Open Trades</label>
+                <span class="slider-value" id="maxpos-val-${k.id}">${maxPos}</span>
+              </div>
+              <input type="range" id="maxpos-${k.id}" min="1" max="10" value="${maxPos}"
+                oninput="document.getElementById('maxpos-val-${k.id}').textContent=this.value"
+                aria-label="Max concurrent positions">
+            </div>
             <div style="display:flex;align-items:flex-end;">
               <label class="toggle">
                 <input type="checkbox" id="enabled-${k.id}" ${isEnabled ? 'checked' : ''}>
@@ -426,6 +436,7 @@
     const leverage = parseInt($(`#leverage-${keyId}`).value);
     const riskPct = parseInt($(`#risk-${keyId}`).value) / 100;
     const maxLossUsdt = parseFloat($(`#maxloss-${keyId}`).value);
+    const maxPositions = parseInt($(`#maxpos-${keyId}`).value);
     const enabled = $(`#enabled-${keyId}`).checked;
 
     try {
@@ -433,6 +444,7 @@
         leverage,
         risk_pct: riskPct,
         max_loss_usdt: maxLossUsdt,
+        max_positions: maxPositions,
         enabled,
       });
       showToast('Settings saved.', 'success');

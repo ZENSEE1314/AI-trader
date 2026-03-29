@@ -1125,12 +1125,13 @@ function getClient() {
 }
 
 // ── MULTI-USER TRADE EXECUTION ──────────────────────────────
-// When a signal fires, execute for all enabled user API keys
+// When a signal fires, execute for all enabled user API keys (Binance + Bitunix)
 async function executeForAllUsers(pick) {
-  let db, cryptoUtils;
+  let db, cryptoUtils, BitunixClient;
   try {
     db = require('./db');
     cryptoUtils = require('./crypto-utils');
+    BitunixClient = require('./bitunix-client').BitunixClient;
   } catch (e) {
     log(`Multi-user deps not available: ${e.message}`);
     return;
@@ -1140,7 +1141,7 @@ async function executeForAllUsers(pick) {
     const keys = await db.query(
       `SELECT ak.*, u.email FROM api_keys ak
        JOIN users u ON u.id = ak.user_id
-       WHERE ak.enabled = true AND ak.platform = 'binance'`
+       WHERE ak.enabled = true`
     );
 
     if (!keys.length) {
@@ -1154,14 +1155,28 @@ async function executeForAllUsers(pick) {
       try {
         const apiKey = cryptoUtils.decrypt(key.api_key_enc, key.iv, key.auth_tag);
         const apiSecret = cryptoUtils.decrypt(key.api_secret_enc, key.secret_iv, key.secret_auth_tag);
-        const userClient = new USDMClient({ api_key: apiKey, api_secret: apiSecret });
+        const maxPos = parseInt(key.max_positions) || 1;
 
-        const account = await userClient.getAccountInformation({ omitZeroBalances: false });
-        const wallet = parseFloat(account.totalWalletBalance);
-        const positions = account.positions.filter(p => parseFloat(p.positionAmt) !== 0);
+        let account, wallet, openPosCount;
 
-        if (positions.length > 0) {
-          log(`User ${key.email} already has ${positions.length} open positions — skip`);
+        if (key.platform === 'binance') {
+          const userClient = new USDMClient({ api_key: apiKey, api_secret: apiSecret });
+          account = await userClient.getAccountInformation({ omitZeroBalances: false });
+          wallet = parseFloat(account.totalWalletBalance);
+          openPosCount = account.positions.filter(p => parseFloat(p.positionAmt) !== 0).length;
+        } else if (key.platform === 'bitunix') {
+          const userClient = new BitunixClient({ apiKey, apiSecret });
+          account = await userClient.getAccountInformation();
+          wallet = parseFloat(account.totalWalletBalance);
+          openPosCount = account.positions.length;
+        } else {
+          log(`User ${key.email} unsupported platform: ${key.platform} — skip`);
+          return;
+        }
+
+        // Check max concurrent positions
+        if (openPosCount >= maxPos) {
+          log(`User ${key.email} has ${openPosCount}/${maxPos} positions — skip`);
           return;
         }
 
@@ -1170,44 +1185,68 @@ async function executeForAllUsers(pick) {
           return;
         }
 
-        // Apply user's custom settings
         const userPick = { ...pick };
         const userLev = parseInt(key.leverage) || CONFIG.LEVERAGE_LOW;
         userPick.leverage = userLev;
-
         const userRiskPct = parseFloat(key.risk_pct) || CONFIG.WALLET_RISK_PCT;
-        const userMaxLoss = parseFloat(key.max_loss_usdt) || 999;
 
-        // Override CONFIG temporarily for this user's trade
-        const origRisk = CONFIG.WALLET_RISK_PCT;
-        CONFIG.WALLET_RISK_PCT = userRiskPct;
+        if (key.platform === 'binance') {
+          const userClient = new USDMClient({ api_key: apiKey, api_secret: apiSecret });
+          const origRisk = CONFIG.WALLET_RISK_PCT;
+          CONFIG.WALLET_RISK_PCT = userRiskPct;
+          let result;
+          try {
+            result = await openTrade(userClient, userPick, wallet);
+          } finally {
+            CONFIG.WALLET_RISK_PCT = origRisk;
+          }
+          if (!result) { log(`User ${key.email} openTrade returned null — skip`); return; }
 
-        let result;
-        try {
-          result = await openTrade(userClient, userPick, wallet);
-        } finally {
-          CONFIG.WALLET_RISK_PCT = origRisk;
+          await db.query(
+            `INSERT INTO trades (api_key_id, user_id, symbol, direction, entry_price, sl_price, tp_price, quantity, leverage, status)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'OPEN')`,
+            [key.id, key.user_id, result.sym, result.direction, result.entry, result.sl, result.tp3, result.qty, result.leverage]
+          );
+          log(`Binance trade for ${key.email}: ${result.sym} ${result.direction} x${result.leverage} qty=${result.qty}`);
+
+        } else if (key.platform === 'bitunix') {
+          const userClient = new BitunixClient({ apiKey, apiSecret });
+          const sym = pick.sym;
+          const isLong = pick.direction !== 'SHORT';
+          const price = pick.price;
+          const slPrice = pick.slPrice || (isLong ? price * 0.985 : price * 1.015);
+          const tpPrice = pick.tpLevel || (isLong ? price * 1.04 : price * 0.96);
+
+          // Set leverage & margin
+          try { await userClient.changeMarginMode(sym, 'ISOLATION'); } catch (_) {}
+          try { await userClient.changeLeverage(sym, userLev); } catch (_) {}
+
+          // Calculate qty from risk
+          const slDist = Math.abs(price - slPrice) / price;
+          const riskUsdt = Math.min(wallet * userRiskPct, parseFloat(key.max_loss_usdt) || 999);
+          const qty = (riskUsdt / (slDist * price)).toFixed(6);
+
+          const order = await userClient.placeOrder({
+            symbol: sym,
+            side: isLong ? 'BUY' : 'SELL',
+            qty,
+            orderType: 'MARKET',
+            tradeSide: 'OPEN',
+            tpPrice: String(tpPrice),
+            tpStopType: 'MARK_PRICE',
+            tpOrderType: 'MARKET',
+            slPrice: String(slPrice),
+            slStopType: 'MARK_PRICE',
+            slOrderType: 'MARKET',
+          });
+
+          await db.query(
+            `INSERT INTO trades (api_key_id, user_id, symbol, direction, entry_price, sl_price, tp_price, quantity, leverage, status)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'OPEN')`,
+            [key.id, key.user_id, sym, isLong ? 'LONG' : 'SHORT', price, slPrice, tpPrice, qty, userLev]
+          );
+          log(`Bitunix trade for ${key.email}: ${sym} ${isLong ? 'LONG' : 'SHORT'} x${userLev} qty=${qty} orderId=${order?.orderId}`);
         }
-
-        if (!result) {
-          log(`User ${key.email} openTrade returned null — skip`);
-          return;
-        }
-
-        // Cap loss at user's max_loss_usdt
-        const actualRisk = wallet * userRiskPct;
-        if (actualRisk > userMaxLoss) {
-          log(`User ${key.email} risk $${actualRisk.toFixed(2)} > max $${userMaxLoss} — trade opened but oversized`);
-        }
-
-        // Log to trades table
-        await db.query(
-          `INSERT INTO trades (api_key_id, user_id, symbol, direction, entry_price, sl_price, tp_price, quantity, leverage, status)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'OPEN')`,
-          [key.id, key.user_id, result.sym, result.direction, result.entry, result.sl, result.tp3, result.qty, result.leverage]
-        );
-
-        log(`Trade executed for ${key.email}: ${result.sym} ${result.direction} x${result.leverage} qty=${result.qty}`);
       } catch (err) {
         log(`User ${key.email} trade error: ${err.message}`);
         try {
