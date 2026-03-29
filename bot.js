@@ -14,8 +14,8 @@ const { log: bLog } = require('./bot-logger');
 
 const TELEGRAM_TOKEN  = process.env.TELEGRAM_TOKEN;
 const TELEGRAM_CHATS  = (process.env.TELEGRAM_CHAT_ID || '').split(',').map(s => s.trim()).filter(Boolean);
-const TRADE_INTERVAL_MIN = parseInt(process.env.TRADE_INTERVAL_MIN || '30');
-const INTERVAL_MIN    = parseInt(process.env.INTERVAL_MIN || '30');
+const TRADE_INTERVAL_MIN = parseInt(process.env.TRADE_INTERVAL_MIN || '3');
+const INTERVAL_MIN    = parseInt(process.env.INTERVAL_MIN || '3');
 const REQUEST_TIMEOUT = 30000;
 
 console.log(`[BOOT] AI Trader v4 | Telegram:${!!TELEGRAM_TOKEN} Chats:${TELEGRAM_CHATS.join(',')||'NONE'} Interval:${INTERVAL_MIN}min`);
