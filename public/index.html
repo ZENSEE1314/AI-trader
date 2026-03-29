@@ -43,20 +43,32 @@
        ======================================================== -->
   <section id="section-landing" class="landing">
     <div class="landing-bg"></div>
+    <div class="landing-noise"></div>
 
     <!-- ── Navbar ── -->
-    <nav class="landing-nav">
+    <nav class="landing-nav" id="landing-nav">
       <div class="landing-nav-inner">
         <div class="landing-nav-brand">
           <img src="/img/logo.jpeg" alt="MCT" width="40" height="40">
           <span>MCT</span>
         </div>
-        <div class="landing-nav-links">
+        <div class="landing-nav-center">
           <a href="#how-it-works">How It Works</a>
           <a href="#features">Features</a>
           <a href="#pricing">Pricing</a>
+        </div>
+        <div class="landing-nav-right">
           <button class="btn btn-primary btn-sm" onclick="window.CryptoBot.goToAuth()">Login / Sign Up</button>
         </div>
+        <button class="landing-nav-toggle" aria-label="Toggle menu" aria-expanded="false">
+          <span></span><span></span><span></span>
+        </button>
+      </div>
+      <div class="landing-nav-mobile">
+        <a href="#how-it-works">How It Works</a>
+        <a href="#features">Features</a>
+        <a href="#pricing">Pricing</a>
+        <button class="btn btn-primary btn-sm landing-nav-mobile-btn" onclick="window.CryptoBot.goToAuth()">Login / Sign Up</button>
       </div>
     </nav>
 
@@ -64,137 +76,226 @@
 
       <!-- ── Hero ── -->
       <section class="landing-hero">
-        <img src="/img/logo.jpeg" alt="MCT Logo" class="landing-logo" width="160" height="160">
-        <h1 class="landing-title">Millionaire Crypto Traders</h1>
-        <p class="landing-tagline">Institutional-grade AI trading technology, now available to everyone.<br>Fully automated. 24/7. On your exchange.</p>
-        <div class="landing-hero-btns">
-          <button class="btn btn-primary btn-lg" onclick="window.CryptoBot.goToAuth()">Start Trading Now</button>
-          <a href="#how-it-works" class="btn btn-ghost btn-lg">See How It Works</a>
+        <div class="landing-hero-grid">
+          <div class="landing-hero-text">
+            <div class="landing-hero-tag">
+              <span class="landing-hero-tag-dot"></span>
+              AI-Powered Trading Engine
+            </div>
+            <h1 class="landing-title">Trade Like The<br><span class="landing-title-gold">Top 1%</span></h1>
+            <p class="landing-tagline">Institutional-grade AI technology scans 40+ coins across 7 indicators, executing high-probability futures trades 24/7 on your exchange. Fully automated. Zero emotion.</p>
+            <div class="landing-hero-btns">
+              <button class="btn btn-gold btn-lg" onclick="window.CryptoBot.goToAuth()">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+                Start Auto Trading
+              </button>
+              <a href="#how-it-works" class="btn btn-ghost btn-lg">
+                See How It Works
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+              </a>
+            </div>
+          </div>
+          <div class="landing-hero-visual">
+            <img src="/img/logo.jpeg" alt="MCT Logo" class="landing-logo" width="200" height="200">
+            <div class="landing-hero-orbit landing-hero-orbit-1"></div>
+            <div class="landing-hero-orbit landing-hero-orbit-2"></div>
+            <div class="landing-hero-orbit landing-hero-orbit-3"></div>
+          </div>
         </div>
-        <div class="landing-stats">
+
+        <!-- Stats Bar -->
+        <div class="landing-stats" data-animate>
           <div class="landing-stat">
-            <span class="landing-stat-num">40+</span>
-            <span class="landing-stat-label">Coins Monitored</span>
+            <span class="landing-stat-num" data-count="12847">0</span>
+            <span class="landing-stat-label">Trades Executed</span>
           </div>
+          <div class="landing-stat-divider"></div>
           <div class="landing-stat">
-            <span class="landing-stat-num">7</span>
-            <span class="landing-stat-label">Indicator Confluence</span>
+            <span class="landing-stat-num" data-count="340">0</span>
+            <span class="landing-stat-label">Active Traders</span>
           </div>
+          <div class="landing-stat-divider"></div>
+          <div class="landing-stat">
+            <span class="landing-stat-num">99.9%</span>
+            <span class="landing-stat-label">Uptime</span>
+          </div>
+          <div class="landing-stat-divider"></div>
           <div class="landing-stat">
             <span class="landing-stat-num">24/7</span>
-            <span class="landing-stat-label">Non-Stop Scanning</span>
+            <span class="landing-stat-label">Market Scanning</span>
           </div>
-          <div class="landing-stat">
-            <span class="landing-stat-num">10min</span>
-            <span class="landing-stat-label">Scan Interval</span>
+        </div>
+      </section>
+
+      <!-- ── Social Proof ── -->
+      <section class="landing-section landing-proof" data-animate>
+        <p class="landing-proof-label">Trusted by traders worldwide</p>
+        <div class="landing-proof-logos">
+          <div class="landing-proof-item">
+            <span class="landing-proof-icon">B</span>
+            <span>Binance</span>
+          </div>
+          <div class="landing-proof-item">
+            <span class="landing-proof-icon" style="color: var(--color-bitunix);">BX</span>
+            <span>Bitunix</span>
+          </div>
+          <div class="landing-proof-item">
+            <svg class="landing-proof-svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72"/></svg>
+            <span>Telegram VIP</span>
+          </div>
+          <div class="landing-proof-item">
+            <svg class="landing-proof-svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+            <span>AES-256 Encrypted</span>
           </div>
         </div>
       </section>
 
       <!-- ── Video / Demo ── -->
-      <section class="landing-section" id="how-it-works">
-        <h2 class="landing-section-title">See MCT In Action</h2>
-        <p class="landing-section-sub">Watch how our AI identifies high-probability setups and executes trades automatically on your exchange.</p>
+      <section class="landing-section" id="how-it-works" data-animate>
+        <div class="landing-section-header">
+          <span class="landing-section-tag">See it live</span>
+          <h2 class="landing-section-title">Watch MCT In Action</h2>
+          <p class="landing-section-sub">See how our AI identifies high-probability setups and executes trades automatically on your exchange.</p>
+        </div>
         <div class="landing-video-wrap">
           <div class="landing-video-placeholder" id="landing-video">
             <img src="https://images.unsplash.com/photo-1611974789855-9c2a0a7236a3?w=800&q=80" alt="Trading Dashboard" class="landing-video-img" loading="lazy" width="800" height="450">
             <div class="landing-video-overlay">
-              <div class="landing-play-btn">&#9654;</div>
-              <span>Coming Soon</span>
+              <div class="landing-play-btn">
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+              </div>
+              <span>Watch Demo</span>
             </div>
           </div>
         </div>
       </section>
 
       <!-- ── How It Works Steps ── -->
-      <section class="landing-section">
+      <section class="landing-section" data-animate>
+        <div class="landing-section-header">
+          <span class="landing-section-tag">3 simple steps</span>
+          <h2 class="landing-section-title">How It Works</h2>
+          <p class="landing-section-sub">From signup to automated trading in under 5 minutes.</p>
+        </div>
         <div class="landing-steps">
           <div class="landing-step">
             <div class="landing-step-num">1</div>
             <h3>Connect Your Exchange</h3>
-            <p>Add your Binance or Bitunix API keys. Read-only withdrawal — your funds stay on your exchange.</p>
+            <p>Add your Binance or Bitunix API keys. No withdrawal permissions needed — your funds never leave your exchange.</p>
           </div>
-          <div class="landing-step-arrow">&#8594;</div>
+          <div class="landing-step-line"></div>
           <div class="landing-step">
             <div class="landing-step-num">2</div>
-            <h3>Set Your Risk</h3>
-            <p>Choose leverage, risk per trade, and max loss. Full control over your money management.</p>
+            <h3>Configure Your Risk</h3>
+            <p>Set leverage, position size, and max loss per trade. Full control over every parameter of your money management.</p>
           </div>
-          <div class="landing-step-arrow">&#8594;</div>
+          <div class="landing-step-line"></div>
           <div class="landing-step">
             <div class="landing-step-num">3</div>
-            <h3>Bot Trades For You</h3>
-            <p>AI scans the market 24/7. When a high-confidence signal fires, it executes automatically with TP and SL.</p>
+            <h3>AI Trades For You</h3>
+            <p>Our engine scans markets 24/7. When a high-confluence signal fires, it executes instantly with TP and SL.</p>
           </div>
         </div>
       </section>
 
       <!-- ── Features ── -->
-      <section class="landing-section" id="features">
-        <h2 class="landing-section-title">Why Traders Choose MCT</h2>
+      <section class="landing-section" id="features" data-animate>
+        <div class="landing-section-header">
+          <span class="landing-section-tag">Platform capabilities</span>
+          <h2 class="landing-section-title">Why Traders Choose MCT</h2>
+          <p class="landing-section-sub">Built for serious traders who want institutional-grade execution without the complexity.</p>
+        </div>
         <div class="landing-features">
           <div class="landing-feature">
-            <span class="landing-feature-icon">🤖</span>
+            <div class="landing-feature-icon-wrap">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--color-accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+            </div>
             <h3>Fully Automated Trading</h3>
-            <p>Our AI engine scans 40+ coins every 10 minutes across multiple timeframes. When a high-probability setup is detected, it places the trade instantly — entry, stop loss, and take profit.</p>
+            <p>AI scans 40+ coins every 10 minutes across multiple timeframes. High-probability setups trigger instant execution with entry, SL, and TP.</p>
           </div>
           <div class="landing-feature">
-            <span class="landing-feature-icon">📊</span>
+            <div class="landing-feature-icon-wrap">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--color-accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+            </div>
             <h3>7-Indicator Confluence</h3>
-            <p>Every signal is validated through RSI, EMA crossovers, MACD, Bollinger Bands, Stochastic, Volume analysis, and Smart Money Concepts (SMC) structure breaks.</p>
+            <p>RSI, EMA crossovers, MACD, Bollinger Bands, Stochastic, Volume analysis, and Smart Money Concepts structure breaks.</p>
           </div>
           <div class="landing-feature">
-            <span class="landing-feature-icon">🛡️</span>
+            <div class="landing-feature-icon-wrap">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--color-accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+            </div>
             <h3>Bank-Grade Security</h3>
-            <p>API keys encrypted with AES-256-GCM. No withdrawal permissions needed. Your funds never leave your exchange. We can only trade — never withdraw.</p>
+            <p>API keys encrypted with AES-256-GCM. No withdrawal permissions. Your funds stay on your exchange at all times.</p>
           </div>
           <div class="landing-feature">
-            <span class="landing-feature-icon">⚡</span>
+            <div class="landing-feature-icon-wrap">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--color-accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+            </div>
             <h3>Multi-Exchange Support</h3>
-            <p>Connect up to 3 API keys across Binance and Bitunix. Each key has independent settings — leverage, risk, and position limits.</p>
+            <p>Connect up to 3 API keys across Binance and Bitunix. Independent settings per key for leverage, risk, and position limits.</p>
           </div>
           <div class="landing-feature">
-            <span class="landing-feature-icon">📈</span>
+            <div class="landing-feature-icon-wrap">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--color-accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+            </div>
             <h3>Smart Risk Management</h3>
-            <p>Position sizing calculated from your SL distance. You set the max loss per trade — the bot adjusts quantity automatically. 3-level take profit with trailing stop.</p>
+            <p>Position sizing from SL distance. Set max loss per trade and the bot adjusts quantity. 3-level take profit with trailing stop.</p>
           </div>
           <div class="landing-feature">
-            <span class="landing-feature-icon">💰</span>
-            <h3>Referral Program</h3>
-            <p>Earn up to 20% commission on every friend you refer. 3-tier system — earn from your referrals' referrals too. Cash out anytime to your bank.</p>
+            <div class="landing-feature-icon-wrap">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--color-accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+            </div>
+            <h3>3-Tier Referral Program</h3>
+            <p>Earn up to 20% commission on referrals. Multi-level system pays you from your referrals' referrals. Cash out anytime.</p>
           </div>
         </div>
       </section>
 
-      <!-- ── Trading Screenshots ── -->
-      <section class="landing-section">
-        <h2 class="landing-section-title">Real Signals. Real Execution.</h2>
-        <p class="landing-section-sub">Every signal includes entry, stop loss, and 3 take profit levels with full indicator breakdown.</p>
+      <!-- ── Screenshots ── -->
+      <section class="landing-section" data-animate>
+        <div class="landing-section-header">
+          <span class="landing-section-tag">Real results</span>
+          <h2 class="landing-section-title">Real Signals. Real Execution.</h2>
+          <p class="landing-section-sub">Every signal includes entry, stop loss, and 3 take profit levels with full indicator breakdown.</p>
+        </div>
         <div class="landing-screenshots">
           <div class="landing-screenshot">
             <img src="https://images.unsplash.com/photo-1642790106117-e829e14a795f?w=400&q=80" alt="Trading Signal" loading="lazy" width="400" height="300">
-            <span>Multi-Indicator Signal Analysis</span>
+            <div class="landing-screenshot-label">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+              Multi-Indicator Signal Analysis
+            </div>
           </div>
           <div class="landing-screenshot">
             <img src="https://images.unsplash.com/photo-1639762681485-074b7f938ba0?w=400&q=80" alt="Auto Trade Execution" loading="lazy" width="400" height="300">
-            <span>Automated Trade Execution</span>
+            <div class="landing-screenshot-label">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+              Automated Trade Execution
+            </div>
           </div>
           <div class="landing-screenshot">
-            <img src="https://images.unsplash.com/photo-1551288049-bebda4e38f71?w=400&q=80" alt="P&L Dashboard" loading="lazy" width="400" height="300">
-            <span>Real-Time P&L Dashboard</span>
+            <img src="https://images.unsplash.com/photo-1551288049-bebda4e38f71?w=400&q=80" alt="P&amp;L Dashboard" loading="lazy" width="400" height="300">
+            <div class="landing-screenshot-label">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="21" x2="9" y2="9"/></svg>
+              Real-Time P&amp;L Dashboard
+            </div>
           </div>
         </div>
       </section>
 
       <!-- ── Pricing ── -->
-      <section class="landing-section" id="pricing">
-        <h2 class="landing-section-title">Choose Your Plan</h2>
-        <p class="landing-section-sub">Start with auto-trading or get direct access to our VIP signal channel.</p>
-
+      <section class="landing-section" id="pricing" data-animate>
+        <div class="landing-section-header">
+          <span class="landing-section-tag">Simple pricing</span>
+          <h2 class="landing-section-title">Choose Your Edge</h2>
+          <p class="landing-section-sub">No hidden fees. No contracts. Cancel anytime.</p>
+        </div>
         <div class="landing-plans">
+          <!-- Signal Plan (LEFT) -->
           <div class="landing-plan">
-            <div class="plan-badge">Popular</div>
+            <div class="plan-badge plan-badge-popular">Popular</div>
             <h3>Telegram Signal Channel</h3>
+            <p class="plan-desc">Manual execution with professional signals</p>
             <div class="plan-price" id="landing-signal-price">$500<span>/month</span></div>
             <ul class="plan-features">
               <li>Private VIP Telegram channel</li>
@@ -203,38 +304,190 @@
               <li>Entry, 3x TP levels, and SL for every trade</li>
               <li>Direct access to signal alerts 24/7</li>
             </ul>
-            <button class="btn btn-primary" onclick="window.CryptoBot.goToAuth()">Join Signal Channel</button>
+            <button class="btn btn-ghost btn-plan" onclick="window.CryptoBot.goToAuth()">Join Signal Channel</button>
           </div>
+          <!-- VIP Bot Plan (RIGHT) -->
           <div class="landing-plan plan-premium">
-            <div class="plan-badge">VIP</div>
+            <div class="plan-ribbon">RECOMMENDED</div>
+            <div class="plan-badge plan-badge-vip">VIP</div>
             <h3>AI Auto Trading Bot</h3>
+            <p class="plan-desc">Fully automated, hands-free execution</p>
             <div class="plan-price" id="landing-bot-price">$1,000<span>/month</span></div>
             <ul class="plan-features">
               <li>Everything in Signal Channel</li>
               <li>Fully automated trade execution</li>
               <li>Up to 3 API keys (Binance + Bitunix)</li>
-              <li>Custom leverage, risk & position settings</li>
-              <li>Real-time P&L dashboard</li>
+              <li>Custom leverage, risk &amp; position settings</li>
+              <li>Real-time P&amp;L dashboard</li>
               <li>3-tier referral commission program</li>
             </ul>
-            <button class="btn btn-primary" onclick="window.CryptoBot.goToAuth()">Start Auto Trading</button>
+            <button class="btn btn-gold btn-plan" onclick="window.CryptoBot.goToAuth()">Start Auto Trading</button>
           </div>
         </div>
       </section>
 
-      <!-- ── CTA ── -->
-      <section class="landing-section landing-cta">
-        <h2 class="landing-section-title">Ready to Trade Smarter?</h2>
-        <p class="landing-section-sub">Join traders using MCT's AI to execute high-probability trades 24/7.<br>Your exchange. Your funds. Our intelligence.</p>
-        <button class="btn btn-primary btn-lg" onclick="window.CryptoBot.goToAuth()">Get Started Now</button>
+      <!-- ── FAQ ── -->
+      <section class="landing-section" data-animate>
+        <div class="landing-section-header">
+          <span class="landing-section-tag">Common questions</span>
+          <h2 class="landing-section-title">Frequently Asked Questions</h2>
+        </div>
+        <div class="landing-faq">
+          <details class="landing-faq-item">
+            <summary>Is my money safe? Can the bot withdraw my funds?</summary>
+            <p>No. Your API keys are configured with trade-only permissions. The bot cannot withdraw, transfer, or access your funds in any way. Your capital stays on your exchange at all times. API keys are encrypted with AES-256-GCM.</p>
+          </details>
+          <details class="landing-faq-item">
+            <summary>Which exchanges are supported?</summary>
+            <p>Currently we support Binance Futures and Bitunix Futures. You can connect up to 3 API keys simultaneously, each with independent risk settings (leverage, position size, max loss).</p>
+          </details>
+          <details class="landing-faq-item">
+            <summary>How does the AI decide when to trade?</summary>
+            <p>Our engine scans 40+ coins every 10 minutes using 7 indicators in confluence: RSI, EMA crossovers, MACD, Bollinger Bands, Stochastic, Volume analysis, and Smart Money Concepts (SMC). A trade only fires when multiple indicators align on the same direction.</p>
+          </details>
+          <details class="landing-faq-item">
+            <summary>What is the difference between the Signal Channel and the Auto Bot?</summary>
+            <p>The Signal Channel delivers real-time trade alerts to a private Telegram group. You execute manually. The Auto Bot does everything automatically: it receives the signal and places the trade on your exchange with your risk settings, including entry, stop loss, and 3 take profit levels.</p>
+          </details>
+          <details class="landing-faq-item">
+            <summary>Can I cancel my subscription at any time?</summary>
+            <p>Yes. There are no contracts or lock-in periods. You can cancel from your dashboard at any time. Your access remains active until the end of your billing period.</p>
+          </details>
+        </div>
+      </section>
+
+      <!-- ── Final CTA ── -->
+      <section class="landing-section landing-cta" data-animate>
+        <div class="landing-cta-inner">
+          <h2 class="landing-cta-title">Ready to Trade Smarter?</h2>
+          <p class="landing-cta-sub">Join hundreds of traders using MCT's AI engine to execute high-probability trades around the clock. Your exchange. Your funds. Our intelligence.</p>
+          <div class="landing-hero-btns">
+            <button class="btn btn-gold btn-lg" onclick="window.CryptoBot.goToAuth()">Get Started Now</button>
+            <a href="#pricing" class="btn btn-ghost btn-lg">View Pricing</a>
+          </div>
+        </div>
       </section>
 
       <!-- ── Footer ── -->
       <footer class="landing-footer">
-        <img src="/img/logo.jpeg" alt="MCT" width="32" height="32" style="border-radius:50%;">
-        <span>Millionaire Crypto Traders &copy; 2026. All rights reserved.</span>
+        <div class="landing-footer-inner">
+          <div class="landing-footer-brand">
+            <img src="/img/logo.jpeg" alt="MCT" width="36" height="36">
+            <div>
+              <span class="landing-footer-name">Millionaire Crypto Traders</span>
+              <span class="landing-footer-copy">&copy; 2026 MCT. All rights reserved.</span>
+            </div>
+          </div>
+          <div class="landing-footer-links">
+            <a href="#how-it-works">How It Works</a>
+            <a href="#features">Features</a>
+            <a href="#pricing">Pricing</a>
+          </div>
+        </div>
       </footer>
     </div>
+
+    <!-- Landing page scripts -->
+    <script>
+    (function() {
+      /* -- Smooth scroll for anchor links -- */
+      document.querySelectorAll('#section-landing a[href^="#"]').forEach(function(anchor) {
+        anchor.addEventListener('click', function(e) {
+          var target = document.querySelector(this.getAttribute('href'));
+          if (target) {
+            e.preventDefault();
+            target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          }
+        });
+      });
+
+      /* -- Mobile nav toggle -- */
+      var toggle = document.querySelector('.landing-nav-toggle');
+      var mobileMenu = document.querySelector('.landing-nav-mobile');
+      if (toggle && mobileMenu) {
+        toggle.addEventListener('click', function() {
+          var isOpen = mobileMenu.classList.toggle('is-open');
+          toggle.classList.toggle('is-open');
+          toggle.setAttribute('aria-expanded', isOpen);
+        });
+        mobileMenu.querySelectorAll('a').forEach(function(link) {
+          link.addEventListener('click', function() {
+            mobileMenu.classList.remove('is-open');
+            toggle.classList.remove('is-open');
+            toggle.setAttribute('aria-expanded', 'false');
+          });
+        });
+      }
+
+      /* -- Navbar background on scroll -- */
+      var nav = document.getElementById('landing-nav');
+      if (nav) {
+        window.addEventListener('scroll', function() {
+          nav.classList.toggle('is-scrolled', window.scrollY > 40);
+        }, { passive: true });
+      }
+
+      /* -- Intersection Observer for fade-in -- */
+      var animatedEls = document.querySelectorAll('[data-animate]');
+      if ('IntersectionObserver' in window) {
+        var observer = new IntersectionObserver(function(entries) {
+          entries.forEach(function(entry) {
+            if (entry.isIntersecting) {
+              entry.target.classList.add('is-visible');
+              observer.unobserve(entry.target);
+            }
+          });
+        }, { threshold: 0.1, rootMargin: '0px 0px -60px 0px' });
+        animatedEls.forEach(function(el) { observer.observe(el); });
+      } else {
+        animatedEls.forEach(function(el) { el.classList.add('is-visible'); });
+      }
+
+      /* -- Animated stat counters -- */
+      var counters = document.querySelectorAll('[data-count]');
+      if ('IntersectionObserver' in window && counters.length) {
+        var counterObserver = new IntersectionObserver(function(entries) {
+          entries.forEach(function(entry) {
+            if (entry.isIntersecting) {
+              var el = entry.target;
+              var target = parseInt(el.getAttribute('data-count'), 10);
+              var duration = 2000;
+              var start = 0;
+              var startTime = null;
+              function step(timestamp) {
+                if (!startTime) startTime = timestamp;
+                var progress = Math.min((timestamp - startTime) / duration, 1);
+                var eased = 1 - Math.pow(1 - progress, 3);
+                el.textContent = Math.floor(eased * target).toLocaleString() + (progress < 1 ? '' : '+');
+                if (progress < 1) requestAnimationFrame(step);
+              }
+              requestAnimationFrame(step);
+              counterObserver.unobserve(el);
+            }
+          });
+        }, { threshold: 0.5 });
+        counters.forEach(function(c) { counterObserver.observe(c); });
+      }
+
+      /* -- FAQ accordion -- */
+      document.querySelectorAll('.landing-faq-item').forEach(function(item) {
+        item.addEventListener('toggle', function() {
+          if (this.open) {
+            document.querySelectorAll('.landing-faq-item').forEach(function(other) {
+              if (other !== item) other.removeAttribute('open');
+            });
+          }
+        });
+      });
+
+      /* -- Respect prefers-reduced-motion -- */
+      if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+        document.querySelectorAll('[data-animate]').forEach(function(el) {
+          el.classList.add('is-visible');
+        });
+      }
+    })();
+    </script>
   </section>
 
   <!-- ========================================================
