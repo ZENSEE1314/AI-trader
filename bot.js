@@ -382,13 +382,81 @@ const MSG_TUT =
   `• Start small and scale up as you learn\n\n` +
   `<i>Need help? Ask in the group anytime 🙌</i>`;
 
-// ── REPORT — Signal P&L Tracker (CSV-backed) ───────────────
+// ── REPORT — Signal P&L Tracker (CSV-backed, split by strategy) ──
+async function evaluateSignals(signals) {
+  const stats = { wins: 0, losses: 0, open: 0, totalPnl: 0, tp1: 0, tp2: 0, tp3: 0, sl: 0, rows: [] };
+
+  for (const sig of signals) {
+    try {
+      const klines = await fetchKlines(sig.symbol, '5m', 300);
+      if (!klines || !klines.length) continue;
+
+      const isBuy = sig.signal === 'BUY';
+      const coin  = sig.symbol.replace('USDT', '');
+      let status = 'OPEN', pnlPct = 0, result = '';
+      let hitTp3 = false, hitTp2 = false, hitTp1 = false, hitSl = false;
+
+      for (const k of klines) {
+        const high = parseFloat(k[2]), low = parseFloat(k[3]);
+        if (isBuy) {
+          if (low <= sig.sl)               { hitSl = true; break; }
+          if (sig.tp3 && high >= sig.tp3)  { hitTp3 = true; break; }
+          if (sig.tp2 && high >= sig.tp2)    hitTp2 = true;
+          if (high >= sig.tp1)               hitTp1 = true;
+        } else {
+          if (high >= sig.sl)              { hitSl = true; break; }
+          if (sig.tp3 && low <= sig.tp3)   { hitTp3 = true; break; }
+          if (sig.tp2 && low <= sig.tp2)     hitTp2 = true;
+          if (low <= sig.tp1)                hitTp1 = true;
+        }
+      }
+
+      if (hitSl)       { pnlPct = -(Math.abs(sig.sl - sig.entry) / sig.entry * 100); status = 'SL HIT'; result = 'LOSS'; stats.losses++; stats.sl++; }
+      else if (hitTp3) { pnlPct = Math.abs(sig.tp3 - sig.entry) / sig.entry * 100;   status = 'TP3 HIT'; result = 'WIN'; stats.wins++; stats.tp3++; }
+      else if (hitTp2) { pnlPct = Math.abs(sig.tp2 - sig.entry) / sig.entry * 100;   status = 'TP2 HIT'; result = 'WIN'; stats.wins++; stats.tp2++; }
+      else if (hitTp1) { pnlPct = Math.abs(sig.tp1 - sig.entry) / sig.entry * 100;   status = 'TP1 HIT'; result = 'WIN'; stats.wins++; stats.tp1++; }
+      else {
+        const lastClose = parseFloat(klines[klines.length - 1][4]);
+        pnlPct = isBuy ? ((lastClose - sig.entry) / sig.entry) * 100 : ((sig.entry - lastClose) / sig.entry) * 100;
+        status = 'OPEN'; result = pnlPct >= 0 ? 'PROFIT' : 'LOSS'; stats.open++;
+      }
+
+      sig.status = status; sig.pnl = pnlPct; sig.result = result;
+      stats.totalPnl += pnlPct;
+
+      const sign = pnlPct >= 0 ? '+' : '';
+      const emoji = result === 'WIN' ? '🟢' : result === 'LOSS' ? '🔴' : '🟡';
+      stats.rows.push(`• <b>${coin}</b> ${sig.signal}\n  <code>$${fmtPrice(sig.entry)}</code> → ${emoji} ${status} (${sign}${pnlPct.toFixed(2)}%)`);
+    } catch (_) {}
+    await sleep(100);
+  }
+
+  return stats;
+}
+
+function formatReportBlock(title, icon, stats, count) {
+  if (!count) return `${icon} <b>${title}</b>\n<i>No signals this session</i>\n`;
+  const winRate = (stats.wins + stats.losses) > 0 ? ((stats.wins / (stats.wins + stats.losses)) * 100).toFixed(0) : '0';
+  const pnlSign = stats.totalPnl >= 0 ? '+' : '';
+  const pnlEmoji = stats.totalPnl >= 0 ? '🟢' : '🔴';
+
+  let block =
+    `${icon} <b>${title}</b>\n` +
+    `${pnlEmoji} P&amp;L: <b>${pnlSign}${stats.totalPnl.toFixed(2)}%</b> | ` +
+    `W: <b>${stats.wins}</b> L: <b>${stats.losses}</b> O: <b>${stats.open}</b> | ` +
+    `WR: <b>${winRate}%</b>\n` +
+    `🎯 TP1:${stats.tp1} TP2:${stats.tp2} TP3:${stats.tp3} 🛑 SL:${stats.sl}\n`;
+
+  if (stats.rows.length) block += stats.rows.join('\n') + '\n';
+  return block;
+}
+
 async function runReport(chatId) {
   const sendFn = chatId ? (msg) => tgSendTo(chatId, msg) : tgSend;
   try {
-    const signals = loadSignals(true); // true = use 9PM SG window
+    const allSignals = loadSignals(true);
 
-    if (!signals.length) {
+    if (!allSignals.length) {
       await sendFn(
         `📋 <b>Daily Signal Report — ${now()}</b>\n` +
         `━━━━━━━━━━━━━━━━━━\n` +
@@ -397,108 +465,48 @@ async function runReport(chatId) {
       return;
     }
 
-    let wins = 0, losses = 0, openTrades = 0;
-    let totalPnlPct = 0;
-    let tp1Hits = 0, tp2Hits = 0, tp3Hits = 0, slHits = 0;
-    const rows = [];
+    // Split by source
+    const mctSignals = allSignals.filter(s => s.source === 'MCT');
+    const legacySignals = allSignals.filter(s => s.source !== 'MCT');
 
-    for (const sig of signals) {
-      try {
-        const klines = await fetchKlines(sig.symbol, '5m', 300);
-        if (!klines || !klines.length) continue;
+    // Evaluate both groups
+    const mctStats = await evaluateSignals(mctSignals);
+    const legacyStats = await evaluateSignals(legacySignals);
 
-        const isBuy = sig.signal === 'BUY';
-        const coin  = sig.symbol.replace('USDT', '');
-        let status  = 'OPEN';
-        let pnlPct  = 0;
-        let result  = '';
-        let hitTp3  = false, hitTp2 = false, hitTp1 = false, hitSl = false;
+    // Update CSV
+    updateSignalCsv(allSignals);
 
-        for (const k of klines) {
-          const high = parseFloat(k[2]);
-          const low  = parseFloat(k[3]);
-          if (isBuy) {
-            if (low <= sig.sl)               { hitSl = true; break; }
-            if (sig.tp3 && high >= sig.tp3)  { hitTp3 = true; break; }
-            if (sig.tp2 && high >= sig.tp2)    hitTp2 = true;
-            if (high >= sig.tp1)               hitTp1 = true;
-          } else {
-            if (high >= sig.sl)              { hitSl = true; break; }
-            if (sig.tp3 && low <= sig.tp3)   { hitTp3 = true; break; }
-            if (sig.tp2 && low <= sig.tp2)     hitTp2 = true;
-            if (low <= sig.tp1)                hitTp1 = true;
-          }
-        }
+    // Overall totals
+    const totalPnl = mctStats.totalPnl + legacyStats.totalPnl;
+    const totalWins = mctStats.wins + legacyStats.wins;
+    const totalLosses = mctStats.losses + legacyStats.losses;
+    const overallWR = (totalWins + totalLosses) > 0 ? ((totalWins / (totalWins + totalLosses)) * 100).toFixed(0) : '0';
+    const overallEmoji = totalPnl >= 0 ? '✅ WINNING DAY' : '❌ LOSING DAY';
+    const overallPnlEmoji = totalPnl >= 0 ? '🟢' : '🔴';
 
-        if (hitSl) {
-          pnlPct = -(Math.abs(sig.sl - sig.entry) / sig.entry * 100);
-          status = 'SL HIT'; result = 'LOSS';
-          losses++; slHits++;
-        } else if (hitTp3) {
-          pnlPct = Math.abs(sig.tp3 - sig.entry) / sig.entry * 100;
-          status = 'TP3 HIT'; result = 'WIN';
-          wins++; tp3Hits++;
-        } else if (hitTp2) {
-          pnlPct = Math.abs(sig.tp2 - sig.entry) / sig.entry * 100;
-          status = 'TP2 HIT'; result = 'WIN';
-          wins++; tp2Hits++;
-        } else if (hitTp1) {
-          pnlPct = Math.abs(sig.tp1 - sig.entry) / sig.entry * 100;
-          status = 'TP1 HIT'; result = 'WIN';
-          wins++; tp1Hits++;
-        } else {
-          const lastClose = parseFloat(klines[klines.length - 1][4]);
-          pnlPct = isBuy
-            ? ((lastClose - sig.entry) / sig.entry) * 100
-            : ((sig.entry - lastClose) / sig.entry) * 100;
-          status = 'OPEN'; result = pnlPct >= 0 ? 'PROFIT' : 'LOSS';
-          openTrades++;
-        }
-
-        sig.status = status;
-        sig.pnl    = pnlPct;
-        sig.result = result;
-
-        totalPnlPct += pnlPct;
-        const sign = pnlPct >= 0 ? '+' : '';
-        const emoji = result === 'WIN' ? '🟢' : result === 'LOSS' ? '🔴' : '🟡';
-        rows.push(
-          `• <b>${coin}</b> ${sig.signal} [${sig.source}]\n` +
-          `  Entry: <code>$${fmtPrice(sig.entry)}</code> → ${emoji} ${status} (${sign}${pnlPct.toFixed(2)}%)`
-        );
-      } catch (_) {}
-      await sleep(100);
-    }
-
-    updateSignalCsv(signals);
-
-    const totalSignals = signals.length;
-    const winRate = (wins + losses) > 0 ? ((wins / (wins + losses)) * 100).toFixed(0) : '0';
-    const pnlSign = totalPnlPct >= 0 ? '+' : '';
-    const pnlEmoji = totalPnlPct >= 0 ? '🟢' : '🔴';
-    const resultEmoji = totalPnlPct >= 0 ? '✅ WINNING DAY' : '❌ LOSING DAY';
-
+    // Build report
     let msg =
       `📋 <b>Daily Signal Report — ${now()}</b>\n` +
       `━━━━━━━━━━━━━━━━━━\n` +
-      `${pnlEmoji} <b>Total P&amp;L: ${pnlSign}${totalPnlPct.toFixed(2)}%</b>\n` +
-      `${resultEmoji}\n\n` +
-      `📊 <b>Summary:</b>\n` +
-      `Signals: <b>${totalSignals}</b> | Wins: <b>${wins}</b> | Losses: <b>${losses}</b> | Open: <b>${openTrades}</b>\n` +
-      `Win Rate: <b>${winRate}%</b>\n` +
-      `🎯 TP1: ${tp1Hits} | TP2: ${tp2Hits} | TP3: ${tp3Hits} | 🛑 SL: ${slHits}\n\n` +
-      `📝 <b>All Signals Today:</b>\n`;
+      `${overallPnlEmoji} <b>Combined P&amp;L: ${totalPnl >= 0 ? '+' : ''}${totalPnl.toFixed(2)}%</b>\n` +
+      `${overallEmoji} | Total: ${allSignals.length} signals | WR: ${overallWR}%\n\n`;
 
-    msg += rows.join('\n') || '<i>No data</i>';
+    // MCT Strategy Report
+    msg += formatReportBlock('MCT Strategy (Key Levels + VWAP)', '🏛', mctStats, mctSignals.length) + '\n';
 
+    // Legacy Strategy Report
+    msg += formatReportBlock('Trader/SMC/Spike Signals', '🧠', legacyStats, legacySignals.length);
+
+    // Split if too long
     if (msg.length > 3900) {
-      const mid = Math.ceil(rows.length / 2);
-      const part1 = msg.substring(0, msg.indexOf('📝')) +
-        `📝 <b>Signals (1/2):</b>\n` + rows.slice(0, mid).join('\n');
-      const part2 = `📝 <b>Signals (2/2):</b>\n` + rows.slice(mid).join('\n');
-      await sendFn(part1);
-      await sleep(500);
-      await sendFn(part2);
+      const splitIdx = msg.indexOf('🧠 <b>Trader');
+      if (splitIdx > 0) {
+        await sendFn(msg.substring(0, splitIdx));
+        await sleep(500);
+        await sendFn(msg.substring(splitIdx));
+      } else {
+        await sendFn(msg.substring(0, 3900));
+      }
     } else {
       await sendFn(msg);
     }
