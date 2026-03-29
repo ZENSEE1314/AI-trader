@@ -1195,19 +1195,37 @@ async function executeForAllUsers(pick) {
 
           log(`Bitunix sizing: wallet=$${wallet.toFixed(2)} margin=$${marginUsdt.toFixed(2)} lev=${userLev}x notional=$${notional.toFixed(2)} qty=${qty} price=$${price}`);
 
+          // Step 1: Place market entry (no inline TP/SL — they don't always work)
           const order = await userClient.placeOrder({
             symbol: sym,
             side: isLong ? 'BUY' : 'SELL',
             qty: String(qty),
             orderType: 'MARKET',
             tradeSide: 'OPEN',
-            tpPrice: String(parseFloat(tpPrice.toFixed(8))),
-            tpStopType: 'MARK_PRICE',
-            tpOrderType: 'MARKET',
-            slPrice: String(parseFloat(slPrice.toFixed(8))),
-            slStopType: 'MARK_PRICE',
-            slOrderType: 'MARKET',
           });
+          log(`Bitunix entry placed: ${sym} orderId=${order?.orderId}`);
+
+          // Step 2: Find the position ID
+          await new Promise(r => setTimeout(r, 1000)); // wait 1s for position to show
+          const positions = await userClient.getOpenPositions(sym);
+          const pos = Array.isArray(positions) ? positions.find(p => p.symbol === sym) : null;
+
+          // Step 3: Place TP/SL on the position
+          if (pos && pos.positionId) {
+            try {
+              await userClient.placePositionTpSl({
+                symbol: sym,
+                positionId: pos.positionId,
+                tpPrice: parseFloat(tpPrice.toFixed(8)),
+                slPrice: parseFloat(slPrice.toFixed(8)),
+              });
+              log(`Bitunix TP/SL set: SL=$${slPrice.toFixed(4)} TP=$${tpPrice.toFixed(4)}`);
+            } catch (tpslErr) {
+              log(`Bitunix TP/SL error: ${tpslErr.message}`);
+            }
+          } else {
+            log(`Bitunix: could not find positionId for ${sym} — TP/SL not set`);
+          }
 
           await db.query(
             `INSERT INTO trades (api_key_id, user_id, symbol, direction, entry_price, sl_price, tp_price, quantity, leverage, status)

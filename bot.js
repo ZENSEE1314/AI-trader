@@ -1913,6 +1913,108 @@ async function start() {
   // ── AUTO REPORT: every 1 hour, sent to all channels ──────
   setInterval(() => runReport(null).catch(err => log(`Auto report err: ${err.message}`)), 60 * 60 * 1000);
 
+  // ── POSITION MONITOR: detect closed trades, update P&L ─────
+  async function monitorPositions() {
+    let db, cryptoUtils, BitunixClient;
+    try {
+      db = require('./db');
+      cryptoUtils = require('./crypto-utils');
+      BitunixClient = require('./bitunix-client').BitunixClient;
+    } catch { return; }
+
+    try {
+      // Get all OPEN trades from DB
+      const openTrades = await db.query(
+        `SELECT t.*, ak.api_key_enc, ak.iv, ak.auth_tag, ak.secret_iv, ak.secret_auth_tag, ak.platform
+         FROM trades t JOIN api_keys ak ON t.api_key_id = ak.id
+         WHERE t.status = 'OPEN'`
+      );
+
+      if (!openTrades.length) return;
+
+      for (const trade of openTrades) {
+        try {
+          const apiKey = cryptoUtils.decrypt(trade.api_key_enc, trade.iv, trade.auth_tag);
+          const apiSecret = cryptoUtils.decrypt(trade.api_secret_enc, trade.secret_iv, trade.secret_auth_tag);
+
+          let stillOpen = false;
+          let currentPnl = 0;
+
+          if (trade.platform === 'binance') {
+            const { USDMClient } = require('binance');
+            const client = new USDMClient({ api_key: apiKey, api_secret: apiSecret });
+            const account = await client.getAccountInformation({ omitZeroBalances: false });
+            const pos = account.positions.find(p => p.symbol === trade.symbol && parseFloat(p.positionAmt) !== 0);
+            if (pos) {
+              stillOpen = true;
+              currentPnl = parseFloat(pos.unrealizedProfit);
+            }
+          } else if (trade.platform === 'bitunix') {
+            const client = new BitunixClient({ apiKey, apiSecret });
+            const positions = await client.getOpenPositions(trade.symbol);
+            const pos = Array.isArray(positions) ? positions.find(p => p.symbol === trade.symbol) : null;
+            if (pos) {
+              stillOpen = true;
+              currentPnl = parseFloat(pos.unrealizedPNL || 0);
+            }
+          }
+
+          if (stillOpen) {
+            // Update current unrealized P&L
+            await db.query('UPDATE trades SET pnl_usdt = $1 WHERE id = $2', [currentPnl, trade.id]);
+          } else {
+            // Position closed — calculate final P&L
+            const entry = parseFloat(trade.entry_price);
+            const sl = parseFloat(trade.sl_price);
+            const tp = parseFloat(trade.tp_price);
+            const qty = parseFloat(trade.quantity);
+            const isLong = trade.direction === 'LONG';
+
+            // Get last price to estimate exit
+            try {
+              const priceRes = await fetch(`https://fapi.binance.com/fapi/v1/ticker/price?symbol=${trade.symbol}`, { timeout: 5000 });
+              const priceData = await priceRes.json();
+              const lastPrice = parseFloat(priceData.price);
+
+              const pnl = isLong
+                ? (lastPrice - entry) * qty
+                : (entry - lastPrice) * qty;
+
+              // Determine status based on where price ended
+              let status = 'CLOSED';
+              if (isLong) {
+                if (lastPrice >= tp) status = 'TP';
+                else if (lastPrice <= sl) status = 'SL';
+              } else {
+                if (lastPrice <= tp) status = 'TP';
+                else if (lastPrice >= sl) status = 'SL';
+              }
+
+              await db.query(
+                'UPDATE trades SET status = $1, pnl_usdt = $2, closed_at = NOW() WHERE id = $3',
+                [status, pnl, trade.id]
+              );
+              log(`Position closed: ${trade.symbol} ${trade.direction} → ${status} P&L: $${pnl.toFixed(4)}`);
+            } catch (_) {
+              await db.query(
+                'UPDATE trades SET status = $1, closed_at = NOW() WHERE id = $2',
+                ['CLOSED', trade.id]
+              );
+            }
+          }
+        } catch (err) {
+          log(`Monitor error for trade ${trade.id}: ${err.message}`);
+        }
+        await sleep(500);
+      }
+    } catch (err) {
+      log(`Position monitor error: ${err.message}`);
+    }
+  }
+
+  // Check positions every 3 minutes
+  setInterval(() => monitorPositions().catch(e => log(`Monitor err: ${e.message}`)), 3 * 60 * 1000);
+
   // ── AUTO KICK EXPIRED SIGNAL SUBSCRIBERS ───────────────────
   async function kickExpiredSignalSubs() {
     try {

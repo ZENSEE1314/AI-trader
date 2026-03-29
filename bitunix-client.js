@@ -127,6 +127,15 @@ class BitunixClient {
     return this._post('/api/v1/futures/trade/place_order', body);
   }
 
+  // ── TP/SL on existing position ──────────────────────────────
+
+  async placePositionTpSl({ symbol, positionId, tpPrice, slPrice }) {
+    const body = { symbol, positionId };
+    if (tpPrice) { body.tpPrice = String(tpPrice); body.tpStopType = 'MARK_PRICE'; }
+    if (slPrice) { body.slPrice = String(slPrice); body.slStopType = 'MARK_PRICE'; }
+    return this._post('/api/v1/futures/tpsl/position/place_order', body);
+  }
+
   // ── Convenience: match Binance-like interface ──────────────
 
   async getAccountInformation() {
