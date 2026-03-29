@@ -1088,6 +1088,22 @@ async function executeForAllUsers(pick) {
 
     const results = await Promise.allSettled(keys.map(async (key) => {
       try {
+        // ── Coin filters: allowed list and ban list ──
+        const symbol = pick.sym;
+        const allowedCoins = (key.allowed_coins || '').split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
+        const bannedCoins = (key.banned_coins || '').split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
+
+        // If allowed list is set, only trade those coins
+        if (allowedCoins.length > 0 && !allowedCoins.includes(symbol)) {
+          log(`User ${key.email} coin ${symbol} not in allowed list — skip`);
+          return;
+        }
+        // If banned list has this coin, skip
+        if (bannedCoins.includes(symbol)) {
+          log(`User ${key.email} coin ${symbol} is banned — skip`);
+          return;
+        }
+
         const apiKey = cryptoUtils.decrypt(key.api_key_enc, key.iv, key.auth_tag);
         const apiSecret = cryptoUtils.decrypt(key.api_secret_enc, key.secret_iv, key.secret_auth_tag);
         const maxPos = parseInt(key.max_positions) || 1;

@@ -13,6 +13,7 @@ router.get('/', async (req, res) => {
   try {
     const rows = await query(
       `SELECT id, platform, label, leverage, risk_pct, max_loss_usdt, max_positions, enabled,
+              allowed_coins, banned_coins,
               substring(api_key_enc, 1, 8) as key_preview, created_at
        FROM api_keys WHERE user_id = $1 ORDER BY created_at`,
       [req.userId]
@@ -92,7 +93,7 @@ router.post('/', async (req, res) => {
 // Update settings for a key
 router.put('/:id/settings', async (req, res) => {
   try {
-    const { leverage, risk_pct, max_loss_usdt, max_positions, enabled } = req.body;
+    const { leverage, risk_pct, max_loss_usdt, max_positions, enabled, allowed_coins, banned_coins } = req.body;
 
     if (leverage !== undefined && (leverage < 1 || leverage > 125)) {
       return res.status(400).json({ error: 'Leverage must be 1-125' });
@@ -114,9 +115,11 @@ router.put('/:id/settings', async (req, res) => {
         risk_pct = COALESCE($2, risk_pct),
         max_loss_usdt = COALESCE($3, max_loss_usdt),
         max_positions = COALESCE($4, max_positions),
-        enabled = COALESCE($5, enabled)
-       WHERE id = $6 AND user_id = $7`,
-      [leverage, risk_pct, max_loss_usdt, max_positions, enabled, req.params.id, req.userId]
+        enabled = COALESCE($5, enabled),
+        allowed_coins = COALESCE($6, allowed_coins),
+        banned_coins = COALESCE($7, banned_coins)
+       WHERE id = $8 AND user_id = $9`,
+      [leverage, risk_pct, max_loss_usdt, max_positions, enabled, allowed_coins, banned_coins, req.params.id, req.userId]
     );
 
     res.json({ ok: true });

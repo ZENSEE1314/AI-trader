@@ -372,6 +372,8 @@
       const riskPct = k.risk_pct != null ? (parseFloat(k.risk_pct) * 100).toFixed(0) : '5';
       const maxLoss = k.max_loss_usdt || 30;
       const maxPos = k.max_positions || 1;
+      const allowedCoins = k.allowed_coins || '';
+      const bannedCoins = k.banned_coins || '';
 
       return `<div class="key-card" data-key-id="${k.id}">
         <div class="key-card-main">
@@ -429,6 +431,16 @@
                 oninput="document.getElementById('maxpos-val-${k.id}').textContent=this.value"
                 aria-label="Max concurrent positions">
             </div>
+            <div class="form-group" style="margin-bottom:0">
+              <label class="form-label" for="allowed-${k.id}">Only Trade These Coins</label>
+              <input class="form-input text-mono" type="text" id="allowed-${k.id}" placeholder="e.g. BTCUSDT,ETHUSDT (empty = all)" value="${escapeHtml(allowedCoins)}" style="font-size:0.8rem;">
+              <div style="font-size:0.65rem;color:var(--color-text-muted);margin-top:2px;">Comma-separated. Leave empty to trade all coins.</div>
+            </div>
+            <div class="form-group" style="margin-bottom:0">
+              <label class="form-label" for="banned-${k.id}">Ban These Coins</label>
+              <input class="form-input text-mono" type="text" id="banned-${k.id}" placeholder="e.g. DOGEUSDT,SHIBUSDT" value="${escapeHtml(bannedCoins)}" style="font-size:0.8rem;">
+              <div style="font-size:0.65rem;color:var(--color-text-muted);margin-top:2px;">Comma-separated. These coins will never be traded.</div>
+            </div>
             <div style="display:flex;align-items:flex-end;">
               <label class="toggle">
                 <input type="checkbox" id="enabled-${k.id}" ${isEnabled ? 'checked' : ''}>
@@ -464,6 +476,8 @@
     const maxLossUsdt = parseInt($(`#maxloss-${keyId}`).value);
     const maxPositions = parseInt($(`#maxpos-${keyId}`).value);
     const enabled = $(`#enabled-${keyId}`).checked;
+    const allowedCoins = ($(`#allowed-${keyId}`).value || '').toUpperCase().replace(/\s/g, '');
+    const bannedCoins = ($(`#banned-${keyId}`).value || '').toUpperCase().replace(/\s/g, '');
 
     try {
       await api('PUT', `/api/keys/${keyId}/settings`, {
@@ -472,6 +486,8 @@
         max_loss_usdt: maxLossUsdt,
         max_positions: maxPositions,
         enabled,
+        allowed_coins: allowedCoins,
+        banned_coins: bannedCoins,
       });
       showToast('Settings saved.', 'success');
       toggleSettings(keyId);
