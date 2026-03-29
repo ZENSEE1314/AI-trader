@@ -644,15 +644,33 @@
   async function loadAdmin() {
     if (!state.user?.is_admin) return;
     try {
-      const [users, subs, wds] = await Promise.all([
+      const [users, subs, wds, settings] = await Promise.all([
         api('GET', '/api/admin/users'),
         api('GET', '/api/admin/subscriptions'),
         api('GET', '/api/admin/withdrawals'),
+        api('GET', '/api/admin/settings'),
       ]);
       renderAdminUsers(users);
       renderAdminSubs(subs);
       renderAdminWithdrawals(wds);
+      // Fill settings fields
+      $('#admin-price').value = settings.sub_price || '29.99';
+      $('#admin-tier1').value = settings.commission_tier1 || '20';
+      $('#admin-tier2').value = settings.commission_tier2 || '10';
+      $('#admin-tier3').value = settings.commission_tier3 || '5';
     } catch (err) { showToast('Failed to load admin.', 'error'); }
+  }
+
+  async function saveAdminSettings() {
+    try {
+      await api('PUT', '/api/admin/settings', {
+        sub_price: $('#admin-price').value,
+        commission_tier1: $('#admin-tier1').value,
+        commission_tier2: $('#admin-tier2').value,
+        commission_tier3: $('#admin-tier3').value,
+      });
+      showToast('Settings saved', 'success');
+    } catch (err) { showToast(err.message, 'error'); }
   }
 
   function renderAdminUsers(users) {
@@ -730,7 +748,7 @@
   window.CryptoBot = {
     toggleSettings, saveSettings, deleteKey, showToast,
     payWithWallet, payBankTransfer, payStripe, requestWithdraw,
-    adminAction, adminSub, adminWd,
+    adminAction, adminSub, adminWd, saveAdminSettings,
   };
 
   // ----- Init -----

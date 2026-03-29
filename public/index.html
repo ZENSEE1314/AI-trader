@@ -289,6 +289,29 @@
       <section id="tab-admin" class="hidden" role="tabpanel" aria-label="Admin">
         <h2 class="section-heading">Admin Panel</h2>
 
+        <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Pricing & Commission</h3>
+        <div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-4);margin-bottom:var(--space-5);">
+          <div class="settings-grid">
+            <div class="form-group" style="margin-bottom:0">
+              <label class="form-label" for="admin-price">Monthly Price (USD)</label>
+              <input class="form-input text-mono" type="number" id="admin-price" min="0" step="0.01">
+            </div>
+            <div class="form-group" style="margin-bottom:0">
+              <label class="form-label" for="admin-tier1">Tier 1 Commission %</label>
+              <input class="form-input text-mono" type="number" id="admin-tier1" min="0" max="100" step="1" placeholder="Direct referral">
+            </div>
+            <div class="form-group" style="margin-bottom:0">
+              <label class="form-label" for="admin-tier2">Tier 2 Commission %</label>
+              <input class="form-input text-mono" type="number" id="admin-tier2" min="0" max="100" step="1" placeholder="Referral's referral">
+            </div>
+            <div class="form-group" style="margin-bottom:0">
+              <label class="form-label" for="admin-tier3">Tier 3 Commission %</label>
+              <input class="form-input text-mono" type="number" id="admin-tier3" min="0" max="100" step="1" placeholder="3rd level. 0 = off">
+            </div>
+          </div>
+          <button class="btn btn-primary btn-sm" style="margin-top:var(--space-3);" onclick="window.CryptoBot.saveAdminSettings()">Save Settings</button>
+        </div>
+
         <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Users</h3>
         <div class="table-wrap" style="margin-bottom:var(--space-5);">
           <table class="data-table">

@@ -127,4 +127,44 @@ router.put('/withdrawals/:id', async (req, res) => {
   }
 });
 
+// Get settings
+router.get('/settings', async (req, res) => {
+  try {
+    const rows = await query('SELECT key, value FROM settings');
+    const settings = {};
+    for (const r of rows) settings[r.key] = r.value;
+    res.json(settings);
+  } catch (err) {
+    console.error('Admin settings error:', err.message);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Update settings
+router.put('/settings', async (req, res) => {
+  try {
+    const { sub_price, commission_tier1, commission_tier2, commission_tier3 } = req.body;
+
+    const updates = [
+      ['sub_price', sub_price],
+      ['commission_tier1', commission_tier1],
+      ['commission_tier2', commission_tier2],
+      ['commission_tier3', commission_tier3],
+    ];
+
+    for (const [key, val] of updates) {
+      if (val !== undefined && val !== null) {
+        await query(
+          `INSERT INTO settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = $2`,
+          [key, String(val)]
+        );
+      }
+    }
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Admin update settings error:', err.message);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 module.exports = router;
