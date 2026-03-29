@@ -126,6 +126,12 @@ async function payReferralCommission(userId, settings) {
       const user = await query('SELECT referred_by FROM users WHERE id = $1', [currentId]);
       if (!user.length || !user[0].referred_by) break;
       const referrerId = user[0].referred_by;
+      // Only pay if referrer has active subscription
+      const activeSub = await query(
+        `SELECT id FROM subscriptions WHERE user_id = $1 AND status = 'active' AND expires_at > NOW() LIMIT 1`,
+        [referrerId]
+      );
+      if (!activeSub.length) { currentId = referrerId; continue; }
       const commission = settings.price * (pct / 100);
       await query('UPDATE users SET wallet_balance = wallet_balance + $1 WHERE id = $2', [commission, referrerId]);
       await query(
