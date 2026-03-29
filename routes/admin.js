@@ -46,6 +46,41 @@ router.put('/users/:id/block', async (req, res) => {
   }
 });
 
+// Edit user wallet balance
+router.put('/users/:id/wallet', async (req, res) => {
+  try {
+    const { amount, reason } = req.body;
+    if (amount === undefined || amount === null) return res.status(400).json({ error: 'Amount required' });
+
+    const parsedAmount = parseFloat(amount);
+    if (isNaN(parsedAmount)) return res.status(400).json({ error: 'Invalid amount' });
+
+    // Get current balance
+    const user = await query('SELECT wallet_balance, email FROM users WHERE id = $1', [req.params.id]);
+    if (!user.length) return res.status(404).json({ error: 'User not found' });
+
+    const currentBalance = parseFloat(user[0].wallet_balance);
+    const diff = parsedAmount - currentBalance;
+
+    // Update balance
+    await query('UPDATE users SET wallet_balance = $1 WHERE id = $2', [parsedAmount, req.params.id]);
+
+    // Log the adjustment
+    if (diff !== 0) {
+      await query(
+        `INSERT INTO wallet_transactions (user_id, type, amount, description)
+         VALUES ($1, 'admin_adjustment', $2, $3)`,
+        [req.params.id, diff, reason || `Admin adjusted balance from $${currentBalance.toFixed(2)} to $${parsedAmount.toFixed(2)}`]
+      );
+    }
+
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Admin wallet edit error:', err.message);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // List pending subscriptions (bank transfer proofs to approve)
 router.get('/subscriptions', async (req, res) => {
   try {

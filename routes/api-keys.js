@@ -24,15 +24,21 @@ router.get('/', async (req, res) => {
   }
 });
 
-// Add a new API key (requires active subscription)
+// Add a new API key (requires active subscription, admin bypasses all limits)
 router.post('/', async (req, res) => {
   try {
-    // Check active subscription
-    const sub = await query(
-      `SELECT id FROM subscriptions WHERE user_id = $1 AND status = 'active' AND expires_at > NOW() LIMIT 1`,
-      [req.userId]
-    );
-    if (!sub.length) return res.status(403).json({ error: 'Active subscription required. Go to Subscription tab to subscribe.' });
+    // Check if admin
+    const user = await query('SELECT is_admin FROM users WHERE id = $1', [req.userId]);
+    const isAdmin = user.length && user[0].is_admin;
+
+    // Non-admin: check active subscription
+    if (!isAdmin) {
+      const sub = await query(
+        `SELECT id FROM subscriptions WHERE user_id = $1 AND status = 'active' AND expires_at > NOW() LIMIT 1`,
+        [req.userId]
+      );
+      if (!sub.length) return res.status(403).json({ error: 'Active subscription required. Go to Subscription tab to subscribe.' });
+    }
 
     const { platform, label, apiKey, apiSecret } = req.body;
     if (!apiKey || !apiSecret) return res.status(400).json({ error: 'API key and secret required' });
@@ -41,9 +47,11 @@ router.post('/', async (req, res) => {
     const validPlatforms = ['binance', 'bitunix'];
     if (!validPlatforms.includes(platform)) return res.status(400).json({ error: 'Unsupported platform' });
 
-    // Check max 3 keys
-    const count = await query('SELECT COUNT(*) as cnt FROM api_keys WHERE user_id = $1', [req.userId]);
-    if (parseInt(count[0].cnt) >= 3) return res.status(400).json({ error: 'Maximum 3 API keys allowed' });
+    // Non-admin: check max 3 keys
+    if (!isAdmin) {
+      const count = await query('SELECT COUNT(*) as cnt FROM api_keys WHERE user_id = $1', [req.userId]);
+      if (parseInt(count[0].cnt) >= 3) return res.status(400).json({ error: 'Maximum 3 API keys allowed' });
+    }
 
     // Validate the key by making a test call
     if (platform === 'binance') {

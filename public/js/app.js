@@ -750,11 +750,13 @@
   }
 
   function renderAdminUsers(users) {
-    $('#admin-users-tbody').innerHTML = users.map(u => `<tr>
+    $('#admin-users-tbody').innerHTML = users.map(u => {
+      const bal = parseFloat(u.wallet_balance || 0).toFixed(2);
+      return `<tr>
       <td>${escapeHtml(u.email)}${u.is_admin ? ' <b>(admin)</b>' : ''}</td>
       <td>${u.sub_status === 'active' ? '<span style="color:var(--color-accent);">Active</span>' : (u.sub_status || 'None')}</td>
       <td>${u.key_count}</td>
-      <td class="text-mono">$${parseFloat(u.wallet_balance || 0).toFixed(2)}</td>
+      <td class="text-mono">$${bal} <button class="btn btn-ghost btn-sm" style="font-size:0.7rem;padding:2px 6px;" onclick="window.CryptoBot.adminEditWallet(${u.id},'${escapeHtml(u.email)}',${bal})">Edit</button></td>
       <td>${escapeHtml(u.referral_code || '-')}</td>
       <td>${formatDate(u.created_at)}</td>
       <td>
@@ -762,7 +764,21 @@
           ? `<button class="btn btn-primary btn-sm" onclick="window.CryptoBot.adminAction('unblock',${u.id})">Unblock</button>`
           : `<button class="btn btn-danger btn-sm" onclick="window.CryptoBot.adminAction('block',${u.id})">Block</button>`}
       </td>
-    </tr>`).join('');
+    </tr>`;
+    }).join('');
+  }
+
+  async function adminEditWallet(userId, email, currentBal) {
+    const newAmount = prompt(`Edit wallet balance for ${email}\nCurrent: $${currentBal}\n\nEnter new balance (USD):`, currentBal);
+    if (newAmount === null) return;
+    const parsed = parseFloat(newAmount);
+    if (isNaN(parsed) || parsed < 0) return showToast('Invalid amount', 'error');
+    const reason = prompt('Reason for adjustment (optional):', '') || '';
+    try {
+      await api('PUT', `/api/admin/users/${userId}/wallet`, { amount: parsed, reason });
+      showToast(`Wallet updated to $${parsed.toFixed(2)}`, 'success');
+      loadAdmin();
+    } catch (err) { showToast(err.message, 'error'); }
   }
 
   function renderAdminSubs(subs) {
@@ -904,7 +920,7 @@
   window.CryptoBot = {
     toggleSettings, saveSettings, deleteKey, showToast,
     payWithWallet, payBankTransfer, payStripe, requestWithdraw,
-    adminAction, adminSub, adminWd, saveAdminSettings,
+    adminAction, adminSub, adminWd, saveAdminSettings, adminEditWallet,
     goToAuth, selectPlan, showLoginForm, onPlatformChange,
   };
 
