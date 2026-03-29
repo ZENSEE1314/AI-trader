@@ -574,8 +574,8 @@ async function executeForAllUsers(pick) {
           const info = await userClient.getExchangeInfo();
           const sinfo = info.symbols.find(s => s.symbol === symbol);
           if (!sinfo) { bLog.error(`User ${key.email}: ${symbol} not found on Binance`); return; }
-          const qtyPrec = sinfo.quantityPrecision || 6;
-          const pricePrec = sinfo.pricePrecision || 2;
+          const qtyPrec = sinfo.quantityPrecision ?? 6;
+          const pricePrec = sinfo.pricePrecision ?? 2;
           const fmtP = (p) => parseFloat(p.toFixed(pricePrec));
 
           // Position sizing: use full available margin with leverage
