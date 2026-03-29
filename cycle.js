@@ -955,7 +955,7 @@ async function main() {
 
     log(`Wallet=$${wallet.toFixed(4)} | Avail=$${avail.toFixed(4)} | uPnL=$${upnl.toFixed(4)} | Pos=${positions.length}`);
 
-    // ── HAS OPEN POSITION ──────────────────────────────────
+    // ── CHECK OPEN POSITIONS (report but don't block new trades) ──
     if (positions.length > 0) {
       await checkTrailingStop(client);
 
@@ -985,11 +985,9 @@ async function main() {
           `💰 Wallet: *$${wallet.toFixed(4)} USDT*`
         );
       }
-      log('=== Cycle End (holding) ===');
-      return;
     }
 
-    // ── NO POSITION → SCAN & TRADE ────────────────────────
+    // ── SCAN & TRADE (always check signal queue, even with open positions) ──
     if (avail < CONFIG.MIN_BALANCE) {
       log(`Balance too low: $${avail.toFixed(4)}`);
       await notify(`⚠️ *Bot — ${now()}*\nBalance too low: \`$${avail.toFixed(4)}\` USDT`);
