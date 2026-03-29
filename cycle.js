@@ -842,25 +842,37 @@ async function syncTradeStatus() {
         const apiKey = cryptoUtils.decrypt(key.api_key_enc, key.iv, key.auth_tag);
         const apiSecret = cryptoUtils.decrypt(key.api_secret_enc, key.secret_iv, key.secret_auth_tag);
 
-        let openSymbols = new Set();
+        let openSymbols = new Map(); // symbol → { amt, unrealizedPnl, entryPrice }
 
         if (key.platform === 'binance') {
           const userClient = new USDMClient({ api_key: apiKey, api_secret: apiSecret });
           const account = await userClient.getAccountInformation({ omitZeroBalances: false });
           for (const p of account.positions) {
-            if (parseFloat(p.positionAmt) !== 0) openSymbols.add(p.symbol);
+            if (parseFloat(p.positionAmt) !== 0) {
+              openSymbols.set(p.symbol, {
+                amt: parseFloat(p.positionAmt),
+                pnl: parseFloat(p.unrealizedProfit || 0),
+              });
+            }
           }
         } else if (key.platform === 'bitunix') {
           const userClient = new BitunixClient({ apiKey, apiSecret });
           const account = await userClient.getAccountInformation();
           for (const p of (account.positions || [])) {
-            openSymbols.add(p.symbol);
+            openSymbols.set(p.symbol, {
+              amt: parseFloat(p.positionAmt || 0),
+              pnl: parseFloat(p.unrealizedProfit || 0),
+            });
           }
         }
 
-        // Close trades in DB that are no longer open on exchange
+        bLog.system(`Sync: exchange has ${openSymbols.size} open positions, DB has ${trades.length} OPEN trades`);
+
         for (const trade of trades) {
-          if (!openSymbols.has(trade.symbol)) {
+          const exchangePos = openSymbols.get(trade.symbol);
+
+          if (!exchangePos) {
+            // Position closed on exchange — mark as WIN/LOSS
             const entryPrice = parseFloat(trade.entry_price);
             const ticker = key.platform === 'binance'
               ? await new USDMClient({ api_key: apiKey, api_secret: apiSecret })
@@ -871,13 +883,20 @@ async function syncTradeStatus() {
             const pnlPct = isLong
               ? (exitPrice - entryPrice) / entryPrice * 100
               : (entryPrice - exitPrice) / entryPrice * 100;
-            const pnlUsdt = parseFloat((pnlPct * parseFloat(trade.quantity) * entryPrice / 100).toFixed(4));
+            const pnlUsdt = parseFloat((pnlPct * parseFloat(trade.quantity || 1) * entryPrice / 100).toFixed(4));
 
             await db.query(
               `UPDATE trades SET status = $1, pnl_usdt = $2 WHERE id = $3`,
               [pnlPct > 0 ? 'WIN' : 'LOSS', pnlUsdt, trade.id]
             );
-            bLog.trade(`DB synced: ${trade.symbol} ${trade.direction} → ${pnlPct > 0 ? 'WIN' : 'LOSS'} PnL=$${pnlUsdt}`);
+            bLog.trade(`DB synced: ${trade.symbol} → ${pnlPct > 0 ? 'WIN' : 'LOSS'} PnL=$${pnlUsdt}`);
+          } else {
+            // Still open — update live unrealized PnL
+            const livePnl = parseFloat(exchangePos.pnl.toFixed(4));
+            await db.query(
+              `UPDATE trades SET pnl_usdt = $1 WHERE id = $2`,
+              [livePnl, trade.id]
+            );
           }
         }
       } catch (e) {
