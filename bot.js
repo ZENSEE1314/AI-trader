@@ -1795,6 +1795,11 @@ async function start() {
   log(`  Interval: ${INTERVAL_MIN} min | Top ${TOP_COINS} coins`);
   log('===================================');
 
+  // ── WEB SERVER (start first so Render detects port) ────────
+  const app = require('./server');
+  const PORT = process.env.PORT || 3000;
+  app.listen(PORT, () => log(`Web dashboard running on port ${PORT}`));
+
   await tgSend(
     `🤖 <b>Crypto Signal Bot Online — ${now()}</b>\n\n` +
     `📊 Signal scan: top <b>${TOP_COINS}</b> coins every <b>${INTERVAL_MIN} min</b>\n` +
@@ -1835,10 +1840,6 @@ async function start() {
       TRADE_INTERVAL_MIN * 60 * 1000);
   }, 60 * 1000); // wait 60s after startup before first trade cycle
 
-  // ── WEB SERVER ──────────────────────────────────────────────
-  const app = require('./server');
-  const PORT = process.env.PORT || 3000;
-  app.listen(PORT, () => log(`Web dashboard running on port ${PORT}`));
 }
 
 start().catch(err => {
