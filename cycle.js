@@ -601,9 +601,43 @@ async function executeForAllUsers(pick) {
           bLog.trade(`User ${key.email}: placing MARKET ${isLong ? 'BUY' : 'SELL'} ${symbol} qty=${qty}...`);
           await userClient.submitNewOrder({ symbol, side: isLong ? 'BUY' : 'SELL', type: 'MARKET', quantity: qty });
 
+          // Set SL and TP — critical for risk management
           const closeSide = isLong ? 'SELL' : 'BUY';
-          try { await userClient.submitNewOrder({ symbol, side: closeSide, type: 'STOP_MARKET', stopPrice: fmtP(slPrice), closePosition: 'true', workingType: 'MARK_PRICE', priceProtect: 'TRUE' }); } catch (e) { bLog.error(`SL order failed: ${e.message}`); }
-          try { await userClient.submitNewOrder({ symbol, side: closeSide, type: 'TAKE_PROFIT_MARKET', stopPrice: fmtP(tp3Price), closePosition: 'true', workingType: 'MARK_PRICE', priceProtect: 'TRUE' }); } catch (e) { bLog.error(`TP order failed: ${e.message}`); }
+          const slFormatted = fmtP(slPrice);
+          const tpFormatted = fmtP(tp3Price);
+          bLog.trade(`Setting SL=$${slFormatted} TP=$${tpFormatted} (pricePrec=${pricePrec})...`);
+
+          let slOk = false, tpOk = false;
+
+          try {
+            await userClient.submitNewOrder({
+              symbol, side: closeSide, type: 'STOP_MARKET',
+              stopPrice: slFormatted, closePosition: 'true',
+              workingType: 'MARK_PRICE', priceProtect: 'TRUE',
+            });
+            slOk = true;
+            bLog.trade(`✅ SL set at $${slFormatted}`);
+          } catch (e) {
+            bLog.error(`❌ SL order FAILED for ${symbol}: ${e.message}`);
+          }
+
+          try {
+            await userClient.submitNewOrder({
+              symbol, side: closeSide, type: 'TAKE_PROFIT_MARKET',
+              stopPrice: tpFormatted, closePosition: 'true',
+              workingType: 'MARK_PRICE', priceProtect: 'TRUE',
+            });
+            tpOk = true;
+            bLog.trade(`✅ TP set at $${tpFormatted}`);
+          } catch (e) {
+            bLog.error(`❌ TP order FAILED for ${symbol}: ${e.message}`);
+          }
+
+          if (!slOk || !tpOk) {
+            const missing = [!slOk ? 'SL' : '', !tpOk ? 'TP' : ''].filter(Boolean).join(' and ');
+            bLog.error(`⚠️ WARNING: ${symbol} position OPEN without ${missing} — MANUAL ACTION NEEDED`);
+            await notify(`*⚠️ WARNING: ${symbol} ${pick.direction}*\nPosition opened but *${missing} failed to set!*\nSet manually on Binance NOW.`);
+          }
 
           await db.query(
             `INSERT INTO trades (api_key_id, user_id, symbol, direction, entry_price, sl_price, tp_price, quantity, leverage, status)
@@ -654,13 +688,19 @@ async function executeForAllUsers(pick) {
           const pos = Array.isArray(positions) ? positions.find(p => p.symbol === symbol) : null;
 
           if (pos && pos.positionId) {
+            bLog.trade(`Setting Bitunix TP/SL: SL=$${parseFloat(slPrice.toFixed(8))} TP=$${parseFloat(tp3Price.toFixed(8))}...`);
             try {
               await userClient.placePositionTpSl({
                 symbol, positionId: pos.positionId,
                 tpPrice: parseFloat(tp3Price.toFixed(8)),
                 slPrice: parseFloat(slPrice.toFixed(8)),
               });
-            } catch (e) { bLog.error(`Bitunix TP/SL error: ${e.message}`); }
+              bLog.trade(`✅ Bitunix TP/SL set successfully`);
+            } catch (e) {
+              bLog.error(`❌ Bitunix TP/SL FAILED: ${e.message} — MANUAL ACTION NEEDED`);
+            }
+          } else {
+            bLog.error(`❌ Bitunix position not found after order — cannot set TP/SL`);
           }
 
           await db.query(
