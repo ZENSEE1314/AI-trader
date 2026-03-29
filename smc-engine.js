@@ -392,17 +392,11 @@ function hasVolumeSpike(klines, idx, avgPeriod = 20) {
 // ── Session Filter ───────────────────────────────────────────
 
 function isGoodTradingSession() {
+  // Crypto trades 24/7 — only avoid very low-volume dead zones
   const utcH = new Date().getUTCHours();
-  if (utcH >= 7 && utcH <= 10) return true;
-  if (utcH >= 12 && utcH <= 16) return true;
-  if (utcH >= 23 || utcH <= 2) return true;
-  return false;
-}
-
-function isAvoidTime() {
-  const min = new Date().getUTCMinutes();
-  if (min <= 1 || (min >= 14 && min <= 16) || (min >= 29 && min <= 31) || (min >= 44 && min <= 46)) return true;
-  return false;
+  // Dead zone: UTC 4-6 (late US night, before Asia opens)
+  if (utcH >= 4 && utcH <= 5) return false;
+  return true;
 }
 
 // ── 1-Minute Entry Confirmation ──────────────────────────────
@@ -452,23 +446,45 @@ async function analyzeSMC(ticker, sentimentScores = {}) {
       fetchKlines(symbol, '1m', 60),
     ]);
 
-    if (!klines15m || klines15m.length < 30 || !klines1h || klines1h.length < 20) return null;
-    if (!klines1m || klines1m.length < 10) return null;
+    if (!klines15m || klines15m.length < 30 || !klines1h || klines1h.length < 20) {
+      bLog.scan(`  ${symbol}: skip — insufficient kline data`);
+      return null;
+    }
+    if (!klines1m || klines1m.length < 10) {
+      bLog.scan(`  ${symbol}: skip — insufficient 1m data`);
+      return null;
+    }
 
     // ── Key Levels ──
     const levels = getKeyLevels(klines1d, klines1w);
-    if (!levels.pdh || !levels.pdl || !levels.op) return null;
+    if (!levels.pdh || !levels.pdl || !levels.op) {
+      bLog.scan(`  ${symbol}: skip — missing key levels`);
+      return null;
+    }
 
     // ── VWAP ──
     const todayKlines = klines1h.slice(-24);
     const vwap = calcVWAP(todayKlines);
-    if (!vwap) return null;
+    if (!vwap) {
+      bLog.scan(`  ${symbol}: skip — no VWAP`);
+      return null;
+    }
 
     // ── Trend Bias ──
+    // Use OP + VWAP agreement for strong bias, EMA as tiebreaker when they disagree
     const aboveOP = price > levels.op;
     const aboveVWAP = price > vwap;
-    const bias = (aboveOP && aboveVWAP) ? 'long' : (!aboveOP && !aboveVWAP) ? 'short' : 'neutral';
-    if (bias === 'neutral') return null;
+    let bias;
+    if (aboveOP && aboveVWAP) {
+      bias = 'long';
+    } else if (!aboveOP && !aboveVWAP) {
+      bias = 'short';
+    } else {
+      // OP and VWAP disagree — use 1h EMA as tiebreaker
+      const closes1hBias = klines1h.map(k => parseFloat(k[4]));
+      const ema21 = calcEMA(closes1hBias.slice(-25), 21);
+      bias = price > ema21 ? 'long' : 'short';
+    }
 
     // ── Indicators ──
     const closes15m = klines15m.map(k => parseFloat(k[4]));
@@ -477,8 +493,14 @@ async function analyzeSMC(ticker, sentimentScores = {}) {
     const closes1h = klines1h.map(k => parseFloat(k[4]));
     const ema7 = calcEMA(closes1h.slice(-20), 7);
 
-    if (bias === 'long' && rsi > 75) return null;
-    if (bias === 'short' && rsi < 25) return null;
+    if (bias === 'long' && rsi > 75) {
+      bLog.scan(`  ${symbol}: skip — RSI ${rsi.toFixed(0)} overbought for long`);
+      return null;
+    }
+    if (bias === 'short' && rsi < 25) {
+      bLog.scan(`  ${symbol}: skip — RSI ${rsi.toFixed(0)} oversold for short`);
+      return null;
+    }
 
     // ── Market Structure ──
     const struct15m = detectStructure(klines15m);
@@ -537,32 +559,29 @@ async function analyzeSMC(ticker, sentimentScores = {}) {
     const isLong = direction === 'LONG';
 
     // === Setup 1: Break and Retest ===
+    // Rejection candle is a bonus, not a gate — proximity to key level is what matters
     if (nearestLevel && nearestDist <= proximity) {
       for (const lv of keyLevelArr) {
         const dist = Math.abs(price - lv.val);
         if (dist > proximity) continue;
 
         if (isLong && price > lv.val && price - lv.val < proximity) {
-          if (rejection1m === 'bullish' || volSpike1m) {
-            setup = 'break_retest';
-            setupName = `Break & Retest ${lv.name}`;
-            sl = lv.val - atr * 0.5;
-            score = 8;
-            if (volSpike1m) score += 2;
-            if (rejection1m === 'bullish') score += 3;
-            break;
-          }
+          setup = 'break_retest';
+          setupName = `Break & Retest ${lv.name}`;
+          sl = lv.val - atr * 0.5;
+          score = 6;
+          if (volSpike1m) score += 2;
+          if (rejection1m === 'bullish') score += 3;
+          break;
         }
         if (!isLong && price < lv.val && lv.val - price < proximity) {
-          if (rejection1m === 'bearish' || volSpike1m) {
-            setup = 'break_retest';
-            setupName = `Break & Retest ${lv.name}`;
-            sl = lv.val + atr * 0.5;
-            score = 8;
-            if (volSpike1m) score += 2;
-            if (rejection1m === 'bearish') score += 3;
-            break;
-          }
+          setup = 'break_retest';
+          setupName = `Break & Retest ${lv.name}`;
+          sl = lv.val + atr * 0.5;
+          score = 6;
+          if (volSpike1m) score += 2;
+          if (rejection1m === 'bearish') score += 3;
+          break;
         }
       }
     }
@@ -575,24 +594,22 @@ async function analyzeSMC(ticker, sentimentScores = {}) {
         const recentLow = Math.min(...recent.map(k => parseFloat(k[3])));
 
         if (isLong && recentLow < lv.val && price > lv.val) {
-          if (rejection1m === 'bullish') {
-            setup = 'liquidity_grab';
-            setupName = `Liquidity Grab below ${lv.name}`;
-            sl = recentLow - atr * 0.3;
-            score = 9;
-            if (volSpike1m) score += 2;
-            break;
-          }
+          setup = 'liquidity_grab';
+          setupName = `Liquidity Grab below ${lv.name}`;
+          sl = recentLow - atr * 0.3;
+          score = 7;
+          if (rejection1m === 'bullish') score += 3;
+          if (volSpike1m) score += 2;
+          break;
         }
         if (!isLong && recentHigh > lv.val && price < lv.val) {
-          if (rejection1m === 'bearish') {
-            setup = 'liquidity_grab';
-            setupName = `Liquidity Grab above ${lv.name}`;
-            sl = recentHigh + atr * 0.3;
-            score = 9;
-            if (volSpike1m) score += 2;
-            break;
-          }
+          setup = 'liquidity_grab';
+          setupName = `Liquidity Grab above ${lv.name}`;
+          sl = recentHigh + atr * 0.3;
+          score = 7;
+          if (rejection1m === 'bearish') score += 3;
+          if (volSpike1m) score += 2;
+          break;
         }
       }
     }
@@ -601,45 +618,49 @@ async function analyzeSMC(ticker, sentimentScores = {}) {
     if (!setup) {
       const vwapDist = Math.abs(price - vwap);
       if (vwapDist < proximity) {
-        if (isLong && price >= vwap && rejection1m === 'bullish') {
+        if (isLong && price >= vwap) {
           setup = 'vwap_trend';
           setupName = `VWAP Trend Follow (Long)`;
           sl = vwap - atr * 0.5;
-          score = 7;
+          score = 5;
+          if (rejection1m === 'bullish') score += 3;
           if (volSpike1m) score += 2;
           if (ema7 && price > ema7) score += 1;
         }
-        if (!isLong && price <= vwap && rejection1m === 'bearish') {
+        if (!isLong && price <= vwap) {
           setup = 'vwap_trend';
           setupName = `VWAP Trend Follow (Short)`;
           sl = vwap + atr * 0.5;
-          score = 7;
+          score = 5;
+          if (rejection1m === 'bearish') score += 3;
           if (volSpike1m) score += 2;
           if (ema7 && price < ema7) score += 1;
         }
       }
     }
 
-    // === Setup 4 (NEW): Fair Value Gap Entry ===
+    // === Setup 4: Fair Value Gap Entry ===
     if (!setup && fvgs.length) {
       for (const fvg of fvgs) {
         const inGap = price >= fvg.bottom && price <= fvg.top;
         if (!inGap) continue;
 
-        if (isLong && fvg.type === 'bullish' && rejection1m === 'bullish') {
+        if (isLong && fvg.type === 'bullish') {
           setup = 'fvg_entry';
           setupName = `FVG Bullish Entry`;
           sl = fvg.bottom - atr * 0.3;
-          score = 8;
+          score = 6;
+          if (rejection1m === 'bullish') score += 3;
           if (volSpike1m) score += 2;
-          if (pd.zone === 'discount') score += 3; // FVG in discount = high probability
+          if (pd.zone === 'discount') score += 3;
           break;
         }
-        if (!isLong && fvg.type === 'bearish' && rejection1m === 'bearish') {
+        if (!isLong && fvg.type === 'bearish') {
           setup = 'fvg_entry';
           setupName = `FVG Bearish Entry`;
           sl = fvg.top + atr * 0.3;
-          score = 8;
+          score = 6;
+          if (rejection1m === 'bearish') score += 3;
           if (volSpike1m) score += 2;
           if (pd.zone === 'premium') score += 3;
           break;
@@ -647,32 +668,37 @@ async function analyzeSMC(ticker, sentimentScores = {}) {
       }
     }
 
-    // === Setup 5 (NEW): Breaker Block Entry ===
+    // === Setup 5: Breaker Block Entry ===
     if (!setup && breakerBlocks.length) {
       for (const bb of breakerBlocks) {
-        const nearBreaker = Math.abs(price - bb.level) / price < 0.005;
+        const nearBreaker = Math.abs(price - bb.level) / price < 0.008;
         if (!nearBreaker) continue;
 
-        if (isLong && bb.type === 'bullish_breaker' && rejection1m === 'bullish') {
+        if (isLong && bb.type === 'bullish_breaker') {
           setup = 'breaker_block';
           setupName = `Bullish Breaker Block`;
           sl = bb.zone.low - atr * 0.3;
-          score = 9;
+          score = 7;
+          if (rejection1m === 'bullish') score += 3;
           if (volSpike1m) score += 2;
           break;
         }
-        if (!isLong && bb.type === 'bearish_breaker' && rejection1m === 'bearish') {
+        if (!isLong && bb.type === 'bearish_breaker') {
           setup = 'breaker_block';
           setupName = `Bearish Breaker Block`;
           sl = bb.zone.high + atr * 0.3;
-          score = 9;
+          score = 7;
+          if (rejection1m === 'bearish') score += 3;
           if (volSpike1m) score += 2;
           break;
         }
       }
     }
 
-    if (!setup) return null;
+    if (!setup) {
+      bLog.scan(`  ${symbol}: ${direction} bias, no setup triggered (no proximity to levels/VWAP/FVG/breaker)`);
+      return null;
+    }
 
     // ── Bonus scoring from new SMC concepts ──
 
@@ -710,15 +736,22 @@ async function analyzeSMC(ticker, sentimentScores = {}) {
     score += sentMod;
 
     // ── Check minimum score ──
-    if (score < params.MIN_SCORE) return null;
+    if (score < (params.MIN_SCORE || 6)) {
+      bLog.scan(`  ${symbol}: ${setupName} score=${score.toFixed(1)} < min ${params.MIN_SCORE || 6} — rejected`);
+      return null;
+    }
 
     // ── TP/SL for 1% profit target ──
     const slDist = Math.abs(price - sl);
     const slPct = slDist / price;
 
-    // Target 1% profit — only take if SL allows >= 1:1 RR
+    // Target 1% profit — allow up to 1.5% SL (0.67:1 minimum RR, AI will learn tighter over time)
     const TP_TARGET = params.TP_PCT || 0.01;
-    if (slPct > TP_TARGET) return null; // SL too wide for 1% target — skip
+    const MAX_SL_PCT = 0.015;
+    if (slPct > MAX_SL_PCT) {
+      bLog.scan(`  ${symbol}: ${setupName} SL=${(slPct*100).toFixed(2)}% > max 1.5% — rejected`);
+      return null;
+    }
 
     const tp1 = isLong ? price * (1 + TP_TARGET) : price * (1 - TP_TARGET);
     const tp2 = isLong ? price * (1 + TP_TARGET * 1.5) : price * (1 - TP_TARGET * 1.5);
@@ -783,8 +816,8 @@ function checkDailyLimits() {
     dailyLosses = 0;
     tradeDate = today;
   }
-  if (dailyTrades >= 3) return 'max_trades'; // increased from 2 to 3 with AI
-  if (dailyLosses >= 2) return '2_losses';
+  if (dailyTrades >= 5) return 'max_trades';
+  if (dailyLosses >= 3) return '3_losses';
   return null;
 }
 
@@ -800,30 +833,24 @@ async function scanSMC(log = console.log) {
   const limitCheck = checkDailyLimits();
   if (limitCheck === 'max_trades') {
     log('SMC: Daily trade limit reached. Waiting for tomorrow.');
-    bLog.scan('Daily trade limit reached (3/3). Waiting for tomorrow.');
+    bLog.scan('Daily trade limit reached (5/5). Waiting for tomorrow.');
     return [];
   }
-  if (limitCheck === '2_losses') {
-    log('SMC: 2 consecutive losses today. Stopped trading.');
-    bLog.scan('2 consecutive losses — stopped for today.');
+  if (limitCheck === '3_losses') {
+    log('SMC: 3 consecutive losses today. Stopped trading.');
+    bLog.scan('3 consecutive losses — stopped for today.');
     return [];
   }
 
   if (!isGoodTradingSession()) {
     const sessionW = aiLearner.getSessionWeight();
     if (sessionW < 1.2) {
-      log('SMC: Outside active trading session.');
-      bLog.scan(`Outside active session (weight: ${sessionW.toFixed(2)}). Waiting for London/NY/Asia overlap.`);
+      log('SMC: Dead zone (UTC 4-5). Low liquidity — skipping.');
+      bLog.scan(`Dead zone hours. Waiting for volume to return.`);
       return [];
     }
-    log(`SMC: Off-hours but AI session weight ${sessionW.toFixed(2)} is high — scanning anyway.`);
-    bLog.ai(`AI override: session weight ${sessionW.toFixed(2)} > 1.2 — scanning in off-hours`);
-  }
-
-  if (isAvoidTime()) {
-    log('SMC: Avoiding round-number entry time.');
-    bLog.scan('Avoiding round-number entry time (:00/:15/:30/:45)');
-    return [];
+    log(`SMC: Dead zone but AI session weight ${sessionW.toFixed(2)} is high — scanning anyway.`);
+    bLog.ai(`AI override: session weight ${sessionW.toFixed(2)} > 1.2 — scanning in dead zone`);
   }
 
   // Fetch sentiment scores (cached for 15 min)
@@ -850,13 +877,13 @@ async function scanSMC(log = console.log) {
   // Top coins by volume + trending boost
   const top30 = tickers
     .filter(t => t.symbol.endsWith('USDT') && !t.symbol.includes('_'))
-    .filter(t => parseFloat(t.quoteVolume) > 100e6)
+    .filter(t => parseFloat(t.quoteVolume) > 50e6)
     .map(t => {
       const sentBoost = sentimentScores[t.symbol]?.trendScore || 0;
       return { ...t, sortScore: parseFloat(t.quoteVolume) + sentBoost * 1e9 };
     })
     .sort((a, b) => b.sortScore - a.sortScore)
-    .slice(0, 30);
+    .slice(0, 50);
 
   bLog.scan(`Analyzing ${top30.length} coins by volume + trend boost...`);
   const params = aiLearner.getOptimalParams();
@@ -872,7 +899,7 @@ async function scanSMC(log = console.log) {
     }
     const r = await analyzeSMC(ticker, sentimentScores);
     analyzed++;
-    if (r && r.score >= (params.MIN_SCORE || 8)) {
+    if (r && r.score >= (params.MIN_SCORE || 6)) {
       results.push(r);
       bLog.scan(`SIGNAL: ${r.symbol} ${r.direction} | score=${r.score} setup=${r.setupName} | zone=${r.premiumDiscount} RSI=${r.rsi} | AI=${r.aiModifier} sent=${r.sentimentMod}`);
     }

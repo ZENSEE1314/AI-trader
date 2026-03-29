@@ -33,7 +33,7 @@ const CONFIG = {
   WALLET_RISK_PCT: 0.03,
   MIN_BALANCE:     5,
   MIN_VOL_M:       100,
-  MIN_SCORE:       8,
+  MIN_SCORE:       6,
 
   RSI_MAX:         68,
   RSI_MIN:         32,
