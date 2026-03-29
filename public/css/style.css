@@ -1074,6 +1074,13 @@ input[type="range"]::-moz-range-thumb {
   }
 }
 
+/* ── All MCT logos: clip to circle, hide black background ─── */
+img[src*="logo"] {
+  border-radius: 50%;
+  overflow: hidden;
+  object-fit: cover;
+}
+
 /* ============================================================
    Landing Page — Premium Fintech Design
    Principle: Material Elevation with editorial type hierarchy.
@@ -1188,6 +1195,8 @@ input[type="range"]::-moz-range-thumb {
 .landing-nav-brand img {
   border-radius: 50%;
   border: 2px solid var(--gold);
+  overflow: hidden;
+  object-fit: cover;
 }
 
 .landing-nav-brand span {
@@ -1410,6 +1419,8 @@ input[type="range"]::-moz-range-thumb {
   position: relative;
   z-index: 2;
   border: 3px solid rgba(212, 175, 55, 0.3);
+  overflow: hidden;
+  object-fit: cover;
 }
 
 @keyframes logo-glow {
