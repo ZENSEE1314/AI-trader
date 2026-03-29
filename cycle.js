@@ -191,24 +191,42 @@ async function openTrade(client, pick, wallet) {
 
   // Market entry
   const order = await client.submitNewOrder({ symbol: sym, side: entrySide, type: 'MARKET', quantity: qty });
+  await sleep(1500);
 
-  // TP3 safety net
-  try {
-    await client.submitNewOrder({
-      symbol: sym, side: closeSide, type: 'TAKE_PROFIT_MARKET',
-      stopPrice: tp3, closePosition: 'true',
-      workingType: 'MARK_PRICE', priceProtect: 'TRUE',
-    });
-  } catch (e) { log(`TP3 warn: ${e.message}`); }
+  // SL + TP — try closePosition first, fallback to quantity
+  let slOk = false, tpOk = false;
+  for (const method of ['closePosition', 'quantity']) {
+    if (slOk && tpOk) break;
+    const params = method === 'closePosition'
+      ? { closePosition: 'true' }
+      : { quantity: qty, reduceOnly: 'true' };
 
-  // SL
-  try {
-    await client.submitNewOrder({
-      symbol: sym, side: closeSide, type: 'STOP_MARKET',
-      stopPrice: sl, closePosition: 'true',
-      workingType: 'MARK_PRICE', priceProtect: 'TRUE',
-    });
-  } catch (e) { log(`SL warn: ${e.message}`); }
+    if (!slOk) {
+      try {
+        await client.submitNewOrder({
+          symbol: sym, side: closeSide, type: 'STOP_MARKET',
+          stopPrice: sl, workingType: 'MARK_PRICE', ...params,
+        });
+        slOk = true;
+        bLog.trade(`✅ Owner SL set at $${fmtPrice(sl)} (${method})`);
+      } catch (e) { bLog.error(`Owner SL ${method}: ${e.message}`); }
+    }
+    if (!tpOk) {
+      try {
+        await client.submitNewOrder({
+          symbol: sym, side: closeSide, type: 'TAKE_PROFIT_MARKET',
+          stopPrice: tp3, workingType: 'MARK_PRICE', ...params,
+        });
+        tpOk = true;
+        bLog.trade(`✅ Owner TP set at $${fmtPrice(tp3)} (${method})`);
+      } catch (e) { bLog.error(`Owner TP ${method}: ${e.message}`); }
+    }
+  }
+  if (!slOk || !tpOk) {
+    const missing = [!slOk ? 'SL' : '', !tpOk ? 'TP' : ''].filter(Boolean).join('+');
+    bLog.error(`⚠️ Owner ${sym} missing ${missing} — set manually!`);
+    await notify(`*⚠️ ${sym} ${direction}* opened without *${missing}*! Set manually NOW.`);
+  }
 
   tradeState.set(sym, {
     entry: price, tp1, tp2, tp3, sl, qty, isLong,
@@ -601,41 +619,57 @@ async function executeForAllUsers(pick) {
           bLog.trade(`User ${key.email}: placing MARKET ${isLong ? 'BUY' : 'SELL'} ${symbol} qty=${qty}...`);
           await userClient.submitNewOrder({ symbol, side: isLong ? 'BUY' : 'SELL', type: 'MARKET', quantity: qty });
 
+          // Wait for position to register before setting SL/TP
+          await sleep(1500);
+
           // Set SL and TP — critical for risk management
           const closeSide = isLong ? 'SELL' : 'BUY';
-          const slFormatted = fmtP(slPrice);
-          const tpFormatted = fmtP(tp3Price);
-          bLog.trade(`Setting SL=$${slFormatted} TP=$${tpFormatted} (pricePrec=${pricePrec})...`);
+          const slFmt = fmtP(slPrice);
+          const tpFmt = fmtP(tp3Price);
+          bLog.trade(`Setting SL=$${slFmt} TP=$${tpFmt} for ${symbol} (pricePrec=${pricePrec})...`);
 
           let slOk = false, tpOk = false;
 
-          try {
-            await userClient.submitNewOrder({
-              symbol, side: closeSide, type: 'STOP_MARKET',
-              stopPrice: slFormatted, closePosition: 'true',
-              workingType: 'MARK_PRICE', priceProtect: 'TRUE',
-            });
-            slOk = true;
-            bLog.trade(`✅ SL set at $${slFormatted}`);
-          } catch (e) {
-            bLog.error(`❌ SL order FAILED for ${symbol}: ${e.message}`);
-          }
+          // Try closePosition approach first, fallback to quantity-based
+          for (const attempt of ['closePosition', 'quantity']) {
+            if (slOk && tpOk) break;
 
-          try {
-            await userClient.submitNewOrder({
-              symbol, side: closeSide, type: 'TAKE_PROFIT_MARKET',
-              stopPrice: tpFormatted, closePosition: 'true',
-              workingType: 'MARK_PRICE', priceProtect: 'TRUE',
-            });
-            tpOk = true;
-            bLog.trade(`✅ TP set at $${tpFormatted}`);
-          } catch (e) {
-            bLog.error(`❌ TP order FAILED for ${symbol}: ${e.message}`);
+            const orderParams = attempt === 'closePosition'
+              ? { closePosition: 'true' }
+              : { quantity: qty, reduceOnly: 'true' };
+
+            if (!slOk) {
+              try {
+                await userClient.submitNewOrder({
+                  symbol, side: closeSide, type: 'STOP_MARKET',
+                  stopPrice: slFmt, workingType: 'MARK_PRICE',
+                  ...orderParams,
+                });
+                slOk = true;
+                bLog.trade(`✅ SL set at $${slFmt} (${attempt})`);
+              } catch (e) {
+                bLog.error(`SL ${attempt} failed: ${e.message}`);
+              }
+            }
+
+            if (!tpOk) {
+              try {
+                await userClient.submitNewOrder({
+                  symbol, side: closeSide, type: 'TAKE_PROFIT_MARKET',
+                  stopPrice: tpFmt, workingType: 'MARK_PRICE',
+                  ...orderParams,
+                });
+                tpOk = true;
+                bLog.trade(`✅ TP set at $${tpFmt} (${attempt})`);
+              } catch (e) {
+                bLog.error(`TP ${attempt} failed: ${e.message}`);
+              }
+            }
           }
 
           if (!slOk || !tpOk) {
             const missing = [!slOk ? 'SL' : '', !tpOk ? 'TP' : ''].filter(Boolean).join(' and ');
-            bLog.error(`⚠️ WARNING: ${symbol} position OPEN without ${missing} — MANUAL ACTION NEEDED`);
+            bLog.error(`⚠️ ${symbol} OPEN without ${missing} — SET MANUALLY!`);
             await notify(`*⚠️ WARNING: ${symbol} ${pick.direction}*\nPosition opened but *${missing} failed to set!*\nSet manually on Binance NOW.`);
           }
 
