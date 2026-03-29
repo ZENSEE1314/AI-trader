@@ -961,12 +961,14 @@ async function main() {
     if (signalQueue.length > 0) {
       const sig = signalQueue.shift();
       log(`Trading queued signal: ${sig.symbol} ${sig.direction}`);
-      // Get current price and build a minimal pick object from the signal
+      // Get current price from public API (no auth needed)
       try {
-        const ticker = await client.getSymbolPriceTicker({ symbol: sig.symbol });
-        const price  = parseFloat(ticker.price);
+        const priceRes = await fetch(`https://fapi.binance.com/fapi/v1/ticker/price?symbol=${sig.symbol}`, { timeout: 10000 });
+        const priceData = await priceRes.json();
+        const price = parseFloat(priceData.price);
+        if (!price || isNaN(price)) throw new Error(`Invalid price for ${sig.symbol}`);
+
         const leverage = CONFIG.HIGH_LEV_COINS.includes(sig.symbol) ? CONFIG.LEVERAGE_HIGH : CONFIG.LEVERAGE_LOW;
-        // SL from signal's slPrice, or fallback 0.5% from price
         const slPrice = sig.slPrice || (sig.direction === 'LONG' ? price * 0.995 : price * 1.005);
         pick = {
           sym: sig.symbol, price, leverage,
@@ -988,7 +990,7 @@ async function main() {
           pdl: null, pdh: null, sessionOpen: null,
         };
       } catch (e) {
-        log(`Queued signal error ${sig.symbol}: ${e.message} — falling back to scan`);
+        log(`Queued signal error ${sig.symbol}: ${e.message}`);
       }
     }
 
