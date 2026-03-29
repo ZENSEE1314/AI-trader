@@ -370,7 +370,7 @@
       const isEnabled = k.enabled !== false;
       const leverage = k.leverage || 10;
       const riskPct = k.risk_pct != null ? (parseFloat(k.risk_pct) * 100).toFixed(0) : '5';
-      const maxLoss = k.max_loss_usdt || 50;
+      const maxLoss = k.max_loss_usdt || 30;
       const maxPos = k.max_positions || 1;
 
       return `<div class="key-card" data-key-id="${k.id}">
@@ -411,9 +411,14 @@
                 oninput="document.getElementById('risk-val-${k.id}').textContent=this.value+'%'"
                 aria-label="Risk percentage">
             </div>
-            <div class="form-group" style="margin-bottom:0">
-              <label class="form-label" for="maxloss-${k.id}">Max Loss (USDT)</label>
-              <input class="form-input text-mono" type="number" id="maxloss-${k.id}" min="1" max="100000" step="1" value="${maxLoss}">
+            <div class="slider-group">
+              <div class="slider-header">
+                <label class="form-label" for="maxloss-${k.id}">Max Loss per Trade</label>
+                <span class="slider-value" id="maxloss-val-${k.id}">${maxLoss}%</span>
+              </div>
+              <input type="range" id="maxloss-${k.id}" min="1" max="100" value="${maxLoss}"
+                oninput="document.getElementById('maxloss-val-${k.id}').textContent=this.value+'%'"
+                aria-label="Max loss percentage">
             </div>
             <div class="slider-group">
               <div class="slider-header">
@@ -456,7 +461,7 @@
   async function saveSettings(keyId) {
     const leverage = parseInt($(`#leverage-${keyId}`).value);
     const riskPct = parseInt($(`#risk-${keyId}`).value) / 100;
-    const maxLossUsdt = parseFloat($(`#maxloss-${keyId}`).value);
+    const maxLossUsdt = parseInt($(`#maxloss-${keyId}`).value);
     const maxPositions = parseInt($(`#maxpos-${keyId}`).value);
     const enabled = $(`#enabled-${keyId}`).checked;
 

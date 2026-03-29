@@ -1222,9 +1222,13 @@ async function executeForAllUsers(pick) {
           try { await userClient.changeLeverage(sym, userLev); } catch (_) {}
 
           // Calculate qty from risk
+          // max_loss_usdt is now a % of trade size (1-100)
+          const maxLossPct = (parseFloat(key.max_loss_usdt) || 30) / 100;
+          const riskUsdt = wallet * userRiskPct;
           const slDist = Math.abs(price - slPrice) / price;
-          const riskUsdt = Math.min(wallet * userRiskPct, parseFloat(key.max_loss_usdt) || 999);
-          const qty = (riskUsdt / (slDist * price)).toFixed(6);
+          // Cap SL distance to max loss %
+          const effectiveSlDist = Math.min(slDist, maxLossPct);
+          const qty = (riskUsdt / (effectiveSlDist * price)).toFixed(6);
 
           const order = await userClient.placeOrder({
             symbol: sym,
