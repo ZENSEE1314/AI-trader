@@ -1074,6 +1074,12 @@ input[type="range"]::-moz-range-thumb {
   }
 }
 
+/* ── Trade status badges ─── */
+.badge-error { color: #ff4757; cursor: help; }
+.badge-open { color: var(--color-accent); }
+.badge-tp { color: #2ed573; }
+.badge-sl { color: #ff4757; }
+
 /* ── Coin chips + autocomplete dropdown ─── */
 .coin-chips {
   display: flex;

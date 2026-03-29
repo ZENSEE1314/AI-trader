@@ -81,6 +81,17 @@ router.put('/users/:id/wallet', async (req, res) => {
   }
 });
 
+// Clear all ERROR trades
+router.delete('/trades/errors', async (req, res) => {
+  try {
+    const result = await query('DELETE FROM trades WHERE status = $1', ['ERROR']);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Clear errors error:', err.message);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // List pending subscriptions (bank transfer proofs to approve)
 router.get('/subscriptions', async (req, res) => {
   try {

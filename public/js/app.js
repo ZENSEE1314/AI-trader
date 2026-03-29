@@ -299,6 +299,13 @@
     els.tradesEmpty.classList.add('hidden');
     els.tradesTbody.closest('.table-wrapper').classList.remove('hidden');
 
+    // Show clear errors button for admin if there are errors
+    const hasErrors = trades.some(t => t.status === 'ERROR');
+    const clearBtn = document.getElementById('btn-clear-errors');
+    if (clearBtn) {
+      clearBtn.classList.toggle('hidden', !hasErrors || !state.user?.is_admin);
+    }
+
     els.tradesTbody.innerHTML = trades.map((t) => {
       const pnl = parseFloat(t.pnl_usdt) || 0;
       const direction = (t.direction || t.side || '').toUpperCase();
@@ -306,7 +313,11 @@
       const dirBadge = isLong ? 'badge-long' : 'badge-short';
       const dirLabel = isLong ? 'Long' : 'Short';
 
-      return `<tr>
+      const isError = t.status === 'ERROR';
+      const errorTip = isError && t.error_msg ? ` title="${escapeHtml(t.error_msg)}"` : '';
+      const statusClass = isError ? 'badge-error' : (t.status === 'OPEN' ? 'badge-open' : (t.status === 'TP' ? 'badge-tp' : (t.status === 'SL' ? 'badge-sl' : '')));
+
+      return `<tr${isError ? ' style="opacity:0.6;"' : ''}>
         <td>${formatDate(t.created_at)}</td>
         <td><strong>${escapeHtml(t.symbol || '--')}</strong></td>
         <td><span class="badge ${dirBadge}">${dirLabel}</span></td>
@@ -314,7 +325,7 @@
         <td class="text-mono text-danger">${t.sl_price != null ? parseFloat(t.sl_price).toFixed(4) : '--'}</td>
         <td class="text-mono text-success">${t.tp_price != null ? parseFloat(t.tp_price).toFixed(4) : '--'}</td>
         <td class="pnl-value ${pnl >= 0 ? 'text-success' : 'text-danger'}">${formatPnl(pnl)}</td>
-        <td><span class="badge-status">${escapeHtml(t.status || '--')}</span></td>
+        <td><span class="badge-status ${statusClass}"${errorTip}>${escapeHtml(t.status || '--')}${isError ? ' ⚠️' : ''}</span></td>
         <td><span class="badge-platform">${escapeHtml(t.platform || '--')}</span></td>
       </tr>`;
     }).join('');
@@ -923,6 +934,16 @@
       .catch(err => showToast(err.message, 'error'));
   }
 
+  // ----- Clear error trades (admin only) -----
+  async function clearErrors() {
+    if (!confirm('Delete all ERROR trades from history?')) return;
+    try {
+      await api('DELETE', '/api/admin/trades/errors');
+      showToast('Error trades cleared', 'success');
+      loadDashboard();
+    } catch (err) { showToast(err.message, 'error'); }
+  }
+
   // ----- Coin list + autocomplete chips -----
   let coinList = [];
   let coinListLoading = false;
@@ -1021,7 +1042,7 @@
   window.CryptoBot = {
     toggleSettings, saveSettings, deleteKey, showToast,
     payWithWallet, payBankTransfer, payStripe, requestWithdraw,
-    adminAction, adminSub, adminWd, saveAdminSettings, adminEditWallet,
+    adminAction, adminSub, adminWd, saveAdminSettings, adminEditWallet, clearErrors,
     goToAuth, selectPlan, showLoginForm, onPlatformChange,
     searchCoins, addCoin, removeCoin,
   };

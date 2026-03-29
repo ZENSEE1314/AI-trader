@@ -620,7 +620,10 @@
         </div>
 
         <!-- Trade History -->
-        <h2 class="section-heading">Trade History</h2>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--space-3);">
+          <h2 class="section-heading" style="margin-bottom:0;">Trade History</h2>
+          <button id="btn-clear-errors" class="btn btn-danger btn-sm hidden" onclick="window.CryptoBot.clearErrors()">Clear Errors</button>
+        </div>
         <div id="trades-wrapper">
           <div class="table-wrapper">
             <table class="data-table">
