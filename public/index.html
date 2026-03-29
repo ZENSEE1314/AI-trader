@@ -64,6 +64,10 @@
           <label class="form-label" for="signup-password">Password</label>
           <input class="form-input" type="password" id="signup-password" placeholder="Min. 6 characters" required autocomplete="new-password" minlength="6">
         </div>
+        <div class="form-group">
+          <label class="form-label" for="signup-referral">Referral Code (optional)</label>
+          <input class="form-input text-mono" type="text" id="signup-referral" placeholder="e.g. CB1A2B3C4D" maxlength="20" autocomplete="off">
+        </div>
         <div id="signup-error" class="form-error" role="alert"></div>
         <button type="submit" class="btn btn-primary" style="width:100%; margin-top:var(--space-4);">
           Create Account
@@ -92,6 +96,9 @@
       <nav class="nav-tabs" role="tablist" aria-label="Main navigation">
         <button class="nav-tab active" role="tab" aria-selected="true" data-tab="dashboard">Dashboard</button>
         <button class="nav-tab" role="tab" aria-selected="false" data-tab="keys">API Keys</button>
+        <button class="nav-tab" role="tab" aria-selected="false" data-tab="subscription">Subscription</button>
+        <button class="nav-tab" role="tab" aria-selected="false" data-tab="wallet">Wallet</button>
+        <button class="nav-tab hidden" role="tab" aria-selected="false" data-tab="admin" id="admin-tab">Admin</button>
       </nav>
 
       <!-- ====================================================
@@ -175,6 +182,135 @@
           <div class="empty-state-icon" aria-hidden="true">🔑</div>
           <div class="empty-state-text">No API keys configured</div>
           <div class="empty-state-sub">Add your exchange API key to start automated trading.</div>
+        </div>
+      </section>
+
+      <!-- ====================================================
+           Subscription Tab
+           ==================================================== -->
+      <section id="tab-subscription" class="hidden" role="tabpanel" aria-label="Subscription">
+        <h2 class="section-heading">Subscription</h2>
+        <div id="sub-status-card" class="summary-card" style="margin-bottom:var(--space-5);padding:var(--space-5);">
+          <div id="sub-status-text">Loading...</div>
+        </div>
+
+        <div id="sub-pay-section" class="hidden">
+          <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Payment Methods</h3>
+          <div class="summary-grid" style="margin-bottom:var(--space-5);">
+
+            <div class="summary-card" style="padding:var(--space-4);">
+              <span class="summary-card-label">Wallet Balance</span>
+              <span class="summary-card-value text-mono" id="sub-wallet-bal">$0.00</span>
+              <button class="btn btn-primary btn-sm" style="margin-top:var(--space-3);width:100%;" onclick="window.CryptoBot.payWithWallet()">Pay with Wallet</button>
+            </div>
+
+            <div class="summary-card" style="padding:var(--space-4);">
+              <span class="summary-card-label">Bank Transfer</span>
+              <div id="sub-bank-info" class="text-mono" style="font-size:0.8rem;margin:var(--space-2) 0;color:var(--color-text-muted);"></div>
+              <div class="form-group" style="margin-bottom:var(--space-2);">
+                <input class="form-input" type="url" id="sub-proof-url" placeholder="Paste payment proof link/screenshot URL">
+              </div>
+              <button class="btn btn-primary btn-sm" style="width:100%;" onclick="window.CryptoBot.payBankTransfer()">Submit Proof</button>
+            </div>
+
+            <div class="summary-card" style="padding:var(--space-4);">
+              <span class="summary-card-label">Credit / Debit Card</span>
+              <span class="summary-card-value" style="font-size:1rem;">Stripe</span>
+              <button class="btn btn-primary btn-sm" style="margin-top:var(--space-3);width:100%;" onclick="window.CryptoBot.payStripe()">Pay with Card</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ====================================================
+           Wallet Tab
+           ==================================================== -->
+      <section id="tab-wallet" class="hidden" role="tabpanel" aria-label="Wallet">
+        <h2 class="section-heading">Wallet & Referrals</h2>
+        <div class="summary-grid" style="margin-bottom:var(--space-5);">
+          <div class="summary-card">
+            <span class="summary-card-label">Balance</span>
+            <span id="wallet-balance" class="summary-card-value text-mono">$0.00</span>
+          </div>
+          <div class="summary-card">
+            <span class="summary-card-label">Total Commission</span>
+            <span id="wallet-commission" class="summary-card-value text-mono">$0.00</span>
+          </div>
+          <div class="summary-card">
+            <span class="summary-card-label">Referrals</span>
+            <span id="wallet-referrals" class="summary-card-value text-mono">0</span>
+          </div>
+        </div>
+
+        <div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-4);margin-bottom:var(--space-5);">
+          <h3 style="margin-bottom:var(--space-2);color:var(--color-text);">Your Referral Link</h3>
+          <div style="display:flex;gap:var(--space-2);align-items:center;">
+            <input class="form-input text-mono" id="referral-link" readonly style="flex:1;font-size:0.85rem;">
+            <button class="btn btn-ghost btn-sm" onclick="navigator.clipboard.writeText(document.getElementById('referral-link').value);window.CryptoBot.showToast('Copied!','success')">Copy</button>
+          </div>
+          <div style="color:var(--color-text-muted);font-size:0.8rem;margin-top:var(--space-2);">Share this link. You earn 20% commission on every friend's subscription.</div>
+        </div>
+
+        <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Withdraw</h3>
+        <div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-4);margin-bottom:var(--space-5);">
+          <div class="settings-grid">
+            <div class="form-group" style="margin-bottom:0">
+              <label class="form-label" for="wd-amount">Amount (USD)</label>
+              <input class="form-input text-mono" type="number" id="wd-amount" min="1" step="0.01" placeholder="0.00">
+            </div>
+            <div class="form-group" style="margin-bottom:0">
+              <label class="form-label" for="wd-bank">Bank Name</label>
+              <input class="form-input" type="text" id="wd-bank" placeholder="e.g. DBS, OCBC">
+            </div>
+            <div class="form-group" style="margin-bottom:0">
+              <label class="form-label" for="wd-accno">Account Number</label>
+              <input class="form-input text-mono" type="text" id="wd-accno" placeholder="xxx-xxxxxxx-x">
+            </div>
+            <div class="form-group" style="margin-bottom:0">
+              <label class="form-label" for="wd-accname">Account Name</label>
+              <input class="form-input" type="text" id="wd-accname" placeholder="Full name on account">
+            </div>
+          </div>
+          <button class="btn btn-primary btn-sm" style="margin-top:var(--space-3);" onclick="window.CryptoBot.requestWithdraw()">Request Withdrawal</button>
+        </div>
+
+        <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Transaction History</h3>
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead><tr><th>Date</th><th>Type</th><th>Amount</th><th>Description</th></tr></thead>
+            <tbody id="wallet-txns-tbody"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- ====================================================
+           Admin Tab (hidden unless admin)
+           ==================================================== -->
+      <section id="tab-admin" class="hidden" role="tabpanel" aria-label="Admin">
+        <h2 class="section-heading">Admin Panel</h2>
+
+        <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Users</h3>
+        <div class="table-wrap" style="margin-bottom:var(--space-5);">
+          <table class="data-table">
+            <thead><tr><th>Email</th><th>Sub</th><th>Keys</th><th>Wallet</th><th>Referral</th><th>Joined</th><th>Action</th></tr></thead>
+            <tbody id="admin-users-tbody"></tbody>
+          </table>
+        </div>
+
+        <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Pending Payments</h3>
+        <div class="table-wrap" style="margin-bottom:var(--space-5);">
+          <table class="data-table">
+            <thead><tr><th>User</th><th>Amount</th><th>Method</th><th>Proof</th><th>Date</th><th>Action</th></tr></thead>
+            <tbody id="admin-subs-tbody"></tbody>
+          </table>
+        </div>
+
+        <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Pending Withdrawals</h3>
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead><tr><th>User</th><th>Amount</th><th>Bank</th><th>Acc No.</th><th>Name</th><th>Date</th><th>Action</th></tr></thead>
+            <tbody id="admin-wd-tbody"></tbody>
+          </table>
         </div>
       </section>
     </main>

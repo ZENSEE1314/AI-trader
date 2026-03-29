@@ -12,6 +12,12 @@ app.use(express.static(path.join(__dirname, 'public')));
 app.use('/api/auth', require('./routes/auth'));
 app.use('/api/keys', require('./routes/api-keys'));
 app.use('/api/dashboard', require('./routes/dashboard'));
+app.use('/api/admin', require('./routes/admin'));
+app.use('/api/subscription', require('./routes/subscription'));
+app.use('/api/wallet', require('./routes/wallet'));
+
+// Stripe webhook needs raw body — mount before json parser catches it
+// (already handled inside subscription.js with express.raw)
 
 // Health check for Render
 app.get('/health', (req, res) => res.json({ status: 'ok' }));

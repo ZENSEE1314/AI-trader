@@ -133,14 +133,17 @@
       btn.classList.toggle('active', isActive);
       btn.setAttribute('aria-selected', isActive);
     });
-    els.tabDashboard.classList.toggle('hidden', tab !== 'dashboard');
-    els.tabKeys.classList.toggle('hidden', tab !== 'keys');
+    const allTabs = ['dashboard', 'keys', 'subscription', 'wallet', 'admin'];
+    allTabs.forEach(t => {
+      const el = $(`#tab-${t}`);
+      if (el) el.classList.toggle('hidden', t !== tab);
+    });
 
-    if (tab === 'dashboard') {
-      loadDashboard();
-    } else {
-      loadKeys();
-    }
+    if (tab === 'dashboard') loadDashboard();
+    else if (tab === 'keys') loadKeys();
+    else if (tab === 'subscription') loadSubscription();
+    else if (tab === 'wallet') loadWallet();
+    else if (tab === 'admin') loadAdmin();
   }
 
   // ----- Auth -----
@@ -150,6 +153,9 @@
       const data = await api('GET', '/api/auth/me');
       state.user = data;
       els.userEmail.textContent = data.email;
+      // Show admin tab if admin
+      const adminTab = $('#admin-tab');
+      if (adminTab) adminTab.classList.toggle('hidden', !data.is_admin);
       showSection('app');
       switchTab('dashboard');
     } catch {
@@ -204,8 +210,10 @@
       hideError(els.signupError);
       const email = $('#signup-email').value.trim();
       const password = $('#signup-password').value;
+      const refInput = $('#signup-referral');
+      const referral_code = refInput ? refInput.value.trim() : '';
       try {
-        await api('POST', '/api/auth/signup', { email, password });
+        await api('POST', '/api/auth/signup', { email, password, referral_code });
         await checkSession();
         showToast('Account created!', 'success');
       } catch (err) {
@@ -532,8 +540,198 @@
     });
   }
 
+  // ----- Subscription -----
+
+  async function loadSubscription() {
+    try {
+      const data = await api('GET', '/api/subscription/status');
+      const el = $('#sub-status-text');
+      const paySection = $('#sub-pay-section');
+
+      if (data.active) {
+        const exp = formatDate(data.subscription.expires_at);
+        el.innerHTML = `<span style="color:var(--color-accent);">&#10003; Active Subscription</span><br>` +
+          `<span style="color:var(--color-text-muted);font-size:0.9rem;">Expires: ${exp} &middot; $${data.price}/month</span>`;
+        paySection.classList.add('hidden');
+      } else {
+        el.innerHTML = `<span style="color:var(--color-danger);">&#10007; No Active Subscription</span><br>` +
+          `<span style="color:var(--color-text-muted);font-size:0.9rem;">Subscribe for $${data.price}/month to enable auto-trading</span>`;
+        paySection.classList.remove('hidden');
+        $('#sub-wallet-bal').textContent = `$${data.wallet_balance.toFixed(2)}`;
+        const bankInfo = data.bank_details;
+        $('#sub-bank-info').textContent = `${bankInfo.bank} | ${bankInfo.account} | ${bankInfo.name}`;
+      }
+    } catch (err) {
+      showToast('Failed to load subscription.', 'error');
+    }
+  }
+
+  async function payWithWallet() {
+    try {
+      const data = await api('POST', '/api/subscription/pay-wallet');
+      showToast(data.message, 'success');
+      loadSubscription();
+    } catch (err) { showToast(err.message, 'error'); }
+  }
+
+  async function payBankTransfer() {
+    const proof = $('#sub-proof-url').value.trim();
+    if (!proof) return showToast('Paste proof URL first', 'error');
+    try {
+      const data = await api('POST', '/api/subscription/bank-transfer', { proof_url: proof });
+      showToast(data.message, 'success');
+      $('#sub-proof-url').value = '';
+    } catch (err) { showToast(err.message, 'error'); }
+  }
+
+  async function payStripe() {
+    try {
+      const data = await api('POST', '/api/subscription/stripe-checkout');
+      if (data.url) window.location.href = data.url;
+    } catch (err) { showToast(err.message, 'error'); }
+  }
+
+  // ----- Wallet -----
+
+  async function loadWallet() {
+    try {
+      const [balance, txns] = await Promise.all([
+        api('GET', '/api/wallet/balance'),
+        api('GET', '/api/wallet/transactions'),
+      ]);
+      $('#wallet-balance').textContent = `$${balance.balance.toFixed(2)}`;
+      $('#wallet-commission').textContent = `$${balance.total_commission.toFixed(2)}`;
+      $('#wallet-referrals').textContent = balance.referral_count;
+
+      const appUrl = window.location.origin;
+      $('#referral-link').value = `${appUrl}/?ref=${balance.referral_code}`;
+
+      const tbody = $('#wallet-txns-tbody');
+      if (!txns.length) {
+        tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;color:var(--color-text-muted);">No transactions yet</td></tr>';
+      } else {
+        tbody.innerHTML = txns.map(t => `<tr>
+          <td>${formatDate(t.created_at)}</td>
+          <td>${escapeHtml(t.type)}</td>
+          <td class="text-mono ${parseFloat(t.amount) >= 0 ? 'positive' : 'negative'}">${parseFloat(t.amount) >= 0 ? '+' : ''}$${parseFloat(t.amount).toFixed(2)}</td>
+          <td>${escapeHtml(t.description || '')}</td>
+        </tr>`).join('');
+      }
+    } catch (err) { showToast('Failed to load wallet.', 'error'); }
+  }
+
+  async function requestWithdraw() {
+    const amount = parseFloat($('#wd-amount').value);
+    const bank_name = $('#wd-bank').value.trim();
+    const account_number = $('#wd-accno').value.trim();
+    const account_name = $('#wd-accname').value.trim();
+    if (!amount || !bank_name || !account_number || !account_name) {
+      return showToast('Fill in all fields', 'error');
+    }
+    try {
+      const data = await api('POST', '/api/wallet/withdraw', { amount, bank_name, account_number, account_name });
+      showToast(data.message, 'success');
+      $('#wd-amount').value = '';
+      $('#wd-bank').value = '';
+      $('#wd-accno').value = '';
+      $('#wd-accname').value = '';
+      loadWallet();
+    } catch (err) { showToast(err.message, 'error'); }
+  }
+
+  // ----- Admin -----
+
+  async function loadAdmin() {
+    if (!state.user?.is_admin) return;
+    try {
+      const [users, subs, wds] = await Promise.all([
+        api('GET', '/api/admin/users'),
+        api('GET', '/api/admin/subscriptions'),
+        api('GET', '/api/admin/withdrawals'),
+      ]);
+      renderAdminUsers(users);
+      renderAdminSubs(subs);
+      renderAdminWithdrawals(wds);
+    } catch (err) { showToast('Failed to load admin.', 'error'); }
+  }
+
+  function renderAdminUsers(users) {
+    $('#admin-users-tbody').innerHTML = users.map(u => `<tr>
+      <td>${escapeHtml(u.email)}${u.is_admin ? ' <b>(admin)</b>' : ''}</td>
+      <td>${u.sub_status === 'active' ? '<span style="color:var(--color-accent);">Active</span>' : (u.sub_status || 'None')}</td>
+      <td>${u.key_count}</td>
+      <td class="text-mono">$${parseFloat(u.wallet_balance || 0).toFixed(2)}</td>
+      <td>${escapeHtml(u.referral_code || '-')}</td>
+      <td>${formatDate(u.created_at)}</td>
+      <td>
+        ${u.is_blocked
+          ? `<button class="btn btn-primary btn-sm" onclick="window.CryptoBot.adminAction('unblock',${u.id})">Unblock</button>`
+          : `<button class="btn btn-danger btn-sm" onclick="window.CryptoBot.adminAction('block',${u.id})">Block</button>`}
+      </td>
+    </tr>`).join('');
+  }
+
+  function renderAdminSubs(subs) {
+    const pending = subs.filter(s => s.status === 'pending' || s.status === 'stripe_pending');
+    $('#admin-subs-tbody').innerHTML = pending.length ? pending.map(s => `<tr>
+      <td>${escapeHtml(s.email)}</td>
+      <td class="text-mono">$${parseFloat(s.amount).toFixed(2)}</td>
+      <td>${escapeHtml(s.payment_method)}</td>
+      <td>${s.proof_url ? `<a href="${escapeHtml(s.proof_url)}" target="_blank" style="color:var(--color-accent);">View</a>` : '-'}</td>
+      <td>${formatDate(s.created_at)}</td>
+      <td>
+        <button class="btn btn-primary btn-sm" onclick="window.CryptoBot.adminSub('approve',${s.id})">Approve</button>
+        <button class="btn btn-danger btn-sm" onclick="window.CryptoBot.adminSub('reject',${s.id})">Reject</button>
+      </td>
+    </tr>`).join('') : '<tr><td colspan="6" style="text-align:center;color:var(--color-text-muted);">No pending payments</td></tr>';
+  }
+
+  function renderAdminWithdrawals(wds) {
+    const pending = wds.filter(w => w.status === 'pending');
+    $('#admin-wd-tbody').innerHTML = pending.length ? pending.map(w => `<tr>
+      <td>${escapeHtml(w.email)}</td>
+      <td class="text-mono">$${parseFloat(w.amount).toFixed(2)}</td>
+      <td>${escapeHtml(w.bank_name)}</td>
+      <td class="text-mono">${escapeHtml(w.account_number)}</td>
+      <td>${escapeHtml(w.account_name)}</td>
+      <td>${formatDate(w.created_at)}</td>
+      <td>
+        <button class="btn btn-primary btn-sm" onclick="window.CryptoBot.adminWd('approve',${w.id})">Approve</button>
+        <button class="btn btn-danger btn-sm" onclick="window.CryptoBot.adminWd('reject',${w.id})">Reject</button>
+      </td>
+    </tr>`).join('') : '<tr><td colspan="7" style="text-align:center;color:var(--color-text-muted);">No pending withdrawals</td></tr>';
+  }
+
+  async function adminAction(action, userId) {
+    try {
+      await api('PUT', `/api/admin/users/${userId}/block`, { blocked: action === 'block' });
+      showToast(`User ${action}ed`, 'success');
+      loadAdmin();
+    } catch (err) { showToast(err.message, 'error'); }
+  }
+
+  async function adminSub(action, subId) {
+    try {
+      await api('PUT', `/api/admin/subscriptions/${subId}`, { action });
+      showToast(`Subscription ${action}d`, 'success');
+      loadAdmin();
+    } catch (err) { showToast(err.message, 'error'); }
+  }
+
+  async function adminWd(action, wdId) {
+    try {
+      await api('PUT', `/api/admin/withdrawals/${wdId}`, { action });
+      showToast(`Withdrawal ${action}d`, 'success');
+      loadAdmin();
+    } catch (err) { showToast(err.message, 'error'); }
+  }
+
   // ----- Expose to inline handlers -----
-  window.CryptoBot = { toggleSettings, saveSettings, deleteKey };
+  window.CryptoBot = {
+    toggleSettings, saveSettings, deleteKey, showToast,
+    payWithWallet, payBankTransfer, payStripe, requestWithdraw,
+    adminAction, adminSub, adminWd,
+  };
 
   // ----- Init -----
 
@@ -544,6 +742,15 @@
     setupNavTabs();
     setupPagination();
     setupModal();
+
+    // Auto-fill referral code from URL (?ref=XXXX)
+    const params = new URLSearchParams(window.location.search);
+    const ref = params.get('ref');
+    if (ref) {
+      const refInput = $('#signup-referral');
+      if (refInput) refInput.value = ref;
+    }
+
     checkSession();
   }
 
