@@ -526,23 +526,38 @@ async function executeForAllUsers(pick) {
   }
 
   try {
-    const keys = await db.query(
+    const allKeys = await db.query(
       `SELECT ak.*, u.email FROM api_keys ak
        JOIN users u ON u.id = ak.user_id
        WHERE ak.enabled = true`
     );
 
-    if (!keys.length) {
+    if (!allKeys.length) {
       bLog.trade('No enabled user API keys found — no users to trade for');
       log('No enabled user API keys — skipping multi-user execution');
       return;
     }
 
+    // Deduplicate: one key per user per platform (prevent same account trading twice)
+    const seen = new Set();
+    const keys = allKeys.filter(key => {
+      const uid = `${key.user_id}_${key.platform}`;
+      if (seen.has(uid)) {
+        bLog.trade(`Skipping duplicate key for ${key.email} on ${key.platform}`);
+        return false;
+      }
+      seen.add(uid);
+      return true;
+    });
+
     const sym = pick.symbol || pick.sym;
-    bLog.trade(`Found ${keys.length} enabled API key(s) — executing ${sym} ${pick.direction}...`);
+    bLog.trade(`Found ${keys.length} unique API key(s) — executing ${sym} ${pick.direction}...`);
     log(`Executing ${sym} ${pick.direction} for ${keys.length} user keys`);
 
-    const results = await Promise.allSettled(keys.map(async (key) => {
+    // Run sequentially per user to prevent race conditions (parallel DB checks)
+    const results = [];
+    for (const key of keys) {
+      const result = await (async () => {
       try {
         const symbol = sym;
         const allowedCoins = (key.allowed_coins || '').split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
@@ -772,14 +787,14 @@ async function executeForAllUsers(pick) {
         bLog.error(`User ${key.email} trade error: ${err.message}`);
         log(`User ${key.email} trade error: ${err.message}`);
       }
-    }));
+    })().catch(e => e.message);
+      results.push(result);
+    }
 
-    const fulfilled = results.filter(r => r.status === 'fulfilled');
-    const fail = results.filter(r => r.status === 'rejected').length;
-    const tooExpensive = fulfilled.filter(r => r.value === 'TOO_EXPENSIVE').length;
-    const ok = fulfilled.length - tooExpensive;
-    bLog.trade(`Multi-user execution done: ${ok} traded, ${tooExpensive} too expensive, ${fail} errors`);
-    log(`Multi-user done: ${ok} ok, ${tooExpensive} too expensive, ${fail} failed`);
+    const tooExpensive = results.filter(r => r === 'TOO_EXPENSIVE').length;
+    const ok = results.length - tooExpensive;
+    bLog.trade(`Multi-user execution done: ${ok} traded, ${tooExpensive} too expensive`);
+    log(`Multi-user done: ${ok} ok, ${tooExpensive} too expensive`);
 
     // If every user found this coin too expensive, signal caller to try next
     if (tooExpensive === keys.length) return 'ALL_TOO_EXPENSIVE';
