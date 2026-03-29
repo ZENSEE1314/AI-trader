@@ -10,6 +10,7 @@ const path  = require('path');
 const { run: runTrader } = require('./cycle');
 const aiLearner = require('./ai-learner');
 const { getSentimentSummary } = require('./sentiment-scraper');
+const { log: bLog } = require('./bot-logger');
 
 const TELEGRAM_TOKEN  = process.env.TELEGRAM_TOKEN;
 const TELEGRAM_CHATS  = (process.env.TELEGRAM_CHAT_ID || '').split(',').map(s => s.trim()).filter(Boolean);
@@ -351,34 +352,41 @@ async function checkSpikes() {
 
 // ── MAIN TRADING CYCLE ───────────────────────────────────────
 async function runTradingCycle(forced = false) {
-  if (paused && !forced) { log('Paused.'); return; }
-  if (isBanned()) return;
+  if (paused && !forced) { log('Paused.'); bLog.system('Bot is paused'); return; }
+  if (isBanned()) { bLog.system('Binance IP banned — skipping cycle'); return; }
 
-  log('── AI Trading Cycle Start ──');
+  bLog.system('Trading cycle started' + (forced ? ' (manual)' : ''));
   try {
     await runTrader();
   } catch (err) {
+    bLog.error(`Trading cycle error: ${err.message}`);
     log(`Trading cycle error: ${err.message}`);
   }
-  log('── AI Trading Cycle End ──');
+  bLog.system('Trading cycle completed');
 }
 
 // ── BOOT ─────────────────────────────────────────────────────
 async function main() {
   log('=== AI Self-Learning Crypto Bot v4 Starting ===');
+  bLog.system('AI Self-Learning Crypto Bot v4 starting...');
 
   // Log AI state on startup
   const stats = aiLearner.getStats();
   if (stats.overall.total > 0) {
     const wr = stats.overall.total > 0 ? ((stats.overall.wins / stats.overall.total) * 100).toFixed(0) : '0';
-    log(`AI State: ${stats.overall.total} trades, ${wr}% win rate, avg PnL ${(stats.overall.avg_pnl || 0).toFixed(3)}%`);
+    const msg = `AI State: ${stats.overall.total} trades, ${wr}% win rate, avg PnL ${(stats.overall.avg_pnl || 0).toFixed(3)}%`;
+    log(msg);
+    bLog.ai(msg);
   } else {
     log('AI State: No previous trades — starting fresh');
+    bLog.ai('No previous trades — AI starting fresh, will learn after first trade');
   }
 
   const bestSetups = aiLearner.getBestSetups();
   if (bestSetups.length) {
-    log('Best setups: ' + bestSetups.map(s => `${s.setup}(${s.win_rate}%)`).join(', '));
+    const msg = 'Best setups: ' + bestSetups.map(s => `${s.setup}(${s.win_rate}%)`).join(', ');
+    log(msg);
+    bLog.ai(msg);
   }
 
   await tgSendPrivate(

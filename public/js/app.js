@@ -141,7 +141,7 @@
       btn.classList.toggle('active', isActive);
       btn.setAttribute('aria-selected', isActive);
     });
-    const allTabs = ['dashboard', 'keys', 'subscription', 'wallet', 'admin'];
+    const allTabs = ['dashboard', 'keys', 'subscription', 'wallet', 'logs', 'admin'];
     allTabs.forEach(t => {
       const el = $(`#tab-${t}`);
       if (el) el.classList.toggle('hidden', t !== tab);
@@ -151,7 +151,11 @@
     else if (tab === 'keys') loadKeys();
     else if (tab === 'subscription') loadSubscription();
     else if (tab === 'wallet') loadWallet();
+    else if (tab === 'logs') startLogPolling();
     else if (tab === 'admin') loadAdmin();
+
+    // Stop log polling when leaving logs tab
+    if (tab !== 'logs') stopLogPolling();
   }
 
   // ----- Auth -----
@@ -1038,6 +1042,93 @@
     }
   }
 
+  // ----- Live Logs -----
+  let logPollTimer = null;
+  let logLastId = 0;
+  let logFilter = null;
+  const LOG_COLORS = {
+    trade: '#00e676', scan: '#00b0ff', sentiment: '#ff9100',
+    ai: '#e040fb', system: '#78909c', error: '#ff5252',
+  };
+  const LOG_ICONS = {
+    trade: '\u{1F4B0}', scan: '\u{1F50D}', sentiment: '\u{1F4F0}',
+    ai: '\u{1F9E0}', system: '\u{2699}\uFE0F', error: '\u{274C}',
+  };
+
+  function startLogPolling() {
+    if (logPollTimer) return;
+    logLastId = 0;
+    const content = $('#logs-content');
+    if (content) content.innerHTML = '';
+    fetchLogs();
+    logPollTimer = setInterval(fetchLogs, 3000);
+    const status = $('#logs-status');
+    if (status) status.textContent = 'Live — polling every 3s';
+  }
+
+  function stopLogPolling() {
+    if (logPollTimer) { clearInterval(logPollTimer); logPollTimer = null; }
+  }
+
+  async function fetchLogs() {
+    try {
+      const catParam = logFilter ? `&category=${logFilter}` : '';
+      const url = logLastId > 0
+        ? `/api/logs?since=${logLastId}${catParam}`
+        : `/api/logs?count=200${catParam}`;
+      const entries = await api('GET', url);
+      if (!entries.length) return;
+
+      const content = $('#logs-content');
+      if (!content) return;
+
+      for (const entry of entries) {
+        const color = LOG_COLORS[entry.category] || '#aaa';
+        const icon = LOG_ICONS[entry.category] || '';
+        const time = entry.ts.slice(11, 19);
+        const cat = entry.category.toUpperCase().padEnd(9);
+        const line = document.createElement('div');
+        line.style.marginBottom = '2px';
+        line.innerHTML =
+          `<span style="color:#666">${escapeHtml(time)}</span> ` +
+          `<span style="color:${color};font-weight:600">${icon} ${escapeHtml(cat)}</span> ` +
+          `<span style="color:var(--color-text)">${escapeHtml(entry.message)}</span>` +
+          (entry.data ? `<span style="color:#666"> ${escapeHtml(JSON.stringify(entry.data))}</span>` : '');
+        content.appendChild(line);
+        logLastId = Math.max(logLastId, entry.id);
+      }
+
+      // Auto-scroll
+      const autoScroll = $('#log-auto-scroll');
+      if (autoScroll && autoScroll.checked) {
+        const container = $('#logs-container');
+        if (container) container.scrollTop = container.scrollHeight;
+      }
+
+      const status = $('#logs-status');
+      if (status) status.textContent = `Live — ${content.childElementCount} entries`;
+    } catch (err) {
+      const status = $('#logs-status');
+      if (status) status.textContent = `Error: ${err.message}`;
+    }
+  }
+
+  function filterLogs(category, btn) {
+    logFilter = category === 'all' ? null : category;
+    logLastId = 0;
+    const content = $('#logs-content');
+    if (content) content.innerHTML = '';
+    $$('.log-filter-btn').forEach(b => b.classList.remove('active'));
+    if (btn) btn.classList.add('active');
+    fetchLogs();
+  }
+
+  function clearLogs() {
+    const content = $('#logs-content');
+    if (content) content.innerHTML = '';
+    logLastId = 0;
+  }
+
   // ----- Expose to inline handlers -----
   window.CryptoBot = {
     toggleSettings, saveSettings, deleteKey, showToast,
@@ -1045,6 +1136,7 @@
     adminAction, adminSub, adminWd, saveAdminSettings, adminEditWallet, clearErrors,
     goToAuth, selectPlan, showLoginForm, onPlatformChange,
     searchCoins, addCoin, removeCoin,
+    filterLogs, clearLogs,
   };
 
   // ----- Init -----

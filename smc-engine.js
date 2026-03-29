@@ -13,6 +13,7 @@
 const fetch = require('node-fetch');
 const aiLearner = require('./ai-learner');
 const { getSentimentScores, getSentimentModifier } = require('./sentiment-scraper');
+const { log: bLog } = require('./bot-logger');
 
 const REQUEST_TIMEOUT = 15000;
 
@@ -799,25 +800,29 @@ async function scanSMC(log = console.log) {
   const limitCheck = checkDailyLimits();
   if (limitCheck === 'max_trades') {
     log('SMC: Daily trade limit reached. Waiting for tomorrow.');
+    bLog.scan('Daily trade limit reached (3/3). Waiting for tomorrow.');
     return [];
   }
   if (limitCheck === '2_losses') {
     log('SMC: 2 consecutive losses today. Stopped trading.');
+    bLog.scan('2 consecutive losses — stopped for today.');
     return [];
   }
 
   if (!isGoodTradingSession()) {
-    // AI can override session filter if session weight is high enough
     const sessionW = aiLearner.getSessionWeight();
     if (sessionW < 1.2) {
       log('SMC: Outside active trading session.');
+      bLog.scan(`Outside active session (weight: ${sessionW.toFixed(2)}). Waiting for London/NY/Asia overlap.`);
       return [];
     }
     log(`SMC: Off-hours but AI session weight ${sessionW.toFixed(2)} is high — scanning anyway.`);
+    bLog.ai(`AI override: session weight ${sessionW.toFixed(2)} > 1.2 — scanning in off-hours`);
   }
 
   if (isAvoidTime()) {
     log('SMC: Avoiding round-number entry time.');
+    bLog.scan('Avoiding round-number entry time (:00/:15/:30/:45)');
     return [];
   }
 
@@ -825,14 +830,22 @@ async function scanSMC(log = console.log) {
   let sentimentScores = {};
   try {
     sentimentScores = await getSentimentScores();
-    const trendingCount = Object.values(sentimentScores).filter(s => s.trendScore > 0.3).length;
+    const trending = Object.entries(sentimentScores)
+      .filter(([, s]) => s.trendScore > 0.3)
+      .sort((a, b) => b[1].trendScore - a[1].trendScore);
+    const trendingCount = trending.length;
     log(`SMC: Sentiment loaded — ${trendingCount} trending coins detected.`);
+    bLog.sentiment(`Loaded sentiment data — ${trendingCount} trending coins`);
+    for (const [sym, data] of trending.slice(0, 5)) {
+      bLog.sentiment(`  ${sym}: trend=${(data.trendScore * 100).toFixed(0)}% sentiment=${data.sentiment} mentions=${data.mentions} sources=[${data.sources.join(',')}]`);
+    }
   } catch (e) {
     log(`SMC: Sentiment fetch failed (${e.message}) — proceeding without.`);
+    bLog.error(`Sentiment fetch failed: ${e.message}`);
   }
 
   const tickers = await fetchTickers();
-  if (!tickers.length) return [];
+  if (!tickers.length) { bLog.error('Failed to fetch tickers from Binance'); return []; }
 
   // Top coins by volume + trending boost
   const top30 = tickers
@@ -845,16 +858,31 @@ async function scanSMC(log = console.log) {
     .sort((a, b) => b.sortScore - a.sortScore)
     .slice(0, 30);
 
-  log(`SMC: Analyzing ${top30.length} coins...`);
+  bLog.scan(`Analyzing ${top30.length} coins by volume + trend boost...`);
+  const params = aiLearner.getOptimalParams();
+  bLog.ai(`AI params: TP=${(params.TP_PCT*100).toFixed(1)}% SL_BUF=${(params.SL_BUFFER*100).toFixed(2)}% MIN_SCORE=${params.MIN_SCORE} RISK=${(params.WALLET_RISK_PCT*100).toFixed(1)}%`);
 
   const results = [];
+  let analyzed = 0;
+  let skippedAI = 0;
   for (const ticker of top30) {
+    if (aiLearner.shouldAvoidCoin(ticker.symbol)) {
+      skippedAI++;
+      bLog.ai(`Skipping ${ticker.symbol} — AI learned poor win rate`);
+    }
     const r = await analyzeSMC(ticker, sentimentScores);
-    if (r && r.score >= (aiLearner.getOptimalParams().MIN_SCORE || 8)) {
+    analyzed++;
+    if (r && r.score >= (params.MIN_SCORE || 8)) {
       results.push(r);
-      log(`  SMC: ${r.symbol} ${r.direction} score=${r.score} setup=${r.setup} AI=${r.aiModifier} sent=${r.sentimentMod}`);
+      bLog.scan(`SIGNAL: ${r.symbol} ${r.direction} | score=${r.score} setup=${r.setupName} | zone=${r.premiumDiscount} RSI=${r.rsi} | AI=${r.aiModifier} sent=${r.sentimentMod}`);
     }
     await new Promise(r => setTimeout(r, 200));
+  }
+
+  if (skippedAI > 0) bLog.ai(`AI avoided ${skippedAI} coins based on past performance`);
+  bLog.scan(`Scan complete: ${analyzed} analyzed, ${results.length} signals found`);
+  if (!results.length) {
+    bLog.scan('No setups met all SMC criteria this cycle. Conditions: key level proximity + rejection candle + 1m confirmation + min score');
   }
 
   results.sort((a, b) => b.score - a.score);

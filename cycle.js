@@ -10,6 +10,7 @@ const fetch = require('node-fetch');
 const aiLearner = require('./ai-learner');
 const { scanSMC, detectStructure, recordDailyTrade } = require('./smc-engine');
 const { getSentimentScores } = require('./sentiment-scraper');
+const { log: bLog } = require('./bot-logger');
 
 const API_KEY        = process.env.BINANCE_API_KEY    || '';
 const API_SECRET     = process.env.BINANCE_API_SECRET || '';
@@ -237,6 +238,10 @@ async function checkTrailingStop(client) {
             : (state.entry - exitPrice) / state.entry * 100;
           const durationMin = Math.round((Date.now() - state.openedAt) / 60000);
 
+          const winLoss = pnlPct > 0 ? 'WIN' : 'LOSS';
+          bLog.trade(`CLOSED: ${sym} ${state.isLong ? 'LONG' : 'SHORT'} | PnL: ${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}% (${winLoss}) | duration: ${durationMin}min | entry=$${fmtPrice(state.entry)} exit=$${fmtPrice(exitPrice)}`);
+          bLog.ai(`Recording trade to AI learner: ${sym} setup=${state.setup} ${winLoss} ${pnlPct.toFixed(2)}%`);
+
           aiLearner.recordTrade({
             symbol: sym,
             direction: state.isLong ? 'LONG' : 'SHORT',
@@ -400,8 +405,12 @@ async function main() {
       return;
     }
 
-    const pick = signals[0]; // best scored signal
+    const pick = signals[0];
     log(`Best signal: ${pick.symbol} ${pick.direction} score=${pick.score} setup=${pick.setup} AI=${pick.aiModifier}`);
+    bLog.trade(`BEST PICK: ${pick.symbol} ${pick.direction} | setup=${pick.setupName} score=${pick.score} | TP1=$${fmtPrice(pick.tp1)} SL=$${fmtPrice(pick.sl)} | zone=${pick.premiumDiscount} RSI=${pick.rsi}`);
+    if (signals.length > 1) {
+      bLog.scan(`Runner-up signals: ${signals.slice(1).map(s => `${s.symbol} ${s.direction} score=${s.score}`).join(', ')}`);
+    }
 
     // ── Step 2: Execute for all registered users ──
     await executeForAllUsers(pick);

@@ -588,6 +588,7 @@
         <button class="nav-tab" role="tab" aria-selected="false" data-tab="keys">API Keys</button>
         <button class="nav-tab" role="tab" aria-selected="false" data-tab="subscription">Subscription</button>
         <button class="nav-tab" role="tab" aria-selected="false" data-tab="wallet">Wallet</button>
+        <button class="nav-tab" role="tab" aria-selected="false" data-tab="logs" id="logs-tab">Logs</button>
         <button class="nav-tab hidden" role="tab" aria-selected="false" data-tab="admin" id="admin-tab">Admin</button>
       </nav>
 
@@ -803,6 +804,33 @@
       <!-- ====================================================
            Admin Tab (hidden unless admin)
            ==================================================== -->
+      <section id="tab-logs" class="hidden" role="tabpanel" aria-label="Logs">
+        <h2 class="section-heading">Bot Live Logs</h2>
+
+        <div style="display:flex;gap:var(--space-2);margin-bottom:var(--space-3);flex-wrap:wrap;">
+          <button class="btn btn-sm log-filter-btn active" data-log-cat="all" onclick="window.CryptoBot.filterLogs('all',this)">All</button>
+          <button class="btn btn-sm log-filter-btn" data-log-cat="scan" onclick="window.CryptoBot.filterLogs('scan',this)">Scan</button>
+          <button class="btn btn-sm log-filter-btn" data-log-cat="trade" onclick="window.CryptoBot.filterLogs('trade',this)">Trades</button>
+          <button class="btn btn-sm log-filter-btn" data-log-cat="sentiment" onclick="window.CryptoBot.filterLogs('sentiment',this)">Sentiment</button>
+          <button class="btn btn-sm log-filter-btn" data-log-cat="ai" onclick="window.CryptoBot.filterLogs('ai',this)">AI Learning</button>
+          <button class="btn btn-sm log-filter-btn" data-log-cat="system" onclick="window.CryptoBot.filterLogs('system',this)">System</button>
+          <button class="btn btn-sm log-filter-btn" data-log-cat="error" onclick="window.CryptoBot.filterLogs('error',this)">Errors</button>
+          <span style="flex:1"></span>
+          <label style="display:flex;align-items:center;gap:var(--space-1);font-size:var(--text-sm);color:var(--color-text-muted);cursor:pointer;">
+            <input type="checkbox" id="log-auto-scroll" checked> Auto-scroll
+          </label>
+        </div>
+
+        <div id="logs-container" style="background:var(--color-bg-inset);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-3);height:65vh;overflow-y:auto;font-family:var(--font-mono);font-size:var(--text-xs);line-height:1.6;">
+          <div id="logs-content" style="white-space:pre-wrap;word-break:break-word;color:var(--color-text-muted);">Connecting to bot logs...</div>
+        </div>
+
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:var(--space-2);">
+          <span id="logs-status" style="font-size:var(--text-xs);color:var(--color-text-muted);">Polling every 3s</span>
+          <button class="btn btn-sm" onclick="window.CryptoBot.clearLogs()">Clear</button>
+        </div>
+      </section>
+
       <section id="tab-admin" class="hidden" role="tabpanel" aria-label="Admin">
         <h2 class="section-heading">Admin Panel</h2>
 

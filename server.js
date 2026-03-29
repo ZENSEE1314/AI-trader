@@ -42,6 +42,22 @@ app.get('/api/coins', async (req, res) => {
 // Health check
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
+// Bot logs endpoint (live dashboard)
+const { getLogs, getRecentLogs } = require('./bot-logger');
+const { authMiddleware } = require('./middleware/auth');
+
+app.get('/api/logs', authMiddleware, (req, res) => {
+  const since = parseFloat(req.query.since) || 0;
+  const category = req.query.category || null;
+  const count = parseInt(req.query.count) || 100;
+
+  if (since > 0) {
+    res.json(getLogs(since, category));
+  } else {
+    res.json(getRecentLogs(count, category));
+  }
+});
+
 // Server outbound IP (for Bitunix API key IP binding)
 app.get('/api/server-ip', async (req, res) => {
   try {
