@@ -1104,6 +1104,27 @@ input[type="range"]::-moz-range-thumb {
   text-align: center;
 }
 
+.landing-topbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  justify-content: flex-end;
+  margin-bottom: var(--space-6);
+}
+
+.landing-topbar img {
+  margin-right: auto;
+}
+
+.landing-topbar-name {
+  font-family: var(--font-display);
+  font-weight: 700;
+  color: #d4af37;
+  font-size: var(--text-lg);
+  margin-right: auto;
+  margin-left: calc(-1 * var(--space-1));
+}
+
 .landing-logo {
   border-radius: 50%;
   margin-bottom: var(--space-4);
