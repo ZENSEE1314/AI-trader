@@ -409,16 +409,24 @@ async function main() {
       return;
     }
 
-    const pick = signals[0];
-    log(`Best signal: ${pick.symbol} ${pick.direction} score=${pick.score} setup=${pick.setup} AI=${pick.aiModifier}`);
-    bLog.trade(`BEST PICK: ${pick.symbol} ${pick.direction} | setup=${pick.setupName} score=${pick.score} | TP1=$${fmtPrice(pick.tp1)} SL=$${fmtPrice(pick.sl)} | zone=${pick.premiumDiscount} RSI=${pick.rsi}`);
-    if (signals.length > 1) {
-      bLog.scan(`Runner-up signals: ${signals.slice(1).map(s => `${s.symbol} ${s.direction} score=${s.score}`).join(', ')}`);
-    }
+    // Try signals in order — fall through to runner-ups if first pick is too expensive
+    let executed = false;
+    for (const pick of signals) {
+      log(`Signal: ${pick.symbol} ${pick.direction} score=${pick.score} setup=${pick.setup} AI=${pick.aiModifier}`);
+      bLog.trade(`TRYING: ${pick.symbol} ${pick.direction} | setup=${pick.setupName} score=${pick.score} | TP1=$${fmtPrice(pick.tp1)} SL=$${fmtPrice(pick.sl)} | zone=${pick.premiumDiscount} RSI=${pick.rsi}`);
 
-    // ── Step 2: Execute for all registered users ──
-    bLog.trade(`Executing trade: ${pick.symbol} ${pick.direction} for registered users...`);
-    await executeForAllUsers(pick);
+      // ── Step 2: Execute for all registered users ──
+      bLog.trade(`Executing trade: ${pick.symbol} ${pick.direction} for registered users...`);
+      const result = await executeForAllUsers(pick);
+
+      if (result === 'ALL_TOO_EXPENSIVE') {
+        bLog.trade(`${pick.symbol} too expensive for all users — trying next signal...`);
+        continue;
+      }
+      executed = true;
+      break;
+    }
+    const pick = signals[0]; // keep reference for owner path
 
     // ── Step 3: Owner's Binance account ──
     if (hasOwnerKeys) {
@@ -554,11 +562,6 @@ async function executeForAllUsers(pick) {
 
           bLog.trade(`User ${key.email} Binance: wallet=$${wallet.toFixed(2)} pos=${openPosCount}/${maxPos} lev=x${userLev}`);
 
-          const marginUsdt = wallet * userRiskPct;
-          const notional = marginUsdt * userLev;
-          let qty = notional / price;
-          if (qty * price < 5.5) qty = 5.5 / price;
-
           // Use SMC engine SL if available, otherwise 1% default
           const slPrice = pick.sl || (isLong ? price * (1 - CONFIG.TP_PCT) : price * (1 + CONFIG.TP_PCT));
           const tp3Price = pick.tp3 || (isLong ? price * (1 + CONFIG.TP_PCT * CONFIG.TP3_MULT) : price * (1 - CONFIG.TP_PCT * CONFIG.TP3_MULT));
@@ -571,9 +574,27 @@ async function executeForAllUsers(pick) {
           if (!sinfo) { bLog.error(`User ${key.email}: ${symbol} not found on Binance`); return; }
           const qtyPrec = sinfo.quantityPrecision || 6;
           const pricePrec = sinfo.pricePrecision || 2;
-          qty = Math.floor(qty * Math.pow(10, qtyPrec)) / Math.pow(10, qtyPrec);
-          if (qty <= 0) { bLog.trade(`User ${key.email}: qty too small after rounding`); return; }
           const fmtP = (p) => parseFloat(p.toFixed(pricePrec));
+
+          // Position sizing: use full available margin with leverage
+          const marginUsdt = wallet * userRiskPct;
+          const notional = marginUsdt * userLev;
+          let qty = notional / price;
+
+          // Ensure minimum notional ($5.5) and minimum lot size
+          const minQty = 1 / Math.pow(10, qtyPrec); // e.g. 0.001 for BTC
+          const minNotionalQty = Math.ceil(5.5 / price * Math.pow(10, qtyPrec)) / Math.pow(10, qtyPrec);
+          qty = Math.floor(qty * Math.pow(10, qtyPrec)) / Math.pow(10, qtyPrec);
+
+          if (qty < minNotionalQty) qty = minNotionalQty;
+          if (qty < minQty) qty = minQty;
+
+          // Check if wallet can afford this qty with leverage
+          const requiredMargin = (qty * price) / userLev;
+          if (requiredMargin > wallet * 0.95) {
+            bLog.trade(`User ${key.email}: ${symbol} needs $${requiredMargin.toFixed(2)} margin but only $${wallet.toFixed(2)} available — too expensive`);
+            return 'TOO_EXPENSIVE';
+          }
 
           bLog.trade(`User ${key.email}: placing MARKET ${isLong ? 'BUY' : 'SELL'} ${symbol} qty=${qty}...`);
           await userClient.submitNewOrder({ symbol, side: isLong ? 'BUY' : 'SELL', type: 'MARKET', quantity: qty });
@@ -606,6 +627,13 @@ async function executeForAllUsers(pick) {
           let qty = notional / price;
           if (qty * price < 5.5) qty = 5.5 / price;
           qty = parseFloat(qty.toFixed(6));
+          if (qty <= 0) qty = parseFloat((5.5 / price).toFixed(6));
+
+          const requiredMarginBx = (qty * price) / userLev;
+          if (requiredMarginBx > wallet * 0.95) {
+            bLog.trade(`User ${key.email}: ${symbol} needs $${requiredMarginBx.toFixed(2)} margin but only $${wallet.toFixed(2)} — too expensive`);
+            return 'TOO_EXPENSIVE';
+          }
 
           const slPrice = pick.sl || (isLong ? price * (1 - CONFIG.TP_PCT) : price * (1 + CONFIG.TP_PCT));
           const tp3Price = pick.tp3 || (isLong ? price * (1 + CONFIG.TP_PCT * CONFIG.TP3_MULT) : price * (1 - CONFIG.TP_PCT * CONFIG.TP3_MULT));
@@ -649,13 +677,20 @@ async function executeForAllUsers(pick) {
       }
     }));
 
-    const ok = results.filter(r => r.status === 'fulfilled').length;
+    const fulfilled = results.filter(r => r.status === 'fulfilled');
     const fail = results.filter(r => r.status === 'rejected').length;
-    bLog.trade(`Multi-user execution done: ${ok} processed, ${fail} rejected`);
-    log(`Multi-user done: ${ok} ok, ${fail} failed`);
+    const tooExpensive = fulfilled.filter(r => r.value === 'TOO_EXPENSIVE').length;
+    const ok = fulfilled.length - tooExpensive;
+    bLog.trade(`Multi-user execution done: ${ok} traded, ${tooExpensive} too expensive, ${fail} errors`);
+    log(`Multi-user done: ${ok} ok, ${tooExpensive} too expensive, ${fail} failed`);
+
+    // If every user found this coin too expensive, signal caller to try next
+    if (tooExpensive === keys.length) return 'ALL_TOO_EXPENSIVE';
+    return 'OK';
   } catch (err) {
     bLog.error(`Multi-user error: ${err.message}`);
     log(`Multi-user error: ${err.message}`);
+    return 'ERROR';
   }
 }
 
