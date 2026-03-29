@@ -30,8 +30,8 @@ const CONFIG = {
   // Trailing stop: once price moves in our favour by TRAIL_PCT, tighten SL
   TRAIL_PCT:       0.008,   // 0.8% activation
 
-  // Position sizing: risk 1% of wallet per trade (sized by SL distance)
-  WALLET_RISK_PCT: 0.01,    // 1% of total wallet at risk per trade
+  // Position sizing: risk 10% of wallet per trade (sized by SL distance)
+  WALLET_RISK_PCT: 0.10,    // 10% of total wallet at risk per trade
 
   MIN_BALANCE:     5,
   MIN_VOL_M:       100,     // min $100M 24h volume
@@ -1039,10 +1039,9 @@ async function main() {
       }
     }
 
-    if (!pick) pick = await findBestTrade(client);
-
+    // Only trade from signal queue — no random scanning
     if (!pick) {
-      log('No trade setup found this cycle — waiting.');
+      log('No queued signal — waiting for bot.js signal.');
       return;
     }
 
