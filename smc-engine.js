@@ -874,9 +874,19 @@ async function scanSMC(log = console.log) {
   const tickers = await fetchTickers();
   if (!tickers.length) { bLog.error('Failed to fetch tickers from Binance'); return []; }
 
+  // Blacklist: non-crypto TradFi perps + problematic tokens
+  const BLACKLIST = new Set([
+    'ALPACAUSDT','BNXUSDT','ALPHAUSDT','BANANAS31USDT',
+    'LYNUSDT','PORT3USDT','RVVUSDT','BSWUSDT',
+    'NEIROETHUSDT','COSUSDT','YALAUSDT','TANSSIUSDT','EPTUSDT',
+    'LEVERUSDT','AGLDUSDT','LOOKSUSDT',
+    'XAUUSDT','XAGUSDT','EURUSDT','GBPUSDT','JPYUSDT',
+  ]);
+
   // Top coins by volume + trending boost
   const top30 = tickers
     .filter(t => t.symbol.endsWith('USDT') && !t.symbol.includes('_'))
+    .filter(t => !BLACKLIST.has(t.symbol))
     .filter(t => parseFloat(t.quoteVolume) > 50e6)
     .map(t => {
       const sentBoost = sentimentScores[t.symbol]?.trendScore || 0;

@@ -46,6 +46,8 @@ const CONFIG = {
     'LYNUSDT','PORT3USDT','RVVUSDT','BSWUSDT',
     'NEIROETHUSDT','COSUSDT','YALAUSDT','TANSSIUSDT','EPTUSDT',
     'LEVERUSDT','AGLDUSDT','LOOKSUSDT',
+    // TradFi perps — require separate agreement, not crypto
+    'XAUUSDT','XAGUSDT','EURUSDT','GBPUSDT','JPYUSDT',
   ],
 };
 
