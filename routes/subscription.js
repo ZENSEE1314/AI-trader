@@ -211,8 +211,8 @@ router.post('/stripe-checkout', async (req, res) => {
         quantity: 1,
       }],
       mode: 'payment',
-      success_url: `${process.env.APP_URL || 'https://cryptobot-g35r.onrender.com'}/?payment=success`,
-      cancel_url: `${process.env.APP_URL || 'https://cryptobot-g35r.onrender.com'}/?payment=cancel`,
+      success_url: `${process.env.APP_URL || 'https://millionairecryptotraders.up.railway.app'}/?payment=success`,
+      cancel_url: `${process.env.APP_URL || 'https://millionairecryptotraders.up.railway.app'}/?payment=cancel`,
       metadata: { userId: String(req.userId) },
     });
 
