@@ -1174,12 +1174,6 @@ async function executeForAllUsers(pick) {
           return;
         }
 
-        // Check max concurrent positions
-        if (openPosCount >= maxPos) {
-          log(`User ${key.email} has ${openPosCount}/${maxPos} positions — skip`);
-          return;
-        }
-
         if (wallet < CONFIG.MIN_BALANCE) {
           log(`User ${key.email} wallet $${wallet.toFixed(2)} < min $${CONFIG.MIN_BALANCE} — skip`);
           return;
