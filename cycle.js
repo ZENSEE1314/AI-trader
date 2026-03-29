@@ -276,6 +276,19 @@ async function checkTrailingStop(client) {
 
           recordDailyTrade(pnlPct > 0);
           log(`AI recorded: ${sym} PnL=${pnlPct.toFixed(2)}% duration=${durationMin}min setup=${state.setup}`);
+
+          // Update DB trades table
+          try {
+            const db = require('./db');
+            await db.query(
+              `UPDATE trades SET status = 'CLOSED', pnl_usdt = $1
+               WHERE symbol = $2 AND status = 'OPEN'`,
+              [parseFloat((pnlPct * state.qty * state.entry / 100).toFixed(4)), sym]
+            );
+            bLog.trade(`DB updated: ${sym} → CLOSED (${winLoss})`);
+          } catch (dbErr) {
+            bLog.error(`DB update failed for ${sym}: ${dbErr.message}`);
+          }
         }
         tradeState.delete(sym);
       }
@@ -795,8 +808,90 @@ async function executeForAllUsers(pick) {
   }
 }
 
+// ── SYNC DB TRADE STATUS WITH EXCHANGE ──────────────────────
+async function syncTradeStatus() {
+  let db, cryptoUtils, BitunixClient;
+  try {
+    db = require('./db');
+    cryptoUtils = require('./crypto-utils');
+    BitunixClient = require('./bitunix-client').BitunixClient;
+  } catch (e) { return; }
+
+  try {
+    const openTrades = await db.query(
+      `SELECT t.*, ak.api_key_enc, ak.iv, ak.auth_tag,
+              ak.api_secret_enc, ak.secret_iv, ak.secret_auth_tag,
+              ak.platform
+       FROM trades t
+       JOIN api_keys ak ON ak.id = t.api_key_id
+       WHERE t.status = 'OPEN'`
+    );
+
+    if (!openTrades.length) return;
+
+    // Group by API key to avoid repeated exchange calls
+    const byKey = {};
+    for (const t of openTrades) {
+      const kid = t.api_key_id;
+      if (!byKey[kid]) byKey[kid] = { key: t, trades: [] };
+      byKey[kid].trades.push(t);
+    }
+
+    for (const { key, trades } of Object.values(byKey)) {
+      try {
+        const apiKey = cryptoUtils.decrypt(key.api_key_enc, key.iv, key.auth_tag);
+        const apiSecret = cryptoUtils.decrypt(key.api_secret_enc, key.secret_iv, key.secret_auth_tag);
+
+        let openSymbols = new Set();
+
+        if (key.platform === 'binance') {
+          const userClient = new USDMClient({ api_key: apiKey, api_secret: apiSecret });
+          const account = await userClient.getAccountInformation({ omitZeroBalances: false });
+          for (const p of account.positions) {
+            if (parseFloat(p.positionAmt) !== 0) openSymbols.add(p.symbol);
+          }
+        } else if (key.platform === 'bitunix') {
+          const userClient = new BitunixClient({ apiKey, apiSecret });
+          const account = await userClient.getAccountInformation();
+          for (const p of (account.positions || [])) {
+            openSymbols.add(p.symbol);
+          }
+        }
+
+        // Close trades in DB that are no longer open on exchange
+        for (const trade of trades) {
+          if (!openSymbols.has(trade.symbol)) {
+            const entryPrice = parseFloat(trade.entry_price);
+            const ticker = key.platform === 'binance'
+              ? await new USDMClient({ api_key: apiKey, api_secret: apiSecret })
+                  .getSymbolPriceTicker({ symbol: trade.symbol }).catch(() => null)
+              : null;
+            const exitPrice = ticker ? parseFloat(ticker.price) : entryPrice;
+            const isLong = trade.direction !== 'SHORT';
+            const pnlPct = isLong
+              ? (exitPrice - entryPrice) / entryPrice * 100
+              : (entryPrice - exitPrice) / entryPrice * 100;
+            const pnlUsdt = parseFloat((pnlPct * parseFloat(trade.quantity) * entryPrice / 100).toFixed(4));
+
+            await db.query(
+              `UPDATE trades SET status = $1, pnl_usdt = $2 WHERE id = $3`,
+              [pnlPct > 0 ? 'WIN' : 'LOSS', pnlUsdt, trade.id]
+            );
+            bLog.trade(`DB synced: ${trade.symbol} ${trade.direction} → ${pnlPct > 0 ? 'WIN' : 'LOSS'} PnL=$${pnlUsdt}`);
+          }
+        }
+      } catch (e) {
+        bLog.error(`Sync error for key ${key.api_key_id}: ${e.message}`);
+      }
+    }
+  } catch (e) {
+    bLog.error(`syncTradeStatus error: ${e.message}`);
+  }
+}
+
 async function run() {
   log(`AI Smart Trader v4 | Telegram: ${!!TELEGRAM_TOKEN} | Chats: ${PRIVATE_CHATS.join(', ') || 'NONE'}`);
+  await syncTradeStatus();
   await main();
 }
 
