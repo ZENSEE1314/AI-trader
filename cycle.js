@@ -944,55 +944,9 @@ async function main() {
   }
 
   log('=== Smart Trader v3 Cycle Start ===');
-  const client = getClient();
+  const hasOwnerKeys = !!(API_KEY && API_SECRET);
 
   try {
-    const account   = await client.getAccountInformation({ omitZeroBalances: false });
-    const wallet    = parseFloat(account.totalWalletBalance);
-    const avail     = parseFloat(account.availableBalance);
-    const upnl      = parseFloat(account.totalUnrealizedProfit);
-    const positions = account.positions.filter(p => parseFloat(p.positionAmt) !== 0);
-
-    log(`Wallet=$${wallet.toFixed(4)} | Avail=$${avail.toFixed(4)} | uPnL=$${upnl.toFixed(4)} | Pos=${positions.length}`);
-
-    // ── CHECK OPEN POSITIONS (report but don't block new trades) ──
-    if (positions.length > 0) {
-      await checkTrailingStop(client);
-
-      for (const p of positions) {
-        const sym   = p.symbol;
-        const amt   = parseFloat(p.positionAmt);
-        const entry = parseFloat(p.entryPrice);
-        const pnl   = parseFloat(p.unrealizedProfit);
-        const lev   = parseInt(p.leverage);
-        const ticker = await client.getSymbolPriceTicker({ symbol: sym });
-        const cur   = parseFloat(ticker.price);
-        const isLong = amt > 0;
-        const pct    = (isLong ? (cur - entry) : (entry - cur)) / entry * 100 * lev;
-        const side   = isLong ? '🟢 LONG' : '🔴 SHORT';
-        const state  = tradeState.get(sym);
-        const tp1Str = state ? `TP1: \`$${fmtPrice(state.tp1)}\`  TP2: \`$${fmtPrice(state.tp2)}\`  TP3: \`$${fmtPrice(state.tp3)}\`` : '(TP managed by orders)';
-        const slStr  = state ? `\`$${fmtPrice(state.sl)}\`` : '(managed)';
-        const tpHits = state ? ` [${state.tpHit1 ? 'TP1✅' : 'TP1⏳'}${state.tpHit2 ? ' TP2✅' : ' TP2⏳'}]` : '';
-
-        await notify(
-          `📊 *Position Update — ${now()}*\n\n` +
-          `*${sym}* ${side} x${lev}${tpHits}\n` +
-          `Entry: \`$${fmtPrice(entry)}\` → Now: \`$${fmtPrice(cur)}\`\n` +
-          `PnL: ${pnl >= 0 ? '🟢' : '🔴'} *${pnl >= 0 ? '+' : ''}$${pnl.toFixed(4)}* (${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%)\n` +
-          `🎯 ${tp1Str}\n` +
-          `🛑 SL: ${slStr}\n` +
-          `💰 Wallet: *$${wallet.toFixed(4)} USDT*`
-        );
-      }
-    }
-
-    // ── SCAN & TRADE (always check signal queue, even with open positions) ──
-    if (avail < CONFIG.MIN_BALANCE) {
-      log(`Balance too low: $${avail.toFixed(4)}`);
-      await notify(`⚠️ *Bot — ${now()}*\nBalance too low: \`$${avail.toFixed(4)}\` USDT`);
-      return;
-    }
 
     // ── Check signal queue first (from bot.js validated signals) ─
     // Expire signals older than 45 min — stale entries shouldn't trade
@@ -1044,54 +998,35 @@ async function main() {
       return;
     }
 
-    const result = await openTrade(client, pick, wallet);
-    if (!result) {
-      log(`openTrade returned null for ${pick.sym} — skipping cycle`);
-      return;
-    }
-    const riskUsdt  = (wallet * CONFIG.WALLET_RISK_PCT).toFixed(2);
-    const isLongT   = result.direction !== 'SHORT';
-    const dirEmoji  = isLongT ? '🟢' : '🔴';
-    const tp1Pct    = (Math.abs(result.tp1 - result.entry) / result.entry * 100).toFixed(2);
-    const tp2Pct    = (Math.abs(result.tp2 - result.entry) / result.entry * 100).toFixed(2);
-    const tp3Pct    = (Math.abs(result.tp3 - result.entry) / result.entry * 100).toFixed(2);
-    const slPct     = (result.slDist * 100).toFixed(3);
-    const notional  = result.qty * result.entry;
-    const totalFees = notional * CONFIG.TAKER_FEE * 2;
-    const netProfit = notional * result.tpFullDist - totalFees;
-    const streakLabel = pick.streak > 0 ? `${pick.streak} 🟢` : `${Math.abs(pick.streak)} 🔴`;
+    log(`Signal ready: ${pick.sym} ${pick.direction}`);
 
-    await notify(
-      `🚀 *NEW TRADE — ${now()}*\n\n` +
-      `*${result.sym}* ${dirEmoji} *${result.direction} x${result.leverage}*\n` +
-      (pick.rule2Long ? `🏦 *Rule 2 — OB Reversal* (${pick.reversalType})\n` : '') +
-      `Confidence: *${result.confidence}* ⭐\n` +
-      `Entry: \`$${fmtPrice(result.entry)}\` | Qty: \`${result.qty}\`\n` +
-      `🎯 TP1 (50%): \`$${fmtPrice(result.tp1)}\` (+${tp1Pct}%) → SL to break even\n` +
-      `🎯 TP2 (25%): \`$${fmtPrice(result.tp2)}\` (+${tp2Pct}%) → SL to TP1\n` +
-      `🎯 TP3 (25%): \`$${fmtPrice(result.tp3)}\` (+${tp3Pct}%) → full close\n` +
-      `🛑 SL: \`$${fmtPrice(result.sl)}\` (-${slPct}% · swing point)\n` +
-      `💸 Fees: \`$${totalFees.toFixed(4)}\` | Net@TP3: \`$${netProfit.toFixed(4)}\`\n\n` +
-      `📊 *Structure:*\n` +
-      `• 15m: \`${pick.marketStructure}\` (${pick.trend})\n` +
-      `• 1m: \`${pick.entry1m?.reason || 'confirmed'}\`\n` +
-      `• Swing ref: \`$${fmtPrice(pick.swingRef)}\`\n` +
-      (pick.rule2Long && pick.obZone ? `• OB: \`$${fmtPrice(pick.obZone.low)}\`–\`$${fmtPrice(pick.obZone.high)}\`\n` : '') +
-      (pick.eql ? `• EQL: \`$${fmtPrice(pick.eql)}\`\n` : '') +
-      (pick.eqh ? `• EQH: \`$${fmtPrice(pick.eqh)}\`\n` : '') +
-      (pick.rule3Confluence ? `• 🎯 *Rule 3 Confluence* (${pick.confluenceCount}/3 levels)\n` : '') +
-      (pick.nearVWAP    ? `  └ Upper VWAP: \`$${fmtPrice(pick.vwap)}\` ✅\n` : '') +
-      (pick.near200EMA  ? `  └ 200 EMA: \`$${fmtPrice(pick.ema200)}\` ✅\n` : '') +
-      (pick.nearSessionOpen ? `  └ Session Open: \`$${fmtPrice(pick.sessionOpen)}\` ✅\n` : '') +
-      (pick.tpLevel     ? `• TP = ${isLongT ? 'PDH' : 'PDL'}: \`$${fmtPrice(pick.tpLevel)}\`\n` : '') +
-      (pick.pdl         ? `• PDL: \`$${fmtPrice(pick.pdl)}\` | PDH: \`$${fmtPrice(pick.pdh)}\`\n` : '') +
-      `• RSI: \`${pick.rsi?.toFixed(1)}\` | MACD: ${pick.macdBullish ? '✅' : '❌'} | Vol: \`${pick.volRatio.toFixed(1)}x\`\n` +
-      `• Streak: ${streakLabel} | Score: \`${pick.score.toFixed(1)}\`\n\n` +
-      `💰 Risk: *$${riskUsdt} USDT* | Wallet: *$${avail.toFixed(4)}*`
-    );
-
-    // Execute for all registered users
+    // ── Execute for all registered users from DB (main trading path) ──
     await executeForAllUsers(pick);
+
+    // ── Owner's Binance account (only if env keys are set) ──
+    if (hasOwnerKeys) {
+      try {
+        const client = getClient();
+        const account = await client.getAccountInformation({ omitZeroBalances: false });
+        const wallet = parseFloat(account.totalWalletBalance);
+        const avail = parseFloat(account.availableBalance);
+
+        if (avail >= CONFIG.MIN_BALANCE) {
+          const result = await openTrade(client, pick, wallet);
+          if (result) {
+            const dirEmoji = result.direction !== 'SHORT' ? '🟢' : '🔴';
+            await notify(
+              `🚀 *Owner Trade — ${now()}*\n` +
+              `*${result.sym}* ${dirEmoji} *${result.direction} x${result.leverage}*\n` +
+              `Entry: \`$${fmtPrice(result.entry)}\` | Qty: \`${result.qty}\`\n` +
+              `💰 Wallet: *$${avail.toFixed(4)}*`
+            );
+          }
+        }
+      } catch (ownerErr) {
+        log(`Owner Binance trade error: ${ownerErr.message}`);
+      }
+    }
 
   } catch (err) {
     if (checkBanError(err)) return;
