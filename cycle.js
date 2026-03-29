@@ -193,35 +193,29 @@ async function openTrade(client, pick, wallet) {
   const order = await client.submitNewOrder({ symbol: sym, side: entrySide, type: 'MARKET', quantity: qty });
   await sleep(1500);
 
-  // SL + TP — try closePosition first, fallback to quantity
+  // SL + TP via Algo Order API (Binance migrated conditional orders Dec 2025)
   let slOk = false, tpOk = false;
-  for (const method of ['closePosition', 'quantity']) {
-    if (slOk && tpOk) break;
-    const params = method === 'closePosition'
-      ? { closePosition: 'true' }
-      : { quantity: qty, reduceOnly: 'true' };
 
-    if (!slOk) {
-      try {
-        await client.submitNewOrder({
-          symbol: sym, side: closeSide, type: 'STOP_MARKET',
-          stopPrice: sl, workingType: 'MARK_PRICE', ...params,
-        });
-        slOk = true;
-        bLog.trade(`✅ Owner SL set at $${fmtPrice(sl)} (${method})`);
-      } catch (e) { bLog.error(`Owner SL ${method}: ${e.message}`); }
-    }
-    if (!tpOk) {
-      try {
-        await client.submitNewOrder({
-          symbol: sym, side: closeSide, type: 'TAKE_PROFIT_MARKET',
-          stopPrice: tp3, workingType: 'MARK_PRICE', ...params,
-        });
-        tpOk = true;
-        bLog.trade(`✅ Owner TP set at $${fmtPrice(tp3)} (${method})`);
-      } catch (e) { bLog.error(`Owner TP ${method}: ${e.message}`); }
-    }
-  }
+  try {
+    await client.submitNewAlgoOrder({
+      algoType: 'CONDITIONAL', symbol: sym, side: closeSide,
+      type: 'STOP_MARKET', triggerPrice: sl,
+      closePosition: 'true', workingType: 'MARK_PRICE',
+    });
+    slOk = true;
+    bLog.trade(`✅ Owner SL set at $${fmtPrice(sl)}`);
+  } catch (e) { bLog.error(`Owner SL algo failed: ${e.message}`); }
+
+  try {
+    await client.submitNewAlgoOrder({
+      algoType: 'CONDITIONAL', symbol: sym, side: closeSide,
+      type: 'TAKE_PROFIT_MARKET', triggerPrice: tp3,
+      closePosition: 'true', workingType: 'MARK_PRICE',
+    });
+    tpOk = true;
+    bLog.trade(`✅ Owner TP set at $${fmtPrice(tp3)}`);
+  } catch (e) { bLog.error(`Owner TP algo failed: ${e.message}`); }
+
   if (!slOk || !tpOk) {
     const missing = [!slOk ? 'SL' : '', !tpOk ? 'TP' : ''].filter(Boolean).join('+');
     bLog.error(`⚠️ Owner ${sym} missing ${missing} — set manually!`);
@@ -303,8 +297,9 @@ async function checkTrailingStop(client) {
         const struct15 = detectStructure(klines15);
         if (shouldExit15m(struct15, entry, isLong ? 'LONG' : 'SHORT')) {
           log(`Exit [${isLong ? 'LONG' : 'SHORT'}] ${sym}: 15m swing + liquidity swept`);
-          await client.cancelAllOpenOrders({ symbol: sym });
-          await client.submitNewOrder({ symbol: sym, side: closeSide, type: 'MARKET', closePosition: 'true' });
+          try { await client.cancelAllOpenOrders({ symbol: sym }); } catch (_) {}
+          try { await client.cancelAllAlgoOpenOrders({ symbol: sym }); } catch (_) {}
+          await client.submitNewOrder({ symbol: sym, side: closeSide, type: 'MARKET', quantity: Math.abs(amt), reduceOnly: 'true' });
           await notify(
             `*Exit: 15m Swing + Liq Swept*\n` +
             `*${sym}* ${isLong ? 'LONG' : 'SHORT'}\n` +
@@ -331,19 +326,20 @@ async function checkTrailingStop(client) {
           const newSl = fmtP(state.entry);
           log(`TP1 hit ${sym} @ $${fmtPrice(cur)}: closing 50%, SL → BE`);
           try {
-            await client.cancelAllOpenOrders({ symbol: sym });
+            try { await client.cancelAllOpenOrders({ symbol: sym }); } catch (_) {}
+            try { await client.cancelAllAlgoOpenOrders({ symbol: sym }); } catch (_) {}
             if (closeQty > 0) {
               await client.submitNewOrder({ symbol: sym, side: closeSide, type: 'MARKET', quantity: closeQty, reduceOnly: 'true' });
             }
-            await client.submitNewOrder({
-              symbol: sym, side: closeSide, type: 'STOP_MARKET',
-              stopPrice: newSl, closePosition: 'true',
-              workingType: 'MARK_PRICE', priceProtect: 'TRUE',
+            await client.submitNewAlgoOrder({
+              algoType: 'CONDITIONAL', symbol: sym, side: closeSide,
+              type: 'STOP_MARKET', triggerPrice: newSl,
+              closePosition: 'true', workingType: 'MARK_PRICE',
             });
-            await client.submitNewOrder({
-              symbol: sym, side: closeSide, type: 'TAKE_PROFIT_MARKET',
-              stopPrice: state.tp3, closePosition: 'true',
-              workingType: 'MARK_PRICE', priceProtect: 'TRUE',
+            await client.submitNewAlgoOrder({
+              algoType: 'CONDITIONAL', symbol: sym, side: closeSide,
+              type: 'TAKE_PROFIT_MARKET', triggerPrice: state.tp3,
+              closePosition: 'true', workingType: 'MARK_PRICE',
             });
           } catch (e) { log(`TP1 exec warn: ${e.message}`); state.tpHit1 = false; }
           await notify(
@@ -364,19 +360,20 @@ async function checkTrailingStop(client) {
           const newSl = fmtP(state.tp1);
           log(`TP2 hit ${sym} @ $${fmtPrice(cur)}: closing 25%, SL → TP1`);
           try {
-            await client.cancelAllOpenOrders({ symbol: sym });
+            try { await client.cancelAllOpenOrders({ symbol: sym }); } catch (_) {}
+            try { await client.cancelAllAlgoOpenOrders({ symbol: sym }); } catch (_) {}
             if (closeQty > 0) {
               await client.submitNewOrder({ symbol: sym, side: closeSide, type: 'MARKET', quantity: closeQty, reduceOnly: 'true' });
             }
-            await client.submitNewOrder({
-              symbol: sym, side: closeSide, type: 'STOP_MARKET',
-              stopPrice: newSl, closePosition: 'true',
-              workingType: 'MARK_PRICE', priceProtect: 'TRUE',
+            await client.submitNewAlgoOrder({
+              algoType: 'CONDITIONAL', symbol: sym, side: closeSide,
+              type: 'STOP_MARKET', triggerPrice: newSl,
+              closePosition: 'true', workingType: 'MARK_PRICE',
             });
-            await client.submitNewOrder({
-              symbol: sym, side: closeSide, type: 'TAKE_PROFIT_MARKET',
-              stopPrice: state.tp3, closePosition: 'true',
-              workingType: 'MARK_PRICE', priceProtect: 'TRUE',
+            await client.submitNewAlgoOrder({
+              algoType: 'CONDITIONAL', symbol: sym, side: closeSide,
+              type: 'TAKE_PROFIT_MARKET', triggerPrice: state.tp3,
+              closePosition: 'true', workingType: 'MARK_PRICE',
             });
           } catch (e) { log(`TP2 exec warn: ${e.message}`); state.tpHit2 = false; }
           await notify(
@@ -622,49 +619,36 @@ async function executeForAllUsers(pick) {
           // Wait for position to register before setting SL/TP
           await sleep(1500);
 
-          // Set SL and TP — critical for risk management
+          // SL + TP via Algo Order API (Binance migrated conditional orders Dec 2025)
           const closeSide = isLong ? 'SELL' : 'BUY';
           const slFmt = fmtP(slPrice);
           const tpFmt = fmtP(tp3Price);
-          bLog.trade(`Setting SL=$${slFmt} TP=$${tpFmt} for ${symbol} (pricePrec=${pricePrec})...`);
+          bLog.trade(`Setting SL=$${slFmt} TP=$${tpFmt} for ${symbol} via Algo API...`);
 
           let slOk = false, tpOk = false;
 
-          // Try closePosition approach first, fallback to quantity-based
-          for (const attempt of ['closePosition', 'quantity']) {
-            if (slOk && tpOk) break;
+          try {
+            await userClient.submitNewAlgoOrder({
+              algoType: 'CONDITIONAL', symbol, side: closeSide,
+              type: 'STOP_MARKET', triggerPrice: slFmt,
+              closePosition: 'true', workingType: 'MARK_PRICE',
+            });
+            slOk = true;
+            bLog.trade(`✅ SL set at $${slFmt}`);
+          } catch (e) {
+            bLog.error(`❌ SL algo failed for ${symbol}: ${e.message}`);
+          }
 
-            const orderParams = attempt === 'closePosition'
-              ? { closePosition: 'true' }
-              : { quantity: qty, reduceOnly: 'true' };
-
-            if (!slOk) {
-              try {
-                await userClient.submitNewOrder({
-                  symbol, side: closeSide, type: 'STOP_MARKET',
-                  stopPrice: slFmt, workingType: 'MARK_PRICE',
-                  ...orderParams,
-                });
-                slOk = true;
-                bLog.trade(`✅ SL set at $${slFmt} (${attempt})`);
-              } catch (e) {
-                bLog.error(`SL ${attempt} failed: ${e.message}`);
-              }
-            }
-
-            if (!tpOk) {
-              try {
-                await userClient.submitNewOrder({
-                  symbol, side: closeSide, type: 'TAKE_PROFIT_MARKET',
-                  stopPrice: tpFmt, workingType: 'MARK_PRICE',
-                  ...orderParams,
-                });
-                tpOk = true;
-                bLog.trade(`✅ TP set at $${tpFmt} (${attempt})`);
-              } catch (e) {
-                bLog.error(`TP ${attempt} failed: ${e.message}`);
-              }
-            }
+          try {
+            await userClient.submitNewAlgoOrder({
+              algoType: 'CONDITIONAL', symbol, side: closeSide,
+              type: 'TAKE_PROFIT_MARKET', triggerPrice: tpFmt,
+              closePosition: 'true', workingType: 'MARK_PRICE',
+            });
+            tpOk = true;
+            bLog.trade(`✅ TP set at $${tpFmt}`);
+          } catch (e) {
+            bLog.error(`❌ TP algo failed for ${symbol}: ${e.message}`);
           }
 
           if (!slOk || !tpOk) {
