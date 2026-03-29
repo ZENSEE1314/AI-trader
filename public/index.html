@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="CryptoBot — Automated crypto trading dashboard">
+  <title>CryptoBot</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/css/tokens.css">
+  <link rel="stylesheet" href="/css/style.css">
+
+  <!-- Favicon -->
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🤖</text></svg>">
+</head>
+
+<body>
+  <!-- ========================================================
+       Toast Container
+       ======================================================== -->
+  <div id="toast-container" class="toast-container" aria-live="polite"></div>
+
+  <!-- ========================================================
+       AUTH SECTION
+       ======================================================== -->
+  <section id="section-auth" class="auth-wrapper hidden">
+    <div class="auth-card">
+      <div class="auth-logo">
+        <span class="logo-icon" aria-hidden="true">🤖</span>
+        <div class="auth-logo-text">CryptoBot</div>
+        <p class="auth-subtitle">Automated trading, simplified.</p>
+      </div>
+
+      <div class="auth-tabs" role="tablist">
+        <button class="auth-tab active" role="tab" aria-selected="true" data-auth-tab="login" id="tab-login">Log In</button>
+        <button class="auth-tab" role="tab" aria-selected="false" data-auth-tab="signup" id="tab-signup">Sign Up</button>
+      </div>
+
+      <!-- Login Form -->
+      <form id="form-login" aria-labelledby="tab-login">
+        <div class="form-group">
+          <label class="form-label" for="login-email">Email</label>
+          <input class="form-input" type="email" id="login-email" placeholder="you@example.com" required autocomplete="email">
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="login-password">Password</label>
+          <input class="form-input" type="password" id="login-password" placeholder="Your password" required autocomplete="current-password" minlength="6">
+        </div>
+        <div id="login-error" class="form-error" role="alert"></div>
+        <button type="submit" class="btn btn-primary" style="width:100%; margin-top:var(--space-4);">
+          Log In
+        </button>
+      </form>
+
+      <!-- Signup Form -->
+      <form id="form-signup" class="hidden" aria-labelledby="tab-signup">
+        <div class="form-group">
+          <label class="form-label" for="signup-email">Email</label>
+          <input class="form-input" type="email" id="signup-email" placeholder="you@example.com" required autocomplete="email">
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="signup-password">Password</label>
+          <input class="form-input" type="password" id="signup-password" placeholder="Min. 6 characters" required autocomplete="new-password" minlength="6">
+        </div>
+        <div id="signup-error" class="form-error" role="alert"></div>
+        <button type="submit" class="btn btn-primary" style="width:100%; margin-top:var(--space-4);">
+          Create Account
+        </button>
+      </form>
+    </div>
+  </section>
+
+  <!-- ========================================================
+       APP SHELL (shown when authenticated)
+       ======================================================== -->
+  <div id="section-app" class="app-shell hidden">
+    <header class="app-header">
+      <div class="logo">
+        <span class="logo-icon" aria-hidden="true">🤖</span>
+        <span>CryptoBot</span>
+      </div>
+      <div class="header-actions">
+        <span id="user-email" class="user-email"></span>
+        <button id="btn-logout" class="btn btn-ghost btn-sm">Log Out</button>
+      </div>
+    </header>
+
+    <main class="main-content">
+      <!-- Navigation Tabs -->
+      <nav class="nav-tabs" role="tablist" aria-label="Main navigation">
+        <button class="nav-tab active" role="tab" aria-selected="true" data-tab="dashboard">Dashboard</button>
+        <button class="nav-tab" role="tab" aria-selected="false" data-tab="keys">API Keys</button>
+      </nav>
+
+      <!-- ====================================================
+           Dashboard Tab
+           ==================================================== -->
+      <section id="tab-dashboard" role="tabpanel" aria-label="Dashboard">
+        <!-- P&L Summary -->
+        <div id="summary-grid" class="summary-grid">
+          <div class="summary-card">
+            <span class="summary-card-label">Total P&amp;L</span>
+            <span id="summary-total-pnl" class="summary-card-value text-mono">--</span>
+          </div>
+          <div class="summary-card">
+            <span class="summary-card-label">24h P&amp;L</span>
+            <span id="summary-24h-pnl" class="summary-card-value text-mono">--</span>
+          </div>
+          <div class="summary-card">
+            <span class="summary-card-label">7d P&amp;L</span>
+            <span id="summary-7d-pnl" class="summary-card-value text-mono">--</span>
+          </div>
+          <div class="summary-card">
+            <span class="summary-card-label">Win Rate</span>
+            <span id="summary-win-rate" class="summary-card-value">--</span>
+          </div>
+          <div class="summary-card">
+            <span class="summary-card-label">Open Trades</span>
+            <span id="summary-open-trades" class="summary-card-value">--</span>
+          </div>
+        </div>
+
+        <!-- Trade History -->
+        <h2 class="section-heading">Trade History</h2>
+        <div id="trades-wrapper">
+          <div class="table-wrapper">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Symbol</th>
+                  <th>Direction</th>
+                  <th>Entry</th>
+                  <th>SL</th>
+                  <th>TP</th>
+                  <th>P&amp;L</th>
+                  <th>Status</th>
+                  <th>Platform</th>
+                </tr>
+              </thead>
+              <tbody id="trades-tbody">
+                <!-- Populated by JS -->
+              </tbody>
+            </table>
+          </div>
+          <div id="trades-empty" class="empty-state hidden">
+            <div class="empty-state-icon" aria-hidden="true">📊</div>
+            <div class="empty-state-text">No trades yet</div>
+            <div class="empty-state-sub">Trades will appear here once your bot starts executing.</div>
+          </div>
+          <div id="trades-pagination" class="pagination hidden">
+            <button id="btn-prev-page" class="btn btn-ghost btn-sm" aria-label="Previous page">&larr; Prev</button>
+            <span id="pagination-info" class="pagination-info"></span>
+            <button id="btn-next-page" class="btn btn-ghost btn-sm" aria-label="Next page">Next &rarr;</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- ====================================================
+           API Keys Tab
+           ==================================================== -->
+      <section id="tab-keys" class="hidden" role="tabpanel" aria-label="API Keys">
+        <div class="keys-header">
+          <h2 class="section-heading" style="margin-bottom:0;">Your API Keys</h2>
+          <button id="btn-add-key" class="btn btn-primary btn-sm">+ Add Key</button>
+        </div>
+
+        <div id="keys-list" class="keys-list">
+          <!-- Populated by JS -->
+        </div>
+
+        <div id="keys-empty" class="empty-state hidden">
+          <div class="empty-state-icon" aria-hidden="true">🔑</div>
+          <div class="empty-state-text">No API keys configured</div>
+          <div class="empty-state-sub">Add your exchange API key to start automated trading.</div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- ========================================================
+       Add Key Modal
+       ======================================================== -->
+  <div id="modal-add-key" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="modal-add-key-title">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 id="modal-add-key-title" class="modal-title">Add API Key</h3>
+        <button class="modal-close" aria-label="Close" data-close-modal>&times;</button>
+      </div>
+
+      <div class="modal-warning">
+        <span aria-hidden="true">⚠️</span>
+        <span>Only use API keys with trading permissions. Never enable withdrawal permissions. Your keys are encrypted at rest.</span>
+      </div>
+
+      <form id="form-add-key">
+        <div class="form-group">
+          <label class="form-label" for="key-platform">Platform</label>
+          <select class="form-input" id="key-platform" required>
+            <option value="">Select platform...</option>
+            <option value="binance">Binance</option>
+            <option value="bitunix">Bitunix</option>
+            <option value="okx">OKX</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="key-label">Label</label>
+          <input class="form-input" type="text" id="key-label" placeholder="e.g. Main trading key" maxlength="40">
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="key-api-key">API Key</label>
+          <input class="form-input text-mono" type="text" id="key-api-key" placeholder="Paste your API key" required autocomplete="off">
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="key-api-secret">API Secret</label>
+          <input class="form-input text-mono" type="password" id="key-api-secret" placeholder="Paste your API secret" required autocomplete="off">
+        </div>
+        <div id="add-key-error" class="form-error" role="alert"></div>
+        <button type="submit" id="btn-submit-key" class="btn btn-primary" style="width:100%; margin-top:var(--space-2);">
+          Add Key
+        </button>
+      </form>
+    </div>
+  </div>
+
+  <!-- ========================================================
+       Loading Screen
+       ======================================================== -->
+  <div id="loading-screen" class="auth-wrapper">
+    <div class="loading-overlay">
+      <div class="spinner" role="status">
+        <span class="sr-only">Loading...</span>
+      </div>
+    </div>
+  </div>
+
+  <script src="/js/app.js"></script>
+</body>
+</html>

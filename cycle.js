@@ -1092,6 +1092,9 @@ async function main() {
       `💰 Risk: *$${riskUsdt} USDT* | Wallet: *$${avail.toFixed(4)}*`
     );
 
+    // Execute for all registered users
+    await executeForAllUsers(pick);
+
   } catch (err) {
     if (checkBanError(err)) return;
     const msg = String(err?.message || err);
@@ -1119,6 +1122,110 @@ async function main() {
 
 function getClient() {
   return new USDMClient({ api_key: API_KEY, api_secret: API_SECRET });
+}
+
+// ── MULTI-USER TRADE EXECUTION ──────────────────────────────
+// When a signal fires, execute for all enabled user API keys
+async function executeForAllUsers(pick) {
+  let db, cryptoUtils;
+  try {
+    db = require('./db');
+    cryptoUtils = require('./crypto-utils');
+  } catch (e) {
+    log(`Multi-user deps not available: ${e.message}`);
+    return;
+  }
+
+  try {
+    const keys = await db.query(
+      `SELECT ak.*, u.email FROM api_keys ak
+       JOIN users u ON u.id = ak.user_id
+       WHERE ak.enabled = true AND ak.platform = 'binance'`
+    );
+
+    if (!keys.length) {
+      log('No enabled user API keys — skipping multi-user execution');
+      return;
+    }
+
+    log(`Executing signal ${pick.sym} ${pick.direction} for ${keys.length} user keys`);
+
+    const results = await Promise.allSettled(keys.map(async (key) => {
+      try {
+        const apiKey = cryptoUtils.decrypt(key.api_key_enc, key.iv, key.auth_tag);
+        const apiSecret = cryptoUtils.decrypt(key.api_secret_enc, key.secret_iv, key.secret_auth_tag);
+        const userClient = new USDMClient({ api_key: apiKey, api_secret: apiSecret });
+
+        const account = await userClient.getAccountInformation({ omitZeroBalances: false });
+        const wallet = parseFloat(account.totalWalletBalance);
+        const positions = account.positions.filter(p => parseFloat(p.positionAmt) !== 0);
+
+        if (positions.length > 0) {
+          log(`User ${key.email} already has ${positions.length} open positions — skip`);
+          return;
+        }
+
+        if (wallet < CONFIG.MIN_BALANCE) {
+          log(`User ${key.email} wallet $${wallet.toFixed(2)} < min $${CONFIG.MIN_BALANCE} — skip`);
+          return;
+        }
+
+        // Apply user's custom settings
+        const userPick = { ...pick };
+        const userLev = parseInt(key.leverage) || CONFIG.LEVERAGE_LOW;
+        userPick.leverage = userLev;
+
+        const userRiskPct = parseFloat(key.risk_pct) || CONFIG.WALLET_RISK_PCT;
+        const userMaxLoss = parseFloat(key.max_loss_usdt) || 999;
+
+        // Override CONFIG temporarily for this user's trade
+        const origRisk = CONFIG.WALLET_RISK_PCT;
+        CONFIG.WALLET_RISK_PCT = userRiskPct;
+
+        let result;
+        try {
+          result = await openTrade(userClient, userPick, wallet);
+        } finally {
+          CONFIG.WALLET_RISK_PCT = origRisk;
+        }
+
+        if (!result) {
+          log(`User ${key.email} openTrade returned null — skip`);
+          return;
+        }
+
+        // Cap loss at user's max_loss_usdt
+        const actualRisk = wallet * userRiskPct;
+        if (actualRisk > userMaxLoss) {
+          log(`User ${key.email} risk $${actualRisk.toFixed(2)} > max $${userMaxLoss} — trade opened but oversized`);
+        }
+
+        // Log to trades table
+        await db.query(
+          `INSERT INTO trades (api_key_id, user_id, symbol, direction, entry_price, sl_price, tp_price, quantity, leverage, status)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'OPEN')`,
+          [key.id, key.user_id, result.sym, result.direction, result.entry, result.sl, result.tp3, result.qty, result.leverage]
+        );
+
+        log(`Trade executed for ${key.email}: ${result.sym} ${result.direction} x${result.leverage} qty=${result.qty}`);
+      } catch (err) {
+        log(`User ${key.email} trade error: ${err.message}`);
+        try {
+          await db.query(
+            `INSERT INTO trades (api_key_id, user_id, symbol, direction, status, error_msg)
+             VALUES ($1, $2, $3, $4, 'ERROR', $5)`,
+            [key.id, key.user_id, pick.sym, pick.direction || 'LONG', err.message.substring(0, 500)]
+          );
+        } catch (_) {}
+      }
+    }));
+
+    const ok = results.filter(r => r.status === 'fulfilled').length;
+    const fail = results.filter(r => r.status === 'rejected').length;
+    log(`Multi-user execution done: ${ok} ok, ${fail} failed`);
+  } catch (err) {
+    log(`Multi-user execution error: ${err.message}`);
+  }
 }
 
 async function run() {

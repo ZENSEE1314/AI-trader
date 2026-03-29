@@ -1,0 +1,116 @@
+/* ============================================================
+   Design Tokens — CryptoBot Dashboard
+   Single source of truth for all visual values.
+   ============================================================ */
+
+:root {
+  /* --- Colors: Core --- */
+  --color-bg:          #0d1117;
+  --color-bg-raised:   #131920;
+  --color-surface:     #161b22;
+  --color-surface-alt: #1c2333;
+  --color-border:      #30363d;
+  --color-border-muted:#21262d;
+
+  /* --- Colors: Text --- */
+  --color-fg:          #e6edf3;
+  --color-fg-muted:    #8b949e;
+  --color-fg-subtle:   #6e7681;
+
+  /* --- Colors: Accent --- */
+  --color-accent:      #00d4aa;
+  --color-accent-fg:   #0d1117;
+  --color-accent-muted:#00d4aa26;
+  --color-accent-hover:#00e8bb;
+
+  /* --- Colors: Semantic --- */
+  --color-success:     #00d4aa;
+  --color-success-muted:#00d4aa1a;
+  --color-danger:      #ff4757;
+  --color-danger-muted:#ff47571a;
+  --color-danger-hover:#ff5e6c;
+  --color-warning:     #ffa726;
+  --color-warning-muted:#ffa7261a;
+  --color-info:        #58a6ff;
+  --color-info-muted:  #58a6ff1a;
+
+  /* --- Colors: Platform badges --- */
+  --color-binance:     #f0b90b;
+  --color-bitunix:     #6366f1;
+  --color-okx:         #fff;
+
+  /* --- Spacing --- */
+  --space-1:  4px;
+  --space-2:  8px;
+  --space-3:  12px;
+  --space-4:  16px;
+  --space-5:  20px;
+  --space-6:  24px;
+  --space-8:  32px;
+  --space-10: 40px;
+  --space-12: 48px;
+  --space-16: 64px;
+  --space-24: 96px;
+
+  /* --- Radius --- */
+  --radius-none: 0;
+  --radius-sm:   4px;
+  --radius-md:   8px;
+  --radius-lg:   12px;
+  --radius-xl:   16px;
+  --radius-full: 9999px;
+
+  /* --- Shadows --- */
+  --shadow-sm:    0 1px 2px rgba(0,0,0,.3);
+  --shadow-md:    0 4px 12px rgba(0,0,0,.4);
+  --shadow-lg:    0 8px 24px rgba(0,0,0,.5);
+  --shadow-xl:    0 16px 48px rgba(0,0,0,.6);
+  --shadow-inner: inset 0 1px 4px rgba(0,0,0,.4);
+  --shadow-glow:  0 0 20px rgba(0,212,170,.15);
+
+  /* --- Typography --- */
+  --font-display: 'Space Grotesk', system-ui, sans-serif;
+  --font-body:    'IBM Plex Sans', system-ui, sans-serif;
+  --font-mono:    'JetBrains Mono', 'Fira Code', monospace;
+
+  --text-xs:   0.75rem;   /* 12px */
+  --text-sm:   0.875rem;  /* 14px */
+  --text-base: 1rem;      /* 16px */
+  --text-lg:   1.125rem;  /* 18px */
+  --text-xl:   1.25rem;   /* 20px */
+  --text-2xl:  1.5rem;    /* 24px */
+  --text-3xl:  2rem;      /* 32px */
+  --text-4xl:  2.5rem;    /* 40px */
+  --text-5xl:  3.5rem;    /* 56px */
+
+  --leading-tight: 1.15;
+  --leading-normal:1.5;
+  --leading-loose: 1.75;
+
+  --weight-light:    200;
+  --weight-normal:   400;
+  --weight-medium:   500;
+  --weight-semibold: 600;
+  --weight-bold:     700;
+  --weight-black:    800;
+
+  /* --- Z-index --- */
+  --z-base:    1;
+  --z-dropdown:10;
+  --z-sticky:  20;
+  --z-overlay: 30;
+  --z-modal:   40;
+  --z-popover: 50;
+  --z-toast:   60;
+  --z-tooltip: 70;
+
+  /* --- Transitions --- */
+  --duration-fast:   120ms;
+  --duration-normal: 200ms;
+  --duration-slow:   400ms;
+  --ease-out:        cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in-out:     cubic-bezier(0.65, 0, 0.35, 1);
+
+  /* --- Breakpoints (for reference — used in media queries) --- */
+  /* sm: 640px, md: 768px, lg: 1024px, xl: 1280px, 2xl: 1536px */
+}

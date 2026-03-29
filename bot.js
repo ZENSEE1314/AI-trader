@@ -1834,6 +1834,11 @@ async function start() {
     setInterval(() => runTrader().catch(e => log(`Trader cycle error: ${e.message}`)),
       TRADE_INTERVAL_MIN * 60 * 1000);
   }, 60 * 1000); // wait 60s after startup before first trade cycle
+
+  // ── WEB SERVER ──────────────────────────────────────────────
+  const app = require('./server');
+  const PORT = process.env.PORT || 3000;
+  app.listen(PORT, () => log(`Web dashboard running on port ${PORT}`));
 }
 
 start().catch(err => {
