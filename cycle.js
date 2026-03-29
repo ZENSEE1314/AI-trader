@@ -177,8 +177,12 @@ async function openTrade(client, pick, wallet) {
   const notional = qty * price;
   const totalFees = notional * CONFIG.TAKER_FEE * 2;
   const tp1Profit = notional * TP_PCT * 0.5;
+  bLog.trade(`Fee check: notional=$${notional.toFixed(2)} fees=$${totalFees.toFixed(4)} TP1=$${tp1Profit.toFixed(4)} SL%=${(slDist*100).toFixed(3)}%`);
   log(`Fee check: notional=$${notional.toFixed(2)} fees=$${totalFees.toFixed(4)} TP1=$${tp1Profit.toFixed(4)} SL%=${(slDist*100).toFixed(3)}%`);
-  if (tp1Profit < totalFees * 1.5) throw new Error(`Trade rejected: TP1 profit < 1.5x fees`);
+  if (tp1Profit < totalFees * 1.5) {
+    bLog.trade(`Trade rejected: TP1 profit $${tp1Profit.toFixed(4)} < 1.5x fees $${(totalFees * 1.5).toFixed(4)}`);
+    throw new Error(`Trade rejected: TP1 profit < 1.5x fees`);
+  }
 
   const entrySide = isLong ? 'BUY' : 'SELL';
   const closeSide = isLong ? 'SELL' : 'BUY';
@@ -413,26 +417,29 @@ async function main() {
     }
 
     // ── Step 2: Execute for all registered users ──
+    bLog.trade(`Executing trade: ${pick.symbol} ${pick.direction} for registered users...`);
     await executeForAllUsers(pick);
 
     // ── Step 3: Owner's Binance account ──
     if (hasOwnerKeys) {
+      bLog.trade(`Executing trade on owner Binance account...`);
       try {
         const client = getClient();
         const account = await client.getAccountInformation({ omitZeroBalances: false });
         const wallet = parseFloat(account.totalWalletBalance);
         const avail = parseFloat(account.availableBalance);
+        bLog.trade(`Owner wallet: $${wallet.toFixed(2)} available: $${avail.toFixed(2)}`);
 
-        // Check trailing stops first
         await checkTrailingStop(client);
 
         if (avail >= CONFIG.MIN_BALANCE) {
-          // Check if already in a position
           const openPos = account.positions.filter(p => parseFloat(p.positionAmt) !== 0);
           if (openPos.length === 0) {
+            bLog.trade(`No open positions — opening trade on ${pick.symbol}...`);
             const result = await openTrade(client, pick, wallet);
             if (result) {
               const dirEmoji = result.direction !== 'SHORT' ? '🟢' : '🔴';
+              bLog.trade(`TRADE OPENED: ${result.sym} ${result.direction} x${result.leverage} qty=${result.qty} entry=$${fmtPrice(result.entry)}`);
               await notify(
                 `*AI Trade — ${now()}*\n` +
                 `*${result.sym}* ${dirEmoji} *${result.direction} x${result.leverage}*\n` +
@@ -443,24 +450,32 @@ async function main() {
                 `Qty: \`${result.qty}\` | Wallet: *$${avail.toFixed(2)}*\n` +
                 `AI Score: *${pick.score}* | Sentiment: ${pick.sentiment || 'neutral'}`
               );
+            } else {
+              bLog.trade(`openTrade returned null for ${pick.symbol} — trade rejected`);
             }
           } else {
-            log(`Already in position (${openPos.map(p => p.symbol).join(', ')}) — monitoring`);
+            bLog.trade(`Already in position: ${openPos.map(p => p.symbol).join(', ')} — monitoring only`);
           }
+        } else {
+          bLog.trade(`Owner balance too low: $${avail.toFixed(2)} < min $${CONFIG.MIN_BALANCE}`);
         }
       } catch (ownerErr) {
+        bLog.error(`Owner trade error: ${ownerErr.message}`);
         log(`Owner trade error: ${ownerErr.message}`);
       }
+    } else {
+      bLog.system(`No owner API keys in env — relying on user keys from dashboard`);
     }
 
   } catch (err) {
     if (checkBanError(err)) return;
     const msg = String(err?.message || err);
     if (msg.toLowerCase().includes('agreement')) {
-      log(`Binance agreement required: ${msg}`);
+      bLog.error(`Binance agreement required: ${msg}`);
       await notify(`*Action Required — Binance Futures Agreement*\nSign the USDT-M Futures agreement on Binance.`);
       return;
     }
+    bLog.error(`Cycle error: ${msg}`);
     log(`ERROR: ${msg}`);
     await notify(`*Bot Error — ${now()}*\n\`${msg.substring(0, 200)}\``);
   }
@@ -480,6 +495,7 @@ async function executeForAllUsers(pick) {
     cryptoUtils = require('./crypto-utils');
     BitunixClient = require('./bitunix-client').BitunixClient;
   } catch (e) {
+    bLog.error(`Multi-user deps not available: ${e.message}`);
     log(`Multi-user deps not available: ${e.message}`);
     return;
   }
@@ -492,11 +508,13 @@ async function executeForAllUsers(pick) {
     );
 
     if (!keys.length) {
+      bLog.trade('No enabled user API keys found — no users to trade for');
       log('No enabled user API keys — skipping multi-user execution');
       return;
     }
 
     const sym = pick.symbol || pick.sym;
+    bLog.trade(`Found ${keys.length} enabled API key(s) — executing ${sym} ${pick.direction}...`);
     log(`Executing ${sym} ${pick.direction} for ${keys.length} user keys`);
 
     const results = await Promise.allSettled(keys.map(async (key) => {
@@ -506,11 +524,11 @@ async function executeForAllUsers(pick) {
         const bannedCoins = (key.banned_coins || '').split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
 
         if (allowedCoins.length > 0 && !allowedCoins.includes(symbol)) {
-          log(`User ${key.email} coin ${symbol} not in allowed list`);
+          bLog.trade(`User ${key.email}: ${symbol} not in allowed list — skipped`);
           return;
         }
         if (bannedCoins.includes(symbol)) {
-          log(`User ${key.email} coin ${symbol} is banned`);
+          bLog.trade(`User ${key.email}: ${symbol} is banned — skipped`);
           return;
         }
 
@@ -531,42 +549,45 @@ async function executeForAllUsers(pick) {
           wallet = parseFloat(account.totalWalletBalance);
           openPosCount = account.positions.filter(p => parseFloat(p.positionAmt) !== 0).length;
 
-          if (openPosCount >= maxPos) { log(`User ${key.email} at max positions`); return; }
-          if (wallet < CONFIG.MIN_BALANCE) { log(`User ${key.email} low wallet`); return; }
+          if (openPosCount >= maxPos) { bLog.trade(`User ${key.email}: at max positions (${openPosCount}/${maxPos})`); return; }
+          if (wallet < CONFIG.MIN_BALANCE) { bLog.trade(`User ${key.email}: wallet too low ($${wallet.toFixed(2)})`); return; }
+
+          bLog.trade(`User ${key.email} Binance: wallet=$${wallet.toFixed(2)} pos=${openPosCount}/${maxPos} lev=x${userLev}`);
 
           const marginUsdt = wallet * userRiskPct;
           const notional = marginUsdt * userLev;
           let qty = notional / price;
           if (qty * price < 5.5) qty = 5.5 / price;
 
-          // 1% TP targeting
-          const slDistPct = CONFIG.TP_PCT; // SL = 1% for 1:1 RR minimum
-          const slPrice = isLong ? price * (1 - slDistPct) : price * (1 + slDistPct);
-          const tp1Price = isLong ? price * (1 + CONFIG.TP_PCT) : price * (1 - CONFIG.TP_PCT);
-          const tp3Price = isLong ? price * (1 + CONFIG.TP_PCT * CONFIG.TP3_MULT) : price * (1 - CONFIG.TP_PCT * CONFIG.TP3_MULT);
+          // Use SMC engine SL if available, otherwise 1% default
+          const slPrice = pick.sl || (isLong ? price * (1 - CONFIG.TP_PCT) : price * (1 + CONFIG.TP_PCT));
+          const tp3Price = pick.tp3 || (isLong ? price * (1 + CONFIG.TP_PCT * CONFIG.TP3_MULT) : price * (1 - CONFIG.TP_PCT * CONFIG.TP3_MULT));
 
           try { await userClient.setLeverage({ symbol, leverage: userLev }); } catch (_) {}
           try { await userClient.setMarginType({ symbol, marginType: 'ISOLATED' }); } catch (e) { if (!e.message?.includes('No need')) throw e; }
 
           const info = await userClient.getExchangeInfo();
           const sinfo = info.symbols.find(s => s.symbol === symbol);
-          const qtyPrec = sinfo?.quantityPrecision || 6;
-          const pricePrec = sinfo?.pricePrecision || 2;
+          if (!sinfo) { bLog.error(`User ${key.email}: ${symbol} not found on Binance`); return; }
+          const qtyPrec = sinfo.quantityPrecision || 6;
+          const pricePrec = sinfo.pricePrecision || 2;
           qty = Math.floor(qty * Math.pow(10, qtyPrec)) / Math.pow(10, qtyPrec);
-          if (qty <= 0) { log(`User ${key.email} qty too small`); return; }
+          if (qty <= 0) { bLog.trade(`User ${key.email}: qty too small after rounding`); return; }
           const fmtP = (p) => parseFloat(p.toFixed(pricePrec));
 
+          bLog.trade(`User ${key.email}: placing MARKET ${isLong ? 'BUY' : 'SELL'} ${symbol} qty=${qty}...`);
           await userClient.submitNewOrder({ symbol, side: isLong ? 'BUY' : 'SELL', type: 'MARKET', quantity: qty });
 
           const closeSide = isLong ? 'SELL' : 'BUY';
-          try { await userClient.submitNewOrder({ symbol, side: closeSide, type: 'STOP_MARKET', stopPrice: fmtP(slPrice), closePosition: 'true', workingType: 'MARK_PRICE', priceProtect: 'TRUE' }); } catch (_) {}
-          try { await userClient.submitNewOrder({ symbol, side: closeSide, type: 'TAKE_PROFIT_MARKET', stopPrice: fmtP(tp3Price), closePosition: 'true', workingType: 'MARK_PRICE', priceProtect: 'TRUE' }); } catch (_) {}
+          try { await userClient.submitNewOrder({ symbol, side: closeSide, type: 'STOP_MARKET', stopPrice: fmtP(slPrice), closePosition: 'true', workingType: 'MARK_PRICE', priceProtect: 'TRUE' }); } catch (e) { bLog.error(`SL order failed: ${e.message}`); }
+          try { await userClient.submitNewOrder({ symbol, side: closeSide, type: 'TAKE_PROFIT_MARKET', stopPrice: fmtP(tp3Price), closePosition: 'true', workingType: 'MARK_PRICE', priceProtect: 'TRUE' }); } catch (e) { bLog.error(`TP order failed: ${e.message}`); }
 
           await db.query(
             `INSERT INTO trades (api_key_id, user_id, symbol, direction, entry_price, sl_price, tp_price, quantity, leverage, status)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'OPEN')`,
             [key.id, key.user_id, symbol, pick.direction, price, fmtP(slPrice), fmtP(tp3Price), qty, userLev]
           );
+          bLog.trade(`✅ Binance OK: ${key.email} ${symbol} ${pick.direction} x${userLev} qty=${qty} entry=$${fmtPrice(price)}`);
           log(`Binance OK: ${key.email} ${symbol} ${pick.direction} x${userLev}`);
 
         } else if (key.platform === 'bitunix') {
@@ -575,8 +596,10 @@ async function executeForAllUsers(pick) {
           wallet = parseFloat(account.totalWalletBalance);
           openPosCount = account.positions.length;
 
-          if (openPosCount >= maxPos) { log(`User ${key.email} at max positions`); return; }
-          if (wallet < CONFIG.MIN_BALANCE) { log(`User ${key.email} low wallet`); return; }
+          if (openPosCount >= maxPos) { bLog.trade(`User ${key.email}: at max positions (${openPosCount}/${maxPos})`); return; }
+          if (wallet < CONFIG.MIN_BALANCE) { bLog.trade(`User ${key.email}: wallet too low ($${wallet.toFixed(2)})`); return; }
+
+          bLog.trade(`User ${key.email} Bitunix: wallet=$${wallet.toFixed(2)} pos=${openPosCount}/${maxPos} lev=x${userLev}`);
 
           const marginUsdt = wallet * userRiskPct;
           const notional = marginUsdt * userLev;
@@ -584,12 +607,13 @@ async function executeForAllUsers(pick) {
           if (qty * price < 5.5) qty = 5.5 / price;
           qty = parseFloat(qty.toFixed(6));
 
-          const slPrice = isLong ? price * (1 - CONFIG.TP_PCT) : price * (1 + CONFIG.TP_PCT);
-          const tp3Price = isLong ? price * (1 + CONFIG.TP_PCT * CONFIG.TP3_MULT) : price * (1 - CONFIG.TP_PCT * CONFIG.TP3_MULT);
+          const slPrice = pick.sl || (isLong ? price * (1 - CONFIG.TP_PCT) : price * (1 + CONFIG.TP_PCT));
+          const tp3Price = pick.tp3 || (isLong ? price * (1 + CONFIG.TP_PCT * CONFIG.TP3_MULT) : price * (1 - CONFIG.TP_PCT * CONFIG.TP3_MULT));
 
           try { await userClient.changeMarginMode(symbol, 'ISOLATION'); } catch (_) {}
           try { await userClient.changeLeverage(symbol, userLev); } catch (_) {}
 
+          bLog.trade(`User ${key.email}: placing Bitunix MARKET ${isLong ? 'BUY' : 'SELL'} ${symbol} qty=${qty}...`);
           const order = await userClient.placeOrder({
             symbol, side: isLong ? 'BUY' : 'SELL',
             qty: String(qty), orderType: 'MARKET', tradeSide: 'OPEN',
@@ -606,7 +630,7 @@ async function executeForAllUsers(pick) {
                 tpPrice: parseFloat(tp3Price.toFixed(8)),
                 slPrice: parseFloat(slPrice.toFixed(8)),
               });
-            } catch (e) { log(`Bitunix TP/SL error: ${e.message}`); }
+            } catch (e) { bLog.error(`Bitunix TP/SL error: ${e.message}`); }
           }
 
           await db.query(
@@ -614,17 +638,23 @@ async function executeForAllUsers(pick) {
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'OPEN')`,
             [key.id, key.user_id, symbol, pick.direction, price, parseFloat(slPrice.toFixed(8)), parseFloat(tp3Price.toFixed(8)), qty, userLev]
           );
+          bLog.trade(`✅ Bitunix OK: ${key.email} ${symbol} ${pick.direction} x${userLev} qty=${qty}`);
           log(`Bitunix OK: ${key.email} ${symbol} ${pick.direction} x${userLev}`);
+        } else {
+          bLog.error(`User ${key.email}: unknown platform "${key.platform}"`);
         }
       } catch (err) {
+        bLog.error(`User ${key.email} trade error: ${err.message}`);
         log(`User ${key.email} trade error: ${err.message}`);
       }
     }));
 
     const ok = results.filter(r => r.status === 'fulfilled').length;
     const fail = results.filter(r => r.status === 'rejected').length;
+    bLog.trade(`Multi-user execution done: ${ok} processed, ${fail} rejected`);
     log(`Multi-user done: ${ok} ok, ${fail} failed`);
   } catch (err) {
+    bLog.error(`Multi-user error: ${err.message}`);
     log(`Multi-user error: ${err.message}`);
   }
 }
