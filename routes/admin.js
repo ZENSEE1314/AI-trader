@@ -69,13 +69,42 @@ router.put('/subscriptions/:id', async (req, res) => {
     if (!sub.length) return res.status(404).json({ error: 'Not found' });
 
     if (action === 'approve') {
-      const now = new Date();
-      const expires = new Date(now);
-      expires.setMonth(expires.getMonth() + 1);
-      await query(
-        `UPDATE subscriptions SET status = 'active', starts_at = $1, expires_at = $2 WHERE id = $3`,
-        [now, expires, req.params.id]
+      const userId = sub[0].user_id;
+      // Extend by 30 days (stacks on existing time)
+      const existing = await query(
+        `SELECT id, expires_at FROM subscriptions WHERE user_id = $1 AND status = 'active' AND expires_at > NOW()
+         ORDER BY expires_at DESC LIMIT 1`,
+        [userId]
       );
+
+      const now = new Date();
+      let newExpiry;
+      if (existing.length) {
+        newExpiry = new Date(existing[0].expires_at);
+        newExpiry.setDate(newExpiry.getDate() + 30);
+        await query('UPDATE subscriptions SET expires_at = $1 WHERE id = $2', [newExpiry, existing[0].id]);
+        // Mark this payment record as processed
+        await query('UPDATE subscriptions SET status = $1 WHERE id = $2', ['processed', req.params.id]);
+      } else {
+        newExpiry = new Date(now);
+        newExpiry.setDate(newExpiry.getDate() + 30);
+        await query(
+          `UPDATE subscriptions SET status = 'active', starts_at = $1, expires_at = $2 WHERE id = $3`,
+          [now, newExpiry, req.params.id]
+        );
+      }
+
+      // Pay referral commissions
+      const settings = {};
+      const rows = await query('SELECT key, value FROM settings');
+      for (const r of rows) settings[r.key] = r.value;
+      const commSettings = {
+        price: parseFloat(settings.sub_price) || 29.99,
+        tier1: parseFloat(settings.commission_tier1) || 0,
+        tier2: parseFloat(settings.commission_tier2) || 0,
+        tier3: parseFloat(settings.commission_tier3) || 0,
+      };
+      await payReferralCommission(userId, commSettings);
     } else {
       await query('UPDATE subscriptions SET status = $1 WHERE id = $2', ['rejected', req.params.id]);
     }
@@ -85,6 +114,28 @@ router.put('/subscriptions/:id', async (req, res) => {
     res.status(500).json({ error: 'Server error' });
   }
 });
+
+// 3-tier referral commission (same logic as subscription.js)
+async function payReferralCommission(userId, settings) {
+  try {
+    const tiers = [settings.tier1, settings.tier2, settings.tier3];
+    let currentId = userId;
+    for (let tier = 0; tier < 3; tier++) {
+      const pct = tiers[tier];
+      if (!pct || pct <= 0) break;
+      const user = await query('SELECT referred_by FROM users WHERE id = $1', [currentId]);
+      if (!user.length || !user[0].referred_by) break;
+      const referrerId = user[0].referred_by;
+      const commission = settings.price * (pct / 100);
+      await query('UPDATE users SET wallet_balance = wallet_balance + $1 WHERE id = $2', [commission, referrerId]);
+      await query(
+        `INSERT INTO wallet_transactions (user_id, type, amount, description, ref_id) VALUES ($1, 'commission', $2, $3, $4)`,
+        [referrerId, commission, `Tier ${tier + 1} commission from user #${userId} (${pct}%)`, userId]
+      );
+      currentId = referrerId;
+    }
+  } catch (err) { console.error('Referral commission error:', err.message); }
+}
 
 // List pending withdrawals
 router.get('/withdrawals', async (req, res) => {

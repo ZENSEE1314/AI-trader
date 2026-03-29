@@ -23,7 +23,38 @@ async function getSettings() {
   };
 }
 
-// Get subscription status + pricing info
+// Extend subscription by N days — stacks on existing time
+async function extendSubscription(userId, days, amount, method) {
+  // Find existing active sub
+  const existing = await query(
+    `SELECT id, expires_at FROM subscriptions WHERE user_id = $1 AND status = 'active' AND expires_at > NOW()
+     ORDER BY expires_at DESC LIMIT 1`,
+    [userId]
+  );
+
+  const now = new Date();
+  let newExpiry;
+
+  if (existing.length) {
+    // Extend from current expiry date
+    newExpiry = new Date(existing[0].expires_at);
+    newExpiry.setDate(newExpiry.getDate() + days);
+    await query('UPDATE subscriptions SET expires_at = $1 WHERE id = $2', [newExpiry, existing[0].id]);
+  } else {
+    // Create new subscription starting now
+    newExpiry = new Date(now);
+    newExpiry.setDate(newExpiry.getDate() + days);
+    await query(
+      `INSERT INTO subscriptions (user_id, plan, status, amount, payment_method, starts_at, expires_at)
+       VALUES ($1, 'monthly', 'active', $2, $3, $4, $5)`,
+      [userId, amount, method, now, newExpiry]
+    );
+  }
+
+  return newExpiry;
+}
+
+// Get subscription status + pricing info + countdown
 router.get('/status', async (req, res) => {
   try {
     const settings = await getSettings();
@@ -33,9 +64,18 @@ router.get('/status', async (req, res) => {
       [req.userId]
     );
     const user = await query('SELECT wallet_balance FROM users WHERE id = $1', [req.userId]);
+
+    let days_left = 0;
+    if (sub.length) {
+      const now = new Date();
+      const exp = new Date(sub[0].expires_at);
+      days_left = Math.max(0, Math.ceil((exp - now) / (1000 * 60 * 60 * 24)));
+    }
+
     res.json({
       active: sub.length > 0,
       subscription: sub[0] || null,
+      days_left,
       price: settings.price,
       wallet_balance: parseFloat(user[0]?.wallet_balance || 0),
       bank_details: BANK_DETAILS,
@@ -82,18 +122,10 @@ router.post('/pay-wallet', async (req, res) => {
       [req.userId, -settings.price]
     );
 
-    const now = new Date();
-    const expires = new Date(now);
-    expires.setMonth(expires.getMonth() + 1);
-    await query(
-      `INSERT INTO subscriptions (user_id, plan, status, amount, payment_method, starts_at, expires_at)
-       VALUES ($1, 'monthly', 'active', $2, 'wallet', $3, $4)`,
-      [req.userId, settings.price, now, expires]
-    );
-
+    const expires = await extendSubscription(req.userId, 30, settings.price, 'wallet');
     await payReferralCommission(req.userId, settings);
 
-    res.json({ ok: true, message: 'Subscription activated!' });
+    res.json({ ok: true, message: `Subscription active until ${expires.toISOString().slice(0, 10)}!` });
   } catch (err) {
     console.error('Wallet pay error:', err.message);
     res.status(500).json({ error: 'Server error' });
@@ -151,16 +183,10 @@ router.post('/stripe-webhook', express.raw({ type: 'application/json' }), async 
     if (event.type === 'checkout.session.completed') {
       const session = event.data.object;
       const userId = parseInt(session.metadata.userId);
-      const now = new Date();
-      const expires = new Date(now);
-      expires.setMonth(expires.getMonth() + 1);
-
-      await query(
-        `UPDATE subscriptions SET status = 'active', starts_at = $1, expires_at = $2
-         WHERE stripe_session_id = $3`,
-        [now, expires, session.id]
-      );
       const settings = await getSettings();
+      await extendSubscription(userId, 30, settings.price, 'stripe');
+      // Mark stripe sub record as active
+      await query(`UPDATE subscriptions SET status = 'active' WHERE stripe_session_id = $1`, [session.id]);
       await payReferralCommission(userId, settings);
     }
     res.json({ received: true });

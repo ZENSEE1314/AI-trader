@@ -549,13 +549,31 @@
       const paySection = $('#sub-pay-section');
 
       if (data.active) {
-        const exp = formatDate(data.subscription.expires_at);
-        el.innerHTML = `<span style="color:var(--color-accent);">&#10003; Active Subscription</span><br>` +
-          `<span style="color:var(--color-text-muted);font-size:0.9rem;">Expires: ${exp} &middot; $${data.price}/month</span>`;
-        paySection.classList.add('hidden');
+        const exp = new Date(data.subscription.expires_at);
+        const days = data.days_left;
+        const expStr = exp.toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' });
+        const daysColor = days <= 5 ? 'var(--color-danger)' : days <= 10 ? '#f0a030' : 'var(--color-accent)';
+
+        el.innerHTML =
+          `<div style="display:flex;align-items:center;gap:var(--space-4);flex-wrap:wrap;">` +
+            `<div>` +
+              `<span style="color:var(--color-accent);font-size:1.1rem;">&#10003; Active</span><br>` +
+              `<span style="color:var(--color-text-muted);font-size:0.85rem;">Expires: ${expStr}</span>` +
+            `</div>` +
+            `<div style="text-align:center;">` +
+              `<span style="font-size:2rem;font-weight:700;color:${daysColor};font-family:var(--font-display);">${days}</span><br>` +
+              `<span style="color:var(--color-text-muted);font-size:0.8rem;">days left</span>` +
+            `</div>` +
+          `</div>`;
+
+        // Still show pay section so they can top up early
+        paySection.classList.remove('hidden');
+        $('#sub-wallet-bal').textContent = `$${data.wallet_balance.toFixed(2)}`;
+        const bankInfo = data.bank_details;
+        $('#sub-bank-info').textContent = `${bankInfo.bank} | ${bankInfo.account} | ${bankInfo.name}`;
       } else {
-        el.innerHTML = `<span style="color:var(--color-danger);">&#10007; No Active Subscription</span><br>` +
-          `<span style="color:var(--color-text-muted);font-size:0.9rem;">Subscribe for $${data.price}/month to enable auto-trading</span>`;
+        el.innerHTML = `<span style="color:var(--color-danger);font-size:1.1rem;">&#10007; No Active Subscription</span><br>` +
+          `<span style="color:var(--color-text-muted);font-size:0.85rem;">Subscribe for $${data.price}/month to enable auto-trading</span>`;
         paySection.classList.remove('hidden');
         $('#sub-wallet-bal').textContent = `$${data.wallet_balance.toFixed(2)}`;
         const bankInfo = data.bank_details;
