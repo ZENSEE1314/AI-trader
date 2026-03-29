@@ -11,7 +11,6 @@ const fetch = require('node-fetch');
 const fs    = require('fs');
 const path  = require('path');
 const { run: runTrader, queueSignal } = require('./cycle');
-const { scanMCT } = require('./mct-strategy');
 
 const TELEGRAM_TOKEN  = process.env.TELEGRAM_TOKEN;
 const TELEGRAM_CHATS  = (process.env.TELEGRAM_CHAT_ID || '').split(',').map(s => s.trim()).filter(Boolean);
@@ -559,7 +558,6 @@ async function handleCommand(text, fromChatId) {
       `🤖 <b>AI Signal Bot — Commands</b>\n\n` +
       `📈 <b>Signals</b>\n` +
       `/scan — Force full signal scan now\n` +
-      `/mct — MCT strategy (Break&amp;Retest, Liquidity Grab, VWAP)\n` +
       `/smc — SMC structure scan (top 10 coins, 4H)\n` +
       `/trader — Multi-indicator trader signals\n\n` +
       `📊 <b>Reports</b>\n` +
@@ -585,9 +583,6 @@ async function handleCommand(text, fromChatId) {
   } else if (cmd === '/resume' || cmd === 'resume') {
     paused = false;
     await tgSend(`▶️ <b>Bot Resumed</b>\nNext scan in ≤${INTERVAL_MIN} min.`);
-  } else if (cmd === '/mct' || cmd === 'mct') {
-    await tgSend(`🏛 <b>MCT Strategy Scan — Key levels, VWAP, Break &amp; Retest...</b>`);
-    await runMCTScan(true);
   } else if (cmd === '/smc' || cmd === 'smc') {
     await tgSend(`🎯 <b>SMC Scan — Top 10 coins (4H structure)...</b>`);
     await runSMCScan(true);
@@ -1793,73 +1788,6 @@ async function runSMCScan(forced = false) {
   log('── SMC Scan end ──\n');
 }
 
-// ── MCT STRATEGY SCAN ────────────────────────────────────────
-async function runMCTScan(forced = false) {
-  log(`── MCT Scan start${forced ? ' (forced)' : ''} ──`);
-  if (paused && !forced) { log('Paused.'); return; }
-
-  try {
-    const results = await scanMCT(log);
-
-    if (!results.length) {
-      if (forced) await tgSend(`🏛 <b>MCT Scan</b> — No setups found. Waiting for key level confirmation.`);
-      log('MCT: no signals');
-      return;
-    }
-
-    for (const r of results) {
-      const coin = r.symbol.replace('USDT', '');
-      const isBuy = r.signal === 'BUY';
-      const sEmoji = isBuy ? '🟢' : '🔴';
-      const slDir = isBuy ? '-' : '+';
-      const tpDir = isBuy ? '+' : '-';
-      const chgSign = r.chg24h >= 0 ? '+' : '';
-
-      const msg =
-        `🏛 <b>MCT Signal — ${coin}/USDT</b>\n` +
-        `━━━━━━━━━━━━━━━━━━\n` +
-        `${sEmoji} <b>${r.direction}</b> | Score: <b>${r.score}</b>\n` +
-        `Setup: <b>${e(r.setupName)}</b>\n` +
-        `Bias: <b>${r.bias.toUpperCase()}</b> (${r.bias === 'long' ? 'Above' : 'Below'} OP &amp; VWAP)\n\n` +
-        `💰 <b>Entry:</b> <code>$${fmtPrice(r.entry)}</code>\n` +
-        `🛑 <b>SL:</b> <code>$${fmtPrice(r.sl)}</code> (${slDir}${r.slPct}%)\n` +
-        `🎯 <b>TP1:</b> <code>$${fmtPrice(r.tp1)}</code> (${tpDir}${r.tp1Pct}%) — 1.5R\n` +
-        `🎯 <b>TP2:</b> <code>$${fmtPrice(r.tp2)}</code> (${tpDir}${r.tp2Pct}%) — 2.5R\n` +
-        `🎯 <b>TP3:</b> <code>$${fmtPrice(r.tp3)}</code> (${tpDir}${r.tp3Pct}%) — 3.5R\n\n` +
-        `📊 <b>Key Levels:</b>\n` +
-        `• PDH: <code>$${fmtPrice(r.levels.pdh)}</code> | PDL: <code>$${fmtPrice(r.levels.pdl)}</code>\n` +
-        `• OP: <code>$${fmtPrice(r.levels.op)}</code> | VWAP: <code>$${fmtPrice(r.vwap)}</code>\n` +
-        (r.levels.pwh ? `• PWH: <code>$${fmtPrice(r.levels.pwh)}</code> | PWL: <code>$${fmtPrice(r.levels.pwl)}</code>\n` : '') +
-        `• RSI: <b>${r.rsi}</b> | ${r.rejection ? `Rejection: ${r.rejection}` : 'No rejection'} | ${r.volSpike ? 'Volume spike ✅' : 'Normal volume'}\n` +
-        `• 24h: <b>${chgSign}${r.chg24h.toFixed(2)}%</b>\n\n` +
-        `<a href="https://www.tradingview.com/chart/?symbol=BINANCE:${r.symbol}">📈 TradingView</a>  |  ` +
-        `<a href="https://www.bitunix.com/futures-trade/${r.symbol}">🔗 Trade Bitunix</a>\n` +
-        `<i>${now()}</i>`;
-
-      await tgSend(msg);
-      trackSignal({
-        symbol: r.symbol, signal: r.signal, entry: r.entry,
-        sl: r.sl, tp1: r.tp1, tp2: r.tp2, tp3: r.tp3, source: 'MCT',
-      });
-
-      // Queue for auto-trade
-      queueSignal({
-        symbol: r.symbol,
-        direction: r.direction,
-        slPrice: r.sl,
-        tpLevel: r.tp3,
-        smcBadges: [r.setupName],
-      });
-      setTimeout(() => runTrader().catch(err => log(`MCT trade cycle err: ${err.message}`)), 2000);
-
-      await sleep(500);
-    }
-
-    log(`MCT: sent ${results.length} signals`);
-  } catch (err) { log(`MCT scan err: ${err.message}`); }
-  log('── MCT Scan end ──\n');
-}
-
 // ── START ────────────────────────────────────────────────────
 async function start() {
   log('===================================');
@@ -1898,7 +1826,6 @@ async function start() {
   setInterval(() => runScan(),              INTERVAL_MIN * 60 * 1000);
   setInterval(() => runSMCScan(),           INTERVAL_MIN * 60 * 1000);
   setInterval(() => runTraderScan(),        INTERVAL_MIN * 60 * 1000);
-  setInterval(() => runMCTScan(),           INTERVAL_MIN * 60 * 1000);
   setInterval(() => checkSpikes(),          SPIKE_INTERVAL);
   setInterval(() => checkSignalTargets(),   3 * 60 * 1000); // check TP/SL every 3 min
 
