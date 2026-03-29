@@ -538,18 +538,7 @@ async function executeForAllUsers(pick) {
       return;
     }
 
-    // Deduplicate: one key per user per platform (prevent same account trading twice)
-    const seen = new Set();
-    const keys = allKeys.filter(key => {
-      const uid = `${key.user_id}_${key.platform}`;
-      if (seen.has(uid)) {
-        bLog.trade(`Skipping duplicate key for ${key.email} on ${key.platform}`);
-        return false;
-      }
-      seen.add(uid);
-      return true;
-    });
-
+    const keys = allKeys;
     const sym = pick.symbol || pick.sym;
     bLog.trade(`Found ${keys.length} unique API key(s) — executing ${sym} ${pick.direction}...`);
     log(`Executing ${sym} ${pick.direction} for ${keys.length} user keys`);
