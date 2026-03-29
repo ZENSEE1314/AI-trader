@@ -8,6 +8,7 @@ const crypto = require('crypto');
 const fetch = require('node-fetch');
 
 const BASE_URL = 'https://fapi.bitunix.com';
+const REQUEST_TIMEOUT = 15000;
 
 class BitunixClient {
   constructor({ apiKey, apiSecret }) {
@@ -15,21 +16,16 @@ class BitunixClient {
     this.apiSecret = apiSecret;
   }
 
-  _sign(queryParams, body) {
+  _sign(queryParamStr, bodyStr) {
     const nonce = crypto.randomBytes(16).toString('hex');
     const timestamp = Date.now().toString();
-    const bodyStr = body ? JSON.stringify(body) : '';
-    const queryStr = queryParams || '';
 
-    // Step 1: SHA256(nonce + timestamp + apiKey + queryParams + body)
-    const digest = crypto.createHash('sha256')
-      .update(nonce + timestamp + this.apiKey + queryStr + bodyStr)
-      .digest('hex');
+    // Step 1: SHA256(nonce + timestamp + apiKey + sortedQueryParams + compressedBody)
+    const digestInput = nonce + timestamp + this.apiKey + queryParamStr + bodyStr;
+    const digest = crypto.createHash('sha256').update(digestInput).digest('hex');
 
     // Step 2: SHA256(digest + secretKey)
-    const sign = crypto.createHash('sha256')
-      .update(digest + this.apiSecret)
-      .digest('hex');
+    const sign = crypto.createHash('sha256').update(digest + this.apiSecret).digest('hex');
 
     return {
       headers: {
@@ -40,41 +36,46 @@ class BitunixClient {
         'Content-Type': 'application/json',
         'language': 'en-US',
       },
-      bodyStr,
     };
   }
 
-  _sortQuery(params) {
+  // Sort query params by key in ASCII order, concat as key1value1key2value2
+  _buildQueryParamStr(params) {
     if (!params || !Object.keys(params).length) return '';
-    return Object.keys(params).sort().map(k => `${k}${params[k]}`).join('');
+    const keys = Object.keys(params).sort();
+    return keys.map(k => k + params[k]).join('');
+  }
+
+  // Build URL query string ?key1=value1&key2=value2
+  _buildQueryString(params) {
+    if (!params || !Object.keys(params).length) return '';
+    return '?' + Object.entries(params).map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join('&');
+  }
+
+  // Compress body — JSON with no extra whitespace
+  _compressBody(body) {
+    if (!body || !Object.keys(body).length) return '';
+    return JSON.stringify(body);
   }
 
   async _get(path, params = {}) {
-    const queryStr = Object.keys(params).length
-      ? '?' + Object.entries(params).map(([k, v]) => `${k}=${v}`).join('&')
-      : '';
-    const sortedParams = this._sortQuery(params);
-    const { headers } = this._sign(sortedParams, null);
+    const queryParamStr = this._buildQueryParamStr(params);
+    const queryString = this._buildQueryString(params);
+    const { headers } = this._sign(queryParamStr, '');
 
-    const res = await fetch(`${BASE_URL}${path}${queryStr}`, {
-      method: 'GET',
-      headers,
-      timeout: 15000,
-    });
+    const url = `${BASE_URL}${path}${queryString}`;
+    const res = await fetch(url, { method: 'GET', headers, timeout: REQUEST_TIMEOUT });
     const json = await res.json();
     if (json.code !== 0) throw new Error(`Bitunix API error: ${json.msg} (code ${json.code})`);
     return json.data;
   }
 
   async _post(path, body = {}) {
-    const { headers, bodyStr } = this._sign('', body);
+    const bodyStr = this._compressBody(body);
+    const { headers } = this._sign('', bodyStr);
 
-    const res = await fetch(`${BASE_URL}${path}`, {
-      method: 'POST',
-      headers,
-      body: bodyStr,
-      timeout: 15000,
-    });
+    const url = `${BASE_URL}${path}`;
+    const res = await fetch(url, { method: 'POST', headers, body: bodyStr, timeout: REQUEST_TIMEOUT });
     const json = await res.json();
     if (json.code !== 0) throw new Error(`Bitunix API error: ${json.msg} (code ${json.code})`);
     return json.data;
@@ -83,8 +84,7 @@ class BitunixClient {
   // ── Account ────────────────────────────────────────────────
 
   async getAccount(marginCoin = 'USDT') {
-    const data = await this._get('/api/v1/futures/account', { marginCoin });
-    return data?.[0] || data;
+    return this._get('/api/v1/futures/account', { marginCoin });
   }
 
   async changeLeverage(symbol, leverage, marginCoin = 'USDT') {
@@ -130,13 +130,21 @@ class BitunixClient {
   // ── Convenience: match Binance-like interface ──────────────
 
   async getAccountInformation() {
-    const acc = await this.getAccount();
-    const positions = await this.getOpenPositions();
+    const data = await this.getAccount();
+    const acc = Array.isArray(data) ? data[0] : data;
+    if (!acc) throw new Error('Bitunix: no account data returned');
+
+    let positions = [];
+    try {
+      const posData = await this.getOpenPositions();
+      positions = Array.isArray(posData) ? posData : [];
+    } catch (_) {}
+
     return {
-      totalWalletBalance: String(parseFloat(acc.available) + parseFloat(acc.margin) + parseFloat(acc.frozen)),
-      availableBalance: acc.available,
+      totalWalletBalance: String(parseFloat(acc.available || 0) + parseFloat(acc.margin || 0) + parseFloat(acc.frozen || 0)),
+      availableBalance: acc.available || '0',
       totalUnrealizedProfit: String(parseFloat(acc.crossUnrealizedPNL || 0) + parseFloat(acc.isolationUnrealizedPNL || 0)),
-      positions: (positions || []).map(p => ({
+      positions: positions.map(p => ({
         symbol: p.symbol,
         positionAmt: p.side === 'LONG' ? p.qty : `-${p.qty}`,
         entryPrice: p.avgOpenPrice,
