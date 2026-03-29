@@ -30,8 +30,9 @@ const CONFIG = {
   // Trailing stop: once price moves in our favour by TRAIL_PCT, tighten SL
   TRAIL_PCT:       0.008,   // 0.8% activation
 
-  // Position sizing: risk 10% of wallet per trade (sized by SL distance)
-  WALLET_RISK_PCT: 0.10,    // 10% of total wallet at risk per trade
+  // Position sizing: risk 3% of wallet per trade (sized by SL distance)
+  // $10 wallet → $0.30 max loss per trade (≈ 30% of $1 margin)
+  WALLET_RISK_PCT: 0.03,
 
   MIN_BALANCE:     5,
   MIN_VOL_M:       100,     // min $100M 24h volume
