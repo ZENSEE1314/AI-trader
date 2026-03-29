@@ -880,12 +880,32 @@
       .catch(err => showToast(err.message, 'error'));
   }
 
+  // ----- Platform change (show Bitunix IP info) -----
+  let serverIpLoaded = false;
+
+  function onPlatformChange(val) {
+    const ipInfo = $('#bitunix-ip-info');
+    if (!ipInfo) return;
+    if (val === 'bitunix') {
+      ipInfo.classList.remove('hidden');
+      if (!serverIpLoaded) {
+        fetch('/api/server-ip').then(r => r.json()).then(data => {
+          const el = $('#server-ip-display');
+          if (el && data.ip) el.value = data.ip;
+          serverIpLoaded = true;
+        }).catch(() => {});
+      }
+    } else {
+      ipInfo.classList.add('hidden');
+    }
+  }
+
   // ----- Expose to inline handlers -----
   window.CryptoBot = {
     toggleSettings, saveSettings, deleteKey, showToast,
     payWithWallet, payBankTransfer, payStripe, requestWithdraw,
     adminAction, adminSub, adminWd, saveAdminSettings,
-    goToAuth, selectPlan, showLoginForm,
+    goToAuth, selectPlan, showLoginForm, onPlatformChange,
   };
 
   // ----- Init -----

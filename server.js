@@ -19,8 +19,20 @@ app.use('/api/wallet', require('./routes/wallet'));
 // Stripe webhook needs raw body — mount before json parser catches it
 // (already handled inside subscription.js with express.raw)
 
-// Health check for Render
+// Health check
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
+
+// Server outbound IP (for Bitunix API key IP binding)
+app.get('/api/server-ip', async (req, res) => {
+  try {
+    const fetch = require('node-fetch');
+    const r = await fetch('https://api.ipify.org?format=json', { timeout: 5000 });
+    const data = await r.json();
+    res.json({ ip: data.ip });
+  } catch {
+    res.json({ ip: 'Unable to detect — try again later' });
+  }
+});
 
 // SPA fallback — serve index.html for non-API routes
 app.use((req, res, next) => {

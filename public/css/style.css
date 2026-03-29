@@ -1074,11 +1074,12 @@ input[type="range"]::-moz-range-thumb {
   }
 }
 
-/* ── All MCT logos: clip to circle, hide black background ─── */
+/* ── All MCT logos: blend away black background ─── */
 img[src*="logo"] {
   border-radius: 50%;
   overflow: hidden;
   object-fit: cover;
+  mix-blend-mode: lighten;
 }
 
 /* ============================================================

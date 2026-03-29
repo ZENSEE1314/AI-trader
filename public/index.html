@@ -875,11 +875,22 @@
       <form id="form-add-key">
         <div class="form-group">
           <label class="form-label" for="key-platform">Platform</label>
-          <select class="form-input" id="key-platform" required>
+          <select class="form-input" id="key-platform" required onchange="window.CryptoBot.onPlatformChange(this.value)">
             <option value="">Select platform...</option>
             <option value="binance">Binance</option>
             <option value="bitunix">Bitunix</option>
           </select>
+        </div>
+
+        <!-- Bitunix IP binding info -->
+        <div id="bitunix-ip-info" class="hidden" style="background:var(--color-bg);border:1px solid var(--color-accent);border-radius:var(--radius-md);padding:var(--space-3);margin-bottom:var(--space-3);">
+          <div style="font-size:var(--text-xs);color:var(--color-text-muted);margin-bottom:var(--space-2);">
+            <strong style="color:var(--color-accent);">Bitunix requires IP binding.</strong> When creating your API key on Bitunix, paste this server IP address into the "Bind IP address" field:
+          </div>
+          <div style="display:flex;align-items:center;gap:var(--space-2);">
+            <input class="form-input text-mono" id="server-ip-display" readonly style="flex:1;font-size:var(--text-sm);" value="Loading...">
+            <button type="button" class="btn btn-ghost btn-sm" onclick="navigator.clipboard.writeText(document.getElementById('server-ip-display').value);window.CryptoBot.showToast('IP copied!','success')">Copy</button>
+          </div>
         </div>
         <div class="form-group">
           <label class="form-label" for="key-label">Label</label>
