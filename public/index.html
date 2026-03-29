@@ -43,69 +43,197 @@
        ======================================================== -->
   <section id="section-landing" class="landing">
     <div class="landing-bg"></div>
+
+    <!-- ── Navbar ── -->
+    <nav class="landing-nav">
+      <div class="landing-nav-inner">
+        <div class="landing-nav-brand">
+          <img src="/img/logo.jpeg" alt="MCT" width="40" height="40">
+          <span>MCT</span>
+        </div>
+        <div class="landing-nav-links">
+          <a href="#how-it-works">How It Works</a>
+          <a href="#features">Features</a>
+          <a href="#pricing">Pricing</a>
+          <button class="btn btn-primary btn-sm" onclick="window.CryptoBot.goToAuth()">Login / Sign Up</button>
+        </div>
+      </div>
+    </nav>
+
     <div class="landing-content">
-      <div class="landing-topbar">
-        <img src="/img/logo.jpeg" alt="MCT" width="36" height="36" style="border-radius:50%;">
-        <span class="landing-topbar-name">MCT</span>
-        <button class="btn btn-primary btn-sm" onclick="window.CryptoBot.goToAuth()">Login / Sign Up</button>
-      </div>
-      <img src="/img/logo.jpeg" alt="MCT Logo" class="landing-logo" width="180" height="180">
-      <h1 class="landing-title">Millionaire Crypto Traders</h1>
-      <p class="landing-tagline">AI-Powered Auto Trading Bot for Binance & Bitunix Futures</p>
 
-      <div class="landing-features">
-        <div class="landing-feature">
-          <span class="landing-feature-icon">🤖</span>
-          <h3>Auto Trading</h3>
-          <p>AI scans 40+ coins every 10 min. Signals fire trades on your exchange automatically.</p>
+      <!-- ── Hero ── -->
+      <section class="landing-hero">
+        <img src="/img/logo.jpeg" alt="MCT Logo" class="landing-logo" width="160" height="160">
+        <h1 class="landing-title">Millionaire Crypto Traders</h1>
+        <p class="landing-tagline">Institutional-grade AI trading technology, now available to everyone.<br>Fully automated. 24/7. On your exchange.</p>
+        <div class="landing-hero-btns">
+          <button class="btn btn-primary btn-lg" onclick="window.CryptoBot.goToAuth()">Start Trading Now</button>
+          <a href="#how-it-works" class="btn btn-ghost btn-lg">See How It Works</a>
         </div>
-        <div class="landing-feature">
-          <span class="landing-feature-icon">📊</span>
-          <h3>Smart Signals</h3>
-          <p>7-indicator confluence: RSI, EMA, MACD, Bollinger, Stochastic, Volume, SMC structure.</p>
+        <div class="landing-stats">
+          <div class="landing-stat">
+            <span class="landing-stat-num">40+</span>
+            <span class="landing-stat-label">Coins Monitored</span>
+          </div>
+          <div class="landing-stat">
+            <span class="landing-stat-num">7</span>
+            <span class="landing-stat-label">Indicator Confluence</span>
+          </div>
+          <div class="landing-stat">
+            <span class="landing-stat-num">24/7</span>
+            <span class="landing-stat-label">Non-Stop Scanning</span>
+          </div>
+          <div class="landing-stat">
+            <span class="landing-stat-num">10min</span>
+            <span class="landing-stat-label">Scan Interval</span>
+          </div>
         </div>
-        <div class="landing-feature">
-          <span class="landing-feature-icon">🛡️</span>
-          <h3>Risk Management</h3>
-          <p>Custom leverage, risk %, max loss per trade. Your keys encrypted with AES-256.</p>
-        </div>
-        <div class="landing-feature">
-          <span class="landing-feature-icon">💰</span>
-          <h3>Earn Referrals</h3>
-          <p>3-tier commission system. Invite friends and earn up to 20% on every subscription.</p>
-        </div>
-      </div>
+      </section>
 
-      <div class="landing-plans">
-        <div class="landing-plan">
-          <div class="plan-badge">Popular</div>
-          <h3>Auto Trading Bot</h3>
-          <div class="plan-price" id="landing-bot-price">$29.99<span>/month</span></div>
-          <ul class="plan-features">
-            <li>AI auto-trade on your exchange</li>
-            <li>Up to 3 API keys (Binance + Bitunix)</li>
-            <li>Custom leverage & risk settings</li>
-            <li>Dashboard with P&L tracking</li>
-            <li>24/7 signal scanning</li>
-          </ul>
-          <button class="btn btn-primary" onclick="window.CryptoBot.goToAuth()">Get Started</button>
+      <!-- ── Video / Demo ── -->
+      <section class="landing-section" id="how-it-works">
+        <h2 class="landing-section-title">See MCT In Action</h2>
+        <p class="landing-section-sub">Watch how our AI identifies high-probability setups and executes trades automatically on your exchange.</p>
+        <div class="landing-video-wrap">
+          <div class="landing-video-placeholder" id="landing-video">
+            <img src="https://images.unsplash.com/photo-1611974789855-9c2a0a7236a3?w=800&q=80" alt="Trading Dashboard" class="landing-video-img" loading="lazy" width="800" height="450">
+            <div class="landing-video-overlay">
+              <div class="landing-play-btn">&#9654;</div>
+              <span>Coming Soon</span>
+            </div>
+          </div>
         </div>
-        <div class="landing-plan plan-premium">
-          <div class="plan-badge">VIP</div>
-          <h3>Telegram Signal Group</h3>
-          <div class="plan-price" id="landing-signal-price">$500<span>/month</span></div>
-          <ul class="plan-features">
-            <li>Private VIP Telegram channel</li>
-            <li>Real-time trade signals with TP/SL</li>
-            <li>SMC + multi-indicator analysis</li>
-            <li>Direct access to signal alerts</li>
-            <li>Manual trade guidance</li>
-          </ul>
-          <button class="btn btn-primary" onclick="window.CryptoBot.goToAuth()">Join Now</button>
-        </div>
-      </div>
+      </section>
 
-      <p class="landing-footer">Trusted by traders worldwide. Start with as little as $10 in your exchange.</p>
+      <!-- ── How It Works Steps ── -->
+      <section class="landing-section">
+        <div class="landing-steps">
+          <div class="landing-step">
+            <div class="landing-step-num">1</div>
+            <h3>Connect Your Exchange</h3>
+            <p>Add your Binance or Bitunix API keys. Read-only withdrawal — your funds stay on your exchange.</p>
+          </div>
+          <div class="landing-step-arrow">&#8594;</div>
+          <div class="landing-step">
+            <div class="landing-step-num">2</div>
+            <h3>Set Your Risk</h3>
+            <p>Choose leverage, risk per trade, and max loss. Full control over your money management.</p>
+          </div>
+          <div class="landing-step-arrow">&#8594;</div>
+          <div class="landing-step">
+            <div class="landing-step-num">3</div>
+            <h3>Bot Trades For You</h3>
+            <p>AI scans the market 24/7. When a high-confidence signal fires, it executes automatically with TP and SL.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ── Features ── -->
+      <section class="landing-section" id="features">
+        <h2 class="landing-section-title">Why Traders Choose MCT</h2>
+        <div class="landing-features">
+          <div class="landing-feature">
+            <span class="landing-feature-icon">🤖</span>
+            <h3>Fully Automated Trading</h3>
+            <p>Our AI engine scans 40+ coins every 10 minutes across multiple timeframes. When a high-probability setup is detected, it places the trade instantly — entry, stop loss, and take profit.</p>
+          </div>
+          <div class="landing-feature">
+            <span class="landing-feature-icon">📊</span>
+            <h3>7-Indicator Confluence</h3>
+            <p>Every signal is validated through RSI, EMA crossovers, MACD, Bollinger Bands, Stochastic, Volume analysis, and Smart Money Concepts (SMC) structure breaks.</p>
+          </div>
+          <div class="landing-feature">
+            <span class="landing-feature-icon">🛡️</span>
+            <h3>Bank-Grade Security</h3>
+            <p>API keys encrypted with AES-256-GCM. No withdrawal permissions needed. Your funds never leave your exchange. We can only trade — never withdraw.</p>
+          </div>
+          <div class="landing-feature">
+            <span class="landing-feature-icon">⚡</span>
+            <h3>Multi-Exchange Support</h3>
+            <p>Connect up to 3 API keys across Binance and Bitunix. Each key has independent settings — leverage, risk, and position limits.</p>
+          </div>
+          <div class="landing-feature">
+            <span class="landing-feature-icon">📈</span>
+            <h3>Smart Risk Management</h3>
+            <p>Position sizing calculated from your SL distance. You set the max loss per trade — the bot adjusts quantity automatically. 3-level take profit with trailing stop.</p>
+          </div>
+          <div class="landing-feature">
+            <span class="landing-feature-icon">💰</span>
+            <h3>Referral Program</h3>
+            <p>Earn up to 20% commission on every friend you refer. 3-tier system — earn from your referrals' referrals too. Cash out anytime to your bank.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ── Trading Screenshots ── -->
+      <section class="landing-section">
+        <h2 class="landing-section-title">Real Signals. Real Execution.</h2>
+        <p class="landing-section-sub">Every signal includes entry, stop loss, and 3 take profit levels with full indicator breakdown.</p>
+        <div class="landing-screenshots">
+          <div class="landing-screenshot">
+            <img src="https://images.unsplash.com/photo-1642790106117-e829e14a795f?w=400&q=80" alt="Trading Signal" loading="lazy" width="400" height="300">
+            <span>Multi-Indicator Signal Analysis</span>
+          </div>
+          <div class="landing-screenshot">
+            <img src="https://images.unsplash.com/photo-1639762681485-074b7f938ba0?w=400&q=80" alt="Auto Trade Execution" loading="lazy" width="400" height="300">
+            <span>Automated Trade Execution</span>
+          </div>
+          <div class="landing-screenshot">
+            <img src="https://images.unsplash.com/photo-1551288049-bebda4e38f71?w=400&q=80" alt="P&L Dashboard" loading="lazy" width="400" height="300">
+            <span>Real-Time P&L Dashboard</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- ── Pricing ── -->
+      <section class="landing-section" id="pricing">
+        <h2 class="landing-section-title">Choose Your Plan</h2>
+        <p class="landing-section-sub">Start with auto-trading or get direct access to our VIP signal channel.</p>
+
+        <div class="landing-plans">
+          <div class="landing-plan">
+            <div class="plan-badge">Popular</div>
+            <h3>Telegram Signal Channel</h3>
+            <div class="plan-price" id="landing-signal-price">$1,000<span>/month</span></div>
+            <ul class="plan-features">
+              <li>Private VIP Telegram channel</li>
+              <li>Real-time trade signals with TP/SL</li>
+              <li>SMC + multi-indicator analysis</li>
+              <li>Entry, 3x TP levels, and SL for every trade</li>
+              <li>Direct access to signal alerts 24/7</li>
+            </ul>
+            <button class="btn btn-primary" onclick="window.CryptoBot.goToAuth()">Join Signal Channel</button>
+          </div>
+          <div class="landing-plan plan-premium">
+            <div class="plan-badge">VIP</div>
+            <h3>AI Auto Trading Bot</h3>
+            <div class="plan-price" id="landing-bot-price">$500<span>/month</span></div>
+            <ul class="plan-features">
+              <li>Everything in Signal Channel</li>
+              <li>Fully automated trade execution</li>
+              <li>Up to 3 API keys (Binance + Bitunix)</li>
+              <li>Custom leverage, risk & position settings</li>
+              <li>Real-time P&L dashboard</li>
+              <li>3-tier referral commission program</li>
+            </ul>
+            <button class="btn btn-primary" onclick="window.CryptoBot.goToAuth()">Start Auto Trading</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- ── CTA ── -->
+      <section class="landing-section landing-cta">
+        <h2 class="landing-section-title">Ready to Trade Smarter?</h2>
+        <p class="landing-section-sub">Join traders using MCT's AI to execute high-probability trades 24/7.<br>Your exchange. Your funds. Our intelligence.</p>
+        <button class="btn btn-primary btn-lg" onclick="window.CryptoBot.goToAuth()">Get Started Now</button>
+      </section>
+
+      <!-- ── Footer ── -->
+      <footer class="landing-footer">
+        <img src="/img/logo.jpeg" alt="MCT" width="32" height="32" style="border-radius:50%;">
+        <span>Millionaire Crypto Traders &copy; 2026. All rights reserved.</span>
+      </footer>
     </div>
   </section>
 
