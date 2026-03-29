@@ -36,8 +36,8 @@ router.get('/summary', async (req, res) => {
     const rows = await query(
       `SELECT
         COUNT(*) as total_trades,
-        COUNT(*) FILTER (WHERE status LIKE 'TP%' OR pnl_usdt > 0) as wins,
-        COUNT(*) FILTER (WHERE status = 'SL' OR (status = 'CLOSED' AND pnl_usdt < 0)) as losses,
+        COUNT(*) FILTER (WHERE status = 'WIN' OR status LIKE 'TP%' OR (status = 'CLOSED' AND pnl_usdt > 0)) as wins,
+        COUNT(*) FILTER (WHERE status = 'LOSS' OR status = 'SL' OR (status = 'CLOSED' AND pnl_usdt < 0)) as losses,
         COUNT(*) FILTER (WHERE status = 'OPEN') as open_trades,
         COALESCE(SUM(pnl_usdt), 0) as total_pnl,
         COALESCE(SUM(pnl_usdt) FILTER (WHERE created_at > NOW() - INTERVAL '24 hours'), 0) as pnl_24h,

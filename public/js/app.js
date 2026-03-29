@@ -295,7 +295,9 @@
     els.summary7dPnl.textContent = formatPnl(pnl7d);
     els.summary7dPnl.className = `summary-card-value text-mono ${pnlClass(pnl7d)}`;
 
-    els.summaryWinRate.textContent = `${s.win_rate}%`;
+    const wins = parseInt(s.wins) || 0;
+    const losses = parseInt(s.losses) || 0;
+    els.summaryWinRate.textContent = `${s.win_rate}%  (${wins}W / ${losses}L)`;
     els.summaryOpenTrades.textContent = s.open_trades;
   }
 
