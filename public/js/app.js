@@ -147,15 +147,16 @@
       if (el) el.classList.toggle('hidden', t !== tab);
     });
 
-    if (tab === 'dashboard') loadDashboard();
+    if (tab === 'dashboard') { loadDashboard(); startDashboardRefresh(); }
     else if (tab === 'keys') loadKeys();
     else if (tab === 'subscription') loadSubscription();
     else if (tab === 'wallet') loadWallet();
     else if (tab === 'logs') startLogPolling();
     else if (tab === 'admin') loadAdmin();
 
-    // Stop log polling when leaving logs tab
+    // Stop polling when leaving tabs
     if (tab !== 'logs') stopLogPolling();
+    if (tab !== 'dashboard') stopDashboardRefresh();
   }
 
   // ----- Auth -----
@@ -250,6 +251,20 @@
       showSection('auth');
       showToast('Logged out.', 'success');
     });
+  }
+
+  // ----- Dashboard Auto-Refresh -----
+
+  let dashboardTimer = null;
+  const DASHBOARD_REFRESH_MS = 15000; // 15 seconds
+
+  function startDashboardRefresh() {
+    stopDashboardRefresh();
+    dashboardTimer = setInterval(loadDashboard, DASHBOARD_REFRESH_MS);
+  }
+
+  function stopDashboardRefresh() {
+    if (dashboardTimer) { clearInterval(dashboardTimer); dashboardTimer = null; }
   }
 
   // ----- Dashboard -----
