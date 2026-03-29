@@ -16,8 +16,8 @@ function authMiddleware(req, res, next) {
   }
 }
 
-function signToken(userId, email) {
-  return jwt.sign({ userId, email }, JWT_SECRET, { expiresIn: '30d' });
+function signToken(userId, email, remember = true) {
+  return jwt.sign({ userId, email }, JWT_SECRET, { expiresIn: remember ? '30d' : '1d' });
 }
 
 module.exports = { authMiddleware, signToken, JWT_SECRET };

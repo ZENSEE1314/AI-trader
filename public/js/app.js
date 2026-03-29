@@ -209,7 +209,8 @@
       const email = $('#login-email').value.trim();
       const password = $('#login-password').value;
       try {
-        await api('POST', '/api/auth/login', { email, password });
+        const remember = $('#login-remember')?.checked ?? true;
+        await api('POST', '/api/auth/login', { email, password, remember });
         await checkSession();
         showToast('Welcome back!', 'success');
       } catch (err) {
@@ -819,12 +820,72 @@
     } catch (err) { showToast(err.message, 'error'); }
   }
 
+  // ----- Forgot / Reset Password -----
+
+  function showForgotForm() {
+    $('#form-login').classList.add('hidden');
+    $('#form-signup').classList.add('hidden');
+    $('#form-forgot').classList.remove('hidden');
+    // Hide auth tabs
+    $$('[data-auth-tab]').forEach(b => b.style.opacity = '0.4');
+  }
+
+  function showLoginForm() {
+    $('#form-forgot').classList.add('hidden');
+    $('#form-login').classList.remove('hidden');
+    $$('[data-auth-tab]').forEach(b => b.style.opacity = '1');
+  }
+
+  function setupForgotPassword() {
+    const btn = $('#btn-forgot-password');
+    if (btn) btn.addEventListener('click', (e) => { e.preventDefault(); showForgotForm(); });
+
+    const form = $('#form-forgot');
+    if (form) form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const email = $('#forgot-email').value.trim();
+      const errEl = $('#forgot-error');
+      const successEl = $('#forgot-success');
+      errEl.textContent = ''; errEl.classList.remove('visible');
+      successEl.classList.add('hidden');
+      try {
+        const data = await api('POST', '/api/auth/forgot-password', { email });
+        successEl.textContent = data.message;
+        successEl.classList.remove('hidden');
+      } catch (err) {
+        errEl.textContent = err.message;
+        errEl.classList.add('visible');
+      }
+    });
+  }
+
+  function checkResetToken() {
+    const params = new URLSearchParams(window.location.search);
+    const resetToken = params.get('reset');
+    const uid = params.get('uid');
+    if (!resetToken || !uid) return;
+
+    // Show reset password prompt
+    showSection('auth');
+    const newPass = prompt('Enter your new password (min 6 characters):');
+    if (!newPass || newPass.length < 6) {
+      showToast('Password must be at least 6 characters', 'error');
+      return;
+    }
+    api('POST', '/api/auth/reset-password', { token: resetToken, uid, password: newPass })
+      .then(data => {
+        showToast(data.message, 'success');
+        window.history.replaceState({}, '', '/');
+      })
+      .catch(err => showToast(err.message, 'error'));
+  }
+
   // ----- Expose to inline handlers -----
   window.CryptoBot = {
     toggleSettings, saveSettings, deleteKey, showToast,
     payWithWallet, payBankTransfer, payStripe, requestWithdraw,
     adminAction, adminSub, adminWd, saveAdminSettings,
-    goToAuth, selectPlan,
+    goToAuth, selectPlan, showLoginForm,
   };
 
   // ----- Init -----
@@ -836,6 +897,10 @@
     setupNavTabs();
     setupPagination();
     setupModal();
+    setupForgotPassword();
+
+    // Check for password reset token in URL
+    checkResetToken();
 
     // Auto-fill referral code from URL (?ref=XXXX)
     const params = new URLSearchParams(window.location.search);
