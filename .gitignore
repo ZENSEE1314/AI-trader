@@ -2,3 +2,6 @@ node_modules/
 .env
 .vercel/
 *.log
+data/trades.db
+data/trades.db-wal
+data/trades.db-shm

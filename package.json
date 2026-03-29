@@ -1,14 +1,16 @@
 {
-  "name": "crypto-signal-scanner",
+  "name": "ai-self-learn-cryptobot",
   "version": "4.0.0",
-  "description": "Crypto signal scanner bot — Binance Futures + Telegram",
+  "description": "AI self-learning crypto trading bot — SMC strategy + sentiment + adaptive parameters",
   "main": "bot.js",
   "scripts": {
     "start": "node bot.js"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",
+    "better-sqlite3": "^11.7.0",
     "binance": "^2.0.0",
+    "cheerio": "^1.0.0",
     "cookie-parser": "^1.4.7",
     "express": "^5.2.1",
     "jsonwebtoken": "^9.0.3",
