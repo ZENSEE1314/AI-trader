@@ -1136,103 +1136,108 @@ async function executeForAllUsers(pick) {
           return;
         }
 
-        const userPick = { ...pick };
-        const userLev = parseInt(key.leverage) || CONFIG.LEVERAGE_LOW;
-        userPick.leverage = userLev;
+        // ── UNIFIED TRADE SIZING (Binance + Bitunix) ──
+        const sym = pick.sym;
+        const isLong = pick.direction !== 'SHORT';
+        const price = pick.price;
         const userRiskPct = parseFloat(key.risk_pct) || CONFIG.WALLET_RISK_PCT;
+        const maxLossPct = (parseFloat(key.max_loss_usdt) || 30) / 100;
+
+        // Auto leverage: price < $100 = 10x, otherwise user setting
+        const userLev = price < 100 ? 10 : (parseInt(key.leverage) || CONFIG.LEVERAGE_LOW);
+
+        // Margin = risk% of wallet. Notional = margin * leverage
+        const marginUsdt = wallet * userRiskPct;
+        const notional = marginUsdt * userLev;
+        let qty = notional / price;
+        if (qty * price < 5.5) qty = 5.5 / price;
+        qty = parseFloat(qty.toFixed(6));
+
+        // SL: maxLoss% of margin → price distance = maxLoss% / leverage
+        const slDistPct = maxLossPct / userLev;
+        const slPrice = isLong ? price * (1 - slDistPct) : price * (1 + slDistPct);
+
+        // TP: 3%/6%/9% of margin → price distance = X% / leverage
+        const tp1Price = isLong ? price * (1 + 0.03 / userLev) : price * (1 - 0.03 / userLev);
+        const tp2Price = isLong ? price * (1 + 0.06 / userLev) : price * (1 - 0.06 / userLev);
+        const tp3Price = isLong ? price * (1 + 0.09 / userLev) : price * (1 - 0.09 / userLev);
+
+        log(`Trade: ${sym} ${pick.direction} wallet=$${wallet.toFixed(2)} margin=$${marginUsdt.toFixed(2)} lev=${userLev}x qty=${qty}`);
+        log(`  SL=$${slPrice.toFixed(4)} (${(maxLossPct*100)}%) TP1=$${tp1Price.toFixed(4)}(3%) TP2=$${tp2Price.toFixed(4)}(6%) TP3=$${tp3Price.toFixed(4)}(9%)`);
 
         if (key.platform === 'binance') {
           const userClient = new USDMClient({ api_key: apiKey, api_secret: apiSecret });
-          const origRisk = CONFIG.WALLET_RISK_PCT;
-          CONFIG.WALLET_RISK_PCT = userRiskPct;
-          let result;
+          const closeSide = isLong ? 'SELL' : 'BUY';
+
+          try { await userClient.setLeverage({ symbol: sym, leverage: userLev }); } catch (_) {}
+          try { await userClient.setMarginType({ symbol: sym, marginType: 'ISOLATED' }); } catch (e) { if (!e.message?.includes('No need')) throw e; }
+
+          // Get exchange precision
+          const info = await userClient.getExchangeInfo();
+          const sinfo = info.symbols.find(s => s.symbol === sym);
+          const qtyPrec = sinfo?.quantityPrecision || 6;
+          const pricePrec = sinfo?.pricePrecision || 2;
+          qty = Math.floor(qty * Math.pow(10, qtyPrec)) / Math.pow(10, qtyPrec);
+          if (qty <= 0) { log(`User ${key.email} qty too small for ${sym}`); return; }
+          const fmtP = (p) => parseFloat(p.toFixed(pricePrec));
+
+          // Market entry
+          await userClient.submitNewOrder({ symbol: sym, side: isLong ? 'BUY' : 'SELL', type: 'MARKET', quantity: qty });
+
+          // SL (MARK_PRICE — no margin call manipulation)
           try {
-            result = await openTrade(userClient, userPick, wallet);
-          } finally {
-            CONFIG.WALLET_RISK_PCT = origRisk;
-          }
-          if (!result) { log(`User ${key.email} openTrade returned null — skip`); return; }
+            await userClient.submitNewOrder({ symbol: sym, side: closeSide, type: 'STOP_MARKET', stopPrice: fmtP(slPrice), closePosition: 'true', workingType: 'MARK_PRICE', priceProtect: 'TRUE' });
+          } catch (e) { log(`Binance SL warn: ${e.message}`); }
+
+          // TP3 as safety net (closes all remaining)
+          try {
+            await userClient.submitNewOrder({ symbol: sym, side: closeSide, type: 'TAKE_PROFIT_MARKET', stopPrice: fmtP(tp3Price), closePosition: 'true', workingType: 'MARK_PRICE', priceProtect: 'TRUE' });
+          } catch (e) { log(`Binance TP3 warn: ${e.message}`); }
 
           await db.query(
             `INSERT INTO trades (api_key_id, user_id, symbol, direction, entry_price, sl_price, tp_price, quantity, leverage, status)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'OPEN')`,
-            [key.id, key.user_id, result.sym, result.direction, result.entry, result.sl, result.tp3, result.qty, result.leverage]
+            [key.id, key.user_id, sym, pick.direction, price, fmtP(slPrice), fmtP(tp3Price), qty, userLev]
           );
-          log(`Binance trade for ${key.email}: ${result.sym} ${result.direction} x${result.leverage} qty=${result.qty}`);
+          log(`Binance OK: ${key.email} ${sym} ${pick.direction} x${userLev} qty=${qty}`);
 
         } else if (key.platform === 'bitunix') {
           const userClient = new BitunixClient({ apiKey, apiSecret });
-          const sym = pick.sym;
-          const isLong = pick.direction !== 'SHORT';
-          const price = pick.price;
-          const slPrice = pick.slPrice || (isLong ? price * 0.985 : price * 1.015);
 
-          // TP: use signal TP or default 3x SL distance
-          const slDist = Math.abs(price - slPrice);
-          let tpPrice = pick.tpLevel;
-          if (!tpPrice || tpPrice <= 0) {
-            tpPrice = isLong ? price + slDist * 3 : price - slDist * 3;
-          }
-          // Validate TP is positive and on correct side
-          if (tpPrice <= 0) tpPrice = isLong ? price * 1.03 : price * 0.97;
-          if (isLong && tpPrice <= price) tpPrice = price * 1.03;
-          if (!isLong && tpPrice >= price) tpPrice = price * 0.97;
-
-          // Set leverage & margin
           try { await userClient.changeMarginMode(sym, 'ISOLATION'); } catch (_) {}
           try { await userClient.changeLeverage(sym, userLev); } catch (_) {}
 
-          // Position sizing: use risk% of wallet as margin, multiply by leverage for notional
-          const marginUsdt = wallet * userRiskPct; // e.g. 3% of wallet
-          const notional = marginUsdt * userLev;    // margin * leverage = notional value
-          let qty = notional / price;               // notional / price = quantity
-
-          // Ensure minimum $5.5 notional
-          if (qty * price < 5.5) qty = 5.5 / price;
-
-          // Round to 6 decimals
-          qty = parseFloat(qty.toFixed(6));
-
-          log(`Bitunix sizing: wallet=$${wallet.toFixed(2)} margin=$${marginUsdt.toFixed(2)} lev=${userLev}x notional=$${notional.toFixed(2)} qty=${qty} price=$${price}`);
-
-          // Step 1: Place market entry (no inline TP/SL — they don't always work)
+          // Market entry
           const order = await userClient.placeOrder({
-            symbol: sym,
-            side: isLong ? 'BUY' : 'SELL',
-            qty: String(qty),
-            orderType: 'MARKET',
-            tradeSide: 'OPEN',
+            symbol: sym, side: isLong ? 'BUY' : 'SELL',
+            qty: String(qty), orderType: 'MARKET', tradeSide: 'OPEN',
           });
-          log(`Bitunix entry placed: ${sym} orderId=${order?.orderId}`);
+          log(`Bitunix entry: ${sym} orderId=${order?.orderId}`);
 
-          // Step 2: Find the position ID
-          await new Promise(r => setTimeout(r, 1000)); // wait 1s for position to show
+          // Wait then set TP/SL on position
+          await new Promise(r => setTimeout(r, 1500));
           const positions = await userClient.getOpenPositions(sym);
           const pos = Array.isArray(positions) ? positions.find(p => p.symbol === sym) : null;
 
-          // Step 3: Place TP/SL on the position
           if (pos && pos.positionId) {
             try {
               await userClient.placePositionTpSl({
-                symbol: sym,
-                positionId: pos.positionId,
-                tpPrice: parseFloat(tpPrice.toFixed(8)),
+                symbol: sym, positionId: pos.positionId,
+                tpPrice: parseFloat(tp3Price.toFixed(8)),
                 slPrice: parseFloat(slPrice.toFixed(8)),
               });
-              log(`Bitunix TP/SL set: SL=$${slPrice.toFixed(4)} TP=$${tpPrice.toFixed(4)}`);
-            } catch (tpslErr) {
-              log(`Bitunix TP/SL error: ${tpslErr.message}`);
-            }
+              log(`Bitunix TP/SL set: SL=$${slPrice.toFixed(4)} TP3=$${tp3Price.toFixed(4)}`);
+            } catch (e) { log(`Bitunix TP/SL error: ${e.message}`); }
           } else {
-            log(`Bitunix: could not find positionId for ${sym} — TP/SL not set`);
+            log(`Bitunix: no positionId for ${sym}`);
           }
 
           await db.query(
             `INSERT INTO trades (api_key_id, user_id, symbol, direction, entry_price, sl_price, tp_price, quantity, leverage, status)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'OPEN')`,
-            [key.id, key.user_id, sym, isLong ? 'LONG' : 'SHORT', price, slPrice, tpPrice, qty, userLev]
+            [key.id, key.user_id, sym, pick.direction, price, parseFloat(slPrice.toFixed(8)), parseFloat(tp3Price.toFixed(8)), qty, userLev]
           );
-          log(`Bitunix trade for ${key.email}: ${sym} ${isLong ? 'LONG' : 'SHORT'} x${userLev} qty=${qty} SL=$${slPrice.toFixed(4)} TP=$${tpPrice.toFixed(4)}`);
+          log(`Bitunix OK: ${key.email} ${sym} ${pick.direction} x${userLev} qty=${qty}`);
         }
       } catch (err) {
         log(`User ${key.email} trade error: ${err.message}`);
