@@ -557,6 +557,16 @@ async function executeForAllUsers(pick) {
           return;
         }
 
+        // Check DB for existing open trade on same symbol to prevent duplicates
+        const existingTrade = await db.query(
+          `SELECT id FROM trades WHERE user_id = $1 AND symbol = $2 AND status = 'OPEN' LIMIT 1`,
+          [key.user_id, symbol]
+        );
+        if (existingTrade.length > 0) {
+          bLog.trade(`User ${key.email}: already has OPEN trade on ${symbol} in DB — skipping duplicate`);
+          return;
+        }
+
         const apiKey = cryptoUtils.decrypt(key.api_key_enc, key.iv, key.auth_tag);
         const apiSecret = cryptoUtils.decrypt(key.api_secret_enc, key.secret_iv, key.secret_auth_tag);
         const maxPos = parseInt(key.max_positions) || 1;
@@ -572,10 +582,18 @@ async function executeForAllUsers(pick) {
           const userClient = new USDMClient({ api_key: apiKey, api_secret: apiSecret });
           account = await userClient.getAccountInformation({ omitZeroBalances: false });
           wallet = parseFloat(account.totalWalletBalance);
-          openPosCount = account.positions.filter(p => parseFloat(p.positionAmt) !== 0).length;
+          const openPositions = account.positions.filter(p => parseFloat(p.positionAmt) !== 0);
+          openPosCount = openPositions.length;
 
           if (openPosCount >= maxPos) { bLog.trade(`User ${key.email}: at max positions (${openPosCount}/${maxPos})`); return; }
           if (wallet < CONFIG.MIN_BALANCE) { bLog.trade(`User ${key.email}: wallet too low ($${wallet.toFixed(2)})`); return; }
+
+          // Check if already in a position on this specific symbol
+          const existingPos = openPositions.find(p => p.symbol === symbol);
+          if (existingPos) {
+            bLog.trade(`User ${key.email}: already in ${symbol} position — skipping duplicate`);
+            return;
+          }
 
           bLog.trade(`User ${key.email} Binance: wallet=$${wallet.toFixed(2)} pos=${openPosCount}/${maxPos} lev=x${userLev}`);
 
@@ -669,10 +687,17 @@ async function executeForAllUsers(pick) {
           const userClient = new BitunixClient({ apiKey, apiSecret });
           account = await userClient.getAccountInformation();
           wallet = parseFloat(account.totalWalletBalance);
-          openPosCount = account.positions.length;
+          const bxPositions = account.positions || [];
+          openPosCount = bxPositions.length;
 
           if (openPosCount >= maxPos) { bLog.trade(`User ${key.email}: at max positions (${openPosCount}/${maxPos})`); return; }
           if (wallet < CONFIG.MIN_BALANCE) { bLog.trade(`User ${key.email}: wallet too low ($${wallet.toFixed(2)})`); return; }
+
+          const existingPosBx = bxPositions.find(p => p.symbol === symbol);
+          if (existingPosBx) {
+            bLog.trade(`User ${key.email}: already in ${symbol} position — skipping duplicate`);
+            return;
+          }
 
           bLog.trade(`User ${key.email} Bitunix: wallet=$${wallet.toFixed(2)} pos=${openPosCount}/${maxPos} lev=x${userLev}`);
 
