@@ -588,6 +588,7 @@
         <button class="nav-tab" role="tab" aria-selected="false" data-tab="keys">API Keys</button>
         <button class="nav-tab" role="tab" aria-selected="false" data-tab="subscription">Subscription</button>
         <button class="nav-tab" role="tab" aria-selected="false" data-tab="wallet">Wallet</button>
+        <button class="nav-tab" role="tab" aria-selected="false" data-tab="chart">Chart</button>
         <button class="nav-tab" role="tab" aria-selected="false" data-tab="logs" id="logs-tab">Logs</button>
         <button class="nav-tab hidden" role="tab" aria-selected="false" data-tab="admin" id="admin-tab">Admin</button>
       </nav>
@@ -820,6 +821,13 @@
       <!-- ====================================================
            Admin Tab (hidden unless admin)
            ==================================================== -->
+      <!-- ====================================================
+           Chart Tab (SMC Zeiierman Indicators)
+           ==================================================== -->
+      <section id="tab-chart" class="hidden" role="tabpanel" aria-label="Chart">
+        <iframe id="chart-iframe" src="" style="width:100%;height:calc(100vh - 120px);border:none;border-radius:var(--radius-lg);background:var(--color-bg);" allow="fullscreen"></iframe>
+      </section>
+
       <section id="tab-logs" class="hidden" role="tabpanel" aria-label="Logs">
         <h2 class="section-heading">Bot Live Logs</h2>
 

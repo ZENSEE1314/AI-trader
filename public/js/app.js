@@ -144,7 +144,7 @@
       btn.classList.toggle('active', isActive);
       btn.setAttribute('aria-selected', isActive);
     });
-    const allTabs = ['dashboard', 'keys', 'subscription', 'wallet', 'logs', 'admin'];
+    const allTabs = ['dashboard', 'keys', 'subscription', 'wallet', 'chart', 'logs', 'admin'];
     allTabs.forEach(t => {
       const el = $(`#tab-${t}`);
       if (el) el.classList.toggle('hidden', t !== tab);
@@ -154,6 +154,10 @@
     else if (tab === 'keys') loadKeys();
     else if (tab === 'subscription') loadSubscription();
     else if (tab === 'wallet') loadWallet();
+    else if (tab === 'chart') {
+      const iframe = $('#chart-iframe');
+      if (iframe && !iframe.src.includes('chart.html')) iframe.src = '/chart.html';
+    }
     else if (tab === 'logs') startLogPolling();
     else if (tab === 'admin') loadAdmin();
 
