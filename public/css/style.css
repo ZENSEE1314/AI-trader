@@ -159,7 +159,11 @@ input, select, textarea {
   margin-bottom: var(--space-8);
   border-bottom: 1px solid var(--color-border-muted);
   padding-bottom: 0;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
 }
+.nav-tabs::-webkit-scrollbar { display: none; }
 
 .nav-tab {
   padding: var(--space-3) var(--space-5);
@@ -174,6 +178,8 @@ input, select, textarea {
   transition: color var(--duration-fast) var(--ease-out),
               border-color var(--duration-fast) var(--ease-out);
   min-height: 44px;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .nav-tab:hover {
