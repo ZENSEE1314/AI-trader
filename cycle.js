@@ -37,7 +37,6 @@ const CONFIG = {
 // AI-tuned leverage — params come from getOptimalParams()
 function getLeverage(symbol, price, params = {}) {
   if (BTC_ETH_SYMBOLS.has(symbol)) return params.LEV_BTC_ETH || 100;
-  if (price < 100) return params.LEV_CHEAP || 10;
   return params.LEV_ALT || 20;
 }
 

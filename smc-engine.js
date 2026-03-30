@@ -301,7 +301,6 @@ async function analyzeLHHL(ticker, params) {
   // Leverage is determined per coin type
   const BTC_ETH = new Set(['BTCUSDT', 'ETHUSDT']);
   const leverage = BTC_ETH.has(symbol) ? (params.LEV_BTC_ETH || 100)
-    : price < 100 ? (params.LEV_CHEAP || 10)
     : (params.LEV_ALT || 20);
 
   const slPct = SL_MARGIN_PCT / leverage;   // e.g., 0.30 / 10 = 0.03 (3%)

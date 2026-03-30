@@ -146,8 +146,7 @@ const DEFAULT_PARAMS = {
   // Sizing params (cycle.js)
   WALLET_SIZE_PCT: 0.10,   // 10% of wallet per trade
   LEV_BTC_ETH: 100,        // BTC/ETH leverage
-  LEV_ALT: 20,             // altcoin leverage (price >= $100)
-  LEV_CHEAP: 10,           // cheap coin leverage (price < $100)
+  LEV_ALT: 20,             // all altcoin leverage
 };
 
 async function getOptimalParams() {
@@ -279,12 +278,6 @@ async function getOptimalParams() {
           if (newLev !== params.LEV_ALT) {
             await logParamChange('LEV_ALT', params.LEV_ALT, newLev, `20x WR ${(wr*100).toFixed(0)}%, reducing`, totalTrades);
             params.LEV_ALT = newLev;
-          }
-        } else if (levVal === 10) {
-          const newLev = Math.max(params.LEV_CHEAP - 2, 5);
-          if (newLev !== params.LEV_CHEAP) {
-            await logParamChange('LEV_CHEAP', params.LEV_CHEAP, newLev, `10x WR ${(wr*100).toFixed(0)}%, reducing`, totalTrades);
-            params.LEV_CHEAP = newLev;
           }
         }
       }
