@@ -210,32 +210,34 @@ async function handleCommand(text, fromChatId) {
 // ── /stats — AI Learning Statistics ──────────────────────────
 async function sendAIStats(chatId) {
   try {
-    const stats = aiLearner.getStats();
+    const stats = await aiLearner.getStats();
     const o = stats.overall;
 
-    if (!o || o.total === 0) {
+    if (!o || parseInt(o.total) === 0) {
       await tgSendTo(chatId, `<b>AI Stats</b>\n\nNo trades recorded yet. The AI will start learning after the first trade.`);
       return;
     }
 
-    const winRate = o.total > 0 ? ((o.wins / o.total) * 100).toFixed(0) : '0';
-    const avgPnl = o.avg_pnl ? o.avg_pnl.toFixed(3) : '0';
+    const total = parseInt(o.total);
+    const wins = parseInt(o.wins);
+    const winRate = total > 0 ? ((wins / total) * 100).toFixed(0) : '0';
+    const avgPnl = o.avg_pnl ? parseFloat(o.avg_pnl).toFixed(3) : '0';
 
     let msg =
       `<b>AI Learning Stats</b>\n` +
       `━━━━━━━━━━━━━━━━━━\n` +
-      `Total Trades: <b>${o.total}</b>\n` +
-      `Win Rate: <b>${winRate}%</b> (${o.wins}W / ${o.total - o.wins}L)\n` +
+      `Total Trades: <b>${total}</b>\n` +
+      `Win Rate: <b>${winRate}%</b> (${wins}W / ${total - wins}L)\n` +
       `Avg PnL: <b>${avgPnl}%</b>\n` +
-      `Total PnL: <b>${o.total_pnl ? o.total_pnl.toFixed(2) : '0'}%</b>\n` +
-      `Best: <b>${o.best_trade ? '+' + o.best_trade.toFixed(2) : '0'}%</b>\n` +
-      `Worst: <b>${o.worst_trade ? o.worst_trade.toFixed(2) : '0'}%</b>\n\n`;
+      `Total PnL: <b>${o.total_pnl ? parseFloat(o.total_pnl).toFixed(2) : '0'}%</b>\n` +
+      `Best: <b>${o.best_trade ? '+' + parseFloat(o.best_trade).toFixed(2) : '0'}%</b>\n` +
+      `Worst: <b>${o.worst_trade ? parseFloat(o.worst_trade).toFixed(2) : '0'}%</b>\n\n`;
 
     if (stats.bySetup.length) {
       msg += `<b>By Setup:</b>\n`;
       for (const s of stats.bySetup) {
-        const wr = s.total > 0 ? ((s.wins / s.total) * 100).toFixed(0) : '0';
-        msg += `  ${s.setup}: ${s.total} trades, ${wr}% WR, avg ${s.avg_pnl.toFixed(3)}%\n`;
+        const wr = parseInt(s.total) > 0 ? ((parseInt(s.wins) / parseInt(s.total)) * 100).toFixed(0) : '0';
+        msg += `  ${s.setup}: ${s.total} trades, ${wr}% WR, avg ${parseFloat(s.avg_pnl).toFixed(3)}%\n`;
       }
       msg += '\n';
     }
@@ -243,7 +245,7 @@ async function sendAIStats(chatId) {
     if (stats.bySession.length) {
       msg += `<b>By Session:</b>\n`;
       for (const s of stats.bySession) {
-        const wr = s.total > 0 ? ((s.wins / s.total) * 100).toFixed(0) : '0';
+        const wr = parseInt(s.total) > 0 ? ((parseInt(s.wins) / parseInt(s.total)) * 100).toFixed(0) : '0';
         msg += `  ${s.session}: ${s.total} trades, ${wr}% WR\n`;
       }
       msg += '\n';
@@ -258,7 +260,7 @@ async function sendAIStats(chatId) {
     }
 
     // Current AI parameters
-    const params = aiLearner.getOptimalParams();
+    const params = await aiLearner.getOptimalParams();
     msg += `<b>Current AI Params:</b>\n`;
     msg += `  TP: ${(params.TP_PCT * 100).toFixed(1)}%\n`;
     msg += `  SL Buffer: ${(params.SL_BUFFER * 100).toFixed(2)}%\n`;
@@ -371,10 +373,12 @@ async function main() {
   bLog.system('AI Self-Learning Crypto Bot v4 starting...');
 
   // Log AI state on startup
-  const stats = aiLearner.getStats();
-  if (stats.overall.total > 0) {
-    const wr = stats.overall.total > 0 ? ((stats.overall.wins / stats.overall.total) * 100).toFixed(0) : '0';
-    const msg = `AI State: ${stats.overall.total} trades, ${wr}% win rate, avg PnL ${(stats.overall.avg_pnl || 0).toFixed(3)}%`;
+  const stats = await aiLearner.getStats();
+  if (stats.overall && parseInt(stats.overall.total) > 0) {
+    const total = parseInt(stats.overall.total);
+    const wins = parseInt(stats.overall.wins);
+    const wr = total > 0 ? ((wins / total) * 100).toFixed(0) : '0';
+    const msg = `AI State: ${total} trades, ${wr}% win rate, avg PnL ${(parseFloat(stats.overall.avg_pnl) || 0).toFixed(3)}%`;
     log(msg);
     bLog.ai(msg);
   } else {
@@ -382,14 +386,14 @@ async function main() {
     bLog.ai('No previous trades — AI starting fresh, will learn after first trade');
   }
 
-  const bestSetups = aiLearner.getBestSetups();
+  const bestSetups = await aiLearner.getBestSetups();
   if (bestSetups.length) {
     const msg = 'Best setups: ' + bestSetups.map(s => `${s.setup}(${s.win_rate}%)`).join(', ');
     log(msg);
     bLog.ai(msg);
   }
 
-  const aiVersion = aiLearner.getCurrentVersion();
+  const aiVersion = await aiLearner.getCurrentVersion();
   bLog.ai(`Current AI version: ${aiVersion}`);
 
   await tgSendPrivate(

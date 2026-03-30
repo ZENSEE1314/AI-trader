@@ -148,7 +148,7 @@ async function openTrade(client, pick, wallet) {
   const fmtP = (p) => parseFloat(p.toFixed(pricePrec));
 
   // AI-optimized parameters
-  const params = aiLearner.getOptimalParams();
+  const params = await aiLearner.getOptimalParams();
   const TP_PCT = params.TP_PCT || CONFIG.TP_PCT;
 
   // SL from SMC engine (swing point based)
@@ -260,7 +260,7 @@ async function checkTrailingStop(client) {
           bLog.trade(`CLOSED: ${sym} ${state.isLong ? 'LONG' : 'SHORT'} | PnL: ${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}% (${winLoss}) | duration: ${durationMin}min | entry=$${fmtPrice(state.entry)} exit=$${fmtPrice(exitPrice)}`);
           bLog.ai(`Recording trade to AI learner: ${sym} setup=${state.setup} ${winLoss} ${pnlPct.toFixed(2)}%`);
 
-          aiLearner.recordTrade({
+          await aiLearner.recordTrade({
             symbol: sym,
             direction: state.isLong ? 'LONG' : 'SHORT',
             setup: state.setup || 'unknown',

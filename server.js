@@ -60,11 +60,11 @@ app.get('/api/logs', authMiddleware, (req, res) => {
 });
 
 // AI version history
-app.get('/api/ai/versions', authMiddleware, (req, res) => {
+app.get('/api/ai/versions', authMiddleware, async (req, res) => {
   const limit = parseInt(req.query.limit) || 50;
   res.json({
-    current: aiLearner.getCurrentVersion(),
-    versions: aiLearner.getVersions(limit),
+    current: await aiLearner.getCurrentVersion(),
+    versions: await aiLearner.getVersions(limit),
   });
 });
 

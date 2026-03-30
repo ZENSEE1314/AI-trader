@@ -432,10 +432,10 @@ async function analyzeSMC(ticker, sentimentScores = {}) {
     const price = parseFloat(ticker.lastPrice);
 
     // Check if AI says to avoid this coin
-    if (aiLearner.shouldAvoidCoin(symbol)) return null;
+    if (await aiLearner.shouldAvoidCoin(symbol)) return null;
 
     // Get AI-optimal parameters
-    const params = aiLearner.getOptimalParams();
+    const params = await aiLearner.getOptimalParams();
 
     // Fetch multi-timeframe data
     const [klines1d, klines1w, klines1h, klines15m, klines1m] = await Promise.all([
@@ -728,7 +728,7 @@ async function analyzeSMC(ticker, sentimentScores = {}) {
     if (entry1m.valid) score += 3;
 
     // ── AI-learned modifiers ──
-    const aiModifier = aiLearner.getAIScoreModifier(symbol, setup, direction);
+    const aiModifier = await aiLearner.getAIScoreModifier(symbol, setup, direction);
     score = score * aiModifier;
 
     // ── Sentiment modifier ──
@@ -843,7 +843,7 @@ async function scanSMC(log = console.log) {
   }
 
   if (!isGoodTradingSession()) {
-    const sessionW = aiLearner.getSessionWeight();
+    const sessionW = await aiLearner.getSessionWeight();
     if (sessionW < 1.2) {
       log('SMC: Dead zone (UTC 4-5). Low liquidity — skipping.');
       bLog.scan(`Dead zone hours. Waiting for volume to return.`);
@@ -896,14 +896,14 @@ async function scanSMC(log = console.log) {
     .slice(0, 50);
 
   bLog.scan(`Analyzing ${top30.length} coins by volume + trend boost...`);
-  const params = aiLearner.getOptimalParams();
+  const params = await aiLearner.getOptimalParams();
   bLog.ai(`AI params: TP=${(params.TP_PCT*100).toFixed(1)}% SL_BUF=${(params.SL_BUFFER*100).toFixed(2)}% MIN_SCORE=${params.MIN_SCORE} RISK=${(params.WALLET_RISK_PCT*100).toFixed(1)}%`);
 
   const results = [];
   let analyzed = 0;
   let skippedAI = 0;
   for (const ticker of top30) {
-    if (aiLearner.shouldAvoidCoin(ticker.symbol)) {
+    if (await aiLearner.shouldAvoidCoin(ticker.symbol)) {
       skippedAI++;
       bLog.ai(`Skipping ${ticker.symbol} — AI learned poor win rate`);
     }
