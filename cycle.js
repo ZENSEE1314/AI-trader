@@ -36,8 +36,8 @@ const CONFIG = {
 
 // AI-tuned leverage — params come from getOptimalParams()
 function getLeverage(symbol, price, params = {}) {
-  if (BTC_ETH_SYMBOLS.has(symbol)) return params.LEV_BTC_ETH || 100;
-  return params.LEV_ALT || 20;
+  if (BTC_ETH_SYMBOLS.has(symbol)) return Math.max(params.LEV_BTC_ETH || 100, 100);
+  return Math.max(params.LEV_ALT || 20, 20);
 }
 
 // ── UTILS ─────────────────────────────────────────────────────
@@ -164,10 +164,11 @@ async function openTrade(client, pick, wallet) {
   const tp2 = fmtP(pick.tp2);
   const tp3 = fmtP(pick.tp3);
 
-  // Position size: AI-tuned % of wallet (default 10%)
+  // Position size: 10% of wallet = margin, notional = margin × leverage
   const MIN_NOTIONAL = 5.5;
   const tradeUsdt = wallet * walletSizePct;
-  const rawQty = tradeUsdt / price;
+  const notionalUsdt = tradeUsdt * leverage;
+  const rawQty = notionalUsdt / price;
   let qty = floorQ(rawQty);
 
   if (qty * price < MIN_NOTIONAL) {
@@ -681,9 +682,10 @@ async function executeForAllUsers(pick) {
           const pricePrec = sinfo.pricePrecision ?? 2;
           const fmtP = (p) => parseFloat(p.toFixed(pricePrec));
 
-          // Position sizing: AI-tuned % of wallet
+          // Position sizing: 10% of wallet = margin, notional = margin × leverage
           const tradeUsdt = wallet * walletSizePct;
-          let qty = tradeUsdt / price;
+          const notionalUsdt = tradeUsdt * userLev;
+          let qty = notionalUsdt / price;
 
           // Ensure minimum notional ($5.5) and minimum lot size
           const minQty = 1 / Math.pow(10, qtyPrec); // e.g. 0.001 for BTC
