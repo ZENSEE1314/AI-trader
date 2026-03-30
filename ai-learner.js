@@ -33,8 +33,9 @@ async function recordTrade(data) {
       symbol, direction, setup, entry_price, exit_price, pnl_pct, is_win,
       leverage, duration_min, session, rsi_at_entry, atr_pct, vol_ratio,
       sentiment_score, bb_position, score_at_entry, sl_distance_pct,
-      tp_distance_pct, trend_1h, market_structure, closed_at
-    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)`,
+      tp_distance_pct, trend_1h, market_structure, closed_at,
+      tf_15m, tf_3m, tf_1m, exit_reason
+    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25)`,
     [
       data.symbol, data.direction, data.setup, data.entryPrice,
       data.exitPrice || null, data.pnlPct || 0, isWin,
@@ -45,6 +46,8 @@ async function recordTrade(data) {
       data.scoreAtEntry || null, data.slDistancePct || null,
       data.tpDistancePct || null, data.trend1h || null,
       data.marketStructure || null, new Date().toISOString(),
+      data.tf15m || null, data.tf3m || null, data.tf1m || null,
+      data.exitReason || null,
     ]
   );
 
@@ -136,7 +139,7 @@ const DEFAULT_PARAMS = {
   SL_BUFFER_PCT: 0.001,    // 0.1% buffer above/below swing candle
   RR_RATIO: 1.5,           // TP = 1.5x SL distance
   SL_MAX_PCT: 0.02,        // skip trades with SL > 2%
-  SL_MIN_PCT: 0.001,       // skip trades with SL < 0.1%
+  SL_MIN_PCT: 0.003,       // skip trades with SL < 0.3% (prevents noise wicks)
   MIN_SCORE: 8,            // minimum confluence score
 
   // Sizing params (cycle.js)
@@ -356,29 +359,82 @@ async function getOptimalParams() {
   }
 
   // ── 7. Direction bias: if SHORT consistently loses, prefer LONG (and vice versa) ──
+  // Uses lower threshold (5 trades per direction instead of 10) for faster adaptation
   const dirAnalysis = await query(
     `SELECT direction,
       COUNT(*) as total,
       SUM(CASE WHEN is_win = 1 THEN 1 ELSE 0 END) as wins,
       AVG(pnl_pct) as avg_pnl
-     FROM (SELECT * FROM ai_trades WHERE pnl_pct IS NOT NULL ORDER BY created_at DESC LIMIT 60) sub
+     FROM (SELECT * FROM ai_trades WHERE pnl_pct IS NOT NULL ORDER BY created_at DESC LIMIT 40) sub
      GROUP BY direction`
   );
-  // Store direction bias for the engine to use
   params.DIRECTION_BIAS = null;
   if (dirAnalysis.length === 2) {
     const longD = dirAnalysis.find(d => d.direction === 'LONG');
     const shortD = dirAnalysis.find(d => d.direction === 'SHORT');
-    if (longD && shortD && parseInt(longD.total) >= 10 && parseInt(shortD.total) >= 10) {
+    if (longD && shortD && parseInt(longD.total) >= 5 && parseInt(shortD.total) >= 5) {
       const longWR = parseInt(longD.wins) / parseInt(longD.total);
       const shortWR = parseInt(shortD.wins) / parseInt(shortD.total);
-      // If one direction is significantly worse, avoid it
-      if (longWR < 0.30 && shortWR > 0.50) {
+      // Bias towards direction with better win rate when gap is significant
+      if (longWR < 0.35 && shortWR > 0.45) {
         params.DIRECTION_BIAS = 'SHORT';
         await logParamChange('DIRECTION_BIAS', 0, -1, `LONG WR ${(longWR*100).toFixed(0)}% vs SHORT ${(shortWR*100).toFixed(0)}%, bias SHORT`, totalTrades);
-      } else if (shortWR < 0.30 && longWR > 0.50) {
+      } else if (shortWR < 0.35 && longWR > 0.45) {
         params.DIRECTION_BIAS = 'LONG';
         await logParamChange('DIRECTION_BIAS', 0, 1, `SHORT WR ${(shortWR*100).toFixed(0)}% vs LONG ${(longWR*100).toFixed(0)}%, bias LONG`, totalTrades);
+      }
+    }
+  }
+
+  // ── 8. Early exit learning: track if structure_break_15m exits help or hurt ──
+  const exitAnalysis = await query(
+    `SELECT exit_reason,
+      COUNT(*) as total,
+      SUM(CASE WHEN is_win = 1 THEN 1 ELSE 0 END) as wins,
+      AVG(pnl_pct) as avg_pnl
+     FROM ai_trades
+     WHERE exit_reason IS NOT NULL AND pnl_pct IS NOT NULL
+     GROUP BY exit_reason HAVING COUNT(*) >= 5`
+  );
+  // Store early exit effectiveness for the engine to use
+  params.EARLY_EXIT_ENABLED = true; // default on
+  for (const ex of exitAnalysis) {
+    if (ex.exit_reason === 'structure_break_15m') {
+      const wr = parseInt(ex.wins) / parseInt(ex.total);
+      const avgPnl = parseFloat(ex.avg_pnl);
+      // If early exits are consistently losing us money, disable them
+      if (wr < 0.25 && avgPnl < -1.0) {
+        params.EARLY_EXIT_ENABLED = false;
+        await logParamChange('EARLY_EXIT_ENABLED', 1, 0,
+          `15m exits WR ${(wr*100).toFixed(0)}% avg ${avgPnl.toFixed(1)}%, disabling`, totalTrades);
+      }
+    }
+  }
+
+  // ── 9. SL tightness learning: if tight SLs always lose, widen minimum ──
+  const tightSLAnalysis = await query(
+    `SELECT
+      COUNT(*) FILTER (WHERE sl_distance_pct < 0.3 AND is_win = 0) as tight_losses,
+      COUNT(*) FILTER (WHERE sl_distance_pct < 0.3 AND is_win = 1) as tight_wins,
+      COUNT(*) FILTER (WHERE sl_distance_pct >= 0.3 AND is_win = 0) as wide_losses,
+      COUNT(*) FILTER (WHERE sl_distance_pct >= 0.3 AND is_win = 1) as wide_wins
+     FROM ai_trades WHERE pnl_pct IS NOT NULL AND sl_distance_pct IS NOT NULL`
+  );
+  const slTight = tightSLAnalysis[0];
+  if (slTight) {
+    const tightTotal = parseInt(slTight.tight_losses) + parseInt(slTight.tight_wins);
+    const wideTotal = parseInt(slTight.wide_losses) + parseInt(slTight.wide_wins);
+    if (tightTotal >= 5 && wideTotal >= 5) {
+      const tightWR = parseInt(slTight.tight_wins) / tightTotal;
+      const wideWR = parseInt(slTight.wide_wins) / wideTotal;
+      // If tight SLs lose much more, raise the minimum
+      if (tightWR < 0.25 && wideWR > tightWR * 1.5) {
+        const newMin = Math.min(params.SL_MIN_PCT * 1.1, 0.005); // max 0.5%
+        if (newMin > params.SL_MIN_PCT) {
+          await logParamChange('SL_MIN_PCT', params.SL_MIN_PCT, newMin,
+            `tight SL WR ${(tightWR*100).toFixed(0)}% vs wide ${(wideWR*100).toFixed(0)}%, widening min`, totalTrades);
+          params.SL_MIN_PCT = newMin;
+        }
       }
     }
   }

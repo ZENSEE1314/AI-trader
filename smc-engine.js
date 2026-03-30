@@ -255,9 +255,15 @@ async function analyzeLHHL(ticker, params) {
   let isShortSetup = struct15.hasLH && struct3.hasLH && struct1.hasLH;
   let isLongSetup = struct15.hasHL && struct3.hasHL && struct1.hasHL;
 
-  // AI direction bias
-  if (dirBias === 'LONG') isShortSetup = false;
-  if (dirBias === 'SHORT') isLongSetup = false;
+  // AI direction bias — completely block the losing direction
+  if (dirBias === 'LONG') {
+    isShortSetup = false;
+    if (isLongSetup) bLog.ai(`${symbol}: AI bias=LONG — blocking SHORT, allowing LONG`);
+  }
+  if (dirBias === 'SHORT') {
+    isLongSetup = false;
+    if (isShortSetup) bLog.ai(`${symbol}: AI bias=SHORT — blocking LONG, allowing SHORT`);
+  }
 
   // Log structure for debugging
   const hasAnySignal = struct15.hasLH || struct15.hasHL || struct3.hasLH || struct3.hasHL || struct1.hasLH || struct1.hasHL;
@@ -447,4 +453,6 @@ module.exports = {
   recordDailyTrade,
   checkDailyLimits,
   isGoodTradingSession,
+  detectSwings,
+  SWING_LENGTHS,
 };

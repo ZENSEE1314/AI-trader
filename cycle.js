@@ -8,7 +8,7 @@
 const { USDMClient } = require('binance');
 const fetch = require('node-fetch');
 const aiLearner = require('./ai-learner');
-const { scanSMC, recordDailyTrade } = require('./smc-engine');
+const { scanSMC, recordDailyTrade, detectSwings, SWING_LENGTHS } = require('./smc-engine');
 const { getSentimentScores } = require('./sentiment-scraper');
 const { log: bLog } = require('./bot-logger');
 
@@ -104,31 +104,29 @@ function calcEMA(prices, period) {
 const tradeState = new Map();
 // sym → { entry, tp1, tp2, tp3, sl, qty, isLong, tpHit1, tpHit2, pricePrec, qtyPrec, setup, openedAt }
 
-// ── 15m EXIT CHECK (structure break against position) ────────
+// ── 15m EXIT CHECK (structure break using Zeiierman swings) ──
+// Uses the same centered-window pivot detection as smc-engine.js
+// Exit LONG only if 15m prints LH AND price dropped back below entry
+// Exit SHORT only if 15m prints HL AND price rallied back above entry
 function shouldExit15m(klines15, entryPrice, direction) {
-  // Exit LONG if 15m makes a Lower High (trend reversing down)
-  // Exit SHORT if 15m makes a Higher Low (trend reversing up)
-  const swingHighs = [];
-  const swingLows = [];
-  for (let i = 1; i < klines15.length - 1; i++) {
-    const high = parseFloat(klines15[i][2]);
-    const low = parseFloat(klines15[i][3]);
-    const prevH = parseFloat(klines15[i - 1][2]);
-    const nextH = parseFloat(klines15[i + 1][2]);
-    const prevL = parseFloat(klines15[i - 1][3]);
-    const nextL = parseFloat(klines15[i + 1][3]);
-    if (high > prevH && high > nextH) swingHighs.push(high);
-    if (low < prevL && low < nextL) swingLows.push(low);
-  }
+  const swings = detectSwings(klines15, SWING_LENGTHS['15m']);
+  const swingHighs = swings.filter(s => s.type === 'high');
+  const swingLows = swings.filter(s => s.type === 'low');
+
   if (direction === 'LONG' && swingHighs.length >= 2) {
     const recent = swingHighs[swingHighs.length - 1];
     const prev = swingHighs[swingHighs.length - 2];
-    return recent < prev && recent > entryPrice;
+    const isLH = recent.price < prev.price;
+    const curPrice = parseFloat(klines15[klines15.length - 1][4]); // close price
+    // Only exit if structure actually broke AND we're losing
+    return isLH && curPrice < entryPrice;
   }
   if (direction === 'SHORT' && swingLows.length >= 2) {
     const recent = swingLows[swingLows.length - 1];
     const prev = swingLows[swingLows.length - 2];
-    return recent > prev && recent < entryPrice;
+    const isHL = recent.price > prev.price;
+    const curPrice = parseFloat(klines15[klines15.length - 1][4]);
+    return isHL && curPrice > entryPrice;
   }
   return false;
 }
@@ -243,6 +241,9 @@ async function openTrade(client, pick, wallet) {
     pricePrec, qtyPrec,
     setup: pick.setup,
     openedAt: Date.now(),
+    tf15m: pick.structure?.tf15 || null,
+    tf3m: pick.structure?.tf3 || null,
+    tf1m: pick.structure?.tf1 || null,
   });
 
   return {
@@ -287,20 +288,25 @@ async function checkTrailingStop(client) {
             session: aiLearner.getCurrentSession(),
             slDistancePct: Math.abs(state.entry - state.sl) / state.entry * 100,
             tpDistancePct: Math.abs(state.tp1 - state.entry) / state.entry * 100,
+            tf15m: state.tf15m || null,
+            tf3m: state.tf3m || null,
+            tf1m: state.tf1m || null,
+            exitReason: 'position_closed',
           });
 
           recordDailyTrade(pnlPct > 0);
           log(`AI recorded: ${sym} PnL=${pnlPct.toFixed(2)}% duration=${durationMin}min setup=${state.setup}`);
 
-          // Update DB trades table
+          // Update DB trades table with exit_price
           try {
             const db = require('./db');
             await db.query(
-              `UPDATE trades SET status = 'CLOSED', pnl_usdt = $1
-               WHERE symbol = $2 AND status = 'OPEN'`,
-              [parseFloat((pnlPct * state.qty * state.entry / 100).toFixed(4)), sym]
+              `UPDATE trades SET status = $1, pnl_usdt = $2, exit_price = $3,
+               closed_at = NOW()
+               WHERE symbol = $4 AND status = 'OPEN'`,
+              [winLoss, parseFloat((pnlPct * state.qty * state.entry / 100).toFixed(4)), exitPrice, sym]
             );
-            bLog.trade(`DB updated: ${sym} → CLOSED (${winLoss})`);
+            bLog.trade(`DB updated: ${sym} → ${winLoss} exit=$${fmtPrice(exitPrice)}`);
           } catch (dbErr) {
             bLog.error(`DB update failed for ${sym}: ${dbErr.message}`);
           }
@@ -319,16 +325,48 @@ async function checkTrailingStop(client) {
       const closeSide = isLong ? 'SELL' : 'BUY';
       const gain = isLong ? (cur - entry) / entry : (entry - cur) / entry;
 
-      // 15m structure break exit check
+      // 15m structure break exit check (AI can disable if it learns exits hurt)
+      const earlyExitParams = await aiLearner.getOptimalParams();
+      const earlyExitEnabled = earlyExitParams.EARLY_EXIT_ENABLED !== false;
       try {
         const klines15 = await client.getKlines({ symbol: sym, interval: '15m', limit: 50 });
-        if (shouldExit15m(klines15, entry, isLong ? 'LONG' : 'SHORT')) {
-          log(`Exit [${isLong ? 'LONG' : 'SHORT'}] ${sym}: 15m swing + liquidity swept`);
+        if (earlyExitEnabled && shouldExit15m(klines15, entry, isLong ? 'LONG' : 'SHORT')) {
+          log(`Exit [${isLong ? 'LONG' : 'SHORT'}] ${sym}: 15m structure break`);
           try { await client.cancelAllOpenOrders({ symbol: sym }); } catch (_) {}
           try { await client.cancelAllAlgoOpenOrders({ symbol: sym }); } catch (_) {}
           await client.submitNewOrder({ symbol: sym, side: closeSide, type: 'MARKET', quantity: Math.abs(amt), reduceOnly: 'true' });
+
+          // Record exit_price in DB
+          try {
+            const db = require('./db');
+            const pnlUsdt = parseFloat((gain * Math.abs(amt) * entry).toFixed(4));
+            await db.query(
+              `UPDATE trades SET status = $1, pnl_usdt = $2, exit_price = $3, closed_at = NOW()
+               WHERE symbol = $4 AND status = 'OPEN'`,
+              [gain > 0 ? 'WIN' : 'LOSS', pnlUsdt, cur, sym]
+            );
+          } catch (_) {}
+
+          // Record to AI learner with exit reason
+          const st = tradeState.get(sym);
+          if (st) {
+            await aiLearner.recordTrade({
+              symbol: sym, direction: isLong ? 'LONG' : 'SHORT',
+              setup: st.setup || 'unknown', entryPrice: entry, exitPrice: cur,
+              pnlPct: gain * 100, leverage: getLeverage(sym, entry, await aiLearner.getOptimalParams()),
+              durationMin: Math.round((Date.now() - st.openedAt) / 60000),
+              session: aiLearner.getCurrentSession(),
+              slDistancePct: Math.abs(entry - st.sl) / entry * 100,
+              tpDistancePct: Math.abs(st.tp1 - entry) / entry * 100,
+              tf15m: st.tf15m || null, tf3m: st.tf3m || null, tf1m: st.tf1m || null,
+              exitReason: 'structure_break_15m',
+            });
+            recordDailyTrade(gain > 0);
+            tradeState.delete(sym);
+          }
+
           await notify(
-            `*Exit: 15m Swing + Liq Swept*\n` +
+            `*Exit: 15m Structure Break*\n` +
             `*${sym}* ${isLong ? 'LONG' : 'SHORT'}\n` +
             `Entry: \`$${fmtPrice(entry)}\` Exit: \`$${fmtPrice(cur)}\`\n` +
             `PnL: *${gain >= 0 ? '+' : ''}${(gain * 100).toFixed(2)}%*`
@@ -706,9 +744,10 @@ async function executeForAllUsers(pick) {
           }
 
           await db.query(
-            `INSERT INTO trades (api_key_id, user_id, symbol, direction, entry_price, sl_price, tp_price, quantity, leverage, status)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'OPEN')`,
-            [key.id, key.user_id, symbol, pick.direction, price, fmtP(slPrice), fmtP(tp3Price), qty, userLev]
+            `INSERT INTO trades (api_key_id, user_id, symbol, direction, entry_price, sl_price, tp_price, quantity, leverage, status, tf_15m, tf_3m, tf_1m)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'OPEN', $10, $11, $12)`,
+            [key.id, key.user_id, symbol, pick.direction, price, fmtP(slPrice), fmtP(tp3Price), qty, userLev,
+             pick.structure?.tf15 || null, pick.structure?.tf3 || null, pick.structure?.tf1 || null]
           );
           bLog.trade(`✅ Binance OK: ${key.email} ${symbol} ${pick.direction} x${userLev} qty=${qty} entry=$${fmtPrice(price)}`);
           log(`Binance OK: ${key.email} ${symbol} ${pick.direction} x${userLev}`);
@@ -897,12 +936,14 @@ async function syncTradeStatus() {
               ? (exitPrice - entryPrice) / entryPrice * 100
               : (entryPrice - exitPrice) / entryPrice * 100;
             const pnlUsdt = parseFloat((pnlPct * parseFloat(trade.quantity || 1) * entryPrice / 100).toFixed(4));
+            const status = pnlPct > 0 ? 'WIN' : 'LOSS';
 
             await db.query(
-              `UPDATE trades SET status = $1, pnl_usdt = $2 WHERE id = $3`,
-              [pnlPct > 0 ? 'WIN' : 'LOSS', pnlUsdt, trade.id]
+              `UPDATE trades SET status = $1, pnl_usdt = $2, exit_price = $3, closed_at = NOW()
+               WHERE id = $4`,
+              [status, pnlUsdt, exitPrice, trade.id]
             );
-            bLog.trade(`DB synced: ${trade.symbol} → ${pnlPct > 0 ? 'WIN' : 'LOSS'} PnL=$${pnlUsdt}`);
+            bLog.trade(`DB synced: ${trade.symbol} → ${status} PnL=$${pnlUsdt} exit=$${fmtPrice(exitPrice)}`);
           } else {
             // Still open — update live unrealized PnL
             const livePnl = parseFloat(exchangePos.pnl.toFixed(4));
