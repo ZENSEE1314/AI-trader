@@ -102,7 +102,7 @@ router.get('/futures-wallet', async (req, res) => {
     // Try user's stored API keys first
     const keys = await query(
       `SELECT api_key_enc, iv, auth_tag, api_secret_enc, secret_iv, secret_auth_tag, platform
-       FROM api_keys WHERE user_id = $1 AND is_active = true AND platform = 'binance' LIMIT 1`,
+       FROM api_keys WHERE user_id = $1 AND enabled = true AND platform = 'binance' LIMIT 1`,
       [req.userId]
     );
 
