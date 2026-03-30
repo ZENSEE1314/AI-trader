@@ -19,13 +19,9 @@ const TELEGRAM_CHATS = (process.env.TELEGRAM_CHAT_ID || '').split(',').map(s => 
 const PRIVATE_CHATS  = TELEGRAM_CHATS.filter(id => !id.startsWith('-'));
 
 // ── CONFIG (defaults — AI may override some via getOptimalParams) ─
-const CONFIG = {
-  WALLET_SIZE_PCT: 0.10,   // 10% of wallet per trade
-  LEVERAGE_BTC_ETH: 100,   // BTC & ETH leverage
-  LEVERAGE_ALT:     20,    // altcoin leverage (price >= $100)
-  LEVERAGE_CHEAP:   10,    // cheap coin leverage (price < $100)
-  BTC_ETH_SYMBOLS: new Set(['BTCUSDT', 'ETHUSDT']),
+const BTC_ETH_SYMBOLS = new Set(['BTCUSDT', 'ETHUSDT']);
 
+const CONFIG = {
   MIN_BALANCE:     5,
   TAKER_FEE:       0.0004,
 
@@ -38,10 +34,11 @@ const CONFIG = {
   ],
 };
 
-function getLeverage(symbol, price) {
-  if (CONFIG.BTC_ETH_SYMBOLS.has(symbol)) return CONFIG.LEVERAGE_BTC_ETH;
-  if (price < 100) return CONFIG.LEVERAGE_CHEAP;
-  return CONFIG.LEVERAGE_ALT;
+// AI-tuned leverage — params come from getOptimalParams()
+function getLeverage(symbol, price, params = {}) {
+  if (BTC_ETH_SYMBOLS.has(symbol)) return params.LEV_BTC_ETH || 100;
+  if (price < 100) return params.LEV_CHEAP || 10;
+  return params.LEV_ALT || 20;
 }
 
 // ── UTILS ─────────────────────────────────────────────────────
@@ -142,7 +139,11 @@ async function openTrade(client, pick, wallet) {
   const price = pick.lastPrice || pick.price;
   const direction = pick.direction;
   const isLong = direction !== 'SHORT';
-  const leverage = getLeverage(sym, price);
+
+  // Get AI-tuned params for leverage and sizing
+  const aiParams = await aiLearner.getOptimalParams();
+  const leverage = getLeverage(sym, price, aiParams);
+  const walletSizePct = aiParams.WALLET_SIZE_PCT || 0.10;
 
   await client.setLeverage({ symbol: sym, leverage });
   try {
@@ -157,18 +158,18 @@ async function openTrade(client, pick, wallet) {
   const floorQ = (q) => Math.floor(q * Math.pow(10, qtyPrec)) / Math.pow(10, qtyPrec);
   const fmtP = (p) => parseFloat(p.toFixed(pricePrec));
 
-  // SL from engine (1m swing candle + 0.1% buffer)
+  // SL from engine (1m swing candle + AI-tuned buffer)
   const sl = fmtP(pick.sl);
   const slDist = Math.abs(price - sl) / price;
 
-  // TP from engine (RR 1:1.5 based on SL distance)
+  // TP from engine (AI-tuned RR ratio)
   const tp1 = fmtP(pick.tp1);
   const tp2 = fmtP(pick.tp2);
   const tp3 = fmtP(pick.tp3);
 
-  // Position size: 10% of wallet
+  // Position size: AI-tuned % of wallet (default 10%)
   const MIN_NOTIONAL = 5.5;
-  const tradeUsdt = wallet * CONFIG.WALLET_SIZE_PCT;
+  const tradeUsdt = wallet * walletSizePct;
   const rawQty = tradeUsdt / price;
   let qty = floorQ(rawQty);
 
@@ -193,7 +194,7 @@ async function openTrade(client, pick, wallet) {
   const totalFees = notional * CONFIG.TAKER_FEE * 2;
   const tpDist = Math.abs(tp1 - price) / price;
   const tp1Profit = notional * tpDist;
-  bLog.trade(`Size: 10% wallet=$${tradeUsdt.toFixed(2)} notional=$${notional.toFixed(2)} lev=${leverage}x margin=$${requiredMargin.toFixed(2)} | SL%=${(slDist*100).toFixed(3)}% RR=1:1.5`);
+  bLog.trade(`Size: ${(walletSizePct*100).toFixed(0)}% wallet=$${tradeUsdt.toFixed(2)} notional=$${notional.toFixed(2)} lev=${leverage}x margin=$${requiredMargin.toFixed(2)} | SL%=${(slDist*100).toFixed(3)}% RR=1:${aiParams.RR_RATIO || 1.5}`);
   log(`Trade: ${sym} ${direction} lev=${leverage}x qty=${qty} notional=$${notional.toFixed(2)} margin=$${requiredMargin.toFixed(2)}`);
   if (tp1Profit < totalFees * 1.5) {
     bLog.trade(`Trade rejected: TP profit $${tp1Profit.toFixed(4)} < 1.5x fees $${(totalFees * 1.5).toFixed(4)}`);
@@ -281,7 +282,7 @@ async function checkTrailingStop(client) {
             entryPrice: state.entry,
             exitPrice,
             pnlPct,
-            leverage: getLeverage(sym, state.entry),
+            leverage: getLeverage(sym, state.entry, await aiLearner.getOptimalParams()),
             durationMin,
             session: aiLearner.getCurrentSession(),
             slDistancePct: Math.abs(state.entry - state.sl) / state.entry * 100,
@@ -603,7 +604,9 @@ async function executeForAllUsers(pick) {
 
         const price = pick.lastPrice || pick.price || pick.entry;
         const isLong = pick.direction !== 'SHORT';
-        const userLev = getLeverage(symbol, price);
+        const aiParams = await aiLearner.getOptimalParams();
+        const userLev = getLeverage(symbol, price, aiParams);
+        const walletSizePct = aiParams.WALLET_SIZE_PCT || 0.10;
 
         let account, wallet, openPosCount;
 
@@ -639,10 +642,9 @@ async function executeForAllUsers(pick) {
           const pricePrec = sinfo.pricePrecision ?? 2;
           const fmtP = (p) => parseFloat(p.toFixed(pricePrec));
 
-          // Position sizing: 10% of wallet
-          const tradeUsdt = wallet * CONFIG.WALLET_SIZE_PCT;
-          const notional = tradeUsdt;
-          let qty = notional / price;
+          // Position sizing: AI-tuned % of wallet
+          const tradeUsdt = wallet * walletSizePct;
+          let qty = tradeUsdt / price;
 
           // Ensure minimum notional ($5.5) and minimum lot size
           const minQty = 1 / Math.pow(10, qtyPrec); // e.g. 0.001 for BTC
@@ -729,8 +731,8 @@ async function executeForAllUsers(pick) {
 
           bLog.trade(`User ${key.email} Bitunix: wallet=$${wallet.toFixed(2)} pos=${openPosCount}/${maxPos} lev=x${userLev}`);
 
-          // Position sizing: 10% of wallet
-          const tradeUsdtBx = wallet * CONFIG.WALLET_SIZE_PCT;
+          // Position sizing: AI-tuned % of wallet
+          const tradeUsdtBx = wallet * walletSizePct;
           let qty = tradeUsdtBx / price;
           if (qty * price < 5.5) qty = 5.5 / price;
           qty = parseFloat(qty.toFixed(6));

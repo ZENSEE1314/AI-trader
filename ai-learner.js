@@ -129,15 +129,21 @@ async function shouldAvoidCoin(symbol) {
 }
 
 // ── Optimal Parameters (adaptive tuning) ─────────────────────
+// These match the LH/HL 3-TF strategy in smc-engine.js and cycle.js
 
 const DEFAULT_PARAMS = {
-  SL_BUFFER: 0.001,
-  TP_PCT: 0.01,
-  MIN_SCORE: 6,
-  WALLET_RISK_PCT: 0.03,
-  RSI_MAX: 68,
-  RSI_MIN: 32,
-  VOL_RATIO_MIN: 1.2,
+  // Strategy params (smc-engine.js)
+  SL_BUFFER_PCT: 0.001,    // 0.1% buffer above/below swing candle
+  RR_RATIO: 1.5,           // TP = 1.5x SL distance
+  SL_MAX_PCT: 0.02,        // skip trades with SL > 2%
+  SL_MIN_PCT: 0.001,       // skip trades with SL < 0.1%
+  MIN_SCORE: 8,            // minimum confluence score
+
+  // Sizing params (cycle.js)
+  WALLET_SIZE_PCT: 0.10,   // 10% of wallet per trade
+  LEV_BTC_ETH: 100,        // BTC/ETH leverage
+  LEV_ALT: 20,             // altcoin leverage (price >= $100)
+  LEV_CHEAP: 10,           // cheap coin leverage (price < $100)
 };
 
 async function getOptimalParams() {
@@ -148,52 +154,105 @@ async function getOptimalParams() {
 
   const params = { ...DEFAULT_PARAMS };
 
-  // Analyze SL distance
+  // ── 1. SL Buffer: are we getting stopped out too early or too late? ──
   const slAnalysis = await query(
     `SELECT
-      AVG(CASE WHEN is_win = 0 THEN sl_distance_pct END) as avg_losing_sl,
-      AVG(CASE WHEN is_win = 1 THEN sl_distance_pct END) as avg_winning_sl,
-      AVG(pnl_pct) as avg_pnl
+      AVG(CASE WHEN is_win = 1 THEN sl_distance_pct END) as avg_win_sl,
+      AVG(CASE WHEN is_win = 0 THEN sl_distance_pct END) as avg_lose_sl
      FROM (SELECT * FROM ai_trades WHERE pnl_pct IS NOT NULL AND sl_distance_pct IS NOT NULL
            ORDER BY created_at DESC LIMIT 50) sub`
   );
-
   const sl = slAnalysis[0];
-  if (sl && sl.avg_losing_sl && sl.avg_winning_sl) {
-    if (parseFloat(sl.avg_winning_sl) > parseFloat(sl.avg_losing_sl) * 1.2) {
-      const newSL = Math.min(params.SL_BUFFER * (1 + MAX_WEIGHT_SHIFT), 0.003);
-      if (newSL !== params.SL_BUFFER) {
-        await logParamChange('SL_BUFFER', params.SL_BUFFER, newSL, 'winning trades use wider SL', totalTrades);
-        params.SL_BUFFER = newSL;
+  if (sl && sl.avg_win_sl && sl.avg_lose_sl) {
+    const winSl = parseFloat(sl.avg_win_sl);
+    const loseSl = parseFloat(sl.avg_lose_sl);
+    // If winning trades had wider SL → our buffer is too tight, widen it
+    if (winSl > loseSl * 1.2) {
+      const newBuf = Math.min(params.SL_BUFFER_PCT * (1 + MAX_WEIGHT_SHIFT), 0.005);
+      if (newBuf !== params.SL_BUFFER_PCT) {
+        await logParamChange('SL_BUFFER_PCT', params.SL_BUFFER_PCT, newBuf, 'winners use wider SL buffer', totalTrades);
+        params.SL_BUFFER_PCT = newBuf;
+      }
+    }
+    // If losing trades had wider SL → our buffer is too loose, tighten it
+    if (loseSl > winSl * 1.3) {
+      const newBuf = Math.max(params.SL_BUFFER_PCT * (1 - MAX_WEIGHT_SHIFT), 0.0005);
+      if (newBuf !== params.SL_BUFFER_PCT) {
+        await logParamChange('SL_BUFFER_PCT', params.SL_BUFFER_PCT, newBuf, 'losers have wider SL, tightening buffer', totalTrades);
+        params.SL_BUFFER_PCT = newBuf;
       }
     }
   }
 
-  // Analyze RSI
-  const rsiAnalysis = await query(
+  // ── 2. RR Ratio: find the sweet spot between TP hit rate and reward ──
+  const tpAnalysis = await query(
     `SELECT
-      AVG(CASE WHEN is_win = 1 AND direction = 'LONG' THEN rsi_at_entry END) as avg_win_rsi_long,
-      AVG(CASE WHEN is_win = 1 AND direction = 'SHORT' THEN rsi_at_entry END) as avg_win_rsi_short
-     FROM (SELECT * FROM ai_trades WHERE pnl_pct IS NOT NULL AND rsi_at_entry IS NOT NULL
-           ORDER BY created_at DESC LIMIT 100) sub`
+      AVG(CASE WHEN is_win = 1 THEN tp_distance_pct END) as avg_win_tp,
+      AVG(CASE WHEN is_win = 1 THEN sl_distance_pct END) as avg_win_sl,
+      AVG(CASE WHEN is_win = 0 THEN tp_distance_pct END) as avg_lose_tp,
+      COUNT(*) FILTER (WHERE is_win = 1) as wins,
+      COUNT(*) FILTER (WHERE is_win = 0) as losses
+     FROM (SELECT * FROM ai_trades WHERE pnl_pct IS NOT NULL AND tp_distance_pct IS NOT NULL
+           ORDER BY created_at DESC LIMIT 80) sub`
   );
-
-  const rsi = rsiAnalysis[0];
-  if (rsi && rsi.avg_win_rsi_long) {
-    const targetMax = Math.round(parseFloat(rsi.avg_win_rsi_long) + 10);
-    params.RSI_MAX = Math.round(params.RSI_MAX + (targetMax - params.RSI_MAX) * MAX_WEIGHT_SHIFT);
-    params.RSI_MAX = Math.max(60, Math.min(75, params.RSI_MAX));
+  const tp = tpAnalysis[0];
+  if (tp && tp.wins && tp.losses) {
+    const winRate = parseInt(tp.wins) / (parseInt(tp.wins) + parseInt(tp.losses));
+    // If win rate < 40%, TP too far → lower RR to hit TP more often
+    if (winRate < 0.40 && params.RR_RATIO > 1.0) {
+      const newRR = Math.max(params.RR_RATIO - 0.1, 1.0);
+      await logParamChange('RR_RATIO', params.RR_RATIO, newRR, `win rate ${(winRate*100).toFixed(0)}% too low, lowering TP target`, totalTrades);
+      params.RR_RATIO = newRR;
+    }
+    // If win rate > 65%, TP too close → raise RR to capture more profit
+    if (winRate > 0.65 && params.RR_RATIO < 2.5) {
+      const newRR = Math.min(params.RR_RATIO + 0.1, 2.5);
+      await logParamChange('RR_RATIO', params.RR_RATIO, newRR, `win rate ${(winRate*100).toFixed(0)}% high, raising TP target`, totalTrades);
+      params.RR_RATIO = newRR;
+    }
   }
 
-  // Analyze score threshold
+  // ── 3. SL Max/Min: find optimal SL distance range ──
+  const slRangeAnalysis = await query(
+    `SELECT
+      sl_distance_pct,
+      is_win
+     FROM ai_trades
+     WHERE pnl_pct IS NOT NULL AND sl_distance_pct IS NOT NULL
+     ORDER BY created_at DESC LIMIT 100`
+  );
+  if (slRangeAnalysis.length >= 30) {
+    // Bucket SL distances and find which ranges win most
+    const buckets = {};
+    for (const t of slRangeAnalysis) {
+      const dist = parseFloat(t.sl_distance_pct);
+      const bucket = Math.round(dist * 200) / 200; // 0.5% buckets
+      if (!buckets[bucket]) buckets[bucket] = { wins: 0, total: 0 };
+      buckets[bucket].total++;
+      if (t.is_win) buckets[bucket].wins++;
+    }
+    // Find the max SL distance where win rate is still decent (>40%)
+    const goodMaxSl = Object.entries(buckets)
+      .filter(([, v]) => v.total >= 3 && v.wins / v.total > 0.4)
+      .map(([k]) => parseFloat(k))
+      .sort((a, b) => b - a);
+    if (goodMaxSl.length) {
+      const optimalMax = Math.min(goodMaxSl[0] / 100 + 0.005, 0.03); // convert % to decimal, add buffer, cap at 3%
+      const newMax = params.SL_MAX_PCT + (optimalMax - params.SL_MAX_PCT) * MAX_WEIGHT_SHIFT;
+      if (Math.abs(newMax - params.SL_MAX_PCT) > 0.001) {
+        await logParamChange('SL_MAX_PCT', params.SL_MAX_PCT, newMax, 'adjusted to optimal SL range', totalTrades);
+        params.SL_MAX_PCT = Math.max(0.01, Math.min(0.03, newMax));
+      }
+    }
+  }
+
+  // ── 4. Min Score threshold: find cutoff that filters losers ──
   const scoreAnalysis = await query(
     `SELECT score_at_entry, is_win
      FROM ai_trades
      WHERE pnl_pct IS NOT NULL AND score_at_entry IS NOT NULL
-     ORDER BY created_at DESC
-     LIMIT 100`
+     ORDER BY created_at DESC LIMIT 100`
   );
-
   if (scoreAnalysis.length >= 30) {
     const winsByScore = {};
     for (const t of scoreAnalysis) {
@@ -209,7 +268,118 @@ async function getOptimalParams() {
     if (goodBuckets.length) {
       const optimalMin = goodBuckets[0];
       params.MIN_SCORE = Math.round(params.MIN_SCORE + (optimalMin - params.MIN_SCORE) * MAX_WEIGHT_SHIFT);
-      params.MIN_SCORE = Math.max(5, Math.min(15, params.MIN_SCORE));
+      params.MIN_SCORE = Math.max(6, Math.min(15, params.MIN_SCORE));
+    }
+  }
+
+  // ── 5. Wallet size: reduce if losing streak, increase if winning ──
+  const recentPerf = await query(
+    `SELECT is_win, pnl_pct
+     FROM ai_trades WHERE pnl_pct IS NOT NULL
+     ORDER BY created_at DESC LIMIT 20`
+  );
+  if (recentPerf.length >= 10) {
+    const recentWinRate = recentPerf.filter(t => t.is_win).length / recentPerf.length;
+    const recentPnl = recentPerf.reduce((s, t) => s + parseFloat(t.pnl_pct), 0);
+    // Losing badly → reduce trade size to protect capital
+    if (recentWinRate < 0.35 || recentPnl < -5) {
+      const newSize = Math.max(params.WALLET_SIZE_PCT * 0.95, 0.05); // min 5%
+      if (newSize < params.WALLET_SIZE_PCT) {
+        await logParamChange('WALLET_SIZE_PCT', params.WALLET_SIZE_PCT, newSize, `recent WR ${(recentWinRate*100).toFixed(0)}%, reducing size`, totalTrades);
+        params.WALLET_SIZE_PCT = newSize;
+      }
+    }
+    // Winning consistently → allow slightly bigger trades
+    if (recentWinRate > 0.60 && recentPnl > 5) {
+      const newSize = Math.min(params.WALLET_SIZE_PCT * 1.05, 0.15); // max 15%
+      if (newSize > params.WALLET_SIZE_PCT) {
+        await logParamChange('WALLET_SIZE_PCT', params.WALLET_SIZE_PCT, newSize, `recent WR ${(recentWinRate*100).toFixed(0)}%, increasing size`, totalTrades);
+        params.WALLET_SIZE_PCT = newSize;
+      }
+    }
+  }
+
+  // ── 6. Leverage: analyze wins/losses by leverage tier ──
+  const levAnalysis = await query(
+    `SELECT leverage,
+      COUNT(*) as total,
+      SUM(CASE WHEN is_win = 1 THEN 1 ELSE 0 END) as wins,
+      AVG(pnl_pct) as avg_pnl
+     FROM ai_trades WHERE pnl_pct IS NOT NULL AND leverage IS NOT NULL
+     GROUP BY leverage HAVING COUNT(*) >= 5
+     ORDER BY leverage`
+  );
+  if (levAnalysis.length >= 2) {
+    for (const lev of levAnalysis) {
+      const levVal = parseInt(lev.leverage);
+      const wr = parseInt(lev.wins) / parseInt(lev.total);
+      const avgPnl = parseFloat(lev.avg_pnl);
+      // If a leverage tier is losing badly, reduce it
+      if (wr < 0.35 && avgPnl < -0.5) {
+        if (levVal === 100) {
+          const newLev = Math.max(params.LEV_BTC_ETH - 10, 50);
+          if (newLev !== params.LEV_BTC_ETH) {
+            await logParamChange('LEV_BTC_ETH', params.LEV_BTC_ETH, newLev, `100x WR ${(wr*100).toFixed(0)}%, reducing`, totalTrades);
+            params.LEV_BTC_ETH = newLev;
+          }
+        } else if (levVal === 20) {
+          const newLev = Math.max(params.LEV_ALT - 5, 10);
+          if (newLev !== params.LEV_ALT) {
+            await logParamChange('LEV_ALT', params.LEV_ALT, newLev, `20x WR ${(wr*100).toFixed(0)}%, reducing`, totalTrades);
+            params.LEV_ALT = newLev;
+          }
+        } else if (levVal === 10) {
+          const newLev = Math.max(params.LEV_CHEAP - 2, 5);
+          if (newLev !== params.LEV_CHEAP) {
+            await logParamChange('LEV_CHEAP', params.LEV_CHEAP, newLev, `10x WR ${(wr*100).toFixed(0)}%, reducing`, totalTrades);
+            params.LEV_CHEAP = newLev;
+          }
+        }
+      }
+      // If a tier is winning well, consider increasing
+      if (wr > 0.60 && avgPnl > 1.0) {
+        if (levVal >= 50 && levVal < 125) {
+          const newLev = Math.min(params.LEV_BTC_ETH + 5, 125);
+          if (newLev !== params.LEV_BTC_ETH) {
+            await logParamChange('LEV_BTC_ETH', params.LEV_BTC_ETH, newLev, `${levVal}x WR ${(wr*100).toFixed(0)}%, increasing`, totalTrades);
+            params.LEV_BTC_ETH = newLev;
+          }
+        } else if (levVal >= 10 && levVal <= 25) {
+          const newLev = Math.min(params.LEV_ALT + 5, 50);
+          if (newLev !== params.LEV_ALT) {
+            await logParamChange('LEV_ALT', params.LEV_ALT, newLev, `${levVal}x WR ${(wr*100).toFixed(0)}%, increasing`, totalTrades);
+            params.LEV_ALT = newLev;
+          }
+        }
+      }
+    }
+  }
+
+  // ── 7. Direction bias: if SHORT consistently loses, prefer LONG (and vice versa) ──
+  const dirAnalysis = await query(
+    `SELECT direction,
+      COUNT(*) as total,
+      SUM(CASE WHEN is_win = 1 THEN 1 ELSE 0 END) as wins,
+      AVG(pnl_pct) as avg_pnl
+     FROM (SELECT * FROM ai_trades WHERE pnl_pct IS NOT NULL ORDER BY created_at DESC LIMIT 60) sub
+     GROUP BY direction`
+  );
+  // Store direction bias for the engine to use
+  params.DIRECTION_BIAS = null;
+  if (dirAnalysis.length === 2) {
+    const longD = dirAnalysis.find(d => d.direction === 'LONG');
+    const shortD = dirAnalysis.find(d => d.direction === 'SHORT');
+    if (longD && shortD && parseInt(longD.total) >= 10 && parseInt(shortD.total) >= 10) {
+      const longWR = parseInt(longD.wins) / parseInt(longD.total);
+      const shortWR = parseInt(shortD.wins) / parseInt(shortD.total);
+      // If one direction is significantly worse, avoid it
+      if (longWR < 0.30 && shortWR > 0.50) {
+        params.DIRECTION_BIAS = 'SHORT';
+        await logParamChange('DIRECTION_BIAS', 0, -1, `LONG WR ${(longWR*100).toFixed(0)}% vs SHORT ${(shortWR*100).toFixed(0)}%, bias SHORT`, totalTrades);
+      } else if (shortWR < 0.30 && longWR > 0.50) {
+        params.DIRECTION_BIAS = 'LONG';
+        await logParamChange('DIRECTION_BIAS', 0, 1, `SHORT WR ${(shortWR*100).toFixed(0)}% vs LONG ${(longWR*100).toFixed(0)}%, bias LONG`, totalTrades);
+      }
     }
   }
 

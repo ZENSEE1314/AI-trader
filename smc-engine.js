@@ -13,8 +13,6 @@ const aiLearner = require('./ai-learner');
 const { log: bLog } = require('./bot-logger');
 
 const REQUEST_TIMEOUT = 15000;
-const SL_BUFFER_PCT = 0.001; // 0.1% buffer above/below swing candle
-const RR_RATIO = 1.5;        // TP = 1.5x SL distance
 const TOP_N_COINS = 200;
 
 // ── Fetch Helpers ────────────────────────────────────────────
@@ -136,9 +134,16 @@ function isGoodTradingSession() {
 
 // ── Analyze Single Coin ──────────────────────────────────────
 
-async function analyzeLHHL(ticker) {
+async function analyzeLHHL(ticker, params) {
   const symbol = ticker.symbol;
   const price = parseFloat(ticker.lastPrice);
+
+  // AI-tuned parameters (defaults: buffer=0.1%, RR=1.5, maxSL=2%, minSL=0.1%)
+  const slBufferPct = params.SL_BUFFER_PCT || 0.001;
+  const rrRatio = params.RR_RATIO || 1.5;
+  const slMaxPct = params.SL_MAX_PCT || 0.02;
+  const slMinPct = params.SL_MIN_PCT || 0.001;
+  const dirBias = params.DIRECTION_BIAS || null;
 
   // Fetch 3 timeframes: 15m, 3m, 1m
   const [klines15m, klines3m, klines1m] = await Promise.all([
@@ -160,8 +165,12 @@ async function analyzeLHHL(ticker) {
   const hl3 = hasHigherLow(klines3m);
   const hl1 = hasHigherLow(klines1m);
 
-  const isShortSetup = lh15 && lh3 && lh1;
-  const isLongSetup = hl15 && hl3 && hl1;
+  let isShortSetup = lh15 && lh3 && lh1;
+  let isLongSetup = hl15 && hl3 && hl1;
+
+  // AI direction bias: skip the losing direction if learned
+  if (dirBias === 'LONG') isShortSetup = false;
+  if (dirBias === 'SHORT') isLongSetup = false;
 
   if (!isShortSetup && !isLongSetup) return null;
 
@@ -181,26 +190,26 @@ async function analyzeLHHL(ticker) {
   }
 
   if (direction === 'SHORT') {
-    // SL = 1m most recent LH candle's highest price + 0.1%
+    // SL = 1m most recent LH candle's highest price + buffer%
     swingCandle1m = lh1.recentSwing;
     const swingHigh = parseFloat(swingCandle1m.candle[2]);
-    sl = swingHigh * (1 + SL_BUFFER_PCT);
+    sl = swingHigh * (1 + slBufferPct);
   } else {
-    // SL = 1m most recent HL candle's lowest price - 0.1%
+    // SL = 1m most recent HL candle's lowest price - buffer%
     swingCandle1m = hl1.recentSwing;
     const swingLow = parseFloat(swingCandle1m.candle[3]);
-    sl = swingLow * (1 - SL_BUFFER_PCT);
+    sl = swingLow * (1 - slBufferPct);
   }
 
   const slDist = Math.abs(price - sl);
   const slPct = slDist / price;
 
-  // Skip if SL is too far (>2%) or too tight (<0.1%)
-  if (slPct > 0.02) return null;
-  if (slPct < 0.001) return null;
+  // Skip if SL outside AI-tuned range
+  if (slPct > slMaxPct) return null;
+  if (slPct < slMinPct) return null;
 
-  // TP = SL distance * RR ratio (1:1.5)
-  const tpDist = slDist * RR_RATIO;
+  // TP = SL distance * AI-tuned RR ratio
+  const tpDist = slDist * rrRatio;
   const tp = direction === 'SHORT'
     ? price - tpDist
     : price + tpDist;
@@ -292,7 +301,13 @@ async function scanSMC(log) {
     .sort((a, b) => parseFloat(b.quoteVolume) - parseFloat(a.quoteVolume))
     .slice(0, TOP_N_COINS);
 
-  bLog.scan(`LH/HL scan: analyzing ${topCoins.length} top market cap tokens across 3 timeframes...`);
+  // Get AI-optimized parameters
+  const params = await aiLearner.getOptimalParams();
+  const rrRatio = params.RR_RATIO || 1.5;
+  const minScore = params.MIN_SCORE || 8;
+
+  bLog.scan(`LH/HL scan: ${topCoins.length} coins | AI params: RR=1:${rrRatio} SL_BUF=${(params.SL_BUFFER_PCT*100).toFixed(2)}% SL_MAX=${(params.SL_MAX_PCT*100).toFixed(1)}% SIZE=${(params.WALLET_SIZE_PCT*100).toFixed(0)}%`);
+  if (params.DIRECTION_BIAS) bLog.ai(`AI direction bias: prefer ${params.DIRECTION_BIAS} (other direction losing)`);
 
   const results = [];
   let analyzed = 0;
@@ -305,14 +320,14 @@ async function scanSMC(log) {
       continue;
     }
 
-    const signal = await analyzeLHHL(ticker);
+    const signal = await analyzeLHHL(ticker, params);
     analyzed++;
 
-    if (signal && signal.score >= 8) {
+    if (signal && signal.score >= minScore) {
       results.push(signal);
       bLog.scan(
         `SIGNAL: ${signal.symbol} ${signal.direction} | score=${signal.score} setup=${signal.setupName}` +
-        ` | SL=$${signal.sl.toFixed(6)} TP=$${signal.tp1.toFixed(6)} RR=1:${RR_RATIO}`
+        ` | SL=$${signal.sl.toFixed(6)} TP=$${signal.tp1.toFixed(6)} RR=1:${rrRatio}`
       );
     }
 
