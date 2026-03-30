@@ -39,6 +39,8 @@
     summary7dPnl:    $('#summary-7d-pnl'),
     summaryWinRate:  $('#summary-win-rate'),
     summaryOpenTrades: $('#summary-open-trades'),
+    summaryTotalWon: $('#summary-total-won'),
+    summaryTotalLost: $('#summary-total-lost'),
     tradesTbody:     $('#trades-tbody'),
     tradesEmpty:     $('#trades-empty'),
     tradesPagination:$('#trades-pagination'),
@@ -299,6 +301,11 @@
     const losses = parseInt(s.losses) || 0;
     els.summaryWinRate.textContent = `${s.win_rate}%  (${wins}W / ${losses}L)`;
     els.summaryOpenTrades.textContent = s.open_trades;
+
+    const totalWon = parseFloat(s.total_won) || 0;
+    const totalLost = parseFloat(s.total_lost) || 0;
+    els.summaryTotalWon.textContent = `+$${totalWon.toFixed(2)}`;
+    els.summaryTotalLost.textContent = `-$${Math.abs(totalLost).toFixed(2)}`;
   }
 
   async function loadTrades() {
