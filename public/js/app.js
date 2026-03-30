@@ -35,10 +35,13 @@
     // Dashboard
     tabDashboard:    $('#tab-dashboard'),
     tabKeys:         $('#tab-keys'),
+    summaryWallet:   $('#summary-wallet'),
     summaryTotalPnl: $('#summary-total-pnl'),
     summary24hPnl:   $('#summary-24h-pnl'),
     summary7dPnl:    $('#summary-7d-pnl'),
     summaryWinRate:  $('#summary-win-rate'),
+    summaryWins:     $('#summary-wins'),
+    summaryLosses:   $('#summary-losses'),
     summaryOpenTrades: $('#summary-open-trades'),
     summaryTotalWon: $('#summary-total-won'),
     summaryTotalLost: $('#summary-total-lost'),
@@ -279,11 +282,14 @@
 
   async function loadDashboard() {
     try {
-      const [summary] = await Promise.all([
+      const [summary, walletData] = await Promise.all([
         api('GET', '/api/dashboard/summary'),
+        api('GET', '/api/dashboard/futures-wallet').catch(() => ({ balance: 0 })),
         loadTrades(),
       ]);
       renderSummary(summary);
+      const bal = parseFloat(walletData.balance) || 0;
+      els.summaryWallet.textContent = `$${bal.toFixed(2)}`;
     } catch (err) {
       showToast('Failed to load dashboard.', 'error');
     }
@@ -305,7 +311,9 @@
 
     const wins = parseInt(s.wins) || 0;
     const losses = parseInt(s.losses) || 0;
-    els.summaryWinRate.textContent = `${s.win_rate}%  (${wins}W / ${losses}L)`;
+    els.summaryWinRate.textContent = `${s.win_rate}%`;
+    els.summaryWins.textContent = `${wins}W`;
+    els.summaryLosses.textContent = `${losses}L`;
     els.summaryOpenTrades.textContent = s.open_trades;
 
     const totalWon = parseFloat(s.total_won) || 0;

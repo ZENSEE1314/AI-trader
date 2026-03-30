@@ -298,16 +298,30 @@ async function analyzeLHHL(ticker, params) {
   if (direction === 'LONG' && !struct1.lastLow) return null;
 
   // Capital-based SL/TP: distance = margin_loss% / leverage
-  // Leverage is determined per coin type
   const BTC_ETH = new Set(['BTCUSDT', 'ETHUSDT']);
   const leverage = BTC_ETH.has(symbol) ? (params.LEV_BTC_ETH || 100)
     : (params.LEV_ALT || 20);
 
-  const slPct = SL_MARGIN_PCT / leverage;   // e.g., 0.30 / 10 = 0.03 (3%)
-  const tpPct = TP_MARGIN_PCT / leverage;   // e.g., 0.45 / 10 = 0.045 (4.5%)
+  const slPct = SL_MARGIN_PCT / leverage;
+  const tpPct = TP_MARGIN_PCT / leverage;
 
-  const slDist = price * slPct;
-  const tpDist = price * tpPct;
+  // Use swing-based SL as floor: don't place SL tighter than the structure swing
+  const swingSl = direction === 'SHORT'
+    ? (struct1.lastHigh ? struct1.lastHigh.price * 1.001 : null)
+    : (struct1.lastLow ? struct1.lastLow.price * 0.999 : null);
+  const swingSlDist = swingSl ? Math.abs(price - swingSl) / price : 0;
+
+  // Take the wider of capital-based or swing-based SL distance
+  const effectiveSlPct = Math.max(slPct, swingSlDist);
+  const slDist = price * effectiveSlPct;
+  const tpDist = price * effectiveSlPct * rrRatio;
+
+  // Guard: reject trades where SL is less than 0.15% from entry (noise territory)
+  const MIN_SL_PCT = 0.0015;
+  if (effectiveSlPct < MIN_SL_PCT) {
+    bLog.scan(`${symbol}: SL too tight (${(effectiveSlPct * 100).toFixed(3)}% < 0.15%) — skipping`);
+    return null;
+  }
 
   const sl = direction === 'SHORT' ? price + slDist : price - slDist;
   const tp = direction === 'SHORT' ? price - tpDist : price + tpDist;
