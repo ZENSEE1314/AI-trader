@@ -319,6 +319,33 @@
       border-color: var(--color-accent);
     }
 
+    .zoom-btn {
+      font-family: var(--font-mono);
+      font-size: 16px;
+      font-weight: var(--weight-bold);
+      background: transparent;
+      border: 1px solid var(--color-border);
+      color: var(--color-fg-muted);
+      width: 30px;
+      height: 30px;
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      transition: all var(--duration-fast) var(--ease-out);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      line-height: 1;
+    }
+    .zoom-btn:hover {
+      color: var(--color-fg);
+      background: var(--color-surface);
+      border-color: var(--color-accent);
+    }
+    .zoom-btn:active {
+      background: var(--color-accent-muted);
+      color: var(--color-accent);
+    }
+
     /* Indicator toggles */
     .ind-toggle {
       display: flex;
@@ -465,6 +492,47 @@
 
     @keyframes spin { to { transform: rotate(360deg); } }
 
+    /* Trend info box */
+    .trend-box {
+      display: flex;
+      align-items: center;
+      gap: var(--space-2);
+      margin-left: auto;
+      padding: 2px var(--space-3);
+      border-radius: var(--radius-sm);
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+      font-weight: var(--weight-bold);
+      border: 1px solid var(--color-border);
+    }
+    .trend-box .trend-label {
+      color: var(--color-fg-muted);
+    }
+    .trend-box .trend-value {
+      padding: 1px var(--space-2);
+      border-radius: 2px;
+    }
+    .trend-box .trend-value.positive {
+      background: rgba(0, 212, 170, 0.2);
+      color: #00d4aa;
+    }
+    .trend-box .trend-value.negative {
+      background: rgba(255, 71, 87, 0.2);
+      color: #ff4757;
+    }
+    .trend-box .trend-value.neutral {
+      background: rgba(139, 148, 158, 0.2);
+      color: #8b949e;
+    }
+    .range-info {
+      font-family: var(--font-mono);
+      font-size: 10px;
+      color: var(--color-fg-muted);
+      display: flex;
+      gap: var(--space-3);
+    }
+    .range-info span { white-space: nowrap; }
+
     /* --- Bottom Panel --- */
     .bottom-panel {
       background: var(--color-bg-raised);
@@ -601,6 +669,15 @@
 
       <div class="toolbar-divider"></div>
 
+      <div class="toolbar-group" role="group" aria-label="Zoom">
+        <span class="toolbar-label">Zoom</span>
+        <button class="zoom-btn" id="zoom-in" title="Zoom In">+</button>
+        <button class="zoom-btn" id="zoom-out" title="Zoom Out">−</button>
+        <button class="zoom-btn" id="zoom-reset" title="Fit to Screen" style="font-size:12px;">⟲</button>
+      </div>
+
+      <div class="toolbar-divider"></div>
+
       <div class="toolbar-group" role="group" aria-label="Indicators">
         <span class="toolbar-label">Indicators</span>
         <label class="ind-toggle"><input type="checkbox" id="tog-swings" checked> Swings</label>
@@ -613,8 +690,25 @@
         <label class="ind-toggle"><input type="checkbox" id="tog-ema200"> EMA200</label>
         <label class="ind-toggle"><input type="checkbox" id="tog-vwap"> VWAP</label>
         <label class="ind-toggle"><input type="checkbox" id="tog-eqheql"> EQH/EQL</label>
+        <label class="ind-toggle"><input type="checkbox" id="tog-choch" checked> CHoCH/BMS</label>
+        <label class="ind-toggle"><input type="checkbox" id="tog-strongweak" checked> Strong/Weak</label>
+        <label class="ind-toggle"><input type="checkbox" id="tog-premium" checked> Premium/Disc</label>
+      </div>
+
+      <div class="trend-box" id="trend-box">
+        <span class="trend-label">Trend:</span>
+        <span class="trend-value neutral" id="trend-value">--</span>
       </div>
     </header>
+
+    <!-- Range info bar -->
+    <div style="background:var(--color-bg-raised);border-bottom:1px solid var(--color-border);padding:2px var(--space-4);display:flex;gap:var(--space-4);align-items:center;">
+      <div class="range-info">
+        <span>Upper Range: <strong id="range-upper" style="color:var(--color-fg);">--</strong></span>
+        <span>Lower Range: <strong id="range-lower" style="color:var(--color-fg);">--</strong></span>
+        <span style="background:rgba(0,212,170,0.15);padding:0 6px;border-radius:2px;">Mid: <strong id="range-mid" style="color:#00d4aa;">--</strong></span>
+      </div>
+    </div>
 
     <!-- Chart -->
     <main class="chart-area">
@@ -725,6 +819,11 @@
       fvgSeries: [],
       keyLevelLines: [],
       eqhEqlLines: [],
+      chochBmsLines: [],
+      strongWeakLines: [],
+      premiumSeries: null,
+      discountSeries: null,
+      midSeries: null,
     };
 
     // Markers are stored and re-applied based on toggle state
@@ -837,7 +936,8 @@
     // ============================================================
 
     function clearIndicators() {
-      [indicatorSeries.ema7, indicatorSeries.ema22, indicatorSeries.ema200, indicatorSeries.vwap]
+      [indicatorSeries.ema7, indicatorSeries.ema22, indicatorSeries.ema200, indicatorSeries.vwap,
+       indicatorSeries.premiumSeries, indicatorSeries.discountSeries, indicatorSeries.midSeries]
         .forEach(s => { if (s) chart.removeSeries(s); });
 
       indicatorSeries.obSeries.forEach(s => chart.removeSeries(s));
@@ -851,6 +951,14 @@
         if (line.series) chart.removeSeries(line.series);
       });
 
+      indicatorSeries.chochBmsLines.forEach(line => {
+        if (line.series) chart.removeSeries(line.series);
+      });
+
+      indicatorSeries.strongWeakLines.forEach(line => {
+        if (line.series) chart.removeSeries(line.series);
+      });
+
       indicatorSeries.ema7 = null;
       indicatorSeries.ema22 = null;
       indicatorSeries.ema200 = null;
@@ -859,17 +967,23 @@
       indicatorSeries.fvgSeries = [];
       indicatorSeries.keyLevelLines = [];
       indicatorSeries.eqhEqlLines = [];
+      indicatorSeries.chochBmsLines = [];
+      indicatorSeries.strongWeakLines = [];
+      indicatorSeries.premiumSeries = null;
+      indicatorSeries.discountSeries = null;
+      indicatorSeries.midSeries = null;
       allMarkers = [];
     }
 
-    let isFirstLoad = true; // track if this is the initial load
+    let isFirstLoad = true;
+    let userBarSpacing = null; // persists user's zoom level across refreshes
 
     function renderChart(data) {
       STATE.chartData = data;
 
       // Save current view position before re-rendering
       const savedRange = chart.timeScale().getVisibleLogicalRange();
-      const savedBarSpacing = chart.timeScale().options().barSpacing;
+      const savedBarSpacing = userBarSpacing || chart.timeScale().options().barSpacing;
 
       clearIndicators();
 
@@ -905,20 +1019,42 @@
       // Equal Highs/Lows
       renderEQHEQL(data);
 
+      // CHoCH / BMS
+      renderCHoCHBMS(data);
+
+      // Strong/Weak Highs and Lows
+      renderStrongWeak(data);
+
+      // Premium/Discount zones
+      renderPremiumDiscount(data);
+
+      // Update trend box and range info
+      updateTrendBox(data);
+
       // Apply visibility from toggles
       applyToggleVisibility();
 
       // Update summary panel
       updateSummary(data);
 
-      // Restore view position — don't reset zoom/scroll on refresh
+      // Zoom: default show ~100 candles, never reset once user zooms
       if (isFirstLoad) {
-        chart.timeScale().fitContent();
+        const totalCandles = data.candles.length;
+        const containerWidth = DOM.chartContainer.clientWidth - 60;
+        // Show last ~100 candles by default
+        const targetCandles = Math.min(100, totalCandles);
+        const defaultSpacing = Math.max(4, containerWidth / targetCandles);
+        chart.timeScale().applyOptions({ barSpacing: defaultSpacing });
+        // Scroll to the end
+        chart.timeScale().scrollToRealTime();
         isFirstLoad = false;
-      } else if (savedRange) {
-        // Restore exact zoom level and scroll position
+        userBarSpacing = null;
+      } else {
+        // Always restore user's zoom level and scroll position
         chart.timeScale().applyOptions({ barSpacing: savedBarSpacing });
-        chart.timeScale().setVisibleLogicalRange(savedRange);
+        if (savedRange) {
+          chart.timeScale().setVisibleLogicalRange(savedRange);
+        }
       }
     }
 
@@ -962,10 +1098,14 @@
     function applyMarkers() {
       const isSwingsOn = document.getElementById('tog-swings').checked;
       const isLabelsOn = document.getElementById('tog-labels').checked;
+      const isChochOn = document.getElementById('tog-choch').checked;
+      const isSwOn = document.getElementById('tog-strongweak').checked;
 
       const filtered = allMarkers.filter(m => {
         if (m._group === 'swings' && !isSwingsOn) return false;
         if (m._group === 'labels' && !isLabelsOn) return false;
+        if (m._group === 'choch' && !isChochOn) return false;
+        if (m._group === 'strongweak' && !isSwOn) return false;
         return true;
       });
 
@@ -1225,6 +1365,173 @@
       }
     }
 
+    // ── CHoCH / BMS Lines ───────────────────────────────────────
+
+    function renderCHoCHBMS(data) {
+      if (!data.chochBms) return;
+
+      for (const item of data.chochBms) {
+        const isChoch = item.type === 'CHoCH';
+        const isBullish = item.direction === 'bullish';
+        const color = isChoch
+          ? (isBullish ? 'rgba(0, 212, 170, 0.7)' : 'rgba(255, 71, 87, 0.7)')
+          : (isBullish ? 'rgba(0, 212, 170, 0.5)' : 'rgba(255, 71, 87, 0.5)');
+
+        const series = chart.addLineSeries({
+          color,
+          lineWidth: isChoch ? 2 : 1,
+          lineStyle: isChoch ? LightweightCharts.LineStyle.Solid : LightweightCharts.LineStyle.Dashed,
+          priceLineVisible: false,
+          lastValueVisible: false,
+          crosshairMarkerVisible: false,
+          title: item.type,
+        });
+
+        series.setData([
+          { time: item.time, value: item.price },
+          { time: item.breakTime, value: item.price },
+        ]);
+
+        indicatorSeries.chochBmsLines.push({ series });
+      }
+
+      // Add CHoCH/BMS as markers with text labels
+      if (data.chochBms.length) {
+        for (const item of data.chochBms) {
+          const isBullish = item.direction === 'bullish';
+          allMarkers.push({
+            time: item.breakTime,
+            position: isBullish ? 'belowBar' : 'aboveBar',
+            color: item.type === 'CHoCH'
+              ? (isBullish ? '#00d4aa' : '#ff4757')
+              : (isBullish ? '#26a69a' : '#ef5350'),
+            shape: 'square',
+            text: item.type,
+            _group: 'choch',
+          });
+        }
+      }
+    }
+
+    // ── Strong / Weak High-Low Lines ──────────────────────────
+
+    function renderStrongWeak(data) {
+      if (!data.strongWeak) return;
+
+      // Only show the most recent unbroken strong/weak levels
+      const recentHighs = data.strongWeak.filter(s => s.type === 'high').slice(-3);
+      const recentLows = data.strongWeak.filter(s => s.type === 'low').slice(-3);
+      const levels = [...recentHighs, ...recentLows];
+
+      const lastCandle = data.candles[data.candles.length - 1];
+      if (!lastCandle) return;
+
+      for (const level of levels) {
+        const isStrong = !level.isBroken;
+        const isHigh = level.type === 'high';
+
+        // Strong = solid important line, Weak = dotted (expected to be taken)
+        const color = isHigh
+          ? (isStrong ? 'rgba(255, 71, 87, 0.6)' : 'rgba(255, 167, 38, 0.4)')
+          : (isStrong ? 'rgba(0, 212, 170, 0.6)' : 'rgba(255, 167, 38, 0.4)');
+
+        const lineStyle = isStrong
+          ? LightweightCharts.LineStyle.Solid
+          : LightweightCharts.LineStyle.SparseDotted;
+
+        const series = chart.addLineSeries({
+          color,
+          lineWidth: isStrong ? 2 : 1,
+          lineStyle,
+          priceLineVisible: false,
+          lastValueVisible: false,
+          crosshairMarkerVisible: false,
+          title: level.label,
+        });
+
+        series.setData([
+          { time: level.time, value: level.price },
+          { time: lastCandle.time, value: level.price },
+        ]);
+
+        indicatorSeries.strongWeakLines.push({ series });
+
+        // Add text marker for the label
+        allMarkers.push({
+          time: level.time,
+          position: isHigh ? 'aboveBar' : 'belowBar',
+          color: isStrong ? (isHigh ? '#ff4757' : '#00d4aa') : '#ffa726',
+          shape: 'square',
+          text: level.label,
+          _group: 'strongweak',
+        });
+      }
+    }
+
+    // ── Premium / Discount Zones ──────────────────────────────
+
+    function renderPremiumDiscount(data) {
+      if (!data.premiumDiscount) return;
+      const pd = data.premiumDiscount;
+      const firstTime = data.candles[0]?.time;
+      const lastTime = data.candles[data.candles.length - 1]?.time;
+      if (!firstTime || !lastTime) return;
+
+      // Build time points spanning the full chart
+      const step = Math.max(1, Math.floor(data.candles.length / 40));
+      const times = [];
+      for (let i = 0; i < data.candles.length; i += step) {
+        times.push(data.candles[i].time);
+      }
+      if (times[times.length - 1] !== lastTime) times.push(lastTime);
+
+      // Premium zone (upper half — red shade)
+      indicatorSeries.premiumSeries = chart.addLineSeries({
+        color: 'rgba(255, 71, 87, 0.06)',
+        lineWidth: 0,
+        priceLineVisible: false,
+        lastValueVisible: false,
+        crosshairMarkerVisible: false,
+      });
+      indicatorSeries.premiumSeries.setData(times.map(t => ({ time: t, value: pd.upperRange })));
+
+      // Discount zone (lower half — green shade)
+      indicatorSeries.discountSeries = chart.addLineSeries({
+        color: 'rgba(0, 212, 170, 0.06)',
+        lineWidth: 0,
+        priceLineVisible: false,
+        lastValueVisible: false,
+        crosshairMarkerVisible: false,
+      });
+      indicatorSeries.discountSeries.setData(times.map(t => ({ time: t, value: pd.lowerRange })));
+
+      // Mid line (equilibrium)
+      indicatorSeries.midSeries = chart.addLineSeries({
+        color: 'rgba(139, 148, 158, 0.5)',
+        lineWidth: 1,
+        lineStyle: LightweightCharts.LineStyle.Dashed,
+        priceLineVisible: false,
+        lastValueVisible: false,
+        crosshairMarkerVisible: false,
+        title: 'EQ',
+      });
+      indicatorSeries.midSeries.setData(times.map(t => ({ time: t, value: pd.mid })));
+    }
+
+    // ── Trend Box + Range Info Update ─────────────────────────
+
+    function updateTrendBox(data) {
+      const trendEl = document.getElementById('trend-value');
+      const trend = data.trend || 'Neutral';
+      trendEl.textContent = trend;
+      trendEl.className = 'trend-value ' + trend.toLowerCase();
+
+      const pd = data.premiumDiscount;
+      document.getElementById('range-upper').textContent = pd ? formatPrice(pd.upperRange) : '--';
+      document.getElementById('range-lower').textContent = pd ? formatPrice(pd.lowerRange) : '--';
+      document.getElementById('range-mid').textContent = pd ? formatPrice(pd.mid) : '--';
+    }
+
     // ============================================================
     // Toggle Visibility
     // ============================================================
@@ -1261,6 +1568,20 @@
       // EQH/EQL
       const isEqOn = document.getElementById('tog-eqheql').checked;
       indicatorSeries.eqhEqlLines.forEach(l => setSeriesVisible(l.series, isEqOn));
+
+      // CHoCH/BMS
+      const isChochOn = document.getElementById('tog-choch').checked;
+      indicatorSeries.chochBmsLines.forEach(l => setSeriesVisible(l.series, isChochOn));
+
+      // Strong/Weak
+      const isSwOn = document.getElementById('tog-strongweak').checked;
+      indicatorSeries.strongWeakLines.forEach(l => setSeriesVisible(l.series, isSwOn));
+
+      // Premium/Discount
+      const isPdOn = document.getElementById('tog-premium').checked;
+      setSeriesVisible(indicatorSeries.premiumSeries, isPdOn);
+      setSeriesVisible(indicatorSeries.discountSeries, isPdOn);
+      setSeriesVisible(indicatorSeries.midSeries, isPdOn);
     }
 
     // ============================================================
@@ -1574,11 +1895,40 @@
         });
       });
 
+      // Zoom buttons
+      const ZOOM_STEP = 2;
+      const MIN_BAR_SPACING = 2;
+      const MAX_BAR_SPACING = 40;
+
+      document.getElementById('zoom-in').addEventListener('click', () => {
+        const current = chart.timeScale().options().barSpacing;
+        const next = Math.min(current + ZOOM_STEP, MAX_BAR_SPACING);
+        userBarSpacing = next;
+        chart.timeScale().applyOptions({ barSpacing: next });
+      });
+
+      document.getElementById('zoom-out').addEventListener('click', () => {
+        const current = chart.timeScale().options().barSpacing;
+        const next = Math.max(current - ZOOM_STEP, MIN_BAR_SPACING);
+        userBarSpacing = next;
+        chart.timeScale().applyOptions({ barSpacing: next });
+      });
+
+      document.getElementById('zoom-reset').addEventListener('click', () => {
+        userBarSpacing = null;
+        chart.timeScale().fitContent();
+      });
+
+      // Track user's manual zoom (mouse wheel / pinch) so it persists
+      chart.timeScale().subscribeVisibleLogicalRangeChange(() => {
+        userBarSpacing = chart.timeScale().options().barSpacing;
+      });
+
       // Indicator toggles
       const toggleIds = [
         'tog-swings', 'tog-labels', 'tog-ob', 'tog-fvg',
         'tog-levels', 'tog-ema7', 'tog-ema22', 'tog-ema200',
-        'tog-vwap', 'tog-eqheql',
+        'tog-vwap', 'tog-eqheql', 'tog-choch', 'tog-strongweak', 'tog-premium',
       ];
       toggleIds.forEach(id => {
         document.getElementById(id).addEventListener('change', applyToggleVisibility);

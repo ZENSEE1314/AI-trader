@@ -219,6 +219,122 @@ function calcVWAP(klines) {
   return vwap;
 }
 
+// ── CHoCH & BMS Detection ───────────────────────────────────
+// CHoCH = Change of Character: structure break AGAINST the trend
+// BMS  = Break of Market Structure: structure break WITH the trend
+function detectCHoCHBMS(swings, klines) {
+  const results = [];
+  if (swings.length < 3) return results;
+
+  let currentTrend = null; // 'bullish' or 'bearish'
+
+  for (let i = 1; i < swings.length; i++) {
+    const prev = swings[i - 1];
+    const curr = swings[i];
+
+    // Look ahead — did price break the previous swing?
+    if (prev.type === 'high') {
+      // Check if a candle after curr broke above prev.price
+      for (let k = curr.index + 1; k < klines.length; k++) {
+        const high = parseFloat(klines[k][2]);
+        if (high > prev.price) {
+          const breakTime = parseInt(klines[k][0]) / 1000;
+          const label = currentTrend === 'bearish' ? 'CHoCH' : 'BMS';
+          results.push({
+            type: label,
+            direction: 'bullish',
+            price: prev.price,
+            time: prev.time,
+            breakTime,
+          });
+          currentTrend = 'bullish';
+          break;
+        }
+        // Stop searching after next swing
+        if (i + 1 < swings.length && k >= swings[i + 1].index) break;
+      }
+    }
+
+    if (prev.type === 'low') {
+      for (let k = curr.index + 1; k < klines.length; k++) {
+        const low = parseFloat(klines[k][3]);
+        if (low < prev.price) {
+          const breakTime = parseInt(klines[k][0]) / 1000;
+          const label = currentTrend === 'bullish' ? 'CHoCH' : 'BMS';
+          results.push({
+            type: label,
+            direction: 'bearish',
+            price: prev.price,
+            time: prev.time,
+            breakTime,
+          });
+          currentTrend = 'bearish';
+          break;
+        }
+        if (i + 1 < swings.length && k >= swings[i + 1].index) break;
+      }
+    }
+  }
+  return results;
+}
+
+// ── Strong/Weak High-Low Classification ─────────────────────
+// Strong High = swing high NOT yet broken by subsequent price action
+// Weak Low = swing low NOT yet broken → expected to be taken (liquidity)
+function classifyStrongWeak(swings, klines) {
+  const classifications = [];
+  const lastClose = parseFloat(klines[klines.length - 1][4]);
+
+  const highs = swings.filter(s => s.type === 'high');
+  const lows = swings.filter(s => s.type === 'low');
+
+  for (const sh of highs) {
+    let broken = false;
+    for (let k = sh.index + 1; k < klines.length; k++) {
+      if (parseFloat(klines[k][2]) > sh.price) { broken = true; break; }
+    }
+    classifications.push({
+      type: 'high',
+      label: broken ? 'Weak High' : 'Strong High',
+      price: sh.price,
+      time: sh.time,
+      isBroken: broken,
+    });
+  }
+
+  for (const sl of lows) {
+    let broken = false;
+    for (let k = sl.index + 1; k < klines.length; k++) {
+      if (parseFloat(klines[k][3]) < sl.price) { broken = true; break; }
+    }
+    classifications.push({
+      type: 'low',
+      label: broken ? 'Weak Low' : 'Strong Low',
+      price: sl.price,
+      time: sl.time,
+      isBroken: broken,
+    });
+  }
+
+  return classifications;
+}
+
+// ── Premium / Discount Zone ─────────────────────────────────
+// Premium = above 50% of range (sell zone), Discount = below 50% (buy zone)
+function calcPremiumDiscount(swings, candles) {
+  const highs = swings.filter(s => s.type === 'high');
+  const lows = swings.filter(s => s.type === 'low');
+
+  if (!highs.length || !lows.length) return null;
+
+  // Use the most recent significant high and low
+  const upperRange = Math.max(...highs.slice(-3).map(h => h.price));
+  const lowerRange = Math.min(...lows.slice(-3).map(l => l.price));
+  const mid = (upperRange + lowerRange) / 2;
+
+  return { upperRange, lowerRange, mid };
+}
+
 // ── Equal Highs / Equal Lows Detection ──────────────────────
 function detectEQHEQL(swings) {
   const tolerance = 0.001; // 0.1% tolerance
@@ -283,6 +399,17 @@ router.get('/data', async (req, res) => {
     const fvgs = detectFVGs(klines);
     const keyLevels = getKeyLevels(dailyKlines, weeklyKlines);
     const eqhEql = detectEQHEQL(swings);
+    const chochBms = detectCHoCHBMS(swings, klines);
+    const strongWeak = classifyStrongWeak(swings, klines);
+    const premiumDiscount = calcPremiumDiscount(swings, candles);
+
+    // Determine overall trend
+    const highLabels = labels.filter(l => l.type === 'high');
+    const lowLabels = labels.filter(l => l.type === 'low');
+    const lastHighLabel = highLabels[highLabels.length - 1];
+    const lastLowLabel = lowLabels[lowLabels.length - 1];
+    const trend = (lastHighLabel?.label === 'HH' && lastLowLabel?.label === 'HL') ? 'Positive'
+      : (lastHighLabel?.label === 'LH' && lastLowLabel?.label === 'LL') ? 'Negative' : 'Neutral';
 
     // EMAs
     const ema7 = calcEMA(closes, 7);
@@ -305,6 +432,10 @@ router.get('/data', async (req, res) => {
       fvgs,
       keyLevels,
       eqhEql,
+      chochBms,
+      strongWeak,
+      premiumDiscount,
+      trend,
       ema7: emaData(ema7),
       ema22: emaData(ema22),
       ema200: emaData(ema200),
