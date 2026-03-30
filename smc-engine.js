@@ -250,10 +250,11 @@ async function analyzeLHHL(ticker, params) {
   const struct3 = getStructure(klines3m, SWING_LENGTHS['3m']);
   const struct1 = getStructure(klines1m, SWING_LENGTHS['1m']);
 
-  // SHORT: all 3 TFs must have LH as the most recent swing high label
-  // LONG: all 3 TFs must have HL as the most recent swing low label
-  let isShortSetup = struct15.hasLH && struct3.hasLH && struct1.hasLH;
-  let isLongSetup = struct15.hasHL && struct3.hasHL && struct1.hasHL;
+  // SHORT: 15m must have FULL bearish structure (LH + LL), lower TFs confirm with LH
+  // LONG: 15m must have FULL bullish structure (HH + HL), lower TFs confirm with HL
+  // This prevents entering on partial structure (LH alone could be consolidation)
+  let isShortSetup = struct15.hasLH && struct15.hasLL && struct3.hasLH && struct1.hasLH;
+  let isLongSetup = struct15.hasHH && struct15.hasHL && struct3.hasHL && struct1.hasHL;
 
   // AI direction bias — completely block the losing direction
   if (dirBias === 'LONG') {
@@ -296,6 +297,43 @@ async function analyzeLHHL(ticker, params) {
   // Verify swing exists (used for direction validation only)
   if (direction === 'SHORT' && !struct1.lastHigh) return null;
   if (direction === 'LONG' && !struct1.lastLow) return null;
+
+  // Recency check: the 1m confirming swing must be within the last 15 candles (15 min)
+  // Stale swings from hours ago lead to late entries after the move is exhausted
+  const MAX_CANDLE_AGE = 15;
+  const lastCandleIndex = klines1m.length - 1;
+  const confirmSwing = direction === 'SHORT' ? struct1.lastHigh : struct1.lastLow;
+  if (confirmSwing && (lastCandleIndex - confirmSwing.index) > MAX_CANDLE_AGE) {
+    bLog.scan(`${symbol}: 1m swing too old (${lastCandleIndex - confirmSwing.index} candles ago) — skipping stale signal`);
+    return null;
+  }
+
+  // Price position check: don't chase — entry should be near the structure level
+  // SHORT: price should be below the last swing high (LH) and not too far below
+  // LONG: price should be above the last swing low (HL) and not too far above
+  const MAX_CHASE_PCT = 0.02; // 2% max distance from structure level
+  if (direction === 'SHORT' && struct1.lastHigh) {
+    const distFromLH = (struct1.lastHigh.price - price) / price;
+    if (price > struct1.lastHigh.price) {
+      bLog.scan(`${symbol}: price above LH — not a valid short entry`);
+      return null;
+    }
+    if (distFromLH > MAX_CHASE_PCT) {
+      bLog.scan(`${symbol}: price ${(distFromLH * 100).toFixed(2)}% below LH — too far, chasing`);
+      return null;
+    }
+  }
+  if (direction === 'LONG' && struct1.lastLow) {
+    const distFromHL = (price - struct1.lastLow.price) / price;
+    if (price < struct1.lastLow.price) {
+      bLog.scan(`${symbol}: price below HL — not a valid long entry`);
+      return null;
+    }
+    if (distFromHL > MAX_CHASE_PCT) {
+      bLog.scan(`${symbol}: price ${(distFromHL * 100).toFixed(2)}% above HL — too far, chasing`);
+      return null;
+    }
+  }
 
   // Capital-based SL/TP: distance = margin_loss% / leverage
   const BTC_ETH = new Set(['BTCUSDT', 'ETHUSDT']);
