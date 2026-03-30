@@ -1124,6 +1124,64 @@
         }
       });
       resizeObserver.observe(container);
+
+      // Vertical pan: drag chart body up/down to shift visible price range
+      let vertPan = { active: false, startY: 0, startTop: 0.05, startBottom: 0.15 };
+
+      container.addEventListener('mousedown', (e) => {
+        // Right-click drag for vertical pan (left-click is used by lightweight-charts for horizontal scroll)
+        if (e.button === 2) {
+          e.preventDefault();
+          const margins = chart.priceScale('right').options().scaleMargins || { top: 0.05, bottom: 0.15 };
+          vertPan = { active: true, startY: e.clientY, startTop: margins.top, startBottom: margins.bottom };
+        }
+      });
+
+      container.addEventListener('contextmenu', (e) => e.preventDefault());
+
+      window.addEventListener('mousemove', (e) => {
+        if (!vertPan.active) return;
+        const deltaY = e.clientY - vertPan.startY;
+        const sensitivity = 0.001;
+        const shift = deltaY * sensitivity;
+        const newTop = Math.max(0, Math.min(0.45, vertPan.startTop + shift));
+        const newBottom = Math.max(0, Math.min(0.45, vertPan.startBottom - shift));
+        chart.priceScale('right').applyOptions({
+          scaleMargins: { top: newTop, bottom: newBottom },
+        });
+      });
+
+      window.addEventListener('mouseup', () => {
+        vertPan.active = false;
+      });
+
+      // Touch vertical pan: two-finger vertical swipe shifts price range
+      let touchVertPan = { active: false, startY: 0, startTop: 0.05, startBottom: 0.15 };
+
+      container.addEventListener('touchstart', (e) => {
+        if (e.touches.length === 2) {
+          const midY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
+          const margins = chart.priceScale('right').options().scaleMargins || { top: 0.05, bottom: 0.15 };
+          touchVertPan = { active: true, startY: midY, startTop: margins.top, startBottom: margins.bottom };
+        }
+      }, { passive: true });
+
+      container.addEventListener('touchmove', (e) => {
+        if (!touchVertPan.active || e.touches.length !== 2) return;
+        const midY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
+        const deltaY = midY - touchVertPan.startY;
+        const sensitivity = 0.001;
+        const shift = deltaY * sensitivity;
+        const newTop = Math.max(0, Math.min(0.45, touchVertPan.startTop + shift));
+        const newBottom = Math.max(0, Math.min(0.45, touchVertPan.startBottom - shift));
+        chart.priceScale('right').applyOptions({
+          scaleMargins: { top: newTop, bottom: newBottom },
+        });
+      }, { passive: true });
+
+      container.addEventListener('touchend', () => {
+        touchVertPan.active = false;
+      }, { passive: true });
     }
 
     // ============================================================
@@ -2188,6 +2246,10 @@
       document.getElementById('zoom-reset').addEventListener('click', () => {
         userBarSpacing = null;
         chart.timeScale().fitContent();
+        // Reset vertical pan to default margins
+        chart.priceScale('right').applyOptions({
+          scaleMargins: { top: 0.05, bottom: 0.15 },
+        });
       });
 
       // Track user's manual zoom (mouse wheel / pinch) so it persists
