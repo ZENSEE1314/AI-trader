@@ -41,7 +41,7 @@
     /* --- Layout Shell --- */
     .app-layout {
       display: grid;
-      grid-template-columns: 280px 1fr;
+      grid-template-columns: 280px 1fr 240px;
       grid-template-rows: auto auto 1fr auto;
       height: 100vh;
       gap: 0;
@@ -492,6 +492,128 @@
 
     @keyframes spin { to { transform: rotate(360deg); } }
 
+    /* --- Right Sidebar --- */
+    .right-sidebar {
+      grid-column: 3;
+      grid-row: 1 / -1;
+      background: var(--color-bg-raised);
+      border-left: 1px solid var(--color-border);
+      display: flex;
+      flex-direction: column;
+      overflow-y: auto;
+      scrollbar-width: thin;
+      scrollbar-color: var(--color-border) transparent;
+    }
+
+    .right-sidebar-section {
+      padding: var(--space-3) var(--space-4);
+      border-bottom: 1px solid var(--color-border);
+    }
+
+    .right-sidebar-title {
+      font-family: var(--font-display);
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--color-fg-subtle);
+      font-weight: var(--weight-medium);
+      margin-bottom: var(--space-2);
+    }
+
+    .rs-trend-box {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: var(--space-2) var(--space-3);
+      border-radius: var(--radius-md);
+      border: 1px solid var(--color-border);
+      margin-bottom: var(--space-2);
+    }
+    .rs-trend-label {
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+      color: var(--color-fg-muted);
+    }
+    .rs-trend-value {
+      font-family: var(--font-mono);
+      font-size: var(--text-sm);
+      font-weight: var(--weight-bold);
+      padding: 2px var(--space-2);
+      border-radius: 3px;
+    }
+    .rs-trend-value.positive { background: rgba(0,212,170,0.15); color: #00d4aa; }
+    .rs-trend-value.negative { background: rgba(255,71,87,0.15); color: #ff4757; }
+    .rs-trend-value.neutral { background: rgba(139,148,158,0.15); color: #8b949e; }
+
+    .rs-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 4px 0;
+      font-family: var(--font-mono);
+      font-size: 11px;
+    }
+    .rs-row-label { color: var(--color-fg-muted); }
+    .rs-row-value { color: var(--color-fg); font-weight: var(--weight-medium); }
+    .rs-row-value.bullish { color: #00d4aa; }
+    .rs-row-value.bearish { color: #ff4757; }
+
+    .rs-mid-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 5px var(--space-2);
+      background: rgba(0,212,170,0.08);
+      border-radius: var(--radius-sm);
+      margin-top: var(--space-1);
+      font-family: var(--font-mono);
+      font-size: 11px;
+    }
+    .rs-mid-row .rs-row-label { color: #00d4aa; }
+    .rs-mid-row .rs-row-value { color: #00d4aa; font-weight: var(--weight-bold); }
+
+    .rs-structure-tag {
+      display: inline-block;
+      font-family: var(--font-mono);
+      font-size: 10px;
+      font-weight: var(--weight-bold);
+      padding: 2px 6px;
+      border-radius: 3px;
+      margin: 2px 2px 2px 0;
+    }
+    .rs-structure-tag.hh { background: rgba(0,212,170,0.15); color: #00d4aa; }
+    .rs-structure-tag.hl { background: rgba(0,212,170,0.15); color: #00d4aa; }
+    .rs-structure-tag.lh { background: rgba(255,71,87,0.15); color: #ff4757; }
+    .rs-structure-tag.ll { background: rgba(255,71,87,0.15); color: #ff4757; }
+
+    .rs-ob-item {
+      display: flex;
+      align-items: center;
+      gap: var(--space-2);
+      padding: 3px 0;
+      font-family: var(--font-mono);
+      font-size: 10px;
+      color: var(--color-fg-muted);
+    }
+    .rs-ob-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 2px;
+      flex-shrink: 0;
+    }
+    .rs-ob-dot.bull { background: #00d4aa; }
+    .rs-ob-dot.bear { background: #ff4757; }
+
+    @media (max-width: 1200px) {
+      .app-layout { grid-template-columns: 1fr 220px; }
+      .sidebar { display: none; }
+    }
+    @media (max-width: 768px) {
+      .app-layout { grid-template-columns: 1fr; }
+      .sidebar { display: none; }
+      .right-sidebar { display: none; }
+    }
+
     /* Trend info box */
     .trend-box {
       display: flex;
@@ -601,15 +723,7 @@
       font-weight: var(--weight-medium);
     }
 
-    /* --- Responsive --- */
-    @media (max-width: 768px) {
-      .app-layout {
-        grid-template-columns: 1fr;
-      }
-      .sidebar {
-        display: none;
-      }
-    }
+    /* --- Responsive (see also right-sidebar responsive rules above) --- */
 
     /* Reduced motion */
     @media (prefers-reduced-motion: reduce) {
@@ -763,6 +877,101 @@
         </div>
       </div>
     </div>
+
+    <!-- Right Sidebar -->
+    <aside class="right-sidebar" id="right-sidebar">
+      <!-- Trend -->
+      <div class="right-sidebar-section">
+        <div class="right-sidebar-title">Trend</div>
+        <div class="rs-trend-box">
+          <span class="rs-trend-label">Trend:</span>
+          <span class="rs-trend-value neutral" id="rs-trend">--</span>
+        </div>
+      </div>
+
+      <!-- Range -->
+      <div class="right-sidebar-section">
+        <div class="right-sidebar-title">Range</div>
+        <div class="rs-row">
+          <span class="rs-row-label">Upper Range:</span>
+          <span class="rs-row-value" id="rs-upper">--</span>
+        </div>
+        <div class="rs-row">
+          <span class="rs-row-label">Lower Range:</span>
+          <span class="rs-row-value" id="rs-lower">--</span>
+        </div>
+        <div class="rs-mid-row">
+          <span class="rs-row-label">Mid:</span>
+          <span class="rs-row-value" id="rs-mid">--</span>
+        </div>
+      </div>
+
+      <!-- Structure -->
+      <div class="right-sidebar-section">
+        <div class="right-sidebar-title">Structure</div>
+        <div class="rs-row">
+          <span class="rs-row-label">Pattern:</span>
+          <span id="rs-struct-tags">--</span>
+        </div>
+        <div class="rs-row">
+          <span class="rs-row-label">Swing High:</span>
+          <span class="rs-row-value bearish" id="rs-sh">--</span>
+        </div>
+        <div class="rs-row">
+          <span class="rs-row-label">Swing Low:</span>
+          <span class="rs-row-value bullish" id="rs-sl">--</span>
+        </div>
+      </div>
+
+      <!-- Key Levels -->
+      <div class="right-sidebar-section">
+        <div class="right-sidebar-title">Key Levels</div>
+        <div class="rs-row">
+          <span class="rs-row-label">PDH:</span>
+          <span class="rs-row-value" id="rs-pdh">--</span>
+        </div>
+        <div class="rs-row">
+          <span class="rs-row-label">PDL:</span>
+          <span class="rs-row-value" id="rs-pdl">--</span>
+        </div>
+        <div class="rs-row">
+          <span class="rs-row-label">OP:</span>
+          <span class="rs-row-value" id="rs-op">--</span>
+        </div>
+        <div class="rs-row">
+          <span class="rs-row-label">PWH:</span>
+          <span class="rs-row-value" id="rs-pwh">--</span>
+        </div>
+        <div class="rs-row">
+          <span class="rs-row-label">PWL:</span>
+          <span class="rs-row-value" id="rs-pwl">--</span>
+        </div>
+      </div>
+
+      <!-- Order Blocks -->
+      <div class="right-sidebar-section">
+        <div class="right-sidebar-title">Order Blocks</div>
+        <div id="rs-ob-list"><span class="rs-row-label">--</span></div>
+      </div>
+
+      <!-- FVGs -->
+      <div class="right-sidebar-section">
+        <div class="right-sidebar-title">Fair Value Gaps</div>
+        <div id="rs-fvg-list"><span class="rs-row-label">--</span></div>
+      </div>
+
+      <!-- CHoCH / BMS -->
+      <div class="right-sidebar-section">
+        <div class="right-sidebar-title">CHoCH / BMS</div>
+        <div id="rs-choch-list"><span class="rs-row-label">--</span></div>
+      </div>
+
+      <!-- Strong / Weak -->
+      <div class="right-sidebar-section">
+        <div class="right-sidebar-title">Strong / Weak Levels</div>
+        <div id="rs-sw-list"><span class="rs-row-label">--</span></div>
+      </div>
+    </aside>
   </div>
 
   <script>
@@ -1521,15 +1730,100 @@
     // ── Trend Box + Range Info Update ─────────────────────────
 
     function updateTrendBox(data) {
-      const trendEl = document.getElementById('trend-value');
       const trend = data.trend || 'Neutral';
+
+      // Toolbar trend box
+      const trendEl = document.getElementById('trend-value');
       trendEl.textContent = trend;
       trendEl.className = 'trend-value ' + trend.toLowerCase();
 
+      // Toolbar range bar
       const pd = data.premiumDiscount;
       document.getElementById('range-upper').textContent = pd ? formatPrice(pd.upperRange) : '--';
       document.getElementById('range-lower').textContent = pd ? formatPrice(pd.lowerRange) : '--';
       document.getElementById('range-mid').textContent = pd ? formatPrice(pd.mid) : '--';
+
+      // ── Right sidebar updates ──
+      // Trend
+      const rsTrend = document.getElementById('rs-trend');
+      rsTrend.textContent = trend;
+      rsTrend.className = 'rs-trend-value ' + trend.toLowerCase();
+
+      // Range
+      document.getElementById('rs-upper').textContent = pd ? formatPrice(pd.upperRange) : '--';
+      document.getElementById('rs-lower').textContent = pd ? formatPrice(pd.lowerRange) : '--';
+      document.getElementById('rs-mid').textContent = pd ? formatPrice(pd.mid) : '--';
+
+      // Structure labels
+      const highLabels = data.labels?.filter(l => l.type === 'high') || [];
+      const lowLabels = data.labels?.filter(l => l.type === 'low') || [];
+      const lastHigh = highLabels[highLabels.length - 1];
+      const lastLow = lowLabels[lowLabels.length - 1];
+      const structTags = document.getElementById('rs-struct-tags');
+      let tagsHtml = '';
+      if (lastHigh) tagsHtml += `<span class="rs-structure-tag ${lastHigh.label.toLowerCase()}">${lastHigh.label}</span>`;
+      if (lastLow) tagsHtml += `<span class="rs-structure-tag ${lastLow.label.toLowerCase()}">${lastLow.label}</span>`;
+      structTags.innerHTML = tagsHtml || '--';
+
+      // Swing prices
+      const swingHighs = data.swings?.filter(s => s.type === 'high') || [];
+      const swingLows = data.swings?.filter(s => s.type === 'low') || [];
+      document.getElementById('rs-sh').textContent = swingHighs.length ? formatPrice(swingHighs[swingHighs.length - 1].price) : '--';
+      document.getElementById('rs-sl').textContent = swingLows.length ? formatPrice(swingLows[swingLows.length - 1].price) : '--';
+
+      // Key Levels
+      const kl = data.keyLevels || {};
+      document.getElementById('rs-pdh').textContent = kl.PDH ? formatPrice(kl.PDH) : '--';
+      document.getElementById('rs-pdl').textContent = kl.PDL ? formatPrice(kl.PDL) : '--';
+      document.getElementById('rs-op').textContent = kl.OP ? formatPrice(kl.OP) : '--';
+      document.getElementById('rs-pwh').textContent = kl.PWH ? formatPrice(kl.PWH) : '--';
+      document.getElementById('rs-pwl').textContent = kl.PWL ? formatPrice(kl.PWL) : '--';
+
+      // Order Blocks
+      const obList = document.getElementById('rs-ob-list');
+      if (data.orderBlocks?.length) {
+        obList.innerHTML = data.orderBlocks.slice(-6).map(ob => {
+          const isBull = ob.type === 'bullish';
+          return `<div class="rs-ob-item"><span class="rs-ob-dot ${isBull ? 'bull' : 'bear'}"></span>${isBull ? 'Bull' : 'Bear'} OB: ${formatPrice(ob.low)} - ${formatPrice(ob.high)}</div>`;
+        }).join('');
+      } else {
+        obList.innerHTML = '<span class="rs-row-label">None</span>';
+      }
+
+      // FVGs
+      const fvgList = document.getElementById('rs-fvg-list');
+      if (data.fvgs?.length) {
+        fvgList.innerHTML = data.fvgs.slice(-6).map(fvg => {
+          const isBull = fvg.type === 'bullish';
+          return `<div class="rs-ob-item"><span class="rs-ob-dot ${isBull ? 'bull' : 'bear'}"></span>${isBull ? 'Bull' : 'Bear'} FVG: ${formatPrice(fvg.low)} - ${formatPrice(fvg.high)}</div>`;
+        }).join('');
+      } else {
+        fvgList.innerHTML = '<span class="rs-row-label">None</span>';
+      }
+
+      // CHoCH / BMS
+      const chochList = document.getElementById('rs-choch-list');
+      if (data.chochBms?.length) {
+        chochList.innerHTML = data.chochBms.slice(-5).map(c => {
+          const isBull = c.direction === 'bullish';
+          return `<div class="rs-ob-item"><span class="rs-ob-dot ${isBull ? 'bull' : 'bear'}"></span>${c.type} ${isBull ? 'Bull' : 'Bear'} @ ${formatPrice(c.price)}</div>`;
+        }).join('');
+      } else {
+        chochList.innerHTML = '<span class="rs-row-label">None</span>';
+      }
+
+      // Strong / Weak
+      const swList = document.getElementById('rs-sw-list');
+      if (data.strongWeak?.length) {
+        const recent = data.strongWeak.slice(-6);
+        swList.innerHTML = recent.map(sw => {
+          const isStrong = !sw.isBroken;
+          const color = isStrong ? (sw.type === 'high' ? 'bear' : 'bull') : '';
+          return `<div class="rs-ob-item"><span class="rs-ob-dot ${color}" style="${!color ? 'background:#ffa726' : ''}"></span>${sw.label}: ${formatPrice(sw.price)}</div>`;
+        }).join('');
+      } else {
+        swList.innerHTML = '<span class="rs-row-label">None</span>';
+      }
     }
 
     // ============================================================
