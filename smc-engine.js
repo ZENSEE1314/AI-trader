@@ -41,79 +41,151 @@ async function fetchTickers() {
   return res.json();
 }
 
-// ── Swing Detection ──────────────────────────────────────────
-// A proper swing high: candle high is the HIGHEST among 3 candles on each side (7-bar pivot)
-// A proper swing low:  candle low is the LOWEST among 3 candles on each side (7-bar pivot)
-// This filters out noise — only real turning points count
+// ── Zeiierman-Style SMC Swing Detection ──────────────────────
+// Based on LuxAlgo / Zeiierman Smart Money Concepts methodology:
+//   1. Centered rolling window pivot detection (not just neighbors)
+//   2. Alternating swings enforced (high-low-high-low, never two highs in a row)
+//   3. Full structure labels: HH, HL, LH, LL
+//   4. Trend state tracked per timeframe
+//
+// Swing length per TF (Zeiierman uses adaptive lengths):
+//   15m → len=10 (covers ~2.5 hours of structure)
+//   3m  → len=8  (covers ~24 min of structure)
+//   1m  → len=5  (covers ~5 min of structure)
 
-const SWING_LOOKBACK = 3; // candles on each side to confirm swing
-const MIN_SWING_DIFF_PCT = 0.001; // 0.1% minimum difference between two swings
+const SWING_LENGTHS = { '15m': 10, '3m': 8, '1m': 5 };
 
-function findSwingHighs(klines) {
-  const swings = [];
-  for (let i = SWING_LOOKBACK; i < klines.length - SWING_LOOKBACK; i++) {
-    const high = parseFloat(klines[i][2]);
-    let isSwing = true;
-    for (let j = 1; j <= SWING_LOOKBACK; j++) {
-      if (high <= parseFloat(klines[i - j][2]) || high <= parseFloat(klines[i + j][2])) {
-        isSwing = false;
-        break;
+// ── Pivot Detection (LuxAlgo swings() method) ───────────────
+// A bar at index [len] is a swing high if its high > highest of surrounding bars
+// A bar at index [len] is a swing low if its low < lowest of surrounding bars
+// Uses oscillator state to enforce alternation (H→L→H→L)
+
+function detectSwings(klines, len) {
+  const highs = klines.map(k => parseFloat(k[2]));
+  const lows = klines.map(k => parseFloat(k[3]));
+
+  const swings = []; // { type: 'high'|'low', index, price, candle }
+  let lastType = null; // enforce alternation
+
+  for (let i = len; i < klines.length - len; i++) {
+    // Check if bar i is the highest high in window [i-len, i+len]
+    let isHigh = true;
+    for (let j = -len; j <= len; j++) {
+      if (j === 0) continue;
+      if (highs[i] <= highs[i + j]) { isHigh = false; break; }
+    }
+
+    // Check if bar i is the lowest low in window [i-len, i+len]
+    let isLow = true;
+    for (let j = -len; j <= len; j++) {
+      if (j === 0) continue;
+      if (lows[i] >= lows[i + j]) { isLow = false; break; }
+    }
+
+    // Both high and low on same bar — pick the more extreme one
+    if (isHigh && isLow) {
+      // Rare: compare relative distances to decide
+      const highDist = highs[i] - Math.max(highs[i - 1], highs[i + 1]);
+      const lowDist = Math.min(lows[i - 1], lows[i + 1]) - lows[i];
+      if (highDist > lowDist) isLow = false;
+      else isHigh = false;
+    }
+
+    if (isHigh) {
+      if (lastType === 'high') {
+        // Two consecutive swing highs: keep the HIGHER one (Zeiierman rule)
+        const prev = swings[swings.length - 1];
+        if (highs[i] > prev.price) {
+          swings[swings.length - 1] = { type: 'high', index: i, price: highs[i], candle: klines[i] };
+        }
+      } else {
+        swings.push({ type: 'high', index: i, price: highs[i], candle: klines[i] });
+        lastType = 'high';
       }
     }
-    if (isSwing) {
-      swings.push({ index: i, price: high, candle: klines[i] });
-    }
-  }
-  return swings.slice(-3); // keep last 3 for better pattern detection
-}
 
-function findSwingLows(klines) {
-  const swings = [];
-  for (let i = SWING_LOOKBACK; i < klines.length - SWING_LOOKBACK; i++) {
-    const low = parseFloat(klines[i][3]);
-    let isSwing = true;
-    for (let j = 1; j <= SWING_LOOKBACK; j++) {
-      if (low >= parseFloat(klines[i - j][3]) || low >= parseFloat(klines[i + j][3])) {
-        isSwing = false;
-        break;
+    if (isLow) {
+      if (lastType === 'low') {
+        // Two consecutive swing lows: keep the LOWER one
+        const prev = swings[swings.length - 1];
+        if (lows[i] < prev.price) {
+          swings[swings.length - 1] = { type: 'low', index: i, price: lows[i], candle: klines[i] };
+        }
+      } else {
+        swings.push({ type: 'low', index: i, price: lows[i], candle: klines[i] });
+        lastType = 'low';
       }
     }
-    if (isSwing) {
-      swings.push({ index: i, price: low, candle: klines[i] });
-    }
   }
-  return swings.slice(-3);
+
+  return swings;
 }
 
-// ── LH / HL Detection ───────────────────────────────────────
-// LH (Lower High): most recent swing high < previous swing high — downtrend
-// HL (Higher Low): most recent swing low > previous swing low — uptrend
-// Must have meaningful price difference (not just noise)
+// ── Market Structure Labels (HH, HL, LH, LL) ────────────────
+// Compare consecutive swing highs and consecutive swing lows:
+//   New swing high > prev swing high → HH (bullish)
+//   New swing high < prev swing high → LH (bearish)
+//   New swing low > prev swing low → HL (bullish)
+//   New swing low < prev swing low → LL (bearish)
 
-function hasLowerHigh(klines) {
-  const swingHighs = findSwingHighs(klines);
-  if (swingHighs.length < 2) return null;
-  const prev = swingHighs[swingHighs.length - 2];
-  const recent = swingHighs[swingHighs.length - 1];
-  const diff = (prev.price - recent.price) / prev.price;
-  // Recent high must be meaningfully lower than previous high
-  if (recent.price < prev.price && diff >= MIN_SWING_DIFF_PCT) {
-    return { isLH: true, recentSwing: recent, prevSwing: prev };
-  }
-  return null;
-}
+function getStructure(klines, len) {
+  const swings = detectSwings(klines, len);
 
-function hasHigherLow(klines) {
-  const swingLows = findSwingLows(klines);
-  if (swingLows.length < 2) return null;
-  const prev = swingLows[swingLows.length - 2];
-  const recent = swingLows[swingLows.length - 1];
-  const diff = (recent.price - prev.price) / prev.price;
-  // Recent low must be meaningfully higher than previous low
-  if (recent.price > prev.price && diff >= MIN_SWING_DIFF_PCT) {
-    return { isHL: true, recentSwing: recent, prevSwing: prev };
+  // Separate into highs and lows (in order)
+  const swingHighs = swings.filter(s => s.type === 'high');
+  const swingLows = swings.filter(s => s.type === 'low');
+
+  // Label each swing high
+  const highLabels = [];
+  for (let i = 1; i < swingHighs.length; i++) {
+    const label = swingHighs[i].price > swingHighs[i - 1].price ? 'HH' : 'LH';
+    highLabels.push({ ...swingHighs[i], label });
   }
-  return null;
+
+  // Label each swing low
+  const lowLabels = [];
+  for (let i = 1; i < swingLows.length; i++) {
+    const label = swingLows[i].price > swingLows[i - 1].price ? 'HL' : 'LL';
+    lowLabels.push({ ...swingLows[i], label });
+  }
+
+  // Get the most recent high label and low label
+  const lastHigh = highLabels.length ? highLabels[highLabels.length - 1] : null;
+  const lastLow = lowLabels.length ? lowLabels[lowLabels.length - 1] : null;
+
+  // Determine trend: bearish = LH+LL, bullish = HH+HL
+  let trend = 'neutral';
+  if (lastHigh && lastLow) {
+    const isBearish = lastHigh.label === 'LH' && lastLow.label === 'LL';
+    const isBullish = lastHigh.label === 'HH' && lastLow.label === 'HL';
+    // Partial signals: LH alone is bearish leaning, HL alone is bullish leaning
+    if (isBearish) trend = 'bearish';
+    else if (isBullish) trend = 'bullish';
+    else if (lastHigh.label === 'LH') trend = 'bearish_lean';
+    else if (lastLow.label === 'HL') trend = 'bullish_lean';
+  } else if (lastHigh) {
+    trend = lastHigh.label === 'LH' ? 'bearish_lean' : 'bullish_lean';
+  } else if (lastLow) {
+    trend = lastLow.label === 'HL' ? 'bullish_lean' : 'bearish_lean';
+  }
+
+  return {
+    swings,
+    swingHighs,
+    swingLows,
+    highLabels,
+    lowLabels,
+    lastHigh,
+    lastLow,
+    trend,
+    // Quick access for the user's LH/HL check
+    hasLH: lastHigh?.label === 'LH',
+    hasHL: lastLow?.label === 'HL',
+    hasHH: lastHigh?.label === 'HH',
+    hasLL: lastLow?.label === 'LL',
+    // Summary label for logging
+    label: `${lastHigh?.label || '--'}/${lastLow?.label || '--'}`,
+  };
 }
 
 // ── Daily Limits ─────────────────────────────────────────────
@@ -156,7 +228,7 @@ async function analyzeLHHL(ticker, params) {
   const symbol = ticker.symbol;
   const price = parseFloat(ticker.lastPrice);
 
-  // AI-tuned parameters (defaults: buffer=0.1%, RR=1.5, maxSL=2%, minSL=0.1%)
+  // AI-tuned parameters
   const slBufferPct = params.SL_BUFFER_PCT || 0.001;
   const rrRatio = params.RR_RATIO || 1.5;
   const slMaxPct = params.SL_MAX_PCT || 0.02;
@@ -171,48 +243,44 @@ async function analyzeLHHL(ticker, params) {
   ]);
 
   if (!klines15m || !klines3m || !klines1m) return null;
-  if (klines15m.length < 10 || klines3m.length < 10 || klines1m.length < 10) return null;
+  if (klines15m.length < 20 || klines3m.length < 20 || klines1m.length < 15) return null;
 
-  // Check for SHORT: all 3 TFs must show Lower High
-  const lh15 = hasLowerHigh(klines15m);
-  const lh3 = hasLowerHigh(klines3m);
-  const lh1 = hasLowerHigh(klines1m);
+  // Get full market structure per timeframe (Zeiierman method)
+  const struct15 = getStructure(klines15m, SWING_LENGTHS['15m']);
+  const struct3 = getStructure(klines3m, SWING_LENGTHS['3m']);
+  const struct1 = getStructure(klines1m, SWING_LENGTHS['1m']);
 
-  // Check for LONG: all 3 TFs must show Higher Low
-  const hl15 = hasHigherLow(klines15m);
-  const hl3 = hasHigherLow(klines3m);
-  const hl1 = hasHigherLow(klines1m);
+  // SHORT: all 3 TFs must have LH as the most recent swing high label
+  // LONG: all 3 TFs must have HL as the most recent swing low label
+  let isShortSetup = struct15.hasLH && struct3.hasLH && struct1.hasLH;
+  let isLongSetup = struct15.hasHL && struct3.hasHL && struct1.hasHL;
 
-  // Log what each TF sees for debugging
-  const tf15 = lh15 ? 'LH' : (hl15 ? 'HL' : '--');
-  const tf3 = lh3 ? 'LH' : (hl3 ? 'HL' : '--');
-  const tf1 = lh1 ? 'LH' : (hl1 ? 'HL' : '--');
-
-  let isShortSetup = lh15 && lh3 && lh1;
-  let isLongSetup = hl15 && hl3 && hl1;
-
-  // AI direction bias: skip the losing direction if learned
+  // AI direction bias
   if (dirBias === 'LONG') isShortSetup = false;
   if (dirBias === 'SHORT') isLongSetup = false;
 
+  // Log structure for debugging
+  const hasAnySignal = struct15.hasLH || struct15.hasHL || struct3.hasLH || struct3.hasHL || struct1.hasLH || struct1.hasHL;
+
   if (!isShortSetup && !isLongSetup) {
-    // Only log when at least one TF has a signal (not all blank)
-    if (lh15 || lh3 || lh1 || hl15 || hl3 || hl1) {
-      bLog.scan(`${symbol}: 15m=${tf15} 3m=${tf3} 1m=${tf1} — NO confluence, skipping`);
+    if (hasAnySignal) {
+      bLog.scan(`${symbol}: 15m=${struct15.label} 3m=${struct3.label} 1m=${struct1.label} — NO confluence`);
     }
     return null;
   }
 
-  bLog.scan(`${symbol}: 15m=${tf15} 3m=${tf3} 1m=${tf1} — ✅ ALL AGREE`);
+  bLog.scan(`${symbol}: 15m=${struct15.label} 3m=${struct3.label} 1m=${struct1.label} — ✅ ALL AGREE`);
 
-  // If both signals exist (rare), pick the one where 1m swing is more recent
-  let direction, sl, swingCandle1m;
+  let direction, sl;
 
   if (isShortSetup && isLongSetup) {
-    if (lh1.recentSwing.index > hl1.recentSwing.index) {
-      direction = 'SHORT';
+    // Both signals: pick based on which 1m swing is more recent
+    const lastLH1m = struct1.lastHigh;
+    const lastHL1m = struct1.lastLow;
+    if (lastLH1m && lastHL1m) {
+      direction = lastLH1m.index > lastHL1m.index ? 'SHORT' : 'LONG';
     } else {
-      direction = 'LONG';
+      direction = isShortSetup ? 'SHORT' : 'LONG';
     }
   } else if (isShortSetup) {
     direction = 'SHORT';
@@ -221,44 +289,43 @@ async function analyzeLHHL(ticker, params) {
   }
 
   if (direction === 'SHORT') {
-    // SL = 1m most recent LH candle's highest price + buffer%
-    swingCandle1m = lh1.recentSwing;
-    const swingHigh = parseFloat(swingCandle1m.candle[2]);
+    // SL = 1m most recent LH swing candle's highest price + buffer%
+    const recentLH = struct1.lastHigh;
+    if (!recentLH) return null;
+    const swingHigh = recentLH.price;
     sl = swingHigh * (1 + slBufferPct);
   } else {
-    // SL = 1m most recent HL candle's lowest price - buffer%
-    swingCandle1m = hl1.recentSwing;
-    const swingLow = parseFloat(swingCandle1m.candle[3]);
+    // SL = 1m most recent HL swing candle's lowest price - buffer%
+    const recentHL = struct1.lastLow;
+    if (!recentHL) return null;
+    const swingLow = recentHL.price;
     sl = swingLow * (1 - slBufferPct);
   }
 
   const slDist = Math.abs(price - sl);
   const slPct = slDist / price;
 
-  // Skip if SL outside AI-tuned range
-  if (slPct > slMaxPct) return null;
-  if (slPct < slMinPct) return null;
+  if (slPct > slMaxPct || slPct < slMinPct) return null;
 
   // TP = SL distance * AI-tuned RR ratio
   const tpDist = slDist * rrRatio;
-  const tp = direction === 'SHORT'
-    ? price - tpDist
-    : price + tpDist;
+  const tp = direction === 'SHORT' ? price - tpDist : price + tpDist;
 
-  // Confidence score: base 10 for 3-TF confluence
-  let score = 10;
+  // Confidence score
+  let score = 10; // base: 3-TF confluence confirmed
 
-  // Bonus: how clean are the swings (bigger difference = stronger trend)
+  // Bonus: full bearish structure (LH + LL) or full bullish (HH + HL)
   if (direction === 'SHORT') {
-    const lhDiff15 = (lh15.prevSwing.price - lh15.recentSwing.price) / lh15.prevSwing.price;
-    const lhDiff3 = (lh3.prevSwing.price - lh3.recentSwing.price) / lh3.prevSwing.price;
-    if (lhDiff15 > 0.005) score += 2;
-    if (lhDiff3 > 0.003) score += 1;
+    if (struct15.hasLL) score += 2; // 15m also making lower lows = strong downtrend
+    if (struct3.hasLL) score += 1;
+    if (struct1.hasLL) score += 1;
+    // Bonus: trend confirmed on higher TF
+    if (struct15.trend === 'bearish') score += 2;
   } else {
-    const hlDiff15 = (hl15.recentSwing.price - hl15.prevSwing.price) / hl15.prevSwing.price;
-    const hlDiff3 = (hl3.recentSwing.price - hl3.prevSwing.price) / hl3.prevSwing.price;
-    if (hlDiff15 > 0.005) score += 2;
-    if (hlDiff3 > 0.003) score += 1;
+    if (struct15.hasHH) score += 2; // 15m also making higher highs = strong uptrend
+    if (struct3.hasHH) score += 1;
+    if (struct1.hasHH) score += 1;
+    if (struct15.trend === 'bullish') score += 2;
   }
 
   // AI modifier
@@ -280,14 +347,11 @@ async function analyzeLHHL(ticker, params) {
     setup,
     setupName: `${direction === 'SHORT' ? 'LH' : 'HL'}-3TF`,
     aiModifier: Math.round(aiModifier * 100) / 100,
-    premiumDiscount: direction === 'SHORT' ? 'premium' : 'discount',
-    rsi: null,
-    sentimentMod: 0,
-    sentiment: 'neutral',
-    swingInfo: {
-      tf15: direction === 'SHORT' ? lh15 : hl15,
-      tf3: direction === 'SHORT' ? lh3 : hl3,
-      tf1: direction === 'SHORT' ? lh1 : hl1,
+    structure: {
+      tf15: struct15.label,
+      tf3: struct3.label,
+      tf1: struct1.label,
+      trend15: struct15.trend,
     },
   };
 }
