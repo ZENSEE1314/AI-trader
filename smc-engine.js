@@ -13,7 +13,7 @@ const aiLearner = require('./ai-learner');
 const { log: bLog } = require('./bot-logger');
 
 const REQUEST_TIMEOUT = 15000;
-const TOP_N_COINS = 200;
+const TOP_N_COINS = 50;
 
 // ── Fetch Helpers ────────────────────────────────────────────
 
