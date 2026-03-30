@@ -20,36 +20,29 @@ const PRIVATE_CHATS  = TELEGRAM_CHATS.filter(id => !id.startsWith('-'));
 
 // ── CONFIG (defaults — AI may override some via getOptimalParams) ─
 const CONFIG = {
-  LEVERAGE_HIGH:   100,
-  LEVERAGE_LOW:    20,
-  HIGH_LEV_COINS:  ['BTCUSDT', 'ETHUSDT'],
+  WALLET_SIZE_PCT: 0.10,   // 10% of wallet per trade
+  LEVERAGE_BTC_ETH: 100,   // BTC & ETH leverage
+  LEVERAGE_ALT:     20,    // altcoin leverage (price >= $100)
+  LEVERAGE_CHEAP:   10,    // cheap coin leverage (price < $100)
+  BTC_ETH_SYMBOLS: new Set(['BTCUSDT', 'ETHUSDT']),
 
-  SL_BUFFER:       0.001,
-  TP_PCT:          0.01,     // 1% profit target
-  TP2_MULT:        1.5,      // TP2 = 1.5%
-  TP3_MULT:        2.0,      // TP3 = 2%
-
-  TRAIL_PCT:       0.006,    // 0.6% trailing activation
-  WALLET_RISK_PCT: 0.03,
   MIN_BALANCE:     5,
-  MIN_VOL_M:       100,
-  MIN_SCORE:       6,
-
-  RSI_MAX:         68,
-  RSI_MIN:         32,
   TAKER_FEE:       0.0004,
-  EMA_FAST:        9,
-  EMA_SLOW:        21,
 
   BLACKLIST: [
     'ALPACAUSDT','BNXUSDT','ALPHAUSDT','BANANAS31USDT',
     'LYNUSDT','PORT3USDT','RVVUSDT','BSWUSDT',
     'NEIROETHUSDT','COSUSDT','YALAUSDT','TANSSIUSDT','EPTUSDT',
     'LEVERUSDT','AGLDUSDT','LOOKSUSDT',
-    // TradFi perps — require separate agreement, not crypto
     'XAUUSDT','XAGUSDT','EURUSDT','GBPUSDT','JPYUSDT',
   ],
 };
+
+function getLeverage(symbol, price) {
+  if (CONFIG.BTC_ETH_SYMBOLS.has(symbol)) return CONFIG.LEVERAGE_BTC_ETH;
+  if (price < 100) return CONFIG.LEVERAGE_CHEAP;
+  return CONFIG.LEVERAGE_ALT;
+}
 
 // ── UTILS ─────────────────────────────────────────────────────
 function now() {
@@ -143,13 +136,13 @@ function shouldExit15m(klines15, entryPrice, direction) {
   return false;
 }
 
-// ── OPEN TRADE (1% TP targeting) ──────────────────────────────
+// ── OPEN TRADE (RR 1:1.5) ────────────────────────────────────
 async function openTrade(client, pick, wallet) {
   const sym = pick.symbol || pick.sym;
   const price = pick.lastPrice || pick.price;
   const direction = pick.direction;
   const isLong = direction !== 'SHORT';
-  const leverage = CONFIG.HIGH_LEV_COINS.includes(sym) ? CONFIG.LEVERAGE_HIGH : CONFIG.LEVERAGE_LOW;
+  const leverage = getLeverage(sym, price);
 
   await client.setLeverage({ symbol: sym, leverage });
   try {
@@ -158,14 +151,11 @@ async function openTrade(client, pick, wallet) {
 
   const info = await client.getExchangeInfo();
   const sinfo = info.symbols.find(s => s.symbol === sym);
-  const qtyPrec = sinfo.quantityPrecision;
+  const qtyPrec = sinfo.quantityPrecision ?? 0;
   const pricePrec = sinfo.pricePrecision;
 
   const floorQ = (q) => Math.floor(q * Math.pow(10, qtyPrec)) / Math.pow(10, qtyPrec);
   const fmtP = (p) => parseFloat(p.toFixed(pricePrec));
-
-  // AI-optimized parameters
-  const params = await aiLearner.getOptimalParams();
 
   // SL from engine (1m swing candle + 0.1% buffer)
   const sl = fmtP(pick.sl);
@@ -176,10 +166,10 @@ async function openTrade(client, pick, wallet) {
   const tp2 = fmtP(pick.tp2);
   const tp3 = fmtP(pick.tp3);
 
-  // Position size: risk % of wallet
+  // Position size: 10% of wallet
   const MIN_NOTIONAL = 5.5;
-  const riskUsdt = wallet * (params.WALLET_RISK_PCT || CONFIG.WALLET_RISK_PCT);
-  const rawQty = riskUsdt / (slDist * price);
+  const tradeUsdt = wallet * CONFIG.WALLET_SIZE_PCT;
+  const rawQty = tradeUsdt / price;
   let qty = floorQ(rawQty);
 
   if (qty * price < MIN_NOTIONAL) {
@@ -191,16 +181,23 @@ async function openTrade(client, pick, wallet) {
     return null;
   }
 
-  // Fee check
+  // Margin check: make sure wallet can cover the margin
   const notional = qty * price;
+  const requiredMargin = notional / leverage;
+  if (requiredMargin > wallet * 0.95) {
+    log(`Margin $${requiredMargin.toFixed(2)} exceeds wallet $${wallet.toFixed(2)} for ${sym}`);
+    return 'TOO_EXPENSIVE';
+  }
+
+  // Fee check
   const totalFees = notional * CONFIG.TAKER_FEE * 2;
   const tpDist = Math.abs(tp1 - price) / price;
-  const tp1Profit = notional * tpDist * 0.5;
-  bLog.trade(`Fee check: notional=$${notional.toFixed(2)} fees=$${totalFees.toFixed(4)} TP1=$${tp1Profit.toFixed(4)} SL%=${(slDist*100).toFixed(3)}% RR=1:1.5`);
-  log(`Fee check: notional=$${notional.toFixed(2)} fees=$${totalFees.toFixed(4)} TP1=$${tp1Profit.toFixed(4)} SL%=${(slDist*100).toFixed(3)}%`);
+  const tp1Profit = notional * tpDist;
+  bLog.trade(`Size: 10% wallet=$${tradeUsdt.toFixed(2)} notional=$${notional.toFixed(2)} lev=${leverage}x margin=$${requiredMargin.toFixed(2)} | SL%=${(slDist*100).toFixed(3)}% RR=1:1.5`);
+  log(`Trade: ${sym} ${direction} lev=${leverage}x qty=${qty} notional=$${notional.toFixed(2)} margin=$${requiredMargin.toFixed(2)}`);
   if (tp1Profit < totalFees * 1.5) {
-    bLog.trade(`Trade rejected: TP1 profit $${tp1Profit.toFixed(4)} < 1.5x fees $${(totalFees * 1.5).toFixed(4)}`);
-    throw new Error(`Trade rejected: TP1 profit < 1.5x fees`);
+    bLog.trade(`Trade rejected: TP profit $${tp1Profit.toFixed(4)} < 1.5x fees $${(totalFees * 1.5).toFixed(4)}`);
+    throw new Error(`Trade rejected: TP profit < 1.5x fees`);
   }
 
   const entrySide = isLong ? 'BUY' : 'SELL';
@@ -284,7 +281,7 @@ async function checkTrailingStop(client) {
             entryPrice: state.entry,
             exitPrice,
             pnlPct,
-            leverage: CONFIG.HIGH_LEV_COINS.includes(sym) ? CONFIG.LEVERAGE_HIGH : CONFIG.LEVERAGE_LOW,
+            leverage: getLeverage(sym, state.entry),
             durationMin,
             session: aiLearner.getCurrentSession(),
             slDistancePct: Math.abs(state.entry - state.sl) / state.entry * 100,
@@ -606,8 +603,7 @@ async function executeForAllUsers(pick) {
 
         const price = pick.lastPrice || pick.price || pick.entry;
         const isLong = pick.direction !== 'SHORT';
-        const userRiskPct = parseFloat(key.risk_pct) || CONFIG.WALLET_RISK_PCT;
-        const userLev = price < 100 ? 10 : (parseInt(key.leverage) || CONFIG.LEVERAGE_LOW);
+        const userLev = getLeverage(symbol, price);
 
         let account, wallet, openPosCount;
 
@@ -630,9 +626,8 @@ async function executeForAllUsers(pick) {
 
           bLog.trade(`User ${key.email} Binance: wallet=$${wallet.toFixed(2)} pos=${openPosCount}/${maxPos} lev=x${userLev}`);
 
-          // Use SMC engine SL if available, otherwise 1% default
-          const slPrice = pick.sl || (isLong ? price * (1 - CONFIG.TP_PCT) : price * (1 + CONFIG.TP_PCT));
-          const tp3Price = pick.tp3 || (isLong ? price * (1 + CONFIG.TP_PCT * CONFIG.TP3_MULT) : price * (1 - CONFIG.TP_PCT * CONFIG.TP3_MULT));
+          const slPrice = pick.sl;
+          const tp3Price = pick.tp1;
 
           try { await userClient.setLeverage({ symbol, leverage: userLev }); } catch (_) {}
           try { await userClient.setMarginType({ symbol, marginType: 'ISOLATED' }); } catch (e) { if (!e.message?.includes('No need')) throw e; }
@@ -644,9 +639,9 @@ async function executeForAllUsers(pick) {
           const pricePrec = sinfo.pricePrecision ?? 2;
           const fmtP = (p) => parseFloat(p.toFixed(pricePrec));
 
-          // Position sizing: use full available margin with leverage
-          const marginUsdt = wallet * userRiskPct;
-          const notional = marginUsdt * userLev;
+          // Position sizing: 10% of wallet
+          const tradeUsdt = wallet * CONFIG.WALLET_SIZE_PCT;
+          const notional = tradeUsdt;
           let qty = notional / price;
 
           // Ensure minimum notional ($5.5) and minimum lot size
@@ -734,9 +729,9 @@ async function executeForAllUsers(pick) {
 
           bLog.trade(`User ${key.email} Bitunix: wallet=$${wallet.toFixed(2)} pos=${openPosCount}/${maxPos} lev=x${userLev}`);
 
-          const marginUsdt = wallet * userRiskPct;
-          const notional = marginUsdt * userLev;
-          let qty = notional / price;
+          // Position sizing: 10% of wallet
+          const tradeUsdtBx = wallet * CONFIG.WALLET_SIZE_PCT;
+          let qty = tradeUsdtBx / price;
           if (qty * price < 5.5) qty = 5.5 / price;
           qty = parseFloat(qty.toFixed(6));
           if (qty <= 0) qty = parseFloat((5.5 / price).toFixed(6));
@@ -747,8 +742,8 @@ async function executeForAllUsers(pick) {
             return 'TOO_EXPENSIVE';
           }
 
-          const slPrice = pick.sl || (isLong ? price * (1 - CONFIG.TP_PCT) : price * (1 + CONFIG.TP_PCT));
-          const tp3Price = pick.tp3 || (isLong ? price * (1 + CONFIG.TP_PCT * CONFIG.TP3_MULT) : price * (1 - CONFIG.TP_PCT * CONFIG.TP3_MULT));
+          const slPrice = pick.sl;
+          const tp3Price = pick.tp1;
 
           try { await userClient.changeMarginMode(symbol, 'ISOLATION'); } catch (_) {}
           try { await userClient.changeLeverage(symbol, userLev); } catch (_) {}
