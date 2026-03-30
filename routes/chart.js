@@ -34,14 +34,19 @@ function detectSwings(klines, len) {
   const swings = [];
   let lastType = null;
 
-  for (let i = len; i < klines.length - len; i++) {
+  // NOTE: Use adaptive right-side lookback near the end so recent candles
+  // can still produce swing labels instead of leaving a gap.
+  const MIN_RIGHT = 2;
+
+  for (let i = len; i < klines.length - MIN_RIGHT; i++) {
+    const rightLen = Math.min(len, klines.length - 1 - i);
     let isHigh = true;
-    for (let j = -len; j <= len; j++) {
+    for (let j = -len; j <= rightLen; j++) {
       if (j === 0) continue;
       if (highs[i] <= highs[i + j]) { isHigh = false; break; }
     }
     let isLow = true;
-    for (let j = -len; j <= len; j++) {
+    for (let j = -len; j <= rightLen; j++) {
       if (j === 0) continue;
       if (lows[i] >= lows[i + j]) { isLow = false; break; }
     }
