@@ -1331,10 +1331,11 @@
     // Shared options for indicator lines: don't affect Y-axis auto-scaling
     // Without this, lines at extreme prices (Strong High at 88000 while candles at 67000)
     // squeeze the candles into a thin band
-    // Put indicator lines on a separate hidden price scale so they don't
-    // stretch the main Y-axis, but still overlay at correct prices
+    // Indicator lines on the main price scale but excluded from autoscale
+    // so they render at correct prices without stretching the Y-axis
     const OVERLAY_OPTS = {
-      priceScaleId: '',  // empty = overlay mode, shares the main price scale visually but doesn't affect autoscale
+      priceScaleId: 'right',
+      autoscaleInfoProvider: () => null,
     };
 
     // ── Markers (Swings + Labels) ──────────────────────────────
@@ -1939,7 +1940,13 @@
         const changeClass = coin.change24h >= 0 ? 'positive' : 'negative';
         const trendClass = coin.trend === 'bullish' ? 'bullish' : coin.trend === 'bearish' ? 'bearish' : 'neutral';
         const changeSign = coin.change24h >= 0 ? '+' : '';
-        const bitunixUrl = `https://www.bitunix.com/futures/USDT-M/${coin.symbol}`;
+        const exchange = coin.exchange || 'binance';
+        const exchangeUrl = exchange === 'bitunix'
+          ? `https://www.bitunix.com/futures/USDT-M/${coin.symbol}`
+          : `https://www.binance.com/en/futures/${coin.symbol}`;
+        const exchangeBadge = exchange === 'bitunix'
+          ? '<span style="font-size:9px;color:var(--color-bitunix, #f0b90b);margin-left:4px;">BTX</span>'
+          : '';
 
         return `
           <div class="coin-item ${isActive ? 'active' : ''}"
@@ -1949,7 +1956,7 @@
                tabindex="0">
             <div class="coin-info">
               <div class="coin-symbol">
-                ${coin.symbol.replace('USDT', '')}
+                ${coin.symbol.replace('USDT', '')}${exchangeBadge}
                 <span class="coin-structure ${trendClass}">${coin.structure}</span>
               </div>
             </div>
@@ -1959,11 +1966,11 @@
                 <div class="coin-change ${changeClass}">${changeSign}${coin.change24h.toFixed(2)}%</div>
               </div>
               <a class="coin-link"
-                 href="${bitunixUrl}"
+                 href="${exchangeUrl}"
                  target="_blank"
                  rel="noopener noreferrer"
-                 title="Open on Bitunix"
-                 aria-label="Open ${coin.symbol} on Bitunix"
+                 title="Open on ${exchange}"
+                 aria-label="Open ${coin.symbol} on ${exchange}"
                  onclick="event.stopPropagation()">&#x2197;</a>
             </div>
           </div>

@@ -456,18 +456,55 @@ router.get('/data', async (req, res) => {
 router.get('/scan', async (req, res) => {
   try {
     const nFetch = require('node-fetch');
-    const r = await nFetch('https://fapi.binance.com/fapi/v1/ticker/24hr', { timeout: 12000 });
-    const tickers = await r.json();
-    const topCoins = tickers
-      .filter(t => t.symbol.endsWith('USDT') && !t.symbol.includes('_'))
-      .sort((a, b) => parseFloat(b.quoteVolume) - parseFloat(a.quoteVolume))
-      .slice(0, 50);
 
+    // Fetch tickers from both Binance and Bitunix in parallel
+    const [binanceRes, bitunixRes] = await Promise.all([
+      nFetch('https://fapi.binance.com/fapi/v1/ticker/24hr', { timeout: 12000 })
+        .then(r => r.json()).catch(() => []),
+      nFetch('https://fapi.bitunix.com/api/v1/futures/market/tickers', { timeout: 12000 })
+        .then(r => r.json()).then(j => j.data || []).catch(() => []),
+    ]);
+
+    // Normalize Binance tickers
+    const binanceCoins = (Array.isArray(binanceRes) ? binanceRes : [])
+      .filter(t => t.symbol.endsWith('USDT') && !t.symbol.includes('_'))
+      .map(t => ({
+        symbol: t.symbol,
+        price: parseFloat(t.lastPrice),
+        change24h: parseFloat(t.priceChangePercent),
+        volume24h: parseFloat(t.quoteVolume),
+        exchange: 'binance',
+      }));
+
+    // Normalize Bitunix tickers — only add tokens not already on Binance
+    const binanceSymbols = new Set(binanceCoins.map(c => c.symbol));
+    const bitunixCoins = bitunixRes
+      .filter(t => t.symbol.endsWith('USDT') && !binanceSymbols.has(t.symbol))
+      .map(t => ({
+        symbol: t.symbol,
+        price: parseFloat(t.lastPrice || t.last),
+        change24h: parseFloat(t.open) > 0
+          ? ((parseFloat(t.last) - parseFloat(t.open)) / parseFloat(t.open) * 100)
+          : 0,
+        volume24h: parseFloat(t.quoteVol || 0),
+        exchange: 'bitunix',
+      }));
+
+    // Merge, sort by volume, take top 50
+    const allCoins = [...binanceCoins, ...bitunixCoins]
+      .sort((a, b) => b.volume24h - a.volume24h)
+      .slice(0, 100);
+
+    // Get structure labels for top coins (only Binance klines available)
     const results = [];
-    for (const t of topCoins.slice(0, 20)) {
+    for (const coin of allCoins) {
       try {
-        const klines = await fetchKlines(t.symbol, '15m', 50);
-        if (!klines || klines.length < 25) continue;
+        const klines = await fetchKlines(coin.symbol, '15m', 50);
+        if (!klines || klines.length < 25) {
+          // No kline data (Bitunix-only token) — still show in list
+          results.push({ ...coin, structure: '--/--', trend: 'neutral' });
+          continue;
+        }
         const swings = detectSwings(klines, SWING_LENGTHS['15m']);
         const structLabels = getStructureLabels(swings);
 
@@ -475,15 +512,14 @@ router.get('/scan', async (req, res) => {
         const lastLow = structLabels.filter(l => l.type === 'low').pop();
 
         results.push({
-          symbol: t.symbol,
-          price: parseFloat(t.lastPrice),
-          change24h: parseFloat(t.priceChangePercent),
-          volume24h: parseFloat(t.quoteVolume),
+          ...coin,
           structure: `${lastHigh?.label || '--'}/${lastLow?.label || '--'}`,
           trend: lastHigh?.label === 'HH' && lastLow?.label === 'HL' ? 'bullish'
             : lastHigh?.label === 'LH' && lastLow?.label === 'LL' ? 'bearish' : 'neutral',
         });
-      } catch (_) {}
+      } catch (_) {
+        results.push({ ...coin, structure: '--/--', trend: 'neutral' });
+      }
     }
 
     res.json(results);
