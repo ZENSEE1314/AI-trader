@@ -42,46 +42,62 @@ async function fetchTickers() {
 }
 
 // ── Swing Detection ──────────────────────────────────────────
-// A swing high: candle whose high is higher than both neighbors
-// A swing low:  candle whose low is lower than both neighbors
-// Returns the 2 most recent swings of each type
+// A proper swing high: candle high is the HIGHEST among 3 candles on each side (7-bar pivot)
+// A proper swing low:  candle low is the LOWEST among 3 candles on each side (7-bar pivot)
+// This filters out noise — only real turning points count
+
+const SWING_LOOKBACK = 3; // candles on each side to confirm swing
+const MIN_SWING_DIFF_PCT = 0.001; // 0.1% minimum difference between two swings
 
 function findSwingHighs(klines) {
   const swings = [];
-  for (let i = 1; i < klines.length - 1; i++) {
+  for (let i = SWING_LOOKBACK; i < klines.length - SWING_LOOKBACK; i++) {
     const high = parseFloat(klines[i][2]);
-    const prevHigh = parseFloat(klines[i - 1][2]);
-    const nextHigh = parseFloat(klines[i + 1][2]);
-    if (high > prevHigh && high > nextHigh) {
+    let isSwing = true;
+    for (let j = 1; j <= SWING_LOOKBACK; j++) {
+      if (high <= parseFloat(klines[i - j][2]) || high <= parseFloat(klines[i + j][2])) {
+        isSwing = false;
+        break;
+      }
+    }
+    if (isSwing) {
       swings.push({ index: i, price: high, candle: klines[i] });
     }
   }
-  return swings.slice(-2);
+  return swings.slice(-3); // keep last 3 for better pattern detection
 }
 
 function findSwingLows(klines) {
   const swings = [];
-  for (let i = 1; i < klines.length - 1; i++) {
+  for (let i = SWING_LOOKBACK; i < klines.length - SWING_LOOKBACK; i++) {
     const low = parseFloat(klines[i][3]);
-    const prevLow = parseFloat(klines[i - 1][3]);
-    const nextLow = parseFloat(klines[i + 1][3]);
-    if (low < prevLow && low < nextLow) {
+    let isSwing = true;
+    for (let j = 1; j <= SWING_LOOKBACK; j++) {
+      if (low >= parseFloat(klines[i - j][3]) || low >= parseFloat(klines[i + j][3])) {
+        isSwing = false;
+        break;
+      }
+    }
+    if (isSwing) {
       swings.push({ index: i, price: low, candle: klines[i] });
     }
   }
-  return swings.slice(-2);
+  return swings.slice(-3);
 }
 
 // ── LH / HL Detection ───────────────────────────────────────
-// LH (Lower High): most recent swing high < previous swing high
-// HL (Higher Low): most recent swing low > previous swing low
+// LH (Lower High): most recent swing high < previous swing high — downtrend
+// HL (Higher Low): most recent swing low > previous swing low — uptrend
+// Must have meaningful price difference (not just noise)
 
 function hasLowerHigh(klines) {
   const swingHighs = findSwingHighs(klines);
   if (swingHighs.length < 2) return null;
-  const prev = swingHighs[0];
-  const recent = swingHighs[1];
-  if (recent.price < prev.price) {
+  const prev = swingHighs[swingHighs.length - 2];
+  const recent = swingHighs[swingHighs.length - 1];
+  const diff = (prev.price - recent.price) / prev.price;
+  // Recent high must be meaningfully lower than previous high
+  if (recent.price < prev.price && diff >= MIN_SWING_DIFF_PCT) {
     return { isLH: true, recentSwing: recent, prevSwing: prev };
   }
   return null;
@@ -90,9 +106,11 @@ function hasLowerHigh(klines) {
 function hasHigherLow(klines) {
   const swingLows = findSwingLows(klines);
   if (swingLows.length < 2) return null;
-  const prev = swingLows[0];
-  const recent = swingLows[1];
-  if (recent.price > prev.price) {
+  const prev = swingLows[swingLows.length - 2];
+  const recent = swingLows[swingLows.length - 1];
+  const diff = (recent.price - prev.price) / prev.price;
+  // Recent low must be meaningfully higher than previous low
+  if (recent.price > prev.price && diff >= MIN_SWING_DIFF_PCT) {
     return { isHL: true, recentSwing: recent, prevSwing: prev };
   }
   return null;
@@ -165,6 +183,11 @@ async function analyzeLHHL(ticker, params) {
   const hl3 = hasHigherLow(klines3m);
   const hl1 = hasHigherLow(klines1m);
 
+  // Log what each TF sees for debugging
+  const tf15 = lh15 ? 'LH' : (hl15 ? 'HL' : '--');
+  const tf3 = lh3 ? 'LH' : (hl3 ? 'HL' : '--');
+  const tf1 = lh1 ? 'LH' : (hl1 ? 'HL' : '--');
+
   let isShortSetup = lh15 && lh3 && lh1;
   let isLongSetup = hl15 && hl3 && hl1;
 
@@ -172,7 +195,15 @@ async function analyzeLHHL(ticker, params) {
   if (dirBias === 'LONG') isShortSetup = false;
   if (dirBias === 'SHORT') isLongSetup = false;
 
-  if (!isShortSetup && !isLongSetup) return null;
+  if (!isShortSetup && !isLongSetup) {
+    // Only log when at least one TF has a signal (not all blank)
+    if (lh15 || lh3 || lh1 || hl15 || hl3 || hl1) {
+      bLog.scan(`${symbol}: 15m=${tf15} 3m=${tf3} 1m=${tf1} — NO confluence, skipping`);
+    }
+    return null;
+  }
+
+  bLog.scan(`${symbol}: 15m=${tf15} 3m=${tf3} 1m=${tf1} — ✅ ALL AGREE`);
 
   // If both signals exist (rare), pick the one where 1m swing is more recent
   let direction, sl, swingCandle1m;
