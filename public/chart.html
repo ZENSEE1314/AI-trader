@@ -1072,7 +1072,7 @@
         },
         rightPriceScale: {
           borderColor: '#30363d',
-          scaleMargins: { top: 0.08, bottom: 0.22 },
+          scaleMargins: { top: 0.05, bottom: 0.15 },
         },
         timeScale: {
           borderColor: '#30363d',
@@ -1273,7 +1273,11 @@
     // Shared options for indicator lines: don't affect Y-axis auto-scaling
     // Without this, lines at extreme prices (Strong High at 88000 while candles at 67000)
     // squeeze the candles into a thin band
-    const OVERLAY_OPTS = { autoscaleInfoProvider: () => null };
+    // Put indicator lines on a separate hidden price scale so they don't
+    // stretch the main Y-axis, but still overlay at correct prices
+    const OVERLAY_OPTS = {
+      priceScaleId: '',  // empty = overlay mode, shares the main price scale visually but doesn't affect autoscale
+    };
 
     // ── Markers (Swings + Labels) ──────────────────────────────
 

@@ -155,8 +155,9 @@
     else if (tab === 'subscription') loadSubscription();
     else if (tab === 'wallet') loadWallet();
     else if (tab === 'chart') {
-      const iframe = $('#chart-iframe');
-      if (iframe && !iframe.src.includes('chart.html')) iframe.src = '/chart.html';
+      window.open('/chart.html', '_blank');
+      // Switch back to dashboard since chart opens in new tab
+      return switchTab('dashboard');
     }
     else if (tab === 'logs') startLogPolling();
     else if (tab === 'admin') loadAdmin();
