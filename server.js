@@ -15,6 +15,7 @@ app.use('/api/dashboard', require('./routes/dashboard'));
 app.use('/api/admin', require('./routes/admin'));
 app.use('/api/subscription', require('./routes/subscription'));
 app.use('/api/wallet', require('./routes/wallet'));
+app.use('/api/chart', require('./routes/chart'));
 
 // Stripe webhook needs raw body — mount before json parser catches it
 // (already handled inside subscription.js with express.raw)

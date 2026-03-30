@@ -1,0 +1,1470 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MCT — SMC Chart</title>
+  <link rel="icon" href="/img/logo.jpeg" type="image/jpeg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;500;700&family=IBM+Plex+Sans:wght@200;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/css/tokens.css">
+  <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
+
+  <style>
+    /* --- Reset --- */
+    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+    html { font-size: 16px; -webkit-text-size-adjust: 100%; }
+
+    body {
+      font-family: var(--font-body);
+      font-weight: var(--weight-normal);
+      line-height: var(--leading-normal);
+      color: var(--color-fg);
+      background: var(--color-bg);
+      min-height: 100vh;
+      overflow: hidden;
+    }
+
+    /* Dot grid background */
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      z-index: -1;
+      background-image: radial-gradient(circle, var(--color-border-muted) 1px, transparent 1px);
+      background-size: 32px 32px;
+      opacity: 0.3;
+      pointer-events: none;
+    }
+
+    /* --- Layout Shell --- */
+    .app-layout {
+      display: grid;
+      grid-template-columns: 280px 1fr;
+      grid-template-rows: auto 1fr auto;
+      height: 100vh;
+      gap: 0;
+    }
+
+    /* --- Sidebar --- */
+    .sidebar {
+      grid-row: 1 / -1;
+      background: var(--color-bg-raised);
+      border-right: 1px solid var(--color-border);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .sidebar-header {
+      padding: var(--space-4) var(--space-4) var(--space-3);
+      border-bottom: 1px solid var(--color-border);
+      flex-shrink: 0;
+    }
+
+    .sidebar-brand {
+      display: flex;
+      align-items: center;
+      gap: var(--space-3);
+      margin-bottom: var(--space-4);
+      text-decoration: none;
+    }
+
+    .sidebar-brand img {
+      width: 32px;
+      height: 32px;
+      border-radius: var(--radius-md);
+    }
+
+    .sidebar-brand span {
+      font-family: var(--font-display);
+      font-weight: var(--weight-bold);
+      font-size: var(--text-lg);
+      color: var(--color-fg);
+      letter-spacing: -0.02em;
+    }
+
+    .sidebar-brand .brand-tag {
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+      color: var(--color-accent);
+      background: var(--color-accent-muted);
+      padding: 2px var(--space-2);
+      border-radius: var(--radius-full);
+      font-weight: var(--weight-normal);
+    }
+
+    .search-box {
+      position: relative;
+    }
+
+    .search-box input {
+      width: 100%;
+      background: var(--color-surface);
+      border: 1px solid var(--color-border);
+      border-radius: var(--radius-md);
+      padding: var(--space-2) var(--space-3);
+      padding-left: var(--space-8);
+      color: var(--color-fg);
+      font-family: var(--font-body);
+      font-size: var(--text-sm);
+      transition: border-color var(--duration-fast) var(--ease-out);
+      outline: none;
+    }
+
+    .search-box input::placeholder { color: var(--color-fg-subtle); }
+    .search-box input:focus { border-color: var(--color-accent); }
+
+    .search-box .search-icon {
+      position: absolute;
+      left: var(--space-3);
+      top: 50%;
+      transform: translateY(-50%);
+      color: var(--color-fg-subtle);
+      font-size: var(--text-sm);
+      pointer-events: none;
+    }
+
+    /* Coin list */
+    .coin-list {
+      flex: 1;
+      overflow-y: auto;
+      scrollbar-width: thin;
+      scrollbar-color: var(--color-border) transparent;
+    }
+
+    .coin-list::-webkit-scrollbar { width: 6px; }
+    .coin-list::-webkit-scrollbar-track { background: transparent; }
+    .coin-list::-webkit-scrollbar-thumb {
+      background: var(--color-border);
+      border-radius: var(--radius-full);
+    }
+
+    .coin-item {
+      display: grid;
+      grid-template-columns: 1fr auto auto;
+      align-items: center;
+      gap: var(--space-2);
+      padding: var(--space-3) var(--space-4);
+      cursor: pointer;
+      transition: background var(--duration-fast) var(--ease-out);
+      border-bottom: 1px solid var(--color-border-muted);
+      position: relative;
+    }
+
+    .coin-item:hover { background: var(--color-surface); }
+    .coin-item.active { background: var(--color-surface-alt); }
+    .coin-item.active::before {
+      content: '';
+      position: absolute;
+      left: 0;
+      top: 0;
+      bottom: 0;
+      width: 3px;
+      background: var(--color-accent);
+      border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+    }
+
+    .coin-info {
+      min-width: 0;
+    }
+
+    .coin-symbol {
+      font-family: var(--font-display);
+      font-weight: var(--weight-bold);
+      font-size: var(--text-sm);
+      color: var(--color-fg);
+      display: flex;
+      align-items: center;
+      gap: var(--space-2);
+    }
+
+    .coin-structure {
+      font-family: var(--font-mono);
+      font-size: 10px;
+      padding: 1px var(--space-1);
+      border-radius: var(--radius-sm);
+      font-weight: var(--weight-medium);
+    }
+
+    .coin-structure.bullish {
+      color: var(--color-success);
+      background: var(--color-success-muted);
+    }
+
+    .coin-structure.bearish {
+      color: var(--color-danger);
+      background: var(--color-danger-muted);
+    }
+
+    .coin-structure.neutral {
+      color: var(--color-fg-muted);
+      background: var(--color-border-muted);
+    }
+
+    .coin-price {
+      font-family: var(--font-mono);
+      font-size: var(--text-sm);
+      color: var(--color-fg);
+      text-align: right;
+    }
+
+    .coin-change {
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+      text-align: right;
+    }
+
+    .coin-change.positive { color: var(--color-success); }
+    .coin-change.negative { color: var(--color-danger); }
+
+    .coin-actions {
+      display: flex;
+      align-items: center;
+      gap: var(--space-1);
+    }
+
+    .coin-link {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 24px;
+      height: 24px;
+      border-radius: var(--radius-sm);
+      color: var(--color-fg-subtle);
+      text-decoration: none;
+      font-size: 11px;
+      transition: all var(--duration-fast) var(--ease-out);
+      flex-shrink: 0;
+    }
+
+    .coin-link:hover {
+      color: var(--color-bitunix);
+      background: rgba(99, 102, 241, 0.15);
+    }
+
+    .coin-loading {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: var(--space-12);
+      color: var(--color-fg-muted);
+      font-size: var(--text-sm);
+    }
+
+    /* --- Toolbar --- */
+    .toolbar {
+      background: var(--color-bg-raised);
+      border-bottom: 1px solid var(--color-border);
+      padding: var(--space-2) var(--space-4);
+      display: flex;
+      align-items: center;
+      gap: var(--space-4);
+      flex-wrap: wrap;
+      min-height: 48px;
+    }
+
+    .toolbar-group {
+      display: flex;
+      align-items: center;
+      gap: var(--space-1);
+    }
+
+    .toolbar-label {
+      font-family: var(--font-display);
+      font-size: var(--text-xs);
+      color: var(--color-fg-subtle);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-right: var(--space-1);
+      font-weight: var(--weight-medium);
+    }
+
+    .toolbar-divider {
+      width: 1px;
+      height: 24px;
+      background: var(--color-border);
+      margin: 0 var(--space-2);
+    }
+
+    .tf-btn {
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+      font-weight: var(--weight-medium);
+      background: transparent;
+      border: 1px solid transparent;
+      color: var(--color-fg-muted);
+      padding: var(--space-1) var(--space-2);
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      transition: all var(--duration-fast) var(--ease-out);
+      min-width: 36px;
+      text-align: center;
+    }
+
+    .tf-btn:hover {
+      color: var(--color-fg);
+      background: var(--color-surface);
+    }
+
+    .tf-btn:focus-visible {
+      outline: 2px solid var(--color-accent);
+      outline-offset: 1px;
+    }
+
+    .tf-btn.active {
+      color: var(--color-accent);
+      background: var(--color-accent-muted);
+      border-color: var(--color-accent);
+    }
+
+    /* Indicator toggles */
+    .ind-toggle {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      cursor: pointer;
+      font-size: 11px;
+      font-family: var(--font-mono);
+      color: var(--color-fg-muted);
+      padding: 2px var(--space-2);
+      border-radius: var(--radius-sm);
+      transition: all var(--duration-fast) var(--ease-out);
+      user-select: none;
+    }
+
+    .ind-toggle:hover { color: var(--color-fg); }
+
+    .ind-toggle input[type="checkbox"] {
+      appearance: none;
+      -webkit-appearance: none;
+      width: 12px;
+      height: 12px;
+      border: 1px solid var(--color-border);
+      border-radius: 2px;
+      background: var(--color-surface);
+      cursor: pointer;
+      position: relative;
+      flex-shrink: 0;
+    }
+
+    .ind-toggle input[type="checkbox"]:checked {
+      background: var(--color-accent);
+      border-color: var(--color-accent);
+    }
+
+    .ind-toggle input[type="checkbox"]:checked::after {
+      content: '';
+      position: absolute;
+      left: 3px;
+      top: 1px;
+      width: 4px;
+      height: 7px;
+      border: solid var(--color-accent-fg);
+      border-width: 0 1.5px 1.5px 0;
+      transform: rotate(45deg);
+    }
+
+    .ind-toggle input[type="checkbox"]:focus-visible {
+      outline: 2px solid var(--color-accent);
+      outline-offset: 1px;
+    }
+
+    /* Symbol title in toolbar */
+    .toolbar-symbol {
+      font-family: var(--font-display);
+      font-weight: var(--weight-bold);
+      font-size: var(--text-lg);
+      color: var(--color-fg);
+      letter-spacing: -0.02em;
+      margin-right: var(--space-2);
+    }
+
+    .toolbar-price {
+      font-family: var(--font-mono);
+      font-size: var(--text-base);
+      color: var(--color-fg);
+      margin-right: var(--space-1);
+    }
+
+    .toolbar-change {
+      font-family: var(--font-mono);
+      font-size: var(--text-sm);
+    }
+
+    .toolbar-change.positive { color: var(--color-success); }
+    .toolbar-change.negative { color: var(--color-danger); }
+
+    /* --- Chart Container --- */
+    .chart-area {
+      position: relative;
+      background: var(--color-bg);
+      overflow: hidden;
+    }
+
+    #chart-container {
+      width: 100%;
+      height: 100%;
+    }
+
+    .chart-loading-overlay {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(13, 17, 23, 0.85);
+      z-index: var(--z-overlay);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity var(--duration-normal) var(--ease-out);
+    }
+
+    .chart-loading-overlay.visible {
+      opacity: 1;
+      pointer-events: auto;
+    }
+
+    .loading-spinner {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: var(--space-4);
+      color: var(--color-fg-muted);
+      font-size: var(--text-sm);
+    }
+
+    .spinner-ring {
+      width: 32px;
+      height: 32px;
+      border: 2px solid var(--color-border);
+      border-top-color: var(--color-accent);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* --- Bottom Panel --- */
+    .bottom-panel {
+      background: var(--color-bg-raised);
+      border-top: 1px solid var(--color-border);
+      overflow: hidden;
+      transition: max-height var(--duration-normal) var(--ease-out);
+      max-height: 120px;
+    }
+
+    .bottom-panel.collapsed { max-height: 0; }
+
+    .bottom-panel-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: var(--space-2) var(--space-4);
+      border-bottom: 1px solid var(--color-border-muted);
+    }
+
+    .bottom-panel-title {
+      font-family: var(--font-display);
+      font-size: var(--text-xs);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--color-fg-subtle);
+      font-weight: var(--weight-medium);
+    }
+
+    .bottom-panel-toggle {
+      background: none;
+      border: none;
+      color: var(--color-fg-muted);
+      font-size: var(--text-sm);
+      cursor: pointer;
+      padding: var(--space-1);
+      border-radius: var(--radius-sm);
+      transition: color var(--duration-fast) var(--ease-out);
+    }
+
+    .bottom-panel-toggle:hover { color: var(--color-fg); }
+
+    .bottom-panel-content {
+      padding: var(--space-3) var(--space-4);
+      display: flex;
+      gap: var(--space-8);
+      flex-wrap: wrap;
+    }
+
+    .structure-item {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .structure-item-label {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--color-fg-subtle);
+      font-family: var(--font-mono);
+    }
+
+    .structure-item-value {
+      font-family: var(--font-mono);
+      font-size: var(--text-sm);
+      font-weight: var(--weight-medium);
+    }
+
+    /* --- Responsive --- */
+    @media (max-width: 768px) {
+      .app-layout {
+        grid-template-columns: 1fr;
+      }
+      .sidebar {
+        display: none;
+      }
+    }
+
+    /* Reduced motion */
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        transition-duration: 0.01ms !important;
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <div class="app-layout">
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <a href="/" class="sidebar-brand">
+          <img src="/img/logo.jpeg" alt="MCT Logo">
+          <span>MCT</span>
+          <span class="brand-tag">SMC</span>
+        </a>
+        <div class="search-box">
+          <span class="search-icon" aria-hidden="true">&#x1F50D;</span>
+          <input
+            type="search"
+            id="coin-search"
+            placeholder="Search coins..."
+            aria-label="Search coins"
+            autocomplete="off"
+          >
+        </div>
+      </div>
+      <div class="coin-list" id="coin-list" role="listbox" aria-label="Coin list">
+        <div class="coin-loading" id="coin-loading">Loading coins...</div>
+      </div>
+    </aside>
+
+    <!-- Toolbar -->
+    <header class="toolbar" role="toolbar" aria-label="Chart controls">
+      <span class="toolbar-symbol" id="toolbar-symbol">BTCUSDT</span>
+      <span class="toolbar-price" id="toolbar-price">--</span>
+      <span class="toolbar-change" id="toolbar-change">--</span>
+
+      <div class="toolbar-divider"></div>
+
+      <div class="toolbar-group" role="group" aria-label="Timeframe">
+        <span class="toolbar-label">TF</span>
+        <button class="tf-btn" data-tf="1m">1m</button>
+        <button class="tf-btn" data-tf="3m">3m</button>
+        <button class="tf-btn" data-tf="5m">5m</button>
+        <button class="tf-btn active" data-tf="15m">15m</button>
+        <button class="tf-btn" data-tf="1h">1h</button>
+        <button class="tf-btn" data-tf="4h">4h</button>
+        <button class="tf-btn" data-tf="1d">1D</button>
+        <button class="tf-btn" data-tf="1w">1W</button>
+      </div>
+
+      <div class="toolbar-divider"></div>
+
+      <div class="toolbar-group" role="group" aria-label="Indicators">
+        <span class="toolbar-label">Indicators</span>
+        <label class="ind-toggle"><input type="checkbox" id="tog-swings" checked> Swings</label>
+        <label class="ind-toggle"><input type="checkbox" id="tog-labels" checked> Labels</label>
+        <label class="ind-toggle"><input type="checkbox" id="tog-ob" checked> OB</label>
+        <label class="ind-toggle"><input type="checkbox" id="tog-fvg" checked> FVG</label>
+        <label class="ind-toggle"><input type="checkbox" id="tog-levels" checked> Key Levels</label>
+        <label class="ind-toggle"><input type="checkbox" id="tog-ema7" checked> EMA7</label>
+        <label class="ind-toggle"><input type="checkbox" id="tog-ema22" checked> EMA22</label>
+        <label class="ind-toggle"><input type="checkbox" id="tog-ema200"> EMA200</label>
+        <label class="ind-toggle"><input type="checkbox" id="tog-vwap"> VWAP</label>
+        <label class="ind-toggle"><input type="checkbox" id="tog-eqheql"> EQH/EQL</label>
+      </div>
+    </header>
+
+    <!-- Chart -->
+    <main class="chart-area">
+      <div id="chart-container"></div>
+      <div class="chart-loading-overlay" id="chart-loading">
+        <div class="loading-spinner">
+          <div class="spinner-ring"></div>
+          <span>Loading chart data...</span>
+        </div>
+      </div>
+    </main>
+
+    <!-- Bottom Panel -->
+    <div class="bottom-panel" id="bottom-panel">
+      <div class="bottom-panel-header">
+        <span class="bottom-panel-title">SMC Structure Summary</span>
+        <button
+          class="bottom-panel-toggle"
+          id="bottom-panel-toggle"
+          aria-label="Toggle structure panel"
+          aria-expanded="true"
+        >&#x25BC;</button>
+      </div>
+      <div class="bottom-panel-content" id="structure-summary">
+        <div class="structure-item">
+          <span class="structure-item-label">Trend</span>
+          <span class="structure-item-value" id="sum-trend">--</span>
+        </div>
+        <div class="structure-item">
+          <span class="structure-item-label">Structure</span>
+          <span class="structure-item-value" id="sum-structure">--</span>
+        </div>
+        <div class="structure-item">
+          <span class="structure-item-label">Last Swing High</span>
+          <span class="structure-item-value" id="sum-sh">--</span>
+        </div>
+        <div class="structure-item">
+          <span class="structure-item-label">Last Swing Low</span>
+          <span class="structure-item-value" id="sum-sl">--</span>
+        </div>
+        <div class="structure-item">
+          <span class="structure-item-label">Order Blocks</span>
+          <span class="structure-item-value" id="sum-ob">--</span>
+        </div>
+        <div class="structure-item">
+          <span class="structure-item-label">FVGs</span>
+          <span class="structure-item-value" id="sum-fvg">--</span>
+        </div>
+        <div class="structure-item">
+          <span class="structure-item-label">PDH / PDL</span>
+          <span class="structure-item-value" id="sum-pdhl">--</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // ============================================================
+    // MCT SMC Chart — Application Logic
+    // ============================================================
+
+    const STATE = {
+      symbol: 'BTCUSDT',
+      interval: '15m',
+      coins: [],
+      chartData: null,
+      refreshTimer: null,
+    };
+
+    const REFRESH_INTERVAL = 30000;
+    const API_BASE = '/api/chart';
+
+    // --- DOM References ---
+    const DOM = {
+      chartContainer: document.getElementById('chart-container'),
+      chartLoading: document.getElementById('chart-loading'),
+      coinList: document.getElementById('coin-list'),
+      coinLoading: document.getElementById('coin-loading'),
+      coinSearch: document.getElementById('coin-search'),
+      toolbarSymbol: document.getElementById('toolbar-symbol'),
+      toolbarPrice: document.getElementById('toolbar-price'),
+      toolbarChange: document.getElementById('toolbar-change'),
+      bottomPanel: document.getElementById('bottom-panel'),
+      bottomPanelToggle: document.getElementById('bottom-panel-toggle'),
+      sumTrend: document.getElementById('sum-trend'),
+      sumStructure: document.getElementById('sum-structure'),
+      sumSh: document.getElementById('sum-sh'),
+      sumSl: document.getElementById('sum-sl'),
+      sumOb: document.getElementById('sum-ob'),
+      sumFvg: document.getElementById('sum-fvg'),
+      sumPdhl: document.getElementById('sum-pdhl'),
+    };
+
+    // --- Chart Instance ---
+    let chart = null;
+    let candleSeries = null;
+    let volumeSeries = null;
+
+    // Indicator series references for show/hide
+    const indicatorSeries = {
+      ema7: null,
+      ema22: null,
+      ema200: null,
+      vwap: null,
+      obSeries: [],
+      fvgSeries: [],
+      keyLevelLines: [],
+      eqhEqlLines: [],
+    };
+
+    // Markers are stored and re-applied based on toggle state
+    let allMarkers = [];
+
+    // ============================================================
+    // Chart Setup
+    // ============================================================
+
+    function createChart() {
+      if (chart) {
+        chart.remove();
+        chart = null;
+      }
+
+      const container = DOM.chartContainer;
+      chart = LightweightCharts.createChart(container, {
+        width: container.clientWidth,
+        height: container.clientHeight,
+        layout: {
+          background: { type: 'solid', color: '#0d1117' },
+          textColor: '#8b949e',
+          fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
+          fontSize: 11,
+        },
+        grid: {
+          vertLines: { color: 'rgba(48, 54, 61, 0.4)' },
+          horzLines: { color: 'rgba(48, 54, 61, 0.4)' },
+        },
+        crosshair: {
+          mode: LightweightCharts.CrosshairMode.Normal,
+          vertLine: { color: 'rgba(0, 212, 170, 0.3)', width: 1, style: 2, labelBackgroundColor: '#131920' },
+          horzLine: { color: 'rgba(0, 212, 170, 0.3)', width: 1, style: 2, labelBackgroundColor: '#131920' },
+        },
+        rightPriceScale: {
+          borderColor: '#30363d',
+          scaleMargins: { top: 0.08, bottom: 0.22 },
+        },
+        timeScale: {
+          borderColor: '#30363d',
+          timeVisible: true,
+          secondsVisible: false,
+          rightOffset: 5,
+          barSpacing: 8,
+        },
+        handleScale: { axisPressedMouseMove: { time: true, price: true } },
+        handleScroll: { mouseWheel: true, pressedMouseMove: true },
+      });
+
+      // Candlestick series
+      candleSeries = chart.addCandlestickSeries({
+        upColor: '#00d4aa',
+        downColor: '#ff4757',
+        borderUpColor: '#00d4aa',
+        borderDownColor: '#ff4757',
+        wickUpColor: '#00d4aa',
+        wickDownColor: '#ff4757',
+      });
+
+      // Volume histogram
+      volumeSeries = chart.addHistogramSeries({
+        priceFormat: { type: 'volume' },
+        priceScaleId: 'volume',
+        color: '#30363d',
+      });
+
+      chart.priceScale('volume').applyOptions({
+        scaleMargins: { top: 0.82, bottom: 0 },
+      });
+
+      // Resize observer
+      const resizeObserver = new ResizeObserver(entries => {
+        for (const entry of entries) {
+          const { width, height } = entry.contentRect;
+          chart.applyOptions({ width, height });
+        }
+      });
+      resizeObserver.observe(container);
+    }
+
+    // ============================================================
+    // Data Fetching
+    // ============================================================
+
+    async function fetchChartData() {
+      const url = `${API_BASE}/data?symbol=${STATE.symbol}&interval=${STATE.interval}&limit=300`;
+      const response = await fetch(url);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      return response.json();
+    }
+
+    async function fetchScanData() {
+      const response = await fetch(`${API_BASE}/scan`);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      return response.json();
+    }
+
+    // ============================================================
+    // Render Chart Data
+    // ============================================================
+
+    function clearIndicators() {
+      [indicatorSeries.ema7, indicatorSeries.ema22, indicatorSeries.ema200, indicatorSeries.vwap]
+        .forEach(s => { if (s) chart.removeSeries(s); });
+
+      indicatorSeries.obSeries.forEach(s => chart.removeSeries(s));
+      indicatorSeries.fvgSeries.forEach(s => chart.removeSeries(s));
+
+      indicatorSeries.keyLevelLines.forEach(line => {
+        if (line.series) chart.removeSeries(line.series);
+      });
+
+      indicatorSeries.eqhEqlLines.forEach(line => {
+        if (line.series) chart.removeSeries(line.series);
+      });
+
+      indicatorSeries.ema7 = null;
+      indicatorSeries.ema22 = null;
+      indicatorSeries.ema200 = null;
+      indicatorSeries.vwap = null;
+      indicatorSeries.obSeries = [];
+      indicatorSeries.fvgSeries = [];
+      indicatorSeries.keyLevelLines = [];
+      indicatorSeries.eqhEqlLines = [];
+      allMarkers = [];
+    }
+
+    function renderChart(data) {
+      STATE.chartData = data;
+      clearIndicators();
+
+      // Candles
+      candleSeries.setData(data.candles);
+
+      // Volume — color based on candle direction
+      const volData = data.candles.map(c => ({
+        time: c.time,
+        value: c.volume,
+        color: c.close >= c.open ? 'rgba(0, 212, 170, 0.2)' : 'rgba(255, 71, 87, 0.2)',
+      }));
+      volumeSeries.setData(volData);
+
+      // Build markers for swings and labels
+      buildMarkers(data);
+
+      // EMA lines
+      renderEMALines(data);
+
+      // VWAP
+      renderVWAP(data);
+
+      // Order Blocks
+      renderOrderBlocks(data);
+
+      // Fair Value Gaps
+      renderFVGs(data);
+
+      // Key Levels
+      renderKeyLevels(data);
+
+      // Equal Highs/Lows
+      renderEQHEQL(data);
+
+      // Apply visibility from toggles
+      applyToggleVisibility();
+
+      // Update summary panel
+      updateSummary(data);
+
+      // Fit content
+      chart.timeScale().fitContent();
+    }
+
+    // ── Markers (Swings + Labels) ──────────────────────────────
+
+    function buildMarkers(data) {
+      const markers = [];
+
+      // Swing markers
+      if (data.swings) {
+        for (const s of data.swings) {
+          markers.push({
+            time: s.time,
+            position: s.type === 'high' ? 'aboveBar' : 'belowBar',
+            color: s.type === 'high' ? '#ff4757' : '#00d4aa',
+            shape: s.type === 'high' ? 'arrowDown' : 'arrowUp',
+            text: '',
+            _group: 'swings',
+          });
+        }
+      }
+
+      // Structure labels
+      if (data.labels) {
+        for (const l of data.labels) {
+          const isBullish = l.label === 'HH' || l.label === 'HL';
+          markers.push({
+            time: l.time,
+            position: l.type === 'high' ? 'aboveBar' : 'belowBar',
+            color: isBullish ? '#00d4aa' : '#ff4757',
+            shape: l.type === 'high' ? 'arrowDown' : 'arrowUp',
+            text: l.label,
+            _group: 'labels',
+          });
+        }
+      }
+
+      allMarkers = markers;
+    }
+
+    function applyMarkers() {
+      const isSwingsOn = document.getElementById('tog-swings').checked;
+      const isLabelsOn = document.getElementById('tog-labels').checked;
+
+      const filtered = allMarkers.filter(m => {
+        if (m._group === 'swings' && !isSwingsOn) return false;
+        if (m._group === 'labels' && !isLabelsOn) return false;
+        return true;
+      });
+
+      // Deduplicate by time — if both swing and label exist, prefer label
+      const byTime = new Map();
+      for (const m of filtered) {
+        const key = `${m.time}_${m.position}`;
+        const existing = byTime.get(key);
+        if (!existing || m._group === 'labels') {
+          byTime.set(key, m);
+        }
+      }
+
+      const sortedMarkers = Array.from(byTime.values())
+        .map(({ _group, ...rest }) => rest)
+        .sort((a, b) => a.time - b.time);
+
+      candleSeries.setMarkers(sortedMarkers);
+    }
+
+    // ── EMA Lines ──────────────────────────────────────────────
+
+    function renderEMALines(data) {
+      if (data.ema7 && data.ema7.length) {
+        indicatorSeries.ema7 = chart.addLineSeries({
+          color: '#58a6ff',
+          lineWidth: 1,
+          priceLineVisible: false,
+          lastValueVisible: false,
+          crosshairMarkerVisible: false,
+        });
+        indicatorSeries.ema7.setData(data.ema7);
+      }
+
+      if (data.ema22 && data.ema22.length) {
+        indicatorSeries.ema22 = chart.addLineSeries({
+          color: '#ffa726',
+          lineWidth: 1,
+          priceLineVisible: false,
+          lastValueVisible: false,
+          crosshairMarkerVisible: false,
+        });
+        indicatorSeries.ema22.setData(data.ema22);
+      }
+
+      if (data.ema200 && data.ema200.length) {
+        indicatorSeries.ema200 = chart.addLineSeries({
+          color: '#e6edf3',
+          lineWidth: 2,
+          priceLineVisible: false,
+          lastValueVisible: false,
+          crosshairMarkerVisible: false,
+        });
+        indicatorSeries.ema200.setData(data.ema200);
+      }
+    }
+
+    // ── VWAP ───────────────────────────────────────────────────
+
+    function renderVWAP(data) {
+      if (data.vwap && data.vwap.length) {
+        indicatorSeries.vwap = chart.addLineSeries({
+          color: '#00d4aa',
+          lineWidth: 1,
+          lineStyle: LightweightCharts.LineStyle.Dashed,
+          priceLineVisible: false,
+          lastValueVisible: false,
+          crosshairMarkerVisible: false,
+        });
+        indicatorSeries.vwap.setData(data.vwap);
+      }
+    }
+
+    // ── Order Blocks (as area between two line series) ─────────
+
+    function renderOrderBlocks(data) {
+      if (!data.orderBlocks) return;
+
+      for (const ob of data.orderBlocks) {
+        const isBullish = ob.type === 'bullish';
+        const fillColor = isBullish ? 'rgba(0, 212, 170, 0.08)' : 'rgba(255, 71, 87, 0.08)';
+        const lineColor = isBullish ? 'rgba(0, 212, 170, 0.35)' : 'rgba(255, 71, 87, 0.35)';
+
+        // Use the candle data to find the time range to extend the OB
+        const startTime = ob.time;
+        const lastCandle = data.candles[data.candles.length - 1];
+        const endTime = lastCandle ? lastCandle.time : ob.endTime;
+
+        // Top line of OB zone
+        const topSeries = chart.addLineSeries({
+          color: lineColor,
+          lineWidth: 1,
+          lineStyle: LightweightCharts.LineStyle.Dotted,
+          priceLineVisible: false,
+          lastValueVisible: false,
+          crosshairMarkerVisible: false,
+        });
+
+        // Bottom line of OB zone
+        const bottomSeries = chart.addLineSeries({
+          color: lineColor,
+          lineWidth: 1,
+          lineStyle: LightweightCharts.LineStyle.Dotted,
+          priceLineVisible: false,
+          lastValueVisible: false,
+          crosshairMarkerVisible: false,
+        });
+
+        // Build data points extending from OB start to chart end
+        const points = data.candles
+          .filter(c => c.time >= startTime && c.time <= endTime)
+          .map(c => c.time);
+
+        if (points.length < 2) continue;
+
+        // Sample fewer points to reduce visual clutter
+        const step = Math.max(1, Math.floor(points.length / 30));
+        const sampledTimes = [points[0]];
+        for (let i = step; i < points.length - 1; i += step) {
+          sampledTimes.push(points[i]);
+        }
+        sampledTimes.push(points[points.length - 1]);
+
+        topSeries.setData(sampledTimes.map(t => ({ time: t, value: ob.high })));
+        bottomSeries.setData(sampledTimes.map(t => ({ time: t, value: ob.low })));
+
+        indicatorSeries.obSeries.push(topSeries, bottomSeries);
+      }
+    }
+
+    // ── Fair Value Gaps ────────────────────────────────────────
+
+    function renderFVGs(data) {
+      if (!data.fvgs) return;
+
+      for (const fvg of data.fvgs) {
+        const isBullish = fvg.type === 'bullish';
+        const lineColor = isBullish ? 'rgba(0, 186, 255, 0.3)' : 'rgba(255, 167, 38, 0.3)';
+
+        const startTime = fvg.time;
+        const lastCandle = data.candles[data.candles.length - 1];
+        const endTime = lastCandle ? lastCandle.time : startTime;
+
+        const topSeries = chart.addLineSeries({
+          color: lineColor,
+          lineWidth: 1,
+          lineStyle: LightweightCharts.LineStyle.Dotted,
+          priceLineVisible: false,
+          lastValueVisible: false,
+          crosshairMarkerVisible: false,
+        });
+
+        const bottomSeries = chart.addLineSeries({
+          color: lineColor,
+          lineWidth: 1,
+          lineStyle: LightweightCharts.LineStyle.Dotted,
+          priceLineVisible: false,
+          lastValueVisible: false,
+          crosshairMarkerVisible: false,
+        });
+
+        const points = data.candles
+          .filter(c => c.time >= startTime && c.time <= endTime)
+          .map(c => c.time);
+
+        if (points.length < 2) continue;
+
+        const step = Math.max(1, Math.floor(points.length / 20));
+        const sampledTimes = [points[0]];
+        for (let i = step; i < points.length - 1; i += step) {
+          sampledTimes.push(points[i]);
+        }
+        sampledTimes.push(points[points.length - 1]);
+
+        topSeries.setData(sampledTimes.map(t => ({ time: t, value: fvg.high })));
+        bottomSeries.setData(sampledTimes.map(t => ({ time: t, value: fvg.low })));
+
+        indicatorSeries.fvgSeries.push(topSeries, bottomSeries);
+      }
+    }
+
+    // ── Key Levels (price lines on candle series) ──────────────
+
+    function renderKeyLevels(data) {
+      if (!data.keyLevels) return;
+
+      const levelConfigs = [
+        { key: 'PDH', color: '#ffa726', style: LightweightCharts.LineStyle.Dashed, label: 'PDH' },
+        { key: 'PDL', color: '#ffa726', style: LightweightCharts.LineStyle.Dashed, label: 'PDL' },
+        { key: 'OP',  color: '#e6edf3', style: LightweightCharts.LineStyle.Dotted, label: 'OP' },
+        { key: 'PWH', color: '#a855f7', style: LightweightCharts.LineStyle.Dashed, label: 'PWH' },
+        { key: 'PWL', color: '#a855f7', style: LightweightCharts.LineStyle.Dashed, label: 'PWL' },
+      ];
+
+      for (const cfg of levelConfigs) {
+        const price = data.keyLevels[cfg.key];
+        if (price == null) continue;
+
+        // Use a line series with two data points spanning the chart
+        const series = chart.addLineSeries({
+          color: cfg.color,
+          lineWidth: 1,
+          lineStyle: cfg.style,
+          priceLineVisible: false,
+          lastValueVisible: true,
+          crosshairMarkerVisible: false,
+          title: cfg.label,
+        });
+
+        const firstTime = data.candles[0]?.time;
+        const lastTime = data.candles[data.candles.length - 1]?.time;
+        if (firstTime && lastTime) {
+          series.setData([
+            { time: firstTime, value: price },
+            { time: lastTime, value: price },
+          ]);
+        }
+
+        indicatorSeries.keyLevelLines.push({ series, key: cfg.key });
+      }
+    }
+
+    // ── Equal Highs / Equal Lows ───────────────────────────────
+
+    function renderEQHEQL(data) {
+      if (!data.eqhEql) return;
+
+      for (const eq of data.eqhEql) {
+        const isHigh = eq.type === 'EQH';
+        const color = isHigh ? 'rgba(255, 71, 87, 0.5)' : 'rgba(0, 212, 170, 0.5)';
+
+        const series = chart.addLineSeries({
+          color,
+          lineWidth: 1,
+          lineStyle: LightweightCharts.LineStyle.SparseDotted,
+          priceLineVisible: false,
+          lastValueVisible: false,
+          crosshairMarkerVisible: false,
+          title: eq.type,
+        });
+
+        const startTime = Math.min(eq.time1 || eq.time, eq.time);
+        const lastTime = data.candles[data.candles.length - 1]?.time || eq.time;
+
+        const points = data.candles
+          .filter(c => c.time >= startTime && c.time <= lastTime)
+          .map(c => c.time);
+
+        if (points.length >= 2) {
+          series.setData([
+            { time: points[0], value: eq.price },
+            { time: points[points.length - 1], value: eq.price },
+          ]);
+        }
+
+        indicatorSeries.eqhEqlLines.push({ series });
+      }
+    }
+
+    // ============================================================
+    // Toggle Visibility
+    // ============================================================
+
+    function setSeriesVisible(series, isVisible) {
+      if (!series) return;
+      series.applyOptions({
+        visible: isVisible,
+      });
+    }
+
+    function applyToggleVisibility() {
+      // Markers
+      applyMarkers();
+
+      // EMAs
+      setSeriesVisible(indicatorSeries.ema7, document.getElementById('tog-ema7').checked);
+      setSeriesVisible(indicatorSeries.ema22, document.getElementById('tog-ema22').checked);
+      setSeriesVisible(indicatorSeries.ema200, document.getElementById('tog-ema200').checked);
+      setSeriesVisible(indicatorSeries.vwap, document.getElementById('tog-vwap').checked);
+
+      // OB
+      const isOBOn = document.getElementById('tog-ob').checked;
+      indicatorSeries.obSeries.forEach(s => setSeriesVisible(s, isOBOn));
+
+      // FVG
+      const isFVGOn = document.getElementById('tog-fvg').checked;
+      indicatorSeries.fvgSeries.forEach(s => setSeriesVisible(s, isFVGOn));
+
+      // Key Levels
+      const isLevelsOn = document.getElementById('tog-levels').checked;
+      indicatorSeries.keyLevelLines.forEach(l => setSeriesVisible(l.series, isLevelsOn));
+
+      // EQH/EQL
+      const isEqOn = document.getElementById('tog-eqheql').checked;
+      indicatorSeries.eqhEqlLines.forEach(l => setSeriesVisible(l.series, isEqOn));
+    }
+
+    // ============================================================
+    // Coin List
+    // ============================================================
+
+    function formatPrice(price) {
+      if (price >= 1000) return price.toFixed(2);
+      if (price >= 1) return price.toFixed(4);
+      if (price >= 0.01) return price.toFixed(6);
+      return price.toFixed(8);
+    }
+
+    function renderCoinList(coins, filter = '') {
+      const filtered = filter
+        ? coins.filter(c => c.symbol.toLowerCase().includes(filter.toLowerCase()))
+        : coins;
+
+      if (!filtered.length) {
+        DOM.coinList.innerHTML = '<div class="coin-loading">No coins found</div>';
+        return;
+      }
+
+      DOM.coinList.innerHTML = filtered.map(coin => {
+        const isActive = coin.symbol === STATE.symbol;
+        const changeClass = coin.change24h >= 0 ? 'positive' : 'negative';
+        const trendClass = coin.trend === 'bullish' ? 'bullish' : coin.trend === 'bearish' ? 'bearish' : 'neutral';
+        const changeSign = coin.change24h >= 0 ? '+' : '';
+        const bitunixUrl = `https://www.bitunix.com/futures/USDT-M/${coin.symbol}`;
+
+        return `
+          <div class="coin-item ${isActive ? 'active' : ''}"
+               role="option"
+               aria-selected="${isActive}"
+               data-symbol="${coin.symbol}"
+               tabindex="0">
+            <div class="coin-info">
+              <div class="coin-symbol">
+                ${coin.symbol.replace('USDT', '')}
+                <span class="coin-structure ${trendClass}">${coin.structure}</span>
+              </div>
+            </div>
+            <div class="coin-actions">
+              <div>
+                <div class="coin-price">${formatPrice(coin.price)}</div>
+                <div class="coin-change ${changeClass}">${changeSign}${coin.change24h.toFixed(2)}%</div>
+              </div>
+              <a class="coin-link"
+                 href="${bitunixUrl}"
+                 target="_blank"
+                 rel="noopener noreferrer"
+                 title="Open on Bitunix"
+                 aria-label="Open ${coin.symbol} on Bitunix"
+                 onclick="event.stopPropagation()">&#x2197;</a>
+            </div>
+          </div>
+        `;
+      }).join('');
+
+      // Attach click handlers
+      DOM.coinList.querySelectorAll('.coin-item').forEach(el => {
+        el.addEventListener('click', () => handleCoinSelect(el.dataset.symbol));
+        el.addEventListener('keydown', e => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            handleCoinSelect(el.dataset.symbol);
+          }
+        });
+      });
+    }
+
+    function handleCoinSelect(symbol) {
+      STATE.symbol = symbol;
+      DOM.toolbarSymbol.textContent = symbol;
+
+      // Update active state
+      DOM.coinList.querySelectorAll('.coin-item').forEach(el => {
+        const isActive = el.dataset.symbol === symbol;
+        el.classList.toggle('active', isActive);
+        el.setAttribute('aria-selected', isActive);
+      });
+
+      // Update toolbar price/change from cached coin data
+      const coin = STATE.coins.find(c => c.symbol === symbol);
+      if (coin) {
+        DOM.toolbarPrice.textContent = formatPrice(coin.price);
+        DOM.toolbarChange.textContent = `${coin.change24h >= 0 ? '+' : ''}${coin.change24h.toFixed(2)}%`;
+        DOM.toolbarChange.className = `toolbar-change ${coin.change24h >= 0 ? 'positive' : 'negative'}`;
+      }
+
+      loadChartData();
+    }
+
+    // ============================================================
+    // Summary Panel
+    // ============================================================
+
+    function updateSummary(data) {
+      if (!data) return;
+
+      // Determine trend from last structure labels
+      const highLabels = data.labels?.filter(l => l.type === 'high') || [];
+      const lowLabels = data.labels?.filter(l => l.type === 'low') || [];
+      const lastHigh = highLabels[highLabels.length - 1];
+      const lastLow = lowLabels[lowLabels.length - 1];
+
+      const structure = `${lastHigh?.label || '--'} / ${lastLow?.label || '--'}`;
+      const isBullish = lastHigh?.label === 'HH' && lastLow?.label === 'HL';
+      const isBearish = lastHigh?.label === 'LH' && lastLow?.label === 'LL';
+      const trend = isBullish ? 'Bullish' : isBearish ? 'Bearish' : 'Neutral';
+      const trendColor = isBullish ? 'var(--color-success)' : isBearish ? 'var(--color-danger)' : 'var(--color-fg-muted)';
+
+      DOM.sumTrend.textContent = trend;
+      DOM.sumTrend.style.color = trendColor;
+      DOM.sumStructure.textContent = structure;
+
+      // Swing prices
+      const swingHighs = data.swings?.filter(s => s.type === 'high') || [];
+      const swingLows = data.swings?.filter(s => s.type === 'low') || [];
+      const lastSH = swingHighs[swingHighs.length - 1];
+      const lastSL = swingLows[swingLows.length - 1];
+      DOM.sumSh.textContent = lastSH ? formatPrice(lastSH.price) : '--';
+      DOM.sumSl.textContent = lastSL ? formatPrice(lastSL.price) : '--';
+
+      // OB / FVG counts
+      const bullOB = data.orderBlocks?.filter(o => o.type === 'bullish').length || 0;
+      const bearOB = data.orderBlocks?.filter(o => o.type === 'bearish').length || 0;
+      DOM.sumOb.textContent = `${bullOB} Bull / ${bearOB} Bear`;
+
+      const bullFVG = data.fvgs?.filter(f => f.type === 'bullish').length || 0;
+      const bearFVG = data.fvgs?.filter(f => f.type === 'bearish').length || 0;
+      DOM.sumFvg.textContent = `${bullFVG} Bull / ${bearFVG} Bear`;
+
+      // PDH/PDL
+      const kl = data.keyLevels || {};
+      DOM.sumPdhl.textContent = kl.PDH && kl.PDL
+        ? `${formatPrice(kl.PDH)} / ${formatPrice(kl.PDL)}`
+        : '--';
+    }
+
+    // ============================================================
+    // Loading / Data Orchestration
+    // ============================================================
+
+    function showChartLoading(isVisible) {
+      DOM.chartLoading.classList.toggle('visible', isVisible);
+    }
+
+    async function loadChartData() {
+      showChartLoading(true);
+      try {
+        const data = await fetchChartData();
+        renderChart(data);
+      } catch (err) {
+        console.error('Failed to load chart data:', err);
+      } finally {
+        showChartLoading(false);
+      }
+    }
+
+    async function loadCoinList() {
+      DOM.coinLoading.style.display = 'flex';
+      try {
+        const coins = await fetchScanData();
+        STATE.coins = coins;
+        DOM.coinLoading.style.display = 'none';
+        renderCoinList(coins);
+      } catch (err) {
+        console.error('Failed to load coin list:', err);
+        DOM.coinLoading.textContent = 'Failed to load coins';
+      }
+    }
+
+    function startAutoRefresh() {
+      if (STATE.refreshTimer) clearInterval(STATE.refreshTimer);
+      STATE.refreshTimer = setInterval(async () => {
+        try {
+          const data = await fetchChartData();
+          renderChart(data);
+        } catch (_) {}
+      }, REFRESH_INTERVAL);
+    }
+
+    // ============================================================
+    // Event Handlers
+    // ============================================================
+
+    function setupEventListeners() {
+      // Timeframe buttons
+      document.querySelectorAll('.tf-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          document.querySelectorAll('.tf-btn').forEach(b => b.classList.remove('active'));
+          btn.classList.add('active');
+          STATE.interval = btn.dataset.tf;
+          loadChartData();
+        });
+      });
+
+      // Indicator toggles
+      const toggleIds = [
+        'tog-swings', 'tog-labels', 'tog-ob', 'tog-fvg',
+        'tog-levels', 'tog-ema7', 'tog-ema22', 'tog-ema200',
+        'tog-vwap', 'tog-eqheql',
+      ];
+      toggleIds.forEach(id => {
+        document.getElementById(id).addEventListener('change', applyToggleVisibility);
+      });
+
+      // Coin search
+      DOM.coinSearch.addEventListener('input', (e) => {
+        renderCoinList(STATE.coins, e.target.value);
+      });
+
+      // Bottom panel toggle
+      DOM.bottomPanelToggle.addEventListener('click', () => {
+        const isCollapsed = DOM.bottomPanel.classList.toggle('collapsed');
+        DOM.bottomPanelToggle.textContent = isCollapsed ? '\u25B2' : '\u25BC';
+        DOM.bottomPanelToggle.setAttribute('aria-expanded', !isCollapsed);
+        // Trigger chart resize
+        setTimeout(() => {
+          const container = DOM.chartContainer;
+          chart.applyOptions({ width: container.clientWidth, height: container.clientHeight });
+        }, 250);
+      });
+    }
+
+    // ============================================================
+    // Init
+    // ============================================================
+
+    async function init() {
+      createChart();
+      setupEventListeners();
+
+      // Load coin list and chart data in parallel
+      await Promise.all([
+        loadCoinList(),
+        loadChartData(),
+      ]);
+
+      startAutoRefresh();
+    }
+
+    // Wait for DOM and library
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', init);
+    } else {
+      init();
+    }
+  </script>
+</body>
+</html>

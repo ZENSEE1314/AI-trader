@@ -1,0 +1,359 @@
+// ============================================================
+// SMC Chart API — serves kline data + computed SMC indicators
+// for the interactive chart page
+// ============================================================
+
+const express = require('express');
+const fetch = require('node-fetch');
+
+const router = express.Router();
+
+const REQUEST_TIMEOUT = 12000;
+const CACHE_TTL = 60000; // 1 min cache
+const cache = new Map();
+
+async function fetchKlines(symbol, interval, limit = 200) {
+  const key = `${symbol}_${interval}_${limit}`;
+  const cached = cache.get(key);
+  if (cached && Date.now() - cached.ts < CACHE_TTL) return cached.data;
+
+  const url = `https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`;
+  const res = await fetch(url, { timeout: REQUEST_TIMEOUT });
+  if (!res.ok) return null;
+  const data = await res.json();
+  cache.set(key, { data, ts: Date.now() });
+  return data;
+}
+
+// ── Zeiierman SMC Swing Detection ───────────────────────────
+const SWING_LENGTHS = { '1w': 3, '1d': 5, '4h': 7, '1h': 8, '15m': 10, '3m': 8, '1m': 5 };
+
+function detectSwings(klines, len) {
+  const highs = klines.map(k => parseFloat(k[2]));
+  const lows = klines.map(k => parseFloat(k[3]));
+  const swings = [];
+  let lastType = null;
+
+  for (let i = len; i < klines.length - len; i++) {
+    let isHigh = true;
+    for (let j = -len; j <= len; j++) {
+      if (j === 0) continue;
+      if (highs[i] <= highs[i + j]) { isHigh = false; break; }
+    }
+    let isLow = true;
+    for (let j = -len; j <= len; j++) {
+      if (j === 0) continue;
+      if (lows[i] >= lows[i + j]) { isLow = false; break; }
+    }
+    if (isHigh && isLow) {
+      const highDist = highs[i] - Math.max(highs[i - 1], highs[i + 1]);
+      const lowDist = Math.min(lows[i - 1], lows[i + 1]) - lows[i];
+      if (highDist > lowDist) isLow = false;
+      else isHigh = false;
+    }
+    if (isHigh) {
+      if (lastType === 'high') {
+        const prev = swings[swings.length - 1];
+        if (highs[i] > prev.price) {
+          swings[swings.length - 1] = { type: 'high', index: i, price: highs[i], time: parseInt(klines[i][0]) / 1000 };
+        }
+      } else {
+        swings.push({ type: 'high', index: i, price: highs[i], time: parseInt(klines[i][0]) / 1000 });
+        lastType = 'high';
+      }
+    }
+    if (isLow) {
+      if (lastType === 'low') {
+        const prev = swings[swings.length - 1];
+        if (lows[i] < prev.price) {
+          swings[swings.length - 1] = { type: 'low', index: i, price: lows[i], time: parseInt(klines[i][0]) / 1000 };
+        }
+      } else {
+        swings.push({ type: 'low', index: i, price: lows[i], time: parseInt(klines[i][0]) / 1000 });
+        lastType = 'low';
+      }
+    }
+  }
+  return swings;
+}
+
+function getStructureLabels(swings) {
+  const labels = [];
+  const swingHighs = swings.filter(s => s.type === 'high');
+  const swingLows = swings.filter(s => s.type === 'low');
+
+  for (let i = 1; i < swingHighs.length; i++) {
+    const label = swingHighs[i].price > swingHighs[i - 1].price ? 'HH' : 'LH';
+    labels.push({ ...swingHighs[i], label });
+  }
+  for (let i = 1; i < swingLows.length; i++) {
+    const label = swingLows[i].price > swingLows[i - 1].price ? 'HL' : 'LL';
+    labels.push({ ...swingLows[i], label });
+  }
+  labels.sort((a, b) => a.time - b.time);
+  return labels;
+}
+
+// ── Order Blocks ────────────────────────────────────────────
+function detectOrderBlocks(klines) {
+  const obs = [];
+  for (let i = 2; i < klines.length; i++) {
+    const prev = klines[i - 1];
+    const cur = klines[i];
+    const prevOpen = parseFloat(prev[1]);
+    const prevClose = parseFloat(prev[4]);
+    const prevHigh = parseFloat(prev[2]);
+    const prevLow = parseFloat(prev[3]);
+    const curOpen = parseFloat(cur[1]);
+    const curClose = parseFloat(cur[4]);
+
+    // Bullish OB: bearish candle followed by strong bullish candle breaking above
+    if (prevClose < prevOpen && curClose > curOpen && curClose > prevHigh) {
+      obs.push({
+        type: 'bullish',
+        time: parseInt(prev[0]) / 1000,
+        high: prevOpen,
+        low: prevLow,
+        endTime: parseInt(cur[0]) / 1000,
+      });
+    }
+    // Bearish OB: bullish candle followed by strong bearish candle breaking below
+    if (prevClose > prevOpen && curClose < curOpen && curClose < prevLow) {
+      obs.push({
+        type: 'bearish',
+        time: parseInt(prev[0]) / 1000,
+        high: prevHigh,
+        low: prevClose,
+        endTime: parseInt(cur[0]) / 1000,
+      });
+    }
+  }
+  return obs.slice(-15); // last 15 OBs
+}
+
+// ── Fair Value Gaps (FVG) ───────────────────────────────────
+function detectFVGs(klines) {
+  const fvgs = [];
+  for (let i = 2; i < klines.length; i++) {
+    const c1High = parseFloat(klines[i - 2][2]);
+    const c1Low = parseFloat(klines[i - 2][3]);
+    const c3High = parseFloat(klines[i][2]);
+    const c3Low = parseFloat(klines[i][3]);
+
+    // Bullish FVG: candle 1 high < candle 3 low (gap up)
+    if (c1High < c3Low) {
+      fvgs.push({
+        type: 'bullish',
+        time: parseInt(klines[i - 1][0]) / 1000,
+        high: c3Low,
+        low: c1High,
+      });
+    }
+    // Bearish FVG: candle 1 low > candle 3 high (gap down)
+    if (c1Low > c3High) {
+      fvgs.push({
+        type: 'bearish',
+        time: parseInt(klines[i - 1][0]) / 1000,
+        high: c1Low,
+        low: c3High,
+      });
+    }
+  }
+  return fvgs.slice(-15);
+}
+
+// ── Key Levels (PDH, PDL, OP, PWH, PWL) ─────────────────────
+function getKeyLevels(dailyKlines, weeklyKlines) {
+  const levels = {};
+  if (dailyKlines && dailyKlines.length >= 2) {
+    const prevDay = dailyKlines[dailyKlines.length - 2];
+    levels.PDH = parseFloat(prevDay[2]);
+    levels.PDL = parseFloat(prevDay[3]);
+    const today = dailyKlines[dailyKlines.length - 1];
+    levels.OP = parseFloat(today[1]);
+  }
+  if (weeklyKlines && weeklyKlines.length >= 2) {
+    const prevWeek = weeklyKlines[weeklyKlines.length - 2];
+    levels.PWH = parseFloat(prevWeek[2]);
+    levels.PWL = parseFloat(prevWeek[3]);
+  }
+  return levels;
+}
+
+// ── EMA Calculation ─────────────────────────────────────────
+function calcEMA(closes, period) {
+  const ema = [];
+  const k = 2 / (period + 1);
+  let prev = closes.slice(0, period).reduce((a, b) => a + b, 0) / period;
+  for (let i = 0; i < closes.length; i++) {
+    if (i < period - 1) { ema.push(null); continue; }
+    if (i === period - 1) { ema.push(prev); continue; }
+    prev = closes[i] * k + prev * (1 - k);
+    ema.push(prev);
+  }
+  return ema;
+}
+
+// ── VWAP Calculation ────────────────────────────────────────
+function calcVWAP(klines) {
+  let cumVol = 0, cumTP = 0;
+  const vwap = [];
+  // Reset at day boundary (approximate: use first candle's date)
+  let currentDay = null;
+  for (const k of klines) {
+    const day = new Date(parseInt(k[0])).toISOString().slice(0, 10);
+    if (day !== currentDay) {
+      cumVol = 0;
+      cumTP = 0;
+      currentDay = day;
+    }
+    const high = parseFloat(k[2]);
+    const low = parseFloat(k[3]);
+    const close = parseFloat(k[4]);
+    const vol = parseFloat(k[5]);
+    const tp = (high + low + close) / 3;
+    cumTP += tp * vol;
+    cumVol += vol;
+    vwap.push(cumVol > 0 ? cumTP / cumVol : close);
+  }
+  return vwap;
+}
+
+// ── Equal Highs / Equal Lows Detection ──────────────────────
+function detectEQHEQL(swings) {
+  const tolerance = 0.001; // 0.1% tolerance
+  const eqs = [];
+  const highs = swings.filter(s => s.type === 'high');
+  const lows = swings.filter(s => s.type === 'low');
+
+  for (let i = 0; i < highs.length; i++) {
+    for (let j = i + 1; j < highs.length; j++) {
+      const diff = Math.abs(highs[i].price - highs[j].price) / highs[i].price;
+      if (diff < tolerance) {
+        eqs.push({ type: 'EQH', price: (highs[i].price + highs[j].price) / 2, time: highs[j].time, time1: highs[i].time });
+      }
+    }
+  }
+  for (let i = 0; i < lows.length; i++) {
+    for (let j = i + 1; j < lows.length; j++) {
+      const diff = Math.abs(lows[i].price - lows[j].price) / lows[i].price;
+      if (diff < tolerance) {
+        eqs.push({ type: 'EQL', price: (lows[i].price + lows[j].price) / 2, time: lows[j].time, time1: lows[i].time });
+      }
+    }
+  }
+  return eqs;
+}
+
+// ── Main Chart Data Endpoint ────────────────────────────────
+router.get('/data', async (req, res) => {
+  try {
+    const symbol = (req.query.symbol || 'BTCUSDT').toUpperCase();
+    const interval = req.query.interval || '15m';
+    const limit = Math.min(parseInt(req.query.limit) || 200, 500);
+    const swingLen = SWING_LENGTHS[interval] || 8;
+
+    // Fetch main klines + daily/weekly for key levels
+    const [klines, dailyKlines, weeklyKlines] = await Promise.all([
+      fetchKlines(symbol, interval, limit),
+      fetchKlines(symbol, '1d', 7),
+      fetchKlines(symbol, '1w', 4),
+    ]);
+
+    if (!klines || !klines.length) {
+      return res.status(404).json({ error: 'No data for symbol' });
+    }
+
+    // Candlestick data
+    const candles = klines.map(k => ({
+      time: parseInt(k[0]) / 1000,
+      open: parseFloat(k[1]),
+      high: parseFloat(k[2]),
+      low: parseFloat(k[3]),
+      close: parseFloat(k[4]),
+      volume: parseFloat(k[5]),
+    }));
+
+    const closes = klines.map(k => parseFloat(k[4]));
+
+    // SMC indicators
+    const swings = detectSwings(klines, swingLen);
+    const labels = getStructureLabels(swings);
+    const orderBlocks = detectOrderBlocks(klines);
+    const fvgs = detectFVGs(klines);
+    const keyLevels = getKeyLevels(dailyKlines, weeklyKlines);
+    const eqhEql = detectEQHEQL(swings);
+
+    // EMAs
+    const ema7 = calcEMA(closes, 7);
+    const ema22 = calcEMA(closes, 22);
+    const ema200 = calcEMA(closes, 200);
+
+    // VWAP
+    const vwap = calcVWAP(klines);
+
+    // Format EMA/VWAP as time series
+    const emaData = (arr) => candles.map((c, i) => arr[i] !== null ? { time: c.time, value: arr[i] } : null).filter(Boolean);
+
+    res.json({
+      symbol,
+      interval,
+      candles,
+      swings,
+      labels,
+      orderBlocks,
+      fvgs,
+      keyLevels,
+      eqhEql,
+      ema7: emaData(ema7),
+      ema22: emaData(ema22),
+      ema200: emaData(ema200),
+      vwap: emaData(vwap),
+    });
+  } catch (err) {
+    console.error('Chart data error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Multi-TF Structure Summary (for coin list) ──────────────
+router.get('/scan', async (req, res) => {
+  try {
+    const nFetch = require('node-fetch');
+    const r = await nFetch('https://fapi.binance.com/fapi/v1/ticker/24hr', { timeout: 12000 });
+    const tickers = await r.json();
+    const topCoins = tickers
+      .filter(t => t.symbol.endsWith('USDT') && !t.symbol.includes('_'))
+      .sort((a, b) => parseFloat(b.quoteVolume) - parseFloat(a.quoteVolume))
+      .slice(0, 50);
+
+    const results = [];
+    for (const t of topCoins.slice(0, 20)) {
+      try {
+        const klines = await fetchKlines(t.symbol, '15m', 50);
+        if (!klines || klines.length < 25) continue;
+        const swings = detectSwings(klines, SWING_LENGTHS['15m']);
+        const structLabels = getStructureLabels(swings);
+
+        const lastHigh = structLabels.filter(l => l.type === 'high').pop();
+        const lastLow = structLabels.filter(l => l.type === 'low').pop();
+
+        results.push({
+          symbol: t.symbol,
+          price: parseFloat(t.lastPrice),
+          change24h: parseFloat(t.priceChangePercent),
+          volume24h: parseFloat(t.quoteVolume),
+          structure: `${lastHigh?.label || '--'}/${lastLow?.label || '--'}`,
+          trend: lastHigh?.label === 'HH' && lastLow?.label === 'HL' ? 'bullish'
+            : lastHigh?.label === 'LH' && lastLow?.label === 'LL' ? 'bearish' : 'neutral',
+        });
+      } catch (_) {}
+    }
+
+    res.json(results);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+module.exports = router;
