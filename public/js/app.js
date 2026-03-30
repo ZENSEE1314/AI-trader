@@ -13,6 +13,7 @@
     tradesPage: 1,
     tradesTotal: 0,
     tradesPages: 1,
+    tradesPeriod: 'all',
     selectedPlan: 'bot', // 'bot' or 'signal'
   };
 
@@ -309,7 +310,9 @@
   }
 
   async function loadTrades() {
-    const data = await api('GET', `/api/dashboard/trades?page=${state.tradesPage}`);
+    let url = `/api/dashboard/trades?page=${state.tradesPage}`;
+    if (state.tradesPeriod !== 'all') url += `&period=${state.tradesPeriod}`;
+    const data = await api('GET', url);
     state.tradesTotal = data.total;
     state.tradesPages = data.pages;
     renderTrades(data.trades);
@@ -382,6 +385,16 @@
         state.tradesPage++;
         loadTrades();
       }
+    });
+
+    document.querySelectorAll('.period-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.period-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        state.tradesPeriod = btn.dataset.period;
+        state.tradesPage = 1;
+        loadTrades();
+      });
     });
   }
 

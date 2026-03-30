@@ -248,6 +248,21 @@ input, select, textarea {
   min-height: 32px;
 }
 
+.period-btn {
+  background: var(--color-surface);
+  color: var(--color-fg-muted);
+  border: 1px solid var(--color-border);
+}
+.period-btn:hover {
+  background: var(--color-surface-hover, var(--color-border));
+  color: var(--color-fg);
+}
+.period-btn.active {
+  background: var(--color-primary);
+  color: #fff;
+  border-color: var(--color-primary);
+}
+
 .btn-icon {
   padding: var(--space-2);
   background: transparent;

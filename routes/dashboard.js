@@ -5,24 +5,44 @@ const { authMiddleware } = require('../middleware/auth');
 const router = express.Router();
 router.use(authMiddleware);
 
+const PERIOD_INTERVALS = {
+  '1d':  '1 day',
+  '7d':  '7 days',
+  '30d': '30 days',
+  '6m':  '6 months',
+  '1y':  '1 year',
+};
+
 // Trade history
 router.get('/trades', async (req, res) => {
   try {
     const page = Math.max(1, parseInt(req.query.page) || 1);
     const limit = 50;
     const offset = (page - 1) * limit;
+    const period = PERIOD_INTERVALS[req.query.period];
+
+    const params = [req.userId];
+    const dateFilter = period
+      ? `AND t.created_at > NOW() - INTERVAL '${period}'`
+      : '';
+    const dateFilterCount = period
+      ? `AND created_at > NOW() - INTERVAL '${period}'`
+      : '';
 
     const rows = await query(
       `SELECT t.*, ak.label as key_label, ak.platform
        FROM trades t
        LEFT JOIN api_keys ak ON t.api_key_id = ak.id
-       WHERE t.user_id = $1
+       WHERE t.user_id = $1 ${dateFilter}
        ORDER BY t.created_at DESC
        LIMIT $2 OFFSET $3`,
       [req.userId, limit, offset]
     );
 
-    const countRes = await query('SELECT COUNT(*) as cnt FROM trades WHERE user_id = $1', [req.userId]);
+    const countRes = await query(
+      `SELECT COUNT(*) as cnt FROM trades WHERE user_id = $1 ${dateFilterCount}`,
+      [req.userId]
+    );
     res.json({ trades: rows, total: parseInt(countRes[0].cnt), page, pages: Math.ceil(countRes[0].cnt / limit) });
   } catch (err) {
     console.error('Trades error:', err.message);
