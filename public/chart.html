@@ -770,8 +770,18 @@
           rightOffset: 5,
           barSpacing: 8,
         },
-        handleScale: { axisPressedMouseMove: { time: true, price: true } },
-        handleScroll: { mouseWheel: true, pressedMouseMove: true },
+        handleScale: {
+          mouseWheel: true,
+          pinch: true,
+          axisPressedMouseMove: { time: true, price: true },
+          axisDoubleClickReset: { time: true, price: true },
+        },
+        handleScroll: {
+          mouseWheel: true,
+          pressedMouseMove: true,
+          horzTouchDrag: true,
+          vertTouchDrag: false,
+        },
       });
 
       // Candlestick series
@@ -852,8 +862,15 @@
       allMarkers = [];
     }
 
+    let isFirstLoad = true; // track if this is the initial load
+
     function renderChart(data) {
       STATE.chartData = data;
+
+      // Save current view position before re-rendering
+      const savedRange = chart.timeScale().getVisibleLogicalRange();
+      const savedBarSpacing = chart.timeScale().options().barSpacing;
+
       clearIndicators();
 
       // Candles
@@ -894,8 +911,15 @@
       // Update summary panel
       updateSummary(data);
 
-      // Fit content
-      chart.timeScale().fitContent();
+      // Restore view position — don't reset zoom/scroll on refresh
+      if (isFirstLoad) {
+        chart.timeScale().fitContent();
+        isFirstLoad = false;
+      } else if (savedRange) {
+        // Restore exact zoom level and scroll position
+        chart.timeScale().applyOptions({ barSpacing: savedBarSpacing });
+        chart.timeScale().setVisibleLogicalRange(savedRange);
+      }
     }
 
     // ── Markers (Swings + Labels) ──────────────────────────────
@@ -1387,6 +1411,7 @@
     }
 
     async function loadChartData() {
+      isFirstLoad = true; // reset so new symbol/TF fits to content
       showChartLoading(true);
       try {
         const data = await fetchChartData();
