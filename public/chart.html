@@ -386,6 +386,25 @@
       font-size: var(--text-base);
       color: var(--color-fg);
       margin-right: var(--space-1);
+      transition: color 0.3s ease;
+    }
+    .toolbar-price.tick-up { color: var(--color-success); }
+    .toolbar-price.tick-down { color: var(--color-danger); }
+
+    /* Live dot indicator */
+    .live-dot {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--color-success);
+      margin-left: var(--space-2);
+      animation: pulse-live 1.5s ease-in-out infinite;
+      vertical-align: middle;
+    }
+    @keyframes pulse-live {
+      0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(0, 212, 170, 0.4); }
+      50% { opacity: 0.6; box-shadow: 0 0 0 6px rgba(0, 212, 170, 0); }
     }
 
     .toolbar-change {
@@ -563,7 +582,7 @@
     <!-- Toolbar -->
     <header class="toolbar" role="toolbar" aria-label="Chart controls">
       <span class="toolbar-symbol" id="toolbar-symbol">BTCUSDT</span>
-      <span class="toolbar-price" id="toolbar-price">--</span>
+      <span class="toolbar-price" id="toolbar-price">--</span><span class="live-dot" title="Live"></span>
       <span class="toolbar-change" id="toolbar-change">--</span>
 
       <div class="toolbar-divider"></div>
@@ -663,9 +682,11 @@
       coins: [],
       chartData: null,
       refreshTimer: null,
+      ws: null,
+      lastPrice: null,
     };
 
-    const REFRESH_INTERVAL = 30000;
+    const REFRESH_INTERVAL = 60000; // full refresh every 60s (WebSocket handles live updates)
     const API_BASE = '/api/chart';
 
     // --- DOM References ---
@@ -1307,6 +1328,7 @@
       }
 
       loadChartData();
+      connectWebSocket(); // reconnect WS for new symbol
     }
 
     // ============================================================
@@ -1400,6 +1422,118 @@
     }
 
     // ============================================================
+    // Binance WebSocket — Live Price Streaming
+    // ============================================================
+
+    function connectWebSocket() {
+      // Close existing connection
+      if (STATE.ws) {
+        STATE.ws.onclose = null; // prevent reconnect on intentional close
+        STATE.ws.close();
+        STATE.ws = null;
+      }
+
+      const sym = STATE.symbol.toLowerCase();
+      const tf = STATE.interval;
+      const wsUrl = `wss://fstream.binance.com/ws/${sym}@kline_${tf}`;
+
+      const ws = new WebSocket(wsUrl);
+      STATE.ws = ws;
+
+      ws.onopen = () => {
+        console.log(`[WS] Connected: ${STATE.symbol} ${tf}`);
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+          if (!msg.k) return;
+
+          const k = msg.k;
+          const candle = {
+            time: Math.floor(k.t / 1000),
+            open: parseFloat(k.o),
+            high: parseFloat(k.h),
+            low: parseFloat(k.l),
+            close: parseFloat(k.c),
+          };
+          const volume = {
+            time: candle.time,
+            value: parseFloat(k.v),
+            color: candle.close >= candle.open
+              ? 'rgba(0, 212, 170, 0.2)'
+              : 'rgba(255, 71, 87, 0.2)',
+          };
+
+          // Update chart in real-time
+          if (candleSeries) candleSeries.update(candle);
+          if (volumeSeries) volumeSeries.update(volume);
+
+          // Update toolbar price with tick color flash
+          if (DOM.toolbarPrice) {
+            const prevPrice = STATE.lastPrice;
+            STATE.lastPrice = candle.close;
+            DOM.toolbarPrice.textContent = '$' + formatPrice(candle.close);
+
+            // Flash green/red on price change
+            if (prevPrice !== null && candle.close !== prevPrice) {
+              const tickClass = candle.close > prevPrice ? 'tick-up' : 'tick-down';
+              DOM.toolbarPrice.classList.remove('tick-up', 'tick-down');
+              DOM.toolbarPrice.classList.add(tickClass);
+              setTimeout(() => DOM.toolbarPrice.classList.remove(tickClass), 600);
+            }
+          }
+
+          // Update price in coin list sidebar
+          const coinEl = document.querySelector(`.coin-item[data-symbol="${STATE.symbol}"] .coin-price`);
+          if (coinEl) coinEl.textContent = '$' + formatPrice(candle.close);
+
+        } catch (_) {}
+      };
+
+      ws.onclose = () => {
+        console.log('[WS] Disconnected, reconnecting in 3s...');
+        setTimeout(() => {
+          if (STATE.symbol && STATE.interval) connectWebSocket();
+        }, 3000);
+      };
+
+      ws.onerror = (err) => {
+        console.error('[WS] Error:', err);
+        ws.close();
+      };
+    }
+
+    // Also stream mark price for the sidebar (all coins)
+    let miniTickerWs = null;
+
+    function connectMiniTickerStream() {
+      if (miniTickerWs) {
+        miniTickerWs.onclose = null;
+        miniTickerWs.close();
+      }
+
+      miniTickerWs = new WebSocket('wss://fstream.binance.com/ws/!miniTicker@arr');
+
+      miniTickerWs.onmessage = (event) => {
+        try {
+          const tickers = JSON.parse(event.data);
+          for (const t of tickers) {
+            const sym = t.s;
+            const price = parseFloat(t.c);
+            const coinEl = document.querySelector(`.coin-item[data-symbol="${sym}"] .coin-price`);
+            if (coinEl) coinEl.textContent = '$' + formatPrice(price);
+          }
+        } catch (_) {}
+      };
+
+      miniTickerWs.onclose = () => {
+        setTimeout(connectMiniTickerStream, 5000);
+      };
+      miniTickerWs.onerror = () => miniTickerWs.close();
+    }
+
+    // ============================================================
     // Event Handlers
     // ============================================================
 
@@ -1411,6 +1545,7 @@
           btn.classList.add('active');
           STATE.interval = btn.dataset.tf;
           loadChartData();
+          connectWebSocket(); // reconnect WS for new timeframe
         });
       });
 
@@ -1457,6 +1592,8 @@
       ]);
 
       startAutoRefresh();
+      connectWebSocket();
+      connectMiniTickerStream();
     }
 
     // Wait for DOM and library
