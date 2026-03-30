@@ -604,11 +604,14 @@
     .rs-ob-dot.bull { background: #00d4aa; }
     .rs-ob-dot.bear { background: #ff4757; }
 
-    @media (max-width: 1200px) {
-      .app-layout { grid-template-columns: 1fr 220px; }
+    @media (max-width: 900px) {
+      .app-layout { grid-template-columns: 200px 1fr 200px; }
+    }
+    @media (max-width: 700px) {
+      .app-layout { grid-template-columns: 1fr 180px; }
       .sidebar { display: none; }
     }
-    @media (max-width: 768px) {
+    @media (max-width: 500px) {
       .app-layout { grid-template-columns: 1fr; }
       .sidebar { display: none; }
       .right-sidebar { display: none; }
@@ -1267,6 +1270,11 @@
       }
     }
 
+    // Shared options for indicator lines: don't affect Y-axis auto-scaling
+    // Without this, lines at extreme prices (Strong High at 88000 while candles at 67000)
+    // squeeze the candles into a thin band
+    const OVERLAY_OPTS = { autoscaleInfoProvider: () => null };
+
     // ── Markers (Swings + Labels) ──────────────────────────────
 
     function buildMarkers(data) {
@@ -1405,22 +1413,16 @@
 
         // Top line of OB zone
         const topSeries = chart.addLineSeries({
-          color: lineColor,
-          lineWidth: 1,
-          lineStyle: LightweightCharts.LineStyle.Dotted,
-          priceLineVisible: false,
-          lastValueVisible: false,
-          crosshairMarkerVisible: false,
+          color: lineColor, lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dotted,
+          priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
+          ...OVERLAY_OPTS,
         });
 
         // Bottom line of OB zone
         const bottomSeries = chart.addLineSeries({
-          color: lineColor,
-          lineWidth: 1,
-          lineStyle: LightweightCharts.LineStyle.Dotted,
-          priceLineVisible: false,
-          lastValueVisible: false,
-          crosshairMarkerVisible: false,
+          color: lineColor, lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dotted,
+          priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
+          ...OVERLAY_OPTS,
         });
 
         // Build data points extending from OB start to chart end
@@ -1459,21 +1461,15 @@
         const endTime = lastCandle ? lastCandle.time : startTime;
 
         const topSeries = chart.addLineSeries({
-          color: lineColor,
-          lineWidth: 1,
-          lineStyle: LightweightCharts.LineStyle.Dotted,
-          priceLineVisible: false,
-          lastValueVisible: false,
-          crosshairMarkerVisible: false,
+          color: lineColor, lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dotted,
+          priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
+          ...OVERLAY_OPTS,
         });
 
         const bottomSeries = chart.addLineSeries({
-          color: lineColor,
-          lineWidth: 1,
-          lineStyle: LightweightCharts.LineStyle.Dotted,
-          priceLineVisible: false,
-          lastValueVisible: false,
-          crosshairMarkerVisible: false,
+          color: lineColor, lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dotted,
+          priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
+          ...OVERLAY_OPTS,
         });
 
         const points = data.candles
@@ -1515,13 +1511,9 @@
 
         // Use a line series with two data points spanning the chart
         const series = chart.addLineSeries({
-          color: cfg.color,
-          lineWidth: 1,
-          lineStyle: cfg.style,
-          priceLineVisible: false,
-          lastValueVisible: true,
-          crosshairMarkerVisible: false,
-          title: cfg.label,
+          color: cfg.color, lineWidth: 1, lineStyle: cfg.style,
+          priceLineVisible: false, lastValueVisible: true, crosshairMarkerVisible: false,
+          title: cfg.label, ...OVERLAY_OPTS,
         });
 
         const firstTime = data.candles[0]?.time;
@@ -1547,13 +1539,9 @@
         const color = isHigh ? 'rgba(255, 71, 87, 0.5)' : 'rgba(0, 212, 170, 0.5)';
 
         const series = chart.addLineSeries({
-          color,
-          lineWidth: 1,
-          lineStyle: LightweightCharts.LineStyle.SparseDotted,
-          priceLineVisible: false,
-          lastValueVisible: false,
-          crosshairMarkerVisible: false,
-          title: eq.type,
+          color, lineWidth: 1, lineStyle: LightweightCharts.LineStyle.SparseDotted,
+          priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
+          title: eq.type, ...OVERLAY_OPTS,
         });
 
         const startTime = Math.min(eq.time1 || eq.time, eq.time);
@@ -1587,13 +1575,10 @@
           : (isBullish ? 'rgba(0, 212, 170, 0.5)' : 'rgba(255, 71, 87, 0.5)');
 
         const series = chart.addLineSeries({
-          color,
-          lineWidth: isChoch ? 2 : 1,
+          color, lineWidth: isChoch ? 2 : 1,
           lineStyle: isChoch ? LightweightCharts.LineStyle.Solid : LightweightCharts.LineStyle.Dashed,
-          priceLineVisible: false,
-          lastValueVisible: false,
-          crosshairMarkerVisible: false,
-          title: item.type,
+          priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
+          title: item.type, ...OVERLAY_OPTS,
         });
 
         series.setData([
@@ -1649,13 +1634,9 @@
           : LightweightCharts.LineStyle.SparseDotted;
 
         const series = chart.addLineSeries({
-          color,
-          lineWidth: isStrong ? 2 : 1,
-          lineStyle,
-          priceLineVisible: false,
-          lastValueVisible: false,
-          crosshairMarkerVisible: false,
-          title: level.label,
+          color, lineWidth: isStrong ? 2 : 1, lineStyle,
+          priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
+          title: level.label, ...OVERLAY_OPTS,
         });
 
         series.setData([
@@ -1696,33 +1677,25 @@
 
       // Premium zone (upper half — red shade)
       indicatorSeries.premiumSeries = chart.addLineSeries({
-        color: 'rgba(255, 71, 87, 0.06)',
-        lineWidth: 0,
-        priceLineVisible: false,
-        lastValueVisible: false,
-        crosshairMarkerVisible: false,
+        color: 'rgba(255, 71, 87, 0.06)', lineWidth: 0,
+        priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
+        ...OVERLAY_OPTS,
       });
       indicatorSeries.premiumSeries.setData(times.map(t => ({ time: t, value: pd.upperRange })));
 
       // Discount zone (lower half — green shade)
       indicatorSeries.discountSeries = chart.addLineSeries({
-        color: 'rgba(0, 212, 170, 0.06)',
-        lineWidth: 0,
-        priceLineVisible: false,
-        lastValueVisible: false,
-        crosshairMarkerVisible: false,
+        color: 'rgba(0, 212, 170, 0.06)', lineWidth: 0,
+        priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
+        ...OVERLAY_OPTS,
       });
       indicatorSeries.discountSeries.setData(times.map(t => ({ time: t, value: pd.lowerRange })));
 
       // Mid line (equilibrium)
       indicatorSeries.midSeries = chart.addLineSeries({
-        color: 'rgba(139, 148, 158, 0.5)',
-        lineWidth: 1,
-        lineStyle: LightweightCharts.LineStyle.Dashed,
-        priceLineVisible: false,
-        lastValueVisible: false,
-        crosshairMarkerVisible: false,
-        title: 'EQ',
+        color: 'rgba(139, 148, 158, 0.5)', lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dashed,
+        priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
+        title: 'EQ', ...OVERLAY_OPTS,
       });
       indicatorSeries.midSeries.setData(times.map(t => ({ time: t, value: pd.mid })));
     }
