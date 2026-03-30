@@ -228,11 +228,11 @@ async function analyzeLHHL(ticker, params) {
   const symbol = ticker.symbol;
   const price = parseFloat(ticker.lastPrice);
 
-  // AI-tuned parameters
-  const slBufferPct = params.SL_BUFFER_PCT || 0.001;
-  const rrRatio = params.RR_RATIO || 1.5;
-  const slMaxPct = params.SL_MAX_PCT || 0.02;
-  const slMinPct = params.SL_MIN_PCT || 0.001;
+  // Capital-based SL/TP: SL = 30% of position margin, TP = 45% of position margin
+  // Price distance = margin% / leverage (e.g., 30% / 10x = 3% price move)
+  const SL_MARGIN_PCT = params.SL_MARGIN_PCT || 0.30;  // 30% of position margin
+  const TP_MARGIN_PCT = params.TP_MARGIN_PCT || 0.45;  // 45% of position margin
+  const rrRatio = TP_MARGIN_PCT / SL_MARGIN_PCT;       // 1.5 RR
   const dirBias = params.DIRECTION_BIAS || null;
 
   // Fetch 3 timeframes: 15m, 3m, 1m
@@ -277,10 +277,9 @@ async function analyzeLHHL(ticker, params) {
 
   bLog.scan(`${symbol}: 15m=${struct15.label} 3m=${struct3.label} 1m=${struct1.label} — ✅ ALL AGREE`);
 
-  let direction, sl;
+  let direction;
 
   if (isShortSetup && isLongSetup) {
-    // Both signals: pick based on which 1m swing is more recent
     const lastLH1m = struct1.lastHigh;
     const lastHL1m = struct1.lastLow;
     if (lastLH1m && lastHL1m) {
@@ -294,27 +293,24 @@ async function analyzeLHHL(ticker, params) {
     direction = 'LONG';
   }
 
-  if (direction === 'SHORT') {
-    // SL = 1m most recent LH swing candle's highest price + buffer%
-    const recentLH = struct1.lastHigh;
-    if (!recentLH) return null;
-    const swingHigh = recentLH.price;
-    sl = swingHigh * (1 + slBufferPct);
-  } else {
-    // SL = 1m most recent HL swing candle's lowest price - buffer%
-    const recentHL = struct1.lastLow;
-    if (!recentHL) return null;
-    const swingLow = recentHL.price;
-    sl = swingLow * (1 - slBufferPct);
-  }
+  // Verify swing exists (used for direction validation only)
+  if (direction === 'SHORT' && !struct1.lastHigh) return null;
+  if (direction === 'LONG' && !struct1.lastLow) return null;
 
-  const slDist = Math.abs(price - sl);
-  const slPct = slDist / price;
+  // Capital-based SL/TP: distance = margin_loss% / leverage
+  // Leverage is determined per coin type
+  const BTC_ETH = new Set(['BTCUSDT', 'ETHUSDT']);
+  const leverage = BTC_ETH.has(symbol) ? (params.LEV_BTC_ETH || 100)
+    : price < 100 ? (params.LEV_CHEAP || 10)
+    : (params.LEV_ALT || 20);
 
-  if (slPct > slMaxPct || slPct < slMinPct) return null;
+  const slPct = SL_MARGIN_PCT / leverage;   // e.g., 0.30 / 10 = 0.03 (3%)
+  const tpPct = TP_MARGIN_PCT / leverage;   // e.g., 0.45 / 10 = 0.045 (4.5%)
 
-  // TP = SL distance * AI-tuned RR ratio
-  const tpDist = slDist * rrRatio;
+  const slDist = price * slPct;
+  const tpDist = price * tpPct;
+
+  const sl = direction === 'SHORT' ? price + slDist : price - slDist;
   const tp = direction === 'SHORT' ? price - tpDist : price + tpDist;
 
   // Confidence score
@@ -346,9 +342,10 @@ async function analyzeLHHL(ticker, params) {
     lastPrice: price,
     sl,
     tp1: tp,
-    tp2: direction === 'SHORT' ? price - tpDist * 1.3 : price + tpDist * 1.3,
-    tp3: direction === 'SHORT' ? price - tpDist * 1.6 : price + tpDist * 1.6,
+    tp2: direction === 'SHORT' ? price - tpDist * 1.2 : price + tpDist * 1.2,
+    tp3: direction === 'SHORT' ? price - tpDist * 1.5 : price + tpDist * 1.5,
     slDist: slPct,
+    leverage,
     score: Math.round(score * 10) / 10,
     setup,
     setupName: `${direction === 'SHORT' ? 'LH' : 'HL'}-3TF`,
@@ -404,10 +401,11 @@ async function scanSMC(log) {
 
   // Get AI-optimized parameters
   const params = await aiLearner.getOptimalParams();
-  const rrRatio = params.RR_RATIO || 1.5;
+  const slMargin = params.SL_MARGIN_PCT || 0.30;
+  const tpMargin = params.TP_MARGIN_PCT || 0.45;
   const minScore = params.MIN_SCORE || 8;
 
-  bLog.scan(`LH/HL scan: ${topCoins.length} coins | AI params: RR=1:${rrRatio} SL_BUF=${(params.SL_BUFFER_PCT*100).toFixed(2)}% SL_MAX=${(params.SL_MAX_PCT*100).toFixed(1)}% SIZE=${(params.WALLET_SIZE_PCT*100).toFixed(0)}%`);
+  bLog.scan(`LH/HL scan: ${topCoins.length} coins | AI params: SL=${(slMargin*100).toFixed(0)}%margin TP=${(tpMargin*100).toFixed(0)}%margin RR=1:${(tpMargin/slMargin).toFixed(1)} SIZE=${(params.WALLET_SIZE_PCT*100).toFixed(0)}%`);
   if (params.DIRECTION_BIAS) bLog.ai(`AI direction bias: prefer ${params.DIRECTION_BIAS} (other direction losing)`);
 
   const results = [];
@@ -428,7 +426,7 @@ async function scanSMC(log) {
       results.push(signal);
       bLog.scan(
         `SIGNAL: ${signal.symbol} ${signal.direction} | score=${signal.score} setup=${signal.setupName}` +
-        ` | SL=$${signal.sl.toFixed(6)} TP=$${signal.tp1.toFixed(6)} RR=1:${rrRatio}`
+        ` | SL=$${signal.sl.toFixed(6)} TP=$${signal.tp1.toFixed(6)} RR=1:${(tpMargin/slMargin).toFixed(1)} lev=${signal.leverage}x`
       );
     }
 

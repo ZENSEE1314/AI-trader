@@ -135,11 +135,12 @@ async function shouldAvoidCoin(symbol) {
 // These match the LH/HL 3-TF strategy in smc-engine.js and cycle.js
 
 const DEFAULT_PARAMS = {
-  // Strategy params (smc-engine.js)
-  SL_BUFFER_PCT: 0.001,    // 0.1% buffer above/below swing candle
-  RR_RATIO: 1.5,           // TP = 1.5x SL distance
-  SL_MAX_PCT: 0.02,        // skip trades with SL > 2%
-  SL_MIN_PCT: 0.003,       // skip trades with SL < 0.3% (prevents noise wicks)
+  // Capital-based SL/TP (smc-engine.js)
+  // SL = 30% of position margin → at 10x lev = 3% price move
+  // TP = 45% of position margin → at 10x lev = 4.5% price move
+  // RR = TP/SL = 1.5
+  SL_MARGIN_PCT: 0.30,     // lose max 30% of position margin per trade
+  TP_MARGIN_PCT: 0.45,     // target 45% of position margin per trade
   MIN_SCORE: 8,            // minimum confluence score
 
   // Sizing params (cycle.js)
@@ -157,97 +158,45 @@ async function getOptimalParams() {
 
   const params = { ...DEFAULT_PARAMS };
 
-  // ── 1. SL Buffer: are we getting stopped out too early or too late? ──
-  const slAnalysis = await query(
+  // ── 1. SL margin %: learn if 30% margin loss is right or needs adjustment ──
+  const slMarginAnalysis = await query(
     `SELECT
-      AVG(CASE WHEN is_win = 1 THEN sl_distance_pct END) as avg_win_sl,
-      AVG(CASE WHEN is_win = 0 THEN sl_distance_pct END) as avg_lose_sl
-     FROM (SELECT * FROM ai_trades WHERE pnl_pct IS NOT NULL AND sl_distance_pct IS NOT NULL
+      COUNT(*) FILTER (WHERE is_win = 1) as wins,
+      COUNT(*) FILTER (WHERE is_win = 0) as losses,
+      AVG(pnl_pct) as avg_pnl
+     FROM (SELECT * FROM ai_trades WHERE pnl_pct IS NOT NULL
            ORDER BY created_at DESC LIMIT 50) sub`
   );
-  const sl = slAnalysis[0];
-  if (sl && sl.avg_win_sl && sl.avg_lose_sl) {
-    const winSl = parseFloat(sl.avg_win_sl);
-    const loseSl = parseFloat(sl.avg_lose_sl);
-    // If winning trades had wider SL → our buffer is too tight, widen it
-    if (winSl > loseSl * 1.2) {
-      const newBuf = Math.min(params.SL_BUFFER_PCT * (1 + MAX_WEIGHT_SHIFT), 0.005);
-      if (newBuf !== params.SL_BUFFER_PCT) {
-        await logParamChange('SL_BUFFER_PCT', params.SL_BUFFER_PCT, newBuf, 'winners use wider SL buffer', totalTrades);
-        params.SL_BUFFER_PCT = newBuf;
+  const slm = slMarginAnalysis[0];
+  if (slm && parseInt(slm.wins) + parseInt(slm.losses) >= 20) {
+    const winRate = parseInt(slm.wins) / (parseInt(slm.wins) + parseInt(slm.losses));
+    // If win rate < 35%, SL too tight — widen to give more room
+    if (winRate < 0.35) {
+      const newSl = Math.min(params.SL_MARGIN_PCT * (1 + MAX_WEIGHT_SHIFT), 0.50); // max 50%
+      const newTp = newSl * 1.5; // keep 1.5 RR
+      if (newSl !== params.SL_MARGIN_PCT) {
+        await logParamChange('SL_MARGIN_PCT', params.SL_MARGIN_PCT, newSl,
+          `WR ${(winRate*100).toFixed(0)}%, widening SL margin to give room`, totalTrades);
+        params.SL_MARGIN_PCT = newSl;
+        params.TP_MARGIN_PCT = Math.min(newTp, 0.75);
       }
     }
-    // If losing trades had wider SL → our buffer is too loose, tighten it
-    if (loseSl > winSl * 1.3) {
-      const newBuf = Math.max(params.SL_BUFFER_PCT * (1 - MAX_WEIGHT_SHIFT), 0.0005);
-      if (newBuf !== params.SL_BUFFER_PCT) {
-        await logParamChange('SL_BUFFER_PCT', params.SL_BUFFER_PCT, newBuf, 'losers have wider SL, tightening buffer', totalTrades);
-        params.SL_BUFFER_PCT = newBuf;
+    // If win rate > 65%, can tighten SL to protect capital more
+    if (winRate > 0.65) {
+      const newSl = Math.max(params.SL_MARGIN_PCT * (1 - MAX_WEIGHT_SHIFT), 0.15); // min 15%
+      const newTp = newSl * 1.5;
+      if (newSl !== params.SL_MARGIN_PCT) {
+        await logParamChange('SL_MARGIN_PCT', params.SL_MARGIN_PCT, newSl,
+          `WR ${(winRate*100).toFixed(0)}%, tightening SL to protect capital`, totalTrades);
+        params.SL_MARGIN_PCT = newSl;
+        params.TP_MARGIN_PCT = Math.max(newTp, 0.225);
       }
     }
   }
 
-  // ── 2. RR Ratio: find the sweet spot between TP hit rate and reward ──
-  const tpAnalysis = await query(
-    `SELECT
-      AVG(CASE WHEN is_win = 1 THEN tp_distance_pct END) as avg_win_tp,
-      AVG(CASE WHEN is_win = 1 THEN sl_distance_pct END) as avg_win_sl,
-      AVG(CASE WHEN is_win = 0 THEN tp_distance_pct END) as avg_lose_tp,
-      COUNT(*) FILTER (WHERE is_win = 1) as wins,
-      COUNT(*) FILTER (WHERE is_win = 0) as losses
-     FROM (SELECT * FROM ai_trades WHERE pnl_pct IS NOT NULL AND tp_distance_pct IS NOT NULL
-           ORDER BY created_at DESC LIMIT 80) sub`
-  );
-  const tp = tpAnalysis[0];
-  if (tp && tp.wins && tp.losses) {
-    const winRate = parseInt(tp.wins) / (parseInt(tp.wins) + parseInt(tp.losses));
-    // If win rate < 40%, TP too far → lower RR to hit TP more often
-    if (winRate < 0.40 && params.RR_RATIO > 1.0) {
-      const newRR = Math.max(params.RR_RATIO - 0.1, 1.0);
-      await logParamChange('RR_RATIO', params.RR_RATIO, newRR, `win rate ${(winRate*100).toFixed(0)}% too low, lowering TP target`, totalTrades);
-      params.RR_RATIO = newRR;
-    }
-    // If win rate > 65%, TP too close → raise RR to capture more profit
-    if (winRate > 0.65 && params.RR_RATIO < 2.5) {
-      const newRR = Math.min(params.RR_RATIO + 0.1, 2.5);
-      await logParamChange('RR_RATIO', params.RR_RATIO, newRR, `win rate ${(winRate*100).toFixed(0)}% high, raising TP target`, totalTrades);
-      params.RR_RATIO = newRR;
-    }
-  }
+  // ── 2. (removed — RR is now fixed at TP/SL = 1.5) ──
 
-  // ── 3. SL Max/Min: find optimal SL distance range ──
-  const slRangeAnalysis = await query(
-    `SELECT
-      sl_distance_pct,
-      is_win
-     FROM ai_trades
-     WHERE pnl_pct IS NOT NULL AND sl_distance_pct IS NOT NULL
-     ORDER BY created_at DESC LIMIT 100`
-  );
-  if (slRangeAnalysis.length >= 30) {
-    // Bucket SL distances and find which ranges win most
-    const buckets = {};
-    for (const t of slRangeAnalysis) {
-      const dist = parseFloat(t.sl_distance_pct);
-      const bucket = Math.round(dist * 200) / 200; // 0.5% buckets
-      if (!buckets[bucket]) buckets[bucket] = { wins: 0, total: 0 };
-      buckets[bucket].total++;
-      if (t.is_win) buckets[bucket].wins++;
-    }
-    // Find the max SL distance where win rate is still decent (>40%)
-    const goodMaxSl = Object.entries(buckets)
-      .filter(([, v]) => v.total >= 3 && v.wins / v.total > 0.4)
-      .map(([k]) => parseFloat(k))
-      .sort((a, b) => b - a);
-    if (goodMaxSl.length) {
-      const optimalMax = Math.min(goodMaxSl[0] / 100 + 0.005, 0.03); // convert % to decimal, add buffer, cap at 3%
-      const newMax = params.SL_MAX_PCT + (optimalMax - params.SL_MAX_PCT) * MAX_WEIGHT_SHIFT;
-      if (Math.abs(newMax - params.SL_MAX_PCT) > 0.001) {
-        await logParamChange('SL_MAX_PCT', params.SL_MAX_PCT, newMax, 'adjusted to optimal SL range', totalTrades);
-        params.SL_MAX_PCT = Math.max(0.01, Math.min(0.03, newMax));
-      }
-    }
-  }
+  // ── 3. (removed — SL range is now capital-based, not swing-based) ──
 
   // ── 4. Min Score threshold: find cutoff that filters losers ──
   const scoreAnalysis = await query(
@@ -411,33 +360,7 @@ async function getOptimalParams() {
     }
   }
 
-  // ── 9. SL tightness learning: if tight SLs always lose, widen minimum ──
-  const tightSLAnalysis = await query(
-    `SELECT
-      COUNT(*) FILTER (WHERE sl_distance_pct < 0.3 AND is_win = 0) as tight_losses,
-      COUNT(*) FILTER (WHERE sl_distance_pct < 0.3 AND is_win = 1) as tight_wins,
-      COUNT(*) FILTER (WHERE sl_distance_pct >= 0.3 AND is_win = 0) as wide_losses,
-      COUNT(*) FILTER (WHERE sl_distance_pct >= 0.3 AND is_win = 1) as wide_wins
-     FROM ai_trades WHERE pnl_pct IS NOT NULL AND sl_distance_pct IS NOT NULL`
-  );
-  const slTight = tightSLAnalysis[0];
-  if (slTight) {
-    const tightTotal = parseInt(slTight.tight_losses) + parseInt(slTight.tight_wins);
-    const wideTotal = parseInt(slTight.wide_losses) + parseInt(slTight.wide_wins);
-    if (tightTotal >= 5 && wideTotal >= 5) {
-      const tightWR = parseInt(slTight.tight_wins) / tightTotal;
-      const wideWR = parseInt(slTight.wide_wins) / wideTotal;
-      // If tight SLs lose much more, raise the minimum
-      if (tightWR < 0.25 && wideWR > tightWR * 1.5) {
-        const newMin = Math.min(params.SL_MIN_PCT * 1.1, 0.005); // max 0.5%
-        if (newMin > params.SL_MIN_PCT) {
-          await logParamChange('SL_MIN_PCT', params.SL_MIN_PCT, newMin,
-            `tight SL WR ${(tightWR*100).toFixed(0)}% vs wide ${(wideWR*100).toFixed(0)}%, widening min`, totalTrades);
-          params.SL_MIN_PCT = newMin;
-        }
-      }
-    }
-  }
+  // ── 9. (removed — SL is now capital-based, no min/max filtering needed) ──
 
   return params;
 }

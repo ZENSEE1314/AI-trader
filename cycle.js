@@ -192,7 +192,9 @@ async function openTrade(client, pick, wallet) {
   const totalFees = notional * CONFIG.TAKER_FEE * 2;
   const tpDist = Math.abs(tp1 - price) / price;
   const tp1Profit = notional * tpDist;
-  bLog.trade(`Size: ${(walletSizePct*100).toFixed(0)}% wallet=$${tradeUsdt.toFixed(2)} notional=$${notional.toFixed(2)} lev=${leverage}x margin=$${requiredMargin.toFixed(2)} | SL%=${(slDist*100).toFixed(3)}% RR=1:${aiParams.RR_RATIO || 1.5}`);
+  const slMarginLoss = slDist * leverage * 100; // % of margin that SL represents
+  const tpMarginGain = Math.abs(tp1 - price) / price * leverage * 100;
+  bLog.trade(`Size: ${(walletSizePct*100).toFixed(0)}% wallet=$${tradeUsdt.toFixed(2)} notional=$${notional.toFixed(2)} lev=${leverage}x margin=$${requiredMargin.toFixed(2)} | SL=${slMarginLoss.toFixed(0)}%margin TP=${tpMarginGain.toFixed(0)}%margin`);
   log(`Trade: ${sym} ${direction} lev=${leverage}x qty=${qty} notional=$${notional.toFixed(2)} margin=$${requiredMargin.toFixed(2)}`);
   if (tp1Profit < totalFees * 1.5) {
     bLog.trade(`Trade rejected: TP profit $${tp1Profit.toFixed(4)} < 1.5x fees $${(totalFees * 1.5).toFixed(4)}`);
