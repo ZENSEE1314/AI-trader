@@ -1,14 +1,14 @@
 // ============================================================
 // Smart Crypto Trader v4 — AI Self-Learning Edition
 // Binance USDT-M Futures + Bitunix Futures
-// Strategy: SMC (Smart Money Concepts) with AI adaptation
-// Target: 1% profit per trade
+// Strategy: 3-TF LH/HL confluence (15m, 3m, 1m)
+// TP: RR 1:1.5 based on SL distance
 // ============================================================
 
 const { USDMClient } = require('binance');
 const fetch = require('node-fetch');
 const aiLearner = require('./ai-learner');
-const { scanSMC, detectStructure, recordDailyTrade } = require('./smc-engine');
+const { scanSMC, recordDailyTrade } = require('./smc-engine');
 const { getSentimentScores } = require('./sentiment-scraper');
 const { log: bLog } = require('./bot-logger');
 
@@ -114,16 +114,33 @@ function calcEMA(prices, period) {
 const tradeState = new Map();
 // sym → { entry, tp1, tp2, tp3, sl, qty, isLong, tpHit1, tpHit2, pricePrec, qtyPrec, setup, openedAt }
 
-// ── 15m EXIT CHECK ───────────────────────────────────────────
-function shouldExit15m(struct15, entryPrice, direction) {
-  if (direction === 'LONG') {
-    const newSwing = struct15.sh1 && struct15.sh1 > entryPrice * 1.005;
-    const liqSwept = struct15.eqh && struct15.eqh > 0;
-    return newSwing && liqSwept;
+// ── 15m EXIT CHECK (structure break against position) ────────
+function shouldExit15m(klines15, entryPrice, direction) {
+  // Exit LONG if 15m makes a Lower High (trend reversing down)
+  // Exit SHORT if 15m makes a Higher Low (trend reversing up)
+  const swingHighs = [];
+  const swingLows = [];
+  for (let i = 1; i < klines15.length - 1; i++) {
+    const high = parseFloat(klines15[i][2]);
+    const low = parseFloat(klines15[i][3]);
+    const prevH = parseFloat(klines15[i - 1][2]);
+    const nextH = parseFloat(klines15[i + 1][2]);
+    const prevL = parseFloat(klines15[i - 1][3]);
+    const nextL = parseFloat(klines15[i + 1][3]);
+    if (high > prevH && high > nextH) swingHighs.push(high);
+    if (low < prevL && low < nextL) swingLows.push(low);
   }
-  const newSwing = struct15.sl1 && struct15.sl1 < entryPrice * 0.995;
-  const liqSwept = struct15.eql && struct15.eql > 0;
-  return newSwing && liqSwept;
+  if (direction === 'LONG' && swingHighs.length >= 2) {
+    const recent = swingHighs[swingHighs.length - 1];
+    const prev = swingHighs[swingHighs.length - 2];
+    return recent < prev && recent > entryPrice;
+  }
+  if (direction === 'SHORT' && swingLows.length >= 2) {
+    const recent = swingLows[swingLows.length - 1];
+    const prev = swingLows[swingLows.length - 2];
+    return recent > prev && recent < entryPrice;
+  }
+  return false;
 }
 
 // ── OPEN TRADE (1% TP targeting) ──────────────────────────────
@@ -149,11 +166,15 @@ async function openTrade(client, pick, wallet) {
 
   // AI-optimized parameters
   const params = await aiLearner.getOptimalParams();
-  const TP_PCT = params.TP_PCT || CONFIG.TP_PCT;
 
-  // SL from SMC engine (swing point based)
+  // SL from engine (1m swing candle + 0.1% buffer)
   const sl = fmtP(pick.sl);
   const slDist = Math.abs(price - sl) / price;
+
+  // TP from engine (RR 1:1.5 based on SL distance)
+  const tp1 = fmtP(pick.tp1);
+  const tp2 = fmtP(pick.tp2);
+  const tp3 = fmtP(pick.tp3);
 
   // Position size: risk % of wallet
   const MIN_NOTIONAL = 5.5;
@@ -170,16 +191,12 @@ async function openTrade(client, pick, wallet) {
     return null;
   }
 
-  // TP levels: 1%, 1.5%, 2% (AI-adjusted)
-  const tp1 = fmtP(isLong ? price * (1 + TP_PCT) : price * (1 - TP_PCT));
-  const tp2 = fmtP(isLong ? price * (1 + TP_PCT * CONFIG.TP2_MULT) : price * (1 - TP_PCT * CONFIG.TP2_MULT));
-  const tp3 = fmtP(isLong ? price * (1 + TP_PCT * CONFIG.TP3_MULT) : price * (1 - TP_PCT * CONFIG.TP3_MULT));
-
   // Fee check
   const notional = qty * price;
   const totalFees = notional * CONFIG.TAKER_FEE * 2;
-  const tp1Profit = notional * TP_PCT * 0.5;
-  bLog.trade(`Fee check: notional=$${notional.toFixed(2)} fees=$${totalFees.toFixed(4)} TP1=$${tp1Profit.toFixed(4)} SL%=${(slDist*100).toFixed(3)}%`);
+  const tpDist = Math.abs(tp1 - price) / price;
+  const tp1Profit = notional * tpDist * 0.5;
+  bLog.trade(`Fee check: notional=$${notional.toFixed(2)} fees=$${totalFees.toFixed(4)} TP1=$${tp1Profit.toFixed(4)} SL%=${(slDist*100).toFixed(3)}% RR=1:1.5`);
   log(`Fee check: notional=$${notional.toFixed(2)} fees=$${totalFees.toFixed(4)} TP1=$${tp1Profit.toFixed(4)} SL%=${(slDist*100).toFixed(3)}%`);
   if (tp1Profit < totalFees * 1.5) {
     bLog.trade(`Trade rejected: TP1 profit $${tp1Profit.toFixed(4)} < 1.5x fees $${(totalFees * 1.5).toFixed(4)}`);
@@ -304,11 +321,10 @@ async function checkTrailingStop(client) {
       const closeSide = isLong ? 'SELL' : 'BUY';
       const gain = isLong ? (cur - entry) / entry : (entry - cur) / entry;
 
-      // 15m swing exit check
+      // 15m structure break exit check
       try {
         const klines15 = await client.getKlines({ symbol: sym, interval: '15m', limit: 50 });
-        const struct15 = detectStructure(klines15);
-        if (shouldExit15m(struct15, entry, isLong ? 'LONG' : 'SHORT')) {
+        if (shouldExit15m(klines15, entry, isLong ? 'LONG' : 'SHORT')) {
           log(`Exit [${isLong ? 'LONG' : 'SHORT'}] ${sym}: 15m swing + liquidity swept`);
           try { await client.cancelAllOpenOrders({ symbol: sym }); } catch (_) {}
           try { await client.cancelAllAlgoOpenOrders({ symbol: sym }); } catch (_) {}
@@ -442,8 +458,8 @@ async function main() {
     // Try signals in order — fall through to runner-ups if first pick is too expensive
     let executed = false;
     for (const pick of signals) {
-      log(`Signal: ${pick.symbol} ${pick.direction} score=${pick.score} setup=${pick.setup} AI=${pick.aiModifier}`);
-      bLog.trade(`TRYING: ${pick.symbol} ${pick.direction} | setup=${pick.setupName} score=${pick.score} | TP1=$${fmtPrice(pick.tp1)} SL=$${fmtPrice(pick.sl)} | zone=${pick.premiumDiscount} RSI=${pick.rsi}`);
+      log(`Signal: ${pick.symbol} ${pick.direction} score=${pick.score} setup=${pick.setupName} AI=${pick.aiModifier}`);
+      bLog.trade(`TRYING: ${pick.symbol} ${pick.direction} | setup=${pick.setupName} score=${pick.score} | TP=$${fmtPrice(pick.tp1)} SL=$${fmtPrice(pick.sl)} | RR=1:1.5`);
 
       // ── Step 2: Execute for all registered users ──
       bLog.trade(`Executing trade: ${pick.symbol} ${pick.direction} for registered users...`);
@@ -481,12 +497,12 @@ async function main() {
               await notify(
                 `*AI Trade — ${now()}*\n` +
                 `*${result.sym}* ${dirEmoji} *${result.direction} x${result.leverage}*\n` +
-                `Setup: *${result.setup}*\n` +
+                `Setup: *${result.setup}* (3-TF LH/HL)\n` +
                 `Entry: \`$${fmtPrice(result.entry)}\`\n` +
-                `TP1(1%): \`$${fmtPrice(result.tp1)}\` | TP2: \`$${fmtPrice(result.tp2)}\` | TP3: \`$${fmtPrice(result.tp3)}\`\n` +
+                `TP: \`$${fmtPrice(result.tp1)}\` (RR 1:1.5)\n` +
                 `SL: \`$${fmtPrice(result.sl)}\` (${(result.slDist*100).toFixed(2)}%)\n` +
                 `Qty: \`${result.qty}\` | Wallet: *$${avail.toFixed(2)}*\n` +
-                `AI Score: *${pick.score}* | Sentiment: ${pick.sentiment || 'neutral'}`
+                `AI Score: *${pick.score}*`
               );
             } else {
               bLog.trade(`openTrade returned null for ${pick.symbol} — trade rejected`);
