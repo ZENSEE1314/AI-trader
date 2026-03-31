@@ -2096,7 +2096,8 @@
       setSeriesVisible(indicatorSeries.vwapUpper, isVwapOn);
       setSeriesVisible(indicatorSeries.vwapLower, isVwapOn);
 
-      const isCurvedOn = document.getElementById('tog-curved').checked;
+      const curvedEl = document.getElementById('tog-curved');
+      const isCurvedOn = curvedEl ? curvedEl.checked : false;
       setSeriesVisible(indicatorSeries.curvedUpper, isCurvedOn);
       setSeriesVisible(indicatorSeries.curvedLower, isCurvedOn);
 
@@ -2523,7 +2524,8 @@
         'tog-vwap', 'tog-curved', 'tog-dailylvl', 'tog-eqheql', 'tog-choch', 'tog-strongweak', 'tog-premium',
       ];
       toggleIds.forEach(id => {
-        document.getElementById(id).addEventListener('change', applyToggleVisibility);
+        const el = document.getElementById(id);
+        if (el) el.addEventListener('change', applyToggleVisibility);
       });
 
       // Coin search
