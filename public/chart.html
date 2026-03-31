@@ -1558,14 +1558,13 @@
     // ── VWAP (3 lines: upper band, VWAP, lower band) ──────────
 
     function renderVWAP(data) {
-      const lineOpts = { lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false };
+      const lineOpts = { lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, ...OVERLAY_OPTS };
 
       if (data.vwapUpper && data.vwapUpper.length) {
         indicatorSeries.vwapUpper = chart.addLineSeries({
           ...lineOpts,
-          color: 'rgba(0, 212, 170, 0.4)',
+          color: 'rgba(33, 150, 243, 0.4)',
           lineStyle: LightweightCharts.LineStyle.Dashed,
-          title: 'VWAP Upper',
         });
         indicatorSeries.vwapUpper.setData(data.vwapUpper);
       }
@@ -1573,7 +1572,7 @@
       if (data.vwap && data.vwap.length) {
         indicatorSeries.vwap = chart.addLineSeries({
           ...lineOpts,
-          color: '#00d4aa',
+          color: '#2196f3',
           lineWidth: 2,
           title: 'VWAP',
         });
@@ -1583,9 +1582,8 @@
       if (data.vwapLower && data.vwapLower.length) {
         indicatorSeries.vwapLower = chart.addLineSeries({
           ...lineOpts,
-          color: 'rgba(0, 212, 170, 0.4)',
+          color: 'rgba(33, 150, 243, 0.4)',
           lineStyle: LightweightCharts.LineStyle.Dashed,
-          title: 'VWAP Lower',
         });
         indicatorSeries.vwapLower.setData(data.vwapLower);
       }
@@ -1594,7 +1592,7 @@
     // ── Curved Structure Bands (Zeiierman) ────────────────────
 
     function renderCurvedBands(data) {
-      const lineOpts = { lineWidth: 2, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false };
+      const lineOpts = { lineWidth: 2, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, ...OVERLAY_OPTS };
 
       if (data.curvedUpper && data.curvedUpper.length) {
         indicatorSeries.curvedUpper = chart.addLineSeries({

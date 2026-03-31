@@ -201,8 +201,8 @@ function calcEMA(closes, period) {
 }
 
 // ── VWAP with Upper/Lower Bands ─────────────────────────────
-// Returns { vwap, upper, lower } — bands use rolling std deviation * multiplier
-const VWAP_BAND_MULT = 2.0;
+// Returns { vwap, upper, lower } — bands use rolling std deviation
+const VWAP_BAND_MULT = 1.0;
 
 function calcVWAPBands(klines) {
   let cumVol = 0, cumTP = 0, cumTP2 = 0;
@@ -244,7 +244,7 @@ function calcVWAPBands(klines) {
 }
 
 // ── Curved Structure Bands (Zeiierman) ──────────────────────
-// ATR-based adaptive upper/lower bands that curve toward price
+// ATR-based adaptive upper/lower bands using RMA (Wilder's smoothing)
 const CURVED_TREND_LENGTH = 100;
 const CURVED_MULTIPLIER = 3.0;
 
@@ -253,27 +253,13 @@ function calcCurvedBands(klines) {
   const lows = klines.map(k => parseFloat(k[3]));
   const closes = klines.map(k => parseFloat(k[4]));
 
-  // ATR calculation
-  const trueRanges = [];
-  for (let i = 0; i < klines.length; i++) {
-    if (i === 0) {
-      trueRanges.push(highs[i] - lows[i]);
-    } else {
-      const tr = Math.max(
-        highs[i] - lows[i],
-        Math.abs(highs[i] - closes[i - 1]),
-        Math.abs(lows[i] - closes[i - 1])
-      );
-      trueRanges.push(tr);
-    }
-  }
+  // RMA-based ATR (Wilder's smoothing — matches Pine Script ta.atr)
+  const atrLen = CURVED_TREND_LENGTH;
+  const lengthSquared = atrLen * atrLen;
+  let rmaAtr = highs[0] - lows[0];
 
-  // Simple moving average of TR for adaptive size
-  const atrLen = Math.min(CURVED_TREND_LENGTH, klines.length);
-  const lengthSquared = CURVED_TREND_LENGTH * CURVED_TREND_LENGTH;
-
-  let upperBand = closes[0];
-  let lowerBand = closes[0];
+  let upperBand = highs[0];
+  let lowerBand = lows[0];
   let barsSinceUpperIncrease = 0;
   let barsSinceLowerDecrease = 0;
 
@@ -281,22 +267,24 @@ function calcCurvedBands(klines) {
   const lowerArr = [];
 
   for (let i = 0; i < klines.length; i++) {
-    // Rolling ATR (simple average of last atrLen true ranges)
-    const start = Math.max(0, i - atrLen + 1);
-    let atrSum = 0;
-    for (let j = start; j <= i; j++) atrSum += trueRanges[j];
-    const adaptiveSize = atrSum / (i - start + 1);
+    // True Range
+    const tr = i === 0
+      ? highs[i] - lows[i]
+      : Math.max(highs[i] - lows[i], Math.abs(highs[i] - closes[i - 1]), Math.abs(lows[i] - closes[i - 1]));
+
+    // RMA: rma = (prev * (len - 1) + val) / len
+    rmaAtr = (rmaAtr * (atrLen - 1) + tr) / atrLen;
 
     // Upper band
     const maxCloseUpper = Math.max(highs[i], upperBand);
     barsSinceUpperIncrease = closes[i] > upperBand ? 0 : barsSinceUpperIncrease + 1;
-    const upperAdj = (adaptiveSize / lengthSquared) * (barsSinceUpperIncrease + 1) * CURVED_MULTIPLIER;
+    const upperAdj = (rmaAtr / lengthSquared) * (barsSinceUpperIncrease + 1) * CURVED_MULTIPLIER;
     upperBand = maxCloseUpper - upperAdj;
 
     // Lower band
     const minCloseLower = Math.min(lows[i], lowerBand);
     barsSinceLowerDecrease = closes[i] < lowerBand ? 0 : barsSinceLowerDecrease + 1;
-    const lowerAdj = (adaptiveSize / lengthSquared) * (barsSinceLowerDecrease + 1) * CURVED_MULTIPLIER;
+    const lowerAdj = (rmaAtr / lengthSquared) * (barsSinceLowerDecrease + 1) * CURVED_MULTIPLIER;
     lowerBand = minCloseLower + lowerAdj;
 
     upperArr.push(upperBand);
