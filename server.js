@@ -15,7 +15,7 @@ app.use((req, res, next) => {
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
     "font-src 'self' https://fonts.gstatic.com; " +
     "img-src 'self' data: blob:; " +
-    "connect-src 'self' https://fapi.binance.com https://fapi.bitunix.com https://api.ipify.org;"
+    "connect-src 'self' https://fapi.binance.com https://fapi.bitunix.com https://api.ipify.org wss://fstream.binance.com wss://stream.bitunix.com;"
   );
   next();
 });
