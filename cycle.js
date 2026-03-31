@@ -34,6 +34,33 @@ const CONFIG = {
   ],
 };
 
+// ── Daily Capital Lock (resets at 7am each day) ─────────────
+// Capital is gauged at 7am and stays fixed until 7am the next day
+const CAPITAL_RESET_HOUR = 7; // 7am local time
+const dailyCapital = new Map(); // key -> { balance, lockedAt }
+
+function getDailyCapital(key, currentBalance) {
+  const now = new Date();
+  const entry = dailyCapital.get(key);
+
+  if (entry) {
+    // Check if we've passed the next 7am reset point
+    const resetTime = new Date(entry.lockedAt);
+    resetTime.setHours(CAPITAL_RESET_HOUR, 0, 0, 0);
+    if (resetTime <= entry.lockedAt) {
+      resetTime.setDate(resetTime.getDate() + 1);
+    }
+    if (now < resetTime) {
+      return entry.balance;
+    }
+  }
+
+  // Lock the current balance for this trading day
+  dailyCapital.set(key, { balance: currentBalance, lockedAt: now });
+  bLog.trade(`Capital locked for ${key}: $${currentBalance.toFixed(2)} (resets at ${CAPITAL_RESET_HOUR}:00)`);
+  return currentBalance;
+}
+
 // AI-tuned leverage — params come from getOptimalParams()
 function getLeverage(symbol, price, params = {}) {
   if (BTC_ETH_SYMBOLS.has(symbol)) return Math.max(params.LEV_BTC_ETH || 100, 100);
@@ -518,9 +545,10 @@ async function main() {
       try {
         const client = getClient();
         const account = await client.getAccountInformation({ omitZeroBalances: false });
-        const wallet = parseFloat(account.totalWalletBalance);
+        const rawWallet = parseFloat(account.totalWalletBalance);
         const avail = parseFloat(account.availableBalance);
-        bLog.trade(`Owner wallet: $${wallet.toFixed(2)} available: $${avail.toFixed(2)}`);
+        const wallet = getDailyCapital('owner-binance', rawWallet);
+        bLog.trade(`Owner wallet: $${rawWallet.toFixed(2)} (daily capital: $${wallet.toFixed(2)}) available: $${avail.toFixed(2)}`);
 
         await checkTrailingStop(client);
 
@@ -653,12 +681,13 @@ async function executeForAllUsers(pick) {
         if (key.platform === 'binance') {
           const userClient = new USDMClient({ api_key: apiKey, api_secret: apiSecret });
           account = await userClient.getAccountInformation({ omitZeroBalances: false });
-          wallet = parseFloat(account.totalWalletBalance);
+          const rawWallet = parseFloat(account.totalWalletBalance);
+          wallet = getDailyCapital(`user-${key.email}-binance`, rawWallet);
           const openPositions = account.positions.filter(p => parseFloat(p.positionAmt) !== 0);
           openPosCount = openPositions.length;
 
           if (openPosCount >= maxPos) { bLog.trade(`User ${key.email}: at max positions (${openPosCount}/${maxPos})`); return; }
-          if (wallet < CONFIG.MIN_BALANCE) { bLog.trade(`User ${key.email}: wallet too low ($${wallet.toFixed(2)})`); return; }
+          if (rawWallet < CONFIG.MIN_BALANCE) { bLog.trade(`User ${key.email}: wallet too low ($${rawWallet.toFixed(2)})`); return; }
 
           // Check if already in a position on this specific symbol
           const existingPos = openPositions.find(p => p.symbol === symbol);
@@ -758,12 +787,13 @@ async function executeForAllUsers(pick) {
         } else if (key.platform === 'bitunix') {
           const userClient = new BitunixClient({ apiKey, apiSecret });
           account = await userClient.getAccountInformation();
-          wallet = parseFloat(account.totalWalletBalance);
+          const rawWalletBx = parseFloat(account.totalWalletBalance);
+          wallet = getDailyCapital(`user-${key.email}-bitunix`, rawWalletBx);
           const bxPositions = account.positions || [];
           openPosCount = bxPositions.length;
 
           if (openPosCount >= maxPos) { bLog.trade(`User ${key.email}: at max positions (${openPosCount}/${maxPos})`); return; }
-          if (wallet < CONFIG.MIN_BALANCE) { bLog.trade(`User ${key.email}: wallet too low ($${wallet.toFixed(2)})`); return; }
+          if (rawWalletBx < CONFIG.MIN_BALANCE) { bLog.trade(`User ${key.email}: wallet too low ($${rawWalletBx.toFixed(2)})`); return; }
 
           const existingPosBx = bxPositions.find(p => p.symbol === symbol);
           if (existingPosBx) {
