@@ -200,49 +200,6 @@ function calcEMA(closes, period) {
   return ema;
 }
 
-// ── VWAP with Upper/Lower Bands ─────────────────────────────
-// Returns { vwap, upper, lower } — bands use rolling std deviation
-const VWAP_BAND_MULT = 1.0;
-
-function calcVWAPBands(klines) {
-  let cumVol = 0, cumTP = 0, cumTP2 = 0;
-  const vwap = [], upper = [], lower = [];
-  let currentDay = null;
-
-  for (const k of klines) {
-    const day = new Date(parseInt(k[0])).toISOString().slice(0, 10);
-    if (day !== currentDay) {
-      cumVol = 0;
-      cumTP = 0;
-      cumTP2 = 0;
-      currentDay = day;
-    }
-    const high = parseFloat(k[2]);
-    const low = parseFloat(k[3]);
-    const close = parseFloat(k[4]);
-    const vol = parseFloat(k[5]);
-    const tp = (high + low + close) / 3;
-
-    cumTP += tp * vol;
-    cumTP2 += tp * tp * vol;
-    cumVol += vol;
-
-    if (cumVol > 0) {
-      const v = cumTP / cumVol;
-      const variance = Math.max(0, cumTP2 / cumVol - v * v);
-      const stdDev = Math.sqrt(variance);
-      vwap.push(v);
-      upper.push(v + stdDev * VWAP_BAND_MULT);
-      lower.push(v - stdDev * VWAP_BAND_MULT);
-    } else {
-      vwap.push(close);
-      upper.push(close);
-      lower.push(close);
-    }
-  }
-  return { vwap, upper, lower };
-}
-
 // ── Curved Structure Bands (Zeiierman) ──────────────────────
 // ATR-based adaptive upper/lower bands using RMA (Wilder's smoothing)
 const CURVED_TREND_LENGTH = 100;
@@ -501,7 +458,6 @@ router.get('/data', async (req, res) => {
     let eqhEql = [], chochBms = [], strongWeak = [], premiumDiscount = {};
     let trend = 'Neutral', dailyLevels = {};
     let ema7 = [], ema22 = [], ema200 = [];
-    let vwapBands = { vwap: [], upper: [], lower: [] };
     let curvedBands = { upper: [], lower: [] };
 
     try {
@@ -525,7 +481,6 @@ router.get('/data', async (req, res) => {
       ema7 = calcEMA(closes, 7);
       ema22 = calcEMA(closes, 22);
       ema200 = calcEMA(closes, 200);
-      vwapBands = calcVWAPBands(klines);
       curvedBands = calcCurvedBands(klines);
       dailyLevels = calcDailyLevels(klines);
     } catch (indErr) {
@@ -552,9 +507,6 @@ router.get('/data', async (req, res) => {
       ema7: emaData(ema7),
       ema22: emaData(ema22),
       ema200: emaData(ema200),
-      vwap: emaData(vwapBands.vwap),
-      vwapUpper: emaData(vwapBands.upper),
-      vwapLower: emaData(vwapBands.lower),
       curvedUpper: emaData(curvedBands.upper),
       curvedLower: emaData(curvedBands.lower),
     });

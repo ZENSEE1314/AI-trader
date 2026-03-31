@@ -3,7 +3,6 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://unpkg.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self' https://fapi.binance.com https://fapi.bitunix.com;">
   <title>MCT — SMC Chart</title>
   <link rel="icon" href="/img/logo.jpeg" type="image/jpeg">
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -892,7 +891,6 @@
         <label class="ind-toggle"><input type="checkbox" id="tog-ema7" checked> EMA7</label>
         <label class="ind-toggle"><input type="checkbox" id="tog-ema22" checked> EMA22</label>
         <label class="ind-toggle"><input type="checkbox" id="tog-ema200"> EMA200</label>
-        <label class="ind-toggle"><input type="checkbox" id="tog-vwap" checked> VWAP</label>
         <label class="ind-toggle"><input type="checkbox" id="tog-curved" checked> Curved Bands</label>
         <label class="ind-toggle"><input type="checkbox" id="tog-dailylvl" checked> OP/PDH/PDL</label>
         <label class="ind-toggle"><input type="checkbox" id="tog-eqheql"> EQH/EQL</label>
@@ -1116,9 +1114,6 @@
       ema7: null,
       ema22: null,
       ema200: null,
-      vwap: null,
-      vwapUpper: null,
-      vwapLower: null,
       curvedUpper: null,
       curvedLower: null,
       dailyOP: null,
@@ -1304,7 +1299,6 @@
 
     function clearIndicators() {
       [indicatorSeries.ema7, indicatorSeries.ema22, indicatorSeries.ema200,
-       indicatorSeries.vwap, indicatorSeries.vwapUpper, indicatorSeries.vwapLower,
        indicatorSeries.curvedUpper, indicatorSeries.curvedLower,
        indicatorSeries.dailyOP, indicatorSeries.dailyPDH, indicatorSeries.dailyPDL,
        indicatorSeries.premiumSeries, indicatorSeries.discountSeries, indicatorSeries.midSeries]
@@ -1332,9 +1326,6 @@
       indicatorSeries.ema7 = null;
       indicatorSeries.ema22 = null;
       indicatorSeries.ema200 = null;
-      indicatorSeries.vwap = null;
-      indicatorSeries.vwapUpper = null;
-      indicatorSeries.vwapLower = null;
       indicatorSeries.curvedUpper = null;
       indicatorSeries.curvedLower = null;
       indicatorSeries.dailyOP = null;
@@ -1380,9 +1371,6 @@
 
       // EMA lines
       renderEMALines(data);
-
-      // VWAP (3 lines: upper band, VWAP, lower band)
-      renderVWAP(data);
 
       // Curved Structure Bands (Zeiierman)
       renderCurvedBands(data);
@@ -1553,40 +1541,6 @@
           crosshairMarkerVisible: false,
         });
         indicatorSeries.ema200.setData(data.ema200);
-      }
-    }
-
-    // ── VWAP (3 lines: upper band, VWAP, lower band) ──────────
-
-    function renderVWAP(data) {
-      const lineOpts = { lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, ...OVERLAY_OPTS };
-
-      if (data.vwapUpper && data.vwapUpper.length) {
-        indicatorSeries.vwapUpper = chart.addLineSeries({
-          ...lineOpts,
-          color: 'rgba(33, 150, 243, 0.4)',
-          lineStyle: LightweightCharts.LineStyle.Dashed,
-        });
-        indicatorSeries.vwapUpper.setData(data.vwapUpper);
-      }
-
-      if (data.vwap && data.vwap.length) {
-        indicatorSeries.vwap = chart.addLineSeries({
-          ...lineOpts,
-          color: '#2196f3',
-          lineWidth: 2,
-          title: 'VWAP',
-        });
-        indicatorSeries.vwap.setData(data.vwap);
-      }
-
-      if (data.vwapLower && data.vwapLower.length) {
-        indicatorSeries.vwapLower = chart.addLineSeries({
-          ...lineOpts,
-          color: 'rgba(33, 150, 243, 0.4)',
-          lineStyle: LightweightCharts.LineStyle.Dashed,
-        });
-        indicatorSeries.vwapLower.setData(data.vwapLower);
       }
     }
 
@@ -2090,11 +2044,6 @@
       setSeriesVisible(indicatorSeries.ema7, document.getElementById('tog-ema7').checked);
       setSeriesVisible(indicatorSeries.ema22, document.getElementById('tog-ema22').checked);
       setSeriesVisible(indicatorSeries.ema200, document.getElementById('tog-ema200').checked);
-      const isVwapOn = document.getElementById('tog-vwap').checked;
-      setSeriesVisible(indicatorSeries.vwap, isVwapOn);
-      setSeriesVisible(indicatorSeries.vwapUpper, isVwapOn);
-      setSeriesVisible(indicatorSeries.vwapLower, isVwapOn);
-
       const curvedEl = document.getElementById('tog-curved');
       const isCurvedOn = curvedEl ? curvedEl.checked : false;
       setSeriesVisible(indicatorSeries.curvedUpper, isCurvedOn);
@@ -2520,7 +2469,7 @@
       const toggleIds = [
         'tog-swings', 'tog-labels', 'tog-ob', 'tog-fvg',
         'tog-levels', 'tog-ema7', 'tog-ema22', 'tog-ema200',
-        'tog-vwap', 'tog-curved', 'tog-dailylvl', 'tog-eqheql', 'tog-choch', 'tog-strongweak', 'tog-premium',
+        'tog-curved', 'tog-dailylvl', 'tog-eqheql', 'tog-choch', 'tog-strongweak', 'tog-premium',
       ];
       toggleIds.forEach(id => {
         const el = document.getElementById(id);
