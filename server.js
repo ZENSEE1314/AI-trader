@@ -6,20 +6,6 @@ const app = express();
 
 app.use(express.json());
 app.use(cookieParser());
-
-// CSP: allow lightweight-charts library (uses eval internally)
-app.use((req, res, next) => {
-  res.setHeader('Content-Security-Policy',
-    "default-src 'self'; " +
-    "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://unpkg.com; " +
-    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
-    "font-src 'self' https://fonts.gstatic.com; " +
-    "img-src 'self' data: blob:; " +
-    "connect-src 'self' https://fapi.binance.com https://fapi.bitunix.com https://api.ipify.org wss://fstream.binance.com wss://stream.bitunix.com;"
-  );
-  next();
-});
-
 app.use(express.static(path.join(__dirname, 'public')));
 
 // API routes
