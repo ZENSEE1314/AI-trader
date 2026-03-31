@@ -53,7 +53,9 @@ async function fetchTickers() {
 //   3m  → len=8  (covers ~24 min of structure)
 //   1m  → len=5  (covers ~5 min of structure)
 
-const SWING_LENGTHS = { '15m': 10, '3m': 8, '1m': 5 };
+// Zeiierman SMC settings: Swing Points Length = 20, Structure Period = 10
+const SWING_LENGTHS = { '15m': 20, '3m': 20, '1m': 20 };
+const STRUCTURE_PERIOD = 10;
 
 // ── Pivot Detection (LuxAlgo swings() method) ───────────────
 // A bar at index [len] is a swing high if its high > highest of surrounding bars
@@ -235,11 +237,11 @@ async function analyzeLHHL(ticker, params) {
   const rrRatio = TP_MARGIN_PCT / SL_MARGIN_PCT;       // 1.5 RR
   const dirBias = params.DIRECTION_BIAS || null;
 
-  // Fetch 3 timeframes: 15m, 3m, 1m
+  // Fetch 3 timeframes: 15m, 3m, 1m (100 candles to support swing length 20)
   const [klines15m, klines3m, klines1m] = await Promise.all([
-    fetchKlines(symbol, '15m', 50),
-    fetchKlines(symbol, '3m', 50),
-    fetchKlines(symbol, '1m', 50),
+    fetchKlines(symbol, '15m', 100),
+    fetchKlines(symbol, '3m', 100),
+    fetchKlines(symbol, '1m', 100),
   ]);
 
   if (!klines15m || !klines3m || !klines1m) return null;
