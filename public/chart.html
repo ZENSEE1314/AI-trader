@@ -604,17 +604,99 @@
     .rs-ob-dot.bull { background: #00d4aa; }
     .rs-ob-dot.bear { background: #ff4757; }
 
-    @media (max-width: 900px) {
+    /* --- Mobile Menu Buttons --- */
+    .mobile-menu-btn {
+      display: none;
+      background: var(--color-bg-sunken);
+      border: 1px solid var(--color-border);
+      color: var(--color-fg);
+      font-size: 16px;
+      width: 32px;
+      height: 32px;
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+    .mobile-menu-btn:hover { background: var(--color-border); }
+
+    /* --- Mobile Responsive --- */
+
+    @media (max-width: 1024px) {
       .app-layout { grid-template-columns: 200px 1fr 200px; }
     }
-    @media (max-width: 700px) {
-      .app-layout { grid-template-columns: 1fr 180px; }
-      .sidebar { display: none; }
+
+    @media (max-width: 768px) {
+      .app-layout {
+        grid-template-columns: 1fr;
+        grid-template-rows: auto auto 1fr auto auto;
+      }
+      .sidebar {
+        display: none;
+        position: fixed;
+        top: 0; left: 0;
+        width: 260px;
+        height: 100vh;
+        z-index: 100;
+        box-shadow: 4px 0 20px rgba(0,0,0,0.5);
+      }
+      .sidebar.mobile-open { display: flex; }
+      .right-sidebar {
+        display: none;
+        position: fixed;
+        top: 0; right: 0;
+        width: 240px;
+        height: 100vh;
+        z-index: 100;
+        box-shadow: -4px 0 20px rgba(0,0,0,0.5);
+      }
+      .right-sidebar.mobile-open { display: flex; }
+      .mobile-overlay {
+        display: none;
+        position: fixed;
+        inset: 0;
+        background: rgba(0,0,0,0.5);
+        z-index: 99;
+      }
+      .mobile-overlay.active { display: block; }
+
+      .toolbar {
+        padding: var(--space-1) var(--space-2);
+        gap: var(--space-2);
+        min-height: 40px;
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+      }
+      .toolbar-symbol { font-size: var(--text-sm); }
+      .toolbar-price { font-size: var(--text-sm); }
+      .toolbar-divider { display: none; }
+      .toolbar-label { display: none; }
+      .ind-toggle { font-size: 10px; }
+      .tf-btn { padding: 2px 6px; min-width: 28px; font-size: 10px; }
+      .zoom-btn { width: 24px; height: 24px; font-size: 12px; }
+      .trend-box { font-size: 10px; padding: 1px var(--space-2); }
+
+      .mobile-menu-btn { display: flex; }
+      .range-info { font-size: 9px; gap: var(--space-2); padding: 2px var(--space-2); }
+
+      .bottom-panel { max-height: 80px; }
+      .bottom-panel-content { padding: var(--space-2); gap: var(--space-4); }
+      .structure-item-label { font-size: 8px; }
+      .structure-item-value { font-size: var(--text-xs); }
     }
-    @media (max-width: 500px) {
-      .app-layout { grid-template-columns: 1fr; }
-      .sidebar { display: none; }
-      .right-sidebar { display: none; }
+
+    @media (max-width: 480px) {
+      .toolbar {
+        flex-wrap: nowrap;
+        gap: var(--space-1);
+        padding: var(--space-1);
+      }
+      .toolbar-change { display: none; }
+      .ind-toggle span,
+      .ind-toggle { font-size: 9px; }
+      .tf-btn { padding: 2px 4px; min-width: 24px; font-size: 9px; }
+      .trend-box { display: none; }
     }
 
     /* Trend info box */
@@ -740,8 +822,11 @@
 
 <body>
   <div class="app-layout">
+    <!-- Mobile overlay (closes sidebars when tapped) -->
+    <div class="mobile-overlay" id="mobile-overlay"></div>
+
     <!-- Sidebar -->
-    <aside class="sidebar">
+    <aside class="sidebar" id="left-sidebar">
       <div class="sidebar-header">
         <a href="/" class="sidebar-brand">
           <img src="/img/logo.jpeg" alt="MCT Logo">
@@ -766,6 +851,7 @@
 
     <!-- Toolbar -->
     <header class="toolbar" role="toolbar" aria-label="Chart controls">
+      <button class="mobile-menu-btn" id="btn-coins" title="Coins" aria-label="Open coin list">&#9776;</button>
       <span class="toolbar-symbol" id="toolbar-symbol">BTCUSDT</span>
       <span class="toolbar-price" id="toolbar-price">--</span><span class="live-dot" title="Live"></span>
       <span class="toolbar-change" id="toolbar-change">--</span>
@@ -818,6 +904,7 @@
         <span class="trend-label">Trend:</span>
         <span class="trend-value neutral" id="trend-value">--</span>
       </div>
+      <button class="mobile-menu-btn" id="btn-info" title="SMC Info" aria-label="Open SMC info panel">&#9432;</button>
     </header>
 
     <!-- Range info bar -->
@@ -2069,6 +2156,10 @@
     }
 
     function handleCoinSelect(symbol) {
+      // Close mobile panels if open
+      document.getElementById('left-sidebar')?.classList.remove('mobile-open');
+      document.getElementById('mobile-overlay')?.classList.remove('active');
+
       STATE.symbol = symbol;
       DOM.toolbarSymbol.textContent = symbol;
 
@@ -2299,6 +2390,31 @@
     // ============================================================
 
     function setupEventListeners() {
+      // Mobile sidebar toggles
+      const overlay = document.getElementById('mobile-overlay');
+      const leftSidebar = document.getElementById('left-sidebar');
+      const rightSidebar = document.getElementById('right-sidebar');
+
+      function closeMobilePanels() {
+        leftSidebar.classList.remove('mobile-open');
+        rightSidebar.classList.remove('mobile-open');
+        overlay.classList.remove('active');
+      }
+
+      document.getElementById('btn-coins').addEventListener('click', () => {
+        const isOpen = leftSidebar.classList.toggle('mobile-open');
+        rightSidebar.classList.remove('mobile-open');
+        overlay.classList.toggle('active', isOpen);
+      });
+
+      document.getElementById('btn-info').addEventListener('click', () => {
+        const isOpen = rightSidebar.classList.toggle('mobile-open');
+        leftSidebar.classList.remove('mobile-open');
+        overlay.classList.toggle('active', isOpen);
+      });
+
+      overlay.addEventListener('click', closeMobilePanels);
+
       // Timeframe buttons
       document.querySelectorAll('.tf-btn').forEach(btn => {
         btn.addEventListener('click', () => {
