@@ -565,7 +565,8 @@ router.get('/scan', async (req, res) => {
           analyzed.push({ ...coin, structure: '--/--', trend: 'neutral' });
           continue;
         }
-        const swings = detectSwings(klines, SWING_LENGTHS['15m']);
+        // Use shorter swing length (10) for scan overview — full 20 needs more data
+        const swings = detectSwings(klines, 10);
         const structLabels = getStructureLabels(swings);
 
         const lastHigh = structLabels.filter(l => l.type === 'high').pop();
