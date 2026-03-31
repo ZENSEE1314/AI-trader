@@ -250,11 +250,22 @@ async function analyzeLHHL(ticker, params) {
   const struct3 = getStructure(klines3m, SWING_LENGTHS['3m']);
   const struct1 = getStructure(klines1m, SWING_LENGTHS['1m']);
 
-  // SHORT: 15m must have FULL bearish structure (LH + LL), lower TFs confirm with LH
-  // LONG: 15m must have FULL bullish structure (HH + HL), lower TFs confirm with HL
-  // This prevents entering on partial structure (LH alone could be consolidation)
-  let isShortSetup = struct15.hasLH && struct15.hasLL && struct3.hasLH && struct1.hasLH;
-  let isLongSetup = struct15.hasHH && struct15.hasHL && struct3.hasHL && struct1.hasHL;
+  // 2-of-3 TF confluence: any 2 timeframes agreeing is enough
+  // HL on 2+ TFs = LONG (the 3rd TF having LL is just a pullback, not trend reversal)
+  // LH on 2+ TFs = SHORT (the 3rd TF having HH is just a bounce, not trend reversal)
+  const hlCount = (struct15.hasHL ? 1 : 0) + (struct3.hasHL ? 1 : 0) + (struct1.hasHL ? 1 : 0);
+  const lhCount = (struct15.hasLH ? 1 : 0) + (struct3.hasLH ? 1 : 0) + (struct1.hasLH ? 1 : 0);
+
+  let isLongSetup = hlCount >= 2;
+  let isShortSetup = lhCount >= 2;
+
+  // If both directions qualify, pick the stronger one (more TFs agreeing)
+  // If tied, block both — market is indecisive
+  if (isLongSetup && isShortSetup) {
+    if (hlCount > lhCount) isShortSetup = false;
+    else if (lhCount > hlCount) isLongSetup = false;
+    else { isLongSetup = false; isShortSetup = false; }
+  }
 
   // AI direction bias — completely block the losing direction
   if (dirBias === 'LONG') {
