@@ -806,6 +806,8 @@
         <label class="ind-toggle"><input type="checkbox" id="tog-ema22" checked> EMA22</label>
         <label class="ind-toggle"><input type="checkbox" id="tog-ema200"> EMA200</label>
         <label class="ind-toggle"><input type="checkbox" id="tog-vwap"> VWAP</label>
+        <label class="ind-toggle"><input type="checkbox" id="tog-dwap" checked> DWAP</label>
+        <label class="ind-toggle"><input type="checkbox" id="tog-dailylvl" checked> OP/PDH/PDL</label>
         <label class="ind-toggle"><input type="checkbox" id="tog-eqheql"> EQH/EQL</label>
         <label class="ind-toggle"><input type="checkbox" id="tog-choch" checked> CHoCH/BMS</label>
         <label class="ind-toggle"><input type="checkbox" id="tog-strongweak" checked> Strong/Weak</label>
@@ -1027,6 +1029,10 @@
       ema22: null,
       ema200: null,
       vwap: null,
+      dwap: null,
+      dailyOP: null,
+      dailyPDH: null,
+      dailyPDL: null,
       obSeries: [],
       fvgSeries: [],
       keyLevelLines: [],
@@ -1207,6 +1213,7 @@
 
     function clearIndicators() {
       [indicatorSeries.ema7, indicatorSeries.ema22, indicatorSeries.ema200, indicatorSeries.vwap,
+       indicatorSeries.dwap, indicatorSeries.dailyOP, indicatorSeries.dailyPDH, indicatorSeries.dailyPDL,
        indicatorSeries.premiumSeries, indicatorSeries.discountSeries, indicatorSeries.midSeries]
         .forEach(s => { if (s) chart.removeSeries(s); });
 
@@ -1233,6 +1240,10 @@
       indicatorSeries.ema22 = null;
       indicatorSeries.ema200 = null;
       indicatorSeries.vwap = null;
+      indicatorSeries.dwap = null;
+      indicatorSeries.dailyOP = null;
+      indicatorSeries.dailyPDH = null;
+      indicatorSeries.dailyPDL = null;
       indicatorSeries.obSeries = [];
       indicatorSeries.fvgSeries = [];
       indicatorSeries.keyLevelLines = [];
@@ -1276,6 +1287,12 @@
 
       // VWAP
       renderVWAP(data);
+
+      // DWAP
+      renderDWAP(data);
+
+      // Daily Levels (OP, PDH, PDL)
+      renderDailyLevels(data);
 
       // Order Blocks
       renderOrderBlocks(data);
@@ -1457,6 +1474,61 @@
         });
         indicatorSeries.vwap.setData(data.vwap);
       }
+    }
+
+    // ── DWAP ──────────────────────────────────────────────────
+
+    function renderDWAP(data) {
+      if (data.dwap && data.dwap.length) {
+        indicatorSeries.dwap = chart.addLineSeries({
+          color: '#f0b90b',
+          lineWidth: 1,
+          lineStyle: LightweightCharts.LineStyle.Dashed,
+          priceLineVisible: false,
+          lastValueVisible: false,
+          crosshairMarkerVisible: false,
+          title: 'DWAP',
+        });
+        indicatorSeries.dwap.setData(data.dwap);
+      }
+    }
+
+    // ── Daily Levels: Opening Price, PDH, PDL ─────────────────
+
+    function renderDailyLevels(data) {
+      // Prefer keyLevels (from daily klines) over dailyLevels (from intraday)
+      const kl = data.keyLevels || {};
+      const dl = data.dailyLevels || {};
+      const openingPrice = kl.OP || dl.openingPrice;
+      const pdh = kl.PDH || dl.pdh;
+      const pdl = kl.PDL || dl.pdl;
+      if (!openingPrice && !pdh && !pdl) return;
+      const firstTime = data.candles[0]?.time;
+      const lastTime = data.candles[data.candles.length - 1]?.time;
+      if (!firstTime || !lastTime) return;
+
+      const makeHorizLine = (price, color, title) => {
+        if (!price) return null;
+        const s = chart.addLineSeries({
+          color,
+          lineWidth: 1,
+          lineStyle: LightweightCharts.LineStyle.Dotted,
+          priceLineVisible: false,
+          lastValueVisible: true,
+          crosshairMarkerVisible: false,
+          title,
+          ...OVERLAY_OPTS,
+        });
+        s.setData([
+          { time: firstTime, value: price },
+          { time: lastTime, value: price },
+        ]);
+        return s;
+      };
+
+      indicatorSeries.dailyOP = makeHorizLine(openingPrice, '#ffffff', 'OP');
+      indicatorSeries.dailyPDH = makeHorizLine(pdh, '#ff6b6b', 'PDH');
+      indicatorSeries.dailyPDL = makeHorizLine(pdl, '#51cf66', 'PDL');
     }
 
     // ── Order Blocks (as area between two line series) ─────────
@@ -1882,6 +1954,13 @@
       setSeriesVisible(indicatorSeries.ema22, document.getElementById('tog-ema22').checked);
       setSeriesVisible(indicatorSeries.ema200, document.getElementById('tog-ema200').checked);
       setSeriesVisible(indicatorSeries.vwap, document.getElementById('tog-vwap').checked);
+      setSeriesVisible(indicatorSeries.dwap, document.getElementById('tog-dwap').checked);
+
+      // Daily Levels (OP, PDH, PDL)
+      const isDailyOn = document.getElementById('tog-dailylvl').checked;
+      setSeriesVisible(indicatorSeries.dailyOP, isDailyOn);
+      setSeriesVisible(indicatorSeries.dailyPDH, isDailyOn);
+      setSeriesVisible(indicatorSeries.dailyPDL, isDailyOn);
 
       // OB
       const isOBOn = document.getElementById('tog-ob').checked;
@@ -2268,7 +2347,7 @@
       const toggleIds = [
         'tog-swings', 'tog-labels', 'tog-ob', 'tog-fvg',
         'tog-levels', 'tog-ema7', 'tog-ema22', 'tog-ema200',
-        'tog-vwap', 'tog-eqheql', 'tog-choch', 'tog-strongweak', 'tog-premium',
+        'tog-vwap', 'tog-dwap', 'tog-dailylvl', 'tog-eqheql', 'tog-choch', 'tog-strongweak', 'tog-premium',
       ];
       toggleIds.forEach(id => {
         document.getElementById(id).addEventListener('change', applyToggleVisibility);

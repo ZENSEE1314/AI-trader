@@ -224,6 +224,57 @@ function calcVWAP(klines) {
   return vwap;
 }
 
+// ── DWAP (Daily Weighted Average Price) ────────────────────
+// Like VWAP but uses (O+H+L+C)/4 instead of typical price
+function calcDWAP(klines) {
+  let cumVol = 0, cumDP = 0;
+  const dwap = [];
+  let currentDay = null;
+  for (const k of klines) {
+    const day = new Date(parseInt(k[0])).toISOString().slice(0, 10);
+    if (day !== currentDay) {
+      cumVol = 0;
+      cumDP = 0;
+      currentDay = day;
+    }
+    const open = parseFloat(k[1]);
+    const high = parseFloat(k[2]);
+    const low = parseFloat(k[3]);
+    const close = parseFloat(k[4]);
+    const vol = parseFloat(k[5]);
+    const dp = (open + high + low + close) / 4;
+    cumDP += dp * vol;
+    cumVol += vol;
+    dwap.push(cumVol > 0 ? cumDP / cumVol : close);
+  }
+  return dwap;
+}
+
+// ── Daily Levels: Opening Price, Previous Day High/Low ─────
+function calcDailyLevels(klines) {
+  const dayMap = new Map();
+  for (const k of klines) {
+    const day = new Date(parseInt(k[0])).toISOString().slice(0, 10);
+    if (!dayMap.has(day)) {
+      dayMap.set(day, { open: parseFloat(k[1]), high: parseFloat(k[2]), low: parseFloat(k[3]) });
+    } else {
+      const d = dayMap.get(day);
+      d.high = Math.max(d.high, parseFloat(k[2]));
+      d.low = Math.min(d.low, parseFloat(k[3]));
+    }
+  }
+
+  const days = [...dayMap.keys()].sort();
+  const today = days[days.length - 1];
+  const yesterday = days.length >= 2 ? days[days.length - 2] : null;
+
+  return {
+    openingPrice: dayMap.get(today)?.open || null,
+    pdh: yesterday ? dayMap.get(yesterday).high : null,
+    pdl: yesterday ? dayMap.get(yesterday).low : null,
+  };
+}
+
 // ── CHoCH & BMS Detection ───────────────────────────────────
 // CHoCH = Change of Character: structure break AGAINST the trend
 // BMS  = Break of Market Structure: structure break WITH the trend
@@ -421,10 +472,14 @@ router.get('/data', async (req, res) => {
     const ema22 = calcEMA(closes, 22);
     const ema200 = calcEMA(closes, 200);
 
-    // VWAP
+    // VWAP & DWAP
     const vwap = calcVWAP(klines);
+    const dwap = calcDWAP(klines);
 
-    // Format EMA/VWAP as time series
+    // Daily levels: opening price, previous day high/low
+    const dailyLevels = calcDailyLevels(klines);
+
+    // Format EMA/VWAP/DWAP as time series
     const emaData = (arr) => candles.map((c, i) => arr[i] !== null ? { time: c.time, value: arr[i] } : null).filter(Boolean);
 
     res.json({
@@ -441,10 +496,12 @@ router.get('/data', async (req, res) => {
       strongWeak,
       premiumDiscount,
       trend,
+      dailyLevels,
       ema7: emaData(ema7),
       ema22: emaData(ema22),
       ema200: emaData(ema200),
       vwap: emaData(vwap),
+      dwap: emaData(dwap),
     });
   } catch (err) {
     console.error('Chart data error:', err.message);
