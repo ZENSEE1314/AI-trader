@@ -201,17 +201,21 @@ function calcEMA(closes, period) {
   return ema;
 }
 
-// ── VWAP Calculation ────────────────────────────────────────
-function calcVWAP(klines) {
-  let cumVol = 0, cumTP = 0;
-  const vwap = [];
-  // Reset at day boundary (approximate: use first candle's date)
+// ── VWAP with Upper/Lower Bands ─────────────────────────────
+// Returns { vwap, upper, lower } — bands use rolling std deviation * multiplier
+const VWAP_BAND_MULT = 2.0;
+
+function calcVWAPBands(klines) {
+  let cumVol = 0, cumTP = 0, cumTP2 = 0;
+  const vwap = [], upper = [], lower = [];
   let currentDay = null;
+
   for (const k of klines) {
     const day = new Date(parseInt(k[0])).toISOString().slice(0, 10);
     if (day !== currentDay) {
       cumVol = 0;
       cumTP = 0;
+      cumTP2 = 0;
       currentDay = day;
     }
     const high = parseFloat(k[2]);
@@ -219,37 +223,88 @@ function calcVWAP(klines) {
     const close = parseFloat(k[4]);
     const vol = parseFloat(k[5]);
     const tp = (high + low + close) / 3;
+
     cumTP += tp * vol;
+    cumTP2 += tp * tp * vol;
     cumVol += vol;
-    vwap.push(cumVol > 0 ? cumTP / cumVol : close);
+
+    if (cumVol > 0) {
+      const v = cumTP / cumVol;
+      const variance = Math.max(0, cumTP2 / cumVol - v * v);
+      const stdDev = Math.sqrt(variance);
+      vwap.push(v);
+      upper.push(v + stdDev * VWAP_BAND_MULT);
+      lower.push(v - stdDev * VWAP_BAND_MULT);
+    } else {
+      vwap.push(close);
+      upper.push(close);
+      lower.push(close);
+    }
   }
-  return vwap;
+  return { vwap, upper, lower };
 }
 
-// ── DWAP (Daily Weighted Average Price) ────────────────────
-// Like VWAP but uses (O+H+L+C)/4 instead of typical price
-function calcDWAP(klines) {
-  let cumVol = 0, cumDP = 0;
-  const dwap = [];
-  let currentDay = null;
-  for (const k of klines) {
-    const day = new Date(parseInt(k[0])).toISOString().slice(0, 10);
-    if (day !== currentDay) {
-      cumVol = 0;
-      cumDP = 0;
-      currentDay = day;
+// ── Curved Structure Bands (Zeiierman) ──────────────────────
+// ATR-based adaptive upper/lower bands that curve toward price
+const CURVED_TREND_LENGTH = 100;
+const CURVED_MULTIPLIER = 3.0;
+
+function calcCurvedBands(klines) {
+  const highs = klines.map(k => parseFloat(k[2]));
+  const lows = klines.map(k => parseFloat(k[3]));
+  const closes = klines.map(k => parseFloat(k[4]));
+
+  // ATR calculation
+  const trueRanges = [];
+  for (let i = 0; i < klines.length; i++) {
+    if (i === 0) {
+      trueRanges.push(highs[i] - lows[i]);
+    } else {
+      const tr = Math.max(
+        highs[i] - lows[i],
+        Math.abs(highs[i] - closes[i - 1]),
+        Math.abs(lows[i] - closes[i - 1])
+      );
+      trueRanges.push(tr);
     }
-    const open = parseFloat(k[1]);
-    const high = parseFloat(k[2]);
-    const low = parseFloat(k[3]);
-    const close = parseFloat(k[4]);
-    const vol = parseFloat(k[5]);
-    const dp = (open + high + low + close) / 4;
-    cumDP += dp * vol;
-    cumVol += vol;
-    dwap.push(cumVol > 0 ? cumDP / cumVol : close);
   }
-  return dwap;
+
+  // Simple moving average of TR for adaptive size
+  const atrLen = Math.min(CURVED_TREND_LENGTH, klines.length);
+  const lengthSquared = CURVED_TREND_LENGTH * CURVED_TREND_LENGTH;
+
+  let upperBand = closes[0];
+  let lowerBand = closes[0];
+  let barsSinceUpperIncrease = 0;
+  let barsSinceLowerDecrease = 0;
+
+  const upperArr = [];
+  const lowerArr = [];
+
+  for (let i = 0; i < klines.length; i++) {
+    // Rolling ATR (simple average of last atrLen true ranges)
+    const start = Math.max(0, i - atrLen + 1);
+    let atrSum = 0;
+    for (let j = start; j <= i; j++) atrSum += trueRanges[j];
+    const adaptiveSize = atrSum / (i - start + 1);
+
+    // Upper band
+    const maxCloseUpper = Math.max(highs[i], upperBand);
+    barsSinceUpperIncrease = closes[i] > upperBand ? 0 : barsSinceUpperIncrease + 1;
+    const upperAdj = (adaptiveSize / lengthSquared) * (barsSinceUpperIncrease + 1) * CURVED_MULTIPLIER;
+    upperBand = maxCloseUpper - upperAdj;
+
+    // Lower band
+    const minCloseLower = Math.min(lows[i], lowerBand);
+    barsSinceLowerDecrease = closes[i] < lowerBand ? 0 : barsSinceLowerDecrease + 1;
+    const lowerAdj = (adaptiveSize / lengthSquared) * (barsSinceLowerDecrease + 1) * CURVED_MULTIPLIER;
+    lowerBand = minCloseLower + lowerAdj;
+
+    upperArr.push(upperBand);
+    lowerArr.push(lowerBand);
+  }
+
+  return { upper: upperArr, lower: lowerArr };
 }
 
 // ── Daily Levels: Opening Price, Previous Day High/Low ─────
@@ -277,38 +332,40 @@ function calcDailyLevels(klines) {
   };
 }
 
-// ── CHoCH & BMS Detection ───────────────────────────────────
-// CHoCH = Change of Character: structure break AGAINST the trend
-// BMS  = Break of Market Structure: structure break WITH the trend
+// ── CHoCH / SMS / BMS Detection (Zeiierman 3-level) ────────
+// CHoCH = Change of Character: first break AGAINST the trend
+// SMS   = Structure Market Shift: second break same direction (confirms shift)
+// BMS   = Break of Market Structure: third+ break WITH the trend (continuation)
 function detectCHoCHBMS(swings, klines) {
   const results = [];
   if (swings.length < 3) return results;
 
   let currentTrend = null; // 'bullish' or 'bearish'
+  let bullBreakCount = 0;  // consecutive bullish breaks
+  let bearBreakCount = 0;  // consecutive bearish breaks
 
   for (let i = 1; i < swings.length; i++) {
     const prev = swings[i - 1];
     const curr = swings[i];
 
-    // Look ahead — did price break the previous swing?
     if (prev.type === 'high') {
-      // Check if a candle after curr broke above prev.price
       for (let k = curr.index + 1; k < klines.length; k++) {
         const high = parseFloat(klines[k][2]);
         if (high > prev.price) {
           const breakTime = parseInt(klines[k][0]) / 1000;
-          const label = currentTrend === 'bearish' ? 'CHoCH' : 'BMS';
-          results.push({
-            type: label,
-            direction: 'bullish',
-            price: prev.price,
-            time: prev.time,
-            breakTime,
-          });
+          let label;
+          if (currentTrend !== 'bullish') {
+            label = 'CHoCH';
+            bullBreakCount = 1;
+            bearBreakCount = 0;
+          } else {
+            bullBreakCount++;
+            label = bullBreakCount === 2 ? 'SMS' : 'BMS';
+          }
+          results.push({ type: label, direction: 'bullish', price: prev.price, time: prev.time, breakTime });
           currentTrend = 'bullish';
           break;
         }
-        // Stop searching after next swing
         if (i + 1 < swings.length && k >= swings[i + 1].index) break;
       }
     }
@@ -318,14 +375,16 @@ function detectCHoCHBMS(swings, klines) {
         const low = parseFloat(klines[k][3]);
         if (low < prev.price) {
           const breakTime = parseInt(klines[k][0]) / 1000;
-          const label = currentTrend === 'bullish' ? 'CHoCH' : 'BMS';
-          results.push({
-            type: label,
-            direction: 'bearish',
-            price: prev.price,
-            time: prev.time,
-            breakTime,
-          });
+          let label;
+          if (currentTrend !== 'bearish') {
+            label = 'CHoCH';
+            bearBreakCount = 1;
+            bullBreakCount = 0;
+          } else {
+            bearBreakCount++;
+            label = bearBreakCount === 2 ? 'SMS' : 'BMS';
+          }
+          results.push({ type: label, direction: 'bearish', price: prev.price, time: prev.time, breakTime });
           currentTrend = 'bearish';
           break;
         }
@@ -454,7 +513,9 @@ router.get('/data', async (req, res) => {
     let swings = [], labels = [], orderBlocks = [], fvgs = [], keyLevels = {};
     let eqhEql = [], chochBms = [], strongWeak = [], premiumDiscount = {};
     let trend = 'Neutral', dailyLevels = {};
-    let ema7 = [], ema22 = [], ema200 = [], vwap = [], dwap = [];
+    let ema7 = [], ema22 = [], ema200 = [];
+    let vwapBands = { vwap: [], upper: [], lower: [] };
+    let curvedBands = { upper: [], lower: [] };
 
     try {
       swings = detectSwings(klines, swingLen);
@@ -477,8 +538,8 @@ router.get('/data', async (req, res) => {
       ema7 = calcEMA(closes, 7);
       ema22 = calcEMA(closes, 22);
       ema200 = calcEMA(closes, 200);
-      vwap = calcVWAP(klines);
-      dwap = calcDWAP(klines);
+      vwapBands = calcVWAPBands(klines);
+      curvedBands = calcCurvedBands(klines);
       dailyLevels = calcDailyLevels(klines);
     } catch (indErr) {
       console.error('Indicator calc error (candles still sent):', indErr.message);
@@ -504,8 +565,11 @@ router.get('/data', async (req, res) => {
       ema7: emaData(ema7),
       ema22: emaData(ema22),
       ema200: emaData(ema200),
-      vwap: emaData(vwap),
-      dwap: emaData(dwap),
+      vwap: emaData(vwapBands.vwap),
+      vwapUpper: emaData(vwapBands.upper),
+      vwapLower: emaData(vwapBands.lower),
+      curvedUpper: emaData(curvedBands.upper),
+      curvedLower: emaData(curvedBands.lower),
     });
   } catch (err) {
     console.error('Chart data error:', err.message);

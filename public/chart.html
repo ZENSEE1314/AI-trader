@@ -891,11 +891,11 @@
         <label class="ind-toggle"><input type="checkbox" id="tog-ema7" checked> EMA7</label>
         <label class="ind-toggle"><input type="checkbox" id="tog-ema22" checked> EMA22</label>
         <label class="ind-toggle"><input type="checkbox" id="tog-ema200"> EMA200</label>
-        <label class="ind-toggle"><input type="checkbox" id="tog-vwap"> VWAP</label>
-        <label class="ind-toggle"><input type="checkbox" id="tog-dwap" checked> DWAP</label>
+        <label class="ind-toggle"><input type="checkbox" id="tog-vwap" checked> VWAP</label>
+        <label class="ind-toggle"><input type="checkbox" id="tog-curved" checked> Curved Bands</label>
         <label class="ind-toggle"><input type="checkbox" id="tog-dailylvl" checked> OP/PDH/PDL</label>
         <label class="ind-toggle"><input type="checkbox" id="tog-eqheql"> EQH/EQL</label>
-        <label class="ind-toggle"><input type="checkbox" id="tog-choch" checked> CHoCH/BMS</label>
+        <label class="ind-toggle"><input type="checkbox" id="tog-choch" checked> CHoCH/SMS/BMS</label>
         <label class="ind-toggle"><input type="checkbox" id="tog-strongweak" checked> Strong/Weak</label>
         <label class="ind-toggle"><input type="checkbox" id="tog-premium" checked> Premium/Disc</label>
       </div>
@@ -1054,7 +1054,7 @@
 
       <!-- CHoCH / BMS -->
       <div class="right-sidebar-section">
-        <div class="right-sidebar-title">CHoCH / BMS</div>
+        <div class="right-sidebar-title">CHoCH / SMS / BMS</div>
         <div id="rs-choch-list"><span class="rs-row-label">--</span></div>
       </div>
 
@@ -1116,7 +1116,10 @@
       ema22: null,
       ema200: null,
       vwap: null,
-      dwap: null,
+      vwapUpper: null,
+      vwapLower: null,
+      curvedUpper: null,
+      curvedLower: null,
       dailyOP: null,
       dailyPDH: null,
       dailyPDL: null,
@@ -1299,8 +1302,10 @@
     // ============================================================
 
     function clearIndicators() {
-      [indicatorSeries.ema7, indicatorSeries.ema22, indicatorSeries.ema200, indicatorSeries.vwap,
-       indicatorSeries.dwap, indicatorSeries.dailyOP, indicatorSeries.dailyPDH, indicatorSeries.dailyPDL,
+      [indicatorSeries.ema7, indicatorSeries.ema22, indicatorSeries.ema200,
+       indicatorSeries.vwap, indicatorSeries.vwapUpper, indicatorSeries.vwapLower,
+       indicatorSeries.curvedUpper, indicatorSeries.curvedLower,
+       indicatorSeries.dailyOP, indicatorSeries.dailyPDH, indicatorSeries.dailyPDL,
        indicatorSeries.premiumSeries, indicatorSeries.discountSeries, indicatorSeries.midSeries]
         .forEach(s => { if (s) chart.removeSeries(s); });
 
@@ -1327,7 +1332,10 @@
       indicatorSeries.ema22 = null;
       indicatorSeries.ema200 = null;
       indicatorSeries.vwap = null;
-      indicatorSeries.dwap = null;
+      indicatorSeries.vwapUpper = null;
+      indicatorSeries.vwapLower = null;
+      indicatorSeries.curvedUpper = null;
+      indicatorSeries.curvedLower = null;
       indicatorSeries.dailyOP = null;
       indicatorSeries.dailyPDH = null;
       indicatorSeries.dailyPDL = null;
@@ -1372,11 +1380,11 @@
       // EMA lines
       renderEMALines(data);
 
-      // VWAP
+      // VWAP (3 lines: upper band, VWAP, lower band)
       renderVWAP(data);
 
-      // DWAP
-      renderDWAP(data);
+      // Curved Structure Bands (Zeiierman)
+      renderCurvedBands(data);
 
       // Daily Levels (OP, PDH, PDL)
       renderDailyLevels(data);
@@ -1547,36 +1555,63 @@
       }
     }
 
-    // ── VWAP ───────────────────────────────────────────────────
+    // ── VWAP (3 lines: upper band, VWAP, lower band) ──────────
 
     function renderVWAP(data) {
+      const lineOpts = { lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false };
+
+      if (data.vwapUpper && data.vwapUpper.length) {
+        indicatorSeries.vwapUpper = chart.addLineSeries({
+          ...lineOpts,
+          color: 'rgba(0, 212, 170, 0.4)',
+          lineStyle: LightweightCharts.LineStyle.Dashed,
+          title: 'VWAP Upper',
+        });
+        indicatorSeries.vwapUpper.setData(data.vwapUpper);
+      }
+
       if (data.vwap && data.vwap.length) {
         indicatorSeries.vwap = chart.addLineSeries({
+          ...lineOpts,
           color: '#00d4aa',
-          lineWidth: 1,
-          lineStyle: LightweightCharts.LineStyle.Dashed,
-          priceLineVisible: false,
-          lastValueVisible: false,
-          crosshairMarkerVisible: false,
+          lineWidth: 2,
+          title: 'VWAP',
         });
         indicatorSeries.vwap.setData(data.vwap);
       }
+
+      if (data.vwapLower && data.vwapLower.length) {
+        indicatorSeries.vwapLower = chart.addLineSeries({
+          ...lineOpts,
+          color: 'rgba(0, 212, 170, 0.4)',
+          lineStyle: LightweightCharts.LineStyle.Dashed,
+          title: 'VWAP Lower',
+        });
+        indicatorSeries.vwapLower.setData(data.vwapLower);
+      }
     }
 
-    // ── DWAP ──────────────────────────────────────────────────
+    // ── Curved Structure Bands (Zeiierman) ────────────────────
 
-    function renderDWAP(data) {
-      if (data.dwap && data.dwap.length) {
-        indicatorSeries.dwap = chart.addLineSeries({
-          color: '#f0b90b',
-          lineWidth: 1,
-          lineStyle: LightweightCharts.LineStyle.Dashed,
-          priceLineVisible: false,
-          lastValueVisible: false,
-          crosshairMarkerVisible: false,
-          title: 'DWAP',
+    function renderCurvedBands(data) {
+      const lineOpts = { lineWidth: 2, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false };
+
+      if (data.curvedUpper && data.curvedUpper.length) {
+        indicatorSeries.curvedUpper = chart.addLineSeries({
+          ...lineOpts,
+          color: '#f23645',
+          title: 'Curved Upper',
         });
-        indicatorSeries.dwap.setData(data.dwap);
+        indicatorSeries.curvedUpper.setData(data.curvedUpper);
+      }
+
+      if (data.curvedLower && data.curvedLower.length) {
+        indicatorSeries.curvedLower = chart.addLineSeries({
+          ...lineOpts,
+          color: '#089981',
+          title: 'Curved Lower',
+        });
+        indicatorSeries.curvedLower.setData(data.curvedLower);
       }
     }
 
@@ -1784,21 +1819,34 @@
       }
     }
 
-    // ── CHoCH / BMS Lines ───────────────────────────────────────
+    // ── CHoCH / SMS / BMS Lines ─────────────────────────────────
 
     function renderCHoCHBMS(data) {
       if (!data.chochBms) return;
 
       for (const item of data.chochBms) {
         const isChoch = item.type === 'CHoCH';
+        const isSms = item.type === 'SMS';
         const isBullish = item.direction === 'bullish';
-        const color = isChoch
-          ? (isBullish ? 'rgba(0, 212, 170, 0.7)' : 'rgba(255, 71, 87, 0.7)')
-          : (isBullish ? 'rgba(0, 212, 170, 0.5)' : 'rgba(255, 71, 87, 0.5)');
+
+        // CHoCH = solid bright, SMS = solid medium, BMS = dashed subtle
+        let color, lineWidth, lineStyle;
+        if (isChoch) {
+          color = isBullish ? 'rgba(8, 236, 126, 0.8)' : 'rgba(255, 34, 34, 0.8)';
+          lineWidth = 2;
+          lineStyle = LightweightCharts.LineStyle.Solid;
+        } else if (isSms) {
+          color = isBullish ? 'rgba(0, 212, 170, 0.7)' : 'rgba(242, 54, 69, 0.7)';
+          lineWidth = 2;
+          lineStyle = LightweightCharts.LineStyle.Solid;
+        } else {
+          color = isBullish ? 'rgba(0, 212, 170, 0.5)' : 'rgba(255, 71, 87, 0.5)';
+          lineWidth = 1;
+          lineStyle = LightweightCharts.LineStyle.Dashed;
+        }
 
         const series = chart.addLineSeries({
-          color, lineWidth: isChoch ? 2 : 1,
-          lineStyle: isChoch ? LightweightCharts.LineStyle.Solid : LightweightCharts.LineStyle.Dashed,
+          color, lineWidth, lineStyle,
           priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
           title: item.type, ...OVERLAY_OPTS,
         });
@@ -1811,16 +1859,19 @@
         indicatorSeries.chochBmsLines.push({ series });
       }
 
-      // Add CHoCH/BMS as markers with text labels
+      // Add CHoCH/SMS/BMS as markers with text labels
       if (data.chochBms.length) {
         for (const item of data.chochBms) {
           const isBullish = item.direction === 'bullish';
+          const markerColor = item.type === 'CHoCH'
+            ? (isBullish ? '#08ec7e' : '#ff2222')
+            : item.type === 'SMS'
+              ? (isBullish ? '#00d4aa' : '#f23645')
+              : (isBullish ? '#26a69a' : '#ef5350');
           allMarkers.push({
             time: item.breakTime,
             position: isBullish ? 'belowBar' : 'aboveBar',
-            color: item.type === 'CHoCH'
-              ? (isBullish ? '#00d4aa' : '#ff4757')
-              : (isBullish ? '#26a69a' : '#ef5350'),
+            color: markerColor,
             shape: 'square',
             text: item.type,
             _group: 'choch',
@@ -2040,8 +2091,14 @@
       setSeriesVisible(indicatorSeries.ema7, document.getElementById('tog-ema7').checked);
       setSeriesVisible(indicatorSeries.ema22, document.getElementById('tog-ema22').checked);
       setSeriesVisible(indicatorSeries.ema200, document.getElementById('tog-ema200').checked);
-      setSeriesVisible(indicatorSeries.vwap, document.getElementById('tog-vwap').checked);
-      setSeriesVisible(indicatorSeries.dwap, document.getElementById('tog-dwap').checked);
+      const isVwapOn = document.getElementById('tog-vwap').checked;
+      setSeriesVisible(indicatorSeries.vwap, isVwapOn);
+      setSeriesVisible(indicatorSeries.vwapUpper, isVwapOn);
+      setSeriesVisible(indicatorSeries.vwapLower, isVwapOn);
+
+      const isCurvedOn = document.getElementById('tog-curved').checked;
+      setSeriesVisible(indicatorSeries.curvedUpper, isCurvedOn);
+      setSeriesVisible(indicatorSeries.curvedLower, isCurvedOn);
 
       // Daily Levels (OP, PDH, PDL)
       const isDailyOn = document.getElementById('tog-dailylvl').checked;
@@ -2463,7 +2520,7 @@
       const toggleIds = [
         'tog-swings', 'tog-labels', 'tog-ob', 'tog-fvg',
         'tog-levels', 'tog-ema7', 'tog-ema22', 'tog-ema200',
-        'tog-vwap', 'tog-dwap', 'tog-dailylvl', 'tog-eqheql', 'tog-choch', 'tog-strongweak', 'tog-premium',
+        'tog-vwap', 'tog-curved', 'tog-dailylvl', 'tog-eqheql', 'tog-choch', 'tog-strongweak', 'tog-premium',
       ];
       toggleIds.forEach(id => {
         document.getElementById(id).addEventListener('change', applyToggleVisibility);
