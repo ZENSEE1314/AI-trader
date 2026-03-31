@@ -450,38 +450,40 @@ router.get('/data', async (req, res) => {
 
     const closes = klines.map(k => parseFloat(k[4]));
 
-    // SMC indicators
-    const swings = detectSwings(klines, swingLen);
-    const labels = getStructureLabels(swings);
-    const orderBlocks = detectOrderBlocks(klines);
-    const fvgs = detectFVGs(klines);
-    const keyLevels = getKeyLevels(dailyKlines, weeklyKlines);
-    const eqhEql = detectEQHEQL(swings);
-    const chochBms = detectCHoCHBMS(swings, klines);
-    const strongWeak = classifyStrongWeak(swings, klines);
-    const premiumDiscount = calcPremiumDiscount(swings, candles);
+    // SMC indicators — wrapped so a crash in any indicator doesn't break candles
+    let swings = [], labels = [], orderBlocks = [], fvgs = [], keyLevels = {};
+    let eqhEql = [], chochBms = [], strongWeak = [], premiumDiscount = {};
+    let trend = 'Neutral', dailyLevels = {};
+    let ema7 = [], ema22 = [], ema200 = [], vwap = [], dwap = [];
 
-    // Determine overall trend
-    const highLabels = labels.filter(l => l.type === 'high');
-    const lowLabels = labels.filter(l => l.type === 'low');
-    const lastHighLabel = highLabels[highLabels.length - 1];
-    const lastLowLabel = lowLabels[lowLabels.length - 1];
-    const trend = (lastHighLabel?.label === 'HH' && lastLowLabel?.label === 'HL') ? 'Positive'
-      : (lastHighLabel?.label === 'LH' && lastLowLabel?.label === 'LL') ? 'Negative' : 'Neutral';
+    try {
+      swings = detectSwings(klines, swingLen);
+      labels = getStructureLabels(swings);
+      orderBlocks = detectOrderBlocks(klines);
+      fvgs = detectFVGs(klines);
+      keyLevels = getKeyLevels(dailyKlines, weeklyKlines);
+      eqhEql = detectEQHEQL(swings);
+      chochBms = detectCHoCHBMS(swings, klines);
+      strongWeak = classifyStrongWeak(swings, klines);
+      premiumDiscount = calcPremiumDiscount(swings, candles);
 
-    // EMAs
-    const ema7 = calcEMA(closes, 7);
-    const ema22 = calcEMA(closes, 22);
-    const ema200 = calcEMA(closes, 200);
+      const highLabels = labels.filter(l => l.type === 'high');
+      const lowLabels = labels.filter(l => l.type === 'low');
+      const lastHighLabel = highLabels[highLabels.length - 1];
+      const lastLowLabel = lowLabels[lowLabels.length - 1];
+      trend = (lastHighLabel?.label === 'HH' && lastLowLabel?.label === 'HL') ? 'Positive'
+        : (lastHighLabel?.label === 'LH' && lastLowLabel?.label === 'LL') ? 'Negative' : 'Neutral';
 
-    // VWAP & DWAP
-    const vwap = calcVWAP(klines);
-    const dwap = calcDWAP(klines);
+      ema7 = calcEMA(closes, 7);
+      ema22 = calcEMA(closes, 22);
+      ema200 = calcEMA(closes, 200);
+      vwap = calcVWAP(klines);
+      dwap = calcDWAP(klines);
+      dailyLevels = calcDailyLevels(klines);
+    } catch (indErr) {
+      console.error('Indicator calc error (candles still sent):', indErr.message);
+    }
 
-    // Daily levels: opening price, previous day high/low
-    const dailyLevels = calcDailyLevels(klines);
-
-    // Format EMA/VWAP/DWAP as time series
     const emaData = (arr) => candles.map((c, i) => arr[i] !== null ? { time: c.time, value: arr[i] } : null).filter(Boolean);
 
     res.json({
@@ -554,14 +556,13 @@ router.get('/scan', async (req, res) => {
       .sort((a, b) => b.volume24h - a.volume24h)
       .slice(0, 100);
 
-    // Get structure labels for top coins (only Binance klines available)
-    const results = [];
-    for (const coin of allCoins) {
+    // Analyze structure for top 30 coins (limit API calls to avoid rate limits)
+    const analyzed = [];
+    for (const coin of allCoins.slice(0, 30)) {
       try {
-        const klines = await fetchKlines(coin.symbol, '15m', 50);
-        if (!klines || klines.length < 25) {
-          // No kline data (Bitunix-only token) — still show in list
-          results.push({ ...coin, structure: '--/--', trend: 'neutral' });
+        const klines = await fetchKlines(coin.symbol, '15m', 100);
+        if (!klines || klines.length < 50) {
+          analyzed.push({ ...coin, structure: '--/--', trend: 'neutral' });
           continue;
         }
         const swings = detectSwings(klines, SWING_LENGTHS['15m']);
@@ -570,18 +571,21 @@ router.get('/scan', async (req, res) => {
         const lastHigh = structLabels.filter(l => l.type === 'high').pop();
         const lastLow = structLabels.filter(l => l.type === 'low').pop();
 
-        results.push({
+        analyzed.push({
           ...coin,
           structure: `${lastHigh?.label || '--'}/${lastLow?.label || '--'}`,
           trend: lastHigh?.label === 'HH' && lastLow?.label === 'HL' ? 'bullish'
             : lastHigh?.label === 'LH' && lastLow?.label === 'LL' ? 'bearish' : 'neutral',
         });
       } catch (_) {
-        results.push({ ...coin, structure: '--/--', trend: 'neutral' });
+        analyzed.push({ ...coin, structure: '--/--', trend: 'neutral' });
       }
     }
 
-    res.json(results);
+    // Add remaining coins without structure analysis
+    const remaining = allCoins.slice(30).map(c => ({ ...c, structure: '--/--', trend: 'neutral' }));
+
+    res.json([...analyzed, ...remaining]);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
