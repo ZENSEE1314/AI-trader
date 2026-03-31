@@ -13,7 +13,8 @@ const aiLearner = require('./ai-learner');
 const { log: bLog } = require('./bot-logger');
 
 const REQUEST_TIMEOUT = 15000;
-const TOP_N_COINS = 50;
+const TOP_N_COINS = 200;
+const MIN_24H_VOLUME = 10_000_000; // $10M minimum 24h volume — skip low liquidity tokens
 
 // ── Fetch Helpers ────────────────────────────────────────────
 
@@ -456,10 +457,11 @@ async function scanSMC(log) {
     'XAUUSDT','XAGUSDT','EURUSDT','GBPUSDT','JPYUSDT',
   ]);
 
-  // Top 200 by market cap (approximated by 24h quote volume)
+  // Top 200 by volume — skip low liquidity tokens (< $10M 24h volume)
   const topCoins = tickers
     .filter(t => t.symbol.endsWith('USDT') && !t.symbol.includes('_'))
     .filter(t => !BLACKLIST.has(t.symbol))
+    .filter(t => parseFloat(t.quoteVolume) >= MIN_24H_VOLUME)
     .sort((a, b) => parseFloat(b.quoteVolume) - parseFloat(a.quoteVolume))
     .slice(0, TOP_N_COINS);
 
