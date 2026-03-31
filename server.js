@@ -41,7 +41,7 @@ app.get('/api/coins', async (req, res) => {
 });
 
 // Health check
-app.get('/health', (req, res) => res.json({ status: 'ok' }));
+app.get('/health', (req, res) => res.json({ status: 'ok', version: '2.1.0' }));
 
 // Bot logs endpoint (live dashboard)
 const { getLogs, getRecentLogs } = require('./bot-logger');
