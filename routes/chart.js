@@ -36,25 +36,24 @@ function detectSwings(klines, len) {
   const swings = [];
   let lastType = null;
 
-  // NOTE: Use adaptive right-side lookback near the end so recent candles
-  // can still produce swing labels instead of leaving a gap.
-  const MIN_RIGHT = 2;
-
-  for (let i = len; i < klines.length - MIN_RIGHT; i++) {
+  // NOTE: Allow swing detection up to the very last candle using
+  // adaptive right-side lookback (left-only confirmation at the end).
+  for (let i = len; i < klines.length; i++) {
     const rightLen = Math.min(len, klines.length - 1 - i);
-    let isHigh = true;
+    let isHigh = rightLen > 0; // need at least 1 right bar to detect high
     for (let j = -len; j <= rightLen; j++) {
       if (j === 0) continue;
       if (highs[i] <= highs[i + j]) { isHigh = false; break; }
     }
-    let isLow = true;
+    let isLow = rightLen > 0;
     for (let j = -len; j <= rightLen; j++) {
       if (j === 0) continue;
       if (lows[i] >= lows[i + j]) { isLow = false; break; }
     }
     if (isHigh && isLow) {
-      const highDist = highs[i] - Math.max(highs[i - 1], highs[i + 1]);
-      const lowDist = Math.min(lows[i - 1], lows[i + 1]) - lows[i];
+      const nextIdx = Math.min(i + 1, klines.length - 1);
+      const highDist = highs[i] - Math.max(highs[i - 1], highs[nextIdx]);
+      const lowDist = Math.min(lows[i - 1], lows[nextIdx]) - lows[i];
       if (highDist > lowDist) isLow = false;
       else isHigh = false;
     }
