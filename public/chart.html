@@ -47,6 +47,37 @@
       gap: 0;
     }
 
+    /* Sidebar collapse states */
+    .app-layout.left-hidden { grid-template-columns: 0px 1fr 240px; }
+    .app-layout.right-hidden { grid-template-columns: 280px 1fr 0px; }
+    .app-layout.left-hidden.right-hidden { grid-template-columns: 0px 1fr 0px; }
+    .app-layout.left-hidden .sidebar { display: none; }
+    .app-layout.right-hidden .right-sidebar { display: none; }
+
+    /* Sidebar toggle buttons */
+    .sidebar-toggle {
+      position: fixed;
+      top: 50%;
+      transform: translateY(-50%);
+      z-index: 50;
+      background: var(--color-bg-raised);
+      border: 1px solid var(--color-border);
+      color: var(--color-fg-muted);
+      width: 20px;
+      height: 48px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      font-size: 12px;
+      transition: background var(--duration-fast), color var(--duration-fast);
+    }
+    .sidebar-toggle:hover { background: var(--color-surface); color: var(--color-fg); }
+    #toggle-left-sidebar { left: 0; border-radius: 0 var(--radius-md) var(--radius-md) 0; border-left: none; }
+    #toggle-right-sidebar { right: 0; border-radius: var(--radius-md) 0 0 var(--radius-md); border-right: none; }
+    .app-layout:not(.left-hidden) #toggle-left-sidebar { left: 280px; }
+    .app-layout:not(.right-hidden) #toggle-right-sidebar { right: 240px; }
+
     /* --- Sidebar --- */
     .sidebar {
       grid-row: 1 / -1;
@@ -483,6 +514,33 @@
       display: none;
     }
 
+    .multi-chart-toolbar {
+      position: absolute;
+      top: 4px;
+      left: 4px;
+      right: 4px;
+      z-index: 10;
+      display: none;
+      gap: 2px;
+      align-items: center;
+    }
+    .chart-area.multi-view .multi-chart-toolbar { display: flex; }
+
+    .multi-tf-btn {
+      font-family: var(--font-mono);
+      font-size: 9px;
+      padding: 1px 4px;
+      background: transparent;
+      border: 1px solid var(--color-border);
+      color: var(--color-fg-muted);
+      border-radius: 3px;
+      cursor: pointer;
+      min-width: 22px;
+      text-align: center;
+    }
+    .multi-tf-btn:hover { background: var(--color-surface); color: var(--color-fg); }
+    .multi-tf-btn.active { background: var(--color-accent); color: #000; border-color: var(--color-accent); font-weight: bold; }
+
     .multi-chart-label {
       position: absolute;
       top: var(--space-2);
@@ -492,6 +550,7 @@
       font-size: var(--text-xs);
       font-weight: var(--weight-bold);
       color: var(--color-fg-muted);
+      display: none; /* hidden — replaced by toolbar */
       background: rgba(13, 17, 23, 0.8);
       padding: 2px var(--space-2);
       border-radius: var(--radius-sm);
@@ -752,6 +811,7 @@
         box-shadow: -4px 0 20px rgba(0,0,0,0.5);
       }
       .right-sidebar.mobile-open { display: flex; }
+      .sidebar-toggle { display: none; }
       .mobile-overlay {
         display: none;
         position: fixed;
@@ -923,9 +983,13 @@
 </head>
 
 <body>
-  <div class="app-layout">
+  <div class="app-layout" id="app-layout">
     <!-- Mobile overlay (closes sidebars when tapped) -->
     <div class="mobile-overlay" id="mobile-overlay"></div>
+
+    <!-- Sidebar toggle buttons -->
+    <button class="sidebar-toggle" id="toggle-left-sidebar" title="Toggle token list">&#9664;</button>
+    <button class="sidebar-toggle" id="toggle-right-sidebar" title="Toggle signal panel">&#9654;</button>
 
     <!-- Sidebar -->
     <aside class="sidebar" id="left-sidebar">
@@ -1037,15 +1101,42 @@
 
       <!-- Multi-chart panels (hidden in single view) -->
       <div class="multi-chart-panel" id="multi-panel-1">
-        <span class="multi-chart-label">1m</span>
+        <div class="multi-chart-toolbar" id="multi-toolbar-1">
+          <button class="multi-tf-btn active" data-panel="0" data-tf="1m">1m</button>
+          <button class="multi-tf-btn" data-panel="0" data-tf="3m">3m</button>
+          <button class="multi-tf-btn" data-panel="0" data-tf="5m">5m</button>
+          <button class="multi-tf-btn" data-panel="0" data-tf="15m">15m</button>
+          <button class="multi-tf-btn" data-panel="0" data-tf="30m">30m</button>
+          <button class="multi-tf-btn" data-panel="0" data-tf="1h">1h</button>
+          <button class="multi-tf-btn" data-panel="0" data-tf="4h">4h</button>
+          <button class="multi-tf-btn" data-panel="0" data-tf="1d">1D</button>
+        </div>
         <div class="multi-chart-inner" id="multi-chart-1"></div>
       </div>
       <div class="multi-chart-panel" id="multi-panel-2">
-        <span class="multi-chart-label">3m</span>
+        <div class="multi-chart-toolbar" id="multi-toolbar-2">
+          <button class="multi-tf-btn" data-panel="1" data-tf="1m">1m</button>
+          <button class="multi-tf-btn active" data-panel="1" data-tf="3m">3m</button>
+          <button class="multi-tf-btn" data-panel="1" data-tf="5m">5m</button>
+          <button class="multi-tf-btn" data-panel="1" data-tf="15m">15m</button>
+          <button class="multi-tf-btn" data-panel="1" data-tf="30m">30m</button>
+          <button class="multi-tf-btn" data-panel="1" data-tf="1h">1h</button>
+          <button class="multi-tf-btn" data-panel="1" data-tf="4h">4h</button>
+          <button class="multi-tf-btn" data-panel="1" data-tf="1d">1D</button>
+        </div>
         <div class="multi-chart-inner" id="multi-chart-2"></div>
       </div>
       <div class="multi-chart-panel" id="multi-panel-3">
-        <span class="multi-chart-label">15m</span>
+        <div class="multi-chart-toolbar" id="multi-toolbar-3">
+          <button class="multi-tf-btn" data-panel="2" data-tf="1m">1m</button>
+          <button class="multi-tf-btn" data-panel="2" data-tf="3m">3m</button>
+          <button class="multi-tf-btn" data-panel="2" data-tf="5m">5m</button>
+          <button class="multi-tf-btn active" data-panel="2" data-tf="15m">15m</button>
+          <button class="multi-tf-btn" data-panel="2" data-tf="30m">30m</button>
+          <button class="multi-tf-btn" data-panel="2" data-tf="1h">1h</button>
+          <button class="multi-tf-btn" data-panel="2" data-tf="4h">4h</button>
+          <button class="multi-tf-btn" data-panel="2" data-tf="1d">1D</button>
+        </div>
         <div class="multi-chart-inner" id="multi-chart-3"></div>
       </div>
     </main>
@@ -2654,7 +2745,7 @@
     // Multi-Chart Split View
     // ============================================================
 
-    const MULTI_TIMEFRAMES = ['1m', '3m', '15m'];
+    let MULTI_TIMEFRAMES = ['1m', '3m', '15m'];
 
     const multiState = {
       isActive: false,
@@ -2988,6 +3079,84 @@
         activateMultiView();
       }
     }
+
+    // ============================================================
+    // Sidebar Toggle (hide/show left tokens bar & right signal bar)
+    // ============================================================
+
+    document.getElementById('toggle-left-sidebar').addEventListener('click', () => {
+      const layout = document.getElementById('app-layout');
+      layout.classList.toggle('left-hidden');
+      const btn = document.getElementById('toggle-left-sidebar');
+      btn.innerHTML = layout.classList.contains('left-hidden') ? '&#9654;' : '&#9664;';
+      // Resize charts after layout shift
+      setTimeout(() => {
+        if (chart) chart.applyOptions({ width: DOM.chartContainer.clientWidth, height: DOM.chartContainer.clientHeight });
+        multiState.charts.forEach(e => {
+          if (e.chart) {
+            const c = document.getElementById(e.containerId);
+            e.chart.applyOptions({ width: c.clientWidth, height: c.clientHeight });
+          }
+        });
+      }, 100);
+    });
+
+    document.getElementById('toggle-right-sidebar').addEventListener('click', () => {
+      const layout = document.getElementById('app-layout');
+      layout.classList.toggle('right-hidden');
+      const btn = document.getElementById('toggle-right-sidebar');
+      btn.innerHTML = layout.classList.contains('right-hidden') ? '&#9664;' : '&#9654;';
+      setTimeout(() => {
+        if (chart) chart.applyOptions({ width: DOM.chartContainer.clientWidth, height: DOM.chartContainer.clientHeight });
+        multiState.charts.forEach(e => {
+          if (e.chart) {
+            const c = document.getElementById(e.containerId);
+            e.chart.applyOptions({ width: c.clientWidth, height: c.clientHeight });
+          }
+        });
+      }, 100);
+    });
+
+    // ============================================================
+    // Multi-Chart Per-Panel TF Switching
+    // ============================================================
+
+    async function switchMultiPanelTF(panelIndex, newTF) {
+      const entry = multiState.charts[panelIndex];
+      if (!entry) return;
+
+      // Update the TF
+      MULTI_TIMEFRAMES[panelIndex] = newTF;
+      entry.tf = newTF;
+
+      // Update active button
+      const toolbar = document.getElementById(`multi-toolbar-${panelIndex + 1}`);
+      toolbar.querySelectorAll('.multi-tf-btn').forEach(b => b.classList.remove('active'));
+      toolbar.querySelector(`[data-tf="${newTF}"]`).classList.add('active');
+
+      // Reconnect WebSocket for new TF
+      if (entry.ws) { entry.ws.onclose = null; entry.ws.close(); entry.ws = null; }
+      connectMultiChartWs(entry);
+
+      // Reload data
+      try {
+        const data = await fetchMultiChartData(newTF);
+        renderMultiChartData(entry, data);
+      } catch (err) {
+        console.error(`Failed to load ${newTF} data for panel ${panelIndex}:`, err);
+      }
+    }
+
+    // Wire up all multi-tf-btn clicks
+    document.querySelectorAll('.multi-tf-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const panelIndex = parseInt(btn.dataset.panel);
+        const tf = btn.dataset.tf;
+        if (multiState.isActive) {
+          switchMultiPanelTF(panelIndex, tf);
+        }
+      });
+    });
 
     // ============================================================
     // Init
