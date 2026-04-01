@@ -160,8 +160,7 @@ function shouldExit15m(klines15, entryPrice, direction) {
 // ── OPEN TRADE (RR 1:1.5) ────────────────────────────────────
 async function openTrade(client, pick, wallet) {
   const sym = pick.symbol || pick.sym;
-  const entryPrice = pick.price;                    // 1m HL/LH structure level
-  const price = pick.lastPrice || pick.price;       // current market price (for sizing)
+  const price = pick.lastPrice || pick.price;
   const direction = pick.direction;
   const isLong = direction !== 'SHORT';
 
@@ -232,13 +231,8 @@ async function openTrade(client, pick, wallet) {
   const entrySide = isLong ? 'BUY' : 'SELL';
   const closeSide = isLong ? 'SELL' : 'BUY';
 
-  // Limit entry at the 1m HL/LH structure price
-  const limitPrice = fmtP(entryPrice);
-  bLog.trade(`Placing LIMIT ${entrySide} at $${limitPrice} (1m ${isLong ? 'HL' : 'LH'} level, market=$${fmtP(price)})`);
-  const order = await client.submitNewOrder({
-    symbol: sym, side: entrySide, type: 'LIMIT',
-    quantity: qty, price: limitPrice, timeInForce: 'GTC',
-  });
+  // Market entry on next 1m candle after HL/LH confirmed
+  const order = await client.submitNewOrder({ symbol: sym, side: entrySide, type: 'MARKET', quantity: qty });
   await sleep(1500);
 
   // SL + TP via Algo Order API (Binance migrated conditional orders Dec 2025)
@@ -271,7 +265,7 @@ async function openTrade(client, pick, wallet) {
   }
 
   tradeState.set(sym, {
-    entry: entryPrice, tp1, tp2, tp3, sl, qty, isLong,
+    entry: price, tp1, tp2, tp3, sl, qty, isLong,
     tpHit1: false, tpHit2: false,
     pricePrec, qtyPrec,
     setup: pick.setup,
@@ -279,7 +273,6 @@ async function openTrade(client, pick, wallet) {
     tf15m: pick.structure?.tf15 || null,
     tf3m: pick.structure?.tf3 || null,
     tf1m: pick.structure?.tf1 || null,
-    orderType: 'LIMIT',
   });
 
   return {
@@ -677,8 +670,7 @@ async function executeForAllUsers(pick) {
         const apiSecret = cryptoUtils.decrypt(key.api_secret_enc, key.secret_iv, key.secret_auth_tag);
         const maxPos = parseInt(key.max_positions) || 1;
 
-        const entryLimitPrice = pick.price;                           // 1m HL/LH structure level
-        const price = pick.lastPrice || pick.price || pick.entry;    // market price for sizing
+        const price = pick.lastPrice || pick.price || pick.entry;
         const isLong = pick.direction !== 'SHORT';
         const aiParams = await aiLearner.getOptimalParams();
         const userLev = getLeverage(symbol, price, aiParams);
@@ -739,12 +731,8 @@ async function executeForAllUsers(pick) {
             return 'TOO_EXPENSIVE';
           }
 
-          const userLimitPrice = fmtP(entryLimitPrice);
-          bLog.trade(`User ${key.email}: placing LIMIT ${isLong ? 'BUY' : 'SELL'} ${symbol} qty=${qty} at $${userLimitPrice} (1m ${isLong ? 'HL' : 'LH'})...`);
-          await userClient.submitNewOrder({
-            symbol, side: isLong ? 'BUY' : 'SELL', type: 'LIMIT',
-            quantity: qty, price: userLimitPrice, timeInForce: 'GTC',
-          });
+          bLog.trade(`User ${key.email}: placing MARKET ${isLong ? 'BUY' : 'SELL'} ${symbol} qty=${qty}...`);
+          await userClient.submitNewOrder({ symbol, side: isLong ? 'BUY' : 'SELL', type: 'MARKET', quantity: qty });
 
           // Wait for position to register before setting SL/TP
           await sleep(1500);
@@ -790,11 +778,11 @@ async function executeForAllUsers(pick) {
           await db.query(
             `INSERT INTO trades (api_key_id, user_id, symbol, direction, entry_price, sl_price, tp_price, quantity, leverage, status, tf_15m, tf_3m, tf_1m)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'OPEN', $10, $11, $12)`,
-            [key.id, key.user_id, symbol, pick.direction, entryLimitPrice, fmtP(slPrice), fmtP(tp3Price), qty, userLev,
+            [key.id, key.user_id, symbol, pick.direction, price, fmtP(slPrice), fmtP(tp3Price), qty, userLev,
              pick.structure?.tf15 || null, pick.structure?.tf3 || null, pick.structure?.tf1 || null]
           );
-          bLog.trade(`✅ Binance LIMIT: ${key.email} ${symbol} ${pick.direction} x${userLev} qty=${qty} entry=$${fmtPrice(entryLimitPrice)}`);
-          log(`Binance LIMIT: ${key.email} ${symbol} ${pick.direction} x${userLev}`);
+          bLog.trade(`✅ Binance OK: ${key.email} ${symbol} ${pick.direction} x${userLev} qty=${qty} entry=$${fmtPrice(price)}`);
+          log(`Binance OK: ${key.email} ${symbol} ${pick.direction} x${userLev}`);
 
         } else if (key.platform === 'bitunix') {
           const userClient = new BitunixClient({ apiKey, apiSecret });
@@ -837,12 +825,11 @@ async function executeForAllUsers(pick) {
           const slFmtBx = parseFloat(slPrice.toFixed(8));
           const tpFmtBx = parseFloat(tp3Price.toFixed(8));
 
-          // Place LIMIT order at 1m HL/LH structure level with TP/SL inline
-          const bxLimitPrice = parseFloat(entryLimitPrice.toFixed(8));
-          bLog.trade(`User ${key.email}: placing Bitunix LIMIT ${isLong ? 'BUY' : 'SELL'} ${symbol} qty=${qty} at $${bxLimitPrice} SL=$${slFmtBx} TP=$${tpFmtBx}...`);
+          // Place order with TP/SL inline — more reliable than setting after
+          bLog.trade(`User ${key.email}: placing Bitunix MARKET ${isLong ? 'BUY' : 'SELL'} ${symbol} qty=${qty} SL=$${slFmtBx} TP=$${tpFmtBx}...`);
           const order = await userClient.placeOrder({
             symbol, side: isLong ? 'BUY' : 'SELL',
-            qty: String(qty), orderType: 'LIMIT', price: String(bxLimitPrice), tradeSide: 'OPEN',
+            qty: String(qty), orderType: 'MARKET', tradeSide: 'OPEN',
             tpPrice: tpFmtBx, tpStopType: 'MARK_PRICE', tpOrderType: 'MARKET',
             slPrice: slFmtBx, slStopType: 'MARK_PRICE', slOrderType: 'MARKET',
           });
@@ -876,7 +863,7 @@ async function executeForAllUsers(pick) {
           await db.query(
             `INSERT INTO trades (api_key_id, user_id, symbol, direction, entry_price, sl_price, tp_price, quantity, leverage, status)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'OPEN')`,
-            [key.id, key.user_id, symbol, pick.direction, entryLimitPrice, parseFloat(slPrice.toFixed(8)), parseFloat(tp3Price.toFixed(8)), qty, userLev]
+            [key.id, key.user_id, symbol, pick.direction, price, parseFloat(slPrice.toFixed(8)), parseFloat(tp3Price.toFixed(8)), qty, userLev]
           );
           bLog.trade(`✅ Bitunix OK: ${key.email} ${symbol} ${pick.direction} x${userLev} qty=${qty}`);
           log(`Bitunix OK: ${key.email} ${symbol} ${pick.direction} x${userLev}`);
