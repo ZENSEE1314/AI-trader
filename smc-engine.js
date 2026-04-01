@@ -251,14 +251,15 @@ async function analyzeLHHL(ticker, params) {
   const struct3 = getStructure(klines3m, SWING_LENGTHS['3m']);
   const struct1 = getStructure(klines1m, SWING_LENGTHS['1m']);
 
-  // 2-of-3 TF confluence: any 2 timeframes agreeing is enough
-  // HL on 2+ TFs = LONG (the 3rd TF having LL is just a pullback, not trend reversal)
-  // LH on 2+ TFs = SHORT (the 3rd TF having HH is just a bounce, not trend reversal)
-  const hlCount = (struct15.hasHL ? 1 : 0) + (struct3.hasHL ? 1 : 0) + (struct1.hasHL ? 1 : 0);
-  const lhCount = (struct15.hasLH ? 1 : 0) + (struct3.hasLH ? 1 : 0) + (struct1.hasLH ? 1 : 0);
+  // 1m MUST confirm: LONG requires 1m HL, SHORT requires 1m LH (entry timeframe)
+  // Then at least 1 of the higher TFs (15m or 3m) must agree for confluence
+  const hlCountHigher = (struct15.hasHL ? 1 : 0) + (struct3.hasHL ? 1 : 0);
+  const lhCountHigher = (struct15.hasLH ? 1 : 0) + (struct3.hasLH ? 1 : 0);
+  const hlCount = hlCountHigher + (struct1.hasHL ? 1 : 0);
+  const lhCount = lhCountHigher + (struct1.hasLH ? 1 : 0);
 
-  let isLongSetup = hlCount >= 2;
-  let isShortSetup = lhCount >= 2;
+  let isLongSetup = struct1.hasHL && hlCountHigher >= 1;  // 1m HL + at least one higher TF HL
+  let isShortSetup = struct1.hasLH && lhCountHigher >= 1; // 1m LH + at least one higher TF LH
 
   // If both directions qualify, pick the stronger one (more TFs agreeing)
   // If tied, block both — market is indecisive
