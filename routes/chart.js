@@ -251,6 +251,39 @@ function calcCurvedBands(klines) {
   return { upper: upperArr, lower: lowerArr };
 }
 
+// ── VWAP (Volume Weighted Average Price) ───────────────────
+// Resets at the start of each trading day (UTC 00:00)
+function calcVWAP(klines) {
+  const vwap = [];
+  let cumVolume = 0;
+  let cumTPV = 0; // cumulative (typical price × volume)
+  let currentDay = '';
+
+  for (let i = 0; i < klines.length; i++) {
+    const ts = parseInt(klines[i][0]);
+    const day = new Date(ts).toISOString().slice(0, 10);
+    const high = parseFloat(klines[i][2]);
+    const low = parseFloat(klines[i][3]);
+    const close = parseFloat(klines[i][4]);
+    const volume = parseFloat(klines[i][5]);
+
+    // Reset at new day
+    if (day !== currentDay) {
+      cumVolume = 0;
+      cumTPV = 0;
+      currentDay = day;
+    }
+
+    const typicalPrice = (high + low + close) / 3;
+    cumTPV += typicalPrice * volume;
+    cumVolume += volume;
+
+    vwap.push(cumVolume > 0 ? cumTPV / cumVolume : close);
+  }
+
+  return vwap;
+}
+
 // ── Daily Levels: Opening Price, Previous Day High/Low ─────
 function calcDailyLevels(klines) {
   const dayMap = new Map();
@@ -458,6 +491,7 @@ router.get('/data', async (req, res) => {
     let eqhEql = [], chochBms = [], strongWeak = [], premiumDiscount = {};
     let trend = 'Neutral', dailyLevels = {};
     let ema7 = [], ema22 = [], ema200 = [];
+    let vwapData = [];
     let curvedBands = { upper: [], lower: [] };
 
     try {
@@ -482,6 +516,7 @@ router.get('/data', async (req, res) => {
       ema22 = calcEMA(closes, 22);
       ema200 = calcEMA(closes, 200);
       curvedBands = calcCurvedBands(klines);
+      vwapData = calcVWAP(klines);
       dailyLevels = calcDailyLevels(klines);
     } catch (indErr) {
       console.error('Indicator calc error (candles still sent):', indErr.message);
@@ -507,6 +542,7 @@ router.get('/data', async (req, res) => {
       ema7: emaData(ema7),
       ema22: emaData(ema22),
       ema200: emaData(ema200),
+      vwap: emaData(vwapData),
       curvedUpper: emaData(curvedBands.upper),
       curvedLower: emaData(curvedBands.lower),
     });

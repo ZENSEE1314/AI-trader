@@ -894,6 +894,7 @@
         <label class="ind-toggle"><input type="checkbox" id="tog-ema7" checked> EMA7</label>
         <label class="ind-toggle"><input type="checkbox" id="tog-ema22" checked> EMA22</label>
         <label class="ind-toggle"><input type="checkbox" id="tog-ema200"> EMA200</label>
+        <label class="ind-toggle"><input type="checkbox" id="tog-vwap" checked> VWAP</label>
         <label class="ind-toggle"><input type="checkbox" id="tog-curved" checked> Curved Bands</label>
         <label class="ind-toggle"><input type="checkbox" id="tog-dailylvl" checked> OP/PDH/PDL</label>
         <label class="ind-toggle"><input type="checkbox" id="tog-eqheql"> EQH/EQL</label>
@@ -1117,6 +1118,7 @@
       ema7: null,
       ema22: null,
       ema200: null,
+      vwap: null,
       curvedUpper: null,
       curvedLower: null,
       dailyOP: null,
@@ -1302,6 +1304,7 @@
 
     function clearIndicators() {
       [indicatorSeries.ema7, indicatorSeries.ema22, indicatorSeries.ema200,
+       indicatorSeries.vwap,
        indicatorSeries.curvedUpper, indicatorSeries.curvedLower,
        indicatorSeries.dailyOP, indicatorSeries.dailyPDH, indicatorSeries.dailyPDL,
        indicatorSeries.premiumSeries, indicatorSeries.discountSeries, indicatorSeries.midSeries]
@@ -1329,6 +1332,7 @@
       indicatorSeries.ema7 = null;
       indicatorSeries.ema22 = null;
       indicatorSeries.ema200 = null;
+      indicatorSeries.vwap = null;
       indicatorSeries.curvedUpper = null;
       indicatorSeries.curvedLower = null;
       indicatorSeries.dailyOP = null;
@@ -1374,6 +1378,9 @@
 
       // EMA lines
       renderEMALines(data);
+
+      // VWAP
+      renderVWAP(data);
 
       // Curved Structure Bands (Zeiierman)
       renderCurvedBands(data);
@@ -1544,6 +1551,22 @@
           crosshairMarkerVisible: false,
         });
         indicatorSeries.ema200.setData(data.ema200);
+      }
+    }
+
+    // ── VWAP ──────────────────────────────────────────────────
+
+    function renderVWAP(data) {
+      if (data.vwap && data.vwap.length) {
+        indicatorSeries.vwap = chart.addLineSeries({
+          color: '#aa46f5',
+          lineWidth: 2,
+          priceLineVisible: false,
+          lastValueVisible: false,
+          crosshairMarkerVisible: false,
+          ...OVERLAY_OPTS,
+        });
+        indicatorSeries.vwap.setData(data.vwap);
       }
     }
 
@@ -2047,6 +2070,7 @@
       setSeriesVisible(indicatorSeries.ema7, document.getElementById('tog-ema7').checked);
       setSeriesVisible(indicatorSeries.ema22, document.getElementById('tog-ema22').checked);
       setSeriesVisible(indicatorSeries.ema200, document.getElementById('tog-ema200').checked);
+      setSeriesVisible(indicatorSeries.vwap, document.getElementById('tog-vwap').checked);
       const curvedEl = document.getElementById('tog-curved');
       const isCurvedOn = curvedEl ? curvedEl.checked : false;
       setSeriesVisible(indicatorSeries.curvedUpper, isCurvedOn);
@@ -2471,7 +2495,7 @@
       // Indicator toggles
       const toggleIds = [
         'tog-swings', 'tog-labels', 'tog-ob', 'tog-fvg',
-        'tog-levels', 'tog-ema7', 'tog-ema22', 'tog-ema200',
+        'tog-levels', 'tog-ema7', 'tog-ema22', 'tog-ema200', 'tog-vwap',
         'tog-curved', 'tog-dailylvl', 'tog-eqheql', 'tog-choch', 'tog-strongweak', 'tog-premium',
       ];
       toggleIds.forEach(id => {
