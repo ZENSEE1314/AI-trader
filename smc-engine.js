@@ -251,25 +251,27 @@ async function analyzeLHHL(ticker, params) {
   const struct3 = getStructure(klines3m, SWING_LENGTHS['3m']);
   const struct1 = getStructure(klines1m, SWING_LENGTHS['1m']);
 
-  // 1m MUST confirm: LONG requires 1m HL, SHORT requires 1m LH (entry timeframe)
-  // Then at least 1 of the higher TFs (15m or 3m) must agree for confluence
+  // REVERSED STRATEGY: same confluence detection, opposite direction
+  // HL confluence → SHORT (fade the higher low, expect reversal down)
+  // LH confluence → LONG (fade the lower high, expect reversal up)
+  // 1m MUST confirm, plus at least 1 higher TF agrees
   const hlCountHigher = (struct15.hasHL ? 1 : 0) + (struct3.hasHL ? 1 : 0);
   const lhCountHigher = (struct15.hasLH ? 1 : 0) + (struct3.hasLH ? 1 : 0);
   const hlCount = hlCountHigher + (struct1.hasHL ? 1 : 0);
   const lhCount = lhCountHigher + (struct1.hasLH ? 1 : 0);
 
-  let isLongSetup = struct1.hasHL && hlCountHigher >= 1;  // 1m HL + at least one higher TF HL
-  let isShortSetup = struct1.hasLH && lhCountHigher >= 1; // 1m LH + at least one higher TF LH
+  // Reversed: HL confluence fires SHORT, LH confluence fires LONG
+  let isShortSetup = struct1.hasHL && hlCountHigher >= 1;  // 1m HL → SHORT (fade it)
+  let isLongSetup = struct1.hasLH && lhCountHigher >= 1;   // 1m LH → LONG (fade it)
 
-  // If both directions qualify, pick the stronger one (more TFs agreeing)
-  // If tied, block both — market is indecisive
+  // If both directions qualify, pick the stronger one
   if (isLongSetup && isShortSetup) {
-    if (hlCount > lhCount) isShortSetup = false;
-    else if (lhCount > hlCount) isLongSetup = false;
+    if (lhCount > hlCount) isShortSetup = false;
+    else if (hlCount > lhCount) isLongSetup = false;
     else { isLongSetup = false; isShortSetup = false; }
   }
 
-  // AI direction bias — completely block the losing direction
+  // AI direction bias
   if (dirBias === 'LONG') {
     isShortSetup = false;
     if (isLongSetup) bLog.ai(`${symbol}: AI bias=LONG — blocking SHORT, allowing LONG`);
@@ -289,8 +291,8 @@ async function analyzeLHHL(ticker, params) {
     return null;
   }
 
-  const tfMatch = Math.max(hlCount, lhCount);
-  bLog.scan(`${symbol}: 15m=${struct15.label} 3m=${struct3.label} 1m=${struct1.label} — ✅ ${tfMatch}/3 TF confluence`);
+  const tfMatch = isShortSetup ? hlCount : lhCount;
+  bLog.scan(`${symbol}: 15m=${struct15.label} 3m=${struct3.label} 1m=${struct1.label} — ✅ ${tfMatch}/3 TF confluence (REVERSED)`);
 
   let direction;
 
@@ -298,7 +300,7 @@ async function analyzeLHHL(ticker, params) {
     const lastLH1m = struct1.lastHigh;
     const lastHL1m = struct1.lastLow;
     if (lastLH1m && lastHL1m) {
-      direction = lastLH1m.index > lastHL1m.index ? 'SHORT' : 'LONG';
+      direction = lastHL1m.index > lastLH1m.index ? 'SHORT' : 'LONG';
     } else {
       direction = isShortSetup ? 'SHORT' : 'LONG';
     }
@@ -308,36 +310,40 @@ async function analyzeLHHL(ticker, params) {
     direction = 'LONG';
   }
 
-  // Verify swing exists (used for direction validation only)
-  if (direction === 'SHORT' && !struct1.lastHigh) return null;
-  if (direction === 'LONG' && !struct1.lastLow) return null;
+  // For reversed: SHORT uses HL swing (lastLow), LONG uses LH swing (lastHigh)
+  if (direction === 'SHORT' && !struct1.lastLow) return null;
+  if (direction === 'LONG' && !struct1.lastHigh) return null;
 
   // Recency check: the 1m confirming swing must be reasonably fresh
   // With swing length N, the most recent detectable swing is at index (total - N - 1),
   // which is N+1 candles from the end. Allow swing_length + 20 candles of age.
+  // Recency: the 1m confirming swing must be fresh
+  // Reversed: SHORT is triggered by HL (lastLow), LONG by LH (lastHigh)
   const MAX_CANDLE_AGE = SWING_LENGTHS['1m'] + 20;
   const lastCandleIndex = klines1m.length - 1;
-  const confirmSwing = direction === 'SHORT' ? struct1.lastHigh : struct1.lastLow;
+  const confirmSwing = direction === 'SHORT' ? struct1.lastLow : struct1.lastHigh;
   if (confirmSwing && (lastCandleIndex - confirmSwing.index) > MAX_CANDLE_AGE) {
     bLog.scan(`${symbol}: 1m swing too old (${lastCandleIndex - confirmSwing.index} candles ago, max ${MAX_CANDLE_AGE}) — skipping stale signal`);
     return null;
   }
 
-  // Entry on the next 1m candle after HL/LH is confirmed — MARKET order
-  // Don't chase if price has already moved too far from the structure level
-  const structLevel = direction === 'LONG' ? struct1.lastLow.price : struct1.lastHigh.price;
+  // Entry on next 1m candle — don't chase if price moved too far
+  // Reversed: SHORT at HL level, LONG at LH level
+  const structLevel = direction === 'SHORT' ? struct1.lastLow.price : struct1.lastHigh.price;
   const MAX_CHASE_PCT = 0.02;
-  if (direction === 'LONG') {
-    const dist = (price - structLevel) / structLevel;
+  if (direction === 'SHORT') {
+    // Shorting at HL — price should still be near the HL, not already dumped
+    const dist = (structLevel - price) / structLevel;
     if (dist > MAX_CHASE_PCT) {
-      bLog.scan(`${symbol}: price ${(dist * 100).toFixed(2)}% above 1m HL ($${structLevel.toFixed(4)}) — too far, chasing`);
+      bLog.scan(`${symbol}: price ${(dist * 100).toFixed(2)}% below 1m HL ($${structLevel.toFixed(4)}) — too far, chasing`);
       return null;
     }
   }
-  if (direction === 'SHORT') {
-    const dist = (structLevel - price) / structLevel;
+  if (direction === 'LONG') {
+    // Buying at LH — price should still be near the LH, not already pumped
+    const dist = (price - structLevel) / structLevel;
     if (dist > MAX_CHASE_PCT) {
-      bLog.scan(`${symbol}: price ${(dist * 100).toFixed(2)}% below 1m LH ($${structLevel.toFixed(4)}) — too far, chasing`);
+      bLog.scan(`${symbol}: price ${(dist * 100).toFixed(2)}% above 1m LH ($${structLevel.toFixed(4)}) — too far, chasing`);
       return null;
     }
   }
@@ -350,10 +356,12 @@ async function analyzeLHHL(ticker, params) {
   const slPct = SL_MARGIN_PCT / leverage;
   const tpPct = TP_MARGIN_PCT / leverage;
 
-  // SL beyond the 1m structure swing (0.1% buffer past the swing)
+  // SL beyond the structure swing that triggered the signal (0.1% buffer)
+  // Reversed: SHORT triggered by HL → SL above the HL swing
+  //           LONG triggered by LH → SL below the LH swing
   const swingSl = direction === 'SHORT'
-    ? struct1.lastHigh.price * 1.001
-    : struct1.lastLow.price * 0.999;
+    ? struct1.lastLow.price * 1.001   // SL above the HL that triggered SHORT
+    : struct1.lastHigh.price * 0.999; // SL below the LH that triggered LONG
   const swingSlDist = Math.abs(price - swingSl) / price;
 
   // Take the wider of capital-based or swing-based SL distance
@@ -374,22 +382,24 @@ async function analyzeLHHL(ticker, params) {
   // Confidence score
   let score = 10; // base: 3-TF confluence confirmed
 
-  // Bonus: full bearish structure (LH + LL) or full bullish (HH + HL)
+  // Reversed scoring: SHORT is fading HL, LONG is fading LH
+  // Bonus when multiple TFs confirm the fade setup
   if (direction === 'SHORT') {
-    if (struct15.hasLL) score += 2; // 15m also making lower lows = strong downtrend
-    if (struct3.hasLL) score += 1;
-    if (struct1.hasLL) score += 1;
-    // Bonus: trend confirmed on higher TF
-    if (struct15.trend === 'bearish') score += 2;
+    // Fading HL — bonus if higher TFs also show HL (stronger fade signal)
+    if (struct15.hasHL) score += 2;
+    if (struct3.hasHL) score += 1;
+    if (struct1.hasHL) score += 1;
+    if (struct15.trend === 'bullish') score += 2; // fading bullish trend = contrarian edge
   } else {
-    if (struct15.hasHH) score += 2; // 15m also making higher highs = strong uptrend
-    if (struct3.hasHH) score += 1;
-    if (struct1.hasHH) score += 1;
-    if (struct15.trend === 'bullish') score += 2;
+    // Fading LH — bonus if higher TFs also show LH
+    if (struct15.hasLH) score += 2;
+    if (struct3.hasLH) score += 1;
+    if (struct1.hasLH) score += 1;
+    if (struct15.trend === 'bearish') score += 2; // fading bearish trend = contrarian edge
   }
 
   // AI modifier
-  const setup = direction === 'SHORT' ? 'LH_3TF' : 'HL_3TF';
+  const setup = direction === 'SHORT' ? 'HL_FADE' : 'LH_FADE';
   const aiModifier = await aiLearner.getAIScoreModifier(symbol, setup, direction);
   score = score * aiModifier;
 
@@ -406,7 +416,7 @@ async function analyzeLHHL(ticker, params) {
     leverage,
     score: Math.round(score * 10) / 10,
     setup,
-    setupName: `${direction === 'SHORT' ? 'LH' : 'HL'}-3TF`,
+    setupName: `${direction === 'SHORT' ? 'HL-FADE' : 'LH-FADE'}`,
     aiModifier: Math.round(aiModifier * 100) / 100,
     structure: {
       tf15: struct15.label,
