@@ -323,29 +323,26 @@ async function analyzeLHHL(ticker, params) {
     return null;
   }
 
-  // Price position check: don't chase — entry should be near the structure level
-  // SHORT: price should be below the last swing high (LH) and not too far below
-  // LONG: price should be above the last swing low (HL) and not too far above
-  const MAX_CHASE_PCT = 0.02; // 2% max distance from structure level
-  if (direction === 'SHORT' && struct1.lastHigh) {
-    const distFromLH = (struct1.lastHigh.price - price) / price;
-    if (price > struct1.lastHigh.price) {
-      bLog.scan(`${symbol}: price above LH — not a valid short entry`);
-      return null;
-    }
-    if (distFromLH > MAX_CHASE_PCT) {
-      bLog.scan(`${symbol}: price ${(distFromLH * 100).toFixed(2)}% below LH — too far, chasing`);
+  // Entry at the 1m structure level — LIMIT order at the HL/LH swing price
+  // LONG: enter at the 1m HL (swing low) price
+  // SHORT: enter at the 1m LH (swing high) price
+  const entryPrice = direction === 'LONG' ? struct1.lastLow.price : struct1.lastHigh.price;
+
+  // Reject if market price has already moved too far past the structure level
+  // LONG: price shouldn't be more than 2% above HL (limit order might not fill)
+  // SHORT: price shouldn't be more than 2% below LH (limit order might not fill)
+  const MAX_CHASE_PCT = 0.02;
+  if (direction === 'LONG') {
+    const dist = (price - entryPrice) / entryPrice;
+    if (dist > MAX_CHASE_PCT) {
+      bLog.scan(`${symbol}: price ${(dist * 100).toFixed(2)}% above 1m HL ($${entryPrice.toFixed(4)}) — limit unlikely to fill`);
       return null;
     }
   }
-  if (direction === 'LONG' && struct1.lastLow) {
-    const distFromHL = (price - struct1.lastLow.price) / price;
-    if (price < struct1.lastLow.price) {
-      bLog.scan(`${symbol}: price below HL — not a valid long entry`);
-      return null;
-    }
-    if (distFromHL > MAX_CHASE_PCT) {
-      bLog.scan(`${symbol}: price ${(distFromHL * 100).toFixed(2)}% above HL — too far, chasing`);
+  if (direction === 'SHORT') {
+    const dist = (entryPrice - price) / entryPrice;
+    if (dist > MAX_CHASE_PCT) {
+      bLog.scan(`${symbol}: price ${(dist * 100).toFixed(2)}% below 1m LH ($${entryPrice.toFixed(4)}) — limit unlikely to fill`);
       return null;
     }
   }
@@ -358,16 +355,16 @@ async function analyzeLHHL(ticker, params) {
   const slPct = SL_MARGIN_PCT / leverage;
   const tpPct = TP_MARGIN_PCT / leverage;
 
-  // Use swing-based SL as floor: don't place SL tighter than the structure swing
+  // SL beyond the 1m structure swing (0.1% buffer past the swing)
   const swingSl = direction === 'SHORT'
-    ? (struct1.lastHigh ? struct1.lastHigh.price * 1.001 : null)
-    : (struct1.lastLow ? struct1.lastLow.price * 0.999 : null);
-  const swingSlDist = swingSl ? Math.abs(price - swingSl) / price : 0;
+    ? struct1.lastHigh.price * 1.001
+    : struct1.lastLow.price * 0.999;
+  const swingSlDist = Math.abs(entryPrice - swingSl) / entryPrice;
 
   // Take the wider of capital-based or swing-based SL distance
   const effectiveSlPct = Math.max(slPct, swingSlDist);
-  const slDist = price * effectiveSlPct;
-  const tpDist = price * effectiveSlPct * rrRatio;
+  const slDist = entryPrice * effectiveSlPct;
+  const tpDist = entryPrice * effectiveSlPct * rrRatio;
 
   // Guard: reject trades where SL is less than 0.15% from entry (noise territory)
   const MIN_SL_PCT = 0.0015;
@@ -376,8 +373,8 @@ async function analyzeLHHL(ticker, params) {
     return null;
   }
 
-  const sl = direction === 'SHORT' ? price + slDist : price - slDist;
-  const tp = direction === 'SHORT' ? price - tpDist : price + tpDist;
+  const sl = direction === 'SHORT' ? entryPrice + slDist : entryPrice - slDist;
+  const tp = direction === 'SHORT' ? entryPrice - tpDist : entryPrice + tpDist;
 
   // Confidence score
   let score = 10; // base: 3-TF confluence confirmed
@@ -404,12 +401,13 @@ async function analyzeLHHL(ticker, params) {
   return {
     symbol,
     direction,
-    price,
-    lastPrice: price,
+    price: entryPrice,       // enter at 1m HL/LH level, not market price
+    lastPrice: price,        // current market price for reference
+    orderType: 'LIMIT',      // limit order at structure level
     sl,
     tp1: tp,
-    tp2: direction === 'SHORT' ? price - tpDist * 1.2 : price + tpDist * 1.2,
-    tp3: direction === 'SHORT' ? price - tpDist * 1.5 : price + tpDist * 1.5,
+    tp2: direction === 'SHORT' ? entryPrice - tpDist * 1.2 : entryPrice + tpDist * 1.2,
+    tp3: direction === 'SHORT' ? entryPrice - tpDist * 1.5 : entryPrice + tpDist * 1.5,
     slDist: slPct,
     leverage,
     score: Math.round(score * 10) / 10,
