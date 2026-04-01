@@ -51,11 +51,29 @@
     .app-layout.left-hidden { grid-template-columns: 0px 1fr 240px; }
     .app-layout.right-hidden { grid-template-columns: 280px 1fr 0px; }
     .app-layout.left-hidden.right-hidden { grid-template-columns: 0px 1fr 0px; }
-    .app-layout.left-hidden .sidebar { display: none; }
-    .app-layout.right-hidden .right-sidebar { display: none; }
+    .app-layout.left-hidden .sidebar { display: none !important; }
+    .app-layout.right-hidden .right-sidebar { display: none !important; }
 
-    /* Sidebar toggle buttons */
-    .sidebar-toggle {
+    /* Sidebar toggle buttons — inside the sidebar headers */
+    .sidebar-collapse-btn {
+      background: none;
+      border: 1px solid var(--color-border);
+      color: var(--color-fg-muted);
+      width: 28px;
+      height: 28px;
+      border-radius: var(--radius-md);
+      cursor: pointer;
+      font-size: 14px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      transition: background var(--duration-fast), color var(--duration-fast);
+    }
+    .sidebar-collapse-btn:hover { background: var(--color-surface); color: var(--color-fg); }
+
+    /* Floating reopen buttons — shown when sidebar is hidden */
+    .sidebar-reopen {
       position: fixed;
       top: 50%;
       transform: translateY(-50%);
@@ -63,20 +81,20 @@
       background: var(--color-bg-raised);
       border: 1px solid var(--color-border);
       color: var(--color-fg-muted);
-      width: 20px;
-      height: 48px;
-      display: flex;
+      width: 24px;
+      height: 56px;
+      display: none;
       align-items: center;
       justify-content: center;
       cursor: pointer;
       font-size: 12px;
       transition: background var(--duration-fast), color var(--duration-fast);
     }
-    .sidebar-toggle:hover { background: var(--color-surface); color: var(--color-fg); }
-    #toggle-left-sidebar { left: 0; border-radius: 0 var(--radius-md) var(--radius-md) 0; border-left: none; }
-    #toggle-right-sidebar { right: 0; border-radius: var(--radius-md) 0 0 var(--radius-md); border-right: none; }
-    .app-layout:not(.left-hidden) #toggle-left-sidebar { left: 280px; }
-    .app-layout:not(.right-hidden) #toggle-right-sidebar { right: 240px; }
+    .sidebar-reopen:hover { background: var(--color-surface); color: var(--color-accent); }
+    #reopen-left { left: 0; border-radius: 0 var(--radius-md) var(--radius-md) 0; border-left: none; }
+    #reopen-right { right: 0; border-radius: var(--radius-md) 0 0 var(--radius-md); border-right: none; }
+    .app-layout.left-hidden #reopen-left { display: flex; }
+    .app-layout.right-hidden #reopen-right { display: flex; }
 
     /* --- Sidebar --- */
     .sidebar {
@@ -987,18 +1005,21 @@
     <!-- Mobile overlay (closes sidebars when tapped) -->
     <div class="mobile-overlay" id="mobile-overlay"></div>
 
-    <!-- Sidebar toggle buttons -->
-    <button class="sidebar-toggle" id="toggle-left-sidebar" title="Toggle token list">&#9664;</button>
-    <button class="sidebar-toggle" id="toggle-right-sidebar" title="Toggle signal panel">&#9654;</button>
+    <!-- Floating reopen buttons (visible when sidebar is hidden) -->
+    <button class="sidebar-reopen" id="reopen-left" title="Show token list">&#9654;</button>
+    <button class="sidebar-reopen" id="reopen-right" title="Show signal panel">&#9664;</button>
 
     <!-- Sidebar -->
     <aside class="sidebar" id="left-sidebar">
       <div class="sidebar-header">
-        <a href="/" class="sidebar-brand">
-          <img src="/img/logo.jpeg" alt="MCT Logo">
-          <span>MCT</span>
-          <span class="brand-tag">SMC</span>
-        </a>
+        <div style="display:flex;align-items:center;justify-content:space-between;">
+          <a href="/" class="sidebar-brand" style="margin-bottom:0;">
+            <img src="/img/logo.jpeg" alt="MCT Logo">
+            <span>MCT</span>
+            <span class="brand-tag">SMC</span>
+          </a>
+          <button class="sidebar-collapse-btn" id="collapse-left" title="Hide token list">&#9664;</button>
+        </div>
         <div class="search-box">
           <span class="search-icon" aria-hidden="true">&#x1F50D;</span>
           <input
@@ -1186,6 +1207,10 @@
 
     <!-- Right Sidebar -->
     <aside class="right-sidebar" id="right-sidebar">
+      <!-- Collapse button -->
+      <div style="display:flex;justify-content:flex-end;padding:var(--space-2) var(--space-3) 0;">
+        <button class="sidebar-collapse-btn" id="collapse-right" title="Hide signal panel">&#9654;</button>
+      </div>
       <!-- Trend -->
       <div class="right-sidebar-section">
         <div class="right-sidebar-title">Trend</div>
@@ -3084,12 +3109,7 @@
     // Sidebar Toggle (hide/show left tokens bar & right signal bar)
     // ============================================================
 
-    document.getElementById('toggle-left-sidebar').addEventListener('click', () => {
-      const layout = document.getElementById('app-layout');
-      layout.classList.toggle('left-hidden');
-      const btn = document.getElementById('toggle-left-sidebar');
-      btn.innerHTML = layout.classList.contains('left-hidden') ? '&#9654;' : '&#9664;';
-      // Resize charts after layout shift
+    function resizeAllCharts() {
       setTimeout(() => {
         if (chart) chart.applyOptions({ width: DOM.chartContainer.clientWidth, height: DOM.chartContainer.clientHeight });
         multiState.charts.forEach(e => {
@@ -3099,22 +3119,26 @@
           }
         });
       }, 100);
+    }
+
+    // Left sidebar: collapse button inside sidebar + reopen floating button
+    document.getElementById('collapse-left').addEventListener('click', () => {
+      document.getElementById('app-layout').classList.add('left-hidden');
+      resizeAllCharts();
+    });
+    document.getElementById('reopen-left').addEventListener('click', () => {
+      document.getElementById('app-layout').classList.remove('left-hidden');
+      resizeAllCharts();
     });
 
-    document.getElementById('toggle-right-sidebar').addEventListener('click', () => {
-      const layout = document.getElementById('app-layout');
-      layout.classList.toggle('right-hidden');
-      const btn = document.getElementById('toggle-right-sidebar');
-      btn.innerHTML = layout.classList.contains('right-hidden') ? '&#9664;' : '&#9654;';
-      setTimeout(() => {
-        if (chart) chart.applyOptions({ width: DOM.chartContainer.clientWidth, height: DOM.chartContainer.clientHeight });
-        multiState.charts.forEach(e => {
-          if (e.chart) {
-            const c = document.getElementById(e.containerId);
-            e.chart.applyOptions({ width: c.clientWidth, height: c.clientHeight });
-          }
-        });
-      }, 100);
+    // Right sidebar: collapse button inside sidebar + reopen floating button
+    document.getElementById('collapse-right').addEventListener('click', () => {
+      document.getElementById('app-layout').classList.add('right-hidden');
+      resizeAllCharts();
+    });
+    document.getElementById('reopen-right').addEventListener('click', () => {
+      document.getElementById('app-layout').classList.remove('right-hidden');
+      resizeAllCharts();
     });
 
     // ============================================================
