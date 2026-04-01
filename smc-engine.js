@@ -191,11 +191,9 @@ function getStructure(klines, len) {
   };
 }
 
-// ── Daily Limits ─────────────────────────────────────────────
+// ── Daily Stats (tracking only, no limits) ──────────────────
 
 const dailyStats = { date: '', trades: 0, consecutiveLosses: 0 };
-const MAX_DAILY_TRADES = 5;
-const MAX_CONSECUTIVE_LOSSES = 3;
 
 function recordDailyTrade(isWin) {
   const today = new Date().toISOString().slice(0, 10);
@@ -213,10 +211,6 @@ function recordDailyTrade(isWin) {
 }
 
 function checkDailyLimits() {
-  const today = new Date().toISOString().slice(0, 10);
-  if (dailyStats.date !== today) return { canTrade: true };
-  if (dailyStats.trades >= MAX_DAILY_TRADES) return { canTrade: false, reason: `Daily limit reached (${MAX_DAILY_TRADES})` };
-  if (dailyStats.consecutiveLosses >= MAX_CONSECUTIVE_LOSSES) return { canTrade: false, reason: `${MAX_CONSECUTIVE_LOSSES} consecutive losses` };
   return { canTrade: true };
 }
 
@@ -290,7 +284,8 @@ async function analyzeLHHL(ticker, params) {
     return null;
   }
 
-  bLog.scan(`${symbol}: 15m=${struct15.label} 3m=${struct3.label} 1m=${struct1.label} — ✅ ALL AGREE`);
+  const tfMatch = Math.max(hlCount, lhCount);
+  bLog.scan(`${symbol}: 15m=${struct15.label} 3m=${struct3.label} 1m=${struct1.label} — ✅ ${tfMatch}/3 TF confluence`);
 
   let direction;
 
