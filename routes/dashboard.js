@@ -52,9 +52,14 @@ router.get('/trades', async (req, res) => {
   }
 });
 
-// P&L summary
+// P&L summary (supports ?period=1d|7d|30d|6m|1y filter)
 router.get('/summary', async (req, res) => {
   try {
+    const period = PERIOD_INTERVALS[req.query.period];
+    const dateFilter = period
+      ? `AND created_at > NOW() - INTERVAL '${period}'`
+      : '';
+
     const rows = await query(
       `SELECT
         COUNT(*) as total_trades,
@@ -66,7 +71,7 @@ router.get('/summary', async (req, res) => {
         COALESCE(SUM(pnl_usdt) FILTER (WHERE pnl_usdt < 0), 0) as total_lost,
         COALESCE(SUM(pnl_usdt) FILTER (WHERE created_at > NOW() - INTERVAL '24 hours'), 0) as pnl_24h,
         COALESCE(SUM(pnl_usdt) FILTER (WHERE created_at > NOW() - INTERVAL '7 days'), 0) as pnl_7d
-       FROM trades WHERE user_id = $1`,
+       FROM trades WHERE user_id = $1 ${dateFilter}`,
       [req.userId]
     );
 

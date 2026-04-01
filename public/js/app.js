@@ -282,8 +282,11 @@
 
   async function loadDashboard() {
     try {
+      const summaryUrl = state.tradesPeriod && state.tradesPeriod !== 'all'
+        ? `/api/dashboard/summary?period=${state.tradesPeriod}`
+        : '/api/dashboard/summary';
       const [summary, walletData] = await Promise.all([
-        api('GET', '/api/dashboard/summary'),
+        api('GET', summaryUrl),
         api('GET', '/api/dashboard/futures-wallet').catch(() => ({ balance: 0 })),
         loadTrades(),
       ]);
@@ -406,7 +409,7 @@
         btn.classList.add('active');
         state.tradesPeriod = btn.dataset.period;
         state.tradesPage = 1;
-        loadTrades();
+        loadDashboard(); // reload summary cards + trades for selected period
       });
     });
   }
