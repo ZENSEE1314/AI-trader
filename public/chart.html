@@ -2745,6 +2745,8 @@
 
     function renderMultiChartData(entry, data) {
       const { chart: mc, candleSeries: cs, volumeSeries: vs } = entry;
+      const OVERLAY = { priceScaleId: 'right', autoscaleInfoProvider: () => null };
+      const LINE_BASE = { lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false };
 
       cs.setData(data.candles);
 
@@ -2756,37 +2758,118 @@
       vs.setData(volData);
 
       // Clear old indicator series
-      if (entry.ema7) { mc.removeSeries(entry.ema7); entry.ema7 = null; }
-      if (entry.ema22) { mc.removeSeries(entry.ema22); entry.ema22 = null; }
-      if (entry.vwap) { mc.removeSeries(entry.vwap); entry.vwap = null; }
+      if (entry.extraSeries) entry.extraSeries.forEach(s => { try { mc.removeSeries(s); } catch(_){} });
+      entry.extraSeries = [];
 
-      // EMA7
-      if (data.ema7 && data.ema7.length) {
-        entry.ema7 = mc.addLineSeries({
-          color: '#58a6ff', lineWidth: 1,
-          priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
-        });
-        entry.ema7.setData(data.ema7);
+      function addLine(color, lineData, opts = {}) {
+        if (!lineData || !lineData.length) return;
+        const s = mc.addLineSeries({ ...LINE_BASE, color, ...OVERLAY, ...opts });
+        s.setData(lineData);
+        entry.extraSeries.push(s);
       }
 
-      // EMA22
-      if (data.ema22 && data.ema22.length) {
-        entry.ema22 = mc.addLineSeries({
-          color: '#ffa726', lineWidth: 1,
-          priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
-        });
-        entry.ema22.setData(data.ema22);
+      // EMA7, EMA22, VWAP
+      addLine('#58a6ff', data.ema7);
+      addLine('#ffa726', data.ema22);
+      addLine('#aa46f5', data.vwap, { lineWidth: 2 });
+
+      // Curved Structure Bands
+      addLine('#f23645', data.curvedUpper, { lineWidth: 2 });
+      addLine('#089981', data.curvedLower, { lineWidth: 2 });
+
+      // ── Swing + Structure Label Markers ──
+      const markers = [];
+      if (data.labels) {
+        for (const l of data.labels) {
+          const isBullish = l.label === 'HH' || l.label === 'HL';
+          markers.push({
+            time: l.time,
+            position: l.type === 'high' ? 'aboveBar' : 'belowBar',
+            color: isBullish ? '#00d4aa' : '#ff4757',
+            shape: l.type === 'high' ? 'arrowDown' : 'arrowUp',
+            text: l.label,
+          });
+        }
+      }
+      if (markers.length) {
+        markers.sort((a, b) => a.time - b.time);
+        cs.setMarkers(markers);
       }
 
-      // VWAP
-      if (data.vwap && data.vwap.length) {
-        entry.vwap = mc.addLineSeries({
-          color: '#aa46f5', lineWidth: 1,
-          priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
-          priceScaleId: 'right',
-          autoscaleInfoProvider: () => null,
-        });
-        entry.vwap.setData(data.vwap);
+      // ── CHoCH / SMS / BMS Lines ──
+      if (data.chochBms && data.chochBms.length) {
+        for (const line of data.chochBms) {
+          const isCHoCH = line.label && line.label.startsWith('CHoCH');
+          const isSMS = line.label && line.label.startsWith('SMS');
+          const isBull = line.label && line.label.includes('↑');
+          const color = isBull ? '#00d4aa' : '#ff4757';
+          const lineStyle = isCHoCH ? 0 : isSMS ? 0 : 2; // solid for CHoCH/SMS, dashed for BMS
+          const lineWidth = isCHoCH ? 2 : 1;
+
+          const s = mc.addLineSeries({
+            ...LINE_BASE, color, lineWidth, lineStyle, ...OVERLAY,
+            title: '',
+          });
+          s.setData([
+            { time: line.startTime, value: line.price },
+            { time: line.endTime, value: line.price },
+          ]);
+          entry.extraSeries.push(s);
+        }
+      }
+
+      // ── Order Blocks ──
+      if (data.orderBlocks && data.orderBlocks.length) {
+        for (const ob of data.orderBlocks) {
+          if (!ob.startTime || !ob.endTime) continue;
+          const isBull = ob.type === 'bull';
+          const color = isBull ? 'rgba(0, 212, 170, 0.15)' : 'rgba(255, 71, 87, 0.15)';
+          const topVal = Math.max(ob.high, ob.low);
+          const botVal = Math.min(ob.high, ob.low);
+
+          // OB as area between top and bottom lines
+          const topSeries = mc.addLineSeries({
+            ...LINE_BASE, color: isBull ? '#00d4aa44' : '#ff475744', lineWidth: 1, ...OVERLAY,
+          });
+          const botSeries = mc.addLineSeries({
+            ...LINE_BASE, color: isBull ? '#00d4aa44' : '#ff475744', lineWidth: 1, ...OVERLAY,
+          });
+          topSeries.setData([{ time: ob.startTime, value: topVal }, { time: ob.endTime, value: topVal }]);
+          botSeries.setData([{ time: ob.startTime, value: botVal }, { time: ob.endTime, value: botVal }]);
+          entry.extraSeries.push(topSeries, botSeries);
+        }
+      }
+
+      // ── FVGs (Fair Value Gaps) ──
+      if (data.fvgs && data.fvgs.length) {
+        for (const fvg of data.fvgs) {
+          if (!fvg.startTime || !fvg.endTime) continue;
+          const isBull = fvg.type === 'bull';
+          const topSeries = mc.addLineSeries({
+            ...LINE_BASE, color: isBull ? '#00d4aa33' : '#ff475733', lineWidth: 1, lineStyle: 2, ...OVERLAY,
+          });
+          const botSeries = mc.addLineSeries({
+            ...LINE_BASE, color: isBull ? '#00d4aa33' : '#ff475733', lineWidth: 1, lineStyle: 2, ...OVERLAY,
+          });
+          topSeries.setData([{ time: fvg.startTime, value: fvg.high }, { time: fvg.endTime, value: fvg.high }]);
+          botSeries.setData([{ time: fvg.startTime, value: fvg.low }, { time: fvg.endTime, value: fvg.low }]);
+          entry.extraSeries.push(topSeries, botSeries);
+        }
+      }
+
+      // ── Strong/Weak Levels ──
+      if (data.strongWeak && data.strongWeak.length) {
+        for (const sw of data.strongWeak) {
+          if (!sw.startTime || !sw.endTime) continue;
+          const isStrong = !sw.isBroken;
+          const isBull = sw.type === 'low';
+          const color = isStrong ? (isBull ? '#00d4aa' : '#ff4757') : '#ffa72666';
+          const s = mc.addLineSeries({
+            ...LINE_BASE, color, lineWidth: isStrong ? 2 : 1, lineStyle: isStrong ? 0 : 2, ...OVERLAY,
+          });
+          s.setData([{ time: sw.startTime, value: sw.price }, { time: sw.endTime, value: sw.price }]);
+          entry.extraSeries.push(s);
+        }
       }
 
       // Fit to show last ~80 candles
