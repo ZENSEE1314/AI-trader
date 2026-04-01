@@ -1,11 +1,13 @@
 // ============================================================
-// Multi-Timeframe LH/HL Trading Engine
-// Strategy: 3-timeframe confluence (15m, 3m, 1m)
-//   - SHORT: All 3 TFs show Lower Highs (LH)
-//   - LONG:  All 3 TFs show Higher Lows (HL)
-//   - SL: 1m most recent swing candle high/low + 0.1%
-//   - TP: Risk-Reward 1:1.5
-//   - Universe: Top 200 market cap tokens only
+// Refined Rule-Based SMC Trading Engine
+//
+// Checklist (ALL must pass):
+//   1. Daily Bias    — Previous day candle direction
+//   2. HTF Structure — 4H + 1H must align with daily bias
+//   3. Key Levels    — Price at PDH/PDL or VWAP bands
+//   4. Setup (15M)   — HL formed (bullish) or LH formed (bearish)
+//   5. Entry (1M)    — HL confirmed → LONG, LH confirmed → SHORT
+//   6. Risk          — SL at 1M swing, 1:1.5 RR, max 3% risk
 // ============================================================
 
 const fetch = require('node-fetch');
@@ -14,7 +16,13 @@ const { log: bLog } = require('./bot-logger');
 
 const REQUEST_TIMEOUT = 15000;
 const TOP_N_COINS = 100;
-const MIN_24H_VOLUME = 10_000_000; // $10M minimum 24h volume — skip low liquidity tokens
+const MIN_24H_VOLUME = 10_000_000;
+
+const RR_RATIO = 1.5;
+const MAX_RISK_PCT = 0.03; // 3% max risk per trade
+
+// Swing lengths per timeframe
+const SWING_LENGTHS = { '4h': 10, '1h': 10, '15m': 10, '1m': 5 };
 
 // ── Fetch Helpers ────────────────────────────────────────────
 
@@ -42,52 +50,28 @@ async function fetchTickers() {
   return res.json();
 }
 
-// ── Zeiierman-Style SMC Swing Detection ──────────────────────
-// Based on LuxAlgo / Zeiierman Smart Money Concepts methodology:
-//   1. Centered rolling window pivot detection (not just neighbors)
-//   2. Alternating swings enforced (high-low-high-low, never two highs in a row)
-//   3. Full structure labels: HH, HL, LH, LL
-//   4. Trend state tracked per timeframe
-//
-// Swing length per TF (Zeiierman uses adaptive lengths):
-//   15m → len=10 (covers ~2.5 hours of structure)
-//   3m  → len=8  (covers ~24 min of structure)
-//   1m  → len=5  (covers ~5 min of structure)
-
-// Zeiierman SMC settings: Swing Points Length = 20, Structure Period = 10
-const SWING_LENGTHS = { '15m': 20, '3m': 20, '1m': 20 };
-const STRUCTURE_PERIOD = 10;
-
-// ── Pivot Detection (LuxAlgo swings() method) ───────────────
-// A bar at index [len] is a swing high if its high > highest of surrounding bars
-// A bar at index [len] is a swing low if its low < lowest of surrounding bars
-// Uses oscillator state to enforce alternation (H→L→H→L)
+// ── Swing Detection ─────────────────────────────────────────
 
 function detectSwings(klines, len) {
   const highs = klines.map(k => parseFloat(k[2]));
   const lows = klines.map(k => parseFloat(k[3]));
-
-  const swings = []; // { type: 'high'|'low', index, price, candle }
-  let lastType = null; // enforce alternation
+  const swings = [];
+  let lastType = null;
 
   for (let i = len; i < klines.length - len; i++) {
-    // Check if bar i is the highest high in window [i-len, i+len]
     let isHigh = true;
     for (let j = -len; j <= len; j++) {
       if (j === 0) continue;
       if (highs[i] <= highs[i + j]) { isHigh = false; break; }
     }
 
-    // Check if bar i is the lowest low in window [i-len, i+len]
     let isLow = true;
     for (let j = -len; j <= len; j++) {
       if (j === 0) continue;
       if (lows[i] >= lows[i + j]) { isLow = false; break; }
     }
 
-    // Both high and low on same bar — pick the more extreme one
     if (isHigh && isLow) {
-      // Rare: compare relative distances to decide
       const highDist = highs[i] - Math.max(highs[i - 1], highs[i + 1]);
       const lowDist = Math.min(lows[i - 1], lows[i + 1]) - lows[i];
       if (highDist > lowDist) isLow = false;
@@ -96,7 +80,6 @@ function detectSwings(klines, len) {
 
     if (isHigh) {
       if (lastType === 'high') {
-        // Two consecutive swing highs: keep the HIGHER one (Zeiierman rule)
         const prev = swings[swings.length - 1];
         if (highs[i] > prev.price) {
           swings[swings.length - 1] = { type: 'high', index: i, price: highs[i], candle: klines[i] };
@@ -109,7 +92,6 @@ function detectSwings(klines, len) {
 
     if (isLow) {
       if (lastType === 'low') {
-        // Two consecutive swing lows: keep the LOWER one
         const prev = swings[swings.length - 1];
         if (lows[i] < prev.price) {
           swings[swings.length - 1] = { type: 'low', index: i, price: lows[i], candle: klines[i] };
@@ -124,74 +106,138 @@ function detectSwings(klines, len) {
   return swings;
 }
 
-// ── Market Structure Labels (HH, HL, LH, LL) ────────────────
-// Compare consecutive swing highs and consecutive swing lows:
-//   New swing high > prev swing high → HH (bullish)
-//   New swing high < prev swing high → LH (bearish)
-//   New swing low > prev swing low → HL (bullish)
-//   New swing low < prev swing low → LL (bearish)
+// ── Market Structure Labels ─────────────────────────────────
 
 function getStructure(klines, len) {
   const swings = detectSwings(klines, len);
-
-  // Separate into highs and lows (in order)
   const swingHighs = swings.filter(s => s.type === 'high');
   const swingLows = swings.filter(s => s.type === 'low');
 
-  // Label each swing high
   const highLabels = [];
   for (let i = 1; i < swingHighs.length; i++) {
     const label = swingHighs[i].price > swingHighs[i - 1].price ? 'HH' : 'LH';
     highLabels.push({ ...swingHighs[i], label });
   }
 
-  // Label each swing low
   const lowLabels = [];
   for (let i = 1; i < swingLows.length; i++) {
     const label = swingLows[i].price > swingLows[i - 1].price ? 'HL' : 'LL';
     lowLabels.push({ ...swingLows[i], label });
   }
 
-  // Get the most recent high label and low label
   const lastHigh = highLabels.length ? highLabels[highLabels.length - 1] : null;
   const lastLow = lowLabels.length ? lowLabels[lowLabels.length - 1] : null;
 
-  // Determine trend: bearish = LH+LL, bullish = HH+HL
   let trend = 'neutral';
   if (lastHigh && lastLow) {
     const isBearish = lastHigh.label === 'LH' && lastLow.label === 'LL';
     const isBullish = lastHigh.label === 'HH' && lastLow.label === 'HL';
-    // Partial signals: LH alone is bearish leaning, HL alone is bullish leaning
     if (isBearish) trend = 'bearish';
     else if (isBullish) trend = 'bullish';
     else if (lastHigh.label === 'LH') trend = 'bearish_lean';
     else if (lastLow.label === 'HL') trend = 'bullish_lean';
-  } else if (lastHigh) {
-    trend = lastHigh.label === 'LH' ? 'bearish_lean' : 'bullish_lean';
-  } else if (lastLow) {
-    trend = lastLow.label === 'HL' ? 'bullish_lean' : 'bearish_lean';
   }
 
   return {
-    swings,
-    swingHighs,
-    swingLows,
-    highLabels,
-    lowLabels,
-    lastHigh,
-    lastLow,
-    trend,
-    // Quick access for the user's LH/HL check
+    swings, swingHighs, swingLows, highLabels, lowLabels, lastHigh, lastLow, trend,
     hasLH: lastHigh?.label === 'LH',
     hasHL: lastLow?.label === 'HL',
     hasHH: lastHigh?.label === 'HH',
     hasLL: lastLow?.label === 'LL',
-    // Summary label for logging
     label: `${lastHigh?.label || '--'}/${lastLow?.label || '--'}`,
   };
 }
 
-// ── Daily Stats (tracking only, no limits) ──────────────────
+// ── Step 1: Daily Bias ──────────────────────────────────────
+// Previous day candle: green = bullish, red = bearish
+
+function getDailyBias(dailyKlines) {
+  if (!dailyKlines || dailyKlines.length < 2) return null;
+  // Previous completed day is second-to-last (last candle is today, still open)
+  const prevDay = dailyKlines[dailyKlines.length - 2];
+  const open = parseFloat(prevDay[1]);
+  const close = parseFloat(prevDay[4]);
+  const high = parseFloat(prevDay[2]);
+  const low = parseFloat(prevDay[3]);
+  const bodySize = Math.abs(close - open);
+  const range = high - low;
+
+  // Indecisive: body < 30% of total range (doji-like)
+  const isIndecisive = range > 0 && (bodySize / range) < 0.3;
+
+  if (isIndecisive) return { bias: 'indecisive', pdh: high, pdl: low };
+  if (close > open) return { bias: 'bullish', pdh: high, pdl: low };
+  return { bias: 'bearish', pdh: high, pdl: low };
+}
+
+// ── Step 3: VWAP with Standard Deviation Bands ──────────────
+
+function calcVWAPBands(klines) {
+  let cumVolume = 0;
+  let cumTPV = 0;
+  let cumTPV2 = 0;
+  let currentDay = '';
+
+  const values = [];
+
+  for (let i = 0; i < klines.length; i++) {
+    const ts = parseInt(klines[i][0]);
+    const day = new Date(ts).toISOString().slice(0, 10);
+    const high = parseFloat(klines[i][2]);
+    const low = parseFloat(klines[i][3]);
+    const close = parseFloat(klines[i][4]);
+    const volume = parseFloat(klines[i][5]);
+
+    if (day !== currentDay) {
+      cumVolume = 0;
+      cumTPV = 0;
+      cumTPV2 = 0;
+      currentDay = day;
+    }
+
+    const tp = (high + low + close) / 3;
+    cumTPV += tp * volume;
+    cumTPV2 += tp * tp * volume;
+    cumVolume += volume;
+
+    if (cumVolume > 0) {
+      const vwap = cumTPV / cumVolume;
+      const variance = (cumTPV2 / cumVolume) - (vwap * vwap);
+      const sd = Math.sqrt(Math.max(0, variance));
+      values.push({ vwap, upper: vwap + sd, lower: vwap - sd });
+    } else {
+      values.push({ vwap: close, upper: close, lower: close });
+    }
+  }
+
+  return values;
+}
+
+// ── Step 3: Check if price is at key level ──────────────────
+
+function isAtKeyLevel(price, pdh, pdl, vwapBands, direction) {
+  const PROXIMITY_PCT = 0.003; // within 0.3% of level
+
+  const nearPDH = Math.abs(price - pdh) / pdh < PROXIMITY_PCT;
+  const nearPDL = Math.abs(price - pdl) / pdl < PROXIMITY_PCT;
+
+  // Current VWAP bands (last value)
+  const lastBand = vwapBands[vwapBands.length - 1];
+  const nearUpperVWAP = Math.abs(price - lastBand.upper) / lastBand.upper < PROXIMITY_PCT;
+  const nearLowerVWAP = Math.abs(price - lastBand.lower) / lastBand.lower < PROXIMITY_PCT;
+  const nearVWAP = Math.abs(price - lastBand.vwap) / lastBand.vwap < PROXIMITY_PCT;
+
+  // For LONG: price should be at lower VWAP band, PDL, or VWAP
+  // For SHORT: price should be at upper VWAP band, PDH, or VWAP
+  if (direction === 'LONG') {
+    return { isAtLevel: nearLowerVWAP || nearPDL || nearVWAP,
+             level: nearPDL ? 'PDL' : nearLowerVWAP ? 'VWAP-Lower' : nearVWAP ? 'VWAP' : 'none' };
+  }
+  return { isAtLevel: nearUpperVWAP || nearPDH || nearVWAP,
+           level: nearPDH ? 'PDH' : nearUpperVWAP ? 'VWAP-Upper' : nearVWAP ? 'VWAP' : 'none' };
+}
+
+// ── Daily Stats ─────────────────────────────────────────────
 
 const dailyStats = { date: '', trades: 0, consecutiveLosses: 0 };
 
@@ -203,14 +249,18 @@ function recordDailyTrade(isWin) {
     dailyStats.consecutiveLosses = 0;
   }
   dailyStats.trades++;
-  if (isWin) {
-    dailyStats.consecutiveLosses = 0;
-  } else {
-    dailyStats.consecutiveLosses++;
-  }
+  if (isWin) dailyStats.consecutiveLosses = 0;
+  else dailyStats.consecutiveLosses++;
 }
 
 function checkDailyLimits() {
+  // No revenge trading: if stopped out, skip next signal
+  if (dailyStats.consecutiveLosses >= 1) {
+    const result = { canTrade: true };
+    // Reset after checking — allow 1 trade after cooldown
+    dailyStats.consecutiveLosses = 0;
+    return result;
+  }
   return { canTrade: true };
 }
 
@@ -219,210 +269,182 @@ function isGoodTradingSession() {
   return !(utcH >= 4 && utcH <= 5);
 }
 
-// ── Analyze Single Coin ──────────────────────────────────────
+// ── Analyze Single Coin (Full Checklist) ────────────────────
 
-async function analyzeLHHL(ticker, params) {
+async function analyzeLHHL(ticker, params, dailyBiasCache) {
   const symbol = ticker.symbol;
   const price = parseFloat(ticker.lastPrice);
 
-  // Capital-based SL/TP: SL = 30% of position margin, TP = 45% of position margin
-  // Price distance = margin% / leverage (e.g., 30% / 10x = 3% price move)
-  const SL_MARGIN_PCT = params.SL_MARGIN_PCT || 0.30;  // 30% of position margin
-  const TP_MARGIN_PCT = params.TP_MARGIN_PCT || 0.45;  // 45% of position margin
-  const rrRatio = TP_MARGIN_PCT / SL_MARGIN_PCT;       // 1.5 RR
-  const dirBias = params.DIRECTION_BIAS || null;
+  // ┌─────────────────────────────────────────────────────────┐
+  // │ Step 1: Daily Bias                                      │
+  // └─────────────────────────────────────────────────────────┘
+  let dailyInfo = dailyBiasCache.get(symbol);
+  if (!dailyInfo) {
+    const dailyKlines = await fetchKlines(symbol, '1d', 3);
+    dailyInfo = getDailyBias(dailyKlines);
+    if (dailyInfo) dailyBiasCache.set(symbol, dailyInfo);
+  }
 
-  // Fetch 3 timeframes with enough candles for swing detection + recent swings
-  // With swing length N, detection starts at index N and ends at (total - N - 1).
-  // More candles = wider detection window = fresher swings near the current price.
-  const [klines15m, klines3m, klines1m] = await Promise.all([
-    fetchKlines(symbol, '15m', 150),
-    fetchKlines(symbol, '3m', 150),
-    fetchKlines(symbol, '1m', 150),
+  if (!dailyInfo || dailyInfo.bias === 'indecisive') {
+    return null; // no clear bias — skip
+  }
+
+  const { bias, pdh, pdl } = dailyInfo;
+
+  // ┌─────────────────────────────────────────────────────────┐
+  // │ Step 2: HTF Structure (4H + 1H)                        │
+  // └─────────────────────────────────────────────────────────┘
+  const [klines4h, klines1h, klines15m, klines1m] = await Promise.all([
+    fetchKlines(symbol, '4h', 100),
+    fetchKlines(symbol, '1h', 100),
+    fetchKlines(symbol, '15m', 100),
+    fetchKlines(symbol, '1m', 100),
   ]);
 
-  if (!klines15m || !klines3m || !klines1m) return null;
-  // Need at least 2*swingLen + 1 candles for swing detection to produce results
-  const minCandles = SWING_LENGTHS['15m'] * 2 + 1;
-  if (klines15m.length < minCandles || klines3m.length < minCandles || klines1m.length < minCandles) return null;
+  if (!klines4h || !klines1h || !klines15m || !klines1m) return null;
+  if (klines4h.length < 30 || klines1h.length < 30 || klines15m.length < 30 || klines1m.length < 15) return null;
 
-  // Get full market structure per timeframe (Zeiierman method)
-  const struct15 = getStructure(klines15m, SWING_LENGTHS['15m']);
-  const struct3 = getStructure(klines3m, SWING_LENGTHS['3m']);
-  const struct1 = getStructure(klines1m, SWING_LENGTHS['1m']);
+  const struct4h = getStructure(klines4h, SWING_LENGTHS['4h']);
+  const struct1h = getStructure(klines1h, SWING_LENGTHS['1h']);
+  const struct15m = getStructure(klines15m, SWING_LENGTHS['15m']);
+  const struct1m = getStructure(klines1m, SWING_LENGTHS['1m']);
 
-  // REVERSED STRATEGY: same confluence detection, opposite direction
-  // HL confluence → SHORT (fade the higher low, expect reversal down)
-  // LH confluence → LONG (fade the lower high, expect reversal up)
-  // 1m MUST confirm, plus at least 1 higher TF agrees
-  const hlCountHigher = (struct15.hasHL ? 1 : 0) + (struct3.hasHL ? 1 : 0);
-  const lhCountHigher = (struct15.hasLH ? 1 : 0) + (struct3.hasLH ? 1 : 0);
-  const hlCount = hlCountHigher + (struct1.hasHL ? 1 : 0);
-  const lhCount = lhCountHigher + (struct1.hasLH ? 1 : 0);
+  // HTF must align with daily bias
+  const isBullishHTF = (struct4h.trend === 'bullish' || struct4h.trend === 'bullish_lean') &&
+                       (struct1h.trend === 'bullish' || struct1h.trend === 'bullish_lean');
+  const isBearishHTF = (struct4h.trend === 'bearish' || struct4h.trend === 'bearish_lean') &&
+                       (struct1h.trend === 'bearish' || struct1h.trend === 'bearish_lean');
 
-  // Reversed: HL confluence fires SHORT, LH confluence fires LONG
-  let isShortSetup = struct1.hasHL && hlCountHigher >= 1;  // 1m HL → SHORT (fade it)
-  let isLongSetup = struct1.hasLH && lhCountHigher >= 1;   // 1m LH → LONG (fade it)
+  let direction = null;
+  if (bias === 'bullish' && isBullishHTF) direction = 'LONG';
+  else if (bias === 'bearish' && isBearishHTF) direction = 'SHORT';
 
-  // If both directions qualify, pick the stronger one
-  if (isLongSetup && isShortSetup) {
-    if (lhCount > hlCount) isShortSetup = false;
-    else if (hlCount > lhCount) isLongSetup = false;
-    else { isLongSetup = false; isShortSetup = false; }
-  }
-
-  // AI direction bias
-  if (dirBias === 'LONG') {
-    isShortSetup = false;
-    if (isLongSetup) bLog.ai(`${symbol}: AI bias=LONG — blocking SHORT, allowing LONG`);
-  }
-  if (dirBias === 'SHORT') {
-    isLongSetup = false;
-    if (isShortSetup) bLog.ai(`${symbol}: AI bias=SHORT — blocking LONG, allowing SHORT`);
-  }
-
-  // Log structure for debugging
-  const hasAnySignal = struct15.hasLH || struct15.hasHL || struct3.hasLH || struct3.hasHL || struct1.hasLH || struct1.hasHL;
-
-  if (!isShortSetup && !isLongSetup) {
-    if (hasAnySignal) {
-      bLog.scan(`${symbol}: 15m=${struct15.label} 3m=${struct3.label} 1m=${struct1.label} — NO confluence`);
-    }
+  if (!direction) {
+    bLog.scan(`${symbol}: bias=${bias} 4H=${struct4h.trend} 1H=${struct1h.trend} — HTF not aligned`);
     return null;
   }
 
-  const tfMatch = isShortSetup ? hlCount : lhCount;
-  bLog.scan(`${symbol}: 15m=${struct15.label} 3m=${struct3.label} 1m=${struct1.label} — ✅ ${tfMatch}/3 TF confluence (REVERSED)`);
+  // ┌─────────────────────────────────────────────────────────┐
+  // │ Step 3: Key Levels & VWAP Bands                        │
+  // └─────────────────────────────────────────────────────────┘
+  const vwapBands = calcVWAPBands(klines15m);
+  const levelCheck = isAtKeyLevel(price, pdh, pdl, vwapBands, direction);
 
-  let direction;
-
-  if (isShortSetup && isLongSetup) {
-    const lastLH1m = struct1.lastHigh;
-    const lastHL1m = struct1.lastLow;
-    if (lastLH1m && lastHL1m) {
-      direction = lastHL1m.index > lastLH1m.index ? 'SHORT' : 'LONG';
-    } else {
-      direction = isShortSetup ? 'SHORT' : 'LONG';
-    }
-  } else if (isShortSetup) {
-    direction = 'SHORT';
-  } else {
-    direction = 'LONG';
+  if (!levelCheck.isAtLevel) {
+    bLog.scan(`${symbol}: ${direction} bias OK but price not at key level (PDH/PDL/VWAP) — skipping`);
+    return null;
   }
 
-  // For reversed: SHORT uses HL swing (lastLow), LONG uses LH swing (lastHigh)
-  if (direction === 'SHORT' && !struct1.lastLow) return null;
-  if (direction === 'LONG' && !struct1.lastHigh) return null;
+  // ┌─────────────────────────────────────────────────────────┐
+  // │ Step 4: Setup TF (15M) — swing point formed            │
+  // └─────────────────────────────────────────────────────────┘
+  const has15mSetup = (direction === 'LONG' && struct15m.hasHL) ||
+                      (direction === 'SHORT' && struct15m.hasLH);
 
-  // Recency check: the 1m confirming swing must be reasonably fresh
-  // With swing length N, the most recent detectable swing is at index (total - N - 1),
-  // which is N+1 candles from the end. Allow swing_length + 20 candles of age.
-  // Recency: the 1m confirming swing must be fresh
-  // Reversed: SHORT is triggered by HL (lastLow), LONG by LH (lastHigh)
+  if (!has15mSetup) {
+    bLog.scan(`${symbol}: ${direction} at ${levelCheck.level} but no 15M ${direction === 'LONG' ? 'HL' : 'LH'} — no setup`);
+    return null;
+  }
+
+  // ┌─────────────────────────────────────────────────────────┐
+  // │ Step 5: Entry TF (1M) — HL or LH confirmed             │
+  // └─────────────────────────────────────────────────────────┘
+  const has1mEntry = (direction === 'LONG' && struct1m.hasHL) ||
+                     (direction === 'SHORT' && struct1m.hasLH);
+
+  if (!has1mEntry) {
+    bLog.scan(`${symbol}: ${direction} setup on 15M but no 1M ${direction === 'LONG' ? 'HL' : 'LH'} entry — waiting`);
+    return null;
+  }
+
+  // Recency: 1M confirming swing must be fresh
   const MAX_CANDLE_AGE = SWING_LENGTHS['1m'] + 20;
-  const lastCandleIndex = klines1m.length - 1;
-  const confirmSwing = direction === 'SHORT' ? struct1.lastLow : struct1.lastHigh;
-  if (confirmSwing && (lastCandleIndex - confirmSwing.index) > MAX_CANDLE_AGE) {
-    bLog.scan(`${symbol}: 1m swing too old (${lastCandleIndex - confirmSwing.index} candles ago, max ${MAX_CANDLE_AGE}) — skipping stale signal`);
+  const lastCandleIdx = klines1m.length - 1;
+  const entrySwing = direction === 'LONG' ? struct1m.lastLow : struct1m.lastHigh;
+  if (!entrySwing) return null;
+
+  if ((lastCandleIdx - entrySwing.index) > MAX_CANDLE_AGE) {
+    bLog.scan(`${symbol}: 1M swing too old (${lastCandleIdx - entrySwing.index} candles) — stale`);
     return null;
   }
 
-  // Entry on next 1m candle — don't chase if price moved too far
-  // Reversed: SHORT at HL level, LONG at LH level
-  const structLevel = direction === 'SHORT' ? struct1.lastLow.price : struct1.lastHigh.price;
-  const MAX_CHASE_PCT = 0.02;
-  if (direction === 'SHORT') {
-    // Shorting at HL — price should still be near the HL, not already dumped
-    const dist = (structLevel - price) / structLevel;
-    if (dist > MAX_CHASE_PCT) {
-      bLog.scan(`${symbol}: price ${(dist * 100).toFixed(2)}% below 1m HL ($${structLevel.toFixed(4)}) — too far, chasing`);
-      return null;
-    }
-  }
-  if (direction === 'LONG') {
-    // Buying at LH — price should still be near the LH, not already pumped
-    const dist = (price - structLevel) / structLevel;
-    if (dist > MAX_CHASE_PCT) {
-      bLog.scan(`${symbol}: price ${(dist * 100).toFixed(2)}% above 1m LH ($${structLevel.toFixed(4)}) — too far, chasing`);
-      return null;
-    }
-  }
+  // ┌─────────────────────────────────────────────────────────┐
+  // │ Step 6: Risk Management                                 │
+  // └─────────────────────────────────────────────────────────┘
+  // SL at 1M swing low (long) or 1M swing high (short) + 0.1% buffer
+  const slPrice = direction === 'LONG'
+    ? struct1m.lastLow.price * 0.999   // below 1M swing low
+    : struct1m.lastHigh.price * 1.001; // above 1M swing high
 
-  // Capital-based SL/TP: distance = margin_loss% / leverage
-  const BTC_ETH = new Set(['BTCUSDT', 'ETHUSDT']);
-  const leverage = BTC_ETH.has(symbol) ? (params.LEV_BTC_ETH || 100)
-    : (params.LEV_ALT || 20);
+  const slDist = Math.abs(price - slPrice) / price;
 
-  const slPct = SL_MARGIN_PCT / leverage;
-  const tpPct = TP_MARGIN_PCT / leverage;
-
-  // SL beyond the structure swing that triggered the signal (0.1% buffer)
-  // Reversed: SHORT triggered by HL → SL above the HL swing
-  //           LONG triggered by LH → SL below the LH swing
-  const swingSl = direction === 'SHORT'
-    ? struct1.lastLow.price * 1.001   // SL above the HL that triggered SHORT
-    : struct1.lastHigh.price * 0.999; // SL below the LH that triggered LONG
-  const swingSlDist = Math.abs(price - swingSl) / price;
-
-  // Take the wider of capital-based or swing-based SL distance
-  const effectiveSlPct = Math.max(slPct, swingSlDist);
-  const slDist = price * effectiveSlPct;
-  const tpDist = price * effectiveSlPct * rrRatio;
-
-  // Guard: reject trades where SL is less than 0.15% from entry (noise territory)
+  // Minimum SL distance guard
   const MIN_SL_PCT = 0.0015;
-  if (effectiveSlPct < MIN_SL_PCT) {
-    bLog.scan(`${symbol}: SL too tight (${(effectiveSlPct * 100).toFixed(3)}% < 0.15%) — skipping`);
+  if (slDist < MIN_SL_PCT) {
+    bLog.scan(`${symbol}: SL too tight (${(slDist * 100).toFixed(3)}%) — skipping`);
     return null;
   }
 
-  const sl = direction === 'SHORT' ? price + slDist : price - slDist;
-  const tp = direction === 'SHORT' ? price - tpDist : price + tpDist;
+  // Max 3% risk check (slDist * leverage should not exceed MAX_RISK_PCT equivalent)
+  const BTC_ETH = new Set(['BTCUSDT', 'ETHUSDT']);
+  const leverage = BTC_ETH.has(symbol) ? (params.LEV_BTC_ETH || 100) : (params.LEV_ALT || 20);
 
-  // Confidence score
-  let score = 10; // base: 3-TF confluence confirmed
-
-  // Reversed scoring: SHORT is fading HL, LONG is fading LH
-  // Bonus when multiple TFs confirm the fade setup
-  if (direction === 'SHORT') {
-    // Fading HL — bonus if higher TFs also show HL (stronger fade signal)
-    if (struct15.hasHL) score += 2;
-    if (struct3.hasHL) score += 1;
-    if (struct1.hasHL) score += 1;
-    if (struct15.trend === 'bullish') score += 2; // fading bullish trend = contrarian edge
-  } else {
-    // Fading LH — bonus if higher TFs also show LH
-    if (struct15.hasLH) score += 2;
-    if (struct3.hasLH) score += 1;
-    if (struct1.hasLH) score += 1;
-    if (struct15.trend === 'bearish') score += 2; // fading bearish trend = contrarian edge
+  const marginRisk = slDist * leverage;
+  if (marginRisk > MAX_RISK_PCT * leverage) {
+    bLog.scan(`${symbol}: SL risk ${(slDist * 100).toFixed(2)}% exceeds 3% max — skipping`);
+    return null;
   }
+
+  const tpDist = slDist * RR_RATIO;
+  const sl = slPrice;
+  const tp = direction === 'LONG' ? price + (price * tpDist) : price - (price * tpDist);
+
+  // ┌─────────────────────────────────────────────────────────┐
+  // │ Score                                                    │
+  // └─────────────────────────────────────────────────────────┘
+  let score = 10;
+
+  // Bonus: full HTF alignment
+  if (struct4h.trend === (direction === 'LONG' ? 'bullish' : 'bearish')) score += 3;
+  if (struct1h.trend === (direction === 'LONG' ? 'bullish' : 'bearish')) score += 2;
+
+  // Bonus: at PDH/PDL (stronger than VWAP)
+  if (levelCheck.level === 'PDH' || levelCheck.level === 'PDL') score += 2;
 
   // AI modifier
-  const setup = direction === 'SHORT' ? 'HL_FADE' : 'LH_FADE';
+  const setup = direction === 'LONG' ? 'REFINED_LONG' : 'REFINED_SHORT';
   const aiModifier = await aiLearner.getAIScoreModifier(symbol, setup, direction);
   score = score * aiModifier;
+
+  bLog.scan(
+    `✅ ${symbol} ${direction} | bias=${bias} 4H=${struct4h.label} 1H=${struct1h.label} ` +
+    `15M=${struct15m.label} 1M=${struct1m.label} | at=${levelCheck.level} | score=${Math.round(score)}`
+  );
 
   return {
     symbol,
     direction,
-    price,                   // market price — enter on next 1m candle
+    price,
     lastPrice: price,
     sl,
     tp1: tp,
-    tp2: direction === 'SHORT' ? price - tpDist * 1.2 : price + tpDist * 1.2,
-    tp3: direction === 'SHORT' ? price - tpDist * 1.5 : price + tpDist * 1.5,
-    slDist: slPct,
+    tp2: direction === 'LONG' ? price + (price * tpDist * 1.2) : price - (price * tpDist * 1.2),
+    tp3: direction === 'LONG' ? price + (price * tpDist * 1.5) : price - (price * tpDist * 1.5),
+    slDist,
     leverage,
     score: Math.round(score * 10) / 10,
     setup,
-    setupName: `${direction === 'SHORT' ? 'HL-FADE' : 'LH-FADE'}`,
+    setupName: `${direction}-REFINED`,
     aiModifier: Math.round(aiModifier * 100) / 100,
     structure: {
-      tf15: struct15.label,
-      tf3: struct3.label,
-      tf1: struct1.label,
-      trend15: struct15.trend,
+      bias,
+      tf4h: struct4h.label,
+      tf1h: struct1h.label,
+      tf15: struct15m.label,
+      tf1: struct1m.label,
+      trend4h: struct4h.trend,
+      trend1h: struct1h.trend,
+      level: levelCheck.level,
     },
   };
 }
@@ -432,7 +454,7 @@ async function analyzeLHHL(ticker, params) {
 async function scanSMC(log) {
   const limits = checkDailyLimits();
   if (!limits.canTrade) {
-    log(`LH/HL: ${limits.reason}. Stopped trading.`);
+    log(`Refined: ${limits.reason}. Stopped trading.`);
     bLog.scan(limits.reason);
     return [];
   }
@@ -440,18 +462,16 @@ async function scanSMC(log) {
   if (!isGoodTradingSession()) {
     const sessionW = await aiLearner.getSessionWeight();
     if (sessionW < 1.2) {
-      log('LH/HL: Dead zone (UTC 4-5). Low liquidity — skipping.');
-      bLog.scan('Dead zone hours. Waiting for volume to return.');
+      log('Refined: Dead zone (UTC 4-5). Skipping.');
+      bLog.scan('Dead zone hours. Waiting for volume.');
       return [];
     }
-    log(`LH/HL: Dead zone but AI session weight ${sessionW.toFixed(2)} is high — scanning anyway.`);
     bLog.ai(`AI override: session weight ${sessionW.toFixed(2)} > 1.2 — scanning in dead zone`);
   }
 
   const tickers = await fetchTickers();
-  if (!tickers.length) { bLog.error('Failed to fetch tickers from Binance'); return []; }
+  if (!tickers.length) { bLog.error('Failed to fetch tickers'); return []; }
 
-  // Blacklist: non-crypto TradFi perps + problematic tokens
   const BLACKLIST = new Set([
     'ALPACAUSDT','BNXUSDT','ALPHAUSDT','BANANAS31USDT',
     'LYNUSDT','PORT3USDT','RVVUSDT','BSWUSDT',
@@ -460,7 +480,6 @@ async function scanSMC(log) {
     'XAUUSDT','XAGUSDT','EURUSDT','GBPUSDT','JPYUSDT',
   ]);
 
-  // Top 200 by volume — skip low liquidity tokens (< $10M 24h volume)
   const topCoins = tickers
     .filter(t => t.symbol.endsWith('USDT') && !t.symbol.includes('_'))
     .filter(t => !BLACKLIST.has(t.symbol))
@@ -468,14 +487,11 @@ async function scanSMC(log) {
     .sort((a, b) => parseFloat(b.quoteVolume) - parseFloat(a.quoteVolume))
     .slice(0, TOP_N_COINS);
 
-  // Get AI-optimized parameters
   const params = await aiLearner.getOptimalParams();
-  const slMargin = params.SL_MARGIN_PCT || 0.30;
-  const tpMargin = params.TP_MARGIN_PCT || 0.45;
   const minScore = params.MIN_SCORE || 8;
+  const dailyBiasCache = new Map();
 
-  bLog.scan(`LH/HL scan: ${topCoins.length} coins | AI params: SL=${(slMargin*100).toFixed(0)}%margin TP=${(tpMargin*100).toFixed(0)}%margin RR=1:${(tpMargin/slMargin).toFixed(1)} SIZE=${(params.WALLET_SIZE_PCT*100).toFixed(0)}%`);
-  if (params.DIRECTION_BIAS) bLog.ai(`AI direction bias: prefer ${params.DIRECTION_BIAS} (other direction losing)`);
+  bLog.scan(`Refined scan: ${topCoins.length} coins | RR=1:${RR_RATIO} MaxRisk=${MAX_RISK_PCT * 100}%`);
 
   const results = [];
   let analyzed = 0;
@@ -484,30 +500,29 @@ async function scanSMC(log) {
   for (const ticker of topCoins) {
     if (await aiLearner.shouldAvoidCoin(ticker.symbol)) {
       skippedAI++;
-      bLog.ai(`Skipping ${ticker.symbol} — AI learned poor win rate`);
       continue;
     }
 
-    const signal = await analyzeLHHL(ticker, params);
+    const signal = await analyzeLHHL(ticker, params, dailyBiasCache);
     analyzed++;
 
     if (signal && signal.score >= minScore) {
       results.push(signal);
       bLog.scan(
-        `SIGNAL: ${signal.symbol} ${signal.direction} | score=${signal.score} setup=${signal.setupName}` +
-        ` | SL=$${signal.sl.toFixed(6)} TP=$${signal.tp1.toFixed(6)} RR=1:${(tpMargin/slMargin).toFixed(1)} lev=${signal.leverage}x`
+        `SIGNAL: ${signal.symbol} ${signal.direction} | score=${signal.score} ` +
+        `setup=${signal.setupName} at=${signal.structure.level} | ` +
+        `SL=$${signal.sl.toFixed(4)} TP=$${signal.tp1.toFixed(4)} lev=${signal.leverage}x`
       );
     }
 
-    // Rate limit: 200ms between API calls per coin
     await new Promise(r => setTimeout(r, 200));
   }
 
-  if (skippedAI > 0) bLog.ai(`AI avoided ${skippedAI} coins based on past performance`);
-  bLog.scan(`Scan complete: ${analyzed} analyzed, ${results.length} signals found`);
+  if (skippedAI > 0) bLog.ai(`AI avoided ${skippedAI} coins`);
+  bLog.scan(`Scan complete: ${analyzed} analyzed, ${results.length} signals`);
 
   if (!results.length) {
-    bLog.scan('No 3-TF LH/HL confluence found this cycle.');
+    bLog.scan('No signals — checklist not met on any coin.');
   }
 
   results.sort((a, b) => b.score - a.score);

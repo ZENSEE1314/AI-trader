@@ -1,7 +1,7 @@
 // ============================================================
 // Smart Crypto Trader v4 — AI Self-Learning Edition
 // Binance USDT-M Futures + Bitunix Futures
-// Strategy: 3-TF LH/HL confluence (15m, 3m, 1m)
+// Strategy: Refined rule-based (Daily bias → 4H/1H → PDH/PDL/VWAP → 15M setup → 1M entry)
 // TP: RR 1:1.5 based on SL distance
 // ============================================================
 
@@ -271,7 +271,7 @@ async function openTrade(client, pick, wallet) {
     setup: pick.setup,
     openedAt: Date.now(),
     tf15m: pick.structure?.tf15 || null,
-    tf3m: pick.structure?.tf3 || null,
+    tf3m: pick.structure?.tf1h || null,
     tf1m: pick.structure?.tf1 || null,
   });
 
@@ -779,7 +779,7 @@ async function executeForAllUsers(pick) {
             `INSERT INTO trades (api_key_id, user_id, symbol, direction, entry_price, sl_price, tp_price, quantity, leverage, status, tf_15m, tf_3m, tf_1m)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'OPEN', $10, $11, $12)`,
             [key.id, key.user_id, symbol, pick.direction, price, fmtP(slPrice), fmtP(tp3Price), qty, userLev,
-             pick.structure?.tf15 || null, pick.structure?.tf3 || null, pick.structure?.tf1 || null]
+             pick.structure?.tf15 || null, pick.structure?.tf1h || null, pick.structure?.tf1 || null]
           );
           bLog.trade(`✅ Binance OK: ${key.email} ${symbol} ${pick.direction} x${userLev} qty=${qty} entry=$${fmtPrice(price)}`);
           log(`Binance OK: ${key.email} ${symbol} ${pick.direction} x${userLev}`);
