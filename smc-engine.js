@@ -232,15 +232,19 @@ async function analyzeLHHL(ticker, params) {
   const rrRatio = TP_MARGIN_PCT / SL_MARGIN_PCT;       // 1.5 RR
   const dirBias = params.DIRECTION_BIAS || null;
 
-  // Fetch 3 timeframes: 15m, 3m, 1m (100 candles to support swing length 20)
+  // Fetch 3 timeframes with enough candles for swing detection + recent swings
+  // With swing length N, detection starts at index N and ends at (total - N - 1).
+  // More candles = wider detection window = fresher swings near the current price.
   const [klines15m, klines3m, klines1m] = await Promise.all([
-    fetchKlines(symbol, '15m', 100),
-    fetchKlines(symbol, '3m', 100),
-    fetchKlines(symbol, '1m', 100),
+    fetchKlines(symbol, '15m', 150),
+    fetchKlines(symbol, '3m', 150),
+    fetchKlines(symbol, '1m', 150),
   ]);
 
   if (!klines15m || !klines3m || !klines1m) return null;
-  if (klines15m.length < 20 || klines3m.length < 20 || klines1m.length < 15) return null;
+  // Need at least 2*swingLen + 1 candles for swing detection to produce results
+  const minCandles = SWING_LENGTHS['15m'] * 2 + 1;
+  if (klines15m.length < minCandles || klines3m.length < minCandles || klines1m.length < minCandles) return null;
 
   // Get full market structure per timeframe (Zeiierman method)
   const struct15 = getStructure(klines15m, SWING_LENGTHS['15m']);
@@ -307,13 +311,14 @@ async function analyzeLHHL(ticker, params) {
   if (direction === 'SHORT' && !struct1.lastHigh) return null;
   if (direction === 'LONG' && !struct1.lastLow) return null;
 
-  // Recency check: the 1m confirming swing must be within the last 15 candles (15 min)
-  // Stale swings from hours ago lead to late entries after the move is exhausted
-  const MAX_CANDLE_AGE = 15;
+  // Recency check: the 1m confirming swing must be reasonably fresh
+  // With swing length N, the most recent detectable swing is at index (total - N - 1),
+  // which is N+1 candles from the end. Allow swing_length + 20 candles of age.
+  const MAX_CANDLE_AGE = SWING_LENGTHS['1m'] + 20;
   const lastCandleIndex = klines1m.length - 1;
   const confirmSwing = direction === 'SHORT' ? struct1.lastHigh : struct1.lastLow;
   if (confirmSwing && (lastCandleIndex - confirmSwing.index) > MAX_CANDLE_AGE) {
-    bLog.scan(`${symbol}: 1m swing too old (${lastCandleIndex - confirmSwing.index} candles ago) — skipping stale signal`);
+    bLog.scan(`${symbol}: 1m swing too old (${lastCandleIndex - confirmSwing.index} candles ago, max ${MAX_CANDLE_AGE}) — skipping stale signal`);
     return null;
   }
 
