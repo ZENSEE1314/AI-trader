@@ -99,41 +99,78 @@ router.get('/summary', async (req, res) => {
   }
 });
 
-// Futures wallet balance from Binance
+// Futures wallet balances from ALL connected exchanges
 router.get('/futures-wallet', async (req, res) => {
   try {
-    let apiKey, apiSecret;
-
-    // Try user's stored API keys first
     const keys = await query(
-      `SELECT api_key_enc, iv, auth_tag, api_secret_enc, secret_iv, secret_auth_tag, platform
-       FROM api_keys WHERE user_id = $1 AND enabled = true AND platform = 'binance' LIMIT 1`,
+      `SELECT id, platform, label, api_key_enc, iv, auth_tag, api_secret_enc, secret_iv, secret_auth_tag
+       FROM api_keys WHERE user_id = $1 AND enabled = true ORDER BY id`,
       [req.userId]
     );
 
-    if (keys.length) {
-      const key = keys[0];
-      apiKey = cryptoUtils.decrypt(key.api_key_enc, key.iv, key.auth_tag);
-      apiSecret = cryptoUtils.decrypt(key.api_secret_enc, key.secret_iv, key.secret_auth_tag);
-    } else if (process.env.BINANCE_API_KEY && process.env.BINANCE_API_SECRET) {
-      // Fall back to owner env vars
-      apiKey = process.env.BINANCE_API_KEY;
-      apiSecret = process.env.BINANCE_API_SECRET;
-    } else {
-      return res.json({ balance: 0, available: 0, unrealizedPnl: 0 });
+    const wallets = [];
+    let totalBalance = 0;
+    let totalAvailable = 0;
+    let totalUnrealizedPnl = 0;
+
+    for (const key of keys) {
+      try {
+        const apiKey = cryptoUtils.decrypt(key.api_key_enc, key.iv, key.auth_tag);
+        const apiSecret = cryptoUtils.decrypt(key.api_secret_enc, key.secret_iv, key.secret_auth_tag);
+
+        let balance = 0, available = 0, unrealizedPnl = 0, positions = 0;
+
+        if (key.platform === 'binance') {
+          const { getBinanceRequestOptions } = require('../proxy-agent');
+          const client = new USDMClient({ api_key: apiKey, api_secret: apiSecret }, getBinanceRequestOptions());
+          const account = await client.getAccountInformation({ omitZeroBalances: false });
+          balance = parseFloat(account.totalWalletBalance) || 0;
+          available = parseFloat(account.availableBalance) || 0;
+          unrealizedPnl = parseFloat(account.totalUnrealizedProfit) || 0;
+          positions = (account.positions || []).filter(p => parseFloat(p.positionAmt) !== 0).length;
+        } else if (key.platform === 'bitunix') {
+          const { BitunixClient } = require('../bitunix-client');
+          const client = new BitunixClient({ apiKey, apiSecret });
+          const account = await client.getAccountInformation();
+          balance = parseFloat(account.totalWalletBalance) || 0;
+          available = parseFloat(account.availableBalance) || 0;
+          unrealizedPnl = parseFloat(account.totalUnrealizedProfit) || 0;
+          positions = (account.positions || []).length;
+        }
+
+        wallets.push({
+          id: key.id,
+          platform: key.platform,
+          label: key.label || `${key.platform} key`,
+          balance,
+          available,
+          unrealizedPnl,
+          positions,
+        });
+
+        totalBalance += balance;
+        totalAvailable += available;
+        totalUnrealizedPnl += unrealizedPnl;
+      } catch (err) {
+        wallets.push({
+          id: key.id,
+          platform: key.platform,
+          label: key.label || `${key.platform} key`,
+          balance: 0, available: 0, unrealizedPnl: 0, positions: 0,
+          error: err.message,
+        });
+      }
     }
 
-    const client = new USDMClient({ api_key: apiKey, api_secret: apiSecret });
-    const account = await client.getAccountInformation({ omitZeroBalances: false });
-
     res.json({
-      balance: parseFloat(account.totalWalletBalance) || 0,
-      available: parseFloat(account.availableBalance) || 0,
-      unrealizedPnl: parseFloat(account.totalUnrealizedProfit) || 0,
+      balance: totalBalance,
+      available: totalAvailable,
+      unrealizedPnl: totalUnrealizedPnl,
+      wallets,
     });
   } catch (err) {
     console.error('Futures wallet error:', err.message);
-    res.json({ balance: 0, available: 0, unrealizedPnl: 0 });
+    res.json({ balance: 0, available: 0, unrealizedPnl: 0, wallets: [] });
   }
 });
 

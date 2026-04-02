@@ -35,7 +35,7 @@
     // Dashboard
     tabDashboard:    $('#tab-dashboard'),
     tabKeys:         $('#tab-keys'),
-    summaryWallet:   $('#summary-wallet'),
+    walletsGrid:     $('#wallets-grid'),
     summaryTotalPnl: $('#summary-total-pnl'),
     summary24hPnl:   $('#summary-24h-pnl'),
     summary7dPnl:    $('#summary-7d-pnl'),
@@ -287,15 +287,53 @@
         : '/api/dashboard/summary';
       const [summary, walletData] = await Promise.all([
         api('GET', summaryUrl),
-        api('GET', '/api/dashboard/futures-wallet').catch(() => ({ balance: 0 })),
+        api('GET', '/api/dashboard/futures-wallet').catch(() => ({ balance: 0, wallets: [] })),
         loadTrades(),
       ]);
       renderSummary(summary);
-      const bal = parseFloat(walletData.balance) || 0;
-      els.summaryWallet.textContent = `$${bal.toFixed(2)}`;
+      renderWallets(walletData);
     } catch (err) {
       showToast('Failed to load dashboard.', 'error');
     }
+  }
+
+  function renderWallets(data) {
+    const wallets = data.wallets || [];
+    const totalBal = parseFloat(data.balance) || 0;
+    const grid = els.walletsGrid;
+    if (!grid) return;
+
+    const platformIcon = (p) => p === 'binance' ? '🟡' : p === 'bitunix' ? '🔵' : '⚪';
+
+    let html = `<div class="summary-card">
+      <span class="summary-card-label">Total Futures Wallet</span>
+      <span class="summary-card-value text-mono" style="color:var(--color-accent);font-size:1.3rem">$${totalBal.toFixed(2)}</span>
+    </div>`;
+
+    for (const w of wallets) {
+      const bal = parseFloat(w.balance) || 0;
+      const avail = parseFloat(w.available) || 0;
+      const pnl = parseFloat(w.unrealizedPnl) || 0;
+      const pnlColor = pnl >= 0 ? 'var(--color-success)' : 'var(--color-danger)';
+      const pnlSign = pnl >= 0 ? '+' : '';
+
+      html += `<div class="summary-card" style="padding:var(--space-3)">
+        <span class="summary-card-label">${platformIcon(w.platform)} ${w.platform.toUpperCase()}</span>
+        <span class="summary-card-value text-mono" style="color:var(--color-accent)">$${bal.toFixed(2)}</span>
+        <div style="font-size:0.75rem;color:var(--color-text-muted);margin-top:4px">
+          <span>Avail: $${avail.toFixed(2)}</span> ·
+          <span style="color:${pnlColor}">uPnL: ${pnlSign}$${pnl.toFixed(2)}</span> ·
+          <span>Pos: ${w.positions || 0}</span>
+        </div>
+        ${w.error ? `<div style="font-size:0.7rem;color:var(--color-danger);margin-top:2px">${w.error}</div>` : ''}
+      </div>`;
+    }
+
+    if (wallets.length === 0) {
+      html += `<div class="summary-card"><span class="summary-card-label">No exchange accounts connected</span></div>`;
+    }
+
+    grid.innerHTML = html;
   }
 
   function renderSummary(s) {
