@@ -1,0 +1,6 @@
+
+[qgtunnel.0]
+accept = "127.0.0.1:44"
+connect = "fapi.bitunix.com:"
+encrypted = false
+transparent = true
