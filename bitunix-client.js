@@ -6,6 +6,7 @@
 
 const crypto = require('crypto');
 const fetch = require('node-fetch');
+const { getFetchOptions } = require('./proxy-agent');
 
 const BASE_URL = 'https://fapi.bitunix.com';
 const REQUEST_TIMEOUT = 15000;
@@ -64,7 +65,7 @@ class BitunixClient {
     const { headers } = this._sign(queryParamStr, '');
 
     const url = `${BASE_URL}${path}${queryString}`;
-    const res = await fetch(url, { method: 'GET', headers, timeout: REQUEST_TIMEOUT });
+    const res = await fetch(url, { method: 'GET', headers, timeout: REQUEST_TIMEOUT, ...getFetchOptions() });
     const json = await res.json();
     if (json.code !== 0) throw new Error(`Bitunix API error: ${json.msg} (code ${json.code})`);
     return json.data;
@@ -75,7 +76,7 @@ class BitunixClient {
     const { headers } = this._sign('', bodyStr);
 
     const url = `${BASE_URL}${path}`;
-    const res = await fetch(url, { method: 'POST', headers, body: bodyStr, timeout: REQUEST_TIMEOUT });
+    const res = await fetch(url, { method: 'POST', headers, body: bodyStr, timeout: REQUEST_TIMEOUT, ...getFetchOptions() });
     const json = await res.json();
     if (json.code !== 0) throw new Error(`Bitunix API error: ${json.msg} (code ${json.code})`);
     return json.data;

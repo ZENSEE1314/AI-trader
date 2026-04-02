@@ -11,6 +11,7 @@
 const fetch = require('node-fetch');
 const aiLearner = require('./ai-learner');
 const { log: bLog } = require('./bot-logger');
+const { getFetchOptions } = require('./proxy-agent');
 
 const REQUEST_TIMEOUT = 15000;
 const TOP_N_COINS = 50;
@@ -27,7 +28,7 @@ const SWING_LENGTHS = { '15m': 10, '3m': 5, '1m': 5 };
 async function fetchWithRetry(url, retries = 3) {
   for (let i = 0; i < retries; i++) {
     try {
-      const res = await fetch(url, { timeout: REQUEST_TIMEOUT });
+      const res = await fetch(url, { timeout: REQUEST_TIMEOUT, ...getFetchOptions() });
       if (res.ok) return res;
     } catch (e) {
       if (i === retries - 1) bLog.error(`fetchWithRetry failed: ${url.split('?')[0]} — ${e.message}`);

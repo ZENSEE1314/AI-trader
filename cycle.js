@@ -11,6 +11,7 @@ const aiLearner = require('./ai-learner');
 const { scanSMC, recordDailyTrade, detectSwings, SWING_LENGTHS } = require('./smc-engine');
 const { getSentimentScores } = require('./sentiment-scraper');
 const { log: bLog } = require('./bot-logger');
+const { getBinanceRequestOptions, getFetchOptions } = require('./proxy-agent');
 
 const API_KEY        = process.env.BINANCE_API_KEY    || '';
 const API_SECRET     = process.env.BINANCE_API_SECRET || '';
@@ -617,7 +618,7 @@ async function main() {
 }
 
 function getClient() {
-  return new USDMClient({ api_key: API_KEY, api_secret: API_SECRET });
+  return new USDMClient({ api_key: API_KEY, api_secret: API_SECRET }, getBinanceRequestOptions());
 }
 
 // ── MULTI-USER TRADE EXECUTION ──────────────────────────────
@@ -716,7 +717,7 @@ async function executeForAllUsers(pick) {
         let account, wallet, openPosCount;
 
         if (key.platform === 'binance') {
-          const userClient = new USDMClient({ api_key: apiKey, api_secret: apiSecret });
+          const userClient = new USDMClient({ api_key: apiKey, api_secret: apiSecret }, getBinanceRequestOptions());
           account = await userClient.getAccountInformation({ omitZeroBalances: false });
           const rawWallet = parseFloat(account.totalWalletBalance);
           wallet = getDailyCapital(`user-${key.email}-binance`, rawWallet);
@@ -970,7 +971,7 @@ async function syncTradeStatus() {
         let openSymbols = new Map(); // symbol → { amt, unrealizedPnl, entryPrice }
 
         if (key.platform === 'binance') {
-          const userClient = new USDMClient({ api_key: apiKey, api_secret: apiSecret });
+          const userClient = new USDMClient({ api_key: apiKey, api_secret: apiSecret }, getBinanceRequestOptions());
           const account = await userClient.getAccountInformation({ omitZeroBalances: false });
           for (const p of account.positions) {
             if (parseFloat(p.positionAmt) !== 0) {
@@ -1002,13 +1003,13 @@ async function syncTradeStatus() {
             let exitPrice = entryPrice;
             if (key.platform === 'binance') {
               try {
-                const binClient = new USDMClient({ api_key: apiKey, api_secret: apiSecret });
+                const binClient = new USDMClient({ api_key: apiKey, api_secret: apiSecret }, getBinanceRequestOptions());
                 const fills = await binClient.getAccountTradeList({ symbol: trade.symbol, limit: 5 });
                 if (fills && fills.length > 0) {
                   exitPrice = parseFloat(fills[fills.length - 1].price);
                 }
               } catch {
-                const ticker = await new USDMClient({ api_key: apiKey, api_secret: apiSecret })
+                const ticker = await new USDMClient({ api_key: apiKey, api_secret: apiSecret }, getBinanceRequestOptions())
                   .getSymbolPriceTicker({ symbol: trade.symbol }).catch(() => null);
                 exitPrice = ticker ? parseFloat(ticker.price) : entryPrice;
               }
