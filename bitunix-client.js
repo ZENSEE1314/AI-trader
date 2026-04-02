@@ -66,7 +66,12 @@ class BitunixClient {
 
     const url = `${BASE_URL}${path}${queryString}`;
     const res = await fetch(url, { method: 'GET', headers, timeout: REQUEST_TIMEOUT, ...getFetchOptions() });
-    const json = await res.json();
+    const rawBody = await res.text();
+    let json;
+    try { json = JSON.parse(rawBody); } catch (e) {
+      console.error(`[Bitunix] Invalid JSON from ${url}:`, rawBody.substring(0, 500));
+      throw new Error(`Bitunix returned non-JSON: ${rawBody.substring(0, 200)}`);
+    }
     if (json.code !== 0) throw new Error(`Bitunix API error: ${json.msg} (code ${json.code})`);
     return json.data;
   }
@@ -77,7 +82,12 @@ class BitunixClient {
 
     const url = `${BASE_URL}${path}`;
     const res = await fetch(url, { method: 'POST', headers, body: bodyStr, timeout: REQUEST_TIMEOUT, ...getFetchOptions() });
-    const json = await res.json();
+    const rawBody = await res.text();
+    let json;
+    try { json = JSON.parse(rawBody); } catch (e) {
+      console.error(`[Bitunix] Invalid JSON from ${url}:`, rawBody.substring(0, 500));
+      throw new Error(`Bitunix returned non-JSON: ${rawBody.substring(0, 200)}`);
+    }
     if (json.code !== 0) throw new Error(`Bitunix API error: ${json.msg} (code ${json.code})`);
     return json.data;
   }

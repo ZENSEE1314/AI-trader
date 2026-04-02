@@ -18,7 +18,7 @@ const TRADE_INTERVAL_MIN = parseInt(process.env.TRADE_INTERVAL_MIN || '5');
 const INTERVAL_MIN    = parseInt(process.env.INTERVAL_MIN || '5');
 const REQUEST_TIMEOUT = 30000;
 
-const { isProxyEnabled } = require('./proxy-agent');
+const { isProxyEnabled, getFetchOptions } = require('./proxy-agent');
 console.log(`[BOOT] AI Trader v4 | Telegram:${!!TELEGRAM_TOKEN} Chats:${TELEGRAM_CHATS.join(',')||'NONE'} Interval:${INTERVAL_MIN}min Proxy:${isProxyEnabled() ? 'YES' : 'NO'}`);
 
 let paused       = false;
@@ -71,7 +71,7 @@ async function fetchWithRetry(url, opts = {}, retries = 3) {
   if (isBanned()) return null;
   for (let i = 0; i < retries; i++) {
     try {
-      const res = await fetch(url, { timeout: REQUEST_TIMEOUT, ...opts });
+      const res = await fetch(url, { timeout: REQUEST_TIMEOUT, ...getFetchOptions(), ...opts });
       if (res.status === 418 || res.status === 429) {
         const body = await res.json().catch(() => ({}));
         const until = parseBanUntil(body.msg || '');
