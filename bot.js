@@ -372,6 +372,10 @@ async function main() {
   log('=== AI Self-Learning Crypto Bot v4 Starting ===');
   bLog.system('AI Self-Learning Crypto Bot v4 starting...');
 
+  // Create all required tables before anything else
+  const { initAllTables } = require('./db');
+  await initAllTables();
+
   // Log AI state on startup
   const stats = await aiLearner.getStats();
   if (stats.overall && parseInt(stats.overall.total) > 0) {

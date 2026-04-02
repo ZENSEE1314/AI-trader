@@ -1,13 +1,11 @@
 // ============================================================
-// Refined Rule-Based SMC Trading Engine
+// SMC Swing Cascade Trading Engine
 //
-// Checklist (ALL must pass):
-//   1. Daily Bias    — Previous day candle direction
-//   2. HTF Structure — 4H + 1H must align with daily bias
-//   3. Key Levels    — Price at PDH/PDL or VWAP bands
-//   4. Setup (15M)   — HL formed (bullish) or LH formed (bearish)
-//   5. Entry (1M)    — HL confirmed → LONG, LH confirmed → SHORT
-//   6. Risk          — SL at 1M swing, 1:1.5 RR, max 3% risk
+// Strategy (ALL must pass):
+//   1. 15M swing point formed — determines direction (HL=LONG, LH=SHORT)
+//   2. 3M swing point confirms same direction
+//   3. 1M swing point formed — enter on the NEXT candle after swing
+//   4. Risk: dynamic TP based on volume, fixed SL
 // ============================================================
 
 const fetch = require('node-fetch');
@@ -15,14 +13,14 @@ const aiLearner = require('./ai-learner');
 const { log: bLog } = require('./bot-logger');
 
 const REQUEST_TIMEOUT = 15000;
-const TOP_N_COINS = 100;
+const TOP_N_COINS = 50;
 const MIN_24H_VOLUME = 10_000_000;
 
-const RR_RATIO = 1.5;
-const MAX_RISK_PCT = 0.03; // 3% max risk per trade
+const TP_PCT = 0.045; // 4.5% take profit
+const SL_PCT = 0.03;  // 3% stop loss
 
 // Swing lengths per timeframe
-const SWING_LENGTHS = { '4h': 10, '1h': 10, '15m': 10, '1m': 5 };
+const SWING_LENGTHS = { '15m': 10, '3m': 5, '1m': 5 };
 
 // ── Fetch Helpers ────────────────────────────────────────────
 
@@ -31,7 +29,9 @@ async function fetchWithRetry(url, retries = 3) {
     try {
       const res = await fetch(url, { timeout: REQUEST_TIMEOUT });
       if (res.ok) return res;
-    } catch (_) {}
+    } catch (e) {
+      if (i === retries - 1) bLog.error(`fetchWithRetry failed: ${url.split('?')[0]} — ${e.message}`);
+    }
     if (i < retries - 1) await new Promise(r => setTimeout(r, 1000 * (i + 1)));
   }
   return null;
@@ -106,6 +106,44 @@ function detectSwings(klines, len) {
   return swings;
 }
 
+// ── Helpers for detailed logging ────────────────────────────
+
+function getSwingChain(struct, count = 4) {
+  const all = [
+    ...struct.highLabels.map(h => ({ ...h, tag: h.label })),
+    ...struct.lowLabels.map(l => ({ ...l, tag: l.label })),
+  ].sort((a, b) => a.index - b.index);
+  return all.slice(-count).map(s => s.tag).join('→');
+}
+
+function getEMAPosition(klines, price) {
+  const closes = klines.map(k => parseFloat(k[4]));
+  if (closes.length < 22) return { ema7: 0, ema22: 0, label: '?' };
+  const ema = (arr, period) => {
+    const k = 2 / (period + 1);
+    let val = arr.slice(0, period).reduce((a, b) => a + b, 0) / period;
+    for (let i = period; i < arr.length; i++) val = arr[i] * k + val * (1 - k);
+    return val;
+  };
+  const e7 = ema(closes, 7);
+  const e22 = ema(closes, 22);
+  const aboveEma7 = price > e7;
+  const aboveEma22 = price > e22;
+  let label;
+  if (aboveEma7 && aboveEma22) label = 'ABOVE both';
+  else if (!aboveEma7 && !aboveEma22) label = 'BELOW both';
+  else if (aboveEma7) label = 'above EMA7 below EMA22';
+  else label = 'below EMA7 above EMA22';
+  return { ema7: e7, ema22: e22, label, aboveEma7, aboveEma22 };
+}
+
+function fmtVol(v) {
+  if (v >= 1e9) return (v / 1e9).toFixed(1) + 'B';
+  if (v >= 1e6) return (v / 1e6).toFixed(1) + 'M';
+  if (v >= 1e3) return (v / 1e3).toFixed(1) + 'K';
+  return v.toFixed(0);
+}
+
 // ── Market Structure Labels ─────────────────────────────────
 
 function getStructure(klines, len) {
@@ -148,95 +186,6 @@ function getStructure(klines, len) {
   };
 }
 
-// ── Step 1: Daily Bias ──────────────────────────────────────
-// Previous day candle: green = bullish, red = bearish
-
-function getDailyBias(dailyKlines) {
-  if (!dailyKlines || dailyKlines.length < 2) return null;
-  // Previous completed day is second-to-last (last candle is today, still open)
-  const prevDay = dailyKlines[dailyKlines.length - 2];
-  const open = parseFloat(prevDay[1]);
-  const close = parseFloat(prevDay[4]);
-  const high = parseFloat(prevDay[2]);
-  const low = parseFloat(prevDay[3]);
-  const bodySize = Math.abs(close - open);
-  const range = high - low;
-
-  // Indecisive: body < 30% of total range (doji-like)
-  const isIndecisive = range > 0 && (bodySize / range) < 0.3;
-
-  if (isIndecisive) return { bias: 'indecisive', pdh: high, pdl: low };
-  if (close > open) return { bias: 'bullish', pdh: high, pdl: low };
-  return { bias: 'bearish', pdh: high, pdl: low };
-}
-
-// ── Step 3: VWAP with Standard Deviation Bands ──────────────
-
-function calcVWAPBands(klines) {
-  let cumVolume = 0;
-  let cumTPV = 0;
-  let cumTPV2 = 0;
-  let currentDay = '';
-
-  const values = [];
-
-  for (let i = 0; i < klines.length; i++) {
-    const ts = parseInt(klines[i][0]);
-    const day = new Date(ts).toISOString().slice(0, 10);
-    const high = parseFloat(klines[i][2]);
-    const low = parseFloat(klines[i][3]);
-    const close = parseFloat(klines[i][4]);
-    const volume = parseFloat(klines[i][5]);
-
-    if (day !== currentDay) {
-      cumVolume = 0;
-      cumTPV = 0;
-      cumTPV2 = 0;
-      currentDay = day;
-    }
-
-    const tp = (high + low + close) / 3;
-    cumTPV += tp * volume;
-    cumTPV2 += tp * tp * volume;
-    cumVolume += volume;
-
-    if (cumVolume > 0) {
-      const vwap = cumTPV / cumVolume;
-      const variance = (cumTPV2 / cumVolume) - (vwap * vwap);
-      const sd = Math.sqrt(Math.max(0, variance));
-      values.push({ vwap, upper: vwap + sd, lower: vwap - sd });
-    } else {
-      values.push({ vwap: close, upper: close, lower: close });
-    }
-  }
-
-  return values;
-}
-
-// ── Step 3: Check if price is at key level ──────────────────
-
-function isAtKeyLevel(price, pdh, pdl, vwapBands, direction) {
-  const PROXIMITY_PCT = 0.003; // within 0.3% of level
-
-  const nearPDH = Math.abs(price - pdh) / pdh < PROXIMITY_PCT;
-  const nearPDL = Math.abs(price - pdl) / pdl < PROXIMITY_PCT;
-
-  // Current VWAP bands (last value)
-  const lastBand = vwapBands[vwapBands.length - 1];
-  const nearUpperVWAP = Math.abs(price - lastBand.upper) / lastBand.upper < PROXIMITY_PCT;
-  const nearLowerVWAP = Math.abs(price - lastBand.lower) / lastBand.lower < PROXIMITY_PCT;
-  const nearVWAP = Math.abs(price - lastBand.vwap) / lastBand.vwap < PROXIMITY_PCT;
-
-  // For LONG: price should be at lower VWAP band, PDL, or VWAP
-  // For SHORT: price should be at upper VWAP band, PDH, or VWAP
-  if (direction === 'LONG') {
-    return { isAtLevel: nearLowerVWAP || nearPDL || nearVWAP,
-             level: nearPDL ? 'PDL' : nearLowerVWAP ? 'VWAP-Lower' : nearVWAP ? 'VWAP' : 'none' };
-  }
-  return { isAtLevel: nearUpperVWAP || nearPDH || nearVWAP,
-           level: nearPDH ? 'PDH' : nearUpperVWAP ? 'VWAP-Upper' : nearVWAP ? 'VWAP' : 'none' };
-}
-
 // ── Daily Stats ─────────────────────────────────────────────
 
 const dailyStats = { date: '', trades: 0, consecutiveLosses: 0 };
@@ -254,12 +203,8 @@ function recordDailyTrade(isWin) {
 }
 
 function checkDailyLimits() {
-  // No revenge trading: if stopped out, skip next signal
-  if (dailyStats.consecutiveLosses >= 1) {
-    const result = { canTrade: true };
-    // Reset after checking — allow 1 trade after cooldown
-    dailyStats.consecutiveLosses = 0;
-    return result;
+  if (dailyStats.consecutiveLosses >= 2) {
+    return { canTrade: false, reason: `${dailyStats.consecutiveLosses} consecutive losses — cooling down` };
   }
   return { canTrade: true };
 }
@@ -269,156 +214,186 @@ function isGoodTradingSession() {
   return !(utcH >= 4 && utcH <= 5);
 }
 
-// ── Analyze Single Coin (Full Checklist) ────────────────────
+// ── Analyze Single Coin (Swing Cascade: 15m → 3m → 1m) ─────
 
-async function analyzeLHHL(ticker, params, dailyBiasCache) {
+async function analyzeLHHL(ticker, params) {
   const symbol = ticker.symbol;
   const price = parseFloat(ticker.lastPrice);
 
   // ┌─────────────────────────────────────────────────────────┐
-  // │ Step 1: Daily Bias                                      │
+  // │ Fetch 15m, 3m, 1m klines                                │
   // └─────────────────────────────────────────────────────────┘
-  let dailyInfo = dailyBiasCache.get(symbol);
-  if (!dailyInfo) {
-    const dailyKlines = await fetchKlines(symbol, '1d', 3);
-    dailyInfo = getDailyBias(dailyKlines);
-    if (dailyInfo) dailyBiasCache.set(symbol, dailyInfo);
-  }
-
-  if (!dailyInfo || dailyInfo.bias === 'indecisive') {
-    return null; // no clear bias — skip
-  }
-
-  const { bias, pdh, pdl } = dailyInfo;
-
-  // ┌─────────────────────────────────────────────────────────┐
-  // │ Step 2: HTF Structure (4H + 1H)                        │
-  // └─────────────────────────────────────────────────────────┘
-  const [klines4h, klines1h, klines15m, klines1m] = await Promise.all([
-    fetchKlines(symbol, '4h', 100),
-    fetchKlines(symbol, '1h', 100),
+  const [klines15m, klines3m, klines1m] = await Promise.all([
     fetchKlines(symbol, '15m', 100),
+    fetchKlines(symbol, '3m', 100),
     fetchKlines(symbol, '1m', 100),
   ]);
 
-  if (!klines4h || !klines1h || !klines15m || !klines1m) return null;
-  if (klines4h.length < 30 || klines1h.length < 30 || klines15m.length < 30 || klines1m.length < 15) return null;
+  if (!klines15m || !klines3m || !klines1m) return null;
+  // Need enough history: 80 x 15m = 20 hours min (rejects brand new listings)
+  if (klines15m.length < 80 || klines3m.length < 50 || klines1m.length < 30) return null;
 
-  const struct4h = getStructure(klines4h, SWING_LENGTHS['4h']);
-  const struct1h = getStructure(klines1h, SWING_LENGTHS['1h']);
   const struct15m = getStructure(klines15m, SWING_LENGTHS['15m']);
+  const struct3m = getStructure(klines3m, SWING_LENGTHS['3m']);
   const struct1m = getStructure(klines1m, SWING_LENGTHS['1m']);
 
-  // HTF must align with daily bias
-  const isBullishHTF = (struct4h.trend === 'bullish' || struct4h.trend === 'bullish_lean') &&
-                       (struct1h.trend === 'bullish' || struct1h.trend === 'bullish_lean');
-  const isBearishHTF = (struct4h.trend === 'bearish' || struct4h.trend === 'bearish_lean') &&
-                       (struct1h.trend === 'bearish' || struct1h.trend === 'bearish_lean');
-
-  let direction = null;
-  if (bias === 'bullish' && isBullishHTF) direction = 'LONG';
-  else if (bias === 'bearish' && isBearishHTF) direction = 'SHORT';
-
-  if (!direction) {
-    bLog.scan(`${symbol}: bias=${bias} 4H=${struct4h.trend} 1H=${struct1h.trend} — HTF not aligned`);
-    return null;
-  }
+  const vol24h = parseFloat(ticker.quoteVolume || 0);
+  const emaPos = getEMAPosition(klines15m, price);
+  const chain15m = getSwingChain(struct15m);
+  const chain3m = getSwingChain(struct3m);
+  const chain1m = getSwingChain(struct1m);
 
   // ┌─────────────────────────────────────────────────────────┐
-  // │ Step 3: Key Levels & VWAP Bands                        │
+  // │ Step 1: 15M structure — determines direction            │
+  // │ LONG: 15M must be bullish (HH + HL) — full trend       │
+  // │ SHORT: 15M must be bearish (LH + LL) — full trend      │
+  // │ Mixed (LH + HL) = pullback, NO TRADE                   │
   // └─────────────────────────────────────────────────────────┘
-  const vwapBands = calcVWAPBands(klines15m);
-  const levelCheck = isAtKeyLevel(price, pdh, pdl, vwapBands, direction);
+  // Build structure label strings: e.g. "HH/HL bullish"
+  const lbl15m = `${struct15m.label} ${struct15m.trend}`;
+  const lbl3m = `${struct3m.label} ${struct3m.trend}`;
+  const lbl1m = `${struct1m.label} ${struct1m.trend}`;
 
-  if (!levelCheck.isAtLevel) {
-    bLog.scan(`${symbol}: ${direction} bias OK but price not at key level (PDH/PDL/VWAP) — skipping`);
+  // Require FULL trend alignment: both high AND low must agree
+  // HH + HL = bullish → LONG
+  // LH + LL = bearish → SHORT
+  // LH + HL or HH + LL = mixed/pullback → skip
+  const isBullish15m = struct15m.hasHH && struct15m.hasHL; // full bullish
+  const isBearish15m = struct15m.hasLH && struct15m.hasLL; // full bearish
+
+  if (!isBullish15m && !isBearish15m) {
+    bLog.scan(
+      `${symbol}: $${price} | Vol=${fmtVol(vol24h)} | ` +
+      `15M=[${chain15m}] ${lbl15m} | 3M=[${chain3m}] ${lbl3m} | 1M=[${chain1m}] ${lbl1m} | ` +
+      `EMA: ${emaPos.label} — 15M not fully aligned (need HH+HL or LH+LL) ❌`
+    );
     return null;
   }
 
+  const direction = isBullish15m ? 'LONG' : 'SHORT';
+
   // ┌─────────────────────────────────────────────────────────┐
-  // │ Step 4: Setup TF (15M) — swing point formed            │
+  // │ Step 2: 3M swing point confirms same direction          │
+  // │ LONG needs HL on 3M, SHORT needs LH on 3M              │
   // └─────────────────────────────────────────────────────────┘
-  const has15mSetup = (direction === 'LONG' && struct15m.hasHL) ||
-                      (direction === 'SHORT' && struct15m.hasLH);
+  const has3mConfirm = (direction === 'LONG' && struct3m.hasHL) ||
+                       (direction === 'SHORT' && struct3m.hasLH);
 
-  if (!has15mSetup) {
-    bLog.scan(`${symbol}: ${direction} at ${levelCheck.level} but no 15M ${direction === 'LONG' ? 'HL' : 'LH'} — no setup`);
+  if (!has3mConfirm) {
+    bLog.scan(
+      `${symbol}: $${price} | Vol=${fmtVol(vol24h)} | ${direction} | ` +
+      `15M=[${chain15m}] ${lbl15m} ✓ | 3M=[${chain3m}] ${lbl3m} need ${direction === 'LONG' ? 'HL' : 'LH'} ❌ | ` +
+      `1M=[${chain1m}] ${lbl1m} | EMA: ${emaPos.label}`
+    );
     return null;
   }
 
   // ┌─────────────────────────────────────────────────────────┐
-  // │ Step 5: Entry TF (1M) — HL or LH confirmed             │
+  // │ Step 3: 1M swing point formed — enter on NEXT candle    │
+  // │ LONG needs HL on 1M, SHORT needs LH on 1M              │
+  // │ Entry candle = the candle right after the swing point   │
   // └─────────────────────────────────────────────────────────┘
   const has1mEntry = (direction === 'LONG' && struct1m.hasHL) ||
                      (direction === 'SHORT' && struct1m.hasLH);
 
   if (!has1mEntry) {
-    bLog.scan(`${symbol}: ${direction} setup on 15M but no 1M ${direction === 'LONG' ? 'HL' : 'LH'} entry — waiting`);
+    bLog.scan(
+      `${symbol}: $${price} | Vol=${fmtVol(vol24h)} | ${direction} | ` +
+      `15M=[${chain15m}] ${lbl15m} ✓ | 3M=[${chain3m}] ${lbl3m} ✓ | ` +
+      `1M=[${chain1m}] ${lbl1m} need ${direction === 'LONG' ? 'HL' : 'LH'} — WAITING ⏳`
+    );
     return null;
   }
 
-  // Recency: 1M confirming swing must be fresh
-  const MAX_CANDLE_AGE = SWING_LENGTHS['1m'] + 20;
+  // The 1M swing must be fresh — enter on the next candle after confirmation
   const lastCandleIdx = klines1m.length - 1;
   const entrySwing = direction === 'LONG' ? struct1m.lastLow : struct1m.lastHigh;
   if (!entrySwing) return null;
 
-  if ((lastCandleIdx - entrySwing.index) > MAX_CANDLE_AGE) {
-    bLog.scan(`${symbol}: 1M swing too old (${lastCandleIdx - entrySwing.index} candles) — stale`);
+  const candlesAfterSwing = lastCandleIdx - entrySwing.index;
+  // Swing needs SWING_LENGTHS['1m'] candles after it to be confirmed
+  // So "age since confirmed" = candlesAfterSwing - SWING_LENGTHS['1m']
+  const swingLen = SWING_LENGTHS['1m'];
+  const ageAfterConfirm = candlesAfterSwing - swingLen;
+
+  // Not yet confirmed (still forming)
+  if (ageAfterConfirm < 1) {
+    bLog.scan(
+      `${symbol}: $${price} | ${direction} | ` +
+      `15M=[${chain15m}] ${lbl15m} ✓ | 3M=[${chain3m}] ${lbl3m} ✓ | ` +
+      `1M=[${chain1m}] ${lbl1m} ✓ | swing confirming (${candlesAfterSwing}/${swingLen + 1} candles) — WAIT ⏳`
+    );
+    return null;
+  }
+
+  // Enter within 5 candles after swing is confirmed, then it's stale
+  const MAX_ENTRY_AGE = 5;
+  if (ageAfterConfirm > MAX_ENTRY_AGE) {
+    bLog.scan(
+      `${symbol}: $${price} | ${direction} | ` +
+      `15M=[${chain15m}] ${lbl15m} ✓ | 3M=[${chain3m}] ${lbl3m} ✓ | ` +
+      `1M=[${chain1m}] ${lbl1m} ✓ | confirmed ${ageAfterConfirm} candles ago (max ${MAX_ENTRY_AGE}) — STALE ⏳`
+    );
     return null;
   }
 
   // ┌─────────────────────────────────────────────────────────┐
-  // │ Step 6: Risk Management                                 │
+  // │ Step 4: Risk Management — Dynamic TP based on volume    │
   // └─────────────────────────────────────────────────────────┘
-  // SL at 1M swing low (long) or 1M swing high (short) + 0.1% buffer
-  const slPrice = direction === 'LONG'
-    ? struct1m.lastLow.price * 0.999   // below 1M swing low
-    : struct1m.lastHigh.price * 1.001; // above 1M swing high
-
-  const slDist = Math.abs(price - slPrice) / price;
-
-  // Minimum SL distance guard
-  const MIN_SL_PCT = 0.0015;
-  if (slDist < MIN_SL_PCT) {
-    bLog.scan(`${symbol}: SL too tight (${(slDist * 100).toFixed(3)}%) — skipping`);
-    return null;
-  }
-
-  // Max 3% risk check (slDist * leverage should not exceed MAX_RISK_PCT equivalent)
   const BTC_ETH = new Set(['BTCUSDT', 'ETHUSDT']);
-  const leverage = BTC_ETH.has(symbol) ? (params.LEV_BTC_ETH || 100) : (params.LEV_ALT || 20);
+  const leverage = BTC_ETH.has(symbol) ? Math.min(params.LEV_BTC_ETH || 20, 20) : Math.min(params.LEV_ALT || 20, 20);
 
-  const marginRisk = slDist * leverage;
-  if (marginRisk > MAX_RISK_PCT * leverage) {
-    bLog.scan(`${symbol}: SL risk ${(slDist * 100).toFixed(2)}% exceeds 3% max — skipping`);
-    return null;
+  // Volume strength: compare last 5 candles avg volume vs last 20 candles avg
+  const volumes1m = klines1m.map(k => parseFloat(k[5]));
+  const recentVol = volumes1m.slice(-5).reduce((a, b) => a + b, 0) / 5;
+  const avgVol = volumes1m.slice(-20).reduce((a, b) => a + b, 0) / 20;
+  const volRatio = avgVol > 0 ? recentVol / avgVol : 1;
+
+  let dynamicTP;
+  let volLabel;
+  if (volRatio >= 1.5) {
+    dynamicTP = TP_PCT;           // 4.5%
+    volLabel = 'STRONG';
+  } else if (volRatio >= 0.8) {
+    dynamicTP = TP_PCT * 0.67;    // ~3%
+    volLabel = 'NORMAL';
+  } else {
+    dynamicTP = TP_PCT * 0.44;    // ~2%
+    volLabel = 'WEAK';
   }
 
-  const tpDist = slDist * RR_RATIO;
-  const sl = slPrice;
-  const tp = direction === 'LONG' ? price + (price * tpDist) : price - (price * tpDist);
+  const sl = direction === 'LONG' ? price * (1 - SL_PCT) : price * (1 + SL_PCT);
+  const tp = direction === 'LONG' ? price * (1 + dynamicTP) : price * (1 - dynamicTP);
+  const slDist = SL_PCT;
 
   // ┌─────────────────────────────────────────────────────────┐
   // │ Score                                                    │
   // └─────────────────────────────────────────────────────────┘
   let score = 10;
 
-  // Bonus: full HTF alignment
-  if (struct4h.trend === (direction === 'LONG' ? 'bullish' : 'bearish')) score += 3;
-  if (struct1h.trend === (direction === 'LONG' ? 'bullish' : 'bearish')) score += 2;
+  // Bonus: all 3 TFs strictly aligned (not just lean)
+  if (struct15m.trend === (direction === 'LONG' ? 'bullish' : 'bearish')) score += 3;
+  if (struct3m.trend === (direction === 'LONG' ? 'bullish' : 'bearish')) score += 2;
+  if (struct1m.trend === (direction === 'LONG' ? 'bullish' : 'bearish')) score += 1;
 
-  // Bonus: at PDH/PDL (stronger than VWAP)
-  if (levelCheck.level === 'PDH' || levelCheck.level === 'PDL') score += 2;
+  // Bonus: strong volume
+  if (volLabel === 'STRONG') score += 2;
+
+  // Bonus: EMA alignment
+  if (direction === 'LONG' && emaPos.aboveEma7 && emaPos.aboveEma22) score += 1;
+  if (direction === 'SHORT' && !emaPos.aboveEma7 && !emaPos.aboveEma22) score += 1;
 
   // AI modifier
-  const setup = direction === 'LONG' ? 'REFINED_LONG' : 'REFINED_SHORT';
+  const setup = direction === 'LONG' ? 'CASCADE_LONG' : 'CASCADE_SHORT';
   const aiModifier = await aiLearner.getAIScoreModifier(symbol, setup, direction);
   score = score * aiModifier;
 
   bLog.scan(
-    `✅ ${symbol} ${direction} | bias=${bias} 4H=${struct4h.label} 1H=${struct1h.label} ` +
-    `15M=${struct15m.label} 1M=${struct1m.label} | at=${levelCheck.level} | score=${Math.round(score)}`
+    `✅ SIGNAL: ${symbol} ${direction} $${price} | Vol=${fmtVol(vol24h)} (1M vol: ${volLabel} ${volRatio.toFixed(1)}x) | ` +
+    `15M=[${chain15m}] ${struct15m.trend} | 3M=[${chain3m}] ${struct3m.trend} | ` +
+    `1M=[${chain1m}] ${struct1m.trend} | EMA: ${emaPos.label} | ` +
+    `Entry: ${candlesAfterSwing} candle(s) after 1M swing | ` +
+    `TP=${(dynamicTP * 100).toFixed(1)}% SL=${(SL_PCT * 100)}% | score=${Math.round(score)}`
   );
 
   return {
@@ -428,33 +403,31 @@ async function analyzeLHHL(ticker, params, dailyBiasCache) {
     lastPrice: price,
     sl,
     tp1: tp,
-    tp2: direction === 'LONG' ? price + (price * tpDist * 1.2) : price - (price * tpDist * 1.2),
-    tp3: direction === 'LONG' ? price + (price * tpDist * 1.5) : price - (price * tpDist * 1.5),
+    tp2: direction === 'LONG' ? price * (1 + dynamicTP * 1.2) : price * (1 - dynamicTP * 1.2),
+    tp3: direction === 'LONG' ? price * (1 + dynamicTP * 1.5) : price * (1 - dynamicTP * 1.5),
     slDist,
     leverage,
     score: Math.round(score * 10) / 10,
     setup,
-    setupName: `${direction}-REFINED`,
+    setupName: `${direction}-CASCADE`,
     aiModifier: Math.round(aiModifier * 100) / 100,
     structure: {
-      bias,
-      tf4h: struct4h.label,
-      tf1h: struct1h.label,
       tf15: struct15m.label,
+      tf3: struct3m.label,
       tf1: struct1m.label,
-      trend4h: struct4h.trend,
-      trend1h: struct1h.trend,
-      level: levelCheck.level,
+      trend15m: struct15m.trend,
+      trend3m: struct3m.trend,
+      trend1m: struct1m.trend,
     },
   };
 }
 
 // ── Main Scan ────────────────────────────────────────────────
 
-async function scanSMC(log) {
+async function scanSMC(log, opts = {}) {
   const limits = checkDailyLimits();
   if (!limits.canTrade) {
-    log(`Refined: ${limits.reason}. Stopped trading.`);
+    log(`Cascade: ${limits.reason}. Stopped trading.`);
     bLog.scan(limits.reason);
     return [];
   }
@@ -462,7 +435,7 @@ async function scanSMC(log) {
   if (!isGoodTradingSession()) {
     const sessionW = await aiLearner.getSessionWeight();
     if (sessionW < 1.2) {
-      log('Refined: Dead zone (UTC 4-5). Skipping.');
+      log('Cascade: Dead zone (UTC 4-5). Skipping.');
       bLog.scan('Dead zone hours. Waiting for volume.');
       return [];
     }
@@ -478,20 +451,23 @@ async function scanSMC(log) {
     'NEIROETHUSDT','COSUSDT','YALAUSDT','TANSSIUSDT','EPTUSDT',
     'LEVERUSDT','AGLDUSDT','LOOKSUSDT',
     'XAUUSDT','XAGUSDT','EURUSDT','GBPUSDT','JPYUSDT',
+    'BASEUSDT','EDGEUSDT',
   ]);
+
+  // Filter out new tokens: need at least 100 15m candles (25 hours of data)
+  // New listings have unreliable swing structure
 
   const topCoins = tickers
     .filter(t => t.symbol.endsWith('USDT') && !t.symbol.includes('_'))
     .filter(t => !BLACKLIST.has(t.symbol))
     .filter(t => parseFloat(t.quoteVolume) >= MIN_24H_VOLUME)
     .sort((a, b) => parseFloat(b.quoteVolume) - parseFloat(a.quoteVolume))
-    .slice(0, TOP_N_COINS);
+    .slice(0, opts.topNCoins || TOP_N_COINS);
 
   const params = await aiLearner.getOptimalParams();
   const minScore = params.MIN_SCORE || 8;
-  const dailyBiasCache = new Map();
 
-  bLog.scan(`Refined scan: ${topCoins.length} coins | RR=1:${RR_RATIO} MaxRisk=${MAX_RISK_PCT * 100}%`);
+  bLog.scan(`Cascade scan: ${topCoins.length} coins | 15m→3m→1m | TP=${TP_PCT * 100}% SL=${SL_PCT * 100}%`);
 
   const results = [];
   let analyzed = 0;
@@ -503,14 +479,14 @@ async function scanSMC(log) {
       continue;
     }
 
-    const signal = await analyzeLHHL(ticker, params, dailyBiasCache);
+    const signal = await analyzeLHHL(ticker, params);
     analyzed++;
 
     if (signal && signal.score >= minScore) {
       results.push(signal);
       bLog.scan(
         `SIGNAL: ${signal.symbol} ${signal.direction} | score=${signal.score} ` +
-        `setup=${signal.setupName} at=${signal.structure.level} | ` +
+        `setup=${signal.setupName} | ` +
         `SL=$${signal.sl.toFixed(4)} TP=$${signal.tp1.toFixed(4)} lev=${signal.leverage}x`
       );
     }
@@ -522,7 +498,7 @@ async function scanSMC(log) {
   bLog.scan(`Scan complete: ${analyzed} analyzed, ${results.length} signals`);
 
   if (!results.length) {
-    bLog.scan('No signals — checklist not met on any coin.');
+    bLog.scan('No signals — cascade not aligned on any coin.');
   }
 
   results.sort((a, b) => b.score - a.score);

@@ -41,63 +41,17 @@
     /* --- Layout Shell --- */
     .app-layout {
       display: grid;
-      grid-template-columns: 280px 1fr 240px;
+      grid-template-columns: 280px minmax(0, 1fr) 240px;
       grid-template-rows: auto auto 1fr auto;
       height: 100vh;
+      width: 100vw;
+      overflow: hidden;
       gap: 0;
     }
 
-    /* Sidebar collapse states */
-    .app-layout.left-hidden { grid-template-columns: 0px 1fr 240px; }
-    .app-layout.right-hidden { grid-template-columns: 280px 1fr 0px; }
-    .app-layout.left-hidden.right-hidden { grid-template-columns: 0px 1fr 0px; }
-    .app-layout.left-hidden .sidebar { display: none !important; }
-    .app-layout.right-hidden .right-sidebar { display: none !important; }
-
-    /* Sidebar toggle buttons — inside the sidebar headers */
-    .sidebar-collapse-btn {
-      background: none;
-      border: 1px solid var(--color-border);
-      color: var(--color-fg-muted);
-      width: 28px;
-      height: 28px;
-      border-radius: var(--radius-md);
-      cursor: pointer;
-      font-size: 14px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      flex-shrink: 0;
-      transition: background var(--duration-fast), color var(--duration-fast);
-    }
-    .sidebar-collapse-btn:hover { background: var(--color-surface); color: var(--color-fg); }
-
-    /* Floating reopen buttons — shown when sidebar is hidden */
-    .sidebar-reopen {
-      position: fixed;
-      top: 50%;
-      transform: translateY(-50%);
-      z-index: 50;
-      background: var(--color-bg-raised);
-      border: 1px solid var(--color-border);
-      color: var(--color-fg-muted);
-      width: 24px;
-      height: 56px;
-      display: none;
-      align-items: center;
-      justify-content: center;
-      cursor: pointer;
-      font-size: 12px;
-      transition: background var(--duration-fast), color var(--duration-fast);
-    }
-    .sidebar-reopen:hover { background: var(--color-surface); color: var(--color-accent); }
-    #reopen-left { left: 0; border-radius: 0 var(--radius-md) var(--radius-md) 0; border-left: none; }
-    #reopen-right { right: 0; border-radius: var(--radius-md) 0 0 var(--radius-md); border-right: none; }
-    .app-layout.left-hidden #reopen-left { display: flex; }
-    .app-layout.right-hidden #reopen-right { display: flex; }
-
     /* --- Sidebar --- */
     .sidebar {
+      grid-column: 1;
       grid-row: 1 / -1;
       background: var(--color-bg-raised);
       border-right: 1px solid var(--color-border);
@@ -304,6 +258,8 @@
 
     /* --- Toolbar --- */
     .toolbar {
+      grid-column: 2;
+      grid-row: 1;
       background: var(--color-bg-raised);
       border-bottom: 1px solid var(--color-border);
       padding: var(--space-2) var(--space-4);
@@ -319,6 +275,25 @@
       align-items: center;
       gap: var(--space-1);
     }
+
+    .ind-list {
+      display: contents;
+    }
+
+    /* Mobile: indicators as dropdown panel */
+    .ind-panel-mobile {
+      display: none;
+      position: absolute;
+      top: 100%;
+      left: 0; right: 0;
+      background: var(--color-bg-raised);
+      border-bottom: 1px solid var(--color-border);
+      padding: var(--space-2) var(--space-3);
+      z-index: 50;
+      flex-wrap: wrap;
+      gap: var(--space-1) var(--space-3);
+    }
+    .ind-panel-mobile.open { display: flex; }
 
     .toolbar-label {
       font-family: var(--font-display);
@@ -676,6 +651,8 @@
       overflow-y: auto;
       scrollbar-width: thin;
       scrollbar-color: var(--color-border) transparent;
+      min-width: 240px;
+      z-index: 10;
     }
 
     .right-sidebar-section {
@@ -797,39 +774,62 @@
     /* --- Mobile Responsive --- */
 
     @media (max-width: 1024px) {
-      .app-layout { grid-template-columns: 200px 1fr 200px; }
+      .app-layout { grid-template-columns: 200px minmax(0, 1fr) 200px; }
     }
 
     @media (max-width: 768px) {
+      /* Multi-chart stacks vertically */
       .chart-area.multi-view {
         grid-template-columns: 1fr;
         grid-template-rows: 1fr 1fr 1fr;
       }
+
+      /* Single column layout — all elements stack */
       .app-layout {
         grid-template-columns: 1fr;
-        grid-template-rows: auto auto 1fr auto auto;
+        grid-template-rows: auto auto 1fr auto;
       }
+
+      /* Override explicit grid positions for mobile */
+      .toolbar   { grid-column: 1; grid-row: 1; }
+      .chart-area { grid-column: 1; grid-row: 3; }
+      .bottom-panel { grid-column: 1; grid-row: 4; }
+
+      /* Range bar under toolbar */
+      .app-layout > div[style*="grid-column:2"] {
+        grid-column: 1 !important;
+        grid-row: 2 !important;
+      }
+
+      /* Left sidebar — slide-in drawer */
       .sidebar {
         display: none;
         position: fixed;
         top: 0; left: 0;
-        width: 260px;
+        width: 280px;
         height: 100vh;
         z-index: 100;
+        grid-column: unset;
+        grid-row: unset;
         box-shadow: 4px 0 20px rgba(0,0,0,0.5);
       }
       .sidebar.mobile-open { display: flex; }
+
+      /* Right sidebar — slide-in drawer from right */
       .right-sidebar {
         display: none;
         position: fixed;
         top: 0; right: 0;
-        width: 240px;
+        width: 260px;
         height: 100vh;
         z-index: 100;
+        grid-column: unset;
+        grid-row: unset;
         box-shadow: -4px 0 20px rgba(0,0,0,0.5);
       }
       .right-sidebar.mobile-open { display: flex; }
-      .sidebar-toggle { display: none; }
+
+      /* Overlay behind drawers */
       .mobile-overlay {
         display: none;
         position: fixed;
@@ -839,44 +839,72 @@
       }
       .mobile-overlay.active { display: block; }
 
+      /* Show hamburger + info buttons */
+      .mobile-menu-btn { display: flex; }
+
+      /* Toolbar: compact, position relative for dropdown */
       .toolbar {
+        position: relative;
         padding: var(--space-1) var(--space-2);
         gap: var(--space-2);
-        min-height: 40px;
-        overflow-x: auto;
-        -webkit-overflow-scrolling: touch;
+        min-height: 44px;
+        flex-wrap: wrap;
       }
-      .toolbar-symbol { font-size: var(--text-sm); }
+      .toolbar-symbol { font-size: var(--text-sm); font-weight: 700; }
       .toolbar-price { font-size: var(--text-sm); }
       .toolbar-divider { display: none; }
       .toolbar-label { display: none; }
-      .ind-toggle { font-size: 10px; }
-      .tf-btn { padding: 2px 6px; min-width: 28px; font-size: 10px; }
-      .zoom-btn { width: 24px; height: 24px; font-size: 12px; }
-      .trend-box { font-size: 10px; padding: 1px var(--space-2); }
 
-      .mobile-menu-btn { display: flex; }
-      .range-info { font-size: 9px; gap: var(--space-2); padding: 2px var(--space-2); }
+      /* TF buttons — compact row */
+      .tf-btn { padding: 3px 8px; min-width: 30px; font-size: 11px; }
 
-      .bottom-panel { max-height: 80px; }
+      /* Hide inline indicator list, show gear toggle button */
+      .toolbar-indicators .ind-list { display: none; }
+      .toolbar-indicators .ind-list.ind-panel-open {
+        display: flex;
+        position: absolute;
+        top: 100%;
+        left: 0; right: 0;
+        background: var(--color-bg-raised);
+        border-bottom: 2px solid var(--color-accent);
+        padding: var(--space-2) var(--space-3);
+        z-index: 50;
+        flex-wrap: wrap;
+        gap: var(--space-1) var(--space-3);
+      }
+      .toolbar-indicators .ind-list.ind-panel-open .ind-toggle {
+        font-size: 11px;
+        padding: 2px 0;
+      }
+      #btn-indicators-toggle { display: flex !important; font-size: 14px; }
+
+      /* Zoom buttons compact */
+      .zoom-btn { width: 26px; height: 26px; font-size: 13px; }
+
+      /* Trend box compact */
+      .trend-box { font-size: 10px; padding: 2px var(--space-2); }
+
+      /* Range bar compact */
+      .range-info { font-size: 10px; gap: var(--space-2); padding: 2px var(--space-2); }
+
+      /* Bottom panel compact */
+      .bottom-panel { grid-column: 1; max-height: 80px; }
       .bottom-panel-content { padding: var(--space-2); gap: var(--space-4); }
-      .structure-item-label { font-size: 8px; }
+      .structure-item-label { font-size: 9px; }
       .structure-item-value { font-size: var(--text-xs); }
     }
 
     @media (max-width: 480px) {
       .toolbar {
-        flex-wrap: nowrap;
         gap: var(--space-1);
         padding: var(--space-1);
       }
       .toolbar-change { display: none; }
-      .ind-toggle span,
-      .ind-toggle { font-size: 9px; }
-      .tf-btn { padding: 2px 4px; min-width: 24px; font-size: 9px; }
-      .view-toggle-btn { font-size: 9px; padding: 2px 4px; }
+      .tf-btn { padding: 2px 5px; min-width: 26px; font-size: 10px; }
+      .view-toggle-btn { font-size: 9px; padding: 2px 5px; }
       .view-toggle-icon .bar { height: 10px; width: 2px; }
       .trend-box { display: none; }
+      .range-info { font-size: 9px; }
     }
 
     /* Trend info box */
@@ -922,6 +950,8 @@
 
     /* --- Bottom Panel --- */
     .bottom-panel {
+      grid-column: 2;
+      grid-row: 4;
       background: var(--color-bg-raised);
       border-top: 1px solid var(--color-border);
       overflow: hidden;
@@ -1006,8 +1036,7 @@
     <div class="mobile-overlay" id="mobile-overlay"></div>
 
     <!-- Floating reopen buttons (visible when sidebar is hidden) -->
-    <button class="sidebar-reopen" id="reopen-left" title="Show token list">&#9654;</button>
-    <button class="sidebar-reopen" id="reopen-right" title="Show signal panel">&#9664;</button>
+    <!-- reopen button removed: left sidebar always visible -->
 
     <!-- Sidebar -->
     <aside class="sidebar" id="left-sidebar">
@@ -1018,7 +1047,7 @@
             <span>MCT</span>
             <span class="brand-tag">SMC</span>
           </a>
-          <button class="sidebar-collapse-btn" id="collapse-left" title="Hide token list">&#9664;</button>
+          <!-- left sidebar always visible on single chart -->
         </div>
         <div class="search-box">
           <span class="search-icon" aria-hidden="true">&#x1F50D;</span>
@@ -1036,7 +1065,7 @@
       </div>
     </aside>
 
-    <!-- Toolbar -->
+    <!-- Toolbar: top bar -->
     <header class="toolbar" role="toolbar" aria-label="Chart controls">
       <button class="mobile-menu-btn" id="btn-coins" title="Coins" aria-label="Open coin list">&#9776;</button>
       <span class="toolbar-symbol" id="toolbar-symbol">BTCUSDT</span>
@@ -1075,23 +1104,27 @@
 
       <div class="toolbar-divider"></div>
 
-      <div class="toolbar-group" role="group" aria-label="Indicators">
+      <!-- Indicators toggle: full row on desktop, collapsible on mobile -->
+      <div class="toolbar-group toolbar-indicators" id="indicators-group" role="group" aria-label="Indicators">
         <span class="toolbar-label">Indicators</span>
-        <label class="ind-toggle"><input type="checkbox" id="tog-swings" checked> Swings</label>
-        <label class="ind-toggle"><input type="checkbox" id="tog-labels" checked> Labels</label>
-        <label class="ind-toggle"><input type="checkbox" id="tog-ob" checked> OB</label>
-        <label class="ind-toggle"><input type="checkbox" id="tog-fvg" checked> FVG</label>
-        <label class="ind-toggle"><input type="checkbox" id="tog-levels" checked> Key Levels</label>
-        <label class="ind-toggle"><input type="checkbox" id="tog-ema7" checked> EMA7</label>
-        <label class="ind-toggle"><input type="checkbox" id="tog-ema22" checked> EMA22</label>
-        <label class="ind-toggle"><input type="checkbox" id="tog-ema200"> EMA200</label>
-        <label class="ind-toggle"><input type="checkbox" id="tog-vwap" checked> VWAP</label>
-        <label class="ind-toggle"><input type="checkbox" id="tog-curved" checked> Curved Bands</label>
-        <label class="ind-toggle"><input type="checkbox" id="tog-dailylvl" checked> OP/PDH/PDL</label>
-        <label class="ind-toggle"><input type="checkbox" id="tog-eqheql"> EQH/EQL</label>
-        <label class="ind-toggle"><input type="checkbox" id="tog-choch" checked> CHoCH/SMS/BMS</label>
-        <label class="ind-toggle"><input type="checkbox" id="tog-strongweak" checked> Strong/Weak</label>
-        <label class="ind-toggle"><input type="checkbox" id="tog-premium" checked> Premium/Disc</label>
+        <button class="mobile-menu-btn" id="btn-indicators-toggle" title="Toggle Indicators" aria-label="Toggle indicators panel" style="display:none;">&#9881;</button>
+        <div class="ind-list" id="ind-list">
+          <label class="ind-toggle"><input type="checkbox" id="tog-swings" checked> Swings</label>
+          <label class="ind-toggle"><input type="checkbox" id="tog-labels" checked> Labels</label>
+          <label class="ind-toggle"><input type="checkbox" id="tog-ob" checked> OB</label>
+          <label class="ind-toggle"><input type="checkbox" id="tog-fvg" checked> FVG</label>
+          <label class="ind-toggle"><input type="checkbox" id="tog-levels" checked> Key Levels</label>
+          <label class="ind-toggle"><input type="checkbox" id="tog-ema7" checked> EMA7</label>
+          <label class="ind-toggle"><input type="checkbox" id="tog-ema22" checked> EMA22</label>
+          <label class="ind-toggle"><input type="checkbox" id="tog-ema200"> EMA200</label>
+          <label class="ind-toggle"><input type="checkbox" id="tog-vwap" checked> VWAP</label>
+          <label class="ind-toggle"><input type="checkbox" id="tog-curved" checked> Curved Bands</label>
+          <label class="ind-toggle"><input type="checkbox" id="tog-dailylvl" checked> OP/PDH/PDL</label>
+          <label class="ind-toggle"><input type="checkbox" id="tog-eqheql"> EQH/EQL</label>
+          <label class="ind-toggle"><input type="checkbox" id="tog-choch" checked> CHoCH/SMS/BMS</label>
+          <label class="ind-toggle"><input type="checkbox" id="tog-strongweak" checked> Strong/Weak</label>
+          <label class="ind-toggle"><input type="checkbox" id="tog-premium" checked> Premium/Disc</label>
+        </div>
       </div>
 
       <div class="trend-box" id="trend-box">
@@ -1102,7 +1135,7 @@
     </header>
 
     <!-- Range info bar -->
-    <div style="background:var(--color-bg-raised);border-bottom:1px solid var(--color-border);padding:2px var(--space-4);display:flex;gap:var(--space-4);align-items:center;">
+    <div style="grid-column:2;grid-row:2;background:var(--color-bg-raised);border-bottom:1px solid var(--color-border);padding:2px var(--space-4);display:flex;gap:var(--space-4);align-items:center;">
       <div class="range-info">
         <span>Upper Range: <strong id="range-upper" style="color:var(--color-fg);">--</strong></span>
         <span>Lower Range: <strong id="range-lower" style="color:var(--color-fg);">--</strong></span>
@@ -1207,10 +1240,6 @@
 
     <!-- Right Sidebar -->
     <aside class="right-sidebar" id="right-sidebar">
-      <!-- Collapse button -->
-      <div style="display:flex;justify-content:flex-end;padding:var(--space-2) var(--space-3) 0;">
-        <button class="sidebar-collapse-btn" id="collapse-right" title="Hide signal panel">&#9654;</button>
-      </div>
       <!-- Trend -->
       <div class="right-sidebar-section">
         <div class="right-sidebar-title">Trend</div>
@@ -1851,7 +1880,7 @@
           lineWidth: 1,
           lineStyle: LightweightCharts.LineStyle.Dotted,
           priceLineVisible: false,
-          lastValueVisible: true,
+          lastValueVisible: false,
           crosshairMarkerVisible: false,
           title,
           ...OVERLAY_OPTS,
@@ -1984,7 +2013,7 @@
         // Use a line series with two data points spanning the chart
         const series = chart.addLineSeries({
           color: cfg.color, lineWidth: 1, lineStyle: cfg.style,
-          priceLineVisible: false, lastValueVisible: true, crosshairMarkerVisible: false,
+          priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
           title: cfg.label, ...OVERLAY_OPTS,
         });
 
@@ -2690,6 +2719,12 @@
 
       overlay.addEventListener('click', closeMobilePanels);
 
+      // Mobile indicators toggle — shows dropdown panel
+      document.getElementById('btn-indicators-toggle').addEventListener('click', () => {
+        const indList = document.getElementById('ind-list');
+        indList.classList.toggle('ind-panel-open');
+      });
+
       // View toggle
       document.getElementById('view-toggle').addEventListener('click', toggleMultiView);
 
@@ -2914,21 +2949,28 @@
 
       // ── CHoCH / SMS / BMS Lines ──
       if (data.chochBms && data.chochBms.length) {
-        for (const line of data.chochBms) {
-          const isCHoCH = line.label && line.label.startsWith('CHoCH');
-          const isSMS = line.label && line.label.startsWith('SMS');
-          const isBull = line.label && line.label.includes('↑');
-          const color = isBull ? '#00d4aa' : '#ff4757';
-          const lineStyle = isCHoCH ? 0 : isSMS ? 0 : 2; // solid for CHoCH/SMS, dashed for BMS
-          const lineWidth = isCHoCH ? 2 : 1;
-
+        for (const item of data.chochBms) {
+          if (!item.time || !item.breakTime) continue;
+          const isChoch = item.type === 'CHoCH';
+          const isSms = item.type === 'SMS';
+          const isBull = item.direction === 'bullish';
+          let color, lw, ls;
+          if (isChoch) {
+            color = isBull ? 'rgba(8, 236, 126, 0.8)' : 'rgba(255, 34, 34, 0.8)';
+            lw = 2; ls = 0;
+          } else if (isSms) {
+            color = isBull ? 'rgba(0, 212, 170, 0.7)' : 'rgba(242, 54, 69, 0.7)';
+            lw = 2; ls = 0;
+          } else {
+            color = isBull ? 'rgba(0, 212, 170, 0.5)' : 'rgba(255, 71, 87, 0.5)';
+            lw = 1; ls = 2;
+          }
           const s = mc.addLineSeries({
-            ...LINE_BASE, color, lineWidth, lineStyle, ...OVERLAY,
-            title: '',
+            ...LINE_BASE, color, lineWidth: lw, lineStyle: ls, ...OVERLAY, title: item.type,
           });
           s.setData([
-            { time: line.startTime, value: line.price },
-            { time: line.endTime, value: line.price },
+            { time: item.time, value: item.price },
+            { time: item.breakTime, value: item.price },
           ]);
           entry.extraSeries.push(s);
         }
@@ -2936,54 +2978,118 @@
 
       // ── Order Blocks ──
       if (data.orderBlocks && data.orderBlocks.length) {
+        const lastTime = data.candles[data.candles.length - 1]?.time;
         for (const ob of data.orderBlocks) {
-          if (!ob.startTime || !ob.endTime) continue;
-          const isBull = ob.type === 'bull';
-          const color = isBull ? 'rgba(0, 212, 170, 0.15)' : 'rgba(255, 71, 87, 0.15)';
-          const topVal = Math.max(ob.high, ob.low);
-          const botVal = Math.min(ob.high, ob.low);
-
-          // OB as area between top and bottom lines
+          const startTime = ob.startTime || ob.time;
+          const endTime = ob.endTime || lastTime;
+          if (!startTime || !endTime) continue;
+          const isBull = ob.type === 'bull' || ob.type === 'bullish';
           const topSeries = mc.addLineSeries({
             ...LINE_BASE, color: isBull ? '#00d4aa44' : '#ff475744', lineWidth: 1, ...OVERLAY,
           });
           const botSeries = mc.addLineSeries({
             ...LINE_BASE, color: isBull ? '#00d4aa44' : '#ff475744', lineWidth: 1, ...OVERLAY,
           });
-          topSeries.setData([{ time: ob.startTime, value: topVal }, { time: ob.endTime, value: topVal }]);
-          botSeries.setData([{ time: ob.startTime, value: botVal }, { time: ob.endTime, value: botVal }]);
+          topSeries.setData([{ time: startTime, value: Math.max(ob.high, ob.low) }, { time: endTime, value: Math.max(ob.high, ob.low) }]);
+          botSeries.setData([{ time: startTime, value: Math.min(ob.high, ob.low) }, { time: endTime, value: Math.min(ob.high, ob.low) }]);
           entry.extraSeries.push(topSeries, botSeries);
         }
       }
 
       // ── FVGs (Fair Value Gaps) ──
       if (data.fvgs && data.fvgs.length) {
+        const lastTime = data.candles[data.candles.length - 1]?.time;
         for (const fvg of data.fvgs) {
-          if (!fvg.startTime || !fvg.endTime) continue;
-          const isBull = fvg.type === 'bull';
+          const startTime = fvg.startTime || fvg.time;
+          const endTime = fvg.endTime || lastTime;
+          if (!startTime || !endTime) continue;
+          const isBull = fvg.type === 'bull' || fvg.type === 'bullish';
+          const lineColor = isBull ? 'rgba(0, 186, 255, 0.3)' : 'rgba(255, 167, 38, 0.3)';
           const topSeries = mc.addLineSeries({
-            ...LINE_BASE, color: isBull ? '#00d4aa33' : '#ff475733', lineWidth: 1, lineStyle: 2, ...OVERLAY,
+            ...LINE_BASE, color: lineColor, lineWidth: 1, lineStyle: 2, ...OVERLAY,
           });
           const botSeries = mc.addLineSeries({
-            ...LINE_BASE, color: isBull ? '#00d4aa33' : '#ff475733', lineWidth: 1, lineStyle: 2, ...OVERLAY,
+            ...LINE_BASE, color: lineColor, lineWidth: 1, lineStyle: 2, ...OVERLAY,
           });
-          topSeries.setData([{ time: fvg.startTime, value: fvg.high }, { time: fvg.endTime, value: fvg.high }]);
-          botSeries.setData([{ time: fvg.startTime, value: fvg.low }, { time: fvg.endTime, value: fvg.low }]);
+          topSeries.setData([{ time: startTime, value: fvg.high }, { time: endTime, value: fvg.high }]);
+          botSeries.setData([{ time: startTime, value: fvg.low }, { time: endTime, value: fvg.low }]);
           entry.extraSeries.push(topSeries, botSeries);
         }
       }
 
       // ── Strong/Weak Levels ──
       if (data.strongWeak && data.strongWeak.length) {
-        for (const sw of data.strongWeak) {
-          if (!sw.startTime || !sw.endTime) continue;
-          const isStrong = !sw.isBroken;
-          const isBull = sw.type === 'low';
-          const color = isStrong ? (isBull ? '#00d4aa' : '#ff4757') : '#ffa72666';
+        const recentHighs = data.strongWeak.filter(s => s.type === 'high').slice(-3);
+        const recentLows = data.strongWeak.filter(s => s.type === 'low').slice(-3);
+        const levels = [...recentHighs, ...recentLows];
+        const lastTime = data.candles[data.candles.length - 1]?.time;
+        for (const level of levels) {
+          const startTime = level.startTime || level.time;
+          const endTime = level.endTime || lastTime;
+          if (!startTime || !endTime) continue;
+          const isStrong = !level.isBroken;
+          const isHigh = level.type === 'high';
+          const color = isHigh
+            ? (isStrong ? 'rgba(255, 71, 87, 0.6)' : 'rgba(255, 167, 38, 0.4)')
+            : (isStrong ? 'rgba(0, 212, 170, 0.6)' : 'rgba(255, 167, 38, 0.4)');
+          const ls = isStrong ? 0 : 3;
           const s = mc.addLineSeries({
-            ...LINE_BASE, color, lineWidth: isStrong ? 2 : 1, lineStyle: isStrong ? 0 : 2, ...OVERLAY,
+            ...LINE_BASE, color, lineWidth: isStrong ? 2 : 1, lineStyle: ls, ...OVERLAY, title: level.label || '',
           });
-          s.setData([{ time: sw.startTime, value: sw.price }, { time: sw.endTime, value: sw.price }]);
+          s.setData([{ time: startTime, value: level.price }, { time: endTime, value: level.price }]);
+          entry.extraSeries.push(s);
+        }
+      }
+
+      // ── Key Levels (PDH, PDL, OP, PWH, PWL) ──
+      if (data.keyLevels) {
+        const firstTime = data.candles[0]?.time;
+        const lastTime = data.candles[data.candles.length - 1]?.time;
+        if (firstTime && lastTime) {
+          const klConfigs = [
+            { key: 'PDH', color: '#ffa726', ls: 2, label: 'PDH' },
+            { key: 'PDL', color: '#ffa726', ls: 2, label: 'PDL' },
+            { key: 'OP',  color: '#e6edf3', ls: 1, label: 'OP' },
+            { key: 'PWH', color: '#a855f7', ls: 2, label: 'PWH' },
+            { key: 'PWL', color: '#a855f7', ls: 2, label: 'PWL' },
+          ];
+          for (const cfg of klConfigs) {
+            const price = data.keyLevels[cfg.key];
+            if (price == null) continue;
+            const s = mc.addLineSeries({
+              ...LINE_BASE, color: cfg.color, lineWidth: 1, lineStyle: cfg.ls, ...OVERLAY, title: cfg.label,
+            });
+            s.setData([{ time: firstTime, value: price }, { time: lastTime, value: price }]);
+            entry.extraSeries.push(s);
+          }
+        }
+      }
+
+      // ── EQH / EQL ──
+      if (data.eqhEql && data.eqhEql.length) {
+        const lastTime = data.candles[data.candles.length - 1]?.time;
+        for (const eq of data.eqhEql) {
+          const isHigh = eq.type === 'EQH';
+          const color = isHigh ? 'rgba(255, 71, 87, 0.5)' : 'rgba(0, 212, 170, 0.5)';
+          const startTime = eq.time1 || eq.time;
+          if (!startTime || !lastTime) continue;
+          const s = mc.addLineSeries({
+            ...LINE_BASE, color, lineWidth: 1, lineStyle: 3, ...OVERLAY, title: eq.type,
+          });
+          s.setData([{ time: startTime, value: eq.price }, { time: lastTime, value: eq.price }]);
+          entry.extraSeries.push(s);
+        }
+      }
+
+      // ── Premium / Discount (EQ mid line) ──
+      if (data.premiumDiscount && data.premiumDiscount.mid) {
+        const firstTime = data.candles[0]?.time;
+        const lastTime = data.candles[data.candles.length - 1]?.time;
+        if (firstTime && lastTime) {
+          const s = mc.addLineSeries({
+            ...LINE_BASE, color: 'rgba(139, 148, 158, 0.5)', lineWidth: 1, lineStyle: 2, ...OVERLAY, title: 'EQ',
+          });
+          s.setData([{ time: firstTime, value: data.premiumDiscount.mid }, { time: lastTime, value: data.premiumDiscount.mid }]);
           entry.extraSeries.push(s);
         }
       }
@@ -3121,25 +3227,8 @@
       }, 100);
     }
 
-    // Left sidebar: collapse button inside sidebar + reopen floating button
-    document.getElementById('collapse-left').addEventListener('click', () => {
-      document.getElementById('app-layout').classList.add('left-hidden');
-      resizeAllCharts();
-    });
-    document.getElementById('reopen-left').addEventListener('click', () => {
-      document.getElementById('app-layout').classList.remove('left-hidden');
-      resizeAllCharts();
-    });
+    // Left sidebar always visible on single chart view (no collapse)
 
-    // Right sidebar: collapse button inside sidebar + reopen floating button
-    document.getElementById('collapse-right').addEventListener('click', () => {
-      document.getElementById('app-layout').classList.add('right-hidden');
-      resizeAllCharts();
-    });
-    document.getElementById('reopen-right').addEventListener('click', () => {
-      document.getElementById('app-layout').classList.remove('right-hidden');
-      resizeAllCharts();
-    });
 
     // ============================================================
     // Multi-Chart Per-Panel TF Switching

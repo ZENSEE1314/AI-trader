@@ -27,7 +27,7 @@ async function fetchKlines(symbol, interval, limit = 200) {
 
 // ── Zeiierman SMC Swing Detection ───────────────────────────
 // Zeiierman SMC settings: Swing Points Length = 20, Structure Period = 10
-const SWING_LENGTHS = { '1w': 10, '1d': 10, '4h': 10, '1h': 10, '15m': 20, '3m': 20, '1m': 20 };
+const SWING_LENGTHS = { '1w': 10, '1d': 10, '4h': 10, '1h': 10, '30m': 15, '15m': 20, '5m': 20, '3m': 20, '1m': 20 };
 const STRUCTURE_PERIOD = 10;
 
 function detectSwings(klines, len) {

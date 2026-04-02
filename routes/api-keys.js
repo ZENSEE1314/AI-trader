@@ -13,7 +13,7 @@ router.get('/', async (req, res) => {
   try {
     const rows = await query(
       `SELECT id, platform, label, leverage, risk_pct, max_loss_usdt, max_positions, enabled,
-              allowed_coins, banned_coins,
+              allowed_coins, banned_coins, tp_pct, sl_pct, max_consec_loss, top_n_coins,
               substring(api_key_enc, 1, 8) as key_preview, created_at
        FROM api_keys WHERE user_id = $1 ORDER BY created_at`,
       [req.userId]
@@ -93,7 +93,8 @@ router.post('/', async (req, res) => {
 // Update settings for a key
 router.put('/:id/settings', async (req, res) => {
   try {
-    const { leverage, risk_pct, max_loss_usdt, max_positions, enabled, allowed_coins, banned_coins } = req.body;
+    const { leverage, risk_pct, max_loss_usdt, max_positions, enabled, allowed_coins, banned_coins,
+            tp_pct, sl_pct, max_consec_loss, top_n_coins } = req.body;
 
     if (leverage !== undefined && (leverage < 1 || leverage > 125)) {
       return res.status(400).json({ error: 'Leverage must be 1-125' });
@@ -103,6 +104,18 @@ router.put('/:id/settings', async (req, res) => {
     }
     if (max_positions !== undefined && (max_positions < 1 || max_positions > 10)) {
       return res.status(400).json({ error: 'Max positions must be 1-10' });
+    }
+    if (tp_pct !== undefined && (tp_pct < 0.005 || tp_pct > 0.20)) {
+      return res.status(400).json({ error: 'TP must be 0.5-20%' });
+    }
+    if (sl_pct !== undefined && (sl_pct < 0.005 || sl_pct > 0.10)) {
+      return res.status(400).json({ error: 'SL must be 0.5-10%' });
+    }
+    if (max_consec_loss !== undefined && (max_consec_loss < 1 || max_consec_loss > 10)) {
+      return res.status(400).json({ error: 'Max consecutive losses must be 1-10' });
+    }
+    if (top_n_coins !== undefined && (top_n_coins < 5 || top_n_coins > 200)) {
+      return res.status(400).json({ error: 'Top coins must be 5-200' });
     }
 
     // Verify ownership
@@ -117,9 +130,14 @@ router.put('/:id/settings', async (req, res) => {
         max_positions = COALESCE($4, max_positions),
         enabled = COALESCE($5, enabled),
         allowed_coins = COALESCE($6, allowed_coins),
-        banned_coins = COALESCE($7, banned_coins)
-       WHERE id = $8 AND user_id = $9`,
-      [leverage, risk_pct, max_loss_usdt, max_positions, enabled, allowed_coins, banned_coins, req.params.id, req.userId]
+        banned_coins = COALESCE($7, banned_coins),
+        tp_pct = COALESCE($8, tp_pct),
+        sl_pct = COALESCE($9, sl_pct),
+        max_consec_loss = COALESCE($10, max_consec_loss),
+        top_n_coins = COALESCE($11, top_n_coins)
+       WHERE id = $12 AND user_id = $13`,
+      [leverage, risk_pct, max_loss_usdt, max_positions, enabled, allowed_coins, banned_coins,
+       tp_pct, sl_pct, max_consec_loss, top_n_coins, req.params.id, req.userId]
     );
 
     res.json({ ok: true });

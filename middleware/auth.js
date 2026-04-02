@@ -1,5 +1,8 @@
 const jwt = require('jsonwebtoken');
 
+if (!process.env.JWT_SECRET) {
+  console.warn('[AUTH] WARNING: JWT_SECRET not set — using insecure default. Set JWT_SECRET env var in production!');
+}
 const JWT_SECRET = process.env.JWT_SECRET || 'change-me-in-production';
 
 function authMiddleware(req, res, next) {

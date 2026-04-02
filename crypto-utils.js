@@ -1,6 +1,9 @@
 const crypto = require('crypto');
 
 const ALGO = 'aes-256-gcm';
+if (!process.env.ENCRYPTION_KEY) {
+  console.warn('[CRYPTO] WARNING: ENCRYPTION_KEY not set — API keys stored with insecure default key. Set ENCRYPTION_KEY env var in production!');
+}
 const KEY = Buffer.from(process.env.ENCRYPTION_KEY || '0'.repeat(64), 'hex');
 
 function encrypt(text) {

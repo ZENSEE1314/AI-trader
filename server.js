@@ -44,19 +44,72 @@ app.get('/api/coins', async (req, res) => {
 app.get('/health', (req, res) => res.json({ status: 'ok', version: '2.1.0' }));
 
 // Bot logs endpoint (live dashboard)
-const { getLogs, getRecentLogs } = require('./bot-logger');
+const { getLogs, getRecentLogs, getHistoricalLogs, getScanStats, getLogCounts } = require('./bot-logger');
 const { authMiddleware } = require('./middleware/auth');
 const aiLearner = require('./ai-learner');
+const { getLatestReport } = require('./nightly-analysis');
 
-app.get('/api/logs', authMiddleware, (req, res) => {
+// Logs: first load reads from DB (persisted), polling reads from memory (fast)
+app.get('/api/logs', authMiddleware, async (req, res) => {
   const since = parseFloat(req.query.since) || 0;
   const category = req.query.category || null;
-  const count = parseInt(req.query.count) || 100;
+  const count = parseInt(req.query.count) || 200;
 
   if (since > 0) {
+    // Polling: fast in-memory for new entries
     res.json(getLogs(since, category));
   } else {
-    res.json(getRecentLogs(count, category));
+    // Initial load / refresh: read from PostgreSQL so old logs survive redeploys
+    try {
+      const dbLogs = await getHistoricalLogs({ category, limit: count });
+      if (dbLogs && dbLogs.length > 0) {
+        // DB returns newest-first, reverse to oldest-first for display
+        res.json(dbLogs.reverse());
+      } else {
+        // Fallback to in-memory if DB is empty or unavailable
+        res.json(getRecentLogs(count, category));
+      }
+    } catch {
+      // DB error — fall back to in-memory
+      res.json(getRecentLogs(count, category));
+    }
+  }
+});
+
+// Historical logs from DB (survives redeploys)
+app.get('/api/logs/history', authMiddleware, async (req, res) => {
+  try {
+    const logs = await getHistoricalLogs({
+      category: req.query.category || null,
+      symbol: req.query.symbol || null,
+      limit: Math.min(parseInt(req.query.limit) || 200, 1000),
+      offset: parseInt(req.query.offset) || 0,
+      startDate: req.query.start || null,
+      endDate: req.query.end || null,
+    });
+    res.json(logs);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Scan analytics for AI learning
+app.get('/api/logs/scan-stats', authMiddleware, async (req, res) => {
+  try {
+    const days = parseInt(req.query.days) || 7;
+    const stats = await getScanStats(days);
+    res.json(stats);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Log summary counts
+app.get('/api/logs/counts', authMiddleware, async (req, res) => {
+  try {
+    res.json(await getLogCounts());
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 
@@ -69,8 +122,19 @@ app.get('/api/ai/versions', authMiddleware, async (req, res) => {
   });
 });
 
+// Nightly analysis report
+app.get('/api/reports/nightly', authMiddleware, async (req, res) => {
+  try {
+    const report = await getLatestReport();
+    if (!report) return res.status(404).json({ error: 'No nightly report available yet' });
+    res.json(report);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Server outbound IP (for Bitunix API key IP binding)
-app.get('/api/server-ip', async (req, res) => {
+app.get('/api/server-ip', authMiddleware, async (req, res) => {
   try {
     const fetch = require('node-fetch');
     const r = await fetch('https://api.ipify.org?format=json', { timeout: 5000 });
@@ -86,5 +150,19 @@ app.use((req, res, next) => {
   if (req.path.startsWith('/api/')) return res.status(404).json({ error: 'Not found' });
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
+
+// ── Auto-migrate: add new trading parameter columns ──────────
+const { query: dbQuery } = require('./db');
+(async () => {
+  const cols = [
+    { name: 'tp_pct',           sql: 'ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS tp_pct DECIMAL DEFAULT 0.045' },
+    { name: 'sl_pct',           sql: 'ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS sl_pct DECIMAL DEFAULT 0.03' },
+    { name: 'max_consec_loss',  sql: 'ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS max_consec_loss INTEGER DEFAULT 2' },
+    { name: 'top_n_coins',      sql: 'ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS top_n_coins INTEGER DEFAULT 50' },
+  ];
+  for (const c of cols) {
+    try { await dbQuery(c.sql); } catch (_) {}
+  }
+})();
 
 module.exports = app;

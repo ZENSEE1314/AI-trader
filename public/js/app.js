@@ -442,6 +442,10 @@
       const maxPos = k.max_positions || 1;
       const allowedCoins = k.allowed_coins || '';
       const bannedCoins = k.banned_coins || '';
+      const tpPct = k.tp_pct != null ? (parseFloat(k.tp_pct) * 100).toFixed(1) : '4.5';
+      const slPct = k.sl_pct != null ? (parseFloat(k.sl_pct) * 100).toFixed(1) : '3.0';
+      const maxConsecLoss = k.max_consec_loss || 2;
+      const topNCoins = k.top_n_coins || 50;
 
       return `<div class="key-card" data-key-id="${k.id}">
         <div class="key-card-main">
@@ -499,6 +503,42 @@
                 oninput="document.getElementById('maxpos-val-${k.id}').textContent=this.value"
                 aria-label="Max concurrent positions">
             </div>
+            <div class="slider-group">
+              <div class="slider-header">
+                <label class="form-label" for="tp-${k.id}">Take Profit %</label>
+                <span class="slider-value" id="tp-val-${k.id}">${tpPct}%</span>
+              </div>
+              <input type="range" id="tp-${k.id}" min="5" max="200" value="${Math.round(tpPct * 10)}"
+                oninput="document.getElementById('tp-val-${k.id}').textContent=(this.value/10).toFixed(1)+'%'"
+                aria-label="Take profit percentage">
+            </div>
+            <div class="slider-group">
+              <div class="slider-header">
+                <label class="form-label" for="sl-${k.id}">Stop Loss %</label>
+                <span class="slider-value" id="sl-val-${k.id}">${slPct}%</span>
+              </div>
+              <input type="range" id="sl-${k.id}" min="5" max="100" value="${Math.round(slPct * 10)}"
+                oninput="document.getElementById('sl-val-${k.id}').textContent=(this.value/10).toFixed(1)+'%'"
+                aria-label="Stop loss percentage">
+            </div>
+            <div class="slider-group">
+              <div class="slider-header">
+                <label class="form-label" for="maxloss-streak-${k.id}">Stop After Losses</label>
+                <span class="slider-value" id="maxloss-streak-val-${k.id}">${maxConsecLoss}</span>
+              </div>
+              <input type="range" id="maxloss-streak-${k.id}" min="1" max="10" value="${maxConsecLoss}"
+                oninput="document.getElementById('maxloss-streak-val-${k.id}').textContent=this.value"
+                aria-label="Max consecutive losses before stopping">
+            </div>
+            <div class="slider-group">
+              <div class="slider-header">
+                <label class="form-label" for="topcoins-${k.id}">Top Market Cap Coins</label>
+                <span class="slider-value" id="topcoins-val-${k.id}">${topNCoins}</span>
+              </div>
+              <input type="range" id="topcoins-${k.id}" min="5" max="200" step="5" value="${topNCoins}"
+                oninput="document.getElementById('topcoins-val-${k.id}').textContent=this.value"
+                aria-label="Top N coins by market cap">
+            </div>
             <div class="form-group" style="margin-bottom:0;grid-column:1/-1;">
               <label class="form-label">Only Trade These Coins <span style="font-weight:400;color:var(--color-text-muted);">(empty = all)</span></label>
               <div class="coin-chips" id="allowed-chips-${k.id}">${buildChips(allowedCoins, k.id, 'allowed')}</div>
@@ -552,6 +592,10 @@
     const enabled = $(`#enabled-${keyId}`).checked;
     const allowedCoins = getChipValues(`allowed-chips-${keyId}`);
     const bannedCoins = getChipValues(`banned-chips-${keyId}`);
+    const tpPct = parseInt($(`#tp-${keyId}`).value) / 1000;
+    const slPct = parseInt($(`#sl-${keyId}`).value) / 1000;
+    const maxConsecLoss = parseInt($(`#maxloss-streak-${keyId}`).value);
+    const topNCoins = parseInt($(`#topcoins-${keyId}`).value);
 
     try {
       await api('PUT', `/api/keys/${keyId}/settings`, {
@@ -562,6 +606,10 @@
         enabled,
         allowed_coins: allowedCoins,
         banned_coins: bannedCoins,
+        tp_pct: tpPct,
+        sl_pct: slPct,
+        max_consec_loss: maxConsecLoss,
+        top_n_coins: topNCoins,
       });
       showToast('Settings saved.', 'success');
       toggleSettings(keyId);

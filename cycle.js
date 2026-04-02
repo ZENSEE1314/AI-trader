@@ -1,8 +1,8 @@
 // ============================================================
 // Smart Crypto Trader v4 — AI Self-Learning Edition
 // Binance USDT-M Futures + Bitunix Futures
-// Strategy: Refined rule-based (Daily bias → 4H/1H → PDH/PDL/VWAP → 15M setup → 1M entry)
-// TP: RR 1:1.5 based on SL distance
+// Strategy: Swing Cascade (15M → 3M → 1M swing confirmation)
+// TP: Dynamic based on volume (4.5%/3%/2%), SL: 3%
 // ============================================================
 
 const { USDMClient } = require('binance');
@@ -63,8 +63,8 @@ function getDailyCapital(key, currentBalance) {
 
 // AI-tuned leverage — params come from getOptimalParams()
 function getLeverage(symbol, price, params = {}) {
-  if (BTC_ETH_SYMBOLS.has(symbol)) return Math.max(params.LEV_BTC_ETH || 100, 100);
-  return Math.max(params.LEV_ALT || 20, 20);
+  if (BTC_ETH_SYMBOLS.has(symbol)) return Math.min(params.LEV_BTC_ETH || 20, 20);
+  return Math.min(params.LEV_ALT || 20, 20);
 }
 
 // ── UTILS ─────────────────────────────────────────────────────
@@ -271,12 +271,12 @@ async function openTrade(client, pick, wallet) {
     setup: pick.setup,
     openedAt: Date.now(),
     tf15m: pick.structure?.tf15 || null,
-    tf3m: pick.structure?.tf1h || null,
+    tf3m: pick.structure?.tf3 || null,
     tf1m: pick.structure?.tf1 || null,
   });
 
   return {
-    sym, qty, entry: entryPrice, leverage, tp1, tp2, tp3, sl,
+    sym, qty, entry: price, leverage, tp1, tp2, tp3, sl,
     slDist, confidence: pick.score, direction,
     orderId: order.orderId, setup: pick.setup,
   };
@@ -293,9 +293,18 @@ async function checkTrailingStop(client) {
       if (!positions.find(p => p.symbol === sym)) {
         const state = tradeState.get(sym);
         if (state) {
-          // Position closed — record to AI learner
-          const ticker = await client.getSymbolPriceTicker({ symbol: sym }).catch(() => null);
-          const exitPrice = ticker ? parseFloat(ticker.price) : state.entry;
+          // Position closed — get actual fill price from trade history
+          let exitPrice = state.entry;
+          try {
+            const trades = await client.getAccountTradeList({ symbol: sym, limit: 5 });
+            if (trades && trades.length > 0) {
+              const lastTrade = trades[trades.length - 1];
+              exitPrice = parseFloat(lastTrade.price);
+            }
+          } catch {
+            const ticker = await client.getSymbolPriceTicker({ symbol: sym }).catch(() => null);
+            exitPrice = ticker ? parseFloat(ticker.price) : state.entry;
+          }
           const pnlPct = state.isLong
             ? (exitPrice - state.entry) / state.entry * 100
             : (state.entry - exitPrice) / state.entry * 100;
@@ -506,8 +515,12 @@ async function main() {
   const hasOwnerKeys = !!(API_KEY && API_SECRET);
 
   try {
-    // ── Step 1: SMC Scan (includes AI weights + sentiment) ──
-    const signals = await scanSMC(log);
+    // Ensure all tables exist before querying
+    const { query: dbQuery, initAllTables } = require('./db');
+    await initAllTables();
+    const topNRows = await dbQuery('SELECT MAX(top_n_coins) as max_n FROM api_keys WHERE enabled = true');
+    const topNCoins = parseInt(topNRows[0]?.max_n) || 50;
+    const signals = await scanSMC(log, { topNCoins });
 
     if (!signals.length) {
       log('No SMC signals found this cycle.');
@@ -673,8 +686,32 @@ async function executeForAllUsers(pick) {
         const price = pick.lastPrice || pick.price || pick.entry;
         const isLong = pick.direction !== 'SHORT';
         const aiParams = await aiLearner.getOptimalParams();
-        const userLev = getLeverage(symbol, price, aiParams);
-        const walletSizePct = aiParams.WALLET_SIZE_PCT || 0.10;
+
+        // Per-user settings from their API key config
+        const userLev = Math.min(parseInt(key.leverage) || 20, 125);
+        const walletSizePct = parseFloat(key.risk_pct) || aiParams.WALLET_SIZE_PCT || 0.10;
+        const userTP = parseFloat(key.tp_pct) || 0.045;
+        const userSL = parseFloat(key.sl_pct) || 0.03;
+        const userMaxConsecLoss = parseInt(key.max_consec_loss) || 2;
+
+        // Check consecutive losses from the end for this user
+        const recentTrades = await db.query(
+          `SELECT status FROM trades WHERE user_id = $1 AND status IN ('WIN','LOSS')
+           ORDER BY closed_at DESC LIMIT $2`,
+          [key.user_id, userMaxConsecLoss]
+        );
+        // All recent trades must be LOSS to count as consecutive
+        const allLosses = recentTrades.length >= userMaxConsecLoss &&
+          recentTrades.every(t => t.status === 'LOSS');
+        if (allLosses) {
+          bLog.trade(`User ${key.email}: ${userMaxConsecLoss} consecutive losses — cooling down`);
+          return;
+        }
+
+        // Calculate per-user TP/SL prices
+        const userSlPrice = isLong ? price * (1 - userSL) : price * (1 + userSL);
+        const userTpPrice = isLong ? price * (1 + userTP) : price * (1 - userTP);
+        const userTp3Price = isLong ? price * (1 + userTP * 1.5) : price * (1 - userTP * 1.5);
 
         let account, wallet, openPosCount;
 
@@ -696,10 +733,10 @@ async function executeForAllUsers(pick) {
             return;
           }
 
-          bLog.trade(`User ${key.email} Binance: wallet=$${wallet.toFixed(2)} pos=${openPosCount}/${maxPos} lev=x${userLev}`);
+          bLog.trade(`User ${key.email} Binance: wallet=$${wallet.toFixed(2)} pos=${openPosCount}/${maxPos} lev=x${userLev} TP=${(userTP*100).toFixed(1)}% SL=${(userSL*100).toFixed(1)}%`);
 
-          const slPrice = pick.sl;
-          const tp3Price = pick.tp1;
+          const slPrice = userSlPrice;
+          const tp3Price = userTp3Price;
 
           try { await userClient.setLeverage({ symbol, leverage: userLev }); } catch (_) {}
           try { await userClient.setMarginType({ symbol, marginType: 'ISOLATED' }); } catch (e) { if (!e.message?.includes('No need')) throw e; }
@@ -779,7 +816,7 @@ async function executeForAllUsers(pick) {
             `INSERT INTO trades (api_key_id, user_id, symbol, direction, entry_price, sl_price, tp_price, quantity, leverage, status, tf_15m, tf_3m, tf_1m)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'OPEN', $10, $11, $12)`,
             [key.id, key.user_id, symbol, pick.direction, price, fmtP(slPrice), fmtP(tp3Price), qty, userLev,
-             pick.structure?.tf15 || null, pick.structure?.tf1h || null, pick.structure?.tf1 || null]
+             pick.structure?.tf15 || null, pick.structure?.tf3 || null, pick.structure?.tf1 || null]
           );
           bLog.trade(`✅ Binance OK: ${key.email} ${symbol} ${pick.direction} x${userLev} qty=${qty} entry=$${fmtPrice(price)}`);
           log(`Binance OK: ${key.email} ${symbol} ${pick.direction} x${userLev}`);
@@ -816,8 +853,8 @@ async function executeForAllUsers(pick) {
             return 'TOO_EXPENSIVE';
           }
 
-          const slPrice = pick.sl;
-          const tp3Price = pick.tp1;
+          const slPrice = userSlPrice;
+          const tp3Price = userTp3Price;
 
           try { await userClient.changeMarginMode(symbol, 'ISOLATION'); } catch (_) {}
           try { await userClient.changeLeverage(symbol, userLev); } catch (_) {}
@@ -874,7 +911,10 @@ async function executeForAllUsers(pick) {
         bLog.error(`User ${key.email} trade error: ${err.message}`);
         log(`User ${key.email} trade error: ${err.message}`);
       }
-    })().catch(e => e.message);
+    })().catch(e => {
+        bLog.error(`User trade execution failed: ${e.message}`);
+        return 'ERROR';
+      });
       results.push(result);
     }
 
@@ -957,13 +997,22 @@ async function syncTradeStatus() {
           const exchangePos = openSymbols.get(trade.symbol);
 
           if (!exchangePos) {
-            // Position closed on exchange — mark as WIN/LOSS
+            // Position closed on exchange — get actual fill price
             const entryPrice = parseFloat(trade.entry_price);
-            const ticker = key.platform === 'binance'
-              ? await new USDMClient({ api_key: apiKey, api_secret: apiSecret })
-                  .getSymbolPriceTicker({ symbol: trade.symbol }).catch(() => null)
-              : null;
-            const exitPrice = ticker ? parseFloat(ticker.price) : entryPrice;
+            let exitPrice = entryPrice;
+            if (key.platform === 'binance') {
+              try {
+                const binClient = new USDMClient({ api_key: apiKey, api_secret: apiSecret });
+                const fills = await binClient.getAccountTradeList({ symbol: trade.symbol, limit: 5 });
+                if (fills && fills.length > 0) {
+                  exitPrice = parseFloat(fills[fills.length - 1].price);
+                }
+              } catch {
+                const ticker = await new USDMClient({ api_key: apiKey, api_secret: apiSecret })
+                  .getSymbolPriceTicker({ symbol: trade.symbol }).catch(() => null);
+                exitPrice = ticker ? parseFloat(ticker.price) : entryPrice;
+              }
+            }
             const isLong = trade.direction !== 'SHORT';
             const pnlPct = isLong
               ? (exitPrice - entryPrice) / entryPrice * 100

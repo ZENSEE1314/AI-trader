@@ -4,7 +4,7 @@
 // Storage: Neon PostgreSQL (persistent across deploys)
 // ============================================================
 
-const { query } = require('./db');
+const { query, initAllTables } = require('./db');
 
 // ── Constants ────────────────────────────────────────────────
 
@@ -27,6 +27,7 @@ function getCurrentSession() {
 // ── Record a Completed Trade ─────────────────────────────────
 
 async function recordTrade(data) {
+  await initAllTables();
   const isWin = data.pnlPct > 0 ? 1 : 0;
   await query(
     `INSERT INTO ai_trades (
@@ -118,17 +119,26 @@ async function getSessionWeight() {
 // ── Should Avoid Coin ────────────────────────────────────────
 
 async function shouldAvoidCoin(symbol) {
-  const stats = await query(
-    `SELECT COUNT(*) as total,
-            SUM(CASE WHEN is_win = 1 THEN 1 ELSE 0 END) as wins
-     FROM ai_trades
-     WHERE symbol = $1 AND pnl_pct IS NOT NULL`,
-    [symbol]
-  );
-  const row = stats[0];
-  if (!row || parseInt(row.total) < MIN_TRADES_FOR_LEARNING) return false;
-  const winRate = parseInt(row.wins) / parseInt(row.total);
-  return winRate < 0.30;
+  try {
+    // Check trade history — only avoid if we have enough data
+    const stats = await query(
+      `SELECT COUNT(*) as total,
+              SUM(CASE WHEN is_win = 1 THEN 1 ELSE 0 END) as wins
+       FROM ai_trades
+       WHERE symbol = $1 AND pnl_pct IS NOT NULL`,
+      [symbol]
+    );
+    const row = stats[0];
+    if (row && parseInt(row.total) >= MIN_TRADES_FOR_LEARNING) {
+      const winRate = parseInt(row.wins) / parseInt(row.total);
+      if (winRate < 0.30) return true;
+    }
+  } catch (_) {
+    // ai_trades table may not exist yet — don't avoid any coin
+    return false;
+  }
+
+  return false;
 }
 
 // ── Optimal Parameters (adaptive tuning) ─────────────────────
@@ -452,6 +462,7 @@ async function getCurrentVersion() {
 // ── Stats for Telegram /stats Command ────────────────────────
 
 async function getStats() {
+  await initAllTables();
   const overall = await query(
     `SELECT COUNT(*) as total,
       SUM(CASE WHEN is_win = 1 THEN 1 ELSE 0 END) as wins,
@@ -540,7 +551,57 @@ async function getAIScoreModifier(symbol, setup, direction) {
     modifier *= 0.7;
   }
 
+  // Scan log bonus: if this coin has high signal-to-trade conversion, boost score
+  try {
+    const logStats = await query(
+      `SELECT
+         COUNT(*) FILTER (WHERE result = 'SIGNAL') as signals,
+         COUNT(*) as total
+       FROM bot_logs
+       WHERE category = 'scan' AND symbol = $1
+         AND ts > NOW() - INTERVAL '7 days'`,
+      [symbol]
+    );
+    const lr = logStats[0];
+    if (lr && parseInt(lr.total) >= 20) {
+      const signalRate = parseInt(lr.signals) / parseInt(lr.total);
+      // High signal rate = coin frequently aligns = boost
+      if (signalRate > 0.1) modifier *= 1.1;
+      // Very low signal rate = rare alignment = slight penalty
+      else if (signalRate < 0.02) modifier *= 0.9;
+    }
+  } catch (_) {}
+
   return modifier;
+}
+
+// ── Scan Log Analysis for Learning ─────────────────────────
+
+async function getLearningSummary() {
+  try {
+    // Cross-reference signals with trade outcomes
+    const summary = await query(`
+      SELECT
+        bl.symbol,
+        bl.direction,
+        COUNT(DISTINCT bl.id) as signal_count,
+        COUNT(DISTINCT t.id) as trade_count,
+        SUM(CASE WHEN t.status = 'WIN' THEN 1 ELSE 0 END) as wins,
+        SUM(CASE WHEN t.status = 'LOSS' THEN 1 ELSE 0 END) as losses,
+        ROUND(AVG(t.pnl_usdt)::numeric, 4) as avg_pnl
+      FROM bot_logs bl
+      LEFT JOIN trades t ON t.symbol = bl.symbol
+        AND t.direction = bl.direction
+        AND t.created_at BETWEEN bl.ts - INTERVAL '5 minutes' AND bl.ts + INTERVAL '30 minutes'
+      WHERE bl.category = 'scan' AND bl.result = 'SIGNAL'
+        AND bl.ts > NOW() - INTERVAL '30 days'
+      GROUP BY bl.symbol, bl.direction
+      ORDER BY signal_count DESC
+    `);
+    return summary;
+  } catch (_) {
+    return [];
+  }
 }
 
 module.exports = {
