@@ -1,6 +1,18 @@
 
 [qgtunnel.0]
-accept = "127.0.0.1:44"
+accept = "127.0.0.1:4444"
 connect = "fapi.bitunix.com:"
+encrypted = false
+transparent = true
+
+[qgtunnel.1]
+accept = "127.0.0.1:4443"
+connect = "fapi.binance.com:443"
+encrypted = false
+transparent = true
+
+[qgtunnel.2]
+accept = "127.0.0.1:4445"
+connect = "api.telegram.org:443"
 encrypted = false
 transparent = true
