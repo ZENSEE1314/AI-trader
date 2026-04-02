@@ -4,8 +4,8 @@ services:
     runtime: node
     plan: starter
     region: singapore
-    buildCommand: curl https://s3.amazonaws.com/quotaguard/qgtunnel-latest.tar.gz | tar xz && npm install
-    startCommand: bin/qgtunnel node bot.js
+    buildCommand: npm install
+    startCommand: node bot.js
     envVars:
       - key: TELEGRAM_TOKEN
         sync: false
@@ -13,7 +13,5 @@ services:
         sync: false
       - key: INTERVAL_MIN
         value: "10"
-      - key: QUOTAGUARDSTATIC_URL
+      - key: PROXY_URL
         sync: false
-      - key: QGTUNNEL_DEBUG
-        value: "true"
