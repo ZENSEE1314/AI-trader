@@ -863,39 +863,35 @@ async function executeForAllUsers(pick) {
           const slFmtBx = parseFloat(slPrice.toFixed(8));
           const tpFmtBx = parseFloat(tp3Price.toFixed(8));
 
-          // Place order with TP/SL inline — more reliable than setting after
+          // Place market order first (without inline TP/SL — Bitunix ignores them)
           bLog.trade(`User ${key.email}: placing Bitunix MARKET ${isLong ? 'BUY' : 'SELL'} ${symbol} qty=${qty} SL=$${slFmtBx} TP=$${tpFmtBx}...`);
           const order = await userClient.placeOrder({
             symbol, side: isLong ? 'BUY' : 'SELL',
             qty: String(qty), orderType: 'MARKET', tradeSide: 'OPEN',
-            tpPrice: tpFmtBx, tpStopType: 'MARK_PRICE', tpOrderType: 'MARKET',
-            slPrice: slFmtBx, slStopType: 'MARK_PRICE', slOrderType: 'MARKET',
           });
-          bLog.trade(`✅ Bitunix order placed with TP/SL inline`);
+          bLog.trade(`✅ Bitunix order placed: ${JSON.stringify(order)}`);
 
-          // Verify TP/SL was set by checking position
-          await sleep(1500);
+          // Wait for position to appear, then set TP/SL on position
+          await sleep(2000);
           const positions = await userClient.getOpenPositions(symbol);
           const pos = Array.isArray(positions) ? positions.find(p => p.symbol === symbol) : null;
+          bLog.trade(`Bitunix position lookup: ${JSON.stringify(pos ? { id: pos.positionId, symbol: pos.symbol, side: pos.side, qty: pos.qty } : null)}`);
 
           if (pos && pos.positionId) {
-            bLog.trade(`Bitunix position confirmed: ${pos.positionId}`);
-            // If inline TP/SL didn't stick, set them on the position as backup
-            if (!pos.tpPrice && !pos.slPrice) {
-              bLog.trade(`Bitunix inline TP/SL not detected — setting via position API...`);
-              try {
-                await userClient.placePositionTpSl({
-                  symbol, positionId: pos.positionId,
-                  tpPrice: tpFmtBx, slPrice: slFmtBx,
-                });
-                bLog.trade(`✅ Bitunix TP/SL set via position API`);
-              } catch (e) {
-                bLog.error(`❌ Bitunix TP/SL FAILED: ${e.message} — SET MANUALLY`);
-                await notify(`*⚠️ Bitunix ${symbol} ${pick.direction}*\nTP/SL failed! Set manually.`);
-              }
+            bLog.trade(`Bitunix position confirmed: ${pos.positionId} — setting TP/SL...`);
+            try {
+              await userClient.placePositionTpSl({
+                symbol, positionId: pos.positionId,
+                tpPrice: tpFmtBx, slPrice: slFmtBx,
+              });
+              bLog.trade(`✅ Bitunix TP=$${tpFmtBx} SL=$${slFmtBx} set on position ${pos.positionId}`);
+            } catch (e) {
+              bLog.error(`❌ Bitunix TP/SL FAILED: ${e.message} — SET MANUALLY`);
+              await notify(`*⚠️ Bitunix ${symbol} ${pick.direction}*\nTP/SL failed! Set manually on Bitunix NOW.`);
             }
           } else {
             bLog.error(`❌ Bitunix position not found after order — verify on exchange`);
+            await notify(`*⚠️ Bitunix ${symbol}*\nOrder placed but position not found. Check Bitunix manually.`);
           }
 
           await db.query(
