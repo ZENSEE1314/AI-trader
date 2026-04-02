@@ -42,7 +42,7 @@ function getDailyCapital(key, currentBalance) {
 
 // AI-tuned leverage — params come from getOptimalParams()
 function getLeverage(symbol, price, params = {}) {
-  if (BTC_ETH_SYMBOLS.has(symbol)) return Math.min(params.LEV_BTC_ETH || 20, 20);
+  if (BTC_ETH_SYMBOLS.has(symbol)) return Math.min(params.LEV_BTC_ETH || 100, 100);
   return Math.min(params.LEV_ALT || 20, 20);
 }
 
