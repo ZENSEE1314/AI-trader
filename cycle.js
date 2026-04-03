@@ -730,7 +730,7 @@ async function executeForAllUsers(pick) {
             return;
           }
 
-          bLog.trade(`User ${key.email} Binance: wallet=$${wallet.toFixed(2)} pos=${openPosCount}/${maxPos} lev=x${userLev} TP=${(userTP*100).toFixed(1)}% SL=${(userSL*100).toFixed(1)}%`);
+          bLog.trade(`User ${key.email} Binance: totalWalletBalance=$${rawWallet.toFixed(2)} available=$${parseFloat(account.availableBalance).toFixed(2)} usedMargin=$${parseFloat(account.totalMarginBalance).toFixed(2)} unrealizedPnL=$${parseFloat(account.totalUnrealizedProfit).toFixed(2)} | wallet=$${wallet.toFixed(2)} pos=${openPosCount}/${maxPos} lev=x${userLev} TP=${(userTP*100).toFixed(1)}% SL=${(userSL*100).toFixed(1)}%`);
 
           const slPrice = userSlPrice;
           const tp3Price = userTp3Price;
