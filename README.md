@@ -34,15 +34,27 @@ Go to: Vercel Dashboard → Your Project → Settings → Environment Variables
 | `TELEGRAM_TOKEN` | Your Telegram bot token (from @BotFather) |
 | `TELEGRAM_CHAT_ID` | Your Telegram chat ID |
 
-### 3. Binance API Key Setup
+### 3. API IP Whitelist
+
+When creating API keys on **Binance** and **Bitunix**, whitelist these server IPs so the bot can connect:
+
+| # | IP Address |
+|---|------------|
+| 1 | `52.192.89.194` |
+| 2 | `52.193.106.127` |
+
+**Binance:** API Management → Edit API → IP Access Restrictions → Add both IPs  
+**Bitunix:** API Management → IP Whitelist → Add both IPs
+
+### 4. Binance API Key Setup
 
 Create API key at Binance with:
 - ✅ Enable Futures Trading
 - ✅ Enable Reading  
 - ❌ Disable Withdrawals (never enable!)
-- Set IP whitelist to your Vercel server IP
+- Whitelist both IPs above
 
-### 4. Telegram Bot Setup
+### 5. Telegram Bot Setup
 
 1. Message [@BotFather](https://t.me/botfather) on Telegram
 2. Send `/newbot` → follow steps → get your `TELEGRAM_TOKEN`
