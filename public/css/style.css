@@ -1032,11 +1032,24 @@ input[type="range"]::-moz-range-thumb {
 
 @media (max-width: 768px) {
   .main-content {
-    padding: var(--space-4);
+    padding: var(--space-3);
   }
 
   .summary-grid {
     grid-template-columns: repeat(2, 1fr);
+    gap: var(--space-2);
+  }
+
+  .summary-card {
+    padding: var(--space-3);
+  }
+
+  .summary-card-label {
+    font-size: 0.7rem;
+  }
+
+  .summary-card-value {
+    font-size: 1rem;
   }
 
   .key-card-main {
@@ -1054,24 +1067,36 @@ input[type="range"]::-moz-range-thumb {
   }
 
   .auth-card {
-    padding: var(--space-6);
+    padding: var(--space-5);
+    margin: var(--space-3);
   }
 
   .modal {
-    padding: var(--space-5);
+    padding: var(--space-4);
+    margin: var(--space-3);
+    max-height: 90vh;
+    overflow-y: auto;
   }
 
   .toast-container {
-    right: var(--space-4);
-    left: var(--space-4);
+    right: var(--space-3);
+    left: var(--space-3);
   }
 
   .toast {
     max-width: 100%;
   }
 
+  /* Mobile-friendly table: horizontal scroll */
+  .table-wrapper {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    border-radius: var(--radius-lg);
+  }
+
   .data-table {
     font-size: var(--text-xs);
+    min-width: 600px;
   }
 
   .data-table th,
@@ -1082,16 +1107,217 @@ input[type="range"]::-moz-range-thumb {
   .user-email {
     display: none;
   }
+
+  /* App header compact */
+  .app-header {
+    padding: var(--space-3) var(--space-4);
+  }
+
+  .logo {
+    font-size: var(--text-lg);
+  }
+
+  .logo img {
+    width: 36px;
+    height: 36px;
+  }
+
+  /* Nav tabs scrollable on mobile */
+  .nav-tabs {
+    gap: 0;
+    margin-bottom: var(--space-5);
+    padding-bottom: 0;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .nav-tab {
+    padding: var(--space-2) var(--space-3);
+    font-size: var(--text-xs);
+    min-height: 38px;
+  }
+
+  /* Section headings */
+  .section-heading {
+    font-size: var(--text-lg);
+  }
+
+  /* Period filter buttons */
+  #trades-period-filter {
+    gap: 4px;
+  }
+
+  #trades-period-filter .btn {
+    padding: var(--space-1) var(--space-2);
+    font-size: 0.65rem;
+    min-height: 28px;
+  }
+
+  /* Landing page mobile */
+  .landing-hero-grid {
+    grid-template-columns: 1fr;
+    text-align: center;
+  }
+
+  .landing-hero-text {
+    order: 2;
+  }
+
+  .landing-hero-visual {
+    order: 1;
+    margin-bottom: var(--space-4);
+  }
+
+  .landing-title {
+    font-size: clamp(2rem, 8vw, 3rem);
+  }
+
+  .landing-hero-btns {
+    flex-direction: column;
+    align-items: center;
+  }
+
+  .landing-steps {
+    flex-direction: column;
+    align-items: center;
+  }
+
+  .landing-step-line {
+    width: 2px;
+    height: 32px;
+  }
+
+  .landing-features {
+    grid-template-columns: 1fr;
+  }
+
+  .landing-plans {
+    grid-template-columns: 1fr;
+  }
+
+  .landing-screenshots {
+    flex-direction: column;
+    align-items: center;
+  }
+
+  .landing-stats {
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: var(--space-3);
+  }
+
+  .landing-stat-divider {
+    display: none;
+  }
+
+  /* Wallet cards stack */
+  .settings-grid {
+    grid-template-columns: 1fr;
+  }
+
+  /* Log container height */
+  #logs-container {
+    height: 50vh;
+  }
 }
 
 @media (max-width: 480px) {
   .summary-grid {
-    grid-template-columns: 1fr;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--space-2);
+  }
+
+  .summary-card {
+    padding: var(--space-2);
+  }
+
+  .summary-card-label {
+    font-size: 0.65rem;
+  }
+
+  .summary-card-value {
+    font-size: 0.9rem;
   }
 
   .nav-tab {
+    padding: var(--space-2);
+    font-size: 0.65rem;
+    min-height: 34px;
+  }
+
+  .main-content {
+    padding: var(--space-2);
+  }
+
+  .auth-card {
+    padding: var(--space-4);
+  }
+
+  /* Hide less important dashboard cards on tiny screens */
+  .landing-proof-logos {
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+
+  .landing-nav-center {
+    display: none;
+  }
+
+  .landing-nav-toggle {
+    display: flex;
+  }
+
+  /* Admin section cards */
+  #admin-earnings-per-user > div {
     padding: var(--space-3);
-    font-size: var(--text-xs);
+  }
+
+  #admin-weekly-summary .summary-card {
+    padding: var(--space-3);
+  }
+
+  /* Hide table columns on mobile - keep essential ones */
+  .data-table th:nth-child(n+5),
+  .data-table td:nth-child(n+5) {
+    /* Keep visible but let horizontal scroll handle it */
+  }
+}
+
+/* Touch-friendly improvements */
+@media (hover: none) and (pointer: coarse) {
+  .btn {
+    min-height: 44px;
+  }
+
+  .btn-sm {
+    min-height: 36px;
+  }
+
+  .nav-tab {
+    min-height: 44px;
+  }
+
+  .form-input {
+    font-size: 16px; /* Prevent iOS zoom */
+  }
+
+  .slider-group input[type="range"] {
+    height: 44px;
+  }
+
+  .period-btn {
+    min-height: 36px;
+    min-width: 44px;
+  }
+
+  /* Larger tap targets for chips */
+  .coin-chip {
+    padding: 4px 10px;
+    font-size: 0.8rem;
+  }
+
+  .coin-chip-x {
+    font-size: 1.2rem;
+    padding: 0 4px;
   }
 }
 

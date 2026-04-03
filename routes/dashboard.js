@@ -174,4 +174,119 @@ router.get('/futures-wallet', async (req, res) => {
   }
 });
 
+// Weekly earnings with profit split
+router.get('/weekly-earnings', async (req, res) => {
+  try {
+    // Get current week (Monday to Sunday)
+    const now = new Date();
+    const dayOfWeek = now.getDay();
+    const mondayOffset = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
+    const monday = new Date(now);
+    monday.setDate(now.getDate() + mondayOffset);
+    monday.setHours(0, 0, 0, 0);
+    const sunday = new Date(monday);
+    sunday.setDate(monday.getDate() + 6);
+    sunday.setHours(23, 59, 59, 999);
+
+    // Get user's profit share settings per key
+    const keys = await query(
+      `SELECT id, label, platform, profit_share_user_pct, profit_share_admin_pct
+       FROM api_keys WHERE user_id = $1`,
+      [req.userId]
+    );
+
+    // Get this week's closed trades with positive PnL (winnings only)
+    const weeklyTrades = await query(
+      `SELECT t.api_key_id, t.pnl_usdt, t.status, t.symbol, t.direction,
+              t.entry_price, t.exit_price, t.created_at, t.closed_at
+       FROM trades t
+       WHERE t.user_id = $1
+         AND t.status IN ('WIN', 'LOSS', 'TP', 'SL', 'CLOSED')
+         AND t.closed_at >= $2 AND t.closed_at <= $3
+       ORDER BY t.closed_at DESC`,
+      [req.userId, monday, sunday]
+    );
+
+    // Calculate per-key earnings
+    const perKey = [];
+    let totalWinningPnl = 0;
+    let totalUserShare = 0;
+    let totalAdminShare = 0;
+    let totalTrades = 0;
+    let totalWins = 0;
+
+    for (const key of keys) {
+      const keyTrades = weeklyTrades.filter(t => t.api_key_id === key.id);
+      const wins = keyTrades.filter(t => parseFloat(t.pnl_usdt) > 0);
+      const winningPnl = wins.reduce((s, t) => s + parseFloat(t.pnl_usdt), 0);
+      const userPct = parseFloat(key.profit_share_user_pct) || 60;
+      const adminPct = parseFloat(key.profit_share_admin_pct) || 40;
+      const userShare = Math.max(0, winningPnl * userPct / 100);
+      const adminShare = Math.max(0, winningPnl * adminPct / 100);
+
+      perKey.push({
+        key_id: key.id,
+        label: key.label || key.platform,
+        platform: key.platform,
+        total_trades: keyTrades.length,
+        win_count: wins.length,
+        loss_count: keyTrades.length - wins.length,
+        winning_pnl: winningPnl,
+        user_share_pct: userPct,
+        admin_share_pct: adminPct,
+        user_share: userShare,
+        admin_share: adminShare,
+      });
+
+      totalWinningPnl += winningPnl;
+      totalUserShare += userShare;
+      totalAdminShare += adminShare;
+      totalTrades += keyTrades.length;
+      totalWins += wins.length;
+    }
+
+    res.json({
+      week_start: monday.toISOString(),
+      week_end: sunday.toISOString(),
+      total_trades: totalTrades,
+      total_wins: totalWins,
+      total_losses: totalTrades - totalWins,
+      winning_pnl: totalWinningPnl,
+      user_share: totalUserShare,
+      admin_share: totalAdminShare,
+      user_share_pct: keys.length > 0 ? (parseFloat(keys[0].profit_share_user_pct) || 60) : 60,
+      admin_share_pct: keys.length > 0 ? (parseFloat(keys[0].profit_share_admin_pct) || 40) : 40,
+      per_key: perKey,
+    });
+  } catch (err) {
+    console.error('Weekly earnings error:', err.message);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Historical weekly earnings (last 8 weeks)
+router.get('/weekly-history', async (req, res) => {
+  try {
+    const weeks = parseInt(req.query.weeks) || 8;
+    const rows = await query(
+      `SELECT week_start, week_end,
+              SUM(winning_pnl) as winning_pnl,
+              SUM(user_share) as user_share,
+              SUM(admin_share) as admin_share,
+              SUM(trade_count) as trade_count,
+              SUM(win_count) as win_count
+       FROM weekly_earnings
+       WHERE user_id = $1 AND settled = true
+       GROUP BY week_start, week_end
+       ORDER BY week_start DESC
+       LIMIT $2`,
+      [req.userId, weeks]
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error('Weekly history error:', err.message);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 module.exports = router;

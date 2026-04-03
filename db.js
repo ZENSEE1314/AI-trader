@@ -80,6 +80,29 @@ async function initAllTables() {
       win_rate DECIMAL,
       created_at TIMESTAMPTZ DEFAULT NOW()
     )`,
+    // Profit share columns on api_keys (per-user configurable by admin)
+    `ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS profit_share_user_pct DECIMAL DEFAULT 60`,
+    `ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS profit_share_admin_pct DECIMAL DEFAULT 40`,
+    `ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS paused_by_admin BOOLEAN DEFAULT false`,
+    // Weekly earnings tracking
+    `CREATE TABLE IF NOT EXISTS weekly_earnings (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER NOT NULL,
+      api_key_id INTEGER,
+      week_start DATE NOT NULL,
+      week_end DATE NOT NULL,
+      total_pnl DECIMAL DEFAULT 0,
+      winning_pnl DECIMAL DEFAULT 0,
+      user_share DECIMAL DEFAULT 0,
+      admin_share DECIMAL DEFAULT 0,
+      user_share_pct DECIMAL DEFAULT 60,
+      admin_share_pct DECIMAL DEFAULT 40,
+      trade_count INTEGER DEFAULT 0,
+      win_count INTEGER DEFAULT 0,
+      settled BOOLEAN DEFAULT false,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE(user_id, api_key_id, week_start)
+    )`,
     `CREATE TABLE IF NOT EXISTS ai_versions (
       id SERIAL PRIMARY KEY,
       version INTEGER,

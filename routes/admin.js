@@ -13,6 +13,167 @@ async function adminOnly(req, res, next) {
 }
 router.use(adminOnly);
 
+// Weekly earnings overview for admin (all users)
+router.get('/weekly-earnings', async (req, res) => {
+  try {
+    const now = new Date();
+    const dayOfWeek = now.getDay();
+    const mondayOffset = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
+    const monday = new Date(now);
+    monday.setDate(now.getDate() + mondayOffset);
+    monday.setHours(0, 0, 0, 0);
+    const sunday = new Date(monday);
+    sunday.setDate(monday.getDate() + 6);
+    sunday.setHours(23, 59, 59, 999);
+
+    // Get all users with their profit share settings and weekly performance
+    const users = await query(
+      `SELECT u.id, u.email,
+              ak.id as key_id, ak.label as key_label, ak.platform,
+              ak.profit_share_user_pct, ak.profit_share_admin_pct,
+              ak.paused_by_admin, ak.enabled
+       FROM users u
+       LEFT JOIN api_keys ak ON ak.user_id = u.id
+       WHERE u.is_admin = false
+       ORDER BY u.email, ak.id`
+    );
+
+    // Get this week's trades for all users
+    const trades = await query(
+      `SELECT t.user_id, t.api_key_id, t.pnl_usdt, t.status, t.symbol
+       FROM trades t
+       WHERE t.status IN ('WIN', 'LOSS', 'TP', 'SL', 'CLOSED')
+         AND t.closed_at >= $1 AND t.closed_at <= $2`,
+      [monday, sunday]
+    );
+
+    // Build per-user/per-key summary
+    const result = [];
+    let grandTotalWinning = 0;
+    let grandTotalUserShare = 0;
+    let grandTotalAdminShare = 0;
+
+    const userMap = {};
+    for (const u of users) {
+      if (!userMap[u.id]) {
+        userMap[u.id] = {
+          user_id: u.id,
+          email: u.email,
+          keys: [],
+          total_winning_pnl: 0,
+          total_user_share: 0,
+          total_admin_share: 0,
+          total_trades: 0,
+          total_wins: 0,
+        };
+      }
+      if (u.key_id) {
+        const keyTrades = trades.filter(t => t.api_key_id === u.key_id);
+        const wins = keyTrades.filter(t => parseFloat(t.pnl_usdt) > 0);
+        const winningPnl = wins.reduce((s, t) => s + parseFloat(t.pnl_usdt), 0);
+        const userPct = parseFloat(u.profit_share_user_pct) || 60;
+        const adminPct = parseFloat(u.profit_share_admin_pct) || 40;
+
+        const keyData = {
+          key_id: u.key_id,
+          label: u.key_label || u.platform,
+          platform: u.platform,
+          paused: u.paused_by_admin || false,
+          enabled: u.enabled !== false,
+          total_trades: keyTrades.length,
+          win_count: wins.length,
+          winning_pnl: winningPnl,
+          user_share_pct: userPct,
+          admin_share_pct: adminPct,
+          user_share: Math.max(0, winningPnl * userPct / 100),
+          admin_share: Math.max(0, winningPnl * adminPct / 100),
+        };
+
+        userMap[u.id].keys.push(keyData);
+        userMap[u.id].total_winning_pnl += winningPnl;
+        userMap[u.id].total_user_share += keyData.user_share;
+        userMap[u.id].total_admin_share += keyData.admin_share;
+        userMap[u.id].total_trades += keyTrades.length;
+        userMap[u.id].total_wins += wins.length;
+      }
+    }
+
+    for (const u of Object.values(userMap)) {
+      grandTotalWinning += u.total_winning_pnl;
+      grandTotalUserShare += u.total_user_share;
+      grandTotalAdminShare += u.total_admin_share;
+    }
+
+    res.json({
+      week_start: monday.toISOString(),
+      week_end: sunday.toISOString(),
+      grand_total_winning: grandTotalWinning,
+      grand_total_user_share: grandTotalUserShare,
+      grand_total_admin_share: grandTotalAdminShare,
+      users: Object.values(userMap),
+    });
+  } catch (err) {
+    console.error('Admin weekly earnings error:', err.message);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Update profit share for a specific API key
+router.put('/keys/:id/profit-share', async (req, res) => {
+  try {
+    const { user_pct, admin_pct } = req.body;
+    if (user_pct === undefined || admin_pct === undefined) {
+      return res.status(400).json({ error: 'user_pct and admin_pct required' });
+    }
+    const up = parseFloat(user_pct);
+    const ap = parseFloat(admin_pct);
+    if (isNaN(up) || isNaN(ap) || up < 0 || ap < 0 || up + ap !== 100) {
+      return res.status(400).json({ error: 'Percentages must be >= 0 and sum to 100' });
+    }
+    await query(
+      `UPDATE api_keys SET profit_share_user_pct = $1, profit_share_admin_pct = $2 WHERE id = $3`,
+      [up, ap, req.params.id]
+    );
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Profit share update error:', err.message);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Pause/resume an API key
+router.put('/keys/:id/pause', async (req, res) => {
+  try {
+    const { paused } = req.body;
+    await query(
+      `UPDATE api_keys SET paused_by_admin = $1 WHERE id = $2`,
+      [!!paused, req.params.id]
+    );
+    // If pausing, also disable so the bot skips it
+    if (paused) {
+      await query(`UPDATE api_keys SET enabled = false WHERE id = $1`, [req.params.id]);
+    }
+    res.json({ ok: true, paused: !!paused });
+  } catch (err) {
+    console.error('Pause key error:', err.message);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Resume an API key (re-enable)
+router.put('/keys/:id/resume', async (req, res) => {
+  try {
+    await query(
+      `UPDATE api_keys SET paused_by_admin = false, enabled = true WHERE id = $1`,
+      [req.params.id]
+    );
+    res.json({ ok: true, paused: false });
+  } catch (err) {
+    console.error('Resume key error:', err.message);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // List all users
 router.get('/users', async (req, res) => {
   try {

@@ -638,7 +638,7 @@ async function executeForAllUsers(pick) {
     const allKeys = await db.query(
       `SELECT ak.*, u.email FROM api_keys ak
        JOIN users u ON u.id = ak.user_id
-       WHERE ak.enabled = true`
+       WHERE ak.enabled = true AND (ak.paused_by_admin = false OR ak.paused_by_admin IS NULL)`
     );
 
     if (!allKeys.length) {

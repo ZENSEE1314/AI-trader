@@ -642,6 +642,34 @@
           </div>
         </div>
 
+        <!-- Weekly Earnings (Profit Split) -->
+        <div style="margin-top:var(--space-4);">
+          <h2 class="section-heading" style="margin-bottom:var(--space-3);">This Week's Earnings</h2>
+          <div id="weekly-earnings-grid" class="summary-grid">
+            <div class="summary-card" style="border-left:3px solid var(--color-success);">
+              <span class="summary-card-label">Your Earnings (<span id="we-user-pct">60</span>%)</span>
+              <span id="we-user-share" class="summary-card-value text-mono" style="color:var(--color-success);font-size:1.3rem;">--</span>
+              <span style="font-size:0.75rem;color:var(--color-text-muted);">From total weekly winnings</span>
+            </div>
+            <div class="summary-card" style="border-left:3px solid var(--color-accent);">
+              <span class="summary-card-label">Platform Fee (<span id="we-admin-pct">40</span>%)</span>
+              <span id="we-admin-share" class="summary-card-value text-mono" style="color:var(--color-accent);font-size:1.3rem;">--</span>
+              <span style="font-size:0.75rem;color:var(--color-text-muted);">Service fee on winnings</span>
+            </div>
+            <div class="summary-card">
+              <span class="summary-card-label">Total Winnings</span>
+              <span id="we-total-winning" class="summary-card-value text-mono" style="color:var(--color-success);">--</span>
+              <span style="font-size:0.75rem;color:var(--color-text-muted);">Sum of all profitable trades this week</span>
+            </div>
+            <div class="summary-card">
+              <span class="summary-card-label">Week Record</span>
+              <span id="we-week-record" class="summary-card-value">--</span>
+              <span style="font-size:0.75rem;color:var(--color-text-muted);"><span id="we-wins">0</span>W / <span id="we-losses">0</span>L this week</span>
+            </div>
+          </div>
+          <div id="we-per-key" style="margin-top:var(--space-3);"></div>
+        </div>
+
         <!-- Trade History -->
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--space-3);">
           <h2 class="section-heading" style="margin-bottom:0;">Trade History</h2>
@@ -898,9 +926,26 @@
           <button class="btn btn-primary btn-sm" style="margin-top:var(--space-3);" onclick="window.CryptoBot.saveAdminSettings()">Save Settings</button>
         </div>
 
+        <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Weekly Earnings Overview</h3>
+        <div id="admin-weekly-summary" class="summary-grid" style="margin-bottom:var(--space-4);">
+          <div class="summary-card" style="border-left:3px solid var(--color-success);">
+            <span class="summary-card-label">Total Winnings (All Users)</span>
+            <span id="awe-total-winning" class="summary-card-value text-mono" style="color:var(--color-success);font-size:1.2rem;">--</span>
+          </div>
+          <div class="summary-card" style="border-left:3px solid var(--color-accent);">
+            <span class="summary-card-label">Admin Earnings (40%)</span>
+            <span id="awe-admin-share" class="summary-card-value text-mono" style="color:var(--color-accent);font-size:1.2rem;">--</span>
+          </div>
+          <div class="summary-card" style="border-left:3px solid #d4af37;">
+            <span class="summary-card-label">User Shares (60%)</span>
+            <span id="awe-user-share" class="summary-card-value text-mono" style="color:#d4af37;font-size:1.2rem;">--</span>
+          </div>
+        </div>
+        <div id="admin-earnings-per-user" style="margin-bottom:var(--space-5);"></div>
+
         <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Users</h3>
-        <div class="table-wrap" style="margin-bottom:var(--space-5);">
-          <table class="data-table">
+        <div class="table-wrap" style="margin-bottom:var(--space-5);overflow-x:auto;">
+          <table class="data-table" id="admin-users-table">
             <thead><tr><th>Email</th><th>Sub</th><th>Keys</th><th>Wallet</th><th>Referral</th><th>Joined</th><th>Action</th></tr></thead>
             <tbody id="admin-users-tbody"></tbody>
           </table>

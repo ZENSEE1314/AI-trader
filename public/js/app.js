@@ -285,13 +285,15 @@
       const summaryUrl = state.tradesPeriod && state.tradesPeriod !== 'all'
         ? `/api/dashboard/summary?period=${state.tradesPeriod}`
         : '/api/dashboard/summary';
-      const [summary, walletData] = await Promise.all([
+      const [summary, walletData, weeklyEarnings] = await Promise.all([
         api('GET', summaryUrl),
         api('GET', '/api/dashboard/futures-wallet').catch(() => ({ balance: 0, wallets: [] })),
+        api('GET', '/api/dashboard/weekly-earnings').catch(() => null),
         loadTrades(),
       ]);
       renderSummary(summary);
       renderWallets(walletData);
+      if (weeklyEarnings) renderWeeklyEarnings(weeklyEarnings);
     } catch (err) {
       showToast('Failed to load dashboard.', 'error');
     }
@@ -334,6 +336,46 @@
     }
 
     grid.innerHTML = html;
+  }
+
+  function renderWeeklyEarnings(data) {
+    const el = (id) => document.getElementById(id);
+    const userShare = parseFloat(data.user_share) || 0;
+    const adminShare = parseFloat(data.admin_share) || 0;
+    const totalWinning = parseFloat(data.winning_pnl) || 0;
+
+    el('we-user-pct').textContent = data.user_share_pct || 60;
+    el('we-admin-pct').textContent = data.admin_share_pct || 40;
+    el('we-user-share').textContent = `$${userShare.toFixed(2)}`;
+    el('we-admin-share').textContent = `$${adminShare.toFixed(2)}`;
+    el('we-total-winning').textContent = `$${totalWinning.toFixed(2)}`;
+    el('we-wins').textContent = data.total_wins || 0;
+    el('we-losses').textContent = data.total_losses || 0;
+
+    const totalTrades = (data.total_wins || 0) + (data.total_losses || 0);
+    const winRate = totalTrades > 0 ? ((data.total_wins / totalTrades) * 100).toFixed(0) : '0';
+    el('we-week-record').textContent = `${winRate}% WR`;
+
+    // Per-key breakdown
+    const perKeyEl = el('we-per-key');
+    if (data.per_key && data.per_key.length > 1) {
+      perKeyEl.innerHTML = data.per_key.map(k => {
+        const pnl = parseFloat(k.winning_pnl) || 0;
+        const us = parseFloat(k.user_share) || 0;
+        return `<div class="summary-card" style="padding:var(--space-3);display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+          <div>
+            <strong style="font-size:0.85rem;">${escapeHtml(k.label || k.platform)}</strong>
+            <span style="font-size:0.75rem;color:var(--color-text-muted);margin-left:8px;">${k.win_count}W / ${k.loss_count}L</span>
+          </div>
+          <div style="text-align:right;">
+            <span class="text-mono" style="color:var(--color-success);font-size:0.9rem;">+$${pnl.toFixed(2)}</span>
+            <span style="font-size:0.7rem;color:var(--color-text-muted);margin-left:4px;">→ Your share: $${us.toFixed(2)}</span>
+          </div>
+        </div>`;
+      }).join('');
+    } else {
+      perKeyEl.innerHTML = '';
+    }
   }
 
   function renderSummary(s) {
@@ -899,15 +941,17 @@
   async function loadAdmin() {
     if (!state.user?.is_admin) return;
     try {
-      const [users, subs, wds, settings] = await Promise.all([
+      const [users, subs, wds, settings, weeklyEarnings] = await Promise.all([
         api('GET', '/api/admin/users'),
         api('GET', '/api/admin/subscriptions'),
         api('GET', '/api/admin/withdrawals'),
         api('GET', '/api/admin/settings'),
+        api('GET', '/api/admin/weekly-earnings').catch(() => null),
       ]);
       renderAdminUsers(users);
       renderAdminSubs(subs);
       renderAdminWithdrawals(wds);
+      if (weeklyEarnings) renderAdminWeeklyEarnings(weeklyEarnings);
       // Fill settings fields
       $('#admin-price').value = settings.sub_price || '29.99';
       $('#admin-signal-price').value = settings.signal_price || '500';
@@ -927,6 +971,105 @@
         commission_tier3: $('#admin-tier3').value,
       });
       showToast('Settings saved', 'success');
+    } catch (err) { showToast(err.message, 'error'); }
+  }
+
+  function renderAdminWeeklyEarnings(data) {
+    const el = (id) => document.getElementById(id);
+    el('awe-total-winning').textContent = `$${(parseFloat(data.grand_total_winning) || 0).toFixed(2)}`;
+    el('awe-admin-share').textContent = `$${(parseFloat(data.grand_total_admin_share) || 0).toFixed(2)}`;
+    el('awe-user-share').textContent = `$${(parseFloat(data.grand_total_user_share) || 0).toFixed(2)}`;
+
+    const container = document.getElementById('admin-earnings-per-user');
+    if (!data.users || data.users.length === 0) {
+      container.innerHTML = '';
+      return;
+    }
+
+    container.innerHTML = data.users.filter(u => u.keys.length > 0).map(u => {
+      const keysHtml = u.keys.map(k => {
+        const isPaused = k.paused || !k.enabled;
+        return `<div style="background:var(--color-bg);border:1px solid var(--color-border-muted);border-radius:var(--radius-md);padding:var(--space-3);margin-top:8px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+            <div>
+              <strong style="font-size:0.8rem;">${escapeHtml(k.label)}</strong>
+              <span style="font-size:0.7rem;color:var(--color-text-muted);margin-left:4px;">${k.platform?.toUpperCase()}</span>
+              ${isPaused ? '<span class="badge-status" style="color:var(--color-danger);margin-left:4px;">⏸ PAUSED</span>' : ''}
+            </div>
+            <div style="display:flex;align-items:center;gap:6px;">
+              <span class="text-mono" style="font-size:0.85rem;color:var(--color-success);">+$${(parseFloat(k.winning_pnl)||0).toFixed(2)}</span>
+              <span style="font-size:0.7rem;color:var(--color-text-muted);">${k.win_count}W</span>
+            </div>
+          </div>
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;flex-wrap:wrap;gap:8px;">
+            <div style="display:flex;gap:8px;align-items:center;">
+              <div style="font-size:0.75rem;">
+                <span style="color:var(--color-text-muted);">Split:</span>
+                <span style="color:var(--color-success);">${k.user_share_pct||60}% user</span> /
+                <span style="color:var(--color-accent);">${k.admin_share_pct||40}% admin</span>
+              </div>
+              <button class="btn btn-ghost btn-sm" style="font-size:0.7rem;padding:2px 8px;min-height:24px;" onclick="window.CryptoBot.adminEditSplit(${k.key_id},${k.user_share_pct||60},${k.admin_share_pct||40})">Edit</button>
+            </div>
+            <div style="display:flex;gap:6px;">
+              ${isPaused
+                ? `<button class="btn btn-primary btn-sm" style="font-size:0.7rem;padding:2px 10px;min-height:26px;" onclick="window.CryptoBot.adminResumeKey(${k.key_id})">▶ Resume</button>`
+                : `<button class="btn btn-danger btn-sm" style="font-size:0.7rem;padding:2px 10px;min-height:26px;" onclick="window.CryptoBot.adminPauseKey(${k.key_id})">⏸ Pause</button>`
+              }
+            </div>
+          </div>
+          <div style="font-size:0.7rem;color:var(--color-text-muted);margin-top:4px;">
+            User earns: <strong style="color:var(--color-success);">$${(parseFloat(k.user_share)||0).toFixed(2)}</strong> ·
+            Admin earns: <strong style="color:var(--color-accent);">$${(parseFloat(k.admin_share)||0).toFixed(2)}</strong>
+          </div>
+        </div>`;
+      }).join('');
+
+      return `<div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-4);margin-bottom:var(--space-3);">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+          <div>
+            <strong style="font-size:0.95rem;">${escapeHtml(u.email)}</strong>
+            <span style="font-size:0.75rem;color:var(--color-text-muted);margin-left:8px;">${u.total_trades} trades · ${u.total_wins}W</span>
+          </div>
+          <div style="text-align:right;">
+            <div class="text-mono" style="font-size:0.9rem;color:var(--color-success);">Winnings: $${(parseFloat(u.total_winning_pnl)||0).toFixed(2)}</div>
+            <div style="font-size:0.7rem;color:var(--color-text-muted);">
+              Admin: <span style="color:var(--color-accent);">$${(parseFloat(u.total_admin_share)||0).toFixed(2)}</span> ·
+              User: <span style="color:var(--color-success);">$${(parseFloat(u.total_user_share)||0).toFixed(2)}</span>
+            </div>
+          </div>
+        </div>
+        ${keysHtml}
+      </div>`;
+    }).join('');
+  }
+
+  async function adminEditSplit(keyId, currentUserPct, currentAdminPct) {
+    const newUserPct = prompt(`Set profit split for this key\n\nUser share % (currently ${currentUserPct}%):`, currentUserPct);
+    if (newUserPct === null) return;
+    const parsed = parseFloat(newUserPct);
+    if (isNaN(parsed) || parsed < 0 || parsed > 100) return showToast('Invalid percentage', 'error');
+    const adminPct = 100 - parsed;
+    try {
+      await api('PUT', `/api/admin/keys/${keyId}/profit-share`, { user_pct: parsed, admin_pct: adminPct });
+      showToast(`Split updated: ${parsed}% user / ${adminPct}% admin`, 'success');
+      loadAdmin();
+    } catch (err) { showToast(err.message, 'error'); }
+  }
+
+  async function adminPauseKey(keyId) {
+    if (!confirm('Pause this API key? The bot will stop trading for this key.')) return;
+    try {
+      await api('PUT', `/api/admin/keys/${keyId}/pause`, { paused: true });
+      showToast('API key paused', 'success');
+      loadAdmin();
+    } catch (err) { showToast(err.message, 'error'); }
+  }
+
+  async function adminResumeKey(keyId) {
+    try {
+      await api('PUT', `/api/admin/keys/${keyId}/resume`);
+      showToast('API key resumed', 'success');
+      loadAdmin();
     } catch (err) { showToast(err.message, 'error'); }
   }
 
@@ -1273,6 +1416,7 @@
     toggleSettings, saveSettings, deleteKey, showToast,
     payWithWallet, payBankTransfer, payStripe, requestWithdraw,
     adminAction, adminSub, adminWd, saveAdminSettings, adminEditWallet, clearErrors,
+    adminEditSplit, adminPauseKey, adminResumeKey,
     goToAuth, selectPlan, showLoginForm, onPlatformChange,
     searchCoins, addCoin, removeCoin,
     filterLogs, clearLogs,
