@@ -18,8 +18,9 @@ const REQUEST_TIMEOUT = 15000;
 const TOP_N_COINS = 100;
 const MIN_24H_VOLUME = 10_000_000;
 
-const RR_RATIO = 1.5;
-const MAX_RISK_PCT = 0.03; // 3% max risk per trade
+// Fixed risk: 10% margin, 1.5% SL (30% margin at 20x), 2.25% TP (45% margin at 20x)
+const FIXED_SL_PCT = 0.015;
+const FIXED_TP_PCT = 0.0225;
 
 // Swing lengths per timeframe
 const SWING_LENGTHS = { '4h': 10, '1h': 10, '15m': 10, '1m': 5 };
@@ -237,29 +238,50 @@ function isAtKeyLevel(price, pdh, pdl, vwapBands, direction) {
            level: nearPDH ? 'PDH' : nearUpperVWAP ? 'VWAP-Upper' : nearVWAP ? 'VWAP' : 'none' };
 }
 
-// ── Daily Stats ─────────────────────────────────────────────
+// ── Daily Stats (resets at 7am) ─────────────────────────────
+// Rule: 2 consecutive losses = stop trading for the day
+// Win resets the consecutive loss counter
+// E.g. W-W-W-L-W-L → ongoing (max consecutive losses = 1)
+// E.g. W-L-L → STOP (2 consecutive losses)
 
-const dailyStats = { date: '', trades: 0, consecutiveLosses: 0 };
+const dailyStats = { date: '', trades: 0, consecutiveLosses: 0, lastResetHour: -1 };
+
+function getTradingDay() {
+  // Trading day resets at 7am
+  const now = new Date();
+  const h = now.getHours();
+  const d = new Date(now);
+  if (h < 7) d.setDate(d.getDate() - 1); // before 7am = still yesterday
+  return d.toISOString().slice(0, 10);
+}
 
 function recordDailyTrade(isWin) {
-  const today = new Date().toISOString().slice(0, 10);
-  if (dailyStats.date !== today) {
-    dailyStats.date = today;
+  const tradingDay = getTradingDay();
+  if (dailyStats.date !== tradingDay) {
+    dailyStats.date = tradingDay;
     dailyStats.trades = 0;
     dailyStats.consecutiveLosses = 0;
   }
   dailyStats.trades++;
-  if (isWin) dailyStats.consecutiveLosses = 0;
-  else dailyStats.consecutiveLosses++;
+  if (isWin) {
+    dailyStats.consecutiveLosses = 0; // win resets the counter
+  } else {
+    dailyStats.consecutiveLosses++;
+  }
 }
 
 function checkDailyLimits() {
-  // No revenge trading: if stopped out, skip next signal
-  if (dailyStats.consecutiveLosses >= 1) {
-    const result = { canTrade: true };
-    // Reset after checking — allow 1 trade after cooldown
+  // Check if we've crossed 7am and need to reset
+  const tradingDay = getTradingDay();
+  if (dailyStats.date !== tradingDay) {
+    dailyStats.date = tradingDay;
+    dailyStats.trades = 0;
     dailyStats.consecutiveLosses = 0;
-    return result;
+  }
+
+  // 2 consecutive losses = stop trading for the day
+  if (dailyStats.consecutiveLosses >= 2) {
+    return { canTrade: false, reason: `${dailyStats.consecutiveLosses} consecutive losses — stopped for today. Resets at 7am.` };
   }
   return { canTrade: true };
 }
@@ -370,34 +392,23 @@ async function analyzeLHHL(ticker, params, dailyBiasCache) {
 
   // ┌─────────────────────────────────────────────────────────┐
   // │ Step 6: Risk Management                                 │
+  // │ 10% margin, 1.5% SL (30% of margin at 20x),            │
+  // │ 2.25% TP (45% of margin at 20x)                        │
   // └─────────────────────────────────────────────────────────┘
-  // SL at 1M swing low (long) or 1M swing high (short) + 0.1% buffer
-  const slPrice = direction === 'LONG'
-    ? struct1m.lastLow.price * 0.999   // below 1M swing low
-    : struct1m.lastHigh.price * 1.001; // above 1M swing high
+  const FIXED_SL_PCT = 0.015;  // 1.5% price distance → 30% margin loss at 20x
+  const FIXED_TP_PCT = 0.0225; // 2.25% price distance → 45% margin profit at 20x
 
-  const slDist = Math.abs(price - slPrice) / price;
+  const sl = direction === 'LONG'
+    ? price * (1 - FIXED_SL_PCT)
+    : price * (1 + FIXED_SL_PCT);
+  const tp = direction === 'LONG'
+    ? price * (1 + FIXED_TP_PCT)
+    : price * (1 - FIXED_TP_PCT);
+  const slDist = FIXED_SL_PCT;
+  const tpDist = FIXED_TP_PCT;
 
-  // Minimum SL distance guard
-  const MIN_SL_PCT = 0.0015;
-  if (slDist < MIN_SL_PCT) {
-    bLog.scan(`${symbol}: SL too tight (${(slDist * 100).toFixed(3)}%) — skipping`);
-    return null;
-  }
-
-  // Max 3% risk check (slDist * leverage should not exceed MAX_RISK_PCT equivalent)
   const BTC_ETH = new Set(['BTCUSDT', 'ETHUSDT']);
-  const leverage = BTC_ETH.has(symbol) ? (params.LEV_BTC_ETH || 100) : (params.LEV_ALT || 20);
-
-  const marginRisk = slDist * leverage;
-  if (marginRisk > MAX_RISK_PCT * leverage) {
-    bLog.scan(`${symbol}: SL risk ${(slDist * 100).toFixed(2)}% exceeds 3% max — skipping`);
-    return null;
-  }
-
-  const tpDist = slDist * RR_RATIO;
-  const sl = slPrice;
-  const tp = direction === 'LONG' ? price + (price * tpDist) : price - (price * tpDist);
+  const leverage = BTC_ETH.has(symbol) ? Math.min(params.LEV_BTC_ETH || 20, 20) : Math.min(params.LEV_ALT || 20, 20);
 
   // ┌─────────────────────────────────────────────────────────┐
   // │ Score                                                    │
@@ -491,7 +502,7 @@ async function scanSMC(log, opts = {}) {
   const minScore = params.MIN_SCORE || 8;
   const dailyBiasCache = new Map();
 
-  bLog.scan(`Refined scan: ${topCoins.length} coins | RR=1:${RR_RATIO} MaxRisk=${MAX_RISK_PCT * 100}%`);
+  bLog.scan(`Refined scan: ${topCoins.length} coins | SL=1.5% TP=2.25% | Margin=10%`);
 
   const results = [];
   let analyzed = 0;

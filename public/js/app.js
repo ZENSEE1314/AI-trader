@@ -522,8 +522,8 @@
       const maxPos = k.max_positions || 1;
       const allowedCoins = k.allowed_coins || '';
       const bannedCoins = k.banned_coins || '';
-      const tpPct = k.tp_pct != null ? (parseFloat(k.tp_pct) * 100).toFixed(1) : '4.5';
-      const slPct = k.sl_pct != null ? (parseFloat(k.sl_pct) * 100).toFixed(1) : '3.0';
+      const tpPct = k.tp_pct != null ? (parseFloat(k.tp_pct) * 100).toFixed(2) : '2.25';
+      const slPct = k.sl_pct != null ? (parseFloat(k.sl_pct) * 100).toFixed(2) : '1.50';
       const maxConsecLoss = k.max_consec_loss || 2;
       const topNCoins = k.top_n_coins || 50;
 

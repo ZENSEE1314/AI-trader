@@ -35,30 +35,8 @@ const CONFIG = {
   ],
 };
 
-// ── Daily Capital Lock (resets at 7am each day) ─────────────
-// Capital is gauged at 7am and stays fixed until 7am the next day
-const CAPITAL_RESET_HOUR = 7; // 7am local time
-const dailyCapital = new Map(); // key -> { balance, lockedAt }
-
+// ── Compound: always use current wallet balance ─────────────
 function getDailyCapital(key, currentBalance) {
-  const now = new Date();
-  const entry = dailyCapital.get(key);
-
-  if (entry) {
-    // Check if we've passed the next 7am reset point
-    const resetTime = new Date(entry.lockedAt);
-    resetTime.setHours(CAPITAL_RESET_HOUR, 0, 0, 0);
-    if (resetTime <= entry.lockedAt) {
-      resetTime.setDate(resetTime.getDate() + 1);
-    }
-    if (now < resetTime) {
-      return entry.balance;
-    }
-  }
-
-  // Lock the current balance for this trading day
-  dailyCapital.set(key, { balance: currentBalance, lockedAt: now });
-  bLog.trade(`Capital locked for ${key}: $${currentBalance.toFixed(2)} (resets at ${CAPITAL_RESET_HOUR}:00)`);
   return currentBalance;
 }
 
@@ -691,21 +669,29 @@ async function executeForAllUsers(pick) {
         // Per-user settings from their API key config
         const userLev = Math.min(parseInt(key.leverage) || 20, 125);
         const walletSizePct = parseFloat(key.risk_pct) || aiParams.WALLET_SIZE_PCT || 0.10;
-        const userTP = parseFloat(key.tp_pct) || 0.045;
-        const userSL = parseFloat(key.sl_pct) || 0.03;
+        const userTP = parseFloat(key.tp_pct) || 0.0225; // 2.25% → 45% margin at 20x
+        const userSL = parseFloat(key.sl_pct) || 0.015;  // 1.5% → 30% margin at 20x
         const userMaxConsecLoss = parseInt(key.max_consec_loss) || 2;
 
-        // Check consecutive losses from the end for this user
+        // Check consecutive losses from the end for this user (resets at 7am)
+        const now = new Date();
+        const h = now.getHours();
+        const dayStart = new Date(now);
+        if (h < 7) dayStart.setDate(dayStart.getDate() - 1);
+        dayStart.setHours(7, 0, 0, 0);
+
         const recentTrades = await db.query(
-          `SELECT status FROM trades WHERE user_id = $1 AND status IN ('WIN','LOSS')
-           ORDER BY closed_at DESC LIMIT $2`,
-          [key.user_id, userMaxConsecLoss]
+          `SELECT status FROM trades
+           WHERE user_id = $1 AND status IN ('WIN','LOSS')
+             AND closed_at >= $2
+           ORDER BY closed_at DESC LIMIT $3`,
+          [key.user_id, dayStart, userMaxConsecLoss]
         );
         // All recent trades must be LOSS to count as consecutive
         const allLosses = recentTrades.length >= userMaxConsecLoss &&
           recentTrades.every(t => t.status === 'LOSS');
         if (allLosses) {
-          bLog.trade(`User ${key.email}: ${userMaxConsecLoss} consecutive losses — cooling down`);
+          bLog.trade(`User ${key.email}: ${userMaxConsecLoss} consecutive losses today — cooling down (resets 7am)`);
           return;
         }
 
