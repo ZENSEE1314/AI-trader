@@ -35,14 +35,36 @@ const CONFIG = {
   ],
 };
 
-// ── Capital: always uses current wallet balance ─────────────
+// ── Daily Capital Lock (resets at 7am each day) ─────────────
+// Capital is gauged at 7am and stays fixed until 7am the next day
+const CAPITAL_RESET_HOUR = 7; // 7am local time
+const dailyCapital = new Map(); // key -> { balance, lockedAt }
+
 function getDailyCapital(key, currentBalance) {
+  const now = new Date();
+  const entry = dailyCapital.get(key);
+
+  if (entry) {
+    // Check if we've passed the next 7am reset point
+    const resetTime = new Date(entry.lockedAt);
+    resetTime.setHours(CAPITAL_RESET_HOUR, 0, 0, 0);
+    if (resetTime <= entry.lockedAt) {
+      resetTime.setDate(resetTime.getDate() + 1);
+    }
+    if (now < resetTime) {
+      return entry.balance;
+    }
+  }
+
+  // Lock the current balance for this trading day
+  dailyCapital.set(key, { balance: currentBalance, lockedAt: now });
+  bLog.trade(`Capital locked for ${key}: $${currentBalance.toFixed(2)} (resets at ${CAPITAL_RESET_HOUR}:00)`);
   return currentBalance;
 }
 
 // AI-tuned leverage — params come from getOptimalParams()
 function getLeverage(symbol, price, params = {}) {
-  if (BTC_ETH_SYMBOLS.has(symbol)) return Math.min(params.LEV_BTC_ETH || 20, 50);
+  if (BTC_ETH_SYMBOLS.has(symbol)) return Math.min(params.LEV_BTC_ETH || 20, 20);
   return Math.min(params.LEV_ALT || 20, 20);
 }
 
