@@ -35,6 +35,10 @@ router.post('/', async (req, res) => {
     const validPlatforms = ['binance', 'bitunix'];
     if (!validPlatforms.includes(platform)) return res.status(400).json({ error: 'Unsupported platform' });
 
+    // Check if admin
+    const user = await query('SELECT is_admin FROM users WHERE id = $1', [req.userId]);
+    const isAdmin = user.length && user[0].is_admin;
+
     // Non-admin: check max 3 keys
     if (!isAdmin) {
       const count = await query('SELECT COUNT(*) as cnt FROM api_keys WHERE user_id = $1', [req.userId]);
