@@ -178,7 +178,7 @@ router.put('/keys/:id/resume', async (req, res) => {
 router.get('/users', async (req, res) => {
   try {
     const rows = await query(
-      `SELECT u.id, u.email, u.is_blocked, u.is_admin, u.referral_code, u.wallet_balance, u.created_at,
+      `SELECT u.id, u.email, u.is_blocked, u.is_admin, u.approved_no_sub, u.referral_code, u.wallet_balance, u.created_at,
               (SELECT COUNT(*) FROM api_keys WHERE user_id = u.id) as key_count,
               (SELECT status FROM subscriptions WHERE user_id = u.id ORDER BY created_at DESC LIMIT 1) as sub_status,
               (SELECT expires_at FROM subscriptions WHERE user_id = u.id AND status = 'active' ORDER BY expires_at DESC LIMIT 1) as sub_expires,
@@ -188,6 +188,18 @@ router.get('/users', async (req, res) => {
     res.json(rows);
   } catch (err) {
     console.error('Admin users error:', err.message);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Approve/revoke user to trade without subscription
+router.put('/users/:id/approve-no-sub', async (req, res) => {
+  try {
+    const { approved } = req.body;
+    await query('UPDATE users SET approved_no_sub = $1 WHERE id = $2', [!!approved, req.params.id]);
+    res.json({ ok: true, approved: !!approved });
+  } catch (err) {
+    console.error('Approve no-sub error:', err.message);
     res.status(500).json({ error: 'Server error' });
   }
 });

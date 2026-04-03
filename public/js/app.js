@@ -1073,6 +1073,14 @@
     } catch (err) { showToast(err.message, 'error'); }
   }
 
+  async function adminApproveNoSub(userId, approved) {
+    try {
+      await api('PUT', `/api/admin/users/${userId}/approve-no-sub`, { approved });
+      showToast(approved ? 'User approved (no sub required)' : 'Approval revoked', 'success');
+      loadAdmin();
+    } catch (err) { showToast(err.message, 'error'); }
+  }
+
   function renderAdminUsers(users) {
     $('#admin-users-tbody').innerHTML = users.map(u => {
       const bal = parseFloat(u.wallet_balance || 0).toFixed(2);
@@ -1083,10 +1091,13 @@
       <td class="text-mono">$${bal} <button class="btn btn-ghost btn-sm" style="font-size:0.7rem;padding:2px 6px;" onclick="window.CryptoBot.adminEditWallet(${u.id},'${escapeHtml(u.email)}',${bal})">Edit</button></td>
       <td>${escapeHtml(u.referral_code || '-')}</td>
       <td>${formatDate(u.created_at)}</td>
-      <td>
+      <td style="white-space:nowrap;">
+        ${u.approved_no_sub
+          ? `<button class="btn btn-ghost btn-sm" style="font-size:0.7rem;color:var(--color-success);border-color:var(--color-success);" onclick="window.CryptoBot.adminApproveNoSub(${u.id},false)" title="Revoke free access">✓ Free</button>`
+          : `<button class="btn btn-ghost btn-sm" style="font-size:0.7rem;" onclick="window.CryptoBot.adminApproveNoSub(${u.id},true)" title="Approve without subscription">+ Approve</button>`}
         ${u.is_blocked
-          ? `<button class="btn btn-primary btn-sm" onclick="window.CryptoBot.adminAction('unblock',${u.id})">Unblock</button>`
-          : `<button class="btn btn-danger btn-sm" onclick="window.CryptoBot.adminAction('block',${u.id})">Block</button>`}
+          ? `<button class="btn btn-primary btn-sm" style="margin-left:4px;" onclick="window.CryptoBot.adminAction('unblock',${u.id})">Unblock</button>`
+          : `<button class="btn btn-danger btn-sm" style="margin-left:4px;" onclick="window.CryptoBot.adminAction('block',${u.id})">Block</button>`}
       </td>
     </tr>`;
     }).join('');
@@ -1416,7 +1427,7 @@
     toggleSettings, saveSettings, deleteKey, showToast,
     payWithWallet, payBankTransfer, payStripe, requestWithdraw,
     adminAction, adminSub, adminWd, saveAdminSettings, adminEditWallet, clearErrors,
-    adminEditSplit, adminPauseKey, adminResumeKey,
+    adminEditSplit, adminPauseKey, adminResumeKey, adminApproveNoSub,
     goToAuth, selectPlan, showLoginForm, onPlatformChange,
     searchCoins, addCoin, removeCoin,
     filterLogs, clearLogs,

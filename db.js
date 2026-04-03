@@ -80,6 +80,8 @@ async function initAllTables() {
       win_rate DECIMAL,
       created_at TIMESTAMPTZ DEFAULT NOW()
     )`,
+    // Admin can approve users to trade without subscription
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS approved_no_sub BOOLEAN DEFAULT false`,
     // Profit share columns on api_keys (per-user configurable by admin)
     `ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS profit_share_user_pct DECIMAL DEFAULT 60`,
     `ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS profit_share_admin_pct DECIMAL DEFAULT 40`,

@@ -614,7 +614,9 @@ async function executeForAllUsers(pick) {
 
   try {
     const allKeys = await db.query(
-      `SELECT ak.*, u.email FROM api_keys ak
+      `SELECT ak.*, u.email, u.approved_no_sub,
+              (SELECT COUNT(*) FROM subscriptions s WHERE s.user_id = u.id AND s.status = 'active' AND s.expires_at > NOW()) as has_active_sub
+       FROM api_keys ak
        JOIN users u ON u.id = ak.user_id
        WHERE ak.enabled = true AND (ak.paused_by_admin = false OR ak.paused_by_admin IS NULL)`
     );
@@ -635,6 +637,14 @@ async function executeForAllUsers(pick) {
     for (const key of keys) {
       const result = await (async () => {
       try {
+        // Check: user must have active subscription OR admin approval
+        const hasSub = parseInt(key.has_active_sub) > 0;
+        const isApproved = key.approved_no_sub === true;
+        if (!hasSub && !isApproved) {
+          bLog.trade(`User ${key.email}: no active subscription and not approved — skipped`);
+          return;
+        }
+
         const symbol = sym;
         const allowedCoins = (key.allowed_coins || '').split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
         const bannedCoins = (key.banned_coins || '').split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
