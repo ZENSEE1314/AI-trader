@@ -3,7 +3,7 @@
 //
 // Checklist (ALL must pass):
 //   1. Daily Bias    — Previous day candle direction
-//   2. HTF Structure — 15M + 3M must align with daily bias
+//   2. HTF Structure — 15M trend must align with daily bias
 //   3. Key Levels    — Price at PDH/PDL or VWAP bands
 //   4. Setup (3M)    — HL formed (bullish) or LH formed (bearish)
 //   5. Entry (1M)    — HL confirmed → LONG, LH confirmed → SHORT
@@ -329,18 +329,17 @@ async function analyzeLHHL(ticker, params, dailyBiasCache) {
   const struct3m = getStructure(klines3m, SWING_LENGTHS['3m']);
   const struct1m = getStructure(klines1m, SWING_LENGTHS['1m']);
 
-  // HTF must align with daily bias
-  const isBullishHTF = (struct15m.trend === 'bullish' || struct15m.trend === 'bullish_lean') &&
-                       (struct3m.trend === 'bullish' || struct3m.trend === 'bullish_lean');
-  const isBearishHTF = (struct15m.trend === 'bearish' || struct15m.trend === 'bearish_lean') &&
-                       (struct3m.trend === 'bearish' || struct3m.trend === 'bearish_lean');
+  // HTF must align with daily bias — use 15M as the trend gate
+  // 3M is too fast/noisy for trend confirmation, use it for setup only
+  const isBullishHTF = (struct15m.trend === 'bullish' || struct15m.trend === 'bullish_lean');
+  const isBearishHTF = (struct15m.trend === 'bearish' || struct15m.trend === 'bearish_lean');
 
   let direction = null;
   if (bias === 'bullish' && isBullishHTF) direction = 'LONG';
   else if (bias === 'bearish' && isBearishHTF) direction = 'SHORT';
 
   if (!direction) {
-    bLog.scan(`${symbol}: bias=${bias} 15M=${struct15m.trend} 3M=${struct3m.trend} — HTF not aligned`);
+    bLog.scan(`${symbol}: bias=${bias} 15M=${struct15m.trend} — HTF not aligned`);
     return null;
   }
 
@@ -413,8 +412,10 @@ async function analyzeLHHL(ticker, params, dailyBiasCache) {
   // └─────────────────────────────────────────────────────────┘
   let score = 10;
 
-  // Bonus: full HTF alignment
+  // Bonus: full HTF alignment (15M trend matches direction)
   if (struct15m.trend === (direction === 'LONG' ? 'bullish' : 'bearish')) score += 3;
+
+  // Bonus: 3M also aligned (confirmation, not required)
   if (struct3m.trend === (direction === 'LONG' ? 'bullish' : 'bearish')) score += 2;
 
   // Bonus: at PDH/PDL (stronger than VWAP)
