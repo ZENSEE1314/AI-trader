@@ -48,30 +48,42 @@ const { getLogs, getRecentLogs, getHistoricalLogs, getScanStats, getLogCounts } 
 const { authMiddleware } = require('./middleware/auth');
 const aiLearner = require('./ai-learner');
 const { getLatestReport } = require('./nightly-analysis');
+const { query: dbQuery } = require('./db');
+
+// Helper: check if user is admin
+async function isAdmin(userId) {
+  try {
+    const rows = await dbQuery('SELECT is_admin FROM users WHERE id = $1', [userId]);
+    return rows.length > 0 && rows[0].is_admin === true;
+  } catch { return false; }
+}
 
 // Logs: first load reads from DB (persisted), polling reads from memory (fast)
+// Users see system logs + their own. Admin sees everything.
 app.get('/api/logs', authMiddleware, async (req, res) => {
   const since = parseFloat(req.query.since) || 0;
   const category = req.query.category || null;
   const count = parseInt(req.query.count) || 200;
+  const admin = await isAdmin(req.userId);
+  const scope = admin ? 'all' : req.userId;
 
   if (since > 0) {
     // Polling: fast in-memory for new entries
-    res.json(getLogs(since, category));
+    res.json(getLogs(since, category, scope));
   } else {
     // Initial load / refresh: read from PostgreSQL so old logs survive redeploys
     try {
-      const dbLogs = await getHistoricalLogs({ category, limit: count });
+      const dbLogs = await getHistoricalLogs({ category, limit: count, userId: scope });
       if (dbLogs && dbLogs.length > 0) {
         // DB returns newest-first, reverse to oldest-first for display
         res.json(dbLogs.reverse());
       } else {
         // Fallback to in-memory if DB is empty or unavailable
-        res.json(getRecentLogs(count, category));
+        res.json(getRecentLogs(count, category, scope));
       }
     } catch {
       // DB error — fall back to in-memory
-      res.json(getRecentLogs(count, category));
+      res.json(getRecentLogs(count, category, scope));
     }
   }
 });
@@ -79,6 +91,7 @@ app.get('/api/logs', authMiddleware, async (req, res) => {
 // Historical logs from DB (survives redeploys)
 app.get('/api/logs/history', authMiddleware, async (req, res) => {
   try {
+    const admin = await isAdmin(req.userId);
     const logs = await getHistoricalLogs({
       category: req.query.category || null,
       symbol: req.query.symbol || null,
@@ -86,6 +99,7 @@ app.get('/api/logs/history', authMiddleware, async (req, res) => {
       offset: parseInt(req.query.offset) || 0,
       startDate: req.query.start || null,
       endDate: req.query.end || null,
+      userId: admin ? 'all' : req.userId,
     });
     res.json(logs);
   } catch (err) {

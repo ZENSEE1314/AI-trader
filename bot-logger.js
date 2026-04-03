@@ -23,12 +23,15 @@ let dbReady = false;
         symbol VARCHAR(30),
         direction VARCHAR(10),
         score DECIMAL,
-        result VARCHAR(20)
+        result VARCHAR(20),
+        user_id INTEGER
       )
     `);
     await query(`CREATE INDEX IF NOT EXISTS idx_bot_logs_ts ON bot_logs (ts DESC)`);
     await query(`CREATE INDEX IF NOT EXISTS idx_bot_logs_category ON bot_logs (category)`);
     await query(`CREATE INDEX IF NOT EXISTS idx_bot_logs_symbol ON bot_logs (symbol)`);
+    await query(`ALTER TABLE bot_logs ADD COLUMN IF NOT EXISTS user_id INTEGER`);
+    await query(`CREATE INDEX IF NOT EXISTS idx_bot_logs_user_id ON bot_logs (user_id)`);
     dbReady = true;
     console.log('[LOGGER] PostgreSQL bot_logs table ready');
   } catch (err) {
@@ -64,13 +67,14 @@ function extractResult(message) {
   return null;
 }
 
-function addLog(category, message, data = null) {
+function addLog(category, message, data = null, userId = null) {
   const entry = {
     id: Date.now() + Math.random(),
     ts: new Date().toISOString(),
     category,
     message,
     data,
+    user_id: userId,
   };
 
   // In-memory buffer for live dashboard
@@ -89,31 +93,38 @@ function addLog(category, message, data = null) {
     const result = extractResult(message);
 
     query(
-      `INSERT INTO bot_logs (ts, category, message, data, symbol, direction, score, result)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      `INSERT INTO bot_logs (ts, category, message, data, symbol, direction, score, result, user_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
       [entry.ts, category, message, data ? JSON.stringify(data) : null,
-       symbol, direction, score, result]
+       symbol, direction, score, result, userId]
     ).catch(err => {
       console.error('[LOGGER] DB write failed:', err.message);
     });
   }
 }
 
-// Live dashboard: in-memory for speed
-function getLogs(since = 0, category = null) {
+// Live dashboard: in-memory for speed (userId=null = system logs only, 'all' = everything)
+function getLogs(since = 0, category = null, userId = null) {
   let filtered = memoryLogs.filter(l => l.id > since);
   if (category) filtered = filtered.filter(l => l.category === category);
+  if (userId !== 'all') {
+    // Show system logs (no user_id) + caller's own logs
+    filtered = filtered.filter(l => !l.user_id || l.user_id === userId);
+  }
   return filtered;
 }
 
-function getRecentLogs(count = 100, category = null) {
+function getRecentLogs(count = 100, category = null, userId = null) {
   let source = category ? memoryLogs.filter(l => l.category === category) : memoryLogs;
+  if (userId !== 'all') {
+    source = source.filter(l => !l.user_id || l.user_id === userId);
+  }
   return source.slice(-count);
 }
 
 // DB queries for historical logs (survives redeploys)
 async function getHistoricalLogs(opts = {}) {
-  const { category, symbol, limit = 200, offset = 0, startDate, endDate } = opts;
+  const { category, symbol, limit = 200, offset = 0, startDate, endDate, userId } = opts;
   let where = [];
   let params = [];
   let idx = 1;
@@ -123,9 +134,15 @@ async function getHistoricalLogs(opts = {}) {
   if (startDate) { where.push(`ts >= $${idx++}`); params.push(startDate); }
   if (endDate) { where.push(`ts <= $${idx++}`); params.push(endDate); }
 
+  // User scoping: system logs (user_id IS NULL) + own logs, unless admin (userId === 'all')
+  if (userId && userId !== 'all') {
+    where.push(`(user_id IS NULL OR user_id = $${idx++})`);
+    params.push(userId);
+  }
+
   const whereClause = where.length ? `WHERE ${where.join(' AND ')}` : '';
   return query(
-    `SELECT id, ts, category, message, data, symbol, direction, score, result
+    `SELECT id, ts, category, message, data, symbol, direction, score, result, user_id
      FROM bot_logs ${whereClause} ORDER BY ts DESC LIMIT $${idx++} OFFSET $${idx}`,
     [...params, limit, offset]
   );
@@ -176,12 +193,12 @@ async function getLogCounts() {
 
 // Convenience methods
 const log = {
-  trade:     (msg, data) => addLog('trade', msg, data),
-  scan:      (msg, data) => addLog('scan', msg, data),
-  sentiment: (msg, data) => addLog('sentiment', msg, data),
-  ai:        (msg, data) => addLog('ai', msg, data),
-  system:    (msg, data) => addLog('system', msg, data),
-  error:     (msg, data) => addLog('error', msg, data),
+  trade:     (msg, data, userId) => addLog('trade', msg, data, userId),
+  scan:      (msg, data, userId) => addLog('scan', msg, data, userId),
+  sentiment: (msg, data, userId) => addLog('sentiment', msg, data, userId),
+  ai:        (msg, data, userId) => addLog('ai', msg, data, userId),
+  system:    (msg, data, userId) => addLog('system', msg, data, userId),
+  error:     (msg, data, userId) => addLog('error', msg, data, userId),
 };
 
 module.exports = {

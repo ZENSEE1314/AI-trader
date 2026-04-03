@@ -635,13 +635,21 @@ async function executeForAllUsers(pick) {
     // Run sequentially per user to prevent race conditions (parallel DB checks)
     const results = [];
     for (const key of keys) {
+      // Per-user logger: auto-tags logs with user_id so they only see their own
+      const userLog = {
+        trade:     (msg, data) => bLog.trade(msg, data, key.user_id),
+        scan:      (msg, data) => bLog.scan(msg, data, key.user_id),
+        error:     (msg, data) => bLog.error(msg, data, key.user_id),
+        system:    (msg, data) => bLog.system(msg, data, key.user_id),
+        ai:        (msg, data) => bLog.ai(msg, data, key.user_id),
+      };
       const result = await (async () => {
       try {
         // Check: user must have active subscription OR admin approval
         const hasSub = parseInt(key.has_active_sub) > 0;
         const isApproved = key.approved_no_sub === true;
         if (!hasSub && !isApproved) {
-          bLog.trade(`User ${key.email}: no active subscription and not approved — skipped`);
+          userLog.trade(`User ${key.email}: no active subscription and not approved — skipped`);
           return;
         }
 
@@ -650,11 +658,11 @@ async function executeForAllUsers(pick) {
         const bannedCoins = (key.banned_coins || '').split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
 
         if (allowedCoins.length > 0 && !allowedCoins.includes(symbol)) {
-          bLog.trade(`User ${key.email}: ${symbol} not in allowed list — skipped`);
+          userLog.trade(`User ${key.email}: ${symbol} not in allowed list — skipped`);
           return;
         }
         if (bannedCoins.includes(symbol)) {
-          bLog.trade(`User ${key.email}: ${symbol} is banned — skipped`);
+          userLog.trade(`User ${key.email}: ${symbol} is banned — skipped`);
           return;
         }
 
@@ -664,7 +672,7 @@ async function executeForAllUsers(pick) {
           [key.user_id, symbol]
         );
         if (existingTrade.length > 0) {
-          bLog.trade(`User ${key.email}: already has OPEN trade on ${symbol} in DB — skipping duplicate`);
+          userLog.trade(`User ${key.email}: already has OPEN trade on ${symbol} in DB — skipping duplicate`);
           return;
         }
 
@@ -701,7 +709,7 @@ async function executeForAllUsers(pick) {
         const allLosses = recentTrades.length >= userMaxConsecLoss &&
           recentTrades.every(t => t.status === 'LOSS');
         if (allLosses) {
-          bLog.trade(`User ${key.email}: ${userMaxConsecLoss} consecutive losses today — cooling down (resets 7am)`);
+          userLog.trade(`User ${key.email}: ${userMaxConsecLoss} consecutive losses today — cooling down (resets 7am)`);
           return;
         }
 
@@ -720,17 +728,17 @@ async function executeForAllUsers(pick) {
           const openPositions = account.positions.filter(p => parseFloat(p.positionAmt) !== 0);
           openPosCount = openPositions.length;
 
-          if (openPosCount >= maxPos) { bLog.trade(`User ${key.email}: at max positions (${openPosCount}/${maxPos})`); return; }
-          if (rawWallet < CONFIG.MIN_BALANCE) { bLog.trade(`User ${key.email}: wallet too low ($${rawWallet.toFixed(2)})`); return; }
+          if (openPosCount >= maxPos) { userLog.trade(`User ${key.email}: at max positions (${openPosCount}/${maxPos})`); return; }
+          if (rawWallet < CONFIG.MIN_BALANCE) { userLog.trade(`User ${key.email}: wallet too low ($${rawWallet.toFixed(2)})`); return; }
 
           // Check if already in a position on this specific symbol
           const existingPos = openPositions.find(p => p.symbol === symbol);
           if (existingPos) {
-            bLog.trade(`User ${key.email}: already in ${symbol} position — skipping duplicate`);
+            userLog.trade(`User ${key.email}: already in ${symbol} position — skipping duplicate`);
             return;
           }
 
-          bLog.trade(`User ${key.email} Binance: totalWalletBalance=$${rawWallet.toFixed(2)} available=$${parseFloat(account.availableBalance).toFixed(2)} usedMargin=$${parseFloat(account.totalMarginBalance).toFixed(2)} unrealizedPnL=$${parseFloat(account.totalUnrealizedProfit).toFixed(2)} | wallet=$${wallet.toFixed(2)} pos=${openPosCount}/${maxPos} lev=x${userLev} TP=${(userTP*100).toFixed(1)}% SL=${(userSL*100).toFixed(1)}%`);
+          userLog.trade(`User ${key.email} Binance: totalWalletBalance=$${rawWallet.toFixed(2)} available=$${parseFloat(account.availableBalance).toFixed(2)} usedMargin=$${parseFloat(account.totalMarginBalance).toFixed(2)} unrealizedPnL=$${parseFloat(account.totalUnrealizedProfit).toFixed(2)} | wallet=$${wallet.toFixed(2)} pos=${openPosCount}/${maxPos} lev=x${userLev} TP=${(userTP*100).toFixed(1)}% SL=${(userSL*100).toFixed(1)}%`);
 
           const slPrice = userSlPrice;
           const tp3Price = userTp3Price;
@@ -740,7 +748,7 @@ async function executeForAllUsers(pick) {
 
           const info = await userClient.getExchangeInfo();
           const sinfo = info.symbols.find(s => s.symbol === symbol);
-          if (!sinfo) { bLog.error(`User ${key.email}: ${symbol} not found on Binance`); return; }
+          if (!sinfo) { userLog.error(`User ${key.email}: ${symbol} not found on Binance`); return; }
           const qtyPrec = sinfo.quantityPrecision ?? 6;
           const pricePrec = sinfo.pricePrecision ?? 2;
           const fmtP = (p) => parseFloat(p.toFixed(pricePrec));
@@ -761,11 +769,11 @@ async function executeForAllUsers(pick) {
           // Check if wallet can afford this qty with leverage
           const requiredMargin = (qty * price) / userLev;
           if (requiredMargin > wallet * 0.95) {
-            bLog.trade(`User ${key.email}: ${symbol} needs $${requiredMargin.toFixed(2)} margin but only $${wallet.toFixed(2)} available — too expensive`);
+            userLog.trade(`User ${key.email}: ${symbol} needs $${requiredMargin.toFixed(2)} margin but only $${wallet.toFixed(2)} available — too expensive`);
             return 'TOO_EXPENSIVE';
           }
 
-          bLog.trade(`User ${key.email}: placing MARKET ${isLong ? 'BUY' : 'SELL'} ${symbol} qty=${qty}...`);
+          userLog.trade(`User ${key.email}: placing MARKET ${isLong ? 'BUY' : 'SELL'} ${symbol} qty=${qty}...`);
           await userClient.submitNewOrder({ symbol, side: isLong ? 'BUY' : 'SELL', type: 'MARKET', quantity: qty });
 
           // Wait for position to register before setting SL/TP
@@ -775,7 +783,7 @@ async function executeForAllUsers(pick) {
           const closeSide = isLong ? 'SELL' : 'BUY';
           const slFmt = fmtP(slPrice);
           const tpFmt = fmtP(tp3Price);
-          bLog.trade(`Setting SL=$${slFmt} TP=$${tpFmt} for ${symbol} via Algo API...`);
+          userLog.trade(`Setting SL=$${slFmt} TP=$${tpFmt} for ${symbol} via Algo API...`);
 
           let slOk = false, tpOk = false;
 
@@ -786,9 +794,9 @@ async function executeForAllUsers(pick) {
               closePosition: 'true', workingType: 'MARK_PRICE',
             });
             slOk = true;
-            bLog.trade(`✅ SL set at $${slFmt}`);
+            userLog.trade(`✅ SL set at $${slFmt}`);
           } catch (e) {
-            bLog.error(`❌ SL algo failed for ${symbol}: ${e.message}`);
+            userLog.error(`❌ SL algo failed for ${symbol}: ${e.message}`);
           }
 
           try {
@@ -798,14 +806,14 @@ async function executeForAllUsers(pick) {
               closePosition: 'true', workingType: 'MARK_PRICE',
             });
             tpOk = true;
-            bLog.trade(`✅ TP set at $${tpFmt}`);
+            userLog.trade(`✅ TP set at $${tpFmt}`);
           } catch (e) {
-            bLog.error(`❌ TP algo failed for ${symbol}: ${e.message}`);
+            userLog.error(`❌ TP algo failed for ${symbol}: ${e.message}`);
           }
 
           if (!slOk || !tpOk) {
             const missing = [!slOk ? 'SL' : '', !tpOk ? 'TP' : ''].filter(Boolean).join(' and ');
-            bLog.error(`⚠️ ${symbol} OPEN without ${missing} — SET MANUALLY!`);
+            userLog.error(`⚠️ ${symbol} OPEN without ${missing} — SET MANUALLY!`);
             await notify(`*⚠️ WARNING: ${symbol} ${pick.direction}*\nPosition opened but *${missing} failed to set!*\nSet manually on Binance NOW.`);
           }
 
@@ -815,7 +823,7 @@ async function executeForAllUsers(pick) {
             [key.id, key.user_id, symbol, pick.direction, price, fmtP(slPrice), fmtP(tp3Price), qty, userLev,
              pick.structure?.tf15 || null, pick.structure?.tf3 || null, pick.structure?.tf1 || null]
           );
-          bLog.trade(`✅ Binance OK: ${key.email} ${symbol} ${pick.direction} x${userLev} qty=${qty} entry=$${fmtPrice(price)}`);
+          userLog.trade(`✅ Binance OK: ${key.email} ${symbol} ${pick.direction} x${userLev} qty=${qty} entry=$${fmtPrice(price)}`);
           log(`Binance OK: ${key.email} ${symbol} ${pick.direction} x${userLev}`);
 
         } else if (key.platform === 'bitunix') {
@@ -826,16 +834,16 @@ async function executeForAllUsers(pick) {
           const bxPositions = account.positions || [];
           openPosCount = bxPositions.length;
 
-          if (openPosCount >= maxPos) { bLog.trade(`User ${key.email}: at max positions (${openPosCount}/${maxPos})`); return; }
-          if (rawWalletBx < CONFIG.MIN_BALANCE) { bLog.trade(`User ${key.email}: wallet too low ($${rawWalletBx.toFixed(2)})`); return; }
+          if (openPosCount >= maxPos) { userLog.trade(`User ${key.email}: at max positions (${openPosCount}/${maxPos})`); return; }
+          if (rawWalletBx < CONFIG.MIN_BALANCE) { userLog.trade(`User ${key.email}: wallet too low ($${rawWalletBx.toFixed(2)})`); return; }
 
           const existingPosBx = bxPositions.find(p => p.symbol === symbol);
           if (existingPosBx) {
-            bLog.trade(`User ${key.email}: already in ${symbol} position — skipping duplicate`);
+            userLog.trade(`User ${key.email}: already in ${symbol} position — skipping duplicate`);
             return;
           }
 
-          bLog.trade(`User ${key.email} Bitunix: wallet=$${wallet.toFixed(2)} pos=${openPosCount}/${maxPos} lev=x${userLev}`);
+          userLog.trade(`User ${key.email} Bitunix: wallet=$${wallet.toFixed(2)} pos=${openPosCount}/${maxPos} lev=x${userLev}`);
 
           // Position sizing: AI-tuned % of wallet
           const tradeUsdtBx = wallet * walletSizePct;
@@ -846,7 +854,7 @@ async function executeForAllUsers(pick) {
 
           const requiredMarginBx = (qty * price) / userLev;
           if (requiredMarginBx > wallet * 0.95) {
-            bLog.trade(`User ${key.email}: ${symbol} needs $${requiredMarginBx.toFixed(2)} margin but only $${wallet.toFixed(2)} — too expensive`);
+            userLog.trade(`User ${key.email}: ${symbol} needs $${requiredMarginBx.toFixed(2)} margin but only $${wallet.toFixed(2)} — too expensive`);
             return 'TOO_EXPENSIVE';
           }
 
@@ -860,33 +868,33 @@ async function executeForAllUsers(pick) {
           const tpFmtBx = parseFloat(tp3Price.toFixed(8));
 
           // Place market order first (without inline TP/SL — Bitunix ignores them)
-          bLog.trade(`User ${key.email}: placing Bitunix MARKET ${isLong ? 'BUY' : 'SELL'} ${symbol} qty=${qty} SL=$${slFmtBx} TP=$${tpFmtBx}...`);
+          userLog.trade(`User ${key.email}: placing Bitunix MARKET ${isLong ? 'BUY' : 'SELL'} ${symbol} qty=${qty} SL=$${slFmtBx} TP=$${tpFmtBx}...`);
           const order = await userClient.placeOrder({
             symbol, side: isLong ? 'BUY' : 'SELL',
             qty: String(qty), orderType: 'MARKET', tradeSide: 'OPEN',
           });
-          bLog.trade(`✅ Bitunix order placed: ${JSON.stringify(order)}`);
+          userLog.trade(`✅ Bitunix order placed: ${JSON.stringify(order)}`);
 
           // Wait for position to appear, then set TP/SL on position
           await sleep(2000);
           const positions = await userClient.getOpenPositions(symbol);
           const pos = Array.isArray(positions) ? positions.find(p => p.symbol === symbol) : null;
-          bLog.trade(`Bitunix position lookup: ${JSON.stringify(pos ? { id: pos.positionId, symbol: pos.symbol, side: pos.side, qty: pos.qty } : null)}`);
+          userLog.trade(`Bitunix position lookup: ${JSON.stringify(pos ? { id: pos.positionId, symbol: pos.symbol, side: pos.side, qty: pos.qty } : null)}`);
 
           if (pos && pos.positionId) {
-            bLog.trade(`Bitunix position confirmed: ${pos.positionId} — setting TP/SL...`);
+            userLog.trade(`Bitunix position confirmed: ${pos.positionId} — setting TP/SL...`);
             try {
               await userClient.placePositionTpSl({
                 symbol, positionId: pos.positionId,
                 tpPrice: tpFmtBx, slPrice: slFmtBx,
               });
-              bLog.trade(`✅ Bitunix TP=$${tpFmtBx} SL=$${slFmtBx} set on position ${pos.positionId}`);
+              userLog.trade(`✅ Bitunix TP=$${tpFmtBx} SL=$${slFmtBx} set on position ${pos.positionId}`);
             } catch (e) {
-              bLog.error(`❌ Bitunix TP/SL FAILED: ${e.message} — SET MANUALLY`);
+              userLog.error(`❌ Bitunix TP/SL FAILED: ${e.message} — SET MANUALLY`);
               await notify(`*⚠️ Bitunix ${symbol} ${pick.direction}*\nTP/SL failed! Set manually on Bitunix NOW.`);
             }
           } else {
-            bLog.error(`❌ Bitunix position not found after order — verify on exchange`);
+            userLog.error(`❌ Bitunix position not found after order — verify on exchange`);
             await notify(`*⚠️ Bitunix ${symbol}*\nOrder placed but position not found. Check Bitunix manually.`);
           }
 
@@ -895,17 +903,17 @@ async function executeForAllUsers(pick) {
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'OPEN')`,
             [key.id, key.user_id, symbol, pick.direction, price, parseFloat(slPrice.toFixed(8)), parseFloat(tp3Price.toFixed(8)), qty, userLev]
           );
-          bLog.trade(`✅ Bitunix OK: ${key.email} ${symbol} ${pick.direction} x${userLev} qty=${qty}`);
+          userLog.trade(`✅ Bitunix OK: ${key.email} ${symbol} ${pick.direction} x${userLev} qty=${qty}`);
           log(`Bitunix OK: ${key.email} ${symbol} ${pick.direction} x${userLev}`);
         } else {
-          bLog.error(`User ${key.email}: unknown platform "${key.platform}"`);
+          userLog.error(`User ${key.email}: unknown platform "${key.platform}"`);
         }
       } catch (err) {
-        bLog.error(`User ${key.email} trade error: ${err.message}`);
+        userLog.error(`User ${key.email} trade error: ${err.message}`);
         log(`User ${key.email} trade error: ${err.message}`);
       }
     })().catch(e => {
-        bLog.error(`User trade execution failed: ${e.message}`);
+        userLog.error(`User trade execution failed: ${e.message}`);
         return 'ERROR';
       });
       results.push(result);
