@@ -1,6 +1,4 @@
 const express = require('express');
-const { USDMClient } = require('binance');
-const { BitunixClient } = require('../bitunix-client');
 const { query } = require('../db');
 const { encrypt, decrypt } = require('../crypto-utils');
 const { authMiddleware } = require('../middleware/auth');
@@ -45,23 +43,8 @@ router.post('/', async (req, res) => {
       if (parseInt(count[0].cnt) >= 3) return res.status(400).json({ error: 'Maximum 3 API keys allowed' });
     }
 
-    // Validate the key by making a test call
-    if (platform === 'binance') {
-      try {
-        const { getBinanceRequestOptions } = require('../proxy-agent');
-        const client = new USDMClient({ api_key: apiKey, api_secret: apiSecret }, getBinanceRequestOptions());
-        await client.getAccountInformation();
-      } catch (e) {
-        return res.status(400).json({ error: `Binance API test failed: ${e.message}. Make sure your server IP is whitelisted on Binance.` });
-      }
-    } else if (platform === 'bitunix') {
-      try {
-        const client = new BitunixClient({ apiKey, apiSecret });
-        await client.getAccount();
-      } catch (e) {
-        return res.status(400).json({ error: `Bitunix API test failed: ${e.message}` });
-      }
-    }
+    // Skip validation test — IP/proxy issues cause false failures.
+    // If key is invalid, errors will show in bot logs on first trade attempt.
 
     const keyEnc = encrypt(apiKey);
     const secretEnc = encrypt(apiSecret);
