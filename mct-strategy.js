@@ -203,23 +203,23 @@ async function analyzeMCT(ticker) {
     const price = parseFloat(ticker.lastPrice);
 
     // Fetch multi-timeframe data
-    const [klines1d, klines1w, klines1h, klines15m, klines1m] = await Promise.all([
+    const [klines1d, klines1w, klines3m, klines15m, klines1m] = await Promise.all([
       fetchKlines(symbol, '1d', 5),
       fetchKlines(symbol, '1w', 3),
-      fetchKlines(symbol, '1h', 50),
+      fetchKlines(symbol, '3m', 100),
       fetchKlines(symbol, '15m', 100),
       fetchKlines(symbol, '1m', 60),
     ]);
 
-    if (!klines15m || klines15m.length < 30 || !klines1h || klines1h.length < 20) return null;
+    if (!klines15m || klines15m.length < 30 || !klines3m || klines3m.length < 30) return null;
     if (!klines1m || klines1m.length < 10) return null;
 
     // ── Key Levels ──
     const levels = getKeyLevels(klines1d, klines1w);
     if (!levels.pdh || !levels.pdl || !levels.op) return null;
 
-    // ── VWAP (calculated from today's 1h bars) ──
-    const todayKlines = klines1h.slice(-24); // last 24 hours
+    // ── VWAP (calculated from today's 15m bars) ──
+    const todayKlines = klines15m.slice(-96); // last 24 hours on 15m
     const vwap = calcVWAP(todayKlines);
     if (!vwap) return null;
 
@@ -230,12 +230,11 @@ async function analyzeMCT(ticker) {
     if (bias === 'neutral') return null; // MCT rule: don't trade between VWAP and OP
 
     // ── EMA 200 trend guide ──
-    const closes1h = klines1h.map(k => parseFloat(k[4]));
-    const ema200 = closes1h.length >= 50 ? calcEMA(closes1h, 50) : null; // use 50 on 1h ≈ 200 on 15m
-    const ema7 = calcEMA(closes1h.slice(-20), 7);
+    const closes15m = klines15m.map(k => parseFloat(k[4]));
+    const ema200 = closes15m.length >= 50 ? calcEMA(closes15m, 50) : null;
+    const ema7 = calcEMA(closes15m.slice(-20), 7);
 
     // ── RSI ──
-    const closes15m = klines15m.map(k => parseFloat(k[4]));
     const rsi = calcRSI(closes15m);
 
     // RSI divergence check (bearish div = price making HH but RSI making LH)

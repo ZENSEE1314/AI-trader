@@ -3,9 +3,9 @@
 //
 // Checklist (ALL must pass):
 //   1. Daily Bias    — Previous day candle direction
-//   2. HTF Structure — 4H + 1H must align with daily bias
+//   2. HTF Structure — 15M + 3M must align with daily bias
 //   3. Key Levels    — Price at PDH/PDL or VWAP bands
-//   4. Setup (15M)   — HL formed (bullish) or LH formed (bearish)
+//   4. Setup (3M)    — HL formed (bullish) or LH formed (bearish)
 //   5. Entry (1M)    — HL confirmed → LONG, LH confirmed → SHORT
 //   6. Risk          — SL at 1M swing, 1:1.5 RR, max 3% risk
 // ============================================================
@@ -23,7 +23,7 @@ const FIXED_SL_PCT = 0.015;
 const FIXED_TP_PCT = 0.0225;
 
 // Swing lengths per timeframe
-const SWING_LENGTHS = { '4h': 10, '1h': 10, '15m': 10, '1m': 5 };
+const SWING_LENGTHS = { '15m': 10, '3m': 10, '1m': 5 };
 
 // ── Fetch Helpers ────────────────────────────────────────────
 
@@ -314,35 +314,33 @@ async function analyzeLHHL(ticker, params, dailyBiasCache) {
   const { bias, pdh, pdl } = dailyInfo;
 
   // ┌─────────────────────────────────────────────────────────┐
-  // │ Step 2: HTF Structure (4H + 1H)                        │
+  // │ Step 2: HTF Structure (15M + 3M)                       │
   // └─────────────────────────────────────────────────────────┘
-  const [klines4h, klines1h, klines15m, klines1m] = await Promise.all([
-    fetchKlines(symbol, '4h', 100),
-    fetchKlines(symbol, '1h', 100),
+  const [klines15m, klines3m, klines1m] = await Promise.all([
     fetchKlines(symbol, '15m', 100),
+    fetchKlines(symbol, '3m', 100),
     fetchKlines(symbol, '1m', 100),
   ]);
 
-  if (!klines4h || !klines1h || !klines15m || !klines1m) return null;
-  if (klines4h.length < 30 || klines1h.length < 30 || klines15m.length < 30 || klines1m.length < 15) return null;
+  if (!klines15m || !klines3m || !klines1m) return null;
+  if (klines15m.length < 30 || klines3m.length < 30 || klines1m.length < 15) return null;
 
-  const struct4h = getStructure(klines4h, SWING_LENGTHS['4h']);
-  const struct1h = getStructure(klines1h, SWING_LENGTHS['1h']);
   const struct15m = getStructure(klines15m, SWING_LENGTHS['15m']);
+  const struct3m = getStructure(klines3m, SWING_LENGTHS['3m']);
   const struct1m = getStructure(klines1m, SWING_LENGTHS['1m']);
 
   // HTF must align with daily bias
-  const isBullishHTF = (struct4h.trend === 'bullish' || struct4h.trend === 'bullish_lean') &&
-                       (struct1h.trend === 'bullish' || struct1h.trend === 'bullish_lean');
-  const isBearishHTF = (struct4h.trend === 'bearish' || struct4h.trend === 'bearish_lean') &&
-                       (struct1h.trend === 'bearish' || struct1h.trend === 'bearish_lean');
+  const isBullishHTF = (struct15m.trend === 'bullish' || struct15m.trend === 'bullish_lean') &&
+                       (struct3m.trend === 'bullish' || struct3m.trend === 'bullish_lean');
+  const isBearishHTF = (struct15m.trend === 'bearish' || struct15m.trend === 'bearish_lean') &&
+                       (struct3m.trend === 'bearish' || struct3m.trend === 'bearish_lean');
 
   let direction = null;
   if (bias === 'bullish' && isBullishHTF) direction = 'LONG';
   else if (bias === 'bearish' && isBearishHTF) direction = 'SHORT';
 
   if (!direction) {
-    bLog.scan(`${symbol}: bias=${bias} 4H=${struct4h.trend} 1H=${struct1h.trend} — HTF not aligned`);
+    bLog.scan(`${symbol}: bias=${bias} 15M=${struct15m.trend} 3M=${struct3m.trend} — HTF not aligned`);
     return null;
   }
 
@@ -358,13 +356,13 @@ async function analyzeLHHL(ticker, params, dailyBiasCache) {
   }
 
   // ┌─────────────────────────────────────────────────────────┐
-  // │ Step 4: Setup TF (15M) — swing point formed            │
+  // │ Step 4: Setup TF (3M) — swing point formed             │
   // └─────────────────────────────────────────────────────────┘
-  const has15mSetup = (direction === 'LONG' && struct15m.hasHL) ||
-                      (direction === 'SHORT' && struct15m.hasLH);
+  const has3mSetup = (direction === 'LONG' && struct3m.hasHL) ||
+                     (direction === 'SHORT' && struct3m.hasLH);
 
-  if (!has15mSetup) {
-    bLog.scan(`${symbol}: ${direction} at ${levelCheck.level} but no 15M ${direction === 'LONG' ? 'HL' : 'LH'} — no setup`);
+  if (!has3mSetup) {
+    bLog.scan(`${symbol}: ${direction} at ${levelCheck.level} but no 3M ${direction === 'LONG' ? 'HL' : 'LH'} — no setup`);
     return null;
   }
 
@@ -375,7 +373,7 @@ async function analyzeLHHL(ticker, params, dailyBiasCache) {
                      (direction === 'SHORT' && struct1m.hasLH);
 
   if (!has1mEntry) {
-    bLog.scan(`${symbol}: ${direction} setup on 15M but no 1M ${direction === 'LONG' ? 'HL' : 'LH'} entry — waiting`);
+    bLog.scan(`${symbol}: ${direction} setup on 3M but no 1M ${direction === 'LONG' ? 'HL' : 'LH'} entry — waiting`);
     return null;
   }
 
@@ -416,8 +414,8 @@ async function analyzeLHHL(ticker, params, dailyBiasCache) {
   let score = 10;
 
   // Bonus: full HTF alignment
-  if (struct4h.trend === (direction === 'LONG' ? 'bullish' : 'bearish')) score += 3;
-  if (struct1h.trend === (direction === 'LONG' ? 'bullish' : 'bearish')) score += 2;
+  if (struct15m.trend === (direction === 'LONG' ? 'bullish' : 'bearish')) score += 3;
+  if (struct3m.trend === (direction === 'LONG' ? 'bullish' : 'bearish')) score += 2;
 
   // Bonus: at PDH/PDL (stronger than VWAP)
   if (levelCheck.level === 'PDH' || levelCheck.level === 'PDL') score += 2;
@@ -428,8 +426,8 @@ async function analyzeLHHL(ticker, params, dailyBiasCache) {
   score = score * aiModifier;
 
   bLog.scan(
-    `✅ ${symbol} ${direction} | bias=${bias} 4H=${struct4h.label} 1H=${struct1h.label} ` +
-    `15M=${struct15m.label} 1M=${struct1m.label} | at=${levelCheck.level} | score=${Math.round(score)}`
+    `✅ ${symbol} ${direction} | bias=${bias} 15M=${struct15m.label} 3M=${struct3m.label} ` +
+    `1M=${struct1m.label} | at=${levelCheck.level} | score=${Math.round(score)}`
   );
 
   return {
@@ -449,12 +447,11 @@ async function analyzeLHHL(ticker, params, dailyBiasCache) {
     aiModifier: Math.round(aiModifier * 100) / 100,
     structure: {
       bias,
-      tf4h: struct4h.label,
-      tf1h: struct1h.label,
       tf15: struct15m.label,
+      tf3: struct3m.label,
       tf1: struct1m.label,
-      trend4h: struct4h.trend,
-      trend1h: struct1h.trend,
+      trend15m: struct15m.trend,
+      trend3m: struct3m.trend,
       level: levelCheck.level,
     },
   };
