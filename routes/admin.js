@@ -178,10 +178,11 @@ router.put('/keys/:id/resume', async (req, res) => {
 router.get('/users', async (req, res) => {
   try {
     const rows = await query(
-      `SELECT u.id, u.email, u.is_blocked, u.is_admin, u.approved_no_sub, u.referral_code, u.wallet_balance, u.created_at,
+      `SELECT u.id, u.email, u.is_blocked, u.is_admin, u.approved_no_sub,
+              u.referral_code, u.wallet_balance, u.cash_wallet, u.commission_earned,
+              u.weekly_fee_amount, u.weekly_fee_due, u.usdt_address, u.usdt_network,
+              u.created_at,
               (SELECT COUNT(*) FROM api_keys WHERE user_id = u.id) as key_count,
-              (SELECT status FROM subscriptions WHERE user_id = u.id ORDER BY created_at DESC LIMIT 1) as sub_status,
-              (SELECT expires_at FROM subscriptions WHERE user_id = u.id AND status = 'active' ORDER BY expires_at DESC LIMIT 1) as sub_expires,
               (SELECT email FROM users WHERE id = u.referred_by) as referred_by_email
        FROM users u ORDER BY u.created_at DESC`
     );
@@ -403,6 +404,96 @@ router.put('/withdrawals/:id', async (req, res) => {
   }
 });
 
+// ── Pending top-ups ──────────────────────────────────────────
+router.get('/topups', async (req, res) => {
+  try {
+    const rows = await query(
+      `SELECT w.*, u.email FROM wallet_transactions w
+       JOIN users u ON u.id = w.user_id
+       WHERE w.type = 'topup_pending'
+       ORDER BY w.created_at DESC`
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error('Admin topups error:', err.message);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Approve/reject top-up
+router.put('/topups/:id', async (req, res) => {
+  try {
+    const { action } = req.body; // 'approve' or 'reject'
+    const txn = await query('SELECT * FROM wallet_transactions WHERE id = $1', [req.params.id]);
+    if (!txn.length) return res.status(404).json({ error: 'Not found' });
+    if (txn[0].type !== 'topup_pending') return res.status(400).json({ error: 'Already processed' });
+
+    if (action === 'approve') {
+      const amount = parseFloat(txn[0].amount);
+      await query('UPDATE users SET cash_wallet = cash_wallet + $1 WHERE id = $2', [amount, txn[0].user_id]);
+      await query(
+        `UPDATE wallet_transactions SET type = 'topup', status = 'approved', description = description || ' (approved)' WHERE id = $1`,
+        [req.params.id]
+      );
+    } else {
+      await query(
+        `UPDATE wallet_transactions SET type = 'topup_rejected', status = 'rejected', description = description || ' (rejected)' WHERE id = $1`,
+        [req.params.id]
+      );
+    }
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Admin topup action error:', err.message);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// ── Set weekly fee for a user ────────────────────────────────
+router.put('/users/:id/weekly-fee', async (req, res) => {
+  try {
+    const { amount } = req.body;
+    if (amount === undefined || amount < 0) return res.status(400).json({ error: 'Valid amount required' });
+    await query('UPDATE users SET weekly_fee_amount = $1 WHERE id = $2', [parseFloat(amount), req.params.id]);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Set weekly fee error:', err.message);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// ── Set weekly fee due date for a user ───────────────────────
+router.put('/users/:id/fee-due', async (req, res) => {
+  try {
+    const { due_date } = req.body;
+    await query('UPDATE users SET weekly_fee_due = $1 WHERE id = $2', [due_date, req.params.id]);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Set fee due error:', err.message);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// ── Users with unpaid fees ──────────────────────────────────
+router.get('/unpaid-fees', async (req, res) => {
+  try {
+    const rows = await query(
+      `SELECT u.id, u.email, u.cash_wallet, u.commission_earned,
+              u.weekly_fee_amount, u.weekly_fee_due,
+              (u.cash_wallet + u.commission_earned) as total_available,
+              (SELECT COUNT(*) FROM api_keys WHERE user_id = u.id AND enabled = true) as active_keys
+       FROM users u
+       WHERE u.is_admin = false
+         AND u.weekly_fee_due IS NOT NULL
+         AND u.weekly_fee_due < NOW()
+       ORDER BY u.weekly_fee_due ASC`
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error('Unpaid fees error:', err.message);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // Get settings
 router.get('/settings', async (req, res) => {
   try {
@@ -419,14 +510,14 @@ router.get('/settings', async (req, res) => {
 // Update settings
 router.put('/settings', async (req, res) => {
   try {
-    const { sub_price, signal_price, commission_tier1, commission_tier2, commission_tier3 } = req.body;
+    const { weekly_fee, commission_tier1, commission_tier2, commission_tier3, min_topup } = req.body;
 
     const updates = [
-      ['sub_price', sub_price],
-      ['signal_price', signal_price],
+      ['weekly_fee', weekly_fee],
       ['commission_tier1', commission_tier1],
       ['commission_tier2', commission_tier2],
       ['commission_tier3', commission_tier3],
+      ['min_topup', min_topup],
     ];
 
     for (const [key, val] of updates) {

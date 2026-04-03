@@ -588,8 +588,7 @@
       <nav class="nav-tabs" role="tablist" aria-label="Main navigation">
         <button class="nav-tab active" role="tab" aria-selected="true" data-tab="dashboard">Dashboard</button>
         <button class="nav-tab" role="tab" aria-selected="false" data-tab="keys">API Keys</button>
-        <button class="nav-tab" role="tab" aria-selected="false" data-tab="subscription">Subscription</button>
-        <button class="nav-tab" role="tab" aria-selected="false" data-tab="wallet">Wallet</button>
+        <button class="nav-tab" role="tab" aria-selected="false" data-tab="cashwallet">Cash Wallet</button>
         <button class="nav-tab" role="tab" aria-selected="false" data-tab="chart">Chart</button>
         <button class="nav-tab" role="tab" aria-selected="false" data-tab="logs" id="logs-tab">Logs</button>
         <button class="nav-tab hidden" role="tab" aria-selected="false" data-tab="admin" id="admin-tab">Admin</button>
@@ -738,126 +737,150 @@
       </section>
 
       <!-- ====================================================
-           Subscription Tab
+           Cash Wallet Tab
            ==================================================== -->
-      <section id="tab-subscription" class="hidden" role="tabpanel" aria-label="Subscription">
-        <h2 class="section-heading">Subscription</h2>
+      <section id="tab-cashwallet" class="hidden" role="tabpanel" aria-label="Cash Wallet">
+        <h2 class="section-heading">Cash Wallet</h2>
 
-        <!-- Current status -->
-        <div id="sub-status-card" class="summary-card" style="margin-bottom:var(--space-5);padding:var(--space-5);">
-          <div id="sub-status-text">Loading...</div>
-        </div>
-
-        <!-- Plan selection -->
-        <div id="sub-pay-section" class="hidden">
-          <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Choose Plan</h3>
-          <div class="summary-grid" style="margin-bottom:var(--space-4);">
-            <div class="summary-card plan-select-card" id="plan-card-bot" style="padding:var(--space-4);cursor:pointer;border:2px solid var(--color-accent);" onclick="window.CryptoBot.selectPlan('bot')">
-              <span class="summary-card-label">Auto Trading Bot</span>
-              <span class="summary-card-value text-mono" id="sub-bot-price">$29.99/mo</span>
-              <span style="font-size:0.8rem;color:var(--color-text-muted);">AI trades on your exchange</span>
-            </div>
-            <div class="summary-card plan-select-card" id="plan-card-signal" style="padding:var(--space-4);cursor:pointer;border:2px solid var(--color-border-muted);" onclick="window.CryptoBot.selectPlan('signal')">
-              <span class="summary-card-label">VIP Telegram Signals</span>
-              <span class="summary-card-value text-mono" id="sub-signal-price">$500/mo</span>
-              <span style="font-size:0.8rem;color:var(--color-text-muted);">Private signal channel access</span>
-            </div>
-          </div>
-
-          <!-- Telegram ID (shown for signal plan) -->
-          <div id="sub-telegram-section" class="hidden" style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-4);margin-bottom:var(--space-4);">
-            <div class="form-group" style="margin-bottom:0;">
-              <label class="form-label" for="sub-telegram-id">Your Telegram ID or @username</label>
-              <input class="form-input text-mono" type="text" id="sub-telegram-id" placeholder="e.g. @yourusername or 123456789">
-              <div style="font-size:0.75rem;color:var(--color-text-muted);margin-top:var(--space-1);">We need this to add you to the VIP channel. You'll be removed if subscription expires.</div>
-            </div>
-          </div>
-
-          <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Payment Methods</h3>
-          <div class="summary-grid" style="margin-bottom:var(--space-5);">
-            <div class="summary-card" style="padding:var(--space-4);">
-              <span class="summary-card-label">Wallet Balance</span>
-              <span class="summary-card-value text-mono" id="sub-wallet-bal">$0.00</span>
-              <button type="button" class="btn btn-primary btn-sm" style="margin-top:var(--space-3);width:100%;" onclick="window.CryptoBot.payWithWallet()">Pay with Wallet</button>
-            </div>
-            <div class="summary-card" style="padding:var(--space-4);">
-              <span class="summary-card-label">Bank Transfer</span>
-              <div id="sub-bank-info" class="text-mono" style="font-size:0.8rem;margin:var(--space-2) 0;color:var(--color-text-muted);"></div>
-              <div class="form-group" style="margin-bottom:var(--space-2);">
-                <label class="form-label sr-only" for="sub-proof-url">Payment proof URL</label>
-                <input class="form-input" type="url" id="sub-proof-url" placeholder="Paste payment proof link/screenshot URL">
-              </div>
-              <button type="button" class="btn btn-primary btn-sm" style="width:100%;" onclick="window.CryptoBot.payBankTransfer()">Submit Proof</button>
-            </div>
-            <div class="summary-card" style="padding:var(--space-4);">
-              <span class="summary-card-label">Credit / Debit Card</span>
-              <span class="summary-card-value" style="font-size:1rem;">Stripe</span>
-              <button type="button" class="btn btn-primary btn-sm" style="margin-top:var(--space-3);width:100%;" onclick="window.CryptoBot.payStripe()">Pay with Card</button>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <!-- ====================================================
-           Wallet Tab
-           ==================================================== -->
-      <section id="tab-wallet" class="hidden" role="tabpanel" aria-label="Wallet">
-        <h2 class="section-heading">Wallet & Referrals</h2>
+        <!-- Wallet Summary -->
         <div class="summary-grid" style="margin-bottom:var(--space-5);">
-          <div class="summary-card">
-            <span class="summary-card-label">Balance</span>
-            <span id="wallet-balance" class="summary-card-value text-mono">$0.00</span>
+          <div class="summary-card" style="border-left:3px solid var(--color-success);">
+            <span class="summary-card-label">Cash Wallet</span>
+            <span id="cw-cash" class="summary-card-value text-mono" style="color:var(--color-success);font-size:1.3rem;">$0.00</span>
+            <span style="font-size:0.75rem;color:var(--color-text-muted);">For paying weekly fees</span>
           </div>
-          <div class="summary-card">
-            <span class="summary-card-label">Total Commission</span>
-            <span id="wallet-commission" class="summary-card-value text-mono">$0.00</span>
+          <div class="summary-card" style="border-left:3px solid var(--color-accent);">
+            <span class="summary-card-label">Commission Earned</span>
+            <span id="cw-commission" class="summary-card-value text-mono" style="color:var(--color-accent);font-size:1.3rem;">$0.00</span>
+            <span style="font-size:0.75rem;color:var(--color-text-muted);">Referral earnings (withdrawable)</span>
           </div>
-          <div class="summary-card">
-            <span class="summary-card-label">Referrals</span>
-            <span id="wallet-referrals" class="summary-card-value text-mono">0</span>
+          <div class="summary-card" style="border-left:3px solid var(--color-warning);">
+            <span class="summary-card-label">Total Balance</span>
+            <span id="cw-total" class="summary-card-value text-mono" style="font-size:1.3rem;">$0.00</span>
+            <span style="font-size:0.75rem;color:var(--color-text-muted);">Cash + Commission combined</span>
+          </div>
+          <div class="summary-card" id="cw-fee-status-card">
+            <span class="summary-card-label">Weekly Fee Status</span>
+            <span id="cw-fee-status" class="summary-card-value">--</span>
+            <span id="cw-fee-due" style="font-size:0.75rem;color:var(--color-text-muted);">--</span>
           </div>
         </div>
 
+        <!-- Fee Due Warning -->
+        <div id="cw-fee-warning" class="hidden" style="background:rgba(239,68,68,0.1);border:1px solid var(--color-danger);border-radius:var(--radius-lg);padding:var(--space-4);margin-bottom:var(--space-4);">
+          <strong style="color:var(--color-danger);">⚠️ Weekly Fee Overdue!</strong>
+          <p style="color:var(--color-text-muted);font-size:0.85rem;margin:var(--space-1) 0 0;">Your trading is paused. Pay the weekly fee to resume bot trading.</p>
+        </div>
+
+        <!-- Pay Weekly Fee -->
+        <div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-4);margin-bottom:var(--space-4);">
+          <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Pay Weekly Fee</h3>
+          <div style="display:flex;gap:var(--space-2);flex-wrap:wrap;margin-bottom:var(--space-3);">
+            <button class="btn btn-primary btn-sm cw-pay-source" data-source="cash" onclick="window.CryptoBot.payFee('cash')">Pay from Cash Wallet</button>
+            <button class="btn btn-ghost btn-sm cw-pay-source" data-source="commission" onclick="window.CryptoBot.payFee('commission')">Pay from Commission</button>
+            <button class="btn btn-ghost btn-sm cw-pay-source" data-source="both" onclick="window.CryptoBot.payFee('both')">Use Both (Commission first)</button>
+          </div>
+          <div id="cw-fee-amount-display" style="font-size:0.85rem;color:var(--color-text-muted);">Weekly fee: <strong id="cw-weekly-fee">$0.00</strong></div>
+        </div>
+
+        <!-- Top Up -->
+        <div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-4);margin-bottom:var(--space-4);">
+          <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Top Up Cash Wallet</h3>
+          <div class="settings-grid" style="margin-bottom:var(--space-3);">
+            <div class="form-group" style="margin-bottom:0">
+              <label class="form-label" for="cw-topup-amount">Amount (USDT)</label>
+              <input class="form-input text-mono" type="number" id="cw-topup-amount" min="1" step="0.01" placeholder="0.00">
+            </div>
+            <div class="form-group" style="margin-bottom:0">
+              <label class="form-label" for="cw-topup-txhash">TX Hash / Proof URL</label>
+              <input class="form-input text-mono" type="text" id="cw-topup-txhash" placeholder="Transaction hash or screenshot URL">
+            </div>
+          </div>
+          <button class="btn btn-primary btn-sm" onclick="window.CryptoBot.submitTopUp()">Submit Top-Up</button>
+        </div>
+
+        <!-- Transfer Commission to Cash -->
+        <div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-4);margin-bottom:var(--space-4);">
+          <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Transfer Commission → Cash Wallet</h3>
+          <div style="display:flex;gap:var(--space-2);align-items:end;flex-wrap:wrap;">
+            <div class="form-group" style="margin-bottom:0;flex:1;min-width:120px;">
+              <label class="form-label" for="cw-transfer-amount">Amount</label>
+              <input class="form-input text-mono" type="number" id="cw-transfer-amount" min="0.01" step="0.01" placeholder="0.00">
+            </div>
+            <button class="btn btn-primary btn-sm" onclick="window.CryptoBot.transferCommission()">Transfer</button>
+          </div>
+          <div style="font-size:0.75rem;color:var(--color-text-muted);margin-top:var(--space-2);">Move commission earnings to cash wallet for fee payments.</div>
+        </div>
+
+        <!-- USDT Withdrawal Address -->
+        <div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-4);margin-bottom:var(--space-4);">
+          <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">USDT Withdrawal Address</h3>
+          <div class="settings-grid" style="margin-bottom:var(--space-3);">
+            <div class="form-group" style="margin-bottom:0">
+              <label class="form-label" for="cw-usdt-addr">USDT Address</label>
+              <input class="form-input text-mono" type="text" id="cw-usdt-addr" placeholder="0x...">
+            </div>
+            <div class="form-group" style="margin-bottom:0">
+              <label class="form-label" for="cw-usdt-net">Network</label>
+              <select class="form-input" id="cw-usdt-net">
+                <option value="BEP20">BEP20 (BSC)</option>
+                <option value="ERC20">ERC20 (Ethereum)</option>
+                <option value="TRC20">TRC20 (Tron)</option>
+                <option value="POLYGON">Polygon</option>
+              </select>
+            </div>
+          </div>
+          <button class="btn btn-primary btn-sm" onclick="window.CryptoBot.saveUsdtAddress()">Save Address</button>
+          <div style="font-size:0.75rem;color:var(--color-text-muted);margin-top:var(--space-2);">Commission withdrawals are sent as USDT only. No bank transfers.</div>
+        </div>
+
+        <!-- Withdraw Commission -->
+        <div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-4);margin-bottom:var(--space-5);">
+          <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Withdraw Commission (USDT)</h3>
+          <div style="display:flex;gap:var(--space-2);align-items:end;flex-wrap:wrap;">
+            <div class="form-group" style="margin-bottom:0;flex:1;min-width:120px;">
+              <label class="form-label" for="cw-wd-amount">Amount (min $10)</label>
+              <input class="form-input text-mono" type="number" id="cw-wd-amount" min="10" step="0.01" placeholder="0.00">
+            </div>
+            <button class="btn btn-primary btn-sm" onclick="window.CryptoBot.withdrawCommission()">Request Withdrawal</button>
+          </div>
+          <div id="cw-wd-address-display" style="font-size:0.8rem;color:var(--color-text-muted);margin-top:var(--space-2);"></div>
+        </div>
+
+        <!-- Referral Section -->
         <div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-4);margin-bottom:var(--space-5);">
           <h3 style="margin-bottom:var(--space-2);color:var(--color-text);">Your Referral Link</h3>
           <div style="display:flex;gap:var(--space-2);align-items:center;">
             <input class="form-input text-mono" id="referral-link" readonly style="flex:1;font-size:0.85rem;">
             <button class="btn btn-ghost btn-sm" onclick="navigator.clipboard.writeText(document.getElementById('referral-link').value);window.CryptoBot.showToast('Copied!','success')">Copy</button>
           </div>
-          <div style="color:var(--color-text-muted);font-size:0.8rem;margin-top:var(--space-2);">Share this link. You earn referral commission on every friend's subscription.</div>
+          <div style="color:var(--color-text-muted);font-size:0.8rem;margin-top:var(--space-2);">Earn commission on every friend's trading. Commission goes to your Commission balance.</div>
+          <div style="margin-top:var(--space-3);">Referrals: <strong id="cw-ref-count">0</strong></div>
         </div>
 
-        <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Withdraw</h3>
-        <div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-4);margin-bottom:var(--space-5);">
-          <div class="settings-grid">
-            <div class="form-group" style="margin-bottom:0">
-              <label class="form-label" for="wd-amount">Amount (USD)</label>
-              <input class="form-input text-mono" type="number" id="wd-amount" min="1" step="0.01" placeholder="0.00">
-            </div>
-            <div class="form-group" style="margin-bottom:0">
-              <label class="form-label" for="wd-bank">Bank Name</label>
-              <input class="form-input" type="text" id="wd-bank" placeholder="e.g. DBS, OCBC">
-            </div>
-            <div class="form-group" style="margin-bottom:0">
-              <label class="form-label" for="wd-accno">Account Number</label>
-              <input class="form-input text-mono" type="text" id="wd-accno" placeholder="xxx-xxxxxxx-x">
-            </div>
-            <div class="form-group" style="margin-bottom:0">
-              <label class="form-label" for="wd-accname">Account Name</label>
-              <input class="form-input" type="text" id="wd-accname" placeholder="Full name on account">
-            </div>
-          </div>
-          <button class="btn btn-primary btn-sm" style="margin-top:var(--space-3);" onclick="window.CryptoBot.requestWithdraw()">Request Withdrawal</button>
-        </div>
-
+        <!-- Transaction History -->
         <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Transaction History</h3>
         <div class="table-wrap">
           <table class="data-table">
-            <thead><tr><th>Date</th><th>Type</th><th>Amount</th><th>Description</th></tr></thead>
-            <tbody id="wallet-txns-tbody"></tbody>
+            <thead><tr><th>Date</th><th>Type</th><th>Amount</th><th>Description</th><th>Status</th></tr></thead>
+            <tbody id="cw-txns-tbody"></tbody>
+          </table>
+        </div>
+
+        <!-- Withdrawal History -->
+        <h3 style="margin-top:var(--space-5);margin-bottom:var(--space-3);color:var(--color-text);">Withdrawal History</h3>
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead><tr><th>Date</th><th>Amount</th><th>Network</th><th>Address</th><th>Status</th></tr></thead>
+            <tbody id="cw-wds-tbody"></tbody>
           </table>
         </div>
       </section>
+
+      <!-- ====================================================
+           Old Wallet Tab (removed — merged into Cash Wallet)
+           ==================================================== -->
+      <section id="tab-wallet" class="hidden" role="tabpanel" aria-label="Wallet" style="display:none;"></section>
 
       <!-- ====================================================
            Admin Tab (hidden unless admin)

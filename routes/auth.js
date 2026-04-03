@@ -29,9 +29,14 @@ router.post('/signup', async (req, res) => {
 
     const hash = await bcrypt.hash(password, 10);
     const myRefCode = generateReferralCode();
+
+    // Set initial weekly fee due 7 days from signup (free trial period)
+    const feeDue = new Date();
+    feeDue.setDate(feeDue.getDate() + 7);
+
     const rows = await query(
-      'INSERT INTO users (email, password_hash, referral_code, referred_by) VALUES ($1, $2, $3, $4) RETURNING id',
-      [email.toLowerCase(), hash, myRefCode, referredBy]
+      'INSERT INTO users (email, password_hash, referral_code, referred_by, weekly_fee_due) VALUES ($1, $2, $3, $4, $5) RETURNING id',
+      [email.toLowerCase(), hash, myRefCode, referredBy, feeDue]
     );
     const token = signToken(rows[0].id, email.toLowerCase());
     res.cookie('token', token, { httpOnly: true, maxAge: 30 * 24 * 60 * 60 * 1000, sameSite: 'lax' });
@@ -149,26 +154,30 @@ router.post('/reset-password', async (req, res) => {
 router.get('/me', authMiddleware, async (req, res) => {
   try {
     const user = await query(
-      `SELECT id, email, is_admin, is_blocked, referral_code, wallet_balance FROM users WHERE id = $1`,
+      `SELECT id, email, is_admin, is_blocked, referral_code, wallet_balance,
+              cash_wallet, commission_earned, weekly_fee_due, usdt_address, usdt_network
+       FROM users WHERE id = $1`,
       [req.userId]
     );
     if (!user.length) return res.status(401).json({ error: 'User not found' });
     if (user[0].is_blocked) return res.status(403).json({ error: 'Account is blocked' });
 
-    // Check active subscription
-    const sub = await query(
-      `SELECT id, expires_at FROM subscriptions WHERE user_id = $1 AND status = 'active' AND expires_at > NOW() LIMIT 1`,
-      [req.userId]
-    );
+    const u = user[0];
+    const feeDue = u.weekly_fee_due ? new Date(u.weekly_fee_due) : null;
+    const feeOverdue = feeDue ? new Date() > feeDue : false;
 
     res.json({
-      userId: user[0].id,
-      email: user[0].email,
-      is_admin: user[0].is_admin,
-      referral_code: user[0].referral_code,
-      wallet_balance: parseFloat(user[0].wallet_balance),
-      has_subscription: sub.length > 0,
-      sub_expires: sub[0]?.expires_at || null,
+      userId: u.id,
+      email: u.email,
+      is_admin: u.is_admin,
+      referral_code: u.referral_code,
+      wallet_balance: parseFloat(u.wallet_balance) || 0,
+      cash_wallet: parseFloat(u.cash_wallet) || 0,
+      commission_earned: parseFloat(u.commission_earned) || 0,
+      weekly_fee_due: u.weekly_fee_due,
+      fee_overdue: feeOverdue,
+      usdt_address: u.usdt_address || '',
+      usdt_network: u.usdt_network || 'BEP20',
     });
   } catch (err) {
     console.error('Me error:', err.message);

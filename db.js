@@ -86,6 +86,43 @@ async function initAllTables() {
     `ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS profit_share_user_pct DECIMAL DEFAULT 60`,
     `ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS profit_share_admin_pct DECIMAL DEFAULT 40`,
     `ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS paused_by_admin BOOLEAN DEFAULT false`,
+    // Cash wallet system (replaces subscription)
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS cash_wallet DECIMAL DEFAULT 0`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS commission_earned DECIMAL DEFAULT 0`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS weekly_fee_amount DECIMAL DEFAULT 0`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS weekly_fee_due TIMESTAMPTZ`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS usdt_address VARCHAR(100)`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS usdt_network VARCHAR(20) DEFAULT 'BEP20'`,
+    // Wallet transactions table
+    `CREATE TABLE IF NOT EXISTS wallet_transactions (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER NOT NULL,
+      type VARCHAR(30) NOT NULL,
+      amount DECIMAL NOT NULL,
+      description TEXT,
+      tx_hash TEXT,
+      status VARCHAR(20) DEFAULT 'completed',
+      ref_id INTEGER,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_wt_user_id ON wallet_transactions (user_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_wt_type ON wallet_transactions (type)`,
+    // Add status column if missing (for existing tables)
+    `ALTER TABLE wallet_transactions ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'completed'`,
+    `ALTER TABLE wallet_transactions ADD COLUMN IF NOT EXISTS tx_hash TEXT`,
+    // Withdrawals table
+    `CREATE TABLE IF NOT EXISTS withdrawals (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER NOT NULL,
+      amount DECIMAL NOT NULL,
+      bank_name VARCHAR(100),
+      account_number VARCHAR(100),
+      account_name VARCHAR(100),
+      status VARCHAR(20) DEFAULT 'pending',
+      admin_note TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_wd_user_id ON withdrawals (user_id)`,
     // Weekly earnings tracking
     `CREATE TABLE IF NOT EXISTS weekly_earnings (
       id SERIAL PRIMARY KEY,

@@ -614,8 +614,7 @@ async function executeForAllUsers(pick) {
 
   try {
     const allKeys = await db.query(
-      `SELECT ak.*, u.email, u.approved_no_sub,
-              (SELECT COUNT(*) FROM subscriptions s WHERE s.user_id = u.id AND s.status = 'active' AND s.expires_at > NOW()) as has_active_sub
+      `SELECT ak.*, u.email, u.weekly_fee_due
        FROM api_keys ak
        JOIN users u ON u.id = ak.user_id
        WHERE ak.enabled = true AND (ak.paused_by_admin = false OR ak.paused_by_admin IS NULL)`
@@ -645,11 +644,11 @@ async function executeForAllUsers(pick) {
       };
       const result = await (async () => {
       try {
-        // Check: user must have active subscription OR admin approval
-        const hasSub = parseInt(key.has_active_sub) > 0;
-        const isApproved = key.approved_no_sub === true;
-        if (!hasSub && !isApproved) {
-          userLog.trade(`User ${key.email}: no active subscription and not approved — skipped`);
+        // Check: weekly fee must be paid (not overdue)
+        const feeDue = key.weekly_fee_due ? new Date(key.weekly_fee_due) : null;
+        const feeOverdue = feeDue && new Date() > feeDue;
+        if (feeOverdue) {
+          userLog.trade(`User ${key.email}: weekly fee overdue — skipped (pay fee to resume)`);
           return;
         }
 

@@ -3,302 +3,273 @@ const { query } = require('../db');
 const { authMiddleware } = require('../middleware/auth');
 
 const router = express.Router();
-// Public endpoint — no auth needed (for landing page)
-router.get('/prices', async (req, res) => {
-  try {
-    const settings = await getSettings();
-    res.json({ price: settings.price, signal_price: settings.signal_price });
-  } catch { res.json({ price: 29.99, signal_price: 500 }); }
-});
-
 router.use(authMiddleware);
 
-const BANK_DETAILS = {
-  bank: process.env.BANK_NAME || 'DBS Bank',
-  account: process.env.BANK_ACCOUNT || '123-456789-0',
-  name: process.env.BANK_HOLDER || 'CryptoBot Trading',
-};
-
-async function getSettings() {
-  const rows = await query('SELECT key, value FROM settings');
-  const s = {};
-  for (const r of rows) s[r.key] = r.value;
-  return {
-    price: parseFloat(s.sub_price) || 29.99,
-    signal_price: parseFloat(s.signal_price) || 500,
-    tier1: parseFloat(s.commission_tier1) || 0,
-    tier2: parseFloat(s.commission_tier2) || 0,
-    tier3: parseFloat(s.commission_tier3) || 0,
-  };
-}
-
-// Extend subscription by N days — stacks on existing time
-async function extendSubscription(userId, days, amount, method, plan = 'monthly') {
-  // Find existing active sub for this plan
-  const existing = await query(
-    `SELECT id, expires_at FROM subscriptions WHERE user_id = $1 AND status = 'active' AND plan = $2 AND expires_at > NOW()
-     ORDER BY expires_at DESC LIMIT 1`,
-    [userId, plan]
-  );
-
-  const now = new Date();
-  let newExpiry;
-
-  if (existing.length) {
-    // Extend from current expiry date
-    newExpiry = new Date(existing[0].expires_at);
-    newExpiry.setDate(newExpiry.getDate() + days);
-    await query('UPDATE subscriptions SET expires_at = $1 WHERE id = $2', [newExpiry, existing[0].id]);
-  } else {
-    // Create new subscription starting now
-    newExpiry = new Date(now);
-    newExpiry.setDate(newExpiry.getDate() + days);
-    await query(
-      `INSERT INTO subscriptions (user_id, plan, status, amount, payment_method, starts_at, expires_at)
-       VALUES ($1, $2, 'active', $3, $4, $5, $6)`,
-      [userId, plan, amount, method, now, newExpiry]
-    );
-  }
-
-  return newExpiry;
-}
-
-// Get subscription status + pricing info + countdown
+// ── Get wallet status ────────────────────────────────────────
 router.get('/status', async (req, res) => {
   try {
-    const settings = await getSettings();
-    const sub = await query(
-      `SELECT * FROM subscriptions WHERE user_id = $1 AND status = 'active' AND expires_at > NOW()
-       ORDER BY expires_at DESC LIMIT 1`,
+    const user = await query(
+      `SELECT cash_wallet, commission_earned, weekly_fee_amount, weekly_fee_due,
+              usdt_address, usdt_network, referral_code, is_admin
+       FROM users WHERE id = $1`,
       [req.userId]
     );
-    const user = await query('SELECT wallet_balance, telegram_id FROM users WHERE id = $1', [req.userId]);
+    if (!user.length) return res.status(404).json({ error: 'User not found' });
+    const u = user[0];
 
-    // Check signal sub separately
-    const signalSub = await query(
-      `SELECT * FROM subscriptions WHERE user_id = $1 AND status = 'active' AND plan = 'signal' AND expires_at > NOW()
-       ORDER BY expires_at DESC LIMIT 1`,
-      [req.userId]
+    const referralCount = await query(
+      'SELECT COUNT(*) as cnt FROM users WHERE referred_by = $1', [req.userId]
     );
 
-    let days_left = 0;
-    if (sub.length) {
-      const now = new Date();
-      const exp = new Date(sub[0].expires_at);
-      days_left = Math.max(0, Math.ceil((exp - now) / (1000 * 60 * 60 * 24)));
+    // Get weekly fee from settings if user doesn't have one set
+    let weeklyFee = parseFloat(u.weekly_fee_amount) || 0;
+    if (!weeklyFee) {
+      const settings = await query("SELECT value FROM settings WHERE key = 'weekly_fee'");
+      weeklyFee = parseFloat(settings[0]?.value) || 10;
     }
 
-    let signal_days_left = 0;
-    if (signalSub.length) {
-      const now = new Date();
-      const exp = new Date(signalSub[0].expires_at);
-      signal_days_left = Math.max(0, Math.ceil((exp - now) / (1000 * 60 * 60 * 24)));
-    }
+    const now = new Date();
+    const dueDate = u.weekly_fee_due ? new Date(u.weekly_fee_due) : null;
+    const isDue = dueDate ? now >= dueDate : false;
+    const daysLeft = dueDate ? Math.max(0, Math.ceil((dueDate - now) / (1000 * 60 * 60 * 24))) : 0;
 
     res.json({
-      active: sub.length > 0,
-      subscription: sub[0] || null,
-      days_left,
-      signal_active: signalSub.length > 0,
-      signal_sub: signalSub[0] || null,
-      signal_days_left,
-      price: settings.price,
-      signal_price: settings.signal_price,
-      wallet_balance: parseFloat(user[0]?.wallet_balance || 0),
-      telegram_id: user[0]?.telegram_id || '',
-      bank_details: BANK_DETAILS,
+      cash_wallet: parseFloat(u.cash_wallet) || 0,
+      commission_earned: parseFloat(u.commission_earned) || 0,
+      total_balance: (parseFloat(u.cash_wallet) || 0) + (parseFloat(u.commission_earned) || 0),
+      weekly_fee: weeklyFee,
+      weekly_fee_due: u.weekly_fee_due,
+      fee_due: isDue,
+      days_left: daysLeft,
+      usdt_address: u.usdt_address || '',
+      usdt_network: u.usdt_network || 'BEP20',
+      referral_code: u.referral_code || '',
+      referral_count: parseInt(referralCount[0]?.cnt || 0),
     });
   } catch (err) {
-    console.error('Sub status error:', err.message);
+    console.error('Wallet status error:', err.message);
     res.status(500).json({ error: 'Server error' });
   }
 });
 
-// Save Telegram ID
-router.post('/telegram-id', async (req, res) => {
+// ── Pay weekly fee ───────────────────────────────────────────
+// source: 'cash' | 'commission' | 'both'
+router.post('/pay-fee', async (req, res) => {
   try {
-    const { telegram_id } = req.body;
-    if (!telegram_id) return res.status(400).json({ error: 'Telegram ID required' });
-    await query('UPDATE users SET telegram_id = $1 WHERE id = $2', [telegram_id.trim(), req.userId]);
+    const { source } = req.body; // 'cash', 'commission', or 'both'
+
+    const user = await query(
+      'SELECT cash_wallet, commission_earned, weekly_fee_amount, weekly_fee_due FROM users WHERE id = $1',
+      [req.userId]
+    );
+    if (!user.length) return res.status(404).json({ error: 'User not found' });
+
+    const u = user[0];
+    let weeklyFee = parseFloat(u.weekly_fee_amount) || 0;
+    if (!weeklyFee) {
+      const settings = await query("SELECT value FROM settings WHERE key = 'weekly_fee'");
+      weeklyFee = parseFloat(settings[0]?.value) || 10;
+    }
+
+    const cashBal = parseFloat(u.cash_wallet) || 0;
+    const commBal = parseFloat(u.commission_earned) || 0;
+
+    if (source === 'cash') {
+      if (cashBal < weeklyFee) return res.status(400).json({ error: `Insufficient cash wallet. Need $${weeklyFee.toFixed(2)}, have $${cashBal.toFixed(2)}` });
+      await query('UPDATE users SET cash_wallet = cash_wallet - $1 WHERE id = $2', [weeklyFee, req.userId]);
+    } else if (source === 'commission') {
+      if (commBal < weeklyFee) return res.status(400).json({ error: `Insufficient commission. Need $${weeklyFee.toFixed(2)}, have $${commBal.toFixed(2)}` });
+      await query('UPDATE users SET commission_earned = commission_earned - $1 WHERE id = $2', [weeklyFee, req.userId]);
+    } else {
+      // 'both' — use commission first, then cash
+      const fromComm = Math.min(commBal, weeklyFee);
+      const fromCash = weeklyFee - fromComm;
+      if (cashBal < fromCash) return res.status(400).json({ error: `Insufficient balance. Need $${weeklyFee.toFixed(2)} total` });
+      if (fromComm > 0) await query('UPDATE users SET commission_earned = commission_earned - $1 WHERE id = $2', [fromComm, req.userId]);
+      if (fromCash > 0) await query('UPDATE users SET cash_wallet = cash_wallet - $1 WHERE id = $2', [fromCash, req.userId]);
+    }
+
+    // Set next due date (7 days from now, or from current due date if not yet past)
+    const now = new Date();
+    const baseDate = u.weekly_fee_due && new Date(u.weekly_fee_due) > now ? new Date(u.weekly_fee_due) : now;
+    const nextDue = new Date(baseDate);
+    nextDue.setDate(nextDue.getDate() + 7);
+
+    await query('UPDATE users SET weekly_fee_due = $1 WHERE id = $2', [nextDue, req.userId]);
+
+    // Log transaction
+    await query(
+      `INSERT INTO wallet_transactions (user_id, type, amount, description)
+       VALUES ($1, 'weekly_fee', $2, $3)`,
+      [req.userId, -weeklyFee, `Weekly fee paid from ${source === 'both' ? 'commission+cash' : source} wallet`]
+    );
+
+    // Re-enable API keys if they were disabled due to expired fee
+    await query(
+      `UPDATE api_keys SET enabled = true
+       WHERE user_id = $1 AND paused_by_admin = false`,
+      [req.userId]
+    );
+
+    res.json({ ok: true, next_due: nextDue.toISOString(), message: `Weekly fee paid! Next due: ${nextDue.toISOString().slice(0, 10)}` });
+  } catch (err) {
+    console.error('Pay fee error:', err.message);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// ── Top up cash wallet (submit proof) ───────────────────────
+router.post('/topup', async (req, res) => {
+  try {
+    const { amount, tx_hash, proof_url } = req.body;
+    if (!amount || amount <= 0) return res.status(400).json({ error: 'Amount required' });
+    if (!tx_hash && !proof_url) return res.status(400).json({ error: 'Transaction hash or proof URL required' });
+
+    await query(
+      `INSERT INTO wallet_transactions (user_id, type, amount, description, tx_hash, status)
+       VALUES ($1, 'topup_pending', $2, $3, $4, 'pending')`,
+      [req.userId, amount, `Top-up request $${parseFloat(amount).toFixed(2)}`, tx_hash || proof_url || '']
+    );
+
+    res.json({ ok: true, message: 'Top-up submitted. Admin will approve and credit your wallet.' });
+  } catch (err) {
+    console.error('Top-up error:', err.message);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// ── Transfer commission to cash wallet ──────────────────────
+router.post('/transfer-commission', async (req, res) => {
+  try {
+    const { amount } = req.body;
+    if (!amount || amount <= 0) return res.status(400).json({ error: 'Amount required' });
+
+    const user = await query('SELECT commission_earned FROM users WHERE id = $1', [req.userId]);
+    const commBal = parseFloat(user[0]?.commission_earned) || 0;
+    if (commBal < amount) return res.status(400).json({ error: `Insufficient commission. Have $${commBal.toFixed(2)}` });
+
+    await query('UPDATE users SET commission_earned = commission_earned - $1, cash_wallet = cash_wallet + $1 WHERE id = $2', [amount, req.userId]);
+    await query(
+      `INSERT INTO wallet_transactions (user_id, type, amount, description) VALUES ($1, 'commission_transfer', $2, 'Transferred commission to cash wallet')`,
+      [req.amount, -amount]
+    );
+    await query(
+      `INSERT INTO wallet_transactions (user_id, type, amount, description) VALUES ($1, 'topup', $2, 'Received from commission')`,
+      [req.userId, amount]
+    );
+
+    res.json({ ok: true, message: `$${amount.toFixed(2)} moved from commission to cash wallet.` });
+  } catch (err) {
+    console.error('Transfer error:', err.message);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// ── Save USDT withdrawal address ────────────────────────────
+router.post('/usdt-address', async (req, res) => {
+  try {
+    const { address, network } = req.body;
+    if (!address) return res.status(400).json({ error: 'USDT address required' });
+    const net = (network || 'BEP20').toUpperCase();
+    if (!['BEP20', 'ERC20', 'TRC20', 'POLYGON'].includes(net)) {
+      return res.status(400).json({ error: 'Supported networks: BEP20, ERC20, TRC20, POLYGON' });
+    }
+    await query('UPDATE users SET usdt_address = $1, usdt_network = $2 WHERE id = $3', [address.trim(), net, req.userId]);
     res.json({ ok: true });
   } catch (err) {
-    console.error('Telegram ID error:', err.message);
+    console.error('USDT address error:', err.message);
     res.status(500).json({ error: 'Server error' });
   }
 });
 
-// Pay via bank transfer (submit proof)
-router.post('/bank-transfer', async (req, res) => {
+// ── Withdraw commission as USDT ─────────────────────────────
+router.post('/withdraw', async (req, res) => {
   try {
-    const settings = await getSettings();
-    const { proof_url, plan } = req.body;
-    if (!proof_url) return res.status(400).json({ error: 'Payment proof URL required' });
+    const { amount } = req.body;
+    if (!amount || amount < 10) return res.status(400).json({ error: 'Minimum withdrawal is $10 USDT' });
 
-    const isSignal = plan === 'signal';
-    const amount = isSignal ? settings.signal_price : settings.price;
-    const planName = isSignal ? 'signal' : 'monthly';
+    const user = await query('SELECT commission_earned, usdt_address, usdt_network FROM users WHERE id = $1', [req.userId]);
+    if (!user.length) return res.status(404).json({ error: 'User not found' });
 
-    if (isSignal) {
-      const user = await query('SELECT telegram_id FROM users WHERE id = $1', [req.userId]);
-      if (!user[0]?.telegram_id) return res.status(400).json({ error: 'Set your Telegram ID first' });
-    }
+    const u = user[0];
+    if (!u.usdt_address) return res.status(400).json({ error: 'Set your USDT withdrawal address first' });
 
+    const commBal = parseFloat(u.commission_earned) || 0;
+    if (commBal < amount) return res.status(400).json({ error: `Insufficient commission. Have $${commBal.toFixed(2)}` });
+
+    // Deduct from commission
+    await query('UPDATE users SET commission_earned = commission_earned - $1 WHERE id = $2', [amount, req.userId]);
+
+    // Create withdrawal request
     await query(
-      `INSERT INTO subscriptions (user_id, plan, status, amount, payment_method, proof_url)
-       VALUES ($1, $2, 'pending', $3, 'bank_transfer', $4)`,
-      [req.userId, planName, amount, proof_url]
-    );
-    res.json({ ok: true, message: 'Payment submitted. Waiting for admin approval.' });
-  } catch (err) {
-    console.error('Bank transfer error:', err.message);
-    res.status(500).json({ error: 'Server error' });
-  }
-});
-
-// Pay via wallet balance
-router.post('/pay-wallet', async (req, res) => {
-  try {
-    const settings = await getSettings();
-    const { plan } = req.body;
-    const isSignal = plan === 'signal';
-    const amount = isSignal ? settings.signal_price : settings.price;
-    const planName = isSignal ? 'signal' : 'monthly';
-
-    if (isSignal) {
-      const u = await query('SELECT telegram_id FROM users WHERE id = $1', [req.userId]);
-      if (!u[0]?.telegram_id) return res.status(400).json({ error: 'Set your Telegram ID first' });
-    }
-
-    const user = await query('SELECT wallet_balance FROM users WHERE id = $1', [req.userId]);
-    const balance = parseFloat(user[0]?.wallet_balance || 0);
-
-    if (balance < amount) {
-      return res.status(400).json({ error: `Insufficient balance. Need $${amount}, have $${balance.toFixed(2)}` });
-    }
-
-    await query('UPDATE users SET wallet_balance = wallet_balance - $1 WHERE id = $2', [amount, req.userId]);
-    await query(
-      `INSERT INTO wallet_transactions (user_id, type, amount, description) VALUES ($1, 'subscription', $2, $3)`,
-      [req.userId, -amount, `${isSignal ? 'Signal' : 'Bot'} subscription payment`]
+      `INSERT INTO withdrawals (user_id, amount, bank_name, account_number, account_name)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [req.userId, amount, `USDT (${u.usdt_network})`, u.usdt_address, 'Crypto Withdrawal']
     );
 
-    const expires = await extendSubscription(req.userId, 30, amount, 'wallet', planName);
-    await payReferralCommission(req.userId, { ...settings, price: amount });
+    // Log transaction
+    await query(
+      `INSERT INTO wallet_transactions (user_id, type, amount, description)
+       VALUES ($1, 'withdrawal', $2, $3)`,
+      [req.userId, -amount, `USDT withdrawal to ${u.usdt_address.slice(0, 8)}...${u.usdt_address.slice(-6)} (${u.usdt_network})`]
+    );
 
-    res.json({ ok: true, message: `${isSignal ? 'Signal' : 'Bot'} subscription active until ${expires.toISOString().slice(0, 10)}!` });
+    res.json({ ok: true, message: 'Withdrawal submitted. Admin will process USDT transfer.' });
   } catch (err) {
-    console.error('Wallet pay error:', err.message);
+    console.error('Withdrawal error:', err.message);
     res.status(500).json({ error: 'Server error' });
   }
 });
 
-// Pay via Stripe
-router.post('/stripe-checkout', async (req, res) => {
+// ── Transaction history ─────────────────────────────────────
+router.get('/transactions', async (req, res) => {
   try {
-    const settings = await getSettings();
-    const STRIPE_KEY = process.env.STRIPE_SECRET_KEY;
-    if (!STRIPE_KEY) return res.status(400).json({ error: 'Stripe not configured' });
+    const rows = await query(
+      `SELECT * FROM wallet_transactions WHERE user_id = $1 ORDER BY created_at DESC LIMIT 200`,
+      [req.userId]
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error('Transactions error:', err.message);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
 
-    const stripe = require('stripe')(STRIPE_KEY);
-    const session = await stripe.checkout.sessions.create({
-      payment_method_types: ['card'],
-      line_items: [{
-        price_data: {
-          currency: 'usd',
-          product_data: { name: 'CryptoBot Monthly Subscription' },
-          unit_amount: Math.round(settings.price * 100),
-        },
-        quantity: 1,
-      }],
-      mode: 'payment',
-      success_url: `${process.env.APP_URL || 'https://millionairecryptotraders.up.railway.app'}/?payment=success`,
-      cancel_url: `${process.env.APP_URL || 'https://millionairecryptotraders.up.railway.app'}/?payment=cancel`,
-      metadata: { userId: String(req.userId) },
+// ── Withdrawal history ──────────────────────────────────────
+router.get('/withdrawals', async (req, res) => {
+  try {
+    const rows = await query(
+      'SELECT * FROM withdrawals WHERE user_id = $1 ORDER BY created_at DESC', [req.userId]
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error('Withdrawals error:', err.message);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// ── Referral info ───────────────────────────────────────────
+router.get('/referral', async (req, res) => {
+  try {
+    const user = await query('SELECT referral_code FROM users WHERE id = $1', [req.userId]);
+    const referrals = await query(
+      `SELECT u.email, u.created_at, u.cash_wallet, u.commission_earned
+       FROM users u WHERE u.referred_by = $1 ORDER BY u.created_at DESC`,
+      [req.userId]
+    );
+    const totalComm = await query(
+      `SELECT COALESCE(SUM(amount), 0) as total FROM wallet_transactions
+       WHERE user_id = $1 AND type = 'commission'`, [req.userId]
+    );
+    res.json({
+      referral_code: user[0]?.referral_code || '',
+      referrals,
+      total_commission: parseFloat(totalComm[0]?.total || 0),
     });
-
-    await query(
-      `INSERT INTO subscriptions (user_id, plan, status, amount, payment_method, stripe_session_id)
-       VALUES ($1, 'monthly', 'stripe_pending', $2, 'stripe', $3)`,
-      [req.userId, settings.price, session.id]
-    );
-
-    res.json({ url: session.url });
   } catch (err) {
-    console.error('Stripe error:', err.message);
-    res.status(500).json({ error: 'Stripe checkout failed' });
+    console.error('Referral info error:', err.message);
+    res.status(500).json({ error: 'Server error' });
   }
 });
-
-// Stripe webhook (no auth — Stripe calls this)
-router.post('/stripe-webhook', express.raw({ type: 'application/json' }), async (req, res) => {
-  try {
-    const STRIPE_KEY = process.env.STRIPE_SECRET_KEY;
-    const WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET;
-    if (!STRIPE_KEY || !WEBHOOK_SECRET) return res.status(400).send('Not configured');
-
-    const stripe = require('stripe')(STRIPE_KEY);
-    const sig = req.headers['stripe-signature'];
-    const event = stripe.webhooks.constructEvent(req.body, sig, WEBHOOK_SECRET);
-
-    if (event.type === 'checkout.session.completed') {
-      const session = event.data.object;
-      const userId = parseInt(session.metadata.userId);
-      const settings = await getSettings();
-      await extendSubscription(userId, 30, settings.price, 'stripe');
-      // Mark stripe sub record as active
-      await query(`UPDATE subscriptions SET status = 'active' WHERE stripe_session_id = $1`, [session.id]);
-      await payReferralCommission(userId, settings);
-    }
-    res.json({ received: true });
-  } catch (err) {
-    console.error('Stripe webhook error:', err.message);
-    res.status(400).send(err.message);
-  }
-});
-
-// Pay 3-tier referral commission
-// Tier 1: user who directly referred → tier1 %
-// Tier 2: person who referred tier 1 → tier2 %
-// Tier 3: person who referred tier 2 → tier3 %
-async function payReferralCommission(userId, settings) {
-  try {
-    const tiers = [settings.tier1, settings.tier2, settings.tier3];
-    let currentId = userId;
-
-    for (let tier = 0; tier < 3; tier++) {
-      const pct = tiers[tier];
-      if (!pct || pct <= 0) break;
-
-      const user = await query('SELECT referred_by FROM users WHERE id = $1', [currentId]);
-      if (!user.length || !user[0].referred_by) break;
-
-      const referrerId = user[0].referred_by;
-
-      // Only pay commission if referrer has active subscription
-      const activeSub = await query(
-        `SELECT id FROM subscriptions WHERE user_id = $1 AND status = 'active' AND expires_at > NOW() LIMIT 1`,
-        [referrerId]
-      );
-      if (!activeSub.length) {
-        // Referrer's account is not active — skip commission, continue up chain
-        currentId = referrerId;
-        continue;
-      }
-
-      const commission = settings.price * (pct / 100);
-
-      await query('UPDATE users SET wallet_balance = wallet_balance + $1 WHERE id = $2', [commission, referrerId]);
-      await query(
-        `INSERT INTO wallet_transactions (user_id, type, amount, description, ref_id)
-         VALUES ($1, 'commission', $2, $3, $4)`,
-        [referrerId, commission, `Tier ${tier + 1} commission from user #${userId} (${pct}%)`, userId]
-      );
-
-      currentId = referrerId;
-    }
-  } catch (err) {
-    console.error('Referral commission error:', err.message);
-  }
-}
 
 module.exports = router;

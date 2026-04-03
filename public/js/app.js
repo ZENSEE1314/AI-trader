@@ -147,7 +147,7 @@
       btn.classList.toggle('active', isActive);
       btn.setAttribute('aria-selected', isActive);
     });
-    const allTabs = ['dashboard', 'keys', 'subscription', 'wallet', 'chart', 'logs', 'admin'];
+    const allTabs = ['dashboard', 'keys', 'cashwallet', 'chart', 'logs', 'admin'];
     allTabs.forEach(t => {
       const el = $(`#tab-${t}`);
       if (el) el.classList.toggle('hidden', t !== tab);
@@ -155,8 +155,7 @@
 
     if (tab === 'dashboard') { loadDashboard(); startDashboardRefresh(); }
     else if (tab === 'keys') loadKeys();
-    else if (tab === 'subscription') loadSubscription();
-    else if (tab === 'wallet') loadWallet();
+    else if (tab === 'cashwallet') loadCashWallet();
     else if (tab === 'chart') {
       window.open('/chart.html', '_blank');
       // Switch back to dashboard since chart opens in new tab
@@ -778,161 +777,162 @@
 
   // ----- Subscription -----
 
-  async function loadSubscription() {
+  // ─── Cash Wallet ─────────────────────────────────────────────
+
+  async function loadCashWallet() {
     try {
-      const data = await api('GET', '/api/subscription/status');
-      const el = $('#sub-status-text');
-      const paySection = $('#sub-pay-section');
-
-      // Build status display for both plans
-      let statusHtml = '';
-
-      // Bot plan status
-      if (data.active) {
-        const exp = new Date(data.subscription.expires_at);
-        const days = data.days_left;
-        const expStr = exp.toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' });
-        const daysColor = days <= 5 ? 'var(--color-danger)' : days <= 10 ? '#f0a030' : 'var(--color-accent)';
-        statusHtml += `<div style="display:flex;align-items:center;gap:var(--space-4);flex-wrap:wrap;margin-bottom:var(--space-3);">` +
-          `<div><span style="color:var(--color-accent);font-size:1rem;">&#10003; Auto Trading Bot</span><br>` +
-          `<span style="color:var(--color-text-muted);font-size:0.8rem;">Expires: ${expStr}</span></div>` +
-          `<div style="text-align:center;"><span style="font-size:1.8rem;font-weight:700;color:${daysColor};font-family:var(--font-display);">${days}</span><br>` +
-          `<span style="color:var(--color-text-muted);font-size:0.75rem;">days left</span></div></div>`;
-      } else {
-        statusHtml += `<div style="margin-bottom:var(--space-3);"><span style="color:var(--color-danger);">&#10007; Auto Trading Bot — Inactive</span></div>`;
-      }
-
-      // Signal plan status
-      if (data.signal_active) {
-        const exp = new Date(data.signal_sub.expires_at);
-        const days = data.signal_days_left;
-        const expStr = exp.toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' });
-        const daysColor = days <= 5 ? 'var(--color-danger)' : days <= 10 ? '#f0a030' : '#d4af37';
-        statusHtml += `<div style="display:flex;align-items:center;gap:var(--space-4);flex-wrap:wrap;">` +
-          `<div><span style="color:#d4af37;font-size:1rem;">&#10003; VIP Telegram Signals</span><br>` +
-          `<span style="color:var(--color-text-muted);font-size:0.8rem;">Expires: ${expStr}</span></div>` +
-          `<div style="text-align:center;"><span style="font-size:1.8rem;font-weight:700;color:${daysColor};font-family:var(--font-display);">${days}</span><br>` +
-          `<span style="color:var(--color-text-muted);font-size:0.75rem;">days left</span></div></div>`;
-      }
-
-      if (!data.active && !data.signal_active) {
-        statusHtml = `<span style="color:var(--color-danger);font-size:1.1rem;">&#10007; No Active Subscription</span><br>` +
-          `<span style="color:var(--color-text-muted);font-size:0.85rem;">Choose a plan below to get started</span>`;
-      }
-
-      el.innerHTML = statusHtml;
-
-      // Update prices on plan cards
-      const botPriceEl = $('#sub-bot-price');
-      const sigPriceEl = $('#sub-signal-price');
-      if (botPriceEl) botPriceEl.textContent = `$${data.price}/mo`;
-      if (sigPriceEl) sigPriceEl.textContent = `$${data.signal_price}/mo`;
-
-      // Pre-fill telegram ID
-      const tgInput = $('#sub-telegram-id');
-      if (tgInput && data.telegram_id) tgInput.value = data.telegram_id;
-
-      paySection.classList.remove('hidden');
-      $('#sub-wallet-bal').textContent = `$${data.wallet_balance.toFixed(2)}`;
-      const bankInfo = data.bank_details;
-      $('#sub-bank-info').textContent = `${bankInfo.bank} | ${bankInfo.account} | ${bankInfo.name}`;
-    } catch (err) {
-      showToast('Failed to load subscription.', 'error');
-    }
-  }
-
-  function selectPlan(plan) {
-    state.selectedPlan = plan;
-    const botCard = $('#plan-card-bot');
-    const sigCard = $('#plan-card-signal');
-    const tgSection = $('#sub-telegram-section');
-    if (botCard) botCard.style.borderColor = plan === 'bot' ? 'var(--color-accent)' : 'var(--color-border-muted)';
-    if (sigCard) sigCard.style.borderColor = plan === 'signal' ? '#d4af37' : 'var(--color-border-muted)';
-    if (tgSection) tgSection.classList.toggle('hidden', plan !== 'signal');
-  }
-
-  async function saveTelegramId() {
-    const tid = $('#sub-telegram-id').value.trim();
-    if (!tid) return showToast('Enter your Telegram ID', 'error');
-    try {
-      await api('POST', '/api/subscription/telegram-id', { telegram_id: tid });
-      showToast('Telegram ID saved', 'success');
-    } catch (err) { showToast(err.message, 'error'); }
-  }
-
-  async function payWithWallet() {
-    if (state.selectedPlan === 'signal') await saveTelegramId();
-    try {
-      const data = await api('POST', '/api/subscription/pay-wallet', { plan: state.selectedPlan });
-      showToast(data.message, 'success');
-      loadSubscription();
-    } catch (err) { showToast(err.message, 'error'); }
-  }
-
-  async function payBankTransfer() {
-    if (state.selectedPlan === 'signal') await saveTelegramId();
-    const proof = $('#sub-proof-url').value.trim();
-    if (!proof) return showToast('Paste proof URL first', 'error');
-    try {
-      const data = await api('POST', '/api/subscription/bank-transfer', { proof_url: proof, plan: state.selectedPlan });
-      showToast(data.message, 'success');
-      $('#sub-proof-url').value = '';
-    } catch (err) { showToast(err.message, 'error'); }
-  }
-
-  async function payStripe() {
-    if (state.selectedPlan === 'signal') await saveTelegramId();
-    try {
-      const data = await api('POST', '/api/subscription/stripe-checkout', { plan: state.selectedPlan });
-      if (data.url) window.location.href = data.url;
-    } catch (err) { showToast(err.message, 'error'); }
-  }
-
-  // ----- Wallet -----
-
-  async function loadWallet() {
-    try {
-      const [balance, txns] = await Promise.all([
-        api('GET', '/api/wallet/balance'),
-        api('GET', '/api/wallet/transactions'),
+      const [status, txns, withdrawals] = await Promise.all([
+        api('GET', '/api/subscription/status'),
+        api('GET', '/api/subscription/transactions'),
+        api('GET', '/api/subscription/withdrawals').catch(() => []),
       ]);
-      $('#wallet-balance').textContent = `$${balance.balance.toFixed(2)}`;
-      $('#wallet-commission').textContent = `$${balance.total_commission.toFixed(2)}`;
-      $('#wallet-referrals').textContent = balance.referral_count;
 
-      const appUrl = window.location.origin;
-      $('#referral-link').value = `${appUrl}/?ref=${balance.referral_code}`;
+      // Summary cards
+      $('#cw-cash').textContent = `$${status.cash_wallet.toFixed(2)}`;
+      $('#cw-commission').textContent = `$${status.commission_earned.toFixed(2)}`;
+      $('#cw-total').textContent = `$${status.total_balance.toFixed(2)}`;
+      $('#cw-weekly-fee').textContent = `$${status.weekly_fee.toFixed(2)}`;
 
-      const tbody = $('#wallet-txns-tbody');
-      if (!txns.length) {
-        tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;color:var(--color-text-muted);">No transactions yet</td></tr>';
+      // Fee status
+      const feeCard = $('#cw-fee-status-card');
+      const feeWarning = $('#cw-fee-warning');
+      if (status.fee_due) {
+        $('#cw-fee-status').textContent = '⚠️ OVERDUE';
+        $('#cw-fee-status').style.color = 'var(--color-danger)';
+        feeCard.style.borderLeft = '3px solid var(--color-danger)';
+        feeWarning.classList.remove('hidden');
+      } else if (status.days_left <= 2) {
+        $('#cw-fee-status').textContent = `Due in ${status.days_left} day${status.days_left !== 1 ? 's' : ''}`;
+        $('#cw-fee-status').style.color = '#f0a030';
+        feeCard.style.borderLeft = '3px solid #f0a030';
+        feeWarning.classList.add('hidden');
       } else {
-        tbody.innerHTML = txns.map(t => `<tr>
-          <td>${formatDate(t.created_at)}</td>
-          <td>${escapeHtml(t.type)}</td>
-          <td class="text-mono ${parseFloat(t.amount) >= 0 ? 'positive' : 'negative'}">${parseFloat(t.amount) >= 0 ? '+' : ''}$${parseFloat(t.amount).toFixed(2)}</td>
-          <td>${escapeHtml(t.description || '')}</td>
-        </tr>`).join('');
+        $('#cw-fee-status').textContent = '✅ Active';
+        $('#cw-fee-status').style.color = 'var(--color-success)';
+        feeCard.style.borderLeft = '3px solid var(--color-success)';
+        feeWarning.classList.add('hidden');
       }
-    } catch (err) { showToast('Failed to load wallet.', 'error'); }
+      if (status.weekly_fee_due) {
+        const due = new Date(status.weekly_fee_due);
+        $('#cw-fee-due').textContent = `Next due: ${due.toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' })}`;
+      }
+
+      // Referral
+      const appUrl = window.location.origin;
+      $('#referral-link').value = `${appUrl}/?ref=${status.referral_code}`;
+      $('#cw-ref-count').textContent = status.referral_count;
+
+      // USDT address
+      if (status.usdt_address) {
+        $('#cw-usdt-addr').value = status.usdt_address;
+        $('#cw-usdt-net').value = status.usdt_network || 'BEP20';
+        $('#cw-wd-address-display').textContent = `Sending to: ${status.usdt_address.slice(0, 10)}...${status.usdt_address.slice(-6)} (${status.usdt_network})`;
+      }
+
+      // Transaction history
+      const tbody = $('#cw-txns-tbody');
+      if (!txns.length) {
+        tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--color-text-muted);">No transactions yet</td></tr>';
+      } else {
+        tbody.innerHTML = txns.map(t => {
+          const amt = parseFloat(t.amount);
+          const typeColors = {
+            topup: 'var(--color-success)', commission: 'var(--color-accent)',
+            weekly_fee: '#f0a030', withdrawal: 'var(--color-danger)',
+            topup_pending: '#f0a030', topup_rejected: 'var(--color-danger)',
+            commission_transfer: 'var(--color-text-muted)', refund: 'var(--color-success)',
+          };
+          const typeLabels = {
+            topup: 'Top Up', commission: 'Commission', weekly_fee: 'Weekly Fee',
+            withdrawal: 'Withdrawal', topup_pending: 'Top Up (Pending)',
+            topup_rejected: 'Top Up (Rejected)', commission_transfer: 'Transfer',
+            refund: 'Refund', admin_adjustment: 'Admin Adjust',
+          };
+          return `<tr>
+            <td>${formatDate(t.created_at)}</td>
+            <td style="color:${typeColors[t.type] || 'var(--color-text)'}">${typeLabels[t.type] || t.type}</td>
+            <td class="text-mono ${amt >= 0 ? 'positive' : 'negative'}">${amt >= 0 ? '+' : ''}$${Math.abs(amt).toFixed(2)}</td>
+            <td>${escapeHtml(t.description || '')}</td>
+            <td>${t.status || '-'}</td>
+          </tr>`;
+        }).join('');
+      }
+
+      // Withdrawal history
+      const wdBody = $('#cw-wds-tbody');
+      if (!withdrawals.length) {
+        wdBody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--color-text-muted);">No withdrawals yet</td></tr>';
+      } else {
+        wdBody.innerHTML = withdrawals.map(w => {
+          const statusColor = w.status === 'approved' ? 'var(--color-success)' : w.status === 'rejected' ? 'var(--color-danger)' : '#f0a030';
+          return `<tr>
+            <td>${formatDate(w.created_at)}</td>
+            <td class="text-mono">$${parseFloat(w.amount).toFixed(2)}</td>
+            <td>${escapeHtml(w.bank_name || '-')}</td>
+            <td class="text-mono" style="font-size:0.8rem;">${escapeHtml((w.account_number || '').slice(0, 12))}...</td>
+            <td style="color:${statusColor}">${w.status}</td>
+          </tr>`;
+        }).join('');
+      }
+    } catch (err) {
+      showToast('Failed to load cash wallet.', 'error');
+    }
   }
 
-  async function requestWithdraw() {
-    const amount = parseFloat($('#wd-amount').value);
-    const bank_name = $('#wd-bank').value.trim();
-    const account_number = $('#wd-accno').value.trim();
-    const account_name = $('#wd-accname').value.trim();
-    if (!amount || !bank_name || !account_number || !account_name) {
-      return showToast('Fill in all fields', 'error');
-    }
+  async function payFee(source) {
+    if (!confirm(`Pay weekly fee from ${source === 'both' ? 'commission + cash' : source} wallet?`)) return;
     try {
-      const data = await api('POST', '/api/wallet/withdraw', { amount, bank_name, account_number, account_name });
+      const data = await api('POST', '/api/subscription/pay-fee', { source });
       showToast(data.message, 'success');
-      $('#wd-amount').value = '';
-      $('#wd-bank').value = '';
-      $('#wd-accno').value = '';
-      $('#wd-accname').value = '';
-      loadWallet();
+      loadCashWallet();
+    } catch (err) { showToast(err.message, 'error'); }
+  }
+
+  async function submitTopUp() {
+    const amount = parseFloat($('#cw-topup-amount').value);
+    const txHash = $('#cw-topup-txhash').value.trim();
+    if (!amount || amount <= 0) return showToast('Enter a valid amount', 'error');
+    if (!txHash) return showToast('Enter TX hash or proof URL', 'error');
+    try {
+      const data = await api('POST', '/api/subscription/topup', { amount, tx_hash: txHash });
+      showToast(data.message, 'success');
+      $('#cw-topup-amount').value = '';
+      $('#cw-topup-txhash').value = '';
+      loadCashWallet();
+    } catch (err) { showToast(err.message, 'error'); }
+  }
+
+  async function transferCommission() {
+    const amount = parseFloat($('#cw-transfer-amount').value);
+    if (!amount || amount <= 0) return showToast('Enter a valid amount', 'error');
+    try {
+      const data = await api('POST', '/api/subscription/transfer-commission', { amount });
+      showToast(data.message, 'success');
+      $('#cw-transfer-amount').value = '';
+      loadCashWallet();
+    } catch (err) { showToast(err.message, 'error'); }
+  }
+
+  async function saveUsdtAddress() {
+    const address = $('#cw-usdt-addr').value.trim();
+    const network = $('#cw-usdt-net').value;
+    if (!address) return showToast('Enter your USDT address', 'error');
+    try {
+      await api('POST', '/api/subscription/usdt-address', { address, network });
+      showToast('USDT address saved', 'success');
+      $('#cw-wd-address-display').textContent = `Sending to: ${address.slice(0, 10)}...${address.slice(-6)} (${network})`;
+    } catch (err) { showToast(err.message, 'error'); }
+  }
+
+  async function withdrawCommission() {
+    const amount = parseFloat($('#cw-wd-amount').value);
+    if (!amount || amount < 10) return showToast('Minimum withdrawal is $10', 'error');
+    if (!confirm(`Withdraw $${amount.toFixed(2)} USDT?`)) return;
+    try {
+      const data = await api('POST', '/api/subscription/withdraw', { amount });
+      showToast(data.message, 'success');
+      $('#cw-wd-amount').value = '';
+      loadCashWallet();
     } catch (err) { showToast(err.message, 'error'); }
   }
 
@@ -1425,10 +1425,10 @@
   // ----- Expose to inline handlers -----
   window.CryptoBot = {
     toggleSettings, saveSettings, deleteKey, showToast,
-    payWithWallet, payBankTransfer, payStripe, requestWithdraw,
+    payFee, submitTopUp, transferCommission, saveUsdtAddress, withdrawCommission,
     adminAction, adminSub, adminWd, saveAdminSettings, adminEditWallet, clearErrors,
     adminEditSplit, adminPauseKey, adminResumeKey, adminApproveNoSub,
-    goToAuth, selectPlan, showLoginForm, onPlatformChange,
+    goToAuth, showLoginForm, onPlatformChange,
     searchCoins, addCoin, removeCoin,
     filterLogs, clearLogs,
   };
@@ -1455,12 +1455,11 @@
       if (refInput) refInput.value = ref;
     }
 
-    // Load landing page prices
-    fetch('/api/subscription/prices').then(r => r.json()).then(data => {
-      const bp = $('#landing-bot-price');
-      const sp = $('#landing-signal-price');
-      if (bp && data.price) bp.innerHTML = `$${data.price}<span>/month</span>`;
-      if (sp && data.signal_price) sp.innerHTML = `$${data.signal_price}<span>/month</span>`;
+    // Load landing page weekly fee
+    fetch('/api/subscription/status').then(r => r.ok ? r.json() : null).then(data => {
+      if (!data) return;
+      const wf = document.getElementById('landing-weekly-fee');
+      if (wf && data.weekly_fee) wf.textContent = `$${data.weekly_fee}/week`;
     }).catch(() => {});
 
     checkSession();
