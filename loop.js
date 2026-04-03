@@ -3,7 +3,7 @@ const { spawn } = require('child_process');
 const path = require('path');
 const { runNightlyAnalysis } = require('./nightly-analysis');
 
-const INTERVAL_MIN = 2;
+const INTERVAL_MIN = 1;
 const CYCLE_TIMEOUT_MS = 4 * 60 * 1000;
 const NIGHTLY_CHECK_INTERVAL_MS = 60 * 1000;
 const NIGHTLY_JAKARTA_HOUR = 22;

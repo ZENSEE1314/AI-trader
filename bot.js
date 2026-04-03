@@ -15,7 +15,7 @@ const { log: bLog } = require('./bot-logger');
 const TELEGRAM_TOKEN  = process.env.TELEGRAM_TOKEN;
 const TELEGRAM_CHATS  = (process.env.TELEGRAM_CHAT_ID || '').split(',').map(s => s.trim()).filter(Boolean);
 const TRADE_INTERVAL_MIN = parseInt(process.env.TRADE_INTERVAL_MIN || '5');
-const INTERVAL_MIN    = parseInt(process.env.INTERVAL_MIN || '5');
+const INTERVAL_MIN    = parseInt(process.env.INTERVAL_MIN || '1');
 const REQUEST_TIMEOUT = 30000;
 
 const { isProxyEnabled, getFetchOptions } = require('./proxy-agent');

@@ -12,6 +12,6 @@ services:
       - key: TELEGRAM_CHAT_ID
         sync: false
       - key: INTERVAL_MIN
-        value: "10"
+        value: "1"
       - key: PROXY_URL
         sync: false
