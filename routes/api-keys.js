@@ -48,10 +48,11 @@ router.post('/', async (req, res) => {
     // Validate the key by making a test call
     if (platform === 'binance') {
       try {
-        const client = new USDMClient({ api_key: apiKey, api_secret: apiSecret });
+        const { getBinanceRequestOptions } = require('../proxy-agent');
+        const client = new USDMClient({ api_key: apiKey, api_secret: apiSecret }, getBinanceRequestOptions());
         await client.getAccountInformation();
       } catch (e) {
-        return res.status(400).json({ error: `Binance API test failed: ${e.message}` });
+        return res.status(400).json({ error: `Binance API test failed: ${e.message}. Make sure your server IP is whitelisted on Binance.` });
       }
     } else if (platform === 'bitunix') {
       try {
