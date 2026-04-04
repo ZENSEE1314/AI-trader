@@ -194,11 +194,15 @@ router.post('/withdraw', async (req, res) => {
     const u = user[0];
     if (!u.usdt_address) return res.status(400).json({ error: 'Set your USDT withdrawal address first' });
 
-    const commBal = parseFloat(u.commission_earned) || 0;
-    if (commBal < amount) return res.status(400).json({ error: `Insufficient commission. Have $${commBal.toFixed(2)}` });
-
-    // Deduct from commission
-    await query('UPDATE users SET commission_earned = commission_earned - $1 WHERE id = $2', [amount, req.userId]);
+    // Atomic deduct — prevents double-spend race condition
+    const deducted = await query(
+      'UPDATE users SET commission_earned = commission_earned - $1 WHERE id = $2 AND commission_earned >= $1 RETURNING commission_earned',
+      [amount, req.userId]
+    );
+    if (!deducted.length) {
+      const commBal = parseFloat(u.commission_earned) || 0;
+      return res.status(400).json({ error: `Insufficient commission. Have $${commBal.toFixed(2)}` });
+    }
 
     // Create withdrawal request
     await query(

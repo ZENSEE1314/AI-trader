@@ -159,11 +159,21 @@ const DEFAULT_PARAMS = {
   LEV_ALT: 20,             // all altcoin leverage
 };
 
+let _paramsCache = { data: null, ts: 0 };
+const PARAMS_CACHE_TTL = 120_000;
+
 async function getOptimalParams() {
+  if (_paramsCache.data && Date.now() - _paramsCache.ts < PARAMS_CACHE_TTL) {
+    return { ..._paramsCache.data };
+  }
+
   const countRes = await query('SELECT COUNT(*) as count FROM ai_trades WHERE pnl_pct IS NOT NULL');
   const totalTrades = parseInt(countRes[0].count);
 
-  if (totalTrades < MIN_TRADES_FOR_LEARNING * 2) return { ...DEFAULT_PARAMS };
+  if (totalTrades < MIN_TRADES_FOR_LEARNING * 2) {
+    _paramsCache = { data: { ...DEFAULT_PARAMS }, ts: Date.now() };
+    return { ...DEFAULT_PARAMS };
+  }
 
   const params = { ...DEFAULT_PARAMS };
 
@@ -365,6 +375,7 @@ async function getOptimalParams() {
 
   // ── 9. (removed — SL is now capital-based, no min/max filtering needed) ──
 
+  _paramsCache = { data: { ...params }, ts: Date.now() };
   return params;
 }
 
@@ -437,7 +448,7 @@ async function saveVersion(tradeCount) {
       parseFloat(o.total_pnl) || 0,
       JSON.stringify(params),
       JSON.stringify(setupWeights),
-      avoided.join(','),
+      JSON.stringify(avoided),
       changes.length ? changes.join(' | ') : 'initial snapshot',
     ]
   );
@@ -618,5 +629,6 @@ module.exports = {
   getCurrentSession,
   getVersions,
   getCurrentVersion,
+  getLearningSummary,
   DEFAULT_PARAMS,
 };

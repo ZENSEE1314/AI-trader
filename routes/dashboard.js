@@ -164,56 +164,52 @@ router.get('/futures-wallet', async (req, res) => {
       [req.userId]
     );
 
+    // Fetch all exchange wallets in parallel
+    const results = await Promise.allSettled(keys.map(async (key) => {
+      const apiKey = cryptoUtils.decrypt(key.api_key_enc, key.iv, key.auth_tag);
+      const apiSecret = cryptoUtils.decrypt(key.api_secret_enc, key.secret_iv, key.secret_auth_tag);
+
+      let balance = 0, available = 0, unrealizedPnl = 0, positions = 0;
+
+      if (key.platform === 'binance') {
+        const { getBinanceRequestOptions } = require('../proxy-agent');
+        const client = new USDMClient({ api_key: apiKey, api_secret: apiSecret }, getBinanceRequestOptions());
+        const account = await client.getAccountInformation({ omitZeroBalances: false });
+        balance = parseFloat(account.totalWalletBalance) || 0;
+        available = parseFloat(account.availableBalance) || 0;
+        unrealizedPnl = parseFloat(account.totalUnrealizedProfit) || 0;
+        positions = (account.positions || []).filter(p => parseFloat(p.positionAmt) !== 0).length;
+      } else if (key.platform === 'bitunix') {
+        const { BitunixClient } = require('../bitunix-client');
+        const client = new BitunixClient({ apiKey, apiSecret });
+        const account = await client.getAccountInformation();
+        balance = parseFloat(account.totalWalletBalance) || 0;
+        available = parseFloat(account.availableBalance) || 0;
+        unrealizedPnl = parseFloat(account.totalUnrealizedProfit) || 0;
+        positions = (account.positions || []).length;
+      }
+
+      return { id: key.id, platform: key.platform, label: key.label || `${key.platform} key`, balance, available, unrealizedPnl, positions };
+    }));
+
     const wallets = [];
     let totalBalance = 0;
     let totalAvailable = 0;
     let totalUnrealizedPnl = 0;
 
-    for (const key of keys) {
-      try {
-        const apiKey = cryptoUtils.decrypt(key.api_key_enc, key.iv, key.auth_tag);
-        const apiSecret = cryptoUtils.decrypt(key.api_secret_enc, key.secret_iv, key.secret_auth_tag);
-
-        let balance = 0, available = 0, unrealizedPnl = 0, positions = 0;
-
-        if (key.platform === 'binance') {
-          const { getBinanceRequestOptions } = require('../proxy-agent');
-          const client = new USDMClient({ api_key: apiKey, api_secret: apiSecret }, getBinanceRequestOptions());
-          const account = await client.getAccountInformation({ omitZeroBalances: false });
-          balance = parseFloat(account.totalWalletBalance) || 0;
-          available = parseFloat(account.availableBalance) || 0;
-          unrealizedPnl = parseFloat(account.totalUnrealizedProfit) || 0;
-          positions = (account.positions || []).filter(p => parseFloat(p.positionAmt) !== 0).length;
-        } else if (key.platform === 'bitunix') {
-          const { BitunixClient } = require('../bitunix-client');
-          const client = new BitunixClient({ apiKey, apiSecret });
-          const account = await client.getAccountInformation();
-          balance = parseFloat(account.totalWalletBalance) || 0;
-          available = parseFloat(account.availableBalance) || 0;
-          unrealizedPnl = parseFloat(account.totalUnrealizedProfit) || 0;
-          positions = (account.positions || []).length;
-        }
-
+    for (let i = 0; i < results.length; i++) {
+      const r = results[i];
+      if (r.status === 'fulfilled') {
+        wallets.push(r.value);
+        totalBalance += r.value.balance;
+        totalAvailable += r.value.available;
+        totalUnrealizedPnl += r.value.unrealizedPnl;
+      } else {
         wallets.push({
-          id: key.id,
-          platform: key.platform,
-          label: key.label || `${key.platform} key`,
-          balance,
-          available,
-          unrealizedPnl,
-          positions,
-        });
-
-        totalBalance += balance;
-        totalAvailable += available;
-        totalUnrealizedPnl += unrealizedPnl;
-      } catch (err) {
-        wallets.push({
-          id: key.id,
-          platform: key.platform,
-          label: key.label || `${key.platform} key`,
+          id: keys[i].id, platform: keys[i].platform,
+          label: keys[i].label || `${keys[i].platform} key`,
           balance: 0, available: 0, unrealizedPnl: 0, positions: 0,
-          error: err.message,
+          error: r.reason?.message || 'Unknown error',
         });
       }
     }

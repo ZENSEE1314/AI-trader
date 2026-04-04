@@ -137,7 +137,11 @@ router.post('/reset-password', async (req, res) => {
     if (!rows.length) return res.status(400).json({ error: 'Invalid or expired reset link' });
 
     const [storedToken, expiresStr] = rows[0].value.split('|');
-    if (storedToken !== token) return res.status(400).json({ error: 'Invalid reset link' });
+    const tokenBuf = Buffer.from(token);
+    const storedBuf = Buffer.from(storedToken);
+    if (tokenBuf.length !== storedBuf.length || !crypto.timingSafeEqual(tokenBuf, storedBuf)) {
+      return res.status(400).json({ error: 'Invalid reset link' });
+    }
     if (new Date(expiresStr) < new Date()) return res.status(400).json({ error: 'Reset link expired' });
 
     const hash = await bcrypt.hash(password, 10);

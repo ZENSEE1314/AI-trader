@@ -4,7 +4,11 @@ const path = require('path');
 
 const app = express();
 
-app.use(express.json());
+// Skip JSON parsing for Stripe webhook — needs raw body for signature verification
+app.use((req, res, next) => {
+  if (req.path === '/api/subscription/stripe-webhook') return next();
+  express.json()(req, res, next);
+});
 app.use(cookieParser());
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -19,9 +23,6 @@ app.use('/api/chart', require('./routes/chart'));
 app.use('/api/token-leverage', require('./routes/token-leverage'));
 app.use('/api/risk-levels', require('./routes/risk-levels'));
 app.use('/health', require('./health'));
-
-// Stripe webhook needs raw body — mount before json parser catches it
-// (already handled inside subscription.js with express.raw)
 
 // Available trading pairs (cached 1 hour)
 let coinListCache = { data: null, ts: 0 };

@@ -41,6 +41,7 @@ async function fetchAllTrades() {
     SELECT id, symbol, direction, entry_price, sl_price, tp_price,
            leverage, status, pnl_usdt, created_at, closed_at, error_msg
     FROM trades
+    WHERE created_at > NOW() - INTERVAL '90 days'
     ORDER BY created_at DESC
   `);
 }

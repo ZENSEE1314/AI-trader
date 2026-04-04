@@ -263,10 +263,10 @@ async function sendAIStats(chatId) {
     // Current AI parameters
     const params = await aiLearner.getOptimalParams();
     msg += `<b>Current AI Params:</b>\n`;
-    msg += `  TP: ${(params.TP_PCT * 100).toFixed(1)}%\n`;
-    msg += `  SL Buffer: ${(params.SL_BUFFER * 100).toFixed(2)}%\n`;
+    msg += `  TP Margin: ${(params.TP_MARGIN_PCT * 100).toFixed(1)}%\n`;
+    msg += `  SL Margin: ${(params.SL_MARGIN_PCT * 100).toFixed(1)}%\n`;
     msg += `  Min Score: ${params.MIN_SCORE}\n`;
-    msg += `  Risk/Trade: ${(params.WALLET_RISK_PCT * 100).toFixed(1)}%\n`;
+    msg += `  Risk/Trade: ${(params.WALLET_SIZE_PCT * 100).toFixed(1)}%\n`;
 
     await tgSendTo(chatId, msg);
   } catch (err) {
@@ -417,8 +417,11 @@ async function main() {
     await pollCommands();
   }, 5000);
 
+  let tradingCycleRunning = false;
   setInterval(async () => {
-    await runTradingCycle();
+    if (tradingCycleRunning) { log('Cycle still running — skipping'); return; }
+    tradingCycleRunning = true;
+    try { await runTradingCycle(); } finally { tradingCycleRunning = false; }
   }, INTERVAL_MIN * 60 * 1000);
 
   setInterval(async () => {

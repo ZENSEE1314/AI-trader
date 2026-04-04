@@ -186,7 +186,7 @@ async function initAllTables() {
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS total_referral_commission DECIMAL DEFAULT 0`,
     `CREATE TABLE IF NOT EXISTS ai_versions (
       id SERIAL PRIMARY KEY,
-      version INTEGER,
+      version VARCHAR(20),
       trade_count INTEGER,
       win_rate DECIMAL,
       avg_pnl DECIMAL,
@@ -195,6 +195,81 @@ async function initAllTables() {
       setup_weights JSONB,
       avoided_coins JSONB,
       changes TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )`,
+    `CREATE TABLE IF NOT EXISTS users (
+      id SERIAL PRIMARY KEY,
+      email VARCHAR(255) UNIQUE NOT NULL,
+      password_hash VARCHAR(255) NOT NULL,
+      is_admin BOOLEAN DEFAULT false,
+      is_blocked BOOLEAN DEFAULT false,
+      referral_code VARCHAR(20) UNIQUE,
+      referred_by INTEGER REFERENCES users(id),
+      wallet_balance DECIMAL DEFAULT 0,
+      telegram_id VARCHAR(50),
+      reset_token VARCHAR(255),
+      reset_token_expires TIMESTAMPTZ,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )`,
+    `CREATE TABLE IF NOT EXISTS api_keys (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER REFERENCES users(id),
+      platform VARCHAR(20) NOT NULL,
+      label VARCHAR(100),
+      api_key_enc TEXT NOT NULL,
+      api_secret_enc TEXT NOT NULL,
+      iv VARCHAR(64),
+      auth_tag VARCHAR(64),
+      secret_iv VARCHAR(64),
+      secret_auth_tag VARCHAR(64),
+      leverage INTEGER DEFAULT 20,
+      risk_pct DECIMAL DEFAULT 0.10,
+      max_loss_usdt DECIMAL,
+      max_positions INTEGER DEFAULT 3,
+      enabled BOOLEAN DEFAULT true,
+      allowed_coins TEXT DEFAULT '',
+      banned_coins TEXT DEFAULT '',
+      tp_pct DECIMAL DEFAULT 0.045,
+      sl_pct DECIMAL DEFAULT 0.03,
+      max_consec_loss INTEGER DEFAULT 2,
+      top_n_coins INTEGER DEFAULT 50,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )`,
+    `CREATE TABLE IF NOT EXISTS subscriptions (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER REFERENCES users(id),
+      plan VARCHAR(50),
+      status VARCHAR(20) DEFAULT 'pending',
+      amount DECIMAL,
+      payment_method VARCHAR(30),
+      proof_url TEXT,
+      stripe_session_id VARCHAR(255),
+      starts_at TIMESTAMPTZ,
+      expires_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )`,
+    `CREATE TABLE IF NOT EXISTS settings (
+      key VARCHAR(100) PRIMARY KEY,
+      value TEXT
+    )`,
+    `CREATE TABLE IF NOT EXISTS wallet_transactions (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER REFERENCES users(id),
+      type VARCHAR(30),
+      amount DECIMAL,
+      description TEXT,
+      ref_id INTEGER,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )`,
+    `CREATE TABLE IF NOT EXISTS withdrawals (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER REFERENCES users(id),
+      amount DECIMAL,
+      bank_name VARCHAR(100),
+      account_number VARCHAR(50),
+      account_name VARCHAR(100),
+      status VARCHAR(20) DEFAULT 'pending',
+      admin_note TEXT,
       created_at TIMESTAMPTZ DEFAULT NOW()
     )`,
   ];
@@ -206,6 +281,24 @@ async function initAllTables() {
       console.error('[DB] Table init error:', err.message);
     }
   }
+
+  // Create indexes for frequently queried columns
+  const indexes = [
+    'CREATE INDEX IF NOT EXISTS idx_trades_user_status ON trades (user_id, status)',
+    'CREATE INDEX IF NOT EXISTS idx_trades_symbol_status ON trades (symbol, status)',
+    'CREATE INDEX IF NOT EXISTS idx_trades_created_at ON trades (created_at DESC)',
+    'CREATE INDEX IF NOT EXISTS idx_ai_trades_symbol ON ai_trades (symbol)',
+    'CREATE INDEX IF NOT EXISTS idx_ai_trades_setup ON ai_trades (setup)',
+    'CREATE INDEX IF NOT EXISTS idx_ai_trades_created_at ON ai_trades (created_at DESC)',
+    'CREATE INDEX IF NOT EXISTS idx_api_keys_user ON api_keys (user_id, enabled)',
+    'CREATE INDEX IF NOT EXISTS idx_wallet_tx_user ON wallet_transactions (user_id)',
+    'CREATE INDEX IF NOT EXISTS idx_subs_user ON subscriptions (user_id, status)',
+  ];
+
+  for (const sql of indexes) {
+    try { await pool.query(sql); } catch (_) {}
+  }
+
   console.log('[DB] All tables verified');
 }
 

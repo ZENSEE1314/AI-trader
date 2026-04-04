@@ -18,9 +18,10 @@ const REQUEST_TIMEOUT = 15000;
 const TOP_N_COINS = 100;
 const MIN_24H_VOLUME = 10_000_000;
 
-// Fixed risk: 10% margin, 1.5% SL (30% margin at 20x), 2.25% TP (45% margin at 20x)
-const FIXED_SL_PCT = 0.015;
-const FIXED_TP_PCT = 0.0225;
+// Default risk: 1.5% SL (30% margin at 20x), 2.25% TP (45% margin at 20x)
+// Overridden by AI params when available
+const DEFAULT_SL_PCT = 0.015;
+const DEFAULT_TP_PCT = 0.0225;
 
 // Swing lengths per timeframe
 const SWING_LENGTHS = { '15m': 10, '3m': 10, '1m': 5 };
@@ -392,21 +393,36 @@ async function analyzeLHHL(ticker, params, dailyBiasCache) {
   // │ 10% margin, 1.5% SL (30% of margin at 20x),            │
   // │ 2.25% TP (45% of margin at 20x)                        │
   // └─────────────────────────────────────────────────────────┘
-  const FIXED_SL_PCT = 0.015;  // 1.5% price distance → 30% margin loss at 20x
-  const FIXED_TP_PCT = 0.0225; // 2.25% price distance → 45% margin profit at 20x
-
-  const sl = direction === 'LONG'
-    ? price * (1 - FIXED_SL_PCT)
-    : price * (1 + FIXED_SL_PCT);
-  const tp = direction === 'LONG'
-    ? price * (1 + FIXED_TP_PCT)
-    : price * (1 - FIXED_TP_PCT);
-  const slDist = FIXED_SL_PCT;
-  const tpDist = FIXED_TP_PCT;
-
   const BTC_ETH = new Set(['BTCUSDT', 'ETHUSDT']);
   const leverage = BTC_ETH.has(symbol) ? Math.min(params.LEV_BTC_ETH || 20, 20) : Math.min(params.LEV_ALT || 20, 20);
 
+  // AI-tuned TP/SL: convert margin-based % to price-move % using leverage
+  // margin_pct / leverage = price_move_pct (e.g. 0.45 margin / 20x = 2.25% price)
+  const baseTpPct = params.TP_MARGIN_PCT ? params.TP_MARGIN_PCT / leverage : DEFAULT_TP_PCT;
+  const baseSlPct = params.SL_MARGIN_PCT ? params.SL_MARGIN_PCT / leverage : DEFAULT_SL_PCT;
+
+  // Volume strength: compare last 5 candles avg volume vs last 20 candles avg
+  const volumes1m = klines1m.map(k => parseFloat(k[5]));
+  const recentVol = volumes1m.slice(-5).reduce((a, b) => a + b, 0) / 5;
+  const avgVol = volumes1m.slice(-20).reduce((a, b) => a + b, 0) / 20;
+  const volRatio = avgVol > 0 ? recentVol / avgVol : 1;
+
+  let dynamicTP;
+  let volLabel;
+  if (volRatio >= 1.5) {
+    dynamicTP = baseTpPct;           // full TP
+    volLabel = 'STRONG';
+  } else if (volRatio >= 0.8) {
+    dynamicTP = baseTpPct * 0.67;    // ~67% of TP
+    volLabel = 'NORMAL';
+  } else {
+    dynamicTP = baseTpPct * 0.44;    // ~44% of TP
+    volLabel = 'WEAK';
+  }
+
+  const sl = direction === 'LONG' ? price * (1 - baseSlPct) : price * (1 + baseSlPct);
+  const tp = direction === 'LONG' ? price * (1 + dynamicTP) : price * (1 - dynamicTP);
+  const slDist = baseSlPct;
   // ┌─────────────────────────────────────────────────────────┐
   // │ Score                                                    │
   // └─────────────────────────────────────────────────────────┘
@@ -500,7 +516,7 @@ async function scanSMC(log, opts = {}) {
   const minScore = params.MIN_SCORE || 8;
   const dailyBiasCache = new Map();
 
-  bLog.scan(`Refined scan: ${topCoins.length} coins | SL=1.5% TP=2.25% | Margin=10%`);
+  bLog.scan(`Refined scan: ${topCoins.length} coins | AI TP_margin=${(params.TP_MARGIN_PCT * 100).toFixed(0)}% SL_margin=${(params.SL_MARGIN_PCT * 100).toFixed(0)}% minScore=${minScore}`);
 
   const results = [];
   let analyzed = 0;

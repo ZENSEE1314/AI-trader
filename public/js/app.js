@@ -326,7 +326,7 @@
           <span style="color:${pnlColor}">uPnL: ${pnlSign}$${pnl.toFixed(2)}</span> ·
           <span>Pos: ${w.positions || 0}</span>
         </div>
-        ${w.error ? `<div style="font-size:0.7rem;color:var(--color-danger);margin-top:2px">${w.error}</div>` : ''}
+        ${w.error ? `<div style="font-size:0.7rem;color:var(--color-danger);margin-top:2px">${escapeHtml(w.error)}</div>` : ''}
       </div>`;
     }
 
