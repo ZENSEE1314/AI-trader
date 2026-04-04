@@ -41,6 +41,23 @@ router.get('/', async (req, res) => {
         [req.userId]
       );
     }
+    // Fetch user token leverages for each key
+    const keyIds = rows.map(r => r.id);
+    let tokenLeverages = [];
+    if (keyIds.length) {
+      try {
+        tokenLeverages = await query(
+          `SELECT api_key_id, symbol, leverage FROM user_token_leverage WHERE api_key_id = ANY($1) ORDER BY symbol`,
+          [keyIds]
+        );
+      } catch (_) { /* table may not exist yet */ }
+    }
+
+    // Attach token leverages to each key
+    for (const row of rows) {
+      row.token_leverages = tokenLeverages.filter(tl => tl.api_key_id === row.id);
+    }
+
     res.json(rows);
   } catch (err) {
     console.error('List keys error:', err.message);
@@ -94,7 +111,7 @@ router.post('/', async (req, res) => {
 router.put('/:id/settings', async (req, res) => {
   try {
     const { leverage, risk_pct, max_loss_usdt, max_positions, enabled, allowed_coins, banned_coins,
-            tp_pct, sl_pct, max_consec_loss, top_n_coins, risk_level_id, capital_percentage } = req.body;
+            tp_pct, sl_pct, max_consec_loss, top_n_coins, risk_level_id, capital_percentage, token_leverages } = req.body;
 
     if (leverage !== undefined && (leverage < 1 || leverage > 125)) {
       return res.status(400).json({ error: 'Leverage must be 1-125' });
@@ -156,6 +173,21 @@ router.put('/:id/settings', async (req, res) => {
       [leverage, risk_pct, max_loss_usdt, max_positions, enabled, allowed_coins, banned_coins,
        tp_pct, sl_pct, max_consec_loss, top_n_coins, risk_level_id, capital_percentage, req.params.id, req.userId]
     );
+
+    // Handle per-token leverage overrides
+    if (Array.isArray(token_leverages)) {
+      // Delete existing and re-insert
+      await query('DELETE FROM user_token_leverage WHERE api_key_id = $1', [req.params.id]);
+      for (const tl of token_leverages) {
+        if (tl.symbol && tl.leverage >= 1 && tl.leverage <= 125) {
+          await query(
+            `INSERT INTO user_token_leverage (api_key_id, symbol, leverage) VALUES ($1, $2, $3)
+             ON CONFLICT (api_key_id, symbol) DO UPDATE SET leverage = $3`,
+            [req.params.id, tl.symbol.toUpperCase(), tl.leverage]
+          );
+        }
+      }
+    }
 
     res.json({ ok: true });
   } catch (err) {

@@ -272,6 +272,25 @@ async function initAllTables() {
       admin_note TEXT,
       created_at TIMESTAMPTZ DEFAULT NOW()
     )`,
+    // Global token settings (admin can enable/ban tokens for all users)
+    `CREATE TABLE IF NOT EXISTS global_token_settings (
+      id SERIAL PRIMARY KEY,
+      symbol VARCHAR(20) NOT NULL UNIQUE,
+      enabled BOOLEAN DEFAULT true,
+      banned BOOLEAN DEFAULT false,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )`,
+    // Per-key per-token user leverage overrides
+    `CREATE TABLE IF NOT EXISTS user_token_leverage (
+      id SERIAL PRIMARY KEY,
+      api_key_id INTEGER NOT NULL REFERENCES api_keys(id) ON DELETE CASCADE,
+      symbol VARCHAR(20) NOT NULL,
+      leverage INTEGER NOT NULL CHECK (leverage >= 1 AND leverage <= 125),
+      UNIQUE(api_key_id, symbol)
+    )`,
+    // Trailing SL columns on trades
+    `ALTER TABLE trades ADD COLUMN IF NOT EXISTS trailing_sl_price NUMERIC`,
+    `ALTER TABLE trades ADD COLUMN IF NOT EXISTS trailing_sl_last_step NUMERIC DEFAULT 0`,
   ];
 
   for (const sql of statements) {
@@ -293,9 +312,19 @@ async function initAllTables() {
     'CREATE INDEX IF NOT EXISTS idx_api_keys_user ON api_keys (user_id, enabled)',
     'CREATE INDEX IF NOT EXISTS idx_wallet_tx_user ON wallet_transactions (user_id)',
     'CREATE INDEX IF NOT EXISTS idx_subs_user ON subscriptions (user_id, status)',
+    'CREATE INDEX IF NOT EXISTS idx_global_tokens_symbol ON global_token_settings (symbol)',
+    'CREATE INDEX IF NOT EXISTS idx_user_token_lev ON user_token_leverage (api_key_id, symbol)',
   ];
 
   for (const sql of indexes) {
+    try { await pool.query(sql); } catch (_) {}
+  }
+
+  // Seed default platform settings
+  const seeds = [
+    `INSERT INTO settings (key, value) VALUES ('referral_commission_pct', '10') ON CONFLICT (key) DO NOTHING`,
+  ];
+  for (const sql of seeds) {
     try { await pool.query(sql); } catch (_) {}
   }
 

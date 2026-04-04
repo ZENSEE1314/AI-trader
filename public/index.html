@@ -747,7 +747,7 @@
           <div class="summary-card" style="border-left:3px solid var(--color-success);">
             <span class="summary-card-label">Cash Wallet</span>
             <span id="cw-cash" class="summary-card-value text-mono" style="color:var(--color-success);font-size:1.3rem;">$0.00</span>
-            <span style="font-size:0.75rem;color:var(--color-text-muted);">For paying weekly fees</span>
+            <span style="font-size:0.75rem;color:var(--color-text-muted);">Top-up balance</span>
           </div>
           <div class="summary-card" style="border-left:3px solid var(--color-accent);">
             <span class="summary-card-label">Commission Earned</span>
@@ -759,28 +759,6 @@
             <span id="cw-total" class="summary-card-value text-mono" style="font-size:1.3rem;">$0.00</span>
             <span style="font-size:0.75rem;color:var(--color-text-muted);">Cash + Commission combined</span>
           </div>
-          <div class="summary-card" id="cw-fee-status-card">
-            <span class="summary-card-label">Weekly Fee Status</span>
-            <span id="cw-fee-status" class="summary-card-value">--</span>
-            <span id="cw-fee-due" style="font-size:0.75rem;color:var(--color-text-muted);">--</span>
-          </div>
-        </div>
-
-        <!-- Fee Due Warning -->
-        <div id="cw-fee-warning" class="hidden" style="background:rgba(239,68,68,0.1);border:1px solid var(--color-danger);border-radius:var(--radius-lg);padding:var(--space-4);margin-bottom:var(--space-4);">
-          <strong style="color:var(--color-danger);">⚠️ Weekly Fee Overdue!</strong>
-          <p style="color:var(--color-text-muted);font-size:0.85rem;margin:var(--space-1) 0 0;">Your trading is paused. Pay the weekly fee to resume bot trading.</p>
-        </div>
-
-        <!-- Pay Weekly Fee -->
-        <div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-4);margin-bottom:var(--space-4);">
-          <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Pay Weekly Fee</h3>
-          <div style="display:flex;gap:var(--space-2);flex-wrap:wrap;margin-bottom:var(--space-3);">
-            <button class="btn btn-primary btn-sm cw-pay-source" data-source="cash" onclick="window.CryptoBot.payFee('cash')">Pay from Cash Wallet</button>
-            <button class="btn btn-ghost btn-sm cw-pay-source" data-source="commission" onclick="window.CryptoBot.payFee('commission')">Pay from Commission</button>
-            <button class="btn btn-ghost btn-sm cw-pay-source" data-source="both" onclick="window.CryptoBot.payFee('both')">Use Both (Commission first)</button>
-          </div>
-          <div id="cw-fee-amount-display" style="font-size:0.85rem;color:var(--color-text-muted);">Weekly fee: <strong id="cw-weekly-fee">$0.00</strong></div>
         </div>
 
         <!-- Top Up -->
@@ -809,7 +787,7 @@
             </div>
             <button class="btn btn-primary btn-sm" onclick="window.CryptoBot.transferCommission()">Transfer</button>
           </div>
-          <div style="font-size:0.75rem;color:var(--color-text-muted);margin-top:var(--space-2);">Move commission earnings to cash wallet for fee payments.</div>
+          <div style="font-size:0.75rem;color:var(--color-text-muted);margin-top:var(--space-2);">Move commission earnings to cash wallet.</div>
         </div>
 
         <!-- USDT Withdrawal Address -->
@@ -922,16 +900,13 @@
       <section id="tab-admin" class="hidden" role="tabpanel" aria-label="Admin">
         <h2 class="section-heading">Admin Panel</h2>
 
-        <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Pricing & Commission</h3>
+        <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Platform Settings</h3>
         <div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-4);margin-bottom:var(--space-5);">
           <div class="settings-grid">
             <div class="form-group" style="margin-bottom:0">
-              <label class="form-label" for="admin-price">Bot Monthly Price (USD)</label>
-              <input class="form-input text-mono" type="number" id="admin-price" min="0" step="0.01">
-            </div>
-            <div class="form-group" style="margin-bottom:0">
-              <label class="form-label" for="admin-signal-price">Signal Monthly Price (USD)</label>
-              <input class="form-input text-mono" type="number" id="admin-signal-price" min="0" step="0.01">
+              <label class="form-label" for="admin-referral-pct">Referral Commission %</label>
+              <input class="form-input text-mono" type="number" id="admin-referral-pct" min="0" max="100" step="1" placeholder="% of platform's 40% fee">
+              <span style="font-size:0.7rem;color:var(--color-text-muted);">% of the 40% platform fee that goes to referrers</span>
             </div>
             <div class="form-group" style="margin-bottom:0">
               <label class="form-label" for="admin-tier1">Tier 1 Commission %</label>
@@ -947,6 +922,26 @@
             </div>
           </div>
           <button class="btn btn-primary btn-sm" style="margin-top:var(--space-3);" onclick="window.CryptoBot.saveAdminSettings()">Save Settings</button>
+        </div>
+
+        <!-- Global Token Management -->
+        <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Global Token Management</h3>
+        <div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-4);margin-bottom:var(--space-5);">
+          <div style="display:flex;gap:var(--space-2);align-items:end;margin-bottom:var(--space-3);flex-wrap:wrap;">
+            <div class="form-group" style="margin-bottom:0;flex:1;min-width:140px;">
+              <label class="form-label" for="admin-token-symbol">Token Symbol</label>
+              <input class="form-input text-mono" type="text" id="admin-token-symbol" placeholder="e.g. BTCUSDT" style="text-transform:uppercase;">
+            </div>
+            <button class="btn btn-primary btn-sm" onclick="window.CryptoBot.addGlobalToken()">Add Token</button>
+            <button class="btn btn-danger btn-sm" onclick="window.CryptoBot.banGlobalToken()">Ban Token</button>
+          </div>
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead><tr><th>Symbol</th><th>Status</th><th>Action</th></tr></thead>
+              <tbody id="admin-tokens-tbody"></tbody>
+            </table>
+          </div>
+          <div id="admin-tokens-empty" style="color:var(--color-text-muted);font-size:0.85rem;padding:var(--space-3);text-align:center;">No global token settings. Bot trades top coins by volume.</div>
         </div>
 
         <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Weekly Earnings Overview</h3>
@@ -969,7 +964,7 @@
         <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Users</h3>
         <div class="table-wrap" style="margin-bottom:var(--space-5);overflow-x:auto;">
           <table class="data-table" id="admin-users-table">
-            <thead><tr><th>Email</th><th>Sub</th><th>Keys</th><th>Wallet</th><th>Referral</th><th>Joined</th><th>Action</th></tr></thead>
+            <thead><tr><th>Email</th><th>Status</th><th>Keys</th><th>Wallet</th><th>Referral</th><th>Joined</th><th>Action</th></tr></thead>
             <tbody id="admin-users-tbody"></tbody>
           </table>
         </div>
@@ -1018,15 +1013,20 @@
           </select>
         </div>
 
-        <!-- Bitunix IP binding info -->
-        <div id="bitunix-ip-info" class="hidden" style="background:var(--color-bg);border:1px solid var(--color-accent);border-radius:var(--radius-md);padding:var(--space-3);margin-bottom:var(--space-3);">
+        <!-- Static IP info for API key whitelisting -->
+        <div id="static-ip-info" class="hidden" style="background:var(--color-bg);border:1px solid var(--color-accent);border-radius:var(--radius-md);padding:var(--space-3);margin-bottom:var(--space-3);">
           <div style="font-size:var(--text-xs);color:var(--color-text-muted);margin-bottom:var(--space-2);">
-            <strong style="color:var(--color-accent);">Bitunix requires IP binding.</strong> When creating your API key on Bitunix, paste this server IP address into the "Bind IP address" field:
+            <strong style="color:var(--color-accent);">Add these static IPs to your API key whitelist:</strong>
           </div>
-          <div style="display:flex;align-items:center;gap:var(--space-2);">
-            <input class="form-input text-mono" id="server-ip-display" readonly style="flex:1;font-size:var(--text-sm);" value="Loading...">
-            <button type="button" class="btn btn-ghost btn-sm" onclick="navigator.clipboard.writeText(document.getElementById('server-ip-display').value);window.CryptoBot.showToast('IP copied!','success')">Copy</button>
+          <div style="display:flex;align-items:center;gap:var(--space-2);margin-bottom:var(--space-2);">
+            <input class="form-input text-mono" readonly style="flex:1;font-size:var(--text-sm);" value="52.192.89.194">
+            <button type="button" class="btn btn-ghost btn-sm" onclick="navigator.clipboard.writeText('52.192.89.194');window.CryptoBot.showToast('IP copied!','success')">Copy</button>
           </div>
+          <div style="display:flex;align-items:center;gap:var(--space-2);margin-bottom:var(--space-2);">
+            <input class="form-input text-mono" readonly style="flex:1;font-size:var(--text-sm);" value="52.193.106.127">
+            <button type="button" class="btn btn-ghost btn-sm" onclick="navigator.clipboard.writeText('52.193.106.127');window.CryptoBot.showToast('IP copied!','success')">Copy</button>
+          </div>
+          <div id="ip-platform-note" style="font-size:var(--text-xs);color:var(--color-text-muted);"></div>
         </div>
         <div class="form-group">
           <label class="form-label" for="key-label">Label</label>

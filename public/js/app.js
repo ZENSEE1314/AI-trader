@@ -71,7 +71,13 @@
     };
     if (body) opts.body = JSON.stringify(body);
     const res = await fetch(path, opts);
-    const data = await res.json();
+    const text = await res.text();
+    let data;
+    try {
+      data = JSON.parse(text);
+    } catch {
+      throw new Error(text || `Request failed (${res.status})`);
+    }
     if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
     return data;
   }
@@ -495,13 +501,74 @@
 
   // ----- API Keys -----
 
+  let riskLevelsCache = [];
+
   async function loadKeys() {
     try {
-      const keys = await api('GET', '/api/keys');
+      const [keys, riskLevels] = await Promise.all([
+        api('GET', '/api/keys'),
+        api('GET', '/api/risk-levels').catch(() => []),
+      ]);
+      riskLevelsCache = riskLevels;
       renderKeys(keys);
+      // Populate risk level dropdowns and token leverage after render
+      for (const k of keys) {
+        populateRiskLevelDropdown(k.id, k.risk_level_id);
+        renderTokenLeverages(k.id, k.token_leverages || []);
+      }
     } catch (err) {
       showToast('Failed to load API keys.', 'error');
     }
+  }
+
+  function populateRiskLevelDropdown(keyId, selectedId) {
+    const sel = $(`#risk-level-${keyId}`);
+    if (!sel) return;
+    sel.innerHTML = '<option value="">-- Select Risk Level --</option>' +
+      riskLevelsCache.map(rl =>
+        `<option value="${rl.id}" ${rl.id === selectedId ? 'selected' : ''}>${escapeHtml(rl.name)} (TP:${(parseFloat(rl.tp_pct)*100).toFixed(1)}% SL:${(parseFloat(rl.sl_pct)*100).toFixed(1)}% Lev:${rl.max_leverage}x)</option>`
+      ).join('');
+  }
+
+  function renderTokenLeverages(keyId, leverages) {
+    const container = $(`#token-lev-${keyId}`);
+    if (!container) return;
+    if (!leverages.length) { container.innerHTML = ''; return; }
+    container.innerHTML = leverages.map(tl =>
+      `<span class="coin-chip">${escapeHtml(tl.symbol)} ${tl.leverage}x <span class="coin-chip-x" onclick="window.CryptoBot.removeTokenLeverage(${keyId},'${escapeHtml(tl.symbol)}')">&times;</span></span>`
+    ).join('');
+  }
+
+  function addTokenLeverage(keyId) {
+    const symbol = ($(`#token-lev-symbol-${keyId}`).value || '').toUpperCase().trim();
+    const leverage = parseInt($(`#token-lev-value-${keyId}`).value);
+    if (!symbol) return showToast('Enter token symbol', 'error');
+    if (!leverage || leverage < 1 || leverage > 125) return showToast('Leverage must be 1-125', 'error');
+    const container = $(`#token-lev-${keyId}`);
+    // Remove existing chip for same symbol
+    container.querySelectorAll('.coin-chip').forEach(c => {
+      if (c.textContent.startsWith(symbol + ' ')) c.remove();
+    });
+    container.innerHTML += `<span class="coin-chip">${escapeHtml(symbol)} ${leverage}x <span class="coin-chip-x" onclick="window.CryptoBot.removeTokenLeverage(${keyId},'${escapeHtml(symbol)}')">&times;</span></span>`;
+    $(`#token-lev-symbol-${keyId}`).value = '';
+    $(`#token-lev-value-${keyId}`).value = '';
+  }
+
+  function removeTokenLeverage(keyId, symbol) {
+    const container = $(`#token-lev-${keyId}`);
+    container.querySelectorAll('.coin-chip').forEach(c => {
+      if (c.textContent.startsWith(symbol + ' ')) c.remove();
+    });
+  }
+
+  function getTokenLeverages(keyId) {
+    const container = $(`#token-lev-${keyId}`);
+    if (!container) return [];
+    return Array.from(container.querySelectorAll('.coin-chip')).map(c => {
+      const text = c.textContent.replace('\u00d7', '').trim();
+      const parts = text.split(' ');
+      return { symbol: parts[0], leverage: parseInt(parts[1]) };
+    }).filter(tl => tl.symbol && tl.leverage);
   }
 
   function renderKeys(keys) {
@@ -634,6 +701,25 @@
                 <div class="coin-dropdown hidden" id="banned-dropdown-${k.id}"></div>
               </div>
             </div>
+            <!-- Risk Level -->
+            <div class="form-group" style="margin-bottom:0;grid-column:1/-1;">
+              <label class="form-label">Risk Level</label>
+              <select class="form-input" id="risk-level-${k.id}" style="max-width:250px;">
+                <option value="">-- Select Risk Level --</option>
+              </select>
+              <span style="font-size:0.7rem;color:var(--color-text-muted);">Overrides TP/SL/leverage with preset values</span>
+            </div>
+            <!-- Per-Token Leverage -->
+            <div class="form-group" style="margin-bottom:0;grid-column:1/-1;">
+              <label class="form-label">Per-Token Leverage</label>
+              <div id="token-lev-${k.id}" style="margin-bottom:8px;"></div>
+              <div style="display:flex;gap:8px;align-items:end;flex-wrap:wrap;">
+                <input class="form-input text-mono" type="text" id="token-lev-symbol-${k.id}" placeholder="BTCUSDT" style="width:120px;font-size:0.8rem;text-transform:uppercase;">
+                <input class="form-input text-mono" type="number" id="token-lev-value-${k.id}" placeholder="20" min="1" max="125" style="width:80px;font-size:0.8rem;">
+                <button class="btn btn-ghost btn-sm" style="font-size:0.7rem;" onclick="window.CryptoBot.addTokenLeverage(${k.id})">Add</button>
+              </div>
+              <span style="font-size:0.7rem;color:var(--color-text-muted);">Set custom leverage per token (e.g. BTC 10x, DOGE 50x)</span>
+            </div>
             <div style="display:flex;align-items:flex-end;">
               <label class="toggle">
                 <input type="checkbox" id="enabled-${k.id}" ${isEnabled ? 'checked' : ''}>
@@ -675,6 +761,8 @@
     const slPct = parseInt($(`#sl-${keyId}`).value) / 1000;
     const maxConsecLoss = parseInt($(`#maxloss-streak-${keyId}`).value);
     const topNCoins = parseInt($(`#topcoins-${keyId}`).value);
+    const riskLevelId = $(`#risk-level-${keyId}`).value || null;
+    const tokenLeverages = getTokenLeverages(keyId);
 
     try {
       await api('PUT', `/api/keys/${keyId}/settings`, {
@@ -689,6 +777,8 @@
         sl_pct: slPct,
         max_consec_loss: maxConsecLoss,
         top_n_coins: topNCoins,
+        risk_level_id: riskLevelId ? parseInt(riskLevelId) : null,
+        token_leverages: tokenLeverages,
       });
       showToast('Settings saved.', 'success');
       toggleSettings(keyId);
@@ -775,53 +865,22 @@
     });
   }
 
-  // ----- Subscription -----
-
   // ─── Cash Wallet ─────────────────────────────────────────────
 
   async function loadCashWallet() {
     try {
-      // Use new wallet endpoints instead of subscription
-      const [walletBalance, commissionBreakdown] = await Promise.all([
-        api('GET', '/api/wallet/balance'),
-        api('GET', '/api/wallet/commission/breakdown').catch(() => ({ total_commission: 0, breakdown: [] })),
+      const [status, txns, withdrawals] = await Promise.all([
+        api('GET', '/api/subscription/status'),
+        api('GET', '/api/subscription/transactions').catch(() => []),
+        api('GET', '/api/subscription/withdrawals').catch(() => []),
       ]);
 
-      // Summary cards - using new wallet structure
-      $('#cw-cash').textContent = `$${walletBalance.balance.toFixed(2)}`;
-      $('#cw-commission').textContent = `$${commissionBreakdown.total_commission.toFixed(2)}`;
-      $('#cw-total').textContent = `$${(walletBalance.balance + commissionBreakdown.total_commission).toFixed(2)}`;
-      
-      // Remove weekly fee display since we removed subscriptions
-      $('#cw-weekly-fee').textContent = '$0.00';
-      $('#cw-weekly-fee-label').textContent = 'No Subscription Fee';
-
-      // Update fee status section to show referral info instead
-      const feeCard = $('#cw-fee-status-card');
-      const feeWarning = $('#cw-fee-warning');
-      $('#cw-fee-status').textContent = '✅ Commission System';
-      $('#cw-fee-status').style.color = 'var(--color-success)';
-      feeCard.style.borderLeft = '3px solid var(--color-success)';
-      feeWarning.classList.add('hidden');
-      
-      // Update fee details to show referral info
-      $('#cw-fee-details').innerHTML = `
-        <div style="margin-bottom: 8px;">
-          <strong>Referral Tier:</strong> ${walletBalance.referral_tier || 'Standard'}
-        </div>
-        <div>
-          <strong>Commission Rate:</strong> 10% from downline profits
-        </div>
-      `;
-        $('#cw-fee-status').textContent = '✅ Active';
-        $('#cw-fee-status').style.color = 'var(--color-success)';
-        feeCard.style.borderLeft = '3px solid var(--color-success)';
-        feeWarning.classList.add('hidden');
-      }
-      if (status.weekly_fee_due) {
-        const due = new Date(status.weekly_fee_due);
-        $('#cw-fee-due').textContent = `Next due: ${due.toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' })}`;
-      }
+      // Summary cards
+      const cashWallet = parseFloat(status.cash_wallet) || 0;
+      const commission = parseFloat(status.commission_earned) || 0;
+      $('#cw-cash').textContent = `$${cashWallet.toFixed(2)}`;
+      $('#cw-commission').textContent = `$${commission.toFixed(2)}`;
+      $('#cw-total').textContent = `$${(cashWallet + commission).toFixed(2)}`;
 
       // Referral
       const appUrl = window.location.origin;
@@ -836,24 +895,26 @@
       }
 
       // Transaction history
+      const typeColors = {
+        topup: 'var(--color-success)', commission: 'var(--color-accent)',
+        withdrawal: 'var(--color-danger)', topup_pending: '#f0a030',
+        topup_rejected: 'var(--color-danger)', commission_transfer: 'var(--color-text-muted)',
+        refund: 'var(--color-success)', profit_share: 'var(--color-success)',
+        platform_fee: '#f0a030',
+      };
+      const typeLabels = {
+        topup: 'Top Up', commission: 'Commission', withdrawal: 'Withdrawal',
+        topup_pending: 'Top Up (Pending)', topup_rejected: 'Top Up (Rejected)',
+        commission_transfer: 'Transfer', refund: 'Refund', admin_adjustment: 'Admin Adjust',
+        profit_share: 'Profit Share (60%)', platform_fee: 'Platform Fee (40%)',
+      };
+
       const tbody = $('#cw-txns-tbody');
       if (!txns.length) {
         tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--color-text-muted);">No transactions yet</td></tr>';
       } else {
         tbody.innerHTML = txns.map(t => {
           const amt = parseFloat(t.amount);
-          const typeColors = {
-            topup: 'var(--color-success)', commission: 'var(--color-accent)',
-            weekly_fee: '#f0a030', withdrawal: 'var(--color-danger)',
-            topup_pending: '#f0a030', topup_rejected: 'var(--color-danger)',
-            commission_transfer: 'var(--color-text-muted)', refund: 'var(--color-success)',
-          };
-          const typeLabels = {
-            topup: 'Top Up', commission: 'Commission', weekly_fee: 'Weekly Fee',
-            withdrawal: 'Withdrawal', topup_pending: 'Top Up (Pending)',
-            topup_rejected: 'Top Up (Rejected)', commission_transfer: 'Transfer',
-            refund: 'Refund', admin_adjustment: 'Admin Adjust',
-          };
           return `<tr>
             <td>${formatDate(t.created_at)}</td>
             <td style="color:${typeColors[t.type] || 'var(--color-text)'}">${typeLabels[t.type] || t.type}</td>
@@ -883,15 +944,6 @@
     } catch (err) {
       showToast('Failed to load cash wallet.', 'error');
     }
-  }
-
-  async function payFee(source) {
-    if (!confirm(`Pay weekly fee from ${source === 'both' ? 'commission + cash' : source} wallet?`)) return;
-    try {
-      const data = await api('POST', '/api/subscription/pay-fee', { source });
-      showToast(data.message, 'success');
-      loadCashWallet();
-    } catch (err) { showToast(err.message, 'error'); }
   }
 
   async function submitTopUp() {
@@ -959,24 +1011,96 @@
       renderAdminWithdrawals(wds);
       if (weeklyEarnings) renderAdminWeeklyEarnings(weeklyEarnings);
       // Fill settings fields
-      $('#admin-price').value = settings.sub_price || '29.99';
-      $('#admin-signal-price').value = settings.signal_price || '500';
+      $('#admin-referral-pct').value = settings.referral_commission_pct || '10';
       $('#admin-tier1').value = settings.commission_tier1 || '20';
       $('#admin-tier2').value = settings.commission_tier2 || '10';
       $('#admin-tier3').value = settings.commission_tier3 || '5';
+
+      // Load global tokens
+      loadGlobalTokens();
     } catch (err) { showToast('Failed to load admin.', 'error'); }
   }
 
   async function saveAdminSettings() {
     try {
       await api('PUT', '/api/admin/settings', {
-        sub_price: $('#admin-price').value,
-        signal_price: $('#admin-signal-price').value,
+        referral_commission_pct: $('#admin-referral-pct').value,
         commission_tier1: $('#admin-tier1').value,
         commission_tier2: $('#admin-tier2').value,
         commission_tier3: $('#admin-tier3').value,
       });
       showToast('Settings saved', 'success');
+    } catch (err) { showToast(err.message, 'error'); }
+  }
+
+  // ----- Global Token Management (Admin) -----
+
+  async function loadGlobalTokens() {
+    try {
+      const tokens = await api('GET', '/api/admin/global-tokens');
+      const tbody = $('#admin-tokens-tbody');
+      const empty = $('#admin-tokens-empty');
+      if (!tokens.length) {
+        tbody.innerHTML = '';
+        empty.classList.remove('hidden');
+        return;
+      }
+      empty.classList.add('hidden');
+      tbody.innerHTML = tokens.map(t => {
+        const isBanned = t.banned;
+        const isEnabled = t.enabled && !t.banned;
+        const statusColor = isBanned ? 'var(--color-danger)' : isEnabled ? 'var(--color-success)' : '#f0a030';
+        const statusText = isBanned ? 'BANNED' : isEnabled ? 'Active' : 'Disabled';
+        return `<tr>
+          <td class="text-mono"><strong>${escapeHtml(t.symbol)}</strong></td>
+          <td style="color:${statusColor}">${statusText}</td>
+          <td style="white-space:nowrap;">
+            ${isBanned
+              ? `<button class="btn btn-primary btn-sm" style="font-size:0.7rem;" onclick="window.CryptoBot.unbanGlobalToken('${escapeHtml(t.symbol)}')">Unban</button>`
+              : `<button class="btn btn-danger btn-sm" style="font-size:0.7rem;" onclick="window.CryptoBot.banGlobalToken('${escapeHtml(t.symbol)}')">Ban</button>`}
+            <button class="btn btn-ghost btn-sm" style="font-size:0.7rem;" onclick="window.CryptoBot.removeGlobalToken('${escapeHtml(t.symbol)}')">Remove</button>
+          </td>
+        </tr>`;
+      }).join('');
+    } catch (err) { /* silent */ }
+  }
+
+  async function addGlobalToken() {
+    const symbol = ($('#admin-token-symbol').value || '').toUpperCase().trim();
+    if (!symbol) return showToast('Enter a token symbol', 'error');
+    try {
+      await api('POST', '/api/admin/global-tokens', { symbol, enabled: true, banned: false });
+      showToast(`${symbol} added`, 'success');
+      $('#admin-token-symbol').value = '';
+      loadGlobalTokens();
+    } catch (err) { showToast(err.message, 'error'); }
+  }
+
+  async function banGlobalToken(symbolOverride) {
+    const symbol = symbolOverride || ($('#admin-token-symbol').value || '').toUpperCase().trim();
+    if (!symbol) return showToast('Enter a token symbol', 'error');
+    try {
+      await api('POST', '/api/admin/global-tokens', { symbol, enabled: false, banned: true });
+      showToast(`${symbol} banned`, 'success');
+      $('#admin-token-symbol').value = '';
+      loadGlobalTokens();
+    } catch (err) { showToast(err.message, 'error'); }
+  }
+
+  async function unbanGlobalToken(symbol) {
+    try {
+      await api('POST', '/api/admin/global-tokens', { symbol, enabled: true, banned: false });
+      showToast(`${symbol} unbanned`, 'success');
+      loadGlobalTokens();
+    } catch (err) { showToast(err.message, 'error'); }
+  }
+
+  async function removeGlobalToken(symbol) {
+    if (!confirm(`Remove ${symbol} from global settings?`)) return;
+    try {
+      await api('DELETE', `/api/admin/global-tokens/${symbol}`);
+      showToast(`${symbol} removed`, 'success');
+      loadGlobalTokens();
     } catch (err) { showToast(err.message, 'error'); }
   }
 
@@ -1321,21 +1445,18 @@
     }
   });
 
-  // ----- Platform change (show Bitunix IP info) -----
-  let serverIpLoaded = false;
+  // ----- Platform change (show static IP info) -----
 
   function onPlatformChange(val) {
-    const ipInfo = $('#bitunix-ip-info');
-    if (!ipInfo) return;
-    if (val === 'bitunix') {
+    const ipInfo = $('#static-ip-info');
+    const noteEl = $('#ip-platform-note');
+    if (!ipInfo || !noteEl) return;
+    if (val === 'binance') {
       ipInfo.classList.remove('hidden');
-      if (!serverIpLoaded) {
-        fetch('/api/server-ip').then(r => r.json()).then(data => {
-          const el = $('#server-ip-display');
-          if (el && data.ip) el.value = data.ip;
-          serverIpLoaded = true;
-        }).catch(() => {});
-      }
+      noteEl.innerHTML = '<strong>Binance:</strong> Add both IPs to your API key whitelist, or you can also <strong>disable IP restriction</strong> in your Binance API settings.';
+    } else if (val === 'bitunix') {
+      ipInfo.classList.remove('hidden');
+      noteEl.innerHTML = '<strong>Bitunix:</strong> Add both IPs to your Bitunix API key "Bind IP address" field.';
     } else {
       ipInfo.classList.add('hidden');
     }
@@ -1431,12 +1552,14 @@
   // ----- Expose to inline handlers -----
   window.CryptoBot = {
     toggleSettings, saveSettings, deleteKey, showToast,
-    payFee, submitTopUp, transferCommission, saveUsdtAddress, withdrawCommission,
+    submitTopUp, transferCommission, saveUsdtAddress, withdrawCommission,
     adminAction, adminSub, adminWd, saveAdminSettings, adminEditWallet, clearErrors,
     adminEditSplit, adminPauseKey, adminResumeKey, adminApproveNoSub,
     goToAuth, showLoginForm, onPlatformChange,
     searchCoins, addCoin, removeCoin,
     filterLogs, clearLogs,
+    addTokenLeverage, removeTokenLeverage,
+    addGlobalToken, banGlobalToken, unbanGlobalToken, removeGlobalToken,
   };
 
   // ----- Init -----
@@ -1460,13 +1583,6 @@
       const refInput = $('#signup-referral');
       if (refInput) refInput.value = ref;
     }
-
-    // Load landing page weekly fee
-    fetch('/api/subscription/status').then(r => r.ok ? r.json() : null).then(data => {
-      if (!data) return;
-      const wf = document.getElementById('landing-weekly-fee');
-      if (wf && data.weekly_fee) wf.textContent = `$${data.weekly_fee}/week`;
-    }).catch(() => {});
 
     checkSession();
   }

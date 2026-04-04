@@ -510,10 +510,10 @@ router.get('/settings', async (req, res) => {
 // Update settings
 router.put('/settings', async (req, res) => {
   try {
-    const { weekly_fee, commission_tier1, commission_tier2, commission_tier3, min_topup } = req.body;
+    const { referral_commission_pct, commission_tier1, commission_tier2, commission_tier3, min_topup } = req.body;
 
     const updates = [
-      ['weekly_fee', weekly_fee],
+      ['referral_commission_pct', referral_commission_pct],
       ['commission_tier1', commission_tier1],
       ['commission_tier2', commission_tier2],
       ['commission_tier3', commission_tier3],
@@ -531,6 +531,49 @@ router.put('/settings', async (req, res) => {
     res.json({ ok: true });
   } catch (err) {
     console.error('Admin update settings error:', err.message);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// ── Global Token Management ─────────────────────────────────
+
+// List all global token settings
+router.get('/global-tokens', async (req, res) => {
+  try {
+    const rows = await query('SELECT * FROM global_token_settings ORDER BY symbol');
+    res.json(rows);
+  } catch (err) {
+    console.error('Global tokens list error:', err.message);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Add or update global token setting
+router.post('/global-tokens', async (req, res) => {
+  try {
+    const { symbol, enabled, banned } = req.body;
+    if (!symbol) return res.status(400).json({ error: 'Symbol required' });
+
+    await query(
+      `INSERT INTO global_token_settings (symbol, enabled, banned)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (symbol) DO UPDATE SET enabled = $2, banned = $3`,
+      [symbol.toUpperCase(), enabled !== false, banned === true]
+    );
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Global token add error:', err.message);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Remove global token setting
+router.delete('/global-tokens/:symbol', async (req, res) => {
+  try {
+    await query('DELETE FROM global_token_settings WHERE symbol = $1', [req.params.symbol.toUpperCase()]);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Global token delete error:', err.message);
     res.status(500).json({ error: 'Server error' });
   }
 });
