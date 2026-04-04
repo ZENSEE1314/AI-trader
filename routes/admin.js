@@ -991,21 +991,20 @@ router.post('/backtest', async (req, res) => {
       .sort((a, b) => parseFloat(b.quoteVolume) - parseFloat(a.quoteVolume))
       .slice(0, TOP_N).map(t => t.symbol);
 
-    // Fetch data with pagination for 3m and 1m
+    // Fetch 15m (scan + exits, ~15 days), 3m (structure, ~3 days), daily
+    // Skip 1m — use 3m for entry structure too (faster + more data coverage)
     const coinData = {};
     const startTime = endTime - 7 * 86400000;
     for (const sym of topCoins) {
-      const [k15, kD] = await Promise.all([
-        fetchK(sym, '15m', 1500), fetchK(sym, '1d', 35),
+      const [k15, k3, kD] = await Promise.all([
+        fetchK(sym, '15m', 1500),
+        fetchK(sym, '3m', 500),
+        fetchK(sym, '1d', 10),
       ]);
-      const [k3, k1] = await Promise.all([
-        fetchK(sym, '3m', 1500),
-        fetchK(sym, '1m', 1500),
-      ]);
-      if (k15 && k3 && k1 && kD) {
-        coinData[sym] = { k15, k3, k1, kD };
+      if (k15 && k3 && kD) {
+        coinData[sym] = { k15, k3, kD };
       }
-      await new Promise(r => setTimeout(r, 100));
+      await new Promise(r => setTimeout(r, 50));
     }
 
     // Run simulation for a given key level mode
@@ -1021,36 +1020,36 @@ router.post('/backtest', async (req, res) => {
       for (let step = 0; step < timeSteps.length; step++) {
         const now = timeSteps[step];
 
-        // Check open positions
+        // Check open positions using 15m candles (covers full 7 days)
         for (let i = openPos.length - 1; i >= 0; i--) {
           const pos = openPos[i];
           const data = coinData[pos.symbol];
           if (!data) continue;
-          const windowStart = step > 0 ? timeSteps[step-1] : now - 900000;
-          const candles = data.k1.filter(k => parseInt(k[0]) >= windowStart && parseInt(k[0]) < now);
+          // Use current 15m candle for exit checks
+          const curCandle = data.k15.find(k => parseInt(k[0]) === now);
+          if (!curCandle) continue;
 
-          for (const c of candles) {
-            const high = parseFloat(c[2]), low = parseFloat(c[3]), close = parseFloat(c[4]);
-            if ((pos.dir === 'LONG' && low <= pos.sl) || (pos.dir === 'SHORT' && high >= pos.sl)) {
-              pos.exit = pos.sl; pos.reason = 'SL'; pos.exitTime = now;
-              pos.pnl = pos.dir === 'LONG' ? (pos.sl - pos.entry) * pos.qty : (pos.entry - pos.sl) * pos.qty;
-              wallet += pos.pnl; openPos.splice(i, 1); break;
-            }
-            if ((pos.dir === 'LONG' && high >= pos.tp) || (pos.dir === 'SHORT' && low <= pos.tp)) {
-              pos.exit = pos.tp; pos.reason = 'TP'; pos.exitTime = now;
-              pos.pnl = pos.dir === 'LONG' ? (pos.tp - pos.entry) * pos.qty : (pos.entry - pos.tp) * pos.qty;
-              wallet += pos.pnl; openPos.splice(i, 1); break;
-            }
-            const pp = pos.dir === 'LONG' ? (close - pos.entry) / pos.entry : (pos.entry - close) / pos.entry;
-            const ns = pos.lastStep === 0 ? TRAILING.FIRST : pos.lastStep + TRAILING.STEP;
-            if (pp >= ns) {
-              let reached = ns;
-              while (pp >= reached + TRAILING.STEP) reached += TRAILING.STEP;
-              pos.lastStep = reached;
-              pos.sl = pos.dir === 'LONG'
-                ? pos.entry * (1 + reached - TRAILING.STEP)
-                : pos.entry * (1 - reached + TRAILING.STEP);
-            }
+          const high = parseFloat(curCandle[2]), low = parseFloat(curCandle[3]), close = parseFloat(curCandle[4]);
+          if ((pos.dir === 'LONG' && low <= pos.sl) || (pos.dir === 'SHORT' && high >= pos.sl)) {
+            pos.exit = pos.sl; pos.reason = 'SL'; pos.exitTime = now;
+            pos.pnl = pos.dir === 'LONG' ? (pos.sl - pos.entry) * pos.qty : (pos.entry - pos.sl) * pos.qty;
+            wallet += pos.pnl; openPos.splice(i, 1); continue;
+          }
+          if ((pos.dir === 'LONG' && high >= pos.tp) || (pos.dir === 'SHORT' && low <= pos.tp)) {
+            pos.exit = pos.tp; pos.reason = 'TP'; pos.exitTime = now;
+            pos.pnl = pos.dir === 'LONG' ? (pos.tp - pos.entry) * pos.qty : (pos.entry - pos.tp) * pos.qty;
+            wallet += pos.pnl; openPos.splice(i, 1); continue;
+          }
+          // Trailing SL
+          const pp = pos.dir === 'LONG' ? (close - pos.entry) / pos.entry : (pos.entry - close) / pos.entry;
+          const ns = pos.lastStep === 0 ? TRAILING.FIRST : pos.lastStep + TRAILING.STEP;
+          if (pp >= ns) {
+            let reached = ns;
+            while (pp >= reached + TRAILING.STEP) reached += TRAILING.STEP;
+            pos.lastStep = reached;
+            pos.sl = pos.dir === 'LONG'
+              ? pos.entry * (1 + reached - TRAILING.STEP)
+              : pos.entry * (1 - reached + TRAILING.STEP);
           }
         }
 
@@ -1062,8 +1061,7 @@ router.post('/backtest', async (req, res) => {
           const data = coinData[sym];
           const k15 = data.k15.filter(k => parseInt(k[0]) <= now);
           const k3 = data.k3.filter(k => parseInt(k[0]) <= now);
-          const k1 = data.k1.filter(k => parseInt(k[0]) <= now);
-          if (k15.length < 30 || k3.length < 30 || k1.length < 15) continue;
+          if (k15.length < 30 || k3.length < 20) continue;
 
           const last3 = k15.slice(-4, -1);
           if (last3.length < 3) continue;
@@ -1078,24 +1076,23 @@ router.post('/backtest', async (req, res) => {
           const pdh = dIdx > 0 ? parseFloat(data.kD[dIdx-1][2]) : price * 1.01;
           const pdl = dIdx > 0 ? parseFloat(data.kD[dIdx-1][3]) : price * 0.99;
 
-          // Key level filter depends on mode
           if (mode !== 'none') {
             const proximity = mode === 'strict' ? 0.003 : 0.01;
             const vwap = calcVWAP(k15);
             if (!atKeyLevel(price, pdh, pdl, vwap, dir, proximity)) continue;
           }
 
+          // Use 3m for both setup and entry structure (no 1m needed)
           const s3 = getStruct(k3, SWING['3m']);
           if ((dir === 'LONG' && !s3.hasHL) || (dir === 'SHORT' && !s3.hasLH)) continue;
 
-          const s1 = getStruct(k1, SWING['1m']);
-          if ((dir === 'LONG' && !s1.hasHL) || (dir === 'SHORT' && !s1.hasLH)) continue;
+          // Recency: 3m swing must be fresh
+          const es = dir === 'LONG' ? s3.lastLow : s3.lastHigh;
+          if (!es || (k3.length - 1 - es.index) > 30) continue;
 
-          const es = dir === 'LONG' ? s1.lastLow : s1.lastHigh;
-          if (!es || (k1.length - 1 - es.index) > 25) continue;
-
-          const vols = k1.slice(-20).map(k => parseFloat(k[5]));
-          const rv = vols.slice(-5).reduce((a,b)=>a+b,0)/5;
+          // Volume check on 15m
+          const vols = k15.slice(-10).map(k => parseFloat(k[5]));
+          const rv = vols.slice(-3).reduce((a,b)=>a+b,0)/3;
           const av = vols.reduce((a,b)=>a+b,0)/vols.length;
           if (av > 0 && rv/av < 0.8) continue;
 
@@ -1111,8 +1108,8 @@ router.post('/backtest', async (req, res) => {
 
       for (const pos of openPos) {
         const data = coinData[pos.symbol];
-        if (data && data.k1.length) {
-          const lp = parseFloat(data.k1[data.k1.length-1][4]);
+        if (data && data.k15.length) {
+          const lp = parseFloat(data.k15[data.k15.length-1][4]);
           pos.exit = lp; pos.reason = 'END'; pos.exitTime = endTime;
           pos.pnl = pos.dir === 'LONG' ? (lp - pos.entry) * pos.qty : (pos.entry - lp) * pos.qty;
           wallet += pos.pnl;
@@ -1151,7 +1148,7 @@ router.post('/backtest', async (req, res) => {
     res.json({
       period: `${new Date(startTime).toISOString().slice(0,10)} → ${new Date(endTime).toISOString().slice(0,10)}`,
       coinsScanned: Object.keys(coinData).length,
-      dataPoints: { k15m: coinData[topCoins[0]]?.k15?.length || 0, k3m: coinData[topCoins[0]]?.k3?.length || 0, k1m: coinData[topCoins[0]]?.k1?.length || 0 },
+      dataPoints: { k15m: coinData[topCoins[0]]?.k15?.length || 0, k3m: coinData[topCoins[0]]?.k3?.length || 0 },
       strategy: summarize(labels[mode] || labels.strict, result),
     });
   } catch (err) {
