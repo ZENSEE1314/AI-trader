@@ -1240,33 +1240,28 @@
 
   async function runBacktest() {
     const resultEl = $('#fix-bitunix-result');
-    if (resultEl) resultEl.textContent = 'Running 30-day backtest... (fetching data for 20 coins, this takes ~1-2 min)';
+    if (resultEl) resultEl.textContent = 'Running backtest with 3 strategies... (fetching paginated data for 20 coins, ~2-3 min)';
     try {
-      const data = await api('POST', '/api/admin/backtest', { days: 30, topN: 20 });
-      let output = '═══════════════════════════════════════════════\n';
-      output += '           30-DAY BACKTEST RESULTS\n';
-      output += '═══════════════════════════════════════════════\n';
-      output += `Period:       ${data.period}\n`;
-      output += `Coins:        ${data.coinsScanned}\n`;
-      output += `Start:        $${data.startWallet}\n`;
-      output += `Final:        $${data.finalWallet}\n`;
-      output += `Total P&L:    ${data.totalPnl >= 0 ? '+' : ''}$${data.totalPnl} (${data.totalPnlPct}%)\n`;
-      output += `Trades:       ${data.totalTrades}\n`;
-      output += `Win/Loss:     ${data.wins}W / ${data.losses}L (${data.winRate}%)\n`;
-      output += `Avg Win:      +$${data.avgWin}\n`;
-      output += `Avg Loss:     $${data.avgLoss}\n`;
-      output += `Max Drawdown: ${data.maxDrawdown}%\n`;
-      output += '═══════════════════════════════════════════════\n\n';
-      output += '── Trade Log ──────────────────────────────────\n';
-      output += 'Date             | Symbol        | Dir   | Entry     | Exit      | P&L      | Exit\n';
-      output += '─'.repeat(90) + '\n';
-      for (const t of data.trades) {
-        const pnl = parseFloat(t.pnl);
-        output += `${t.date} | ${t.symbol.padEnd(13)} | ${t.dir.padEnd(5)} | ${t.entry.padStart(9)} | ${t.exit.padStart(9)} | ${(pnl >= 0 ? '+' : '') + '$' + t.pnl} | ${t.reason}\n`;
-      }
-      output += '\n── Per-Coin Stats ─────────────────────────────\n';
-      for (const c of data.coinStats) {
-        output += `${c.symbol.padEnd(13)} | W:${c.wins} L:${c.losses} | ${c.pnl >= 0 ? '+' : ''}$${c.pnl}\n`;
+      const data = await api('POST', '/api/admin/backtest', { topN: 20 });
+      let output = '═══════════════════════════════════════════════════════\n';
+      output += '     BACKTEST: 3 STRATEGY COMPARISON\n';
+      output += '═══════════════════════════════════════════════════════\n';
+      output += `Period: ${data.period} | Coins: ${data.coinsScanned}\n`;
+      output += `Data:   15m=${data.dataPoints.k15m} 3m=${data.dataPoints.k3m} 1m=${data.dataPoints.k1m} candles\n\n`;
+
+      for (const s of data.strategies) {
+        output += `─── ${s.label} ───────────────────────────────\n`;
+        output += `Wallet:   $${s.startWallet} → $${s.finalWallet}  |  P&L: ${s.totalPnl >= 0 ? '+' : ''}$${s.totalPnl} (${s.totalPnlPct}%)\n`;
+        output += `Trades:   ${s.totalTrades}  |  Win: ${s.wins}  Loss: ${s.losses}  |  WR: ${s.winRate}%\n`;
+        output += `Avg Win:  +$${s.avgWin}  |  Avg Loss: $${s.avgLoss}  |  Max DD: ${s.maxDrawdown}%\n`;
+        if (s.trades.length) {
+          output += 'Date             | Symbol        | Dir   | Entry     | Exit      | P&L      | Exit\n';
+          for (const t of s.trades) {
+            const pnl = parseFloat(t.pnl);
+            output += `${t.date} | ${t.symbol.padEnd(13)} | ${t.dir.padEnd(5)} | ${t.entry.padStart(9)} | ${t.exit.padStart(9)} | ${(pnl >= 0 ? '+' : '') + '$' + t.pnl} | ${t.reason}\n`;
+          }
+        }
+        output += '\n';
       }
       if (resultEl) resultEl.textContent = output;
     } catch (err) {
