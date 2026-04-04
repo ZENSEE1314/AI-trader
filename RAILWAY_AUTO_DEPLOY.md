@@ -101,7 +101,7 @@ AI-trader/
 - `.gitignore` already excludes `.env`
 
 ### 2. **GitHub Token Usage**
-Your token (`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`) is:
+Your GitHub token is:
 - In `.env` for local development
 - **NOT** needed in Railway (uses GitHub app)
 - Can be added as `GITHUB_TOKEN` variable if needed for API calls
