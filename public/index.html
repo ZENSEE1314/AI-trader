@@ -598,7 +598,20 @@
            Dashboard Tab
            ==================================================== -->
       <section id="tab-dashboard" role="tabpanel" aria-label="Dashboard">
-        <!-- P&L Summary -->
+        <!-- Cash Wallet on Dashboard -->
+        <div id="dash-cash-wallet" class="summary-grid" style="margin-bottom:var(--space-4);">
+          <div class="summary-card" style="border-left:3px solid var(--color-success);">
+            <span class="summary-card-label">Cash Wallet</span>
+            <span id="dash-cw-balance" class="summary-card-value text-mono" style="color:var(--color-success);font-size:1.3rem;">$0.00</span>
+            <span style="font-size:0.75rem;color:var(--color-text-muted);">Available for withdrawal</span>
+          </div>
+          <div class="summary-card" style="border-left:3px solid var(--color-accent);">
+            <span class="summary-card-label">Commission Earned</span>
+            <span id="dash-cw-commission" class="summary-card-value text-mono" style="color:var(--color-accent);font-size:1.3rem;">$0.00</span>
+            <span style="font-size:0.75rem;color:var(--color-text-muted);">Referral earnings (included in wallet)</span>
+          </div>
+        </div>
+
         <!-- Exchange Wallets -->
         <div id="wallets-grid" class="summary-grid" style="margin-bottom:var(--space-4);"></div>
 
@@ -745,23 +758,27 @@
         <!-- Wallet Summary -->
         <div class="summary-grid" style="margin-bottom:var(--space-5);">
           <div class="summary-card" style="border-left:3px solid var(--color-success);">
-            <span class="summary-card-label">Cash Wallet</span>
+            <span class="summary-card-label">Cash Wallet Balance</span>
             <span id="cw-cash" class="summary-card-value text-mono" style="color:var(--color-success);font-size:1.3rem;">$0.00</span>
-            <span style="font-size:0.75rem;color:var(--color-text-muted);">Top-up balance</span>
+            <span style="font-size:0.75rem;color:var(--color-text-muted);">Top-ups + commissions combined</span>
           </div>
           <div class="summary-card" style="border-left:3px solid var(--color-accent);">
             <span class="summary-card-label">Commission Earned</span>
             <span id="cw-commission" class="summary-card-value text-mono" style="color:var(--color-accent);font-size:1.3rem;">$0.00</span>
-            <span style="font-size:0.75rem;color:var(--color-text-muted);">Referral earnings (withdrawable)</span>
-          </div>
-          <div class="summary-card" style="border-left:3px solid var(--color-warning);">
-            <span class="summary-card-label">Total Balance</span>
-            <span id="cw-total" class="summary-card-value text-mono" style="font-size:1.3rem;">$0.00</span>
-            <span style="font-size:0.75rem;color:var(--color-text-muted);">Cash + Commission combined</span>
+            <span style="font-size:0.75rem;color:var(--color-text-muted);">Referral earnings (auto-added to wallet)</span>
           </div>
         </div>
 
         <!-- Top Up -->
+        <div id="cw-platform-addr" class="hidden" style="background:var(--color-bg);border:1px solid var(--color-accent);border-radius:var(--radius-md);padding:var(--space-3);margin-bottom:var(--space-4);">
+          <div style="font-size:0.85rem;color:var(--color-text);margin-bottom:var(--space-2);"><strong>Send USDT to this address:</strong></div>
+          <div style="display:flex;align-items:center;gap:var(--space-2);">
+            <input class="form-input text-mono" id="cw-platform-addr-val" readonly style="flex:1;font-size:var(--text-sm);">
+            <button type="button" class="btn btn-ghost btn-sm" onclick="navigator.clipboard.writeText(document.getElementById('cw-platform-addr-val').value);window.CryptoBot.showToast('Address copied!','success')">Copy</button>
+          </div>
+          <div id="cw-platform-net" style="font-size:0.75rem;color:var(--color-text-muted);margin-top:4px;">Network: BEP20</div>
+          <div style="font-size:0.75rem;color:var(--color-accent);margin-top:4px;">Auto-detected if you send from your saved withdrawal address. Otherwise submit TX hash below.</div>
+        </div>
         <div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-4);margin-bottom:var(--space-4);">
           <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Top Up Cash Wallet</h3>
           <div class="settings-grid" style="margin-bottom:var(--space-3);">
@@ -777,18 +794,7 @@
           <button class="btn btn-primary btn-sm" onclick="window.CryptoBot.submitTopUp()">Submit Top-Up</button>
         </div>
 
-        <!-- Transfer Commission to Cash -->
-        <div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-4);margin-bottom:var(--space-4);">
-          <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Transfer Commission → Cash Wallet</h3>
-          <div style="display:flex;gap:var(--space-2);align-items:end;flex-wrap:wrap;">
-            <div class="form-group" style="margin-bottom:0;flex:1;min-width:120px;">
-              <label class="form-label" for="cw-transfer-amount">Amount</label>
-              <input class="form-input text-mono" type="number" id="cw-transfer-amount" min="0.01" step="0.01" placeholder="0.00">
-            </div>
-            <button class="btn btn-primary btn-sm" onclick="window.CryptoBot.transferCommission()">Transfer</button>
-          </div>
-          <div style="font-size:0.75rem;color:var(--color-text-muted);margin-top:var(--space-2);">Move commission earnings to cash wallet.</div>
-        </div>
+        <!-- Commission is auto-added to cash wallet -->
 
         <!-- USDT Withdrawal Address -->
         <div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-4);margin-bottom:var(--space-4);">
@@ -812,15 +818,15 @@
           <div style="font-size:0.75rem;color:var(--color-text-muted);margin-top:var(--space-2);">Commission withdrawals are sent as USDT only. No bank transfers.</div>
         </div>
 
-        <!-- Withdraw Commission -->
+        <!-- Withdraw from Cash Wallet -->
         <div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-4);margin-bottom:var(--space-5);">
-          <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Withdraw Commission (USDT)</h3>
+          <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Withdraw (USDT)</h3>
           <div style="display:flex;gap:var(--space-2);align-items:end;flex-wrap:wrap;">
             <div class="form-group" style="margin-bottom:0;flex:1;min-width:120px;">
               <label class="form-label" for="cw-wd-amount">Amount (min $10)</label>
               <input class="form-input text-mono" type="number" id="cw-wd-amount" min="10" step="0.01" placeholder="0.00">
             </div>
-            <button class="btn btn-primary btn-sm" onclick="window.CryptoBot.withdrawCommission()">Request Withdrawal</button>
+            <button class="btn btn-primary btn-sm" onclick="window.CryptoBot.withdrawFromWallet()">Request Withdrawal</button>
           </div>
           <div id="cw-wd-address-display" style="font-size:0.8rem;color:var(--color-text-muted);margin-top:var(--space-2);"></div>
         </div>
@@ -921,27 +927,103 @@
               <input class="form-input text-mono" type="number" id="admin-tier3" min="0" max="100" step="1" placeholder="3rd level. 0 = off">
             </div>
           </div>
+          <div style="margin-top:var(--space-3);border-top:1px solid var(--color-border-muted);padding-top:var(--space-3);">
+            <strong style="font-size:0.85rem;">Platform USDT Address (Auto Top-Up)</strong>
+            <div class="settings-grid" style="margin-top:var(--space-2);">
+              <div class="form-group" style="margin-bottom:0">
+                <label class="form-label" for="admin-usdt-addr">USDT Receiving Address</label>
+                <input class="form-input text-mono" type="text" id="admin-usdt-addr" placeholder="0x...">
+              </div>
+              <div class="form-group" style="margin-bottom:0">
+                <label class="form-label" for="admin-usdt-net">Network</label>
+                <select class="form-input" id="admin-usdt-net">
+                  <option value="BEP20">BEP20 (BSC)</option>
+                  <option value="ERC20">ERC20 (Ethereum)</option>
+                  <option value="TRC20">TRC20 (Tron)</option>
+                </select>
+              </div>
+              <div class="form-group" style="margin-bottom:0">
+                <label class="form-label" for="admin-bscscan-key">BSCScan API Key</label>
+                <input class="form-input text-mono" type="text" id="admin-bscscan-key" placeholder="For auto-detect (optional)">
+              </div>
+            </div>
+            <div style="font-size:0.75rem;color:var(--color-text-muted);margin-top:var(--space-2);">Users send USDT with their user ID as memo. Bot auto-detects and credits cash wallet.</div>
+          </div>
           <button class="btn btn-primary btn-sm" style="margin-top:var(--space-3);" onclick="window.CryptoBot.saveAdminSettings()">Save Settings</button>
         </div>
 
-        <!-- Global Token Management -->
-        <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Global Token Management</h3>
+        <!-- Risk Level Settings -->
+        <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Risk Level Settings</h3>
         <div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-4);margin-bottom:var(--space-5);">
+          <div id="admin-risk-levels"></div>
+          <div style="margin-top:var(--space-3);border-top:1px solid var(--color-border-muted);padding-top:var(--space-3);">
+            <strong style="font-size:0.85rem;">Add Risk Level</strong>
+            <div class="settings-grid" style="margin-top:var(--space-2);">
+              <div class="form-group" style="margin-bottom:0">
+                <label class="form-label">Name</label>
+                <input class="form-input" type="text" id="rl-name" placeholder="e.g. Low, Medium, High">
+              </div>
+              <div class="form-group" style="margin-bottom:0">
+                <label class="form-label">TP %</label>
+                <input class="form-input text-mono" type="number" id="rl-tp" step="0.001" value="0.045">
+              </div>
+              <div class="form-group" style="margin-bottom:0">
+                <label class="form-label">SL %</label>
+                <input class="form-input text-mono" type="number" id="rl-sl" step="0.001" value="0.03">
+              </div>
+              <div class="form-group" style="margin-bottom:0">
+                <label class="form-label">Capital %</label>
+                <input class="form-input text-mono" type="number" id="rl-capital" step="1" value="10">
+              </div>
+              <div class="form-group" style="margin-bottom:0">
+                <label class="form-label">Max Leverage</label>
+                <input class="form-input text-mono" type="number" id="rl-leverage" step="1" value="20">
+              </div>
+              <div class="form-group" style="margin-bottom:0">
+                <label class="form-label">Max Consec Loss</label>
+                <input class="form-input text-mono" type="number" id="rl-consec" step="1" value="2">
+              </div>
+            </div>
+            <button class="btn btn-primary btn-sm" style="margin-top:var(--space-2);" onclick="window.CryptoBot.addRiskLevel()">Add Risk Level</button>
+          </div>
+        </div>
+
+        <!-- Allowed Tokens (whitelist — only trade these) -->
+        <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Allowed Tokens <span style="font-size:0.75rem;color:var(--color-text-muted);">(only trade these)</span></h3>
+        <div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-4);margin-bottom:var(--space-4);">
           <div style="display:flex;gap:var(--space-2);align-items:end;margin-bottom:var(--space-3);flex-wrap:wrap;">
             <div class="form-group" style="margin-bottom:0;flex:1;min-width:140px;">
-              <label class="form-label" for="admin-token-symbol">Token Symbol</label>
-              <input class="form-input text-mono" type="text" id="admin-token-symbol" placeholder="e.g. BTCUSDT" style="text-transform:uppercase;">
+              <label class="form-label" for="admin-allowed-symbol">Token Symbol</label>
+              <input class="form-input text-mono" type="text" id="admin-allowed-symbol" placeholder="e.g. BTCUSDT" style="text-transform:uppercase;">
             </div>
-            <button class="btn btn-primary btn-sm" onclick="window.CryptoBot.addGlobalToken()">Add Token</button>
-            <button class="btn btn-danger btn-sm" onclick="window.CryptoBot.banGlobalToken()">Ban Token</button>
+            <button class="btn btn-primary btn-sm" onclick="window.CryptoBot.addAllowedToken()">Add Allowed</button>
           </div>
           <div class="table-wrap">
             <table class="data-table">
-              <thead><tr><th>Symbol</th><th>Status</th><th>Action</th></tr></thead>
-              <tbody id="admin-tokens-tbody"></tbody>
+              <thead><tr><th>Symbol</th><th>Action</th></tr></thead>
+              <tbody id="admin-allowed-tbody"></tbody>
             </table>
           </div>
-          <div id="admin-tokens-empty" style="color:var(--color-text-muted);font-size:0.85rem;padding:var(--space-3);text-align:center;">No global token settings. Bot trades top coins by volume.</div>
+          <div id="admin-allowed-empty" style="color:var(--color-text-muted);font-size:0.85rem;padding:var(--space-3);text-align:center;">No allowed tokens set. Bot trades top coins by volume.</div>
+        </div>
+
+        <!-- Banned Tokens (blacklist — never trade these) -->
+        <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Banned Tokens <span style="font-size:0.75rem;color:var(--color-text-muted);">(never trade these)</span></h3>
+        <div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-4);margin-bottom:var(--space-5);">
+          <div style="display:flex;gap:var(--space-2);align-items:end;margin-bottom:var(--space-3);flex-wrap:wrap;">
+            <div class="form-group" style="margin-bottom:0;flex:1;min-width:140px;">
+              <label class="form-label" for="admin-banned-symbol">Token Symbol</label>
+              <input class="form-input text-mono" type="text" id="admin-banned-symbol" placeholder="e.g. DOGEUSDT" style="text-transform:uppercase;">
+            </div>
+            <button class="btn btn-danger btn-sm" onclick="window.CryptoBot.addBannedToken()">Ban Token</button>
+          </div>
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead><tr><th>Symbol</th><th>Action</th></tr></thead>
+              <tbody id="admin-banned-tbody"></tbody>
+            </table>
+          </div>
+          <div id="admin-banned-empty" style="color:var(--color-text-muted);font-size:0.85rem;padding:var(--space-3);text-align:center;">No banned tokens. Bot can trade any coin.</div>
         </div>
 
         <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Weekly Earnings Overview</h3>
@@ -964,7 +1046,7 @@
         <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Users</h3>
         <div class="table-wrap" style="margin-bottom:var(--space-5);overflow-x:auto;">
           <table class="data-table" id="admin-users-table">
-            <thead><tr><th>Email</th><th>Status</th><th>Keys</th><th>Wallet</th><th>Referral</th><th>Joined</th><th>Action</th></tr></thead>
+            <thead><tr><th>Email</th><th>Keys</th><th>Wallet</th><th>Referral</th><th>Joined</th><th>Action</th></tr></thead>
             <tbody id="admin-users-tbody"></tbody>
           </table>
         </div>

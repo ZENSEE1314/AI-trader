@@ -31,13 +31,14 @@ router.get('/cash-wallet', async (req, res) => {
       'SELECT COUNT(*) as cnt FROM users WHERE referred_by = $1', [req.userId]
     );
 
-    const cashWallet = parseFloat(u.cash_wallet) || 0;
+    const rawCash = parseFloat(u.cash_wallet) || 0;
     const commissionEarned = parseFloat(u.commission_earned) || 0;
+    const cashWallet = rawCash + commissionEarned;
 
     res.json({
       cash_wallet: cashWallet,
       commission_earned: commissionEarned,
-      total_balance: cashWallet + commissionEarned,
+      total_balance: cashWallet,
       referral_code: u.referral_code || '',
       referral_count: parseInt(referralCount[0]?.cnt || 0),
       referral_tier: parseInt(u.referral_tier) || 1,

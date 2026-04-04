@@ -20,14 +20,21 @@ router.get('/status', async (req, res) => {
       'SELECT COUNT(*) as cnt FROM users WHERE referred_by = $1', [req.userId]
     );
 
+    // Get platform USDT address for display
+    const platformAddrRow = await query("SELECT value FROM settings WHERE key = 'platform_usdt_address'").catch(() => []);
+    const platformNetRow = await query("SELECT value FROM settings WHERE key = 'platform_usdt_network'").catch(() => []);
+
+    const cashWallet = (parseFloat(u.cash_wallet) || 0) + (parseFloat(u.commission_earned) || 0);
     res.json({
-      cash_wallet: parseFloat(u.cash_wallet) || 0,
+      cash_wallet: cashWallet,
       commission_earned: parseFloat(u.commission_earned) || 0,
-      total_balance: (parseFloat(u.cash_wallet) || 0) + (parseFloat(u.commission_earned) || 0),
+      total_balance: cashWallet,
       usdt_address: u.usdt_address || '',
       usdt_network: u.usdt_network || 'BEP20',
       referral_code: u.referral_code || '',
       referral_count: parseInt(referralCount[0]?.cnt || 0),
+      platform_usdt_address: platformAddrRow[0]?.value || '',
+      platform_usdt_network: platformNetRow[0]?.value || 'BEP20',
     });
   } catch (err) {
     console.error('Wallet status error:', err.message);
@@ -55,32 +62,7 @@ router.post('/topup', async (req, res) => {
   }
 });
 
-// ── Transfer commission to cash wallet ──────────────────────
-router.post('/transfer-commission', async (req, res) => {
-  try {
-    const { amount } = req.body;
-    if (!amount || amount <= 0) return res.status(400).json({ error: 'Amount required' });
-
-    const user = await query('SELECT commission_earned FROM users WHERE id = $1', [req.userId]);
-    const commBal = parseFloat(user[0]?.commission_earned) || 0;
-    if (commBal < amount) return res.status(400).json({ error: `Insufficient commission. Have $${commBal.toFixed(2)}` });
-
-    await query('UPDATE users SET commission_earned = commission_earned - $1, cash_wallet = cash_wallet + $1 WHERE id = $2', [amount, req.userId]);
-    await query(
-      `INSERT INTO wallet_transactions (user_id, type, amount, description) VALUES ($1, 'commission_transfer', $2, 'Transferred commission to cash wallet')`,
-      [req.userId, -amount]
-    );
-    await query(
-      `INSERT INTO wallet_transactions (user_id, type, amount, description) VALUES ($1, 'topup', $2, 'Received from commission')`,
-      [req.userId, amount]
-    );
-
-    res.json({ ok: true, message: `$${amount.toFixed(2)} moved from commission to cash wallet.` });
-  } catch (err) {
-    console.error('Transfer error:', err.message);
-    res.status(500).json({ error: 'Server error' });
-  }
-});
+// Transfer commission endpoint removed — commission auto-added to cash wallet
 
 // ── Save USDT withdrawal address ────────────────────────────
 router.post('/usdt-address', async (req, res) => {
@@ -99,36 +81,34 @@ router.post('/usdt-address', async (req, res) => {
   }
 });
 
-// ── Withdraw commission as USDT ─────────────────────────────
+// ── Withdraw from cash wallet as USDT ───────────────────────
 router.post('/withdraw', async (req, res) => {
   try {
     const { amount } = req.body;
     if (!amount || amount < 10) return res.status(400).json({ error: 'Minimum withdrawal is $10 USDT' });
 
-    const user = await query('SELECT commission_earned, usdt_address, usdt_network FROM users WHERE id = $1', [req.userId]);
+    const user = await query('SELECT cash_wallet, usdt_address, usdt_network FROM users WHERE id = $1', [req.userId]);
     if (!user.length) return res.status(404).json({ error: 'User not found' });
 
     const u = user[0];
     if (!u.usdt_address) return res.status(400).json({ error: 'Set your USDT withdrawal address first' });
 
-    // Atomic deduct — prevents double-spend race condition
+    // Atomic deduct from cash_wallet
     const deducted = await query(
-      'UPDATE users SET commission_earned = commission_earned - $1 WHERE id = $2 AND commission_earned >= $1 RETURNING commission_earned',
+      'UPDATE users SET cash_wallet = cash_wallet - $1 WHERE id = $2 AND cash_wallet >= $1 RETURNING cash_wallet',
       [amount, req.userId]
     );
     if (!deducted.length) {
-      const commBal = parseFloat(u.commission_earned) || 0;
-      return res.status(400).json({ error: `Insufficient commission. Have $${commBal.toFixed(2)}` });
+      const bal = parseFloat(u.cash_wallet) || 0;
+      return res.status(400).json({ error: `Insufficient balance. Have $${bal.toFixed(2)}` });
     }
 
-    // Create withdrawal request
     await query(
       `INSERT INTO withdrawals (user_id, amount, bank_name, account_number, account_name)
        VALUES ($1, $2, $3, $4, $5)`,
       [req.userId, amount, `USDT (${u.usdt_network})`, u.usdt_address, 'Crypto Withdrawal']
     );
 
-    // Log transaction
     await query(
       `INSERT INTO wallet_transactions (user_id, type, amount, description)
        VALUES ($1, 'withdrawal', $2, $3)`,

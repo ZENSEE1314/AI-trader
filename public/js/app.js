@@ -290,18 +290,29 @@
       const summaryUrl = state.tradesPeriod && state.tradesPeriod !== 'all'
         ? `/api/dashboard/summary?period=${state.tradesPeriod}`
         : '/api/dashboard/summary';
-      const [summary, walletData, weeklyEarnings] = await Promise.all([
+      const [summary, walletData, weeklyEarnings, cashData] = await Promise.all([
         api('GET', summaryUrl),
         api('GET', '/api/dashboard/futures-wallet').catch(() => ({ balance: 0, wallets: [] })),
         api('GET', '/api/dashboard/weekly-earnings').catch(() => null),
+        api('GET', '/api/dashboard/cash-wallet').catch(() => null),
         loadTrades(),
       ]);
       renderSummary(summary);
       renderWallets(walletData);
       if (weeklyEarnings) renderWeeklyEarnings(weeklyEarnings);
+      if (cashData) renderDashCashWallet(cashData);
     } catch (err) {
       showToast('Failed to load dashboard.', 'error');
     }
+  }
+
+  function renderDashCashWallet(data) {
+    const bal = parseFloat(data.cash_wallet) || 0;
+    const comm = parseFloat(data.commission_earned) || 0;
+    const balEl = document.getElementById('dash-cw-balance');
+    const commEl = document.getElementById('dash-cw-commission');
+    if (balEl) balEl.textContent = `$${bal.toFixed(2)}`;
+    if (commEl) commEl.textContent = `$${comm.toFixed(2)}`;
   }
 
   function renderWallets(data) {
@@ -880,7 +891,16 @@
       const commission = parseFloat(status.commission_earned) || 0;
       $('#cw-cash').textContent = `$${cashWallet.toFixed(2)}`;
       $('#cw-commission').textContent = `$${commission.toFixed(2)}`;
-      $('#cw-total').textContent = `$${(cashWallet + commission).toFixed(2)}`;
+
+      // Platform USDT address for top-ups
+      if (status.platform_usdt_address) {
+        const addrBox = $('#cw-platform-addr');
+        if (addrBox) addrBox.classList.remove('hidden');
+        const addrVal = $('#cw-platform-addr-val');
+        if (addrVal) addrVal.value = status.platform_usdt_address;
+        const netEl = $('#cw-platform-net');
+        if (netEl) netEl.textContent = `Network: ${status.platform_usdt_network || 'BEP20'}`;
+      }
 
       // Referral
       const appUrl = window.location.origin;
@@ -960,17 +980,6 @@
     } catch (err) { showToast(err.message, 'error'); }
   }
 
-  async function transferCommission() {
-    const amount = parseFloat($('#cw-transfer-amount').value);
-    if (!amount || amount <= 0) return showToast('Enter a valid amount', 'error');
-    try {
-      const data = await api('POST', '/api/subscription/transfer-commission', { amount });
-      showToast(data.message, 'success');
-      $('#cw-transfer-amount').value = '';
-      loadCashWallet();
-    } catch (err) { showToast(err.message, 'error'); }
-  }
-
   async function saveUsdtAddress() {
     const address = $('#cw-usdt-addr').value.trim();
     const network = $('#cw-usdt-net').value;
@@ -982,10 +991,10 @@
     } catch (err) { showToast(err.message, 'error'); }
   }
 
-  async function withdrawCommission() {
+  async function withdrawFromWallet() {
     const amount = parseFloat($('#cw-wd-amount').value);
     if (!amount || amount < 10) return showToast('Minimum withdrawal is $10', 'error');
-    if (!confirm(`Withdraw $${amount.toFixed(2)} USDT?`)) return;
+    if (!confirm(`Withdraw $${amount.toFixed(2)} USDT from cash wallet?`)) return;
     try {
       const data = await api('POST', '/api/subscription/withdraw', { amount });
       showToast(data.message, 'success');
@@ -1015,9 +1024,13 @@
       $('#admin-tier1').value = settings.commission_tier1 || '20';
       $('#admin-tier2').value = settings.commission_tier2 || '10';
       $('#admin-tier3').value = settings.commission_tier3 || '5';
+      if (settings.platform_usdt_address) $('#admin-usdt-addr').value = settings.platform_usdt_address;
+      if (settings.platform_usdt_network) $('#admin-usdt-net').value = settings.platform_usdt_network;
+      if (settings.bscscan_api_key) $('#admin-bscscan-key').value = settings.bscscan_api_key;
 
-      // Load global tokens
+      // Load global tokens and risk levels
       loadGlobalTokens();
+      loadRiskLevels();
     } catch (err) { showToast('Failed to load admin.', 'error'); }
   }
 
@@ -1028,75 +1041,137 @@
         commission_tier1: $('#admin-tier1').value,
         commission_tier2: $('#admin-tier2').value,
         commission_tier3: $('#admin-tier3').value,
+        platform_usdt_address: $('#admin-usdt-addr').value.trim(),
+        platform_usdt_network: $('#admin-usdt-net').value,
+        bscscan_api_key: $('#admin-bscscan-key').value.trim(),
       });
       showToast('Settings saved', 'success');
     } catch (err) { showToast(err.message, 'error'); }
   }
 
-  // ----- Global Token Management (Admin) -----
+  // ----- Risk Level Management (Admin) -----
+
+  async function loadRiskLevels() {
+    try {
+      const levels = await api('GET', '/api/admin/risk-levels');
+      const container = $('#admin-risk-levels');
+      if (!container) return;
+      if (!levels.length) {
+        container.innerHTML = '<div style="color:var(--color-text-muted);font-size:0.85rem;text-align:center;padding:var(--space-3);">No risk levels configured. Add one below.</div>';
+        return;
+      }
+      container.innerHTML = levels.map(rl => `<div style="background:var(--color-bg);border:1px solid var(--color-border-muted);border-radius:var(--radius-md);padding:var(--space-3);margin-bottom:8px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+          <strong style="font-size:0.9rem;">${escapeHtml(rl.name)}</strong>
+          <div style="display:flex;gap:4px;">
+            <button class="btn btn-danger btn-sm" style="font-size:0.7rem;" onclick="window.CryptoBot.deleteRiskLevel(${rl.id})">Delete</button>
+          </div>
+        </div>
+        <div style="display:flex;flex-wrap:wrap;gap:12px;margin-top:8px;font-size:0.8rem;color:var(--color-text-muted);">
+          <span>TP: <strong class="text-mono">${(parseFloat(rl.tp_pct)*100).toFixed(1)}%</strong></span>
+          <span>SL: <strong class="text-mono">${(parseFloat(rl.sl_pct)*100).toFixed(1)}%</strong></span>
+          <span>Capital: <strong class="text-mono">${parseFloat(rl.capital_percentage)}%</strong></span>
+          <span>Max Lev: <strong class="text-mono">${rl.max_leverage}x</strong></span>
+          <span>Consec Loss: <strong class="text-mono">${rl.max_consec_loss}</strong></span>
+        </div>
+      </div>`).join('');
+    } catch (err) { /* silent */ }
+  }
+
+  async function addRiskLevel() {
+    const name = ($('#rl-name').value || '').trim();
+    if (!name) return showToast('Enter a risk level name', 'error');
+    try {
+      await api('POST', '/api/admin/risk-levels', {
+        name,
+        tp_pct: parseFloat($('#rl-tp').value) || 0.045,
+        sl_pct: parseFloat($('#rl-sl').value) || 0.03,
+        capital_percentage: parseFloat($('#rl-capital').value) || 10,
+        max_leverage: parseInt($('#rl-leverage').value) || 20,
+        max_consec_loss: parseInt($('#rl-consec').value) || 2,
+      });
+      showToast(`${name} risk level added`, 'success');
+      $('#rl-name').value = '';
+      loadRiskLevels();
+    } catch (err) { showToast(err.message, 'error'); }
+  }
+
+  async function deleteRiskLevel(id) {
+    if (!confirm('Delete this risk level? Keys using it will be unlinked.')) return;
+    try {
+      await api('DELETE', `/api/admin/risk-levels/${id}`);
+      showToast('Risk level deleted', 'success');
+      loadRiskLevels();
+    } catch (err) { showToast(err.message, 'error'); }
+  }
+
+  // ----- Allowed / Banned Token Management (Admin) -----
 
   async function loadGlobalTokens() {
     try {
       const tokens = await api('GET', '/api/admin/global-tokens');
-      const tbody = $('#admin-tokens-tbody');
-      const empty = $('#admin-tokens-empty');
-      if (!tokens.length) {
-        tbody.innerHTML = '';
-        empty.classList.remove('hidden');
-        return;
-      }
-      empty.classList.add('hidden');
-      tbody.innerHTML = tokens.map(t => {
-        const isBanned = t.banned;
-        const isEnabled = t.enabled && !t.banned;
-        const statusColor = isBanned ? 'var(--color-danger)' : isEnabled ? 'var(--color-success)' : '#f0a030';
-        const statusText = isBanned ? 'BANNED' : isEnabled ? 'Active' : 'Disabled';
-        return `<tr>
+      const allowed = tokens.filter(t => t.enabled && !t.banned);
+      const banned = tokens.filter(t => t.banned);
+
+      const allowedBody = $('#admin-allowed-tbody');
+      const allowedEmpty = $('#admin-allowed-empty');
+      if (!allowed.length) {
+        allowedBody.innerHTML = '';
+        allowedEmpty.classList.remove('hidden');
+      } else {
+        allowedEmpty.classList.add('hidden');
+        allowedBody.innerHTML = allowed.map(t => `<tr>
           <td class="text-mono"><strong>${escapeHtml(t.symbol)}</strong></td>
-          <td style="color:${statusColor}">${statusText}</td>
-          <td style="white-space:nowrap;">
-            ${isBanned
-              ? `<button class="btn btn-primary btn-sm" style="font-size:0.7rem;" onclick="window.CryptoBot.unbanGlobalToken('${escapeHtml(t.symbol)}')">Unban</button>`
-              : `<button class="btn btn-danger btn-sm" style="font-size:0.7rem;" onclick="window.CryptoBot.banGlobalToken('${escapeHtml(t.symbol)}')">Ban</button>`}
-            <button class="btn btn-ghost btn-sm" style="font-size:0.7rem;" onclick="window.CryptoBot.removeGlobalToken('${escapeHtml(t.symbol)}')">Remove</button>
-          </td>
-        </tr>`;
-      }).join('');
+          <td><button class="btn btn-ghost btn-sm" style="font-size:0.7rem;" onclick="window.CryptoBot.removeGlobalToken('${escapeHtml(t.symbol)}')">Remove</button></td>
+        </tr>`).join('');
+      }
+
+      const bannedBody = $('#admin-banned-tbody');
+      const bannedEmpty = $('#admin-banned-empty');
+      if (!banned.length) {
+        bannedBody.innerHTML = '';
+        bannedEmpty.classList.remove('hidden');
+      } else {
+        bannedEmpty.classList.add('hidden');
+        bannedBody.innerHTML = banned.map(t => `<tr>
+          <td class="text-mono"><strong>${escapeHtml(t.symbol)}</strong></td>
+          <td><button class="btn btn-primary btn-sm" style="font-size:0.7rem;" onclick="window.CryptoBot.unbanGlobalToken('${escapeHtml(t.symbol)}')">Unban</button></td>
+        </tr>`).join('');
+      }
     } catch (err) { /* silent */ }
   }
 
-  async function addGlobalToken() {
-    const symbol = ($('#admin-token-symbol').value || '').toUpperCase().trim();
+  async function addAllowedToken() {
+    const symbol = ($('#admin-allowed-symbol').value || '').toUpperCase().trim();
     if (!symbol) return showToast('Enter a token symbol', 'error');
     try {
       await api('POST', '/api/admin/global-tokens', { symbol, enabled: true, banned: false });
-      showToast(`${symbol} added`, 'success');
-      $('#admin-token-symbol').value = '';
+      showToast(`${symbol} added to allowed`, 'success');
+      $('#admin-allowed-symbol').value = '';
       loadGlobalTokens();
     } catch (err) { showToast(err.message, 'error'); }
   }
 
-  async function banGlobalToken(symbolOverride) {
-    const symbol = symbolOverride || ($('#admin-token-symbol').value || '').toUpperCase().trim();
+  async function addBannedToken() {
+    const symbol = ($('#admin-banned-symbol').value || '').toUpperCase().trim();
     if (!symbol) return showToast('Enter a token symbol', 'error');
     try {
       await api('POST', '/api/admin/global-tokens', { symbol, enabled: false, banned: true });
       showToast(`${symbol} banned`, 'success');
-      $('#admin-token-symbol').value = '';
+      $('#admin-banned-symbol').value = '';
       loadGlobalTokens();
     } catch (err) { showToast(err.message, 'error'); }
   }
 
   async function unbanGlobalToken(symbol) {
     try {
-      await api('POST', '/api/admin/global-tokens', { symbol, enabled: true, banned: false });
+      await api('DELETE', `/api/admin/global-tokens/${symbol}`);
       showToast(`${symbol} unbanned`, 'success');
       loadGlobalTokens();
     } catch (err) { showToast(err.message, 'error'); }
   }
 
   async function removeGlobalToken(symbol) {
-    if (!confirm(`Remove ${symbol} from global settings?`)) return;
     try {
       await api('DELETE', `/api/admin/global-tokens/${symbol}`);
       showToast(`${symbol} removed`, 'success');
@@ -1216,18 +1291,14 @@
       const bal = parseFloat(u.wallet_balance || 0).toFixed(2);
       return `<tr>
       <td>${escapeHtml(u.email)}${u.is_admin ? ' <b>(admin)</b>' : ''}</td>
-      <td>${u.sub_status === 'active' ? '<span style="color:var(--color-accent);">Active</span>' : (u.sub_status || 'None')}</td>
       <td>${u.key_count}</td>
       <td class="text-mono">$${bal} <button class="btn btn-ghost btn-sm" style="font-size:0.7rem;padding:2px 6px;" onclick="window.CryptoBot.adminEditWallet(${u.id},'${escapeHtml(u.email)}',${bal})">Edit</button></td>
       <td>${escapeHtml(u.referral_code || '-')}</td>
       <td>${formatDate(u.created_at)}</td>
       <td style="white-space:nowrap;">
-        ${u.approved_no_sub
-          ? `<button class="btn btn-ghost btn-sm" style="font-size:0.7rem;color:var(--color-success);border-color:var(--color-success);" onclick="window.CryptoBot.adminApproveNoSub(${u.id},false)" title="Revoke free access">✓ Free</button>`
-          : `<button class="btn btn-ghost btn-sm" style="font-size:0.7rem;" onclick="window.CryptoBot.adminApproveNoSub(${u.id},true)" title="Approve without subscription">+ Approve</button>`}
         ${u.is_blocked
-          ? `<button class="btn btn-primary btn-sm" style="margin-left:4px;" onclick="window.CryptoBot.adminAction('unblock',${u.id})">Unblock</button>`
-          : `<button class="btn btn-danger btn-sm" style="margin-left:4px;" onclick="window.CryptoBot.adminAction('block',${u.id})">Block</button>`}
+          ? `<button class="btn btn-primary btn-sm" onclick="window.CryptoBot.adminAction('unblock',${u.id})">Unblock</button>`
+          : `<button class="btn btn-danger btn-sm" onclick="window.CryptoBot.adminAction('block',${u.id})">Block</button>`}
       </td>
     </tr>`;
     }).join('');
@@ -1552,14 +1623,15 @@
   // ----- Expose to inline handlers -----
   window.CryptoBot = {
     toggleSettings, saveSettings, deleteKey, showToast,
-    submitTopUp, transferCommission, saveUsdtAddress, withdrawCommission,
+    submitTopUp, saveUsdtAddress, withdrawFromWallet,
     adminAction, adminSub, adminWd, saveAdminSettings, adminEditWallet, clearErrors,
-    adminEditSplit, adminPauseKey, adminResumeKey, adminApproveNoSub,
+    adminEditSplit, adminPauseKey, adminResumeKey,
     goToAuth, showLoginForm, onPlatformChange,
     searchCoins, addCoin, removeCoin,
     filterLogs, clearLogs,
     addTokenLeverage, removeTokenLeverage,
-    addGlobalToken, banGlobalToken, unbanGlobalToken, removeGlobalToken,
+    addAllowedToken, addBannedToken, unbanGlobalToken, removeGlobalToken,
+    addRiskLevel, deleteRiskLevel,
   };
 
   // ----- Init -----

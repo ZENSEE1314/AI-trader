@@ -512,12 +512,17 @@ router.put('/settings', async (req, res) => {
   try {
     const { referral_commission_pct, commission_tier1, commission_tier2, commission_tier3, min_topup } = req.body;
 
+    const { platform_usdt_address, platform_usdt_network, bscscan_api_key } = req.body;
+
     const updates = [
       ['referral_commission_pct', referral_commission_pct],
       ['commission_tier1', commission_tier1],
       ['commission_tier2', commission_tier2],
       ['commission_tier3', commission_tier3],
       ['min_topup', min_topup],
+      ['platform_usdt_address', platform_usdt_address],
+      ['platform_usdt_network', platform_usdt_network],
+      ['bscscan_api_key', bscscan_api_key],
     ];
 
     for (const [key, val] of updates) {
@@ -531,6 +536,63 @@ router.put('/settings', async (req, res) => {
     res.json({ ok: true });
   } catch (err) {
     console.error('Admin update settings error:', err.message);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// ── Risk Level Management ───────────────────────────────────
+
+router.get('/risk-levels', async (req, res) => {
+  try {
+    const rows = await query('SELECT * FROM risk_levels ORDER BY id');
+    res.json(rows);
+  } catch (err) {
+    console.error('Risk levels list error:', err.message);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+router.post('/risk-levels', async (req, res) => {
+  try {
+    const { name, description, tp_pct, sl_pct, max_consec_loss, top_n_coins, capital_percentage, max_leverage } = req.body;
+    if (!name) return res.status(400).json({ error: 'Name required' });
+    const row = await query(
+      `INSERT INTO risk_levels (name, description, tp_pct, sl_pct, max_consec_loss, top_n_coins, capital_percentage, max_leverage)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
+      [name, description || '', tp_pct || 0.045, sl_pct || 0.03, max_consec_loss || 2, top_n_coins || 50, capital_percentage || 10, max_leverage || 20]
+    );
+    res.json(row[0]);
+  } catch (err) {
+    console.error('Risk level create error:', err.message);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+router.put('/risk-levels/:id', async (req, res) => {
+  try {
+    const { name, description, tp_pct, sl_pct, max_consec_loss, top_n_coins, capital_percentage, max_leverage, enabled } = req.body;
+    await query(
+      `UPDATE risk_levels SET name = COALESCE($1, name), description = COALESCE($2, description),
+       tp_pct = COALESCE($3, tp_pct), sl_pct = COALESCE($4, sl_pct),
+       max_consec_loss = COALESCE($5, max_consec_loss), top_n_coins = COALESCE($6, top_n_coins),
+       capital_percentage = COALESCE($7, capital_percentage), max_leverage = COALESCE($8, max_leverage),
+       enabled = COALESCE($9, enabled) WHERE id = $10`,
+      [name, description, tp_pct, sl_pct, max_consec_loss, top_n_coins, capital_percentage, max_leverage, enabled, req.params.id]
+    );
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Risk level update error:', err.message);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+router.delete('/risk-levels/:id', async (req, res) => {
+  try {
+    await query('UPDATE api_keys SET risk_level_id = NULL WHERE risk_level_id = $1', [req.params.id]);
+    await query('DELETE FROM risk_levels WHERE id = $1', [req.params.id]);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Risk level delete error:', err.message);
     res.status(500).json({ error: 'Server error' });
   }
 });

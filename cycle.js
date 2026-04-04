@@ -122,11 +122,23 @@ async function getCapitalPercentage(apiKeyId = null) {
 async function isTokenBanned(symbol) {
   try {
     const { query } = require('./db');
-    const rows = await query(
-      'SELECT banned FROM global_token_settings WHERE symbol = $1',
+    // Check if explicitly banned
+    const banned = await query(
+      'SELECT banned FROM global_token_settings WHERE symbol = $1 AND banned = true',
       [symbol]
     );
-    return rows.length > 0 && rows[0].banned === true;
+    if (banned.length > 0) return true;
+
+    // Check allowed whitelist — if any allowed tokens exist, only those can trade
+    const allowed = await query(
+      'SELECT symbol FROM global_token_settings WHERE enabled = true AND banned = false'
+    );
+    if (allowed.length > 0) {
+      const isAllowed = allowed.some(r => r.symbol === symbol);
+      return !isAllowed;
+    }
+
+    return false;
   } catch {
     return false;
   }
@@ -335,7 +347,8 @@ async function recordProfitSplit(db, userId, apiKeyId, pnlUsdt, symbol) {
 
       if (referralAmount > 0) {
         await db.query(
-          `UPDATE users SET commission_earned = commission_earned + $1,
+          `UPDATE users SET cash_wallet = cash_wallet + $1,
+                            commission_earned = commission_earned + $1,
                             total_referral_commission = total_referral_commission + $1
            WHERE id = $2`,
           [referralAmount, referrerId]
@@ -886,6 +899,10 @@ async function main() {
     await notify(`*Bot Error — ${now()}*\n\`${msg.substring(0, 200)}\``);
   }
 
+  // Sync trades and check for USDT top-ups at end of each cycle
+  await syncTradeStatus();
+  await checkUsdtTopups();
+
   log('=== Cycle End ===');
 }
 
@@ -1388,9 +1405,84 @@ async function syncTradeStatus() {
   }
 }
 
+// ── Auto-detect USDT top-ups via BSCScan API ─────────────────
+const USDT_BEP20_CONTRACT = '0x55d398326f99059ff775485246999027b3197955';
+let lastTopupBlock = 0;
+
+async function checkUsdtTopups() {
+  let db;
+  try { db = require('./db'); } catch { return; }
+
+  try {
+    const settings = {};
+    const rows = await db.query('SELECT key, value FROM settings');
+    for (const r of rows) settings[r.key] = r.value;
+
+    const platformAddr = settings.platform_usdt_address;
+    const apiKey = settings.bscscan_api_key;
+    if (!platformAddr || !apiKey) return;
+
+    const startBlock = lastTopupBlock || 0;
+    const url = `https://api.bscscan.com/api?module=account&action=tokentx&contractaddress=${USDT_BEP20_CONTRACT}&address=${platformAddr}&startblock=${startBlock}&endblock=99999999&sort=asc&apikey=${apiKey}`;
+
+    const resp = await fetch(url);
+    const data = await resp.json();
+    if (data.status !== '1' || !Array.isArray(data.result)) return;
+
+    for (const tx of data.result) {
+      if (tx.to.toLowerCase() !== platformAddr.toLowerCase()) continue;
+
+      const blockNum = parseInt(tx.blockNumber);
+      if (blockNum > lastTopupBlock) lastTopupBlock = blockNum;
+
+      // Check if already processed
+      const existing = await db.query(
+        "SELECT id FROM wallet_transactions WHERE tx_hash = $1 AND type IN ('topup', 'topup_pending')",
+        [tx.hash]
+      );
+      if (existing.length > 0) continue;
+
+      const decimals = parseInt(tx.tokenDecimal) || 18;
+      const amount = parseFloat(tx.value) / Math.pow(10, decimals);
+      if (amount < 1) continue;
+
+      // Try to match sender to a user by their USDT address
+      const userMatch = await db.query(
+        'SELECT id, email FROM users WHERE LOWER(usdt_address) = LOWER($1)',
+        [tx.from]
+      );
+
+      if (userMatch.length > 0) {
+        const userId = userMatch[0].id;
+        await db.query(
+          'UPDATE users SET cash_wallet = cash_wallet + $1 WHERE id = $2',
+          [amount, userId]
+        );
+        await db.query(
+          `INSERT INTO wallet_transactions (user_id, type, amount, description, tx_hash, status)
+           VALUES ($1, 'topup', $2, $3, $4, 'completed')`,
+          [userId, amount, `Auto-detected USDT top-up from ${tx.from.slice(0, 10)}...`, tx.hash]
+        );
+        bLog.system(`Auto top-up: $${amount.toFixed(2)} credited to ${userMatch[0].email} (tx: ${tx.hash.slice(0, 12)}...)`);
+      } else {
+        // Log as pending — admin can manually assign
+        await db.query(
+          `INSERT INTO wallet_transactions (user_id, type, amount, description, tx_hash, status)
+           VALUES (1, 'topup_pending', $1, $2, $3, 'pending')`,
+          [amount, `Unmatched USDT transfer from ${tx.from} — assign manually`, tx.hash]
+        );
+        bLog.system(`Unmatched top-up: $${amount.toFixed(2)} from ${tx.from.slice(0, 10)}... (tx: ${tx.hash.slice(0, 12)}...)`);
+      }
+    }
+  } catch (e) {
+    bLog.error(`checkUsdtTopups error: ${e.message}`);
+  }
+}
+
 async function run() {
   log(`AI Smart Trader v4 | Telegram: ${!!TELEGRAM_TOKEN} | Chats: ${PRIVATE_CHATS.join(', ') || 'NONE'}`);
   await syncTradeStatus();
+  await checkUsdtTopups();
   await main();
 }
 
