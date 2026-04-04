@@ -33,6 +33,28 @@
   <link rel="stylesheet" href="/css/style.css">
 
   <link rel="icon" href="/img/logo.jpeg" type="image/jpeg">
+  
+  <!-- Simple inline JS for login button -->
+  <script>
+    function showAuthSection() {
+      // Hide landing page, show auth section
+      document.getElementById('section-landing').style.display = 'none';
+      document.getElementById('section-auth').style.display = 'block';
+      
+      // Show login form by default
+      document.getElementById('form-login').classList.remove('hidden');
+      document.getElementById('form-signup').classList.add('hidden');
+      
+      // Set active tab
+      document.querySelectorAll('[data-auth-tab]').forEach(tab => {
+        tab.classList.toggle('active', tab.getAttribute('data-auth-tab') === 'login');
+        tab.setAttribute('aria-selected', tab.getAttribute('data-auth-tab') === 'login');
+      });
+    }
+    
+    // Also expose it globally as fallback
+    window.showAuthSection = showAuthSection;
+  </script>
 </head>
 
 <body>
@@ -62,7 +84,7 @@
           <a href="/chart.html" target="_blank" style="color:var(--color-accent);">Chart</a>
         </div>
         <div class="landing-nav-right">
-          <button class="btn btn-primary btn-sm" onclick="window.CryptoBot.goToAuth()">Login / Sign Up</button>
+          <button class="btn btn-primary btn-sm" onclick="if(window.CryptoBot){window.CryptoBot.goToAuth();}else{showAuthSection();}">Login / Sign Up</button>
         </div>
         <button class="landing-nav-toggle" aria-label="Toggle menu" aria-expanded="false">
           <span></span><span></span><span></span>
@@ -73,7 +95,7 @@
         <a href="#features">Features</a>
         <a href="#pricing">Pricing</a>
         <a href="/chart.html" style="color:var(--color-accent);">Chart</a>
-        <button class="btn btn-primary btn-sm landing-nav-mobile-btn" onclick="window.CryptoBot.goToAuth()">Login / Sign Up</button>
+        <button class="btn btn-primary btn-sm landing-nav-mobile-btn" onclick="if(window.CryptoBot){window.CryptoBot.goToAuth();}else{showAuthSection();}">Login / Sign Up</button>
       </div>
     </nav>
 
@@ -1059,7 +1081,18 @@
     </div>
   </div>
 
-  <script src="/js/app.js"></script>
+  <script src="/js/app.js" onerror="console.error('Failed to load app.js');"></script>
   <script src="/js/cashwallet-fix.js"></script>
+  
+  <!-- Check if app loaded and show error if not -->
+  <script>
+    setTimeout(function() {
+      if (!window.CryptoBot) {
+        console.error('CryptoBot not loaded - JavaScript may have errors');
+        // You could show a user-friendly message here
+        // document.getElementById('js-error').style.display = 'block';
+      }
+    }, 2000);
+  </script>
 </body>
 </html>
