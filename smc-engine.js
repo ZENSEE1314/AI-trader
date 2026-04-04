@@ -2,12 +2,11 @@
 // Refined Rule-Based SMC Trading Engine
 //
 // Checklist (ALL must pass):
-//   1. Daily Bias    — Previous day candle direction
-//   2. HTF Structure — 15M trend must align with daily bias
-//   3. Key Levels    — Price at PDH/PDL or VWAP bands
-//   4. Setup (3M)    — HL formed (bullish) or LH formed (bearish)
-//   5. Entry (1M)    — HL confirmed → LONG, LH confirmed → SHORT
-//   6. Risk          — SL at 1M swing, 1:1.5 RR, max 3% risk
+//   1. 3-Candle Trend — Last 3 completed 15M candles determine direction
+//   2. Key Levels     — Price at PDH/PDL or VWAP bands
+//   3. Setup (3M)     — HL formed (bullish) or LH formed (bearish)
+//   4. Entry (1M)     — HL confirmed → LONG, LH confirmed → SHORT
+//   5. Risk           — SL at 1M swing, 1:1.5 RR
 // ============================================================
 
 const fetch = require('node-fetch');
@@ -299,71 +298,48 @@ async function analyzeLHHL(ticker, params, dailyBiasCache) {
   const price = parseFloat(ticker.lastPrice);
 
   // ┌─────────────────────────────────────────────────────────┐
-  // │ Step 1: Daily Bias                                      │
+  // │ Step 1: 3-Candle Trend (15M) — determines direction     │
   // └─────────────────────────────────────────────────────────┘
-  let dailyInfo = dailyBiasCache.get(symbol);
-  if (!dailyInfo) {
-    const dailyKlines = await fetchKlines(symbol, '1d', 3);
-    dailyInfo = getDailyBias(dailyKlines);
-    if (dailyInfo) dailyBiasCache.set(symbol, dailyInfo);
-  }
-
-  if (!dailyInfo || dailyInfo.bias === 'indecisive') {
-    return null; // no clear bias — skip
-  }
-
-  const { bias, pdh, pdl } = dailyInfo;
-
-  // Validate daily bias with latest 4H candle — reject stale bias
-  try {
-    const klines4h = await fetchKlines(symbol, '4h', 3);
-    if (klines4h && klines4h.length >= 2) {
-      const last4h = klines4h[klines4h.length - 2]; // last completed 4H candle
-      const open4h = parseFloat(last4h[1]);
-      const close4h = parseFloat(last4h[4]);
-      const is4hGreen = close4h > open4h;
-      // If daily says bearish but last 4H is green (buyers stepping in), skip
-      if (bias === 'bearish' && is4hGreen) {
-        bLog.scan(`${symbol}: daily bearish but 4H green — bias conflict, skipping`);
-        return null;
-      }
-      // If daily says bullish but last 4H is red (sellers stepping in), skip
-      if (bias === 'bullish' && !is4hGreen) {
-        bLog.scan(`${symbol}: daily bullish but 4H red — bias conflict, skipping`);
-        return null;
-      }
-    }
-  } catch { /* continue if 4H data unavailable */ }
-
-  // ┌─────────────────────────────────────────────────────────┐
-  // │ Step 2: HTF Structure (15M + 3M)                       │
-  // └─────────────────────────────────────────────────────────┘
-  const [klines15m, klines3m, klines1m] = await Promise.all([
+  const [klines15m, klines3m, klines1m, dailyKlines] = await Promise.all([
     fetchKlines(symbol, '15m', 100),
     fetchKlines(symbol, '3m', 100),
     fetchKlines(symbol, '1m', 100),
+    fetchKlines(symbol, '1d', 3),
   ]);
 
   if (!klines15m || !klines3m || !klines1m) return null;
   if (klines15m.length < 30 || klines3m.length < 30 || klines1m.length < 15) return null;
 
+  // Use last 3 completed 15M candles to determine trend direction
+  const completed15m = klines15m.slice(-4, -1); // last 3 completed (exclude current open candle)
+  if (completed15m.length < 3) return null;
+
+  let greenCount = 0;
+  let redCount = 0;
+  for (const c of completed15m) {
+    const cOpen = parseFloat(c[1]);
+    const cClose = parseFloat(c[4]);
+    if (cClose > cOpen) greenCount++;
+    else if (cClose < cOpen) redCount++;
+  }
+
+  // Need at least 2 of 3 candles agreeing on direction
+  let direction = null;
+  if (greenCount >= 2) direction = 'LONG';
+  else if (redCount >= 2) direction = 'SHORT';
+
+  if (!direction) {
+    return null; // no clear trend from 3 candles
+  }
+
+  // Get PDH/PDL for key level check
+  const dailyInfo = getDailyBias(dailyKlines);
+  const pdh = dailyInfo?.pdh || price * 1.01;
+  const pdl = dailyInfo?.pdl || price * 0.99;
+
   const struct15m = getStructure(klines15m, SWING_LENGTHS['15m']);
   const struct3m = getStructure(klines3m, SWING_LENGTHS['3m']);
   const struct1m = getStructure(klines1m, SWING_LENGTHS['1m']);
-
-  // HTF must align with daily bias — use 15M as the trend gate
-  // Require strict trend (HH+HL or LH+LL), not lean variants (single swing)
-  const isBullishHTF = struct15m.trend === 'bullish';
-  const isBearishHTF = struct15m.trend === 'bearish';
-
-  let direction = null;
-  if (bias === 'bullish' && isBullishHTF) direction = 'LONG';
-  else if (bias === 'bearish' && isBearishHTF) direction = 'SHORT';
-
-  if (!direction) {
-    bLog.scan(`${symbol}: bias=${bias} 15M=${struct15m.trend} — HTF not aligned (strict)`);
-    return null;
-  }
 
   // ┌─────────────────────────────────────────────────────────┐
   // │ Step 3: Key Levels & VWAP Bands                        │
@@ -372,7 +348,7 @@ async function analyzeLHHL(ticker, params, dailyBiasCache) {
   const levelCheck = isAtKeyLevel(price, pdh, pdl, vwapBands, direction);
 
   if (!levelCheck.isAtLevel) {
-    bLog.scan(`${symbol}: ${direction} bias OK but price not at key level (PDH/PDL/VWAP) — skipping`);
+    bLog.scan(`${symbol}: ${direction} 3candle OK but price not at key level (PDH/PDL/VWAP) — skipping`);
     return null;
   }
 
@@ -449,12 +425,16 @@ async function analyzeLHHL(ticker, params, dailyBiasCache) {
   // │ Score                                                    │
   // └─────────────────────────────────────────────────────────┘
   let score = 10;
+  const bias = direction === 'LONG' ? 'bullish' : 'bearish';
 
-  // Bonus: full HTF alignment (15M trend matches direction)
-  if (struct15m.trend === (direction === 'LONG' ? 'bullish' : 'bearish')) score += 3;
+  // Bonus: 3-candle unanimous (all 3 agree)
+  if (greenCount === 3 || redCount === 3) score += 2;
 
-  // Bonus: 3M also aligned (confirmation, not required)
-  if (struct3m.trend === (direction === 'LONG' ? 'bullish' : 'bearish')) score += 2;
+  // Bonus: 15M structure also aligns
+  if (struct15m.trend === bias) score += 3;
+
+  // Bonus: 3M also aligned
+  if (struct3m.trend === bias) score += 2;
 
   // Bonus: at PDH/PDL (stronger than VWAP)
   if (levelCheck.level === 'PDH' || levelCheck.level === 'PDL') score += 2;
@@ -465,7 +445,7 @@ async function analyzeLHHL(ticker, params, dailyBiasCache) {
   score = score * aiModifier;
 
   bLog.scan(
-    `✅ ${symbol} ${direction} | bias=${bias} 15M=${struct15m.label} 3M=${struct3m.label} ` +
+    `✅ ${symbol} ${direction} | 3candle=${greenCount}G/${redCount}R 15M=${struct15m.label} 3M=${struct3m.label} ` +
     `1M=${struct1m.label} | at=${levelCheck.level} | score=${Math.round(score)}`
   );
 
@@ -476,8 +456,8 @@ async function analyzeLHHL(ticker, params, dailyBiasCache) {
     lastPrice: price,
     sl,
     tp1: tp,
-    tp2: direction === 'LONG' ? price + (price * tpDist * 1.2) : price - (price * tpDist * 1.2),
-    tp3: direction === 'LONG' ? price + (price * tpDist * 1.5) : price - (price * tpDist * 1.5),
+    tp2: direction === 'LONG' ? price + (price * dynamicTP * 1.2) : price - (price * dynamicTP * 1.2),
+    tp3: direction === 'LONG' ? price + (price * dynamicTP * 1.5) : price - (price * dynamicTP * 1.5),
     slDist,
     leverage,
     score: Math.round(score * 10) / 10,
@@ -486,6 +466,7 @@ async function analyzeLHHL(ticker, params, dailyBiasCache) {
     aiModifier: Math.round(aiModifier * 100) / 100,
     structure: {
       bias,
+      candle3: `${greenCount}G/${redCount}R`,
       tf15: struct15m.label,
       tf3: struct3m.label,
       tf1: struct1m.label,
