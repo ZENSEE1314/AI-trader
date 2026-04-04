@@ -865,10 +865,12 @@ router.post('/debug-bitunix', async (req, res) => {
 
 // ── Backtest: compare 3 strategy variants over last 15 days ────
 router.post('/backtest', async (req, res) => {
+  req.setTimeout(600000);
+  res.setTimeout(600000);
   try {
     const fetch = require('node-fetch');
     const { getFetchOptions } = require('../proxy-agent');
-    const TOP_N = parseInt(req.body.topN) || 20;
+    const TOP_N = parseInt(req.body.topN) || 100;
     const WALLET_START = 1000;
     const RISK_PCT = 0.10;
     const LEVERAGE = 20;
