@@ -1144,20 +1144,15 @@ router.post('/backtest', async (req, res) => {
       };
     }
 
-    // Run all 3 variants
-    const r1 = simulate('strict');
-    const r2 = simulate('relaxed');
-    const r3 = simulate('none');
+    const mode = req.body.mode || 'strict';
+    const labels = { strict: 'Strict (0.3% key level)', relaxed: 'Relaxed (1% key level)', none: 'No Key Level (trend + structure only)' };
+    const result = simulate(mode);
 
     res.json({
       period: `${new Date(startTime).toISOString().slice(0,10)} → ${new Date(endTime).toISOString().slice(0,10)}`,
       coinsScanned: Object.keys(coinData).length,
       dataPoints: { k15m: coinData[topCoins[0]]?.k15?.length || 0, k3m: coinData[topCoins[0]]?.k3?.length || 0, k1m: coinData[topCoins[0]]?.k1?.length || 0 },
-      strategies: [
-        summarize('A) Strict (0.3% key level)', r1),
-        summarize('B) Relaxed (1% key level)', r2),
-        summarize('C) No Key Level (trend + structure only)', r3),
-      ],
+      strategy: summarize(labels[mode] || labels.strict, result),
     });
   } catch (err) {
     console.error('Backtest error:', err);
