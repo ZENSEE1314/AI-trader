@@ -835,26 +835,29 @@ router.post('/debug-bitunix', async (req, res) => {
     // Bitunix might use different symbol format
     const symDash = sym.replace('USDT', '-USDT');
 
-    // 1. Test GET endpoints via client._get (account, positions — proves auth works)
-    try { results.account = await client._rawGet('/api/v1/futures/account', { marginCoin: 'USDT' }); } catch (e) { results.account_err = e.message; }
+    // Account works! Auth + proxy confirmed. Now find the right trade history endpoint.
 
-    // 2. get_fills with both symbol formats
-    try { results.fills_normal = await client._rawPost('/api/v1/futures/trade/get_fills', { symbol: sym, limit: 5 }); } catch (e) { results.fills_normal_err = e.message; }
-    try { results.fills_dash = await client._rawPost('/api/v1/futures/trade/get_fills', { symbol: symDash, limit: 5 }); } catch (e) { results.fills_dash_err = e.message; }
+    // 1. Position history endpoints (closed positions = what we need)
+    try { results.posHistory_v1 = await client._rawPost('/api/v1/futures/position/get_history_positions', { pageNum: 1, pageSize: 5 }); } catch (e) { results.posHistory_v1_err = e.message; }
+    try { results.posHistory_GET = await client._rawGet('/api/v1/futures/position/get_history_positions', { pageNum: 1, pageSize: 5 }); } catch (e) { results.posHistory_GET_err = e.message; }
 
-    // 3. get_history_orders with both symbol formats
-    try { results.histOrders_normal = await client._rawPost('/api/v1/futures/trade/get_history_orders', { symbol: sym, pageNum: 1, pageSize: 5 }); } catch (e) { results.histOrders_normal_err = e.message; }
-    try { results.histOrders_dash = await client._rawPost('/api/v1/futures/trade/get_history_orders', { symbol: symDash, pageNum: 1, pageSize: 5 }); } catch (e) { results.histOrders_dash_err = e.message; }
+    // 2. Open positions (GET)
+    try { results.openPos = await client._rawGet('/api/v1/futures/position/get_pending_positions', {}); } catch (e) { results.openPos_err = e.message; }
 
-    // 4. Try string types for pageNum/pageSize (Bitunix may want strings)
-    try { results.histOrders_str = await client._rawPost('/api/v1/futures/trade/get_history_orders', { symbol: sym, pageNum: '1', pageSize: '5' }); } catch (e) { results.histOrders_str_err = e.message; }
+    // 3. get_fills needs orderId?
+    try { results.fills_orderId = await client._rawPost('/api/v1/futures/trade/get_fills', { orderId: '12345', symbol: sym }); } catch (e) { results.fills_orderId_err = e.message; }
 
-    // 5. Try get_fills with string limit and orderId
-    try { results.fills_strLimit = await client._rawPost('/api/v1/futures/trade/get_fills', { symbol: sym, limit: '20' }); } catch (e) { results.fills_strLimit_err = e.message; }
+    // 4. Order list endpoints (GET vs POST)
+    try { results.orderList_GET = await client._rawGet('/api/v1/futures/trade/get_history_orders', { symbol: sym, pageNum: 1, pageSize: 5 }); } catch (e) { results.orderList_GET_err = e.message; }
+    try { results.openOrders = await client._rawGet('/api/v1/futures/trade/get_open_orders', { symbol: sym }); } catch (e) { results.openOrders_err = e.message; }
+    try { results.openOrders_POST = await client._rawPost('/api/v1/futures/trade/get_open_orders', { symbol: sym }); } catch (e) { results.openOrders_POST_err = e.message; }
 
-    // 6. Try v2 endpoints (Bitunix may have migrated)
-    try { results.fills_v2 = await client._rawPost('/api/v2/futures/trade/get_fills', { symbol: sym, limit: 5 }); } catch (e) { results.fills_v2_err = e.message; }
-    try { results.histOrders_v2 = await client._rawPost('/api/v2/futures/trade/get_history_orders', { symbol: sym, pageNum: 1, pageSize: 5 }); } catch (e) { results.histOrders_v2_err = e.message; }
+    // 5. Try /api/v1/futures/order/ paths
+    try { results.orderHist_alt = await client._rawPost('/api/v1/futures/order/get_history_orders', { symbol: sym, pageNum: 1, pageSize: 5 }); } catch (e) { results.orderHist_alt_err = e.message; }
+
+    // 6. Bill/ledger endpoint (some exchanges put PnL here)
+    try { results.bills = await client._rawPost('/api/v1/futures/account/bills', { pageNum: 1, pageSize: 5 }); } catch (e) { results.bills_err = e.message; }
+    try { results.bills_GET = await client._rawGet('/api/v1/futures/account/bills', { pageNum: 1, pageSize: 5 }); } catch (e) { results.bills_GET_err = e.message; }
 
     res.json(results);
   } catch (err) {
