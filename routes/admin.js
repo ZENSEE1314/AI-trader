@@ -826,35 +826,47 @@ router.post('/debug-bitunix', async (req, res) => {
     const apiSecret = cryptoUtils.decrypt(trade.api_secret_enc, trade.secret_iv, trade.secret_auth_tag);
     const client = new BitunixClient({ apiKey, apiSecret });
 
-    const results = { trade: { id: trade.id, symbol: trade.symbol, direction: trade.direction, entry: trade.entry_price } };
+    const results = {
+      trade: { id: trade.id, symbol: trade.symbol, direction: trade.direction, entry: trade.entry_price },
+      keyPreview: apiKey.substring(0, 8) + '...',
+      proxyEnabled: require('../proxy-agent').isProxyEnabled(),
+    };
 
-    // Test multiple parameter formats to find what Bitunix accepts
-    const sym = trade.symbol;
+    // Test WITH proxy (normal)
+    try { results.withProxy_fills = await client._rawPost('/api/v1/futures/trade/get_fills', { symbol: trade.symbol, pageNum: 1, pageSize: 5 }); } catch (e) { results.withProxy_fills_err = e.message; }
+    try { results.withProxy_histOrders = await client._rawPost('/api/v1/futures/trade/get_history_orders', { symbol: trade.symbol, pageNum: 1, pageSize: 5 }); } catch (e) { results.withProxy_histOrders_err = e.message; }
 
-    // get_fills: try different param combos
-    try { results.fills_v1 = await client._rawPost('/api/v1/futures/trade/get_fills', { symbol: sym, limit: 5 }); } catch (e) { results.fills_v1_err = e.message; }
-    try { results.fills_v2 = await client._rawPost('/api/v1/futures/trade/get_fills', { symbol: sym, pageNum: 1, pageSize: 5 }); } catch (e) { results.fills_v2_err = e.message; }
-    try { results.fills_v3 = await client._rawPost('/api/v1/futures/trade/get_fills', { symbol: sym }); } catch (e) { results.fills_v3_err = e.message; }
-    try { results.fills_noSym = await client._rawPost('/api/v1/futures/trade/get_fills', { pageNum: 1, pageSize: 5 }); } catch (e) { results.fills_noSym_err = e.message; }
+    // Test WITHOUT proxy — direct connection
+    const fetch = require('node-fetch');
+    const crypto = require('crypto');
+    const nonce = crypto.randomBytes(16).toString('hex');
+    const timestamp = Date.now().toString();
+    const body = { symbol: trade.symbol, pageNum: 1, pageSize: 5 };
+    const bodyStr = JSON.stringify(body);
+    const digest = crypto.createHash('sha256').update(nonce + timestamp + apiKey + bodyStr).digest('hex');
+    const sign = crypto.createHash('sha256').update(digest + apiSecret).digest('hex');
+    const headers = { 'api-key': apiKey, nonce, timestamp, sign, 'Content-Type': 'application/json', language: 'en-US' };
 
-    // history orders
-    try { results.histOrders = await client._rawPost('/api/v1/futures/trade/get_history_orders', { symbol: sym, pageNum: 1, pageSize: 5 }); } catch (e) { results.histOrders_err = e.message; }
+    try {
+      const directRes = await fetch('https://fapi.bitunix.com/api/v1/futures/trade/get_history_orders', {
+        method: 'POST', headers, body: bodyStr, timeout: 15000,
+      });
+      results.noProxy_histOrders = await directRes.json();
+    } catch (e) { results.noProxy_histOrders_err = e.message; }
 
-    // history trades
-    try { results.histTrades = await client._rawPost('/api/v1/futures/trade/get_history_trades', { symbol: sym, pageNum: 1, pageSize: 5 }); } catch (e) { results.histTrades_err = e.message; }
-
-    // Also try BTCUSDT as a known symbol
-    try { results.fills_btc = await client._rawPost('/api/v1/futures/trade/get_fills', { symbol: 'BTCUSDT', pageNum: 1, pageSize: 5 }); } catch (e) { results.fills_btc_err = e.message; }
-    try { results.histOrders_btc = await client._rawPost('/api/v1/futures/trade/get_history_orders', { symbol: 'BTCUSDT', pageNum: 1, pageSize: 5 }); } catch (e) { results.histOrders_btc_err = e.message; }
-
-    // market price
-    try { results.marketPrice = await client.getMarketPrice(sym); } catch (e) { results.marketPrice_err = e.message; }
-
-    // open positions
-    try { results.positions = await client._rawPost('/api/v1/futures/position/get_pending_positions', {}); } catch (e) { results.positions_err = e.message; }
-
-    // account
-    try { results.account = await client._rawPost('/api/v1/futures/account', {}); } catch (e) { results.account_err = e.message; }
+    // Also test account without proxy (GET)
+    try {
+      const nonce2 = crypto.randomBytes(16).toString('hex');
+      const ts2 = Date.now().toString();
+      const qp = 'marginCoinUSDT';
+      const d2 = crypto.createHash('sha256').update(nonce2 + ts2 + apiKey + qp + '').digest('hex');
+      const s2 = crypto.createHash('sha256').update(d2 + apiSecret).digest('hex');
+      const h2 = { 'api-key': apiKey, nonce: nonce2, timestamp: ts2, sign: s2, 'Content-Type': 'application/json', language: 'en-US' };
+      const accRes = await fetch('https://fapi.bitunix.com/api/v1/futures/account?marginCoin=USDT', {
+        method: 'GET', headers: h2, timeout: 15000,
+      });
+      results.noProxy_account = await accRes.json();
+    } catch (e) { results.noProxy_account_err = e.message; }
 
     res.json(results);
   } catch (err) {
