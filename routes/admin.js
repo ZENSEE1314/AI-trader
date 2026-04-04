@@ -828,23 +828,33 @@ router.post('/debug-bitunix', async (req, res) => {
 
     const results = { trade: { id: trade.id, symbol: trade.symbol, direction: trade.direction, entry: trade.entry_price } };
 
-    // Test all endpoints — use _rawPost to see full Bitunix response including error codes
-    try {
-      results.rawFills = await client._rawPost('/api/v1/futures/trade/get_fills', { symbol: trade.symbol, limit: 5 });
-    } catch (e) { results.fillsError = e.message; }
+    // Test multiple parameter formats to find what Bitunix accepts
+    const sym = trade.symbol;
 
-    try {
-      results.rawHistoryOrders = await client._rawPost('/api/v1/futures/trade/get_history_orders', { symbol: trade.symbol, pageNum: 1, pageSize: 5 });
-    } catch (e) { results.historyOrdersError = e.message; }
+    // get_fills: try different param combos
+    try { results.fills_v1 = await client._rawPost('/api/v1/futures/trade/get_fills', { symbol: sym, limit: 5 }); } catch (e) { results.fills_v1_err = e.message; }
+    try { results.fills_v2 = await client._rawPost('/api/v1/futures/trade/get_fills', { symbol: sym, pageNum: 1, pageSize: 5 }); } catch (e) { results.fills_v2_err = e.message; }
+    try { results.fills_v3 = await client._rawPost('/api/v1/futures/trade/get_fills', { symbol: sym }); } catch (e) { results.fills_v3_err = e.message; }
+    try { results.fills_noSym = await client._rawPost('/api/v1/futures/trade/get_fills', { pageNum: 1, pageSize: 5 }); } catch (e) { results.fills_noSym_err = e.message; }
 
-    try {
-      results.rawHistoryTrades = await client._rawPost('/api/v1/futures/trade/get_history_trades', { symbol: trade.symbol, pageNum: 1, pageSize: 5 });
-    } catch (e) { results.historyTradesError = e.message; }
+    // history orders
+    try { results.histOrders = await client._rawPost('/api/v1/futures/trade/get_history_orders', { symbol: sym, pageNum: 1, pageSize: 5 }); } catch (e) { results.histOrders_err = e.message; }
 
-    try {
-      const mp = await client.getMarketPrice(trade.symbol);
-      results.marketPrice = mp;
-    } catch (e) { results.marketPriceError = e.message; }
+    // history trades
+    try { results.histTrades = await client._rawPost('/api/v1/futures/trade/get_history_trades', { symbol: sym, pageNum: 1, pageSize: 5 }); } catch (e) { results.histTrades_err = e.message; }
+
+    // Also try BTCUSDT as a known symbol
+    try { results.fills_btc = await client._rawPost('/api/v1/futures/trade/get_fills', { symbol: 'BTCUSDT', pageNum: 1, pageSize: 5 }); } catch (e) { results.fills_btc_err = e.message; }
+    try { results.histOrders_btc = await client._rawPost('/api/v1/futures/trade/get_history_orders', { symbol: 'BTCUSDT', pageNum: 1, pageSize: 5 }); } catch (e) { results.histOrders_btc_err = e.message; }
+
+    // market price
+    try { results.marketPrice = await client.getMarketPrice(sym); } catch (e) { results.marketPrice_err = e.message; }
+
+    // open positions
+    try { results.positions = await client._rawPost('/api/v1/futures/position/get_pending_positions', {}); } catch (e) { results.positions_err = e.message; }
+
+    // account
+    try { results.account = await client._rawPost('/api/v1/futures/account', {}); } catch (e) { results.account_err = e.message; }
 
     res.json(results);
   } catch (err) {
