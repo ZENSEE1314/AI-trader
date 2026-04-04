@@ -879,6 +879,7 @@ router.post('/backtest', async (req, res) => {
 
     const DAYS = Math.min(parseInt(req.body.days) || 7, 15);
     const REVERSE = req.body.reverse === true;
+    const TF_MODE = req.body.timeframe === 'fast' ? 'fast' : 'standard';
     const endTime = Date.now();
 
     async function fetchK(symbol, interval, limit, et) {
@@ -989,43 +990,59 @@ router.post('/backtest', async (req, res) => {
       .sort((a, b) => parseFloat(b.quoteVolume) - parseFloat(a.quoteVolume))
       .slice(0, TOP_N).map(t => t.symbol);
 
-    // Fetch 15m (scan + exits, ~15 days), 3m (structure, ~3 days), daily
-    // Skip 1m — use 3m for entry structure too (faster + more data coverage)
     const coinData = {};
     const startTime = endTime - DAYS * 86400000;
     for (const sym of topCoins) {
-      const k3Limit = DAYS <= 7 ? 500 : 1500;
-      const [k15, k3, kD] = await Promise.all([
-        fetchK(sym, '15m', 1500),
-        fetchK(sym, '3m', k3Limit),
-        fetchK(sym, '1d', Math.max(10, DAYS + 2)),
-      ]);
-      if (k15 && k3 && kD) {
-        coinData[sym] = { k15, k3, kD };
+      if (TF_MODE === 'fast') {
+        // Fast: 3m trend, 1m structure, 3m for exits (covers ~3 days max)
+        const [k3, k1, kD] = await Promise.all([
+          fetchK(sym, '3m', 1500),
+          fetchK(sym, '1m', 1500),
+          fetchK(sym, '1d', Math.max(10, DAYS + 2)),
+        ]);
+        if (k3 && k1 && kD) {
+          coinData[sym] = { k3, k1, kD };
+        }
+      } else {
+        // Standard: 15m trend, 3m structure, 15m for exits
+        const k3Limit = DAYS <= 7 ? 500 : 1500;
+        const [k15, k3, kD] = await Promise.all([
+          fetchK(sym, '15m', 1500),
+          fetchK(sym, '3m', k3Limit),
+          fetchK(sym, '1d', Math.max(10, DAYS + 2)),
+        ]);
+        if (k15 && k3 && kD) {
+          coinData[sym] = { k15, k3, kD };
+        }
       }
       await new Promise(r => setTimeout(r, 50));
     }
 
     // Run simulation for a given key level mode
+    // Standard: 15m trend → 3m structure, 15m exits
+    // Fast: 3m trend → 1m structure, 3m exits
     function simulate(mode) {
+      const isFast = TF_MODE === 'fast';
       let wallet = WALLET_START;
       const trades = [];
       const openPos = [];
       const firstCoin = Object.keys(coinData)[0];
       if (!firstCoin) return { trades: [], wallet };
 
-      const timeSteps = coinData[firstCoin].k15.map(k => parseInt(k[0])).filter(t => t >= startTime);
+      // Time steps: scan on 15m (standard) or 3m (fast)
+      const scanKey = isFast ? 'k3' : 'k15';
+      const timeSteps = coinData[firstCoin][scanKey].map(k => parseInt(k[0])).filter(t => t >= startTime);
 
       for (let step = 0; step < timeSteps.length; step++) {
         const now = timeSteps[step];
 
-        // Check open positions using 15m candles (covers full 7 days)
+        // Check open positions
         for (let i = openPos.length - 1; i >= 0; i--) {
           const pos = openPos[i];
           const data = coinData[pos.symbol];
           if (!data) continue;
-          // Use current 15m candle for exit checks
-          const curCandle = data.k15.find(k => parseInt(k[0]) === now);
+          const exitCandles = data[scanKey];
+          const curCandle = exitCandles.find(k => parseInt(k[0]) === now);
           if (!curCandle) continue;
 
           const high = parseFloat(curCandle[2]), low = parseFloat(curCandle[3]), close = parseFloat(curCandle[4]);
@@ -1058,11 +1075,17 @@ router.post('/backtest', async (req, res) => {
           if (openPos.length >= MAX_POS) break;
           if (openPos.find(p => p.symbol === sym)) continue;
           const data = coinData[sym];
-          const k15 = data.k15.filter(k => parseInt(k[0]) <= now);
-          const k3 = data.k3.filter(k => parseInt(k[0]) <= now);
-          if (k15.length < 30 || k3.length < 20) continue;
 
-          const last3 = k15.slice(-4, -1);
+          // Trend candles: 15m (standard) or 3m (fast)
+          const trendCandles = (isFast ? data.k3 : data.k15).filter(k => parseInt(k[0]) <= now);
+          // Structure candles: 3m (standard) or 1m (fast)
+          const structCandles = (isFast ? data.k1 : data.k3).filter(k => parseInt(k[0]) <= now);
+          const minTrend = isFast ? 20 : 30;
+          const minStruct = isFast ? 15 : 20;
+          if (trendCandles.length < minTrend || structCandles.length < minStruct) continue;
+
+          // 3-candle trend
+          const last3 = trendCandles.slice(-4, -1);
           if (last3.length < 3) continue;
           let gc = 0, rc = 0;
           for (const c of last3) { parseFloat(c[4]) > parseFloat(c[1]) ? gc++ : rc++; }
@@ -1071,28 +1094,32 @@ router.post('/backtest', async (req, res) => {
           if (!dir) continue;
           if (REVERSE) dir = dir === 'LONG' ? 'SHORT' : 'LONG';
 
-          const price = parseFloat(k15[k15.length-1][4]);
+          const price = parseFloat(trendCandles[trendCandles.length-1][4]);
           const dIdx = data.kD.findIndex(k => parseInt(k[0]) + 86400000 > now);
           const pdh = dIdx > 0 ? parseFloat(data.kD[dIdx-1][2]) : price * 1.01;
           const pdl = dIdx > 0 ? parseFloat(data.kD[dIdx-1][3]) : price * 0.99;
 
           if (mode !== 'none') {
             const proximity = mode === 'strict' ? 0.003 : 0.01;
-            const vwap = calcVWAP(k15);
+            const vwap = calcVWAP(trendCandles);
             if (!atKeyLevel(price, pdh, pdl, vwap, dir, proximity)) continue;
           }
 
-          // Use 3m for both setup and entry structure (no 1m needed)
-          const s3 = getStruct(k3, SWING['3m']);
-          if ((dir === 'LONG' && !s3.hasHL) || (dir === 'SHORT' && !s3.hasLH)) continue;
+          // Structure check
+          const swingLen = isFast ? SWING['1m'] : SWING['3m'];
+          const struct = getStruct(structCandles, swingLen);
+          if ((dir === 'LONG' && !struct.hasHL) || (dir === 'SHORT' && !struct.hasLH)) continue;
 
-          // Recency: 3m swing must be fresh
-          const es = dir === 'LONG' ? s3.lastLow : s3.lastHigh;
-          if (!es || (k3.length - 1 - es.index) > 30) continue;
+          // Recency check
+          const es = dir === 'LONG' ? struct.lastLow : struct.lastHigh;
+          const maxAge = isFast ? 25 : 30;
+          if (!es || (structCandles.length - 1 - es.index) > maxAge) continue;
 
-          // Volume check on 15m
-          const vols = k15.slice(-10).map(k => parseFloat(k[5]));
-          const rv = vols.slice(-3).reduce((a,b)=>a+b,0)/3;
+          // Volume check on trend candles
+          const volWindow = isFast ? 20 : 10;
+          const volRecent = isFast ? 5 : 3;
+          const vols = trendCandles.slice(-volWindow).map(k => parseFloat(k[5]));
+          const rv = vols.slice(-volRecent).reduce((a,b)=>a+b,0)/volRecent;
           const av = vols.reduce((a,b)=>a+b,0)/vols.length;
           if (av > 0 && rv/av < 0.8) continue;
 
@@ -1108,8 +1135,9 @@ router.post('/backtest', async (req, res) => {
 
       for (const pos of openPos) {
         const data = coinData[pos.symbol];
-        if (data && data.k15.length) {
-          const lp = parseFloat(data.k15[data.k15.length-1][4]);
+        const closeCandles = data ? data[scanKey] : null;
+        if (closeCandles && closeCandles.length) {
+          const lp = parseFloat(closeCandles[closeCandles.length-1][4]);
           pos.exit = lp; pos.reason = 'END'; pos.exitTime = endTime;
           pos.pnl = pos.dir === 'LONG' ? (lp - pos.entry) * pos.qty : (pos.entry - lp) * pos.qty;
           wallet += pos.pnl;
@@ -1143,15 +1171,22 @@ router.post('/backtest', async (req, res) => {
 
     const mode = req.body.mode || 'strict';
     const labels = { strict: 'Strict (0.3% key level)', relaxed: 'Relaxed (1% key level)', none: 'No Key Level (trend + structure only)' };
-    const prefix = REVERSE ? 'REVERSE — ' : '';
+    const tfLabel = TF_MODE === 'fast' ? '[3m→1m] ' : '[15m→3m] ';
+    const prefix = (REVERSE ? 'REVERSE ' : '') + tfLabel;
     const result = simulate(mode);
+
+    const firstData = coinData[topCoins[0]];
+    const dp = TF_MODE === 'fast'
+      ? { k3m: firstData?.k3?.length || 0, k1m: firstData?.k1?.length || 0 }
+      : { k15m: firstData?.k15?.length || 0, k3m: firstData?.k3?.length || 0 };
 
     res.json({
       period: `${new Date(startTime).toISOString().slice(0,10)} → ${new Date(endTime).toISOString().slice(0,10)}`,
       days: DAYS,
       reverse: REVERSE,
+      timeframe: TF_MODE,
       coinsScanned: Object.keys(coinData).length,
-      dataPoints: { k15m: coinData[topCoins[0]]?.k15?.length || 0, k3m: coinData[topCoins[0]]?.k3?.length || 0 },
+      dataPoints: dp,
       strategy: summarize(prefix + (labels[mode] || labels.strict), result),
     });
   } catch (err) {

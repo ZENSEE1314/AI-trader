@@ -1093,13 +1093,23 @@
           <button class="btn btn-primary btn-sm" onclick="window.CryptoBot.fixBitunixPnl()">Sync All Trades with Exchange</button>
           <button class="btn btn-ghost btn-sm" onclick="window.CryptoBot.debugBitunix()">Debug Bitunix API</button>
           <div style="margin-top:var(--space-2);display:flex;gap:var(--space-2);align-items:center;flex-wrap:wrap;">
-            <label style="font-size:0.8rem;color:var(--color-text-muted);">Backtest Days:</label>
+            <label style="font-size:0.8rem;color:var(--color-text-muted);">Days:</label>
             <select id="backtest-days" class="input" style="width:70px;padding:4px 8px;font-size:0.8rem;">
               <option value="7" selected>7</option>
               <option value="14">14</option>
             </select>
-            <button class="btn btn-ghost btn-sm" onclick="window.CryptoBot.runBacktest('none', false)">Normal</button>
+          </div>
+          <div style="margin-top:var(--space-2);font-size:0.75rem;color:var(--color-text-muted);">15m trend → 3m structure (current strategy)</div>
+          <div style="display:flex;gap:var(--space-2);flex-wrap:wrap;margin-top:var(--space-1);">
+            <button class="btn btn-ghost btn-sm" onclick="window.CryptoBot.runBacktest('strict', false)">Strict</button>
+            <button class="btn btn-ghost btn-sm" onclick="window.CryptoBot.runBacktest('relaxed', false)">Relaxed</button>
+            <button class="btn btn-ghost btn-sm" onclick="window.CryptoBot.runBacktest('none', false)">No Key Level</button>
             <button class="btn btn-ghost btn-sm" onclick="window.CryptoBot.runBacktest('none', true)">Reverse</button>
+          </div>
+          <div style="margin-top:var(--space-2);font-size:0.75rem;color:var(--color-text-muted);">3m trend → 1m structure (faster signals)</div>
+          <div style="display:flex;gap:var(--space-2);flex-wrap:wrap;margin-top:var(--space-1);">
+            <button class="btn btn-ghost btn-sm" onclick="window.CryptoBot.runBacktest('none', false, 'fast')">Fast Normal</button>
+            <button class="btn btn-ghost btn-sm" onclick="window.CryptoBot.runBacktest('none', true, 'fast')">Fast Reverse</button>
           </div>
           <pre id="fix-bitunix-result" style="margin-top:var(--space-2);font-size:0.75rem;color:var(--color-text-muted);max-height:600px;overflow:auto;white-space:pre-wrap;word-break:break-all;"></pre>
         </div>

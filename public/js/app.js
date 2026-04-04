@@ -1238,20 +1238,22 @@
     }
   }
 
-  async function runBacktest(mode, reverse) {
+  async function runBacktest(mode, reverse, timeframe) {
     const daysEl = $('#backtest-days');
     const days = daysEl ? parseInt(daysEl.value) || 7 : 7;
-    const tag = reverse ? 'REVERSE' : 'Normal';
+    const tf = timeframe || 'standard';
+    const tag = (reverse ? 'REVERSE ' : '') + (tf === 'fast' ? 'Fast ' : '') + `${days}d`;
     const resultEl = $('#fix-bitunix-result');
-    if (resultEl) resultEl.textContent = `Running ${tag} backtest (${days}d)... (~1-2 min)`;
+    if (resultEl) resultEl.textContent = `Running ${tag} backtest... (~1-2 min)`;
     try {
-      const data = await api('POST', '/api/admin/backtest', { topN: 20, mode, days, reverse });
+      const data = await api('POST', '/api/admin/backtest', { topN: 20, mode, days, reverse, timeframe: tf });
       const s = data.strategy;
       let output = '═══════════════════════════════════════════════\n';
       output += `  BACKTEST: ${s.label}\n`;
       output += '═══════════════════════════════════════════════\n';
       output += `Period:   ${data.period} | Coins: ${data.coinsScanned}\n`;
-      output += `Data:     15m=${data.dataPoints.k15m} 3m=${data.dataPoints.k3m}\n`;
+      const dpStr = Object.entries(data.dataPoints).map(([k, v]) => `${k}=${v}`).join(' ');
+      output += `Data:     ${dpStr}\n`;
       output += `Wallet:   $${s.startWallet} → $${s.finalWallet}\n`;
       output += `P&L:      ${s.totalPnl >= 0 ? '+' : ''}$${s.totalPnl} (${s.totalPnlPct}%)\n`;
       output += `Trades:   ${s.totalTrades}  |  Win: ${s.wins}  Loss: ${s.losses}  |  WR: ${s.winRate}%\n`;
