@@ -1105,6 +1105,21 @@
     } catch (err) { showToast(err.message, 'error'); }
   }
 
+  async function fixBitunixPnl() {
+    const resultEl = $('#fix-bitunix-result');
+    if (resultEl) resultEl.textContent = 'Fixing...';
+    try {
+      const data = await api('POST', '/api/admin/fix-bitunix-pnl');
+      const msg = `Fixed ${data.fixed} trades: ${(data.results || []).map(r => `${r.symbol} → ${r.status || 'ERROR'} $${(r.pnl || 0).toFixed(2)}`).join(', ')}`;
+      if (resultEl) resultEl.textContent = msg;
+      showToast(`Fixed ${data.fixed} trades`, 'success');
+      loadAdmin();
+    } catch (err) {
+      if (resultEl) resultEl.textContent = err.message;
+      showToast(err.message, 'error');
+    }
+  }
+
   // ----- Allowed / Banned Token Management (Admin) -----
 
   async function loadGlobalTokens() {
@@ -1632,6 +1647,7 @@
     addTokenLeverage, removeTokenLeverage,
     addAllowedToken, addBannedToken, unbanGlobalToken, removeGlobalToken,
     addRiskLevel, deleteRiskLevel,
+    fixBitunixPnl,
   };
 
   // ----- Init -----
