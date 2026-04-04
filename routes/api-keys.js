@@ -9,17 +9,38 @@ router.use(authMiddleware);
 // List user's keys (never return actual keys)
 router.get('/', async (req, res) => {
   try {
-    const rows = await query(
-      `SELECT ak.id, ak.platform, ak.label, ak.leverage, ak.risk_pct, ak.max_loss_usdt, ak.max_positions, ak.enabled,
-              ak.allowed_coins, ak.banned_coins, ak.tp_pct, ak.sl_pct, ak.max_consec_loss, ak.top_n_coins,
-              ak.risk_level_id, ak.capital_percentage,
-              rl.name as risk_level_name, rl.description as risk_level_description,
-              substring(ak.api_key_enc, 1, 8) as key_preview, ak.created_at
-       FROM api_keys ak
-       LEFT JOIN risk_levels rl ON ak.risk_level_id = rl.id
-       WHERE ak.user_id = $1 ORDER BY ak.created_at`,
-      [req.userId]
-    );
+    // Try the new query with risk levels, fall back to simple query if it fails
+    let rows;
+    try {
+      rows = await query(
+        `SELECT ak.id, ak.platform, ak.label, ak.leverage, ak.risk_pct, ak.max_loss_usdt, ak.max_positions, ak.enabled,
+                ak.allowed_coins, ak.banned_coins, ak.tp_pct, ak.sl_pct, ak.max_consec_loss, ak.top_n_coins,
+                COALESCE(ak.risk_level_id, 1) as risk_level_id,
+                COALESCE(ak.capital_percentage, 10.0) as capital_percentage,
+                COALESCE(rl.name, 'Medium Risk') as risk_level_name,
+                COALESCE(rl.description, 'Balanced risk profile') as risk_level_description,
+                substring(ak.api_key_enc, 1, 8) as key_preview, ak.created_at
+         FROM api_keys ak
+         LEFT JOIN risk_levels rl ON ak.risk_level_id = rl.id
+         WHERE ak.user_id = $1 ORDER BY ak.created_at`,
+        [req.userId]
+      );
+    } catch (err) {
+      // Fallback to simple query if new columns/tables don't exist yet
+      console.log('Using fallback API key query:', err.message);
+      rows = await query(
+        `SELECT ak.id, ak.platform, ak.label, ak.leverage, ak.risk_pct, ak.max_loss_usdt, ak.max_positions, ak.enabled,
+                ak.allowed_coins, ak.banned_coins, ak.tp_pct, ak.sl_pct, ak.max_consec_loss, ak.top_n_coins,
+                1 as risk_level_id,
+                10.0 as capital_percentage,
+                'Medium Risk' as risk_level_name,
+                'Balanced risk profile' as risk_level_description,
+                substring(ak.api_key_enc, 1, 8) as key_preview, ak.created_at
+         FROM api_keys ak
+         WHERE ak.user_id = $1 ORDER BY ak.created_at`,
+        [req.userId]
+      );
+    }
     res.json(rows);
   } catch (err) {
     console.error('List keys error:', err.message);

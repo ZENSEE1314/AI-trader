@@ -781,32 +781,38 @@
 
   async function loadCashWallet() {
     try {
-      const [status, txns, withdrawals] = await Promise.all([
-        api('GET', '/api/subscription/status'),
-        api('GET', '/api/subscription/transactions'),
-        api('GET', '/api/subscription/withdrawals').catch(() => []),
+      // Use new wallet endpoints instead of subscription
+      const [walletBalance, commissionBreakdown] = await Promise.all([
+        api('GET', '/api/wallet/balance'),
+        api('GET', '/api/wallet/commission/breakdown').catch(() => ({ total_commission: 0, breakdown: [] })),
       ]);
 
-      // Summary cards
-      $('#cw-cash').textContent = `$${status.cash_wallet.toFixed(2)}`;
-      $('#cw-commission').textContent = `$${status.commission_earned.toFixed(2)}`;
-      $('#cw-total').textContent = `$${status.total_balance.toFixed(2)}`;
-      $('#cw-weekly-fee').textContent = `$${status.weekly_fee.toFixed(2)}`;
+      // Summary cards - using new wallet structure
+      $('#cw-cash').textContent = `$${walletBalance.balance.toFixed(2)}`;
+      $('#cw-commission').textContent = `$${commissionBreakdown.total_commission.toFixed(2)}`;
+      $('#cw-total').textContent = `$${(walletBalance.balance + commissionBreakdown.total_commission).toFixed(2)}`;
+      
+      // Remove weekly fee display since we removed subscriptions
+      $('#cw-weekly-fee').textContent = '$0.00';
+      $('#cw-weekly-fee-label').textContent = 'No Subscription Fee';
 
-      // Fee status
+      // Update fee status section to show referral info instead
       const feeCard = $('#cw-fee-status-card');
       const feeWarning = $('#cw-fee-warning');
-      if (status.fee_due) {
-        $('#cw-fee-status').textContent = '⚠️ OVERDUE';
-        $('#cw-fee-status').style.color = 'var(--color-danger)';
-        feeCard.style.borderLeft = '3px solid var(--color-danger)';
-        feeWarning.classList.remove('hidden');
-      } else if (status.days_left <= 2) {
-        $('#cw-fee-status').textContent = `Due in ${status.days_left} day${status.days_left !== 1 ? 's' : ''}`;
-        $('#cw-fee-status').style.color = '#f0a030';
-        feeCard.style.borderLeft = '3px solid #f0a030';
-        feeWarning.classList.add('hidden');
-      } else {
+      $('#cw-fee-status').textContent = '✅ Commission System';
+      $('#cw-fee-status').style.color = 'var(--color-success)';
+      feeCard.style.borderLeft = '3px solid var(--color-success)';
+      feeWarning.classList.add('hidden');
+      
+      // Update fee details to show referral info
+      $('#cw-fee-details').innerHTML = `
+        <div style="margin-bottom: 8px;">
+          <strong>Referral Tier:</strong> ${walletBalance.referral_tier || 'Standard'}
+        </div>
+        <div>
+          <strong>Commission Rate:</strong> 10% from downline profits
+        </div>
+      `;
         $('#cw-fee-status').textContent = '✅ Active';
         $('#cw-fee-status').style.color = 'var(--color-success)';
         feeCard.style.borderLeft = '3px solid var(--color-success)';

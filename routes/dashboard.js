@@ -15,6 +15,62 @@ const PERIOD_INTERVALS = {
   '1y':  '1 year',
 };
 
+// Cash wallet info for dashboard
+router.get('/cash-wallet', async (req, res) => {
+  try {
+    const { query } = require('../db');
+    
+    // Get user's wallet balance
+    const walletResult = await query(
+      'SELECT balance, referral_tier, total_referral_commission FROM users WHERE id = $1',
+      [req.userId]
+    );
+    
+    // Get commission breakdown
+    const commissionResult = await query(
+      `SELECT SUM(amount) as total_commission 
+       FROM referral_commissions 
+       WHERE recipient_id = $1 AND status = 'paid'`,
+      [req.userId]
+    );
+    
+    const wallet = walletResult[0] || { balance: 0, referral_tier: 'standard', total_referral_commission: 0 };
+    const totalCommission = parseFloat(commissionResult[0]?.total_commission || 0);
+    
+    res.json({
+      balance: parseFloat(wallet.balance || 0),
+      total_commission: totalCommission,
+      total_balance: parseFloat(wallet.balance || 0) + totalCommission,
+      referral_tier: wallet.referral_tier || 'standard',
+      referral_code: `ref${req.userId.toString().padStart(6, '0')}`,
+      referral_count: 0, // You can add referral count logic later
+      usdt_address: '', // Add USDT address field to users table if needed
+      usdt_network: 'ERC20',
+      fee_due: false,
+      days_left: 30,
+      weekly_fee: 0,
+      weekly_fee_due: null
+    });
+  } catch (err) {
+    console.error('Cash wallet error:', err.message);
+    // Return default values if error
+    res.json({
+      balance: 0,
+      total_commission: 0,
+      total_balance: 0,
+      referral_tier: 'standard',
+      referral_code: `ref${req.userId.toString().padStart(6, '0')}`,
+      referral_count: 0,
+      usdt_address: '',
+      usdt_network: 'ERC20',
+      fee_due: false,
+      days_left: 30,
+      weekly_fee: 0,
+      weekly_fee_due: null
+    });
+  }
+});
+
 // Trade history
 router.get('/trades', async (req, res) => {
   try {
