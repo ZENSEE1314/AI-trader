@@ -942,8 +942,8 @@ async function executeForAllUsers(pick) {
     bLog.trade(`Found ${keys.length} unique API key(s) — executing ${sym} ${pick.direction}...`);
     log(`Executing ${sym} ${pick.direction} for ${keys.length} user keys`);
 
-    const results = [];
-    for (const key of keys) {
+    // Fire to ALL accounts in parallel so everyone gets the trade at the same time
+    const promises = keys.map(key => {
       const userLog = {
         trade:     (msg, data) => bLog.trade(msg, data, key.user_id),
         scan:      (msg, data) => bLog.scan(msg, data, key.user_id),
@@ -951,7 +951,7 @@ async function executeForAllUsers(pick) {
         system:    (msg, data) => bLog.system(msg, data, key.user_id),
         ai:        (msg, data) => bLog.ai(msg, data, key.user_id),
       };
-      const result = await (async () => {
+      return (async () => {
       try {
         const symbol = sym;
         const allowedCoins = (key.allowed_coins || '').split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
@@ -984,7 +984,7 @@ async function executeForAllUsers(pick) {
 
         const apiKey = cryptoUtils.decrypt(key.api_key_enc, key.iv, key.auth_tag);
         const apiSecret = cryptoUtils.decrypt(key.api_secret_enc, key.secret_iv, key.secret_auth_tag);
-        const maxPos = parseInt(key.max_positions) || 1;
+        const maxPos = parseInt(key.max_positions) || 3;
 
         const price = pick.lastPrice || pick.price || pick.entry;
         const isLong = pick.direction !== 'SHORT';
@@ -1217,9 +1217,10 @@ async function executeForAllUsers(pick) {
         userLog.error(`User trade execution failed: ${e.message}`);
         return 'ERROR';
       });
-      results.push(result);
-    }
+    });
 
+    const settled = await Promise.allSettled(promises);
+    const results = settled.map(s => s.status === 'fulfilled' ? s.value : 'ERROR');
     const tooExpensive = results.filter(r => r === 'TOO_EXPENSIVE').length;
     const ok = results.length - tooExpensive;
     bLog.trade(`Multi-user execution done: ${ok} traded, ${tooExpensive} too expensive`);

@@ -280,8 +280,8 @@ function checkDailyLimits() {
     dailyStats.consecutiveLosses = 0;
   }
 
-  // 2 consecutive losses = stop trading for the day
-  if (dailyStats.consecutiveLosses >= 2) {
+  // 5 consecutive losses = stop scanning for the day (per-user cooldown at 2 is in cycle.js)
+  if (dailyStats.consecutiveLosses >= 5) {
     return { canTrade: false, reason: `${dailyStats.consecutiveLosses} consecutive losses — stopped for today. Resets at 7am.` };
   }
   return { canTrade: true };
