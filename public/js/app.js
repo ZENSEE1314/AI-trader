@@ -550,6 +550,26 @@
       riskLevelsCache.map(rl =>
         `<option value="${rl.id}" ${rl.id === selectedId ? 'selected' : ''}>${escapeHtml(rl.name)} (TP:${(parseFloat(rl.tp_pct)*100).toFixed(1)}% SL:${(parseFloat(rl.sl_pct)*100).toFixed(1)}% Lev:${rl.max_leverage}x)</option>`
       ).join('');
+    sel.onchange = () => applyRiskLevel(keyId);
+  }
+
+  function applyRiskLevel(keyId) {
+    const rlId = parseInt($(`#risk-level-${keyId}`).value);
+    const rl = riskLevelsCache.find(r => r.id === rlId);
+    if (!rl) return;
+    const tp = (parseFloat(rl.tp_pct) * 100).toFixed(1);
+    const sl = (parseFloat(rl.sl_pct) * 100).toFixed(1);
+    const lev = parseInt(rl.max_leverage);
+    const consec = parseInt(rl.max_consec_loss) || 2;
+    // Update sliders + number inputs
+    syncSlider(`tp-${keyId}`, Math.round(tp * 10));
+    syncNum(`tp-num-${keyId}`, tp);
+    syncSlider(`sl-${keyId}`, Math.round(sl * 10));
+    syncNum(`sl-num-${keyId}`, sl);
+    syncSlider(`leverage-${keyId}`, lev);
+    syncNum(`leverage-num-${keyId}`, lev);
+    syncSlider(`maxloss-streak-${keyId}`, consec);
+    syncNum(`maxloss-streak-num-${keyId}`, consec);
   }
 
   function renderTokenLeverages(keyId, leverages) {
