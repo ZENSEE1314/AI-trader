@@ -1397,30 +1397,59 @@ async function syncTradeStatus() {
                 } catch { /* keep entryPrice */ }
               }
             } else if (key.platform === 'bitunix') {
+              const bxClient = new BitunixClient({ apiKey, apiSecret });
+              let found = false;
+
+              // Method 1: History orders — look for CLOSE order
               try {
-                const bxClient = new BitunixClient({ apiKey, apiSecret });
-                const histOrders = await bxClient.getHistoryOrders({ symbol: trade.symbol, pageSize: 10 });
+                const histOrders = await bxClient.getHistoryOrders({ symbol: trade.symbol, pageSize: 20 });
+                bLog.system(`Bitunix histOrders for ${trade.symbol}: ${JSON.stringify(histOrders).substring(0, 300)}`);
                 const orderList = Array.isArray(histOrders) ? histOrders : (histOrders?.orderList || histOrders?.list || []);
-                // Find the close order
-                const closeOrder = orderList.find(o =>
-                  o.tradeSide === 'CLOSE' && parseFloat(o.avgPrice || o.price || 0) > 0
-                );
-                if (closeOrder) {
-                  exitPrice = parseFloat(closeOrder.avgPrice || closeOrder.price);
-                  if (closeOrder.profit) realizedPnl = parseFloat(closeOrder.profit);
-                } else if (orderList.length > 0) {
-                  const recent = orderList[0];
-                  exitPrice = parseFloat(recent.avgPrice || recent.price || entryPrice);
-                } else {
-                  const priceData = await bxClient.getMarketPrice(trade.symbol);
-                  exitPrice = parseFloat(priceData?.lastPrice || priceData?.price || entryPrice);
+                for (const o of orderList) {
+                  const oPrice = parseFloat(o.avgPrice || o.price || 0);
+                  if (o.tradeSide === 'CLOSE' && oPrice > 0) {
+                    exitPrice = oPrice;
+                    if (o.profit != null) realizedPnl = parseFloat(o.profit);
+                    found = true;
+                    break;
+                  }
                 }
-              } catch {
+              } catch (e) { bLog.error(`Bitunix histOrders error: ${e.message}`); }
+
+              // Method 2: History trades — look for fill with close side
+              if (!found) {
                 try {
-                  const bxClient = new BitunixClient({ apiKey, apiSecret });
+                  const histTrades = await bxClient.getHistoryTrades({ symbol: trade.symbol, pageSize: 20 });
+                  bLog.system(`Bitunix histTrades for ${trade.symbol}: ${JSON.stringify(histTrades).substring(0, 300)}`);
+                  const tradeList = Array.isArray(histTrades) ? histTrades : (histTrades?.tradeList || histTrades?.orderList || histTrades?.list || []);
+                  const closeSide = isLong ? 'SELL' : 'BUY';
+                  for (const t of tradeList) {
+                    const tPrice = parseFloat(t.price || t.avgPrice || t.filledPrice || 0);
+                    if (tPrice > 0 && (t.side === closeSide || t.tradeSide === 'CLOSE')) {
+                      exitPrice = tPrice;
+                      if (t.profit != null) realizedPnl = parseFloat(t.profit);
+                      if (t.realizedPnl != null) realizedPnl = parseFloat(t.realizedPnl);
+                      found = true;
+                      break;
+                    }
+                  }
+                  // If no close-side match, use most recent trade as fallback
+                  if (!found && tradeList.length > 0) {
+                    const recent = tradeList[0];
+                    const rPrice = parseFloat(recent.price || recent.avgPrice || recent.filledPrice || 0);
+                    if (rPrice > 0) { exitPrice = rPrice; found = true; }
+                  }
+                } catch (e) { bLog.error(`Bitunix histTrades error: ${e.message}`); }
+              }
+
+              // Method 3: Current market price as last resort
+              if (!found) {
+                try {
                   const priceData = await bxClient.getMarketPrice(trade.symbol);
-                  exitPrice = parseFloat(priceData?.lastPrice || priceData?.price || entryPrice);
-                } catch { /* keep entryPrice */ }
+                  bLog.system(`Bitunix marketPrice for ${trade.symbol}: ${JSON.stringify(priceData)}`);
+                  const mp = parseFloat(priceData?.lastPrice || priceData?.price || priceData || 0);
+                  if (mp > 0) exitPrice = mp;
+                } catch (e) { bLog.error(`Bitunix marketPrice error: ${e.message}`); }
               }
             }
 

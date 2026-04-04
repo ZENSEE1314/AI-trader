@@ -583,6 +583,30 @@
     });
   }
 
+  function searchTokenLev(input, keyId) {
+    loadCoinList();
+    const q = (input.value || '').toUpperCase().trim();
+    const dd = $(`#token-lev-dropdown-${keyId}`);
+    if (!dd) return;
+    if (!q) { dd.classList.add('hidden'); return; }
+    const matches = coinList.filter(c => c.includes(q)).slice(0, 8);
+    if (!matches.length) { dd.classList.add('hidden'); return; }
+    dd.innerHTML = matches.map(c =>
+      `<div class="coin-dropdown-item" onclick="window.CryptoBot.pickTokenLev(${keyId},'${c}')">${c.replace('USDT', '')}/<span style="opacity:0.5">USDT</span></div>`
+    ).join('');
+    dd.classList.remove('hidden');
+  }
+
+  function pickTokenLev(keyId, symbol) {
+    const input = $(`#token-lev-symbol-${keyId}`);
+    if (input) input.value = symbol;
+    const dd = $(`#token-lev-dropdown-${keyId}`);
+    if (dd) dd.classList.add('hidden');
+    // Focus the leverage input
+    const levInput = $(`#token-lev-value-${keyId}`);
+    if (levInput) levInput.focus();
+  }
+
   function getTokenLeverages(keyId) {
     const container = $(`#token-lev-${keyId}`);
     if (!container) return [];
@@ -724,8 +748,11 @@
             <div class="form-group" style="margin-bottom:0;grid-column:1/-1;">
               <label class="form-label">Per-Token Leverage</label>
               <div id="token-lev-${k.id}" style="margin-bottom:8px;"></div>
-              <div style="display:flex;gap:8px;align-items:end;flex-wrap:wrap;">
-                <input class="form-input text-mono" type="text" id="token-lev-symbol-${k.id}" placeholder="BTCUSDT" style="width:120px;font-size:0.8rem;text-transform:uppercase;">
+              <div style="display:flex;gap:8px;align-items:end;flex-wrap:wrap;position:relative;">
+                <div style="position:relative;">
+                  <input class="form-input text-mono" type="text" id="token-lev-symbol-${k.id}" placeholder="Type token..." autocomplete="off" style="width:140px;font-size:0.8rem;text-transform:uppercase;" oninput="window.CryptoBot.searchTokenLev(this,${k.id})" onfocus="window.CryptoBot.searchTokenLev(this,${k.id})">
+                  <div class="coin-dropdown hidden" id="token-lev-dropdown-${k.id}"></div>
+                </div>
                 <input class="form-input text-mono" type="number" id="token-lev-value-${k.id}" placeholder="20" min="1" max="125" style="width:80px;font-size:0.8rem;">
                 <button class="btn btn-ghost btn-sm" style="font-size:0.7rem;" onclick="window.CryptoBot.addTokenLeverage(${k.id})">Add</button>
               </div>
@@ -1777,7 +1804,7 @@
     goToAuth, showLoginForm, onPlatformChange,
     searchCoins, addCoin, removeCoin,
     filterLogs, clearLogs,
-    addTokenLeverage, removeTokenLeverage,
+    addTokenLeverage, removeTokenLeverage, searchTokenLev, pickTokenLev,
     addAllowedToken, addBannedToken, unbanGlobalToken, removeGlobalToken,
     searchAdminToken, pickAdminToken, searchUserBanToken,
     addRiskLevel, saveRiskLevel, deleteRiskLevel,

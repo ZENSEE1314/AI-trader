@@ -729,23 +729,53 @@ router.post('/fix-bitunix-pnl', async (req, res) => {
             continue;
           }
 
-          // Closed — get close order price
+          let found = false;
+
+          // Method 1: History orders
           try {
-            const histOrders = await client.getHistoryOrders({ symbol: trade.symbol, pageSize: 10 });
+            const histOrders = await client.getHistoryOrders({ symbol: trade.symbol, pageSize: 20 });
             const orderList = Array.isArray(histOrders) ? histOrders : (histOrders?.orderList || histOrders?.list || []);
-            const closeOrder = orderList.find(o =>
-              o.tradeSide === 'CLOSE' && parseFloat(o.avgPrice || o.price || 0) > 0
-            );
-            if (closeOrder) {
-              exitPrice = parseFloat(closeOrder.avgPrice || closeOrder.price);
-              if (closeOrder.profit) realizedPnl = parseFloat(closeOrder.profit);
-            } else if (orderList.length > 0) {
-              exitPrice = parseFloat(orderList[0].avgPrice || orderList[0].price || entryPrice);
+            for (const o of orderList) {
+              const oPrice = parseFloat(o.avgPrice || o.price || 0);
+              if (o.tradeSide === 'CLOSE' && oPrice > 0) {
+                exitPrice = oPrice;
+                if (o.profit != null) realizedPnl = parseFloat(o.profit);
+                found = true;
+                break;
+              }
             }
-          } catch {
+          } catch { /* try next method */ }
+
+          // Method 2: History trades
+          if (!found) {
+            try {
+              const histTrades = await client.getHistoryTrades({ symbol: trade.symbol, pageSize: 20 });
+              const tradeList = Array.isArray(histTrades) ? histTrades : (histTrades?.tradeList || histTrades?.orderList || histTrades?.list || []);
+              const closeSide = isLong ? 'SELL' : 'BUY';
+              for (const t of tradeList) {
+                const tPrice = parseFloat(t.price || t.avgPrice || t.filledPrice || 0);
+                if (tPrice > 0 && (t.side === closeSide || t.tradeSide === 'CLOSE')) {
+                  exitPrice = tPrice;
+                  if (t.profit != null) realizedPnl = parseFloat(t.profit);
+                  if (t.realizedPnl != null) realizedPnl = parseFloat(t.realizedPnl);
+                  found = true;
+                  break;
+                }
+              }
+              if (!found && tradeList.length > 0) {
+                const recent = tradeList[0];
+                const rPrice = parseFloat(recent.price || recent.avgPrice || recent.filledPrice || 0);
+                if (rPrice > 0) { exitPrice = rPrice; found = true; }
+              }
+            } catch { /* try next method */ }
+          }
+
+          // Method 3: Market price fallback
+          if (!found) {
             try {
               const priceData = await client.getMarketPrice(trade.symbol);
-              exitPrice = parseFloat(priceData?.lastPrice || priceData?.price || entryPrice);
+              const mp = parseFloat(priceData?.lastPrice || priceData?.price || priceData || 0);
+              if (mp > 0) exitPrice = mp;
             } catch { /* keep entryPrice */ }
           }
         }
