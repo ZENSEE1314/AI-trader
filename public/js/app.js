@@ -597,12 +597,11 @@
       const riskPct = k.risk_pct != null ? (parseFloat(k.risk_pct) * 100).toFixed(0) : '5';
       const maxLoss = k.max_loss_usdt || 30;
       const maxPos = k.max_positions || 1;
-      const allowedCoins = k.allowed_coins || '';
+
       const bannedCoins = k.banned_coins || '';
-      const tpPct = k.tp_pct != null ? (parseFloat(k.tp_pct) * 100).toFixed(2) : '2.25';
-      const slPct = k.sl_pct != null ? (parseFloat(k.sl_pct) * 100).toFixed(2) : '1.50';
+      const tpPct = k.tp_pct != null ? (parseFloat(k.tp_pct) * 100).toFixed(2) : '1.00';
+      const slPct = k.sl_pct != null ? (parseFloat(k.sl_pct) * 100).toFixed(2) : '1.00';
       const maxConsecLoss = k.max_consec_loss || 2;
-      const topNCoins = k.top_n_coins || 50;
 
       return `<div class="key-card" data-key-id="${k.id}">
         <div class="key-card-main">
@@ -627,88 +626,78 @@
             <div class="slider-group">
               <div class="slider-header">
                 <label class="form-label" for="leverage-${k.id}">Leverage</label>
-                <span class="slider-value" id="leverage-val-${k.id}">${leverage}x</span>
+                <input type="number" class="slider-num" id="leverage-num-${k.id}" min="1" max="125" step="1" value="${leverage}"
+                  oninput="window.CryptoBot.syncSlider('leverage-${k.id}',this.value)">
               </div>
               <input type="range" id="leverage-${k.id}" min="1" max="125" value="${leverage}"
-                oninput="document.getElementById('leverage-val-${k.id}').textContent=this.value+'x'"
+                oninput="window.CryptoBot.syncNum('leverage-num-${k.id}',this.value)"
                 aria-label="Leverage">
             </div>
             <div class="slider-group">
               <div class="slider-header">
-                <label class="form-label" for="risk-${k.id}">Risk per Trade</label>
-                <span class="slider-value" id="risk-val-${k.id}">${riskPct}%</span>
+                <label class="form-label" for="risk-${k.id}">Risk per Trade (%)</label>
+                <input type="number" class="slider-num" id="risk-num-${k.id}" min="1" max="20" step="1" value="${riskPct}"
+                  oninput="window.CryptoBot.syncSlider('risk-${k.id}',this.value)">
               </div>
               <input type="range" id="risk-${k.id}" min="1" max="20" value="${riskPct}"
-                oninput="document.getElementById('risk-val-${k.id}').textContent=this.value+'%'"
+                oninput="window.CryptoBot.syncNum('risk-num-${k.id}',this.value)"
                 aria-label="Risk percentage">
             </div>
             <div class="slider-group">
               <div class="slider-header">
-                <label class="form-label" for="maxloss-${k.id}">Max Loss per Trade</label>
-                <span class="slider-value" id="maxloss-val-${k.id}">${maxLoss}%</span>
+                <label class="form-label" for="maxloss-${k.id}">Max Loss per Trade (%)</label>
+                <input type="number" class="slider-num" id="maxloss-num-${k.id}" min="1" max="100" step="1" value="${maxLoss}"
+                  oninput="window.CryptoBot.syncSlider('maxloss-${k.id}',this.value)">
               </div>
               <input type="range" id="maxloss-${k.id}" min="1" max="100" value="${maxLoss}"
-                oninput="document.getElementById('maxloss-val-${k.id}').textContent=this.value+'%'"
+                oninput="window.CryptoBot.syncNum('maxloss-num-${k.id}',this.value)"
                 aria-label="Max loss percentage">
             </div>
             <div class="slider-group">
               <div class="slider-header">
                 <label class="form-label" for="maxpos-${k.id}">Max Open Trades</label>
-                <span class="slider-value" id="maxpos-val-${k.id}">${maxPos}</span>
+                <input type="number" class="slider-num" id="maxpos-num-${k.id}" min="1" max="10" step="1" value="${maxPos}"
+                  oninput="window.CryptoBot.syncSlider('maxpos-${k.id}',this.value)">
               </div>
               <input type="range" id="maxpos-${k.id}" min="1" max="10" value="${maxPos}"
-                oninput="document.getElementById('maxpos-val-${k.id}').textContent=this.value"
+                oninput="window.CryptoBot.syncNum('maxpos-num-${k.id}',this.value)"
                 aria-label="Max concurrent positions">
             </div>
             <div class="slider-group">
               <div class="slider-header">
                 <label class="form-label" for="tp-${k.id}">Take Profit %</label>
-                <span class="slider-value" id="tp-val-${k.id}">${tpPct}%</span>
+                <input type="number" class="slider-num" id="tp-num-${k.id}" min="0.5" max="20" step="0.1" value="${tpPct}"
+                  oninput="window.CryptoBot.syncSlider('tp-${k.id}',Math.round(this.value*10))">
               </div>
               <input type="range" id="tp-${k.id}" min="5" max="200" value="${Math.round(tpPct * 10)}"
-                oninput="document.getElementById('tp-val-${k.id}').textContent=(this.value/10).toFixed(1)+'%'"
+                oninput="window.CryptoBot.syncNum('tp-num-${k.id}',(this.value/10).toFixed(1))"
                 aria-label="Take profit percentage">
             </div>
             <div class="slider-group">
               <div class="slider-header">
                 <label class="form-label" for="sl-${k.id}">Stop Loss %</label>
-                <span class="slider-value" id="sl-val-${k.id}">${slPct}%</span>
+                <input type="number" class="slider-num" id="sl-num-${k.id}" min="0.5" max="10" step="0.1" value="${slPct}"
+                  oninput="window.CryptoBot.syncSlider('sl-${k.id}',Math.round(this.value*10))">
               </div>
               <input type="range" id="sl-${k.id}" min="5" max="100" value="${Math.round(slPct * 10)}"
-                oninput="document.getElementById('sl-val-${k.id}').textContent=(this.value/10).toFixed(1)+'%'"
+                oninput="window.CryptoBot.syncNum('sl-num-${k.id}',(this.value/10).toFixed(1))"
                 aria-label="Stop loss percentage">
             </div>
             <div class="slider-group">
               <div class="slider-header">
                 <label class="form-label" for="maxloss-streak-${k.id}">Stop After Losses</label>
-                <span class="slider-value" id="maxloss-streak-val-${k.id}">${maxConsecLoss}</span>
+                <input type="number" class="slider-num" id="maxloss-streak-num-${k.id}" min="1" max="10" step="1" value="${maxConsecLoss}"
+                  oninput="window.CryptoBot.syncSlider('maxloss-streak-${k.id}',this.value)">
               </div>
               <input type="range" id="maxloss-streak-${k.id}" min="1" max="10" value="${maxConsecLoss}"
-                oninput="document.getElementById('maxloss-streak-val-${k.id}').textContent=this.value"
+                oninput="window.CryptoBot.syncNum('maxloss-streak-num-${k.id}',this.value)"
                 aria-label="Max consecutive losses before stopping">
             </div>
-            <div class="slider-group">
-              <div class="slider-header">
-                <label class="form-label" for="topcoins-${k.id}">Top Market Cap Coins</label>
-                <span class="slider-value" id="topcoins-val-${k.id}">${topNCoins}</span>
-              </div>
-              <input type="range" id="topcoins-${k.id}" min="5" max="200" step="5" value="${topNCoins}"
-                oninput="document.getElementById('topcoins-val-${k.id}').textContent=this.value"
-                aria-label="Top N coins by market cap">
-            </div>
             <div class="form-group" style="margin-bottom:0;grid-column:1/-1;">
-              <label class="form-label">Only Trade These Coins <span style="font-weight:400;color:var(--color-text-muted);">(empty = all)</span></label>
-              <div class="coin-chips" id="allowed-chips-${k.id}">${buildChips(allowedCoins, k.id, 'allowed')}</div>
-              <div style="position:relative;">
-                <input class="form-input text-mono" type="text" id="allowed-search-${k.id}" placeholder="Search coin..." autocomplete="off" style="font-size:0.8rem;" oninput="window.CryptoBot.searchCoins(this,${k.id},'allowed')" onfocus="window.CryptoBot.searchCoins(this,${k.id},'allowed')">
-                <div class="coin-dropdown hidden" id="allowed-dropdown-${k.id}"></div>
-              </div>
-            </div>
-            <div class="form-group" style="margin-bottom:0;grid-column:1/-1;">
-              <label class="form-label">Ban These Coins</label>
+              <label class="form-label">Ban These Coins <span style="font-weight:400;color:var(--color-text-muted);">(select from available tokens)</span></label>
               <div class="coin-chips" id="banned-chips-${k.id}">${buildChips(bannedCoins, k.id, 'banned')}</div>
               <div style="position:relative;">
-                <input class="form-input text-mono" type="text" id="banned-search-${k.id}" placeholder="Search coin to ban..." autocomplete="off" style="font-size:0.8rem;" oninput="window.CryptoBot.searchCoins(this,${k.id},'banned')" onfocus="window.CryptoBot.searchCoins(this,${k.id},'banned')">
+                <input class="form-input text-mono" type="text" id="banned-search-${k.id}" placeholder="Type to search available tokens..." autocomplete="off" style="font-size:0.8rem;" oninput="window.CryptoBot.searchUserBanToken(this,${k.id})" onfocus="window.CryptoBot.searchUserBanToken(this,${k.id})">
                 <div class="coin-dropdown hidden" id="banned-dropdown-${k.id}"></div>
               </div>
             </div>
@@ -766,12 +755,10 @@
     const maxLossUsdt = parseInt($(`#maxloss-${keyId}`).value);
     const maxPositions = parseInt($(`#maxpos-${keyId}`).value);
     const enabled = $(`#enabled-${keyId}`).checked;
-    const allowedCoins = getChipValues(`allowed-chips-${keyId}`);
     const bannedCoins = getChipValues(`banned-chips-${keyId}`);
     const tpPct = parseInt($(`#tp-${keyId}`).value) / 1000;
     const slPct = parseInt($(`#sl-${keyId}`).value) / 1000;
     const maxConsecLoss = parseInt($(`#maxloss-streak-${keyId}`).value);
-    const topNCoins = parseInt($(`#topcoins-${keyId}`).value);
     const riskLevelId = $(`#risk-level-${keyId}`).value || null;
     const tokenLeverages = getTokenLeverages(keyId);
 
@@ -782,12 +769,10 @@
         max_loss_usdt: maxLossUsdt,
         max_positions: maxPositions,
         enabled,
-        allowed_coins: allowedCoins,
         banned_coins: bannedCoins,
         tp_pct: tpPct,
         sl_pct: slPct,
         max_consec_loss: maxConsecLoss,
-        top_n_coins: topNCoins,
         risk_level_id: riskLevelId ? parseInt(riskLevelId) : null,
         token_leverages: tokenLeverages,
       });
@@ -1084,8 +1069,8 @@
     try {
       await api('POST', '/api/admin/risk-levels', {
         name,
-        tp_pct: parseFloat($('#rl-tp').value) || 0.045,
-        sl_pct: parseFloat($('#rl-sl').value) || 0.03,
+        tp_pct: parseFloat($('#rl-tp').value) || 0.01,
+        sl_pct: parseFloat($('#rl-sl').value) || 0.01,
         capital_percentage: parseFloat($('#rl-capital').value) || 10,
         max_leverage: parseInt($('#rl-leverage').value) || 20,
         max_consec_loss: parseInt($('#rl-consec').value) || 2,
@@ -1192,6 +1177,58 @@
       showToast(`${symbol} removed`, 'success');
       loadGlobalTokens();
     } catch (err) { showToast(err.message, 'error'); }
+  }
+
+  // Admin token search dropdown (uses full Binance coin list)
+  function searchAdminToken(input, prefix) {
+    loadCoinList();
+    const q = (input.value || '').toUpperCase().trim();
+    const dd = $(`#${prefix}-dropdown`);
+    if (!dd) return;
+    if (!q) { dd.classList.add('hidden'); return; }
+    const matches = coinList.filter(c => c.includes(q)).slice(0, 10);
+    if (!matches.length) { dd.classList.add('hidden'); return; }
+    dd.innerHTML = matches.map(c =>
+      `<div class="coin-dropdown-item" onclick="window.CryptoBot.pickAdminToken('${prefix}','${c}')">${c.replace('USDT', '')}/<span style="opacity:0.5">USDT</span></div>`
+    ).join('');
+    dd.classList.remove('hidden');
+  }
+
+  function pickAdminToken(prefix, symbol) {
+    const input = $(`#${prefix}-symbol`);
+    if (input) input.value = symbol;
+    const dd = $(`#${prefix}-dropdown`);
+    if (dd) dd.classList.add('hidden');
+    if (prefix === 'admin-allowed') addAllowedToken();
+    else if (prefix === 'admin-banned') addBannedToken();
+  }
+
+  // User ban-token search (shows only admin-allowed tokens)
+  let allowedTokenCache = [];
+  let allowedTokenLoading = false;
+
+  async function loadAllowedTokens() {
+    if (allowedTokenCache.length || allowedTokenLoading) return;
+    allowedTokenLoading = true;
+    try {
+      allowedTokenCache = await api('GET', '/api/allowed-tokens');
+    } catch { allowedTokenCache = []; }
+    allowedTokenLoading = false;
+  }
+
+  function searchUserBanToken(input, keyId) {
+    loadAllowedTokens();
+    const q = (input.value || '').toUpperCase().trim();
+    const dd = $(`#banned-dropdown-${keyId}`);
+    if (!dd) return;
+    const existing = getChipValues(`banned-chips-${keyId}`).split(',').filter(Boolean);
+    const source = allowedTokenCache.length ? allowedTokenCache : coinList;
+    const matches = source.filter(c => (!q || c.includes(q)) && !existing.includes(c)).slice(0, 10);
+    if (!matches.length) { dd.classList.add('hidden'); return; }
+    dd.innerHTML = matches.map(c =>
+      `<div class="coin-dropdown-item" onclick="window.CryptoBot.addCoin('banned-chips-${keyId}','${c}',${keyId},'banned')">${c.replace('USDT', '')}/<span style="opacity:0.5">USDT</span></div>`
+    ).join('');
+    dd.classList.remove('hidden');
   }
 
   function renderAdminWeeklyEarnings(data) {
@@ -1526,7 +1563,7 @@
 
   // Close dropdowns on click outside
   document.addEventListener('click', (e) => {
-    if (!e.target.closest('.coin-dropdown') && !e.target.matches('[id*="-search-"]')) {
+    if (!e.target.closest('.coin-dropdown') && !e.target.matches('[id*="-search-"]') && !e.target.matches('[id*="-symbol"]')) {
       $$('.coin-dropdown').forEach(d => d.classList.add('hidden'));
     }
   });
@@ -1636,8 +1673,18 @@
   }
 
   // ----- Expose to inline handlers -----
+  function syncSlider(sliderId, val) {
+    const slider = document.getElementById(sliderId);
+    if (slider) slider.value = val;
+  }
+
+  function syncNum(numId, val) {
+    const numInput = document.getElementById(numId);
+    if (numInput) numInput.value = val;
+  }
+
   window.CryptoBot = {
-    toggleSettings, saveSettings, deleteKey, showToast,
+    toggleSettings, saveSettings, deleteKey, showToast, syncSlider, syncNum,
     submitTopUp, saveUsdtAddress, withdrawFromWallet,
     adminAction, adminSub, adminWd, saveAdminSettings, adminEditWallet, clearErrors,
     adminEditSplit, adminPauseKey, adminResumeKey,
@@ -1646,6 +1693,7 @@
     filterLogs, clearLogs,
     addTokenLeverage, removeTokenLeverage,
     addAllowedToken, addBannedToken, unbanGlobalToken, removeGlobalToken,
+    searchAdminToken, pickAdminToken, searchUserBanToken,
     addRiskLevel, deleteRiskLevel,
     fixBitunixPnl,
   };

@@ -44,6 +44,17 @@ app.get('/api/coins', async (req, res) => {
   } catch { res.json([]); }
 });
 
+// Public list of admin-allowed tokens (for user ban-token dropdown)
+app.get('/api/allowed-tokens', async (req, res) => {
+  try {
+    const { query } = require('./db');
+    const rows = await query(
+      "SELECT symbol FROM global_token_settings WHERE enabled = true AND banned = false ORDER BY symbol"
+    );
+    res.json(rows.map(r => r.symbol));
+  } catch { res.json([]); }
+});
+
 // Health check
 app.get('/health', (req, res) => res.json({ status: 'ok', version: '2.1.0' }));
 

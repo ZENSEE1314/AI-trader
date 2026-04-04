@@ -993,8 +993,8 @@ async function executeForAllUsers(pick) {
         // Per-user settings: use user_token_leverage first, then key default
         const userLev = await getTokenLeverage(symbol, key.id);
         const walletSizePct = (await getCapitalPercentage(key.id)) / 100;
-        const userTP = parseFloat(key.tp_pct) || 0.0225;
-        const userSL = parseFloat(key.sl_pct) || 0.015;
+        const userTP = parseFloat(key.tp_pct) || 0.01;
+        const userSL = parseFloat(key.sl_pct) || 0.01;
         const userMaxConsecLoss = parseInt(key.max_consec_loss) || 2;
 
         // Check consecutive losses
@@ -1148,7 +1148,8 @@ async function executeForAllUsers(pick) {
           userLog.trade(`User ${key.email} Bitunix: wallet=$${wallet.toFixed(2)} pos=${openPosCount}/${maxPos} lev=x${userLev}`);
 
           const tradeUsdtBx = wallet * walletSizePct;
-          let qty = tradeUsdtBx / price;
+          const notionalUsdtBx = tradeUsdtBx * userLev;
+          let qty = notionalUsdtBx / price;
           if (qty * price < 5.5) qty = 5.5 / price;
           qty = parseFloat(qty.toFixed(6));
           if (qty <= 0) qty = parseFloat((5.5 / price).toFixed(6));

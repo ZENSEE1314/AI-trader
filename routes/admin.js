@@ -559,7 +559,7 @@ router.post('/risk-levels', async (req, res) => {
     const row = await query(
       `INSERT INTO risk_levels (name, description, tp_pct, sl_pct, max_consec_loss, top_n_coins, capital_percentage, max_leverage)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
-      [name, description || '', tp_pct || 0.045, sl_pct || 0.03, max_consec_loss || 2, top_n_coins || 50, capital_percentage || 10, max_leverage || 20]
+      [name, description || '', tp_pct || 0.01, sl_pct || 0.01, max_consec_loss || 2, top_n_coins || 50, capital_percentage || 10, max_leverage || 20]
     );
     res.json(row[0]);
   } catch (err) {

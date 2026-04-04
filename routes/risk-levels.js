@@ -55,8 +55,8 @@ router.post('/', async (req, res) => {
     const {
       name,
       description,
-      tp_pct = 0.045,
-      sl_pct = 0.03,
+      tp_pct = 0.01,
+      sl_pct = 0.01,
       max_consec_loss = 2,
       top_n_coins = 50,
       capital_percentage = 10.0,
@@ -229,7 +229,7 @@ router.get('/setup/defaults', async (req, res) => {
       {
         name: 'No Risk',
         description: 'Conservative trading with minimal risk',
-        tp_pct: 0.02,
+        tp_pct: 0.01,
         sl_pct: 0.01,
         max_consec_loss: 1,
         top_n_coins: 30,
@@ -239,8 +239,8 @@ router.get('/setup/defaults', async (req, res) => {
       {
         name: 'Medium Risk',
         description: 'Balanced risk-reward trading',
-        tp_pct: 0.045,
-        sl_pct: 0.03,
+        tp_pct: 0.01,
+        sl_pct: 0.01,
         max_consec_loss: 2,
         top_n_coins: 50,
         capital_percentage: 10.0,
@@ -249,8 +249,8 @@ router.get('/setup/defaults', async (req, res) => {
       {
         name: 'High Risk',
         description: 'Aggressive trading with higher risk',
-        tp_pct: 0.08,
-        sl_pct: 0.05,
+        tp_pct: 0.01,
+        sl_pct: 0.01,
         max_consec_loss: 3,
         top_n_coins: 80,
         capital_percentage: 20.0,

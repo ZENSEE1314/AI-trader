@@ -965,11 +965,11 @@
               </div>
               <div class="form-group" style="margin-bottom:0">
                 <label class="form-label">TP %</label>
-                <input class="form-input text-mono" type="number" id="rl-tp" step="0.001" value="0.045">
+                <input class="form-input text-mono" type="number" id="rl-tp" step="0.001" value="0.01">
               </div>
               <div class="form-group" style="margin-bottom:0">
                 <label class="form-label">SL %</label>
-                <input class="form-input text-mono" type="number" id="rl-sl" step="0.001" value="0.03">
+                <input class="form-input text-mono" type="number" id="rl-sl" step="0.001" value="0.01">
               </div>
               <div class="form-group" style="margin-bottom:0">
                 <label class="form-label">Capital %</label>
@@ -992,9 +992,10 @@
         <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Allowed Tokens <span style="font-size:0.75rem;color:var(--color-text-muted);">(only trade these)</span></h3>
         <div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-4);margin-bottom:var(--space-4);">
           <div style="display:flex;gap:var(--space-2);align-items:end;margin-bottom:var(--space-3);flex-wrap:wrap;">
-            <div class="form-group" style="margin-bottom:0;flex:1;min-width:140px;">
+            <div class="form-group" style="margin-bottom:0;flex:1;min-width:140px;position:relative;">
               <label class="form-label" for="admin-allowed-symbol">Token Symbol</label>
-              <input class="form-input text-mono" type="text" id="admin-allowed-symbol" placeholder="e.g. BTCUSDT" style="text-transform:uppercase;">
+              <input class="form-input text-mono" type="text" id="admin-allowed-symbol" placeholder="Type to search..." autocomplete="off" style="text-transform:uppercase;" oninput="window.CryptoBot.searchAdminToken(this,'admin-allowed')" onfocus="window.CryptoBot.searchAdminToken(this,'admin-allowed')">
+              <div class="coin-dropdown hidden" id="admin-allowed-dropdown"></div>
             </div>
             <button class="btn btn-primary btn-sm" onclick="window.CryptoBot.addAllowedToken()">Add Allowed</button>
           </div>
@@ -1011,9 +1012,10 @@
         <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Banned Tokens <span style="font-size:0.75rem;color:var(--color-text-muted);">(never trade these)</span></h3>
         <div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-4);margin-bottom:var(--space-5);">
           <div style="display:flex;gap:var(--space-2);align-items:end;margin-bottom:var(--space-3);flex-wrap:wrap;">
-            <div class="form-group" style="margin-bottom:0;flex:1;min-width:140px;">
+            <div class="form-group" style="margin-bottom:0;flex:1;min-width:140px;position:relative;">
               <label class="form-label" for="admin-banned-symbol">Token Symbol</label>
-              <input class="form-input text-mono" type="text" id="admin-banned-symbol" placeholder="e.g. DOGEUSDT" style="text-transform:uppercase;">
+              <input class="form-input text-mono" type="text" id="admin-banned-symbol" placeholder="Type to search..." autocomplete="off" style="text-transform:uppercase;" oninput="window.CryptoBot.searchAdminToken(this,'admin-banned')" onfocus="window.CryptoBot.searchAdminToken(this,'admin-banned')">
+              <div class="coin-dropdown hidden" id="admin-banned-dropdown"></div>
             </div>
             <button class="btn btn-danger btn-sm" onclick="window.CryptoBot.addBannedToken()">Ban Token</button>
           </div>
