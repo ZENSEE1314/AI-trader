@@ -733,8 +733,7 @@ router.post('/fix-bitunix-pnl', async (req, res) => {
 
           // Method 1: History orders
           try {
-            const histOrders = await client.getHistoryOrders({ symbol: trade.symbol, pageSize: 20 });
-            const orderList = Array.isArray(histOrders) ? histOrders : (histOrders?.orderList || histOrders?.list || []);
+            const orderList = await client.getHistoryOrders({ symbol: trade.symbol, pageSize: 20 });
             for (const o of orderList) {
               const oPrice = parseFloat(o.avgPrice || o.price || 0);
               if (o.tradeSide === 'CLOSE' && oPrice > 0) {
@@ -749,8 +748,7 @@ router.post('/fix-bitunix-pnl', async (req, res) => {
           // Method 2: History trades
           if (!found) {
             try {
-              const histTrades = await client.getHistoryTrades({ symbol: trade.symbol, pageSize: 20 });
-              const tradeList = Array.isArray(histTrades) ? histTrades : (histTrades?.tradeList || histTrades?.orderList || histTrades?.list || []);
+              const tradeList = await client.getHistoryTrades({ symbol: trade.symbol, pageSize: 20 });
               const closeSide = isLong ? 'SELL' : 'BUY';
               for (const t of tradeList) {
                 const tPrice = parseFloat(t.price || t.avgPrice || t.filledPrice || 0);
@@ -797,7 +795,7 @@ router.post('/fix-bitunix-pnl', async (req, res) => {
           [status, pnlUsdt, exitPrice, trade.id]
         );
 
-        results.push({ id: trade.id, symbol: trade.symbol, platform: trade.platform, status, pnl: pnlUsdt, exitPrice });
+        results.push({ id: trade.id, symbol: trade.symbol, platform: trade.platform, status, pnl: pnlUsdt, exitPrice, entryPrice, qty, realizedPnl });
       } catch (err) {
         results.push({ id: trade.id, symbol: trade.symbol, error: err.message });
       }

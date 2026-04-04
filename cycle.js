@@ -1402,9 +1402,8 @@ async function syncTradeStatus() {
 
               // Method 1: History orders — look for CLOSE order
               try {
-                const histOrders = await bxClient.getHistoryOrders({ symbol: trade.symbol, pageSize: 20 });
-                bLog.system(`Bitunix histOrders for ${trade.symbol}: ${JSON.stringify(histOrders).substring(0, 300)}`);
-                const orderList = Array.isArray(histOrders) ? histOrders : (histOrders?.orderList || histOrders?.list || []);
+                const orderList = await bxClient.getHistoryOrders({ symbol: trade.symbol, pageSize: 20 });
+                bLog.system(`Bitunix histOrders for ${trade.symbol}: ${JSON.stringify(orderList).substring(0, 500)}`);
                 for (const o of orderList) {
                   const oPrice = parseFloat(o.avgPrice || o.price || 0);
                   if (o.tradeSide === 'CLOSE' && oPrice > 0) {
@@ -1419,9 +1418,8 @@ async function syncTradeStatus() {
               // Method 2: History trades — look for fill with close side
               if (!found) {
                 try {
-                  const histTrades = await bxClient.getHistoryTrades({ symbol: trade.symbol, pageSize: 20 });
-                  bLog.system(`Bitunix histTrades for ${trade.symbol}: ${JSON.stringify(histTrades).substring(0, 300)}`);
-                  const tradeList = Array.isArray(histTrades) ? histTrades : (histTrades?.tradeList || histTrades?.orderList || histTrades?.list || []);
+                  const tradeList = await bxClient.getHistoryTrades({ symbol: trade.symbol, pageSize: 20 });
+                  bLog.system(`Bitunix histTrades for ${trade.symbol}: ${JSON.stringify(tradeList).substring(0, 500)}`);
                   const closeSide = isLong ? 'SELL' : 'BUY';
                   for (const t of tradeList) {
                     const tPrice = parseFloat(t.price || t.avgPrice || t.filledPrice || 0);

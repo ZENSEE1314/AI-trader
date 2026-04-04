@@ -152,19 +152,27 @@ class BitunixClient {
   async getHistoryOrders({ symbol, pageNum = 1, pageSize = 10 } = {}) {
     const body = { pageNum, pageSize };
     if (symbol) body.symbol = symbol;
-    return this._post('/api/v1/futures/trade/get_history_orders', body);
+    const data = await this._post('/api/v1/futures/trade/get_history_orders', body);
+    // Normalize: return the order list array
+    if (Array.isArray(data)) return data;
+    return data?.orderList || data?.list || [];
   }
 
   async getHistoryTrades({ symbol, pageNum = 1, pageSize = 10 } = {}) {
     const body = { pageNum, pageSize };
     if (symbol) body.symbol = symbol;
-    return this._post('/api/v1/futures/trade/get_history_trades', body);
+    const data = await this._post('/api/v1/futures/trade/get_history_trades', body);
+    // Normalize: return the trade list array
+    if (Array.isArray(data)) return data;
+    return data?.tradeList || data?.orderList || data?.list || [];
   }
 
   // ── Market Data ────────────────────────────────────────────
 
   async getMarketPrice(symbol) {
     const data = await this._get('/api/v1/futures/market/get_latest_price', { symbol });
+    // API may return array or object
+    if (Array.isArray(data)) return data[0] || {};
     return data;
   }
 
