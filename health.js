@@ -6,29 +6,40 @@ const router = express.Router();
 // Health check endpoint
 router.get('/', async (req, res) => {
   try {
-    // Check database connection
-    await query('SELECT 1');
+    const { query } = require('./db');
     
-    // Check if essential tables exist
-    const tables = ['users', 'api_keys', 'trades'];
-    const tableChecks = await Promise.all(
-      tables.map(table => 
-        query(`
-          SELECT EXISTS (
-            SELECT FROM information_schema.tables 
-            WHERE table_name = $1
-          ) as exists
-        `, [table])
-      )
-    );
+    // Try database connection
+    let databaseStatus = 'connected';
+    let tablesStatus = 'unknown';
     
-    const allTablesExist = tableChecks.every(result => result[0].exists);
+    try {
+      await query('SELECT 1');
+      
+      // Check if essential tables exist
+      const tables = ['users', 'api_keys', 'trades'];
+      const tableChecks = await Promise.all(
+        tables.map(table => 
+          query(`
+            SELECT EXISTS (
+              SELECT FROM information_schema.tables 
+              WHERE table_name = $1
+            ) as exists
+          `, [table])
+        )
+      );
+      
+      tablesStatus = tableChecks.every(result => result[0].exists) ? 'all_exist' : 'some_missing';
+    } catch (dbError) {
+      databaseStatus = 'disconnected';
+      tablesStatus = 'unknown';
+      console.warn('Database check failed:', dbError.message);
+    }
     
     const healthStatus = {
       status: 'healthy',
       timestamp: new Date().toISOString(),
-      database: 'connected',
-      tables: allTablesExist ? 'all_exist' : 'some_missing',
+      database: databaseStatus,
+      tables: tablesStatus,
       new_features: {
         token_leverage: true,
         risk_levels: true,
@@ -36,7 +47,9 @@ router.get('/', async (req, res) => {
         cash_wallet: true
       },
       environment: process.env.NODE_ENV || 'development',
-      version: require('./package.json').version
+      version: require('./package.json').version,
+      uptime: process.uptime(),
+      memory: process.memoryUsage()
     };
     
     res.status(200).json(healthStatus);
@@ -46,7 +59,7 @@ router.get('/', async (req, res) => {
     const healthStatus = {
       status: 'unhealthy',
       timestamp: new Date().toISOString(),
-      database: 'disconnected',
+      database: 'unknown',
       error: error.message,
       environment: process.env.NODE_ENV || 'development',
       version: require('./package.json').version
