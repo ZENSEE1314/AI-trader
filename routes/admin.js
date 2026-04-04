@@ -877,11 +877,9 @@ router.post('/backtest', async (req, res) => {
     const TRAILING = { INIT: 0.01, FIRST: 0.013, STEP: 0.01 };
     const SWING = { '15m': 10, '3m': 10, '1m': 5 };
 
+    const DAYS = Math.min(parseInt(req.body.days) || 7, 15);
+    const REVERSE = req.body.reverse === true;
     const endTime = Date.now();
-    // 15m: 1500 candles = ~15.6 days, 3m: 1500 = ~3.1 days
-    // Use 15m as scan interval, 3m data limited to ~3 days for structure
-    // Fetch 15m = 1500 candles (~15 days), 3m = 1500, 1m = 1500 (~25h for exit checks)
-    // We'll scan on 15m steps and use 3m/1m windows for structure checks
 
     async function fetchK(symbol, interval, limit, et) {
       const url = `https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=${interval}&limit=${limit}${et ? '&endTime=' + et : ''}`;
@@ -994,12 +992,13 @@ router.post('/backtest', async (req, res) => {
     // Fetch 15m (scan + exits, ~15 days), 3m (structure, ~3 days), daily
     // Skip 1m — use 3m for entry structure too (faster + more data coverage)
     const coinData = {};
-    const startTime = endTime - 7 * 86400000;
+    const startTime = endTime - DAYS * 86400000;
     for (const sym of topCoins) {
+      const k3Limit = DAYS <= 7 ? 500 : 1500;
       const [k15, k3, kD] = await Promise.all([
         fetchK(sym, '15m', 1500),
-        fetchK(sym, '3m', 500),
-        fetchK(sym, '1d', 10),
+        fetchK(sym, '3m', k3Limit),
+        fetchK(sym, '1d', Math.max(10, DAYS + 2)),
       ]);
       if (k15 && k3 && kD) {
         coinData[sym] = { k15, k3, kD };
@@ -1070,6 +1069,7 @@ router.post('/backtest', async (req, res) => {
           let dir = null;
           if (gc >= 2) dir = 'LONG'; else if (rc >= 2) dir = 'SHORT';
           if (!dir) continue;
+          if (REVERSE) dir = dir === 'LONG' ? 'SHORT' : 'LONG';
 
           const price = parseFloat(k15[k15.length-1][4]);
           const dIdx = data.kD.findIndex(k => parseInt(k[0]) + 86400000 > now);
@@ -1143,13 +1143,16 @@ router.post('/backtest', async (req, res) => {
 
     const mode = req.body.mode || 'strict';
     const labels = { strict: 'Strict (0.3% key level)', relaxed: 'Relaxed (1% key level)', none: 'No Key Level (trend + structure only)' };
+    const prefix = REVERSE ? 'REVERSE — ' : '';
     const result = simulate(mode);
 
     res.json({
       period: `${new Date(startTime).toISOString().slice(0,10)} → ${new Date(endTime).toISOString().slice(0,10)}`,
+      days: DAYS,
+      reverse: REVERSE,
       coinsScanned: Object.keys(coinData).length,
       dataPoints: { k15m: coinData[topCoins[0]]?.k15?.length || 0, k3m: coinData[topCoins[0]]?.k3?.length || 0 },
-      strategy: summarize(labels[mode] || labels.strict, result),
+      strategy: summarize(prefix + (labels[mode] || labels.strict), result),
     });
   } catch (err) {
     console.error('Backtest error:', err);
