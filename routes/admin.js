@@ -863,4 +863,295 @@ router.post('/debug-bitunix', async (req, res) => {
   }
 });
 
+// ── Backtest: run strategy simulation over last 30 days ────
+router.post('/backtest', async (req, res) => {
+  try {
+    const fetch = require('node-fetch');
+    const { getFetchOptions } = require('../proxy-agent');
+    const DAYS = parseInt(req.body.days) || 30;
+    const TOP_N = parseInt(req.body.topN) || 20;
+    const WALLET_START = 1000;
+    const RISK_PCT = 0.10;
+    const LEVERAGE = 20;
+    const MAX_POS = 3;
+    const TP_PCT = 0.01;
+    const TRAILING = { INIT: 0.01, FIRST: 0.013, STEP: 0.01 };
+    const SWING = { '15m': 10, '3m': 10, '1m': 5 };
+    const PROXIMITY = 0.003;
+
+    const endTime = Date.now();
+    const startTime = endTime - DAYS * 86400000;
+
+    // Fetch functions
+    async function fetchK(symbol, interval, limit) {
+      const url = `https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=${interval}&limit=${limit}&endTime=${endTime}`;
+      for (let i = 0; i < 3; i++) {
+        try {
+          const r = await fetch(url, { timeout: 15000, ...getFetchOptions() });
+          if (r.ok) return r.json();
+        } catch {}
+        await new Promise(r => setTimeout(r, 500));
+      }
+      return null;
+    }
+
+    // Swing detection
+    function detectSwings(klines, len) {
+      const highs = klines.map(k => parseFloat(k[2]));
+      const lows = klines.map(k => parseFloat(k[3]));
+      const swings = [];
+      let lastType = null;
+      for (let i = len; i < klines.length - len; i++) {
+        let isH = true, isL = true;
+        for (let j = -len; j <= len; j++) {
+          if (j === 0) continue;
+          if (highs[i] <= highs[i + j]) isH = false;
+          if (lows[i] >= lows[i + j]) isL = false;
+        }
+        if (isH && isL) {
+          const hd = highs[i] - Math.max(highs[i-1], highs[i+1]);
+          const ld = Math.min(lows[i-1], lows[i+1]) - lows[i];
+          if (hd > ld) isL = false; else isH = false;
+        }
+        if (isH) {
+          if (lastType === 'high' && highs[i] > swings[swings.length-1].price)
+            swings[swings.length-1] = { type: 'high', index: i, price: highs[i] };
+          else if (lastType !== 'high') { swings.push({ type: 'high', index: i, price: highs[i] }); lastType = 'high'; }
+        }
+        if (isL) {
+          if (lastType === 'low' && lows[i] < swings[swings.length-1].price)
+            swings[swings.length-1] = { type: 'low', index: i, price: lows[i] };
+          else if (lastType !== 'low') { swings.push({ type: 'low', index: i, price: lows[i] }); lastType = 'low'; }
+        }
+      }
+      return swings;
+    }
+
+    function getStruct(klines, len) {
+      const sw = detectSwings(klines, len);
+      const sH = sw.filter(s => s.type === 'high');
+      const sL = sw.filter(s => s.type === 'low');
+      const lH = sH.length > 1 ? sH[sH.length-1] : null;
+      const lL = sL.length > 1 ? sL[sL.length-1] : null;
+      const hLabel = lH && sH.length > 1 ? (sH[sH.length-1].price > sH[sH.length-2].price ? 'HH' : 'LH') : null;
+      const lLabel = lL && sL.length > 1 ? (sL[sL.length-1].price > sL[sL.length-2].price ? 'HL' : 'LL') : null;
+      return { hasHL: lLabel === 'HL', hasLH: hLabel === 'LH', lastHigh: lH, lastLow: lL };
+    }
+
+    function calcVWAP(klines) {
+      let cv = 0, ct = 0, ct2 = 0, day = '';
+      const vals = [];
+      for (const k of klines) {
+        const d = new Date(parseInt(k[0])).toISOString().slice(0,10);
+        const h = parseFloat(k[2]), l = parseFloat(k[3]), c = parseFloat(k[4]), v = parseFloat(k[5]);
+        if (d !== day) { cv = 0; ct = 0; ct2 = 0; day = d; }
+        const tp = (h+l+c)/3;
+        ct += tp*v; ct2 += tp*tp*v; cv += v;
+        if (cv > 0) { const vw = ct/cv; vals.push({ vwap: vw, upper: vw + Math.sqrt(Math.max(0, ct2/cv - vw*vw)), lower: vw - Math.sqrt(Math.max(0, ct2/cv - vw*vw)) }); }
+        else vals.push({ vwap: c, upper: c, lower: c });
+      }
+      return vals;
+    }
+
+    function atKeyLevel(price, pdh, pdl, vwap, dir) {
+      const b = vwap[vwap.length-1];
+      const nPDH = Math.abs(price-pdh)/pdh < PROXIMITY;
+      const nPDL = Math.abs(price-pdl)/pdl < PROXIMITY;
+      const nU = Math.abs(price-b.upper)/b.upper < PROXIMITY;
+      const nL = Math.abs(price-b.lower)/b.lower < PROXIMITY;
+      const nV = Math.abs(price-b.vwap)/b.vwap < PROXIMITY;
+      return dir === 'LONG' ? (nL || nPDL || nV) : (nU || nPDH || nV);
+    }
+
+    // Get top coins
+    const tickerRes = await fetch('https://fapi.binance.com/fapi/v1/ticker/24hr', { timeout: 15000, ...getFetchOptions() });
+    const tickers = await tickerRes.json();
+    const BL = new Set(['USDCUSDT','ALPACAUSDT','XAUUSDT','XAGUSDT','EURUSDT','GBPUSDT','JPYUSDT']);
+    const topCoins = tickers
+      .filter(t => t.symbol.endsWith('USDT') && !t.symbol.includes('_') && !BL.has(t.symbol))
+      .filter(t => parseFloat(t.quoteVolume) >= 10_000_000)
+      .sort((a, b) => parseFloat(b.quoteVolume) - parseFloat(a.quoteVolume))
+      .slice(0, TOP_N).map(t => t.symbol);
+
+    // Fetch data
+    const coinData = {};
+    for (const sym of topCoins) {
+      const [k15, k3, k1, kD] = await Promise.all([
+        fetchK(sym, '15m', 1500), fetchK(sym, '3m', 1500),
+        fetchK(sym, '1m', 1500), fetchK(sym, '1d', 35),
+      ]);
+      if (k15 && k3 && k1 && kD) coinData[sym] = { k15, k3, k1, kD };
+      await new Promise(r => setTimeout(r, 200));
+    }
+
+    // Simulate
+    let wallet = WALLET_START;
+    const trades = [];
+    const openPos = [];
+    const firstCoin = Object.keys(coinData)[0];
+    if (!firstCoin) return res.json({ error: 'No data fetched' });
+
+    const timeSteps = coinData[firstCoin].k15.map(k => parseInt(k[0])).filter(t => t >= startTime);
+
+    for (let step = 0; step < timeSteps.length; step++) {
+      const now = timeSteps[step];
+
+      // Check open positions
+      for (let i = openPos.length - 1; i >= 0; i--) {
+        const pos = openPos[i];
+        const data = coinData[pos.symbol];
+        if (!data) continue;
+        const windowStart = step > 0 ? timeSteps[step-1] : now - 900000;
+        const candles = data.k1.filter(k => parseInt(k[0]) >= windowStart && parseInt(k[0]) < now);
+
+        let closed = false;
+        for (const c of candles) {
+          const high = parseFloat(c[2]), low = parseFloat(c[3]), close = parseFloat(c[4]);
+          // SL
+          if ((pos.dir === 'LONG' && low <= pos.sl) || (pos.dir === 'SHORT' && high >= pos.sl)) {
+            pos.exit = pos.sl; pos.reason = 'SL'; pos.exitTime = now;
+            pos.pnl = pos.dir === 'LONG' ? (pos.sl - pos.entry) * pos.qty : (pos.entry - pos.sl) * pos.qty;
+            wallet += pos.pnl; openPos.splice(i, 1); closed = true; break;
+          }
+          // TP
+          if ((pos.dir === 'LONG' && high >= pos.tp) || (pos.dir === 'SHORT' && low <= pos.tp)) {
+            pos.exit = pos.tp; pos.reason = 'TP'; pos.exitTime = now;
+            pos.pnl = pos.dir === 'LONG' ? (pos.tp - pos.entry) * pos.qty : (pos.entry - pos.tp) * pos.qty;
+            wallet += pos.pnl; openPos.splice(i, 1); closed = true; break;
+          }
+          // Trailing SL
+          const pp = pos.dir === 'LONG' ? (close - pos.entry) / pos.entry : (pos.entry - close) / pos.entry;
+          const ns = pos.lastStep === 0 ? TRAILING.FIRST : pos.lastStep + TRAILING.STEP;
+          if (pp >= ns) {
+            let reached = ns;
+            while (pp >= reached + TRAILING.STEP) reached += TRAILING.STEP;
+            pos.lastStep = reached;
+            pos.sl = pos.dir === 'LONG'
+              ? pos.entry * (1 + reached - TRAILING.STEP)
+              : pos.entry * (1 - reached + TRAILING.STEP);
+          }
+        }
+      }
+
+      if (openPos.length >= MAX_POS) continue;
+
+      // Scan
+      for (const sym of Object.keys(coinData)) {
+        if (openPos.length >= MAX_POS) break;
+        if (openPos.find(p => p.symbol === sym)) continue;
+        const data = coinData[sym];
+        const k15 = data.k15.filter(k => parseInt(k[0]) <= now);
+        const k3 = data.k3.filter(k => parseInt(k[0]) <= now);
+        const k1 = data.k1.filter(k => parseInt(k[0]) <= now);
+        if (k15.length < 30 || k3.length < 30 || k1.length < 15) continue;
+
+        // 3-candle trend
+        const last3 = k15.slice(-4, -1);
+        if (last3.length < 3) continue;
+        let gc = 0, rc = 0;
+        for (const c of last3) { parseFloat(c[4]) > parseFloat(c[1]) ? gc++ : rc++; }
+        let dir = null;
+        if (gc >= 2) dir = 'LONG'; else if (rc >= 2) dir = 'SHORT';
+        if (!dir) continue;
+
+        const price = parseFloat(k15[k15.length-1][4]);
+        const dIdx = data.kD.findIndex(k => parseInt(k[0]) + 86400000 > now);
+        const pdh = dIdx > 0 ? parseFloat(data.kD[dIdx-1][2]) : price * 1.01;
+        const pdl = dIdx > 0 ? parseFloat(data.kD[dIdx-1][3]) : price * 0.99;
+
+        const vwap = calcVWAP(k15);
+        if (!atKeyLevel(price, pdh, pdl, vwap, dir)) continue;
+
+        const s3 = getStruct(k3, SWING['3m']);
+        if ((dir === 'LONG' && !s3.hasHL) || (dir === 'SHORT' && !s3.hasLH)) continue;
+
+        const s1 = getStruct(k1, SWING['1m']);
+        if ((dir === 'LONG' && !s1.hasHL) || (dir === 'SHORT' && !s1.hasLH)) continue;
+
+        const es = dir === 'LONG' ? s1.lastLow : s1.lastHigh;
+        if (!es || (k1.length - 1 - es.index) > 25) continue;
+
+        const vols = k1.slice(-20).map(k => parseFloat(k[5]));
+        const rv = vols.slice(-5).reduce((a,b)=>a+b,0)/5;
+        const av = vols.reduce((a,b)=>a+b,0)/vols.length;
+        if (av > 0 && rv/av < 0.8) continue;
+
+        // Entry!
+        const tradeUsdt = wallet * RISK_PCT;
+        const qty = (tradeUsdt * LEVERAGE) / price;
+        const sl = dir === 'LONG' ? price * (1 - TRAILING.INIT) : price * (1 + TRAILING.INIT);
+        const tp = dir === 'LONG' ? price * (1 + TP_PCT) : price * (1 - TP_PCT);
+        const trade = { symbol: sym, dir, entry: price, qty, sl, tp, lastStep: 0, entryTime: now, exit: null, reason: null, pnl: null, exitTime: null };
+        openPos.push(trade);
+        trades.push(trade);
+      }
+    }
+
+    // Close remaining
+    for (const pos of openPos) {
+      const data = coinData[pos.symbol];
+      if (data && data.k1.length) {
+        const lp = parseFloat(data.k1[data.k1.length-1][4]);
+        pos.exit = lp; pos.reason = 'END'; pos.exitTime = endTime;
+        pos.pnl = pos.dir === 'LONG' ? (lp - pos.entry) * pos.qty : (pos.entry - lp) * pos.qty;
+        wallet += pos.pnl;
+      }
+    }
+
+    // Results
+    const closed = trades.filter(t => t.pnl !== null);
+    const wins = closed.filter(t => t.pnl > 0);
+    const losses = closed.filter(t => t.pnl <= 0);
+    const totalPnl = closed.reduce((s, t) => s + t.pnl, 0);
+    const avgWin = wins.length ? wins.reduce((s, t) => s + t.pnl, 0) / wins.length : 0;
+    const avgLoss = losses.length ? losses.reduce((s, t) => s + t.pnl, 0) / losses.length : 0;
+
+    let peak = WALLET_START, maxDD = 0, running = WALLET_START;
+    for (const t of closed) {
+      running += t.pnl;
+      if (running > peak) peak = running;
+      const dd = (peak - running) / peak;
+      if (dd > maxDD) maxDD = dd;
+    }
+
+    const tradeLog = closed.map(t => ({
+      date: new Date(t.entryTime).toISOString().slice(0, 16),
+      symbol: t.symbol, dir: t.dir,
+      entry: t.entry.toFixed(4), exit: t.exit.toFixed(4),
+      pnl: t.pnl.toFixed(2), reason: t.reason,
+    }));
+
+    // Per-coin stats
+    const coinStats = {};
+    for (const t of closed) {
+      if (!coinStats[t.symbol]) coinStats[t.symbol] = { wins: 0, losses: 0, pnl: 0 };
+      if (t.pnl > 0) coinStats[t.symbol].wins++; else coinStats[t.symbol].losses++;
+      coinStats[t.symbol].pnl += t.pnl;
+    }
+
+    res.json({
+      period: `${new Date(startTime).toISOString().slice(0,10)} → ${new Date(endTime).toISOString().slice(0,10)}`,
+      coinsScanned: Object.keys(coinData).length,
+      startWallet: WALLET_START,
+      finalWallet: parseFloat(wallet.toFixed(2)),
+      totalPnl: parseFloat(totalPnl.toFixed(2)),
+      totalPnlPct: parseFloat(((totalPnl / WALLET_START) * 100).toFixed(1)),
+      totalTrades: closed.length,
+      wins: wins.length,
+      losses: losses.length,
+      winRate: closed.length ? parseFloat(((wins.length / closed.length) * 100).toFixed(1)) : 0,
+      avgWin: parseFloat(avgWin.toFixed(2)),
+      avgLoss: parseFloat(avgLoss.toFixed(2)),
+      maxDrawdown: parseFloat((maxDD * 100).toFixed(1)),
+      trades: tradeLog,
+      coinStats: Object.entries(coinStats).sort((a, b) => b[1].pnl - a[1].pnl).map(([s, d]) => ({
+        symbol: s, wins: d.wins, losses: d.losses, pnl: parseFloat(d.pnl.toFixed(2)),
+      })),
+    });
+  } catch (err) {
+    console.error('Backtest error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 module.exports = router;
