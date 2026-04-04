@@ -43,8 +43,32 @@ app.get('/api/coins', async (req, res) => {
   } catch { res.json([]); }
 });
 
-// Health check
-app.get('/health', (req, res) => res.json({ status: 'ok', version: '2.1.0' }));
+// Public health check (no auth required)
+app.get('/health', (req, res) => res.json({ 
+  status: 'ok', 
+  version: '2.1.0',
+  timestamp: new Date().toISOString(),
+  environment: process.env.NODE_ENV || 'development',
+  jwt_secret_set: !!process.env.JWT_SECRET,
+  database_url_set: !!process.env.DATABASE_URL
+}));
+
+// Public status endpoint for debugging
+app.get('/status', (req, res) => {
+  res.json({
+    server: 'running',
+    time: new Date().toISOString(),
+    node_version: process.version,
+    environment: process.env.NODE_ENV || 'development',
+    port: process.env.PORT || 3000,
+    features: {
+      cash_wallet: true,
+      token_leverage: true,
+      risk_levels: true,
+      referral_system: true
+    }
+  });
+});
 
 // Bot logs endpoint (live dashboard)
 const { getLogs, getRecentLogs, getHistoricalLogs, getScanStats, getLogCounts } = require('./bot-logger');

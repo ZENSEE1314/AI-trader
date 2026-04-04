@@ -39,7 +39,15 @@ router.post('/signup', async (req, res) => {
       [email.toLowerCase(), hash, myRefCode, referredBy, feeDue]
     );
     const token = signToken(rows[0].id, email.toLowerCase());
-    res.cookie('token', token, { httpOnly: true, maxAge: 30 * 24 * 60 * 60 * 1000, sameSite: 'lax' });
+    // Railway-compatible cookie settings
+    const isProduction = process.env.NODE_ENV === 'production' || process.env.RAILWAY_ENVIRONMENT;
+    res.cookie('token', token, { 
+      httpOnly: true, 
+      maxAge: 30 * 24 * 60 * 60 * 1000, 
+      sameSite: isProduction ? 'none' : 'lax',
+      secure: isProduction,
+      domain: isProduction ? undefined : 'localhost'
+    });
     res.json({ ok: true });
   } catch (err) {
     console.error('Signup error:', err.message);
@@ -62,7 +70,15 @@ router.post('/login', async (req, res) => {
 
     const maxAge = remember ? 30 * 24 * 60 * 60 * 1000 : 24 * 60 * 60 * 1000; // 30 days or 1 day
     const token = signToken(rows[0].id, email.toLowerCase(), remember);
-    res.cookie('token', token, { httpOnly: true, maxAge, sameSite: 'lax' });
+    // Railway-compatible cookie settings
+    const isProduction = process.env.NODE_ENV === 'production' || process.env.RAILWAY_ENVIRONMENT;
+    res.cookie('token', token, { 
+      httpOnly: true, 
+      maxAge,
+      sameSite: isProduction ? 'none' : 'lax',
+      secure: isProduction,
+      domain: isProduction ? undefined : 'localhost'
+    });
     res.json({ ok: true });
   } catch (err) {
     console.error('Login error:', err.message);
@@ -71,7 +87,12 @@ router.post('/login', async (req, res) => {
 });
 
 router.post('/logout', (req, res) => {
-  res.clearCookie('token');
+  const isProduction = process.env.NODE_ENV === 'production' || process.env.RAILWAY_ENVIRONMENT;
+  res.clearCookie('token', { 
+    sameSite: isProduction ? 'none' : 'lax',
+    secure: isProduction,
+    domain: isProduction ? undefined : 'localhost'
+  });
   res.json({ ok: true });
 });
 
