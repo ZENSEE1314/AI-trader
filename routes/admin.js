@@ -900,7 +900,7 @@ router.post('/backtest', async (req, res) => {
       const all = [];
       let et = endTime;
       const msPerCandle = { '1m': 60000, '3m': 180000 }[interval] || 60000;
-      for (let page = 0; page < 6; page++) {
+      for (let page = 0; page < 2; page++) {
         const data = await fetchK(symbol, interval, 1500, et);
         if (!data || !data.length) break;
         const filtered = data.filter(k => parseInt(k[0]) >= startTime);
@@ -993,16 +993,16 @@ router.post('/backtest', async (req, res) => {
 
     // Fetch data with pagination for 3m and 1m
     const coinData = {};
-    const startTime = endTime - 15 * 86400000;
+    const startTime = endTime - 7 * 86400000;
     for (const sym of topCoins) {
       const [k15, kD] = await Promise.all([
         fetchK(sym, '15m', 1500), fetchK(sym, '1d', 35),
       ]);
       const [k3, k1] = await Promise.all([
-        fetchPaginated(sym, '3m', startTime),
-        fetchPaginated(sym, '1m', startTime),
+        fetchK(sym, '3m', 1500),
+        fetchK(sym, '1m', 1500),
       ]);
-      if (k15 && k3.length && k1.length && kD) {
+      if (k15 && k3 && k1 && kD) {
         coinData[sym] = { k15, k3, k1, kD };
       }
       await new Promise(r => setTimeout(r, 100));
