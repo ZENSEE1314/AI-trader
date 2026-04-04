@@ -172,12 +172,21 @@ class BitunixClient {
     return data?.fillList || data?.list || data?.fills || [];
   }
 
-  // Raw POST — returns full response including code/msg for debugging
+  // Raw methods — return full response including code/msg for debugging
   async _rawPost(path, body = {}) {
     const bodyStr = this._compressBody(body);
     const { headers } = this._sign('', bodyStr);
     const url = `${BASE_URL}${path}`;
     const res = await fetch(url, { method: 'POST', headers, body: bodyStr, timeout: REQUEST_TIMEOUT, ...getFetchOptions() });
+    return res.json();
+  }
+
+  async _rawGet(path, params = {}) {
+    const queryParamStr = this._buildQueryParamStr(params);
+    const queryString = this._buildQueryString(params);
+    const { headers } = this._sign(queryParamStr, '');
+    const url = `${BASE_URL}${path}${queryString}`;
+    const res = await fetch(url, { method: 'GET', headers, timeout: REQUEST_TIMEOUT, ...getFetchOptions() });
     return res.json();
   }
 

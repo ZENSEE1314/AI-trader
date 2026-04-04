@@ -829,33 +829,32 @@ router.post('/debug-bitunix', async (req, res) => {
     const results = {
       trade: { id: trade.id, symbol: trade.symbol, direction: trade.direction, entry: trade.entry_price },
       keyPreview: apiKey.substring(0, 8) + '...',
-      proxyEnabled: require('../proxy-agent').isProxyEnabled(),
     };
 
     const sym = trade.symbol;
+    // Bitunix might use different symbol format
+    const symDash = sym.replace('USDT', '-USDT');
 
-    // Proxy works (fills passed auth last time). Now find correct params/endpoints.
+    // 1. Test GET endpoints via client._get (account, positions — proves auth works)
+    try { results.account = await client._rawGet('/api/v1/futures/account', { marginCoin: 'USDT' }); } catch (e) { results.account_err = e.message; }
 
-    // get_fills — try different body formats
-    try { results.fills_1 = await client._rawPost('/api/v1/futures/trade/get_fills', { symbol: sym, limit: 5 }); } catch (e) { results.fills_1_err = e.message; }
-    try { results.fills_2 = await client._rawPost('/api/v1/futures/trade/get_fills', { symbol: sym, pageSize: 5, pageNum: 1 }); } catch (e) { results.fills_2_err = e.message; }
-    try { results.fills_3 = await client._rawPost('/api/v1/futures/trade/get_fills', { symbol: sym, startTime: Date.now() - 7*86400000, endTime: Date.now() }); } catch (e) { results.fills_3_err = e.message; }
-    try { results.fills_4 = await client._rawPost('/api/v1/futures/trade/get_fills', {}); } catch (e) { results.fills_4_err = e.message; }
+    // 2. get_fills with both symbol formats
+    try { results.fills_normal = await client._rawPost('/api/v1/futures/trade/get_fills', { symbol: sym, limit: 5 }); } catch (e) { results.fills_normal_err = e.message; }
+    try { results.fills_dash = await client._rawPost('/api/v1/futures/trade/get_fills', { symbol: symDash, limit: 5 }); } catch (e) { results.fills_dash_err = e.message; }
 
-    // query_order endpoint from docs
-    try { results.queryOrder = await client._rawPost('/api/v1/futures/trade/query_order', { symbol: sym }); } catch (e) { results.queryOrder_err = e.message; }
+    // 3. get_history_orders with both symbol formats
+    try { results.histOrders_normal = await client._rawPost('/api/v1/futures/trade/get_history_orders', { symbol: sym, pageNum: 1, pageSize: 5 }); } catch (e) { results.histOrders_normal_err = e.message; }
+    try { results.histOrders_dash = await client._rawPost('/api/v1/futures/trade/get_history_orders', { symbol: symDash, pageNum: 1, pageSize: 5 }); } catch (e) { results.histOrders_dash_err = e.message; }
 
-    // query_orders (plural) endpoint
-    try { results.queryOrders = await client._rawPost('/api/v1/futures/trade/query_orders', { symbol: sym, status: 'FILLED', pageNum: 1, pageSize: 5 }); } catch (e) { results.queryOrders_err = e.message; }
+    // 4. Try string types for pageNum/pageSize (Bitunix may want strings)
+    try { results.histOrders_str = await client._rawPost('/api/v1/futures/trade/get_history_orders', { symbol: sym, pageNum: '1', pageSize: '5' }); } catch (e) { results.histOrders_str_err = e.message; }
 
-    // get_order_history
-    try { results.orderHistory = await client._rawPost('/api/v1/futures/trade/get_order_history', { symbol: sym, pageNum: 1, pageSize: 5 }); } catch (e) { results.orderHistory_err = e.message; }
+    // 5. Try get_fills with string limit and orderId
+    try { results.fills_strLimit = await client._rawPost('/api/v1/futures/trade/get_fills', { symbol: sym, limit: '20' }); } catch (e) { results.fills_strLimit_err = e.message; }
 
-    // position history
-    try { results.posHistory = await client._rawPost('/api/v1/futures/position/get_history_positions', { symbol: sym, pageNum: 1, pageSize: 5 }); } catch (e) { results.posHistory_err = e.message; }
-
-    // get pending positions (should work — tests proxy + auth)
-    try { results.openPositions = await client._rawPost('/api/v1/futures/position/get_pending_positions', {}); } catch (e) { results.openPositions_err = e.message; }
+    // 6. Try v2 endpoints (Bitunix may have migrated)
+    try { results.fills_v2 = await client._rawPost('/api/v2/futures/trade/get_fills', { symbol: sym, limit: 5 }); } catch (e) { results.fills_v2_err = e.message; }
+    try { results.histOrders_v2 = await client._rawPost('/api/v2/futures/trade/get_history_orders', { symbol: sym, pageNum: 1, pageSize: 5 }); } catch (e) { results.histOrders_v2_err = e.message; }
 
     res.json(results);
   } catch (err) {
