@@ -57,21 +57,58 @@ router.post('/signup', async (req, res) => {
 
 router.post('/login', async (req, res) => {
   try {
+    console.log('[AUTH DEBUG] Login attempt:', { 
+      email: req.body.email ? 'provided' : 'missing',
+      password: req.body.password ? 'provided' : 'missing',
+      remember: req.body.remember,
+      hasJWTSecret: !!process.env.JWT_SECRET,
+      nodeEnv: process.env.NODE_ENV,
+      isRailway: !!process.env.RAILWAY_ENVIRONMENT
+    });
+    
     const { email, password } = req.body;
-    if (!email || !password) return res.status(400).json({ error: 'Email and password required' });
+    if (!email || !password) {
+      console.log('[AUTH DEBUG] Missing email or password');
+      return res.status(400).json({ error: 'Email and password required' });
+    }
 
     const { remember } = req.body;
+    console.log('[AUTH DEBUG] Querying database for user:', email.toLowerCase());
     const rows = await query('SELECT id, password_hash, is_blocked FROM users WHERE email = $1', [email.toLowerCase()]);
-    if (!rows.length) return res.status(401).json({ error: 'Invalid credentials' });
-    if (rows[0].is_blocked) return res.status(403).json({ error: 'Account is blocked. Contact support.' });
+    console.log('[AUTH DEBUG] Database result:', { found: rows.length, isBlocked: rows[0]?.is_blocked });
+    
+    if (!rows.length) {
+      console.log('[AUTH DEBUG] User not found');
+      return res.status(401).json({ error: 'Invalid credentials' });
+    }
+    if (rows[0].is_blocked) {
+      console.log('[AUTH DEBUG] User is blocked');
+      return res.status(403).json({ error: 'Account is blocked. Contact support.' });
+    }
 
+    console.log('[AUTH DEBUG] Checking password...');
     const valid = await bcrypt.compare(password, rows[0].password_hash);
-    if (!valid) return res.status(401).json({ error: 'Invalid credentials' });
+    console.log('[AUTH DEBUG] Password valid:', valid);
+    
+    if (!valid) {
+      console.log('[AUTH DEBUG] Invalid password');
+      return res.status(401).json({ error: 'Invalid credentials' });
+    }
 
     const maxAge = remember ? 30 * 24 * 60 * 60 * 1000 : 24 * 60 * 60 * 1000; // 30 days or 1 day
+    console.log('[AUTH DEBUG] Creating JWT token...');
     const token = signToken(rows[0].id, email.toLowerCase(), remember);
+    console.log('[AUTH DEBUG] Token created, length:', token.length);
+    
     // Railway-compatible cookie settings
     const isProduction = process.env.NODE_ENV === 'production' || process.env.RAILWAY_ENVIRONMENT;
+    console.log('[AUTH DEBUG] Cookie settings:', { 
+      isProduction, 
+      sameSite: isProduction ? 'none' : 'lax',
+      secure: isProduction,
+      maxAge
+    });
+    
     res.cookie('token', token, { 
       httpOnly: true, 
       maxAge,
@@ -79,6 +116,8 @@ router.post('/login', async (req, res) => {
       secure: isProduction,
       domain: isProduction ? undefined : 'localhost'
     });
+    
+    console.log('[AUTH DEBUG] Login successful, sending response');
     res.json({ ok: true });
   } catch (err) {
     console.error('Login error:', err.message);
