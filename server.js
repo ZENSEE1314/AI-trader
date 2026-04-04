@@ -169,8 +169,8 @@ app.use((req, res, next) => {
 });
 
 // ── Auto-migrate: add new trading parameter columns ──────────
-const { query: dbQuery } = require('./db');
 (async () => {
+  const { query: dbQuery } = require('./db');
   const cols = [
     { name: 'tp_pct',           sql: 'ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS tp_pct DECIMAL DEFAULT 0.045' },
     { name: 'sl_pct',           sql: 'ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS sl_pct DECIMAL DEFAULT 0.03' },

@@ -6,8 +6,6 @@ const router = express.Router();
 // Health check endpoint
 router.get('/', async (req, res) => {
   try {
-    const { query } = require('./db');
-    
     // Try database connection
     let databaseStatus = 'connected';
     let tablesStatus = 'unknown';
