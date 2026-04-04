@@ -7,23 +7,13 @@ const JWT_SECRET = process.env.JWT_SECRET || 'change-me-in-production';
 
 function authMiddleware(req, res, next) {
   const token = req.cookies?.token;
-  
-  // Debug logging
-  console.log(`[AUTH] Path: ${req.path}, Has token: ${!!token}, JWT_SECRET set: ${!!process.env.JWT_SECRET}`);
-  
-  if (!token) {
-    console.log('[AUTH] No token found, returning 401');
-    return res.status(401).json({ error: 'Not logged in' });
-  }
-  
+  if (!token) return res.status(401).json({ error: 'Not logged in' });
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
     req.userId = decoded.userId;
     req.userEmail = decoded.email;
-    console.log(`[AUTH] User authenticated: ${decoded.email} (ID: ${decoded.userId})`);
     next();
-  } catch (err) {
-    console.log(`[AUTH] Token verification failed: ${err.message}`);
+  } catch {
     res.clearCookie('token');
     return res.status(401).json({ error: 'Session expired' });
   }
