@@ -1238,6 +1238,18 @@
     }
   }
 
+  async function debugBitunix() {
+    const resultEl = $('#fix-bitunix-result');
+    if (resultEl) resultEl.textContent = 'Testing Bitunix API...';
+    try {
+      const data = await api('POST', '/api/admin/debug-bitunix');
+      if (resultEl) resultEl.textContent = JSON.stringify(data, null, 2);
+      console.log('Bitunix debug:', data);
+    } catch (err) {
+      if (resultEl) resultEl.textContent = 'Error: ' + err.message;
+    }
+  }
+
   // ----- Allowed / Banned Token Management (Admin) -----
 
   async function loadGlobalTokens() {
@@ -1828,7 +1840,7 @@
     addAllowedToken, addBannedToken, unbanGlobalToken, removeGlobalToken,
     searchAdminToken, pickAdminToken, searchUserBanToken,
     addRiskLevel, saveRiskLevel, deleteRiskLevel,
-    fixBitunixPnl,
+    fixBitunixPnl, debugBitunix,
   };
 
   // ----- Init -----

@@ -1091,7 +1091,8 @@
         <div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-4);margin-bottom:var(--space-5);">
           <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Tools</h3>
           <button class="btn btn-primary btn-sm" onclick="window.CryptoBot.fixBitunixPnl()">Sync All Trades with Exchange</button>
-          <span id="fix-bitunix-result" style="margin-left:var(--space-2);font-size:0.8rem;color:var(--color-text-muted);"></span>
+          <button class="btn btn-ghost btn-sm" onclick="window.CryptoBot.debugBitunix()">Debug Bitunix API</button>
+          <pre id="fix-bitunix-result" style="margin-top:var(--space-2);font-size:0.75rem;color:var(--color-text-muted);max-height:400px;overflow:auto;white-space:pre-wrap;word-break:break-all;"></pre>
         </div>
 
         <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Pending Withdrawals</h3>

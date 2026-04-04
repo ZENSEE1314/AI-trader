@@ -803,4 +803,53 @@ router.post('/fix-bitunix-pnl', async (req, res) => {
   }
 });
 
+// ── Diagnostic: test Bitunix API responses for a trade ────
+router.post('/debug-bitunix', async (req, res) => {
+  try {
+    const cryptoUtils = require('../crypto-utils');
+    const { BitunixClient } = require('../bitunix-client');
+
+    // Find a Bitunix trade to test
+    const trades = await query(
+      `SELECT t.*, ak.api_key_enc, ak.iv, ak.auth_tag,
+              ak.api_secret_enc, ak.secret_iv, ak.secret_auth_tag
+       FROM trades t
+       JOIN api_keys ak ON ak.id = t.api_key_id
+       WHERE ak.platform = 'bitunix'
+       ORDER BY t.created_at DESC LIMIT 1`
+    );
+
+    if (!trades.length) return res.json({ error: 'No Bitunix trades found' });
+
+    const trade = trades[0];
+    const apiKey = cryptoUtils.decrypt(trade.api_key_enc, trade.iv, trade.auth_tag);
+    const apiSecret = cryptoUtils.decrypt(trade.api_secret_enc, trade.secret_iv, trade.secret_auth_tag);
+    const client = new BitunixClient({ apiKey, apiSecret });
+
+    const results = { trade: { id: trade.id, symbol: trade.symbol, direction: trade.direction, entry: trade.entry_price } };
+
+    // Test all endpoints — use _rawPost to see full Bitunix response including error codes
+    try {
+      results.rawFills = await client._rawPost('/api/v1/futures/trade/get_fills', { symbol: trade.symbol, limit: 5 });
+    } catch (e) { results.fillsError = e.message; }
+
+    try {
+      results.rawHistoryOrders = await client._rawPost('/api/v1/futures/trade/get_history_orders', { symbol: trade.symbol, pageNum: 1, pageSize: 5 });
+    } catch (e) { results.historyOrdersError = e.message; }
+
+    try {
+      results.rawHistoryTrades = await client._rawPost('/api/v1/futures/trade/get_history_trades', { symbol: trade.symbol, pageNum: 1, pageSize: 5 });
+    } catch (e) { results.historyTradesError = e.message; }
+
+    try {
+      const mp = await client.getMarketPrice(trade.symbol);
+      results.marketPrice = mp;
+    } catch (e) { results.marketPriceError = e.message; }
+
+    res.json(results);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 module.exports = router;

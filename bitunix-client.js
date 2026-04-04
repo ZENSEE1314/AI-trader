@@ -166,11 +166,19 @@ class BitunixClient {
   }
 
   async getFills({ symbol, limit = 20 } = {}) {
-    const body = { limit };
-    if (symbol) body.symbol = symbol;
+    const body = { symbol, limit };
     const data = await this._post('/api/v1/futures/trade/get_fills', body);
     if (Array.isArray(data)) return data;
     return data?.fillList || data?.list || data?.fills || [];
+  }
+
+  // Raw POST — returns full response including code/msg for debugging
+  async _rawPost(path, body = {}) {
+    const bodyStr = this._compressBody(body);
+    const { headers } = this._sign('', bodyStr);
+    const url = `${BASE_URL}${path}`;
+    const res = await fetch(url, { method: 'POST', headers, body: bodyStr, timeout: REQUEST_TIMEOUT, ...getFetchOptions() });
+    return res.json();
   }
 
   // ── Market Data ────────────────────────────────────────────
