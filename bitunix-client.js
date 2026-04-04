@@ -147,6 +147,27 @@ class BitunixClient {
     return this._post('/api/v1/futures/tpsl/position/place_order', body);
   }
 
+  // ── Order / Trade History ───────────────────────────────────
+
+  async getHistoryOrders({ symbol, pageNum = 1, pageSize = 10 } = {}) {
+    const body = { pageNum, pageSize };
+    if (symbol) body.symbol = symbol;
+    return this._post('/api/v1/futures/trade/get_history_orders', body);
+  }
+
+  async getHistoryTrades({ symbol, pageNum = 1, pageSize = 10 } = {}) {
+    const body = { pageNum, pageSize };
+    if (symbol) body.symbol = symbol;
+    return this._post('/api/v1/futures/trade/get_history_trades', body);
+  }
+
+  // ── Market Data ────────────────────────────────────────────
+
+  async getMarketPrice(symbol) {
+    const data = await this._get('/api/v1/futures/market/get_latest_price', { symbol });
+    return data;
+  }
+
   // ── Convenience: match Binance-like interface ──────────────
 
   async getAccountInformation() {

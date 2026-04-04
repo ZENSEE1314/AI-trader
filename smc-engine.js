@@ -314,6 +314,27 @@ async function analyzeLHHL(ticker, params, dailyBiasCache) {
 
   const { bias, pdh, pdl } = dailyInfo;
 
+  // Validate daily bias with latest 4H candle — reject stale bias
+  try {
+    const klines4h = await fetchKlines(symbol, '4h', 3);
+    if (klines4h && klines4h.length >= 2) {
+      const last4h = klines4h[klines4h.length - 2]; // last completed 4H candle
+      const open4h = parseFloat(last4h[1]);
+      const close4h = parseFloat(last4h[4]);
+      const is4hGreen = close4h > open4h;
+      // If daily says bearish but last 4H is green (buyers stepping in), skip
+      if (bias === 'bearish' && is4hGreen) {
+        bLog.scan(`${symbol}: daily bearish but 4H green — bias conflict, skipping`);
+        return null;
+      }
+      // If daily says bullish but last 4H is red (sellers stepping in), skip
+      if (bias === 'bullish' && !is4hGreen) {
+        bLog.scan(`${symbol}: daily bullish but 4H red — bias conflict, skipping`);
+        return null;
+      }
+    }
+  } catch { /* continue if 4H data unavailable */ }
+
   // ┌─────────────────────────────────────────────────────────┐
   // │ Step 2: HTF Structure (15M + 3M)                       │
   // └─────────────────────────────────────────────────────────┘
@@ -331,16 +352,16 @@ async function analyzeLHHL(ticker, params, dailyBiasCache) {
   const struct1m = getStructure(klines1m, SWING_LENGTHS['1m']);
 
   // HTF must align with daily bias — use 15M as the trend gate
-  // 3M is too fast/noisy for trend confirmation, use it for setup only
-  const isBullishHTF = (struct15m.trend === 'bullish' || struct15m.trend === 'bullish_lean');
-  const isBearishHTF = (struct15m.trend === 'bearish' || struct15m.trend === 'bearish_lean');
+  // Require strict trend (HH+HL or LH+LL), not lean variants (single swing)
+  const isBullishHTF = struct15m.trend === 'bullish';
+  const isBearishHTF = struct15m.trend === 'bearish';
 
   let direction = null;
   if (bias === 'bullish' && isBullishHTF) direction = 'LONG';
   else if (bias === 'bearish' && isBearishHTF) direction = 'SHORT';
 
   if (!direction) {
-    bLog.scan(`${symbol}: bias=${bias} 15M=${struct15m.trend} — HTF not aligned`);
+    bLog.scan(`${symbol}: bias=${bias} 15M=${struct15m.trend} — HTF not aligned (strict)`);
     return null;
   }
 
@@ -416,8 +437,9 @@ async function analyzeLHHL(ticker, params, dailyBiasCache) {
     dynamicTP = baseTpPct * 0.67;    // ~67% of TP
     volLabel = 'NORMAL';
   } else {
-    dynamicTP = baseTpPct * 0.44;    // ~44% of TP
-    volLabel = 'WEAK';
+    // Weak volume — skip entry entirely to avoid choppy market losses
+    bLog.scan(`${symbol}: ${direction} setup valid but volume too weak (${volRatio.toFixed(2)}x avg) — skipping`);
+    return null;
   }
 
   const sl = direction === 'LONG' ? price * (1 - baseSlPct) : price * (1 + baseSlPct);

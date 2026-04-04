@@ -1369,6 +1369,24 @@ async function syncTradeStatus() {
                   .getSymbolPriceTicker({ symbol: trade.symbol }).catch(() => null);
                 exitPrice = ticker ? parseFloat(ticker.price) : entryPrice;
               }
+            } else if (key.platform === 'bitunix') {
+              try {
+                const bxClient = new BitunixClient({ apiKey, apiSecret });
+                const histTrades = await bxClient.getHistoryTrades({ symbol: trade.symbol, pageSize: 5 });
+                const tradeList = Array.isArray(histTrades) ? histTrades : (histTrades?.orderList || []);
+                if (tradeList.length > 0) {
+                  exitPrice = parseFloat(tradeList[0].price || tradeList[0].avgPrice || entryPrice);
+                } else {
+                  const priceData = await bxClient.getMarketPrice(trade.symbol);
+                  exitPrice = parseFloat(priceData?.lastPrice || priceData?.price || entryPrice);
+                }
+              } catch {
+                try {
+                  const bxClient = new BitunixClient({ apiKey, apiSecret });
+                  const priceData = await bxClient.getMarketPrice(trade.symbol);
+                  exitPrice = parseFloat(priceData?.lastPrice || priceData?.price || entryPrice);
+                } catch { /* keep entryPrice as fallback */ }
+              }
             }
             const isLong = trade.direction !== 'SHORT';
             const pnlPct = isLong
