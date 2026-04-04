@@ -640,23 +640,31 @@ router.delete('/global-tokens/:symbol', async (req, res) => {
   }
 });
 
-// ── One-time fix: re-sync Bitunix trades with $0.00 PnL ────
+// ── Force re-sync all trades with exchange data ────
 router.post('/fix-bitunix-pnl', async (req, res) => {
   try {
     const cryptoUtils = require('../crypto-utils');
     const { BitunixClient } = require('../bitunix-client');
+    const { USDMClient } = require('binance');
+    const getBinanceRequestOptions = () => {
+      const PROXY_URL = process.env.QUOTAGUARDSTATIC_URL;
+      if (!PROXY_URL) return {};
+      const { HttpsProxyAgent } = require('https-proxy-agent');
+      return { requestOptions: { agent: new HttpsProxyAgent(PROXY_URL) } };
+    };
 
-    // Find all Bitunix trades with $0.00 PnL that are LOSS or OPEN
+    // Find all trades that need syncing (OPEN, $0 PnL, or NULL exit)
     const badTrades = await query(
       `SELECT t.*, ak.api_key_enc, ak.iv, ak.auth_tag,
               ak.api_secret_enc, ak.secret_iv, ak.secret_auth_tag,
               ak.platform
        FROM trades t
        JOIN api_keys ak ON ak.id = t.api_key_id
-       WHERE ak.platform = 'bitunix'
-         AND (t.pnl_usdt = 0 OR t.pnl_usdt IS NULL OR t.status = 'OPEN')
+       WHERE t.status = 'OPEN'
+          OR (t.pnl_usdt = 0 AND t.exit_price IS NOT NULL)
+          OR t.pnl_usdt IS NULL
        ORDER BY t.created_at DESC
-       LIMIT 50`
+       LIMIT 100`
     );
 
     if (!badTrades.length) return res.json({ ok: true, fixed: 0, message: 'No trades to fix' });
@@ -666,44 +674,92 @@ router.post('/fix-bitunix-pnl', async (req, res) => {
       try {
         const apiKey = cryptoUtils.decrypt(trade.api_key_enc, trade.iv, trade.auth_tag);
         const apiSecret = cryptoUtils.decrypt(trade.api_secret_enc, trade.secret_iv, trade.secret_auth_tag);
-        const client = new BitunixClient({ apiKey, apiSecret });
 
         const entryPrice = parseFloat(trade.entry_price);
-        let exitPrice = entryPrice;
-
-        // Check if position is still open
-        const account = await client.getAccountInformation();
-        const openPos = (account.positions || []).find(p => p.symbol === trade.symbol);
-
-        if (openPos) {
-          // Still open — update live PnL
-          const livePnl = parseFloat(openPos.unrealizedProfit || 0);
-          await query('UPDATE trades SET pnl_usdt = $1 WHERE id = $2', [livePnl, trade.id]);
-          results.push({ id: trade.id, symbol: trade.symbol, status: 'STILL_OPEN', pnl: livePnl });
-          continue;
-        }
-
-        // Position closed — try to get fill price
-        try {
-          const histTrades = await client.getHistoryTrades({ symbol: trade.symbol, pageSize: 10 });
-          const tradeList = Array.isArray(histTrades) ? histTrades : (histTrades?.orderList || []);
-          if (tradeList.length > 0) {
-            exitPrice = parseFloat(tradeList[0].price || tradeList[0].avgPrice || entryPrice);
-          }
-        } catch {
-          try {
-            const priceData = await client.getMarketPrice(trade.symbol);
-            exitPrice = parseFloat(priceData?.lastPrice || priceData?.price || entryPrice);
-          } catch { /* keep entryPrice */ }
-        }
-
+        const qty = parseFloat(trade.quantity || 0);
         const isLong = trade.direction !== 'SHORT';
-        const pnlPct = isLong
-          ? (exitPrice - entryPrice) / entryPrice * 100
-          : (entryPrice - exitPrice) / entryPrice * 100;
-        const qty = parseFloat(trade.quantity || 1);
-        const pnlUsdt = parseFloat((pnlPct * qty * entryPrice / 100).toFixed(4));
-        const status = pnlPct > 0 ? 'WIN' : 'LOSS';
+        let exitPrice = entryPrice;
+        let realizedPnl = null;
+        let isStillOpen = false;
+
+        if (trade.platform === 'binance') {
+          const client = new USDMClient({ api_key: apiKey, api_secret: apiSecret }, getBinanceRequestOptions());
+          const account = await client.getAccountInformation({ omitZeroBalances: false });
+          const openPos = account.positions.find(p => p.symbol === trade.symbol && parseFloat(p.positionAmt) !== 0);
+
+          if (openPos) {
+            const livePnl = parseFloat(openPos.unrealizedProfit || 0);
+            await query('UPDATE trades SET pnl_usdt = $1 WHERE id = $2', [livePnl, trade.id]);
+            results.push({ id: trade.id, symbol: trade.symbol, status: 'STILL_OPEN', pnl: livePnl });
+            continue;
+          }
+
+          // Closed — get fill data
+          try {
+            const openTime = trade.created_at ? new Date(trade.created_at).getTime() : Date.now() - 7 * 86400000;
+            const fills = await client.getAccountTradeList({ symbol: trade.symbol, startTime: openTime, limit: 50 });
+            const closeSide = isLong ? 'SELL' : 'BUY';
+            const closeFills = (fills || []).filter(f => f.side === closeSide);
+            if (closeFills.length > 0) {
+              let totalQty = 0, totalValue = 0, totalPnl = 0;
+              for (const f of closeFills) {
+                const fQty = parseFloat(f.qty);
+                totalQty += fQty;
+                totalValue += fQty * parseFloat(f.price);
+                totalPnl += parseFloat(f.realizedPnl || 0);
+              }
+              if (totalQty > 0) exitPrice = totalValue / totalQty;
+              if (totalPnl !== 0) realizedPnl = totalPnl;
+            }
+          } catch {
+            try {
+              const ticker = await client.getSymbolPriceTicker({ symbol: trade.symbol });
+              exitPrice = parseFloat(ticker.price);
+            } catch { /* keep entryPrice */ }
+          }
+        } else if (trade.platform === 'bitunix') {
+          const client = new BitunixClient({ apiKey, apiSecret });
+          const account = await client.getAccountInformation();
+          const openPos = (account.positions || []).find(p => p.symbol === trade.symbol);
+
+          if (openPos) {
+            const livePnl = parseFloat(openPos.unrealizedProfit || 0);
+            await query('UPDATE trades SET pnl_usdt = $1 WHERE id = $2', [livePnl, trade.id]);
+            results.push({ id: trade.id, symbol: trade.symbol, status: 'STILL_OPEN', pnl: livePnl });
+            continue;
+          }
+
+          // Closed — get close order price
+          try {
+            const histOrders = await client.getHistoryOrders({ symbol: trade.symbol, pageSize: 10 });
+            const orderList = Array.isArray(histOrders) ? histOrders : (histOrders?.orderList || histOrders?.list || []);
+            const closeOrder = orderList.find(o =>
+              o.tradeSide === 'CLOSE' && parseFloat(o.avgPrice || o.price || 0) > 0
+            );
+            if (closeOrder) {
+              exitPrice = parseFloat(closeOrder.avgPrice || closeOrder.price);
+              if (closeOrder.profit) realizedPnl = parseFloat(closeOrder.profit);
+            } else if (orderList.length > 0) {
+              exitPrice = parseFloat(orderList[0].avgPrice || orderList[0].price || entryPrice);
+            }
+          } catch {
+            try {
+              const priceData = await client.getMarketPrice(trade.symbol);
+              exitPrice = parseFloat(priceData?.lastPrice || priceData?.price || entryPrice);
+            } catch { /* keep entryPrice */ }
+          }
+        }
+
+        // Calculate PnL
+        let pnlUsdt;
+        if (realizedPnl !== null) {
+          pnlUsdt = parseFloat(realizedPnl.toFixed(4));
+        } else {
+          pnlUsdt = isLong
+            ? parseFloat(((exitPrice - entryPrice) * qty).toFixed(4))
+            : parseFloat(((entryPrice - exitPrice) * qty).toFixed(4));
+        }
+        const status = pnlUsdt > 0 ? 'WIN' : 'LOSS';
 
         await query(
           `UPDATE trades SET status = $1, pnl_usdt = $2, exit_price = $3, closed_at = COALESCE(closed_at, NOW())
@@ -711,19 +767,7 @@ router.post('/fix-bitunix-pnl', async (req, res) => {
           [status, pnlUsdt, exitPrice, trade.id]
         );
 
-        // Record profit split for winning trades
-        if (pnlUsdt > 0) {
-          const { query: dbQuery } = require('../db');
-          const keyRows = await dbQuery(
-            'SELECT profit_share_user_pct, profit_share_admin_pct FROM api_keys WHERE id = $1',
-            [trade.api_key_id]
-          );
-          const userPct = keyRows.length > 0 ? (parseFloat(keyRows[0].profit_share_user_pct) || 60) : 60;
-          const userShare = pnlUsdt * userPct / 100;
-          await dbQuery('UPDATE users SET cash_wallet = cash_wallet + $1 WHERE id = $2', [userShare, trade.user_id]);
-        }
-
-        results.push({ id: trade.id, symbol: trade.symbol, status, pnl: pnlUsdt, exitPrice });
+        results.push({ id: trade.id, symbol: trade.symbol, platform: trade.platform, status, pnl: pnlUsdt, exitPrice });
       } catch (err) {
         results.push({ id: trade.id, symbol: trade.symbol, error: err.message });
       }
@@ -731,7 +775,7 @@ router.post('/fix-bitunix-pnl', async (req, res) => {
 
     res.json({ ok: true, fixed: results.length, results });
   } catch (err) {
-    console.error('Fix Bitunix PnL error:', err.message);
+    console.error('Fix trade sync error:', err.message);
     res.status(500).json({ error: 'Server error' });
   }
 });

@@ -1357,27 +1357,60 @@ async function syncTradeStatus() {
           const exchangePos = openSymbols.get(trade.symbol);
 
           if (!exchangePos) {
+            // Position closed on exchange — find the exit price
             const entryPrice = parseFloat(trade.entry_price);
+            const qty = parseFloat(trade.quantity || 0);
+            const isLong = trade.direction !== 'SHORT';
             let exitPrice = entryPrice;
+            let realizedPnl = null;
+
             if (key.platform === 'binance') {
               try {
                 const binClient = new USDMClient({ api_key: apiKey, api_secret: apiSecret }, getBinanceRequestOptions());
-                const fills = await binClient.getAccountTradeList({ symbol: trade.symbol, limit: 5 });
+                // Get fills after the trade was opened
+                const openTime = trade.created_at ? new Date(trade.created_at).getTime() : Date.now() - 86400000;
+                const fills = await binClient.getAccountTradeList({ symbol: trade.symbol, startTime: openTime, limit: 50 });
                 if (fills && fills.length > 0) {
-                  exitPrice = parseFloat(fills[fills.length - 1].price);
+                  // Find the close fills (opposite side of entry)
+                  const closeSide = isLong ? 'SELL' : 'BUY';
+                  const closeFills = fills.filter(f => f.side === closeSide && f.positionSide !== 'BOTH' || f.side === closeSide);
+                  if (closeFills.length > 0) {
+                    // Weight-averaged exit price from close fills
+                    let totalQty = 0, totalValue = 0, totalPnl = 0;
+                    for (const f of closeFills) {
+                      const fQty = parseFloat(f.qty);
+                      totalQty += fQty;
+                      totalValue += fQty * parseFloat(f.price);
+                      totalPnl += parseFloat(f.realizedPnl || 0);
+                    }
+                    if (totalQty > 0) exitPrice = totalValue / totalQty;
+                    if (totalPnl !== 0) realizedPnl = totalPnl;
+                  } else if (fills.length > 0) {
+                    exitPrice = parseFloat(fills[fills.length - 1].price);
+                  }
                 }
               } catch {
-                const ticker = await new USDMClient({ api_key: apiKey, api_secret: apiSecret }, getBinanceRequestOptions())
-                  .getSymbolPriceTicker({ symbol: trade.symbol }).catch(() => null);
-                exitPrice = ticker ? parseFloat(ticker.price) : entryPrice;
+                try {
+                  const ticker = await new USDMClient({ api_key: apiKey, api_secret: apiSecret }, getBinanceRequestOptions())
+                    .getSymbolPriceTicker({ symbol: trade.symbol });
+                  exitPrice = parseFloat(ticker.price);
+                } catch { /* keep entryPrice */ }
               }
             } else if (key.platform === 'bitunix') {
               try {
                 const bxClient = new BitunixClient({ apiKey, apiSecret });
-                const histTrades = await bxClient.getHistoryTrades({ symbol: trade.symbol, pageSize: 5 });
-                const tradeList = Array.isArray(histTrades) ? histTrades : (histTrades?.orderList || []);
-                if (tradeList.length > 0) {
-                  exitPrice = parseFloat(tradeList[0].price || tradeList[0].avgPrice || entryPrice);
+                const histOrders = await bxClient.getHistoryOrders({ symbol: trade.symbol, pageSize: 10 });
+                const orderList = Array.isArray(histOrders) ? histOrders : (histOrders?.orderList || histOrders?.list || []);
+                // Find the close order
+                const closeOrder = orderList.find(o =>
+                  o.tradeSide === 'CLOSE' && parseFloat(o.avgPrice || o.price || 0) > 0
+                );
+                if (closeOrder) {
+                  exitPrice = parseFloat(closeOrder.avgPrice || closeOrder.price);
+                  if (closeOrder.profit) realizedPnl = parseFloat(closeOrder.profit);
+                } else if (orderList.length > 0) {
+                  const recent = orderList[0];
+                  exitPrice = parseFloat(recent.avgPrice || recent.price || entryPrice);
                 } else {
                   const priceData = await bxClient.getMarketPrice(trade.symbol);
                   exitPrice = parseFloat(priceData?.lastPrice || priceData?.price || entryPrice);
@@ -1387,15 +1420,21 @@ async function syncTradeStatus() {
                   const bxClient = new BitunixClient({ apiKey, apiSecret });
                   const priceData = await bxClient.getMarketPrice(trade.symbol);
                   exitPrice = parseFloat(priceData?.lastPrice || priceData?.price || entryPrice);
-                } catch { /* keep entryPrice as fallback */ }
+                } catch { /* keep entryPrice */ }
               }
             }
-            const isLong = trade.direction !== 'SHORT';
-            const pnlPct = isLong
-              ? (exitPrice - entryPrice) / entryPrice * 100
-              : (entryPrice - exitPrice) / entryPrice * 100;
-            const pnlUsdt = parseFloat((pnlPct * parseFloat(trade.quantity || 1) * entryPrice / 100).toFixed(4));
-            const status = pnlPct > 0 ? 'WIN' : 'LOSS';
+
+            // Calculate PnL: use exchange realized PnL if available, otherwise compute
+            let pnlUsdt;
+            if (realizedPnl !== null) {
+              pnlUsdt = parseFloat(realizedPnl.toFixed(4));
+            } else {
+              // PnL = (exit - entry) * qty for LONG, (entry - exit) * qty for SHORT
+              pnlUsdt = isLong
+                ? parseFloat(((exitPrice - entryPrice) * qty).toFixed(4))
+                : parseFloat(((entryPrice - exitPrice) * qty).toFixed(4));
+            }
+            const status = pnlUsdt > 0 ? 'WIN' : 'LOSS';
 
             await db.query(
               `UPDATE trades SET status = $1, pnl_usdt = $2, exit_price = $3, closed_at = NOW()
@@ -1409,6 +1448,7 @@ async function syncTradeStatus() {
               await recordProfitSplit(db, trade.user_id, trade.api_key_id, pnlUsdt, trade.symbol);
             }
           } else {
+            // Still open — update live PnL
             const livePnl = parseFloat(exchangePos.pnl.toFixed(4));
             await db.query(
               `UPDATE trades SET pnl_usdt = $1 WHERE id = $2`,
