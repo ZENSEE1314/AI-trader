@@ -153,7 +153,6 @@ class BitunixClient {
     const body = { pageNum, pageSize };
     if (symbol) body.symbol = symbol;
     const data = await this._post('/api/v1/futures/trade/get_history_orders', body);
-    // Normalize: return the order list array
     if (Array.isArray(data)) return data;
     return data?.orderList || data?.list || [];
   }
@@ -162,9 +161,16 @@ class BitunixClient {
     const body = { pageNum, pageSize };
     if (symbol) body.symbol = symbol;
     const data = await this._post('/api/v1/futures/trade/get_history_trades', body);
-    // Normalize: return the trade list array
     if (Array.isArray(data)) return data;
     return data?.tradeList || data?.orderList || data?.list || [];
+  }
+
+  async getFills({ symbol, limit = 20 } = {}) {
+    const body = { limit };
+    if (symbol) body.symbol = symbol;
+    const data = await this._post('/api/v1/futures/trade/get_fills', body);
+    if (Array.isArray(data)) return data;
+    return data?.fillList || data?.list || data?.fills || [];
   }
 
   // ── Market Data ────────────────────────────────────────────

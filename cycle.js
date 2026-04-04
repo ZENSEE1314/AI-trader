@@ -1400,44 +1400,38 @@ async function syncTradeStatus() {
               const bxClient = new BitunixClient({ apiKey, apiSecret });
               let found = false;
 
-              // Method 1: History orders — look for CLOSE order
+              // Method 1: get_fills — actual execution data with realized PnL
               try {
-                const orderList = await bxClient.getHistoryOrders({ symbol: trade.symbol, pageSize: 20 });
-                bLog.system(`Bitunix histOrders for ${trade.symbol}: ${JSON.stringify(orderList).substring(0, 500)}`);
-                for (const o of orderList) {
-                  const oPrice = parseFloat(o.avgPrice || o.price || 0);
-                  if (o.tradeSide === 'CLOSE' && oPrice > 0) {
-                    exitPrice = oPrice;
-                    if (o.profit != null) realizedPnl = parseFloat(o.profit);
+                const fills = await bxClient.getFills({ symbol: trade.symbol, limit: 20 });
+                bLog.system(`Bitunix fills for ${trade.symbol}: ${JSON.stringify(fills).substring(0, 800)}`);
+                const closeSide = isLong ? 'SELL' : 'BUY';
+                for (const f of fills) {
+                  const fPrice = parseFloat(f.price || f.filledPrice || f.avgPrice || 0);
+                  if (fPrice > 0 && (f.side === closeSide || f.tradeSide === 'CLOSE')) {
+                    exitPrice = fPrice;
+                    if (f.realizedPnl != null) realizedPnl = parseFloat(f.realizedPnl);
+                    else if (f.profit != null) realizedPnl = parseFloat(f.profit);
                     found = true;
                     break;
                   }
                 }
-              } catch (e) { bLog.error(`Bitunix histOrders error: ${e.message}`); }
+              } catch (e) { bLog.error(`Bitunix fills error: ${e.message}`); }
 
-              // Method 2: History trades — look for fill with close side
+              // Method 2: History orders — look for CLOSE order
               if (!found) {
                 try {
-                  const tradeList = await bxClient.getHistoryTrades({ symbol: trade.symbol, pageSize: 20 });
-                  bLog.system(`Bitunix histTrades for ${trade.symbol}: ${JSON.stringify(tradeList).substring(0, 500)}`);
-                  const closeSide = isLong ? 'SELL' : 'BUY';
-                  for (const t of tradeList) {
-                    const tPrice = parseFloat(t.price || t.avgPrice || t.filledPrice || 0);
-                    if (tPrice > 0 && (t.side === closeSide || t.tradeSide === 'CLOSE')) {
-                      exitPrice = tPrice;
-                      if (t.profit != null) realizedPnl = parseFloat(t.profit);
-                      if (t.realizedPnl != null) realizedPnl = parseFloat(t.realizedPnl);
+                  const orderList = await bxClient.getHistoryOrders({ symbol: trade.symbol, pageSize: 20 });
+                  bLog.system(`Bitunix histOrders for ${trade.symbol}: ${JSON.stringify(orderList).substring(0, 500)}`);
+                  for (const o of orderList) {
+                    const oPrice = parseFloat(o.avgPrice || o.price || 0);
+                    if (o.tradeSide === 'CLOSE' && oPrice > 0) {
+                      exitPrice = oPrice;
+                      if (o.profit != null) realizedPnl = parseFloat(o.profit);
                       found = true;
                       break;
                     }
                   }
-                  // If no close-side match, use most recent trade as fallback
-                  if (!found && tradeList.length > 0) {
-                    const recent = tradeList[0];
-                    const rPrice = parseFloat(recent.price || recent.avgPrice || recent.filledPrice || 0);
-                    if (rPrice > 0) { exitPrice = rPrice; found = true; }
-                  }
-                } catch (e) { bLog.error(`Bitunix histTrades error: ${e.message}`); }
+                } catch (e) { bLog.error(`Bitunix histOrders error: ${e.message}`); }
               }
 
               // Method 3: Current market price as last resort

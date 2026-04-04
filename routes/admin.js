@@ -731,39 +731,34 @@ router.post('/fix-bitunix-pnl', async (req, res) => {
 
           let found = false;
 
-          // Method 1: History orders
+          // Method 1: get_fills — actual execution data with realized PnL
           try {
-            const orderList = await client.getHistoryOrders({ symbol: trade.symbol, pageSize: 20 });
-            for (const o of orderList) {
-              const oPrice = parseFloat(o.avgPrice || o.price || 0);
-              if (o.tradeSide === 'CLOSE' && oPrice > 0) {
-                exitPrice = oPrice;
-                if (o.profit != null) realizedPnl = parseFloat(o.profit);
+            const fills = await client.getFills({ symbol: trade.symbol, limit: 20 });
+            const closeSide = isLong ? 'SELL' : 'BUY';
+            for (const f of fills) {
+              const fPrice = parseFloat(f.price || f.filledPrice || f.avgPrice || 0);
+              if (fPrice > 0 && (f.side === closeSide || f.tradeSide === 'CLOSE')) {
+                exitPrice = fPrice;
+                if (f.realizedPnl != null) realizedPnl = parseFloat(f.realizedPnl);
+                else if (f.profit != null) realizedPnl = parseFloat(f.profit);
                 found = true;
                 break;
               }
             }
           } catch { /* try next method */ }
 
-          // Method 2: History trades
+          // Method 2: History orders
           if (!found) {
             try {
-              const tradeList = await client.getHistoryTrades({ symbol: trade.symbol, pageSize: 20 });
-              const closeSide = isLong ? 'SELL' : 'BUY';
-              for (const t of tradeList) {
-                const tPrice = parseFloat(t.price || t.avgPrice || t.filledPrice || 0);
-                if (tPrice > 0 && (t.side === closeSide || t.tradeSide === 'CLOSE')) {
-                  exitPrice = tPrice;
-                  if (t.profit != null) realizedPnl = parseFloat(t.profit);
-                  if (t.realizedPnl != null) realizedPnl = parseFloat(t.realizedPnl);
+              const orderList = await client.getHistoryOrders({ symbol: trade.symbol, pageSize: 20 });
+              for (const o of orderList) {
+                const oPrice = parseFloat(o.avgPrice || o.price || 0);
+                if (o.tradeSide === 'CLOSE' && oPrice > 0) {
+                  exitPrice = oPrice;
+                  if (o.profit != null) realizedPnl = parseFloat(o.profit);
                   found = true;
                   break;
                 }
-              }
-              if (!found && tradeList.length > 0) {
-                const recent = tradeList[0];
-                const rPrice = parseFloat(recent.price || recent.avgPrice || recent.filledPrice || 0);
-                if (rPrice > 0) { exitPrice = rPrice; found = true; }
               }
             } catch { /* try next method */ }
           }
