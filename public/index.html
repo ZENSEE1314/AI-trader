@@ -58,7 +58,7 @@
         <div class="landing-nav-center">
           <a href="#how-it-works">How It Works</a>
           <a href="#features">Features</a>
-          <a href="#pricing">Pricing</a>
+          <a href="#pricing">Profit Split</a>
           <a href="/chart.html" target="_blank" style="color:var(--color-accent);">Chart</a>
         </div>
         <div class="landing-nav-right">
@@ -71,7 +71,7 @@
       <div class="landing-nav-mobile">
         <a href="#how-it-works">How It Works</a>
         <a href="#features">Features</a>
-        <a href="#pricing">Pricing</a>
+        <a href="#pricing">Profit Split</a>
         <a href="/chart.html" style="color:var(--color-accent);">Chart</a>
         <button class="btn btn-primary btn-sm landing-nav-mobile-btn" onclick="window.CryptoBot.goToAuth()">Login / Sign Up</button>
       </div>
@@ -88,7 +88,7 @@
               AI-Powered Trading Engine
             </div>
             <h1 class="landing-title">Trade Like The<br><span class="landing-title-gold">Top 1%</span></h1>
-            <p class="landing-tagline">Institutional-grade AI technology scans 40+ coins across 7 indicators, executing high-probability futures trades 24/7 on your exchange. Fully automated. Zero emotion.</p>
+            <p class="landing-tagline">AI-powered trading engine scans 40+ coins 24/7, executing high-probability futures trades on your exchange. No monthly fees — we only earn when you profit. 60/40 split.</p>
             <div class="landing-hero-btns">
               <button class="btn btn-gold btn-lg" onclick="window.CryptoBot.goToAuth()">
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
@@ -284,45 +284,31 @@
         </div>
       </section>
 
-      <!-- ── Pricing ── -->
+      <!-- ── How It Works (Profit Split) ── -->
       <section class="landing-section" id="pricing" data-animate>
         <div class="landing-section-header">
-          <span class="landing-section-tag">Simple pricing</span>
-          <h2 class="landing-section-title">Choose Your Edge</h2>
-          <p class="landing-section-sub">No hidden fees. No contracts. Cancel anytime.</p>
+          <span class="landing-section-tag">Win together</span>
+          <h2 class="landing-section-title">We Trade. We Split Profits.</h2>
+          <p class="landing-section-sub">No monthly fees. No upfront cost. We only earn when you win.</p>
         </div>
         <div class="landing-plans">
-          <!-- Signal Plan (LEFT) -->
-          <div class="landing-plan">
-            <div class="plan-badge plan-badge-popular">Popular</div>
-            <h3>Telegram Signal Channel</h3>
-            <p class="plan-desc">Manual execution with professional signals</p>
-            <div class="plan-price" id="landing-signal-price">$500<span>/month</span></div>
+          <div class="landing-plan plan-premium" style="max-width:520px;margin:0 auto;">
+            <div class="plan-ribbon">FREE TO START</div>
+            <h3>AI Auto Trading</h3>
+            <p class="plan-desc">Fully automated, hands-free execution on your exchange</p>
+            <div class="plan-price" style="font-size:2.4rem;">60 / 40<span> profit split</span></div>
+            <p style="font-size:0.85rem;color:var(--color-text-muted);margin-top:-8px;margin-bottom:16px;">You keep 60% of profits. We take 40% only on winning trades.</p>
             <ul class="plan-features">
-              <li>Private VIP Telegram channel</li>
-              <li>Real-time trade signals with TP/SL</li>
-              <li>SMC + multi-indicator analysis</li>
-              <li>Entry, 3x TP levels, and SL for every trade</li>
-              <li>Direct access to signal alerts 24/7</li>
-            </ul>
-            <button class="btn btn-ghost btn-plan" onclick="window.CryptoBot.goToAuth()">Join Signal Channel</button>
-          </div>
-          <!-- VIP Bot Plan (RIGHT) -->
-          <div class="landing-plan plan-premium">
-            <div class="plan-ribbon">RECOMMENDED</div>
-            <div class="plan-badge plan-badge-vip">VIP</div>
-            <h3>AI Auto Trading Bot</h3>
-            <p class="plan-desc">Fully automated, hands-free execution</p>
-            <div class="plan-price" id="landing-bot-price">$1,000<span>/month</span></div>
-            <ul class="plan-features">
-              <li>Everything in Signal Channel</li>
+              <li>Zero monthly subscription fees</li>
+              <li>AI scans 40+ coins 24/7</li>
               <li>Fully automated trade execution</li>
-              <li>Up to 3 API keys on Bitunix</li>
+              <li>Trailing stop-loss locks in profits</li>
+              <li>Connect up to 3 API keys (Binance &amp; Bitunix)</li>
               <li>Custom leverage, risk &amp; position settings</li>
               <li>Real-time P&amp;L dashboard</li>
               <li>Referral commission program</li>
             </ul>
-            <button class="btn btn-gold btn-plan" onclick="window.CryptoBot.goToAuth()">Start Auto Trading</button>
+            <button class="btn btn-gold btn-plan" onclick="window.CryptoBot.goToAuth()">Start Trading Free</button>
           </div>
         </div>
       </section>
@@ -340,19 +326,19 @@
           </details>
           <details class="landing-faq-item">
             <summary>Which exchanges are supported?</summary>
-            <p>Currently we support Bitunix Futures. You can connect up to 3 API keys simultaneously, each with independent risk settings (leverage, position size, max loss).</p>
+            <p>We support Binance USDT-M Futures and Bitunix Futures. You can connect up to 3 API keys simultaneously, each with independent risk settings (leverage, position size, max loss).</p>
           </details>
           <details class="landing-faq-item">
             <summary>How does the AI decide when to trade?</summary>
-            <p>Our engine scans 40+ coins every 10 minutes using 7 indicators in confluence: RSI, EMA crossovers, MACD, Bollinger Bands, Stochastic, Volume analysis, and Smart Money Concepts (SMC). A trade only fires when multiple indicators align on the same direction.</p>
+            <p>Our engine scans 40+ coins every 3 minutes using Smart Money Concepts (SMC) with multi-timeframe confluence (daily, 4H, 15M, 3M, 1M). A trade only fires when structure, bias, and volume all align. Trailing stop-loss automatically locks in profits as the trade moves in your favour.</p>
           </details>
           <details class="landing-faq-item">
-            <summary>What is the difference between the Signal Channel and the Auto Bot?</summary>
-            <p>The Signal Channel delivers real-time trade alerts to a private Telegram group. You execute manually. The Auto Bot does everything automatically: it receives the signal and places the trade on your exchange with your risk settings, including entry, stop loss, and 3 take profit levels.</p>
+            <summary>How does the profit split work?</summary>
+            <p>There are no monthly fees. When a trade closes in profit, 60% goes to you and 40% is the platform fee. Losing trades cost you nothing extra. Your 60% share is automatically added to your cash wallet.</p>
           </details>
           <details class="landing-faq-item">
-            <summary>Can I cancel my subscription at any time?</summary>
-            <p>Yes. There are no contracts or lock-in periods. You can cancel from your dashboard at any time. Your access remains active until the end of your billing period.</p>
+            <summary>Can I stop trading at any time?</summary>
+            <p>Yes. Simply disable your API key from the dashboard. There are no contracts or lock-in periods. Open positions will continue to be managed until they close.</p>
           </details>
         </div>
       </section>
@@ -361,10 +347,9 @@
       <section class="landing-section landing-cta" data-animate>
         <div class="landing-cta-inner">
           <h2 class="landing-cta-title">Ready to Trade Smarter?</h2>
-          <p class="landing-cta-sub">Join hundreds of traders using MCT's AI engine to execute high-probability trades around the clock. Your exchange. Your funds. Our intelligence.</p>
+          <p class="landing-cta-sub">Join hundreds of traders using MCT's AI engine to execute high-probability trades around the clock. No fees. We only earn when you win.</p>
           <div class="landing-hero-btns">
-            <button class="btn btn-gold btn-lg" onclick="window.CryptoBot.goToAuth()">Get Started Now</button>
-            <a href="#pricing" class="btn btn-ghost btn-lg">View Pricing</a>
+            <button class="btn btn-gold btn-lg" onclick="window.CryptoBot.goToAuth()">Start Trading Free</button>
           </div>
         </div>
       </section>
@@ -382,7 +367,7 @@
           <div class="landing-footer-links">
             <a href="#how-it-works">How It Works</a>
             <a href="#features">Features</a>
-            <a href="#pricing">Pricing</a>
+            <a href="#pricing">Profit Split</a>
           </div>
         </div>
       </footer>
