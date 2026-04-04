@@ -832,41 +832,30 @@ router.post('/debug-bitunix', async (req, res) => {
       proxyEnabled: require('../proxy-agent').isProxyEnabled(),
     };
 
-    // Test WITH proxy (normal)
-    try { results.withProxy_fills = await client._rawPost('/api/v1/futures/trade/get_fills', { symbol: trade.symbol, pageNum: 1, pageSize: 5 }); } catch (e) { results.withProxy_fills_err = e.message; }
-    try { results.withProxy_histOrders = await client._rawPost('/api/v1/futures/trade/get_history_orders', { symbol: trade.symbol, pageNum: 1, pageSize: 5 }); } catch (e) { results.withProxy_histOrders_err = e.message; }
+    const sym = trade.symbol;
 
-    // Test WITHOUT proxy — direct connection
-    const fetch = require('node-fetch');
-    const crypto = require('crypto');
-    const nonce = crypto.randomBytes(16).toString('hex');
-    const timestamp = Date.now().toString();
-    const body = { symbol: trade.symbol, pageNum: 1, pageSize: 5 };
-    const bodyStr = JSON.stringify(body);
-    const digest = crypto.createHash('sha256').update(nonce + timestamp + apiKey + bodyStr).digest('hex');
-    const sign = crypto.createHash('sha256').update(digest + apiSecret).digest('hex');
-    const headers = { 'api-key': apiKey, nonce, timestamp, sign, 'Content-Type': 'application/json', language: 'en-US' };
+    // Proxy works (fills passed auth last time). Now find correct params/endpoints.
 
-    try {
-      const directRes = await fetch('https://fapi.bitunix.com/api/v1/futures/trade/get_history_orders', {
-        method: 'POST', headers, body: bodyStr, timeout: 15000,
-      });
-      results.noProxy_histOrders = await directRes.json();
-    } catch (e) { results.noProxy_histOrders_err = e.message; }
+    // get_fills — try different body formats
+    try { results.fills_1 = await client._rawPost('/api/v1/futures/trade/get_fills', { symbol: sym, limit: 5 }); } catch (e) { results.fills_1_err = e.message; }
+    try { results.fills_2 = await client._rawPost('/api/v1/futures/trade/get_fills', { symbol: sym, pageSize: 5, pageNum: 1 }); } catch (e) { results.fills_2_err = e.message; }
+    try { results.fills_3 = await client._rawPost('/api/v1/futures/trade/get_fills', { symbol: sym, startTime: Date.now() - 7*86400000, endTime: Date.now() }); } catch (e) { results.fills_3_err = e.message; }
+    try { results.fills_4 = await client._rawPost('/api/v1/futures/trade/get_fills', {}); } catch (e) { results.fills_4_err = e.message; }
 
-    // Also test account without proxy (GET)
-    try {
-      const nonce2 = crypto.randomBytes(16).toString('hex');
-      const ts2 = Date.now().toString();
-      const qp = 'marginCoinUSDT';
-      const d2 = crypto.createHash('sha256').update(nonce2 + ts2 + apiKey + qp + '').digest('hex');
-      const s2 = crypto.createHash('sha256').update(d2 + apiSecret).digest('hex');
-      const h2 = { 'api-key': apiKey, nonce: nonce2, timestamp: ts2, sign: s2, 'Content-Type': 'application/json', language: 'en-US' };
-      const accRes = await fetch('https://fapi.bitunix.com/api/v1/futures/account?marginCoin=USDT', {
-        method: 'GET', headers: h2, timeout: 15000,
-      });
-      results.noProxy_account = await accRes.json();
-    } catch (e) { results.noProxy_account_err = e.message; }
+    // query_order endpoint from docs
+    try { results.queryOrder = await client._rawPost('/api/v1/futures/trade/query_order', { symbol: sym }); } catch (e) { results.queryOrder_err = e.message; }
+
+    // query_orders (plural) endpoint
+    try { results.queryOrders = await client._rawPost('/api/v1/futures/trade/query_orders', { symbol: sym, status: 'FILLED', pageNum: 1, pageSize: 5 }); } catch (e) { results.queryOrders_err = e.message; }
+
+    // get_order_history
+    try { results.orderHistory = await client._rawPost('/api/v1/futures/trade/get_order_history', { symbol: sym, pageNum: 1, pageSize: 5 }); } catch (e) { results.orderHistory_err = e.message; }
+
+    // position history
+    try { results.posHistory = await client._rawPost('/api/v1/futures/position/get_history_positions', { symbol: sym, pageNum: 1, pageSize: 5 }); } catch (e) { results.posHistory_err = e.message; }
+
+    // get pending positions (should work — tests proxy + auth)
+    try { results.openPositions = await client._rawPost('/api/v1/futures/position/get_pending_positions', {}); } catch (e) { results.openPositions_err = e.message; }
 
     res.json(results);
   } catch (err) {
