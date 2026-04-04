@@ -640,4 +640,100 @@ router.delete('/global-tokens/:symbol', async (req, res) => {
   }
 });
 
+// ── One-time fix: re-sync Bitunix trades with $0.00 PnL ────
+router.post('/fix-bitunix-pnl', async (req, res) => {
+  try {
+    const cryptoUtils = require('../crypto-utils');
+    const { BitunixClient } = require('../bitunix-client');
+
+    // Find all Bitunix trades with $0.00 PnL that are LOSS or OPEN
+    const badTrades = await query(
+      `SELECT t.*, ak.api_key_enc, ak.iv, ak.auth_tag,
+              ak.api_secret_enc, ak.secret_iv, ak.secret_auth_tag,
+              ak.platform
+       FROM trades t
+       JOIN api_keys ak ON ak.id = t.api_key_id
+       WHERE ak.platform = 'bitunix'
+         AND (t.pnl_usdt = 0 OR t.pnl_usdt IS NULL OR t.status = 'OPEN')
+       ORDER BY t.created_at DESC
+       LIMIT 50`
+    );
+
+    if (!badTrades.length) return res.json({ ok: true, fixed: 0, message: 'No trades to fix' });
+
+    const results = [];
+    for (const trade of badTrades) {
+      try {
+        const apiKey = cryptoUtils.decrypt(trade.api_key_enc, trade.iv, trade.auth_tag);
+        const apiSecret = cryptoUtils.decrypt(trade.api_secret_enc, trade.secret_iv, trade.secret_auth_tag);
+        const client = new BitunixClient({ apiKey, apiSecret });
+
+        const entryPrice = parseFloat(trade.entry_price);
+        let exitPrice = entryPrice;
+
+        // Check if position is still open
+        const account = await client.getAccountInformation();
+        const openPos = (account.positions || []).find(p => p.symbol === trade.symbol);
+
+        if (openPos) {
+          // Still open — update live PnL
+          const livePnl = parseFloat(openPos.unrealizedProfit || 0);
+          await query('UPDATE trades SET pnl_usdt = $1 WHERE id = $2', [livePnl, trade.id]);
+          results.push({ id: trade.id, symbol: trade.symbol, status: 'STILL_OPEN', pnl: livePnl });
+          continue;
+        }
+
+        // Position closed — try to get fill price
+        try {
+          const histTrades = await client.getHistoryTrades({ symbol: trade.symbol, pageSize: 10 });
+          const tradeList = Array.isArray(histTrades) ? histTrades : (histTrades?.orderList || []);
+          if (tradeList.length > 0) {
+            exitPrice = parseFloat(tradeList[0].price || tradeList[0].avgPrice || entryPrice);
+          }
+        } catch {
+          try {
+            const priceData = await client.getMarketPrice(trade.symbol);
+            exitPrice = parseFloat(priceData?.lastPrice || priceData?.price || entryPrice);
+          } catch { /* keep entryPrice */ }
+        }
+
+        const isLong = trade.direction !== 'SHORT';
+        const pnlPct = isLong
+          ? (exitPrice - entryPrice) / entryPrice * 100
+          : (entryPrice - exitPrice) / entryPrice * 100;
+        const qty = parseFloat(trade.quantity || 1);
+        const pnlUsdt = parseFloat((pnlPct * qty * entryPrice / 100).toFixed(4));
+        const status = pnlPct > 0 ? 'WIN' : 'LOSS';
+
+        await query(
+          `UPDATE trades SET status = $1, pnl_usdt = $2, exit_price = $3, closed_at = COALESCE(closed_at, NOW())
+           WHERE id = $4`,
+          [status, pnlUsdt, exitPrice, trade.id]
+        );
+
+        // Record profit split for winning trades
+        if (pnlUsdt > 0) {
+          const { query: dbQuery } = require('../db');
+          const keyRows = await dbQuery(
+            'SELECT profit_share_user_pct, profit_share_admin_pct FROM api_keys WHERE id = $1',
+            [trade.api_key_id]
+          );
+          const userPct = keyRows.length > 0 ? (parseFloat(keyRows[0].profit_share_user_pct) || 60) : 60;
+          const userShare = pnlUsdt * userPct / 100;
+          await dbQuery('UPDATE users SET cash_wallet = cash_wallet + $1 WHERE id = $2', [userShare, trade.user_id]);
+        }
+
+        results.push({ id: trade.id, symbol: trade.symbol, status, pnl: pnlUsdt, exitPrice });
+      } catch (err) {
+        results.push({ id: trade.id, symbol: trade.symbol, error: err.message });
+      }
+    }
+
+    res.json({ ok: true, fixed: results.length, results });
+  } catch (err) {
+    console.error('Fix Bitunix PnL error:', err.message);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 module.exports = router;
