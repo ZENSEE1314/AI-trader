@@ -458,17 +458,28 @@
 
       const isError = t.status === 'ERROR';
       const errorTip = isError && t.error_msg ? ` title="${escapeHtml(t.error_msg)}"` : '';
-      const statusClass = isError ? 'badge-error' : (t.status === 'OPEN' ? 'badge-open' : (t.status === 'TP' ? 'badge-tp' : (t.status === 'SL' ? 'badge-sl' : '')));
+
+      let statusClass = '';
+      let statusColor = '';
+      if (isError) { statusClass = 'badge-error'; }
+      else if (t.status === 'WIN') { statusClass = 'badge-win'; statusColor = 'color:var(--color-success);'; }
+      else if (t.status === 'LOSS') { statusClass = 'badge-loss'; statusColor = 'color:var(--color-danger);'; }
+      else if (t.status === 'OPEN') { statusClass = 'badge-open'; statusColor = 'color:#f5a623;'; }
+      else if (t.status === 'TP') { statusClass = 'badge-tp'; statusColor = 'color:var(--color-success);'; }
+      else if (t.status === 'SL') { statusClass = 'badge-sl'; statusColor = 'color:var(--color-danger);'; }
+
+      const exitPrice = t.exit_price != null ? parseFloat(t.exit_price).toFixed(4) : '--';
 
       return `<tr${isError ? ' style="opacity:0.6;"' : ''}>
         <td>${formatDate(t.created_at)}</td>
         <td><strong>${escapeHtml(t.symbol || '--')}</strong></td>
         <td><span class="badge ${dirBadge}">${dirLabel}</span></td>
         <td class="text-mono">${t.entry_price != null ? parseFloat(t.entry_price).toFixed(4) : '--'}</td>
+        <td class="text-mono">${exitPrice}</td>
         <td class="text-mono text-danger">${t.sl_price != null ? parseFloat(t.sl_price).toFixed(4) : '--'}</td>
         <td class="text-mono text-success">${t.tp_price != null ? parseFloat(t.tp_price).toFixed(4) : '--'}</td>
         <td class="pnl-value ${pnl >= 0 ? 'text-success' : 'text-danger'}">${formatPnl(pnl)}</td>
-        <td><span class="badge-status ${statusClass}"${errorTip}>${escapeHtml(t.status || '--')}${isError ? ' ⚠️' : ''}</span></td>
+        <td><span class="badge-status ${statusClass}" style="${statusColor}font-weight:600;"${errorTip}>${escapeHtml(t.status || '--')}${isError ? ' ⚠️' : ''}</span></td>
         <td><span class="badge-platform">${escapeHtml(t.platform || '--')}</span></td>
       </tr>`;
     }).join('');

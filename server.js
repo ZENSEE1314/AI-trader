@@ -1,8 +1,12 @@
 const express = require('express');
 const cookieParser = require('cookie-parser');
 const path = require('path');
+const { initAllTables } = require('./db');
 
 const app = express();
+
+// Ensure all tables exist on startup
+initAllTables().catch(err => console.error('DB init error:', err.message));
 
 // Skip JSON parsing for Stripe webhook — needs raw body for signature verification
 app.use((req, res, next) => {
