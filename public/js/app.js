@@ -1045,21 +1045,79 @@
         container.innerHTML = '<div style="color:var(--color-text-muted);font-size:0.85rem;text-align:center;padding:var(--space-3);">No risk levels configured. Add one below.</div>';
         return;
       }
-      container.innerHTML = levels.map(rl => `<div style="background:var(--color-bg);border:1px solid var(--color-border-muted);border-radius:var(--radius-md);padding:var(--space-3);margin-bottom:8px;">
-        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
-          <strong style="font-size:0.9rem;">${escapeHtml(rl.name)}</strong>
+      const tp = (v) => (parseFloat(v)*100).toFixed(1);
+      const sl = (v) => (parseFloat(v)*100).toFixed(1);
+      container.innerHTML = levels.map(rl => {
+        const id = rl.id;
+        return `<div style="background:var(--color-bg);border:1px solid var(--color-border-muted);border-radius:var(--radius-md);padding:var(--space-3);margin-bottom:8px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:8px;">
+          <div>
+            <strong style="font-size:0.9rem;">${escapeHtml(rl.name)}</strong>
+            <span style="font-size:0.75rem;color:var(--color-text-muted);margin-left:8px;">${escapeHtml(rl.description || '')}</span>
+          </div>
           <div style="display:flex;gap:4px;">
-            <button class="btn btn-danger btn-sm" style="font-size:0.7rem;" onclick="window.CryptoBot.deleteRiskLevel(${rl.id})">Delete</button>
+            <button class="btn btn-primary btn-sm" style="font-size:0.7rem;" onclick="window.CryptoBot.saveRiskLevel(${id})">Save</button>
+            <button class="btn btn-danger btn-sm" style="font-size:0.7rem;" onclick="window.CryptoBot.deleteRiskLevel(${id})">Delete</button>
           </div>
         </div>
-        <div style="display:flex;flex-wrap:wrap;gap:12px;margin-top:8px;font-size:0.8rem;color:var(--color-text-muted);">
-          <span>TP: <strong class="text-mono">${(parseFloat(rl.tp_pct)*100).toFixed(1)}%</strong></span>
-          <span>SL: <strong class="text-mono">${(parseFloat(rl.sl_pct)*100).toFixed(1)}%</strong></span>
-          <span>Capital: <strong class="text-mono">${parseFloat(rl.capital_percentage)}%</strong></span>
-          <span>Max Lev: <strong class="text-mono">${rl.max_leverage}x</strong></span>
-          <span>Consec Loss: <strong class="text-mono">${rl.max_consec_loss}</strong></span>
+        <div class="settings-grid">
+          <div class="slider-group">
+            <div class="slider-header">
+              <label class="form-label">TP %</label>
+              <input type="number" class="slider-num" id="rle-tp-num-${id}" min="0.1" max="20" step="0.1" value="${tp(rl.tp_pct)}"
+                oninput="window.CryptoBot.syncSlider('rle-tp-range-${id}',Math.round(this.value*10))">
+            </div>
+            <input type="range" id="rle-tp-range-${id}" min="1" max="200" value="${Math.round(parseFloat(rl.tp_pct)*1000)}"
+              oninput="window.CryptoBot.syncNum('rle-tp-num-${id}',(this.value/10).toFixed(1))">
+          </div>
+          <div class="slider-group">
+            <div class="slider-header">
+              <label class="form-label">SL %</label>
+              <input type="number" class="slider-num" id="rle-sl-num-${id}" min="0.1" max="10" step="0.1" value="${sl(rl.sl_pct)}"
+                oninput="window.CryptoBot.syncSlider('rle-sl-range-${id}',Math.round(this.value*10))">
+            </div>
+            <input type="range" id="rle-sl-range-${id}" min="1" max="100" value="${Math.round(parseFloat(rl.sl_pct)*1000)}"
+              oninput="window.CryptoBot.syncNum('rle-sl-num-${id}',(this.value/10).toFixed(1))">
+          </div>
+          <div class="slider-group">
+            <div class="slider-header">
+              <label class="form-label">Capital %</label>
+              <input type="number" class="slider-num" id="rle-cap-num-${id}" min="1" max="50" step="1" value="${parseFloat(rl.capital_percentage)}"
+                oninput="window.CryptoBot.syncSlider('rle-cap-range-${id}',this.value)">
+            </div>
+            <input type="range" id="rle-cap-range-${id}" min="1" max="50" value="${parseFloat(rl.capital_percentage)}"
+              oninput="window.CryptoBot.syncNum('rle-cap-num-${id}',this.value)">
+          </div>
+          <div class="slider-group">
+            <div class="slider-header">
+              <label class="form-label">Max Leverage</label>
+              <input type="number" class="slider-num" id="rle-lev-num-${id}" min="1" max="125" step="1" value="${rl.max_leverage}"
+                oninput="window.CryptoBot.syncSlider('rle-lev-range-${id}',this.value)">
+            </div>
+            <input type="range" id="rle-lev-range-${id}" min="1" max="125" value="${rl.max_leverage}"
+              oninput="window.CryptoBot.syncNum('rle-lev-num-${id}',this.value)">
+          </div>
+          <div class="slider-group">
+            <div class="slider-header">
+              <label class="form-label">Max Consec Losses</label>
+              <input type="number" class="slider-num" id="rle-consec-num-${id}" min="1" max="10" step="1" value="${rl.max_consec_loss}"
+                oninput="window.CryptoBot.syncSlider('rle-consec-range-${id}',this.value)">
+            </div>
+            <input type="range" id="rle-consec-range-${id}" min="1" max="10" value="${rl.max_consec_loss}"
+              oninput="window.CryptoBot.syncNum('rle-consec-num-${id}',this.value)">
+          </div>
+          <div class="slider-group">
+            <div class="slider-header">
+              <label class="form-label">Top Coins</label>
+              <input type="number" class="slider-num" id="rle-top-num-${id}" min="5" max="200" step="5" value="${rl.top_n_coins || 50}"
+                oninput="window.CryptoBot.syncSlider('rle-top-range-${id}',this.value)">
+            </div>
+            <input type="range" id="rle-top-range-${id}" min="5" max="200" step="5" value="${rl.top_n_coins || 50}"
+              oninput="window.CryptoBot.syncNum('rle-top-num-${id}',this.value)">
+          </div>
         </div>
-      </div>`).join('');
+      </div>`;
+      }).join('');
     } catch (err) { /* silent */ }
   }
 
@@ -1069,15 +1127,32 @@
     try {
       await api('POST', '/api/admin/risk-levels', {
         name,
-        tp_pct: parseFloat($('#rl-tp').value) || 0.01,
-        sl_pct: parseFloat($('#rl-sl').value) || 0.01,
-        capital_percentage: parseFloat($('#rl-capital').value) || 10,
-        max_leverage: parseInt($('#rl-leverage').value) || 20,
-        max_consec_loss: parseInt($('#rl-consec').value) || 2,
+        description: ($('#rl-desc').value || '').trim(),
+        tp_pct: (parseFloat($('#rl-tp-num').value) || 1.0) / 100,
+        sl_pct: (parseFloat($('#rl-sl-num').value) || 1.0) / 100,
+        capital_percentage: parseFloat($('#rl-capital-num').value) || 10,
+        max_leverage: parseInt($('#rl-leverage-num').value) || 20,
+        max_consec_loss: parseInt($('#rl-consec-num').value) || 2,
+        top_n_coins: parseInt($('#rl-topcoins-num').value) || 50,
       });
       showToast(`${name} risk level added`, 'success');
       $('#rl-name').value = '';
+      $('#rl-desc').value = '';
       loadRiskLevels();
+    } catch (err) { showToast(err.message, 'error'); }
+  }
+
+  async function saveRiskLevel(id) {
+    try {
+      await api('PUT', `/api/admin/risk-levels/${id}`, {
+        tp_pct: (parseFloat($(`#rle-tp-num-${id}`).value) || 1.0) / 100,
+        sl_pct: (parseFloat($(`#rle-sl-num-${id}`).value) || 1.0) / 100,
+        capital_percentage: parseFloat($(`#rle-cap-num-${id}`).value) || 10,
+        max_leverage: parseInt($(`#rle-lev-num-${id}`).value) || 20,
+        max_consec_loss: parseInt($(`#rle-consec-num-${id}`).value) || 2,
+        top_n_coins: parseInt($(`#rle-top-num-${id}`).value) || 50,
+      });
+      showToast('Risk level saved', 'success');
     } catch (err) { showToast(err.message, 'error'); }
   }
 
@@ -1694,7 +1769,7 @@
     addTokenLeverage, removeTokenLeverage,
     addAllowedToken, addBannedToken, unbanGlobalToken, removeGlobalToken,
     searchAdminToken, pickAdminToken, searchUserBanToken,
-    addRiskLevel, deleteRiskLevel,
+    addRiskLevel, saveRiskLevel, deleteRiskLevel,
     fixBitunixPnl,
   };
 

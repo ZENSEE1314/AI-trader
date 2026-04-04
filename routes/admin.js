@@ -619,7 +619,7 @@ router.post('/global-tokens', async (req, res) => {
     await query(
       `INSERT INTO global_token_settings (symbol, enabled, banned)
        VALUES ($1, $2, $3)
-       ON CONFLICT (symbol) DO UPDATE SET enabled = $2, banned = $3`,
+       ON CONFLICT (symbol) DO UPDATE SET enabled = EXCLUDED.enabled, banned = EXCLUDED.banned`,
       [symbol.toUpperCase(), enabled !== false, banned === true]
     );
     res.json({ ok: true });
