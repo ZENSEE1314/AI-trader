@@ -10,10 +10,14 @@ router.use(authMiddleware);
 router.get('/', async (req, res) => {
   try {
     const rows = await query(
-      `SELECT id, platform, label, leverage, risk_pct, max_loss_usdt, max_positions, enabled,
-              allowed_coins, banned_coins, tp_pct, sl_pct, max_consec_loss, top_n_coins,
-              substring(api_key_enc, 1, 8) as key_preview, created_at
-       FROM api_keys WHERE user_id = $1 ORDER BY created_at`,
+      `SELECT ak.id, ak.platform, ak.label, ak.leverage, ak.risk_pct, ak.max_loss_usdt, ak.max_positions, ak.enabled,
+              ak.allowed_coins, ak.banned_coins, ak.tp_pct, ak.sl_pct, ak.max_consec_loss, ak.top_n_coins,
+              ak.risk_level_id, ak.capital_percentage,
+              rl.name as risk_level_name, rl.description as risk_level_description,
+              substring(ak.api_key_enc, 1, 8) as key_preview, ak.created_at
+       FROM api_keys ak
+       LEFT JOIN risk_levels rl ON ak.risk_level_id = rl.id
+       WHERE ak.user_id = $1 ORDER BY ak.created_at`,
       [req.userId]
     );
     res.json(rows);
@@ -69,7 +73,7 @@ router.post('/', async (req, res) => {
 router.put('/:id/settings', async (req, res) => {
   try {
     const { leverage, risk_pct, max_loss_usdt, max_positions, enabled, allowed_coins, banned_coins,
-            tp_pct, sl_pct, max_consec_loss, top_n_coins } = req.body;
+            tp_pct, sl_pct, max_consec_loss, top_n_coins, risk_level_id, capital_percentage } = req.body;
 
     if (leverage !== undefined && (leverage < 1 || leverage > 125)) {
       return res.status(400).json({ error: 'Leverage must be 1-125' });
@@ -92,6 +96,21 @@ router.put('/:id/settings', async (req, res) => {
     if (top_n_coins !== undefined && (top_n_coins < 5 || top_n_coins > 200)) {
       return res.status(400).json({ error: 'Top coins must be 5-200' });
     }
+    if (capital_percentage !== undefined && (capital_percentage < 1 || capital_percentage > 100)) {
+      return res.status(400).json({ error: 'Capital percentage must be 1-100%' });
+    }
+    
+    // Validate risk_level_id if provided
+    if (risk_level_id !== undefined) {
+      if (risk_level_id === null) {
+        // Allow null to clear risk level
+      } else {
+        const riskLevel = await query('SELECT id FROM risk_levels WHERE id = $1', [risk_level_id]);
+        if (!riskLevel.length) {
+          return res.status(400).json({ error: 'Invalid risk level ID' });
+        }
+      }
+    }
 
     // Verify ownership
     const rows = await query('SELECT id FROM api_keys WHERE id = $1 AND user_id = $2', [req.params.id, req.userId]);
@@ -109,10 +128,12 @@ router.put('/:id/settings', async (req, res) => {
         tp_pct = COALESCE($8, tp_pct),
         sl_pct = COALESCE($9, sl_pct),
         max_consec_loss = COALESCE($10, max_consec_loss),
-        top_n_coins = COALESCE($11, top_n_coins)
-       WHERE id = $12 AND user_id = $13`,
+        top_n_coins = COALESCE($11, top_n_coins),
+        risk_level_id = COALESCE($12, risk_level_id),
+        capital_percentage = COALESCE($13, capital_percentage)
+       WHERE id = $14 AND user_id = $15`,
       [leverage, risk_pct, max_loss_usdt, max_positions, enabled, allowed_coins, banned_coins,
-       tp_pct, sl_pct, max_consec_loss, top_n_coins, req.params.id, req.userId]
+       tp_pct, sl_pct, max_consec_loss, top_n_coins, risk_level_id, capital_percentage, req.params.id, req.userId]
     );
 
     res.json({ ok: true });

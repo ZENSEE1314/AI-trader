@@ -1,5 +1,5 @@
-const userLev = await getTokenLeverage(symbol, key.id);
-        const walletSizePct = (await getCapitalPercentage(key.id)) / 100; // Convert percentage to decimalv4 — AI Self-Learning Edition
+// ============================================================
+// Smart Crypto Trader v4 — AI Self-Learning Edition
 // Binance USDT-M Futures + Bitunix Futures
 // Strategy: Swing Cascade (15M → 3M → 1M swing confirmation)
 // TP: Dynamic based on volume (4.5%/3%/2%), SL: 3%
@@ -39,74 +39,6 @@ const CONFIG = {
 function getDailyCapital(key, currentBalance) {
   return currentBalance;
 }
-
-// Get token-specific leverage from database, fallback to default
-async function getTokenLeverage(symbol, apiKeyId = null) {
-  try {
-    const { query } = require('./db');
-    
-    // First check if there's a token-specific leverage setting
-    const tokenRows = await query(
-      'SELECT leverage FROM token_leverage WHERE symbol = $1 AND enabled = true',
-      [symbol]
-    );
-    
-    if (tokenRows.length > 0) {
-      return parseInt(tokenRows[0].leverage);
-    }
-    
-    // If API key has a risk level, use its max_leverage
-    if (apiKeyId) {
-      const keyRows = await query(
-        `SELECT rl.max_leverage 
-         FROM api_keys ak 
-         LEFT JOIN risk_levels rl ON ak.risk_level_id = rl.id 
-         WHERE ak.id = $1 AND rl.enabled = true`,
-        [apiKeyId]
-      );
-      
-      if (keyRows.length > 0 && keyRows[0].max_leverage) {
-        return parseInt(keyRows[0].max_leverage);
-      }
-    }
-    
-    // Default leverage based on token type
-    if (BTC_ETH_SYMBOLS.has(symbol)) return 20;
-    return 20;
-  } catch (err) {
-    console.error('Error getting token leverage:', err.message);
-    // Fallback to default
-    if (BTC_ETH_SYMBOLS.has(symbol)) return 20;
-    return 20;
-  }
-}
-
-// Get capital percentage for trading (default 10%)
-async function getCapitalPercentage(apiKeyId = null) {
-  try {
-    if (!apiKeyId) return 10.0; // Default 10%
-    
-    const { query } = require('./db');
-    const keyRows = await query(
-      `SELECT COALESCE(ak.capital_percentage, rl.capital_percentage, 10.0) as capital_pct
-       FROM api_keys ak
-       LEFT JOIN risk_levels rl ON ak.risk_level_id = rl.id
-       WHERE ak.id = $1`,
-      [apiKeyId]
-    );
-    
-    if (keyRows.length > 0) {
-      return parseFloat(keyRows[0].capital_pct);
-    }
-    
-    return 10.0;
-  } catch (err) {
-    console.error('Error getting capital percentage:', err.message);
-    return 10.0;
-  }
-}
-
-
 
 // Get token-specific leverage from database, fallback to default
 async function getTokenLeverage(symbol, apiKeyId = null) {

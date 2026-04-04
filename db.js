@@ -142,6 +142,48 @@ async function initAllTables() {
       created_at TIMESTAMPTZ DEFAULT NOW(),
       UNIQUE(user_id, api_key_id, week_start)
     )`,
+    // Referral commission tracking
+    `CREATE TABLE IF NOT EXISTS referral_commissions (
+      id SERIAL PRIMARY KEY,
+      referrer_id INTEGER NOT NULL,
+      referee_id INTEGER NOT NULL,
+      level INTEGER NOT NULL,
+      amount DECIMAL NOT NULL,
+      description TEXT,
+      trade_id INTEGER,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_rc_referrer_id ON referral_commissions (referrer_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_rc_referee_id ON referral_commissions (referee_id)`,
+    // Token leverage settings
+    `CREATE TABLE IF NOT EXISTS token_leverage (
+      id SERIAL PRIMARY KEY,
+      symbol VARCHAR(30) NOT NULL,
+      leverage INTEGER DEFAULT 20,
+      enabled BOOLEAN DEFAULT true,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE(symbol)
+    )`,
+    // Risk level settings
+    `CREATE TABLE IF NOT EXISTS risk_levels (
+      id SERIAL PRIMARY KEY,
+      name VARCHAR(50) NOT NULL,
+      description TEXT,
+      tp_pct DECIMAL DEFAULT 0.045,
+      sl_pct DECIMAL DEFAULT 0.03,
+      max_consec_loss INTEGER DEFAULT 2,
+      top_n_coins INTEGER DEFAULT 50,
+      capital_percentage DECIMAL DEFAULT 10.0,
+      max_leverage INTEGER DEFAULT 20,
+      enabled BOOLEAN DEFAULT true,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )`,
+    // User risk level assignment
+    `ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS risk_level_id INTEGER`,
+    `ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS capital_percentage DECIMAL DEFAULT 10.0`,
+    // Add referral tier columns
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS referral_tier INTEGER DEFAULT 1`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS total_referral_commission DECIMAL DEFAULT 0`,
     `CREATE TABLE IF NOT EXISTS ai_versions (
       id SERIAL PRIMARY KEY,
       version INTEGER,
