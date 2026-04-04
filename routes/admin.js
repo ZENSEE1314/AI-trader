@@ -731,31 +731,29 @@ router.post('/fix-bitunix-pnl', async (req, res) => {
 
           let found = false;
 
-          // Method 1: get_fills — actual execution data with realized PnL
+          // Method 1: Position history — has closePrice and realizedPNL
           try {
-            const fills = await client.getFills({ symbol: trade.symbol, limit: 20 });
-            const closeSide = isLong ? 'SELL' : 'BUY';
-            for (const f of fills) {
-              const fPrice = parseFloat(f.price || f.filledPrice || f.avgPrice || 0);
-              if (fPrice > 0 && (f.side === closeSide || f.tradeSide === 'CLOSE')) {
-                exitPrice = fPrice;
-                if (f.realizedPnl != null) realizedPnl = parseFloat(f.realizedPnl);
-                else if (f.profit != null) realizedPnl = parseFloat(f.profit);
+            const positions = await client.getHistoryPositions({ symbol: trade.symbol, pageSize: 20 });
+            for (const p of positions) {
+              const cp = parseFloat(p.closePrice || 0);
+              if (cp > 0 && p.symbol === trade.symbol) {
+                exitPrice = cp;
+                if (p.realizedPNL != null) realizedPnl = parseFloat(p.realizedPNL);
                 found = true;
                 break;
               }
             }
           } catch { /* try next method */ }
 
-          // Method 2: History orders
+          // Method 2: Order history — reduceOnly orders are close orders
           if (!found) {
             try {
               const orderList = await client.getHistoryOrders({ symbol: trade.symbol, pageSize: 20 });
               for (const o of orderList) {
-                const oPrice = parseFloat(o.avgPrice || o.price || 0);
-                if (o.tradeSide === 'CLOSE' && oPrice > 0) {
+                const oPrice = parseFloat(o.avgPrice || 0);
+                if (o.reduceOnly && oPrice > 0) {
                   exitPrice = oPrice;
-                  if (o.profit != null) realizedPnl = parseFloat(o.profit);
+                  if (o.realizedPNL != null) realizedPnl = parseFloat(o.realizedPNL);
                   found = true;
                   break;
                 }

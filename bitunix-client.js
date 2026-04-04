@@ -150,26 +150,19 @@ class BitunixClient {
   // ── Order / Trade History ───────────────────────────────────
 
   async getHistoryOrders({ symbol, pageNum = 1, pageSize = 10 } = {}) {
-    const body = { pageNum, pageSize };
-    if (symbol) body.symbol = symbol;
-    const data = await this._post('/api/v1/futures/trade/get_history_orders', body);
+    const params = { pageNum, pageSize };
+    if (symbol) params.symbol = symbol;
+    const data = await this._get('/api/v1/futures/trade/get_history_orders', params);
     if (Array.isArray(data)) return data;
     return data?.orderList || data?.list || [];
   }
 
-  async getHistoryTrades({ symbol, pageNum = 1, pageSize = 10 } = {}) {
-    const body = { pageNum, pageSize };
-    if (symbol) body.symbol = symbol;
-    const data = await this._post('/api/v1/futures/trade/get_history_trades', body);
+  async getHistoryPositions({ symbol, pageNum = 1, pageSize = 10 } = {}) {
+    const params = { pageNum, pageSize };
+    if (symbol) params.symbol = symbol;
+    const data = await this._get('/api/v1/futures/position/get_history_positions', params);
     if (Array.isArray(data)) return data;
-    return data?.tradeList || data?.orderList || data?.list || [];
-  }
-
-  async getFills({ symbol, limit = 20 } = {}) {
-    const body = { symbol, limit };
-    const data = await this._post('/api/v1/futures/trade/get_fills', body);
-    if (Array.isArray(data)) return data;
-    return data?.fillList || data?.list || data?.fills || [];
+    return data?.positionList || data?.list || [];
   }
 
   // Raw methods — return full response including code/msg for debugging

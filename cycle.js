@@ -1400,33 +1400,29 @@ async function syncTradeStatus() {
               const bxClient = new BitunixClient({ apiKey, apiSecret });
               let found = false;
 
-              // Method 1: get_fills — actual execution data with realized PnL
+              // Method 1: Position history — has entryPrice, closePrice, realizedPNL
               try {
-                const fills = await bxClient.getFills({ symbol: trade.symbol, limit: 20 });
-                bLog.system(`Bitunix fills for ${trade.symbol}: ${JSON.stringify(fills).substring(0, 800)}`);
-                const closeSide = isLong ? 'SELL' : 'BUY';
-                for (const f of fills) {
-                  const fPrice = parseFloat(f.price || f.filledPrice || f.avgPrice || 0);
-                  if (fPrice > 0 && (f.side === closeSide || f.tradeSide === 'CLOSE')) {
-                    exitPrice = fPrice;
-                    if (f.realizedPnl != null) realizedPnl = parseFloat(f.realizedPnl);
-                    else if (f.profit != null) realizedPnl = parseFloat(f.profit);
+                const positions = await bxClient.getHistoryPositions({ symbol: trade.symbol, pageSize: 20 });
+                for (const p of positions) {
+                  const cp = parseFloat(p.closePrice || 0);
+                  if (cp > 0 && p.symbol === trade.symbol) {
+                    exitPrice = cp;
+                    if (p.realizedPNL != null) realizedPnl = parseFloat(p.realizedPNL);
                     found = true;
                     break;
                   }
                 }
-              } catch (e) { bLog.error(`Bitunix fills error: ${e.message}`); }
+              } catch (e) { bLog.error(`Bitunix posHistory error: ${e.message}`); }
 
-              // Method 2: History orders — look for CLOSE order
+              // Method 2: Order history — look for reduceOnly/CLOSE order with avgPrice
               if (!found) {
                 try {
                   const orderList = await bxClient.getHistoryOrders({ symbol: trade.symbol, pageSize: 20 });
-                  bLog.system(`Bitunix histOrders for ${trade.symbol}: ${JSON.stringify(orderList).substring(0, 500)}`);
                   for (const o of orderList) {
-                    const oPrice = parseFloat(o.avgPrice || o.price || 0);
-                    if (o.tradeSide === 'CLOSE' && oPrice > 0) {
+                    const oPrice = parseFloat(o.avgPrice || 0);
+                    if (o.reduceOnly && oPrice > 0) {
                       exitPrice = oPrice;
-                      if (o.profit != null) realizedPnl = parseFloat(o.profit);
+                      if (o.realizedPNL != null) realizedPnl = parseFloat(o.realizedPNL);
                       found = true;
                       break;
                     }
@@ -1438,7 +1434,6 @@ async function syncTradeStatus() {
               if (!found) {
                 try {
                   const priceData = await bxClient.getMarketPrice(trade.symbol);
-                  bLog.system(`Bitunix marketPrice for ${trade.symbol}: ${JSON.stringify(priceData)}`);
                   const mp = parseFloat(priceData?.lastPrice || priceData?.price || priceData || 0);
                   if (mp > 0) exitPrice = mp;
                 } catch (e) { bLog.error(`Bitunix marketPrice error: ${e.message}`); }
