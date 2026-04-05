@@ -37,7 +37,7 @@ const CONFIG = {
 
 // ── Trailing SL config ─────────────────────────────────────
 const TRAILING_SL = {
-  INITIAL_SL_PCT:  0.01,   // -1% initial SL from entry
+  INITIAL_SL_PCT:  0.03,   // -3% initial SL from entry
   FIRST_STEP:      0.012,  // First trailing step at +1.2% profit
   STEP_INCREMENT:  0.012,  // Each subsequent step is +1.2%
 };

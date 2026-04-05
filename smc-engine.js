@@ -18,7 +18,7 @@ const REQUEST_TIMEOUT = 15000;
 const TOP_N_COINS = 100;
 const MIN_24H_VOLUME = 10_000_000;
 
-const SL_PCT = 0.01;           // 1% initial SL
+const SL_PCT = 0.03;           // 3% initial SL
 const TRAILING_STEP = 0.012;   // trail SL by 1.2% when price moves in favor
 
 // Swing lengths per timeframe
