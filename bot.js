@@ -375,58 +375,79 @@ async function main() {
 
   // Create all required tables before anything else
   const { initAllTables } = require('./db');
-  await initAllTables();
-
-  // Log AI state on startup
-  const stats = await aiLearner.getStats();
-  if (stats.overall && parseInt(stats.overall.total) > 0) {
-    const total = parseInt(stats.overall.total);
-    const wins = parseInt(stats.overall.wins);
-    const wr = total > 0 ? ((wins / total) * 100).toFixed(0) : '0';
-    const msg = `AI State: ${total} trades, ${wr}% win rate, avg PnL ${(parseFloat(stats.overall.avg_pnl) || 0).toFixed(3)}%`;
-    log(msg);
-    bLog.ai(msg);
-  } else {
-    log('AI State: No previous trades — starting fresh');
-    bLog.ai('No previous trades — AI starting fresh, will learn after first trade');
+  try {
+    await initAllTables();
+    log('DB tables initialized');
+  } catch (err) {
+    log(`DB init error: ${err.message}`);
   }
 
-  const bestSetups = await aiLearner.getBestSetups();
-  if (bestSetups.length) {
-    const msg = 'Best setups: ' + bestSetups.map(s => `${s.setup}(${s.win_rate}%)`).join(', ');
-    log(msg);
-    bLog.ai(msg);
+  // Log AI state on startup (non-critical — don't block boot)
+  try {
+    const stats = await aiLearner.getStats();
+    if (stats.overall && parseInt(stats.overall.total) > 0) {
+      const total = parseInt(stats.overall.total);
+      const wins = parseInt(stats.overall.wins);
+      const wr = total > 0 ? ((wins / total) * 100).toFixed(0) : '0';
+      const msg = `AI State: ${total} trades, ${wr}% win rate, avg PnL ${(parseFloat(stats.overall.avg_pnl) || 0).toFixed(3)}%`;
+      log(msg);
+      bLog.ai(msg);
+    } else {
+      log('AI State: No previous trades — starting fresh');
+      bLog.ai('No previous trades — AI starting fresh, will learn after first trade');
+    }
+
+    const bestSetups = await aiLearner.getBestSetups();
+    if (bestSetups.length) {
+      const msg = 'Best setups: ' + bestSetups.map(s => `${s.setup}(${s.win_rate}%)`).join(', ');
+      log(msg);
+      bLog.ai(msg);
+    }
+
+    const aiVersion = await aiLearner.getCurrentVersion();
+    bLog.ai(`Current AI version: ${aiVersion}`);
+  } catch (err) {
+    log(`AI state load error (non-fatal): ${err.message}`);
   }
 
-  const aiVersion = await aiLearner.getCurrentVersion();
-  bLog.ai(`Current AI version: ${aiVersion}`);
-
-  await tgSendPrivate(
-    `<b>AI Trading Bot v4 Online</b>\n` +
-    `SMC Strategy + Self-Learning + Sentiment\n` +
-    `Target: 1% per trade\n` +
-    `Scan every ${INTERVAL_MIN} min\n` +
-    `Commands: /scan /stats /sentiment /pause /resume /help`
-  );
+  try {
+    await tgSendPrivate(
+      `<b>AI Trading Bot v4 Online</b>\n` +
+      `SMC Strategy + Self-Learning + Sentiment\n` +
+      `Target: 1% per trade\n` +
+      `Scan every ${INTERVAL_MIN} min\n` +
+      `Commands: /scan /stats /sentiment /pause /resume /help`
+    );
+  } catch (err) {
+    log(`Telegram notify error (non-fatal): ${err.message}`);
+  }
 
   // Initial scan
-  await runTradingCycle();
+  try {
+    await runTradingCycle();
+  } catch (err) {
+    log(`Initial scan error (non-fatal): ${err.message}`);
+  }
 
-  // Main loop
+  // Main loop — these MUST start regardless of errors above
+  log(`Starting main loop: scan every ${INTERVAL_MIN} min`);
+
   setInterval(async () => {
-    await pollCommands();
+    try { await pollCommands(); } catch (err) { log(`Poll error: ${err.message}`); }
   }, 5000);
 
   let tradingCycleRunning = false;
   setInterval(async () => {
     if (tradingCycleRunning) { log('Cycle still running — skipping'); return; }
     tradingCycleRunning = true;
-    try { await runTradingCycle(); } finally { tradingCycleRunning = false; }
+    try { await runTradingCycle(); } catch (err) { log(`Cycle error: ${err.message}`); } finally { tradingCycleRunning = false; }
   }, INTERVAL_MIN * 60 * 1000);
 
   setInterval(async () => {
-    await checkSpikes();
+    try { await checkSpikes(); } catch (err) { log(`Spike check error: ${err.message}`); }
   }, SPIKE_INTERVAL);
+
+  log('Bot loop is running');
 
   // Express server for health checks + web dashboard
   try {

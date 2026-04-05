@@ -477,7 +477,7 @@ async function scanSMC(log, opts = {}) {
   const minScore = params.MIN_SCORE || 8;
   const dailyBiasCache = new Map();
 
-  bLog.scan(`Refined scan: ${topCoins.length} coins | RR=1:${RR_RATIO} MaxRisk=${MAX_RISK_PCT * 100}%`);
+  bLog.scan(`Refined scan: ${topCoins.length} coins | minScore=${minScore}`);
 
   const results = [];
   let analyzed = 0;
