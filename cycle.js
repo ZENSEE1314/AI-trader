@@ -38,8 +38,8 @@ const CONFIG = {
 // ── Trailing SL config ─────────────────────────────────────
 const TRAILING_SL = {
   INITIAL_SL_PCT:  0.03,   // -3% initial SL from entry
-  FIRST_STEP:      0.01,   // First trailing step at +1% profit
-  STEP_INCREMENT:  0.01,   // Each subsequent step is +1%
+  FIRST_STEP:      0.015,  // First trailing step at +1.5% profit
+  STEP_INCREMENT:  0.015,  // Each subsequent step is +1.5%
 };
 
 // ── Compound: always use current wallet balance ─────────────
@@ -1218,7 +1218,7 @@ async function syncTradeStatus() {
     const openTrades = await db.query(
       `SELECT t.*, ak.api_key_enc, ak.iv, ak.auth_tag,
               ak.api_secret_enc, ak.secret_iv, ak.secret_auth_tag,
-              ak.platform, COALESCE(ak.trailing_sl_step, 1.0) as key_trailing_sl_step
+              ak.platform, COALESCE(ak.trailing_sl_step, 1.5) as key_trailing_sl_step
        FROM trades t
        JOIN api_keys ak ON ak.id = t.api_key_id
        WHERE t.status = 'OPEN'`
@@ -1264,7 +1264,7 @@ async function syncTradeStatus() {
                 ? entryPrice + (exchangePos.pnl / absAmt)
                 : entryPrice - (exchangePos.pnl / absAmt);
               const lastStep = parseFloat(trade.trailing_sl_last_step) || 0;
-              const userStepPct = parseFloat(key.key_trailing_sl_step || 1.0) / 100;
+              const userStepPct = parseFloat(key.key_trailing_sl_step || 1.5) / 100;
 
               const trailResult = calculateTrailingStep(entryPrice, curPrice, isLong, lastStep, userStepPct);
               if (trailResult) {
@@ -1308,7 +1308,7 @@ async function syncTradeStatus() {
                 ? entryPrice + (exchangePos.pnl / absAmt)
                 : entryPrice - (exchangePos.pnl / absAmt);
               const lastStep = parseFloat(trade.trailing_sl_last_step) || 0;
-              const userStepPct = parseFloat(key.key_trailing_sl_step || 1.0) / 100;
+              const userStepPct = parseFloat(key.key_trailing_sl_step || 1.5) / 100;
 
               const trailResult = calculateTrailingStep(entryPrice, curPrice, isLong, lastStep, userStepPct);
               if (trailResult) {
