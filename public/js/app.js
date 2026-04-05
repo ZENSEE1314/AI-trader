@@ -1528,44 +1528,57 @@
 
     try {
       // Stream NDJSON — read lines as they arrive, no first-byte timeout
-      const token = localStorage.getItem('token');
       const resp = await fetch('/api/admin/ai-optimize', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: 'Bearer ' + token } : {}) },
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
         body: JSON.stringify({ days }),
       });
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      if (!resp.ok) {
+        const errText = await resp.text();
+        throw new Error(errText || `HTTP ${resp.status}`);
+      }
 
-      const reader = resp.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
       let logs = '⚛️ QUANTUM AI OPTIMIZER — LIVE LOG\n';
       let finalData = null;
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop();
-        for (const line of lines) {
-          if (!line.trim()) continue;
-          try {
-            const msg = JSON.parse(line);
-            if (msg.type === 'log') {
-              logs += msg.message + '\n';
-              if (resultEl) resultEl.textContent = logs;
-            } else if (msg.type === 'progress') {
-              logs += `  [${msg.phase}] ${msg.pct}%\n`;
-              if (resultEl) resultEl.textContent = logs;
-            } else if (msg.type === 'result') {
-              finalData = msg;
-            } else if (msg.type === 'error') {
-              logs += `\nERROR: ${msg.error}\n`;
-              if (resultEl) resultEl.textContent = logs;
-            }
-          } catch {}
+      function processLine(line) {
+        if (!line.trim()) return;
+        try {
+          const msg = JSON.parse(line);
+          if (msg.type === 'log') {
+            logs += msg.message + '\n';
+            if (resultEl) { resultEl.textContent = logs; resultEl.scrollTop = resultEl.scrollHeight; }
+          } else if (msg.type === 'progress') {
+            logs += `  [${msg.phase}] ${msg.pct}%\n`;
+            if (resultEl) { resultEl.textContent = logs; resultEl.scrollTop = resultEl.scrollHeight; }
+          } else if (msg.type === 'result') {
+            finalData = msg;
+          } else if (msg.type === 'error') {
+            logs += '\nERROR: ' + msg.error + '\n';
+            if (resultEl) resultEl.textContent = logs;
+          }
+        } catch {}
+      }
+
+      // Try streaming with ReadableStream, fall back to full-text read
+      if (resp.body && resp.body.getReader) {
+        const reader = resp.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop();
+          for (const line of lines) processLine(line);
         }
+        if (buffer.trim()) processLine(buffer);
+      } else {
+        // Fallback: read entire response then parse lines
+        const text = await resp.text();
+        for (const line of text.split('\n')) processLine(line);
       }
 
       if (!finalData) { if (resultEl) resultEl.textContent = logs + '\nNo results received.'; return; }

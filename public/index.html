@@ -1099,9 +1099,9 @@
             </div>
             <button class="btn btn-primary btn-sm" onclick="window.CryptoBot.addAllowedToken()">Add Allowed</button>
           </div>
-          <div class="table-wrap">
+          <div class="table-wrap" style="max-height:300px;overflow-y:auto;">
             <table class="data-table">
-              <thead><tr><th>Symbol</th><th>Action</th></tr></thead>
+              <thead style="position:sticky;top:0;z-index:1;"><tr><th>Symbol</th><th>Action</th></tr></thead>
               <tbody id="admin-allowed-tbody"></tbody>
             </table>
           </div>
@@ -1119,9 +1119,9 @@
             </div>
             <button class="btn btn-danger btn-sm" onclick="window.CryptoBot.addBannedToken()">Ban Token</button>
           </div>
-          <div class="table-wrap">
+          <div class="table-wrap" style="max-height:300px;overflow-y:auto;">
             <table class="data-table">
-              <thead><tr><th>Symbol</th><th>Action</th></tr></thead>
+              <thead style="position:sticky;top:0;z-index:1;"><tr><th>Symbol</th><th>Action</th></tr></thead>
               <tbody id="admin-banned-tbody"></tbody>
             </table>
           </div>
@@ -1244,7 +1244,7 @@
               <span class="tip-btn">?<span class="tip-text">Strategy-only optimizer using admin tokens. 10 presets → 25 genetic → QAOA + SPSA + Annealing. Tests ~130 strategy combos + per-token scoring. Risk is user-set.</span></span>
             </div>
           </div>
-          <pre id="fix-bitunix-result" style="margin-top:var(--space-2);font-size:0.75rem;color:var(--color-text-muted);max-height:600px;overflow:auto;white-space:pre-wrap;word-break:break-all;"></pre>
+          <pre id="fix-bitunix-result" style="margin-top:var(--space-2);font-size:0.75rem;color:var(--color-text-muted);max-height:70vh;overflow:auto;white-space:pre-wrap;word-break:break-all;border:1px solid var(--color-border-muted);border-radius:var(--radius-md);padding:var(--space-3);background:var(--color-bg-base);"></pre>
         </div>
 
         <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Pending Withdrawals <span class="tip-btn">?<span class="tip-text">User withdrawal requests awaiting admin processing. Approve or reject with a note.</span></span></h3>
@@ -1329,7 +1329,7 @@
     </div>
   </div>
 
-  <script src="/js/app.js?v=20260405t"></script>
+  <script src="/js/app.js?v=20260405u"></script>
   <script src="/js/cashwallet-fix.js"></script>
 
 </body>
