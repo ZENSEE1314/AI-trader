@@ -1970,7 +1970,7 @@ router.post('/ai-optimize', async (req, res) => {
 
       // SPSA
       let spsaCount = 0;
-      const spsaResults = spsaOptimize(topN[0].settings, evaluate, 20);
+      const spsaResults = await spsaOptimize(topN[0].settings, evaluate, 20, yieldTick);
       for (const sr of spsaResults) {
         if (sr.trades > 0) {
           allQR.push({ risk: `SPSA-${spsaCount + 1}`, riskId: `spsa${spsaCount}`, settings: sr.config, ...sr });
@@ -1987,7 +1987,7 @@ router.post('/ai-optimize', async (req, res) => {
         const sorted = [...allQR].sort((a, b) => b.winRate - a.winRate || b.totalPnl - a.totalPnl);
         combinedTop.push(...sorted.slice(0, 5));
       }
-      const annealResults = quantumAnneal(combinedTop.slice(0, 10), evaluate, 25);
+      const annealResults = await quantumAnneal(combinedTop.slice(0, 10), evaluate, 25, yieldTick);
       for (const ar of annealResults) {
         if (ar.trades > 0) {
           allQR.push({ risk: `Anneal-${annealCount + 1}`, riskId: `anneal${annealCount}`, settings: ar.config, ...ar });

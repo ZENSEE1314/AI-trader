@@ -86,7 +86,7 @@ function qaoaSample(topResults, count) {
 /**
  * SPSA Optimizer — gradient-free, 2 evals per iteration for ALL 20 params
  */
-function spsaOptimize(startConfig, evaluateFn, iterations = 15) {
+async function spsaOptimize(startConfig, evaluateFn, iterations = 15, yieldFn) {
   const A_COEFF = 10;
   const ALPHA = 0.602;
   const GAMMA = 0.101;
@@ -148,6 +148,7 @@ function spsaOptimize(startConfig, evaluateFn, iterations = 15) {
       const gHat = (fPlus - fMinus) / (2 * ck * delta[key]);
       theta[key] = Math.max(0, Math.min(1, theta[key] + ak * gHat));
     }
+    if (yieldFn && (k + 1) % 3 === 0) await yieldFn();
   }
 
   const finalConfig = denormalize(theta);
@@ -160,7 +161,7 @@ function spsaOptimize(startConfig, evaluateFn, iterations = 15) {
 /**
  * Quantum Annealing — tunneling + Metropolis acceptance
  */
-function quantumAnneal(topResults, evaluateFn, iterations = 20) {
+async function quantumAnneal(topResults, evaluateFn, iterations = 20, yieldFn) {
   if (!topResults.length) return [];
 
   const T_INITIAL = 2.0;
@@ -211,6 +212,7 @@ function quantumAnneal(topResults, evaluateFn, iterations = 20) {
       current = { ...neighbor };
       currentFitness = neighborFitness;
     }
+    if (yieldFn && (step + 1) % 5 === 0) await yieldFn();
   }
 
   return allEvaluated;
