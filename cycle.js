@@ -1259,7 +1259,10 @@ async function syncTradeStatus() {
             if (exchangePos && trade.trailing_sl_last_step !== undefined) {
               const entryPrice = parseFloat(trade.entry_price);
               const isLong = trade.direction !== 'SHORT';
-              const curPrice = entryPrice + (exchangePos.pnl / Math.abs(exchangePos.amt || 1));
+              const absAmt = Math.abs(exchangePos.amt) || 1;
+              const curPrice = isLong
+                ? entryPrice + (exchangePos.pnl / absAmt)
+                : entryPrice - (exchangePos.pnl / absAmt);
               const lastStep = parseFloat(trade.trailing_sl_last_step) || 0;
               const userStepPct = parseFloat(key.key_trailing_sl_step || 1.2) / 100;
 
@@ -1289,6 +1292,7 @@ async function syncTradeStatus() {
             openSymbols.set(p.symbol, {
               amt: parseFloat(p.positionAmt || 0),
               pnl: parseFloat(p.unrealizedProfit || 0),
+              markPrice: p.markPrice ? parseFloat(p.markPrice) : null,
             });
           }
 
@@ -1298,7 +1302,11 @@ async function syncTradeStatus() {
             if (exchangePos && trade.trailing_sl_last_step !== undefined) {
               const entryPrice = parseFloat(trade.entry_price);
               const isLong = trade.direction !== 'SHORT';
-              const curPrice = entryPrice + (exchangePos.pnl / Math.abs(exchangePos.amt || 1));
+              // Calculate current price from PnL: long pnl=(cur-entry)*qty, short pnl=(entry-cur)*qty
+              const absAmt = Math.abs(exchangePos.amt) || 1;
+              const curPrice = isLong
+                ? entryPrice + (exchangePos.pnl / absAmt)
+                : entryPrice - (exchangePos.pnl / absAmt);
               const lastStep = parseFloat(trade.trailing_sl_last_step) || 0;
               const userStepPct = parseFloat(key.key_trailing_sl_step || 1.2) / 100;
 
