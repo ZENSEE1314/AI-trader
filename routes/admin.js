@@ -878,14 +878,9 @@ router.post('/emergency-close', async (req, res) => {
 
           for (const pos of openPos) {
             try {
-              // Bitunix raw: side is BUY (long) or SELL (short), positionMode is HEDGE
-              const isLong = pos.side === 'BUY';
-              const closeSide = isLong ? 'SELL' : 'BUY';
-              const qty = pos.qty;
-              console.log(`[EMERGENCY] Closing ${pos.symbol} side=${pos.side} qty=${qty} for ${key.email} → order side=${closeSide} tradeSide=CLOSE`);
-              const closeResult = await client.placeOrder({
-                symbol: pos.symbol, side: closeSide,
-                qty: String(qty), orderType: 'MARKET', tradeSide: 'CLOSE',
+              console.log(`[EMERGENCY] Flash closing ${pos.symbol} positionId=${pos.positionId} side=${pos.side} qty=${pos.qty} for ${key.email}`);
+              const closeResult = await client.flashClose({
+                symbol: pos.symbol, positionId: pos.positionId,
               });
               console.log(`[EMERGENCY] Close result:`, JSON.stringify(closeResult));
               await query(

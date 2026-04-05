@@ -138,6 +138,12 @@ class BitunixClient {
     return this._post('/api/v1/futures/trade/place_order', body);
   }
 
+  // ── Flash Close (market close entire position) ─────────────
+
+  async flashClose({ symbol, positionId }) {
+    return this._post('/api/v1/futures/trade/flash_close', { symbol, positionId });
+  }
+
   // ── TP/SL on existing position ──────────────────────────────
 
   async placePositionTpSl({ symbol, positionId, tpPrice, slPrice }) {
