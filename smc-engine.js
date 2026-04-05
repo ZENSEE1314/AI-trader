@@ -240,11 +240,20 @@ function isAtKeyLevel(price, pdh, pdl, vwapBands, direction) {
 // ── Daily Stats ─────────────────────────────────────────────
 
 const dailyStats = { date: '', trades: 0, consecutiveLosses: 0 };
+const MAX_CONSEC_LOSSES = 2;
+
+function getTradingDay() {
+  const now = new Date();
+  const h = now.getHours();
+  const d = new Date(now);
+  if (h < 7) d.setDate(d.getDate() - 1);
+  return d.toISOString().slice(0, 10);
+}
 
 function recordDailyTrade(isWin) {
-  const today = new Date().toISOString().slice(0, 10);
-  if (dailyStats.date !== today) {
-    dailyStats.date = today;
+  const tradingDay = getTradingDay();
+  if (dailyStats.date !== tradingDay) {
+    dailyStats.date = tradingDay;
     dailyStats.trades = 0;
     dailyStats.consecutiveLosses = 0;
   }
@@ -254,12 +263,14 @@ function recordDailyTrade(isWin) {
 }
 
 function checkDailyLimits() {
-  // No revenge trading: if stopped out, skip next signal
-  if (dailyStats.consecutiveLosses >= 1) {
-    const result = { canTrade: true };
-    // Reset after checking — allow 1 trade after cooldown
+  const tradingDay = getTradingDay();
+  if (dailyStats.date !== tradingDay) {
+    dailyStats.date = tradingDay;
+    dailyStats.trades = 0;
     dailyStats.consecutiveLosses = 0;
-    return result;
+  }
+  if (dailyStats.consecutiveLosses >= MAX_CONSEC_LOSSES) {
+    return { canTrade: false, reason: `${dailyStats.consecutiveLosses} consecutive SL hits — stopped for today. Resets at 7am.` };
   }
   return { canTrade: true };
 }

@@ -997,6 +997,8 @@ router.post('/backtest', async (req, res) => {
       let wallet = WALLET_START;
       const trades = [];
       const openPos = [];
+      let consecLosses = 0;
+      let tradingDay = '';
       const firstCoin = Object.keys(coinData)[0];
       if (!firstCoin) return { trades: [], wallet };
 
@@ -1005,6 +1007,12 @@ router.post('/backtest', async (req, res) => {
 
       for (let step = 0; step < timeSteps.length; step++) {
         const now = timeSteps[step];
+
+        // Reset daily losses at 7am
+        const d = new Date(now);
+        const h = d.getHours();
+        const dayKey = h < 7 ? new Date(d.getTime() - 86400000).toISOString().slice(0,10) : d.toISOString().slice(0,10);
+        if (dayKey !== tradingDay) { tradingDay = dayKey; consecLosses = 0; }
 
         // Exit checks on 15M candles — SL hit or trailing SL
         for (let i = openPos.length - 1; i >= 0; i--) {
@@ -1019,7 +1027,9 @@ router.post('/backtest', async (req, res) => {
           if ((pos.dir === 'LONG' && low <= pos.sl) || (pos.dir === 'SHORT' && high >= pos.sl)) {
             pos.exit = pos.sl; pos.reason = pos.lastStep > 0 ? 'TRAIL' : 'SL'; pos.exitTime = now;
             pos.pnl = pos.dir === 'LONG' ? (pos.sl - pos.entry) * pos.qty : (pos.entry - pos.sl) * pos.qty;
-            wallet += pos.pnl; openPos.splice(i, 1); continue;
+            wallet += pos.pnl; openPos.splice(i, 1);
+            if (pos.pnl < 0) consecLosses++; else consecLosses = 0;
+            continue;
           }
           // Trailing SL: +1.2%→SL+0.6%, +2.4%→SL+1.2%, +3.6%→SL+2.4%
           const profitPct = pos.dir === 'LONG' ? (close - pos.entry) / pos.entry : (pos.entry - close) / pos.entry;
@@ -1038,6 +1048,7 @@ router.post('/backtest', async (req, res) => {
         }
 
         if (openPos.length >= MAX_POS) continue;
+        if (consecLosses >= 2) continue; // 2 SL = stop for the day, resumes at 7am
 
         for (const sym of Object.keys(coinData)) {
           if (openPos.length >= MAX_POS) break;
