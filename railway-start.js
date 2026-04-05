@@ -37,7 +37,7 @@ const processes = [];
 
 // Start web server
 console.log('\n🌐 Starting web server...');
-const webServer = spawn('node', ['server.js'], {
+const webServer = spawn('node', ['start-server.js'], {
   stdio: 'inherit',
   env: process.env
 });
