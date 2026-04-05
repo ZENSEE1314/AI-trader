@@ -1226,6 +1226,7 @@
         api('GET', '/api/admin/settings'),
         api('GET', '/api/admin/weekly-earnings').catch(() => null),
       ]);
+      loadAiVersions().catch(() => {});
       renderAdminUsers(users);
       renderAdminSubs(subs);
       renderAdminWithdrawals(wds);
@@ -1417,14 +1418,64 @@
     }
   }
 
-  async function runBacktest(mode, reverse) {
-    const daysEl = $('#backtest-days');
-    const days = daysEl ? parseInt(daysEl.value) || 7 : 7;
-    const tag = (reverse ? 'REVERSE ' : 'Normal ') + `${days}d`;
-    const resultEl = $('#fix-bitunix-result');
-    if (resultEl) resultEl.textContent = `Running ${tag} backtest (100 coins, 5 TFs)... ~5 min, please wait`;
+  async function loadAiVersions() {
     try {
-      const data = await api('POST', '/api/admin/backtest', { topN: 100, days, reverse });
+      const data = await api('GET', '/api/admin/ai-versions');
+      const sel = $('#bt-ai-version');
+      if (!sel || !data.versions) return;
+      sel.innerHTML = '<option value="">Manual Settings</option>';
+      for (const v of data.versions) {
+        const wr = v.win_rate ? (parseFloat(v.win_rate) * 100).toFixed(0) : '?';
+        const pnl = v.total_pnl ? parseFloat(v.total_pnl).toFixed(1) : '?';
+        const date = new Date(v.created_at).toLocaleDateString();
+        sel.innerHTML += `<option value='${v.id}' data-params='${escapeHtml(JSON.stringify(v.params))}'>${v.version} — ${v.trade_count || 0} trades, ${wr}% WR, ${pnl}% PnL (${date})</option>`;
+      }
+      sel.onchange = function() {
+        const opt = sel.options[sel.selectedIndex];
+        const raw = opt?.getAttribute('data-params');
+        if (!raw) return;
+        try {
+          const p = JSON.parse(raw);
+          if (p.sl_pct != null) $('#bt-sl').value = (parseFloat(p.sl_pct) * 100).toFixed(1);
+          if (p.tp_pct != null) $('#bt-tp').value = (parseFloat(p.tp_pct) * 100).toFixed(1);
+          if (p.trailing_step != null) $('#bt-trail').value = (parseFloat(p.trailing_step) * 100).toFixed(1);
+          if (p.leverage != null) $('#bt-leverage').value = parseInt(p.leverage);
+          if (p.risk_pct != null) $('#bt-risk').value = (parseFloat(p.risk_pct) * 100).toFixed(0);
+          if (p.max_positions != null) $('#bt-maxpos').value = parseInt(p.max_positions);
+          if (p.max_consec_loss != null) $('#bt-consec').value = parseInt(p.max_consec_loss);
+          if (p.top_n_coins != null) $('#bt-topn').value = parseInt(p.top_n_coins);
+        } catch {}
+      };
+      showToast(`Loaded ${data.versions.length} AI versions`, 'success');
+    } catch (err) {
+      showToast('Failed to load AI versions: ' + err.message, 'error');
+    }
+  }
+
+  async function runBacktest(mode, reverse) {
+    const days = parseInt($('#backtest-days')?.value) || 7;
+    const slPct = parseFloat($('#bt-sl')?.value) || 3;
+    const tpPct = parseFloat($('#bt-tp')?.value) || 0;
+    const trailStep = parseFloat($('#bt-trail')?.value) || 1.2;
+    const leverage = parseInt($('#bt-leverage')?.value) || 20;
+    const riskPct = parseInt($('#bt-risk')?.value) || 10;
+    const maxPositions = parseInt($('#bt-maxpos')?.value) || 3;
+    const maxConsecLoss = parseInt($('#bt-consec')?.value) ?? 2;
+    const wallet = parseInt($('#bt-wallet')?.value) || 1000;
+    const topN = parseInt($('#bt-topn')?.value) || 100;
+
+    const tag = (reverse ? 'REVERSE ' : '') + `${days}d SL:${slPct}% TP:${tpPct}% Trail:${trailStep}% Lev:${leverage}x`;
+    const resultEl = $('#fix-bitunix-result');
+    if (resultEl) resultEl.textContent = `Running ${tag} backtest (${topN} coins)... please wait`;
+    try {
+      const data = await api('POST', '/api/admin/backtest', {
+        topN, days, reverse,
+        slPct: slPct / 100,
+        tpPct: tpPct / 100,
+        trailStep: trailStep / 100,
+        leverage, riskPct: riskPct / 100,
+        maxPositions, maxConsecLoss, wallet,
+      });
       const s = data.strategy;
       let output = '═══════════════════════════════════════════════\n';
       output += `  BACKTEST: ${s.label}\n`;
@@ -1437,6 +1488,22 @@
       output += `Trades:   ${s.totalTrades}  |  Win: ${s.wins}  Loss: ${s.losses}  |  WR: ${s.winRate}%\n`;
       output += `Avg Win:  +$${s.avgWin}  |  Avg Loss: $${s.avgLoss}  |  Max DD: ${s.maxDrawdown}%\n`;
       output += '═══════════════════════════════════════════════\n\n';
+
+      // Daily trade count breakdown
+      const dailyCounts = {};
+      for (const t of s.trades) {
+        const day = t.date.slice(0, 10);
+        dailyCounts[day] = (dailyCounts[day] || 0) + 1;
+      }
+      output += '─── Daily Trades ──────────────────────────────\n';
+      for (const [day, cnt] of Object.entries(dailyCounts)) {
+        const dayTrades = s.trades.filter(t => t.date.startsWith(day));
+        const dayWins = dayTrades.filter(t => parseFloat(t.pnl) > 0).length;
+        const dayPnl = dayTrades.reduce((s, t) => s + parseFloat(t.pnl), 0);
+        output += `${day} | ${cnt} trades (${dayWins}W/${cnt-dayWins}L) | ${dayPnl >= 0 ? '+' : ''}$${dayPnl.toFixed(2)}\n`;
+      }
+      output += '\n';
+
       if (s.trades.length) {
         output += 'Date             | Symbol        | Dir   | Entry     | Exit      | P&L      | Exit\n';
         output += '─'.repeat(90) + '\n';
@@ -2156,7 +2223,7 @@
     addAllowedToken, addBannedToken, unbanGlobalToken, removeGlobalToken,
     searchAdminToken, pickAdminToken, searchUserBanToken,
     addRiskLevel, saveRiskLevel, deleteRiskLevel,
-    fixBitunixPnl, debugBitunix, runBacktest,
+    fixBitunixPnl, debugBitunix, runBacktest, loadAiVersions,
   };
 
   // ----- Init -----

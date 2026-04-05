@@ -30,7 +30,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/css/tokens.css">
-  <link rel="stylesheet" href="/css/style.css?v=20260405b">
+  <link rel="stylesheet" href="/css/style.css?v=20260405c">
 
   <link rel="icon" href="/img/logo.jpeg" type="image/jpeg">
   <style>
@@ -1128,17 +1128,77 @@
           <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Tools <span class="tip-btn">?<span class="tip-text">Admin utilities: sync trades with exchanges, debug APIs, run backtests, and fix corrupted data.</span></span></h3>
           <button class="btn btn-primary btn-sm" onclick="window.CryptoBot.fixBitunixPnl()">Sync All Trades with Exchange</button>
           <button class="btn btn-ghost btn-sm" onclick="window.CryptoBot.debugBitunix()">Debug Bitunix API</button>
-          <div style="margin-top:var(--space-2);display:flex;gap:var(--space-2);align-items:center;flex-wrap:wrap;">
-            <label style="font-size:0.8rem;color:var(--color-text-muted);">Days:</label>
-            <select id="backtest-days" class="input" style="width:70px;padding:4px 8px;font-size:0.8rem;">
-              <option value="7" selected>7</option>
-              <option value="14">14</option>
-            </select>
-          </div>
-          <div style="margin-top:var(--space-2);font-size:0.75rem;color:var(--color-text-muted);">Daily→4H+1H→KeyLvl→15M→1M (swing SL, 1:1.5 RR)</div>
-          <div style="display:flex;gap:var(--space-2);flex-wrap:wrap;margin-top:var(--space-1);">
-            <button class="btn btn-ghost btn-sm" onclick="window.CryptoBot.runBacktest('strict', false)">Backtest Normal</button>
-            <button class="btn btn-ghost btn-sm" onclick="window.CryptoBot.runBacktest('strict', true)">Backtest Reverse</button>
+
+          <!-- Backtest Settings -->
+          <div style="margin-top:var(--space-4);border-top:1px solid var(--color-border-muted);padding-top:var(--space-3);">
+            <strong style="font-size:0.9rem;color:var(--color-text);">Backtest Settings <span class="tip-btn">?<span class="tip-text">Configure all risk parameters before running a backtest. Pick an AI version to load its saved settings, or set manually.</span></span></strong>
+
+            <!-- AI Version Selector -->
+            <div style="margin-top:var(--space-2);margin-bottom:var(--space-3);">
+              <label class="form-label" style="font-size:0.8rem;">AI Strategy Version <span class="tip-btn">?<span class="tip-text">Load parameters from a saved AI version. The AI auto-learns from past trades and saves optimized settings.</span></span></label>
+              <div style="display:flex;gap:var(--space-2);align-items:center;flex-wrap:wrap;">
+                <select id="bt-ai-version" class="form-input" style="max-width:300px;font-size:0.8rem;">
+                  <option value="">Manual Settings</option>
+                </select>
+                <button class="btn btn-ghost btn-sm" onclick="window.CryptoBot.loadAiVersions()" style="font-size:0.75rem;">Refresh</button>
+              </div>
+            </div>
+
+            <!-- Settings Grid -->
+            <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:var(--space-2);margin-bottom:var(--space-3);">
+              <div class="form-group" style="margin-bottom:0;">
+                <label class="form-label" style="font-size:0.75rem;">Days <span class="tip-btn">?<span class="tip-text">How many days of historical data to backtest. More days = longer wait but more trades.</span></span></label>
+                <select id="backtest-days" class="form-input" style="font-size:0.8rem;">
+                  <option value="3">3</option>
+                  <option value="5">5</option>
+                  <option value="7" selected>7</option>
+                  <option value="14">14</option>
+                  <option value="30">30</option>
+                </select>
+              </div>
+              <div class="form-group" style="margin-bottom:0;">
+                <label class="form-label" style="font-size:0.75rem;">SL % <span class="tip-btn">?<span class="tip-text">Initial stop-loss distance from entry. e.g. 3 = 3% SL.</span></span></label>
+                <input class="form-input text-mono" type="number" id="bt-sl" min="0.5" max="10" step="0.1" value="3.0" style="font-size:0.8rem;">
+              </div>
+              <div class="form-group" style="margin-bottom:0;">
+                <label class="form-label" style="font-size:0.75rem;">TP % <span class="tip-btn">?<span class="tip-text">Fixed take-profit %. Set 0 for trailing-only (no fixed TP). e.g. 2.25 = close at +2.25% profit.</span></span></label>
+                <input class="form-input text-mono" type="number" id="bt-tp" min="0" max="20" step="0.1" value="0" style="font-size:0.8rem;">
+              </div>
+              <div class="form-group" style="margin-bottom:0;">
+                <label class="form-label" style="font-size:0.75rem;">Trail Step % <span class="tip-btn">?<span class="tip-text">Trailing SL step increment. At each step, SL moves up to lock profit. e.g. 1.2 = trail every +1.2%.</span></span></label>
+                <input class="form-input text-mono" type="number" id="bt-trail" min="0.3" max="5" step="0.1" value="1.2" style="font-size:0.8rem;">
+              </div>
+              <div class="form-group" style="margin-bottom:0;">
+                <label class="form-label" style="font-size:0.75rem;">Leverage <span class="tip-btn">?<span class="tip-text">Leverage multiplier for all trades in this backtest.</span></span></label>
+                <input class="form-input text-mono" type="number" id="bt-leverage" min="1" max="125" step="1" value="20" style="font-size:0.8rem;">
+              </div>
+              <div class="form-group" style="margin-bottom:0;">
+                <label class="form-label" style="font-size:0.75rem;">Risk % <span class="tip-btn">?<span class="tip-text">% of wallet used per trade. e.g. 10 = use 10% of $1000 = $100 per trade.</span></span></label>
+                <input class="form-input text-mono" type="number" id="bt-risk" min="1" max="50" step="1" value="10" style="font-size:0.8rem;">
+              </div>
+              <div class="form-group" style="margin-bottom:0;">
+                <label class="form-label" style="font-size:0.75rem;">Max Positions <span class="tip-btn">?<span class="tip-text">Maximum simultaneous open trades.</span></span></label>
+                <input class="form-input text-mono" type="number" id="bt-maxpos" min="1" max="20" step="1" value="3" style="font-size:0.8rem;">
+              </div>
+              <div class="form-group" style="margin-bottom:0;">
+                <label class="form-label" style="font-size:0.75rem;">Stop After Losses <span class="tip-btn">?<span class="tip-text">Pause trading after N consecutive losses per day. Resets at 7am. Set 0 for unlimited.</span></span></label>
+                <input class="form-input text-mono" type="number" id="bt-consec" min="0" max="20" step="1" value="2" style="font-size:0.8rem;">
+              </div>
+              <div class="form-group" style="margin-bottom:0;">
+                <label class="form-label" style="font-size:0.75rem;">Wallet $ <span class="tip-btn">?<span class="tip-text">Starting wallet balance for the backtest simulation.</span></span></label>
+                <input class="form-input text-mono" type="number" id="bt-wallet" min="100" max="100000" step="100" value="1000" style="font-size:0.8rem;">
+              </div>
+              <div class="form-group" style="margin-bottom:0;">
+                <label class="form-label" style="font-size:0.75rem;">Top N Coins <span class="tip-btn">?<span class="tip-text">Number of top coins by 24h volume to scan for setups.</span></span></label>
+                <input class="form-input text-mono" type="number" id="bt-topn" min="10" max="200" step="10" value="100" style="font-size:0.8rem;">
+              </div>
+            </div>
+
+            <div style="font-size:0.75rem;color:var(--color-text-muted);margin-bottom:var(--space-2);">Daily→4H+1H→KeyLvl→15M→1M (configurable SL/TP, trailing steps)</div>
+            <div style="display:flex;gap:var(--space-2);flex-wrap:wrap;">
+              <button class="btn btn-primary btn-sm" onclick="window.CryptoBot.runBacktest('strict', false)">▶ Run Backtest</button>
+              <button class="btn btn-ghost btn-sm" onclick="window.CryptoBot.runBacktest('strict', true)">↻ Reverse Direction</button>
+            </div>
           </div>
           <pre id="fix-bitunix-result" style="margin-top:var(--space-2);font-size:0.75rem;color:var(--color-text-muted);max-height:600px;overflow:auto;white-space:pre-wrap;word-break:break-all;"></pre>
         </div>
@@ -1225,7 +1285,7 @@
     </div>
   </div>
 
-  <script src="/js/app.js?v=20260405b"></script>
+  <script src="/js/app.js?v=20260405c"></script>
   <script src="/js/cashwallet-fix.js"></script>
 
 </body>

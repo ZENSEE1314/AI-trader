@@ -1007,23 +1007,43 @@ router.post('/debug-bitunix', async (req, res) => {
   }
 });
 
-// ── Backtest: compare 3 strategy variants over last 15 days ────
+// ── AI Versions — list for backtest version selector ──────────
+router.get('/ai-versions', async (req, res) => {
+  try {
+    const rows = await query(
+      `SELECT id, version, trade_count, win_rate, avg_pnl, total_pnl,
+              params, setup_weights, avoided_coins, changes, created_at
+       FROM ai_versions ORDER BY id DESC LIMIT 50`
+    );
+    res.json({ versions: rows });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Backtest: configurable risk settings + AI version selector ────
 router.post('/backtest', async (req, res) => {
   req.setTimeout(600000);
   res.setTimeout(600000);
   try {
     const fetch = require('node-fetch');
     const { getFetchOptions } = require('../proxy-agent');
-    const TOP_N = parseInt(req.body.topN) || 100;
-    const WALLET_START = 1000;
-    const RISK_PCT = 0.10;
-    const MAX_POS = 3;
-    const SL_PCT = 0.03;
-    const TRAIL_STEP = 0.012;
+
+    // All settings from request body (with sensible defaults)
+    const TOP_N = Math.min(parseInt(req.body.topN) || 100, 200);
+    const WALLET_START = parseFloat(req.body.wallet) || 1000;
+    const RISK_PCT = Math.min(parseFloat(req.body.riskPct) || 0.10, 1);
+    const MAX_POS = parseInt(req.body.maxPositions) || 3;
+    const SL_PCT = parseFloat(req.body.slPct) || 0.03;
+    const TP_PCT = parseFloat(req.body.tpPct) || 0;          // 0 = no fixed TP, trailing only
+    const TRAIL_FIRST = parseFloat(req.body.trailStep) || 0.012;
+    const TRAIL_STEP = TRAIL_FIRST;                           // same step size
+    const MAX_LEVERAGE = parseInt(req.body.leverage) || 20;
+    const MAX_CONSEC_LOSS = parseInt(req.body.maxConsecLoss) ?? 2;  // 0 = unlimited
     const SWING = { '4h': 10, '1h': 10, '15m': 10, '1m': 5 };
     const PROXIMITY = 0.003;
 
-    const DAYS = Math.min(parseInt(req.body.days) || 7, 15);
+    const DAYS = Math.min(parseInt(req.body.days) || 7, 30);
     const REVERSE = req.body.reverse === true;
     const endTime = Date.now();
 
@@ -1175,15 +1195,25 @@ router.post('/backtest', async (req, res) => {
             if (pos.pnl < 0) consecLosses++; else consecLosses = 0;
             continue;
           }
-          // Trailing SL: +1.2%→SL+0.6%, +2.4%→SL+1.2%, +3.6%→SL+2.4%
+          // Check fixed TP hit (if configured)
+          if (pos.tp) {
+            if ((pos.dir === 'LONG' && high >= pos.tp) || (pos.dir === 'SHORT' && low <= pos.tp)) {
+              pos.exit = pos.tp; pos.reason = 'TP'; pos.exitTime = now;
+              pos.pnl = pos.dir === 'LONG' ? (pos.tp - pos.entry) * pos.qty : (pos.entry - pos.tp) * pos.qty;
+              wallet += pos.pnl; openPos.splice(i, 1);
+              consecLosses = 0;
+              continue;
+            }
+          }
+          // Trailing SL with configurable step
           const profitPct = pos.dir === 'LONG' ? (close - pos.entry) / pos.entry : (pos.entry - close) / pos.entry;
-          const nextStep = pos.lastStep === 0 ? TRAIL_STEP : pos.lastStep + TRAIL_STEP;
+          const nextStep = pos.lastStep === 0 ? TRAIL_FIRST : pos.lastStep + TRAIL_STEP;
           if (profitPct >= nextStep) {
             let reached = nextStep;
             while (profitPct >= reached + TRAIL_STEP) reached += TRAIL_STEP;
             pos.lastStep = reached;
-            const slLevel = reached <= TRAIL_STEP
-              ? reached - TRAIL_STEP / 2
+            const slLevel = reached <= TRAIL_FIRST
+              ? reached - TRAIL_FIRST / 2
               : reached - TRAIL_STEP;
             pos.sl = pos.dir === 'LONG'
               ? pos.entry * (1 + slLevel)
@@ -1192,7 +1222,7 @@ router.post('/backtest', async (req, res) => {
         }
 
         if (openPos.length >= MAX_POS) continue;
-        if (consecLosses >= 2) continue; // 2 SL = stop for the day, resumes at 7am
+        if (MAX_CONSEC_LOSS > 0 && consecLosses >= MAX_CONSEC_LOSS) continue;
 
         for (const sym of Object.keys(coinData)) {
           if (openPos.length >= MAX_POS) break;
@@ -1251,13 +1281,16 @@ router.post('/backtest', async (req, res) => {
           if (!entrySwing) continue;
           if ((k1.length - 1 - entrySwing.index) > 25) continue;
 
-          // Step 6: Risk — 1% SL, trailing +1.2% steps, no fixed TP
-          const leverage = (sym === 'BTCUSDT' || sym === 'ETHUSDT') ? 100 : 20;
+          // Step 6: Risk — configurable SL, trailing steps, optional TP
+          const leverage = MAX_LEVERAGE;
           const sl = dir === 'LONG' ? price * (1 - SL_PCT) : price * (1 + SL_PCT);
+          const tp = TP_PCT > 0
+            ? (dir === 'LONG' ? price * (1 + TP_PCT) : price * (1 - TP_PCT))
+            : null;
 
           const tradeUsdt = wallet * RISK_PCT;
           const qty = (tradeUsdt * leverage) / price;
-          const trade = { symbol: sym, dir, entry: price, qty, sl, lastStep: 0, entryTime: now, exit: null, reason: null, pnl: null, exitTime: null };
+          const trade = { symbol: sym, dir, entry: price, qty, sl, tp, lastStep: 0, entryTime: now, exit: null, reason: null, pnl: null, exitTime: null };
           openPos.push(trade);
           trades.push(trade);
         }
@@ -1303,16 +1336,23 @@ router.post('/backtest', async (req, res) => {
     const result = simulate();
 
     const firstData = coinData[topCoins[0]];
+    const settingsLabel = `SL:${(SL_PCT*100).toFixed(1)}%` +
+      (TP_PCT > 0 ? ` TP:${(TP_PCT*100).toFixed(1)}%` : ' no-TP') +
+      ` Trail:${(TRAIL_FIRST*100).toFixed(1)}% Lev:${MAX_LEVERAGE}x` +
+      ` Risk:${(RISK_PCT*100)}% MaxPos:${MAX_POS}` +
+      (MAX_CONSEC_LOSS > 0 ? ` StopAfter:${MAX_CONSEC_LOSS}L` : ' noStop');
     res.json({
       period: `${new Date(startTime).toISOString().slice(0,10)} → ${new Date(endTime).toISOString().slice(0,10)}`,
       days: DAYS,
       reverse: REVERSE,
       coinsScanned: Object.keys(coinData).length,
+      settings: { slPct: SL_PCT, tpPct: TP_PCT, trailStep: TRAIL_FIRST, leverage: MAX_LEVERAGE,
+        riskPct: RISK_PCT, maxPositions: MAX_POS, maxConsecLoss: MAX_CONSEC_LOSS, wallet: WALLET_START, topN: TOP_N },
       dataPoints: {
         k4h: firstData?.k4h?.length || 0, k1h: firstData?.k1h?.length || 0,
         k15m: firstData?.k15?.length || 0, k1m: firstData?.k1?.length || 0,
       },
-      strategy: summarize(label + 'Daily→4H+1H→KeyLvl→15M→1M (1%SL, trail+1.2%)', result),
+      strategy: summarize(label + `Daily→4H+1H→KeyLvl→15M→1M (${settingsLabel})`, result),
     });
   } catch (err) {
     console.error('Backtest error:', err);
