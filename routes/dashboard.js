@@ -221,6 +221,16 @@ router.get('/weekly-earnings', async (req, res) => {
     sunday.setDate(monday.getDate() + 6);
     sunday.setHours(23, 59, 59, 999);
 
+    // Get user info for payment timer
+    const userRow = await query(
+      `SELECT created_at, last_paid_at FROM users WHERE id = $1`, [req.userId]
+    );
+    const paidAt = userRow[0]?.last_paid_at ? new Date(userRow[0].last_paid_at) : new Date(userRow[0]?.created_at || now);
+    const dueDate = new Date(paidAt.getTime() + 7 * 86400000);
+    const msRemaining = dueDate - now;
+    const daysRemaining = Math.max(0, Math.ceil(msRemaining / 86400000));
+    const isOverdue = msRemaining <= 0;
+
     // Get user's profit share settings per key
     const keys = await query(
       `SELECT id, label, platform, profit_share_user_pct, profit_share_admin_pct
@@ -291,6 +301,9 @@ router.get('/weekly-earnings', async (req, res) => {
       user_share_pct: keys.length > 0 ? (parseFloat(keys[0].profit_share_user_pct) || 60) : 60,
       admin_share_pct: keys.length > 0 ? (parseFloat(keys[0].profit_share_admin_pct) || 40) : 40,
       per_key: perKey,
+      payment_due: dueDate.toISOString(),
+      days_remaining: daysRemaining,
+      is_overdue: isOverdue,
     });
   } catch (err) {
     console.error('Weekly earnings error:', err.message);

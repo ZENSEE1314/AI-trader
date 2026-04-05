@@ -362,6 +362,29 @@
     const netColor = netPnl >= 0 ? 'var(--color-success)' : 'var(--color-danger)';
     const netSign = netPnl >= 0 ? '+' : '';
 
+    // Payment countdown timer
+    const timerEl = el('we-timer-days');
+    if (timerEl && data.days_remaining !== undefined) {
+      const days = data.days_remaining;
+      timerEl.textContent = days;
+      if (data.is_overdue) {
+        timerEl.style.color = 'var(--color-danger)';
+        timerEl.textContent = 'OVERDUE';
+        el('we-timer').style.borderColor = 'var(--color-danger)';
+        el('we-timer').style.background = 'rgba(239,68,68,0.08)';
+      } else if (days <= 2) {
+        timerEl.style.color = 'var(--color-danger)';
+        el('we-timer').style.borderColor = 'var(--color-danger)';
+      } else if (days <= 4) {
+        timerEl.style.color = '#f59e0b';
+        el('we-timer').style.borderColor = '#f59e0b';
+      } else {
+        timerEl.style.color = 'var(--color-accent)';
+        el('we-timer').style.borderColor = 'var(--color-border-muted)';
+        el('we-timer').style.background = 'var(--color-bg)';
+      }
+    }
+
     el('we-user-pct').textContent = data.user_share_pct || 60;
     el('we-admin-pct').textContent = data.admin_share_pct || 40;
     el('we-user-share').textContent = `$${userShare.toFixed(2)}`;
@@ -552,17 +575,58 @@
   }
 
   function populateRiskLevelDropdown(keyId, selectedId) {
-    const sel = $(`#risk-level-${keyId}`);
-    if (!sel) return;
-    sel.innerHTML = '<option value="">-- Select Risk Level --</option>' +
-      riskLevelsCache.map(rl =>
-        `<option value="${rl.id}" ${rl.id === selectedId ? 'selected' : ''}>${escapeHtml(rl.name)} (TP:${(parseFloat(rl.tp_pct)*100).toFixed(1)}% SL:${(parseFloat(rl.sl_pct)*100).toFixed(1)}% Lev:${rl.max_leverage}x)</option>`
-      ).join('');
-    sel.onchange = () => applyRiskLevel(keyId);
+    const container = $(`#risk-boxes-${keyId}`);
+    const hidden = $(`#risk-level-${keyId}`);
+    if (!container || !hidden) return;
+
+    const RISK_ICONS = { low: '\u{1F6E1}', medium: '\u26A1', high: '\u{1F525}' };
+    const RISK_COLORS = {
+      low:    { border: '#22c55e', bg: 'rgba(34,197,94,0.08)', glow: 'rgba(34,197,94,0.25)' },
+      medium: { border: '#f59e0b', bg: 'rgba(245,158,11,0.08)', glow: 'rgba(245,158,11,0.25)' },
+      high:   { border: '#ef4444', bg: 'rgba(239,68,68,0.08)', glow: 'rgba(239,68,68,0.25)' },
+    };
+
+    container.innerHTML = riskLevelsCache.map(rl => {
+      const isSelected = rl.id === selectedId;
+      const nameKey = (rl.name || '').toLowerCase().includes('high') ? 'high'
+        : (rl.name || '').toLowerCase().includes('medium') ? 'medium' : 'low';
+      const c = RISK_COLORS[nameKey] || RISK_COLORS.medium;
+      const icon = RISK_ICONS[nameKey] || '\u26A1';
+
+      return `<div class="risk-box" data-rl-id="${rl.id}" data-key-id="${keyId}"
+        onclick="window.CryptoBot.selectRiskLevel(${keyId},${rl.id})"
+        style="
+          cursor:pointer;border:2px solid ${isSelected ? c.border : 'var(--color-border-muted)'};
+          border-radius:var(--radius-lg);padding:16px 14px;text-align:center;
+          background:${isSelected ? c.bg : 'var(--color-bg)'};
+          box-shadow:${isSelected ? '0 0 12px ' + c.glow : 'none'};
+          transition:all 0.2s ease;position:relative;
+        ">
+        ${isSelected ? `<div style="position:absolute;top:8px;right:10px;font-size:0.7rem;color:${c.border};font-weight:700;">ACTIVE</div>` : ''}
+        <div style="font-size:1.8rem;margin-bottom:6px;">${icon}</div>
+        <div style="font-size:0.95rem;font-weight:700;color:${isSelected ? c.border : 'var(--color-text)'};">${escapeHtml(rl.name)}</div>
+        <div style="font-size:0.7rem;color:var(--color-text-muted);margin:6px 0 10px;line-height:1.3;">${escapeHtml(rl.description || '')}</div>
+        <div style="display:flex;justify-content:center;gap:8px;flex-wrap:wrap;">
+          <span style="font-size:0.7rem;background:var(--color-bg-raised);padding:2px 8px;border-radius:10px;">Lev ${rl.max_leverage}x</span>
+          <span style="font-size:0.7rem;background:var(--color-bg-raised);padding:2px 8px;border-radius:10px;">Cap ${parseFloat(rl.capital_percentage || 10)}%</span>
+          <span style="font-size:0.7rem;background:var(--color-bg-raised);padding:2px 8px;border-radius:10px;">SL ${(parseFloat(rl.sl_pct)*100).toFixed(1)}%</span>
+        </div>
+      </div>`;
+    }).join('');
+  }
+
+  function selectRiskLevel(keyId, rlId) {
+    const hidden = $(`#risk-level-${keyId}`);
+    if (hidden) hidden.value = rlId;
+    // Re-render boxes to update selection
+    populateRiskLevelDropdown(keyId, rlId);
+    // Apply the risk level values to sliders
+    applyRiskLevel(keyId);
   }
 
   function applyRiskLevel(keyId) {
-    const rlId = parseInt($(`#risk-level-${keyId}`).value);
+    const raw = $(`#risk-level-${keyId}`)?.value;
+    const rlId = parseInt(raw);
     const rl = riskLevelsCache.find(r => r.id === rlId);
     if (!rl) return;
     const tp = (parseFloat(rl.tp_pct) * 100).toFixed(1);
@@ -686,6 +750,12 @@
           </div>
         </div>
         <div class="key-settings" id="settings-${k.id}">
+          <!-- Risk Level Visual Selector -->
+          <div style="margin-bottom:var(--space-4);">
+            <label class="form-label" style="margin-bottom:var(--space-2);">Risk Level</label>
+            <input type="hidden" id="risk-level-${k.id}" value="${k.risk_level_id || ''}">
+            <div id="risk-boxes-${k.id}" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;"></div>
+          </div>
           <div class="settings-grid">
             <div class="slider-group">
               <div class="slider-header">
@@ -764,14 +834,6 @@
                 <input class="form-input text-mono" type="text" id="banned-search-${k.id}" placeholder="Type to search available tokens..." autocomplete="off" style="font-size:0.8rem;" oninput="window.CryptoBot.searchUserBanToken(this,${k.id})" onfocus="window.CryptoBot.searchUserBanToken(this,${k.id})">
                 <div class="coin-dropdown hidden" id="banned-dropdown-${k.id}"></div>
               </div>
-            </div>
-            <!-- Risk Level -->
-            <div class="form-group" style="margin-bottom:0;grid-column:1/-1;">
-              <label class="form-label">Risk Level</label>
-              <select class="form-input" id="risk-level-${k.id}" style="max-width:250px;">
-                <option value="">-- Select Risk Level --</option>
-              </select>
-              <span style="font-size:0.7rem;color:var(--color-text-muted);">Overrides TP/SL/leverage with preset values</span>
             </div>
             <!-- Per-Token Leverage -->
             <div class="form-group" style="margin-bottom:0;grid-column:1/-1;">
@@ -1437,8 +1499,10 @@
     container.innerHTML = data.users.filter(u => u.keys.length > 0).map(u => {
       const net = parseFloat(u.total_net_pnl) || 0;
       const netColor = net >= 0 ? 'var(--color-success)' : 'var(--color-danger)';
-      const overdueTag = u.is_overdue ? '<span style="color:var(--color-danger);font-size:0.7rem;font-weight:bold;margin-left:6px;">⚠ OVERDUE</span>' : '';
-      const lastPaid = u.last_paid ? `<span style="font-size:0.7rem;color:var(--color-text-muted);margin-left:6px;">Last paid: ${u.last_paid}</span>` : '<span style="font-size:0.7rem;color:var(--color-text-muted);margin-left:6px;">Never paid</span>';
+      const days = u.days_remaining;
+      const timerColor = u.is_overdue ? 'var(--color-danger)' : days <= 2 ? 'var(--color-danger)' : days <= 4 ? '#f59e0b' : 'var(--color-accent)';
+      const timerText = u.is_overdue ? 'OVERDUE' : `${days}d left`;
+      const timerBadge = `<span style="font-size:0.7rem;font-weight:700;color:${timerColor};background:${u.is_overdue ? 'rgba(239,68,68,0.12)' : 'rgba(0,0,0,0.06)'};padding:2px 8px;border-radius:10px;margin-left:6px;">${timerText}</span>`;
 
       const keysHtml = u.keys.map(k => {
         const isPaused = k.paused || !k.enabled;
@@ -1478,12 +1542,12 @@
         </div>`;
       }).join('');
 
-      return `<div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-4);margin-bottom:var(--space-3);">
+      return `<div style="background:var(--color-bg-raised);border:1px solid ${u.is_overdue ? 'var(--color-danger)' : 'var(--color-border-muted)'};border-radius:var(--radius-lg);padding:var(--space-4);margin-bottom:var(--space-3);">
         <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
           <div>
             <strong style="font-size:0.95rem;">${escapeHtml(u.email)}</strong>
             <span style="font-size:0.75rem;color:var(--color-text-muted);margin-left:8px;">${u.total_trades} trades · ${u.total_wins}W/${u.total_losses}L</span>
-            ${overdueTag}${lastPaid}
+            ${timerBadge}
           </div>
           <div style="display:flex;align-items:center;gap:8px;">
             <div style="text-align:right;">
@@ -1581,12 +1645,22 @@
   function renderAdminUsers(users) {
     $('#admin-users-tbody').innerHTML = users.map(u => {
       const bal = parseFloat(u.wallet_balance || 0).toFixed(2);
+      // Payment timer: 7 days from last_paid_at or created_at
+      const paidAt = u.last_paid_at ? new Date(u.last_paid_at) : new Date(u.created_at);
+      const dueDate = new Date(paidAt.getTime() + 7 * 86400000);
+      const msLeft = dueDate - Date.now();
+      const daysLeft = Math.max(0, Math.ceil(msLeft / 86400000));
+      const isOverdue = msLeft <= 0;
+      const timerColor = isOverdue ? 'var(--color-danger)' : daysLeft <= 2 ? 'var(--color-danger)' : daysLeft <= 4 ? '#f59e0b' : 'var(--color-success)';
+      const timerText = isOverdue ? '<b>OVERDUE</b>' : `${daysLeft}d left`;
+
       return `<tr>
       <td>${escapeHtml(u.email)}${u.is_admin ? ' <b>(admin)</b>' : ''}</td>
       <td>${u.key_count}</td>
       <td class="text-mono">$${bal} <button class="btn btn-ghost btn-sm" style="font-size:0.7rem;padding:2px 6px;" onclick="window.CryptoBot.adminEditWallet(${u.id},'${escapeHtml(u.email)}',${bal})">Edit</button></td>
       <td>${escapeHtml(u.referral_code || '-')}</td>
       <td>${formatDate(u.created_at)}</td>
+      <td style="white-space:nowrap;"><span style="color:${timerColor};font-size:0.8rem;font-weight:600;">${timerText}</span></td>
       <td style="white-space:nowrap;">
         ${u.is_blocked
           ? `<button class="btn btn-primary btn-sm" onclick="window.CryptoBot.adminAction('unblock',${u.id})">Unblock</button>`
@@ -1931,7 +2005,7 @@
     goToAuth, showLoginForm, onPlatformChange,
     searchCoins, addCoin, removeCoin,
     filterLogs, clearLogs,
-    addTokenLeverage, removeTokenLeverage, searchTokenLev, pickTokenLev,
+    addTokenLeverage, removeTokenLeverage, searchTokenLev, pickTokenLev, selectRiskLevel,
     addAllowedToken, addBannedToken, unbanGlobalToken, removeGlobalToken,
     searchAdminToken, pickAdminToken, searchUserBanToken,
     addRiskLevel, saveRiskLevel, deleteRiskLevel,

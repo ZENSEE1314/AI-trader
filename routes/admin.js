@@ -27,7 +27,7 @@ router.get('/weekly-earnings', async (req, res) => {
     sunday.setHours(23, 59, 59, 999);
 
     const users = await query(
-      `SELECT u.id, u.email,
+      `SELECT u.id, u.email, u.created_at, u.last_paid_at,
               ak.id as key_id, ak.label as key_label, ak.platform,
               ak.profit_share_user_pct, ak.profit_share_admin_pct,
               ak.paused_by_admin, ak.enabled
@@ -46,15 +46,6 @@ router.get('/weekly-earnings', async (req, res) => {
       [monday, sunday]
     );
 
-    // Check last paid date per user
-    const lastPaid = await query(
-      `SELECT user_id, MAX(week_end) as last_paid_week
-       FROM weekly_earnings WHERE settled = true
-       GROUP BY user_id`
-    );
-    const lastPaidMap = {};
-    for (const lp of lastPaid) lastPaidMap[lp.user_id] = new Date(lp.last_paid_week);
-
     let grandTotalNet = 0;
     let grandTotalUserShare = 0;
     let grandTotalAdminShare = 0;
@@ -62,11 +53,18 @@ router.get('/weekly-earnings', async (req, res) => {
     const userMap = {};
     for (const u of users) {
       if (!userMap[u.id]) {
-        const lpDate = lastPaidMap[u.id];
-        const isOverdue = lpDate ? (now - lpDate > 8 * 86400000) : false;
+        // Timer: 7 days from last_paid_at (or created_at if never paid)
+        const paidAt = u.last_paid_at ? new Date(u.last_paid_at) : new Date(u.created_at);
+        const dueDate = new Date(paidAt.getTime() + 7 * 86400000);
+        const msRemaining = dueDate - now;
+        const daysRemaining = Math.max(0, Math.ceil(msRemaining / 86400000));
+        const isOverdue = msRemaining <= 0;
+
         userMap[u.id] = {
           user_id: u.id,
           email: u.email,
+          created_at: u.created_at,
+          last_paid_at: u.last_paid_at,
           keys: [],
           total_net_pnl: 0,
           total_user_share: 0,
@@ -74,7 +72,8 @@ router.get('/weekly-earnings', async (req, res) => {
           total_trades: 0,
           total_wins: 0,
           total_losses: 0,
-          last_paid: lpDate ? lpDate.toISOString().slice(0,10) : null,
+          payment_due: dueDate.toISOString(),
+          days_remaining: daysRemaining,
           is_overdue: isOverdue,
         };
       }
@@ -284,7 +283,7 @@ router.get('/users', async (req, res) => {
       `SELECT u.id, u.email, u.is_blocked, u.is_admin, u.approved_no_sub,
               u.referral_code, u.wallet_balance, u.cash_wallet, u.commission_earned,
               u.weekly_fee_amount, u.weekly_fee_due, u.usdt_address, u.usdt_network,
-              u.created_at,
+              u.created_at, u.last_paid_at,
               (SELECT COUNT(*) FROM api_keys WHERE user_id = u.id) as key_count,
               (SELECT email FROM users WHERE id = u.referred_by) as referred_by_email
        FROM users u ORDER BY u.created_at DESC`

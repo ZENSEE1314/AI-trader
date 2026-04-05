@@ -641,7 +641,14 @@
 
         <!-- Weekly Earnings (Profit Split) -->
         <div style="margin-top:var(--space-4);">
-          <h2 class="section-heading" style="margin-bottom:var(--space-3);">This Week's Earnings</h2>
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--space-3);flex-wrap:wrap;gap:8px;">
+            <h2 class="section-heading" style="margin-bottom:0;">This Week's Earnings</h2>
+            <div id="we-timer" style="display:flex;align-items:center;gap:8px;padding:6px 14px;border-radius:var(--radius-md);background:var(--color-bg);border:1px solid var(--color-border-muted);">
+              <span style="font-size:0.75rem;color:var(--color-text-muted);">Payment due in</span>
+              <span id="we-timer-days" style="font-size:1.1rem;font-weight:700;color:var(--color-accent);">--</span>
+              <span style="font-size:0.75rem;color:var(--color-text-muted);">days</span>
+            </div>
+          </div>
           <div id="weekly-earnings-grid" class="summary-grid">
             <div class="summary-card" style="border-left:3px solid var(--color-success);">
               <span class="summary-card-label">Your Earnings (<span id="we-user-pct">60</span>%)</span>
@@ -1078,7 +1085,7 @@
         <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Users</h3>
         <div class="table-wrap" style="margin-bottom:var(--space-5);overflow-x:auto;">
           <table class="data-table" id="admin-users-table">
-            <thead><tr><th>Email</th><th>Keys</th><th>Wallet</th><th>Referral</th><th>Joined</th><th>Action</th></tr></thead>
+            <thead><tr><th>Email</th><th>Keys</th><th>Wallet</th><th>Referral</th><th>Joined</th><th>Payment</th><th>Action</th></tr></thead>
             <tbody id="admin-users-tbody"></tbody>
           </table>
         </div>
