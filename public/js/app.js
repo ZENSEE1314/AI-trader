@@ -1549,6 +1549,7 @@
         if (!line.trim()) return;
         try {
           const msg = JSON.parse(line);
+          if (msg.type === 'ping') return;
           if (msg.type === 'log') {
             logs += msg.message + '\n';
             if (resultEl) { resultEl.textContent = logs; resultEl.scrollTop = resultEl.scrollHeight; }
@@ -1763,20 +1764,25 @@
   }
 
   async function removeGlobalToken(symbol) {
-    if (!symbol) return;
-    if (!confirm('Remove ' + symbol + ' from allowed tokens?')) return;
+    console.log('[DEBUG] removeGlobalToken called with:', symbol);
+    if (!symbol) { console.log('[DEBUG] No symbol, returning'); return; }
+    if (!confirm('Remove ' + symbol + ' from allowed tokens?')) { console.log('[DEBUG] User cancelled'); return; }
     try {
+      console.log('[DEBUG] Sending POST /api/admin/remove-global-token', symbol);
       const resp = await fetch('/api/admin/remove-global-token', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'same-origin',
         body: JSON.stringify({ symbol }),
       });
+      console.log('[DEBUG] Response status:', resp.status);
       const data = await resp.json();
+      console.log('[DEBUG] Response data:', data);
       if (!resp.ok) throw new Error(data.error || 'Failed');
       showToast(symbol + ' removed', 'success');
       loadGlobalTokens();
     } catch (err) {
+      console.error('[DEBUG] Remove error:', err);
       alert('Remove failed: ' + (err.message || err));
     }
   }

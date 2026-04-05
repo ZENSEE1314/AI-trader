@@ -786,10 +786,11 @@ router.delete('/global-tokens/:symbol', async (req, res) => {
 
 // POST-based remove (more reliable than DELETE with URL params)
 router.post('/remove-global-token', async (req, res) => {
+  console.log('[ADMIN] remove-global-token hit, body:', JSON.stringify(req.body));
   try {
     const symbol = (req.body.symbol || '').toUpperCase().trim();
     if (!symbol) return res.status(400).json({ error: 'Symbol required' });
-    const result = await query('DELETE FROM global_token_settings WHERE symbol = $1', [symbol]);
+    await query('DELETE FROM global_token_settings WHERE symbol = $1', [symbol]);
     console.log(`[ADMIN] Removed global token: ${symbol}`);
     res.json({ ok: true, symbol });
   } catch (err) {
@@ -1531,6 +1532,12 @@ router.post('/ai-optimize', async (req, res) => {
   function sendLog(msg) { try { res.write(JSON.stringify({ type: 'log', message: msg }) + '\n'); } catch {} }
   function sendProgress(phase, pct) { try { res.write(JSON.stringify({ type: 'progress', phase, pct }) + '\n'); } catch {} }
 
+  // Keepalive ping every 5s — prevents Railway/proxy from killing idle streams
+  const keepalive = setInterval(() => {
+    try { res.write(JSON.stringify({ type: 'ping' }) + '\n'); } catch {}
+  }, 5000);
+  res.on('close', () => clearInterval(keepalive));
+
   try {
     const fetch = require('node-fetch');
     const { getFetchOptions } = require('../proxy-agent');
@@ -1606,6 +1613,7 @@ router.post('/ai-optimize', async (req, res) => {
     const allowedRows = await query('SELECT symbol FROM global_token_settings WHERE enabled = true AND banned = false ORDER BY symbol');
     const topCoins = allowedRows.map(r => r.symbol);
     if (!topCoins.length) {
+      clearInterval(keepalive);
       res.write(JSON.stringify({ type: 'result', error: 'No tokens enabled in admin token settings', results: [] }) + '\n');
       return res.end();
     }
@@ -1669,6 +1677,7 @@ router.post('/ai-optimize', async (req, res) => {
 
     const firstCoin = Object.keys(coinData)[0];
     if (!firstCoin) {
+      clearInterval(keepalive);
       res.write(JSON.stringify({ type: 'result', error: 'No data fetched', results: [] }) + '\n');
       return res.end();
     }
@@ -1971,9 +1980,11 @@ router.post('/ai-optimize', async (req, res) => {
       results: allResults,
       cachedData: isCacheValid,
     }) + '\n');
+    clearInterval(keepalive);
     res.end();
   } catch (err) {
     console.error('AI optimize error:', err);
+    clearInterval(keepalive);
     try {
       res.write(JSON.stringify({ type: 'error', error: err.message }) + '\n');
       res.end();
