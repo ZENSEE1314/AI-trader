@@ -1735,18 +1735,24 @@
 
   async function unbanGlobalToken(symbol) {
     try {
-      await api('DELETE', `/api/admin/global-tokens/${symbol}`);
+      await api('POST', '/api/admin/global-tokens/remove', { symbol });
       showToast(`${symbol} unbanned`, 'success');
       loadGlobalTokens();
-    } catch (err) { showToast(err.message, 'error'); }
+    } catch (err) {
+      console.error('Unban token error:', err);
+      showToast(err.message || 'Failed to unban token', 'error');
+    }
   }
 
   async function removeGlobalToken(symbol) {
     try {
-      await api('DELETE', `/api/admin/global-tokens/${symbol}`);
+      await api('POST', '/api/admin/global-tokens/remove', { symbol });
       showToast(`${symbol} removed`, 'success');
       loadGlobalTokens();
-    } catch (err) { showToast(err.message, 'error'); }
+    } catch (err) {
+      console.error('Remove token error:', err);
+      showToast(err.message || 'Failed to remove token', 'error');
+    }
   }
 
   // Admin token search dropdown (uses full Binance coin list)

@@ -784,6 +784,19 @@ router.delete('/global-tokens/:symbol', async (req, res) => {
   }
 });
 
+// POST-based remove (more reliable than DELETE with URL params)
+router.post('/global-tokens/remove', async (req, res) => {
+  try {
+    const symbol = (req.body.symbol || '').toUpperCase().trim();
+    if (!symbol) return res.status(400).json({ error: 'Symbol required' });
+    await query('DELETE FROM global_token_settings WHERE symbol = $1', [symbol]);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Global token remove error:', err.message);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // ── Force re-sync all trades with exchange data ────
 router.post('/fix-bitunix-pnl', async (req, res) => {
   try {
@@ -1528,33 +1541,12 @@ router.post('/ai-optimize', async (req, res) => {
     sendLog(`Starting optimizer: ${DAYS} days, strategy-only (13 params)`);
 
     async function fetchK(symbol, interval, limit) {
-      if (limit <= 1500) {
-        const url = `https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`;
-        for (let i = 0; i < 2; i++) {
-          try { const r = await fetch(url, { timeout: 8000, ...getFetchOptions() }); if (r.ok) return r.json(); } catch {}
-          await new Promise(r => setTimeout(r, 200));
-        }
-        return null;
-      }
-      let all = [];
-      let et = endTime;
-      let remaining = limit;
-      while (remaining > 0) {
-        const batch = Math.min(remaining, 1500);
-        const url = `https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=${interval}&limit=${batch}&endTime=${et}`;
-        let data = null;
-        for (let i = 0; i < 2; i++) {
-          try { const r = await fetch(url, { timeout: 8000, ...getFetchOptions() }); if (r.ok) { data = await r.json(); break; } } catch {}
-          await new Promise(r => setTimeout(r, 200));
-        }
-        if (!data || !data.length) break;
-        all = data.concat(all);
-        et = parseInt(data[0][0]) - 1;
-        remaining -= data.length;
-        if (data.length < batch) break;
-        await new Promise(r => setTimeout(r, 50));
-      }
-      return all.length ? all : null;
+      const url = `https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=${interval}&limit=${Math.min(limit,1500)}`;
+      try {
+        const r = await fetch(url, { timeout: 6000, ...getFetchOptions() });
+        if (!r.ok) return null;
+        return r.json();
+      } catch { return null; }
     }
     function detectSwings(klines, len) {
       const highs = klines.map(k => parseFloat(k[2])), lows = klines.map(k => parseFloat(k[3]));
@@ -1603,10 +1595,10 @@ router.post('/ai-optimize', async (req, res) => {
       const k15Limit = Math.ceil(DAYS * 24 * 4) + 100;
       const k4hLimit = Math.ceil(DAYS * 6) + 50;
       const k1hLimit = Math.ceil(DAYS * 24) + 50;
-      const BATCH = 8;
+      const BATCH = 5;
       const failedCoins = [];
 
-      // Per-coin fetch with 30s hard timeout
+      // Per-coin fetch with 15s hard timeout — single attempt, no retries
       async function fetchCoin(sym) {
         return Promise.race([
           (async () => {
@@ -1615,7 +1607,7 @@ router.post('/ai-optimize', async (req, res) => {
             ]);
             return { sym, kD, k4h, k1h, k15, k1 };
           })(),
-          new Promise(resolve => setTimeout(() => resolve({ sym, kD:null, k4h:null, k1h:null, k15:null, k1:null, timedOut:true }), 30000)),
+          new Promise(resolve => setTimeout(() => resolve({ sym, kD:null, k4h:null, k1h:null, k15:null, k1:null, timedOut:true }), 15000)),
         ]);
       }
 
@@ -1625,21 +1617,21 @@ router.post('/ai-optimize', async (req, res) => {
         for (const r of fetchResults) {
           if (r.timedOut) {
             failedCoins.push(r.sym + '(timeout)');
-            sendLog(`  ⚠️ ${r.sym} timed out — skipped`);
+            sendLog(`  ${r.sym} timed out - skipped`);
           } else if (r.kD&&r.k4h&&r.k1h&&r.k15) {
             coinData[r.sym] = { kD:r.kD, k4h:r.k4h, k1h:r.k1h, k15:r.k15, k1:r.k1||[] };
           } else {
             failedCoins.push(r.sym + '(no data)');
-            sendLog(`  ⚠️ ${r.sym} missing data — skipped`);
           }
         }
         const done = Math.min(b+BATCH, topCoins.length);
-        sendLog(`Fetched ${done}/${topCoins.length} tokens (${Object.keys(coinData).length} OK)`);
+        const ok = Object.keys(coinData).length;
+        sendLog(`Fetched ${done}/${topCoins.length} tokens (${ok} OK${failedCoins.length ? ', ' + failedCoins.length + ' failed' : ''})`);
         sendProgress('fetch', Math.round(done/topCoins.length*100));
-        // Small delay between batches to avoid rate limits
-        if (b + BATCH < topCoins.length) await new Promise(r => setTimeout(r, 200));
+        // Rate limit pause between batches
+        if (b + BATCH < topCoins.length) await new Promise(r => setTimeout(r, 300));
       }
-      if (failedCoins.length) sendLog(`⚠️ ${failedCoins.length} tokens failed: ${failedCoins.join(', ')}`);
+      if (failedCoins.length) sendLog(`⚠️ Failed: ${failedCoins.join(', ')}`);
       // Save to cache
       _candleCache.data = coinData;
       _candleCache.tokens = cacheKey;
