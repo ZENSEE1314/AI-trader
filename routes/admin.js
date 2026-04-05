@@ -1508,7 +1508,6 @@ router.post('/ai-optimize', async (req, res) => {
     const { getFetchOptions } = require('../proxy-agent');
     const { quantumOptimize } = require('../quantum-optimizer');
     const DAYS = Math.min(parseInt(req.body.days) || 7, 30);
-    const TOP_N = Math.min(parseInt(req.body.topN) || 50, 100);
     const endTime = Date.now();
     const startTime = endTime - DAYS * 86400000;
     const SW = { '4h': 10, '1h': 10, '15m': 10, '1m': 5 };
@@ -1574,22 +1573,17 @@ router.post('/ai-optimize', async (req, res) => {
         :(Math.abs(price-b.upper)/b.upper<PROX||Math.abs(price-pdh)/pdh<PROX||Math.abs(price-b.vwap)/b.vwap<PROX);
     }
 
-    // Fetch data once for all combos
-    const tickerRes = await fetch('https://fapi.binance.com/fapi/v1/ticker/24hr', { timeout: 15000, ...getFetchOptions() });
-    const tickers = await tickerRes.json();
-    const BL = new Set(['USDCUSDT','ALPACAUSDT','XAUUSDT','XAGUSDT','EURUSDT','GBPUSDT','JPYUSDT']);
-    const topCoins = tickers
-      .filter(t => t.symbol.endsWith('USDT')&&!t.symbol.includes('_')&&!BL.has(t.symbol))
-      .filter(t => parseFloat(t.quoteVolume)>=10_000_000)
-      .sort((a,b) => parseFloat(b.quoteVolume)-parseFloat(a.quoteVolume))
-      .slice(0, TOP_N).map(t => t.symbol);
+    // Fetch admin-allowed tokens from DB (not top volume)
+    const allowedRows = await query('SELECT symbol FROM global_token_settings WHERE enabled = true AND banned = false ORDER BY symbol');
+    const topCoins = allowedRows.map(r => r.symbol);
+    if (!topCoins.length) return res.json({ error: 'No tokens enabled in admin token settings', results: [] });
 
     const coinData = {};
     const k15Limit = Math.ceil(DAYS * 24 * 4) + 100;
     const k4hLimit = Math.ceil(DAYS * 6) + 50;
     const k1hLimit = Math.ceil(DAYS * 24) + 50;
-    // Parallel fetch — 5 coins at a time for speed
-    const BATCH = 5;
+    // Parallel fetch — 10 coins at a time for speed
+    const BATCH = 10;
     for (let b = 0; b < topCoins.length; b += BATCH) {
       const batch = topCoins.slice(b, b + BATCH);
       const results = await Promise.all(batch.map(async (sym) => {
@@ -1760,14 +1754,37 @@ router.post('/ai-optimize', async (req, res) => {
         finalWallet:parseFloat(r.wallet.toFixed(2)), maxDrawdown:parseFloat((maxDD*100).toFixed(1)) };
     }
 
-    // Unified evaluator: takes full config (strategy + risk), returns score
-    function evaluate(cfg) {
+    // Fixed risk config for backtesting — user controls their own risk
+    const FIXED_RISK = { slPct: 0.03, tpPct: 0, trailStep: 0.012, leverage: 20, riskPct: 0.10, maxPos: 5, maxConsecLoss: 0 };
+
+    // Unified evaluator: merges strategy config with fixed risk, returns score
+    function evaluate(strategyCfg) {
+      const cfg = { ...strategyCfg, ...FIXED_RISK };
       const signals = computeSignals(cfg);
       const r = replaySignals(signals, cfg);
       return scoreResult(r);
     }
 
-    // ═══ ROUND 1: Preset strategy × risk grid (12 combos) ═══
+    // Per-token evaluator: run best strategy on each token individually
+    function evaluatePerToken(strategyCfg) {
+      const cfg = { ...strategyCfg, ...FIXED_RISK };
+      const signals = computeSignals(cfg);
+      const tokenStats = {};
+      for (const sym of Object.keys(coinData)) {
+        const symSignals = signals.filter(s => s.sym === sym);
+        if (!symSignals.length) { tokenStats[sym] = { trades: 0, wins: 0, winRate: 0, totalPnl: 0, rating: 'No Data' }; continue; }
+        const r = replaySignals(symSignals, cfg);
+        const s = scoreResult(r);
+        let rating = 'Bad';
+        if (s.trades >= 3 && s.winRate >= 60) rating = 'Good';
+        else if (s.trades >= 2 && s.winRate >= 50) rating = 'OK';
+        else if (s.trades === 0) rating = 'No Trades';
+        tokenStats[sym] = { ...s, rating };
+      }
+      return tokenStats;
+    }
+
+    // ═══ ROUND 1: Strategy presets (no risk combos — 10 fast evals) ═══
     const presets = [
       { name:'Full SMC',       swingLen4h:10,swingLen1h:10,swingLen15m:10,swingLen1m:5, indecisiveThresh:0.3, keyLevelProximity:0.003, maxEntryAge:25, requireBothHTF:1,requireKeyLevel:1,require15m:1,require1m:1,requireVolSpike:0,volSpikeMultiplier:1.5 },
       { name:'No Key Level',   swingLen4h:10,swingLen1h:10,swingLen15m:10,swingLen1m:5, indecisiveThresh:0.3, keyLevelProximity:0.003, maxEntryAge:25, requireBothHTF:1,requireKeyLevel:0,require15m:1,require1m:1,requireVolSpike:0,volSpikeMultiplier:1.5 },
@@ -1780,28 +1797,15 @@ router.post('/ai-optimize', async (req, res) => {
       { name:'Ultra Strict',   swingLen4h:12,swingLen1h:12,swingLen15m:12,swingLen1m:5, indecisiveThresh:0.35,keyLevelProximity:0.002, maxEntryAge:20, requireBothHTF:1,requireKeyLevel:1,require15m:1,require1m:1,requireVolSpike:1,volSpikeMultiplier:2.0 },
       { name:'Momentum Only',  swingLen4h:10,swingLen1h:10,swingLen15m:8, swingLen1m:4, indecisiveThresh:0.2, keyLevelProximity:0.008, maxEntryAge:35, requireBothHTF:0,requireKeyLevel:0,require15m:1,require1m:1,requireVolSpike:0,volSpikeMultiplier:1.5 },
     ];
-    const riskPresets = [
-      { name:'Conservative', slPct:0.02,  tpPct:0.03,  trailStep:0.012, leverage:10, riskPct:0.05, maxPos:2,  maxConsecLoss:2 },
-      { name:'Default',      slPct:0.03,  tpPct:0,     trailStep:0.012, leverage:20, riskPct:0.10, maxPos:3,  maxConsecLoss:0 },
-      { name:'Aggressive',   slPct:0.02,  tpPct:0,     trailStep:0.015, leverage:30, riskPct:0.15, maxPos:5,  maxConsecLoss:0 },
-      { name:'Scalp',        slPct:0.01,  tpPct:0.015, trailStep:0.01,  leverage:20, riskPct:0.10, maxPos:5,  maxConsecLoss:3 },
-      { name:'Wide Swing',   slPct:0.05,  tpPct:0,     trailStep:0.02,  leverage:10, riskPct:0.15, maxPos:2,  maxConsecLoss:0 },
-    ];
 
     const results = [];
     for (const strat of presets) {
-      for (const risk of riskPresets) {
-        const cfg = { ...strat, ...risk };
-        const s = evaluate(cfg);
-        results.push({
-          strategy: strat.name, risk: risk.name,
-          combo: `${strat.name} + ${risk.name}`,
-          settings: cfg, ...s,
-        });
-      }
+      const s = evaluate(strat);
+      results.push({ strategy: strat.name, risk: 'User', combo: strat.name, settings: strat, ...s });
     }
+    console.log(`[OPTIMIZE] Round 1 done: ${presets.length} presets evaluated`);
 
-    // ═══ ROUND 2: Genetic — breed from top 10 ═══
+    // ═══ ROUND 2: Genetic — breed from top 10 (strategy params only) ═══
     results.sort((a,b) => b.winRate-a.winRate || b.totalPnl-a.totalPnl);
     const topParents = results.filter(r=>r.trades>0).slice(0,10);
     const mutations = [];
@@ -1827,12 +1831,12 @@ router.post('/ai-optimize', async (req, res) => {
         mutations.push({ strategy:'Genetic', risk:`Gen${gen+1}`, combo:`Genetic Gen${gen+1}`, settings:child, ...s });
       }
     }
+    console.log(`[OPTIMIZE] Round 2 done: ${mutations.length} genetic offspring`);
 
-    // ═══ ROUND 3: Quantum (QAOA + SPSA + Annealing) over ALL 20 params ═══
+    // ═══ ROUND 3: Quantum (QAOA + SPSA + Annealing) — 13 strategy params only ═══
     const preQuantum = [...results, ...mutations].sort((a,b) => b.winRate-a.winRate || b.totalPnl-a.totalPnl);
     const quantum = quantumOptimize(preQuantum, evaluate);
 
-    // Add strategy descriptions to quantum results
     for (const qr of quantum.results) {
       qr.strategy = 'Quantum';
       qr.combo = `Quantum ${qr.risk}`;
@@ -1840,8 +1844,19 @@ router.post('/ai-optimize', async (req, res) => {
 
     const allResults = [...results, ...mutations, ...quantum.results];
     allResults.sort((a,b) => b.winRate-a.winRate || b.totalPnl-a.totalPnl);
+    console.log(`[OPTIMIZE] Round 3 done: ${quantum.results.length} quantum results`);
 
-    // Save top 3 as AI versions (full strategy + risk params)
+    // ═══ Per-token scoring using the best strategy ═══
+    const bestStrat = allResults.find(r => r.trades > 0);
+    const tokenScores = bestStrat ? evaluatePerToken(bestStrat.settings) : {};
+
+    // Sort tokens: Good first, then OK, then Bad, then No Trades/No Data
+    const TOKEN_RANK = { 'Good': 0, 'OK': 1, 'Bad': 2, 'No Trades': 3, 'No Data': 4 };
+    const tokenScoreList = Object.entries(tokenScores)
+      .map(([sym, s]) => ({ symbol: sym, ...s }))
+      .sort((a, b) => TOKEN_RANK[a.rating] - TOKEN_RANK[b.rating] || b.winRate - a.winRate || b.totalPnl - a.totalPnl);
+
+    // Save top 3 as AI versions (strategy params only — no risk)
     const saved = [];
     for (let i=0; i<Math.min(3,allResults.length); i++) {
       const best=allResults[i]; if(!best||best.trades===0) continue;
@@ -1860,15 +1875,21 @@ router.post('/ai-optimize', async (req, res) => {
       saved.push({ rank:i+1, version:ver, combo:best.combo, winRate:best.winRate, pnl:best.totalPnl });
     }
 
+    const goodTokens = tokenScoreList.filter(t => t.rating === 'Good').length;
+    const badTokens = tokenScoreList.filter(t => t.rating === 'Bad').length;
+
     res.json({
       period: `${new Date(startTime).toISOString().slice(0,10)} → ${new Date(endTime).toISOString().slice(0,10)}`,
       days: DAYS, coinsScanned: Object.keys(coinData).length,
-      presetStrategies: presets.length, presetRisks: riskPresets.length,
+      presetStrategies: presets.length,
       round1Combos: results.length, round2Genetic: mutations.length,
       round3Quantum: quantum.results.length,
       quantumStats: quantum.stats,
       totalCombos: allResults.length,
-      paramsSearched: 20,
+      paramsSearched: Object.keys(PB).length,
+      riskNote: 'Risk is user-configured. AI optimizes strategy only.',
+      tokenSummary: `${goodTokens} good, ${tokenScoreList.filter(t=>t.rating==='OK').length} OK, ${badTokens} bad out of ${tokenScoreList.length} tokens`,
+      tokenScores: tokenScoreList,
       saved,
       results: allResults,
     });

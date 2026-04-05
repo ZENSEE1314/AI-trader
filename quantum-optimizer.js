@@ -15,8 +15,8 @@
 
 // ── Full Parameter Space: Strategy + Risk ───────────────────
 
+// Strategy-only params — risk is user-configured, not AI-searched
 const PARAM_BOUNDS = {
-  // Strategy params
   swingLen4h:        { min: 5,     max: 20,    step: 2,     integer: true },
   swingLen1h:        { min: 5,     max: 20,    step: 2,     integer: true },
   swingLen15m:       { min: 5,     max: 20,    step: 2,     integer: true },
@@ -30,14 +30,6 @@ const PARAM_BOUNDS = {
   require1m:         { min: 0,     max: 1,     step: 1,     integer: true },
   requireVolSpike:   { min: 0,     max: 1,     step: 1,     integer: true },
   volSpikeMultiplier:{ min: 1.0,   max: 3.0,   step: 0.2 },
-  // Risk params
-  slPct:             { min: 0.005, max: 0.08,  step: 0.003 },
-  tpPct:             { min: 0,     max: 0.06,  step: 0.004 },
-  trailStep:         { min: 0.004, max: 0.035, step: 0.002 },
-  leverage:          { min: 5,     max: 50,    step: 3,     integer: true },
-  riskPct:           { min: 0.02,  max: 0.25,  step: 0.015 },
-  maxPos:            { min: 1,     max: 10,    step: 1,     integer: true },
-  maxConsecLoss:     { min: 0,     max: 5,     step: 1,     integer: true },
 };
 
 const PARAM_KEYS = Object.keys(PARAM_BOUNDS);

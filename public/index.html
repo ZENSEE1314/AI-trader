@@ -1232,10 +1232,7 @@
                 <label class="form-label" style="font-size:0.75rem;">Wallet $ <span class="tip-btn">?<span class="tip-text">Starting wallet balance for the backtest simulation.</span></span></label>
                 <input class="form-input text-mono" type="number" id="bt-wallet" min="100" max="100000" step="100" value="1000" style="font-size:0.8rem;">
               </div>
-              <div class="form-group" style="margin-bottom:0;">
-                <label class="form-label" style="font-size:0.75rem;">Top N Coins <span class="tip-btn">?<span class="tip-text">Number of top coins by 24h volume to scan for setups.</span></span></label>
-                <input class="form-input text-mono" type="number" id="bt-topn" min="10" max="200" step="10" value="100" style="font-size:0.8rem;">
-              </div>
+              <!-- Tokens come from admin token settings, no Top N needed -->
             </div>
 
             <div style="font-size:0.75rem;color:var(--color-text-muted);margin-bottom:var(--space-2);">Daily→4H+1H→KeyLvl→15M→1M (configurable SL/TP, trailing steps)</div>
@@ -1244,7 +1241,7 @@
               <button class="btn btn-ghost btn-sm" onclick="window.CryptoBot.runBacktest('strict', true)">↻ Reverse</button>
               <span style="color:var(--color-border-muted);">|</span>
               <button class="btn btn-sm" style="background:linear-gradient(135deg,#8b5cf6,#6366f1);color:#fff;border:none;" onclick="window.CryptoBot.runAiOptimize()">⚛️ Quantum AI Optimize</button>
-              <span class="tip-btn">?<span class="tip-text">4-phase optimizer: 42 preset combos → 20 genetic mutations → QAOA amplitude sampling → SPSA gradient search → Quantum Annealing. Tests 150+ combinations to find the best strategy + risk settings.</span></span>
+              <span class="tip-btn">?<span class="tip-text">Strategy-only optimizer using admin tokens. 10 presets → 25 genetic → QAOA + SPSA + Annealing. Tests ~130 strategy combos + per-token scoring. Risk is user-set.</span></span>
             </div>
           </div>
           <pre id="fix-bitunix-result" style="margin-top:var(--space-2);font-size:0.75rem;color:var(--color-text-muted);max-height:600px;overflow:auto;white-space:pre-wrap;word-break:break-all;"></pre>
@@ -1332,7 +1329,7 @@
     </div>
   </div>
 
-  <script src="/js/app.js?v=20260405r"></script>
+  <script src="/js/app.js?v=20260405s"></script>
   <script src="/js/cashwallet-fix.js"></script>
 
 </body>

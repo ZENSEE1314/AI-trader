@@ -1523,95 +1523,75 @@
 
   async function runAiOptimize() {
     const days = parseInt($('#backtest-days')?.value) || 7;
-    const topN = Math.min(parseInt($('#bt-topn')?.value) || 20, 100);
     const resultEl = $('#fix-bitunix-result');
-    if (resultEl) resultEl.textContent = `⚛️ Quantum AI Optimizer running on ${topN} coins over ${days} days...\n` +
-      `Searching 20 parameters: strategy (swings, HTF, key levels, volume, confirmation) + risk (SL, TP, leverage, trail)\n` +
-      `Phase 1: 10 strategy presets × 5 risk presets = 50 combos\n` +
+    if (resultEl) resultEl.textContent = `⚛️ Quantum AI Optimizer running on admin tokens over ${days} days...\n` +
+      `Searching 13 STRATEGY parameters (risk is user-configured)\n` +
+      `Phase 1: 10 strategy presets\n` +
       `Phase 2: 25 genetic offspring from top 10\n` +
       `Phase 3: QAOA(30) + SPSA(40) + Annealing(25) = ~95 quantum combos\n` +
-      `Please wait — testing ~170 combinations across full parameter space...`;
+      `Plus per-token scoring to show good/bad tokens...\n` +
+      `Please wait...`;
     try {
-      const data = await api('POST', '/api/admin/ai-optimize', { days, topN });
+      const data = await api('POST', '/api/admin/ai-optimize', { days });
       const R = data.results;
       let output = '═══════════════════════════════════════════════════════════════════════════════════════════════════════\n';
-      output += '  ⚛️🧠 QUANTUM-INSPIRED AI OPTIMIZATION\n';
-      output += `  Period: ${data.period} | Coins: ${data.coinsScanned}\n`;
-      output += `  Parameters: ${data.paramsSearched||20} (strategy: swings, HTF, key levels, volume | risk: SL, TP, trail, leverage)\n`;
-      output += `  Round 1: ${data.presetStrategies||10} strategies × ${data.presetRisks||5} risks = ${data.round1Combos} preset combos\n`;
-      output += `  Round 2: ${data.round2Genetic} genetic offspring (crossover + mutation on all 20 params)\n`;
+      output += '  ⚛️🧠 QUANTUM-INSPIRED AI OPTIMIZATION (Strategy Only)\n';
+      output += `  Period: ${data.period} | Tokens: ${data.coinsScanned} (admin-allowed)\n`;
+      output += `  Parameters: ${data.paramsSearched||13} strategy params (risk is user-set)\n`;
+      output += `  Round 1: ${data.round1Combos} strategy presets\n`;
+      output += `  Round 2: ${data.round2Genetic} genetic offspring\n`;
       const qs = data.quantumStats || {};
       output += `  Round 3: ${data.round3Quantum||0} quantum — QAOA:${qs.qaoaCount||0} SPSA:${qs.spsaCount||0} Anneal:${qs.annealCount||0}\n`;
       output += `  Total: ${data.totalCombos} combinations tested ⚛️\n`;
+      if (data.riskNote) output += `  ℹ️ ${data.riskNote}\n`;
       output += '═══════════════════════════════════════════════════════════════════════════════════════════════════════\n\n';
 
       // ── Top 10 Overall ──
-      output += '── TOP 10 BEST COMBOS ────────────────────────────────────────────────────────────────────────────\n';
-      output += '#   | Strategy       | Risk           | Trades |  W / L  | WR%    | P&L        | MaxDD  | Risk Settings          | Strategy Params\n';
-      output += '─'.repeat(160) + '\n';
+      output += '── TOP 10 BEST STRATEGIES ────────────────────────────────────────────────────────────────────────\n';
+      output += '#   | Strategy       | Trades |  W / L  | WR%    | P&L        | MaxDD  | Strategy Params\n';
+      output += '─'.repeat(120) + '\n';
       for (let i = 0; i < Math.min(10, R.length); i++) {
         const r = R[i], s = r.settings || {};
         const medal = i===0?'🥇':i===1?'🥈':i===2?'🥉':`#${i+1}`;
         const pnl = (r.totalPnl>=0?'+':'')+`$${r.totalPnl.toFixed(2)}`;
-        const sl = `SL:${((s.slPct||0)*100).toFixed(1)}%`;
-        const tp = s.tpPct ? `TP:${(s.tpPct*100).toFixed(1)}%` : 'trail';
-        const riskStr = `${sl} ${tp} ${((s.trailStep||0)*100).toFixed(1)}%t ${s.leverage||20}x ${((s.riskPct||0.1)*100).toFixed(0)}%r ${s.maxPos||3}p`;
         const htf = s.requireBothHTF!==undefined ? (s.requireBothHTF?'both':'either') : '?';
         const kl = s.requireKeyLevel!==undefined ? (s.requireKeyLevel?'Y':'N') : '?';
         const c1m = s.require1m!==undefined ? (s.require1m?'Y':'N') : '?';
+        const c15 = s.require15m!==undefined ? (s.require15m?'Y':'N') : '?';
         const vol = s.requireVolSpike!==undefined ? (s.requireVolSpike?`${(s.volSpikeMultiplier||1.5).toFixed(1)}x`:'N') : '?';
-        const stratStr = `sw:${s.swingLen4h||10}/${s.swingLen1h||10}/${s.swingLen15m||10}/${s.swingLen1m||5} HTF:${htf} KL:${kl} 1m:${c1m} Vol:${vol}`;
-        output += `${String(medal).padEnd(4)}| ${(r.strategy||'').padEnd(15)}| ${(r.risk||'').padEnd(15)}| ${String(r.trades).padStart(6)} | ${String(r.wins+'W/'+r.losses+'L').padEnd(7)} | ${String(r.winRate+'%').padStart(6)} | ${pnl.padStart(10)} | ${String(r.maxDrawdown+'%').padStart(5)}  | ${riskStr.padEnd(23)}| ${stratStr}\n`;
+        const stratStr = `sw:${s.swingLen4h||10}/${s.swingLen1h||10}/${s.swingLen15m||10}/${s.swingLen1m||5} HTF:${htf} KL:${kl} 15m:${c15} 1m:${c1m} Vol:${vol}`;
+        output += `${String(medal).padEnd(4)}| ${(r.combo||'').padEnd(15)}| ${String(r.trades).padStart(6)} | ${String(r.wins+'W/'+r.losses+'L').padEnd(7)} | ${String(r.winRate+'%').padStart(6)} | ${pnl.padStart(10)} | ${String(r.maxDrawdown+'%').padStart(5)}  | ${stratStr}\n`;
+      }
+
+      // ── Per-token scores ──
+      const tokens = data.tokenScores || [];
+      if (tokens.length) {
+        output += '\n── TOKEN SCORES (Best Strategy Applied) ──────────────────────────────────────────\n';
+        output += `  ${data.tokenSummary || ''}\n\n`;
+        output += 'Symbol          | Rating    | Trades | W / L   | WR%    | P&L\n';
+        output += '─'.repeat(80) + '\n';
+        for (const t of tokens) {
+          const icon = t.rating==='Good'?'✅':t.rating==='OK'?'⚠️':t.rating==='Bad'?'❌':'⬜';
+          const pnl = t.trades > 0 ? ((t.totalPnl>=0?'+':'')+`$${t.totalPnl.toFixed(2)}`) : '--';
+          const wl = t.trades > 0 ? `${t.wins}W/${t.losses}L` : '--';
+          const wr = t.trades > 0 ? `${t.winRate}%` : '--';
+          output += `${icon} ${t.symbol.padEnd(14)}| ${t.rating.padEnd(10)}| ${String(t.trades).padStart(6)} | ${wl.padEnd(7)} | ${wr.padStart(6)} | ${pnl}\n`;
+        }
+        const badList = tokens.filter(t => t.rating === 'Bad' || t.rating === 'No Trades');
+        if (badList.length) {
+          output += `\n  💡 Consider removing: ${badList.map(t=>t.symbol).join(', ')}\n`;
+        }
       }
 
       // ── Strategy leaderboard ──
-      output += '\n── BEST RISK LEVEL PER STRATEGY ──────────────────────────────────────────────────\n';
+      output += '\n── STRATEGY LEADERBOARD ──────────────────────────────────────────────────────────\n';
       const strats = [...new Set(R.map(r=>r.strategy))];
       for (const strat of strats) {
         const stratResults = R.filter(r=>r.strategy===strat);
-        const best = stratResults[0]; // already sorted
-        if (!best) continue;
-        const s = best.settings;
+        const best = stratResults[0];
+        if (!best || best.trades === 0) continue;
         const pnl = (best.totalPnl>=0?'+':'')+`$${best.totalPnl.toFixed(2)}`;
-        output += `  ${strat.padEnd(15)} → Best: ${best.risk.padEnd(14)} | ${best.trades} trades | ${best.winRate}% WR | ${pnl} | SL:${(s.slPct*100).toFixed(1)}% Trail:${(s.trailStep*100).toFixed(1)}% Lev:${s.leverage}x\n`;
-      }
-
-      // ── Risk leaderboard ──
-      output += '\n── BEST STRATEGY PER RISK LEVEL ──────────────────────────────────────────────────\n';
-      const riskNames = [...new Set(R.map(r=>r.risk))];
-      for (const risk of riskNames) {
-        const riskResults = R.filter(r=>r.risk===risk);
-        const best = riskResults.sort((a,b)=>b.winRate-a.winRate||b.totalPnl-a.totalPnl)[0];
-        if (!best) continue;
-        const pnl = (best.totalPnl>=0?'+':'')+`$${best.totalPnl.toFixed(2)}`;
-        output += `  ${risk.padEnd(15)} → Best: ${best.strategy.padEnd(14)} | ${best.trades} trades | ${best.winRate}% WR | ${pnl}\n`;
-      }
-
-      // ── Full grid (strategy × risk) ──
-      output += '\n── FULL GRID: WIN RATE % ──────────────────────────────────────────────────────────\n';
-      output += ''.padEnd(16) + '| ' + riskNames.map(r=>r.padEnd(14)).join('| ') + '\n';
-      output += '─'.repeat(16 + riskNames.length * 16) + '\n';
-      for (const strat of strats) {
-        let row = strat.padEnd(16) + '|';
-        for (const risk of riskNames) {
-          const r = R.find(x=>x.strategy===strat&&x.risk===risk);
-          const cell = r ? `${r.winRate}% (${r.trades}t)` : '  --  ';
-          row += ' ' + cell.padEnd(14) + '|';
-        }
-        output += row + '\n';
-      }
-
-      output += '\n── FULL GRID: P&L $ ──────────────────────────────────────────────────────────────\n';
-      output += ''.padEnd(16) + '| ' + riskNames.map(r=>r.padEnd(14)).join('| ') + '\n';
-      output += '─'.repeat(16 + riskNames.length * 16) + '\n';
-      for (const strat of strats) {
-        let row = strat.padEnd(16) + '|';
-        for (const risk of riskNames) {
-          const r = R.find(x=>x.strategy===strat&&x.risk===risk);
-          const cell = r ? `${r.totalPnl>=0?'+':''}$${r.totalPnl.toFixed(0)}` : '  --  ';
-          row += ' ' + cell.padEnd(14) + '|';
-        }
-        output += row + '\n';
+        output += `  ${strat.padEnd(20)} | ${best.trades} trades | ${best.winRate}% WR | ${pnl}\n`;
       }
 
       // ── Saved versions ──
