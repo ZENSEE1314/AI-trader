@@ -965,6 +965,34 @@ router.get('/debug-positions', async (req, res) => {
   }
 });
 
+// Debug: show raw Bitunix position history + order history to check PnL
+router.get('/debug-bitunix-history', async (req, res) => {
+  try {
+    const cryptoUtils = require('../crypto-utils');
+    const { BitunixClient } = require('../bitunix-client');
+    const keys = await query(
+      `SELECT ak.api_key_enc, ak.iv, ak.auth_tag,
+              ak.api_secret_enc, ak.secret_iv, ak.secret_auth_tag, u.email
+       FROM api_keys ak JOIN users u ON u.id = ak.user_id
+       WHERE ak.enabled = true AND ak.platform = 'bitunix' LIMIT 1`
+    );
+    if (!keys.length) return res.json({ error: 'No active Bitunix keys' });
+    const apiKey = cryptoUtils.decrypt(keys[0].api_key_enc, keys[0].iv, keys[0].auth_tag);
+    const apiSecret = cryptoUtils.decrypt(keys[0].api_secret_enc, keys[0].secret_iv, keys[0].secret_auth_tag);
+    const client = new BitunixClient({ apiKey, apiSecret });
+
+    const symbol = (req.query.symbol || '').toUpperCase() || undefined;
+    const [posHistory, orderHistory] = await Promise.all([
+      client.getHistoryPositions({ symbol, pageSize: 20 }).catch(e => ({ error: e.message })),
+      client.getHistoryOrders({ symbol, pageSize: 20 }).catch(e => ({ error: e.message })),
+    ]);
+
+    res.json({ user: keys[0].email, posHistory, orderHistory });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Emergency Close: close a specific token across ALL users ────
 router.post('/emergency-close', async (req, res) => {
   const symbol = (req.body.symbol || '').toUpperCase().trim();
@@ -1117,30 +1145,48 @@ router.post('/fix-bitunix-pnl', async (req, res) => {
           }
 
           let found = false;
+          const tradeOpenTime = trade.created_at ? new Date(trade.created_at).getTime() : 0;
+          const tradeEntry = parseFloat(trade.entry_price);
+          const tradeSide = trade.direction === 'SHORT' ? 'SELL' : 'BUY';
 
-          // Method 1: Position history — has closePrice and realizedPNL
+          // Method 1: Position history — match by entry price + side + time
           try {
-            const positions = await client.getHistoryPositions({ symbol: trade.symbol, pageSize: 20 });
+            const positions = await client.getHistoryPositions({ symbol: trade.symbol, pageSize: 50 });
             for (const p of positions) {
-              const cp = parseFloat(p.closePrice || 0);
-              if (cp > 0 && p.symbol === trade.symbol) {
+              const cp = parseFloat(p.closePrice || p.avgClosePrice || 0);
+              const ep = parseFloat(p.avgOpenPrice || p.entryPrice || p.openPrice || 0);
+              const pSide = p.side || p.positionSide || '';
+              const closeTime = p.closeTime || p.updateTime || p.ctime || 0;
+              const closeMs = typeof closeTime === 'string' ? new Date(closeTime).getTime() : parseInt(closeTime);
+              const entryMatch = ep > 0 && Math.abs(ep - tradeEntry) / tradeEntry < 0.001;
+              const sideMatch = !pSide || pSide === tradeSide;
+              const timeMatch = !tradeOpenTime || !closeMs || closeMs > tradeOpenTime;
+
+              if (cp > 0 && p.symbol === trade.symbol && entryMatch && sideMatch && timeMatch) {
                 exitPrice = cp;
-                if (p.realizedPNL != null) realizedPnl = parseFloat(p.realizedPNL);
+                const pnlVal = p.realizedPNL ?? p.realizedPnl ?? p.profit ?? p.closeProfit ?? p.pnl ?? null;
+                if (pnlVal != null) realizedPnl = parseFloat(pnlVal);
                 found = true;
                 break;
               }
             }
           } catch { /* try next method */ }
 
-          // Method 2: Order history — reduceOnly orders are close orders
+          // Method 2: Order history — CLOSE orders matching time
           if (!found) {
             try {
-              const orderList = await client.getHistoryOrders({ symbol: trade.symbol, pageSize: 20 });
+              const orderList = await client.getHistoryOrders({ symbol: trade.symbol, pageSize: 50 });
               for (const o of orderList) {
-                const oPrice = parseFloat(o.avgPrice || 0);
-                if (o.reduceOnly && oPrice > 0) {
+                const oPrice = parseFloat(o.avgPrice || o.price || 0);
+                const isClose = o.reduceOnly || o.tradeSide === 'CLOSE';
+                const oTime = o.ctime || o.updateTime || o.createTime || 0;
+                const oMs = typeof oTime === 'string' ? new Date(oTime).getTime() : parseInt(oTime);
+                const timeMatch = !tradeOpenTime || !oMs || oMs > tradeOpenTime;
+
+                if (isClose && oPrice > 0 && timeMatch) {
                   exitPrice = oPrice;
-                  if (o.realizedPNL != null) realizedPnl = parseFloat(o.realizedPNL);
+                  const pnlVal = o.realizedPNL ?? o.realizedPnl ?? o.profit ?? o.pnl ?? null;
+                  if (pnlVal != null) realizedPnl = parseFloat(pnlVal);
                   found = true;
                   break;
                 }
