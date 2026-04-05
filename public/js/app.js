@@ -358,13 +358,19 @@
     const el = (id) => document.getElementById(id);
     const userShare = parseFloat(data.user_share) || 0;
     const adminShare = parseFloat(data.admin_share) || 0;
-    const totalWinning = parseFloat(data.winning_pnl) || 0;
+    const netPnl = parseFloat(data.net_pnl) || 0;
+    const netColor = netPnl >= 0 ? 'var(--color-success)' : 'var(--color-danger)';
+    const netSign = netPnl >= 0 ? '+' : '';
 
     el('we-user-pct').textContent = data.user_share_pct || 60;
     el('we-admin-pct').textContent = data.admin_share_pct || 40;
     el('we-user-share').textContent = `$${userShare.toFixed(2)}`;
     el('we-admin-share').textContent = `$${adminShare.toFixed(2)}`;
-    el('we-total-winning').textContent = `$${totalWinning.toFixed(2)}`;
+
+    const totalEl = el('we-total-winning');
+    totalEl.textContent = `${netSign}$${Math.abs(netPnl).toFixed(2)}`;
+    totalEl.style.color = netColor;
+
     el('we-wins').textContent = data.total_wins || 0;
     el('we-losses').textContent = data.total_losses || 0;
 
@@ -376,7 +382,9 @@
     const perKeyEl = el('we-per-key');
     if (data.per_key && data.per_key.length > 1) {
       perKeyEl.innerHTML = data.per_key.map(k => {
-        const pnl = parseFloat(k.winning_pnl) || 0;
+        const pnl = parseFloat(k.net_pnl) || 0;
+        const pnlColor = pnl >= 0 ? 'var(--color-success)' : 'var(--color-danger)';
+        const pnlSign = pnl >= 0 ? '+' : '';
         const us = parseFloat(k.user_share) || 0;
         return `<div class="summary-card" style="padding:var(--space-3);display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
           <div>
@@ -384,7 +392,7 @@
             <span style="font-size:0.75rem;color:var(--color-text-muted);margin-left:8px;">${k.win_count}W / ${k.loss_count}L</span>
           </div>
           <div style="text-align:right;">
-            <span class="text-mono" style="color:var(--color-success);font-size:0.9rem;">+$${pnl.toFixed(2)}</span>
+            <span class="text-mono" style="color:${pnlColor};font-size:0.9rem;">${pnlSign}$${Math.abs(pnl).toFixed(2)}</span>
             <span style="font-size:0.7rem;color:var(--color-text-muted);margin-left:4px;">→ Your share: $${us.toFixed(2)}</span>
           </div>
         </div>`;
@@ -1413,7 +1421,10 @@
 
   function renderAdminWeeklyEarnings(data) {
     const el = (id) => document.getElementById(id);
-    el('awe-total-winning').textContent = `$${(parseFloat(data.grand_total_winning) || 0).toFixed(2)}`;
+    const netVal = parseFloat(data.grand_total_net) || 0;
+    const netEl = el('awe-total-net');
+    netEl.textContent = `${netVal >= 0 ? '+' : ''}$${netVal.toFixed(2)}`;
+    netEl.style.color = netVal >= 0 ? 'var(--color-success)' : 'var(--color-danger)';
     el('awe-admin-share').textContent = `$${(parseFloat(data.grand_total_admin_share) || 0).toFixed(2)}`;
     el('awe-user-share').textContent = `$${(parseFloat(data.grand_total_user_share) || 0).toFixed(2)}`;
 
@@ -1424,18 +1435,25 @@
     }
 
     container.innerHTML = data.users.filter(u => u.keys.length > 0).map(u => {
+      const net = parseFloat(u.total_net_pnl) || 0;
+      const netColor = net >= 0 ? 'var(--color-success)' : 'var(--color-danger)';
+      const overdueTag = u.is_overdue ? '<span style="color:var(--color-danger);font-size:0.7rem;font-weight:bold;margin-left:6px;">⚠ OVERDUE</span>' : '';
+      const lastPaid = u.last_paid ? `<span style="font-size:0.7rem;color:var(--color-text-muted);margin-left:6px;">Last paid: ${u.last_paid}</span>` : '<span style="font-size:0.7rem;color:var(--color-text-muted);margin-left:6px;">Never paid</span>';
+
       const keysHtml = u.keys.map(k => {
         const isPaused = k.paused || !k.enabled;
+        const kNet = parseFloat(k.net_pnl) || 0;
+        const kNetColor = kNet >= 0 ? 'var(--color-success)' : 'var(--color-danger)';
         return `<div style="background:var(--color-bg);border:1px solid var(--color-border-muted);border-radius:var(--radius-md);padding:var(--space-3);margin-top:8px;">
           <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
             <div>
               <strong style="font-size:0.8rem;">${escapeHtml(k.label)}</strong>
               <span style="font-size:0.7rem;color:var(--color-text-muted);margin-left:4px;">${k.platform?.toUpperCase()}</span>
-              ${isPaused ? '<span class="badge-status" style="color:var(--color-danger);margin-left:4px;">⏸ PAUSED</span>' : ''}
+              ${isPaused ? '<span style="color:var(--color-danger);font-size:0.7rem;margin-left:4px;">⏸ PAUSED</span>' : ''}
             </div>
             <div style="display:flex;align-items:center;gap:6px;">
-              <span class="text-mono" style="font-size:0.85rem;color:var(--color-success);">+$${(parseFloat(k.winning_pnl)||0).toFixed(2)}</span>
-              <span style="font-size:0.7rem;color:var(--color-text-muted);">${k.win_count}W</span>
+              <span class="text-mono" style="font-size:0.85rem;color:${kNetColor};">${kNet >= 0 ? '+' : ''}$${kNet.toFixed(2)}</span>
+              <span style="font-size:0.7rem;color:var(--color-text-muted);">${k.win_count}W/${k.loss_count}L</span>
             </div>
           </div>
           <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;flex-wrap:wrap;gap:8px;">
@@ -1455,8 +1473,7 @@
             </div>
           </div>
           <div style="font-size:0.7rem;color:var(--color-text-muted);margin-top:4px;">
-            User earns: <strong style="color:var(--color-success);">$${(parseFloat(k.user_share)||0).toFixed(2)}</strong> ·
-            Admin earns: <strong style="color:var(--color-accent);">$${(parseFloat(k.admin_share)||0).toFixed(2)}</strong>
+            ${kNet > 0 ? `User: <strong style="color:var(--color-success);">$${(parseFloat(k.user_share)||0).toFixed(2)}</strong> · Admin: <strong style="color:var(--color-accent);">$${(parseFloat(k.admin_share)||0).toFixed(2)}</strong>` : '<span style="color:var(--color-text-muted);">Net negative — no profit to split</span>'}
           </div>
         </div>`;
       }).join('');
@@ -1465,14 +1482,18 @@
         <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
           <div>
             <strong style="font-size:0.95rem;">${escapeHtml(u.email)}</strong>
-            <span style="font-size:0.75rem;color:var(--color-text-muted);margin-left:8px;">${u.total_trades} trades · ${u.total_wins}W</span>
+            <span style="font-size:0.75rem;color:var(--color-text-muted);margin-left:8px;">${u.total_trades} trades · ${u.total_wins}W/${u.total_losses}L</span>
+            ${overdueTag}${lastPaid}
           </div>
-          <div style="text-align:right;">
-            <div class="text-mono" style="font-size:0.9rem;color:var(--color-success);">Winnings: $${(parseFloat(u.total_winning_pnl)||0).toFixed(2)}</div>
-            <div style="font-size:0.7rem;color:var(--color-text-muted);">
-              Admin: <span style="color:var(--color-accent);">$${(parseFloat(u.total_admin_share)||0).toFixed(2)}</span> ·
-              User: <span style="color:var(--color-success);">$${(parseFloat(u.total_user_share)||0).toFixed(2)}</span>
+          <div style="display:flex;align-items:center;gap:8px;">
+            <div style="text-align:right;">
+              <div class="text-mono" style="font-size:0.9rem;color:${netColor};">Net: ${net >= 0 ? '+' : ''}$${net.toFixed(2)}</div>
+              <div style="font-size:0.7rem;color:var(--color-text-muted);">
+                Admin: <span style="color:var(--color-accent);">$${(parseFloat(u.total_admin_share)||0).toFixed(2)}</span> ·
+                User: <span style="color:var(--color-success);">$${(parseFloat(u.total_user_share)||0).toFixed(2)}</span>
+              </div>
             </div>
+            <button class="btn btn-primary btn-sm" style="font-size:0.75rem;padding:4px 12px;min-height:28px;" onclick="window.CryptoBot.adminMarkPaid(${u.user_id},'${escapeHtml(u.email)}')">✓ Paid</button>
           </div>
         </div>
         ${keysHtml}
@@ -1491,6 +1512,45 @@
       showToast(`Split updated: ${parsed}% user / ${adminPct}% admin`, 'success');
       loadAdmin();
     } catch (err) { showToast(err.message, 'error'); }
+  }
+
+  async function adminMarkPaid(userId, email) {
+    if (!confirm(`Mark ${email} as PAID for this week?\nThis saves earnings to history and resumes trading.`)) return;
+    try {
+      await api('POST', `/api/admin/mark-paid/${userId}`);
+      showToast(`${email} marked as paid — trading resumed`, 'success');
+      loadAdmin();
+    } catch (err) { showToast(err.message, 'error'); }
+  }
+
+  async function adminFixTrades() {
+    if (!confirm('Re-fetch actual PnL from exchanges and fix corrupted trade data?')) return;
+    const statusEl = document.getElementById('fix-trades-status');
+    statusEl.textContent = 'Fixing... (this may take a minute)';
+    statusEl.style.color = 'var(--color-accent)';
+    try {
+      const result = await api('POST', '/api/admin/fix-trades');
+      if (result.fixed > 0) {
+        statusEl.textContent = `Fixed ${result.fixed} of ${result.total_checked} trades`;
+        statusEl.style.color = 'var(--color-success)';
+        showToast(`Fixed ${result.fixed} corrupted trades`, 'success');
+        // Show details
+        for (const d of result.details || []) {
+          if (d.fixed) {
+            console.log(`Fixed #${d.id} ${d.email} ${d.symbol}: ${d.old_status} $${d.old_pnl} → ${d.new_status} $${d.new_pnl}`);
+          }
+        }
+        loadAdmin();
+      } else {
+        statusEl.textContent = `Checked ${result.total_checked} trades — all correct`;
+        statusEl.style.color = 'var(--color-success)';
+        showToast('All trades look correct', 'info');
+      }
+    } catch (err) {
+      statusEl.textContent = `Error: ${err.message}`;
+      statusEl.style.color = 'var(--color-danger)';
+      showToast(err.message, 'error');
+    }
   }
 
   async function adminPauseKey(keyId) {
@@ -1867,7 +1927,7 @@
     toggleSettings, saveSettings, deleteKey, showToast, syncSlider, syncNum,
     submitTopUp, saveUsdtAddress, withdrawFromWallet,
     adminAction, adminSub, adminWd, saveAdminSettings, adminEditWallet, clearErrors,
-    adminEditSplit, adminPauseKey, adminResumeKey,
+    adminEditSplit, adminPauseKey, adminResumeKey, adminMarkPaid, adminFixTrades,
     goToAuth, showLoginForm, onPlatformChange,
     searchCoins, addCoin, removeCoin,
     filterLogs, clearLogs,

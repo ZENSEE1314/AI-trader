@@ -26,7 +26,6 @@ router.get('/weekly-earnings', async (req, res) => {
     sunday.setDate(monday.getDate() + 6);
     sunday.setHours(23, 59, 59, 999);
 
-    // Get all users with their profit share settings and weekly performance
     const users = await query(
       `SELECT u.id, u.email,
               ak.id as key_id, ak.label as key_label, ak.platform,
@@ -38,7 +37,7 @@ router.get('/weekly-earnings', async (req, res) => {
        ORDER BY u.email, ak.id`
     );
 
-    // Get this week's trades for all users
+    // Get this week's trades — all closed trades (wins AND losses)
     const trades = await query(
       `SELECT t.user_id, t.api_key_id, t.pnl_usdt, t.status, t.symbol
        FROM trades t
@@ -47,33 +46,49 @@ router.get('/weekly-earnings', async (req, res) => {
       [monday, sunday]
     );
 
-    // Build per-user/per-key summary
-    const result = [];
-    let grandTotalWinning = 0;
+    // Check last paid date per user
+    const lastPaid = await query(
+      `SELECT user_id, MAX(week_end) as last_paid_week
+       FROM weekly_earnings WHERE settled = true
+       GROUP BY user_id`
+    );
+    const lastPaidMap = {};
+    for (const lp of lastPaid) lastPaidMap[lp.user_id] = new Date(lp.last_paid_week);
+
+    let grandTotalNet = 0;
     let grandTotalUserShare = 0;
     let grandTotalAdminShare = 0;
 
     const userMap = {};
     for (const u of users) {
       if (!userMap[u.id]) {
+        const lpDate = lastPaidMap[u.id];
+        const isOverdue = lpDate ? (now - lpDate > 8 * 86400000) : false;
         userMap[u.id] = {
           user_id: u.id,
           email: u.email,
           keys: [],
-          total_winning_pnl: 0,
+          total_net_pnl: 0,
           total_user_share: 0,
           total_admin_share: 0,
           total_trades: 0,
           total_wins: 0,
+          total_losses: 0,
+          last_paid: lpDate ? lpDate.toISOString().slice(0,10) : null,
+          is_overdue: isOverdue,
         };
       }
       if (u.key_id) {
         const keyTrades = trades.filter(t => t.api_key_id === u.key_id);
         const wins = keyTrades.filter(t => parseFloat(t.pnl_usdt) > 0);
-        const winningPnl = wins.reduce((s, t) => s + parseFloat(t.pnl_usdt), 0);
+        const losses = keyTrades.filter(t => parseFloat(t.pnl_usdt) <= 0);
+        // Net P&L = wins + losses (losses are negative)
+        const netPnl = keyTrades.reduce((s, t) => s + parseFloat(t.pnl_usdt), 0);
         const userPct = parseFloat(u.profit_share_user_pct) || 60;
         const adminPct = parseFloat(u.profit_share_admin_pct) || 40;
 
+        // Only share profit if net is positive
+        const shareable = Math.max(0, netPnl);
         const keyData = {
           key_id: u.key_id,
           label: u.key_label || u.platform,
@@ -82,24 +97,26 @@ router.get('/weekly-earnings', async (req, res) => {
           enabled: u.enabled !== false,
           total_trades: keyTrades.length,
           win_count: wins.length,
-          winning_pnl: winningPnl,
+          loss_count: losses.length,
+          net_pnl: netPnl,
           user_share_pct: userPct,
           admin_share_pct: adminPct,
-          user_share: Math.max(0, winningPnl * userPct / 100),
-          admin_share: Math.max(0, winningPnl * adminPct / 100),
+          user_share: shareable * userPct / 100,
+          admin_share: shareable * adminPct / 100,
         };
 
         userMap[u.id].keys.push(keyData);
-        userMap[u.id].total_winning_pnl += winningPnl;
+        userMap[u.id].total_net_pnl += netPnl;
         userMap[u.id].total_user_share += keyData.user_share;
         userMap[u.id].total_admin_share += keyData.admin_share;
         userMap[u.id].total_trades += keyTrades.length;
         userMap[u.id].total_wins += wins.length;
+        userMap[u.id].total_losses += losses.length;
       }
     }
 
     for (const u of Object.values(userMap)) {
-      grandTotalWinning += u.total_winning_pnl;
+      grandTotalNet += u.total_net_pnl;
       grandTotalUserShare += u.total_user_share;
       grandTotalAdminShare += u.total_admin_share;
     }
@@ -107,13 +124,99 @@ router.get('/weekly-earnings', async (req, res) => {
     res.json({
       week_start: monday.toISOString(),
       week_end: sunday.toISOString(),
-      grand_total_winning: grandTotalWinning,
+      grand_total_net: grandTotalNet,
       grand_total_user_share: grandTotalUserShare,
       grand_total_admin_share: grandTotalAdminShare,
       users: Object.values(userMap),
     });
   } catch (err) {
     console.error('Admin weekly earnings error:', err.message);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Mark user as paid — save to history, reset, resume trading
+router.post('/mark-paid/:userId', async (req, res) => {
+  try {
+    const userId = parseInt(req.params.userId);
+    const now = new Date();
+    const dayOfWeek = now.getDay();
+    const mondayOffset = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
+    const monday = new Date(now);
+    monday.setDate(now.getDate() + mondayOffset);
+    monday.setHours(0, 0, 0, 0);
+    const sunday = new Date(monday);
+    sunday.setDate(monday.getDate() + 6);
+    sunday.setHours(23, 59, 59, 999);
+
+    // Get user's keys
+    const keys = await query(
+      `SELECT id, profit_share_user_pct, profit_share_admin_pct FROM api_keys WHERE user_id = $1`,
+      [userId]
+    );
+
+    // Get this week's trades
+    const trades = await query(
+      `SELECT api_key_id, pnl_usdt, status FROM trades
+       WHERE user_id = $1 AND status IN ('WIN','LOSS','TP','SL','CLOSED')
+         AND closed_at >= $2 AND closed_at <= $3`,
+      [userId, monday, sunday]
+    );
+
+    // Save per-key earnings to history
+    for (const key of keys) {
+      const keyTrades = trades.filter(t => t.api_key_id === key.id);
+      const netPnl = keyTrades.reduce((s, t) => s + parseFloat(t.pnl_usdt), 0);
+      const wins = keyTrades.filter(t => parseFloat(t.pnl_usdt) > 0);
+      const winPnl = wins.reduce((s, t) => s + parseFloat(t.pnl_usdt), 0);
+      const shareable = Math.max(0, netPnl);
+      const userPct = parseFloat(key.profit_share_user_pct) || 60;
+      const adminPct = parseFloat(key.profit_share_admin_pct) || 40;
+
+      await query(
+        `INSERT INTO weekly_earnings (user_id, api_key_id, week_start, week_end,
+          total_pnl, winning_pnl, user_share, admin_share,
+          user_share_pct, admin_share_pct, trade_count, win_count, settled)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,true)
+         ON CONFLICT (user_id, api_key_id, week_start)
+         DO UPDATE SET total_pnl=$5, winning_pnl=$6, user_share=$7, admin_share=$8,
+           trade_count=$11, win_count=$12, settled=true`,
+        [userId, key.id, monday, sunday, netPnl, winPnl,
+         shareable * userPct / 100, shareable * adminPct / 100,
+         userPct, adminPct, keyTrades.length, wins.length]
+      );
+    }
+
+    // Resume all user's keys and record payment timestamp
+    await query(
+      `UPDATE api_keys SET paused_by_admin = false, enabled = true WHERE user_id = $1`,
+      [userId]
+    );
+    await query(
+      `UPDATE users SET last_paid_at = NOW() WHERE id = $1`,
+      [userId]
+    );
+
+    res.json({ ok: true, message: 'Marked as paid, trading resumed' });
+  } catch (err) {
+    console.error('Mark paid error:', err.message);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Get payment history for all users
+router.get('/payment-history', async (req, res) => {
+  try {
+    const rows = await query(
+      `SELECT we.*, u.email FROM weekly_earnings we
+       JOIN users u ON u.id = we.user_id
+       WHERE we.settled = true
+       ORDER BY we.week_end DESC, u.email
+       LIMIT 100`
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error('Payment history error:', err.message);
     res.status(500).json({ error: 'Server error' });
   }
 });
@@ -1172,6 +1275,125 @@ router.post('/backtest', async (req, res) => {
     });
   } catch (err) {
     console.error('Backtest error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Fix corrupted trades — recalculate PnL from exchange fills per user
+router.post('/fix-trades', async (req, res) => {
+  try {
+    const cryptoUtils = require('../crypto-utils');
+    const { USDMClient } = require('binance');
+    let getBinanceRequestOptions;
+    try { getBinanceRequestOptions = require('../proxy-agent').getBinanceRequestOptions; } catch { getBinanceRequestOptions = () => ({}); }
+
+    const now = new Date();
+    const dayOfWeek = now.getDay();
+    const mondayOffset = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
+    const monday = new Date(now);
+    monday.setDate(now.getDate() + mondayOffset);
+    monday.setHours(0, 0, 0, 0);
+    const sunday = new Date(monday);
+    sunday.setDate(monday.getDate() + 6);
+    sunday.setHours(23, 59, 59, 999);
+
+    // Also check trades from last 2 weeks to catch older corruption
+    const twoWeeksAgo = new Date(monday);
+    twoWeeksAgo.setDate(twoWeeksAgo.getDate() - 14);
+
+    const trades = await query(
+      `SELECT t.id, t.user_id, t.api_key_id, t.symbol, t.direction,
+              t.entry_price, t.exit_price, t.pnl_usdt, t.quantity,
+              t.status, t.created_at, t.closed_at,
+              u.email,
+              ak.api_key_enc, ak.iv, ak.auth_tag,
+              ak.api_secret_enc, ak.secret_iv, ak.secret_auth_tag,
+              ak.platform
+       FROM trades t
+       JOIN users u ON u.id = t.user_id
+       JOIN api_keys ak ON ak.id = t.api_key_id
+       WHERE t.status IN ('WIN', 'LOSS', 'TP', 'SL', 'CLOSED')
+         AND t.closed_at >= $1
+       ORDER BY u.email, t.closed_at`,
+      [twoWeeksAgo]
+    );
+
+    const results = [];
+    let fixed = 0;
+
+    for (const t of trades) {
+      const entry = parseFloat(t.entry_price);
+      const dbPnl = parseFloat(t.pnl_usdt);
+      const qty = parseFloat(t.quantity || 0);
+      const isLong = t.direction !== 'SHORT';
+
+      let actualExit = null;
+      let actualPnl = null;
+
+      if (t.platform === 'binance' && qty > 0) {
+        try {
+          const apiKey = cryptoUtils.decrypt(t.api_key_enc, t.iv, t.auth_tag);
+          const apiSecret = cryptoUtils.decrypt(t.api_secret_enc, t.secret_iv, t.secret_auth_tag);
+          const client = new USDMClient({ api_key: apiKey, api_secret: apiSecret }, getBinanceRequestOptions());
+
+          const openTime = new Date(t.created_at).getTime();
+          const fills = await client.getAccountTradeList({ symbol: t.symbol, startTime: openTime, limit: 50 });
+
+          if (fills && fills.length > 0) {
+            const closeSide = isLong ? 'SELL' : 'BUY';
+            const closeFills = fills.filter(f => f.side === closeSide);
+            if (closeFills.length > 0) {
+              let totalQty = 0, totalValue = 0, totalRealizedPnl = 0;
+              for (const f of closeFills) {
+                const fQty = parseFloat(f.qty);
+                totalQty += fQty;
+                totalValue += fQty * parseFloat(f.price);
+                totalRealizedPnl += parseFloat(f.realizedPnl || 0);
+              }
+              if (totalQty > 0) actualExit = totalValue / totalQty;
+              if (totalRealizedPnl !== 0) actualPnl = totalRealizedPnl;
+            }
+          }
+        } catch (e) {
+          results.push({ id: t.id, email: t.email, symbol: t.symbol, error: e.message });
+          continue;
+        }
+      }
+
+      // Calculate correct PnL
+      let correctPnl;
+      if (actualPnl !== null) {
+        correctPnl = parseFloat(actualPnl.toFixed(4));
+      } else if (actualExit !== null && qty > 0) {
+        correctPnl = isLong
+          ? parseFloat(((actualExit - entry) * qty).toFixed(4))
+          : parseFloat(((entry - actualExit) * qty).toFixed(4));
+      } else {
+        continue;
+      }
+
+      const correctStatus = correctPnl > 0 ? 'WIN' : 'LOSS';
+      const correctExit = actualExit || parseFloat(t.exit_price);
+      const isWrong = Math.abs(correctPnl - dbPnl) > 0.01 || correctStatus !== t.status;
+
+      if (isWrong) {
+        await query(
+          `UPDATE trades SET status = $1, pnl_usdt = $2, exit_price = $3 WHERE id = $4`,
+          [correctStatus, correctPnl, correctExit, t.id]
+        );
+        results.push({
+          id: t.id, email: t.email, symbol: t.symbol, direction: t.direction,
+          old_status: t.status, old_pnl: dbPnl,
+          new_status: correctStatus, new_pnl: correctPnl,
+          fixed: true,
+        });
+        fixed++;
+      }
+    }
+
+    res.json({ total_checked: trades.length, fixed, details: results });
+  } catch (err) {
+    console.error('Fix trades error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });

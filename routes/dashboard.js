@@ -240,9 +240,9 @@ router.get('/weekly-earnings', async (req, res) => {
       [req.userId, monday, sunday]
     );
 
-    // Calculate per-key earnings
+    // Calculate per-key earnings using NET P&L (wins - losses)
     const perKey = [];
-    let totalWinningPnl = 0;
+    let totalNetPnl = 0;
     let totalUserShare = 0;
     let totalAdminShare = 0;
     let totalTrades = 0;
@@ -251,11 +251,12 @@ router.get('/weekly-earnings', async (req, res) => {
     for (const key of keys) {
       const keyTrades = weeklyTrades.filter(t => t.api_key_id === key.id);
       const wins = keyTrades.filter(t => parseFloat(t.pnl_usdt) > 0);
-      const winningPnl = wins.reduce((s, t) => s + parseFloat(t.pnl_usdt), 0);
+      const netPnl = keyTrades.reduce((s, t) => s + parseFloat(t.pnl_usdt), 0);
       const userPct = parseFloat(key.profit_share_user_pct) || 60;
       const adminPct = parseFloat(key.profit_share_admin_pct) || 40;
-      const userShare = Math.max(0, winningPnl * userPct / 100);
-      const adminShare = Math.max(0, winningPnl * adminPct / 100);
+      const shareable = Math.max(0, netPnl);
+      const userShare = shareable * userPct / 100;
+      const adminShare = shareable * adminPct / 100;
 
       perKey.push({
         key_id: key.id,
@@ -264,14 +265,14 @@ router.get('/weekly-earnings', async (req, res) => {
         total_trades: keyTrades.length,
         win_count: wins.length,
         loss_count: keyTrades.length - wins.length,
-        winning_pnl: winningPnl,
+        net_pnl: netPnl,
         user_share_pct: userPct,
         admin_share_pct: adminPct,
         user_share: userShare,
         admin_share: adminShare,
       });
 
-      totalWinningPnl += winningPnl;
+      totalNetPnl += netPnl;
       totalUserShare += userShare;
       totalAdminShare += adminShare;
       totalTrades += keyTrades.length;
@@ -284,7 +285,7 @@ router.get('/weekly-earnings', async (req, res) => {
       total_trades: totalTrades,
       total_wins: totalWins,
       total_losses: totalTrades - totalWins,
-      winning_pnl: totalWinningPnl,
+      net_pnl: totalNetPnl,
       user_share: totalUserShare,
       admin_share: totalAdminShare,
       user_share_pct: keys.length > 0 ? (parseFloat(keys[0].profit_share_user_pct) || 60) : 60,

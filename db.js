@@ -86,6 +86,7 @@ async function initAllTables() {
     `ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS profit_share_user_pct DECIMAL DEFAULT 60`,
     `ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS profit_share_admin_pct DECIMAL DEFAULT 40`,
     `ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS paused_by_admin BOOLEAN DEFAULT false`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS last_paid_at TIMESTAMPTZ DEFAULT NOW()`,
     // Cash wallet system (replaces subscription)
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS cash_wallet DECIMAL DEFAULT 0`,
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS commission_earned DECIMAL DEFAULT 0`,

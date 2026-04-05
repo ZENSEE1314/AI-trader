@@ -559,35 +559,9 @@ async function checkTrailingStop(client) {
           recordDailyTrade(pnlPct > 0);
           log(`AI recorded: ${sym} PnL=${pnlPct.toFixed(2)}% duration=${durationMin}min setup=${state.setup}`);
 
-          // Update DB trades table with exit_price
-          try {
-            const db = require('./db');
-            const pnlUsdt = parseFloat((pnlPct * state.qty * state.entry / 100).toFixed(4));
-            await db.query(
-              `UPDATE trades SET status = $1, pnl_usdt = $2, exit_price = $3,
-               trailing_sl_price = $4, trailing_sl_last_step = $5,
-               closed_at = NOW()
-               WHERE symbol = $6 AND status = 'OPEN'`,
-              [winLoss, pnlUsdt, exitPrice,
-               state.trailingSlPrice || null, state.trailingSlLastStep || 0,
-               sym]
-            );
-            bLog.trade(`DB updated: ${sym} -> ${winLoss} exit=$${fmtPrice(exitPrice)}`);
-
-            // Record profit split if winning
-            if (pnlUsdt > 0) {
-              // Find the trade to get user_id and api_key_id
-              const tradeRow = await db.query(
-                `SELECT user_id, api_key_id FROM trades WHERE symbol = $1 AND status = $2 ORDER BY closed_at DESC LIMIT 1`,
-                [sym, winLoss]
-              );
-              if (tradeRow.length > 0) {
-                await recordProfitSplit(db, tradeRow[0].user_id, tradeRow[0].api_key_id, pnlUsdt, sym);
-              }
-            }
-          } catch (dbErr) {
-            bLog.error(`DB update failed for ${sym}: ${dbErr.message}`);
-          }
+          // NOTE: User trades are updated by syncTradeStatus() with per-user PnL.
+          // Owner account has no rows in the trades table.
+          bLog.trade(`Owner position closed: ${sym} -> ${winLoss} exit=$${fmtPrice(exitPrice)}`);
         }
         tradeState.delete(sym);
       }
@@ -614,25 +588,8 @@ async function checkTrailingStop(client) {
           try { await client.cancelAllAlgoOpenOrders({ symbol: sym }); } catch (_) {}
           await client.submitNewOrder({ symbol: sym, side: closeSide, type: 'MARKET', quantity: Math.abs(amt), reduceOnly: 'true' });
 
-          try {
-            const db = require('./db');
-            const pnlUsdt = parseFloat((gain * Math.abs(amt) * entry).toFixed(4));
-            await db.query(
-              `UPDATE trades SET status = $1, pnl_usdt = $2, exit_price = $3, closed_at = NOW()
-               WHERE symbol = $4 AND status = 'OPEN'`,
-              [gain > 0 ? 'WIN' : 'LOSS', pnlUsdt, cur, sym]
-            );
-
-            if (pnlUsdt > 0) {
-              const tradeRow = await db.query(
-                `SELECT user_id, api_key_id FROM trades WHERE symbol = $1 AND exit_price = $2 ORDER BY closed_at DESC LIMIT 1`,
-                [sym, cur]
-              );
-              if (tradeRow.length > 0) {
-                await recordProfitSplit(db, tradeRow[0].user_id, tradeRow[0].api_key_id, pnlUsdt, sym);
-              }
-            }
-          } catch (_) {}
+          // NOTE: User trades are updated by syncTradeStatus() with per-user PnL.
+          // Owner 15m exit only closes the owner's exchange position.
 
           const st = tradeState.get(sym);
           if (st) {
@@ -928,6 +885,39 @@ async function executeForAllUsers(pick) {
   }
 
   try {
+    // Auto-pause users with overdue payment (>7 days since last paid, with positive earnings)
+    const PAYMENT_OVERDUE_DAYS = 7;
+    try {
+      const overdueUsers = await db.query(
+        `SELECT DISTINCT ak.user_id
+         FROM api_keys ak
+         JOIN users u ON u.id = ak.user_id
+         WHERE ak.enabled = true
+           AND (ak.paused_by_admin = false OR ak.paused_by_admin IS NULL)
+           AND u.last_paid_at < NOW() - INTERVAL '${PAYMENT_OVERDUE_DAYS} days'`
+      );
+      for (const row of overdueUsers) {
+        // Only pause if user has net positive earnings since last payment
+        const earningsCheck = await db.query(
+          `SELECT COALESCE(SUM(pnl_usdt), 0) as net_pnl
+           FROM trades
+           WHERE user_id = $1 AND status IN ('WIN','LOSS','TP','SL','CLOSED')
+             AND closed_at > (SELECT last_paid_at FROM users WHERE id = $1)`,
+          [row.user_id]
+        );
+        const netPnl = parseFloat(earningsCheck[0]?.net_pnl) || 0;
+        if (netPnl > 0) {
+          await db.query(
+            `UPDATE api_keys SET paused_by_admin = true WHERE user_id = $1 AND enabled = true`,
+            [row.user_id]
+          );
+          bLog.trade(`User ${row.user_id}: auto-paused — payment overdue (>7 days, net P&L: $${netPnl.toFixed(2)})`);
+        }
+      }
+    } catch (pauseErr) {
+      bLog.error(`Auto-pause check failed: ${pauseErr.message}`);
+    }
+
     const allKeys = await db.query(
       `SELECT ak.*, u.email
        FROM api_keys ak

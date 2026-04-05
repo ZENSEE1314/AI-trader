@@ -646,17 +646,17 @@
             <div class="summary-card" style="border-left:3px solid var(--color-success);">
               <span class="summary-card-label">Your Earnings (<span id="we-user-pct">60</span>%)</span>
               <span id="we-user-share" class="summary-card-value text-mono" style="color:var(--color-success);font-size:1.3rem;">--</span>
-              <span style="font-size:0.75rem;color:var(--color-text-muted);">From total weekly winnings</span>
+              <span style="font-size:0.75rem;color:var(--color-text-muted);">Your share of net profit</span>
             </div>
             <div class="summary-card" style="border-left:3px solid var(--color-accent);">
               <span class="summary-card-label">Platform Fee (<span id="we-admin-pct">40</span>%)</span>
               <span id="we-admin-share" class="summary-card-value text-mono" style="color:var(--color-accent);font-size:1.3rem;">--</span>
-              <span style="font-size:0.75rem;color:var(--color-text-muted);">Service fee on winnings</span>
+              <span style="font-size:0.75rem;color:var(--color-text-muted);">Service fee on net profit</span>
             </div>
             <div class="summary-card">
-              <span class="summary-card-label">Total Winnings</span>
-              <span id="we-total-winning" class="summary-card-value text-mono" style="color:var(--color-success);">--</span>
-              <span style="font-size:0.75rem;color:var(--color-text-muted);">Sum of all profitable trades this week</span>
+              <span class="summary-card-label">Net P&L</span>
+              <span id="we-total-winning" class="summary-card-value text-mono">--</span>
+              <span style="font-size:0.75rem;color:var(--color-text-muted);">Wins minus losses this week</span>
             </div>
             <div class="summary-card">
               <span class="summary-card-label">Week Record</span>
@@ -1057,17 +1057,21 @@
         <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Weekly Earnings Overview</h3>
         <div id="admin-weekly-summary" class="summary-grid" style="margin-bottom:var(--space-4);">
           <div class="summary-card" style="border-left:3px solid var(--color-success);">
-            <span class="summary-card-label">Total Winnings (All Users)</span>
-            <span id="awe-total-winning" class="summary-card-value text-mono" style="color:var(--color-success);font-size:1.2rem;">--</span>
+            <span class="summary-card-label">Net P&L (All Users)</span>
+            <span id="awe-total-net" class="summary-card-value text-mono" style="font-size:1.2rem;">--</span>
           </div>
           <div class="summary-card" style="border-left:3px solid var(--color-accent);">
-            <span class="summary-card-label">Admin Earnings (40%)</span>
+            <span class="summary-card-label">Admin Share</span>
             <span id="awe-admin-share" class="summary-card-value text-mono" style="color:var(--color-accent);font-size:1.2rem;">--</span>
           </div>
           <div class="summary-card" style="border-left:3px solid #d4af37;">
-            <span class="summary-card-label">User Shares (60%)</span>
+            <span class="summary-card-label">User Share</span>
             <span id="awe-user-share" class="summary-card-value text-mono" style="color:#d4af37;font-size:1.2rem;">--</span>
           </div>
+        </div>
+        <div style="margin-bottom:var(--space-3);">
+          <button class="btn btn-sm" style="font-size:0.75rem;" onclick="window.CryptoBot.adminFixTrades()">🔧 Fix Corrupted Trades</button>
+          <span id="fix-trades-status" style="font-size:0.75rem;color:var(--color-text-muted);margin-left:8px;"></span>
         </div>
         <div id="admin-earnings-per-user" style="margin-bottom:var(--space-5);"></div>
 
