@@ -1530,9 +1530,9 @@ router.post('/ai-optimize', async (req, res) => {
     async function fetchK(symbol, interval, limit) {
       if (limit <= 1500) {
         const url = `https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`;
-        for (let i = 0; i < 3; i++) {
-          try { const r = await fetch(url, { timeout: 15000, ...getFetchOptions() }); if (r.ok) return r.json(); } catch {}
-          await new Promise(r => setTimeout(r, 500));
+        for (let i = 0; i < 2; i++) {
+          try { const r = await fetch(url, { timeout: 8000, ...getFetchOptions() }); if (r.ok) return r.json(); } catch {}
+          await new Promise(r => setTimeout(r, 200));
         }
         return null;
       }
@@ -1543,16 +1543,16 @@ router.post('/ai-optimize', async (req, res) => {
         const batch = Math.min(remaining, 1500);
         const url = `https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=${interval}&limit=${batch}&endTime=${et}`;
         let data = null;
-        for (let i = 0; i < 3; i++) {
-          try { const r = await fetch(url, { timeout: 15000, ...getFetchOptions() }); if (r.ok) { data = await r.json(); break; } } catch {}
-          await new Promise(r => setTimeout(r, 500));
+        for (let i = 0; i < 2; i++) {
+          try { const r = await fetch(url, { timeout: 8000, ...getFetchOptions() }); if (r.ok) { data = await r.json(); break; } } catch {}
+          await new Promise(r => setTimeout(r, 200));
         }
         if (!data || !data.length) break;
         all = data.concat(all);
         et = parseInt(data[0][0]) - 1;
         remaining -= data.length;
         if (data.length < batch) break;
-        await new Promise(r => setTimeout(r, 100));
+        await new Promise(r => setTimeout(r, 50));
       }
       return all.length ? all : null;
     }
@@ -1603,22 +1603,43 @@ router.post('/ai-optimize', async (req, res) => {
       const k15Limit = Math.ceil(DAYS * 24 * 4) + 100;
       const k4hLimit = Math.ceil(DAYS * 6) + 50;
       const k1hLimit = Math.ceil(DAYS * 24) + 50;
-      const BATCH = 10;
+      const BATCH = 8;
+      const failedCoins = [];
+
+      // Per-coin fetch with 30s hard timeout
+      async function fetchCoin(sym) {
+        return Promise.race([
+          (async () => {
+            const [kD,k4h,k1h,k15,k1] = await Promise.all([
+              fetchK(sym,'1d',Math.max(10,DAYS+2)), fetchK(sym,'4h',k4hLimit), fetchK(sym,'1h',k1hLimit), fetchK(sym,'15m',k15Limit), fetchK(sym,'1m',1500),
+            ]);
+            return { sym, kD, k4h, k1h, k15, k1 };
+          })(),
+          new Promise(resolve => setTimeout(() => resolve({ sym, kD:null, k4h:null, k1h:null, k15:null, k1:null, timedOut:true }), 30000)),
+        ]);
+      }
+
       for (let b = 0; b < topCoins.length; b += BATCH) {
         const batch = topCoins.slice(b, b + BATCH);
-        const fetchResults = await Promise.all(batch.map(async (sym) => {
-          const [kD,k4h,k1h,k15,k1] = await Promise.all([
-            fetchK(sym,'1d',Math.max(10,DAYS+2)), fetchK(sym,'4h',k4hLimit), fetchK(sym,'1h',k1hLimit), fetchK(sym,'15m',k15Limit), fetchK(sym,'1m',1500),
-          ]);
-          return { sym, kD, k4h, k1h, k15, k1 };
-        }));
+        const fetchResults = await Promise.all(batch.map(fetchCoin));
         for (const r of fetchResults) {
-          if (r.kD&&r.k4h&&r.k1h&&r.k15) coinData[r.sym] = { kD:r.kD, k4h:r.k4h, k1h:r.k1h, k15:r.k15, k1:r.k1||[] };
+          if (r.timedOut) {
+            failedCoins.push(r.sym + '(timeout)');
+            sendLog(`  ⚠️ ${r.sym} timed out — skipped`);
+          } else if (r.kD&&r.k4h&&r.k1h&&r.k15) {
+            coinData[r.sym] = { kD:r.kD, k4h:r.k4h, k1h:r.k1h, k15:r.k15, k1:r.k1||[] };
+          } else {
+            failedCoins.push(r.sym + '(no data)');
+            sendLog(`  ⚠️ ${r.sym} missing data — skipped`);
+          }
         }
         const done = Math.min(b+BATCH, topCoins.length);
-        sendLog(`Fetched ${done}/${topCoins.length} tokens`);
+        sendLog(`Fetched ${done}/${topCoins.length} tokens (${Object.keys(coinData).length} OK)`);
         sendProgress('fetch', Math.round(done/topCoins.length*100));
+        // Small delay between batches to avoid rate limits
+        if (b + BATCH < topCoins.length) await new Promise(r => setTimeout(r, 200));
       }
+      if (failedCoins.length) sendLog(`⚠️ ${failedCoins.length} tokens failed: ${failedCoins.join(', ')}`);
       // Save to cache
       _candleCache.data = coinData;
       _candleCache.tokens = cacheKey;
