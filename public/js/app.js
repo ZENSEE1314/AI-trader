@@ -1524,19 +1524,58 @@
   async function runAiOptimize() {
     const days = parseInt($('#backtest-days')?.value) || 7;
     const resultEl = $('#fix-bitunix-result');
-    if (resultEl) resultEl.textContent = `⚛️ Quantum AI Optimizer running on admin tokens over ${days} days...\n` +
-      `Searching 13 STRATEGY parameters (risk is user-configured)\n` +
-      `Phase 1: 10 strategy presets\n` +
-      `Phase 2: 25 genetic offspring from top 10\n` +
-      `Phase 3: QAOA(30) + SPSA(40) + Annealing(25) = ~95 quantum combos\n` +
-      `Plus per-token scoring to show good/bad tokens...\n` +
-      `Please wait...`;
+    if (resultEl) resultEl.textContent = '⚛️ Starting Quantum AI Optimizer...\n';
+
     try {
-      const data = await api('POST', '/api/admin/ai-optimize', { days });
-      const R = data.results;
+      // Stream NDJSON — read lines as they arrive, no first-byte timeout
+      const token = localStorage.getItem('token');
+      const resp = await fetch('/api/admin/ai-optimize', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: 'Bearer ' + token } : {}) },
+        body: JSON.stringify({ days }),
+      });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let logs = '⚛️ QUANTUM AI OPTIMIZER — LIVE LOG\n';
+      let finalData = null;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop();
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          try {
+            const msg = JSON.parse(line);
+            if (msg.type === 'log') {
+              logs += msg.message + '\n';
+              if (resultEl) resultEl.textContent = logs;
+            } else if (msg.type === 'progress') {
+              logs += `  [${msg.phase}] ${msg.pct}%\n`;
+              if (resultEl) resultEl.textContent = logs;
+            } else if (msg.type === 'result') {
+              finalData = msg;
+            } else if (msg.type === 'error') {
+              logs += `\nERROR: ${msg.error}\n`;
+              if (resultEl) resultEl.textContent = logs;
+            }
+          } catch {}
+        }
+      }
+
+      if (!finalData) { if (resultEl) resultEl.textContent = logs + '\nNo results received.'; return; }
+
+      // Build final output from result data
+      const data = finalData;
+      const R = data.results || [];
       let output = '═══════════════════════════════════════════════════════════════════════════════════════════════════════\n';
       output += '  ⚛️🧠 QUANTUM-INSPIRED AI OPTIMIZATION (Strategy Only)\n';
-      output += `  Period: ${data.period} | Tokens: ${data.coinsScanned} (admin-allowed)\n`;
+      output += `  Period: ${data.period} | Tokens: ${data.coinsScanned} (admin-allowed)${data.cachedData ? ' [CACHED]' : ''}\n`;
       output += `  Parameters: ${data.paramsSearched||13} strategy params (risk is user-set)\n`;
       output += `  Round 1: ${data.round1Combos} strategy presets\n`;
       output += `  Round 2: ${data.round2Genetic} genetic offspring\n`;
@@ -1603,10 +1642,11 @@
         output += '\n  ✅ Top 3 saved! Refresh the AI Version dropdown to load them.\n';
       }
 
-      if (resultEl) resultEl.textContent = output;
+      // Show live log + final results
+      if (resultEl) resultEl.textContent = logs + '\n' + output;
       loadAiVersions().catch(() => {});
     } catch (err) {
-      if (resultEl) resultEl.textContent = 'Error: ' + err.message;
+      if (resultEl) resultEl.textContent += '\nError: ' + err.message;
     }
   }
 
