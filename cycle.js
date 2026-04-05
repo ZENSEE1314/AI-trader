@@ -37,9 +37,14 @@ const CONFIG = {
 
 // ── Trailing SL config ─────────────────────────────────────
 const TRAILING_SL = {
-  INITIAL_SL_PCT:  0.03,   // -3% initial SL from entry
-  FIRST_STEP:      0.015,  // First trailing step at +1.5% profit
-  STEP_INCREMENT:  0.015,  // Each subsequent step is +1.5%
+  INITIAL_SL_PCT: 0.03,          // -3% initial SL from entry
+  TRAIL_GAP:      0.015,         // 1.5% trailing gap after last tier
+  // Tiers: [profitThreshold, slLevel] — when profit reaches threshold, move SL to slLevel
+  TIERS: [
+    { trigger: 0.015, sl: 0.005 },  // +1.5% profit → SL at +0.5%
+    { trigger: 0.030, sl: 0.015 },  // +3.0% profit → SL at +1.5%
+    { trigger: 0.050, sl: 0.035 },  // +5.0% profit → SL at +3.5%
+  ],
 };
 
 // ── Compound: always use current wallet balance ─────────────
@@ -265,36 +270,45 @@ async function updateStopLoss(client, symbol, newSlPrice, closeSide, platform, p
   return false;
 }
 
-// ── TRAILING SL: Calculate and step SL up as profit grows ────
+// ── TRAILING SL: Tier-based trailing with 1.5% gap ────
+// Tiers: +1.5% → SL +0.5%, +3% → SL +1.5%, +5% → SL +3.5%, then trail 1.5% behind
 // Returns { stepped: boolean, newSlPrice, newLastStep } or null
-// stepPct: trailing SL step size as decimal (e.g. 0.012 = 1.2%). Defaults to TRAILING_SL config.
-function calculateTrailingStep(entryPrice, currentPrice, isLong, lastStep, stepPct) {
-  const firstStep = stepPct || TRAILING_SL.FIRST_STEP;
-  const stepIncrement = stepPct || TRAILING_SL.STEP_INCREMENT;
-
+function calculateTrailingStep(entryPrice, currentPrice, isLong, lastStep) {
   const profitPct = isLong
     ? (currentPrice - entryPrice) / entryPrice
     : (entryPrice - currentPrice) / entryPrice;
 
-  const nextStep = lastStep === 0 ? firstStep : lastStep + stepIncrement;
+  const tiers = TRAILING_SL.TIERS;
+  const trailGap = TRAILING_SL.TRAIL_GAP;
 
-  if (profitPct < nextStep) return null;
-
-  // Price may have jumped multiple levels — find the highest reached step
-  let reachedStep = nextStep;
-  while (profitPct >= reachedStep + stepIncrement) {
-    reachedStep += stepIncrement;
+  // Find the highest tier reached
+  let bestTierSl = null;
+  let bestTierTrigger = 0;
+  for (const tier of tiers) {
+    if (profitPct >= tier.trigger) {
+      bestTierSl = tier.sl;
+      bestTierTrigger = tier.trigger;
+    }
   }
 
-  // SL placement: first step → half step behind, subsequent → full step behind
-  const slLevel = reachedStep <= firstStep
-    ? reachedStep - stepIncrement / 2
-    : reachedStep - stepIncrement;
-  const newSlPrice = isLong
-    ? entryPrice * (1 + slLevel)
-    : entryPrice * (1 - slLevel);
+  // Beyond last tier: trail 1.5% behind current profit
+  const lastTier = tiers[tiers.length - 1];
+  if (profitPct > lastTier.trigger) {
+    const trailingSl = profitPct - trailGap;
+    if (trailingSl > lastTier.sl) {
+      bestTierSl = trailingSl;
+      bestTierTrigger = profitPct;
+    }
+  }
 
-  return { stepped: true, newSlPrice, newLastStep: reachedStep };
+  if (bestTierSl === null) return null;
+  if (bestTierSl <= lastStep) return null; // SL only moves up, never down
+
+  const newSlPrice = isLong
+    ? entryPrice * (1 + bestTierSl)
+    : entryPrice * (1 - bestTierSl);
+
+  return { stepped: true, newSlPrice, newLastStep: bestTierSl };
 }
 
 // ── PROFIT SPLIT: Credit 60% user, 40% platform fee ─────────
@@ -785,8 +799,12 @@ async function main() {
 
         if (avail >= CONFIG.MIN_BALANCE) {
           const openPos = account.positions.filter(p => parseFloat(p.positionAmt) !== 0);
-          if (openPos.length === 0) {
-            bLog.trade(`No open positions — opening trade on ${pick.symbol}...`);
+          const alreadyInSymbol = openPos.find(p => p.symbol === pick.symbol);
+
+          if (alreadyInSymbol) {
+            bLog.trade(`Owner already in ${pick.symbol} — skipping duplicate. Open: ${openPos.map(p => p.symbol).join(', ')}`);
+          } else {
+            bLog.trade(`Owner has ${openPos.length} open position(s) — opening ${pick.symbol}...`);
             const result = await openTrade(client, pick, wallet);
             if (result && result !== 'TOO_EXPENSIVE') {
               const dirEmoji = result.direction !== 'SHORT' ? '🟢' : '🔴';
@@ -804,8 +822,6 @@ async function main() {
             } else if (!result) {
               bLog.trade(`openTrade returned null for ${pick.symbol} — trade rejected`);
             }
-          } else {
-            bLog.trade(`Already in position: ${openPos.map(p => p.symbol).join(', ')} — monitoring only`);
           }
         } else {
           bLog.trade(`Owner balance too low: $${avail.toFixed(2)} < min $${CONFIG.MIN_BALANCE}`);
@@ -1218,7 +1234,7 @@ async function syncTradeStatus() {
     const openTrades = await db.query(
       `SELECT t.*, ak.api_key_enc, ak.iv, ak.auth_tag,
               ak.api_secret_enc, ak.secret_iv, ak.secret_auth_tag,
-              ak.platform, COALESCE(ak.trailing_sl_step, 1.5) as key_trailing_sl_step
+              ak.platform, COALESCE(ak.trailing_sl_step, 1.0) as key_trailing_sl_step
        FROM trades t
        JOIN api_keys ak ON ak.id = t.api_key_id
        WHERE t.status = 'OPEN'`
@@ -1264,9 +1280,7 @@ async function syncTradeStatus() {
                 ? entryPrice + (exchangePos.pnl / absAmt)
                 : entryPrice - (exchangePos.pnl / absAmt);
               const lastStep = parseFloat(trade.trailing_sl_last_step) || 0;
-              const userStepPct = parseFloat(key.key_trailing_sl_step || 1.5) / 100;
-
-              const trailResult = calculateTrailingStep(entryPrice, curPrice, isLong, lastStep, userStepPct);
+              const trailResult = calculateTrailingStep(entryPrice, curPrice, isLong, lastStep);
               if (trailResult) {
                 const closeSide = isLong ? 'SELL' : 'BUY';
                 try {
@@ -1308,9 +1322,7 @@ async function syncTradeStatus() {
                 ? entryPrice + (exchangePos.pnl / absAmt)
                 : entryPrice - (exchangePos.pnl / absAmt);
               const lastStep = parseFloat(trade.trailing_sl_last_step) || 0;
-              const userStepPct = parseFloat(key.key_trailing_sl_step || 1.5) / 100;
-
-              const trailResult = calculateTrailingStep(entryPrice, curPrice, isLong, lastStep, userStepPct);
+              const trailResult = calculateTrailingStep(entryPrice, curPrice, isLong, lastStep);
               if (trailResult) {
                 try {
                   const existingTp = parseFloat(trade.tp_price) || 0;

@@ -140,8 +140,25 @@ class BitunixClient {
 
   // ── Flash Close (market close entire position) ─────────────
 
-  async flashClose({ symbol, positionId }) {
-    return this._post('/api/v1/futures/trade/flash_close', { symbol, positionId });
+  async flashClose({ positionId }) {
+    return this._post('/api/v1/futures/trade/flash_close_position', { positionId });
+  }
+
+  // ── Close position by placing opposite market order ────────
+
+  async closePosition({ symbol, side, qty, positionId }) {
+    // For hedge mode: side=BUY position → close with SELL, side=SELL → close with BUY
+    const closeSide = side === 'BUY' ? 'SELL' : 'BUY';
+    const body = {
+      symbol,
+      side: closeSide,
+      qty: String(qty),
+      orderType: 'MARKET',
+      tradeSide: 'CLOSE',
+    };
+    if (positionId) body.positionId = positionId;
+    console.log('[Bitunix closePosition] Sending:', JSON.stringify(body));
+    return this._post('/api/v1/futures/trade/place_order', body);
   }
 
   // ── TP/SL on existing position ──────────────────────────────

@@ -102,6 +102,48 @@ router.get('/trades', async (req, res) => {
   }
 });
 
+// CSV export of all trades
+router.get('/trades/csv', async (req, res) => {
+  try {
+    const period = PERIOD_INTERVALS[req.query.period];
+    const dateFilter = period
+      ? `AND t.created_at > NOW() - INTERVAL '${period}'`
+      : '';
+
+    const rows = await query(
+      `SELECT t.created_at, t.symbol, t.direction, t.entry_price, t.exit_price,
+              t.sl_price, t.tp_price, t.pnl_usdt, t.status, t.closed_at,
+              ak.label as key_label, ak.platform
+       FROM trades t
+       LEFT JOIN api_keys ak ON t.api_key_id = ak.id
+       WHERE t.user_id = $1 ${dateFilter}
+       ORDER BY t.created_at DESC`,
+      [req.userId]
+    );
+
+    const header = 'Date,Symbol,Direction,Entry Price,Exit Price,SL Price,TP Price,PnL (USDT),Status,Closed At,Key Label,Platform';
+    const csvRows = rows.map(r => {
+      const date = r.created_at ? new Date(r.created_at).toISOString() : '';
+      const closedAt = r.closed_at ? new Date(r.closed_at).toISOString() : '';
+      return [
+        date, r.symbol || '', r.direction || '', r.entry_price || '', r.exit_price || '',
+        r.sl_price || '', r.tp_price || '', r.pnl_usdt || '0', r.status || '', closedAt,
+        (r.key_label || '').replace(/,/g, ' '), (r.platform || '').replace(/,/g, ' '),
+      ].join(',');
+    });
+
+    const csv = [header, ...csvRows].join('\n');
+    const filename = `trades_${new Date().toISOString().slice(0, 10)}.csv`;
+
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(csv);
+  } catch (err) {
+    console.error('CSV export error:', err.message);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // P&L summary (supports ?period=1d|7d|30d|6m|1y filter)
 router.get('/summary', async (req, res) => {
   try {
@@ -220,25 +262,17 @@ router.get('/futures-wallet', async (req, res) => {
   }
 });
 
-// Weekly earnings with profit split
+// Weekly earnings with profit split (rolling 7-day window from last payment)
 router.get('/weekly-earnings', async (req, res) => {
   try {
-    // Get current week (Monday to Sunday)
     const now = new Date();
-    const dayOfWeek = now.getDay();
-    const mondayOffset = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
-    const monday = new Date(now);
-    monday.setDate(now.getDate() + mondayOffset);
-    monday.setHours(0, 0, 0, 0);
-    const sunday = new Date(monday);
-    sunday.setDate(monday.getDate() + 6);
-    sunday.setHours(23, 59, 59, 999);
 
-    // Get user info for payment timer
+    // Rolling window: last_paid_at → now. Resets to 0 after each payment.
     const userRow = await query(
       `SELECT created_at, last_paid_at FROM users WHERE id = $1`, [req.userId]
     );
     const paidAt = userRow[0]?.last_paid_at ? new Date(userRow[0].last_paid_at) : new Date(userRow[0]?.created_at || now);
+    const periodStart = paidAt;
     const dueDate = new Date(paidAt.getTime() + 7 * 86400000);
     const msRemaining = dueDate - now;
     const daysRemaining = Math.max(0, Math.ceil(msRemaining / 86400000));
@@ -251,16 +285,16 @@ router.get('/weekly-earnings', async (req, res) => {
       [req.userId]
     );
 
-    // Get this week's closed trades with positive PnL (winnings only)
+    // Get trades closed since last payment (rolling window)
     const weeklyTrades = await query(
       `SELECT t.api_key_id, t.pnl_usdt, t.status, t.symbol, t.direction,
               t.entry_price, t.exit_price, t.created_at, t.closed_at
        FROM trades t
        WHERE t.user_id = $1
          AND t.status IN ('WIN', 'LOSS', 'TP', 'SL', 'CLOSED')
-         AND t.closed_at >= $2 AND t.closed_at <= $3
+         AND t.closed_at >= $2
        ORDER BY t.closed_at DESC`,
-      [req.userId, monday, sunday]
+      [req.userId, periodStart]
     );
 
     // Calculate per-key earnings using NET P&L (wins - losses)
@@ -303,8 +337,8 @@ router.get('/weekly-earnings', async (req, res) => {
     }
 
     res.json({
-      week_start: monday.toISOString(),
-      week_end: sunday.toISOString(),
+      week_start: periodStart.toISOString(),
+      week_end: dueDate.toISOString(),
       total_trades: totalTrades,
       total_wins: totalWins,
       total_losses: totalTrades - totalWins,
@@ -353,17 +387,14 @@ router.get('/weekly-history', async (req, res) => {
 router.post('/pay-weekly', async (req, res) => {
   try {
     const userId = req.userId;
-
-    // Get current week bounds
     const now = new Date();
-    const dayOfWeek = now.getDay();
-    const mondayOffset = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
-    const monday = new Date(now);
-    monday.setDate(now.getDate() + mondayOffset);
-    monday.setHours(0, 0, 0, 0);
-    const sunday = new Date(monday);
-    sunday.setDate(monday.getDate() + 6);
-    sunday.setHours(23, 59, 59, 999);
+
+    // Rolling window: last_paid_at → now
+    const userInfo = await query(
+      `SELECT created_at, last_paid_at FROM users WHERE id = $1`, [userId]
+    );
+    const paidAt = userInfo[0]?.last_paid_at ? new Date(userInfo[0].last_paid_at) : new Date(userInfo[0]?.created_at || now);
+    const periodStart = paidAt;
 
     // Get user's keys
     const keys = await query(
@@ -372,12 +403,12 @@ router.post('/pay-weekly', async (req, res) => {
     );
     if (!keys.length) return res.status(400).json({ error: 'No API keys found' });
 
-    // Get this week's closed trades
+    // Get trades closed since last payment
     const trades = await query(
       `SELECT api_key_id, pnl_usdt, status FROM trades
        WHERE user_id = $1 AND status IN ('WIN','LOSS','TP','SL','CLOSED')
-         AND closed_at >= $2 AND closed_at <= $3`,
-      [userId, monday, sunday]
+         AND closed_at >= $2`,
+      [userId, periodStart]
     );
 
     // Calculate total admin share (platform fee)
@@ -398,7 +429,14 @@ router.post('/pay-weekly', async (req, res) => {
     );
     const cashWallet = (parseFloat(userRow[0]?.cash_wallet) || 0) + (parseFloat(userRow[0]?.commission_earned) || 0);
     if (cashWallet < totalAdminShare) {
-      return res.status(400).json({ error: `Insufficient balance. Fee: $${totalAdminShare.toFixed(2)}, Wallet: $${cashWallet.toFixed(2)}` });
+      const shortfall = totalAdminShare - cashWallet;
+      return res.status(400).json({
+        error: `Insufficient balance. Fee: $${totalAdminShare.toFixed(2)}, Wallet: $${cashWallet.toFixed(2)}. Please top up at least $${shortfall.toFixed(2)}.`,
+        code: 'INSUFFICIENT_BALANCE',
+        fee: totalAdminShare,
+        balance: cashWallet,
+        shortfall,
+      });
     }
 
     // Save per-key earnings to weekly_earnings history
@@ -419,7 +457,7 @@ router.post('/pay-weekly', async (req, res) => {
          ON CONFLICT (user_id, api_key_id, week_start)
          DO UPDATE SET total_pnl=$5, winning_pnl=$6, user_share=$7, admin_share=$8,
            trade_count=$11, win_count=$12, settled=true`,
-        [userId, key.id, monday, sunday, netPnl, winPnl,
+        [userId, key.id, periodStart, now, netPnl, winPnl,
          shareable * userPct / 100, shareable * adminPct / 100,
          userPct, adminPct, keyTrades.length, wins.length]
       );
@@ -446,7 +484,7 @@ router.post('/pay-weekly', async (req, res) => {
       `INSERT INTO wallet_transactions (user_id, type, amount, status, description)
        VALUES ($1, 'platform_fee', $2, 'completed', $3)`,
       [userId, -totalAdminShare,
-       `Weekly platform fee payment (self-pay) for week ${monday.toISOString().slice(0,10)} to ${sunday.toISOString().slice(0,10)}`]
+       `Weekly platform fee payment for ${periodStart.toISOString().slice(0,10)} to ${now.toISOString().slice(0,10)} | Trades: ${trades.length} | Net P&L: $${trades.reduce((s, t) => s + parseFloat(t.pnl_usdt), 0).toFixed(2)}`]
     );
 
     // Resume trading (unpause keys)

@@ -591,6 +591,16 @@
     });
   }
 
+  function setupCsvExport() {
+    const btn = document.getElementById('btn-export-csv');
+    if (!btn) return;
+    btn.addEventListener('click', () => {
+      let url = '/api/dashboard/trades/csv';
+      if (state.tradesPeriod !== 'all') url += `?period=${state.tradesPeriod}`;
+      window.location.href = url;
+    });
+  }
+
   // ----- API Keys -----
 
   let riskLevelsCache = [];
@@ -1169,13 +1179,25 @@
   }
 
   async function payWeekly() {
-    if (!confirm('Pay the weekly platform fee from your cash wallet?\nThis will deduct the platform fee and reset your payment timer.')) return;
+    if (!confirm('Pay the weekly platform fee from your cash wallet?\nThis will deduct the platform fee and reset your 7-day timer.')) return;
     try {
       const result = await api('POST', '/api/dashboard/pay-weekly');
-      showToast(result.message || 'Payment successful — trading resumed!', 'success');
+      showToast(result.message || 'Payment successful — timer reset!', 'success');
       loadDashboard();
       loadCashWallet();
-    } catch (err) { showToast(err.message, 'error'); }
+    } catch (err) {
+      const msg = err.message || '';
+      if (msg.includes('Insufficient') || msg.includes('top up')) {
+        showToast('Insufficient cash wallet balance. Redirecting to top up...', 'error');
+        setTimeout(() => {
+          document.querySelector('[data-tab="cashwallet"]')?.click();
+          const topUpAmount = document.getElementById('cw-topup-amount');
+          if (topUpAmount) topUpAmount.focus();
+        }, 1000);
+      } else {
+        showToast(msg, 'error');
+      }
+    }
   }
 
   async function submitTopUp() {
@@ -2536,6 +2558,7 @@
     setupLogout();
     setupNavTabs();
     setupPagination();
+    setupCsvExport();
     setupModal();
     setupForgotPassword();
 

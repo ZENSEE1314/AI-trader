@@ -700,13 +700,14 @@
           <h2 class="section-heading" style="margin-bottom:0;">Trade History <span class="tip-btn">?<span class="tip-text">All your bot trades across exchanges. Filter by time period. Shows entry/exit prices, SL/TP, P&L, and status.</span></span></h2>
           <button id="btn-clear-errors" class="btn btn-danger btn-sm hidden" onclick="window.CryptoBot.clearErrors()">Clear Errors</button>
         </div>
-        <div id="trades-period-filter" style="display:flex;gap:8px;margin-bottom:var(--space-3);flex-wrap:wrap;">
+        <div id="trades-period-filter" style="display:flex;gap:8px;margin-bottom:var(--space-3);flex-wrap:wrap;align-items:center;">
           <button class="btn btn-sm period-btn active" data-period="all">All</button>
           <button class="btn btn-sm period-btn" data-period="1d">1 Day</button>
           <button class="btn btn-sm period-btn" data-period="7d">7 Days</button>
           <button class="btn btn-sm period-btn" data-period="30d">30 Days</button>
           <button class="btn btn-sm period-btn" data-period="6m">6 Months</button>
           <button class="btn btn-sm period-btn" data-period="1y">1 Year</button>
+          <button class="btn btn-sm" id="btn-export-csv" style="margin-left:auto;background:var(--color-accent);color:#fff;padding:4px 12px;" title="Download trade history as CSV">Download CSV</button>
         </div>
         <div id="trades-wrapper">
           <div class="table-wrapper">
@@ -965,6 +966,10 @@
 
       <section id="tab-admin" class="hidden" role="tabpanel" aria-label="Admin">
         <h2 class="section-heading">Admin Panel <span class="tip-btn">?<span class="tip-text">Admin-only controls for managing users, platform settings, global tokens, risk levels, and weekly earnings settlement.</span></span></h2>
+
+        <div style="margin-bottom:var(--space-4);">
+          <button class="btn btn-sm" id="btn-admin-csv" style="background:var(--color-accent);color:#fff;padding:6px 16px;" onclick="window.location.href='/api/admin/trades/csv'">Download All Trades CSV</button>
+        </div>
 
         <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Platform Settings <span class="tip-btn">?<span class="tip-text">Global settings that apply to the entire platform. Configure referral tiers, USDT addresses, and commission percentages.</span></span></h3>
         <div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-4);margin-bottom:var(--space-5);">

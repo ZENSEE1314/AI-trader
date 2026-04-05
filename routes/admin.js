@@ -134,6 +134,42 @@ router.get('/weekly-earnings', async (req, res) => {
   }
 });
 
+// CSV export of ALL users' trades (admin only)
+router.get('/trades/csv', async (req, res) => {
+  try {
+    const rows = await query(
+      `SELECT t.created_at, t.symbol, t.direction, t.entry_price, t.exit_price,
+              t.sl_price, t.tp_price, t.pnl_usdt, t.status, t.closed_at,
+              u.email, ak.label as key_label, ak.platform
+       FROM trades t
+       LEFT JOIN api_keys ak ON t.api_key_id = ak.id
+       LEFT JOIN users u ON t.user_id = u.id
+       ORDER BY t.created_at DESC`
+    );
+
+    const header = 'Date,User,Symbol,Direction,Entry Price,Exit Price,SL Price,TP Price,PnL (USDT),Status,Closed At,Key Label,Platform';
+    const csvRows = rows.map(r => {
+      const date = r.created_at ? new Date(r.created_at).toISOString() : '';
+      const closedAt = r.closed_at ? new Date(r.closed_at).toISOString() : '';
+      return [
+        date, (r.email || '').replace(/,/g, ' '), r.symbol || '', r.direction || '',
+        r.entry_price || '', r.exit_price || '', r.sl_price || '', r.tp_price || '',
+        r.pnl_usdt || '0', r.status || '', closedAt,
+        (r.key_label || '').replace(/,/g, ' '), (r.platform || '').replace(/,/g, ' '),
+      ].join(',');
+    });
+
+    const csv = [header, ...csvRows].join('\n');
+    const filename = `all_trades_${new Date().toISOString().slice(0, 10)}.csv`;
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(csv);
+  } catch (err) {
+    console.error('Admin CSV export error:', err.message);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // Mark user as paid — save to history, reset, resume trading
 router.post('/mark-paid/:userId', async (req, res) => {
   try {
@@ -879,9 +915,7 @@ router.post('/emergency-close', async (req, res) => {
           for (const pos of openPos) {
             try {
               console.log(`[EMERGENCY] Flash closing ${pos.symbol} positionId=${pos.positionId} side=${pos.side} qty=${pos.qty} for ${key.email}`);
-              const closeResult = await client.flashClose({
-                symbol: pos.symbol, positionId: pos.positionId,
-              });
+              const closeResult = await client.flashClose({ positionId: pos.positionId });
               console.log(`[EMERGENCY] Close result:`, JSON.stringify(closeResult));
               await query(
                 `UPDATE trades SET status = 'CLOSED', exit_price = $1, closed_at = NOW()
@@ -889,8 +923,8 @@ router.post('/emergency-close', async (req, res) => {
                 [parseFloat(pos.avgOpenPrice || 0), key.id, pos.symbol]
               );
               totalClosed++;
-              results.push({ user: key.email, symbol: pos.symbol, side: pos.side, qty, status: 'CLOSED' });
-              console.log(`[EMERGENCY] Closed ${pos.symbol} ${pos.side} qty=${qty} for ${key.email}`);
+              results.push({ user: key.email, symbol: pos.symbol, side: pos.side, qty: pos.qty, status: 'CLOSED' });
+              console.log(`[EMERGENCY] Closed ${pos.symbol} ${pos.side} qty=${pos.qty} for ${key.email}`);
             } catch (closeErr) {
               results.push({ user: key.email, symbol: pos.symbol, status: 'FAILED', error: closeErr.message });
             }
