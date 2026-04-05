@@ -1610,6 +1610,7 @@ router.post('/ai-optimize', async (req, res) => {
     }
 
     // Fetch admin-allowed tokens from DB
+    sendLog('Querying token list from DB...');
     const allowedRows = await query('SELECT symbol FROM global_token_settings WHERE enabled = true AND banned = false ORDER BY symbol');
     const topCoins = allowedRows.map(r => r.symbol);
     if (!topCoins.length) {
@@ -1986,7 +1987,7 @@ router.post('/ai-optimize', async (req, res) => {
     console.error('AI optimize error:', err);
     clearInterval(keepalive);
     try {
-      res.write(JSON.stringify({ type: 'error', error: err.message }) + '\n');
+      res.write(JSON.stringify({ type: 'error', error: err.message, stack: (err.stack || '').split('\n').slice(0,3).join(' | ') }) + '\n');
       res.end();
     } catch {}
   }
