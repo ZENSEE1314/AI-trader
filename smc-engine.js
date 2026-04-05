@@ -18,11 +18,37 @@ const REQUEST_TIMEOUT = 15000;
 const TOP_N_COINS = 100;
 const MIN_24H_VOLUME = 10_000_000;
 
-const SL_PCT = 0.03;           // 3% initial SL
-const TRAILING_STEP = 0.012;   // trail SL by 1.2% when price moves in favor
+const SL_PCT = 0.03;           // 3% initial SL (overridden by strategyConfig)
+const TRAILING_STEP = 0.012;   // trail SL by 1.2% (overridden by strategyConfig)
 
-// Swing lengths per timeframe
-const SWING_LENGTHS = { '4h': 10, '1h': 10, '15m': 10, '1m': 5 };
+// Swing lengths per timeframe (defaults, overridden by strategyConfig)
+let SWING_LENGTHS = { '4h': 10, '1h': 10, '15m': 10, '1m': 5 };
+
+// Strategy config loaded from DB (ai_versions best params)
+let strategyConfig = null;
+let strategyConfigLoadedAt = 0;
+const STRATEGY_CONFIG_TTL = 120000; // 2 min cache
+
+async function getStrategyConfig() {
+  if (strategyConfig && Date.now() - strategyConfigLoadedAt < STRATEGY_CONFIG_TTL) return strategyConfig;
+  try {
+    const db = require('./db');
+    const rows = await db.query('SELECT params FROM ai_versions ORDER BY id DESC LIMIT 1');
+    if (rows.length && rows[0].params) {
+      const p = typeof rows[0].params === 'string' ? JSON.parse(rows[0].params) : rows[0].params;
+      strategyConfig = p;
+      strategyConfigLoadedAt = Date.now();
+      // Update swing lengths if provided
+      if (p.swingLen4h) SWING_LENGTHS['4h'] = p.swingLen4h;
+      if (p.swingLen1h) SWING_LENGTHS['1h'] = p.swingLen1h;
+      if (p.swingLen15m) SWING_LENGTHS['15m'] = p.swingLen15m;
+      if (p.swingLen1m) SWING_LENGTHS['1m'] = p.swingLen1m;
+      bLog.ai(`Strategy config loaded: sw=${p.swingLen4h||10}/${p.swingLen1h||10}/${p.swingLen15m||10}/${p.swingLen1m||5} HTF:${p.requireBothHTF?'both':'either'} KL:${p.requireKeyLevel?'Y':'N'} 1m:${p.require1m?'Y':'N'}`);
+      return p;
+    }
+  } catch (err) { bLog.error(`Failed to load strategy config: ${err.message}`); }
+  return null;
+}
 
 // ── Fetch Helpers ────────────────────────────────────────────
 
@@ -215,8 +241,8 @@ function calcVWAPBands(klines) {
 
 // ── Step 3: Check if price is at key level ──────────────────
 
-function isAtKeyLevel(price, pdh, pdl, vwapBands, direction) {
-  const PROXIMITY_PCT = 0.003; // within 0.3% of level
+function isAtKeyLevel(price, pdh, pdl, vwapBands, direction, proximityOverride) {
+  const PROXIMITY_PCT = proximityOverride || 0.003; // configurable proximity
 
   const nearPDH = Math.abs(price - pdh) / pdh < PROXIMITY_PCT;
   const nearPDL = Math.abs(price - pdl) / pdl < PROXIMITY_PCT;
@@ -273,25 +299,41 @@ function isGoodTradingSession() {
   return !(utcH >= 4 && utcH <= 5);
 }
 
-// ── Analyze Single Coin (Full Checklist) ────────────────────
+// ── Analyze Single Coin (Full Checklist — config-driven) ───
 
 async function analyzeLHHL(ticker, params, dailyBiasCache) {
   const symbol = ticker.symbol;
   const price = parseFloat(ticker.lastPrice);
 
-  // ┌─────────────────────────────────────────────────────────┐
-  // │ Step 1: Daily Bias                                      │
-  // └─────────────────────────────────────────────────────────┘
+  // Load optimized strategy params from DB
+  const sc = await getStrategyConfig() || {};
+  const INDECISIVE_THRESH = sc.indecisiveThresh || 0.3;
+  const NEED_BOTH_HTF = sc.requireBothHTF !== undefined ? !!sc.requireBothHTF : true;
+  const NEED_KL = sc.requireKeyLevel !== undefined ? !!sc.requireKeyLevel : true;
+  const NEED_15M = sc.require15m !== undefined ? !!sc.require15m : true;
+  const NEED_1M = sc.require1m !== undefined ? !!sc.require1m : true;
+  const NEED_VOL = sc.requireVolSpike !== undefined ? !!sc.requireVolSpike : false;
+  const VOL_MULT = sc.volSpikeMultiplier || 1.5;
+  const KL_PROX = sc.keyLevelProximity || 0.003;
+  const MAX_ENTRY_AGE = sc.maxEntryAge || 25;
+
+  // Step 1: Daily Bias
   let dailyInfo = dailyBiasCache.get(symbol);
   if (!dailyInfo) {
     const dailyKlines = await fetchKlines(symbol, '1d', 3);
-    dailyInfo = getDailyBias(dailyKlines);
-    if (dailyInfo) dailyBiasCache.set(symbol, dailyInfo);
+    if (!dailyKlines || dailyKlines.length < 2) return null;
+    const prevDay = dailyKlines[dailyKlines.length - 2];
+    const dOpen = parseFloat(prevDay[1]), dClose = parseFloat(prevDay[4]);
+    const dHigh = parseFloat(prevDay[2]), dLow = parseFloat(prevDay[3]);
+    const bodySize = Math.abs(dClose - dOpen), range = dHigh - dLow;
+    const isIndecisive = range > 0 && (bodySize / range) < INDECISIVE_THRESH;
+    dailyInfo = isIndecisive ? { bias: 'indecisive', pdh: dHigh, pdl: dLow }
+      : dClose > dOpen ? { bias: 'bullish', pdh: dHigh, pdl: dLow }
+      : { bias: 'bearish', pdh: dHigh, pdl: dLow };
+    dailyBiasCache.set(symbol, dailyInfo);
   }
 
-  if (!dailyInfo || dailyInfo.bias === 'indecisive') {
-    return null; // no clear bias — skip
-  }
+  if (!dailyInfo || dailyInfo.bias === 'indecisive') return null;
 
   const { bias, pdh, pdl } = dailyInfo;
 
@@ -313,15 +355,20 @@ async function analyzeLHHL(ticker, params, dailyBiasCache) {
   const struct15m = getStructure(klines15m, SWING_LENGTHS['15m']);
   const struct1m = getStructure(klines1m, SWING_LENGTHS['1m']);
 
-  // HTF must align with daily bias
-  const isBullishHTF = (struct4h.trend === 'bullish' || struct4h.trend === 'bullish_lean') &&
-                       (struct1h.trend === 'bullish' || struct1h.trend === 'bullish_lean');
-  const isBearishHTF = (struct4h.trend === 'bearish' || struct4h.trend === 'bearish_lean') &&
-                       (struct1h.trend === 'bearish' || struct1h.trend === 'bearish_lean');
+  // HTF alignment: both or either based on optimized config
+  const b4 = struct4h.trend === 'bullish' || struct4h.trend === 'bullish_lean';
+  const b1 = struct1h.trend === 'bullish' || struct1h.trend === 'bullish_lean';
+  const r4 = struct4h.trend === 'bearish' || struct4h.trend === 'bearish_lean';
+  const r1 = struct1h.trend === 'bearish' || struct1h.trend === 'bearish_lean';
 
   let direction = null;
-  if (bias === 'bullish' && isBullishHTF) direction = 'LONG';
-  else if (bias === 'bearish' && isBearishHTF) direction = 'SHORT';
+  if (NEED_BOTH_HTF) {
+    if (bias === 'bullish' && b4 && b1) direction = 'LONG';
+    else if (bias === 'bearish' && r4 && r1) direction = 'SHORT';
+  } else {
+    if (bias === 'bullish' && (b4 || b1)) direction = 'LONG';
+    else if (bias === 'bearish' && (r4 || r1)) direction = 'SHORT';
+  }
 
   if (!direction) {
     bLog.scan(`${symbol}: bias=${bias} 4H=${struct4h.trend} 1H=${struct1h.trend} — HTF not aligned`);
@@ -331,10 +378,24 @@ async function analyzeLHHL(ticker, params, dailyBiasCache) {
   // ┌─────────────────────────────────────────────────────────┐
   // │ Step 3: Key Levels & VWAP Bands                        │
   // └─────────────────────────────────────────────────────────┘
-  const vwapBands = calcVWAPBands(klines15m);
-  const levelCheck = isAtKeyLevel(price, pdh, pdl, vwapBands, direction);
+  // Step 3: Key Levels (conditional based on config)
+  let levelCheck = { isAtLevel: true, level: 'none' };
+  if (NEED_KL) {
+    const vwapBands = calcVWAPBands(klines15m);
+    levelCheck = isAtKeyLevel(price, pdh, pdl, vwapBands, direction);
+  }
 
-  if (!levelCheck.isAtLevel) {
+  // Step 3b: Volume Spike (conditional)
+  if (NEED_VOL) {
+    const vols = klines15m.slice(-20).map(k => parseFloat(k[5]));
+    const avg = vols.reduce((a, b) => a + b, 0) / vols.length;
+    if (avg > 0 && (vols.slice(-5).reduce((a, b) => a + b, 0) / 5) / avg < VOL_MULT) {
+      bLog.scan(`${symbol}: ${direction} no volume spike`);
+      return null;
+    }
+  }
+
+  if (NEED_KL && !levelCheck.isAtLevel) {
     bLog.scan(`${symbol}: ${direction} bias OK but price not at key level (PDH/PDL/VWAP) — skipping`);
     return null;
   }
@@ -342,7 +403,7 @@ async function analyzeLHHL(ticker, params, dailyBiasCache) {
   // ┌─────────────────────────────────────────────────────────┐
   // │ Step 4: Setup TF (15M) — swing point formed            │
   // └─────────────────────────────────────────────────────────┘
-  const has15mSetup = (direction === 'LONG' && struct15m.hasHL) ||
+  const has15mSetup = !NEED_15M || (direction === 'LONG' && struct15m.hasHL) ||
                       (direction === 'SHORT' && struct15m.hasLH);
 
   if (!has15mSetup) {
@@ -353,7 +414,7 @@ async function analyzeLHHL(ticker, params, dailyBiasCache) {
   // ┌─────────────────────────────────────────────────────────┐
   // │ Step 5: Entry TF (1M) — HL or LH confirmed             │
   // └─────────────────────────────────────────────────────────┘
-  const has1mEntry = (direction === 'LONG' && struct1m.hasHL) ||
+  const has1mEntry = !NEED_1M || (direction === 'LONG' && struct1m.hasHL) ||
                      (direction === 'SHORT' && struct1m.hasLH);
 
   if (!has1mEntry) {
@@ -361,8 +422,8 @@ async function analyzeLHHL(ticker, params, dailyBiasCache) {
     return null;
   }
 
-  // Recency: 1M confirming swing must be fresh
-  const MAX_CANDLE_AGE = SWING_LENGTHS['1m'] + 20;
+  // Recency: 1M confirming swing must be fresh (config-driven)
+  const MAX_CANDLE_AGE = NEED_1M ? MAX_ENTRY_AGE : 999;
   const lastCandleIdx = klines1m.length - 1;
   const entrySwing = direction === 'LONG' ? struct1m.lastLow : struct1m.lastHigh;
   if (!entrySwing) return null;

@@ -1499,15 +1499,16 @@ router.post('/backtest', async (req, res) => {
   }
 });
 
-// ── AI Optimize: mix-and-match strategy × risk, rank all combos ────
+// ── AI Optimize: unified strategy + risk quantum search ────
 router.post('/ai-optimize', async (req, res) => {
   req.setTimeout(600000);
   res.setTimeout(600000);
   try {
     const fetch = require('node-fetch');
     const { getFetchOptions } = require('../proxy-agent');
+    const { quantumOptimize } = require('../quantum-optimizer');
     const DAYS = Math.min(parseInt(req.body.days) || 7, 30);
-    const TOP_N = Math.min(parseInt(req.body.topN) || 20, 100);
+    const TOP_N = Math.min(parseInt(req.body.topN) || 50, 100);
     const endTime = Date.now();
     const startTime = endTime - DAYS * 86400000;
     const SW = { '4h': 10, '1h': 10, '15m': 10, '1m': 5 };
@@ -1614,77 +1615,83 @@ router.post('/ai-optimize', async (req, res) => {
       for (const k of coinData[sym].k15) k15Index[sym][parseInt(k[0])] = k;
     }
 
-    // ═══ SPEED OPTIMIZATION 2: Pre-compute ALL signals per strategy ═══
-    // Signal = { step, sym, dir, price } — computed once, replayed many times
-    function precomputeSignals(strat) {
-      const signals = []; // [{step, sym, dir, price}]
+    // ═══ UNIFIED parameterized signal generator — strategy params control everything ═══
+    function computeSignals(cfg) {
+      const swLens = { '4h': cfg.swingLen4h||10, '1h': cfg.swingLen1h||10, '15m': cfg.swingLen15m||10, '1m': cfg.swingLen1m||5 };
+      const INDECISIVE = cfg.indecisiveThresh || 0.3;
+      const PROX = cfg.keyLevelProximity || 0.003;
+      const MAX_AGE = cfg.maxEntryAge || 25;
+      const NEED_BOTH_HTF = cfg.requireBothHTF !== undefined ? !!cfg.requireBothHTF : true;
+      const NEED_KL = cfg.requireKeyLevel !== undefined ? !!cfg.requireKeyLevel : true;
+      const NEED_15M = cfg.require15m !== undefined ? !!cfg.require15m : true;
+      const NEED_1M = cfg.require1m !== undefined ? !!cfg.require1m : true;
+      const NEED_VOL = cfg.requireVolSpike !== undefined ? !!cfg.requireVolSpike : false;
+      const VOL_MULT = cfg.volSpikeMultiplier || 1.5;
+
+      const signals = [];
       for (let step=0; step<timeSteps.length; step++) {
         const now = timeSteps[step];
         for (const sym of Object.keys(coinData)) {
           const data = coinData[sym];
           const k15 = data.k15.filter(k=>parseInt(k[0])<=now); if (k15.length<30) continue;
           const price = parseFloat(k15[k15.length-1][4]);
+
+          // Daily bias
           const dIdx = data.kD.findIndex(k=>parseInt(k[0])+86400000>now);
           const pD = dIdx>0?data.kD[dIdx-1]:null;
+          if (!pD) continue;
+          const dO=parseFloat(pD[1]),dC=parseFloat(pD[4]),dH=parseFloat(pD[2]),dL=parseFloat(pD[3]);
+          if ((dH-dL)>0&&(Math.abs(dC-dO)/(dH-dL))<INDECISIVE) continue;
+          const bias = dC>dO?'bullish':'bearish';
 
-          function dBias() {
-            if (!pD) return null;
-            const dO=parseFloat(pD[1]),dC=parseFloat(pD[4]),dH=parseFloat(pD[2]),dL=parseFloat(pD[3]);
-            if ((dH-dL)>0&&(Math.abs(dC-dO)/(dH-dL))<0.3) return null;
-            return { bias:dC>dO?'bullish':'bearish', pdh:dH, pdl:dL };
-          }
-          function htf() {
-            const k4h=data.k4h.filter(k=>parseInt(k[0])<=now), k1h=data.k1h.filter(k=>parseInt(k[0])<=now);
-            if (k4h.length<30||k1h.length<30) return null;
-            return { s4h:getS(k4h,SW['4h']), s1h:getS(k1h,SW['1h']) };
-          }
-          function c15(dir) { const s=getS(k15,SW['15m']); return (dir==='LONG'&&s.hasHL)||(dir==='SHORT'&&s.hasLH); }
-          function c1(dir) {
-            const k1=data.k1.filter(k=>parseInt(k[0])<=now); if(k1.length<15) return false;
-            const s=getS(k1,SW['1m']); if((dir==='LONG'&&!s.hasHL)||(dir==='SHORT'&&!s.hasLH)) return false;
-            const es=dir==='LONG'?s.lastLow:s.lastHigh; return es&&(k1.length-1-es.index)<=25;
-          }
+          // HTF structure
+          const k4h=data.k4h.filter(k=>parseInt(k[0])<=now), k1h=data.k1h.filter(k=>parseInt(k[0])<=now);
+          if (k4h.length<30||k1h.length<30) continue;
+          const s4h=getS(k4h,swLens['4h']), s1h=getS(k1h,swLens['1h']);
+          const b4=s4h.trend==='bullish'||s4h.trend==='bullish_lean';
+          const b1=s1h.trend==='bullish'||s1h.trend==='bullish_lean';
+          const r4=s4h.trend==='bearish'||s4h.trend==='bearish_lean';
+          const r1=s1h.trend==='bearish'||s1h.trend==='bearish_lean';
 
           let dir = null;
-          if (strat==='full') {
-            const db=dBias(); if(!db) continue; const h=htf(); if(!h) continue;
-            const bu=(h.s4h.trend==='bullish'||h.s4h.trend==='bullish_lean')&&(h.s1h.trend==='bullish'||h.s1h.trend==='bullish_lean');
-            const be=(h.s4h.trend==='bearish'||h.s4h.trend==='bearish_lean')&&(h.s1h.trend==='bearish'||h.s1h.trend==='bearish_lean');
-            if(db.bias==='bullish'&&bu) dir='LONG'; else if(db.bias==='bearish'&&be) dir='SHORT'; else continue;
-            const vw=calcVW(k15); if(!atKL(price,db.pdh,db.pdl,vw,dir)) continue;
-            if(!c15(dir)||!c1(dir)) continue;
-          } else if (strat==='noKeyLevel') {
-            const db=dBias(); if(!db) continue; const h=htf(); if(!h) continue;
-            const bu=(h.s4h.trend==='bullish'||h.s4h.trend==='bullish_lean')&&(h.s1h.trend==='bullish'||h.s1h.trend==='bullish_lean');
-            const be=(h.s4h.trend==='bearish'||h.s4h.trend==='bearish_lean')&&(h.s1h.trend==='bearish'||h.s1h.trend==='bearish_lean');
-            if(db.bias==='bullish'&&bu) dir='LONG'; else if(db.bias==='bearish'&&be) dir='SHORT'; else continue;
-            if(!c15(dir)||!c1(dir)) continue;
-          } else if (strat==='relaxedHTF') {
-            const db=dBias(); if(!db) continue; const h=htf(); if(!h) continue;
-            const b4=h.s4h.trend==='bullish'||h.s4h.trend==='bullish_lean', b1=h.s1h.trend==='bullish'||h.s1h.trend==='bullish_lean';
-            const r4=h.s4h.trend==='bearish'||h.s4h.trend==='bearish_lean', r1=h.s1h.trend==='bearish'||h.s1h.trend==='bearish_lean';
-            if(db.bias==='bullish'&&(b4||b1)) dir='LONG'; else if(db.bias==='bearish'&&(r4||r1)) dir='SHORT'; else continue;
-            const vw=calcVW(k15); if(!atKL(price,db.pdh,db.pdl,vw,dir)) continue;
-            if(!c15(dir)||!c1(dir)) continue;
-          } else if (strat==='noHTF') {
-            const db=dBias(); if(!db) continue; dir=db.bias==='bullish'?'LONG':'SHORT';
-            if(!c15(dir)||!c1(dir)) continue;
-          } else if (strat==='momentum') {
-            const l3=k15.slice(-4,-1); if(l3.length<3) continue;
-            let g=0,r=0; for(const c of l3){if(parseFloat(c[4])>parseFloat(c[1]))g++;else r++;}
-            if(g>=2) dir='LONG'; else if(r>=2) dir='SHORT'; else continue;
-            if(!c15(dir)||!c1(dir)) continue;
-          } else if (strat==='volumeSpike') {
-            const db=dBias(); if(!db) continue; const h=htf(); if(!h) continue;
-            const bu=(h.s4h.trend==='bullish'||h.s4h.trend==='bullish_lean')&&(h.s1h.trend==='bullish'||h.s1h.trend==='bullish_lean');
-            const be=(h.s4h.trend==='bearish'||h.s4h.trend==='bearish_lean')&&(h.s1h.trend==='bearish'||h.s1h.trend==='bearish_lean');
-            if(db.bias==='bullish'&&bu) dir='LONG'; else if(db.bias==='bearish'&&be) dir='SHORT'; else continue;
-            const vw=calcVW(k15); if(!atKL(price,db.pdh,db.pdl,vw,dir)) continue;
-            if(!c15(dir)) continue;
-            const vols=k15.slice(-20).map(k=>parseFloat(k[5])); const avg=vols.reduce((a,b)=>a+b,0)/vols.length;
-            if(avg>0&&(vols.slice(-5).reduce((a,b)=>a+b,0)/5)/avg<1.5) continue;
-            if(!c1(dir)) continue;
-          } else continue;
+          if (NEED_BOTH_HTF) {
+            if(bias==='bullish'&&b4&&b1) dir='LONG'; else if(bias==='bearish'&&r4&&r1) dir='SHORT';
+          } else {
+            if(bias==='bullish'&&(b4||b1)) dir='LONG'; else if(bias==='bearish'&&(r4||r1)) dir='SHORT';
+          }
+          if (!dir) continue;
+
+          // Key level check
+          if (NEED_KL) {
+            const vw=calcVW(k15);
+            const b=vw[vw.length-1];
+            const atLevel = dir==='LONG'
+              ?(Math.abs(price-b.lower)/b.lower<PROX||Math.abs(price-dL)/dL<PROX||Math.abs(price-b.vwap)/b.vwap<PROX)
+              :(Math.abs(price-b.upper)/b.upper<PROX||Math.abs(price-dH)/dH<PROX||Math.abs(price-b.vwap)/b.vwap<PROX);
+            if (!atLevel) continue;
+          }
+
+          // Volume spike check
+          if (NEED_VOL) {
+            const vols=k15.slice(-20).map(k=>parseFloat(k[5]));
+            const avg=vols.reduce((a,b)=>a+b,0)/vols.length;
+            if(avg>0&&(vols.slice(-5).reduce((a,b)=>a+b,0)/5)/avg<VOL_MULT) continue;
+          }
+
+          // 15m confirmation
+          if (NEED_15M) {
+            const s15=getS(k15,swLens['15m']);
+            if(!((dir==='LONG'&&s15.hasHL)||(dir==='SHORT'&&s15.hasLH))) continue;
+          }
+
+          // 1m confirmation + freshness
+          if (NEED_1M) {
+            const k1=data.k1.filter(k=>parseInt(k[0])<=now); if(k1.length<15) continue;
+            const s1m=getS(k1,swLens['1m']);
+            if(!((dir==='LONG'&&s1m.hasHL)||(dir==='SHORT'&&s1m.hasLH))) continue;
+            const es=dir==='LONG'?s1m.lastLow:s1m.lastHigh;
+            if(!es||(k1.length-1-es.index)>MAX_AGE) continue;
+          }
 
           signals.push({ step, sym, dir, price });
         }
@@ -1692,7 +1699,7 @@ router.post('/ai-optimize', async (req, res) => {
       return signals;
     }
 
-    // ═══ SPEED OPTIMIZATION 3: Fast replay — just loops through pre-computed signals ═══
+    // ═══ Fast replay — loops through signals with risk config ═══
     function replaySignals(signals, cfg) {
       let wallet = 1000;
       const trades = [], openPos = [];
@@ -1704,7 +1711,6 @@ router.post('/ai-optimize', async (req, res) => {
         const dayKey = h<7?new Date(d.getTime()-86400000).toISOString().slice(0,10):d.toISOString().slice(0,10);
         if (dayKey!==tradingDay) { tradingDay=dayKey; consecLosses=0; }
 
-        // Exit checks
         for (let i=openPos.length-1; i>=0; i--) {
           const pos=openPos[i];
           const candle = k15Index[pos.symbol]?.[now]; if (!candle) continue;
@@ -1723,22 +1729,20 @@ router.post('/ai-optimize', async (req, res) => {
             pos.sl=pos.dir==='LONG'?pos.entry*(1+(r<=cfg.trailStep?r-cfg.trailStep/2:r-cfg.trailStep)):pos.entry*(1-(r<=cfg.trailStep?r-cfg.trailStep/2:r-cfg.trailStep));
           }
         }
-        if (openPos.length>=cfg.maxPos) continue;
-        if (cfg.maxConsecLoss>0&&consecLosses>=cfg.maxConsecLoss) continue;
+        if (openPos.length>=(cfg.maxPos||5)) continue;
+        if ((cfg.maxConsecLoss||0)>0&&consecLosses>=(cfg.maxConsecLoss||0)) continue;
 
-        // Get signals for this step
         while (lastStep+1<signals.length && signals[lastStep+1].step===step) {
           lastStep++;
           const sig = signals[lastStep];
-          if (openPos.length>=cfg.maxPos) break;
+          if (openPos.length>=(cfg.maxPos||5)) break;
           if (openPos.find(p=>p.symbol===sig.sym)) continue;
-          const sl=sig.dir==='LONG'?sig.price*(1-cfg.slPct):sig.price*(1+cfg.slPct);
-          const tp=cfg.tpPct>0?(sig.dir==='LONG'?sig.price*(1+cfg.tpPct):sig.price*(1-cfg.tpPct)):null;
-          const qty=(wallet*cfg.riskPct*cfg.leverage)/sig.price;
+          const sl=sig.dir==='LONG'?sig.price*(1-(cfg.slPct||0.03)):sig.price*(1+(cfg.slPct||0.03));
+          const tp=(cfg.tpPct||0)>0?(sig.dir==='LONG'?sig.price*(1+(cfg.tpPct)):sig.price*(1-(cfg.tpPct))):null;
+          const qty=(wallet*(cfg.riskPct||0.1)*(cfg.leverage||20))/sig.price;
           const trade={symbol:sig.sym,dir:sig.dir,entry:sig.price,qty,sl,tp,lastStep:0,pnl:null};
           openPos.push(trade); trades.push(trade);
         }
-        // Skip remaining signals at this step if already at max
         while (lastStep+1<signals.length && signals[lastStep+1].step===step) lastStep++;
       }
       for (const pos of openPos) { const data=coinData[pos.symbol]; if(data&&data.k15.length) { const lp=parseFloat(data.k15[data.k15.length-1][4]); pos.pnl=pos.dir==='LONG'?(lp-pos.entry)*pos.qty:(pos.entry-lp)*pos.qty; wallet+=pos.pnl; } }
@@ -1756,94 +1760,88 @@ router.post('/ai-optimize', async (req, res) => {
         finalWallet:parseFloat(r.wallet.toFixed(2)), maxDrawdown:parseFloat((maxDD*100).toFixed(1)) };
     }
 
-    // ── Strategies & Risk Profiles ──
-    const strategies = [
-      { id:'full', name:'Full (Live)' }, { id:'noKeyLevel', name:'No Key Level' },
-      { id:'relaxedHTF', name:'Relaxed HTF' }, { id:'noHTF', name:'No HTF' },
-      { id:'momentum', name:'Momentum' }, { id:'volumeSpike', name:'Vol Spike' },
-    ];
-    const risks = [
-      { id:'conservative', name:'Conservative', slPct:0.02, tpPct:0.03,  trailStep:0.012, leverage:10, riskPct:0.05, maxPos:2, maxConsecLoss:2 },
-      { id:'default',      name:'Default',      slPct:0.03, tpPct:0,     trailStep:0.012, leverage:20, riskPct:0.10, maxPos:3, maxConsecLoss:2 },
-      { id:'tightSlTp',    name:'Tight SL+TP',  slPct:0.015,tpPct:0.0225,trailStep:0.012, leverage:20, riskPct:0.10, maxPos:3, maxConsecLoss:2 },
-      { id:'wideSl',       name:'Wide SL',       slPct:0.05, tpPct:0,     trailStep:0.02,  leverage:10, riskPct:0.15, maxPos:2, maxConsecLoss:2 },
-      { id:'scalp',        name:'Scalp',         slPct:0.01, tpPct:0.015, trailStep:0.01,  leverage:20, riskPct:0.10, maxPos:5, maxConsecLoss:3 },
-      { id:'noStop',       name:'No Loss Stop',  slPct:0.03, tpPct:0,     trailStep:0.012, leverage:20, riskPct:0.10, maxPos:5, maxConsecLoss:0 },
-      { id:'aggressive',   name:'Aggressive',    slPct:0.02, tpPct:0,     trailStep:0.015, leverage:30, riskPct:0.15, maxPos:5, maxConsecLoss:0 },
-    ];
-
-    // ═══ ROUND 1: Pre-compute signals per strategy (heavy part, done once) ═══
-    const signalCache = {};
-    for (const strat of strategies) {
-      signalCache[strat.id] = precomputeSignals(strat.id);
+    // Unified evaluator: takes full config (strategy + risk), returns score
+    function evaluate(cfg) {
+      const signals = computeSignals(cfg);
+      const r = replaySignals(signals, cfg);
+      return scoreResult(r);
     }
 
-    // ═══ ROUND 1: Replay all 42 combos (fast — just number crunching) ═══
+    // ═══ ROUND 1: Preset strategy × risk grid (12 combos) ═══
+    const presets = [
+      { name:'Full SMC',       swingLen4h:10,swingLen1h:10,swingLen15m:10,swingLen1m:5, indecisiveThresh:0.3, keyLevelProximity:0.003, maxEntryAge:25, requireBothHTF:1,requireKeyLevel:1,require15m:1,require1m:1,requireVolSpike:0,volSpikeMultiplier:1.5 },
+      { name:'No Key Level',   swingLen4h:10,swingLen1h:10,swingLen15m:10,swingLen1m:5, indecisiveThresh:0.3, keyLevelProximity:0.003, maxEntryAge:25, requireBothHTF:1,requireKeyLevel:0,require15m:1,require1m:1,requireVolSpike:0,volSpikeMultiplier:1.5 },
+      { name:'Relaxed HTF',    swingLen4h:10,swingLen1h:10,swingLen15m:10,swingLen1m:5, indecisiveThresh:0.3, keyLevelProximity:0.003, maxEntryAge:25, requireBothHTF:0,requireKeyLevel:1,require15m:1,require1m:1,requireVolSpike:0,volSpikeMultiplier:1.5 },
+      { name:'No 1m Confirm',  swingLen4h:10,swingLen1h:10,swingLen15m:10,swingLen1m:5, indecisiveThresh:0.3, keyLevelProximity:0.003, maxEntryAge:25, requireBothHTF:1,requireKeyLevel:1,require15m:1,require1m:0,requireVolSpike:0,volSpikeMultiplier:1.5 },
+      { name:'Vol Spike',      swingLen4h:10,swingLen1h:10,swingLen15m:10,swingLen1m:5, indecisiveThresh:0.3, keyLevelProximity:0.003, maxEntryAge:25, requireBothHTF:1,requireKeyLevel:1,require15m:1,require1m:1,requireVolSpike:1,volSpikeMultiplier:1.5 },
+      { name:'Wide Swings',    swingLen4h:15,swingLen1h:15,swingLen15m:15,swingLen1m:8, indecisiveThresh:0.2, keyLevelProximity:0.005, maxEntryAge:40, requireBothHTF:1,requireKeyLevel:1,require15m:1,require1m:1,requireVolSpike:0,volSpikeMultiplier:1.5 },
+      { name:'Tight Swings',   swingLen4h:6, swingLen1h:6, swingLen15m:6, swingLen1m:3, indecisiveThresh:0.4, keyLevelProximity:0.002, maxEntryAge:15, requireBothHTF:1,requireKeyLevel:1,require15m:1,require1m:1,requireVolSpike:0,volSpikeMultiplier:1.5 },
+      { name:'Easy Entry',     swingLen4h:8, swingLen1h:8, swingLen15m:8, swingLen1m:4, indecisiveThresh:0.15,keyLevelProximity:0.01,  maxEntryAge:40, requireBothHTF:0,requireKeyLevel:0,require15m:1,require1m:0,requireVolSpike:0,volSpikeMultiplier:1.5 },
+      { name:'Ultra Strict',   swingLen4h:12,swingLen1h:12,swingLen15m:12,swingLen1m:5, indecisiveThresh:0.35,keyLevelProximity:0.002, maxEntryAge:20, requireBothHTF:1,requireKeyLevel:1,require15m:1,require1m:1,requireVolSpike:1,volSpikeMultiplier:2.0 },
+      { name:'Momentum Only',  swingLen4h:10,swingLen1h:10,swingLen15m:8, swingLen1m:4, indecisiveThresh:0.2, keyLevelProximity:0.008, maxEntryAge:35, requireBothHTF:0,requireKeyLevel:0,require15m:1,require1m:1,requireVolSpike:0,volSpikeMultiplier:1.5 },
+    ];
+    const riskPresets = [
+      { name:'Conservative', slPct:0.02,  tpPct:0.03,  trailStep:0.012, leverage:10, riskPct:0.05, maxPos:2,  maxConsecLoss:2 },
+      { name:'Default',      slPct:0.03,  tpPct:0,     trailStep:0.012, leverage:20, riskPct:0.10, maxPos:3,  maxConsecLoss:0 },
+      { name:'Aggressive',   slPct:0.02,  tpPct:0,     trailStep:0.015, leverage:30, riskPct:0.15, maxPos:5,  maxConsecLoss:0 },
+      { name:'Scalp',        slPct:0.01,  tpPct:0.015, trailStep:0.01,  leverage:20, riskPct:0.10, maxPos:5,  maxConsecLoss:3 },
+      { name:'Wide Swing',   slPct:0.05,  tpPct:0,     trailStep:0.02,  leverage:10, riskPct:0.15, maxPos:2,  maxConsecLoss:0 },
+    ];
+
     const results = [];
-    for (const strat of strategies) {
-      for (const risk of risks) {
-        const r = replaySignals(signalCache[strat.id], risk);
-        const s = scoreResult(r);
-        results.push({ strategy:strat.name, strategyId:strat.id, risk:risk.name, riskId:risk.id,
-          combo:`${strat.name} + ${risk.name}`,
-          settings:{slPct:risk.slPct,tpPct:risk.tpPct,trailStep:risk.trailStep,leverage:risk.leverage,riskPct:risk.riskPct,maxPos:risk.maxPos,maxConsecLoss:risk.maxConsecLoss},
-          ...s });
+    for (const strat of presets) {
+      for (const risk of riskPresets) {
+        const cfg = { ...strat, ...risk };
+        const s = evaluate(cfg);
+        results.push({
+          strategy: strat.name, risk: risk.name,
+          combo: `${strat.name} + ${risk.name}`,
+          settings: cfg, ...s,
+        });
       }
     }
 
-    // ═══ ROUND 2: Genetic — breed new combos from top 5 winners ═══
+    // ═══ ROUND 2: Genetic — breed from top 10 ═══
     results.sort((a,b) => b.winRate-a.winRate || b.totalPnl-a.totalPnl);
-    const top5 = results.filter(r=>r.trades>0).slice(0,5);
+    const topParents = results.filter(r=>r.trades>0).slice(0,10);
     const mutations = [];
-    function mutate(val, min, max, step) {
-      const delta = (Math.random()-0.5) * 2 * step;
-      return Math.min(max, Math.max(min, parseFloat((val + delta).toFixed(4))));
-    }
+    const { PARAM_BOUNDS: PB } = require('../quantum-optimizer');
 
-    for (let gen = 0; gen < 20; gen++) {
-      // Pick 2 random parents from top 5
-      const p1 = top5[Math.floor(Math.random()*top5.length)];
-      const p2 = top5[Math.floor(Math.random()*top5.length)];
+    for (let gen = 0; gen < 25; gen++) {
+      const p1 = topParents[Math.floor(Math.random()*topParents.length)];
+      const p2 = topParents[Math.floor(Math.random()*topParents.length)];
       if (!p1||!p2) continue;
-      // Crossover: mix settings from both parents
-      const child = {
-        slPct:     Math.random()>0.5 ? p1.settings.slPct : p2.settings.slPct,
-        tpPct:     Math.random()>0.5 ? p1.settings.tpPct : p2.settings.tpPct,
-        trailStep: Math.random()>0.5 ? p1.settings.trailStep : p2.settings.trailStep,
-        leverage:  Math.random()>0.5 ? p1.settings.leverage : p2.settings.leverage,
-        riskPct:   Math.random()>0.5 ? p1.settings.riskPct : p2.settings.riskPct,
-        maxPos:    Math.random()>0.5 ? p1.settings.maxPos : p2.settings.maxPos,
-        maxConsecLoss: Math.random()>0.5 ? p1.settings.maxConsecLoss : p2.settings.maxConsecLoss,
-      };
-      // Mutate slightly
-      child.slPct = mutate(child.slPct, 0.005, 0.08, 0.005);
-      child.tpPct = mutate(child.tpPct, 0, 0.05, 0.005);
-      child.trailStep = mutate(child.trailStep, 0.005, 0.03, 0.002);
-      child.leverage = Math.round(mutate(child.leverage, 5, 50, 5));
-      child.riskPct = mutate(child.riskPct, 0.02, 0.20, 0.02);
-      child.maxPos = Math.round(mutate(child.maxPos, 1, 10, 1));
-
-      // Use the best parent's strategy
-      const stratId = p1.winRate >= p2.winRate ? p1.strategyId : p2.strategyId;
-      const stratName = strategies.find(s=>s.id===stratId)?.name || stratId;
-      const r = replaySignals(signalCache[stratId], child);
-      const s = scoreResult(r);
+      const child = {};
+      for (const key of Object.keys(PB)) {
+        const b = PB[key];
+        const v1 = p1.settings[key], v2 = p2.settings[key];
+        let val = Math.random()>0.5 ? (v1!==undefined?v1:(b.min+b.max)/2) : (v2!==undefined?v2:(b.min+b.max)/2);
+        val += (Math.random()-0.5)*2*b.step;
+        val = Math.max(b.min, Math.min(b.max, val));
+        if (b.integer) val = Math.round(val);
+        else val = parseFloat(val.toFixed(4));
+        child[key] = val;
+      }
+      const s = evaluate(child);
       if (s.trades > 0) {
-        mutations.push({ strategy:stratName, strategyId:stratId, risk:`Gen${gen+1}`, riskId:`gen${gen}`,
-          combo:`${stratName} + Gen${gen+1}`, settings:child, ...s });
+        mutations.push({ strategy:'Genetic', risk:`Gen${gen+1}`, combo:`Genetic Gen${gen+1}`, settings:child, ...s });
       }
     }
 
-    // ═══ ROUND 3: Quantum-Inspired Optimization (QAOA + SPSA + Annealing) ═══
-    const { quantumOptimize } = require('../quantum-optimizer');
+    // ═══ ROUND 3: Quantum (QAOA + SPSA + Annealing) over ALL 20 params ═══
     const preQuantum = [...results, ...mutations].sort((a,b) => b.winRate-a.winRate || b.totalPnl-a.totalPnl);
-    const quantum = quantumOptimize(preQuantum, signalCache, replaySignals, scoreResult, strategies);
+    const quantum = quantumOptimize(preQuantum, evaluate);
 
-    // Merge all rounds and re-sort
+    // Add strategy descriptions to quantum results
+    for (const qr of quantum.results) {
+      qr.strategy = 'Quantum';
+      qr.combo = `Quantum ${qr.risk}`;
+    }
+
     const allResults = [...results, ...mutations, ...quantum.results];
     allResults.sort((a,b) => b.winRate-a.winRate || b.totalPnl-a.totalPnl);
 
-    // Save top 3 as AI versions
+    // Save top 3 as AI versions (full strategy + risk params)
     const saved = [];
     for (let i=0; i<Math.min(3,allResults.length); i++) {
       const best=allResults[i]; if(!best||best.trades===0) continue;
@@ -1857,7 +1855,7 @@ router.post('/ai-optimize', async (req, res) => {
         `INSERT INTO ai_versions (version, trade_count, win_rate, avg_pnl, total_pnl, params, setup_weights, avoided_coins, changes)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
         [ver, best.trades, best.winRate/100, best.trades?best.totalPnl/best.trades:0, best.totalPnl,
-         JSON.stringify({...best.settings,strategy:best.strategyId}), '{}', '[]',
+         JSON.stringify(best.settings), '{}', '[]',
          `${medal} AI #${i+1}: ${best.combo} (${best.winRate}% WR, $${best.totalPnl} PnL, ${DAYS}d)`]);
       saved.push({ rank:i+1, version:ver, combo:best.combo, winRate:best.winRate, pnl:best.totalPnl });
     }
@@ -1865,11 +1863,12 @@ router.post('/ai-optimize', async (req, res) => {
     res.json({
       period: `${new Date(startTime).toISOString().slice(0,10)} → ${new Date(endTime).toISOString().slice(0,10)}`,
       days: DAYS, coinsScanned: Object.keys(coinData).length,
-      strategiesCount: strategies.length, risksCount: risks.length,
+      presetStrategies: presets.length, presetRisks: riskPresets.length,
       round1Combos: results.length, round2Genetic: mutations.length,
       round3Quantum: quantum.results.length,
       quantumStats: quantum.stats,
       totalCombos: allResults.length,
+      paramsSearched: 20,
       saved,
       results: allResults,
     });

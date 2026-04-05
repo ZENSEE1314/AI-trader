@@ -1525,37 +1525,43 @@
     const days = parseInt($('#backtest-days')?.value) || 7;
     const topN = Math.min(parseInt($('#bt-topn')?.value) || 20, 100);
     const resultEl = $('#fix-bitunix-result');
-    if (resultEl) resultEl.textContent = `🧠 AI Quantum Optimizer running on ${topN} coins over ${days} days...\n` +
-      `Phase 1: Pre-compute signals per strategy (6 strategies)\n` +
-      `Phase 2: Fast replay × 7 risk levels = 42 preset combos\n` +
-      `Phase 3: Genetic breeding — 20 offspring from top 5\n` +
-      `Phase 4: Quantum QAOA amplitude sampling + SPSA gradient search + Quantum Annealing\n` +
-      `Please wait — heavily optimized with signal caching + quantum-inspired search...`;
+    if (resultEl) resultEl.textContent = `⚛️ Quantum AI Optimizer running on ${topN} coins over ${days} days...\n` +
+      `Searching 20 parameters: strategy (swings, HTF, key levels, volume, confirmation) + risk (SL, TP, leverage, trail)\n` +
+      `Phase 1: 10 strategy presets × 5 risk presets = 50 combos\n` +
+      `Phase 2: 25 genetic offspring from top 10\n` +
+      `Phase 3: QAOA(30) + SPSA(40) + Annealing(25) = ~95 quantum combos\n` +
+      `Please wait — testing ~170 combinations across full parameter space...`;
     try {
       const data = await api('POST', '/api/admin/ai-optimize', { days, topN });
       const R = data.results;
       let output = '═══════════════════════════════════════════════════════════════════════════════════════════════════════\n';
       output += '  ⚛️🧠 QUANTUM-INSPIRED AI OPTIMIZATION\n';
       output += `  Period: ${data.period} | Coins: ${data.coinsScanned}\n`;
-      output += `  Round 1: ${data.strategiesCount} Strategies × ${data.risksCount} Risk Levels = ${data.round1Combos} preset combos\n`;
-      output += `  Round 2: ${data.round2Genetic} genetic offspring bred from top 5 parents\n`;
+      output += `  Parameters: ${data.paramsSearched||20} (strategy: swings, HTF, key levels, volume | risk: SL, TP, trail, leverage)\n`;
+      output += `  Round 1: ${data.presetStrategies||10} strategies × ${data.presetRisks||5} risks = ${data.round1Combos} preset combos\n`;
+      output += `  Round 2: ${data.round2Genetic} genetic offspring (crossover + mutation on all 20 params)\n`;
       const qs = data.quantumStats || {};
-      output += `  Round 3: ${data.round3Quantum||0} quantum-inspired — QAOA:${qs.qaoaCount||0} + SPSA:${qs.spsaCount||0} + Anneal:${qs.annealCount||0}\n`;
+      output += `  Round 3: ${data.round3Quantum||0} quantum — QAOA:${qs.qaoaCount||0} SPSA:${qs.spsaCount||0} Anneal:${qs.annealCount||0}\n`;
       output += `  Total: ${data.totalCombos} combinations tested ⚛️\n`;
       output += '═══════════════════════════════════════════════════════════════════════════════════════════════════════\n\n';
 
       // ── Top 10 Overall ──
       output += '── TOP 10 BEST COMBOS ────────────────────────────────────────────────────────────────────────────\n';
-      output += '#   | Strategy       | Risk           | Trades |  W / L  | WR%    | P&L        | MaxDD  | Settings\n';
-      output += '─'.repeat(120) + '\n';
+      output += '#   | Strategy       | Risk           | Trades |  W / L  | WR%    | P&L        | MaxDD  | Risk Settings          | Strategy Params\n';
+      output += '─'.repeat(160) + '\n';
       for (let i = 0; i < Math.min(10, R.length); i++) {
-        const r = R[i], s = r.settings;
+        const r = R[i], s = r.settings || {};
         const medal = i===0?'🥇':i===1?'🥈':i===2?'🥉':`#${i+1}`;
         const pnl = (r.totalPnl>=0?'+':'')+`$${r.totalPnl.toFixed(2)}`;
-        const sl = `SL:${(s.slPct*100).toFixed(1)}%`;
+        const sl = `SL:${((s.slPct||0)*100).toFixed(1)}%`;
         const tp = s.tpPct ? `TP:${(s.tpPct*100).toFixed(1)}%` : 'trail';
-        const rest = `${(s.trailStep*100).toFixed(1)}%t ${s.leverage}x ${(s.riskPct*100)}%r ${s.maxPos}p`;
-        output += `${String(medal).padEnd(4)}| ${r.strategy.padEnd(15)}| ${r.risk.padEnd(15)}| ${String(r.trades).padStart(6)} | ${String(r.wins+'W/'+r.losses+'L').padEnd(7)} | ${String(r.winRate+'%').padStart(6)} | ${pnl.padStart(10)} | ${String(r.maxDrawdown+'%').padStart(5)}  | ${sl} ${tp} ${rest}\n`;
+        const riskStr = `${sl} ${tp} ${((s.trailStep||0)*100).toFixed(1)}%t ${s.leverage||20}x ${((s.riskPct||0.1)*100).toFixed(0)}%r ${s.maxPos||3}p`;
+        const htf = s.requireBothHTF!==undefined ? (s.requireBothHTF?'both':'either') : '?';
+        const kl = s.requireKeyLevel!==undefined ? (s.requireKeyLevel?'Y':'N') : '?';
+        const c1m = s.require1m!==undefined ? (s.require1m?'Y':'N') : '?';
+        const vol = s.requireVolSpike!==undefined ? (s.requireVolSpike?`${(s.volSpikeMultiplier||1.5).toFixed(1)}x`:'N') : '?';
+        const stratStr = `sw:${s.swingLen4h||10}/${s.swingLen1h||10}/${s.swingLen15m||10}/${s.swingLen1m||5} HTF:${htf} KL:${kl} 1m:${c1m} Vol:${vol}`;
+        output += `${String(medal).padEnd(4)}| ${(r.strategy||'').padEnd(15)}| ${(r.risk||'').padEnd(15)}| ${String(r.trades).padStart(6)} | ${String(r.wins+'W/'+r.losses+'L').padEnd(7)} | ${String(r.winRate+'%').padStart(6)} | ${pnl.padStart(10)} | ${String(r.maxDrawdown+'%').padStart(5)}  | ${riskStr.padEnd(23)}| ${stratStr}\n`;
       }
 
       // ── Strategy leaderboard ──
