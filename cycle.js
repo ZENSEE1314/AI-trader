@@ -1393,52 +1393,54 @@ async function syncTradeStatus() {
               let found = false;
               const tradeOpenTime = trade.created_at ? new Date(trade.created_at).getTime() : 0;
               const tradeEntry = parseFloat(trade.entry_price);
-              const tradeSide = trade.direction === 'SHORT' ? 'SELL' : 'BUY';
+              // Bitunix position history uses LONG/SHORT (not BUY/SELL)
+              const tradeSideLong = trade.direction !== 'SHORT';
 
-              // Method 1: Position history — match by symbol + side + entry price + close time after open
+              // Method 1: Position history — match by symbol + side + entry price + time
+              // Fields: entryPrice, closePrice, side (LONG/SHORT), realizedPNL (excludes fees), fee, funding
               try {
                 const positions = await bxClient.getHistoryPositions({ symbol: trade.symbol, pageSize: 50 });
                 for (const p of positions) {
-                  const cp = parseFloat(p.closePrice || p.avgClosePrice || 0);
-                  const ep = parseFloat(p.avgOpenPrice || p.entryPrice || p.openPrice || 0);
-                  const pSide = p.side || p.positionSide || '';
-                  const closeTime = p.closeTime || p.updateTime || p.ctime || 0;
-                  const closeMs = typeof closeTime === 'string' ? new Date(closeTime).getTime() : parseInt(closeTime);
+                  const cp = parseFloat(p.closePrice || 0);
+                  const ep = parseFloat(p.entryPrice || 0);
+                  const pSideLong = (p.side || '').toUpperCase() === 'LONG';
+                  const closeMs = parseInt(p.mtime || p.ctime || 0);
 
-                  // Match: same symbol, similar entry price (within 0.1%), closed after trade opened
-                  const entryMatch = ep > 0 && Math.abs(ep - tradeEntry) / tradeEntry < 0.001;
-                  const sideMatch = !pSide || pSide === tradeSide;
+                  const entryMatch = ep > 0 && Math.abs(ep - tradeEntry) / tradeEntry < 0.002;
+                  const sideMatch = pSideLong === tradeSideLong;
                   const timeMatch = !tradeOpenTime || !closeMs || closeMs > tradeOpenTime;
 
                   if (cp > 0 && p.symbol === trade.symbol && entryMatch && sideMatch && timeMatch) {
                     exitPrice = cp;
-                    // Bitunix may use different field names for realized PnL
-                    const pnlVal = p.realizedPNL ?? p.realizedPnl ?? p.profit ?? p.closeProfit ?? p.pnl ?? null;
-                    if (pnlVal != null) realizedPnl = parseFloat(pnlVal);
+                    // Net PnL = realizedPNL - fee - funding (Bitunix realizedPNL excludes fees)
+                    const grossPnl = parseFloat(p.realizedPNL || 0);
+                    const fee = Math.abs(parseFloat(p.fee || 0));
+                    const funding = parseFloat(p.funding || 0);
+                    realizedPnl = grossPnl - fee - funding;
                     found = true;
-                    bLog.system(`Bitunix posHistory match: ${trade.symbol} entry=$${ep} exit=$${cp} pnl=${realizedPnl}`);
+                    bLog.system(`Bitunix posHistory: ${trade.symbol} entry=$${ep} exit=$${cp} pnl=${grossPnl} fee=${fee} funding=${funding} net=${realizedPnl}`);
                     break;
                   }
                 }
               } catch (e) { bLog.error(`Bitunix posHistory error: ${e.message}`); }
 
-              // Method 2: Order history — look for CLOSE order matching symbol
+              // Method 2: Order history — CLOSE orders (fee included in realizedPNL here)
               if (!found) {
                 try {
                   const orderList = await bxClient.getHistoryOrders({ symbol: trade.symbol, pageSize: 50 });
                   for (const o of orderList) {
                     const oPrice = parseFloat(o.avgPrice || o.price || 0);
                     const isClose = o.reduceOnly || o.tradeSide === 'CLOSE';
-                    const oTime = o.ctime || o.updateTime || o.createTime || 0;
-                    const oMs = typeof oTime === 'string' ? new Date(oTime).getTime() : parseInt(oTime);
+                    const oMs = parseInt(o.ctime || o.mtime || 0);
                     const timeMatch = !tradeOpenTime || !oMs || oMs > tradeOpenTime;
 
                     if (isClose && oPrice > 0 && timeMatch) {
                       exitPrice = oPrice;
-                      const pnlVal = o.realizedPNL ?? o.realizedPnl ?? o.profit ?? o.pnl ?? null;
-                      if (pnlVal != null) realizedPnl = parseFloat(pnlVal);
+                      const pnlVal = parseFloat(o.realizedPNL || 0);
+                      const fee = Math.abs(parseFloat(o.fee || 0));
+                      realizedPnl = pnlVal - fee;
                       found = true;
-                      bLog.system(`Bitunix orderHistory match: ${trade.symbol} exit=$${oPrice} pnl=${realizedPnl}`);
+                      bLog.system(`Bitunix orderHistory: ${trade.symbol} exit=$${oPrice} pnl=${pnlVal} fee=${fee} net=${realizedPnl}`);
                       break;
                     }
                   }

@@ -1147,46 +1147,48 @@ router.post('/fix-bitunix-pnl', async (req, res) => {
           let found = false;
           const tradeOpenTime = trade.created_at ? new Date(trade.created_at).getTime() : 0;
           const tradeEntry = parseFloat(trade.entry_price);
-          const tradeSide = trade.direction === 'SHORT' ? 'SELL' : 'BUY';
+          const tradeSideLong = trade.direction !== 'SHORT';
 
           // Method 1: Position history — match by entry price + side + time
+          // Net PnL = realizedPNL - fee - funding
           try {
             const positions = await client.getHistoryPositions({ symbol: trade.symbol, pageSize: 50 });
             for (const p of positions) {
-              const cp = parseFloat(p.closePrice || p.avgClosePrice || 0);
-              const ep = parseFloat(p.avgOpenPrice || p.entryPrice || p.openPrice || 0);
-              const pSide = p.side || p.positionSide || '';
-              const closeTime = p.closeTime || p.updateTime || p.ctime || 0;
-              const closeMs = typeof closeTime === 'string' ? new Date(closeTime).getTime() : parseInt(closeTime);
-              const entryMatch = ep > 0 && Math.abs(ep - tradeEntry) / tradeEntry < 0.001;
-              const sideMatch = !pSide || pSide === tradeSide;
+              const cp = parseFloat(p.closePrice || 0);
+              const ep = parseFloat(p.entryPrice || 0);
+              const pSideLong = (p.side || '').toUpperCase() === 'LONG';
+              const closeMs = parseInt(p.mtime || p.ctime || 0);
+              const entryMatch = ep > 0 && Math.abs(ep - tradeEntry) / tradeEntry < 0.002;
+              const sideMatch = pSideLong === tradeSideLong;
               const timeMatch = !tradeOpenTime || !closeMs || closeMs > tradeOpenTime;
 
               if (cp > 0 && p.symbol === trade.symbol && entryMatch && sideMatch && timeMatch) {
                 exitPrice = cp;
-                const pnlVal = p.realizedPNL ?? p.realizedPnl ?? p.profit ?? p.closeProfit ?? p.pnl ?? null;
-                if (pnlVal != null) realizedPnl = parseFloat(pnlVal);
+                const grossPnl = parseFloat(p.realizedPNL || 0);
+                const fee = Math.abs(parseFloat(p.fee || 0));
+                const funding = parseFloat(p.funding || 0);
+                realizedPnl = grossPnl - fee - funding;
                 found = true;
                 break;
               }
             }
           } catch { /* try next method */ }
 
-          // Method 2: Order history — CLOSE orders matching time
+          // Method 2: Order history — CLOSE orders
           if (!found) {
             try {
               const orderList = await client.getHistoryOrders({ symbol: trade.symbol, pageSize: 50 });
               for (const o of orderList) {
                 const oPrice = parseFloat(o.avgPrice || o.price || 0);
                 const isClose = o.reduceOnly || o.tradeSide === 'CLOSE';
-                const oTime = o.ctime || o.updateTime || o.createTime || 0;
-                const oMs = typeof oTime === 'string' ? new Date(oTime).getTime() : parseInt(oTime);
+                const oMs = parseInt(o.ctime || o.mtime || 0);
                 const timeMatch = !tradeOpenTime || !oMs || oMs > tradeOpenTime;
 
                 if (isClose && oPrice > 0 && timeMatch) {
                   exitPrice = oPrice;
-                  const pnlVal = o.realizedPNL ?? o.realizedPnl ?? o.profit ?? o.pnl ?? null;
-                  if (pnlVal != null) realizedPnl = parseFloat(pnlVal);
+                  const pnlVal = parseFloat(o.realizedPNL || 0);
+                  const fee = Math.abs(parseFloat(o.fee || 0));
+                  realizedPnl = pnlVal - fee;
                   found = true;
                   break;
                 }
