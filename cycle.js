@@ -36,18 +36,18 @@ const CONFIG = {
 };
 
 // ── Trailing SL config ─────────────────────────────────────
+// Fixed tiers up to 5%, then 3% steps from 10%, then 5% steps from 20%
 const TRAILING_SL = {
   INITIAL_SL_PCT: 0.03,          // -3% initial SL from entry
-  BEYOND_STEP:    0.05,          // After last tier: every +5% profit adds +5% to SL
-  TIERS: [
+  FIXED_TIERS: [
     { trigger: 0.01,  sl: 0.005 },  //  +1%   → SL at +0.5%
     { trigger: 0.025, sl: 0.005 },  //  +2.5% → SL at +0.5%
     { trigger: 0.05,  sl: 0.02  },  //  +5%   → SL at +2%
-    { trigger: 0.10,  sl: 0.03  },  // +10%   → SL at +3%
-    { trigger: 0.15,  sl: 0.04  },  // +15%   → SL at +4%
-    { trigger: 0.20,  sl: 0.05  },  // +20%   → SL at +5%
-    { trigger: 0.25,  sl: 0.05  },  // +25%   → SL at +5%
   ],
+  // 10-19%: trigger every 3%, SL trails 7% behind trigger
+  MID_START:  0.10, MID_STEP: 0.03, MID_GAP: 0.07,
+  // 20%+:   trigger every 5%, SL trails 5% behind trigger
+  HIGH_START: 0.20, HIGH_STEP: 0.05, HIGH_GAP: 0.05,
 };
 
 // ── Compound: always use current wallet balance ─────────────
@@ -273,36 +273,38 @@ async function updateStopLoss(client, symbol, newSlPrice, closeSide, platform, p
   return false;
 }
 
-// ── TRAILING SL: Tier-based + rolling 5% steps beyond 25% ────
-// 1%→SL+0.5%, 2.5%→+0.5%, 5%→+2%, 10%→+3%, 15%→+4%, 20%→+5%, 25%→+5%
-// Beyond 25%: every +5% profit → SL moves up +5% (30%→+10%, 35%→+15%, 40%→+20%, ...)
-// Returns { stepped: boolean, newSlPrice, newLastStep } or null
+// ── TRAILING SL: Fixed tiers + 3% steps (10-19%) + 5% steps (20%+) ────
+// 1%→+0.5%, 2.5%→+0.5%, 5%→+2%
+// 10%→+3%, 13%→+6%, 16%→+9%, 19%→+12%   (3% steps, 7% gap)
+// 20%→+15%, 25%→+20%, 30%→+25%, ...      (5% steps, 5% gap)
 function calculateTrailingStep(entryPrice, currentPrice, isLong, lastStep) {
   const profitPct = isLong
     ? (currentPrice - entryPrice) / entryPrice
     : (entryPrice - currentPrice) / entryPrice;
 
-  const tiers = TRAILING_SL.TIERS;
-  const step = TRAILING_SL.BEYOND_STEP;
-
-  // Find the highest fixed tier reached
+  const { FIXED_TIERS, MID_START, MID_STEP, MID_GAP, HIGH_START, HIGH_STEP, HIGH_GAP } = TRAILING_SL;
   let bestSl = null;
-  for (const tier of tiers) {
-    if (profitPct >= tier.trigger) {
-      bestSl = tier.sl;
-    }
+
+  // Phase 1: Fixed tiers (1%, 2.5%, 5%)
+  for (const tier of FIXED_TIERS) {
+    if (profitPct >= tier.trigger) bestSl = tier.sl;
   }
 
-  // Beyond last tier: every +5% profit adds +5% to SL
-  // 30% → SL +10%, 35% → +15%, 40% → +20%, etc.
-  const lastTier = tiers[tiers.length - 1];
-  if (profitPct > lastTier.trigger) {
-    const beyondPct = profitPct - lastTier.trigger;
-    const stepsReached = Math.floor(beyondPct / step);
-    const beyondSl = lastTier.sl + stepsReached * step;
-    if (beyondSl > bestSl) {
-      bestSl = beyondSl;
-    }
+  // Phase 2: 10-19% range — trigger every 3%, SL = trigger - 7%
+  if (profitPct >= MID_START) {
+    const cap = Math.min(profitPct, HIGH_START - 0.001);
+    const stepsReached = Math.floor((cap - MID_START) / MID_STEP);
+    const trigger = MID_START + stepsReached * MID_STEP;
+    const sl = trigger - MID_GAP;
+    if (sl > (bestSl || 0)) bestSl = sl;
+  }
+
+  // Phase 3: 20%+ — trigger every 5%, SL = trigger - 5%
+  if (profitPct >= HIGH_START) {
+    const stepsReached = Math.floor((profitPct - HIGH_START) / HIGH_STEP);
+    const trigger = HIGH_START + stepsReached * HIGH_STEP;
+    const sl = trigger - HIGH_GAP;
+    if (sl > (bestSl || 0)) bestSl = sl;
   }
 
   if (bestSl === null) return null;
