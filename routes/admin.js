@@ -838,7 +838,7 @@ router.post('/emergency-close', async (req, res) => {
               ak.platform, u.email
        FROM api_keys ak
        JOIN users u ON u.id = ak.user_id
-       WHERE ak.is_active = true`
+       WHERE ak.enabled = true`
     );
 
     const results = [];
