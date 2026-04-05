@@ -999,27 +999,30 @@ async function executeForAllUsers(pick) {
         const walletSizePct = (await getCapitalPercentage(key.id)) / 100;
         const userTP = parseFloat(key.tp_pct) || 0.01;
         const userSL = parseFloat(key.sl_pct) || 0.01;
-        const userMaxConsecLoss = parseInt(key.max_consec_loss) || 2;
+        const rawConsecLoss = parseInt(key.max_consec_loss);
+        const userMaxConsecLoss = isNaN(rawConsecLoss) ? 2 : rawConsecLoss;
 
-        // Check consecutive losses
-        const nowDate = new Date();
-        const h = nowDate.getHours();
-        const dayStart = new Date(nowDate);
-        if (h < 7) dayStart.setDate(dayStart.getDate() - 1);
-        dayStart.setHours(7, 0, 0, 0);
+        // 0 = unlimited, never stop. Otherwise check consecutive losses since 7am.
+        if (userMaxConsecLoss > 0) {
+          const nowDate = new Date();
+          const h = nowDate.getHours();
+          const dayStart = new Date(nowDate);
+          if (h < 7) dayStart.setDate(dayStart.getDate() - 1);
+          dayStart.setHours(7, 0, 0, 0);
 
-        const recentTrades = await db.query(
-          `SELECT status FROM trades
-           WHERE user_id = $1 AND status IN ('WIN','LOSS')
-             AND closed_at >= $2
-           ORDER BY closed_at DESC LIMIT $3`,
-          [key.user_id, dayStart, userMaxConsecLoss]
-        );
-        const allLosses = recentTrades.length >= userMaxConsecLoss &&
-          recentTrades.every(t => t.status === 'LOSS');
-        if (allLosses) {
-          userLog.trade(`User ${key.email}: ${userMaxConsecLoss} consecutive losses today — cooling down (resets 7am)`);
-          return;
+          const recentTrades = await db.query(
+            `SELECT status FROM trades
+             WHERE user_id = $1 AND status IN ('WIN','LOSS')
+               AND closed_at >= $2
+             ORDER BY closed_at DESC LIMIT $3`,
+            [key.user_id, dayStart, userMaxConsecLoss]
+          );
+          const allLosses = recentTrades.length >= userMaxConsecLoss &&
+            recentTrades.every(t => t.status === 'LOSS');
+          if (allLosses) {
+            userLog.trade(`User ${key.email}: ${userMaxConsecLoss} consecutive losses today — cooling down (resets 7am)`);
+            return;
+          }
         }
 
         // Initial trailing SL at -1% from entry

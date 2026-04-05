@@ -560,7 +560,8 @@
     const tp = (parseFloat(rl.tp_pct) * 100).toFixed(1);
     const sl = (parseFloat(rl.sl_pct) * 100).toFixed(1);
     const lev = parseInt(rl.max_leverage);
-    const consec = parseInt(rl.max_consec_loss) || 2;
+    const rawConsec = parseInt(rl.max_consec_loss);
+    const consec = isNaN(rawConsec) ? 2 : rawConsec;
     // Update sliders + number inputs
     syncSlider(`tp-${keyId}`, Math.round(tp * 10));
     syncNum(`tp-num-${keyId}`, tp);
@@ -656,7 +657,7 @@
       const bannedCoins = k.banned_coins || '';
       const tpPct = k.tp_pct != null ? (parseFloat(k.tp_pct) * 100).toFixed(2) : '1.00';
       const slPct = k.sl_pct != null ? (parseFloat(k.sl_pct) * 100).toFixed(2) : '1.00';
-      const maxConsecLoss = k.max_consec_loss || 2;
+      const maxConsecLoss = k.max_consec_loss != null ? k.max_consec_loss : 2;
 
       return `<div class="key-card" data-key-id="${k.id}">
         <div class="key-card-main">
@@ -1158,10 +1159,10 @@
           <div class="slider-group">
             <div class="slider-header">
               <label class="form-label">Max Consec Losses</label>
-              <input type="number" class="slider-num" id="rle-consec-num-${id}" min="1" max="10" step="1" value="${rl.max_consec_loss}"
+              <input type="number" class="slider-num" id="rle-consec-num-${id}" min="0" max="10" step="1" value="${rl.max_consec_loss}"
                 oninput="window.CryptoBot.syncSlider('rle-consec-range-${id}',this.value)">
             </div>
-            <input type="range" id="rle-consec-range-${id}" min="1" max="10" value="${rl.max_consec_loss}"
+            <input type="range" id="rle-consec-range-${id}" min="0" max="10" value="${rl.max_consec_loss}"
               oninput="window.CryptoBot.syncNum('rle-consec-num-${id}',this.value)">
           </div>
           <div class="slider-group">
@@ -1190,7 +1191,7 @@
         sl_pct: (parseFloat($('#rl-sl-num').value) || 1.0) / 100,
         capital_percentage: parseFloat($('#rl-capital-num').value) || 10,
         max_leverage: parseInt($('#rl-leverage-num').value) || 20,
-        max_consec_loss: parseInt($('#rl-consec-num').value) || 2,
+        max_consec_loss: parseInt($('#rl-consec-num').value),
         top_n_coins: parseInt($('#rl-topcoins-num').value) || 50,
       });
       showToast(`${name} risk level added`, 'success');
@@ -1207,7 +1208,7 @@
         sl_pct: (parseFloat($(`#rle-sl-num-${id}`).value) || 1.0) / 100,
         capital_percentage: parseFloat($(`#rle-cap-num-${id}`).value) || 10,
         max_leverage: parseInt($(`#rle-lev-num-${id}`).value) || 20,
-        max_consec_loss: parseInt($(`#rle-consec-num-${id}`).value) || 2,
+        max_consec_loss: parseInt($(`#rle-consec-num-${id}`).value),
         top_n_coins: parseInt($(`#rle-top-num-${id}`).value) || 50,
       });
       showToast('Risk level saved', 'success');
