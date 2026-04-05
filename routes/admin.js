@@ -874,9 +874,8 @@ router.post('/backtest', async (req, res) => {
     const WALLET_START = 1000;
     const RISK_PCT = 0.10;
     const MAX_POS = 3;
-    const RR_RATIO = 1.5;
-    const MAX_RISK_PCT = 0.03;
-    const MIN_SL_PCT = 0.0015;
+    const SL_PCT = 0.01;
+    const TRAIL_STEP = 0.012;
     const SWING = { '4h': 10, '1h': 10, '15m': 10, '1m': 5 };
     const PROXIMITY = 0.003;
 
@@ -1007,7 +1006,7 @@ router.post('/backtest', async (req, res) => {
       for (let step = 0; step < timeSteps.length; step++) {
         const now = timeSteps[step];
 
-        // Exit checks on 15M candles (covers full window)
+        // Exit checks on 15M candles — SL hit or trailing SL
         for (let i = openPos.length - 1; i >= 0; i--) {
           const pos = openPos[i];
           const data = coinData[pos.symbol];
@@ -1015,16 +1014,23 @@ router.post('/backtest', async (req, res) => {
           const curCandle = data.k15.find(k => parseInt(k[0]) === now);
           if (!curCandle) continue;
 
-          const high = parseFloat(curCandle[2]), low = parseFloat(curCandle[3]);
+          const high = parseFloat(curCandle[2]), low = parseFloat(curCandle[3]), close = parseFloat(curCandle[4]);
+          // Check SL hit
           if ((pos.dir === 'LONG' && low <= pos.sl) || (pos.dir === 'SHORT' && high >= pos.sl)) {
-            pos.exit = pos.sl; pos.reason = 'SL'; pos.exitTime = now;
+            pos.exit = pos.sl; pos.reason = pos.lastStep > 0 ? 'TRAIL' : 'SL'; pos.exitTime = now;
             pos.pnl = pos.dir === 'LONG' ? (pos.sl - pos.entry) * pos.qty : (pos.entry - pos.sl) * pos.qty;
             wallet += pos.pnl; openPos.splice(i, 1); continue;
           }
-          if ((pos.dir === 'LONG' && high >= pos.tp) || (pos.dir === 'SHORT' && low <= pos.tp)) {
-            pos.exit = pos.tp; pos.reason = 'TP'; pos.exitTime = now;
-            pos.pnl = pos.dir === 'LONG' ? (pos.tp - pos.entry) * pos.qty : (pos.entry - pos.tp) * pos.qty;
-            wallet += pos.pnl; openPos.splice(i, 1); continue;
+          // Trailing SL: move SL up by 1.2% each time price gains another 1.2%
+          const profitPct = pos.dir === 'LONG' ? (close - pos.entry) / pos.entry : (pos.entry - close) / pos.entry;
+          const nextStep = pos.lastStep === 0 ? TRAIL_STEP : pos.lastStep + TRAIL_STEP;
+          if (profitPct >= nextStep) {
+            let reached = nextStep;
+            while (profitPct >= reached + TRAIL_STEP) reached += TRAIL_STEP;
+            pos.lastStep = reached;
+            pos.sl = pos.dir === 'LONG'
+              ? pos.entry * (1 + reached - TRAIL_STEP)
+              : pos.entry * (1 - reached + TRAIL_STEP);
           }
         }
 
@@ -1087,23 +1093,13 @@ router.post('/backtest', async (req, res) => {
           if (!entrySwing) continue;
           if ((k1.length - 1 - entrySwing.index) > 25) continue;
 
-          // Step 6: Risk — SL at 1M swing + 0.1% buffer, 1:1.5 RR
-          const slPrice = dir === 'LONG'
-            ? entrySwing.price * 0.999
-            : entrySwing.price * 1.001;
-          const slDist = Math.abs(price - slPrice) / price;
-          if (slDist < MIN_SL_PCT) continue;
-
+          // Step 6: Risk — 1% SL, trailing +1.2% steps, no fixed TP
           const leverage = (sym === 'BTCUSDT' || sym === 'ETHUSDT') ? 100 : 20;
-          if (slDist * leverage > MAX_RISK_PCT * leverage) continue;
-
-          const tpDist = slDist * RR_RATIO;
-          const sl = slPrice;
-          const tp = dir === 'LONG' ? price * (1 + tpDist) : price * (1 - tpDist);
+          const sl = dir === 'LONG' ? price * (1 - SL_PCT) : price * (1 + SL_PCT);
 
           const tradeUsdt = wallet * RISK_PCT;
           const qty = (tradeUsdt * leverage) / price;
-          const trade = { symbol: sym, dir, entry: price, qty, sl, tp, entryTime: now, exit: null, reason: null, pnl: null, exitTime: null };
+          const trade = { symbol: sym, dir, entry: price, qty, sl, lastStep: 0, entryTime: now, exit: null, reason: null, pnl: null, exitTime: null };
           openPos.push(trade);
           trades.push(trade);
         }
@@ -1158,7 +1154,7 @@ router.post('/backtest', async (req, res) => {
         k4h: firstData?.k4h?.length || 0, k1h: firstData?.k1h?.length || 0,
         k15m: firstData?.k15?.length || 0, k1m: firstData?.k1?.length || 0,
       },
-      strategy: summarize(label + 'Daily→4H+1H→KeyLvl→15M→1M (1:1.5 RR)', result),
+      strategy: summarize(label + 'Daily→4H+1H→KeyLvl→15M→1M (1%SL, trail+1.2%)', result),
     });
   } catch (err) {
     console.error('Backtest error:', err);

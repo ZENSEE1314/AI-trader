@@ -38,8 +38,8 @@ const CONFIG = {
 // ── Trailing SL config ─────────────────────────────────────
 const TRAILING_SL = {
   INITIAL_SL_PCT:  0.01,   // -1% initial SL from entry
-  FIRST_STEP:      0.013,  // First profit lock at 1.3%
-  STEP_INCREMENT:  0.01,   // Each subsequent step is +1%
+  FIRST_STEP:      0.012,  // First trailing step at +1.2% profit
+  STEP_INCREMENT:  0.012,  // Each subsequent step is +1.2%
 };
 
 // ── Compound: always use current wallet balance ─────────────

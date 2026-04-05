@@ -7,7 +7,7 @@
 //   3. Key Levels    — Price at PDH/PDL or VWAP bands
 //   4. Setup (15M)   — HL formed (bullish) or LH formed (bearish)
 //   5. Entry (1M)    — HL confirmed → LONG, LH confirmed → SHORT
-//   6. Risk          — SL at 1M swing, 1:1.5 RR, max 3% risk
+//   6. Risk          — 1% SL, trailing SL +1.2% on each gain
 // ============================================================
 
 const fetch = require('node-fetch');
@@ -18,8 +18,8 @@ const REQUEST_TIMEOUT = 15000;
 const TOP_N_COINS = 100;
 const MIN_24H_VOLUME = 10_000_000;
 
-const RR_RATIO = 1.5;
-const MAX_RISK_PCT = 0.03; // 3% max risk per trade
+const SL_PCT = 0.01;           // 1% initial SL
+const TRAILING_STEP = 0.012;   // trail SL by 1.2% when price moves in favor
 
 // Swing lengths per timeframe
 const SWING_LENGTHS = { '4h': 10, '1h': 10, '15m': 10, '1m': 5 };
@@ -370,34 +370,15 @@ async function analyzeLHHL(ticker, params, dailyBiasCache) {
 
   // ┌─────────────────────────────────────────────────────────┐
   // │ Step 6: Risk Management                                 │
+  // │ 1% SL, trailing SL moves +1.2% each time price gains   │
   // └─────────────────────────────────────────────────────────┘
-  // SL at 1M swing low (long) or 1M swing high (short) + 0.1% buffer
-  const slPrice = direction === 'LONG'
-    ? struct1m.lastLow.price * 0.999   // below 1M swing low
-    : struct1m.lastHigh.price * 1.001; // above 1M swing high
-
-  const slDist = Math.abs(price - slPrice) / price;
-
-  // Minimum SL distance guard
-  const MIN_SL_PCT = 0.0015;
-  if (slDist < MIN_SL_PCT) {
-    bLog.scan(`${symbol}: SL too tight (${(slDist * 100).toFixed(3)}%) — skipping`);
-    return null;
-  }
-
-  // Max 3% risk check (slDist * leverage should not exceed MAX_RISK_PCT equivalent)
   const BTC_ETH = new Set(['BTCUSDT', 'ETHUSDT']);
   const leverage = BTC_ETH.has(symbol) ? (params.LEV_BTC_ETH || 100) : (params.LEV_ALT || 20);
 
-  const marginRisk = slDist * leverage;
-  if (marginRisk > MAX_RISK_PCT * leverage) {
-    bLog.scan(`${symbol}: SL risk ${(slDist * 100).toFixed(2)}% exceeds 3% max — skipping`);
-    return null;
-  }
-
-  const tpDist = slDist * RR_RATIO;
-  const sl = slPrice;
-  const tp = direction === 'LONG' ? price + (price * tpDist) : price - (price * tpDist);
+  const sl = direction === 'LONG' ? price * (1 - SL_PCT) : price * (1 + SL_PCT);
+  const slDist = SL_PCT;
+  // No fixed TP — trailing SL handles exit. Set tp far away so it never hits.
+  const tp = direction === 'LONG' ? price * 1.50 : price * 0.50;
 
   // ┌─────────────────────────────────────────────────────────┐
   // │ Score                                                    │
@@ -428,8 +409,9 @@ async function analyzeLHHL(ticker, params, dailyBiasCache) {
     lastPrice: price,
     sl,
     tp1: tp,
-    tp2: direction === 'LONG' ? price + (price * tpDist * 1.2) : price - (price * tpDist * 1.2),
-    tp3: direction === 'LONG' ? price + (price * tpDist * 1.5) : price - (price * tpDist * 1.5),
+    tp2: tp,
+    tp3: tp,
+    trailingStep: TRAILING_STEP,
     slDist,
     leverage,
     score: Math.round(score * 10) / 10,
