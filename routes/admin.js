@@ -1501,7 +1501,7 @@ router.post('/ai-optimize', async (req, res) => {
   try {
     const fetch = require('node-fetch');
     const { getFetchOptions } = require('../proxy-agent');
-    const DAYS = Math.min(parseInt(req.body.days) || 7, 14);
+    const DAYS = Math.min(parseInt(req.body.days) || 7, 30);
     const TOP_N = Math.min(parseInt(req.body.topN) || 50, 100);
     const endTime = Date.now();
     const startTime = endTime - DAYS * 86400000;
@@ -1509,12 +1509,34 @@ router.post('/ai-optimize', async (req, res) => {
     const PROX = 0.003;
 
     async function fetchK(symbol, interval, limit) {
-      const url = `https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`;
-      for (let i = 0; i < 3; i++) {
-        try { const r = await fetch(url, { timeout: 15000, ...getFetchOptions() }); if (r.ok) return r.json(); } catch {}
-        await new Promise(r => setTimeout(r, 500));
+      if (limit <= 1500) {
+        const url = `https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`;
+        for (let i = 0; i < 3; i++) {
+          try { const r = await fetch(url, { timeout: 15000, ...getFetchOptions() }); if (r.ok) return r.json(); } catch {}
+          await new Promise(r => setTimeout(r, 500));
+        }
+        return null;
       }
-      return null;
+      // Paginated fetch for >1500 candles
+      let all = [];
+      let et = endTime;
+      let remaining = limit;
+      while (remaining > 0) {
+        const batch = Math.min(remaining, 1500);
+        const url = `https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=${interval}&limit=${batch}&endTime=${et}`;
+        let data = null;
+        for (let i = 0; i < 3; i++) {
+          try { const r = await fetch(url, { timeout: 15000, ...getFetchOptions() }); if (r.ok) { data = await r.json(); break; } } catch {}
+          await new Promise(r => setTimeout(r, 500));
+        }
+        if (!data || !data.length) break;
+        all = data.concat(all);
+        et = parseInt(data[0][0]) - 1;
+        remaining -= data.length;
+        if (data.length < batch) break;
+        await new Promise(r => setTimeout(r, 100));
+      }
+      return all.length ? all : null;
     }
     function detectSwings(klines, len) {
       const highs = klines.map(k => parseFloat(k[2])), lows = klines.map(k => parseFloat(k[3]));
@@ -1558,8 +1580,11 @@ router.post('/ai-optimize', async (req, res) => {
 
     const coinData = {};
     for (const sym of topCoins) {
+      const k15Limit = Math.ceil(DAYS * 24 * 4) + 100; // 96 candles/day for 15m
+      const k4hLimit = Math.ceil(DAYS * 6) + 50;
+      const k1hLimit = Math.ceil(DAYS * 24) + 50;
       const [kD,k4h,k1h,k15,k1] = await Promise.all([
-        fetchK(sym,'1d',Math.max(10,DAYS+2)), fetchK(sym,'4h',500), fetchK(sym,'1h',500), fetchK(sym,'15m',1500), fetchK(sym,'1m',1500),
+        fetchK(sym,'1d',Math.max(10,DAYS+2)), fetchK(sym,'4h',k4hLimit), fetchK(sym,'1h',k1hLimit), fetchK(sym,'15m',k15Limit), fetchK(sym,'1m',1500),
       ]);
       if (kD&&k4h&&k1h&&k15) coinData[sym] = { kD, k4h, k1h, k15, k1: k1||[] };
       await new Promise(r => setTimeout(r, 50));
