@@ -288,10 +288,14 @@ function calculateTrailingStep(entryPrice, currentPrice, isLong, lastStep) {
     }
   }
 
-  // Set SL at the reached step profit level
+  // SL placement: first step → half step behind, subsequent → full step behind
+  // +1.2% → SL +0.6%, +2.4% → SL +1.2%, +3.6% → SL +2.4%
+  const slLevel = reachedStep <= TRAILING_SL.FIRST_STEP
+    ? reachedStep - TRAILING_SL.STEP_INCREMENT / 2
+    : reachedStep - TRAILING_SL.STEP_INCREMENT;
   const newSlPrice = isLong
-    ? entryPrice * (1 + reachedStep)
-    : entryPrice * (1 - reachedStep);
+    ? entryPrice * (1 + slLevel)
+    : entryPrice * (1 - slLevel);
 
   return { stepped: true, newSlPrice, newLastStep: reachedStep };
 }

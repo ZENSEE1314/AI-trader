@@ -1021,16 +1021,19 @@ router.post('/backtest', async (req, res) => {
             pos.pnl = pos.dir === 'LONG' ? (pos.sl - pos.entry) * pos.qty : (pos.entry - pos.sl) * pos.qty;
             wallet += pos.pnl; openPos.splice(i, 1); continue;
           }
-          // Trailing SL: move SL up by 1.2% each time price gains another 1.2%
+          // Trailing SL: +1.2%→SL+0.6%, +2.4%→SL+1.2%, +3.6%→SL+2.4%
           const profitPct = pos.dir === 'LONG' ? (close - pos.entry) / pos.entry : (pos.entry - close) / pos.entry;
           const nextStep = pos.lastStep === 0 ? TRAIL_STEP : pos.lastStep + TRAIL_STEP;
           if (profitPct >= nextStep) {
             let reached = nextStep;
             while (profitPct >= reached + TRAIL_STEP) reached += TRAIL_STEP;
             pos.lastStep = reached;
+            const slLevel = reached <= TRAIL_STEP
+              ? reached - TRAIL_STEP / 2
+              : reached - TRAIL_STEP;
             pos.sl = pos.dir === 'LONG'
-              ? pos.entry * (1 + reached - TRAIL_STEP)
-              : pos.entry * (1 - reached + TRAIL_STEP);
+              ? pos.entry * (1 + slLevel)
+              : pos.entry * (1 - slLevel);
           }
         }
 
