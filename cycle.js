@@ -336,34 +336,8 @@ async function recordProfitSplit(db, userId, apiKeyId, pnlUsdt, symbol) {
       [userShare, userId]
     );
 
-    // Handle referral commission from the platform's share
-    const referrerRow = await db.query(
-      'SELECT referred_by FROM users WHERE id = $1',
-      [userId]
-    );
-    if (referrerRow.length > 0 && referrerRow[0].referred_by) {
-      const referrerId = referrerRow[0].referred_by;
-      const settingsRow = await db.query(
-        "SELECT value FROM settings WHERE key = 'referral_commission_pct'"
-      );
-      const refPct = settingsRow.length > 0 ? parseFloat(settingsRow[0].value) : 10;
-      const referralAmount = platformFee * refPct / 100;
-
-      if (referralAmount > 0) {
-        await db.query(
-          `UPDATE users SET cash_wallet = cash_wallet + $1,
-                            commission_earned = commission_earned + $1,
-                            total_referral_commission = total_referral_commission + $1
-           WHERE id = $2`,
-          [referralAmount, referrerId]
-        );
-        await db.query(
-          `INSERT INTO wallet_transactions (user_id, type, amount, status, note)
-           VALUES ($1, 'referral_commission', $2, 'completed', $3)`,
-          [referrerId, referralAmount, `${refPct}% referral commission from user #${userId} ${symbol} trade`]
-        );
-      }
-    }
+    // NOTE: Referral commission is paid weekly when admin marks user as paid,
+    // not per-trade. See routes/admin.js mark-paid endpoint.
 
     bLog.trade(`Profit split: ${symbol} PnL=$${pnlUsdt.toFixed(2)} → user ${userPct}%=$${userShare.toFixed(2)} platform ${adminPct}%=$${platformFee.toFixed(2)}`);
   } catch (err) {

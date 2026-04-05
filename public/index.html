@@ -33,6 +33,11 @@
   <link rel="stylesheet" href="/css/style.css">
 
   <link rel="icon" href="/img/logo.jpeg" type="image/jpeg">
+  <style>
+    .tip-btn{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;border-radius:50%;background:var(--color-border-muted);color:var(--color-text-muted);font-size:0.6rem;font-weight:700;cursor:help;position:relative;margin-left:4px;vertical-align:middle;flex-shrink:0;}
+    .tip-btn:hover .tip-text{display:block;}
+    .tip-text{display:none;position:absolute;bottom:calc(100% + 6px);left:50%;transform:translateX(-50%);background:var(--color-bg-raised);border:1px solid var(--color-border-muted);color:var(--color-text);font-size:0.72rem;font-weight:400;padding:8px 12px;border-radius:var(--radius-md);white-space:normal;width:200px;z-index:100;box-shadow:0 4px 12px rgba(0,0,0,0.2);line-height:1.4;text-align:left;}
+  </style>
 </head>
 
 <body>
@@ -586,14 +591,12 @@
         <!-- Cash Wallet on Dashboard -->
         <div id="dash-cash-wallet" class="summary-grid" style="margin-bottom:var(--space-4);">
           <div class="summary-card" style="border-left:3px solid var(--color-success);">
-            <span class="summary-card-label">Cash Wallet</span>
+            <span class="summary-card-label">Cash Wallet <span class="tip-btn">?<span class="tip-text">Your total USDT balance. Includes top-ups and referral commissions. You can withdraw this amount.</span></span></span>
             <span id="dash-cw-balance" class="summary-card-value text-mono" style="color:var(--color-success);font-size:1.3rem;">$0.00</span>
-            <span style="font-size:0.75rem;color:var(--color-text-muted);">Available for withdrawal</span>
           </div>
           <div class="summary-card" style="border-left:3px solid var(--color-accent);">
-            <span class="summary-card-label">Commission Earned</span>
+            <span class="summary-card-label">Referral Commission <span class="tip-btn">?<span class="tip-text">Total commission earned from your referrals' weekly profits. Paid when admin settles each week.</span></span></span>
             <span id="dash-cw-commission" class="summary-card-value text-mono" style="color:var(--color-accent);font-size:1.3rem;">$0.00</span>
-            <span style="font-size:0.75rem;color:var(--color-text-muted);">Referral earnings (included in wallet)</span>
           </div>
         </div>
 
@@ -602,39 +605,39 @@
 
         <div id="summary-grid" class="summary-grid">
           <div class="summary-card">
-            <span class="summary-card-label">Total P&amp;L</span>
+            <span class="summary-card-label">Total P&amp;L <span class="tip-btn">?<span class="tip-text">Your total profit and loss across all trades since the beginning. Green = profit, Red = loss.</span></span></span>
             <span id="summary-total-pnl" class="summary-card-value text-mono">--</span>
           </div>
           <div class="summary-card">
-            <span class="summary-card-label">24h P&amp;L</span>
+            <span class="summary-card-label">24h P&amp;L <span class="tip-btn">?<span class="tip-text">Profit or loss from trades closed in the last 24 hours.</span></span></span>
             <span id="summary-24h-pnl" class="summary-card-value text-mono">--</span>
           </div>
           <div class="summary-card">
-            <span class="summary-card-label">7d P&amp;L</span>
+            <span class="summary-card-label">7d P&amp;L <span class="tip-btn">?<span class="tip-text">Profit or loss from trades closed in the last 7 days.</span></span></span>
             <span id="summary-7d-pnl" class="summary-card-value text-mono">--</span>
           </div>
           <div class="summary-card">
-            <span class="summary-card-label">Win Rate</span>
+            <span class="summary-card-label">Win Rate <span class="tip-btn">?<span class="tip-text">Percentage of your closed trades that were profitable.</span></span></span>
             <span id="summary-win-rate" class="summary-card-value">--</span>
           </div>
           <div class="summary-card">
-            <span class="summary-card-label">Wins</span>
+            <span class="summary-card-label">Wins <span class="tip-btn">?<span class="tip-text">Number of trades that closed with a profit.</span></span></span>
             <span id="summary-wins" class="summary-card-value" style="color:var(--color-success)">--</span>
           </div>
           <div class="summary-card">
-            <span class="summary-card-label">Losses</span>
+            <span class="summary-card-label">Losses <span class="tip-btn">?<span class="tip-text">Number of trades that closed with a loss.</span></span></span>
             <span id="summary-losses" class="summary-card-value" style="color:var(--color-danger)">--</span>
           </div>
           <div class="summary-card">
-            <span class="summary-card-label">Open Trades</span>
+            <span class="summary-card-label">Open Trades <span class="tip-btn">?<span class="tip-text">Trades currently active on the exchange. Not yet closed.</span></span></span>
             <span id="summary-open-trades" class="summary-card-value">--</span>
           </div>
           <div class="summary-card">
-            <span class="summary-card-label">Total Won</span>
+            <span class="summary-card-label">Total Won <span class="tip-btn">?<span class="tip-text">Sum of all profits from winning trades.</span></span></span>
             <span id="summary-total-won" class="summary-card-value text-mono" style="color:var(--color-success)">--</span>
           </div>
           <div class="summary-card">
-            <span class="summary-card-label">Total Lost</span>
+            <span class="summary-card-label">Total Lost <span class="tip-btn">?<span class="tip-text">Sum of all losses from losing trades.</span></span></span>
             <span id="summary-total-lost" class="summary-card-value text-mono" style="color:var(--color-danger)">--</span>
           </div>
         </div>
@@ -651,22 +654,19 @@
           </div>
           <div id="weekly-earnings-grid" class="summary-grid">
             <div class="summary-card" style="border-left:3px solid var(--color-success);">
-              <span class="summary-card-label">Your Earnings (<span id="we-user-pct">60</span>%)</span>
+              <span class="summary-card-label">Your Earnings (<span id="we-user-pct">60</span>%) <span class="tip-btn">?<span class="tip-text">Your share of this week's net profit. Only calculated when the week is net positive.</span></span></span>
               <span id="we-user-share" class="summary-card-value text-mono" style="color:var(--color-success);font-size:1.3rem;">--</span>
-              <span style="font-size:0.75rem;color:var(--color-text-muted);">Your share of net profit</span>
             </div>
             <div class="summary-card" style="border-left:3px solid var(--color-accent);">
-              <span class="summary-card-label">Platform Fee (<span id="we-admin-pct">40</span>%)</span>
+              <span class="summary-card-label">Platform Fee (<span id="we-admin-pct">40</span>%) <span class="tip-btn">?<span class="tip-text">Platform service fee deducted from this week's net profit. Only applies when profits are positive.</span></span></span>
               <span id="we-admin-share" class="summary-card-value text-mono" style="color:var(--color-accent);font-size:1.3rem;">--</span>
-              <span style="font-size:0.75rem;color:var(--color-text-muted);">Service fee on net profit</span>
             </div>
             <div class="summary-card">
-              <span class="summary-card-label">Net P&L</span>
+              <span class="summary-card-label">Net P&amp;L <span class="tip-btn">?<span class="tip-text">This week's total: all wins minus all losses. Profit split only applies if this is positive.</span></span></span>
               <span id="we-total-winning" class="summary-card-value text-mono">--</span>
-              <span style="font-size:0.75rem;color:var(--color-text-muted);">Wins minus losses this week</span>
             </div>
             <div class="summary-card">
-              <span class="summary-card-label">Week Record</span>
+              <span class="summary-card-label">Week Record <span class="tip-btn">?<span class="tip-text">Win rate and win/loss count for trades closed this week.</span></span></span>
               <span id="we-week-record" class="summary-card-value">--</span>
               <span style="font-size:0.75rem;color:var(--color-text-muted);"><span id="we-wins">0</span>W / <span id="we-losses">0</span>L this week</span>
             </div>
@@ -831,26 +831,13 @@
             <input class="form-input text-mono" id="referral-link" readonly style="flex:1;font-size:0.85rem;">
             <button class="btn btn-ghost btn-sm" onclick="navigator.clipboard.writeText(document.getElementById('referral-link').value);window.CryptoBot.showToast('Copied!','success')">Copy</button>
           </div>
-          <div style="color:var(--color-text-muted);font-size:0.8rem;margin-top:var(--space-2);">Earn commission on every friend's trading. Commission goes to your Commission balance.</div>
-          <div style="margin-top:var(--space-3);">Referrals: <strong id="cw-ref-count">0</strong></div>
-        </div>
-
-        <!-- Transaction History -->
-        <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Transaction History</h3>
-        <div class="table-wrap">
-          <table class="data-table">
-            <thead><tr><th>Date</th><th>Type</th><th>Amount</th><th>Description</th><th>Status</th></tr></thead>
-            <tbody id="cw-txns-tbody"></tbody>
-          </table>
-        </div>
-
-        <!-- Withdrawal History -->
-        <h3 style="margin-top:var(--space-5);margin-bottom:var(--space-3);color:var(--color-text);">Withdrawal History</h3>
-        <div class="table-wrap">
-          <table class="data-table">
-            <thead><tr><th>Date</th><th>Amount</th><th>Network</th><th>Address</th><th>Status</th></tr></thead>
-            <tbody id="cw-wds-tbody"></tbody>
-          </table>
+          <div style="color:var(--color-text-muted);font-size:0.8rem;margin-top:var(--space-2);">Earn weekly commission from your referrals' profits. Paid when admin settles each week.</div>
+          <div style="margin-top:var(--space-3);display:flex;gap:16px;flex-wrap:wrap;">
+            <div>Referrals: <strong id="cw-ref-count">0</strong></div>
+            <div>Total Earned: <strong id="cw-ref-total" class="text-mono" style="color:var(--color-accent);">$0.00</strong></div>
+          </div>
+          <!-- Referral details table -->
+          <div id="cw-referrals-list" style="margin-top:var(--space-3);"></div>
         </div>
       </section>
 

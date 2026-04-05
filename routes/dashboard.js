@@ -27,8 +27,16 @@ router.get('/cash-wallet', async (req, res) => {
     if (!user.length) return res.status(404).json({ error: 'User not found' });
     const u = user[0];
 
-    const referralCount = await query(
-      'SELECT COUNT(*) as cnt FROM users WHERE referred_by = $1', [req.userId]
+    // Referral details: names + commission earned from each
+    const referrals = await query(
+      `SELECT u.id, u.email, u.created_at,
+              COALESCE(SUM(rc.amount), 0) as total_commission
+       FROM users u
+       LEFT JOIN referral_commissions rc ON rc.referee_id = u.id AND rc.referrer_id = $1
+       WHERE u.referred_by = $1
+       GROUP BY u.id, u.email, u.created_at
+       ORDER BY u.created_at DESC`,
+      [req.userId]
     );
 
     const rawCash = parseFloat(u.cash_wallet) || 0;
@@ -40,11 +48,16 @@ router.get('/cash-wallet', async (req, res) => {
       commission_earned: commissionEarned,
       total_balance: cashWallet,
       referral_code: u.referral_code || '',
-      referral_count: parseInt(referralCount[0]?.cnt || 0),
+      referral_count: referrals.length,
       referral_tier: parseInt(u.referral_tier) || 1,
       total_referral_commission: parseFloat(u.total_referral_commission) || 0,
       usdt_address: u.usdt_address || '',
       usdt_network: u.usdt_network || 'BEP20',
+      referrals: referrals.map(r => ({
+        email: r.email,
+        joined: r.created_at,
+        commission: parseFloat(r.total_commission) || 0,
+      })),
     });
   } catch (err) {
     console.error('Cash wallet error:', err.message);

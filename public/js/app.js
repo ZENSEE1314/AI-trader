@@ -994,10 +994,9 @@
 
   async function loadCashWallet() {
     try {
-      const [status, txns, withdrawals] = await Promise.all([
+      const [status, dashWallet] = await Promise.all([
         api('GET', '/api/subscription/status'),
-        api('GET', '/api/subscription/transactions').catch(() => []),
-        api('GET', '/api/subscription/withdrawals').catch(() => []),
+        api('GET', '/api/dashboard/cash-wallet').catch(() => null),
       ]);
 
       // Summary cards
@@ -1016,10 +1015,9 @@
         if (netEl) netEl.textContent = `Network: ${status.platform_usdt_network || 'BEP20'}`;
       }
 
-      // Referral
+      // Referral link
       const appUrl = window.location.origin;
       $('#referral-link').value = `${appUrl}/?ref=${status.referral_code}`;
-      $('#cw-ref-count').textContent = status.referral_count;
 
       // USDT address
       if (status.usdt_address) {
@@ -1028,52 +1026,33 @@
         $('#cw-wd-address-display').textContent = `Sending to: ${status.usdt_address.slice(0, 10)}...${status.usdt_address.slice(-6)} (${status.usdt_network})`;
       }
 
-      // Transaction history
-      const typeColors = {
-        topup: 'var(--color-success)', commission: 'var(--color-accent)',
-        withdrawal: 'var(--color-danger)', topup_pending: '#f0a030',
-        topup_rejected: 'var(--color-danger)', commission_transfer: 'var(--color-text-muted)',
-        refund: 'var(--color-success)', profit_share: 'var(--color-success)',
-        platform_fee: '#f0a030',
-      };
-      const typeLabels = {
-        topup: 'Top Up', commission: 'Commission', withdrawal: 'Withdrawal',
-        topup_pending: 'Top Up (Pending)', topup_rejected: 'Top Up (Rejected)',
-        commission_transfer: 'Transfer', refund: 'Refund', admin_adjustment: 'Admin Adjust',
-        profit_share: 'Profit Share (60%)', platform_fee: 'Platform Fee (40%)',
-      };
+      // Referral details from dashboard endpoint
+      const referrals = dashWallet?.referrals || [];
+      const refCount = referrals.length;
+      const refTotal = parseFloat(dashWallet?.total_referral_commission || 0);
+      $('#cw-ref-count').textContent = refCount;
+      const refTotalEl = $('#cw-ref-total');
+      if (refTotalEl) refTotalEl.textContent = `$${refTotal.toFixed(2)}`;
 
-      const tbody = $('#cw-txns-tbody');
-      if (!txns.length) {
-        tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--color-text-muted);">No transactions yet</td></tr>';
-      } else {
-        tbody.innerHTML = txns.map(t => {
-          const amt = parseFloat(t.amount);
-          return `<tr>
-            <td>${formatDate(t.created_at)}</td>
-            <td style="color:${typeColors[t.type] || 'var(--color-text)'}">${typeLabels[t.type] || t.type}</td>
-            <td class="text-mono ${amt >= 0 ? 'positive' : 'negative'}">${amt >= 0 ? '+' : ''}$${Math.abs(amt).toFixed(2)}</td>
-            <td>${escapeHtml(t.description || '')}</td>
-            <td>${t.status || '-'}</td>
-          </tr>`;
-        }).join('');
-      }
-
-      // Withdrawal history
-      const wdBody = $('#cw-wds-tbody');
-      if (!withdrawals.length) {
-        wdBody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--color-text-muted);">No withdrawals yet</td></tr>';
-      } else {
-        wdBody.innerHTML = withdrawals.map(w => {
-          const statusColor = w.status === 'approved' ? 'var(--color-success)' : w.status === 'rejected' ? 'var(--color-danger)' : '#f0a030';
-          return `<tr>
-            <td>${formatDate(w.created_at)}</td>
-            <td class="text-mono">$${parseFloat(w.amount).toFixed(2)}</td>
-            <td>${escapeHtml(w.bank_name || '-')}</td>
-            <td class="text-mono" style="font-size:0.8rem;">${escapeHtml((w.account_number || '').slice(0, 12))}...</td>
-            <td style="color:${statusColor}">${w.status}</td>
-          </tr>`;
-        }).join('');
+      // Referral names + commission table
+      const refList = $('#cw-referrals-list');
+      if (refList) {
+        if (refCount === 0) {
+          refList.innerHTML = '<div style="color:var(--color-text-muted);font-size:0.8rem;">No referrals yet. Share your link to start earning!</div>';
+        } else {
+          refList.innerHTML = `<div class="table-wrap"><table class="data-table" style="font-size:0.85rem;">
+            <thead><tr><th>Referral</th><th>Joined</th><th>Commission Earned</th></tr></thead>
+            <tbody>${referrals.map(r => {
+              const comm = parseFloat(r.commission) || 0;
+              const emailShort = r.email.length > 20 ? r.email.slice(0, 8) + '...' + r.email.slice(r.email.indexOf('@')) : r.email;
+              return `<tr>
+                <td>${escapeHtml(emailShort)}</td>
+                <td>${formatDate(r.joined)}</td>
+                <td class="text-mono" style="color:${comm > 0 ? 'var(--color-accent)' : 'var(--color-text-muted)'};">${comm > 0 ? '+' : ''}$${comm.toFixed(2)}</td>
+              </tr>`;
+            }).join('')}</tbody>
+          </table></div>`;
+        }
       }
     } catch (err) {
       showToast('Failed to load cash wallet.', 'error');

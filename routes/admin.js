@@ -186,6 +186,47 @@ router.post('/mark-paid/:userId', async (req, res) => {
       );
     }
 
+    // Calculate total admin share for referral commission
+    const totalNetPnl = trades.reduce((s, t) => s + parseFloat(t.pnl_usdt), 0);
+    const totalShareable = Math.max(0, totalNetPnl);
+    if (totalShareable > 0) {
+      const firstKey = keys[0];
+      const adminPct = firstKey ? (parseFloat(firstKey.profit_share_admin_pct) || 40) : 40;
+      const totalAdminShare = totalShareable * adminPct / 100;
+
+      // Pay referral commission from platform's share (weekly, on payment)
+      const referrerRow = await query('SELECT referred_by FROM users WHERE id = $1', [userId]);
+      if (referrerRow.length > 0 && referrerRow[0].referred_by) {
+        const referrerId = referrerRow[0].referred_by;
+        const settingsRow = await query("SELECT value FROM settings WHERE key = 'referral_commission_pct'");
+        const refPct = settingsRow.length > 0 ? parseFloat(settingsRow[0].value) : 10;
+        const referralAmount = parseFloat((totalAdminShare * refPct / 100).toFixed(4));
+
+        if (referralAmount > 0) {
+          const userEmail = (await query('SELECT email FROM users WHERE id = $1', [userId]))[0]?.email || `#${userId}`;
+          await query(
+            `UPDATE users SET cash_wallet = cash_wallet + $1,
+                              commission_earned = commission_earned + $1,
+                              total_referral_commission = total_referral_commission + $1
+             WHERE id = $2`,
+            [referralAmount, referrerId]
+          );
+          await query(
+            `INSERT INTO referral_commissions (referrer_id, referee_id, level, amount, description)
+             VALUES ($1, $2, 1, $3, $4)`,
+            [referrerId, userId, referralAmount,
+             `Weekly commission from ${userEmail} (${refPct}% of $${totalAdminShare.toFixed(2)} platform fee)`]
+          );
+          await query(
+            `INSERT INTO wallet_transactions (user_id, type, amount, status, description)
+             VALUES ($1, 'referral_commission', $2, 'completed', $3)`,
+            [referrerId, referralAmount,
+             `Weekly referral commission from ${userEmail}`]
+          );
+        }
+      }
+    }
+
     // Resume all user's keys and record payment timestamp
     await query(
       `UPDATE api_keys SET paused_by_admin = false, enabled = true WHERE user_id = $1`,
