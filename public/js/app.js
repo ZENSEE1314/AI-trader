@@ -1427,8 +1427,10 @@
       for (const v of data.versions) {
         const wr = v.win_rate ? (parseFloat(v.win_rate) * 100).toFixed(0) : '?';
         const pnl = v.total_pnl ? parseFloat(v.total_pnl).toFixed(1) : '?';
-        const date = new Date(v.created_at).toLocaleDateString();
-        sel.innerHTML += `<option value='${v.id}' data-params='${escapeHtml(JSON.stringify(v.params))}'>${v.version} — ${v.trade_count || 0} trades, ${wr}% WR, ${pnl}% PnL (${date})</option>`;
+        const d = new Date(v.created_at);
+        const date = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+        const desc = v.changes ? ` | ${v.changes}` : '';
+        sel.innerHTML += `<option value='${v.id}' data-params='${escapeHtml(JSON.stringify(v.params))}'>${v.version} [${date}] — ${v.trade_count || 0} trades, ${wr}% WR, ${pnl}% PnL${desc}</option>`;
       }
       sel.onchange = function() {
         const opt = sel.options[sel.selectedIndex];
