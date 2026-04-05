@@ -1533,7 +1533,8 @@ router.post('/ai-optimize', async (req, res) => {
       const hL = sH.length>1?(sH[sH.length-1].price>sH[sH.length-2].price?'HH':'LH'):null;
       const lL = sL.length>1?(sL[sL.length-1].price>sL[sL.length-2].price?'HL':'LL'):null;
       const t = (hL==='LH'&&lL==='LL')?'bearish':(hL==='HH'&&lL==='HL')?'bullish':hL==='LH'?'bearish_lean':lL==='HL'?'bullish_lean':'neutral';
-      return { hasHL: lL==='HL', hasLH: hL==='LH', trend: t };
+      return { hasHL: lL==='HL', hasLH: hL==='LH', trend: t,
+        lastHigh: sH.length ? sH[sH.length-1] : null, lastLow: sL.length ? sL[sL.length-1] : null };
     }
     function calcVW(klines) {
       let cv=0,ct=0,ct2=0,day=''; const vals=[];
