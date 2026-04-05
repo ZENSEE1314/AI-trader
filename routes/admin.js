@@ -1140,21 +1140,26 @@ router.post('/backtest', async (req, res) => {
       .sort((a, b) => parseFloat(b.quoteVolume) - parseFloat(a.quoteVolume))
       .slice(0, TOP_N).map(t => t.symbol);
 
-    // Fetch: Daily, 4H, 1H, 15M for all coins + 1M (last ~25h only)
+    // Fetch: Daily, 4H, 1H, 15M for all coins + 1M — parallel batches of 5
     const coinData = {};
     const startTime = endTime - DAYS * 86400000;
-    for (const sym of topCoins) {
-      const [kD, k4h, k1h, k15, k1] = await Promise.all([
-        fetchK(sym, '1d', Math.max(10, DAYS + 2)),
-        fetchK(sym, '4h', 500),
-        fetchK(sym, '1h', 500),
-        fetchK(sym, '15m', 1500),
-        fetchK(sym, '1m', 1500),
-      ]);
-      if (kD && k4h && k1h && k15) {
-        coinData[sym] = { kD, k4h, k1h, k15, k1: k1 || [] };
+    const BT_BATCH = 5;
+    for (let b = 0; b < topCoins.length; b += BT_BATCH) {
+      const batch = topCoins.slice(b, b + BT_BATCH);
+      const results = await Promise.all(batch.map(async (sym) => {
+        const [kD, k4h, k1h, k15, k1] = await Promise.all([
+          fetchK(sym, '1d', Math.max(10, DAYS + 2)),
+          fetchK(sym, '4h', 500),
+          fetchK(sym, '1h', 500),
+          fetchK(sym, '15m', 1500),
+          fetchK(sym, '1m', 1500),
+        ]);
+        return { sym, kD, k4h, k1h, k15, k1 };
+      }));
+      for (const r of results) {
+        if (r.kD && r.k4h && r.k1h && r.k15) coinData[r.sym] = { kD:r.kD, k4h:r.k4h, k1h:r.k1h, k15:r.k15, k1:r.k1||[] };
       }
-      await new Promise(r => setTimeout(r, 50));
+      console.log(`[BACKTEST] Fetched ${Math.min(b+BT_BATCH, topCoins.length)}/${topCoins.length} coins`);
     }
 
     // Simulate: Daily bias → 4H+1H → Key level → 15M setup → 1M entry → Swing SL, 1:1.5 RR
@@ -1502,7 +1507,7 @@ router.post('/ai-optimize', async (req, res) => {
     const fetch = require('node-fetch');
     const { getFetchOptions } = require('../proxy-agent');
     const DAYS = Math.min(parseInt(req.body.days) || 7, 30);
-    const TOP_N = Math.min(parseInt(req.body.topN) || 50, 100);
+    const TOP_N = Math.min(parseInt(req.body.topN) || 20, 100);
     const endTime = Date.now();
     const startTime = endTime - DAYS * 86400000;
     const SW = { '4h': 10, '1h': 10, '15m': 10, '1m': 5 };
@@ -1579,15 +1584,23 @@ router.post('/ai-optimize', async (req, res) => {
       .slice(0, TOP_N).map(t => t.symbol);
 
     const coinData = {};
-    for (const sym of topCoins) {
-      const k15Limit = Math.ceil(DAYS * 24 * 4) + 100; // 96 candles/day for 15m
-      const k4hLimit = Math.ceil(DAYS * 6) + 50;
-      const k1hLimit = Math.ceil(DAYS * 24) + 50;
-      const [kD,k4h,k1h,k15,k1] = await Promise.all([
-        fetchK(sym,'1d',Math.max(10,DAYS+2)), fetchK(sym,'4h',k4hLimit), fetchK(sym,'1h',k1hLimit), fetchK(sym,'15m',k15Limit), fetchK(sym,'1m',1500),
-      ]);
-      if (kD&&k4h&&k1h&&k15) coinData[sym] = { kD, k4h, k1h, k15, k1: k1||[] };
-      await new Promise(r => setTimeout(r, 50));
+    const k15Limit = Math.ceil(DAYS * 24 * 4) + 100;
+    const k4hLimit = Math.ceil(DAYS * 6) + 50;
+    const k1hLimit = Math.ceil(DAYS * 24) + 50;
+    // Parallel fetch — 5 coins at a time for speed
+    const BATCH = 5;
+    for (let b = 0; b < topCoins.length; b += BATCH) {
+      const batch = topCoins.slice(b, b + BATCH);
+      const results = await Promise.all(batch.map(async (sym) => {
+        const [kD,k4h,k1h,k15,k1] = await Promise.all([
+          fetchK(sym,'1d',Math.max(10,DAYS+2)), fetchK(sym,'4h',k4hLimit), fetchK(sym,'1h',k1hLimit), fetchK(sym,'15m',k15Limit), fetchK(sym,'1m',1500),
+        ]);
+        return { sym, kD, k4h, k1h, k15, k1 };
+      }));
+      for (const r of results) {
+        if (r.kD&&r.k4h&&r.k1h&&r.k15) coinData[r.sym] = { kD:r.kD, k4h:r.k4h, k1h:r.k1h, k15:r.k15, k1:r.k1||[] };
+      }
+      console.log(`[OPTIMIZE] Fetched ${Math.min(b+BATCH, topCoins.length)}/${topCoins.length} coins`);
     }
 
     const firstCoin = Object.keys(coinData)[0];

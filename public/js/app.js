@@ -1523,7 +1523,7 @@
 
   async function runAiOptimize() {
     const days = parseInt($('#backtest-days')?.value) || 7;
-    const topN = Math.min(parseInt($('#bt-topn')?.value) || 50, 100);
+    const topN = Math.min(parseInt($('#bt-topn')?.value) || 20, 100);
     const resultEl = $('#fix-bitunix-result');
     if (resultEl) resultEl.textContent = `🧠 AI Quantum Optimizer running on ${topN} coins over ${days} days...\n` +
       `Phase 1: Pre-compute signals per strategy (6 strategies)\n` +
