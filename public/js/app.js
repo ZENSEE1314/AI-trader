@@ -1524,16 +1524,23 @@
     const days = parseInt($('#backtest-days')?.value) || 7;
     const topN = Math.min(parseInt($('#bt-topn')?.value) || 50, 100);
     const resultEl = $('#fix-bitunix-result');
-    if (resultEl) resultEl.textContent = `🧠 AI optimizing... testing 6 strategies × 7 risk levels + genetic mutations on ${topN} coins over ${days} days.\nPhase 1: Pre-computing signals per strategy → Phase 2: Fast replay with all risk configs → Phase 3: Genetic breeding from top 5...\nPlease wait — this is heavily optimized with signal caching...`;
+    if (resultEl) resultEl.textContent = `🧠 AI Quantum Optimizer running on ${topN} coins over ${days} days...\n` +
+      `Phase 1: Pre-compute signals per strategy (6 strategies)\n` +
+      `Phase 2: Fast replay × 7 risk levels = 42 preset combos\n` +
+      `Phase 3: Genetic breeding — 20 offspring from top 5\n` +
+      `Phase 4: Quantum QAOA amplitude sampling + SPSA gradient search + Quantum Annealing\n` +
+      `Please wait — heavily optimized with signal caching + quantum-inspired search...`;
     try {
       const data = await api('POST', '/api/admin/ai-optimize', { days, topN });
       const R = data.results;
       let output = '═══════════════════════════════════════════════════════════════════════════════════════════════════════\n';
-      output += '  🧠 AI MIX & MATCH OPTIMIZATION\n';
+      output += '  ⚛️🧠 QUANTUM-INSPIRED AI OPTIMIZATION\n';
       output += `  Period: ${data.period} | Coins: ${data.coinsScanned}\n`;
       output += `  Round 1: ${data.strategiesCount} Strategies × ${data.risksCount} Risk Levels = ${data.round1Combos} preset combos\n`;
       output += `  Round 2: ${data.round2Genetic} genetic offspring bred from top 5 parents\n`;
-      output += `  Total: ${data.totalCombos} combinations tested\n`;
+      const qs = data.quantumStats || {};
+      output += `  Round 3: ${data.round3Quantum||0} quantum-inspired — QAOA:${qs.qaoaCount||0} + SPSA:${qs.spsaCount||0} + Anneal:${qs.annealCount||0}\n`;
+      output += `  Total: ${data.totalCombos} combinations tested ⚛️\n`;
       output += '═══════════════════════════════════════════════════════════════════════════════════════════════════════\n\n';
 
       // ── Top 10 Overall ──

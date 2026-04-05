@@ -1795,8 +1795,13 @@ router.post('/ai-optimize', async (req, res) => {
       }
     }
 
-    // Merge genetic results and re-sort
-    const allResults = [...results, ...mutations];
+    // ═══ ROUND 3: Quantum-Inspired Optimization (QAOA + SPSA + Annealing) ═══
+    const { quantumOptimize } = require('../quantum-optimizer');
+    const preQuantum = [...results, ...mutations].sort((a,b) => b.winRate-a.winRate || b.totalPnl-a.totalPnl);
+    const quantum = quantumOptimize(preQuantum, signalCache, replaySignals, scoreResult, strategies);
+
+    // Merge all rounds and re-sort
+    const allResults = [...results, ...mutations, ...quantum.results];
     allResults.sort((a,b) => b.winRate-a.winRate || b.totalPnl-a.totalPnl);
 
     // Save top 3 as AI versions
@@ -1823,6 +1828,8 @@ router.post('/ai-optimize', async (req, res) => {
       days: DAYS, coinsScanned: Object.keys(coinData).length,
       strategiesCount: strategies.length, risksCount: risks.length,
       round1Combos: results.length, round2Genetic: mutations.length,
+      round3Quantum: quantum.results.length,
+      quantumStats: quantum.stats,
       totalCombos: allResults.length,
       saved,
       results: allResults,
