@@ -799,6 +799,72 @@ router.post('/remove-global-token', async (req, res) => {
   }
 });
 
+// ── Emergency Close: close a specific token across ALL users ────
+router.post('/emergency-close', async (req, res) => {
+  const symbol = (req.body.symbol || '').toUpperCase().trim();
+  if (!symbol) return res.status(400).json({ error: 'Symbol required' });
+  console.log(`[ADMIN] ⚠️ EMERGENCY CLOSE ${symbol} for all users`);
+  try {
+    const cryptoUtils = require('../crypto-utils');
+    const { BitunixClient } = require('../bitunix-client');
+
+    const keys = await query(
+      `SELECT ak.id, ak.api_key_enc, ak.iv, ak.auth_tag,
+              ak.api_secret_enc, ak.secret_iv, ak.secret_auth_tag,
+              ak.platform, u.email
+       FROM api_keys ak
+       JOIN users u ON u.id = ak.user_id
+       WHERE ak.is_active = true`
+    );
+
+    const results = [];
+    let totalClosed = 0;
+
+    for (const key of keys) {
+      try {
+        const apiKey = cryptoUtils.decrypt(key.api_key_enc, key.iv, key.auth_tag);
+        const apiSecret = cryptoUtils.decrypt(key.api_secret_enc, key.secret_iv, key.secret_auth_tag);
+
+        if (key.platform === 'bitunix') {
+          const client = new BitunixClient({ apiKey, apiSecret });
+          const positions = await client.getOpenPositions(symbol);
+          const openPos = Array.isArray(positions) ? positions.filter(p => p.symbol === symbol && parseFloat(p.qty) > 0) : [];
+
+          for (const pos of openPos) {
+            try {
+              const isLong = pos.side === 'BUY';
+              const closeSide = isLong ? 'SELL' : 'BUY';
+              const qty = parseFloat(pos.qty);
+              await client.placeOrder({
+                symbol: pos.symbol, side: closeSide,
+                qty: String(qty), orderType: 'MARKET', tradeSide: 'CLOSE',
+              });
+              await query(
+                `UPDATE trades SET status = 'CLOSED', exit_price = $1, closed_at = NOW()
+                 WHERE api_key_id = $2 AND symbol = $3 AND status = 'OPEN'`,
+                [parseFloat(pos.markPrice || 0), key.id, pos.symbol]
+              );
+              totalClosed++;
+              results.push({ user: key.email, symbol: pos.symbol, side: pos.side, qty, status: 'CLOSED' });
+              console.log(`[EMERGENCY] Closed ${pos.symbol} ${pos.side} qty=${qty} for ${key.email}`);
+            } catch (closeErr) {
+              results.push({ user: key.email, symbol: pos.symbol, status: 'FAILED', error: closeErr.message });
+            }
+          }
+        }
+      } catch (keyErr) {
+        results.push({ user: key.email, status: 'KEY_ERROR', error: keyErr.message });
+      }
+    }
+
+    console.log(`[ADMIN] Emergency close ${symbol}: ${totalClosed} positions closed across ${keys.length} users`);
+    res.json({ ok: true, symbol, totalClosed, totalUsers: keys.length, results });
+  } catch (err) {
+    console.error('Emergency close error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Force re-sync all trades with exchange data ────
 router.post('/fix-bitunix-pnl', async (req, res) => {
   try {

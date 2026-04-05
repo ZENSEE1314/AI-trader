@@ -1985,6 +1985,31 @@
     }
   }
 
+  async function emergencyClose() {
+    const input = document.getElementById('emergency-close-symbol');
+    const symbol = (input?.value || '').toUpperCase().trim();
+    if (!symbol) { showToast('Enter a token symbol (e.g. SOLUSDT)', 'error'); return; }
+    if (!confirm(`🚨 EMERGENCY CLOSE ${symbol}\n\nThis will MARKET CLOSE ${symbol} for ALL users immediately.\n\nAre you sure?`)) return;
+    const statusEl = document.getElementById('emergency-stop-status');
+    statusEl.textContent = `Closing ${symbol}...`;
+    statusEl.style.color = '#ef4444';
+    try {
+      const result = await api('POST', '/api/admin/emergency-close', { symbol });
+      statusEl.textContent = `${symbol}: ${result.totalClosed} positions closed across ${result.totalUsers} users`;
+      statusEl.style.color = 'var(--color-success)';
+      showToast(`${symbol}: ${result.totalClosed} positions closed`, 'success');
+      if (result.results) {
+        for (const r of result.results) {
+          console.log(`[EMERGENCY] ${r.user}: ${r.symbol} ${r.status}${r.error ? ' — ' + r.error : ''}`);
+        }
+      }
+    } catch (err) {
+      statusEl.textContent = 'Failed: ' + (err.message || err);
+      statusEl.style.color = '#ef4444';
+      showToast('Emergency close failed: ' + err.message, 'error');
+    }
+  }
+
   async function adminFixTrades() {
     if (!confirm('Re-fetch actual PnL from exchanges and fix corrupted trade data?')) return;
     const statusEl = document.getElementById('fix-trades-status');
@@ -2449,6 +2474,7 @@
     addAllowedToken, addBannedToken, unbanGlobalToken, removeGlobalToken,
     searchAdminToken, pickAdminToken, searchUserBanToken,
     addRiskLevel, saveRiskLevel, deleteRiskLevel,
+    emergencyClose,
     fixBitunixPnl, debugBitunix, runBacktest, loadAiVersions, runAiOptimize,
   };
 

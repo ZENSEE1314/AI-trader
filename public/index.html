@@ -1149,6 +1149,14 @@
           <button class="btn btn-danger btn-sm" style="font-size:0.75rem;margin-left:12px;" onclick="window.CryptoBot.adminClearTestData()">🗑 Clear Test Data</button>
           <span id="clear-data-status" style="font-size:0.75rem;color:var(--color-text-muted);margin-left:8px;"></span>
         </div>
+        <div style="margin-bottom:var(--space-3);padding:var(--space-3);border:2px solid #ef4444;border-radius:var(--radius-lg);background:rgba(239,68,68,0.05);">
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+            <input id="emergency-close-symbol" type="text" placeholder="e.g. SOLUSDT" style="width:140px;padding:6px 10px;font-size:0.85rem;border:1px solid #ef4444;border-radius:var(--radius-md);background:var(--color-bg-base);color:var(--color-text);" />
+            <button class="btn btn-sm" style="font-size:0.85rem;background:#ef4444;color:#fff;border:none;font-weight:700;padding:8px 20px;" onclick="window.CryptoBot.emergencyClose()">🚨 CLOSE TOKEN FOR ALL USERS</button>
+            <span id="emergency-stop-status" style="font-size:0.75rem;color:var(--color-text-muted);"></span>
+          </div>
+          <div style="font-size:0.7rem;color:#ef4444;margin-top:4px;">Market-closes the chosen token across ALL users. Use when AI makes a bad call on a specific coin.</div>
+        </div>
         <div id="admin-earnings-per-user" style="margin-bottom:var(--space-5);"></div>
 
         <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Users <span class="tip-btn">?<span class="tip-text">All registered users. Manage approval, block/unblock, pause trading, adjust profit-share ratios, and view payment status.</span></span></h3>
@@ -1329,7 +1337,7 @@
     </div>
   </div>
 
-  <script src="/js/app.js?v=20260405aa"></script>
+  <script src="/js/app.js?v=20260405ab"></script>
   <script src="/js/cashwallet-fix.js"></script>
 
 </body>
