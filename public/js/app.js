@@ -1524,13 +1524,16 @@
     const days = parseInt($('#backtest-days')?.value) || 7;
     const topN = Math.min(parseInt($('#bt-topn')?.value) || 50, 100);
     const resultEl = $('#fix-bitunix-result');
-    if (resultEl) resultEl.textContent = `🧠 AI optimizing... testing 6 strategies × 7 risk levels = 42 combos on ${topN} coins over ${days} days.\nFetching data then running all simulations — please wait...`;
+    if (resultEl) resultEl.textContent = `🧠 AI optimizing... testing 6 strategies × 7 risk levels + genetic mutations on ${topN} coins over ${days} days.\nPhase 1: Pre-computing signals per strategy → Phase 2: Fast replay with all risk configs → Phase 3: Genetic breeding from top 5...\nPlease wait — this is heavily optimized with signal caching...`;
     try {
       const data = await api('POST', '/api/admin/ai-optimize', { days, topN });
       const R = data.results;
       let output = '═══════════════════════════════════════════════════════════════════════════════════════════════════════\n';
       output += '  🧠 AI MIX & MATCH OPTIMIZATION\n';
-      output += `  Period: ${data.period} | Coins: ${data.coinsScanned} | ${data.strategiesCount} Strategies × ${data.risksCount} Risk Levels = ${data.totalCombos} combos\n`;
+      output += `  Period: ${data.period} | Coins: ${data.coinsScanned}\n`;
+      output += `  Round 1: ${data.strategiesCount} Strategies × ${data.risksCount} Risk Levels = ${data.round1Combos} preset combos\n`;
+      output += `  Round 2: ${data.round2Genetic} genetic offspring bred from top 5 parents\n`;
+      output += `  Total: ${data.totalCombos} combinations tested\n`;
       output += '═══════════════════════════════════════════════════════════════════════════════════════════════════════\n\n';
 
       // ── Top 10 Overall ──

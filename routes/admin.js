@@ -1568,242 +1568,264 @@ router.post('/ai-optimize', async (req, res) => {
     if (!firstCoin) return res.json({ error: 'No data fetched', results: [] });
     const timeSteps = coinData[firstCoin].k15.map(k=>parseInt(k[0])).filter(t=>t>=startTime);
 
-    // ── Strategy: returns direction or null for a coin at a given time ──
-    function getSignal(strat, sym, now) {
-      const data = coinData[sym]; if (!data) return null;
-      const k15 = data.k15.filter(k=>parseInt(k[0])<=now); if (k15.length<30) return null;
-      const price = parseFloat(k15[k15.length-1][4]);
-      const dIdx = data.kD.findIndex(k=>parseInt(k[0])+86400000>now);
-      const prevDay = dIdx>0 ? data.kD[dIdx-1] : null;
-
-      // Helper: daily bias
-      function dailyBias() {
-        if (!prevDay) return null;
-        const dO=parseFloat(prevDay[1]),dC=parseFloat(prevDay[4]),dH=parseFloat(prevDay[2]),dL=parseFloat(prevDay[3]);
-        if ((dH-dL)>0&&(Math.abs(dC-dO)/(dH-dL))<0.3) return null; // doji
-        return { bias: dC>dO?'bullish':'bearish', pdh:dH, pdl:dL };
-      }
-      // Helper: HTF structures
-      function htf() {
-        const k4h=data.k4h.filter(k=>parseInt(k[0])<=now), k1h=data.k1h.filter(k=>parseInt(k[0])<=now);
-        if (k4h.length<30||k1h.length<30) return null;
-        return { s4h: getS(k4h,SW['4h']), s1h: getS(k1h,SW['1h']) };
-      }
-      // Helper: 15M setup check
-      function check15m(dir) {
-        const s15 = getS(k15,SW['15m']);
-        return (dir==='LONG'&&s15.hasHL)||(dir==='SHORT'&&s15.hasLH);
-      }
-      // Helper: 1M entry check
-      function check1m(dir) {
-        const k1=data.k1.filter(k=>parseInt(k[0])<=now); if (k1.length<15) return false;
-        const s1=getS(k1,SW['1m']);
-        if ((dir==='LONG'&&!s1.hasHL)||(dir==='SHORT'&&!s1.hasLH)) return false;
-        const es=dir==='LONG'?s1.lastLow:s1.lastHigh;
-        return es && (k1.length-1-es.index)<=25;
-      }
-
-      let dir = null;
-
-      if (strat === 'full') {
-        // Daily → 4H+1H → Key Level → 15M → 1M
-        const db = dailyBias(); if (!db) return null;
-        const h = htf(); if (!h) return null;
-        const bull=(h.s4h.trend==='bullish'||h.s4h.trend==='bullish_lean')&&(h.s1h.trend==='bullish'||h.s1h.trend==='bullish_lean');
-        const bear=(h.s4h.trend==='bearish'||h.s4h.trend==='bearish_lean')&&(h.s1h.trend==='bearish'||h.s1h.trend==='bearish_lean');
-        if (db.bias==='bullish'&&bull) dir='LONG'; else if (db.bias==='bearish'&&bear) dir='SHORT'; else return null;
-        const vwap=calcVW(k15); if (!atKL(price,db.pdh,db.pdl,vwap,dir)) return null;
-        if (!check15m(dir)||!check1m(dir)) return null;
-      }
-      else if (strat === 'noKeyLevel') {
-        // Daily → 4H+1H → 15M → 1M (skip key level)
-        const db = dailyBias(); if (!db) return null;
-        const h = htf(); if (!h) return null;
-        const bull=(h.s4h.trend==='bullish'||h.s4h.trend==='bullish_lean')&&(h.s1h.trend==='bullish'||h.s1h.trend==='bullish_lean');
-        const bear=(h.s4h.trend==='bearish'||h.s4h.trend==='bearish_lean')&&(h.s1h.trend==='bearish'||h.s1h.trend==='bearish_lean');
-        if (db.bias==='bullish'&&bull) dir='LONG'; else if (db.bias==='bearish'&&bear) dir='SHORT'; else return null;
-        if (!check15m(dir)||!check1m(dir)) return null;
-      }
-      else if (strat === 'relaxedHTF') {
-        // Daily → (4H OR 1H) → Key Level → 15M → 1M
-        const db = dailyBias(); if (!db) return null;
-        const h = htf(); if (!h) return null;
-        const b4h=h.s4h.trend==='bullish'||h.s4h.trend==='bullish_lean';
-        const b1h=h.s1h.trend==='bullish'||h.s1h.trend==='bullish_lean';
-        const r4h=h.s4h.trend==='bearish'||h.s4h.trend==='bearish_lean';
-        const r1h=h.s1h.trend==='bearish'||h.s1h.trend==='bearish_lean';
-        if (db.bias==='bullish'&&(b4h||b1h)) dir='LONG'; else if (db.bias==='bearish'&&(r4h||r1h)) dir='SHORT'; else return null;
-        const vwap=calcVW(k15); if (!atKL(price,db.pdh,db.pdl,vwap,dir)) return null;
-        if (!check15m(dir)||!check1m(dir)) return null;
-      }
-      else if (strat === 'noHTF') {
-        // Daily → 15M → 1M (skip 4H+1H)
-        const db = dailyBias(); if (!db) return null;
-        dir = db.bias==='bullish'?'LONG':'SHORT';
-        if (!check15m(dir)||!check1m(dir)) return null;
-      }
-      else if (strat === 'momentum') {
-        // 15M 3-candle trend → 15M setup → 1M entry
-        const last3 = k15.slice(-4, -1); if (last3.length<3) return null;
-        let g=0,r=0; for (const c of last3) { if(parseFloat(c[4])>parseFloat(c[1]))g++;else r++; }
-        if (g>=2) dir='LONG'; else if (r>=2) dir='SHORT'; else return null;
-        if (!check15m(dir)||!check1m(dir)) return null;
-      }
-      else if (strat === 'volumeSpike') {
-        // Full + 1.5x volume spike
-        const db = dailyBias(); if (!db) return null;
-        const h = htf(); if (!h) return null;
-        const bull=(h.s4h.trend==='bullish'||h.s4h.trend==='bullish_lean')&&(h.s1h.trend==='bullish'||h.s1h.trend==='bullish_lean');
-        const bear=(h.s4h.trend==='bearish'||h.s4h.trend==='bearish_lean')&&(h.s1h.trend==='bearish'||h.s1h.trend==='bearish_lean');
-        if (db.bias==='bullish'&&bull) dir='LONG'; else if (db.bias==='bearish'&&bear) dir='SHORT'; else return null;
-        const vwap=calcVW(k15); if (!atKL(price,db.pdh,db.pdl,vwap,dir)) return null;
-        if (!check15m(dir)) return null;
-        const vols=k15.slice(-20).map(k=>parseFloat(k[5])); const avg=vols.reduce((a,b)=>a+b,0)/vols.length;
-        if (avg>0&&(vols.slice(-5).reduce((a,b)=>a+b,0)/5)/avg<1.5) return null;
-        if (!check1m(dir)) return null;
-      }
-      else return null;
-
-      return { dir, price };
+    // ═══ SPEED OPTIMIZATION 1: Pre-build k15 index for O(1) candle lookup ═══
+    const k15Index = {};
+    for (const sym of Object.keys(coinData)) {
+      k15Index[sym] = {};
+      for (const k of coinData[sym].k15) k15Index[sym][parseInt(k[0])] = k;
     }
 
-    // ── Simulate: strategy + risk config ──
-    function simulate(strat, cfg) {
+    // ═══ SPEED OPTIMIZATION 2: Pre-compute ALL signals per strategy ═══
+    // Signal = { step, sym, dir, price } — computed once, replayed many times
+    function precomputeSignals(strat) {
+      const signals = []; // [{step, sym, dir, price}]
+      for (let step=0; step<timeSteps.length; step++) {
+        const now = timeSteps[step];
+        for (const sym of Object.keys(coinData)) {
+          const data = coinData[sym];
+          const k15 = data.k15.filter(k=>parseInt(k[0])<=now); if (k15.length<30) continue;
+          const price = parseFloat(k15[k15.length-1][4]);
+          const dIdx = data.kD.findIndex(k=>parseInt(k[0])+86400000>now);
+          const pD = dIdx>0?data.kD[dIdx-1]:null;
+
+          function dBias() {
+            if (!pD) return null;
+            const dO=parseFloat(pD[1]),dC=parseFloat(pD[4]),dH=parseFloat(pD[2]),dL=parseFloat(pD[3]);
+            if ((dH-dL)>0&&(Math.abs(dC-dO)/(dH-dL))<0.3) return null;
+            return { bias:dC>dO?'bullish':'bearish', pdh:dH, pdl:dL };
+          }
+          function htf() {
+            const k4h=data.k4h.filter(k=>parseInt(k[0])<=now), k1h=data.k1h.filter(k=>parseInt(k[0])<=now);
+            if (k4h.length<30||k1h.length<30) return null;
+            return { s4h:getS(k4h,SW['4h']), s1h:getS(k1h,SW['1h']) };
+          }
+          function c15(dir) { const s=getS(k15,SW['15m']); return (dir==='LONG'&&s.hasHL)||(dir==='SHORT'&&s.hasLH); }
+          function c1(dir) {
+            const k1=data.k1.filter(k=>parseInt(k[0])<=now); if(k1.length<15) return false;
+            const s=getS(k1,SW['1m']); if((dir==='LONG'&&!s.hasHL)||(dir==='SHORT'&&!s.hasLH)) return false;
+            const es=dir==='LONG'?s.lastLow:s.lastHigh; return es&&(k1.length-1-es.index)<=25;
+          }
+
+          let dir = null;
+          if (strat==='full') {
+            const db=dBias(); if(!db) continue; const h=htf(); if(!h) continue;
+            const bu=(h.s4h.trend==='bullish'||h.s4h.trend==='bullish_lean')&&(h.s1h.trend==='bullish'||h.s1h.trend==='bullish_lean');
+            const be=(h.s4h.trend==='bearish'||h.s4h.trend==='bearish_lean')&&(h.s1h.trend==='bearish'||h.s1h.trend==='bearish_lean');
+            if(db.bias==='bullish'&&bu) dir='LONG'; else if(db.bias==='bearish'&&be) dir='SHORT'; else continue;
+            const vw=calcVW(k15); if(!atKL(price,db.pdh,db.pdl,vw,dir)) continue;
+            if(!c15(dir)||!c1(dir)) continue;
+          } else if (strat==='noKeyLevel') {
+            const db=dBias(); if(!db) continue; const h=htf(); if(!h) continue;
+            const bu=(h.s4h.trend==='bullish'||h.s4h.trend==='bullish_lean')&&(h.s1h.trend==='bullish'||h.s1h.trend==='bullish_lean');
+            const be=(h.s4h.trend==='bearish'||h.s4h.trend==='bearish_lean')&&(h.s1h.trend==='bearish'||h.s1h.trend==='bearish_lean');
+            if(db.bias==='bullish'&&bu) dir='LONG'; else if(db.bias==='bearish'&&be) dir='SHORT'; else continue;
+            if(!c15(dir)||!c1(dir)) continue;
+          } else if (strat==='relaxedHTF') {
+            const db=dBias(); if(!db) continue; const h=htf(); if(!h) continue;
+            const b4=h.s4h.trend==='bullish'||h.s4h.trend==='bullish_lean', b1=h.s1h.trend==='bullish'||h.s1h.trend==='bullish_lean';
+            const r4=h.s4h.trend==='bearish'||h.s4h.trend==='bearish_lean', r1=h.s1h.trend==='bearish'||h.s1h.trend==='bearish_lean';
+            if(db.bias==='bullish'&&(b4||b1)) dir='LONG'; else if(db.bias==='bearish'&&(r4||r1)) dir='SHORT'; else continue;
+            const vw=calcVW(k15); if(!atKL(price,db.pdh,db.pdl,vw,dir)) continue;
+            if(!c15(dir)||!c1(dir)) continue;
+          } else if (strat==='noHTF') {
+            const db=dBias(); if(!db) continue; dir=db.bias==='bullish'?'LONG':'SHORT';
+            if(!c15(dir)||!c1(dir)) continue;
+          } else if (strat==='momentum') {
+            const l3=k15.slice(-4,-1); if(l3.length<3) continue;
+            let g=0,r=0; for(const c of l3){if(parseFloat(c[4])>parseFloat(c[1]))g++;else r++;}
+            if(g>=2) dir='LONG'; else if(r>=2) dir='SHORT'; else continue;
+            if(!c15(dir)||!c1(dir)) continue;
+          } else if (strat==='volumeSpike') {
+            const db=dBias(); if(!db) continue; const h=htf(); if(!h) continue;
+            const bu=(h.s4h.trend==='bullish'||h.s4h.trend==='bullish_lean')&&(h.s1h.trend==='bullish'||h.s1h.trend==='bullish_lean');
+            const be=(h.s4h.trend==='bearish'||h.s4h.trend==='bearish_lean')&&(h.s1h.trend==='bearish'||h.s1h.trend==='bearish_lean');
+            if(db.bias==='bullish'&&bu) dir='LONG'; else if(db.bias==='bearish'&&be) dir='SHORT'; else continue;
+            const vw=calcVW(k15); if(!atKL(price,db.pdh,db.pdl,vw,dir)) continue;
+            if(!c15(dir)) continue;
+            const vols=k15.slice(-20).map(k=>parseFloat(k[5])); const avg=vols.reduce((a,b)=>a+b,0)/vols.length;
+            if(avg>0&&(vols.slice(-5).reduce((a,b)=>a+b,0)/5)/avg<1.5) continue;
+            if(!c1(dir)) continue;
+          } else continue;
+
+          signals.push({ step, sym, dir, price });
+        }
+      }
+      return signals;
+    }
+
+    // ═══ SPEED OPTIMIZATION 3: Fast replay — just loops through pre-computed signals ═══
+    function replaySignals(signals, cfg) {
       let wallet = 1000;
       const trades = [], openPos = [];
-      let consecLosses = 0, tradingDay = '';
+      let consecLosses = 0, tradingDay = '', lastStep = -1;
 
       for (let step=0; step<timeSteps.length; step++) {
         const now = timeSteps[step];
         const d = new Date(now), h = d.getHours();
-        const dayKey = h<7 ? new Date(d.getTime()-86400000).toISOString().slice(0,10) : d.toISOString().slice(0,10);
+        const dayKey = h<7?new Date(d.getTime()-86400000).toISOString().slice(0,10):d.toISOString().slice(0,10);
         if (dayKey!==tradingDay) { tradingDay=dayKey; consecLosses=0; }
 
         // Exit checks
         for (let i=openPos.length-1; i>=0; i--) {
-          const pos=openPos[i]; const data=coinData[pos.symbol]; if(!data) continue;
-          const cur=data.k15.find(k=>parseInt(k[0])===now); if(!cur) continue;
-          const high=parseFloat(cur[2]),low=parseFloat(cur[3]),close=parseFloat(cur[4]);
+          const pos=openPos[i];
+          const candle = k15Index[pos.symbol]?.[now]; if (!candle) continue;
+          const high=parseFloat(candle[2]),low=parseFloat(candle[3]),close=parseFloat(candle[4]);
           if ((pos.dir==='LONG'&&low<=pos.sl)||(pos.dir==='SHORT'&&high>=pos.sl)) {
             pos.pnl=pos.dir==='LONG'?(pos.sl-pos.entry)*pos.qty:(pos.entry-pos.sl)*pos.qty;
-            pos.reason=pos.lastStep>0?'TRAIL':'SL'; wallet+=pos.pnl; openPos.splice(i,1);
-            if(pos.pnl<0) consecLosses++; else consecLosses=0; continue;
+            wallet+=pos.pnl; openPos.splice(i,1); if(pos.pnl<0)consecLosses++;else consecLosses=0; continue;
           }
           if (pos.tp&&((pos.dir==='LONG'&&high>=pos.tp)||(pos.dir==='SHORT'&&low<=pos.tp))) {
             pos.pnl=pos.dir==='LONG'?(pos.tp-pos.entry)*pos.qty:(pos.entry-pos.tp)*pos.qty;
-            pos.reason='TP'; wallet+=pos.pnl; openPos.splice(i,1); consecLosses=0; continue;
+            wallet+=pos.pnl; openPos.splice(i,1); consecLosses=0; continue;
           }
           const pp=pos.dir==='LONG'?(close-pos.entry)/pos.entry:(pos.entry-close)/pos.entry;
           const ns=pos.lastStep===0?cfg.trailStep:pos.lastStep+cfg.trailStep;
           if (pp>=ns) { let r=ns; while(pp>=r+cfg.trailStep) r+=cfg.trailStep; pos.lastStep=r;
-            const sl2=r<=cfg.trailStep?r-cfg.trailStep/2:r-cfg.trailStep;
-            pos.sl=pos.dir==='LONG'?pos.entry*(1+sl2):pos.entry*(1-sl2);
+            pos.sl=pos.dir==='LONG'?pos.entry*(1+(r<=cfg.trailStep?r-cfg.trailStep/2:r-cfg.trailStep)):pos.entry*(1-(r<=cfg.trailStep?r-cfg.trailStep/2:r-cfg.trailStep));
           }
         }
-
         if (openPos.length>=cfg.maxPos) continue;
         if (cfg.maxConsecLoss>0&&consecLosses>=cfg.maxConsecLoss) continue;
 
-        for (const sym of Object.keys(coinData)) {
+        // Get signals for this step
+        while (lastStep+1<signals.length && signals[lastStep+1].step===step) {
+          lastStep++;
+          const sig = signals[lastStep];
           if (openPos.length>=cfg.maxPos) break;
-          if (openPos.find(p=>p.symbol===sym)) continue;
-          const sig = getSignal(strat, sym, now);
-          if (!sig) continue;
-          const { dir, price } = sig;
-          const sl=dir==='LONG'?price*(1-cfg.slPct):price*(1+cfg.slPct);
-          const tp=cfg.tpPct>0?(dir==='LONG'?price*(1+cfg.tpPct):price*(1-cfg.tpPct)):null;
-          const qty=(wallet*cfg.riskPct*cfg.leverage)/price;
-          const trade = { symbol:sym, dir, entry:price, qty, sl, tp, lastStep:0, entryTime:now, pnl:null, reason:null };
+          if (openPos.find(p=>p.symbol===sig.sym)) continue;
+          const sl=sig.dir==='LONG'?sig.price*(1-cfg.slPct):sig.price*(1+cfg.slPct);
+          const tp=cfg.tpPct>0?(sig.dir==='LONG'?sig.price*(1+cfg.tpPct):sig.price*(1-cfg.tpPct)):null;
+          const qty=(wallet*cfg.riskPct*cfg.leverage)/sig.price;
+          const trade={symbol:sig.sym,dir:sig.dir,entry:sig.price,qty,sl,tp,lastStep:0,pnl:null};
           openPos.push(trade); trades.push(trade);
         }
+        // Skip remaining signals at this step if already at max
+        while (lastStep+1<signals.length && signals[lastStep+1].step===step) lastStep++;
       }
-      // Close remaining
-      for (const pos of openPos) { const data=coinData[pos.symbol]; if(data&&data.k15.length) { const lp=parseFloat(data.k15[data.k15.length-1][4]); pos.pnl=pos.dir==='LONG'?(lp-pos.entry)*pos.qty:(pos.entry-lp)*pos.qty; pos.reason='END'; wallet+=pos.pnl; } }
+      for (const pos of openPos) { const data=coinData[pos.symbol]; if(data&&data.k15.length) { const lp=parseFloat(data.k15[data.k15.length-1][4]); pos.pnl=pos.dir==='LONG'?(lp-pos.entry)*pos.qty:(pos.entry-lp)*pos.qty; wallet+=pos.pnl; } }
       return { trades, wallet };
     }
 
-    // ── Define all strategies and risk profiles ──
+    function scoreResult(r) {
+      const closed=r.trades.filter(t=>t.pnl!==null); const wins=closed.filter(t=>t.pnl>0);
+      const totalPnl=closed.reduce((s,t)=>s+t.pnl,0);
+      let peak=1000,maxDD=0,running=1000;
+      for(const t of closed){running+=t.pnl;if(running>peak)peak=running;const dd=(peak-running)/peak;if(dd>maxDD)maxDD=dd;}
+      return { trades:closed.length, wins:wins.length, losses:closed.length-wins.length,
+        winRate:closed.length?parseFloat(((wins.length/closed.length)*100).toFixed(1)):0,
+        totalPnl:parseFloat(totalPnl.toFixed(2)), pnlPct:parseFloat(((totalPnl/1000)*100).toFixed(1)),
+        finalWallet:parseFloat(r.wallet.toFixed(2)), maxDrawdown:parseFloat((maxDD*100).toFixed(1)) };
+    }
+
+    // ── Strategies & Risk Profiles ──
     const strategies = [
-      { id: 'full',        name: 'Full (Live)' },
-      { id: 'noKeyLevel',  name: 'No Key Level' },
-      { id: 'relaxedHTF',  name: 'Relaxed HTF' },
-      { id: 'noHTF',       name: 'No HTF' },
-      { id: 'momentum',    name: 'Momentum' },
-      { id: 'volumeSpike', name: 'Vol Spike' },
+      { id:'full', name:'Full (Live)' }, { id:'noKeyLevel', name:'No Key Level' },
+      { id:'relaxedHTF', name:'Relaxed HTF' }, { id:'noHTF', name:'No HTF' },
+      { id:'momentum', name:'Momentum' }, { id:'volumeSpike', name:'Vol Spike' },
     ];
     const risks = [
-      { id: 'conservative', name: 'Conservative', slPct:0.02, tpPct:0.03,  trailStep:0.012, leverage:10, riskPct:0.05, maxPos:2, maxConsecLoss:2 },
-      { id: 'default',      name: 'Default',      slPct:0.03, tpPct:0,     trailStep:0.012, leverage:20, riskPct:0.10, maxPos:3, maxConsecLoss:2 },
-      { id: 'tightSlTp',    name: 'Tight SL+TP',  slPct:0.015,tpPct:0.0225,trailStep:0.012, leverage:20, riskPct:0.10, maxPos:3, maxConsecLoss:2 },
-      { id: 'wideSl',       name: 'Wide SL',       slPct:0.05, tpPct:0,     trailStep:0.02,  leverage:10, riskPct:0.15, maxPos:2, maxConsecLoss:2 },
-      { id: 'scalp',        name: 'Scalp',         slPct:0.01, tpPct:0.015, trailStep:0.01,  leverage:20, riskPct:0.10, maxPos:5, maxConsecLoss:3 },
-      { id: 'noStop',       name: 'No Loss Stop',  slPct:0.03, tpPct:0,     trailStep:0.012, leverage:20, riskPct:0.10, maxPos:5, maxConsecLoss:0 },
-      { id: 'aggressive',   name: 'Aggressive',    slPct:0.02, tpPct:0,     trailStep:0.015, leverage:30, riskPct:0.15, maxPos:5, maxConsecLoss:0 },
+      { id:'conservative', name:'Conservative', slPct:0.02, tpPct:0.03,  trailStep:0.012, leverage:10, riskPct:0.05, maxPos:2, maxConsecLoss:2 },
+      { id:'default',      name:'Default',      slPct:0.03, tpPct:0,     trailStep:0.012, leverage:20, riskPct:0.10, maxPos:3, maxConsecLoss:2 },
+      { id:'tightSlTp',    name:'Tight SL+TP',  slPct:0.015,tpPct:0.0225,trailStep:0.012, leverage:20, riskPct:0.10, maxPos:3, maxConsecLoss:2 },
+      { id:'wideSl',       name:'Wide SL',       slPct:0.05, tpPct:0,     trailStep:0.02,  leverage:10, riskPct:0.15, maxPos:2, maxConsecLoss:2 },
+      { id:'scalp',        name:'Scalp',         slPct:0.01, tpPct:0.015, trailStep:0.01,  leverage:20, riskPct:0.10, maxPos:5, maxConsecLoss:3 },
+      { id:'noStop',       name:'No Loss Stop',  slPct:0.03, tpPct:0,     trailStep:0.012, leverage:20, riskPct:0.10, maxPos:5, maxConsecLoss:0 },
+      { id:'aggressive',   name:'Aggressive',    slPct:0.02, tpPct:0,     trailStep:0.015, leverage:30, riskPct:0.15, maxPos:5, maxConsecLoss:0 },
     ];
 
-    // ── Run ALL combinations: 6 strategies × 7 risk = 42 combos ──
+    // ═══ ROUND 1: Pre-compute signals per strategy (heavy part, done once) ═══
+    const signalCache = {};
+    for (const strat of strategies) {
+      signalCache[strat.id] = precomputeSignals(strat.id);
+    }
+
+    // ═══ ROUND 1: Replay all 42 combos (fast — just number crunching) ═══
     const results = [];
     for (const strat of strategies) {
       for (const risk of risks) {
-        const r = simulate(strat.id, risk);
-        const closed = r.trades.filter(t=>t.pnl!==null);
-        const wins = closed.filter(t=>t.pnl>0);
-        const totalPnl = closed.reduce((s,t)=>s+t.pnl,0);
-        let peak=1000, maxDD=0, running=1000;
-        for (const t of closed) { running+=t.pnl; if(running>peak) peak=running; const dd=(peak-running)/peak; if(dd>maxDD) maxDD=dd; }
-        results.push({
-          strategy: strat.name,
-          strategyId: strat.id,
-          risk: risk.name,
-          riskId: risk.id,
-          combo: `${strat.name} + ${risk.name}`,
-          settings: { slPct:risk.slPct, tpPct:risk.tpPct, trailStep:risk.trailStep, leverage:risk.leverage, riskPct:risk.riskPct, maxPos:risk.maxPos, maxConsecLoss:risk.maxConsecLoss },
-          trades: closed.length,
-          wins: wins.length,
-          losses: closed.length - wins.length,
-          winRate: closed.length ? parseFloat(((wins.length/closed.length)*100).toFixed(1)) : 0,
-          totalPnl: parseFloat(totalPnl.toFixed(2)),
-          pnlPct: parseFloat(((totalPnl/1000)*100).toFixed(1)),
-          finalWallet: parseFloat(r.wallet.toFixed(2)),
-          maxDrawdown: parseFloat((maxDD*100).toFixed(1)),
-        });
+        const r = replaySignals(signalCache[strat.id], risk);
+        const s = scoreResult(r);
+        results.push({ strategy:strat.name, strategyId:strat.id, risk:risk.name, riskId:risk.id,
+          combo:`${strat.name} + ${risk.name}`,
+          settings:{slPct:risk.slPct,tpPct:risk.tpPct,trailStep:risk.trailStep,leverage:risk.leverage,riskPct:risk.riskPct,maxPos:risk.maxPos,maxConsecLoss:risk.maxConsecLoss},
+          ...s });
       }
     }
 
-    // Sort: win rate DESC, then P&L DESC
+    // ═══ ROUND 2: Genetic — breed new combos from top 5 winners ═══
     results.sort((a,b) => b.winRate-a.winRate || b.totalPnl-a.totalPnl);
+    const top5 = results.filter(r=>r.trades>0).slice(0,5);
+    const mutations = [];
+    function mutate(val, min, max, step) {
+      const delta = (Math.random()-0.5) * 2 * step;
+      return Math.min(max, Math.max(min, parseFloat((val + delta).toFixed(4))));
+    }
+
+    for (let gen = 0; gen < 20; gen++) {
+      // Pick 2 random parents from top 5
+      const p1 = top5[Math.floor(Math.random()*top5.length)];
+      const p2 = top5[Math.floor(Math.random()*top5.length)];
+      if (!p1||!p2) continue;
+      // Crossover: mix settings from both parents
+      const child = {
+        slPct:     Math.random()>0.5 ? p1.settings.slPct : p2.settings.slPct,
+        tpPct:     Math.random()>0.5 ? p1.settings.tpPct : p2.settings.tpPct,
+        trailStep: Math.random()>0.5 ? p1.settings.trailStep : p2.settings.trailStep,
+        leverage:  Math.random()>0.5 ? p1.settings.leverage : p2.settings.leverage,
+        riskPct:   Math.random()>0.5 ? p1.settings.riskPct : p2.settings.riskPct,
+        maxPos:    Math.random()>0.5 ? p1.settings.maxPos : p2.settings.maxPos,
+        maxConsecLoss: Math.random()>0.5 ? p1.settings.maxConsecLoss : p2.settings.maxConsecLoss,
+      };
+      // Mutate slightly
+      child.slPct = mutate(child.slPct, 0.005, 0.08, 0.005);
+      child.tpPct = mutate(child.tpPct, 0, 0.05, 0.005);
+      child.trailStep = mutate(child.trailStep, 0.005, 0.03, 0.002);
+      child.leverage = Math.round(mutate(child.leverage, 5, 50, 5));
+      child.riskPct = mutate(child.riskPct, 0.02, 0.20, 0.02);
+      child.maxPos = Math.round(mutate(child.maxPos, 1, 10, 1));
+
+      // Use the best parent's strategy
+      const stratId = p1.winRate >= p2.winRate ? p1.strategyId : p2.strategyId;
+      const stratName = strategies.find(s=>s.id===stratId)?.name || stratId;
+      const r = replaySignals(signalCache[stratId], child);
+      const s = scoreResult(r);
+      if (s.trades > 0) {
+        mutations.push({ strategy:stratName, strategyId:stratId, risk:`Gen${gen+1}`, riskId:`gen${gen}`,
+          combo:`${stratName} + Gen${gen+1}`, settings:child, ...s });
+      }
+    }
+
+    // Merge genetic results and re-sort
+    const allResults = [...results, ...mutations];
+    allResults.sort((a,b) => b.winRate-a.winRate || b.totalPnl-a.totalPnl);
 
     // Save top 3 as AI versions
     const saved = [];
-    for (let i = 0; i < Math.min(3, results.length); i++) {
-      const best = results[i];
-      if (!best || best.trades === 0) continue;
-      const rows = await query('SELECT version FROM ai_versions ORDER BY id DESC LIMIT 1');
-      const prev = rows.length ? rows[0].version : 'v0.0';
-      const parts = prev.match(/v(\d+)\.(\d+)/);
-      const major = parts ? parseInt(parts[1]) : 1;
-      const minor = parts ? parseInt(parts[2]) + 1 : 0;
-      const ver = `v${major}.${minor}`;
-      const medal = i===0?'🥇':i===1?'🥈':'🥉';
+    for (let i=0; i<Math.min(3,allResults.length); i++) {
+      const best=allResults[i]; if(!best||best.trades===0) continue;
+      const rows=await query('SELECT version FROM ai_versions ORDER BY id DESC LIMIT 1');
+      const prev=rows.length?rows[0].version:'v0.0';
+      const parts=prev.match(/v(\d+)\.(\d+)/);
+      const major=parts?parseInt(parts[1]):1; const minor=parts?parseInt(parts[2])+1:0;
+      const ver=`v${major}.${minor}`;
+      const medal=i===0?'🥇':i===1?'🥈':'🥉';
       await query(
         `INSERT INTO ai_versions (version, trade_count, win_rate, avg_pnl, total_pnl, params, setup_weights, avoided_coins, changes)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-        [ver, best.trades, best.winRate/100,
-         best.trades ? best.totalPnl/best.trades : 0, best.totalPnl,
-         JSON.stringify({ ...best.settings, strategy: best.strategyId }),
-         '{}', '[]',
-         `${medal} AI #${i+1}: ${best.combo} (${best.winRate}% WR, $${best.totalPnl} PnL, ${DAYS}d)`]
-      );
-      saved.push({ rank: i+1, version: ver, combo: best.combo });
+        [ver, best.trades, best.winRate/100, best.trades?best.totalPnl/best.trades:0, best.totalPnl,
+         JSON.stringify({...best.settings,strategy:best.strategyId}), '{}', '[]',
+         `${medal} AI #${i+1}: ${best.combo} (${best.winRate}% WR, $${best.totalPnl} PnL, ${DAYS}d)`]);
+      saved.push({ rank:i+1, version:ver, combo:best.combo, winRate:best.winRate, pnl:best.totalPnl });
     }
 
     res.json({
       period: `${new Date(startTime).toISOString().slice(0,10)} → ${new Date(endTime).toISOString().slice(0,10)}`,
       days: DAYS, coinsScanned: Object.keys(coinData).length,
       strategiesCount: strategies.length, risksCount: risks.length,
-      totalCombos: results.length,
+      round1Combos: results.length, round2Genetic: mutations.length,
+      totalCombos: allResults.length,
       saved,
-      results,
+      results: allResults,
     });
   } catch (err) {
     console.error('AI optimize error:', err);
