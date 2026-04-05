@@ -192,6 +192,7 @@ app.use((req, res, next) => {
     { name: 'sl_pct',           sql: 'ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS sl_pct DECIMAL DEFAULT 0.03' },
     { name: 'max_consec_loss',  sql: 'ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS max_consec_loss INTEGER DEFAULT 2' },
     { name: 'top_n_coins',      sql: 'ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS top_n_coins INTEGER DEFAULT 50' },
+    { name: 'username',         sql: 'ALTER TABLE users ADD COLUMN IF NOT EXISTS username VARCHAR(100)' },
   ];
   for (const c of cols) {
     try { await dbQuery(c.sql); } catch (_) {}

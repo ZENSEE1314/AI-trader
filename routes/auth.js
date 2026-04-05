@@ -158,7 +158,7 @@ router.post('/reset-password', async (req, res) => {
 router.get('/me', authMiddleware, async (req, res) => {
   try {
     const user = await query(
-      `SELECT id, email, is_admin, is_blocked, referral_code, wallet_balance,
+      `SELECT id, username, email, is_admin, is_blocked, referral_code, wallet_balance,
               cash_wallet, commission_earned, weekly_fee_due, usdt_address, usdt_network
        FROM users WHERE id = $1`,
       [req.userId]
@@ -172,6 +172,7 @@ router.get('/me', authMiddleware, async (req, res) => {
 
     res.json({
       userId: u.id,
+      username: u.username || '',
       email: u.email,
       is_admin: u.is_admin,
       referral_code: u.referral_code,
@@ -185,6 +186,65 @@ router.get('/me', authMiddleware, async (req, res) => {
     });
   } catch (err) {
     console.error('Me error:', err.message);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Update profile (username, email)
+router.put('/profile', authMiddleware, async (req, res) => {
+  try {
+    const { username, email } = req.body;
+    const updates = [];
+    const params = [];
+    let idx = 1;
+
+    if (username !== undefined) {
+      updates.push(`username = $${idx++}`);
+      params.push(username.trim());
+    }
+    if (email) {
+      const existing = await query('SELECT id FROM users WHERE email = $1 AND id != $2', [email.toLowerCase(), req.userId]);
+      if (existing.length) return res.status(409).json({ error: 'Email already in use' });
+      updates.push(`email = $${idx++}`);
+      params.push(email.toLowerCase());
+    }
+
+    if (!updates.length) return res.status(400).json({ error: 'Nothing to update' });
+
+    params.push(req.userId);
+    await query(`UPDATE users SET ${updates.join(', ')} WHERE id = $${idx}`, params);
+
+    // If email changed, re-issue token
+    if (email) {
+      const newToken = signToken(req.userId, email.toLowerCase());
+      res.cookie('token', newToken, { httpOnly: true, maxAge: 30 * 24 * 60 * 60 * 1000, sameSite: 'lax' });
+    }
+
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Profile update error:', err.message);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Change password
+router.put('/change-password', authMiddleware, async (req, res) => {
+  try {
+    const { current_password, new_password } = req.body;
+    if (!current_password || !new_password) return res.status(400).json({ error: 'Both passwords required' });
+    if (new_password.length < 6) return res.status(400).json({ error: 'New password must be 6+ characters' });
+
+    const rows = await query('SELECT password_hash FROM users WHERE id = $1', [req.userId]);
+    if (!rows.length) return res.status(404).json({ error: 'User not found' });
+
+    const valid = await bcrypt.compare(current_password, rows[0].password_hash);
+    if (!valid) return res.status(401).json({ error: 'Current password is incorrect' });
+
+    const hash = await bcrypt.hash(new_password, 10);
+    await query('UPDATE users SET password_hash = $1 WHERE id = $2', [hash, req.userId]);
+    res.json({ ok: true, message: 'Password changed successfully' });
+  } catch (err) {
+    console.error('Change password error:', err.message);
     res.status(500).json({ error: 'Server error' });
   }
 });
