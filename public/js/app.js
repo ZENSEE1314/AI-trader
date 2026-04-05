@@ -324,7 +324,7 @@
     const platformIcon = (p) => p === 'binance' ? '🟡' : p === 'bitunix' ? '🔵' : '⚪';
 
     let html = `<div class="summary-card">
-      <span class="summary-card-label">Total Futures Wallet</span>
+      <span class="summary-card-label">Total Futures Wallet <span class="tip-btn">?<span class="tip-text">Combined balance across all your connected exchange futures wallets.</span></span></span>
       <span class="summary-card-value text-mono" style="color:var(--color-accent);font-size:1.3rem">$${totalBal.toFixed(2)}</span>
     </div>`;
 
@@ -336,7 +336,7 @@
       const pnlSign = pnl >= 0 ? '+' : '';
 
       html += `<div class="summary-card" style="padding:var(--space-3)">
-        <span class="summary-card-label">${platformIcon(w.platform)} ${w.platform.toUpperCase()}</span>
+        <span class="summary-card-label">${platformIcon(w.platform)} ${w.platform.toUpperCase()} <span class="tip-btn">?<span class="tip-text">Futures wallet on ${w.platform.toUpperCase()}. Avail = available margin, uPnL = unrealized profit/loss from open positions, Pos = number of open positions.</span></span></span>
         <span class="summary-card-value text-mono" style="color:var(--color-accent)">$${bal.toFixed(2)}</span>
         <div style="font-size:0.75rem;color:var(--color-text-muted);margin-top:4px">
           <span>Avail: $${avail.toFixed(2)}</span> ·
@@ -795,14 +795,14 @@
         <div class="key-settings" id="settings-${k.id}">
           <!-- Risk Level Visual Selector -->
           <div style="margin-bottom:var(--space-4);">
-            <label class="form-label" style="margin-bottom:var(--space-2);">Risk Level</label>
+            <label class="form-label" style="margin-bottom:var(--space-2);">Risk Level <span class="tip-btn">?<span class="tip-text">Choose a preset risk profile. This auto-fills leverage, SL, TP, and trailing settings. You can still adjust individually after.</span></span></label>
             <input type="hidden" id="risk-level-${k.id}" value="${k.risk_level_id || ''}">
             <div id="risk-boxes-${k.id}" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;"></div>
           </div>
           <div class="settings-grid">
             <div class="slider-group">
               <div class="slider-header">
-                <label class="form-label" for="leverage-${k.id}">Leverage</label>
+                <label class="form-label" for="leverage-${k.id}">Leverage <span class="tip-btn">?<span class="tip-text">Multiplier for your trade size. Higher leverage = bigger gains but also bigger losses. E.g. 20x means $100 controls $2000.</span></span></label>
                 <input type="number" class="slider-num" id="leverage-num-${k.id}" min="1" max="125" step="1" value="${leverage}"
                   oninput="window.CryptoBot.syncSlider('leverage-${k.id}',this.value)">
               </div>
@@ -812,7 +812,7 @@
             </div>
             <div class="slider-group">
               <div class="slider-header">
-                <label class="form-label" for="risk-${k.id}">Risk per Trade (%)</label>
+                <label class="form-label" for="risk-${k.id}">Risk per Trade (%) <span class="tip-btn">?<span class="tip-text">Percentage of your wallet used as margin for each trade. E.g. 10% of a $1000 wallet = $100 margin per trade.</span></span></label>
                 <input type="number" class="slider-num" id="risk-num-${k.id}" min="1" max="20" step="1" value="${riskPct}"
                   oninput="window.CryptoBot.syncSlider('risk-${k.id}',this.value)">
               </div>
@@ -822,7 +822,7 @@
             </div>
             <div class="slider-group">
               <div class="slider-header">
-                <label class="form-label" for="maxloss-${k.id}">Max Loss per Trade (%)</label>
+                <label class="form-label" for="maxloss-${k.id}">Max Loss per Trade (%) <span class="tip-btn">?<span class="tip-text">Maximum loss allowed on a single trade as % of margin. If a trade hits this loss, it auto-closes.</span></span></label>
                 <input type="number" class="slider-num" id="maxloss-num-${k.id}" min="1" max="100" step="1" value="${maxLoss}"
                   oninput="window.CryptoBot.syncSlider('maxloss-${k.id}',this.value)">
               </div>
@@ -832,7 +832,7 @@
             </div>
             <div class="slider-group">
               <div class="slider-header">
-                <label class="form-label" for="maxpos-${k.id}">Max Open Trades</label>
+                <label class="form-label" for="maxpos-${k.id}">Max Open Trades <span class="tip-btn">?<span class="tip-text">Maximum number of trades the bot can have open at the same time. More trades = more risk but more opportunity.</span></span></label>
                 <input type="number" class="slider-num" id="maxpos-num-${k.id}" min="1" max="10" step="1" value="${maxPos}"
                   oninput="window.CryptoBot.syncSlider('maxpos-${k.id}',this.value)">
               </div>
@@ -842,7 +842,7 @@
             </div>
             <div class="slider-group">
               <div class="slider-header">
-                <label class="form-label" for="tp-${k.id}">Take Profit %</label>
+                <label class="form-label" for="tp-${k.id}">Take Profit % <span class="tip-btn">?<span class="tip-text">Target profit % to close the trade. E.g. 1.5% means when price moves 1.5% in your favor, position starts closing. TP3 = 1.5x this value.</span></span></label>
                 <input type="number" class="slider-num" id="tp-num-${k.id}" min="0.5" max="20" step="0.1" value="${tpPct}"
                   oninput="window.CryptoBot.syncSlider('tp-${k.id}',Math.round(this.value*10))">
               </div>
@@ -872,7 +872,7 @@
             </div>
             <div class="slider-group">
               <div class="slider-header">
-                <label class="form-label" for="maxloss-streak-${k.id}">Stop After Losses</label>
+                <label class="form-label" for="maxloss-streak-${k.id}">Stop After Losses <span class="tip-btn">?<span class="tip-text">Bot stops trading after this many consecutive losses in one day. Resets at 7am daily. Set 0 for unlimited (never stop).</span></span></label>
                 <input type="number" class="slider-num" id="maxloss-streak-num-${k.id}" min="1" max="10" step="1" value="${maxConsecLoss}"
                   oninput="window.CryptoBot.syncSlider('maxloss-streak-${k.id}',this.value)">
               </div>
@@ -881,7 +881,7 @@
                 aria-label="Max consecutive losses before stopping">
             </div>
             <div class="form-group" style="margin-bottom:0;grid-column:1/-1;">
-              <label class="form-label">Ban These Coins <span style="font-weight:400;color:var(--color-text-muted);">(select from available tokens)</span></label>
+              <label class="form-label">Ban These Coins <span class="tip-btn">?<span class="tip-text">Block specific coins from trading. The bot will never open positions on banned coins.</span></span></label>
               <div class="coin-chips" id="banned-chips-${k.id}">${buildChips(bannedCoins, k.id, 'banned')}</div>
               <div style="position:relative;">
                 <input class="form-input text-mono" type="text" id="banned-search-${k.id}" placeholder="Type to search available tokens..." autocomplete="off" style="font-size:0.8rem;" oninput="window.CryptoBot.searchUserBanToken(this,${k.id})" onfocus="window.CryptoBot.searchUserBanToken(this,${k.id})">
@@ -890,7 +890,7 @@
             </div>
             <!-- Per-Token Leverage -->
             <div class="form-group" style="margin-bottom:0;grid-column:1/-1;">
-              <label class="form-label">Per-Token Leverage</label>
+              <label class="form-label">Per-Token Leverage <span class="tip-btn">?<span class="tip-text">Set different leverage for specific coins. E.g. BTC 10x, DOGE 50x. Overrides the default leverage above for these tokens.</span></span></label>
               <div id="token-lev-${k.id}" style="margin-bottom:8px;"></div>
               <div style="display:flex;gap:8px;align-items:end;flex-wrap:wrap;position:relative;">
                 <div style="position:relative;">

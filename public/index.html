@@ -30,7 +30,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/css/tokens.css">
-  <link rel="stylesheet" href="/css/style.css?v=20260405">
+  <link rel="stylesheet" href="/css/style.css?v=20260405b">
 
   <link rel="icon" href="/img/logo.jpeg" type="image/jpeg">
   <style>
@@ -657,7 +657,7 @@
         <!-- Weekly Earnings (Profit Split) -->
         <div style="margin-top:var(--space-4);">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--space-3);flex-wrap:wrap;gap:8px;">
-            <h2 class="section-heading" style="margin-bottom:0;">This Week's Earnings</h2>
+            <h2 class="section-heading" style="margin-bottom:0;">This Week's Earnings <span class="tip-btn">?<span class="tip-text">Your weekly profit split. You keep 60% of net profits, 40% goes to the platform. Payment is due weekly — pay before the timer runs out to keep trading.</span></span></h2>
             <div id="we-timer" style="display:flex;align-items:center;gap:10px;padding:8px 16px;border-radius:var(--radius-md);background:var(--color-bg);border:1px solid var(--color-border-muted);">
               <span style="font-size:0.7rem;color:var(--color-text-muted);white-space:nowrap;">Due in</span>
               <div style="text-align:center;">
@@ -696,7 +696,7 @@
 
         <!-- Trade History -->
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--space-3);">
-          <h2 class="section-heading" style="margin-bottom:0;">Trade History</h2>
+          <h2 class="section-heading" style="margin-bottom:0;">Trade History <span class="tip-btn">?<span class="tip-text">All your bot trades across exchanges. Filter by time period. Shows entry/exit prices, SL/TP, P&L, and status.</span></span></h2>
           <button id="btn-clear-errors" class="btn btn-danger btn-sm hidden" onclick="window.CryptoBot.clearErrors()">Clear Errors</button>
         </div>
         <div id="trades-period-filter" style="display:flex;gap:8px;margin-bottom:var(--space-3);flex-wrap:wrap;">
@@ -747,7 +747,7 @@
            ==================================================== -->
       <section id="tab-keys" class="hidden" role="tabpanel" aria-label="API Keys">
         <div class="keys-header">
-          <h2 class="section-heading" style="margin-bottom:0;">Your API Keys</h2>
+          <h2 class="section-heading" style="margin-bottom:0;">Your API Keys <span class="tip-btn">?<span class="tip-text">Manage your exchange API keys. Each key connects to one exchange account. Configure risk settings, leverage, and token preferences per key.</span></span></h2>
           <button id="btn-add-key" class="btn btn-primary btn-sm">+ Add Key</button>
         </div>
 
@@ -766,17 +766,17 @@
            Cash Wallet Tab
            ==================================================== -->
       <section id="tab-cashwallet" class="hidden" role="tabpanel" aria-label="Cash Wallet">
-        <h2 class="section-heading">Cash Wallet</h2>
+        <h2 class="section-heading">Cash Wallet <span class="tip-btn">?<span class="tip-text">Your USDT wallet for top-ups, withdrawals, and referral commissions. Use this balance to pay weekly platform fees.</span></span></h2>
 
         <!-- Wallet Summary -->
         <div class="summary-grid" style="margin-bottom:var(--space-5);">
           <div class="summary-card" style="border-left:3px solid var(--color-success);">
-            <span class="summary-card-label">Cash Wallet Balance</span>
+            <span class="summary-card-label">Cash Wallet Balance <span class="tip-btn">?<span class="tip-text">Your total USDT balance. Includes top-ups and referral commissions. Use this to pay platform fees or withdraw.</span></span></span>
             <span id="cw-cash" class="summary-card-value text-mono" style="color:var(--color-success);font-size:1.3rem;">$0.00</span>
             <span style="font-size:0.75rem;color:var(--color-text-muted);">Top-ups + commissions combined</span>
           </div>
           <div class="summary-card" style="border-left:3px solid var(--color-accent);">
-            <span class="summary-card-label">Commission Earned</span>
+            <span class="summary-card-label">Commission Earned <span class="tip-btn">?<span class="tip-text">Total referral commission earned from your referrals' weekly profits. Automatically added to your cash wallet.</span></span></span>
             <span id="cw-commission" class="summary-card-value text-mono" style="color:var(--color-accent);font-size:1.3rem;">$0.00</span>
             <span style="font-size:0.75rem;color:var(--color-text-muted);">Referral earnings (auto-added to wallet)</span>
           </div>
@@ -793,7 +793,7 @@
           <div style="font-size:0.75rem;color:var(--color-accent);margin-top:4px;">Auto-detected if you send from your saved withdrawal address. Otherwise submit TX hash below.</div>
         </div>
         <div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-4);margin-bottom:var(--space-4);">
-          <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Top Up Cash Wallet</h3>
+          <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Top Up Cash Wallet <span class="tip-btn">?<span class="tip-text">Send USDT to the platform address, then submit the TX hash here. Admin will verify and credit your wallet.</span></span></h3>
           <div class="settings-grid" style="margin-bottom:var(--space-3);">
             <div class="form-group" style="margin-bottom:0">
               <label class="form-label" for="cw-topup-amount">Amount (USDT)</label>
@@ -811,7 +811,7 @@
 
         <!-- USDT Withdrawal Address -->
         <div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-4);margin-bottom:var(--space-4);">
-          <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">USDT Withdrawal Address</h3>
+          <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">USDT Withdrawal Address <span class="tip-btn">?<span class="tip-text">Save your USDT wallet address for withdrawals. Make sure the address and network match your exchange/wallet.</span></span></h3>
           <div class="settings-grid" style="margin-bottom:var(--space-3);">
             <div class="form-group" style="margin-bottom:0">
               <label class="form-label" for="cw-usdt-addr">USDT Address</label>
@@ -833,7 +833,7 @@
 
         <!-- Withdraw from Cash Wallet -->
         <div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-4);margin-bottom:var(--space-5);">
-          <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Withdraw (USDT)</h3>
+          <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Withdraw (USDT) <span class="tip-btn">?<span class="tip-text">Request a withdrawal from your cash wallet. Minimum $10. Sent to your saved USDT address after admin approval.</span></span></h3>
           <div style="display:flex;gap:var(--space-2);align-items:end;flex-wrap:wrap;">
             <div class="form-group" style="margin-bottom:0;flex:1;min-width:120px;">
               <label class="form-label" for="cw-wd-amount">Amount (min $10)</label>
@@ -846,7 +846,7 @@
 
         <!-- Referral Section -->
         <div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-4);margin-bottom:var(--space-5);">
-          <h3 style="margin-bottom:var(--space-2);color:var(--color-text);">Your Referral Link</h3>
+          <h3 style="margin-bottom:var(--space-2);color:var(--color-text);">Your Referral Link <span class="tip-btn">?<span class="tip-text">Share this link with friends. When they sign up and trade, you earn a % of the platform's weekly fee from their profits.</span></span></h3>
           <div style="display:flex;gap:var(--space-2);align-items:center;">
             <input class="form-input text-mono" id="referral-link" readonly style="flex:1;font-size:0.85rem;">
             <button class="btn btn-ghost btn-sm" onclick="navigator.clipboard.writeText(document.getElementById('referral-link').value);window.CryptoBot.showToast('Copied!','success')">Copy</button>
@@ -862,7 +862,7 @@
 
         <!-- Transaction History -->
         <div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-4);margin-bottom:var(--space-4);">
-          <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Transaction History</h3>
+          <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Transaction History <span class="tip-btn">?<span class="tip-text">All wallet transactions: top-ups, platform fee payments, referral commissions, and withdrawals.</span></span></h3>
           <div id="cw-transactions" style="max-height:300px;overflow-y:auto;">
             <div style="color:var(--color-text-muted);font-size:0.8rem;">Loading...</div>
           </div>
@@ -870,7 +870,7 @@
 
         <!-- Withdrawal History -->
         <div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-4);margin-bottom:var(--space-5);">
-          <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Withdrawal History</h3>
+          <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Withdrawal History <span class="tip-btn">?<span class="tip-text">History of your USDT withdrawal requests and their status (pending, completed, rejected).</span></span></h3>
           <div id="cw-withdrawals" style="max-height:300px;overflow-y:auto;">
             <div style="color:var(--color-text-muted);font-size:0.8rem;">Loading...</div>
           </div>
@@ -893,7 +893,7 @@
       </section>
 
       <section id="tab-logs" class="hidden" role="tabpanel" aria-label="Logs">
-        <h2 class="section-heading">Bot Live Logs</h2>
+        <h2 class="section-heading">Bot Live Logs <span class="tip-btn">?<span class="tip-text">Real-time logs from the trading bot. Filter by category to see scans, trades, AI learning, sentiment analysis, and errors.</span></span></h2>
 
         <div style="display:flex;gap:var(--space-2);margin-bottom:var(--space-3);flex-wrap:wrap;">
           <button class="btn btn-sm log-filter-btn active" data-log-cat="all" onclick="window.CryptoBot.filterLogs('all',this)">All</button>
@@ -920,34 +920,34 @@
       </section>
 
       <section id="tab-admin" class="hidden" role="tabpanel" aria-label="Admin">
-        <h2 class="section-heading">Admin Panel</h2>
+        <h2 class="section-heading">Admin Panel <span class="tip-btn">?<span class="tip-text">Admin-only controls for managing users, platform settings, global tokens, risk levels, and weekly earnings settlement.</span></span></h2>
 
-        <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Platform Settings</h3>
+        <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Platform Settings <span class="tip-btn">?<span class="tip-text">Global settings that apply to the entire platform. Configure referral tiers, USDT addresses, and commission percentages.</span></span></h3>
         <div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-4);margin-bottom:var(--space-5);">
           <div class="settings-grid">
             <div class="form-group" style="margin-bottom:0">
-              <label class="form-label" for="admin-referral-pct">Referral Commission %</label>
+              <label class="form-label" for="admin-referral-pct">Referral Commission % <span class="tip-btn">?<span class="tip-text">Percentage of the platform's 40% fee that gets paid out as referral commissions to users who referred new traders.</span></span></label>
               <input class="form-input text-mono" type="number" id="admin-referral-pct" min="0" max="100" step="1" placeholder="% of platform's 40% fee">
               <span style="font-size:0.7rem;color:var(--color-text-muted);">% of the 40% platform fee that goes to referrers</span>
             </div>
             <div class="form-group" style="margin-bottom:0">
-              <label class="form-label" for="admin-tier1">Tier 1 Commission %</label>
+              <label class="form-label" for="admin-tier1">Tier 1 Commission % <span class="tip-btn">?<span class="tip-text">Commission % for direct referrals (the person who referred the trader).</span></span></label>
               <input class="form-input text-mono" type="number" id="admin-tier1" min="0" max="100" step="1" placeholder="Direct referral">
             </div>
             <div class="form-group" style="margin-bottom:0">
-              <label class="form-label" for="admin-tier2">Tier 2 Commission %</label>
+              <label class="form-label" for="admin-tier2">Tier 2 Commission % <span class="tip-btn">?<span class="tip-text">Commission % for 2nd-level referrals (the person who referred the referrer). Set 0 to disable.</span></span></label>
               <input class="form-input text-mono" type="number" id="admin-tier2" min="0" max="100" step="1" placeholder="Referral's referral">
             </div>
             <div class="form-group" style="margin-bottom:0">
-              <label class="form-label" for="admin-tier3">Tier 3 Commission %</label>
+              <label class="form-label" for="admin-tier3">Tier 3 Commission % <span class="tip-btn">?<span class="tip-text">Commission % for 3rd-level referrals. Set 0 to disable this tier entirely.</span></span></label>
               <input class="form-input text-mono" type="number" id="admin-tier3" min="0" max="100" step="1" placeholder="3rd level. 0 = off">
             </div>
           </div>
           <div style="margin-top:var(--space-3);border-top:1px solid var(--color-border-muted);padding-top:var(--space-3);">
-            <strong style="font-size:0.85rem;">Platform USDT Address (Auto Top-Up)</strong>
+            <strong style="font-size:0.85rem;">Platform USDT Address (Auto Top-Up) <span class="tip-btn">?<span class="tip-text">Users send USDT to this address with their user ID as memo. The bot auto-detects payments and credits their cash wallet.</span></span></strong>
             <div class="settings-grid" style="margin-top:var(--space-2);">
               <div class="form-group" style="margin-bottom:0">
-                <label class="form-label" for="admin-usdt-addr">USDT Receiving Address</label>
+                <label class="form-label" for="admin-usdt-addr">USDT Receiving Address <span class="tip-btn">?<span class="tip-text">Your platform wallet address where users send USDT top-up payments.</span></span></label>
                 <input class="form-input text-mono" type="text" id="admin-usdt-addr" placeholder="0x...">
               </div>
               <div class="form-group" style="margin-bottom:0">
@@ -959,7 +959,7 @@
                 </select>
               </div>
               <div class="form-group" style="margin-bottom:0">
-                <label class="form-label" for="admin-bscscan-key">BSCScan API Key</label>
+                <label class="form-label" for="admin-bscscan-key">BSCScan API Key <span class="tip-btn">?<span class="tip-text">Optional. Used to auto-detect incoming USDT payments on BEP20 network via BSCScan API.</span></span></label>
                 <input class="form-input text-mono" type="text" id="admin-bscscan-key" placeholder="For auto-detect (optional)">
               </div>
             </div>
@@ -969,7 +969,7 @@
         </div>
 
         <!-- Risk Level Settings -->
-        <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Risk Level Settings</h3>
+        <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Risk Level Settings <span class="tip-btn">?<span class="tip-text">Create risk presets (Low/Medium/High) that users can pick. Each preset controls TP, SL, leverage, capital %, and trailing SL step.</span></span></h3>
         <div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-4);margin-bottom:var(--space-5);">
           <div id="admin-risk-levels"></div>
           <div style="margin-top:var(--space-3);border-top:1px solid var(--color-border-muted);padding-top:var(--space-3);">
@@ -986,7 +986,7 @@
               <div class="settings-grid">
                 <div class="slider-group">
                   <div class="slider-header">
-                    <label class="form-label">Take Profit %</label>
+                    <label class="form-label">Take Profit % <span class="tip-btn">?<span class="tip-text">Target profit % to close winning trades at this risk level.</span></span></label>
                     <input type="number" class="slider-num" id="rl-tp-num" min="0.1" max="20" step="0.1" value="1.0"
                       oninput="window.CryptoBot.syncSlider('rl-tp-range',Math.round(this.value*10))">
                   </div>
@@ -995,7 +995,7 @@
                 </div>
                 <div class="slider-group">
                   <div class="slider-header">
-                    <label class="form-label">Stop Loss %</label>
+                    <label class="form-label">Stop Loss % <span class="tip-btn">?<span class="tip-text">Initial stop-loss distance from entry price at this risk level.</span></span></label>
                     <input type="number" class="slider-num" id="rl-sl-num" min="0.1" max="10" step="0.1" value="1.0"
                       oninput="window.CryptoBot.syncSlider('rl-sl-range',Math.round(this.value*10))">
                   </div>
@@ -1004,7 +1004,7 @@
                 </div>
                 <div class="slider-group">
                   <div class="slider-header">
-                    <label class="form-label">Capital %</label>
+                    <label class="form-label">Capital % <span class="tip-btn">?<span class="tip-text">Percentage of futures wallet used per trade at this risk level.</span></span></label>
                     <input type="number" class="slider-num" id="rl-capital-num" min="1" max="50" step="1" value="10"
                       oninput="window.CryptoBot.syncSlider('rl-capital-range',this.value)">
                   </div>
@@ -1013,7 +1013,7 @@
                 </div>
                 <div class="slider-group">
                   <div class="slider-header">
-                    <label class="form-label">Max Leverage</label>
+                    <label class="form-label">Max Leverage <span class="tip-btn">?<span class="tip-text">Maximum leverage allowed for trades at this risk level.</span></span></label>
                     <input type="number" class="slider-num" id="rl-leverage-num" min="1" max="125" step="1" value="20"
                       oninput="window.CryptoBot.syncSlider('rl-leverage-range',this.value)">
                   </div>
@@ -1022,7 +1022,7 @@
                 </div>
                 <div class="slider-group">
                   <div class="slider-header">
-                    <label class="form-label">Max Consec Losses</label>
+                    <label class="form-label">Max Consec Losses <span class="tip-btn">?<span class="tip-text">Bot stops trading after this many consecutive losses. Resets when a trade wins.</span></span></label>
                     <input type="number" class="slider-num" id="rl-consec-num" min="0" max="10" step="1" value="2"
                       oninput="window.CryptoBot.syncSlider('rl-consec-range',this.value)">
                   </div>
@@ -1031,7 +1031,7 @@
                 </div>
                 <div class="slider-group">
                   <div class="slider-header">
-                    <label class="form-label">Top Coins</label>
+                    <label class="form-label">Top Coins <span class="tip-btn">?<span class="tip-text">Number of top coins by 24h volume the bot scans for trade setups at this risk level.</span></span></label>
                     <input type="number" class="slider-num" id="rl-topcoins-num" min="5" max="200" step="5" value="50"
                       oninput="window.CryptoBot.syncSlider('rl-topcoins-range',this.value)">
                   </div>
@@ -1045,7 +1045,7 @@
         </div>
 
         <!-- Allowed Tokens (whitelist — only trade these) -->
-        <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Allowed Tokens <span style="font-size:0.75rem;color:var(--color-text-muted);">(only trade these)</span></h3>
+        <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Allowed Tokens <span class="tip-btn">?<span class="tip-text">Whitelist: if any tokens are listed here, the bot will ONLY trade these tokens. Leave empty to trade top coins by volume.</span></span> <span style="font-size:0.75rem;color:var(--color-text-muted);">(only trade these)</span></h3>
         <div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-4);margin-bottom:var(--space-4);">
           <div style="display:flex;gap:var(--space-2);align-items:end;margin-bottom:var(--space-3);flex-wrap:wrap;">
             <div class="form-group" style="margin-bottom:0;flex:1;min-width:140px;position:relative;">
@@ -1065,7 +1065,7 @@
         </div>
 
         <!-- Banned Tokens (blacklist — never trade these) -->
-        <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Banned Tokens <span style="font-size:0.75rem;color:var(--color-text-muted);">(never trade these)</span></h3>
+        <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Banned Tokens <span class="tip-btn">?<span class="tip-text">Blacklist: the bot will never open new trades on these tokens. Existing positions will close normally.</span></span> <span style="font-size:0.75rem;color:var(--color-text-muted);">(never trade these)</span></h3>
         <div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-4);margin-bottom:var(--space-5);">
           <div style="display:flex;gap:var(--space-2);align-items:end;margin-bottom:var(--space-3);flex-wrap:wrap;">
             <div class="form-group" style="margin-bottom:0;flex:1;min-width:140px;position:relative;">
@@ -1084,18 +1084,18 @@
           <div id="admin-banned-empty" style="color:var(--color-text-muted);font-size:0.85rem;padding:var(--space-3);text-align:center;">No banned tokens. Bot can trade any coin.</div>
         </div>
 
-        <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Weekly Earnings Overview</h3>
+        <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Weekly Earnings Overview <span class="tip-btn">?<span class="tip-text">Summary of all users' weekly profits. Shows the 60/40 split, admin share, and per-user breakdown. Settle earnings here.</span></span></h3>
         <div id="admin-weekly-summary" class="summary-grid" style="margin-bottom:var(--space-4);">
           <div class="summary-card" style="border-left:3px solid var(--color-success);">
-            <span class="summary-card-label">Net P&L (All Users)</span>
+            <span class="summary-card-label">Net P&L (All Users) <span class="tip-btn">?<span class="tip-text">Combined net profit/loss across all users' trades this week.</span></span></span>
             <span id="awe-total-net" class="summary-card-value text-mono" style="font-size:1.2rem;">--</span>
           </div>
           <div class="summary-card" style="border-left:3px solid var(--color-accent);">
-            <span class="summary-card-label">Admin Share</span>
+            <span class="summary-card-label">Admin Share <span class="tip-btn">?<span class="tip-text">Platform's 40% share of net profits across all users this week.</span></span></span>
             <span id="awe-admin-share" class="summary-card-value text-mono" style="color:var(--color-accent);font-size:1.2rem;">--</span>
           </div>
           <div class="summary-card" style="border-left:3px solid #d4af37;">
-            <span class="summary-card-label">User Share</span>
+            <span class="summary-card-label">User Share <span class="tip-btn">?<span class="tip-text">Users' 60% share of net profits this week.</span></span></span>
             <span id="awe-user-share" class="summary-card-value text-mono" style="color:#d4af37;font-size:1.2rem;">--</span>
           </div>
         </div>
@@ -1107,7 +1107,7 @@
         </div>
         <div id="admin-earnings-per-user" style="margin-bottom:var(--space-5);"></div>
 
-        <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Users</h3>
+        <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Users <span class="tip-btn">?<span class="tip-text">All registered users. Manage approval, block/unblock, pause trading, adjust profit-share ratios, and view payment status.</span></span></h3>
         <div class="table-wrap" style="margin-bottom:var(--space-5);overflow-x:auto;">
           <table class="data-table" id="admin-users-table">
             <thead><tr><th>Email</th><th>Keys</th><th>Wallet</th><th>Referral</th><th>Joined</th><th>Payment</th><th>Action</th></tr></thead>
@@ -1115,7 +1115,7 @@
           </table>
         </div>
 
-        <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Pending Payments</h3>
+        <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Pending Payments <span class="tip-btn">?<span class="tip-text">Subscription payments awaiting admin approval. Review proof of payment and approve or reject.</span></span></h3>
         <div class="table-wrap" style="margin-bottom:var(--space-5);">
           <table class="data-table">
             <thead><tr><th>User</th><th>Amount</th><th>Method</th><th>Proof</th><th>Date</th><th>Action</th></tr></thead>
@@ -1125,7 +1125,7 @@
 
         <!-- Fix Tools -->
         <div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-4);margin-bottom:var(--space-5);">
-          <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Tools</h3>
+          <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Tools <span class="tip-btn">?<span class="tip-text">Admin utilities: sync trades with exchanges, debug APIs, run backtests, and fix corrupted data.</span></span></h3>
           <button class="btn btn-primary btn-sm" onclick="window.CryptoBot.fixBitunixPnl()">Sync All Trades with Exchange</button>
           <button class="btn btn-ghost btn-sm" onclick="window.CryptoBot.debugBitunix()">Debug Bitunix API</button>
           <div style="margin-top:var(--space-2);display:flex;gap:var(--space-2);align-items:center;flex-wrap:wrap;">
@@ -1143,7 +1143,7 @@
           <pre id="fix-bitunix-result" style="margin-top:var(--space-2);font-size:0.75rem;color:var(--color-text-muted);max-height:600px;overflow:auto;white-space:pre-wrap;word-break:break-all;"></pre>
         </div>
 
-        <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Pending Withdrawals</h3>
+        <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Pending Withdrawals <span class="tip-btn">?<span class="tip-text">User withdrawal requests awaiting admin processing. Approve or reject with a note.</span></span></h3>
         <div class="table-wrap">
           <table class="data-table">
             <thead><tr><th>User</th><th>Amount</th><th>Bank</th><th>Acc No.</th><th>Name</th><th>Date</th><th>Action</th></tr></thead>
@@ -1171,7 +1171,7 @@
 
       <form id="form-add-key">
         <div class="form-group">
-          <label class="form-label" for="key-platform">Platform</label>
+          <label class="form-label" for="key-platform">Platform <span class="tip-btn">?<span class="tip-text">Select which exchange this API key belongs to. Currently supports Binance and Bitunix futures.</span></span></label>
           <select class="form-input" id="key-platform" required onchange="window.CryptoBot.onPlatformChange(this.value)">
             <option value="">Select platform...</option>
             <option value="binance">Binance</option>
@@ -1195,15 +1195,15 @@
           <div id="ip-platform-note" style="font-size:var(--text-xs);color:var(--color-text-muted);"></div>
         </div>
         <div class="form-group">
-          <label class="form-label" for="key-label">Label</label>
+          <label class="form-label" for="key-label">Label <span class="tip-btn">?<span class="tip-text">A friendly name for this API key, e.g. "Main account" or "Scalp key".</span></span></label>
           <input class="form-input" type="text" id="key-label" placeholder="e.g. Main trading key" maxlength="40">
         </div>
         <div class="form-group">
-          <label class="form-label" for="key-api-key">API Key</label>
+          <label class="form-label" for="key-api-key">API Key <span class="tip-btn">?<span class="tip-text">Your exchange API key. Only enable futures trading permissions — never enable withdrawal.</span></span></label>
           <input class="form-input text-mono" type="text" id="key-api-key" placeholder="Paste your API key" required autocomplete="off">
         </div>
         <div class="form-group">
-          <label class="form-label" for="key-api-secret">API Secret</label>
+          <label class="form-label" for="key-api-secret">API Secret <span class="tip-btn">?<span class="tip-text">Your exchange API secret. Encrypted at rest — we never store it in plain text.</span></span></label>
           <input class="form-input text-mono" type="password" id="key-api-secret" placeholder="Paste your API secret" required autocomplete="off">
         </div>
         <div id="add-key-error" class="form-error" role="alert"></div>
@@ -1225,7 +1225,7 @@
     </div>
   </div>
 
-  <script src="/js/app.js?v=20260405"></script>
+  <script src="/js/app.js?v=20260405b"></script>
   <script src="/js/cashwallet-fix.js"></script>
 
 </body>
