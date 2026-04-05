@@ -236,7 +236,7 @@ function shouldExit15m(klines15, entryPrice, direction) {
 }
 
 // ── TRAILING SL: Update exchange stop-loss order ─────────────
-async function updateStopLoss(client, symbol, newSlPrice, closeSide, platform, pricePrec) {
+async function updateStopLoss(client, symbol, newSlPrice, closeSide, platform, pricePrec, existingTpPrice) {
   const fmtP = (p) => parseFloat(p.toFixed(pricePrec || 2));
   const slFmt = fmtP(newSlPrice);
 
@@ -250,14 +250,14 @@ async function updateStopLoss(client, symbol, newSlPrice, closeSide, platform, p
     });
     return true;
   } else if (platform === 'bitunix') {
-    // Update position SL via Bitunix API
+    // NOTE: Bitunix replaces the entire TP/SL config on each call.
+    // Must re-send TP alongside SL to avoid wiping it.
     const positions = await client.getOpenPositions(symbol);
     const pos = Array.isArray(positions) ? positions.find(p => p.symbol === symbol) : null;
     if (pos && pos.positionId) {
-      await client.placePositionTpSl({
-        symbol, positionId: pos.positionId,
-        slPrice: slFmt,
-      });
+      const tpslPayload = { symbol, positionId: pos.positionId, slPrice: slFmt };
+      if (existingTpPrice) tpslPayload.tpPrice = fmtP(existingTpPrice);
+      await client.placePositionTpSl(tpslPayload);
       return true;
     }
     return false;
@@ -1304,7 +1304,8 @@ async function syncTradeStatus() {
               const trailResult = calculateTrailingStep(entryPrice, curPrice, isLong, lastStep, userStepPct);
               if (trailResult) {
                 try {
-                  const stepped = await updateStopLoss(userClient, trade.symbol, trailResult.newSlPrice, null, 'bitunix', 8);
+                  const existingTp = parseFloat(trade.tp_price) || 0;
+                  const stepped = await updateStopLoss(userClient, trade.symbol, trailResult.newSlPrice, null, 'bitunix', 8, existingTp || undefined);
                   if (stepped) {
                     await db.query(
                       `UPDATE trades SET trailing_sl_price = $1, trailing_sl_last_step = $2
