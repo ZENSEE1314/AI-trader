@@ -1455,6 +1455,7 @@
   }
 
   async function runBacktest(mode, reverse) {
+    const strategy = $('#bt-strategy')?.value || 'full';
     const days = parseInt($('#backtest-days')?.value) || 7;
     const slPct = parseFloat($('#bt-sl')?.value) || 3;
     const tpPct = parseFloat($('#bt-tp')?.value) || 0;
@@ -1466,12 +1467,13 @@
     const wallet = parseInt($('#bt-wallet')?.value) || 1000;
     const topN = parseInt($('#bt-topn')?.value) || 100;
 
-    const tag = (reverse ? 'REVERSE ' : '') + `${days}d SL:${slPct}% TP:${tpPct}% Trail:${trailStep}% Lev:${leverage}x`;
+    const stratNames = { full:'Full', noKeyLevel:'No KeyLvl', noHTF:'No HTF', momentum:'Momentum', relaxedHTF:'Relaxed HTF', volumeSpike:'Vol Spike' };
+    const tag = (reverse ? 'REVERSE ' : '') + `[${stratNames[strategy]||strategy}] ${days}d SL:${slPct}% Trail:${trailStep}%`;
     const resultEl = $('#fix-bitunix-result');
     if (resultEl) resultEl.textContent = `Running ${tag} backtest (${topN} coins)... please wait`;
     try {
       const data = await api('POST', '/api/admin/backtest', {
-        topN, days, reverse,
+        strategy, topN, days, reverse,
         slPct: slPct / 100,
         tpPct: tpPct / 100,
         trailStep: trailStep / 100,

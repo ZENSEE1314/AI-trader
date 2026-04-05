@@ -1043,6 +1043,7 @@ router.post('/backtest', async (req, res) => {
     const SWING = { '4h': 10, '1h': 10, '15m': 10, '1m': 5 };
     const PROXIMITY = 0.003;
 
+    const STRATEGY = req.body.strategy || 'full';   // full | noKeyLevel | noHTF | momentum | relaxedHTF | volumeSpike
     const DAYS = Math.min(parseInt(req.body.days) || 7, 30);
     const REVERSE = req.body.reverse === true;
     const endTime = Date.now();
@@ -1229,57 +1230,180 @@ router.post('/backtest', async (req, res) => {
           if (openPos.find(p => p.symbol === sym)) continue;
           const data = coinData[sym];
 
-          // Step 1: Daily Bias — previous day candle
+          // ── Shared data prep ──
           const dIdx = data.kD.findIndex(k => parseInt(k[0]) + 86400000 > now);
-          if (dIdx < 1) continue;
-          const prevDay = data.kD[dIdx - 1];
-          const dOpen = parseFloat(prevDay[1]), dClose = parseFloat(prevDay[4]);
-          const dHigh = parseFloat(prevDay[2]), dLow = parseFloat(prevDay[3]);
-          const bodySize = Math.abs(dClose - dOpen);
-          const dRange = dHigh - dLow;
-          if (dRange > 0 && (bodySize / dRange) < 0.3) continue; // indecisive doji
-          const bias = dClose > dOpen ? 'bullish' : 'bearish';
-          const pdh = dHigh, pdl = dLow;
-
-          // Step 2: 4H + 1H structure must align with daily bias
+          const prevDay = dIdx > 0 ? data.kD[dIdx - 1] : null;
           const k4h = data.k4h.filter(k => parseInt(k[0]) <= now);
           const k1h = data.k1h.filter(k => parseInt(k[0]) <= now);
-          if (k4h.length < 30 || k1h.length < 30) continue;
-
-          const s4h = getStruct(k4h, SWING['4h']);
-          const s1h = getStruct(k1h, SWING['1h']);
-
-          const isBullHTF = (s4h.trend === 'bullish' || s4h.trend === 'bullish_lean') &&
-                            (s1h.trend === 'bullish' || s1h.trend === 'bullish_lean');
-          const isBearHTF = (s4h.trend === 'bearish' || s4h.trend === 'bearish_lean') &&
-                            (s1h.trend === 'bearish' || s1h.trend === 'bearish_lean');
-
-          let dir = null;
-          if (bias === 'bullish' && isBullHTF) dir = 'LONG';
-          else if (bias === 'bearish' && isBearHTF) dir = 'SHORT';
-          if (!dir) continue;
-          if (REVERSE) dir = dir === 'LONG' ? 'SHORT' : 'LONG';
-
-          // Step 3: Key Level (PDH/PDL/VWAP) within 0.3%
           const k15 = data.k15.filter(k => parseInt(k[0]) <= now);
+          const k1 = data.k1.filter(k => parseInt(k[0]) <= now);
           if (k15.length < 30) continue;
           const price = parseFloat(k15[k15.length-1][4]);
-          const vwap = calcVWAP(k15);
-          if (!atKeyLevel(price, pdh, pdl, vwap, dir)) continue;
 
-          // Step 4: 15M setup — HL (LONG) or LH (SHORT)
-          const s15 = getStruct(k15, SWING['15m']);
-          if ((dir === 'LONG' && !s15.hasHL) || (dir === 'SHORT' && !s15.hasLH)) continue;
+          let dir = null;
 
-          // Step 5: 1M entry — HL/LH confirmed + recency
-          const k1 = data.k1.filter(k => parseInt(k[0]) <= now);
-          if (k1.length < 15) continue;
-          const s1 = getStruct(k1, SWING['1m']);
-          if ((dir === 'LONG' && !s1.hasHL) || (dir === 'SHORT' && !s1.hasLH)) continue;
+          // ══════════════════════════════════════════════════════
+          // STRATEGY: full (Current Live — strictest)
+          // Daily → 4H+1H → KeyLevel → 15M → 1M
+          // ══════════════════════════════════════════════════════
+          if (STRATEGY === 'full') {
+            if (!prevDay) continue;
+            const dOpen = parseFloat(prevDay[1]), dClose = parseFloat(prevDay[4]);
+            const dHigh = parseFloat(prevDay[2]), dLow = parseFloat(prevDay[3]);
+            if ((dHigh-dLow) > 0 && (Math.abs(dClose-dOpen)/(dHigh-dLow)) < 0.3) continue;
+            const bias = dClose > dOpen ? 'bullish' : 'bearish';
+            if (k4h.length < 30 || k1h.length < 30) continue;
+            const s4h = getStruct(k4h, SWING['4h']), s1h = getStruct(k1h, SWING['1h']);
+            const bullHTF = (s4h.trend==='bullish'||s4h.trend==='bullish_lean')&&(s1h.trend==='bullish'||s1h.trend==='bullish_lean');
+            const bearHTF = (s4h.trend==='bearish'||s4h.trend==='bearish_lean')&&(s1h.trend==='bearish'||s1h.trend==='bearish_lean');
+            if (bias==='bullish'&&bullHTF) dir='LONG'; else if (bias==='bearish'&&bearHTF) dir='SHORT';
+            if (!dir) continue;
+            const vwap = calcVWAP(k15);
+            if (!atKeyLevel(price, dHigh, dLow, vwap, dir)) continue;
+            const s15 = getStruct(k15, SWING['15m']);
+            if ((dir==='LONG'&&!s15.hasHL)||(dir==='SHORT'&&!s15.hasLH)) continue;
+            if (k1.length < 15) continue;
+            const s1 = getStruct(k1, SWING['1m']);
+            if ((dir==='LONG'&&!s1.hasHL)||(dir==='SHORT'&&!s1.hasLH)) continue;
+            const es = dir==='LONG'?s1.lastLow:s1.lastHigh;
+            if (!es||(k1.length-1-es.index)>25) continue;
+          }
 
-          const entrySwing = dir === 'LONG' ? s1.lastLow : s1.lastHigh;
-          if (!entrySwing) continue;
-          if ((k1.length - 1 - entrySwing.index) > 25) continue;
+          // ══════════════════════════════════════════════════════
+          // STRATEGY: noKeyLevel
+          // Daily → 4H+1H → 15M → 1M  (skip VWAP/PDH/PDL)
+          // ══════════════════════════════════════════════════════
+          else if (STRATEGY === 'noKeyLevel') {
+            if (!prevDay) continue;
+            const dOpen = parseFloat(prevDay[1]), dClose = parseFloat(prevDay[4]);
+            const dHigh = parseFloat(prevDay[2]), dLow = parseFloat(prevDay[3]);
+            if ((dHigh-dLow) > 0 && (Math.abs(dClose-dOpen)/(dHigh-dLow)) < 0.3) continue;
+            const bias = dClose > dOpen ? 'bullish' : 'bearish';
+            if (k4h.length < 30 || k1h.length < 30) continue;
+            const s4h = getStruct(k4h, SWING['4h']), s1h = getStruct(k1h, SWING['1h']);
+            const bullHTF = (s4h.trend==='bullish'||s4h.trend==='bullish_lean')&&(s1h.trend==='bullish'||s1h.trend==='bullish_lean');
+            const bearHTF = (s4h.trend==='bearish'||s4h.trend==='bearish_lean')&&(s1h.trend==='bearish'||s1h.trend==='bearish_lean');
+            if (bias==='bullish'&&bullHTF) dir='LONG'; else if (bias==='bearish'&&bearHTF) dir='SHORT';
+            if (!dir) continue;
+            // Skip key level check — go straight to 15M
+            const s15 = getStruct(k15, SWING['15m']);
+            if ((dir==='LONG'&&!s15.hasHL)||(dir==='SHORT'&&!s15.hasLH)) continue;
+            if (k1.length < 15) continue;
+            const s1 = getStruct(k1, SWING['1m']);
+            if ((dir==='LONG'&&!s1.hasHL)||(dir==='SHORT'&&!s1.hasLH)) continue;
+            const es = dir==='LONG'?s1.lastLow:s1.lastHigh;
+            if (!es||(k1.length-1-es.index)>25) continue;
+          }
+
+          // ══════════════════════════════════════════════════════
+          // STRATEGY: noHTF
+          // Daily → 15M → 1M  (skip 4H+1H structure check)
+          // ══════════════════════════════════════════════════════
+          else if (STRATEGY === 'noHTF') {
+            if (!prevDay) continue;
+            const dOpen = parseFloat(prevDay[1]), dClose = parseFloat(prevDay[4]);
+            const dHigh = parseFloat(prevDay[2]), dLow = parseFloat(prevDay[3]);
+            if ((dHigh-dLow) > 0 && (Math.abs(dClose-dOpen)/(dHigh-dLow)) < 0.3) continue;
+            const bias = dClose > dOpen ? 'bullish' : 'bearish';
+            dir = bias === 'bullish' ? 'LONG' : 'SHORT';
+            // Skip 4H+1H — go straight to 15M
+            const s15 = getStruct(k15, SWING['15m']);
+            if ((dir==='LONG'&&!s15.hasHL)||(dir==='SHORT'&&!s15.hasLH)) continue;
+            if (k1.length < 15) continue;
+            const s1 = getStruct(k1, SWING['1m']);
+            if ((dir==='LONG'&&!s1.hasHL)||(dir==='SHORT'&&!s1.hasLH)) continue;
+            const es = dir==='LONG'?s1.lastLow:s1.lastHigh;
+            if (!es||(k1.length-1-es.index)>25) continue;
+          }
+
+          // ══════════════════════════════════════════════════════
+          // STRATEGY: momentum
+          // 15M 3-candle trend → 3M/15M setup → 1M entry (old logic)
+          // ══════════════════════════════════════════════════════
+          else if (STRATEGY === 'momentum') {
+            const last3 = k15.slice(-4, -1);
+            if (last3.length < 3) continue;
+            let green = 0, red = 0;
+            for (const c of last3) { if (parseFloat(c[4]) > parseFloat(c[1])) green++; else red++; }
+            if (green >= 2) dir = 'LONG'; else if (red >= 2) dir = 'SHORT';
+            if (!dir) continue;
+            // 15M setup
+            const s15 = getStruct(k15, SWING['15m']);
+            if ((dir==='LONG'&&!s15.hasHL)||(dir==='SHORT'&&!s15.hasLH)) continue;
+            // 1M entry
+            if (k1.length < 15) continue;
+            const s1 = getStruct(k1, SWING['1m']);
+            if ((dir==='LONG'&&!s1.hasHL)||(dir==='SHORT'&&!s1.hasLH)) continue;
+            const es = dir==='LONG'?s1.lastLow:s1.lastHigh;
+            if (!es||(k1.length-1-es.index)>25) continue;
+          }
+
+          // ══════════════════════════════════════════════════════
+          // STRATEGY: relaxedHTF
+          // Daily → (4H OR 1H) → KeyLevel → 15M → 1M
+          // ══════════════════════════════════════════════════════
+          else if (STRATEGY === 'relaxedHTF') {
+            if (!prevDay) continue;
+            const dOpen = parseFloat(prevDay[1]), dClose = parseFloat(prevDay[4]);
+            const dHigh = parseFloat(prevDay[2]), dLow = parseFloat(prevDay[3]);
+            if ((dHigh-dLow) > 0 && (Math.abs(dClose-dOpen)/(dHigh-dLow)) < 0.3) continue;
+            const bias = dClose > dOpen ? 'bullish' : 'bearish';
+            if (k4h.length < 30 || k1h.length < 30) continue;
+            const s4h = getStruct(k4h, SWING['4h']), s1h = getStruct(k1h, SWING['1h']);
+            // Only need ONE of 4H/1H aligned (not both)
+            const bull4h = s4h.trend==='bullish'||s4h.trend==='bullish_lean';
+            const bull1h = s1h.trend==='bullish'||s1h.trend==='bullish_lean';
+            const bear4h = s4h.trend==='bearish'||s4h.trend==='bearish_lean';
+            const bear1h = s1h.trend==='bearish'||s1h.trend==='bearish_lean';
+            if (bias==='bullish'&&(bull4h||bull1h)) dir='LONG';
+            else if (bias==='bearish'&&(bear4h||bear1h)) dir='SHORT';
+            if (!dir) continue;
+            const vwap = calcVWAP(k15);
+            if (!atKeyLevel(price, dHigh, dLow, vwap, dir)) continue;
+            const s15 = getStruct(k15, SWING['15m']);
+            if ((dir==='LONG'&&!s15.hasHL)||(dir==='SHORT'&&!s15.hasLH)) continue;
+            if (k1.length < 15) continue;
+            const s1 = getStruct(k1, SWING['1m']);
+            if ((dir==='LONG'&&!s1.hasHL)||(dir==='SHORT'&&!s1.hasLH)) continue;
+            const es = dir==='LONG'?s1.lastLow:s1.lastHigh;
+            if (!es||(k1.length-1-es.index)>25) continue;
+          }
+
+          // ══════════════════════════════════════════════════════
+          // STRATEGY: volumeSpike
+          // Full + volume must be 1.5x above 20-bar average
+          // ══════════════════════════════════════════════════════
+          else if (STRATEGY === 'volumeSpike') {
+            if (!prevDay) continue;
+            const dOpen = parseFloat(prevDay[1]), dClose = parseFloat(prevDay[4]);
+            const dHigh = parseFloat(prevDay[2]), dLow = parseFloat(prevDay[3]);
+            if ((dHigh-dLow) > 0 && (Math.abs(dClose-dOpen)/(dHigh-dLow)) < 0.3) continue;
+            const bias = dClose > dOpen ? 'bullish' : 'bearish';
+            if (k4h.length < 30 || k1h.length < 30) continue;
+            const s4h = getStruct(k4h, SWING['4h']), s1h = getStruct(k1h, SWING['1h']);
+            const bullHTF = (s4h.trend==='bullish'||s4h.trend==='bullish_lean')&&(s1h.trend==='bullish'||s1h.trend==='bullish_lean');
+            const bearHTF = (s4h.trend==='bearish'||s4h.trend==='bearish_lean')&&(s1h.trend==='bearish'||s1h.trend==='bearish_lean');
+            if (bias==='bullish'&&bullHTF) dir='LONG'; else if (bias==='bearish'&&bearHTF) dir='SHORT';
+            if (!dir) continue;
+            const vwap = calcVWAP(k15);
+            if (!atKeyLevel(price, dHigh, dLow, vwap, dir)) continue;
+            const s15 = getStruct(k15, SWING['15m']);
+            if ((dir==='LONG'&&!s15.hasHL)||(dir==='SHORT'&&!s15.hasLH)) continue;
+            // Volume spike filter: recent 5-bar volume > 1.5x 20-bar average
+            const vols = k15.slice(-20).map(k => parseFloat(k[5]));
+            const avgVol = vols.reduce((a,b)=>a+b,0)/vols.length;
+            const recentVol = vols.slice(-5).reduce((a,b)=>a+b,0)/5;
+            if (avgVol > 0 && recentVol/avgVol < 1.5) continue;
+            if (k1.length < 15) continue;
+            const s1 = getStruct(k1, SWING['1m']);
+            if ((dir==='LONG'&&!s1.hasHL)||(dir==='SHORT'&&!s1.hasLH)) continue;
+            const es = dir==='LONG'?s1.lastLow:s1.lastHigh;
+            if (!es||(k1.length-1-es.index)>25) continue;
+          }
+
+          else { continue; } // unknown strategy
+
+          if (REVERSE) dir = dir === 'LONG' ? 'SHORT' : 'LONG';
 
           // Step 6: Risk — configurable SL, trailing steps, optional TP
           const leverage = MAX_LEVERAGE;
@@ -1332,7 +1456,15 @@ router.post('/backtest', async (req, res) => {
       };
     }
 
-    const label = REVERSE ? 'REVERSE — ' : '';
+    const STRATEGY_NAMES = {
+      full: 'Daily→4H+1H→KeyLvl→15M→1M',
+      noKeyLevel: 'Daily→4H+1H→15M→1M (no key level)',
+      noHTF: 'Daily→15M→1M (skip 4H+1H)',
+      momentum: '15M 3-candle→15M setup→1M entry',
+      relaxedHTF: 'Daily→(4H OR 1H)→KeyLvl→15M→1M',
+      volumeSpike: 'Full + Volume Spike 1.5x filter',
+    };
+    const label = (REVERSE ? 'REVERSE — ' : '') + (STRATEGY_NAMES[STRATEGY] || STRATEGY) + ' | ';
     const result = simulate();
 
     const firstData = coinData[topCoins[0]];
@@ -1344,6 +1476,8 @@ router.post('/backtest', async (req, res) => {
     res.json({
       period: `${new Date(startTime).toISOString().slice(0,10)} → ${new Date(endTime).toISOString().slice(0,10)}`,
       days: DAYS,
+      strategy: STRATEGY,
+      strategyName: STRATEGY_NAMES[STRATEGY] || STRATEGY,
       reverse: REVERSE,
       coinsScanned: Object.keys(coinData).length,
       settings: { slPct: SL_PCT, tpPct: TP_PCT, trailStep: TRAIL_FIRST, leverage: MAX_LEVERAGE,
