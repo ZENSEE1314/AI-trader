@@ -2021,9 +2021,16 @@
     statusEl.style.color = '#ef4444';
     try {
       const result = await api('POST', '/api/admin/emergency-close', { symbol });
+      const details = (result.results || []).map(r => `${r.user}: ${r.status}${r.error ? ' — ' + r.error : ''}`).join('\n');
       statusEl.textContent = `${symbol}: ${result.totalClosed} closed`;
-      statusEl.style.color = 'var(--color-success)';
-      showToast(`${symbol}: ${result.totalClosed} positions closed`, 'success');
+      statusEl.style.color = result.totalClosed > 0 ? 'var(--color-success)' : '#ef4444';
+      if (details) console.log('[EMERGENCY RESULTS]\n' + details);
+      if (result.totalClosed > 0) {
+        showToast(`${symbol}: ${result.totalClosed} positions closed`, 'success');
+      } else {
+        showToast(`${symbol}: no positions closed. Check console for details.`, 'error');
+        alert('Close results:\n' + details);
+      }
       loadOpenPositions();
     } catch (err) {
       statusEl.textContent = 'Failed: ' + (err.message || err);

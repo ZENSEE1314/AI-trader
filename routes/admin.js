@@ -878,19 +878,20 @@ router.post('/emergency-close', async (req, res) => {
 
           for (const pos of openPos) {
             try {
-              // Bitunix uses LONG/SHORT for position side, BUY/SELL for order side
-              const isLong = pos.side === 'LONG';
+              // Bitunix raw: side is BUY (long) or SELL (short), positionMode is HEDGE
+              const isLong = pos.side === 'BUY';
               const closeSide = isLong ? 'SELL' : 'BUY';
-              const qty = parseFloat(pos.qty);
-              console.log(`[EMERGENCY] Closing ${pos.symbol} ${pos.side} qty=${qty} for ${key.email} (closeSide=${closeSide})`);
-              await client.placeOrder({
+              const qty = pos.qty;
+              console.log(`[EMERGENCY] Closing ${pos.symbol} side=${pos.side} qty=${qty} for ${key.email} → order side=${closeSide} tradeSide=CLOSE`);
+              const closeResult = await client.placeOrder({
                 symbol: pos.symbol, side: closeSide,
                 qty: String(qty), orderType: 'MARKET', tradeSide: 'CLOSE',
               });
+              console.log(`[EMERGENCY] Close result:`, JSON.stringify(closeResult));
               await query(
                 `UPDATE trades SET status = 'CLOSED', exit_price = $1, closed_at = NOW()
                  WHERE api_key_id = $2 AND symbol = $3 AND status = 'OPEN'`,
-                [parseFloat(pos.markPrice || pos.avgOpenPrice || 0), key.id, pos.symbol]
+                [parseFloat(pos.avgOpenPrice || 0), key.id, pos.symbol]
               );
               totalClosed++;
               results.push({ user: key.email, symbol: pos.symbol, side: pos.side, qty, status: 'CLOSED' });
