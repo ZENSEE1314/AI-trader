@@ -239,8 +239,8 @@ function isAtKeyLevel(price, pdh, pdl, vwapBands, direction) {
 
 // ── Daily Stats ─────────────────────────────────────────────
 
+// Daily stats tracked at engine level, but per-user loss limits are in cycle.js
 const dailyStats = { date: '', trades: 0, consecutiveLosses: 0 };
-const MAX_CONSEC_LOSSES = 2;
 
 function getTradingDay() {
   const now = new Date();
@@ -263,15 +263,8 @@ function recordDailyTrade(isWin) {
 }
 
 function checkDailyLimits() {
-  const tradingDay = getTradingDay();
-  if (dailyStats.date !== tradingDay) {
-    dailyStats.date = tradingDay;
-    dailyStats.trades = 0;
-    dailyStats.consecutiveLosses = 0;
-  }
-  if (dailyStats.consecutiveLosses >= MAX_CONSEC_LOSSES) {
-    return { canTrade: false, reason: `${dailyStats.consecutiveLosses} consecutive SL hits — stopped for today. Resets at 7am.` };
-  }
+  // Per-user loss limits handled in cycle.js via key.max_consec_loss
+  // Engine always scans — individual users get stopped by their own setting
   return { canTrade: true };
 }
 
