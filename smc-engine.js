@@ -20,6 +20,8 @@ const MIN_24H_VOLUME = 10_000_000;
 
 const SL_PCT = 0.03;           // 3% initial SL
 const TRAILING_STEP = 0.012;   // trail SL by 1.2% when price moves in favor
+const RR_RATIO = 3;            // risk-reward ratio 1:3
+const MAX_RISK_PCT = 0.01;     // max 1% account risk per trade
 
 // Swing lengths per timeframe
 const SWING_LENGTHS = { '4h': 10, '1h': 10, '15m': 10, '1m': 5 };
