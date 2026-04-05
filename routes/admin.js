@@ -823,6 +823,28 @@ router.get('/open-positions', async (req, res) => {
   }
 });
 
+// ── Debug: show raw Bitunix positions for first active key ────
+router.get('/debug-positions', async (req, res) => {
+  try {
+    const cryptoUtils = require('../crypto-utils');
+    const { BitunixClient } = require('../bitunix-client');
+    const keys = await query(
+      `SELECT ak.api_key_enc, ak.iv, ak.auth_tag,
+              ak.api_secret_enc, ak.secret_iv, ak.secret_auth_tag, u.email
+       FROM api_keys ak JOIN users u ON u.id = ak.user_id
+       WHERE ak.enabled = true AND ak.platform = 'bitunix' LIMIT 1`
+    );
+    if (!keys.length) return res.json({ error: 'No active Bitunix keys' });
+    const apiKey = cryptoUtils.decrypt(keys[0].api_key_enc, keys[0].iv, keys[0].auth_tag);
+    const apiSecret = cryptoUtils.decrypt(keys[0].api_secret_enc, keys[0].secret_iv, keys[0].secret_auth_tag);
+    const client = new BitunixClient({ apiKey, apiSecret });
+    const positions = await client.getOpenPositions();
+    res.json({ user: keys[0].email, raw: positions });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Emergency Close: close a specific token across ALL users ────
 router.post('/emergency-close', async (req, res) => {
   const symbol = (req.body.symbol || '').toUpperCase().trim();
