@@ -26,7 +26,9 @@ app.use('/api/wallet', require('./routes/wallet'));
 app.use('/api/chart', require('./routes/chart'));
 app.use('/api/token-leverage', require('./routes/token-leverage'));
 app.use('/api/risk-levels', require('./routes/risk-levels'));
-app.use('/health', require('./health'));
+// Fast health endpoint for Railway healthcheck (no DB queries)
+app.get('/health', (req, res) => res.json({ status: 'ok', uptime: process.uptime() }));
+app.use('/health/details', require('./health'));
 
 // Available trading pairs (cached 1 hour)
 let coinListCache = { data: null, ts: 0 };
@@ -59,8 +61,6 @@ app.get('/api/allowed-tokens', async (req, res) => {
   } catch { res.json([]); }
 });
 
-// Health check
-app.get('/health', (req, res) => res.json({ status: 'ok', version: '2.1.0' }));
 
 // Bot logs endpoint (live dashboard)
 const { getLogs, getRecentLogs, getHistoricalLogs, getScanStats, getLogCounts } = require('./bot-logger');
