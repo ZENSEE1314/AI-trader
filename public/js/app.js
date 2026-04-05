@@ -1455,7 +1455,6 @@
   }
 
   async function runBacktest(mode, reverse) {
-    const strategy = $('#bt-strategy')?.value || 'full';
     const days = parseInt($('#backtest-days')?.value) || 7;
     const slPct = parseFloat($('#bt-sl')?.value) || 3;
     const tpPct = parseFloat($('#bt-tp')?.value) || 0;
@@ -1467,13 +1466,12 @@
     const wallet = parseInt($('#bt-wallet')?.value) || 1000;
     const topN = parseInt($('#bt-topn')?.value) || 100;
 
-    const stratNames = { full:'Full', noKeyLevel:'No KeyLvl', noHTF:'No HTF', momentum:'Momentum', relaxedHTF:'Relaxed HTF', volumeSpike:'Vol Spike' };
-    const tag = (reverse ? 'REVERSE ' : '') + `[${stratNames[strategy]||strategy}] ${days}d SL:${slPct}% Trail:${trailStep}%`;
+    const tag = (reverse ? 'REVERSE ' : '') + `${days}d SL:${slPct}% TP:${tpPct}% Trail:${trailStep}% Lev:${leverage}x`;
     const resultEl = $('#fix-bitunix-result');
     if (resultEl) resultEl.textContent = `Running ${tag} backtest (${topN} coins)... please wait`;
     try {
       const data = await api('POST', '/api/admin/backtest', {
-        strategy, topN, days, reverse,
+        strategy: 'full', topN, days, reverse,
         slPct: slPct / 100,
         tpPct: tpPct / 100,
         trailStep: trailStep / 100,
@@ -1517,6 +1515,44 @@
         }
       }
       if (resultEl) resultEl.textContent = output;
+    } catch (err) {
+      if (resultEl) resultEl.textContent = 'Error: ' + err.message;
+    }
+  }
+
+  async function runAiOptimize() {
+    const days = parseInt($('#backtest-days')?.value) || 7;
+    const topN = Math.min(parseInt($('#bt-topn')?.value) || 50, 100);
+    const resultEl = $('#fix-bitunix-result');
+    if (resultEl) resultEl.textContent = `🧠 AI optimizing... testing 12 risk combos on ${topN} coins over ${days} days.\nThis takes a few minutes — please wait...`;
+    try {
+      const data = await api('POST', '/api/admin/ai-optimize', { days, topN });
+      let output = '═══════════════════════════════════════════════════════════════════════════════════\n';
+      output += '  🧠 AI OPTIMIZATION RESULTS\n';
+      output += `  Period: ${data.period} | Coins: ${data.coinsScanned} | Combos tested: ${data.combosTestedCount}\n`;
+      output += '═══════════════════════════════════════════════════════════════════════════════════\n\n';
+      output += '#  | Name               | Trades | W/L      | WR%    | P&L        | Max DD  | Settings\n';
+      output += '─'.repeat(110) + '\n';
+      for (let i = 0; i < data.results.length; i++) {
+        const r = data.results[i];
+        const s = r.settings;
+        const rank = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `#${i+1}`;
+        const pnlStr = (r.totalPnl >= 0 ? '+' : '') + '$' + r.totalPnl.toFixed(2);
+        const settingsStr = `SL:${(s.slPct*100).toFixed(1)}% TP:${s.tpPct ? (s.tpPct*100).toFixed(1)+'%' : 'trail'} Trail:${(s.trailStep*100).toFixed(1)}% Lev:${s.leverage}x Risk:${(s.riskPct*100)}% Pos:${s.maxPos} Stop:${s.maxConsecLoss||'off'}`;
+        output += `${String(rank).padEnd(3)} | ${r.name.padEnd(18)} | ${String(r.trades).padStart(6)} | ${String(r.wins+'W/'+r.losses+'L').padEnd(8)} | ${String(r.winRate+'%').padStart(6)} | ${pnlStr.padStart(10)} | ${String(r.maxDrawdown+'%').padStart(6)}  | ${settingsStr}\n`;
+      }
+      output += '─'.repeat(110) + '\n';
+      const best = data.results[0];
+      if (best) {
+        output += `\n🏆 BEST: "${best.name}" — ${best.winRate}% win rate, ${best.totalPnl >= 0 ? '+' : ''}$${best.totalPnl.toFixed(2)} P&L\n`;
+        const s = best.settings;
+        output += `   SL: ${(s.slPct*100).toFixed(1)}% | TP: ${s.tpPct ? (s.tpPct*100).toFixed(1)+'%' : 'trailing only'} | Trail: ${(s.trailStep*100).toFixed(1)}% | Leverage: ${s.leverage}x | Risk: ${(s.riskPct*100)}% | Max Pos: ${s.maxPos} | Stop after: ${s.maxConsecLoss || 'never'}\n`;
+        if (best.savedAsVersion) {
+          output += `   ✅ Saved as AI version ${best.savedAsVersion} — select it from the dropdown to use these settings!\n`;
+        }
+      }
+      if (resultEl) resultEl.textContent = output;
+      loadAiVersions().catch(() => {});
     } catch (err) {
       if (resultEl) resultEl.textContent = 'Error: ' + err.message;
     }
@@ -2227,7 +2263,7 @@
     addAllowedToken, addBannedToken, unbanGlobalToken, removeGlobalToken,
     searchAdminToken, pickAdminToken, searchUserBanToken,
     addRiskLevel, saveRiskLevel, deleteRiskLevel,
-    fixBitunixPnl, debugBitunix, runBacktest, loadAiVersions,
+    fixBitunixPnl, debugBitunix, runBacktest, loadAiVersions, runAiOptimize,
   };
 
   // ----- Init -----

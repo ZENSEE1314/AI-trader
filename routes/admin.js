@@ -1494,6 +1494,227 @@ router.post('/backtest', async (req, res) => {
   }
 });
 
+// ── AI Optimize: test many risk combos, find best settings ────
+router.post('/ai-optimize', async (req, res) => {
+  req.setTimeout(600000);
+  res.setTimeout(600000);
+  try {
+    const fetch = require('node-fetch');
+    const { getFetchOptions } = require('../proxy-agent');
+    const DAYS = Math.min(parseInt(req.body.days) || 7, 14);
+    const TOP_N = Math.min(parseInt(req.body.topN) || 50, 100);
+    const endTime = Date.now();
+    const startTime = endTime - DAYS * 86400000;
+    const SWING = { '4h': 10, '1h': 10, '15m': 10, '1m': 5 };
+    const PROXIMITY = 0.003;
+
+    async function fetchK(symbol, interval, limit) {
+      const url = `https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`;
+      for (let i = 0; i < 3; i++) {
+        try { const r = await fetch(url, { timeout: 15000, ...getFetchOptions() }); if (r.ok) return r.json(); } catch {}
+        await new Promise(r => setTimeout(r, 500));
+      }
+      return null;
+    }
+
+    function detectSwings(klines, len) {
+      const highs = klines.map(k => parseFloat(k[2])), lows = klines.map(k => parseFloat(k[3]));
+      const swings = []; let lastType = null;
+      for (let i = len; i < klines.length - len; i++) {
+        let isH = true, isL = true;
+        for (let j = -len; j <= len; j++) { if (j===0) continue; if (highs[i]<=highs[i+j]) isH=false; if (lows[i]>=lows[i+j]) isL=false; }
+        if (isH && isL) { if ((highs[i]-Math.max(highs[i-1],highs[i+1]))>(Math.min(lows[i-1],lows[i+1])-lows[i])) isL=false; else isH=false; }
+        if (isH) { if (lastType==='high'&&highs[i]>swings[swings.length-1].price) swings[swings.length-1]={type:'high',index:i,price:highs[i]}; else if (lastType!=='high') { swings.push({type:'high',index:i,price:highs[i]}); lastType='high'; } }
+        if (isL) { if (lastType==='low'&&lows[i]<swings[swings.length-1].price) swings[swings.length-1]={type:'low',index:i,price:lows[i]}; else if (lastType!=='low') { swings.push({type:'low',index:i,price:lows[i]}); lastType='low'; } }
+      }
+      return swings;
+    }
+    function getStruct(klines, len) {
+      const sw = detectSwings(klines, len); const sH = sw.filter(s=>s.type==='high'), sL = sw.filter(s=>s.type==='low');
+      const hL = sH.length>1?(sH[sH.length-1].price>sH[sH.length-2].price?'HH':'LH'):null;
+      const lL = sL.length>1?(sL[sL.length-1].price>sL[sL.length-2].price?'HL':'LL'):null;
+      const t = (hL==='LH'&&lL==='LL')?'bearish':(hL==='HH'&&lL==='HL')?'bullish':hL==='LH'?'bearish_lean':lL==='HL'?'bullish_lean':'neutral';
+      return { hasHL: lL==='HL', hasLH: hL==='LH', trend: t };
+    }
+    function calcVWAP(klines) {
+      let cv=0,ct=0,ct2=0,day=''; const vals=[];
+      for (const k of klines) { const d=new Date(parseInt(k[0])).toISOString().slice(0,10); const h=parseFloat(k[2]),l=parseFloat(k[3]),c=parseFloat(k[4]),v=parseFloat(k[5]); if(d!==day){cv=0;ct=0;ct2=0;day=d;} const tp=(h+l+c)/3; ct+=tp*v; ct2+=tp*tp*v; cv+=v; if(cv>0){const vw=ct/cv;const sd=Math.sqrt(Math.max(0,ct2/cv-vw*vw));vals.push({vwap:vw,upper:vw+sd,lower:vw-sd});}else vals.push({vwap:c,upper:c,lower:c});} return vals;
+    }
+    function atKeyLevel(price, pdh, pdl, vwap, dir) {
+      const b=vwap[vwap.length-1]; const nPDH=Math.abs(price-pdh)/pdh<PROXIMITY; const nPDL=Math.abs(price-pdl)/pdl<PROXIMITY;
+      const nU=Math.abs(price-b.upper)/b.upper<PROXIMITY; const nL=Math.abs(price-b.lower)/b.lower<PROXIMITY; const nV=Math.abs(price-b.vwap)/b.vwap<PROXIMITY;
+      return dir==='LONG'?(nL||nPDL||nV):(nU||nPDH||nV);
+    }
+
+    // Fetch data once
+    const tickerRes = await fetch('https://fapi.binance.com/fapi/v1/ticker/24hr', { timeout: 15000, ...getFetchOptions() });
+    const tickers = await tickerRes.json();
+    const BL = new Set(['USDCUSDT','ALPACAUSDT','XAUUSDT','XAGUSDT','EURUSDT','GBPUSDT','JPYUSDT']);
+    const topCoins = tickers
+      .filter(t => t.symbol.endsWith('USDT')&&!t.symbol.includes('_')&&!BL.has(t.symbol))
+      .filter(t => parseFloat(t.quoteVolume)>=10_000_000)
+      .sort((a,b) => parseFloat(b.quoteVolume)-parseFloat(a.quoteVolume))
+      .slice(0, TOP_N).map(t => t.symbol);
+
+    const coinData = {};
+    for (const sym of topCoins) {
+      const [kD,k4h,k1h,k15,k1] = await Promise.all([
+        fetchK(sym,'1d',Math.max(10,DAYS+2)), fetchK(sym,'4h',500), fetchK(sym,'1h',500), fetchK(sym,'15m',1500), fetchK(sym,'1m',1500),
+      ]);
+      if (kD&&k4h&&k1h&&k15) coinData[sym] = { kD, k4h, k1h, k15, k1: k1||[] };
+      await new Promise(r => setTimeout(r, 50));
+    }
+
+    // Simulate with given params
+    function simulate(cfg) {
+      let wallet = 1000;
+      const trades = [], openPos = [];
+      let consecLosses = 0, tradingDay = '';
+      const firstCoin = Object.keys(coinData)[0];
+      if (!firstCoin) return { trades: [], wallet };
+      const timeSteps = coinData[firstCoin].k15.map(k=>parseInt(k[0])).filter(t=>t>=startTime);
+
+      for (let step=0; step<timeSteps.length; step++) {
+        const now = timeSteps[step];
+        const d = new Date(now), h = d.getHours();
+        const dayKey = h<7 ? new Date(d.getTime()-86400000).toISOString().slice(0,10) : d.toISOString().slice(0,10);
+        if (dayKey !== tradingDay) { tradingDay = dayKey; consecLosses = 0; }
+
+        // Exit checks
+        for (let i=openPos.length-1; i>=0; i--) {
+          const pos = openPos[i]; const data = coinData[pos.symbol]; if (!data) continue;
+          const cur = data.k15.find(k=>parseInt(k[0])===now); if (!cur) continue;
+          const high=parseFloat(cur[2]), low=parseFloat(cur[3]), close=parseFloat(cur[4]);
+          if ((pos.dir==='LONG'&&low<=pos.sl)||(pos.dir==='SHORT'&&high>=pos.sl)) {
+            pos.exit=pos.sl; pos.reason=pos.lastStep>0?'TRAIL':'SL'; pos.pnl=pos.dir==='LONG'?(pos.sl-pos.entry)*pos.qty:(pos.entry-pos.sl)*pos.qty;
+            wallet+=pos.pnl; openPos.splice(i,1); if(pos.pnl<0)consecLosses++;else consecLosses=0; continue;
+          }
+          if (pos.tp && ((pos.dir==='LONG'&&high>=pos.tp)||(pos.dir==='SHORT'&&low<=pos.tp))) {
+            pos.exit=pos.tp; pos.reason='TP'; pos.pnl=pos.dir==='LONG'?(pos.tp-pos.entry)*pos.qty:(pos.entry-pos.tp)*pos.qty;
+            wallet+=pos.pnl; openPos.splice(i,1); consecLosses=0; continue;
+          }
+          const pp = pos.dir==='LONG'?(close-pos.entry)/pos.entry:(pos.entry-close)/pos.entry;
+          const ns = pos.lastStep===0?cfg.trailStep:pos.lastStep+cfg.trailStep;
+          if (pp>=ns) { let r=ns; while(pp>=r+cfg.trailStep) r+=cfg.trailStep; pos.lastStep=r;
+            const sl2=r<=cfg.trailStep?r-cfg.trailStep/2:r-cfg.trailStep;
+            pos.sl=pos.dir==='LONG'?pos.entry*(1+sl2):pos.entry*(1-sl2);
+          }
+        }
+
+        if (openPos.length>=cfg.maxPos) continue;
+        if (cfg.maxConsecLoss>0 && consecLosses>=cfg.maxConsecLoss) continue;
+
+        // Entry: always use full (live) strategy
+        for (const sym of Object.keys(coinData)) {
+          if (openPos.length>=cfg.maxPos) break;
+          if (openPos.find(p=>p.symbol===sym)) continue;
+          const data = coinData[sym];
+          const dIdx = data.kD.findIndex(k=>parseInt(k[0])+86400000>now);
+          if (dIdx<1) continue;
+          const pD = data.kD[dIdx-1];
+          const dO=parseFloat(pD[1]),dC=parseFloat(pD[4]),dH=parseFloat(pD[2]),dL=parseFloat(pD[3]);
+          if ((dH-dL)>0&&(Math.abs(dC-dO)/(dH-dL))<0.3) continue;
+          const bias = dC>dO?'bullish':'bearish';
+          const k4h=data.k4h.filter(k=>parseInt(k[0])<=now), k1h=data.k1h.filter(k=>parseInt(k[0])<=now);
+          if (k4h.length<30||k1h.length<30) continue;
+          const s4h=getStruct(k4h,SWING['4h']), s1h=getStruct(k1h,SWING['1h']);
+          const bH=(s4h.trend==='bullish'||s4h.trend==='bullish_lean')&&(s1h.trend==='bullish'||s1h.trend==='bullish_lean');
+          const bR=(s4h.trend==='bearish'||s4h.trend==='bearish_lean')&&(s1h.trend==='bearish'||s1h.trend==='bearish_lean');
+          let dir=null; if(bias==='bullish'&&bH) dir='LONG'; else if(bias==='bearish'&&bR) dir='SHORT'; if(!dir) continue;
+          const k15=data.k15.filter(k=>parseInt(k[0])<=now); if(k15.length<30) continue;
+          const price=parseFloat(k15[k15.length-1][4]);
+          const vwap=calcVWAP(k15); if(!atKeyLevel(price,dH,dL,vwap,dir)) continue;
+          const s15=getStruct(k15,SWING['15m']); if((dir==='LONG'&&!s15.hasHL)||(dir==='SHORT'&&!s15.hasLH)) continue;
+          const k1=data.k1.filter(k=>parseInt(k[0])<=now); if(k1.length<15) continue;
+          const s1=getStruct(k1,SWING['1m']); if((dir==='LONG'&&!s1.hasHL)||(dir==='SHORT'&&!s1.hasLH)) continue;
+          const es=dir==='LONG'?s1.lastLow:s1.lastHigh; if(!es||(k1.length-1-es.index)>25) continue;
+
+          const sl=dir==='LONG'?price*(1-cfg.slPct):price*(1+cfg.slPct);
+          const tp=cfg.tpPct>0?(dir==='LONG'?price*(1+cfg.tpPct):price*(1-cfg.tpPct)):null;
+          const qty=(wallet*cfg.riskPct*cfg.leverage)/price;
+          openPos.push({ symbol:sym, dir, entry:price, qty, sl, tp, lastStep:0, entryTime:now, exit:null, reason:null, pnl:null });
+          trades.push(openPos[openPos.length-1]);
+        }
+      }
+      for (const pos of openPos) { const data=coinData[pos.symbol]; if(data&&data.k15.length) { const lp=parseFloat(data.k15[data.k15.length-1][4]); pos.exit=lp;pos.reason='END';pos.pnl=pos.dir==='LONG'?(lp-pos.entry)*pos.qty:(pos.entry-lp)*pos.qty;wallet+=pos.pnl; } }
+      return { trades, wallet };
+    }
+
+    // Define risk combos to test
+    const combos = [
+      { name: 'Conservative',     slPct:0.02, tpPct:0.03,  trailStep:0.012, leverage:10, riskPct:0.05, maxPos:2, maxConsecLoss:2 },
+      { name: 'Default Live',     slPct:0.03, tpPct:0,     trailStep:0.012, leverage:20, riskPct:0.10, maxPos:3, maxConsecLoss:2 },
+      { name: 'Tight SL+TP',     slPct:0.015,tpPct:0.0225,trailStep:0.012, leverage:20, riskPct:0.10, maxPos:3, maxConsecLoss:2 },
+      { name: 'Wide SL',         slPct:0.05, tpPct:0,     trailStep:0.02,  leverage:10, riskPct:0.15, maxPos:2, maxConsecLoss:2 },
+      { name: 'High Leverage',   slPct:0.02, tpPct:0,     trailStep:0.012, leverage:50, riskPct:0.05, maxPos:3, maxConsecLoss:2 },
+      { name: 'Scalp 1%',        slPct:0.01, tpPct:0.015, trailStep:0.01,  leverage:20, riskPct:0.10, maxPos:5, maxConsecLoss:3 },
+      { name: 'No Loss Stop',    slPct:0.03, tpPct:0,     trailStep:0.012, leverage:20, riskPct:0.10, maxPos:5, maxConsecLoss:0 },
+      { name: 'Max Positions',   slPct:0.03, tpPct:0,     trailStep:0.012, leverage:20, riskPct:0.08, maxPos:10,maxConsecLoss:0 },
+      { name: 'Tight Trail 0.8%',slPct:0.02, tpPct:0,     trailStep:0.008, leverage:20, riskPct:0.10, maxPos:3, maxConsecLoss:2 },
+      { name: 'Wide Trail 2%',   slPct:0.03, tpPct:0,     trailStep:0.02,  leverage:20, riskPct:0.10, maxPos:3, maxConsecLoss:2 },
+      { name: 'Low Risk 3%',     slPct:0.03, tpPct:0,     trailStep:0.012, leverage:10, riskPct:0.03, maxPos:3, maxConsecLoss:2 },
+      { name: 'Aggressive',      slPct:0.02, tpPct:0,     trailStep:0.015, leverage:30, riskPct:0.15, maxPos:5, maxConsecLoss:0 },
+    ];
+
+    const results = [];
+    for (const c of combos) {
+      const r = simulate(c);
+      const closed = r.trades.filter(t => t.pnl !== null);
+      const wins = closed.filter(t => t.pnl > 0);
+      const totalPnl = closed.reduce((s, t) => s + t.pnl, 0);
+      let peak = 1000, maxDD = 0, running = 1000;
+      for (const t of closed) { running += t.pnl; if (running > peak) peak = running; const dd = (peak - running) / peak; if (dd > maxDD) maxDD = dd; }
+      results.push({
+        name: c.name,
+        settings: c,
+        trades: closed.length,
+        wins: wins.length,
+        losses: closed.length - wins.length,
+        winRate: closed.length ? parseFloat(((wins.length / closed.length) * 100).toFixed(1)) : 0,
+        totalPnl: parseFloat(totalPnl.toFixed(2)),
+        pnlPct: parseFloat(((totalPnl / 1000) * 100).toFixed(1)),
+        finalWallet: parseFloat(r.wallet.toFixed(2)),
+        maxDrawdown: parseFloat((maxDD * 100).toFixed(1)),
+      });
+    }
+
+    // Sort by: highest win rate first, then by total P&L
+    results.sort((a, b) => b.winRate - a.winRate || b.totalPnl - a.totalPnl);
+
+    // Save best as new AI version
+    const best = results[0];
+    if (best && best.trades > 0) {
+      const rows = await query('SELECT version FROM ai_versions ORDER BY id DESC LIMIT 1');
+      const prev = rows.length ? rows[0].version : 'v0.0';
+      const parts = prev.match(/v(\d+)\.(\d+)/);
+      const major = parts ? parseInt(parts[1]) : 1;
+      const minor = parts ? parseInt(parts[2]) + 1 : 0;
+      const newVersion = `v${major}.${minor}`;
+
+      await query(
+        `INSERT INTO ai_versions (version, trade_count, win_rate, avg_pnl, total_pnl, params, setup_weights, avoided_coins, changes)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+        [newVersion, best.trades, best.winRate / 100,
+         best.trades ? best.totalPnl / best.trades : 0, best.totalPnl,
+         JSON.stringify(best.settings), '{}', '[]',
+         `AI optimized: ${best.name} (${best.winRate}% WR, $${best.totalPnl} PnL, ${DAYS}d test)`]
+      );
+      best.savedAsVersion = newVersion;
+    }
+
+    res.json({
+      period: `${new Date(startTime).toISOString().slice(0,10)} → ${new Date(endTime).toISOString().slice(0,10)}`,
+      days: DAYS,
+      coinsScanned: Object.keys(coinData).length,
+      combosTestedCount: combos.length,
+      results,
+    });
+  } catch (err) {
+    console.error('AI optimize error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Fix corrupted trades — recalculate PnL from exchange fills per user
 router.post('/fix-trades', async (req, res) => {
   try {

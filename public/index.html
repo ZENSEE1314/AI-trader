@@ -30,7 +30,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/css/tokens.css">
-  <link rel="stylesheet" href="/css/style.css?v=20260405e">
+  <link rel="stylesheet" href="/css/style.css?v=20260405f">
 
   <link rel="icon" href="/img/logo.jpeg" type="image/jpeg">
   <style>
@@ -1133,22 +1133,9 @@
           <div style="margin-top:var(--space-4);border-top:1px solid var(--color-border-muted);padding-top:var(--space-3);">
             <strong style="font-size:0.9rem;color:var(--color-text);">Backtest Settings <span class="tip-btn">?<span class="tip-text">Configure all risk parameters before running a backtest. Pick an AI version to load its saved settings, or set manually.</span></span></strong>
 
-            <!-- Trading Strategy Selector -->
-            <div style="margin-top:var(--space-2);margin-bottom:var(--space-3);">
-              <label class="form-label" style="font-size:0.8rem;">Trading Strategy <span class="tip-btn">?<span class="tip-text">Choose which entry logic to use. Each strategy has different timeframe requirements and filters. More filters = fewer but higher-quality trades.</span></span></label>
-              <select id="bt-strategy" class="form-input" style="max-width:500px;font-size:0.8rem;">
-                <option value="full">🔒 Full (Live) — Daily → 4H+1H → Key Level → 15M → 1M</option>
-                <option value="noKeyLevel">🔓 No Key Level — Daily → 4H+1H → 15M → 1M</option>
-                <option value="relaxedHTF">🔄 Relaxed HTF — Daily → (4H OR 1H) → Key Level → 15M → 1M</option>
-                <option value="noHTF">⚡ No HTF — Daily → 15M → 1M (skip 4H+1H)</option>
-                <option value="momentum">📊 Momentum — 15M 3-candle trend → 15M setup → 1M entry</option>
-                <option value="volumeSpike">📈 Volume Spike — Full + volume must be 1.5x average</option>
-              </select>
-            </div>
-
             <!-- AI Version Selector -->
-            <div style="margin-bottom:var(--space-3);">
-              <label class="form-label" style="font-size:0.8rem;">AI Saved Settings <span class="tip-btn">?<span class="tip-text">Load risk parameters from a saved AI version. Only changes the risk sliders below — strategy is selected separately above.</span></span></label>
+            <div style="margin-top:var(--space-2);margin-bottom:var(--space-3);">
+              <label class="form-label" style="font-size:0.8rem;">AI Version <span class="tip-btn">?<span class="tip-text">Load risk parameters from a saved AI version. Each version was trained on different trade data and has different optimized settings.</span></span></label>
               <div style="display:flex;gap:var(--space-2);align-items:center;flex-wrap:wrap;">
                 <select id="bt-ai-version" class="form-input" style="max-width:400px;font-size:0.8rem;">
                   <option value="">Manual Settings</option>
@@ -1208,9 +1195,12 @@
             </div>
 
             <div style="font-size:0.75rem;color:var(--color-text-muted);margin-bottom:var(--space-2);">Daily→4H+1H→KeyLvl→15M→1M (configurable SL/TP, trailing steps)</div>
-            <div style="display:flex;gap:var(--space-2);flex-wrap:wrap;">
+            <div style="display:flex;gap:var(--space-2);flex-wrap:wrap;align-items:center;">
               <button class="btn btn-primary btn-sm" onclick="window.CryptoBot.runBacktest('strict', false)">▶ Run Backtest</button>
-              <button class="btn btn-ghost btn-sm" onclick="window.CryptoBot.runBacktest('strict', true)">↻ Reverse Direction</button>
+              <button class="btn btn-ghost btn-sm" onclick="window.CryptoBot.runBacktest('strict', true)">↻ Reverse</button>
+              <span style="color:var(--color-border-muted);">|</span>
+              <button class="btn btn-sm" style="background:linear-gradient(135deg,#8b5cf6,#6366f1);color:#fff;border:none;" onclick="window.CryptoBot.runAiOptimize()">🧠 AI Find Best Settings</button>
+              <span class="tip-btn">?<span class="tip-text">AI tests 12+ risk combinations and ranks them by win rate and profit. Finds which SL, TP, trailing step, leverage, and position limits work best.</span></span>
             </div>
           </div>
           <pre id="fix-bitunix-result" style="margin-top:var(--space-2);font-size:0.75rem;color:var(--color-text-muted);max-height:600px;overflow:auto;white-space:pre-wrap;word-break:break-all;"></pre>
@@ -1298,7 +1288,7 @@
     </div>
   </div>
 
-  <script src="/js/app.js?v=20260405e"></script>
+  <script src="/js/app.js?v=20260405f"></script>
   <script src="/js/cashwallet-fix.js"></script>
 
 </body>
