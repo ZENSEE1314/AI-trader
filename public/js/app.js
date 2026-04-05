@@ -1527,12 +1527,15 @@
     if (resultEl) resultEl.textContent = '⚛️ Starting Quantum AI Optimizer...\n';
 
     try {
-      // Stream NDJSON — read lines as they arrive, no first-byte timeout
+      // Stream NDJSON — read lines as they arrive, 10 min timeout
+      const abortCtrl = new AbortController();
+      const abortTimer = setTimeout(() => abortCtrl.abort(), 600000);
       const resp = await fetch('/api/admin/ai-optimize', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'same-origin',
         body: JSON.stringify({ days }),
+        signal: abortCtrl.signal,
       });
       if (!resp.ok) {
         const errText = await resp.text();
@@ -1656,9 +1659,11 @@
       }
 
       // Show live log + final results
+      clearTimeout(abortTimer);
       if (resultEl) resultEl.textContent = logs + '\n' + output;
       loadAiVersions().catch(() => {});
     } catch (err) {
+      if (typeof abortTimer !== 'undefined') clearTimeout(abortTimer);
       if (resultEl) resultEl.textContent += '\nError: ' + err.message;
     }
   }
@@ -1692,8 +1697,11 @@
         allowedEmpty.classList.add('hidden');
         allowedBody.innerHTML = allowed.map(t => `<tr>
           <td class="text-mono"><strong>${escapeHtml(t.symbol)}</strong></td>
-          <td><button class="btn btn-ghost btn-sm" style="font-size:0.7rem;" onclick="window.CryptoBot.removeGlobalToken('${escapeHtml(t.symbol)}')">Remove</button></td>
+          <td><button class="btn btn-danger btn-sm" style="font-size:0.7rem;cursor:pointer;" data-remove-token="${escapeHtml(t.symbol)}">✕ Remove</button></td>
         </tr>`).join('');
+        allowedBody.querySelectorAll('[data-remove-token]').forEach(btn => {
+          btn.addEventListener('click', () => removeGlobalToken(btn.dataset.removeToken));
+        });
       }
 
       const bannedBody = $('#admin-banned-tbody');
@@ -1705,8 +1713,11 @@
         bannedEmpty.classList.add('hidden');
         bannedBody.innerHTML = banned.map(t => `<tr>
           <td class="text-mono"><strong>${escapeHtml(t.symbol)}</strong></td>
-          <td><button class="btn btn-primary btn-sm" style="font-size:0.7rem;" onclick="window.CryptoBot.unbanGlobalToken('${escapeHtml(t.symbol)}')">Unban</button></td>
+          <td><button class="btn btn-primary btn-sm" style="font-size:0.7rem;cursor:pointer;" data-unban-token="${escapeHtml(t.symbol)}">Unban</button></td>
         </tr>`).join('');
+        bannedBody.querySelectorAll('[data-unban-token]').forEach(btn => {
+          btn.addEventListener('click', () => unbanGlobalToken(btn.dataset.unbanToken));
+        });
       }
     } catch (err) { /* silent */ }
   }
@@ -1734,26 +1745,39 @@
   }
 
   async function unbanGlobalToken(symbol) {
+    if (!symbol) return;
     try {
-      await api('POST', '/api/admin/remove-global-token', { symbol });
-      showToast(`${symbol} unbanned`, 'success');
+      const resp = await fetch('/api/admin/remove-global-token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ symbol }),
+      });
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.error || 'Failed');
+      showToast(symbol + ' unbanned', 'success');
       loadGlobalTokens();
     } catch (err) {
-      console.error('Unban token error:', err);
-      alert('Failed to unban ' + symbol + ': ' + (err.message || err));
+      alert('Unban failed: ' + (err.message || err));
     }
   }
 
   async function removeGlobalToken(symbol) {
-    console.log('removeGlobalToken called:', symbol);
+    if (!symbol) return;
+    if (!confirm('Remove ' + symbol + ' from allowed tokens?')) return;
     try {
-      const result = await api('POST', '/api/admin/remove-global-token', { symbol });
-      console.log('removeGlobalToken result:', result);
-      showToast(`${symbol} removed`, 'success');
+      const resp = await fetch('/api/admin/remove-global-token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ symbol }),
+      });
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.error || 'Failed');
+      showToast(symbol + ' removed', 'success');
       loadGlobalTokens();
     } catch (err) {
-      console.error('Remove token error:', err);
-      alert('Failed to remove ' + symbol + ': ' + (err.message || err));
+      alert('Remove failed: ' + (err.message || err));
     }
   }
 

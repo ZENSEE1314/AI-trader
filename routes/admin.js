@@ -1541,43 +1541,35 @@ router.post('/ai-optimize', async (req, res) => {
 
     sendLog(`Starting optimizer: ${DAYS} days, strategy-only (13 params) [Bitunix]`);
 
-    // Bitunix kline API — public, max 200 per page, paginate with startTime/endTime
+    // Bitunix kline API — public, max 200 per page, paginate backwards
     // Returns Binance-compatible arrays: [time, open, high, low, close, volume]
     async function fetchK(symbol, interval, limit) {
       const PAGE = 200;
       let all = [];
       let et = endTime;
       let remaining = limit;
-      while (remaining > 0) {
+      let pages = 0;
+      while (remaining > 0 && pages < 10) {
+        pages++;
         const batch = Math.min(remaining, PAGE);
         const url = `https://fapi.bitunix.com/api/v1/futures/market/kline?symbol=${symbol}&interval=${interval}&limit=${batch}&endTime=${et}`;
         try {
-          const r = await fetch(url, { timeout: 8000, ...getFetchOptions() });
+          const r = await fetch(url, { timeout: 5000, ...getFetchOptions() });
           if (!r.ok) break;
           const json = await r.json();
           if (json.code !== 0 || !json.data || !json.data.length) break;
-          // Convert Bitunix format to Binance-compatible arrays
           const candles = json.data.map(c => [
-            c.time,                    // [0] openTime
-            String(c.open),            // [1] open
-            String(c.high),            // [2] high
-            String(c.low),             // [3] low
-            String(c.close),           // [4] close
-            String(c.baseVol || '0'),  // [5] volume
+            c.time, String(c.open), String(c.high), String(c.low), String(c.close), String(c.baseVol || '0'),
           ]);
-          // Older candles go before existing data (paginating backwards in time)
           candles.sort((a, b) => a[0] - b[0]);
           all = candles.concat(all);
-          // Move endTime before the earliest candle we got
           const earliest = Math.min(...json.data.map(c => c.time));
           et = earliest - 1;
           remaining -= json.data.length;
           if (json.data.length < batch) break;
-          // Rate limit: Bitunix allows 10 req/s — small pause
-          await new Promise(r => setTimeout(r, 120));
+          await new Promise(r => setTimeout(r, 80));
         } catch { break; }
       }
-      // Final sort ascending by time
       all.sort((a, b) => a[0] - b[0]);
       return all.length ? all : null;
     }
@@ -1632,7 +1624,7 @@ router.post('/ai-optimize', async (req, res) => {
       const BATCH = 3;
       const failedCoins = [];
 
-      // Per-coin fetch with 60s hard timeout (Bitunix paginates at 200/page)
+      // Per-coin fetch with 25s hard timeout
       async function fetchCoin(sym) {
         return Promise.race([
           (async () => {
@@ -1641,7 +1633,7 @@ router.post('/ai-optimize', async (req, res) => {
             ]);
             return { sym, kD, k4h, k1h, k15, k1 };
           })(),
-          new Promise(resolve => setTimeout(() => resolve({ sym, kD:null, k4h:null, k1h:null, k15:null, k1:null, timedOut:true }), 60000)),
+          new Promise(resolve => setTimeout(() => resolve({ sym, kD:null, k4h:null, k1h:null, k15:null, k1:null, timedOut:true }), 25000)),
         ]);
       }
 
