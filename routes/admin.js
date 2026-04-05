@@ -1541,20 +1541,24 @@ router.post('/ai-optimize', async (req, res) => {
 
     sendLog(`Starting optimizer: ${DAYS} days, strategy-only (13 params) [Bitunix]`);
 
-    // Bitunix kline API — public, max 200 per page, paginate backwards
+    // Bitunix kline API — public, max 200 per page
     // Returns Binance-compatible arrays: [time, open, high, low, close, volume]
-    async function fetchK(symbol, interval, limit) {
+    const AbortController = globalThis.AbortController || require('abort-controller');
+    async function fetchK(symbol, interval, limit, coinAbort) {
       const PAGE = 200;
       let all = [];
       let et = endTime;
       let remaining = limit;
       let pages = 0;
-      while (remaining > 0 && pages < 10) {
+      while (remaining > 0 && pages < 8) {
+        if (coinAbort && coinAbort.aborted) break;
         pages++;
         const batch = Math.min(remaining, PAGE);
         const url = `https://fapi.bitunix.com/api/v1/futures/market/kline?symbol=${symbol}&interval=${interval}&limit=${batch}&endTime=${et}`;
         try {
-          const r = await fetch(url, { timeout: 5000, ...getFetchOptions() });
+          const opts = { timeout: 4000, ...getFetchOptions() };
+          if (coinAbort) opts.signal = coinAbort;
+          const r = await fetch(url, opts);
           if (!r.ok) break;
           const json = await r.json();
           if (json.code !== 0 || !json.data || !json.data.length) break;
@@ -1567,7 +1571,7 @@ router.post('/ai-optimize', async (req, res) => {
           et = earliest - 1;
           remaining -= json.data.length;
           if (json.data.length < batch) break;
-          await new Promise(r => setTimeout(r, 80));
+          await new Promise(r => setTimeout(r, 60));
         } catch { break; }
       }
       all.sort((a, b) => a[0] - b[0]);
@@ -1620,46 +1624,42 @@ router.post('/ai-optimize', async (req, res) => {
       const k15Limit = Math.ceil(DAYS * 24 * 4) + 100;
       const k4hLimit = Math.ceil(DAYS * 6) + 50;
       const k1hLimit = Math.ceil(DAYS * 24) + 50;
-      // Bitunix: 200 candles/page, 10 req/s limit — fetch 3 coins parallel
-      const BATCH = 3;
       const failedCoins = [];
 
-      // Per-coin fetch with 25s hard timeout
-      async function fetchCoin(sym) {
-        return Promise.race([
-          (async () => {
-            const [kD,k4h,k1h,k15,k1] = await Promise.all([
-              fetchK(sym,'1d',Math.max(10,DAYS+2)), fetchK(sym,'4h',k4hLimit), fetchK(sym,'1h',k1hLimit), fetchK(sym,'15m',k15Limit), fetchK(sym,'1m',1500),
-            ]);
-            return { sym, kD, k4h, k1h, k15, k1 };
-          })(),
-          new Promise(resolve => setTimeout(() => resolve({ sym, kD:null, k4h:null, k1h:null, k15:null, k1:null, timedOut:true }), 25000)),
-        ]);
-      }
-
-      for (let b = 0; b < topCoins.length; b += BATCH) {
-        const batch = topCoins.slice(b, b + BATCH);
-        sendLog(`  Fetching: ${batch.join(', ')}`);
-        const fetchResults = await Promise.all(batch.map(fetchCoin));
-        for (const r of fetchResults) {
-          if (r.timedOut) {
-            failedCoins.push(r.sym);
-            sendLog(`  ❌ ${r.sym} — TIMEOUT (no futures data?)`);
-          } else if (r.kD&&r.k4h&&r.k1h&&r.k15) {
-            coinData[r.sym] = { kD:r.kD, k4h:r.k4h, k1h:r.k1h, k15:r.k15, k1:r.k1||[] };
-            sendLog(`  ✅ ${r.sym} — ${r.k15.length} candles`);
+      // Fetch ONE coin at a time — avoids Bitunix rate limit stalls
+      for (let i = 0; i < topCoins.length; i++) {
+        const sym = topCoins[i];
+        const ac = new AbortController();
+        const timer = setTimeout(() => ac.abort(), 20000);
+        try {
+          const [kD,k4h,k1h,k15,k1] = await Promise.all([
+            fetchK(sym,'1d',Math.max(10,DAYS+2),ac.signal),
+            fetchK(sym,'4h',k4hLimit,ac.signal),
+            fetchK(sym,'1h',k1hLimit,ac.signal),
+            fetchK(sym,'15m',k15Limit,ac.signal),
+            fetchK(sym,'1m',1500,ac.signal),
+          ]);
+          clearTimeout(timer);
+          if (kD&&k4h&&k1h&&k15) {
+            coinData[sym] = { kD, k4h, k1h, k15, k1:k1||[] };
+            sendLog(`  ✅ ${sym}`);
           } else {
-            failedCoins.push(r.sym);
-            const missing = [!r.kD&&'1d',!r.k4h&&'4h',!r.k1h&&'1h',!r.k15&&'15m'].filter(Boolean).join(',');
-            sendLog(`  ❌ ${r.sym} — missing ${missing || 'data'}`);
+            failedCoins.push(sym);
+            const missing = [!kD&&'1d',!k4h&&'4h',!k1h&&'1h',!k15&&'15m'].filter(Boolean).join(',');
+            sendLog(`  ❌ ${sym} — missing ${missing}`);
           }
+        } catch {
+          clearTimeout(timer);
+          failedCoins.push(sym);
+          sendLog(`  ❌ ${sym} — timeout`);
         }
-        const done = Math.min(b+BATCH, topCoins.length);
-        sendProgress('fetch', Math.round(done/topCoins.length*100));
-        if (b + BATCH < topCoins.length) await new Promise(r => setTimeout(r, 500));
+        if ((i+1) % 5 === 0 || i === topCoins.length - 1) {
+          sendLog(`  ${i+1}/${topCoins.length} done (${Object.keys(coinData).length} OK)`);
+          sendProgress('fetch', Math.round((i+1)/topCoins.length*100));
+        }
       }
-      sendLog(`Fetch done: ${Object.keys(coinData).length} OK, ${failedCoins.length} failed [Bitunix]`);
-      if (failedCoins.length) sendLog(`Remove these tokens (no futures data): ${failedCoins.join(', ')}`);
+      sendLog(`Fetch done: ${Object.keys(coinData).length}/${topCoins.length} [Bitunix]`);
+      if (failedCoins.length) sendLog(`Failed: ${failedCoins.join(', ')}`);
       // Save to cache
       _candleCache.data = coinData;
       _candleCache.tokens = cacheKey;
