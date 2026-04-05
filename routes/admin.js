@@ -785,15 +785,16 @@ router.delete('/global-tokens/:symbol', async (req, res) => {
 });
 
 // POST-based remove (more reliable than DELETE with URL params)
-router.post('/global-tokens/remove', async (req, res) => {
+router.post('/remove-global-token', async (req, res) => {
   try {
     const symbol = (req.body.symbol || '').toUpperCase().trim();
     if (!symbol) return res.status(400).json({ error: 'Symbol required' });
-    await query('DELETE FROM global_token_settings WHERE symbol = $1', [symbol]);
-    res.json({ ok: true });
+    const result = await query('DELETE FROM global_token_settings WHERE symbol = $1', [symbol]);
+    console.log(`[ADMIN] Removed global token: ${symbol}`);
+    res.json({ ok: true, symbol });
   } catch (err) {
     console.error('Global token remove error:', err.message);
-    res.status(500).json({ error: 'Server error' });
+    res.status(500).json({ error: err.message });
   }
 });
 
@@ -1613,25 +1614,27 @@ router.post('/ai-optimize', async (req, res) => {
 
       for (let b = 0; b < topCoins.length; b += BATCH) {
         const batch = topCoins.slice(b, b + BATCH);
+        sendLog(`  Fetching: ${batch.join(', ')}`);
         const fetchResults = await Promise.all(batch.map(fetchCoin));
         for (const r of fetchResults) {
           if (r.timedOut) {
-            failedCoins.push(r.sym + '(timeout)');
-            sendLog(`  ${r.sym} timed out - skipped`);
+            failedCoins.push(r.sym);
+            sendLog(`  ❌ ${r.sym} — TIMEOUT (no futures data?)`);
           } else if (r.kD&&r.k4h&&r.k1h&&r.k15) {
             coinData[r.sym] = { kD:r.kD, k4h:r.k4h, k1h:r.k1h, k15:r.k15, k1:r.k1||[] };
+            sendLog(`  ✅ ${r.sym} — ${r.k15.length} candles`);
           } else {
-            failedCoins.push(r.sym + '(no data)');
+            failedCoins.push(r.sym);
+            const missing = [!r.kD&&'1d',!r.k4h&&'4h',!r.k1h&&'1h',!r.k15&&'15m'].filter(Boolean).join(',');
+            sendLog(`  ❌ ${r.sym} — missing ${missing || 'data'}`);
           }
         }
         const done = Math.min(b+BATCH, topCoins.length);
-        const ok = Object.keys(coinData).length;
-        sendLog(`Fetched ${done}/${topCoins.length} tokens (${ok} OK${failedCoins.length ? ', ' + failedCoins.length + ' failed' : ''})`);
         sendProgress('fetch', Math.round(done/topCoins.length*100));
-        // Rate limit pause between batches
         if (b + BATCH < topCoins.length) await new Promise(r => setTimeout(r, 300));
       }
-      if (failedCoins.length) sendLog(`⚠️ Failed: ${failedCoins.join(', ')}`);
+      sendLog(`Fetch done: ${Object.keys(coinData).length} OK, ${failedCoins.length} failed`);
+      if (failedCoins.length) sendLog(`Remove these tokens (no futures data): ${failedCoins.join(', ')}`);
       // Save to cache
       _candleCache.data = coinData;
       _candleCache.tokens = cacheKey;

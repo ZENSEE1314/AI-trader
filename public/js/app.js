@@ -1735,23 +1735,25 @@
 
   async function unbanGlobalToken(symbol) {
     try {
-      await api('POST', '/api/admin/global-tokens/remove', { symbol });
+      await api('POST', '/api/admin/remove-global-token', { symbol });
       showToast(`${symbol} unbanned`, 'success');
       loadGlobalTokens();
     } catch (err) {
       console.error('Unban token error:', err);
-      showToast(err.message || 'Failed to unban token', 'error');
+      alert('Failed to unban ' + symbol + ': ' + (err.message || err));
     }
   }
 
   async function removeGlobalToken(symbol) {
+    console.log('removeGlobalToken called:', symbol);
     try {
-      await api('POST', '/api/admin/global-tokens/remove', { symbol });
+      const result = await api('POST', '/api/admin/remove-global-token', { symbol });
+      console.log('removeGlobalToken result:', result);
       showToast(`${symbol} removed`, 'success');
       loadGlobalTokens();
     } catch (err) {
       console.error('Remove token error:', err);
-      showToast(err.message || 'Failed to remove token', 'error');
+      alert('Failed to remove ' + symbol + ': ' + (err.message || err));
     }
   }
 
