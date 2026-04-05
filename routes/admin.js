@@ -873,15 +873,15 @@ router.post('/backtest', async (req, res) => {
     const TOP_N = parseInt(req.body.topN) || 100;
     const WALLET_START = 1000;
     const RISK_PCT = 0.10;
-    const LEVERAGE = 20;
     const MAX_POS = 3;
-    const TP_PCT = 0.01;
-    const TRAILING = { INIT: 0.01, FIRST: 0.013, STEP: 0.01 };
-    const SWING = { '15m': 10, '3m': 10, '1m': 5 };
+    const RR_RATIO = 1.5;
+    const MAX_RISK_PCT = 0.03;
+    const MIN_SL_PCT = 0.0015;
+    const SWING = { '4h': 10, '1h': 10, '15m': 10, '1m': 5 };
+    const PROXIMITY = 0.003;
 
     const DAYS = Math.min(parseInt(req.body.days) || 7, 15);
     const REVERSE = req.body.reverse === true;
-    const TF_MODE = req.body.timeframe === 'fast' ? 'fast' : 'standard';
     const endTime = Date.now();
 
     async function fetchK(symbol, interval, limit, et) {
@@ -896,27 +896,7 @@ router.post('/backtest', async (req, res) => {
       return null;
     }
 
-    // Paginated fetch for 3m and 1m to get more history
-    async function fetchPaginated(symbol, interval, startTime) {
-      const all = [];
-      let et = endTime;
-      const msPerCandle = { '1m': 60000, '3m': 180000 }[interval] || 60000;
-      for (let page = 0; page < 2; page++) {
-        const data = await fetchK(symbol, interval, 1500, et);
-        if (!data || !data.length) break;
-        const filtered = data.filter(k => parseInt(k[0]) >= startTime);
-        all.unshift(...filtered);
-        const oldest = parseInt(data[0][0]);
-        if (oldest <= startTime) break;
-        et = oldest - 1;
-        await new Promise(r => setTimeout(r, 150));
-      }
-      // Dedupe by timestamp
-      const seen = new Set();
-      return all.filter(k => { const t = k[0]; if (seen.has(t)) return false; seen.add(t); return true; });
-    }
-
-    // Swing detection
+    // Swing detection (same as smc-engine.js)
     function detectSwings(klines, len) {
       const highs = klines.map(k => parseFloat(k[2]));
       const lows = klines.map(k => parseFloat(k[3]));
@@ -954,7 +934,11 @@ router.post('/backtest', async (req, res) => {
       const sL = sw.filter(s => s.type === 'low');
       const hLabel = sH.length > 1 ? (sH[sH.length-1].price > sH[sH.length-2].price ? 'HH' : 'LH') : null;
       const lLabel = sL.length > 1 ? (sL[sL.length-1].price > sL[sL.length-2].price ? 'HL' : 'LL') : null;
-      return { hasHL: lLabel === 'HL', hasLH: hLabel === 'LH',
+      const trend = (hLabel === 'LH' && lLabel === 'LL') ? 'bearish'
+        : (hLabel === 'HH' && lLabel === 'HL') ? 'bullish'
+        : hLabel === 'LH' ? 'bearish_lean'
+        : lLabel === 'HL' ? 'bullish_lean' : 'neutral';
+      return { hasHL: lLabel === 'HL', hasLH: hLabel === 'LH', trend,
         lastHigh: sH.length ? sH[sH.length-1] : null, lastLow: sL.length ? sL[sL.length-1] : null };
     }
 
@@ -972,13 +956,13 @@ router.post('/backtest', async (req, res) => {
       return vals;
     }
 
-    function atKeyLevel(price, pdh, pdl, vwap, dir, proximity) {
+    function atKeyLevel(price, pdh, pdl, vwap, dir) {
       const b = vwap[vwap.length-1];
-      const nPDH = Math.abs(price-pdh)/pdh < proximity;
-      const nPDL = Math.abs(price-pdl)/pdl < proximity;
-      const nU = Math.abs(price-b.upper)/b.upper < proximity;
-      const nL = Math.abs(price-b.lower)/b.lower < proximity;
-      const nV = Math.abs(price-b.vwap)/b.vwap < proximity;
+      const nPDH = Math.abs(price-pdh)/pdh < PROXIMITY;
+      const nPDL = Math.abs(price-pdl)/pdl < PROXIMITY;
+      const nU = Math.abs(price-b.upper)/b.upper < PROXIMITY;
+      const nL = Math.abs(price-b.lower)/b.lower < PROXIMITY;
+      const nV = Math.abs(price-b.vwap)/b.vwap < PROXIMITY;
       return dir === 'LONG' ? (nL || nPDL || nV) : (nU || nPDH || nV);
     }
 
@@ -992,62 +976,46 @@ router.post('/backtest', async (req, res) => {
       .sort((a, b) => parseFloat(b.quoteVolume) - parseFloat(a.quoteVolume))
       .slice(0, TOP_N).map(t => t.symbol);
 
+    // Fetch: Daily, 4H, 1H, 15M for all coins + 1M (last ~25h only)
     const coinData = {};
     const startTime = endTime - DAYS * 86400000;
     for (const sym of topCoins) {
-      if (TF_MODE === 'fast') {
-        // Fast: 3m trend, 1m structure, 3m for exits (covers ~3 days max)
-        const [k3, k1, kD] = await Promise.all([
-          fetchK(sym, '3m', 1500),
-          fetchK(sym, '1m', 1500),
-          fetchK(sym, '1d', Math.max(10, DAYS + 2)),
-        ]);
-        if (k3 && k1 && kD) {
-          coinData[sym] = { k3, k1, kD };
-        }
-      } else {
-        // Standard: 15m trend, 3m structure, 15m for exits
-        const k3Limit = DAYS <= 7 ? 500 : 1500;
-        const [k15, k3, kD] = await Promise.all([
-          fetchK(sym, '15m', 1500),
-          fetchK(sym, '3m', k3Limit),
-          fetchK(sym, '1d', Math.max(10, DAYS + 2)),
-        ]);
-        if (k15 && k3 && kD) {
-          coinData[sym] = { k15, k3, kD };
-        }
+      const [kD, k4h, k1h, k15, k1] = await Promise.all([
+        fetchK(sym, '1d', Math.max(10, DAYS + 2)),
+        fetchK(sym, '4h', 500),
+        fetchK(sym, '1h', 500),
+        fetchK(sym, '15m', 1500),
+        fetchK(sym, '1m', 1500),
+      ]);
+      if (kD && k4h && k1h && k15) {
+        coinData[sym] = { kD, k4h, k1h, k15, k1: k1 || [] };
       }
       await new Promise(r => setTimeout(r, 50));
     }
 
-    // Run simulation for a given key level mode
-    // Standard: 15m trend → 3m structure, 15m exits
-    // Fast: 3m trend → 1m structure, 3m exits
-    function simulate(mode) {
-      const isFast = TF_MODE === 'fast';
+    // Simulate: Daily bias → 4H+1H → Key level → 15M setup → 1M entry → Swing SL, 1:1.5 RR
+    function simulate() {
       let wallet = WALLET_START;
       const trades = [];
       const openPos = [];
       const firstCoin = Object.keys(coinData)[0];
       if (!firstCoin) return { trades: [], wallet };
 
-      // Time steps: scan on 15m (standard) or 3m (fast)
-      const scanKey = isFast ? 'k3' : 'k15';
-      const timeSteps = coinData[firstCoin][scanKey].map(k => parseInt(k[0])).filter(t => t >= startTime);
+      // Scan on 15M steps
+      const timeSteps = coinData[firstCoin].k15.map(k => parseInt(k[0])).filter(t => t >= startTime);
 
       for (let step = 0; step < timeSteps.length; step++) {
         const now = timeSteps[step];
 
-        // Check open positions
+        // Exit checks on 15M candles (covers full window)
         for (let i = openPos.length - 1; i >= 0; i--) {
           const pos = openPos[i];
           const data = coinData[pos.symbol];
           if (!data) continue;
-          const exitCandles = data[scanKey];
-          const curCandle = exitCandles.find(k => parseInt(k[0]) === now);
+          const curCandle = data.k15.find(k => parseInt(k[0]) === now);
           if (!curCandle) continue;
 
-          const high = parseFloat(curCandle[2]), low = parseFloat(curCandle[3]), close = parseFloat(curCandle[4]);
+          const high = parseFloat(curCandle[2]), low = parseFloat(curCandle[3]);
           if ((pos.dir === 'LONG' && low <= pos.sl) || (pos.dir === 'SHORT' && high >= pos.sl)) {
             pos.exit = pos.sl; pos.reason = 'SL'; pos.exitTime = now;
             pos.pnl = pos.dir === 'LONG' ? (pos.sl - pos.entry) * pos.qty : (pos.entry - pos.sl) * pos.qty;
@@ -1058,17 +1026,6 @@ router.post('/backtest', async (req, res) => {
             pos.pnl = pos.dir === 'LONG' ? (pos.tp - pos.entry) * pos.qty : (pos.entry - pos.tp) * pos.qty;
             wallet += pos.pnl; openPos.splice(i, 1); continue;
           }
-          // Trailing SL
-          const pp = pos.dir === 'LONG' ? (close - pos.entry) / pos.entry : (pos.entry - close) / pos.entry;
-          const ns = pos.lastStep === 0 ? TRAILING.FIRST : pos.lastStep + TRAILING.STEP;
-          if (pp >= ns) {
-            let reached = ns;
-            while (pp >= reached + TRAILING.STEP) reached += TRAILING.STEP;
-            pos.lastStep = reached;
-            pos.sl = pos.dir === 'LONG'
-              ? pos.entry * (1 + reached - TRAILING.STEP)
-              : pos.entry * (1 - reached + TRAILING.STEP);
-          }
         }
 
         if (openPos.length >= MAX_POS) continue;
@@ -1078,68 +1035,85 @@ router.post('/backtest', async (req, res) => {
           if (openPos.find(p => p.symbol === sym)) continue;
           const data = coinData[sym];
 
-          // Trend candles: 15m (standard) or 3m (fast)
-          const trendCandles = (isFast ? data.k3 : data.k15).filter(k => parseInt(k[0]) <= now);
-          // Structure candles: 3m (standard) or 1m (fast)
-          const structCandles = (isFast ? data.k1 : data.k3).filter(k => parseInt(k[0]) <= now);
-          const minTrend = isFast ? 20 : 30;
-          const minStruct = isFast ? 15 : 20;
-          if (trendCandles.length < minTrend || structCandles.length < minStruct) continue;
+          // Step 1: Daily Bias — previous day candle
+          const dIdx = data.kD.findIndex(k => parseInt(k[0]) + 86400000 > now);
+          if (dIdx < 1) continue;
+          const prevDay = data.kD[dIdx - 1];
+          const dOpen = parseFloat(prevDay[1]), dClose = parseFloat(prevDay[4]);
+          const dHigh = parseFloat(prevDay[2]), dLow = parseFloat(prevDay[3]);
+          const bodySize = Math.abs(dClose - dOpen);
+          const dRange = dHigh - dLow;
+          if (dRange > 0 && (bodySize / dRange) < 0.3) continue; // indecisive doji
+          const bias = dClose > dOpen ? 'bullish' : 'bearish';
+          const pdh = dHigh, pdl = dLow;
 
-          // 3-candle trend
-          const last3 = trendCandles.slice(-4, -1);
-          if (last3.length < 3) continue;
-          let gc = 0, rc = 0;
-          for (const c of last3) { parseFloat(c[4]) > parseFloat(c[1]) ? gc++ : rc++; }
+          // Step 2: 4H + 1H structure must align with daily bias
+          const k4h = data.k4h.filter(k => parseInt(k[0]) <= now);
+          const k1h = data.k1h.filter(k => parseInt(k[0]) <= now);
+          if (k4h.length < 30 || k1h.length < 30) continue;
+
+          const s4h = getStruct(k4h, SWING['4h']);
+          const s1h = getStruct(k1h, SWING['1h']);
+
+          const isBullHTF = (s4h.trend === 'bullish' || s4h.trend === 'bullish_lean') &&
+                            (s1h.trend === 'bullish' || s1h.trend === 'bullish_lean');
+          const isBearHTF = (s4h.trend === 'bearish' || s4h.trend === 'bearish_lean') &&
+                            (s1h.trend === 'bearish' || s1h.trend === 'bearish_lean');
+
           let dir = null;
-          if (gc >= 2) dir = 'LONG'; else if (rc >= 2) dir = 'SHORT';
+          if (bias === 'bullish' && isBullHTF) dir = 'LONG';
+          else if (bias === 'bearish' && isBearHTF) dir = 'SHORT';
           if (!dir) continue;
           if (REVERSE) dir = dir === 'LONG' ? 'SHORT' : 'LONG';
 
-          const price = parseFloat(trendCandles[trendCandles.length-1][4]);
-          const dIdx = data.kD.findIndex(k => parseInt(k[0]) + 86400000 > now);
-          const pdh = dIdx > 0 ? parseFloat(data.kD[dIdx-1][2]) : price * 1.01;
-          const pdl = dIdx > 0 ? parseFloat(data.kD[dIdx-1][3]) : price * 0.99;
+          // Step 3: Key Level (PDH/PDL/VWAP) within 0.3%
+          const k15 = data.k15.filter(k => parseInt(k[0]) <= now);
+          if (k15.length < 30) continue;
+          const price = parseFloat(k15[k15.length-1][4]);
+          const vwap = calcVWAP(k15);
+          if (!atKeyLevel(price, pdh, pdl, vwap, dir)) continue;
 
-          if (mode !== 'none') {
-            const proximity = mode === 'strict' ? 0.003 : 0.01;
-            const vwap = calcVWAP(trendCandles);
-            if (!atKeyLevel(price, pdh, pdl, vwap, dir, proximity)) continue;
-          }
+          // Step 4: 15M setup — HL (LONG) or LH (SHORT)
+          const s15 = getStruct(k15, SWING['15m']);
+          if ((dir === 'LONG' && !s15.hasHL) || (dir === 'SHORT' && !s15.hasLH)) continue;
 
-          // Structure check
-          const swingLen = isFast ? SWING['1m'] : SWING['3m'];
-          const struct = getStruct(structCandles, swingLen);
-          if ((dir === 'LONG' && !struct.hasHL) || (dir === 'SHORT' && !struct.hasLH)) continue;
+          // Step 5: 1M entry — HL/LH confirmed + recency
+          const k1 = data.k1.filter(k => parseInt(k[0]) <= now);
+          if (k1.length < 15) continue;
+          const s1 = getStruct(k1, SWING['1m']);
+          if ((dir === 'LONG' && !s1.hasHL) || (dir === 'SHORT' && !s1.hasLH)) continue;
 
-          // Recency check
-          const es = dir === 'LONG' ? struct.lastLow : struct.lastHigh;
-          const maxAge = isFast ? 25 : 30;
-          if (!es || (structCandles.length - 1 - es.index) > maxAge) continue;
+          const entrySwing = dir === 'LONG' ? s1.lastLow : s1.lastHigh;
+          if (!entrySwing) continue;
+          if ((k1.length - 1 - entrySwing.index) > 25) continue;
 
-          // Volume check on trend candles
-          const volWindow = isFast ? 20 : 10;
-          const volRecent = isFast ? 5 : 3;
-          const vols = trendCandles.slice(-volWindow).map(k => parseFloat(k[5]));
-          const rv = vols.slice(-volRecent).reduce((a,b)=>a+b,0)/volRecent;
-          const av = vols.reduce((a,b)=>a+b,0)/vols.length;
-          if (av > 0 && rv/av < 0.8) continue;
+          // Step 6: Risk — SL at 1M swing + 0.1% buffer, 1:1.5 RR
+          const slPrice = dir === 'LONG'
+            ? entrySwing.price * 0.999
+            : entrySwing.price * 1.001;
+          const slDist = Math.abs(price - slPrice) / price;
+          if (slDist < MIN_SL_PCT) continue;
+
+          const leverage = (sym === 'BTCUSDT' || sym === 'ETHUSDT') ? 100 : 20;
+          if (slDist * leverage > MAX_RISK_PCT * leverage) continue;
+
+          const tpDist = slDist * RR_RATIO;
+          const sl = slPrice;
+          const tp = dir === 'LONG' ? price * (1 + tpDist) : price * (1 - tpDist);
 
           const tradeUsdt = wallet * RISK_PCT;
-          const qty = (tradeUsdt * LEVERAGE) / price;
-          const sl = dir === 'LONG' ? price * (1 - TRAILING.INIT) : price * (1 + TRAILING.INIT);
-          const tp = dir === 'LONG' ? price * (1 + TP_PCT) : price * (1 - TP_PCT);
-          const trade = { symbol: sym, dir, entry: price, qty, sl, tp, lastStep: 0, entryTime: now, exit: null, reason: null, pnl: null, exitTime: null };
+          const qty = (tradeUsdt * leverage) / price;
+          const trade = { symbol: sym, dir, entry: price, qty, sl, tp, entryTime: now, exit: null, reason: null, pnl: null, exitTime: null };
           openPos.push(trade);
           trades.push(trade);
         }
       }
 
+      // Close remaining positions at last price
       for (const pos of openPos) {
         const data = coinData[pos.symbol];
-        const closeCandles = data ? data[scanKey] : null;
-        if (closeCandles && closeCandles.length) {
-          const lp = parseFloat(closeCandles[closeCandles.length-1][4]);
+        if (data && data.k15.length) {
+          const lp = parseFloat(data.k15[data.k15.length-1][4]);
           pos.exit = lp; pos.reason = 'END'; pos.exitTime = endTime;
           pos.pnl = pos.dir === 'LONG' ? (lp - pos.entry) * pos.qty : (pos.entry - lp) * pos.qty;
           wallet += pos.pnl;
@@ -1171,25 +1145,20 @@ router.post('/backtest', async (req, res) => {
       };
     }
 
-    const mode = req.body.mode || 'strict';
-    const labels = { strict: 'Strict (0.3% key level)', relaxed: 'Relaxed (1% key level)', none: 'No Key Level (trend + structure only)' };
-    const tfLabel = TF_MODE === 'fast' ? '[3m→1m] ' : '[15m→3m] ';
-    const prefix = (REVERSE ? 'REVERSE ' : '') + tfLabel;
-    const result = simulate(mode);
+    const label = REVERSE ? 'REVERSE — ' : '';
+    const result = simulate();
 
     const firstData = coinData[topCoins[0]];
-    const dp = TF_MODE === 'fast'
-      ? { k3m: firstData?.k3?.length || 0, k1m: firstData?.k1?.length || 0 }
-      : { k15m: firstData?.k15?.length || 0, k3m: firstData?.k3?.length || 0 };
-
     res.json({
       period: `${new Date(startTime).toISOString().slice(0,10)} → ${new Date(endTime).toISOString().slice(0,10)}`,
       days: DAYS,
       reverse: REVERSE,
-      timeframe: TF_MODE,
       coinsScanned: Object.keys(coinData).length,
-      dataPoints: dp,
-      strategy: summarize(prefix + (labels[mode] || labels.strict), result),
+      dataPoints: {
+        k4h: firstData?.k4h?.length || 0, k1h: firstData?.k1h?.length || 0,
+        k15m: firstData?.k15?.length || 0, k1m: firstData?.k1?.length || 0,
+      },
+      strategy: summarize(label + 'Daily→4H+1H→KeyLvl→15M→1M (1:1.5 RR)', result),
     });
   } catch (err) {
     console.error('Backtest error:', err);

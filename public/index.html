@@ -1099,17 +1099,10 @@
               <option value="14">14</option>
             </select>
           </div>
-          <div style="margin-top:var(--space-2);font-size:0.75rem;color:var(--color-text-muted);">15m trend → 3m structure (current strategy)</div>
+          <div style="margin-top:var(--space-2);font-size:0.75rem;color:var(--color-text-muted);">Daily→4H+1H→KeyLvl→15M→1M (swing SL, 1:1.5 RR)</div>
           <div style="display:flex;gap:var(--space-2);flex-wrap:wrap;margin-top:var(--space-1);">
-            <button class="btn btn-ghost btn-sm" onclick="window.CryptoBot.runBacktest('strict', false)">Strict</button>
-            <button class="btn btn-ghost btn-sm" onclick="window.CryptoBot.runBacktest('relaxed', false)">Relaxed</button>
-            <button class="btn btn-ghost btn-sm" onclick="window.CryptoBot.runBacktest('none', false)">No Key Level</button>
-            <button class="btn btn-ghost btn-sm" onclick="window.CryptoBot.runBacktest('none', true)">Reverse</button>
-          </div>
-          <div style="margin-top:var(--space-2);font-size:0.75rem;color:var(--color-text-muted);">3m trend → 1m structure (faster signals)</div>
-          <div style="display:flex;gap:var(--space-2);flex-wrap:wrap;margin-top:var(--space-1);">
-            <button class="btn btn-ghost btn-sm" onclick="window.CryptoBot.runBacktest('none', false, 'fast')">Fast Normal</button>
-            <button class="btn btn-ghost btn-sm" onclick="window.CryptoBot.runBacktest('none', true, 'fast')">Fast Reverse</button>
+            <button class="btn btn-ghost btn-sm" onclick="window.CryptoBot.runBacktest('strict', false)">Backtest Normal</button>
+            <button class="btn btn-ghost btn-sm" onclick="window.CryptoBot.runBacktest('strict', true)">Backtest Reverse</button>
           </div>
           <pre id="fix-bitunix-result" style="margin-top:var(--space-2);font-size:0.75rem;color:var(--color-text-muted);max-height:600px;overflow:auto;white-space:pre-wrap;word-break:break-all;"></pre>
         </div>

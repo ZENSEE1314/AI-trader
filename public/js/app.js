@@ -1238,15 +1238,14 @@
     }
   }
 
-  async function runBacktest(mode, reverse, timeframe) {
+  async function runBacktest(mode, reverse) {
     const daysEl = $('#backtest-days');
     const days = daysEl ? parseInt(daysEl.value) || 7 : 7;
-    const tf = timeframe || 'standard';
-    const tag = (reverse ? 'REVERSE ' : '') + (tf === 'fast' ? 'Fast ' : '') + `${days}d`;
+    const tag = (reverse ? 'REVERSE ' : 'Normal ') + `${days}d`;
     const resultEl = $('#fix-bitunix-result');
-    if (resultEl) resultEl.textContent = `Running ${tag} backtest (100 coins)... ~3-5 min, please wait`;
+    if (resultEl) resultEl.textContent = `Running ${tag} backtest (100 coins, 5 TFs)... ~5 min, please wait`;
     try {
-      const data = await api('POST', '/api/admin/backtest', { topN: 100, mode, days, reverse, timeframe: tf });
+      const data = await api('POST', '/api/admin/backtest', { topN: 100, days, reverse });
       const s = data.strategy;
       let output = '═══════════════════════════════════════════════\n';
       output += `  BACKTEST: ${s.label}\n`;
