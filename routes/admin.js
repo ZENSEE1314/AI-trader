@@ -1620,10 +1620,26 @@ router.post('/ai-optimize', async (req, res) => {
     }
     sendLog(`Found ${topCoins.length} admin tokens`);
 
-    // Check candle cache — reuse if same tokens + same days + fresh
+    // Check candle cache — in-memory first, then DB, then fetch fresh
     const cacheKey = topCoins.join(',') + ':' + DAYS;
     let coinData;
-    const isCacheValid = _candleCache.data && _candleCache.tokens === cacheKey && (Date.now() - _candleCache.ts) < CANDLE_CACHE_TTL;
+    let isCacheValid = _candleCache.data && _candleCache.tokens === cacheKey && (Date.now() - _candleCache.ts) < CANDLE_CACHE_TTL;
+
+    if (!isCacheValid) {
+      // Try loading from DB (survives redeploys)
+      try {
+        const dbCache = await query('SELECT cache_key, candle_data, created_at FROM optimizer_cache WHERE id = 1');
+        if (dbCache.length && dbCache[0].cache_key === cacheKey && (Date.now() - dbCache[0].created_at) < CANDLE_CACHE_TTL) {
+          _candleCache.data = dbCache[0].candle_data;
+          _candleCache.tokens = dbCache[0].cache_key;
+          _candleCache.ts = dbCache[0].created_at;
+          isCacheValid = true;
+          sendLog(`Restored candle cache from DB (${Math.round((Date.now() - dbCache[0].created_at)/1000)}s old)`);
+        }
+      } catch (e) {
+        sendLog(`DB cache check failed: ${e.message}`);
+      }
+    }
 
     if (isCacheValid) {
       coinData = _candleCache.data;
@@ -1669,11 +1685,23 @@ router.post('/ai-optimize', async (req, res) => {
       }
       sendLog(`Fetch done: ${Object.keys(coinData).length}/${topCoins.length} [Bitunix]`);
       if (failedCoins.length) sendLog(`Failed: ${failedCoins.join(', ')}`);
-      // Save to cache
+      // Save to in-memory cache
+      const nowTs = Date.now();
       _candleCache.data = coinData;
       _candleCache.tokens = cacheKey;
-      _candleCache.ts = Date.now();
-      sendLog(`Candle data cached (valid for ${CANDLE_CACHE_TTL/60000} min)`);
+      _candleCache.ts = nowTs;
+      // Persist to DB so it survives redeploys
+      try {
+        await query(
+          `INSERT INTO optimizer_cache (id, cache_key, candle_data, created_at)
+           VALUES (1, $1, $2, $3)
+           ON CONFLICT (id) DO UPDATE SET cache_key = $1, candle_data = $2, created_at = $3`,
+          [cacheKey, JSON.stringify(coinData), nowTs]
+        );
+        sendLog(`Candle data cached in DB (valid for ${CANDLE_CACHE_TTL/60000} min)`);
+      } catch (e) {
+        sendLog(`DB cache save failed: ${e.message} — in-memory only`);
+      }
     }
 
     const firstCoin = Object.keys(coinData)[0];
