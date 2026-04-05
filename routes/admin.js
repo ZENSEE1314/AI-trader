@@ -1901,12 +1901,16 @@ router.post('/ai-optimize', async (req, res) => {
       { name:'Momentum Only',  swingLen4h:10,swingLen1h:10,swingLen15m:8, swingLen1m:4, indecisiveThresh:0.2, keyLevelProximity:0.008, maxEntryAge:35, requireBothHTF:0,requireKeyLevel:0,require15m:1,require1m:1,requireVolSpike:0,volSpikeMultiplier:1.5 },
     ];
 
+    // NOTE: yield to event loop between evaluations so keepalive pings can fire
+    const yieldTick = () => new Promise(r => setImmediate(r));
+
     const results = [];
     for (let pi = 0; pi < presets.length; pi++) {
       const strat = presets[pi];
       const s = evaluate(strat);
       results.push({ strategy: strat.name, risk: 'User', combo: strat.name, settings: strat, ...s });
       sendLog(`  ${strat.name}: ${s.trades} trades, ${s.winRate}% WR, $${s.totalPnl}`);
+      await yieldTick();
     }
     sendProgress('round1', 100);
 
@@ -1936,6 +1940,7 @@ router.post('/ai-optimize', async (req, res) => {
       if (s.trades > 0) {
         mutations.push({ strategy:'Genetic', risk:`Gen${gen+1}`, combo:`Genetic Gen${gen+1}`, settings:child, ...s });
       }
+      if ((gen + 1) % 5 === 0) await yieldTick();
     }
     sendLog(`Round 2 done: ${mutations.length} viable offspring`);
     sendProgress('round2', 100);
@@ -1943,7 +1948,57 @@ router.post('/ai-optimize', async (req, res) => {
     // ═══ ROUND 3: Quantum ═══
     sendLog('Round 3: Quantum search (QAOA + SPSA + Annealing)...');
     const preQuantum = [...results, ...mutations].sort((a,b) => b.winRate-a.winRate || b.totalPnl-a.totalPnl);
-    const quantum = quantumOptimize(preQuantum, evaluate);
+    // Run quantum in chunks with event loop yields to keep stream alive
+    const quantum = await (async () => {
+      const { qaoaSample, spsaOptimize, quantumAnneal, PARAM_BOUNDS: QPB } = require('../quantum-optimizer');
+      const topN = preQuantum.filter(r => r.trades > 0).slice(0, 10);
+      if (!topN.length) return { results: [], stats: { qaoaCount: 0, spsaCount: 0, annealCount: 0 } };
+      const allQR = [];
+
+      // QAOA
+      const qaoaSamples = qaoaSample(topN, 30);
+      let qaoaCount = 0;
+      for (const sample of qaoaSamples) {
+        const score = evaluate(sample.config);
+        if (score.trades > 0) {
+          allQR.push({ risk: `QAOA-${qaoaCount + 1}`, riskId: `qaoa${qaoaCount}`, settings: sample.config, ...score });
+          qaoaCount++;
+        }
+        if (qaoaCount % 5 === 0) await yieldTick();
+      }
+      sendLog(`  QAOA: ${qaoaCount} viable`);
+
+      // SPSA
+      let spsaCount = 0;
+      const spsaResults = spsaOptimize(topN[0].settings, evaluate, 20);
+      for (const sr of spsaResults) {
+        if (sr.trades > 0) {
+          allQR.push({ risk: `SPSA-${spsaCount + 1}`, riskId: `spsa${spsaCount}`, settings: sr.config, ...sr });
+          spsaCount++;
+        }
+      }
+      await yieldTick();
+      sendLog(`  SPSA: ${spsaCount} viable`);
+
+      // Annealing
+      let annealCount = 0;
+      const combinedTop = [...topN];
+      if (allQR.length) {
+        const sorted = [...allQR].sort((a, b) => b.winRate - a.winRate || b.totalPnl - a.totalPnl);
+        combinedTop.push(...sorted.slice(0, 5));
+      }
+      const annealResults = quantumAnneal(combinedTop.slice(0, 10), evaluate, 25);
+      for (const ar of annealResults) {
+        if (ar.trades > 0) {
+          allQR.push({ risk: `Anneal-${annealCount + 1}`, riskId: `anneal${annealCount}`, settings: ar.config, ...ar });
+          annealCount++;
+        }
+      }
+      await yieldTick();
+      sendLog(`  Anneal: ${annealCount} viable`);
+
+      return { results: allQR, stats: { qaoaCount, spsaCount, annealCount } };
+    })();
 
     for (const qr of quantum.results) {
       qr.strategy = 'Quantum';
