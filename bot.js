@@ -371,6 +371,16 @@ async function runTradingCycle(forced = false) {
 // ── BOOT ─────────────────────────────────────────────────────
 async function main() {
   log('=== AI Self-Learning Crypto Bot v4 Starting ===');
+
+  // Start Express server FIRST so Railway healthcheck passes
+  try {
+    const server = require('./server');
+    const PORT = process.env.PORT || 3000;
+    server.listen(PORT, () => log(`Server on :${PORT}`));
+  } catch (err) {
+    log(`Server not started: ${err.message}`);
+  }
+
   bLog.system('AI Self-Learning Crypto Bot v4 starting...');
 
   // Create all required tables before anything else
@@ -448,15 +458,6 @@ async function main() {
   }, SPIKE_INTERVAL);
 
   log('Bot loop is running');
-
-  // Express server for health checks + web dashboard
-  try {
-    const server = require('./server');
-    const PORT = process.env.PORT || 3000;
-    server.listen(PORT, () => log(`Server on :${PORT}`));
-  } catch (err) {
-    log(`Server not started: ${err.message}`);
-  }
 }
 
 main().catch(err => {
