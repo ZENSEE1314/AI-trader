@@ -1532,10 +1532,10 @@ router.post('/ai-optimize', async (req, res) => {
   function sendLog(msg) { try { res.write(JSON.stringify({ type: 'log', message: msg }) + '\n'); } catch {} }
   function sendProgress(phase, pct) { try { res.write(JSON.stringify({ type: 'progress', phase, pct }) + '\n'); } catch {} }
 
-  // Keepalive ping every 5s — prevents Railway/proxy from killing idle streams
+  // Keepalive ping every 2s — prevents Railway/proxy from killing idle streams
   const keepalive = setInterval(() => {
     try { res.write(JSON.stringify({ type: 'ping' }) + '\n'); } catch {}
-  }, 5000);
+  }, 2000);
   res.on('close', () => clearInterval(keepalive));
 
   try {
@@ -1868,11 +1868,52 @@ router.post('/ai-optimize', async (req, res) => {
       return scoreResult(r);
     }
 
-    function evaluatePerToken(strategyCfg) {
+    async function evaluatePerToken(strategyCfg) {
       const cfg = { ...strategyCfg, ...FIXED_RISK };
-      const signals = computeSignals(cfg);
+      const signals = await (async () => {
+        // Reuse evaluateAsync's signal logic but return signals directly
+        const sigs = [];
+        const swLens = { '4h': cfg.swingLen4h||10, '1h': cfg.swingLen1h||10, '15m': cfg.swingLen15m||10, '1m': cfg.swingLen1m||5 };
+        const INDECISIVE = cfg.indecisiveThresh || 0.3, PROX = cfg.keyLevelProximity || 0.003;
+        const MAX_AGE = cfg.maxEntryAge || 25;
+        const NEED_BOTH_HTF = cfg.requireBothHTF !== undefined ? !!cfg.requireBothHTF : true;
+        const NEED_KL = cfg.requireKeyLevel !== undefined ? !!cfg.requireKeyLevel : true;
+        const NEED_15M = cfg.require15m !== undefined ? !!cfg.require15m : true;
+        const NEED_1M = cfg.require1m !== undefined ? !!cfg.require1m : true;
+        const NEED_VOL = cfg.requireVolSpike !== undefined ? !!cfg.requireVolSpike : false;
+        const VOL_MULT = cfg.volSpikeMultiplier || 1.5;
+        for (let step=0; step<timeSteps.length; step++) {
+          if (step % 100 === 0 && step > 0) await yieldTick();
+          const now = timeSteps[step];
+          for (const sym of coinKeys) {
+            const data = coinData[sym];
+            const k15 = data.k15.filter(k=>parseInt(k[0])<=now); if (k15.length<30) continue;
+            const price = parseFloat(k15[k15.length-1][4]);
+            const dIdx = data.kD.findIndex(k=>parseInt(k[0])+86400000>now);
+            const pD = dIdx>0?data.kD[dIdx-1]:null; if (!pD) continue;
+            const dO=parseFloat(pD[1]),dC=parseFloat(pD[4]),dH=parseFloat(pD[2]),dL=parseFloat(pD[3]);
+            if ((dH-dL)>0&&(Math.abs(dC-dO)/(dH-dL))<INDECISIVE) continue;
+            const bias = dC>dO?'bullish':'bearish';
+            const k4h=data.k4h.filter(k=>parseInt(k[0])<=now), k1h=data.k1h.filter(k=>parseInt(k[0])<=now);
+            if (k4h.length<30||k1h.length<30) continue;
+            const s4h=getS(k4h,swLens['4h']), s1h=getS(k1h,swLens['1h']);
+            const b4=s4h.trend==='bullish'||s4h.trend==='bullish_lean', b1=s1h.trend==='bullish'||s1h.trend==='bullish_lean';
+            const r4=s4h.trend==='bearish'||s4h.trend==='bearish_lean', r1=s1h.trend==='bearish'||s1h.trend==='bearish_lean';
+            let dir = null;
+            if (NEED_BOTH_HTF) { if(bias==='bullish'&&b4&&b1) dir='LONG'; else if(bias==='bearish'&&r4&&r1) dir='SHORT'; }
+            else { if(bias==='bullish'&&(b4||b1)) dir='LONG'; else if(bias==='bearish'&&(r4||r1)) dir='SHORT'; }
+            if (!dir) continue;
+            if (NEED_KL) { const vw=calcVW(k15); const b=vw[vw.length-1]; const atLevel = dir==='LONG'?(Math.abs(price-b.lower)/b.lower<PROX||Math.abs(price-dL)/dL<PROX||Math.abs(price-b.vwap)/b.vwap<PROX):(Math.abs(price-b.upper)/b.upper<PROX||Math.abs(price-dH)/dH<PROX||Math.abs(price-b.vwap)/b.vwap<PROX); if (!atLevel) continue; }
+            if (NEED_VOL) { const vols=k15.slice(-20).map(k=>parseFloat(k[5])); const avg=vols.reduce((a,b)=>a+b,0)/vols.length; if(avg>0&&(vols.slice(-5).reduce((a,b)=>a+b,0)/5)/avg<VOL_MULT) continue; }
+            if (NEED_15M) { const s15=getS(k15,swLens['15m']); if(!((dir==='LONG'&&s15.hasHL)||(dir==='SHORT'&&s15.hasLH))) continue; }
+            if (NEED_1M) { const k1=data.k1.filter(k=>parseInt(k[0])<=now); if(k1.length<15) continue; const s1m=getS(k1,swLens['1m']); if(!((dir==='LONG'&&s1m.hasHL)||(dir==='SHORT'&&s1m.hasLH))) continue; const es=dir==='LONG'?s1m.lastLow:s1m.lastHigh; if(!es||(k1.length-1-es.index)>MAX_AGE) continue; }
+            sigs.push({ step, sym, dir, price });
+          }
+        }
+        return sigs;
+      })();
       const tokenStats = {};
-      for (const sym of Object.keys(coinData)) {
+      for (const sym of coinKeys) {
         const symSignals = signals.filter(s => s.sym === sym);
         if (!symSignals.length) { tokenStats[sym] = { trades: 0, wins: 0, winRate: 0, totalPnl: 0, rating: 'No Data' }; continue; }
         const r = replaySignals(symSignals, cfg);
@@ -1901,16 +1942,86 @@ router.post('/ai-optimize', async (req, res) => {
       { name:'Momentum Only',  swingLen4h:10,swingLen1h:10,swingLen15m:8, swingLen1m:4, indecisiveThresh:0.2, keyLevelProximity:0.008, maxEntryAge:35, requireBothHTF:0,requireKeyLevel:0,require15m:1,require1m:1,requireVolSpike:0,volSpikeMultiplier:1.5 },
     ];
 
-    // NOTE: yield to event loop between evaluations so keepalive pings can fire
+    // Yield to event loop so keepalive pings can fire between heavy compute
     const yieldTick = () => new Promise(r => setImmediate(r));
+    // Async evaluate — yields mid-computation to keep stream alive
+    const coinKeys = Object.keys(coinData);
+    async function evaluateAsync(strategyCfg) {
+      const cfg = { ...strategyCfg, ...FIXED_RISK };
+      const signals = [];
+      const swLens = { '4h': cfg.swingLen4h||10, '1h': cfg.swingLen1h||10, '15m': cfg.swingLen15m||10, '1m': cfg.swingLen1m||5 };
+      const INDECISIVE = cfg.indecisiveThresh || 0.3;
+      const PROX = cfg.keyLevelProximity || 0.003;
+      const MAX_AGE = cfg.maxEntryAge || 25;
+      const NEED_BOTH_HTF = cfg.requireBothHTF !== undefined ? !!cfg.requireBothHTF : true;
+      const NEED_KL = cfg.requireKeyLevel !== undefined ? !!cfg.requireKeyLevel : true;
+      const NEED_15M = cfg.require15m !== undefined ? !!cfg.require15m : true;
+      const NEED_1M = cfg.require1m !== undefined ? !!cfg.require1m : true;
+      const NEED_VOL = cfg.requireVolSpike !== undefined ? !!cfg.requireVolSpike : false;
+      const VOL_MULT = cfg.volSpikeMultiplier || 1.5;
+      for (let step=0; step<timeSteps.length; step++) {
+        if (step % 100 === 0 && step > 0) await yieldTick();
+        const now = timeSteps[step];
+        for (const sym of coinKeys) {
+          const data = coinData[sym];
+          const k15 = data.k15.filter(k=>parseInt(k[0])<=now); if (k15.length<30) continue;
+          const price = parseFloat(k15[k15.length-1][4]);
+          const dIdx = data.kD.findIndex(k=>parseInt(k[0])+86400000>now);
+          const pD = dIdx>0?data.kD[dIdx-1]:null;
+          if (!pD) continue;
+          const dO=parseFloat(pD[1]),dC=parseFloat(pD[4]),dH=parseFloat(pD[2]),dL=parseFloat(pD[3]);
+          if ((dH-dL)>0&&(Math.abs(dC-dO)/(dH-dL))<INDECISIVE) continue;
+          const bias = dC>dO?'bullish':'bearish';
+          const k4h=data.k4h.filter(k=>parseInt(k[0])<=now), k1h=data.k1h.filter(k=>parseInt(k[0])<=now);
+          if (k4h.length<30||k1h.length<30) continue;
+          const s4h=getS(k4h,swLens['4h']), s1h=getS(k1h,swLens['1h']);
+          const b4=s4h.trend==='bullish'||s4h.trend==='bullish_lean';
+          const b1=s1h.trend==='bullish'||s1h.trend==='bullish_lean';
+          const r4=s4h.trend==='bearish'||s4h.trend==='bearish_lean';
+          const r1=s1h.trend==='bearish'||s1h.trend==='bearish_lean';
+          let dir = null;
+          if (NEED_BOTH_HTF) {
+            if(bias==='bullish'&&b4&&b1) dir='LONG'; else if(bias==='bearish'&&r4&&r1) dir='SHORT';
+          } else {
+            if(bias==='bullish'&&(b4||b1)) dir='LONG'; else if(bias==='bearish'&&(r4||r1)) dir='SHORT';
+          }
+          if (!dir) continue;
+          if (NEED_KL) {
+            const vw=calcVW(k15); const b=vw[vw.length-1];
+            const atLevel = dir==='LONG'
+              ?(Math.abs(price-b.lower)/b.lower<PROX||Math.abs(price-dL)/dL<PROX||Math.abs(price-b.vwap)/b.vwap<PROX)
+              :(Math.abs(price-b.upper)/b.upper<PROX||Math.abs(price-dH)/dH<PROX||Math.abs(price-b.vwap)/b.vwap<PROX);
+            if (!atLevel) continue;
+          }
+          if (NEED_VOL) {
+            const vols=k15.slice(-20).map(k=>parseFloat(k[5]));
+            const avg=vols.reduce((a,b)=>a+b,0)/vols.length;
+            if(avg>0&&(vols.slice(-5).reduce((a,b)=>a+b,0)/5)/avg<VOL_MULT) continue;
+          }
+          if (NEED_15M) {
+            const s15=getS(k15,swLens['15m']);
+            if(!((dir==='LONG'&&s15.hasHL)||(dir==='SHORT'&&s15.hasLH))) continue;
+          }
+          if (NEED_1M) {
+            const k1=data.k1.filter(k=>parseInt(k[0])<=now); if(k1.length<15) continue;
+            const s1m=getS(k1,swLens['1m']);
+            if(!((dir==='LONG'&&s1m.hasHL)||(dir==='SHORT'&&s1m.hasLH))) continue;
+            const es=dir==='LONG'?s1m.lastLow:s1m.lastHigh;
+            if(!es||(k1.length-1-es.index)>MAX_AGE) continue;
+          }
+          signals.push({ step, sym, dir, price });
+        }
+      }
+      const r = replaySignals(signals, cfg);
+      return scoreResult(r);
+    }
 
     const results = [];
     for (let pi = 0; pi < presets.length; pi++) {
       const strat = presets[pi];
-      const s = evaluate(strat);
+      const s = await evaluateAsync(strat);
       results.push({ strategy: strat.name, risk: 'User', combo: strat.name, settings: strat, ...s });
       sendLog(`  ${strat.name}: ${s.trades} trades, ${s.winRate}% WR, $${s.totalPnl}`);
-      await yieldTick();
     }
     sendProgress('round1', 100);
 
@@ -1936,11 +2047,10 @@ router.post('/ai-optimize', async (req, res) => {
         else val = parseFloat(val.toFixed(4));
         child[key] = val;
       }
-      const s = evaluate(child);
+      const s = await evaluateAsync(child);
       if (s.trades > 0) {
         mutations.push({ strategy:'Genetic', risk:`Gen${gen+1}`, combo:`Genetic Gen${gen+1}`, settings:child, ...s });
       }
-      if ((gen + 1) % 5 === 0) await yieldTick();
     }
     sendLog(`Round 2 done: ${mutations.length} viable offspring`);
     sendProgress('round2', 100);
@@ -1959,18 +2069,17 @@ router.post('/ai-optimize', async (req, res) => {
       const qaoaSamples = qaoaSample(topN, 30);
       let qaoaCount = 0;
       for (const sample of qaoaSamples) {
-        const score = evaluate(sample.config);
+        const score = await evaluateAsync(sample.config);
         if (score.trades > 0) {
           allQR.push({ risk: `QAOA-${qaoaCount + 1}`, riskId: `qaoa${qaoaCount}`, settings: sample.config, ...score });
           qaoaCount++;
         }
-        if (qaoaCount % 5 === 0) await yieldTick();
       }
       sendLog(`  QAOA: ${qaoaCount} viable`);
 
       // SPSA
       let spsaCount = 0;
-      const spsaResults = await spsaOptimize(topN[0].settings, evaluate, 20, yieldTick);
+      const spsaResults = await spsaOptimize(topN[0].settings, evaluateAsync, 20);
       for (const sr of spsaResults) {
         if (sr.trades > 0) {
           allQR.push({ risk: `SPSA-${spsaCount + 1}`, riskId: `spsa${spsaCount}`, settings: sr.config, ...sr });
@@ -1987,7 +2096,7 @@ router.post('/ai-optimize', async (req, res) => {
         const sorted = [...allQR].sort((a, b) => b.winRate - a.winRate || b.totalPnl - a.totalPnl);
         combinedTop.push(...sorted.slice(0, 5));
       }
-      const annealResults = await quantumAnneal(combinedTop.slice(0, 10), evaluate, 25, yieldTick);
+      const annealResults = await quantumAnneal(combinedTop.slice(0, 10), evaluateAsync, 25);
       for (const ar of annealResults) {
         if (ar.trades > 0) {
           allQR.push({ risk: `Anneal-${annealCount + 1}`, riskId: `anneal${annealCount}`, settings: ar.config, ...ar });
@@ -2014,7 +2123,7 @@ router.post('/ai-optimize', async (req, res) => {
     // ═══ Per-token scoring ═══
     sendLog('Scoring individual tokens...');
     const bestStrat = allResults.find(r => r.trades > 0);
-    const tokenScores = bestStrat ? evaluatePerToken(bestStrat.settings) : {};
+    const tokenScores = bestStrat ? await evaluatePerToken(bestStrat.settings) : {};
 
     const TOKEN_RANK = { 'Good': 0, 'OK': 1, 'Bad': 2, 'No Trades': 3, 'No Data': 4 };
     const tokenScoreList = Object.entries(tokenScores)

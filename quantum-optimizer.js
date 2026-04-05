@@ -135,8 +135,8 @@ async function spsaOptimize(startConfig, evaluateFn, iterations = 15, yieldFn) {
 
     const cfgPlus = denormalize(thetaPlus);
     const cfgMinus = denormalize(thetaMinus);
-    const scorePlus = evaluateFn(cfgPlus);
-    const scoreMinus = evaluateFn(cfgMinus);
+    const scorePlus = await evaluateFn(cfgPlus);
+    const scoreMinus = await evaluateFn(cfgMinus);
 
     allEvaluated.push({ config: cfgPlus, ...scorePlus });
     allEvaluated.push({ config: cfgMinus, ...scoreMinus });
@@ -148,11 +148,11 @@ async function spsaOptimize(startConfig, evaluateFn, iterations = 15, yieldFn) {
       const gHat = (fPlus - fMinus) / (2 * ck * delta[key]);
       theta[key] = Math.max(0, Math.min(1, theta[key] + ak * gHat));
     }
-    if (yieldFn && (k + 1) % 3 === 0) await yieldFn();
+    if (yieldFn) await yieldFn();
   }
 
   const finalConfig = denormalize(theta);
-  const finalScore = evaluateFn(finalConfig);
+  const finalScore = await evaluateFn(finalConfig);
   allEvaluated.push({ config: finalConfig, ...finalScore });
 
   return allEvaluated;
@@ -199,7 +199,7 @@ async function quantumAnneal(topResults, evaluateFn, iterations = 20, yieldFn) {
       neighbor[key] = val;
     }
 
-    const score = evaluateFn(neighbor);
+    const score = await evaluateFn(neighbor);
     const neighborFitness = (score.winRate || 0) * 2 +
       Math.max(0, score.totalPnl || 0) * 0.1;
 
@@ -212,7 +212,7 @@ async function quantumAnneal(topResults, evaluateFn, iterations = 20, yieldFn) {
       current = { ...neighbor };
       currentFitness = neighborFitness;
     }
-    if (yieldFn && (step + 1) % 5 === 0) await yieldFn();
+    if (yieldFn) await yieldFn();
   }
 
   return allEvaluated;
