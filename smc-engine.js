@@ -361,6 +361,18 @@ async function analyzeLHHL(ticker, params, dailyBiasCache) {
   const r4 = struct4h.trend === 'bearish' || struct4h.trend === 'bearish_lean';
   const r1 = struct1h.trend === 'bearish' || struct1h.trend === 'bearish_lean';
 
+  // NOTE: Hard SMC rule — 4H structure blocks counter-trend trades regardless of settings.
+  // LH on 4H blocks longs (bearish structure), HL on 4H blocks shorts (bullish structure).
+  // This prevents counter-trend entries like longing into a downtrend bounce.
+  if (bias === 'bullish' && struct4h.hasLH && !struct4h.hasHL) {
+    bLog.scan(`${symbol}: 4H has LH (bearish) — blocks LONG even though daily bias is bullish`);
+    return null;
+  }
+  if (bias === 'bearish' && struct4h.hasHL && !struct4h.hasLH) {
+    bLog.scan(`${symbol}: 4H has HL (bullish) — blocks SHORT even though daily bias is bearish`);
+    return null;
+  }
+
   let direction = null;
   if (NEED_BOTH_HTF) {
     if (bias === 'bullish' && b4 && b1) direction = 'LONG';
