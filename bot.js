@@ -428,13 +428,15 @@ async function main() {
     await checkSpikes();
   }, SPIKE_INTERVAL);
 
-  // Express server for health checks + web dashboard
-  try {
-    const server = require('./server');
-    const PORT = process.env.PORT || 3000;
-    server.listen(PORT, () => log(`Server on :${PORT}`));
-  } catch (err) {
-    log(`Server not started: ${err.message}`);
+  // Express server for health checks + web dashboard (skip if already running)
+  if (!process.env.SKIP_SERVER) {
+    try {
+      const server = require('./server');
+      const PORT = process.env.PORT || 3000;
+      server.listen(PORT, () => log(`Server on :${PORT}`));
+    } catch (err) {
+      log(`Server not started: ${err.message}`);
+    }
   }
 }
 

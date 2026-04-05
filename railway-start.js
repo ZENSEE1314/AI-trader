@@ -47,19 +47,28 @@ webServer.on('error', (err) => {
   console.error('❌ Web server failed to start:', err.message);
 });
 
-// Wait a bit for web server to start
+// Wait a bit for web server to start, then launch bot with auto-restart
 setTimeout(() => {
-  // Start trading bot
-  console.log('\n🤖 Starting trading bot...');
-  const tradingBot = spawn('node', ['bot.js'], {
-    stdio: 'inherit',
-    env: process.env
-  });
-  processes.push(tradingBot);
+  function startBot() {
+    console.log('\n🤖 Starting trading bot...');
+    const tradingBot = spawn('node', ['bot.js'], {
+      stdio: 'inherit',
+      env: { ...process.env, SKIP_SERVER: '1' }
+    });
+    processes.push(tradingBot);
 
-  tradingBot.on('error', (err) => {
-    console.error('❌ Trading bot failed to start:', err.message);
-  });
+    tradingBot.on('error', (err) => {
+      console.error('❌ Trading bot failed to start:', err.message);
+    });
+
+    tradingBot.on('exit', (code) => {
+      if (code !== 0 && code !== null) {
+        console.error(`⚠️  Trading bot exited with code ${code}, restarting in 10s...`);
+        setTimeout(startBot, 10000);
+      }
+    });
+  }
+  startBot();
 }, 3000);
 
 // Handle process termination
