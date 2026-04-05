@@ -799,6 +799,30 @@ router.post('/remove-global-token', async (req, res) => {
   }
 });
 
+// ── List all open positions across all users ────
+router.get('/open-positions', async (req, res) => {
+  try {
+    const rows = await query(
+      `SELECT t.symbol, t.direction, t.entry_price, t.quantity, t.sl_price, t.tp_price,
+              t.trailing_sl_price, t.created_at, u.email
+       FROM trades t
+       JOIN api_keys ak ON ak.id = t.api_key_id
+       JOIN users u ON u.id = t.user_id
+       WHERE t.status = 'OPEN'
+       ORDER BY t.symbol, u.email`
+    );
+    // Group by symbol
+    const grouped = {};
+    for (const r of rows) {
+      if (!grouped[r.symbol]) grouped[r.symbol] = { symbol: r.symbol, users: [], direction: r.direction, entry: r.entry_price };
+      grouped[r.symbol].users.push(r.email);
+    }
+    res.json({ positions: Object.values(grouped), total: rows.length });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Emergency Close: close a specific token across ALL users ────
 router.post('/emergency-close', async (req, res) => {
   const symbol = (req.body.symbol || '').toUpperCase().trim();

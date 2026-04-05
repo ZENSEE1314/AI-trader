@@ -1985,29 +1985,72 @@
     }
   }
 
-  async function emergencyClose() {
-    const input = document.getElementById('emergency-close-symbol');
-    const symbol = (input?.value || '').toUpperCase().trim();
-    if (!symbol) { showToast('Enter a token symbol (e.g. SOLUSDT)', 'error'); return; }
-    if (!confirm(`🚨 EMERGENCY CLOSE ${symbol}\n\nThis will MARKET CLOSE ${symbol} for ALL users immediately.\n\nAre you sure?`)) return;
+  async function loadOpenPositions() {
+    const listEl = document.getElementById('open-positions-list');
+    if (!listEl) return;
+    listEl.innerHTML = '<span style="color:var(--color-text-muted);">Loading...</span>';
+    try {
+      const data = await api('GET', '/api/admin/open-positions');
+      if (!data.positions || !data.positions.length) {
+        listEl.innerHTML = '<span style="color:var(--color-success);">No open positions</span>';
+        return;
+      }
+      listEl.innerHTML = data.positions.map(p => {
+        const dirColor = p.direction === 'LONG' ? '#22c55e' : '#ef4444';
+        const dirLabel = p.direction === 'LONG' ? '▲ LONG' : '▼ SHORT';
+        const userCount = p.users.length;
+        return `<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid rgba(255,255,255,0.05);">
+          <button class="btn btn-sm" style="font-size:0.7rem;background:#ef4444;color:#fff;border:none;padding:3px 10px;cursor:pointer;" data-close-token="${p.symbol}">✕ Close</button>
+          <strong style="color:var(--color-text);min-width:120px;">${p.symbol}</strong>
+          <span style="color:${dirColor};font-size:0.75rem;font-weight:700;min-width:70px;">${dirLabel}</span>
+          <span style="color:var(--color-text-muted);font-size:0.75rem;">${userCount} user${userCount > 1 ? 's' : ''}: ${p.users.join(', ')}</span>
+        </div>`;
+      }).join('');
+      listEl.querySelectorAll('[data-close-token]').forEach(btn => {
+        btn.addEventListener('click', () => emergencyCloseToken(btn.dataset.closeToken));
+      });
+    } catch (err) {
+      listEl.innerHTML = '<span style="color:#ef4444;">Failed: ' + (err.message || err) + '</span>';
+    }
+  }
+
+  async function emergencyCloseToken(symbol) {
+    if (!confirm(`🚨 CLOSE ${symbol} for ALL users?\n\nThis will market-close immediately.`)) return;
     const statusEl = document.getElementById('emergency-stop-status');
     statusEl.textContent = `Closing ${symbol}...`;
     statusEl.style.color = '#ef4444';
     try {
       const result = await api('POST', '/api/admin/emergency-close', { symbol });
-      statusEl.textContent = `${symbol}: ${result.totalClosed} positions closed across ${result.totalUsers} users`;
+      statusEl.textContent = `${symbol}: ${result.totalClosed} closed`;
       statusEl.style.color = 'var(--color-success)';
       showToast(`${symbol}: ${result.totalClosed} positions closed`, 'success');
-      if (result.results) {
-        for (const r of result.results) {
-          console.log(`[EMERGENCY] ${r.user}: ${r.symbol} ${r.status}${r.error ? ' — ' + r.error : ''}`);
-        }
-      }
+      loadOpenPositions();
     } catch (err) {
       statusEl.textContent = 'Failed: ' + (err.message || err);
       statusEl.style.color = '#ef4444';
-      showToast('Emergency close failed: ' + err.message, 'error');
+      showToast('Close failed: ' + err.message, 'error');
     }
+  }
+
+  async function emergencyCloseAll() {
+    if (!confirm('🚨 CLOSE ALL POSITIONS for ALL users?\n\nThis will market-close EVERY open position immediately.\n\nAre you absolutely sure?')) return;
+    const statusEl = document.getElementById('emergency-stop-status');
+    const listEl = document.getElementById('open-positions-list');
+    const tokens = listEl ? [...listEl.querySelectorAll('[data-close-token]')].map(b => b.dataset.closeToken) : [];
+    if (!tokens.length) { showToast('No open positions to close', 'error'); return; }
+    statusEl.textContent = `Closing ${tokens.length} tokens...`;
+    statusEl.style.color = '#ef4444';
+    let totalClosed = 0;
+    for (const symbol of tokens) {
+      try {
+        const result = await api('POST', '/api/admin/emergency-close', { symbol });
+        totalClosed += result.totalClosed;
+      } catch {}
+    }
+    statusEl.textContent = `Done: ${totalClosed} positions closed across ${tokens.length} tokens`;
+    statusEl.style.color = 'var(--color-success)';
+    showToast(`${totalClosed} positions closed`, 'success');
+    loadOpenPositions();
   }
 
   async function adminFixTrades() {
@@ -2474,7 +2517,7 @@
     addAllowedToken, addBannedToken, unbanGlobalToken, removeGlobalToken,
     searchAdminToken, pickAdminToken, searchUserBanToken,
     addRiskLevel, saveRiskLevel, deleteRiskLevel,
-    emergencyClose,
+    loadOpenPositions, emergencyCloseToken, emergencyCloseAll,
     fixBitunixPnl, debugBitunix, runBacktest, loadAiVersions, runAiOptimize,
   };
 
