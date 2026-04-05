@@ -159,9 +159,9 @@ router.get('/trades/csv', async (req, res) => {
       ].join(',');
     });
 
-    const csv = [header, ...csvRows].join('\n');
+    const csv = '\uFEFF' + ['sep=,', header, ...csvRows].join('\r\n');
     const filename = `all_trades_${new Date().toISOString().slice(0, 10)}.csv`;
-    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     res.send(csv);
   } catch (err) {
