@@ -47,10 +47,10 @@ const TRAILING_SL = {
     { trigger: 0.10,  sl: 0.02  },  //  +10%  → SL at +2%
     { trigger: 0.13,  sl: 0.03  },  //  +13%  → SL at +3%
   ],
-  // 16-19%: trigger every 3%, SL trails 10% behind trigger
-  MID_START:  0.16, MID_STEP: 0.03, MID_GAP: 0.10,
-  // 20%+:   trigger every 5%, SL trails 5% behind trigger
-  HIGH_START: 0.20, HIGH_STEP: 0.05, HIGH_GAP: 0.05,
+  // 16-19%: trigger every 3%, SL trails 3% behind trigger
+  MID_START:  0.16, MID_STEP: 0.03, MID_GAP: 0.03,
+  // 20%+:   trigger every 5%, SL trails 1% behind trigger
+  HIGH_START: 0.20, HIGH_STEP: 0.05, HIGH_GAP: 0.01,
 };
 
 // ── Compound: always use current wallet balance ─────────────
