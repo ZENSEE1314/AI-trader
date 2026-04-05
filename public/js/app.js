@@ -1524,33 +1524,88 @@
     const days = parseInt($('#backtest-days')?.value) || 7;
     const topN = Math.min(parseInt($('#bt-topn')?.value) || 50, 100);
     const resultEl = $('#fix-bitunix-result');
-    if (resultEl) resultEl.textContent = `🧠 AI optimizing... testing 12 risk combos on ${topN} coins over ${days} days.\nThis takes a few minutes — please wait...`;
+    if (resultEl) resultEl.textContent = `🧠 AI optimizing... testing 6 strategies × 7 risk levels = 42 combos on ${topN} coins over ${days} days.\nFetching data then running all simulations — please wait...`;
     try {
       const data = await api('POST', '/api/admin/ai-optimize', { days, topN });
-      let output = '═══════════════════════════════════════════════════════════════════════════════════\n';
-      output += '  🧠 AI OPTIMIZATION RESULTS\n';
-      output += `  Period: ${data.period} | Coins: ${data.coinsScanned} | Combos tested: ${data.combosTestedCount}\n`;
-      output += '═══════════════════════════════════════════════════════════════════════════════════\n\n';
-      output += '#  | Name               | Trades | W/L      | WR%    | P&L        | Max DD  | Settings\n';
-      output += '─'.repeat(110) + '\n';
-      for (let i = 0; i < data.results.length; i++) {
-        const r = data.results[i];
-        const s = r.settings;
-        const rank = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `#${i+1}`;
-        const pnlStr = (r.totalPnl >= 0 ? '+' : '') + '$' + r.totalPnl.toFixed(2);
-        const settingsStr = `SL:${(s.slPct*100).toFixed(1)}% TP:${s.tpPct ? (s.tpPct*100).toFixed(1)+'%' : 'trail'} Trail:${(s.trailStep*100).toFixed(1)}% Lev:${s.leverage}x Risk:${(s.riskPct*100)}% Pos:${s.maxPos} Stop:${s.maxConsecLoss||'off'}`;
-        output += `${String(rank).padEnd(3)} | ${r.name.padEnd(18)} | ${String(r.trades).padStart(6)} | ${String(r.wins+'W/'+r.losses+'L').padEnd(8)} | ${String(r.winRate+'%').padStart(6)} | ${pnlStr.padStart(10)} | ${String(r.maxDrawdown+'%').padStart(6)}  | ${settingsStr}\n`;
+      const R = data.results;
+      let output = '═══════════════════════════════════════════════════════════════════════════════════════════════════════\n';
+      output += '  🧠 AI MIX & MATCH OPTIMIZATION\n';
+      output += `  Period: ${data.period} | Coins: ${data.coinsScanned} | ${data.strategiesCount} Strategies × ${data.risksCount} Risk Levels = ${data.totalCombos} combos\n`;
+      output += '═══════════════════════════════════════════════════════════════════════════════════════════════════════\n\n';
+
+      // ── Top 10 Overall ──
+      output += '── TOP 10 BEST COMBOS ────────────────────────────────────────────────────────────────────────────\n';
+      output += '#   | Strategy       | Risk           | Trades |  W / L  | WR%    | P&L        | MaxDD  | Settings\n';
+      output += '─'.repeat(120) + '\n';
+      for (let i = 0; i < Math.min(10, R.length); i++) {
+        const r = R[i], s = r.settings;
+        const medal = i===0?'🥇':i===1?'🥈':i===2?'🥉':`#${i+1}`;
+        const pnl = (r.totalPnl>=0?'+':'')+`$${r.totalPnl.toFixed(2)}`;
+        const sl = `SL:${(s.slPct*100).toFixed(1)}%`;
+        const tp = s.tpPct ? `TP:${(s.tpPct*100).toFixed(1)}%` : 'trail';
+        const rest = `${(s.trailStep*100).toFixed(1)}%t ${s.leverage}x ${(s.riskPct*100)}%r ${s.maxPos}p`;
+        output += `${String(medal).padEnd(4)}| ${r.strategy.padEnd(15)}| ${r.risk.padEnd(15)}| ${String(r.trades).padStart(6)} | ${String(r.wins+'W/'+r.losses+'L').padEnd(7)} | ${String(r.winRate+'%').padStart(6)} | ${pnl.padStart(10)} | ${String(r.maxDrawdown+'%').padStart(5)}  | ${sl} ${tp} ${rest}\n`;
       }
-      output += '─'.repeat(110) + '\n';
-      const best = data.results[0];
-      if (best) {
-        output += `\n🏆 BEST: "${best.name}" — ${best.winRate}% win rate, ${best.totalPnl >= 0 ? '+' : ''}$${best.totalPnl.toFixed(2)} P&L\n`;
+
+      // ── Strategy leaderboard ──
+      output += '\n── BEST RISK LEVEL PER STRATEGY ──────────────────────────────────────────────────\n';
+      const strats = [...new Set(R.map(r=>r.strategy))];
+      for (const strat of strats) {
+        const stratResults = R.filter(r=>r.strategy===strat);
+        const best = stratResults[0]; // already sorted
+        if (!best) continue;
         const s = best.settings;
-        output += `   SL: ${(s.slPct*100).toFixed(1)}% | TP: ${s.tpPct ? (s.tpPct*100).toFixed(1)+'%' : 'trailing only'} | Trail: ${(s.trailStep*100).toFixed(1)}% | Leverage: ${s.leverage}x | Risk: ${(s.riskPct*100)}% | Max Pos: ${s.maxPos} | Stop after: ${s.maxConsecLoss || 'never'}\n`;
-        if (best.savedAsVersion) {
-          output += `   ✅ Saved as AI version ${best.savedAsVersion} — select it from the dropdown to use these settings!\n`;
-        }
+        const pnl = (best.totalPnl>=0?'+':'')+`$${best.totalPnl.toFixed(2)}`;
+        output += `  ${strat.padEnd(15)} → Best: ${best.risk.padEnd(14)} | ${best.trades} trades | ${best.winRate}% WR | ${pnl} | SL:${(s.slPct*100).toFixed(1)}% Trail:${(s.trailStep*100).toFixed(1)}% Lev:${s.leverage}x\n`;
       }
+
+      // ── Risk leaderboard ──
+      output += '\n── BEST STRATEGY PER RISK LEVEL ──────────────────────────────────────────────────\n';
+      const riskNames = [...new Set(R.map(r=>r.risk))];
+      for (const risk of riskNames) {
+        const riskResults = R.filter(r=>r.risk===risk);
+        const best = riskResults.sort((a,b)=>b.winRate-a.winRate||b.totalPnl-a.totalPnl)[0];
+        if (!best) continue;
+        const pnl = (best.totalPnl>=0?'+':'')+`$${best.totalPnl.toFixed(2)}`;
+        output += `  ${risk.padEnd(15)} → Best: ${best.strategy.padEnd(14)} | ${best.trades} trades | ${best.winRate}% WR | ${pnl}\n`;
+      }
+
+      // ── Full grid (strategy × risk) ──
+      output += '\n── FULL GRID: WIN RATE % ──────────────────────────────────────────────────────────\n';
+      output += ''.padEnd(16) + '| ' + riskNames.map(r=>r.padEnd(14)).join('| ') + '\n';
+      output += '─'.repeat(16 + riskNames.length * 16) + '\n';
+      for (const strat of strats) {
+        let row = strat.padEnd(16) + '|';
+        for (const risk of riskNames) {
+          const r = R.find(x=>x.strategy===strat&&x.risk===risk);
+          const cell = r ? `${r.winRate}% (${r.trades}t)` : '  --  ';
+          row += ' ' + cell.padEnd(14) + '|';
+        }
+        output += row + '\n';
+      }
+
+      output += '\n── FULL GRID: P&L $ ──────────────────────────────────────────────────────────────\n';
+      output += ''.padEnd(16) + '| ' + riskNames.map(r=>r.padEnd(14)).join('| ') + '\n';
+      output += '─'.repeat(16 + riskNames.length * 16) + '\n';
+      for (const strat of strats) {
+        let row = strat.padEnd(16) + '|';
+        for (const risk of riskNames) {
+          const r = R.find(x=>x.strategy===strat&&x.risk===risk);
+          const cell = r ? `${r.totalPnl>=0?'+':''}$${r.totalPnl.toFixed(0)}` : '  --  ';
+          row += ' ' + cell.padEnd(14) + '|';
+        }
+        output += row + '\n';
+      }
+
+      // ── Saved versions ──
+      if (data.saved && data.saved.length) {
+        output += '\n── SAVED AS AI VERSIONS ───────────────────────────────────────────────────────────\n';
+        for (const s of data.saved) {
+          output += `  ${s.rank===1?'🥇':s.rank===2?'🥈':'🥉'} ${s.version} → ${s.combo}\n`;
+        }
+        output += '\n  ✅ Top 3 saved! Refresh the AI Version dropdown to load them.\n';
+      }
+
       if (resultEl) resultEl.textContent = output;
       loadAiVersions().catch(() => {});
     } catch (err) {
