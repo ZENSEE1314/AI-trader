@@ -1316,12 +1316,21 @@ async function syncTradeStatus() {
             if (exchangePos && trade.trailing_sl_last_step !== undefined) {
               const entryPrice = parseFloat(trade.entry_price);
               const isLong = trade.direction !== 'SHORT';
-              // Calculate current price from PnL: long pnl=(cur-entry)*qty, short pnl=(entry-cur)*qty
-              const absAmt = Math.abs(exchangePos.amt) || 1;
-              const curPrice = isLong
-                ? entryPrice + (exchangePos.pnl / absAmt)
-                : entryPrice - (exchangePos.pnl / absAmt);
+              // Use markPrice directly when available, fall back to PnL calc
+              let curPrice;
+              if (exchangePos.markPrice) {
+                curPrice = exchangePos.markPrice;
+              } else {
+                const absAmt = Math.abs(exchangePos.amt) || 1;
+                curPrice = isLong
+                  ? entryPrice + (exchangePos.pnl / absAmt)
+                  : entryPrice - (exchangePos.pnl / absAmt);
+              }
+              const profitPct = isLong
+                ? (curPrice - entryPrice) / entryPrice
+                : (entryPrice - curPrice) / entryPrice;
               const lastStep = parseFloat(trade.trailing_sl_last_step) || 0;
+              bLog.trade(`Bitunix trailing check: ${trade.symbol} entry=$${entryPrice} cur=$${curPrice} profit=${(profitPct*100).toFixed(2)}% lastStep=${(lastStep*100).toFixed(1)}%`);
               const trailResult = calculateTrailingStep(entryPrice, curPrice, isLong, lastStep);
               if (trailResult) {
                 try {

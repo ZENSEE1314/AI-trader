@@ -234,7 +234,7 @@ class BitunixClient {
       totalUnrealizedProfit: String(parseFloat(acc.crossUnrealizedPNL || 0) + parseFloat(acc.isolationUnrealizedPNL || 0)),
       positions: positions.map(p => ({
         symbol: p.symbol,
-        positionAmt: p.side === 'BUY' ? p.qty : `-${p.qty}`,
+        positionAmt: (p.side === 'BUY' || p.side === 'LONG') ? p.qty : `-${p.qty}`,
         entryPrice: p.avgOpenPrice,
         markPrice: p.markPrice || null,
         unrealizedProfit: p.unrealizedPNL,
