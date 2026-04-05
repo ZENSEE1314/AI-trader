@@ -11,20 +11,23 @@ console.log(`Port: ${process.env.PORT || 3000}`);
 console.log('');
 
 // Check required environment variables
-const requiredEnvVars = [
-  'DATABASE_URL',
-  'JWT_SECRET',
-  'TELEGRAM_TOKEN',
-  'TELEGRAM_CHAT_ID'
-];
+const criticalVars = ['DATABASE_URL'];
+const recommendedVars = ['JWT_SECRET', 'TELEGRAM_TOKEN', 'TELEGRAM_CHAT_ID'];
 
-const missingVars = requiredEnvVars.filter(varName => !process.env[varName]);
+const missingCritical = criticalVars.filter(v => !process.env[v]);
+const missingRecommended = recommendedVars.filter(v => !process.env[v]);
 
-if (missingVars.length > 0) {
-  console.error('❌ Missing required environment variables:');
-  missingVars.forEach(varName => console.error(`   - ${varName}`));
+if (missingCritical.length > 0) {
+  console.error('❌ Missing critical environment variables:');
+  missingCritical.forEach(v => console.error(`   - ${v}`));
   console.error('\nPlease set these in Railway dashboard → Variables');
   process.exit(1);
+}
+
+if (missingRecommended.length > 0) {
+  console.warn('⚠️  Missing recommended environment variables:');
+  missingRecommended.forEach(v => console.warn(`   - ${v}`));
+  console.warn('Bot will start but some features may not work.\n');
 }
 
 console.log('✅ All required environment variables are set');

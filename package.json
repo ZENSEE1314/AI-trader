@@ -4,7 +4,7 @@
   "description": "AI self-learning crypto trading bot — SMC strategy + sentiment + adaptive parameters",
   "main": "bot.js",
   "scripts": {
-    "start": "node railway-start-simple.js",
+    "start": "node railway-start.js",
     "dev": "node server.js",
     "bot": "node bot.js",
     "web": "node server.js"
