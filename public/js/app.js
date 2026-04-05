@@ -1263,8 +1263,9 @@
       if (settings.platform_usdt_network) $('#admin-usdt-net').value = settings.platform_usdt_network;
       if (settings.bscscan_api_key) $('#admin-bscscan-key').value = settings.bscscan_api_key;
 
-      // Load global tokens and risk levels
+      // Load global tokens, token leverage, and risk levels
       loadGlobalTokens();
+      loadTokenLeverage();
       loadRiskLevels();
     } catch (err) { showToast('Failed to load admin.', 'error'); }
   }
@@ -1831,6 +1832,92 @@
     if (dd) dd.classList.add('hidden');
     if (prefix === 'admin-allowed') addAllowedToken();
     else if (prefix === 'admin-banned') addBannedToken();
+    // admin-lev: just fill input, don't auto-submit (user sets leverage first)
+  }
+
+  // ── Token Leverage Management ──
+
+  async function loadTokenLeverage() {
+    try {
+      const tokens = await api('GET', '/api/admin/token-leverage');
+      const tbody = $('#admin-lev-tbody');
+      const empty = $('#admin-lev-empty');
+      if (!tbody) return;
+
+      if (!tokens.length) {
+        tbody.innerHTML = '';
+        empty.classList.remove('hidden');
+        return;
+      }
+      empty.classList.add('hidden');
+
+      // Fetch current prices for display
+      let priceMap = {};
+      try {
+        const resp = await fetch('https://fapi.binance.com/fapi/v1/ticker/price');
+        const tickers = await resp.json();
+        for (const t of tickers) priceMap[t.symbol] = parseFloat(t.price);
+      } catch (_) {}
+
+      tbody.innerHTML = tokens.map(t => {
+        const price = priceMap[t.symbol];
+        const priceStr = price ? `$${price >= 1 ? price.toFixed(2) : price.toFixed(4)}` : '--';
+        return `<tr>
+          <td class="text-mono"><strong>${escapeHtml(t.symbol.replace('USDT', ''))}</strong></td>
+          <td class="text-mono" style="color:var(--color-text-muted);">${priceStr}</td>
+          <td>
+            <input type="number" class="form-input text-mono" style="width:70px;padding:2px 6px;font-size:0.85rem;display:inline-block;" value="${t.leverage}" min="1" max="125" data-lev-symbol="${escapeHtml(t.symbol)}">
+            <button class="btn btn-sm" style="font-size:0.65rem;padding:2px 8px;cursor:pointer;" onclick="window.CryptoBot.updateTokenLev('${escapeHtml(t.symbol)}', this)">Save</button>
+          </td>
+          <td><button class="btn btn-danger btn-sm" style="font-size:0.7rem;cursor:pointer;" data-remove-lev="${escapeHtml(t.symbol)}">✕</button></td>
+        </tr>`;
+      }).join('');
+
+      tbody.querySelectorAll('[data-remove-lev]').forEach(btn => {
+        btn.addEventListener('click', () => removeTokenLeverage(btn.dataset.removeLev));
+      });
+    } catch (err) { /* silent */ }
+  }
+
+  async function addTokenLeverage() {
+    const symbol = ($('#admin-lev-symbol').value || '').toUpperCase().trim();
+    const leverage = parseInt($('#admin-lev-value').value) || 20;
+    if (!symbol) return showToast('Enter a token symbol', 'error');
+    if (leverage < 1 || leverage > 125) return showToast('Leverage must be 1-125', 'error');
+    try {
+      await api('POST', '/api/admin/token-leverage', { symbol, leverage });
+      showToast(`${symbol} set to ${leverage}x`, 'success');
+      $('#admin-lev-symbol').value = '';
+      loadTokenLeverage();
+    } catch (err) { showToast(err.message, 'error'); }
+  }
+
+  async function updateTokenLev(symbol, btn) {
+    const input = btn.previousElementSibling;
+    const leverage = parseInt(input.value);
+    if (!leverage || leverage < 1 || leverage > 125) return showToast('Leverage must be 1-125', 'error');
+    try {
+      await api('POST', '/api/admin/token-leverage', { symbol, leverage });
+      showToast(`${symbol} updated to ${leverage}x`, 'success');
+    } catch (err) { showToast(err.message, 'error'); }
+  }
+
+  async function removeTokenLeverage(symbol) {
+    if (!confirm(`Remove leverage setting for ${symbol}? It will use default 20x.`)) return;
+    try {
+      await api('POST', '/api/admin/remove-token-leverage', { symbol });
+      showToast(`${symbol} leverage removed`, 'success');
+      loadTokenLeverage();
+    } catch (err) { showToast(err.message, 'error'); }
+  }
+
+  async function autoPopulateLeverage() {
+    if (!confirm('Auto-populate leverage for all tokens above $1000?\nBTC/ETH → 100x, others → 20x')) return;
+    try {
+      const result = await api('POST', '/api/admin/token-leverage/auto-populate', { min_price: 1000, default_leverage: 20 });
+      showToast(`Added ${result.added} tokens`, 'success');
+      loadTokenLeverage();
+    } catch (err) { showToast(err.message, 'error'); }
   }
 
   // User ban-token search (shows only admin-allowed tokens)
@@ -2542,7 +2629,7 @@
     goToAuth, showLoginForm, onPlatformChange,
     searchCoins, addCoin, removeCoin,
     filterLogs, clearLogs,
-    addTokenLeverage, removeTokenLeverage, searchTokenLev, pickTokenLev, selectRiskLevel,
+    addTokenLeverage, removeTokenLeverage, updateTokenLev, autoPopulateLeverage, searchTokenLev, pickTokenLev, selectRiskLevel,
     addAllowedToken, addBannedToken, unbanGlobalToken, removeGlobalToken,
     searchAdminToken, pickAdminToken, searchUserBanToken,
     addRiskLevel, saveRiskLevel, deleteRiskLevel,

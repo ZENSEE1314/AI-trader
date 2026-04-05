@@ -1133,6 +1133,34 @@
           <div id="admin-banned-empty" style="color:var(--color-text-muted);font-size:0.85rem;padding:var(--space-3);text-align:center;">No banned tokens. Bot can trade any coin.</div>
         </div>
 
+        <!-- Token Leverage Settings -->
+        <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Token Leverage <span class="tip-btn">?<span class="tip-text">Set custom leverage per token. BTC/ETH default 100x. Auto-populate adds all tokens above $1000. This overrides user risk level leverage.</span></span></h3>
+        <div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-4);margin-bottom:var(--space-5);">
+          <div style="display:flex;gap:var(--space-2);align-items:end;margin-bottom:var(--space-3);flex-wrap:wrap;">
+            <div class="form-group" style="margin-bottom:0;flex:1;min-width:140px;position:relative;">
+              <label class="form-label" for="admin-lev-symbol">Token Symbol</label>
+              <input class="form-input text-mono" type="text" id="admin-lev-symbol" placeholder="Type to search..." autocomplete="off" style="text-transform:uppercase;" oninput="window.CryptoBot.searchAdminToken(this,'admin-lev')" onfocus="window.CryptoBot.searchAdminToken(this,'admin-lev')">
+              <div class="coin-dropdown hidden" id="admin-lev-dropdown"></div>
+            </div>
+            <div class="form-group" style="margin-bottom:0;width:90px;">
+              <label class="form-label" for="admin-lev-value">Leverage</label>
+              <input class="form-input text-mono" type="number" id="admin-lev-value" placeholder="20" min="1" max="125" value="20">
+            </div>
+            <button class="btn btn-primary btn-sm" onclick="window.CryptoBot.addTokenLeverage()">Set Leverage</button>
+          </div>
+          <div style="display:flex;gap:var(--space-2);margin-bottom:var(--space-3);flex-wrap:wrap;align-items:center;">
+            <button class="btn btn-sm" style="background:var(--color-accent);color:#fff;" onclick="window.CryptoBot.autoPopulateLeverage()">Auto-Populate ($1000+ tokens)</button>
+            <span style="font-size:0.75rem;color:var(--color-text-muted);">Adds all tokens above $1000 at 20x. BTC/ETH set to 100x.</span>
+          </div>
+          <div class="table-wrap" style="max-height:400px;overflow-y:auto;">
+            <table class="data-table">
+              <thead style="position:sticky;top:0;z-index:1;"><tr><th>Symbol</th><th>Price</th><th>Leverage</th><th>Action</th></tr></thead>
+              <tbody id="admin-lev-tbody"></tbody>
+            </table>
+          </div>
+          <div id="admin-lev-empty" style="color:var(--color-text-muted);font-size:0.85rem;padding:var(--space-3);text-align:center;">No token leverage set. Default 20x for all tokens.</div>
+        </div>
+
         <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Weekly Earnings Overview <span class="tip-btn">?<span class="tip-text">Summary of all users' weekly profits. Shows the 60/40 split, admin share, and per-user breakdown. Settle earnings here.</span></span></h3>
         <div id="admin-weekly-summary" class="summary-grid" style="margin-bottom:var(--space-4);">
           <div class="summary-card" style="border-left:3px solid var(--color-success);">

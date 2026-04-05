@@ -835,6 +835,90 @@ router.post('/remove-global-token', async (req, res) => {
   }
 });
 
+// ── Token Leverage Management ────────────────────────────────
+
+// List all token leverage settings
+router.get('/token-leverage', async (req, res) => {
+  try {
+    const rows = await query('SELECT * FROM token_leverage WHERE enabled = true ORDER BY symbol');
+    res.json(rows);
+  } catch (err) {
+    console.error('Token leverage list error:', err.message);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Set leverage for a token
+router.post('/token-leverage', async (req, res) => {
+  try {
+    const { symbol, leverage } = req.body;
+    if (!symbol) return res.status(400).json({ error: 'Symbol required' });
+    const lev = parseInt(leverage);
+    if (!lev || lev < 1 || lev > 125) return res.status(400).json({ error: 'Leverage must be 1-125' });
+
+    await query(
+      `INSERT INTO token_leverage (symbol, leverage, enabled)
+       VALUES ($1, $2, true)
+       ON CONFLICT (symbol) DO UPDATE SET leverage = EXCLUDED.leverage, enabled = true`,
+      [symbol.toUpperCase(), lev]
+    );
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Token leverage set error:', err.message);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Remove token leverage setting
+router.post('/remove-token-leverage', async (req, res) => {
+  try {
+    const symbol = (req.body.symbol || '').toUpperCase().trim();
+    if (!symbol) return res.status(400).json({ error: 'Symbol required' });
+    await query('DELETE FROM token_leverage WHERE symbol = $1', [symbol]);
+    res.json({ ok: true, symbol });
+  } catch (err) {
+    console.error('Token leverage remove error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Auto-populate: fetch all tokens above $1000 from Binance and add with default leverage
+router.post('/token-leverage/auto-populate', async (req, res) => {
+  try {
+    const defaultLev = parseInt(req.body.default_leverage) || 20;
+    const minPrice = parseFloat(req.body.min_price) || 1000;
+
+    const fetch = require('node-fetch');
+    const response = await fetch('https://fapi.binance.com/fapi/v1/ticker/price');
+    const tickers = await response.json();
+    const usdtPairs = tickers.filter(t =>
+      t.symbol.endsWith('USDT') && parseFloat(t.price) >= minPrice
+    );
+
+    let added = 0;
+    for (const t of usdtPairs) {
+      const sym = t.symbol;
+      const price = parseFloat(t.price);
+      // BTC/ETH get 100x, others get the default
+      const isTopCoin = sym === 'BTCUSDT' || sym === 'ETHUSDT';
+      const lev = isTopCoin ? 100 : defaultLev;
+
+      await query(
+        `INSERT INTO token_leverage (symbol, leverage, enabled)
+         VALUES ($1, $2, true)
+         ON CONFLICT (symbol) DO NOTHING`,
+        [sym, lev]
+      );
+      added++;
+    }
+
+    res.json({ ok: true, added, tokens: usdtPairs.map(t => ({ symbol: t.symbol, price: parseFloat(t.price) })) });
+  } catch (err) {
+    console.error('Token leverage auto-populate error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── List all open positions across all users ────
 router.get('/open-positions', async (req, res) => {
   try {
