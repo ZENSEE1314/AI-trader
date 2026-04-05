@@ -36,16 +36,19 @@ const CONFIG = {
 };
 
 // ── Trailing SL config ─────────────────────────────────────
-// Fixed tiers up to 5%, then 3% steps from 10%, then 5% steps from 20%
+// Fixed tiers up to 13%, then 3% steps from 16%, then 5% steps from 20%
 const TRAILING_SL = {
   INITIAL_SL_PCT: 0.03,          // -3% initial SL from entry
   FIXED_TIERS: [
     { trigger: 0.01,  sl: 0.005 },  //  +1%   → SL at +0.5%
     { trigger: 0.025, sl: 0.005 },  //  +2.5% → SL at +0.5%
     { trigger: 0.05,  sl: 0.02  },  //  +5%   → SL at +2%
+    { trigger: 0.08,  sl: 0.02  },  //  +8%   → SL at +2%
+    { trigger: 0.10,  sl: 0.02  },  //  +10%  → SL at +2%
+    { trigger: 0.13,  sl: 0.03  },  //  +13%  → SL at +3%
   ],
-  // 10-19%: trigger every 3%, SL trails 7% behind trigger
-  MID_START:  0.10, MID_STEP: 0.03, MID_GAP: 0.07,
+  // 16-19%: trigger every 3%, SL trails 10% behind trigger
+  MID_START:  0.16, MID_STEP: 0.03, MID_GAP: 0.10,
   // 20%+:   trigger every 5%, SL trails 5% behind trigger
   HIGH_START: 0.20, HIGH_STEP: 0.05, HIGH_GAP: 0.05,
 };
