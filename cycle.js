@@ -958,7 +958,8 @@ async function executeForAllUsers(pick) {
         // Per-user settings: use user_token_leverage first, then key default
         const userLev = await getTokenLeverage(symbol, key.id);
         const walletSizePct = (await getCapitalPercentage(key.id)) / 100;
-        const userTP = parseFloat(key.tp_pct) || 0.01;
+        const rawTP = parseFloat(key.tp_pct);
+        const userTP = isNaN(rawTP) ? 0.01 : rawTP;
         const userSL = parseFloat(key.sl_pct) || 0.01;
         const rawConsecLoss = parseInt(key.max_consec_loss);
         const userMaxConsecLoss = isNaN(rawConsecLoss) ? 2 : rawConsecLoss;
@@ -1129,15 +1130,16 @@ async function executeForAllUsers(pick) {
           }
 
           const slPrice = initialSlPrice;
-          const tp3Price = userTp3Price;
+          const hasTp = userTP > 0;
+          const tp3Price = hasTp ? userTp3Price : 0;
 
           try { await userClient.changeMarginMode(symbol, 'ISOLATION'); } catch (_) {}
           try { await userClient.changeLeverage(symbol, userLev); } catch (_) {}
 
           const slFmtBx = parseFloat(slPrice.toFixed(8));
-          const tpFmtBx = parseFloat(tp3Price.toFixed(8));
+          const tpFmtBx = hasTp ? parseFloat(tp3Price.toFixed(8)) : 0;
 
-          userLog.trade(`User ${key.email}: placing Bitunix MARKET ${isLong ? 'BUY' : 'SELL'} ${symbol} qty=${qty} SL=$${slFmtBx} TP=$${tpFmtBx}...`);
+          userLog.trade(`User ${key.email}: placing Bitunix MARKET ${isLong ? 'BUY' : 'SELL'} ${symbol} qty=${qty} SL=$${slFmtBx}${hasTp ? ` TP=$${tpFmtBx}` : ' (trailing SL only, no TP)'}...`);
           const order = await userClient.placeOrder({
             symbol, side: isLong ? 'BUY' : 'SELL',
             qty: String(qty), orderType: 'MARKET', tradeSide: 'OPEN',
@@ -1152,11 +1154,10 @@ async function executeForAllUsers(pick) {
           if (pos && pos.positionId) {
             userLog.trade(`Bitunix position confirmed: ${pos.positionId} — setting TP/SL...`);
             try {
-              await userClient.placePositionTpSl({
-                symbol, positionId: pos.positionId,
-                tpPrice: tpFmtBx, slPrice: slFmtBx,
-              });
-              userLog.trade(`Bitunix TP=$${tpFmtBx} SL=$${slFmtBx} set on position ${pos.positionId}`);
+              const tpslArgs = { symbol, positionId: pos.positionId, slPrice: slFmtBx };
+              if (hasTp) tpslArgs.tpPrice = tpFmtBx;
+              await userClient.placePositionTpSl(tpslArgs);
+              userLog.trade(`Bitunix ${hasTp ? `TP=$${tpFmtBx} ` : ''}SL=$${slFmtBx} set on position ${pos.positionId}${hasTp ? '' : ' (trailing SL only)'}`);
             } catch (e) {
               userLog.error(`Bitunix TP/SL FAILED: ${e.message} — SET MANUALLY`);
               await notify(`*Bitunix ${symbol} ${pick.direction}*\nTP/SL failed! Set manually on Bitunix NOW.`);
