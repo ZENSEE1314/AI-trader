@@ -267,32 +267,29 @@ async function updateStopLoss(client, symbol, newSlPrice, closeSide, platform, p
 
 // ── TRAILING SL: Calculate and step SL up as profit grows ────
 // Returns { stepped: boolean, newSlPrice, newLastStep } or null
-function calculateTrailingStep(entryPrice, currentPrice, isLong, lastStep) {
+// stepPct: trailing SL step size as decimal (e.g. 0.012 = 1.2%). Defaults to TRAILING_SL config.
+function calculateTrailingStep(entryPrice, currentPrice, isLong, lastStep, stepPct) {
+  const firstStep = stepPct || TRAILING_SL.FIRST_STEP;
+  const stepIncrement = stepPct || TRAILING_SL.STEP_INCREMENT;
+
   const profitPct = isLong
     ? (currentPrice - entryPrice) / entryPrice
     : (entryPrice - currentPrice) / entryPrice;
 
-  // Determine what the next step threshold is
-  const nextStep = lastStep === 0 ? TRAILING_SL.FIRST_STEP : lastStep + TRAILING_SL.STEP_INCREMENT;
+  const nextStep = lastStep === 0 ? firstStep : lastStep + stepIncrement;
 
   if (profitPct < nextStep) return null;
 
   // Price may have jumped multiple levels — find the highest reached step
   let reachedStep = nextStep;
-  while (true) {
-    const stepAfter = reachedStep + TRAILING_SL.STEP_INCREMENT;
-    if (profitPct >= stepAfter) {
-      reachedStep = stepAfter;
-    } else {
-      break;
-    }
+  while (profitPct >= reachedStep + stepIncrement) {
+    reachedStep += stepIncrement;
   }
 
   // SL placement: first step → half step behind, subsequent → full step behind
-  // +1.2% → SL +0.6%, +2.4% → SL +1.2%, +3.6% → SL +2.4%
-  const slLevel = reachedStep <= TRAILING_SL.FIRST_STEP
-    ? reachedStep - TRAILING_SL.STEP_INCREMENT / 2
-    : reachedStep - TRAILING_SL.STEP_INCREMENT;
+  const slLevel = reachedStep <= firstStep
+    ? reachedStep - stepIncrement / 2
+    : reachedStep - stepIncrement;
   const newSlPrice = isLong
     ? entryPrice * (1 + slLevel)
     : entryPrice * (1 - slLevel);
@@ -989,8 +986,8 @@ async function executeForAllUsers(pick) {
           }
         }
 
-        // Initial trailing SL at -1% from entry
-        const initialSlPrice = isLong ? price * (1 - TRAILING_SL.INITIAL_SL_PCT) : price * (1 + TRAILING_SL.INITIAL_SL_PCT);
+        // Initial trailing SL uses user's sl_pct setting (per API key)
+        const initialSlPrice = isLong ? price * (1 - userSL) : price * (1 + userSL);
         const userTpPrice = isLong ? price * (1 + userTP) : price * (1 - userTP);
         const userTp3Price = isLong ? price * (1 + userTP * 1.5) : price * (1 - userTP * 1.5);
 
@@ -1220,7 +1217,7 @@ async function syncTradeStatus() {
     const openTrades = await db.query(
       `SELECT t.*, ak.api_key_enc, ak.iv, ak.auth_tag,
               ak.api_secret_enc, ak.secret_iv, ak.secret_auth_tag,
-              ak.platform
+              ak.platform, COALESCE(ak.trailing_sl_step, 1.2) as key_trailing_sl_step
        FROM trades t
        JOIN api_keys ak ON ak.id = t.api_key_id
        WHERE t.status = 'OPEN'`
@@ -1263,8 +1260,9 @@ async function syncTradeStatus() {
               const isLong = trade.direction !== 'SHORT';
               const curPrice = entryPrice + (exchangePos.pnl / Math.abs(exchangePos.amt || 1));
               const lastStep = parseFloat(trade.trailing_sl_last_step) || 0;
+              const userStepPct = parseFloat(key.key_trailing_sl_step || 1.2) / 100;
 
-              const trailResult = calculateTrailingStep(entryPrice, curPrice, isLong, lastStep);
+              const trailResult = calculateTrailingStep(entryPrice, curPrice, isLong, lastStep, userStepPct);
               if (trailResult) {
                 const closeSide = isLong ? 'SELL' : 'BUY';
                 try {
@@ -1301,8 +1299,9 @@ async function syncTradeStatus() {
               const isLong = trade.direction !== 'SHORT';
               const curPrice = entryPrice + (exchangePos.pnl / Math.abs(exchangePos.amt || 1));
               const lastStep = parseFloat(trade.trailing_sl_last_step) || 0;
+              const userStepPct = parseFloat(key.key_trailing_sl_step || 1.2) / 100;
 
-              const trailResult = calculateTrailingStep(entryPrice, curPrice, isLong, lastStep);
+              const trailResult = calculateTrailingStep(entryPrice, curPrice, isLong, lastStep, userStepPct);
               if (trailResult) {
                 try {
                   const stepped = await updateStopLoss(userClient, trade.symbol, trailResult.newSlPrice, null, 'bitunix', 8);

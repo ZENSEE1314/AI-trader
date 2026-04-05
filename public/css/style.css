@@ -1211,7 +1211,8 @@ input[type="range"]::-moz-range-thumb {
   }
 
   .landing-plans {
-    grid-template-columns: 1fr;
+    flex-direction: column;
+    align-items: center;
   }
 
   .landing-screenshots {
@@ -2185,8 +2186,8 @@ img[src*="logo"] {
    ============================================================ */
 
 .landing-plans {
-  display: grid;
-  grid-template-columns: 1fr 1.08fr;
+  display: flex;
+  justify-content: center;
   gap: var(--space-6);
   max-width: 780px;
   margin: 0 auto;
@@ -2594,7 +2595,6 @@ img[src*="logo"] {
   }
 
   .landing-plans {
-    grid-template-columns: 1fr;
     max-width: 420px;
   }
 

@@ -697,12 +697,12 @@ router.get('/risk-levels', async (req, res) => {
 
 router.post('/risk-levels', async (req, res) => {
   try {
-    const { name, description, tp_pct, sl_pct, max_consec_loss, top_n_coins, capital_percentage, max_leverage } = req.body;
+    const { name, description, tp_pct, sl_pct, trailing_sl_step, max_consec_loss, top_n_coins, capital_percentage, max_leverage } = req.body;
     if (!name) return res.status(400).json({ error: 'Name required' });
     const row = await query(
-      `INSERT INTO risk_levels (name, description, tp_pct, sl_pct, max_consec_loss, top_n_coins, capital_percentage, max_leverage)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
-      [name, description || '', tp_pct || 0.01, sl_pct || 0.01, max_consec_loss || 2, top_n_coins || 50, capital_percentage || 10, max_leverage || 20]
+      `INSERT INTO risk_levels (name, description, tp_pct, sl_pct, trailing_sl_step, max_consec_loss, top_n_coins, capital_percentage, max_leverage)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
+      [name, description || '', tp_pct || 0.01, sl_pct || 0.01, trailing_sl_step || 1.2, max_consec_loss || 2, top_n_coins || 50, capital_percentage || 10, max_leverage || 20]
     );
     res.json(row[0]);
   } catch (err) {
@@ -713,14 +713,15 @@ router.post('/risk-levels', async (req, res) => {
 
 router.put('/risk-levels/:id', async (req, res) => {
   try {
-    const { name, description, tp_pct, sl_pct, max_consec_loss, top_n_coins, capital_percentage, max_leverage, enabled } = req.body;
+    const { name, description, tp_pct, sl_pct, trailing_sl_step, max_consec_loss, top_n_coins, capital_percentage, max_leverage, enabled } = req.body;
     await query(
       `UPDATE risk_levels SET name = COALESCE($1, name), description = COALESCE($2, description),
        tp_pct = COALESCE($3, tp_pct), sl_pct = COALESCE($4, sl_pct),
-       max_consec_loss = COALESCE($5, max_consec_loss), top_n_coins = COALESCE($6, top_n_coins),
-       capital_percentage = COALESCE($7, capital_percentage), max_leverage = COALESCE($8, max_leverage),
-       enabled = COALESCE($9, enabled) WHERE id = $10`,
-      [name, description, tp_pct, sl_pct, max_consec_loss, top_n_coins, capital_percentage, max_leverage, enabled, req.params.id]
+       trailing_sl_step = COALESCE($5, trailing_sl_step),
+       max_consec_loss = COALESCE($6, max_consec_loss), top_n_coins = COALESCE($7, top_n_coins),
+       capital_percentage = COALESCE($8, capital_percentage), max_leverage = COALESCE($9, max_leverage),
+       enabled = COALESCE($10, enabled) WHERE id = $11`,
+      [name, description, tp_pct, sl_pct, trailing_sl_step, max_consec_loss, top_n_coins, capital_percentage, max_leverage, enabled, req.params.id]
     );
     res.json({ ok: true });
   } catch (err) {
@@ -1435,6 +1436,21 @@ router.post('/fix-trades', async (req, res) => {
   } catch (err) {
     console.error('Fix trades error:', err.message);
     res.status(500).json({ error: err.message });
+  }
+});
+
+// Clear old test data from wallet_transactions and withdrawals
+router.post('/clear-test-data', async (req, res) => {
+  try {
+    const txResult = await query('DELETE FROM wallet_transactions');
+    const wdResult = await query('DELETE FROM withdrawals');
+    res.json({
+      ok: true,
+      message: `Cleared ${txResult.rowCount || 0} transactions and ${wdResult.rowCount || 0} withdrawals`,
+    });
+  } catch (err) {
+    console.error('Clear test data error:', err.message);
+    res.status(500).json({ error: 'Server error' });
   }
 });
 

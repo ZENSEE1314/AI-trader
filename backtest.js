@@ -8,14 +8,16 @@ const fetch = require('node-fetch');
 const { getFetchOptions } = require('./proxy-agent');
 
 // ── Strategy Parameters ─────────────────────────────────────
+// Matches live cycle.js trailing SL config + user key settings from Apr 1 trades
+// Trades showed: SL ~1.5%, TP ~2.25% (= 1.5% * 1.5x), RR = 1:1.5
 const SWING_LENGTHS = { '15m': 10, '3m': 10, '1m': 5 };
 const MIN_24H_VOLUME = 10_000_000;
-const DEFAULT_TP_PCT = 0.01;       // 1% TP (user default)
-const DEFAULT_SL_PCT = 0.01;       // 1% SL (initial trailing)
+const DEFAULT_TP_PCT = 0.015;      // 1.5% TP (matches live user key tp_pct)
+const DEFAULT_SL_PCT = 0.015;      // 1.5% SL (matches live user key sl_pct)
 const TRAILING_SL = {
-  INITIAL_SL_PCT: 0.01,
-  FIRST_STEP: 0.013,
-  STEP_INCREMENT: 0.01,
+  INITIAL_SL_PCT: 0.03,            // 3% initial SL (from cycle.js)
+  FIRST_STEP:     0.012,           // First trailing at +1.2% profit (from cycle.js)
+  STEP_INCREMENT: 0.012,           // Each step +1.2% (from cycle.js)
 };
 const VWAP_PROXIMITY = 0.003;      // 0.3% proximity to key level
 const WALLET = 1000;               // Starting wallet USDT
@@ -369,12 +371,14 @@ async function runBacktest() {
       const tradeUsdt = wallet * RISK_PCT;
       const notional = tradeUsdt * LEVERAGE;
       const qty = notional / price;
+      // SL: uses DEFAULT_SL_PCT (user's sl_pct), same as cycle.js
       const slPrice = direction === 'LONG'
-        ? price * (1 - TRAILING_SL.INITIAL_SL_PCT)
-        : price * (1 + TRAILING_SL.INITIAL_SL_PCT);
+        ? price * (1 - DEFAULT_SL_PCT)
+        : price * (1 + DEFAULT_SL_PCT);
+      // TP: uses TP_PCT * 1.5 (TP3 level), same as cycle.js userTp3Price
       const tpPrice = direction === 'LONG'
-        ? price * (1 + DEFAULT_TP_PCT)
-        : price * (1 - DEFAULT_TP_PCT);
+        ? price * (1 + DEFAULT_TP_PCT * 1.5)
+        : price * (1 - DEFAULT_TP_PCT * 1.5);
 
       const trade = {
         symbol, direction, entryPrice: price, qty, slPrice, tpPrice,

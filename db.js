@@ -182,6 +182,8 @@ async function initAllTables() {
     // User risk level assignment
     `ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS risk_level_id INTEGER`,
     `ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS capital_percentage DECIMAL DEFAULT 10.0`,
+    `ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS trailing_sl_step DECIMAL DEFAULT 1.2`,
+    `ALTER TABLE risk_levels ADD COLUMN IF NOT EXISTS trailing_sl_step DECIMAL DEFAULT 1.2`,
     // Add referral tier columns
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS referral_tier INTEGER DEFAULT 1`,
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS total_referral_commission DECIMAL DEFAULT 0`,

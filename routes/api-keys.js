@@ -17,6 +17,7 @@ router.get('/', async (req, res) => {
                 ak.allowed_coins, ak.banned_coins, ak.tp_pct, ak.sl_pct, ak.max_consec_loss, ak.top_n_coins,
                 COALESCE(ak.risk_level_id, 1) as risk_level_id,
                 COALESCE(ak.capital_percentage, 10.0) as capital_percentage,
+                COALESCE(ak.trailing_sl_step, 1.2) as trailing_sl_step,
                 COALESCE(rl.name, 'Medium Risk') as risk_level_name,
                 COALESCE(rl.description, 'Balanced risk profile') as risk_level_description,
                 substring(ak.api_key_enc, 1, 8) as key_preview, ak.created_at
@@ -33,6 +34,7 @@ router.get('/', async (req, res) => {
                 ak.allowed_coins, ak.banned_coins, ak.tp_pct, ak.sl_pct, ak.max_consec_loss, ak.top_n_coins,
                 1 as risk_level_id,
                 10.0 as capital_percentage,
+                COALESCE(ak.trailing_sl_step, 1.2) as trailing_sl_step,
                 'Medium Risk' as risk_level_name,
                 'Balanced risk profile' as risk_level_description,
                 substring(ak.api_key_enc, 1, 8) as key_preview, ak.created_at
@@ -111,7 +113,7 @@ router.post('/', async (req, res) => {
 router.put('/:id/settings', async (req, res) => {
   try {
     const { leverage, risk_pct, max_loss_usdt, max_positions, enabled, allowed_coins, banned_coins,
-            tp_pct, sl_pct, max_consec_loss, top_n_coins, risk_level_id, capital_percentage, token_leverages } = req.body;
+            tp_pct, sl_pct, max_consec_loss, top_n_coins, risk_level_id, capital_percentage, trailing_sl_step, token_leverages } = req.body;
 
     if (leverage !== undefined && (leverage < 1 || leverage > 125)) {
       return res.status(400).json({ error: 'Leverage must be 1-125' });
@@ -136,6 +138,9 @@ router.put('/:id/settings', async (req, res) => {
     }
     if (capital_percentage !== undefined && (capital_percentage < 1 || capital_percentage > 100)) {
       return res.status(400).json({ error: 'Capital percentage must be 1-100%' });
+    }
+    if (trailing_sl_step !== undefined && (trailing_sl_step < 0.5 || trailing_sl_step > 5.0)) {
+      return res.status(400).json({ error: 'Trailing SL step must be 0.5-5%' });
     }
     
     // Validate risk_level_id if provided
@@ -168,10 +173,11 @@ router.put('/:id/settings', async (req, res) => {
         max_consec_loss = COALESCE($10, max_consec_loss),
         top_n_coins = COALESCE($11, top_n_coins),
         risk_level_id = COALESCE($12, risk_level_id),
-        capital_percentage = COALESCE($13, capital_percentage)
-       WHERE id = $14 AND user_id = $15`,
+        capital_percentage = COALESCE($13, capital_percentage),
+        trailing_sl_step = COALESCE($14, trailing_sl_step)
+       WHERE id = $15 AND user_id = $16`,
       [leverage, risk_pct, max_loss_usdt, max_positions, enabled, allowed_coins, banned_coins,
-       tp_pct, sl_pct, max_consec_loss, top_n_coins, risk_level_id, capital_percentage, req.params.id, req.userId]
+       tp_pct, sl_pct, max_consec_loss, top_n_coins, risk_level_id, capital_percentage, trailing_sl_step, req.params.id, req.userId]
     );
 
     // Handle per-token leverage overrides

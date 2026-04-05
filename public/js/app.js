@@ -354,6 +354,62 @@
     grid.innerHTML = html;
   }
 
+  let weTimerInterval = null;
+
+  function formatCountdown(ms) {
+    if (ms <= 0) return 'OVERDUE';
+    const totalSec = Math.floor(ms / 1000);
+    const dd = Math.floor(totalSec / 86400);
+    const hh = Math.floor((totalSec % 86400) / 3600);
+    const mm = Math.floor((totalSec % 3600) / 60);
+    const ss = totalSec % 60;
+    return `${String(dd).padStart(2,'0')}:${String(hh).padStart(2,'0')}:${String(mm).padStart(2,'0')}:${String(ss).padStart(2,'0')}`;
+  }
+
+  function startCountdownTimer(dueIso, adminShareAmount) {
+    if (weTimerInterval) clearInterval(weTimerInterval);
+    const dueMs = new Date(dueIso).getTime();
+    const timerEl = document.getElementById('we-timer-countdown');
+    const timerBox = document.getElementById('we-timer');
+    const payBtn = document.getElementById('we-pay-btn');
+    if (!timerEl) return;
+
+    function tick() {
+      const remaining = dueMs - Date.now();
+      timerEl.textContent = formatCountdown(remaining);
+      const isOverdue = remaining <= 0;
+      const daysLeft = remaining / 86400000;
+
+      if (isOverdue) {
+        timerEl.style.color = 'var(--color-danger)';
+        timerBox.style.borderColor = 'var(--color-danger)';
+        timerBox.style.background = 'rgba(239,68,68,0.08)';
+      } else if (daysLeft <= 2) {
+        timerEl.style.color = 'var(--color-danger)';
+        timerBox.style.borderColor = 'var(--color-danger)';
+        timerBox.style.background = 'var(--color-bg)';
+      } else if (daysLeft <= 4) {
+        timerEl.style.color = '#f59e0b';
+        timerBox.style.borderColor = '#f59e0b';
+        timerBox.style.background = 'var(--color-bg)';
+      } else {
+        timerEl.style.color = 'var(--color-accent)';
+        timerBox.style.borderColor = 'var(--color-border-muted)';
+        timerBox.style.background = 'var(--color-bg)';
+      }
+
+      // Show pay button if there's a fee to pay
+      if (payBtn && adminShareAmount > 0) {
+        payBtn.classList.remove('hidden');
+        payBtn.textContent = `Pay $${adminShareAmount.toFixed(2)}`;
+      } else if (payBtn) {
+        payBtn.classList.add('hidden');
+      }
+    }
+    tick();
+    weTimerInterval = setInterval(tick, 1000);
+  }
+
   function renderWeeklyEarnings(data) {
     const el = (id) => document.getElementById(id);
     const userShare = parseFloat(data.user_share) || 0;
@@ -362,27 +418,9 @@
     const netColor = netPnl >= 0 ? 'var(--color-success)' : 'var(--color-danger)';
     const netSign = netPnl >= 0 ? '+' : '';
 
-    // Payment countdown timer
-    const timerEl = el('we-timer-days');
-    if (timerEl && data.days_remaining !== undefined) {
-      const days = data.days_remaining;
-      timerEl.textContent = days;
-      if (data.is_overdue) {
-        timerEl.style.color = 'var(--color-danger)';
-        timerEl.textContent = 'OVERDUE';
-        el('we-timer').style.borderColor = 'var(--color-danger)';
-        el('we-timer').style.background = 'rgba(239,68,68,0.08)';
-      } else if (days <= 2) {
-        timerEl.style.color = 'var(--color-danger)';
-        el('we-timer').style.borderColor = 'var(--color-danger)';
-      } else if (days <= 4) {
-        timerEl.style.color = '#f59e0b';
-        el('we-timer').style.borderColor = '#f59e0b';
-      } else {
-        timerEl.style.color = 'var(--color-accent)';
-        el('we-timer').style.borderColor = 'var(--color-border-muted)';
-        el('we-timer').style.background = 'var(--color-bg)';
-      }
+    // Live countdown timer (dd:hh:mm:ss)
+    if (data.payment_due) {
+      startCountdownTimer(data.payment_due, adminShare);
     }
 
     el('we-user-pct').textContent = data.user_share_pct || 60;
@@ -610,6 +648,7 @@
           <span style="font-size:0.7rem;background:var(--color-bg-raised);padding:2px 8px;border-radius:10px;">Lev ${rl.max_leverage}x</span>
           <span style="font-size:0.7rem;background:var(--color-bg-raised);padding:2px 8px;border-radius:10px;">Cap ${parseFloat(rl.capital_percentage || 10)}%</span>
           <span style="font-size:0.7rem;background:var(--color-bg-raised);padding:2px 8px;border-radius:10px;">SL ${(parseFloat(rl.sl_pct)*100).toFixed(1)}%</span>
+          <span style="font-size:0.7rem;background:var(--color-bg-raised);padding:2px 8px;border-radius:10px;">Trail ${parseFloat(rl.trailing_sl_step || 1.2).toFixed(1)}%</span>
         </div>
       </div>`;
     }).join('');
@@ -643,6 +682,9 @@
     syncNum(`leverage-num-${keyId}`, lev);
     syncSlider(`maxloss-streak-${keyId}`, consec);
     syncNum(`maxloss-streak-num-${keyId}`, consec);
+    const trail = parseFloat(rl.trailing_sl_step || 1.2).toFixed(1);
+    syncSlider(`trailing-step-${keyId}`, Math.round(trail * 10));
+    syncNum(`trailing-step-num-${keyId}`, trail);
   }
 
   function renderTokenLeverages(keyId, leverages) {
@@ -729,6 +771,7 @@
       const bannedCoins = k.banned_coins || '';
       const tpPct = k.tp_pct != null ? (parseFloat(k.tp_pct) * 100).toFixed(2) : '1.00';
       const slPct = k.sl_pct != null ? (parseFloat(k.sl_pct) * 100).toFixed(2) : '1.00';
+      const trailingStep = k.trailing_sl_step != null ? parseFloat(k.trailing_sl_step).toFixed(1) : '1.2';
       const maxConsecLoss = k.max_consec_loss != null ? k.max_consec_loss : 2;
 
       return `<div class="key-card" data-key-id="${k.id}">
@@ -809,13 +852,23 @@
             </div>
             <div class="slider-group">
               <div class="slider-header">
-                <label class="form-label" for="sl-${k.id}">Stop Loss %</label>
+                <label class="form-label" for="sl-${k.id}">Initial SL % <span class="tip-btn">?<span class="tip-text">Stop loss placed at this % from entry. E.g. 1.5% means if price drops 1.5% your position closes.</span></span></label>
                 <input type="number" class="slider-num" id="sl-num-${k.id}" min="0.5" max="10" step="0.1" value="${slPct}"
                   oninput="window.CryptoBot.syncSlider('sl-${k.id}',Math.round(this.value*10))">
               </div>
               <input type="range" id="sl-${k.id}" min="5" max="100" value="${Math.round(slPct * 10)}"
                 oninput="window.CryptoBot.syncNum('sl-num-${k.id}',(this.value/10).toFixed(1))"
                 aria-label="Stop loss percentage">
+            </div>
+            <div class="slider-group">
+              <div class="slider-header">
+                <label class="form-label" for="trailing-step-${k.id}">Trailing SL Step % <span class="tip-btn">?<span class="tip-text">As price moves in your favor, SL moves up in steps of this %. E.g. 1% means every 1% profit gained, SL locks in the previous level.</span></span></label>
+                <input type="number" class="slider-num" id="trailing-step-num-${k.id}" min="0.5" max="5" step="0.1" value="${trailingStep}"
+                  oninput="window.CryptoBot.syncSlider('trailing-step-${k.id}',Math.round(this.value*10))">
+              </div>
+              <input type="range" id="trailing-step-${k.id}" min="5" max="50" value="${Math.round(trailingStep * 10)}"
+                oninput="window.CryptoBot.syncNum('trailing-step-num-${k.id}',(this.value/10).toFixed(1))"
+                aria-label="Trailing stop loss step percentage">
             </div>
             <div class="slider-group">
               <div class="slider-header">
@@ -887,6 +940,7 @@
     const bannedCoins = getChipValues(`banned-chips-${keyId}`);
     const tpPct = parseInt($(`#tp-${keyId}`).value) / 1000;
     const slPct = parseInt($(`#sl-${keyId}`).value) / 1000;
+    const trailingSlStep = parseInt($(`#trailing-step-${keyId}`).value) / 10;
     const maxConsecLoss = parseInt($(`#maxloss-streak-${keyId}`).value);
     const riskLevelId = $(`#risk-level-${keyId}`).value || null;
     const tokenLeverages = getTokenLeverages(keyId);
@@ -901,6 +955,7 @@
         banned_coins: bannedCoins,
         tp_pct: tpPct,
         sl_pct: slPct,
+        trailing_sl_step: trailingSlStep,
         max_consec_loss: maxConsecLoss,
         risk_level_id: riskLevelId ? parseInt(riskLevelId) : null,
         token_leverages: tokenLeverages,
@@ -1054,9 +1109,72 @@
           </table></div>`;
         }
       }
+
+      // Transaction history
+      const txContainer = $('#cw-transactions');
+      if (txContainer) {
+        try {
+          const txns = await api('GET', '/api/subscription/transactions');
+          if (!txns.length) {
+            txContainer.innerHTML = '<div style="color:var(--color-text-muted);font-size:0.8rem;">No transactions yet.</div>';
+          } else {
+            txContainer.innerHTML = `<table class="data-table" style="font-size:0.85rem;">
+              <thead><tr><th>Date</th><th>Type</th><th>Amount</th><th>Status</th><th>Description</th></tr></thead>
+              <tbody>${txns.slice(0, 50).map(t => {
+                const amt = parseFloat(t.amount) || 0;
+                const isPositive = amt >= 0;
+                return `<tr>
+                  <td>${formatDate(t.created_at)}</td>
+                  <td>${escapeHtml(t.type || '-')}</td>
+                  <td class="text-mono" style="color:${isPositive ? 'var(--color-success)' : 'var(--color-danger)'};">${isPositive ? '+' : ''}$${Math.abs(amt).toFixed(2)}</td>
+                  <td>${escapeHtml(t.status || '-')}</td>
+                  <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(t.description || '-')}</td>
+                </tr>`;
+              }).join('')}</tbody>
+            </table>`;
+          }
+        } catch { txContainer.innerHTML = '<div style="color:var(--color-text-muted);font-size:0.8rem;">Could not load transactions.</div>'; }
+      }
+
+      // Withdrawal history
+      const wdContainer = $('#cw-withdrawals');
+      if (wdContainer) {
+        try {
+          const wds = await api('GET', '/api/subscription/withdrawals');
+          if (!wds.length) {
+            wdContainer.innerHTML = '<div style="color:var(--color-text-muted);font-size:0.8rem;">No withdrawals yet.</div>';
+          } else {
+            wdContainer.innerHTML = `<table class="data-table" style="font-size:0.85rem;">
+              <thead><tr><th>Date</th><th>Amount</th><th>Status</th><th>Address</th></tr></thead>
+              <tbody>${wds.map(w => {
+                const amt = parseFloat(w.amount) || 0;
+                const statusColor = w.status === 'completed' ? 'var(--color-success)' : w.status === 'pending' ? '#f59e0b' : 'var(--color-text-muted)';
+                const addr = w.usdt_address || w.bank_name || '-';
+                const addrShort = addr.length > 20 ? addr.slice(0, 10) + '...' + addr.slice(-6) : addr;
+                return `<tr>
+                  <td>${formatDate(w.created_at)}</td>
+                  <td class="text-mono">$${amt.toFixed(2)}</td>
+                  <td style="color:${statusColor};font-weight:600;">${escapeHtml(w.status || '-')}</td>
+                  <td style="font-size:0.8rem;">${escapeHtml(addrShort)}</td>
+                </tr>`;
+              }).join('')}</tbody>
+            </table>`;
+          }
+        } catch { wdContainer.innerHTML = '<div style="color:var(--color-text-muted);font-size:0.8rem;">Could not load withdrawals.</div>'; }
+      }
     } catch (err) {
       showToast('Failed to load cash wallet.', 'error');
     }
+  }
+
+  async function payWeekly() {
+    if (!confirm('Pay the weekly platform fee from your cash wallet?\nThis will deduct the platform fee and reset your payment timer.')) return;
+    try {
+      const result = await api('POST', '/api/dashboard/pay-weekly');
+      showToast(result.message || 'Payment successful — trading resumed!', 'success');
+      loadDashboard();
+      loadCashWallet();
+    } catch (err) { showToast(err.message, 'error'); }
   }
 
   async function submitTopUp() {
@@ -1216,6 +1334,15 @@
           </div>
           <div class="slider-group">
             <div class="slider-header">
+              <label class="form-label">Trailing SL Step %</label>
+              <input type="number" class="slider-num" id="rle-trail-num-${id}" min="0.5" max="5" step="0.1" value="${parseFloat(rl.trailing_sl_step || 1.2).toFixed(1)}"
+                oninput="window.CryptoBot.syncSlider('rle-trail-range-${id}',Math.round(this.value*10))">
+            </div>
+            <input type="range" id="rle-trail-range-${id}" min="5" max="50" value="${Math.round(parseFloat(rl.trailing_sl_step || 1.2)*10)}"
+              oninput="window.CryptoBot.syncNum('rle-trail-num-${id}',(this.value/10).toFixed(1))">
+          </div>
+          <div class="slider-group">
+            <div class="slider-header">
               <label class="form-label">Top Coins</label>
               <input type="number" class="slider-num" id="rle-top-num-${id}" min="5" max="200" step="5" value="${rl.top_n_coins || 50}"
                 oninput="window.CryptoBot.syncSlider('rle-top-range-${id}',this.value)">
@@ -1238,6 +1365,7 @@
         description: ($('#rl-desc').value || '').trim(),
         tp_pct: (parseFloat($('#rl-tp-num').value) || 1.0) / 100,
         sl_pct: (parseFloat($('#rl-sl-num').value) || 1.0) / 100,
+        trailing_sl_step: parseFloat($('#rl-trail-num')?.value) || 1.2,
         capital_percentage: parseFloat($('#rl-capital-num').value) || 10,
         max_leverage: parseInt($('#rl-leverage-num').value) || 20,
         max_consec_loss: parseInt($('#rl-consec-num').value),
@@ -1255,6 +1383,7 @@
       await api('PUT', `/api/admin/risk-levels/${id}`, {
         tp_pct: (parseFloat($(`#rle-tp-num-${id}`).value) || 1.0) / 100,
         sl_pct: (parseFloat($(`#rle-sl-num-${id}`).value) || 1.0) / 100,
+        trailing_sl_step: parseFloat($(`#rle-trail-num-${id}`).value) || 1.2,
         capital_percentage: parseFloat($(`#rle-cap-num-${id}`).value) || 10,
         max_leverage: parseInt($(`#rle-lev-num-${id}`).value) || 20,
         max_consec_loss: parseInt($(`#rle-consec-num-${id}`).value),
@@ -1478,10 +1607,14 @@
     container.innerHTML = data.users.filter(u => u.keys.length > 0).map(u => {
       const net = parseFloat(u.total_net_pnl) || 0;
       const netColor = net >= 0 ? 'var(--color-success)' : 'var(--color-danger)';
-      const days = u.days_remaining;
-      const timerColor = u.is_overdue ? 'var(--color-danger)' : days <= 2 ? 'var(--color-danger)' : days <= 4 ? '#f59e0b' : 'var(--color-accent)';
-      const timerText = u.is_overdue ? 'OVERDUE' : `${days}d left`;
-      const timerBadge = `<span style="font-size:0.7rem;font-weight:700;color:${timerColor};background:${u.is_overdue ? 'rgba(239,68,68,0.12)' : 'rgba(0,0,0,0.06)'};padding:2px 8px;border-radius:10px;margin-left:6px;">${timerText}</span>`;
+      const paidAt = u.last_paid_at ? new Date(u.last_paid_at) : new Date(u.created_at);
+      const dueMs = paidAt.getTime() + 7 * 86400000;
+      const remaining = dueMs - Date.now();
+      const isOverdue = remaining <= 0;
+      const daysLeft = remaining / 86400000;
+      const timerColor = isOverdue ? 'var(--color-danger)' : daysLeft <= 2 ? 'var(--color-danger)' : daysLeft <= 4 ? '#f59e0b' : 'var(--color-accent)';
+      const timerText = formatCountdown(remaining);
+      const timerBadge = `<span class="admin-timer-badge" data-due="${dueMs}" style="font-size:0.7rem;font-weight:700;color:${timerColor};background:${isOverdue ? 'rgba(239,68,68,0.12)' : 'rgba(0,0,0,0.06)'};padding:2px 8px;border-radius:10px;margin-left:6px;font-family:var(--font-mono);">${timerText}</span>`;
 
       const keysHtml = u.keys.map(k => {
         const isPaused = k.paused || !k.enabled;
@@ -1542,6 +1675,25 @@
         ${keysHtml}
       </div>`;
     }).join('');
+
+    // Start live ticking for all admin timer badges
+    startAdminTimerTick();
+  }
+
+  let adminTimerInterval = null;
+
+  function startAdminTimerTick() {
+    if (adminTimerInterval) clearInterval(adminTimerInterval);
+    adminTimerInterval = setInterval(() => {
+      document.querySelectorAll('.admin-timer-badge[data-due]').forEach(badge => {
+        const dueMs = parseInt(badge.dataset.due);
+        const remaining = dueMs - Date.now();
+        badge.textContent = formatCountdown(remaining);
+        const isOverdue = remaining <= 0;
+        const daysLeft = remaining / 86400000;
+        badge.style.color = isOverdue ? 'var(--color-danger)' : daysLeft <= 2 ? 'var(--color-danger)' : daysLeft <= 4 ? '#f59e0b' : 'var(--color-accent)';
+      });
+    }, 1000);
   }
 
   async function adminEditSplit(keyId, currentUserPct, currentAdminPct) {
@@ -1564,6 +1716,23 @@
       showToast(`${email} marked as paid — trading resumed`, 'success');
       loadAdmin();
     } catch (err) { showToast(err.message, 'error'); }
+  }
+
+  async function adminClearTestData() {
+    if (!confirm('Clear ALL wallet transactions and withdrawal history?\nThis cannot be undone.')) return;
+    const statusEl = document.getElementById('clear-data-status');
+    statusEl.textContent = 'Clearing...';
+    statusEl.style.color = 'var(--color-accent)';
+    try {
+      const result = await api('POST', '/api/admin/clear-test-data');
+      statusEl.textContent = result.message;
+      statusEl.style.color = 'var(--color-success)';
+      showToast('Test data cleared', 'success');
+    } catch (err) {
+      statusEl.textContent = 'Failed';
+      statusEl.style.color = 'var(--color-danger)';
+      showToast(err.message, 'error');
+    }
   }
 
   async function adminFixTrades() {
@@ -1624,14 +1793,13 @@
   function renderAdminUsers(users) {
     $('#admin-users-tbody').innerHTML = users.map(u => {
       const bal = parseFloat(u.wallet_balance || 0).toFixed(2);
-      // Payment timer: 7 days from last_paid_at or created_at
       const paidAt = u.last_paid_at ? new Date(u.last_paid_at) : new Date(u.created_at);
-      const dueDate = new Date(paidAt.getTime() + 7 * 86400000);
-      const msLeft = dueDate - Date.now();
-      const daysLeft = Math.max(0, Math.ceil(msLeft / 86400000));
+      const dueMs = paidAt.getTime() + 7 * 86400000;
+      const msLeft = dueMs - Date.now();
       const isOverdue = msLeft <= 0;
+      const daysLeft = msLeft / 86400000;
       const timerColor = isOverdue ? 'var(--color-danger)' : daysLeft <= 2 ? 'var(--color-danger)' : daysLeft <= 4 ? '#f59e0b' : 'var(--color-success)';
-      const timerText = isOverdue ? '<b>OVERDUE</b>' : `${daysLeft}d left`;
+      const timerText = formatCountdown(msLeft);
 
       return `<tr>
       <td>${escapeHtml(u.email)}${u.is_admin ? ' <b>(admin)</b>' : ''}</td>
@@ -1639,7 +1807,7 @@
       <td class="text-mono">$${bal} <button class="btn btn-ghost btn-sm" style="font-size:0.7rem;padding:2px 6px;" onclick="window.CryptoBot.adminEditWallet(${u.id},'${escapeHtml(u.email)}',${bal})">Edit</button></td>
       <td>${escapeHtml(u.referral_code || '-')}</td>
       <td>${formatDate(u.created_at)}</td>
-      <td style="white-space:nowrap;"><span style="color:${timerColor};font-size:0.8rem;font-weight:600;">${timerText}</span></td>
+      <td style="white-space:nowrap;"><span class="admin-timer-badge" data-due="${dueMs}" style="color:${timerColor};font-size:0.8rem;font-weight:600;font-family:var(--font-mono);">${timerText}</span></td>
       <td style="white-space:nowrap;">
         ${u.is_blocked
           ? `<button class="btn btn-primary btn-sm" onclick="window.CryptoBot.adminAction('unblock',${u.id})">Unblock</button>`
@@ -1978,9 +2146,9 @@
 
   window.CryptoBot = {
     toggleSettings, saveSettings, deleteKey, showToast, syncSlider, syncNum,
-    submitTopUp, saveUsdtAddress, withdrawFromWallet,
+    submitTopUp, saveUsdtAddress, withdrawFromWallet, payWeekly,
     adminAction, adminSub, adminWd, saveAdminSettings, adminEditWallet, clearErrors,
-    adminEditSplit, adminPauseKey, adminResumeKey, adminMarkPaid, adminFixTrades,
+    adminEditSplit, adminPauseKey, adminResumeKey, adminMarkPaid, adminFixTrades, adminClearTestData,
     goToAuth, showLoginForm, onPlatformChange,
     searchCoins, addCoin, removeCoin,
     filterLogs, clearLogs,

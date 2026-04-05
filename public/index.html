@@ -30,7 +30,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/css/tokens.css">
-  <link rel="stylesheet" href="/css/style.css">
+  <link rel="stylesheet" href="/css/style.css?v=20260405">
 
   <link rel="icon" href="/img/logo.jpeg" type="image/jpeg">
   <style>
@@ -297,13 +297,25 @@
           <p class="landing-section-sub">No monthly fees. No upfront cost. We only earn when you win.</p>
         </div>
         <div class="landing-plans">
-          <div class="landing-plan plan-premium" style="max-width:520px;margin:0 auto;">
+          <div class="landing-plan plan-premium" style="max-width:560px;width:100%;text-align:center;">
             <div class="plan-ribbon">FREE TO START</div>
-            <h3>AI Auto Trading</h3>
-            <p class="plan-desc">Fully automated, hands-free execution on your exchange</p>
-            <div class="plan-price" style="font-size:2.4rem;">60 / 40<span> profit split</span></div>
-            <p style="font-size:0.85rem;color:var(--color-text-muted);margin-top:-8px;margin-bottom:16px;">You keep 60% of profits. We take 40% only on winning trades.</p>
-            <ul class="plan-features">
+            <h3 style="font-size:1.3rem;margin-bottom:4px;">AI Auto Trading</h3>
+            <p class="plan-desc" style="margin-bottom:20px;">Fully automated, hands-free execution on your exchange</p>
+
+            <!-- 60/40 Visual Split -->
+            <div style="display:flex;justify-content:center;gap:0;margin:0 auto 20px;max-width:380px;">
+              <div style="flex:6;background:linear-gradient(135deg,rgba(34,197,94,0.15),rgba(34,197,94,0.05));border:2px solid var(--color-success);border-radius:var(--radius-lg) 0 0 var(--radius-lg);padding:20px 12px;text-align:center;">
+                <div style="font-size:2.2rem;font-weight:800;color:var(--color-success);line-height:1;">60%</div>
+                <div style="font-size:0.75rem;color:var(--color-success);font-weight:600;margin-top:4px;text-transform:uppercase;letter-spacing:0.5px;">Your Profit</div>
+              </div>
+              <div style="flex:4;background:linear-gradient(135deg,rgba(212,175,55,0.12),rgba(212,175,55,0.04));border:2px solid var(--gold);border-left:none;border-radius:0 var(--radius-lg) var(--radius-lg) 0;padding:20px 12px;text-align:center;">
+                <div style="font-size:2.2rem;font-weight:800;color:var(--gold);line-height:1;">40%</div>
+                <div style="font-size:0.75rem;color:var(--gold);font-weight:600;margin-top:4px;text-transform:uppercase;letter-spacing:0.5px;">Platform Fee</div>
+              </div>
+            </div>
+            <p style="font-size:0.85rem;color:var(--color-text-muted);margin-bottom:24px;">Only on net positive weeks. Losing weeks cost you nothing.</p>
+
+            <ul class="plan-features" style="text-align:left;max-width:380px;margin:0 auto 24px;">
               <li>Zero monthly subscription fees</li>
               <li>AI scans 40+ coins 24/7</li>
               <li>Fully automated trade execution</li>
@@ -646,10 +658,18 @@
         <div style="margin-top:var(--space-4);">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--space-3);flex-wrap:wrap;gap:8px;">
             <h2 class="section-heading" style="margin-bottom:0;">This Week's Earnings</h2>
-            <div id="we-timer" style="display:flex;align-items:center;gap:8px;padding:6px 14px;border-radius:var(--radius-md);background:var(--color-bg);border:1px solid var(--color-border-muted);">
-              <span style="font-size:0.75rem;color:var(--color-text-muted);">Payment due in</span>
-              <span id="we-timer-days" style="font-size:1.1rem;font-weight:700;color:var(--color-accent);">--</span>
-              <span style="font-size:0.75rem;color:var(--color-text-muted);">days</span>
+            <div id="we-timer" style="display:flex;align-items:center;gap:10px;padding:8px 16px;border-radius:var(--radius-md);background:var(--color-bg);border:1px solid var(--color-border-muted);">
+              <span style="font-size:0.7rem;color:var(--color-text-muted);white-space:nowrap;">Due in</span>
+              <div style="text-align:center;">
+                <span id="we-timer-countdown" style="font-size:1.2rem;font-weight:700;color:var(--color-accent);font-family:var(--font-mono);letter-spacing:1px;">--:--:--:--</span>
+                <div style="display:flex;justify-content:space-between;padding:0 2px;margin-top:1px;">
+                  <span style="font-size:0.55rem;color:var(--color-text-muted);width:25%;text-align:center;">days</span>
+                  <span style="font-size:0.55rem;color:var(--color-text-muted);width:25%;text-align:center;">hrs</span>
+                  <span style="font-size:0.55rem;color:var(--color-text-muted);width:25%;text-align:center;">min</span>
+                  <span style="font-size:0.55rem;color:var(--color-text-muted);width:25%;text-align:center;">sec</span>
+                </div>
+              </div>
+              <button id="we-pay-btn" class="btn btn-primary btn-sm hidden" style="font-size:0.7rem;padding:2px 10px;min-height:24px;" onclick="window.CryptoBot.payWeekly()">Pay Now</button>
             </div>
           </div>
           <div id="weekly-earnings-grid" class="summary-grid">
@@ -838,6 +858,22 @@
           </div>
           <!-- Referral details table -->
           <div id="cw-referrals-list" style="margin-top:var(--space-3);"></div>
+        </div>
+
+        <!-- Transaction History -->
+        <div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-4);margin-bottom:var(--space-4);">
+          <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Transaction History</h3>
+          <div id="cw-transactions" style="max-height:300px;overflow-y:auto;">
+            <div style="color:var(--color-text-muted);font-size:0.8rem;">Loading...</div>
+          </div>
+        </div>
+
+        <!-- Withdrawal History -->
+        <div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-4);margin-bottom:var(--space-5);">
+          <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Withdrawal History</h3>
+          <div id="cw-withdrawals" style="max-height:300px;overflow-y:auto;">
+            <div style="color:var(--color-text-muted);font-size:0.8rem;">Loading...</div>
+          </div>
         </div>
       </section>
 
@@ -1066,6 +1102,8 @@
         <div style="margin-bottom:var(--space-3);">
           <button class="btn btn-sm" style="font-size:0.75rem;" onclick="window.CryptoBot.adminFixTrades()">🔧 Fix Corrupted Trades</button>
           <span id="fix-trades-status" style="font-size:0.75rem;color:var(--color-text-muted);margin-left:8px;"></span>
+          <button class="btn btn-danger btn-sm" style="font-size:0.75rem;margin-left:12px;" onclick="window.CryptoBot.adminClearTestData()">🗑 Clear Test Data</button>
+          <span id="clear-data-status" style="font-size:0.75rem;color:var(--color-text-muted);margin-left:8px;"></span>
         </div>
         <div id="admin-earnings-per-user" style="margin-bottom:var(--space-5);"></div>
 
@@ -1187,7 +1225,7 @@
     </div>
   </div>
 
-  <script src="/js/app.js"></script>
+  <script src="/js/app.js?v=20260405"></script>
   <script src="/js/cashwallet-fix.js"></script>
 
 </body>
