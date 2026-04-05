@@ -1539,15 +1539,47 @@ router.post('/ai-optimize', async (req, res) => {
     const endTime = Date.now();
     const startTime = endTime - DAYS * 86400000;
 
-    sendLog(`Starting optimizer: ${DAYS} days, strategy-only (13 params)`);
+    sendLog(`Starting optimizer: ${DAYS} days, strategy-only (13 params) [Bitunix]`);
 
+    // Bitunix kline API — public, max 200 per page, paginate with startTime/endTime
+    // Returns Binance-compatible arrays: [time, open, high, low, close, volume]
     async function fetchK(symbol, interval, limit) {
-      const url = `https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=${interval}&limit=${Math.min(limit,1500)}`;
-      try {
-        const r = await fetch(url, { timeout: 6000, ...getFetchOptions() });
-        if (!r.ok) return null;
-        return r.json();
-      } catch { return null; }
+      const PAGE = 200;
+      let all = [];
+      let et = endTime;
+      let remaining = limit;
+      while (remaining > 0) {
+        const batch = Math.min(remaining, PAGE);
+        const url = `https://fapi.bitunix.com/api/v1/futures/market/kline?symbol=${symbol}&interval=${interval}&limit=${batch}&endTime=${et}`;
+        try {
+          const r = await fetch(url, { timeout: 8000, ...getFetchOptions() });
+          if (!r.ok) break;
+          const json = await r.json();
+          if (json.code !== 0 || !json.data || !json.data.length) break;
+          // Convert Bitunix format to Binance-compatible arrays
+          const candles = json.data.map(c => [
+            c.time,                    // [0] openTime
+            String(c.open),            // [1] open
+            String(c.high),            // [2] high
+            String(c.low),             // [3] low
+            String(c.close),           // [4] close
+            String(c.baseVol || '0'),  // [5] volume
+          ]);
+          // Older candles go before existing data (paginating backwards in time)
+          candles.sort((a, b) => a[0] - b[0]);
+          all = candles.concat(all);
+          // Move endTime before the earliest candle we got
+          const earliest = Math.min(...json.data.map(c => c.time));
+          et = earliest - 1;
+          remaining -= json.data.length;
+          if (json.data.length < batch) break;
+          // Rate limit: Bitunix allows 10 req/s — small pause
+          await new Promise(r => setTimeout(r, 120));
+        } catch { break; }
+      }
+      // Final sort ascending by time
+      all.sort((a, b) => a[0] - b[0]);
+      return all.length ? all : null;
     }
     function detectSwings(klines, len) {
       const highs = klines.map(k => parseFloat(k[2])), lows = klines.map(k => parseFloat(k[3]));
@@ -1596,10 +1628,11 @@ router.post('/ai-optimize', async (req, res) => {
       const k15Limit = Math.ceil(DAYS * 24 * 4) + 100;
       const k4hLimit = Math.ceil(DAYS * 6) + 50;
       const k1hLimit = Math.ceil(DAYS * 24) + 50;
-      const BATCH = 5;
+      // Bitunix: 200 candles/page, 10 req/s limit — fetch 3 coins parallel
+      const BATCH = 3;
       const failedCoins = [];
 
-      // Per-coin fetch with 15s hard timeout — single attempt, no retries
+      // Per-coin fetch with 60s hard timeout (Bitunix paginates at 200/page)
       async function fetchCoin(sym) {
         return Promise.race([
           (async () => {
@@ -1608,7 +1641,7 @@ router.post('/ai-optimize', async (req, res) => {
             ]);
             return { sym, kD, k4h, k1h, k15, k1 };
           })(),
-          new Promise(resolve => setTimeout(() => resolve({ sym, kD:null, k4h:null, k1h:null, k15:null, k1:null, timedOut:true }), 15000)),
+          new Promise(resolve => setTimeout(() => resolve({ sym, kD:null, k4h:null, k1h:null, k15:null, k1:null, timedOut:true }), 60000)),
         ]);
       }
 
@@ -1631,9 +1664,9 @@ router.post('/ai-optimize', async (req, res) => {
         }
         const done = Math.min(b+BATCH, topCoins.length);
         sendProgress('fetch', Math.round(done/topCoins.length*100));
-        if (b + BATCH < topCoins.length) await new Promise(r => setTimeout(r, 300));
+        if (b + BATCH < topCoins.length) await new Promise(r => setTimeout(r, 500));
       }
-      sendLog(`Fetch done: ${Object.keys(coinData).length} OK, ${failedCoins.length} failed`);
+      sendLog(`Fetch done: ${Object.keys(coinData).length} OK, ${failedCoins.length} failed [Bitunix]`);
       if (failedCoins.length) sendLog(`Remove these tokens (no futures data): ${failedCoins.join(', ')}`);
       // Save to cache
       _candleCache.data = coinData;
