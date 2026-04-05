@@ -153,7 +153,7 @@
       btn.classList.toggle('active', isActive);
       btn.setAttribute('aria-selected', isActive);
     });
-    const allTabs = ['dashboard', 'keys', 'cashwallet', 'chart', 'logs', 'admin'];
+    const allTabs = ['dashboard', 'keys', 'cashwallet', 'chart', 'logs', 'profile', 'admin'];
     allTabs.forEach(t => {
       const el = $(`#tab-${t}`);
       if (el) el.classList.toggle('hidden', t !== tab);
@@ -168,6 +168,7 @@
       return switchTab('dashboard');
     }
     else if (tab === 'logs') startLogPolling();
+    else if (tab === 'profile') loadProfile();
     else if (tab === 'admin') loadAdmin();
 
     // Stop polling when leaving tabs
@@ -181,7 +182,7 @@
     try {
       const data = await api('GET', '/api/auth/me');
       state.user = data;
-      els.userEmail.textContent = data.email;
+      els.userEmail.textContent = data.username || data.email;
       // Show admin tab if admin
       const adminTab = $('#admin-tab');
       if (adminTab) adminTab.classList.toggle('hidden', !data.is_admin);
@@ -2316,8 +2317,51 @@
     if (numInput) numInput.value = val;
   }
 
+  // ----- Profile -----
+
+  function loadProfile() {
+    if (!state.user) return;
+    const usernameEl = $('#profile-username');
+    const emailEl = $('#profile-email');
+    if (usernameEl) usernameEl.value = state.user.username || '';
+    if (emailEl) emailEl.value = state.user.email || '';
+  }
+
+  async function saveProfile() {
+    const username = ($('#profile-username')?.value || '').trim();
+    const email = ($('#profile-email')?.value || '').trim();
+    if (!email) return showToast('Email is required', 'error');
+    try {
+      await api('PUT', '/api/auth/profile', { username, email });
+      state.user.username = username;
+      state.user.email = email;
+      els.userEmail.textContent = username || email;
+      showToast('Profile updated', 'success');
+    } catch (err) {
+      showToast(err.message || 'Failed to update profile', 'error');
+    }
+  }
+
+  async function changePassword() {
+    const current = $('#profile-current-pw')?.value;
+    const newPw = $('#profile-new-pw')?.value;
+    const confirm = $('#profile-confirm-pw')?.value;
+    if (!current || !newPw) return showToast('All fields required', 'error');
+    if (newPw.length < 6) return showToast('Password must be 6+ characters', 'error');
+    if (newPw !== confirm) return showToast('Passwords do not match', 'error');
+    try {
+      await api('PUT', '/api/auth/change-password', { current_password: current, new_password: newPw });
+      showToast('Password changed successfully', 'success');
+      $('#profile-current-pw').value = '';
+      $('#profile-new-pw').value = '';
+      $('#profile-confirm-pw').value = '';
+    } catch (err) {
+      showToast(err.message || 'Failed to change password', 'error');
+    }
+  }
+
   window.CryptoBot = {
-    toggleSettings, saveSettings, deleteKey, showToast, syncSlider, syncNum,
+    toggleSettings, saveSettings, deleteKey, showToast, syncSlider, syncNum, saveProfile, changePassword,
     submitTopUp, saveUsdtAddress, withdrawFromWallet, payWeekly,
     adminAction, adminSub, adminWd, saveAdminSettings, adminEditWallet, clearErrors,
     adminEditSplit, adminPauseKey, adminResumeKey, adminMarkPaid, adminFixTrades, adminClearTestData,

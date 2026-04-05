@@ -203,6 +203,7 @@ async function initAllTables() {
     )`,
     `CREATE TABLE IF NOT EXISTS users (
       id SERIAL PRIMARY KEY,
+      username VARCHAR(100),
       email VARCHAR(255) UNIQUE NOT NULL,
       password_hash VARCHAR(255) NOT NULL,
       is_admin BOOLEAN DEFAULT false,
@@ -330,6 +331,22 @@ async function initAllTables() {
   ];
   for (const sql of seeds) {
     try { await pool.query(sql); } catch (_) {}
+  }
+
+  // Seed approved tokens
+  const approvedTokens = [
+    '1000BONKUSDT','CAKEUSDT','ZROUSDT','VIRTUALUSDT','DEXEUSDT','PENGUUSDT',
+    'STXUSDT','SEIUSDT','APTUSDT','FLRUSDT','FILUSDT','VETUSDT','STABLEUSDT',
+    'JUPUSDT','ARBUSDT','FETUSDT','POLUSDT','RENDERUSDT','KASUSDT','ATOMUSDT',
+    'WLDUSDT','MORPHOUSDT','NIGHTUSDT','ENAUSDT','TRUMPUSDT',
+  ];
+  for (const symbol of approvedTokens) {
+    try {
+      await pool.query(
+        `INSERT INTO global_token_settings (symbol, enabled, banned) VALUES ($1, true, false) ON CONFLICT (symbol) DO NOTHING`,
+        [symbol]
+      );
+    } catch (_) {}
   }
 
   console.log('[DB] All tables verified');
