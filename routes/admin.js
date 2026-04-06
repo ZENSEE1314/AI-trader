@@ -2208,7 +2208,7 @@ router.post('/ai-optimize', async (req, res) => {
         const NEED_VOL = cfg.requireVolSpike !== undefined ? !!cfg.requireVolSpike : false;
         const VOL_MULT = cfg.volSpikeMultiplier || 1.5;
         for (let step=0; step<timeSteps.length; step++) {
-          if (step % 20 === 0 && step > 0) await yieldTick();
+          if (step % YIELD_EVERY === 0 && step > 0) await yieldTick();
           const now = timeSteps[step];
           for (const sym of coinKeys) {
             const data = coinData[sym];
@@ -2272,12 +2272,20 @@ router.post('/ai-optimize', async (req, res) => {
     let _lastPing = Date.now();
     const yieldTick = async () => {
       await new Promise(r => setImmediate(r));
-      if (Date.now() - _lastPing > 1500) {
+      if (Date.now() - _lastPing > 1000) {
         _lastPing = Date.now();
         try { res.write(JSON.stringify({ type: 'ping' }) + '\n'); } catch {}
       }
     };
     const coinKeys = Object.keys(coinData);
+    // Scale yield frequency and quantum iterations based on data size
+    const YIELD_EVERY = timeSteps.length > 1000 ? 8 : 20;
+    const isHeavy = timeSteps.length > 1000;
+    const QAOA_COUNT = isHeavy ? 5 : 10;
+    const SPSA_COUNT = isHeavy ? 4 : 8;
+    const ANNEAL_COUNT = isHeavy ? 5 : 10;
+    const GENETIC_COUNT = isHeavy ? 8 : 15;
+    sendLog(`Compute plan: ${timeSteps.length} steps × ${coinKeys.length} tokens | yield every ${YIELD_EVERY} | ${isHeavy ? 'HEAVY mode' : 'normal'}`);
     async function evaluateAsync(strategyCfg) {
       const cfg = { ...strategyCfg, ...FIXED_RISK };
       const signals = [];
@@ -2292,7 +2300,7 @@ router.post('/ai-optimize', async (req, res) => {
       const NEED_VOL = cfg.requireVolSpike !== undefined ? !!cfg.requireVolSpike : false;
       const VOL_MULT = cfg.volSpikeMultiplier || 1.5;
       for (let step=0; step<timeSteps.length; step++) {
-        if (step % 20 === 0 && step > 0) await yieldTick();
+        if (step % YIELD_EVERY === 0 && step > 0) await yieldTick();
         const now = timeSteps[step];
         for (const sym of coinKeys) {
           const data = coinData[sym];
@@ -2375,14 +2383,14 @@ router.post('/ai-optimize', async (req, res) => {
     sendProgress('round1', 100);
 
     // ═══ ROUND 2: Genetic ═══
-    sendLog('Round 2: Breeding 15 genetic offspring...');
+    sendLog(`Round 2: Breeding ${GENETIC_COUNT} genetic offspring...`);
     results.sort((a,b) => b.winRate-a.winRate || b.totalPnl-a.totalPnl);
     const topParents = results.filter(r=>r.trades>0).slice(0,10);
     const mutations = [];
     const { PARAM_BOUNDS: PB } = require('../quantum-optimizer');
 
     try {
-      for (let gen = 0; gen < 15; gen++) {
+      for (let gen = 0; gen < GENETIC_COUNT; gen++) {
         const p1 = topParents[Math.floor(Math.random()*topParents.length)];
         const p2 = topParents[Math.floor(Math.random()*topParents.length)];
         if (!p1||!p2) continue;
@@ -2418,8 +2426,7 @@ router.post('/ai-optimize', async (req, res) => {
         if (!topN.length) return { results: [], stats: { qaoaCount: 0, spsaCount: 0, annealCount: 0 } };
         const allQR = [];
 
-        // QAOA — 10 samples to stay within Railway compute limits
-        const qaoaSamples = qaoaSample(topN, 10);
+        const qaoaSamples = qaoaSample(topN, QAOA_COUNT);
         let qaoaCount = 0;
         for (let qi = 0; qi < qaoaSamples.length; qi++) {
           try {
@@ -2429,14 +2436,14 @@ router.post('/ai-optimize', async (req, res) => {
               qaoaCount++;
             }
           } catch (e) { sendLog(`  ⚠ QAOA sample failed: ${e.message}`); }
-          if ((qi+1) % 5 === 0) sendLog(`  QAOA: ${qi+1}/${qaoaSamples.length} tested`);
+          if ((qi+1) % Math.max(1, Math.floor(qaoaSamples.length/2)) === 0) sendLog(`  QAOA: ${qi+1}/${qaoaSamples.length} tested`);
         }
         sendLog(`  QAOA: ${qaoaCount} viable`);
 
         // SPSA — reduced from 20 to 10 iterations
         let spsaCount = 0;
         try {
-          const spsaResults = await spsaOptimize(topN[0].settings, evaluateAsync, 8);
+          const spsaResults = await spsaOptimize(topN[0].settings, evaluateAsync, SPSA_COUNT, yieldTick);
           for (const sr of spsaResults) {
             if (sr.trades > 0) {
               allQR.push({ risk: `SPSA-${spsaCount + 1}`, riskId: `spsa${spsaCount}`, settings: sr.config, ...sr });
@@ -2455,7 +2462,7 @@ router.post('/ai-optimize', async (req, res) => {
             const sorted = [...allQR].sort((a, b) => b.winRate - a.winRate || b.totalPnl - a.totalPnl);
             combinedTop.push(...sorted.slice(0, 5));
           }
-          const annealResults = await quantumAnneal(combinedTop.slice(0, 10), evaluateAsync, 10);
+          const annealResults = await quantumAnneal(combinedTop.slice(0, 10), evaluateAsync, ANNEAL_COUNT, yieldTick);
           for (const ar of annealResults) {
             if (ar.trades > 0) {
               allQR.push({ risk: `Anneal-${annealCount + 1}`, riskId: `anneal${annealCount}`, settings: ar.config, ...ar });
