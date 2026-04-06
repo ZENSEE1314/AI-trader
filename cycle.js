@@ -396,8 +396,9 @@ async function openTrade(client, pick, wallet) {
   const tp2 = fmtP(pick.tp2);
   const tp3 = fmtP(pick.tp3);
 
-  // Initial trailing SL at -1% from entry
-  const initialSlPrice = fmtP(isLong ? price * (1 - TRAILING_SL.INITIAL_SL_PCT) : price * (1 + TRAILING_SL.INITIAL_SL_PCT));
+  // Initial SL: INITIAL_SL_PCT is % of capital, convert to price distance using leverage
+  const slPricePct = TRAILING_SL.INITIAL_SL_PCT / leverage;
+  const initialSlPrice = fmtP(isLong ? price * (1 - slPricePct) : price * (1 + slPricePct));
 
   // Position size: 10% of wallet = margin, notional = margin * leverage
   const MIN_NOTIONAL = 5.5;
@@ -1003,8 +1004,9 @@ async function executeForAllUsers(pick) {
           }
         }
 
-        // Initial trailing SL uses user's sl_pct setting (per API key)
-        const initialSlPrice = isLong ? price * (1 - userSL) : price * (1 + userSL);
+        // Initial SL: sl_pct is % of capital at risk, convert to price distance using leverage
+        const slPricePct = userSL / userLev;
+        const initialSlPrice = isLong ? price * (1 - slPricePct) : price * (1 + slPricePct);
         const userTpPrice = isLong ? price * (1 + userTP) : price * (1 - userTP);
         const userTp3Price = isLong ? price * (1 + userTP * 1.5) : price * (1 - userTP * 1.5);
 
