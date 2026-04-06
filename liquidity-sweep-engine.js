@@ -473,15 +473,19 @@ function detectLiquiditySweep(candles15m, candles1m) {
 // ── Strategy 2: Stop-Loss Hunt ─────────────────────────────
 // Price touches S/R multiple times → false break → reversal close back
 
-function detectStopLossHunt(candles15m, candles1m) {
+function detectStopLossHunt(candles15m, candles1m, cfg = {}) {
+  const minTouches = cfg.minTouches || 2;
+  const proximityPct = cfg.proximityPct || 0.01;
+  const lookback = cfg.lookback || 50;
+
   if (candles15m.length < 30 || candles1m.length < 10) return null;
 
   const parsed15 = candles15m.map(parseCandle);
   const parsed1 = candles1m.map(parseCandle);
-  const levels = findKeyLevels(parsed15, 50);
+  const levels = findKeyLevels(parsed15, lookback);
 
-  // Only consider levels with 2+ touches (clear S/R)
-  const strongLevels = levels.filter(l => l.touches >= 2);
+  // Only consider levels with enough touches
+  const strongLevels = levels.filter(l => l.touches >= minTouches);
   if (!strongLevels.length) return null;
 
   const lastCandle15 = parsed15[parsed15.length - 1];
@@ -489,7 +493,7 @@ function detectStopLossHunt(candles15m, candles1m) {
 
   for (const level of strongLevels) {
     const proxPct = Math.abs(lastCandle15.close - level.price) / level.price;
-    if (proxPct > 0.01) continue; // must be within 1% of level
+    if (proxPct > proximityPct) continue;
 
     // Bullish SL hunt: support level
     // Price drops below support then closes back above it
@@ -543,20 +547,21 @@ function detectStopLossHunt(candles15m, candles1m) {
 // ── Strategy 3: Momentum Scalping ──────────────────────────
 // 15m: strong trend → 1m: pin bar forms → pin bar FAILS → enter
 
-function detectMomentumScalp(candles15m, candles1m) {
+function detectMomentumScalp(candles15m, candles1m, cfg = {}) {
+  const trendStrength = cfg.trendStrength || 7;
+  const pinBarWickRatio = cfg.pinBarWickRatio || 2.0;
+
   if (candles15m.length < 15 || candles1m.length < 10) return null;
 
   const parsed15 = candles15m.map(parseCandle);
   const parsed1 = candles1m.map(parseCandle);
 
-  // Determine 15m trend: count recent candle directions
   const recent15 = parsed15.slice(-10);
   const greenCount = recent15.filter(isGreenCandle).length;
   const redCount = recent15.filter(isRedCandle).length;
 
-  // Need a strong trend (7+ candles in one direction)
-  const isBullishTrend = greenCount >= 7;
-  const isBearishTrend = redCount >= 7;
+  const isBullishTrend = greenCount >= trendStrength;
+  const isBearishTrend = redCount >= trendStrength;
   if (!isBullishTrend && !isBearishTrend) return null;
 
   // On 1m: look for pin bar + its failure
@@ -566,9 +571,9 @@ function detectMomentumScalp(candles15m, candles1m) {
     if (!pinCandle || !failCandle) continue;
 
     if (isBearishTrend) {
-      // In bearish trend: bullish pin bar (long lower wick = resistance to selling)
-      // Failure = next candle breaks below the pin bar low
-      if (isBullishPinBar(pinCandle) && failCandle.close < pinCandle.low) {
+      // In bearish trend: bullish pin bar → failure
+      const lw = Math.min(pinCandle.open, pinCandle.close) - pinCandle.low;
+      if (lw > bodySize(pinCandle) * pinBarWickRatio && lw > totalRange(pinCandle) * 0.5 && failCandle.close < pinCandle.low) {
         return {
           direction: 'SHORT',
           setup: 'MOMENTUM_SCALP',
@@ -581,9 +586,9 @@ function detectMomentumScalp(candles15m, candles1m) {
     }
 
     if (isBullishTrend) {
-      // In bullish trend: bearish pin bar (long upper wick = resistance to buying)
-      // Failure = next candle breaks above the pin bar high
-      if (isBearishPinBar(pinCandle) && failCandle.close > pinCandle.high) {
+      // In bullish trend: bearish pin bar → failure
+      const uw = pinCandle.high - Math.max(pinCandle.open, pinCandle.close);
+      if (uw > bodySize(pinCandle) * pinBarWickRatio && uw > totalRange(pinCandle) * 0.5 && failCandle.close > pinCandle.high) {
         return {
           direction: 'LONG',
           setup: 'MOMENTUM_SCALP',
@@ -713,14 +718,12 @@ function isNearFibLevel(price, fibLevels, tolerancePct = 0.003) {
 //   3. Fibonacci 50% / 61.8% retracement adds confluence
 //   4. LTF setup must align with HTF structure (don't swim against the current)
 
-function isStrongBreakout(breakCandle, prevCandle, levelPrice, direction) {
+function isStrongBreakout(breakCandle, prevCandle, levelPrice, direction, bodyRatio = 0.8) {
   const breakBody = bodySize(breakCandle);
   const breakRange = totalRange(breakCandle);
   const prevBody = bodySize(prevCandle);
 
-  // Strong breakout criteria:
-  // 1. Break candle body must be larger than previous candle body
-  const isLargerBody = breakBody > prevBody * 0.8;
+  const isLargerBody = breakBody > prevBody * bodyRatio;
   // 2. Break candle body must be > 50% of its total range (not a wick-heavy candle)
   const isFullBody = breakRange > 0 && (breakBody / breakRange) > 0.5;
   // 3. Close must be decisively past the level (> 0.1% beyond it)
@@ -734,14 +737,12 @@ function isStrongBreakout(breakCandle, prevCandle, levelPrice, direction) {
   return isLargerBody && isFullBody && isDecisive;
 }
 
-function isWeakRetest(retestCandle, breakCandle, levelPrice, direction) {
+function isWeakRetest(retestCandle, breakCandle, levelPrice, direction, retestRatio = 0.7) {
   const retestBody = bodySize(retestCandle);
   const breakBody = bodySize(breakCandle);
   const retestRange = totalRange(retestCandle);
 
-  // Weak retest criteria:
-  // 1. Retest candle body must be SMALLER than breakout candle body
-  const isSmallerBody = retestBody < breakBody * 0.7;
+  const isSmallerBody = retestBody < breakBody * retestRatio;
   // 2. Retest candle range should be smaller (less conviction in pullback)
   const isSmallerRange = retestRange < totalRange(breakCandle) * 0.9;
   // 3. Price touches or comes very close to the level but doesn't close past it
@@ -781,7 +782,10 @@ function isClearRejection(rejectionCandle, levelPrice, direction) {
   }
 }
 
-function detectBRR(candles1h, candles15m, candles1m) {
+function detectBRR(candles1h, candles15m, candles1m, cfg = {}) {
+  const breakoutBodyRatio = cfg.breakoutBodyRatio || 0.8;
+  const retestBodyRatio = cfg.retestBodyRatio || 0.7;
+
   if (!candles1h || candles1h.length < 30 || candles15m.length < 20 || candles1m.length < 15) return null;
 
   // HTF structure from 1h
@@ -823,14 +827,14 @@ function detectBRR(candles1h, candles15m, candles1m) {
         if (!(prevCandle.close < levelPrice && breakCandle.close > levelPrice)) continue;
 
         // CONDITION 1: Strong breakout
-        if (!isStrongBreakout(breakCandle, prevCandle, levelPrice, 'LONG')) continue;
+        if (!isStrongBreakout(breakCandle, prevCandle, levelPrice, 'LONG', breakoutBodyRatio)) continue;
 
         // Look for retest + rejection in subsequent candles
         for (let r = i + 1; r < Math.min(i + 6, parsed15.length); r++) {
           const retestCandle = parsed15[r];
 
           // CONDITION 2: Weak retest
-          if (!isWeakRetest(retestCandle, breakCandle, levelPrice, 'LONG')) continue;
+          if (!isWeakRetest(retestCandle, breakCandle, levelPrice, 'LONG', retestBodyRatio)) continue;
 
           // CONDITION 3: Clear rejection
           if (!isClearRejection(retestCandle, levelPrice, 'LONG')) continue;
@@ -878,14 +882,14 @@ function detectBRR(candles1h, candles15m, candles1m) {
         if (!(prevCandle.close > levelPrice && breakCandle.close < levelPrice)) continue;
 
         // CONDITION 1: Strong breakout
-        if (!isStrongBreakout(breakCandle, prevCandle, levelPrice, 'SHORT')) continue;
+        if (!isStrongBreakout(breakCandle, prevCandle, levelPrice, 'SHORT', breakoutBodyRatio)) continue;
 
         // Look for retest + rejection
         for (let r = i + 1; r < Math.min(i + 6, parsed15.length); r++) {
           const retestCandle = parsed15[r];
 
           // CONDITION 2: Weak retest
-          if (!isWeakRetest(retestCandle, breakCandle, levelPrice, 'SHORT')) continue;
+          if (!isWeakRetest(retestCandle, breakCandle, levelPrice, 'SHORT', retestBodyRatio)) continue;
 
           // CONDITION 3: Clear rejection
           if (!isClearRejection(retestCandle, levelPrice, 'SHORT')) continue;
@@ -1030,7 +1034,7 @@ function detectSwings(klines, len) {
 
 // ── Analyze Single Coin ────────────────────────────────────
 
-async function analyzeCoin(ticker, params, enabledStrategies = null) {
+async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg = {}) {
   const symbol = ticker.symbol;
   const price = parseFloat(ticker.lastPrice);
 
@@ -1083,7 +1087,7 @@ async function analyzeCoin(ticker, params, enabledStrategies = null) {
 
   // Strategy 2: Stop-Loss Hunt
   if (!enabledStrategies || enabledStrategies.STOP_LOSS_HUNT) {
-  const hunt = detectStopLossHunt(klines15m, klines1m);
+  const hunt = detectStopLossHunt(klines15m, klines1m, strategyCfg.hunt || {});
   if (hunt) {
     const tp = findNearestLevel(hunt.entryPrice, allLevels, hunt.direction);
     const slDist = Math.abs(hunt.entryPrice - hunt.sl) / hunt.entryPrice;
@@ -1113,7 +1117,7 @@ async function analyzeCoin(ticker, params, enabledStrategies = null) {
 
   // Strategy 3: Momentum Scalping
   if (!enabledStrategies || enabledStrategies.MOMENTUM_SCALP) {
-  const momentum = detectMomentumScalp(klines15m, klines1m);
+  const momentum = detectMomentumScalp(klines15m, klines1m, strategyCfg.momentum || {});
   if (momentum) {
     const slDist = Math.abs(momentum.entryPrice - momentum.sl) / momentum.entryPrice;
     const tp = findNearestLevel(momentum.entryPrice, allLevels, momentum.direction);
@@ -1142,7 +1146,7 @@ async function analyzeCoin(ticker, params, enabledStrategies = null) {
 
   // Strategy 4: BRR (Breakout-Retest-Rejection) + Fibonacci
   if (!enabledStrategies || enabledStrategies.BRR_FIBO) {
-  const brr = detectBRR(klines1h, klines15m, klines1m);
+  const brr = detectBRR(klines1h, klines15m, klines1m, strategyCfg.brr || {});
   if (brr) {
     const slDist = Math.abs(brr.entryPrice - brr.sl) / brr.entryPrice;
     const tp = findNearestLevel(brr.entryPrice, allLevels, brr.direction);
@@ -1274,15 +1278,17 @@ async function scanSMC(log, opts = {}) {
   const params = await aiLearner.getOptimalParams();
   const minScore = params.MIN_SCORE || 8;
 
-  // Quantum optimizer: get active strategy combo
+  // Quantum optimizer: get active strategy combo + best params from backtest
   let activeCombo = 15;
   let enabledStrategies = null;
   let comboName = 'ALL';
+  let bestParams = {};
   try {
     const quantumOptimizer = require('./quantum-optimizer');
     activeCombo = await quantumOptimizer.getActiveCombo();
     enabledStrategies = quantumOptimizer.getEnabledStrategies(activeCombo);
     comboName = quantumOptimizer.comboToName(activeCombo);
+    bestParams = await quantumOptimizer.getActiveParams();
   } catch (err) {
     bLog.error(`Quantum optimizer not available: ${err.message} — using all strategies`);
   }
@@ -1299,7 +1305,7 @@ async function scanSMC(log, opts = {}) {
       continue;
     }
 
-    const signal = await analyzeCoin(ticker, params, enabledStrategies);
+    const signal = await analyzeCoin(ticker, params, enabledStrategies, bestParams);
     if (signal) signal.comboId = activeCombo;
     analyzed++;
 

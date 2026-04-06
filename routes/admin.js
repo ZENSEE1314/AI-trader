@@ -1952,136 +1952,149 @@ router.post('/ai-optimize', async (req, res) => {
       h1Index[sym] = k1h.map(k => parseInt(k[6])); // close times
     }
 
-    // Run backtest for each combo
-    sendLog('');
-    sendLog('=== BACKTESTING 15 COMBOS ===');
-    const comboResults = [];
-    const yield_ = () => new Promise(r => setImmediate(r)); // keep stream alive
+    // Parameter grid — key tunables per strategy
+    const PARAM_GRID = {
+      rrRatio: [1.5, 2.0, 2.5, 3.0],
+      hunt: { minTouches: [2, 3, 4], proximityPct: [0.005, 0.01, 0.015] },
+      momentum: { trendStrength: [6, 7, 8], pinBarWickRatio: [1.5, 2.0, 2.5] },
+      brr: { breakoutBodyRatio: [0.5, 0.7, 0.9], retestBodyRatio: [0.5, 0.7, 0.9] },
+    };
 
-    for (let comboId = 1; comboId <= 15; comboId++) {
+    // Build param variants for grid search (keep it manageable ~48 configs)
+    const paramVariants = [];
+    for (const rr of PARAM_GRID.rrRatio) {
+      // Default params
+      paramVariants.push({ rr, hunt: {}, momentum: {}, brr: {}, label: `RR${rr}` });
+      // HUNT variants
+      for (const mt of PARAM_GRID.hunt.minTouches) {
+        for (const pp of PARAM_GRID.hunt.proximityPct) {
+          if (mt === 2 && pp === 0.01 && rr !== 2.0) continue; // skip defaults except with RR2
+          paramVariants.push({ rr, hunt: { minTouches: mt, proximityPct: pp }, momentum: {}, brr: {}, label: `RR${rr}_HT${mt}_HP${pp}` });
+        }
+      }
+      // MOMENTUM variants
+      for (const ts of PARAM_GRID.momentum.trendStrength) {
+        if (ts === 7 && rr !== 2.0) continue; // skip default
+        paramVariants.push({ rr, hunt: {}, momentum: { trendStrength: ts }, brr: {}, label: `RR${rr}_MT${ts}` });
+      }
+      // BRR variants (fewer since BRR performs worst)
+      if (rr === 2.0 || rr === 2.5) {
+        for (const bb of PARAM_GRID.brr.breakoutBodyRatio) {
+          paramVariants.push({ rr, hunt: {}, momentum: {}, brr: { breakoutBodyRatio: bb }, label: `RR${rr}_BB${bb}` });
+        }
+      }
+    }
+    sendLog(`Parameter grid: ${paramVariants.length} configs × 15 combos = ${paramVariants.length * 15} tests`);
+
+    // Backtest function — runs one combo with one param config
+    const yield_ = () => new Promise(r => setImmediate(r));
+    function runBacktest(comboId, params) {
       const enabled = quantumOptimizer.getEnabledStrategies(comboId);
-      const name = quantumOptimizer.comboToName(comboId);
       let trades = 0, wins = 0, losses = 0, totalPnl = 0;
 
       for (const sym of validTokens) {
-        const { k1h, k15m, k1m } = klineCache[sym];
+        const { k1h, k15m } = klineCache[sym];
         const symM1 = m1Index[sym];
         const symH1Times = h1Index[sym];
         let position = null;
 
-        // Walk through 15m time steps (skip first 100 for lookback)
         for (let i = 100; i < k15m.length - 1; i++) {
-          // Check exit using pre-indexed 1m candles
           if (position) {
             const m1Bucket = symM1.get(i) || [];
             let closed = false;
             for (const c of m1Bucket) {
               const high = parseFloat(c[2]);
               const low = parseFloat(c[3]);
-
               if (position.direction === 'LONG') {
-                if (low <= position.sl) {
-                  totalPnl += (position.sl - position.entry) / position.entry * 100;
-                  losses++; trades++; closed = true; break;
-                }
-                if (high >= position.tp1) {
-                  totalPnl += (position.tp1 - position.entry) / position.entry * 100;
-                  wins++; trades++; closed = true; break;
-                }
+                if (low <= position.sl) { totalPnl += (position.sl - position.entry) / position.entry * 100; losses++; trades++; closed = true; break; }
+                if (high >= position.tp1) { totalPnl += (position.tp1 - position.entry) / position.entry * 100; wins++; trades++; closed = true; break; }
               } else {
-                if (high >= position.sl) {
-                  totalPnl += (position.entry - position.sl) / position.entry * 100;
-                  losses++; trades++; closed = true; break;
-                }
-                if (low <= position.tp1) {
-                  totalPnl += (position.entry - position.tp1) / position.entry * 100;
-                  wins++; trades++; closed = true; break;
-                }
+                if (high >= position.sl) { totalPnl += (position.entry - position.sl) / position.entry * 100; losses++; trades++; closed = true; break; }
+                if (low <= position.tp1) { totalPnl += (position.entry - position.tp1) / position.entry * 100; wins++; trades++; closed = true; break; }
               }
             }
             if (closed) position = null;
           }
 
-          // Try new entry if no position (check every 4th step = hourly to save CPU)
           if (!position && i % 4 === 0) {
             const w15m = k15m.slice(Math.max(0, i - 99), i + 1);
-            // Get last 50 1m candles from recent buckets
             const w1m = [];
-            for (let b = Math.max(0, i - 3); b <= i; b++) {
-              const bucket = symM1.get(b) || [];
-              w1m.push(...bucket);
-            }
+            for (let b = Math.max(0, i - 3); b <= i; b++) { const bucket = symM1.get(b) || []; w1m.push(...bucket); }
             const w1mSlice = w1m.slice(-50);
-
             if (w15m.length < 30 || w1mSlice.length < 10) continue;
 
-            // Get 1h window using pre-indexed times
             const stepTime = parseInt(k15m[i][6]);
             let h1End = 0;
-            for (let h = symH1Times.length - 1; h >= 0; h--) {
-              if (symH1Times[h] <= stepTime) { h1End = h + 1; break; }
-            }
+            for (let h = symH1Times.length - 1; h >= 0; h--) { if (symH1Times[h] <= stepTime) { h1End = h + 1; break; } }
             const w1h = k1h.slice(Math.max(0, h1End - 60), h1End);
 
             let signal = null;
             try {
-              if (enabled.LIQUIDITY_SWEEP) {
-                const s = engine.detectLiquiditySweep(w15m, w1mSlice);
-                if (s) signal = s;
-              }
-              if (enabled.STOP_LOSS_HUNT) {
-                const s = engine.detectStopLossHunt(w15m, w1mSlice);
-                if (s && (!signal || s.touches > 2)) signal = s;
-              }
-              if (enabled.MOMENTUM_SCALP) {
-                const s = engine.detectMomentumScalp(w15m, w1mSlice);
-                if (s && !signal) signal = s;
-              }
-              if (enabled.BRR_FIBO && w1h.length >= 30) {
-                const s = engine.detectBRR(w1h, w15m, w1mSlice);
-                if (s && (!signal || s.score > 14)) signal = s;
-              }
-            } catch { /* strategy error on this step — skip */ }
+              if (enabled.LIQUIDITY_SWEEP) { const s = engine.detectLiquiditySweep(w15m, w1mSlice); if (s) signal = s; }
+              if (enabled.STOP_LOSS_HUNT) { const s = engine.detectStopLossHunt(w15m, w1mSlice, params.hunt); if (s && (!signal || s.touches > 2)) signal = s; }
+              if (enabled.MOMENTUM_SCALP) { const s = engine.detectMomentumScalp(w15m, w1mSlice, params.momentum); if (s && !signal) signal = s; }
+              if (enabled.BRR_FIBO && w1h.length >= 30) { const s = engine.detectBRR(w1h, w15m, w1mSlice, params.brr); if (s && (!signal || s.score > 14)) signal = s; }
+            } catch {}
 
             if (signal) {
               const slDist = Math.abs(signal.entryPrice - signal.sl) / signal.entryPrice;
               if (slDist > 0.001 && slDist < 0.05) {
-                const tpDist = slDist * 2;
+                const tpDist = slDist * params.rr;
                 position = {
-                  entry: signal.entryPrice,
-                  sl: signal.sl,
-                  tp1: signal.direction === 'LONG'
-                    ? signal.entryPrice * (1 + tpDist)
-                    : signal.entryPrice * (1 - tpDist),
-                  direction: signal.direction,
+                  entry: signal.entryPrice, sl: signal.sl, direction: signal.direction,
+                  tp1: signal.direction === 'LONG' ? signal.entryPrice * (1 + tpDist) : signal.entryPrice * (1 - tpDist),
                 };
               }
             }
           }
         }
-
-        // Close any remaining position at last price
         if (position) {
           const lastClose = parseFloat(k15m[k15m.length - 1][4]);
-          const pnl = position.direction === 'LONG'
-            ? (lastClose - position.entry) / position.entry * 100
-            : (position.entry - lastClose) / position.entry * 100;
-          totalPnl += pnl;
-          if (pnl > 0) wins++; else losses++;
-          trades++;
-          position = null;
+          const pnl = position.direction === 'LONG' ? (lastClose - position.entry) / position.entry * 100 : (position.entry - lastClose) / position.entry * 100;
+          totalPnl += pnl; if (pnl > 0) wins++; else losses++; trades++;
         }
-        await yield_(); // keep connection alive
+      }
+      return { trades, wins, losses, totalPnl };
+    }
+
+    // Run grid search
+    sendLog('');
+    sendLog('=== GRID SEARCH: 15 COMBOS × PARAM VARIANTS ===');
+    const comboResults = [];
+    let testsRun = 0;
+    const totalTests = 15 * paramVariants.length;
+
+    for (let comboId = 1; comboId <= 15; comboId++) {
+      const name = quantumOptimizer.comboToName(comboId);
+      let bestResult = null;
+      let bestParams = null;
+      let bestPnl = -Infinity;
+
+      for (const pv of paramVariants) {
+        const result = runBacktest(comboId, pv);
+        testsRun++;
+        if (result.totalPnl > bestPnl || (result.totalPnl === bestPnl && result.trades > (bestResult?.trades || 0))) {
+          bestPnl = result.totalPnl;
+          bestResult = result;
+          bestParams = pv;
+        }
+        if (testsRun % 20 === 0) {
+          sendProgress('backtest', Math.round(50 + (testsRun / totalTests) * 40));
+          await yield_();
+        }
       }
 
-      const wr = trades > 0 ? (wins / trades * 100).toFixed(0) : '0';
-      const avgPnl = trades > 0 ? (totalPnl / trades).toFixed(2) : '0.00';
-      const pnlSign = totalPnl >= 0 ? '+' : '';
-      sendLog(`  #${String(comboId).padEnd(3)} ${name.padEnd(28)} ${String(trades).padStart(4)} trades | ${wr}% WR | ${pnlSign}${totalPnl.toFixed(2)}% total | avg ${avgPnl}%`);
+      const wr = bestResult.trades > 0 ? (bestResult.wins / bestResult.trades * 100).toFixed(0) : '0';
+      const avgPnl = bestResult.trades > 0 ? (bestResult.totalPnl / bestResult.trades).toFixed(2) : '0.00';
+      const pnlSign = bestResult.totalPnl >= 0 ? '+' : '';
+      sendLog(`  #${String(comboId).padEnd(3)} ${name.padEnd(28)} ${String(bestResult.trades).padStart(4)} trades | ${wr}% WR | ${pnlSign}${bestResult.totalPnl.toFixed(2)}% | best: RR=${bestParams.rr} ${bestParams.label}`);
 
-      comboResults.push({ comboId, trades, wins, losses, totalPnl });
-      sendProgress('backtest', Math.round(50 + (comboId / 15) * 40));
-      await yield_(); // yield between combos
+      comboResults.push({
+        comboId, trades: bestResult.trades, wins: bestResult.wins,
+        losses: bestResult.losses, totalPnl: bestResult.totalPnl,
+        bestParams: { rr: bestParams.rr, hunt: bestParams.hunt, momentum: bestParams.momentum, brr: bestParams.brr },
+      });
+      await yield_();
     }
 
     // Seed results into DB

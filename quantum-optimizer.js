@@ -285,12 +285,13 @@ async function resetAndSeedFromBacktest(results) {
         `UPDATE quantum_strategy_combos SET
           total_trades = $1, wins = $2, losses = $3, total_pnl = $4,
           avg_pnl = $5, win_rate = $6, ema_win_rate = $7, sharpe_estimate = $8,
+          best_params = $9,
           is_active = false, is_exploring = false, admin_locked = false,
           last_trade_at = NOW(), updated_at = NOW()
-         WHERE combo_id = $9`,
+         WHERE combo_id = $10`,
         [r.trades, r.wins, r.losses, r.totalPnl.toFixed(4),
          avgPnl.toFixed(4), winRate.toFixed(4), emaWinRate.toFixed(4),
-         sharpe.toFixed(4), r.comboId]
+         sharpe.toFixed(4), JSON.stringify(r.bestParams || {}), r.comboId]
       );
     }
 
@@ -302,6 +303,18 @@ async function resetAndSeedFromBacktest(results) {
     console.error('[Quantum] resetAndSeedFromBacktest error:', err.message);
     return false;
   }
+}
+
+// ── Load Best Params for Active Combo ──────────────────────
+
+async function getActiveParams() {
+  try {
+    const db = getDB();
+    if (!db) return {};
+    const rows = await db.query('SELECT best_params FROM quantum_strategy_combos WHERE is_active = true LIMIT 1');
+    if (rows.length && rows[0].best_params) return rows[0].best_params;
+    return {};
+  } catch { return {}; }
 }
 
 // ── Admin Controls ─────────────────────────────────────────
@@ -390,6 +403,7 @@ module.exports = {
   adminSetCombo,
   adminUnlockCombo,
   resetAndSeedFromBacktest,
+  getActiveParams,
   comboToName,
   isStrategyEnabled,
   STRATEGIES,

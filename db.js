@@ -236,6 +236,7 @@ async function initAllTables() {
       UNIQUE(combo_id)
     )`,
     `CREATE INDEX IF NOT EXISTS idx_qsc_combo_id ON quantum_strategy_combos (combo_id)`,
+    `ALTER TABLE quantum_strategy_combos ADD COLUMN IF NOT EXISTS best_params JSONB`,
     `ALTER TABLE ai_trades ADD COLUMN IF NOT EXISTS combo_id INTEGER DEFAULT 15`,
     `CREATE TABLE IF NOT EXISTS users (
       id SERIAL PRIMARY KEY,
