@@ -782,7 +782,7 @@ router.delete('/risk-levels/:id', async (req, res) => {
 // List all global token settings
 router.get('/global-tokens', async (req, res) => {
   try {
-    const rows = await query('SELECT * FROM global_token_settings ORDER BY symbol');
+    const rows = await query('SELECT * FROM global_token_settings ORDER BY rank ASC, symbol ASC');
     res.json(rows);
   } catch (err) {
     console.error('Global tokens list error:', err.message);
@@ -865,16 +865,23 @@ router.post('/scan-bitunix-tokens', async (req, res) => {
     let unchanged = 0;
     let removed = 0;
 
-    // Upsert all Bitunix pairs — new ones default to enabled + not banned
-    for (const p of pairs) {
+    // Upsert all Bitunix pairs — new ones default to enabled + not banned, store rank by order
+    for (let i = 0; i < pairs.length; i++) {
+      const p = pairs[i];
+      const pairRank = i + 1;
       if (existingMap[p.symbol]) {
+        // Update rank for existing tokens (only if still default 999)
+        await query(
+          'UPDATE global_token_settings SET rank = LEAST(rank, $1) WHERE symbol = $2',
+          [pairRank, p.symbol]
+        );
         unchanged++;
       } else {
         await query(
-          `INSERT INTO global_token_settings (symbol, enabled, banned)
-           VALUES ($1, true, false)
-           ON CONFLICT (symbol) DO NOTHING`,
-          [p.symbol]
+          `INSERT INTO global_token_settings (symbol, enabled, banned, rank)
+           VALUES ($1, true, false, $2)
+           ON CONFLICT (symbol) DO UPDATE SET rank = LEAST(global_token_settings.rank, EXCLUDED.rank)`,
+          [p.symbol, pairRank]
         );
         added++;
       }
@@ -1998,7 +2005,7 @@ router.post('/ai-optimize', async (req, res) => {
 
     // Fetch admin-allowed tokens from DB — auto-scan Bitunix if list is empty
     sendLog('Querying token list from DB...');
-    let allowedRows = await query('SELECT symbol FROM global_token_settings WHERE enabled = true AND banned = false ORDER BY symbol');
+    let allowedRows = await query('SELECT symbol FROM global_token_settings WHERE enabled = true AND banned = false ORDER BY rank ASC, symbol ASC');
     if (!allowedRows.length) {
       sendLog('No tokens in DB — auto-scanning Bitunix...');
       try {
@@ -2013,7 +2020,7 @@ router.post('/ai-optimize', async (req, res) => {
             );
           }
           sendLog(`Auto-scanned ${validPairs.length} Bitunix pairs into DB`);
-          allowedRows = await query('SELECT symbol FROM global_token_settings WHERE enabled = true AND banned = false ORDER BY symbol');
+          allowedRows = await query('SELECT symbol FROM global_token_settings WHERE enabled = true AND banned = false ORDER BY rank ASC, symbol ASC');
         }
       } catch (e) { sendLog(`Auto-scan failed: ${e.message}`); }
     }
