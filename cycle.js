@@ -876,7 +876,7 @@ async function main() {
         log(`Owner trade error: ${ownerErr.message}`);
       }
     } else {
-      bLog.system(`No owner API keys in env — relying on user keys from dashboard`);
+      // No owner env keys — normal mode, using user keys from dashboard
     }
 
   } catch (err) {
