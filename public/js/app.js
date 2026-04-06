@@ -1713,6 +1713,11 @@
       const allowed = tokens.filter(t => t.enabled && !t.banned);
       const banned = tokens.filter(t => t.banned);
 
+      const allowedCountEl = $('#allowed-count');
+      const bannedCountEl = $('#banned-count');
+      if (allowedCountEl) allowedCountEl.textContent = allowed.length;
+      if (bannedCountEl) bannedCountEl.textContent = banned.length;
+
       const allowedBody = $('#admin-allowed-tbody');
       const allowedEmpty = $('#admin-allowed-empty');
       if (!allowed.length) {
@@ -1844,6 +1849,9 @@
       const tbody = $('#admin-lev-tbody');
       const empty = $('#admin-lev-empty');
       if (!tbody) return;
+
+      const levCountEl = $('#leverage-count');
+      if (levCountEl) levCountEl.textContent = tokens.length;
 
       if (!tokens.length) {
         tbody.innerHTML = '';

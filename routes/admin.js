@@ -1361,6 +1361,13 @@ router.post('/backtest', async (req, res) => {
     const REVERSE = req.body.reverse === true;
     const endTime = Date.now();
 
+    // Per-token leverage from admin settings
+    const leverageMap = {};
+    try {
+      const levRows = await query('SELECT symbol, leverage FROM token_leverage WHERE enabled = true');
+      for (const r of levRows) leverageMap[r.symbol] = parseInt(r.leverage) || MAX_LEVERAGE;
+    } catch (_) {}
+
     async function fetchK(symbol, interval, limit, et) {
       const url = `https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=${interval}&limit=${limit}${et ? '&endTime=' + et : ''}`;
       for (let i = 0; i < 3; i++) {
@@ -1723,9 +1730,10 @@ router.post('/backtest', async (req, res) => {
 
           if (REVERSE) dir = dir === 'LONG' ? 'SHORT' : 'LONG';
 
-          // Step 6: Risk — configurable SL, trailing steps, optional TP
-          const leverage = MAX_LEVERAGE;
-          const sl = dir === 'LONG' ? price * (1 - SL_PCT) : price * (1 + SL_PCT);
+          // Step 6: Risk — per-token leverage from admin settings, SL scaled to leverage
+          const leverage = leverageMap[sym] || MAX_LEVERAGE;
+          const tokenSlPct = SL_PCT > 0 ? SL_PCT : (0.20 / leverage);
+          const sl = dir === 'LONG' ? price * (1 - tokenSlPct) : price * (1 + tokenSlPct);
           const tp = TP_PCT > 0
             ? (dir === 'LONG' ? price * (1 + TP_PCT) : price * (1 - TP_PCT))
             : null;
@@ -1918,6 +1926,16 @@ router.post('/ai-optimize', async (req, res) => {
     }
     sendLog(`Found ${topCoins.length} admin tokens`);
 
+    // Per-token leverage from admin settings (e.g., BTC=100x, alts=20x)
+    const DEFAULT_LEVERAGE = 20;
+    const leverageMap = {};
+    try {
+      const levRows = await query('SELECT symbol, leverage FROM token_leverage WHERE enabled = true');
+      for (const r of levRows) leverageMap[r.symbol] = parseInt(r.leverage) || DEFAULT_LEVERAGE;
+      const customCount = levRows.length;
+      if (customCount) sendLog(`Loaded ${customCount} custom leverage settings (${levRows.map(r => r.symbol.replace('USDT','') + ':' + r.leverage + 'x').join(', ')})`);
+    } catch (e) { sendLog(`Token leverage query failed: ${e.message}, using ${DEFAULT_LEVERAGE}x for all`); }
+
     // Check candle cache — in-memory first, then DB, then fetch fresh
     const cacheKey = topCoins.join(',') + ':' + DAYS;
     let coinData;
@@ -2009,6 +2027,8 @@ router.post('/ai-optimize', async (req, res) => {
       return res.end();
     }
     const timeSteps = coinData[firstCoin].k15.map(k=>parseInt(k[0])).filter(t=>t>=startTime);
+    const isHeavy = timeSteps.length > 1000;
+    const YIELD_EVERY = isHeavy ? 8 : 20;
 
     // Pre-build k15 index for O(1) candle lookup (used by replaySignals)
     const k15Index = {};
@@ -2160,9 +2180,11 @@ router.post('/ai-optimize', async (req, res) => {
           const sig = signals[lastStep];
           if (openPos.length>=(cfg.maxPos||5)) break;
           if (openPos.find(p=>p.symbol===sig.sym)) continue;
-          const sl=sig.dir==='LONG'?sig.price*(1-(cfg.slPct||0.03)):sig.price*(1+(cfg.slPct||0.03));
+          const tokenLev = getTokenLev(sig.sym);
+          const tokenSlPct = getTokenSlPct(sig.sym);
+          const sl=sig.dir==='LONG'?sig.price*(1-tokenSlPct):sig.price*(1+tokenSlPct);
           const tp=(cfg.tpPct||0)>0?(sig.dir==='LONG'?sig.price*(1+(cfg.tpPct)):sig.price*(1-(cfg.tpPct))):null;
-          const qty=(wallet*(cfg.riskPct||0.1)*(cfg.leverage||20))/sig.price;
+          const qty=(wallet*(cfg.riskPct||0.1)*tokenLev)/sig.price;
           const trade={symbol:sig.sym,dir:sig.dir,entry:sig.price,qty,sl,tp,lastStep:0,pnl:null};
           openPos.push(trade); trades.push(trade);
         }
@@ -2183,9 +2205,12 @@ router.post('/ai-optimize', async (req, res) => {
         finalWallet:parseFloat(r.wallet.toFixed(2)), maxDrawdown:parseFloat((maxDD*100).toFixed(1)) };
     }
 
-    // SL/trailing matches cycle.js: -20% capital initial, 15% gap, triggers at +30/+50/then every +25%
-    // slPct = INITIAL_SL_PCT / leverage = 0.20 / 20 = 0.01 price
-    const FIXED_RISK = { slPct: 0.01, tpPct: 0, trailStep: 0.015, trailTrigger: 0.015, leverage: 20, riskPct: 0.10, maxPos: 5, maxConsecLoss: 0 };
+    // SL/trailing matches cycle.js: -20% capital initial, 15% gap
+    // slPct = CAPITAL_SL_PCT / leverage (per token), e.g. 0.20/20=0.01, 0.20/100=0.002
+    const CAPITAL_SL_PCT = 0.20;
+    const FIXED_RISK = { tpPct: 0, trailStep: 0.015, trailTrigger: 0.015, riskPct: 0.10, maxPos: 5, maxConsecLoss: 0 };
+    function getTokenLev(symbol) { return leverageMap[symbol] || DEFAULT_LEVERAGE; }
+    function getTokenSlPct(symbol) { return CAPITAL_SL_PCT / getTokenLev(symbol); }
 
     function evaluate(strategyCfg) {
       const cfg = { ...strategyCfg, ...FIXED_RISK };
@@ -2297,9 +2322,6 @@ router.post('/ai-optimize', async (req, res) => {
       }
     };
     const coinKeys = Object.keys(coinData);
-    // Scale yield frequency and quantum iterations based on data size
-    const YIELD_EVERY = timeSteps.length > 1000 ? 8 : 20;
-    const isHeavy = timeSteps.length > 1000;
     const QAOA_COUNT = isHeavy ? 5 : 10;
     const SPSA_COUNT = isHeavy ? 4 : 8;
     const ANNEAL_COUNT = isHeavy ? 5 : 10;

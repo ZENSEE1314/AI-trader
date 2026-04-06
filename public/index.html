@@ -1104,7 +1104,7 @@
         </div>
 
         <!-- Allowed Tokens (whitelist — only trade these) -->
-        <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Allowed Tokens <span class="tip-btn">?<span class="tip-text">Whitelist: if any tokens are listed here, the bot will ONLY trade these tokens. Leave empty to trade top coins by volume.</span></span> <span style="font-size:0.75rem;color:var(--color-text-muted);">(only trade these)</span></h3>
+        <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Allowed Tokens <span id="allowed-count" class="badge" style="background:var(--color-success);color:#fff;padding:2px 8px;border-radius:12px;font-size:0.75rem;margin-left:4px;">0</span> <span class="tip-btn">?<span class="tip-text">Whitelist: if any tokens are listed here, the bot will ONLY trade these tokens. Leave empty to trade top coins by volume.</span></span> <span style="font-size:0.75rem;color:var(--color-text-muted);">(only trade these)</span></h3>
         <div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-4);margin-bottom:var(--space-4);">
           <div style="display:flex;gap:var(--space-2);align-items:end;margin-bottom:var(--space-3);flex-wrap:wrap;">
             <div class="form-group" style="margin-bottom:0;flex:1;min-width:140px;position:relative;">
@@ -1124,7 +1124,7 @@
         </div>
 
         <!-- Banned Tokens (blacklist — never trade these) -->
-        <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Banned Tokens <span class="tip-btn">?<span class="tip-text">Blacklist: the bot will never open new trades on these tokens. Existing positions will close normally.</span></span> <span style="font-size:0.75rem;color:var(--color-text-muted);">(never trade these)</span></h3>
+        <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Banned Tokens <span id="banned-count" class="badge" style="background:var(--color-danger);color:#fff;padding:2px 8px;border-radius:12px;font-size:0.75rem;margin-left:4px;">0</span> <span class="tip-btn">?<span class="tip-text">Blacklist: the bot will never open new trades on these tokens. Existing positions will close normally.</span></span> <span style="font-size:0.75rem;color:var(--color-text-muted);">(never trade these)</span></h3>
         <div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-4);margin-bottom:var(--space-5);">
           <div style="display:flex;gap:var(--space-2);align-items:end;margin-bottom:var(--space-3);flex-wrap:wrap;">
             <div class="form-group" style="margin-bottom:0;flex:1;min-width:140px;position:relative;">
@@ -1144,7 +1144,7 @@
         </div>
 
         <!-- Token Leverage Settings -->
-        <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Token Leverage <span class="tip-btn">?<span class="tip-text">Set custom leverage per token. BTC/ETH default 100x. Auto-populate adds all tokens above $1000. This overrides user risk level leverage.</span></span></h3>
+        <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Token Leverage <span id="leverage-count" class="badge" style="background:var(--color-accent);color:#fff;padding:2px 8px;border-radius:12px;font-size:0.75rem;margin-left:4px;">0</span> <span class="tip-btn">?<span class="tip-text">Set custom leverage per token. BTC/ETH default 100x. Auto-populate adds all tokens above $1000. This overrides user risk level leverage.</span></span></h3>
         <div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-4);margin-bottom:var(--space-5);">
           <div style="display:flex;gap:var(--space-2);align-items:end;margin-bottom:var(--space-3);flex-wrap:wrap;">
             <div class="form-group" style="margin-bottom:0;flex:1;min-width:140px;position:relative;">
