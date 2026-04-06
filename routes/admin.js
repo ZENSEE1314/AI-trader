@@ -2741,30 +2741,37 @@ router.post('/ai-optimize', async (req, res) => {
     sendLog('Saving top 3 as AI versions...');
     const saved = [];
     try {
-      const rows=await query('SELECT version FROM ai_versions ORDER BY id DESC LIMIT 1');
-      const prev=rows.length?rows[0].version:'v0.0';
-      const parts=prev.match(/v(\d+)\.(\d+)/);
-      let major=parts?parseInt(parts[1]):1;
-      let minor=parts?parseInt(parts[2]):0;
+      const rows = await query('SELECT version FROM ai_versions ORDER BY id DESC LIMIT 1');
+      const prev = rows.length ? rows[0].version : 'v3.0';
+      const parts = prev.match(/v(\d+)\.(\d+)/);
+      let major = parts ? parseInt(parts[1]) : 3;
+      let minor = parts ? parseInt(parts[2]) : 0;
+      sendLog(`  Previous version: ${prev} → major=${major} minor=${minor}`);
 
-      for (let i=0; i<Math.min(3,allResults.length); i++) {
-        const best=allResults[i]; if(!best||best.trades===0) continue;
+      for (let i = 0; i < Math.min(3, allResults.length); i++) {
+        const best = allResults[i];
+        if (!best || best.trades === 0) continue;
         minor++;
-        const ver=`v${major}.${minor}`;
-        const medal=i===0?'🥇':i===1?'🥈':'🥉';
+        const ver = `v${major}.${minor}`;
+        const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : '🥉';
         const tradeCount = parseInt(best.trades) || 0;
         const winRate = parseFloat(best.winRate) / 100 || 0;
         const avgPnl = tradeCount > 0 ? parseFloat(best.totalPnl) / tradeCount : 0;
         const totalPnl = parseFloat(best.totalPnl) || 0;
-        sendLog(`  Inserting ${ver}: trades=${tradeCount} wr=${winRate} pnl=${totalPnl}`);
-        await query(
-          `INSERT INTO ai_versions (version, trade_count, win_rate, avg_pnl, total_pnl, params, setup_weights, avoided_coins, changes)
-           VALUES ($1, $2::int, $3::float, $4::float, $5::float, $6::jsonb, $7::jsonb, $8::jsonb, $9::text)`,
-          [String(ver), tradeCount, winRate, avgPnl, totalPnl,
-           JSON.stringify(best.settings), '{}', '[]',
-           `${medal} AI #${i+1}: ${best.combo} (${best.winRate}% WR, $${best.totalPnl} PnL, ${DAYS}d)`]);
-        saved.push({ rank:i+1, version:ver, combo:best.combo, winRate:best.winRate, pnl:best.totalPnl });
-        sendLog(`  Saved ${medal} ${ver}: ${best.combo} (${best.winRate}% WR)`);
+        const paramsJson = JSON.stringify(best.settings || {});
+        const changesText = `${medal} AI #${i + 1}: ${best.combo} (${best.winRate}% WR, $${best.totalPnl} PnL, ${DAYS}d)`;
+        sendLog(`  Saving ${ver}: ${tradeCount}T ${(winRate * 100).toFixed(0)}%WR $${totalPnl}`);
+        try {
+          await query(
+            `INSERT INTO ai_versions (version, trade_count, win_rate, avg_pnl, total_pnl, params, setup_weights, avoided_coins, changes)
+             VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8::jsonb, $9)`,
+            [ver, tradeCount, winRate, avgPnl, totalPnl, paramsJson, '{}', '[]', changesText]
+          );
+          saved.push({ rank: i + 1, version: ver, combo: best.combo, winRate: best.winRate, pnl: best.totalPnl });
+          sendLog(`  ✅ Saved ${medal} ${ver}`);
+        } catch (insertErr) {
+          sendLog(`  ❌ Save ${ver} failed: ${insertErr.message}`);
+        }
       }
     } catch (saveErr) {
       sendLog(`Save error: ${saveErr.message} — results still returned below`);
