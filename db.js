@@ -183,6 +183,16 @@ async function initAllTables() {
       enabled BOOLEAN DEFAULT true,
       created_at TIMESTAMPTZ DEFAULT NOW()
     )`,
+    // Seed default risk levels if empty
+    `INSERT INTO risk_levels (name, description, tp_pct, sl_pct, max_consec_loss, top_n_coins, capital_percentage, max_leverage)
+     SELECT 'No Risk', 'Conservative — low risk', 0.02, 0.01, 1, 30, 5.0, 10
+     WHERE NOT EXISTS (SELECT 1 FROM risk_levels WHERE name = 'No Risk')`,
+    `INSERT INTO risk_levels (name, description, tp_pct, sl_pct, max_consec_loss, top_n_coins, capital_percentage, max_leverage)
+     SELECT 'Medium Risk', 'Balanced risk-reward', 0.045, 0.03, 2, 50, 10.0, 20
+     WHERE NOT EXISTS (SELECT 1 FROM risk_levels WHERE name = 'Medium Risk')`,
+    `INSERT INTO risk_levels (name, description, tp_pct, sl_pct, max_consec_loss, top_n_coins, capital_percentage, max_leverage)
+     SELECT 'High Risk', 'Aggressive trading', 0.08, 0.05, 3, 80, 20.0, 50
+     WHERE NOT EXISTS (SELECT 1 FROM risk_levels WHERE name = 'High Risk')`,
     // User risk level assignment
     `ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS risk_level_id INTEGER`,
     `ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS capital_percentage DECIMAL DEFAULT 10.0`,

@@ -161,15 +161,11 @@ router.put('/:id/settings', async (req, res) => {
       return res.status(400).json({ error: 'Trailing SL step must be 0.5-5%' });
     }
     
-    // Validate risk_level_id if provided
-    if (risk_level_id !== undefined) {
-      if (risk_level_id === null) {
-        // Allow null to clear risk level
-      } else {
-        const riskLevel = await query('SELECT id FROM risk_levels WHERE id = $1', [risk_level_id]);
-        if (!riskLevel.length) {
-          return res.status(400).json({ error: 'Invalid risk level ID' });
-        }
+    // Validate risk_level_id if provided (skip if null/0/empty — means "no risk level")
+    if (risk_level_id !== undefined && risk_level_id !== null && risk_level_id !== 0 && risk_level_id !== '') {
+      const riskLevel = await query('SELECT id FROM risk_levels WHERE id = $1', [risk_level_id]);
+      if (!riskLevel.length) {
+        return res.status(400).json({ error: 'Invalid risk level ID — go to Admin > Risk Levels to create levels first' });
       }
     }
 
