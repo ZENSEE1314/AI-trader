@@ -985,31 +985,7 @@ async function executeForAllUsers(pick) {
         const rawTP = parseFloat(key.tp_pct);
         const userTP = isNaN(rawTP) ? 0.01 : rawTP;
         const userSL = parseFloat(key.sl_pct) || 0.01;
-        const rawConsecLoss = parseInt(key.max_consec_loss);
-        const userMaxConsecLoss = isNaN(rawConsecLoss) ? 2 : rawConsecLoss;
-
-        // 0 = unlimited, never stop. Otherwise check consecutive losses since 7am.
-        if (userMaxConsecLoss > 0) {
-          const nowDate = new Date();
-          const h = nowDate.getHours();
-          const dayStart = new Date(nowDate);
-          if (h < 7) dayStart.setDate(dayStart.getDate() - 1);
-          dayStart.setHours(7, 0, 0, 0);
-
-          const recentTrades = await db.query(
-            `SELECT status FROM trades
-             WHERE user_id = $1 AND status IN ('WIN','LOSS')
-               AND closed_at >= $2
-             ORDER BY closed_at DESC LIMIT $3`,
-            [key.user_id, dayStart, userMaxConsecLoss]
-          );
-          const allLosses = recentTrades.length >= userMaxConsecLoss &&
-            recentTrades.every(t => t.status === 'LOSS');
-          if (allLosses) {
-            userLog.trade(`User ${key.email}: ${userMaxConsecLoss} consecutive losses today — cooling down (resets 7am)`);
-            return;
-          }
-        }
+        // Consecutive loss cooldown removed — let it run
 
         // Initial SL: sl_pct is % of capital at risk, convert to price distance using leverage
         const slPricePct = userSL / userLev;
