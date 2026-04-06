@@ -87,8 +87,26 @@ router.post('/', async (req, res) => {
       if (parseInt(count[0].cnt) >= 3) return res.status(400).json({ error: 'Maximum 3 API keys allowed' });
     }
 
-    // Skip validation test — IP/proxy issues cause false failures.
-    // If key is invalid, errors will show in bot logs on first trade attempt.
+    // Validate key by testing connection to exchange
+    try {
+      if (platform === 'binance') {
+        const { USDMClient } = require('binance');
+        const testClient = new USDMClient({ api_key: apiKey, api_secret: apiSecret });
+        await testClient.getAccountInformation({ omitZeroBalances: true });
+      } else if (platform === 'bitunix') {
+        const { BitunixClient } = require('../bitunix-client');
+        const testClient = new BitunixClient({ apiKey, apiSecret });
+        await testClient.getAccountInformation();
+      }
+    } catch (testErr) {
+      const msg = testErr.message || 'Unknown error';
+      console.error(`API key validation failed (${platform}): ${msg}`);
+      if (msg.includes('Invalid API') || msg.includes('signature') || msg.includes('401') || msg.includes('403') || msg.includes('invalid')) {
+        return res.status(400).json({ error: `Invalid API key — ${platform} rejected the credentials. Check your key and secret.` });
+      }
+      // Network/IP errors — save anyway, key might work from Railway
+      console.warn(`API key test inconclusive (${platform}): ${msg} — saving anyway`);
+    }
 
     const keyEnc = encrypt(apiKey);
     const secretEnc = encrypt(apiSecret);
@@ -105,7 +123,7 @@ router.post('/', async (req, res) => {
     res.json({ ok: true });
   } catch (err) {
     console.error('Add key error:', err.message);
-    res.status(500).json({ error: 'Server error' });
+    res.status(500).json({ error: 'Failed to save API key' });
   }
 });
 
