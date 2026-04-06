@@ -23,7 +23,7 @@ const SL_PCT = 0.03;           // 3% initial SL (overridden by strategyConfig)
 const TRAILING_STEP = 0.012;   // trail SL by 1.2% (overridden by strategyConfig)
 
 // Swing lengths per timeframe (defaults, overridden by strategyConfig)
-let SWING_LENGTHS = { '4h': 10, '1h': 10, '15m': 10, '1m': 5 };
+let SWING_LENGTHS = { '4h': 11, '1h': 10, '15m': 8, '1m': 3 };
 
 // Strategy config loaded from DB (ai_versions best params)
 let strategyConfig = null;
@@ -308,7 +308,8 @@ async function analyzeLHHL(ticker, params, dailyBiasCache) {
 
   // Load optimized strategy params from DB
   const sc = await getStrategyConfig() || {};
-  const INDECISIVE_THRESH = sc.indecisiveThresh || 0.3;
+  // Genetic Gen5 v3.0 defaults — loaded from DB, fallbacks match locked strategy
+  const INDECISIVE_THRESH = sc.indecisiveThresh || 0.2;
   const NEED_BOTH_HTF = sc.requireBothHTF !== undefined ? !!sc.requireBothHTF : false;
   const NEED_KL = sc.requireKeyLevel !== undefined ? !!sc.requireKeyLevel : false;
   const NEED_15M = sc.require15m !== undefined ? !!sc.require15m : true;
@@ -316,7 +317,7 @@ async function analyzeLHHL(ticker, params, dailyBiasCache) {
   const NEED_VOL = sc.requireVolSpike !== undefined ? !!sc.requireVolSpike : false;
   const VOL_MULT = sc.volSpikeMultiplier || 1.5;
   const KL_PROX = sc.keyLevelProximity || 0.005;
-  const MAX_ENTRY_AGE = sc.maxEntryAge || 30;
+  const MAX_ENTRY_AGE = sc.maxEntryAge || 35;
 
   // Step 1: Daily Bias
   let dailyInfo = dailyBiasCache.get(symbol);

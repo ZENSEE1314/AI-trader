@@ -155,19 +155,20 @@ const DEFAULT_PARAMS = {
   LEV_BTC_ETH: 100,        // BTC/ETH leverage
   LEV_ALT: 20,             // all altcoin leverage
 
-  // Strategy config (smc-engine.js uses these via getStrategyConfig)
-  requireBothHTF: false,    // only need 1 of 4H/1H aligned (true = both required)
+  // Strategy config — LOCKED to Genetic Gen5 (v3.0): 71.4% WR, +$242
+  // NOTE: Do not change these defaults without user approval
+  requireBothHTF: false,    // either 4H or 1H aligned (not both required)
   requireKeyLevel: false,   // skip PDH/PDL/VWAP proximity check
-  require15m: true,         // 15M swing setup required
-  require1m: true,          // 1M entry confirmation required
+  require15m: true,         // 15M swing setup REQUIRED
+  require1m: true,          // 1M entry confirmation REQUIRED
   requireVolSpike: false,   // volume spike filter off
-  maxEntryAge: 30,          // 1M swing must be within 30 candles
-  indecisiveThresh: 0.3,    // daily candle body/range ratio below this = indecisive
+  maxEntryAge: 35,          // 1M swing must be within 35 candles
+  indecisiveThresh: 0.2,    // daily candle body/range ratio below this = indecisive
   keyLevelProximity: 0.005, // 0.5% proximity to key levels (if enabled)
-  swingLen4h: 10,
+  swingLen4h: 11,
   swingLen1h: 10,
-  swingLen15m: 10,
-  swingLen1m: 5,
+  swingLen15m: 8,
+  swingLen1m: 3,
 };
 
 let _paramsCache = { data: null, ts: 0 };
