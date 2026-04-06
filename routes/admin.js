@@ -1925,10 +1925,38 @@ router.post('/ai-optimize', async (req, res) => {
     sendLog(`Data ready: ${validTokens.length} tokens`);
     if (!validTokens.length) throw new Error('No valid token data fetched');
 
+    // Pre-index 1m candles by 15m bucket for fast lookup
+    sendLog('Indexing 1m candles...');
+    const m1Index = {}; // sym → Map<15m_close_time, [1m candles]>
+    for (const sym of validTokens) {
+      const { k15m, k1m } = klineCache[sym];
+      const idx = new Map();
+      let m1ptr = 0;
+      for (let i = 0; i < k15m.length; i++) {
+        const prevEnd = i > 0 ? parseInt(k15m[i - 1][6]) : 0;
+        const curEnd = parseInt(k15m[i][6]);
+        const bucket = [];
+        while (m1ptr < k1m.length && parseInt(k1m[m1ptr][0]) <= curEnd) {
+          if (parseInt(k1m[m1ptr][0]) > prevEnd) bucket.push(k1m[m1ptr]);
+          m1ptr++;
+        }
+        idx.set(i, bucket);
+      }
+      m1Index[sym] = idx;
+    }
+
+    // Pre-index 1h candles by time
+    const h1Index = {};
+    for (const sym of validTokens) {
+      const { k1h } = klineCache[sym];
+      h1Index[sym] = k1h.map(k => parseInt(k[6])); // close times
+    }
+
     // Run backtest for each combo
     sendLog('');
     sendLog('=== BACKTESTING 15 COMBOS ===');
     const comboResults = [];
+    const yield_ = () => new Promise(r => setImmediate(r)); // keep stream alive
 
     for (let comboId = 1; comboId <= 15; comboId++) {
       const enabled = quantumOptimizer.getEnabledStrategies(comboId);
@@ -1937,90 +1965,95 @@ router.post('/ai-optimize', async (req, res) => {
 
       for (const sym of validTokens) {
         const { k1h, k15m, k1m } = klineCache[sym];
-        let wallet = SIM_WALLET;
-        let position = null; // { entry, sl, tp1, direction, openIdx }
+        const symM1 = m1Index[sym];
+        const symH1Times = h1Index[sym];
+        let position = null;
 
-        // Walk through 15m time steps
-        const STEP = 15; // minutes
+        // Walk through 15m time steps (skip first 100 for lookback)
         for (let i = 100; i < k15m.length - 1; i++) {
-          const stepTime = parseInt(k15m[i][6]); // close time of 15m candle
-
-          // Check exit for open position using 1m candles
+          // Check exit using pre-indexed 1m candles
           if (position) {
-            const m1Window = k1m.filter(k => {
-              const t = parseInt(k[0]);
-              return t > parseInt(k15m[i - 1][6]) && t <= stepTime;
-            });
-
+            const m1Bucket = symM1.get(i) || [];
             let closed = false;
-            for (const c of m1Window) {
+            for (const c of m1Bucket) {
               const high = parseFloat(c[2]);
               const low = parseFloat(c[3]);
 
               if (position.direction === 'LONG') {
                 if (low <= position.sl) {
-                  const pnl = (position.sl - position.entry) / position.entry * 100;
-                  totalPnl += pnl; losses++; trades++; closed = true; break;
+                  totalPnl += (position.sl - position.entry) / position.entry * 100;
+                  losses++; trades++; closed = true; break;
                 }
                 if (high >= position.tp1) {
-                  const pnl = (position.tp1 - position.entry) / position.entry * 100;
-                  totalPnl += pnl; wins++; trades++; closed = true; break;
+                  totalPnl += (position.tp1 - position.entry) / position.entry * 100;
+                  wins++; trades++; closed = true; break;
                 }
               } else {
                 if (high >= position.sl) {
-                  const pnl = (position.entry - position.sl) / position.entry * 100;
-                  totalPnl += pnl; losses++; trades++; closed = true; break;
+                  totalPnl += (position.entry - position.sl) / position.entry * 100;
+                  losses++; trades++; closed = true; break;
                 }
                 if (low <= position.tp1) {
-                  const pnl = (position.entry - position.tp1) / position.entry * 100;
-                  totalPnl += pnl; wins++; trades++; closed = true; break;
+                  totalPnl += (position.entry - position.tp1) / position.entry * 100;
+                  wins++; trades++; closed = true; break;
                 }
               }
             }
             if (closed) position = null;
           }
 
-          // Try new entry if no position
-          if (!position) {
-            // Window klines for strategy detection
-            const w1h = k1h.filter(k => parseInt(k[6]) <= stepTime).slice(-60);
+          // Try new entry if no position (check every 4th step = hourly to save CPU)
+          if (!position && i % 4 === 0) {
             const w15m = k15m.slice(Math.max(0, i - 99), i + 1);
-            const w1m = k1m.filter(k => parseInt(k[6]) <= stepTime).slice(-50);
+            // Get last 50 1m candles from recent buckets
+            const w1m = [];
+            for (let b = Math.max(0, i - 3); b <= i; b++) {
+              const bucket = symM1.get(b) || [];
+              w1m.push(...bucket);
+            }
+            const w1mSlice = w1m.slice(-50);
 
-            if (w15m.length < 30 || w1m.length < 10) continue;
+            if (w15m.length < 30 || w1mSlice.length < 10) continue;
 
-            // Run each enabled strategy
+            // Get 1h window using pre-indexed times
+            const stepTime = parseInt(k15m[i][6]);
+            let h1End = 0;
+            for (let h = symH1Times.length - 1; h >= 0; h--) {
+              if (symH1Times[h] <= stepTime) { h1End = h + 1; break; }
+            }
+            const w1h = k1h.slice(Math.max(0, h1End - 60), h1End);
+
             let signal = null;
-            if (enabled.LIQUIDITY_SWEEP) {
-              const s = engine.detectLiquiditySweep(w15m, w1m);
-              if (s && !signal) signal = s;
-            }
-            if (enabled.STOP_LOSS_HUNT) {
-              const s = engine.detectStopLossHunt(w15m, w1m);
-              if (s && (!signal || s.touches > 2)) signal = s;
-            }
-            if (enabled.MOMENTUM_SCALP) {
-              const s = engine.detectMomentumScalp(w15m, w1m);
-              if (s && !signal) signal = s;
-            }
-            if (enabled.BRR_FIBO && w1h.length >= 30) {
-              const s = engine.detectBRR(w1h, w15m, w1m);
-              if (s && (!signal || s.score > 14)) signal = s;
-            }
+            try {
+              if (enabled.LIQUIDITY_SWEEP) {
+                const s = engine.detectLiquiditySweep(w15m, w1mSlice);
+                if (s) signal = s;
+              }
+              if (enabled.STOP_LOSS_HUNT) {
+                const s = engine.detectStopLossHunt(w15m, w1mSlice);
+                if (s && (!signal || s.touches > 2)) signal = s;
+              }
+              if (enabled.MOMENTUM_SCALP) {
+                const s = engine.detectMomentumScalp(w15m, w1mSlice);
+                if (s && !signal) signal = s;
+              }
+              if (enabled.BRR_FIBO && w1h.length >= 30) {
+                const s = engine.detectBRR(w1h, w15m, w1mSlice);
+                if (s && (!signal || s.score > 14)) signal = s;
+              }
+            } catch { /* strategy error on this step — skip */ }
 
             if (signal) {
               const slDist = Math.abs(signal.entryPrice - signal.sl) / signal.entryPrice;
               if (slDist > 0.001 && slDist < 0.05) {
-                const tpDist = slDist * 2; // RR 1:2
-                const tp1 = signal.direction === 'LONG'
-                  ? signal.entryPrice * (1 + tpDist)
-                  : signal.entryPrice * (1 - tpDist);
+                const tpDist = slDist * 2;
                 position = {
                   entry: signal.entryPrice,
                   sl: signal.sl,
-                  tp1,
+                  tp1: signal.direction === 'LONG'
+                    ? signal.entryPrice * (1 + tpDist)
+                    : signal.entryPrice * (1 - tpDist),
                   direction: signal.direction,
-                  setup: signal.setup,
                 };
               }
             }
@@ -2038,6 +2071,7 @@ router.post('/ai-optimize', async (req, res) => {
           trades++;
           position = null;
         }
+        await yield_(); // keep connection alive
       }
 
       const wr = trades > 0 ? (wins / trades * 100).toFixed(0) : '0';
@@ -2047,6 +2081,7 @@ router.post('/ai-optimize', async (req, res) => {
 
       comboResults.push({ comboId, trades, wins, losses, totalPnl });
       sendProgress('backtest', Math.round(50 + (comboId / 15) * 40));
+      await yield_(); // yield between combos
     }
 
     // Seed results into DB
