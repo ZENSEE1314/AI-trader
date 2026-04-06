@@ -2524,8 +2524,8 @@
       for (const entry of entries) {
         const color = LOG_COLORS[entry.category] || '#aaa';
         const icon = LOG_ICONS[entry.category] || '';
-        const time = entry.ts.slice(11, 19);
-        const cat = entry.category.toUpperCase().padEnd(9);
+        const time = entry.ts ? entry.ts.slice(11, 19) : '--:--:--';
+        const cat = (entry.category || 'system').toUpperCase().padEnd(9);
         const line = document.createElement('div');
         line.style.marginBottom = '2px';
         line.innerHTML =
