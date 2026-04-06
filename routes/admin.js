@@ -2638,22 +2638,33 @@ router.post('/ai-optimize', async (req, res) => {
     // ═══ Save top 3 ═══
     sendLog('Saving top 3 as AI versions...');
     const saved = [];
-    for (let i=0; i<Math.min(3,allResults.length); i++) {
-      const best=allResults[i]; if(!best||best.trades===0) continue;
+    try {
       const rows=await query('SELECT version FROM ai_versions ORDER BY id DESC LIMIT 1');
       const prev=rows.length?rows[0].version:'v0.0';
       const parts=prev.match(/v(\d+)\.(\d+)/);
-      const major=parts?parseInt(parts[1]):1; const minor=parts?parseInt(parts[2])+1:0;
-      const ver=`v${major}.${minor}`;
-      const medal=i===0?'🥇':i===1?'🥈':'🥉';
-      await query(
-        `INSERT INTO ai_versions (version, trade_count, win_rate, avg_pnl, total_pnl, params, setup_weights, avoided_coins, changes)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-        [ver, best.trades, best.winRate/100, best.trades?best.totalPnl/best.trades:0, best.totalPnl,
-         JSON.stringify(best.settings), '{}', '[]',
-         `${medal} AI #${i+1}: ${best.combo} (${best.winRate}% WR, $${best.totalPnl} PnL, ${DAYS}d)`]);
-      saved.push({ rank:i+1, version:ver, combo:best.combo, winRate:best.winRate, pnl:best.totalPnl });
-      sendLog(`  Saved ${medal} ${ver}: ${best.combo} (${best.winRate}% WR)`);
+      let major=parts?parseInt(parts[1]):1;
+      let minor=parts?parseInt(parts[2]):0;
+
+      for (let i=0; i<Math.min(3,allResults.length); i++) {
+        const best=allResults[i]; if(!best||best.trades===0) continue;
+        minor++;
+        const ver=`v${major}.${minor}`;
+        const medal=i===0?'🥇':i===1?'🥈':'🥉';
+        const tradeCount = parseInt(best.trades) || 0;
+        const winRate = parseFloat(best.winRate) / 100 || 0;
+        const avgPnl = tradeCount > 0 ? parseFloat(best.totalPnl) / tradeCount : 0;
+        const totalPnl = parseFloat(best.totalPnl) || 0;
+        await query(
+          `INSERT INTO ai_versions (version, trade_count, win_rate, avg_pnl, total_pnl, params, setup_weights, avoided_coins, changes)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+          [ver, tradeCount, winRate, avgPnl, totalPnl,
+           JSON.stringify(best.settings), '{}', '[]',
+           `${medal} AI #${i+1}: ${best.combo} (${best.winRate}% WR, $${best.totalPnl} PnL, ${DAYS}d)`]);
+        saved.push({ rank:i+1, version:ver, combo:best.combo, winRate:best.winRate, pnl:best.totalPnl });
+        sendLog(`  Saved ${medal} ${ver}: ${best.combo} (${best.winRate}% WR)`);
+      }
+    } catch (saveErr) {
+      sendLog(`Save error: ${saveErr.message} — results still returned below`);
     }
 
     // Send final result as last NDJSON line
