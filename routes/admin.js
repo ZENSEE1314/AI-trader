@@ -2253,20 +2253,39 @@ router.post('/ai-optimize', async (req, res) => {
       return tokenStats;
     }
 
-    // ═══ ROUND 1: Strategy presets ═══
-    sendLog('Round 1: Testing 10 strategy presets...');
-    const presets = [
-      { name:'Full SMC',       swingLen4h:10,swingLen1h:10,swingLen15m:10,swingLen1m:5, indecisiveThresh:0.3, keyLevelProximity:0.003, maxEntryAge:25, requireBothHTF:1,requireKeyLevel:1,require15m:1,require1m:1,requireVolSpike:0,volSpikeMultiplier:1.5 },
-      { name:'No Key Level',   swingLen4h:10,swingLen1h:10,swingLen15m:10,swingLen1m:5, indecisiveThresh:0.3, keyLevelProximity:0.003, maxEntryAge:25, requireBothHTF:1,requireKeyLevel:0,require15m:1,require1m:1,requireVolSpike:0,volSpikeMultiplier:1.5 },
-      { name:'Relaxed HTF',    swingLen4h:10,swingLen1h:10,swingLen15m:10,swingLen1m:5, indecisiveThresh:0.3, keyLevelProximity:0.003, maxEntryAge:25, requireBothHTF:0,requireKeyLevel:1,require15m:1,require1m:1,requireVolSpike:0,volSpikeMultiplier:1.5 },
-      { name:'No 1m Confirm',  swingLen4h:10,swingLen1h:10,swingLen15m:10,swingLen1m:5, indecisiveThresh:0.3, keyLevelProximity:0.003, maxEntryAge:25, requireBothHTF:1,requireKeyLevel:1,require15m:1,require1m:0,requireVolSpike:0,volSpikeMultiplier:1.5 },
-      { name:'Vol Spike',      swingLen4h:10,swingLen1h:10,swingLen15m:10,swingLen1m:5, indecisiveThresh:0.3, keyLevelProximity:0.003, maxEntryAge:25, requireBothHTF:1,requireKeyLevel:1,require15m:1,require1m:1,requireVolSpike:1,volSpikeMultiplier:1.5 },
-      { name:'Wide Swings',    swingLen4h:15,swingLen1h:15,swingLen15m:15,swingLen1m:8, indecisiveThresh:0.2, keyLevelProximity:0.005, maxEntryAge:40, requireBothHTF:1,requireKeyLevel:1,require15m:1,require1m:1,requireVolSpike:0,volSpikeMultiplier:1.5 },
-      { name:'Tight Swings',   swingLen4h:6, swingLen1h:6, swingLen15m:6, swingLen1m:3, indecisiveThresh:0.4, keyLevelProximity:0.002, maxEntryAge:15, requireBothHTF:1,requireKeyLevel:1,require15m:1,require1m:1,requireVolSpike:0,volSpikeMultiplier:1.5 },
-      { name:'Easy Entry',     swingLen4h:8, swingLen1h:8, swingLen15m:8, swingLen1m:4, indecisiveThresh:0.15,keyLevelProximity:0.01,  maxEntryAge:40, requireBothHTF:0,requireKeyLevel:0,require15m:1,require1m:0,requireVolSpike:0,volSpikeMultiplier:1.5 },
-      { name:'Ultra Strict',   swingLen4h:12,swingLen1h:12,swingLen15m:12,swingLen1m:5, indecisiveThresh:0.35,keyLevelProximity:0.002, maxEntryAge:20, requireBothHTF:1,requireKeyLevel:1,require15m:1,require1m:1,requireVolSpike:1,volSpikeMultiplier:2.0 },
-      { name:'Momentum Only',  swingLen4h:10,swingLen1h:10,swingLen15m:8, swingLen1m:4, indecisiveThresh:0.2, keyLevelProximity:0.008, maxEntryAge:35, requireBothHTF:0,requireKeyLevel:0,require15m:1,require1m:1,requireVolSpike:0,volSpikeMultiplier:1.5 },
+    // ═══ ROUND 1: Full grid search — all toggle + swing combinations ═══
+    // 5 toggles (2^5=32) × 3 swing profiles × 2 indecisive thresholds = 192 combos
+    // In heavy mode, skip volSpike combos to save time (2^4=16 × 3 × 2 = 96)
+    const SWING_PROFILES = [
+      { name:'Standard', swingLen4h:10, swingLen1h:10, swingLen15m:10, swingLen1m:5, keyLevelProximity:0.005, maxEntryAge:30, volSpikeMultiplier:1.5 },
+      { name:'Tight',    swingLen4h:7,  swingLen1h:7,  swingLen15m:7,  swingLen1m:3, keyLevelProximity:0.003, maxEntryAge:20, volSpikeMultiplier:1.5 },
+      { name:'Wide',     swingLen4h:13, swingLen1h:12, swingLen15m:9,  swingLen1m:4, keyLevelProximity:0.008, maxEntryAge:40, volSpikeMultiplier:1.5 },
     ];
+    const INDECISIVE_OPTS = [0.2, 0.35];
+    const TOGGLE_KEYS = ['requireBothHTF','requireKeyLevel','require15m','require1m','requireVolSpike'];
+
+    const presets = [];
+    for (const sw of SWING_PROFILES) {
+      for (const indec of INDECISIVE_OPTS) {
+        // Generate all toggle combinations (0-31 for 5 bits, or 0-15 skipping volSpike in heavy mode)
+        const maxBits = isHeavy ? 16 : 32; // skip volSpike bit in heavy mode
+        for (let bits = 0; bits < maxBits; bits++) {
+          const toggles = {};
+          for (let i = 0; i < TOGGLE_KEYS.length; i++) {
+            if (isHeavy && i === 4) { toggles[TOGGLE_KEYS[i]] = 0; continue; } // volSpike always off in heavy
+            toggles[TOGGLE_KEYS[i]] = (bits >> i) & 1;
+          }
+          const label = `${sw.name}|${indec}|` +
+            `HTF:${toggles.requireBothHTF?'both':'either'}|` +
+            `KL:${toggles.requireKeyLevel?'Y':'N'}|` +
+            `15m:${toggles.require15m?'Y':'N'}|` +
+            `1m:${toggles.require1m?'Y':'N'}|` +
+            `Vol:${toggles.requireVolSpike?'Y':'N'}`;
+          presets.push({ name: label, ...sw, indecisiveThresh: indec, ...toggles });
+        }
+      }
+    }
+    sendLog(`Round 1: Grid search — ${presets.length} systematic combinations (${SWING_PROFILES.length} swing × ${INDECISIVE_OPTS.length} indec × ${isHeavy?16:32} toggles)...`);
 
     // Yield to event loop AND send keepalive ping so Railway proxy doesn't kill stream
     let _lastPing = Date.now();
@@ -2371,14 +2390,27 @@ router.post('/ai-optimize', async (req, res) => {
         const strat = presets[pi];
         try {
           const s = await evaluateAsync(strat);
-          results.push({ strategy: strat.name, risk: 'User', combo: strat.name, settings: strat, ...s });
-          sendLog(`  ${strat.name}: ${s.trades} trades, ${s.winRate}% WR, $${s.totalPnl}`);
+          if (s.trades > 0) {
+            results.push({ strategy: strat.name, risk: 'User', combo: strat.name, settings: strat, ...s });
+          }
         } catch (presetErr) {
-          sendLog(`  ⚠ ${strat.name} failed: ${presetErr.message}`);
+          sendLog(`  ⚠ #${pi+1} failed: ${presetErr.message}`);
+        }
+        if ((pi+1) % 10 === 0 || pi === presets.length - 1) {
+          const viable = results.filter(r => r.trades > 0).length;
+          sendLog(`  Grid: ${pi+1}/${presets.length} tested, ${viable} viable so far`);
+          sendProgress('round1', Math.round((pi+1)/presets.length*100));
         }
       }
     } catch (r1Err) {
       sendLog(`Round 1 error: ${r1Err.message}`);
+    }
+    // Show top 5 from grid search
+    const gridSorted = [...results].sort((a,b) => b.winRate-a.winRate || b.totalPnl-a.totalPnl);
+    sendLog(`Round 1 done: ${results.length} viable from ${presets.length} combos`);
+    for (let i = 0; i < Math.min(5, gridSorted.length); i++) {
+      const r = gridSorted[i];
+      sendLog(`  #${i+1} ${r.combo}: ${r.trades}T ${r.winRate}%WR $${r.totalPnl}`);
     }
     sendProgress('round1', 100);
 
@@ -2531,7 +2563,7 @@ router.post('/ai-optimize', async (req, res) => {
       type: 'result',
       period: `${new Date(startTime).toISOString().slice(0,10)} → ${new Date(endTime).toISOString().slice(0,10)}`,
       days: DAYS, coinsScanned: Object.keys(coinData).length,
-      presetStrategies: presets.length,
+      gridSearchCombos: presets.length,
       round1Combos: results.length, round2Genetic: mutations.length,
       round3Quantum: quantum.results.length,
       quantumStats: quantum.stats,
