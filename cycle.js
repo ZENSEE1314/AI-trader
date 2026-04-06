@@ -622,35 +622,41 @@ async function checkTrailingStop(client) {
 
       if (trailResult) {
         const { newSlPrice, newLastStep } = trailResult;
-        try {
-          const stepped = await updateStopLoss(client, sym, newSlPrice, closeSide, 'binance', state.pricePrec);
-          if (stepped) {
-            const oldStep = state.trailingSlLastStep || 0;
-            state.trailingSlPrice = newSlPrice;
-            state.trailingSlLastStep = newLastStep;
-            state.sl = parseFloat(newSlPrice.toFixed(state.pricePrec));
-            bLog.trade(`Trailing SL stepped: ${sym} ${(oldStep*100).toFixed(1)}% -> ${(newLastStep*100).toFixed(1)}% | SL=$${fmtPrice(newSlPrice)}`);
-            log(`Trailing SL: ${sym} stepped to ${(newLastStep*100).toFixed(1)}% profit lock, SL=$${fmtPrice(newSlPrice)}`);
-
-            // Update DB
-            try {
-              const db = require('./db');
-              await db.query(
-                `UPDATE trades SET trailing_sl_price = $1, trailing_sl_last_step = $2
-                 WHERE symbol = $3 AND status = 'OPEN'`,
-                [newSlPrice, newLastStep, sym]
-              );
-            } catch (_) {}
-
-            await notify(
-              `*Trailing SL Stepped*\n` +
-              `*${sym}* ${state.isLong ? 'LONG' : 'SHORT'}\n` +
-              `Profit: *+${(newLastStep*100).toFixed(1)}%*\n` +
-              `SL locked at: \`$${fmtPrice(newSlPrice)}\``
-            );
+        let slUpdated = false;
+        for (let attempt = 1; attempt <= 3; attempt++) {
+          try {
+            slUpdated = await updateStopLoss(client, sym, newSlPrice, closeSide, 'binance', state.pricePrec);
+            if (slUpdated) break;
+          } catch (e) {
+            bLog.error(`WATCHDOG: Owner SL update failed for ${sym} attempt ${attempt}/3: ${e.message}`);
+            if (attempt < 3) await new Promise(r => setTimeout(r, 1000));
           }
-        } catch (e) {
-          bLog.error(`Trailing SL update failed for ${sym}: ${e.message}`);
+        }
+        if (slUpdated) {
+          const oldStep = state.trailingSlLastStep || 0;
+          state.trailingSlPrice = newSlPrice;
+          state.trailingSlLastStep = newLastStep;
+          state.sl = parseFloat(newSlPrice.toFixed(state.pricePrec));
+          bLog.trade(`✓ Trailing SL stepped: ${sym} ${(oldStep*100).toFixed(1)}% -> ${(newLastStep*100).toFixed(1)}% | SL=$${fmtPrice(newSlPrice)}`);
+
+          try {
+            const db = require('./db');
+            await db.query(
+              `UPDATE trades SET trailing_sl_price = $1, trailing_sl_last_step = $2
+               WHERE symbol = $3 AND status = 'OPEN'`,
+              [newSlPrice, newLastStep, sym]
+            );
+          } catch (_) {}
+
+          await notify(
+            `*Trailing SL Stepped*\n` +
+            `*${sym}* ${state.isLong ? 'LONG' : 'SHORT'}\n` +
+            `Capital profit: *+${(newLastStep*100).toFixed(1)}%*\n` +
+            `SL locked at: \`$${fmtPrice(newSlPrice)}\``
+          );
+        } else {
+          bLog.error(`WATCHDOG ALERT: Owner SL failed 3x for ${sym}!`);
+          await notify(`🚨 *TRAILING SL FAILED*\n${sym} owner SL update failed 3 times!\nCheck manually!`);
         }
       }
 
@@ -1260,27 +1266,34 @@ async function syncTradeStatus() {
             if (exchangePos && trade.trailing_sl_last_step !== undefined) {
               const entryPrice = parseFloat(trade.entry_price);
               const isLong = trade.direction !== 'SHORT';
-              const absAmt = Math.abs(exchangePos.amt) || 1;
-              const curPrice = isLong
-                ? entryPrice + (exchangePos.pnl / absAmt)
-                : entryPrice - (exchangePos.pnl / absAmt);
+              const curPrice = exchangePos.entryPrice && exchangePos.pnl !== undefined
+                ? (isLong ? entryPrice + (exchangePos.pnl / (Math.abs(exchangePos.amt) || 1))
+                          : entryPrice - (exchangePos.pnl / (Math.abs(exchangePos.amt) || 1)))
+                : entryPrice;
               const lastStep = parseFloat(trade.trailing_sl_last_step) || 0;
               const tradeLev = parseFloat(trade.leverage) || 20;
               const trailResult = calculateTrailingStep(entryPrice, curPrice, isLong, lastStep, tradeLev);
               if (trailResult) {
                 const closeSide = isLong ? 'SELL' : 'BUY';
-                try {
-                  const stepped = await updateStopLoss(userClient, trade.symbol, trailResult.newSlPrice, closeSide, 'binance', 2);
-                  if (stepped) {
-                    await db.query(
-                      `UPDATE trades SET trailing_sl_price = $1, trailing_sl_last_step = $2
-                       WHERE id = $3`,
-                      [trailResult.newSlPrice, trailResult.newLastStep, trade.id]
-                    );
-                    bLog.trade(`Sync trailing SL: ${trade.symbol} stepped to ${(trailResult.newLastStep*100).toFixed(1)}% SL=$${fmtPrice(trailResult.newSlPrice)}`);
+                let slUpdated = false;
+                for (let attempt = 1; attempt <= 3; attempt++) {
+                  try {
+                    slUpdated = await updateStopLoss(userClient, trade.symbol, trailResult.newSlPrice, closeSide, 'binance', 2);
+                    if (slUpdated) break;
+                  } catch (e) {
+                    bLog.error(`WATCHDOG: Binance SL update failed for ${trade.symbol} attempt ${attempt}/3: ${e.message}`);
+                    if (attempt < 3) await new Promise(r => setTimeout(r, 1000));
                   }
-                } catch (e) {
-                  bLog.error(`Sync trailing SL error for ${trade.symbol}: ${e.message}`);
+                }
+                if (slUpdated) {
+                  await db.query(
+                    `UPDATE trades SET trailing_sl_price = $1, trailing_sl_last_step = $2 WHERE id = $3`,
+                    [trailResult.newSlPrice, trailResult.newLastStep, trade.id]
+                  );
+                  bLog.trade(`Sync trailing SL: ${trade.symbol} stepped to ${(trailResult.newLastStep*100).toFixed(1)}% SL=$${fmtPrice(trailResult.newSlPrice)}`);
+                } else {
+                  bLog.error(`WATCHDOG ALERT: Binance SL failed 3x for ${trade.symbol}`);
+                  await notify(`🚨 *TRAILING SL FAILED*\n${trade.symbol} Binance SL update failed 3 times!`);
                 }
               }
             }
@@ -1296,60 +1309,122 @@ async function syncTradeStatus() {
             });
           }
 
-          // Check trailing SL for Bitunix positions
+          // Check trailing SL for Bitunix positions (self-healing)
           for (const trade of trades) {
             const exchangePos = openSymbols.get(trade.symbol);
             if (exchangePos && trade.trailing_sl_last_step !== undefined) {
               const entryPrice = parseFloat(trade.entry_price);
               const isLong = trade.direction !== 'SHORT';
-              // Fetch current price from Binance public API (most reliable)
-              let curPrice;
-              try {
-                const fetch = require('node-fetch');
-                const tickerRes = await fetch(
-                  `https://fapi.binance.com/fapi/v1/ticker/price?symbol=${trade.symbol}`,
-                  { timeout: 5000, ...getFetchOptions() }
-                );
-                const tickerData = await tickerRes.json();
-                curPrice = parseFloat(tickerData.price);
-                if (!curPrice || isNaN(curPrice)) throw new Error('Invalid price from Binance');
-              } catch (priceErr) {
-                bLog.error(`Bitunix trailing: Binance price fetch failed for ${trade.symbol}: ${priceErr.message}`);
-                // Fallback: use markPrice or PnL calc
-                if (exchangePos.markPrice) {
-                  curPrice = exchangePos.markPrice;
-                  bLog.trade(`Bitunix trailing: using markPrice fallback $${curPrice}`);
-                } else {
+              const tradeLev = parseFloat(trade.leverage) || 20;
+
+              // ── Step 1: Get current price (3 methods, must succeed) ──
+              let curPrice = null;
+              const priceMethods = [
+                // Method A: Binance futures public API
+                async () => {
+                  const fetch = require('node-fetch');
+                  const res = await fetch(
+                    `https://fapi.binance.com/fapi/v1/ticker/price?symbol=${trade.symbol}`,
+                    { timeout: 5000, ...getFetchOptions() }
+                  );
+                  const d = await res.json();
+                  const p = parseFloat(d.price);
+                  if (!p || isNaN(p)) throw new Error('invalid');
+                  return p;
+                },
+                // Method B: Binance spot API
+                async () => {
+                  const fetch = require('node-fetch');
+                  const res = await fetch(
+                    `https://api.binance.com/api/v3/ticker/price?symbol=${trade.symbol}`,
+                    { timeout: 5000, ...getFetchOptions() }
+                  );
+                  const d = await res.json();
+                  const p = parseFloat(d.price);
+                  if (!p || isNaN(p)) throw new Error('invalid');
+                  return p;
+                },
+                // Method C: Bitunix markPrice from position
+                async () => {
+                  if (exchangePos.markPrice) return exchangePos.markPrice;
+                  throw new Error('no markPrice');
+                },
+                // Method D: Calculate from PnL
+                async () => {
                   const absAmt = Math.abs(exchangePos.amt) || 1;
-                  curPrice = isLong
+                  const p = isLong
                     ? entryPrice + (exchangePos.pnl / absAmt)
                     : entryPrice - (exchangePos.pnl / absAmt);
-                  bLog.trade(`Bitunix trailing: using PnL calc fallback $${curPrice} (pnl=${exchangePos.pnl}, amt=${exchangePos.amt})`);
+                  if (!p || isNaN(p) || p <= 0) throw new Error('invalid calc');
+                  return p;
+                },
+              ];
+
+              for (let i = 0; i < priceMethods.length; i++) {
+                try {
+                  curPrice = await priceMethods[i]();
+                  if (i > 0) bLog.trade(`Bitunix trailing: ${trade.symbol} price from fallback method ${i + 1}: $${curPrice}`);
+                  break;
+                } catch (e) {
+                  bLog.error(`Bitunix trailing: price method ${i + 1} failed for ${trade.symbol}: ${e.message}`);
                 }
               }
+
+              if (!curPrice) {
+                bLog.error(`WATCHDOG: ALL price methods failed for ${trade.symbol} — cannot trail SL!`);
+                await notify(`⚠️ *TRAILING SL BROKEN*\n${trade.symbol}: all price sources failed!\nManual check needed.`);
+                continue;
+              }
+
+              // ── Step 2: Calculate profit & trailing step ──
               const profitPct = isLong
                 ? (curPrice - entryPrice) / entryPrice
                 : (entryPrice - curPrice) / entryPrice;
-              const lastStep = parseFloat(trade.trailing_sl_last_step) || 0;
-              const tradeLev = parseFloat(trade.leverage) || 20;
               const capitalPct = profitPct * tradeLev;
+              const lastStep = parseFloat(trade.trailing_sl_last_step) || 0;
+
               bLog.trade(`Bitunix trailing: ${trade.symbol} entry=$${entryPrice} cur=$${curPrice} pricePct=${(profitPct*100).toFixed(3)}% capitalPct=${(capitalPct*100).toFixed(2)}% lev=${tradeLev}x lastStep=${(lastStep*100).toFixed(1)}%`);
+
               const trailResult = calculateTrailingStep(entryPrice, curPrice, isLong, lastStep, tradeLev);
-              if (trailResult) {
+              if (!trailResult) continue;
+
+              // ── Step 3: Update SL on exchange (retry up to 3 times) ──
+              let slUpdated = false;
+              for (let attempt = 1; attempt <= 3; attempt++) {
                 try {
                   const existingTp = parseFloat(trade.tp_price) || 0;
-                  const stepped = await updateStopLoss(userClient, trade.symbol, trailResult.newSlPrice, null, 'bitunix', 8, existingTp || undefined);
-                  if (stepped) {
-                    await db.query(
-                      `UPDATE trades SET trailing_sl_price = $1, trailing_sl_last_step = $2
-                       WHERE id = $3`,
-                      [trailResult.newSlPrice, trailResult.newLastStep, trade.id]
-                    );
-                    bLog.trade(`Sync trailing SL (Bitunix): ${trade.symbol} stepped to ${(trailResult.newLastStep*100).toFixed(1)}%`);
-                  }
+                  slUpdated = await updateStopLoss(userClient, trade.symbol, trailResult.newSlPrice, null, 'bitunix', 8, existingTp || undefined);
+                  if (slUpdated) break;
+                  bLog.error(`WATCHDOG: updateStopLoss returned false for ${trade.symbol} (attempt ${attempt}/3)`);
                 } catch (e) {
-                  bLog.error(`Sync trailing SL error (Bitunix) for ${trade.symbol}: ${e.message}`);
+                  bLog.error(`WATCHDOG: updateStopLoss failed for ${trade.symbol} attempt ${attempt}/3: ${e.message}`);
+                  if (attempt < 3) await new Promise(r => setTimeout(r, 1000));
                 }
+              }
+
+              // ── Step 4: Verify SL was actually set ──
+              if (slUpdated) {
+                await db.query(
+                  `UPDATE trades SET trailing_sl_price = $1, trailing_sl_last_step = $2 WHERE id = $3`,
+                  [trailResult.newSlPrice, trailResult.newLastStep, trade.id]
+                );
+                bLog.trade(`✓ Trailing SL (Bitunix): ${trade.symbol} stepped to ${(trailResult.newLastStep*100).toFixed(1)}% SL=$${trailResult.newSlPrice.toFixed(8)}`);
+                await notify(
+                  `*Trailing SL Stepped*\n` +
+                  `*${trade.symbol}* ${isLong ? 'LONG' : 'SHORT'}\n` +
+                  `Capital profit: *+${(trailResult.newLastStep*100).toFixed(1)}%*\n` +
+                  `SL locked at: \`$${trailResult.newSlPrice.toFixed(8)}\``
+                );
+              } else {
+                // All 3 attempts failed — emergency alert
+                bLog.error(`WATCHDOG ALERT: Failed to set trailing SL for ${trade.symbol} after 3 attempts!`);
+                await notify(
+                  `🚨 *TRAILING SL FAILED*\n` +
+                  `*${trade.symbol}* ${isLong ? 'LONG' : 'SHORT'}\n` +
+                  `Profit: +${(capitalPct*100).toFixed(1)}% capital\n` +
+                  `SL update FAILED 3 times!\n` +
+                  `⚠️ Check position manually!`
+                );
               }
             }
           }
