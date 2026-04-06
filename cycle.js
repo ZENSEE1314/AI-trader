@@ -252,13 +252,43 @@ async function updateStopLoss(client, symbol, newSlPrice, closeSide, platform, p
   const slFmt = fmtP(newSlPrice);
 
   if (platform === 'binance') {
-    // Cancel existing algo SL orders, then place new one
+    // Save existing TP orders before cancelling all algo orders
+    let existingTpOrders = [];
+    try {
+      const algoOrders = await client.getAlgoOpenOrders({ symbol });
+      existingTpOrders = (algoOrders || []).filter(o => o.type === 'TAKE_PROFIT_MARKET');
+    } catch (_) {}
+
     try { await client.cancelAllAlgoOpenOrders({ symbol }); } catch (_) {}
+
+    // Place new SL
     await client.submitNewAlgoOrder({
       algoType: 'CONDITIONAL', symbol, side: closeSide,
       type: 'STOP_MARKET', triggerPrice: slFmt,
       closePosition: 'true', workingType: 'MARK_PRICE',
     });
+
+    // Re-place TP orders that were cancelled
+    for (const tp of existingTpOrders) {
+      try {
+        await client.submitNewAlgoOrder({
+          algoType: 'CONDITIONAL', symbol, side: tp.side,
+          type: 'TAKE_PROFIT_MARKET', triggerPrice: tp.triggerPrice,
+          closePosition: 'true', workingType: 'MARK_PRICE',
+        });
+      } catch (_) {}
+    }
+
+    // Also re-place from existingTpPrice param if provided and no algo TP was found
+    if (existingTpPrice && existingTpOrders.length === 0) {
+      try {
+        await client.submitNewAlgoOrder({
+          algoType: 'CONDITIONAL', symbol, side: closeSide,
+          type: 'TAKE_PROFIT_MARKET', triggerPrice: fmtP(existingTpPrice),
+          closePosition: 'true', workingType: 'MARK_PRICE',
+        });
+      } catch (_) {}
+    }
     return true;
   } else if (platform === 'bitunix') {
     // NOTE: Bitunix replaces the entire TP/SL config on each call.
@@ -625,7 +655,7 @@ async function checkTrailingStop(client) {
         let slUpdated = false;
         for (let attempt = 1; attempt <= 3; attempt++) {
           try {
-            slUpdated = await updateStopLoss(client, sym, newSlPrice, closeSide, 'binance', state.pricePrec);
+            slUpdated = await updateStopLoss(client, sym, newSlPrice, closeSide, 'binance', state.pricePrec, state.tp3 || state.tp1);
             if (slUpdated) break;
           } catch (e) {
             bLog.error(`WATCHDOG: Owner SL update failed for ${sym} attempt ${attempt}/3: ${e.message}`);
@@ -990,7 +1020,7 @@ async function executeForAllUsers(pick) {
         const walletSizePct = (await getCapitalPercentage(key.id)) / 100;
         const rawTP = parseFloat(key.tp_pct);
         const userTP = isNaN(rawTP) ? 0.01 : rawTP;
-        const userSL = parseFloat(key.sl_pct) || 0.01;
+        const userSL = parseFloat(key.sl_pct) || 0.02;
         // Consecutive loss cooldown removed — let it run
 
         // Initial SL: sl_pct is % of capital at risk, convert to price distance using leverage
@@ -1278,7 +1308,8 @@ async function syncTradeStatus() {
                 let slUpdated = false;
                 for (let attempt = 1; attempt <= 3; attempt++) {
                   try {
-                    slUpdated = await updateStopLoss(userClient, trade.symbol, trailResult.newSlPrice, closeSide, 'binance', 2);
+                    const userTp = parseFloat(trade.tp_price) || 0;
+                    slUpdated = await updateStopLoss(userClient, trade.symbol, trailResult.newSlPrice, closeSide, 'binance', 8, userTp || undefined);
                     if (slUpdated) break;
                   } catch (e) {
                     bLog.error(`WATCHDOG: Binance SL update failed for ${trade.symbol} attempt ${attempt}/3: ${e.message}`);
@@ -1452,7 +1483,7 @@ async function syncTradeStatus() {
                 if (fills && fills.length > 0) {
                   // Find the close fills (opposite side of entry)
                   const closeSide = isLong ? 'SELL' : 'BUY';
-                  const closeFills = fills.filter(f => f.side === closeSide && f.positionSide !== 'BOTH' || f.side === closeSide);
+                  const closeFills = fills.filter(f => f.side === closeSide);
                   if (closeFills.length > 0) {
                     // Weight-averaged exit price from close fills
                     let totalQty = 0, totalValue = 0, totalPnl = 0;
