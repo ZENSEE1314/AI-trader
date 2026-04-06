@@ -490,9 +490,11 @@ async function analyzeLHHL(ticker, params, dailyBiasCache) {
   score = score * aiModifier;
 
   const scalperTag = scalperResult.signal !== 'No Signal' ? ` | Scalper=${scalperResult.signal}` : '';
+  const absorp = scalperResult.details?.absorption;
+  const absorpTag = absorp && absorp.strength > 0 ? ` | Absorb=${absorp.netAbsorption}(buy=${absorp.buyStrength},sell=${absorp.sellStrength})` : '';
   bLog.scan(
     `✅ ${symbol} ${direction} | bias=${bias} 4H=${struct4h.label} 1H=${struct1h.label} ` +
-    `15M=${struct15m.label} 1M=${struct1m.label} | at=${levelCheck.level} | score=${Math.round(score)}${scalperTag}`
+    `15M=${struct15m.label} 1M=${struct1m.label} | at=${levelCheck.level} | score=${Math.round(score)}${scalperTag}${absorpTag}`
   );
 
   return {

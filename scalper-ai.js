@@ -332,8 +332,100 @@ function analyzeScalperAI(klines) {
   };
 }
 
+// ── Absorption Bubbles ──────────────────────────────────────
+// Port of Pine Script "Absorption Bubbles [profitprotrading]"
+// Detects high-volume candles where volume concentrates in wick zones,
+// signaling institutional absorption:
+//   - Buying absorption: volume in LOWER wick → buyers absorb sellers → bullish
+//   - Selling absorption: volume in UPPER wick → sellers absorb buyers → bearish
+
+const ABSORPTION_CFG = {
+  THRESHOLD: 0.1,     // limitFactor: minimum scaled volume to qualify
+  LOOKBACK: 100,      // standard deviation lookback for volume normalization
+};
+
 /**
- * Quick check: does the scalper AI confirm the SMC direction?
+ * Detect absorption events on recent klines.
+ * @param {Array} klines - Binance-format klines
+ * @param {number} recentBars - how many recent bars to check for absorption
+ * @returns {{ buyingAbsorption: number, sellingAbsorption: number, netAbsorption: string, strength: number, events: Array }}
+ */
+function detectAbsorption(klines, recentBars = 5) {
+  if (!klines || klines.length < ABSORPTION_CFG.LOOKBACK + 10) return null;
+
+  const volumes = klines.map(k => parseFloat(k[5]));
+
+  // Volume standard deviation over lookback
+  const volSlice = volumes.slice(-ABSORPTION_CFG.LOOKBACK);
+  const volMean = volSlice.reduce((a, b) => a + b, 0) / volSlice.length;
+  const volVariance = volSlice.reduce((s, v) => s + (v - volMean) ** 2, 0) / volSlice.length;
+  const volStdev = Math.sqrt(volVariance) || 1;
+
+  const events = [];
+  let buyCount = 0, sellCount = 0;
+  let buyStrength = 0, sellStrength = 0;
+
+  // Check last N bars for absorption
+  const startIdx = Math.max(0, klines.length - recentBars);
+  for (let i = startIdx; i < klines.length; i++) {
+    const open = parseFloat(klines[i][1]);
+    const high = parseFloat(klines[i][2]);
+    const low = parseFloat(klines[i][3]);
+    const close = parseFloat(klines[i][4]);
+    const vol = parseFloat(klines[i][5]);
+
+    const scaledVol = vol / volStdev;
+    if (scaledVol < ABSORPTION_CFG.THRESHOLD) continue;
+
+    const midPrice = (high + low) / 2;
+    const topBody = Math.max(open, close);
+    const lowBody = Math.min(open, close);
+
+    // Upper wick zone: midPrice between top of body and high
+    const isUpperZone = midPrice >= topBody && midPrice <= high;
+    // Lower wick zone: midPrice between low and bottom of body
+    const isLowerZone = midPrice <= lowBody && midPrice >= low;
+
+    // Bubble size tier (how significant)
+    let tier = 0;
+    const t = ABSORPTION_CFG.THRESHOLD;
+    if (scaledVol >= t + 6) tier = 5;       // huge
+    else if (scaledVol >= t + 3) tier = 4;  // large
+    else if (scaledVol >= t + 2) tier = 3;  // normal
+    else if (scaledVol >= t + 1) tier = 2;  // small
+    else tier = 1;                           // tiny
+
+    if (isLowerZone) {
+      // Buying absorption: buyers absorbed selling pressure at the lows
+      buyCount++;
+      buyStrength += tier;
+      events.push({ type: 'buy', tier, scaledVol: Math.round(scaledVol * 100) / 100, barIdx: i });
+    }
+    if (isUpperZone) {
+      // Selling absorption: sellers absorbed buying pressure at the highs
+      sellCount++;
+      sellStrength += tier;
+      events.push({ type: 'sell', tier, scaledVol: Math.round(scaledVol * 100) / 100, barIdx: i });
+    }
+  }
+
+  const netAbsorption = buyStrength > sellStrength ? 'bullish'
+    : sellStrength > buyStrength ? 'bearish'
+    : 'neutral';
+
+  return {
+    buyingAbsorption: buyCount,
+    sellingAbsorption: sellCount,
+    buyStrength,
+    sellStrength,
+    netAbsorption,
+    strength: Math.max(buyStrength, sellStrength),
+    events,
+  };
+}
+
+/**
+ * Quick check: does the scalper AI + absorption confirm the SMC direction?
  * @param {Array} klines15m - 15-minute klines
  * @param {string} direction - 'LONG' or 'SHORT'
  * @returns {{ confirmed: boolean, signal: string, score: number, details: object }}
@@ -359,7 +451,27 @@ function confirmSignal(klines15m, direction) {
     else if (signal === 'Strong Buy') { scoreBonus = -5; confirmed = false; }
   }
 
+  // Absorption Bubbles: detect institutional volume absorption
+  const absorption = detectAbsorption(klines15m, 5);
+  if (absorption && absorption.strength > 0) {
+    result.absorption = absorption;
+
+    if (direction === 'LONG' && absorption.netAbsorption === 'bullish') {
+      // Buying absorption confirms LONG: buyers absorbed selling pressure
+      scoreBonus += Math.min(absorption.buyStrength, 3);
+    } else if (direction === 'SHORT' && absorption.netAbsorption === 'bearish') {
+      // Selling absorption confirms SHORT: sellers absorbed buying pressure
+      scoreBonus += Math.min(absorption.sellStrength, 3);
+    } else if (direction === 'LONG' && absorption.netAbsorption === 'bearish' && absorption.sellStrength >= 4) {
+      // Heavy selling absorption against our LONG — reduce score
+      scoreBonus -= 2;
+    } else if (direction === 'SHORT' && absorption.netAbsorption === 'bullish' && absorption.buyStrength >= 4) {
+      // Heavy buying absorption against our SHORT — reduce score
+      scoreBonus -= 2;
+    }
+  }
+
   return { confirmed, signal, score: scoreBonus, details: result };
 }
 
-module.exports = { analyzeScalperAI, confirmSignal };
+module.exports = { analyzeScalperAI, confirmSignal, detectAbsorption };
