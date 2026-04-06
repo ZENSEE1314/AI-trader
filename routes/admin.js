@@ -2010,22 +2010,44 @@ router.post('/ai-optimize', async (req, res) => {
     }
     const timeSteps = coinData[firstCoin].k15.map(k=>parseInt(k[0])).filter(t=>t>=startTime);
 
-    // Pre-build k15 index for O(1) candle lookup
+    // Pre-build k15 index for O(1) candle lookup (used by replaySignals)
     const k15Index = {};
     for (const sym of Object.keys(coinData)) {
       k15Index[sym] = {};
       for (const k of coinData[sym].k15) k15Index[sym][parseInt(k[0])] = k;
     }
+
+    // Pre-parse all timestamps once so inner loops avoid repeated parseInt
+    // Store sorted timestamp arrays per symbol per timeframe for binary search
+    const parsedTs = {};
+    for (const sym of Object.keys(coinData)) {
+      const d = coinData[sym];
+      parsedTs[sym] = {
+        k15: d.k15.map(k => parseInt(k[0])),
+        k4h: d.k4h.map(k => parseInt(k[0])),
+        k1h: d.k1h.map(k => parseInt(k[0])),
+        k1:  d.k1.map(k => parseInt(k[0])),
+        kD:  d.kD.map(k => parseInt(k[0])),
+      };
+    }
+
+    // Binary search: find last index where ts[i] <= target
+    function bisectRight(tsArr, target) {
+      let lo = 0, hi = tsArr.length;
+      while (lo < hi) { const mid = (lo + hi) >>> 1; if (tsArr[mid] <= target) lo = mid + 1; else hi = mid; }
+      return lo; // number of elements <= target
+    }
+
     sendLog(`Data ready: ${Object.keys(coinData).length} tokens, ${timeSteps.length} time steps`);
 
-    // ═══ UNIFIED parameterized signal generator ═══
+    // ═══ UNIFIED parameterized signal generator (uses binary search, no .filter) ═══
     function computeSignals(cfg) {
       const swLens = { '4h': cfg.swingLen4h||10, '1h': cfg.swingLen1h||10, '15m': cfg.swingLen15m||10, '1m': cfg.swingLen1m||5 };
       const INDECISIVE = cfg.indecisiveThresh || 0.3;
       const PROX = cfg.keyLevelProximity || 0.003;
       const MAX_AGE = cfg.maxEntryAge || 25;
-      const NEED_BOTH_HTF = cfg.requireBothHTF !== undefined ? !!cfg.requireBothHTF : true;
-      const NEED_KL = cfg.requireKeyLevel !== undefined ? !!cfg.requireKeyLevel : true;
+      const NEED_BOTH_HTF = cfg.requireBothHTF !== undefined ? !!cfg.requireBothHTF : false;
+      const NEED_KL = cfg.requireKeyLevel !== undefined ? !!cfg.requireKeyLevel : false;
       const NEED_15M = cfg.require15m !== undefined ? !!cfg.require15m : true;
       const NEED_1M = cfg.require1m !== undefined ? !!cfg.require1m : true;
       const NEED_VOL = cfg.requireVolSpike !== undefined ? !!cfg.requireVolSpike : false;
@@ -2034,21 +2056,25 @@ router.post('/ai-optimize', async (req, res) => {
       const signals = [];
       for (let step=0; step<timeSteps.length; step++) {
         const now = timeSteps[step];
-        for (const sym of Object.keys(coinData)) {
+        for (const sym of coinKeys) {
           const data = coinData[sym];
-          const k15 = data.k15.filter(k=>parseInt(k[0])<=now); if (k15.length<30) continue;
-          const price = parseFloat(k15[k15.length-1][4]);
+          const ts = parsedTs[sym];
+          const n15 = bisectRight(ts.k15, now); if (n15<30) continue;
+          const k15 = data.k15.slice(0, n15);
+          const price = parseFloat(k15[n15-1][4]);
 
-          const dIdx = data.kD.findIndex(k=>parseInt(k[0])+86400000>now);
+          const dTs = ts.kD;
+          let dIdx = -1;
+          for (let di=0; di<dTs.length; di++) { if (dTs[di]+86400000>now) { dIdx=di; break; } }
           const pD = dIdx>0?data.kD[dIdx-1]:null;
           if (!pD) continue;
           const dO=parseFloat(pD[1]),dC=parseFloat(pD[4]),dH=parseFloat(pD[2]),dL=parseFloat(pD[3]);
           if ((dH-dL)>0&&(Math.abs(dC-dO)/(dH-dL))<INDECISIVE) continue;
           const bias = dC>dO?'bullish':'bearish';
 
-          const k4h=data.k4h.filter(k=>parseInt(k[0])<=now), k1h=data.k1h.filter(k=>parseInt(k[0])<=now);
-          if (k4h.length<30||k1h.length<30) continue;
-          const s4h=getS(k4h,swLens['4h']), s1h=getS(k1h,swLens['1h']);
+          const n4h=bisectRight(ts.k4h,now), n1h=bisectRight(ts.k1h,now);
+          if (n4h<30||n1h<30) continue;
+          const s4h=getS(data.k4h.slice(0,n4h),swLens['4h']), s1h=getS(data.k1h.slice(0,n1h),swLens['1h']);
           const b4=s4h.trend==='bullish'||s4h.trend==='bullish_lean';
           const b1=s1h.trend==='bullish'||s1h.trend==='bullish_lean';
           const r4=s4h.trend==='bearish'||s4h.trend==='bearish_lean';
@@ -2083,7 +2109,8 @@ router.post('/ai-optimize', async (req, res) => {
           }
 
           if (NEED_1M) {
-            const k1=data.k1.filter(k=>parseInt(k[0])<=now); if(k1.length<15) continue;
+            const n1m=bisectRight(ts.k1,now); if(n1m<15) continue;
+            const k1=data.k1.slice(0,n1m);
             const s1m=getS(k1,swLens['1m']);
             if(!((dir==='LONG'&&s1m.hasHL)||(dir==='SHORT'&&s1m.hasLH))) continue;
             const es=dir==='LONG'?s1m.lastLow:s1m.lastHigh;
@@ -2171,32 +2198,35 @@ router.post('/ai-optimize', async (req, res) => {
     async function evaluatePerToken(strategyCfg) {
       const cfg = { ...strategyCfg, ...FIXED_RISK };
       const signals = await (async () => {
-        // Reuse evaluateAsync's signal logic but return signals directly
         const sigs = [];
         const swLens = { '4h': cfg.swingLen4h||10, '1h': cfg.swingLen1h||10, '15m': cfg.swingLen15m||10, '1m': cfg.swingLen1m||5 };
         const INDECISIVE = cfg.indecisiveThresh || 0.3, PROX = cfg.keyLevelProximity || 0.003;
         const MAX_AGE = cfg.maxEntryAge || 25;
-        const NEED_BOTH_HTF = cfg.requireBothHTF !== undefined ? !!cfg.requireBothHTF : true;
-        const NEED_KL = cfg.requireKeyLevel !== undefined ? !!cfg.requireKeyLevel : true;
+        const NEED_BOTH_HTF = cfg.requireBothHTF !== undefined ? !!cfg.requireBothHTF : false;
+        const NEED_KL = cfg.requireKeyLevel !== undefined ? !!cfg.requireKeyLevel : false;
         const NEED_15M = cfg.require15m !== undefined ? !!cfg.require15m : true;
         const NEED_1M = cfg.require1m !== undefined ? !!cfg.require1m : true;
         const NEED_VOL = cfg.requireVolSpike !== undefined ? !!cfg.requireVolSpike : false;
         const VOL_MULT = cfg.volSpikeMultiplier || 1.5;
         for (let step=0; step<timeSteps.length; step++) {
-          if (step % 50 === 0 && step > 0) await yieldTick();
+          if (step % 100 === 0 && step > 0) await yieldTick();
           const now = timeSteps[step];
           for (const sym of coinKeys) {
             const data = coinData[sym];
-            const k15 = data.k15.filter(k=>parseInt(k[0])<=now); if (k15.length<30) continue;
-            const price = parseFloat(k15[k15.length-1][4]);
-            const dIdx = data.kD.findIndex(k=>parseInt(k[0])+86400000>now);
+            const ts = parsedTs[sym];
+            const n15 = bisectRight(ts.k15, now); if (n15<30) continue;
+            const k15 = data.k15.slice(0, n15);
+            const price = parseFloat(k15[n15-1][4]);
+            const dTs = ts.kD;
+            let dIdx = -1;
+            for (let di=0; di<dTs.length; di++) { if (dTs[di]+86400000>now) { dIdx=di; break; } }
             const pD = dIdx>0?data.kD[dIdx-1]:null; if (!pD) continue;
             const dO=parseFloat(pD[1]),dC=parseFloat(pD[4]),dH=parseFloat(pD[2]),dL=parseFloat(pD[3]);
             if ((dH-dL)>0&&(Math.abs(dC-dO)/(dH-dL))<INDECISIVE) continue;
             const bias = dC>dO?'bullish':'bearish';
-            const k4h=data.k4h.filter(k=>parseInt(k[0])<=now), k1h=data.k1h.filter(k=>parseInt(k[0])<=now);
-            if (k4h.length<30||k1h.length<30) continue;
-            const s4h=getS(k4h,swLens['4h']), s1h=getS(k1h,swLens['1h']);
+            const n4h=bisectRight(ts.k4h,now), n1h=bisectRight(ts.k1h,now);
+            if (n4h<30||n1h<30) continue;
+            const s4h=getS(data.k4h.slice(0,n4h),swLens['4h']), s1h=getS(data.k1h.slice(0,n1h),swLens['1h']);
             const b4=s4h.trend==='bullish'||s4h.trend==='bullish_lean', b1=s1h.trend==='bullish'||s1h.trend==='bullish_lean';
             const r4=s4h.trend==='bearish'||s4h.trend==='bearish_lean', r1=s1h.trend==='bearish'||s1h.trend==='bearish_lean';
             let dir = null;
@@ -2206,7 +2236,7 @@ router.post('/ai-optimize', async (req, res) => {
             if (NEED_KL) { const vw=calcVW(k15); const b=vw[vw.length-1]; const atLevel = dir==='LONG'?(Math.abs(price-b.lower)/b.lower<PROX||Math.abs(price-dL)/dL<PROX||Math.abs(price-b.vwap)/b.vwap<PROX):(Math.abs(price-b.upper)/b.upper<PROX||Math.abs(price-dH)/dH<PROX||Math.abs(price-b.vwap)/b.vwap<PROX); if (!atLevel) continue; }
             if (NEED_VOL) { const vols=k15.slice(-20).map(k=>parseFloat(k[5])); const avg=vols.reduce((a,b)=>a+b,0)/vols.length; if(avg>0&&(vols.slice(-5).reduce((a,b)=>a+b,0)/5)/avg<VOL_MULT) continue; }
             if (NEED_15M) { const s15=getS(k15,swLens['15m']); if(!((dir==='LONG'&&s15.hasHL)||(dir==='SHORT'&&s15.hasLH))) continue; }
-            if (NEED_1M) { const k1=data.k1.filter(k=>parseInt(k[0])<=now); if(k1.length<15) continue; const s1m=getS(k1,swLens['1m']); if(!((dir==='LONG'&&s1m.hasHL)||(dir==='SHORT'&&s1m.hasLH))) continue; const es=dir==='LONG'?s1m.lastLow:s1m.lastHigh; if(!es||(k1.length-1-es.index)>MAX_AGE) continue; }
+            if (NEED_1M) { const n1m=bisectRight(ts.k1,now); if(n1m<15) continue; const k1=data.k1.slice(0,n1m); const s1m=getS(k1,swLens['1m']); if(!((dir==='LONG'&&s1m.hasHL)||(dir==='SHORT'&&s1m.hasLH))) continue; const es=dir==='LONG'?s1m.lastLow:s1m.lastHigh; if(!es||(k1.length-1-es.index)>MAX_AGE) continue; }
             sigs.push({ step, sym, dir, price });
           }
         }
@@ -2253,28 +2283,34 @@ router.post('/ai-optimize', async (req, res) => {
       const INDECISIVE = cfg.indecisiveThresh || 0.3;
       const PROX = cfg.keyLevelProximity || 0.003;
       const MAX_AGE = cfg.maxEntryAge || 25;
-      const NEED_BOTH_HTF = cfg.requireBothHTF !== undefined ? !!cfg.requireBothHTF : true;
-      const NEED_KL = cfg.requireKeyLevel !== undefined ? !!cfg.requireKeyLevel : true;
+      const NEED_BOTH_HTF = cfg.requireBothHTF !== undefined ? !!cfg.requireBothHTF : false;
+      const NEED_KL = cfg.requireKeyLevel !== undefined ? !!cfg.requireKeyLevel : false;
       const NEED_15M = cfg.require15m !== undefined ? !!cfg.require15m : true;
       const NEED_1M = cfg.require1m !== undefined ? !!cfg.require1m : true;
       const NEED_VOL = cfg.requireVolSpike !== undefined ? !!cfg.requireVolSpike : false;
       const VOL_MULT = cfg.volSpikeMultiplier || 1.5;
       for (let step=0; step<timeSteps.length; step++) {
-        if (step % 50 === 0 && step > 0) await yieldTick();
+        if (step % 100 === 0 && step > 0) await yieldTick();
         const now = timeSteps[step];
         for (const sym of coinKeys) {
           const data = coinData[sym];
-          const k15 = data.k15.filter(k=>parseInt(k[0])<=now); if (k15.length<30) continue;
-          const price = parseFloat(k15[k15.length-1][4]);
-          const dIdx = data.kD.findIndex(k=>parseInt(k[0])+86400000>now);
+          const ts = parsedTs[sym];
+          const n15 = bisectRight(ts.k15, now); if (n15<30) continue;
+          const k15 = data.k15.slice(0, n15);
+          const price = parseFloat(k15[n15-1][4]);
+
+          const dTs = ts.kD;
+          let dIdx = -1;
+          for (let di=0; di<dTs.length; di++) { if (dTs[di]+86400000>now) { dIdx=di; break; } }
           const pD = dIdx>0?data.kD[dIdx-1]:null;
           if (!pD) continue;
           const dO=parseFloat(pD[1]),dC=parseFloat(pD[4]),dH=parseFloat(pD[2]),dL=parseFloat(pD[3]);
           if ((dH-dL)>0&&(Math.abs(dC-dO)/(dH-dL))<INDECISIVE) continue;
           const bias = dC>dO?'bullish':'bearish';
-          const k4h=data.k4h.filter(k=>parseInt(k[0])<=now), k1h=data.k1h.filter(k=>parseInt(k[0])<=now);
-          if (k4h.length<30||k1h.length<30) continue;
-          const s4h=getS(k4h,swLens['4h']), s1h=getS(k1h,swLens['1h']);
+
+          const n4h=bisectRight(ts.k4h,now), n1h=bisectRight(ts.k1h,now);
+          if (n4h<30||n1h<30) continue;
+          const s4h=getS(data.k4h.slice(0,n4h),swLens['4h']), s1h=getS(data.k1h.slice(0,n1h),swLens['1h']);
           const b4=s4h.trend==='bullish'||s4h.trend==='bullish_lean';
           const b1=s1h.trend==='bullish'||s1h.trend==='bullish_lean';
           const r4=s4h.trend==='bearish'||s4h.trend==='bearish_lean';
@@ -2303,7 +2339,8 @@ router.post('/ai-optimize', async (req, res) => {
             if(!((dir==='LONG'&&s15.hasHL)||(dir==='SHORT'&&s15.hasLH))) continue;
           }
           if (NEED_1M) {
-            const k1=data.k1.filter(k=>parseInt(k[0])<=now); if(k1.length<15) continue;
+            const n1m=bisectRight(ts.k1,now); if(n1m<15) continue;
+            const k1=data.k1.slice(0,n1m);
             const s1m=getS(k1,swLens['1m']);
             if(!((dir==='LONG'&&s1m.hasHL)||(dir==='SHORT'&&s1m.hasLH))) continue;
             const es=dir==='LONG'?s1m.lastLow:s1m.lastHigh;
@@ -2317,40 +2354,52 @@ router.post('/ai-optimize', async (req, res) => {
     }
 
     const results = [];
-    for (let pi = 0; pi < presets.length; pi++) {
-      const strat = presets[pi];
-      const s = await evaluateAsync(strat);
-      results.push({ strategy: strat.name, risk: 'User', combo: strat.name, settings: strat, ...s });
-      sendLog(`  ${strat.name}: ${s.trades} trades, ${s.winRate}% WR, $${s.totalPnl}`);
+    try {
+      for (let pi = 0; pi < presets.length; pi++) {
+        const strat = presets[pi];
+        try {
+          const s = await evaluateAsync(strat);
+          results.push({ strategy: strat.name, risk: 'User', combo: strat.name, settings: strat, ...s });
+          sendLog(`  ${strat.name}: ${s.trades} trades, ${s.winRate}% WR, $${s.totalPnl}`);
+        } catch (presetErr) {
+          sendLog(`  ⚠ ${strat.name} failed: ${presetErr.message}`);
+        }
+      }
+    } catch (r1Err) {
+      sendLog(`Round 1 error: ${r1Err.message}`);
     }
     sendProgress('round1', 100);
 
     // ═══ ROUND 2: Genetic ═══
-    sendLog('Round 2: Breeding 25 genetic offspring...');
+    sendLog('Round 2: Breeding 15 genetic offspring...');
     results.sort((a,b) => b.winRate-a.winRate || b.totalPnl-a.totalPnl);
     const topParents = results.filter(r=>r.trades>0).slice(0,10);
     const mutations = [];
     const { PARAM_BOUNDS: PB } = require('../quantum-optimizer');
 
-    for (let gen = 0; gen < 25; gen++) {
-      const p1 = topParents[Math.floor(Math.random()*topParents.length)];
-      const p2 = topParents[Math.floor(Math.random()*topParents.length)];
-      if (!p1||!p2) continue;
-      const child = {};
-      for (const key of Object.keys(PB)) {
-        const b = PB[key];
-        const v1 = p1.settings[key], v2 = p2.settings[key];
-        let val = Math.random()>0.5 ? (v1!==undefined?v1:(b.min+b.max)/2) : (v2!==undefined?v2:(b.min+b.max)/2);
-        val += (Math.random()-0.5)*2*b.step;
-        val = Math.max(b.min, Math.min(b.max, val));
-        if (b.integer) val = Math.round(val);
-        else val = parseFloat(val.toFixed(4));
-        child[key] = val;
+    try {
+      for (let gen = 0; gen < 15; gen++) {
+        const p1 = topParents[Math.floor(Math.random()*topParents.length)];
+        const p2 = topParents[Math.floor(Math.random()*topParents.length)];
+        if (!p1||!p2) continue;
+        const child = {};
+        for (const key of Object.keys(PB)) {
+          const b = PB[key];
+          const v1 = p1.settings[key], v2 = p2.settings[key];
+          let val = Math.random()>0.5 ? (v1!==undefined?v1:(b.min+b.max)/2) : (v2!==undefined?v2:(b.min+b.max)/2);
+          val += (Math.random()-0.5)*2*b.step;
+          val = Math.max(b.min, Math.min(b.max, val));
+          if (b.integer) val = Math.round(val);
+          else val = parseFloat(val.toFixed(4));
+          child[key] = val;
+        }
+        const s = await evaluateAsync(child);
+        if (s.trades > 0) {
+          mutations.push({ strategy:'Genetic', risk:`Gen${gen+1}`, combo:`Genetic Gen${gen+1}`, settings:child, ...s });
+        }
       }
-      const s = await evaluateAsync(child);
-      if (s.trades > 0) {
-        mutations.push({ strategy:'Genetic', risk:`Gen${gen+1}`, combo:`Genetic Gen${gen+1}`, settings:child, ...s });
-      }
+    } catch (r2Err) {
+      sendLog(`Round 2 error: ${r2Err.message}`);
     }
     sendLog(`Round 2 done: ${mutations.length} viable offspring`);
     sendProgress('round2', 100);
@@ -2358,55 +2407,65 @@ router.post('/ai-optimize', async (req, res) => {
     // ═══ ROUND 3: Quantum ═══
     sendLog('Round 3: Quantum search (QAOA + SPSA + Annealing)...');
     const preQuantum = [...results, ...mutations].sort((a,b) => b.winRate-a.winRate || b.totalPnl-a.totalPnl);
-    // Run quantum in chunks with event loop yields to keep stream alive
     const quantum = await (async () => {
-      const { qaoaSample, spsaOptimize, quantumAnneal, PARAM_BOUNDS: QPB } = require('../quantum-optimizer');
-      const topN = preQuantum.filter(r => r.trades > 0).slice(0, 10);
-      if (!topN.length) return { results: [], stats: { qaoaCount: 0, spsaCount: 0, annealCount: 0 } };
-      const allQR = [];
+      try {
+        const { qaoaSample, spsaOptimize, quantumAnneal } = require('../quantum-optimizer');
+        const topN = preQuantum.filter(r => r.trades > 0).slice(0, 10);
+        if (!topN.length) return { results: [], stats: { qaoaCount: 0, spsaCount: 0, annealCount: 0 } };
+        const allQR = [];
 
-      // QAOA
-      const qaoaSamples = qaoaSample(topN, 30);
-      let qaoaCount = 0;
-      for (const sample of qaoaSamples) {
-        const score = await evaluateAsync(sample.config);
-        if (score.trades > 0) {
-          allQR.push({ risk: `QAOA-${qaoaCount + 1}`, riskId: `qaoa${qaoaCount}`, settings: sample.config, ...score });
-          qaoaCount++;
+        // QAOA — reduced from 30 to 15 samples
+        const qaoaSamples = qaoaSample(topN, 15);
+        let qaoaCount = 0;
+        for (const sample of qaoaSamples) {
+          try {
+            const score = await evaluateAsync(sample.config);
+            if (score.trades > 0) {
+              allQR.push({ risk: `QAOA-${qaoaCount + 1}`, riskId: `qaoa${qaoaCount}`, settings: sample.config, ...score });
+              qaoaCount++;
+            }
+          } catch (e) { sendLog(`  ⚠ QAOA sample failed: ${e.message}`); }
         }
-      }
-      sendLog(`  QAOA: ${qaoaCount} viable`);
+        sendLog(`  QAOA: ${qaoaCount} viable`);
 
-      // SPSA
-      let spsaCount = 0;
-      const spsaResults = await spsaOptimize(topN[0].settings, evaluateAsync, 20);
-      for (const sr of spsaResults) {
-        if (sr.trades > 0) {
-          allQR.push({ risk: `SPSA-${spsaCount + 1}`, riskId: `spsa${spsaCount}`, settings: sr.config, ...sr });
-          spsaCount++;
-        }
-      }
-      await yieldTick();
-      sendLog(`  SPSA: ${spsaCount} viable`);
+        // SPSA — reduced from 20 to 10 iterations
+        let spsaCount = 0;
+        try {
+          const spsaResults = await spsaOptimize(topN[0].settings, evaluateAsync, 10);
+          for (const sr of spsaResults) {
+            if (sr.trades > 0) {
+              allQR.push({ risk: `SPSA-${spsaCount + 1}`, riskId: `spsa${spsaCount}`, settings: sr.config, ...sr });
+              spsaCount++;
+            }
+          }
+        } catch (e) { sendLog(`  ⚠ SPSA failed: ${e.message}`); }
+        await yieldTick();
+        sendLog(`  SPSA: ${spsaCount} viable`);
 
-      // Annealing
-      let annealCount = 0;
-      const combinedTop = [...topN];
-      if (allQR.length) {
-        const sorted = [...allQR].sort((a, b) => b.winRate - a.winRate || b.totalPnl - a.totalPnl);
-        combinedTop.push(...sorted.slice(0, 5));
-      }
-      const annealResults = await quantumAnneal(combinedTop.slice(0, 10), evaluateAsync, 25);
-      for (const ar of annealResults) {
-        if (ar.trades > 0) {
-          allQR.push({ risk: `Anneal-${annealCount + 1}`, riskId: `anneal${annealCount}`, settings: ar.config, ...ar });
-          annealCount++;
-        }
-      }
-      await yieldTick();
-      sendLog(`  Anneal: ${annealCount} viable`);
+        // Annealing — reduced from 25 to 15 steps
+        let annealCount = 0;
+        try {
+          const combinedTop = [...topN];
+          if (allQR.length) {
+            const sorted = [...allQR].sort((a, b) => b.winRate - a.winRate || b.totalPnl - a.totalPnl);
+            combinedTop.push(...sorted.slice(0, 5));
+          }
+          const annealResults = await quantumAnneal(combinedTop.slice(0, 10), evaluateAsync, 15);
+          for (const ar of annealResults) {
+            if (ar.trades > 0) {
+              allQR.push({ risk: `Anneal-${annealCount + 1}`, riskId: `anneal${annealCount}`, settings: ar.config, ...ar });
+              annealCount++;
+            }
+          }
+        } catch (e) { sendLog(`  ⚠ Anneal failed: ${e.message}`); }
+        await yieldTick();
+        sendLog(`  Anneal: ${annealCount} viable`);
 
-      return { results: allQR, stats: { qaoaCount, spsaCount, annealCount } };
+        return { results: allQR, stats: { qaoaCount, spsaCount, annealCount } };
+      } catch (r3Err) {
+        sendLog(`Round 3 error: ${r3Err.message}`);
+        return { results: [], stats: { qaoaCount: 0, spsaCount: 0, annealCount: 0 } };
+      }
     })();
 
     for (const qr of quantum.results) {

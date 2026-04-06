@@ -299,6 +299,13 @@ async function initAllTables() {
     // Trailing SL columns on trades
     `ALTER TABLE trades ADD COLUMN IF NOT EXISTS trailing_sl_price NUMERIC`,
     `ALTER TABLE trades ADD COLUMN IF NOT EXISTS trailing_sl_last_step NUMERIC DEFAULT 0`,
+    // Optimizer candle cache (survives redeploys)
+    `CREATE TABLE IF NOT EXISTS optimizer_cache (
+      id INTEGER PRIMARY KEY,
+      cache_key TEXT,
+      candle_data JSONB,
+      created_at BIGINT
+    )`,
   ];
 
   for (const sql of statements) {
