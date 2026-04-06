@@ -1812,7 +1812,7 @@ router.post('/backtest', async (req, res) => {
 
           // Step 6: Risk — per-token leverage from admin settings, SL scaled to leverage
           const leverage = leverageMap[sym] || MAX_LEVERAGE;
-          const tokenSlPct = SL_PCT > 0 ? SL_PCT : (0.20 / leverage);
+          const tokenSlPct = SL_PCT > 0 ? SL_PCT : 0.25;
           const sl = dir === 'LONG' ? price * (1 - tokenSlPct) : price * (1 + tokenSlPct);
           const tp = TP_PCT > 0
             ? (dir === 'LONG' ? price * (1 + TP_PCT) : price * (1 - TP_PCT))
@@ -2328,12 +2328,11 @@ router.post('/ai-optimize', async (req, res) => {
         finalWallet:parseFloat(r.wallet.toFixed(2)), maxDrawdown:parseFloat((maxDD*100).toFixed(1)) };
     }
 
-    // SL/trailing matches cycle.js: -20% capital initial, 15% gap
-    // slPct = CAPITAL_SL_PCT / leverage (per token), e.g. 0.20/20=0.01, 0.20/100=0.002
-    const CAPITAL_SL_PCT = 0.20;
+    // SL: flat 25% price distance from entry for all tokens (matches cycle.js)
+    const FLAT_SL_PCT = 0.25;
     const FIXED_RISK = { tpPct: 0, trailStep: 0.015, trailTrigger: 0.015, riskPct: 0.10, maxPos: 5, maxConsecLoss: 0 };
     function getTokenLev(symbol) { return leverageMap[symbol] || DEFAULT_LEVERAGE; }
-    function getTokenSlPct(symbol) { return CAPITAL_SL_PCT / getTokenLev(symbol); }
+    function getTokenSlPct() { return FLAT_SL_PCT; }
 
     // Composite ranking: rewards both win rate AND trade count
     // 60% WR × 20 trades > 83% WR × 5 trades

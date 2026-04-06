@@ -41,7 +41,7 @@ const CONFIG = {
 //   Initial SL = 20% of $100 = -$20 loss triggers SL.
 //   Trailing gap = 15%. At +30% ($30 profit) → SL locks at +15% ($15 profit).
 const TRAILING_SL = {
-  INITIAL_SL_PCT: 0.20,           // -20% of trading capital
+  INITIAL_SL_PCT: 0.25,           // 25% price distance from entry (flat, not capital-based)
   TRAILING_GAP: 0.15,             // SL always 15% behind current profit
   FIXED_TIERS: [
     { trigger: 0.30,  sl: 0.15  },  //  +30%  → SL at +15%  (gap 15%)
@@ -429,8 +429,8 @@ async function openTrade(client, pick, wallet) {
   const tp2 = fmtP(pick.tp2);
   const tp3 = fmtP(pick.tp3);
 
-  // Initial SL: INITIAL_SL_PCT is % of capital, convert to price distance using leverage
-  const slPricePct = TRAILING_SL.INITIAL_SL_PCT / leverage;
+  // Initial SL: flat 25% price distance from entry (same for all tokens/leverage)
+  const slPricePct = TRAILING_SL.INITIAL_SL_PCT;
   const initialSlPrice = fmtP(isLong ? price * (1 - slPricePct) : price * (1 + slPricePct));
 
   // Position size: 10% of wallet = margin, notional = margin * leverage
@@ -1020,11 +1020,11 @@ async function executeForAllUsers(pick) {
         const walletSizePct = (await getCapitalPercentage(key.id)) / 100;
         const rawTP = parseFloat(key.tp_pct);
         const userTP = (isNaN(rawTP) || rawTP <= 0) ? 0.045 : rawTP;
-        const userSL = parseFloat(key.sl_pct) || 0.20;
-        // Consecutive loss cooldown removed — let it run
+        // Flat 25% SL price distance for all tokens (not capital-based)
+        const userSL = 0.25;
 
-        // Both SL and TP are capital %, convert to price distance using leverage
-        const slPricePct = userSL / userLev;
+        // SL = flat 25% price distance, TP = capital % / leverage
+        const slPricePct = userSL;
         const tpPricePct = userTP / userLev;
         const initialSlPrice = isLong ? price * (1 - slPricePct) : price * (1 + slPricePct);
         const userTpPrice = isLong ? price * (1 + tpPricePct) : price * (1 - tpPricePct);
