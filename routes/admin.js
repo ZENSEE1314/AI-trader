@@ -2029,6 +2029,7 @@ router.post('/ai-optimize', async (req, res) => {
     const timeSteps = coinData[firstCoin].k15.map(k=>parseInt(k[0])).filter(t=>t>=startTime);
     const isHeavy = timeSteps.length > 1000;
     const tokenCount = Object.keys(coinData).length;
+    const isVeryHeavy = isHeavy && tokenCount > 30;
     // Scale yield frequency: more tokens = yield more often to keep event loop alive
     // 16 tokens × 8 steps = 128 work units was OK; scale inversely with token count
     const YIELD_EVERY = Math.max(1, Math.floor((isHeavy ? 128 : 320) / tokenCount));
@@ -2369,8 +2370,6 @@ router.post('/ai-optimize', async (req, res) => {
       }
     };
     const coinKeys = Object.keys(coinData);
-    // Scale iterations down when both heavy time range AND many tokens
-    const isVeryHeavy = isHeavy && tokenCount > 30;
     const QAOA_COUNT = isVeryHeavy ? 3 : isHeavy ? 5 : 10;
     const SPSA_COUNT = isVeryHeavy ? 3 : isHeavy ? 4 : 8;
     const ANNEAL_COUNT = isVeryHeavy ? 3 : isHeavy ? 5 : 10;
