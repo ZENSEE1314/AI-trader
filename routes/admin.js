@@ -1820,15 +1820,8 @@ router.post('/backtest', async (req, res) => {
 });
 
 // ── AI Optimize: streaming NDJSON with candle cache ────
-// NOTE: In-memory candle cache shared across requests. Expires after 30 min.
-const _candleCache = { data: null, tokens: null, days: null, ts: 0 };
-const CANDLE_CACHE_TTL = 30 * 60 * 1000;
-
+// Quantum AI Optimizer — uses bitmask combo system (15 strategy combinations)
 router.post('/ai-optimize', async (req, res) => {
-  req.setTimeout(600000);
-  res.setTimeout(600000);
-
-  // Stream NDJSON — each line is a JSON object the frontend reads
   res.setHeader('Content-Type', 'application/x-ndjson');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('X-Accel-Buffering', 'no');
@@ -1837,654 +1830,93 @@ router.post('/ai-optimize', async (req, res) => {
   function sendLog(msg) { try { res.write(JSON.stringify({ type: 'log', message: msg }) + '\n'); } catch {} }
   function sendProgress(phase, pct) { try { res.write(JSON.stringify({ type: 'progress', phase, pct }) + '\n'); } catch {} }
 
-  // Keepalive ping every 2s — prevents Railway/proxy from killing idle streams
   const keepalive = setInterval(() => {
     try { res.write(JSON.stringify({ type: 'ping' }) + '\n'); } catch {}
   }, 2000);
   res.on('close', () => clearInterval(keepalive));
 
   try {
-    const fetch = require('node-fetch');
-    const { getFetchOptions } = require('../proxy-agent');
-    const { quantumOptimize } = require('../quantum-optimizer');
-    const DAYS = Math.min(parseInt(req.body.days) || 7, 30);
-    const endTime = Date.now();
-    const startTime = endTime - DAYS * 86400000;
+    const quantumOptimizer = require('../quantum-optimizer');
 
-    sendLog(`Starting optimizer: ${DAYS} days, strategy-only (13 params) [Bitunix]`);
+    sendLog('Quantum AI Optimizer — Bitmask Combo System');
 
     // Bitunix kline API — public, max 200 per page
     // Returns Binance-compatible arrays: [time, open, high, low, close, volume]
-    const AbortController = globalThis.AbortController || require('abort-controller');
-    async function fetchK(symbol, interval, limit, coinAbort) {
-      const PAGE = 200;
-      let all = [];
-      let et = endTime;
-      let remaining = limit;
-      let pages = 0;
-      while (remaining > 0 && pages < 8) {
-        if (coinAbort && coinAbort.aborted) break;
-        pages++;
-        const batch = Math.min(remaining, PAGE);
-        const url = `https://fapi.bitunix.com/api/v1/futures/market/kline?symbol=${symbol}&interval=${interval}&limit=${batch}&endTime=${et}`;
-        try {
-          const opts = { timeout: 4000, ...getFetchOptions() };
-          if (coinAbort) opts.signal = coinAbort;
-          const r = await fetch(url, opts);
-          if (!r.ok) break;
-          const json = await r.json();
-          if (json.code !== 0 || !json.data || !json.data.length) break;
-          const candles = json.data.map(c => [
-            c.time, String(c.open), String(c.high), String(c.low), String(c.close), String(c.baseVol || '0'),
-          ]);
-          candles.sort((a, b) => a[0] - b[0]);
-          all = candles.concat(all);
-          const earliest = Math.min(...json.data.map(c => c.time));
-          et = earliest - 1;
-          remaining -= json.data.length;
-          if (json.data.length < batch) break;
-          await new Promise(r => setTimeout(r, 60));
-        } catch { break; }
-      }
-      all.sort((a, b) => a[0] - b[0]);
-      return all.length ? all : null;
+    sendLog('Initializing 15 strategy combos...');
+    sendProgress('init', 10);
+    await quantumOptimizer.initCombos();
+
+    sendLog('Loading combo performance data...');
+    sendProgress('analyze', 30);
+    const stats = await quantumOptimizer.getComboStats();
+    const combos = stats.combos || [];
+    const activeCombo = combos.find(c => c.is_active);
+
+    sendLog(`Phase: ${stats.current_phase} | Explored: ${stats.exploration_progress.explored}/${stats.exploration_progress.total}`);
+    sendProgress('analyze', 50);
+
+    // Show all combo stats
+    sendLog('');
+    sendLog('=== STRATEGY COMBO PERFORMANCE ===');
+    const sorted = [...combos].sort((a, b) => b.composite_score - a.composite_score);
+    for (const c of sorted) {
+      const active = c.is_active ? ' ← ACTIVE' : '';
+      const locked = c.admin_locked ? ' [LOCKED]' : '';
+      const exploring = c.is_exploring ? ' [EXPLORING]' : '';
+      sendLog(
+        `  #${c.combo_id} ${c.combo_name}: ` +
+        `${c.total_trades} trades, ${(c.win_rate * 100).toFixed(0)}% WR, ` +
+        `avg ${c.avg_pnl.toFixed(2)}%, score=${c.composite_score.toFixed(3)}` +
+        `${active}${locked}${exploring}`
+      );
     }
-    function detectSwings(klines, len) {
-      const highs = klines.map(k => parseFloat(k[2])), lows = klines.map(k => parseFloat(k[3]));
-      const swings = []; let lastType = null;
-      for (let i = len; i < klines.length - len; i++) {
-        let isH = true, isL = true;
-        for (let j = -len; j <= len; j++) { if (j===0) continue; if (highs[i]<=highs[i+j]) isH=false; if (lows[i]>=lows[i+j]) isL=false; }
-        if (isH && isL) { if ((highs[i]-Math.max(highs[i-1],highs[i+1]))>(Math.min(lows[i-1],lows[i+1])-lows[i])) isL=false; else isH=false; }
-        if (isH) { if (lastType==='high'&&highs[i]>swings[swings.length-1].price) swings[swings.length-1]={type:'high',index:i,price:highs[i]}; else if (lastType!=='high') { swings.push({type:'high',index:i,price:highs[i]}); lastType='high'; } }
-        if (isL) { if (lastType==='low'&&lows[i]<swings[swings.length-1].price) swings[swings.length-1]={type:'low',index:i,price:lows[i]}; else if (lastType!=='low') { swings.push({type:'low',index:i,price:lows[i]}); lastType='low'; } }
-      }
-      return swings;
-    }
-    function getS(klines, len) {
-      const sw = detectSwings(klines, len); const sH = sw.filter(s=>s.type==='high'), sL = sw.filter(s=>s.type==='low');
-      const hL = sH.length>1?(sH[sH.length-1].price>sH[sH.length-2].price?'HH':'LH'):null;
-      const lL = sL.length>1?(sL[sL.length-1].price>sL[sL.length-2].price?'HL':'LL'):null;
-      const t = (hL==='LH'&&lL==='LL')?'bearish':(hL==='HH'&&lL==='HL')?'bullish':hL==='LH'?'bearish_lean':lL==='HL'?'bullish_lean':'neutral';
-      return { hasHL: lL==='HL', hasLH: hL==='LH', trend: t,
-        lastHigh: sH.length ? sH[sH.length-1] : null, lastLow: sL.length ? sL[sL.length-1] : null };
-    }
-    function calcVW(klines) {
-      let cv=0,ct=0,ct2=0,day=''; const vals=[];
-      for (const k of klines) { const d=new Date(parseInt(k[0])).toISOString().slice(0,10); const h=parseFloat(k[2]),l=parseFloat(k[3]),c=parseFloat(k[4]),v=parseFloat(k[5]); if(d!==day){cv=0;ct=0;ct2=0;day=d;} const tp=(h+l+c)/3; ct+=tp*v; ct2+=tp*tp*v; cv+=v; if(cv>0){const vw=ct/cv;const sd=Math.sqrt(Math.max(0,ct2/cv-vw*vw));vals.push({vwap:vw,upper:vw+sd,lower:vw-sd});}else vals.push({vwap:c,upper:c,lower:c});} return vals;
+    sendProgress('analyze', 70);
+
+    // Run evaluation to potentially switch combos
+    sendLog('');
+    sendLog('Running evaluation...');
+    await quantumOptimizer.evaluateAndSwitch();
+    sendProgress('optimize', 90);
+
+    // Get updated active combo
+    const newActiveId = await quantumOptimizer.getActiveCombo();
+    const newActive = combos.find(c => c.combo_id === newActiveId);
+    const strategies = quantumOptimizer.getEnabledStrategies(newActiveId);
+    const enabledList = Object.entries(strategies).filter(([, v]) => v).map(([k]) => k).join(', ');
+
+    sendLog('');
+    sendLog(`Active combo: #${newActiveId} (${quantumOptimizer.comboToName(newActiveId)})`);
+    sendLog(`Enabled strategies: ${enabledList}`);
+    if (newActive) {
+      sendLog(`Win rate: ${(newActive.win_rate * 100).toFixed(0)}% | Avg PnL: ${newActive.avg_pnl.toFixed(2)}% | Trades: ${newActive.total_trades}`);
     }
 
-    // Fetch admin-allowed tokens from DB
-    sendLog('Querying token list from DB...');
-    const allowedRows = await query('SELECT symbol FROM global_token_settings WHERE enabled = true AND banned = false ORDER BY symbol');
-    const topCoins = allowedRows.map(r => r.symbol);
-    if (!topCoins.length) {
-      clearInterval(keepalive);
-      res.write(JSON.stringify({ type: 'result', error: 'No tokens enabled in admin token settings', results: [] }) + '\n');
-      return res.end();
-    }
-    sendLog(`Found ${topCoins.length} admin tokens`);
+    sendProgress('done', 100);
 
-    // Check candle cache — in-memory first, then DB, then fetch fresh
-    const cacheKey = topCoins.join(',') + ':' + DAYS;
-    let coinData;
-    let isCacheValid = _candleCache.data && _candleCache.tokens === cacheKey && (Date.now() - _candleCache.ts) < CANDLE_CACHE_TTL;
-
-    if (!isCacheValid) {
-      // Try loading from DB (survives redeploys)
-      try {
-        const dbCache = await query('SELECT cache_key, candle_data, created_at FROM optimizer_cache WHERE id = 1');
-        if (dbCache.length && dbCache[0].cache_key === cacheKey && (Date.now() - dbCache[0].created_at) < CANDLE_CACHE_TTL) {
-          _candleCache.data = dbCache[0].candle_data;
-          _candleCache.tokens = dbCache[0].cache_key;
-          _candleCache.ts = dbCache[0].created_at;
-          isCacheValid = true;
-          sendLog(`Restored candle cache from DB (${Math.round((Date.now() - dbCache[0].created_at)/1000)}s old)`);
-        }
-      } catch (e) {
-        sendLog(`DB cache check failed: ${e.message}`);
-      }
-    }
-
-    if (isCacheValid) {
-      coinData = _candleCache.data;
-      sendLog(`Using cached candle data (${Object.keys(coinData).length} tokens, ${Math.round((Date.now() - _candleCache.ts)/1000)}s old)`);
-    } else {
-      coinData = {};
-      const k15Limit = Math.ceil(DAYS * 24 * 4) + 100;
-      const k4hLimit = Math.ceil(DAYS * 6) + 50;
-      const k1hLimit = Math.ceil(DAYS * 24) + 50;
-      const failedCoins = [];
-
-      // Fetch ONE coin at a time — avoids Bitunix rate limit stalls
-      for (let i = 0; i < topCoins.length; i++) {
-        const sym = topCoins[i];
-        const ac = new AbortController();
-        const timer = setTimeout(() => ac.abort(), 20000);
-        try {
-          const [kD,k4h,k1h,k15,k1] = await Promise.all([
-            fetchK(sym,'1d',Math.max(10,DAYS+2),ac.signal),
-            fetchK(sym,'4h',k4hLimit,ac.signal),
-            fetchK(sym,'1h',k1hLimit,ac.signal),
-            fetchK(sym,'15m',k15Limit,ac.signal),
-            fetchK(sym,'1m',1500,ac.signal),
-          ]);
-          clearTimeout(timer);
-          if (kD&&k4h&&k1h&&k15) {
-            coinData[sym] = { kD, k4h, k1h, k15, k1:k1||[] };
-            sendLog(`  ✅ ${sym}`);
-          } else {
-            failedCoins.push(sym);
-            const missing = [!kD&&'1d',!k4h&&'4h',!k1h&&'1h',!k15&&'15m'].filter(Boolean).join(',');
-            sendLog(`  ❌ ${sym} — missing ${missing}`);
-          }
-        } catch {
-          clearTimeout(timer);
-          failedCoins.push(sym);
-          sendLog(`  ❌ ${sym} — timeout`);
-        }
-        if ((i+1) % 5 === 0 || i === topCoins.length - 1) {
-          sendLog(`  ${i+1}/${topCoins.length} done (${Object.keys(coinData).length} OK)`);
-          sendProgress('fetch', Math.round((i+1)/topCoins.length*100));
-        }
-      }
-      sendLog(`Fetch done: ${Object.keys(coinData).length}/${topCoins.length} [Bitunix]`);
-      if (failedCoins.length) sendLog(`Failed: ${failedCoins.join(', ')}`);
-      // Save to in-memory cache
-      const nowTs = Date.now();
-      _candleCache.data = coinData;
-      _candleCache.tokens = cacheKey;
-      _candleCache.ts = nowTs;
-      // Persist to DB so it survives redeploys
-      try {
-        await query(
-          `INSERT INTO optimizer_cache (id, cache_key, candle_data, created_at)
-           VALUES (1, $1, $2, $3)
-           ON CONFLICT (id) DO UPDATE SET cache_key = $1, candle_data = $2, created_at = $3`,
-          [cacheKey, JSON.stringify(coinData), nowTs]
-        );
-        sendLog(`Candle data cached in DB (valid for ${CANDLE_CACHE_TTL/60000} min)`);
-      } catch (e) {
-        sendLog(`DB cache save failed: ${e.message} — in-memory only`);
-      }
-    }
-
-    const firstCoin = Object.keys(coinData)[0];
-    if (!firstCoin) {
-      clearInterval(keepalive);
-      res.write(JSON.stringify({ type: 'result', error: 'No data fetched', results: [] }) + '\n');
-      return res.end();
-    }
-    const timeSteps = coinData[firstCoin].k15.map(k=>parseInt(k[0])).filter(t=>t>=startTime);
-
-    // Pre-build k15 index for O(1) candle lookup
-    const k15Index = {};
-    for (const sym of Object.keys(coinData)) {
-      k15Index[sym] = {};
-      for (const k of coinData[sym].k15) k15Index[sym][parseInt(k[0])] = k;
-    }
-    sendLog(`Data ready: ${Object.keys(coinData).length} tokens, ${timeSteps.length} time steps`);
-
-    // ═══ UNIFIED parameterized signal generator ═══
-    function computeSignals(cfg) {
-      const swLens = { '4h': cfg.swingLen4h||10, '1h': cfg.swingLen1h||10, '15m': cfg.swingLen15m||10, '1m': cfg.swingLen1m||5 };
-      const INDECISIVE = cfg.indecisiveThresh || 0.3;
-      const PROX = cfg.keyLevelProximity || 0.003;
-      const MAX_AGE = cfg.maxEntryAge || 25;
-      const NEED_BOTH_HTF = cfg.requireBothHTF !== undefined ? !!cfg.requireBothHTF : true;
-      const NEED_KL = cfg.requireKeyLevel !== undefined ? !!cfg.requireKeyLevel : true;
-      const NEED_15M = cfg.require15m !== undefined ? !!cfg.require15m : true;
-      const NEED_1M = cfg.require1m !== undefined ? !!cfg.require1m : true;
-      const NEED_VOL = cfg.requireVolSpike !== undefined ? !!cfg.requireVolSpike : false;
-      const VOL_MULT = cfg.volSpikeMultiplier || 1.5;
-
-      const signals = [];
-      for (let step=0; step<timeSteps.length; step++) {
-        const now = timeSteps[step];
-        for (const sym of Object.keys(coinData)) {
-          const data = coinData[sym];
-          const k15 = data.k15.filter(k=>parseInt(k[0])<=now); if (k15.length<30) continue;
-          const price = parseFloat(k15[k15.length-1][4]);
-
-          const dIdx = data.kD.findIndex(k=>parseInt(k[0])+86400000>now);
-          const pD = dIdx>0?data.kD[dIdx-1]:null;
-          if (!pD) continue;
-          const dO=parseFloat(pD[1]),dC=parseFloat(pD[4]),dH=parseFloat(pD[2]),dL=parseFloat(pD[3]);
-          if ((dH-dL)>0&&(Math.abs(dC-dO)/(dH-dL))<INDECISIVE) continue;
-          const bias = dC>dO?'bullish':'bearish';
-
-          const k4h=data.k4h.filter(k=>parseInt(k[0])<=now), k1h=data.k1h.filter(k=>parseInt(k[0])<=now);
-          if (k4h.length<30||k1h.length<30) continue;
-          const s4h=getS(k4h,swLens['4h']), s1h=getS(k1h,swLens['1h']);
-          const b4=s4h.trend==='bullish'||s4h.trend==='bullish_lean';
-          const b1=s1h.trend==='bullish'||s1h.trend==='bullish_lean';
-          const r4=s4h.trend==='bearish'||s4h.trend==='bearish_lean';
-          const r1=s1h.trend==='bearish'||s1h.trend==='bearish_lean';
-
-          let dir = null;
-          if (NEED_BOTH_HTF) {
-            if(bias==='bullish'&&b4&&b1) dir='LONG'; else if(bias==='bearish'&&r4&&r1) dir='SHORT';
-          } else {
-            if(bias==='bullish'&&(b4||b1)) dir='LONG'; else if(bias==='bearish'&&(r4||r1)) dir='SHORT';
-          }
-          if (!dir) continue;
-
-          if (NEED_KL) {
-            const vw=calcVW(k15);
-            const b=vw[vw.length-1];
-            const atLevel = dir==='LONG'
-              ?(Math.abs(price-b.lower)/b.lower<PROX||Math.abs(price-dL)/dL<PROX||Math.abs(price-b.vwap)/b.vwap<PROX)
-              :(Math.abs(price-b.upper)/b.upper<PROX||Math.abs(price-dH)/dH<PROX||Math.abs(price-b.vwap)/b.vwap<PROX);
-            if (!atLevel) continue;
-          }
-
-          if (NEED_VOL) {
-            const vols=k15.slice(-20).map(k=>parseFloat(k[5]));
-            const avg=vols.reduce((a,b)=>a+b,0)/vols.length;
-            if(avg>0&&(vols.slice(-5).reduce((a,b)=>a+b,0)/5)/avg<VOL_MULT) continue;
-          }
-
-          if (NEED_15M) {
-            const s15=getS(k15,swLens['15m']);
-            if(!((dir==='LONG'&&s15.hasHL)||(dir==='SHORT'&&s15.hasLH))) continue;
-          }
-
-          if (NEED_1M) {
-            const k1=data.k1.filter(k=>parseInt(k[0])<=now); if(k1.length<15) continue;
-            const s1m=getS(k1,swLens['1m']);
-            if(!((dir==='LONG'&&s1m.hasHL)||(dir==='SHORT'&&s1m.hasLH))) continue;
-            const es=dir==='LONG'?s1m.lastLow:s1m.lastHigh;
-            if(!es||(k1.length-1-es.index)>MAX_AGE) continue;
-          }
-
-          signals.push({ step, sym, dir, price });
-        }
-      }
-      return signals;
-    }
-
-    // ═══ Fast replay ═══
-    function replaySignals(signals, cfg) {
-      let wallet = 1000;
-      const trades = [], openPos = [];
-      let consecLosses = 0, tradingDay = '', lastStep = -1;
-
-      for (let step=0; step<timeSteps.length; step++) {
-        const now = timeSteps[step];
-        const d = new Date(now), h = d.getHours();
-        const dayKey = h<7?new Date(d.getTime()-86400000).toISOString().slice(0,10):d.toISOString().slice(0,10);
-        if (dayKey!==tradingDay) { tradingDay=dayKey; consecLosses=0; }
-
-        for (let i=openPos.length-1; i>=0; i--) {
-          const pos=openPos[i];
-          const candle = k15Index[pos.symbol]?.[now]; if (!candle) continue;
-          const high=parseFloat(candle[2]),low=parseFloat(candle[3]),close=parseFloat(candle[4]);
-          if ((pos.dir==='LONG'&&low<=pos.sl)||(pos.dir==='SHORT'&&high>=pos.sl)) {
-            pos.pnl=pos.dir==='LONG'?(pos.sl-pos.entry)*pos.qty:(pos.entry-pos.sl)*pos.qty;
-            wallet+=pos.pnl; openPos.splice(i,1); if(pos.pnl<0)consecLosses++;else consecLosses=0; continue;
-          }
-          if (pos.tp&&((pos.dir==='LONG'&&high>=pos.tp)||(pos.dir==='SHORT'&&low<=pos.tp))) {
-            pos.pnl=pos.dir==='LONG'?(pos.tp-pos.entry)*pos.qty:(pos.entry-pos.tp)*pos.qty;
-            wallet+=pos.pnl; openPos.splice(i,1); consecLosses=0; continue;
-          }
-          const pp=pos.dir==='LONG'?(close-pos.entry)/pos.entry:(pos.entry-close)/pos.entry;
-          const ns=pos.lastStep===0?cfg.trailStep:pos.lastStep+cfg.trailStep;
-          if (pp>=ns) { let r=ns; while(pp>=r+cfg.trailStep) r+=cfg.trailStep; pos.lastStep=r;
-            pos.sl=pos.dir==='LONG'?pos.entry*(1+(r<=cfg.trailStep?r-cfg.trailStep/2:r-cfg.trailStep)):pos.entry*(1-(r<=cfg.trailStep?r-cfg.trailStep/2:r-cfg.trailStep));
-          }
-        }
-        if (openPos.length>=(cfg.maxPos||5)) continue;
-        if ((cfg.maxConsecLoss||0)>0&&consecLosses>=(cfg.maxConsecLoss||0)) continue;
-
-        while (lastStep+1<signals.length && signals[lastStep+1].step===step) {
-          lastStep++;
-          const sig = signals[lastStep];
-          if (openPos.length>=(cfg.maxPos||5)) break;
-          if (openPos.find(p=>p.symbol===sig.sym)) continue;
-          const sl=sig.dir==='LONG'?sig.price*(1-(cfg.slPct||0.03)):sig.price*(1+(cfg.slPct||0.03));
-          const tp=(cfg.tpPct||0)>0?(sig.dir==='LONG'?sig.price*(1+(cfg.tpPct)):sig.price*(1-(cfg.tpPct))):null;
-          const qty=(wallet*(cfg.riskPct||0.1)*(cfg.leverage||20))/sig.price;
-          const trade={symbol:sig.sym,dir:sig.dir,entry:sig.price,qty,sl,tp,lastStep:0,pnl:null};
-          openPos.push(trade); trades.push(trade);
-        }
-        while (lastStep+1<signals.length && signals[lastStep+1].step===step) lastStep++;
-      }
-      for (const pos of openPos) { const data=coinData[pos.symbol]; if(data&&data.k15.length) { const lp=parseFloat(data.k15[data.k15.length-1][4]); pos.pnl=pos.dir==='LONG'?(lp-pos.entry)*pos.qty:(pos.entry-lp)*pos.qty; wallet+=pos.pnl; } }
-      return { trades, wallet };
-    }
-
-    function scoreResult(r) {
-      const closed=r.trades.filter(t=>t.pnl!==null); const wins=closed.filter(t=>t.pnl>0);
-      const totalPnl=closed.reduce((s,t)=>s+t.pnl,0);
-      let peak=1000,maxDD=0,running=1000;
-      for(const t of closed){running+=t.pnl;if(running>peak)peak=running;const dd=(peak-running)/peak;if(dd>maxDD)maxDD=dd;}
-      return { trades:closed.length, wins:wins.length, losses:closed.length-wins.length,
-        winRate:closed.length?parseFloat(((wins.length/closed.length)*100).toFixed(1)):0,
-        totalPnl:parseFloat(totalPnl.toFixed(2)), pnlPct:parseFloat(((totalPnl/1000)*100).toFixed(1)),
-        finalWallet:parseFloat(r.wallet.toFixed(2)), maxDrawdown:parseFloat((maxDD*100).toFixed(1)) };
-    }
-
-    const FIXED_RISK = { slPct: 0.03, tpPct: 0, trailStep: 0.012, leverage: 20, riskPct: 0.10, maxPos: 5, maxConsecLoss: 0 };
-
-    function evaluate(strategyCfg) {
-      const cfg = { ...strategyCfg, ...FIXED_RISK };
-      const signals = computeSignals(cfg);
-      const r = replaySignals(signals, cfg);
-      return scoreResult(r);
-    }
-
-    async function evaluatePerToken(strategyCfg) {
-      const cfg = { ...strategyCfg, ...FIXED_RISK };
-      const signals = await (async () => {
-        // Reuse evaluateAsync's signal logic but return signals directly
-        const sigs = [];
-        const swLens = { '4h': cfg.swingLen4h||10, '1h': cfg.swingLen1h||10, '15m': cfg.swingLen15m||10, '1m': cfg.swingLen1m||5 };
-        const INDECISIVE = cfg.indecisiveThresh || 0.3, PROX = cfg.keyLevelProximity || 0.003;
-        const MAX_AGE = cfg.maxEntryAge || 25;
-        const NEED_BOTH_HTF = cfg.requireBothHTF !== undefined ? !!cfg.requireBothHTF : true;
-        const NEED_KL = cfg.requireKeyLevel !== undefined ? !!cfg.requireKeyLevel : true;
-        const NEED_15M = cfg.require15m !== undefined ? !!cfg.require15m : true;
-        const NEED_1M = cfg.require1m !== undefined ? !!cfg.require1m : true;
-        const NEED_VOL = cfg.requireVolSpike !== undefined ? !!cfg.requireVolSpike : false;
-        const VOL_MULT = cfg.volSpikeMultiplier || 1.5;
-        for (let step=0; step<timeSteps.length; step++) {
-          if (step % 100 === 0 && step > 0) await yieldTick();
-          const now = timeSteps[step];
-          for (const sym of coinKeys) {
-            const data = coinData[sym];
-            const k15 = data.k15.filter(k=>parseInt(k[0])<=now); if (k15.length<30) continue;
-            const price = parseFloat(k15[k15.length-1][4]);
-            const dIdx = data.kD.findIndex(k=>parseInt(k[0])+86400000>now);
-            const pD = dIdx>0?data.kD[dIdx-1]:null; if (!pD) continue;
-            const dO=parseFloat(pD[1]),dC=parseFloat(pD[4]),dH=parseFloat(pD[2]),dL=parseFloat(pD[3]);
-            if ((dH-dL)>0&&(Math.abs(dC-dO)/(dH-dL))<INDECISIVE) continue;
-            const bias = dC>dO?'bullish':'bearish';
-            const k4h=data.k4h.filter(k=>parseInt(k[0])<=now), k1h=data.k1h.filter(k=>parseInt(k[0])<=now);
-            if (k4h.length<30||k1h.length<30) continue;
-            const s4h=getS(k4h,swLens['4h']), s1h=getS(k1h,swLens['1h']);
-            const b4=s4h.trend==='bullish'||s4h.trend==='bullish_lean', b1=s1h.trend==='bullish'||s1h.trend==='bullish_lean';
-            const r4=s4h.trend==='bearish'||s4h.trend==='bearish_lean', r1=s1h.trend==='bearish'||s1h.trend==='bearish_lean';
-            let dir = null;
-            if (NEED_BOTH_HTF) { if(bias==='bullish'&&b4&&b1) dir='LONG'; else if(bias==='bearish'&&r4&&r1) dir='SHORT'; }
-            else { if(bias==='bullish'&&(b4||b1)) dir='LONG'; else if(bias==='bearish'&&(r4||r1)) dir='SHORT'; }
-            if (!dir) continue;
-            if (NEED_KL) { const vw=calcVW(k15); const b=vw[vw.length-1]; const atLevel = dir==='LONG'?(Math.abs(price-b.lower)/b.lower<PROX||Math.abs(price-dL)/dL<PROX||Math.abs(price-b.vwap)/b.vwap<PROX):(Math.abs(price-b.upper)/b.upper<PROX||Math.abs(price-dH)/dH<PROX||Math.abs(price-b.vwap)/b.vwap<PROX); if (!atLevel) continue; }
-            if (NEED_VOL) { const vols=k15.slice(-20).map(k=>parseFloat(k[5])); const avg=vols.reduce((a,b)=>a+b,0)/vols.length; if(avg>0&&(vols.slice(-5).reduce((a,b)=>a+b,0)/5)/avg<VOL_MULT) continue; }
-            if (NEED_15M) { const s15=getS(k15,swLens['15m']); if(!((dir==='LONG'&&s15.hasHL)||(dir==='SHORT'&&s15.hasLH))) continue; }
-            if (NEED_1M) { const k1=data.k1.filter(k=>parseInt(k[0])<=now); if(k1.length<15) continue; const s1m=getS(k1,swLens['1m']); if(!((dir==='LONG'&&s1m.hasHL)||(dir==='SHORT'&&s1m.hasLH))) continue; const es=dir==='LONG'?s1m.lastLow:s1m.lastHigh; if(!es||(k1.length-1-es.index)>MAX_AGE) continue; }
-            sigs.push({ step, sym, dir, price });
-          }
-        }
-        return sigs;
-      })();
-      const tokenStats = {};
-      for (const sym of coinKeys) {
-        const symSignals = signals.filter(s => s.sym === sym);
-        if (!symSignals.length) { tokenStats[sym] = { trades: 0, wins: 0, winRate: 0, totalPnl: 0, rating: 'No Data' }; continue; }
-        const r = replaySignals(symSignals, cfg);
-        const s = scoreResult(r);
-        let rating = 'Bad';
-        if (s.trades >= 3 && s.winRate >= 60) rating = 'Good';
-        else if (s.trades >= 2 && s.winRate >= 50) rating = 'OK';
-        else if (s.trades === 0) rating = 'No Trades';
-        tokenStats[sym] = { ...s, rating };
-      }
-      return tokenStats;
-    }
-
-    // ═══ ROUND 1: Strategy presets ═══
-    sendLog('Round 1: Testing 10 strategy presets...');
-    const presets = [
-      { name:'Full SMC',       swingLen4h:10,swingLen1h:10,swingLen15m:10,swingLen1m:5, indecisiveThresh:0.3, keyLevelProximity:0.003, maxEntryAge:25, requireBothHTF:1,requireKeyLevel:1,require15m:1,require1m:1,requireVolSpike:0,volSpikeMultiplier:1.5 },
-      { name:'No Key Level',   swingLen4h:10,swingLen1h:10,swingLen15m:10,swingLen1m:5, indecisiveThresh:0.3, keyLevelProximity:0.003, maxEntryAge:25, requireBothHTF:1,requireKeyLevel:0,require15m:1,require1m:1,requireVolSpike:0,volSpikeMultiplier:1.5 },
-      { name:'Relaxed HTF',    swingLen4h:10,swingLen1h:10,swingLen15m:10,swingLen1m:5, indecisiveThresh:0.3, keyLevelProximity:0.003, maxEntryAge:25, requireBothHTF:0,requireKeyLevel:1,require15m:1,require1m:1,requireVolSpike:0,volSpikeMultiplier:1.5 },
-      { name:'No 1m Confirm',  swingLen4h:10,swingLen1h:10,swingLen15m:10,swingLen1m:5, indecisiveThresh:0.3, keyLevelProximity:0.003, maxEntryAge:25, requireBothHTF:1,requireKeyLevel:1,require15m:1,require1m:0,requireVolSpike:0,volSpikeMultiplier:1.5 },
-      { name:'Vol Spike',      swingLen4h:10,swingLen1h:10,swingLen15m:10,swingLen1m:5, indecisiveThresh:0.3, keyLevelProximity:0.003, maxEntryAge:25, requireBothHTF:1,requireKeyLevel:1,require15m:1,require1m:1,requireVolSpike:1,volSpikeMultiplier:1.5 },
-      { name:'Wide Swings',    swingLen4h:15,swingLen1h:15,swingLen15m:15,swingLen1m:8, indecisiveThresh:0.2, keyLevelProximity:0.005, maxEntryAge:40, requireBothHTF:1,requireKeyLevel:1,require15m:1,require1m:1,requireVolSpike:0,volSpikeMultiplier:1.5 },
-      { name:'Tight Swings',   swingLen4h:6, swingLen1h:6, swingLen15m:6, swingLen1m:3, indecisiveThresh:0.4, keyLevelProximity:0.002, maxEntryAge:15, requireBothHTF:1,requireKeyLevel:1,require15m:1,require1m:1,requireVolSpike:0,volSpikeMultiplier:1.5 },
-      { name:'Easy Entry',     swingLen4h:8, swingLen1h:8, swingLen15m:8, swingLen1m:4, indecisiveThresh:0.15,keyLevelProximity:0.01,  maxEntryAge:40, requireBothHTF:0,requireKeyLevel:0,require15m:1,require1m:0,requireVolSpike:0,volSpikeMultiplier:1.5 },
-      { name:'Ultra Strict',   swingLen4h:12,swingLen1h:12,swingLen15m:12,swingLen1m:5, indecisiveThresh:0.35,keyLevelProximity:0.002, maxEntryAge:20, requireBothHTF:1,requireKeyLevel:1,require15m:1,require1m:1,requireVolSpike:1,volSpikeMultiplier:2.0 },
-      { name:'Momentum Only',  swingLen4h:10,swingLen1h:10,swingLen15m:8, swingLen1m:4, indecisiveThresh:0.2, keyLevelProximity:0.008, maxEntryAge:35, requireBothHTF:0,requireKeyLevel:0,require15m:1,require1m:1,requireVolSpike:0,volSpikeMultiplier:1.5 },
-    ];
-
-    // Yield to event loop so keepalive pings can fire between heavy compute
-    const yieldTick = () => new Promise(r => setImmediate(r));
-    // Async evaluate — yields mid-computation to keep stream alive
-    const coinKeys = Object.keys(coinData);
-    async function evaluateAsync(strategyCfg) {
-      const cfg = { ...strategyCfg, ...FIXED_RISK };
-      const signals = [];
-      const swLens = { '4h': cfg.swingLen4h||10, '1h': cfg.swingLen1h||10, '15m': cfg.swingLen15m||10, '1m': cfg.swingLen1m||5 };
-      const INDECISIVE = cfg.indecisiveThresh || 0.3;
-      const PROX = cfg.keyLevelProximity || 0.003;
-      const MAX_AGE = cfg.maxEntryAge || 25;
-      const NEED_BOTH_HTF = cfg.requireBothHTF !== undefined ? !!cfg.requireBothHTF : true;
-      const NEED_KL = cfg.requireKeyLevel !== undefined ? !!cfg.requireKeyLevel : true;
-      const NEED_15M = cfg.require15m !== undefined ? !!cfg.require15m : true;
-      const NEED_1M = cfg.require1m !== undefined ? !!cfg.require1m : true;
-      const NEED_VOL = cfg.requireVolSpike !== undefined ? !!cfg.requireVolSpike : false;
-      const VOL_MULT = cfg.volSpikeMultiplier || 1.5;
-      for (let step=0; step<timeSteps.length; step++) {
-        if (step % 100 === 0 && step > 0) await yieldTick();
-        const now = timeSteps[step];
-        for (const sym of coinKeys) {
-          const data = coinData[sym];
-          const k15 = data.k15.filter(k=>parseInt(k[0])<=now); if (k15.length<30) continue;
-          const price = parseFloat(k15[k15.length-1][4]);
-          const dIdx = data.kD.findIndex(k=>parseInt(k[0])+86400000>now);
-          const pD = dIdx>0?data.kD[dIdx-1]:null;
-          if (!pD) continue;
-          const dO=parseFloat(pD[1]),dC=parseFloat(pD[4]),dH=parseFloat(pD[2]),dL=parseFloat(pD[3]);
-          if ((dH-dL)>0&&(Math.abs(dC-dO)/(dH-dL))<INDECISIVE) continue;
-          const bias = dC>dO?'bullish':'bearish';
-          const k4h=data.k4h.filter(k=>parseInt(k[0])<=now), k1h=data.k1h.filter(k=>parseInt(k[0])<=now);
-          if (k4h.length<30||k1h.length<30) continue;
-          const s4h=getS(k4h,swLens['4h']), s1h=getS(k1h,swLens['1h']);
-          const b4=s4h.trend==='bullish'||s4h.trend==='bullish_lean';
-          const b1=s1h.trend==='bullish'||s1h.trend==='bullish_lean';
-          const r4=s4h.trend==='bearish'||s4h.trend==='bearish_lean';
-          const r1=s1h.trend==='bearish'||s1h.trend==='bearish_lean';
-          let dir = null;
-          if (NEED_BOTH_HTF) {
-            if(bias==='bullish'&&b4&&b1) dir='LONG'; else if(bias==='bearish'&&r4&&r1) dir='SHORT';
-          } else {
-            if(bias==='bullish'&&(b4||b1)) dir='LONG'; else if(bias==='bearish'&&(r4||r1)) dir='SHORT';
-          }
-          if (!dir) continue;
-          if (NEED_KL) {
-            const vw=calcVW(k15); const b=vw[vw.length-1];
-            const atLevel = dir==='LONG'
-              ?(Math.abs(price-b.lower)/b.lower<PROX||Math.abs(price-dL)/dL<PROX||Math.abs(price-b.vwap)/b.vwap<PROX)
-              :(Math.abs(price-b.upper)/b.upper<PROX||Math.abs(price-dH)/dH<PROX||Math.abs(price-b.vwap)/b.vwap<PROX);
-            if (!atLevel) continue;
-          }
-          if (NEED_VOL) {
-            const vols=k15.slice(-20).map(k=>parseFloat(k[5]));
-            const avg=vols.reduce((a,b)=>a+b,0)/vols.length;
-            if(avg>0&&(vols.slice(-5).reduce((a,b)=>a+b,0)/5)/avg<VOL_MULT) continue;
-          }
-          if (NEED_15M) {
-            const s15=getS(k15,swLens['15m']);
-            if(!((dir==='LONG'&&s15.hasHL)||(dir==='SHORT'&&s15.hasLH))) continue;
-          }
-          if (NEED_1M) {
-            const k1=data.k1.filter(k=>parseInt(k[0])<=now); if(k1.length<15) continue;
-            const s1m=getS(k1,swLens['1m']);
-            if(!((dir==='LONG'&&s1m.hasHL)||(dir==='SHORT'&&s1m.hasLH))) continue;
-            const es=dir==='LONG'?s1m.lastLow:s1m.lastHigh;
-            if(!es||(k1.length-1-es.index)>MAX_AGE) continue;
-          }
-          signals.push({ step, sym, dir, price });
-        }
-      }
-      const r = replaySignals(signals, cfg);
-      return scoreResult(r);
-    }
-
-    const results = [];
-    for (let pi = 0; pi < presets.length; pi++) {
-      const strat = presets[pi];
-      const s = await evaluateAsync(strat);
-      results.push({ strategy: strat.name, risk: 'User', combo: strat.name, settings: strat, ...s });
-      sendLog(`  ${strat.name}: ${s.trades} trades, ${s.winRate}% WR, $${s.totalPnl}`);
-    }
-    sendProgress('round1', 100);
-
-    // ═══ ROUND 2: Genetic ═══
-    sendLog('Round 2: Breeding 25 genetic offspring...');
-    results.sort((a,b) => b.winRate-a.winRate || b.totalPnl-a.totalPnl);
-    const topParents = results.filter(r=>r.trades>0).slice(0,10);
-    const mutations = [];
-    const { PARAM_BOUNDS: PB } = require('../quantum-optimizer');
-
-    for (let gen = 0; gen < 25; gen++) {
-      const p1 = topParents[Math.floor(Math.random()*topParents.length)];
-      const p2 = topParents[Math.floor(Math.random()*topParents.length)];
-      if (!p1||!p2) continue;
-      const child = {};
-      for (const key of Object.keys(PB)) {
-        const b = PB[key];
-        const v1 = p1.settings[key], v2 = p2.settings[key];
-        let val = Math.random()>0.5 ? (v1!==undefined?v1:(b.min+b.max)/2) : (v2!==undefined?v2:(b.min+b.max)/2);
-        val += (Math.random()-0.5)*2*b.step;
-        val = Math.max(b.min, Math.min(b.max, val));
-        if (b.integer) val = Math.round(val);
-        else val = parseFloat(val.toFixed(4));
-        child[key] = val;
-      }
-      const s = await evaluateAsync(child);
-      if (s.trades > 0) {
-        mutations.push({ strategy:'Genetic', risk:`Gen${gen+1}`, combo:`Genetic Gen${gen+1}`, settings:child, ...s });
-      }
-    }
-    sendLog(`Round 2 done: ${mutations.length} viable offspring`);
-    sendProgress('round2', 100);
-
-    // ═══ ROUND 3: Quantum ═══
-    sendLog('Round 3: Quantum search (QAOA + SPSA + Annealing)...');
-    const preQuantum = [...results, ...mutations].sort((a,b) => b.winRate-a.winRate || b.totalPnl-a.totalPnl);
-    // Run quantum in chunks with event loop yields to keep stream alive
-    const quantum = await (async () => {
-      const { qaoaSample, spsaOptimize, quantumAnneal, PARAM_BOUNDS: QPB } = require('../quantum-optimizer');
-      const topN = preQuantum.filter(r => r.trades > 0).slice(0, 10);
-      if (!topN.length) return { results: [], stats: { qaoaCount: 0, spsaCount: 0, annealCount: 0 } };
-      const allQR = [];
-
-      // QAOA
-      const qaoaSamples = qaoaSample(topN, 30);
-      let qaoaCount = 0;
-      for (const sample of qaoaSamples) {
-        const score = await evaluateAsync(sample.config);
-        if (score.trades > 0) {
-          allQR.push({ risk: `QAOA-${qaoaCount + 1}`, riskId: `qaoa${qaoaCount}`, settings: sample.config, ...score });
-          qaoaCount++;
-        }
-      }
-      sendLog(`  QAOA: ${qaoaCount} viable`);
-
-      // SPSA
-      let spsaCount = 0;
-      const spsaResults = await spsaOptimize(topN[0].settings, evaluateAsync, 20);
-      for (const sr of spsaResults) {
-        if (sr.trades > 0) {
-          allQR.push({ risk: `SPSA-${spsaCount + 1}`, riskId: `spsa${spsaCount}`, settings: sr.config, ...sr });
-          spsaCount++;
-        }
-      }
-      await yieldTick();
-      sendLog(`  SPSA: ${spsaCount} viable`);
-
-      // Annealing
-      let annealCount = 0;
-      const combinedTop = [...topN];
-      if (allQR.length) {
-        const sorted = [...allQR].sort((a, b) => b.winRate - a.winRate || b.totalPnl - a.totalPnl);
-        combinedTop.push(...sorted.slice(0, 5));
-      }
-      const annealResults = await quantumAnneal(combinedTop.slice(0, 10), evaluateAsync, 25);
-      for (const ar of annealResults) {
-        if (ar.trades > 0) {
-          allQR.push({ risk: `Anneal-${annealCount + 1}`, riskId: `anneal${annealCount}`, settings: ar.config, ...ar });
-          annealCount++;
-        }
-      }
-      await yieldTick();
-      sendLog(`  Anneal: ${annealCount} viable`);
-
-      return { results: allQR, stats: { qaoaCount, spsaCount, annealCount } };
-    })();
-
-    for (const qr of quantum.results) {
-      qr.strategy = 'Quantum';
-      qr.combo = `Quantum ${qr.risk}`;
-    }
-
-    const allResults = [...results, ...mutations, ...quantum.results];
-    allResults.sort((a,b) => b.winRate-a.winRate || b.totalPnl-a.totalPnl);
-    const qs = quantum.stats || {};
-    sendLog(`Round 3 done: QAOA:${qs.qaoaCount||0} SPSA:${qs.spsaCount||0} Anneal:${qs.annealCount||0}`);
-    sendProgress('round3', 100);
-
-    // ═══ Per-token scoring ═══
-    sendLog('Scoring individual tokens...');
-    const bestStrat = allResults.find(r => r.trades > 0);
-    const tokenScores = bestStrat ? await evaluatePerToken(bestStrat.settings) : {};
-
-    const TOKEN_RANK = { 'Good': 0, 'OK': 1, 'Bad': 2, 'No Trades': 3, 'No Data': 4 };
-    const tokenScoreList = Object.entries(tokenScores)
-      .map(([sym, s]) => ({ symbol: sym, ...s }))
-      .sort((a, b) => TOKEN_RANK[a.rating] - TOKEN_RANK[b.rating] || b.winRate - a.winRate || b.totalPnl - a.totalPnl);
-
-    const goodTokens = tokenScoreList.filter(t => t.rating === 'Good').length;
-    const badTokens = tokenScoreList.filter(t => t.rating === 'Bad').length;
-    sendLog(`Token scores: ${goodTokens} good, ${badTokens} bad out of ${tokenScoreList.length}`);
-
-    // ═══ Save top 3 ═══
-    sendLog('Saving top 3 as AI versions...');
-    const saved = [];
-    for (let i=0; i<Math.min(3,allResults.length); i++) {
-      const best=allResults[i]; if(!best||best.trades===0) continue;
-      const rows=await query('SELECT version FROM ai_versions ORDER BY id DESC LIMIT 1');
-      const prev=rows.length?rows[0].version:'v0.0';
-      const parts=prev.match(/v(\d+)\.(\d+)/);
-      const major=parts?parseInt(parts[1]):1; const minor=parts?parseInt(parts[2])+1:0;
-      const ver=`v${major}.${minor}`;
-      const medal=i===0?'🥇':i===1?'🥈':'🥉';
-      await query(
-        `INSERT INTO ai_versions (version, trade_count, win_rate, avg_pnl, total_pnl, params, setup_weights, avoided_coins, changes)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-        [ver, best.trades, best.winRate/100, best.trades?best.totalPnl/best.trades:0, best.totalPnl,
-         JSON.stringify(best.settings), '{}', '[]',
-         `${medal} AI #${i+1}: ${best.combo} (${best.winRate}% WR, $${best.totalPnl} PnL, ${DAYS}d)`]);
-      saved.push({ rank:i+1, version:ver, combo:best.combo, winRate:best.winRate, pnl:best.totalPnl });
-      sendLog(`  Saved ${medal} ${ver}: ${best.combo} (${best.winRate}% WR)`);
-    }
-
-    // Send final result as last NDJSON line
+    // Send final result
     res.write(JSON.stringify({
       type: 'result',
-      period: `${new Date(startTime).toISOString().slice(0,10)} → ${new Date(endTime).toISOString().slice(0,10)}`,
-      days: DAYS, coinsScanned: Object.keys(coinData).length,
-      presetStrategies: presets.length,
-      round1Combos: results.length, round2Genetic: mutations.length,
-      round3Quantum: quantum.results.length,
-      quantumStats: quantum.stats,
-      totalCombos: allResults.length,
-      paramsSearched: Object.keys(PB).length,
-      riskNote: 'Risk is user-configured. AI optimizes strategy only.',
-      tokenSummary: `${goodTokens} good, ${tokenScoreList.filter(t=>t.rating==='OK').length} OK, ${badTokens} bad out of ${tokenScoreList.length} tokens`,
-      tokenScores: tokenScoreList,
-      saved,
-      results: allResults,
-      cachedData: isCacheValid,
+      activeCombo: newActiveId,
+      comboName: quantumOptimizer.comboToName(newActiveId),
+      strategies,
+      stats: newActive || {},
+      phase: stats.current_phase,
+      exploration: stats.exploration_progress,
+      allCombos: sorted.map(c => ({
+        id: c.combo_id, name: c.combo_name,
+        trades: c.total_trades, winRate: c.win_rate,
+        avgPnl: c.avg_pnl, score: c.composite_score,
+        active: c.is_active, locked: c.admin_locked,
+      })),
     }) + '\n');
+
     clearInterval(keepalive);
     res.end();
   } catch (err) {
     console.error('AI optimize error:', err);
     clearInterval(keepalive);
     try {
-      res.write(JSON.stringify({ type: 'error', error: err.message, stack: (err.stack || '').split('\n').slice(0,3).join(' | ') }) + '\n');
+      res.write(JSON.stringify({ type: 'error', error: err.message }) + '\n');
       res.end();
     } catch {}
   }
