@@ -286,8 +286,10 @@ async function initAllTables() {
       symbol VARCHAR(20) NOT NULL UNIQUE,
       enabled BOOLEAN DEFAULT true,
       banned BOOLEAN DEFAULT false,
+      "rank" INTEGER DEFAULT 999,
       created_at TIMESTAMPTZ DEFAULT NOW()
     )`,
+    `ALTER TABLE global_token_settings ADD COLUMN IF NOT EXISTS "rank" INTEGER DEFAULT 999`,
     // Per-key per-token user leverage overrides
     `CREATE TABLE IF NOT EXISTS user_token_leverage (
       id SERIAL PRIMARY KEY,
