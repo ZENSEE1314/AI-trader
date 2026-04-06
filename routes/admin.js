@@ -965,6 +965,28 @@ router.get('/debug-positions', async (req, res) => {
   }
 });
 
+// Debug: show raw Bitunix open positions (to check field names)
+router.get('/debug-bitunix-positions', async (req, res) => {
+  try {
+    const cryptoUtils = require('../crypto-utils');
+    const { BitunixClient } = require('../bitunix-client');
+    const keys = await query(
+      `SELECT ak.api_key_enc, ak.iv, ak.auth_tag,
+              ak.api_secret_enc, ak.secret_iv, ak.secret_auth_tag
+       FROM api_keys ak
+       WHERE ak.enabled = true AND ak.platform = 'bitunix' LIMIT 1`
+    );
+    if (!keys.length) return res.json({ error: 'No active Bitunix keys' });
+    const apiKey = cryptoUtils.decrypt(keys[0].api_key_enc, keys[0].iv, keys[0].auth_tag);
+    const apiSecret = cryptoUtils.decrypt(keys[0].api_secret_enc, keys[0].secret_iv, keys[0].secret_auth_tag);
+    const client = new BitunixClient({ apiKey, apiSecret });
+    const rawPositions = await client._rawGet('/api/v1/futures/position/get_pending_positions', {});
+    res.json({ rawPositions });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Debug: show raw Bitunix position history + order history to check PnL
 router.get('/debug-bitunix-history', async (req, res) => {
   try {

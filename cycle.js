@@ -1316,21 +1316,29 @@ async function syncTradeStatus() {
             if (exchangePos && trade.trailing_sl_last_step !== undefined) {
               const entryPrice = parseFloat(trade.entry_price);
               const isLong = trade.direction !== 'SHORT';
-              // Use markPrice directly when available, fall back to PnL calc
+              // Fetch current price from Binance public API (most reliable)
               let curPrice;
-              if (exchangePos.markPrice) {
-                curPrice = exchangePos.markPrice;
-              } else {
-                const absAmt = Math.abs(exchangePos.amt) || 1;
-                curPrice = isLong
-                  ? entryPrice + (exchangePos.pnl / absAmt)
-                  : entryPrice - (exchangePos.pnl / absAmt);
+              try {
+                const fetch = require('node-fetch');
+                const tickerRes = await fetch(`https://fapi.binance.com/fapi/v1/ticker/price?symbol=${trade.symbol}`);
+                const tickerData = await tickerRes.json();
+                curPrice = parseFloat(tickerData.price);
+              } catch (_) {
+                // Fallback: use markPrice or PnL calc
+                if (exchangePos.markPrice) {
+                  curPrice = exchangePos.markPrice;
+                } else {
+                  const absAmt = Math.abs(exchangePos.amt) || 1;
+                  curPrice = isLong
+                    ? entryPrice + (exchangePos.pnl / absAmt)
+                    : entryPrice - (exchangePos.pnl / absAmt);
+                }
               }
               const profitPct = isLong
                 ? (curPrice - entryPrice) / entryPrice
                 : (entryPrice - curPrice) / entryPrice;
               const lastStep = parseFloat(trade.trailing_sl_last_step) || 0;
-              bLog.trade(`Bitunix trailing check: ${trade.symbol} entry=$${entryPrice} cur=$${curPrice} profit=${(profitPct*100).toFixed(2)}% lastStep=${(lastStep*100).toFixed(1)}%`);
+              bLog.trade(`Bitunix trailing: ${trade.symbol} entry=$${entryPrice} cur=$${curPrice} profit=${(profitPct*100).toFixed(2)}% lastStep=${(lastStep*100).toFixed(1)}%`);
               const trailResult = calculateTrailingStep(entryPrice, curPrice, isLong, lastStep);
               if (trailResult) {
                 try {
