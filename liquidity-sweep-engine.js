@@ -84,6 +84,38 @@ function isBearishPinBar(c) {
   return upperWick > body * 2 && upperWick > range * 0.6;
 }
 
+// ── RSI Calculation ────────────────────────────────────────
+
+function calcRSI(candles, period = 14) {
+  if (candles.length < period + 1) return 50;
+  let gains = 0, losses = 0;
+  for (let i = candles.length - period; i < candles.length; i++) {
+    const diff = candles[i].close - candles[i - 1].close;
+    if (diff > 0) gains += diff; else losses += Math.abs(diff);
+  }
+  if (losses === 0) return 100;
+  const rs = (gains / period) / (losses / period);
+  return 100 - (100 / (1 + rs));
+}
+
+// ── Volume Check ───────────────────────────────────────────
+
+function hasVolumeConfirm(candles, idx, multiplier = 1.2) {
+  if (candles.length < 22 || idx < 20) return true; // not enough data, pass
+  const avgVol = candles.slice(idx - 20, idx).reduce((s, c) => s + c.volume, 0) / 20;
+  return candles[idx].volume > avgVol * multiplier;
+}
+
+// ── EMA for trend detection ────────────────────────────────
+
+function calcEMA(prices, period) {
+  if (prices.length < period) return null;
+  const k = 2 / (period + 1);
+  let ema = prices.slice(0, period).reduce((a, b) => a + b, 0) / period;
+  for (let i = period; i < prices.length; i++) ema = prices[i] * k + ema * (1 - k);
+  return ema;
+}
+
 // ── ATR for dynamic SL buffer ──────────────────────────────
 
 function calcATR(candles, period = 14) {
@@ -405,7 +437,6 @@ function detectLiquiditySweep(candles15m, candles1m) {
   const parsed15 = candles15m.map(parseCandle);
   const parsed1 = candles1m.map(parseCandle);
 
-  // Look at recent 15m candles for a range candle + sweep candle
   for (let i = parsed15.length - 5; i < parsed15.length - 1; i++) {
     const rangeCandle = parsed15[i];
     const sweepCandle = parsed15[i + 1];
@@ -413,62 +444,48 @@ function detectLiquiditySweep(candles15m, candles1m) {
 
     const rangeHigh = rangeCandle.high;
     const rangeLow = rangeCandle.low;
+    const rangeSize = rangeHigh - rangeLow;
+    if (rangeSize === 0) continue;
 
-    // Bullish sweep: sweep candle breaks below range low then closes back inside
-    const isBullishSweep = sweepCandle.low < rangeLow &&
-                           sweepCandle.close > rangeLow &&
-                           sweepCandle.close <= rangeHigh;
-
-    // Bearish sweep: sweep candle breaks above range high then closes back inside
-    const isBearishSweep = sweepCandle.high > rangeHigh &&
-                           sweepCandle.close < rangeHigh &&
-                           sweepCandle.close >= rangeLow;
-
+    const isBullishSweep = sweepCandle.low < rangeLow && sweepCandle.close > rangeLow && sweepCandle.close <= rangeHigh;
+    const isBearishSweep = sweepCandle.high > rangeHigh && sweepCandle.close < rangeHigh && sweepCandle.close >= rangeLow;
     if (!isBullishSweep && !isBearishSweep) continue;
+
+    // Volume: sweep candle must have higher volume than range candle
+    if (sweepCandle.volume <= rangeCandle.volume * 1.1) continue;
+
+    // Close quality: must close >40% into range (not barely inside)
+    if (isBullishSweep && (sweepCandle.close - rangeLow) / rangeSize < 0.4) continue;
+    if (isBearishSweep && (rangeHigh - sweepCandle.close) / rangeSize < 0.4) continue;
+
+    // Trend lean: last 3 15m candles should lean in direction
+    const recent3 = parsed15.slice(Math.max(0, i - 2), i + 1);
+    const greenRecent = recent3.filter(isGreenCandle).length;
+    const redRecent = recent3.filter(isRedCandle).length;
+    if (isBullishSweep && redRecent > greenRecent + 1) continue; // too bearish
+    if (isBearishSweep && greenRecent > redRecent + 1) continue; // too bullish
 
     const direction = isBullishSweep ? 'LONG' : 'SHORT';
 
-    // Confirm on 1m: look for same pattern in recent candles
-    for (let j = parsed1.length - 8; j < parsed1.length - 1; j++) {
+    // 1m confirmation: tightened to last 4 candles only
+    for (let j = parsed1.length - 4; j < parsed1.length - 1; j++) {
       const range1m = parsed1[j];
       const sweep1m = parsed1[j + 1];
       if (!range1m || !sweep1m) continue;
 
-      const h1m = range1m.high;
-      const l1m = range1m.low;
-
       if (direction === 'LONG') {
-        // 1m bullish sweep: breaks below and closes back inside
-        if (sweep1m.low < l1m && sweep1m.close > l1m && sweep1m.close <= h1m) {
-          return {
-            direction,
-            setup: 'LIQUIDITY_SWEEP',
-            entryPrice: sweep1m.close,
-            sl: Math.min(sweepCandle.low, sweep1m.low),
-            rangeHigh,
-            rangeLow,
-            sweepCandle15m: i + 1,
-            sweepCandle1m: j + 1,
-          };
+        if (sweep1m.low < range1m.low && sweep1m.close > range1m.low) {
+          return { direction, setup: 'LIQUIDITY_SWEEP', entryPrice: sweep1m.close,
+            sl: Math.min(sweepCandle.low, sweep1m.low), rangeHigh, rangeLow };
         }
       } else {
-        // 1m bearish sweep: breaks above and closes back inside
-        if (sweep1m.high > h1m && sweep1m.close < h1m && sweep1m.close >= l1m) {
-          return {
-            direction,
-            setup: 'LIQUIDITY_SWEEP',
-            entryPrice: sweep1m.close,
-            sl: Math.max(sweepCandle.high, sweep1m.high),
-            rangeHigh,
-            rangeLow,
-            sweepCandle15m: i + 1,
-            sweepCandle1m: j + 1,
-          };
+        if (sweep1m.high > range1m.high && sweep1m.close < range1m.high) {
+          return { direction, setup: 'LIQUIDITY_SWEEP', entryPrice: sweep1m.close,
+            sl: Math.max(sweepCandle.high, sweep1m.high), rangeHigh, rangeLow };
         }
       }
     }
   }
-
   return null;
 }
 
@@ -476,8 +493,8 @@ function detectLiquiditySweep(candles15m, candles1m) {
 // Price touches S/R multiple times → false break → reversal close back
 
 function detectStopLossHunt(candles15m, candles1m, cfg = {}) {
-  const minTouches = cfg.minTouches || 2;
-  const proximityPct = cfg.proximityPct || 0.01;
+  const minTouches = cfg.minTouches || 3; // raised from 2
+  const proximityPct = cfg.proximityPct || 0.005; // tightened from 1% to 0.5%
   const lookback = cfg.lookback || 50;
 
   if (candles15m.length < 30 || candles1m.length < 10) return null;
@@ -486,63 +503,52 @@ function detectStopLossHunt(candles15m, candles1m, cfg = {}) {
   const parsed1 = candles1m.map(parseCandle);
   const levels = findKeyLevels(parsed15, lookback);
 
-  // Only consider levels with enough touches
-  const strongLevels = levels.filter(l => l.touches >= minTouches);
+  // Require strong zones (strength >= 3 AND enough touches)
+  const strongLevels = levels.filter(l => l.touches >= minTouches && l.strength >= 3);
   if (!strongLevels.length) return null;
 
   const lastCandle15 = parsed15[parsed15.length - 1];
   const prevCandle15 = parsed15[parsed15.length - 2];
 
+  // Momentum check: recent 15m candles should show direction
+  const recent5 = parsed15.slice(-5);
+  const recentGreen = recent5.filter(isGreenCandle).length;
+  const recentRed = recent5.filter(isRedCandle).length;
+
   for (const level of strongLevels) {
     const proxPct = Math.abs(lastCandle15.close - level.price) / level.price;
     if (proxPct > proximityPct) continue;
 
-    // Bullish SL hunt: support level
-    // Price drops below support then closes back above it
     if (level.type === 'support') {
       const brokeBelow = lastCandle15.low < level.price;
       const closedAbove = lastCandle15.close > level.price;
-
-      if (brokeBelow && closedAbove) {
-        // Confirm on 1m
+      // Rejection body must be larger than break (conviction)
+      const hasConviction = bodySize(lastCandle15) > bodySize(prevCandle15) * 0.7;
+      // Need at least 2 green in last 5 (momentum)
+      if (brokeBelow && closedAbove && hasConviction && recentGreen >= 2) {
         const last1m = parsed1[parsed1.length - 1];
-        if (last1m.close > level.price) {
-          return {
-            direction: 'LONG',
-            setup: 'STOP_LOSS_HUNT',
-            entryPrice: last1m.close,
-            sl: lastCandle15.low,
-            level: level.price,
-            levelType: level.type,
-            touches: level.touches,
-          };
+        if (last1m.close > level.price && isGreenCandle(last1m)) {
+          return { direction: 'LONG', setup: 'STOP_LOSS_HUNT', entryPrice: last1m.close,
+            sl: lastCandle15.low, level: level.price, levelType: level.type,
+            touches: level.touches, strength: level.strength };
         }
       }
     }
 
-    // Bearish SL hunt: resistance level
-    // Price spikes above resistance then closes back below it
     if (level.type === 'resistance') {
       const brokeAbove = lastCandle15.high > level.price;
       const closedBelow = lastCandle15.close < level.price;
-
-      if (brokeAbove && closedBelow) {
+      const hasConviction = bodySize(lastCandle15) > bodySize(prevCandle15) * 0.7;
+      if (brokeAbove && closedBelow && hasConviction && recentRed >= 2) {
         const last1m = parsed1[parsed1.length - 1];
-        if (last1m.close < level.price) {
-          return {
-            direction: 'SHORT',
-            setup: 'STOP_LOSS_HUNT',
-            entryPrice: last1m.close,
-            sl: lastCandle15.high,
-            level: level.price,
-            levelType: level.type,
-            touches: level.touches,
-          };
+        if (last1m.close < level.price && isRedCandle(last1m)) {
+          return { direction: 'SHORT', setup: 'STOP_LOSS_HUNT', entryPrice: last1m.close,
+            sl: lastCandle15.high, level: level.price, levelType: level.type,
+            touches: level.touches, strength: level.strength };
         }
       }
     }
   }
-
   return null;
 }
 
@@ -551,58 +557,62 @@ function detectStopLossHunt(candles15m, candles1m, cfg = {}) {
 
 function detectMomentumScalp(candles15m, candles1m, cfg = {}) {
   const trendStrength = cfg.trendStrength || 7;
-  const pinBarWickRatio = cfg.pinBarWickRatio || 2.0;
+  const pinBarWickRatio = cfg.pinBarWickRatio || 2.5; // tightened from 2.0
 
   if (candles15m.length < 15 || candles1m.length < 10) return null;
 
   const parsed15 = candles15m.map(parseCandle);
   const parsed1 = candles1m.map(parseCandle);
 
-  const recent15 = parsed15.slice(-10);
-  const greenCount = recent15.filter(isGreenCandle).length;
-  const redCount = recent15.filter(isRedCandle).length;
+  // EMA trend check (more robust than candle counting)
+  const closes15 = parsed15.map(c => c.close);
+  const ema9 = calcEMA(closes15, 9);
+  const ema21 = calcEMA(closes15, 21);
+  if (ema9 === null || ema21 === null) return null;
 
-  const isBullishTrend = greenCount >= trendStrength;
-  const isBearishTrend = redCount >= trendStrength;
+  // Also check recent candle direction for confirmation
+  const recent10 = parsed15.slice(-10);
+  const greenCount = recent10.filter(isGreenCandle).length;
+  const redCount = recent10.filter(isRedCandle).length;
+
+  // EMA alignment + candle count together
+  const isBullishTrend = ema9 > ema21 && greenCount >= trendStrength;
+  const isBearishTrend = ema9 < ema21 && redCount >= trendStrength;
   if (!isBullishTrend && !isBearishTrend) return null;
 
-  // On 1m: look for pin bar + its failure
-  for (let i = parsed1.length - 6; i < parsed1.length - 1; i++) {
+  // 1m: look for pin bar + failure (last 4 candles only — fresh)
+  for (let i = parsed1.length - 4; i < parsed1.length - 1; i++) {
     const pinCandle = parsed1[i];
     const failCandle = parsed1[i + 1];
     if (!pinCandle || !failCandle) continue;
 
+    const pinBody = bodySize(pinCandle);
+    const pinRange = totalRange(pinCandle);
+    const failBody = bodySize(failCandle);
+    if (pinRange === 0) continue;
+
+    // Failure must be convincing: body > 40% of range
+    if (failBody / totalRange(failCandle) < 0.4) continue;
+
+    // Volume: failure candle should have more volume
+    if (failCandle.volume <= pinCandle.volume * 0.9) continue;
+
     if (isBearishTrend) {
-      // In bearish trend: bullish pin bar → failure
       const lw = Math.min(pinCandle.open, pinCandle.close) - pinCandle.low;
-      if (lw > bodySize(pinCandle) * pinBarWickRatio && lw > totalRange(pinCandle) * 0.5 && failCandle.close < pinCandle.low) {
-        return {
-          direction: 'SHORT',
-          setup: 'MOMENTUM_SCALP',
-          entryPrice: failCandle.close,
-          sl: pinCandle.high,
-          trendDirection: 'bearish',
-          pinBarIndex: i,
-        };
+      if (lw > pinBody * pinBarWickRatio && lw > pinRange * 0.6 && failCandle.close < pinCandle.low) {
+        return { direction: 'SHORT', setup: 'MOMENTUM_SCALP', entryPrice: failCandle.close,
+          sl: pinCandle.high, trendDirection: 'bearish', pinBarIndex: i };
       }
     }
 
     if (isBullishTrend) {
-      // In bullish trend: bearish pin bar → failure
       const uw = pinCandle.high - Math.max(pinCandle.open, pinCandle.close);
-      if (uw > bodySize(pinCandle) * pinBarWickRatio && uw > totalRange(pinCandle) * 0.5 && failCandle.close > pinCandle.high) {
-        return {
-          direction: 'LONG',
-          setup: 'MOMENTUM_SCALP',
-          entryPrice: failCandle.close,
-          sl: pinCandle.low,
-          trendDirection: 'bullish',
-          pinBarIndex: i,
-        };
+      if (uw > pinBody * pinBarWickRatio && uw > pinRange * 0.6 && failCandle.close > pinCandle.high) {
+        return { direction: 'LONG', setup: 'MOMENTUM_SCALP', entryPrice: failCandle.close,
+          sl: pinCandle.low, trendDirection: 'bullish', pinBarIndex: i };
       }
     }
   }
-
   return null;
 }
 
@@ -720,7 +730,7 @@ function isNearFibLevel(price, fibLevels, tolerancePct = 0.003) {
 //   3. Fibonacci 50% / 61.8% retracement adds confluence
 //   4. LTF setup must align with HTF structure (don't swim against the current)
 
-function isStrongBreakout(breakCandle, prevCandle, levelPrice, direction, bodyRatio = 0.8) {
+function isStrongBreakout(breakCandle, prevCandle, levelPrice, direction, bodyRatio = 1.2) {
   const breakBody = bodySize(breakCandle);
   const breakRange = totalRange(breakCandle);
   const prevBody = bodySize(prevCandle);
@@ -731,9 +741,9 @@ function isStrongBreakout(breakCandle, prevCandle, levelPrice, direction, bodyRa
   // 3. Close must be decisively past the level (> 0.1% beyond it)
   let isDecisive = false;
   if (direction === 'LONG') {
-    isDecisive = (breakCandle.close - levelPrice) / levelPrice > 0.001;
+    isDecisive = (breakCandle.close - levelPrice) / levelPrice > 0.003;
   } else {
-    isDecisive = (levelPrice - breakCandle.close) / levelPrice > 0.001;
+    isDecisive = (levelPrice - breakCandle.close) / levelPrice > 0.003;
   }
 
   return isLargerBody && isFullBody && isDecisive;
@@ -773,14 +783,14 @@ function isClearRejection(rejectionCandle, levelPrice, direction) {
     const closesAbove = rejectionCandle.close > levelPrice;
     const isGreen = rejectionCandle.close > rejectionCandle.open;
     // Wick must be significant (> 30% of range) OR candle is green closing above level
-    return closesAbove && (wickRatio > 0.3 || isGreen) && rejectionCandle.close > rejectionCandle.open;
+    return closesAbove && (wickRatio > 0.5) && rejectionCandle.close > rejectionCandle.open;
   } else {
     // Bearish rejection: long upper wick touching the level, close well below it
     const upperWick = rejectionCandle.high - Math.max(rejectionCandle.open, rejectionCandle.close);
     const wickRatio = upperWick / range;
     const closesBelow = rejectionCandle.close < levelPrice;
     const isRed = rejectionCandle.close < rejectionCandle.open;
-    return closesBelow && (wickRatio > 0.3 || isRed) && rejectionCandle.close < rejectionCandle.open;
+    return closesBelow && (wickRatio > 0.5) && rejectionCandle.close < rejectionCandle.open;
   }
 }
 
@@ -845,7 +855,7 @@ function detectBRR(candles1h, candles15m, candles1m, cfg = {}) {
           let fibConfluence = false;
           let fibLevel = null;
           if (fibLevels) {
-            const fibCheck = isNearFibLevel(retestCandle.low, fibLevels, 0.005);
+            const fibCheck = isNearFibLevel(retestCandle.low, fibLevels, 0.003);
             fibConfluence = fibCheck.isNear;
             fibLevel = fibCheck.level;
           }
@@ -854,7 +864,7 @@ function detectBRR(candles1h, candles15m, candles1m, cfg = {}) {
           const last1m = parsed1[parsed1.length - 1];
           if (last1m.close <= levelPrice) continue;
 
-          const baseScore = 15;
+          const baseScore = 8;
           const fibBonus = fibConfluence ? 4 : 0;
           const momentumBonus = htf.momentum === 'bullish' ? 2 : 0;
           const strongHTFBonus = htf.trend === 'bullish' ? 2 : 0; // full HH+HL trend
@@ -900,7 +910,7 @@ function detectBRR(candles1h, candles15m, candles1m, cfg = {}) {
           let fibConfluence = false;
           let fibLevel = null;
           if (fibLevels) {
-            const fibCheck = isNearFibLevel(retestCandle.high, fibLevels, 0.005);
+            const fibCheck = isNearFibLevel(retestCandle.high, fibLevels, 0.003);
             fibConfluence = fibCheck.isNear;
             fibLevel = fibCheck.level;
           }
@@ -909,7 +919,7 @@ function detectBRR(candles1h, candles15m, candles1m, cfg = {}) {
           const last1m = parsed1[parsed1.length - 1];
           if (last1m.close >= levelPrice) continue;
 
-          const baseScore = 15;
+          const baseScore = 8;
           const fibBonus = fibConfluence ? 4 : 0;
           const momentumBonus = htf.momentum === 'bearish' ? 2 : 0;
           const strongHTFBonus = htf.trend === 'bearish' ? 2 : 0;
@@ -1052,6 +1062,30 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
   const parsed15 = klines15m.map(parseCandle);
   const parsed1 = klines1m.map(parseCandle);
   const atr15 = calcATR(parsed15);
+
+  // ── GLOBAL FILTERS ──────────────────────────────────────
+  // ATR volatility filter: reject illiquid or insanely volatile
+  const atrPct = atr15 / price;
+  if (atrPct < 0.002 || atrPct > 0.03) return null; // 0.2% - 3% ATR range
+
+  // RSI filter
+  const rsi14 = calcRSI(parsed15);
+
+  // 1h trend for multi-TF alignment
+  let h1Trend = 'neutral';
+  if (klines1h && klines1h.length >= 20) {
+    const parsed1h = klines1h.map(parseCandle);
+    const h1Closes = parsed1h.map(c => c.close);
+    const h1Ema9 = calcEMA(h1Closes, 9);
+    const h1Ema21 = calcEMA(h1Closes, 21);
+    if (h1Ema9 !== null && h1Ema21 !== null) {
+      h1Trend = h1Ema9 > h1Ema21 ? 'bullish' : 'bearish';
+    }
+  }
+
+  // Volume on latest candle
+  const lastVolOK = parsed15.length >= 22 && hasVolumeConfirm(parsed15, parsed15.length - 1, 1.0);
+
   const allLevels = findKeyLevels(parsed15, 80);
   const trendlines = detectTrendlines(parsed15);
 
@@ -1080,7 +1114,7 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
         tp3: sweep.direction === 'LONG' ? sweep.entryPrice + (tpDist * price * 2) : sweep.entryPrice - (tpDist * price * 2),
         slDist, setup: 'LIQUIDITY_SWEEP',
         setupName: `${sweep.direction}-LIQ-SWEEP`,
-        score: 12 + (rr > 2 ? 3 : 0),
+        score: 6 + (rr > 2 ? 2 : 0),
         rr: Math.round(rr * 10) / 10,
       });
     }
@@ -1110,7 +1144,7 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
         tp3: hunt.direction === 'LONG' ? hunt.entryPrice + (tpDist * price * 2) : hunt.entryPrice - (tpDist * price * 2),
         slDist, setup: 'STOP_LOSS_HUNT',
         setupName: `${hunt.direction}-SL-HUNT`,
-        score: 13 + touchBonus,
+        score: 7 + Math.min(touchBonus, 3),
         rr: Math.round(rr * 10) / 10,
       });
     }
@@ -1139,7 +1173,7 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
         tp3: momentum.direction === 'LONG' ? momentum.entryPrice + (tpDist * price * 2) : momentum.entryPrice - (tpDist * price * 2),
         slDist, setup: 'MOMENTUM_SCALP',
         setupName: `${momentum.direction}-MOM-SCALP`,
-        score: 11,
+        score: 5,
         rr: Math.round(rr * 10) / 10,
       });
     }
@@ -1204,42 +1238,76 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
 
   if (!signals.length) return null;
 
-  // Apply confluence bonuses to all signals before sorting
+  // Apply confluence bonuses + global filters to all signals
   for (const sig of signals) {
-    // Trendline confluence: is entry near a trendline?
+    // RSI filter: reject overbought longs, oversold shorts
+    if (sig.direction === 'LONG' && rsi14 > 75) { sig.score -= 5; sig.rsiRejected = true; }
+    if (sig.direction === 'SHORT' && rsi14 < 25) { sig.score -= 5; sig.rsiRejected = true; }
+    if (rsi14 >= 30 && rsi14 <= 70) sig.score += 1; // RSI in healthy zone
+
+    // 1h trend alignment
+    if (sig.direction === 'LONG' && h1Trend === 'bullish') sig.score += 2;
+    if (sig.direction === 'SHORT' && h1Trend === 'bearish') sig.score += 2;
+    if (sig.direction === 'LONG' && h1Trend === 'bearish') sig.score -= 3; // fighting trend
+    if (sig.direction === 'SHORT' && h1Trend === 'bullish') sig.score -= 3;
+
+    // Volume confirmation
+    if (lastVolOK) sig.score += 2;
+
+    // Trendline confluence (tightened to 0.2%)
     if (sig.direction === 'LONG' && trendlines.uptrend) {
       const trendDist = Math.abs(sig.price - trendlines.uptrend.currentPrice) / sig.price;
-      if (trendDist < 0.005) {
-        sig.score += 2;
-        sig.trendlineConfluence = 'uptrend_support';
-      }
+      if (trendDist < 0.002) { sig.score += 2; sig.trendlineConfluence = 'uptrend_support'; }
     }
     if (sig.direction === 'SHORT' && trendlines.downtrend) {
       const trendDist = Math.abs(sig.price - trendlines.downtrend.currentPrice) / sig.price;
-      if (trendDist < 0.005) {
-        sig.score += 2;
-        sig.trendlineConfluence = 'downtrend_resistance';
-      }
+      if (trendDist < 0.002) { sig.score += 2; sig.trendlineConfluence = 'downtrend_resistance'; }
     }
 
-    // Candlestick confirmation at nearest S/R zone
-    const nearestZone = allLevels.find(z => isInZone(sig.price, z) || Math.abs(sig.price - z.price) / sig.price < 0.005);
+    // Candlestick pattern at zone
+    const nearestZone = allLevels.find(z => isInZone(sig.price, z) || Math.abs(sig.price - z.price) / sig.price < 0.003);
     if (nearestZone) {
       const candleConf = hasCandleConfirmation(parsed1, nearestZone, sig.direction);
-      if (candleConf.confirmed) {
-        sig.score += 3;
-        sig.candlePattern = candleConf.pattern;
-      }
-      // S/R zone strength bonus
+      if (candleConf.confirmed) { sig.score += 3; sig.candlePattern = candleConf.pattern; }
       if (nearestZone.strength >= 4) sig.score += 2;
       else if (nearestZone.strength >= 2) sig.score += 1;
       sig.zoneStrength = nearestZone.strength;
     }
+
+    // Dynamic ATR-based SL (override hardcoded SL if ATR is available)
+    if (atr15 > 0) {
+      const atrSl = sig.direction === 'LONG' ? sig.price - atr15 * 1.0 : sig.price + atr15 * 1.0;
+      // Use ATR SL if it's tighter than the strategy SL
+      if (sig.direction === 'LONG' && atrSl > sig.sl) sig.sl = atrSl;
+      if (sig.direction === 'SHORT' && atrSl < sig.sl) sig.sl = atrSl;
+      sig.slDist = Math.abs(sig.price - sig.sl) / sig.price;
+    }
+
+    // Smart TP: find nearest strong S/R level in direction
+    const strongLevels = allLevels.filter(l => l.strength >= 3);
+    const tpLevel = findNearestLevel(sig.price, strongLevels, sig.direction, sig.slDist * 1.2);
+    if (tpLevel) {
+      sig.tp1 = tpLevel.price;
+    } else {
+      // Fallback: ATR-based TP (2x ATR)
+      sig.tp1 = sig.direction === 'LONG' ? sig.price + atr15 * 2.0 : sig.price - atr15 * 2.0;
+    }
+    sig.tp2 = sig.direction === 'LONG' ? sig.price + Math.abs(sig.tp1 - sig.price) * 1.5 : sig.price - Math.abs(sig.tp1 - sig.price) * 1.5;
+    sig.tp3 = sig.direction === 'LONG' ? sig.price + Math.abs(sig.tp1 - sig.price) * 2.0 : sig.price - Math.abs(sig.tp1 - sig.price) * 2.0;
+
+    // Recalculate RR with updated SL/TP
+    const tpDist = Math.abs(sig.tp1 - sig.price) / sig.price;
+    sig.rr = sig.slDist > 0 ? Math.round(tpDist / sig.slDist * 10) / 10 : 1.0;
   }
 
+  // Filter: RR minimum 1.2 (lowered from 1.5), SL reasonable
+  const validSignals = signals.filter(s => s.rr >= 1.2 && s.slDist > 0.001 && s.slDist < 0.03 && s.score >= 0);
+
+  if (!validSignals.length) return null;
+
   // Return highest scoring signal
-  signals.sort((a, b) => b.score - a.score);
-  const best = signals[0];
+  validSignals.sort((a, b) => b.score - a.score);
+  const best = validSignals[0];
 
   // Add AI modifier
   const aiModifier = await aiLearner.getAIScoreModifier(symbol, best.setup, best.direction);
