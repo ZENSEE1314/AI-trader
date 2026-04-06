@@ -1181,28 +1181,49 @@ async function executeForAllUsers(pick) {
           userLog.trade(`Bitunix position lookup: ${JSON.stringify(pos ? { id: pos.positionId, symbol: pos.symbol, side: pos.side, qty: pos.qty } : null)}`);
 
           if (pos && pos.positionId) {
-            userLog.trade(`Bitunix position confirmed: ${pos.positionId} — setting TP/SL...`);
+            // Recalculate SL/TP from actual entry price to avoid stale-price rejection
+            const actualEntry = parseFloat(pos.avgOpenPrice || pos.entryPrice || pos.avgPrice) || price;
+            const actualSlPricePct = userSL / userLev;
+            const actualSlPrice = isLong
+              ? actualEntry * (1 - actualSlPricePct)
+              : actualEntry * (1 + actualSlPricePct);
+            const actualTpPrice = hasTp
+              ? (isLong ? actualEntry * (1 + userTP * 1.5) : actualEntry * (1 - userTP * 1.5))
+              : 0;
+            const slFmtActual = parseFloat(actualSlPrice.toFixed(8));
+            const tpFmtActual = hasTp ? parseFloat(actualTpPrice.toFixed(8)) : 0;
+
+            userLog.trade(`Bitunix position confirmed: ${pos.positionId} entry=$${actualEntry} — setting TP/SL (SL=$${slFmtActual} TP=$${tpFmtActual || 'none'})...`);
             try {
-              const tpslArgs = { symbol, positionId: pos.positionId, slPrice: slFmtBx };
-              if (hasTp) tpslArgs.tpPrice = tpFmtBx;
+              const tpslArgs = { symbol, positionId: pos.positionId, slPrice: slFmtActual };
+              if (hasTp) tpslArgs.tpPrice = tpFmtActual;
               await userClient.placePositionTpSl(tpslArgs);
-              userLog.trade(`Bitunix ${hasTp ? `TP=$${tpFmtBx} ` : ''}SL=$${slFmtBx} set on position ${pos.positionId}${hasTp ? '' : ' (trailing SL only)'}`);
+              userLog.trade(`Bitunix TP/SL set on ${pos.positionId}: SL=$${slFmtActual}${hasTp ? ` TP=$${tpFmtActual}` : ' (trailing only)'}`);
             } catch (e) {
               userLog.error(`Bitunix TP/SL FAILED: ${e.message} — SET MANUALLY`);
               await notify(`*Bitunix ${symbol} ${pick.direction}*\nTP/SL failed! Set manually on Bitunix NOW.`);
             }
+
+            // Store actual entry price in DB
+            await db.query(
+              `INSERT INTO trades (api_key_id, user_id, symbol, direction, entry_price, sl_price, tp_price, quantity, leverage, status,
+               trailing_sl_price, trailing_sl_last_step)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'OPEN', $10, 0)`,
+              [key.id, key.user_id, symbol, pick.direction, actualEntry,
+               slFmtActual, hasTp ? tpFmtActual : 0, qty, userLev, slFmtActual]
+            );
           } else {
             userLog.error(`Bitunix position not found after order — verify on exchange`);
             await notify(`*Bitunix ${symbol}*\nOrder placed but position not found. Check Bitunix manually.`);
-          }
 
-          await db.query(
-            `INSERT INTO trades (api_key_id, user_id, symbol, direction, entry_price, sl_price, tp_price, quantity, leverage, status,
-             trailing_sl_price, trailing_sl_last_step)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'OPEN', $10, 0)`,
-            [key.id, key.user_id, symbol, pick.direction, price, parseFloat(slPrice.toFixed(8)), parseFloat(tp3Price.toFixed(8)), qty, userLev,
-             parseFloat(slPrice.toFixed(8))]
-          );
+            await db.query(
+              `INSERT INTO trades (api_key_id, user_id, symbol, direction, entry_price, sl_price, tp_price, quantity, leverage, status,
+               trailing_sl_price, trailing_sl_last_step)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'OPEN', $10, 0)`,
+              [key.id, key.user_id, symbol, pick.direction, price,
+               parseFloat(slPrice.toFixed(8)), parseFloat(tp3Price.toFixed(8)), qty, userLev, parseFloat(slPrice.toFixed(8))]
+            );
+          }
           userLog.trade(`Bitunix OK: ${key.email} ${symbol} ${pick.direction} x${userLev} qty=${qty}`);
           log(`Bitunix OK: ${key.email} ${symbol} ${pick.direction} x${userLev}`);
         } else {
