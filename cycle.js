@@ -130,16 +130,26 @@ async function getCapitalPercentage(apiKeyId = null) {
   }
 }
 
-// Check if a token is globally banned by admin
+// Check if a token is allowed by admin (must be in approved list)
 async function isTokenBanned(symbol) {
   try {
     const { query } = require('./db');
-    // Only check explicit bans — tokens not in the table are allowed by default
+    // Explicitly banned
     const banned = await query(
       'SELECT banned FROM global_token_settings WHERE symbol = $1 AND banned = true',
       [symbol]
     );
-    return banned.length > 0;
+    if (banned.length > 0) return true;
+
+    // Must be in approved list — if approved tokens exist, only those can trade
+    const allowed = await query(
+      'SELECT symbol FROM global_token_settings WHERE enabled = true AND banned = false'
+    );
+    if (allowed.length > 0) {
+      return !allowed.some(r => r.symbol === symbol);
+    }
+
+    return false;
   } catch {
     return false;
   }

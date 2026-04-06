@@ -336,12 +336,17 @@ async function initAllTables() {
     try { await pool.query(sql); } catch (_) {}
   }
 
-  // Seed approved tokens
+  // Seed approved tokens (admin can add/remove via dashboard)
   const approvedTokens = [
+    // Major coins
+    'BTCUSDT','ETHUSDT','SOLUSDT','BNBUSDT','XRPUSDT','DOGEUSDT','ADAUSDT',
+    'AVAXUSDT','DOTUSDT','LINKUSDT','MATICUSDT','UNIUSDT','LTCUSDT','NEARUSDT',
+    'SUIUSDT','PEPEUSDT','SHIBUSDT','TONUSDT','TRXUSDT','ICPUSDT',
+    // Mid caps
     '1000BONKUSDT','CAKEUSDT','ZROUSDT','VIRTUALUSDT','DEXEUSDT','PENGUUSDT',
-    'STXUSDT','SEIUSDT','APTUSDT','FLRUSDT','FILUSDT','VETUSDT','STABLEUSDT',
+    'STXUSDT','SEIUSDT','APTUSDT','FLRUSDT','FILUSDT','VETUSDT',
     'JUPUSDT','ARBUSDT','FETUSDT','POLUSDT','RENDERUSDT','KASUSDT','ATOMUSDT',
-    'WLDUSDT','MORPHOUSDT','NIGHTUSDT','ENAUSDT','TRUMPUSDT',
+    'WLDUSDT','MORPHOUSDT','ENAUSDT','TRUMPUSDT',
   ];
   for (const symbol of approvedTokens) {
     try {
