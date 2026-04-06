@@ -2028,7 +2028,10 @@ router.post('/ai-optimize', async (req, res) => {
     }
     const timeSteps = coinData[firstCoin].k15.map(k=>parseInt(k[0])).filter(t=>t>=startTime);
     const isHeavy = timeSteps.length > 1000;
-    const YIELD_EVERY = isHeavy ? 8 : 20;
+    const tokenCount = Object.keys(coinData).length;
+    // Scale yield frequency: more tokens = yield more often to keep event loop alive
+    // 16 tokens × 8 steps = 128 work units was OK; scale inversely with token count
+    const YIELD_EVERY = Math.max(1, Math.floor((isHeavy ? 128 : 320) / tokenCount));
 
     // Pre-build k15 index for O(1) candle lookup (used by replaySignals)
     const k15Index = {};
@@ -2322,11 +2325,13 @@ router.post('/ai-optimize', async (req, res) => {
       }
     };
     const coinKeys = Object.keys(coinData);
-    const QAOA_COUNT = isHeavy ? 5 : 10;
-    const SPSA_COUNT = isHeavy ? 4 : 8;
-    const ANNEAL_COUNT = isHeavy ? 5 : 10;
-    const GENETIC_COUNT = isHeavy ? 8 : 15;
-    sendLog(`Compute plan: ${timeSteps.length} steps × ${coinKeys.length} tokens | yield every ${YIELD_EVERY} | ${isHeavy ? 'HEAVY mode' : 'normal'}`);
+    // Scale iterations down when both heavy time range AND many tokens
+    const isVeryHeavy = isHeavy && tokenCount > 30;
+    const QAOA_COUNT = isVeryHeavy ? 3 : isHeavy ? 5 : 10;
+    const SPSA_COUNT = isVeryHeavy ? 3 : isHeavy ? 4 : 8;
+    const ANNEAL_COUNT = isVeryHeavy ? 3 : isHeavy ? 5 : 10;
+    const GENETIC_COUNT = isVeryHeavy ? 5 : isHeavy ? 8 : 15;
+    sendLog(`Compute plan: ${timeSteps.length} steps × ${coinKeys.length} tokens | yield every ${YIELD_EVERY} | ${isVeryHeavy ? 'VERY HEAVY' : isHeavy ? 'HEAVY' : 'normal'}`);
     async function evaluateAsync(strategyCfg) {
       const cfg = { ...strategyCfg, ...FIXED_RISK };
       const signals = [];
@@ -2418,6 +2423,8 @@ router.post('/ai-optimize', async (req, res) => {
         } catch (presetErr) {
           sendLog(`  ⚠ #${pi+1} failed: ${presetErr.message}`);
         }
+        // Yield between each preset to keep stream alive with many tokens
+        await yieldTick();
         if ((pi+1) % 10 === 0 || pi === presets.length - 1) {
           const viable = results.filter(r => r.trades > 0).length;
           sendLog(`  Grid: ${pi+1}/${presets.length} tested, ${viable} viable so far`);
@@ -2426,6 +2433,18 @@ router.post('/ai-optimize', async (req, res) => {
       }
     } catch (r1Err) {
       sendLog(`Round 1 error: ${r1Err.message}`);
+    }
+    // Save Round 1 results to DB so they survive stream drops
+    if (results.length) {
+      try {
+        await query(
+          `INSERT INTO optimizer_cache (id, cache_key, candle_data, created_at)
+           VALUES (2, $1, $2, $3)
+           ON CONFLICT (id) DO UPDATE SET cache_key = $1, candle_data = $2, created_at = $3`,
+          ['round1_results', JSON.stringify(results.slice(0, 20)), Date.now()]
+        );
+        sendLog(`Round 1 partial results saved (${results.length} viable)`);
+      } catch (_) {}
     }
     // Show top 5 from grid search
     const gridSorted = [...results].sort((a,b) => b.winRate-a.winRate || b.totalPnl-a.totalPnl);
@@ -2463,6 +2482,7 @@ router.post('/ai-optimize', async (req, res) => {
         if (s.trades > 0) {
           mutations.push({ strategy:'Genetic', risk:`Gen${gen+1}`, combo:`Genetic Gen${gen+1}`, settings:child, ...s });
         }
+        await yieldTick();
       }
     } catch (r2Err) {
       sendLog(`Round 2 error: ${r2Err.message}`);
