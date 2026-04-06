@@ -1320,18 +1320,25 @@ async function syncTradeStatus() {
               let curPrice;
               try {
                 const fetch = require('node-fetch');
-                const tickerRes = await fetch(`https://fapi.binance.com/fapi/v1/ticker/price?symbol=${trade.symbol}`);
+                const tickerRes = await fetch(
+                  `https://fapi.binance.com/fapi/v1/ticker/price?symbol=${trade.symbol}`,
+                  { timeout: 5000, ...getFetchOptions() }
+                );
                 const tickerData = await tickerRes.json();
                 curPrice = parseFloat(tickerData.price);
-              } catch (_) {
+                if (!curPrice || isNaN(curPrice)) throw new Error('Invalid price from Binance');
+              } catch (priceErr) {
+                bLog.error(`Bitunix trailing: Binance price fetch failed for ${trade.symbol}: ${priceErr.message}`);
                 // Fallback: use markPrice or PnL calc
                 if (exchangePos.markPrice) {
                   curPrice = exchangePos.markPrice;
+                  bLog.trade(`Bitunix trailing: using markPrice fallback $${curPrice}`);
                 } else {
                   const absAmt = Math.abs(exchangePos.amt) || 1;
                   curPrice = isLong
                     ? entryPrice + (exchangePos.pnl / absAmt)
                     : entryPrice - (exchangePos.pnl / absAmt);
+                  bLog.trade(`Bitunix trailing: using PnL calc fallback $${curPrice} (pnl=${exchangePos.pnl}, amt=${exchangePos.amt})`);
                 }
               }
               const profitPct = isLong
