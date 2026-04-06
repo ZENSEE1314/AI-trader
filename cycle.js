@@ -280,22 +280,25 @@ async function updateStopLoss(client, symbol, newSlPrice, closeSide, platform, p
 // 1%→+0.5%, 2.5%→+0.5%, 5%→+2%
 // 10%→+3%, 13%→+6%, 16%→+9%, 19%→+12%   (3% steps, 7% gap)
 // 20%→+15%, 25%→+20%, 30%→+25%, ...      (5% steps, 5% gap)
-function calculateTrailingStep(entryPrice, currentPrice, isLong, lastStep) {
-  const profitPct = isLong
+function calculateTrailingStep(entryPrice, currentPrice, isLong, lastStep, leverage = 20) {
+  const pricePct = isLong
     ? (currentPrice - entryPrice) / entryPrice
     : (entryPrice - currentPrice) / entryPrice;
+
+  // Tiers are in capital %, convert price move to capital profit
+  const capitalPct = pricePct * leverage;
 
   const { FIXED_TIERS, HIGH_START, HIGH_STEP, HIGH_GAP } = TRAILING_SL;
   let bestSl = null;
 
-  // Phase 1: Fixed tiers (1% through 20%)
+  // Phase 1: Fixed tiers (1% through 20% capital)
   for (const tier of FIXED_TIERS) {
-    if (profitPct >= tier.trigger) bestSl = tier.sl;
+    if (capitalPct >= tier.trigger) bestSl = tier.sl;
   }
 
-  // Phase 2: 25%+ — trigger every 5%, SL = trigger - 2%
-  if (profitPct >= HIGH_START) {
-    const stepsReached = Math.floor((profitPct - HIGH_START) / HIGH_STEP);
+  // Phase 2: 25%+ capital — trigger every 5%, SL = trigger - 2%
+  if (capitalPct >= HIGH_START) {
+    const stepsReached = Math.floor((capitalPct - HIGH_START) / HIGH_STEP);
     const trigger = HIGH_START + stepsReached * HIGH_STEP;
     const sl = trigger - HIGH_GAP;
     if (sl > (bestSl || 0)) bestSl = sl;
@@ -304,9 +307,11 @@ function calculateTrailingStep(entryPrice, currentPrice, isLong, lastStep) {
   if (bestSl === null) return null;
   if (bestSl <= lastStep) return null; // SL only moves up, never down
 
+  // Convert capital % back to price distance
+  const slPricePct = bestSl / leverage;
   const newSlPrice = isLong
-    ? entryPrice * (1 + bestSl)
-    : entryPrice * (1 - bestSl);
+    ? entryPrice * (1 + slPricePct)
+    : entryPrice * (1 - slPricePct);
 
   return { stepped: true, newSlPrice, newLastStep: bestSl };
 }
@@ -484,6 +489,7 @@ async function openTrade(client, pick, wallet) {
     tf1m: pick.structure?.tf1 || null,
     trailingSlPrice: initialSlPrice,
     trailingSlLastStep: 0,
+    leverage,
   });
 
   return {
@@ -610,7 +616,8 @@ async function checkTrailingStop(client) {
       // ── Trailing SL step check ──
       const trailResult = calculateTrailingStep(
         state.entry, cur, state.isLong,
-        state.trailingSlLastStep || 0
+        state.trailingSlLastStep || 0,
+        state.leverage || 20
       );
 
       if (trailResult) {
@@ -1282,7 +1289,8 @@ async function syncTradeStatus() {
                 ? entryPrice + (exchangePos.pnl / absAmt)
                 : entryPrice - (exchangePos.pnl / absAmt);
               const lastStep = parseFloat(trade.trailing_sl_last_step) || 0;
-              const trailResult = calculateTrailingStep(entryPrice, curPrice, isLong, lastStep);
+              const tradeLev = parseFloat(trade.leverage) || 20;
+              const trailResult = calculateTrailingStep(entryPrice, curPrice, isLong, lastStep, tradeLev);
               if (trailResult) {
                 const closeSide = isLong ? 'SELL' : 'BUY';
                 try {
@@ -1347,8 +1355,10 @@ async function syncTradeStatus() {
                 ? (curPrice - entryPrice) / entryPrice
                 : (entryPrice - curPrice) / entryPrice;
               const lastStep = parseFloat(trade.trailing_sl_last_step) || 0;
-              bLog.trade(`Bitunix trailing: ${trade.symbol} entry=$${entryPrice} cur=$${curPrice} profit=${(profitPct*100).toFixed(2)}% lastStep=${(lastStep*100).toFixed(1)}%`);
-              const trailResult = calculateTrailingStep(entryPrice, curPrice, isLong, lastStep);
+              const tradeLev = parseFloat(trade.leverage) || 20;
+              const capitalPct = profitPct * tradeLev;
+              bLog.trade(`Bitunix trailing: ${trade.symbol} entry=$${entryPrice} cur=$${curPrice} pricePct=${(profitPct*100).toFixed(3)}% capitalPct=${(capitalPct*100).toFixed(2)}% lev=${tradeLev}x lastStep=${(lastStep*100).toFixed(1)}%`);
+              const trailResult = calculateTrailingStep(entryPrice, curPrice, isLong, lastStep, tradeLev);
               if (trailResult) {
                 try {
                   const existingTp = parseFloat(trade.tp_price) || 0;
