@@ -30,13 +30,14 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/css/tokens.css">
-  <link rel="stylesheet" href="/css/style.css?v=20260405g">
+  <link rel="stylesheet" href="/css/style.css?v=20260406a">
 
   <link rel="icon" href="/img/logo.jpeg" type="image/jpeg">
   <style>
-    .tip-btn{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;border-radius:50%;background:var(--color-border-muted);color:var(--color-text-muted);font-size:0.6rem;font-weight:700;cursor:help;position:relative;margin-left:4px;vertical-align:middle;flex-shrink:0;}
+    .tip-btn{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;border-radius:50%;background:rgba(0,229,255,0.1);color:var(--color-accent);font-size:0.6rem;font-weight:700;cursor:help;position:relative;margin-left:4px;vertical-align:middle;flex-shrink:0;border:1px solid rgba(0,229,255,0.15);transition:box-shadow 0.15s ease;}
+    .tip-btn:hover{box-shadow:0 0 8px rgba(0,229,255,0.2);}
     .tip-btn:hover .tip-text{display:block;}
-    .tip-text{display:none;position:absolute;bottom:calc(100% + 6px);left:50%;transform:translateX(-50%);background:var(--color-bg-raised);border:1px solid var(--color-border-muted);color:var(--color-text);font-size:0.72rem;font-weight:400;padding:8px 12px;border-radius:var(--radius-md);white-space:normal;width:200px;z-index:100;box-shadow:0 4px 12px rgba(0,0,0,0.2);line-height:1.4;text-align:left;}
+    .tip-text{display:none;position:absolute;bottom:calc(100% + 6px);left:50%;transform:translateX(-50%);background:var(--color-bg-raised);border:1px solid rgba(0,229,255,0.1);color:var(--color-text);font-size:0.72rem;font-weight:400;padding:8px 12px;border-radius:var(--radius-md);white-space:normal;width:200px;z-index:100;box-shadow:0 4px 20px rgba(0,0,0,0.5),0 0 16px rgba(0,229,255,0.05);line-height:1.4;text-align:left;backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);}
   </style>
 </head>
 
