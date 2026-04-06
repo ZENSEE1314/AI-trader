@@ -1090,7 +1090,13 @@ router.post('/fix-bitunix-pnl', async (req, res) => {
       return { requestOptions: { agent: new HttpsProxyAgent(PROXY_URL) } };
     };
 
-    // Find all trades that need syncing (OPEN, $0 PnL, or NULL exit)
+    // Step 1: Delete ERROR trades (never executed on exchange — no data to sync)
+    const errorDeleted = await query(
+      `DELETE FROM trades WHERE status = 'ERROR' OR (entry_price IS NULL AND exit_price IS NULL) RETURNING id`
+    );
+    const errorCount = errorDeleted.length;
+
+    // Step 2: Find trades that need syncing (OPEN, $0 PnL, or NULL exit)
     const badTrades = await query(
       `SELECT t.*, ak.api_key_enc, ak.iv, ak.auth_tag,
               ak.api_secret_enc, ak.secret_iv, ak.secret_auth_tag,
@@ -1104,7 +1110,8 @@ router.post('/fix-bitunix-pnl', async (req, res) => {
        LIMIT 100`
     );
 
-    if (!badTrades.length) return res.json({ ok: true, fixed: 0, message: 'No trades to fix' });
+    if (!badTrades.length && errorCount === 0) return res.json({ ok: true, fixed: 0, errors_deleted: 0, message: 'No trades to fix' });
+    if (!badTrades.length) return res.json({ ok: true, fixed: 0, errors_deleted: errorCount, message: `Deleted ${errorCount} ERROR trades` });
 
     const results = [];
     for (const trade of badTrades) {
@@ -1251,7 +1258,7 @@ router.post('/fix-bitunix-pnl', async (req, res) => {
       }
     }
 
-    res.json({ ok: true, fixed: results.length, results });
+    res.json({ ok: true, fixed: results.length, errors_deleted: errorCount, results });
   } catch (err) {
     console.error('Fix trade sync error:', err.message);
     res.status(500).json({ error: 'Server error' });
