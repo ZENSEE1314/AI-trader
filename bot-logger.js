@@ -67,10 +67,23 @@ function extractResult(message) {
   return null;
 }
 
+const TIMEZONE = 'Asia/Singapore';
+
+function toLocalTime(date) {
+  return date.toLocaleString('en-GB', {
+    timeZone: TIMEZONE,
+    day: '2-digit', month: 'short', year: 'numeric',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+    hour12: false,
+  });
+}
+
 function addLog(category, message, data = null, userId = null) {
+  const now = new Date();
   const entry = {
     id: Date.now() + Math.random(),
-    ts: new Date().toISOString(),
+    ts: now.toISOString(),
+    tsLocal: toLocalTime(now),
     category,
     message,
     data,
@@ -81,9 +94,9 @@ function addLog(category, message, data = null, userId = null) {
   memoryLogs.push(entry);
   if (memoryLogs.length > MAX_MEMORY_LOGS) memoryLogs.shift();
 
-  // Console output
+  // Console output in Singapore time
   const tag = category.toUpperCase().padEnd(9);
-  console.log(`[${entry.ts.slice(11, 19)}] [${tag}] ${message}`);
+  console.log(`[${entry.tsLocal}] [${tag}] ${message}`);
 
   // Persist to PostgreSQL (non-blocking)
   if (dbReady) {
