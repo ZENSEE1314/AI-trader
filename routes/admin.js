@@ -1944,21 +1944,18 @@ router.post('/ai-optimize', async (req, res) => {
 
     // Bitunix kline API — public, max 200 per page
     // Returns Binance-compatible arrays: [time, open, high, low, close, volume]
-    const AbortController = globalThis.AbortController || require('abort-controller');
-    async function fetchK(symbol, interval, limit, coinAbort) {
+    async function fetchK(symbol, interval, limit) {
       const PAGE = 200;
       let all = [];
       let et = endTime;
       let remaining = limit;
       let pages = 0;
       while (remaining > 0 && pages < 8) {
-        if (coinAbort && coinAbort.aborted) break;
         pages++;
         const batch = Math.min(remaining, PAGE);
         const url = `https://fapi.bitunix.com/api/v1/futures/market/kline?symbol=${symbol}&interval=${interval}&limit=${batch}&endTime=${et}`;
         try {
-          const opts = { timeout: 4000, ...getFetchOptions() };
-          if (coinAbort) opts.signal = coinAbort;
+          const opts = { timeout: 8000, ...getFetchOptions() };
           const r = await fetch(url, opts);
           if (!r.ok) break;
           const json = await r.json();
@@ -1972,7 +1969,7 @@ router.post('/ai-optimize', async (req, res) => {
           et = earliest - 1;
           remaining -= json.data.length;
           if (json.data.length < batch) break;
-          await new Promise(r => setTimeout(r, 60));
+          await new Promise(r => setTimeout(r, 150));
         } catch { break; }
       }
       all.sort((a, b) => a[0] - b[0]);
@@ -2077,20 +2074,15 @@ router.post('/ai-optimize', async (req, res) => {
       const k1hLimit = Math.ceil(DAYS * 24) + 50;
       const failedCoins = [];
 
-      // Fetch ONE coin at a time — avoids Bitunix rate limit stalls
+      // Fetch ONE coin at a time, ONE timeframe at a time — avoids Bitunix rate limits
       for (let i = 0; i < topCoins.length; i++) {
         const sym = topCoins[i];
-        const ac = new AbortController();
-        const timer = setTimeout(() => ac.abort(), 20000);
         try {
-          const [kD,k4h,k1h,k15,k1] = await Promise.all([
-            fetchK(sym,'1d',Math.max(10,DAYS+2),ac.signal),
-            fetchK(sym,'4h',k4hLimit,ac.signal),
-            fetchK(sym,'1h',k1hLimit,ac.signal),
-            fetchK(sym,'15m',k15Limit,ac.signal),
-            fetchK(sym,'1m',1500,ac.signal),
-          ]);
-          clearTimeout(timer);
+          const kD = await fetchK(sym,'1d',Math.max(10,DAYS+2));
+          const k4h = await fetchK(sym,'4h',k4hLimit);
+          const k1h = await fetchK(sym,'1h',k1hLimit);
+          const k15 = await fetchK(sym,'15m',k15Limit);
+          const k1 = await fetchK(sym,'1m',1500);
           if (kD&&k4h&&k1h&&k15) {
             coinData[sym] = { kD, k4h, k1h, k15, k1:k1||[] };
             sendLog(`  ✅ ${sym}`);
@@ -2099,11 +2091,12 @@ router.post('/ai-optimize', async (req, res) => {
             const missing = [!kD&&'1d',!k4h&&'4h',!k1h&&'1h',!k15&&'15m'].filter(Boolean).join(',');
             sendLog(`  ❌ ${sym} — missing ${missing}`);
           }
-        } catch {
-          clearTimeout(timer);
+        } catch (fetchErr) {
           failedCoins.push(sym);
-          sendLog(`  ❌ ${sym} — timeout`);
+          sendLog(`  ❌ ${sym} — ${fetchErr.message || 'timeout'}`);
         }
+        // Delay between tokens to avoid rate limits
+        if (i < topCoins.length - 1) await new Promise(r => setTimeout(r, 200));
         if ((i+1) % 5 === 0 || i === topCoins.length - 1) {
           sendLog(`  ${i+1}/${topCoins.length} done (${Object.keys(coinData).length} OK)`);
           sendProgress('fetch', Math.round((i+1)/topCoins.length*100));
