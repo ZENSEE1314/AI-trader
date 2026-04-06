@@ -36,21 +36,22 @@ const CONFIG = {
 };
 
 // ── Trailing SL config ─────────────────────────────────────
-// Fixed tiers up to 20%, then 5% steps from 25% (gap 2%)
+// All values are CAPITAL % (divide by leverage for price %).
+// Tiers are wide enough that SL profit > fees at any leverage.
+// Fee reference: taker 0.04% × 2 sides × leverage = capital cost
+//   20x → 1.6% fees | 50x → 4% fees | 100x → 8% fees
 const TRAILING_SL = {
   INITIAL_SL_PCT: 0.03,          // -3% initial SL from entry
   FIXED_TIERS: [
-    { trigger: 0.01,  sl: 0.005 },  //  +1%   → SL at +0.5%  (gap 0.5%)
-    { trigger: 0.025, sl: 0.02  },  //  +2.5% → SL at +2%    (gap 0.5%)
-    { trigger: 0.05,  sl: 0.03  },  //  +5%   → SL at +3%    (gap 2%)
-    { trigger: 0.08,  sl: 0.06  },  //  +8%   → SL at +6%    (gap 2%)
-    { trigger: 0.10,  sl: 0.08  },  //  +10%  → SL at +8%    (gap 2%)
-    { trigger: 0.13,  sl: 0.10  },  //  +13%  → SL at +10%   (gap 3%)
-    { trigger: 0.16,  sl: 0.13  },  //  +16%  → SL at +13%   (gap 3%)
-    { trigger: 0.20,  sl: 0.19  },  //  +20%  → SL at +19%   (gap 1%)
+    { trigger: 0.10,  sl: 0.05  },  //  +10%  → SL at +5%   (gap 5%)  — first lock well above fees
+    { trigger: 0.15,  sl: 0.10  },  //  +15%  → SL at +10%  (gap 5%)
+    { trigger: 0.20,  sl: 0.15  },  //  +20%  → SL at +15%  (gap 5%)
+    { trigger: 0.30,  sl: 0.24  },  //  +30%  → SL at +24%  (gap 6%)
+    { trigger: 0.40,  sl: 0.34  },  //  +40%  → SL at +34%  (gap 6%)
+    { trigger: 0.50,  sl: 0.44  },  //  +50%  → SL at +44%  (gap 6%)
   ],
-  // 25%+: trigger every 5%, SL = trigger - 2%
-  HIGH_START: 0.25, HIGH_STEP: 0.05, HIGH_GAP: 0.02,
+  // 60%+: trigger every 10%, SL = trigger - 5%
+  HIGH_START: 0.60, HIGH_STEP: 0.10, HIGH_GAP: 0.05,
 };
 
 // ── Compound: always use current wallet balance ─────────────
@@ -311,12 +312,12 @@ function calculateTrailingStep(entryPrice, currentPrice, isLong, lastStep, lever
   const { FIXED_TIERS, HIGH_START, HIGH_STEP, HIGH_GAP } = TRAILING_SL;
   let bestSl = null;
 
-  // Phase 1: Fixed tiers (1% through 20% capital)
+  // Phase 1: Fixed tiers (10% through 50% capital)
   for (const tier of FIXED_TIERS) {
     if (capitalPct >= tier.trigger) bestSl = tier.sl;
   }
 
-  // Phase 2: 25%+ capital — trigger every 5%, SL = trigger - 2%
+  // Phase 2: 60%+ capital — trigger every 10%, SL = trigger - 5%
   if (capitalPct >= HIGH_START) {
     const stepsReached = Math.floor((capitalPct - HIGH_START) / HIGH_STEP);
     const trigger = HIGH_START + stepsReached * HIGH_STEP;
