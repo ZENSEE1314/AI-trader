@@ -518,15 +518,7 @@ async function scanSMC(log, opts = {}) {
     return [];
   }
 
-  if (!isGoodTradingSession()) {
-    const sessionW = await aiLearner.getSessionWeight();
-    if (sessionW < 1.2) {
-      log('Refined: Dead zone (UTC 4-5). Skipping.');
-      bLog.scan('Dead zone hours. Waiting for volume.');
-      return [];
-    }
-    bLog.ai(`AI override: session weight ${sessionW.toFixed(2)} > 1.2 — scanning in dead zone`);
-  }
+  // Dead zone removed — trade 24/7
 
   const tickers = await fetchTickers();
   if (!tickers.length) { bLog.error('Failed to fetch tickers'); return []; }
