@@ -2157,7 +2157,9 @@ router.post('/ai-optimize', async (req, res) => {
         finalWallet:parseFloat(r.wallet.toFixed(2)), maxDrawdown:parseFloat((maxDD*100).toFixed(1)) };
     }
 
-    const FIXED_RISK = { slPct: 0.03, tpPct: 0, trailStep: 0.012, leverage: 20, riskPct: 0.10, maxPos: 5, maxConsecLoss: 0 };
+    // SL/trailing matches cycle.js: -20% capital initial, 15% gap, triggers at +30/+50/then every +25%
+    // slPct = INITIAL_SL_PCT / leverage = 0.20 / 20 = 0.01 price
+    const FIXED_RISK = { slPct: 0.01, tpPct: 0, trailStep: 0.015, trailTrigger: 0.015, leverage: 20, riskPct: 0.10, maxPos: 5, maxConsecLoss: 0 };
 
     function evaluate(strategyCfg) {
       const cfg = { ...strategyCfg, ...FIXED_RISK };
@@ -2181,7 +2183,7 @@ router.post('/ai-optimize', async (req, res) => {
         const NEED_VOL = cfg.requireVolSpike !== undefined ? !!cfg.requireVolSpike : false;
         const VOL_MULT = cfg.volSpikeMultiplier || 1.5;
         for (let step=0; step<timeSteps.length; step++) {
-          if (step % 100 === 0 && step > 0) await yieldTick();
+          if (step % 50 === 0 && step > 0) await yieldTick();
           const now = timeSteps[step];
           for (const sym of coinKeys) {
             const data = coinData[sym];
@@ -2258,7 +2260,7 @@ router.post('/ai-optimize', async (req, res) => {
       const NEED_VOL = cfg.requireVolSpike !== undefined ? !!cfg.requireVolSpike : false;
       const VOL_MULT = cfg.volSpikeMultiplier || 1.5;
       for (let step=0; step<timeSteps.length; step++) {
-        if (step % 100 === 0 && step > 0) await yieldTick();
+        if (step % 50 === 0 && step > 0) await yieldTick();
         const now = timeSteps[step];
         for (const sym of coinKeys) {
           const data = coinData[sym];

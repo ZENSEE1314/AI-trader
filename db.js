@@ -338,14 +338,14 @@ async function initAllTables() {
 
   // Seed approved tokens (admin can add/remove via dashboard)
   const approvedTokens = [
-    // Major coins
+    // Major coins (use Binance futures symbols: 1000PEPE, 1000SHIB, POL not MATIC)
     'BTCUSDT','ETHUSDT','SOLUSDT','BNBUSDT','XRPUSDT','DOGEUSDT','ADAUSDT',
-    'AVAXUSDT','DOTUSDT','LINKUSDT','MATICUSDT','UNIUSDT','LTCUSDT','NEARUSDT',
-    'SUIUSDT','PEPEUSDT','SHIBUSDT','TONUSDT','TRXUSDT','ICPUSDT',
+    'AVAXUSDT','DOTUSDT','LINKUSDT','POLUSDT','UNIUSDT','LTCUSDT','NEARUSDT',
+    'SUIUSDT','1000PEPEUSDT','1000SHIBUSDT','TONUSDT','TRXUSDT','ICPUSDT',
     // Mid caps
     '1000BONKUSDT','CAKEUSDT','ZROUSDT','VIRTUALUSDT','DEXEUSDT','PENGUUSDT',
     'STXUSDT','SEIUSDT','APTUSDT','FLRUSDT','FILUSDT','VETUSDT',
-    'JUPUSDT','ARBUSDT','FETUSDT','POLUSDT','RENDERUSDT','KASUSDT','ATOMUSDT',
+    'JUPUSDT','ARBUSDT','FETUSDT','RENDERUSDT','KASUSDT','ATOMUSDT',
     'WLDUSDT','MORPHOUSDT','ENAUSDT','TRUMPUSDT',
   ];
   for (const symbol of approvedTokens) {
@@ -355,6 +355,12 @@ async function initAllTables() {
         [symbol]
       );
     } catch (_) {}
+  }
+
+  // Clean up wrong symbols (renamed/delisted)
+  const badSymbols = ['MATICUSDT', 'PEPEUSDT', 'SHIBUSDT', 'STABLEUSDT', 'NIGHTUSDT'];
+  for (const sym of badSymbols) {
+    try { await pool.query('DELETE FROM global_token_settings WHERE symbol = $1', [sym]); } catch (_) {}
   }
 
   console.log('[DB] All tables verified');
