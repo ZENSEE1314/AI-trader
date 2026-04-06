@@ -1090,7 +1090,8 @@
       if (status.usdt_address) {
         $('#cw-usdt-addr').value = status.usdt_address;
         $('#cw-usdt-net').value = status.usdt_network || 'BEP20';
-        $('#cw-wd-address-display').textContent = `Sending to: ${status.usdt_address.slice(0, 10)}...${status.usdt_address.slice(-6)} (${status.usdt_network})`;
+        const addr = status.usdt_address || '';
+        $('#cw-wd-address-display').textContent = addr ? `Sending to: ${addr.slice(0, 10)}...${addr.slice(-6)} (${status.usdt_network || 'BEP20'})` : '';
       }
 
       // Referral details from dashboard endpoint
@@ -1111,7 +1112,7 @@
             <thead><tr><th>Referral</th><th>Joined</th><th>Commission Earned</th></tr></thead>
             <tbody>${referrals.map(r => {
               const comm = parseFloat(r.commission) || 0;
-              const emailShort = r.email.length > 20 ? r.email.slice(0, 8) + '...' + r.email.slice(r.email.indexOf('@')) : r.email;
+              const emailShort = (r.email || '').length > 20 ? r.email.slice(0, 8) + '...' + r.email.slice(r.email.indexOf('@')) : (r.email || '--');
               return `<tr>
                 <td>${escapeHtml(emailShort)}</td>
                 <td>${formatDate(r.joined)}</td>
@@ -1162,7 +1163,7 @@
                 const amt = parseFloat(w.amount) || 0;
                 const statusColor = w.status === 'completed' ? 'var(--color-success)' : w.status === 'pending' ? '#f59e0b' : 'var(--color-text-muted)';
                 const addr = w.usdt_address || w.bank_name || '-';
-                const addrShort = addr.length > 20 ? addr.slice(0, 10) + '...' + addr.slice(-6) : addr;
+                const addrShort = (addr || '').length > 20 ? addr.slice(0, 10) + '...' + addr.slice(-6) : (addr || '--');
                 return `<tr>
                   <td>${formatDate(w.created_at)}</td>
                   <td class="text-mono">$${amt.toFixed(2)}</td>
@@ -1243,16 +1244,14 @@
   async function loadAdmin() {
     if (!state.user?.is_admin) return;
     try {
-      const [users, subs, wds, settings, weeklyEarnings] = await Promise.all([
+      const [users, wds, settings, weeklyEarnings] = await Promise.all([
         api('GET', '/api/admin/users'),
-        api('GET', '/api/admin/subscriptions'),
         api('GET', '/api/admin/withdrawals'),
         api('GET', '/api/admin/settings'),
         api('GET', '/api/admin/weekly-earnings').catch(() => null),
       ]);
       loadAiVersions().catch(() => {});
       renderAdminUsers(users);
-      renderAdminSubs(subs);
       renderAdminWithdrawals(wds);
       if (weeklyEarnings) renderAdminWeeklyEarnings(weeklyEarnings);
       // Fill settings fields
@@ -1519,7 +1518,7 @@
       // Daily trade count breakdown
       const dailyCounts = {};
       for (const t of s.trades) {
-        const day = t.date.slice(0, 10);
+        const day = (t.date || '').slice(0, 10);
         dailyCounts[day] = (dailyCounts[day] || 0) + 1;
       }
       output += '─── Daily Trades ──────────────────────────────\n';
