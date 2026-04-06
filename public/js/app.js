@@ -1610,76 +1610,46 @@
 
       if (!finalData) { if (resultEl) resultEl.textContent = logs + '\nNo results received.'; return; }
 
-      // Build final output from result data
+      // Build final output from bitmask combo result
       const data = finalData;
-      const R = data.results || [];
+      const combos = data.allCombos || [];
       let output = '═══════════════════════════════════════════════════════════════════════════════════════════════════════\n';
-      output += '  ⚛️🧠 QUANTUM-INSPIRED AI OPTIMIZATION (Strategy Only)\n';
-      output += `  Period: ${data.period} | Tokens: ${data.coinsScanned} (admin-allowed)${data.cachedData ? ' [CACHED]' : ''}\n`;
-      output += `  Parameters: ${data.paramsSearched||13} strategy params (risk is user-set)\n`;
-      output += `  Round 1: ${data.round1Combos} strategy presets\n`;
-      output += `  Round 2: ${data.round2Genetic} genetic offspring\n`;
-      const qs = data.quantumStats || {};
-      output += `  Round 3: ${data.round3Quantum||0} quantum — QAOA:${qs.qaoaCount||0} SPSA:${qs.spsaCount||0} Anneal:${qs.annealCount||0}\n`;
-      output += `  Total: ${data.totalCombos} combinations tested ⚛️\n`;
-      if (data.riskNote) output += `  ℹ️ ${data.riskNote}\n`;
+      output += '  ⚛️ QUANTUM AI — BITMASK COMBO OPTIMIZER\n';
+      output += `  Phase: ${data.phase || 'exploring'} | Explored: ${data.exploration?.explored || 0}/${data.exploration?.total || 15}\n`;
+      output += `  Active: #${data.activeCombo} (${data.comboName})\n`;
+      const strats = data.strategies || {};
+      const enabledList = Object.entries(strats).filter(([,v]) => v).map(([k]) => k).join(', ');
+      output += `  Enabled: ${enabledList}\n`;
       output += '═══════════════════════════════════════════════════════════════════════════════════════════════════════\n\n';
 
-      // ── Top 10 Overall ──
-      output += '── TOP 10 BEST STRATEGIES ────────────────────────────────────────────────────────────────────────\n';
-      output += '#   | Strategy       | Trades |  W / L  | WR%    | P&L        | MaxDD  | Strategy Params\n';
-      output += '─'.repeat(120) + '\n';
-      for (let i = 0; i < Math.min(10, R.length); i++) {
-        const r = R[i], s = r.settings || {};
-        const medal = i===0?'🥇':i===1?'🥈':i===2?'🥉':`#${i+1}`;
-        const pnl = (r.totalPnl>=0?'+':'')+`$${r.totalPnl.toFixed(2)}`;
-        const htf = s.requireBothHTF!==undefined ? (s.requireBothHTF?'both':'either') : '?';
-        const kl = s.requireKeyLevel!==undefined ? (s.requireKeyLevel?'Y':'N') : '?';
-        const c1m = s.require1m!==undefined ? (s.require1m?'Y':'N') : '?';
-        const c15 = s.require15m!==undefined ? (s.require15m?'Y':'N') : '?';
-        const vol = s.requireVolSpike!==undefined ? (s.requireVolSpike?`${(s.volSpikeMultiplier||1.5).toFixed(1)}x`:'N') : '?';
-        const stratStr = `sw:${s.swingLen4h||10}/${s.swingLen1h||10}/${s.swingLen15m||10}/${s.swingLen1m||5} HTF:${htf} KL:${kl} 15m:${c15} 1m:${c1m} Vol:${vol}`;
-        output += `${String(medal).padEnd(4)}| ${(r.combo||'').padEnd(15)}| ${String(r.trades).padStart(6)} | ${String(r.wins+'W/'+r.losses+'L').padEnd(7)} | ${String(r.winRate+'%').padStart(6)} | ${pnl.padStart(10)} | ${String(r.maxDrawdown+'%').padStart(5)}  | ${stratStr}\n`;
+      // ── Combo Leaderboard ──
+      output += '── STRATEGY COMBO LEADERBOARD ─────────────────────────────────────────────────────\n';
+      output += '#    | Combo                          | Trades |  WR%   | Avg PnL  | Score  | Status\n';
+      output += '─'.repeat(95) + '\n';
+      for (let i = 0; i < combos.length; i++) {
+        const c = combos[i];
+        const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `#${i+1}`;
+        const wr = (c.winRate * 100).toFixed(0);
+        const pnl = c.avgPnl >= 0 ? `+${c.avgPnl.toFixed(2)}%` : `${c.avgPnl.toFixed(2)}%`;
+        let status = '';
+        if (c.active) status = '← ACTIVE';
+        if (c.locked) status += ' [LOCKED]';
+        output += `${String(medal).padEnd(5)}| ${c.name.padEnd(31)}| ${String(c.trades).padStart(6)} | ${String(wr + '%').padStart(6)} | ${pnl.padStart(8)} | ${c.score.toFixed(3).padStart(6)} | ${status}\n`;
       }
 
-      // ── Per-token scores ──
-      const tokens = data.tokenScores || [];
-      if (tokens.length) {
-        output += '\n── TOKEN SCORES (Best Strategy Applied) ──────────────────────────────────────────\n';
-        output += `  ${data.tokenSummary || ''}\n\n`;
-        output += 'Symbol          | Rating    | Trades | W / L   | WR%    | P&L\n';
-        output += '─'.repeat(80) + '\n';
-        for (const t of tokens) {
-          const icon = t.rating==='Good'?'✅':t.rating==='OK'?'⚠️':t.rating==='Bad'?'❌':'⬜';
-          const pnl = t.trades > 0 ? ((t.totalPnl>=0?'+':'')+`$${t.totalPnl.toFixed(2)}`) : '--';
-          const wl = t.trades > 0 ? `${t.wins}W/${t.losses}L` : '--';
-          const wr = t.trades > 0 ? `${t.winRate}%` : '--';
-          output += `${icon} ${t.symbol.padEnd(14)}| ${t.rating.padEnd(10)}| ${String(t.trades).padStart(6)} | ${wl.padEnd(7)} | ${wr.padStart(6)} | ${pnl}\n`;
+      output += '\n';
+      if (combos.every(c => c.trades === 0)) {
+        output += '  ⏳ No trades yet — the bot will collect data as it trades.\n';
+        output += '  The optimizer will auto-switch to the best combo after 20+ trades per combo.\n';
+        output += '  Currently running ALL strategies (#15) as default.\n';
+      } else {
+        const explored = combos.filter(c => c.trades >= 20).length;
+        const remaining = 15 - explored;
+        if (remaining > 0) {
+          output += `  📊 ${explored}/15 combos have enough data (20+ trades). ${remaining} still exploring.\n`;
+        } else {
+          output += '  ✅ All combos explored! Optimizer is now auto-selecting the best performer.\n';
         }
-        const badList = tokens.filter(t => t.rating === 'Bad' || t.rating === 'No Trades');
-        if (badList.length) {
-          output += `\n  💡 Consider removing: ${badList.map(t=>t.symbol).join(', ')}\n`;
-        }
-      }
-
-      // ── Strategy leaderboard ──
-      output += '\n── STRATEGY LEADERBOARD ──────────────────────────────────────────────────────────\n';
-      const strats = [...new Set(R.map(r=>r.strategy))];
-      for (const strat of strats) {
-        const stratResults = R.filter(r=>r.strategy===strat);
-        const best = stratResults[0];
-        if (!best || best.trades === 0) continue;
-        const pnl = (best.totalPnl>=0?'+':'')+`$${best.totalPnl.toFixed(2)}`;
-        output += `  ${strat.padEnd(20)} | ${best.trades} trades | ${best.winRate}% WR | ${pnl}\n`;
-      }
-
-      // ── Saved versions ──
-      if (data.saved && data.saved.length) {
-        output += '\n── SAVED AS AI VERSIONS ───────────────────────────────────────────────────────────\n';
-        for (const s of data.saved) {
-          output += `  ${s.rank===1?'🥇':s.rank===2?'🥈':'🥉'} ${s.version} → ${s.combo}\n`;
-        }
-        output += '\n  ✅ Top 3 saved! Refresh the AI Version dropdown to load them.\n';
       }
 
       // Show live log + final results
