@@ -2766,7 +2766,7 @@ router.post('/ai-optimize', async (req, res) => {
         sendLog(`  Inserting ${ver}: trades=${tradeCount} wr=${winRate} pnl=${totalPnl}`);
         await query(
           `INSERT INTO ai_versions (version, trade_count, win_rate, avg_pnl, total_pnl, params, setup_weights, avoided_coins, changes)
-           VALUES ($1, $2::int, $3::float, $4::float, $5::float, $6::text, $7::text, $8::text, $9::text)`,
+           VALUES ($1, $2::int, $3::float, $4::float, $5::float, $6::jsonb, $7::jsonb, $8::jsonb, $9::text)`,
           [String(ver), tradeCount, winRate, avgPnl, totalPnl,
            JSON.stringify(best.settings), '{}', '[]',
            `${medal} AI #${i+1}: ${best.combo} (${best.winRate}% WR, $${best.totalPnl} PnL, ${DAYS}d)`]);
