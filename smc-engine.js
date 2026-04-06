@@ -308,14 +308,14 @@ async function analyzeLHHL(ticker, params, dailyBiasCache) {
   // Load optimized strategy params from DB
   const sc = await getStrategyConfig() || {};
   const INDECISIVE_THRESH = sc.indecisiveThresh || 0.3;
-  const NEED_BOTH_HTF = sc.requireBothHTF !== undefined ? !!sc.requireBothHTF : true;
-  const NEED_KL = sc.requireKeyLevel !== undefined ? !!sc.requireKeyLevel : true;
+  const NEED_BOTH_HTF = sc.requireBothHTF !== undefined ? !!sc.requireBothHTF : false;
+  const NEED_KL = sc.requireKeyLevel !== undefined ? !!sc.requireKeyLevel : false;
   const NEED_15M = sc.require15m !== undefined ? !!sc.require15m : true;
   const NEED_1M = sc.require1m !== undefined ? !!sc.require1m : true;
   const NEED_VOL = sc.requireVolSpike !== undefined ? !!sc.requireVolSpike : false;
   const VOL_MULT = sc.volSpikeMultiplier || 1.5;
-  const KL_PROX = sc.keyLevelProximity || 0.003;
-  const MAX_ENTRY_AGE = sc.maxEntryAge || 25;
+  const KL_PROX = sc.keyLevelProximity || 0.005;
+  const MAX_ENTRY_AGE = sc.maxEntryAge || 30;
 
   // Step 1: Daily Bias
   let dailyInfo = dailyBiasCache.get(symbol);

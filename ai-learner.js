@@ -146,9 +146,6 @@ async function shouldAvoidCoin(symbol) {
 
 const DEFAULT_PARAMS = {
   // Capital-based SL/TP (smc-engine.js)
-  // SL = 30% of position margin → at 10x lev = 3% price move
-  // TP = 45% of position margin → at 10x lev = 4.5% price move
-  // RR = TP/SL = 1.5
   SL_MARGIN_PCT: 0.30,     // lose max 30% of position margin per trade
   TP_MARGIN_PCT: 0.45,     // target 45% of position margin per trade
   MIN_SCORE: 8,            // minimum confluence score
@@ -157,6 +154,20 @@ const DEFAULT_PARAMS = {
   WALLET_SIZE_PCT: 0.10,   // 10% of wallet per trade
   LEV_BTC_ETH: 100,        // BTC/ETH leverage
   LEV_ALT: 20,             // all altcoin leverage
+
+  // Strategy config (smc-engine.js uses these via getStrategyConfig)
+  requireBothHTF: false,    // only need 1 of 4H/1H aligned (true = both required)
+  requireKeyLevel: false,   // skip PDH/PDL/VWAP proximity check
+  require15m: true,         // 15M swing setup required
+  require1m: true,          // 1M entry confirmation required
+  requireVolSpike: false,   // volume spike filter off
+  maxEntryAge: 30,          // 1M swing must be within 30 candles
+  indecisiveThresh: 0.3,    // daily candle body/range ratio below this = indecisive
+  keyLevelProximity: 0.005, // 0.5% proximity to key levels (if enabled)
+  swingLen4h: 10,
+  swingLen1h: 10,
+  swingLen15m: 10,
+  swingLen1m: 5,
 };
 
 let _paramsCache = { data: null, ts: 0 };
@@ -176,6 +187,22 @@ async function getOptimalParams() {
   }
 
   const params = { ...DEFAULT_PARAMS };
+
+  // Preserve strategy config from latest saved version (admin may have tuned these)
+  try {
+    const prevRows = await query('SELECT params FROM ai_versions ORDER BY id DESC LIMIT 1');
+    if (prevRows.length && prevRows[0].params) {
+      const prev = typeof prevRows[0].params === 'string' ? JSON.parse(prevRows[0].params) : prevRows[0].params;
+      const strategyKeys = [
+        'requireBothHTF', 'requireKeyLevel', 'require15m', 'require1m',
+        'requireVolSpike', 'maxEntryAge', 'indecisiveThresh', 'keyLevelProximity',
+        'swingLen4h', 'swingLen1h', 'swingLen15m', 'swingLen1m',
+      ];
+      for (const key of strategyKeys) {
+        if (prev[key] !== undefined) params[key] = prev[key];
+      }
+    }
+  } catch (_) {}
 
   // ── 1. SL margin %: learn if 30% margin loss is right or needs adjustment ──
   const slMarginAnalysis = await query(
