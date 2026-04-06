@@ -175,7 +175,7 @@ async function initAllTables() {
       name VARCHAR(50) NOT NULL,
       description TEXT,
       tp_pct DECIMAL DEFAULT 0.045,
-      sl_pct DECIMAL DEFAULT 0.03,
+      sl_pct DECIMAL DEFAULT 0.20,
       max_consec_loss INTEGER DEFAULT 2,
       top_n_coins INTEGER DEFAULT 50,
       capital_percentage DECIMAL DEFAULT 10.0,
@@ -238,7 +238,7 @@ async function initAllTables() {
       allowed_coins TEXT DEFAULT '',
       banned_coins TEXT DEFAULT '',
       tp_pct DECIMAL DEFAULT 0.045,
-      sl_pct DECIMAL DEFAULT 0.03,
+      sl_pct DECIMAL DEFAULT 0.20,
       max_consec_loss INTEGER DEFAULT 2,
       top_n_coins INTEGER DEFAULT 50,
       created_at TIMESTAMPTZ DEFAULT NOW()

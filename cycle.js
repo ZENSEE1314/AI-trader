@@ -37,21 +37,18 @@ const CONFIG = {
 
 // ── Trailing SL config ─────────────────────────────────────
 // All values are CAPITAL % (divide by leverage for price %).
-// Tiers are wide enough that SL profit > fees at any leverage.
-// Fee reference: taker 0.04% × 2 sides × leverage = capital cost
-//   20x → 1.6% fees | 50x → 4% fees | 100x → 8% fees
+// Example: $1000 capital, 10% per trade = $100 trading.
+//   Initial SL = 20% of $100 = -$20 loss triggers SL.
+//   Trailing gap = 15%. At +30% ($30 profit) → SL locks at +15% ($15 profit).
 const TRAILING_SL = {
-  INITIAL_SL_PCT: 0.03,          // -3% initial SL from entry
+  INITIAL_SL_PCT: 0.20,           // -20% of trading capital
+  TRAILING_GAP: 0.15,             // SL always 15% behind current profit
   FIXED_TIERS: [
-    { trigger: 0.10,  sl: 0.05  },  //  +10%  → SL at +5%   (gap 5%)  — first lock well above fees
-    { trigger: 0.15,  sl: 0.10  },  //  +15%  → SL at +10%  (gap 5%)
-    { trigger: 0.20,  sl: 0.15  },  //  +20%  → SL at +15%  (gap 5%)
-    { trigger: 0.30,  sl: 0.24  },  //  +30%  → SL at +24%  (gap 6%)
-    { trigger: 0.40,  sl: 0.34  },  //  +40%  → SL at +34%  (gap 6%)
-    { trigger: 0.50,  sl: 0.44  },  //  +50%  → SL at +44%  (gap 6%)
+    { trigger: 0.30,  sl: 0.15  },  //  +30%  → SL at +15%  (gap 15%)
+    { trigger: 0.50,  sl: 0.35  },  //  +50%  → SL at +35%  (gap 15%)
   ],
-  // 60%+: trigger every 10%, SL = trigger - 5%
-  HIGH_START: 0.60, HIGH_STEP: 0.10, HIGH_GAP: 0.05,
+  // 50%+: trigger every 25%, SL = trigger - 15%
+  HIGH_START: 0.75, HIGH_STEP: 0.25, HIGH_GAP: 0.15,
 };
 
 // ── Compound: always use current wallet balance ─────────────
@@ -307,10 +304,10 @@ async function updateStopLoss(client, symbol, newSlPrice, closeSide, platform, p
   return false;
 }
 
-// ── TRAILING SL: Fixed tiers + 3% steps (10-19%) + 5% steps (20%+) ────
-// 1%→+0.5%, 2.5%→+0.5%, 5%→+2%
-// 10%→+3%, 13%→+6%, 16%→+9%, 19%→+12%   (3% steps, 7% gap)
-// 20%→+15%, 25%→+20%, 30%→+25%, ...      (5% steps, 5% gap)
+// ── TRAILING SL ────────────────────────────────────────────
+// Initial SL: -20% capital. Trailing: 15% gap behind profit.
+// Triggers at +30%, +50%, then every +25% (75%, 100%, 125%...)
+// SL always = trigger - 15%
 function calculateTrailingStep(entryPrice, currentPrice, isLong, lastStep, leverage = 20) {
   const pricePct = isLong
     ? (currentPrice - entryPrice) / entryPrice
@@ -322,12 +319,12 @@ function calculateTrailingStep(entryPrice, currentPrice, isLong, lastStep, lever
   const { FIXED_TIERS, HIGH_START, HIGH_STEP, HIGH_GAP } = TRAILING_SL;
   let bestSl = null;
 
-  // Phase 1: Fixed tiers (10% through 50% capital)
+  // Phase 1: Fixed tiers (+30% → +15%, +50% → +35%)
   for (const tier of FIXED_TIERS) {
     if (capitalPct >= tier.trigger) bestSl = tier.sl;
   }
 
-  // Phase 2: 60%+ capital — trigger every 10%, SL = trigger - 5%
+  // Phase 2: 75%+ capital — trigger every 25%, SL = trigger - 15%
   if (capitalPct >= HIGH_START) {
     const stepsReached = Math.floor((capitalPct - HIGH_START) / HIGH_STEP);
     const trigger = HIGH_START + stepsReached * HIGH_STEP;
@@ -1023,7 +1020,7 @@ async function executeForAllUsers(pick) {
         const walletSizePct = (await getCapitalPercentage(key.id)) / 100;
         const rawTP = parseFloat(key.tp_pct);
         const userTP = (isNaN(rawTP) || rawTP <= 0) ? 0.045 : rawTP;
-        const userSL = parseFloat(key.sl_pct) || 0.02;
+        const userSL = parseFloat(key.sl_pct) || 0.20;
         // Consecutive loss cooldown removed — let it run
 
         // Both SL and TP are capital %, convert to price distance using leverage
@@ -1199,8 +1196,9 @@ async function executeForAllUsers(pick) {
             const actualSlPrice = isLong
               ? actualEntry * (1 - actualSlPricePct)
               : actualEntry * (1 + actualSlPricePct);
+            const actualTpPricePct = userTP / userLev;
             const actualTpPrice = hasTp
-              ? (isLong ? actualEntry * (1 + userTP * 1.5) : actualEntry * (1 - userTP * 1.5))
+              ? (isLong ? actualEntry * (1 + actualTpPricePct * 1.5) : actualEntry * (1 - actualTpPricePct * 1.5))
               : 0;
             const slFmtActual = parseFloat(actualSlPrice.toFixed(8));
             const tpFmtActual = hasTp ? parseFloat(actualTpPrice.toFixed(8)) : 0;
