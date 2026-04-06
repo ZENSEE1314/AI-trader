@@ -1822,6 +1822,8 @@ router.post('/backtest', async (req, res) => {
 // ── AI Optimize: streaming NDJSON with candle cache ────
 // Quantum AI Optimizer — uses bitmask combo system (15 strategy combinations)
 router.post('/ai-optimize', async (req, res) => {
+  req.setTimeout(600000);
+  res.setTimeout(600000);
   res.setHeader('Content-Type', 'application/x-ndjson');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('X-Accel-Buffering', 'no');
@@ -1836,78 +1838,252 @@ router.post('/ai-optimize', async (req, res) => {
   res.on('close', () => clearInterval(keepalive));
 
   try {
+    const fetch = require('node-fetch');
     const quantumOptimizer = require('../quantum-optimizer');
+    const engine = require('../liquidity-sweep-engine');
+    const DAYS = Math.min(parseInt(req.body.days) || 7, 365);
+    const endTime = Date.now();
+    const startTime = endTime - DAYS * 86400000;
+    const SIM_WALLET = 1000;
+    const RISK_PCT = 0.10;
+    const LEVERAGE = 20;
+    const MIN_SCORE = 8;
 
-    sendLog('Quantum AI Optimizer — Bitmask Combo System');
+    sendLog(`⚛️ Quantum AI Backtester — ${DAYS} day${DAYS > 1 ? 's' : ''}`);
+    sendLog(`Simulated wallet: $${SIM_WALLET} | Risk: ${RISK_PCT * 100}% | Leverage: ${LEVERAGE}x`);
+    sendProgress('init', 5);
 
-    // Bitunix kline API — public, max 200 per page
-    // Returns Binance-compatible arrays: [time, open, high, low, close, volume]
-    sendLog('Initializing 15 strategy combos...');
-    sendProgress('init', 10);
     await quantumOptimizer.initCombos();
 
-    sendLog('Loading combo performance data...');
-    sendProgress('analyze', 30);
-    const stats = await quantumOptimizer.getComboStats();
-    const combos = stats.combos || [];
-    const activeCombo = combos.find(c => c.is_active);
-
-    sendLog(`Phase: ${stats.current_phase} | Explored: ${stats.exploration_progress.explored}/${stats.exploration_progress.total}`);
-    sendProgress('analyze', 50);
-
-    // Show all combo stats
-    sendLog('');
-    sendLog('=== STRATEGY COMBO PERFORMANCE ===');
-    const sorted = [...combos].sort((a, b) => b.composite_score - a.composite_score);
-    for (const c of sorted) {
-      const active = c.is_active ? ' ← ACTIVE' : '';
-      const locked = c.admin_locked ? ' [LOCKED]' : '';
-      const exploring = c.is_exploring ? ' [EXPLORING]' : '';
-      sendLog(
-        `  #${c.combo_id} ${c.combo_name}: ` +
-        `${c.total_trades} trades, ${(c.win_rate * 100).toFixed(0)}% WR, ` +
-        `avg ${c.avg_pnl.toFixed(2)}%, score=${c.composite_score.toFixed(3)}` +
-        `${active}${locked}${exploring}`
-      );
+    // Get admin tokens
+    const tokenRows = await query('SELECT symbol FROM token_leverage WHERE enabled = true');
+    let tokens = tokenRows.map(r => r.symbol);
+    if (!tokens.length) {
+      // Fallback: top 20 by volume
+      const tickerRes = await fetch('https://fapi.binance.com/fapi/v1/ticker/24hr', { timeout: 15000 });
+      const tickers = await tickerRes.json();
+      tokens = tickers
+        .filter(t => t.symbol.endsWith('USDT') && !t.symbol.includes('_'))
+        .sort((a, b) => parseFloat(b.quoteVolume) - parseFloat(a.quoteVolume))
+        .slice(0, 20)
+        .map(t => t.symbol);
     }
-    sendProgress('analyze', 70);
+    sendLog(`Tokens: ${tokens.length} (${tokens.slice(0, 5).join(', ')}${tokens.length > 5 ? '...' : ''})`);
 
-    // Run evaluation to potentially switch combos
-    sendLog('');
-    sendLog('Running evaluation...');
-    await quantumOptimizer.evaluateAndSwitch();
-    sendProgress('optimize', 90);
-
-    // Get updated active combo
-    const newActiveId = await quantumOptimizer.getActiveCombo();
-    const newActive = combos.find(c => c.combo_id === newActiveId);
-    const strategies = quantumOptimizer.getEnabledStrategies(newActiveId);
-    const enabledList = Object.entries(strategies).filter(([, v]) => v).map(([k]) => k).join(', ');
-
-    sendLog('');
-    sendLog(`Active combo: #${newActiveId} (${quantumOptimizer.comboToName(newActiveId)})`);
-    sendLog(`Enabled strategies: ${enabledList}`);
-    if (newActive) {
-      sendLog(`Win rate: ${(newActive.win_rate * 100).toFixed(0)}% | Avg PnL: ${newActive.avg_pnl.toFixed(2)}% | Trades: ${newActive.total_trades}`);
+    // Fetch klines for all tokens
+    async function fetchK(symbol, interval, limit, et = endTime) {
+      const PAGE = 1500;
+      let all = [];
+      let curEnd = et;
+      let remaining = limit;
+      while (remaining > 0) {
+        const batch = Math.min(remaining, PAGE);
+        const url = `https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=${interval}&limit=${batch}&endTime=${curEnd}`;
+        try {
+          const r = await fetch(url, { timeout: 15000 });
+          if (!r.ok) break;
+          const data = await r.json();
+          if (!data.length) break;
+          all = data.concat(all);
+          curEnd = parseInt(data[0][0]) - 1;
+          remaining -= data.length;
+          if (data.length < batch) break;
+        } catch { break; }
+      }
+      return all;
     }
 
+    sendLog('Fetching historical data...');
+    const klineCache = {};
+    let fetchDone = 0;
+    const k1mLimit = Math.min(DAYS * 1440, 10000);
+    const k15mLimit = Math.min(DAYS * 96, 5000);
+    const k1hLimit = Math.min(DAYS * 24, 2000);
+
+    for (const sym of tokens) {
+      try {
+        const [k1h, k15m, k1m] = await Promise.all([
+          fetchK(sym, '1h', k1hLimit),
+          fetchK(sym, '15m', k15mLimit),
+          fetchK(sym, '1m', k1mLimit),
+        ]);
+        if (k15m.length >= 30 && k1m.length >= 50) {
+          klineCache[sym] = { k1h, k15m, k1m };
+          sendLog(`  ✅ ${sym} (1h:${k1h.length} 15m:${k15m.length} 1m:${k1m.length})`);
+        } else {
+          sendLog(`  ❌ ${sym} — insufficient data`);
+        }
+      } catch (e) {
+        sendLog(`  ❌ ${sym} — ${e.message}`);
+      }
+      fetchDone++;
+      sendProgress('fetch', Math.round(fetchDone / tokens.length * 40) + 10);
+      await new Promise(r => setTimeout(r, 200));
+    }
+
+    const validTokens = Object.keys(klineCache);
+    sendLog(`Data ready: ${validTokens.length} tokens`);
+    if (!validTokens.length) throw new Error('No valid token data fetched');
+
+    // Run backtest for each combo
+    sendLog('');
+    sendLog('=== BACKTESTING 15 COMBOS ===');
+    const comboResults = [];
+
+    for (let comboId = 1; comboId <= 15; comboId++) {
+      const enabled = quantumOptimizer.getEnabledStrategies(comboId);
+      const name = quantumOptimizer.comboToName(comboId);
+      let trades = 0, wins = 0, losses = 0, totalPnl = 0;
+
+      for (const sym of validTokens) {
+        const { k1h, k15m, k1m } = klineCache[sym];
+        let wallet = SIM_WALLET;
+        let position = null; // { entry, sl, tp1, direction, openIdx }
+
+        // Walk through 15m time steps
+        const STEP = 15; // minutes
+        for (let i = 100; i < k15m.length - 1; i++) {
+          const stepTime = parseInt(k15m[i][6]); // close time of 15m candle
+
+          // Check exit for open position using 1m candles
+          if (position) {
+            const m1Window = k1m.filter(k => {
+              const t = parseInt(k[0]);
+              return t > parseInt(k15m[i - 1][6]) && t <= stepTime;
+            });
+
+            let closed = false;
+            for (const c of m1Window) {
+              const high = parseFloat(c[2]);
+              const low = parseFloat(c[3]);
+
+              if (position.direction === 'LONG') {
+                if (low <= position.sl) {
+                  const pnl = (position.sl - position.entry) / position.entry * 100;
+                  totalPnl += pnl; losses++; trades++; closed = true; break;
+                }
+                if (high >= position.tp1) {
+                  const pnl = (position.tp1 - position.entry) / position.entry * 100;
+                  totalPnl += pnl; wins++; trades++; closed = true; break;
+                }
+              } else {
+                if (high >= position.sl) {
+                  const pnl = (position.entry - position.sl) / position.entry * 100;
+                  totalPnl += pnl; losses++; trades++; closed = true; break;
+                }
+                if (low <= position.tp1) {
+                  const pnl = (position.entry - position.tp1) / position.entry * 100;
+                  totalPnl += pnl; wins++; trades++; closed = true; break;
+                }
+              }
+            }
+            if (closed) position = null;
+          }
+
+          // Try new entry if no position
+          if (!position) {
+            // Window klines for strategy detection
+            const w1h = k1h.filter(k => parseInt(k[6]) <= stepTime).slice(-60);
+            const w15m = k15m.slice(Math.max(0, i - 99), i + 1);
+            const w1m = k1m.filter(k => parseInt(k[6]) <= stepTime).slice(-50);
+
+            if (w15m.length < 30 || w1m.length < 10) continue;
+
+            // Run each enabled strategy
+            let signal = null;
+            if (enabled.LIQUIDITY_SWEEP) {
+              const s = engine.detectLiquiditySweep(w15m, w1m);
+              if (s && !signal) signal = s;
+            }
+            if (enabled.STOP_LOSS_HUNT) {
+              const s = engine.detectStopLossHunt(w15m, w1m);
+              if (s && (!signal || s.touches > 2)) signal = s;
+            }
+            if (enabled.MOMENTUM_SCALP) {
+              const s = engine.detectMomentumScalp(w15m, w1m);
+              if (s && !signal) signal = s;
+            }
+            if (enabled.BRR_FIBO && w1h.length >= 30) {
+              const s = engine.detectBRR(w1h, w15m, w1m);
+              if (s && (!signal || s.score > 14)) signal = s;
+            }
+
+            if (signal) {
+              const slDist = Math.abs(signal.entryPrice - signal.sl) / signal.entryPrice;
+              if (slDist > 0.001 && slDist < 0.05) {
+                const tpDist = slDist * 2; // RR 1:2
+                const tp1 = signal.direction === 'LONG'
+                  ? signal.entryPrice * (1 + tpDist)
+                  : signal.entryPrice * (1 - tpDist);
+                position = {
+                  entry: signal.entryPrice,
+                  sl: signal.sl,
+                  tp1,
+                  direction: signal.direction,
+                  setup: signal.setup,
+                };
+              }
+            }
+          }
+        }
+
+        // Close any remaining position at last price
+        if (position) {
+          const lastClose = parseFloat(k15m[k15m.length - 1][4]);
+          const pnl = position.direction === 'LONG'
+            ? (lastClose - position.entry) / position.entry * 100
+            : (position.entry - lastClose) / position.entry * 100;
+          totalPnl += pnl;
+          if (pnl > 0) wins++; else losses++;
+          trades++;
+          position = null;
+        }
+      }
+
+      const wr = trades > 0 ? (wins / trades * 100).toFixed(0) : '0';
+      const avgPnl = trades > 0 ? (totalPnl / trades).toFixed(2) : '0.00';
+      const pnlSign = totalPnl >= 0 ? '+' : '';
+      sendLog(`  #${String(comboId).padEnd(3)} ${name.padEnd(28)} ${String(trades).padStart(4)} trades | ${wr}% WR | ${pnlSign}${totalPnl.toFixed(2)}% total | avg ${avgPnl}%`);
+
+      comboResults.push({ comboId, trades, wins, losses, totalPnl });
+      sendProgress('backtest', Math.round(50 + (comboId / 15) * 40));
+    }
+
+    // Seed results into DB
+    sendLog('');
+    sendLog('Saving results to database...');
+    const bestCombo = await quantumOptimizer.resetAndSeedFromBacktest(comboResults);
+    sendProgress('save', 95);
+
+    const bestResult = comboResults.find(c => c.comboId === bestCombo) || {};
+    const bestName = quantumOptimizer.comboToName(bestCombo);
+    const bestStrats = quantumOptimizer.getEnabledStrategies(bestCombo);
+    const enabledList = Object.entries(bestStrats).filter(([, v]) => v).map(([k]) => k).join(', ');
+
+    sendLog(`\n✅ Best combo: #${bestCombo} (${bestName})`);
+    sendLog(`   Strategies: ${enabledList}`);
+    sendLog(`   ${bestResult.trades || 0} trades | ${bestResult.wins || 0}W/${bestResult.losses || 0}L | ${(bestResult.totalPnl || 0).toFixed(2)}% total PnL`);
     sendProgress('done', 100);
 
     // Send final result
     res.write(JSON.stringify({
       type: 'result',
-      activeCombo: newActiveId,
-      comboName: quantumOptimizer.comboToName(newActiveId),
-      strategies,
-      stats: newActive || {},
-      phase: stats.current_phase,
-      exploration: stats.exploration_progress,
-      allCombos: sorted.map(c => ({
-        id: c.combo_id, name: c.combo_name,
-        trades: c.total_trades, winRate: c.win_rate,
-        avgPnl: c.avg_pnl, score: c.composite_score,
-        active: c.is_active, locked: c.admin_locked,
-      })),
+      days: DAYS,
+      tokens: validTokens.length,
+      activeCombo: bestCombo,
+      comboName: bestName,
+      strategies: bestStrats,
+      phase: 'backtest_complete',
+      exploration: { explored: 15, total: 15, min_trades: 0 },
+      allCombos: comboResults
+        .map(c => ({
+          id: c.comboId, name: quantumOptimizer.comboToName(c.comboId),
+          trades: c.trades, winRate: c.trades > 0 ? c.wins / c.trades : 0,
+          avgPnl: c.trades > 0 ? c.totalPnl / c.trades : 0,
+          score: c.trades > 0 ? (c.wins / c.trades * 0.4 + Math.max(0, Math.min(1, (c.totalPnl / c.trades + 5) / 10)) * 0.6) : 0,
+          active: c.comboId === bestCombo, locked: false,
+        }))
+        .sort((a, b) => b.score - a.score),
     }) + '\n');
 
     clearInterval(keepalive);

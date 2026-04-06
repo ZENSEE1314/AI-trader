@@ -249,6 +249,61 @@ async function evaluateAndSwitch() {
   }
 }
 
+// ── Backtest Seeding ───────────────────────────────────────
+
+async function resetAndSeedFromBacktest(results) {
+  const db = getDB();
+  if (!db) return false;
+
+  try {
+    await initCombos();
+
+    let bestCombo = 15;
+    let bestScore = -Infinity;
+
+    for (const r of results) {
+      if (r.comboId < 1 || r.comboId > 15) continue;
+
+      const winRate = r.trades > 0 ? r.wins / r.trades : 0;
+      const avgPnl = r.trades > 0 ? r.totalPnl / r.trades : 0;
+      const emaWinRate = winRate; // use raw WR from backtest
+
+      // Approximate sharpe
+      const stddev = Math.max(Math.abs(avgPnl), 0.1);
+      const sharpe = avgPnl / stddev;
+
+      const composite = calcComposite({
+        ema_win_rate: emaWinRate, avg_pnl: avgPnl, sharpe_estimate: sharpe,
+      });
+
+      if (composite > bestScore && r.trades >= 3) {
+        bestScore = composite;
+        bestCombo = r.comboId;
+      }
+
+      await db.query(
+        `UPDATE quantum_strategy_combos SET
+          total_trades = $1, wins = $2, losses = $3, total_pnl = $4,
+          avg_pnl = $5, win_rate = $6, ema_win_rate = $7, sharpe_estimate = $8,
+          is_active = false, is_exploring = false, admin_locked = false,
+          last_trade_at = NOW(), updated_at = NOW()
+         WHERE combo_id = $9`,
+        [r.trades, r.wins, r.losses, r.totalPnl.toFixed(4),
+         avgPnl.toFixed(4), winRate.toFixed(4), emaWinRate.toFixed(4),
+         sharpe.toFixed(4), r.comboId]
+      );
+    }
+
+    // Activate best combo
+    await db.query('UPDATE quantum_strategy_combos SET is_active = true WHERE combo_id = $1', [bestCombo]);
+    bLog.ai(`Quantum BACKTEST: seeded ${results.length} combos, best=#${bestCombo} (${comboToName(bestCombo)}) score=${bestScore.toFixed(3)}`);
+    return bestCombo;
+  } catch (err) {
+    console.error('[Quantum] resetAndSeedFromBacktest error:', err.message);
+    return false;
+  }
+}
+
 // ── Admin Controls ─────────────────────────────────────────
 
 async function adminSetCombo(comboId) {
@@ -334,6 +389,7 @@ module.exports = {
   getComboStats,
   adminSetCombo,
   adminUnlockCombo,
+  resetAndSeedFromBacktest,
   comboToName,
   isStrategyEnabled,
   STRATEGIES,

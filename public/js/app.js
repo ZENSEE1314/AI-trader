@@ -1614,9 +1614,10 @@
       const data = finalData;
       const combos = data.allCombos || [];
       let output = '═══════════════════════════════════════════════════════════════════════════════════════════════════════\n';
-      output += '  ⚛️ QUANTUM AI — BITMASK COMBO OPTIMIZER\n';
+      output += '  ⚛️ QUANTUM AI — BITMASK COMBO BACKTESTER\n';
+      if (data.days) output += `  Period: ${data.days} days | Tokens: ${data.tokens || '?'}\n`;
       output += `  Phase: ${data.phase || 'exploring'} | Explored: ${data.exploration?.explored || 0}/${data.exploration?.total || 15}\n`;
-      output += `  Active: #${data.activeCombo} (${data.comboName})\n`;
+      output += `  Best combo: #${data.activeCombo} (${data.comboName})\n`;
       const strats = data.strategies || {};
       const enabledList = Object.entries(strats).filter(([,v]) => v).map(([k]) => k).join(', ');
       output += `  Enabled: ${enabledList}\n`;
