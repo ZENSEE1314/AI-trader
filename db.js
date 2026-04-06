@@ -330,6 +330,12 @@ async function initAllTables() {
       UNIQUE(api_key_id, symbol)
     )`,
     // Trailing SL columns on trades
+    `ALTER TABLE trades ADD COLUMN IF NOT EXISTS exit_price DECIMAL`,
+    `ALTER TABLE trades ADD COLUMN IF NOT EXISTS error_msg TEXT`,
+    `ALTER TABLE trades ADD COLUMN IF NOT EXISTS closed_at TIMESTAMPTZ`,
+    `ALTER TABLE trades ADD COLUMN IF NOT EXISTS tf_15m VARCHAR(30)`,
+    `ALTER TABLE trades ADD COLUMN IF NOT EXISTS tf_3m VARCHAR(30)`,
+    `ALTER TABLE trades ADD COLUMN IF NOT EXISTS tf_1m VARCHAR(30)`,
     `ALTER TABLE trades ADD COLUMN IF NOT EXISTS trailing_sl_price NUMERIC`,
     `ALTER TABLE trades ADD COLUMN IF NOT EXISTS trailing_sl_last_step NUMERIC DEFAULT 0`,
   ];
