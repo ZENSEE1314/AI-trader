@@ -550,11 +550,26 @@ async function scanSMC(log, opts = {}) {
   const minScore = params.MIN_SCORE || 8;
   const dailyBiasCache = new Map();
 
-  bLog.scan(`Refined scan: ${topCoins.length} coins | minScore=${minScore}`);
+  // BTC market filter: fetch BTC daily bias to block counter-trend alt trades
+  let btcBias = null;
+  try {
+    const btcDaily = await fetchKlines('BTCUSDT', '1d', 3);
+    if (btcDaily && btcDaily.length >= 2) {
+      const prevDay = btcDaily[btcDaily.length - 2];
+      const dOpen = parseFloat(prevDay[1]), dClose = parseFloat(prevDay[4]);
+      btcBias = dClose > dOpen ? 'bullish' : dClose < dOpen ? 'bearish' : null;
+      bLog.scan(`BTC market bias: ${btcBias || 'neutral'}`);
+    }
+  } catch (e) {
+    bLog.error(`BTC bias fetch failed: ${e.message}`);
+  }
+
+  bLog.scan(`Refined scan: ${topCoins.length} coins | minScore=${minScore} | BTC=${btcBias || 'unknown'}`);
 
   const results = [];
   let analyzed = 0;
   let skippedAI = 0;
+  let skippedBtcFilter = 0;
 
   for (const ticker of topCoins) {
     if (await aiLearner.shouldAvoidCoin(ticker.symbol)) {
@@ -566,6 +581,21 @@ async function scanSMC(log, opts = {}) {
     analyzed++;
 
     if (signal && signal.score >= minScore) {
+      // BTC filter: block alt shorts when BTC is bull, block alt longs when BTC is bear
+      const isAlt = signal.symbol !== 'BTCUSDT' && signal.symbol !== 'ETHUSDT';
+      if (isAlt && btcBias) {
+        if (btcBias === 'bullish' && signal.direction === 'SHORT') {
+          bLog.scan(`${signal.symbol}: SHORT blocked — BTC is bullish, alts follow BTC`);
+          skippedBtcFilter++;
+          continue;
+        }
+        if (btcBias === 'bearish' && signal.direction === 'LONG') {
+          bLog.scan(`${signal.symbol}: LONG blocked — BTC is bearish, alts follow BTC`);
+          skippedBtcFilter++;
+          continue;
+        }
+      }
+
       results.push(signal);
       bLog.scan(
         `SIGNAL: ${signal.symbol} ${signal.direction} | score=${signal.score} ` +
@@ -578,6 +608,7 @@ async function scanSMC(log, opts = {}) {
   }
 
   if (skippedAI > 0) bLog.ai(`AI avoided ${skippedAI} coins`);
+  if (skippedBtcFilter > 0) bLog.scan(`BTC filter blocked ${skippedBtcFilter} counter-trend alt signals`);
   bLog.scan(`Scan complete: ${analyzed} analyzed, ${results.length} signals`);
 
   if (!results.length) {
