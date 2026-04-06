@@ -2060,12 +2060,9 @@ router.post('/ai-optimize', async (req, res) => {
           const data = coinData[sym];
           const ts = parsedTs[sym];
           const n15 = bisectRight(ts.k15, now); if (n15<30) continue;
-          const k15 = data.k15.slice(0, n15);
-          const price = parseFloat(k15[n15-1][4]);
+          const price = parseFloat(data.k15[n15-1][4]);
 
-          const dTs = ts.kD;
-          let dIdx = -1;
-          for (let di=0; di<dTs.length; di++) { if (dTs[di]+86400000>now) { dIdx=di; break; } }
+          let dIdx = bisectRight(ts.kD, now - 86400000);
           const pD = dIdx>0?data.kD[dIdx-1]:null;
           if (!pD) continue;
           const dO=parseFloat(pD[1]),dC=parseFloat(pD[4]),dH=parseFloat(pD[2]),dL=parseFloat(pD[3]);
@@ -2074,7 +2071,7 @@ router.post('/ai-optimize', async (req, res) => {
 
           const n4h=bisectRight(ts.k4h,now), n1h=bisectRight(ts.k1h,now);
           if (n4h<30||n1h<30) continue;
-          const s4h=getS(data.k4h.slice(0,n4h),swLens['4h']), s1h=getS(data.k1h.slice(0,n1h),swLens['1h']);
+          const s4h=getS(data.k4h.slice(Math.max(0,n4h-60),n4h),swLens['4h']), s1h=getS(data.k1h.slice(Math.max(0,n1h-60),n1h),swLens['1h']);
           const b4=s4h.trend==='bullish'||s4h.trend==='bullish_lean';
           const b1=s1h.trend==='bullish'||s1h.trend==='bullish_lean';
           const r4=s4h.trend==='bearish'||s4h.trend==='bearish_lean';
@@ -2089,7 +2086,8 @@ router.post('/ai-optimize', async (req, res) => {
           if (!dir) continue;
 
           if (NEED_KL) {
-            const vw=calcVW(k15);
+            const k15s=data.k15.slice(Math.max(0,n15-100),n15);
+            const vw=calcVW(k15s);
             const b=vw[vw.length-1];
             const atLevel = dir==='LONG'
               ?(Math.abs(price-b.lower)/b.lower<PROX||Math.abs(price-dL)/dL<PROX||Math.abs(price-b.vwap)/b.vwap<PROX)
@@ -2098,19 +2096,20 @@ router.post('/ai-optimize', async (req, res) => {
           }
 
           if (NEED_VOL) {
-            const vols=k15.slice(-20).map(k=>parseFloat(k[5]));
+            const vs=Math.max(0,n15-20);
+            const vols=data.k15.slice(vs,n15).map(k=>parseFloat(k[5]));
             const avg=vols.reduce((a,b)=>a+b,0)/vols.length;
             if(avg>0&&(vols.slice(-5).reduce((a,b)=>a+b,0)/5)/avg<VOL_MULT) continue;
           }
 
           if (NEED_15M) {
-            const s15=getS(k15,swLens['15m']);
+            const s15=getS(data.k15.slice(Math.max(0,n15-60),n15),swLens['15m']);
             if(!((dir==='LONG'&&s15.hasHL)||(dir==='SHORT'&&s15.hasLH))) continue;
           }
 
           if (NEED_1M) {
             const n1m=bisectRight(ts.k1,now); if(n1m<15) continue;
-            const k1=data.k1.slice(0,n1m);
+            const k1=data.k1.slice(Math.max(0,n1m-60),n1m);
             const s1m=getS(k1,swLens['1m']);
             if(!((dir==='LONG'&&s1m.hasHL)||(dir==='SHORT'&&s1m.hasLH))) continue;
             const es=dir==='LONG'?s1m.lastLow:s1m.lastHigh;
@@ -2209,34 +2208,31 @@ router.post('/ai-optimize', async (req, res) => {
         const NEED_VOL = cfg.requireVolSpike !== undefined ? !!cfg.requireVolSpike : false;
         const VOL_MULT = cfg.volSpikeMultiplier || 1.5;
         for (let step=0; step<timeSteps.length; step++) {
-          if (step % 100 === 0 && step > 0) await yieldTick();
+          if (step % 20 === 0 && step > 0) await yieldTick();
           const now = timeSteps[step];
           for (const sym of coinKeys) {
             const data = coinData[sym];
             const ts = parsedTs[sym];
             const n15 = bisectRight(ts.k15, now); if (n15<30) continue;
-            const k15 = data.k15.slice(0, n15);
-            const price = parseFloat(k15[n15-1][4]);
-            const dTs = ts.kD;
-            let dIdx = -1;
-            for (let di=0; di<dTs.length; di++) { if (dTs[di]+86400000>now) { dIdx=di; break; } }
+            const price = parseFloat(data.k15[n15-1][4]);
+            let dIdx = bisectRight(ts.kD, now - 86400000);
             const pD = dIdx>0?data.kD[dIdx-1]:null; if (!pD) continue;
             const dO=parseFloat(pD[1]),dC=parseFloat(pD[4]),dH=parseFloat(pD[2]),dL=parseFloat(pD[3]);
             if ((dH-dL)>0&&(Math.abs(dC-dO)/(dH-dL))<INDECISIVE) continue;
             const bias = dC>dO?'bullish':'bearish';
             const n4h=bisectRight(ts.k4h,now), n1h=bisectRight(ts.k1h,now);
             if (n4h<30||n1h<30) continue;
-            const s4h=getS(data.k4h.slice(0,n4h),swLens['4h']), s1h=getS(data.k1h.slice(0,n1h),swLens['1h']);
+            const s4h=getS(data.k4h.slice(Math.max(0,n4h-60),n4h),swLens['4h']), s1h=getS(data.k1h.slice(Math.max(0,n1h-60),n1h),swLens['1h']);
             const b4=s4h.trend==='bullish'||s4h.trend==='bullish_lean', b1=s1h.trend==='bullish'||s1h.trend==='bullish_lean';
             const r4=s4h.trend==='bearish'||s4h.trend==='bearish_lean', r1=s1h.trend==='bearish'||s1h.trend==='bearish_lean';
             let dir = null;
             if (NEED_BOTH_HTF) { if(bias==='bullish'&&b4&&b1) dir='LONG'; else if(bias==='bearish'&&r4&&r1) dir='SHORT'; }
             else { if(bias==='bullish'&&(b4||b1)) dir='LONG'; else if(bias==='bearish'&&(r4||r1)) dir='SHORT'; }
             if (!dir) continue;
-            if (NEED_KL) { const vw=calcVW(k15); const b=vw[vw.length-1]; const atLevel = dir==='LONG'?(Math.abs(price-b.lower)/b.lower<PROX||Math.abs(price-dL)/dL<PROX||Math.abs(price-b.vwap)/b.vwap<PROX):(Math.abs(price-b.upper)/b.upper<PROX||Math.abs(price-dH)/dH<PROX||Math.abs(price-b.vwap)/b.vwap<PROX); if (!atLevel) continue; }
-            if (NEED_VOL) { const vols=k15.slice(-20).map(k=>parseFloat(k[5])); const avg=vols.reduce((a,b)=>a+b,0)/vols.length; if(avg>0&&(vols.slice(-5).reduce((a,b)=>a+b,0)/5)/avg<VOL_MULT) continue; }
-            if (NEED_15M) { const s15=getS(k15,swLens['15m']); if(!((dir==='LONG'&&s15.hasHL)||(dir==='SHORT'&&s15.hasLH))) continue; }
-            if (NEED_1M) { const n1m=bisectRight(ts.k1,now); if(n1m<15) continue; const k1=data.k1.slice(0,n1m); const s1m=getS(k1,swLens['1m']); if(!((dir==='LONG'&&s1m.hasHL)||(dir==='SHORT'&&s1m.hasLH))) continue; const es=dir==='LONG'?s1m.lastLow:s1m.lastHigh; if(!es||(k1.length-1-es.index)>MAX_AGE) continue; }
+            if (NEED_KL) { const k15s=data.k15.slice(Math.max(0,n15-100),n15); const vw=calcVW(k15s); const b=vw[vw.length-1]; const atLevel = dir==='LONG'?(Math.abs(price-b.lower)/b.lower<PROX||Math.abs(price-dL)/dL<PROX||Math.abs(price-b.vwap)/b.vwap<PROX):(Math.abs(price-b.upper)/b.upper<PROX||Math.abs(price-dH)/dH<PROX||Math.abs(price-b.vwap)/b.vwap<PROX); if (!atLevel) continue; }
+            if (NEED_VOL) { const vs=Math.max(0,n15-20); const vols=data.k15.slice(vs,n15).map(k=>parseFloat(k[5])); const avg=vols.reduce((a,b)=>a+b,0)/vols.length; if(avg>0&&(vols.slice(-5).reduce((a,b)=>a+b,0)/5)/avg<VOL_MULT) continue; }
+            if (NEED_15M) { const s15=getS(data.k15.slice(Math.max(0,n15-60),n15),swLens['15m']); if(!((dir==='LONG'&&s15.hasHL)||(dir==='SHORT'&&s15.hasLH))) continue; }
+            if (NEED_1M) { const n1m=bisectRight(ts.k1,now); if(n1m<15) continue; const k1=data.k1.slice(Math.max(0,n1m-60),n1m); const s1m=getS(k1,swLens['1m']); if(!((dir==='LONG'&&s1m.hasHL)||(dir==='SHORT'&&s1m.hasLH))) continue; const es=dir==='LONG'?s1m.lastLow:s1m.lastHigh; if(!es||(k1.length-1-es.index)>MAX_AGE) continue; }
             sigs.push({ step, sym, dir, price });
           }
         }
@@ -2272,9 +2268,15 @@ router.post('/ai-optimize', async (req, res) => {
       { name:'Momentum Only',  swingLen4h:10,swingLen1h:10,swingLen15m:8, swingLen1m:4, indecisiveThresh:0.2, keyLevelProximity:0.008, maxEntryAge:35, requireBothHTF:0,requireKeyLevel:0,require15m:1,require1m:1,requireVolSpike:0,volSpikeMultiplier:1.5 },
     ];
 
-    // Yield to event loop so keepalive pings can fire between heavy compute
-    const yieldTick = () => new Promise(r => setImmediate(r));
-    // Async evaluate — yields mid-computation to keep stream alive
+    // Yield to event loop AND send keepalive ping so Railway proxy doesn't kill stream
+    let _lastPing = Date.now();
+    const yieldTick = async () => {
+      await new Promise(r => setImmediate(r));
+      if (Date.now() - _lastPing > 1500) {
+        _lastPing = Date.now();
+        try { res.write(JSON.stringify({ type: 'ping' }) + '\n'); } catch {}
+      }
+    };
     const coinKeys = Object.keys(coinData);
     async function evaluateAsync(strategyCfg) {
       const cfg = { ...strategyCfg, ...FIXED_RISK };
@@ -2290,18 +2292,16 @@ router.post('/ai-optimize', async (req, res) => {
       const NEED_VOL = cfg.requireVolSpike !== undefined ? !!cfg.requireVolSpike : false;
       const VOL_MULT = cfg.volSpikeMultiplier || 1.5;
       for (let step=0; step<timeSteps.length; step++) {
-        if (step % 100 === 0 && step > 0) await yieldTick();
+        if (step % 20 === 0 && step > 0) await yieldTick();
         const now = timeSteps[step];
         for (const sym of coinKeys) {
           const data = coinData[sym];
           const ts = parsedTs[sym];
           const n15 = bisectRight(ts.k15, now); if (n15<30) continue;
-          const k15 = data.k15.slice(0, n15);
-          const price = parseFloat(k15[n15-1][4]);
+          const price = parseFloat(data.k15[n15-1][4]);
 
           const dTs = ts.kD;
-          let dIdx = -1;
-          for (let di=0; di<dTs.length; di++) { if (dTs[di]+86400000>now) { dIdx=di; break; } }
+          let dIdx = bisectRight(dTs, now - 86400000);
           const pD = dIdx>0?data.kD[dIdx-1]:null;
           if (!pD) continue;
           const dO=parseFloat(pD[1]),dC=parseFloat(pD[4]),dH=parseFloat(pD[2]),dL=parseFloat(pD[3]);
@@ -2310,7 +2310,8 @@ router.post('/ai-optimize', async (req, res) => {
 
           const n4h=bisectRight(ts.k4h,now), n1h=bisectRight(ts.k1h,now);
           if (n4h<30||n1h<30) continue;
-          const s4h=getS(data.k4h.slice(0,n4h),swLens['4h']), s1h=getS(data.k1h.slice(0,n1h),swLens['1h']);
+          const k4hSlice=data.k4h.slice(Math.max(0,n4h-60),n4h), k1hSlice=data.k1h.slice(Math.max(0,n1h-60),n1h);
+          const s4h=getS(k4hSlice,swLens['4h']), s1h=getS(k1hSlice,swLens['1h']);
           const b4=s4h.trend==='bullish'||s4h.trend==='bullish_lean';
           const b1=s1h.trend==='bullish'||s1h.trend==='bullish_lean';
           const r4=s4h.trend==='bearish'||s4h.trend==='bearish_lean';
@@ -2323,24 +2324,27 @@ router.post('/ai-optimize', async (req, res) => {
           }
           if (!dir) continue;
           if (NEED_KL) {
-            const vw=calcVW(k15); const b=vw[vw.length-1];
+            const k15Slice=data.k15.slice(Math.max(0,n15-100),n15);
+            const vw=calcVW(k15Slice); const b=vw[vw.length-1];
             const atLevel = dir==='LONG'
               ?(Math.abs(price-b.lower)/b.lower<PROX||Math.abs(price-dL)/dL<PROX||Math.abs(price-b.vwap)/b.vwap<PROX)
               :(Math.abs(price-b.upper)/b.upper<PROX||Math.abs(price-dH)/dH<PROX||Math.abs(price-b.vwap)/b.vwap<PROX);
             if (!atLevel) continue;
           }
           if (NEED_VOL) {
-            const vols=k15.slice(-20).map(k=>parseFloat(k[5]));
+            const volStart=Math.max(0,n15-20);
+            const vols=data.k15.slice(volStart,n15).map(k=>parseFloat(k[5]));
             const avg=vols.reduce((a,b)=>a+b,0)/vols.length;
             if(avg>0&&(vols.slice(-5).reduce((a,b)=>a+b,0)/5)/avg<VOL_MULT) continue;
           }
           if (NEED_15M) {
-            const s15=getS(k15,swLens['15m']);
+            const k15Tail=data.k15.slice(Math.max(0,n15-60),n15);
+            const s15=getS(k15Tail,swLens['15m']);
             if(!((dir==='LONG'&&s15.hasHL)||(dir==='SHORT'&&s15.hasLH))) continue;
           }
           if (NEED_1M) {
             const n1m=bisectRight(ts.k1,now); if(n1m<15) continue;
-            const k1=data.k1.slice(0,n1m);
+            const k1=data.k1.slice(Math.max(0,n1m-60),n1m);
             const s1m=getS(k1,swLens['1m']);
             if(!((dir==='LONG'&&s1m.hasHL)||(dir==='SHORT'&&s1m.hasLH))) continue;
             const es=dir==='LONG'?s1m.lastLow:s1m.lastHigh;
@@ -2414,24 +2418,25 @@ router.post('/ai-optimize', async (req, res) => {
         if (!topN.length) return { results: [], stats: { qaoaCount: 0, spsaCount: 0, annealCount: 0 } };
         const allQR = [];
 
-        // QAOA — reduced from 30 to 15 samples
-        const qaoaSamples = qaoaSample(topN, 15);
+        // QAOA — 10 samples to stay within Railway compute limits
+        const qaoaSamples = qaoaSample(topN, 10);
         let qaoaCount = 0;
-        for (const sample of qaoaSamples) {
+        for (let qi = 0; qi < qaoaSamples.length; qi++) {
           try {
-            const score = await evaluateAsync(sample.config);
+            const score = await evaluateAsync(qaoaSamples[qi].config);
             if (score.trades > 0) {
-              allQR.push({ risk: `QAOA-${qaoaCount + 1}`, riskId: `qaoa${qaoaCount}`, settings: sample.config, ...score });
+              allQR.push({ risk: `QAOA-${qaoaCount + 1}`, riskId: `qaoa${qaoaCount}`, settings: qaoaSamples[qi].config, ...score });
               qaoaCount++;
             }
           } catch (e) { sendLog(`  ⚠ QAOA sample failed: ${e.message}`); }
+          if ((qi+1) % 5 === 0) sendLog(`  QAOA: ${qi+1}/${qaoaSamples.length} tested`);
         }
         sendLog(`  QAOA: ${qaoaCount} viable`);
 
         // SPSA — reduced from 20 to 10 iterations
         let spsaCount = 0;
         try {
-          const spsaResults = await spsaOptimize(topN[0].settings, evaluateAsync, 10);
+          const spsaResults = await spsaOptimize(topN[0].settings, evaluateAsync, 8);
           for (const sr of spsaResults) {
             if (sr.trades > 0) {
               allQR.push({ risk: `SPSA-${spsaCount + 1}`, riskId: `spsa${spsaCount}`, settings: sr.config, ...sr });
@@ -2450,7 +2455,7 @@ router.post('/ai-optimize', async (req, res) => {
             const sorted = [...allQR].sort((a, b) => b.winRate - a.winRate || b.totalPnl - a.totalPnl);
             combinedTop.push(...sorted.slice(0, 5));
           }
-          const annealResults = await quantumAnneal(combinedTop.slice(0, 10), evaluateAsync, 15);
+          const annealResults = await quantumAnneal(combinedTop.slice(0, 10), evaluateAsync, 10);
           for (const ar of annealResults) {
             if (ar.trades > 0) {
               allQR.push({ risk: `Anneal-${annealCount + 1}`, riskId: `anneal${annealCount}`, settings: ar.config, ...ar });
