@@ -1558,7 +1558,7 @@
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'same-origin',
-        body: JSON.stringify({ days }),
+        body: JSON.stringify({ days, maxTokens: parseInt($('#bt-max-tokens')?.value) || 50 }),
         signal: abortCtrl.signal,
       });
       if (!resp.ok) {
@@ -1761,6 +1761,20 @@
       $('#admin-allowed-symbol').value = '';
       loadGlobalTokens();
     } catch (err) { showToast(err.message, 'error'); }
+  }
+
+  async function scanBitunixTokens() {
+    const btn = $('#scan-bitunix-btn');
+    if (btn) { btn.disabled = true; btn.textContent = '⏳ Scanning...'; }
+    try {
+      const result = await api('POST', '/api/admin/scan-bitunix-tokens');
+      showToast(result.message || `Found ${result.bitunixTotal} tokens`, 'success');
+      loadGlobalTokens();
+    } catch (err) {
+      showToast(err.message, 'error');
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = '🔍 Scan Bitunix'; }
+    }
   }
 
   async function addBannedToken() {
@@ -2693,7 +2707,7 @@
     searchCoins, addCoin, removeCoin,
     filterLogs, clearLogs,
     addTokenLeverage, removeTokenLeverage, updateTokenLev, autoPopulateLeverage, searchTokenLev, pickTokenLev, selectRiskLevel,
-    addAllowedToken, addBannedToken, unbanGlobalToken, removeGlobalToken,
+    addAllowedToken, addBannedToken, unbanGlobalToken, removeGlobalToken, scanBitunixTokens,
     searchAdminToken, pickAdminToken, searchUserBanToken,
     addRiskLevel, saveRiskLevel, deleteRiskLevel,
     loadOpenPositions, emergencyCloseToken, emergencyCloseAll,

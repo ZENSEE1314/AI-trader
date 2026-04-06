@@ -835,6 +835,86 @@ router.post('/remove-global-token', async (req, res) => {
   }
 });
 
+// Scan Bitunix for all available futures pairs and sync to global_token_settings
+router.post('/scan-bitunix-tokens', async (req, res) => {
+  try {
+    const fetch = require('node-fetch');
+    const { getFetchOptions } = require('../proxy-agent');
+
+    const url = 'https://fapi.bitunix.com/api/v1/futures/market/trading_pairs';
+    const r = await fetch(url, { timeout: 15000, ...getFetchOptions() });
+    const json = await r.json();
+    if (json.code !== 0 || !Array.isArray(json.data)) {
+      return res.status(502).json({ error: `Bitunix API error: ${json.msg || 'unknown'}` });
+    }
+
+    const pairs = json.data
+      .filter(p => p.quote === 'USDT' && p.symbolStatus === 'OPEN')
+      .sort((a, b) => parseInt(b.maxLeverage || 0) - parseInt(a.maxLeverage || 0));
+
+    if (!pairs.length) {
+      return res.status(502).json({ error: 'No USDT pairs found on Bitunix' });
+    }
+
+    // Get existing tokens so we preserve their enabled/banned state
+    const existing = await query('SELECT symbol, enabled, banned FROM global_token_settings');
+    const existingMap = {};
+    for (const row of existing) existingMap[row.symbol] = row;
+
+    let added = 0;
+    let unchanged = 0;
+    let removed = 0;
+
+    // Upsert all Bitunix pairs — new ones default to enabled + not banned
+    for (const p of pairs) {
+      if (existingMap[p.symbol]) {
+        unchanged++;
+      } else {
+        await query(
+          `INSERT INTO global_token_settings (symbol, enabled, banned)
+           VALUES ($1, true, false)
+           ON CONFLICT (symbol) DO NOTHING`,
+          [p.symbol]
+        );
+        added++;
+      }
+    }
+
+    // Mark tokens that don't exist on Bitunix as banned (if they were previously added)
+    const bitunixSet = new Set(pairs.map(p => p.symbol));
+    for (const row of existing) {
+      if (!bitunixSet.has(row.symbol) && !row.banned) {
+        await query(
+          'UPDATE global_token_settings SET banned = true WHERE symbol = $1',
+          [row.symbol]
+        );
+        removed++;
+      }
+    }
+
+    // Clear candle cache since token list changed
+    try {
+      await query('DELETE FROM optimizer_cache');
+    } catch (_) {}
+
+    const finalRows = await query('SELECT COUNT(*) as total FROM global_token_settings WHERE enabled = true AND banned = false');
+    const enabledCount = parseInt(finalRows[0].total);
+
+    res.json({
+      ok: true,
+      bitunixTotal: pairs.length,
+      added,
+      unchanged,
+      bannedInvalid: removed,
+      enabledCount,
+      message: `Found ${pairs.length} Bitunix pairs. Added ${added} new, ${removed} invalid banned. ${enabledCount} tokens now enabled.`,
+    });
+  } catch (err) {
+    console.error('Scan Bitunix tokens error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Token Leverage Management ────────────────────────────────
 
 // List all token leverage settings
@@ -1849,10 +1929,11 @@ router.post('/ai-optimize', async (req, res) => {
     const { getFetchOptions } = require('../proxy-agent');
     const { quantumOptimize } = require('../quantum-optimizer');
     const DAYS = Math.min(parseInt(req.body.days) || 7, 30);
+    const MAX_TOKENS = Math.min(parseInt(req.body.maxTokens) || 50, 200);
     const endTime = Date.now();
     const startTime = endTime - DAYS * 86400000;
 
-    sendLog(`Starting optimizer: ${DAYS} days, strategy-only (13 params) [Bitunix]`);
+    sendLog(`Starting optimizer: ${DAYS} days, max ${MAX_TOKENS} tokens [Bitunix]`);
 
     // Bitunix kline API — public, max 200 per page
     // Returns Binance-compatible arrays: [time, open, high, low, close, volume]
@@ -1915,16 +1996,38 @@ router.post('/ai-optimize', async (req, res) => {
       for (const k of klines) { const d=new Date(parseInt(k[0])).toISOString().slice(0,10); const h=parseFloat(k[2]),l=parseFloat(k[3]),c=parseFloat(k[4]),v=parseFloat(k[5]); if(d!==day){cv=0;ct=0;ct2=0;day=d;} const tp=(h+l+c)/3; ct+=tp*v; ct2+=tp*tp*v; cv+=v; if(cv>0){const vw=ct/cv;const sd=Math.sqrt(Math.max(0,ct2/cv-vw*vw));vals.push({vwap:vw,upper:vw+sd,lower:vw-sd});}else vals.push({vwap:c,upper:c,lower:c});} return vals;
     }
 
-    // Fetch admin-allowed tokens from DB
+    // Fetch admin-allowed tokens from DB — auto-scan Bitunix if list is empty
     sendLog('Querying token list from DB...');
-    const allowedRows = await query('SELECT symbol FROM global_token_settings WHERE enabled = true AND banned = false ORDER BY symbol');
-    const topCoins = allowedRows.map(r => r.symbol);
+    let allowedRows = await query('SELECT symbol FROM global_token_settings WHERE enabled = true AND banned = false ORDER BY symbol');
+    if (!allowedRows.length) {
+      sendLog('No tokens in DB — auto-scanning Bitunix...');
+      try {
+        const pairsRes = await fetch('https://fapi.bitunix.com/api/v1/futures/market/trading_pairs', { timeout: 15000, ...getFetchOptions() });
+        const pairsJson = await pairsRes.json();
+        if (pairsJson.code === 0 && Array.isArray(pairsJson.data)) {
+          const validPairs = pairsJson.data.filter(p => p.quote === 'USDT' && p.symbolStatus === 'OPEN');
+          for (const p of validPairs) {
+            await query(
+              `INSERT INTO global_token_settings (symbol, enabled, banned) VALUES ($1, true, false) ON CONFLICT (symbol) DO NOTHING`,
+              [p.symbol]
+            );
+          }
+          sendLog(`Auto-scanned ${validPairs.length} Bitunix pairs into DB`);
+          allowedRows = await query('SELECT symbol FROM global_token_settings WHERE enabled = true AND banned = false ORDER BY symbol');
+        }
+      } catch (e) { sendLog(`Auto-scan failed: ${e.message}`); }
+    }
+    let topCoins = allowedRows.map(r => r.symbol);
     if (!topCoins.length) {
       clearInterval(keepalive);
       res.write(JSON.stringify({ type: 'result', error: 'No tokens enabled in admin token settings', results: [] }) + '\n');
       return res.end();
     }
-    sendLog(`Found ${topCoins.length} admin tokens`);
+    if (topCoins.length > MAX_TOKENS) {
+      sendLog(`Limiting from ${topCoins.length} to top ${MAX_TOKENS} tokens`);
+      topCoins = topCoins.slice(0, MAX_TOKENS);
+    }
+    sendLog(`Using ${topCoins.length} tokens`);
 
     // Per-token leverage from admin settings (e.g., BTC=100x, alts=20x)
     const DEFAULT_LEVERAGE = 20;
