@@ -13,6 +13,7 @@
 const fetch = require('node-fetch');
 const aiLearner = require('./ai-learner');
 const { log: bLog } = require('./bot-logger');
+const { confirmSignal } = require('./scalper-ai');
 
 const REQUEST_TIMEOUT = 15000;
 const TOP_N_COINS = 100;
@@ -458,6 +459,17 @@ async function analyzeLHHL(ticker, params, dailyBiasCache) {
   const tp = direction === 'LONG' ? price * 1.50 : price * 0.50;
 
   // ┌─────────────────────────────────────────────────────────┐
+  // │ Step 7: Pro Scalper AI Confirmation                     │
+  // │ Composite oscillator (ADX+Momentum+Vol+Volume) + HMA    │
+  // │ Strong signal in same direction = +3, conflicting = block│
+  // └─────────────────────────────────────────────────────────┘
+  const scalperResult = confirmSignal(klines15m, direction);
+  if (!scalperResult.confirmed) {
+    bLog.scan(`${symbol}: ${direction} blocked by Scalper AI — ${scalperResult.signal} (osc=${scalperResult.details?.oscillator})`);
+    return null;
+  }
+
+  // ┌─────────────────────────────────────────────────────────┐
   // │ Score                                                    │
   // └─────────────────────────────────────────────────────────┘
   let score = 10;
@@ -469,14 +481,18 @@ async function analyzeLHHL(ticker, params, dailyBiasCache) {
   // Bonus: at PDH/PDL (stronger than VWAP)
   if (levelCheck.level === 'PDH' || levelCheck.level === 'PDL') score += 2;
 
+  // Bonus: Scalper AI confirmation (Strong Buy/Sell = +3, Early = +1)
+  score += scalperResult.score;
+
   // AI modifier
   const setup = direction === 'LONG' ? 'REFINED_LONG' : 'REFINED_SHORT';
   const aiModifier = await aiLearner.getAIScoreModifier(symbol, setup, direction);
   score = score * aiModifier;
 
+  const scalperTag = scalperResult.signal !== 'No Signal' ? ` | Scalper=${scalperResult.signal}` : '';
   bLog.scan(
     `✅ ${symbol} ${direction} | bias=${bias} 4H=${struct4h.label} 1H=${struct1h.label} ` +
-    `15M=${struct15m.label} 1M=${struct1m.label} | at=${levelCheck.level} | score=${Math.round(score)}`
+    `15M=${struct15m.label} 1M=${struct1m.label} | at=${levelCheck.level} | score=${Math.round(score)}${scalperTag}`
   );
 
   return {
@@ -505,6 +521,13 @@ async function analyzeLHHL(ticker, params, dailyBiasCache) {
       trend1h: struct1h.trend,
       level: levelCheck.level,
     },
+    scalperAI: scalperResult.details ? {
+      signal: scalperResult.signal,
+      oscillator: scalperResult.details.oscillator,
+      adx: scalperResult.details.adx,
+      trendHMA: scalperResult.details.trendHMA,
+      momentum: scalperResult.details.momentum,
+    } : null,
   };
 }
 
