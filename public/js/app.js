@@ -302,6 +302,7 @@
       renderWallets(walletData);
       if (weeklyEarnings) renderWeeklyEarnings(weeklyEarnings);
       if (cashData) renderDashCashWallet(cashData);
+      loadPauseStatus();
     } catch (err) {
       showToast('Failed to load dashboard.', 'error');
     }
@@ -2621,8 +2622,62 @@
     }
   }
 
+  // ── Pause Bot ──────────────────────────────────────────────
+  async function loadPauseStatus() {
+    try {
+      const res = await api('/api/dashboard/pause-status');
+      updatePauseUI(res.paused);
+    } catch (_) {}
+  }
+
+  function updatePauseUI(isPaused) {
+    const dot = $('#pause-status-dot');
+    const text = $('#pause-status-text');
+    const btn = $('#pause-btn');
+    if (!dot || !text || !btn) return;
+
+    if (isPaused) {
+      dot.style.background = 'var(--color-danger)';
+      text.textContent = 'Bot Paused';
+      text.style.color = 'var(--color-danger)';
+      btn.textContent = 'Resume Bot';
+      btn.style.background = 'var(--color-success)';
+      btn.style.borderColor = 'var(--color-success)';
+      btn.style.color = '#fff';
+    } else {
+      dot.style.background = 'var(--color-success)';
+      text.textContent = 'Bot Active';
+      text.style.color = 'var(--color-success)';
+      btn.textContent = 'Pause Bot';
+      btn.style.background = '';
+      btn.style.borderColor = 'var(--color-danger)';
+      btn.style.color = 'var(--color-danger)';
+    }
+  }
+
+  async function togglePause() {
+    const btn = $('#pause-btn');
+    const isPaused = btn.textContent.trim() === 'Resume Bot';
+    const action = isPaused ? 'resume' : 'pause';
+    if (!confirm(`Are you sure you want to ${action} the bot? ${isPaused ? 'Trading will resume and the weekly timer will continue.' : 'No new trades will be opened and the weekly timer will pause.'}`)) return;
+
+    try {
+      btn.disabled = true;
+      btn.textContent = isPaused ? 'Resuming...' : 'Pausing...';
+      const res = await api('/api/dashboard/toggle-pause', { method: 'POST' });
+      updatePauseUI(res.paused);
+      showToast(res.paused ? 'Bot paused — no new trades will open' : 'Bot resumed — trading is active', res.paused ? 'warning' : 'success');
+    } catch (err) {
+      showToast(err.message || 'Failed to toggle pause', 'error');
+      loadPauseStatus();
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
   window.CryptoBot = {
     toggleSettings, saveSettings, deleteKey, showToast, syncSlider, syncNum, saveProfile, changePassword,
+    togglePause,
     submitTopUp, saveUsdtAddress, withdrawFromWallet, payWeekly,
     adminAction, adminSub, adminWd, saveAdminSettings, adminEditWallet, clearErrors,
     adminEditSplit, adminPauseKey, adminResumeKey, adminMarkPaid, adminFixTrades, adminClearTestData,

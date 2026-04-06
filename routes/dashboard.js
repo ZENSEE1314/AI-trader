@@ -102,6 +102,64 @@ router.get('/trades', async (req, res) => {
   }
 });
 
+// Pause/resume bot for this user
+router.post('/toggle-pause', async (req, res) => {
+  try {
+    const keys = await query(
+      'SELECT id, paused_by_user FROM api_keys WHERE user_id = $1 AND enabled = true',
+      [req.userId]
+    );
+    if (!keys.length) return res.status(404).json({ error: 'No active keys found' });
+
+    const currentlyPaused = keys[0].paused_by_user === true;
+    const newState = !currentlyPaused;
+
+    await query(
+      `UPDATE api_keys SET paused_by_user = $1, paused_at = $2
+       WHERE user_id = $3 AND enabled = true`,
+      [newState, newState ? new Date() : null, req.userId]
+    );
+
+    // If pausing, also pause the weekly timer by recording pause time on user
+    if (newState) {
+      await query(
+        'UPDATE users SET timer_paused_at = NOW() WHERE id = $1',
+        [req.userId]
+      );
+    } else {
+      // Resuming: add paused duration to last_paid_at so timer doesn't count paused time
+      const user = await query('SELECT timer_paused_at, last_paid_at FROM users WHERE id = $1', [req.userId]);
+      if (user.length && user[0].timer_paused_at) {
+        const pausedMs = Date.now() - new Date(user[0].timer_paused_at).getTime();
+        await query(
+          `UPDATE users SET last_paid_at = last_paid_at + ($1 || ' milliseconds')::interval,
+                           timer_paused_at = NULL WHERE id = $2`,
+          [pausedMs, req.userId]
+        );
+      }
+    }
+
+    res.json({ paused: newState });
+  } catch (err) {
+    console.error('Toggle pause error:', err.message);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Get pause status
+router.get('/pause-status', async (req, res) => {
+  try {
+    const keys = await query(
+      'SELECT paused_by_user FROM api_keys WHERE user_id = $1 AND enabled = true LIMIT 1',
+      [req.userId]
+    );
+    const paused = keys.length > 0 && keys[0].paused_by_user === true;
+    res.json({ paused });
+  } catch (err) {
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // CSV export of all trades
 router.get('/trades/csv', async (req, res) => {
   try {

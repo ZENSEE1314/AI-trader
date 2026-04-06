@@ -954,7 +954,9 @@ async function executeForAllUsers(pick) {
       `SELECT ak.*, u.email
        FROM api_keys ak
        JOIN users u ON u.id = ak.user_id
-       WHERE ak.enabled = true AND (ak.paused_by_admin = false OR ak.paused_by_admin IS NULL)`
+       WHERE ak.enabled = true
+         AND (ak.paused_by_admin = false OR ak.paused_by_admin IS NULL)
+         AND (ak.paused_by_user = false OR ak.paused_by_user IS NULL)`
     );
 
     if (!allKeys.length) {
