@@ -26,6 +26,7 @@ app.use('/api/wallet', require('./routes/wallet'));
 app.use('/api/chart', require('./routes/chart'));
 app.use('/api/token-leverage', require('./routes/token-leverage'));
 app.use('/api/risk-levels', require('./routes/risk-levels'));
+app.use('/api/quantum', require('./routes/quantum'));
 // Fast health endpoint for Railway healthcheck (no DB queries)
 app.get('/health', (req, res) => res.json({ status: 'ok', uptime: process.uptime() }));
 app.use('/health/details', require('./health'));

@@ -204,6 +204,29 @@ async function initAllTables() {
       changes TEXT,
       created_at TIMESTAMPTZ DEFAULT NOW()
     )`,
+    // Quantum AI strategy optimizer
+    `CREATE TABLE IF NOT EXISTS quantum_strategy_combos (
+      id SERIAL PRIMARY KEY,
+      combo_id INTEGER NOT NULL,
+      combo_name VARCHAR(100),
+      total_trades INTEGER DEFAULT 0,
+      wins INTEGER DEFAULT 0,
+      losses INTEGER DEFAULT 0,
+      total_pnl DECIMAL DEFAULT 0,
+      avg_pnl DECIMAL DEFAULT 0,
+      win_rate DECIMAL DEFAULT 0,
+      ema_win_rate DECIMAL DEFAULT 0.5,
+      sharpe_estimate DECIMAL DEFAULT 0,
+      is_active BOOLEAN DEFAULT false,
+      is_exploring BOOLEAN DEFAULT false,
+      admin_locked BOOLEAN DEFAULT false,
+      last_trade_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE(combo_id)
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_qsc_combo_id ON quantum_strategy_combos (combo_id)`,
+    `ALTER TABLE ai_trades ADD COLUMN IF NOT EXISTS combo_id INTEGER DEFAULT 15`,
     `CREATE TABLE IF NOT EXISTS users (
       id SERIAL PRIMARY KEY,
       username VARCHAR(100),

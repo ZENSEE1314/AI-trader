@@ -1,14 +1,13 @@
 // ============================================================
 // Smart Crypto Trader v4 — AI Self-Learning Edition
 // Binance USDT-M Futures + Bitunix Futures
-// Strategy: Swing Cascade (15M → 3M → 1M swing confirmation)
-// TP: Dynamic based on volume (4.5%/3%/2%), SL: 3%
+// Strategy: SMC (LiqSweep+SLHunt+MomScalp) + BRR-Fib + Quantum AI
 // ============================================================
 
 const { USDMClient } = require('binance');
 const fetch = require('node-fetch');
 const aiLearner = require('./ai-learner');
-const { scanSMC, recordDailyTrade, detectSwings, SWING_LENGTHS } = require('./smc-engine');
+const { scanSMC, recordDailyTrade, detectSwings, SWING_LENGTHS } = require('./liquidity-sweep-engine');
 const { getSentimentScores } = require('./sentiment-scraper');
 const { log: bLog } = require('./bot-logger');
 const { getBinanceRequestOptions, getFetchOptions } = require('./proxy-agent');
@@ -133,23 +132,12 @@ async function getCapitalPercentage(apiKeyId = null) {
 async function isTokenBanned(symbol) {
   try {
     const { query } = require('./db');
-    // Check if explicitly banned
+    // Only check explicit bans — tokens not in the table are allowed by default
     const banned = await query(
       'SELECT banned FROM global_token_settings WHERE symbol = $1 AND banned = true',
       [symbol]
     );
-    if (banned.length > 0) return true;
-
-    // Check allowed whitelist — if any allowed tokens exist, only those can trade
-    const allowed = await query(
-      'SELECT symbol FROM global_token_settings WHERE enabled = true AND banned = false'
-    );
-    if (allowed.length > 0) {
-      const isAllowed = allowed.some(r => r.symbol === symbol);
-      return !isAllowed;
-    }
-
-    return false;
+    return banned.length > 0;
   } catch {
     return false;
   }
@@ -514,6 +502,7 @@ async function openTrade(client, pick, wallet) {
     tpHit1: false, tpHit2: false,
     pricePrec, qtyPrec,
     setup: pick.setup,
+    comboId: pick.comboId || 15,
     openedAt: Date.now(),
     tf15m: pick.structure?.tf15 || null,
     tf3m: pick.structure?.tf3 || null,
@@ -577,6 +566,7 @@ async function checkTrailingStop(client) {
             tf3m: state.tf3m || null,
             tf1m: state.tf1m || null,
             exitReason: 'position_closed',
+            comboId: state.comboId || 15,
           });
 
           recordDailyTrade(pnlPct > 0);
@@ -626,6 +616,7 @@ async function checkTrailingStop(client) {
               tpDistancePct: Math.abs(st.tp1 - entry) / entry * 100,
               tf15m: st.tf15m || null, tf3m: st.tf3m || null, tf1m: st.tf1m || null,
               exitReason: 'structure_break_15m',
+              comboId: st.comboId || 15,
             });
             recordDailyTrade(gain > 0);
             tradeState.delete(sym);

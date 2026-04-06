@@ -425,7 +425,7 @@ async function main() {
   try {
     await tgSendPrivate(
       `<b>AI Trading Bot v4 Online</b>\n` +
-      `SMC Strategy + Self-Learning + Sentiment\n` +
+      `SMC (LiqSweep+SLHunt+MomScalp) + BRR-Fib + Quantum AI\n` +
       `Target: 1% per trade\n` +
       `Scan every ${INTERVAL_MIN} min\n` +
       `Commands: /scan /stats /sentiment /pause /resume /help`

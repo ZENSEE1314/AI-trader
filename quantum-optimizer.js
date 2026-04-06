@@ -1,284 +1,340 @@
-/**
- * Quantum-Inspired Optimizer — adapted from TuringQ/deepquantum
- *
- * Searches over ALL parameters simultaneously:
- *   Strategy: swing lengths, HTF mode, key level, volume, indecisive threshold
- *   Risk: SL%, TP%, trail step, leverage, risk%, max positions
- *
- * Algorithms:
- *   1. QAOA Amplitude Sampling — superposition-weighted exploration
- *   2. SPSA Gradient Search — 2 evals per iteration for ALL params
- *   3. Quantum Annealing — tunneling to escape local optima
- */
+// ============================================================
+// Quantum AI Strategy Optimizer
+//
+// Mix-and-matches 4 strategies using bitmask combos (1-15).
+// Tracks performance per combo, auto-selects the best one.
+// Epsilon-greedy exploration → exploitation after 20+ trades.
+// Admin can force-lock any combo via API.
+// ============================================================
 
-'use strict';
+const { log: bLog } = require('./bot-logger');
 
-// ── Full Parameter Space: Strategy + Risk ───────────────────
-
-// Strategy-only params — risk is user-configured, not AI-searched
-const PARAM_BOUNDS = {
-  swingLen4h:        { min: 5,     max: 20,    step: 2,     integer: true },
-  swingLen1h:        { min: 5,     max: 20,    step: 2,     integer: true },
-  swingLen15m:       { min: 5,     max: 20,    step: 2,     integer: true },
-  swingLen1m:        { min: 3,     max: 10,    step: 1,     integer: true },
-  indecisiveThresh:  { min: 0.1,   max: 0.5,   step: 0.05 },
-  keyLevelProximity: { min: 0.001, max: 0.015, step: 0.001 },
-  maxEntryAge:       { min: 10,    max: 50,    step: 5,     integer: true },
-  requireBothHTF:    { min: 0,     max: 1,     step: 1,     integer: true }, // 1=both, 0=either
-  requireKeyLevel:   { min: 0,     max: 1,     step: 1,     integer: true },
-  require15m:        { min: 0,     max: 1,     step: 1,     integer: true },
-  require1m:         { min: 0,     max: 1,     step: 1,     integer: true },
-  requireVolSpike:   { min: 0,     max: 1,     step: 1,     integer: true },
-  volSpikeMultiplier:{ min: 1.0,   max: 3.0,   step: 0.2 },
+const STRATEGIES = {
+  LIQUIDITY_SWEEP: 0, // bit 0
+  STOP_LOSS_HUNT: 1,  // bit 1
+  MOMENTUM_SCALP: 2,  // bit 2
+  BRR_FIBO: 3,        // bit 3
 };
 
-const PARAM_KEYS = Object.keys(PARAM_BOUNDS);
+const STRATEGY_SHORT = ['SWEEP', 'HUNT', 'MOMENTUM', 'BRR'];
+const TOTAL_COMBOS = 15; // 1-15 (0 = all off, excluded)
+const MIN_TRADES_PER_COMBO = 20;
+const EXPLORE_EPSILON = 0.15;
+const SWITCH_MARGIN = 0.05; // 5% improvement needed to switch
+const EMA_ALPHA = 0.3;
+const EVAL_INTERVAL = 10; // evaluate every N trades
 
-/**
- * QAOA-Inspired Amplitude Sampling
- */
-function qaoaSample(topResults, count) {
-  if (!topResults.length) return [];
+let _initialized = false;
+let _tradesSinceEval = 0;
 
-  const fitnesses = topResults.map(r => {
-    const wr = r.winRate || 0;
-    const pnl = Math.max(0, r.totalPnl + 100);
-    return wr * 2 + pnl * 0.5 + 1;
-  });
+// ── Bitmask Helpers ────────────────────────────────────────
 
-  const totalFit = fitnesses.reduce((a, b) => a + b, 0);
-  const probabilities = fitnesses.map(f => f / totalFit);
-
-  const samples = [];
-  for (let i = 0; i < count; i++) {
-    const r = Math.random();
-    let cumulative = 0;
-    let parentIdx = 0;
-    for (let j = 0; j < probabilities.length; j++) {
-      cumulative += probabilities[j];
-      if (r < cumulative) { parentIdx = j; break; }
-    }
-
-    const parent = topResults[parentIdx].settings;
-    const mixerStrength = 1.0 - (i / count) * 0.7;
-    const child = {};
-
-    for (const key of PARAM_KEYS) {
-      const bounds = PARAM_BOUNDS[key];
-      const base = parent[key] !== undefined ? parent[key] : (bounds.min + bounds.max) / 2;
-      const angle = (Math.random() - 0.5) * Math.PI * mixerStrength;
-      const range = bounds.max - bounds.min;
-      const delta = Math.sin(angle) * range * 0.3;
-
-      let val = base + delta;
-      val = Math.max(bounds.min, Math.min(bounds.max, val));
-      if (bounds.integer) val = Math.round(val);
-      else val = parseFloat(val.toFixed(4));
-      child[key] = val;
-    }
-
-    samples.push({ parentIdx, config: child });
+function comboToName(comboId) {
+  const parts = [];
+  for (const [name, bit] of Object.entries(STRATEGIES)) {
+    if (comboId & (1 << bit)) parts.push(STRATEGY_SHORT[bit]);
   }
-
-  return samples;
+  return parts.join('+') || 'NONE';
 }
 
-/**
- * SPSA Optimizer — gradient-free, 2 evals per iteration for ALL 20 params
- */
-async function spsaOptimize(startConfig, evaluateFn, iterations = 15, yieldFn) {
-  const A_COEFF = 10;
-  const ALPHA = 0.602;
-  const GAMMA = 0.101;
-  const A_INIT = 0.5;
-  const C_INIT = 0.15;
-
-  function normalize(config) {
-    const n = {};
-    for (const key of PARAM_KEYS) {
-      const b = PARAM_BOUNDS[key];
-      n[key] = b.max === b.min ? 0.5 : (config[key] - b.min) / (b.max - b.min);
-    }
-    return n;
-  }
-
-  function denormalize(nConfig) {
-    const d = {};
-    for (const key of PARAM_KEYS) {
-      const b = PARAM_BOUNDS[key];
-      let val = nConfig[key] * (b.max - b.min) + b.min;
-      val = Math.max(b.min, Math.min(b.max, val));
-      if (b.integer) val = Math.round(val);
-      else val = parseFloat(val.toFixed(4));
-      d[key] = val;
-    }
-    return d;
-  }
-
-  let theta = normalize(startConfig);
-  const allEvaluated = [];
-
-  for (let k = 0; k < iterations; k++) {
-    const ak = A_INIT / Math.pow(k + 1 + A_COEFF, ALPHA);
-    const ck = C_INIT / Math.pow(k + 1, GAMMA);
-
-    const delta = {};
-    for (const key of PARAM_KEYS) {
-      delta[key] = Math.random() > 0.5 ? 1 : -1;
-    }
-
-    const thetaPlus = {}, thetaMinus = {};
-    for (const key of PARAM_KEYS) {
-      thetaPlus[key] = Math.max(0, Math.min(1, theta[key] + ck * delta[key]));
-      thetaMinus[key] = Math.max(0, Math.min(1, theta[key] - ck * delta[key]));
-    }
-
-    const cfgPlus = denormalize(thetaPlus);
-    const cfgMinus = denormalize(thetaMinus);
-    const scorePlus = await evaluateFn(cfgPlus);
-    const scoreMinus = await evaluateFn(cfgMinus);
-
-    allEvaluated.push({ config: cfgPlus, ...scorePlus });
-    allEvaluated.push({ config: cfgMinus, ...scoreMinus });
-
-    const fPlus = (scorePlus.winRate || 0) * 2 + Math.max(0, scorePlus.totalPnl || 0) * 0.1;
-    const fMinus = (scoreMinus.winRate || 0) * 2 + Math.max(0, scoreMinus.totalPnl || 0) * 0.1;
-
-    for (const key of PARAM_KEYS) {
-      const gHat = (fPlus - fMinus) / (2 * ck * delta[key]);
-      theta[key] = Math.max(0, Math.min(1, theta[key] + ak * gHat));
-    }
-    if (yieldFn) await yieldFn();
-  }
-
-  const finalConfig = denormalize(theta);
-  const finalScore = await evaluateFn(finalConfig);
-  allEvaluated.push({ config: finalConfig, ...finalScore });
-
-  return allEvaluated;
+function isStrategyEnabled(comboId, strategyName) {
+  const bit = STRATEGIES[strategyName];
+  return (comboId & (1 << bit)) !== 0;
 }
 
-/**
- * Quantum Annealing — tunneling + Metropolis acceptance
- */
-async function quantumAnneal(topResults, evaluateFn, iterations = 20, yieldFn) {
-  if (!topResults.length) return [];
-
-  const T_INITIAL = 2.0;
-  const T_FINAL = 0.01;
-  const TUNNEL_PROB = 0.3;
-
-  let current = { ...topResults[0].settings };
-  let currentFitness = (topResults[0].winRate || 0) * 2 +
-    Math.max(0, topResults[0].totalPnl || 0) * 0.1;
-  const allEvaluated = [];
-
-  for (let step = 0; step < iterations; step++) {
-    const progress = step / iterations;
-    const temperature = T_INITIAL * Math.pow(T_FINAL / T_INITIAL, progress);
-    const neighbor = {};
-    const isQuantumTunnel = Math.random() < TUNNEL_PROB * (1 - progress);
-
-    for (const key of PARAM_KEYS) {
-      const b = PARAM_BOUNDS[key];
-      const range = b.max - b.min;
-
-      let delta;
-      if (isQuantumTunnel) {
-        const randTop = topResults[Math.floor(Math.random() * topResults.length)];
-        const base = randTop.settings[key] !== undefined ? randTop.settings[key] : current[key];
-        delta = (base - current[key]) * (0.5 + Math.random() * 0.5);
-      } else {
-        delta = (Math.random() - 0.5) * range * temperature * 0.5;
-      }
-
-      let val = current[key] + delta;
-      val = Math.max(b.min, Math.min(b.max, val));
-      if (b.integer) val = Math.round(val);
-      else val = parseFloat(val.toFixed(4));
-      neighbor[key] = val;
-    }
-
-    const score = await evaluateFn(neighbor);
-    const neighborFitness = (score.winRate || 0) * 2 +
-      Math.max(0, score.totalPnl || 0) * 0.1;
-
-    allEvaluated.push({ config: neighbor, ...score });
-
-    const deltaE = neighborFitness - currentFitness;
-    const acceptProb = deltaE > 0 ? 1.0 : Math.exp(deltaE / Math.max(temperature, 0.001));
-
-    if (Math.random() < acceptProb) {
-      current = { ...neighbor };
-      currentFitness = neighborFitness;
-    }
-    if (yieldFn) await yieldFn();
-  }
-
-  return allEvaluated;
-}
-
-/**
- * Full Quantum Pipeline — unified strategy+risk search
- *
- * @param {Object[]} topResults - Top results from Round 1
- * @param {Function} evaluateFn - (fullConfig) => { trades, winRate, totalPnl, ... }
- * @returns {Object} { results, stats }
- */
-function quantumOptimize(topResults, evaluateFn) {
-  const allQuantumResults = [];
-  const topN = topResults.filter(r => r.trades > 0).slice(0, 10);
-  if (!topN.length) return { results: [], stats: { qaoaCount: 0, spsaCount: 0, annealCount: 0 } };
-
-  // ═══ PHASE 1: QAOA Amplitude Sampling — 30 samples ═══
-  const qaoaSamples = qaoaSample(topN, 30);
-  let qaoaCount = 0;
-  for (const sample of qaoaSamples) {
-    const score = evaluateFn(sample.config);
-    if (score.trades > 0) {
-      allQuantumResults.push({
-        risk: `QAOA-${qaoaCount + 1}`, riskId: `qaoa${qaoaCount}`,
-        settings: sample.config, ...score,
-      });
-      qaoaCount++;
-    }
-  }
-
-  // ═══ PHASE 2: SPSA Gradient Search — 20 iterations from best ═══
-  let spsaCount = 0;
-  const spsaResults = spsaOptimize(topN[0].settings, evaluateFn, 20);
-  for (const sr of spsaResults) {
-    if (sr.trades > 0) {
-      allQuantumResults.push({
-        risk: `SPSA-${spsaCount + 1}`, riskId: `spsa${spsaCount}`,
-        settings: sr.config, ...sr,
-      });
-      spsaCount++;
-    }
-  }
-
-  // ═══ PHASE 3: Quantum Annealing — 25 steps ═══
-  let annealCount = 0;
-  const combinedTop = [...topN];
-  if (allQuantumResults.length) {
-    const sorted = [...allQuantumResults].sort((a, b) => b.winRate - a.winRate || b.totalPnl - a.totalPnl);
-    combinedTop.push(...sorted.slice(0, 5));
-  }
-  const annealResults = quantumAnneal(combinedTop.slice(0, 10), evaluateFn, 25);
-  for (const ar of annealResults) {
-    if (ar.trades > 0) {
-      allQuantumResults.push({
-        risk: `QAnneal-${annealCount + 1}`, riskId: `anneal${annealCount}`,
-        settings: ar.config, ...ar,
-      });
-      annealCount++;
-    }
-  }
-
+function getEnabledStrategies(comboId) {
   return {
-    results: allQuantumResults,
-    stats: { qaoaCount, spsaCount, annealCount },
+    LIQUIDITY_SWEEP: isStrategyEnabled(comboId, 'LIQUIDITY_SWEEP'),
+    STOP_LOSS_HUNT: isStrategyEnabled(comboId, 'STOP_LOSS_HUNT'),
+    MOMENTUM_SCALP: isStrategyEnabled(comboId, 'MOMENTUM_SCALP'),
+    BRR_FIBO: isStrategyEnabled(comboId, 'BRR_FIBO'),
   };
 }
 
-module.exports = { quantumOptimize, qaoaSample, spsaOptimize, quantumAnneal, PARAM_BOUNDS, PARAM_KEYS };
+// ── Database Helpers ───────────────────────────────────────
+
+function getDB() {
+  try { return require('./db'); }
+  catch (e) { return null; }
+}
+
+async function initCombos() {
+  if (_initialized) return;
+  const db = getDB();
+  if (!db) return;
+
+  try {
+    const existing = await db.query('SELECT combo_id FROM quantum_strategy_combos');
+    if (existing.length >= TOTAL_COMBOS) {
+      _initialized = true;
+      return;
+    }
+
+    for (let id = 1; id <= TOTAL_COMBOS; id++) {
+      const name = comboToName(id);
+      const isDefault = id === 15;
+      await db.query(
+        `INSERT INTO quantum_strategy_combos (combo_id, combo_name, is_active, ema_win_rate)
+         VALUES ($1, $2, $3, 0.5)
+         ON CONFLICT (combo_id) DO NOTHING`,
+        [id, name, isDefault]
+      );
+    }
+    _initialized = true;
+    bLog.ai('Quantum optimizer: seeded 15 strategy combos');
+  } catch (err) {
+    console.error('[Quantum] Init error:', err.message);
+  }
+}
+
+// ── Get Active Combo ───────────────────────────────────────
+
+async function getActiveCombo() {
+  try {
+    await initCombos();
+    const db = getDB();
+    if (!db) return 15;
+
+    const rows = await db.query(
+      'SELECT combo_id FROM quantum_strategy_combos WHERE is_active = true LIMIT 1'
+    );
+    return rows.length ? rows[0].combo_id : 15;
+  } catch (err) {
+    console.error('[Quantum] getActiveCombo error:', err.message);
+    return 15;
+  }
+}
+
+// ── Record Trade Outcome for a Combo ───────────────────────
+
+async function recordComboTrade(comboId, { pnlPct, isWin }) {
+  const db = getDB();
+  if (!db || !comboId || comboId < 1 || comboId > 15) return;
+
+  try {
+    const rows = await db.query(
+      'SELECT * FROM quantum_strategy_combos WHERE combo_id = $1',
+      [comboId]
+    );
+    if (!rows.length) return;
+
+    const combo = rows[0];
+    const newTrades = combo.total_trades + 1;
+    const newWins = combo.wins + (isWin ? 1 : 0);
+    const newLosses = combo.losses + (isWin ? 0 : 1);
+    const newTotalPnl = parseFloat(combo.total_pnl) + pnlPct;
+    const newAvgPnl = newTotalPnl / newTrades;
+    const newWinRate = newWins / newTrades;
+
+    // EMA win rate (same formula as ai-learner.js)
+    const prevEma = parseFloat(combo.ema_win_rate) || 0.5;
+    const newEmaWinRate = EMA_ALPHA * (isWin ? 1 : 0) + (1 - EMA_ALPHA) * prevEma;
+
+    // Sharpe estimate: avg_pnl / estimated_stddev
+    // Approximate stddev using variance update
+    const oldAvg = combo.total_trades > 0 ? parseFloat(combo.total_pnl) / combo.total_trades : 0;
+    const deviation = pnlPct - oldAvg;
+    const prevSharpe = parseFloat(combo.sharpe_estimate) || 0;
+    const estimatedStddev = Math.max(Math.abs(deviation), 0.1);
+    const newSharpe = newAvgPnl / estimatedStddev;
+
+    await db.query(
+      `UPDATE quantum_strategy_combos SET
+        total_trades = $1, wins = $2, losses = $3, total_pnl = $4,
+        avg_pnl = $5, win_rate = $6, ema_win_rate = $7, sharpe_estimate = $8,
+        last_trade_at = NOW(), updated_at = NOW()
+       WHERE combo_id = $9`,
+      [newTrades, newWins, newLosses, newTotalPnl.toFixed(4),
+       newAvgPnl.toFixed(4), newWinRate.toFixed(4), newEmaWinRate.toFixed(4),
+       newSharpe.toFixed(4), comboId]
+    );
+
+    _tradesSinceEval++;
+    if (_tradesSinceEval >= EVAL_INTERVAL) {
+      _tradesSinceEval = 0;
+      await evaluateAndSwitch();
+    }
+  } catch (err) {
+    console.error('[Quantum] recordComboTrade error:', err.message);
+  }
+}
+
+// ── Composite Score ────────────────────────────────────────
+
+function calcComposite(combo) {
+  const ema = parseFloat(combo.ema_win_rate) || 0;
+  const avgPnl = parseFloat(combo.avg_pnl) || 0;
+  const sharpe = parseFloat(combo.sharpe_estimate) || 0;
+
+  // Normalize avg_pnl to 0-1 range (cap at +/-5%)
+  const normPnl = Math.max(0, Math.min(1, (avgPnl + 5) / 10));
+  // Normalize sharpe to 0-1 range (cap at 3)
+  const normSharpe = Math.max(0, Math.min(1, (sharpe + 1) / 4));
+
+  return ema * 0.4 + normPnl * 0.3 + normSharpe * 0.3;
+}
+
+// ── Evaluate & Auto-Switch ─────────────────────────────────
+
+async function evaluateAndSwitch() {
+  const db = getDB();
+  if (!db) return;
+
+  try {
+    const combos = await db.query(
+      'SELECT * FROM quantum_strategy_combos ORDER BY combo_id'
+    );
+    if (!combos.length) return;
+
+    const active = combos.find(c => c.is_active);
+    if (!active) return;
+
+    // Admin locked — no auto switch
+    if (active.admin_locked) {
+      bLog.ai(`Quantum: combo ${active.combo_id} (${active.combo_name}) is admin-locked — skipping eval`);
+      return;
+    }
+
+    // Check if we're still exploring
+    const underExplored = combos.filter(c => c.total_trades < MIN_TRADES_PER_COMBO);
+    const isExploring = underExplored.length > 0;
+
+    if (isExploring) {
+      // Epsilon-greedy: 15% chance to explore an under-tested combo
+      if (Math.random() < EXPLORE_EPSILON && underExplored.length > 0) {
+        const pick = underExplored[Math.floor(Math.random() * underExplored.length)];
+
+        // Mark current active as inactive, new one as active + exploring
+        await db.query('UPDATE quantum_strategy_combos SET is_active = false, is_exploring = false WHERE is_active = true');
+        await db.query('UPDATE quantum_strategy_combos SET is_active = true, is_exploring = true WHERE combo_id = $1', [pick.combo_id]);
+
+        bLog.ai(`Quantum EXPLORE: switched to combo ${pick.combo_id} (${pick.combo_name}) — ${pick.total_trades}/${MIN_TRADES_PER_COMBO} trades`);
+        return;
+      }
+    }
+
+    // Exploitation: find best combo with enough data
+    const eligible = combos.filter(c => c.total_trades >= MIN_TRADES_PER_COMBO);
+    if (!eligible.length) return;
+
+    const scored = eligible.map(c => ({ ...c, composite: calcComposite(c) }));
+    scored.sort((a, b) => b.composite - a.composite);
+    const best = scored[0];
+
+    const activeComposite = calcComposite(active);
+    const improvement = best.composite - activeComposite;
+
+    if (best.combo_id !== active.combo_id && improvement > SWITCH_MARGIN) {
+      await db.query('UPDATE quantum_strategy_combos SET is_active = false, is_exploring = false WHERE is_active = true');
+      await db.query('UPDATE quantum_strategy_combos SET is_active = true, is_exploring = false WHERE combo_id = $1', [best.combo_id]);
+
+      bLog.ai(
+        `Quantum SWITCH: ${active.combo_name} (${activeComposite.toFixed(3)}) → ${best.combo_name} (${best.composite.toFixed(3)}) | ` +
+        `improvement=${(improvement * 100).toFixed(1)}% | WR=${(parseFloat(best.ema_win_rate) * 100).toFixed(0)}% avgPnL=${parseFloat(best.avg_pnl).toFixed(2)}%`
+      );
+
+      // Log to parameter history
+      try {
+        await db.query(
+          `INSERT INTO ai_parameter_history (param_name, old_value, new_value, reason, trade_count, win_rate)
+           VALUES ('quantum_combo', $1, $2, $3, $4, $5)`,
+          [active.combo_id, best.combo_id,
+           `Auto-switch: ${best.combo_name} scored ${best.composite.toFixed(3)} vs ${activeComposite.toFixed(3)}`,
+           best.total_trades, best.win_rate]
+        );
+      } catch (e) { console.error('[Quantum] param history log error:', e.message); }
+    }
+  } catch (err) {
+    console.error('[Quantum] evaluateAndSwitch error:', err.message);
+  }
+}
+
+// ── Admin Controls ─────────────────────────────────────────
+
+async function adminSetCombo(comboId) {
+  const db = getDB();
+  if (!db || comboId < 1 || comboId > 15) return false;
+
+  try {
+    await db.query('UPDATE quantum_strategy_combos SET is_active = false, is_exploring = false, admin_locked = false WHERE is_active = true');
+    await db.query('UPDATE quantum_strategy_combos SET is_active = true, admin_locked = true WHERE combo_id = $1', [comboId]);
+    bLog.ai(`Quantum ADMIN: forced combo ${comboId} (${comboToName(comboId)}) — locked`);
+    return true;
+  } catch (err) {
+    console.error('[Quantum] adminSetCombo error:', err.message);
+    return false;
+  }
+}
+
+async function adminUnlockCombo() {
+  const db = getDB();
+  if (!db) return false;
+
+  try {
+    await db.query('UPDATE quantum_strategy_combos SET admin_locked = false WHERE admin_locked = true');
+    bLog.ai('Quantum ADMIN: unlocked — auto-optimization resumed');
+    return true;
+  } catch (err) {
+    console.error('[Quantum] adminUnlockCombo error:', err.message);
+    return false;
+  }
+}
+
+// ── Stats for API ──────────────────────────────────────────
+
+async function getComboStats() {
+  const db = getDB();
+  if (!db) return [];
+
+  try {
+    await initCombos();
+    const combos = await db.query(
+      'SELECT * FROM quantum_strategy_combos ORDER BY combo_id'
+    );
+
+    const explored = combos.filter(c => c.total_trades >= MIN_TRADES_PER_COMBO).length;
+
+    return {
+      combos: combos.map(c => ({
+        combo_id: c.combo_id,
+        combo_name: c.combo_name,
+        strategies: getEnabledStrategies(c.combo_id),
+        total_trades: c.total_trades,
+        wins: c.wins,
+        losses: c.losses,
+        win_rate: parseFloat(c.win_rate) || 0,
+        ema_win_rate: parseFloat(c.ema_win_rate) || 0,
+        avg_pnl: parseFloat(c.avg_pnl) || 0,
+        sharpe_estimate: parseFloat(c.sharpe_estimate) || 0,
+        composite_score: calcComposite(c),
+        is_active: c.is_active,
+        is_exploring: c.is_exploring,
+        admin_locked: c.admin_locked,
+        last_trade_at: c.last_trade_at,
+      })),
+      exploration_progress: {
+        explored,
+        total: TOTAL_COMBOS,
+        min_trades: MIN_TRADES_PER_COMBO,
+      },
+      current_phase: explored >= TOTAL_COMBOS ? 'exploiting' : 'exploring',
+    };
+  } catch (err) {
+    console.error('[Quantum] getComboStats error:', err.message);
+    return { combos: [], exploration_progress: { explored: 0, total: 15, min_trades: 20 }, current_phase: 'error' };
+  }
+}
+
+module.exports = {
+  initCombos,
+  getActiveCombo,
+  getEnabledStrategies,
+  recordComboTrade,
+  evaluateAndSwitch,
+  getComboStats,
+  adminSetCombo,
+  adminUnlockCombo,
+  comboToName,
+  isStrategyEnabled,
+  STRATEGIES,
+};
