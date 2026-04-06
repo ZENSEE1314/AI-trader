@@ -1022,15 +1022,16 @@ async function executeForAllUsers(pick) {
         const userLev = await getTokenLeverage(symbol, key.id);
         const walletSizePct = (await getCapitalPercentage(key.id)) / 100;
         const rawTP = parseFloat(key.tp_pct);
-        const userTP = isNaN(rawTP) ? 0.01 : rawTP;
+        const userTP = (isNaN(rawTP) || rawTP <= 0) ? 0.045 : rawTP;
         const userSL = parseFloat(key.sl_pct) || 0.02;
         // Consecutive loss cooldown removed — let it run
 
-        // Initial SL: sl_pct is % of capital at risk, convert to price distance using leverage
+        // Both SL and TP are capital %, convert to price distance using leverage
         const slPricePct = userSL / userLev;
+        const tpPricePct = userTP / userLev;
         const initialSlPrice = isLong ? price * (1 - slPricePct) : price * (1 + slPricePct);
-        const userTpPrice = isLong ? price * (1 + userTP) : price * (1 - userTP);
-        const userTp3Price = isLong ? price * (1 + userTP * 1.5) : price * (1 - userTP * 1.5);
+        const userTpPrice = isLong ? price * (1 + tpPricePct) : price * (1 - tpPricePct);
+        const userTp3Price = isLong ? price * (1 + tpPricePct * 1.5) : price * (1 - tpPricePct * 1.5);
 
         let account, wallet, openPosCount;
 
