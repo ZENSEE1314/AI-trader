@@ -2069,6 +2069,7 @@ router.post('/ai-optimize', async (req, res) => {
       const INDECISIVE = cfg.indecisiveThresh || 0.3;
       const PROX = cfg.keyLevelProximity || 0.003;
       const MAX_AGE = cfg.maxEntryAge || 25;
+      const NEED_DAILY = cfg.requireDailyBias !== undefined ? !!cfg.requireDailyBias : true;
       const NEED_BOTH_HTF = cfg.requireBothHTF !== undefined ? !!cfg.requireBothHTF : false;
       const NEED_KL = cfg.requireKeyLevel !== undefined ? !!cfg.requireKeyLevel : false;
       const NEED_15M = cfg.require15m !== undefined ? !!cfg.require15m : true;
@@ -2082,18 +2083,23 @@ router.post('/ai-optimize', async (req, res) => {
         for (const sym of coinKeys) {
           const data = coinData[sym];
           const ts = parsedTs[sym];
-          const n15 = bisectRight(ts.k15, now); if (n15<30) continue;
+          const n15 = bisectRight(ts.k15, now); if (n15<10) continue;
           const price = parseFloat(data.k15[n15-1][4]);
 
+          // Daily candle — used for bias and key levels (optional filter)
           let dIdx = bisectRight(ts.kD, now - 86400000);
           const pD = dIdx>0?data.kD[dIdx-1]:null;
-          if (!pD) continue;
-          const dO=parseFloat(pD[1]),dC=parseFloat(pD[4]),dH=parseFloat(pD[2]),dL=parseFloat(pD[3]);
-          if ((dH-dL)>0&&(Math.abs(dC-dO)/(dH-dL))<INDECISIVE) continue;
-          const bias = dC>dO?'bullish':'bearish';
+          let dO=0, dC=0, dH=0, dL=0, bias=null;
+          if (pD) {
+            dO=parseFloat(pD[1]); dC=parseFloat(pD[4]); dH=parseFloat(pD[2]); dL=parseFloat(pD[3]);
+            if (!((dH-dL)>0&&(Math.abs(dC-dO)/(dH-dL))<INDECISIVE)) {
+              bias = dC>dO?'bullish':'bearish';
+            }
+          }
+          if (NEED_DAILY && !bias) continue;
 
           const n4h=bisectRight(ts.k4h,now), n1h=bisectRight(ts.k1h,now);
-          if (n4h<30||n1h<30) continue;
+          if (n4h<10||n1h<10) continue;
           const s4h=getS(data.k4h.slice(Math.max(0,n4h-60),n4h),swLens['4h']), s1h=getS(data.k1h.slice(Math.max(0,n1h-60),n1h),swLens['1h']);
           const b4=s4h.trend==='bullish'||s4h.trend==='bullish_lean';
           const b1=s1h.trend==='bullish'||s1h.trend==='bullish_lean';
@@ -2101,10 +2107,20 @@ router.post('/ai-optimize', async (req, res) => {
           const r1=s1h.trend==='bearish'||s1h.trend==='bearish_lean';
 
           let dir = null;
-          if (NEED_BOTH_HTF) {
-            if(bias==='bullish'&&b4&&b1) dir='LONG'; else if(bias==='bearish'&&r4&&r1) dir='SHORT';
+          if (NEED_DAILY && bias) {
+            // Daily bias + HTF confluence
+            if (NEED_BOTH_HTF) {
+              if(bias==='bullish'&&b4&&b1) dir='LONG'; else if(bias==='bearish'&&r4&&r1) dir='SHORT';
+            } else {
+              if(bias==='bullish'&&(b4||b1)) dir='LONG'; else if(bias==='bearish'&&(r4||r1)) dir='SHORT';
+            }
           } else {
-            if(bias==='bullish'&&(b4||b1)) dir='LONG'; else if(bias==='bearish'&&(r4||r1)) dir='SHORT';
+            // No daily bias — direction from HTF alone (no conflicting signals)
+            if (NEED_BOTH_HTF) {
+              if(b4&&b1) dir='LONG'; else if(r4&&r1) dir='SHORT';
+            } else {
+              if((b4||b1)&&!r4&&!r1) dir='LONG'; else if((r4||r1)&&!b4&&!b1) dir='SHORT';
+            }
           }
           if (!dir) continue;
 
@@ -2113,8 +2129,8 @@ router.post('/ai-optimize', async (req, res) => {
             const vw=calcVW(k15s);
             const b=vw[vw.length-1];
             const atLevel = dir==='LONG'
-              ?(Math.abs(price-b.lower)/b.lower<PROX||Math.abs(price-dL)/dL<PROX||Math.abs(price-b.vwap)/b.vwap<PROX)
-              :(Math.abs(price-b.upper)/b.upper<PROX||Math.abs(price-dH)/dH<PROX||Math.abs(price-b.vwap)/b.vwap<PROX);
+              ?(Math.abs(price-b.lower)/b.lower<PROX||(dL>0&&Math.abs(price-dL)/dL<PROX)||Math.abs(price-b.vwap)/b.vwap<PROX)
+              :(Math.abs(price-b.upper)/b.upper<PROX||(dH>0&&Math.abs(price-dH)/dH<PROX)||Math.abs(price-b.vwap)/b.vwap<PROX);
             if (!atLevel) continue;
           }
 
@@ -2215,6 +2231,16 @@ router.post('/ai-optimize', async (req, res) => {
     function getTokenLev(symbol) { return leverageMap[symbol] || DEFAULT_LEVERAGE; }
     function getTokenSlPct(symbol) { return CAPITAL_SL_PCT / getTokenLev(symbol); }
 
+    // Composite ranking: rewards both win rate AND trade count
+    // 60% WR × 20 trades > 83% WR × 5 trades
+    function rankScore(r) {
+      const wr = r.winRate || 0;
+      const tradeBonus = Math.min(r.trades, 30) / 30 * 40; // 0-40 points for trades (capped at 30)
+      const pnlBonus = Math.max(0, r.totalPnl || 0) / 1000 * 10; // 0-10 points for PnL
+      return wr * 0.6 + tradeBonus + pnlBonus;
+    }
+    function rankSort(a, b) { return rankScore(b) - rankScore(a); }
+
     function evaluate(strategyCfg) {
       const cfg = { ...strategyCfg, ...FIXED_RISK };
       const signals = computeSignals(cfg);
@@ -2229,6 +2255,7 @@ router.post('/ai-optimize', async (req, res) => {
         const swLens = { '4h': cfg.swingLen4h||10, '1h': cfg.swingLen1h||10, '15m': cfg.swingLen15m||10, '1m': cfg.swingLen1m||5 };
         const INDECISIVE = cfg.indecisiveThresh || 0.3, PROX = cfg.keyLevelProximity || 0.003;
         const MAX_AGE = cfg.maxEntryAge || 25;
+        const NEED_DAILY = cfg.requireDailyBias !== undefined ? !!cfg.requireDailyBias : true;
         const NEED_BOTH_HTF = cfg.requireBothHTF !== undefined ? !!cfg.requireBothHTF : false;
         const NEED_KL = cfg.requireKeyLevel !== undefined ? !!cfg.requireKeyLevel : false;
         const NEED_15M = cfg.require15m !== undefined ? !!cfg.require15m : true;
@@ -2241,23 +2268,31 @@ router.post('/ai-optimize', async (req, res) => {
           for (const sym of coinKeys) {
             const data = coinData[sym];
             const ts = parsedTs[sym];
-            const n15 = bisectRight(ts.k15, now); if (n15<30) continue;
+            const n15 = bisectRight(ts.k15, now); if (n15<10) continue;
             const price = parseFloat(data.k15[n15-1][4]);
             let dIdx = bisectRight(ts.kD, now - 86400000);
-            const pD = dIdx>0?data.kD[dIdx-1]:null; if (!pD) continue;
-            const dO=parseFloat(pD[1]),dC=parseFloat(pD[4]),dH=parseFloat(pD[2]),dL=parseFloat(pD[3]);
-            if ((dH-dL)>0&&(Math.abs(dC-dO)/(dH-dL))<INDECISIVE) continue;
-            const bias = dC>dO?'bullish':'bearish';
+            const pD = dIdx>0?data.kD[dIdx-1]:null;
+            let dO=0, dC=0, dH=0, dL=0, bias=null;
+            if (pD) {
+              dO=parseFloat(pD[1]); dC=parseFloat(pD[4]); dH=parseFloat(pD[2]); dL=parseFloat(pD[3]);
+              if (!((dH-dL)>0&&(Math.abs(dC-dO)/(dH-dL))<INDECISIVE)) bias = dC>dO?'bullish':'bearish';
+            }
+            if (NEED_DAILY && !bias) continue;
             const n4h=bisectRight(ts.k4h,now), n1h=bisectRight(ts.k1h,now);
-            if (n4h<30||n1h<30) continue;
+            if (n4h<10||n1h<10) continue;
             const s4h=getS(data.k4h.slice(Math.max(0,n4h-60),n4h),swLens['4h']), s1h=getS(data.k1h.slice(Math.max(0,n1h-60),n1h),swLens['1h']);
             const b4=s4h.trend==='bullish'||s4h.trend==='bullish_lean', b1=s1h.trend==='bullish'||s1h.trend==='bullish_lean';
             const r4=s4h.trend==='bearish'||s4h.trend==='bearish_lean', r1=s1h.trend==='bearish'||s1h.trend==='bearish_lean';
             let dir = null;
-            if (NEED_BOTH_HTF) { if(bias==='bullish'&&b4&&b1) dir='LONG'; else if(bias==='bearish'&&r4&&r1) dir='SHORT'; }
-            else { if(bias==='bullish'&&(b4||b1)) dir='LONG'; else if(bias==='bearish'&&(r4||r1)) dir='SHORT'; }
+            if (NEED_DAILY && bias) {
+              if (NEED_BOTH_HTF) { if(bias==='bullish'&&b4&&b1) dir='LONG'; else if(bias==='bearish'&&r4&&r1) dir='SHORT'; }
+              else { if(bias==='bullish'&&(b4||b1)) dir='LONG'; else if(bias==='bearish'&&(r4||r1)) dir='SHORT'; }
+            } else {
+              if (NEED_BOTH_HTF) { if(b4&&b1) dir='LONG'; else if(r4&&r1) dir='SHORT'; }
+              else { if((b4||b1)&&!r4&&!r1) dir='LONG'; else if((r4||r1)&&!b4&&!b1) dir='SHORT'; }
+            }
             if (!dir) continue;
-            if (NEED_KL) { const k15s=data.k15.slice(Math.max(0,n15-100),n15); const vw=calcVW(k15s); const b=vw[vw.length-1]; const atLevel = dir==='LONG'?(Math.abs(price-b.lower)/b.lower<PROX||Math.abs(price-dL)/dL<PROX||Math.abs(price-b.vwap)/b.vwap<PROX):(Math.abs(price-b.upper)/b.upper<PROX||Math.abs(price-dH)/dH<PROX||Math.abs(price-b.vwap)/b.vwap<PROX); if (!atLevel) continue; }
+            if (NEED_KL) { const k15s=data.k15.slice(Math.max(0,n15-100),n15); const vw=calcVW(k15s); const b=vw[vw.length-1]; const atLevel = dir==='LONG'?(Math.abs(price-b.lower)/b.lower<PROX||(dL>0&&Math.abs(price-dL)/dL<PROX)||Math.abs(price-b.vwap)/b.vwap<PROX):(Math.abs(price-b.upper)/b.upper<PROX||(dH>0&&Math.abs(price-dH)/dH<PROX)||Math.abs(price-b.vwap)/b.vwap<PROX); if (!atLevel) continue; }
             if (NEED_VOL) { const vs=Math.max(0,n15-20); const vols=data.k15.slice(vs,n15).map(k=>parseFloat(k[5])); const avg=vols.reduce((a,b)=>a+b,0)/vols.length; if(avg>0&&(vols.slice(-5).reduce((a,b)=>a+b,0)/5)/avg<VOL_MULT) continue; }
             if (NEED_15M) { const s15=getS(data.k15.slice(Math.max(0,n15-60),n15),swLens['15m']); if(!((dir==='LONG'&&s15.hasHL)||(dir==='SHORT'&&s15.hasLH))) continue; }
             if (NEED_1M) { const n1m=bisectRight(ts.k1,now); if(n1m<15) continue; const k1=data.k1.slice(Math.max(0,n1m-60),n1m); const s1m=getS(k1,swLens['1m']); if(!((dir==='LONG'&&s1m.hasHL)||(dir==='SHORT'&&s1m.hasLH))) continue; const es=dir==='LONG'?s1m.lastLow:s1m.lastHigh; if(!es||(k1.length-1-es.index)>MAX_AGE) continue; }
@@ -2282,28 +2317,37 @@ router.post('/ai-optimize', async (req, res) => {
     }
 
     // ═══ ROUND 1: Full grid search — all toggle + swing combinations ═══
-    // 5 toggles (2^5=32) × 3 swing profiles × 2 indecisive thresholds = 192 combos
-    // In heavy mode, skip volSpike combos to save time (2^4=16 × 3 × 2 = 96)
+    // 6 toggles: dailyBias, bothHTF, keyLevel, 15m, 1m, volSpike
+    // Very heavy: skip volSpike+keyLevel (4 bits=16) × 3 swing × 2 indec = 96
+    // Heavy: skip volSpike (5 bits=32) × 3 swing × 2 indec = 192
+    // Normal: all 6 (64) × 3 × 2 = 384
     const SWING_PROFILES = [
       { name:'Standard', swingLen4h:10, swingLen1h:10, swingLen15m:10, swingLen1m:5, keyLevelProximity:0.005, maxEntryAge:30, volSpikeMultiplier:1.5 },
       { name:'Tight',    swingLen4h:7,  swingLen1h:7,  swingLen15m:7,  swingLen1m:3, keyLevelProximity:0.003, maxEntryAge:20, volSpikeMultiplier:1.5 },
       { name:'Wide',     swingLen4h:13, swingLen1h:12, swingLen15m:9,  swingLen1m:4, keyLevelProximity:0.008, maxEntryAge:40, volSpikeMultiplier:1.5 },
     ];
-    const INDECISIVE_OPTS = [0.2, 0.35];
-    const TOGGLE_KEYS = ['requireBothHTF','requireKeyLevel','require15m','require1m','requireVolSpike'];
+    const INDECISIVE_OPTS = [0.1, 0.25];
+    const TOGGLE_KEYS = ['requireDailyBias','requireBothHTF','requireKeyLevel','require15m','require1m','requireVolSpike'];
+    // Which toggles to skip in heavy modes (index into TOGGLE_KEYS)
+    const SKIP_VERY_HEAVY = new Set([2, 5]); // keyLevel + volSpike always off
+    const SKIP_HEAVY = new Set([5]);          // volSpike always off
 
     const presets = [];
     for (const sw of SWING_PROFILES) {
       for (const indec of INDECISIVE_OPTS) {
-        // Generate all toggle combinations (0-31 for 5 bits, or 0-15 skipping volSpike in heavy mode)
-        const maxBits = isHeavy ? 16 : 32; // skip volSpike bit in heavy mode
+        const skipSet = isVeryHeavy ? SKIP_VERY_HEAVY : isHeavy ? SKIP_HEAVY : new Set();
+        const activeBits = TOGGLE_KEYS.length - skipSet.size;
+        const maxBits = 1 << activeBits;
         for (let bits = 0; bits < maxBits; bits++) {
           const toggles = {};
+          let bitPos = 0;
           for (let i = 0; i < TOGGLE_KEYS.length; i++) {
-            if (isHeavy && i === 4) { toggles[TOGGLE_KEYS[i]] = 0; continue; } // volSpike always off in heavy
-            toggles[TOGGLE_KEYS[i]] = (bits >> i) & 1;
+            if (skipSet.has(i)) { toggles[TOGGLE_KEYS[i]] = 0; continue; }
+            toggles[TOGGLE_KEYS[i]] = (bits >> bitPos) & 1;
+            bitPos++;
           }
           const label = `${sw.name}|${indec}|` +
+            `Daily:${toggles.requireDailyBias?'Y':'N'}|` +
             `HTF:${toggles.requireBothHTF?'both':'either'}|` +
             `KL:${toggles.requireKeyLevel?'Y':'N'}|` +
             `15m:${toggles.require15m?'Y':'N'}|` +
@@ -2313,7 +2357,7 @@ router.post('/ai-optimize', async (req, res) => {
         }
       }
     }
-    sendLog(`Round 1: Grid search — ${presets.length} systematic combinations (${SWING_PROFILES.length} swing × ${INDECISIVE_OPTS.length} indec × ${isHeavy?16:32} toggles)...`);
+    sendLog(`Round 1: Grid search — ${presets.length} combos (${SWING_PROFILES.length} swing × ${INDECISIVE_OPTS.length} indec × ${1<<(TOGGLE_KEYS.length-(isVeryHeavy?SKIP_VERY_HEAVY.size:isHeavy?SKIP_HEAVY.size:0))} toggles) [dailyBias+HTF+KL+15m+1m+Vol]...`);
 
     // Yield to event loop AND send keepalive ping so Railway proxy doesn't kill stream
     let _lastPing = Date.now();
@@ -2339,6 +2383,7 @@ router.post('/ai-optimize', async (req, res) => {
       const INDECISIVE = cfg.indecisiveThresh || 0.3;
       const PROX = cfg.keyLevelProximity || 0.003;
       const MAX_AGE = cfg.maxEntryAge || 25;
+      const NEED_DAILY = cfg.requireDailyBias !== undefined ? !!cfg.requireDailyBias : true;
       const NEED_BOTH_HTF = cfg.requireBothHTF !== undefined ? !!cfg.requireBothHTF : false;
       const NEED_KL = cfg.requireKeyLevel !== undefined ? !!cfg.requireKeyLevel : false;
       const NEED_15M = cfg.require15m !== undefined ? !!cfg.require15m : true;
@@ -2351,19 +2396,23 @@ router.post('/ai-optimize', async (req, res) => {
         for (const sym of coinKeys) {
           const data = coinData[sym];
           const ts = parsedTs[sym];
-          const n15 = bisectRight(ts.k15, now); if (n15<30) continue;
+          const n15 = bisectRight(ts.k15, now); if (n15<10) continue;
           const price = parseFloat(data.k15[n15-1][4]);
 
-          const dTs = ts.kD;
-          let dIdx = bisectRight(dTs, now - 86400000);
+          // Daily candle — used for bias and key levels (optional filter)
+          let dIdx = bisectRight(ts.kD, now - 86400000);
           const pD = dIdx>0?data.kD[dIdx-1]:null;
-          if (!pD) continue;
-          const dO=parseFloat(pD[1]),dC=parseFloat(pD[4]),dH=parseFloat(pD[2]),dL=parseFloat(pD[3]);
-          if ((dH-dL)>0&&(Math.abs(dC-dO)/(dH-dL))<INDECISIVE) continue;
-          const bias = dC>dO?'bullish':'bearish';
+          let dO=0, dC=0, dH=0, dL=0, bias=null;
+          if (pD) {
+            dO=parseFloat(pD[1]); dC=parseFloat(pD[4]); dH=parseFloat(pD[2]); dL=parseFloat(pD[3]);
+            if (!((dH-dL)>0&&(Math.abs(dC-dO)/(dH-dL))<INDECISIVE)) {
+              bias = dC>dO?'bullish':'bearish';
+            }
+          }
+          if (NEED_DAILY && !bias) continue;
 
           const n4h=bisectRight(ts.k4h,now), n1h=bisectRight(ts.k1h,now);
-          if (n4h<30||n1h<30) continue;
+          if (n4h<10||n1h<10) continue;
           const k4hSlice=data.k4h.slice(Math.max(0,n4h-60),n4h), k1hSlice=data.k1h.slice(Math.max(0,n1h-60),n1h);
           const s4h=getS(k4hSlice,swLens['4h']), s1h=getS(k1hSlice,swLens['1h']);
           const b4=s4h.trend==='bullish'||s4h.trend==='bullish_lean';
@@ -2371,18 +2420,26 @@ router.post('/ai-optimize', async (req, res) => {
           const r4=s4h.trend==='bearish'||s4h.trend==='bearish_lean';
           const r1=s1h.trend==='bearish'||s1h.trend==='bearish_lean';
           let dir = null;
-          if (NEED_BOTH_HTF) {
-            if(bias==='bullish'&&b4&&b1) dir='LONG'; else if(bias==='bearish'&&r4&&r1) dir='SHORT';
+          if (NEED_DAILY && bias) {
+            if (NEED_BOTH_HTF) {
+              if(bias==='bullish'&&b4&&b1) dir='LONG'; else if(bias==='bearish'&&r4&&r1) dir='SHORT';
+            } else {
+              if(bias==='bullish'&&(b4||b1)) dir='LONG'; else if(bias==='bearish'&&(r4||r1)) dir='SHORT';
+            }
           } else {
-            if(bias==='bullish'&&(b4||b1)) dir='LONG'; else if(bias==='bearish'&&(r4||r1)) dir='SHORT';
+            if (NEED_BOTH_HTF) {
+              if(b4&&b1) dir='LONG'; else if(r4&&r1) dir='SHORT';
+            } else {
+              if((b4||b1)&&!r4&&!r1) dir='LONG'; else if((r4||r1)&&!b4&&!b1) dir='SHORT';
+            }
           }
           if (!dir) continue;
           if (NEED_KL) {
             const k15Slice=data.k15.slice(Math.max(0,n15-100),n15);
             const vw=calcVW(k15Slice); const b=vw[vw.length-1];
             const atLevel = dir==='LONG'
-              ?(Math.abs(price-b.lower)/b.lower<PROX||Math.abs(price-dL)/dL<PROX||Math.abs(price-b.vwap)/b.vwap<PROX)
-              :(Math.abs(price-b.upper)/b.upper<PROX||Math.abs(price-dH)/dH<PROX||Math.abs(price-b.vwap)/b.vwap<PROX);
+              ?(Math.abs(price-b.lower)/b.lower<PROX||(dL>0&&Math.abs(price-dL)/dL<PROX)||Math.abs(price-b.vwap)/b.vwap<PROX)
+              :(Math.abs(price-b.upper)/b.upper<PROX||(dH>0&&Math.abs(price-dH)/dH<PROX)||Math.abs(price-b.vwap)/b.vwap<PROX);
             if (!atLevel) continue;
           }
           if (NEED_VOL) {
@@ -2447,7 +2504,7 @@ router.post('/ai-optimize', async (req, res) => {
       } catch (_) {}
     }
     // Show top 5 from grid search
-    const gridSorted = [...results].sort((a,b) => b.winRate-a.winRate || b.totalPnl-a.totalPnl);
+    const gridSorted = [...results].sort((a,b) => rankSort(a,b));
     sendLog(`Round 1 done: ${results.length} viable from ${presets.length} combos`);
     for (let i = 0; i < Math.min(5, gridSorted.length); i++) {
       const r = gridSorted[i];
@@ -2457,7 +2514,7 @@ router.post('/ai-optimize', async (req, res) => {
 
     // ═══ ROUND 2: Genetic ═══
     sendLog(`Round 2: Breeding ${GENETIC_COUNT} genetic offspring...`);
-    results.sort((a,b) => b.winRate-a.winRate || b.totalPnl-a.totalPnl);
+    results.sort((a,b) => rankSort(a,b));
     const topParents = results.filter(r=>r.trades>0).slice(0,10);
     const mutations = [];
     const { PARAM_BOUNDS: PB } = require('../quantum-optimizer');
@@ -2492,7 +2549,7 @@ router.post('/ai-optimize', async (req, res) => {
 
     // ═══ ROUND 3: Quantum ═══
     sendLog('Round 3: Quantum search (QAOA + SPSA + Annealing)...');
-    const preQuantum = [...results, ...mutations].sort((a,b) => b.winRate-a.winRate || b.totalPnl-a.totalPnl);
+    const preQuantum = [...results, ...mutations].sort((a,b) => rankSort(a,b));
     const quantum = await (async () => {
       try {
         const { qaoaSample, spsaOptimize, quantumAnneal } = require('../quantum-optimizer');
@@ -2533,7 +2590,7 @@ router.post('/ai-optimize', async (req, res) => {
         try {
           const combinedTop = [...topN];
           if (allQR.length) {
-            const sorted = [...allQR].sort((a, b) => b.winRate - a.winRate || b.totalPnl - a.totalPnl);
+            const sorted = [...allQR].sort(rankSort);
             combinedTop.push(...sorted.slice(0, 5));
           }
           const annealResults = await quantumAnneal(combinedTop.slice(0, 10), evaluateAsync, ANNEAL_COUNT, yieldTick);
@@ -2560,7 +2617,7 @@ router.post('/ai-optimize', async (req, res) => {
     }
 
     const allResults = [...results, ...mutations, ...quantum.results];
-    allResults.sort((a,b) => b.winRate-a.winRate || b.totalPnl-a.totalPnl);
+    allResults.sort((a,b) => rankSort(a,b));
     const qs = quantum.stats || {};
     sendLog(`Round 3 done: QAOA:${qs.qaoaCount||0} SPSA:${qs.spsaCount||0} Anneal:${qs.annealCount||0}`);
     sendProgress('round3', 100);
