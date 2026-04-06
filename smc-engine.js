@@ -531,9 +531,23 @@ async function scanSMC(log, opts = {}) {
     'XAUUSDT','XAGUSDT','EURUSDT','GBPUSDT','JPYUSDT',
   ]);
 
+  // Only scan tokens approved by admin in global_token_settings
+  let approvedTokens = null;
+  try {
+    const db = require('./db');
+    const rows = await db.query('SELECT symbol FROM global_token_settings WHERE enabled = true AND banned = false');
+    if (rows.length > 0) {
+      approvedTokens = new Set(rows.map(r => r.symbol));
+      bLog.scan(`Admin approved tokens: ${approvedTokens.size}`);
+    }
+  } catch (err) {
+    bLog.error(`Failed to load approved tokens: ${err.message}`);
+  }
+
   const topCoins = tickers
     .filter(t => t.symbol.endsWith('USDT') && !t.symbol.includes('_'))
     .filter(t => !BLACKLIST.has(t.symbol))
+    .filter(t => approvedTokens ? approvedTokens.has(t.symbol) : true)
     .filter(t => parseFloat(t.quoteVolume) >= MIN_24H_VOLUME)
     .sort((a, b) => parseFloat(b.quoteVolume) - parseFloat(a.quoteVolume))
     .slice(0, opts.topNCoins || TOP_N_COINS);
