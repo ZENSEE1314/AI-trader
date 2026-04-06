@@ -14,10 +14,11 @@ const STRATEGIES = {
   STOP_LOSS_HUNT: 1,  // bit 1
   MOMENTUM_SCALP: 2,  // bit 2
   BRR_FIBO: 3,        // bit 3
+  SMC_CLASSIC: 4,     // bit 4
 };
 
-const STRATEGY_SHORT = ['SWEEP', 'HUNT', 'MOMENTUM', 'BRR'];
-const TOTAL_COMBOS = 15; // 1-15 (0 = all off, excluded)
+const STRATEGY_SHORT = ['SWEEP', 'HUNT', 'MOMENTUM', 'BRR', 'SMC'];
+const TOTAL_COMBOS = 31; // 1-31 (5 strategies = 2^5 - 1)
 const MIN_TRADES_PER_COMBO = 20;
 const EXPLORE_EPSILON = 0.15;
 const SWITCH_MARGIN = 0.05; // 5% improvement needed to switch
@@ -48,6 +49,7 @@ function getEnabledStrategies(comboId) {
     STOP_LOSS_HUNT: isStrategyEnabled(comboId, 'STOP_LOSS_HUNT'),
     MOMENTUM_SCALP: isStrategyEnabled(comboId, 'MOMENTUM_SCALP'),
     BRR_FIBO: isStrategyEnabled(comboId, 'BRR_FIBO'),
+    SMC_CLASSIC: isStrategyEnabled(comboId, 'SMC_CLASSIC'),
   };
 }
 
@@ -109,7 +111,7 @@ async function getActiveCombo() {
 
 async function recordComboTrade(comboId, { pnlPct, isWin }) {
   const db = getDB();
-  if (!db || !comboId || comboId < 1 || comboId > 15) return;
+  if (!db || !comboId || comboId < 1 || comboId > TOTAL_COMBOS) return;
 
   try {
     const rows = await db.query(
@@ -321,7 +323,7 @@ async function getActiveParams() {
 
 async function adminSetCombo(comboId) {
   const db = getDB();
-  if (!db || comboId < 1 || comboId > 15) return false;
+  if (!db || comboId < 1 || comboId > TOTAL_COMBOS) return false;
 
   try {
     await db.query('UPDATE quantum_strategy_combos SET is_active = false, is_exploring = false, admin_locked = false WHERE is_active = true');

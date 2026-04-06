@@ -16,6 +16,8 @@
 const fetch = require('node-fetch');
 const aiLearner = require('./ai-learner');
 const { log: bLog } = require('./bot-logger');
+let smcEngine = null;
+try { smcEngine = require('./smc-engine'); } catch (e) { console.warn('[Engine] SMC engine not available:', e.message); }
 
 const REQUEST_TIMEOUT = 15000;
 const TOP_N_COINS = 100;
@@ -1174,6 +1176,31 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     }
   }
   } // end BRR_FIBO gate
+
+  // Strategy 5: SMC Classic (Daily Bias → 4H+1H HTF → 15m Setup → 1m Entry)
+  if ((!enabledStrategies || enabledStrategies.SMC_CLASSIC) && smcEngine) {
+    try {
+      const dailyBiasCache = new Map();
+      const smcSignal = await smcEngine.analyzeLHHL(
+        { symbol, lastPrice: price }, await aiLearner.getOptimalParams(), dailyBiasCache
+      );
+      if (smcSignal && smcSignal.score >= 8) {
+        signals.push({
+          symbol, direction: smcSignal.direction, price: smcSignal.price || price,
+          lastPrice: price,
+          sl: smcSignal.sl,
+          tp1: smcSignal.tp1,
+          tp2: smcSignal.tp2,
+          tp3: smcSignal.tp3,
+          slDist: smcSignal.slDist || Math.abs(price - smcSignal.sl) / price,
+          setup: 'SMC_CLASSIC',
+          setupName: `${smcSignal.direction}-SMC`,
+          score: smcSignal.score,
+          rr: smcSignal.slDist > 0 ? Math.abs(smcSignal.tp1 - price) / Math.abs(price - smcSignal.sl) : 1.5,
+        });
+      }
+    } catch { /* SMC engine error — skip */ }
+  } // end SMC_CLASSIC gate
 
   if (!signals.length) return null;
 

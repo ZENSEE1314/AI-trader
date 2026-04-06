@@ -1984,7 +1984,9 @@ router.post('/ai-optimize', async (req, res) => {
         }
       }
     }
-    sendLog(`Parameter grid: ${paramVariants.length} configs × 15 combos = ${paramVariants.length * 15} tests`);
+    const TOTAL = quantumOptimizer.STRATEGIES ? Object.keys(quantumOptimizer.STRATEGIES).length : 5;
+    const TOTAL_COMBOS = (1 << TOTAL) - 1; // 31 for 5 strategies
+    sendLog(`Parameter grid: ${paramVariants.length} configs × ${TOTAL_COMBOS} combos = ${paramVariants.length * TOTAL_COMBOS} tests`);
 
     // Backtest function — runs one combo with one param config
     const yield_ = () => new Promise(r => setImmediate(r));
@@ -2034,6 +2036,23 @@ router.post('/ai-optimize', async (req, res) => {
               if (enabled.STOP_LOSS_HUNT) { const s = engine.detectStopLossHunt(w15m, w1mSlice, params.hunt); if (s && (!signal || s.touches > 2)) signal = s; }
               if (enabled.MOMENTUM_SCALP) { const s = engine.detectMomentumScalp(w15m, w1mSlice, params.momentum); if (s && !signal) signal = s; }
               if (enabled.BRR_FIBO && w1h.length >= 30) { const s = engine.detectBRR(w1h, w15m, w1mSlice, params.brr); if (s && (!signal || s.score > 14)) signal = s; }
+              // SMC Classic: strong S/R zone + 1m reversal candle pattern
+              if (enabled.SMC_CLASSIC && w1h.length >= 20) {
+                const pc = k => ({ open: parseFloat(k[1]), high: parseFloat(k[2]), low: parseFloat(k[3]), close: parseFloat(k[4]), volume: parseFloat(k[5]) });
+                const levels = engine.findKeyLevels(w15m.map(pc), 50);
+                const lp = parseFloat(w15m[w15m.length - 1][4]);
+                const near = levels.find(l => Math.abs(l.price - lp) / lp < 0.003 && l.strength >= 3);
+                if (near && w1mSlice.length >= 2) {
+                  const c1 = parseFloat(w1mSlice[w1mSlice.length - 1][4]), o1 = parseFloat(w1mSlice[w1mSlice.length - 1][1]);
+                  const c2 = parseFloat(w1mSlice[w1mSlice.length - 2][4]), o2 = parseFloat(w1mSlice[w1mSlice.length - 2][1]);
+                  if (near.type === 'support' && c1 > o1 && c2 < o2 && !signal) {
+                    signal = { direction: 'LONG', setup: 'SMC_CLASSIC', entryPrice: c1, sl: near.zoneLow || near.price * 0.997 };
+                  }
+                  if (near.type === 'resistance' && c1 < o1 && c2 > o2 && !signal) {
+                    signal = { direction: 'SHORT', setup: 'SMC_CLASSIC', entryPrice: c1, sl: near.zoneHigh || near.price * 1.003 };
+                  }
+                }
+              }
             } catch {}
 
             if (signal) {
@@ -2059,12 +2078,12 @@ router.post('/ai-optimize', async (req, res) => {
 
     // Run grid search
     sendLog('');
-    sendLog('=== GRID SEARCH: 15 COMBOS × PARAM VARIANTS ===');
+    sendLog(`=== GRID SEARCH: ${TOTAL_COMBOS} COMBOS × PARAM VARIANTS ===`);
     const comboResults = [];
     let testsRun = 0;
-    const totalTests = 15 * paramVariants.length;
+    const totalTests = TOTAL_COMBOS * paramVariants.length;
 
-    for (let comboId = 1; comboId <= 15; comboId++) {
+    for (let comboId = 1; comboId <= TOTAL_COMBOS; comboId++) {
       const name = quantumOptimizer.comboToName(comboId);
       let bestResult = null;
       let bestParams = null;
