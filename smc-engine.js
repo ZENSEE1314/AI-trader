@@ -694,18 +694,13 @@ async function scanSMC(log, opts = {}) {
   async function getBtcBias() {
     if (_btcBiasCache !== null) return _btcBiasCache;
     try {
-      const [btcDaily, btc4h, btc1h] = await Promise.all([
-        fetchKlines('BTCUSDT', '1d', 3),
+      const [btc4h, btc1h] = await Promise.all([
         fetchKlines('BTCUSDT', '4h', 3),
         fetchKlines('BTCUSDT', '1h', 5),
       ]);
       _btcKlinesCache = btc1h;
       let bullVotes = 0, bearVotes = 0;
 
-      if (btcDaily && btcDaily.length >= 1) {
-        const c = btcDaily[btcDaily.length - 1];
-        if (parseFloat(c[4]) > parseFloat(c[1])) bullVotes++; else bearVotes++;
-      }
       if (btc4h && btc4h.length >= 1) {
         const c = btc4h[btc4h.length - 1];
         if (parseFloat(c[4]) > parseFloat(c[1])) bullVotes++; else bearVotes++;
@@ -715,7 +710,8 @@ async function scanSMC(log, opts = {}) {
         if (parseFloat(c[4]) > parseFloat(c[1])) bullVotes++; else bearVotes++;
       }
 
-      _btcBiasCache = bullVotes >= 2 ? 'bullish' : bearVotes >= 2 ? 'bearish' : null;
+      // Both must agree, otherwise neutral
+      _btcBiasCache = bullVotes === 2 ? 'bullish' : bearVotes === 2 ? 'bearish' : null;
       return _btcBiasCache;
     } catch (e) {
       bLog.error(`BTC bias fetch failed: ${e.message}`);
