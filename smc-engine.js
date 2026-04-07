@@ -23,7 +23,7 @@ const SL_PCT = 0.25;           // 25% flat price distance SL for all tokens
 const TRAILING_STEP = 0.012;   // trail SL by 1.2% (overridden by strategyConfig)
 
 // Swing lengths per timeframe (defaults, overridden by strategyConfig)
-let SWING_LENGTHS = { '4h': 11, '1h': 10, '15m': 8, '1m': 3 };
+let SWING_LENGTHS = { '4h': 11, '1h': 10, '15m': 8, '3m': 5, '1m': 3 };
 
 // Strategy config loaded from DB (ai_versions best params)
 let strategyConfig = null;
@@ -342,19 +342,21 @@ async function analyzeLHHL(ticker, params, dailyBiasCache) {
   // ┌─────────────────────────────────────────────────────────┐
   // │ Step 2: HTF Structure (4H + 1H)                        │
   // └─────────────────────────────────────────────────────────┘
-  const [klines4h, klines1h, klines15m, klines1m] = await Promise.all([
+  const [klines4h, klines1h, klines15m, klines3m, klines1m] = await Promise.all([
     fetchKlines(symbol, '4h', 100),
     fetchKlines(symbol, '1h', 100),
     fetchKlines(symbol, '15m', 100),
+    fetchKlines(symbol, '3m', 100),
     fetchKlines(symbol, '1m', 100),
   ]);
 
-  if (!klines4h || !klines1h || !klines15m || !klines1m) return null;
-  if (klines4h.length < 30 || klines1h.length < 30 || klines15m.length < 30 || klines1m.length < 15) return null;
+  if (!klines4h || !klines1h || !klines15m || !klines3m || !klines1m) return null;
+  if (klines4h.length < 30 || klines1h.length < 30 || klines15m.length < 30 || klines3m.length < 15 || klines1m.length < 15) return null;
 
   const struct4h = getStructure(klines4h, SWING_LENGTHS['4h']);
   const struct1h = getStructure(klines1h, SWING_LENGTHS['1h']);
   const struct15m = getStructure(klines15m, SWING_LENGTHS['15m']);
+  const struct3m = getStructure(klines3m, SWING_LENGTHS['3m']);
   const struct1m = getStructure(klines1m, SWING_LENGTHS['1m']);
 
   // HTF alignment: both or either based on optimized config
@@ -496,13 +498,24 @@ async function analyzeLHHL(ticker, params, dailyBiasCache) {
   }
 
   // ┌─────────────────────────────────────────────────────────┐
+  // │ Step 4b: 3M Confirmation — bridge between 15M and 1M   │
+  // └─────────────────────────────────────────────────────────┘
+  const has3mConfirm = (direction === 'LONG' && struct3m.hasHL) ||
+                       (direction === 'SHORT' && struct3m.hasLH);
+
+  if (!has3mConfirm) {
+    bLog.scan(`${symbol}: ${direction} has 15M setup but no 3M ${direction === 'LONG' ? 'HL' : 'LH'} — no confluence`);
+    return null;
+  }
+
+  // ┌─────────────────────────────────────────────────────────┐
   // │ Step 5: Entry TF (1M) — HL or LH confirmed             │
   // └─────────────────────────────────────────────────────────┘
   const has1mEntry = !NEED_1M || (direction === 'LONG' && struct1m.hasHL) ||
                      (direction === 'SHORT' && struct1m.hasLH);
 
   if (!has1mEntry) {
-    bLog.scan(`${symbol}: ${direction} setup on 15M but no 1M ${direction === 'LONG' ? 'HL' : 'LH'} entry — waiting`);
+    bLog.scan(`${symbol}: ${direction} setup on 15M+3M but no 1M ${direction === 'LONG' ? 'HL' : 'LH'} entry — waiting`);
     return null;
   }
 
@@ -586,7 +599,7 @@ async function analyzeLHHL(ticker, params, dailyBiasCache) {
   const absorpTag = absorp && absorp.strength > 0 ? ` | Absorb=${absorp.netAbsorption}(buy=${absorp.buyStrength},sell=${absorp.sellStrength})` : '';
   bLog.scan(
     `✅ ${symbol} ${direction} | bias=${bias} 4H=${struct4h.label} 1H=${struct1h.label} ` +
-    `15M=${struct15m.label} 1M=${struct1m.label} | at=${levelCheck.level} | score=${Math.round(score)}${scalperTag}${absorpTag}`
+    `15M=${struct15m.label} 3M=${struct3m.label} 1M=${struct1m.label} | at=${levelCheck.level} | score=${Math.round(score)}${scalperTag}${absorpTag}`
   );
 
   return {
@@ -610,6 +623,7 @@ async function analyzeLHHL(ticker, params, dailyBiasCache) {
       tf4h: struct4h.label,
       tf1h: struct1h.label,
       tf15: struct15m.label,
+      tf3: struct3m.label,
       tf1: struct1m.label,
       trend4h: struct4h.trend,
       trend1h: struct1h.trend,
