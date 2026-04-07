@@ -1570,6 +1570,38 @@
     }
   }
 
+  async function customerChat() {
+    const input = document.getElementById('chatbot-input');
+    const container = document.getElementById('chatbot-messages');
+    if (!input || !container || !input.value.trim()) return;
+    const msg = input.value.trim();
+    input.value = '';
+    // Add user message
+    const userEl = document.createElement('div');
+    userEl.className = 'chatbot-msg chatbot-user';
+    userEl.innerHTML = `<span>${escapeHtml(msg)}</span>`;
+    container.appendChild(userEl);
+    container.scrollTop = container.scrollHeight;
+    // Fetch reply
+    try {
+      const res = await fetch('/api/chatbot', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: msg }),
+      });
+      const data = await res.json();
+      const botEl = document.createElement('div');
+      botEl.className = 'chatbot-msg chatbot-bot';
+      botEl.innerHTML = `<span>${escapeHtml(data.reply || 'Sorry, try again.').replace(/\n/g, '<br>')}</span>`;
+      container.appendChild(botEl);
+    } catch {
+      const errEl = document.createElement('div');
+      errEl.className = 'chatbot-msg chatbot-bot';
+      errEl.innerHTML = '<span>Sorry, I\'m having trouble. Try again later.</span>';
+      container.appendChild(errEl);
+    }
+    container.scrollTop = container.scrollHeight;
+  }
+
   async function mcCommand(command, params) {
     try {
       const result = await api('POST', '/api/admin/agents/command', { command, params });
@@ -3020,7 +3052,7 @@
     addRiskLevel, saveRiskLevel, deleteRiskLevel,
     loadOpenPositions, emergencyCloseToken, emergencyCloseAll,
     fixBitunixPnl, debugBitunix, runBacktest, loadAiVersions, runAiOptimize,
-    mcRefresh, mcCommand, mcChat, mcChatQuick, switchAdminTab,
+    mcRefresh, mcCommand, mcChat, mcChatQuick, switchAdminTab, customerChat,
     mcToggleSkill, mcUpdateConfig, mcCreateAgent, mcRemoveAgent,
   };
 
