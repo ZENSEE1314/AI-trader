@@ -301,6 +301,9 @@ async function initAllTables() {
     // Trailing SL columns on trades
     `ALTER TABLE trades ADD COLUMN IF NOT EXISTS trailing_sl_price NUMERIC`,
     `ALTER TABLE trades ADD COLUMN IF NOT EXISTS trailing_sl_last_step NUMERIC DEFAULT 0`,
+    // Trade fee tracking
+    `ALTER TABLE trades ADD COLUMN IF NOT EXISTS trading_fee NUMERIC DEFAULT 0`,
+    `ALTER TABLE trades ADD COLUMN IF NOT EXISTS gross_pnl NUMERIC`,
     // Optimizer candle cache (survives redeploys)
     `CREATE TABLE IF NOT EXISTS optimizer_cache (
       id INTEGER PRIMARY KEY,

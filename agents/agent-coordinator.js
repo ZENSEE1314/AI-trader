@@ -250,8 +250,14 @@ class AgentCoordinator extends BaseAgent {
     if (/^(performance|win|loss|how.*doing|results|pnl|profit)/.test(text)) {
       return this._buildPerformanceChat();
     }
+    if (/^(accountant|pnl|profit|loss|trade history|trades|check.*trade|fix.*pnl|wrong.*pnl|earnings|revenue|income)/.test(text)) {
+      return this._buildTradeHistoryChat();
+    }
+    if (/^(fee|commission|cost|how much.*pay|charges)/.test(text)) {
+      return this._buildFeeChat();
+    }
     if (/^(help|what can you|commands|how do i)/.test(text)) {
-      return { from: 'Coordinator', message: 'You can tell me:\n\n• "scan now" — hunt for trades\n• "pause/resume all" — control all agents\n• "pause/resume chart/trader/risk/sentiment" — control one agent\n• "status" — full team report\n• "what are you trading?" — open positions\n• "any signals?" — latest scan results\n• "market mood?" — sentiment report\n• "risk report" — risk exposure\n• "performance" — win/loss stats' };
+      return { from: 'Coordinator', message: 'You can tell me:\n\n• "scan now" — hunt for trades\n• "pause/resume all" — control all agents\n• "pause/resume chart/trader/risk/sentiment" — control one agent\n• "status" — full team report\n• "what are you trading?" — open positions\n• "any signals?" — latest scan results\n• "market mood?" — sentiment report\n• "risk report" — risk exposure\n• "performance" — win/loss stats\n• "trade history" / "pnl" — last 10 trades with fees\n• "fees" — total fees paid' };
     }
 
     // Catch-all
@@ -359,6 +365,50 @@ class AgentCoordinator extends BaseAgent {
       return { from: 'Coordinator', message: lines.join('\n') };
     } catch {
       return { from: 'Coordinator', message: 'Can\'t load performance data right now.' };
+    }
+  }
+
+  async _buildTradeHistoryChat() {
+    try {
+      const { query } = require('../db');
+      const recent = await query(
+        `SELECT symbol, direction, status, pnl_usdt, trading_fee, gross_pnl, created_at, closed_at
+         FROM trades WHERE status IN ('WIN','LOSS','TP','SL','CLOSED')
+         ORDER BY closed_at DESC LIMIT 10`
+      );
+      if (!recent.length) return { from: 'Coordinator', message: 'No closed trades yet.' };
+      const totalNet = recent.reduce((s, t) => s + (parseFloat(t.pnl_usdt) || 0), 0);
+      const totalFee = recent.reduce((s, t) => s + (parseFloat(t.trading_fee) || 0), 0);
+      const wins = recent.filter(t => t.status === 'WIN' || t.status === 'TP').length;
+      const lines = [`**Last ${recent.length} Trades**\n`];
+      for (const t of recent) {
+        const net = parseFloat(t.pnl_usdt) || 0;
+        const fee = parseFloat(t.trading_fee) || 0;
+        const gross = t.gross_pnl != null ? parseFloat(t.gross_pnl) : net;
+        lines.push(`${t.status === 'WIN' || t.status === 'TP' ? 'W' : 'L'} ${t.symbol} ${t.direction} | gross: $${gross.toFixed(2)} | fee: $${fee.toFixed(2)} | net: $${net.toFixed(2)}`);
+      }
+      lines.push(`\n**Summary:** ${wins}W/${recent.length - wins}L | Net: $${totalNet.toFixed(2)} | Fees: $${totalFee.toFixed(2)}`);
+      return { from: 'Coordinator', message: lines.join('\n') };
+    } catch (err) {
+      return { from: 'Coordinator', message: `Can't load trade history: ${err.message}` };
+    }
+  }
+
+  async _buildFeeChat() {
+    try {
+      const { query } = require('../db');
+      const fees = await query(
+        `SELECT COALESCE(SUM(trading_fee), 0) as total_fee, COUNT(*) as trades
+         FROM trades WHERE status IN ('WIN','LOSS','TP','SL','CLOSED') AND trading_fee > 0`
+      );
+      const f = fees[0];
+      const totalFee = parseFloat(f.total_fee) || 0;
+      const count = parseInt(f.trades) || 0;
+      if (count === 0) return { from: 'Coordinator', message: 'No fee data recorded yet. Fees will be tracked on future trades.' };
+      const avg = totalFee / count;
+      return { from: 'Coordinator', message: `**Fee Report**\n\nTotal fees paid: $${totalFee.toFixed(2)}\nTrades with fees: ${count}\nAvg fee per trade: $${avg.toFixed(2)}` };
+    } catch (err) {
+      return { from: 'Coordinator', message: `Can't load fee data: ${err.message}` };
     }
   }
 
