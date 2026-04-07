@@ -687,23 +687,46 @@ async function scanSMC(log, opts = {}) {
   const minScore = params.MIN_SCORE || 8;
   const dailyBiasCache = new Map();
 
-  // BTC market filter: use TODAY's candle (current direction) to block counter-trend trades
-  let btcBias = null;
-  try {
-    const btcDaily = await fetchKlines('BTCUSDT', '1d', 3);
-    if (btcDaily && btcDaily.length >= 1) {
-      // Use current (today's) candle — not yesterday's
-      const today = btcDaily[btcDaily.length - 1];
-      const dOpen = parseFloat(today[1]), dClose = parseFloat(today[4]);
-      const changePct = ((dClose - dOpen) / dOpen) * 100;
-      btcBias = dClose > dOpen ? 'bullish' : dClose < dOpen ? 'bearish' : null;
-      bLog.scan(`BTC market bias: ${btcBias || 'neutral'} (today ${changePct > 0 ? '+' : ''}${changePct.toFixed(2)}%)`);
+  // BTC market filter: fetch fresh BTC data per signal (checked each time, not cached)
+  async function getBtcBias() {
+    try {
+      // Check multiple timeframes for stronger confirmation
+      const [btcDaily, btc4h, btc1h] = await Promise.all([
+        fetchKlines('BTCUSDT', '1d', 3),
+        fetchKlines('BTCUSDT', '4h', 3),
+        fetchKlines('BTCUSDT', '1h', 3),
+      ]);
+      let bullVotes = 0, bearVotes = 0;
+
+      // Today's daily candle
+      if (btcDaily && btcDaily.length >= 1) {
+        const c = btcDaily[btcDaily.length - 1];
+        if (parseFloat(c[4]) > parseFloat(c[1])) bullVotes++; else bearVotes++;
+      }
+      // Current 4h candle
+      if (btc4h && btc4h.length >= 1) {
+        const c = btc4h[btc4h.length - 1];
+        if (parseFloat(c[4]) > parseFloat(c[1])) bullVotes++; else bearVotes++;
+      }
+      // Current 1h candle
+      if (btc1h && btc1h.length >= 1) {
+        const c = btc1h[btc1h.length - 1];
+        if (parseFloat(c[4]) > parseFloat(c[1])) bullVotes++; else bearVotes++;
+      }
+
+      // Need 2 out of 3 timeframes to agree
+      if (bullVotes >= 2) return 'bullish';
+      if (bearVotes >= 2) return 'bearish';
+      return null;
+    } catch (e) {
+      bLog.error(`BTC bias fetch failed: ${e.message}`);
+      return null;
     }
-  } catch (e) {
-    bLog.error(`BTC bias fetch failed: ${e.message}`);
   }
 
-  bLog.scan(`Refined scan: ${topCoins.length} coins | minScore=${minScore} | BTC=${btcBias || 'unknown'}`);
+  // Get initial BTC bias for logging
+  const btcBias = await getBtcBias();
+  bLog.scan(`Refined scan: ${topCoins.length} coins | minScore=${minScore} | BTC=${btcBias || 'neutral'}`);
 
   const results = [];
   let analyzed = 0;
@@ -720,17 +743,40 @@ async function scanSMC(log, opts = {}) {
     analyzed++;
 
     if (signal && signal.score >= minScore) {
-      // BTC filter: block counter-trend trades — if BTC is bullish today, only LONG
-      if (btcBias) {
-        if (btcBias === 'bullish' && signal.direction === 'SHORT') {
-          bLog.scan(`${signal.symbol}: SHORT blocked — BTC is bullish today`);
-          skippedBtcFilter++;
-          continue;
-        }
-        if (btcBias === 'bearish' && signal.direction === 'LONG') {
-          bLog.scan(`${signal.symbol}: LONG blocked — BTC is bearish today`);
-          skippedBtcFilter++;
-          continue;
+      // BTC filter: check if this token follows BTC before blocking
+      const liveBtc = await getBtcBias();
+      if (liveBtc) {
+        // Check if this token is actually following BTC right now
+        let tokenFollowsBtc = true;
+        try {
+          const tokenK = await fetchKlines(signal.symbol, '1h', 5);
+          const btcK = await fetchKlines('BTCUSDT', '1h', 5);
+          if (tokenK && btcK && tokenK.length >= 3 && btcK.length >= 3) {
+            // Compare last 3 hourly candles — count how many move in same direction as BTC
+            let sameDir = 0;
+            for (let i = tokenK.length - 3; i < tokenK.length; i++) {
+              const tUp = parseFloat(tokenK[i][4]) > parseFloat(tokenK[i][1]);
+              const bUp = parseFloat(btcK[i][4]) > parseFloat(btcK[i][1]);
+              if (tUp === bUp) sameDir++;
+            }
+            // If 2+ out of 3 candles move opposite to BTC, token is not following BTC
+            tokenFollowsBtc = sameDir >= 2;
+          }
+        } catch (_) {}
+
+        if (tokenFollowsBtc) {
+          if (liveBtc === 'bullish' && signal.direction === 'SHORT') {
+            bLog.scan(`${signal.symbol}: SHORT blocked — BTC is bullish & token follows BTC`);
+            skippedBtcFilter++;
+            continue;
+          }
+          if (liveBtc === 'bearish' && signal.direction === 'LONG') {
+            bLog.scan(`${signal.symbol}: LONG blocked — BTC is bearish & token follows BTC`);
+            skippedBtcFilter++;
+            continue;
+          }
+        } else {
+          bLog.scan(`${signal.symbol}: BTC filter bypassed — token moving independently from BTC`);
         }
       }
 
