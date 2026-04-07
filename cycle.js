@@ -41,7 +41,7 @@ const CONFIG = {
 //   Initial SL = 20% of $100 = -$20 loss triggers SL.
 //   Trailing gap = 15%. At +30% ($30 profit) → SL locks at +15% ($15 profit).
 const TRAILING_SL = {
-  INITIAL_SL_PCT: 0.25,           // 25% price distance from entry (flat, not capital-based)
+  INITIAL_SL_PCT: 0.05,           // 5% price distance SL (RR 1:2 with 10% TP)
   TRAILING_GAP: 0.15,             // SL always 15% behind current profit
   FIXED_TIERS: [
     { trigger: 0.30,  sl: 0.15  },  //  +30%  → SL at +15%  (gap 15%)
@@ -1028,17 +1028,12 @@ async function executeForAllUsers(pick) {
         // Per-user settings: use user_token_leverage first, then key default
         const userLev = await getTokenLeverage(symbol, key.id);
         const walletSizePct = (await getCapitalPercentage(key.id)) / 100;
-        const rawTP = parseFloat(key.tp_pct);
-        const userTP = (isNaN(rawTP) || rawTP <= 0) ? 0.045 : rawTP;
-        // Flat 25% SL price distance for all tokens (not capital-based)
-        const userSL = 0.25;
-
-        // SL = flat 25% price distance, TP = capital % / leverage
-        const slPricePct = userSL;
-        const tpPricePct = userTP / userLev;
+        // SL = 5% price distance, TP = 10% price distance (RR 1:2)
+        const slPricePct = 0.05;
+        const tpPricePct = 0.10;
         const initialSlPrice = isLong ? price * (1 - slPricePct) : price * (1 + slPricePct);
         const userTpPrice = isLong ? price * (1 + tpPricePct) : price * (1 - tpPricePct);
-        const userTp3Price = isLong ? price * (1 + tpPricePct * 1.5) : price * (1 - tpPricePct * 1.5);
+        const userTp3Price = userTpPrice;
 
         let account, wallet, openPosCount;
 
