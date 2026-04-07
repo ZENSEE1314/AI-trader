@@ -1009,7 +1009,7 @@ async function executeForAllUsers(pick) {
 
         // Cooldown: don't re-enter same token within 4 hours after last closed trade
         const recentClosed = await db.query(
-          `SELECT id, closed_at FROM trades WHERE user_id = $1 AND symbol = $2 AND status = 'CLOSED' AND closed_at > NOW() - INTERVAL '4 hours' ORDER BY closed_at DESC LIMIT 1`,
+          `SELECT id, closed_at FROM trades WHERE user_id = $1 AND symbol = $2 AND status IN ('WIN','LOSS','TP','SL','CLOSED') AND closed_at > NOW() - INTERVAL '4 hours' ORDER BY closed_at DESC LIMIT 1`,
           [key.user_id, symbol]
         );
         if (recentClosed.length > 0) {
