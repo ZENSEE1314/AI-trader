@@ -743,18 +743,40 @@ async function scanSMC(log, opts = {}) {
     analyzed++;
 
     if (signal && signal.score >= minScore) {
-      // BTC filter: re-check BTC live before each trade — not cached
+      // BTC filter: check if this token follows BTC before blocking
       const liveBtc = await getBtcBias();
       if (liveBtc) {
-        if (liveBtc === 'bullish' && signal.direction === 'SHORT') {
-          bLog.scan(`${signal.symbol}: SHORT blocked — BTC is bullish (1d+4h+1h)`);
-          skippedBtcFilter++;
-          continue;
-        }
-        if (liveBtc === 'bearish' && signal.direction === 'LONG') {
-          bLog.scan(`${signal.symbol}: LONG blocked — BTC is bearish (1d+4h+1h)`);
-          skippedBtcFilter++;
-          continue;
+        // Check if this token is actually following BTC right now
+        let tokenFollowsBtc = true;
+        try {
+          const tokenK = await fetchKlines(signal.symbol, '1h', 5);
+          const btcK = await fetchKlines('BTCUSDT', '1h', 5);
+          if (tokenK && btcK && tokenK.length >= 3 && btcK.length >= 3) {
+            // Compare last 3 hourly candles — count how many move in same direction as BTC
+            let sameDir = 0;
+            for (let i = tokenK.length - 3; i < tokenK.length; i++) {
+              const tUp = parseFloat(tokenK[i][4]) > parseFloat(tokenK[i][1]);
+              const bUp = parseFloat(btcK[i][4]) > parseFloat(btcK[i][1]);
+              if (tUp === bUp) sameDir++;
+            }
+            // If 2+ out of 3 candles move opposite to BTC, token is not following BTC
+            tokenFollowsBtc = sameDir >= 2;
+          }
+        } catch (_) {}
+
+        if (tokenFollowsBtc) {
+          if (liveBtc === 'bullish' && signal.direction === 'SHORT') {
+            bLog.scan(`${signal.symbol}: SHORT blocked — BTC is bullish & token follows BTC`);
+            skippedBtcFilter++;
+            continue;
+          }
+          if (liveBtc === 'bearish' && signal.direction === 'LONG') {
+            bLog.scan(`${signal.symbol}: LONG blocked — BTC is bearish & token follows BTC`);
+            skippedBtcFilter++;
+            continue;
+          }
+        } else {
+          bLog.scan(`${signal.symbol}: BTC filter bypassed — token moving independently from BTC`);
         }
       }
 
