@@ -87,9 +87,18 @@ function customerFAQ(text) {
 app.get('/api/agents/status', (req, res) => {
   try {
     const { getCoordinator } = require('./agents');
+    const { isAvailable } = require('./agents/ai-brain');
     const coordinator = getCoordinator();
     const h = coordinator.getHealth();
-    res.json({ state: h.state, cycleRunning: h.cycleRunning, runCount: h.runCount, agentCount: Object.keys(h.agents || {}).length });
+    res.json({
+      state: h.state,
+      cycleRunning: h.cycleRunning,
+      runCount: h.runCount,
+      agentCount: Object.keys(h.agents || {}).length,
+      aiEnabled: isAvailable(),
+      aiKeySet: !!process.env.ANTHROPIC_API_KEY,
+      aiKeyPrefix: process.env.ANTHROPIC_API_KEY ? process.env.ANTHROPIC_API_KEY.substring(0, 10) + '...' : 'NOT SET',
+    });
   } catch (err) {
     res.json({ state: 'offline', error: err.message });
   }
