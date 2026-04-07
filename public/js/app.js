@@ -1428,80 +1428,39 @@
     return `${Math.round(diff / 86400000)}d ago`;
   }
 
-  function mcCeoQuick(text) {
-    const input = document.getElementById('mc-ceo-input');
+  function mcChatQuick(text) {
+    const input = document.getElementById('mc-chat-input');
     if (input) input.value = text;
-    mcCeoCommand();
+    mcChat();
   }
 
-  async function mcCeoCommand() {
-    const input = document.getElementById('mc-ceo-input');
-    const responseEl = document.getElementById('mc-ceo-response');
+  function mcChatAddMessage(from, text, isCeo) {
+    const container = document.getElementById('mc-chat-messages');
+    if (!container) return;
+    const msg = document.createElement('div');
+    msg.className = `mc-chat-msg ${isCeo ? 'mc-chat-ceo' : 'mc-chat-agent'}`;
+    // Format **bold** in agent messages
+    const formatted = escapeHtml(text).replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+    msg.innerHTML = `<span class="mc-chat-from">${escapeHtml(from)}</span><span class="mc-chat-text">${formatted}</span>`;
+    container.appendChild(msg);
+    container.scrollTop = container.scrollHeight;
+  }
+
+  async function mcChat() {
+    const input = document.getElementById('mc-chat-input');
     if (!input || !input.value.trim()) return;
+    const message = input.value.trim();
+    input.value = '';
 
-    const raw = input.value.trim().toLowerCase();
-    responseEl.innerHTML = `<span style="color:var(--color-accent);">Processing: "${escapeHtml(raw)}"...</span>`;
-
-    // Parse natural language → command + params
-    const parsed = parseCeoCommand(raw);
-    if (!parsed) {
-      responseEl.innerHTML = `<span style="color:var(--color-danger);">Unknown command. Try: scan now, pause all, resume chart, status</span>`;
-      return;
-    }
+    mcChatAddMessage('You', message, true);
 
     try {
-      if (parsed.command === 'status') {
-        await mcRefresh();
-        responseEl.innerHTML = `<span style="color:var(--color-success);">Dashboard refreshed.</span>`;
-      } else {
-        const result = await api('POST', '/api/admin/agents/command', { command: parsed.command, params: parsed.params });
-        if (result.ok === false && result.error) {
-          responseEl.innerHTML = `<span style="color:var(--color-danger);">${escapeHtml(result.error)}</span>`;
-        } else {
-          responseEl.innerHTML = `<span style="color:var(--color-success);">${escapeHtml(parsed.feedback)}</span>`;
-        }
-        setTimeout(mcRefresh, 500);
-      }
+      const reply = await api('POST', '/api/admin/agents/chat', { message });
+      mcChatAddMessage(reply.from || 'Coordinator', reply.message || 'Done.', false);
+      setTimeout(mcRefresh, 800);
     } catch (err) {
-      responseEl.innerHTML = `<span style="color:var(--color-danger);">Error: ${escapeHtml(err.message)}</span>`;
+      mcChatAddMessage('System', `Error: ${err.message}`, false);
     }
-
-    input.value = '';
-  }
-
-  function parseCeoCommand(text) {
-    // scan / force scan
-    if (/^(scan|force scan|scan now|run scan|go scan|find trades)/.test(text))
-      return { command: 'force-scan', params: {}, feedback: 'Scan triggered. Agents are hunting for signals...' };
-
-    // pause all
-    if (/^(pause all|stop all|halt|freeze|stop everything|pause everything)/.test(text))
-      return { command: 'pause-all', params: {}, feedback: 'All agents paused.' };
-
-    // resume all
-    if (/^(resume all|start all|go|run|wake up|unpause all|start everything)/.test(text))
-      return { command: 'resume-all', params: {}, feedback: 'All agents resumed.' };
-
-    // pause specific agent
-    const pauseMatch = text.match(/^(pause|stop|halt|freeze)\s+(chart|trader|risk|sentiment)/);
-    if (pauseMatch)
-      return { command: 'pause-agent', params: { agent: pauseMatch[2] }, feedback: `${pauseMatch[2]} agent paused.` };
-
-    // resume specific agent
-    const resumeMatch = text.match(/^(resume|start|unpause|wake)\s+(chart|trader|risk|sentiment)/);
-    if (resumeMatch)
-      return { command: 'resume-agent', params: { agent: resumeMatch[2] }, feedback: `${resumeMatch[2]} agent resumed.` };
-
-    // reset specific agent
-    const resetMatch = text.match(/^(reset|fix|clear)\s+(chart|trader|risk|sentiment)/);
-    if (resetMatch)
-      return { command: 'reset-agent', params: { agent: resetMatch[2] }, feedback: `${resetMatch[2]} agent reset.` };
-
-    // status / refresh
-    if (/^(status|refresh|health|check|report|how are you|what.*doing)/.test(text))
-      return { command: 'status', params: {}, feedback: 'Refreshed.' };
-
-    return null;
   }
 
   async function mcCommand(command, params) {
@@ -2954,7 +2913,7 @@
     addRiskLevel, saveRiskLevel, deleteRiskLevel,
     loadOpenPositions, emergencyCloseToken, emergencyCloseAll,
     fixBitunixPnl, debugBitunix, runBacktest, loadAiVersions, runAiOptimize,
-    mcRefresh, mcCommand, mcCeoCommand, mcCeoQuick, switchAdminTab,
+    mcRefresh, mcCommand, mcChat, mcChatQuick, switchAdminTab,
   };
 
   // ----- Init -----

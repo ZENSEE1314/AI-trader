@@ -1009,27 +1009,32 @@
             <div style="color:var(--color-text-muted);font-size:0.85rem;padding:var(--space-3);text-align:center;">Loading agents...</div>
           </div>
 
-          <!-- CEO Command Bar -->
-          <div class="mc-command-bar" style="margin-top:var(--space-4);border-top:1px solid var(--color-border-muted);padding-top:var(--space-3);">
-            <div style="display:flex;align-items:center;gap:8px;margin-bottom:var(--space-2);">
-              <strong style="font-size:0.85rem;color:var(--color-accent);">CEO Command</strong>
-              <span style="font-size:0.7rem;color:var(--color-text-muted);">Tell your agents what to do</span>
+          <!-- CEO Chat -->
+          <div style="margin-top:var(--space-4);border-top:1px solid var(--color-border-muted);padding-top:var(--space-3);">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--space-2);">
+              <strong style="font-size:0.85rem;color:var(--color-accent);">Talk to Your Agents</strong>
+              <span style="font-size:0.7rem;color:var(--color-text-muted);">Type naturally — they understand you</span>
             </div>
-            <div style="display:flex;gap:6px;">
-              <input type="text" id="mc-ceo-input" class="form-input text-mono" placeholder="e.g. scan now, pause chart, resume all, status..." style="flex:1;font-size:0.85rem;padding:10px 14px;background:var(--color-bg);border:1px solid var(--color-border-muted);border-radius:var(--radius-md);" onkeydown="if(event.key==='Enter')window.CryptoBot.mcCeoCommand()">
-              <button class="btn btn-sm" style="background:var(--color-accent);color:#000;font-weight:600;padding:10px 20px;white-space:nowrap;" onclick="window.CryptoBot.mcCeoCommand()">Send</button>
+            <div id="mc-chat-messages" class="mc-chat-messages">
+              <div class="mc-chat-msg mc-chat-agent">
+                <span class="mc-chat-from">Coordinator</span>
+                <span class="mc-chat-text">Ready for orders, boss. Type "help" to see what I can do, or just tell me what you need.</span>
+              </div>
             </div>
-            <div id="mc-ceo-response" style="margin-top:var(--space-2);font-size:0.8rem;color:var(--color-text-muted);min-height:20px;"></div>
+            <div style="display:flex;gap:6px;margin-top:var(--space-2);">
+              <input type="text" id="mc-chat-input" class="form-input text-mono" placeholder="Tell your agents what to do..." style="flex:1;font-size:0.85rem;padding:10px 14px;" onkeydown="if(event.key==='Enter')window.CryptoBot.mcChat()">
+              <button class="btn btn-sm" style="background:var(--color-accent);color:#000;font-weight:600;padding:10px 20px;white-space:nowrap;" onclick="window.CryptoBot.mcChat()">Send</button>
+            </div>
             <div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:var(--space-2);">
-              <button class="mc-quick-cmd" onclick="window.CryptoBot.mcCeoQuick('scan now')">scan now</button>
-              <button class="mc-quick-cmd" onclick="window.CryptoBot.mcCeoQuick('pause all')">pause all</button>
-              <button class="mc-quick-cmd" onclick="window.CryptoBot.mcCeoQuick('resume all')">resume all</button>
-              <button class="mc-quick-cmd" onclick="window.CryptoBot.mcCeoQuick('pause chart')">pause chart</button>
-              <button class="mc-quick-cmd" onclick="window.CryptoBot.mcCeoQuick('pause trader')">pause trader</button>
-              <button class="mc-quick-cmd" onclick="window.CryptoBot.mcCeoQuick('pause risk')">pause risk</button>
-              <button class="mc-quick-cmd" onclick="window.CryptoBot.mcCeoQuick('resume chart')">resume chart</button>
-              <button class="mc-quick-cmd" onclick="window.CryptoBot.mcCeoQuick('resume trader')">resume trader</button>
-              <button class="mc-quick-cmd" onclick="window.CryptoBot.mcCeoQuick('status')">status</button>
+              <button class="mc-quick-cmd" onclick="window.CryptoBot.mcChatQuick('scan now')">scan now</button>
+              <button class="mc-quick-cmd" onclick="window.CryptoBot.mcChatQuick('status')">status</button>
+              <button class="mc-quick-cmd" onclick="window.CryptoBot.mcChatQuick('any signals?')">any signals?</button>
+              <button class="mc-quick-cmd" onclick="window.CryptoBot.mcChatQuick('market mood?')">market mood?</button>
+              <button class="mc-quick-cmd" onclick="window.CryptoBot.mcChatQuick('what are you trading?')">open positions</button>
+              <button class="mc-quick-cmd" onclick="window.CryptoBot.mcChatQuick('risk report')">risk report</button>
+              <button class="mc-quick-cmd" onclick="window.CryptoBot.mcChatQuick('performance')">performance</button>
+              <button class="mc-quick-cmd" onclick="window.CryptoBot.mcChatQuick('pause all')">pause all</button>
+              <button class="mc-quick-cmd" onclick="window.CryptoBot.mcChatQuick('resume all')">resume all</button>
             </div>
           </div>
 

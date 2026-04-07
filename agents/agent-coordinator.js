@@ -191,6 +191,177 @@ class AgentCoordinator extends BaseAgent {
     return this._agents.get(name);
   }
 
+  // ── Chat (CEO → Agents) ────────────────────────────────────
+
+  async handleChat(message) {
+    const text = message.trim().toLowerCase();
+    this.addActivity('command', `CEO: ${message}`);
+
+    // ── Action commands ──
+    if (/^(scan|force scan|scan now|go scan|find trades|hunt|look for)/.test(text)) {
+      if (this.cycleRunning) return { from: 'Coordinator', message: 'Already running a scan. Hold on, boss.' };
+      this.run({ forced: true }).catch(() => {});
+      return { from: 'Coordinator', message: 'On it. Scanning all markets now — ChartAgent is hunting for signals. I\'ll update the feed when done.' };
+    }
+    if (/^(pause all|stop all|halt|freeze|stop everything|shut down|stand down)/.test(text)) {
+      await this.handleCommand('pause-all');
+      return { from: 'Coordinator', message: 'All agents standing down. Nobody moves until you say so.' };
+    }
+    if (/^(resume all|start all|wake|go go|unpause|back to work|get to work|start working|lets go)/.test(text)) {
+      await this.handleCommand('resume-all');
+      return { from: 'Coordinator', message: 'All agents back online. ChartAgent scanning, RiskAgent filtering, TraderAgent executing. We\'re live.' };
+    }
+
+    // Pause/resume/reset specific agent
+    const pauseM = text.match(/^(pause|stop|halt)\s+(chart|trader|risk|sentiment)/);
+    if (pauseM) {
+      await this.handleCommand('pause-agent', { agent: pauseM[2] });
+      const names = { chart: 'ChartAgent', trader: 'TraderAgent', risk: 'RiskAgent', sentiment: 'SentimentAgent' };
+      return { from: names[pauseM[2]] || 'Coordinator', message: `Understood. I'm paused. Standing by until you need me.` };
+    }
+    const resumeM = text.match(/^(resume|start|unpause|wake)\s+(chart|trader|risk|sentiment)/);
+    if (resumeM) {
+      await this.handleCommand('resume-agent', { agent: resumeM[2] });
+      const names = { chart: 'ChartAgent', trader: 'TraderAgent', risk: 'RiskAgent', sentiment: 'SentimentAgent' };
+      return { from: names[resumeM[2]] || 'Coordinator', message: `Back online. Ready to work.` };
+    }
+    const resetM = text.match(/^(reset|fix|clear)\s+(chart|trader|risk|sentiment)/);
+    if (resetM) {
+      await this.handleCommand('reset-agent', { agent: resetM[2] });
+      return { from: 'Coordinator', message: `${resetM[2]} agent has been reset. Error cleared, ready to go.` };
+    }
+
+    // ── Status / report queries ──
+    if (/^(status|report|what.*(doing|happening|going on)|how.*(are|is)|sitrep|update)/.test(text)) {
+      return this._buildStatusChat();
+    }
+    if (/^(who|which|what).*(trading|open|position)/.test(text)) {
+      return this._buildPositionsChat();
+    }
+    if (/^(mood|sentiment|market|how.*(market|crypto))/.test(text)) {
+      return this._buildSentimentChat();
+    }
+    if (/^(signal|what.*(found|see|scan)|any.*(signal|trade|setup))/.test(text)) {
+      return this._buildSignalsChat();
+    }
+    if (/^(risk|danger|safe|exposure|drawdown)/.test(text)) {
+      return this._buildRiskChat();
+    }
+    if (/^(performance|win|loss|how.*doing|results|pnl|profit)/.test(text)) {
+      return this._buildPerformanceChat();
+    }
+    if (/^(help|what can you|commands|how do i)/.test(text)) {
+      return { from: 'Coordinator', message: 'You can tell me:\n\n• "scan now" — hunt for trades\n• "pause/resume all" — control all agents\n• "pause/resume chart/trader/risk/sentiment" — control one agent\n• "status" — full team report\n• "what are you trading?" — open positions\n• "any signals?" — latest scan results\n• "market mood?" — sentiment report\n• "risk report" — risk exposure\n• "performance" — win/loss stats' };
+    }
+
+    // Catch-all
+    return { from: 'Coordinator', message: `I didn't understand "${message}". Try "status", "scan now", "pause chart", or "help" to see what I can do.` };
+  }
+
+  _buildStatusChat() {
+    const h = this.getHealth();
+    const agents = h.agents || {};
+    const lines = [];
+    lines.push(`**Team Status Report**`);
+
+    for (const [key, a] of Object.entries(agents)) {
+      const state = a.paused ? 'PAUSED' : a.state.toUpperCase();
+      let detail = `${a.runCount} runs`;
+      if (a.lastSignalCount !== undefined) detail += `, ${a.lastSignalCount} signals last scan`;
+      if (a.openPositions !== undefined) detail += `, ${a.openPositions} open positions`;
+      if (a.mood) detail += `, mood: ${a.mood}`;
+      if (a.consecutiveLosses > 0) detail += `, ${a.consecutiveLosses} consecutive losses`;
+      if (a.currentTask) detail = `Working: ${a.currentTask.description}`;
+      lines.push(`• ${a.name} [${state}] — ${detail}`);
+    }
+
+    if (h.cycleRunning) lines.push(`\nCurrently running a trading cycle.`);
+    else lines.push(`\nAll quiet. Waiting for next cycle.`);
+
+    return { from: 'Coordinator', message: lines.join('\n') };
+  }
+
+  async _buildPositionsChat() {
+    try {
+      const { query } = require('../db');
+      const trades = await query("SELECT symbol, direction, entry_price, leverage, created_at FROM trades WHERE status = 'OPEN' ORDER BY created_at DESC");
+      if (!trades.length) return { from: 'TraderAgent', message: 'No open positions right now. Waiting for a good setup.' };
+      const lines = [`We have ${trades.length} open position(s):\n`];
+      for (const t of trades) {
+        const ago = Math.round((Date.now() - new Date(t.created_at).getTime()) / 60000);
+        lines.push(`• ${t.symbol} ${t.direction} x${t.leverage} @ $${parseFloat(t.entry_price).toFixed(4)} — ${ago}m ago`);
+      }
+      return { from: 'TraderAgent', message: lines.join('\n') };
+    } catch {
+      return { from: 'TraderAgent', message: 'Can\'t check positions right now — database might be loading.' };
+    }
+  }
+
+  _buildSentimentChat() {
+    const sh = this.sentimentAgent.getHealth();
+    if (!sh.scansCompleted) return { from: 'SentimentAgent', message: 'Haven\'t scanned sentiment yet. Run a cycle first or ask me to scan.' };
+    const mood = sh.mood;
+    const moodDesc = mood === 'risk-on' ? 'Bullish — market is greedy. Good for longs.' :
+                     mood === 'risk-off' ? 'Bearish — fear in the market. Careful with longs.' :
+                     'Neutral — no strong bias. Normal conditions.';
+    return { from: 'SentimentAgent', message: `Market mood: **${mood.toUpperCase()}**\n${moodDesc}\n\nTracking ${sh.coinsTracked} coins across CoinGecko, CryptoPanic, and X/Twitter. ${sh.extremeEvents} extreme events detected.` };
+  }
+
+  _buildSignalsChat() {
+    const ch = this.chartAgent.getHealth();
+    const signals = this.chartAgent.getLastSignals();
+    if (!ch.totalScans) return { from: 'ChartAgent', message: 'Haven\'t scanned yet. Tell me to "scan now" and I\'ll look.' };
+    if (!signals.length) return { from: 'ChartAgent', message: `Last scan found nothing. Checked ${ch.totalScans} time(s). No setups passed the checklist — all filters are strict. I\'ll keep looking.` };
+    const lines = [`Found ${signals.length} signal(s) on last scan:\n`];
+    for (const s of signals) {
+      lines.push(`• ${s.symbol} ${s.direction} — score: ${s.score}, setup: ${s.setupName || 'SMC'}`);
+    }
+    return { from: 'ChartAgent', message: lines.join('\n') };
+  }
+
+  _buildRiskChat() {
+    const rh = this.riskAgent.getHealth();
+    const lines = [`**Risk Report**\n`];
+    lines.push(`Signals approved: ${rh.signalsApproved}`);
+    lines.push(`Signals rejected: ${rh.signalsRejected}`);
+    lines.push(`Max open positions: ${rh.maxOpenPositions}`);
+    lines.push(`Consecutive losses: ${rh.consecutiveLosses}`);
+    if (rh.consecutiveLosses >= 3) lines.push(`\n⚠️ Drawdown mode active — reducing position sizes.`);
+    if (rh.lastRiskReport?.rejectionReasons?.length) {
+      lines.push(`\nRecent rejections:`);
+      for (const r of rh.lastRiskReport.rejectionReasons.slice(0, 3)) {
+        lines.push(`• ${r.symbol}: ${r.reasons.join(', ')}`);
+      }
+    }
+    return { from: 'RiskAgent', message: lines.join('\n') };
+  }
+
+  async _buildPerformanceChat() {
+    try {
+      const aiLearner = require('../ai-learner');
+      const stats = await aiLearner.getStats();
+      if (!stats.overall || parseInt(stats.overall.total) === 0) {
+        return { from: 'Coordinator', message: 'No trades recorded yet. The AI is still learning — performance data will appear after the first few trades.' };
+      }
+      const o = stats.overall;
+      const total = parseInt(o.total);
+      const wins = parseInt(o.wins);
+      const wr = ((wins / total) * 100).toFixed(0);
+      const avgPnl = parseFloat(o.avg_pnl || 0).toFixed(3);
+      const totalPnl = parseFloat(o.total_pnl || 0).toFixed(2);
+      const lines = [`**Performance Report**\n`];
+      lines.push(`Total trades: ${total}`);
+      lines.push(`Win rate: ${wr}% (${wins}W / ${total - wins}L)`);
+      lines.push(`Avg PnL per trade: ${avgPnl}%`);
+      lines.push(`Total PnL: ${totalPnl}%`);
+      if (o.best_trade) lines.push(`Best trade: +${parseFloat(o.best_trade).toFixed(2)}%`);
+      if (o.worst_trade) lines.push(`Worst trade: ${parseFloat(o.worst_trade).toFixed(2)}%`);
+      return { from: 'Coordinator', message: lines.join('\n') };
+    } catch {
+      return { from: 'Coordinator', message: 'Can\'t load performance data right now.' };
+    }
+  }
+
   // ── Health & Status ───────────────────────────────────────
 
   getAgentHealthSummary() {

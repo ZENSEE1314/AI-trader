@@ -2972,6 +2972,20 @@ router.post('/agents/command', async (req, res) => {
   }
 });
 
+// POST /api/admin/agents/chat — Natural language chat with agents
+router.post('/agents/chat', async (req, res) => {
+  try {
+    const { message } = req.body;
+    if (!message) return res.status(400).json({ error: 'No message' });
+    const { getCoordinator } = require('../agents');
+    const coordinator = getCoordinator();
+    const reply = await coordinator.handleChat(message);
+    res.json(reply);
+  } catch (err) {
+    res.status(500).json({ from: 'System', message: `Error: ${err.message}` });
+  }
+});
+
 // GET /api/admin/agents/activity — Activity feed only
 router.get('/agents/activity', async (req, res) => {
   try {
