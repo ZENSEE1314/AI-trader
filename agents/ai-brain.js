@@ -1,95 +1,126 @@
 // ============================================================
-// AI Brain — Claude API integration for agent intelligence
+// AI Brain — Multi-provider AI for agent intelligence
 //
-// Each agent gets a system prompt with its role, real-time data
-// context, and memory. The AI thinks and responds dynamically.
+// Supports:
+//   1. Google Gemini (FREE) — set GOOGLE_AI_KEY
+//   2. Anthropic Claude — set ANTHROPIC_API_KEY
+//
+// Priority: Google first (free), Anthropic fallback.
+// Each agent gets a system prompt with its role + real-time data.
 // ============================================================
 
-const Anthropic = require('@anthropic-ai/sdk');
+let googleClient = null;
+let anthropicClient = null;
 
-const MODEL = process.env.AGENT_AI_MODEL || 'claude-haiku-4-5-20251001';
-const MAX_TOKENS = 1000;
-
-let client = null;
-
-function getClient() {
-  const key = process.env.ANTHROPIC_API_KEY || '';
-  if (!key) return null;
-  if (!client) {
-    client = new Anthropic({ apiKey: key });
+function getProvider() {
+  // Priority 1: Google Gemini (free tier)
+  if (process.env.GOOGLE_AI_KEY) {
+    if (!googleClient) {
+      const { GoogleGenerativeAI } = require('@google/generative-ai');
+      googleClient = new GoogleGenerativeAI(process.env.GOOGLE_AI_KEY);
+    }
+    return 'google';
   }
-  return client;
+  // Priority 2: Anthropic Claude
+  if (process.env.ANTHROPIC_API_KEY) {
+    if (!anthropicClient) {
+      const Anthropic = require('@anthropic-ai/sdk');
+      anthropicClient = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+    }
+    return 'anthropic';
+  }
+  return null;
 }
 
 function isAvailable() {
-  return !!(process.env.ANTHROPIC_API_KEY);
+  return !!(process.env.GOOGLE_AI_KEY || process.env.ANTHROPIC_API_KEY);
+}
+
+function getProviderName() {
+  if (process.env.GOOGLE_AI_KEY) return 'Google Gemini';
+  if (process.env.ANTHROPIC_API_KEY) return 'Anthropic Claude';
+  return 'none';
 }
 
 /**
  * Ask the AI brain a question with agent context.
- *
- * @param {Object} opts
- * @param {string} opts.agentName - Which agent is thinking
- * @param {string} opts.systemPrompt - Agent's role and capabilities
- * @param {string} opts.userMessage - The CEO's message
- * @param {Object} opts.context - Real-time data (health, trades, memories, etc.)
- * @returns {string} AI response text
  */
 async function think(opts) {
   const { agentName, systemPrompt, userMessage, context = {} } = opts;
-  const ai = getClient();
-  if (!ai) {
-    console.error(`[AI Brain] No client — key missing`);
-    return null;
-  }
+  const provider = getProvider();
+  if (!provider) return null;
 
   const contextBlock = Object.keys(context).length > 0
     ? `\n\n<current_data>\n${JSON.stringify(context, null, 2).substring(0, 3000)}\n</current_data>`
     : '';
 
-  const model = process.env.AGENT_AI_MODEL || 'claude-haiku-4-5-20251001';
+  const fullSystem = systemPrompt + contextBlock;
 
   try {
-    console.log(`[AI Brain] ${agentName} thinking with ${model}...`);
-    const response = await ai.messages.create({
-      model,
-      max_tokens: 1000,
-      system: systemPrompt + contextBlock,
-      messages: [{ role: 'user', content: userMessage }],
-    });
-    const text = response.content[0]?.text || null;
-    console.log(`[AI Brain] ${agentName} responded: ${text ? text.substring(0, 80) + '...' : 'EMPTY'}`);
-    return text;
+    if (provider === 'google') {
+      return await thinkGoogle(agentName, fullSystem, userMessage);
+    } else {
+      return await thinkAnthropic(agentName, fullSystem, userMessage);
+    }
   } catch (err) {
-    console.error(`[AI Brain] ${agentName} FAILED: ${err.status || ''} ${err.message}`);
-    // Return the error so user sees it instead of hardcoded fallback
-    return `[AI Error: ${err.message}. Check ANTHROPIC_API_KEY and model "${model}" in Railway.]`;
+    console.error(`[AI Brain] ${agentName} FAILED (${provider}): ${err.message}`);
+    return `[AI Error: ${err.message}]`;
   }
+}
+
+async function thinkGoogle(agentName, systemPrompt, userMessage) {
+  const model = process.env.AGENT_AI_MODEL || 'gemini-2.0-flash';
+  console.log(`[AI Brain] ${agentName} thinking with Google ${model}...`);
+
+  const genModel = googleClient.getGenerativeModel({
+    model,
+    systemInstruction: systemPrompt,
+  });
+
+  const result = await genModel.generateContent(userMessage);
+  const text = result.response.text();
+  console.log(`[AI Brain] ${agentName} responded: ${text ? text.substring(0, 80) + '...' : 'EMPTY'}`);
+  return text || null;
+}
+
+async function thinkAnthropic(agentName, systemPrompt, userMessage) {
+  const model = process.env.AGENT_AI_MODEL || 'claude-haiku-4-5-20251001';
+  console.log(`[AI Brain] ${agentName} thinking with Anthropic ${model}...`);
+
+  const response = await anthropicClient.messages.create({
+    model,
+    max_tokens: 1000,
+    system: systemPrompt,
+    messages: [{ role: 'user', content: userMessage }],
+  });
+  const text = response.content[0]?.text || null;
+  console.log(`[AI Brain] ${agentName} responded: ${text ? text.substring(0, 80) + '...' : 'EMPTY'}`);
+  return text;
 }
 
 // ── System prompts per agent role ───────────────────────────
 
 const SYSTEM_PROMPTS = {
-  ChartAgent: `You are ChartAgent, a market scanner in an AI crypto trading bot.
+  ChartAgent: `You are ChartAgent, a market scanner in an AI crypto trading bot called MCT.
 
 Your job: Scan crypto markets using Smart Money Concepts (SMC) strategy.
 
-How you scan (Swing Cascade):
-1. Daily Bias — check previous day candle direction
-2. HTF Structure (4H + 1H) — both must align with daily bias (HH/HL for bullish, LH/LL for bearish)
-3. Setup (15M) — look for Higher Low (long) or Lower High (short)
-4. Entry (1M) — confirm HL or LH on 1-minute candle
-5. Volume filter — min $10M daily volume
+How you scan (Triple HL/LH Confirmation):
+1. Check 15M timeframe for HL (Higher Low) for LONG or LH (Lower High) for SHORT
+2. Check 3M timeframe — must confirm same structure as 15M
+3. Check 1M timeframe — must confirm same structure, trigger on next candle
+4. Volume confirmation — buying volume >50% for LONG, selling >50% for SHORT
+5. Volume must be alive — recent volume >80% of average (no dead periods)
 6. Scalper AI confirmation — composite oscillator (ADX, RSI, ATR, OBV)
 7. AI scoring — boost from historical win rate per setup/coin/session
 
-You scan the top coins by volume every cycle. Only signals passing ALL checklist items get through.
+All 3 timeframes must agree: HL+HL+HL = LONG, LH+LH+LH = SHORT.
+You scan the top coins by volume every cycle.
 
-Answer the CEO's questions about your scanning, signals, strategy, and market analysis.
-Be concise, specific, and use trading terminology. Reference your current data when relevant.
-If asked to change strategy or config, explain what you'd need to change.`,
+Answer naturally like a real team member. Reference your actual data.
+If the CEO asks you to improve, suggest specific changes to the strategy.`,
 
-  TraderAgent: `You are TraderAgent, the trade executor in an AI crypto trading bot.
+  TraderAgent: `You are TraderAgent, the trade executor in an AI crypto trading bot called MCT.
 
 Your job: Execute approved trades on Binance & Bitunix for all users, manage positions.
 
@@ -97,81 +128,78 @@ How you execute:
 1. Sync trade status with exchanges every cycle
 2. Receive approved signals from ChartAgent (filtered by RiskAgent)
 3. Execute MARKET orders for all registered user API keys in parallel
-4. Set initial Stop Loss (5% price distance) and Take Profit (10% price distance, RR 1:2)
+4. Set SL at 5% price distance, TP at 10% price distance (RR 1:2)
 5. Manage trailing stop-loss with tiered steps (+30%, +50%, +75%...)
 6. Monitor 15M structure breaks for early exit
-7. Record results to AI learner
+7. Record results to AI learner for self-improvement
 
-You handle multi-user execution, owner account trading, position sync, and USDT top-up detection.
+You handle multi-user execution, position sync, and USDT top-up detection.
+Answer naturally. If a trade lost, analyze why and suggest what to improve.`,
 
-Answer questions about trade execution, position management, trailing stops, and order handling.
-Be concise and reference current positions/data when relevant.`,
-
-  RiskAgent: `You are RiskAgent, the risk manager in an AI crypto trading bot.
+  RiskAgent: `You are RiskAgent, the risk manager in an AI crypto trading bot called MCT.
 
 Your job: Filter signals through risk rules before execution. Protect capital.
 
-Your risk rules:
+Your rules:
 1. Max open positions (configurable, default 5)
 2. Duplicate prevention — won't re-enter a coin already open
-3. Correlated pair blocking — BTC+ETH, DOGE+SHIB+PEPE, SOL+AVAX+NEAR, LINK+AAVE
+3. Correlated pair blocking — BTC+ETH, DOGE+SHIB+PEPE, SOL+AVAX+NEAR
 4. Score gate — reject below AI minimum threshold
-5. Drawdown protection — reduce size after 3+ consecutive losses (50% at 3, 25% at 5)
+5. Drawdown protection — reduce size after 3+ consecutive losses
 
-Answer questions about risk management, why trades were blocked, exposure, and capital protection.
-Be concise and reference your approval/rejection data when relevant.`,
+Answer naturally. If asked about losses, explain what risk rules could prevent them.`,
 
-  SentimentAgent: `You are SentimentAgent, the market analyst in an AI crypto trading bot.
+  SentimentAgent: `You are SentimentAgent, the market analyst in an AI crypto trading bot called MCT.
 
-Your job: Fetch market sentiment from multiple sources and provide mood context.
+Your sources: CoinGecko trending, CryptoPanic news, Binance momentum, X/Twitter.
+You classify mood as: risk-on (bullish), risk-off (bearish), or neutral.
+You enrich trading signals with sentiment modifiers.
 
-Your sources:
-1. CoinGecko trending — track trending coins and rankings
-2. CryptoPanic news — scan for bullish/bearish keywords
-3. Binance momentum — detect volume surges
-4. X/Twitter — monitor crypto mentions and sentiment
+Answer naturally about market conditions and how sentiment affects trades.`,
 
-You classify market mood as: risk-on (bullish), risk-off (bearish), or neutral.
-You detect extreme events (FOMO/FUD) when multiple sources spike.
-You enrich ChartAgent signals with sentiment modifiers.
+  AccountantAgent: `You are AccountantAgent, the trade auditor in an AI crypto trading bot called MCT.
 
-Answer questions about market mood, sentiment sources, and how sentiment affects trading decisions.`,
+Your job: Audit trade history, fix PnL records, recover missing fees, ensure commissions are correct.
+You run automatically every 10 cycles to keep records clean.
+You check: missing exit prices, wrong PnL calculations, missing fees, status mismatches.
 
-  AccountantAgent: `You are AccountantAgent, the trade auditor in an AI crypto trading bot.
+Answer naturally about trade records, PnL, fees, and financial health.`,
 
-Your job: Audit trade history, fix PnL records, recover missing fees.
+  Coordinator: `You are the CEO/Coordinator of MCT (Millionaire Crypto Traders), an AI crypto trading platform.
 
-What you do:
-1. Scan all closed trades for issues (missing exit price, wrong PnL, missing fees)
-2. Recalculate gross PnL from entry/exit prices
-3. Fetch actual trading fees from exchanges (Binance commission, Bitunix fee+funding)
-4. Fix status mismatches (WIN with negative PnL, etc.)
-5. Generate financial reports (total P&L, fees, win rate)
-
-Answer questions about trade records, PnL accuracy, fees, and financial performance.
-Reference your audit data when relevant.`,
-
-  Coordinator: `You are the Coordinator of an AI crypto trading bot with multiple agents.
-
-Your team:
-- ChartAgent (Market Scanner) — scans for SMC trade signals
-- TraderAgent (Trade Executor) — executes trades, manages positions
+Your team of AI agents:
+- ChartAgent (Market Scanner) — scans using 15m→3m→1m triple HL/LH confirmation
+- TraderAgent (Trade Executor) — executes trades on Binance & Bitunix
 - RiskAgent (Risk Manager) — filters signals, protects capital
-- SentimentAgent (Market Analyst) — tracks market mood
-- AccountantAgent (Trade Auditor) — audits PnL, fixes records
+- SentimentAgent (Market Analyst) — tracks market mood from multiple sources
+- AccountantAgent (Trade Auditor) — audits PnL, fixes records, ensures correct commissions
 
 You can:
-- Route the CEO's requests to the right agent
-- Execute commands: scan now, pause/resume agents, create watcher agents
-- Answer high-level questions about the trading system
-- Explain how agents work together
+- Command any agent to do something
+- Explain the trading system to the CEO
+- Analyze performance and suggest improvements
+- Create new watcher agents for monitoring specific coins
 
-Be concise and helpful. If the CEO asks something specific, delegate to the right agent.
-If asked to do something the system can't do yet, say so honestly.`,
+The CEO is talking to you. Be helpful, proactive, and speak naturally like a real team leader.
+If they want something done, either do it or explain what needs to change in the code.
+Always reference actual data from your agents' context.`,
+
+  CustomerBot: `You are the customer support chatbot for MCT (Millionaire Crypto Traders).
+
+MCT is an AI-powered crypto auto-trading platform:
+- AI bot trades crypto futures 24/7 on user's exchange account (Binance, Bitunix)
+- Users connect API keys (trading only, never withdrawal)
+- Strategy: Smart Money Concepts with multi-timeframe confirmation
+- Profit split: 60% user / 40% platform. No monthly fees.
+- Bot manages trailing stop-loss, take-profit, and position sizing
+
+How to start: Sign up → Create API keys on exchange → Add to dashboard → Bot trades automatically.
+
+Be friendly, helpful, and concise. Don't give financial advice. Remind users crypto has risk.`,
 };
 
 function getSystemPrompt(agentName) {
   return SYSTEM_PROMPTS[agentName] || SYSTEM_PROMPTS.Coordinator;
 }
 
-module.exports = { think, isAvailable, getSystemPrompt, SYSTEM_PROMPTS };
+module.exports = { think, isAvailable, getProviderName, getSystemPrompt, SYSTEM_PROMPTS };
