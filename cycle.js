@@ -362,14 +362,14 @@ async function recordProfitSplit(db, userId, apiKeyId, pnlUsdt, symbol) {
 
     // Record platform fee as wallet transaction
     await db.query(
-      `INSERT INTO wallet_transactions (user_id, type, amount, status, note)
+      `INSERT INTO wallet_transactions (user_id, type, amount, status, description)
        VALUES ($1, 'platform_fee', $2, 'completed', $3)`,
       [userId, platformFee, `${adminPct}% platform fee on ${symbol} profit $${pnlUsdt.toFixed(2)}`]
     );
 
     // Record user profit share
     await db.query(
-      `INSERT INTO wallet_transactions (user_id, type, amount, status, note)
+      `INSERT INTO wallet_transactions (user_id, type, amount, status, description)
        VALUES ($1, 'profit_share', $2, 'completed', $3)`,
       [userId, userShare, `${userPct}% profit share on ${symbol} profit $${pnlUsdt.toFixed(2)}`]
     );
@@ -1004,6 +1004,17 @@ async function executeForAllUsers(pick) {
         );
         if (existingTrade.length > 0) {
           userLog.trade(`User ${key.email}: already has OPEN trade on ${symbol} in DB — skipping duplicate`);
+          return;
+        }
+
+        // Daily loss limit: stop trading if user has 3+ losses today
+        const maxConsecLoss = parseInt(key.max_consec_loss) || 3;
+        const todayLosses = await db.query(
+          `SELECT COUNT(*) as cnt FROM trades WHERE user_id = $1 AND status IN ('LOSS','SL') AND closed_at > NOW() - INTERVAL '24 hours'`,
+          [key.user_id]
+        );
+        if (parseInt(todayLosses[0]?.cnt) >= maxConsecLoss) {
+          userLog.trade(`User ${key.email}: ${todayLosses[0].cnt} losses in 24h (max ${maxConsecLoss}) — paused until losses reset`);
           return;
         }
 

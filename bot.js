@@ -33,7 +33,7 @@ const SPIKE_INTERVAL  = 2 * 60 * 1000;
 // ── HELPERS ──────────────────────────────────────────────────
 function now() {
   return new Date().toLocaleString('en-GB', {
-    timeZone: 'Asia/Jakarta',
+    timeZone: 'Asia/Singapore',
     day: '2-digit', month: 'short', year: 'numeric',
     hour: '2-digit', minute: '2-digit',
   });
