@@ -2852,3 +2852,197 @@ img[src*="logo"] {
 .plan-select-card:hover {
   border-color: var(--color-accent) !important;
 }
+
+/* ============================================================
+   Mission Control — Agent Dashboard
+   ============================================================ */
+
+/* Admin Sub-Tabs */
+.admin-subtabs {
+  display: flex;
+  gap: 2px;
+  margin-bottom: var(--space-4);
+  border-bottom: 1px solid var(--color-border-muted);
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+.admin-subtabs::-webkit-scrollbar { display: none; }
+.admin-subtab {
+  padding: 10px 18px;
+  font-size: 0.82rem;
+  font-weight: 500;
+  color: var(--color-text-muted);
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color var(--duration-fast) var(--ease-out), border-color var(--duration-fast) var(--ease-out);
+}
+.admin-subtab:hover {
+  color: var(--color-text);
+}
+.admin-subtab.active {
+  color: var(--color-accent);
+  border-bottom-color: var(--color-accent);
+  text-shadow: 0 0 12px rgba(0, 229, 255, 0.3);
+}
+.admin-tab-panel {
+  animation: adminTabIn 0.2s ease-out;
+}
+@keyframes adminTabIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.mc-agents-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: var(--space-3);
+}
+
+.mc-agent-card {
+  background: var(--color-bg);
+  border: 1px solid var(--color-border-muted);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+  transition: border-color var(--duration-fast) var(--ease-out), box-shadow var(--duration-fast) var(--ease-out);
+}
+.mc-agent-card:hover {
+  border-color: rgba(0, 229, 255, 0.2);
+}
+.mc-agent-card.mc-card-running {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 12px rgba(0, 229, 255, 0.1);
+}
+.mc-agent-card.mc-card-error {
+  border-color: var(--color-danger);
+  box-shadow: 0 0 12px rgba(255, 56, 96, 0.1);
+}
+.mc-agent-card.mc-card-paused {
+  border-color: var(--color-warning);
+  opacity: 0.8;
+}
+
+.mc-agent-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--space-2);
+}
+.mc-agent-name {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--color-text);
+}
+.mc-agent-meta {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px 12px;
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+  margin-bottom: var(--space-2);
+}
+.mc-agent-meta .mc-meta-label {
+  color: var(--color-fg-subtle);
+}
+.mc-agent-task {
+  font-size: 0.75rem;
+  padding: 6px 8px;
+  background: rgba(0, 229, 255, 0.06);
+  border-radius: var(--radius-sm);
+  color: var(--color-accent);
+  margin-bottom: var(--space-2);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.mc-agent-task .mc-pulse {
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: var(--color-accent);
+  animation: mc-pulse 1.5s ease-in-out infinite;
+}
+@keyframes mc-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+.mc-agent-actions {
+  display: flex;
+  gap: 4px;
+  margin-top: var(--space-2);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--color-border-muted);
+}
+.mc-agent-actions .btn {
+  font-size: 0.7rem;
+  padding: 3px 10px;
+}
+
+/* Badges */
+.mc-badge {
+  display: inline-block;
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+.mc-badge-idle     { background: rgba(122, 141, 160, 0.15); color: var(--color-text-muted); }
+.mc-badge-running  { background: rgba(0, 229, 255, 0.15); color: var(--color-accent); }
+.mc-badge-error    { background: rgba(255, 56, 96, 0.15); color: var(--color-danger); }
+.mc-badge-stopped  { background: rgba(255, 56, 96, 0.1); color: var(--color-danger); }
+.mc-badge-paused   { background: rgba(255, 176, 32, 0.15); color: var(--color-warning); }
+
+/* Command buttons */
+.mc-cmd-btn {
+  font-size: 0.75rem !important;
+  padding: 4px 12px !important;
+  border-radius: 6px !important;
+  transition: transform 0.1s ease, box-shadow 0.15s ease;
+}
+.mc-cmd-btn:active {
+  transform: scale(0.96);
+}
+
+/* Activity Feed */
+.mc-activity-feed {
+  max-height: 240px;
+  overflow-y: auto;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border-muted);
+  border-radius: var(--radius-md);
+  padding: var(--space-2);
+}
+.mc-activity-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 4px 6px;
+  font-size: 0.75rem;
+  border-bottom: 1px solid rgba(30, 45, 61, 0.4);
+}
+.mc-activity-item:last-child { border-bottom: none; }
+.mc-activity-ts {
+  flex-shrink: 0;
+  color: var(--color-fg-subtle);
+  font-family: var(--font-mono, 'JetBrains Mono', monospace);
+  font-size: 0.7rem;
+  min-width: 52px;
+}
+.mc-activity-agent {
+  flex-shrink: 0;
+  font-weight: 600;
+  min-width: 80px;
+  color: var(--color-accent);
+}
+.mc-activity-msg {
+  color: var(--color-text-muted);
+  word-break: break-word;
+}
+.mc-activity-item[data-type="error"] .mc-activity-msg { color: var(--color-danger); }
+.mc-activity-item[data-type="command"] .mc-activity-msg { color: var(--color-warning); }
+.mc-activity-item[data-type="success"] .mc-activity-msg { color: var(--color-success); }

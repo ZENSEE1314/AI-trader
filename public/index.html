@@ -975,13 +975,191 @@
       </section>
 
       <section id="tab-admin" class="hidden" role="tabpanel" aria-label="Admin">
-        <h2 class="section-heading">Admin Panel <span class="tip-btn">?<span class="tip-text">Admin-only controls for managing users, platform settings, global tokens, risk levels, and weekly earnings settlement.</span></span></h2>
+        <h2 class="section-heading">Admin Panel</h2>
 
-        <div style="margin-bottom:var(--space-4);">
-          <button class="btn btn-sm" id="btn-admin-csv" style="background:var(--color-accent);color:#fff;padding:6px 16px;" onclick="window.location.href='/api/admin/trades/csv'">Download All Trades CSV</button>
+        <!-- Admin Sub-Tabs -->
+        <nav class="admin-subtabs" role="tablist">
+          <button class="admin-subtab active" data-admintab="mc" onclick="window.CryptoBot.switchAdminTab('mc')">Mission Control <span id="mc-status-dot" style="display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--color-text-muted);margin-left:4px;vertical-align:middle;"></span></button>
+          <button class="admin-subtab" data-admintab="earnings" onclick="window.CryptoBot.switchAdminTab('earnings')">Earnings</button>
+          <button class="admin-subtab" data-admintab="users" onclick="window.CryptoBot.switchAdminTab('users')">Users</button>
+          <button class="admin-subtab" data-admintab="tokens" onclick="window.CryptoBot.switchAdminTab('tokens')">Tokens</button>
+          <button class="admin-subtab" data-admintab="settings" onclick="window.CryptoBot.switchAdminTab('settings')">Settings</button>
+          <button class="admin-subtab" data-admintab="tools" onclick="window.CryptoBot.switchAdminTab('tools')">Tools</button>
+        </nav>
+
+        <!-- ═══════════════════════════════════════════
+             TAB: Mission Control
+             ═══════════════════════════════════════════ -->
+        <div id="admin-tab-mc" class="admin-tab-panel">
+          <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:var(--space-4);padding-bottom:var(--space-3);border-bottom:1px solid var(--color-border-muted);">
+            <div style="display:flex;align-items:center;gap:12px;">
+              <span style="font-size:0.9rem;font-weight:600;color:var(--color-text);">Coordinator</span>
+              <span id="mc-coord-state" class="mc-badge mc-badge-idle">idle</span>
+              <span id="mc-coord-cycles" style="font-size:0.75rem;color:var(--color-text-muted);">0 cycles</span>
+              <span id="mc-uptime" style="font-size:0.75rem;color:var(--color-text-muted);"></span>
+            </div>
+            <div style="display:flex;gap:6px;flex-wrap:wrap;">
+              <button class="btn btn-sm mc-cmd-btn" style="background:var(--color-accent);color:#000;font-weight:600;" onclick="window.CryptoBot.mcCommand('force-scan')">Force Scan</button>
+              <button class="btn btn-sm mc-cmd-btn" style="background:var(--color-warning);color:#000;" onclick="window.CryptoBot.mcCommand('pause-all')">Pause All</button>
+              <button class="btn btn-sm mc-cmd-btn" style="background:var(--color-success);color:#000;" onclick="window.CryptoBot.mcCommand('resume-all')">Resume All</button>
+              <button class="btn btn-sm mc-cmd-btn" style="border:1px solid var(--color-border);color:var(--color-text);" onclick="window.CryptoBot.mcRefresh()">Refresh</button>
+            </div>
+          </div>
+          <div id="mc-agents-grid" class="mc-agents-grid">
+            <div style="color:var(--color-text-muted);font-size:0.85rem;padding:var(--space-3);text-align:center;">Loading agents...</div>
+          </div>
+          <div style="margin-top:var(--space-4);border-top:1px solid var(--color-border-muted);padding-top:var(--space-3);">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--space-2);">
+              <strong style="font-size:0.85rem;color:var(--color-text);">Activity Feed</strong>
+              <span id="mc-activity-count" style="font-size:0.7rem;color:var(--color-text-muted);">0 events</span>
+            </div>
+            <div id="mc-activity-feed" class="mc-activity-feed">
+              <div style="color:var(--color-text-muted);font-size:0.8rem;text-align:center;padding:var(--space-3);">No activity yet</div>
+            </div>
+          </div>
         </div>
 
-        <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Platform Settings <span class="tip-btn">?<span class="tip-text">Global settings that apply to the entire platform. Configure referral tiers, USDT addresses, and commission percentages.</span></span></h3>
+        <!-- ═══════════════════════════════════════════
+             TAB: Earnings
+             ═══════════════════════════════════════════ -->
+        <div id="admin-tab-earnings" class="admin-tab-panel hidden">
+          <div id="admin-weekly-summary" class="summary-grid" style="margin-bottom:var(--space-4);">
+            <div class="summary-card" style="border-left:3px solid var(--color-success);">
+              <span class="summary-card-label">Net P&L (All Users)</span>
+              <span id="awe-total-net" class="summary-card-value text-mono" style="font-size:1.2rem;">--</span>
+            </div>
+            <div class="summary-card" style="border-left:3px solid var(--color-accent);">
+              <span class="summary-card-label">Admin Share</span>
+              <span id="awe-admin-share" class="summary-card-value text-mono" style="color:var(--color-accent);font-size:1.2rem;">--</span>
+            </div>
+            <div class="summary-card" style="border-left:3px solid #d4af37;">
+              <span class="summary-card-label">User Share</span>
+              <span id="awe-user-share" class="summary-card-value text-mono" style="color:#d4af37;font-size:1.2rem;">--</span>
+            </div>
+          </div>
+          <div style="margin-bottom:var(--space-3);padding:var(--space-3);border:2px solid #ef4444;border-radius:var(--radius-lg);background:rgba(239,68,68,0.05);">
+            <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:8px;">
+              <strong style="color:#ef4444;font-size:0.9rem;">Emergency Close Positions</strong>
+              <div style="display:flex;align-items:center;gap:6px;">
+                <button class="btn btn-sm" style="font-size:0.75rem;background:transparent;color:#ef4444;border:1px solid #ef4444;padding:4px 12px;" onclick="window.CryptoBot.loadOpenPositions()">Refresh</button>
+                <button class="btn btn-sm" style="font-size:0.75rem;background:#ef4444;color:#fff;border:none;font-weight:700;padding:4px 12px;" onclick="window.CryptoBot.emergencyCloseAll()">CLOSE ALL</button>
+                <span id="emergency-stop-status" style="font-size:0.75rem;color:var(--color-text-muted);"></span>
+              </div>
+            </div>
+            <div id="open-positions-list" style="font-size:0.8rem;color:var(--color-text-muted);">Click Refresh to load open positions</div>
+          </div>
+          <div style="margin-bottom:var(--space-3);">
+            <button class="btn btn-sm" style="font-size:0.75rem;" onclick="window.CryptoBot.adminFixTrades()">Fix Corrupted Trades</button>
+            <span id="fix-trades-status" style="font-size:0.75rem;color:var(--color-text-muted);margin-left:8px;"></span>
+            <button class="btn btn-danger btn-sm" style="font-size:0.75rem;margin-left:12px;" onclick="window.CryptoBot.adminClearTestData()">Clear Test Data</button>
+            <span id="clear-data-status" style="font-size:0.75rem;color:var(--color-text-muted);margin-left:8px;"></span>
+          </div>
+          <div id="admin-earnings-per-user" style="margin-bottom:var(--space-4);"></div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════
+             TAB: Users
+             ═══════════════════════════════════════════ -->
+        <div id="admin-tab-users" class="admin-tab-panel hidden">
+          <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Users</h3>
+          <div class="table-wrap" style="margin-bottom:var(--space-5);overflow-x:auto;">
+            <table class="data-table" id="admin-users-table">
+              <thead><tr><th>Email</th><th>Keys</th><th>Wallet</th><th>Referral</th><th>Joined</th><th>Payment</th><th>Action</th></tr></thead>
+              <tbody id="admin-users-tbody"></tbody>
+            </table>
+          </div>
+          <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Pending Payments</h3>
+          <div class="table-wrap" style="margin-bottom:var(--space-5);">
+            <table class="data-table">
+              <thead><tr><th>User</th><th>Amount</th><th>Method</th><th>Proof</th><th>Date</th><th>Action</th></tr></thead>
+              <tbody id="admin-subs-tbody"></tbody>
+            </table>
+          </div>
+          <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Pending Withdrawals</h3>
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead><tr><th>User</th><th>Amount</th><th>Bank</th><th>Acc No.</th><th>Name</th><th>Date</th><th>Action</th></tr></thead>
+              <tbody id="admin-wd-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════
+             TAB: Tokens
+             ═══════════════════════════════════════════ -->
+        <div id="admin-tab-tokens" class="admin-tab-panel hidden">
+          <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Allowed Tokens <span id="allowed-count" class="badge" style="background:var(--color-success);color:#fff;padding:2px 8px;border-radius:12px;font-size:0.75rem;margin-left:4px;">0</span> <span style="font-size:0.75rem;color:var(--color-text-muted);">(only trade these)</span></h3>
+          <div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-4);margin-bottom:var(--space-4);">
+            <div style="display:flex;gap:var(--space-2);align-items:end;margin-bottom:var(--space-3);flex-wrap:wrap;">
+              <div class="form-group" style="margin-bottom:0;flex:1;min-width:140px;position:relative;">
+                <label class="form-label" for="admin-allowed-symbol">Token Symbol</label>
+                <input class="form-input text-mono" type="text" id="admin-allowed-symbol" placeholder="Type to search..." autocomplete="off" style="text-transform:uppercase;" oninput="window.CryptoBot.searchAdminToken(this,'admin-allowed')" onfocus="window.CryptoBot.searchAdminToken(this,'admin-allowed')">
+                <div class="coin-dropdown hidden" id="admin-allowed-dropdown"></div>
+              </div>
+              <button class="btn btn-primary btn-sm" onclick="window.CryptoBot.addAllowedToken()">Add Allowed</button>
+              <button class="btn btn-sm" id="scan-bitunix-btn" style="background:var(--color-accent);color:#fff;" onclick="window.CryptoBot.scanBitunixTokens()">Scan Bitunix</button>
+            </div>
+            <div class="table-wrap" style="max-height:300px;overflow-y:auto;">
+              <table class="data-table">
+                <thead style="position:sticky;top:0;z-index:1;"><tr><th>Symbol</th><th>Action</th></tr></thead>
+                <tbody id="admin-allowed-tbody"></tbody>
+              </table>
+            </div>
+            <div id="admin-allowed-empty" style="color:var(--color-text-muted);font-size:0.85rem;padding:var(--space-3);text-align:center;">No allowed tokens set. Bot trades top coins by volume.</div>
+          </div>
+
+          <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Banned Tokens <span id="banned-count" class="badge" style="background:var(--color-danger);color:#fff;padding:2px 8px;border-radius:12px;font-size:0.75rem;margin-left:4px;">0</span> <span style="font-size:0.75rem;color:var(--color-text-muted);">(never trade these)</span></h3>
+          <div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-4);margin-bottom:var(--space-5);">
+            <div style="display:flex;gap:var(--space-2);align-items:end;margin-bottom:var(--space-3);flex-wrap:wrap;">
+              <div class="form-group" style="margin-bottom:0;flex:1;min-width:140px;position:relative;">
+                <label class="form-label" for="admin-banned-symbol">Token Symbol</label>
+                <input class="form-input text-mono" type="text" id="admin-banned-symbol" placeholder="Type to search..." autocomplete="off" style="text-transform:uppercase;" oninput="window.CryptoBot.searchAdminToken(this,'admin-banned')" onfocus="window.CryptoBot.searchAdminToken(this,'admin-banned')">
+                <div class="coin-dropdown hidden" id="admin-banned-dropdown"></div>
+              </div>
+              <button class="btn btn-danger btn-sm" onclick="window.CryptoBot.addBannedToken()">Ban Token</button>
+            </div>
+            <div class="table-wrap" style="max-height:300px;overflow-y:auto;">
+              <table class="data-table">
+                <thead style="position:sticky;top:0;z-index:1;"><tr><th>Symbol</th><th>Action</th></tr></thead>
+                <tbody id="admin-banned-tbody"></tbody>
+              </table>
+            </div>
+            <div id="admin-banned-empty" style="color:var(--color-text-muted);font-size:0.85rem;padding:var(--space-3);text-align:center;">No banned tokens. Bot can trade any coin.</div>
+          </div>
+
+          <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Token Leverage <span id="leverage-count" class="badge" style="background:var(--color-accent);color:#fff;padding:2px 8px;border-radius:12px;font-size:0.75rem;margin-left:4px;">0</span></h3>
+          <div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-4);margin-bottom:var(--space-5);">
+            <div style="display:flex;gap:var(--space-2);align-items:end;margin-bottom:var(--space-3);flex-wrap:wrap;">
+              <div class="form-group" style="margin-bottom:0;flex:1;min-width:140px;position:relative;">
+                <label class="form-label" for="admin-lev-symbol">Token Symbol</label>
+                <input class="form-input text-mono" type="text" id="admin-lev-symbol" placeholder="Type to search..." autocomplete="off" style="text-transform:uppercase;" oninput="window.CryptoBot.searchAdminToken(this,'admin-lev')" onfocus="window.CryptoBot.searchAdminToken(this,'admin-lev')">
+                <div class="coin-dropdown hidden" id="admin-lev-dropdown"></div>
+              </div>
+              <div class="form-group" style="margin-bottom:0;width:90px;">
+                <label class="form-label" for="admin-lev-value">Leverage</label>
+                <input class="form-input text-mono" type="number" id="admin-lev-value" placeholder="20" min="1" max="125" value="20">
+              </div>
+              <button class="btn btn-primary btn-sm" onclick="window.CryptoBot.addTokenLeverage()">Set Leverage</button>
+            </div>
+            <div style="display:flex;gap:var(--space-2);margin-bottom:var(--space-3);flex-wrap:wrap;align-items:center;">
+              <button class="btn btn-sm" style="background:var(--color-accent);color:#fff;" onclick="window.CryptoBot.autoPopulateLeverage()">Auto-Populate ($1000+ tokens)</button>
+              <span style="font-size:0.75rem;color:var(--color-text-muted);">BTC/ETH 100x, others 20x.</span>
+            </div>
+            <div class="table-wrap" style="max-height:400px;overflow-y:auto;">
+              <table class="data-table">
+                <thead style="position:sticky;top:0;z-index:1;"><tr><th>Symbol</th><th>Price</th><th>Leverage</th><th>Action</th></tr></thead>
+                <tbody id="admin-lev-tbody"></tbody>
+              </table>
+            </div>
+            <div id="admin-lev-empty" style="color:var(--color-text-muted);font-size:0.85rem;padding:var(--space-3);text-align:center;">No token leverage set. Default 20x for all tokens.</div>
+          </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════
+             TAB: Settings
+             ═══════════════════════════════════════════ -->
+        <div id="admin-tab-settings" class="admin-tab-panel hidden">
+          <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Platform Settings <span class="tip-btn">?<span class="tip-text">Global settings that apply to the entire platform. Configure referral tiers, USDT addresses, and commission percentages.</span></span></h3>
         <div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-4);margin-bottom:var(--space-5);">
           <div class="settings-grid">
             <div class="form-group" style="margin-bottom:0">
@@ -1027,8 +1205,7 @@
           <button class="btn btn-primary btn-sm" style="margin-top:var(--space-3);" onclick="window.CryptoBot.saveAdminSettings()">Save Settings</button>
         </div>
 
-        <!-- Risk Level Settings -->
-        <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Risk Level Settings <span class="tip-btn">?<span class="tip-text">Create risk presets (Low/Medium/High) that users can pick. Each preset controls TP, SL, leverage, capital %, and trailing SL step.</span></span></h3>
+          <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Risk Level Settings</h3>
         <div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-4);margin-bottom:var(--space-5);">
           <div id="admin-risk-levels"></div>
           <div style="margin-top:var(--space-3);border-top:1px solid var(--color-border-muted);padding-top:var(--space-3);">
@@ -1102,139 +1279,25 @@
             <button class="btn btn-primary btn-sm" style="margin-top:var(--space-3);" onclick="window.CryptoBot.addRiskLevel()">Add Risk Level</button>
           </div>
         </div>
+        </div><!-- /admin-tab-settings -->
 
-        <!-- Allowed Tokens (whitelist — only trade these) -->
-        <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Allowed Tokens <span id="allowed-count" class="badge" style="background:var(--color-success);color:#fff;padding:2px 8px;border-radius:12px;font-size:0.75rem;margin-left:4px;">0</span> <span class="tip-btn">?<span class="tip-text">Whitelist: if any tokens are listed here, the bot will ONLY trade these tokens. Leave empty to trade top coins by volume.</span></span> <span style="font-size:0.75rem;color:var(--color-text-muted);">(only trade these)</span></h3>
-        <div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-4);margin-bottom:var(--space-4);">
-          <div style="display:flex;gap:var(--space-2);align-items:end;margin-bottom:var(--space-3);flex-wrap:wrap;">
-            <div class="form-group" style="margin-bottom:0;flex:1;min-width:140px;position:relative;">
-              <label class="form-label" for="admin-allowed-symbol">Token Symbol</label>
-              <input class="form-input text-mono" type="text" id="admin-allowed-symbol" placeholder="Type to search..." autocomplete="off" style="text-transform:uppercase;" oninput="window.CryptoBot.searchAdminToken(this,'admin-allowed')" onfocus="window.CryptoBot.searchAdminToken(this,'admin-allowed')">
-              <div class="coin-dropdown hidden" id="admin-allowed-dropdown"></div>
-            </div>
-            <button class="btn btn-primary btn-sm" onclick="window.CryptoBot.addAllowedToken()">Add Allowed</button>
-            <button class="btn btn-sm" id="scan-bitunix-btn" style="background:var(--color-accent);color:#fff;" onclick="window.CryptoBot.scanBitunixTokens()">🔍 Scan Bitunix</button>
+        <!-- Tokens tab is already above, skip old inline tokens -->
+        <!-- ═══════════════════════════════════════════
+             TAB: Tools
+             ═══════════════════════════════════════════ -->
+        <div id="admin-tab-tools" class="admin-tab-panel hidden">
+          <div style="margin-bottom:var(--space-3);display:flex;gap:var(--space-2);flex-wrap:wrap;">
+            <button class="btn btn-sm" style="background:var(--color-accent);color:#fff;padding:6px 16px;" onclick="window.location.href='/api/admin/trades/csv'">Download All Trades CSV</button>
+            <button class="btn btn-primary btn-sm" onclick="window.CryptoBot.fixBitunixPnl()">Sync All Trades</button>
+            <button class="btn btn-ghost btn-sm" onclick="window.CryptoBot.debugBitunix()">Debug Bitunix API</button>
           </div>
-          <div class="table-wrap" style="max-height:300px;overflow-y:auto;">
-            <table class="data-table">
-              <thead style="position:sticky;top:0;z-index:1;"><tr><th>Symbol</th><th>Action</th></tr></thead>
-              <tbody id="admin-allowed-tbody"></tbody>
-            </table>
-          </div>
-          <div id="admin-allowed-empty" style="color:var(--color-text-muted);font-size:0.85rem;padding:var(--space-3);text-align:center;">No allowed tokens set. Bot trades top coins by volume.</div>
-        </div>
-
-        <!-- Banned Tokens (blacklist — never trade these) -->
-        <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Banned Tokens <span id="banned-count" class="badge" style="background:var(--color-danger);color:#fff;padding:2px 8px;border-radius:12px;font-size:0.75rem;margin-left:4px;">0</span> <span class="tip-btn">?<span class="tip-text">Blacklist: the bot will never open new trades on these tokens. Existing positions will close normally.</span></span> <span style="font-size:0.75rem;color:var(--color-text-muted);">(never trade these)</span></h3>
-        <div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-4);margin-bottom:var(--space-5);">
-          <div style="display:flex;gap:var(--space-2);align-items:end;margin-bottom:var(--space-3);flex-wrap:wrap;">
-            <div class="form-group" style="margin-bottom:0;flex:1;min-width:140px;position:relative;">
-              <label class="form-label" for="admin-banned-symbol">Token Symbol</label>
-              <input class="form-input text-mono" type="text" id="admin-banned-symbol" placeholder="Type to search..." autocomplete="off" style="text-transform:uppercase;" oninput="window.CryptoBot.searchAdminToken(this,'admin-banned')" onfocus="window.CryptoBot.searchAdminToken(this,'admin-banned')">
-              <div class="coin-dropdown hidden" id="admin-banned-dropdown"></div>
-            </div>
-            <button class="btn btn-danger btn-sm" onclick="window.CryptoBot.addBannedToken()">Ban Token</button>
-          </div>
-          <div class="table-wrap" style="max-height:300px;overflow-y:auto;">
-            <table class="data-table">
-              <thead style="position:sticky;top:0;z-index:1;"><tr><th>Symbol</th><th>Action</th></tr></thead>
-              <tbody id="admin-banned-tbody"></tbody>
-            </table>
-          </div>
-          <div id="admin-banned-empty" style="color:var(--color-text-muted);font-size:0.85rem;padding:var(--space-3);text-align:center;">No banned tokens. Bot can trade any coin.</div>
-        </div>
-
-        <!-- Token Leverage Settings -->
-        <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Token Leverage <span id="leverage-count" class="badge" style="background:var(--color-accent);color:#fff;padding:2px 8px;border-radius:12px;font-size:0.75rem;margin-left:4px;">0</span> <span class="tip-btn">?<span class="tip-text">Set custom leverage per token. BTC/ETH default 100x. Auto-populate adds all tokens above $1000. This overrides user risk level leverage.</span></span></h3>
-        <div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-4);margin-bottom:var(--space-5);">
-          <div style="display:flex;gap:var(--space-2);align-items:end;margin-bottom:var(--space-3);flex-wrap:wrap;">
-            <div class="form-group" style="margin-bottom:0;flex:1;min-width:140px;position:relative;">
-              <label class="form-label" for="admin-lev-symbol">Token Symbol</label>
-              <input class="form-input text-mono" type="text" id="admin-lev-symbol" placeholder="Type to search..." autocomplete="off" style="text-transform:uppercase;" oninput="window.CryptoBot.searchAdminToken(this,'admin-lev')" onfocus="window.CryptoBot.searchAdminToken(this,'admin-lev')">
-              <div class="coin-dropdown hidden" id="admin-lev-dropdown"></div>
-            </div>
-            <div class="form-group" style="margin-bottom:0;width:90px;">
-              <label class="form-label" for="admin-lev-value">Leverage</label>
-              <input class="form-input text-mono" type="number" id="admin-lev-value" placeholder="20" min="1" max="125" value="20">
-            </div>
-            <button class="btn btn-primary btn-sm" onclick="window.CryptoBot.addTokenLeverage()">Set Leverage</button>
-          </div>
-          <div style="display:flex;gap:var(--space-2);margin-bottom:var(--space-3);flex-wrap:wrap;align-items:center;">
-            <button class="btn btn-sm" style="background:var(--color-accent);color:#fff;" onclick="window.CryptoBot.autoPopulateLeverage()">Auto-Populate ($1000+ tokens)</button>
-            <span style="font-size:0.75rem;color:var(--color-text-muted);">Adds all tokens above $1000 at 20x. BTC/ETH set to 100x.</span>
-          </div>
-          <div class="table-wrap" style="max-height:400px;overflow-y:auto;">
-            <table class="data-table">
-              <thead style="position:sticky;top:0;z-index:1;"><tr><th>Symbol</th><th>Price</th><th>Leverage</th><th>Action</th></tr></thead>
-              <tbody id="admin-lev-tbody"></tbody>
-            </table>
-          </div>
-          <div id="admin-lev-empty" style="color:var(--color-text-muted);font-size:0.85rem;padding:var(--space-3);text-align:center;">No token leverage set. Default 20x for all tokens.</div>
-        </div>
-
-        <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Weekly Earnings Overview <span class="tip-btn">?<span class="tip-text">Summary of all users' weekly profits. Shows the 60/40 split, admin share, and per-user breakdown. Settle earnings here.</span></span></h3>
-        <div id="admin-weekly-summary" class="summary-grid" style="margin-bottom:var(--space-4);">
-          <div class="summary-card" style="border-left:3px solid var(--color-success);">
-            <span class="summary-card-label">Net P&L (All Users) <span class="tip-btn">?<span class="tip-text">Combined net profit/loss across all users' trades this week.</span></span></span>
-            <span id="awe-total-net" class="summary-card-value text-mono" style="font-size:1.2rem;">--</span>
-          </div>
-          <div class="summary-card" style="border-left:3px solid var(--color-accent);">
-            <span class="summary-card-label">Admin Share <span class="tip-btn">?<span class="tip-text">Platform's 40% share of net profits across all users this week.</span></span></span>
-            <span id="awe-admin-share" class="summary-card-value text-mono" style="color:var(--color-accent);font-size:1.2rem;">--</span>
-          </div>
-          <div class="summary-card" style="border-left:3px solid #d4af37;">
-            <span class="summary-card-label">User Share <span class="tip-btn">?<span class="tip-text">Users' 60% share of net profits this week.</span></span></span>
-            <span id="awe-user-share" class="summary-card-value text-mono" style="color:#d4af37;font-size:1.2rem;">--</span>
-          </div>
-        </div>
-        <div style="margin-bottom:var(--space-3);">
-          <button class="btn btn-sm" style="font-size:0.75rem;" onclick="window.CryptoBot.adminFixTrades()">🔧 Fix Corrupted Trades</button>
-          <span id="fix-trades-status" style="font-size:0.75rem;color:var(--color-text-muted);margin-left:8px;"></span>
-          <button class="btn btn-danger btn-sm" style="font-size:0.75rem;margin-left:12px;" onclick="window.CryptoBot.adminClearTestData()">🗑 Clear Test Data</button>
-          <span id="clear-data-status" style="font-size:0.75rem;color:var(--color-text-muted);margin-left:8px;"></span>
-        </div>
-        <div style="margin-bottom:var(--space-3);padding:var(--space-3);border:2px solid #ef4444;border-radius:var(--radius-lg);background:rgba(239,68,68,0.05);">
-          <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:8px;">
-            <strong style="color:#ef4444;font-size:0.9rem;">🚨 Emergency Close Positions</strong>
-            <div style="display:flex;align-items:center;gap:6px;">
-              <button class="btn btn-sm" style="font-size:0.75rem;background:transparent;color:#ef4444;border:1px solid #ef4444;padding:4px 12px;" onclick="window.CryptoBot.loadOpenPositions()">↻ Refresh</button>
-              <button class="btn btn-sm" style="font-size:0.75rem;background:#ef4444;color:#fff;border:none;font-weight:700;padding:4px 12px;" onclick="window.CryptoBot.emergencyCloseAll()">CLOSE ALL</button>
-              <span id="emergency-stop-status" style="font-size:0.75rem;color:var(--color-text-muted);"></span>
-            </div>
-          </div>
-          <div id="open-positions-list" style="font-size:0.8rem;color:var(--color-text-muted);">Click Refresh to load open positions</div>
-        </div>
-        <div id="admin-earnings-per-user" style="margin-bottom:var(--space-5);"></div>
-
-        <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Users <span class="tip-btn">?<span class="tip-text">All registered users. Manage approval, block/unblock, pause trading, adjust profit-share ratios, and view payment status.</span></span></h3>
-        <div class="table-wrap" style="margin-bottom:var(--space-5);overflow-x:auto;">
-          <table class="data-table" id="admin-users-table">
-            <thead><tr><th>Email</th><th>Keys</th><th>Wallet</th><th>Referral</th><th>Joined</th><th>Payment</th><th>Action</th></tr></thead>
-            <tbody id="admin-users-tbody"></tbody>
-          </table>
-        </div>
-
-        <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Pending Payments <span class="tip-btn">?<span class="tip-text">Subscription payments awaiting admin approval. Review proof of payment and approve or reject.</span></span></h3>
-        <div class="table-wrap" style="margin-bottom:var(--space-5);">
-          <table class="data-table">
-            <thead><tr><th>User</th><th>Amount</th><th>Method</th><th>Proof</th><th>Date</th><th>Action</th></tr></thead>
-            <tbody id="admin-subs-tbody"></tbody>
-          </table>
-        </div>
-
-        <!-- Fix Tools -->
-        <div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-4);margin-bottom:var(--space-5);">
-          <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Tools <span class="tip-btn">?<span class="tip-text">Admin utilities: sync trades with exchanges, debug APIs, run backtests, and fix corrupted data.</span></span></h3>
-          <button class="btn btn-primary btn-sm" onclick="window.CryptoBot.fixBitunixPnl()">Sync All Trades with Exchange</button>
-          <button class="btn btn-ghost btn-sm" onclick="window.CryptoBot.debugBitunix()">Debug Bitunix API</button>
+        <!-- old duplicate sections removed -->
 
           <!-- Backtest Settings -->
-          <div style="margin-top:var(--space-4);border-top:1px solid var(--color-border-muted);padding-top:var(--space-3);">
-            <strong style="font-size:0.9rem;color:var(--color-text);">Backtest Settings <span class="tip-btn">?<span class="tip-text">Configure all risk parameters before running a backtest. Pick an AI version to load its saved settings, or set manually.</span></span></strong>
-
-            <!-- AI Version Selector -->
+          <div style="margin-top:var(--space-4);background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-4);">
+            <strong style="font-size:0.9rem;color:var(--color-text);">Backtest Settings</strong>
             <div style="margin-top:var(--space-2);margin-bottom:var(--space-3);">
-              <label class="form-label" style="font-size:0.8rem;">AI Version <span class="tip-btn">?<span class="tip-text">Load risk parameters from a saved AI version. Each version was trained on different trade data and has different optimized settings.</span></span></label>
+              <label class="form-label" style="font-size:0.8rem;">AI Version</label>
               <div style="display:flex;gap:var(--space-2);align-items:center;flex-wrap:wrap;">
                 <select id="bt-ai-version" class="form-input" style="max-width:400px;font-size:0.8rem;">
                   <option value="">Manual Settings</option>
@@ -1242,77 +1305,59 @@
                 <button class="btn btn-ghost btn-sm" onclick="window.CryptoBot.loadAiVersions()" style="font-size:0.75rem;">Refresh</button>
               </div>
             </div>
-
-            <!-- Settings Grid -->
             <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:var(--space-2);margin-bottom:var(--space-3);">
               <div class="form-group" style="margin-bottom:0;">
-                <label class="form-label" style="font-size:0.75rem;">Days <span class="tip-btn">?<span class="tip-text">How many days of historical data to backtest. More days = longer wait but more trades.</span></span></label>
+                <label class="form-label" style="font-size:0.75rem;">Days</label>
                 <select id="backtest-days" class="form-input" style="font-size:0.8rem;">
-                  <option value="3">3</option>
-                  <option value="5">5</option>
-                  <option value="7" selected>7</option>
-                  <option value="14">14</option>
-                  <option value="30">30</option>
+                  <option value="3">3</option><option value="5">5</option><option value="7" selected>7</option><option value="14">14</option><option value="30">30</option>
                 </select>
               </div>
               <div class="form-group" style="margin-bottom:0;">
-                <label class="form-label" style="font-size:0.75rem;">Max Tokens <span class="tip-btn">?<span class="tip-text">Max tokens for optimizer. More tokens = more trades found but slower. 50 default, max 200.</span></span></label>
+                <label class="form-label" style="font-size:0.75rem;">Max Tokens</label>
                 <input class="form-input text-mono" type="number" id="bt-max-tokens" min="10" max="200" step="10" value="50" style="font-size:0.8rem;">
               </div>
               <div class="form-group" style="margin-bottom:0;">
-                <label class="form-label" style="font-size:0.75rem;">SL % <span class="tip-btn">?<span class="tip-text">Initial stop-loss distance from entry. e.g. 3 = 3% SL.</span></span></label>
+                <label class="form-label" style="font-size:0.75rem;">SL %</label>
                 <input class="form-input text-mono" type="number" id="bt-sl" min="0.5" max="10" step="0.1" value="3.0" style="font-size:0.8rem;">
               </div>
               <div class="form-group" style="margin-bottom:0;">
-                <label class="form-label" style="font-size:0.75rem;">TP % <span class="tip-btn">?<span class="tip-text">Fixed take-profit %. Set 0 for trailing-only (no fixed TP). e.g. 2.25 = close at +2.25% profit.</span></span></label>
+                <label class="form-label" style="font-size:0.75rem;">TP %</label>
                 <input class="form-input text-mono" type="number" id="bt-tp" min="0" max="20" step="0.1" value="0" style="font-size:0.8rem;">
               </div>
               <div class="form-group" style="margin-bottom:0;">
-                <label class="form-label" style="font-size:0.75rem;">Trail Step % <span class="tip-btn">?<span class="tip-text">Trailing SL step increment. At each step, SL moves up to lock profit. e.g. 1.2 = trail every +1.2%.</span></span></label>
+                <label class="form-label" style="font-size:0.75rem;">Trail Step %</label>
                 <input class="form-input text-mono" type="number" id="bt-trail" min="0.3" max="5" step="0.1" value="1.2" style="font-size:0.8rem;">
               </div>
               <div class="form-group" style="margin-bottom:0;">
-                <label class="form-label" style="font-size:0.75rem;">Leverage <span class="tip-btn">?<span class="tip-text">Leverage multiplier for all trades in this backtest.</span></span></label>
+                <label class="form-label" style="font-size:0.75rem;">Leverage</label>
                 <input class="form-input text-mono" type="number" id="bt-leverage" min="1" max="125" step="1" value="20" style="font-size:0.8rem;">
               </div>
               <div class="form-group" style="margin-bottom:0;">
-                <label class="form-label" style="font-size:0.75rem;">Risk % <span class="tip-btn">?<span class="tip-text">% of wallet used per trade. e.g. 10 = use 10% of $1000 = $100 per trade.</span></span></label>
+                <label class="form-label" style="font-size:0.75rem;">Risk %</label>
                 <input class="form-input text-mono" type="number" id="bt-risk" min="1" max="50" step="1" value="10" style="font-size:0.8rem;">
               </div>
               <div class="form-group" style="margin-bottom:0;">
-                <label class="form-label" style="font-size:0.75rem;">Max Positions <span class="tip-btn">?<span class="tip-text">Maximum simultaneous open trades.</span></span></label>
+                <label class="form-label" style="font-size:0.75rem;">Max Positions</label>
                 <input class="form-input text-mono" type="number" id="bt-maxpos" min="1" max="20" step="1" value="3" style="font-size:0.8rem;">
               </div>
               <div class="form-group" style="margin-bottom:0;">
-                <label class="form-label" style="font-size:0.75rem;">Stop After Losses <span class="tip-btn">?<span class="tip-text">Pause trading after N consecutive losses per day. Resets at 7am. Set 0 for unlimited.</span></span></label>
+                <label class="form-label" style="font-size:0.75rem;">Stop After Losses</label>
                 <input class="form-input text-mono" type="number" id="bt-consec" min="0" max="20" step="1" value="2" style="font-size:0.8rem;">
               </div>
               <div class="form-group" style="margin-bottom:0;">
-                <label class="form-label" style="font-size:0.75rem;">Wallet $ <span class="tip-btn">?<span class="tip-text">Starting wallet balance for the backtest simulation.</span></span></label>
+                <label class="form-label" style="font-size:0.75rem;">Wallet $</label>
                 <input class="form-input text-mono" type="number" id="bt-wallet" min="100" max="100000" step="100" value="1000" style="font-size:0.8rem;">
               </div>
-              <!-- Tokens come from admin token settings, no Top N needed -->
             </div>
-
-            <div style="font-size:0.75rem;color:var(--color-text-muted);margin-bottom:var(--space-2);">Daily→4H+1H→KeyLvl→15M→1M (configurable SL/TP, trailing steps)</div>
             <div style="display:flex;gap:var(--space-2);flex-wrap:wrap;align-items:center;">
-              <button class="btn btn-primary btn-sm" onclick="window.CryptoBot.runBacktest('strict', false)">▶ Run Backtest</button>
-              <button class="btn btn-ghost btn-sm" onclick="window.CryptoBot.runBacktest('strict', true)">↻ Reverse</button>
-              <span style="color:var(--color-border-muted);">|</span>
-              <button class="btn btn-sm" style="background:linear-gradient(135deg,#8b5cf6,#6366f1);color:#fff;border:none;" onclick="window.CryptoBot.runAiOptimize()">⚛️ Quantum AI Optimize</button>
-              <span class="tip-btn">?<span class="tip-text">Strategy-only optimizer using admin tokens. 10 presets → 25 genetic → QAOA + SPSA + Annealing. Tests ~130 strategy combos + per-token scoring. Risk is user-set.</span></span>
+              <button class="btn btn-primary btn-sm" onclick="window.CryptoBot.runBacktest('strict', false)">Run Backtest</button>
+              <button class="btn btn-ghost btn-sm" onclick="window.CryptoBot.runBacktest('strict', true)">Reverse</button>
+              <button class="btn btn-sm" style="background:linear-gradient(135deg,#8b5cf6,#6366f1);color:#fff;border:none;" onclick="window.CryptoBot.runAiOptimize()">Quantum AI Optimize</button>
             </div>
           </div>
           <pre id="fix-bitunix-result" style="margin-top:var(--space-2);font-size:0.75rem;color:var(--color-text-muted);max-height:70vh;overflow:auto;white-space:pre-wrap;word-break:break-all;border:1px solid var(--color-border-muted);border-radius:var(--radius-md);padding:var(--space-3);background:var(--color-bg-base);"></pre>
-        </div>
+        </div><!-- /admin-tab-tools -->
 
-        <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Pending Withdrawals <span class="tip-btn">?<span class="tip-text">User withdrawal requests awaiting admin processing. Approve or reject with a note.</span></span></h3>
-        <div class="table-wrap">
-          <table class="data-table">
-            <thead><tr><th>User</th><th>Amount</th><th>Bank</th><th>Acc No.</th><th>Name</th><th>Date</th><th>Action</th></tr></thead>
-            <tbody id="admin-wd-tbody"></tbody>
-          </table>
-        </div>
       </section>
     </main>
   </div>

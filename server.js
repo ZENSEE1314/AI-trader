@@ -30,6 +30,18 @@ app.use('/api/risk-levels', require('./routes/risk-levels'));
 app.get('/health', (req, res) => res.json({ status: 'ok', uptime: process.uptime() }));
 app.use('/health/details', require('./health'));
 
+// Agent framework health (public — basic status only)
+app.get('/api/agents/status', (req, res) => {
+  try {
+    const { getCoordinator } = require('./agents');
+    const coordinator = getCoordinator();
+    const h = coordinator.getHealth();
+    res.json({ state: h.state, cycleRunning: h.cycleRunning, runCount: h.runCount, agentCount: Object.keys(h.agents || {}).length });
+  } catch (err) {
+    res.json({ state: 'offline', error: err.message });
+  }
+});
+
 // Available trading pairs (cached 1 hour)
 let coinListCache = { data: null, ts: 0 };
 app.get('/api/coins', async (req, res) => {

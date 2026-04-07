@@ -1754,4 +1754,24 @@ async function run() {
   await main();
 }
 
-module.exports = { run };
+module.exports = {
+  run,
+  // Exported for agent framework (Phase 2)
+  executeForAllUsers,
+  openTrade,
+  checkTrailingStop,
+  syncTradeStatus,
+  checkUsdtTopups,
+  getClient,
+  isTokenBanned,
+  getTokenLeverage,
+  getCapitalPercentage,
+  getDailyCapital,
+  calculateTrailingStep,
+  updateStopLoss,
+  recordProfitSplit,
+  notify,
+  CONFIG,
+  TRAILING_SL,
+  tradeState,
+};

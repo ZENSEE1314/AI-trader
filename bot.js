@@ -11,6 +11,7 @@ const { run: runTrader } = require('./cycle');
 const aiLearner = require('./ai-learner');
 const { getSentimentSummary } = require('./sentiment-scraper');
 const { log: bLog } = require('./bot-logger');
+const { getCoordinator } = require('./agents');
 
 const TELEGRAM_TOKEN  = process.env.TELEGRAM_TOKEN;
 const TELEGRAM_CHATS  = (process.env.TELEGRAM_CHAT_ID || '').split(',').map(s => s.trim()).filter(Boolean);
@@ -183,7 +184,8 @@ async function handleCommand(text, fromChatId) {
       `<b>Trading</b>\n` +
       `/scan — Force SMC scan now\n` +
       `/stats — AI learning stats &amp; performance\n` +
-      `/sentiment — Current market sentiment\n\n` +
+      `/sentiment — Current market sentiment\n` +
+      `/agents — Agent framework health\n\n` +
       `<b>Control</b>\n` +
       `/pause — Pause auto trading\n` +
       `/resume — Resume auto trading\n` +
@@ -203,6 +205,8 @@ async function handleCommand(text, fromChatId) {
     await sendAIStats(fromChatId);
   } else if (cmd === '/sentiment' || cmd === 'sentiment') {
     await sendSentiment(fromChatId);
+  } else if (cmd === '/agents' || cmd === 'agents') {
+    await sendAgentHealth(fromChatId);
   } else {
     await tgSendTo(fromChatId, `Unknown command: <code>${e(cmd)}</code>\nSend /help for all commands.`);
   }
@@ -271,6 +275,42 @@ async function sendAIStats(chatId) {
     await tgSendTo(chatId, msg);
   } catch (err) {
     await tgSendTo(chatId, `<b>Stats Error</b>\n<code>${e(err.message)}</code>`);
+  }
+}
+
+// ── /agents — Agent Framework Health ─────────────────────────
+async function sendAgentHealth(chatId) {
+  try {
+    const coordinator = getCoordinator();
+    const health = coordinator.getHealth();
+    let msg = `<b>Agent Framework</b>\n━━━━━━━━━━━━━━━━━━\n`;
+    msg += `Coordinator: <b>${health.state}</b> | Runs: ${health.runCount}\n`;
+    msg += `Cycle running: ${health.cycleRunning ? 'Yes' : 'No'}\n\n`;
+
+    for (const [name, agentHealth] of Object.entries(health.agents || {})) {
+      msg += `<b>${agentHealth.name}</b>\n`;
+      msg += `  State: ${agentHealth.state} | Runs: ${agentHealth.runCount}\n`;
+      if (agentHealth.lastRunAt) {
+        const ago = Math.round((Date.now() - agentHealth.lastRunAt) / 60000);
+        msg += `  Last run: ${ago}m ago\n`;
+      }
+      if (agentHealth.lastError) {
+        const errAgo = Math.round((Date.now() - agentHealth.lastError.at) / 60000);
+        msg += `  Last error: ${agentHealth.lastError.message.substring(0, 60)} (${errAgo}m ago)\n`;
+      }
+      // ChartAgent extras
+      if (agentHealth.lastSignalCount !== undefined) {
+        msg += `  Signals: ${agentHealth.lastSignalCount} | Scans: ${agentHealth.totalScans}\n`;
+      }
+      // TraderAgent extras
+      if (agentHealth.cycleCount !== undefined) {
+        msg += `  Cycles: ${agentHealth.cycleCount}\n`;
+      }
+      msg += '\n';
+    }
+    await tgSendTo(chatId, msg);
+  } catch (err) {
+    await tgSendTo(chatId, `<b>Agent Health Error</b>\n<code>${e(err.message)}</code>`);
   }
 }
 
@@ -353,14 +393,18 @@ async function checkSpikes() {
   } catch (err) { log(`spike err: ${err.message}`); }
 }
 
-// ── MAIN TRADING CYCLE ───────────────────────────────────────
+// ── MAIN TRADING CYCLE (via Agent Coordinator) ──────────────
 async function runTradingCycle(forced = false) {
   if (paused && !forced) { log('Paused.'); bLog.system('Bot is paused'); return; }
   if (isBanned()) { bLog.system('Binance IP banned — skipping cycle'); return; }
 
   bLog.system('Trading cycle started' + (forced ? ' (manual)' : ''));
   try {
-    await runTrader();
+    const coordinator = getCoordinator();
+    const result = await coordinator.run({ forced });
+    if (result) {
+      bLog.system(`Cycle done in ${result.elapsed}s`);
+    }
   } catch (err) {
     bLog.error(`Trading cycle error: ${err.message}`);
     log(`Trading cycle error: ${err.message}`);
@@ -392,6 +436,15 @@ async function main() {
     log('DB tables initialized');
   } catch (err) {
     log(`DB init error: ${err.message}`);
+  }
+
+  // Initialize agent framework
+  try {
+    const coordinator = getCoordinator();
+    await coordinator.init();
+    log('Agent framework initialized');
+  } catch (err) {
+    log(`Agent init error (non-fatal): ${err.message}`);
   }
 
   // Log AI state on startup (non-critical — don't block boot)
