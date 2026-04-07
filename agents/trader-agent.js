@@ -235,6 +235,22 @@ class TraderAgent extends BaseAgent {
     return p.toFixed(8);
   }
 
+  async _getAIContext() {
+    let openTrades = [];
+    try {
+      const { query } = require('../db');
+      openTrades = await query("SELECT symbol, direction, entry_price, leverage, pnl_usdt, created_at FROM trades WHERE status = 'OPEN' ORDER BY created_at DESC LIMIT 10");
+    } catch {}
+    return {
+      cycleCount: this.cycleCount,
+      openPositions: this.openPositionCount,
+      tradesExecuted: this.tradesExecuted,
+      tradesSkipped: this.tradesSkipped,
+      openTrades: openTrades.map(t => ({ symbol: t.symbol, direction: t.direction, entry: t.entry_price, lev: t.leverage, pnl: t.pnl_usdt })),
+      lastResult: this.lastTradeResult,
+    };
+  }
+
   getLastResult() {
     return this.lastTradeResult;
   }

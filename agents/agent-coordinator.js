@@ -245,7 +245,7 @@ class AgentCoordinator extends BaseAgent {
     };
     for (const [name, agent] of Object.entries(agentNameMap)) {
       if (agent && text.includes(name) && /how|what|why|explain|tell|describe|skill|work|do you/.test(text)) {
-        return { from: agent.name, message: agent.explain(message) };
+        return { from: agent.name, message: await agent.explain(message) };
       }
     }
 
@@ -313,21 +313,48 @@ class AgentCoordinator extends BaseAgent {
       return { from: 'Coordinator', message: 'You can tell me:\n\n**Trading:**\n• "scan now" — hunt for trades\n• "any signals?" — latest scan results\n• "what are you trading?" — open positions\n\n**Agents:**\n• "status" — full team report\n• "team" — list all agents\n• "pause/resume chart/trader/risk/sentiment" — control agents\n• "create agent to watch BTCUSDT" — add a watcher\n• "remove <agent>" — delete custom agent\n\n**Analysis:**\n• "market mood?" — sentiment report\n• "risk report" — risk exposure\n• "performance" — win/loss stats\n• "audit trades" — accountant fixes PnL\n• "trade history" — last 10 trades\n• "fees" — total fees paid\n• "what do you remember?" — agent memories & lessons' };
     }
 
-    // General "how does X work" questions — route to most relevant agent
-    if (/smc|smart money|swing|scan|signal|setup|timeframe|candle/.test(text)) {
-      return { from: this.chartAgent.name, message: this.chartAgent.explain(message) };
-    }
-    if (/trail|stop.?loss|tp|take.?profit|position|execut|entry|exit|order/.test(text)) {
-      return { from: this.traderAgent.name, message: this.traderAgent.explain(message) };
-    }
-    if (/risk|exposure|max.?pos|drawdown|correlat|safe/.test(text)) {
-      return { from: this.riskAgent.name, message: this.riskAgent.explain(message) };
-    }
-    if (/mood|sentiment|bull|bear|fomo|fud|news|trend/.test(text)) {
-      return { from: this.sentimentAgent.name, message: this.sentimentAgent.explain(message) };
+    // ── AI-powered response: route to the right agent's brain ──
+    const { isAvailable: aiAvailable } = require('./ai-brain');
+    if (aiAvailable()) {
+      // Determine which agent should answer
+      let targetAgent = null;
+      let targetName = 'Coordinator';
+
+      // Check if mentioning a specific agent
+      for (const [name, agent] of this._agents) {
+        if (text.includes(name) || text.includes(agent.name.toLowerCase())) {
+          targetAgent = agent;
+          targetName = agent.name;
+          break;
+        }
+      }
+
+      // Keyword routing if no agent named
+      if (!targetAgent) {
+        if (/smc|smart money|swing|scan|signal|setup|timeframe|candle|chart/.test(text)) targetAgent = this.chartAgent;
+        else if (/trail|stop.?loss|tp|take.?profit|position|execut|entry|exit|order|trade/.test(text)) targetAgent = this.traderAgent;
+        else if (/risk|exposure|max.?pos|drawdown|correlat|safe|block|reject/.test(text)) targetAgent = this.riskAgent;
+        else if (/mood|sentiment|bull|bear|fomo|fud|news|trend|market/.test(text)) targetAgent = this.sentimentAgent;
+        else if (/audit|pnl|fee|accountant|fix.*trade|check.*trade/.test(text)) targetAgent = this.accountantAgent;
+      }
+
+      const agent = targetAgent || this;
+      const answer = await (agent.explain ? agent.explain(message) : Promise.resolve(null));
+      if (answer) return { from: agent.name || targetName, message: answer };
     }
 
-    // Catch-all — try to be helpful
+    // Fallback: hardcoded responses for when no AI key
+    if (/smc|smart money|swing|scan|signal|setup|timeframe|candle/.test(text)) {
+      return { from: this.chartAgent.name, message: await this.chartAgent.explain(message) };
+    }
+    if (/trail|stop.?loss|tp|take.?profit|position|execut|entry|exit|order/.test(text)) {
+      return { from: this.traderAgent.name, message: await this.traderAgent.explain(message) };
+    }
+    if (/risk|exposure|max.?pos|drawdown|correlat|safe/.test(text)) {
+      return { from: this.riskAgent.name, message: await this.riskAgent.explain(message) };
+    }
+
+    // Catch-all
     return { from: 'Coordinator', message: `I don't know how to do "${message}" yet. Here's what I can do:\n\n• **scan now** — find trades\n• **status** / **team** — check agents\n• **audit trades** — fix PnL\n• **create agent to watch BTCUSDT** — add watcher\n• **help** — full command list` };
   }
 
