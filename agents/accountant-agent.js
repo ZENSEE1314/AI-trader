@@ -1,0 +1,238 @@
+// ============================================================
+// AccountantAgent — Trade auditing & PnL correction
+//
+// Audits trade history, recalculates PnL from exchange data,
+// fixes missing fees, and generates financial reports.
+// ============================================================
+
+const { BaseAgent } = require('./base-agent');
+const { log: bLog } = require('../bot-logger');
+
+class AccountantAgent extends BaseAgent {
+  constructor(options = {}) {
+    super('AccountantAgent', options);
+    this.lastAuditResult = null;
+    this.auditsRun = 0;
+    this.tradesFixed = 0;
+    this.totalFeesRecovered = 0;
+
+    this._profile = {
+      description: 'Audits all trade history, recalculates PnL from exchange data, fixes missing fees and incorrect amounts.',
+      role: 'Trade Auditor',
+      icon: 'accountant',
+      skills: [
+        { id: 'audit_pnl', name: 'PnL Audit', description: 'Check all trades for incorrect or missing PnL values', enabled: true },
+        { id: 'fix_fees', name: 'Fee Recovery', description: 'Fetch actual trading fees from exchange and update records', enabled: true },
+        { id: 'recalc_gross', name: 'Gross PnL Recalc', description: 'Recalculate gross PnL from entry/exit prices', enabled: true },
+        { id: 'report', name: 'Financial Report', description: 'Generate summary of all trades with totals', enabled: true },
+      ],
+      config: [
+        { key: 'auditLimit', label: 'Max Trades to Audit', type: 'number', value: options.auditLimit || 100, min: 10, max: 500 },
+      ],
+    };
+  }
+
+  async execute(context = {}) {
+    const { mode = 'audit' } = context;
+    this.auditsRun++;
+
+    if (mode === 'audit') return this.runFullAudit();
+    if (mode === 'report') return this.generateReport();
+    return this.runFullAudit();
+  }
+
+  async runFullAudit() {
+    this.currentTask = { description: 'Auditing all trade history', startedAt: Date.now() };
+    this.addActivity('info', 'Starting full trade audit...');
+
+    let db;
+    try { db = require('../db'); } catch (e) {
+      this.addActivity('error', 'Database not available');
+      return { ok: false, error: 'Database not available' };
+    }
+
+    // Step 1: Find all closed trades
+    const trades = await db.query(
+      `SELECT t.*, ak.api_key_enc, ak.iv, ak.auth_tag,
+              ak.api_secret_enc, ak.secret_iv, ak.secret_auth_tag,
+              ak.platform
+       FROM trades t
+       LEFT JOIN api_keys ak ON ak.id = t.api_key_id
+       WHERE t.status IN ('WIN','LOSS','TP','SL','CLOSED')
+       ORDER BY t.closed_at DESC
+       LIMIT $1`,
+      [this._profile.config.find(c => c.key === 'auditLimit')?.value || 100]
+    );
+
+    this.addActivity('info', `Found ${trades.length} closed trades to audit`);
+
+    let issues = [];
+    let fixed = 0;
+    let totalFeeRecovered = 0;
+
+    for (const trade of trades) {
+      const problems = [];
+      const entryPrice = parseFloat(trade.entry_price) || 0;
+      const exitPrice = parseFloat(trade.exit_price) || 0;
+      const qty = parseFloat(trade.quantity) || 0;
+      const isLong = trade.direction !== 'SHORT';
+      const currentPnl = parseFloat(trade.pnl_usdt) || 0;
+      const currentFee = parseFloat(trade.trading_fee) || 0;
+      const currentGross = trade.gross_pnl != null ? parseFloat(trade.gross_pnl) : null;
+
+      // Check 1: Missing exit price
+      if (!exitPrice || exitPrice === 0) {
+        problems.push('missing_exit_price');
+      }
+
+      // Check 2: Recalculate gross PnL from prices
+      if (entryPrice > 0 && exitPrice > 0 && qty > 0) {
+        const calcGross = isLong
+          ? (exitPrice - entryPrice) * qty
+          : (entryPrice - exitPrice) * qty;
+        const calcGrossRound = parseFloat(calcGross.toFixed(4));
+
+        // Check if gross_pnl is missing or wrong
+        if (currentGross === null) {
+          problems.push('missing_gross_pnl');
+          await db.query('UPDATE trades SET gross_pnl = $1 WHERE id = $2', [calcGrossRound, trade.id]);
+          fixed++;
+        } else if (Math.abs(currentGross - calcGrossRound) > 0.01) {
+          problems.push(`gross_pnl_mismatch: stored=${currentGross} calc=${calcGrossRound}`);
+          await db.query('UPDATE trades SET gross_pnl = $1 WHERE id = $2', [calcGrossRound, trade.id]);
+          fixed++;
+        }
+      }
+
+      // Check 3: Missing fee — try to fetch from exchange
+      if (currentFee === 0 && trade.api_key_enc) {
+        try {
+          const fee = await this._fetchTradeFee(trade, db);
+          if (fee > 0) {
+            await db.query('UPDATE trades SET trading_fee = $1 WHERE id = $2', [fee, trade.id]);
+            totalFeeRecovered += fee;
+            fixed++;
+            problems.push(`fee_recovered: $${fee.toFixed(4)}`);
+          }
+        } catch (e) {
+          // Can't fetch fee — skip
+        }
+      }
+
+      // Check 4: PnL sign vs status mismatch
+      if (currentPnl > 0 && (trade.status === 'LOSS' || trade.status === 'SL')) {
+        problems.push(`status_mismatch: pnl=+${currentPnl} but status=${trade.status}`);
+        await db.query('UPDATE trades SET status = $1 WHERE id = $2', ['WIN', trade.id]);
+        fixed++;
+      } else if (currentPnl < 0 && (trade.status === 'WIN' || trade.status === 'TP')) {
+        problems.push(`status_mismatch: pnl=${currentPnl} but status=${trade.status}`);
+        await db.query('UPDATE trades SET status = $1 WHERE id = $2', ['LOSS', trade.id]);
+        fixed++;
+      }
+
+      if (problems.length > 0) {
+        issues.push({ id: trade.id, symbol: trade.symbol, problems });
+      }
+    }
+
+    this.tradesFixed += fixed;
+    this.totalFeesRecovered += totalFeeRecovered;
+    this.currentTask = null;
+
+    const result = {
+      totalAudited: trades.length,
+      issuesFound: issues.length,
+      fixed,
+      feesRecovered: parseFloat(totalFeeRecovered.toFixed(4)),
+      issues: issues.slice(0, 20), // top 20 for display
+    };
+    this.lastAuditResult = result;
+    this.addActivity('success', `Audit done: ${trades.length} trades, ${issues.length} issues, ${fixed} fixed, $${totalFeeRecovered.toFixed(2)} fees recovered`);
+
+    return result;
+  }
+
+  async _fetchTradeFee(trade, db) {
+    let cryptoUtils;
+    try { cryptoUtils = require('../crypto-utils'); } catch { return 0; }
+
+    const apiKey = cryptoUtils.decrypt(trade.api_key_enc, trade.iv, trade.auth_tag);
+    const apiSecret = cryptoUtils.decrypt(trade.api_secret_enc, trade.secret_iv, trade.secret_auth_tag);
+
+    if (trade.platform === 'binance') {
+      const { USDMClient } = require('binance');
+      const { getBinanceRequestOptions } = require('../proxy-agent');
+      const client = new USDMClient({ api_key: apiKey, api_secret: apiSecret }, getBinanceRequestOptions());
+      const openTime = trade.created_at ? new Date(trade.created_at).getTime() : Date.now() - 7 * 86400000;
+      const fills = await client.getAccountTradeList({ symbol: trade.symbol, startTime: openTime, limit: 50 });
+      let totalFee = 0;
+      for (const f of (fills || [])) {
+        totalFee += Math.abs(parseFloat(f.commission || 0));
+      }
+      return parseFloat(totalFee.toFixed(4));
+    } else if (trade.platform === 'bitunix') {
+      const { BitunixClient } = require('../bitunix-client');
+      const client = new BitunixClient({ apiKey, apiSecret });
+      const positions = await client.getHistoryPositions({ symbol: trade.symbol, pageSize: 20 });
+      for (const p of (positions || [])) {
+        const ep = parseFloat(p.entryPrice || 0);
+        if (Math.abs(ep - parseFloat(trade.entry_price)) / parseFloat(trade.entry_price) < 0.002) {
+          const fee = Math.abs(parseFloat(p.fee || 0));
+          const funding = Math.abs(parseFloat(p.funding || 0));
+          return parseFloat((fee + funding).toFixed(4));
+        }
+      }
+    }
+    return 0;
+  }
+
+  async generateReport() {
+    this.currentTask = { description: 'Generating financial report', startedAt: Date.now() };
+    let db;
+    try { db = require('../db'); } catch { return { ok: false, error: 'DB unavailable' }; }
+
+    const stats = await db.query(`
+      SELECT
+        COUNT(*) as total,
+        COUNT(*) FILTER (WHERE status IN ('WIN','TP')) as wins,
+        COUNT(*) FILTER (WHERE status IN ('LOSS','SL')) as losses,
+        COALESCE(SUM(pnl_usdt), 0) as total_net_pnl,
+        COALESCE(SUM(gross_pnl), 0) as total_gross_pnl,
+        COALESCE(SUM(trading_fee), 0) as total_fees,
+        COALESCE(AVG(pnl_usdt), 0) as avg_pnl,
+        MAX(pnl_usdt) as best_trade,
+        MIN(pnl_usdt) as worst_trade
+      FROM trades
+      WHERE status IN ('WIN','LOSS','TP','SL','CLOSED')
+    `);
+
+    const s = stats[0];
+    this.currentTask = null;
+    this.addActivity('success', 'Financial report generated');
+
+    return {
+      total: parseInt(s.total),
+      wins: parseInt(s.wins),
+      losses: parseInt(s.losses),
+      winRate: parseInt(s.total) > 0 ? ((parseInt(s.wins) / parseInt(s.total)) * 100).toFixed(1) : '0',
+      totalNetPnl: parseFloat(parseFloat(s.total_net_pnl).toFixed(2)),
+      totalGrossPnl: parseFloat(parseFloat(s.total_gross_pnl).toFixed(2)),
+      totalFees: parseFloat(parseFloat(s.total_fees).toFixed(2)),
+      avgPnl: parseFloat(parseFloat(s.avg_pnl).toFixed(4)),
+      bestTrade: parseFloat(parseFloat(s.best_trade || 0).toFixed(2)),
+      worstTrade: parseFloat(parseFloat(s.worst_trade || 0).toFixed(2)),
+    };
+  }
+
+  getHealth() {
+    return {
+      ...super.getHealth(),
+      auditsRun: this.auditsRun,
+      tradesFixed: this.tradesFixed,
+      totalFeesRecovered: this.totalFeesRecovered,
+      lastAuditResult: this.lastAuditResult,
+    };
+  }
+}
+
+module.exports = { AccountantAgent };
