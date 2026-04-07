@@ -981,6 +981,51 @@
           <button class="btn btn-sm" id="btn-admin-csv" style="background:var(--color-accent);color:#fff;padding:6px 16px;" onclick="window.location.href='/api/admin/trades/csv'">Download All Trades CSV</button>
         </div>
 
+        <!-- ═══════════════════════════════════════════════════════
+             MISSION CONTROL — Agent Framework Dashboard
+             ═══════════════════════════════════════════════════════ -->
+        <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">
+          Mission Control
+          <span class="tip-btn">?<span class="tip-text">Real-time view of all AI agents. Monitor health, see what each agent is doing, and send commands directly.</span></span>
+          <span id="mc-status-dot" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--color-text-muted);margin-left:6px;vertical-align:middle;"></span>
+        </h3>
+
+        <div class="mc-panel" style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-4);margin-bottom:var(--space-5);">
+
+          <!-- Coordinator Status Bar -->
+          <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:var(--space-4);padding-bottom:var(--space-3);border-bottom:1px solid var(--color-border-muted);">
+            <div style="display:flex;align-items:center;gap:12px;">
+              <span style="font-size:0.9rem;font-weight:600;color:var(--color-text);">Coordinator</span>
+              <span id="mc-coord-state" class="mc-badge mc-badge-idle">idle</span>
+              <span id="mc-coord-cycles" style="font-size:0.75rem;color:var(--color-text-muted);">0 cycles</span>
+              <span id="mc-uptime" style="font-size:0.75rem;color:var(--color-text-muted);"></span>
+            </div>
+            <div style="display:flex;gap:6px;flex-wrap:wrap;">
+              <button class="btn btn-sm mc-cmd-btn" style="background:var(--color-accent);color:#000;font-weight:600;" onclick="window.CryptoBot.mcCommand('force-scan')">Force Scan</button>
+              <button class="btn btn-sm mc-cmd-btn" style="background:var(--color-warning);color:#000;" onclick="window.CryptoBot.mcCommand('pause-all')">Pause All</button>
+              <button class="btn btn-sm mc-cmd-btn" style="background:var(--color-success);color:#000;" onclick="window.CryptoBot.mcCommand('resume-all')">Resume All</button>
+              <button class="btn btn-sm mc-cmd-btn" style="border:1px solid var(--color-border);color:var(--color-text);" onclick="window.CryptoBot.mcRefresh()">Refresh</button>
+            </div>
+          </div>
+
+          <!-- Agent Cards Grid -->
+          <div id="mc-agents-grid" class="mc-agents-grid">
+            <!-- Populated by JS -->
+            <div style="color:var(--color-text-muted);font-size:0.85rem;padding:var(--space-3);text-align:center;">Loading agents...</div>
+          </div>
+
+          <!-- Activity Feed -->
+          <div style="margin-top:var(--space-4);border-top:1px solid var(--color-border-muted);padding-top:var(--space-3);">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--space-2);">
+              <strong style="font-size:0.85rem;color:var(--color-text);">Activity Feed</strong>
+              <span id="mc-activity-count" style="font-size:0.7rem;color:var(--color-text-muted);">0 events</span>
+            </div>
+            <div id="mc-activity-feed" class="mc-activity-feed">
+              <div style="color:var(--color-text-muted);font-size:0.8rem;text-align:center;padding:var(--space-3);">No activity yet</div>
+            </div>
+          </div>
+        </div>
+
         <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Platform Settings <span class="tip-btn">?<span class="tip-text">Global settings that apply to the entire platform. Configure referral tiers, USDT addresses, and commission percentages.</span></span></h3>
         <div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-4);margin-bottom:var(--space-5);">
           <div class="settings-grid">

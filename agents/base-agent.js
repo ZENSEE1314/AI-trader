@@ -22,9 +22,15 @@ class BaseAgent {
     this.lastError = null;
     this.runCount = 0;
     this.options = options;
+    this.paused = false;
+    this.currentTask = null; // { description, startedAt }
 
     // Inbox for inter-agent messages
     this._inbox = [];
+
+    // Activity feed — rolling log of recent actions
+    this._activity = [];
+    this._maxActivity = 50;
 
     // Event listeners: { eventName: [fn, ...] }
     this._listeners = {};
@@ -41,18 +47,28 @@ class BaseAgent {
       this.log('Already running — skipping');
       return null;
     }
+    if (this.paused) {
+      this.log('Paused — skipping');
+      this.addActivity('skip', 'Skipped (paused)');
+      return null;
+    }
 
     this.state = AGENT_STATES.RUNNING;
     this.lastRunAt = Date.now();
     this.runCount++;
+    this.currentTask = { description: 'Executing cycle', startedAt: Date.now() };
 
     try {
       const result = await this.execute(context);
       this.state = AGENT_STATES.IDLE;
+      this.currentTask = null;
+      this.addActivity('success', `Cycle #${this.runCount} complete`);
       return result;
     } catch (err) {
       this.state = AGENT_STATES.ERROR;
       this.lastError = { message: err.message, at: Date.now() };
+      this.currentTask = null;
+      this.addActivity('error', `Cycle #${this.runCount} failed: ${err.message}`);
       this.logError(`Execute failed: ${err.message}`);
       throw err;
     }
@@ -134,16 +150,30 @@ class BaseAgent {
     bLog.error(formatted);
   }
 
+  // ── Activity Feed ──────────────────────────────────────────
+
+  addActivity(type, message) {
+    this._activity.push({ type, message, ts: Date.now() });
+    if (this._activity.length > this._maxActivity) this._activity.shift();
+  }
+
+  getActivity(limit = 20) {
+    return this._activity.slice(-limit);
+  }
+
   // ── Health ────────────────────────────────────────────────
 
   getHealth() {
     return {
       name: this.name,
       state: this.state,
+      paused: this.paused,
       runCount: this.runCount,
       lastRunAt: this.lastRunAt,
       lastError: this.lastError,
+      currentTask: this.currentTask,
       inboxSize: this._inbox.length,
+      recentActivity: this.getActivity(10),
     };
   }
 

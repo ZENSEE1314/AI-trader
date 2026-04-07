@@ -30,14 +30,15 @@ app.use('/api/risk-levels', require('./routes/risk-levels'));
 app.get('/health', (req, res) => res.json({ status: 'ok', uptime: process.uptime() }));
 app.use('/health/details', require('./health'));
 
-// Agent framework health endpoint
-app.get('/api/agents/health', (req, res) => {
+// Agent framework health (public — basic status only)
+app.get('/api/agents/status', (req, res) => {
   try {
     const { getCoordinator } = require('./agents');
     const coordinator = getCoordinator();
-    res.json(coordinator.getHealth());
+    const h = coordinator.getHealth();
+    res.json({ state: h.state, cycleRunning: h.cycleRunning, runCount: h.runCount, agentCount: Object.keys(h.agents || {}).length });
   } catch (err) {
-    res.json({ error: err.message, agents: {} });
+    res.json({ state: 'offline', error: err.message });
   }
 });
 

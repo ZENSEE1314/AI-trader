@@ -174,6 +174,12 @@
     // Stop polling when leaving tabs
     if (tab !== 'logs') stopLogPolling();
     if (tab !== 'dashboard') stopDashboardRefresh();
+    // Mission Control auto-refresh
+    if (tab === 'admin') {
+      if (!mcRefreshTimer) mcRefreshTimer = setInterval(mcRefresh, 15000);
+    } else {
+      if (mcRefreshTimer) { clearInterval(mcRefreshTimer); mcRefreshTimer = null; }
+    }
   }
 
   // ----- Auth -----
@@ -1268,7 +1274,140 @@
       loadGlobalTokens();
       loadTokenLeverage();
       loadRiskLevels();
+      // Mission Control
+      mcRefresh();
     } catch (err) { showToast('Failed to load admin.', 'error'); }
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // MISSION CONTROL — Agent Dashboard
+  // ═══════════════════════════════════════════════════════════
+
+  let mcRefreshTimer = null;
+
+  async function mcRefresh() {
+    try {
+      const data = await api('GET', '/api/admin/agents/health');
+      renderMissionControl(data);
+    } catch (err) {
+      const grid = document.getElementById('mc-agents-grid');
+      if (grid) grid.innerHTML = `<div style="color:var(--color-danger);font-size:0.85rem;padding:var(--space-3);">Failed to load: ${escapeHtml(err.message)}</div>`;
+    }
+  }
+
+  function renderMissionControl(data) {
+    const { health, activity, uptime } = data;
+    if (!health) return;
+
+    // Status dot
+    const dot = document.getElementById('mc-status-dot');
+    if (dot) {
+      const anyRunning = health.cycleRunning || Object.values(health.agents || {}).some(a => a.state === 'running');
+      const anyError = Object.values(health.agents || {}).some(a => a.state === 'error');
+      dot.style.background = anyRunning ? 'var(--color-accent)' : anyError ? 'var(--color-danger)' : 'var(--color-success)';
+      dot.style.boxShadow = anyRunning ? '0 0 8px rgba(0,229,255,0.5)' : '';
+    }
+
+    // Coordinator bar
+    const coordState = document.getElementById('mc-coord-state');
+    if (coordState) {
+      const st = health.paused ? 'paused' : health.cycleRunning ? 'running' : health.state;
+      coordState.textContent = st;
+      coordState.className = `mc-badge mc-badge-${st}`;
+    }
+    const coordCycles = document.getElementById('mc-coord-cycles');
+    if (coordCycles) coordCycles.textContent = `${health.runCount} cycles`;
+    const uptimeEl = document.getElementById('mc-uptime');
+    if (uptimeEl && uptime) {
+      const h = Math.floor(uptime / 3600);
+      const m = Math.floor((uptime % 3600) / 60);
+      uptimeEl.textContent = `Uptime: ${h}h ${m}m`;
+    }
+
+    // Agent cards
+    const grid = document.getElementById('mc-agents-grid');
+    if (grid && health.agents) {
+      const agents = Object.entries(health.agents);
+      grid.innerHTML = agents.map(([key, a]) => {
+        const st = a.paused ? 'paused' : a.state;
+        const cardClass = st === 'running' ? 'mc-card-running' : st === 'error' ? 'mc-card-error' : a.paused ? 'mc-card-paused' : '';
+        const lastRun = a.lastRunAt ? formatTimeAgo(a.lastRunAt) : 'never';
+        const taskHtml = a.currentTask
+          ? `<div class="mc-agent-task"><span class="mc-pulse"></span>${escapeHtml(a.currentTask.description)} (${formatTimeAgo(a.currentTask.startedAt)})</div>`
+          : '';
+        const errHtml = a.lastError
+          ? `<div style="font-size:0.7rem;color:var(--color-danger);margin-bottom:4px;word-break:break-word;">Last error: ${escapeHtml(a.lastError.message.substring(0, 100))}</div>`
+          : '';
+
+        // Extra stats per agent type
+        let extraStats = '';
+        if (a.lastSignalCount !== undefined) extraStats += `<span class="mc-meta-label">Signals:</span><span>${a.lastSignalCount}</span><span class="mc-meta-label">Scans:</span><span>${a.totalScans}</span>`;
+        if (a.cycleCount !== undefined) extraStats += `<span class="mc-meta-label">Cycles:</span><span>${a.cycleCount}</span>`;
+
+        return `<div class="mc-agent-card ${cardClass}">
+          <div class="mc-agent-header">
+            <span class="mc-agent-name">${escapeHtml(a.name)}</span>
+            <span class="mc-badge mc-badge-${st}">${st}</span>
+          </div>
+          ${taskHtml}
+          ${errHtml}
+          <div class="mc-agent-meta">
+            <span class="mc-meta-label">Runs:</span><span>${a.runCount}</span>
+            <span class="mc-meta-label">Last run:</span><span>${lastRun}</span>
+            <span class="mc-meta-label">Inbox:</span><span>${a.inboxSize}</span>
+            ${extraStats}
+          </div>
+          <div class="mc-agent-actions">
+            ${a.paused
+              ? `<button class="btn btn-sm" style="background:var(--color-success);color:#000;" onclick="window.CryptoBot.mcCommand('resume-agent',{agent:'${key}'})">Resume</button>`
+              : `<button class="btn btn-sm" style="background:var(--color-warning);color:#000;" onclick="window.CryptoBot.mcCommand('pause-agent',{agent:'${key}'})">Pause</button>`
+            }
+            ${st === 'error' ? `<button class="btn btn-sm" style="border:1px solid var(--color-accent);color:var(--color-accent);" onclick="window.CryptoBot.mcCommand('reset-agent',{agent:'${key}'})">Reset</button>` : ''}
+          </div>
+        </div>`;
+      }).join('');
+    }
+
+    // Activity feed
+    const feed = document.getElementById('mc-activity-feed');
+    const countEl = document.getElementById('mc-activity-count');
+    if (feed && activity) {
+      if (countEl) countEl.textContent = `${activity.length} events`;
+      if (!activity.length) {
+        feed.innerHTML = '<div style="color:var(--color-text-muted);font-size:0.8rem;text-align:center;padding:var(--space-3);">No activity yet</div>';
+      } else {
+        feed.innerHTML = activity.map(a => {
+          const time = new Date(a.ts).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+          return `<div class="mc-activity-item" data-type="${escapeHtml(a.type)}">
+            <span class="mc-activity-ts">${time}</span>
+            <span class="mc-activity-agent">${escapeHtml(a.agent)}</span>
+            <span class="mc-activity-msg">${escapeHtml(a.message)}</span>
+          </div>`;
+        }).join('');
+      }
+    }
+  }
+
+  function formatTimeAgo(ts) {
+    const diff = Date.now() - ts;
+    if (diff < 60000) return `${Math.round(diff / 1000)}s ago`;
+    if (diff < 3600000) return `${Math.round(diff / 60000)}m ago`;
+    if (diff < 86400000) return `${Math.round(diff / 3600000)}h ago`;
+    return `${Math.round(diff / 86400000)}d ago`;
+  }
+
+  async function mcCommand(command, params) {
+    try {
+      const result = await api('POST', '/api/admin/agents/command', { command, params });
+      if (result.ok === false && result.error) {
+        showToast(result.error, 'error');
+      } else {
+        showToast(`Command "${command}" sent`, 'success');
+      }
+      setTimeout(mcRefresh, 500);
+    } catch (err) {
+      showToast(`Command failed: ${err.message}`, 'error');
+    }
   }
 
   async function saveAdminSettings() {
@@ -2707,6 +2846,7 @@
     addRiskLevel, saveRiskLevel, deleteRiskLevel,
     loadOpenPositions, emergencyCloseToken, emergencyCloseAll,
     fixBitunixPnl, debugBitunix, runBacktest, loadAiVersions, runAiOptimize,
+    mcRefresh, mcCommand,
   };
 
   // ----- Init -----

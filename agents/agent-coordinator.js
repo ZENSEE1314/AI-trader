@@ -122,6 +122,86 @@ class AgentCoordinator extends BaseAgent {
     };
   }
 
+  // ── Commands (from Mission Control UI) ─────────────────────
+
+  async handleCommand(command, params = {}) {
+    this.log(`Command received: ${command} ${JSON.stringify(params)}`);
+    this.addActivity('command', `Command: ${command}`);
+
+    switch (command) {
+      case 'force-scan': {
+        if (this.cycleRunning) return { ok: false, error: 'Cycle already running' };
+        this.addActivity('command', 'Force scan triggered from Mission Control');
+        const result = await this.run({ forced: true });
+        return { ok: true, result };
+      }
+
+      case 'pause-agent': {
+        const agent = this._agents.get(params.agent);
+        if (!agent) return { ok: false, error: `Agent "${params.agent}" not found` };
+        agent.paused = true;
+        agent.addActivity('command', 'Paused from Mission Control');
+        this.log(`Agent ${params.agent} paused`);
+        return { ok: true };
+      }
+
+      case 'resume-agent': {
+        const agent = this._agents.get(params.agent);
+        if (!agent) return { ok: false, error: `Agent "${params.agent}" not found` };
+        agent.paused = false;
+        agent.addActivity('command', 'Resumed from Mission Control');
+        this.log(`Agent ${params.agent} resumed`);
+        return { ok: true };
+      }
+
+      case 'pause-all': {
+        for (const [name, agent] of this._agents) {
+          agent.paused = true;
+          agent.addActivity('command', 'Paused (pause-all)');
+        }
+        this.paused = true;
+        this.log('All agents paused');
+        return { ok: true };
+      }
+
+      case 'resume-all': {
+        for (const [name, agent] of this._agents) {
+          agent.paused = false;
+          agent.addActivity('command', 'Resumed (resume-all)');
+        }
+        this.paused = false;
+        this.log('All agents resumed');
+        return { ok: true };
+      }
+
+      case 'reset-agent': {
+        const agent = this._agents.get(params.agent);
+        if (!agent) return { ok: false, error: `Agent "${params.agent}" not found` };
+        agent.state = 'idle';
+        agent.lastError = null;
+        agent.currentTask = null;
+        agent.addActivity('command', 'Reset from Mission Control');
+        this.log(`Agent ${params.agent} reset`);
+        return { ok: true };
+      }
+
+      default:
+        return { ok: false, error: `Unknown command: ${command}` };
+    }
+  }
+
+  // ── Full Activity (all agents) ────────────────────────────
+
+  getAllActivity(limit = 30) {
+    const all = [];
+    all.push(...this.getActivity(limit).map(a => ({ ...a, agent: 'Coordinator' })));
+    for (const [name, agent] of this._agents) {
+      all.push(...agent.getActivity(limit).map(a => ({ ...a, agent: agent.name })));
+    }
+    all.sort((a, b) => b.ts - a.ts);
+    return all.slice(0, limit);
+  }
+
   // ── Shutdown ──────────────────────────────────────────────
 
   async shutdown() {

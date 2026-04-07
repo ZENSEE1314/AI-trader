@@ -2941,4 +2941,47 @@ router.post('/clear-test-data', async (req, res) => {
   }
 });
 
+// ── Mission Control: Agent Framework ────────────────────────
+
+// GET /api/admin/agents/health — Full agent health + activity
+router.get('/agents/health', async (req, res) => {
+  try {
+    const { getCoordinator } = require('../agents');
+    const coordinator = getCoordinator();
+    res.json({
+      health: coordinator.getHealth(),
+      activity: coordinator.getAllActivity(30),
+      uptime: process.uptime(),
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/admin/agents/command — Send command to coordinator
+router.post('/agents/command', async (req, res) => {
+  try {
+    const { command, params } = req.body;
+    if (!command) return res.status(400).json({ error: 'Missing command' });
+    const { getCoordinator } = require('../agents');
+    const coordinator = getCoordinator();
+    const result = await coordinator.handleCommand(command, params || {});
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// GET /api/admin/agents/activity — Activity feed only
+router.get('/agents/activity', async (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit) || 30;
+    const { getCoordinator } = require('../agents');
+    const coordinator = getCoordinator();
+    res.json(coordinator.getAllActivity(limit));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 module.exports = router;
