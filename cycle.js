@@ -362,14 +362,14 @@ async function recordProfitSplit(db, userId, apiKeyId, pnlUsdt, symbol) {
 
     // Record platform fee as wallet transaction
     await db.query(
-      `INSERT INTO wallet_transactions (user_id, type, amount, status, note)
+      `INSERT INTO wallet_transactions (user_id, type, amount, status, description)
        VALUES ($1, 'platform_fee', $2, 'completed', $3)`,
       [userId, platformFee, `${adminPct}% platform fee on ${symbol} profit $${pnlUsdt.toFixed(2)}`]
     );
 
     // Record user profit share
     await db.query(
-      `INSERT INTO wallet_transactions (user_id, type, amount, status, note)
+      `INSERT INTO wallet_transactions (user_id, type, amount, status, description)
        VALUES ($1, 'profit_share', $2, 'completed', $3)`,
       [userId, userShare, `${userPct}% profit share on ${symbol} profit $${pnlUsdt.toFixed(2)}`]
     );
