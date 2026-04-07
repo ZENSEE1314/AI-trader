@@ -172,6 +172,21 @@ class RiskAgent extends BaseAgent {
     return { approved, rejected, riskReport };
   }
 
+  explain(question) {
+    const text = question.toLowerCase();
+    if (/correl|pair|group|why.*block|why.*reject/.test(text)) {
+      const groups = CORRELATED_GROUPS.map(g => g.map(s => s.replace('USDT', '')).join(', '));
+      return `**Correlated Pair Groups**\n\nI block opening trades on coins that move together:\n${groups.map(g => `• ${g}`).join('\n')}\n\nIf you're already in BTC, I won't let you open ETH same direction — that's double exposure to the same move.`;
+    }
+    if (/drawdown|consec|loss|protect/.test(text)) {
+      return `**Drawdown Protection**\n\n• After 3 consecutive losses → position size cut to 50%\n• After 5 consecutive losses → position size cut to 25%\n• Resets when a trade wins\n• Current streak: ${this.consecutiveLosses} consecutive losses`;
+    }
+    if (/how.*work|what.*do|rule|filter/.test(text)) {
+      return `**Risk Rules (all checked per signal)**\n\n1. **Max positions** — currently ${this.maxOpenPositions} max open at once\n2. **Duplicate check** — won't re-enter a coin already open\n3. **Correlation check** — blocks correlated pairs\n4. **Score gate** — rejects signals below AI minimum\n5. **Drawdown protection** — reduces size after 3+ losses\n\nApproved: ${this.signalsApproved} | Rejected: ${this.signalsRejected}`;
+    }
+    return super.explain(question);
+  }
+
   _findCorrelatedOpen(symbol, openSymbols) {
     for (const group of CORRELATED_GROUPS) {
       if (group.includes(symbol)) {

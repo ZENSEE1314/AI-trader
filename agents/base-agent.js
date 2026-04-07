@@ -208,6 +208,31 @@ class BaseAgent {
     return skill ? skill.enabled : false;
   }
 
+  // ── Explain (agent answers questions about itself) ─────────
+
+  explain(question) {
+    const text = question.toLowerCase();
+    const profile = this.getProfile();
+    const skillList = profile.skills.map(s => `• **${s.name}** ${s.enabled ? '' : '(OFF)'} — ${s.description}`).join('\n');
+
+    if (/how.*work|how.*scan|how.*do|what.*do|explain|tell me about|describe/.test(text)) {
+      return `I'm the **${profile.role}**.\n\n${profile.description}\n\n**My Skills:**\n${skillList}`;
+    }
+    if (/skill|capabilit|what can you/.test(text)) {
+      return `**My Skills:**\n${skillList}`;
+    }
+    if (/config|setting|parameter/.test(text)) {
+      const cfgList = profile.config.map(c => `• ${c.label}: ${c.value}`).join('\n');
+      return `**My Config:**\n${cfgList || 'No configurable settings.'}`;
+    }
+    if (/status|health|state|running/.test(text)) {
+      const h = this.getHealth();
+      return `State: **${h.paused ? 'PAUSED' : h.state}** | Runs: ${h.runCount} | Last run: ${h.lastRunAt ? new Date(h.lastRunAt).toLocaleTimeString() : 'never'}`;
+    }
+    // Default
+    return `I'm **${this.name}** (${profile.role}). ${profile.description}\n\n**Skills:**\n${skillList}`;
+  }
+
   // ── Memory (DB-backed, survives restarts) ──────────────────
 
   async remember(key, value, category = 'general') {

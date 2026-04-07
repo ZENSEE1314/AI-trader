@@ -235,19 +235,33 @@ class AgentCoordinator extends BaseAgent {
     }
 
     // ── Status / report queries ──
-    if (/^(status|report|what.*(doing|happening|going on)|how.*(are|is)|sitrep|update)/.test(text)) {
+    // Agent-directed questions (before status/report)
+    const agentNameMap = {
+      chart: this.chartAgent, chartagent: this.chartAgent, 'chart agent': this.chartAgent,
+      trader: this.traderAgent, traderagent: this.traderAgent, 'trader agent': this.traderAgent,
+      risk: this.riskAgent, riskagent: this.riskAgent, 'risk agent': this.riskAgent,
+      sentiment: this.sentimentAgent, sentimentagent: this.sentimentAgent, 'sentiment agent': this.sentimentAgent,
+      accountant: this.accountantAgent, accountantagent: this.accountantAgent, 'accountant agent': this.accountantAgent,
+    };
+    for (const [name, agent] of Object.entries(agentNameMap)) {
+      if (agent && text.includes(name) && /how|what|why|explain|tell|describe|skill|work|do you/.test(text)) {
+        return { from: agent.name, message: agent.explain(message) };
+      }
+    }
+
+    if (/^(status|sitrep|update)$/.test(text) || /^(what.*(doing|happening|going on))/.test(text) || /^how are (you|things|we)/.test(text)) {
       return this._buildStatusChat();
     }
     if (/^(who|which|what).*(trading|open|position)/.test(text)) {
       return this._buildPositionsChat();
     }
-    if (/^(mood|sentiment|market|how.*(market|crypto))/.test(text)) {
+    if (/^(mood|market mood|how.*(market|crypto))/.test(text)) {
       return this._buildSentimentChat();
     }
     if (/^(signal|what.*(found|see|scan)|any.*(signal|trade|setup))/.test(text)) {
       return this._buildSignalsChat();
     }
-    if (/^(risk|danger|safe|exposure|drawdown)/.test(text)) {
+    if (/^(risk report|exposure|drawdown)$/.test(text)) {
       return this._buildRiskChat();
     }
     if (/^(performance|win|loss|how.*doing|results|pnl|profit)/.test(text)) {
@@ -297,6 +311,20 @@ class AgentCoordinator extends BaseAgent {
 
     if (/^(help|what can you|commands|how do i)/.test(text)) {
       return { from: 'Coordinator', message: 'You can tell me:\n\n**Trading:**\n• "scan now" — hunt for trades\n• "any signals?" — latest scan results\n• "what are you trading?" — open positions\n\n**Agents:**\n• "status" — full team report\n• "team" — list all agents\n• "pause/resume chart/trader/risk/sentiment" — control agents\n• "create agent to watch BTCUSDT" — add a watcher\n• "remove <agent>" — delete custom agent\n\n**Analysis:**\n• "market mood?" — sentiment report\n• "risk report" — risk exposure\n• "performance" — win/loss stats\n• "audit trades" — accountant fixes PnL\n• "trade history" — last 10 trades\n• "fees" — total fees paid\n• "what do you remember?" — agent memories & lessons' };
+    }
+
+    // General "how does X work" questions — route to most relevant agent
+    if (/smc|smart money|swing|scan|signal|setup|timeframe|candle/.test(text)) {
+      return { from: this.chartAgent.name, message: this.chartAgent.explain(message) };
+    }
+    if (/trail|stop.?loss|tp|take.?profit|position|execut|entry|exit|order/.test(text)) {
+      return { from: this.traderAgent.name, message: this.traderAgent.explain(message) };
+    }
+    if (/risk|exposure|max.?pos|drawdown|correlat|safe/.test(text)) {
+      return { from: this.riskAgent.name, message: this.riskAgent.explain(message) };
+    }
+    if (/mood|sentiment|bull|bear|fomo|fud|news|trend/.test(text)) {
+      return { from: this.sentimentAgent.name, message: this.sentimentAgent.explain(message) };
     }
 
     // Catch-all — try to be helpful
