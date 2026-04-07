@@ -278,6 +278,11 @@ class AgentCoordinator extends BaseAgent {
       return { from: 'Coordinator', message: result.error };
     }
 
+    // Check memories
+    if (/what.*(remember|learned|know|memory)|memories|lessons|brain/.test(text)) {
+      return this._buildMemoryChat(text);
+    }
+
     // List agents
     if (/^(list|show|who|which)\s*(agent|team|all)/.test(text) || text === 'agents' || text === 'team') {
       const agents = Object.entries(this.getAllProfiles());
@@ -291,7 +296,7 @@ class AgentCoordinator extends BaseAgent {
     }
 
     if (/^(help|what can you|commands|how do i)/.test(text)) {
-      return { from: 'Coordinator', message: 'You can tell me:\n\n**Trading:**\n• "scan now" — hunt for trades\n• "any signals?" — latest scan results\n• "what are you trading?" — open positions\n\n**Agents:**\n• "status" — full team report\n• "team" — list all agents\n• "pause/resume chart/trader/risk/sentiment" — control agents\n• "create agent to watch BTCUSDT" — add a watcher\n• "remove <agent>" — delete custom agent\n\n**Analysis:**\n• "market mood?" — sentiment report\n• "risk report" — risk exposure\n• "performance" — win/loss stats\n• "audit trades" — accountant fixes PnL\n• "trade history" — last 10 trades\n• "fees" — total fees paid' };
+      return { from: 'Coordinator', message: 'You can tell me:\n\n**Trading:**\n• "scan now" — hunt for trades\n• "any signals?" — latest scan results\n• "what are you trading?" — open positions\n\n**Agents:**\n• "status" — full team report\n• "team" — list all agents\n• "pause/resume chart/trader/risk/sentiment" — control agents\n• "create agent to watch BTCUSDT" — add a watcher\n• "remove <agent>" — delete custom agent\n\n**Analysis:**\n• "market mood?" — sentiment report\n• "risk report" — risk exposure\n• "performance" — win/loss stats\n• "audit trades" — accountant fixes PnL\n• "trade history" — last 10 trades\n• "fees" — total fees paid\n• "what do you remember?" — agent memories & lessons' };
     }
 
     // Catch-all — try to be helpful
@@ -528,6 +533,46 @@ class AgentCoordinator extends BaseAgent {
     } catch (err) {
       return { from: 'Coordinator', message: `Can't load fee data: ${err.message}` };
     }
+  }
+
+  async _buildMemoryChat(text) {
+    // Check if asking about specific agent
+    const agentMatch = text.match(/(chart|trader|risk|sentiment|accountant)/);
+    const agentKey = agentMatch ? agentMatch[1] : null;
+
+    const lines = [];
+    const agents = agentKey ? [[agentKey, this._agents.get(agentKey)]] : [...this._agents.entries()];
+
+    for (const [key, agent] of agents) {
+      if (!agent) continue;
+      const memories = await agent.recallAll();
+      const lessons = await agent.getLessons(null, 5);
+
+      if (memories.length === 0 && lessons.length === 0) continue;
+
+      lines.push(`**${agent.name}:**`);
+      if (memories.length > 0) {
+        lines.push(`  Memories: ${memories.length}`);
+        for (const m of memories.slice(0, 3)) {
+          const val = typeof m.value === 'object' ? JSON.stringify(m.value).substring(0, 60) : String(m.value);
+          lines.push(`  • [${m.category}] ${m.key}: ${val}`);
+        }
+        if (memories.length > 3) lines.push(`  ...and ${memories.length - 3} more`);
+      }
+      if (lessons.length > 0) {
+        lines.push(`  Lessons: ${lessons.length}`);
+        for (const l of lessons.slice(0, 3)) {
+          lines.push(`  • ${l.lesson.substring(0, 70)}`);
+        }
+      }
+      lines.push('');
+    }
+
+    if (lines.length === 0) {
+      return { from: 'Coordinator', message: 'No memories or lessons stored yet. Agents will start learning after their first trades and scans.' };
+    }
+
+    return { from: 'Coordinator', message: `**Agent Memory & Lessons**\n\n${lines.join('\n')}` };
   }
 
   // ── Agent Profiles ─────────────────────────────────────────

@@ -304,6 +304,29 @@ async function initAllTables() {
     // Trade fee tracking
     `ALTER TABLE trades ADD COLUMN IF NOT EXISTS trading_fee NUMERIC DEFAULT 0`,
     `ALTER TABLE trades ADD COLUMN IF NOT EXISTS gross_pnl NUMERIC`,
+    // Agent memory (persists across restarts)
+    `CREATE TABLE IF NOT EXISTS agent_memory (
+      id SERIAL PRIMARY KEY,
+      agent TEXT NOT NULL,
+      key TEXT NOT NULL,
+      value JSONB,
+      category TEXT DEFAULT 'general',
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE(agent, key)
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_agent_memory_agent ON agent_memory (agent)`,
+    // Agent learning log
+    `CREATE TABLE IF NOT EXISTS agent_lessons (
+      id SERIAL PRIMARY KEY,
+      agent TEXT NOT NULL,
+      type TEXT NOT NULL,
+      input JSONB,
+      outcome JSONB,
+      lesson TEXT,
+      score NUMERIC DEFAULT 0,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_agent_lessons_agent ON agent_lessons (agent, type)`,
     // Optimizer candle cache (survives redeploys)
     `CREATE TABLE IF NOT EXISTS optimizer_cache (
       id INTEGER PRIMARY KEY,

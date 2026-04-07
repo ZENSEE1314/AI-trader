@@ -45,6 +45,8 @@ class RiskAgent extends BaseAgent {
         { id: 'duplicate_check', name: 'Duplicate Prevention', description: 'Block re-entry into a symbol already open', enabled: true },
         { id: 'score_gate', name: 'Score Gate', description: 'Reject signals below AI minimum score threshold', enabled: true },
         { id: 'drawdown_protect', name: 'Drawdown Protection', description: 'Reduce position size after 3+ consecutive losses', enabled: true },
+        { id: 'memory', name: 'Memory', description: 'Remember which coins/pairs caused losses and avoid them', enabled: true },
+        { id: 'self_learn', name: 'Self-Learning', description: 'Learn rejection patterns — which blocks saved money', enabled: true },
       ],
       config: [
         { key: 'maxOpenPositions', label: 'Max Open Positions', type: 'number', value: options.maxOpenPositions || 5, min: 1, max: 20 },
@@ -146,10 +148,19 @@ class RiskAgent extends BaseAgent {
         this.signalsRejected++;
         this.logTrade(`REJECTED: ${sym} ${signal.direction} — ${reasons.join(', ')}`);
         this.addActivity('skip', `Rejected ${sym}: ${reasons[0]}`);
+        // Learn: record rejection
+        if (this.isSkillEnabled('self_learn')) {
+          this.learn('rejection', { symbol: sym, direction: signal.direction, score: signal.score },
+            { reasons }, `Blocked ${sym}: ${reasons[0]}`, 0).catch(() => {});
+        }
       } else {
         approved.push(signal);
         this.signalsApproved++;
         this.addActivity('success', `Approved ${sym} ${signal.direction} score=${signal.score}`);
+        // Memory: remember approved signals
+        if (this.isSkillEnabled('memory')) {
+          this.remember(`approved_${sym}`, { direction: signal.direction, score: signal.score, ts: Date.now() }, 'approved').catch(() => {});
+        }
       }
     }
 

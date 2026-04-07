@@ -29,6 +29,8 @@ class ChartAgent extends BaseAgent {
         { id: 'scalper_confirm', name: 'Scalper Confirmation', description: 'Composite oscillator (ADX, RSI, ATR, OBV) entry filter', enabled: true },
         { id: 'volume_filter', name: 'Volume Filter', description: 'Reject coins below $10M daily volume', enabled: true },
         { id: 'ai_scoring', name: 'AI Scoring', description: 'Boost signals using setup/coin/session win-rate history', enabled: true },
+        { id: 'memory', name: 'Memory', description: 'Remember best-performing coins and setups across restarts', enabled: true },
+        { id: 'self_learn', name: 'Self-Learning', description: 'Track which signals led to wins/losses and adjust scoring', enabled: true },
       ],
       config: [
         { key: 'topNCoins', label: 'Top N Coins to Scan', type: 'number', value: options.topNCoins || 50, min: 10, max: 200 },
@@ -78,7 +80,19 @@ class ChartAgent extends BaseAgent {
       }
     }
 
-    // 5. Emit signals event
+    // 5. Memory: remember best coins and signal patterns
+    if (this.isSkillEnabled('memory') && signals.length > 0) {
+      const topSignal = signals[0];
+      await this.remember(`last_signal_${topSignal.symbol}`, {
+        direction: topSignal.direction, score: topSignal.score,
+        setup: topSignal.setupName, session, ts: Date.now(),
+      }, 'signals');
+      // Track signal frequency per coin
+      const freq = (await this.recall(`signal_freq_${topSignal.symbol}`)) || 0;
+      await this.remember(`signal_freq_${topSignal.symbol}`, freq + 1, 'frequency');
+    }
+
+    // 6. Emit signals event
     this.emit('signals', { signals, scanResult });
 
     return { signals, scanResult };
