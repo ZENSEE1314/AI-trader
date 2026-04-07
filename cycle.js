@@ -1575,7 +1575,7 @@ async function syncTradeStatus() {
                 }
               } catch (e) { bLog.error(`Bitunix posHistory error: ${e.message}`); }
 
-              // Method 2: Order history — CLOSE orders (fee included in realizedPNL here)
+              // Method 2: Order history — CLOSE orders (realizedPNL here already includes fee)
               if (!found) {
                 try {
                   const orderList = await bxClient.getHistoryOrders({ symbol: trade.symbol, pageSize: 50 });
@@ -1588,10 +1588,9 @@ async function syncTradeStatus() {
                     if (isClose && oPrice > 0 && timeMatch) {
                       exitPrice = oPrice;
                       const pnlVal = parseFloat(o.realizedPNL || 0);
-                      const fee = Math.abs(parseFloat(o.fee || 0));
-                      realizedPnl = pnlVal - fee;
+                      realizedPnl = pnlVal; // already net of fees
                       found = true;
-                      bLog.system(`Bitunix orderHistory: ${trade.symbol} exit=$${oPrice} pnl=${pnlVal} fee=${fee} net=${realizedPnl}`);
+                      bLog.system(`Bitunix orderHistory: ${trade.symbol} exit=$${oPrice} pnl=${pnlVal} net=${realizedPnl}`);
                       break;
                     }
                   }
