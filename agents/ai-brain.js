@@ -7,21 +7,22 @@
 
 const Anthropic = require('@anthropic-ai/sdk');
 
-const API_KEY = process.env.ANTHROPIC_API_KEY || '';
 const MODEL = process.env.AGENT_AI_MODEL || 'claude-haiku-4-5-20251001';
-const MAX_TOKENS = 800;
+const MAX_TOKENS = 1000;
 
 let client = null;
 
 function getClient() {
-  if (!client && API_KEY) {
-    client = new Anthropic({ apiKey: API_KEY });
+  const key = process.env.ANTHROPIC_API_KEY || '';
+  if (!key) return null;
+  if (!client) {
+    client = new Anthropic({ apiKey: key });
   }
   return client;
 }
 
 function isAvailable() {
-  return !!API_KEY;
+  return !!(process.env.ANTHROPIC_API_KEY);
 }
 
 /**
