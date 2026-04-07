@@ -390,6 +390,49 @@ async function analyzeLHHL(ticker, params, dailyBiasCache) {
   }
 
   // ┌─────────────────────────────────────────────────────────┐
+  // │ Step 2b: Trend Strength — only trade strong movers      │
+  // └─────────────────────────────────────────────────────────┘
+  // Check 4H momentum: price must have moved >= 1.5% in our direction over last 6 candles (24h)
+  // This filters out choppy sideways tokens that technically have "bullish" structure
+  {
+    const recent4h = klines4h.slice(-6);
+    if (recent4h.length >= 6) {
+      const startP = parseFloat(recent4h[0][1]);
+      const endP = parseFloat(recent4h[recent4h.length - 1][4]);
+      const trendPct = (endP - startP) / startP;
+      const MIN_TREND_MOVE = 0.015; // 1.5% move needed
+
+      if (direction === 'LONG' && trendPct < MIN_TREND_MOVE) {
+        bLog.scan(`${symbol}: LONG weak — 4H only moved ${(trendPct * 100).toFixed(2)}% (need >${(MIN_TREND_MOVE * 100)}%)`);
+        return null;
+      }
+      if (direction === 'SHORT' && trendPct > -MIN_TREND_MOVE) {
+        bLog.scan(`${symbol}: SHORT weak — 4H only moved ${(trendPct * 100).toFixed(2)}% (need <-${(MIN_TREND_MOVE * 100)}%)`);
+        return null;
+      }
+    }
+  }
+
+  // Check 1H momentum: last 4 candles (4h) — confirm momentum hasn't stalled
+  {
+    const recent1h = klines1h.slice(-4);
+    if (recent1h.length >= 4) {
+      const startP = parseFloat(recent1h[0][1]);
+      const endP = parseFloat(recent1h[recent1h.length - 1][4]);
+      const movePct = (endP - startP) / startP;
+
+      if (direction === 'LONG' && movePct < 0) {
+        bLog.scan(`${symbol}: LONG stalled — 1H moving down ${(movePct * 100).toFixed(2)}% in last 4h`);
+        return null;
+      }
+      if (direction === 'SHORT' && movePct > 0) {
+        bLog.scan(`${symbol}: SHORT stalled — 1H moving up +${(movePct * 100).toFixed(2)}% in last 4h`);
+        return null;
+      }
+    }
+  }
+
+  // ┌─────────────────────────────────────────────────────────┐
   // │ Step 3: Key Levels & VWAP Bands                        │
   // └─────────────────────────────────────────────────────────┘
   // Step 3: Key Levels (conditional based on config)
