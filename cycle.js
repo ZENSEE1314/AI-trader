@@ -1007,6 +1007,16 @@ async function executeForAllUsers(pick) {
           return;
         }
 
+        // Cooldown: don't re-enter same token within 4 hours after last closed trade
+        const recentClosed = await db.query(
+          `SELECT id, closed_at FROM trades WHERE user_id = $1 AND symbol = $2 AND status = 'CLOSED' AND closed_at > NOW() - INTERVAL '4 hours' ORDER BY closed_at DESC LIMIT 1`,
+          [key.user_id, symbol]
+        );
+        if (recentClosed.length > 0) {
+          userLog.trade(`User ${key.email}: ${symbol} recently closed — cooldown active, skipping re-entry`);
+          return;
+        }
+
         const apiKey = cryptoUtils.decrypt(key.api_key_enc, key.iv, key.auth_tag);
         const apiSecret = cryptoUtils.decrypt(key.api_secret_enc, key.secret_iv, key.secret_auth_tag);
         const maxPos = parseInt(key.max_positions) || 3;
