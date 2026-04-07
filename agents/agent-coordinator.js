@@ -1,17 +1,15 @@
 // ============================================================
 // AgentCoordinator — Orchestrates all trading agents
 //
-// Manages the lifecycle of ChartAgent and TraderAgent,
-// routes messages between them, and provides a unified
-// interface for bot.js to interact with.
-//
-// Phase 1: Simple sequential pipeline
-//   ChartAgent.scan() → signals → TraderAgent.execute()
+// Phase 2: Decoupled pipeline
+//   1. ChartAgent scans for signals (via smc-engine)
+//   2. Coordinator evaluates & approves signals
+//   3. TraderAgent executes approved signals + manages positions
+//   4. Results fed back for learning
 //
 // Future phases will add:
 //   - RiskAgent for position sizing & portfolio risk
 //   - SentimentAgent for macro context
-//   - Parallel agent execution
 //   - Agent voting / consensus on trades
 // ============================================================
 
@@ -55,17 +53,12 @@ class AgentCoordinator extends BaseAgent {
   }
 
   /**
-   * Run one full trading cycle through the agent pipeline.
+   * Run one full trading cycle through the decoupled agent pipeline.
    *
-   * Phase 1 flow (preserves existing behavior):
-   *   1. TraderAgent runs the full cycle.js pipeline
-   *      (which internally calls scanSMC, executes trades, etc.)
-   *
-   * Phase 2 flow (future — decoupled):
-   *   1. ChartAgent scans for signals
-   *   2. Coordinator evaluates signals
-   *   3. TraderAgent executes approved signals
-   *   4. Results fed back to ChartAgent for learning
+   * Flow:
+   *   1. ChartAgent scans market for SMC signals
+   *   2. Coordinator logs signal count
+   *   3. TraderAgent syncs positions, executes signals, manages trailing SL
    */
   async execute(context = {}) {
     if (this.cycleRunning) {
@@ -75,21 +68,64 @@ class AgentCoordinator extends BaseAgent {
 
     this.cycleRunning = true;
     const cycleStart = Date.now();
+    this.addActivity('info', 'Cycle started');
 
     try {
-      // Phase 1: delegate to TraderAgent which calls cycle.run()
-      const tradeResult = await this.traderAgent.run({ mode: 'full' });
+      // Resolve top N coins from DB (same as cycle.js main())
+      let topNCoins = 50;
+      try {
+        const { query: dbQuery } = require('../db');
+        const topNRows = await dbQuery('SELECT MAX(top_n_coins) as max_n FROM api_keys WHERE enabled = true');
+        topNCoins = parseInt(topNRows[0]?.max_n) || 50;
+      } catch (_) {}
 
+      // ── Step 1: ChartAgent scans for signals ──
+      let signals = [];
+      let scanResult = null;
+
+      if (!this.chartAgent.paused) {
+        this.currentTask = { description: 'ChartAgent scanning market', startedAt: Date.now() };
+        const chartOutput = await this.chartAgent.run({ topNCoins });
+        if (chartOutput) {
+          signals = chartOutput.signals || [];
+          scanResult = chartOutput.scanResult;
+        }
+        this.addActivity('info', `ChartAgent found ${signals.length} signal(s)`);
+      } else {
+        this.addActivity('skip', 'ChartAgent paused — skipping scan');
+      }
+
+      // ── Step 2: TraderAgent executes signals + manages positions ──
+      let tradeResult = null;
+
+      if (!this.traderAgent.paused) {
+        this.currentTask = { description: 'TraderAgent executing', startedAt: Date.now() };
+        tradeResult = await this.traderAgent.run({ signals, mode: 'signals' });
+        if (tradeResult?.executed) {
+          this.addActivity('success', `Trade executed: ${signals[0]?.symbol} ${signals[0]?.direction}`);
+        }
+      } else {
+        this.addActivity('skip', 'TraderAgent paused — skipping execution');
+      }
+
+      this.currentTask = null;
       const elapsed = ((Date.now() - cycleStart) / 1000).toFixed(1);
-      this.log(`Cycle complete in ${elapsed}s`);
+      this.log(`Cycle complete in ${elapsed}s | Signals: ${signals.length} | Executed: ${tradeResult?.executed || false}`);
+      this.addActivity('success', `Cycle done in ${elapsed}s`);
 
       return {
         elapsed: parseFloat(elapsed),
+        signals: signals.length,
+        scanResult,
         tradeResult,
         agents: this.getAgentHealthSummary(),
       };
+    } catch (err) {
+      this.addActivity('error', `Cycle error: ${err.message}`);
+      throw err;
     } finally {
       this.cycleRunning = false;
+      this.currentTask = null;
     }
   }
 

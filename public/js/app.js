@@ -1343,6 +1343,10 @@
         let extraStats = '';
         if (a.lastSignalCount !== undefined) extraStats += `<span class="mc-meta-label">Signals:</span><span>${a.lastSignalCount}</span><span class="mc-meta-label">Scans:</span><span>${a.totalScans}</span>`;
         if (a.cycleCount !== undefined) extraStats += `<span class="mc-meta-label">Cycles:</span><span>${a.cycleCount}</span>`;
+        if (a.openPositions !== undefined) extraStats += `<span class="mc-meta-label">Open pos:</span><span>${a.openPositions}</span>`;
+        if (a.tradesExecuted !== undefined) extraStats += `<span class="mc-meta-label">Executed:</span><span style="color:var(--color-success);">${a.tradesExecuted}</span>`;
+        if (a.tradesSkipped !== undefined) extraStats += `<span class="mc-meta-label">Skipped:</span><span>${a.tradesSkipped}</span>`;
+        if (a.lastSyncAt) extraStats += `<span class="mc-meta-label">Last sync:</span><span>${formatTimeAgo(a.lastSyncAt)}</span>`;
 
         return `<div class="mc-agent-card ${cardClass}">
           <div class="mc-agent-header">
