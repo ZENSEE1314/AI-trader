@@ -2489,17 +2489,12 @@
   // ----- Platform change (show static IP info) -----
 
   function onPlatformChange(val) {
-    const ipInfo = $('#static-ip-info');
-    const noteEl = $('#ip-platform-note');
-    if (!ipInfo || !noteEl) return;
-    if (val === 'binance') {
-      ipInfo.classList.remove('hidden');
-      noteEl.innerHTML = '<strong>Binance:</strong> Add both IPs to your API key whitelist, or you can also <strong>disable IP restriction</strong> in your Binance API settings.';
-    } else if (val === 'bitunix') {
-      ipInfo.classList.remove('hidden');
-      noteEl.innerHTML = '<strong>Bitunix:</strong> Add both IPs to your Bitunix API key "Bind IP address" field.';
+    const guide = $('#bitunix-setup-guide');
+    if (!guide) return;
+    if (val === 'bitunix') {
+      guide.classList.remove('hidden');
     } else {
-      ipInfo.classList.add('hidden');
+      guide.classList.add('hidden');
     }
   }
 

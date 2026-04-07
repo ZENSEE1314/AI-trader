@@ -1342,20 +1342,29 @@
           </select>
         </div>
 
-        <!-- Static IP info for API key whitelisting -->
-        <div id="static-ip-info" class="hidden" style="background:var(--color-bg);border:1px solid var(--color-accent);border-radius:var(--radius-md);padding:var(--space-3);margin-bottom:var(--space-3);">
-          <div style="font-size:var(--text-xs);color:var(--color-text-muted);margin-bottom:var(--space-2);">
-            <strong style="color:var(--color-accent);">Add these static IPs to your API key whitelist:</strong>
+        <!-- Bitunix setup guide -->
+        <div id="bitunix-setup-guide" class="hidden" style="background:var(--color-bg);border:1px solid var(--color-accent);border-radius:var(--radius-md);padding:var(--space-3);margin-bottom:var(--space-3);">
+          <div style="font-size:var(--text-xs);margin-bottom:var(--space-2);">
+            <strong style="color:var(--color-accent);">Bitunix Setup — 2 API Keys Required:</strong>
           </div>
-          <div style="display:flex;align-items:center;gap:var(--space-2);margin-bottom:var(--space-2);">
-            <input class="form-input text-mono" readonly style="flex:1;font-size:var(--text-sm);" value="52.192.89.194">
-            <button type="button" class="btn btn-ghost btn-sm" onclick="navigator.clipboard.writeText('52.192.89.194');window.CryptoBot.showToast('IP copied!','success')">Copy</button>
+          <div style="font-size:var(--text-xs);color:var(--color-text-muted);line-height:1.6;">
+            <div style="margin-bottom:var(--space-2);">
+              <strong style="color:var(--color-success);">Key 1 — Trading Key</strong><br>
+              Bitunix → API Management → <strong>Create API</strong><br>
+              Permissions: <strong>Read + Trade</strong> (never enable Withdraw)<br>
+              Paste this key below.
+            </div>
+            <div style="margin-bottom:var(--space-2);">
+              <strong style="color:var(--color-warning);">Key 2 — 3rd Party App Key</strong><br>
+              Bitunix → API Management → <strong>Create for 3rd Party App</strong><br>
+              This is read-only for market data access.
+            </div>
+            <div style="background:var(--color-danger-bg, rgba(239,68,68,0.1));border:1px solid var(--color-danger);border-radius:var(--radius-sm);padding:var(--space-2);margin-top:var(--space-2);">
+              <strong style="color:var(--color-danger);">IMPORTANT — Remove IP Restriction:</strong><br>
+              For BOTH keys → Edit → IP Restriction → <strong>Delete all IPs</strong> or leave blank.<br>
+              Do NOT whitelist any IP. The bot uses dynamic IPs.
+            </div>
           </div>
-          <div style="display:flex;align-items:center;gap:var(--space-2);margin-bottom:var(--space-2);">
-            <input class="form-input text-mono" readonly style="flex:1;font-size:var(--text-sm);" value="52.193.106.127">
-            <button type="button" class="btn btn-ghost btn-sm" onclick="navigator.clipboard.writeText('52.193.106.127');window.CryptoBot.showToast('IP copied!','success')">Copy</button>
-          </div>
-          <div id="ip-platform-note" style="font-size:var(--text-xs);color:var(--color-text-muted);"></div>
         </div>
         <div class="form-group">
           <label class="form-label" for="key-label">Label <span class="tip-btn">?<span class="tip-text">A friendly name for this API key, e.g. "Main account" or "Scalp key".</span></span></label>
