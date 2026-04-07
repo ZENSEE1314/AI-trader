@@ -1501,6 +1501,7 @@ async function syncTradeStatus() {
             const isLong = trade.direction !== 'SHORT';
             let exitPrice = entryPrice;
             let realizedPnl = null;
+            let tradingFee = 0;
 
             if (key.platform === 'binance') {
               try {
@@ -1509,6 +1510,10 @@ async function syncTradeStatus() {
                 const openTime = trade.created_at ? new Date(trade.created_at).getTime() : Date.now() - 86400000;
                 const fills = await binClient.getAccountTradeList({ symbol: trade.symbol, startTime: openTime, limit: 50 });
                 if (fills && fills.length > 0) {
+                  // Calculate total fees from ALL fills (entry + exit)
+                  for (const f of fills) {
+                    tradingFee += Math.abs(parseFloat(f.commission || 0));
+                  }
                   // Find the close fills (opposite side of entry)
                   const closeSide = isLong ? 'SELL' : 'BUY';
                   const closeFills = fills.filter(f => f.side === closeSide);
@@ -1570,6 +1575,7 @@ async function syncTradeStatus() {
                     const rpnl = parseFloat(p.realizedPNL || 0);
                     const fee = Math.abs(parseFloat(p.fee || 0));
                     const funding = Math.abs(parseFloat(p.funding || 0));
+                    tradingFee = fee + funding;
                     // Priority: profit > pnl > (realizedPNL - fee - funding)
                     if (profit !== 0) {
                       realizedPnl = profit;
@@ -1633,23 +1639,28 @@ async function syncTradeStatus() {
             }
 
             // Calculate PnL: use exchange realized PnL if available, otherwise compute
+            let grossPnl = isLong
+              ? parseFloat(((exitPrice - entryPrice) * qty).toFixed(4))
+              : parseFloat(((entryPrice - exitPrice) * qty).toFixed(4));
             let pnlUsdt;
             if (realizedPnl !== null) {
               pnlUsdt = parseFloat(realizedPnl.toFixed(4));
+              // If realized PnL is net (already has fees deducted), gross = net + fees
+              if (tradingFee > 0 && Math.abs(grossPnl) < 0.01) grossPnl = pnlUsdt + tradingFee;
             } else {
-              // PnL = (exit - entry) * qty for LONG, (entry - exit) * qty for SHORT
-              pnlUsdt = isLong
-                ? parseFloat(((exitPrice - entryPrice) * qty).toFixed(4))
-                : parseFloat(((entryPrice - exitPrice) * qty).toFixed(4));
+              pnlUsdt = grossPnl - tradingFee;
             }
+            tradingFee = parseFloat(tradingFee.toFixed(4));
+            grossPnl = parseFloat(grossPnl.toFixed(4));
             const status = pnlUsdt > 0 ? 'WIN' : 'LOSS';
 
             await db.query(
-              `UPDATE trades SET status = $1, pnl_usdt = $2, exit_price = $3, closed_at = NOW()
+              `UPDATE trades SET status = $1, pnl_usdt = $2, exit_price = $3, closed_at = NOW(),
+               trading_fee = $5, gross_pnl = $6
                WHERE id = $4`,
-              [status, pnlUsdt, exitPrice, trade.id]
+              [status, pnlUsdt, exitPrice, trade.id, tradingFee, grossPnl]
             );
-            bLog.trade(`DB synced: ${trade.symbol} -> ${status} PnL=$${pnlUsdt} exit=$${fmtPrice(exitPrice)}`);
+            bLog.trade(`DB synced: ${trade.symbol} -> ${status} gross=$${grossPnl} fee=$${tradingFee} net=$${pnlUsdt} exit=$${fmtPrice(exitPrice)}`);
 
             // Record profit split for winning trades
             if (pnlUsdt > 0) {

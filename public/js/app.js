@@ -527,11 +527,13 @@
     }
 
     els.tradesTbody.innerHTML = trades.map((t) => {
-      const pnl = parseFloat(t.pnl_usdt) || 0;
+      const netPnl = parseFloat(t.pnl_usdt) || 0;
+      const grossPnl = t.gross_pnl != null ? parseFloat(t.gross_pnl) : netPnl;
+      const fee = parseFloat(t.trading_fee) || 0;
       const direction = (t.direction || t.side || '').toUpperCase();
       const isLong = direction === 'LONG' || direction === 'BUY';
       const dirBadge = isLong ? 'badge-long' : 'badge-short';
-      const dirLabel = isLong ? 'Long' : 'Short';
+      const dirLabel = isLong ? 'L' : 'S';
 
       const isError = t.status === 'ERROR';
       const errorTip = isError && t.error_msg ? ` title="${escapeHtml(t.error_msg)}"` : '';
@@ -553,10 +555,10 @@
         <td><span class="badge ${dirBadge}">${dirLabel}</span></td>
         <td class="text-mono">${t.entry_price != null ? parseFloat(t.entry_price).toFixed(4) : '--'}</td>
         <td class="text-mono">${exitPrice}</td>
-        <td class="text-mono text-danger">${t.sl_price != null ? parseFloat(t.sl_price).toFixed(4) : '--'}</td>
-        <td class="text-mono text-success">${t.tp_price != null ? parseFloat(t.tp_price).toFixed(4) : '--'}</td>
-        <td class="pnl-value ${pnl >= 0 ? 'text-success' : 'text-danger'}">${formatPnl(pnl)}</td>
-        <td><span class="badge-status ${statusClass}" style="${statusColor}font-weight:600;"${errorTip}>${escapeHtml(t.status || '--')}${isError ? ' ⚠️' : ''}</span></td>
+        <td class="text-mono ${grossPnl >= 0 ? 'text-success' : 'text-danger'}">${formatPnl(grossPnl)}</td>
+        <td class="text-mono" style="color:var(--color-warning);">${fee > 0 ? '-$' + fee.toFixed(2) : '--'}</td>
+        <td class="pnl-value ${netPnl >= 0 ? 'text-success' : 'text-danger'}" style="font-weight:600;">${formatPnl(netPnl)}</td>
+        <td><span class="badge-status ${statusClass}" style="${statusColor}font-weight:600;"${errorTip}>${escapeHtml(t.status || '--')}${isError ? ' !' : ''}</span></td>
         <td><span class="badge-platform">${escapeHtml(t.platform || '--')}</span></td>
       </tr>`;
     }).join('');
