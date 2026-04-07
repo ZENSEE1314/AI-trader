@@ -34,6 +34,23 @@ class RiskAgent extends BaseAgent {
     this.signalsApproved = 0;
     this.signalsRejected = 0;
     this.lastRiskReport = null;
+
+    this._profile = {
+      description: 'Filters signals through risk rules before they reach execution. Protects capital from overexposure.',
+      role: 'Risk Manager',
+      icon: 'risk',
+      skills: [
+        { id: 'max_positions', name: 'Max Position Limit', description: 'Block new trades when at maximum open positions', enabled: true },
+        { id: 'correlation_check', name: 'Correlation Check', description: 'Block correlated pairs (BTC+ETH, memecoins, L1s)', enabled: true },
+        { id: 'duplicate_check', name: 'Duplicate Prevention', description: 'Block re-entry into a symbol already open', enabled: true },
+        { id: 'score_gate', name: 'Score Gate', description: 'Reject signals below AI minimum score threshold', enabled: true },
+        { id: 'drawdown_protect', name: 'Drawdown Protection', description: 'Reduce position size after 3+ consecutive losses', enabled: true },
+      ],
+      config: [
+        { key: 'maxOpenPositions', label: 'Max Open Positions', type: 'number', value: options.maxOpenPositions || 5, min: 1, max: 20 },
+        { key: 'minSignalScore', label: 'Min Signal Score', type: 'number', value: options.minSignalScore || 0, min: 0, max: 100 },
+      ],
+    };
   }
 
   /**

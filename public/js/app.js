@@ -1339,65 +1339,15 @@
       uptimeEl.textContent = `Uptime: ${h}h ${m}m`;
     }
 
-    // Agent cards
+    // Agent cards — load profiles for skills/config
     const grid = document.getElementById('mc-agents-grid');
     if (grid && health.agents) {
-      const agents = Object.entries(health.agents);
-      grid.innerHTML = agents.map(([key, a]) => {
-        const st = a.paused ? 'paused' : a.state;
-        const cardClass = st === 'running' ? 'mc-card-running' : st === 'error' ? 'mc-card-error' : a.paused ? 'mc-card-paused' : '';
-        const lastRun = a.lastRunAt ? formatTimeAgo(a.lastRunAt) : 'never';
-        const taskHtml = a.currentTask
-          ? `<div class="mc-agent-task"><span class="mc-pulse"></span>${escapeHtml(a.currentTask.description)} (${formatTimeAgo(a.currentTask.startedAt)})</div>`
-          : '';
-        const errHtml = a.lastError
-          ? `<div style="font-size:0.7rem;color:var(--color-danger);margin-bottom:4px;word-break:break-word;">Last error: ${escapeHtml(a.lastError.message.substring(0, 100))}</div>`
-          : '';
-
-        // Extra stats per agent type
-        let extraStats = '';
-        // ChartAgent
-        if (a.lastSignalCount !== undefined) extraStats += `<span class="mc-meta-label">Signals:</span><span>${a.lastSignalCount}</span><span class="mc-meta-label">Scans:</span><span>${a.totalScans}</span>`;
-        // TraderAgent
-        if (a.cycleCount !== undefined) extraStats += `<span class="mc-meta-label">Cycles:</span><span>${a.cycleCount}</span>`;
-        if (a.openPositions !== undefined) extraStats += `<span class="mc-meta-label">Open pos:</span><span>${a.openPositions}</span>`;
-        if (a.tradesExecuted !== undefined) extraStats += `<span class="mc-meta-label">Executed:</span><span style="color:var(--color-success);">${a.tradesExecuted}</span>`;
-        if (a.tradesSkipped !== undefined && a.tradesExecuted !== undefined) extraStats += `<span class="mc-meta-label">Skipped:</span><span>${a.tradesSkipped}</span>`;
-        if (a.lastSyncAt) extraStats += `<span class="mc-meta-label">Last sync:</span><span>${formatTimeAgo(a.lastSyncAt)}</span>`;
-        // RiskAgent
-        if (a.signalsApproved !== undefined) extraStats += `<span class="mc-meta-label">Approved:</span><span style="color:var(--color-success);">${a.signalsApproved}</span>`;
-        if (a.signalsRejected !== undefined) extraStats += `<span class="mc-meta-label">Rejected:</span><span style="color:var(--color-danger);">${a.signalsRejected}</span>`;
-        if (a.consecutiveLosses !== undefined) extraStats += `<span class="mc-meta-label">Consec losses:</span><span${a.consecutiveLosses >= 3 ? ' style="color:var(--color-danger);"' : ''}>${a.consecutiveLosses}</span>`;
-        // SentimentAgent
-        if (a.mood !== undefined) {
-          const moodColor = a.mood === 'risk-on' ? 'var(--color-success)' : a.mood === 'risk-off' ? 'var(--color-danger)' : 'var(--color-text-muted)';
-          extraStats += `<span class="mc-meta-label">Mood:</span><span style="color:${moodColor};font-weight:600;">${a.mood}</span>`;
-        }
-        if (a.coinsTracked !== undefined) extraStats += `<span class="mc-meta-label">Coins:</span><span>${a.coinsTracked}</span>`;
-        if (a.scansCompleted !== undefined) extraStats += `<span class="mc-meta-label">Scans:</span><span>${a.scansCompleted}</span>`;
-
-        return `<div class="mc-agent-card ${cardClass}">
-          <div class="mc-agent-header">
-            <span class="mc-agent-name">${escapeHtml(a.name)}</span>
-            <span class="mc-badge mc-badge-${st}">${st}</span>
-          </div>
-          ${taskHtml}
-          ${errHtml}
-          <div class="mc-agent-meta">
-            <span class="mc-meta-label">Runs:</span><span>${a.runCount}</span>
-            <span class="mc-meta-label">Last run:</span><span>${lastRun}</span>
-            <span class="mc-meta-label">Inbox:</span><span>${a.inboxSize}</span>
-            ${extraStats}
-          </div>
-          <div class="mc-agent-actions">
-            ${a.paused
-              ? `<button class="btn btn-sm" style="background:var(--color-success);color:#000;" onclick="window.CryptoBot.mcCommand('resume-agent',{agent:'${key}'})">Resume</button>`
-              : `<button class="btn btn-sm" style="background:var(--color-warning);color:#000;" onclick="window.CryptoBot.mcCommand('pause-agent',{agent:'${key}'})">Pause</button>`
-            }
-            ${st === 'error' ? `<button class="btn btn-sm" style="border:1px solid var(--color-accent);color:var(--color-accent);" onclick="window.CryptoBot.mcCommand('reset-agent',{agent:'${key}'})">Reset</button>` : ''}
-          </div>
-        </div>`;
-      }).join('');
+      // Fetch profiles (cached briefly)
+      if (!mcProfilesCache || Date.now() - mcProfilesCacheTs > 10000) {
+        api('GET', '/api/admin/agents/profiles').then(p => { mcProfilesCache = p; mcProfilesCacheTs = Date.now(); renderAgentCards(grid, health.agents); }).catch(() => renderAgentCards(grid, health.agents));
+      } else {
+        renderAgentCards(grid, health.agents);
+      }
     }
 
     // Activity feed
@@ -1418,6 +1368,161 @@
         }).join('');
       }
     }
+  }
+
+  let mcProfilesCache = null, mcProfilesCacheTs = 0;
+
+  function renderAgentCards(grid, agents) {
+    const entries = Object.entries(agents);
+    let html = entries.map(([key, a]) => {
+      const st = a.paused ? 'paused' : a.state;
+      const cardClass = st === 'running' ? 'mc-card-running' : st === 'error' ? 'mc-card-error' : a.paused ? 'mc-card-paused' : '';
+      const lastRun = a.lastRunAt ? formatTimeAgo(a.lastRunAt) : 'never';
+      const taskHtml = a.currentTask
+        ? `<div class="mc-agent-task"><span class="mc-pulse"></span>${escapeHtml(a.currentTask.description)} (${formatTimeAgo(a.currentTask.startedAt)})</div>`
+        : '';
+      const errHtml = a.lastError
+        ? `<div style="font-size:0.7rem;color:var(--color-danger);margin-bottom:4px;">Error: ${escapeHtml(a.lastError.message.substring(0, 80))}</div>`
+        : '';
+
+      // Profile data
+      const profile = mcProfilesCache && mcProfilesCache[key] ? mcProfilesCache[key] : null;
+      const desc = profile ? profile.description : '';
+      const role = profile ? profile.role : '';
+      const skills = profile ? (profile.skills || []) : [];
+      const config = profile ? (profile.config || []) : [];
+
+      // Skills HTML
+      const skillsHtml = skills.length ? skills.map(s =>
+        `<div class="mc-skill-row">
+          <label class="mc-skill-toggle">
+            <input type="checkbox" ${s.enabled ? 'checked' : ''} onchange="window.CryptoBot.mcToggleSkill('${key}','${s.id}',this.checked)">
+            <span class="mc-skill-name">${escapeHtml(s.name)}</span>
+          </label>
+          <span class="mc-skill-desc">${escapeHtml(s.description)}</span>
+        </div>`
+      ).join('') : '';
+
+      // Config HTML
+      const configHtml = config.length ? config.map(c => {
+        const inputType = c.type === 'number' ? 'number' : 'text';
+        return `<div class="mc-config-row">
+          <label class="mc-config-label">${escapeHtml(c.label)}</label>
+          <input class="form-input text-mono mc-config-input" type="${inputType}" value="${escapeHtml(String(c.value))}"
+            ${c.min !== undefined ? `min="${c.min}"` : ''} ${c.max !== undefined ? `max="${c.max}"` : ''}
+            data-agent="${key}" data-key="${c.key}" onchange="window.CryptoBot.mcUpdateConfig('${key}','${c.key}',this.value)">
+        </div>`;
+      }).join('') : '';
+
+      const isCustom = a.custom;
+
+      return `<div class="mc-agent-card ${cardClass}">
+        <div class="mc-agent-header" onclick="this.parentElement.classList.toggle('mc-expanded')" style="cursor:pointer;">
+          <div>
+            <span class="mc-agent-name">${escapeHtml(a.name)}</span>
+            ${role ? `<span style="font-size:0.7rem;color:var(--color-text-muted);margin-left:6px;">${escapeHtml(role)}</span>` : ''}
+          </div>
+          <div style="display:flex;align-items:center;gap:6px;">
+            <span class="mc-badge mc-badge-${st}">${st}</span>
+            <span style="font-size:0.7rem;color:var(--color-text-muted);transition:transform 0.2s;" class="mc-expand-arrow">&#9662;</span>
+          </div>
+        </div>
+        ${desc ? `<div style="font-size:0.75rem;color:var(--color-text-muted);margin-bottom:6px;">${escapeHtml(desc)}</div>` : ''}
+        ${taskHtml}${errHtml}
+        <div class="mc-agent-meta">
+          <span class="mc-meta-label">Runs:</span><span>${a.runCount}</span>
+          <span class="mc-meta-label">Last run:</span><span>${lastRun}</span>
+        </div>
+        <div class="mc-agent-actions">
+          ${a.paused
+            ? `<button class="btn btn-sm" style="background:var(--color-success);color:#000;" onclick="event.stopPropagation();window.CryptoBot.mcCommand('resume-agent',{agent:'${key}'})">Resume</button>`
+            : `<button class="btn btn-sm" style="background:var(--color-warning);color:#000;" onclick="event.stopPropagation();window.CryptoBot.mcCommand('pause-agent',{agent:'${key}'})">Pause</button>`
+          }
+          ${st === 'error' ? `<button class="btn btn-sm" style="border:1px solid var(--color-accent);color:var(--color-accent);" onclick="event.stopPropagation();window.CryptoBot.mcCommand('reset-agent',{agent:'${key}'})">Reset</button>` : ''}
+          ${isCustom ? `<button class="btn btn-sm" style="border:1px solid var(--color-danger);color:var(--color-danger);" onclick="event.stopPropagation();window.CryptoBot.mcRemoveAgent('${key}')">Remove</button>` : ''}
+        </div>
+        <div class="mc-profile-panel">
+          ${skills.length ? `<div class="mc-profile-section"><div class="mc-profile-section-title">Skills</div>${skillsHtml}</div>` : ''}
+          ${config.length ? `<div class="mc-profile-section"><div class="mc-profile-section-title">Config</div>${configHtml}</div>` : ''}
+        </div>
+      </div>`;
+    }).join('');
+
+    // Add Agent button
+    html += `<div class="mc-agent-card mc-add-card" onclick="document.getElementById('mc-add-agent-form').classList.toggle('hidden')" style="cursor:pointer;display:flex;align-items:center;justify-content:center;min-height:120px;border-style:dashed;">
+      <div style="text-align:center;">
+        <div style="font-size:1.5rem;color:var(--color-accent);margin-bottom:4px;">+</div>
+        <div style="font-size:0.8rem;color:var(--color-text-muted);">Add Watcher Agent</div>
+      </div>
+    </div>`;
+
+    // Add Agent form (hidden)
+    html += `<div id="mc-add-agent-form" class="hidden mc-agent-card" style="grid-column:1/-1;">
+      <div style="font-weight:600;margin-bottom:var(--space-2);color:var(--color-text);">Create Watcher Agent</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--space-2);margin-bottom:var(--space-2);">
+        <div class="form-group" style="margin:0;">
+          <label class="form-label" style="font-size:0.75rem;">Name</label>
+          <input class="form-input" type="text" id="mc-new-agent-name" placeholder="e.g. BTC Watcher">
+        </div>
+        <div class="form-group" style="margin:0;">
+          <label class="form-label" style="font-size:0.75rem;">Symbols (comma-separated)</label>
+          <input class="form-input text-mono" type="text" id="mc-new-agent-symbols" placeholder="BTCUSDT,ETHUSDT" style="text-transform:uppercase;">
+        </div>
+        <div class="form-group" style="margin:0;">
+          <label class="form-label" style="font-size:0.75rem;">Alert Threshold %</label>
+          <input class="form-input text-mono" type="number" id="mc-new-agent-threshold" value="3" min="0.5" max="20" step="0.5">
+        </div>
+        <div class="form-group" style="margin:0;">
+          <label class="form-label" style="font-size:0.75rem;">Description</label>
+          <input class="form-input" type="text" id="mc-new-agent-desc" placeholder="What does this agent watch?">
+        </div>
+      </div>
+      <button class="btn btn-primary btn-sm" onclick="window.CryptoBot.mcCreateAgent()">Create Agent</button>
+    </div>`;
+
+    grid.innerHTML = html;
+  }
+
+  async function mcToggleSkill(agentKey, skillId, enabled) {
+    try {
+      await api('PUT', `/api/admin/agents/profiles/${agentKey}/skill`, { skillId, enabled });
+      showToast(`Skill ${enabled ? 'enabled' : 'disabled'}`, 'success');
+      mcProfilesCache = null;
+    } catch (err) { showToast(err.message, 'error'); }
+  }
+
+  async function mcUpdateConfig(agentKey, key, value) {
+    try {
+      const numVal = parseFloat(value);
+      await api('PUT', `/api/admin/agents/profiles/${agentKey}/config`, { [key]: isNaN(numVal) ? value : numVal });
+      showToast('Config updated', 'success');
+      mcProfilesCache = null;
+    } catch (err) { showToast(err.message, 'error'); }
+  }
+
+  async function mcCreateAgent() {
+    const name = document.getElementById('mc-new-agent-name')?.value?.trim();
+    const symbols = document.getElementById('mc-new-agent-symbols')?.value?.trim();
+    const threshold = document.getElementById('mc-new-agent-threshold')?.value;
+    const desc = document.getElementById('mc-new-agent-desc')?.value?.trim();
+    if (!name) { showToast('Name is required', 'error'); return; }
+    try {
+      await api('POST', '/api/admin/agents/create', { name, symbols, alertThreshold: threshold, description: desc });
+      showToast(`Agent "${name}" created`, 'success');
+      mcProfilesCache = null;
+      document.getElementById('mc-add-agent-form')?.classList.add('hidden');
+      mcRefresh();
+    } catch (err) { showToast(err.message, 'error'); }
+  }
+
+  async function mcRemoveAgent(key) {
+    if (!confirm(`Remove agent "${key}"?`)) return;
+    try {
+      await api('DELETE', `/api/admin/agents/${key}`);
+      showToast('Agent removed', 'success');
+      mcProfilesCache = null;
+      mcRefresh();
+    } catch (err) { showToast(err.message, 'error'); }
   }
 
   function formatTimeAgo(ts) {
@@ -2914,6 +3019,7 @@
     loadOpenPositions, emergencyCloseToken, emergencyCloseAll,
     fixBitunixPnl, debugBitunix, runBacktest, loadAiVersions, runAiOptimize,
     mcRefresh, mcCommand, mcChat, mcChatQuick, switchAdminTab,
+    mcToggleSkill, mcUpdateConfig, mcCreateAgent, mcRemoveAgent,
   };
 
   // ----- Init -----

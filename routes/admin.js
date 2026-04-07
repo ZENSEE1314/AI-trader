@@ -2998,4 +2998,66 @@ router.get('/agents/activity', async (req, res) => {
   }
 });
 
+// GET /api/admin/agents/profiles — All agent profiles with skills & config
+router.get('/agents/profiles', async (req, res) => {
+  try {
+    const { getCoordinator } = require('../agents');
+    res.json(getCoordinator().getAllProfiles());
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// GET /api/admin/agents/profiles/:key — Single agent profile
+router.get('/agents/profiles/:key', async (req, res) => {
+  try {
+    const { getCoordinator } = require('../agents');
+    const profile = getCoordinator().getAgentProfile(req.params.key);
+    if (!profile) return res.status(404).json({ error: 'Agent not found' });
+    res.json(profile);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// PUT /api/admin/agents/profiles/:key/config — Update agent config
+router.put('/agents/profiles/:key/config', async (req, res) => {
+  try {
+    const { getCoordinator } = require('../agents');
+    const result = getCoordinator().updateAgentConfig(req.params.key, req.body);
+    res.json(result);
+  } catch (err) { res.status(500).json({ ok: false, error: err.message }); }
+});
+
+// PUT /api/admin/agents/profiles/:key/skill — Toggle a skill
+router.put('/agents/profiles/:key/skill', async (req, res) => {
+  try {
+    const { skillId, enabled } = req.body;
+    if (!skillId) return res.status(400).json({ error: 'Missing skillId' });
+    const { getCoordinator } = require('../agents');
+    const result = getCoordinator().toggleAgentSkill(req.params.key, skillId, !!enabled);
+    res.json(result);
+  } catch (err) { res.status(500).json({ ok: false, error: err.message }); }
+});
+
+// POST /api/admin/agents/create — Create a custom watcher agent
+router.post('/agents/create', async (req, res) => {
+  try {
+    const { name, symbols, alertThreshold, description } = req.body;
+    if (!name) return res.status(400).json({ error: 'Missing name' });
+    const { getCoordinator } = require('../agents');
+    const result = getCoordinator().addWatcherAgent(name, {
+      symbols: (symbols || '').split(',').map(s => s.trim().toUpperCase()).filter(Boolean),
+      alertThreshold: parseFloat(alertThreshold) || 3,
+      description: description || '',
+    });
+    res.json(result);
+  } catch (err) { res.status(500).json({ ok: false, error: err.message }); }
+});
+
+// DELETE /api/admin/agents/:key — Remove a custom agent
+router.delete('/agents/:key', async (req, res) => {
+  try {
+    const { getCoordinator } = require('../agents');
+    const result = getCoordinator().removeAgent(req.params.key);
+    res.json(result);
+  } catch (err) { res.status(500).json({ ok: false, error: err.message }); }
+});
+
 module.exports = router;

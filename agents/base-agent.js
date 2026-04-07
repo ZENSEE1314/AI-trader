@@ -25,6 +25,15 @@ class BaseAgent {
     this.paused = false;
     this.currentTask = null; // { description, startedAt }
 
+    // Profile — subclasses override via defineProfile()
+    this._profile = {
+      description: '',
+      role: '',
+      icon: '',
+      skills: [],    // [{ id, name, description, enabled }]
+      config: [],    // [{ key, label, type, value, min, max, options }]
+    };
+
     // Inbox for inter-agent messages
     this._inbox = [];
 
@@ -159,6 +168,44 @@ class BaseAgent {
 
   getActivity(limit = 20) {
     return this._activity.slice(-limit);
+  }
+
+  // ── Profile & Skills ───────────────────────────────────────
+
+  getProfile() {
+    return { ...this._profile, name: this.name };
+  }
+
+  getConfig() {
+    return this._profile.config.map(c => ({ ...c }));
+  }
+
+  updateConfig(changes) {
+    // changes = { key: value, ... }
+    for (const [key, value] of Object.entries(changes)) {
+      const cfg = this._profile.config.find(c => c.key === key);
+      if (cfg) {
+        cfg.value = value;
+        // Apply to options
+        this.options[key] = value;
+        // Apply to instance property if it exists
+        if (this[key] !== undefined) this[key] = value;
+        this.addActivity('config', `Config: ${cfg.label} → ${value}`);
+      }
+    }
+  }
+
+  toggleSkill(skillId, enabled) {
+    const skill = this._profile.skills.find(s => s.id === skillId);
+    if (skill) {
+      skill.enabled = enabled;
+      this.addActivity('config', `Skill ${skill.name}: ${enabled ? 'ON' : 'OFF'}`);
+    }
+  }
+
+  isSkillEnabled(skillId) {
+    const skill = this._profile.skills.find(s => s.id === skillId);
+    return skill ? skill.enabled : false;
   }
 
   // ── Health ────────────────────────────────────────────────

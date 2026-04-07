@@ -362,6 +362,66 @@ class AgentCoordinator extends BaseAgent {
     }
   }
 
+  // ── Agent Profiles ─────────────────────────────────────────
+
+  getAllProfiles() {
+    const profiles = {};
+    for (const [key, agent] of this._agents) {
+      profiles[key] = {
+        ...agent.getProfile(),
+        health: agent.getHealth(),
+      };
+    }
+    return profiles;
+  }
+
+  getAgentProfile(agentKey) {
+    const agent = this._agents.get(agentKey);
+    if (!agent) return null;
+    return { ...agent.getProfile(), health: agent.getHealth() };
+  }
+
+  updateAgentConfig(agentKey, changes) {
+    const agent = this._agents.get(agentKey);
+    if (!agent) return { ok: false, error: `Agent "${agentKey}" not found` };
+    agent.updateConfig(changes);
+    this.log(`Config updated for ${agentKey}: ${JSON.stringify(changes)}`);
+    return { ok: true };
+  }
+
+  toggleAgentSkill(agentKey, skillId, enabled) {
+    const agent = this._agents.get(agentKey);
+    if (!agent) return { ok: false, error: `Agent "${agentKey}" not found` };
+    agent.toggleSkill(skillId, enabled);
+    this.log(`Skill ${skillId} ${enabled ? 'enabled' : 'disabled'} on ${agentKey}`);
+    return { ok: true };
+  }
+
+  // ── Custom Agent Creation ─────────────────────────────────
+
+  addWatcherAgent(name, config = {}) {
+    const { WatcherAgent } = require('./watcher-agent');
+    const agent = new WatcherAgent(name, config);
+    const key = name.toLowerCase().replace(/[^a-z0-9]/g, '_');
+    this._agents.set(key, agent);
+    agent.init();
+    this.log(`Custom agent added: ${name} (${key})`);
+    this.addActivity('command', `New agent: ${name}`);
+    return { ok: true, key };
+  }
+
+  removeAgent(agentKey) {
+    // Don't allow removing core agents
+    const core = ['chart', 'trader', 'risk', 'sentiment'];
+    if (core.includes(agentKey)) return { ok: false, error: 'Cannot remove core agents' };
+    const agent = this._agents.get(agentKey);
+    if (!agent) return { ok: false, error: `Agent "${agentKey}" not found` };
+    agent.shutdown();
+    this._agents.delete(agentKey);
+    this.log(`Agent removed: ${agentKey}`);
+    return { ok: true };
+  }
+
   // ── Health & Status ───────────────────────────────────────
 
   getAgentHealthSummary() {
