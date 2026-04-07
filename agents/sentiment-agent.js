@@ -40,6 +40,8 @@ class SentimentAgent extends BaseAgent {
         { id: 'x_twitter', name: 'X/Twitter Sentiment', description: 'Monitor crypto mentions and sentiment on X', enabled: true },
         { id: 'extreme_detect', name: 'Extreme Event Detection', description: 'Flag FOMO/FUD when multiple sources spike', enabled: true },
         { id: 'signal_enrich', name: 'Signal Enrichment', description: 'Add sentiment modifier to ChartAgent signals', enabled: true },
+        { id: 'memory', name: 'Memory', description: 'Remember mood history and extreme events across restarts', enabled: true },
+        { id: 'self_learn', name: 'Self-Learning', description: 'Track if mood predictions aligned with market moves', enabled: true },
       ],
       config: [
         { key: 'maxHistory', label: 'Mood History Size', type: 'number', value: 50, min: 10, max: 200 },
@@ -101,6 +103,24 @@ class SentimentAgent extends BaseAgent {
     };
 
     this.addActivity('success', `Mood: ${mood} (${bullishCount}B/${bearishCount}R/${stats.neutral}N) — ${entries.length} coins`);
+
+    // Memory: persist mood and extreme events
+    if (this.isSkillEnabled('memory')) {
+      await this.remember('last_mood', { mood, bullishPct, bearishPct, ts: Date.now() }, 'mood');
+      await this.remember('mood_streak', {
+        current: mood,
+        count: (this.moodHistory.filter(m => m.mood === mood).length),
+      }, 'mood');
+    }
+    // Learn: track mood accuracy
+    if (this.isSkillEnabled('self_learn') && this.moodHistory.length >= 2) {
+      const prev = this.moodHistory[this.moodHistory.length - 2];
+      if (prev.mood !== mood) {
+        this.learn('mood_shift', { from: prev.mood, to: mood }, { bullishPct, bearishPct },
+          `Mood shifted ${prev.mood} → ${mood}`, 0).catch(() => {});
+      }
+    }
+
     this.currentTask = null;
 
     return { mood, scores, stats };

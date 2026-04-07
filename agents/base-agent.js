@@ -208,6 +208,91 @@ class BaseAgent {
     return skill ? skill.enabled : false;
   }
 
+  // ── Memory (DB-backed, survives restarts) ──────────────────
+
+  async remember(key, value, category = 'general') {
+    try {
+      const { query } = require('../db');
+      await query(
+        `INSERT INTO agent_memory (agent, key, value, category, updated_at)
+         VALUES ($1, $2, $3, $4, NOW())
+         ON CONFLICT (agent, key) DO UPDATE SET value = $3, category = $4, updated_at = NOW()`,
+        [this.name, key, JSON.stringify(value), category]
+      );
+    } catch (e) {
+      // Fallback to in-memory if DB unavailable
+      if (!this._memoryCache) this._memoryCache = {};
+      this._memoryCache[key] = value;
+    }
+  }
+
+  async recall(key) {
+    try {
+      const { query } = require('../db');
+      const rows = await query(
+        'SELECT value FROM agent_memory WHERE agent = $1 AND key = $2',
+        [this.name, key]
+      );
+      if (rows.length) return rows[0].value;
+    } catch (e) {
+      if (this._memoryCache && this._memoryCache[key] !== undefined) return this._memoryCache[key];
+    }
+    return null;
+  }
+
+  async recallAll(category = null) {
+    try {
+      const { query } = require('../db');
+      const sql = category
+        ? 'SELECT key, value, category, updated_at FROM agent_memory WHERE agent = $1 AND category = $2 ORDER BY updated_at DESC'
+        : 'SELECT key, value, category, updated_at FROM agent_memory WHERE agent = $1 ORDER BY updated_at DESC';
+      const params = category ? [this.name, category] : [this.name];
+      return await query(sql, params);
+    } catch { return []; }
+  }
+
+  async forget(key) {
+    try {
+      const { query } = require('../db');
+      await query('DELETE FROM agent_memory WHERE agent = $1 AND key = $2', [this.name, key]);
+    } catch {}
+  }
+
+  // ── Learning (tracks decisions → outcomes) ────────────────
+
+  async learn(type, input, outcome, lesson, score = 0) {
+    try {
+      const { query } = require('../db');
+      await query(
+        `INSERT INTO agent_lessons (agent, type, input, outcome, lesson, score)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [this.name, type, JSON.stringify(input), JSON.stringify(outcome), lesson, score]
+      );
+      this.addActivity('learn', `Learned: ${lesson.substring(0, 60)}`);
+    } catch {}
+  }
+
+  async getLessons(type = null, limit = 20) {
+    try {
+      const { query } = require('../db');
+      const sql = type
+        ? 'SELECT * FROM agent_lessons WHERE agent = $1 AND type = $2 ORDER BY created_at DESC LIMIT $3'
+        : 'SELECT * FROM agent_lessons WHERE agent = $1 ORDER BY created_at DESC LIMIT $2';
+      const params = type ? [this.name, type, limit] : [this.name, limit];
+      return await query(sql, params);
+    } catch { return []; }
+  }
+
+  async getBestLessons(type, limit = 5) {
+    try {
+      const { query } = require('../db');
+      return await query(
+        'SELECT * FROM agent_lessons WHERE agent = $1 AND type = $2 ORDER BY score DESC LIMIT $3',
+        [this.name, type, limit]
+      );
+    } catch { return []; }
+  }
+
   // ── Health ────────────────────────────────────────────────
 
   getHealth() {

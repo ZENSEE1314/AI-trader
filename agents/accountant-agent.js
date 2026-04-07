@@ -25,6 +25,8 @@ class AccountantAgent extends BaseAgent {
         { id: 'fix_fees', name: 'Fee Recovery', description: 'Fetch actual trading fees from exchange and update records', enabled: true },
         { id: 'recalc_gross', name: 'Gross PnL Recalc', description: 'Recalculate gross PnL from entry/exit prices', enabled: true },
         { id: 'report', name: 'Financial Report', description: 'Generate summary of all trades with totals', enabled: true },
+        { id: 'memory', name: 'Memory', description: 'Remember audit results and track fixes across restarts', enabled: true },
+        { id: 'self_learn', name: 'Self-Learning', description: 'Learn which trade types have fee issues and flag them early', enabled: true },
       ],
       config: [
         { key: 'auditLimit', label: 'Max Trades to Audit', type: 'number', value: options.auditLimit || 100, min: 10, max: 500 },
@@ -148,6 +150,27 @@ class AccountantAgent extends BaseAgent {
     };
     this.lastAuditResult = result;
     this.addActivity('success', `Audit done: ${trades.length} trades, ${issues.length} issues, ${fixed} fixed, $${totalFeeRecovered.toFixed(2)} fees recovered`);
+
+    // Memory: remember audit results
+    if (this.isSkillEnabled('memory')) {
+      await this.remember('last_audit', result, 'audit');
+      const totalAudits = (await this.recall('total_audits')) || 0;
+      await this.remember('total_audits', totalAudits + 1, 'stats');
+      const totalFixed = (await this.recall('lifetime_fixes')) || 0;
+      await this.remember('lifetime_fixes', totalFixed + fixed, 'stats');
+    }
+    // Learn: which platforms have fee issues
+    if (this.isSkillEnabled('self_learn') && issues.length > 0) {
+      const platforms = {};
+      for (const i of issues) {
+        const t = trades.find(t => t.id === i.id);
+        if (t) platforms[t.platform] = (platforms[t.platform] || 0) + 1;
+      }
+      for (const [platform, count] of Object.entries(platforms)) {
+        await this.learn('fee_issues', { platform }, { count },
+          `${platform}: ${count} trades with fee issues`, count);
+      }
+    }
 
     return result;
   }

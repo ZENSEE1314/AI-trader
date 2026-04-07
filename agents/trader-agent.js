@@ -55,6 +55,8 @@ class TraderAgent extends BaseAgent {
         { id: 'position_sync', name: 'Position Sync', description: 'Sync open trades with exchange, detect closes, record P&L', enabled: true },
         { id: 'structure_exit', name: '15M Structure Exit', description: 'Exit early on 15-minute structure break (LH for longs, HL for shorts)', enabled: true },
         { id: 'usdt_topup', name: 'USDT Top-Up Detection', description: 'Auto-detect USDT deposits and credit user wallets', enabled: true },
+        { id: 'memory', name: 'Memory', description: 'Remember trade outcomes per coin and avoid repeat losers', enabled: true },
+        { id: 'self_learn', name: 'Self-Learning', description: 'Learn which coins/setups are profitable and adjust execution', enabled: true },
       ],
       config: [
         { key: 'maxHistory', label: 'Trade History Size', type: 'number', value: 100, min: 20, max: 500 },
@@ -129,6 +131,12 @@ class TraderAgent extends BaseAgent {
         executionResult = result;
         this.tradesExecuted++;
         this.addActivity('success', `${pick.symbol} ${pick.direction} executed for users`);
+        // Memory: record trade entry
+        if (this.isSkillEnabled('memory')) {
+          await this.remember(`last_trade_${pick.symbol}`, {
+            direction: pick.direction, score: pick.score, ts: Date.now(),
+          }, 'trades');
+        }
         break; // One trade per cycle
       }
 
