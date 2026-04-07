@@ -2993,6 +2993,52 @@ img[src*="logo"] {
   border-color: var(--color-accent);
   background: rgba(0, 229, 255, 0.03);
 }
+
+/* Customer Chatbot Widget */
+.chatbot-widget { position: fixed; bottom: 20px; right: 20px; z-index: 9999; }
+.chatbot-toggle {
+  width: 56px; height: 56px; border-radius: 50%;
+  background: linear-gradient(135deg, var(--color-accent), #0088cc);
+  border: none; color: #fff; cursor: pointer;
+  box-shadow: 0 4px 20px rgba(0, 229, 255, 0.3);
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+  display: flex; align-items: center; justify-content: center;
+}
+.chatbot-toggle:hover { transform: scale(1.08); box-shadow: 0 6px 28px rgba(0, 229, 255, 0.4); }
+.chatbot-panel {
+  position: absolute; bottom: 70px; right: 0;
+  width: 340px; max-height: 480px;
+  background: var(--color-bg-raised); border: 1px solid var(--color-border-muted);
+  border-radius: var(--radius-lg); overflow: hidden;
+  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.4);
+  display: flex; flex-direction: column;
+  animation: adminTabIn 0.2s ease-out;
+}
+.chatbot-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 16px; background: linear-gradient(135deg, var(--color-accent), #0088cc);
+  color: #fff; font-size: 0.9rem;
+}
+.chatbot-messages {
+  flex: 1; overflow-y: auto; padding: 12px;
+  display: flex; flex-direction: column; gap: 8px;
+  max-height: 320px; min-height: 200px;
+}
+.chatbot-msg {
+  padding: 8px 12px; border-radius: 12px; font-size: 0.82rem;
+  line-height: 1.5; max-width: 90%; display: flex; flex-direction: column;
+}
+.chatbot-bot {
+  background: var(--color-bg); border: 1px solid var(--color-border-muted);
+  align-self: flex-start; color: var(--color-text);
+}
+.chatbot-user {
+  background: rgba(0, 229, 255, 0.1); border: 1px solid rgba(0, 229, 255, 0.15);
+  align-self: flex-end; color: var(--color-text);
+}
+@media (max-width: 480px) {
+  .chatbot-panel { width: calc(100vw - 32px); right: -4px; }
+}
 .mc-agent-card.mc-card-running {
   border-color: var(--color-accent);
   box-shadow: 0 0 12px rgba(0, 229, 255, 0.1);

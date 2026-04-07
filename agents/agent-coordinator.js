@@ -159,6 +159,19 @@ class AgentCoordinator extends BaseAgent {
         this.addActivity('skip', 'TraderAgent paused — skipping execution');
       }
 
+      // ── Step 6: AccountantAgent auto-audit (every 10 cycles) ──
+      if (!this.accountantAgent.paused && this.runCount % 10 === 0) {
+        this.currentTask = { description: 'AccountantAgent auditing', startedAt: Date.now() };
+        try {
+          const auditResult = await this.accountantAgent.run({ mode: 'audit' });
+          if (auditResult?.fixed > 0) {
+            this.addActivity('success', `Accountant fixed ${auditResult.fixed} trade(s)`);
+          }
+        } catch (err) {
+          this.addActivity('error', `Audit error: ${err.message}`);
+        }
+      }
+
       this.currentTask = null;
       const elapsed = ((Date.now() - cycleStart) / 1000).toFixed(1);
       this.log(`Cycle complete in ${elapsed}s | Mood: ${mood} | Signals: ${signals.length} → ${approvedSignals.length} approved | Executed: ${tradeResult?.executed || false}`);
