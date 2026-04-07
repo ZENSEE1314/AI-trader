@@ -2857,6 +2857,45 @@ img[src*="logo"] {
    Mission Control — Agent Dashboard
    ============================================================ */
 
+/* Admin Sub-Tabs */
+.admin-subtabs {
+  display: flex;
+  gap: 2px;
+  margin-bottom: var(--space-4);
+  border-bottom: 1px solid var(--color-border-muted);
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+.admin-subtabs::-webkit-scrollbar { display: none; }
+.admin-subtab {
+  padding: 10px 18px;
+  font-size: 0.82rem;
+  font-weight: 500;
+  color: var(--color-text-muted);
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color var(--duration-fast) var(--ease-out), border-color var(--duration-fast) var(--ease-out);
+}
+.admin-subtab:hover {
+  color: var(--color-text);
+}
+.admin-subtab.active {
+  color: var(--color-accent);
+  border-bottom-color: var(--color-accent);
+  text-shadow: 0 0 12px rgba(0, 229, 255, 0.3);
+}
+.admin-tab-panel {
+  animation: adminTabIn 0.2s ease-out;
+}
+@keyframes adminTabIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
 .mc-agents-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));

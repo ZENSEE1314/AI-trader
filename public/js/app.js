@@ -1285,6 +1285,21 @@
 
   let mcRefreshTimer = null;
 
+  function switchAdminTab(tab) {
+    // Toggle sub-tab buttons
+    document.querySelectorAll('.admin-subtab').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.admintab === tab);
+    });
+    // Toggle panels
+    const panels = ['mc', 'earnings', 'users', 'tokens', 'settings', 'tools'];
+    panels.forEach(p => {
+      const el = document.getElementById(`admin-tab-${p}`);
+      if (el) el.classList.toggle('hidden', p !== tab);
+    });
+    // Refresh Mission Control when switching to it
+    if (tab === 'mc') mcRefresh();
+  }
+
   async function mcRefresh() {
     try {
       const data = await api('GET', '/api/admin/agents/health');
@@ -2863,7 +2878,7 @@
     addRiskLevel, saveRiskLevel, deleteRiskLevel,
     loadOpenPositions, emergencyCloseToken, emergencyCloseAll,
     fixBitunixPnl, debugBitunix, runBacktest, loadAiVersions, runAiOptimize,
-    mcRefresh, mcCommand,
+    mcRefresh, mcCommand, switchAdminTab,
   };
 
   // ----- Init -----
