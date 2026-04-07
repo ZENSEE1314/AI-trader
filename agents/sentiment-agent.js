@@ -155,6 +155,22 @@ class SentimentAgent extends BaseAgent {
     });
   }
 
+  async _getAIContext() {
+    const topCoins = this.lastScores ? Object.entries(this.lastScores)
+      .filter(([, v]) => v.trendScore > 0.2)
+      .sort((a, b) => b[1].trendScore - a[1].trendScore)
+      .slice(0, 5)
+      .map(([sym, v]) => ({ symbol: sym, trend: v.trendScore, sentiment: v.sentiment, mentions: v.mentions }))
+      : [];
+    return {
+      mood: this.lastMood,
+      coinsTracked: this.lastScores ? Object.keys(this.lastScores).length : 0,
+      topCoins,
+      extremeEvents: this.extremeEvents.slice(-3),
+      moodHistory: this.moodHistory.slice(-5),
+    };
+  }
+
   getMood() {
     return this.lastMood;
   }

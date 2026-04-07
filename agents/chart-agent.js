@@ -98,18 +98,12 @@ class ChartAgent extends BaseAgent {
     return { signals, scanResult };
   }
 
-  explain(question) {
-    const text = question.toLowerCase();
-    if (/smc|smart money|how.*scan|strategy|method|swing/.test(text)) {
-      return `**How I Scan (SMC Swing Cascade)**\n\nI use Smart Money Concepts across 4 timeframes:\n\n**1. Daily Bias** — check if yesterday's candle was bullish or bearish\n**2. HTF Structure (4H + 1H)** — both must align with daily bias (HH/HL for bullish, LH/LL for bearish)\n**3. Setup (15M)** — look for Higher Low (long) or Lower High (short) forming\n**4. Entry (1M)** — confirm HL or LH on the 1-minute chart\n\n**Filters:**\n• Min $10M daily volume\n• Scalper AI confirmation (ADX, RSI, ATR, OBV composite)\n• AI score boost from win-rate history per setup/coin/session\n\nI scan the top ${this._profile.config.find(c => c.key === 'topNCoins')?.value || 50} coins by volume every cycle. Only signals that pass ALL checklist items get through.`;
-    }
-    if (/signal|score|rank|how.*pick/.test(text)) {
-      const last = this.lastSignals;
-      let msg = `**Signal Scoring**\n\nEach coin gets scored 0-100:\n• Timeframe alignment: +points per TF confirming\n• AI setup weight: based on historical win rate of that setup\n• AI coin weight: based on historical win rate on that coin\n• Session weight: how well this trading session performs\n• Sentiment modifier: boost if news/trends align\n\nTop 3 signals passed to RiskAgent for filtering.`;
-      if (last.length) msg += `\n\n**Last scan found ${last.length} signal(s):**\n` + last.map(s => `• ${s.symbol} ${s.direction} score=${s.score}`).join('\n');
-      return msg;
-    }
-    return super.explain(question);
+  async _getAIContext() {
+    return {
+      lastSignals: this.lastSignals.map(s => ({ symbol: s.symbol, direction: s.direction, score: s.score, setup: s.setupName })),
+      totalScans: this.scanHistory.length,
+      topNCoins: this._profile.config.find(c => c.key === 'topNCoins')?.value || 50,
+    };
   }
 
   // Get sentiment overlay for a specific symbol
