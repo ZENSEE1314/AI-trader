@@ -1,31 +1,33 @@
 // ============================================================
 // AgentCoordinator — Orchestrates all trading agents
 //
-// Phase 2: Decoupled pipeline
-//   1. ChartAgent scans for signals (via smc-engine)
-//   2. Coordinator evaluates & approves signals
-//   3. TraderAgent executes approved signals + manages positions
-//   4. Results fed back for learning
-//
-// Future phases will add:
-//   - RiskAgent for position sizing & portfolio risk
-//   - SentimentAgent for macro context
-//   - Agent voting / consensus on trades
+// Phase 3: Full agent pipeline
+//   1. SentimentAgent fetches market mood
+//   2. ChartAgent scans for signals (via smc-engine)
+//   3. SentimentAgent enriches signals with sentiment data
+//   4. RiskAgent filters signals (position limits, correlation, drawdown)
+//   5. TraderAgent executes approved signals + manages positions
 // ============================================================
 
 const { BaseAgent, AGENT_STATES } = require('./base-agent');
 const { ChartAgent } = require('./chart-agent');
 const { TraderAgent } = require('./trader-agent');
+const { RiskAgent } = require('./risk-agent');
+const { SentimentAgent } = require('./sentiment-agent');
 
 class AgentCoordinator extends BaseAgent {
   constructor(options = {}) {
     super('Coordinator', options);
     this.chartAgent = new ChartAgent(options);
     this.traderAgent = new TraderAgent(options);
+    this.riskAgent = new RiskAgent(options);
+    this.sentimentAgent = new SentimentAgent(options);
 
-    // Registry for future agents
+    // Agent registry — order matters for display
     this._agents = new Map();
+    this._agents.set('sentiment', this.sentimentAgent);
     this._agents.set('chart', this.chartAgent);
+    this._agents.set('risk', this.riskAgent);
     this._agents.set('trader', this.traderAgent);
 
     // Wire up inter-agent events
@@ -79,7 +81,20 @@ class AgentCoordinator extends BaseAgent {
         topNCoins = parseInt(topNRows[0]?.max_n) || 50;
       } catch (_) {}
 
-      // ── Step 1: ChartAgent scans for signals ──
+      // ── Step 1: SentimentAgent fetches market mood ──
+      let mood = 'neutral';
+      if (!this.sentimentAgent.paused) {
+        this.currentTask = { description: 'SentimentAgent checking mood', startedAt: Date.now() };
+        try {
+          const sentResult = await this.sentimentAgent.run();
+          if (sentResult) mood = sentResult.mood;
+          this.addActivity('info', `Market mood: ${mood}`);
+        } catch (err) {
+          this.addActivity('error', `Sentiment error (non-fatal): ${err.message}`);
+        }
+      }
+
+      // ── Step 2: ChartAgent scans for signals ──
       let signals = [];
       let scanResult = null;
 
@@ -95,14 +110,47 @@ class AgentCoordinator extends BaseAgent {
         this.addActivity('skip', 'ChartAgent paused — skipping scan');
       }
 
-      // ── Step 2: TraderAgent executes signals + manages positions ──
+      // ── Step 3: SentimentAgent enriches signals ──
+      if (signals.length > 0 && !this.sentimentAgent.paused) {
+        signals = this.sentimentAgent.enrichSignals(signals);
+        const enriched = signals.filter(s => s._sentimentModifier !== 0);
+        if (enriched.length) {
+          this.addActivity('info', `Sentiment enriched ${enriched.length} signal(s)`);
+        }
+      }
+
+      // ── Step 4: RiskAgent filters signals ──
+      let approvedSignals = signals;
+      let riskReport = null;
+
+      if (signals.length > 0 && !this.riskAgent.paused) {
+        this.currentTask = { description: 'RiskAgent evaluating risk', startedAt: Date.now() };
+        // Get current open positions for risk evaluation
+        let openPositions = [];
+        try {
+          const { query: dbQuery } = require('../db');
+          const openTrades = await dbQuery("SELECT symbol FROM trades WHERE status = 'OPEN'");
+          openPositions = openTrades.map(t => t.symbol);
+        } catch (_) {}
+
+        const riskResult = await this.riskAgent.run({ signals, openPositions });
+        if (riskResult) {
+          approvedSignals = riskResult.approved || [];
+          riskReport = riskResult.riskReport;
+          if (riskResult.rejected?.length) {
+            this.addActivity('info', `RiskAgent: ${approvedSignals.length} approved, ${riskResult.rejected.length} rejected`);
+          }
+        }
+      }
+
+      // ── Step 5: TraderAgent executes approved signals ──
       let tradeResult = null;
 
       if (!this.traderAgent.paused) {
         this.currentTask = { description: 'TraderAgent executing', startedAt: Date.now() };
-        tradeResult = await this.traderAgent.run({ signals, mode: 'signals' });
+        tradeResult = await this.traderAgent.run({ signals: approvedSignals, mode: 'signals' });
         if (tradeResult?.executed) {
-          this.addActivity('success', `Trade executed: ${signals[0]?.symbol} ${signals[0]?.direction}`);
+          this.addActivity('success', `Trade executed: ${approvedSignals[0]?.symbol} ${approvedSignals[0]?.direction}`);
         }
       } else {
         this.addActivity('skip', 'TraderAgent paused — skipping execution');
@@ -110,13 +158,16 @@ class AgentCoordinator extends BaseAgent {
 
       this.currentTask = null;
       const elapsed = ((Date.now() - cycleStart) / 1000).toFixed(1);
-      this.log(`Cycle complete in ${elapsed}s | Signals: ${signals.length} | Executed: ${tradeResult?.executed || false}`);
+      this.log(`Cycle complete in ${elapsed}s | Mood: ${mood} | Signals: ${signals.length} → ${approvedSignals.length} approved | Executed: ${tradeResult?.executed || false}`);
       this.addActivity('success', `Cycle done in ${elapsed}s`);
 
       return {
         elapsed: parseFloat(elapsed),
+        mood,
         signals: signals.length,
+        approved: approvedSignals.length,
         scanResult,
+        riskReport,
         tradeResult,
         agents: this.getAgentHealthSummary(),
       };

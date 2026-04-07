@@ -5,6 +5,8 @@
 const { BaseAgent, AGENT_STATES } = require('./base-agent');
 const { ChartAgent } = require('./chart-agent');
 const { TraderAgent } = require('./trader-agent');
+const { RiskAgent } = require('./risk-agent');
+const { SentimentAgent } = require('./sentiment-agent');
 const { AgentCoordinator, getCoordinator } = require('./agent-coordinator');
 
 module.exports = {
@@ -12,6 +14,8 @@ module.exports = {
   AGENT_STATES,
   ChartAgent,
   TraderAgent,
+  RiskAgent,
+  SentimentAgent,
   AgentCoordinator,
   getCoordinator,
 };

@@ -1341,12 +1341,25 @@
 
         // Extra stats per agent type
         let extraStats = '';
+        // ChartAgent
         if (a.lastSignalCount !== undefined) extraStats += `<span class="mc-meta-label">Signals:</span><span>${a.lastSignalCount}</span><span class="mc-meta-label">Scans:</span><span>${a.totalScans}</span>`;
+        // TraderAgent
         if (a.cycleCount !== undefined) extraStats += `<span class="mc-meta-label">Cycles:</span><span>${a.cycleCount}</span>`;
         if (a.openPositions !== undefined) extraStats += `<span class="mc-meta-label">Open pos:</span><span>${a.openPositions}</span>`;
         if (a.tradesExecuted !== undefined) extraStats += `<span class="mc-meta-label">Executed:</span><span style="color:var(--color-success);">${a.tradesExecuted}</span>`;
-        if (a.tradesSkipped !== undefined) extraStats += `<span class="mc-meta-label">Skipped:</span><span>${a.tradesSkipped}</span>`;
+        if (a.tradesSkipped !== undefined && a.tradesExecuted !== undefined) extraStats += `<span class="mc-meta-label">Skipped:</span><span>${a.tradesSkipped}</span>`;
         if (a.lastSyncAt) extraStats += `<span class="mc-meta-label">Last sync:</span><span>${formatTimeAgo(a.lastSyncAt)}</span>`;
+        // RiskAgent
+        if (a.signalsApproved !== undefined) extraStats += `<span class="mc-meta-label">Approved:</span><span style="color:var(--color-success);">${a.signalsApproved}</span>`;
+        if (a.signalsRejected !== undefined) extraStats += `<span class="mc-meta-label">Rejected:</span><span style="color:var(--color-danger);">${a.signalsRejected}</span>`;
+        if (a.consecutiveLosses !== undefined) extraStats += `<span class="mc-meta-label">Consec losses:</span><span${a.consecutiveLosses >= 3 ? ' style="color:var(--color-danger);"' : ''}>${a.consecutiveLosses}</span>`;
+        // SentimentAgent
+        if (a.mood !== undefined) {
+          const moodColor = a.mood === 'risk-on' ? 'var(--color-success)' : a.mood === 'risk-off' ? 'var(--color-danger)' : 'var(--color-text-muted)';
+          extraStats += `<span class="mc-meta-label">Mood:</span><span style="color:${moodColor};font-weight:600;">${a.mood}</span>`;
+        }
+        if (a.coinsTracked !== undefined) extraStats += `<span class="mc-meta-label">Coins:</span><span>${a.coinsTracked}</span>`;
+        if (a.scansCompleted !== undefined) extraStats += `<span class="mc-meta-label">Scans:</span><span>${a.scansCompleted}</span>`;
 
         return `<div class="mc-agent-card ${cardClass}">
           <div class="mc-agent-header">
