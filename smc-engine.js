@@ -687,15 +687,17 @@ async function scanSMC(log, opts = {}) {
   const minScore = params.MIN_SCORE || 8;
   const dailyBiasCache = new Map();
 
-  // BTC market filter: fetch BTC daily bias to block counter-trend alt trades
+  // BTC market filter: use TODAY's candle (current direction) to block counter-trend trades
   let btcBias = null;
   try {
     const btcDaily = await fetchKlines('BTCUSDT', '1d', 3);
-    if (btcDaily && btcDaily.length >= 2) {
-      const prevDay = btcDaily[btcDaily.length - 2];
-      const dOpen = parseFloat(prevDay[1]), dClose = parseFloat(prevDay[4]);
+    if (btcDaily && btcDaily.length >= 1) {
+      // Use current (today's) candle — not yesterday's
+      const today = btcDaily[btcDaily.length - 1];
+      const dOpen = parseFloat(today[1]), dClose = parseFloat(today[4]);
+      const changePct = ((dClose - dOpen) / dOpen) * 100;
       btcBias = dClose > dOpen ? 'bullish' : dClose < dOpen ? 'bearish' : null;
-      bLog.scan(`BTC market bias: ${btcBias || 'neutral'}`);
+      bLog.scan(`BTC market bias: ${btcBias || 'neutral'} (today ${changePct > 0 ? '+' : ''}${changePct.toFixed(2)}%)`);
     }
   } catch (e) {
     bLog.error(`BTC bias fetch failed: ${e.message}`);
@@ -718,16 +720,15 @@ async function scanSMC(log, opts = {}) {
     analyzed++;
 
     if (signal && signal.score >= minScore) {
-      // BTC filter: block alt shorts when BTC is bull, block alt longs when BTC is bear
-      const isAlt = signal.symbol !== 'BTCUSDT' && signal.symbol !== 'ETHUSDT';
-      if (isAlt && btcBias) {
+      // BTC filter: block counter-trend trades — if BTC is bullish today, only LONG
+      if (btcBias) {
         if (btcBias === 'bullish' && signal.direction === 'SHORT') {
-          bLog.scan(`${signal.symbol}: SHORT blocked — BTC is bullish, alts follow BTC`);
+          bLog.scan(`${signal.symbol}: SHORT blocked — BTC is bullish today`);
           skippedBtcFilter++;
           continue;
         }
         if (btcBias === 'bearish' && signal.direction === 'LONG') {
-          bLog.scan(`${signal.symbol}: LONG blocked — BTC is bearish, alts follow BTC`);
+          bLog.scan(`${signal.symbol}: LONG blocked — BTC is bearish today`);
           skippedBtcFilter++;
           continue;
         }
