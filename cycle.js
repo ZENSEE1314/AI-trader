@@ -1007,17 +1007,6 @@ async function executeForAllUsers(pick) {
           return;
         }
 
-        // Daily loss limit: stop trading if user has 3+ losses today
-        const maxConsecLoss = parseInt(key.max_consec_loss) || 3;
-        const todayLosses = await db.query(
-          `SELECT COUNT(*) as cnt FROM trades WHERE user_id = $1 AND status IN ('LOSS','SL') AND closed_at > NOW() - INTERVAL '24 hours'`,
-          [key.user_id]
-        );
-        if (parseInt(todayLosses[0]?.cnt) >= maxConsecLoss) {
-          userLog.trade(`User ${key.email}: ${todayLosses[0].cnt} losses in 24h (max ${maxConsecLoss}) — paused until losses reset`);
-          return;
-        }
-
         // Cooldown: don't re-enter same token within 4 hours after last closed trade
         const recentClosed = await db.query(
           `SELECT id, closed_at FROM trades WHERE user_id = $1 AND symbol = $2 AND status IN ('WIN','LOSS','TP','SL','CLOSED') AND closed_at > NOW() - INTERVAL '4 hours' ORDER BY closed_at DESC LIMIT 1`,
