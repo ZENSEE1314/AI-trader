@@ -17,8 +17,24 @@ class ChartAgent extends BaseAgent {
   constructor(options = {}) {
     super('ChartAgent', options);
     this.lastSignals = [];
-    this.scanHistory = [];      // rolling window of last N scans
+    this.scanHistory = [];
     this.maxHistory = 50;
+
+    this._profile = {
+      description: 'Scans all markets for high-probability SMC trade setups using multi-timeframe analysis.',
+      role: 'Market Scanner',
+      icon: 'chart',
+      skills: [
+        { id: 'smc_scan', name: 'SMC Scan', description: 'Swing Cascade strategy — 4H/1H/15M/1M confirmation', enabled: true },
+        { id: 'scalper_confirm', name: 'Scalper Confirmation', description: 'Composite oscillator (ADX, RSI, ATR, OBV) entry filter', enabled: true },
+        { id: 'volume_filter', name: 'Volume Filter', description: 'Reject coins below $10M daily volume', enabled: true },
+        { id: 'ai_scoring', name: 'AI Scoring', description: 'Boost signals using setup/coin/session win-rate history', enabled: true },
+      ],
+      config: [
+        { key: 'topNCoins', label: 'Top N Coins to Scan', type: 'number', value: options.topNCoins || 50, min: 10, max: 200 },
+        { key: 'maxHistory', label: 'Scan History Size', type: 'number', value: 50, min: 10, max: 200 },
+      ],
+    };
   }
 
   async execute(context = {}) {

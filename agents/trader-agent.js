@@ -43,6 +43,23 @@ class TraderAgent extends BaseAgent {
     this.lastSyncAt = null;
     this.tradesExecuted = 0;
     this.tradesSkipped = 0;
+
+    this._profile = {
+      description: 'Executes approved trades on Binance & Bitunix for all users, manages trailing stops and position sync.',
+      role: 'Trade Executor',
+      icon: 'trader',
+      skills: [
+        { id: 'multi_user_exec', name: 'Multi-User Execution', description: 'Execute trades for all registered user API keys in parallel', enabled: true },
+        { id: 'owner_trade', name: 'Owner Account Trading', description: 'Trade on the owner Binance account with full TP/SL', enabled: true },
+        { id: 'trailing_sl', name: 'Trailing Stop-Loss', description: 'Dynamic trailing SL with tiered steps (+30%, +50%, +75%...)', enabled: true },
+        { id: 'position_sync', name: 'Position Sync', description: 'Sync open trades with exchange, detect closes, record P&L', enabled: true },
+        { id: 'structure_exit', name: '15M Structure Exit', description: 'Exit early on 15-minute structure break (LH for longs, HL for shorts)', enabled: true },
+        { id: 'usdt_topup', name: 'USDT Top-Up Detection', description: 'Auto-detect USDT deposits and credit user wallets', enabled: true },
+      ],
+      config: [
+        { key: 'maxHistory', label: 'Trade History Size', type: 'number', value: 100, min: 20, max: 500 },
+      ],
+    };
   }
 
   /**

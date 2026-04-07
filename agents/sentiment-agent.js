@@ -28,6 +28,23 @@ class SentimentAgent extends BaseAgent {
     this.maxHistory = 50;
     this.scansCompleted = 0;
     this.extremeEvents = [];
+
+    this._profile = {
+      description: 'Fetches market sentiment from multiple sources and provides mood context to the trading pipeline.',
+      role: 'Market Analyst',
+      icon: 'sentiment',
+      skills: [
+        { id: 'coingecko', name: 'CoinGecko Trending', description: 'Track trending coins and market cap rankings', enabled: true },
+        { id: 'cryptopanic', name: 'CryptoPanic News', description: 'Scan crypto news for bullish/bearish keywords', enabled: true },
+        { id: 'binance_momentum', name: 'Binance Momentum', description: 'Detect momentum surges from 24h volume data', enabled: true },
+        { id: 'x_twitter', name: 'X/Twitter Sentiment', description: 'Monitor crypto mentions and sentiment on X', enabled: true },
+        { id: 'extreme_detect', name: 'Extreme Event Detection', description: 'Flag FOMO/FUD when multiple sources spike', enabled: true },
+        { id: 'signal_enrich', name: 'Signal Enrichment', description: 'Add sentiment modifier to ChartAgent signals', enabled: true },
+      ],
+      config: [
+        { key: 'maxHistory', label: 'Mood History Size', type: 'number', value: 50, min: 10, max: 200 },
+      ],
+    };
   }
 
   /**
