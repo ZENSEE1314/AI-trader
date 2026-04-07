@@ -36,7 +36,7 @@ app.post('/api/chatbot', async (req, res) => {
     const { message } = req.body;
     if (!message) return res.status(400).json({ reply: 'Please type a message.' });
     const { think, isAvailable } = require('./agents/ai-brain');
-    console.log(`[CHATBOT] AI available: ${isAvailable()} | key set: ${!!process.env.ANTHROPIC_API_KEY}`);
+    console.log(`[CHATBOT] AI available: ${isAvailable()} | provider: ${require('./agents/ai-brain').getProviderName()}`);
     if (isAvailable()) {
       const reply = await think({
         agentName: 'CustomerBot',
@@ -87,7 +87,7 @@ function customerFAQ(text) {
 app.get('/api/agents/status', (req, res) => {
   try {
     const { getCoordinator } = require('./agents');
-    const { isAvailable } = require('./agents/ai-brain');
+    const { isAvailable, getProviderName } = require('./agents/ai-brain');
     const coordinator = getCoordinator();
     const h = coordinator.getHealth();
     res.json({
@@ -96,8 +96,9 @@ app.get('/api/agents/status', (req, res) => {
       runCount: h.runCount,
       agentCount: Object.keys(h.agents || {}).length,
       aiEnabled: isAvailable(),
-      aiKeySet: !!process.env.ANTHROPIC_API_KEY,
-      aiKeyPrefix: process.env.ANTHROPIC_API_KEY ? process.env.ANTHROPIC_API_KEY.substring(0, 10) + '...' : 'NOT SET',
+      aiProvider: getProviderName(),
+      googleKeySet: !!process.env.GOOGLE_AI_KEY,
+      anthropicKeySet: !!process.env.ANTHROPIC_API_KEY,
     });
   } catch (err) {
     res.json({ state: 'offline', error: err.message });
