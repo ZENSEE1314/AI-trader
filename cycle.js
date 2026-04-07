@@ -1548,7 +1548,6 @@ async function syncTradeStatus() {
               const tradeSideLong = trade.direction !== 'SHORT';
 
               // Method 1: Position history — match by symbol + side + entry price + time
-              // Fields: entryPrice, closePrice, side (LONG/SHORT), realizedPNL (excludes fees), fee, funding
               try {
                 const positions = await bxClient.getHistoryPositions({ symbol: trade.symbol, pageSize: 50 });
                 for (const p of positions) {
@@ -1563,13 +1562,15 @@ async function syncTradeStatus() {
 
                   if (cp > 0 && p.symbol === trade.symbol && entryMatch && sideMatch && timeMatch) {
                     exitPrice = cp;
-                    // Net PnL = realizedPNL - fee - funding (Bitunix realizedPNL excludes fees)
-                    const grossPnl = parseFloat(p.realizedPNL || 0);
+                    // Use profit field if available (net of fees), otherwise realizedPNL
+                    const profit = parseFloat(p.profit || 0);
+                    const rpnl = parseFloat(p.realizedPNL || 0);
                     const fee = Math.abs(parseFloat(p.fee || 0));
-                    const funding = parseFloat(p.funding || 0);
-                    realizedPnl = grossPnl - fee - funding;
+                    const funding = Math.abs(parseFloat(p.funding || 0));
+                    // profit = net P&L (after fees). If not available, compute from realizedPNL - fees
+                    realizedPnl = profit !== 0 ? profit : (rpnl - fee - funding);
                     found = true;
-                    bLog.system(`Bitunix posHistory: ${trade.symbol} entry=$${ep} exit=$${cp} pnl=${grossPnl} fee=${fee} funding=${funding} net=${realizedPnl}`);
+                    bLog.system(`Bitunix posHistory: ${trade.symbol} entry=$${ep} exit=$${cp} profit=${profit} rpnl=${rpnl} fee=${fee} funding=${funding} => net=${realizedPnl}`);
                     break;
                   }
                 }
