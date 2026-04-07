@@ -19,8 +19,9 @@ const REQUEST_TIMEOUT = 15000;
 const TOP_N_COINS = 100;
 const MIN_24H_VOLUME = 10_000_000;
 
-const SL_PCT = 0.25;           // 25% flat price distance SL for all tokens
-const TRAILING_STEP = 0.012;   // trail SL by 1.2% (overridden by strategyConfig)
+const SL_PCT = 0.05;           // 5% price distance SL
+const TP_PCT = 0.10;           // 10% price distance TP (RR 1:2)
+const TRAILING_STEP = 0.012;   // trail SL by 1.2% after TP reached
 
 // Swing lengths per timeframe (defaults, overridden by strategyConfig)
 let SWING_LENGTHS = { '4h': 11, '1h': 10, '15m': 8, '3m': 5, '1m': 3 };
@@ -560,8 +561,8 @@ async function analyzeLHHL(ticker, params, dailyBiasCache) {
 
   const sl = direction === 'LONG' ? price * (1 - SL_PCT) : price * (1 + SL_PCT);
   const slDist = SL_PCT;
-  // No fixed TP — trailing SL handles exit. Set tp far away so it never hits.
-  const tp = direction === 'LONG' ? price * 1.50 : price * 0.50;
+  // TP at 10% price distance (RR 1:2 with 5% SL)
+  const tp = direction === 'LONG' ? price * (1 + TP_PCT) : price * (1 - TP_PCT);
 
   // ┌─────────────────────────────────────────────────────────┐
   // │ Step 7: Pro Scalper AI Confirmation                     │
