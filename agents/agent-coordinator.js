@@ -263,12 +263,39 @@ class AgentCoordinator extends BaseAgent {
     if (/^(fee|commission|cost|how much.*pay|charges)/.test(text)) {
       return this._buildFeeChat();
     }
-    if (/^(help|what can you|commands|how do i)/.test(text)) {
-      return { from: 'Coordinator', message: 'You can tell me:\n\n• "scan now" — hunt for trades\n• "pause/resume all" — control all agents\n• "pause/resume chart/trader/risk/sentiment" — control one agent\n• "status" — full team report\n• "what are you trading?" — open positions\n• "any signals?" — latest scan results\n• "market mood?" — sentiment report\n• "risk report" — risk exposure\n• "performance" — win/loss stats\n• "trade history" / "pnl" — last 10 trades with fees\n• "fees" — total fees paid\n• "accountant" / "audit trades" / "fix pnl" — audit & fix all trade records\n• "check trades" — recalculate PnL + recover missing fees' };
+    // Create agent
+    const createMatch = text.match(/(?:create|add|make|build|new|hire|spawn)\s+(?:a\s+|an\s+)?(?:agent|watcher|bot)?\s*(?:to\s+|for\s+|that\s+)?(?:watch|monitor|track|follow)?\s*(.+)/);
+    if (createMatch || /^(create|add|make|build|new|hire|spawn)\s/.test(text)) {
+      return this._handleCreateAgent(text, message);
     }
 
-    // Catch-all
-    return { from: 'Coordinator', message: `I didn't understand "${message}". Try "status", "scan now", "pause chart", or "help" to see what I can do.` };
+    // Remove/fire agent
+    const removeMatch = text.match(/(?:remove|delete|fire|kill|drop)\s+(?:agent\s+)?(\w+)/);
+    if (removeMatch) {
+      const key = removeMatch[1].toLowerCase();
+      const result = this.removeAgent(key);
+      if (result.ok) return { from: 'Coordinator', message: `Agent "${key}" has been removed.` };
+      return { from: 'Coordinator', message: result.error };
+    }
+
+    // List agents
+    if (/^(list|show|who|which)\s*(agent|team|all)/.test(text) || text === 'agents' || text === 'team') {
+      const agents = Object.entries(this.getAllProfiles());
+      const lines = [`**Your Team (${agents.length} agents)**\n`];
+      for (const [key, a] of agents) {
+        const st = a.health?.paused ? 'PAUSED' : (a.health?.state || 'idle').toUpperCase();
+        lines.push(`• **${a.name}** (${a.role}) [${st}] — ${a.description.substring(0, 60)}`);
+      }
+      lines.push(`\nSay "create agent to watch BTCUSDT" to add a new watcher.`);
+      return { from: 'Coordinator', message: lines.join('\n') };
+    }
+
+    if (/^(help|what can you|commands|how do i)/.test(text)) {
+      return { from: 'Coordinator', message: 'You can tell me:\n\n**Trading:**\n• "scan now" — hunt for trades\n• "any signals?" — latest scan results\n• "what are you trading?" — open positions\n\n**Agents:**\n• "status" — full team report\n• "team" — list all agents\n• "pause/resume chart/trader/risk/sentiment" — control agents\n• "create agent to watch BTCUSDT" — add a watcher\n• "remove <agent>" — delete custom agent\n\n**Analysis:**\n• "market mood?" — sentiment report\n• "risk report" — risk exposure\n• "performance" — win/loss stats\n• "audit trades" — accountant fixes PnL\n• "trade history" — last 10 trades\n• "fees" — total fees paid' };
+    }
+
+    // Catch-all — try to be helpful
+    return { from: 'Coordinator', message: `I don't know how to do "${message}" yet. Here's what I can do:\n\n• **scan now** — find trades\n• **status** / **team** — check agents\n• **audit trades** — fix PnL\n• **create agent to watch BTCUSDT** — add watcher\n• **help** — full command list` };
   }
 
   _buildStatusChat() {
@@ -372,6 +399,53 @@ class AgentCoordinator extends BaseAgent {
       return { from: 'Coordinator', message: lines.join('\n') };
     } catch {
       return { from: 'Coordinator', message: 'Can\'t load performance data right now.' };
+    }
+  }
+
+  _handleCreateAgent(text, originalMessage) {
+    // Extract symbols from the message
+    const symbolMatches = text.match(/[A-Z]{2,10}USDT/gi) || [];
+    const symbols = symbolMatches.map(s => s.toUpperCase());
+
+    // Extract a name — use the symbols or a generic name
+    let name;
+    if (symbols.length === 1) {
+      name = `${symbols[0].replace('USDT', '')} Watcher`;
+    } else if (symbols.length > 1) {
+      name = `${symbols[0].replace('USDT', '')}+ Watcher`;
+    } else {
+      // Try to extract what they want to watch
+      const watchMatch = text.match(/(?:watch|monitor|track|follow)\s+(\w+)/);
+      if (watchMatch) {
+        const coin = watchMatch[1].toUpperCase();
+        if (!coin.endsWith('USDT')) symbols.push(coin + 'USDT');
+        name = `${coin} Watcher`;
+      } else {
+        name = `Custom Watcher ${this._agents.size}`;
+      }
+    }
+
+    if (!symbols.length) {
+      return { from: 'Coordinator', message: `I can create a watcher agent, but which coins should it monitor?\n\nTry: "create agent to watch BTCUSDT, ETHUSDT"` };
+    }
+
+    // Extract threshold if mentioned
+    const threshMatch = text.match(/(\d+(?:\.\d+)?)\s*%/);
+    const threshold = threshMatch ? parseFloat(threshMatch[1]) : 3;
+
+    try {
+      const result = this.addWatcherAgent(name, {
+        symbols,
+        alertThreshold: threshold,
+        description: `Watches ${symbols.join(', ')} for ${threshold}%+ moves`,
+      });
+
+      if (result.ok) {
+        return { from: 'Coordinator', message: `Done! Created **${name}**.\n\nWatching: ${symbols.join(', ')}\nAlert threshold: ${threshold}%\nAgent key: ${result.key}\n\nI'll alert you when these coins move ${threshold}%+ in a minute. Say "remove ${result.key}" to delete.` };
+      }
+      return { from: 'Coordinator', message: `Failed to create agent: ${result.error}` };
+    } catch (err) {
+      return { from: 'Coordinator', message: `Error creating agent: ${err.message}` };
     }
   }
 
