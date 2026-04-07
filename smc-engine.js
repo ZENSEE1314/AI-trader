@@ -355,24 +355,58 @@ async function analyzeLHHL(ticker, params, dailyBiasCache) {
     return null;
   }
 
-  // Volume check: directional volume must support the trade
+  // ┌─────────────────────────────────────────────────────────┐
+  // │ Volume Confirmation: must see buying/selling pressure   │
+  // │ in the CORRECT direction. No volume = no trade.         │
+  // └─────────────────────────────────────────────────────────┘
   {
-    const recent = klines15m.slice(-10);
-    let buyVol = 0, sellVol = 0;
-    for (const k of recent) {
+    // 15M volume: check last 10 candles for directional volume
+    const recent15 = klines15m.slice(-10);
+    let buyVol15 = 0, sellVol15 = 0;
+    for (const k of recent15) {
       const o = parseFloat(k[1]), c = parseFloat(k[4]), v = parseFloat(k[5]);
-      if (c >= o) buyVol += v; else sellVol += v;
+      if (c >= o) buyVol15 += v; else sellVol15 += v;
     }
-    const totalVol = buyVol + sellVol;
-    const buyRatio = totalVol > 0 ? buyVol / totalVol : 0.5;
-    const sellRatio = totalVol > 0 ? sellVol / totalVol : 0.5;
+    const total15 = buyVol15 + sellVol15;
+    const buyRatio15 = total15 > 0 ? buyVol15 / total15 : 0.5;
+    const sellRatio15 = total15 > 0 ? sellVol15 / total15 : 0.5;
 
-    if (direction === 'LONG' && sellRatio > 0.65) {
-      bLog.scan(`${symbol}: LONG blocked — selling pressure ${(sellRatio * 100).toFixed(0)}%`);
+    // LONG needs buying volume > 50%, SHORT needs selling volume > 50%
+    if (direction === 'LONG' && buyRatio15 < 0.50) {
+      bLog.scan(`${symbol}: LONG no volume — buy vol only ${(buyRatio15 * 100).toFixed(0)}% (need >50%)`);
       return null;
     }
-    if (direction === 'SHORT' && buyRatio > 0.65) {
-      bLog.scan(`${symbol}: SHORT blocked — buying pressure ${(buyRatio * 100).toFixed(0)}%`);
+    if (direction === 'SHORT' && sellRatio15 < 0.50) {
+      bLog.scan(`${symbol}: SHORT no volume — sell vol only ${(sellRatio15 * 100).toFixed(0)}% (need >50%)`);
+      return null;
+    }
+
+    // 1M volume: last 5 candles must also confirm direction (more recent = more important)
+    const recent1 = klines1m.slice(-5);
+    let buyVol1 = 0, sellVol1 = 0;
+    for (const k of recent1) {
+      const o = parseFloat(k[1]), c = parseFloat(k[4]), v = parseFloat(k[5]);
+      if (c >= o) buyVol1 += v; else sellVol1 += v;
+    }
+    const total1 = buyVol1 + sellVol1;
+    const buyRatio1 = total1 > 0 ? buyVol1 / total1 : 0.5;
+    const sellRatio1 = total1 > 0 ? sellVol1 / total1 : 0.5;
+
+    if (direction === 'LONG' && buyRatio1 < 0.45) {
+      bLog.scan(`${symbol}: LONG 1m volume wrong way — buy ${(buyRatio1 * 100).toFixed(0)}% (need >45%)`);
+      return null;
+    }
+    if (direction === 'SHORT' && sellRatio1 < 0.45) {
+      bLog.scan(`${symbol}: SHORT 1m volume wrong way — sell ${(sellRatio1 * 100).toFixed(0)}% (need >45%)`);
+      return null;
+    }
+
+    // Volume spike check: last 3 candles avg must be above 20-candle avg (something is happening)
+    const vols15 = klines15m.slice(-20).map(k => parseFloat(k[5]));
+    const avgVol = vols15.reduce((a, b) => a + b, 0) / vols15.length;
+    const recentAvg = vols15.slice(-3).reduce((a, b) => a + b, 0) / 3;
+    if (avgVol > 0 && recentAvg < avgVol * 0.8) {
+      bLog.scan(`${symbol}: ${direction} dead volume — recent ${(recentAvg/avgVol*100).toFixed(0)}% of avg (need >80%)`);
       return null;
     }
   }
