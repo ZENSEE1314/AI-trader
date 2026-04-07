@@ -38,23 +38,32 @@ function isAvailable() {
 async function think(opts) {
   const { agentName, systemPrompt, userMessage, context = {} } = opts;
   const ai = getClient();
-  if (!ai) return null; // Fallback to hardcoded if no API key
+  if (!ai) {
+    console.error(`[AI Brain] No client — key missing`);
+    return null;
+  }
 
   const contextBlock = Object.keys(context).length > 0
-    ? `\n\n<current_data>\n${JSON.stringify(context, null, 2)}\n</current_data>`
+    ? `\n\n<current_data>\n${JSON.stringify(context, null, 2).substring(0, 3000)}\n</current_data>`
     : '';
 
+  const model = process.env.AGENT_AI_MODEL || 'claude-haiku-4-5-20251001';
+
   try {
+    console.log(`[AI Brain] ${agentName} thinking with ${model}...`);
     const response = await ai.messages.create({
-      model: MODEL,
-      max_tokens: MAX_TOKENS,
+      model,
+      max_tokens: 1000,
       system: systemPrompt + contextBlock,
       messages: [{ role: 'user', content: userMessage }],
     });
-    return response.content[0]?.text || null;
+    const text = response.content[0]?.text || null;
+    console.log(`[AI Brain] ${agentName} responded: ${text ? text.substring(0, 80) + '...' : 'EMPTY'}`);
+    return text;
   } catch (err) {
-    console.error(`[AI Brain] ${agentName} think error: ${err.message}`);
-    return null;
+    console.error(`[AI Brain] ${agentName} FAILED: ${err.status || ''} ${err.message}`);
+    // Return the error so user sees it instead of hardcoded fallback
+    return `[AI Error: ${err.message}. Check ANTHROPIC_API_KEY and model "${model}" in Railway.]`;
   }
 }
 
