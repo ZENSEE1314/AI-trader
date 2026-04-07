@@ -1054,7 +1054,7 @@ async function executeForAllUsers(pick) {
             return;
           }
 
-          userLog.trade(`User ${key.email} Binance: wallet=$${rawWallet.toFixed(2)} available=$${parseFloat(account.availableBalance).toFixed(2)} pos=${openPosCount}/${maxPos} lev=x${userLev} TP=${(userTP*100).toFixed(1)}% SL=trailing`);
+          userLog.trade(`User ${key.email} Binance: wallet=$${rawWallet.toFixed(2)} available=$${parseFloat(account.availableBalance).toFixed(2)} pos=${openPosCount}/${maxPos} lev=x${userLev} TP=${(tpPricePct*100).toFixed(1)}% SL=trailing`);
 
           const slPrice = initialSlPrice;
           const tp3Price = userTp3Price;
@@ -1173,7 +1173,7 @@ async function executeForAllUsers(pick) {
           }
 
           const slPrice = initialSlPrice;
-          const hasTp = userTP > 0;
+          const hasTp = tpPricePct > 0;
           const tp3Price = hasTp ? userTp3Price : 0;
 
           try { await userClient.changeMarginMode(symbol, 'ISOLATION'); } catch (_) {}
@@ -1197,13 +1197,11 @@ async function executeForAllUsers(pick) {
           if (pos && pos.positionId) {
             // Recalculate SL/TP from actual entry price to avoid stale-price rejection
             const actualEntry = parseFloat(pos.avgOpenPrice || pos.entryPrice || pos.avgPrice) || price;
-            const actualSlPricePct = userSL / userLev;
             const actualSlPrice = isLong
-              ? actualEntry * (1 - actualSlPricePct)
-              : actualEntry * (1 + actualSlPricePct);
-            const actualTpPricePct = userTP / userLev;
+              ? actualEntry * (1 - slPricePct)
+              : actualEntry * (1 + slPricePct);
             const actualTpPrice = hasTp
-              ? (isLong ? actualEntry * (1 + actualTpPricePct * 1.5) : actualEntry * (1 - actualTpPricePct * 1.5))
+              ? (isLong ? actualEntry * (1 + tpPricePct) : actualEntry * (1 - tpPricePct))
               : 0;
             const slFmtActual = parseFloat(actualSlPrice.toFixed(8));
             const tpFmtActual = hasTp ? parseFloat(actualTpPrice.toFixed(8)) : 0;
