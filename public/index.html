@@ -1008,6 +1008,31 @@
           <div id="mc-agents-grid" class="mc-agents-grid">
             <div style="color:var(--color-text-muted);font-size:0.85rem;padding:var(--space-3);text-align:center;">Loading agents...</div>
           </div>
+
+          <!-- CEO Command Bar -->
+          <div class="mc-command-bar" style="margin-top:var(--space-4);border-top:1px solid var(--color-border-muted);padding-top:var(--space-3);">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:var(--space-2);">
+              <strong style="font-size:0.85rem;color:var(--color-accent);">CEO Command</strong>
+              <span style="font-size:0.7rem;color:var(--color-text-muted);">Tell your agents what to do</span>
+            </div>
+            <div style="display:flex;gap:6px;">
+              <input type="text" id="mc-ceo-input" class="form-input text-mono" placeholder="e.g. scan now, pause chart, resume all, status..." style="flex:1;font-size:0.85rem;padding:10px 14px;background:var(--color-bg);border:1px solid var(--color-border-muted);border-radius:var(--radius-md);" onkeydown="if(event.key==='Enter')window.CryptoBot.mcCeoCommand()">
+              <button class="btn btn-sm" style="background:var(--color-accent);color:#000;font-weight:600;padding:10px 20px;white-space:nowrap;" onclick="window.CryptoBot.mcCeoCommand()">Send</button>
+            </div>
+            <div id="mc-ceo-response" style="margin-top:var(--space-2);font-size:0.8rem;color:var(--color-text-muted);min-height:20px;"></div>
+            <div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:var(--space-2);">
+              <button class="mc-quick-cmd" onclick="window.CryptoBot.mcCeoQuick('scan now')">scan now</button>
+              <button class="mc-quick-cmd" onclick="window.CryptoBot.mcCeoQuick('pause all')">pause all</button>
+              <button class="mc-quick-cmd" onclick="window.CryptoBot.mcCeoQuick('resume all')">resume all</button>
+              <button class="mc-quick-cmd" onclick="window.CryptoBot.mcCeoQuick('pause chart')">pause chart</button>
+              <button class="mc-quick-cmd" onclick="window.CryptoBot.mcCeoQuick('pause trader')">pause trader</button>
+              <button class="mc-quick-cmd" onclick="window.CryptoBot.mcCeoQuick('pause risk')">pause risk</button>
+              <button class="mc-quick-cmd" onclick="window.CryptoBot.mcCeoQuick('resume chart')">resume chart</button>
+              <button class="mc-quick-cmd" onclick="window.CryptoBot.mcCeoQuick('resume trader')">resume trader</button>
+              <button class="mc-quick-cmd" onclick="window.CryptoBot.mcCeoQuick('status')">status</button>
+            </div>
+          </div>
+
           <div style="margin-top:var(--space-4);border-top:1px solid var(--color-border-muted);padding-top:var(--space-3);">
             <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--space-2);">
               <strong style="font-size:0.85rem;color:var(--color-text);">Activity Feed</strong>

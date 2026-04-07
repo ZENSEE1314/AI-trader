@@ -3046,3 +3046,28 @@ img[src*="logo"] {
 .mc-activity-item[data-type="error"] .mc-activity-msg { color: var(--color-danger); }
 .mc-activity-item[data-type="command"] .mc-activity-msg { color: var(--color-warning); }
 .mc-activity-item[data-type="success"] .mc-activity-msg { color: var(--color-success); }
+
+/* CEO Quick Command chips */
+.mc-quick-cmd {
+  font-size: 0.7rem;
+  padding: 3px 10px;
+  border-radius: 12px;
+  border: 1px solid var(--color-border-muted);
+  background: var(--color-bg);
+  color: var(--color-text-muted);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  font-family: var(--font-mono, 'JetBrains Mono', monospace);
+}
+.mc-quick-cmd:hover {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+  background: rgba(0, 229, 255, 0.06);
+}
+
+/* CEO command input focus glow */
+#mc-ceo-input:focus {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 12px rgba(0, 229, 255, 0.15);
+  outline: none;
+}

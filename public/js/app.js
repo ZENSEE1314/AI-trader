@@ -1428,6 +1428,82 @@
     return `${Math.round(diff / 86400000)}d ago`;
   }
 
+  function mcCeoQuick(text) {
+    const input = document.getElementById('mc-ceo-input');
+    if (input) input.value = text;
+    mcCeoCommand();
+  }
+
+  async function mcCeoCommand() {
+    const input = document.getElementById('mc-ceo-input');
+    const responseEl = document.getElementById('mc-ceo-response');
+    if (!input || !input.value.trim()) return;
+
+    const raw = input.value.trim().toLowerCase();
+    responseEl.innerHTML = `<span style="color:var(--color-accent);">Processing: "${escapeHtml(raw)}"...</span>`;
+
+    // Parse natural language → command + params
+    const parsed = parseCeoCommand(raw);
+    if (!parsed) {
+      responseEl.innerHTML = `<span style="color:var(--color-danger);">Unknown command. Try: scan now, pause all, resume chart, status</span>`;
+      return;
+    }
+
+    try {
+      if (parsed.command === 'status') {
+        await mcRefresh();
+        responseEl.innerHTML = `<span style="color:var(--color-success);">Dashboard refreshed.</span>`;
+      } else {
+        const result = await api('POST', '/api/admin/agents/command', { command: parsed.command, params: parsed.params });
+        if (result.ok === false && result.error) {
+          responseEl.innerHTML = `<span style="color:var(--color-danger);">${escapeHtml(result.error)}</span>`;
+        } else {
+          responseEl.innerHTML = `<span style="color:var(--color-success);">${escapeHtml(parsed.feedback)}</span>`;
+        }
+        setTimeout(mcRefresh, 500);
+      }
+    } catch (err) {
+      responseEl.innerHTML = `<span style="color:var(--color-danger);">Error: ${escapeHtml(err.message)}</span>`;
+    }
+
+    input.value = '';
+  }
+
+  function parseCeoCommand(text) {
+    // scan / force scan
+    if (/^(scan|force scan|scan now|run scan|go scan|find trades)/.test(text))
+      return { command: 'force-scan', params: {}, feedback: 'Scan triggered. Agents are hunting for signals...' };
+
+    // pause all
+    if (/^(pause all|stop all|halt|freeze|stop everything|pause everything)/.test(text))
+      return { command: 'pause-all', params: {}, feedback: 'All agents paused.' };
+
+    // resume all
+    if (/^(resume all|start all|go|run|wake up|unpause all|start everything)/.test(text))
+      return { command: 'resume-all', params: {}, feedback: 'All agents resumed.' };
+
+    // pause specific agent
+    const pauseMatch = text.match(/^(pause|stop|halt|freeze)\s+(chart|trader|risk|sentiment)/);
+    if (pauseMatch)
+      return { command: 'pause-agent', params: { agent: pauseMatch[2] }, feedback: `${pauseMatch[2]} agent paused.` };
+
+    // resume specific agent
+    const resumeMatch = text.match(/^(resume|start|unpause|wake)\s+(chart|trader|risk|sentiment)/);
+    if (resumeMatch)
+      return { command: 'resume-agent', params: { agent: resumeMatch[2] }, feedback: `${resumeMatch[2]} agent resumed.` };
+
+    // reset specific agent
+    const resetMatch = text.match(/^(reset|fix|clear)\s+(chart|trader|risk|sentiment)/);
+    if (resetMatch)
+      return { command: 'reset-agent', params: { agent: resetMatch[2] }, feedback: `${resetMatch[2]} agent reset.` };
+
+    // status / refresh
+    if (/^(status|refresh|health|check|report|how are you|what.*doing)/.test(text))
+      return { command: 'status', params: {}, feedback: 'Refreshed.' };
+
+    return null;
+  }
+
   async function mcCommand(command, params) {
     try {
       const result = await api('POST', '/api/admin/agents/command', { command, params });
@@ -2878,7 +2954,7 @@
     addRiskLevel, saveRiskLevel, deleteRiskLevel,
     loadOpenPositions, emergencyCloseToken, emergencyCloseAll,
     fixBitunixPnl, debugBitunix, runBacktest, loadAiVersions, runAiOptimize,
-    mcRefresh, mcCommand, switchAdminTab,
+    mcRefresh, mcCommand, mcCeoCommand, mcCeoQuick, switchAdminTab,
   };
 
   // ----- Init -----
