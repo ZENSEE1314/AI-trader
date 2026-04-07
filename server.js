@@ -30,6 +30,17 @@ app.use('/api/risk-levels', require('./routes/risk-levels'));
 app.get('/health', (req, res) => res.json({ status: 'ok', uptime: process.uptime() }));
 app.use('/health/details', require('./health'));
 
+// Agent framework health endpoint
+app.get('/api/agents/health', (req, res) => {
+  try {
+    const { getCoordinator } = require('./agents');
+    const coordinator = getCoordinator();
+    res.json(coordinator.getHealth());
+  } catch (err) {
+    res.json({ error: err.message, agents: {} });
+  }
+});
+
 // Available trading pairs (cached 1 hour)
 let coinListCache = { data: null, ts: 0 };
 app.get('/api/coins', async (req, res) => {
