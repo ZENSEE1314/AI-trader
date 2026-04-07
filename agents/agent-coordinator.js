@@ -14,6 +14,7 @@ const { ChartAgent } = require('./chart-agent');
 const { TraderAgent } = require('./trader-agent');
 const { RiskAgent } = require('./risk-agent');
 const { SentimentAgent } = require('./sentiment-agent');
+const { AccountantAgent } = require('./accountant-agent');
 
 class AgentCoordinator extends BaseAgent {
   constructor(options = {}) {
@@ -22,6 +23,7 @@ class AgentCoordinator extends BaseAgent {
     this.traderAgent = new TraderAgent(options);
     this.riskAgent = new RiskAgent(options);
     this.sentimentAgent = new SentimentAgent(options);
+    this.accountantAgent = new AccountantAgent(options);
 
     // Agent registry — order matters for display
     this._agents = new Map();
@@ -29,6 +31,7 @@ class AgentCoordinator extends BaseAgent {
     this._agents.set('chart', this.chartAgent);
     this._agents.set('risk', this.riskAgent);
     this._agents.set('trader', this.traderAgent);
+    this._agents.set('accountant', this.accountantAgent);
 
     // Wire up inter-agent events
     this.chartAgent.on('signals', (data) => {
@@ -250,14 +253,18 @@ class AgentCoordinator extends BaseAgent {
     if (/^(performance|win|loss|how.*doing|results|pnl|profit)/.test(text)) {
       return this._buildPerformanceChat();
     }
-    if (/^(accountant|pnl|profit|loss|trade history|trades|check.*trade|fix.*pnl|wrong.*pnl|earnings|revenue|income)/.test(text)) {
+    // Accountant commands — audit and fix trades
+    if (/accountant|audit|check.*trad|fix.*trad|fix.*pnl|wrong.*pnl|correct.*pnl|recalc|recheck/.test(text)) {
+      return this._runAccountantAudit();
+    }
+    if (/^(pnl|profit|loss|trade history|trades|show.*trade|my.*trade|earnings|revenue|income|how much.*(made|lost|earn))/.test(text)) {
       return this._buildTradeHistoryChat();
     }
     if (/^(fee|commission|cost|how much.*pay|charges)/.test(text)) {
       return this._buildFeeChat();
     }
     if (/^(help|what can you|commands|how do i)/.test(text)) {
-      return { from: 'Coordinator', message: 'You can tell me:\n\n• "scan now" — hunt for trades\n• "pause/resume all" — control all agents\n• "pause/resume chart/trader/risk/sentiment" — control one agent\n• "status" — full team report\n• "what are you trading?" — open positions\n• "any signals?" — latest scan results\n• "market mood?" — sentiment report\n• "risk report" — risk exposure\n• "performance" — win/loss stats\n• "trade history" / "pnl" — last 10 trades with fees\n• "fees" — total fees paid' };
+      return { from: 'Coordinator', message: 'You can tell me:\n\n• "scan now" — hunt for trades\n• "pause/resume all" — control all agents\n• "pause/resume chart/trader/risk/sentiment" — control one agent\n• "status" — full team report\n• "what are you trading?" — open positions\n• "any signals?" — latest scan results\n• "market mood?" — sentiment report\n• "risk report" — risk exposure\n• "performance" — win/loss stats\n• "trade history" / "pnl" — last 10 trades with fees\n• "fees" — total fees paid\n• "accountant" / "audit trades" / "fix pnl" — audit & fix all trade records\n• "check trades" — recalculate PnL + recover missing fees' };
     }
 
     // Catch-all
@@ -365,6 +372,43 @@ class AgentCoordinator extends BaseAgent {
       return { from: 'Coordinator', message: lines.join('\n') };
     } catch {
       return { from: 'Coordinator', message: 'Can\'t load performance data right now.' };
+    }
+  }
+
+  async _runAccountantAudit() {
+    try {
+      this.addActivity('command', 'AccountantAgent audit triggered from chat');
+      const result = await this.accountantAgent.run({ mode: 'audit' });
+      if (!result) return { from: 'AccountantAgent', message: 'Audit skipped — agent may be paused.' };
+
+      const lines = [`**Trade Audit Complete**\n`];
+      lines.push(`Trades audited: ${result.totalAudited}`);
+      lines.push(`Issues found: ${result.issuesFound}`);
+      lines.push(`Fixed: ${result.fixed}`);
+      if (result.feesRecovered > 0) lines.push(`Fees recovered: $${result.feesRecovered.toFixed(2)}`);
+      if (result.issues && result.issues.length > 0) {
+        lines.push(`\n**Issues:**`);
+        for (const issue of result.issues.slice(0, 8)) {
+          lines.push(`• ${issue.symbol}: ${issue.problems.join(', ')}`);
+        }
+        if (result.issues.length > 8) lines.push(`...and ${result.issues.length - 8} more`);
+      }
+      if (result.issuesFound === 0) lines.push(`\nAll trades look correct.`);
+
+      // Also run financial report
+      const report = await this.accountantAgent.generateReport();
+      if (report && report.total > 0) {
+        lines.push(`\n**Financial Summary:**`);
+        lines.push(`${report.wins}W / ${report.losses}L (${report.winRate}% WR)`);
+        lines.push(`Gross P&L: $${report.totalGrossPnl}`);
+        lines.push(`Total fees: $${report.totalFees}`);
+        lines.push(`Net P&L: $${report.totalNetPnl}`);
+        lines.push(`Best: +$${report.bestTrade} | Worst: $${report.worstTrade}`);
+      }
+
+      return { from: 'AccountantAgent', message: lines.join('\n') };
+    } catch (err) {
+      return { from: 'AccountantAgent', message: `Audit failed: ${err.message}` };
     }
   }
 
