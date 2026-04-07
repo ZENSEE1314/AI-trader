@@ -1562,21 +1562,35 @@ async function syncTradeStatus() {
 
                   if (cp > 0 && p.symbol === trade.symbol && entryMatch && sideMatch && timeMatch) {
                     exitPrice = cp;
-                    // Use profit field if available (net of fees), otherwise realizedPNL
+                    // Log ALL raw fields so we can verify which one matches Bitunix dashboard
+                    bLog.system(`Bitunix RAW posHistory: ${trade.symbol} | ${JSON.stringify({
+                      entryPrice: p.entryPrice, closePrice: p.closePrice, side: p.side,
+                      realizedPNL: p.realizedPNL, profit: p.profit, pnl: p.pnl,
+                      fee: p.fee, funding: p.funding, qty: p.qty, volume: p.volume,
+                      marginMode: p.marginMode, leverage: p.leverage
+                    })}`);
+                    // Try all possible net P&L fields from Bitunix
                     const profit = parseFloat(p.profit || 0);
+                    const pnl = parseFloat(p.pnl || 0);
                     const rpnl = parseFloat(p.realizedPNL || 0);
                     const fee = Math.abs(parseFloat(p.fee || 0));
                     const funding = Math.abs(parseFloat(p.funding || 0));
-                    // profit = net P&L (after fees). If not available, compute from realizedPNL - fees
-                    realizedPnl = profit !== 0 ? profit : (rpnl - fee - funding);
+                    // Priority: profit > pnl > (realizedPNL - fee - funding)
+                    if (profit !== 0) {
+                      realizedPnl = profit;
+                    } else if (pnl !== 0) {
+                      realizedPnl = pnl;
+                    } else {
+                      realizedPnl = rpnl - fee - funding;
+                    }
                     found = true;
-                    bLog.system(`Bitunix posHistory: ${trade.symbol} entry=$${ep} exit=$${cp} profit=${profit} rpnl=${rpnl} fee=${fee} funding=${funding} => net=${realizedPnl}`);
+                    bLog.system(`Bitunix posHistory RESULT: ${trade.symbol} net=${realizedPnl} (used: ${profit !== 0 ? 'profit' : pnl !== 0 ? 'pnl' : 'rpnl-fee-funding'})`);
                     break;
                   }
                 }
               } catch (e) { bLog.error(`Bitunix posHistory error: ${e.message}`); }
 
-              // Method 2: Order history — CLOSE orders (realizedPNL here already includes fee)
+              // Method 2: Order history — CLOSE orders
               if (!found) {
                 try {
                   const orderList = await bxClient.getHistoryOrders({ symbol: trade.symbol, pageSize: 50 });
@@ -1588,10 +1602,25 @@ async function syncTradeStatus() {
 
                     if (isClose && oPrice > 0 && timeMatch) {
                       exitPrice = oPrice;
-                      const pnlVal = parseFloat(o.realizedPNL || 0);
-                      realizedPnl = pnlVal; // already net of fees
+                      bLog.system(`Bitunix RAW orderHistory: ${trade.symbol} | ${JSON.stringify({
+                        avgPrice: o.avgPrice, price: o.price, realizedPNL: o.realizedPNL,
+                        profit: o.profit, pnl: o.pnl, fee: o.fee, tradeSide: o.tradeSide,
+                        reduceOnly: o.reduceOnly, qty: o.qty
+                      })}`);
+                      const profit = parseFloat(o.profit || 0);
+                      const pnl = parseFloat(o.pnl || 0);
+                      const rpnl = parseFloat(o.realizedPNL || 0);
+                      const fee = Math.abs(parseFloat(o.fee || 0));
+                      // Priority: profit > pnl > realizedPNL > (realizedPNL - fee)
+                      if (profit !== 0) {
+                        realizedPnl = profit;
+                      } else if (pnl !== 0) {
+                        realizedPnl = pnl;
+                      } else if (rpnl !== 0) {
+                        realizedPnl = rpnl;
+                      }
                       found = true;
-                      bLog.system(`Bitunix orderHistory: ${trade.symbol} exit=$${oPrice} pnl=${pnlVal} net=${realizedPnl}`);
+                      bLog.system(`Bitunix orderHistory RESULT: ${trade.symbol} net=${realizedPnl} (used: ${profit !== 0 ? 'profit' : pnl !== 0 ? 'pnl' : 'rpnl'})`);
                       break;
                     }
                   }
