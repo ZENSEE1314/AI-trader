@@ -19,7 +19,7 @@ const REQUEST_TIMEOUT = 15000;
 const TOP_N_COINS = 100;
 const MIN_24H_VOLUME = 10_000_000;
 
-const SL_PCT = 0.03;           // 3% initial SL (overridden by strategyConfig)
+const SL_PCT = 0.25;           // 25% flat price distance SL for all tokens
 const TRAILING_STEP = 0.012;   // trail SL by 1.2% (overridden by strategyConfig)
 
 // Swing lengths per timeframe (defaults, overridden by strategyConfig)
@@ -399,13 +399,40 @@ async function analyzeLHHL(ticker, params, dailyBiasCache) {
     levelCheck = isAtKeyLevel(price, pdh, pdl, vwapBands, direction);
   }
 
-  // Step 3b: Volume Spike (conditional)
-  if (NEED_VOL) {
-    const vols = klines15m.slice(-20).map(k => parseFloat(k[5]));
-    const avg = vols.reduce((a, b) => a + b, 0) / vols.length;
-    if (avg > 0 && (vols.slice(-5).reduce((a, b) => a + b, 0) / 5) / avg < VOL_MULT) {
-      bLog.scan(`${symbol}: ${direction} no volume spike`);
+  // Step 3b: Directional Volume Confirmation (always on)
+  // Check that recent volume supports the trade direction:
+  // - LONG: more buying volume (green candles) than selling (red candles) in last 10 candles
+  // - SHORT: more selling volume than buying volume
+  // Also check for volume spike if config requires it
+  {
+    const recent = klines15m.slice(-10);
+    let buyVol = 0, sellVol = 0;
+    for (const k of recent) {
+      const o = parseFloat(k[1]), c = parseFloat(k[4]), v = parseFloat(k[5]);
+      if (c >= o) buyVol += v; else sellVol += v;
+    }
+    const totalVol = buyVol + sellVol;
+    const buyRatio = totalVol > 0 ? buyVol / totalVol : 0.5;
+    const sellRatio = totalVol > 0 ? sellVol / totalVol : 0.5;
+
+    // Block entries where volume clearly goes against the direction
+    if (direction === 'LONG' && sellRatio > 0.65) {
+      bLog.scan(`${symbol}: LONG blocked — selling pressure ${(sellRatio * 100).toFixed(0)}% > 65% (pullback risk)`);
       return null;
+    }
+    if (direction === 'SHORT' && buyRatio > 0.65) {
+      bLog.scan(`${symbol}: SHORT blocked — buying pressure ${(buyRatio * 100).toFixed(0)}% > 65% (pullback risk)`);
+      return null;
+    }
+
+    // Optional: also require a volume spike above average
+    if (NEED_VOL) {
+      const vols = klines15m.slice(-20).map(k => parseFloat(k[5]));
+      const avg = vols.reduce((a, b) => a + b, 0) / vols.length;
+      if (avg > 0 && (vols.slice(-5).reduce((a, b) => a + b, 0) / 5) / avg < VOL_MULT) {
+        bLog.scan(`${symbol}: ${direction} no volume spike`);
+        return null;
+      }
     }
   }
 
@@ -445,6 +472,27 @@ async function analyzeLHHL(ticker, params, dailyBiasCache) {
   if ((lastCandleIdx - entrySwing.index) > MAX_CANDLE_AGE) {
     bLog.scan(`${symbol}: 1M swing too old (${lastCandleIdx - entrySwing.index} candles) — stale`);
     return null;
+  }
+
+  // Step 5b: 1M Momentum Check — reject if last 5 candles pull back hard
+  // Prevents entering right as price reverses against our direction
+  {
+    const last5 = klines1m.slice(-5);
+    if (last5.length >= 5) {
+      const startPrice = parseFloat(last5[0][1]);
+      const endPrice = parseFloat(last5[last5.length - 1][4]);
+      const movePct = (endPrice - startPrice) / startPrice;
+      // LONG but price dropping > 0.3% in last 5 min = active pullback
+      if (direction === 'LONG' && movePct < -0.003) {
+        bLog.scan(`${symbol}: LONG rejected — 1m pullback ${(movePct * 100).toFixed(2)}% (active selling)`);
+        return null;
+      }
+      // SHORT but price rising > 0.3% in last 5 min = active bounce
+      if (direction === 'SHORT' && movePct > 0.003) {
+        bLog.scan(`${symbol}: SHORT rejected — 1m bounce +${(movePct * 100).toFixed(2)}% (active buying)`);
+        return null;
+      }
+    }
   }
 
   // ┌─────────────────────────────────────────────────────────┐
