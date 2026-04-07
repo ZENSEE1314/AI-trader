@@ -36,6 +36,7 @@ app.post('/api/chatbot', async (req, res) => {
     const { message } = req.body;
     if (!message) return res.status(400).json({ reply: 'Please type a message.' });
     const { think, isAvailable } = require('./agents/ai-brain');
+    console.log(`[CHATBOT] AI available: ${isAvailable()} | key set: ${!!process.env.ANTHROPIC_API_KEY}`);
     if (isAvailable()) {
       const reply = await think({
         agentName: 'CustomerBot',

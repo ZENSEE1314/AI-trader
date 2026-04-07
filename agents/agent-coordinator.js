@@ -290,9 +290,8 @@ class AgentCoordinator extends BaseAgent {
     if (/^(fee|commission|cost|how much.*pay|charges)/.test(text)) {
       return this._buildFeeChat();
     }
-    // Create agent
-    const createMatch = text.match(/(?:create|add|make|build|new|hire|spawn)\s+(?:a\s+|an\s+)?(?:agent|watcher|bot)?\s*(?:to\s+|for\s+|that\s+)?(?:watch|monitor|track|follow)?\s*(.+)/);
-    if (createMatch || /^(create|add|make|build|new|hire|spawn)\s/.test(text)) {
+    // Create watcher agent — only when explicitly asking to watch/monitor coins
+    if (/(?:create|add|make|new|hire|spawn)\s+(?:a\s+|an\s+)?(?:watcher|agent)\s+(?:to\s+|for\s+)?(?:watch|monitor|track|follow)\s/i.test(text)) {
       return this._handleCreateAgent(text, message);
     }
 
@@ -322,53 +321,72 @@ class AgentCoordinator extends BaseAgent {
       return { from: 'Coordinator', message: lines.join('\n') };
     }
 
-    if (/^(help|what can you|commands|how do i)/.test(text)) {
-      return { from: 'Coordinator', message: 'You can tell me:\n\n**Trading:**\n• "scan now" — hunt for trades\n• "any signals?" — latest scan results\n• "what are you trading?" — open positions\n\n**Agents:**\n• "status" — full team report\n• "team" — list all agents\n• "pause/resume chart/trader/risk/sentiment" — control agents\n• "create agent to watch BTCUSDT" — add a watcher\n• "remove <agent>" — delete custom agent\n\n**Analysis:**\n• "market mood?" — sentiment report\n• "risk report" — risk exposure\n• "performance" — win/loss stats\n• "audit trades" — accountant fixes PnL\n• "trade history" — last 10 trades\n• "fees" — total fees paid\n• "what do you remember?" — agent memories & lessons' };
-    }
-
-    // ── AI-powered response: route to the right agent's brain ──
-    const { isAvailable: aiAvailable } = require('./ai-brain');
+    // ── AI-powered response (primary handler for all questions) ──
+    const { isAvailable: aiAvailable, think, getSystemPrompt } = require('./ai-brain');
     if (aiAvailable()) {
-      // Determine which agent should answer
+      // Route to the right agent
       let targetAgent = null;
-      let targetName = 'Coordinator';
-
-      // Check if mentioning a specific agent
       for (const [name, agent] of this._agents) {
         if (text.includes(name) || text.includes(agent.name.toLowerCase())) {
           targetAgent = agent;
-          targetName = agent.name;
           break;
         }
       }
-
-      // Keyword routing if no agent named
+      // Keyword routing
       if (!targetAgent) {
         if (/smc|smart money|swing|scan|signal|setup|timeframe|candle|chart/.test(text)) targetAgent = this.chartAgent;
-        else if (/trail|stop.?loss|tp|take.?profit|position|execut|entry|exit|order|trade/.test(text)) targetAgent = this.traderAgent;
+        else if (/trail|stop.?loss|tp|take.?profit|position|execut|entry|exit|order/.test(text)) targetAgent = this.traderAgent;
         else if (/risk|exposure|max.?pos|drawdown|correlat|safe|block|reject/.test(text)) targetAgent = this.riskAgent;
         else if (/mood|sentiment|bull|bear|fomo|fud|news|trend|market/.test(text)) targetAgent = this.sentimentAgent;
         else if (/audit|pnl|fee|accountant|fix.*trade|check.*trade/.test(text)) targetAgent = this.accountantAgent;
       }
 
       const agent = targetAgent || this;
-      const answer = await (agent.explain ? agent.explain(message) : Promise.resolve(null));
-      if (answer) return { from: agent.name || targetName, message: answer };
+      const agentName = agent.name || 'Coordinator';
+
+      // Build context from agent + system state
+      const context = {
+        health: agent.getHealth ? agent.getHealth() : {},
+        profile: agent.getProfile ? agent.getProfile() : {},
+        recentActivity: agent.getActivity ? agent.getActivity(5) : [],
+      };
+      if (agent._getAIContext) Object.assign(context, await agent._getAIContext());
+
+      // Also add memories if available
+      try {
+        if (agent.recallAll) {
+          const memories = await agent.recallAll();
+          if (memories.length) context.memories = memories.slice(0, 10).map(m => ({ key: m.key, value: m.value, category: m.category }));
+        }
+        if (agent.getLessons) {
+          const lessons = await agent.getLessons(null, 5);
+          if (lessons.length) context.lessons = lessons.map(l => ({ type: l.type, lesson: l.lesson, score: l.score }));
+        }
+      } catch {}
+
+      const aiReply = await think({ agentName, systemPrompt: getSystemPrompt(agentName), userMessage: message, context });
+      if (aiReply) return { from: agentName, message: aiReply };
     }
 
-    // Fallback: hardcoded responses for when no AI key
-    if (/smc|smart money|swing|scan|signal|setup|timeframe|candle/.test(text)) {
-      return { from: this.chartAgent.name, message: await this.chartAgent.explain(message) };
+    // ── Fallback: no API key — use hardcoded explain() ──
+    if (/^(help|what can you|commands)/.test(text)) {
+      return { from: 'Coordinator', message: 'Set ANTHROPIC_API_KEY on Railway for smart AI responses.\n\nCommands that always work:\n• scan now\n• status / team\n• pause/resume <agent>\n• audit trades\n• create agent to watch BTCUSDT\n• help' };
     }
-    if (/trail|stop.?loss|tp|take.?profit|position|execut|entry|exit|order/.test(text)) {
-      return { from: this.traderAgent.name, message: await this.traderAgent.explain(message) };
+    // Route to agent explain fallback
+    let fallbackAgent = null;
+    for (const [name, agent] of this._agents) {
+      if (text.includes(name) || text.includes(agent.name.toLowerCase())) { fallbackAgent = agent; break; }
     }
-    if (/risk|exposure|max.?pos|drawdown|correlat|safe/.test(text)) {
-      return { from: this.riskAgent.name, message: await this.riskAgent.explain(message) };
+    if (!fallbackAgent) {
+      if (/smc|scan|signal|chart/.test(text)) fallbackAgent = this.chartAgent;
+      else if (/trail|stop|position|trade/.test(text)) fallbackAgent = this.traderAgent;
+      else if (/risk|drawdown/.test(text)) fallbackAgent = this.riskAgent;
+      else if (/mood|sentiment/.test(text)) fallbackAgent = this.sentimentAgent;
+      else if (/audit|pnl|fee/.test(text)) fallbackAgent = this.accountantAgent;
     }
+    if (fallbackAgent) return { from: fallbackAgent.name, message: await fallbackAgent.explain(message) };
 
-    // Catch-all
-    return { from: 'Coordinator', message: `I don't know how to do "${message}" yet. Here's what I can do:\n\n• **scan now** — find trades\n• **status** / **team** — check agents\n• **audit trades** — fix PnL\n• **create agent to watch BTCUSDT** — add watcher\n• **help** — full command list` };
+    return { from: 'Coordinator', message: `Set **ANTHROPIC_API_KEY** on Railway for AI-powered responses. Without it, I can only run commands like "scan now", "status", "audit trades", etc. Type "help" for the full list.` };
   }
 
   _buildStatusChat() {
@@ -704,6 +722,17 @@ class AgentCoordinator extends BaseAgent {
   }
 
   // ── Health & Status ───────────────────────────────────────
+
+  async _getAIContext() {
+    const agentSummary = {};
+    for (const [key, agent] of this._agents) {
+      const h = agent.getHealth();
+      agentSummary[key] = { name: h.name, state: h.state, paused: h.paused, runCount: h.runCount };
+    }
+    let openTrades = 0;
+    try { const { query } = require('../db'); const r = await query("SELECT COUNT(*) as c FROM trades WHERE status = 'OPEN'"); openTrades = parseInt(r[0].c); } catch {}
+    return { agents: agentSummary, cycleRunning: this.cycleRunning, totalCycles: this.runCount, openTrades };
+  }
 
   getAgentHealthSummary() {
     const summary = {};
