@@ -290,6 +290,8 @@ async function initAllTables() {
       created_at TIMESTAMPTZ DEFAULT NOW()
     )`,
     `ALTER TABLE global_token_settings ADD COLUMN IF NOT EXISTS "rank" INTEGER DEFAULT 999`,
+    `ALTER TABLE global_token_settings ADD COLUMN IF NOT EXISTS risk_tag VARCHAR(20) DEFAULT NULL`,
+    `ALTER TABLE global_token_settings ADD COLUMN IF NOT EXISTS featured BOOLEAN DEFAULT false`,
     // Per-key per-token user leverage overrides
     `CREATE TABLE IF NOT EXISTS user_token_leverage (
       id SERIAL PRIMARY KEY,

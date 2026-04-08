@@ -2884,6 +2884,15 @@ img[src*="logo"] {
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
 .signal-card:hover { border-color: rgba(0, 229, 255, 0.3); }
+.risk-badge {
+  position: absolute; top: -1px; right: -1px;
+  font-size: 0.55rem; font-weight: 700; text-transform: uppercase;
+  padding: 1px 5px; border-radius: 0 6px 0 6px; letter-spacing: 0.3px;
+}
+.risk-low { background: var(--color-success); color: #000; }
+.risk-med { background: var(--color-warning); color: #000; }
+.risk-high { background: var(--color-danger); color: #fff; }
+.risk-pop { background: linear-gradient(135deg, #f59e0b, #ef4444); color: #fff; }
 .signal-card.signal-long { border-left: 3px solid var(--color-success); }
 .signal-card.signal-short { border-left: 3px solid var(--color-danger); }
 .signal-card.signal-none { border-left: 3px solid var(--color-border-muted); opacity: 0.6; }

@@ -1277,6 +1277,7 @@
       loadGlobalTokens();
       loadTokenLeverage();
       loadRiskLevels();
+      adminLoadTokenBoard();
       // Mission Control
       mcRefresh();
     } catch (err) { showToast('Failed to load admin.', 'error'); }
@@ -1598,8 +1599,15 @@
           const signalDot = dir === 'LONG' ? '<span style="color:var(--color-success);font-size:0.65rem;">LONG</span>'
             : dir === 'SHORT' ? '<span style="color:var(--color-danger);font-size:0.65rem;">SHORT</span>'
             : '';
+          const riskTag = t.riskTag;
+          const riskBadge = riskTag === 'low' ? '<span class="risk-badge risk-low">Low</span>'
+            : riskTag === 'medium' ? '<span class="risk-badge risk-med">Med</span>'
+            : riskTag === 'high' ? '<span class="risk-badge risk-high">High</span>'
+            : riskTag === 'popular' ? '<span class="risk-badge risk-pop">Hot</span>'
+            : '';
 
           return `<div class="signal-card ${dir ? (dir === 'LONG' ? 'signal-long' : 'signal-short') : 'signal-none'} ${on ? 'signal-watching' : ''}" style="position:relative;">
+            ${riskBadge}
             <div style="display:flex;justify-content:space-between;align-items:center;">
               <span class="signal-card-sym">${coin}</span>
               <label class="token-switch">
@@ -1653,6 +1661,61 @@
       await api('POST', '/api/dashboard/watchlist/bulk', { symbols: _allTokenSymbols, enabled: enable });
       showToast(enable ? 'All tokens ON' : 'All tokens OFF', 'success');
       loadSignalBoard();
+    } catch (err) { showToast(err.message, 'error'); }
+  }
+
+  // ── Admin Token Board ─────────────────────────────────
+  async function adminLoadTokenBoard() {
+    try {
+      const tokens = await api('GET', '/api/admin/token-board');
+      const tbody = document.getElementById('admin-board-tbody');
+      const empty = document.getElementById('admin-board-empty');
+      if (!tbody) return;
+      if (!tokens.length) { tbody.innerHTML = ''; if (empty) empty.style.display = ''; return; }
+      if (empty) empty.style.display = 'none';
+      tbody.innerHTML = tokens.filter(t => t.risk_tag || t.featured).map(t => {
+        const coin = t.symbol.replace('USDT', '');
+        return `<tr>
+          <td><strong>${escapeHtml(t.symbol)}</strong></td>
+          <td>
+            <select class="form-input" style="font-size:0.8rem;padding:2px 6px;width:120px;" onchange="window.CryptoBot.adminSetRiskTag('${t.symbol}',this.value)">
+              <option value="" ${!t.risk_tag ? 'selected' : ''}>None</option>
+              <option value="popular" ${t.risk_tag === 'popular' ? 'selected' : ''}>Popular</option>
+              <option value="low" ${t.risk_tag === 'low' ? 'selected' : ''}>Low Risk</option>
+              <option value="medium" ${t.risk_tag === 'medium' ? 'selected' : ''}>Medium Risk</option>
+              <option value="high" ${t.risk_tag === 'high' ? 'selected' : ''}>High Risk</option>
+            </select>
+          </td>
+          <td><button class="btn btn-danger btn-sm" style="font-size:0.7rem;" onclick="window.CryptoBot.adminRemoveTokenBoard('${t.symbol}')">Remove</button></td>
+        </tr>`;
+      }).join('');
+    } catch (err) { showToast(err.message, 'error'); }
+  }
+
+  async function adminAddTokenBoard() {
+    const sym = document.getElementById('admin-board-symbol')?.value?.trim().toUpperCase();
+    const risk = document.getElementById('admin-board-risk')?.value || null;
+    if (!sym) { showToast('Enter a symbol', 'error'); return; }
+    try {
+      await api('POST', '/api/admin/token-board/add', { symbol: sym, risk_tag: risk });
+      showToast(`${sym} added`, 'success');
+      document.getElementById('admin-board-symbol').value = '';
+      adminLoadTokenBoard();
+    } catch (err) { showToast(err.message, 'error'); }
+  }
+
+  async function adminSetRiskTag(symbol, tag) {
+    try {
+      await api('PUT', `/api/admin/token-board/${symbol}/risk`, { risk_tag: tag || null });
+      showToast(`${symbol}: ${tag || 'no tag'}`, 'success');
+    } catch (err) { showToast(err.message, 'error'); }
+  }
+
+  async function adminRemoveTokenBoard(symbol) {
+    try {
+      await api('DELETE', `/api/admin/token-board/${symbol}`);
+      showToast(`${symbol} removed`, 'success');
+      adminLoadTokenBoard();
     } catch (err) { showToast(err.message, 'error'); }
   }
 
@@ -3140,6 +3203,7 @@
     fixBitunixPnl, debugBitunix, runBacktest, loadAiVersions, runAiOptimize,
     mcRefresh, mcCommand, mcChat, mcChatQuick, switchAdminTab, customerChat,
     loadSignalBoard, toggleWatch, watchAll,
+    adminLoadTokenBoard, adminAddTokenBoard, adminSetRiskTag, adminRemoveTokenBoard,
     mcToggleSkill, mcUpdateConfig, mcCreateAgent, mcRemoveAgent,
   };
 

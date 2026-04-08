@@ -626,13 +626,22 @@ router.get('/signal-board', async (req, res) => {
     const watchMap = {};
     for (const w of watchlist) watchMap[w.symbol] = w.enabled;
 
-    // Merge: top coins + signal status + watchlist
+    // Get admin risk tags
+    let riskTags = {};
+    try {
+      const tags = await query('SELECT symbol, risk_tag, featured FROM global_token_settings WHERE risk_tag IS NOT NULL OR featured = true');
+      for (const t of tags) riskTags[t.symbol] = { risk: t.risk_tag, featured: t.featured };
+    } catch {}
+
+    // Merge: top coins + signal status + watchlist + risk tags
     const tokens = topCoins.map(c => ({
       ...c,
       signal: board.tokens[c.symbol] || null,
       direction: board.tokens[c.symbol]?.direction || null,
       score: board.tokens[c.symbol]?.score || 0,
       watching: watchMap[c.symbol] === true,
+      riskTag: riskTags[c.symbol]?.risk || null,
+      featured: riskTags[c.symbol]?.featured || false,
     }));
 
     res.json({ tokens, lastScanAt: board.lastScanAt, dailyResults, watchlist: watchMap });
