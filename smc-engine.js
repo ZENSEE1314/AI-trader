@@ -19,8 +19,8 @@ const REQUEST_TIMEOUT = 15000;
 const TOP_N_COINS = 100;
 const MIN_24H_VOLUME = 10_000_000;
 
-const SL_PCT = 0.05;           // 5% price distance SL
-const TP_PCT = 0.10;           // 10% price distance TP (RR 1:2)
+const SL_PCT = 0.005;          // 0.5% price distance = 10% capital at 20x lev
+const TP_PCT = 0.01;           // 1% price distance = 20% capital at 20x lev (RR 1:2)
 const TRAILING_STEP = 0.012;   // trail SL by 1.2% after TP reached
 
 // Swing lengths per timeframe (defaults, overridden by strategyConfig)
