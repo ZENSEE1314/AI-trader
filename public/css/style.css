@@ -3988,31 +3988,19 @@ img[src*="logo"] {
 
 .crypto-network-section {
   position: relative;
-  height: 280vh;
-  padding: 0;
+  padding: var(--space-16) 0;
   margin: 0;
-  overflow: visible;
 }
 
 .crypto-network-stage {
   position: relative;
-  height: 100vh;
+  min-height: 560px;
   width: 100%;
   display: flex;
   align-items: center;
   justify-content: center;
-  overflow: hidden;
+  overflow: visible;
   z-index: var(--z-base);
-}
-.crypto-network-stage.cn-fixed {
-  position: fixed;
-  top: 0;
-  left: 0;
-}
-.crypto-network-stage.cn-bottom {
-  position: absolute;
-  bottom: 0;
-  top: auto;
 }
 
 /* --- Background Atmosphere --- */
@@ -4450,7 +4438,7 @@ img[src*="logo"] {
 
 @media (max-width: 768px) {
   .crypto-network-section {
-    height: 220vh;
+    padding: var(--space-10) 0;
   }
 
   .cn-perspective {
@@ -4519,7 +4507,7 @@ img[src*="logo"] {
 
 @media (max-width: 480px) {
   .crypto-network-section {
-    height: 200vh;
+    padding: var(--space-8) 0;
   }
 
   .cn-perspective {
