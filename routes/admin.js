@@ -386,6 +386,22 @@ router.put('/users/:id/approve-no-sub', async (req, res) => {
   }
 });
 
+// Change user role (admin/user)
+router.put('/users/:id/role', async (req, res) => {
+  try {
+    const { is_admin } = req.body;
+    const targetId = parseInt(req.params.id);
+    if (targetId === req.userId) {
+      return res.status(400).json({ error: 'Cannot change your own role' });
+    }
+    await query('UPDATE users SET is_admin = $1 WHERE id = $2', [!!is_admin, targetId]);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Change role error:', err.message);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // Block/unblock user
 router.put('/users/:id/block', async (req, res) => {
   try {
@@ -2866,6 +2882,7 @@ router.post('/fix-trades', async (req, res) => {
   try {
     const cryptoUtils = require('../crypto-utils');
     const { USDMClient } = require('binance');
+    const { BitunixClient } = require('../bitunix-client');
     let getBinanceRequestOptions;
     try { getBinanceRequestOptions = require('../proxy-agent').getBinanceRequestOptions; } catch { getBinanceRequestOptions = () => ({}); }
 
@@ -2912,28 +2929,52 @@ router.post('/fix-trades', async (req, res) => {
       let actualExit = null;
       let actualPnl = null;
 
-      if (t.platform === 'binance' && qty > 0) {
+      if (qty > 0) {
         try {
           const apiKey = cryptoUtils.decrypt(t.api_key_enc, t.iv, t.auth_tag);
           const apiSecret = cryptoUtils.decrypt(t.api_secret_enc, t.secret_iv, t.secret_auth_tag);
-          const client = new USDMClient({ api_key: apiKey, api_secret: apiSecret }, getBinanceRequestOptions());
 
-          const openTime = new Date(t.created_at).getTime();
-          const fills = await client.getAccountTradeList({ symbol: t.symbol, startTime: openTime, limit: 50 });
+          if (t.platform === 'binance') {
+            const client = new USDMClient({ api_key: apiKey, api_secret: apiSecret }, getBinanceRequestOptions());
+            const openTime = new Date(t.created_at).getTime();
+            const fills = await client.getAccountTradeList({ symbol: t.symbol, startTime: openTime, limit: 50 });
 
-          if (fills && fills.length > 0) {
-            const closeSide = isLong ? 'SELL' : 'BUY';
-            const closeFills = fills.filter(f => f.side === closeSide);
-            if (closeFills.length > 0) {
-              let totalQty = 0, totalValue = 0, totalRealizedPnl = 0;
-              for (const f of closeFills) {
-                const fQty = parseFloat(f.qty);
-                totalQty += fQty;
-                totalValue += fQty * parseFloat(f.price);
-                totalRealizedPnl += parseFloat(f.realizedPnl || 0);
+            if (fills && fills.length > 0) {
+              const closeSide = isLong ? 'SELL' : 'BUY';
+              const closeFills = fills.filter(f => f.side === closeSide);
+              if (closeFills.length > 0) {
+                let totalQty = 0, totalValue = 0, totalRealizedPnl = 0;
+                for (const f of closeFills) {
+                  const fQty = parseFloat(f.qty);
+                  totalQty += fQty;
+                  totalValue += fQty * parseFloat(f.price);
+                  totalRealizedPnl += parseFloat(f.realizedPnl || 0);
+                }
+                if (totalQty > 0) actualExit = totalValue / totalQty;
+                if (totalRealizedPnl !== 0) actualPnl = totalRealizedPnl;
               }
-              if (totalQty > 0) actualExit = totalValue / totalQty;
-              if (totalRealizedPnl !== 0) actualPnl = totalRealizedPnl;
+            }
+          } else if (t.platform === 'bitunix') {
+            const bxClient = new BitunixClient({ apiKey, apiSecret });
+            const positions = await bxClient.getHistoryPositions({ symbol: t.symbol, pageSize: 50 });
+            const tradeEntry = entry;
+            const tradeSideLong = isLong;
+
+            for (const p of positions) {
+              const cp = parseFloat(p.closePrice || p.avgClosePrice || 0);
+              const ep = parseFloat(p.entryPrice || p.avgOpenPrice || 0);
+              const pSideLong = (p.side || '').toUpperCase() === 'LONG';
+              const entryMatch = ep > 0 && Math.abs(ep - tradeEntry) / tradeEntry < 0.002;
+              const sideMatch = pSideLong === tradeSideLong;
+
+              if (cp > 0 && p.symbol === t.symbol && entryMatch && sideMatch) {
+                actualExit = cp;
+                const profit = parseFloat(p.profit || 0);
+                const pnl = parseFloat(p.pnl || 0);
+                if (profit !== 0) actualPnl = profit;
+                else if (pnl !== 0) actualPnl = pnl;
+                break;
+              }
             }
           }
         } catch (e) {

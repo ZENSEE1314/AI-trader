@@ -2910,17 +2910,22 @@
       const timerColor = isOverdue ? 'var(--color-danger)' : daysLeft <= 2 ? 'var(--color-danger)' : daysLeft <= 4 ? '#f59e0b' : 'var(--color-success)';
       const timerText = formatCountdown(msLeft);
 
+      const roleBtn = u.is_admin
+        ? `<button class="btn btn-sm" style="font-size:0.7rem;padding:2px 8px;background:var(--color-accent);color:#fff;border:none;" onclick="window.CryptoBot.adminChangeRole(${u.id},'${escapeHtml(u.email)}',false)">Demote</button>`
+        : `<button class="btn btn-sm" style="font-size:0.7rem;padding:2px 8px;background:#8b5cf6;color:#fff;border:none;" onclick="window.CryptoBot.adminChangeRole(${u.id},'${escapeHtml(u.email)}',true)">Make Admin</button>`;
+
       return `<tr>
-      <td>${escapeHtml(u.email)}${u.is_admin ? ' <b>(admin)</b>' : ''}</td>
+      <td>${escapeHtml(u.email)}${u.is_admin ? ' <span style="color:var(--color-accent);font-size:0.7rem;font-weight:700;">ADMIN</span>' : ''}</td>
       <td>${u.key_count}</td>
       <td class="text-mono">$${bal} <button class="btn btn-ghost btn-sm" style="font-size:0.7rem;padding:2px 6px;" onclick="window.CryptoBot.adminEditWallet(${u.id},'${escapeHtml(u.email)}',${bal})">Edit</button></td>
       <td>${escapeHtml(u.referral_code || '-')}</td>
       <td>${formatDate(u.created_at)}</td>
       <td style="white-space:nowrap;"><span class="admin-timer-badge" data-due="${dueMs}" style="color:${timerColor};font-size:0.8rem;font-weight:600;font-family:var(--font-mono);">${timerText}</span></td>
-      <td style="white-space:nowrap;">
+      <td style="white-space:nowrap;display:flex;gap:4px;align-items:center;">
         ${u.is_blocked
           ? `<button class="btn btn-primary btn-sm" onclick="window.CryptoBot.adminAction('unblock',${u.id})">Unblock</button>`
           : `<button class="btn btn-danger btn-sm" onclick="window.CryptoBot.adminAction('block',${u.id})">Block</button>`}
+        ${roleBtn}
       </td>
     </tr>`;
     }).join('');
@@ -2974,6 +2979,16 @@
     try {
       await api('PUT', `/api/admin/users/${userId}/block`, { blocked: action === 'block' });
       showToast(`User ${action}ed`, 'success');
+      loadAdmin();
+    } catch (err) { showToast(err.message, 'error'); }
+  }
+
+  async function adminChangeRole(userId, email, makeAdmin) {
+    const action = makeAdmin ? 'promote to Admin' : 'demote to User';
+    if (!confirm(`${action} for ${email}?`)) return;
+    try {
+      await api('PUT', `/api/admin/users/${userId}/role`, { is_admin: makeAdmin });
+      showToast(`${email} ${makeAdmin ? 'promoted to Admin' : 'demoted to User'}`, 'success');
       loadAdmin();
     } catch (err) { showToast(err.message, 'error'); }
   }
@@ -3348,7 +3363,7 @@
     toggleSettings, saveSettings, deleteKey, showToast, syncSlider, syncNum, saveProfile, changePassword,
     togglePause,
     submitTopUp, saveUsdtAddress, withdrawFromWallet, payWeekly,
-    adminAction, adminSub, adminWd, saveAdminSettings, adminEditWallet, clearErrors,
+    adminAction, adminChangeRole, adminSub, adminWd, saveAdminSettings, adminEditWallet, clearErrors,
     adminEditSplit, adminPauseKey, adminResumeKey, adminMarkPaid, adminFixTrades, adminClearTestData,
     goToAuth, showLoginForm, onPlatformChange,
     searchCoins, addCoin, removeCoin,
