@@ -1,60 +1,61 @@
 /* ============================================================
    Design Tokens — CryptoBot Dashboard
-   Principle: Futuristic 3D Tech Terminal
-   Aesthetic: Glassmorphism + neon glow accents on deep dark layers.
+   Principle: Premium Gold Luxury Terminal
+   Aesthetic: Glassmorphism + warm gold accents on deep dark layers.
    ============================================================ */
 
 :root {
-  /* --- Colors: Core (deep layered darks) --- */
-  --color-bg:          #060a10;
-  --color-bg-base:     #060a10;
-  --color-bg-raised:   #0c1219;
-  --color-bg-inset:    #080d14;
-  --color-surface:     #0f1620;
-  --color-surface-alt: #141c28;
-  --color-border:      #1e2d3d;
-  --color-border-muted:#152030;
+  /* --- Colors: Core (warm dark base) --- */
+  --color-bg:          #08070c;
+  --color-bg-base:     #08070c;
+  --color-bg-raised:   #110f18;
+  --color-bg-inset:    #0a0910;
+  --color-surface:     #14121e;
+  --color-surface-alt: #1a1726;
+  --color-border:      #2a2438;
+  --color-border-muted:#1e1830;
 
-  /* --- Colors: Text --- */
-  --color-fg:          #e0eaf5;
-  --color-fg-muted:    #7a8da0;
-  --color-fg-subtle:   #4d6072;
-  --color-text:        #e0eaf5;
-  --color-text-muted:  #7a8da0;
+  /* --- Colors: Text (warm whites) --- */
+  --color-fg:          #f0e8df;
+  --color-fg-muted:    #9a8e80;
+  --color-fg-subtle:   #6a5f52;
+  --color-text:        #f0e8df;
+  --color-text-muted:  #9a8e80;
 
-  /* --- Colors: Accent (refined cyan — slightly warmer for premium feel) --- */
-  --color-accent:      #00d4f5;
-  --color-accent-fg:   #060a10;
-  --color-accent-muted:rgba(0, 212, 245, 0.10);
-  --color-accent-hover:#2aeaff;
-  --color-primary:     #00d4f5;
-  --color-accent-soft: rgba(0, 212, 245, 0.06);
+  /* --- Colors: Accent (GOLD — primary across all pages) --- */
+  --color-accent:      #d4af37;
+  --color-accent-fg:   #08070c;
+  --color-accent-muted:rgba(212, 175, 55, 0.10);
+  --color-accent-hover:#e8c84a;
+  --color-primary:     #d4af37;
+  --color-accent-soft: rgba(212, 175, 55, 0.06);
+  --color-accent-dim:  #b8922a;
 
   /* --- Colors: Semantic --- */
-  --color-success:     #00ff88;
-  --color-success-muted:rgba(0, 255, 136, 0.1);
-  --color-danger:      #ff3860;
-  --color-danger-muted:rgba(255, 56, 96, 0.1);
-  --color-danger-hover:#ff5275;
-  --color-warning:     #ffb020;
-  --color-warning-muted:rgba(255, 176, 32, 0.1);
-  --color-info:        #5b9eff;
-  --color-info-muted:  rgba(91, 158, 255, 0.1);
+  --color-success:     #34d399;
+  --color-success-muted:rgba(52, 211, 153, 0.1);
+  --color-danger:      #f43f5e;
+  --color-danger-muted:rgba(244, 63, 94, 0.1);
+  --color-danger-hover:#fb7185;
+  --color-warning:     #fbbf24;
+  --color-warning-muted:rgba(251, 191, 36, 0.1);
+  --color-info:        #60a5fa;
+  --color-info-muted:  rgba(96, 165, 250, 0.1);
 
   /* --- Colors: Platform badges --- */
   --color-binance:     #f0b90b;
   --color-bitunix:     #7c7fff;
   --color-okx:         #fff;
 
-  /* --- Neon glow helpers (subtler for premium feel) --- */
-  --glow-cyan:         0 0 16px rgba(0, 212, 245, 0.18), 0 0 48px rgba(0, 212, 245, 0.06);
-  --glow-green:        0 0 16px rgba(0, 255, 136, 0.15), 0 0 48px rgba(0, 255, 136, 0.05);
-  --glow-red:          0 0 16px rgba(255, 56, 96, 0.15), 0 0 48px rgba(255, 56, 96, 0.05);
-  --glow-gold:         0 0 16px rgba(212, 175, 55, 0.2), 0 0 48px rgba(212, 175, 55, 0.06);
+  /* --- Glow helpers (warm gold tones) --- */
+  --glow-cyan:         0 0 16px rgba(212, 175, 55, 0.2), 0 0 48px rgba(212, 175, 55, 0.06);
+  --glow-green:        0 0 16px rgba(52, 211, 153, 0.15), 0 0 48px rgba(52, 211, 153, 0.05);
+  --glow-red:          0 0 16px rgba(244, 63, 94, 0.15), 0 0 48px rgba(244, 63, 94, 0.05);
+  --glow-gold:         0 0 16px rgba(212, 175, 55, 0.25), 0 0 48px rgba(212, 175, 55, 0.08);
 
-  /* --- Glass effect --- */
-  --glass-bg:          rgba(12, 18, 28, 0.65);
-  --glass-border:      rgba(0, 229, 255, 0.08);
+  /* --- Glass effect (warm tint) --- */
+  --glass-bg:          rgba(17, 15, 24, 0.7);
+  --glass-border:      rgba(212, 175, 55, 0.06);
   --glass-blur:        16px;
 
   /* --- Spacing --- */
@@ -78,13 +79,13 @@
   --radius-xl:   20px;
   --radius-full: 9999px;
 
-  /* --- Shadows (3D depth) --- */
-  --shadow-sm:    0 1px 3px rgba(0,0,0,.5), 0 0 1px rgba(0,229,255,0.03);
-  --shadow-md:    0 4px 16px rgba(0,0,0,.6), 0 0 1px rgba(0,229,255,0.05);
-  --shadow-lg:    0 8px 32px rgba(0,0,0,.7), 0 0 1px rgba(0,229,255,0.06);
-  --shadow-xl:    0 20px 60px rgba(0,0,0,.8), 0 0 1px rgba(0,229,255,0.08);
+  /* --- Shadows (warm depth) --- */
+  --shadow-sm:    0 1px 3px rgba(0,0,0,.5), 0 0 1px rgba(212,175,55,0.03);
+  --shadow-md:    0 4px 16px rgba(0,0,0,.6), 0 0 1px rgba(212,175,55,0.04);
+  --shadow-lg:    0 8px 32px rgba(0,0,0,.7), 0 0 1px rgba(212,175,55,0.05);
+  --shadow-xl:    0 20px 60px rgba(0,0,0,.8), 0 0 1px rgba(212,175,55,0.06);
   --shadow-inner: inset 0 2px 6px rgba(0,0,0,.5);
-  --shadow-glow:  0 0 24px rgba(0,229,255,0.2), 0 4px 16px rgba(0,0,0,.4);
+  --shadow-glow:  0 0 24px rgba(212,175,55,0.15), 0 4px 16px rgba(0,0,0,.4);
 
   /* --- 3D Card perspective --- */
   --card-3d-hover: perspective(800px) rotateX(2deg) rotateY(-1deg) translateY(-4px);

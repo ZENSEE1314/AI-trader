@@ -34,10 +34,10 @@
 
   <link rel="icon" href="/img/logo.jpeg" type="image/jpeg">
   <style>
-    .tip-btn{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;border-radius:50%;background:rgba(0,229,255,0.1);color:var(--color-accent);font-size:0.6rem;font-weight:700;cursor:help;position:relative;margin-left:4px;vertical-align:middle;flex-shrink:0;border:1px solid rgba(0,229,255,0.15);transition:box-shadow 0.15s ease;}
-    .tip-btn:hover{box-shadow:0 0 8px rgba(0,229,255,0.2);}
+    .tip-btn{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;border-radius:50%;background:rgba(212,175,55,0.1);color:var(--color-accent);font-size:0.6rem;font-weight:700;cursor:help;position:relative;margin-left:4px;vertical-align:middle;flex-shrink:0;border:1px solid rgba(212,175,55,0.15);transition:box-shadow 0.15s ease;}
+    .tip-btn:hover{box-shadow:0 0 8px rgba(212,175,55,0.2);}
     .tip-btn:hover .tip-text{display:block;}
-    .tip-text{display:none;position:absolute;bottom:calc(100% + 6px);left:50%;transform:translateX(-50%);background:var(--color-bg-raised);border:1px solid rgba(0,229,255,0.1);color:var(--color-text);font-size:0.72rem;font-weight:400;padding:8px 12px;border-radius:var(--radius-md);white-space:normal;width:200px;z-index:100;box-shadow:0 4px 20px rgba(0,0,0,0.5),0 0 16px rgba(0,229,255,0.05);line-height:1.4;text-align:left;backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);}
+    .tip-text{display:none;position:absolute;bottom:calc(100% + 6px);left:50%;transform:translateX(-50%);background:var(--color-bg-raised);border:1px solid rgba(212,175,55,0.1);color:var(--color-text);font-size:0.72rem;font-weight:400;padding:8px 12px;border-radius:var(--radius-md);white-space:normal;width:200px;z-index:100;box-shadow:0 4px 20px rgba(0,0,0,0.5),0 0 16px rgba(212,175,55,0.05);line-height:1.4;text-align:left;backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);}
   </style>
 </head>
 
@@ -480,7 +480,7 @@
               vx: (Math.random() - 0.5) * 0.4,
               vy: (Math.random() - 0.5) * 0.4,
               r: Math.random() * 2 + 0.5,
-              color: ['rgba(0,229,255,', 'rgba(0,255,136,', 'rgba(212,175,55,'][Math.floor(Math.random() * 3)]
+              color: ['rgba(212,175,55,', 'rgba(232,200,74,', 'rgba(184,146,42,'][Math.floor(Math.random() * 3)]
             });
           }
 
@@ -520,7 +520,7 @@
                   ctx.beginPath();
                   ctx.moveTo(p.x, p.y);
                   ctx.lineTo(p2.x, p2.y);
-                  ctx.strokeStyle = 'rgba(0,229,255,' + (0.06 * (1 - d / CONNECT_DIST)) + ')';
+                  ctx.strokeStyle = 'rgba(212,175,55,' + (0.06 * (1 - d / CONNECT_DIST)) + ')';
                   ctx.lineWidth = 0.5;
                   ctx.stroke();
                 }

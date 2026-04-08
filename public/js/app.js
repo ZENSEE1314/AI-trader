@@ -1324,7 +1324,7 @@
       const anyRunning = health.cycleRunning || Object.values(health.agents || {}).some(a => a.state === 'running');
       const anyError = Object.values(health.agents || {}).some(a => a.state === 'error');
       dot.style.background = anyRunning ? 'var(--color-accent)' : anyError ? 'var(--color-danger)' : 'var(--color-success)';
-      dot.style.boxShadow = anyRunning ? '0 0 8px rgba(0,229,255,0.5)' : '';
+      dot.style.boxShadow = anyRunning ? '0 0 8px rgba(212,175,55,0.5)' : '';
     }
 
     // Coordinator bar
