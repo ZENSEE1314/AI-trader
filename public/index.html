@@ -192,6 +192,147 @@
 
       <div class="landing-section-divider"></div>
 
+      <!-- ── Crypto Network Scroll Animation ── -->
+      <section class="landing-section crypto-network-section" id="crypto-network">
+        <div class="crypto-network-stage">
+          <!-- Background floating particles -->
+          <div class="cn-particles" aria-hidden="true">
+            <span class="cn-particle" style="--p-x:12%;--p-y:18%;--p-delay:0s;--p-dur:14s;">BTC</span>
+            <span class="cn-particle" style="--p-x:82%;--p-y:22%;--p-delay:2s;--p-dur:18s;">ETH</span>
+            <span class="cn-particle" style="--p-x:8%;--p-y:72%;--p-delay:4s;--p-dur:16s;">SOL</span>
+            <span class="cn-particle" style="--p-x:88%;--p-y:68%;--p-delay:1s;--p-dur:20s;">BNB</span>
+            <span class="cn-particle" style="--p-x:25%;--p-y:85%;--p-delay:3s;--p-dur:15s;">XRP</span>
+            <span class="cn-particle" style="--p-x:72%;--p-y:12%;--p-delay:5s;--p-dur:17s;">DOGE</span>
+            <span class="cn-particle" style="--p-x:50%;--p-y:8%;--p-delay:2.5s;--p-dur:19s;">ADA</span>
+            <span class="cn-particle" style="--p-x:38%;--p-y:92%;--p-delay:1.5s;--p-dur:13s;">AVAX</span>
+          </div>
+
+          <!-- 3D Perspective Container -->
+          <div class="cn-perspective">
+            <div class="cn-network" id="cn-network">
+
+              <!-- SVG Connection Lines -->
+              <svg class="cn-lines" viewBox="0 0 800 600" preserveAspectRatio="xMidYMid meet" aria-hidden="true">
+                <defs>
+                  <linearGradient id="cn-grad-binance" x1="0%" y1="0%" x2="100%" y2="0%">
+                    <stop offset="0%" stop-color="#d4af37" stop-opacity="0.8"/>
+                    <stop offset="100%" stop-color="#f0b90b" stop-opacity="0.8"/>
+                  </linearGradient>
+                  <linearGradient id="cn-grad-bitunix" x1="0%" y1="0%" x2="100%" y2="0%">
+                    <stop offset="0%" stop-color="#d4af37" stop-opacity="0.8"/>
+                    <stop offset="100%" stop-color="#7c7fff" stop-opacity="0.8"/>
+                  </linearGradient>
+                  <linearGradient id="cn-grad-ai" x1="0%" y1="0%" x2="100%" y2="100%">
+                    <stop offset="0%" stop-color="#d4af37" stop-opacity="0.8"/>
+                    <stop offset="100%" stop-color="#a855f7" stop-opacity="0.8"/>
+                  </linearGradient>
+                  <linearGradient id="cn-grad-wallet" x1="0%" y1="0%" x2="100%" y2="100%">
+                    <stop offset="0%" stop-color="#d4af37" stop-opacity="0.8"/>
+                    <stop offset="100%" stop-color="#22c55e" stop-opacity="0.8"/>
+                  </linearGradient>
+                  <filter id="cn-glow-filter">
+                    <feGaussianBlur stdDeviation="3" result="blur"/>
+                    <feMerge>
+                      <feMergeNode in="blur"/>
+                      <feMergeNode in="SourceGraphic"/>
+                    </feMerge>
+                  </filter>
+                </defs>
+                <!-- Connection: Hub -> Binance (top-left) -->
+                <path class="cn-line cn-line-binance" d="M400,300 C300,300 220,200 160,160" stroke="url(#cn-grad-binance)" fill="none" stroke-width="2" filter="url(#cn-glow-filter)"/>
+                <path class="cn-line-glow cn-line-binance" d="M400,300 C300,300 220,200 160,160" stroke="#f0b90b" fill="none" stroke-width="1" opacity="0.4"/>
+                <!-- Connection: Hub -> Bitunix (top-right) -->
+                <path class="cn-line cn-line-bitunix" d="M400,300 C500,300 580,200 640,160" stroke="url(#cn-grad-bitunix)" fill="none" stroke-width="2" filter="url(#cn-glow-filter)"/>
+                <path class="cn-line-glow cn-line-bitunix" d="M400,300 C500,300 580,200 640,160" stroke="#7c7fff" fill="none" stroke-width="1" opacity="0.4"/>
+                <!-- Connection: Hub -> AI Brain (bottom-left) -->
+                <path class="cn-line cn-line-ai" d="M400,300 C320,340 240,400 180,440" stroke="url(#cn-grad-ai)" fill="none" stroke-width="2" filter="url(#cn-glow-filter)"/>
+                <path class="cn-line-glow cn-line-ai" d="M400,300 C320,340 240,400 180,440" stroke="#a855f7" fill="none" stroke-width="1" opacity="0.4"/>
+                <!-- Connection: Hub -> Wallet (bottom-right) -->
+                <path class="cn-line cn-line-wallet" d="M400,300 C480,340 560,400 620,440" stroke="url(#cn-grad-wallet)" fill="none" stroke-width="2" filter="url(#cn-glow-filter)"/>
+                <path class="cn-line-glow cn-line-wallet" d="M400,300 C480,340 560,400 620,440" stroke="#22c55e" fill="none" stroke-width="1" opacity="0.4"/>
+
+                <!-- Animated pulse dots along paths -->
+                <circle class="cn-pulse-dot cn-pulse-binance" r="4" fill="#f0b90b" opacity="0">
+                  <animateMotion dur="2.5s" repeatCount="indefinite" path="M400,300 C300,300 220,200 160,160"/>
+                </circle>
+                <circle class="cn-pulse-dot cn-pulse-bitunix" r="4" fill="#7c7fff" opacity="0">
+                  <animateMotion dur="3s" repeatCount="indefinite" path="M400,300 C500,300 580,200 640,160"/>
+                </circle>
+                <circle class="cn-pulse-dot cn-pulse-ai" r="4" fill="#a855f7" opacity="0">
+                  <animateMotion dur="2.8s" repeatCount="indefinite" path="M400,300 C320,340 240,400 180,440"/>
+                </circle>
+                <circle class="cn-pulse-dot cn-pulse-wallet" r="4" fill="#22c55e" opacity="0">
+                  <animateMotion dur="3.2s" repeatCount="indefinite" path="M400,300 C480,340 560,400 620,440"/>
+                </circle>
+                <!-- Reverse pulse dots (data flowing back to hub) -->
+                <circle class="cn-pulse-dot cn-pulse-binance-rev" r="3" fill="#d4af37" opacity="0">
+                  <animateMotion dur="2.5s" repeatCount="indefinite" path="M160,160 C220,200 300,300 400,300"/>
+                </circle>
+                <circle class="cn-pulse-dot cn-pulse-bitunix-rev" r="3" fill="#d4af37" opacity="0">
+                  <animateMotion dur="3s" repeatCount="indefinite" path="M640,160 C580,200 500,300 400,300"/>
+                </circle>
+              </svg>
+
+              <!-- Central MCT Hub -->
+              <div class="cn-hub" id="cn-hub">
+                <div class="cn-hub-glow"></div>
+                <div class="cn-hub-ring"></div>
+                <div class="cn-hub-core">
+                  <img src="/img/logo.jpeg" alt="MCT Hub" width="52" height="52" class="cn-hub-logo">
+                  <span class="cn-hub-label">MCT</span>
+                </div>
+              </div>
+
+              <!-- Node: Binance (top-left) -->
+              <div class="cn-node cn-node-binance" data-cn-step="2">
+                <div class="cn-node-icon">
+                  <svg width="22" height="22" viewBox="0 0 24 24" fill="none"><path d="M12 2L6.5 7.5 8.36 9.36 12 5.71l3.64 3.65L17.5 7.5 12 2zm-7.5 10L2 14.5 4.5 17l2.5-2.5L4.5 12zm15 0l-2.5 2.5L17.5 17l2.5-2.5L22 14.5 19.5 12zM12 8.29L7.54 12.75 9.4 14.6 12 12l2.6 2.6 1.86-1.85L12 8.29zM12 22l5.5-5.5-1.86-1.86L12 18.29l-3.64-3.65L6.5 16.5 12 22z" fill="#f0b90b"/></svg>
+                </div>
+                <span class="cn-node-name">Binance</span>
+                <span class="cn-node-tag">Exchange</span>
+              </div>
+
+              <!-- Node: Bitunix (top-right) -->
+              <div class="cn-node cn-node-bitunix" data-cn-step="2">
+                <div class="cn-node-icon">
+                  <span style="font-weight:700;font-size:1rem;color:#7c7fff;">BX</span>
+                </div>
+                <span class="cn-node-name">Bitunix</span>
+                <span class="cn-node-tag">Exchange</span>
+              </div>
+
+              <!-- Node: AI Brain (bottom-left) -->
+              <div class="cn-node cn-node-ai" data-cn-step="3">
+                <div class="cn-node-icon">
+                  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#a855f7" stroke-width="1.5"><path d="M12 2a4 4 0 0 0-4 4v2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8a2 2 0 0 0-2-2h-2V6a4 4 0 0 0-4-4z"/><circle cx="9" cy="14" r="1.5" fill="#a855f7"/><circle cx="15" cy="14" r="1.5" fill="#a855f7"/><path d="M9 18h6" stroke-linecap="round"/></svg>
+                </div>
+                <span class="cn-node-name">AI Brain</span>
+                <span class="cn-node-tag">Analysis</span>
+              </div>
+
+              <!-- Node: Your Wallet (bottom-right) -->
+              <div class="cn-node cn-node-wallet" data-cn-step="3">
+                <div class="cn-node-icon">
+                  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="1.5"><rect x="2" y="6" width="20" height="14" rx="2"/><path d="M2 10h20"/><circle cx="17" cy="15" r="1.5" fill="#22c55e"/></svg>
+                </div>
+                <span class="cn-node-name">Your Wallet</span>
+                <span class="cn-node-tag">Profits</span>
+              </div>
+
+            </div>
+          </div>
+
+          <!-- Section header overlay -->
+          <div class="cn-header">
+            <span class="landing-section-tag">The Network</span>
+            <h2 class="landing-section-title">Your Money. Our AI. Their Liquidity.</h2>
+            <p class="landing-section-sub">MCT connects your exchange accounts to our AI engine, scanning 40+ coins and executing trades automatically.</p>
+          </div>
+        </div>
+      </section>
+
+      <div class="landing-section-divider"></div>
+
       <!-- ── Social Proof ── -->
       <section class="landing-section landing-proof" data-animate>
         <p class="landing-proof-label">Trusted by traders worldwide</p>
@@ -746,6 +887,102 @@
       });
 
       /* ═══════════════════════════════════════════════════
+         Crypto Network — Scroll-Driven Animation
+         ═══════════════════════════════════════════════════ */
+      (function initCryptoNetwork() {
+        var section = document.getElementById('crypto-network');
+        var network = document.getElementById('cn-network');
+        if (!section || !network) return;
+
+        var hub = network.querySelector('.cn-hub');
+        var nodes = network.querySelectorAll('.cn-node');
+        var lines = network.querySelectorAll('.cn-line');
+        var lineGlows = network.querySelectorAll('.cn-line-glow');
+        var pulseDots = network.querySelectorAll('.cn-pulse-dot');
+        var header = section.querySelector('.cn-header');
+
+        // Set initial hidden states via class
+        network.classList.add('cn-ready');
+
+        function getScrollProgress() {
+          var rect = section.getBoundingClientRect();
+          var sectionHeight = section.offsetHeight;
+          var viewportH = window.innerHeight;
+          // Progress 0 = section top hits viewport bottom, 1 = section bottom hits viewport top
+          var start = rect.top + sectionHeight;
+          var totalScroll = sectionHeight + viewportH;
+          var scrolled = viewportH - rect.top;
+          return Math.max(0, Math.min(1, scrolled / totalScroll));
+        }
+
+        function updateNetwork() {
+          if (reducedMotion) return;
+          var p = getScrollProgress();
+
+          // Phase 1 (0.15-0.3): Hub appears
+          var hubProgress = Math.max(0, Math.min(1, (p - 0.15) / 0.15));
+          hub.style.opacity = hubProgress;
+          hub.style.transform = 'translate(-50%,-50%) scale(' + (0.5 + hubProgress * 0.5) + ')';
+
+          // Phase 2 (0.3-0.5): Lines extend + exchange nodes appear
+          var lineProgress = Math.max(0, Math.min(1, (p - 0.3) / 0.2));
+          lines.forEach(function(line) {
+            var len = line.getTotalLength ? line.getTotalLength() : 300;
+            line.style.strokeDasharray = len;
+            line.style.strokeDashoffset = len * (1 - lineProgress);
+            line.style.opacity = lineProgress;
+          });
+          lineGlows.forEach(function(g) {
+            g.style.opacity = lineProgress * 0.4;
+            var len = g.getTotalLength ? g.getTotalLength() : 300;
+            g.style.strokeDasharray = len;
+            g.style.strokeDashoffset = len * (1 - lineProgress);
+          });
+
+          // Exchange nodes (step 2)
+          nodes.forEach(function(node) {
+            var step = parseInt(node.getAttribute('data-cn-step'), 10);
+            var nodeP;
+            if (step === 2) {
+              nodeP = Math.max(0, Math.min(1, (p - 0.35) / 0.15));
+            } else {
+              nodeP = Math.max(0, Math.min(1, (p - 0.5) / 0.15));
+            }
+            node.style.opacity = nodeP;
+            node.style.transform = 'scale(' + (0.6 + nodeP * 0.4) + ')';
+          });
+
+          // Phase 3 (0.55-0.7): Pulse dots appear (data flowing)
+          var pulseP = Math.max(0, Math.min(1, (p - 0.55) / 0.15));
+          pulseDots.forEach(function(dot) {
+            dot.style.opacity = pulseP * 0.9;
+          });
+
+          // Header fades in
+          var headerP = Math.max(0, Math.min(1, (p - 0.2) / 0.15));
+          if (header) {
+            header.style.opacity = headerP;
+            header.style.transform = 'translateY(' + (20 * (1 - headerP)) + 'px)';
+          }
+        }
+
+        if (!reducedMotion) {
+          window.addEventListener('scroll', updateNetwork, { passive: true });
+          window.addEventListener('resize', updateNetwork, { passive: true });
+          updateNetwork();
+        } else {
+          // Show everything immediately for reduced motion
+          hub.style.opacity = '1';
+          hub.style.transform = 'translate(-50%,-50%) scale(1)';
+          nodes.forEach(function(n) { n.style.opacity = '1'; n.style.transform = 'scale(1)'; });
+          lines.forEach(function(l) { l.style.opacity = '1'; l.style.strokeDashoffset = '0'; });
+          lineGlows.forEach(function(g) { g.style.opacity = '0.4'; g.style.strokeDashoffset = '0'; });
+          pulseDots.forEach(function(d) { d.style.opacity = '0.9'; });
+          if (header) { header.style.opacity = '1'; header.style.transform = 'none'; }
+        }
+      })();
+
+      /* ═══════════════════════════════════════════════════
          Reduced Motion Fallback
          ═══════════════════════════════════════════════════ */
       if (reducedMotion) {
@@ -865,6 +1102,41 @@
            Dashboard Tab
            ==================================================== -->
       <section id="tab-dashboard" role="tabpanel" aria-label="Dashboard">
+        <!-- Mini Crypto Network Widget -->
+        <div class="cn-mini-widget" id="cn-mini-widget">
+          <div class="cn-mini-header">
+            <span class="cn-mini-title">Network Status</span>
+            <span class="cn-mini-status"><span class="cn-mini-dot"></span>Live</span>
+          </div>
+          <div class="cn-mini-stage">
+            <svg class="cn-mini-lines" viewBox="0 0 300 200" preserveAspectRatio="xMidYMid meet" aria-hidden="true">
+              <path d="M150,100 C110,100 70,60 40,50" stroke="rgba(240,185,11,0.4)" fill="none" stroke-width="1.5"/>
+              <path d="M150,100 C190,100 230,60 260,50" stroke="rgba(124,127,255,0.4)" fill="none" stroke-width="1.5"/>
+              <path d="M150,100 C120,120 80,150 50,160" stroke="rgba(168,85,247,0.3)" fill="none" stroke-width="1.5"/>
+              <path d="M150,100 C180,120 220,150 250,160" stroke="rgba(34,197,94,0.4)" fill="none" stroke-width="1.5"/>
+              <circle r="3" fill="#f0b90b" opacity="0.8">
+                <animateMotion dur="2s" repeatCount="indefinite" path="M150,100 C110,100 70,60 40,50"/>
+              </circle>
+              <circle r="3" fill="#7c7fff" opacity="0.8">
+                <animateMotion dur="2.4s" repeatCount="indefinite" path="M150,100 C190,100 230,60 260,50"/>
+              </circle>
+              <circle r="2.5" fill="#a855f7" opacity="0.6">
+                <animateMotion dur="2.6s" repeatCount="indefinite" path="M150,100 C120,120 80,150 50,160"/>
+              </circle>
+              <circle r="3" fill="#22c55e" opacity="0.8">
+                <animateMotion dur="2.2s" repeatCount="indefinite" path="M150,100 C180,120 220,150 250,160"/>
+              </circle>
+            </svg>
+            <div class="cn-mini-hub">
+              <img src="/img/logo.jpeg" alt="" width="28" height="28" style="border-radius:50%;">
+            </div>
+            <span class="cn-mini-node cn-mini-n1" title="Binance" style="color:#f0b90b;">BN</span>
+            <span class="cn-mini-node cn-mini-n2" title="Bitunix" style="color:#7c7fff;">BX</span>
+            <span class="cn-mini-node cn-mini-n3" title="AI Brain" style="color:#a855f7;">AI</span>
+            <span class="cn-mini-node cn-mini-n4" title="Wallet" style="color:#22c55e;">W</span>
+          </div>
+        </div>
+
         <!-- Cash Wallet on Dashboard -->
         <div id="dash-cash-wallet" class="summary-grid" style="margin-bottom:var(--space-4);">
           <div class="summary-card" style="border-left:3px solid var(--color-success);">
