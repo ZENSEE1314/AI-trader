@@ -1367,7 +1367,7 @@
       }
     }
 
-    // Activity feed
+    // Activity feed — detailed view of all agent actions
     const feed = document.getElementById('mc-activity-feed');
     const countEl = document.getElementById('mc-activity-count');
     if (feed && activity) {
@@ -1377,9 +1377,21 @@
       } else {
         feed.innerHTML = activity.map(a => {
           const time = new Date(a.ts).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+          const typeLabel = a.type === 'trade' ? 'TRADE'
+            : a.type === 'error' ? 'ERROR'
+            : a.type === 'success' ? 'OK'
+            : a.type === 'command' ? 'CMD'
+            : a.type === 'warning' ? 'WARN'
+            : a.type === 'learn' ? 'AI'
+            : a.type === 'config' ? 'CFG'
+            : a.type === 'skip' ? 'SKIP'
+            : a.type === 'info' ? 'INFO'
+            : a.type.toUpperCase().substring(0, 4);
           return `<div class="mc-activity-item" data-type="${escapeHtml(a.type)}">
+            <span class="mc-activity-dot"></span>
             <span class="mc-activity-ts">${time}</span>
             <span class="mc-activity-agent">${escapeHtml(a.agent)}</span>
+            <span style="font-size:0.6rem;font-weight:700;opacity:0.5;min-width:30px;text-transform:uppercase;">${typeLabel}</span>
             <span class="mc-activity-msg">${escapeHtml(a.message)}</span>
           </div>`;
         }).join('');

@@ -3151,7 +3151,7 @@ router.get('/agents/health', async (req, res) => {
     const coordinator = getCoordinator();
     res.json({
       health: coordinator.getHealth(),
-      activity: coordinator.getAllActivity(30),
+      activity: coordinator.getAllActivity(100),
       uptime: process.uptime(),
     });
   } catch (err) {

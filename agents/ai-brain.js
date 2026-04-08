@@ -2,10 +2,10 @@
 // AI Brain — Multi-provider AI for agent intelligence
 //
 // Supports:
-//   1. Google Gemini (FREE) — set GOOGLE_AI_KEY
-//   2. Anthropic Claude — set ANTHROPIC_API_KEY
+//   1. Anthropic Claude — set ANTHROPIC_API_KEY
+//   2. Google Gemini (fallback) — set GOOGLE_AI_KEY
 //
-// Priority: Google first (free), Anthropic fallback.
+// Priority: Claude first, Gemini fallback.
 // Each agent gets a system prompt with its role + real-time data.
 // ============================================================
 
@@ -33,15 +33,7 @@ function getCached(key) {
 }
 
 function getProvider() {
-  // Priority 1: Google Gemini (free tier)
-  if (process.env.GOOGLE_AI_KEY) {
-    if (!googleClient) {
-      const { GoogleGenerativeAI } = require('@google/generative-ai');
-      googleClient = new GoogleGenerativeAI(process.env.GOOGLE_AI_KEY);
-    }
-    return 'google';
-  }
-  // Priority 2: Anthropic Claude
+  // Priority 1: Anthropic Claude
   if (process.env.ANTHROPIC_API_KEY) {
     if (!anthropicClient) {
       const Anthropic = require('@anthropic-ai/sdk');
@@ -49,16 +41,24 @@ function getProvider() {
     }
     return 'anthropic';
   }
+  // Priority 2: Google Gemini (fallback)
+  if (process.env.GOOGLE_AI_KEY) {
+    if (!googleClient) {
+      const { GoogleGenerativeAI } = require('@google/generative-ai');
+      googleClient = new GoogleGenerativeAI(process.env.GOOGLE_AI_KEY);
+    }
+    return 'google';
+  }
   return null;
 }
 
 function isAvailable() {
-  return !!(process.env.GOOGLE_AI_KEY || process.env.ANTHROPIC_API_KEY);
+  return !!(process.env.ANTHROPIC_API_KEY || process.env.GOOGLE_AI_KEY);
 }
 
 function getProviderName() {
-  if (process.env.GOOGLE_AI_KEY) return 'Google Gemini';
   if (process.env.ANTHROPIC_API_KEY) return 'Anthropic Claude';
+  if (process.env.GOOGLE_AI_KEY) return 'Google Gemini';
   return 'none';
 }
 
@@ -126,7 +126,7 @@ async function thinkGoogle(agentName, systemPrompt, userMessage) {
 }
 
 async function thinkAnthropic(agentName, systemPrompt, userMessage) {
-  const model = process.env.AGENT_AI_MODEL || 'claude-haiku-4-5-20251001';
+  const model = process.env.AGENT_AI_MODEL || 'claude-sonnet-4-6';
   console.log(`[AI Brain] ${agentName} thinking with Anthropic ${model}...`);
 
   const response = await anthropicClient.messages.create({

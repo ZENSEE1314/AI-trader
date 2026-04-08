@@ -174,14 +174,19 @@ class AgentCoordinator extends BaseAgent {
         } catch {}
       }
 
-      this.addActivity('info', `${signals.length} signal(s) from ${tokenEntries.length} token agents`);
+      if (signals.length > 0) {
+        const signalDetails = signals.map(s => `${s.symbol.replace('USDT','')} ${s.direction} score=${s.score || '?'}`).join(', ');
+        this.addActivity('info', `${signals.length} signal(s) found: ${signalDetails}`);
+      } else {
+        this.addActivity('skip', `Scanned ${tokenEntries.length} tokens — no signals this cycle`);
+      }
 
       // ── Step 3: SentimentAgent enriches signals ──
       if (signals.length > 0 && !this.sentimentAgent.paused) {
         signals = this.sentimentAgent.enrichSignals(signals);
         const enriched = signals.filter(s => s._sentimentModifier !== 0);
         if (enriched.length) {
-          this.addActivity('info', `Sentiment enriched ${enriched.length} signal(s)`);
+          this.addActivity('info', `Sentiment enriched ${enriched.length} signal(s): ${enriched.map(s => `${s.symbol.replace('USDT','')} ${s._sentimentModifier > 0 ? '+' : ''}${s._sentimentModifier}`).join(', ')}`);
         }
       }
 
@@ -204,7 +209,11 @@ class AgentCoordinator extends BaseAgent {
           approvedSignals = riskResult.approved || [];
           riskReport = riskResult.riskReport;
           if (riskResult.rejected?.length) {
-            this.addActivity('info', `RiskAgent: ${approvedSignals.length} approved, ${riskResult.rejected.length} rejected`);
+            const rejDetails = riskResult.rejected.map(r => `${(r.symbol || '').replace('USDT','')}(${r.reason || 'filtered'})`).join(', ');
+            this.addActivity('warning', `RiskAgent rejected ${riskResult.rejected.length}: ${rejDetails}`);
+          }
+          if (approvedSignals.length > 0) {
+            this.addActivity('success', `RiskAgent approved ${approvedSignals.length}: ${approvedSignals.map(s => `${s.symbol.replace('USDT','')} ${s.direction}`).join(', ')}`);
           }
         }
       }
@@ -216,7 +225,10 @@ class AgentCoordinator extends BaseAgent {
         this.currentTask = { description: 'TraderAgent executing', startedAt: Date.now() };
         tradeResult = await this.traderAgent.run({ signals: approvedSignals, mode: 'signals' });
         if (tradeResult?.executed) {
-          this.addActivity('success', `Trade executed: ${approvedSignals[0]?.symbol} ${approvedSignals[0]?.direction}`);
+          const execSymbols = approvedSignals.map(s => `${s.symbol.replace('USDT','')} ${s.direction}`).join(', ');
+          this.addActivity('trade', `Trade executed: ${execSymbols}`);
+        } else if (approvedSignals.length > 0) {
+          this.addActivity('skip', `TraderAgent received ${approvedSignals.length} signal(s) but none executed`);
         }
       } else {
         this.addActivity('skip', 'TraderAgent paused — skipping execution');
@@ -238,7 +250,7 @@ class AgentCoordinator extends BaseAgent {
       this.currentTask = null;
       const elapsed = ((Date.now() - cycleStart) / 1000).toFixed(1);
       this.log(`Cycle complete in ${elapsed}s | Mood: ${mood} | Signals: ${signals.length} → ${approvedSignals.length} approved | Executed: ${tradeResult?.executed || false}`);
-      this.addActivity('success', `Cycle done in ${elapsed}s`);
+      this.addActivity('success', `Cycle #${this.runCount} done in ${elapsed}s | mood=${mood} | scanned=${tokenEntries.length} | signals=${signals.length} | approved=${approvedSignals.length} | traded=${tradeResult?.executed ? 'YES' : 'no'}`);
 
       return {
         elapsed: parseFloat(elapsed),

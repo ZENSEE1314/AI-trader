@@ -36,21 +36,14 @@ const CONFIG = {
 };
 
 // ── Trailing SL config ─────────────────────────────────────
-// All values are CAPITAL % (divide by leverage for price %).
-// Example: $1000 capital, 10% per trade = $100 trading.
-//   Initial SL = 20% of $100 = -$20 loss triggers SL.
-//   Trailing gap = 15%. At +30% ($30 profit) → SL locks at +15% ($15 profit).
+// All values are PRICE % (not capital %).
+// Initial SL: 30% price distance from entry (e.g., $100 entry → SL at $70).
+// Trailing: at +10% profit → SL locks at +5%, then +2.5% steps upward.
 const TRAILING_SL = {
-  INITIAL_SL_PCT: 0.005,          // 0.5% price = 10% capital at 20x (overridden per trade by leverage)
-  TRAILING_GAP: 0.15,             // SL always 15% behind current capital profit
-  FIXED_TIERS: [
-    { trigger: 0.05,  sl: 0.001 },  //  +5% capital → SL at breakeven
-    { trigger: 0.10,  sl: 0.05  },  // +10% capital → SL locks +5%
-    { trigger: 0.15,  sl: 0.10  },  // +15% capital → SL locks +10%
-    { trigger: 0.20,  sl: 0.15  },  // +20% capital (TP hit) → SL locks +15%
-  ],
-  // Beyond TP: trigger every 5%, SL = trigger - 5%
-  HIGH_START: 0.25, HIGH_STEP: 0.05, HIGH_GAP: 0.05,
+  INITIAL_SL_PCT: 0.30,            // 30% price distance = SL at 70% of entry (long)
+  FIRST_TRIGGER: 0.10,             // First trailing trigger at +10% price profit
+  FIRST_SL: 0.05,                  // Lock SL at +5% profit when +10% hit
+  STEP_SIZE: 0.025,                // Each subsequent step adds +2.5%
 };
 
 // ── Compound: always use current wallet balance ─────────────
@@ -307,41 +300,35 @@ async function updateStopLoss(client, symbol, newSlPrice, closeSide, platform, p
 }
 
 // ── TRAILING SL ────────────────────────────────────────────
-// Initial SL: -20% capital. Trailing: 15% gap behind profit.
-// Triggers at +30%, +50%, then every +25% (75%, 100%, 125%...)
-// SL always = trigger - 15%
+// At +10% price profit → SL locks at +5%.
+// Then every +2.5% step: +12.5% → SL +7.5%, +15% → SL +10%, etc.
+// SL only moves up, never down.
 function calculateTrailingStep(entryPrice, currentPrice, isLong, lastStep, leverage = 20) {
   const pricePct = isLong
     ? (currentPrice - entryPrice) / entryPrice
     : (entryPrice - currentPrice) / entryPrice;
 
-  // Tiers are in capital %, convert price move to capital profit
-  const capitalPct = pricePct * leverage;
-
-  const { FIXED_TIERS, HIGH_START, HIGH_STEP, HIGH_GAP } = TRAILING_SL;
+  const { FIRST_TRIGGER, FIRST_SL, STEP_SIZE } = TRAILING_SL;
   let bestSl = null;
 
-  // Phase 1: Fixed tiers (+30% → +15%, +50% → +35%)
-  for (const tier of FIXED_TIERS) {
-    if (capitalPct >= tier.trigger) bestSl = tier.sl;
-  }
+  if (pricePct >= FIRST_TRIGGER) {
+    // First tier: +10% profit → SL at +5%
+    bestSl = FIRST_SL;
 
-  // Phase 2: 75%+ capital — trigger every 25%, SL = trigger - 15%
-  if (capitalPct >= HIGH_START) {
-    const stepsReached = Math.floor((capitalPct - HIGH_START) / HIGH_STEP);
-    const trigger = HIGH_START + stepsReached * HIGH_STEP;
-    const sl = trigger - HIGH_GAP;
-    if (sl > (bestSl || 0)) bestSl = sl;
+    // Additional steps: each +2.5% above first trigger moves SL up by +2.5%
+    const stepsAbove = Math.floor((pricePct - FIRST_TRIGGER) / STEP_SIZE);
+    if (stepsAbove > 0) {
+      bestSl = FIRST_SL + stepsAbove * STEP_SIZE;
+    }
   }
 
   if (bestSl === null) return null;
   if (bestSl <= lastStep) return null; // SL only moves up, never down
 
-  // Convert capital % back to price distance
-  const slPricePct = bestSl / leverage;
+  // bestSl is already in price %, no leverage conversion needed
   const newSlPrice = isLong
-    ? entryPrice * (1 + slPricePct)
-    : entryPrice * (1 - slPricePct);
+    ? entryPrice * (1 + bestSl)
+    : entryPrice * (1 - bestSl);
 
   return { stepped: true, newSlPrice, newLastStep: bestSl };
 }
@@ -431,7 +418,7 @@ async function openTrade(client, pick, wallet) {
   const tp2 = fmtP(pick.tp2);
   const tp3 = fmtP(pick.tp3);
 
-  // Initial SL: flat 25% price distance from entry (same for all tokens/leverage)
+  // Initial SL: 30% price distance from entry ($100 trade → SL at $70)
   const slPricePct = TRAILING_SL.INITIAL_SL_PCT;
   const initialSlPrice = fmtP(isLong ? price * (1 - slPricePct) : price * (1 + slPricePct));
 
@@ -459,17 +446,15 @@ async function openTrade(client, pick, wallet) {
     return 'TOO_EXPENSIVE';
   }
 
-  // Fee check
+  // Fee check: ensure trailing SL first trigger profit covers fees
   const totalFees = notional * CONFIG.TAKER_FEE * 2;
-  const tpDist = Math.abs(tp1 - price) / price;
-  const tp1Profit = notional * tpDist;
-  const slMarginLoss = slDist * leverage * 100;
-  const tpMarginGain = Math.abs(tp1 - price) / price * leverage * 100;
-  bLog.trade(`Size: ${(walletSizePct*100).toFixed(0)}% wallet=$${tradeUsdt.toFixed(2)} notional=$${notional.toFixed(2)} lev=${leverage}x margin=$${requiredMargin.toFixed(2)} | SL=${slMarginLoss.toFixed(0)}%margin TP=${tpMarginGain.toFixed(0)}%margin`);
+  const trailProfit = notional * TRAILING_SL.FIRST_TRIGGER;
+  const slMarginLoss = slPricePct * leverage * 100;
+  bLog.trade(`Size: ${(walletSizePct*100).toFixed(0)}% wallet=$${tradeUsdt.toFixed(2)} notional=$${notional.toFixed(2)} lev=${leverage}x margin=$${requiredMargin.toFixed(2)} | SL=${slMarginLoss.toFixed(0)}%margin`);
   log(`Trade: ${sym} ${direction} lev=${leverage}x qty=${qty} notional=$${notional.toFixed(2)} margin=$${requiredMargin.toFixed(2)}`);
-  if (tp1Profit < totalFees * 1.5) {
-    bLog.trade(`Trade rejected: TP profit $${tp1Profit.toFixed(4)} < 1.5x fees $${(totalFees * 1.5).toFixed(4)}`);
-    throw new Error(`Trade rejected: TP profit < 1.5x fees`);
+  if (trailProfit < totalFees * 1.5) {
+    bLog.trade(`Trade rejected: trailing profit $${trailProfit.toFixed(4)} < 1.5x fees $${(totalFees * 1.5).toFixed(4)}`);
+    throw new Error(`Trade rejected: trailing profit < 1.5x fees`);
   }
 
   const entrySide = isLong ? 'BUY' : 'SELL';
@@ -479,8 +464,8 @@ async function openTrade(client, pick, wallet) {
   const order = await client.submitNewOrder({ symbol: sym, side: entrySide, type: 'MARKET', quantity: qty });
   await sleep(1500);
 
-  // Set initial trailing SL at -1% (not the engine SL)
-  let slOk = false, tpOk = false;
+  // Set initial SL at -30% price distance (no TP — trailing SL handles exits)
+  let slOk = false;
 
   try {
     await client.submitNewAlgoOrder({
@@ -489,23 +474,12 @@ async function openTrade(client, pick, wallet) {
       closePosition: 'true', workingType: 'MARK_PRICE',
     });
     slOk = true;
-    bLog.trade(`SL set at $${fmtPrice(initialSlPrice)} (-${(TRAILING_SL.INITIAL_SL_PCT*100).toFixed(0)}% trailing)`);
+    bLog.trade(`SL set at $${fmtPrice(initialSlPrice)} (-${(TRAILING_SL.INITIAL_SL_PCT*100).toFixed(0)}% from entry)`);
   } catch (e) { bLog.error(`Owner SL algo failed: ${e.message}`); }
 
-  try {
-    await client.submitNewAlgoOrder({
-      algoType: 'CONDITIONAL', symbol: sym, side: closeSide,
-      type: 'TAKE_PROFIT_MARKET', triggerPrice: tp3,
-      closePosition: 'true', workingType: 'MARK_PRICE',
-    });
-    tpOk = true;
-    bLog.trade(`TP set at $${fmtPrice(tp3)}`);
-  } catch (e) { bLog.error(`Owner TP algo failed: ${e.message}`); }
-
-  if (!slOk || !tpOk) {
-    const missing = [!slOk ? 'SL' : '', !tpOk ? 'TP' : ''].filter(Boolean).join('+');
-    bLog.error(`Owner ${sym} missing ${missing} — set manually!`);
-    await notify(`*${sym} ${direction}* opened without *${missing}*! Set manually NOW.`);
+  if (!slOk) {
+    bLog.error(`Owner ${sym} missing SL — set manually!`);
+    await notify(`*${sym} ${direction}* opened without *SL*! Set manually NOW.`);
   }
 
   tradeState.set(sym, {
@@ -1154,10 +1128,9 @@ async function executeForAllUsers(pick) {
 
           const closeSide = isLong ? 'SELL' : 'BUY';
           const slFmt = fmtP(slPrice);
-          const tpFmt = fmtP(tp3Price);
-          userLog.trade(`Setting trailing SL=$${slFmt} TP=$${tpFmt} for ${symbol}...`);
+          userLog.trade(`Setting trailing SL=$${slFmt} for ${symbol} (no TP — trailing SL handles exits)...`);
 
-          let slOk = false, tpOk = false;
+          let slOk = false;
 
           try {
             await userClient.submitNewAlgoOrder({
@@ -1166,27 +1139,14 @@ async function executeForAllUsers(pick) {
               closePosition: 'true', workingType: 'MARK_PRICE',
             });
             slOk = true;
-            userLog.trade(`SL set at $${slFmt} (-1% trailing)`);
+            userLog.trade(`SL set at $${slFmt} (-30% from entry)`);
           } catch (e) {
             userLog.error(`SL algo failed for ${symbol}: ${e.message}`);
           }
 
-          try {
-            await userClient.submitNewAlgoOrder({
-              algoType: 'CONDITIONAL', symbol, side: closeSide,
-              type: 'TAKE_PROFIT_MARKET', triggerPrice: tpFmt,
-              closePosition: 'true', workingType: 'MARK_PRICE',
-            });
-            tpOk = true;
-            userLog.trade(`TP set at $${tpFmt}`);
-          } catch (e) {
-            userLog.error(`TP algo failed for ${symbol}: ${e.message}`);
-          }
-
-          if (!slOk || !tpOk) {
-            const missing = [!slOk ? 'SL' : '', !tpOk ? 'TP' : ''].filter(Boolean).join(' and ');
-            userLog.error(`${symbol} OPEN without ${missing} — SET MANUALLY!`);
-            await notify(`*${symbol} ${pick.direction}*\nPosition opened but *${missing} failed to set!*\nSet manually on Binance NOW.`);
+          if (!slOk) {
+            userLog.error(`${symbol} OPEN without SL — SET MANUALLY!`);
+            await notify(`*${symbol} ${pick.direction}*\nPosition opened but *SL failed to set!*\nSet manually on Binance NOW.`);
           }
 
           await db.query(
@@ -1697,16 +1657,17 @@ async function syncTradeStatus() {
             }
 
             // Calculate PnL: use exchange realized PnL if available, otherwise compute
-            let grossPnl = isLong
-              ? parseFloat(((exitPrice - entryPrice) * qty).toFixed(4))
-              : parseFloat(((entryPrice - exitPrice) * qty).toFixed(4));
+            // Binance realizedPnl = gross PnL (before fees). Net = gross - fees.
+            let grossPnl;
             let pnlUsdt;
             if (realizedPnl !== null) {
-              pnlUsdt = parseFloat(realizedPnl.toFixed(4));
-              // If realized PnL is net (already has fees deducted), gross = net + fees
-              if (tradingFee > 0 && Math.abs(grossPnl) < 0.01) grossPnl = pnlUsdt + tradingFee;
+              grossPnl = parseFloat(realizedPnl.toFixed(4));
+              pnlUsdt = parseFloat((realizedPnl - tradingFee).toFixed(4));
             } else {
-              pnlUsdt = grossPnl - tradingFee;
+              grossPnl = isLong
+                ? parseFloat(((exitPrice - entryPrice) * qty).toFixed(4))
+                : parseFloat(((entryPrice - exitPrice) * qty).toFixed(4));
+              pnlUsdt = parseFloat((grossPnl - tradingFee).toFixed(4));
             }
             tradingFee = parseFloat(tradingFee.toFixed(4));
             grossPnl = parseFloat(grossPnl.toFixed(4));

@@ -366,9 +366,9 @@ async function analyzeLHHL(ticker, params, dailyBiasCache) {
   // ┌─────────────────────────────────────────────────────────┐
   // │ Pullback Filter: LONG at bottom, SHORT at top           │
   // │ Don't buy at the peak, don't sell at the bottom.        │
+  // │ Tightened: LONG must be in bottom 40%, SHORT in top 40% │
   // └─────────────────────────────────────────────────────────┘
   {
-    // Use 1M candles to find recent range (last 30 candles = 30 minutes)
     const rangeCandles = klines1m.slice(-30);
     let rangeHigh = -Infinity, rangeLow = Infinity;
     for (const k of rangeCandles) {
@@ -379,18 +379,68 @@ async function analyzeLHHL(ticker, params, dailyBiasCache) {
     const rangeSize = rangeHigh - rangeLow;
     if (rangeSize <= 0) return null;
 
-    // Where is price within the range? 0 = bottom, 1 = top
     const pricePosition = (price - rangeLow) / rangeSize;
 
-    // LONG: price must be in bottom 60% of range (buying the dip, not the top)
-    if (direction === 'LONG' && pricePosition > 0.60) {
-      bLog.scan(`${symbol}: LONG blocked — price at ${(pricePosition * 100).toFixed(0)}% of range (too high, buying top). Need pullback below 60%`);
+    // LONG: price must be in bottom 40% of range (buying the dip)
+    if (direction === 'LONG' && pricePosition > 0.40) {
+      bLog.scan(`${symbol}: LONG blocked — price at ${(pricePosition * 100).toFixed(0)}% of range (too high). Need pullback below 40%`);
       return null;
     }
-    // SHORT: price must be in top 60% of range (selling the bounce, not the bottom)
-    if (direction === 'SHORT' && pricePosition < 0.40) {
-      bLog.scan(`${symbol}: SHORT blocked — price at ${(pricePosition * 100).toFixed(0)}% of range (too low, selling bottom). Need bounce above 40%`);
+    // SHORT: price must be in top 40% of range (selling the bounce)
+    if (direction === 'SHORT' && pricePosition < 0.60) {
+      bLog.scan(`${symbol}: SHORT blocked — price at ${(pricePosition * 100).toFixed(0)}% of range (too low). Need bounce above 60%`);
       return null;
+    }
+  }
+
+  // ┌─────────────────────────────────────────────────────────┐
+  // │ RSI Overbought/Oversold Guard                           │
+  // │ Don't LONG when RSI > 70 (overbought/extended)          │
+  // │ Don't SHORT when RSI < 30 (oversold/extended)           │
+  // └─────────────────────────────────────────────────────────┘
+  {
+    const closes15 = klines15m.slice(-15).map(k => parseFloat(k[4]));
+    if (closes15.length >= 15) {
+      let gains = 0, losses = 0;
+      for (let i = 1; i < closes15.length; i++) {
+        const diff = closes15[i] - closes15[i - 1];
+        if (diff > 0) gains += diff; else losses -= diff;
+      }
+      const period = closes15.length - 1;
+      const avgGain = gains / period;
+      const avgLoss = losses / period;
+      const rs = avgLoss > 0 ? avgGain / avgLoss : 100;
+      const rsi = 100 - (100 / (1 + rs));
+
+      if (direction === 'LONG' && rsi > 70) {
+        bLog.scan(`${symbol}: LONG blocked — 15m RSI ${rsi.toFixed(0)} overbought (>70). Price already extended`);
+        return null;
+      }
+      if (direction === 'SHORT' && rsi < 30) {
+        bLog.scan(`${symbol}: SHORT blocked — 15m RSI ${rsi.toFixed(0)} oversold (<30). Price already extended`);
+        return null;
+      }
+    }
+  }
+
+  // ┌─────────────────────────────────────────────────────────┐
+  // │ Momentum Exhaustion Guard                                │
+  // │ If price moved >1.5% in trade direction in last 15 mins │
+  // │ the move is done — don't chase. Wait for pullback.      │
+  // └─────────────────────────────────────────────────────────┘
+  {
+    const recent = klines1m.slice(-15);
+    if (recent.length >= 10) {
+      const startPrice = parseFloat(recent[0][1]);
+      const movePct = (price - startPrice) / startPrice;
+      if (direction === 'LONG' && movePct > 0.015) {
+        bLog.scan(`${symbol}: LONG blocked — price already moved +${(movePct * 100).toFixed(1)}% in 15min (chasing). Wait for pullback`);
+        return null;
+      }
+      if (direction === 'SHORT' && movePct < -0.015) {
+        bLog.scan(`${symbol}: SHORT blocked — price already dropped ${(movePct * 100).toFixed(1)}% in 15min (chasing). Wait for bounce`);
+        return null;
+      }
     }
   }
 

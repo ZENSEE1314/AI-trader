@@ -40,7 +40,7 @@ class BaseAgent {
 
     // Activity feed — rolling log of recent actions
     this._activity = [];
-    this._maxActivity = 50;
+    this._maxActivity = 200;
 
     // Event listeners: { eventName: [fn, ...] }
     this._listeners = {};
