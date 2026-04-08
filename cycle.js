@@ -41,18 +41,18 @@ const CONFIG = {
 //   Initial SL = 20% of $100 = -$20 loss triggers SL.
 //   Trailing gap = 15%. At +30% ($30 profit) → SL locks at +15% ($15 profit).
 const TRAILING_SL = {
-  INITIAL_SL_PCT: 0.005,          // 0.5% price distance = 10% capital at 20x lev
+  INITIAL_SL_PCT: 0.10,           // 10% price distance SL
   TRAILING_GAP: 0.15,             // SL always 15% behind current capital profit
   FIXED_TIERS: [
-    { trigger: 0.10,  sl: 0.001 },  //  +10% capital → SL at breakeven
-    { trigger: 0.20,  sl: 0.10  },  //  +20% capital → SL at +10% (locked profit)
-    { trigger: 0.40,  sl: 0.25  },  //  +40% capital → SL at +25%
-    { trigger: 0.60,  sl: 0.45  },  //  +60% capital → SL at +45%
-    { trigger: 0.80,  sl: 0.65  },  //  +80% capital → SL at +65%
-    { trigger: 1.00,  sl: 0.85  },  // +100% capital → SL at +85%
+    { trigger: 0.20,  sl: 0.001 },  //  +20% capital (+1% price@20x) → SL at breakeven
+    { trigger: 0.40,  sl: 0.20  },  //  +40% capital (+2% price) → SL locks +20%
+    { trigger: 0.80,  sl: 0.50  },  //  +80% capital (+4% price) → SL locks +50%
+    { trigger: 1.20,  sl: 0.80  },  // +120% capital (+6% price) → SL locks +80%
+    { trigger: 1.60,  sl: 1.20  },  // +160% capital (+8% price) → SL locks +120%
+    { trigger: 2.00,  sl: 1.60  },  // +200% capital (+10% price) → SL locks +160%
   ],
-  // 100%+: trigger every 25%, SL = trigger - 15%
-  HIGH_START: 1.25, HIGH_STEP: 0.25, HIGH_GAP: 0.15,
+  // 200%+: trigger every 50%, SL = trigger - 40%
+  HIGH_START: 2.50, HIGH_STEP: 0.50, HIGH_GAP: 0.40,
 };
 
 // ── Compound: always use current wallet balance ─────────────
@@ -1033,8 +1033,8 @@ async function executeForAllUsers(pick) {
         const userLev = await getTokenLeverage(symbol, key.id);
         const walletSizePct = (await getCapitalPercentage(key.id)) / 100;
         // SL = 5% price distance, TP = 10% price distance (RR 1:2)
-        const slPricePct = 0.005;   // 0.5% price = 10% capital at 20x
-        const tpPricePct = 0.01;    // 1% price = 20% capital at 20x (RR 1:2)
+        const slPricePct = 0.10;    // 10% price distance SL
+        const tpPricePct = 0.20;    // 20% price distance TP (RR 1:2)
         const initialSlPrice = isLong ? price * (1 - slPricePct) : price * (1 + slPricePct);
         const userTpPrice = isLong ? price * (1 + tpPricePct) : price * (1 - tpPricePct);
         const userTp3Price = userTpPrice;
