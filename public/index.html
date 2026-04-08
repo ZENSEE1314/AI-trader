@@ -1141,6 +1141,36 @@
              TAB: Tokens
              ═══════════════════════════════════════════ -->
         <div id="admin-tab-tokens" class="admin-tab-panel hidden">
+          <!-- Token Board — Admin risk tags -->
+          <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Token Board — Risk Tags</h3>
+          <div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-4);margin-bottom:var(--space-4);">
+            <div style="display:flex;gap:var(--space-2);align-items:end;margin-bottom:var(--space-3);flex-wrap:wrap;">
+              <div class="form-group" style="margin-bottom:0;flex:1;min-width:140px;position:relative;">
+                <label class="form-label">Add Token</label>
+                <input class="form-input text-mono" type="text" id="admin-board-symbol" placeholder="BTCUSDT" style="text-transform:uppercase;">
+              </div>
+              <div class="form-group" style="margin-bottom:0;width:120px;">
+                <label class="form-label">Risk Tag</label>
+                <select class="form-input" id="admin-board-risk">
+                  <option value="">None</option>
+                  <option value="popular">Popular / Hot</option>
+                  <option value="low">Low Risk</option>
+                  <option value="medium">Medium Risk</option>
+                  <option value="high">High Risk</option>
+                </select>
+              </div>
+              <button class="btn btn-primary btn-sm" onclick="window.CryptoBot.adminAddTokenBoard()">Add</button>
+              <button class="btn btn-sm" style="border:1px solid var(--color-border);color:var(--color-text);" onclick="window.CryptoBot.adminLoadTokenBoard()">Refresh</button>
+            </div>
+            <div class="table-wrap" style="max-height:400px;overflow-y:auto;">
+              <table class="data-table">
+                <thead style="position:sticky;top:0;z-index:1;"><tr><th>Symbol</th><th>Risk Tag</th><th>Action</th></tr></thead>
+                <tbody id="admin-board-tbody"></tbody>
+              </table>
+            </div>
+            <div id="admin-board-empty" style="color:var(--color-text-muted);font-size:0.85rem;padding:var(--space-3);text-align:center;">No tokens tagged. Add tokens above to set risk levels for users.</div>
+          </div>
+
           <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Allowed Tokens <span id="allowed-count" class="badge" style="background:var(--color-success);color:#fff;padding:2px 8px;border-radius:12px;font-size:0.75rem;margin-left:4px;">0</span> <span style="font-size:0.75rem;color:var(--color-text-muted);">(only trade these)</span></h3>
           <div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-4);margin-bottom:var(--space-4);">
             <div style="display:flex;gap:var(--space-2);align-items:end;margin-bottom:var(--space-3);flex-wrap:wrap;">

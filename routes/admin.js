@@ -2943,6 +2943,70 @@ router.post('/clear-test-data', async (req, res) => {
 
 // ── Mission Control: Agent Framework ────────────────────────
 
+// ── Token Board Management ──────────────────────────────────
+
+// GET /api/admin/token-board — all tokens with risk tags
+router.get('/token-board', async (req, res) => {
+  try {
+    const tokens = await query(
+      `SELECT symbol, enabled, banned, risk_tag, featured, "rank"
+       FROM global_token_settings ORDER BY "rank" ASC, symbol ASC`
+    );
+    res.json(tokens);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// PUT /api/admin/token-board/:symbol/risk — set risk tag
+router.put('/token-board/:symbol/risk', async (req, res) => {
+  try {
+    const { risk_tag } = req.body; // 'low', 'medium', 'high', 'popular', null
+    await query(
+      `INSERT INTO global_token_settings (symbol, enabled, banned, risk_tag)
+       VALUES ($1, true, false, $2)
+       ON CONFLICT (symbol) DO UPDATE SET risk_tag = $2`,
+      [req.params.symbol.toUpperCase(), risk_tag || null]
+    );
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// PUT /api/admin/token-board/:symbol/featured — toggle featured
+router.put('/token-board/:symbol/featured', async (req, res) => {
+  try {
+    const { featured } = req.body;
+    await query(
+      `INSERT INTO global_token_settings (symbol, enabled, banned, featured)
+       VALUES ($1, true, false, $2)
+       ON CONFLICT (symbol) DO UPDATE SET featured = $2`,
+      [req.params.symbol.toUpperCase(), !!featured]
+    );
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// POST /api/admin/token-board/add — add token to board
+router.post('/token-board/add', async (req, res) => {
+  try {
+    const { symbol, risk_tag } = req.body;
+    if (!symbol) return res.status(400).json({ error: 'Missing symbol' });
+    await query(
+      `INSERT INTO global_token_settings (symbol, enabled, banned, risk_tag, featured)
+       VALUES ($1, true, false, $2, false)
+       ON CONFLICT (symbol) DO UPDATE SET enabled = true, banned = false, risk_tag = COALESCE($2, global_token_settings.risk_tag)`,
+      [symbol.toUpperCase(), risk_tag || null]
+    );
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// DELETE /api/admin/token-board/:symbol — remove from board
+router.delete('/token-board/:symbol', async (req, res) => {
+  try {
+    await query('DELETE FROM global_token_settings WHERE symbol = $1', [req.params.symbol.toUpperCase()]);
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // GET /api/admin/agents/health — Full agent health + activity
 router.get('/agents/health', async (req, res) => {
   try {
