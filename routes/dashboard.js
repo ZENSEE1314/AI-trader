@@ -592,15 +592,31 @@ router.post('/pay-weekly', async (req, res) => {
 
 // ── Token Signal Board & Watchlist ───────────────────────────
 
-// GET /api/dashboard/signal-board — live token signals
+// GET /api/dashboard/signal-board — top 50 tokens with signals + watchlist
 router.get('/signal-board', async (req, res) => {
   try {
     const { getSignalBoard } = require('../token-scanner');
-    const board = getSignalBoard();
-
-    // Also get daily results for today
     const { getDailyResults } = require('../token-scanner');
+    const board = getSignalBoard();
     const dailyResults = await getDailyResults();
+
+    // Get top 50 coins by volume from Binance
+    let topCoins = [];
+    try {
+      const fetch = require('node-fetch');
+      const r = await fetch('https://fapi.binance.com/fapi/v1/ticker/24hr', { timeout: 10000 });
+      const tickers = await r.json();
+      topCoins = tickers
+        .filter(t => t.symbol.endsWith('USDT') && !t.symbol.includes('_'))
+        .sort((a, b) => parseFloat(b.quoteVolume) - parseFloat(a.quoteVolume))
+        .slice(0, 50)
+        .map(t => ({
+          symbol: t.symbol,
+          price: parseFloat(t.lastPrice),
+          change24h: parseFloat(t.priceChangePercent),
+          volume: parseFloat(t.quoteVolume),
+        }));
+    } catch {}
 
     // Get user's watchlist
     const watchlist = await query(
@@ -610,12 +626,16 @@ router.get('/signal-board', async (req, res) => {
     const watchMap = {};
     for (const w of watchlist) watchMap[w.symbol] = w.enabled;
 
-    res.json({
-      tokens: board.tokens,
-      lastScanAt: board.lastScanAt,
-      dailyResults,
-      watchlist: watchMap,
-    });
+    // Merge: top coins + signal status + watchlist
+    const tokens = topCoins.map(c => ({
+      ...c,
+      signal: board.tokens[c.symbol] || null,
+      direction: board.tokens[c.symbol]?.direction || null,
+      score: board.tokens[c.symbol]?.score || 0,
+      watching: watchMap[c.symbol] === true,
+    }));
+
+    res.json({ tokens, lastScanAt: board.lastScanAt, dailyResults, watchlist: watchMap });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -661,6 +681,22 @@ router.delete('/watchlist/:symbol', async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
+});
+
+// POST /api/dashboard/watchlist/bulk — enable/disable all
+router.post('/watchlist/bulk', async (req, res) => {
+  try {
+    const { symbols, enabled } = req.body;
+    if (!symbols || !Array.isArray(symbols)) return res.status(400).json({ error: 'Missing symbols array' });
+    for (const sym of symbols) {
+      await query(
+        `INSERT INTO user_watchlist (user_id, symbol, enabled) VALUES ($1, $2, $3)
+         ON CONFLICT (user_id, symbol) DO UPDATE SET enabled = $3`,
+        [req.userId, sym.toUpperCase(), !!enabled]
+      );
+    }
+    res.json({ ok: true, count: symbols.length });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // PUT /api/dashboard/watchlist/:symbol/toggle — enable/disable

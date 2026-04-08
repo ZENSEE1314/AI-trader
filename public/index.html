@@ -719,17 +719,21 @@
           <button class="btn btn-sm period-btn" data-period="1y">1 Year</button>
           <button class="btn btn-sm" id="btn-export-csv" style="margin-left:auto;background:var(--color-accent);color:#fff;padding:4px 12px;" title="Download trade history as CSV">Download CSV</button>
         </div>
-        <!-- Signal Board & Token Watchlist -->
+        <!-- Token Selector — Top 50 by volume with on/off switches -->
         <div style="margin-bottom:var(--space-4);">
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--space-2);">
-            <h3 style="margin:0;font-size:0.95rem;color:var(--color-text);">Signal Board</h3>
-            <button class="btn btn-sm" style="background:var(--color-accent);color:#000;font-size:0.75rem;" onclick="window.CryptoBot.loadSignalBoard()">Refresh</button>
+            <h3 style="margin:0;font-size:0.95rem;color:var(--color-text);">My Tokens <span id="watch-count" style="font-size:0.75rem;color:var(--color-accent);">(0 active)</span></h3>
+            <div style="display:flex;gap:6px;">
+              <button class="btn btn-sm" style="font-size:0.7rem;background:var(--color-success);color:#000;" onclick="window.CryptoBot.watchAll(true)">All ON</button>
+              <button class="btn btn-sm" style="font-size:0.7rem;background:var(--color-danger);color:#fff;" onclick="window.CryptoBot.watchAll(false)">All OFF</button>
+              <button class="btn btn-sm" style="font-size:0.7rem;border:1px solid var(--color-border);color:var(--color-text);" onclick="window.CryptoBot.loadSignalBoard()">Refresh</button>
+            </div>
           </div>
-          <div id="signal-board" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:6px;margin-bottom:var(--space-3);">
-            <div style="color:var(--color-text-muted);font-size:0.8rem;grid-column:1/-1;text-align:center;padding:var(--space-2);">Loading signals...</div>
+          <div id="signal-board" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(105px,1fr));gap:4px;margin-bottom:var(--space-3);">
+            <div style="color:var(--color-text-muted);font-size:0.8rem;grid-column:1/-1;text-align:center;padding:var(--space-2);">Loading tokens...</div>
           </div>
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--space-2);">
-            <h3 style="margin:0;font-size:0.95rem;color:var(--color-text);">Today's Token Results</h3>
+            <h3 style="margin:0;font-size:0.95rem;color:var(--color-text);">Today's Results</h3>
           </div>
           <div id="daily-results" style="margin-bottom:var(--space-3);">
             <div style="color:var(--color-text-muted);font-size:0.8rem;text-align:center;padding:var(--space-2);">No results yet today</div>
