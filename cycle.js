@@ -1261,7 +1261,7 @@ async function executeForAllUsers(pick) {
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'OPEN', $10, 0, $11, $12, $13)`,
             [key.id, key.user_id, symbol, pick.direction, price, fmtP(slPrice), fmtP(userTp), qty, userLev,
              fmtP(slPrice),
-             pick.structure?.tf15 || null, pick.structure?.tf3 || null, pick.structure?.tf1 || null]
+             pick.structure?.tf4h || pick.structure?.tf15 || null, pick.structure?.tf1h || pick.structure?.tf3 || null, pick.structure?.tf15 || pick.structure?.tf1 || null]
           );
           executedUserSymbols.add(dedupKey);
           userLog.trade(`Binance OK: ${key.email} ${symbol} ${pick.direction} x${userLev} qty=${qty} entry=$${fmtPrice(price)} SL=$${fmtPrice(slPrice)} TP=$${fmtPrice(userTp)}`);
@@ -1347,7 +1347,7 @@ async function executeForAllUsers(pick) {
                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'OPEN', $10, 0, $11, $12, $13)`,
               [key.id, key.user_id, symbol, pick.direction, actualEntry,
                slFmtActual, 0, qty, userLev, slFmtActual,
-               pick.structure?.tf15 || null, pick.structure?.tf3 || null, pick.structure?.tf1 || null]
+               pick.structure?.tf4h || pick.structure?.tf15 || null, pick.structure?.tf1h || pick.structure?.tf3 || null, pick.structure?.tf15 || pick.structure?.tf1 || null]
             );
           } else {
             userLog.error(`Bitunix position not found after order — verify on exchange`);
@@ -1359,7 +1359,7 @@ async function executeForAllUsers(pick) {
                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'OPEN', $10, 0, $11, $12, $13)`,
               [key.id, key.user_id, symbol, pick.direction, price,
                parseFloat(slPrice.toFixed(8)), 0, qty, userLev, parseFloat(slPrice.toFixed(8)),
-               pick.structure?.tf15 || null, pick.structure?.tf3 || null, pick.structure?.tf1 || null]
+               pick.structure?.tf4h || pick.structure?.tf15 || null, pick.structure?.tf1h || pick.structure?.tf3 || null, pick.structure?.tf15 || pick.structure?.tf1 || null]
             );
           }
           executedUserSymbols.add(dedupKey);
