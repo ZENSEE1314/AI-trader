@@ -1625,7 +1625,7 @@ img[src*="logo"] {
 
 .landing {
   position: relative;
-  overflow: hidden;
+  overflow-x: hidden;
 }
 
 /* --- Ambient backgrounds with depth --- */
