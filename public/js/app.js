@@ -2720,17 +2720,63 @@
         listEl.innerHTML = '<span style="color:var(--color-success);">No open positions</span>';
         return;
       }
-      listEl.innerHTML = data.positions.map(p => {
-        const dirColor = p.direction === 'LONG' ? '#22c55e' : '#ef4444';
-        const dirLabel = p.direction === 'LONG' ? '▲ LONG' : '▼ SHORT';
-        const userCount = p.users.length;
-        return `<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid rgba(255,255,255,0.05);">
-          <button class="btn btn-sm" style="font-size:0.7rem;background:#ef4444;color:#fff;border:none;padding:3px 10px;cursor:pointer;" data-close-token="${p.symbol}">✕ Close</button>
-          <strong style="color:var(--color-text);min-width:120px;">${p.symbol}</strong>
-          <span style="color:${dirColor};font-size:0.75rem;font-weight:700;min-width:70px;">${dirLabel}</span>
-          <span style="color:var(--color-text-muted);font-size:0.75rem;">${userCount} user${userCount > 1 ? 's' : ''}: ${p.users.join(', ')}</span>
+
+      let totalPnl = 0;
+      const html = data.positions.map(group => {
+        const sym = group.symbol;
+        const dir = group.direction;
+        const dirColor = dir === 'LONG' ? 'var(--color-success)' : 'var(--color-danger)';
+
+        const tradesHtml = group.trades.map(t => {
+          totalPnl += t.pnlUsdt;
+          const dangerBg = t.danger === 'critical' ? 'rgba(239,68,68,0.15)' : t.danger === 'danger' ? 'rgba(239,68,68,0.08)' : t.danger === 'warning' ? 'rgba(255,176,32,0.06)' : '';
+          const pnlColor = t.pnlUsdt >= 0 ? 'var(--color-success)' : 'var(--color-danger)';
+          const fmtEntry = t.entry >= 1 ? t.entry.toFixed(2) : t.entry.toFixed(6);
+          const fmtCur = t.curPrice >= 1 ? t.curPrice.toFixed(2) : t.curPrice.toFixed(6);
+          const hrs = Math.floor(t.durationMin / 60);
+          const mins = t.durationMin % 60;
+          const dur = hrs > 0 ? `${hrs}h${mins}m` : `${mins}m`;
+
+          return `<div style="display:grid;grid-template-columns:1fr auto;gap:4px;padding:6px 8px;background:${dangerBg};border-radius:4px;margin-bottom:2px;">
+            <div>
+              <span style="font-size:0.75rem;color:var(--color-text-muted);">${escapeHtml(t.email)} • ${t.platform} • x${t.leverage} • ${dur}</span>
+            </div>
+            <div style="text-align:right;">
+              <span style="font-weight:700;color:${pnlColor};font-size:0.85rem;">${t.pnlUsdt >= 0 ? '+' : ''}$${t.pnlUsdt.toFixed(2)}</span>
+              <span style="font-size:0.7rem;color:${pnlColor};margin-left:4px;">(${t.capitalPnl >= 0 ? '+' : ''}${t.capitalPnl}% cap)</span>
+            </div>
+            <div style="font-size:0.7rem;color:var(--color-text-muted);">
+              Entry: $${fmtEntry} → Now: $${fmtCur} | Price: ${t.pnlPct >= 0 ? '+' : ''}${t.pnlPct}%
+            </div>
+            <div style="text-align:right;font-size:0.7rem;color:var(--color-text-muted);">
+              SL: ${t.slDist > 0 ? t.slDist + '% away' : '--'}
+            </div>
+          </div>`;
+        }).join('');
+
+        const groupPnl = group.totalPnl;
+        const groupColor = groupPnl >= 0 ? 'var(--color-success)' : 'var(--color-danger)';
+
+        return `<div style="margin-bottom:var(--space-3);border:1px solid var(--color-border-muted);border-radius:var(--radius-md);overflow:hidden;">
+          <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 10px;background:var(--color-bg-raised);">
+            <div style="display:flex;align-items:center;gap:8px;">
+              <button class="btn btn-sm" style="font-size:0.65rem;background:#ef4444;color:#fff;border:none;padding:2px 8px;" data-close-token="${sym}">Close</button>
+              <strong>${sym.replace('USDT','')}</strong>
+              <span style="color:${dirColor};font-weight:700;font-size:0.8rem;">${dir}</span>
+              <span style="font-size:0.72rem;color:var(--color-text-muted);">${group.trades.length} user(s)</span>
+            </div>
+            <span style="font-weight:700;color:${groupColor};">${groupPnl >= 0 ? '+' : ''}$${groupPnl.toFixed(2)}</span>
+          </div>
+          <div style="padding:4px 6px;">${tradesHtml}</div>
         </div>`;
       }).join('');
+
+      const totalColor = totalPnl >= 0 ? 'var(--color-success)' : 'var(--color-danger)';
+      listEl.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--space-2);padding:6px 0;border-bottom:1px solid var(--color-border-muted);">
+        <span style="font-size:0.85rem;font-weight:600;">Total Open P&L:</span>
+        <span style="font-size:1rem;font-weight:700;color:${totalColor};">${totalPnl >= 0 ? '+' : ''}$${totalPnl.toFixed(2)}</span>
+      </div>${html}`;
+
       listEl.querySelectorAll('[data-close-token]').forEach(btn => {
         btn.addEventListener('click', () => emergencyCloseToken(btn.dataset.closeToken));
       });

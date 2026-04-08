@@ -1010,21 +1010,73 @@ router.post('/token-leverage/auto-populate', async (req, res) => {
 router.get('/open-positions', async (req, res) => {
   try {
     const rows = await query(
-      `SELECT t.symbol, t.direction, t.entry_price, t.quantity, t.sl_price, t.tp_price,
-              t.trailing_sl_price, t.created_at, u.email
+      `SELECT t.id, t.symbol, t.direction, t.entry_price, t.quantity, t.leverage,
+              t.sl_price, t.tp_price, t.trailing_sl_price, t.pnl_usdt,
+              t.created_at, u.email, ak.platform
        FROM trades t
        JOIN api_keys ak ON ak.id = t.api_key_id
        JOIN users u ON u.id = t.user_id
        WHERE t.status = 'OPEN'
        ORDER BY t.symbol, u.email`
     );
+
+    // Fetch live prices
+    let priceMap = {};
+    try {
+      const fetch = require('node-fetch');
+      const r = await fetch('https://fapi.binance.com/fapi/v1/ticker/price', { timeout: 8000 });
+      const tickers = await r.json();
+      for (const t of tickers) priceMap[t.symbol] = parseFloat(t.price);
+    } catch {}
+
+    // Build positions with live P&L
+    const positions = rows.map(t => {
+      const entry = parseFloat(t.entry_price) || 0;
+      const qty = parseFloat(t.quantity) || 0;
+      const lev = parseInt(t.leverage) || 20;
+      const curPrice = priceMap[t.symbol] || entry;
+      const isLong = t.direction !== 'SHORT';
+
+      const pricePnl = isLong ? (curPrice - entry) / entry : (entry - curPrice) / entry;
+      const capitalPnl = pricePnl * lev;
+      const pnlUsdt = isLong ? (curPrice - entry) * qty : (entry - curPrice) * qty;
+      const sl = parseFloat(t.trailing_sl_price || t.sl_price) || 0;
+      const tp = parseFloat(t.tp_price) || 0;
+      const slDist = sl > 0 ? (isLong ? (curPrice - sl) / curPrice * 100 : (sl - curPrice) / curPrice * 100) : 0;
+
+      const durationMin = Math.round((Date.now() - new Date(t.created_at).getTime()) / 60000);
+
+      // Danger level
+      let danger = 'safe';
+      if (capitalPnl < -0.5) danger = 'critical'; // -50%+ capital
+      else if (capitalPnl < -0.2) danger = 'danger'; // -20%+ capital
+      else if (capitalPnl < 0) danger = 'warning'; // losing
+
+      return {
+        id: t.id,
+        symbol: t.symbol,
+        direction: t.direction,
+        email: t.email,
+        platform: t.platform,
+        entry, curPrice, qty, leverage: lev,
+        pnlUsdt: parseFloat(pnlUsdt.toFixed(2)),
+        pnlPct: parseFloat((pricePnl * 100).toFixed(2)),
+        capitalPnl: parseFloat((capitalPnl * 100).toFixed(1)),
+        sl, tp, slDist: parseFloat(slDist.toFixed(1)),
+        durationMin,
+        danger,
+      };
+    });
+
     // Group by symbol
     const grouped = {};
-    for (const r of rows) {
-      if (!grouped[r.symbol]) grouped[r.symbol] = { symbol: r.symbol, users: [], direction: r.direction, entry: r.entry_price };
-      grouped[r.symbol].users.push(r.email);
+    for (const p of positions) {
+      if (!grouped[p.symbol]) grouped[p.symbol] = { symbol: p.symbol, direction: p.direction, trades: [], totalPnl: 0 };
+      grouped[p.symbol].trades.push(p);
+      grouped[p.symbol].totalPnl += p.pnlUsdt;
     }
-    res.json({ positions: Object.values(grouped), total: rows.length });
+
+    res.json({ positions: Object.values(grouped), all: positions, total: rows.length });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
