@@ -43,12 +43,14 @@ let circuitBreakerUntil = 0;
 // ── Trailing SL config ─────────────────────────────────────
 // All values are PRICE % (not capital %).
 // Initial SL: 1% price distance from entry (at 20x = 20% capital risk).
-// Trailing: at +1.3% profit → SL locks at +0.5%, then +1% steps upward.
+// Trailing: at +1% profit → SL locks at +0.5%, every +1% adds another +0.5% to SL.
+// Example: +1%→SL+0.5%, +2%→SL+1%, +3%→SL+1.5%, +4%→SL+2%, ...
 const TRAILING_SL = {
   INITIAL_SL_PCT: 0.01,            // 1% price distance — real protection at 20x = 20% capital risk
-  FIRST_TRIGGER: 0.013,            // First trailing trigger at +1.3% price profit
-  FIRST_SL: 0.005,                 // Lock SL at +0.5% profit (break-even+) when first trigger hit
-  STEP_SIZE: 0.01,                 // Each subsequent step adds +1% profit lock
+  FIRST_TRIGGER: 0.01,             // First trailing trigger at +1% price profit
+  FIRST_SL: 0.005,                 // Lock SL at +0.5% profit when first trigger hit
+  STEP_TRIGGER: 0.01,              // Each subsequent trigger step is +1% above previous
+  STEP_SL: 0.005,                  // Each step adds +0.5% to SL lock
 };
 
 // ── Compound: always use current wallet balance ─────────────
@@ -306,25 +308,25 @@ async function updateStopLoss(client, symbol, newSlPrice, closeSide, platform, p
 }
 
 // ── TRAILING SL ────────────────────────────────────────────
-// At +10% price profit → SL locks at +5%.
-// Then every +2.5% step: +12.5% → SL +7.5%, +15% → SL +10%, etc.
+// At +1% profit → SL locks at +0.5%.
+// Every +1% more: +2%→SL+1%, +3%→SL+1.5%, +4%→SL+2%, etc.
 // SL only moves up, never down.
 function calculateTrailingStep(entryPrice, currentPrice, isLong, lastStep, leverage = 20) {
   const pricePct = isLong
     ? (currentPrice - entryPrice) / entryPrice
     : (entryPrice - currentPrice) / entryPrice;
 
-  const { FIRST_TRIGGER, FIRST_SL, STEP_SIZE } = TRAILING_SL;
+  const { FIRST_TRIGGER, FIRST_SL, STEP_TRIGGER, STEP_SL } = TRAILING_SL;
   let bestSl = null;
 
   if (pricePct >= FIRST_TRIGGER) {
-    // First tier: +10% profit → SL at +5%
+    // First tier: +1% profit → SL at +0.5%
     bestSl = FIRST_SL;
 
-    // Additional steps: each +2.5% above first trigger moves SL up by +2.5%
-    const stepsAbove = Math.floor((pricePct - FIRST_TRIGGER) / STEP_SIZE);
+    // Additional steps: each +1% above first trigger adds +0.5% to SL
+    const stepsAbove = Math.floor((pricePct - FIRST_TRIGGER + 1e-10) / STEP_TRIGGER);
     if (stepsAbove > 0) {
-      bestSl = FIRST_SL + stepsAbove * STEP_SIZE;
+      bestSl = FIRST_SL + stepsAbove * STEP_SL;
     }
   }
 
