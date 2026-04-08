@@ -1343,14 +1343,27 @@
       uptimeEl.textContent = `Uptime: ${h}h ${m}m`;
     }
 
-    // Agent cards — load profiles for skills/config
+    // Agent stats bar
+    if (health.agents) {
+      const agents = Object.values(health.agents);
+      const totalEl = document.getElementById('mc-total-agents');
+      const runningEl = document.getElementById('mc-running-count');
+      const signalEl = document.getElementById('mc-signal-count');
+      const errorEl = document.getElementById('mc-error-count');
+      if (totalEl) totalEl.textContent = agents.length;
+      if (runningEl) runningEl.textContent = agents.filter(a => a.state === 'running').length;
+      if (signalEl) signalEl.textContent = agents.filter(a => a.signalCount > 0 || a.lastSignalCount > 0).reduce((s, a) => s + (a.signalCount || a.lastSignalCount || 0), 0);
+      if (errorEl) errorEl.textContent = agents.filter(a => a.state === 'error').length;
+    }
+
+    // Agent cards — load profiles, store all agents for filtering
+    mcAllAgents = health.agents || {};
     const grid = document.getElementById('mc-agents-grid');
     if (grid && health.agents) {
-      // Fetch profiles (cached briefly)
       if (!mcProfilesCache || Date.now() - mcProfilesCacheTs > 10000) {
-        api('GET', '/api/admin/agents/profiles').then(p => { mcProfilesCache = p; mcProfilesCacheTs = Date.now(); renderAgentCards(grid, health.agents); }).catch(() => renderAgentCards(grid, health.agents));
+        api('GET', '/api/admin/agents/profiles').then(p => { mcProfilesCache = p; mcProfilesCacheTs = Date.now(); filterAgents(mcCurrentFilter); }).catch(() => filterAgents(mcCurrentFilter));
       } else {
-        renderAgentCards(grid, health.agents);
+        filterAgents(mcCurrentFilter);
       }
     }
 
@@ -1375,6 +1388,27 @@
   }
 
   let mcProfilesCache = null, mcProfilesCacheTs = 0;
+  let mcAllAgents = {};
+  let mcCurrentFilter = 'system';
+
+  function filterAgents(filter) {
+    mcCurrentFilter = filter;
+    // Update tab active state
+    document.querySelectorAll('.mc-filter-tab').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.filter === filter);
+    });
+    const grid = document.getElementById('mc-agents-grid');
+    if (!grid) return;
+
+    const filtered = {};
+    for (const [key, agent] of Object.entries(mcAllAgents)) {
+      const isToken = agent.tokenAgent || agent.symbol;
+      if (filter === 'system' && !isToken) filtered[key] = agent;
+      else if (filter === 'token' && isToken) filtered[key] = agent;
+      else if (filter === 'all') filtered[key] = agent;
+    }
+    renderAgentCards(grid, filtered);
+  }
 
   function renderAgentCards(grid, agents) {
     const entries = Object.entries(agents);
@@ -3228,7 +3262,7 @@
     addRiskLevel, saveRiskLevel, deleteRiskLevel,
     loadOpenPositions, emergencyCloseToken, emergencyCloseAll,
     fixBitunixPnl, debugBitunix, runBacktest, loadAiVersions, runAiOptimize,
-    mcRefresh, mcCommand, mcChat, mcChatQuick, switchAdminTab, customerChat,
+    mcRefresh, mcCommand, mcChat, mcChatQuick, switchAdminTab, filterAgents, customerChat,
     loadSignalBoard, toggleWatch, watchAll, setUserLeverage,
     adminLoadTokenBoard, adminAddTokenBoard, adminSetRiskTag, adminSetTokenLev, adminToggleBan, adminRemoveTokenBoard,
     mcToggleSkill, mcUpdateConfig, mcCreateAgent, mcRemoveAgent,

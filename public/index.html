@@ -1026,6 +1026,33 @@
               <button class="btn btn-sm mc-cmd-btn" style="border:1px solid var(--color-border);color:var(--color-text);" onclick="window.CryptoBot.mcRefresh()">Refresh</button>
             </div>
           </div>
+          <!-- Agent Stats Bar -->
+          <div id="mc-stats-bar" class="summary-grid" style="margin-bottom:var(--space-3);">
+            <div class="summary-card" style="border-left:3px solid var(--color-accent);padding:8px 12px;">
+              <span class="summary-card-label" style="font-size:0.7rem;">Total Agents</span>
+              <span id="mc-total-agents" class="summary-card-value text-mono" style="font-size:1.1rem;">--</span>
+            </div>
+            <div class="summary-card" style="border-left:3px solid var(--color-success);padding:8px 12px;">
+              <span class="summary-card-label" style="font-size:0.7rem;">Running</span>
+              <span id="mc-running-count" class="summary-card-value text-mono" style="font-size:1.1rem;color:var(--color-success);">--</span>
+            </div>
+            <div class="summary-card" style="border-left:3px solid var(--color-warning);padding:8px 12px;">
+              <span class="summary-card-label" style="font-size:0.7rem;">Signals</span>
+              <span id="mc-signal-count" class="summary-card-value text-mono" style="font-size:1.1rem;color:var(--color-warning);">--</span>
+            </div>
+            <div class="summary-card" style="border-left:3px solid var(--color-danger);padding:8px 12px;">
+              <span class="summary-card-label" style="font-size:0.7rem;">Errors</span>
+              <span id="mc-error-count" class="summary-card-value text-mono" style="font-size:1.1rem;color:var(--color-danger);">--</span>
+            </div>
+          </div>
+
+          <!-- Agent Filter Tabs -->
+          <div style="display:flex;gap:2px;margin-bottom:var(--space-3);border-bottom:1px solid var(--color-border-muted);">
+            <button class="mc-filter-tab active" data-filter="system" onclick="window.CryptoBot.filterAgents('system')">System Agents</button>
+            <button class="mc-filter-tab" data-filter="token" onclick="window.CryptoBot.filterAgents('token')">Token Agents</button>
+            <button class="mc-filter-tab" data-filter="all" onclick="window.CryptoBot.filterAgents('all')">All</button>
+          </div>
+
           <div id="mc-agents-grid" class="mc-agents-grid">
             <div style="color:var(--color-text-muted);font-size:0.85rem;padding:var(--space-3);text-align:center;">Loading agents...</div>
           </div>
