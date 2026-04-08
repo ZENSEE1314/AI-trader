@@ -350,8 +350,8 @@ async function analyzeLHHL(ticker, params, dailyBiasCache) {
   // │ Don't buy at the peak, don't sell at the bottom.        │
   // └─────────────────────────────────────────────────────────┘
   {
-    // Use 15M candles to find recent range (last 20 candles = 5 hours)
-    const rangeCandles = klines15m.slice(-20);
+    // Use 1M candles to find recent range (last 30 candles = 30 minutes)
+    const rangeCandles = klines1m.slice(-30);
     let rangeHigh = -Infinity, rangeLow = Infinity;
     for (const k of rangeCandles) {
       const h = parseFloat(k[2]), l = parseFloat(k[3]);
