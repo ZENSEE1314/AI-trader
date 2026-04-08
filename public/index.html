@@ -1141,100 +1141,37 @@
              TAB: Tokens
              ═══════════════════════════════════════════ -->
         <div id="admin-tab-tokens" class="admin-tab-panel hidden">
-          <!-- Token Board — Admin risk tags -->
-          <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Token Board — Risk Tags</h3>
+          <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Token Board</h3>
           <div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-4);margin-bottom:var(--space-4);">
             <div style="display:flex;gap:var(--space-2);align-items:end;margin-bottom:var(--space-3);flex-wrap:wrap;">
-              <div class="form-group" style="margin-bottom:0;flex:1;min-width:140px;position:relative;">
+              <div class="form-group" style="margin-bottom:0;flex:1;min-width:140px;">
                 <label class="form-label">Add Token</label>
                 <input class="form-input text-mono" type="text" id="admin-board-symbol" placeholder="BTCUSDT" style="text-transform:uppercase;">
               </div>
               <div class="form-group" style="margin-bottom:0;width:120px;">
-                <label class="form-label">Risk Tag</label>
+                <label class="form-label">Risk</label>
                 <select class="form-input" id="admin-board-risk">
                   <option value="">None</option>
-                  <option value="popular">Popular / Hot</option>
+                  <option value="popular">Popular</option>
                   <option value="low">Low Risk</option>
-                  <option value="medium">Medium Risk</option>
+                  <option value="medium">Med Risk</option>
                   <option value="high">High Risk</option>
                 </select>
+              </div>
+              <div class="form-group" style="margin-bottom:0;width:80px;">
+                <label class="form-label">Leverage</label>
+                <input class="form-input text-mono" type="number" id="admin-board-lev" value="20" min="1" max="125">
               </div>
               <button class="btn btn-primary btn-sm" onclick="window.CryptoBot.adminAddTokenBoard()">Add</button>
               <button class="btn btn-sm" style="border:1px solid var(--color-border);color:var(--color-text);" onclick="window.CryptoBot.adminLoadTokenBoard()">Refresh</button>
             </div>
-            <div class="table-wrap" style="max-height:400px;overflow-y:auto;">
+            <div class="table-wrap" style="max-height:500px;overflow-y:auto;">
               <table class="data-table">
-                <thead style="position:sticky;top:0;z-index:1;"><tr><th>Symbol</th><th>Risk Tag</th><th>Action</th></tr></thead>
+                <thead style="position:sticky;top:0;z-index:1;"><tr><th>Symbol</th><th>Risk</th><th>Leverage</th><th>Banned</th><th>Action</th></tr></thead>
                 <tbody id="admin-board-tbody"></tbody>
               </table>
             </div>
-            <div id="admin-board-empty" style="color:var(--color-text-muted);font-size:0.85rem;padding:var(--space-3);text-align:center;">No tokens tagged. Add tokens above to set risk levels for users.</div>
-          </div>
-
-          <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Allowed Tokens <span id="allowed-count" class="badge" style="background:var(--color-success);color:#fff;padding:2px 8px;border-radius:12px;font-size:0.75rem;margin-left:4px;">0</span> <span style="font-size:0.75rem;color:var(--color-text-muted);">(only trade these)</span></h3>
-          <div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-4);margin-bottom:var(--space-4);">
-            <div style="display:flex;gap:var(--space-2);align-items:end;margin-bottom:var(--space-3);flex-wrap:wrap;">
-              <div class="form-group" style="margin-bottom:0;flex:1;min-width:140px;position:relative;">
-                <label class="form-label" for="admin-allowed-symbol">Token Symbol</label>
-                <input class="form-input text-mono" type="text" id="admin-allowed-symbol" placeholder="Type to search..." autocomplete="off" style="text-transform:uppercase;" oninput="window.CryptoBot.searchAdminToken(this,'admin-allowed')" onfocus="window.CryptoBot.searchAdminToken(this,'admin-allowed')">
-                <div class="coin-dropdown hidden" id="admin-allowed-dropdown"></div>
-              </div>
-              <button class="btn btn-primary btn-sm" onclick="window.CryptoBot.addAllowedToken()">Add Allowed</button>
-              <button class="btn btn-sm" id="scan-bitunix-btn" style="background:var(--color-accent);color:#fff;" onclick="window.CryptoBot.scanBitunixTokens()">Scan Bitunix</button>
-            </div>
-            <div class="table-wrap" style="max-height:300px;overflow-y:auto;">
-              <table class="data-table">
-                <thead style="position:sticky;top:0;z-index:1;"><tr><th>Symbol</th><th>Action</th></tr></thead>
-                <tbody id="admin-allowed-tbody"></tbody>
-              </table>
-            </div>
-            <div id="admin-allowed-empty" style="color:var(--color-text-muted);font-size:0.85rem;padding:var(--space-3);text-align:center;">No allowed tokens set. Bot trades top coins by volume.</div>
-          </div>
-
-          <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Banned Tokens <span id="banned-count" class="badge" style="background:var(--color-danger);color:#fff;padding:2px 8px;border-radius:12px;font-size:0.75rem;margin-left:4px;">0</span> <span style="font-size:0.75rem;color:var(--color-text-muted);">(never trade these)</span></h3>
-          <div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-4);margin-bottom:var(--space-5);">
-            <div style="display:flex;gap:var(--space-2);align-items:end;margin-bottom:var(--space-3);flex-wrap:wrap;">
-              <div class="form-group" style="margin-bottom:0;flex:1;min-width:140px;position:relative;">
-                <label class="form-label" for="admin-banned-symbol">Token Symbol</label>
-                <input class="form-input text-mono" type="text" id="admin-banned-symbol" placeholder="Type to search..." autocomplete="off" style="text-transform:uppercase;" oninput="window.CryptoBot.searchAdminToken(this,'admin-banned')" onfocus="window.CryptoBot.searchAdminToken(this,'admin-banned')">
-                <div class="coin-dropdown hidden" id="admin-banned-dropdown"></div>
-              </div>
-              <button class="btn btn-danger btn-sm" onclick="window.CryptoBot.addBannedToken()">Ban Token</button>
-            </div>
-            <div class="table-wrap" style="max-height:300px;overflow-y:auto;">
-              <table class="data-table">
-                <thead style="position:sticky;top:0;z-index:1;"><tr><th>Symbol</th><th>Action</th></tr></thead>
-                <tbody id="admin-banned-tbody"></tbody>
-              </table>
-            </div>
-            <div id="admin-banned-empty" style="color:var(--color-text-muted);font-size:0.85rem;padding:var(--space-3);text-align:center;">No banned tokens. Bot can trade any coin.</div>
-          </div>
-
-          <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Token Leverage <span id="leverage-count" class="badge" style="background:var(--color-accent);color:#fff;padding:2px 8px;border-radius:12px;font-size:0.75rem;margin-left:4px;">0</span></h3>
-          <div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-4);margin-bottom:var(--space-5);">
-            <div style="display:flex;gap:var(--space-2);align-items:end;margin-bottom:var(--space-3);flex-wrap:wrap;">
-              <div class="form-group" style="margin-bottom:0;flex:1;min-width:140px;position:relative;">
-                <label class="form-label" for="admin-lev-symbol">Token Symbol</label>
-                <input class="form-input text-mono" type="text" id="admin-lev-symbol" placeholder="Type to search..." autocomplete="off" style="text-transform:uppercase;" oninput="window.CryptoBot.searchAdminToken(this,'admin-lev')" onfocus="window.CryptoBot.searchAdminToken(this,'admin-lev')">
-                <div class="coin-dropdown hidden" id="admin-lev-dropdown"></div>
-              </div>
-              <div class="form-group" style="margin-bottom:0;width:90px;">
-                <label class="form-label" for="admin-lev-value">Leverage</label>
-                <input class="form-input text-mono" type="number" id="admin-lev-value" placeholder="20" min="1" max="125" value="20">
-              </div>
-              <button class="btn btn-primary btn-sm" onclick="window.CryptoBot.addTokenLeverage()">Set Leverage</button>
-            </div>
-            <div style="display:flex;gap:var(--space-2);margin-bottom:var(--space-3);flex-wrap:wrap;align-items:center;">
-              <button class="btn btn-sm" style="background:var(--color-accent);color:#fff;" onclick="window.CryptoBot.autoPopulateLeverage()">Auto-Populate ($1000+ tokens)</button>
-              <span style="font-size:0.75rem;color:var(--color-text-muted);">BTC/ETH 100x, others 20x.</span>
-            </div>
-            <div class="table-wrap" style="max-height:400px;overflow-y:auto;">
-              <table class="data-table">
-                <thead style="position:sticky;top:0;z-index:1;"><tr><th>Symbol</th><th>Price</th><th>Leverage</th><th>Action</th></tr></thead>
-                <tbody id="admin-lev-tbody"></tbody>
-              </table>
-            </div>
-            <div id="admin-lev-empty" style="color:var(--color-text-muted);font-size:0.85rem;padding:var(--space-3);text-align:center;">No token leverage set. Default 20x for all tokens.</div>
+            <div id="admin-board-empty" style="color:var(--color-text-muted);font-size:0.85rem;padding:var(--space-3);text-align:center;">No tokens. Add tokens above.</div>
           </div>
         </div>
 

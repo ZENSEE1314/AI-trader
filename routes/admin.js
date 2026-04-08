@@ -2945,12 +2945,15 @@ router.post('/clear-test-data', async (req, res) => {
 
 // ── Token Board Management ──────────────────────────────────
 
-// GET /api/admin/token-board — all tokens with risk tags
+// GET /api/admin/token-board — all tokens with risk tags + leverage
 router.get('/token-board', async (req, res) => {
   try {
     const tokens = await query(
-      `SELECT symbol, enabled, banned, risk_tag, featured, "rank"
-       FROM global_token_settings ORDER BY "rank" ASC, symbol ASC`
+      `SELECT g.symbol, g.enabled, g.banned, g.risk_tag, g.featured, g."rank",
+              COALESCE(tl.leverage, 20) as leverage
+       FROM global_token_settings g
+       LEFT JOIN token_leverage tl ON tl.symbol = g.symbol AND tl.enabled = true
+       ORDER BY g."rank" ASC, g.symbol ASC`
     );
     res.json(tokens);
   } catch (err) { res.status(500).json({ error: err.message }); }
