@@ -921,66 +921,72 @@
         if (header) { header.style.opacity = '0'; header.style.transform = 'translateY(20px)'; }
 
         function animateIn() {
-          // Phase 1: Header + Hub (immediate)
-          if (header) {
-            header.style.transition = 'opacity 0.8s ease, transform 0.8s ease';
-            header.style.opacity = '1';
-            header.style.transform = 'translateY(0)';
-          }
-          hub.style.transition = 'opacity 0.8s ease, transform 0.8s cubic-bezier(0.34,1.56,0.64,1)';
-          hub.style.opacity = '1';
-          hub.style.transform = 'translate(-50%,-50%) scale(1)';
+          // Force browser to commit the hidden state before adding transitions.
+          // Double rAF ensures the initial opacity:0 frame is painted first.
+          requestAnimationFrame(function() {
+            requestAnimationFrame(function() {
+              // Phase 1: Header + Hub
+              if (header) {
+                header.style.transition = 'opacity 0.8s ease, transform 0.8s ease';
+                header.style.opacity = '1';
+                header.style.transform = 'translateY(0)';
+              }
+              hub.style.transition = 'opacity 0.8s ease, transform 0.8s cubic-bezier(0.34,1.56,0.64,1)';
+              hub.style.opacity = '1';
+              hub.style.transform = 'translate(-50%,-50%) scale(1)';
 
-          // Phase 2: Lines extend (400ms delay)
-          setTimeout(function() {
-            lines.forEach(function(l) {
-              l.style.transition = 'stroke-dashoffset 1.2s ease, opacity 0.6s ease';
-              l.style.strokeDashoffset = '0';
-              l.style.opacity = '1';
-            });
-            lineGlows.forEach(function(g) {
-              g.style.transition = 'stroke-dashoffset 1.2s ease, opacity 0.6s ease';
-              g.style.strokeDashoffset = '0';
-              g.style.opacity = '0.4';
-            });
-          }, 400);
+              // Phase 2: Lines extend (400ms delay)
+              setTimeout(function() {
+                lines.forEach(function(l) {
+                  l.style.transition = 'stroke-dashoffset 1.2s ease, opacity 0.6s ease';
+                  l.style.strokeDashoffset = '0';
+                  l.style.opacity = '1';
+                });
+                lineGlows.forEach(function(g) {
+                  g.style.transition = 'stroke-dashoffset 1.2s ease, opacity 0.6s ease';
+                  g.style.strokeDashoffset = '0';
+                  g.style.opacity = '0.4';
+                });
+              }, 400);
 
-          // Phase 3: Exchange nodes (800ms delay, staggered)
-          var step2Nodes = [];
-          var step3Nodes = [];
-          nodes.forEach(function(n) {
-            var step = parseInt(n.getAttribute('data-cn-step'), 10);
-            if (step === 2) step2Nodes.push(n); else step3Nodes.push(n);
+              // Phase 3: Exchange nodes (800ms delay, staggered)
+              var step2Nodes = [];
+              var step3Nodes = [];
+              nodes.forEach(function(n) {
+                var step = parseInt(n.getAttribute('data-cn-step'), 10);
+                if (step === 2) step2Nodes.push(n); else step3Nodes.push(n);
+              });
+
+              setTimeout(function() {
+                step2Nodes.forEach(function(n, i) {
+                  setTimeout(function() {
+                    n.style.transition = 'opacity 0.6s ease, transform 0.6s cubic-bezier(0.34,1.56,0.64,1)';
+                    n.style.opacity = '1';
+                    n.style.transform = 'scale(1) translateY(0)';
+                  }, i * 150);
+                });
+              }, 800);
+
+              // Phase 4: AI + Wallet nodes (1200ms)
+              setTimeout(function() {
+                step3Nodes.forEach(function(n, i) {
+                  setTimeout(function() {
+                    n.style.transition = 'opacity 0.6s ease, transform 0.6s cubic-bezier(0.34,1.56,0.64,1)';
+                    n.style.opacity = '1';
+                    n.style.transform = 'scale(1) translateY(0)';
+                  }, i * 150);
+                });
+              }, 1200);
+
+              // Phase 5: Pulse dots (1600ms)
+              setTimeout(function() {
+                pulseDots.forEach(function(d) {
+                  d.style.transition = 'opacity 0.5s ease';
+                  d.style.opacity = '0.9';
+                });
+              }, 1600);
+            });
           });
-
-          setTimeout(function() {
-            step2Nodes.forEach(function(n, i) {
-              setTimeout(function() {
-                n.style.transition = 'opacity 0.6s ease, transform 0.6s cubic-bezier(0.34,1.56,0.64,1)';
-                n.style.opacity = '1';
-                n.style.transform = 'scale(1) translateY(0)';
-              }, i * 150);
-            });
-          }, 800);
-
-          // Phase 4: AI + Wallet nodes (1200ms)
-          setTimeout(function() {
-            step3Nodes.forEach(function(n, i) {
-              setTimeout(function() {
-                n.style.transition = 'opacity 0.6s ease, transform 0.6s cubic-bezier(0.34,1.56,0.64,1)';
-                n.style.opacity = '1';
-                n.style.transform = 'scale(1) translateY(0)';
-              }, i * 150);
-            });
-          }, 1200);
-
-          // Phase 5: Pulse dots (1600ms)
-          setTimeout(function() {
-            pulseDots.forEach(function(d) {
-              d.style.transition = 'opacity 0.5s ease';
-              d.style.opacity = '0.9';
-            });
-          }, 1600);
         }
 
         if (!reducedMotion && 'IntersectionObserver' in window) {
