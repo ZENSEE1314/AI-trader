@@ -600,22 +600,41 @@ router.get('/signal-board', async (req, res) => {
     const board = getSignalBoard();
     const dailyResults = await getDailyResults();
 
-    // Get top 50 coins by volume from Binance
+    // Get ALL active tokens from admin board (not just top 50)
+    let adminTokens = new Set();
+    try {
+      const adminRows = await query('SELECT symbol FROM global_token_settings WHERE enabled = true AND banned = false');
+      for (const r of adminRows) adminTokens.add(r.symbol);
+    } catch {}
+
+    // Fetch live prices from Binance
     let topCoins = [];
     try {
       const fetch = require('node-fetch');
       const r = await fetch('https://fapi.binance.com/fapi/v1/ticker/24hr', { timeout: 10000 });
       const tickers = await r.json();
-      topCoins = tickers
-        .filter(t => t.symbol.endsWith('USDT') && !t.symbol.includes('_'))
-        .sort((a, b) => parseFloat(b.quoteVolume) - parseFloat(a.quoteVolume))
-        .slice(0, 50)
-        .map(t => ({
-          symbol: t.symbol,
-          price: parseFloat(t.lastPrice),
-          change24h: parseFloat(t.priceChangePercent),
-          volume: parseFloat(t.quoteVolume),
-        }));
+      const tickerMap = {};
+      for (const t of tickers) {
+        if (t.symbol.endsWith('USDT') && !t.symbol.includes('_')) {
+          tickerMap[t.symbol] = {
+            symbol: t.symbol,
+            price: parseFloat(t.lastPrice),
+            change24h: parseFloat(t.priceChangePercent),
+            volume: parseFloat(t.quoteVolume),
+          };
+        }
+      }
+      // If admin has tokens, show those. Otherwise fall back to top 50 by volume
+      if (adminTokens.size > 0) {
+        for (const sym of adminTokens) {
+          if (tickerMap[sym]) topCoins.push(tickerMap[sym]);
+        }
+        topCoins.sort((a, b) => b.volume - a.volume);
+      } else {
+        topCoins = Object.values(tickerMap)
+          .sort((a, b) => b.volume - a.volume)
+          .slice(0, 50);
+      }
     } catch {}
 
     // Get user's watchlist
