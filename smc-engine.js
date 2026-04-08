@@ -345,6 +345,37 @@ async function analyzeLHHL(ticker, params, dailyBiasCache) {
     return null;
   }
 
+  // ┌─────────────────────────────────────────────────────────┐
+  // │ Pullback Filter: LONG at bottom, SHORT at top           │
+  // │ Don't buy at the peak, don't sell at the bottom.        │
+  // └─────────────────────────────────────────────────────────┘
+  {
+    // Use 15M candles to find recent range (last 20 candles = 5 hours)
+    const rangeCandles = klines15m.slice(-20);
+    let rangeHigh = -Infinity, rangeLow = Infinity;
+    for (const k of rangeCandles) {
+      const h = parseFloat(k[2]), l = parseFloat(k[3]);
+      if (h > rangeHigh) rangeHigh = h;
+      if (l < rangeLow) rangeLow = l;
+    }
+    const rangeSize = rangeHigh - rangeLow;
+    if (rangeSize <= 0) return null;
+
+    // Where is price within the range? 0 = bottom, 1 = top
+    const pricePosition = (price - rangeLow) / rangeSize;
+
+    // LONG: price must be in bottom 60% of range (buying the dip, not the top)
+    if (direction === 'LONG' && pricePosition > 0.60) {
+      bLog.scan(`${symbol}: LONG blocked — price at ${(pricePosition * 100).toFixed(0)}% of range (too high, buying top). Need pullback below 60%`);
+      return null;
+    }
+    // SHORT: price must be in top 60% of range (selling the bounce, not the bottom)
+    if (direction === 'SHORT' && pricePosition < 0.40) {
+      bLog.scan(`${symbol}: SHORT blocked — price at ${(pricePosition * 100).toFixed(0)}% of range (too low, selling bottom). Need bounce above 40%`);
+      return null;
+    }
+  }
+
   // Recency: 1M confirming swing must be within last 10 candles (fresh)
   const lastCandleIdx = klines1m.length - 1;
   const entrySwing = direction === 'LONG' ? struct1m.lastLow : struct1m.lastHigh;
