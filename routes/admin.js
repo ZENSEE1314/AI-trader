@@ -2025,7 +2025,7 @@ router.post('/ai-optimize', async (req, res) => {
         const batch = Math.min(remaining, PAGE);
         const url = `https://fapi.bitunix.com/api/v1/futures/market/kline?symbol=${symbol}&interval=${interval}&limit=${batch}&endTime=${et}`;
         try {
-          const opts = { timeout: 8000, ...getFetchOptions() };
+          const opts = { timeout: 12000, ...getFetchOptions() };
           const r = await fetch(url, opts);
           if (!r.ok) break;
           const json = await r.json();
@@ -2144,9 +2144,53 @@ router.post('/ai-optimize', async (req, res) => {
       const k1hLimit = Math.ceil(DAYS * 24) + 50;
       const failedCoins = [];
 
-      // Fetch ONE coin at a time, ONE timeframe at a time — avoids Bitunix rate limits
-      for (let i = 0; i < topCoins.length; i++) {
-        const sym = topCoins[i];
+      // Try loading PARTIAL cache from DB — resume from where we left off after timeout
+      let resumedCount = 0;
+      try {
+        const partialCache = await query('SELECT cache_key, candle_data, created_at FROM optimizer_cache WHERE id = 1');
+        if (partialCache.length && partialCache[0].candle_data) {
+          const age = Date.now() - partialCache[0].created_at;
+          // Accept partial data up to 2 hours old (longer than full cache TTL — gives time to resume)
+          if (age < 2 * 60 * 60 * 1000) {
+            const saved = typeof partialCache[0].candle_data === 'string'
+              ? JSON.parse(partialCache[0].candle_data) : partialCache[0].candle_data;
+            for (const sym of Object.keys(saved)) {
+              if (topCoins.includes(sym) && saved[sym].k15 && saved[sym].k15.length > 0) {
+                coinData[sym] = saved[sym];
+                resumedCount++;
+              }
+            }
+            if (resumedCount > 0) {
+              sendLog(`📦 Resumed ${resumedCount} tokens from DB cache (${Math.round(age/1000)}s old)`);
+            }
+          }
+        }
+      } catch (e) {
+        sendLog(`Partial cache load failed: ${e.message}`);
+      }
+
+      // Fetch remaining tokens (skip already-cached ones)
+      const toFetch = topCoins.filter(sym => !coinData[sym]);
+      if (toFetch.length < topCoins.length) {
+        sendLog(`Skipping ${topCoins.length - toFetch.length} already-cached tokens, fetching ${toFetch.length} remaining`);
+      }
+
+      // Incremental save helper — persists partial results every N tokens
+      const SAVE_EVERY = 5;
+      async function savePartialToDb() {
+        try {
+          const nowTs = Date.now();
+          await query(
+            `INSERT INTO optimizer_cache (id, cache_key, candle_data, created_at)
+             VALUES (1, $1, $2::jsonb, $3)
+             ON CONFLICT (id) DO UPDATE SET cache_key = $1, candle_data = $2::jsonb, created_at = $3`,
+            [cacheKey, JSON.stringify(coinData), nowTs]
+          );
+        } catch {}
+      }
+
+      for (let i = 0; i < toFetch.length; i++) {
+        const sym = toFetch[i];
         try {
           const kD = await fetchK(sym,'1d',Math.max(10,DAYS+2));
           const k4h = await fetchK(sym,'4h',k4hLimit);
@@ -2166,25 +2210,31 @@ router.post('/ai-optimize', async (req, res) => {
           sendLog(`  ❌ ${sym} — ${fetchErr.message || 'timeout'}`);
         }
         // Delay between tokens to avoid rate limits
-        if (i < topCoins.length - 1) await new Promise(r => setTimeout(r, 200));
-        if ((i+1) % 5 === 0 || i === topCoins.length - 1) {
-          sendLog(`  ${i+1}/${topCoins.length} done (${Object.keys(coinData).length} OK)`);
-          sendProgress('fetch', Math.round((i+1)/topCoins.length*100));
+        if (i < toFetch.length - 1) await new Promise(r => setTimeout(r, 200));
+
+        const totalDone = resumedCount + i + 1;
+        if ((i+1) % SAVE_EVERY === 0 || i === toFetch.length - 1) {
+          sendLog(`  ${totalDone}/${topCoins.length} done (${Object.keys(coinData).length} OK)`);
+          sendProgress('fetch', Math.round(totalDone/topCoins.length*100));
+          // Save partial progress to DB — so we can resume after timeout
+          await savePartialToDb();
+          if ((i+1) % SAVE_EVERY === 0 && i < toFetch.length - 1) {
+            sendLog(`  💾 Progress saved (${Object.keys(coinData).length} tokens) — safe to resume if timeout`);
+          }
         }
       }
       sendLog(`Fetch done: ${Object.keys(coinData).length}/${topCoins.length} [Bitunix]`);
       if (failedCoins.length) sendLog(`Failed: ${failedCoins.join(', ')}`);
-      // Save to in-memory cache
+      // Final save to in-memory + DB cache
       const nowTs = Date.now();
       _candleCache.data = coinData;
       _candleCache.tokens = cacheKey;
       _candleCache.ts = nowTs;
-      // Persist to DB so it survives redeploys
       try {
         await query(
           `INSERT INTO optimizer_cache (id, cache_key, candle_data, created_at)
-           VALUES (1, $1, $2, $3)
-           ON CONFLICT (id) DO UPDATE SET cache_key = $1, candle_data = $2, created_at = $3`,
+           VALUES (1, $1, $2::jsonb, $3)
+           ON CONFLICT (id) DO UPDATE SET cache_key = $1, candle_data = $2::jsonb, created_at = $3`,
           [cacheKey, JSON.stringify(coinData), nowTs]
         );
         sendLog(`Candle data cached in DB (valid for ${CANDLE_CACHE_TTL/60000} min)`);
