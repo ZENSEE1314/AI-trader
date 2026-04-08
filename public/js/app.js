@@ -1652,7 +1652,8 @@
             : riskTag === 'popular' ? '<span class="risk-badge risk-pop">Hot</span>'
             : '';
 
-          return `<div class="signal-card ${dir ? (dir === 'LONG' ? 'signal-long' : 'signal-short') : 'signal-none'} ${on ? 'signal-watching' : ''}" style="position:relative;">
+          const dirClass = dir ? (dir === 'LONG' ? 'signal-long' : 'signal-short') : (on ? '' : 'signal-none');
+          return `<div class="signal-card ${dirClass} ${on ? 'signal-watching' : ''}" style="position:relative;">
             ${riskBadge}
             <div style="display:flex;justify-content:space-between;align-items:center;">
               <span class="signal-card-sym">${coin}</span>
