@@ -12,6 +12,26 @@
 let googleClient = null;
 let anthropicClient = null;
 
+// Rate limiting — max 10 requests per minute for free tier
+const requestLog = [];
+const MAX_REQUESTS_PER_MIN = 10;
+
+// Response cache — avoid duplicate API calls
+const responseCache = new Map();
+const CACHE_TTL = 60000; // 1 minute
+
+function isRateLimited() {
+  const now = Date.now();
+  while (requestLog.length && requestLog[0] < now - 60000) requestLog.shift();
+  return requestLog.length >= MAX_REQUESTS_PER_MIN;
+}
+
+function getCached(key) {
+  const entry = responseCache.get(key);
+  if (entry && Date.now() - entry.ts < CACHE_TTL) return entry.text;
+  return null;
+}
+
 function getProvider() {
   // Priority 1: Google Gemini (free tier)
   if (process.env.GOOGLE_AI_KEY) {
@@ -50,20 +70,42 @@ async function think(opts) {
   const provider = getProvider();
   if (!provider) return null;
 
+  // Check cache first
+  const cacheKey = `${agentName}:${userMessage.substring(0, 100)}`;
+  const cached = getCached(cacheKey);
+  if (cached) {
+    console.log(`[AI Brain] ${agentName} cache hit`);
+    return cached;
+  }
+
+  // Rate limit check
+  if (isRateLimited()) {
+    console.log(`[AI Brain] Rate limited — ${requestLog.length} requests in last minute`);
+    return `I'm thinking too fast — please wait a moment and try again. (${requestLog.length}/${MAX_REQUESTS_PER_MIN} requests/min)`;
+  }
+
   const contextBlock = Object.keys(context).length > 0
-    ? `\n\n<current_data>\n${JSON.stringify(context, null, 2).substring(0, 3000)}\n</current_data>`
+    ? `\n\n<current_data>\n${JSON.stringify(context, null, 2).substring(0, 2000)}\n</current_data>`
     : '';
 
   const fullSystem = systemPrompt + contextBlock;
 
   try {
+    requestLog.push(Date.now());
+    let text;
     if (provider === 'google') {
-      return await thinkGoogle(agentName, fullSystem, userMessage);
+      text = await thinkGoogle(agentName, fullSystem, userMessage);
     } else {
-      return await thinkAnthropic(agentName, fullSystem, userMessage);
+      text = await thinkAnthropic(agentName, fullSystem, userMessage);
     }
+    // Cache the response
+    if (text) responseCache.set(cacheKey, { text, ts: Date.now() });
+    return text;
   } catch (err) {
     console.error(`[AI Brain] ${agentName} FAILED (${provider}): ${err.message}`);
+    if (err.message?.includes('429') || err.message?.includes('quota')) {
+      return `I'm being rate limited by ${provider === 'google' ? 'Google' : 'Anthropic'}. Please wait 30 seconds and try again.`;
+    }
     return `[AI Error: ${err.message}]`;
   }
 }

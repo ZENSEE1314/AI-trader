@@ -42,13 +42,17 @@ const CONFIG = {
 //   Trailing gap = 15%. At +30% ($30 profit) → SL locks at +15% ($15 profit).
 const TRAILING_SL = {
   INITIAL_SL_PCT: 0.05,           // 5% price distance SL (RR 1:2 with 10% TP)
-  TRAILING_GAP: 0.15,             // SL always 15% behind current profit
+  TRAILING_GAP: 0.15,             // SL always 15% behind current capital profit
   FIXED_TIERS: [
-    { trigger: 0.30,  sl: 0.15  },  //  +30%  → SL at +15%  (gap 15%)
-    { trigger: 0.50,  sl: 0.35  },  //  +50%  → SL at +35%  (gap 15%)
+    { trigger: 0.10,  sl: 0.001 },  //  +10% capital → SL at breakeven
+    { trigger: 0.20,  sl: 0.10  },  //  +20% capital → SL at +10% (locked profit)
+    { trigger: 0.40,  sl: 0.25  },  //  +40% capital → SL at +25%
+    { trigger: 0.60,  sl: 0.45  },  //  +60% capital → SL at +45%
+    { trigger: 0.80,  sl: 0.65  },  //  +80% capital → SL at +65%
+    { trigger: 1.00,  sl: 0.85  },  // +100% capital → SL at +85%
   ],
-  // 50%+: trigger every 25%, SL = trigger - 15%
-  HIGH_START: 0.75, HIGH_STEP: 0.25, HIGH_GAP: 0.15,
+  // 100%+: trigger every 25%, SL = trigger - 15%
+  HIGH_START: 1.25, HIGH_STEP: 0.25, HIGH_GAP: 0.15,
 };
 
 // ── Compound: always use current wallet balance ─────────────
