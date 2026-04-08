@@ -1568,9 +1568,15 @@ async function syncTradeStatus() {
               // Method 1: Position history — match by symbol + side + entry price + time
               try {
                 const positions = await bxClient.getHistoryPositions({ symbol: trade.symbol, pageSize: 50 });
+                // Log first result's ALL keys so we know exact Bitunix field names
+                if (positions.length > 0) {
+                  bLog.system(`Bitunix posHistory FIELDS for ${trade.symbol}: ${JSON.stringify(Object.keys(positions[0]))}`);
+                  bLog.system(`Bitunix posHistory FIRST RAW: ${JSON.stringify(positions[0])}`);
+                }
                 for (const p of positions) {
-                  const cp = parseFloat(p.closePrice || 0);
-                  const ep = parseFloat(p.entryPrice || 0);
+                  // Bitunix may use avgOpenPrice instead of entryPrice
+                  const cp = parseFloat(p.closePrice || p.avgClosePrice || 0);
+                  const ep = parseFloat(p.entryPrice || p.avgOpenPrice || 0);
                   const pSideLong = (p.side || '').toUpperCase() === 'LONG';
                   const closeMs = parseInt(p.mtime || p.ctime || 0);
 
@@ -1657,12 +1663,20 @@ async function syncTradeStatus() {
             }
 
             // Calculate PnL: use exchange realized PnL if available, otherwise compute
-            // Binance realizedPnl = gross PnL (before fees). Net = gross - fees.
+            // Binance: realizedPnl = gross (before fees), so net = gross - fees
+            // Bitunix: profit/pnl fields are NET (fees already included), so net = as-is
             let grossPnl;
             let pnlUsdt;
             if (realizedPnl !== null) {
-              grossPnl = parseFloat(realizedPnl.toFixed(4));
-              pnlUsdt = parseFloat((realizedPnl - tradingFee).toFixed(4));
+              if (key.platform === 'bitunix') {
+                // Bitunix Position PnL is NET (fees already deducted)
+                pnlUsdt = parseFloat(realizedPnl.toFixed(4));
+                grossPnl = parseFloat((realizedPnl + tradingFee).toFixed(4));
+              } else {
+                // Binance realizedPnl is GROSS (before fees)
+                grossPnl = parseFloat(realizedPnl.toFixed(4));
+                pnlUsdt = parseFloat((realizedPnl - tradingFee).toFixed(4));
+              }
             } else {
               grossPnl = isLong
                 ? parseFloat(((exitPrice - entryPrice) * qty).toFixed(4))

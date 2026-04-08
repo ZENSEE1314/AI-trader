@@ -232,15 +232,23 @@ class BitunixClient {
       totalWalletBalance: String(parseFloat(acc.available || 0) + parseFloat(acc.margin || 0) + parseFloat(acc.frozen || 0)),
       availableBalance: acc.available || '0',
       totalUnrealizedProfit: String(parseFloat(acc.crossUnrealizedPNL || 0) + parseFloat(acc.isolationUnrealizedPNL || 0)),
-      positions: positions.map(p => ({
-        symbol: p.symbol,
-        positionAmt: (p.side === 'BUY' || p.side === 'LONG') ? p.qty : `-${p.qty}`,
-        entryPrice: p.avgOpenPrice,
-        markPrice: p.markPrice || null,
-        unrealizedProfit: p.unrealizedPNL,
-        leverage: String(p.leverage),
-        positionId: p.positionId,
-      })),
+      positions: positions.map(p => {
+        // Log raw position fields on first call for debugging
+        if (!this._posFieldsLogged) {
+          console.log(`[Bitunix] Raw position fields: ${JSON.stringify(Object.keys(p))}`);
+          console.log(`[Bitunix] Raw position data: ${JSON.stringify(p)}`);
+          this._posFieldsLogged = true;
+        }
+        return {
+          symbol: p.symbol,
+          positionAmt: (p.side === 'BUY' || p.side === 'LONG') ? (p.qty || p.positionAmt) : `-${p.qty || p.positionAmt}`,
+          entryPrice: p.avgOpenPrice || p.entryPrice || p.openPrice,
+          markPrice: p.markPrice || p.lastPrice || null,
+          unrealizedProfit: p.unrealizedPNL || p.unrealizedProfit || p.unrealizedPnl || '0',
+          leverage: String(p.leverage || 20),
+          positionId: p.positionId || p.id,
+        };
+      }),
     };
   }
 }
