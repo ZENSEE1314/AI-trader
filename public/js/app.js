@@ -307,6 +307,7 @@
       renderSummary(summary);
       renderWallets(walletData);
       if (weeklyEarnings) renderWeeklyEarnings(weeklyEarnings);
+      loadSignalBoard();
       if (cashData) renderDashCashWallet(cashData);
       loadPauseStatus();
     } catch (err) {
@@ -1568,6 +1569,71 @@
     } catch (err) {
       mcChatAddMessage('System', `Error: ${err.message}`, false);
     }
+  }
+
+  async function loadSignalBoard() {
+    try {
+      const data = await api('GET', '/api/dashboard/signal-board');
+      const board = document.getElementById('signal-board');
+      const results = document.getElementById('daily-results');
+      if (!board) return;
+
+      // Render signal cards
+      const tokens = Object.entries(data.tokens || {}).sort((a, b) => (b[1].score || 0) - (a[1].score || 0));
+      const watchlist = data.watchlist || {};
+
+      if (!tokens.length) {
+        board.innerHTML = '<div style="color:var(--color-text-muted);font-size:0.8rem;grid-column:1/-1;text-align:center;padding:var(--space-2);">No signals yet — next scan will populate</div>';
+      } else {
+        board.innerHTML = tokens.map(([sym, t]) => {
+          const isWatching = watchlist[sym] === true;
+          const dir = t.direction;
+          const cls = dir === 'LONG' ? 'signal-long' : dir === 'SHORT' ? 'signal-short' : 'signal-none';
+          const dirColor = dir === 'LONG' ? 'var(--color-success)' : dir === 'SHORT' ? 'var(--color-danger)' : 'var(--color-text-muted)';
+          const coin = sym.replace('USDT', '');
+          return `<div class="signal-card ${cls} ${isWatching ? 'signal-watching' : ''}">
+            <div style="display:flex;justify-content:space-between;align-items:center;">
+              <span class="signal-card-sym">${coin}</span>
+              <span class="signal-card-dir" style="color:${dirColor};">${dir || '--'}</span>
+            </div>
+            <div class="signal-card-score">Score: ${t.score || 0} | ${t.setup || '--'}</div>
+            <button class="signal-card-btn ${isWatching ? 'watching' : ''}" onclick="window.CryptoBot.toggleWatch('${sym}',${!isWatching})">${isWatching ? 'Watching' : 'Watch'}</button>
+          </div>`;
+        }).join('');
+      }
+
+      // Render daily results
+      if (results && data.dailyResults?.length) {
+        results.innerHTML = '<div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-md);overflow:hidden;">' +
+          data.dailyResults.map(r => {
+            const pnl = parseFloat(r.total_pnl) || 0;
+            const coin = r.symbol.replace('USDT', '');
+            return `<div class="daily-result-row">
+              <span style="font-weight:600;min-width:70px;">${coin}</span>
+              <span style="font-size:0.75rem;color:var(--color-text-muted);">${r.wins}W/${r.losses}L</span>
+              <span style="font-weight:600;color:${pnl >= 0 ? 'var(--color-success)' : 'var(--color-danger)'};">${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)}</span>
+            </div>`;
+          }).join('') + '</div>';
+      } else if (results) {
+        results.innerHTML = '<div style="color:var(--color-text-muted);font-size:0.8rem;text-align:center;padding:var(--space-2);">No results yet today</div>';
+      }
+    } catch (err) {
+      const board = document.getElementById('signal-board');
+      if (board) board.innerHTML = `<div style="color:var(--color-text-muted);font-size:0.8rem;grid-column:1/-1;">${err.message}</div>`;
+    }
+  }
+
+  async function toggleWatch(symbol, enable) {
+    try {
+      if (enable) {
+        await api('POST', '/api/dashboard/watchlist', { symbol });
+        showToast(`Watching ${symbol.replace('USDT', '')}`, 'success');
+      } else {
+        await api('DELETE', `/api/dashboard/watchlist/${symbol}`);
+        showToast(`Removed ${symbol.replace('USDT', '')}`, 'success');
+      }
+      loadSignalBoard();
+    } catch (err) { showToast(err.message, 'error'); }
   }
 
   async function customerChat() {
@@ -3053,6 +3119,7 @@
     loadOpenPositions, emergencyCloseToken, emergencyCloseAll,
     fixBitunixPnl, debugBitunix, runBacktest, loadAiVersions, runAiOptimize,
     mcRefresh, mcCommand, mcChat, mcChatQuick, switchAdminTab, customerChat,
+    loadSignalBoard, toggleWatch,
     mcToggleSkill, mcUpdateConfig, mcCreateAgent, mcRemoveAgent,
   };
 

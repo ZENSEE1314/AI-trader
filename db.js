@@ -304,6 +304,31 @@ async function initAllTables() {
     // Trade fee tracking
     `ALTER TABLE trades ADD COLUMN IF NOT EXISTS trading_fee NUMERIC DEFAULT 0`,
     `ALTER TABLE trades ADD COLUMN IF NOT EXISTS gross_pnl NUMERIC`,
+    // User token watchlist (which tokens each user wants to trade)
+    `CREATE TABLE IF NOT EXISTS user_watchlist (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER NOT NULL,
+      symbol VARCHAR(30) NOT NULL,
+      enabled BOOLEAN DEFAULT true,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE(user_id, symbol)
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_user_watchlist_user ON user_watchlist (user_id)`,
+    // Token daily results (aggregated daily P&L per token)
+    `CREATE TABLE IF NOT EXISTS token_daily_results (
+      id SERIAL PRIMARY KEY,
+      symbol VARCHAR(30) NOT NULL,
+      trade_date DATE NOT NULL,
+      total_trades INTEGER DEFAULT 0,
+      wins INTEGER DEFAULT 0,
+      losses INTEGER DEFAULT 0,
+      total_pnl NUMERIC DEFAULT 0,
+      total_fee NUMERIC DEFAULT 0,
+      avg_pnl NUMERIC DEFAULT 0,
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE(symbol, trade_date)
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_token_daily_date ON token_daily_results (trade_date DESC)`,
     // Agent memory (persists across restarts)
     `CREATE TABLE IF NOT EXISTS agent_memory (
       id SERIAL PRIMARY KEY,

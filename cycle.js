@@ -983,17 +983,23 @@ async function executeForAllUsers(pick) {
       return (async () => {
       try {
         const symbol = sym;
-        const allowedCoins = (key.allowed_coins || '').split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
         const bannedCoins = (key.banned_coins || '').split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
-
-        if (allowedCoins.length > 0 && !allowedCoins.includes(symbol)) {
-          userLog.trade(`User ${key.email}: ${symbol} not in allowed list — skipped`);
-          return;
-        }
         if (bannedCoins.includes(symbol)) {
           userLog.trade(`User ${key.email}: ${symbol} is banned — skipped`);
           return;
         }
+
+        // Check user's watchlist — if they have one, only trade their picks
+        try {
+          const watchlist = await db.query(
+            'SELECT symbol FROM user_watchlist WHERE user_id = $1 AND enabled = true',
+            [key.user_id]
+          );
+          if (watchlist.length > 0 && !watchlist.some(w => w.symbol === symbol)) {
+            userLog.trade(`User ${key.email}: ${symbol} not in watchlist — skipped`);
+            return;
+          }
+        } catch (_) {}
 
         // Check global token ban
         if (await isTokenBanned(symbol)) {
@@ -1663,6 +1669,12 @@ async function syncTradeStatus() {
               [status, pnlUsdt, exitPrice, trade.id, tradingFee, grossPnl]
             );
             bLog.trade(`DB synced: ${trade.symbol} -> ${status} gross=$${grossPnl} fee=$${tradingFee} net=$${pnlUsdt} exit=$${fmtPrice(exitPrice)}`);
+
+            // Record token daily result
+            try {
+              const { recordTokenResult } = require('./token-scanner');
+              await recordTokenResult(trade.symbol, pnlUsdt, tradingFee, pnlUsdt > 0);
+            } catch (_) {}
 
             // Record profit split for winning trades
             if (pnlUsdt > 0) {
