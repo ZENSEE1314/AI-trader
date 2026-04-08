@@ -247,8 +247,13 @@ class AgentCoordinator extends BaseAgent {
       return { from: 'Coordinator', message: `${resetM[2]} agent has been reset. Error cleared, ready to go.` };
     }
 
+    // ── Accountant commands — MUST be before agent question routing ──
+    if (/account.*fix|account.*check|account.*audit|audit|fix.*trad|fix.*pnl|fix.*price|fix.*fee|wrong.*pnl|correct.*pnl|recalc|recheck/.test(text)) {
+      return this._runAccountantAudit();
+    }
+
     // ── Status / report queries ──
-    // Agent-directed questions (before status/report)
+    // Agent-directed questions (only for "how/what/why" questions, not action commands)
     const agentNameMap = {
       chart: this.chartAgent, chartagent: this.chartAgent, 'chart agent': this.chartAgent,
       trader: this.traderAgent, traderagent: this.traderAgent, 'trader agent': this.traderAgent,
@@ -279,10 +284,6 @@ class AgentCoordinator extends BaseAgent {
     }
     if (/^(performance|win|loss|how.*doing|results|pnl|profit)/.test(text)) {
       return this._buildPerformanceChat();
-    }
-    // Accountant commands — audit and fix trades
-    if (/accountant|audit|check.*trad|fix.*trad|fix.*pnl|wrong.*pnl|correct.*pnl|recalc|recheck/.test(text)) {
-      return this._runAccountantAudit();
     }
     if (/^(pnl|profit|loss|trade history|trades|show.*trade|my.*trade|earnings|revenue|income|how much.*(made|lost|earn))/.test(text)) {
       return this._buildTradeHistoryChat();
