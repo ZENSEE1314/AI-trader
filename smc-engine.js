@@ -318,7 +318,8 @@ async function analyzeLHHL(ticker, params, dailyBiasCache) {
   // │ Entry triggers on the next 1M candle after confirmation.│
   // └─────────────────────────────────────────────────────────┘
 
-  const [klines15m, klines3m, klines1m] = await Promise.all([
+  const [klines1h, klines15m, klines3m, klines1m] = await Promise.all([
+    fetchKlines(symbol, '1h', 25),
     fetchKlines(symbol, '15m', 100),
     fetchKlines(symbol, '3m', 100),
     fetchKlines(symbol, '1m', 100),
@@ -343,6 +344,23 @@ async function analyzeLHHL(ticker, params, dailyBiasCache) {
   if (!direction) {
     bLog.scan(`${symbol}: 15m=${struct15m.label} 3m=${struct3m.label} 1m=${struct1m.label} — no triple alignment`);
     return null;
+  }
+
+  // ┌─────────────────────────────────────────────────────────┐
+  // │ 1H Trend Filter: only trade WITH the hourly trend       │
+  // │ LONG only if price > 1H 20MA, SHORT only if below       │
+  // └─────────────────────────────────────────────────────────┘
+  if (klines1h && klines1h.length >= 20) {
+    const closes1h = klines1h.slice(-20).map(k => parseFloat(k[4]));
+    const ma20 = closes1h.reduce((a, b) => a + b, 0) / closes1h.length;
+    if (direction === 'LONG' && price < ma20) {
+      bLog.scan(`${symbol}: LONG blocked — price $${price.toFixed(4)} below 1H 20MA $${ma20.toFixed(4)} (downtrend)`);
+      return null;
+    }
+    if (direction === 'SHORT' && price > ma20) {
+      bLog.scan(`${symbol}: SHORT blocked — price $${price.toFixed(4)} above 1H 20MA $${ma20.toFixed(4)} (uptrend)`);
+      return null;
+    }
   }
 
   // ┌─────────────────────────────────────────────────────────┐

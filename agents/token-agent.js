@@ -76,14 +76,15 @@ class TokenAgent extends BaseAgent {
   async execute(context = {}) {
     this.currentTask = { description: `Scanning ${this.symbol}`, startedAt: Date.now() };
 
-    // Fetch all 3 timeframes
-    const [klines15m, klines3m, klines1m] = await Promise.all([
+    // Fetch all timeframes (added 1h for trend filter)
+    const [klines1h, klines15m, klines3m, klines1m] = await Promise.all([
+      fetchKlines(this.symbol, '1h', 25),
       fetchKlines(this.symbol, '15m', 100),
       fetchKlines(this.symbol, '3m', 100),
       fetchKlines(this.symbol, '1m', 100),
     ]);
 
-    if (!klines15m || !klines3m || !klines1m) {
+    if (!klines1h || !klines15m || !klines3m || !klines1m) {
       this.currentTask = null;
       return null;
     }
@@ -107,6 +108,21 @@ class TokenAgent extends BaseAgent {
     if (!direction) {
       this.currentTask = null;
       return { symbol: this.symbol, direction: null, status: 'watching' };
+    }
+
+    // 1H trend filter — don't LONG in downtrend, don't SHORT in uptrend
+    // Price must be on the right side of the 1H 20-period moving average
+    if (klines1h.length >= 20) {
+      const closes1h = klines1h.slice(-20).map(k => parseFloat(k[4]));
+      const ma20 = closes1h.reduce((a, b) => a + b, 0) / closes1h.length;
+      if (direction === 'LONG' && this.lastPrice < ma20) {
+        this.currentTask = null;
+        return { symbol: this.symbol, direction: null, status: 'below_1h_ma' };
+      }
+      if (direction === 'SHORT' && this.lastPrice > ma20) {
+        this.currentTask = null;
+        return { symbol: this.symbol, direction: null, status: 'above_1h_ma' };
+      }
     }
 
     // Recency check — 1m swing must be within last 10 candles
