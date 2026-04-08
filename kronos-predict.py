@@ -20,9 +20,15 @@ warnings.filterwarnings("ignore")
 import pandas as pd
 from datetime import datetime, timedelta
 
-# Add Kronos to path
-KRONOS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "Kronos")
-sys.path.insert(0, KRONOS_DIR)
+# Add Kronos to path — local vendor copy (Docker) or parent Kronos dir (dev)
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+VENDOR_DIR = os.path.join(SCRIPT_DIR, "kronos_vendor")
+KRONOS_DIR = os.path.join(SCRIPT_DIR, "..", "Kronos")
+
+if os.path.isdir(os.path.join(VENDOR_DIR, "model")):
+    sys.path.insert(0, VENDOR_DIR)
+else:
+    sys.path.insert(0, KRONOS_DIR)
 
 BINANCE_APIS = [
     "https://data-api.binance.vision/api/v3/klines",

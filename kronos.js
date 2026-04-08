@@ -8,7 +8,7 @@ const path = require('path');
 
 const SCRIPT_PATH = path.join(__dirname, 'kronos-predict.py');
 const TIMEOUT_MS = 60_000; // 60s — model inference takes ~10s on CPU
-const PYTHON_CMD = 'python';
+const PYTHON_CMD = process.platform === 'win32' ? 'python' : 'python3';
 
 /**
  * Get Kronos AI prediction for a symbol.

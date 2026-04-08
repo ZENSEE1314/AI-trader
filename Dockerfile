@@ -1,7 +1,17 @@
-FROM node:20-alpine
+FROM node:20-slim
 
-# Install dependencies for native modules
-RUN apk add --no-cache python3 make g++
+# Install Python 3 + pip for Kronos AI predictions
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 python3-pip python3-venv wget \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install CPU-only PyTorch first (saves ~1.5GB vs full CUDA build)
+RUN pip3 install --no-cache-dir --break-system-packages \
+    torch --index-url https://download.pytorch.org/whl/cpu
+
+# Install remaining Kronos dependencies
+RUN pip3 install --no-cache-dir --break-system-packages \
+    numpy pandas tqdm einops huggingface_hub safetensors
 
 WORKDIR /app
 
@@ -15,8 +25,8 @@ RUN npm ci --only=production
 COPY . .
 
 # Create non-root user
-RUN addgroup -g 1001 -S nodejs
-RUN adduser -S nodejs -u 1001
+RUN groupadd -g 1001 nodejs
+RUN useradd -u 1001 -g nodejs -s /bin/sh nodejs
 USER nodejs
 
 # Health check
