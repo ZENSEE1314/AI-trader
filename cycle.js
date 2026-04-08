@@ -1061,13 +1061,9 @@ async function executeForAllUsers(pick) {
         // Per-user settings: use user_token_leverage first, then key default
         const userLev = await getTokenLeverage(symbol, key.id);
         const walletSizePct = (await getCapitalPercentage(key.id)) / 100;
-        // SL = 5% price distance, TP = 10% price distance (RR 1:2)
-        // SL/TP scaled by leverage: always 10% capital SL, 20% capital TP
-        const slPricePct = 0.10 / userLev;  // e.g. 10%/20x = 0.5% price
-        const tpPricePct = 0.20 / userLev;  // e.g. 20%/20x = 1% price
+        // SL: 30% price distance, no TP — trailing SL handles exits
+        const slPricePct = TRAILING_SL.INITIAL_SL_PCT; // 0.30 = 30% price
         const initialSlPrice = isLong ? price * (1 - slPricePct) : price * (1 + slPricePct);
-        const userTpPrice = isLong ? price * (1 + tpPricePct) : price * (1 - tpPricePct);
-        const userTp3Price = userTpPrice;
 
         let account, wallet, openPosCount;
 
@@ -1088,10 +1084,9 @@ async function executeForAllUsers(pick) {
             return;
           }
 
-          userLog.trade(`User ${key.email} Binance: wallet=$${rawWallet.toFixed(2)} available=$${parseFloat(account.availableBalance).toFixed(2)} pos=${openPosCount}/${maxPos} lev=x${userLev} TP=${(tpPricePct*100).toFixed(1)}% SL=trailing`);
+          userLog.trade(`User ${key.email} Binance: wallet=$${rawWallet.toFixed(2)} available=$${parseFloat(account.availableBalance).toFixed(2)} pos=${openPosCount}/${maxPos} lev=x${userLev} SL=${(slPricePct*100).toFixed(0)}% trailing`);
 
           const slPrice = initialSlPrice;
-          const tp3Price = userTp3Price;
 
           try { await userClient.setLeverage({ symbol, leverage: userLev }); } catch (_) {}
           try { await userClient.setMarginType({ symbol, marginType: 'ISOLATED' }); } catch (e) { if (!e.message?.includes('No need')) throw e; }
@@ -1153,7 +1148,7 @@ async function executeForAllUsers(pick) {
             `INSERT INTO trades (api_key_id, user_id, symbol, direction, entry_price, sl_price, tp_price, quantity, leverage, status,
              trailing_sl_price, trailing_sl_last_step, tf_15m, tf_3m, tf_1m)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'OPEN', $10, 0, $11, $12, $13)`,
-            [key.id, key.user_id, symbol, pick.direction, price, fmtP(slPrice), fmtP(tp3Price), qty, userLev,
+            [key.id, key.user_id, symbol, pick.direction, price, fmtP(slPrice), 0, qty, userLev,
              fmtP(slPrice),
              pick.structure?.tf15 || null, pick.structure?.tf3 || null, pick.structure?.tf1 || null]
           );
@@ -1193,16 +1188,13 @@ async function executeForAllUsers(pick) {
           }
 
           const slPrice = initialSlPrice;
-          const hasTp = tpPricePct > 0;
-          const tp3Price = hasTp ? userTp3Price : 0;
 
           try { await userClient.changeMarginMode(symbol, 'ISOLATION'); } catch (_) {}
           try { await userClient.changeLeverage(symbol, userLev); } catch (_) {}
 
           const slFmtBx = parseFloat(slPrice.toFixed(8));
-          const tpFmtBx = hasTp ? parseFloat(tp3Price.toFixed(8)) : 0;
 
-          userLog.trade(`User ${key.email}: placing Bitunix MARKET ${isLong ? 'BUY' : 'SELL'} ${symbol} qty=${qty} SL=$${slFmtBx}${hasTp ? ` TP=$${tpFmtBx}` : ' (trailing SL only, no TP)'}...`);
+          userLog.trade(`User ${key.email}: placing Bitunix MARKET ${isLong ? 'BUY' : 'SELL'} ${symbol} qty=${qty} SL=$${slFmtBx} (-${(slPricePct*100).toFixed(0)}% trailing, no TP)...`);
           const order = await userClient.placeOrder({
             symbol, side: isLong ? 'BUY' : 'SELL',
             qty: String(qty), orderType: 'MARKET', tradeSide: 'OPEN',
@@ -1215,26 +1207,20 @@ async function executeForAllUsers(pick) {
           userLog.trade(`Bitunix position lookup: ${JSON.stringify(pos ? { id: pos.positionId, symbol: pos.symbol, side: pos.side, qty: pos.qty } : null)}`);
 
           if (pos && pos.positionId) {
-            // Recalculate SL/TP from actual entry price to avoid stale-price rejection
+            // Recalculate SL from actual entry price to avoid stale-price rejection
             const actualEntry = parseFloat(pos.avgOpenPrice || pos.entryPrice || pos.avgPrice) || price;
             const actualSlPrice = isLong
               ? actualEntry * (1 - slPricePct)
               : actualEntry * (1 + slPricePct);
-            const actualTpPrice = hasTp
-              ? (isLong ? actualEntry * (1 + tpPricePct) : actualEntry * (1 - tpPricePct))
-              : 0;
             const slFmtActual = parseFloat(actualSlPrice.toFixed(8));
-            const tpFmtActual = hasTp ? parseFloat(actualTpPrice.toFixed(8)) : 0;
 
-            userLog.trade(`Bitunix position confirmed: ${pos.positionId} entry=$${actualEntry} — setting TP/SL (SL=$${slFmtActual} TP=$${tpFmtActual || 'none'})...`);
+            userLog.trade(`Bitunix position confirmed: ${pos.positionId} entry=$${actualEntry} — setting SL=$${slFmtActual} (-${(slPricePct*100).toFixed(0)}% trailing, no TP)...`);
             try {
-              const tpslArgs = { symbol, positionId: pos.positionId, slPrice: slFmtActual };
-              if (hasTp) tpslArgs.tpPrice = tpFmtActual;
-              await userClient.placePositionTpSl(tpslArgs);
-              userLog.trade(`Bitunix TP/SL set on ${pos.positionId}: SL=$${slFmtActual}${hasTp ? ` TP=$${tpFmtActual}` : ' (trailing only)'}`);
+              await userClient.placePositionTpSl({ symbol, positionId: pos.positionId, slPrice: slFmtActual });
+              userLog.trade(`Bitunix SL set on ${pos.positionId}: SL=$${slFmtActual} (trailing only, no TP)`);
             } catch (e) {
-              userLog.error(`Bitunix TP/SL FAILED: ${e.message} — SET MANUALLY`);
-              await notify(`*Bitunix ${symbol} ${pick.direction}*\nTP/SL failed! Set manually on Bitunix NOW.`);
+              userLog.error(`Bitunix SL FAILED: ${e.message} — SET MANUALLY`);
+              await notify(`*Bitunix ${symbol} ${pick.direction}*\nSL failed! Set manually on Bitunix NOW.`);
             }
 
             // Store actual entry price in DB
@@ -1243,7 +1229,7 @@ async function executeForAllUsers(pick) {
                trailing_sl_price, trailing_sl_last_step)
                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'OPEN', $10, 0)`,
               [key.id, key.user_id, symbol, pick.direction, actualEntry,
-               slFmtActual, hasTp ? tpFmtActual : 0, qty, userLev, slFmtActual]
+               slFmtActual, 0, qty, userLev, slFmtActual]
             );
           } else {
             userLog.error(`Bitunix position not found after order — verify on exchange`);
@@ -1254,7 +1240,7 @@ async function executeForAllUsers(pick) {
                trailing_sl_price, trailing_sl_last_step)
                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'OPEN', $10, 0)`,
               [key.id, key.user_id, symbol, pick.direction, price,
-               parseFloat(slPrice.toFixed(8)), parseFloat(tp3Price.toFixed(8)), qty, userLev, parseFloat(slPrice.toFixed(8))]
+               parseFloat(slPrice.toFixed(8)), 0, qty, userLev, parseFloat(slPrice.toFixed(8))]
             );
           }
           userLog.trade(`Bitunix OK: ${key.email} ${symbol} ${pick.direction} x${userLev} qty=${qty}`);
