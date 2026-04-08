@@ -341,17 +341,28 @@ async function analyzeLHHL(ticker, params, dailyBiasCache) {
   const struct3m = getStructure(klines3m, SWING_LENGTHS['3m'] || SWING_LENGTHS['3m'] || 5);
   const struct1m = getStructure(klines1m, SWING_LENGTHS['1m']);
 
-  // Direction: all 3 TFs must agree — HL+HL+HL = LONG, LH+LH+LH = SHORT
+  // Direction: all 3 TFs must agree on FULL structure (both highs and lows)
+  // LONG  = HL (Higher Low) on lows  AND NOT LH on highs (must be HH or neutral)
+  // SHORT = LH (Lower High) on highs AND NOT HL on lows  (must be LL or neutral)
+  // This prevents longing into a downtrend where lows are HL but highs are still LH
   let direction = null;
 
-  if (struct15m.hasHL && struct3m.hasHL && struct1m.hasHL) {
+  const allHL = struct15m.hasHL && struct3m.hasHL && struct1m.hasHL;
+  const anyLH = struct15m.hasLH || struct3m.hasLH || struct1m.hasLH;
+  const allLH = struct15m.hasLH && struct3m.hasLH && struct1m.hasLH;
+  const anyHL = struct15m.hasHL || struct3m.hasHL || struct1m.hasHL;
+
+  if (allHL && !anyLH) {
     direction = 'LONG';
-  } else if (struct15m.hasLH && struct3m.hasLH && struct1m.hasLH) {
+  } else if (allLH && !anyHL) {
     direction = 'SHORT';
   }
 
   if (!direction) {
-    bLog.scan(`${symbol}: 15m=${struct15m.label} 3m=${struct3m.label} 1m=${struct1m.label} — no triple alignment`);
+    const reason = (allHL && anyLH) ? 'HL but LH conflict (mixed trend)'
+                 : (allLH && anyHL) ? 'LH but HL conflict (mixed trend)'
+                 : 'no triple alignment';
+    bLog.scan(`${symbol}: 15m=${struct15m.label} 3m=${struct3m.label} 1m=${struct1m.label} — ${reason}`);
     return null;
   }
 
