@@ -19,8 +19,8 @@ const REQUEST_TIMEOUT = 15000;
 const TOP_N_COINS = 100;
 const MIN_24H_VOLUME = 10_000_000;
 
-const SL_PCT = 0.10;           // 10% price distance SL
-const TP_PCT = 0.20;           // 20% price distance TP (RR 1:2)
+const SL_PCT = 0.005;          // 0.5% price = 10% capital at 20x
+const TP_PCT = 0.01;           // 1% price = 20% capital at 20x (RR 1:2)
 const TRAILING_STEP = 0.012;   // trail SL by 1.2% after TP reached
 
 // Swing lengths per timeframe (defaults, overridden by strategyConfig)
@@ -461,14 +461,21 @@ async function analyzeLHHL(ticker, params, dailyBiasCache) {
   }
 
   // ┌─────────────────────────────────────────────────────────┐
-  // │ Risk Management: SL 5%, TP 10% (RR 1:2)               │
+  // │ Risk Management: SL/TP scaled by leverage               │
+  // │ Always risk 10% capital, target 20% capital (RR 1:2)    │
   // └─────────────────────────────────────────────────────────┘
   const BTC_ETH = new Set(['BTCUSDT', 'ETHUSDT']);
   const leverage = BTC_ETH.has(symbol) ? (params.LEV_BTC_ETH || 100) : (params.LEV_ALT || 20);
 
-  const sl = direction === 'LONG' ? price * (1 - SL_PCT) : price * (1 + SL_PCT);
-  const slDist = SL_PCT;
-  const tp = direction === 'LONG' ? price * (1 + TP_PCT) : price * (1 - TP_PCT);
+  // SL/TP in price % = capital % / leverage
+  const CAPITAL_SL = 0.10; // 10% capital risk
+  const CAPITAL_TP = 0.20; // 20% capital target (RR 1:2)
+  const slPct = CAPITAL_SL / leverage;  // e.g. 10%/20x = 0.5% price, 10%/100x = 0.1% price
+  const tpPct = CAPITAL_TP / leverage;  // e.g. 20%/20x = 1% price, 20%/100x = 0.2% price
+
+  const sl = direction === 'LONG' ? price * (1 - slPct) : price * (1 + slPct);
+  const slDist = slPct;
+  const tp = direction === 'LONG' ? price * (1 + tpPct) : price * (1 - tpPct);
 
   // ┌─────────────────────────────────────────────────────────┐
   // │ Pro Scalper AI Confirmation                              │

@@ -42,8 +42,9 @@ async function fetchKlines(symbol, interval, limit = 100) {
   } catch { return null; }
 }
 
-const SL_PCT = 0.10;
-const TP_PCT = 0.20;
+// Capital-based risk: 10% SL, 20% TP (divided by leverage at trade time)
+const CAPITAL_SL = 0.10;
+const CAPITAL_TP = 0.20;
 
 class TokenAgent extends BaseAgent {
   constructor(symbol, options = {}) {
@@ -184,10 +185,13 @@ class TokenAgent extends BaseAgent {
     let score = 15;
     score += scalper.score;
 
-    // Build signal
+    // Build signal — SL/TP scaled by leverage
     const price = this.lastPrice;
-    const sl = direction === 'LONG' ? price * (1 - SL_PCT) : price * (1 + SL_PCT);
-    const tp = direction === 'LONG' ? price * (1 + TP_PCT) : price * (1 - TP_PCT);
+    const leverage = this.symbol === 'BTCUSDT' || this.symbol === 'ETHUSDT' ? 100 : 20;
+    const slPct = CAPITAL_SL / leverage;  // 10%/20x = 0.5% price
+    const tpPct = CAPITAL_TP / leverage;  // 20%/20x = 1% price
+    const sl = direction === 'LONG' ? price * (1 - slPct) : price * (1 + slPct);
+    const tp = direction === 'LONG' ? price * (1 + tpPct) : price * (1 - tpPct);
 
     const signal = {
       symbol: this.symbol,
@@ -195,8 +199,8 @@ class TokenAgent extends BaseAgent {
       price,
       lastPrice: price,
       sl, tp1: tp, tp2: tp, tp3: tp,
-      slDist: SL_PCT,
-      leverage: this.symbol === 'BTCUSDT' || this.symbol === 'ETHUSDT' ? 100 : 20,
+      slDist: slPct,
+      leverage,
       score,
       setup: `TRIPLE_${direction}`,
       setupName: `${direction}-${this.coin}`,
