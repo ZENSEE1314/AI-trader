@@ -1571,45 +1571,58 @@
     }
   }
 
+  let _allTokenSymbols = [];
+
   async function loadSignalBoard() {
     try {
       const data = await api('GET', '/api/dashboard/signal-board');
       const board = document.getElementById('signal-board');
       const results = document.getElementById('daily-results');
+      const countEl = document.getElementById('watch-count');
       if (!board) return;
 
-      // Render signal cards
-      const tokens = Object.entries(data.tokens || {}).sort((a, b) => (b[1].score || 0) - (a[1].score || 0));
-      const watchlist = data.watchlist || {};
+      const tokens = data.tokens || [];
+      _allTokenSymbols = tokens.map(t => t.symbol);
+      const activeCount = tokens.filter(t => t.watching).length;
+      if (countEl) countEl.textContent = `(${activeCount} active)`;
 
       if (!tokens.length) {
-        board.innerHTML = '<div style="color:var(--color-text-muted);font-size:0.8rem;grid-column:1/-1;text-align:center;padding:var(--space-2);">No signals yet — next scan will populate</div>';
+        board.innerHTML = '<div style="color:var(--color-text-muted);font-size:0.8rem;grid-column:1/-1;text-align:center;">Loading top 50 tokens...</div>';
       } else {
-        board.innerHTML = tokens.map(([sym, t]) => {
-          const isWatching = watchlist[sym] === true;
+        board.innerHTML = tokens.map(t => {
+          const coin = t.symbol.replace('USDT', '');
+          const on = t.watching;
           const dir = t.direction;
-          const cls = dir === 'LONG' ? 'signal-long' : dir === 'SHORT' ? 'signal-short' : 'signal-none';
-          const dirColor = dir === 'LONG' ? 'var(--color-success)' : dir === 'SHORT' ? 'var(--color-danger)' : 'var(--color-text-muted)';
-          const coin = sym.replace('USDT', '');
-          return `<div class="signal-card ${cls} ${isWatching ? 'signal-watching' : ''}">
+          const chg = t.change24h || 0;
+          const chgColor = chg >= 0 ? 'var(--color-success)' : 'var(--color-danger)';
+          const signalDot = dir === 'LONG' ? '<span style="color:var(--color-success);font-size:0.65rem;">LONG</span>'
+            : dir === 'SHORT' ? '<span style="color:var(--color-danger);font-size:0.65rem;">SHORT</span>'
+            : '';
+
+          return `<div class="signal-card ${dir ? (dir === 'LONG' ? 'signal-long' : 'signal-short') : 'signal-none'} ${on ? 'signal-watching' : ''}" style="position:relative;">
             <div style="display:flex;justify-content:space-between;align-items:center;">
               <span class="signal-card-sym">${coin}</span>
-              <span class="signal-card-dir" style="color:${dirColor};">${dir || '--'}</span>
+              <label class="token-switch">
+                <input type="checkbox" ${on ? 'checked' : ''} onchange="window.CryptoBot.toggleWatch('${t.symbol}',this.checked)">
+                <span class="token-slider"></span>
+              </label>
             </div>
-            <div class="signal-card-score">Score: ${t.score || 0} | ${t.setup || '--'}</div>
-            <button class="signal-card-btn ${isWatching ? 'watching' : ''}" onclick="window.CryptoBot.toggleWatch('${sym}',${!isWatching})">${isWatching ? 'Watching' : 'Watch'}</button>
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-top:2px;">
+              <span style="font-size:0.7rem;color:${chgColor};">${chg >= 0 ? '+' : ''}${chg.toFixed(1)}%</span>
+              ${signalDot}
+            </div>
           </div>`;
         }).join('');
       }
 
-      // Render daily results
+      // Daily results
       if (results && data.dailyResults?.length) {
         results.innerHTML = '<div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-md);overflow:hidden;">' +
           data.dailyResults.map(r => {
             const pnl = parseFloat(r.total_pnl) || 0;
             const coin = r.symbol.replace('USDT', '');
             return `<div class="daily-result-row">
-              <span style="font-weight:600;min-width:70px;">${coin}</span>
+              <span style="font-weight:600;min-width:60px;">${coin}</span>
               <span style="font-size:0.75rem;color:var(--color-text-muted);">${r.wins}W/${r.losses}L</span>
               <span style="font-weight:600;color:${pnl >= 0 ? 'var(--color-success)' : 'var(--color-danger)'};">${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)}</span>
             </div>`;
@@ -1627,11 +1640,18 @@
     try {
       if (enable) {
         await api('POST', '/api/dashboard/watchlist', { symbol });
-        showToast(`Watching ${symbol.replace('USDT', '')}`, 'success');
       } else {
         await api('DELETE', `/api/dashboard/watchlist/${symbol}`);
-        showToast(`Removed ${symbol.replace('USDT', '')}`, 'success');
       }
+      loadSignalBoard();
+    } catch (err) { showToast(err.message, 'error'); }
+  }
+
+  async function watchAll(enable) {
+    try {
+      if (!_allTokenSymbols.length) await loadSignalBoard();
+      await api('POST', '/api/dashboard/watchlist/bulk', { symbols: _allTokenSymbols, enabled: enable });
+      showToast(enable ? 'All tokens ON' : 'All tokens OFF', 'success');
       loadSignalBoard();
     } catch (err) { showToast(err.message, 'error'); }
   }
@@ -3119,7 +3139,7 @@
     loadOpenPositions, emergencyCloseToken, emergencyCloseAll,
     fixBitunixPnl, debugBitunix, runBacktest, loadAiVersions, runAiOptimize,
     mcRefresh, mcCommand, mcChat, mcChatQuick, switchAdminTab, customerChat,
-    loadSignalBoard, toggleWatch,
+    loadSignalBoard, toggleWatch, watchAll,
     mcToggleSkill, mcUpdateConfig, mcCreateAgent, mcRemoveAgent,
   };
 
