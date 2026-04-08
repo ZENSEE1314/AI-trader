@@ -38,11 +38,13 @@ router.get('/weekly-earnings', async (req, res) => {
     );
 
     // Get this week's trades — all closed trades (wins AND losses)
+    // Use COALESCE to catch trades where closed_at was not set
     const trades = await query(
       `SELECT t.user_id, t.api_key_id, t.pnl_usdt, t.status, t.symbol
        FROM trades t
        WHERE t.status IN ('WIN', 'LOSS', 'TP', 'SL', 'CLOSED')
-         AND t.closed_at >= $1 AND t.closed_at <= $2`,
+         AND COALESCE(t.closed_at, t.created_at) >= $1
+         AND COALESCE(t.closed_at, t.created_at) <= $2`,
       [monday, sunday]
     );
 

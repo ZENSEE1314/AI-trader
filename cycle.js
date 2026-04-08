@@ -1730,6 +1730,12 @@ async function syncTradeStatus() {
               grossPnl = isLong
                 ? parseFloat(((exitPrice - entryPrice) * qty).toFixed(4))
                 : parseFloat(((entryPrice - exitPrice) * qty).toFixed(4));
+              // Estimate fees when exchange data unavailable: ~0.06% per side (open+close)
+              if (tradingFee === 0) {
+                const notional = exitPrice * qty;
+                tradingFee = parseFloat((notional * 0.0012).toFixed(4)); // 0.12% round trip
+                bLog.trade(`Estimated trading fee for ${trade.symbol}: $${tradingFee.toFixed(4)} (0.12% of $${notional.toFixed(2)} notional)`);
+              }
               pnlUsdt = parseFloat((grossPnl - tradingFee).toFixed(4));
             }
             tradingFee = parseFloat(tradingFee.toFixed(4));
