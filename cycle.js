@@ -643,6 +643,57 @@ async function checkTrailingStop(client) {
       const state = tradeState.get(sym);
       if (!state) continue;
 
+      // ── Spike TP: close at 0.5% profit if token spiked ──
+      // Detect spike: price moved >1.5% in last 5 minutes (5x 1m candles)
+      const priceProfitPct = gain * 100; // gain is already directional
+      if (priceProfitPct >= 0.5) {
+        try {
+          const klines1m = await client.getKlines({ symbol: sym, interval: '1m', limit: 6 });
+          if (klines1m && klines1m.length >= 5) {
+            const opens = klines1m.map(k => parseFloat(k[1]));
+            const highs = klines1m.map(k => parseFloat(k[2]));
+            const lows = klines1m.map(k => parseFloat(k[3]));
+            const startPrice = opens[0];
+            const maxHigh = Math.max(...highs);
+            const minLow = Math.min(...lows);
+            const spikeUp = (maxHigh - startPrice) / startPrice;
+            const spikeDown = (startPrice - minLow) / startPrice;
+            const spikeSize = isLong ? spikeUp : spikeDown;
+
+            if (spikeSize >= 0.015) { // 1.5%+ move in 5 minutes = spike
+              bLog.trade(`SPIKE TP: ${sym} spiked ${(spikeSize*100).toFixed(2)}% in 5min — closing at +${priceProfitPct.toFixed(2)}% profit`);
+              try { await client.cancelAllOpenOrders({ symbol: sym }); } catch (_) {}
+              try { await client.cancelAllAlgoOpenOrders({ symbol: sym }); } catch (_) {}
+              await client.submitNewOrder({ symbol: sym, side: closeSide, type: 'MARKET', quantity: Math.abs(amt), reduceOnly: 'true' });
+
+              const st = state;
+              await aiLearner.recordTrade({
+                symbol: sym, direction: isLong ? 'LONG' : 'SHORT',
+                setup: st.setup || 'unknown', entryPrice: entry, exitPrice: cur,
+                pnlPct: priceProfitPct, leverage: st.leverage || 20,
+                durationMin: Math.round((Date.now() - st.openedAt) / 60000),
+                session: aiLearner.getCurrentSession(),
+                slDistancePct: Math.abs(entry - st.sl) / entry * 100,
+                tpDistancePct: Math.abs(st.tp1 - entry) / entry * 100,
+                tf15m: st.tf15m || null, tf3m: st.tf3m || null, tf1m: st.tf1m || null,
+                exitReason: 'spike_tp',
+              });
+              recordDailyTrade(true);
+              tradeState.delete(sym);
+
+              await notify(
+                `*Spike TP — Quick Profit Locked*\n` +
+                `*${sym}* ${isLong ? 'LONG' : 'SHORT'}\n` +
+                `Spike: *${(spikeSize*100).toFixed(1)}%* in 5min\n` +
+                `Entry: \`$${fmtPrice(entry)}\` Exit: \`$${fmtPrice(cur)}\`\n` +
+                `PnL: *+${priceProfitPct.toFixed(2)}%*`
+              );
+              continue;
+            }
+          }
+        } catch (e) { bLog.error(`Spike TP check failed for ${sym}: ${e.message}`); }
+      }
+
       // ── Trailing SL step check ──
       const trailResult = calculateTrailingStep(
         state.entry, cur, state.isLong,

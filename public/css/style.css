@@ -2944,15 +2944,15 @@ img[src*="logo"] {
 
 /* Signal Board */
 .signal-card {
-  background: var(--color-bg-raised);
-  border: 1px solid var(--color-border-muted);
+  background: rgba(14, 12, 20, 0.6);
+  border: 1px solid rgba(42, 36, 56, 0.4);
   border-radius: var(--radius-md);
   padding: 8px 10px;
   font-size: 0.78rem;
   cursor: pointer;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
 }
-.signal-card:hover { border-color: rgba(212, 175, 55, 0.3); }
+.signal-card:hover { border-color: rgba(212, 175, 55, 0.4); }
 .risk-badge {
   position: absolute; top: -1px; right: -1px;
   font-size: 0.55rem; font-weight: 700; text-transform: uppercase;
@@ -2964,15 +2964,20 @@ img[src*="logo"] {
 .risk-pop { background: linear-gradient(135deg, #f59e0b, #ef4444); color: #fff; }
 .signal-card.signal-long { border-left: 3px solid var(--color-success); }
 .signal-card.signal-short { border-left: 3px solid var(--color-danger); }
-.signal-card.signal-none { border-left: 3px solid var(--color-border-muted); opacity: 0.4; }
+.signal-card.signal-none { border-left: 3px solid var(--color-border-muted); opacity: 0.3; }
 .signal-card.signal-watching {
-  border-color: rgba(212, 175, 55, 0.5);
-  box-shadow: 0 0 12px rgba(212, 175, 55, 0.15), 0 0 24px rgba(212, 175, 55, 0.06);
-  background: linear-gradient(180deg, rgba(212, 175, 55, 0.06), var(--color-bg-raised));
+  border: 1px solid rgba(212, 175, 55, 0.6);
+  box-shadow: 0 0 16px rgba(212, 175, 55, 0.25), 0 0 40px rgba(212, 175, 55, 0.08), inset 0 0 20px rgba(212, 175, 55, 0.04);
+  background: linear-gradient(180deg, rgba(212, 175, 55, 0.12) 0%, rgba(212, 175, 55, 0.04) 40%, rgba(14, 12, 20, 0.7) 100%);
+}
+.signal-card.signal-watching:hover {
+  border-color: rgba(232, 200, 74, 0.8);
+  box-shadow: 0 0 20px rgba(212, 175, 55, 0.35), 0 0 48px rgba(212, 175, 55, 0.12);
 }
 .signal-card.signal-watching .signal-card-sym {
-  color: #f0e8df;
-  text-shadow: 0 0 8px rgba(212, 175, 55, 0.2);
+  color: #f5e6c8;
+  text-shadow: 0 0 10px rgba(212, 175, 55, 0.35);
+  font-weight: 700;
 }
 .signal-card-sym { font-weight: 600; color: var(--color-text); }
 .signal-card-dir { font-size: 0.7rem; font-weight: 600; }
