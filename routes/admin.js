@@ -3094,10 +3094,13 @@ router.post('/token-board/populate-top50', async (req, res) => {
       .slice(0, 50)
       .map((t, i) => ({ symbol: t.symbol, rank: i + 1 }));
 
-    const top50Set = new Set(top50.map(t => t.symbol));
-    let added = 0, banned = 0;
+    let added = 0;
 
-    // Add top 50 as enabled
+    // Step 1: Ban ALL existing tokens first
+    await query('UPDATE global_token_settings SET banned = true, enabled = false');
+    const beforeCount = await query('SELECT COUNT(*) as c FROM global_token_settings WHERE banned = false');
+
+    // Step 2: Enable only top 50
     for (const t of top50) {
       await query(
         `INSERT INTO global_token_settings (symbol, enabled, banned, "rank")
@@ -3108,16 +3111,13 @@ router.post('/token-board/populate-top50', async (req, res) => {
       added++;
     }
 
-    // Ban everything else already in the table
-    const existing = await query('SELECT symbol FROM global_token_settings');
-    for (const row of existing) {
-      if (!top50Set.has(row.symbol)) {
-        await query('UPDATE global_token_settings SET banned = true, enabled = false WHERE symbol = $1', [row.symbol]);
-        banned++;
-      }
-    }
+    // Step 3: Delete banned tokens that aren't in top 50 (clean up table)
+    const top50Set = new Set(top50.map(t => t.symbol));
+    await query('DELETE FROM global_token_settings WHERE banned = true');
 
-    res.json({ ok: true, added, banned, total: top50.length });
+    const afterCount = await query('SELECT COUNT(*) as c FROM global_token_settings');
+
+    res.json({ ok: true, active: added, total: parseInt(afterCount[0].c) });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
