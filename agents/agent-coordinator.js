@@ -228,6 +228,18 @@ class AgentCoordinator extends BaseAgent {
       return { from: 'Coordinator', message: 'All agents back online. ChartAgent scanning, RiskAgent filtering, TraderAgent executing. We\'re live.' };
     }
 
+    // Close positions
+    if (/close.*position|close.*all|close.*trade|emergency.*close|exit.*all|sell.*all|dump.*all/.test(text)) {
+      return this._closeAllPositions();
+    }
+    // Close specific token
+    const closeMatch = text.match(/close\s+([A-Z0-9]+)/i);
+    if (closeMatch) {
+      const sym = closeMatch[1].toUpperCase();
+      const symbol = sym.endsWith('USDT') ? sym : sym + 'USDT';
+      return this._closeToken(symbol);
+    }
+
     // Pause/resume/reset specific agent
     const pauseM = text.match(/^(pause|stop|halt)\s+(chart|trader|risk|sentiment)/);
     if (pauseM) {
@@ -491,6 +503,110 @@ class AgentCoordinator extends BaseAgent {
       return { from: 'Coordinator', message: lines.join('\n') };
     } catch {
       return { from: 'Coordinator', message: 'Can\'t load performance data right now.' };
+    }
+  }
+
+  async _closeAllPositions() {
+    try {
+      const db = require('../db');
+      const cryptoUtils = require('../crypto-utils');
+      const { BitunixClient } = require('../bitunix-client');
+
+      const keys = await db.query(
+        `SELECT ak.*, u.email FROM api_keys ak JOIN users u ON u.id = ak.user_id
+         WHERE ak.enabled = true AND (ak.paused_by_admin = false OR ak.paused_by_admin IS NULL)`
+      );
+
+      let closed = 0;
+      for (const key of keys) {
+        try {
+          const apiKey = cryptoUtils.decrypt(key.api_key_enc, key.iv, key.auth_tag);
+          const apiSecret = cryptoUtils.decrypt(key.api_secret_enc, key.secret_iv, key.secret_auth_tag);
+
+          if (key.platform === 'bitunix') {
+            const client = new BitunixClient({ apiKey, apiSecret });
+            const account = await client.getAccountInformation();
+            for (const pos of (account.positions || [])) {
+              if (parseFloat(pos.positionAmt || pos.qty || 0) !== 0) {
+                try {
+                  await client.flashClose({ symbol: pos.symbol, positionId: pos.positionId });
+                  closed++;
+                } catch (e) { this.logError(`Close ${pos.symbol} failed: ${e.message}`); }
+              }
+            }
+          } else if (key.platform === 'binance') {
+            const { USDMClient } = require('binance');
+            const { getBinanceRequestOptions } = require('../proxy-agent');
+            const client = new USDMClient({ api_key: apiKey, api_secret: apiSecret }, getBinanceRequestOptions());
+            const account = await client.getAccountInformation({ omitZeroBalances: false });
+            for (const pos of account.positions) {
+              const amt = parseFloat(pos.positionAmt);
+              if (amt !== 0) {
+                const side = amt > 0 ? 'SELL' : 'BUY';
+                try {
+                  await client.submitNewOrder({ symbol: pos.symbol, side, type: 'MARKET', quantity: Math.abs(amt), reduceOnly: 'true' });
+                  closed++;
+                } catch (e) { this.logError(`Close ${pos.symbol} failed: ${e.message}`); }
+              }
+            }
+          }
+        } catch (e) { this.logError(`Close for ${key.email} failed: ${e.message}`); }
+      }
+
+      // Update DB
+      await db.query("UPDATE trades SET status = 'CLOSED', closed_at = NOW() WHERE status = 'OPEN'");
+      this.addActivity('command', `Emergency close: ${closed} positions closed`);
+      return { from: 'TraderAgent', message: `Done. Closed ${closed} position(s) across all users. All open trades marked as CLOSED in DB.` };
+    } catch (err) {
+      return { from: 'TraderAgent', message: `Failed to close positions: ${err.message}` };
+    }
+  }
+
+  async _closeToken(symbol) {
+    try {
+      const db = require('../db');
+      const cryptoUtils = require('../crypto-utils');
+      const { BitunixClient } = require('../bitunix-client');
+
+      const keys = await db.query(
+        `SELECT ak.*, u.email FROM api_keys ak JOIN users u ON u.id = ak.user_id WHERE ak.enabled = true`
+      );
+
+      let closed = 0;
+      for (const key of keys) {
+        try {
+          const apiKey = cryptoUtils.decrypt(key.api_key_enc, key.iv, key.auth_tag);
+          const apiSecret = cryptoUtils.decrypt(key.api_secret_enc, key.secret_iv, key.secret_auth_tag);
+
+          if (key.platform === 'bitunix') {
+            const client = new BitunixClient({ apiKey, apiSecret });
+            const positions = await client.getOpenPositions(symbol);
+            const pos = Array.isArray(positions) ? positions.find(p => p.symbol === symbol) : null;
+            if (pos && pos.positionId) {
+              await client.flashClose({ symbol, positionId: pos.positionId });
+              closed++;
+            }
+          } else if (key.platform === 'binance') {
+            const { USDMClient } = require('binance');
+            const { getBinanceRequestOptions } = require('../proxy-agent');
+            const client = new USDMClient({ api_key: apiKey, api_secret: apiSecret }, getBinanceRequestOptions());
+            const account = await client.getAccountInformation({ omitZeroBalances: false });
+            const pos = account.positions.find(p => p.symbol === symbol && parseFloat(p.positionAmt) !== 0);
+            if (pos) {
+              const amt = parseFloat(pos.positionAmt);
+              const side = amt > 0 ? 'SELL' : 'BUY';
+              await client.submitNewOrder({ symbol, side, type: 'MARKET', quantity: Math.abs(amt), reduceOnly: 'true' });
+              closed++;
+            }
+          }
+        } catch (e) { this.logError(`Close ${symbol} for ${key.email}: ${e.message}`); }
+      }
+
+      await db.query("UPDATE trades SET status = 'CLOSED', closed_at = NOW() WHERE symbol = $1 AND status = 'OPEN'", [symbol]);
+      this.addActivity('command', `Closed ${symbol}: ${closed} position(s)`);
+      return { from: 'TraderAgent', message: `Closed ${symbol} for ${closed} user(s). DB updated.` };
+    } catch (err) {
+      return { from: 'TraderAgent', message: `Failed to close ${symbol}: ${err.message}` };
     }
   }
 
