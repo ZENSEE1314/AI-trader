@@ -891,8 +891,9 @@
          ═══════════════════════════════════════════════════ */
       (function initCryptoNetwork() {
         var section = document.getElementById('crypto-network');
+        var stage = section ? section.querySelector('.crypto-network-stage') : null;
         var network = document.getElementById('cn-network');
-        if (!section || !network) return;
+        if (!section || !stage || !network) return;
 
         var hub = network.querySelector('.cn-hub');
         var nodes = network.querySelectorAll('.cn-node');
@@ -901,65 +902,74 @@
         var pulseDots = network.querySelectorAll('.cn-pulse-dot');
         var header = section.querySelector('.cn-header');
 
-        // Set initial hidden states via class
         network.classList.add('cn-ready');
 
-        function getScrollProgress() {
-          var rect = section.getBoundingClientRect();
-          var sectionHeight = section.offsetHeight;
-          var viewportH = window.innerHeight;
-          // Progress 0 = section top hits viewport bottom, 1 = section bottom hits viewport top
-          var start = rect.top + sectionHeight;
-          var totalScroll = sectionHeight + viewportH;
-          var scrolled = viewportH - rect.top;
-          return Math.max(0, Math.min(1, scrolled / totalScroll));
+        function updateStickyAndProgress() {
+          var sRect = section.getBoundingClientRect();
+          var sTop = sRect.top;
+          var sHeight = section.offsetHeight;
+          var viewH = window.innerHeight;
+          var stageH = viewH;
+          var scrollRoom = sHeight - stageH;
+
+          // Manual sticky: fix stage while section is in scroll range
+          if (sTop <= 0 && sTop > -scrollRoom) {
+            stage.classList.add('cn-fixed');
+            stage.classList.remove('cn-bottom');
+          } else if (sTop <= -scrollRoom) {
+            stage.classList.remove('cn-fixed');
+            stage.classList.add('cn-bottom');
+          } else {
+            stage.classList.remove('cn-fixed');
+            stage.classList.remove('cn-bottom');
+          }
+
+          // Scroll progress within the section (0 to 1)
+          var p = scrollRoom > 0 ? Math.max(0, Math.min(1, -sTop / scrollRoom)) : 0;
+          return p;
         }
 
         function updateNetwork() {
           if (reducedMotion) return;
-          var p = getScrollProgress();
+          var p = updateStickyAndProgress();
 
-          // Phase 1 (0.15-0.3): Hub appears
-          var hubProgress = Math.max(0, Math.min(1, (p - 0.15) / 0.15));
-          hub.style.opacity = hubProgress;
-          hub.style.transform = 'translate(-50%,-50%) scale(' + (0.5 + hubProgress * 0.5) + ')';
+          // Phase 1 (0-0.25): Hub appears
+          var hubP = Math.max(0, Math.min(1, p / 0.25));
+          hub.style.opacity = hubP;
+          hub.style.transform = 'translate(-50%,-50%) scale(' + (0.5 + hubP * 0.5) + ')';
 
-          // Phase 2 (0.3-0.5): Lines extend + exchange nodes appear
-          var lineProgress = Math.max(0, Math.min(1, (p - 0.3) / 0.2));
+          // Phase 2 (0.2-0.5): Lines extend + exchange nodes appear
+          var lineP = Math.max(0, Math.min(1, (p - 0.2) / 0.3));
           lines.forEach(function(line) {
             var len = line.getTotalLength ? line.getTotalLength() : 300;
             line.style.strokeDasharray = len;
-            line.style.strokeDashoffset = len * (1 - lineProgress);
-            line.style.opacity = lineProgress;
+            line.style.strokeDashoffset = len * (1 - lineP);
+            line.style.opacity = lineP;
           });
           lineGlows.forEach(function(g) {
-            g.style.opacity = lineProgress * 0.4;
+            g.style.opacity = lineP * 0.4;
             var len = g.getTotalLength ? g.getTotalLength() : 300;
             g.style.strokeDasharray = len;
-            g.style.strokeDashoffset = len * (1 - lineProgress);
+            g.style.strokeDashoffset = len * (1 - lineP);
           });
 
-          // Exchange nodes (step 2)
           nodes.forEach(function(node) {
             var step = parseInt(node.getAttribute('data-cn-step'), 10);
-            var nodeP;
-            if (step === 2) {
-              nodeP = Math.max(0, Math.min(1, (p - 0.35) / 0.15));
-            } else {
-              nodeP = Math.max(0, Math.min(1, (p - 0.5) / 0.15));
-            }
+            var nodeP = step === 2
+              ? Math.max(0, Math.min(1, (p - 0.3) / 0.2))
+              : Math.max(0, Math.min(1, (p - 0.45) / 0.2));
             node.style.opacity = nodeP;
             node.style.transform = 'scale(' + (0.6 + nodeP * 0.4) + ')';
           });
 
-          // Phase 3 (0.55-0.7): Pulse dots appear (data flowing)
-          var pulseP = Math.max(0, Math.min(1, (p - 0.55) / 0.15));
+          // Phase 3 (0.55-0.75): Pulse dots (data flowing)
+          var pulseP = Math.max(0, Math.min(1, (p - 0.55) / 0.2));
           pulseDots.forEach(function(dot) {
             dot.style.opacity = pulseP * 0.9;
           });
 
-          // Header fades in
-          var headerP = Math.max(0, Math.min(1, (p - 0.2) / 0.15));
+          // Header fades in early
+          var headerP = Math.max(0, Math.min(1, p / 0.2));
           if (header) {
             header.style.opacity = headerP;
             header.style.transform = 'translateY(' + (20 * (1 - headerP)) + 'px)';
@@ -971,7 +981,6 @@
           window.addEventListener('resize', updateNetwork, { passive: true });
           updateNetwork();
         } else {
-          // Show everything immediately for reduced motion
           hub.style.opacity = '1';
           hub.style.transform = 'translate(-50%,-50%) scale(1)';
           nodes.forEach(function(n) { n.style.opacity = '1'; n.style.transform = 'scale(1)'; });
