@@ -590,4 +590,91 @@ router.post('/pay-weekly', async (req, res) => {
   }
 });
 
+// ── Token Signal Board & Watchlist ───────────────────────────
+
+// GET /api/dashboard/signal-board — live token signals
+router.get('/signal-board', async (req, res) => {
+  try {
+    const { getSignalBoard } = require('../token-scanner');
+    const board = getSignalBoard();
+
+    // Also get daily results for today
+    const { getDailyResults } = require('../token-scanner');
+    const dailyResults = await getDailyResults();
+
+    // Get user's watchlist
+    const watchlist = await query(
+      'SELECT symbol, enabled FROM user_watchlist WHERE user_id = $1',
+      [req.userId]
+    );
+    const watchMap = {};
+    for (const w of watchlist) watchMap[w.symbol] = w.enabled;
+
+    res.json({
+      tokens: board.tokens,
+      lastScanAt: board.lastScanAt,
+      dailyResults,
+      watchlist: watchMap,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/dashboard/daily-results — token leaderboard
+router.get('/daily-results', async (req, res) => {
+  try {
+    const { getDailyResults } = require('../token-scanner');
+    const date = req.query.date || null;
+    const results = await getDailyResults(date);
+    res.json(results);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/dashboard/watchlist — add token to user's watchlist
+router.post('/watchlist', async (req, res) => {
+  try {
+    const { symbol } = req.body;
+    if (!symbol) return res.status(400).json({ error: 'Missing symbol' });
+    await query(
+      `INSERT INTO user_watchlist (user_id, symbol, enabled)
+       VALUES ($1, $2, true)
+       ON CONFLICT (user_id, symbol) DO UPDATE SET enabled = true`,
+      [req.userId, symbol.toUpperCase()]
+    );
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// DELETE /api/dashboard/watchlist/:symbol — remove from watchlist
+router.delete('/watchlist/:symbol', async (req, res) => {
+  try {
+    await query(
+      'DELETE FROM user_watchlist WHERE user_id = $1 AND symbol = $2',
+      [req.userId, req.params.symbol.toUpperCase()]
+    );
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// PUT /api/dashboard/watchlist/:symbol/toggle — enable/disable
+router.put('/watchlist/:symbol/toggle', async (req, res) => {
+  try {
+    const { enabled } = req.body;
+    await query(
+      `UPDATE user_watchlist SET enabled = $1 WHERE user_id = $2 AND symbol = $3`,
+      [!!enabled, req.userId, req.params.symbol.toUpperCase()]
+    );
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 module.exports = router;

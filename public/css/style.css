@@ -2857,6 +2857,35 @@ img[src*="logo"] {
    Mission Control — Agent Dashboard
    ============================================================ */
 
+/* Signal Board */
+.signal-card {
+  background: var(--color-bg-raised);
+  border: 1px solid var(--color-border-muted);
+  border-radius: var(--radius-md);
+  padding: 8px 10px;
+  font-size: 0.78rem;
+  cursor: pointer;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.signal-card:hover { border-color: rgba(0, 229, 255, 0.3); }
+.signal-card.signal-long { border-left: 3px solid var(--color-success); }
+.signal-card.signal-short { border-left: 3px solid var(--color-danger); }
+.signal-card.signal-none { border-left: 3px solid var(--color-border-muted); opacity: 0.6; }
+.signal-card.signal-watching { border-color: var(--color-accent); box-shadow: 0 0 8px rgba(0,229,255,0.1); }
+.signal-card-sym { font-weight: 600; color: var(--color-text); }
+.signal-card-dir { font-size: 0.7rem; font-weight: 600; }
+.signal-card-score { font-size: 0.7rem; color: var(--color-text-muted); }
+.signal-card-btn { font-size: 0.65rem; padding: 2px 6px; border-radius: 4px; border: 1px solid var(--color-border-muted); background: transparent; color: var(--color-text-muted); cursor: pointer; margin-top: 4px; }
+.signal-card-btn:hover { border-color: var(--color-accent); color: var(--color-accent); }
+.signal-card-btn.watching { background: rgba(0,229,255,0.1); border-color: var(--color-accent); color: var(--color-accent); }
+
+.daily-result-row {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 6px 10px; font-size: 0.8rem;
+  border-bottom: 1px solid var(--color-border-muted);
+}
+.daily-result-row:last-child { border-bottom: none; }
+
 /* Admin Sub-Tabs */
 .admin-subtabs {
   display: flex;
