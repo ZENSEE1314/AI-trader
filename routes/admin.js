@@ -2945,7 +2945,7 @@ router.post('/clear-test-data', async (req, res) => {
 
 // ── Token Board Management ──────────────────────────────────
 
-// GET /api/admin/token-board — all tokens with risk tags + leverage
+// GET /api/admin/token-board — all tokens with risk tags + leverage + live price
 router.get('/token-board', async (req, res) => {
   try {
     const tokens = await query(
@@ -2955,7 +2955,30 @@ router.get('/token-board', async (req, res) => {
        LEFT JOIN token_leverage tl ON tl.symbol = g.symbol AND tl.enabled = true
        ORDER BY g."rank" ASC, g.symbol ASC`
     );
-    res.json(tokens);
+
+    // Fetch live prices + volume from Binance
+    let priceMap = {};
+    try {
+      const fetch = require('node-fetch');
+      const r = await fetch('https://fapi.binance.com/fapi/v1/ticker/24hr', { timeout: 10000 });
+      const tickers = await r.json();
+      for (const t of tickers) {
+        priceMap[t.symbol] = {
+          price: parseFloat(t.lastPrice),
+          change24h: parseFloat(t.priceChangePercent),
+          volume: parseFloat(t.quoteVolume),
+        };
+      }
+    } catch {}
+
+    const result = tokens.map(t => ({
+      ...t,
+      price: priceMap[t.symbol]?.price || 0,
+      change24h: priceMap[t.symbol]?.change24h || 0,
+      volume: priceMap[t.symbol]?.volume || 0,
+    }));
+
+    res.json(result);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
