@@ -873,6 +873,27 @@ async function main() {
         continue;
       }
 
+      // Kronos AI prediction — confirm direction before trading
+      try {
+        const { getKronosPrediction } = require('./kronos');
+        const kronos = await getKronosPrediction(pick.symbol || pick.sym, '15m', 20);
+        bLog.ai(`Kronos ${pick.symbol}: ${kronos.direction} (${kronos.change_pct > 0 ? '+' : ''}${kronos.change_pct}%) confidence=${kronos.confidence} trend=${kronos.trend}`);
+        log(`Kronos: ${pick.symbol} → ${kronos.direction} ${kronos.change_pct}% conf=${kronos.confidence}`);
+
+        if (kronos.direction !== 'NEUTRAL' && kronos.direction !== pick.direction && kronos.confidence !== 'low') {
+          bLog.trade(`KRONOS BLOCKED: ${pick.symbol} SMC=${pick.direction} but Kronos=${kronos.direction} (${kronos.change_pct}% ${kronos.confidence}) — skipping`);
+          await notify(`Kronos blocked *${pick.symbol}* ${pick.direction}\nAI predicts ${kronos.direction} (${kronos.change_pct}%)`);
+          continue;
+        }
+
+        if (kronos.direction === pick.direction && kronos.confidence === 'high') {
+          bLog.trade(`KRONOS CONFIRMED: ${pick.symbol} ${pick.direction} with HIGH confidence (${kronos.change_pct}%)`);
+        }
+      } catch (kronosErr) {
+        bLog.error(`Kronos error (non-blocking): ${kronosErr.message}`);
+        // Continue without Kronos — don't block trades if prediction fails
+      }
+
       bLog.trade(`Executing trade: ${pick.symbol} ${pick.direction} for registered users...`);
       const result = await executeForAllUsers(pick);
 
