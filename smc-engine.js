@@ -141,20 +141,29 @@ function getStructure(klines, len) {
   const swingHighs = swings.filter(s => s.type === 'high');
   const swingLows = swings.filter(s => s.type === 'low');
 
+  // Minimum swing size: HL/LH must differ by at least 0.15% from previous swing
+  // to filter out noise bounces in strong trends
+  const MIN_SWING_PCT = 0.0015;
+
   const highLabels = [];
   for (let i = 1; i < swingHighs.length; i++) {
+    const diff = Math.abs(swingHighs[i].price - swingHighs[i - 1].price) / swingHighs[i - 1].price;
     const label = swingHighs[i].price > swingHighs[i - 1].price ? 'HH' : 'LH';
-    highLabels.push({ ...swingHighs[i], label });
+    highLabels.push({ ...swingHighs[i], label, significant: diff >= MIN_SWING_PCT });
   }
 
   const lowLabels = [];
   for (let i = 1; i < swingLows.length; i++) {
+    const diff = Math.abs(swingLows[i].price - swingLows[i - 1].price) / swingLows[i - 1].price;
     const label = swingLows[i].price > swingLows[i - 1].price ? 'HL' : 'LL';
-    lowLabels.push({ ...swingLows[i], label });
+    lowLabels.push({ ...swingLows[i], label, significant: diff >= MIN_SWING_PCT });
   }
 
-  const lastHigh = highLabels.length ? highLabels[highLabels.length - 1] : null;
-  const lastLow = lowLabels.length ? lowLabels[lowLabels.length - 1] : null;
+  // Only consider significant swings for direction decisions
+  const sigHighs = highLabels.filter(h => h.significant);
+  const sigLows = lowLabels.filter(l => l.significant);
+  const lastHigh = sigHighs.length ? sigHighs[sigHighs.length - 1] : (highLabels.length ? highLabels[highLabels.length - 1] : null);
+  const lastLow = sigLows.length ? sigLows[sigLows.length - 1] : (lowLabels.length ? lowLabels[lowLabels.length - 1] : null);
 
   let trend = 'neutral';
   if (lastHigh && lastLow) {

@@ -35,15 +35,20 @@ const CONFIG = {
   ],
 };
 
+// ── Circuit Breaker: pause after consecutive losses ────────
+const CIRCUIT_BREAKER = { MAX_CONSECUTIVE_LOSSES: 3, COOLDOWN_MS: 30 * 60 * 1000 }; // 30 min pause
+let consecutiveLosses = 0;
+let circuitBreakerUntil = 0;
+
 // ── Trailing SL config ─────────────────────────────────────
 // All values are PRICE % (not capital %).
-// Initial SL: 30% price distance from entry (e.g., $100 entry → SL at $70).
-// Trailing: at +10% profit → SL locks at +5%, then +2.5% steps upward.
+// Initial SL: 1% price distance from entry (at 20x = 20% capital risk).
+// Trailing: at +1.3% profit → SL locks at +0.5%, then +1% steps upward.
 const TRAILING_SL = {
-  INITIAL_SL_PCT: 0.30,            // 30% price distance = SL at 70% of entry (long)
-  FIRST_TRIGGER: 0.10,             // First trailing trigger at +10% price profit
-  FIRST_SL: 0.05,                  // Lock SL at +5% profit when +10% hit
-  STEP_SIZE: 0.025,                // Each subsequent step adds +2.5%
+  INITIAL_SL_PCT: 0.01,            // 1% price distance — real protection at 20x = 20% capital risk
+  FIRST_TRIGGER: 0.013,            // First trailing trigger at +1.3% price profit
+  FIRST_SL: 0.005,                 // Lock SL at +0.5% profit (break-even+) when first trigger hit
+  STEP_SIZE: 0.01,                 // Each subsequent step adds +1% profit lock
 };
 
 // ── Compound: always use current wallet balance ─────────────
@@ -418,9 +423,10 @@ async function openTrade(client, pick, wallet) {
   const tp2 = fmtP(pick.tp2);
   const tp3 = fmtP(pick.tp3);
 
-  // Initial SL: 30% price distance from entry ($100 trade → SL at $70)
+  // Initial SL: 1% price distance from entry (at 20x = 20% capital risk)
   const slPricePct = TRAILING_SL.INITIAL_SL_PCT;
   const initialSlPrice = fmtP(isLong ? price * (1 - slPricePct) : price * (1 + slPricePct));
+  const tpPct = Math.abs(tp1 - price) / price;
 
   // Position size: 10% of wallet = margin, notional = margin * leverage
   const MIN_NOTIONAL = 5.5;
@@ -464,8 +470,9 @@ async function openTrade(client, pick, wallet) {
   const order = await client.submitNewOrder({ symbol: sym, side: entrySide, type: 'MARKET', quantity: qty });
   await sleep(1500);
 
-  // Set initial SL at -30% price distance (no TP — trailing SL handles exits)
+  // Set initial SL and TP on exchange
   let slOk = false;
+  let tpOk = false;
 
   try {
     await client.submitNewAlgoOrder({
@@ -474,8 +481,19 @@ async function openTrade(client, pick, wallet) {
       closePosition: 'true', workingType: 'MARK_PRICE',
     });
     slOk = true;
-    bLog.trade(`SL set at $${fmtPrice(initialSlPrice)} (-${(TRAILING_SL.INITIAL_SL_PCT*100).toFixed(0)}% from entry)`);
+    bLog.trade(`SL set at $${fmtPrice(initialSlPrice)} (-${(TRAILING_SL.INITIAL_SL_PCT*100).toFixed(1)}% from entry)`);
   } catch (e) { bLog.error(`Owner SL algo failed: ${e.message}`); }
+
+  // Place TP order on exchange (take profit at tp1)
+  try {
+    await client.submitNewAlgoOrder({
+      algoType: 'CONDITIONAL', symbol: sym, side: closeSide,
+      type: 'TAKE_PROFIT_MARKET', triggerPrice: tp1,
+      closePosition: 'true', workingType: 'MARK_PRICE',
+    });
+    tpOk = true;
+    bLog.trade(`TP set at $${fmtPrice(tp1)} (+${(tpPct*100).toFixed(1)}% from entry)`);
+  } catch (e) { bLog.error(`Owner TP algo failed: ${e.message}`); }
 
   if (!slOk) {
     bLog.error(`Owner ${sym} missing SL — set manually!`);
@@ -810,6 +828,17 @@ async function main() {
     return;
   }
 
+  // Circuit breaker: pause after consecutive losses
+  if (Date.now() < circuitBreakerUntil) {
+    const remainMin = Math.ceil((circuitBreakerUntil - Date.now()) / 60000);
+    log(`Circuit breaker active — ${consecutiveLosses} consecutive losses. Pausing ${remainMin}min. Only checking trailing SL.`);
+    // Still check trailing SL on existing positions
+    try {
+      if (API_KEY && API_SECRET) await checkTrailingStop(getClient());
+    } catch (e) { bLog.error(`Trailing check during breaker: ${e.message}`); }
+    return;
+  }
+
   log('=== AI Smart Trader v4 Cycle Start ===');
   const hasOwnerKeys = !!(API_KEY && API_SECRET);
 
@@ -1061,9 +1090,10 @@ async function executeForAllUsers(pick) {
         // Per-user settings: use user_token_leverage first, then key default
         const userLev = await getTokenLeverage(symbol, key.id);
         const walletSizePct = (await getCapitalPercentage(key.id)) / 100;
-        // SL: 30% price distance, no TP — trailing SL handles exits
-        const slPricePct = TRAILING_SL.INITIAL_SL_PCT; // 0.30 = 30% price
+        // SL: 1% price distance (at 20x = 20% capital risk), TP from engine
+        const slPricePct = TRAILING_SL.INITIAL_SL_PCT;
         const initialSlPrice = isLong ? price * (1 - slPricePct) : price * (1 + slPricePct);
+        const userTp = pick.tp1 || (isLong ? price * 1.01 : price * 0.99);
 
         let account, wallet, openPosCount;
 
@@ -1123,9 +1153,11 @@ async function executeForAllUsers(pick) {
 
           const closeSide = isLong ? 'SELL' : 'BUY';
           const slFmt = fmtP(slPrice);
-          userLog.trade(`Setting trailing SL=$${slFmt} for ${symbol} (no TP — trailing SL handles exits)...`);
+          const tpFmt = fmtP(userTp);
+          userLog.trade(`Setting SL=$${slFmt} TP=$${tpFmt} for ${symbol}...`);
 
           let slOk = false;
+          let tpOk = false;
 
           try {
             await userClient.submitNewAlgoOrder({
@@ -1134,9 +1166,21 @@ async function executeForAllUsers(pick) {
               closePosition: 'true', workingType: 'MARK_PRICE',
             });
             slOk = true;
-            userLog.trade(`SL set at $${slFmt} (-30% from entry)`);
+            userLog.trade(`SL set at $${slFmt} (-${(slPricePct*100).toFixed(1)}% from entry)`);
           } catch (e) {
             userLog.error(`SL algo failed for ${symbol}: ${e.message}`);
+          }
+
+          try {
+            await userClient.submitNewAlgoOrder({
+              algoType: 'CONDITIONAL', symbol, side: closeSide,
+              type: 'TAKE_PROFIT_MARKET', triggerPrice: tpFmt,
+              closePosition: 'true', workingType: 'MARK_PRICE',
+            });
+            tpOk = true;
+            userLog.trade(`TP set at $${tpFmt}`);
+          } catch (e) {
+            userLog.error(`TP algo failed for ${symbol}: ${e.message}`);
           }
 
           if (!slOk) {
@@ -1148,11 +1192,11 @@ async function executeForAllUsers(pick) {
             `INSERT INTO trades (api_key_id, user_id, symbol, direction, entry_price, sl_price, tp_price, quantity, leverage, status,
              trailing_sl_price, trailing_sl_last_step, tf_15m, tf_3m, tf_1m)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'OPEN', $10, 0, $11, $12, $13)`,
-            [key.id, key.user_id, symbol, pick.direction, price, fmtP(slPrice), 0, qty, userLev,
+            [key.id, key.user_id, symbol, pick.direction, price, fmtP(slPrice), fmtP(userTp), qty, userLev,
              fmtP(slPrice),
              pick.structure?.tf15 || null, pick.structure?.tf3 || null, pick.structure?.tf1 || null]
           );
-          userLog.trade(`Binance OK: ${key.email} ${symbol} ${pick.direction} x${userLev} qty=${qty} entry=$${fmtPrice(price)} SL=trailing`);
+          userLog.trade(`Binance OK: ${key.email} ${symbol} ${pick.direction} x${userLev} qty=${qty} entry=$${fmtPrice(price)} SL=$${fmtPrice(slPrice)} TP=$${fmtPrice(userTp)}`);
           log(`Binance OK: ${key.email} ${symbol} ${pick.direction} x${userLev}`);
 
         } else if (key.platform === 'bitunix') {
@@ -1194,7 +1238,7 @@ async function executeForAllUsers(pick) {
 
           const slFmtBx = parseFloat(slPrice.toFixed(8));
 
-          userLog.trade(`User ${key.email}: placing Bitunix MARKET ${isLong ? 'BUY' : 'SELL'} ${symbol} qty=${qty} SL=$${slFmtBx} (-${(slPricePct*100).toFixed(0)}% trailing, no TP)...`);
+          userLog.trade(`User ${key.email}: placing Bitunix MARKET ${isLong ? 'BUY' : 'SELL'} ${symbol} qty=${qty} SL=$${slFmtBx} TP=$${parseFloat(userTp.toFixed(8))}...`);
           const order = await userClient.placeOrder({
             symbol, side: isLong ? 'BUY' : 'SELL',
             qty: String(qty), orderType: 'MARKET', tradeSide: 'OPEN',
@@ -1214,10 +1258,15 @@ async function executeForAllUsers(pick) {
               : actualEntry * (1 + slPricePct);
             const slFmtActual = parseFloat(actualSlPrice.toFixed(8));
 
-            userLog.trade(`Bitunix position confirmed: ${pos.positionId} entry=$${actualEntry} — setting SL=$${slFmtActual} (-${(slPricePct*100).toFixed(0)}% trailing, no TP)...`);
+            const actualTpPrice = isLong
+              ? actualEntry * (1 + Math.abs(userTp - price) / price)
+              : actualEntry * (1 - Math.abs(userTp - price) / price);
+            const tpFmtActual = parseFloat(actualTpPrice.toFixed(8));
+
+            userLog.trade(`Bitunix position confirmed: ${pos.positionId} entry=$${actualEntry} — setting SL=$${slFmtActual} TP=$${tpFmtActual}...`);
             try {
-              await userClient.placePositionTpSl({ symbol, positionId: pos.positionId, slPrice: slFmtActual });
-              userLog.trade(`Bitunix SL set on ${pos.positionId}: SL=$${slFmtActual} (trailing only, no TP)`);
+              await userClient.placePositionTpSl({ symbol, positionId: pos.positionId, slPrice: slFmtActual, tpPrice: tpFmtActual });
+              userLog.trade(`Bitunix SL/TP set on ${pos.positionId}: SL=$${slFmtActual} TP=$${tpFmtActual}`);
             } catch (e) {
               userLog.error(`Bitunix SL FAILED: ${e.message} — SET MANUALLY`);
               await notify(`*Bitunix ${symbol} ${pick.direction}*\nSL failed! Set manually on Bitunix NOW.`);
@@ -1680,6 +1729,18 @@ async function syncTradeStatus() {
               [status, pnlUsdt, exitPrice, trade.id, tradingFee, grossPnl]
             );
             bLog.trade(`DB synced: ${trade.symbol} -> ${status} gross=$${grossPnl} fee=$${tradingFee} net=$${pnlUsdt} exit=$${fmtPrice(exitPrice)}`);
+
+            // Circuit breaker: track consecutive losses
+            if (status === 'LOSS') {
+              consecutiveLosses++;
+              if (consecutiveLosses >= CIRCUIT_BREAKER.MAX_CONSECUTIVE_LOSSES) {
+                circuitBreakerUntil = Date.now() + CIRCUIT_BREAKER.COOLDOWN_MS;
+                bLog.trade(`CIRCUIT BREAKER: ${consecutiveLosses} consecutive losses — pausing ${CIRCUIT_BREAKER.COOLDOWN_MS / 60000}min`);
+                await notify(`*Circuit Breaker Activated*\n${consecutiveLosses} consecutive losses — pausing new trades for 30 minutes.`);
+              }
+            } else {
+              consecutiveLosses = 0; // Reset on any win
+            }
 
             // Record token daily result
             try {
