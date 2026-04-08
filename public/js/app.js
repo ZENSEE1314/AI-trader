@@ -1713,21 +1713,39 @@
       const empty = document.getElementById('admin-board-empty');
       if (!tbody) return;
       if (!tokens.length) { tbody.innerHTML = ''; if (empty) empty.style.display = ''; return; }
-      if (empty) empty.style.display = 'none';
+      const activeCount = tokens.filter(t => !t.banned).length;
+      const withSignal = tokens.filter(t => t.signal).length;
+      const withAgent = tokens.filter(t => t.hasAgent).length;
+      const statsEl = document.getElementById('admin-board-stats');
+      if (statsEl) statsEl.textContent = `${activeCount} active / ${tokens.length} total | ${withAgent} agents | ${withSignal} signals`;
+
       tbody.innerHTML = tokens.map(t => {
         const price = t.price || 0;
         const chg = t.change24h || 0;
         const vol = t.volume || 0;
         const chgColor = chg >= 0 ? 'var(--color-success)' : 'var(--color-danger)';
-        const fmtPrice = price >= 1000 ? '$' + price.toLocaleString('en-US',{maximumFractionDigits:2}) : price >= 1 ? '$' + price.toFixed(2) : '$' + price.toFixed(6);
-        const fmtVol = vol >= 1e9 ? '$' + (vol/1e9).toFixed(1) + 'B' : vol >= 1e6 ? '$' + (vol/1e6).toFixed(0) + 'M' : '$' + (vol/1e3).toFixed(0) + 'K';
-        return `<tr${t.banned ? ' style="opacity:0.5;"' : ''}>
-          <td><strong>${escapeHtml(t.symbol.replace('USDT',''))}</strong></td>
-          <td class="text-mono" style="font-size:0.78rem;">${fmtPrice}</td>
-          <td style="font-size:0.78rem;color:${chgColor};font-weight:600;">${chg >= 0 ? '+' : ''}${chg.toFixed(1)}%</td>
-          <td style="font-size:0.75rem;color:var(--color-text-muted);">${fmtVol}</td>
+        const fmtPrice = price >= 1000 ? '$' + price.toLocaleString('en-US',{maximumFractionDigits:2}) : price >= 1 ? '$' + price.toFixed(2) : price > 0 ? '$' + price.toFixed(6) : '--';
+        const fmtVol = vol >= 1e9 ? (vol/1e9).toFixed(1) + 'B' : vol >= 1e6 ? (vol/1e6).toFixed(0) + 'M' : vol >= 1e3 ? (vol/1e3).toFixed(0) + 'K' : '--';
+
+        // Signal indicator
+        let signalHtml = '';
+        if (t.signal === 'LONG') signalHtml = '<span style="color:var(--color-success);font-weight:700;font-size:0.72rem;">LONG</span>';
+        else if (t.signal === 'SHORT') signalHtml = '<span style="color:var(--color-danger);font-weight:700;font-size:0.72rem;">SHORT</span>';
+        else if (t.hasAgent) signalHtml = '<span style="color:var(--color-text-muted);font-size:0.65rem;">watching</span>';
+        else signalHtml = '<span style="color:var(--color-border);font-size:0.65rem;">--</span>';
+
+        // Structure label
+        const struct = t.structure;
+        const structTip = struct ? `15m:${struct.tf15m||'?'} 3m:${struct.tf3m||'?'} 1m:${struct.tf1m||'?'}` : '';
+
+        return `<tr${t.banned ? ' style="opacity:0.4;"' : ''}>
+          <td title="${structTip}">${signalHtml}</td>
+          <td><strong style="font-size:0.8rem;">${escapeHtml(t.symbol.replace('USDT',''))}</strong></td>
+          <td class="text-mono" style="font-size:0.75rem;">${fmtPrice}</td>
+          <td style="font-size:0.75rem;color:${chgColor};font-weight:600;">${chg >= 0 ? '+' : ''}${chg.toFixed(1)}%</td>
+          <td style="font-size:0.72rem;color:var(--color-text-muted);">${fmtVol}</td>
           <td>
-            <select class="form-input" style="font-size:0.72rem;padding:1px 4px;width:80px;" onchange="window.CryptoBot.adminSetRiskTag('${t.symbol}',this.value)">
+            <select class="form-input" style="font-size:0.7rem;padding:1px 3px;width:70px;" onchange="window.CryptoBot.adminSetRiskTag('${t.symbol}',this.value)">
               <option value="" ${!t.risk_tag ? 'selected' : ''}>-</option>
               <option value="popular" ${t.risk_tag === 'popular' ? 'selected' : ''}>Hot</option>
               <option value="low" ${t.risk_tag === 'low' ? 'selected' : ''}>Low</option>
@@ -1735,11 +1753,22 @@
               <option value="high" ${t.risk_tag === 'high' ? 'selected' : ''}>High</option>
             </select>
           </td>
-          <td><input class="form-input text-mono" type="number" value="${t.leverage || 20}" min="1" max="125" style="width:50px;font-size:0.72rem;padding:1px 4px;" onchange="window.CryptoBot.adminSetTokenLev('${t.symbol}',this.value)"></td>
-          <td><label class="token-switch"><input type="checkbox" ${t.banned ? 'checked' : ''} onchange="window.CryptoBot.adminToggleBan('${t.symbol}',this.checked)"><span class="token-slider" style="${t.banned ? 'background:var(--color-danger)' : ''}"></span></label></td>
-          <td><button class="btn btn-sm" style="font-size:0.6rem;color:var(--color-danger);border:1px solid var(--color-danger);background:transparent;padding:1px 6px;" onclick="window.CryptoBot.adminRemoveTokenBoard('${t.symbol}')">X</button></td>
+          <td><input class="form-input text-mono" type="number" value="${t.leverage || 20}" min="1" max="125" style="width:46px;font-size:0.7rem;padding:1px 3px;" onchange="window.CryptoBot.adminSetTokenLev('${t.symbol}',this.value)"></td>
+          <td>
+            <label class="token-switch"><input type="checkbox" ${!t.banned ? 'checked' : ''} onchange="window.CryptoBot.adminToggleBan('${t.symbol}',!this.checked)"><span class="token-slider"></span></label>
+          </td>
+          <td><button style="font-size:0.6rem;color:var(--color-danger);background:none;border:none;cursor:pointer;padding:0;" onclick="window.CryptoBot.adminRemoveTokenBoard('${t.symbol}')">X</button></td>
         </tr>`;
       }).join('');
+    } catch (err) { showToast(err.message, 'error'); }
+  }
+
+  async function adminPopulateTop50() {
+    try {
+      showToast('Loading top 50 tokens...', 'info');
+      const result = await api('POST', '/api/admin/token-board/populate-top50');
+      showToast(`Done: ${result.added} active, ${result.banned} banned`, 'success');
+      adminLoadTokenBoard();
     } catch (err) { showToast(err.message, 'error'); }
   }
 
@@ -3273,7 +3302,7 @@
     fixBitunixPnl, debugBitunix, runBacktest, loadAiVersions, runAiOptimize,
     mcRefresh, mcCommand, mcChat, mcChatQuick, switchAdminTab, filterAgents, customerChat,
     loadSignalBoard, toggleWatch, watchAll, setUserLeverage,
-    adminLoadTokenBoard, adminAddTokenBoard, adminSetRiskTag, adminSetTokenLev, adminToggleBan, adminRemoveTokenBoard,
+    adminLoadTokenBoard, adminAddTokenBoard, adminPopulateTop50, adminSetRiskTag, adminSetTokenLev, adminToggleBan, adminRemoveTokenBoard,
     mcToggleSkill, mcUpdateConfig, mcCreateAgent, mcRemoveAgent,
   };
 

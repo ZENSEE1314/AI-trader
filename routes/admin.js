@@ -2956,6 +2956,22 @@ router.get('/token-board', async (req, res) => {
        ORDER BY g."rank" ASC, g.symbol ASC`
     );
 
+    // Get live signal status from token agents
+    let signalMap = {};
+    try {
+      const { getCoordinator } = require('../agents');
+      const coord = getCoordinator();
+      for (const [sym, agent] of coord.tokenAgents || new Map()) {
+        const h = agent.getHealth();
+        signalMap[sym] = {
+          direction: h.lastSignal?.direction || null,
+          score: h.lastSignal?.score || 0,
+          structure: h.structure || {},
+          hasAgent: true,
+        };
+      }
+    } catch {}
+
     // Fetch live prices + volume from Binance
     let priceMap = {};
     try {
@@ -2976,6 +2992,10 @@ router.get('/token-board', async (req, res) => {
       price: priceMap[t.symbol]?.price || 0,
       change24h: priceMap[t.symbol]?.change24h || 0,
       volume: priceMap[t.symbol]?.volume || 0,
+      signal: signalMap[t.symbol]?.direction || null,
+      signalScore: signalMap[t.symbol]?.score || 0,
+      structure: signalMap[t.symbol]?.structure || null,
+      hasAgent: signalMap[t.symbol]?.hasAgent || false,
     }));
 
     res.json(result);
@@ -3007,6 +3027,45 @@ router.put('/token-board/:symbol/featured', async (req, res) => {
       [req.params.symbol.toUpperCase(), !!featured]
     );
     res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// POST /api/admin/token-board/populate-top50 — auto-add top 50 by volume, ban the rest
+router.post('/token-board/populate-top50', async (req, res) => {
+  try {
+    const fetch = require('node-fetch');
+    const r = await fetch('https://fapi.binance.com/fapi/v1/ticker/24hr', { timeout: 15000 });
+    const tickers = await r.json();
+    const top50 = tickers
+      .filter(t => t.symbol.endsWith('USDT') && !t.symbol.includes('_'))
+      .sort((a, b) => parseFloat(b.quoteVolume) - parseFloat(a.quoteVolume))
+      .slice(0, 50)
+      .map((t, i) => ({ symbol: t.symbol, rank: i + 1 }));
+
+    const top50Set = new Set(top50.map(t => t.symbol));
+    let added = 0, banned = 0;
+
+    // Add top 50 as enabled
+    for (const t of top50) {
+      await query(
+        `INSERT INTO global_token_settings (symbol, enabled, banned, "rank")
+         VALUES ($1, true, false, $2)
+         ON CONFLICT (symbol) DO UPDATE SET enabled = true, banned = false, "rank" = $2`,
+        [t.symbol, t.rank]
+      );
+      added++;
+    }
+
+    // Ban everything else already in the table
+    const existing = await query('SELECT symbol FROM global_token_settings');
+    for (const row of existing) {
+      if (!top50Set.has(row.symbol)) {
+        await query('UPDATE global_token_settings SET banned = true, enabled = false WHERE symbol = $1', [row.symbol]);
+        banned++;
+      }
+    }
+
+    res.json({ ok: true, added, banned, total: top50.length });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 

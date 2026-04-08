@@ -1175,30 +1175,33 @@
                 <label class="form-label">Add Token</label>
                 <input class="form-input text-mono" type="text" id="admin-board-symbol" placeholder="BTCUSDT" style="text-transform:uppercase;">
               </div>
-              <div class="form-group" style="margin-bottom:0;width:120px;">
+              <div class="form-group" style="margin-bottom:0;width:100px;">
                 <label class="form-label">Risk</label>
                 <select class="form-input" id="admin-board-risk">
                   <option value="">None</option>
                   <option value="popular">Popular</option>
-                  <option value="low">Low Risk</option>
-                  <option value="medium">Med Risk</option>
-                  <option value="high">High Risk</option>
+                  <option value="low">Low</option>
+                  <option value="medium">Med</option>
+                  <option value="high">High</option>
                 </select>
               </div>
-              <div class="form-group" style="margin-bottom:0;width:80px;">
-                <label class="form-label">Leverage</label>
+              <div class="form-group" style="margin-bottom:0;width:70px;">
+                <label class="form-label">Lev</label>
                 <input class="form-input text-mono" type="number" id="admin-board-lev" value="20" min="1" max="125">
               </div>
               <button class="btn btn-primary btn-sm" onclick="window.CryptoBot.adminAddTokenBoard()">Add</button>
-              <button class="btn btn-sm" style="border:1px solid var(--color-border);color:var(--color-text);" onclick="window.CryptoBot.adminLoadTokenBoard()">Refresh</button>
             </div>
-            <div class="table-wrap" style="max-height:500px;overflow-y:auto;">
-              <table class="data-table">
-                <thead style="position:sticky;top:0;z-index:1;"><tr><th>Symbol</th><th>Price</th><th>24h</th><th>Volume</th><th>Risk</th><th>Lev</th><th>Ban</th><th></th></tr></thead>
+            <div style="display:flex;gap:var(--space-2);margin-bottom:var(--space-3);flex-wrap:wrap;">
+              <button class="btn btn-sm" style="background:var(--color-accent);color:#000;font-weight:600;" onclick="window.CryptoBot.adminPopulateTop50()">Auto Top 50</button>
+              <button class="btn btn-sm" style="border:1px solid var(--color-border);color:var(--color-text);" onclick="window.CryptoBot.adminLoadTokenBoard()">Refresh</button>
+              <span id="admin-board-stats" style="font-size:0.75rem;color:var(--color-text-muted);align-self:center;"></span>
+            </div>
+            <div class="table-wrap" style="max-height:600px;overflow-y:auto;">
+              <table class="data-table" style="font-size:0.8rem;">
+                <thead style="position:sticky;top:0;z-index:1;"><tr><th>Signal</th><th>Symbol</th><th>Price</th><th>24h</th><th>Volume</th><th>Risk</th><th>Lev</th><th>Active</th><th></th></tr></thead>
                 <tbody id="admin-board-tbody"></tbody>
               </table>
             </div>
-            <div id="admin-board-empty" style="color:var(--color-text-muted);font-size:0.85rem;padding:var(--space-3);text-align:center;">No tokens. Add tokens above.</div>
           </div>
         </div>
 
