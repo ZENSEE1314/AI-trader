@@ -4086,22 +4086,15 @@ img[src*="logo"] {
 }
 
 .cn-line {
-  stroke-dasharray: 300;
-  stroke-dashoffset: 300;
-  opacity: 0;
   transition: none;
 }
 
 .cn-line-glow {
-  stroke-dasharray: 300;
-  stroke-dashoffset: 300;
-  opacity: 0;
   filter: blur(3px);
 }
 
 /* Pulse dots hidden until scroll activates */
 .cn-pulse-dot {
-  opacity: 0;
 }
 
 /* --- Central MCT Hub --- */
@@ -4109,11 +4102,10 @@ img[src*="logo"] {
   position: absolute;
   top: 50%;
   left: 50%;
-  transform: translate(-50%, -50%) scale(0.5);
+  transform: translate(-50%, -50%) scale(1);
   width: 120px;
   height: 120px;
   z-index: 10;
-  opacity: 0;
   will-change: transform, opacity;
 }
 
@@ -4297,7 +4289,6 @@ img[src*="logo"] {
   transform: translateX(-50%);
   text-align: center;
   z-index: 20;
-  opacity: 0;
   will-change: transform, opacity;
   width: 90%;
   max-width: 600px;
@@ -4315,14 +4306,7 @@ img[src*="logo"] {
   margin-top: var(--space-3);
 }
 
-/* --- Ready state (JS sets initial values) --- */
-.cn-ready .cn-hub,
-.cn-ready .cn-node,
-.cn-ready .cn-line,
-.cn-ready .cn-line-glow,
-.cn-ready .cn-pulse-dot {
-  transition: none;
-}
+/* JS handles all initial states and transitions */
 
 
 /* ============================================================
