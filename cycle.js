@@ -1291,10 +1291,11 @@ async function executeForAllUsers(pick) {
             // Store actual entry price in DB
             await db.query(
               `INSERT INTO trades (api_key_id, user_id, symbol, direction, entry_price, sl_price, tp_price, quantity, leverage, status,
-               trailing_sl_price, trailing_sl_last_step)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'OPEN', $10, 0)`,
+               trailing_sl_price, trailing_sl_last_step, tf_15m, tf_3m, tf_1m)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'OPEN', $10, 0, $11, $12, $13)`,
               [key.id, key.user_id, symbol, pick.direction, actualEntry,
-               slFmtActual, 0, qty, userLev, slFmtActual]
+               slFmtActual, 0, qty, userLev, slFmtActual,
+               pick.structure?.tf15 || null, pick.structure?.tf3 || null, pick.structure?.tf1 || null]
             );
           } else {
             userLog.error(`Bitunix position not found after order — verify on exchange`);
@@ -1302,10 +1303,11 @@ async function executeForAllUsers(pick) {
 
             await db.query(
               `INSERT INTO trades (api_key_id, user_id, symbol, direction, entry_price, sl_price, tp_price, quantity, leverage, status,
-               trailing_sl_price, trailing_sl_last_step)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'OPEN', $10, 0)`,
+               trailing_sl_price, trailing_sl_last_step, tf_15m, tf_3m, tf_1m)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'OPEN', $10, 0, $11, $12, $13)`,
               [key.id, key.user_id, symbol, pick.direction, price,
-               parseFloat(slPrice.toFixed(8)), 0, qty, userLev, parseFloat(slPrice.toFixed(8))]
+               parseFloat(slPrice.toFixed(8)), 0, qty, userLev, parseFloat(slPrice.toFixed(8)),
+               pick.structure?.tf15 || null, pick.structure?.tf3 || null, pick.structure?.tf1 || null]
             );
           }
           executedUserSymbols.add(dedupKey);
