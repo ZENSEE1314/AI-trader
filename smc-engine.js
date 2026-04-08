@@ -312,7 +312,7 @@ function isGoodTradingSession() {
 
 // ── Analyze Single Coin (Full Checklist — config-driven) ───
 
-async function analyzeLHHL(ticker, params, dailyBiasCache) {
+async function analyzeLHHL(ticker, params, dailyBiasCache, kronosPredictions = null) {
   const symbol = ticker.symbol;
   const price = parseFloat(ticker.lastPrice);
 
@@ -569,6 +569,25 @@ async function analyzeLHHL(ticker, params, dailyBiasCache) {
   // Scalper AI bonus
   score += scalperResult.score;
 
+  // Kronos AI prediction bonus/penalty
+  let kronosData = null;
+  if (kronosPredictions && kronosPredictions.has(symbol)) {
+    kronosData = kronosPredictions.get(symbol);
+    if (!kronosData.error) {
+      if (kronosData.direction === direction) {
+        // Kronos agrees — boost score based on confidence
+        const boost = kronosData.confidence === 'high' ? 5 : kronosData.confidence === 'medium' ? 3 : 1;
+        score += boost;
+        bLog.scan(`${symbol}: Kronos AGREES ${direction} (+${boost}) conf=${kronosData.confidence} ${kronosData.change_pct}%`);
+      } else if (kronosData.direction !== 'NEUTRAL') {
+        // Kronos disagrees — penalty based on confidence
+        const penalty = kronosData.confidence === 'high' ? 6 : kronosData.confidence === 'medium' ? 3 : 1;
+        score -= penalty;
+        bLog.scan(`${symbol}: Kronos DISAGREES (${kronosData.direction} vs ${direction}) (-${penalty}) conf=${kronosData.confidence}`);
+      }
+    }
+  }
+
   // AI modifier
   const setup = direction === 'LONG' ? 'TRIPLE_HL_LONG' : 'TRIPLE_LH_SHORT';
   const aiModifier = await aiLearner.getAIScoreModifier(symbol, setup, direction);
@@ -576,7 +595,8 @@ async function analyzeLHHL(ticker, params, dailyBiasCache) {
 
   bLog.scan(
     `SIGNAL: ${symbol} ${direction} | 15m=${struct15m.label} 3m=${struct3m.label} 1m=${struct1m.label} ` +
-    `| score=${Math.round(score)} | Scalper=${scalperResult.signal}`
+    `| score=${Math.round(score)} | Scalper=${scalperResult.signal}` +
+    (kronosData ? ` | Kronos=${kronosData.direction}(${kronosData.change_pct}%)` : '')
   );
 
   return {
@@ -603,6 +623,12 @@ async function analyzeLHHL(ticker, params, dailyBiasCache) {
     scalperAI: scalperResult.details ? {
       signal: scalperResult.signal,
       oscillator: scalperResult.details.oscillator,
+    } : null,
+    kronos: kronosData ? {
+      direction: kronosData.direction,
+      change_pct: kronosData.change_pct,
+      confidence: kronosData.confidence,
+      trend: kronosData.trend,
     } : null,
   };
 }
@@ -667,7 +693,7 @@ async function scanSMC(log, opts = {}) {
       continue;
     }
 
-    const signal = await analyzeLHHL(ticker, params, dailyBiasCache);
+    const signal = await analyzeLHHL(ticker, params, dailyBiasCache, opts.kronosPredictions || null);
     analyzed++;
 
     if (signal && signal.score >= minScore) {

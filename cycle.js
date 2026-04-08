@@ -850,7 +850,37 @@ async function main() {
     await initAllTables();
     const topNRows = await dbQuery('SELECT MAX(top_n_coins) as max_n FROM api_keys WHERE enabled = true');
     const topNCoins = parseInt(topNRows[0]?.max_n) || 50;
-    const signals = await scanSMC(log, { topNCoins });
+
+    // ── Kronos AI Batch Scan: predict ALL top tokens ──────────
+    let kronosPredictions = null;
+    try {
+      const kronos = require('./kronos');
+      const fetch = require('node-fetch');
+
+      // Fetch top coins list (same as SMC uses)
+      const tickerRes = await fetch('https://fapi.binance.com/fapi/v1/ticker/24hr', { timeout: 15000 });
+      const tickers = await tickerRes.json();
+      const topSymbols = tickers
+        .filter(t => t.symbol.endsWith('USDT') && !t.symbol.includes('_'))
+        .filter(t => parseFloat(t.quoteVolume) >= 10_000_000)
+        .sort((a, b) => parseFloat(b.quoteVolume) - parseFloat(a.quoteVolume))
+        .slice(0, Math.min(topNCoins, 30))  // Cap at 30 to limit prediction time
+        .map(t => t.symbol);
+
+      bLog.ai(`Kronos batch scan starting: ${topSymbols.length} tokens`);
+      kronosPredictions = await kronos.scanAllTokens(topSymbols, '15m', 20, 3);
+
+      // Send summary to Telegram
+      const summary = kronos.formatPredictionSummary();
+      if (summary) {
+        await notify(summary);
+        bLog.ai(`Kronos summary sent to Telegram (${kronosPredictions.size} predictions)`);
+      }
+    } catch (kronosBatchErr) {
+      bLog.error(`Kronos batch scan failed (non-blocking): ${kronosBatchErr.message}`);
+    }
+
+    const signals = await scanSMC(log, { topNCoins, kronosPredictions });
 
     if (!signals.length) {
       log('No SMC signals found this cycle.');
@@ -873,25 +903,26 @@ async function main() {
         continue;
       }
 
-      // Kronos AI prediction — confirm direction before trading
+      // Kronos AI prediction — use cached batch result or fetch fresh
       try {
-        const { getKronosPrediction } = require('./kronos');
-        const kronos = await getKronosPrediction(pick.symbol || pick.sym, '15m', 20);
-        bLog.ai(`Kronos ${pick.symbol}: ${kronos.direction} (${kronos.change_pct > 0 ? '+' : ''}${kronos.change_pct}%) confidence=${kronos.confidence} trend=${kronos.trend}`);
-        log(`Kronos: ${pick.symbol} → ${kronos.direction} ${kronos.change_pct}% conf=${kronos.confidence}`);
+        const kronosModule = require('./kronos');
+        const sym = pick.symbol || pick.sym;
+        const kronosResult = kronosModule.getCachedPrediction(sym) || await kronosModule.getKronosPrediction(sym, '15m', 20);
 
-        if (kronos.direction !== 'NEUTRAL' && kronos.direction !== pick.direction && kronos.confidence !== 'low') {
-          bLog.trade(`KRONOS BLOCKED: ${pick.symbol} SMC=${pick.direction} but Kronos=${kronos.direction} (${kronos.change_pct}% ${kronos.confidence}) — skipping`);
-          await notify(`Kronos blocked *${pick.symbol}* ${pick.direction}\nAI predicts ${kronos.direction} (${kronos.change_pct}%)`);
+        bLog.ai(`Kronos ${sym}: ${kronosResult.direction} (${kronosResult.change_pct > 0 ? '+' : ''}${kronosResult.change_pct}%) confidence=${kronosResult.confidence} trend=${kronosResult.trend}`);
+        log(`Kronos: ${sym} → ${kronosResult.direction} ${kronosResult.change_pct}% conf=${kronosResult.confidence}`);
+
+        if (kronosResult.direction !== 'NEUTRAL' && kronosResult.direction !== pick.direction && kronosResult.confidence !== 'low') {
+          bLog.trade(`KRONOS BLOCKED: ${sym} SMC=${pick.direction} but Kronos=${kronosResult.direction} (${kronosResult.change_pct}% ${kronosResult.confidence}) — skipping`);
+          await notify(`🚫 Kronos blocked *${sym}* ${pick.direction}\nAI predicts ${kronosResult.direction} (${kronosResult.change_pct}%)`);
           continue;
         }
 
-        if (kronos.direction === pick.direction && kronos.confidence === 'high') {
-          bLog.trade(`KRONOS CONFIRMED: ${pick.symbol} ${pick.direction} with HIGH confidence (${kronos.change_pct}%)`);
+        if (kronosResult.direction === pick.direction && kronosResult.confidence === 'high') {
+          bLog.trade(`KRONOS CONFIRMED: ${sym} ${pick.direction} with HIGH confidence (${kronosResult.change_pct}%)`);
         }
       } catch (kronosErr) {
         bLog.error(`Kronos error (non-blocking): ${kronosErr.message}`);
-        // Continue without Kronos — don't block trades if prediction fails
       }
 
       bLog.trade(`Executing trade: ${pick.symbol} ${pick.direction} for registered users...`);

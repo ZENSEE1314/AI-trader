@@ -310,6 +310,7 @@
       loadSignalBoard();
       if (cashData) renderDashCashWallet(cashData);
       loadPauseStatus();
+      loadKronosPredictions();
     } catch (err) {
       showToast('Failed to load dashboard.', 'error');
     }
@@ -322,6 +323,50 @@
     const commEl = document.getElementById('dash-cw-commission');
     if (balEl) balEl.textContent = `$${bal.toFixed(2)}`;
     if (commEl) commEl.textContent = `$${comm.toFixed(2)}`;
+  }
+
+  async function loadKronosPredictions() {
+    const tbody = document.getElementById('kronos-tbody');
+    if (!tbody) return;
+    try {
+      const data = await api('GET', '/api/dashboard/kronos-predictions');
+      const countEl = document.getElementById('kronos-count');
+      const bullEl = document.getElementById('kronos-bull');
+      const bearEl = document.getElementById('kronos-bear');
+      const neutralEl = document.getElementById('kronos-neutral');
+
+      if (countEl) countEl.textContent = `(${data.total} tokens)`;
+      if (bullEl) bullEl.textContent = `📈 ${data.longs} Bullish`;
+      if (bearEl) bearEl.textContent = `📉 ${data.shorts} Bearish`;
+      if (neutralEl) neutralEl.textContent = `➖ ${data.neutrals} Neutral`;
+
+      if (!data.predictions || data.predictions.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--color-text-secondary);padding:20px;">No predictions yet — waiting for next cycle scan</td></tr>';
+        return;
+      }
+
+      tbody.innerHTML = data.predictions.map(p => {
+        const isLong = p.direction === 'LONG';
+        const isShort = p.direction === 'SHORT';
+        const dirColor = isLong ? 'var(--color-success)' : isShort ? 'var(--color-danger)' : 'var(--color-text-secondary)';
+        const dirIcon = isLong ? '📈' : isShort ? '📉' : '➖';
+        const confIcon = p.confidence === 'high' ? '🔥' : p.confidence === 'medium' ? '⚡' : '·';
+        const changePct = p.change_pct || 0;
+        const changeColor = changePct > 0 ? 'var(--color-success)' : changePct < 0 ? 'var(--color-danger)' : 'var(--color-text-secondary)';
+        const trendColor = p.trend === 'bullish' ? 'var(--color-success)' : p.trend === 'bearish' ? 'var(--color-danger)' : 'var(--color-text-secondary)';
+
+        return `<tr>
+          <td style="font-weight:600;">${p.symbol.replace('USDT', '')}</td>
+          <td style="color:${dirColor};font-weight:700;">${dirIcon} ${p.direction}</td>
+          <td style="color:${changeColor};font-weight:600;">${changePct > 0 ? '+' : ''}${changePct}%</td>
+          <td>${confIcon} ${p.confidence}</td>
+          <td style="color:${trendColor};">${p.trend}</td>
+          <td class="text-mono" style="font-size:0.75rem;">$${(p.predicted || 0).toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:6})}</td>
+        </tr>`;
+      }).join('');
+    } catch (err) {
+      tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--color-danger);padding:20px;">Failed to load predictions</td></tr>';
+    }
   }
 
   function renderWallets(data) {
@@ -3372,6 +3417,7 @@
     addAllowedToken, addBannedToken, unbanGlobalToken, removeGlobalToken, scanBitunixTokens,
     searchAdminToken, pickAdminToken, searchUserBanToken,
     addRiskLevel, saveRiskLevel, deleteRiskLevel,
+    loadKronosPredictions,
     loadOpenPositions, emergencyCloseToken, emergencyCloseAll,
     fixBitunixPnl, debugBitunix, runBacktest, loadAiVersions, runAiOptimize,
     mcRefresh, mcCommand, mcChat, mcChatQuick, switchAdminTab, filterAgents, customerChat,

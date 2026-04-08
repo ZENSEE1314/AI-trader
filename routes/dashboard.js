@@ -772,4 +772,26 @@ router.put('/watchlist/:symbol/toggle', async (req, res) => {
   }
 });
 
+// Kronos AI predictions — latest batch results
+router.get('/kronos-predictions', async (req, res) => {
+  try {
+    const { getAllPredictions } = require('../kronos');
+    const predictions = getAllPredictions();
+
+    const longs = predictions.filter(p => p.direction === 'LONG');
+    const shorts = predictions.filter(p => p.direction === 'SHORT');
+    const neutrals = predictions.filter(p => p.direction === 'NEUTRAL');
+
+    res.json({
+      total: predictions.length,
+      longs: longs.length,
+      shorts: shorts.length,
+      neutrals: neutrals.length,
+      predictions,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 module.exports = router;
