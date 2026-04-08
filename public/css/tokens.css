@@ -22,12 +22,13 @@
   --color-text:        #e0eaf5;
   --color-text-muted:  #7a8da0;
 
-  /* --- Colors: Accent (cyan/blue neon) --- */
-  --color-accent:      #00e5ff;
+  /* --- Colors: Accent (refined cyan — slightly warmer for premium feel) --- */
+  --color-accent:      #00d4f5;
   --color-accent-fg:   #060a10;
-  --color-accent-muted:rgba(0, 229, 255, 0.12);
-  --color-accent-hover:#33ecff;
-  --color-primary:     #00e5ff;
+  --color-accent-muted:rgba(0, 212, 245, 0.10);
+  --color-accent-hover:#2aeaff;
+  --color-primary:     #00d4f5;
+  --color-accent-soft: rgba(0, 212, 245, 0.06);
 
   /* --- Colors: Semantic --- */
   --color-success:     #00ff88;
@@ -45,11 +46,11 @@
   --color-bitunix:     #7c7fff;
   --color-okx:         #fff;
 
-  /* --- Neon glow helpers --- */
-  --glow-cyan:         0 0 20px rgba(0, 229, 255, 0.25), 0 0 60px rgba(0, 229, 255, 0.08);
-  --glow-green:        0 0 20px rgba(0, 255, 136, 0.2), 0 0 60px rgba(0, 255, 136, 0.06);
-  --glow-red:          0 0 20px rgba(255, 56, 96, 0.2), 0 0 60px rgba(255, 56, 96, 0.06);
-  --glow-gold:         0 0 20px rgba(212, 175, 55, 0.25), 0 0 60px rgba(212, 175, 55, 0.08);
+  /* --- Neon glow helpers (subtler for premium feel) --- */
+  --glow-cyan:         0 0 16px rgba(0, 212, 245, 0.18), 0 0 48px rgba(0, 212, 245, 0.06);
+  --glow-green:        0 0 16px rgba(0, 255, 136, 0.15), 0 0 48px rgba(0, 255, 136, 0.05);
+  --glow-red:          0 0 16px rgba(255, 56, 96, 0.15), 0 0 48px rgba(255, 56, 96, 0.05);
+  --glow-gold:         0 0 16px rgba(212, 175, 55, 0.2), 0 0 48px rgba(212, 175, 55, 0.06);
 
   /* --- Glass effect --- */
   --glass-bg:          rgba(12, 18, 28, 0.65);
