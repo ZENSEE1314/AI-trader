@@ -626,6 +626,16 @@ router.get('/signal-board', async (req, res) => {
     const watchMap = {};
     for (const w of watchlist) watchMap[w.symbol] = w.enabled;
 
+    // Get user's per-token leverage
+    let userLevMap = {};
+    try {
+      const keys = await query('SELECT id FROM api_keys WHERE user_id = $1 LIMIT 1', [req.userId]);
+      if (keys.length) {
+        const levs = await query('SELECT symbol, leverage FROM user_token_leverage WHERE api_key_id = $1', [keys[0].id]);
+        for (const l of levs) userLevMap[l.symbol] = parseInt(l.leverage);
+      }
+    } catch {}
+
     // Get admin risk tags
     let riskTags = {};
     try {
@@ -642,6 +652,7 @@ router.get('/signal-board', async (req, res) => {
       watching: watchMap[c.symbol] === true,
       riskTag: riskTags[c.symbol]?.risk || null,
       featured: riskTags[c.symbol]?.featured || false,
+      userLeverage: userLevMap[c.symbol] || 20,
     }));
 
     res.json({ tokens, lastScanAt: board.lastScanAt, dailyResults, watchlist: watchMap });
@@ -705,6 +716,26 @@ router.post('/watchlist/bulk', async (req, res) => {
       );
     }
     res.json({ ok: true, count: symbols.length });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// PUT /api/dashboard/watchlist/:symbol/leverage — set user per-token leverage
+router.put('/watchlist/:symbol/leverage', async (req, res) => {
+  try {
+    const { leverage } = req.body;
+    const lev = parseInt(leverage) || 20;
+    const symbol = req.params.symbol.toUpperCase();
+    // Get user's first API key for the leverage override
+    const keys = await query('SELECT id FROM api_keys WHERE user_id = $1 LIMIT 1', [req.userId]);
+    if (keys.length) {
+      await query(
+        `INSERT INTO user_token_leverage (api_key_id, symbol, leverage)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (api_key_id, symbol) DO UPDATE SET leverage = $3`,
+        [keys[0].id, symbol, lev]
+      );
+    }
+    res.json({ ok: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 

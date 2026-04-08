@@ -1619,6 +1619,7 @@
               <span style="font-size:0.7rem;color:${chgColor};">${chg >= 0 ? '+' : ''}${chg.toFixed(1)}%</span>
               ${signalDot}
             </div>
+            ${on ? `<input type="number" class="form-input text-mono" value="${t.userLeverage || 20}" min="1" max="125" style="width:100%;font-size:0.68rem;padding:2px 4px;margin-top:3px;text-align:center;" onchange="window.CryptoBot.setUserLeverage('${t.symbol}',this.value)" title="Your leverage">` : ''}
           </div>`;
         }).join('');
       }
@@ -1655,6 +1656,12 @@
     } catch (err) { showToast(err.message, 'error'); }
   }
 
+  async function setUserLeverage(symbol, leverage) {
+    try {
+      await api('PUT', `/api/dashboard/watchlist/${symbol}/leverage`, { leverage: parseInt(leverage) });
+    } catch (err) { showToast(err.message, 'error'); }
+  }
+
   async function watchAll(enable) {
     try {
       if (!_allTokenSymbols.length) await loadSignalBoard();
@@ -1673,20 +1680,21 @@
       if (!tbody) return;
       if (!tokens.length) { tbody.innerHTML = ''; if (empty) empty.style.display = ''; return; }
       if (empty) empty.style.display = 'none';
-      tbody.innerHTML = tokens.filter(t => t.risk_tag || t.featured).map(t => {
-        const coin = t.symbol.replace('USDT', '');
+      tbody.innerHTML = tokens.map(t => {
         return `<tr>
           <td><strong>${escapeHtml(t.symbol)}</strong></td>
           <td>
-            <select class="form-input" style="font-size:0.8rem;padding:2px 6px;width:120px;" onchange="window.CryptoBot.adminSetRiskTag('${t.symbol}',this.value)">
+            <select class="form-input" style="font-size:0.78rem;padding:2px 6px;width:100px;" onchange="window.CryptoBot.adminSetRiskTag('${t.symbol}',this.value)">
               <option value="" ${!t.risk_tag ? 'selected' : ''}>None</option>
               <option value="popular" ${t.risk_tag === 'popular' ? 'selected' : ''}>Popular</option>
-              <option value="low" ${t.risk_tag === 'low' ? 'selected' : ''}>Low Risk</option>
-              <option value="medium" ${t.risk_tag === 'medium' ? 'selected' : ''}>Medium Risk</option>
-              <option value="high" ${t.risk_tag === 'high' ? 'selected' : ''}>High Risk</option>
+              <option value="low" ${t.risk_tag === 'low' ? 'selected' : ''}>Low</option>
+              <option value="medium" ${t.risk_tag === 'medium' ? 'selected' : ''}>Medium</option>
+              <option value="high" ${t.risk_tag === 'high' ? 'selected' : ''}>High</option>
             </select>
           </td>
-          <td><button class="btn btn-danger btn-sm" style="font-size:0.7rem;" onclick="window.CryptoBot.adminRemoveTokenBoard('${t.symbol}')">Remove</button></td>
+          <td><input class="form-input text-mono" type="number" value="${t.leverage || 20}" min="1" max="125" style="width:60px;font-size:0.78rem;padding:2px 6px;" onchange="window.CryptoBot.adminSetTokenLev('${t.symbol}',this.value)"></td>
+          <td><label class="token-switch"><input type="checkbox" ${t.banned ? 'checked' : ''} onchange="window.CryptoBot.adminToggleBan('${t.symbol}',this.checked)"><span class="token-slider" style="${t.banned ? 'background:var(--color-danger)' : ''}"></span></label></td>
+          <td><button class="btn btn-sm" style="font-size:0.65rem;color:var(--color-danger);border:1px solid var(--color-danger);background:transparent;padding:2px 8px;" onclick="window.CryptoBot.adminRemoveTokenBoard('${t.symbol}')">X</button></td>
         </tr>`;
       }).join('');
     } catch (err) { showToast(err.message, 'error'); }
@@ -1695,10 +1703,13 @@
   async function adminAddTokenBoard() {
     const sym = document.getElementById('admin-board-symbol')?.value?.trim().toUpperCase();
     const risk = document.getElementById('admin-board-risk')?.value || null;
+    const lev = document.getElementById('admin-board-lev')?.value || 20;
     if (!sym) { showToast('Enter a symbol', 'error'); return; }
+    const symbol = sym.endsWith('USDT') ? sym : sym + 'USDT';
     try {
-      await api('POST', '/api/admin/token-board/add', { symbol: sym, risk_tag: risk });
-      showToast(`${sym} added`, 'success');
+      await api('POST', '/api/admin/token-board/add', { symbol, risk_tag: risk });
+      await api('POST', '/api/admin/token-leverage', { symbol, leverage: parseInt(lev) }).catch(() => {});
+      showToast(`${symbol} added`, 'success');
       document.getElementById('admin-board-symbol').value = '';
       adminLoadTokenBoard();
     } catch (err) { showToast(err.message, 'error'); }
@@ -1707,14 +1718,30 @@
   async function adminSetRiskTag(symbol, tag) {
     try {
       await api('PUT', `/api/admin/token-board/${symbol}/risk`, { risk_tag: tag || null });
-      showToast(`${symbol}: ${tag || 'no tag'}`, 'success');
+    } catch (err) { showToast(err.message, 'error'); }
+  }
+
+  async function adminSetTokenLev(symbol, lev) {
+    try {
+      await api('POST', '/api/admin/token-leverage', { symbol, leverage: parseInt(lev) });
+    } catch (err) { showToast(err.message, 'error'); }
+  }
+
+  async function adminToggleBan(symbol, banned) {
+    try {
+      if (banned) {
+        await api('POST', '/api/admin/global-tokens', { symbol, type: 'ban' });
+      } else {
+        await api('POST', '/api/admin/remove-global-token', { symbol, list: 'banned' }).catch(() =>
+          api('DELETE', `/api/admin/global-tokens/${symbol}`).catch(() => {})
+        );
+      }
     } catch (err) { showToast(err.message, 'error'); }
   }
 
   async function adminRemoveTokenBoard(symbol) {
     try {
       await api('DELETE', `/api/admin/token-board/${symbol}`);
-      showToast(`${symbol} removed`, 'success');
       adminLoadTokenBoard();
     } catch (err) { showToast(err.message, 'error'); }
   }
@@ -3202,8 +3229,8 @@
     loadOpenPositions, emergencyCloseToken, emergencyCloseAll,
     fixBitunixPnl, debugBitunix, runBacktest, loadAiVersions, runAiOptimize,
     mcRefresh, mcCommand, mcChat, mcChatQuick, switchAdminTab, customerChat,
-    loadSignalBoard, toggleWatch, watchAll,
-    adminLoadTokenBoard, adminAddTokenBoard, adminSetRiskTag, adminRemoveTokenBoard,
+    loadSignalBoard, toggleWatch, watchAll, setUserLeverage,
+    adminLoadTokenBoard, adminAddTokenBoard, adminSetRiskTag, adminSetTokenLev, adminToggleBan, adminRemoveTokenBoard,
     mcToggleSkill, mcUpdateConfig, mcCreateAgent, mcRemoveAgent,
   };
 
