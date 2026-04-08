@@ -30,7 +30,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/css/tokens.css">
-  <link rel="stylesheet" href="/css/style.css?v=20260406a">
+  <link rel="stylesheet" href="/css/style.css?v=20260408a">
 
   <link rel="icon" href="/img/logo.jpeg" type="image/jpeg">
   <style>
@@ -51,8 +51,21 @@
        LANDING PAGE
        ======================================================== -->
   <section id="section-landing" class="landing">
+    <canvas id="particle-canvas"></canvas>
     <div class="landing-bg"></div>
     <div class="landing-noise"></div>
+    <div class="scroll-progress" id="scroll-progress"></div>
+
+    <!-- Floating geometric shapes -->
+    <div class="landing-shapes">
+      <div class="landing-shape landing-shape--hex" style="top:8%;left:5%;"></div>
+      <div class="landing-shape landing-shape--ring" style="top:15%;right:8%;"></div>
+      <div class="landing-shape landing-shape--triangle" style="top:45%;left:3%;"></div>
+      <div class="landing-shape landing-shape--diamond" style="top:60%;right:5%;"></div>
+      <div class="landing-shape landing-shape--cross" style="top:75%;left:8%;"></div>
+      <div class="landing-shape landing-shape--hex" style="top:85%;right:10%;opacity:0.03;"></div>
+      <div class="landing-shape landing-shape--ring" style="top:35%;left:92%;width:100px;height:100px;"></div>
+    </div>
 
     <!-- ── Navbar ── -->
     <nav class="landing-nav" id="landing-nav">
@@ -86,15 +99,16 @@
     <div class="landing-content">
 
       <!-- ── Hero ── -->
-      <section class="landing-hero">
+      <section class="landing-hero" style="position:relative;">
+        <div class="hero-mouse-glow" id="hero-mouse-glow"></div>
         <div class="landing-hero-grid">
           <div class="landing-hero-text">
             <div class="landing-hero-tag">
               <span class="landing-hero-tag-dot"></span>
               AI-Powered Trading Engine
             </div>
-            <h1 class="landing-title">Trade Like The<br><span class="landing-title-gold">Top 1%</span></h1>
-            <p class="landing-tagline">AI-powered trading engine scans 40+ coins 24/7, executing high-probability futures trades on your exchange. No monthly fees — we only earn when you profit. 60/40 split.</p>
+            <h1 class="landing-title">Trade Like The<br><span class="landing-title-gradient">Top 1%</span></h1>
+            <p class="landing-tagline" id="hero-tagline"></p>
             <div class="landing-hero-btns">
               <button class="btn btn-gold btn-lg" onclick="window.CryptoBot.goToAuth()">
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
@@ -106,16 +120,54 @@
               </a>
             </div>
           </div>
-          <div class="landing-hero-visual">
-            <img src="/img/logo.jpeg" alt="MCT Logo" class="landing-logo" width="260" height="260">
-            <div class="landing-hero-orbit landing-hero-orbit-1"></div>
-            <div class="landing-hero-orbit landing-hero-orbit-2"></div>
-            <div class="landing-hero-orbit landing-hero-orbit-3"></div>
+          <div class="landing-hero-visual" id="hero-visual">
+            <div class="landing-hero-visual-inner" id="hero-visual-inner">
+              <img src="/img/logo.jpeg" alt="MCT Logo" class="landing-logo" width="260" height="260">
+              <div class="landing-hero-orbit landing-hero-orbit-1"></div>
+              <div class="landing-hero-orbit landing-hero-orbit-2"></div>
+              <div class="landing-hero-orbit landing-hero-orbit-3"></div>
+            </div>
+            <!-- Floating crypto symbols -->
+            <span class="landing-crypto-float" style="top:5%;left:10%;animation:shape-float-1 12s ease-in-out infinite;">BTC</span>
+            <span class="landing-crypto-float" style="top:20%;right:5%;animation:shape-float-2 15s ease-in-out infinite;color:var(--gold);">ETH</span>
+            <span class="landing-crypto-float" style="bottom:15%;left:5%;animation:shape-float-3 18s ease-in-out infinite;color:var(--color-success);">SOL</span>
+            <span class="landing-crypto-float" style="bottom:5%;right:15%;animation:shape-float-4 14s ease-in-out infinite;">XRP</span>
+          </div>
+        </div>
+
+        <!-- Live Ticker -->
+        <div class="landing-ticker" data-animate>
+          <div class="landing-ticker-track" id="ticker-track">
+            <span class="landing-ticker-item"><span class="ticker-symbol">BTC</span> <span class="ticker-up">+2.4%</span></span>
+            <span class="landing-ticker-item"><span class="ticker-symbol">ETH</span> <span class="ticker-up">+1.8%</span></span>
+            <span class="landing-ticker-item"><span class="ticker-symbol">SOL</span> <span class="ticker-up">+5.2%</span></span>
+            <span class="landing-ticker-item"><span class="ticker-symbol">BNB</span> <span class="ticker-down">-0.3%</span></span>
+            <span class="landing-ticker-item"><span class="ticker-symbol">XRP</span> <span class="ticker-up">+3.1%</span></span>
+            <span class="landing-ticker-item"><span class="ticker-symbol">DOGE</span> <span class="ticker-up">+4.7%</span></span>
+            <span class="landing-ticker-item"><span class="ticker-symbol">ADA</span> <span class="ticker-down">-1.2%</span></span>
+            <span class="landing-ticker-item"><span class="ticker-symbol">AVAX</span> <span class="ticker-up">+2.9%</span></span>
+            <span class="landing-ticker-item"><span class="ticker-symbol">LINK</span> <span class="ticker-up">+1.5%</span></span>
+            <span class="landing-ticker-item"><span class="ticker-symbol">SUI</span> <span class="ticker-up">+6.3%</span></span>
+            <span class="landing-ticker-item"><span class="ticker-symbol">NEAR</span> <span class="ticker-up">+3.8%</span></span>
+            <span class="landing-ticker-item"><span class="ticker-symbol">DOT</span> <span class="ticker-down">-0.7%</span></span>
+            <!-- Duplicated for seamless scroll -->
+            <span class="landing-ticker-item"><span class="ticker-symbol">BTC</span> <span class="ticker-up">+2.4%</span></span>
+            <span class="landing-ticker-item"><span class="ticker-symbol">ETH</span> <span class="ticker-up">+1.8%</span></span>
+            <span class="landing-ticker-item"><span class="ticker-symbol">SOL</span> <span class="ticker-up">+5.2%</span></span>
+            <span class="landing-ticker-item"><span class="ticker-symbol">BNB</span> <span class="ticker-down">-0.3%</span></span>
+            <span class="landing-ticker-item"><span class="ticker-symbol">XRP</span> <span class="ticker-up">+3.1%</span></span>
+            <span class="landing-ticker-item"><span class="ticker-symbol">DOGE</span> <span class="ticker-up">+4.7%</span></span>
+            <span class="landing-ticker-item"><span class="ticker-symbol">ADA</span> <span class="ticker-down">-1.2%</span></span>
+            <span class="landing-ticker-item"><span class="ticker-symbol">AVAX</span> <span class="ticker-up">+2.9%</span></span>
+            <span class="landing-ticker-item"><span class="ticker-symbol">LINK</span> <span class="ticker-up">+1.5%</span></span>
+            <span class="landing-ticker-item"><span class="ticker-symbol">SUI</span> <span class="ticker-up">+6.3%</span></span>
+            <span class="landing-ticker-item"><span class="ticker-symbol">NEAR</span> <span class="ticker-up">+3.8%</span></span>
+            <span class="landing-ticker-item"><span class="ticker-symbol">DOT</span> <span class="ticker-down">-0.7%</span></span>
           </div>
         </div>
 
         <!-- Stats Bar -->
-        <div class="landing-stats" data-animate>
+        <div class="landing-stats" data-animate style="margin-top:var(--space-8);">
           <div class="landing-stat">
             <span class="landing-stat-num" data-count="12847">0</span>
             <span class="landing-stat-label">Trades Executed</span>
@@ -137,6 +189,8 @@
           </div>
         </div>
       </section>
+
+      <div class="landing-section-divider"></div>
 
       <!-- ── Social Proof ── -->
       <section class="landing-section landing-proof" data-animate>
@@ -177,6 +231,8 @@
         </div>
       </section>
 
+      <div class="landing-section-divider"></div>
+
       <!-- ── How It Works Steps ── -->
       <section class="landing-section" data-animate>
         <div class="landing-section-header">
@@ -205,6 +261,8 @@
         </div>
       </section>
 
+      <div class="landing-section-divider"></div>
+
       <!-- ── Features ── -->
       <section class="landing-section" id="features" data-animate>
         <div class="landing-section-header">
@@ -212,7 +270,7 @@
           <h2 class="landing-section-title">Why Traders Choose MCT</h2>
           <p class="landing-section-sub">Built for serious traders who want institutional-grade execution without the complexity.</p>
         </div>
-        <div class="landing-features">
+        <div class="landing-features" data-stagger>
           <div class="landing-feature">
             <div class="landing-feature-icon-wrap">
               <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--color-accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
@@ -394,7 +452,185 @@
     <!-- Landing page scripts -->
     <script>
     (function() {
-      /* -- Smooth scroll for anchor links -- */
+      var reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+      /* ═══════════════════════════════════════════════════
+         Particle Canvas Background
+         ═══════════════════════════════════════════════════ */
+      if (!reducedMotion) {
+        var canvas = document.getElementById('particle-canvas');
+        if (canvas) {
+          var ctx = canvas.getContext('2d');
+          var particles = [];
+          var PARTICLE_COUNT = 60;
+          var CONNECT_DIST = 140;
+          var mouseX = -9999, mouseY = -9999;
+
+          function resizeCanvas() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+          }
+          resizeCanvas();
+          window.addEventListener('resize', resizeCanvas, { passive: true });
+
+          for (var i = 0; i < PARTICLE_COUNT; i++) {
+            particles.push({
+              x: Math.random() * canvas.width,
+              y: Math.random() * canvas.height,
+              vx: (Math.random() - 0.5) * 0.4,
+              vy: (Math.random() - 0.5) * 0.4,
+              r: Math.random() * 2 + 0.5,
+              color: ['rgba(0,229,255,', 'rgba(0,255,136,', 'rgba(212,175,55,'][Math.floor(Math.random() * 3)]
+            });
+          }
+
+          document.addEventListener('mousemove', function(e) {
+            mouseX = e.clientX;
+            mouseY = e.clientY;
+          }, { passive: true });
+
+          function drawParticles() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            for (var i = 0; i < particles.length; i++) {
+              var p = particles[i];
+              p.x += p.vx;
+              p.y += p.vy;
+              if (p.x < 0 || p.x > canvas.width) p.vx *= -1;
+              if (p.y < 0 || p.y > canvas.height) p.vy *= -1;
+
+              /* Mouse repel */
+              var dx = p.x - mouseX, dy = p.y - mouseY;
+              var dist = Math.sqrt(dx * dx + dy * dy);
+              if (dist < 120) {
+                p.x += dx * 0.02;
+                p.y += dy * 0.02;
+              }
+
+              ctx.beginPath();
+              ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+              ctx.fillStyle = p.color + '0.4)';
+              ctx.fill();
+
+              /* Connection lines */
+              for (var j = i + 1; j < particles.length; j++) {
+                var p2 = particles[j];
+                var ddx = p.x - p2.x, ddy = p.y - p2.y;
+                var d = Math.sqrt(ddx * ddx + ddy * ddy);
+                if (d < CONNECT_DIST) {
+                  ctx.beginPath();
+                  ctx.moveTo(p.x, p.y);
+                  ctx.lineTo(p2.x, p2.y);
+                  ctx.strokeStyle = 'rgba(0,229,255,' + (0.06 * (1 - d / CONNECT_DIST)) + ')';
+                  ctx.lineWidth = 0.5;
+                  ctx.stroke();
+                }
+              }
+            }
+            requestAnimationFrame(drawParticles);
+          }
+          requestAnimationFrame(drawParticles);
+        }
+      }
+
+      /* ═══════════════════════════════════════════════════
+         Typing Effect for Hero Tagline
+         ═══════════════════════════════════════════════════ */
+      var taglineEl = document.getElementById('hero-tagline');
+      if (taglineEl) {
+        var fullText = 'AI-powered trading engine scans 40+ coins 24/7, executing high-probability futures trades on your exchange. No monthly fees \u2014 we only earn when you profit. 60/40 split.';
+        if (reducedMotion) {
+          taglineEl.textContent = fullText;
+        } else {
+          var charIndex = 0;
+          var cursor = document.createElement('span');
+          cursor.className = 'typing-cursor';
+          taglineEl.appendChild(cursor);
+          function typeChar() {
+            if (charIndex < fullText.length) {
+              taglineEl.insertBefore(document.createTextNode(fullText[charIndex]), cursor);
+              charIndex++;
+              setTimeout(typeChar, 18);
+            } else {
+              setTimeout(function() { cursor.remove(); }, 2000);
+            }
+          }
+          setTimeout(typeChar, 600);
+        }
+      }
+
+      /* ═══════════════════════════════════════════════════
+         Scroll Progress Bar
+         ═══════════════════════════════════════════════════ */
+      var progressBar = document.getElementById('scroll-progress');
+      if (progressBar && !reducedMotion) {
+        window.addEventListener('scroll', function() {
+          var landing = document.getElementById('section-landing');
+          if (!landing || landing.classList.contains('hidden')) return;
+          var h = document.documentElement.scrollHeight - window.innerHeight;
+          var pct = h > 0 ? window.scrollY / h : 0;
+          progressBar.style.transform = 'scaleX(' + Math.min(pct, 1) + ')';
+        }, { passive: true });
+      }
+
+      /* ═══════════════════════════════════════════════════
+         Mouse-follow Glow on Hero
+         ═══════════════════════════════════════════════════ */
+      if (!reducedMotion) {
+        var glow = document.getElementById('hero-mouse-glow');
+        var heroSection = document.querySelector('.landing-hero');
+        if (glow && heroSection) {
+          heroSection.addEventListener('mousemove', function(e) {
+            var rect = heroSection.getBoundingClientRect();
+            glow.style.left = (e.clientX - rect.left) + 'px';
+            glow.style.top = (e.clientY - rect.top) + 'px';
+          }, { passive: true });
+        }
+      }
+
+      /* ═══════════════════════════════════════════════════
+         3D Tilt on Hero Logo (mouse reactive)
+         ═══════════════════════════════════════════════════ */
+      if (!reducedMotion) {
+        var heroVisual = document.getElementById('hero-visual');
+        var heroInner = document.getElementById('hero-visual-inner');
+        if (heroVisual && heroInner) {
+          heroVisual.addEventListener('mousemove', function(e) {
+            var rect = heroVisual.getBoundingClientRect();
+            var x = (e.clientX - rect.left) / rect.width - 0.5;
+            var y = (e.clientY - rect.top) / rect.height - 0.5;
+            heroInner.style.transform = 'rotateY(' + (x * 15) + 'deg) rotateX(' + (-y * 15) + 'deg)';
+          }, { passive: true });
+          heroVisual.addEventListener('mouseleave', function() {
+            heroInner.style.transform = 'rotateY(0deg) rotateX(0deg)';
+          });
+        }
+      }
+
+      /* ═══════════════════════════════════════════════════
+         Feature Card Tilt + Glow Follow
+         ═══════════════════════════════════════════════════ */
+      if (!reducedMotion) {
+        document.querySelectorAll('.landing-feature').forEach(function(card) {
+          card.addEventListener('mousemove', function(e) {
+            var rect = card.getBoundingClientRect();
+            var x = e.clientX - rect.left;
+            var y = e.clientY - rect.top;
+            var cx = rect.width / 2, cy = rect.height / 2;
+            var rotateX = ((y - cy) / cy) * -8;
+            var rotateY = ((x - cx) / cx) * 8;
+            card.style.transform = 'perspective(600px) rotateX(' + rotateX + 'deg) rotateY(' + rotateY + 'deg) translateY(-6px)';
+            card.style.setProperty('--glow-x', x + 'px');
+            card.style.setProperty('--glow-y', y + 'px');
+          }, { passive: true });
+          card.addEventListener('mouseleave', function() {
+            card.style.transform = '';
+          });
+        });
+      }
+
+      /* ═══════════════════════════════════════════════════
+         Smooth Scroll for Anchor Links
+         ═══════════════════════════════════════════════════ */
       document.querySelectorAll('#section-landing a[href^="#"]').forEach(function(anchor) {
         anchor.addEventListener('click', function(e) {
           var target = document.querySelector(this.getAttribute('href'));
@@ -405,7 +641,9 @@
         });
       });
 
-      /* -- Mobile nav toggle -- */
+      /* ═══════════════════════════════════════════════════
+         Mobile Nav Toggle
+         ═══════════════════════════════════════════════════ */
       var toggle = document.querySelector('.landing-nav-toggle');
       var mobileMenu = document.querySelector('.landing-nav-mobile');
       if (toggle && mobileMenu) {
@@ -423,7 +661,9 @@
         });
       }
 
-      /* -- Navbar background on scroll -- */
+      /* ═══════════════════════════════════════════════════
+         Navbar Background on Scroll
+         ═══════════════════════════════════════════════════ */
       var nav = document.getElementById('landing-nav');
       if (nav) {
         window.addEventListener('scroll', function() {
@@ -431,9 +671,11 @@
         }, { passive: true });
       }
 
-      /* -- Intersection Observer for fade-in -- */
-      var animatedEls = document.querySelectorAll('[data-animate]');
-      if ('IntersectionObserver' in window) {
+      /* ═══════════════════════════════════════════════════
+         IntersectionObserver — Fade-in + Stagger
+         ═══════════════════════════════════════════════════ */
+      var animatedEls = document.querySelectorAll('[data-animate], [data-stagger]');
+      if ('IntersectionObserver' in window && !reducedMotion) {
         var observer = new IntersectionObserver(function(entries) {
           entries.forEach(function(entry) {
             if (entry.isIntersecting) {
@@ -447,7 +689,9 @@
         animatedEls.forEach(function(el) { el.classList.add('is-visible'); });
       }
 
-      /* -- Animated stat counters -- */
+      /* ═══════════════════════════════════════════════════
+         Animated Stat Counters
+         ═══════════════════════════════════════════════════ */
       var counters = document.querySelectorAll('[data-count]');
       if ('IntersectionObserver' in window && counters.length) {
         var counterObserver = new IntersectionObserver(function(entries) {
@@ -456,7 +700,6 @@
               var el = entry.target;
               var target = parseInt(el.getAttribute('data-count'), 10);
               var duration = 2000;
-              var start = 0;
               var startTime = null;
               function step(timestamp) {
                 if (!startTime) startTime = timestamp;
@@ -473,7 +716,25 @@
         counters.forEach(function(c) { counterObserver.observe(c); });
       }
 
-      /* -- FAQ accordion -- */
+      /* ═══════════════════════════════════════════════════
+         Parallax on Scroll (subtle)
+         ═══════════════════════════════════════════════════ */
+      if (!reducedMotion) {
+        var shapes = document.querySelectorAll('.landing-shape');
+        if (shapes.length) {
+          window.addEventListener('scroll', function() {
+            var scrollY = window.scrollY;
+            shapes.forEach(function(shape, i) {
+              var speed = 0.02 + (i * 0.008);
+              shape.style.transform = 'translateY(' + (-scrollY * speed) + 'px)';
+            });
+          }, { passive: true });
+        }
+      }
+
+      /* ═══════════════════════════════════════════════════
+         FAQ Accordion
+         ═══════════════════════════════════════════════════ */
       document.querySelectorAll('.landing-faq-item').forEach(function(item) {
         item.addEventListener('toggle', function() {
           if (this.open) {
@@ -484,9 +745,11 @@
         });
       });
 
-      /* -- Respect prefers-reduced-motion -- */
-      if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
-        document.querySelectorAll('[data-animate]').forEach(function(el) {
+      /* ═══════════════════════════════════════════════════
+         Reduced Motion Fallback
+         ═══════════════════════════════════════════════════ */
+      if (reducedMotion) {
+        document.querySelectorAll('[data-animate], [data-stagger]').forEach(function(el) {
           el.classList.add('is-visible');
         });
       }
