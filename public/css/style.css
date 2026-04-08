@@ -4106,7 +4106,6 @@ img[src*="logo"] {
   width: 120px;
   height: 120px;
   z-index: 10;
-  will-change: transform, opacity;
 }
 
 .cn-hub-glow {
@@ -4207,7 +4206,6 @@ img[src*="logo"] {
   z-index: 5;
   opacity: 0;
   transform: scale(0.6);
-  will-change: transform, opacity;
   box-shadow: var(--shadow-lg);
   transition: box-shadow var(--duration-normal) var(--ease-out);
 }
@@ -4289,7 +4287,6 @@ img[src*="logo"] {
   transform: translateX(-50%);
   text-align: center;
   z-index: 20;
-  will-change: transform, opacity;
   width: 90%;
   max-width: 600px;
 }
