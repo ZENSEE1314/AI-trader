@@ -58,6 +58,7 @@ function getDailyCapital(key, currentBalance) {
 
 // Get token-specific leverage: user per-key → admin global → risk level → 20x default
 async function getTokenLeverage(symbol, apiKeyId = null) {
+  const MAX_LEVERAGE = 20;
   try {
     const { query } = require('./db');
 
@@ -68,7 +69,7 @@ async function getTokenLeverage(symbol, apiKeyId = null) {
         [apiKeyId, symbol]
       );
       if (userTokenRows.length > 0) {
-        return parseInt(userTokenRows[0].leverage);
+        return Math.min(parseInt(userTokenRows[0].leverage), MAX_LEVERAGE);
       }
     }
 
@@ -78,7 +79,7 @@ async function getTokenLeverage(symbol, apiKeyId = null) {
       [symbol]
     );
     if (tokenRows.length > 0) {
-      return parseInt(tokenRows[0].leverage);
+      return Math.min(parseInt(tokenRows[0].leverage), MAX_LEVERAGE);
     }
 
     // Priority 3: Risk level max_leverage from API key
@@ -91,11 +92,11 @@ async function getTokenLeverage(symbol, apiKeyId = null) {
         [apiKeyId]
       );
       if (keyRows.length > 0 && keyRows[0].max_leverage) {
-        return parseInt(keyRows[0].max_leverage);
+        return Math.min(parseInt(keyRows[0].max_leverage), MAX_LEVERAGE);
       }
     }
 
-    return 20;
+    return MAX_LEVERAGE;
   } catch (err) {
     console.error('Error getting token leverage:', err.message);
     return 20;
@@ -1023,8 +1024,12 @@ async function executeForAllUsers(pick) {
     bLog.trade(`Found ${keys.length} unique API key(s) — executing ${sym} ${pick.direction}...`);
     log(`Executing ${sym} ${pick.direction} for ${keys.length} user keys`);
 
-    // Fire to ALL accounts in parallel so everyone gets the trade at the same time
-    const promises = keys.map(key => {
+    // Track which user+symbol combos have been executed this cycle to prevent duplicates
+    const executedUserSymbols = new Set();
+
+    // Execute sequentially per key to prevent race condition duplicates
+    // (parallel execution caused all keys to check DB simultaneously, find no trade, and all open)
+    for (const key of keys) {
       const userLog = {
         trade:     (msg, data) => bLog.trade(msg, data, key.user_id),
         scan:      (msg, data) => bLog.scan(msg, data, key.user_id),
@@ -1032,9 +1037,17 @@ async function executeForAllUsers(pick) {
         system:    (msg, data) => bLog.system(msg, data, key.user_id),
         ai:        (msg, data) => bLog.ai(msg, data, key.user_id),
       };
-      return (async () => {
+      await (async () => {
       try {
         const symbol = sym;
+
+        // Dedup guard: skip if this user+symbol was already executed this cycle
+        const dedupKey = `${key.user_id}:${symbol}`;
+        if (executedUserSymbols.has(dedupKey)) {
+          userLog.trade(`User ${key.email}: ${symbol} already executed this cycle — skipping duplicate key`);
+          return;
+        }
+
         const bannedCoins = (key.banned_coins || '').split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
         if (bannedCoins.includes(symbol)) {
           userLog.trade(`User ${key.email}: ${symbol} is banned — skipped`);
@@ -1196,6 +1209,7 @@ async function executeForAllUsers(pick) {
              fmtP(slPrice),
              pick.structure?.tf15 || null, pick.structure?.tf3 || null, pick.structure?.tf1 || null]
           );
+          executedUserSymbols.add(dedupKey);
           userLog.trade(`Binance OK: ${key.email} ${symbol} ${pick.direction} x${userLev} qty=${qty} entry=$${fmtPrice(price)} SL=$${fmtPrice(slPrice)} TP=$${fmtPrice(userTp)}`);
           log(`Binance OK: ${key.email} ${symbol} ${pick.direction} x${userLev}`);
 
@@ -1292,6 +1306,7 @@ async function executeForAllUsers(pick) {
                parseFloat(slPrice.toFixed(8)), 0, qty, userLev, parseFloat(slPrice.toFixed(8))]
             );
           }
+          executedUserSymbols.add(dedupKey);
           userLog.trade(`Bitunix OK: ${key.email} ${symbol} ${pick.direction} x${userLev} qty=${qty}`);
           log(`Bitunix OK: ${key.email} ${symbol} ${pick.direction} x${userLev}`);
         } else {
@@ -1303,18 +1318,15 @@ async function executeForAllUsers(pick) {
       }
     })().catch(e => {
         userLog.error(`User trade execution failed: ${e.message}`);
-        return 'ERROR';
       });
-    });
+    }
 
-    const settled = await Promise.allSettled(promises);
-    const results = settled.map(s => s.status === 'fulfilled' ? s.value : 'ERROR');
-    const tooExpensive = results.filter(r => r === 'TOO_EXPENSIVE').length;
-    const ok = results.length - tooExpensive;
-    bLog.trade(`Multi-user execution done: ${ok} traded, ${tooExpensive} too expensive`);
-    log(`Multi-user done: ${ok} ok, ${tooExpensive} too expensive`);
+    const okCount = keys.length - executedUserSymbols.size;
+    const tradedCount = executedUserSymbols.size;
+    bLog.trade(`Multi-user execution done: ${tradedCount} traded, ${okCount} skipped/failed`);
+    log(`Multi-user done: ${tradedCount} traded, ${okCount} skipped/failed`);
 
-    if (tooExpensive === keys.length) return 'ALL_TOO_EXPENSIVE';
+    if (tradedCount === 0) return 'ALL_TOO_EXPENSIVE';
     return 'OK';
   } catch (err) {
     bLog.error(`Multi-user error: ${err.message}`);
