@@ -15,6 +15,13 @@ const { TraderAgent } = require('./trader-agent');
 const { RiskAgent } = require('./risk-agent');
 const { SentimentAgent } = require('./sentiment-agent');
 const { AccountantAgent } = require('./accountant-agent');
+const { TokenAgent } = require('./token-agent');
+
+// Top tokens that always get their own agent
+const DEFAULT_TOKEN_AGENTS = [
+  'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT',
+  'DOGEUSDT', 'ADAUSDT', 'AVAXUSDT', 'SUIUSDT', 'LINKUSDT',
+];
 
 class AgentCoordinator extends BaseAgent {
   constructor(options = {}) {
@@ -44,6 +51,7 @@ class AgentCoordinator extends BaseAgent {
     });
 
     this.cycleRunning = false;
+    this.tokenAgents = new Map(); // symbol → TokenAgent
   }
 
   async init() {
@@ -54,7 +62,38 @@ class AgentCoordinator extends BaseAgent {
       this.log(`  ${name}: initialized`);
     }
 
-    this.log(`Agent framework ready — ${this._agents.size} agents loaded`);
+    // Create dedicated token agents for top coins
+    for (const symbol of DEFAULT_TOKEN_AGENTS) {
+      this.addTokenAgent(symbol);
+    }
+
+    // Load additional token agents from DB
+    try {
+      const { query } = require('../db');
+      const rows = await query('SELECT symbol FROM global_token_settings WHERE enabled = true AND banned = false');
+      for (const r of rows) {
+        if (!this.tokenAgents.has(r.symbol)) this.addTokenAgent(r.symbol);
+      }
+    } catch {}
+
+    this.log(`Agent framework ready — ${this._agents.size} system agents + ${this.tokenAgents.size} token agents`);
+  }
+
+  addTokenAgent(symbol) {
+    if (this.tokenAgents.has(symbol)) return;
+    const agent = new TokenAgent(symbol);
+    this.tokenAgents.set(symbol, agent);
+    const key = symbol.toLowerCase().replace('usdt', '');
+    this._agents.set(key, agent);
+    agent.init();
+  }
+
+  removeTokenAgent(symbol) {
+    const key = symbol.toLowerCase().replace('usdt', '');
+    const agent = this.tokenAgents.get(symbol);
+    if (agent) agent.shutdown();
+    this.tokenAgents.delete(symbol);
+    this._agents.delete(key);
   }
 
   /**
@@ -97,21 +136,45 @@ class AgentCoordinator extends BaseAgent {
         }
       }
 
-      // ── Step 2: ChartAgent scans for signals ──
+      // ── Step 2: All TokenAgents scan in parallel ──
       let signals = [];
       let scanResult = null;
 
-      if (!this.chartAgent.paused) {
-        this.currentTask = { description: 'ChartAgent scanning market', startedAt: Date.now() };
-        const chartOutput = await this.chartAgent.run({ topNCoins });
-        if (chartOutput) {
-          signals = chartOutput.signals || [];
-          scanResult = chartOutput.scanResult;
+      this.currentTask = { description: `Scanning ${this.tokenAgents.size} tokens in parallel`, startedAt: Date.now() };
+
+      // Run all token agents in parallel (5 at a time to avoid rate limits)
+      const tokenEntries = [...this.tokenAgents.entries()].filter(([, a]) => !a.paused);
+      const batchSize = 5;
+      for (let i = 0; i < tokenEntries.length; i += batchSize) {
+        const batch = tokenEntries.slice(i, i + batchSize);
+        const results = await Promise.allSettled(
+          batch.map(([sym, agent]) => agent.run().catch(e => null))
+        );
+        for (const r of results) {
+          if (r.status === 'fulfilled' && r.value && r.value.direction) {
+            signals.push(r.value);
+          }
         }
-        this.addActivity('info', `ChartAgent found ${signals.length} signal(s)`);
-      } else {
-        this.addActivity('skip', 'ChartAgent paused — skipping scan');
+        // Small delay between batches to avoid rate limits
+        if (i + batchSize < tokenEntries.length) await new Promise(r => setTimeout(r, 300));
       }
+
+      // Also run ChartAgent for any tokens that don't have dedicated agents
+      if (!this.chartAgent.paused) {
+        try {
+          const chartOutput = await this.chartAgent.run({ topNCoins });
+          if (chartOutput?.signals) {
+            for (const s of chartOutput.signals) {
+              // Only add if not already found by a token agent
+              if (!signals.find(existing => existing.symbol === s.symbol)) {
+                signals.push(s);
+              }
+            }
+          }
+        } catch {}
+      }
+
+      this.addActivity('info', `${signals.length} signal(s) from ${tokenEntries.length} token agents`);
 
       // ── Step 3: SentimentAgent enriches signals ──
       if (signals.length > 0 && !this.sentimentAgent.paused) {

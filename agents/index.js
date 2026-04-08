@@ -8,6 +8,7 @@ const { TraderAgent } = require('./trader-agent');
 const { RiskAgent } = require('./risk-agent');
 const { SentimentAgent } = require('./sentiment-agent');
 const { AccountantAgent } = require('./accountant-agent');
+const { TokenAgent } = require('./token-agent');
 const { WatcherAgent } = require('./watcher-agent');
 const { AgentCoordinator, getCoordinator } = require('./agent-coordinator');
 
@@ -19,6 +20,7 @@ module.exports = {
   RiskAgent,
   SentimentAgent,
   AccountantAgent,
+  TokenAgent,
   WatcherAgent,
   AgentCoordinator,
   getCoordinator,
