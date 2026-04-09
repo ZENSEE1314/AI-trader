@@ -3,6 +3,14 @@
 // Minimal entry point: bind PORT instantly for Railway healthcheck,
 // then load the full app + bot after.
 
+// Global error handlers — prevent crashes from killing the server
+process.on('uncaughtException', (err) => {
+  console.error('[UNCAUGHT EXCEPTION] (not exiting):', err.message);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('[UNHANDLED REJECTION] (not exiting):', reason?.message || reason);
+});
+
 const express = require('express');
 const PORT = process.env.PORT || 3000;
 

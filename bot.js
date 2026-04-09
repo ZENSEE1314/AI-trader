@@ -614,6 +614,5 @@ async function main() {
 }
 
 main().catch(err => {
-  console.error('FATAL:', err);
-  process.exit(1);
+  console.error('FATAL bot error (not exiting — server stays up):', err);
 });
