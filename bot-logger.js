@@ -67,7 +67,7 @@ function extractResult(message) {
   return null;
 }
 
-const TIMEZONE = 'Asia/Singapore';
+const TIMEZONE = 'Asia/Jakarta';
 
 function toLocalTime(date) {
   return date.toLocaleString('en-GB', {

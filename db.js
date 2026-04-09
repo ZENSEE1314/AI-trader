@@ -5,13 +5,28 @@ const pool = new Pool({
   connectionString: dbUrl.includes('sslmode=') ? dbUrl : `${dbUrl}${dbUrl.includes('?') ? '&' : '?'}sslmode=require`,
   ssl: { rejectUnauthorized: false },
   max: 10,
+  connectionTimeoutMillis: 30000,
+  idleTimeoutMillis: 60000,
+  statement_timeout: 30000,
+  query_timeout: 30000,
 });
 
 pool.on('error', (err) => console.error('[DB] Pool error:', err.message));
 
-async function query(sql, params) {
-  const res = await pool.query(sql, params);
-  return res.rows;
+async function query(sql, params, retries = 2) {
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const res = await pool.query(sql, params);
+      return res.rows;
+    } catch (err) {
+      const isTransient = err.message.includes('timeout') || err.message.includes('Connection terminated') || err.code === 'ECONNRESET';
+      if (isTransient && attempt < retries) {
+        await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
+        continue;
+      }
+      throw err;
+    }
+  }
 }
 
 // ── Auto-create all required tables ─────────────────────────

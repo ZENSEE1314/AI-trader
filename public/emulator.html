@@ -853,7 +853,7 @@ function updateFeed(activity) {
 
   const scroll = document.getElementById('feedScroll');
   scroll.innerHTML = feedEntries.slice(-25).map(a => {
-    const t = new Date(a.ts).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+    const t = new Date(a.ts).toLocaleTimeString('en-GB',{timeZone:'Asia/Jakarta',hour:'2-digit',minute:'2-digit',second:'2-digit'});
     const n = (a.agent||'').toLowerCase();
     const bc = n.includes('coordinator')?'b-coord':n.includes('sentiment')?'b-sent':n.includes('chart')?'b-chart':n.includes('risk')?'b-risk':n.includes('trader')?'b-trade':n.includes('accountant')?'b-acct':n.includes('police')?'b-risk':n.includes('kronos')?'b-sent':n.includes('strategy')?'b-chart':n.includes('coder')?'b-acct':n.includes('optimizer')?'b-chart':'b-tok';
     const sn = (a.agent||'').replace('Agent','').slice(0,6);

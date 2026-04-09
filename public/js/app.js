@@ -116,6 +116,7 @@
     if (!isoStr) return '--';
     const d = new Date(isoStr);
     return d.toLocaleDateString('en-US', {
+      timeZone: 'Asia/Jakarta',
       month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false,
     });
   }
@@ -1439,7 +1440,7 @@
         feed.innerHTML = '<div style="color:var(--color-text-muted);font-size:0.8rem;text-align:center;padding:var(--space-3);">No activity yet</div>';
       } else {
         feed.innerHTML = activity.map(a => {
-          const time = new Date(a.ts).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+          const time = new Date(a.ts).toLocaleTimeString('en-GB', { timeZone: 'Asia/Jakarta', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
           const typeLabel = a.type === 'trade' ? 'TRADE'
             : a.type === 'error' ? 'ERROR'
             : a.type === 'success' ? 'OK'
