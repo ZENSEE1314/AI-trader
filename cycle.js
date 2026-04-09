@@ -364,21 +364,16 @@ async function recordProfitSplit(db, userId, apiKeyId, pnlUsdt, symbol) {
       [userId, platformFee, `${adminPct}% platform fee on ${symbol} profit $${pnlUsdt.toFixed(2)}`]
     );
 
-    // Record user profit share
+    // Record user profit share (for tracking only — profit stays on exchange)
     await db.query(
       `INSERT INTO wallet_transactions (user_id, type, amount, status, description)
        VALUES ($1, 'profit_share', $2, 'completed', $3)`,
       [userId, userShare, `${userPct}% profit share on ${symbol} profit $${pnlUsdt.toFixed(2)}`]
     );
 
-    // Credit user's 60% to their cash wallet
-    await db.query(
-      `UPDATE users SET cash_wallet = cash_wallet + $1 WHERE id = $2`,
-      [userShare, userId]
-    );
-
-    // NOTE: Referral commission is paid weekly when admin marks user as paid,
-    // not per-trade. See routes/admin.js mark-paid endpoint.
+    // NOTE: User's 60% profit stays in their Binance/Bitunix account.
+    // Cash wallet is only for top-ups and referral commissions.
+    // Platform's 40% fee is collected separately (admin marks paid weekly).
 
     bLog.trade(`Profit split: ${symbol} PnL=$${pnlUsdt.toFixed(2)} → user ${userPct}%=$${userShare.toFixed(2)} platform ${adminPct}%=$${platformFee.toFixed(2)}`);
   } catch (err) {

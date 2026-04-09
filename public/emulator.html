@@ -8,7 +8,7 @@
   <link rel="icon" href="/img/logo.jpeg" type="image/jpeg">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=IBM+Plex+Sans:wght@200;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=IBM+Plex+Sans:wght@200;400;500;600&family=JetBrains+Mono:wght@400;500&family=Press+Start+2P&display=swap" rel="stylesheet">
   <style>
     /* ============================================================
        Tokens (inline copy from tokens.css for standalone page)
@@ -55,6 +55,7 @@
       --font-display: 'Space Grotesk', system-ui, sans-serif;
       --font-body:    'IBM Plex Sans', system-ui, sans-serif;
       --font-mono:    'JetBrains Mono', 'Fira Code', monospace;
+      --font-pixel:   'Press Start 2P', monospace;
       --text-xs: 0.75rem; --text-sm: 0.875rem; --text-base: 1rem;
       --text-lg: 1.125rem; --text-xl: 1.25rem; --text-2xl: 1.5rem;
       --text-3xl: 2rem; --text-4xl: 2.5rem;
@@ -66,6 +67,23 @@
       --duration-fast: 120ms; --duration-normal: 250ms; --duration-slow: 450ms;
       --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
       --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+      /* Pixel art palette */
+      --px-dark:    #08070c;
+      --px-surface: #14121e;
+      --px-gold:    #d4af37;
+      --px-gold-lt: #e8c84a;
+      --px-skin:    #f0e8df;
+      --px-skin-dk: #d4c4a8;
+      --px-hair:    #5a4a3a;
+      --px-shirt-b: #3b82f6;
+      --px-shirt-g: #34d399;
+      --px-shirt-r: #f43f5e;
+      --px-shirt-p: #a78bfa;
+      --px-pants:   #2a2438;
+      --px-shield:  #60a5fa;
+      --px-shield-g:#34d399;
+      --px-glass:   #93c5fd;
+      --px-white:   #f0e8df;
     }
 
     /* ============================================================
@@ -594,6 +612,7 @@
       border-radius: var(--radius-md);
       transition: border-color var(--duration-fast) var(--ease-out),
                   box-shadow var(--duration-fast) var(--ease-out);
+      position: relative;
     }
 
     .token-card.signal-long {
@@ -901,6 +920,523 @@
     }
 
     /* ============================================================
+       PIXEL ART CHARACTERS
+       ============================================================ */
+    .pixel-char-wrap {
+      position: absolute;
+      top: var(--space-3);
+      right: var(--space-3);
+      z-index: var(--z-base);
+      pointer-events: none;
+      image-rendering: pixelated;
+      image-rendering: -moz-crisp-edges;
+      image-rendering: crisp-edges;
+    }
+
+    .pixel-char {
+      width: 3px;
+      height: 3px;
+      background: transparent;
+      transform: scale(2);
+      transform-origin: top right;
+      image-rendering: pixelated;
+    }
+
+    /* Coordinator - Boss with gold crown at podium */
+    .char-coordinator {
+      box-shadow:
+        /* Crown */
+        6px 0 var(--px-gold), 12px 0 var(--px-gold-lt), 18px 0 var(--px-gold),
+        3px 3px var(--px-gold), 6px 3px var(--px-gold-lt), 9px 3px var(--px-gold), 12px 3px var(--px-gold-lt), 15px 3px var(--px-gold), 18px 3px var(--px-gold-lt), 21px 3px var(--px-gold),
+        3px 6px var(--px-gold), 6px 6px var(--px-gold-lt), 9px 6px var(--px-gold-lt), 12px 6px var(--px-gold-lt), 15px 6px var(--px-gold-lt), 18px 6px var(--px-gold-lt), 21px 6px var(--px-gold),
+        /* Head */
+        6px 9px var(--px-skin), 9px 9px var(--px-skin), 12px 9px var(--px-skin), 15px 9px var(--px-skin), 18px 9px var(--px-skin),
+        6px 12px var(--px-skin), 9px 12px var(--px-dark), 12px 12px var(--px-skin), 15px 12px var(--px-dark), 18px 12px var(--px-skin),
+        6px 15px var(--px-skin), 9px 15px var(--px-skin), 12px 15px var(--px-skin-dk), 15px 15px var(--px-skin), 18px 15px var(--px-skin),
+        /* Suit - gold trim */
+        3px 18px var(--px-gold), 6px 18px #1a1726, 9px 18px #1a1726, 12px 18px var(--px-gold), 15px 18px #1a1726, 18px 18px #1a1726, 21px 18px var(--px-gold),
+        3px 21px var(--px-gold), 6px 21px #1a1726, 9px 21px #1a1726, 12px 21px var(--px-gold), 15px 21px #1a1726, 18px 21px #1a1726, 21px 21px var(--px-gold),
+        3px 24px var(--px-gold), 6px 24px #1a1726, 9px 24px #1a1726, 12px 24px #1a1726, 15px 24px #1a1726, 18px 24px #1a1726, 21px 24px var(--px-gold),
+        /* Arms */
+        0px 18px var(--px-skin-dk), 24px 18px var(--px-skin-dk),
+        0px 21px var(--px-skin-dk), 24px 21px var(--px-skin-dk),
+        /* Pants */
+        6px 27px var(--px-pants), 9px 27px var(--px-pants), 12px 27px var(--px-pants), 15px 27px var(--px-pants), 18px 27px var(--px-pants),
+        /* Legs */
+        6px 30px var(--px-pants), 9px 30px var(--px-pants), 15px 30px var(--px-pants), 18px 30px var(--px-pants),
+        /* Shoes */
+        6px 33px var(--px-hair), 9px 33px var(--px-hair), 15px 33px var(--px-hair), 18px 33px var(--px-hair);
+    }
+
+    /* Sentiment - Character with crystal ball */
+    .char-sentiment {
+      box-shadow:
+        /* Hair */
+        6px 0 var(--px-hair), 9px 0 var(--px-hair), 12px 0 var(--px-hair), 15px 0 var(--px-hair),
+        3px 3px var(--px-hair), 6px 3px var(--px-hair), 9px 3px var(--px-hair), 12px 3px var(--px-hair), 15px 3px var(--px-hair), 18px 3px var(--px-hair),
+        /* Head */
+        6px 6px var(--px-skin), 9px 6px var(--px-skin), 12px 6px var(--px-skin), 15px 6px var(--px-skin),
+        6px 9px var(--px-skin), 9px 9px var(--px-dark), 12px 9px var(--px-skin), 15px 9px var(--px-dark),
+        6px 12px var(--px-skin), 9px 12px var(--px-skin), 12px 12px var(--px-skin-dk), 15px 12px var(--px-skin),
+        /* Blue robe */
+        3px 15px var(--px-shirt-b), 6px 15px var(--px-shirt-b), 9px 15px var(--px-shirt-b), 12px 15px var(--px-shirt-b), 15px 15px var(--px-shirt-b), 18px 15px var(--px-shirt-b),
+        3px 18px var(--px-shirt-b), 6px 18px #2563eb, 9px 18px var(--px-shirt-b), 12px 18px var(--px-shirt-b), 15px 18px #2563eb, 18px 18px var(--px-shirt-b),
+        3px 21px var(--px-shirt-b), 6px 21px var(--px-shirt-b), 9px 21px var(--px-shirt-b), 12px 21px var(--px-shirt-b), 15px 21px var(--px-shirt-b), 18px 21px var(--px-shirt-b),
+        /* Crystal ball (held in front) */
+        24px 15px var(--px-glass), 27px 15px #93c5fd,
+        24px 18px #93c5fd, 27px 18px #bfdbfe, 30px 18px var(--px-glass),
+        24px 21px var(--px-glass), 27px 21px #93c5fd,
+        /* Hands */
+        21px 18px var(--px-skin-dk), 0px 18px var(--px-skin-dk),
+        /* Legs */
+        6px 24px var(--px-pants), 9px 24px var(--px-pants), 12px 24px var(--px-pants), 15px 24px var(--px-pants),
+        6px 27px var(--px-pants), 9px 27px var(--px-pants), 15px 27px var(--px-pants),
+        /* Shoes */
+        6px 30px var(--px-hair), 9px 30px var(--px-hair), 15px 30px var(--px-hair);
+    }
+
+    /* Chart - Character with magnifying glass */
+    .char-chart {
+      box-shadow:
+        /* Hair */
+        6px 0 var(--px-hair), 9px 0 var(--px-hair), 12px 0 var(--px-hair), 15px 0 var(--px-hair),
+        3px 3px var(--px-hair), 6px 3px var(--px-hair), 9px 3px var(--px-hair), 12px 3px var(--px-hair), 15px 3px var(--px-hair), 18px 3px var(--px-hair),
+        /* Head */
+        6px 6px var(--px-skin), 9px 6px var(--px-skin), 12px 6px var(--px-skin), 15px 6px var(--px-skin),
+        6px 9px var(--px-skin), 9px 9px var(--px-dark), 12px 9px var(--px-skin), 15px 9px var(--px-dark),
+        6px 12px var(--px-skin), 9px 12px var(--px-skin), 12px 12px var(--px-skin-dk), 15px 12px var(--px-skin),
+        /* Green shirt */
+        3px 15px var(--px-shirt-g), 6px 15px var(--px-shirt-g), 9px 15px var(--px-shirt-g), 12px 15px var(--px-shirt-g), 15px 15px var(--px-shirt-g), 18px 15px var(--px-shirt-g),
+        3px 18px var(--px-shirt-g), 6px 18px #059669, 9px 18px var(--px-shirt-g), 12px 18px var(--px-shirt-g), 15px 18px #059669, 18px 18px var(--px-shirt-g),
+        3px 21px var(--px-shirt-g), 6px 21px var(--px-shirt-g), 9px 21px var(--px-shirt-g), 12px 21px var(--px-shirt-g), 15px 21px var(--px-shirt-g), 18px 21px var(--px-shirt-g),
+        /* Magnifying glass - handle */
+        24px 15px var(--px-hair), 27px 18px var(--px-hair), 30px 21px var(--px-hair),
+        /* Magnifying glass - lens ring */
+        27px 6px var(--px-gold), 30px 6px var(--px-gold), 33px 6px var(--px-gold),
+        24px 9px var(--px-gold), 36px 9px var(--px-gold),
+        24px 12px var(--px-gold), 30px 9px #bfdbfe, 30px 12px #bfdbfe, 33px 9px #bfdbfe, 36px 12px var(--px-gold),
+        27px 15px var(--px-gold), 30px 15px var(--px-gold), 33px 15px var(--px-gold),
+        /* Hand */
+        21px 18px var(--px-skin-dk), 0px 18px var(--px-skin-dk),
+        /* Legs */
+        6px 24px var(--px-pants), 9px 24px var(--px-pants), 12px 24px var(--px-pants), 15px 24px var(--px-pants),
+        6px 27px var(--px-pants), 9px 27px var(--px-pants), 15px 27px var(--px-pants),
+        /* Shoes */
+        6px 30px var(--px-hair), 9px 30px var(--px-hair), 15px 30px var(--px-hair);
+    }
+
+    /* Risk - Character with shield */
+    .char-risk {
+      box-shadow:
+        /* Helmet */
+        6px 0 var(--px-gold), 9px 0 var(--px-gold), 12px 0 var(--px-gold), 15px 0 var(--px-gold),
+        3px 3px var(--px-gold), 6px 3px var(--px-gold-lt), 9px 3px var(--px-gold-lt), 12px 3px var(--px-gold-lt), 15px 3px var(--px-gold-lt), 18px 3px var(--px-gold),
+        /* Face in helmet */
+        6px 6px var(--px-skin), 9px 6px var(--px-skin), 12px 6px var(--px-skin), 15px 6px var(--px-skin),
+        6px 9px var(--px-skin), 9px 9px var(--px-dark), 12px 9px var(--px-skin), 15px 9px var(--px-dark),
+        6px 12px var(--px-gold), 9px 12px var(--px-skin), 12px 12px var(--px-skin-dk), 15px 12px var(--px-skin), 18px 12px var(--px-gold),
+        /* Armor */
+        3px 15px #6b7280, 6px 15px #9ca3af, 9px 15px #9ca3af, 12px 15px var(--px-gold), 15px 15px #9ca3af, 18px 15px #9ca3af, 21px 15px #6b7280,
+        3px 18px #6b7280, 6px 18px #9ca3af, 9px 18px #6b7280, 12px 18px var(--px-gold), 15px 18px #6b7280, 18px 18px #9ca3af, 21px 18px #6b7280,
+        3px 21px #6b7280, 6px 21px #9ca3af, 9px 21px #9ca3af, 12px 21px #9ca3af, 15px 21px #9ca3af, 18px 21px #9ca3af, 21px 21px #6b7280,
+        /* Shield (left arm) */
+        -6px 12px var(--px-shield), -3px 12px var(--px-shield),
+        -9px 15px var(--px-shield), -6px 15px var(--px-shield-g), -3px 15px var(--px-shield),
+        -9px 18px var(--px-shield), -6px 18px var(--px-shield-g), -3px 18px var(--px-shield), 0px 18px var(--px-shield),
+        -9px 21px var(--px-shield), -6px 21px var(--px-shield-g), -3px 21px var(--px-shield),
+        -6px 24px var(--px-shield), -3px 24px var(--px-shield),
+        /* Right arm */
+        24px 18px var(--px-skin-dk),
+        /* Legs */
+        6px 24px #6b7280, 9px 24px #6b7280, 12px 24px #6b7280, 15px 24px #6b7280,
+        6px 27px #6b7280, 9px 27px #6b7280, 15px 27px #6b7280,
+        /* Boots */
+        6px 30px var(--px-pants), 9px 30px var(--px-pants), 15px 30px var(--px-pants);
+    }
+
+    /* Trader - Character at desk with monitors */
+    .char-trader {
+      box-shadow:
+        /* Hair */
+        6px 0 var(--px-hair), 9px 0 var(--px-hair), 12px 0 var(--px-hair), 15px 0 var(--px-hair),
+        3px 3px var(--px-hair), 6px 3px var(--px-hair), 9px 3px var(--px-hair), 12px 3px var(--px-hair), 15px 3px var(--px-hair), 18px 3px var(--px-hair),
+        /* Head */
+        6px 6px var(--px-skin), 9px 6px var(--px-skin), 12px 6px var(--px-skin), 15px 6px var(--px-skin),
+        6px 9px var(--px-skin), 9px 9px var(--px-dark), 12px 9px var(--px-skin), 15px 9px var(--px-dark),
+        6px 12px var(--px-skin), 9px 12px var(--px-skin), 12px 12px var(--px-skin-dk), 15px 12px var(--px-skin),
+        /* Gold vest over dark shirt */
+        3px 15px var(--px-gold), 6px 15px #1a1726, 9px 15px #1a1726, 12px 15px #1a1726, 15px 15px #1a1726, 18px 15px var(--px-gold),
+        3px 18px var(--px-gold), 6px 18px #1a1726, 9px 18px #1a1726, 12px 18px #1a1726, 15px 18px #1a1726, 18px 18px var(--px-gold),
+        3px 21px var(--px-gold), 6px 21px #1a1726, 9px 21px #1a1726, 12px 21px #1a1726, 15px 21px #1a1726, 18px 21px var(--px-gold),
+        /* Arms reaching to keyboard */
+        0px 18px var(--px-skin-dk), 21px 18px var(--px-skin-dk), 24px 21px var(--px-skin-dk),
+        /* Tiny monitor behind */
+        27px 3px #6b7280, 30px 3px #6b7280, 33px 3px #6b7280, 36px 3px #6b7280,
+        27px 6px var(--px-shirt-g), 30px 6px var(--px-shirt-g), 33px 6px var(--px-shirt-r), 36px 6px #6b7280,
+        27px 9px var(--px-shirt-g), 30px 9px var(--px-shirt-r), 33px 9px var(--px-shirt-g), 36px 9px #6b7280,
+        27px 12px #6b7280, 30px 12px #6b7280, 33px 12px #6b7280, 36px 12px #6b7280,
+        30px 15px #6b7280, 33px 15px #6b7280,
+        /* Legs */
+        6px 24px var(--px-pants), 9px 24px var(--px-pants), 12px 24px var(--px-pants), 15px 24px var(--px-pants),
+        6px 27px var(--px-pants), 9px 27px var(--px-pants), 15px 27px var(--px-pants),
+        /* Shoes */
+        6px 30px var(--px-hair), 9px 30px var(--px-hair), 15px 30px var(--px-hair);
+    }
+
+    /* Accountant - Character with glasses and ledger */
+    .char-accountant {
+      box-shadow:
+        /* Hair - neat parted */
+        6px 0 var(--px-hair), 9px 0 var(--px-hair), 12px 0 var(--px-hair), 15px 0 var(--px-hair),
+        3px 3px var(--px-hair), 6px 3px var(--px-hair), 9px 3px var(--px-hair), 12px 3px var(--px-hair), 15px 3px var(--px-hair), 18px 3px var(--px-hair),
+        /* Head */
+        6px 6px var(--px-skin), 9px 6px var(--px-skin), 12px 6px var(--px-skin), 15px 6px var(--px-skin),
+        /* Eyes with glasses frames */
+        3px 9px var(--px-glass), 6px 9px var(--px-skin), 9px 9px var(--px-dark), 12px 9px var(--px-glass), 15px 9px var(--px-dark), 18px 9px var(--px-skin), 21px 9px var(--px-glass),
+        6px 12px var(--px-skin), 9px 12px var(--px-skin), 12px 12px var(--px-skin-dk), 15px 12px var(--px-skin),
+        /* Purple sweater vest */
+        3px 15px var(--px-shirt-p), 6px 15px var(--px-shirt-p), 9px 15px var(--px-shirt-p), 12px 15px var(--px-shirt-p), 15px 15px var(--px-shirt-p), 18px 15px var(--px-shirt-p),
+        3px 18px var(--px-shirt-p), 6px 18px #7c3aed, 9px 18px var(--px-shirt-p), 12px 18px var(--px-shirt-p), 15px 18px #7c3aed, 18px 18px var(--px-shirt-p),
+        3px 21px var(--px-shirt-p), 6px 21px var(--px-shirt-p), 9px 21px var(--px-shirt-p), 12px 21px var(--px-shirt-p), 15px 21px var(--px-shirt-p), 18px 21px var(--px-shirt-p),
+        /* Book/Ledger held */
+        24px 15px var(--px-hair), 27px 15px var(--px-gold), 30px 15px var(--px-hair),
+        24px 18px var(--px-hair), 27px 18px var(--px-white), 30px 18px var(--px-hair),
+        24px 21px var(--px-hair), 27px 21px var(--px-white), 30px 21px var(--px-hair),
+        24px 24px var(--px-hair), 27px 24px var(--px-gold), 30px 24px var(--px-hair),
+        /* Hands */
+        21px 18px var(--px-skin-dk), 0px 18px var(--px-skin-dk),
+        /* Legs */
+        6px 24px var(--px-pants), 9px 24px var(--px-pants), 12px 24px var(--px-pants), 15px 24px var(--px-pants),
+        6px 27px var(--px-pants), 9px 27px var(--px-pants), 15px 27px var(--px-pants),
+        /* Shoes */
+        6px 30px var(--px-hair), 9px 30px var(--px-hair), 15px 30px var(--px-hair);
+    }
+
+    /* Token Agent - Small character with coin above */
+    .char-token {
+      box-shadow:
+        /* Coin above head */
+        6px 0 var(--px-gold), 9px 0 var(--px-gold-lt), 12px 0 var(--px-gold),
+        /* Head */
+        6px 6px var(--px-skin), 9px 6px var(--px-skin), 12px 6px var(--px-skin),
+        6px 9px var(--px-dark), 9px 9px var(--px-skin), 12px 9px var(--px-dark),
+        /* Body */
+        3px 12px var(--px-gold), 6px 12px var(--px-gold), 9px 12px var(--px-gold), 12px 12px var(--px-gold), 15px 12px var(--px-gold),
+        6px 15px var(--px-gold), 9px 15px #b8922a, 12px 15px var(--px-gold),
+        /* Legs */
+        6px 18px var(--px-pants), 12px 18px var(--px-pants),
+        6px 21px var(--px-hair), 12px 21px var(--px-hair);
+      transform: scale(1.5);
+    }
+
+    /* ============================================================
+       PIXEL CHARACTER ANIMATION STATES
+       ============================================================ */
+
+    /* Idle - gentle breathing bob */
+    .anim-idle {
+      animation: char-breathe 3s ease-in-out infinite;
+    }
+    .anim-stopped {
+      animation: char-breathe 4s ease-in-out infinite;
+      opacity: 0.5;
+    }
+
+    @keyframes char-breathe {
+      0%, 100% { transform: scale(2) translateY(0); }
+      50% { transform: scale(2) translateY(-2px); }
+    }
+
+    /* Running - bob faster with slight side movement */
+    .anim-running {
+      animation: char-working 0.6s ease-in-out infinite;
+    }
+
+    @keyframes char-working {
+      0%, 100% { transform: scale(2) translateY(0) translateX(0); }
+      25% { transform: scale(2) translateY(-2px) translateX(1px); }
+      50% { transform: scale(2) translateY(0) translateX(0); }
+      75% { transform: scale(2) translateY(-2px) translateX(-1px); }
+    }
+
+    /* Error - wobble with red tint */
+    .anim-error {
+      animation: char-dizzy 0.5s ease-in-out infinite;
+      filter: drop-shadow(0 0 4px rgba(244, 63, 94, 0.6));
+    }
+
+    @keyframes char-dizzy {
+      0%, 100% { transform: scale(2) rotate(0deg); }
+      25% { transform: scale(2) rotate(5deg); }
+      75% { transform: scale(2) rotate(-5deg); }
+    }
+
+    /* Paused - settled down, zzz effect handled by pseudo-element on wrapper */
+    .anim-paused {
+      animation: char-sleep 4s ease-in-out infinite;
+      opacity: 0.4;
+    }
+
+    @keyframes char-sleep {
+      0%, 100% { transform: scale(2) translateY(2px); }
+      50% { transform: scale(2) translateY(3px); }
+    }
+
+    /* Zzz bubbles for paused state */
+    .pixel-char-wrap.state-paused::after {
+      content: 'z z z';
+      position: absolute;
+      top: -8px;
+      right: -4px;
+      font-family: var(--font-pixel);
+      font-size: 6px;
+      color: var(--color-fg-subtle);
+      letter-spacing: 2px;
+      animation: zzz-float 2.5s ease-in-out infinite;
+      white-space: nowrap;
+    }
+
+    @keyframes zzz-float {
+      0%, 100% { opacity: 0.3; transform: translateY(0); }
+      50% { opacity: 0.8; transform: translateY(-4px); }
+    }
+
+    /* Error stars above head */
+    .pixel-char-wrap.state-error::after {
+      content: '* * *';
+      position: absolute;
+      top: -10px;
+      right: 0;
+      font-family: var(--font-pixel);
+      font-size: 6px;
+      color: var(--color-danger);
+      letter-spacing: 1px;
+      animation: stars-spin 1s linear infinite;
+      white-space: nowrap;
+    }
+
+    @keyframes stars-spin {
+      0% { transform: translateX(-2px); opacity: 0.6; }
+      50% { transform: translateX(2px); opacity: 1; }
+      100% { transform: translateX(-2px); opacity: 0.6; }
+    }
+
+    /* Running glow for specific characters */
+    .pixel-char-wrap.state-running .char-sentiment {
+      filter: drop-shadow(0 0 6px rgba(96, 165, 250, 0.5));
+    }
+    .pixel-char-wrap.state-running .char-risk {
+      filter: drop-shadow(0 0 6px rgba(52, 211, 153, 0.5));
+    }
+    .pixel-char-wrap.state-running .char-chart {
+      filter: drop-shadow(0 0 6px rgba(52, 211, 153, 0.4));
+    }
+    .pixel-char-wrap.state-running .char-trader {
+      filter: drop-shadow(0 0 6px rgba(212, 175, 55, 0.5));
+    }
+    .pixel-char-wrap.state-running .char-accountant {
+      filter: drop-shadow(0 0 6px rgba(167, 139, 250, 0.5));
+    }
+
+    /* Token character walk animation */
+    .token-char-wrap {
+      position: relative;
+      width: 28px;
+      height: 28px;
+      flex-shrink: 0;
+      image-rendering: pixelated;
+      overflow: hidden;
+    }
+
+    .token-char-inner {
+      position: absolute;
+      animation: token-walk 3s ease-in-out infinite;
+    }
+
+    @keyframes token-walk {
+      0%, 100% { left: 0px; }
+      50% { left: 10px; }
+    }
+
+    /* ============================================================
+       COORDINATOR TRADING FLOOR SCENE
+       ============================================================ */
+    .floor-scene {
+      position: relative;
+      height: 56px;
+      margin-bottom: var(--space-4);
+      border-radius: var(--radius-md);
+      overflow: hidden;
+      background:
+        repeating-linear-gradient(
+          90deg,
+          var(--color-bg-inset) 0px,
+          var(--color-bg-inset) 14px,
+          var(--color-surface) 14px,
+          var(--color-surface) 28px
+        );
+      border: 1px solid var(--color-border-muted);
+    }
+
+    .floor-scene::before {
+      content: '';
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      height: 8px;
+      background: repeating-linear-gradient(
+        90deg,
+        var(--color-surface-alt) 0px,
+        var(--color-surface-alt) 12px,
+        var(--color-border-muted) 12px,
+        var(--color-border-muted) 13px
+      );
+    }
+
+    .scene-char {
+      position: absolute;
+      bottom: 10px;
+      image-rendering: pixelated;
+    }
+
+    /* Mini characters for the scene (scale 1) */
+    .mini-char {
+      width: 2px;
+      height: 2px;
+      background: transparent;
+      transform: scale(1);
+      image-rendering: pixelated;
+    }
+
+    .mini-coordinator {
+      box-shadow:
+        3px 0 var(--px-gold), 6px 0 var(--px-gold-lt), 9px 0 var(--px-gold),
+        3px 3px var(--px-skin), 6px 3px var(--px-skin), 9px 3px var(--px-skin),
+        3px 6px var(--px-dark), 6px 6px var(--px-skin), 9px 6px var(--px-dark),
+        0px 9px var(--px-gold), 3px 9px #1a1726, 6px 9px var(--px-gold), 9px 9px #1a1726, 12px 9px var(--px-gold),
+        0px 12px var(--px-skin-dk), 3px 12px #1a1726, 6px 12px #1a1726, 9px 12px #1a1726, 12px 12px var(--px-skin-dk),
+        3px 15px var(--px-pants), 6px 15px var(--px-pants), 9px 15px var(--px-pants),
+        3px 18px var(--px-hair), 9px 18px var(--px-hair);
+    }
+
+    .mini-sentiment {
+      box-shadow:
+        3px 0 var(--px-hair), 6px 0 var(--px-hair), 9px 0 var(--px-hair),
+        3px 3px var(--px-skin), 6px 3px var(--px-skin), 9px 3px var(--px-skin),
+        3px 6px var(--px-dark), 6px 6px var(--px-skin), 9px 6px var(--px-dark),
+        0px 9px var(--px-shirt-b), 3px 9px var(--px-shirt-b), 6px 9px var(--px-shirt-b), 9px 9px var(--px-shirt-b), 12px 9px var(--px-shirt-b),
+        3px 12px var(--px-shirt-b), 6px 12px var(--px-shirt-b), 9px 12px var(--px-shirt-b),
+        3px 15px var(--px-pants), 9px 15px var(--px-pants),
+        3px 18px var(--px-hair), 9px 18px var(--px-hair);
+    }
+
+    .mini-chart {
+      box-shadow:
+        3px 0 var(--px-hair), 6px 0 var(--px-hair), 9px 0 var(--px-hair),
+        3px 3px var(--px-skin), 6px 3px var(--px-skin), 9px 3px var(--px-skin),
+        3px 6px var(--px-dark), 6px 6px var(--px-skin), 9px 6px var(--px-dark),
+        0px 9px var(--px-shirt-g), 3px 9px var(--px-shirt-g), 6px 9px var(--px-shirt-g), 9px 9px var(--px-shirt-g), 12px 9px var(--px-shirt-g),
+        3px 12px var(--px-shirt-g), 6px 12px var(--px-shirt-g), 9px 12px var(--px-shirt-g),
+        3px 15px var(--px-pants), 9px 15px var(--px-pants),
+        3px 18px var(--px-hair), 9px 18px var(--px-hair);
+    }
+
+    .mini-risk {
+      box-shadow:
+        3px 0 var(--px-gold), 6px 0 var(--px-gold), 9px 0 var(--px-gold),
+        3px 3px var(--px-skin), 6px 3px var(--px-skin), 9px 3px var(--px-skin),
+        3px 6px var(--px-dark), 6px 6px var(--px-skin), 9px 6px var(--px-dark),
+        0px 9px #6b7280, 3px 9px #9ca3af, 6px 9px var(--px-gold), 9px 9px #9ca3af, 12px 9px #6b7280,
+        3px 12px #6b7280, 6px 12px #9ca3af, 9px 12px #6b7280,
+        3px 15px #6b7280, 9px 15px #6b7280,
+        3px 18px var(--px-pants), 9px 18px var(--px-pants);
+    }
+
+    .mini-trader {
+      box-shadow:
+        3px 0 var(--px-hair), 6px 0 var(--px-hair), 9px 0 var(--px-hair),
+        3px 3px var(--px-skin), 6px 3px var(--px-skin), 9px 3px var(--px-skin),
+        3px 6px var(--px-dark), 6px 6px var(--px-skin), 9px 6px var(--px-dark),
+        0px 9px var(--px-gold), 3px 9px #1a1726, 6px 9px #1a1726, 9px 9px #1a1726, 12px 9px var(--px-gold),
+        3px 12px var(--px-gold), 6px 12px #1a1726, 9px 12px var(--px-gold),
+        3px 15px var(--px-pants), 9px 15px var(--px-pants),
+        3px 18px var(--px-hair), 9px 18px var(--px-hair);
+    }
+
+    .mini-accountant {
+      box-shadow:
+        3px 0 var(--px-hair), 6px 0 var(--px-hair), 9px 0 var(--px-hair),
+        3px 3px var(--px-skin), 6px 3px var(--px-skin), 9px 3px var(--px-skin),
+        0px 6px var(--px-glass), 3px 6px var(--px-dark), 6px 6px var(--px-glass), 9px 6px var(--px-dark), 12px 6px var(--px-glass),
+        0px 9px var(--px-shirt-p), 3px 9px var(--px-shirt-p), 6px 9px var(--px-shirt-p), 9px 9px var(--px-shirt-p), 12px 9px var(--px-shirt-p),
+        3px 12px var(--px-shirt-p), 6px 12px #7c3aed, 9px 12px var(--px-shirt-p),
+        3px 15px var(--px-pants), 9px 15px var(--px-pants),
+        3px 18px var(--px-hair), 9px 18px var(--px-hair);
+    }
+
+    /* Scene character animations */
+    .scene-char.idle-bob {
+      animation: scene-bob 3s ease-in-out infinite;
+    }
+
+    .scene-char.work-bob {
+      animation: scene-work 0.8s ease-in-out infinite;
+    }
+
+    @keyframes scene-bob {
+      0%, 100% { transform: translateY(0); }
+      50% { transform: translateY(-2px); }
+    }
+
+    @keyframes scene-work {
+      0%, 100% { transform: translateY(0); }
+      50% { transform: translateY(-3px); }
+    }
+
+    /* Data packets flowing in scene */
+    .scene-packet {
+      position: absolute;
+      bottom: 24px;
+      width: 4px;
+      height: 4px;
+      border-radius: 1px;
+      background: var(--px-gold);
+      box-shadow: 0 0 4px rgba(212,175,55,0.6);
+      opacity: 0;
+    }
+
+    .floor-scene.cycle-active .scene-packet {
+      opacity: 1;
+    }
+
+    .scene-packet:nth-child(1) { animation: packet-flow-1 2s ease-in-out infinite 0s; }
+    .scene-packet:nth-child(2) { animation: packet-flow-2 2s ease-in-out infinite 0.4s; }
+    .scene-packet:nth-child(3) { animation: packet-flow-3 2s ease-in-out infinite 0.8s; }
+
+    @keyframes packet-flow-1 {
+      0% { left: 15%; opacity: 0; }
+      10% { opacity: 1; }
+      50% { left: 45%; opacity: 1; }
+      60% { opacity: 0; }
+      100% { left: 45%; opacity: 0; }
+    }
+    @keyframes packet-flow-2 {
+      0% { left: 45%; opacity: 0; }
+      10% { opacity: 1; }
+      50% { left: 65%; opacity: 1; }
+      60% { opacity: 0; }
+      100% { left: 65%; opacity: 0; }
+    }
+    @keyframes packet-flow-3 {
+      0% { left: 65%; opacity: 0; }
+      10% { opacity: 1; }
+      50% { left: 85%; opacity: 1; }
+      60% { opacity: 0; }
+      100% { left: 85%; opacity: 0; }
+    }
+
+    /* ============================================================
        Reduced motion
        ============================================================ */
     @media (prefers-reduced-motion: reduce) {
@@ -921,6 +1457,23 @@
       .kbd-hints { display: none; }
       .pipeline { font-size: 0.65rem; }
       .token-grid { grid-template-columns: 1fr; }
+      .pixel-char { transform: scale(1.5); }
+      .pixel-char-wrap { top: var(--space-2); right: var(--space-2); }
+      .floor-scene { height: 44px; }
+      .anim-idle { animation-name: char-breathe-mobile; }
+      .anim-running { animation-name: char-working-mobile; }
+    }
+
+    @keyframes char-breathe-mobile {
+      0%, 100% { transform: scale(1.5) translateY(0); }
+      50% { transform: scale(1.5) translateY(-1px); }
+    }
+
+    @keyframes char-working-mobile {
+      0%, 100% { transform: scale(1.5) translateY(0) translateX(0); }
+      25% { transform: scale(1.5) translateY(-1px) translateX(1px); }
+      50% { transform: scale(1.5) translateY(0) translateX(0); }
+      75% { transform: scale(1.5) translateY(-1px) translateX(-1px); }
     }
   </style>
 </head>
@@ -1048,6 +1601,19 @@
       }
     }
 
+    function getAnimState(state) {
+      if (state === 'running') return 'running';
+      if (state === 'error') return 'error';
+      if (state === 'paused') return 'paused';
+      if (state === 'idle') return 'idle';
+      return 'stopped';
+    }
+
+    function renderPixelChar(charClass, state) {
+      const animState = getAnimState(state);
+      return `<div class="pixel-char-wrap state-${animState}"><div class="pixel-char ${charClass} anim-${animState}"></div></div>`;
+    }
+
     /* ============================================================
        Render: Coordinator
        ============================================================ */
@@ -1055,10 +1621,12 @@
       const state = health.state || 'stopped';
       const isCycleActive = health.cycleRunning;
       const stageNames = ['Sentiment', 'Scanner', 'Risk', 'Trader', 'Accountant'];
+      const sceneAnimClass = isCycleActive ? 'work-bob' : 'idle-bob';
 
       return `
         <div class="room coordinator-room state-${state}" role="region" aria-label="Coordinator Agent">
           <div class="scan-line"></div>
+          ${renderPixelChar('char-coordinator', state)}
           <div class="room-header">
             <div class="room-icon">&#x1F3DB;</div>
             <div class="room-meta">
@@ -1067,6 +1635,29 @@
             </div>
             <div class="room-state-dot ${state}" title="${state}"></div>
             <span class="state-badge ${state}">${state}</span>
+          </div>
+          <div class="floor-scene ${isCycleActive ? 'cycle-active' : ''}">
+            <div class="scene-char ${sceneAnimClass}" style="left:8%;">
+              <div class="mini-char mini-sentiment"></div>
+            </div>
+            <div class="scene-char ${sceneAnimClass}" style="left:25%;animation-delay:0.2s;">
+              <div class="mini-char mini-chart"></div>
+            </div>
+            <div class="scene-char ${sceneAnimClass}" style="left:42%;animation-delay:0.1s;">
+              <div class="mini-char mini-coordinator"></div>
+            </div>
+            <div class="scene-char ${sceneAnimClass}" style="left:58%;animation-delay:0.3s;">
+              <div class="mini-char mini-risk"></div>
+            </div>
+            <div class="scene-char ${sceneAnimClass}" style="left:72%;animation-delay:0.15s;">
+              <div class="mini-char mini-trader"></div>
+            </div>
+            <div class="scene-char ${sceneAnimClass}" style="left:88%;animation-delay:0.25s;">
+              <div class="mini-char mini-accountant"></div>
+            </div>
+            <div class="scene-packet"></div>
+            <div class="scene-packet"></div>
+            <div class="scene-packet"></div>
           </div>
           <div class="pipeline ${isCycleActive ? 'cycle-active' : ''}">
             ${stageNames.map(name => `
@@ -1102,6 +1693,7 @@
       return `
         <div class="room state-${state}" role="region" aria-label="Sentiment Agent">
           <div class="scan-line"></div>
+          ${renderPixelChar('char-sentiment', state)}
           <div class="room-header">
             <div class="room-icon">${moodEmoji}</div>
             <div class="room-meta">
@@ -1136,6 +1728,7 @@
       return `
         <div class="room state-${state}" role="region" aria-label="Chart Agent">
           <div class="scan-line"></div>
+          ${renderPixelChar('char-chart', state)}
           <div class="room-header">
             <div class="room-icon">&#x1F4CA;</div>
             <div class="room-meta">
@@ -1174,6 +1767,7 @@
       return `
         <div class="room state-${state}" role="region" aria-label="Risk Agent">
           <div class="scan-line"></div>
+          ${renderPixelChar('char-risk', state)}
           <div class="room-header">
             <div class="room-icon">&#x1F6E1;</div>
             <div class="room-meta">
@@ -1215,6 +1809,7 @@
       return `
         <div class="room state-${state}" role="region" aria-label="Trader Agent">
           <div class="scan-line"></div>
+          ${renderPixelChar('char-trader', state)}
           <div class="room-header">
             <div class="room-icon">&#x1F4B0;</div>
             <div class="room-meta">
@@ -1283,6 +1878,11 @@
 
         return `
           <div class="token-card ${signalClass}" role="listitem">
+            <div class="token-char-wrap">
+              <div class="token-char-inner">
+                <div class="pixel-char char-token"></div>
+              </div>
+            </div>
             <div class="token-info">
               <div class="token-symbol">${escapeHtml(displayName)}</div>
               <div class="token-price">${formatPrice(agent.lastPrice, symbol)}</div>
@@ -1322,6 +1922,7 @@
       return `
         <div class="room state-${state}" role="region" aria-label="Accountant Agent">
           <div class="scan-line"></div>
+          ${renderPixelChar('char-accountant', state)}
           <div class="room-header">
             <div class="room-icon">&#x1F4D1;</div>
             <div class="room-meta">

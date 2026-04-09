@@ -62,19 +62,47 @@ class AgentCoordinator extends BaseAgent {
       this.log(`  ${name}: initialized`);
     }
 
-    // Create dedicated token agents for top coins
+    // Create dedicated token agents for top coins by volume
+    // Dashboard enabled/disabled is per-user trading preference — scanning is global
     for (const symbol of DEFAULT_TOKEN_AGENTS) {
       this.addTokenAgent(symbol);
     }
 
-    // Load additional token agents from DB
+    // Fetch top coins by volume from Binance and create agents for all of them
     try {
-      const { query } = require('../db');
-      const rows = await query('SELECT symbol FROM global_token_settings WHERE enabled = true AND banned = false');
-      for (const r of rows) {
-        if (!this.tokenAgents.has(r.symbol)) this.addTokenAgent(r.symbol);
+      const fetch = require('node-fetch');
+      const res = await fetch('https://fapi.binance.com/fapi/v1/ticker/24hr', { timeout: 10000 });
+      if (res.ok) {
+        const tickers = await res.json();
+        // Get banned tokens from DB
+        const { query } = require('../db');
+        const bannedRows = await query('SELECT symbol FROM global_token_settings WHERE banned = true').catch(() => []);
+        const banned = new Set(bannedRows.map(r => r.symbol));
+
+        const topCoins = tickers
+          .filter(t => t.symbol.endsWith('USDT') && !t.symbol.includes('_'))
+          .filter(t => !banned.has(t.symbol))
+          .filter(t => parseFloat(t.quoteVolume) >= 10_000_000)
+          .sort((a, b) => parseFloat(b.quoteVolume) - parseFloat(a.quoteVolume))
+          .slice(0, 50)
+          .map(t => t.symbol);
+
+        for (const sym of topCoins) {
+          if (!this.tokenAgents.has(sym)) this.addTokenAgent(sym);
+        }
+        this.log(`Loaded top ${topCoins.length} tokens by volume`);
       }
-    } catch {}
+    } catch (err) {
+      this.logError(`Failed to fetch top tokens: ${err.message}`);
+      // Fallback: load from global_token_settings
+      try {
+        const { query } = require('../db');
+        const rows = await query('SELECT symbol FROM global_token_settings WHERE banned = false');
+        for (const r of rows) {
+          if (!this.tokenAgents.has(r.symbol)) this.addTokenAgent(r.symbol);
+        }
+      } catch {}
+    }
 
     this.log(`Agent framework ready — ${this._agents.size} system agents + ${this.tokenAgents.size} token agents`);
   }
