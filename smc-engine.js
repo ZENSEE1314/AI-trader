@@ -509,8 +509,12 @@ async function analyzeLHHL(ticker, params, dailyBiasCache, kronosPredictions = n
   // │ Always risk 10% capital, target 20% capital (RR 1:2)    │
   // │ SL/trailing stay the same — user-configured             │
   // └─────────────────────────────────────────────────────────┘
-  const BTC_ETH = new Set(['BTCUSDT', 'ETHUSDT']);
-  const leverage = BTC_ETH.has(symbol) ? (params.LEV_BTC_ETH || 100) : (params.LEV_ALT || 20);
+  // Leverage based on token price: $100+ → 100x, $10-99 → 50x, <$10 → 20x
+  const HIGH_PRICE = new Set(['BTCUSDT','ETHUSDT','BNBUSDT','SOLUSDT','AAVEUSDT','MKRUSDT','BCHUSDT','LTCUSDT','AVAXUSDT','LINKUSDT']);
+  let leverage;
+  if (HIGH_PRICE.has(symbol) || price >= 100) leverage = params.LEV_BTC_ETH || 100;
+  else if (price >= 10) leverage = params.LEV_MID || 50;
+  else leverage = params.LEV_ALT || 20;
 
   const CAPITAL_SL = 0.10;
   const CAPITAL_TP = 0.20;

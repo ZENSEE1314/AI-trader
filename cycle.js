@@ -21,6 +21,11 @@ const PRIVATE_CHATS  = TELEGRAM_CHATS.filter(id => !id.startsWith('-'));
 
 // ── CONFIG (defaults — AI may override some via getOptimalParams) ─
 const BTC_ETH_SYMBOLS = new Set(['BTCUSDT', 'ETHUSDT']);
+// Tokens priced $100+ need 100x leverage — small % moves matter more
+const HIGH_PRICE_SYMBOLS = new Set([
+  'BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'SOLUSDT', 'AAVEUSDT',
+  'MKRUSDT', 'BCHUSDT', 'LTCUSDT', 'AVAXUSDT', 'LINKUSDT',
+]);
 
 const CONFIG = {
   MIN_BALANCE:     5,
@@ -45,13 +50,26 @@ let circuitBreakerUntil = 0;
 // Initial SL: 1% price distance from entry (at 20x = 20% capital risk).
 // Trailing: at +1% profit → SL locks at +0.5%, every +1% adds another +0.5% to SL.
 // Example: +1%→SL+0.5%, +2%→SL+1%, +3%→SL+1.5%, +4%→SL+2%, ...
-const TRAILING_SL = {
-  INITIAL_SL_PCT: 0.01,            // 1% price distance — real protection at 20x = 20% capital risk
-  FIRST_TRIGGER: 0.01,             // First trailing trigger at +1% price profit
-  FIRST_SL: 0.005,                 // Lock SL at +0.5% profit when first trigger hit
-  STEP_TRIGGER: 0.01,              // Each subsequent trigger step is +1% above previous
-  STEP_SL: 0.005,                  // Each step adds +0.5% to SL lock
+// Trailing SL config: capital-based (10% of capital = trigger)
+// These are CAPITAL percentages — divided by leverage to get price %
+const TRAILING_SL_CAPITAL = {
+  INITIAL_SL_CAPITAL: 0.10,    // Risk 10% of margin on initial SL
+  FIRST_TRIGGER_CAPITAL: 0.10, // First trail at +10% capital profit
+  FIRST_SL_CAPITAL: 0.05,     // Lock SL at +5% capital profit
+  STEP_TRIGGER_CAPITAL: 0.10,  // Each step = +10% capital above previous
+  STEP_SL_CAPITAL: 0.05,      // Each step locks +5% capital
 };
+
+function getTrailingSLConfig(leverage) {
+  const c = TRAILING_SL_CAPITAL;
+  return {
+    INITIAL_SL_PCT: c.INITIAL_SL_CAPITAL / leverage,
+    FIRST_TRIGGER: c.FIRST_TRIGGER_CAPITAL / leverage,
+    FIRST_SL: c.FIRST_SL_CAPITAL / leverage,
+    STEP_TRIGGER: c.STEP_TRIGGER_CAPITAL / leverage,
+    STEP_SL: c.STEP_SL_CAPITAL / leverage,
+  };
+}
 
 // ── Compound: always use current wallet balance ─────────────
 function getDailyCapital(key, currentBalance) {
@@ -157,8 +175,16 @@ async function isTokenBanned(symbol) {
 
 // AI-tuned leverage — params come from getOptimalParams()
 function getLeverage(symbol, price, params = {}) {
-  if (BTC_ETH_SYMBOLS.has(symbol)) return Math.min(params.LEV_BTC_ETH || 20, 20);
-  return Math.min(params.LEV_ALT || 20, 20);
+  // Tokens priced $100+ use 100x — small % moves need higher leverage to hit TP
+  if (HIGH_PRICE_SYMBOLS.has(symbol) || price >= 100) {
+    return params.LEV_BTC_ETH || 100;
+  }
+  // Mid-price tokens ($10-99) use 50x
+  if (price >= 10) {
+    return params.LEV_MID || 50;
+  }
+  // Low-price tokens use 20x
+  return params.LEV_ALT || 20;
 }
 
 // ── UTILS ─────────────────────────────────────────────────────
@@ -316,14 +342,14 @@ function calculateTrailingStep(entryPrice, currentPrice, isLong, lastStep, lever
     ? (currentPrice - entryPrice) / entryPrice
     : (entryPrice - currentPrice) / entryPrice;
 
-  const { FIRST_TRIGGER, FIRST_SL, STEP_TRIGGER, STEP_SL } = TRAILING_SL;
+  const { FIRST_TRIGGER, FIRST_SL, STEP_TRIGGER, STEP_SL } = getTrailingSLConfig(leverage);
   let bestSl = null;
 
   if (pricePct >= FIRST_TRIGGER) {
-    // First tier: +1% profit → SL at +0.5%
+    // First tier: lock SL at FIRST_SL profit
     bestSl = FIRST_SL;
 
-    // Additional steps: each +1% above first trigger adds +0.5% to SL
+    // Additional steps
     const stepsAbove = Math.floor((pricePct - FIRST_TRIGGER + 1e-10) / STEP_TRIGGER);
     if (stepsAbove > 0) {
       bestSl = FIRST_SL + stepsAbove * STEP_SL;
@@ -333,7 +359,6 @@ function calculateTrailingStep(entryPrice, currentPrice, isLong, lastStep, lever
   if (bestSl === null) return null;
   if (bestSl <= lastStep) return null; // SL only moves up, never down
 
-  // bestSl is already in price %, no leverage conversion needed
   const newSlPrice = isLong
     ? entryPrice * (1 + bestSl)
     : entryPrice * (1 - bestSl);
@@ -421,8 +446,9 @@ async function openTrade(client, pick, wallet) {
   const tp2 = fmtP(pick.tp2);
   const tp3 = fmtP(pick.tp3);
 
-  // Initial SL: 1% price distance from entry (at 20x = 20% capital risk)
-  const slPricePct = TRAILING_SL.INITIAL_SL_PCT;
+  // Initial SL: 10% capital risk, scaled by leverage
+  const trailConfig = getTrailingSLConfig(leverage);
+  const slPricePct = trailConfig.INITIAL_SL_PCT;
   const initialSlPrice = fmtP(isLong ? price * (1 - slPricePct) : price * (1 + slPricePct));
   const tpPct = Math.abs(tp1 - price) / price;
 
@@ -452,9 +478,9 @@ async function openTrade(client, pick, wallet) {
 
   // Fee check: ensure trailing SL first trigger profit covers fees
   const totalFees = notional * CONFIG.TAKER_FEE * 2;
-  const trailProfit = notional * TRAILING_SL.FIRST_TRIGGER;
+  const trailProfit = notional * trailConfig.FIRST_TRIGGER;
   const slMarginLoss = slPricePct * leverage * 100;
-  bLog.trade(`Size: ${(walletSizePct*100).toFixed(0)}% wallet=$${tradeUsdt.toFixed(2)} notional=$${notional.toFixed(2)} lev=${leverage}x margin=$${requiredMargin.toFixed(2)} | SL=${slMarginLoss.toFixed(0)}%margin`);
+  bLog.trade(`Size: ${(walletSizePct*100).toFixed(0)}% wallet=$${tradeUsdt.toFixed(2)} notional=$${notional.toFixed(2)} lev=${leverage}x margin=$${requiredMargin.toFixed(2)} | SL=${slMarginLoss.toFixed(0)}%margin | trail trigger=${(trailConfig.FIRST_TRIGGER*100).toFixed(3)}%`);
   log(`Trade: ${sym} ${direction} lev=${leverage}x qty=${qty} notional=$${notional.toFixed(2)} margin=$${requiredMargin.toFixed(2)}`);
   if (trailProfit < totalFees * 1.5) {
     bLog.trade(`Trade rejected: trailing profit $${trailProfit.toFixed(4)} < 1.5x fees $${(totalFees * 1.5).toFixed(4)}`);
@@ -479,7 +505,7 @@ async function openTrade(client, pick, wallet) {
       closePosition: 'true', workingType: 'MARK_PRICE',
     });
     slOk = true;
-    bLog.trade(`SL set at $${fmtPrice(initialSlPrice)} (-${(TRAILING_SL.INITIAL_SL_PCT*100).toFixed(1)}% from entry)`);
+    bLog.trade(`SL set at $${fmtPrice(initialSlPrice)} (-${(slPricePct*100).toFixed(2)}% price = ${(slPricePct*leverage*100).toFixed(0)}% capital)`);
   } catch (e) { bLog.error(`Owner SL algo failed: ${e.message}`); }
 
   // Place TP order on exchange (take profit at tp1)
@@ -1153,8 +1179,9 @@ async function executeForAllUsers(pick) {
         // Per-user settings: use user_token_leverage first, then key default
         const userLev = await getTokenLeverage(symbol, key.id);
         const walletSizePct = (await getCapitalPercentage(key.id)) / 100;
-        // SL: 1% price distance (at 20x = 20% capital risk), TP from engine
-        const slPricePct = TRAILING_SL.INITIAL_SL_PCT;
+        // SL: 10% capital risk, scaled by user's leverage
+        const userTrailConfig = getTrailingSLConfig(userLev);
+        const slPricePct = userTrailConfig.INITIAL_SL_PCT;
         const initialSlPrice = isLong ? price * (1 - slPricePct) : price * (1 + slPricePct);
         const userTp = pick.tp1 || (isLong ? price * 1.01 : price * 0.99);
 
@@ -1955,6 +1982,7 @@ module.exports = {
   recordProfitSplit,
   notify,
   CONFIG,
-  TRAILING_SL,
+  TRAILING_SL_CAPITAL,
+  getTrailingSLConfig,
   tradeState,
 };
