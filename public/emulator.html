@@ -4,998 +4,578 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>MCT Trading Floor — Agent Emulator</title>
-  <meta name="description" content="MCT Trading Floor — Real-time AI agent visualization and control center.">
   <link rel="icon" href="/img/logo.jpeg" type="image/jpeg">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=IBM+Plex+Sans:wght@200;400;500;600&family=JetBrains+Mono:wght@400;500&family=Press+Start+2P&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=JetBrains+Mono:wght@400;500&family=Space+Grotesk:wght@400;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
   <style>
     :root {
-      --color-bg:          #08070c;
-      --color-bg-raised:   #110f18;
-      --color-bg-inset:    #0a0910;
-      --color-surface:     #14121e;
-      --color-surface-alt: #1a1726;
-      --color-border:      #2a2438;
-      --color-border-muted:#1e1830;
-      --color-fg:          #f0e8df;
-      --color-fg-muted:    #9a8e80;
-      --color-fg-subtle:   #6a5f52;
-      --color-accent:      #d4af37;
-      --color-accent-fg:   #08070c;
-      --color-accent-muted:rgba(212, 175, 55, 0.10);
-      --color-accent-hover:#e8c84a;
-      --color-accent-soft: rgba(212, 175, 55, 0.06);
-      --color-success:     #34d399;
-      --color-success-muted:rgba(52, 211, 153, 0.1);
-      --color-danger:      #f43f5e;
-      --color-danger-muted:rgba(244, 63, 94, 0.1);
-      --color-warning:     #fbbf24;
-      --color-info:        #60a5fa;
-      --color-info-muted:  rgba(96, 165, 250, 0.1);
-      --glow-gold:         0 0 16px rgba(212, 175, 55, 0.25), 0 0 48px rgba(212, 175, 55, 0.08);
-      --glass-bg:          rgba(17, 15, 24, 0.7);
-      --glass-border:      rgba(212, 175, 55, 0.06);
-      --glass-blur:        16px;
-      --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px;
-      --space-5: 20px; --space-6: 24px; --space-8: 32px;
-      --radius-sm: 4px; --radius-md: 8px; --radius-lg: 14px; --radius-xl: 20px; --radius-full: 9999px;
-      --shadow-md:    0 4px 16px rgba(0,0,0,.6);
-      --shadow-lg:    0 8px 32px rgba(0,0,0,.7);
-      --font-display: 'Space Grotesk', system-ui, sans-serif;
-      --font-body:    'IBM Plex Sans', system-ui, sans-serif;
-      --font-mono:    'JetBrains Mono', 'Fira Code', monospace;
-      --font-pixel:   'Press Start 2P', monospace;
-      --text-xs: 0.75rem; --text-sm: 0.875rem; --text-base: 1rem;
-      --text-lg: 1.125rem; --text-xl: 1.25rem; --text-2xl: 1.5rem;
-      --z-base: 1; --z-dropdown: 10; --z-overlay: 30;
-      --duration-fast: 120ms; --duration-normal: 250ms;
-      --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
-      --px-dark:    #08070c;
-      --px-surface: #14121e;
-      --px-gold:    #d4af37;
-      --px-gold-lt: #e8c84a;
-      --px-skin:    #f0e8df;
-      --px-skin-dk: #d4c4a8;
-      --px-hair:    #5a4a3a;
-      --px-shirt-b: #3b82f6;
-      --px-shirt-g: #34d399;
-      --px-shirt-r: #f43f5e;
-      --px-shirt-p: #a78bfa;
-      --px-pants:   #2a2438;
-      --px-shield:  #60a5fa;
-      --px-shield-g:#34d399;
-      --px-glass:   #93c5fd;
-      --px-white:   #f0e8df;
+      --bg:#08070c; --surface:#14121e; --surface2:#1a1726; --border:#2a2438; --border2:#1e1830;
+      --fg:#f0e8df; --fg2:#9a8e80; --fg3:#6a5f52; --accent:#d4af37; --accent2:#e8c84a;
+      --success:#34d399; --danger:#f43f5e; --info:#60a5fa; --warn:#fbbf24; --purple:#a78bfa;
+      --wall:#1a1726; --wall2:#252035; --floor:#1c1a28; --floor2:#161422;
+      --corridor:#0e0d14;
+      --px-gold:#d4af37; --px-gold2:#e8c84a; --px-skin:#f0e8df; --px-skindk:#d4c4a8;
+      --px-hair:#5a4a3a; --px-blue:#3b82f6; --px-green:#34d399; --px-red:#f43f5e;
+      --px-purple:#a78bfa; --px-pants:#2a2438; --px-dark:#08070c; --px-glass:#93c5fd;
+    }
+    *,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
+    body{font-family:'IBM Plex Sans',sans-serif;color:var(--fg);background:var(--bg);min-height:100vh;overflow-x:hidden}
+
+    /* ═══ HEADER ═══ */
+    .hdr{position:sticky;top:0;z-index:50;display:flex;align-items:center;justify-content:space-between;padding:6px 20px;background:rgba(8,7,12,.92);backdrop-filter:blur(12px);border-bottom:1px solid var(--border2);gap:12px}
+    .hdr-left{display:flex;align-items:center;gap:10px}
+    .dot{width:8px;height:8px;border-radius:50%;background:var(--success);box-shadow:0 0 6px var(--success);animation:pulse 2s ease-in-out infinite}
+    .dot.off{background:var(--danger);box-shadow:0 0 6px var(--danger)}
+    @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+    .hdr-title{font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:1.1rem;color:var(--accent)}
+    .hdr-center{display:flex;gap:20px}
+    .hdr-stat{display:flex;flex-direction:column;align-items:center;gap:1px}
+    .hdr-stat-l{font-size:.6rem;color:var(--fg3);text-transform:uppercase;letter-spacing:.5px}
+    .hdr-stat-v{font-family:'JetBrains Mono',monospace;font-size:.8rem}
+    .badge{font-family:'JetBrains Mono',monospace;font-size:.6rem;font-weight:600;padding:2px 8px;border-radius:99px;border:1px solid var(--border)}
+    .badge.idle{color:var(--fg2)}.badge.running{color:var(--accent);border-color:var(--accent);background:rgba(212,175,55,.1)}
+    .hdr-right{display:flex;align-items:center;gap:10px}
+    .back-link{color:var(--fg2);text-decoration:none;font-size:.85rem}.back-link:hover{color:var(--accent)}
+    .tbtn{background:0;border:1px solid var(--border);border-radius:99px;color:var(--fg3);padding:3px 12px;font-size:.75rem;cursor:pointer}
+    .tbtn.on{border-color:var(--accent);color:var(--accent)}
+
+    /* ═══ MAP CONTAINER ═══ */
+    .map-wrap{padding:16px;display:flex;justify-content:center}
+    .rpg-map{
+      position:relative;width:100%;max-width:960px;aspect-ratio:48/36;
+      background:var(--corridor);border:4px solid #333;border-radius:6px;
+      image-rendering:pixelated;overflow:hidden;
+      box-shadow:0 0 40px rgba(0,0,0,.6),inset 0 0 60px rgba(0,0,0,.3);
     }
 
-    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
-    html { font-size: 16px; }
-    body {
-      font-family: var(--font-body);
-      color: var(--color-fg);
-      background: var(--color-bg);
-      min-height: 100vh;
-      overflow-x: hidden;
-    }
+    /* ═══ ROOMS ═══ */
+    .rm{position:absolute;border:3px solid var(--wall2);border-radius:3px;overflow:hidden}
+    .rm::before{content:attr(data-name);position:absolute;top:4px;left:50%;transform:translateX(-50%);font-family:'Press Start 2P',monospace;font-size:6px;color:rgba(255,255,255,.2);white-space:nowrap;z-index:2;pointer-events:none}
+    /* Floor tile pattern */
+    .rm::after{content:'';position:absolute;inset:0;opacity:.15;pointer-events:none;
+      background:repeating-linear-gradient(0deg,transparent,transparent 19px,rgba(255,255,255,.08) 19px,rgba(255,255,255,.08) 20px),
+                 repeating-linear-gradient(90deg,transparent,transparent 19px,rgba(255,255,255,.08) 19px,rgba(255,255,255,.08) 20px)}
 
-    /* ============================================================
-       HEADER
-       ============================================================ */
-    .header {
-      position: sticky; top: 0; z-index: var(--z-overlay);
-      display: flex; align-items: center; justify-content: space-between;
-      padding: var(--space-2) var(--space-5);
-      background: rgba(8,7,12,0.92); backdrop-filter: blur(12px);
-      border-bottom: 1px solid var(--color-border-muted);
-      gap: var(--space-4);
-    }
-    .header-left { display: flex; align-items: center; gap: var(--space-3); }
-    .live-dot {
-      width: 8px; height: 8px; border-radius: 50%;
-      background: var(--color-success);
-      box-shadow: 0 0 6px var(--color-success);
-      animation: pulse-dot 2s ease-in-out infinite;
-    }
-    .live-dot.disconnected { background: var(--color-danger); box-shadow: 0 0 6px var(--color-danger); }
-    @keyframes pulse-dot { 0%,100%{opacity:1}50%{opacity:0.4} }
-    .header-title { font-family: var(--font-display); font-weight: 600; font-size: var(--text-lg); color: var(--color-accent); }
-    .header-center { display: flex; gap: var(--space-5); }
-    .header-stat { display: flex; flex-direction: column; align-items: center; gap: 2px; }
-    .header-stat-label { font-size: 0.65rem; color: var(--color-fg-subtle); text-transform: uppercase; letter-spacing: 0.5px; }
-    .header-stat-value { font-family: var(--font-mono); font-size: var(--text-sm); color: var(--color-fg); }
-    .state-badge {
-      font-family: var(--font-mono); font-size: 0.65rem; font-weight: 600;
-      padding: 2px 8px; border-radius: var(--radius-full);
-      text-transform: uppercase; letter-spacing: 0.5px;
-      border: 1px solid var(--color-border);
-    }
-    .state-badge.idle { color: var(--color-fg-muted); border-color: var(--color-border); }
-    .state-badge.running { color: var(--color-accent); border-color: var(--color-accent); background: var(--color-accent-muted); }
-    .state-badge.error { color: var(--color-danger); border-color: var(--color-danger); }
-    .header-right { display: flex; align-items: center; gap: var(--space-3); }
-    .back-link { color: var(--color-fg-muted); text-decoration: none; font-size: var(--text-sm); }
-    .back-link:hover { color: var(--color-accent); }
-    .toggle-btn {
-      background: transparent; border: 1px solid var(--color-border); border-radius: var(--radius-full);
-      color: var(--color-fg-subtle); padding: 3px 12px; font-size: var(--text-xs); cursor: pointer;
-    }
-    .toggle-btn.active { border-color: var(--color-accent); color: var(--color-accent); }
-    .kbd { font-family: var(--font-mono); font-size: 0.6rem; background: var(--color-surface-alt); padding: 1px 5px; border-radius: 3px; border: 1px solid var(--color-border); }
-    .kbd-hints { display: flex; gap: var(--space-3); font-size: 0.65rem; color: var(--color-fg-subtle); }
+    /* Room positions */
+    .rm-research{left:0%;top:0%;width:31%;height:39%;background:linear-gradient(135deg,#121828,#0f1520)}
+    .rm-command{left:33%;top:0%;width:34%;height:39%;background:linear-gradient(135deg,#1a1520,#161020)}
+    .rm-security{left:69%;top:0%;width:31%;height:39%;background:linear-gradient(135deg,#101820,#0c1418)}
+    .rm-trading{left:0%;top:41%;width:31%;height:38%;background:linear-gradient(135deg,#1a1218,#160e14)}
+    .rm-hall{left:33%;top:41%;width:34%;height:38%;background:linear-gradient(135deg,#14121e,#100e18);border-color:#333}
+    .rm-accountant{left:69%;top:41%;width:31%;height:38%;background:linear-gradient(135deg,#151020,#110c1a)}
+    .rm-resting{left:33%;top:81%;width:34%;height:18%;background:linear-gradient(135deg,#12100a,#0e0c08)}
 
-    /* ============================================================
-       MAIN LAYOUT
-       ============================================================ */
-    .floor {
-      padding: var(--space-5);
-      display: flex; flex-direction: column; gap: var(--space-5);
-      max-width: 1800px; margin: 0 auto;
-    }
+    /* Door gaps — overlay strips that hide wall */
+    .door{position:absolute;background:var(--corridor);z-index:3}
+    /* Horizontal doors (between rows) */
+    .door-h{height:8px;width:12%}
+    /* Vertical doors (between columns) */
+    .door-v{width:8px;height:12%}
 
-    /* ============================================================
-       THE BIG HALL — All agents walk here
-       ============================================================ */
-    .trading-hall {
-      position: relative;
-      height: 220px;
-      background:
-        linear-gradient(180deg, var(--color-bg-inset) 0%, var(--color-surface) 100%),
-        repeating-linear-gradient(90deg, transparent 0px, transparent 59px, var(--color-border-muted) 59px, var(--color-border-muted) 60px);
-      border: 1px solid var(--color-border);
-      border-radius: var(--radius-lg);
-      overflow: hidden;
-    }
-    /* Floor tiles */
-    .trading-hall::before {
-      content: '';
-      position: absolute; bottom: 0; left: 0; right: 0; height: 40px;
-      background: repeating-linear-gradient(
-        90deg,
-        var(--color-surface-alt) 0px, var(--color-surface-alt) 29px,
-        var(--color-surface) 29px, var(--color-surface) 60px
-      );
-      border-top: 1px solid var(--color-border-muted);
-      opacity: 0.5;
-    }
-    /* Desks in the background */
-    .hall-desk {
-      position: absolute; bottom: 42px;
-      width: 40px; height: 20px;
-      background: var(--color-surface-alt);
-      border: 1px solid var(--color-border);
-      border-radius: 3px 3px 0 0;
-    }
-    .hall-desk::after {
-      content: '';
-      position: absolute; top: 2px; left: 3px; right: 3px; height: 6px;
-      background: var(--color-success); opacity: 0.3; border-radius: 1px;
-    }
-    /* Hall label */
-    .hall-label {
-      position: absolute; top: var(--space-3); left: var(--space-4);
-      font-family: var(--font-pixel); font-size: 8px;
-      color: var(--color-fg-subtle); opacity: 0.5;
-      letter-spacing: 1px;
-    }
-    /* Pipeline progress bar at top of hall */
-    .hall-pipeline {
-      position: absolute; top: 0; left: 0; right: 0;
-      display: flex; height: 24px;
-      background: rgba(0,0,0,0.3);
-      border-bottom: 1px solid var(--color-border-muted);
-    }
-    .hall-stage {
-      flex: 1; display: flex; align-items: center; justify-content: center;
-      font-family: var(--font-mono); font-size: 0.6rem;
-      color: var(--color-fg-subtle); border-right: 1px solid var(--color-border-muted);
-      transition: all 0.3s;
-    }
-    .hall-stage:last-child { border-right: none; }
-    .hall-stage.active { color: var(--color-accent); background: var(--color-accent-muted); }
-    .hall-stage.done { color: var(--color-success); opacity: 0.7; }
+    /* ═══ FURNITURE ═══ */
+    .furn{position:absolute;border-radius:2px;z-index:1}
+    .desk{background:#2a2020;border:1px solid #3a3030;width:10%;height:8%}
+    .desk::after{content:'';position:absolute;top:1px;left:15%;width:35%;height:40%;background:var(--success);opacity:.4;border-radius:1px}
+    .monitor{background:#1a1a2a;border:1px solid #2a2a4a;width:6%;height:5%}
+    .monitor::after{content:'';position:absolute;inset:1px;background:var(--info);opacity:.25;border-radius:1px}
+    .bookshelf{background:#2a2018;border:1px solid #3a3028;width:3%;height:18%}
+    .bookshelf::after{content:'';position:absolute;top:10%;left:15%;right:15%;height:25%;background:var(--danger);opacity:.3;border-radius:1px}
+    .chair{background:#1a1726;border:1px solid var(--border2);width:4%;height:4%;border-radius:50%}
+    .bed{background:#2a2018;border:1px solid #3a3028;width:10%;height:6%;border-radius:3px}
+    .bed::after{content:'';position:absolute;left:2px;top:2px;width:30%;height:60%;background:var(--fg3);opacity:.3;border-radius:2px}
+    .shield-decor{background:var(--info);width:4%;height:5%;border-radius:2px 2px 50% 50%;opacity:.15;border:1px solid rgba(96,165,250,.2)}
+    .chart-decor{background:var(--surface2);border:1px solid var(--border2);width:14%;height:10%}
+    .chart-decor::after{content:'';position:absolute;bottom:2px;left:2px;right:2px;height:60%;
+      background:linear-gradient(90deg,transparent 0%,var(--success) 20%,var(--success) 22%,transparent 22%,transparent 30%,var(--danger) 40%,var(--danger) 42%,transparent 42%,transparent 50%,var(--success) 60%,var(--success) 62%,transparent 62%,transparent 70%,var(--success) 80%,var(--success) 82%,transparent 82%);
+      opacity:.3}
+    .safe{background:#333;border:2px solid #555;width:5%;height:7%;border-radius:2px}
+    .safe::after{content:'';position:absolute;top:35%;left:50%;transform:translateX(-50%);width:20%;height:25%;background:var(--accent);opacity:.3;border-radius:50%}
 
-    /* ============================================================
-       PIXEL CHARACTERS IN HALL
-       ============================================================ */
-    .hall-char {
-      position: absolute;
-      bottom: 44px;
-      z-index: var(--z-base);
-      pointer-events: none;
-      image-rendering: pixelated;
-      transition: filter 0.3s;
+    /* ═══ PIXEL CHARACTERS ═══ */
+    .agent-char{
+      position:absolute;z-index:10;pointer-events:none;
+      transition:left 3s ease-in-out,top 3s ease-in-out;
+      image-rendering:pixelated;
     }
-    .hall-char .pixel-sprite {
-      width: 3px; height: 3px;
-      background: transparent;
-      transform: scale(2.5);
-      transform-origin: bottom center;
-      image-rendering: pixelated;
+    .agent-char .pxs{width:3px;height:3px;background:transparent;transform:scale(2);transform-origin:bottom center}
+    .agent-char .nametag{
+      position:absolute;bottom:-10px;left:50%;transform:translateX(-50%);
+      font-family:'Press Start 2P',monospace;font-size:4px;color:var(--fg3);white-space:nowrap;
+      text-shadow:0 0 3px var(--bg),1px 1px 0 var(--bg);
     }
-    /* Name tag under character */
-    .hall-char .char-nametag {
-      position: absolute; bottom: -14px; left: 50%; transform: translateX(-50%);
-      font-family: var(--font-pixel); font-size: 5px;
-      color: var(--color-fg-muted); white-space: nowrap;
-      text-shadow: 0 0 3px var(--color-bg);
+    .agent-char .lvltag{
+      position:absolute;top:-10px;left:50%;transform:translateX(-50%);
+      font-family:'Press Start 2P',monospace;font-size:4px;color:var(--accent);white-space:nowrap;
+      text-shadow:0 0 4px rgba(212,175,55,.5);
     }
-    .hall-char .char-lvl {
-      position: absolute; top: -12px; left: 50%; transform: translateX(-50%);
-      font-family: var(--font-pixel); font-size: 5px;
-      color: var(--color-accent); white-space: nowrap;
-      text-shadow: 0 0 4px rgba(212,175,55,0.5);
+    /* Thought bubble */
+    .agent-char .thought{
+      position:absolute;bottom:calc(100% + 6px);left:50%;transform:translateX(-50%);
+      font-family:'JetBrains Mono',monospace;font-size:5px;color:var(--fg);white-space:nowrap;
+      background:rgba(20,18,30,.9);border:1px solid var(--border);border-radius:4px;padding:2px 4px;
+      opacity:0;transition:opacity .5s;pointer-events:none;max-width:120px;overflow:hidden;text-overflow:ellipsis;
     }
+    .agent-char .thought.show{opacity:1}
+    .agent-char .thought::after{content:'';position:absolute;top:100%;left:50%;transform:translateX(-50%);border:3px solid transparent;border-top-color:var(--border)}
 
-    /* Walking animation — each agent gets a unique patrol via inline style animation */
-    .hall-char.walking .pixel-sprite {
-      animation: walk-step 0.8s steps(2) infinite;
-    }
-    .hall-char.idle-anim .pixel-sprite {
-      animation: idle-breathe 2.5s ease-in-out infinite;
-    }
-    .hall-char.working .pixel-sprite {
-      animation: work-bounce 0.4s steps(2) infinite;
-      filter: drop-shadow(0 0 5px rgba(212,175,55,0.4));
-    }
-    .hall-char.error-anim .pixel-sprite {
-      animation: dizzy 0.5s ease-in-out infinite;
-      filter: drop-shadow(0 0 4px rgba(244,63,94,0.5));
-    }
-    .hall-char.sleeping .pixel-sprite {
-      animation: none; opacity: 0.4;
-    }
-    .hall-char.sleeping::after {
-      content: 'z z z'; position: absolute; top: -20px; left: 50%; transform: translateX(-50%);
-      font-family: var(--font-pixel); font-size: 5px; color: var(--color-fg-subtle);
-      animation: zzz 2s ease-in-out infinite; white-space: nowrap;
-    }
+    /* Walk animation */
+    .agent-char.walking .pxs{animation:walk-bob .6s steps(2) infinite}
+    .agent-char.idle .pxs{animation:idle-bob 2.5s ease-in-out infinite}
+    .agent-char.working .pxs{animation:work-bob .4s steps(2) infinite;filter:drop-shadow(0 0 4px rgba(212,175,55,.4))}
+    .agent-char.dizzy .pxs{animation:err-spin .5s ease-in-out infinite;filter:drop-shadow(0 0 3px rgba(244,63,94,.5))}
+    .agent-char.asleep .pxs{opacity:.35;animation:none}
+    .agent-char.asleep::before{content:'z z z';position:absolute;top:-16px;left:50%;transform:translateX(-50%);font-family:'Press Start 2P',monospace;font-size:4px;color:var(--fg3);animation:zzz 2s ease-in-out infinite;white-space:nowrap}
+    @keyframes walk-bob{0%,100%{transform:scale(2) translateY(0)}50%{transform:scale(2) translateY(-3px)}}
+    @keyframes idle-bob{0%,100%{transform:scale(2) translateY(0)}50%{transform:scale(2) translateY(-2px)}}
+    @keyframes work-bob{0%,100%{transform:scale(2) translateY(0)}50%{transform:scale(2) translateY(-4px)}}
+    @keyframes err-spin{0%,100%{transform:scale(2) rotate(0)}25%{transform:scale(2) rotate(6deg)}75%{transform:scale(2) rotate(-6deg)}}
+    @keyframes zzz{0%,100%{opacity:.2;transform:translateX(-50%) translateY(0)}50%{opacity:.8;transform:translateX(-50%) translateY(-5px)}}
 
-    @keyframes walk-step {
-      0%,100% { transform: scale(2.5) translateY(0); }
-      50% { transform: scale(2.5) translateY(-3px); }
-    }
-    @keyframes idle-breathe {
-      0%,100% { transform: scale(2.5) translateY(0); }
-      50% { transform: scale(2.5) translateY(-2px); }
-    }
-    @keyframes work-bounce {
-      0%,100% { transform: scale(2.5) translateY(0); }
-      50% { transform: scale(2.5) translateY(-4px); }
-    }
-    @keyframes dizzy {
-      0%,100% { transform: scale(2.5) rotate(0deg); }
-      25% { transform: scale(2.5) rotate(6deg); }
-      75% { transform: scale(2.5) rotate(-6deg); }
-    }
-    @keyframes zzz {
-      0%,100% { opacity: 0.3; transform: translateX(-50%) translateY(0); }
-      50% { opacity: 0.8; transform: translateX(-50%) translateY(-5px); }
-    }
+    /* ═══ SPRITES (box-shadow pixel art) ═══ */
+    .sp-coord{box-shadow:6px 0 var(--px-gold),12px 0 var(--px-gold2),18px 0 var(--px-gold),3px 3px var(--px-gold),6px 3px var(--px-gold2),9px 3px var(--px-gold),12px 3px var(--px-gold2),15px 3px var(--px-gold),18px 3px var(--px-gold2),21px 3px var(--px-gold),3px 6px var(--px-gold),6px 6px var(--px-gold2),9px 6px var(--px-gold2),12px 6px var(--px-gold2),15px 6px var(--px-gold2),18px 6px var(--px-gold2),21px 6px var(--px-gold),6px 9px var(--px-skin),9px 9px var(--px-skin),12px 9px var(--px-skin),15px 9px var(--px-skin),18px 9px var(--px-skin),6px 12px var(--px-skin),9px 12px var(--px-dark),12px 12px var(--px-skin),15px 12px var(--px-dark),18px 12px var(--px-skin),6px 15px var(--px-skin),9px 15px var(--px-skin),12px 15px var(--px-skindk),15px 15px var(--px-skin),18px 15px var(--px-skin),3px 18px var(--px-gold),6px 18px #1a1726,9px 18px #1a1726,12px 18px var(--px-gold),15px 18px #1a1726,18px 18px #1a1726,21px 18px var(--px-gold),3px 21px var(--px-gold),6px 21px #1a1726,9px 21px #1a1726,12px 21px var(--px-gold),15px 21px #1a1726,18px 21px #1a1726,21px 21px var(--px-gold),0px 18px var(--px-skindk),24px 18px var(--px-skindk),6px 24px var(--px-pants),9px 24px var(--px-pants),15px 24px var(--px-pants),18px 24px var(--px-pants),6px 27px var(--px-pants),9px 27px var(--px-pants),15px 27px var(--px-pants),18px 27px var(--px-pants),6px 30px var(--px-hair),9px 30px var(--px-hair),15px 30px var(--px-hair),18px 30px var(--px-hair)}
+    .sp-sent{box-shadow:6px 0 var(--px-hair),9px 0 var(--px-hair),12px 0 var(--px-hair),15px 0 var(--px-hair),3px 3px var(--px-hair),6px 3px var(--px-hair),9px 3px var(--px-hair),12px 3px var(--px-hair),15px 3px var(--px-hair),18px 3px var(--px-hair),6px 6px var(--px-skin),9px 6px var(--px-skin),12px 6px var(--px-skin),15px 6px var(--px-skin),6px 9px var(--px-skin),9px 9px var(--px-dark),12px 9px var(--px-skin),15px 9px var(--px-dark),6px 12px var(--px-skin),9px 12px var(--px-skin),12px 12px var(--px-skindk),15px 12px var(--px-skin),3px 15px var(--px-blue),6px 15px var(--px-blue),9px 15px var(--px-blue),12px 15px var(--px-blue),15px 15px var(--px-blue),18px 15px var(--px-blue),3px 18px var(--px-blue),6px 18px #2563eb,9px 18px var(--px-blue),12px 18px var(--px-blue),15px 18px #2563eb,18px 18px var(--px-blue),3px 21px var(--px-blue),6px 21px var(--px-blue),9px 21px var(--px-blue),12px 21px var(--px-blue),15px 21px var(--px-blue),18px 21px var(--px-blue),21px 18px var(--px-skindk),0px 18px var(--px-skindk),6px 24px var(--px-pants),9px 24px var(--px-pants),12px 24px var(--px-pants),15px 24px var(--px-pants),6px 27px var(--px-pants),9px 27px var(--px-pants),15px 27px var(--px-pants),6px 30px var(--px-hair),9px 30px var(--px-hair),15px 30px var(--px-hair)}
+    .sp-chart{box-shadow:6px 0 var(--px-hair),9px 0 var(--px-hair),12px 0 var(--px-hair),15px 0 var(--px-hair),3px 3px var(--px-hair),6px 3px var(--px-hair),9px 3px var(--px-hair),12px 3px var(--px-hair),15px 3px var(--px-hair),18px 3px var(--px-hair),6px 6px var(--px-skin),9px 6px var(--px-skin),12px 6px var(--px-skin),15px 6px var(--px-skin),6px 9px var(--px-skin),9px 9px var(--px-dark),12px 9px var(--px-skin),15px 9px var(--px-dark),6px 12px var(--px-skin),9px 12px var(--px-skin),12px 12px var(--px-skindk),15px 12px var(--px-skin),3px 15px var(--px-green),6px 15px var(--px-green),9px 15px var(--px-green),12px 15px var(--px-green),15px 15px var(--px-green),18px 15px var(--px-green),3px 18px var(--px-green),6px 18px #059669,9px 18px var(--px-green),12px 18px var(--px-green),15px 18px #059669,18px 18px var(--px-green),3px 21px var(--px-green),6px 21px var(--px-green),9px 21px var(--px-green),12px 21px var(--px-green),15px 21px var(--px-green),18px 21px var(--px-green),21px 18px var(--px-skindk),0px 18px var(--px-skindk),6px 24px var(--px-pants),9px 24px var(--px-pants),12px 24px var(--px-pants),15px 24px var(--px-pants),6px 27px var(--px-pants),9px 27px var(--px-pants),15px 27px var(--px-pants),6px 30px var(--px-hair),9px 30px var(--px-hair),15px 30px var(--px-hair)}
+    .sp-risk{box-shadow:6px 0 var(--px-gold),9px 0 var(--px-gold),12px 0 var(--px-gold),15px 0 var(--px-gold),3px 3px var(--px-gold),6px 3px var(--px-gold2),9px 3px var(--px-gold2),12px 3px var(--px-gold2),15px 3px var(--px-gold2),18px 3px var(--px-gold),6px 6px var(--px-skin),9px 6px var(--px-skin),12px 6px var(--px-skin),15px 6px var(--px-skin),6px 9px var(--px-skin),9px 9px var(--px-dark),12px 9px var(--px-skin),15px 9px var(--px-dark),6px 12px var(--px-gold),9px 12px var(--px-skin),12px 12px var(--px-skindk),15px 12px var(--px-skin),18px 12px var(--px-gold),3px 15px #6b7280,6px 15px #9ca3af,9px 15px #9ca3af,12px 15px var(--px-gold),15px 15px #9ca3af,18px 15px #9ca3af,21px 15px #6b7280,3px 18px #6b7280,6px 18px #9ca3af,9px 18px #6b7280,12px 18px var(--px-gold),15px 18px #6b7280,18px 18px #9ca3af,21px 18px #6b7280,24px 18px var(--px-skindk),6px 21px #6b7280,9px 21px #6b7280,12px 21px #6b7280,15px 21px #6b7280,6px 24px #6b7280,9px 24px #6b7280,15px 24px #6b7280,6px 27px var(--px-pants),9px 27px var(--px-pants),15px 27px var(--px-pants)}
+    .sp-trader{box-shadow:6px 0 var(--px-hair),9px 0 var(--px-hair),12px 0 var(--px-hair),15px 0 var(--px-hair),3px 3px var(--px-hair),6px 3px var(--px-hair),9px 3px var(--px-hair),12px 3px var(--px-hair),15px 3px var(--px-hair),18px 3px var(--px-hair),6px 6px var(--px-skin),9px 6px var(--px-skin),12px 6px var(--px-skin),15px 6px var(--px-skin),6px 9px var(--px-skin),9px 9px var(--px-dark),12px 9px var(--px-skin),15px 9px var(--px-dark),6px 12px var(--px-skin),9px 12px var(--px-skin),12px 12px var(--px-skindk),15px 12px var(--px-skin),3px 15px var(--px-gold),6px 15px #1a1726,9px 15px #1a1726,12px 15px #1a1726,15px 15px #1a1726,18px 15px var(--px-gold),3px 18px var(--px-gold),6px 18px #1a1726,9px 18px #1a1726,12px 18px #1a1726,15px 18px #1a1726,18px 18px var(--px-gold),0px 18px var(--px-skindk),21px 18px var(--px-skindk),6px 21px var(--px-pants),9px 21px var(--px-pants),12px 21px var(--px-pants),15px 21px var(--px-pants),6px 24px var(--px-pants),9px 24px var(--px-pants),15px 24px var(--px-pants),6px 27px var(--px-hair),9px 27px var(--px-hair),15px 27px var(--px-hair)}
+    .sp-acct{box-shadow:6px 0 var(--px-hair),9px 0 var(--px-hair),12px 0 var(--px-hair),15px 0 var(--px-hair),3px 3px var(--px-hair),6px 3px var(--px-hair),9px 3px var(--px-hair),12px 3px var(--px-hair),15px 3px var(--px-hair),18px 3px var(--px-hair),6px 6px var(--px-skin),9px 6px var(--px-skin),12px 6px var(--px-skin),15px 6px var(--px-skin),3px 9px var(--px-glass),6px 9px var(--px-skin),9px 9px var(--px-dark),12px 9px var(--px-glass),15px 9px var(--px-dark),18px 9px var(--px-skin),21px 9px var(--px-glass),6px 12px var(--px-skin),9px 12px var(--px-skin),12px 12px var(--px-skindk),15px 12px var(--px-skin),3px 15px var(--px-purple),6px 15px var(--px-purple),9px 15px var(--px-purple),12px 15px var(--px-purple),15px 15px var(--px-purple),18px 15px var(--px-purple),3px 18px var(--px-purple),6px 18px #7c3aed,9px 18px var(--px-purple),12px 18px var(--px-purple),15px 18px #7c3aed,18px 18px var(--px-purple),21px 18px var(--px-skindk),0px 18px var(--px-skindk),6px 21px var(--px-pants),9px 21px var(--px-pants),12px 21px var(--px-pants),15px 21px var(--px-pants),6px 24px var(--px-pants),9px 24px var(--px-pants),15px 24px var(--px-pants),6px 27px var(--px-hair),9px 27px var(--px-hair),15px 27px var(--px-hair)}
+    .sp-token{box-shadow:6px 0 var(--px-gold),9px 0 var(--px-gold2),12px 0 var(--px-gold),6px 6px var(--px-skin),9px 6px var(--px-skin),12px 6px var(--px-skin),6px 9px var(--px-dark),9px 9px var(--px-skin),12px 9px var(--px-dark),3px 12px var(--px-gold),6px 12px var(--px-gold),9px 12px var(--px-gold),12px 12px var(--px-gold),15px 12px var(--px-gold),6px 15px var(--px-gold),9px 15px #b8922a,12px 15px var(--px-gold),6px 18px var(--px-pants),12px 18px var(--px-pants),6px 21px var(--px-hair),12px 21px var(--px-hair)}
 
-    /* Patrol keyframes — generated per agent for variety */
-    @keyframes patrol-1 { 0%{left:5%}25%{left:35%}50%{left:60%}75%{left:25%}100%{left:5%} }
-    @keyframes patrol-2 { 0%{left:80%}30%{left:50%}60%{left:15%}100%{left:80%} }
-    @keyframes patrol-3 { 0%{left:15%}40%{left:70%}80%{left:40%}100%{left:15%} }
-    @keyframes patrol-4 { 0%{left:60%}33%{left:10%}66%{left:45%}100%{left:60%} }
-    @keyframes patrol-5 { 0%{left:40%}50%{left:85%}100%{left:40%} }
-    @keyframes patrol-6 { 0%{left:70%}25%{left:20%}50%{left:55%}75%{left:90%}100%{left:70%} }
-    @keyframes patrol-7 { 0%{left:25%}50%{left:75%}100%{left:25%} }
-    @keyframes patrol-fast-1 { 0%{left:5%}15%{left:50%}30%{left:20%}50%{left:80%}70%{left:35%}100%{left:5%} }
-    @keyframes patrol-fast-2 { 0%{left:80%}20%{left:30%}40%{left:70%}60%{left:10%}80%{left:60%}100%{left:80%} }
-    @keyframes patrol-fast-3 { 0%{left:15%}25%{left:65%}50%{left:5%}75%{left:85%}100%{left:15%} }
-    @keyframes patrol-fast-4 { 0%{left:60%}20%{left:5%}40%{left:75%}60%{left:30%}80%{left:90%}100%{left:60%} }
-    @keyframes patrol-fast-5 { 0%{left:40%}30%{left:10%}60%{left:70%}100%{left:40%} }
-    @keyframes patrol-fast-6 { 0%{left:70%}25%{left:15%}50%{left:85%}75%{left:40%}100%{left:70%} }
+    /* ═══ PROFILE CARDS ═══ */
+    .cards-wrap{padding:0 16px 16px}
+    .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px;max-width:960px;margin:0 auto}
+    .card{background:rgba(17,15,24,.7);border:1px solid var(--border2);border-radius:10px;padding:12px;transition:border-color .2s;position:relative;overflow:hidden}
+    .card:hover{border-color:var(--border)}.card.on{border-color:var(--accent);box-shadow:0 0 16px rgba(212,175,55,.15)}.card.err{border-color:var(--danger)}
+    .card-top{display:flex;align-items:center;gap:10px;margin-bottom:8px}
+    .card-av{width:36px;height:36px;background:var(--surface2);border-radius:6px;display:flex;align-items:center;justify-content:center;border:1px solid var(--border2);flex-shrink:0;position:relative;overflow:hidden;image-rendering:pixelated}
+    .card-av .pxs{transform:scale(1.1);transform-origin:center;position:absolute;top:1px;left:3px}
+    .card-info{flex:1;min-width:0}
+    .card-name{font-family:'Space Grotesk',sans-serif;font-weight:600;font-size:.85rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .card-role{font-size:.65rem;color:var(--fg3)}
+    .card-st{font-family:'JetBrains Mono',monospace;font-size:.55rem;font-weight:600;padding:1px 5px;border-radius:99px;border:1px solid var(--border)}
+    .card-st.running{color:var(--accent);border-color:var(--accent);background:rgba(212,175,55,.1)}
+    .card-st.error{color:var(--danger);border-color:var(--danger)}
+    .card-st.idle{color:var(--fg2)}
+    .lvl-row{display:flex;align-items:center;gap:6px;margin-bottom:6px}
+    .lvl-badge{font-family:'Press Start 2P',monospace;font-size:6px;color:var(--accent);background:rgba(212,175,55,.1);padding:2px 5px;border-radius:3px;border:1px solid rgba(212,175,55,.15)}
+    .xp-bar{flex:1;height:7px;background:var(--bg);border-radius:99px;overflow:hidden;border:1px solid var(--border2)}
+    .xp-fill{height:100%;border-radius:99px;background:linear-gradient(90deg,var(--accent),var(--accent2));transition:width .5s;min-width:1px}
+    .xp-txt{font-family:'JetBrains Mono',monospace;font-size:.55rem;color:var(--fg3);white-space:nowrap}
+    .card-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-bottom:8px}
+    .cs{text-align:center;padding:3px 0;background:var(--bg);border-radius:4px}
+    .cs-v{font-family:'JetBrains Mono',monospace;font-size:.8rem;font-weight:600}
+    .cs-v.grn{color:var(--success)}.cs-v.gld{color:var(--accent)}
+    .cs-l{font-size:.55rem;color:var(--fg3);text-transform:uppercase}
+    .card-task{font-family:'JetBrains Mono',monospace;font-size:.6rem;color:var(--accent);display:flex;align-items:center;gap:4px;margin-bottom:4px}
+    .card-task .td{width:5px;height:5px;border-radius:50%;background:var(--accent);animation:pulse 1s ease-in-out infinite}
+    .card-act{font-size:.65rem;color:var(--fg2);max-height:44px;overflow-y:auto;scrollbar-width:thin;scrollbar-color:var(--border) transparent}
+    .card-act div{padding:1px 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 
-    /* ============================================================
-       PIXEL ART SPRITES (box-shadow technique)
-       ============================================================ */
-    .sprite-coordinator {
-      box-shadow:
-        6px 0 var(--px-gold), 12px 0 var(--px-gold-lt), 18px 0 var(--px-gold),
-        3px 3px var(--px-gold), 6px 3px var(--px-gold-lt), 9px 3px var(--px-gold), 12px 3px var(--px-gold-lt), 15px 3px var(--px-gold), 18px 3px var(--px-gold-lt), 21px 3px var(--px-gold),
-        3px 6px var(--px-gold), 6px 6px var(--px-gold-lt), 9px 6px var(--px-gold-lt), 12px 6px var(--px-gold-lt), 15px 6px var(--px-gold-lt), 18px 6px var(--px-gold-lt), 21px 6px var(--px-gold),
-        6px 9px var(--px-skin), 9px 9px var(--px-skin), 12px 9px var(--px-skin), 15px 9px var(--px-skin), 18px 9px var(--px-skin),
-        6px 12px var(--px-skin), 9px 12px var(--px-dark), 12px 12px var(--px-skin), 15px 12px var(--px-dark), 18px 12px var(--px-skin),
-        6px 15px var(--px-skin), 9px 15px var(--px-skin), 12px 15px var(--px-skin-dk), 15px 15px var(--px-skin), 18px 15px var(--px-skin),
-        3px 18px var(--px-gold), 6px 18px #1a1726, 9px 18px #1a1726, 12px 18px var(--px-gold), 15px 18px #1a1726, 18px 18px #1a1726, 21px 18px var(--px-gold),
-        3px 21px var(--px-gold), 6px 21px #1a1726, 9px 21px #1a1726, 12px 21px var(--px-gold), 15px 21px #1a1726, 18px 21px #1a1726, 21px 21px var(--px-gold),
-        3px 24px var(--px-gold), 6px 24px #1a1726, 9px 24px #1a1726, 12px 24px #1a1726, 15px 24px #1a1726, 18px 24px #1a1726, 21px 24px var(--px-gold),
-        0px 18px var(--px-skin-dk), 24px 18px var(--px-skin-dk),
-        0px 21px var(--px-skin-dk), 24px 21px var(--px-skin-dk),
-        6px 27px var(--px-pants), 9px 27px var(--px-pants), 12px 27px var(--px-pants), 15px 27px var(--px-pants), 18px 27px var(--px-pants),
-        6px 30px var(--px-pants), 9px 30px var(--px-pants), 15px 30px var(--px-pants), 18px 30px var(--px-pants),
-        6px 33px var(--px-hair), 9px 33px var(--px-hair), 15px 33px var(--px-hair), 18px 33px var(--px-hair);
-    }
-    .sprite-sentiment {
-      box-shadow:
-        6px 0 var(--px-hair), 9px 0 var(--px-hair), 12px 0 var(--px-hair), 15px 0 var(--px-hair),
-        3px 3px var(--px-hair), 6px 3px var(--px-hair), 9px 3px var(--px-hair), 12px 3px var(--px-hair), 15px 3px var(--px-hair), 18px 3px var(--px-hair),
-        6px 6px var(--px-skin), 9px 6px var(--px-skin), 12px 6px var(--px-skin), 15px 6px var(--px-skin),
-        6px 9px var(--px-skin), 9px 9px var(--px-dark), 12px 9px var(--px-skin), 15px 9px var(--px-dark),
-        6px 12px var(--px-skin), 9px 12px var(--px-skin), 12px 12px var(--px-skin-dk), 15px 12px var(--px-skin),
-        3px 15px var(--px-shirt-b), 6px 15px var(--px-shirt-b), 9px 15px var(--px-shirt-b), 12px 15px var(--px-shirt-b), 15px 15px var(--px-shirt-b), 18px 15px var(--px-shirt-b),
-        3px 18px var(--px-shirt-b), 6px 18px #2563eb, 9px 18px var(--px-shirt-b), 12px 18px var(--px-shirt-b), 15px 18px #2563eb, 18px 18px var(--px-shirt-b),
-        3px 21px var(--px-shirt-b), 6px 21px var(--px-shirt-b), 9px 21px var(--px-shirt-b), 12px 21px var(--px-shirt-b), 15px 21px var(--px-shirt-b), 18px 21px var(--px-shirt-b),
-        24px 15px var(--px-glass), 27px 15px #93c5fd,
-        24px 18px #93c5fd, 27px 18px #bfdbfe, 30px 18px var(--px-glass),
-        24px 21px var(--px-glass), 27px 21px #93c5fd,
-        21px 18px var(--px-skin-dk), 0px 18px var(--px-skin-dk),
-        6px 24px var(--px-pants), 9px 24px var(--px-pants), 12px 24px var(--px-pants), 15px 24px var(--px-pants),
-        6px 27px var(--px-pants), 9px 27px var(--px-pants), 15px 27px var(--px-pants),
-        6px 30px var(--px-hair), 9px 30px var(--px-hair), 15px 30px var(--px-hair);
-    }
-    .sprite-chart {
-      box-shadow:
-        6px 0 var(--px-hair), 9px 0 var(--px-hair), 12px 0 var(--px-hair), 15px 0 var(--px-hair),
-        3px 3px var(--px-hair), 6px 3px var(--px-hair), 9px 3px var(--px-hair), 12px 3px var(--px-hair), 15px 3px var(--px-hair), 18px 3px var(--px-hair),
-        6px 6px var(--px-skin), 9px 6px var(--px-skin), 12px 6px var(--px-skin), 15px 6px var(--px-skin),
-        6px 9px var(--px-skin), 9px 9px var(--px-dark), 12px 9px var(--px-skin), 15px 9px var(--px-dark),
-        6px 12px var(--px-skin), 9px 12px var(--px-skin), 12px 12px var(--px-skin-dk), 15px 12px var(--px-skin),
-        3px 15px var(--px-shirt-g), 6px 15px var(--px-shirt-g), 9px 15px var(--px-shirt-g), 12px 15px var(--px-shirt-g), 15px 15px var(--px-shirt-g), 18px 15px var(--px-shirt-g),
-        3px 18px var(--px-shirt-g), 6px 18px #059669, 9px 18px var(--px-shirt-g), 12px 18px var(--px-shirt-g), 15px 18px #059669, 18px 18px var(--px-shirt-g),
-        3px 21px var(--px-shirt-g), 6px 21px var(--px-shirt-g), 9px 21px var(--px-shirt-g), 12px 21px var(--px-shirt-g), 15px 21px var(--px-shirt-g), 18px 21px var(--px-shirt-g),
-        24px 15px var(--px-hair), 27px 18px var(--px-hair), 30px 21px var(--px-hair),
-        27px 6px var(--px-gold), 30px 6px var(--px-gold), 33px 6px var(--px-gold),
-        24px 9px var(--px-gold), 36px 9px var(--px-gold),
-        24px 12px var(--px-gold), 30px 9px #bfdbfe, 30px 12px #bfdbfe, 33px 9px #bfdbfe, 36px 12px var(--px-gold),
-        27px 15px var(--px-gold), 30px 15px var(--px-gold), 33px 15px var(--px-gold),
-        21px 18px var(--px-skin-dk), 0px 18px var(--px-skin-dk),
-        6px 24px var(--px-pants), 9px 24px var(--px-pants), 12px 24px var(--px-pants), 15px 24px var(--px-pants),
-        6px 27px var(--px-pants), 9px 27px var(--px-pants), 15px 27px var(--px-pants),
-        6px 30px var(--px-hair), 9px 30px var(--px-hair), 15px 30px var(--px-hair);
-    }
-    .sprite-risk {
-      box-shadow:
-        6px 0 var(--px-gold), 9px 0 var(--px-gold), 12px 0 var(--px-gold), 15px 0 var(--px-gold),
-        3px 3px var(--px-gold), 6px 3px var(--px-gold-lt), 9px 3px var(--px-gold-lt), 12px 3px var(--px-gold-lt), 15px 3px var(--px-gold-lt), 18px 3px var(--px-gold),
-        6px 6px var(--px-skin), 9px 6px var(--px-skin), 12px 6px var(--px-skin), 15px 6px var(--px-skin),
-        6px 9px var(--px-skin), 9px 9px var(--px-dark), 12px 9px var(--px-skin), 15px 9px var(--px-dark),
-        6px 12px var(--px-gold), 9px 12px var(--px-skin), 12px 12px var(--px-skin-dk), 15px 12px var(--px-skin), 18px 12px var(--px-gold),
-        3px 15px #6b7280, 6px 15px #9ca3af, 9px 15px #9ca3af, 12px 15px var(--px-gold), 15px 15px #9ca3af, 18px 15px #9ca3af, 21px 15px #6b7280,
-        3px 18px #6b7280, 6px 18px #9ca3af, 9px 18px #6b7280, 12px 18px var(--px-gold), 15px 18px #6b7280, 18px 18px #9ca3af, 21px 18px #6b7280,
-        3px 21px #6b7280, 6px 21px #9ca3af, 9px 21px #9ca3af, 12px 21px #9ca3af, 15px 21px #9ca3af, 18px 21px #9ca3af, 21px 21px #6b7280,
-        -6px 12px var(--px-shield), -3px 12px var(--px-shield),
-        -9px 15px var(--px-shield), -6px 15px var(--px-shield-g), -3px 15px var(--px-shield),
-        -9px 18px var(--px-shield), -6px 18px var(--px-shield-g), -3px 18px var(--px-shield), 0px 18px var(--px-shield),
-        -9px 21px var(--px-shield), -6px 21px var(--px-shield-g), -3px 21px var(--px-shield),
-        -6px 24px var(--px-shield), -3px 24px var(--px-shield),
-        24px 18px var(--px-skin-dk),
-        6px 24px #6b7280, 9px 24px #6b7280, 12px 24px #6b7280, 15px 24px #6b7280,
-        6px 27px #6b7280, 9px 27px #6b7280, 15px 27px #6b7280,
-        6px 30px var(--px-pants), 9px 30px var(--px-pants), 15px 30px var(--px-pants);
-    }
-    .sprite-trader {
-      box-shadow:
-        6px 0 var(--px-hair), 9px 0 var(--px-hair), 12px 0 var(--px-hair), 15px 0 var(--px-hair),
-        3px 3px var(--px-hair), 6px 3px var(--px-hair), 9px 3px var(--px-hair), 12px 3px var(--px-hair), 15px 3px var(--px-hair), 18px 3px var(--px-hair),
-        6px 6px var(--px-skin), 9px 6px var(--px-skin), 12px 6px var(--px-skin), 15px 6px var(--px-skin),
-        6px 9px var(--px-skin), 9px 9px var(--px-dark), 12px 9px var(--px-skin), 15px 9px var(--px-dark),
-        6px 12px var(--px-skin), 9px 12px var(--px-skin), 12px 12px var(--px-skin-dk), 15px 12px var(--px-skin),
-        3px 15px var(--px-gold), 6px 15px #1a1726, 9px 15px #1a1726, 12px 15px #1a1726, 15px 15px #1a1726, 18px 15px var(--px-gold),
-        3px 18px var(--px-gold), 6px 18px #1a1726, 9px 18px #1a1726, 12px 18px #1a1726, 15px 18px #1a1726, 18px 18px var(--px-gold),
-        3px 21px var(--px-gold), 6px 21px #1a1726, 9px 21px #1a1726, 12px 21px #1a1726, 15px 21px #1a1726, 18px 21px var(--px-gold),
-        0px 18px var(--px-skin-dk), 21px 18px var(--px-skin-dk), 24px 21px var(--px-skin-dk),
-        27px 3px #6b7280, 30px 3px #6b7280, 33px 3px #6b7280, 36px 3px #6b7280,
-        27px 6px var(--px-shirt-g), 30px 6px var(--px-shirt-g), 33px 6px var(--px-shirt-r), 36px 6px #6b7280,
-        27px 9px var(--px-shirt-g), 30px 9px var(--px-shirt-r), 33px 9px var(--px-shirt-g), 36px 9px #6b7280,
-        27px 12px #6b7280, 30px 12px #6b7280, 33px 12px #6b7280, 36px 12px #6b7280,
-        30px 15px #6b7280, 33px 15px #6b7280,
-        6px 24px var(--px-pants), 9px 24px var(--px-pants), 12px 24px var(--px-pants), 15px 24px var(--px-pants),
-        6px 27px var(--px-pants), 9px 27px var(--px-pants), 15px 27px var(--px-pants),
-        6px 30px var(--px-hair), 9px 30px var(--px-hair), 15px 30px var(--px-hair);
-    }
-    .sprite-accountant {
-      box-shadow:
-        6px 0 var(--px-hair), 9px 0 var(--px-hair), 12px 0 var(--px-hair), 15px 0 var(--px-hair),
-        3px 3px var(--px-hair), 6px 3px var(--px-hair), 9px 3px var(--px-hair), 12px 3px var(--px-hair), 15px 3px var(--px-hair), 18px 3px var(--px-hair),
-        6px 6px var(--px-skin), 9px 6px var(--px-skin), 12px 6px var(--px-skin), 15px 6px var(--px-skin),
-        3px 9px var(--px-glass), 6px 9px var(--px-skin), 9px 9px var(--px-dark), 12px 9px var(--px-glass), 15px 9px var(--px-dark), 18px 9px var(--px-skin), 21px 9px var(--px-glass),
-        6px 12px var(--px-skin), 9px 12px var(--px-skin), 12px 12px var(--px-skin-dk), 15px 12px var(--px-skin),
-        3px 15px var(--px-shirt-p), 6px 15px var(--px-shirt-p), 9px 15px var(--px-shirt-p), 12px 15px var(--px-shirt-p), 15px 15px var(--px-shirt-p), 18px 15px var(--px-shirt-p),
-        3px 18px var(--px-shirt-p), 6px 18px #7c3aed, 9px 18px var(--px-shirt-p), 12px 18px var(--px-shirt-p), 15px 18px #7c3aed, 18px 18px var(--px-shirt-p),
-        3px 21px var(--px-shirt-p), 6px 21px var(--px-shirt-p), 9px 21px var(--px-shirt-p), 12px 21px var(--px-shirt-p), 15px 21px var(--px-shirt-p), 18px 21px var(--px-shirt-p),
-        24px 15px var(--px-hair), 27px 15px var(--px-gold), 30px 15px var(--px-hair),
-        24px 18px var(--px-hair), 27px 18px var(--px-white), 30px 18px var(--px-hair),
-        24px 21px var(--px-hair), 27px 21px var(--px-white), 30px 21px var(--px-hair),
-        24px 24px var(--px-hair), 27px 24px var(--px-gold), 30px 24px var(--px-hair),
-        21px 18px var(--px-skin-dk), 0px 18px var(--px-skin-dk),
-        6px 24px var(--px-pants), 9px 24px var(--px-pants), 12px 24px var(--px-pants), 15px 24px var(--px-pants),
-        6px 27px var(--px-pants), 9px 27px var(--px-pants), 15px 27px var(--px-pants),
-        6px 30px var(--px-hair), 9px 30px var(--px-hair), 15px 30px var(--px-hair);
-    }
-    .sprite-token {
-      box-shadow:
-        6px 0 var(--px-gold), 9px 0 var(--px-gold-lt), 12px 0 var(--px-gold),
-        6px 6px var(--px-skin), 9px 6px var(--px-skin), 12px 6px var(--px-skin),
-        6px 9px var(--px-dark), 9px 9px var(--px-skin), 12px 9px var(--px-dark),
-        3px 12px var(--px-gold), 6px 12px var(--px-gold), 9px 12px var(--px-gold), 12px 12px var(--px-gold), 15px 12px var(--px-gold),
-        6px 15px var(--px-gold), 9px 15px #b8922a, 12px 15px var(--px-gold),
-        6px 18px var(--px-pants), 12px 18px var(--px-pants),
-        6px 21px var(--px-hair), 12px 21px var(--px-hair);
-      transform: scale(2);
-    }
+    /* ═══ FEED ═══ */
+    .feed-wrap{padding:0 16px 24px}
+    .feed{background:rgba(17,15,24,.7);border:1px solid var(--border2);border-radius:10px;padding:12px;max-width:960px;margin:0 auto}
+    .feed-title{font-family:'Space Grotesk',sans-serif;font-size:.85rem;font-weight:600;color:var(--fg2);margin-bottom:8px}
+    .feed-scroll{max-height:160px;overflow-y:auto;scrollbar-width:thin;scrollbar-color:var(--border) transparent}
+    .fe{display:flex;gap:6px;padding:2px 0;font-size:.7rem;color:var(--fg2);border-bottom:1px solid rgba(255,255,255,.02)}
+    .fe-t{font-family:'JetBrains Mono',monospace;font-size:.6rem;color:var(--fg3);flex-shrink:0;width:48px}
+    .fe-b{font-family:'JetBrains Mono',monospace;font-size:.5rem;font-weight:600;padding:0 3px;border-radius:2px;flex-shrink:0}
+    .fe-b.b-coord{color:var(--accent);background:rgba(212,175,55,.1)}.fe-b.b-sent{color:var(--info);background:rgba(96,165,250,.1)}.fe-b.b-chart{color:var(--success);background:rgba(52,211,153,.1)}.fe-b.b-risk{color:var(--warn);background:rgba(251,191,36,.1)}.fe-b.b-trade{color:var(--accent);background:rgba(212,175,55,.1)}.fe-b.b-acct{color:var(--purple);background:rgba(167,139,250,.1)}.fe-b.b-tok{color:var(--fg2);background:var(--surface2)}
+    .fe-m{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
-    /* ============================================================
-       AGENT PROFILE CARDS — RPG style
-       ============================================================ */
-    .profiles-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-      gap: var(--space-4);
-    }
-    .agent-card {
-      background: var(--glass-bg);
-      backdrop-filter: blur(var(--glass-blur));
-      border: 1px solid var(--color-border-muted);
-      border-radius: var(--radius-lg);
-      padding: var(--space-4);
-      transition: border-color 0.2s, box-shadow 0.2s;
-      position: relative;
-      overflow: hidden;
-    }
-    .agent-card:hover { border-color: var(--color-border); }
-    .agent-card.is-running { border-color: var(--color-accent); box-shadow: var(--glow-gold); }
-    .agent-card.is-error { border-color: var(--color-danger); }
+    .placeholder{display:flex;justify-content:center;align-items:center;min-height:200px;color:var(--fg3);font-size:.85rem;text-align:center}
+    .placeholder-icon{font-size:2rem;margin-bottom:10px;animation:pulse 2s ease-in-out infinite}
 
-    .card-header {
-      display: flex; align-items: center; gap: var(--space-3);
-      margin-bottom: var(--space-3);
-    }
-    .card-avatar {
-      width: 40px; height: 40px;
-      background: var(--color-surface-alt);
-      border-radius: var(--radius-md);
-      display: flex; align-items: center; justify-content: center;
-      font-size: 1.4rem;
-      border: 1px solid var(--color-border-muted);
-      flex-shrink: 0;
-      position: relative;
-      overflow: hidden;
-      image-rendering: pixelated;
-    }
-    .card-avatar .pixel-sprite {
-      transform: scale(1.2);
-      transform-origin: center;
-      position: absolute; top: 2px; left: 4px;
-    }
-    .card-info { flex: 1; min-width: 0; }
-    .card-name {
-      font-family: var(--font-display); font-weight: 600; font-size: var(--text-sm);
-      color: var(--color-fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-    }
-    .card-role { font-size: 0.7rem; color: var(--color-fg-subtle); }
-    .card-state {
-      font-family: var(--font-mono); font-size: 0.6rem; font-weight: 600;
-      padding: 1px 6px; border-radius: var(--radius-full);
-      border: 1px solid var(--color-border);
-    }
-    .card-state.idle { color: var(--color-fg-muted); }
-    .card-state.running { color: var(--color-accent); border-color: var(--color-accent); background: var(--color-accent-muted); }
-    .card-state.error { color: var(--color-danger); border-color: var(--color-danger); }
-
-    /* Level + XP bar */
-    .card-level-row {
-      display: flex; align-items: center; gap: var(--space-2);
-      margin-bottom: var(--space-2);
-    }
-    .level-badge {
-      font-family: var(--font-pixel); font-size: 7px;
-      color: var(--color-accent); white-space: nowrap;
-      background: var(--color-accent-muted);
-      padding: 2px 6px; border-radius: var(--radius-sm);
-      border: 1px solid rgba(212,175,55,0.2);
-    }
-    .xp-bar-wrap {
-      flex: 1; height: 8px;
-      background: var(--color-bg-inset);
-      border-radius: var(--radius-full);
-      overflow: hidden; position: relative;
-      border: 1px solid var(--color-border-muted);
-    }
-    .xp-bar-fill {
-      height: 100%; border-radius: var(--radius-full);
-      background: linear-gradient(90deg, var(--color-accent), var(--color-accent-hover));
-      transition: width 0.5s ease-out;
-      min-width: 2px;
-    }
-    .xp-text {
-      font-family: var(--font-mono); font-size: 0.6rem;
-      color: var(--color-fg-subtle); white-space: nowrap;
-    }
-
-    /* Stats row */
-    .card-stats {
-      display: grid; grid-template-columns: repeat(3, 1fr);
-      gap: var(--space-2);
-      margin-bottom: var(--space-3);
-    }
-    .card-stat {
-      text-align: center; padding: var(--space-1) 0;
-      background: var(--color-bg-inset);
-      border-radius: var(--radius-sm);
-    }
-    .card-stat-val {
-      font-family: var(--font-mono); font-size: var(--text-sm); font-weight: 600;
-      color: var(--color-fg);
-    }
-    .card-stat-val.earned { color: var(--color-success); }
-    .card-stat-val.accent { color: var(--color-accent); }
-    .card-stat-label { font-size: 0.6rem; color: var(--color-fg-subtle); text-transform: uppercase; }
-
-    /* Activity in card */
-    .card-activity {
-      font-size: 0.7rem; color: var(--color-fg-muted);
-      max-height: 60px; overflow-y: auto;
-      scrollbar-width: thin; scrollbar-color: var(--color-border) transparent;
-    }
-    .card-activity-entry {
-      padding: 1px 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-    }
-    .card-current-task {
-      font-family: var(--font-mono); font-size: 0.65rem;
-      color: var(--color-accent); margin-bottom: var(--space-2);
-      display: flex; align-items: center; gap: 4px;
-    }
-    .task-dot {
-      width: 5px; height: 5px; border-radius: 50%;
-      background: var(--color-accent);
-      animation: pulse-dot 1s ease-in-out infinite;
-    }
-
-    /* ============================================================
-       LIVE FEED
-       ============================================================ */
-    .live-feed {
-      background: var(--glass-bg); border: 1px solid var(--color-border-muted);
-      border-radius: var(--radius-lg); padding: var(--space-4);
-    }
-    .feed-title {
-      font-family: var(--font-display); font-size: var(--text-sm); font-weight: 600;
-      color: var(--color-fg-muted); margin-bottom: var(--space-3);
-      display: flex; align-items: center; gap: var(--space-2);
-    }
-    .feed-scroll {
-      max-height: 200px; overflow-y: auto;
-      scrollbar-width: thin; scrollbar-color: var(--color-border) transparent;
-    }
-    .feed-entry {
-      display: flex; gap: var(--space-2); padding: 2px 0;
-      font-size: 0.75rem; color: var(--color-fg-muted);
-      border-bottom: 1px solid rgba(255,255,255,0.02);
-    }
-    .feed-time { font-family: var(--font-mono); font-size: 0.65rem; color: var(--color-fg-subtle); flex-shrink: 0; width: 50px; }
-    .feed-badge {
-      font-family: var(--font-mono); font-size: 0.55rem; font-weight: 600;
-      padding: 0 4px; border-radius: 3px; flex-shrink: 0;
-    }
-    .feed-badge.coordinator { color: var(--color-accent); background: var(--color-accent-muted); }
-    .feed-badge.sentiment { color: var(--color-info); background: var(--color-info-muted); }
-    .feed-badge.chart { color: var(--color-success); background: var(--color-success-muted); }
-    .feed-badge.risk { color: var(--color-warning); background: rgba(251,191,36,0.1); }
-    .feed-badge.trader { color: var(--color-accent); background: var(--color-accent-muted); }
-    .feed-badge.accountant { color: #a78bfa; background: rgba(167,139,250,0.1); }
-    .feed-badge.token { color: var(--color-fg-muted); background: var(--color-surface-alt); }
-
-    .feed-msg { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-
-    /* ============================================================
-       Placeholder
-       ============================================================ */
-    .placeholder {
-      display: flex; justify-content: center; align-items: center;
-      min-height: 300px; color: var(--color-fg-subtle);
-      font-size: var(--text-sm); text-align: center;
-    }
-    .placeholder-icon { font-size: 2rem; margin-bottom: var(--space-3); animation: pulse-dot 2s ease-in-out infinite; }
-
-    /* ============================================================
-       Mobile
-       ============================================================ */
-    @media (max-width: 640px) {
-      .floor { padding: var(--space-3); gap: var(--space-3); }
-      .header-center { display: none; }
-      .kbd-hints { display: none; }
-      .trading-hall { height: 160px; }
-      .hall-char .pixel-sprite { transform: scale(1.8); }
-      .profiles-grid { grid-template-columns: 1fr; }
-    }
-    @media (prefers-reduced-motion: reduce) {
-      *, *::before, *::after {
-        animation-duration: 0.01ms !important;
-        animation-iteration-count: 1 !important;
-      }
-    }
+    @media(max-width:640px){.hdr-center{display:none}.rpg-map{aspect-ratio:4/4}.cards{grid-template-columns:1fr}}
+    @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;transition-duration:.01ms!important}}
   </style>
 </head>
-
 <body>
-  <header class="header">
-    <div class="header-left">
-      <div class="live-dot" id="liveDot"></div>
-      <span class="header-title">MCT Trading Floor</span>
+  <header class="hdr">
+    <div class="hdr-left"><div class="dot" id="dot"></div><span class="hdr-title">MCT Trading Floor</span></div>
+    <div class="hdr-center">
+      <div class="hdr-stat"><span class="hdr-stat-l">Uptime</span><span class="hdr-stat-v" id="uptime">--</span></div>
+      <div class="hdr-stat"><span class="hdr-stat-l">Cycles</span><span class="hdr-stat-v" id="cycles">--</span></div>
+      <div class="hdr-stat"><span class="badge idle" id="stateBadge">IDLE</span></div>
     </div>
-    <div class="header-center" id="headerCenter">
-      <div class="header-stat">
-        <span class="header-stat-label">Uptime</span>
-        <span class="header-stat-value" id="uptimeValue">--</span>
-      </div>
-      <div class="header-stat">
-        <span class="header-stat-label">Cycles</span>
-        <span class="header-stat-value" id="cycleCount">--</span>
-      </div>
-      <div class="header-stat">
-        <span class="state-badge idle" id="stateBadge">IDLE</span>
-      </div>
-    </div>
-    <div class="header-right">
-      <div class="kbd-hints">
-        <span><span class="kbd">Space</span> Refresh</span>
-        <span><span class="kbd">S</span> Scan</span>
-      </div>
-      <button class="toggle-btn active" id="autoRefreshBtn">Auto</button>
+    <div class="hdr-right">
+      <button class="tbtn on" id="autoBtn">Auto</button>
       <a href="/" class="back-link">&larr; Dashboard</a>
     </div>
   </header>
 
-  <main class="floor" id="floorContainer">
-    <div class="placeholder" id="loadingPlaceholder">
-      <div>
-        <div class="placeholder-icon">&#x1F4E1;</div>
-        <div>Connecting to trading floor...</div>
-      </div>
+  <div class="map-wrap">
+    <div class="rpg-map" id="rpgMap">
+      <!-- Rooms -->
+      <div class="rm rm-research" data-name="RESEARCH LAB"></div>
+      <div class="rm rm-command" data-name="COMMAND CENTER"></div>
+      <div class="rm rm-security" data-name="SECURITY"></div>
+      <div class="rm rm-trading" data-name="TRADING ROOM"></div>
+      <div class="rm rm-hall" data-name="MAIN HALL"></div>
+      <div class="rm rm-accountant" data-name="ACCOUNTS"></div>
+      <div class="rm rm-resting" data-name="REST AREA"></div>
+
+      <!-- Doors -->
+      <div class="door door-h" style="left:12%;top:calc(39% - 4px);"></div>
+      <div class="door door-h" style="left:45%;top:calc(39% - 4px);"></div>
+      <div class="door door-h" style="left:78%;top:calc(39% - 4px);"></div>
+      <div class="door door-h" style="left:12%;top:calc(41% - 4px);"></div>
+      <div class="door door-h" style="left:45%;top:calc(41% - 4px);"></div>
+      <div class="door door-h" style="left:78%;top:calc(41% - 4px);"></div>
+      <div class="door door-v" style="top:50%;left:calc(31% - 4px);"></div>
+      <div class="door door-v" style="top:50%;left:calc(33% - 4px);"></div>
+      <div class="door door-v" style="top:50%;left:calc(69% - 4px);"></div>
+      <div class="door door-v" style="top:15%;left:calc(31% - 4px);"></div>
+      <div class="door door-v" style="top:15%;left:calc(33% - 4px);"></div>
+      <div class="door door-v" style="top:15%;left:calc(69% - 4px);"></div>
+      <div class="door door-h" style="left:45%;top:calc(79% - 4px);"></div>
+      <div class="door door-h" style="left:45%;top:calc(81% - 4px);"></div>
+
+      <!-- Furniture — Research -->
+      <div class="furn desk" style="left:6%;top:20%"></div>
+      <div class="furn desk" style="left:18%;top:20%"></div>
+      <div class="furn bookshelf" style="left:2%;top:14%"></div>
+      <div class="furn chart-decor" style="left:14%;top:6%"></div>
+      <!-- Furniture — Command -->
+      <div class="furn desk" style="left:45%;top:16%;width:12%;height:6%"></div>
+      <div class="furn monitor" style="left:47%;top:10%"></div>
+      <div class="furn monitor" style="left:54%;top:10%"></div>
+      <div class="furn chart-decor" style="left:40%;top:4%;width:18%"></div>
+      <!-- Furniture — Security -->
+      <div class="furn shield-decor" style="left:76%;top:5%"></div>
+      <div class="furn shield-decor" style="left:82%;top:5%"></div>
+      <div class="furn shield-decor" style="left:88%;top:5%"></div>
+      <div class="furn desk" style="left:78%;top:20%"></div>
+      <div class="furn monitor" style="left:80%;top:14%"></div>
+      <!-- Furniture — Trading -->
+      <div class="furn desk" style="left:5%;top:56%"></div>
+      <div class="furn desk" style="left:16%;top:56%"></div>
+      <div class="furn monitor" style="left:7%;top:50%"></div>
+      <div class="furn monitor" style="left:18%;top:50%"></div>
+      <div class="furn chart-decor" style="left:5%;top:44%"></div>
+      <!-- Furniture — Accountant -->
+      <div class="furn desk" style="left:78%;top:56%"></div>
+      <div class="furn safe" style="left:90%;top:48%"></div>
+      <div class="furn bookshelf" style="left:72%;top:44%"></div>
+      <!-- Furniture — Resting -->
+      <div class="furn bed" style="left:36%;top:86%"></div>
+      <div class="furn bed" style="left:52%;top:86%"></div>
+      <div class="furn chair" style="left:48%;top:92%"></div>
+
+      <!-- Characters injected by JS -->
     </div>
-  </main>
+  </div>
 
-  <script>
-    const POLL_INTERVAL = 3000;
-    const MAX_FEED = 60;
-    let isAutoRefresh = true;
-    let pollTimer = null;
-    let isConnected = false;
-    let previousData = null;
-    let feedEntries = [];
+  <div class="cards-wrap"><div class="cards" id="profileCards"></div></div>
+  <div class="feed-wrap"><div class="feed" id="feedBox"><div class="feed-title">&#x1F4E1; Live Activity</div><div class="feed-scroll" id="feedScroll"></div></div></div>
 
-    /* ── Agent config ────────────────────────────────────── */
-    const CORE_AGENTS = [
-      { key: 'coordinator', name: 'Coordinator',   role: 'Pipeline Boss',    sprite: 'sprite-coordinator', icon: '\u{1F3DB}', patrol: 1 },
-      { key: 'sentiment',   name: 'SentimentAgent', role: 'Mood Analyst',    sprite: 'sprite-sentiment',   icon: '\u{2696}',  patrol: 2 },
-      { key: 'chart',       name: 'ChartAgent',     role: 'Signal Scanner',  sprite: 'sprite-chart',       icon: '\u{1F4CA}', patrol: 3 },
-      { key: 'risk',        name: 'RiskAgent',      role: 'Risk Gatekeeper', sprite: 'sprite-risk',        icon: '\u{1F6E1}', patrol: 4 },
-      { key: 'trader',      name: 'TraderAgent',    role: 'Trade Executor',  sprite: 'sprite-trader',      icon: '\u{1F4B0}', patrol: 5 },
-      { key: 'accountant',  name: 'AccountantAgent',role: 'Trade Auditor',   sprite: 'sprite-accountant',  icon: '\u{1F4D1}', patrol: 6 },
-    ];
+<script>
+/* ═══════════════════════════════════════════
+   AGENT DEFINITIONS
+   ═══════════════════════════════════════════ */
+const AGENTS = {
+  coordinator:{name:'Coordinator',role:'Pipeline Boss',sprite:'sp-coord',tag:'BOSS',
+    station:{x:50,y:22},room:'command'},
+  sentiment:{name:'SentimentAgent',role:'Mood Analyst',sprite:'sp-sent',tag:'SENT',
+    station:{x:10,y:26},room:'research'},
+  chart:{name:'ChartAgent',role:'Signal Scanner',sprite:'sp-chart',tag:'SCAN',
+    station:{x:22,y:26},room:'research'},
+  risk:{name:'RiskAgent',role:'Risk Guard',sprite:'sp-risk',tag:'RISK',
+    station:{x:82,y:26},room:'security'},
+  trader:{name:'TraderAgent',role:'Trade Executor',sprite:'sp-trader',tag:'EXEC',
+    station:{x:10,y:62},room:'trading'},
+  accountant:{name:'AccountantAgent',role:'Trade Auditor',sprite:'sp-acct',tag:'ACCT',
+    station:{x:82,y:62},room:'accountant'},
+};
 
-    /* ── Helpers ─────────────────────────────────────────── */
-    function formatUptime(s) {
-      if (!s && s !== 0) return '--';
-      const d = Math.floor(s/86400), h = Math.floor((s%86400)/3600), m = Math.floor((s%3600)/60);
-      const p = []; if (d) p.push(d+'d'); p.push(h+'h', m+'m'); return p.join(' ');
-    }
-    function formatRelativeTime(ts) {
-      if (!ts) return '--';
-      const d = Date.now() - ts;
-      if (d < 5000) return 'now';
-      if (d < 60000) return Math.floor(d/1000)+'s';
-      if (d < 3600000) return Math.floor(d/60000)+'m';
-      return Math.floor(d/3600000)+'h';
-    }
-    function esc(s) { const el = document.createElement('span'); el.textContent = s; return el.innerHTML; }
-    function fmtMoney(n) {
-      if (n == null || n === 0) return '$0';
-      if (n >= 1000) return '$' + (n/1000).toFixed(1) + 'k';
-      return '$' + n.toFixed(2);
-    }
-    function getBadgeClass(name) {
-      const n = (name||'').toLowerCase();
-      if (n.includes('coordinator')) return 'coordinator';
-      if (n.includes('sentiment')) return 'sentiment';
-      if (n.includes('chart')||n.includes('scanner')) return 'chart';
-      if (n.includes('risk')) return 'risk';
-      if (n.includes('trader')) return 'trader';
-      if (n.includes('accountant')) return 'accountant';
-      return 'token';
-    }
+const ROOMS = {
+  command:    {x:33,y:1,w:34,h:38},
+  research:   {x:0,y:1,w:31,h:38},
+  security:   {x:69,y:1,w:31,h:38},
+  trading:    {x:0,y:41,w:31,h:38},
+  hall:       {x:33,y:41,w:34,h:38},
+  accountant: {x:69,y:41,w:31,h:38},
+  resting:    {x:33,y:81,w:34,h:18},
+};
 
-    /* ── Hall characters ─────────────────────────────────── */
-    function getAnimClass(state, isRunning) {
-      if (isRunning || state === 'running') return 'working';
-      if (state === 'error') return 'error-anim';
-      if (state === 'paused' || state === 'stopped') return 'sleeping';
-      return 'idle-anim';
-    }
-    function getPatrolStyle(idx, state, isRunning) {
-      if (state === 'paused' || state === 'stopped') return `left: ${15 + idx * 12}%;`;
-      const patrolName = (isRunning || state === 'running') ? `patrol-fast-${(idx % 6) + 1}` : `patrol-${(idx % 7) + 1}`;
-      const dur = (isRunning || state === 'running') ? (5 + idx * 0.7) : (8 + idx * 1.5);
-      return `animation: ${patrolName} ${dur.toFixed(1)}s ease-in-out infinite;`;
-    }
+/* ═══ CHARACTER STATE ═══ */
+const chars = {};
+let feedEntries = [];
+let prevData = null;
+let autoRefresh = true;
+let pollTimer = null;
 
-    function renderHallCharacter(cfg, agentData, idx, isCycleRunning) {
-      const state = agentData?.state || 'idle';
-      const rpg = agentData?.rpg || {};
-      const isRunning = isCycleRunning && state === 'running';
-      const animCls = getAnimClass(state, isRunning);
-      const patrolStyle = getPatrolStyle(idx, state, isRunning);
-      const lvl = rpg.level || 1;
+function randInRoom(room) {
+  const r = ROOMS[room];
+  return { x: r.x + 4 + Math.random() * (r.w - 8), y: r.y + 14 + Math.random() * (r.h - 18) };
+}
 
-      return `<div class="hall-char ${animCls}" style="${patrolStyle}">
-        <div class="char-lvl">Lv${lvl}</div>
-        <div class="pixel-sprite ${cfg.sprite}"></div>
-        <div class="char-nametag">${cfg.key === 'coordinator' ? 'BOSS' : cfg.key.slice(0,4).toUpperCase()}</div>
-      </div>`;
-    }
+function getTargetRoom(state) {
+  if (state === 'running') return 'station';
+  if (state === 'paused' || state === 'stopped') return 'resting';
+  if (state === 'error') return 'station';
+  return 'hall';
+}
 
-    /* ── Trading Hall ────────────────────────────────────── */
-    function renderHall(health, agents) {
-      const isCycleActive = health.cycleRunning;
-      const taskDesc = (health.currentTask?.description || '').toLowerCase();
-      const stages = ['Sentiment','Kronos','Scanner','Risk','Trader','Audit'];
-      const activeStage = stages.findIndex(s => taskDesc.includes(s.toLowerCase()));
+function getAnimClass(state) {
+  if (state === 'running') return 'working';
+  if (state === 'error') return 'dizzy';
+  if (state === 'paused' || state === 'stopped') return 'asleep';
+  return 'idle';
+}
 
-      // Core agent characters
-      let chars = '';
-      CORE_AGENTS.forEach((cfg, i) => {
-        const data = cfg.key === 'coordinator' ? health : (agents[cfg.key] || {});
-        chars += renderHallCharacter(cfg, data, i, isCycleActive);
-      });
+function getThought(agentData) {
+  if (!agentData) return '';
+  if (agentData.currentTask) return agentData.currentTask.description || '';
+  const act = agentData.recentActivity;
+  if (act && act.length > 0) return act[0].message || '';
+  return '';
+}
 
-      // Token agent characters (show up to 8 in the hall)
-      const tokenKeys = Object.keys(agents).filter(k =>
-        !['sentiment','chart','risk','trader','accountant'].includes(k) && agents[k]?.rpg
-      );
-      tokenKeys.slice(0, 8).forEach((k, i) => {
-        const data = agents[k];
-        const lvl = data?.rpg?.level || 1;
-        const state = data?.state || 'idle';
-        const animCls = getAnimClass(state, isCycleActive);
-        const patrolStyle = getPatrolStyle(6 + i, state, isCycleActive);
-        chars += `<div class="hall-char ${animCls}" style="${patrolStyle}">
-          <div class="char-lvl">Lv${lvl}</div>
-          <div class="pixel-sprite sprite-token"></div>
-          <div class="char-nametag">${k.slice(0,4).toUpperCase()}</div>
-        </div>`;
-      });
+/* ═══ CREATE CHARACTER DOM ELEMENTS ═══ */
+function initCharacters() {
+  const map = document.getElementById('rpgMap');
+  for (const [key, cfg] of Object.entries(AGENTS)) {
+    const el = document.createElement('div');
+    el.className = 'agent-char idle';
+    el.id = 'char-' + key;
+    el.style.left = cfg.station.x + '%';
+    el.style.top = cfg.station.y + '%';
+    el.innerHTML = `
+      <div class="thought" id="thought-${key}"></div>
+      <div class="lvltag" id="lvl-${key}">Lv1</div>
+      <div class="pxs ${cfg.sprite}"></div>
+      <div class="nametag">${cfg.tag}</div>
+    `;
+    map.appendChild(el);
+    chars[key] = { el, x: cfg.station.x, y: cfg.station.y, targetRoom: 'station', wanderTimer: 0 };
+  }
+}
 
-      // Background desks
-      let desks = '';
-      for (let d = 0; d < 6; d++) {
-        desks += `<div class="hall-desk" style="left:${8 + d * 16}%;"></div>`;
-      }
+/* ═══ UPDATE CHARACTER POSITIONS ═══ */
+function updateCharacters(healthData) {
+  const agents = healthData.agents || {};
+  const now = Date.now();
 
-      return `
-        <div class="trading-hall">
-          <div class="hall-label">MCT TRADING FLOOR</div>
-          <div class="hall-pipeline">
-            ${stages.map((s, i) => {
-              const cls = i === activeStage ? 'active' : (activeStage > i ? 'done' : '');
-              return `<div class="hall-stage ${cls}">${s}</div>`;
-            }).join('')}
-          </div>
-          ${desks}
-          ${chars}
-        </div>
-      `;
+  for (const [key, cfg] of Object.entries(AGENTS)) {
+    const agentData = key === 'coordinator' ? healthData : agents[key];
+    if (!agentData) continue;
+    const ch = chars[key];
+    const state = agentData.state || 'idle';
+    const targetRoom = getTargetRoom(state);
+
+    // Update animation class
+    ch.el.className = 'agent-char ' + getAnimClass(state);
+
+    // Update level tag
+    const rpg = agentData.rpg || {};
+    document.getElementById('lvl-' + key).textContent = 'Lv' + (rpg.level || 1);
+
+    // Update thought bubble
+    const thought = getThought(agentData);
+    const thoughtEl = document.getElementById('thought-' + key);
+    if (thought) {
+      thoughtEl.textContent = thought.slice(0, 40);
+      thoughtEl.classList.add('show');
+    } else {
+      thoughtEl.classList.remove('show');
     }
 
-    /* ── Agent Profile Card ──────────────────────────────── */
-    function renderAgentCard(key, agentData, cfg) {
-      if (!agentData) return '';
-      const state = agentData.state || 'stopped';
-      const rpg = agentData.rpg || {};
-      const lvl = rpg.level || 1;
-      const xpProg = rpg.xpProgress || 0;
-      const xpNext = rpg.xpForNext || 100;
-      const xpCurrent = Math.round(xpProg * xpNext);
-      const totalEarned = rpg.totalEarned || 0;
-      const tasks = rpg.tasksCompleted || 0;
-      const successRate = rpg.successRate || 0;
-      const cardCls = state === 'running' ? 'is-running' : (state === 'error' ? 'is-error' : '');
-      const spriteClass = cfg ? cfg.sprite : 'sprite-token';
+    // Move to target
+    if (targetRoom === 'station') {
+      ch.el.style.left = cfg.station.x + '%';
+      ch.el.style.top = cfg.station.y + '%';
+      ch.targetRoom = 'station';
+    } else if (targetRoom !== ch.targetRoom || now - ch.wanderTimer > 5000) {
+      const room = targetRoom === 'hall' ? 'hall' : 'resting';
+      const pos = randInRoom(room);
+      ch.el.style.left = pos.x + '%';
+      ch.el.style.top = pos.y + '%';
+      ch.targetRoom = targetRoom;
+      ch.wanderTimer = now;
 
-      const activity = (agentData.recentActivity || []).slice(0, 3);
-      const activityHtml = activity.map(a =>
-        `<div class="card-activity-entry">${a.message || ''}</div>`
-      ).join('') || '<div class="card-activity-entry">No activity yet</div>';
-
-      const displayName = cfg ? cfg.name : agentData.name || key;
-      const displayRole = cfg ? cfg.role : (agentData.name || key).replace('Agent','') + ' Specialist';
-
-      return `
-        <div class="agent-card ${cardCls}">
-          <div class="card-header">
-            <div class="card-avatar">
-              <div class="pixel-sprite ${spriteClass}"></div>
-            </div>
-            <div class="card-info">
-              <div class="card-name">${esc(displayName)}</div>
-              <div class="card-role">${esc(displayRole)}</div>
-            </div>
-            <span class="card-state ${state}">${state}</span>
-          </div>
-          <div class="card-level-row">
-            <span class="level-badge">Lv.${lvl}</span>
-            <div class="xp-bar-wrap">
-              <div class="xp-bar-fill" style="width:${Math.round(xpProg * 100)}%"></div>
-            </div>
-            <span class="xp-text">${xpCurrent}/${xpNext}</span>
-          </div>
-          <div class="card-stats">
-            <div class="card-stat">
-              <div class="card-stat-val earned">${fmtMoney(totalEarned)}</div>
-              <div class="card-stat-label">Earned</div>
-            </div>
-            <div class="card-stat">
-              <div class="card-stat-val accent">${tasks}</div>
-              <div class="card-stat-label">Tasks</div>
-            </div>
-            <div class="card-stat">
-              <div class="card-stat-val">${successRate}%</div>
-              <div class="card-stat-label">Success</div>
-            </div>
-          </div>
-          ${agentData.currentTask ? `<div class="card-current-task"><div class="task-dot"></div>${esc(agentData.currentTask.description)}</div>` : ''}
-          <div class="card-activity">${activityHtml}</div>
-        </div>
-      `;
-    }
-
-    /* ── Live Feed ────────────────────────────────────────── */
-    function renderFeed(activity) {
-      if (activity && activity.length) {
-        for (const a of activity) {
-          if (!feedEntries.find(e => e.ts === a.ts && e.message === a.message)) {
-            feedEntries.push(a);
-          }
-        }
-        feedEntries.sort((a,b) => a.ts - b.ts);
-        if (feedEntries.length > MAX_FEED) feedEntries = feedEntries.slice(-MAX_FEED);
-      }
-
-      const entries = feedEntries.slice(-30).map(a => {
-        const t = new Date(a.ts);
-        const time = t.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-        const badge = getBadgeClass(a.agent);
-        const shortName = (a.agent||'').replace('Agent','').slice(0,6);
-        return `<div class="feed-entry">
-          <span class="feed-time">${time}</span>
-          <span class="feed-badge ${badge}">${esc(shortName)}</span>
-          <span class="feed-msg">${esc(a.message || '')}</span>
-        </div>`;
-      }).join('');
-
-      return `
-        <div class="live-feed">
-          <div class="feed-title">&#x1F4E1; Live Activity</div>
-          <div class="feed-scroll" id="feedScroll">${entries}</div>
-        </div>
-      `;
-    }
-
-    /* ── Full Render ─────────────────────────────────────── */
-    function renderFloor(data) {
-      const health = data.health || {};
-      const agents = health.agents || {};
-      const container = document.getElementById('floorContainer');
-
-      // Header
-      document.getElementById('uptimeValue').textContent = formatUptime(data.uptime);
-      document.getElementById('cycleCount').textContent = health.runCount ?? '--';
-      const stateBadge = document.getElementById('stateBadge');
-      const displayState = health.cycleRunning ? 'SCANNING' : (health.state || 'stopped').toUpperCase();
-      stateBadge.textContent = displayState;
-      stateBadge.className = 'state-badge ' + (health.cycleRunning ? 'running' : (health.state || 'stopped'));
-
-      // Core agent cards
-      let coreCards = '';
-      CORE_AGENTS.forEach(cfg => {
-        const agentData = cfg.key === 'coordinator' ? health : agents[cfg.key];
-        if (agentData) coreCards += renderAgentCard(cfg.key, agentData, cfg);
-      });
-
-      // Token agent cards (sorted by level desc)
-      const tokenKeys = Object.keys(agents).filter(k =>
-        !['sentiment','chart','risk','trader','accountant'].includes(k)
-      );
-      tokenKeys.sort((a, b) => {
-        const la = agents[b]?.rpg?.level || 1;
-        const lb = agents[a]?.rpg?.level || 1;
-        return la - lb;
-      });
-      let tokenCards = '';
-      for (const k of tokenKeys.slice(0, 20)) {
-        tokenCards += renderAgentCard(k, agents[k], null);
-      }
-
-      container.innerHTML = [
-        renderHall(health, agents),
-        '<div class="profiles-grid">',
-          coreCards,
-          tokenCards,
-        '</div>',
-        renderFeed(data.activity),
-      ].join('');
-
-      requestAnimationFrame(() => {
-        const feed = document.getElementById('feedScroll');
-        if (feed) feed.scrollTop = feed.scrollHeight;
-      });
-    }
-
-    /* ── Auth — uses same cookie auth as main dashboard ──── */
-    function getAuthHeaders() {
-      return {};
-    }
-    function getFetchOpts(extra = {}) {
-      return { credentials: 'same-origin', ...extra };
-    }
-
-    /* ── Fetch ────────────────────────────────────────────── */
-    async function fetchData() {
-      try {
-        const res = await fetch('/api/admin/agents/health', getFetchOpts());
-        if (res.status === 401 || res.status === 403) {
-          document.getElementById('floorContainer').innerHTML = `
-            <div class="placeholder"><div>
-              <div class="placeholder-icon">&#x1F512;</div>
-              <div>Authentication Required</div>
-              <div style="font-size:var(--text-sm);color:var(--color-fg-subtle);margin-top:var(--space-3);">
-                <a href="/" style="color:var(--color-accent);">Log in</a> first.
-              </div>
-            </div></div>`;
-          stopPolling();
-          return;
-        }
-        if (!res.ok) throw new Error('HTTP ' + res.status);
-
-        const data = await res.json();
-        if (!isConnected) {
-          isConnected = true;
-          document.getElementById('liveDot').classList.remove('disconnected');
-        }
-        previousData = data;
-        renderFloor(data);
-      } catch (err) {
-        console.error('Fetch error:', err);
-        isConnected = false;
-        document.getElementById('liveDot').classList.add('disconnected');
-        if (!previousData) {
-          document.getElementById('floorContainer').innerHTML = `
-            <div class="placeholder"><div>
-              <div class="placeholder-icon" style="color:var(--color-danger);">&#x26A0;</div>
-              <div style="color:var(--color-danger);">Disconnected</div>
-              <div style="font-size:var(--text-xs);color:var(--color-fg-subtle);">Retrying...</div>
-            </div></div>`;
-        }
+      // Add walking class briefly
+      if (state === 'idle') {
+        ch.el.className = 'agent-char walking';
+        setTimeout(() => {
+          if (ch.el.className.includes('walking')) ch.el.className = 'agent-char idle';
+        }, 3000);
       }
     }
+  }
+}
 
-    function startPolling() { pollTimer = setInterval(fetchData, POLL_INTERVAL); fetchData(); }
-    function stopPolling() { clearInterval(pollTimer); pollTimer = null; }
-    function toggleAutoRefresh() {
-      isAutoRefresh = !isAutoRefresh;
-      const btn = document.getElementById('autoRefreshBtn');
-      btn.classList.toggle('active', isAutoRefresh);
-      if (isAutoRefresh) startPolling(); else stopPolling();
+/* ═══ WANDER IDLE AGENTS ═══ */
+setInterval(() => {
+  for (const [key, ch] of Object.entries(chars)) {
+    if (ch.targetRoom === 'hall') {
+      const pos = randInRoom('hall');
+      ch.el.style.left = pos.x + '%';
+      ch.el.style.top = pos.y + '%';
+      ch.el.className = 'agent-char walking';
+      ch.wanderTimer = Date.now();
+      setTimeout(() => {
+        if (ch.el.className.includes('walking')) ch.el.className = 'agent-char idle';
+      }, 3000);
     }
-
-    /* ── Keyboard ────────────────────────────────────────── */
-    document.addEventListener('keydown', e => {
-      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
-      if (e.code === 'Space') { e.preventDefault(); toggleAutoRefresh(); }
-      if (e.code === 'KeyS') {
-        e.preventDefault();
-        fetch('/api/admin/agents/command', getFetchOpts({
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ command: 'force-scan' }),
-        })).then(() => fetchData()).catch(() => {});
+    if (ch.targetRoom === 'resting') {
+      // Sleeping agents stay put, just re-randomize occasionally
+      if (Math.random() < 0.2) {
+        const pos = randInRoom('resting');
+        ch.el.style.left = pos.x + '%';
+        ch.el.style.top = pos.y + '%';
       }
+    }
+  }
+}, 6000);
+
+/* ═══ PROFILE CARDS ═══ */
+function esc(s) { const e = document.createElement('span'); e.textContent = s; return e.innerHTML; }
+function fmtMoney(n) { if (!n) return '$0'; if (n >= 1000) return '$'+(n/1000).toFixed(1)+'k'; return '$'+n.toFixed(2); }
+
+function renderCards(healthData) {
+  const agents = healthData.agents || {};
+  const container = document.getElementById('profileCards');
+  let html = '';
+
+  // Core agents
+  for (const [key, cfg] of Object.entries(AGENTS)) {
+    const d = key === 'coordinator' ? healthData : agents[key];
+    if (!d) continue;
+    html += renderCard(key, d, cfg);
+  }
+
+  // Token agents (top 12 by level)
+  const tokenKeys = Object.keys(agents).filter(k => !Object.keys(AGENTS).includes(k) && k !== 'coordinator');
+  tokenKeys.sort((a, b) => (agents[b]?.rpg?.level || 1) - (agents[a]?.rpg?.level || 1));
+  for (const k of tokenKeys.slice(0, 12)) {
+    html += renderCard(k, agents[k], {
+      name: agents[k]?.name || k,
+      role: (agents[k]?.name || k).replace('Agent','') + ' Specialist',
+      sprite: 'sp-token',
     });
+  }
 
-    /* ── Init ────────────────────────────────────────────── */
-    document.getElementById('autoRefreshBtn').addEventListener('click', toggleAutoRefresh);
-    startPolling();
-  </script>
+  container.innerHTML = html;
+}
+
+function renderCard(key, d, cfg) {
+  const state = d.state || 'stopped';
+  const rpg = d.rpg || {};
+  const lvl = rpg.level || 1;
+  const xpProg = rpg.xpProgress || 0;
+  const xpNext = rpg.xpForNext || 100;
+  const xpCur = Math.round(xpProg * xpNext);
+  const earned = rpg.totalEarned || 0;
+  const tasks = rpg.tasksCompleted || 0;
+  const rate = rpg.successRate || 0;
+  const cls = state === 'running' ? ' on' : state === 'error' ? ' err' : '';
+  const act = (d.recentActivity || []).slice(0, 2).map(a =>
+    '<div>' + esc(a.message || '') + '</div>'
+  ).join('') || '<div>No activity</div>';
+
+  return `<div class="card${cls}">
+    <div class="card-top">
+      <div class="card-av"><div class="pxs ${cfg.sprite}"></div></div>
+      <div class="card-info">
+        <div class="card-name">${esc(cfg.name)}</div>
+        <div class="card-role">${esc(cfg.role)}</div>
+      </div>
+      <span class="card-st ${state}">${state}</span>
+    </div>
+    <div class="lvl-row">
+      <span class="lvl-badge">Lv.${lvl}</span>
+      <div class="xp-bar"><div class="xp-fill" style="width:${Math.round(xpProg*100)}%"></div></div>
+      <span class="xp-txt">${xpCur}/${xpNext}</span>
+    </div>
+    <div class="card-stats">
+      <div class="cs"><div class="cs-v grn">${fmtMoney(earned)}</div><div class="cs-l">Earned</div></div>
+      <div class="cs"><div class="cs-v gld">${tasks}</div><div class="cs-l">Tasks</div></div>
+      <div class="cs"><div class="cs-v">${rate}%</div><div class="cs-l">Success</div></div>
+    </div>
+    ${d.currentTask ? `<div class="card-task"><div class="td"></div>${esc(d.currentTask.description||'')}</div>` : ''}
+    <div class="card-act">${act}</div>
+  </div>`;
+}
+
+/* ═══ LIVE FEED ═══ */
+function updateFeed(activity) {
+  if (!activity || !activity.length) return;
+  for (const a of activity) {
+    if (!feedEntries.find(e => e.ts === a.ts && e.message === a.message)) feedEntries.push(a);
+  }
+  feedEntries.sort((a, b) => a.ts - b.ts);
+  if (feedEntries.length > 60) feedEntries = feedEntries.slice(-60);
+
+  const scroll = document.getElementById('feedScroll');
+  scroll.innerHTML = feedEntries.slice(-25).map(a => {
+    const t = new Date(a.ts).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+    const n = (a.agent||'').toLowerCase();
+    const bc = n.includes('coordinator')?'b-coord':n.includes('sentiment')?'b-sent':n.includes('chart')?'b-chart':n.includes('risk')?'b-risk':n.includes('trader')?'b-trade':n.includes('accountant')?'b-acct':'b-tok';
+    const sn = (a.agent||'').replace('Agent','').slice(0,6);
+    return `<div class="fe"><span class="fe-t">${t}</span><span class="fe-b ${bc}">${esc(sn)}</span><span class="fe-m">${esc(a.message||'')}</span></div>`;
+  }).join('');
+  requestAnimationFrame(() => { scroll.scrollTop = scroll.scrollHeight; });
+}
+
+/* ═══ HEADER ═══ */
+function updateHeader(data) {
+  const h = data.health || {};
+  document.getElementById('uptime').textContent = formatUptime(data.uptime);
+  document.getElementById('cycles').textContent = h.runCount ?? '--';
+  const b = document.getElementById('stateBadge');
+  const st = h.cycleRunning ? 'SCANNING' : (h.state || 'stopped').toUpperCase();
+  b.textContent = st;
+  b.className = 'badge ' + (h.cycleRunning ? 'running' : (h.state || 'idle'));
+}
+
+function formatUptime(s) {
+  if (!s && s !== 0) return '--';
+  const d = Math.floor(s/86400), h = Math.floor((s%86400)/3600), m = Math.floor((s%3600)/60);
+  const p = []; if (d) p.push(d+'d'); p.push(h+'h',m+'m'); return p.join(' ');
+}
+
+/* ═══ DATA FETCH ═══ */
+async function fetchData() {
+  try {
+    const res = await fetch('/api/admin/agents/health', { credentials: 'same-origin' });
+    if (res.status === 401 || res.status === 403) {
+      document.getElementById('profileCards').innerHTML = '<div class="placeholder"><div><div class="placeholder-icon">&#x1F512;</div><div>Log in on <a href="/" style="color:var(--accent)">dashboard</a> first</div></div></div>';
+      stopPolling(); return;
+    }
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    document.getElementById('dot').classList.remove('off');
+    prevData = data;
+
+    updateHeader(data);
+    updateCharacters(data.health || {});
+    renderCards(data.health || {});
+    updateFeed(data.activity);
+  } catch (err) {
+    console.error(err);
+    document.getElementById('dot').classList.add('off');
+  }
+}
+
+function startPolling() { pollTimer = setInterval(fetchData, 3000); fetchData(); }
+function stopPolling() { clearInterval(pollTimer); pollTimer = null; }
+
+document.getElementById('autoBtn').addEventListener('click', () => {
+  autoRefresh = !autoRefresh;
+  document.getElementById('autoBtn').classList.toggle('on', autoRefresh);
+  if (autoRefresh) startPolling(); else stopPolling();
+});
+
+document.addEventListener('keydown', e => {
+  if (e.target.tagName==='INPUT'||e.target.tagName==='TEXTAREA') return;
+  if (e.code==='Space') { e.preventDefault(); document.getElementById('autoBtn').click(); }
+  if (e.code==='KeyS') {
+    e.preventDefault();
+    fetch('/api/admin/agents/command',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'same-origin',body:JSON.stringify({command:'force-scan'})}).then(()=>fetchData()).catch(()=>{});
+  }
+});
+
+/* ═══ INIT ═══ */
+initCharacters();
+startPolling();
+</script>
 </body>
 </html>
