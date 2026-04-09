@@ -350,55 +350,97 @@ function initCharacters() {
 }
 
 /* ═══ UPDATE CHARACTER POSITIONS ═══ */
-function updateCharacters(healthData) {
-  const agents = healthData.agents || {};
+function updateCharacter(key, agentData, cfg) {
   const now = Date.now();
+  let ch = chars[key];
 
-  for (const [key, cfg] of Object.entries(AGENTS)) {
-    const agentData = key === 'coordinator' ? healthData : agents[key];
-    if (!agentData) continue;
-    const ch = chars[key];
-    const state = agentData.state || 'idle';
-    const targetRoom = getTargetRoom(state);
+  // Dynamically create character if it doesn't exist (token agents)
+  if (!ch) {
+    const map = document.getElementById('rpgMap');
+    const el = document.createElement('div');
+    el.className = 'agent-char idle';
+    el.id = 'char-' + key;
+    const startPos = randInRoom('hall');
+    el.style.left = startPos.x + '%';
+    el.style.top = startPos.y + '%';
+    const tag = key.replace('usdt','').toUpperCase().slice(0,4);
+    el.innerHTML = `
+      <div class="thought" id="thought-${key}"></div>
+      <div class="lvltag" id="lvl-${key}">Lv1</div>
+      <div class="pxs sp-token"></div>
+      <div class="nametag">${tag}</div>
+    `;
+    map.appendChild(el);
+    chars[key] = { el, x: startPos.x, y: startPos.y, targetRoom: 'hall', wanderTimer: 0 };
+    ch = chars[key];
+  }
 
-    // Update animation class
-    ch.el.className = 'agent-char ' + getAnimClass(state);
+  const state = agentData.state || 'idle';
+  const targetRoom = getTargetRoom(state);
 
-    // Update level tag
-    const rpg = agentData.rpg || {};
-    document.getElementById('lvl-' + key).textContent = 'Lv' + (rpg.level || 1);
+  // Update animation class
+  ch.el.className = 'agent-char ' + getAnimClass(state);
 
-    // Update thought bubble
-    const thought = getThought(agentData);
-    const thoughtEl = document.getElementById('thought-' + key);
+  // Update level tag
+  const rpg = agentData.rpg || {};
+  const lvlEl = document.getElementById('lvl-' + key);
+  if (lvlEl) lvlEl.textContent = 'Lv' + (rpg.level || 1);
+
+  // Update thought bubble
+  const thought = getThought(agentData);
+  const thoughtEl = document.getElementById('thought-' + key);
+  if (thoughtEl) {
     if (thought) {
       thoughtEl.textContent = thought.slice(0, 40);
       thoughtEl.classList.add('show');
     } else {
       thoughtEl.classList.remove('show');
     }
+  }
 
-    // Move to target
-    if (targetRoom === 'station') {
-      ch.el.style.left = cfg.station.x + '%';
-      ch.el.style.top = cfg.station.y + '%';
-      ch.targetRoom = 'station';
-    } else if (targetRoom !== ch.targetRoom || now - ch.wanderTimer > 5000) {
-      const room = targetRoom === 'hall' ? 'hall' : 'resting';
-      const pos = randInRoom(room);
-      ch.el.style.left = pos.x + '%';
-      ch.el.style.top = pos.y + '%';
-      ch.targetRoom = targetRoom;
-      ch.wanderTimer = now;
+  // Move to target
+  if (targetRoom === 'station' && cfg.station) {
+    ch.el.style.left = cfg.station.x + '%';
+    ch.el.style.top = cfg.station.y + '%';
+    ch.targetRoom = 'station';
+  } else if (targetRoom === 'station' && !cfg.station) {
+    // Token agents go to research room when working (their "station")
+    const pos = randInRoom('research');
+    ch.el.style.left = pos.x + '%';
+    ch.el.style.top = pos.y + '%';
+    ch.targetRoom = 'station';
+  } else if (targetRoom !== ch.targetRoom || now - ch.wanderTimer > 5000) {
+    const room = targetRoom === 'hall' ? 'hall' : 'resting';
+    const pos = randInRoom(room);
+    ch.el.style.left = pos.x + '%';
+    ch.el.style.top = pos.y + '%';
+    ch.targetRoom = targetRoom;
+    ch.wanderTimer = now;
 
-      // Add walking class briefly
-      if (state === 'idle') {
-        ch.el.className = 'agent-char walking';
-        setTimeout(() => {
-          if (ch.el.className.includes('walking')) ch.el.className = 'agent-char idle';
-        }, 3000);
-      }
+    if (state === 'idle') {
+      ch.el.className = 'agent-char walking';
+      setTimeout(() => {
+        if (ch.el.className.includes('walking')) ch.el.className = 'agent-char idle';
+      }, 3000);
     }
+  }
+}
+
+function updateCharacters(healthData) {
+  const agents = healthData.agents || {};
+
+  // Core agents
+  for (const [key, cfg] of Object.entries(AGENTS)) {
+    const agentData = key === 'coordinator' ? healthData : agents[key];
+    if (!agentData) continue;
+    updateCharacter(key, agentData, cfg);
+  }
+
+  // Token agents (show top 12 on map)
+  const tokenKeys = Object.keys(agents).filter(k => !Object.keys(AGENTS).includes(k) && k !== 'coordinator');
+  tokenKeys.sort((a, b) => (agents[b]?.rpg?.level || 1) - (agents[a]?.rpg?.level || 1));
+  for (const k of tokenKeys.slice(0, 12)) {
+    updateCharacter(k, agents[k], { name: agents[k]?.name || k, sprite: 'sp-token' });
   }
 }
 

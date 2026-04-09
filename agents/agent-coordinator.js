@@ -143,6 +143,17 @@ class AgentCoordinator extends BaseAgent {
     const cycleStart = Date.now();
     this.addActivity('info', 'Cycle started');
 
+    // Keep all agents visually "running" for the entire cycle duration
+    // so the emulator shows them at their stations instead of idle in the hall
+    const coreAgents = [this.sentimentAgent, this.chartAgent, this.riskAgent, this.traderAgent, this.accountantAgent];
+    for (const a of coreAgents) {
+      if (!a.paused) {
+        a.managedByCoordinator = true;
+        a.state = 'running';
+        a.currentTask = { description: 'Standing by for pipeline...', startedAt: Date.now() };
+      }
+    }
+
     try {
       // Resolve top N coins from DB (same as cycle.js main())
       let topNCoins = 50;
@@ -156,6 +167,7 @@ class AgentCoordinator extends BaseAgent {
       let mood = 'neutral';
       if (!this.sentimentAgent.paused) {
         this.currentTask = { description: 'Step 1/6: SentimentAgent checking mood', startedAt: Date.now() };
+        this.sentimentAgent.currentTask = { description: 'Analyzing market mood...', startedAt: Date.now() };
         try {
           const sentResult = await this.sentimentAgent.run();
           if (sentResult) mood = sentResult.mood;
@@ -190,7 +202,15 @@ class AgentCoordinator extends BaseAgent {
 
       const tokenEntries = [...this.tokenAgents.entries()].filter(([, a]) => !a.paused);
       this.currentTask = { description: `Step 3/6: Scanning ${tokenEntries.length} tokens`, startedAt: Date.now() };
+      this.chartAgent.currentTask = { description: `Scanning ${tokenEntries.length} tokens for setups...`, startedAt: Date.now() };
       this.chartAgent.addActivity('info', `Scanning ${tokenEntries.length} tokens for SMC setups...`);
+
+      // Set all token agents to managed so they stay "running" during scan
+      for (const [, ta] of tokenEntries) {
+        ta.managedByCoordinator = true;
+        ta.state = 'running';
+        ta.currentTask = { description: 'Waiting to scan...', startedAt: Date.now() };
+      }
 
       // Run token agents in parallel batches (8 at a time, 200ms delay between batches)
       const BATCH_SIZE = 8;
@@ -230,6 +250,13 @@ class AgentCoordinator extends BaseAgent {
         } catch {}
       }
 
+      // Release token agents back to idle after scanning
+      for (const [, ta] of tokenEntries) {
+        ta.managedByCoordinator = false;
+        ta.state = 'idle';
+        ta.currentTask = null;
+      }
+
       if (signals.length > 0) {
         const signalDetails = signals.map(s => `${s.symbol.replace('USDT','')} ${s.direction} score=${s.score || '?'}`).join(', ');
         this.addActivity('info', `${signals.length} signal(s): ${signalDetails}`);
@@ -257,6 +284,7 @@ class AgentCoordinator extends BaseAgent {
 
       if (signals.length > 0 && !this.riskAgent.paused) {
         this.currentTask = { description: 'Step 5/6: RiskAgent evaluating', startedAt: Date.now() };
+        this.riskAgent.currentTask = { description: 'Evaluating signal risk...', startedAt: Date.now() };
         let openPositions = [];
         try {
           const { query: dbQuery } = require('../db');
@@ -288,6 +316,7 @@ class AgentCoordinator extends BaseAgent {
 
       if (!this.traderAgent.paused) {
         this.currentTask = { description: 'Step 6/6: TraderAgent executing', startedAt: Date.now() };
+        this.traderAgent.currentTask = { description: 'Executing approved trades...', startedAt: Date.now() };
         tradeResult = await this.traderAgent.run({ signals: approvedSignals, mode: 'signals' });
         if (tradeResult?.executed) {
           const execSymbols = approvedSignals.map(s => `${s.symbol.replace('USDT','')} ${s.direction}`).join(', ');
@@ -309,6 +338,7 @@ class AgentCoordinator extends BaseAgent {
       // ── Step 6: AccountantAgent auto-audit (every 10 cycles) ──
       if (!this.accountantAgent.paused && this.runCount % 10 === 0) {
         this.currentTask = { description: 'AccountantAgent auditing', startedAt: Date.now() };
+        this.accountantAgent.currentTask = { description: 'Auditing trade records...', startedAt: Date.now() };
         try {
           const auditResult = await this.accountantAgent.run({ mode: 'audit' });
           if (auditResult?.fixed > 0) {
@@ -355,6 +385,14 @@ class AgentCoordinator extends BaseAgent {
     } finally {
       this.cycleRunning = false;
       this.currentTask = null;
+      // Reset all agents back to idle after cycle completes
+      for (const a of coreAgents) {
+        a.managedByCoordinator = false;
+        if (a.state === 'running') {
+          a.state = 'idle';
+          a.currentTask = null;
+        }
+      }
     }
   }
 

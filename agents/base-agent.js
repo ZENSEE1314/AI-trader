@@ -26,6 +26,7 @@ class BaseAgent {
     this.options = options;
     this.paused = false;
     this.currentTask = null; // { description, startedAt }
+    this.managedByCoordinator = false; // when true, coordinator controls state lifecycle
 
     // Profile — subclasses override via defineProfile()
     this._profile = {
@@ -57,7 +58,9 @@ class BaseAgent {
   }
 
   async run(context = {}) {
-    if (this.state === AGENT_STATES.RUNNING) {
+    // When managedByCoordinator is true, skip the "already running" guard
+    // because the coordinator pre-sets state to 'running' for the full pipeline
+    if (this.state === AGENT_STATES.RUNNING && !this.managedByCoordinator) {
       this.log('Already running — skipping');
       return null;
     }
@@ -74,8 +77,11 @@ class BaseAgent {
 
     try {
       const result = await this.execute(context);
-      this.state = AGENT_STATES.IDLE;
-      this.currentTask = null;
+      // Only reset to idle if coordinator isn't managing our state
+      if (!this.managedByCoordinator) {
+        this.state = AGENT_STATES.IDLE;
+        this.currentTask = null;
+      }
       this.addActivity('success', `Cycle #${this.runCount} complete`);
       return result;
     } catch (err) {
