@@ -41,59 +41,69 @@
     /* ═══ MAP CONTAINER ═══ */
     .map-wrap{padding:16px;display:flex;justify-content:center}
     .rpg-map{
-      position:relative;width:100%;max-width:960px;aspect-ratio:48/36;
+      position:relative;width:100%;max-width:960px;aspect-ratio:1/1;
       background:var(--corridor);border:4px solid #333;border-radius:6px;
       image-rendering:pixelated;overflow:hidden;
       box-shadow:0 0 40px rgba(0,0,0,.6),inset 0 0 60px rgba(0,0,0,.3);
     }
 
-    /* ═══ ROOMS ═══ */
+    /* ═══ ROOMS — 3x3 grid ═══ */
     .rm{position:absolute;border:3px solid var(--wall2);border-radius:3px;overflow:hidden}
     .rm::before{content:attr(data-name);position:absolute;top:4px;left:50%;transform:translateX(-50%);font-family:'Press Start 2P',monospace;font-size:6px;color:rgba(255,255,255,.2);white-space:nowrap;z-index:2;pointer-events:none}
-    /* Floor tile pattern */
     .rm::after{content:'';position:absolute;inset:0;opacity:.15;pointer-events:none;
       background:repeating-linear-gradient(0deg,transparent,transparent 19px,rgba(255,255,255,.08) 19px,rgba(255,255,255,.08) 20px),
                  repeating-linear-gradient(90deg,transparent,transparent 19px,rgba(255,255,255,.08) 19px,rgba(255,255,255,.08) 20px)}
 
-    /* Room positions */
-    .rm-research{left:0%;top:0%;width:31%;height:39%;background:linear-gradient(135deg,#121828,#0f1520)}
-    .rm-command{left:33%;top:0%;width:34%;height:39%;background:linear-gradient(135deg,#1a1520,#161020)}
-    .rm-security{left:69%;top:0%;width:31%;height:39%;background:linear-gradient(135deg,#101820,#0c1418)}
-    .rm-trading{left:0%;top:41%;width:31%;height:38%;background:linear-gradient(135deg,#1a1218,#160e14)}
-    .rm-hall{left:33%;top:41%;width:34%;height:38%;background:linear-gradient(135deg,#14121e,#100e18);border-color:#333}
-    .rm-accountant{left:69%;top:41%;width:31%;height:38%;background:linear-gradient(135deg,#151020,#110c1a)}
-    .rm-resting{left:33%;top:81%;width:34%;height:18%;background:linear-gradient(135deg,#12100a,#0e0c08)}
+    /* Row 1 */
+    .rm-research{left:0%;top:0%;width:32%;height:32%;background:linear-gradient(135deg,#121828,#0f1520)}
+    .rm-command{left:34%;top:0%;width:32%;height:32%;background:linear-gradient(135deg,#1a1520,#161020)}
+    .rm-security{left:68%;top:0%;width:32%;height:32%;background:linear-gradient(135deg,#101820,#0c1418)}
+    /* Row 2 */
+    .rm-trading{left:0%;top:34%;width:32%;height:32%;background:linear-gradient(135deg,#1a1218,#160e14)}
+    .rm-hall{left:34%;top:34%;width:32%;height:32%;background:linear-gradient(135deg,#14121e,#100e18);border-color:#333}
+    .rm-accountant{left:68%;top:34%;width:32%;height:32%;background:linear-gradient(135deg,#151020,#110c1a)}
+    /* Row 3 */
+    .rm-briefing{left:0%;top:68%;width:32%;height:32%;background:linear-gradient(135deg,#18140c,#141008)}
+    .rm-resting{left:34%;top:68%;width:32%;height:32%;background:linear-gradient(135deg,#12100a,#0e0c08)}
+    .rm-vault{left:68%;top:68%;width:32%;height:32%;background:linear-gradient(135deg,#1a1810,#16140c)}
 
     /* Door gaps — overlay strips that hide wall */
     .door{position:absolute;background:var(--corridor);z-index:3}
-    /* Horizontal doors (between rows) */
-    .door-h{height:8px;width:12%}
-    /* Vertical doors (between columns) */
-    .door-v{width:8px;height:12%}
+    .door-h{height:8px;width:10%}
+    .door-v{width:8px;height:10%}
+    /* Door markers — colored rectangles at gap positions */
+    .door-mark{position:absolute;z-index:4;border-radius:1px;opacity:.6}
+    .door-mark-h{width:14px;height:4px;background:var(--accent)}
+    .door-mark-v{width:4px;height:14px;background:var(--accent)}
 
     /* ═══ FURNITURE ═══ */
     .furn{position:absolute;border-radius:2px;z-index:1}
-    .desk{background:#2a2020;border:1px solid #3a3030;width:10%;height:8%}
+    .desk{background:#2a2020;border:1px solid #3a3030;width:8%;height:6%}
     .desk::after{content:'';position:absolute;top:1px;left:15%;width:35%;height:40%;background:var(--success);opacity:.4;border-radius:1px}
-    .monitor{background:#1a1a2a;border:1px solid #2a2a4a;width:6%;height:5%}
+    .monitor{background:#1a1a2a;border:1px solid #2a2a4a;width:5%;height:4%}
     .monitor::after{content:'';position:absolute;inset:1px;background:var(--info);opacity:.25;border-radius:1px}
-    .bookshelf{background:#2a2018;border:1px solid #3a3028;width:3%;height:18%}
+    .bookshelf{background:#2a2018;border:1px solid #3a3028;width:2.5%;height:14%}
     .bookshelf::after{content:'';position:absolute;top:10%;left:15%;right:15%;height:25%;background:var(--danger);opacity:.3;border-radius:1px}
-    .chair{background:#1a1726;border:1px solid var(--border2);width:4%;height:4%;border-radius:50%}
-    .bed{background:#2a2018;border:1px solid #3a3028;width:10%;height:6%;border-radius:3px}
+    .chair{background:#1a1726;border:1px solid var(--border2);width:3.5%;height:3.5%;border-radius:50%}
+    .bed{background:#2a2018;border:1px solid #3a3028;width:8%;height:5%;border-radius:3px}
     .bed::after{content:'';position:absolute;left:2px;top:2px;width:30%;height:60%;background:var(--fg3);opacity:.3;border-radius:2px}
-    .shield-decor{background:var(--info);width:4%;height:5%;border-radius:2px 2px 50% 50%;opacity:.15;border:1px solid rgba(96,165,250,.2)}
-    .chart-decor{background:var(--surface2);border:1px solid var(--border2);width:14%;height:10%}
+    .shield-decor{background:var(--info);width:3.5%;height:4%;border-radius:2px 2px 50% 50%;opacity:.15;border:1px solid rgba(96,165,250,.2)}
+    .chart-decor{background:var(--surface2);border:1px solid var(--border2);width:12%;height:8%}
     .chart-decor::after{content:'';position:absolute;bottom:2px;left:2px;right:2px;height:60%;
       background:linear-gradient(90deg,transparent 0%,var(--success) 20%,var(--success) 22%,transparent 22%,transparent 30%,var(--danger) 40%,var(--danger) 42%,transparent 42%,transparent 50%,var(--success) 60%,var(--success) 62%,transparent 62%,transparent 70%,var(--success) 80%,var(--success) 82%,transparent 82%);
       opacity:.3}
-    .safe{background:#333;border:2px solid #555;width:5%;height:7%;border-radius:2px}
+    .safe{background:#333;border:2px solid #555;width:4.5%;height:6%;border-radius:2px}
     .safe::after{content:'';position:absolute;top:35%;left:50%;transform:translateX(-50%);width:20%;height:25%;background:var(--accent);opacity:.3;border-radius:50%}
+    /* Briefing room table */
+    .round-table{background:#2a2420;border:2px solid #3a3430;width:10%;height:10%;border-radius:50%;opacity:.7}
+    .round-table::after{content:'';position:absolute;inset:20%;background:#1a1410;border-radius:50%;opacity:.5}
+    /* Vault gold bar */
+    .gold-bar{background:var(--accent);width:3%;height:2%;border-radius:1px;opacity:.25;border:1px solid var(--accent2)}
 
     /* ═══ PIXEL CHARACTERS ═══ */
     .agent-char{
       position:absolute;z-index:10;pointer-events:none;
-      transition:left 3s ease-in-out,top 3s ease-in-out;
+      transition:left 0.8s ease-in-out,top 0.8s ease-in-out;
       image-rendering:pixelated;
     }
     .agent-char .pxs{width:3px;height:3px;background:transparent;transform:scale(2);transform-origin:bottom center}
@@ -107,7 +117,6 @@
       font-family:'Press Start 2P',monospace;font-size:4px;color:var(--accent);white-space:nowrap;
       text-shadow:0 0 4px rgba(212,175,55,.5);
     }
-    /* Thought bubble */
     .agent-char .thought{
       position:absolute;bottom:calc(100% + 6px);left:50%;transform:translateX(-50%);
       font-family:'JetBrains Mono',monospace;font-size:5px;color:var(--fg);white-space:nowrap;
@@ -183,7 +192,7 @@
     .placeholder{display:flex;justify-content:center;align-items:center;min-height:200px;color:var(--fg3);font-size:.85rem;text-align:center}
     .placeholder-icon{font-size:2rem;margin-bottom:10px;animation:pulse 2s ease-in-out infinite}
 
-    @media(max-width:640px){.hdr-center{display:none}.rpg-map{aspect-ratio:4/4}.cards{grid-template-columns:1fr}}
+    @media(max-width:640px){.hdr-center{display:none}.rpg-map{aspect-ratio:1/1}.cards{grid-template-columns:1fr}}
     @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;transition-duration:.01ms!important}}
   </style>
 </head>
@@ -203,61 +212,116 @@
 
   <div class="map-wrap">
     <div class="rpg-map" id="rpgMap">
-      <!-- Rooms -->
+      <!-- Rooms — 3x3 grid -->
       <div class="rm rm-research" data-name="RESEARCH LAB"></div>
       <div class="rm rm-command" data-name="COMMAND CENTER"></div>
       <div class="rm rm-security" data-name="SECURITY"></div>
       <div class="rm rm-trading" data-name="TRADING ROOM"></div>
       <div class="rm rm-hall" data-name="MAIN HALL"></div>
       <div class="rm rm-accountant" data-name="ACCOUNTS"></div>
+      <div class="rm rm-briefing" data-name="BRIEFING ROOM"></div>
       <div class="rm rm-resting" data-name="REST AREA"></div>
+      <div class="rm rm-vault" data-name="VAULT"></div>
 
-      <!-- Doors -->
-      <div class="door door-h" style="left:12%;top:calc(39% - 4px);"></div>
-      <div class="door door-h" style="left:45%;top:calc(39% - 4px);"></div>
-      <div class="door door-h" style="left:78%;top:calc(39% - 4px);"></div>
-      <div class="door door-h" style="left:12%;top:calc(41% - 4px);"></div>
-      <div class="door door-h" style="left:45%;top:calc(41% - 4px);"></div>
-      <div class="door door-h" style="left:78%;top:calc(41% - 4px);"></div>
-      <div class="door door-v" style="top:50%;left:calc(31% - 4px);"></div>
-      <div class="door door-v" style="top:50%;left:calc(33% - 4px);"></div>
-      <div class="door door-v" style="top:50%;left:calc(69% - 4px);"></div>
-      <div class="door door-v" style="top:15%;left:calc(31% - 4px);"></div>
-      <div class="door door-v" style="top:15%;left:calc(33% - 4px);"></div>
-      <div class="door door-v" style="top:15%;left:calc(69% - 4px);"></div>
-      <div class="door door-h" style="left:45%;top:calc(79% - 4px);"></div>
-      <div class="door door-h" style="left:45%;top:calc(81% - 4px);"></div>
+      <!-- Doors — horizontal (between rows) -->
+      <!-- Row 1 ↔ Row 2 -->
+      <div class="door door-h" style="left:11%;top:calc(32% - 4px)"></div>
+      <div class="door door-h" style="left:11%;top:calc(34% - 4px)"></div>
+      <div class="door door-h" style="left:45%;top:calc(32% - 4px)"></div>
+      <div class="door door-h" style="left:45%;top:calc(34% - 4px)"></div>
+      <div class="door door-h" style="left:79%;top:calc(32% - 4px)"></div>
+      <div class="door door-h" style="left:79%;top:calc(34% - 4px)"></div>
+      <!-- Row 2 ↔ Row 3 -->
+      <div class="door door-h" style="left:11%;top:calc(66% - 4px)"></div>
+      <div class="door door-h" style="left:11%;top:calc(68% - 4px)"></div>
+      <div class="door door-h" style="left:45%;top:calc(66% - 4px)"></div>
+      <div class="door door-h" style="left:45%;top:calc(68% - 4px)"></div>
+      <div class="door door-h" style="left:79%;top:calc(66% - 4px)"></div>
+      <div class="door door-h" style="left:79%;top:calc(68% - 4px)"></div>
 
-      <!-- Furniture — Research -->
-      <div class="furn desk" style="left:6%;top:20%"></div>
-      <div class="furn desk" style="left:18%;top:20%"></div>
-      <div class="furn bookshelf" style="left:2%;top:14%"></div>
-      <div class="furn chart-decor" style="left:14%;top:6%"></div>
-      <!-- Furniture — Command -->
-      <div class="furn desk" style="left:45%;top:16%;width:12%;height:6%"></div>
-      <div class="furn monitor" style="left:47%;top:10%"></div>
-      <div class="furn monitor" style="left:54%;top:10%"></div>
-      <div class="furn chart-decor" style="left:40%;top:4%;width:18%"></div>
+      <!-- Doors — vertical (between columns) -->
+      <!-- Col 1 ↔ Col 2 -->
+      <div class="door door-v" style="top:11%;left:calc(32% - 4px)"></div>
+      <div class="door door-v" style="top:11%;left:calc(34% - 4px)"></div>
+      <div class="door door-v" style="top:45%;left:calc(32% - 4px)"></div>
+      <div class="door door-v" style="top:45%;left:calc(34% - 4px)"></div>
+      <div class="door door-v" style="top:79%;left:calc(32% - 4px)"></div>
+      <div class="door door-v" style="top:79%;left:calc(34% - 4px)"></div>
+      <!-- Col 2 ↔ Col 3 -->
+      <div class="door door-v" style="top:11%;left:calc(66% - 4px)"></div>
+      <div class="door door-v" style="top:11%;left:calc(68% - 4px)"></div>
+      <div class="door door-v" style="top:45%;left:calc(66% - 4px)"></div>
+      <div class="door door-v" style="top:45%;left:calc(68% - 4px)"></div>
+      <div class="door door-v" style="top:79%;left:calc(66% - 4px)"></div>
+      <div class="door door-v" style="top:79%;left:calc(68% - 4px)"></div>
+
+      <!-- Door markers — colored indicators at doorway positions -->
+      <!-- Row 1↔2 markers -->
+      <div class="door-mark door-mark-h" style="left:calc(16% - 7px);top:calc(33% - 2px)"></div>
+      <div class="door-mark door-mark-h" style="left:calc(50% - 7px);top:calc(33% - 2px)"></div>
+      <div class="door-mark door-mark-h" style="left:calc(84% - 7px);top:calc(33% - 2px)"></div>
+      <!-- Row 2↔3 markers -->
+      <div class="door-mark door-mark-h" style="left:calc(16% - 7px);top:calc(67% - 2px)"></div>
+      <div class="door-mark door-mark-h" style="left:calc(50% - 7px);top:calc(67% - 2px)"></div>
+      <div class="door-mark door-mark-h" style="left:calc(84% - 7px);top:calc(67% - 2px)"></div>
+      <!-- Col 1↔2 markers -->
+      <div class="door-mark door-mark-v" style="left:calc(33% - 2px);top:calc(16% - 7px)"></div>
+      <div class="door-mark door-mark-v" style="left:calc(33% - 2px);top:calc(50% - 7px)"></div>
+      <div class="door-mark door-mark-v" style="left:calc(33% - 2px);top:calc(84% - 7px)"></div>
+      <!-- Col 2↔3 markers -->
+      <div class="door-mark door-mark-v" style="left:calc(67% - 2px);top:calc(16% - 7px)"></div>
+      <div class="door-mark door-mark-v" style="left:calc(67% - 2px);top:calc(50% - 7px)"></div>
+      <div class="door-mark door-mark-v" style="left:calc(67% - 2px);top:calc(84% - 7px)"></div>
+
+      <!-- Furniture — Research Lab -->
+      <div class="furn desk" style="left:5%;top:16%"></div>
+      <div class="furn desk" style="left:16%;top:16%"></div>
+      <div class="furn bookshelf" style="left:1.5%;top:10%"></div>
+      <div class="furn chart-decor" style="left:10%;top:4%"></div>
+      <!-- Furniture — Command Center -->
+      <div class="furn desk" style="left:44%;top:14%;width:10%;height:5%"></div>
+      <div class="furn monitor" style="left:46%;top:8%"></div>
+      <div class="furn monitor" style="left:52%;top:8%"></div>
+      <div class="furn chart-decor" style="left:40%;top:3%;width:16%"></div>
       <!-- Furniture — Security -->
-      <div class="furn shield-decor" style="left:76%;top:5%"></div>
-      <div class="furn shield-decor" style="left:82%;top:5%"></div>
-      <div class="furn shield-decor" style="left:88%;top:5%"></div>
-      <div class="furn desk" style="left:78%;top:20%"></div>
-      <div class="furn monitor" style="left:80%;top:14%"></div>
-      <!-- Furniture — Trading -->
-      <div class="furn desk" style="left:5%;top:56%"></div>
-      <div class="furn desk" style="left:16%;top:56%"></div>
-      <div class="furn monitor" style="left:7%;top:50%"></div>
-      <div class="furn monitor" style="left:18%;top:50%"></div>
-      <div class="furn chart-decor" style="left:5%;top:44%"></div>
+      <div class="furn shield-decor" style="left:74%;top:4%"></div>
+      <div class="furn shield-decor" style="left:80%;top:4%"></div>
+      <div class="furn shield-decor" style="left:86%;top:4%"></div>
+      <div class="furn desk" style="left:76%;top:16%"></div>
+      <div class="furn monitor" style="left:78%;top:10%"></div>
+      <!-- Furniture — Trading Room -->
+      <div class="furn desk" style="left:4%;top:48%"></div>
+      <div class="furn desk" style="left:15%;top:48%"></div>
+      <div class="furn monitor" style="left:6%;top:42%"></div>
+      <div class="furn monitor" style="left:17%;top:42%"></div>
+      <div class="furn chart-decor" style="left:4%;top:36%"></div>
       <!-- Furniture — Accountant -->
-      <div class="furn desk" style="left:78%;top:56%"></div>
-      <div class="furn safe" style="left:90%;top:48%"></div>
-      <div class="furn bookshelf" style="left:72%;top:44%"></div>
-      <!-- Furniture — Resting -->
-      <div class="furn bed" style="left:36%;top:86%"></div>
-      <div class="furn bed" style="left:52%;top:86%"></div>
-      <div class="furn chair" style="left:48%;top:92%"></div>
+      <div class="furn desk" style="left:76%;top:48%"></div>
+      <div class="furn safe" style="left:90%;top:40%"></div>
+      <div class="furn bookshelf" style="left:70%;top:38%"></div>
+      <!-- Furniture — Briefing Room -->
+      <div class="furn round-table" style="left:11%;top:78%"></div>
+      <div class="furn chair" style="left:8%;top:75%"></div>
+      <div class="furn chair" style="left:18%;top:75%"></div>
+      <div class="furn chair" style="left:8%;top:87%"></div>
+      <div class="furn chair" style="left:18%;top:87%"></div>
+      <div class="furn chair" style="left:5%;top:81%"></div>
+      <div class="furn chair" style="left:23%;top:81%"></div>
+      <!-- Furniture — Rest Area -->
+      <div class="furn bed" style="left:37%;top:76%"></div>
+      <div class="furn bed" style="left:52%;top:76%"></div>
+      <div class="furn bed" style="left:37%;top:86%"></div>
+      <div class="furn chair" style="left:48%;top:90%"></div>
+      <!-- Furniture — Vault -->
+      <div class="furn safe" style="left:72%;top:72%"></div>
+      <div class="furn safe" style="left:80%;top:72%"></div>
+      <div class="furn safe" style="left:90%;top:72%"></div>
+      <div class="furn safe" style="left:72%;top:84%"></div>
+      <div class="furn safe" style="left:80%;top:84%"></div>
+      <div class="furn gold-bar" style="left:86%;top:80%"></div>
+      <div class="furn gold-bar" style="left:90%;top:80%"></div>
+      <div class="furn gold-bar" style="left:88%;top:83%"></div>
+      <div class="furn gold-bar" style="left:92%;top:76%"></div>
 
       <!-- Characters injected by JS -->
     </div>
@@ -272,28 +336,115 @@
    ═══════════════════════════════════════════ */
 const AGENTS = {
   coordinator:{name:'Coordinator',role:'Pipeline Boss',sprite:'sp-coord',tag:'BOSS',
-    station:{x:50,y:22},room:'command'},
+    station:{x:50,y:18},room:'command'},
   sentiment:{name:'SentimentAgent',role:'Mood Analyst',sprite:'sp-sent',tag:'SENT',
-    station:{x:10,y:26},room:'research'},
+    station:{x:10,y:18},room:'research'},
   chart:{name:'ChartAgent',role:'Signal Scanner',sprite:'sp-chart',tag:'SCAN',
-    station:{x:22,y:26},room:'research'},
+    station:{x:22,y:18},room:'research'},
   risk:{name:'RiskAgent',role:'Risk Guard',sprite:'sp-risk',tag:'RISK',
-    station:{x:82,y:26},room:'security'},
+    station:{x:82,y:18},room:'security'},
   trader:{name:'TraderAgent',role:'Trade Executor',sprite:'sp-trader',tag:'EXEC',
-    station:{x:10,y:62},room:'trading'},
+    station:{x:10,y:52},room:'trading'},
   accountant:{name:'AccountantAgent',role:'Trade Auditor',sprite:'sp-acct',tag:'ACCT',
-    station:{x:82,y:62},room:'accountant'},
+    station:{x:82,y:52},room:'accountant'},
 };
 
+/* Room bounding boxes (x, y, w, h in % of map) */
 const ROOMS = {
-  command:    {x:33,y:1,w:34,h:38},
-  research:   {x:0,y:1,w:31,h:38},
-  security:   {x:69,y:1,w:31,h:38},
-  trading:    {x:0,y:41,w:31,h:38},
-  hall:       {x:33,y:41,w:34,h:38},
-  accountant: {x:69,y:41,w:31,h:38},
-  resting:    {x:33,y:81,w:34,h:18},
+  research:   {x:0, y:0, w:32, h:32, col:0, row:0},
+  command:    {x:34,y:0, w:32, h:32, col:1, row:0},
+  security:   {x:68,y:0, w:32, h:32, col:2, row:0},
+  trading:    {x:0, y:34,w:32, h:32, col:0, row:1},
+  hall:       {x:34,y:34,w:32, h:32, col:1, row:1},
+  accountant: {x:68,y:34,w:32, h:32, col:2, row:1},
+  briefing:   {x:0, y:68,w:32, h:32, col:0, row:2},
+  resting:    {x:34,y:68,w:32, h:32, col:1, row:2},
+  vault:      {x:68,y:68,w:32, h:32, col:2, row:2},
 };
+
+/* ═══ DOOR WAYPOINTS ═══
+   Each door connects two rooms and has an (x,y) position on the map.
+   Doors are at corridor midpoints between adjacent rooms. */
+const DOORS = {
+  'research-command':     {x:33, y:16},
+  'command-security':     {x:67, y:16},
+  'research-trading':     {x:16, y:33},
+  'command-hall':         {x:50, y:33},
+  'security-accountant':  {x:84, y:33},
+  'trading-hall':         {x:33, y:50},
+  'hall-accountant':      {x:67, y:50},
+  'trading-briefing':     {x:16, y:67},
+  'hall-resting':         {x:50, y:67},
+  'accountant-vault':     {x:84, y:67},
+  'briefing-resting':     {x:33, y:84},
+  'resting-vault':        {x:67, y:84},
+};
+
+/* Room adjacency graph built from DOORS */
+const ADJACENCY = {};
+for (const [key, pos] of Object.entries(DOORS)) {
+  const [a, b] = key.split('-');
+  if (!ADJACENCY[a]) ADJACENCY[a] = [];
+  if (!ADJACENCY[b]) ADJACENCY[b] = [];
+  ADJACENCY[a].push({room: b, door: key, pos});
+  ADJACENCY[b].push({room: a, door: key, pos});
+}
+
+/* BFS: find shortest path of rooms from `from` to `to` */
+function findRoomPath(from, to) {
+  if (from === to) return [from];
+  const visited = new Set([from]);
+  const queue = [[from]];
+  while (queue.length > 0) {
+    const path = queue.shift();
+    const current = path[path.length - 1];
+    for (const neighbor of (ADJACENCY[current] || [])) {
+      if (visited.has(neighbor.room)) continue;
+      const newPath = [...path, neighbor.room];
+      if (neighbor.room === to) return newPath;
+      visited.add(neighbor.room);
+      queue.push(newPath);
+    }
+  }
+  return [from];
+}
+
+/* Convert room path to waypoint coordinates the agent walks through */
+function roomPathToWaypoints(roomPath, destX, destY) {
+  const waypoints = [];
+  for (let i = 0; i < roomPath.length - 1; i++) {
+    const a = roomPath[i];
+    const b = roomPath[i + 1];
+    const doorKey = DOORS[a + '-' + b] ? a + '-' + b : b + '-' + a;
+    const door = DOORS[doorKey];
+    if (door) {
+      waypoints.push({x: door.x, y: door.y});
+    }
+  }
+  waypoints.push({x: destX, y: destY});
+  return waypoints;
+}
+
+/* ═══ COLLISION AVOIDANCE — slot assignment within rooms ═══ */
+const roomSlotCounters = {};
+
+function getSlotOffset(agentKey, room) {
+  if (!roomSlotCounters[room]) roomSlotCounters[room] = {};
+  if (roomSlotCounters[room][agentKey] === undefined) {
+    const idx = Object.keys(roomSlotCounters[room]).length;
+    roomSlotCounters[room][agentKey] = idx;
+  }
+  const idx = roomSlotCounters[room][agentKey];
+  const col = idx % 3;
+  const row = Math.floor(idx / 3);
+  return {dx: (col - 1) * 5, dy: (row - 1) * 5};
+}
+
+function clearSlot(agentKey, room) {
+  if (roomSlotCounters[room]) {
+    delete roomSlotCounters[room][agentKey];
+  }
+}
 
 /* ═══ CHARACTER STATE ═══ */
 const chars = {};
@@ -301,10 +452,12 @@ let feedEntries = [];
 let prevData = null;
 let autoRefresh = true;
 let pollTimer = null;
+const STEP_DURATION = 800;
 
 function randInRoom(room) {
   const r = ROOMS[room];
-  return { x: r.x + 4 + Math.random() * (r.w - 8), y: r.y + 14 + Math.random() * (r.h - 18) };
+  if (!r) return {x: 50, y: 50};
+  return {x: r.x + 4 + Math.random() * (r.w - 8), y: r.y + 10 + Math.random() * (r.h - 14)};
 }
 
 function getTargetRoom(state) {
@@ -329,6 +482,42 @@ function getThought(agentData) {
   return '';
 }
 
+/* Determine which room a coordinate falls in */
+function roomAtPos(x, y) {
+  for (const [name, r] of Object.entries(ROOMS)) {
+    if (x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h) return name;
+  }
+  return 'hall';
+}
+
+/* ═══ WALK AGENT THROUGH WAYPOINTS ═══ */
+function walkAgent(key, waypoints, finalClass) {
+  const ch = chars[key];
+  if (!ch || waypoints.length === 0) return;
+
+  ch.isWalking = true;
+  ch.walkAbort = false;
+  ch.el.className = 'agent-char walking';
+
+  function step(i) {
+    if (ch.walkAbort || i >= waypoints.length) {
+      ch.isWalking = false;
+      ch.el.className = 'agent-char ' + finalClass;
+      ch.currentRoom = roomAtPos(
+        parseFloat(ch.el.style.left),
+        parseFloat(ch.el.style.top)
+      );
+      return;
+    }
+    const wp = waypoints[i];
+    ch.el.style.left = wp.x + '%';
+    ch.el.style.top = wp.y + '%';
+    setTimeout(() => step(i + 1), STEP_DURATION);
+  }
+
+  step(0);
+}
+
 /* ═══ CREATE CHARACTER DOM ELEMENTS ═══ */
 function initCharacters() {
   const map = document.getElementById('rpgMap');
@@ -336,8 +525,9 @@ function initCharacters() {
     const el = document.createElement('div');
     el.className = 'agent-char idle';
     el.id = 'char-' + key;
-    el.style.left = cfg.station.x + '%';
-    el.style.top = cfg.station.y + '%';
+    const startPos = randInRoom('hall');
+    el.style.left = startPos.x + '%';
+    el.style.top = startPos.y + '%';
     el.innerHTML = `
       <div class="thought" id="thought-${key}"></div>
       <div class="lvltag" id="lvl-${key}">Lv1</div>
@@ -345,7 +535,11 @@ function initCharacters() {
       <div class="nametag">${cfg.tag}</div>
     `;
     map.appendChild(el);
-    chars[key] = { el, x: cfg.station.x, y: cfg.station.y, targetRoom: 'station', wanderTimer: 0 };
+    chars[key] = {
+      el, x: startPos.x, y: startPos.y,
+      targetRoom: 'hall', currentRoom: 'hall',
+      wanderTimer: 0, isWalking: false, walkAbort: false
+    };
   }
 }
 
@@ -354,7 +548,6 @@ function updateCharacter(key, agentData, cfg) {
   const now = Date.now();
   let ch = chars[key];
 
-  // Dynamically create character if it doesn't exist (token agents)
   if (!ch) {
     const map = document.getElementById('rpgMap');
     const el = document.createElement('div');
@@ -371,22 +564,22 @@ function updateCharacter(key, agentData, cfg) {
       <div class="nametag">${tag}</div>
     `;
     map.appendChild(el);
-    chars[key] = { el, x: startPos.x, y: startPos.y, targetRoom: 'hall', wanderTimer: 0 };
+    chars[key] = {
+      el, x: startPos.x, y: startPos.y,
+      targetRoom: 'hall', currentRoom: 'hall',
+      wanderTimer: 0, isWalking: false, walkAbort: false
+    };
     ch = chars[key];
   }
 
   const state = agentData.state || 'idle';
-  const targetRoom = getTargetRoom(state);
+  const desiredTarget = getTargetRoom(state);
+  const animClass = getAnimClass(state);
 
-  // Update animation class
-  ch.el.className = 'agent-char ' + getAnimClass(state);
-
-  // Update level tag
   const rpg = agentData.rpg || {};
   const lvlEl = document.getElementById('lvl-' + key);
   if (lvlEl) lvlEl.textContent = 'Lv' + (rpg.level || 1);
 
-  // Update thought bubble
   const thought = getThought(agentData);
   const thoughtEl = document.getElementById('thought-' + key);
   if (thoughtEl) {
@@ -398,75 +591,117 @@ function updateCharacter(key, agentData, cfg) {
     }
   }
 
-  // Move to target
-  if (targetRoom === 'station' && cfg.station) {
-    ch.el.style.left = cfg.station.x + '%';
-    ch.el.style.top = cfg.station.y + '%';
-    ch.targetRoom = 'station';
-  } else if (targetRoom === 'station' && !cfg.station) {
-    // Token agents go to research room when working (their "station")
-    const pos = randInRoom('research');
-    ch.el.style.left = pos.x + '%';
-    ch.el.style.top = pos.y + '%';
-    ch.targetRoom = 'station';
-  } else if (targetRoom !== ch.targetRoom || now - ch.wanderTimer > 5000) {
-    const room = targetRoom === 'hall' ? 'hall' : 'resting';
-    const pos = randInRoom(room);
-    ch.el.style.left = pos.x + '%';
-    ch.el.style.top = pos.y + '%';
-    ch.targetRoom = targetRoom;
-    ch.wanderTimer = now;
+  if (ch.isWalking) return;
 
-    if (state === 'idle') {
-      ch.el.className = 'agent-char walking';
-      setTimeout(() => {
-        if (ch.el.className.includes('walking')) ch.el.className = 'agent-char idle';
-      }, 3000);
+  let destRoom;
+  let destX, destY;
+
+  if (desiredTarget === 'station') {
+    destRoom = cfg.room || 'research';
+    if (cfg.station) {
+      destX = cfg.station.x;
+      destY = cfg.station.y;
+    } else {
+      const offset = getSlotOffset(key, destRoom);
+      const r = ROOMS[destRoom];
+      destX = r.x + r.w / 2 + offset.dx;
+      destY = r.y + r.h / 2 + offset.dy;
     }
+  } else if (desiredTarget === 'resting') {
+    destRoom = 'resting';
+    const offset = getSlotOffset(key, 'resting');
+    const r = ROOMS.resting;
+    destX = r.x + r.w / 2 + offset.dx;
+    destY = r.y + r.h / 2 + offset.dy;
+  } else {
+    destRoom = 'hall';
+    if (ch.targetRoom === 'hall' && ch.currentRoom === 'hall' && now - ch.wanderTimer < 5000) {
+      return;
+    }
+    const offset = getSlotOffset(key, 'hall');
+    const r = ROOMS.hall;
+    destX = r.x + 6 + Math.random() * (r.w - 12) + offset.dx * 0.5;
+    destY = r.y + 10 + Math.random() * (r.h - 14) + offset.dy * 0.5;
+    destX = Math.max(r.x + 2, Math.min(r.x + r.w - 2, destX));
+    destY = Math.max(r.y + 8, Math.min(r.y + r.h - 4, destY));
   }
+
+  if (desiredTarget === ch.targetRoom && ch.currentRoom === destRoom && desiredTarget !== 'hall') {
+    ch.el.className = 'agent-char ' + animClass;
+    return;
+  }
+
+  clearSlot(key, ch.currentRoom);
+  ch.targetRoom = desiredTarget;
+
+  const fromRoom = ch.currentRoom || 'hall';
+  if (fromRoom === destRoom) {
+    ch.el.style.left = destX + '%';
+    ch.el.style.top = destY + '%';
+    ch.el.className = 'agent-char ' + animClass;
+    ch.currentRoom = destRoom;
+    ch.wanderTimer = now;
+    return;
+  }
+
+  const roomPath = findRoomPath(fromRoom, destRoom);
+  const waypoints = roomPathToWaypoints(roomPath, destX, destY);
+  walkAgent(key, waypoints, animClass);
+  ch.currentRoom = destRoom;
+  ch.wanderTimer = now;
 }
 
 function updateCharacters(healthData) {
   const agents = healthData.agents || {};
 
-  // Core agents
   for (const [key, cfg] of Object.entries(AGENTS)) {
     const agentData = key === 'coordinator' ? healthData : agents[key];
     if (!agentData) continue;
     updateCharacter(key, agentData, cfg);
   }
 
-  // Token agents (show top 12 on map)
   const tokenKeys = Object.keys(agents).filter(k => !Object.keys(AGENTS).includes(k) && k !== 'coordinator');
   tokenKeys.sort((a, b) => (agents[b]?.rpg?.level || 1) - (agents[a]?.rpg?.level || 1));
-  for (const k of tokenKeys.slice(0, 12)) {
-    updateCharacter(k, agents[k], { name: agents[k]?.name || k, sprite: 'sp-token' });
+  for (const k of tokenKeys.slice(0, 8)) {
+    const tokenRoom = (agents[k]?.state === 'running') ? 'research' : undefined;
+    updateCharacter(k, agents[k], {
+      name: agents[k]?.name || k,
+      sprite: 'sp-token',
+      room: tokenRoom || 'hall'
+    });
+  }
+
+  // Remove token chars no longer in top 8
+  const activeTokenKeys = new Set(tokenKeys.slice(0, 8));
+  for (const k of Object.keys(chars)) {
+    if (!AGENTS[k] && !activeTokenKeys.has(k)) {
+      chars[k].el.remove();
+      delete chars[k];
+    }
   }
 }
 
 /* ═══ WANDER IDLE AGENTS ═══ */
 setInterval(() => {
   for (const [key, ch] of Object.entries(chars)) {
-    if (ch.targetRoom === 'hall') {
-      const pos = randInRoom('hall');
+    if (ch.isWalking) continue;
+
+    if (ch.targetRoom === 'hall' && ch.currentRoom === 'hall') {
+      const r = ROOMS.hall;
+      const pos = {
+        x: r.x + 6 + Math.random() * (r.w - 12),
+        y: r.y + 10 + Math.random() * (r.h - 14)
+      };
+      ch.el.className = 'agent-char walking';
       ch.el.style.left = pos.x + '%';
       ch.el.style.top = pos.y + '%';
-      ch.el.className = 'agent-char walking';
       ch.wanderTimer = Date.now();
       setTimeout(() => {
         if (ch.el.className.includes('walking')) ch.el.className = 'agent-char idle';
-      }, 3000);
-    }
-    if (ch.targetRoom === 'resting') {
-      // Sleeping agents stay put, just re-randomize occasionally
-      if (Math.random() < 0.2) {
-        const pos = randInRoom('resting');
-        ch.el.style.left = pos.x + '%';
-        ch.el.style.top = pos.y + '%';
-      }
+      }, STEP_DURATION);
     }
   }
-}, 6000);
+}, 7000);
 
 /* ═══ PROFILE CARDS ═══ */
 function esc(s) { const e = document.createElement('span'); e.textContent = s; return e.innerHTML; }
@@ -477,14 +712,12 @@ function renderCards(healthData) {
   const container = document.getElementById('profileCards');
   let html = '';
 
-  // Core agents
   for (const [key, cfg] of Object.entries(AGENTS)) {
     const d = key === 'coordinator' ? healthData : agents[key];
     if (!d) continue;
     html += renderCard(key, d, cfg);
   }
 
-  // Token agents (top 12 by level)
   const tokenKeys = Object.keys(agents).filter(k => !Object.keys(AGENTS).includes(k) && k !== 'coordinator');
   tokenKeys.sort((a, b) => (agents[b]?.rpg?.level || 1) - (agents[a]?.rpg?.level || 1));
   for (const k of tokenKeys.slice(0, 12)) {
