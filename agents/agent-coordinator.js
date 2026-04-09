@@ -651,10 +651,42 @@ class AgentCoordinator extends BaseAgent {
         } catch (e) { this.logError(`Close for ${key.email} failed: ${e.message}`); }
       }
 
-      // Update DB
-      await db.query("UPDATE trades SET status = 'CLOSED', closed_at = NOW() WHERE status = 'OPEN'");
-      this.addActivity('command', `Emergency close: ${closed} positions closed`);
-      return { from: 'TraderAgent', message: `Done. Closed ${closed} position(s) across all users. All open trades marked as CLOSED in DB.` };
+      // Update DB — fetch current prices and record actual exit PnL
+      const openTrades = await db.query("SELECT id, symbol, direction, entry_price FROM trades WHERE status = 'OPEN'");
+      let dbClosed = 0;
+      for (const t of openTrades) {
+        try {
+          // Fetch current price for PnL calculation
+          const fetch = require('node-fetch');
+          const priceRes = await fetch(`https://fapi.binance.com/fapi/v1/ticker/price?symbol=${t.symbol}`, { timeout: 5000 });
+          const priceData = priceRes.ok ? await priceRes.json() : null;
+          const exitPrice = priceData ? parseFloat(priceData.price) : 0;
+          const entryPrice = parseFloat(t.entry_price) || 0;
+
+          let pnlPct = 0;
+          if (entryPrice > 0 && exitPrice > 0) {
+            pnlPct = t.direction === 'LONG'
+              ? ((exitPrice - entryPrice) / entryPrice) * 100
+              : ((entryPrice - exitPrice) / entryPrice) * 100;
+          }
+          const isWin = pnlPct > 0;
+          const status = isWin ? 'WIN' : 'LOSS';
+
+          await db.query(
+            `UPDATE trades SET status = $1, closed_at = NOW(), exit_price = $2, pnl_pct = $3
+             WHERE id = $4`,
+            [status, exitPrice || null, pnlPct, t.id]
+          );
+          dbClosed++;
+        } catch (e) {
+          // Fallback: just mark as CLOSED without PnL
+          await db.query("UPDATE trades SET status = 'CLOSED', closed_at = NOW() WHERE id = $1", [t.id]);
+          dbClosed++;
+        }
+      }
+
+      this.addActivity('command', `Emergency close: ${closed} positions closed on exchanges, ${dbClosed} trades updated in DB`);
+      return { from: 'TraderAgent', message: `Done. Closed ${closed} position(s) on exchanges. ${dbClosed} trade(s) updated with exit prices in DB.` };
     } catch (err) {
       return { from: 'TraderAgent', message: `Failed to close positions: ${err.message}` };
     }

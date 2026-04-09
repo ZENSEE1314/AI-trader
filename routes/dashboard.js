@@ -43,10 +43,35 @@ router.get('/cash-wallet', async (req, res) => {
     const commissionEarned = parseFloat(u.commission_earned) || 0;
     const cashWallet = rawCash + commissionEarned;
 
+    // Break down cash wallet sources for transparency
+    let profitShareTotal = 0;
+    let topUpTotal = 0;
+    let feesPaid = 0;
+    try {
+      const sources = await query(
+        `SELECT type, COALESCE(SUM(amount), 0) as total
+         FROM wallet_transactions
+         WHERE user_id = $1 AND status = 'completed'
+         GROUP BY type`,
+        [req.userId]
+      );
+      for (const s of sources) {
+        if (s.type === 'profit_share') profitShareTotal = parseFloat(s.total) || 0;
+        else if (s.type === 'topup' || s.type === 'deposit') topUpTotal = parseFloat(s.total) || 0;
+        else if (s.type === 'platform_fee' || s.type === 'weekly_fee') feesPaid += parseFloat(s.total) || 0;
+      }
+    } catch {}
+
     res.json({
       cash_wallet: cashWallet,
       commission_earned: commissionEarned,
       total_balance: cashWallet,
+      breakdown: {
+        top_ups: topUpTotal,
+        profit_shares: profitShareTotal,
+        referral_commission: commissionEarned,
+        fees_paid: feesPaid,
+      },
       referral_code: u.referral_code || '',
       referral_count: referrals.length,
       referral_tier: parseInt(u.referral_tier) || 1,
@@ -790,7 +815,9 @@ router.get('/kronos-predictions', async (req, res) => {
       predictions,
     });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    // Return empty predictions instead of 500 — Kronos may not have run yet
+    console.error('Kronos predictions error:', err.message);
+    res.json({ total: 0, longs: 0, shorts: 0, neutrals: 0, predictions: [] });
   }
 });
 

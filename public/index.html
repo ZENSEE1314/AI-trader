@@ -1392,9 +1392,10 @@
         <!-- Wallet Summary -->
         <div class="summary-grid" style="margin-bottom:var(--space-5);">
           <div class="summary-card" style="border-left:3px solid var(--color-success);">
-            <span class="summary-card-label">Cash Wallet Balance <span class="tip-btn">?<span class="tip-text">Your total USDT balance. Includes top-ups and referral commissions. Use this to pay platform fees or withdraw.</span></span></span>
+            <span class="summary-card-label">Cash Wallet Balance <span class="tip-btn">?<span class="tip-text">Your total USDT balance. Sources: top-ups, 60% profit share from winning trades, and referral commissions. Use this to withdraw or pay fees.</span></span></span>
             <span id="cw-cash" class="summary-card-value text-mono" style="color:var(--color-success);font-size:1.3rem;">$0.00</span>
-            <span style="font-size:0.75rem;color:var(--color-text-muted);">Top-ups + commissions combined</span>
+            <span style="font-size:0.75rem;color:var(--color-text-muted);">Top-ups + profit shares + commissions</span>
+            <div id="cw-breakdown"></div>
           </div>
           <div class="summary-card" style="border-left:3px solid var(--color-accent);">
             <span class="summary-card-label">Commission Earned <span class="tip-btn">?<span class="tip-text">Total referral commission earned from your referrals' weekly profits. Automatically added to your cash wallet.</span></span></span>

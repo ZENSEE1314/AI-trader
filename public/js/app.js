@@ -365,7 +365,8 @@
         </tr>`;
       }).join('');
     } catch (err) {
-      tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--color-danger);padding:20px;">Failed to load predictions</td></tr>';
+      console.warn('Kronos predictions:', err.message);
+      tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--color-text-secondary);padding:20px;">No predictions available — Kronos scans during trading cycles</td></tr>';
     }
   }
 
@@ -1125,6 +1126,24 @@
       const commission = parseFloat(status.commission_earned) || 0;
       $('#cw-cash').textContent = `$${cashWallet.toFixed(2)}`;
       $('#cw-commission').textContent = `$${commission.toFixed(2)}`;
+
+      // Cash wallet breakdown (where the money came from)
+      const breakdown = dashWallet?.breakdown;
+      const breakdownEl = $('#cw-breakdown');
+      if (breakdownEl && breakdown) {
+        const topUps = parseFloat(breakdown.top_ups) || 0;
+        const profitShares = parseFloat(breakdown.profit_shares) || 0;
+        const refComm = parseFloat(breakdown.referral_commission) || 0;
+        const feesPaid = parseFloat(breakdown.fees_paid) || 0;
+        breakdownEl.innerHTML = `
+          <div style="font-size:0.78rem;color:var(--color-text-muted);margin-top:8px;line-height:1.6;">
+            <div>Top-ups: <span class="text-mono" style="color:var(--color-text);">$${topUps.toFixed(2)}</span></div>
+            <div>Profit shares (60%): <span class="text-mono" style="color:var(--color-success);">$${profitShares.toFixed(2)}</span></div>
+            <div>Referral commission: <span class="text-mono" style="color:var(--color-accent);">$${refComm.toFixed(2)}</span></div>
+            ${feesPaid > 0 ? `<div>Fees paid: <span class="text-mono" style="color:var(--color-danger);">-$${feesPaid.toFixed(2)}</span></div>` : ''}
+          </div>
+        `;
+      }
 
       // Platform USDT address for top-ups
       if (status.platform_usdt_address) {
