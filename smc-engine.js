@@ -324,7 +324,7 @@ async function analyzeLHHL(ticker, params, dailyBiasCache, kronosPredictions = n
   // NEED_BOTH_HTF removed — 4H takes priority, falls back to 1H (no mixed-structure blocking)
   const NEED_KL = sc.requireKeyLevel !== undefined ? !!sc.requireKeyLevel : false;
   const NEED_15M = sc.require15m !== undefined ? !!sc.require15m : false;
-  const NEED_1M = sc.require1m !== undefined ? !!sc.require1m : false;
+  const NEED_1M = true; // Always require 1m swing confirmation: HL for LONG, LH for SHORT
   const NEED_VOL = sc.requireVolSpike !== undefined ? !!sc.requireVolSpike : false;
   const VOL_MULT = sc.volSpikeMultiplier || 1.5;
   const INDECISIVE_THRESH = sc.indecisiveThresh || 0.3;
