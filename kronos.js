@@ -21,7 +21,7 @@ const CACHE_TTL_MS = 3 * 60_000; // 3 min cache — matches cycle interval
  * Get Kronos AI prediction for a single symbol.
  */
 function getKronosPrediction(symbol, interval = '15m', predLen = 20) {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const args = [SCRIPT_PATH, symbol, interval, String(predLen)];
 
     execFile(PYTHON_CMD, args, { timeout: TIMEOUT_MS, maxBuffer: 1024 * 1024 }, (err, stdout) => {

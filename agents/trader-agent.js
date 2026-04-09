@@ -136,9 +136,8 @@ class TraderAgent extends BaseAgent {
             this.logTrade(`KRONOS CONFIRMED: ${sym} ${pick.direction} HIGH confidence`);
           }
         } catch (kronosErr) {
-          this.logTrade(`Kronos error — blocking trade for safety: ${kronosErr.message}`);
-          this.addActivity('skip', `${pick.symbol} Kronos unavailable — skipped for safety`);
-          continue;
+          this.logTrade(`Kronos unavailable — proceeding with SMC signal only: ${kronosErr.message}`);
+          this.addActivity('info', `${pick.symbol} Kronos unavailable — trading on SMC signal`);
         }
 
         // Execute for all registered users
