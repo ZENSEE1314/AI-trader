@@ -1293,6 +1293,7 @@ function renderSidebarCard(key, d, cfg) {
   const xpProg = rpg.xpProgress || 0;
   const xpNext = rpg.xpForNext || 100;
   const xpCur = Math.round(xpProg * xpNext);
+  const earned = rpg.totalEarned || 0;
   const mood = pers.mood || 'focused';
   const moodIcon = mood === 'confident' ? '\u{1F60E}' : mood === 'competitive' ? '\u{1F525}' : mood === 'anxious' ? '\u{1F630}' : mood === 'determined' ? '\u{1F4AA}' : mood === 'reflective' ? '\u{1F914}' : mood === 'ambitious' ? '\u{1F680}' : '\u{1F3AF}';
   const task = d.currentTask ? (d.currentTask.description || '') : '';
@@ -1318,6 +1319,7 @@ function renderSidebarCard(key, d, cfg) {
       <div class="sb-xp-bar"><div class="sb-xp-fill" style="width:${Math.round(xpProg*100)}%"></div></div>
       <span class="sb-xp-txt">${xpCur}/${xpNext}</span>
     </div>
+    <div class="sb-earned" style="font-family:'JetBrains Mono',monospace;font-size:.75rem;color:${earned >= 0 ? 'var(--success)' : 'var(--danger)'};margin-top:2px">${earned >= 0 ? '+' : ''}${fmtMoney(earned)}</div>
     ${task ? `<div class="sb-task"><div class="td"></div>${esc(task.slice(0,60))}</div>` : ''}
     <div class="sb-mood">${moodIcon} ${mood}</div>
   </div>`;
@@ -1800,6 +1802,7 @@ function openAgentModal(agentKey) {
     <div class="am-section-title">Stats</div>
     <div class="am-stat-row">
       <div class="am-stat"><span class="am-stat-val">${lvl}</span><span class="am-stat-lbl">Level</span></div>
+      <div class="am-stat"><span class="am-stat-val" style="color:${totalEarned >= 0 ? 'var(--success)' : 'var(--danger)'}">${totalEarned >= 0 ? '+' : ''}${fmtMoney(totalEarned)}</span><span class="am-stat-lbl">Earned</span></div>
       <div class="am-stat"><span class="am-stat-val">${tasksCompleted}</span><span class="am-stat-lbl">Tasks</span></div>
       <div class="am-stat"><span class="am-stat-val">${successRate}%</span><span class="am-stat-lbl">Success</span></div>
       <div class="am-stat"><span class="am-stat-val">${tier}</span><span class="am-stat-lbl">Tier</span></div>
