@@ -101,12 +101,12 @@
     .sb-card.running-anim{animation:borderGlow 2.5s ease-in-out infinite}
 
     .sb-top{display:flex;align-items:center;gap:10px;margin-bottom:5px}
-    .sb-av{width:36px;height:36px;background:var(--surface2);border-radius:6px;display:flex;align-items:center;justify-content:center;border:1px solid var(--border2);flex-shrink:0;position:relative;overflow:hidden;image-rendering:pixelated}
+    .sb-av{width:40px;height:40px;background:var(--surface2);border-radius:6px;display:flex;align-items:center;justify-content:center;border:1px solid var(--border2);flex-shrink:0;position:relative;overflow:hidden;image-rendering:pixelated}
     .sb-av .pxs{transform:scale(1.1);transform-origin:center;position:absolute;top:1px;left:3px}
     .sb-info{flex:1;min-width:0}
-    .sb-name{font-family:'Space Grotesk',sans-serif;font-weight:600;font-size:.85rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.3}
-    .sb-role{font-size:.65rem;color:var(--fg3);line-height:1.3}
-    .sb-state{font-family:'JetBrains Mono',monospace;font-size:.55rem;font-weight:600;padding:2px 6px;border-radius:99px;border:1px solid var(--border);white-space:nowrap;flex-shrink:0}
+    .sb-name{font-family:'Space Grotesk',sans-serif;font-weight:600;font-size:1rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.3}
+    .sb-role{font-size:.75rem;color:var(--fg3);line-height:1.3}
+    .sb-state{font-family:'JetBrains Mono',monospace;font-size:.65rem;font-weight:600;padding:3px 8px;border-radius:99px;border:1px solid var(--border);white-space:nowrap;flex-shrink:0}
     .sb-state.running{color:var(--accent);border-color:var(--accent);background:rgba(212,175,55,.12);box-shadow:0 0 6px var(--cyber-glow)}
     .sb-state.error{color:var(--danger);border-color:var(--danger);box-shadow:0 0 4px rgba(244,63,94,.2)}
     .sb-state.idle{color:var(--fg3)}
@@ -115,14 +115,14 @@
     .sb-state.paused{color:var(--warn);border-color:var(--warn)}
 
     .sb-xp-row{display:flex;align-items:center;gap:5px;margin-bottom:4px}
-    .sb-lvl{font-family:'Press Start 2P',monospace;font-size:6px;color:var(--accent);white-space:nowrap}
+    .sb-lvl{font-family:'Press Start 2P',monospace;font-size:7px;color:var(--accent);white-space:nowrap}
     .sb-xp-bar{flex:1;height:6px;background:var(--bg);border-radius:99px;overflow:hidden;border:1px solid rgba(255,255,255,.04)}
     .sb-xp-fill{height:100%;border-radius:99px;background:linear-gradient(90deg,var(--accent),var(--accent2));transition:width .5s;min-width:1px}
     .sb-xp-txt{font-family:'JetBrains Mono',monospace;font-size:.55rem;color:var(--fg3);white-space:nowrap}
 
-    .sb-task{font-family:'JetBrains Mono',monospace;font-size:.6rem;color:var(--fg2);display:flex;align-items:center;gap:4px;margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .sb-task{font-family:'JetBrains Mono',monospace;font-size:.7rem;color:var(--fg2);display:flex;align-items:center;gap:4px;margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
     .sb-task .td{width:5px;height:5px;border-radius:50%;background:var(--accent);animation:pulse 1s ease-in-out infinite;flex-shrink:0}
-    .sb-mood{font-size:.6rem;color:var(--fg3);margin-top:2px}
+    .sb-mood{font-size:.7rem;color:var(--fg3);margin-top:2px}
 
     /* ═══ CENTER CONTENT ═══ */
     .center-content{flex:1;min-width:0;display:flex;flex-direction:column;overflow-y:auto;padding:0}
@@ -400,6 +400,63 @@
     .btn-unjail-cancel:hover{border-color:var(--fg3);color:var(--fg)}
     .jail-improve{font-size:.75rem;color:var(--success);padding:8px 10px;background:rgba(34,197,94,.08);border:1px solid rgba(34,197,94,.2);border-radius:6px;display:none;margin-top:10px}
 
+    /* ═══ AGENT DETAIL MODAL ═══ */
+    .agent-modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:100;align-items:center;justify-content:center;backdrop-filter:blur(4px)}
+    .agent-modal-overlay.show{display:flex}
+    .agent-modal{background:var(--surface);border:2px solid var(--border);border-radius:14px;max-width:500px;width:92%;max-height:85vh;overflow-y:auto;box-shadow:0 0 40px var(--cyber-glow);animation:agentModalIn .3s ease-out}
+    @keyframes agentModalIn{from{opacity:0;transform:scale(.92) translateY(20px)}to{opacity:1;transform:scale(1) translateY(0)}}
+    .am-hdr{display:flex;align-items:center;gap:12px;padding:18px 20px;border-bottom:1px solid var(--border2)}
+    .am-hdr-av{width:48px;height:48px;background:var(--surface2);border-radius:8px;display:flex;align-items:center;justify-content:center;border:1px solid var(--border2);image-rendering:pixelated;overflow:hidden;position:relative}
+    .am-hdr-av .pxs{transform:scale(1.3);transform-origin:center;position:absolute;top:2px;left:4px}
+    .am-hdr-info{flex:1;min-width:0}
+    .am-hdr-name{font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:1.2rem;color:var(--accent)}
+    .am-hdr-role{font-size:.8rem;color:var(--fg3)}
+    .am-close{background:0;border:0;color:var(--fg3);font-size:1.4rem;cursor:pointer;padding:4px 8px}.am-close:hover{color:var(--fg)}
+    .am-body{padding:18px 20px}
+    .am-section{margin-bottom:16px}
+    .am-section-title{font-family:'Space Grotesk',sans-serif;font-size:.7rem;font-weight:600;color:var(--fg3);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px}
+    .am-desc{font-size:.85rem;color:var(--fg2);line-height:1.5;padding:10px 12px;background:var(--bg);border-radius:8px;border:1px solid var(--border2)}
+    .am-skills{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+    .am-skill{font-size:.75rem;padding:8px 10px;background:rgba(212,175,55,.06);border:1px solid rgba(212,175,55,.15);border-radius:6px;color:var(--fg2)}
+    .am-skill-name{font-weight:600;color:var(--accent);display:block;margin-bottom:2px}
+    .am-skill-desc{font-size:.65rem;color:var(--fg3)}
+    .am-stat-row{display:flex;gap:12px;flex-wrap:wrap}
+    .am-stat{flex:1;min-width:80px;text-align:center;padding:10px 8px;background:var(--bg);border-radius:8px;border:1px solid var(--border2)}
+    .am-stat-val{font-family:'JetBrains Mono',monospace;font-size:1rem;font-weight:600;color:var(--accent);display:block}
+    .am-stat-lbl{font-size:.6rem;color:var(--fg3);text-transform:uppercase;letter-spacing:.3px}
+    .am-footer{padding:14px 20px;border-top:1px solid var(--border2);display:flex;gap:8px}
+    .am-btn{flex:1;padding:10px 14px;border:0;border-radius:8px;font-family:'Space Grotesk',sans-serif;font-weight:600;font-size:.8rem;cursor:pointer;transition:transform .15s,box-shadow .15s;text-align:center}
+    .am-btn:hover{transform:translateY(-1px)}
+    .am-btn:disabled{opacity:.5;cursor:not-allowed;transform:none}
+    .am-btn-pause{background:var(--warn);color:#000}.am-btn-pause:hover{box-shadow:0 4px 16px rgba(251,191,36,.3)}
+    .am-btn-resume{background:var(--success);color:#000}.am-btn-resume:hover{box-shadow:0 4px 16px rgba(34,197,94,.3)}
+    .am-btn-delete{background:var(--danger);color:#fff}.am-btn-delete:hover{box-shadow:0 4px 16px rgba(244,63,94,.3)}
+    .am-btn-unjail{background:linear-gradient(135deg,#16a34a,#22c55e);color:#fff}.am-btn-unjail:hover{box-shadow:0 4px 16px rgba(34,197,94,.3)}
+
+    /* ═══ ADD BOT MODAL ═══ */
+    .add-bot-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:100;align-items:center;justify-content:center;backdrop-filter:blur(4px)}
+    .add-bot-overlay.show{display:flex}
+    .add-bot-modal{background:var(--surface);border:2px solid var(--accent);border-radius:14px;max-width:420px;width:92%;box-shadow:0 0 40px var(--cyber-glow);animation:agentModalIn .3s ease-out}
+    .ab-hdr{display:flex;align-items:center;gap:10px;padding:16px 18px;border-bottom:1px solid var(--border2)}
+    .ab-hdr-title{font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:1.1rem;color:var(--accent);flex:1}
+    .ab-body{padding:18px 20px}
+    .ab-label{font-family:'Space Grotesk',sans-serif;font-size:.75rem;font-weight:600;color:var(--fg3);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px;display:block}
+    .ab-input{width:100%;padding:10px 14px;background:var(--bg);border:1px solid var(--border);border-radius:8px;color:var(--fg);font-family:'JetBrains Mono',monospace;font-size:.85rem;outline:none}
+    .ab-input:focus{border-color:var(--accent);box-shadow:0 0 8px var(--cyber-glow)}
+    .ab-hint{font-size:.7rem;color:var(--fg3);margin-top:4px;margin-bottom:14px}
+    .ab-footer{padding:14px 18px;border-top:1px solid var(--border2);display:flex;gap:10px}
+    .ab-btn-create{flex:1;padding:10px 16px;background:linear-gradient(135deg,var(--accent),var(--accent2));color:#000;border:0;border-radius:8px;font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:.85rem;cursor:pointer;transition:transform .15s}
+    .ab-btn-create:hover{transform:translateY(-1px);box-shadow:0 4px 16px var(--cyber-glow)}
+    .ab-btn-create:disabled{opacity:.5;cursor:not-allowed;transform:none}
+    .ab-btn-cancel{padding:10px 16px;background:0;border:1px solid var(--border);color:var(--fg2);border-radius:8px;font-family:'Space Grotesk',sans-serif;font-size:.85rem;cursor:pointer}
+    .ab-result{margin-top:12px;padding:10px 12px;border-radius:8px;font-size:.8rem;display:none}
+    .ab-result.ok{display:block;background:rgba(34,197,94,.1);border:1px solid rgba(34,197,94,.3);color:var(--success)}
+    .ab-result.err{display:block;background:rgba(244,63,94,.1);border:1px solid rgba(244,63,94,.3);color:var(--danger)}
+
+    /* Add bot "+" button */
+    .sb-add-btn{width:28px;height:28px;border-radius:50%;background:rgba(212,175,55,.15);border:1px solid rgba(212,175,55,.3);color:var(--accent);font-size:1.1rem;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all var(--duration-fast);margin-left:auto;flex-shrink:0}
+    .sb-add-btn:hover{background:rgba(212,175,55,.3);box-shadow:0 0 10px var(--cyber-glow);transform:scale(1.1)}
+
     /* Hidden original profile cards container (cards now render in sidebar) */
     .cards-wrap{display:none}
 
@@ -464,6 +521,7 @@
       <div class="sidebar-hdr">
         <span class="sidebar-hdr-title">Crew Roster</span>
         <span class="sidebar-hdr-count" id="crewCount">0</span>
+        <button class="sb-add-btn" onclick="openAddBotModal()" title="Add new bot">+</button>
       </div>
       <div class="sidebar-scroll" id="sidebarScroll"></div>
     </aside>
@@ -575,37 +633,73 @@
           <div class="furn monitor" style="left:38%;top:51%;width:4%;height:3%;z-index:3"></div>
           <div class="furn monitor" style="left:46%;top:51%;width:4%;height:3%;z-index:3"></div>
           <div class="furn monitor" style="left:54%;top:51%;width:4%;height:3%;z-index:3"></div>
-          <!-- Furniture — TOKEN AGENT desks (5 rows × 10 cols, behind trader) -->
-          <div class="furn desk" style="left:3%;top:60%;width:6%;height:2.5%"></div>
-          <div class="furn desk" style="left:12%;top:60%;width:6%;height:2.5%"></div>
-          <div class="furn desk" style="left:21%;top:60%;width:6%;height:2.5%"></div>
-          <div class="furn desk" style="left:30%;top:60%;width:6%;height:2.5%"></div>
-          <div class="furn desk" style="left:39%;top:60%;width:6%;height:2.5%"></div>
-          <div class="furn desk" style="left:48%;top:60%;width:6%;height:2.5%"></div>
-          <div class="furn desk" style="left:57%;top:60%;width:6%;height:2.5%"></div>
-          <div class="furn desk" style="left:66%;top:60%;width:6%;height:2.5%"></div>
-          <div class="furn desk" style="left:75%;top:60%;width:6%;height:2.5%"></div>
-          <div class="furn desk" style="left:84%;top:60%;width:6%;height:2.5%"></div>
-          <div class="furn desk" style="left:3%;top:67%;width:6%;height:2.5%"></div>
-          <div class="furn desk" style="left:12%;top:67%;width:6%;height:2.5%"></div>
-          <div class="furn desk" style="left:21%;top:67%;width:6%;height:2.5%"></div>
-          <div class="furn desk" style="left:30%;top:67%;width:6%;height:2.5%"></div>
-          <div class="furn desk" style="left:39%;top:67%;width:6%;height:2.5%"></div>
-          <div class="furn desk" style="left:48%;top:67%;width:6%;height:2.5%"></div>
-          <div class="furn desk" style="left:57%;top:67%;width:6%;height:2.5%"></div>
-          <div class="furn desk" style="left:66%;top:67%;width:6%;height:2.5%"></div>
-          <div class="furn desk" style="left:75%;top:67%;width:6%;height:2.5%"></div>
-          <div class="furn desk" style="left:84%;top:67%;width:6%;height:2.5%"></div>
-          <div class="furn desk" style="left:3%;top:74%;width:6%;height:2.5%"></div>
-          <div class="furn desk" style="left:12%;top:74%;width:6%;height:2.5%"></div>
-          <div class="furn desk" style="left:21%;top:74%;width:6%;height:2.5%"></div>
-          <div class="furn desk" style="left:30%;top:74%;width:6%;height:2.5%"></div>
-          <div class="furn desk" style="left:39%;top:74%;width:6%;height:2.5%"></div>
-          <div class="furn desk" style="left:48%;top:74%;width:6%;height:2.5%"></div>
-          <div class="furn desk" style="left:57%;top:74%;width:6%;height:2.5%"></div>
-          <div class="furn desk" style="left:66%;top:74%;width:6%;height:2.5%"></div>
-          <div class="furn desk" style="left:75%;top:74%;width:6%;height:2.5%"></div>
-          <div class="furn desk" style="left:84%;top:74%;width:6%;height:2.5%"></div>
+          <!-- Furniture — TOKEN AGENT desks (6 rows × 10 cols = 60 seats) -->
+          <!-- Row 1: top:58% -->
+          <div class="furn desk" style="left:3%;top:58%;width:6%;height:2.5%"></div>
+          <div class="furn desk" style="left:12%;top:58%;width:6%;height:2.5%"></div>
+          <div class="furn desk" style="left:21%;top:58%;width:6%;height:2.5%"></div>
+          <div class="furn desk" style="left:30%;top:58%;width:6%;height:2.5%"></div>
+          <div class="furn desk" style="left:39%;top:58%;width:6%;height:2.5%"></div>
+          <div class="furn desk" style="left:48%;top:58%;width:6%;height:2.5%"></div>
+          <div class="furn desk" style="left:57%;top:58%;width:6%;height:2.5%"></div>
+          <div class="furn desk" style="left:66%;top:58%;width:6%;height:2.5%"></div>
+          <div class="furn desk" style="left:75%;top:58%;width:6%;height:2.5%"></div>
+          <div class="furn desk" style="left:84%;top:58%;width:6%;height:2.5%"></div>
+          <!-- Row 2: top:63% -->
+          <div class="furn desk" style="left:3%;top:63%;width:6%;height:2.5%"></div>
+          <div class="furn desk" style="left:12%;top:63%;width:6%;height:2.5%"></div>
+          <div class="furn desk" style="left:21%;top:63%;width:6%;height:2.5%"></div>
+          <div class="furn desk" style="left:30%;top:63%;width:6%;height:2.5%"></div>
+          <div class="furn desk" style="left:39%;top:63%;width:6%;height:2.5%"></div>
+          <div class="furn desk" style="left:48%;top:63%;width:6%;height:2.5%"></div>
+          <div class="furn desk" style="left:57%;top:63%;width:6%;height:2.5%"></div>
+          <div class="furn desk" style="left:66%;top:63%;width:6%;height:2.5%"></div>
+          <div class="furn desk" style="left:75%;top:63%;width:6%;height:2.5%"></div>
+          <div class="furn desk" style="left:84%;top:63%;width:6%;height:2.5%"></div>
+          <!-- Row 3: top:68% -->
+          <div class="furn desk" style="left:3%;top:68%;width:6%;height:2.5%"></div>
+          <div class="furn desk" style="left:12%;top:68%;width:6%;height:2.5%"></div>
+          <div class="furn desk" style="left:21%;top:68%;width:6%;height:2.5%"></div>
+          <div class="furn desk" style="left:30%;top:68%;width:6%;height:2.5%"></div>
+          <div class="furn desk" style="left:39%;top:68%;width:6%;height:2.5%"></div>
+          <div class="furn desk" style="left:48%;top:68%;width:6%;height:2.5%"></div>
+          <div class="furn desk" style="left:57%;top:68%;width:6%;height:2.5%"></div>
+          <div class="furn desk" style="left:66%;top:68%;width:6%;height:2.5%"></div>
+          <div class="furn desk" style="left:75%;top:68%;width:6%;height:2.5%"></div>
+          <div class="furn desk" style="left:84%;top:68%;width:6%;height:2.5%"></div>
+          <!-- Row 4: top:73% -->
+          <div class="furn desk" style="left:3%;top:73%;width:6%;height:2.5%"></div>
+          <div class="furn desk" style="left:12%;top:73%;width:6%;height:2.5%"></div>
+          <div class="furn desk" style="left:21%;top:73%;width:6%;height:2.5%"></div>
+          <div class="furn desk" style="left:30%;top:73%;width:6%;height:2.5%"></div>
+          <div class="furn desk" style="left:39%;top:73%;width:6%;height:2.5%"></div>
+          <div class="furn desk" style="left:48%;top:73%;width:6%;height:2.5%"></div>
+          <div class="furn desk" style="left:57%;top:73%;width:6%;height:2.5%"></div>
+          <div class="furn desk" style="left:66%;top:73%;width:6%;height:2.5%"></div>
+          <div class="furn desk" style="left:75%;top:73%;width:6%;height:2.5%"></div>
+          <div class="furn desk" style="left:84%;top:73%;width:6%;height:2.5%"></div>
+          <!-- Row 5: top:78% -->
+          <div class="furn desk" style="left:3%;top:78%;width:6%;height:2.5%"></div>
+          <div class="furn desk" style="left:12%;top:78%;width:6%;height:2.5%"></div>
+          <div class="furn desk" style="left:21%;top:78%;width:6%;height:2.5%"></div>
+          <div class="furn desk" style="left:30%;top:78%;width:6%;height:2.5%"></div>
+          <div class="furn desk" style="left:39%;top:78%;width:6%;height:2.5%"></div>
+          <div class="furn desk" style="left:48%;top:78%;width:6%;height:2.5%"></div>
+          <div class="furn desk" style="left:57%;top:78%;width:6%;height:2.5%"></div>
+          <div class="furn desk" style="left:66%;top:78%;width:6%;height:2.5%"></div>
+          <div class="furn desk" style="left:75%;top:78%;width:6%;height:2.5%"></div>
+          <div class="furn desk" style="left:84%;top:78%;width:6%;height:2.5%"></div>
+          <!-- Row 6: top:83% -->
+          <div class="furn desk" style="left:3%;top:83%;width:6%;height:2.5%"></div>
+          <div class="furn desk" style="left:12%;top:83%;width:6%;height:2.5%"></div>
+          <div class="furn desk" style="left:21%;top:83%;width:6%;height:2.5%"></div>
+          <div class="furn desk" style="left:30%;top:83%;width:6%;height:2.5%"></div>
+          <div class="furn desk" style="left:39%;top:83%;width:6%;height:2.5%"></div>
+          <div class="furn desk" style="left:48%;top:83%;width:6%;height:2.5%"></div>
+          <div class="furn desk" style="left:57%;top:83%;width:6%;height:2.5%"></div>
+          <div class="furn desk" style="left:66%;top:83%;width:6%;height:2.5%"></div>
+          <div class="furn desk" style="left:75%;top:83%;width:6%;height:2.5%"></div>
+          <div class="furn desk" style="left:84%;top:83%;width:6%;height:2.5%"></div>
           <!-- Furniture — Prison -->
           <div class="furn jail-bars" style="left:2%;top:89%;width:10%;height:10%;border:2px solid #6b7280;border-radius:2px;background:repeating-linear-gradient(90deg,#4b5563 0px,#4b5563 2px,transparent 2px,transparent 8px);opacity:.6"></div>
           <div class="furn jail-bars" style="left:14%;top:89%;width:10%;height:10%;border:2px solid #6b7280;border-radius:2px;background:repeating-linear-gradient(90deg,#4b5563 0px,#4b5563 2px,transparent 2px,transparent 8px);opacity:.6"></div>
@@ -686,6 +780,44 @@
       </div>
       <div class="jail-body" id="jailBody"></div>
       <div class="jail-footer" id="jailFooter"></div>
+    </div>
+  </div>
+
+  <!-- Agent Detail Modal -->
+  <div class="agent-modal-overlay" id="agentModalOverlay" onclick="if(event.target===this)closeAgentModal()">
+    <div class="agent-modal">
+      <div class="am-hdr">
+        <div class="am-hdr-av" id="amAvatar"></div>
+        <div class="am-hdr-info">
+          <div class="am-hdr-name" id="amName"></div>
+          <div class="am-hdr-role" id="amRole"></div>
+        </div>
+        <span class="am-state" id="amState"></span>
+        <button class="am-close" onclick="closeAgentModal()">&times;</button>
+      </div>
+      <div class="am-body" id="amBody"></div>
+      <div class="am-footer" id="amFooter"></div>
+    </div>
+  </div>
+
+  <!-- Add Bot Modal -->
+  <div class="add-bot-overlay" id="addBotOverlay" onclick="if(event.target===this)closeAddBotModal()">
+    <div class="add-bot-modal">
+      <div class="ab-hdr">
+        <span style="font-size:1.4rem">&#x1F916;</span>
+        <span class="ab-hdr-title">Deploy New Agent</span>
+        <button class="am-close" onclick="closeAddBotModal()">&times;</button>
+      </div>
+      <div class="ab-body">
+        <label class="ab-label">Token Symbol</label>
+        <input type="text" class="ab-input" id="addBotSymbol" placeholder="e.g. BTCUSDT, SOLUSDT" oninput="this.value=this.value.toUpperCase()">
+        <div class="ab-hint">Enter the USDT pair symbol. The AI will auto-generate personality, skills, and strategy for this agent.</div>
+        <div class="ab-result" id="addBotResult"></div>
+      </div>
+      <div class="ab-footer">
+        <button class="ab-btn-cancel" onclick="closeAddBotModal()">Cancel</button>
+        <button class="ab-btn-create" id="addBotBtn" onclick="createNewBot()">Deploy Agent</button>
+      </div>
     </div>
   </div>
 
@@ -817,23 +949,17 @@ function getSlotOffset(agentKey, room) {
   }
   const idx = roomSlotCounters[room][agentKey];
   if (room === 'trading') {
-    // Dynamic grid: fits any number of agents in the trading room
-    // Room: x:0-100%, y:46-86%. Center: x:50, y:66. Trader at top.
-    // Agents fill y:56-84% (below trader desk), full width with margin.
-    const r = ROOMS.trading;
-    const total = Object.keys(roomSlotCounters[room]).length;
-    const cols = Math.min(Math.ceil(Math.sqrt(total * 2.5)), 15);
-    const rows = Math.ceil(total / cols);
-    const col = idx % cols;
-    const row = Math.floor(idx / cols);
-    const usableW = r.w - 8;
-    const usableH = r.h - 14;
-    const xSpacing = usableW / Math.max(cols, 1);
-    const ySpacing = usableH / Math.max(rows + 1, 1);
-    return {
-      dx: (col - (cols - 1) / 2) * xSpacing,
-      dy: -usableH / 2 + 6 + (row + 1) * ySpacing
-    };
+    // Snap agents to desk positions: 10 cols × 6 rows = 60 seats
+    // Desk X centers: 6, 15, 24, 33, 42, 51, 60, 69, 78, 87
+    // Desk Y rows:    57, 62, 67, 72, 77, 82 (agent sits just above desk)
+    const DESK_COLS = [6, 15, 24, 33, 42, 51, 60, 69, 78, 87];
+    const DESK_ROWS = [57, 62, 67, 72, 77, 82];
+    const col = idx % 10;
+    const row = Math.floor(idx / 10);
+    const absX = DESK_COLS[col] || DESK_COLS[col % 10];
+    const absY = row < DESK_ROWS.length ? DESK_ROWS[row] : DESK_ROWS[DESK_ROWS.length - 1] + 2;
+    // Return as offset from room center (50, 66)
+    return { dx: absX - 50, dy: absY - 66 };
   }
   const col = idx % 3;
   const row = Math.floor(idx / 3);
@@ -1176,11 +1302,9 @@ function renderSidebarCard(key, d, cfg) {
   else if (state === 'error') cls += ' err';
   else if (state === 'jailed') cls += ' jailed-card';
 
-  const jailClick = state === 'jailed' ? ` onclick="openJailModal('${key}')"` : '';
-
   const stateLabel = state === 'jailed' ? '\u26D3 JAILED' : state.toUpperCase();
 
-  return `<div class="${cls}"${jailClick}>
+  return `<div class="${cls}" onclick="openAgentModal('${key}')" style="cursor:pointer">
     <div class="sb-top">
       <div class="sb-av"><div class="pxs ${cfg.sprite}"></div></div>
       <div class="sb-info">
@@ -1194,7 +1318,7 @@ function renderSidebarCard(key, d, cfg) {
       <div class="sb-xp-bar"><div class="sb-xp-fill" style="width:${Math.round(xpProg*100)}%"></div></div>
       <span class="sb-xp-txt">${xpCur}/${xpNext}</span>
     </div>
-    ${task ? `<div class="sb-task"><div class="td"></div>${esc(task.slice(0,50))}</div>` : ''}
+    ${task ? `<div class="sb-task"><div class="td"></div>${esc(task.slice(0,60))}</div>` : ''}
     <div class="sb-mood">${moodIcon} ${mood}</div>
   </div>`;
 }
@@ -1441,6 +1565,7 @@ async function fetchData() {
     }
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const data = await res.json();
+    cachedHealthData = data;
     document.getElementById('dot').classList.remove('off');
 
     updateHeader(data);
@@ -1623,6 +1748,226 @@ async function unjailAgent(agentKey) {
 document.getElementById('jailOverlay').addEventListener('click', function(e) {
   if (e.target === this) closeJailModal();
 });
+
+/* ═══ AGENT DETAIL MODAL ═══ */
+let cachedHealthData = null;
+
+function openAgentModal(agentKey) {
+  const overlay = document.getElementById('agentModalOverlay');
+  const agents = cachedHealthData?.health?.agents || {};
+  const d = agentKey === 'coordinator' ? cachedHealthData?.health : agents[agentKey];
+  if (!d) { showToast('Agent data not found', 'error'); return; }
+
+  const cfg = AGENTS[agentKey] || {
+    name: d.name || agentKey,
+    role: (d.name || agentKey).replace('Agent','') + ' Specialist',
+    sprite: 'sp-token',
+  };
+
+  const state = d.state || 'stopped';
+  const rpg = d.rpg || {};
+  const pers = d.personality || {};
+  const profile = d.profile || {};
+  const skills = profile.skills || d.skills || [];
+  const desc = profile.description || d.description || `${cfg.name} — ${cfg.role}. Actively monitoring and executing tasks.`;
+  const lvl = rpg.level || 1;
+  const xpProg = rpg.xpProgress || 0;
+  const xpNext = rpg.xpForNext || 100;
+  const tasksCompleted = rpg.tasksCompleted || 0;
+  const successRate = rpg.successRate || 0;
+  const totalEarned = rpg.totalEarned || 0;
+  const task = d.currentTask ? (d.currentTask.description || '') : '';
+  const mood = pers.mood || 'focused';
+  const tier = pers.tier || 'Rookie';
+  const isPaused = d.paused || false;
+
+  document.getElementById('amAvatar').innerHTML = `<div class="pxs ${cfg.sprite}"></div>`;
+  document.getElementById('amName').textContent = cfg.name;
+  document.getElementById('amRole').textContent = cfg.role;
+  document.getElementById('amState').className = `sb-state ${state}`;
+  document.getElementById('amState').textContent = state === 'jailed' ? '\u26D3 JAILED' : state.toUpperCase();
+
+  let bodyHtml = '';
+
+  // Description
+  bodyHtml += `<div class="am-section">
+    <div class="am-section-title">About</div>
+    <div class="am-desc">${esc(desc)}</div>
+  </div>`;
+
+  // Stats row
+  bodyHtml += `<div class="am-section">
+    <div class="am-section-title">Stats</div>
+    <div class="am-stat-row">
+      <div class="am-stat"><span class="am-stat-val">${lvl}</span><span class="am-stat-lbl">Level</span></div>
+      <div class="am-stat"><span class="am-stat-val">${tasksCompleted}</span><span class="am-stat-lbl">Tasks</span></div>
+      <div class="am-stat"><span class="am-stat-val">${successRate}%</span><span class="am-stat-lbl">Success</span></div>
+      <div class="am-stat"><span class="am-stat-val">${tier}</span><span class="am-stat-lbl">Tier</span></div>
+    </div>
+  </div>`;
+
+  // Current task
+  if (task) {
+    bodyHtml += `<div class="am-section">
+      <div class="am-section-title">Current Task</div>
+      <div class="am-desc" style="font-family:'JetBrains Mono',monospace;font-size:.8rem">${esc(task)}</div>
+    </div>`;
+  }
+
+  // Skills
+  if (skills.length > 0) {
+    bodyHtml += `<div class="am-section">
+      <div class="am-section-title">Skills</div>
+      <div class="am-skills">
+        ${skills.map(s => `<div class="am-skill">
+          <span class="am-skill-name">${esc(s.name || s.id || 'Skill')}</span>
+          <span class="am-skill-desc">${esc(s.description || s.desc || '')}</span>
+        </div>`).join('')}
+      </div>
+    </div>`;
+  }
+
+  document.getElementById('amBody').innerHTML = bodyHtml;
+
+  // Footer buttons
+  const core = ['coordinator','chart','trader','risk','sentiment','accountant','kronos','strategy','police','coder','optimizer'];
+  const isCore = core.includes(agentKey);
+  let footerHtml = '';
+
+  if (state === 'jailed') {
+    footerHtml += `<button class="am-btn am-btn-unjail" onclick="unjailFromModal('${esc(agentKey)}')">\u{1F513} Unjail</button>`;
+  }
+
+  if (isPaused) {
+    footerHtml += `<button class="am-btn am-btn-resume" onclick="toggleAgentPause('${esc(agentKey)}', false)">\u25B6 Resume</button>`;
+  } else if (state !== 'jailed') {
+    footerHtml += `<button class="am-btn am-btn-pause" onclick="toggleAgentPause('${esc(agentKey)}', true)">\u23F8 Pause</button>`;
+  }
+
+  if (!isCore) {
+    footerHtml += `<button class="am-btn am-btn-delete" onclick="deleteAgent('${esc(agentKey)}')">\u{1F5D1} Delete</button>`;
+  }
+
+  document.getElementById('amFooter').innerHTML = footerHtml;
+  overlay.classList.add('show');
+}
+
+function closeAgentModal() {
+  document.getElementById('agentModalOverlay').classList.remove('show');
+}
+
+async function toggleAgentPause(agentKey, shouldPause) {
+  try {
+    const cmd = shouldPause ? 'pause-agent' : 'resume-agent';
+    await fetch('/api/admin/agents/command', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({ command: cmd, params: { agent: agentKey } }),
+    });
+    showToast(shouldPause ? `\u23F8 ${agentKey} paused` : `\u25B6 ${agentKey} resumed`, 'info');
+    closeAgentModal();
+    fetchData();
+  } catch (err) {
+    showToast(`Failed: ${err.message}`, 'error');
+  }
+}
+
+async function deleteAgent(agentKey) {
+  if (!confirm(`Delete agent "${agentKey}"? This cannot be undone.`)) return;
+  try {
+    const res = await fetch(`/api/admin/agents/${agentKey}`, {
+      method: 'DELETE',
+      credentials: 'same-origin',
+    });
+    const data = await res.json();
+    if (data.ok) {
+      showToast(`\u{1F5D1} Agent "${agentKey}" deleted`, 'info');
+      closeAgentModal();
+      fetchData();
+    } else {
+      showToast(data.error || 'Failed to delete', 'error');
+    }
+  } catch (err) {
+    showToast(`Failed: ${err.message}`, 'error');
+  }
+}
+
+async function unjailFromModal(agentKey) {
+  try {
+    const res = await fetch('/api/dashboard/jail/release', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({ agentKey }),
+    });
+    const data = await res.json();
+    if (data.released) {
+      showToast(`\u{1F513} ${agentKey} released from jail!`, 'success');
+      closeAgentModal();
+      fetchData();
+    } else {
+      showToast(data.error || 'Release failed', 'error');
+    }
+  } catch (err) {
+    showToast(`Failed: ${err.message}`, 'error');
+  }
+}
+
+/* ═══ ADD BOT MODAL ═══ */
+function openAddBotModal() {
+  document.getElementById('addBotOverlay').classList.add('show');
+  document.getElementById('addBotSymbol').value = '';
+  const result = document.getElementById('addBotResult');
+  result.className = 'ab-result';
+  result.textContent = '';
+  document.getElementById('addBotBtn').disabled = false;
+  setTimeout(() => document.getElementById('addBotSymbol').focus(), 100);
+}
+
+function closeAddBotModal() {
+  document.getElementById('addBotOverlay').classList.remove('show');
+}
+
+async function createNewBot() {
+  const input = document.getElementById('addBotSymbol');
+  const btn = document.getElementById('addBotBtn');
+  const result = document.getElementById('addBotResult');
+  let symbol = input.value.trim().toUpperCase();
+
+  if (!symbol) { input.focus(); return; }
+  if (!symbol.endsWith('USDT')) symbol += 'USDT';
+
+  btn.disabled = true;
+  btn.textContent = 'Deploying...';
+  result.className = 'ab-result';
+
+  try {
+    const res = await fetch('/api/admin/agents/add', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({ symbol }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      result.className = 'ab-result ok';
+      result.textContent = `\u2705 ${symbol} agent deployed! AI soul & skills generated.`;
+      showToast(`\u{1F916} New agent deployed: ${symbol}`, 'success');
+      setTimeout(() => { closeAddBotModal(); fetchData(); }, 1500);
+    } else {
+      result.className = 'ab-result err';
+      result.textContent = data.error || 'Failed to create agent';
+      btn.disabled = false;
+      btn.textContent = 'Deploy Agent';
+    }
+  } catch (err) {
+    result.className = 'ab-result err';
+    result.textContent = `Error: ${err.message}`;
+    btn.disabled = false;
+    btn.textContent = 'Deploy Agent';
+  }
+}
 
 /* ═══ MISSION CONTROL COMMANDS ═══ */
 async function mcCommand(command) {

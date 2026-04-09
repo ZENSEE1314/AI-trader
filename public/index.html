@@ -1587,8 +1587,7 @@
 
         <!-- Admin Sub-Tabs -->
         <nav class="admin-subtabs" role="tablist">
-          <button class="admin-subtab active" data-admintab="mc" onclick="window.CryptoBot.switchAdminTab('mc')">Mission Control <span id="mc-status-dot" style="display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--color-text-muted);margin-left:4px;vertical-align:middle;"></span></button>
-          <button class="admin-subtab" data-admintab="earnings" onclick="window.CryptoBot.switchAdminTab('earnings')">Earnings</button>
+          <button class="admin-subtab active" data-admintab="earnings" onclick="window.CryptoBot.switchAdminTab('earnings')">Earnings</button>
           <button class="admin-subtab" data-admintab="users" onclick="window.CryptoBot.switchAdminTab('users')">Users</button>
           <button class="admin-subtab" data-admintab="tokens" onclick="window.CryptoBot.switchAdminTab('tokens')">Tokens</button>
           <button class="admin-subtab" data-admintab="settings" onclick="window.CryptoBot.switchAdminTab('settings')">Settings</button>
@@ -1597,100 +1596,9 @@
         </nav>
 
         <!-- ═══════════════════════════════════════════
-             TAB: Mission Control
-             ═══════════════════════════════════════════ -->
-        <div id="admin-tab-mc" class="admin-tab-panel">
-          <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:var(--space-4);padding-bottom:var(--space-3);border-bottom:1px solid var(--color-border-muted);">
-            <div style="display:flex;align-items:center;gap:12px;">
-              <span style="font-size:0.9rem;font-weight:600;color:var(--color-text);">Coordinator</span>
-              <span id="mc-coord-state" class="mc-badge mc-badge-idle">idle</span>
-              <span id="mc-coord-cycles" style="font-size:0.75rem;color:var(--color-text-muted);">0 cycles</span>
-              <span id="mc-uptime" style="font-size:0.75rem;color:var(--color-text-muted);"></span>
-            </div>
-            <div style="display:flex;gap:6px;flex-wrap:wrap;">
-              <button class="btn btn-sm mc-cmd-btn" style="background:var(--color-accent);color:#000;font-weight:600;" onclick="window.CryptoBot.mcCommand('force-scan')">Force Scan</button>
-              <button class="btn btn-sm mc-cmd-btn" style="background:var(--color-warning);color:#000;" onclick="window.CryptoBot.mcCommand('pause-all')">Pause All</button>
-              <button class="btn btn-sm mc-cmd-btn" style="background:var(--color-success);color:#000;" onclick="window.CryptoBot.mcCommand('resume-all')">Resume All</button>
-              <button class="btn btn-sm mc-cmd-btn" style="border:1px solid var(--color-accent);color:var(--color-accent);background:rgba(212,175,55,0.08);" onclick="window.CryptoBot.mcRefresh()">Refresh</button>
-            </div>
-          </div>
-          <!-- Agent Stats Bar -->
-          <div id="mc-stats-bar" class="summary-grid" style="margin-bottom:var(--space-3);">
-            <div class="summary-card" style="border-left:3px solid var(--color-accent);padding:8px 12px;">
-              <span class="summary-card-label" style="font-size:0.7rem;">Total Agents</span>
-              <span id="mc-total-agents" class="summary-card-value text-mono" style="font-size:1.1rem;">--</span>
-            </div>
-            <div class="summary-card" style="border-left:3px solid var(--color-success);padding:8px 12px;">
-              <span class="summary-card-label" style="font-size:0.7rem;">Running</span>
-              <span id="mc-running-count" class="summary-card-value text-mono" style="font-size:1.1rem;color:var(--color-success);">--</span>
-            </div>
-            <div class="summary-card" style="border-left:3px solid var(--color-warning);padding:8px 12px;">
-              <span class="summary-card-label" style="font-size:0.7rem;">Signals</span>
-              <span id="mc-signal-count" class="summary-card-value text-mono" style="font-size:1.1rem;color:var(--color-warning);">--</span>
-            </div>
-            <div class="summary-card" style="border-left:3px solid var(--color-danger);padding:8px 12px;">
-              <span class="summary-card-label" style="font-size:0.7rem;">Errors</span>
-              <span id="mc-error-count" class="summary-card-value text-mono" style="font-size:1.1rem;color:var(--color-danger);">--</span>
-            </div>
-          </div>
-
-          <!-- Agent Filter Tabs -->
-          <div style="display:flex;gap:2px;margin-bottom:var(--space-3);border-bottom:1px solid var(--color-border-muted);">
-            <button class="mc-filter-tab active" data-filter="system" onclick="window.CryptoBot.filterAgents('system')">System Agents</button>
-            <button class="mc-filter-tab" data-filter="token" onclick="window.CryptoBot.filterAgents('token')">Token Agents</button>
-            <button class="mc-filter-tab" data-filter="all" onclick="window.CryptoBot.filterAgents('all')">All</button>
-          </div>
-
-          <div id="mc-agents-grid" class="mc-agents-grid">
-            <div style="color:var(--color-text-muted);font-size:0.85rem;padding:var(--space-3);text-align:center;">Loading agents...</div>
-          </div>
-
-          <!-- CEO Chat -->
-          <div style="margin-top:var(--space-4);border-top:1px solid var(--color-border-muted);padding-top:var(--space-3);">
-            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--space-2);">
-              <strong style="font-size:0.85rem;color:var(--color-accent);">Talk to Your Agents</strong>
-              <span style="font-size:0.7rem;color:var(--color-text-muted);">Type naturally — they understand you</span>
-            </div>
-            <div id="mc-chat-messages" class="mc-chat-messages">
-              <div class="mc-chat-msg mc-chat-agent">
-                <span class="mc-chat-from">Coordinator</span>
-                <span class="mc-chat-text">Ready for orders, boss. Type "help" to see what I can do, or just tell me what you need.</span>
-              </div>
-            </div>
-            <div style="display:flex;gap:6px;margin-top:var(--space-2);">
-              <input type="text" id="mc-chat-input" class="form-input text-mono" placeholder="Tell your agents what to do..." style="flex:1;font-size:0.85rem;padding:10px 14px;" onkeydown="if(event.key==='Enter')window.CryptoBot.mcChat()">
-              <button class="btn btn-sm" style="background:var(--color-accent);color:#000;font-weight:600;padding:10px 20px;white-space:nowrap;" onclick="window.CryptoBot.mcChat()">Send</button>
-            </div>
-            <div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:var(--space-2);">
-              <button class="mc-quick-cmd" onclick="window.CryptoBot.mcChatQuick('scan now')">scan now</button>
-              <button class="mc-quick-cmd" onclick="window.CryptoBot.mcChatQuick('status')">status</button>
-              <button class="mc-quick-cmd" onclick="window.CryptoBot.mcChatQuick('any signals?')">any signals?</button>
-              <button class="mc-quick-cmd" onclick="window.CryptoBot.mcChatQuick('market mood?')">market mood?</button>
-              <button class="mc-quick-cmd" onclick="window.CryptoBot.mcChatQuick('what are you trading?')">open positions</button>
-              <button class="mc-quick-cmd" onclick="window.CryptoBot.mcChatQuick('risk report')">risk report</button>
-              <button class="mc-quick-cmd" onclick="window.CryptoBot.mcChatQuick('performance')">performance</button>
-              <button class="mc-quick-cmd" onclick="window.CryptoBot.mcChatQuick('audit trades')">audit trades</button>
-              <button class="mc-quick-cmd" onclick="window.CryptoBot.mcChatQuick('what do you remember?')">memories</button>
-              <button class="mc-quick-cmd" onclick="window.CryptoBot.mcChatQuick('pause all')">pause all</button>
-              <button class="mc-quick-cmd" onclick="window.CryptoBot.mcChatQuick('resume all')">resume all</button>
-            </div>
-          </div>
-
-          <div style="margin-top:var(--space-4);border-top:1px solid var(--color-border-muted);padding-top:var(--space-3);">
-            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--space-2);">
-              <strong style="font-size:0.85rem;color:var(--color-text);">Activity Feed</strong>
-              <span id="mc-activity-count" style="font-size:0.7rem;color:var(--color-text-muted);">0 events</span>
-            </div>
-            <div id="mc-activity-feed" class="mc-activity-feed">
-              <div style="color:var(--color-text-muted);font-size:0.8rem;text-align:center;padding:var(--space-3);">No activity yet</div>
-            </div>
-          </div>
-        </div>
-
-        <!-- ═══════════════════════════════════════════
              TAB: Earnings
              ═══════════════════════════════════════════ -->
-        <div id="admin-tab-earnings" class="admin-tab-panel hidden">
+        <div id="admin-tab-earnings" class="admin-tab-panel">
           <div id="admin-weekly-summary" class="summary-grid" style="margin-bottom:var(--space-4);">
             <div class="summary-card" style="border-left:3px solid var(--color-success);">
               <span class="summary-card-label">Net P&L (All Users)</span>

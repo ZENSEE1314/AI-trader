@@ -175,12 +175,7 @@
     // Stop polling when leaving tabs
     if (tab !== 'logs') stopLogPolling();
     if (tab !== 'dashboard') stopDashboardRefresh();
-    // Mission Control auto-refresh
-    if (tab === 'admin') {
-      if (!mcRefreshTimer) mcRefreshTimer = setInterval(mcRefresh, 15000);
-    } else {
-      if (mcRefreshTimer) { clearInterval(mcRefreshTimer); mcRefreshTimer = null; }
-    }
+    // Admin tab no longer has MC panel — no timer needed
   }
 
   // ----- Auth -----
@@ -1342,8 +1337,6 @@
       loadTokenLeverage();
       loadRiskLevels();
       adminLoadTokenBoard();
-      // Mission Control
-      mcRefresh();
     } catch (err) { showToast('Failed to load admin.', 'error'); }
   }
 
@@ -1359,13 +1352,13 @@
       btn.classList.toggle('active', btn.dataset.admintab === tab);
     });
     // Toggle panels
-    const panels = ['mc', 'earnings', 'users', 'tokens', 'settings', 'tools'];
+    const panels = ['earnings', 'users', 'tokens', 'settings', 'tools'];
     panels.forEach(p => {
       const el = document.getElementById(`admin-tab-${p}`);
       if (el) el.classList.toggle('hidden', p !== tab);
     });
-    // Refresh Mission Control when switching to it
-    if (tab === 'mc') mcRefresh();
+    // Refresh admin data when switching tabs
+    if (tab === 'earnings') loadAdmin();
   }
 
   async function mcRefresh() {

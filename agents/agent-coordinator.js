@@ -1481,13 +1481,18 @@ class AgentCoordinator extends BaseAgent {
   }
 
   removeAgent(agentKey) {
-    // Don't allow removing core agents
     const core = ['chart', 'trader', 'risk', 'sentiment', 'accountant', 'kronos', 'strategy', 'police', 'coder', 'optimizer'];
     if (core.includes(agentKey)) return { ok: false, error: 'Cannot remove core agents' };
     const agent = this._agents.get(agentKey);
     if (!agent) return { ok: false, error: `Agent "${agentKey}" not found` };
     agent.shutdown();
     this._agents.delete(agentKey);
+    // Clean up from tokenAgents map if it was a token agent
+    const symbol = agentKey.toUpperCase() + 'USDT';
+    if (this.tokenAgents.has(symbol)) {
+      this.tokenAgents.delete(symbol);
+      this._rebuildScanQueue();
+    }
     this.log(`Agent removed: ${agentKey}`);
     return { ok: true };
   }

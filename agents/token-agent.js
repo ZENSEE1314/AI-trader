@@ -110,6 +110,7 @@ class TokenAgent extends BaseAgent {
         ts: this.lastSignal.ts,
       } : null,
       tokenAgent: true,
+      profile: this._profile,
     };
   }
 }

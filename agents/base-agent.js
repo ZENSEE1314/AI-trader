@@ -740,6 +740,7 @@ class BaseAgent {
       rpg: this.getRpgProfile(),
       personality: this.getPersonality(),
       competition: this.getCompetitionStats(),
+      profile: this._profile,
     };
   }
 

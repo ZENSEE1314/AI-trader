@@ -172,8 +172,9 @@ function getStructure(klines, len) {
     const isBullish = lastHigh.label === 'HH' && lastLow.label === 'HL';
     if (isBearish) trend = 'bearish';
     else if (isBullish) trend = 'bullish';
-    // NOTE: Mixed structures (LH+HL or HH+LL) stay 'neutral' — no trade.
-    // Per SMC rules: HL blocks shorts, LH blocks longs. Mixed = indecisive.
+    // Mixed structures: use the most recent swing's bias instead of neutral
+    else if (lastHigh.label === 'LH') trend = 'bearish';
+    else if (lastLow.label === 'HL') trend = 'bullish';
   }
 
   return {
@@ -320,7 +321,7 @@ async function analyzeLHHL(ticker, params, dailyBiasCache, kronosPredictions = n
   // Load AI-optimized strategy params from DB (set by Quantum Optimizer)
   const sc = await getStrategyConfig() || {};
   const NEED_DAILY = sc.requireDailyBias !== undefined ? !!sc.requireDailyBias : false;
-  const NEED_BOTH_HTF = sc.requireBothHTF !== undefined ? !!sc.requireBothHTF : true;
+  // NEED_BOTH_HTF removed — 4H takes priority, falls back to 1H (no mixed-structure blocking)
   const NEED_KL = sc.requireKeyLevel !== undefined ? !!sc.requireKeyLevel : false;
   const NEED_15M = sc.require15m !== undefined ? !!sc.require15m : false;
   const NEED_1M = sc.require1m !== undefined ? !!sc.require1m : false;
@@ -385,27 +386,21 @@ async function analyzeLHHL(ticker, params, dailyBiasCache, kronosPredictions = n
   const bear4h = struct4h.trend === 'bearish';
   const bear1h = struct1h.trend === 'bearish';
 
+  // Direction from HTF: 4H takes priority, fall back to 1H
   let direction = null;
   if (NEED_DAILY && dailyBias) {
-    if (NEED_BOTH_HTF) {
-      if (dailyBias === 'bullish' && bull4h && bull1h) direction = 'LONG';
-      else if (dailyBias === 'bearish' && bear4h && bear1h) direction = 'SHORT';
-    } else {
-      if (dailyBias === 'bullish' && (bull4h || bull1h)) direction = 'LONG';
-      else if (dailyBias === 'bearish' && (bear4h || bear1h)) direction = 'SHORT';
-    }
+    if (dailyBias === 'bullish' && (bull4h || bull1h)) direction = 'LONG';
+    else if (dailyBias === 'bearish' && (bear4h || bear1h)) direction = 'SHORT';
   } else {
-    if (NEED_BOTH_HTF) {
-      if (bull4h && bull1h) direction = 'LONG';
-      else if (bear4h && bear1h) direction = 'SHORT';
-    } else {
-      if ((bull4h || bull1h) && !bear4h && !bear1h) direction = 'LONG';
-      else if ((bear4h || bear1h) && !bull4h && !bull1h) direction = 'SHORT';
-    }
+    // Use 4H as primary; if neutral, defer to 1H
+    if (bull4h) direction = 'LONG';
+    else if (bear4h) direction = 'SHORT';
+    else if (bull1h) direction = 'LONG';
+    else if (bear1h) direction = 'SHORT';
   }
 
   if (!direction) {
-    bLog.scan(`${symbol}: 4h=${struct4h.trend} 1h=${struct1h.trend} daily=${dailyBias || 'N/A'} — no HTF alignment`);
+    bLog.scan(`${symbol}: 4h=${struct4h.trend} 1h=${struct1h.trend} daily=${dailyBias || 'N/A'} — no HTF direction found`);
     return null;
   }
 

@@ -3406,4 +3406,28 @@ router.delete('/agents/:key', async (req, res) => {
   } catch (err) { res.status(500).json({ ok: false, error: err.message }); }
 });
 
+// POST /api/admin/agents/add — Deploy a new token agent with AI-generated soul
+router.post('/agents/add', async (req, res) => {
+  try {
+    const { symbol } = req.body;
+    if (!symbol) return res.status(400).json({ ok: false, error: 'Missing symbol' });
+    const sym = symbol.toUpperCase().endsWith('USDT') ? symbol.toUpperCase() : symbol.toUpperCase() + 'USDT';
+    const { getCoordinator } = require('../agents');
+    const coordinator = getCoordinator();
+    if (coordinator.tokenAgents.has(sym)) {
+      return res.json({ ok: false, error: `${sym} agent already exists` });
+    }
+    coordinator.addTokenAgent(sym);
+    const key = sym.toLowerCase().replace('usdt', '');
+    const agent = coordinator._agents.get(key);
+    const profile = agent ? (agent._profile || agent.profile || {}) : {};
+    res.json({
+      ok: true,
+      symbol: sym,
+      key,
+      profile,
+    });
+  } catch (err) { res.status(500).json({ ok: false, error: err.message }); }
+});
+
 module.exports = router;
