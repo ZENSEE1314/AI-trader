@@ -160,6 +160,37 @@
     .sp-strat{box-shadow:6px 0 #f97316,9px 0 #f97316,12px 0 #f97316,15px 0 #f97316,3px 3px #ea580c,6px 3px #f97316,9px 3px #fb923c,12px 3px #fb923c,15px 3px #f97316,18px 3px #ea580c,6px 6px var(--px-skin),9px 6px var(--px-skin),12px 6px var(--px-skin),15px 6px var(--px-skin),6px 9px var(--px-skin),9px 9px var(--px-dark),12px 9px var(--px-skin),15px 9px var(--px-dark),6px 12px var(--px-skin),9px 12px var(--px-skin),12px 12px var(--px-skindk),15px 12px var(--px-skin),3px 15px #c2410c,6px 15px #ea580c,9px 15px #ea580c,12px 15px #f97316,15px 15px #ea580c,18px 15px #c2410c,3px 18px #c2410c,6px 18px #ea580c,9px 18px #f97316,12px 18px #fb923c,15px 18px #ea580c,18px 18px #c2410c,21px 18px var(--px-skindk),0px 18px var(--px-skindk),6px 21px #ea580c,9px 21px #ea580c,12px 21px #ea580c,15px 21px #ea580c,6px 24px var(--px-pants),9px 24px var(--px-pants),15px 24px var(--px-pants),6px 27px var(--px-hair),9px 27px var(--px-hair),15px 27px var(--px-hair)}
     .sp-token{box-shadow:6px 0 var(--px-gold),9px 0 var(--px-gold2),12px 0 var(--px-gold),6px 6px var(--px-skin),9px 6px var(--px-skin),12px 6px var(--px-skin),6px 9px var(--px-dark),9px 9px var(--px-skin),12px 9px var(--px-dark),3px 12px var(--px-gold),6px 12px var(--px-gold),9px 12px var(--px-gold),12px 12px var(--px-gold),15px 12px var(--px-gold),6px 15px var(--px-gold),9px 15px #b8922a,12px 15px var(--px-gold),6px 18px var(--px-pants),12px 18px var(--px-pants),6px 21px var(--px-hair),12px 21px var(--px-hair)}
 
+    /* ═══ JAIL MODAL ═══ */
+    .jail-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:100;align-items:center;justify-content:center;backdrop-filter:blur(4px)}
+    .jail-overlay.show{display:flex}
+    .jail-modal{background:var(--surface);border:2px solid #4b2020;border-radius:14px;max-width:440px;width:92%;max-height:80vh;overflow-y:auto;box-shadow:0 0 40px rgba(244,63,94,.2);animation:jailModalIn .3s ease-out}
+    @keyframes jailModalIn{from{opacity:0;transform:scale(.92) translateY(20px)}to{opacity:1;transform:scale(1) translateY(0)}}
+    .jail-hdr{display:flex;align-items:center;gap:10px;padding:16px 18px;border-bottom:1px solid #4b2020}
+    .jail-hdr-icon{font-size:1.6rem}
+    .jail-hdr-title{font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:1.1rem;color:var(--danger);flex:1}
+    .jail-close{background:0;border:0;color:var(--fg3);font-size:1.2rem;cursor:pointer;padding:4px 8px}
+    .jail-close:hover{color:var(--fg)}
+    .jail-body{padding:16px 18px}
+    .jail-section{margin-bottom:14px}
+    .jail-label{font-family:'Space Grotesk',sans-serif;font-size:.7rem;font-weight:600;color:var(--fg3);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px}
+    .jail-value{font-family:'JetBrains Mono',monospace;font-size:.8rem;color:var(--fg);padding:6px 10px;background:var(--bg);border-radius:6px;border:1px solid var(--border2)}
+    .jail-severity{display:inline-block;font-family:'JetBrains Mono',monospace;font-size:.65rem;font-weight:600;padding:2px 8px;border-radius:99px;text-transform:uppercase}
+    .jail-severity.critical{color:#f43f5e;border:1px solid #f43f5e;background:rgba(244,63,94,.1)}
+    .jail-severity.high{color:#fb923c;border:1px solid #fb923c;background:rgba(251,146,60,.1)}
+    .jail-severity.medium{color:#fbbf24;border:1px solid #fbbf24;background:rgba(251,191,36,.1)}
+    .jail-severity.low{color:var(--fg2);border:1px solid var(--border);background:rgba(255,255,255,.05)}
+    .jail-history{list-style:none;padding:0;margin:0}
+    .jail-history li{font-size:.7rem;color:var(--fg2);padding:5px 8px;border-left:2px solid var(--border2);margin-bottom:4px;background:rgba(0,0,0,.2);border-radius:0 4px 4px 0}
+    .jail-history li .jh-num{color:var(--danger);font-weight:600}
+    .jail-history li .jh-time{color:var(--fg3);font-size:.6rem;float:right}
+    .jail-footer{padding:12px 18px;border-top:1px solid var(--border2);display:flex;gap:10px}
+    .btn-unjail{flex:1;padding:10px 16px;background:linear-gradient(135deg,#16a34a,#22c55e);color:#fff;border:0;border-radius:8px;font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:.85rem;cursor:pointer;transition:transform .15s,box-shadow .15s}
+    .btn-unjail:hover{transform:translateY(-1px);box-shadow:0 4px 16px rgba(34,197,94,.3)}
+    .btn-unjail:disabled{opacity:.5;cursor:not-allowed;transform:none;box-shadow:none}
+    .btn-unjail-cancel{padding:10px 16px;background:0;border:1px solid var(--border);color:var(--fg2);border-radius:8px;font-family:'Space Grotesk',sans-serif;font-size:.85rem;cursor:pointer}
+    .btn-unjail-cancel:hover{border-color:var(--fg3);color:var(--fg)}
+    .jail-improve{font-size:.75rem;color:var(--success);padding:8px 10px;background:rgba(34,197,94,.08);border:1px solid rgba(34,197,94,.2);border-radius:6px;display:none;margin-top:10px}
+
     /* ═══ PROFILE CARDS ═══ */
     .cards-wrap{padding:0 16px 16px}
     .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px;max-width:960px;margin:0 auto}
@@ -354,6 +385,19 @@
 
   <div class="cards-wrap"><div class="cards" id="profileCards"></div></div>
   <div class="feed-wrap"><div class="feed" id="feedBox"><div class="feed-title">&#x1F4E1; Live Activity</div><div class="feed-scroll" id="feedScroll"></div></div></div>
+
+  <!-- Jail Modal Overlay -->
+  <div class="jail-overlay" id="jailOverlay">
+    <div class="jail-modal">
+      <div class="jail-hdr">
+        <span class="jail-hdr-icon">🔒</span>
+        <span class="jail-hdr-title" id="jailTitle">Agent Violation Report</span>
+        <button class="jail-close" onclick="closeJailModal()">&times;</button>
+      </div>
+      <div class="jail-body" id="jailBody"></div>
+      <div class="jail-footer" id="jailFooter"></div>
+    </div>
+  </div>
 
 <script>
 /* ═══════════════════════════════════════════
@@ -623,6 +667,14 @@ function updateCharacter(key, agentData, cfg) {
   const desiredTarget = getTargetRoom(state);
   const animClass = getAnimClass(state);
 
+  if (state === 'jailed') {
+    ch.el.style.cursor = 'pointer';
+    ch.el.onclick = () => openJailModal(key);
+  } else {
+    ch.el.style.cursor = '';
+    ch.el.onclick = null;
+  }
+
   const rpg = agentData.rpg || {};
   const lvlEl = document.getElementById('lvl-' + key);
   if (lvlEl) lvlEl.textContent = 'Lv' + (rpg.level || 1);
@@ -811,14 +863,15 @@ function renderCard(key, d, cfg) {
     '<div>' + esc(a.message || '') + '</div>'
   ).join('') || '<div>No activity</div>';
 
-  return `<div class="card${cls}">
+  const jailClick = state === 'jailed' ? ` onclick="openJailModal('${key}')" style="cursor:pointer"` : '';
+  return `<div class="card${cls}"${jailClick}>
     <div class="card-top">
       <div class="card-av"><div class="pxs ${cfg.sprite}"></div></div>
       <div class="card-info">
         <div class="card-name">${esc(cfg.name)}${rank > 0 ? ' <span style="color:var(--fg3);font-size:.6rem">#' + rank + '</span>' : ''}</div>
         <div class="card-role">${esc(cfg.role)} <span style="${tierColor};font-weight:600">[${tier}]</span></div>
       </div>
-      <span class="card-st ${state}">${state === 'jailed' ? '⛓️ JAILED' : state}</span>
+      <span class="card-st ${state}">${state === 'jailed' ? '⛓️ JAILED — click to review' : state}</span>
     </div>
     <div class="lvl-row">
       <span class="lvl-badge">Lv.${lvl}</span>
@@ -918,6 +971,147 @@ document.addEventListener('keydown', e => {
     e.preventDefault();
     fetch('/api/admin/agents/command',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'same-origin',body:JSON.stringify({command:'force-scan'})}).then(()=>fetchData()).catch(()=>{});
   }
+});
+
+/* ═══ JAIL MODAL ═══ */
+function openJailModal(agentKey) {
+  const overlay = document.getElementById('jailOverlay');
+  const body = document.getElementById('jailBody');
+  const footer = document.getElementById('jailFooter');
+  const title = document.getElementById('jailTitle');
+
+  title.textContent = '⛓️ Loading...';
+  body.innerHTML = '<div style="text-align:center;padding:20px;color:var(--fg3)">Fetching violation report...</div>';
+  footer.innerHTML = '';
+  overlay.classList.add('show');
+  overlay.dataset.agentKey = agentKey;
+
+  fetch(`/api/dashboard/jail/report/${agentKey}`, { credentials: 'same-origin' })
+    .then(r => r.json())
+    .then(report => {
+      const jr = report.jailRecord || {};
+      const isJailed = report.isJailed;
+      const agentName = agentKey.charAt(0).toUpperCase() + agentKey.slice(1);
+      title.textContent = isJailed ? `⛓️ ${agentName} — JAILED` : `📋 ${agentName} — Report`;
+
+      let html = '';
+
+      if (isJailed && jr.reason) {
+        html += `<div class="jail-section">
+          <div class="jail-label">Offense</div>
+          <div class="jail-value">${esc(jr.reason)}</div>
+        </div>`;
+        html += `<div class="jail-section">
+          <div class="jail-label">Violation Type</div>
+          <div class="jail-value">${esc(jr.violationType || 'unknown')}</div>
+        </div>`;
+        html += `<div class="jail-section">
+          <div class="jail-label">Severity</div>
+          <span class="jail-severity ${(jr.severity||'medium').toLowerCase()}">${jr.severity || 'unknown'}</span>
+        </div>`;
+        const dur = jr.jailedAt ? Math.round((Date.now() - jr.jailedAt) / 60000) : 0;
+        html += `<div class="jail-section">
+          <div class="jail-label">Time Served</div>
+          <div class="jail-value">${dur >= 60 ? Math.floor(dur/60) + 'h ' + (dur%60) + 'm' : dur + ' minutes'}</div>
+        </div>`;
+        html += `<div class="jail-section">
+          <div class="jail-label">Warnings Before Arrest</div>
+          <div class="jail-value">${jr.warnings || 0} warning(s)</div>
+        </div>`;
+      }
+
+      if (!isJailed) {
+        html += `<div class="jail-section">
+          <div class="jail-label">Status</div>
+          <div class="jail-value" style="color:var(--success)">✅ Not currently jailed</div>
+        </div>`;
+        html += `<div class="jail-section">
+          <div class="jail-label">Current Warnings</div>
+          <div class="jail-value">${report.currentWarnings || 0}</div>
+        </div>`;
+      }
+
+      const history = report.warningHistory || [];
+      if (history.length > 0) {
+        html += `<div class="jail-section">
+          <div class="jail-label">Warning History (${history.length})</div>
+          <ul class="jail-history">`;
+        for (const w of history.slice(0, 10)) {
+          const t = w.ts ? new Date(w.ts).toLocaleString('en-GB', {timeZone:'Asia/Jakarta', day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit'}) : '';
+          html += `<li><span class="jh-num">Warning #${w.warningNumber || '?'}</span> — ${esc(w.violation || w.reason || 'unknown')}<span class="jh-time">${t}</span></li>`;
+        }
+        html += `</ul></div>`;
+      }
+
+      html += '<div class="jail-improve" id="jailImprove"></div>';
+      body.innerHTML = html;
+
+      if (isJailed) {
+        footer.innerHTML = `
+          <button class="btn-unjail" id="btnUnjail" onclick="unjailAgent('${esc(agentKey)}')">🔓 Release & Improve</button>
+          <button class="btn-unjail-cancel" onclick="closeJailModal()">Cancel</button>
+        `;
+      } else {
+        footer.innerHTML = `<button class="btn-unjail-cancel" onclick="closeJailModal()" style="flex:1">Close</button>`;
+      }
+    })
+    .catch(err => {
+      body.innerHTML = `<div style="text-align:center;padding:20px;color:var(--danger)">Failed to load report: ${err.message}</div>`;
+      footer.innerHTML = `<button class="btn-unjail-cancel" onclick="closeJailModal()" style="flex:1">Close</button>`;
+    });
+}
+
+function closeJailModal() {
+  document.getElementById('jailOverlay').classList.remove('show');
+}
+
+async function unjailAgent(agentKey) {
+  const btn = document.getElementById('btnUnjail');
+  btn.disabled = true;
+  btn.textContent = '⏳ Releasing...';
+
+  try {
+    const res = await fetch('/api/dashboard/jail/release', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({ agentKey }),
+    });
+    const data = await res.json();
+
+    if (data.ok) {
+      btn.textContent = '✅ Released!';
+      btn.style.background = 'linear-gradient(135deg,#059669,#10b981)';
+
+      const improveEl = document.getElementById('jailImprove');
+      if (improveEl) {
+        const violation = data.report?.jailRecord?.violationType || 'unknown';
+        const lessons = {
+          excessive_losses: 'I will reduce position sizes and wait for stronger confirmations.',
+          high_error_rate: 'I will validate inputs more carefully and handle edge cases.',
+          ignoring_risk: 'I will always respect RiskAgent rejection — safety first.',
+          stale_agent: 'I will stay active and report status regularly.',
+          repeated_failures: 'I will diagnose root causes instead of repeating failed patterns.',
+        };
+        improveEl.innerHTML = `🧠 <strong>Self-improvement:</strong> "${lessons[violation] || 'I will be more careful and follow protocol.'}"`;
+        improveEl.style.display = 'block';
+      }
+
+      setTimeout(() => { closeJailModal(); fetchData(); }, 2500);
+    } else {
+      btn.textContent = '❌ Failed';
+      btn.disabled = false;
+      setTimeout(() => { btn.textContent = '🔓 Release & Improve'; }, 2000);
+    }
+  } catch (err) {
+    btn.textContent = '❌ Error';
+    btn.disabled = false;
+    setTimeout(() => { btn.textContent = '🔓 Release & Improve'; }, 2000);
+  }
+}
+
+document.getElementById('jailOverlay').addEventListener('click', function(e) {
+  if (e.target === this) closeJailModal();
 });
 
 /* ═══ INIT ═══ */

@@ -22,6 +22,14 @@ const { PoliceAgent } = require('./police-agent');
 const { CoderAgent } = require('./coder-agent');
 const { OptimizerAgent } = require('./optimizer-agent');
 
+const SELF_IMPROVE_LESSONS = {
+  excessive_losses: 'I will reduce position sizes and wait for stronger confirmations.',
+  high_error_rate: 'I will validate inputs more carefully and handle edge cases.',
+  ignoring_risk: 'I will always respect RiskAgent rejection — safety first.',
+  stale_agent: 'I will stay active and report status regularly.',
+  repeated_failures: 'I will diagnose root causes instead of repeating failed patterns.',
+};
+
 // Top tokens that always get their own agent
 const DEFAULT_TOKEN_AGENTS = [
   'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT',
@@ -413,18 +421,32 @@ class AgentCoordinator extends BaseAgent {
   }
 
   async releaseAgent(agentKey) {
+    const report = await this.policeAgent.getViolationReport(agentKey);
     const released = await this.policeAgent.releaseAgent(agentKey, this);
     if (released) {
       const agent = this._agents.get(agentKey);
       if (agent) {
         agent.managedByCoordinator = true;
         agent.state = 'running';
-        agent.currentTask = { description: 'Back on duty after jail release', startedAt: Date.now() };
-        agent.addActivity('success', 'CEO approved release — proving myself again');
+
+        const violation = report?.jailRecord?.violationType || 'unknown';
+        const lesson = SELF_IMPROVE_LESSONS[violation] || 'I will be more careful and follow protocol.';
+        agent.currentTask = { description: `Self-improving: ${lesson}`, startedAt: Date.now() };
+        agent.addActivity('success', `Released from jail — lesson learned: ${lesson}`);
+
+        try {
+          await agent.remember(`improvement_${Date.now()}`, {
+            violation,
+            reason: report?.jailRecord?.reason || 'unknown',
+            lesson,
+            releasedAt: Date.now(),
+          }, 'self_improvement');
+        } catch { /* DB may not be ready */ }
+
         agent.generateThought();
       }
     }
-    return released;
+    return { released, report };
   }
 
   async getViolationReport(agentKey) {

@@ -902,8 +902,8 @@ router.post('/jail/release', async (req, res) => {
     if (!agentKey) return res.status(400).json({ error: 'agentKey required' });
     const { getCoordinator } = require('../agents/agent-coordinator');
     const coord = getCoordinator();
-    const released = await coord.releaseAgent(agentKey);
-    res.json({ ok: released, agentKey });
+    const { released, report } = await coord.releaseAgent(agentKey);
+    res.json({ ok: released, agentKey, report });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
