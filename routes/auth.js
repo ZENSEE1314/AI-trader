@@ -34,9 +34,13 @@ router.post('/signup', async (req, res) => {
     const feeDue = new Date();
     feeDue.setDate(feeDue.getDate() + 7);
 
+    // First registered user becomes admin automatically
+    const userCount = await query('SELECT COUNT(*) as cnt FROM users');
+    const isFirstUser = parseInt(userCount[0]?.cnt || 0) === 0;
+
     const rows = await query(
-      'INSERT INTO users (email, password_hash, referral_code, referred_by, weekly_fee_due) VALUES ($1, $2, $3, $4, $5) RETURNING id',
-      [email.toLowerCase(), hash, myRefCode, referredBy, feeDue]
+      'INSERT INTO users (email, password_hash, referral_code, referred_by, weekly_fee_due, is_admin) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id',
+      [email.toLowerCase(), hash, myRefCode, referredBy, feeDue, isFirstUser]
     );
     const token = signToken(rows[0].id, email.toLowerCase());
     res.cookie('token', token, { httpOnly: true, maxAge: 30 * 24 * 60 * 60 * 1000, sameSite: 'lax' });

@@ -1342,7 +1342,7 @@ async function executeForAllUsers(pick) {
                trailing_sl_price, trailing_sl_last_step, tf_15m, tf_3m, tf_1m)
                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'OPEN', $10, 0, $11, $12, $13)`,
               [key.id, key.user_id, symbol, pick.direction, actualEntry,
-               slFmtActual, 0, qty, userLev, slFmtActual,
+               slFmtActual, tpFmtActual, qty, userLev, slFmtActual,
                pick.structure?.tf4h || pick.structure?.tf15 || null, pick.structure?.tf1h || pick.structure?.tf3 || null, pick.structure?.tf15 || pick.structure?.tf1 || null]
             );
           } else {
@@ -1496,7 +1496,18 @@ async function syncTradeStatus() {
               // ── Step 1: Get current price (3 methods, must succeed) ──
               let curPrice = null;
               const priceMethods = [
-                // Method A: Binance futures public API
+                // Method A: Bitunix client getMarketPrice (native to this exchange)
+                async () => {
+                  const p = await userClient.getMarketPrice(trade.symbol);
+                  if (!p || isNaN(p)) throw new Error('invalid');
+                  return p;
+                },
+                // Method B: Bitunix markPrice from position data
+                async () => {
+                  if (exchangePos.markPrice) return exchangePos.markPrice;
+                  throw new Error('no markPrice');
+                },
+                // Method C: Binance futures public API (fallback for shared symbols)
                 async () => {
                   const fetch = require('node-fetch');
                   const res = await fetch(
@@ -1507,23 +1518,6 @@ async function syncTradeStatus() {
                   const p = parseFloat(d.price);
                   if (!p || isNaN(p)) throw new Error('invalid');
                   return p;
-                },
-                // Method B: Binance spot API
-                async () => {
-                  const fetch = require('node-fetch');
-                  const res = await fetch(
-                    `https://api.binance.com/api/v3/ticker/price?symbol=${trade.symbol}`,
-                    { timeout: 5000, ...getFetchOptions() }
-                  );
-                  const d = await res.json();
-                  const p = parseFloat(d.price);
-                  if (!p || isNaN(p)) throw new Error('invalid');
-                  return p;
-                },
-                // Method C: Bitunix markPrice from position
-                async () => {
-                  if (exchangePos.markPrice) return exchangePos.markPrice;
-                  throw new Error('no markPrice');
                 },
                 // Method D: Calculate from PnL
                 async () => {

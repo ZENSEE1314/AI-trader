@@ -172,8 +172,8 @@ function getStructure(klines, len) {
     const isBullish = lastHigh.label === 'HH' && lastLow.label === 'HL';
     if (isBearish) trend = 'bearish';
     else if (isBullish) trend = 'bullish';
-    else if (lastHigh.label === 'LH') trend = 'bearish_lean';
-    else if (lastLow.label === 'HL') trend = 'bullish_lean';
+    // NOTE: Mixed structures (LH+HL or HH+LL) stay 'neutral' — no trade.
+    // Per SMC rules: HL blocks shorts, LH blocks longs. Mixed = indecisive.
   }
 
   return {
@@ -380,10 +380,10 @@ async function analyzeLHHL(ticker, params, dailyBiasCache, kronosPredictions = n
   const struct4h = getStructure(klines4h, SWING_LENGTHS['4h']);
   const struct1h = getStructure(klines1h, SWING_LENGTHS['1h']);
 
-  const bull4h = struct4h.trend === 'bullish' || struct4h.trend === 'bullish_lean';
-  const bull1h = struct1h.trend === 'bullish' || struct1h.trend === 'bullish_lean';
-  const bear4h = struct4h.trend === 'bearish' || struct4h.trend === 'bearish_lean';
-  const bear1h = struct1h.trend === 'bearish' || struct1h.trend === 'bearish_lean';
+  const bull4h = struct4h.trend === 'bullish';
+  const bull1h = struct1h.trend === 'bullish';
+  const bear4h = struct4h.trend === 'bearish';
+  const bear1h = struct1h.trend === 'bearish';
 
   let direction = null;
   if (NEED_DAILY && dailyBias) {

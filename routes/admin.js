@@ -1203,22 +1203,74 @@ router.post('/emergency-close', async (req, res) => {
           const positions = await client.getOpenPositions(symbol);
           const openPos = Array.isArray(positions) ? positions.filter(p => p.symbol === symbol && parseFloat(p.qty) > 0) : [];
 
-          for (const pos of openPos) {
-            try {
-              console.log(`[EMERGENCY] Flash closing ${pos.symbol} positionId=${pos.positionId} side=${pos.side} qty=${pos.qty} for ${key.email}`);
-              const closeResult = await client.flashClose({ positionId: pos.positionId });
-              console.log(`[EMERGENCY] Close result:`, JSON.stringify(closeResult));
-              await query(
-                `UPDATE trades SET status = 'CLOSED', exit_price = $1, closed_at = NOW()
-                 WHERE api_key_id = $2 AND symbol = $3 AND status = 'OPEN'`,
-                [parseFloat(pos.avgOpenPrice || 0), key.id, pos.symbol]
-              );
-              totalClosed++;
-              results.push({ user: key.email, symbol: pos.symbol, side: pos.side, qty: pos.qty, status: 'CLOSED' });
-              console.log(`[EMERGENCY] Closed ${pos.symbol} ${pos.side} qty=${pos.qty} for ${key.email}`);
-            } catch (closeErr) {
-              results.push({ user: key.email, symbol: pos.symbol, status: 'FAILED', error: closeErr.message });
+          if (openPos.length > 0) {
+            for (const pos of openPos) {
+              try {
+                console.log(`[EMERGENCY] Flash closing ${pos.symbol} positionId=${pos.positionId} side=${pos.side} qty=${pos.qty} for ${key.email}`);
+                const closeResult = await client.flashClose({ positionId: pos.positionId });
+                console.log(`[EMERGENCY] Close result:`, JSON.stringify(closeResult));
+                await query(
+                  `UPDATE trades SET status = 'CLOSED', exit_price = $1, closed_at = NOW()
+                   WHERE api_key_id = $2 AND symbol = $3 AND status = 'OPEN'`,
+                  [parseFloat(pos.avgOpenPrice || 0), key.id, pos.symbol]
+                );
+                totalClosed++;
+                results.push({ user: key.email, symbol: pos.symbol, side: pos.side, qty: pos.qty, status: 'CLOSED' });
+                console.log(`[EMERGENCY] Closed ${pos.symbol} ${pos.side} qty=${pos.qty} for ${key.email}`);
+              } catch (closeErr) {
+                results.push({ user: key.email, symbol: pos.symbol, status: 'FAILED', error: closeErr.message });
+              }
             }
+          } else {
+            // No exchange position found — mark DB trades as closed (phantom cleanup)
+            const phantomRows = await query(
+              `UPDATE trades SET status = 'CLOSED', closed_at = NOW()
+               WHERE api_key_id = $1 AND symbol = $2 AND status = 'OPEN'
+               RETURNING id`,
+              [key.id, symbol]
+            );
+            if (phantomRows.length > 0) {
+              console.log(`[EMERGENCY] Cleaned ${phantomRows.length} phantom DB trade(s) for ${key.email} ${symbol}`);
+              totalClosed += phantomRows.length;
+              results.push({ user: key.email, symbol, status: 'PHANTOM_CLEANED', count: phantomRows.length });
+            }
+          }
+        } else {
+          // Binance — close via market order
+          try {
+            const { USDMClient } = require('binance');
+            const getBinanceRequestOptions = () => {
+              const PROXY_URL = process.env.QUOTAGUARDSTATIC_URL;
+              if (!PROXY_URL) return {};
+              const { HttpsProxyAgent } = require('https-proxy-agent');
+              return { requestOptions: { agent: new HttpsProxyAgent(PROXY_URL) } };
+            };
+            const client = new USDMClient({ api_key: apiKey, api_secret: apiSecret, ...getBinanceRequestOptions() });
+            const positions = await client.getPositions({ symbol });
+            const openPos = positions.filter(p => parseFloat(p.positionAmt) !== 0);
+
+            if (openPos.length > 0) {
+              for (const pos of openPos) {
+                try {
+                  const amt = parseFloat(pos.positionAmt);
+                  const closeSide = amt > 0 ? 'SELL' : 'BUY';
+                  await client.submitNewOrder({ symbol, side: closeSide, type: 'MARKET', quantity: String(Math.abs(amt)), reduceOnly: 'true' });
+                  await query(`UPDATE trades SET status = 'CLOSED', exit_price = $1, closed_at = NOW() WHERE api_key_id = $2 AND symbol = $3 AND status = 'OPEN'`, [parseFloat(pos.markPrice || 0), key.id, symbol]);
+                  totalClosed++;
+                  results.push({ user: key.email, symbol, side: amt > 0 ? 'LONG' : 'SHORT', qty: Math.abs(amt), status: 'CLOSED' });
+                } catch (closeErr) {
+                  results.push({ user: key.email, symbol, status: 'FAILED', error: closeErr.message });
+                }
+              }
+            } else {
+              const phantomRows = await query(`UPDATE trades SET status = 'CLOSED', closed_at = NOW() WHERE api_key_id = $1 AND symbol = $2 AND status = 'OPEN' RETURNING id`, [key.id, symbol]);
+              if (phantomRows.length > 0) {
+                totalClosed += phantomRows.length;
+                results.push({ user: key.email, symbol, status: 'PHANTOM_CLEANED', count: phantomRows.length });
+              }
+            }
+          } catch (binErr) {
+            results.push({ user: key.email, symbol, status: 'BINANCE_ERROR', error: binErr.message });
           }
         }
       } catch (keyErr) {
