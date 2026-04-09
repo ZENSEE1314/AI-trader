@@ -817,11 +817,23 @@ function getSlotOffset(agentKey, room) {
   }
   const idx = roomSlotCounters[room][agentKey];
   if (room === 'trading') {
-    // 10 columns × 5 rows = 50 seats behind the trader's front desk
-    const cols = 10;
+    // Dynamic grid: fits any number of agents in the trading room
+    // Room: x:0-100%, y:46-86%. Center: x:50, y:66. Trader at top.
+    // Agents fill y:56-84% (below trader desk), full width with margin.
+    const r = ROOMS.trading;
+    const total = Object.keys(roomSlotCounters[room]).length;
+    const cols = Math.min(Math.ceil(Math.sqrt(total * 2.5)), 15);
+    const rows = Math.ceil(total / cols);
     const col = idx % cols;
     const row = Math.floor(idx / cols);
-    return {dx: (col - 4.5) * 9, dy: 6 + row * 7};
+    const usableW = r.w - 8;
+    const usableH = r.h - 14;
+    const xSpacing = usableW / Math.max(cols, 1);
+    const ySpacing = usableH / Math.max(rows + 1, 1);
+    return {
+      dx: (col - (cols - 1) / 2) * xSpacing,
+      dy: -usableH / 2 + 6 + (row + 1) * ySpacing
+    };
   }
   const col = idx % 3;
   const row = Math.floor(idx / 3);
