@@ -63,6 +63,21 @@ class RiskAgent extends BaseAgent {
   async execute(context = {}) {
     const { signals = [], openPositions = [] } = context;
 
+    // Consume inter-agent messages from KronosAgent and StrategyAgent
+    const kronosMsgs = this.consumeMessages('kronos-predictions');
+    const strategyMsgs = this.consumeMessages('strategy-risk');
+    if (kronosMsgs.length > 0) {
+      const highConf = kronosMsgs[kronosMsgs.length - 1].payload?.highConf || [];
+      if (highConf.length > 0) {
+        this.addActivity('info', `Kronos intel: ${highConf.length} high-confidence prediction(s)`);
+        this.remember('kronos_highconf', highConf.map(p => `${p.symbol} ${p.direction}`).join(', ')).catch(() => {});
+      }
+    }
+    if (strategyMsgs.length > 0) {
+      const strat = strategyMsgs[strategyMsgs.length - 1].payload;
+      this.addActivity('info', `Strategy intel: "${strat.name}" ${strat.winRate?.toFixed(1)}% WR, DD=${strat.maxDrawdown?.toFixed(1)}%`);
+    }
+
     if (!signals.length) {
       return { approved: [], rejected: [], riskReport: this._buildReport([], [], openPositions) };
     }

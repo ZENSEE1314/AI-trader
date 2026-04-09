@@ -378,6 +378,55 @@ async function initAllTables() {
       pred_low NUMERIC,
       scanned_at TIMESTAMPTZ DEFAULT NOW()
     )`,
+    // Strategy backtests (StrategyAgent saves results here)
+    `CREATE TABLE IF NOT EXISTS strategy_backtests (
+      id SERIAL PRIMARY KEY,
+      name VARCHAR(100) NOT NULL,
+      params JSONB NOT NULL,
+      total_trades INTEGER DEFAULT 0,
+      wins INTEGER DEFAULT 0,
+      losses INTEGER DEFAULT 0,
+      win_rate NUMERIC DEFAULT 0,
+      total_pnl NUMERIC DEFAULT 0,
+      avg_win NUMERIC DEFAULT 0,
+      avg_loss NUMERIC DEFAULT 0,
+      max_drawdown NUMERIC DEFAULT 0,
+      symbols JSONB DEFAULT '[]',
+      top_trades JSONB DEFAULT '[]',
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_strategy_backtests_name ON strategy_backtests (name)`,
+    `CREATE INDEX IF NOT EXISTS idx_strategy_backtests_created ON strategy_backtests (created_at DESC)`,
+    // Agent jail records (PoliceAgent tracks violations)
+    `CREATE TABLE IF NOT EXISTS agent_jail (
+      id SERIAL PRIMARY KEY,
+      agent_key VARCHAR(50) NOT NULL,
+      agent_name VARCHAR(100) NOT NULL,
+      reason TEXT NOT NULL,
+      violation_type VARCHAR(50),
+      severity VARCHAR(20),
+      warnings INTEGER DEFAULT 0,
+      jailed_at TIMESTAMPTZ DEFAULT NOW(),
+      released_at TIMESTAMPTZ,
+      released_by VARCHAR(100)
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_agent_jail_key ON agent_jail (agent_key)`,
+    `CREATE INDEX IF NOT EXISTS idx_agent_jail_active ON agent_jail (released_at) WHERE released_at IS NULL`,
+    // CoderAgent patch records (self-healing code history)
+    `CREATE TABLE IF NOT EXISTS code_patches (
+      id SERIAL PRIMARY KEY,
+      file VARCHAR(200) NOT NULL,
+      description TEXT,
+      patch_type VARCHAR(30),
+      search_text TEXT,
+      replace_text TEXT,
+      confidence NUMERIC DEFAULT 0,
+      status VARCHAR(20) DEFAULT 'pending',
+      applied_at TIMESTAMPTZ,
+      reverted_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_code_patches_status ON code_patches (status)`,
     // Optimizer candle cache (survives redeploys)
     `CREATE TABLE IF NOT EXISTS optimizer_cache (
       id INTEGER PRIMARY KEY,
@@ -448,6 +497,12 @@ async function initAllTables() {
   for (const sym of badSymbols) {
     try { await pool.query('DELETE FROM global_token_settings WHERE symbol = $1', [sym]); } catch (_) {}
   }
+
+  // Reset all agent XP, levels, and earnings to 0 (fresh start)
+  try {
+    await pool.query(`UPDATE agent_profiles SET level = 1, xp = 0, total_earned = 0, tasks_completed = 0, tasks_success = 0, updated_at = NOW()`);
+    console.log('[DB] Agent profiles reset to 0 — fresh start');
+  } catch (_) {}
 
   console.log('[DB] All tables verified');
 }

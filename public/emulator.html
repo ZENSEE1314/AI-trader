@@ -63,9 +63,12 @@
     .rm-hall{left:34%;top:34%;width:32%;height:32%;background:linear-gradient(135deg,#14121e,#100e18);border-color:#333}
     .rm-accountant{left:68%;top:34%;width:32%;height:32%;background:linear-gradient(135deg,#151020,#110c1a)}
     /* Row 3 */
-    .rm-briefing{left:0%;top:68%;width:32%;height:32%;background:linear-gradient(135deg,#18140c,#141008)}
-    .rm-resting{left:34%;top:68%;width:32%;height:32%;background:linear-gradient(135deg,#12100a,#0e0c08)}
-    .rm-vault{left:68%;top:68%;width:32%;height:32%;background:linear-gradient(135deg,#1a1810,#16140c)}
+    .rm-briefing{left:0%;top:55%;width:32%;height:22%;background:linear-gradient(135deg,#18140c,#141008)}
+    .rm-resting{left:34%;top:55%;width:32%;height:22%;background:linear-gradient(135deg,#12100a,#0e0c08)}
+    .rm-vault{left:68%;top:55%;width:32%;height:22%;background:linear-gradient(135deg,#1a1810,#16140c)}
+    /* Row 4 — Prison & Police HQ */
+    .rm-prison{left:0%;top:79%;width:50%;height:21%;background:linear-gradient(135deg,#1a0c0c,#140808);border-color:#4b2020}
+    .rm-yard{left:52%;top:79%;width:48%;height:21%;background:linear-gradient(135deg,#0c1428,#081020);border-color:#1e3a5f}
 
     /* Door gaps — overlay strips that hide wall */
     .door{position:absolute;background:var(--corridor);z-index:3}
@@ -131,6 +134,8 @@
     .agent-char.idle .pxs{animation:idle-bob 2.5s ease-in-out infinite}
     .agent-char.working .pxs{animation:work-bob .4s steps(2) infinite;filter:drop-shadow(0 0 4px rgba(212,175,55,.4))}
     .agent-char.dizzy .pxs{animation:err-spin .5s ease-in-out infinite;filter:drop-shadow(0 0 3px rgba(244,63,94,.5))}
+    .agent-char.jailed .pxs{opacity:.5;animation:jail-shake .6s ease-in-out infinite;filter:grayscale(.7) drop-shadow(0 0 3px rgba(244,63,94,.4))}
+    .agent-char.jailed::before{content:'⛓️';position:absolute;top:-14px;left:50%;transform:translateX(-50%);font-size:8px;animation:jail-rattle 1.5s ease-in-out infinite}
     .agent-char.asleep .pxs{opacity:.35;animation:none}
     .agent-char.asleep::before{content:'z z z';position:absolute;top:-16px;left:50%;transform:translateX(-50%);font-family:'Press Start 2P',monospace;font-size:4px;color:var(--fg3);animation:zzz 2s ease-in-out infinite;white-space:nowrap}
     @keyframes walk-bob{0%,100%{transform:scale(2) translateY(0)}50%{transform:scale(2) translateY(-3px)}}
@@ -138,6 +143,8 @@
     @keyframes work-bob{0%,100%{transform:scale(2) translateY(0)}50%{transform:scale(2) translateY(-4px)}}
     @keyframes err-spin{0%,100%{transform:scale(2) rotate(0)}25%{transform:scale(2) rotate(6deg)}75%{transform:scale(2) rotate(-6deg)}}
     @keyframes zzz{0%,100%{opacity:.2;transform:translateX(-50%) translateY(0)}50%{opacity:.8;transform:translateX(-50%) translateY(-5px)}}
+    @keyframes jail-shake{0%,100%{transform:scale(2) translateX(0)}25%{transform:scale(2) translateX(-1px)}75%{transform:scale(2) translateX(1px)}}
+    @keyframes jail-rattle{0%,100%{transform:translateX(-50%) rotate(0)}30%{transform:translateX(-50%) rotate(-8deg)}60%{transform:translateX(-50%) rotate(8deg)}}
 
     /* ═══ SPRITES (box-shadow pixel art) ═══ */
     .sp-coord{box-shadow:6px 0 var(--px-gold),12px 0 var(--px-gold2),18px 0 var(--px-gold),3px 3px var(--px-gold),6px 3px var(--px-gold2),9px 3px var(--px-gold),12px 3px var(--px-gold2),15px 3px var(--px-gold),18px 3px var(--px-gold2),21px 3px var(--px-gold),3px 6px var(--px-gold),6px 6px var(--px-gold2),9px 6px var(--px-gold2),12px 6px var(--px-gold2),15px 6px var(--px-gold2),18px 6px var(--px-gold2),21px 6px var(--px-gold),6px 9px var(--px-skin),9px 9px var(--px-skin),12px 9px var(--px-skin),15px 9px var(--px-skin),18px 9px var(--px-skin),6px 12px var(--px-skin),9px 12px var(--px-dark),12px 12px var(--px-skin),15px 12px var(--px-dark),18px 12px var(--px-skin),6px 15px var(--px-skin),9px 15px var(--px-skin),12px 15px var(--px-skindk),15px 15px var(--px-skin),18px 15px var(--px-skin),3px 18px var(--px-gold),6px 18px #1a1726,9px 18px #1a1726,12px 18px var(--px-gold),15px 18px #1a1726,18px 18px #1a1726,21px 18px var(--px-gold),3px 21px var(--px-gold),6px 21px #1a1726,9px 21px #1a1726,12px 21px var(--px-gold),15px 21px #1a1726,18px 21px #1a1726,21px 21px var(--px-gold),0px 18px var(--px-skindk),24px 18px var(--px-skindk),6px 24px var(--px-pants),9px 24px var(--px-pants),15px 24px var(--px-pants),18px 24px var(--px-pants),6px 27px var(--px-pants),9px 27px var(--px-pants),15px 27px var(--px-pants),18px 27px var(--px-pants),6px 30px var(--px-hair),9px 30px var(--px-hair),15px 30px var(--px-hair),18px 30px var(--px-hair)}
@@ -146,6 +153,10 @@
     .sp-risk{box-shadow:6px 0 var(--px-gold),9px 0 var(--px-gold),12px 0 var(--px-gold),15px 0 var(--px-gold),3px 3px var(--px-gold),6px 3px var(--px-gold2),9px 3px var(--px-gold2),12px 3px var(--px-gold2),15px 3px var(--px-gold2),18px 3px var(--px-gold),6px 6px var(--px-skin),9px 6px var(--px-skin),12px 6px var(--px-skin),15px 6px var(--px-skin),6px 9px var(--px-skin),9px 9px var(--px-dark),12px 9px var(--px-skin),15px 9px var(--px-dark),6px 12px var(--px-gold),9px 12px var(--px-skin),12px 12px var(--px-skindk),15px 12px var(--px-skin),18px 12px var(--px-gold),3px 15px #6b7280,6px 15px #9ca3af,9px 15px #9ca3af,12px 15px var(--px-gold),15px 15px #9ca3af,18px 15px #9ca3af,21px 15px #6b7280,3px 18px #6b7280,6px 18px #9ca3af,9px 18px #6b7280,12px 18px var(--px-gold),15px 18px #6b7280,18px 18px #9ca3af,21px 18px #6b7280,24px 18px var(--px-skindk),6px 21px #6b7280,9px 21px #6b7280,12px 21px #6b7280,15px 21px #6b7280,6px 24px #6b7280,9px 24px #6b7280,15px 24px #6b7280,6px 27px var(--px-pants),9px 27px var(--px-pants),15px 27px var(--px-pants)}
     .sp-trader{box-shadow:6px 0 var(--px-hair),9px 0 var(--px-hair),12px 0 var(--px-hair),15px 0 var(--px-hair),3px 3px var(--px-hair),6px 3px var(--px-hair),9px 3px var(--px-hair),12px 3px var(--px-hair),15px 3px var(--px-hair),18px 3px var(--px-hair),6px 6px var(--px-skin),9px 6px var(--px-skin),12px 6px var(--px-skin),15px 6px var(--px-skin),6px 9px var(--px-skin),9px 9px var(--px-dark),12px 9px var(--px-skin),15px 9px var(--px-dark),6px 12px var(--px-skin),9px 12px var(--px-skin),12px 12px var(--px-skindk),15px 12px var(--px-skin),3px 15px var(--px-gold),6px 15px #1a1726,9px 15px #1a1726,12px 15px #1a1726,15px 15px #1a1726,18px 15px var(--px-gold),3px 18px var(--px-gold),6px 18px #1a1726,9px 18px #1a1726,12px 18px #1a1726,15px 18px #1a1726,18px 18px var(--px-gold),0px 18px var(--px-skindk),21px 18px var(--px-skindk),6px 21px var(--px-pants),9px 21px var(--px-pants),12px 21px var(--px-pants),15px 21px var(--px-pants),6px 24px var(--px-pants),9px 24px var(--px-pants),15px 24px var(--px-pants),6px 27px var(--px-hair),9px 27px var(--px-hair),15px 27px var(--px-hair)}
     .sp-acct{box-shadow:6px 0 var(--px-hair),9px 0 var(--px-hair),12px 0 var(--px-hair),15px 0 var(--px-hair),3px 3px var(--px-hair),6px 3px var(--px-hair),9px 3px var(--px-hair),12px 3px var(--px-hair),15px 3px var(--px-hair),18px 3px var(--px-hair),6px 6px var(--px-skin),9px 6px var(--px-skin),12px 6px var(--px-skin),15px 6px var(--px-skin),3px 9px var(--px-glass),6px 9px var(--px-skin),9px 9px var(--px-dark),12px 9px var(--px-glass),15px 9px var(--px-dark),18px 9px var(--px-skin),21px 9px var(--px-glass),6px 12px var(--px-skin),9px 12px var(--px-skin),12px 12px var(--px-skindk),15px 12px var(--px-skin),3px 15px var(--px-purple),6px 15px var(--px-purple),9px 15px var(--px-purple),12px 15px var(--px-purple),15px 15px var(--px-purple),18px 15px var(--px-purple),3px 18px var(--px-purple),6px 18px #7c3aed,9px 18px var(--px-purple),12px 18px var(--px-purple),15px 18px #7c3aed,18px 18px var(--px-purple),21px 18px var(--px-skindk),0px 18px var(--px-skindk),6px 21px var(--px-pants),9px 21px var(--px-pants),12px 21px var(--px-pants),15px 21px var(--px-pants),6px 24px var(--px-pants),9px 24px var(--px-pants),15px 24px var(--px-pants),6px 27px var(--px-hair),9px 27px var(--px-hair),15px 27px var(--px-hair)}
+    .sp-kronos{box-shadow:6px 0 #06b6d4,9px 0 #06b6d4,12px 0 #06b6d4,15px 0 #06b6d4,3px 3px #0891b2,6px 3px #06b6d4,9px 3px #22d3ee,12px 3px #22d3ee,15px 3px #06b6d4,18px 3px #0891b2,6px 6px var(--px-skin),9px 6px var(--px-skin),12px 6px var(--px-skin),15px 6px var(--px-skin),6px 9px var(--px-skin),9px 9px #22d3ee,12px 9px var(--px-skin),15px 9px #22d3ee,6px 12px var(--px-skin),9px 12px var(--px-skin),12px 12px var(--px-skindk),15px 12px var(--px-skin),3px 15px #0e7490,6px 15px #0891b2,9px 15px #0891b2,12px 15px #22d3ee,15px 15px #0891b2,18px 15px #0e7490,3px 18px #0e7490,6px 18px #0891b2,9px 18px #06b6d4,12px 18px #22d3ee,15px 18px #0891b2,18px 18px #0e7490,21px 18px var(--px-skindk),0px 18px var(--px-skindk),6px 21px #0891b2,9px 21px #0891b2,12px 21px #0891b2,15px 21px #0891b2,6px 24px var(--px-pants),9px 24px var(--px-pants),15px 24px var(--px-pants),6px 27px var(--px-hair),9px 27px var(--px-hair),15px 27px var(--px-hair)}
+    .sp-police{box-shadow:6px 0 #1e3a5f,9px 0 #1e3a5f,12px 0 #1e3a5f,15px 0 #1e3a5f,3px 3px #1e3a5f,6px 3px #2563eb,9px 3px #fbbf24,12px 3px #fbbf24,15px 3px #2563eb,18px 3px #1e3a5f,6px 6px var(--px-skin),9px 6px var(--px-skin),12px 6px var(--px-skin),15px 6px var(--px-skin),6px 9px var(--px-skin),9px 9px var(--px-dark),12px 9px var(--px-skin),15px 9px var(--px-dark),6px 12px var(--px-skin),9px 12px var(--px-skin),12px 12px var(--px-skindk),15px 12px var(--px-skin),3px 15px #1e40af,6px 15px #2563eb,9px 15px #2563eb,12px 15px #fbbf24,15px 15px #2563eb,18px 15px #1e40af,3px 18px #1e40af,6px 18px #2563eb,9px 18px #1e40af,12px 18px #fbbf24,15px 18px #1e40af,18px 18px #2563eb,21px 18px var(--px-skindk),0px 18px var(--px-skindk),6px 21px #1e40af,9px 21px #1e40af,12px 21px #1e40af,15px 21px #1e40af,6px 24px #1e3a5f,9px 24px #1e3a5f,15px 24px #1e3a5f,6px 27px var(--px-dark),9px 27px var(--px-dark),15px 27px var(--px-dark)}
+    .sp-coder{box-shadow:6px 0 #a855f7,9px 0 #a855f7,12px 0 #a855f7,15px 0 #a855f7,3px 3px #9333ea,6px 3px #a855f7,9px 3px #c084fc,12px 3px #c084fc,15px 3px #a855f7,18px 3px #9333ea,6px 6px var(--px-skin),9px 6px var(--px-skin),12px 6px var(--px-skin),15px 6px var(--px-skin),6px 9px var(--px-skin),9px 9px #22d3ee,12px 9px var(--px-skin),15px 9px #22d3ee,6px 12px var(--px-skin),9px 12px var(--px-skin),12px 12px var(--px-skindk),15px 12px var(--px-skin),3px 15px #7e22ce,6px 15px #9333ea,9px 15px #9333ea,12px 15px #22d3ee,15px 15px #9333ea,18px 15px #7e22ce,3px 18px #7e22ce,6px 18px #9333ea,9px 18px #a855f7,12px 18px #22d3ee,15px 18px #9333ea,18px 18px #7e22ce,21px 18px var(--px-skindk),0px 18px var(--px-skindk),6px 21px #9333ea,9px 21px #9333ea,12px 21px #9333ea,15px 21px #9333ea,6px 24px var(--px-pants),9px 24px var(--px-pants),15px 24px var(--px-pants),6px 27px var(--px-hair),9px 27px var(--px-hair),15px 27px var(--px-hair)}
+    .sp-strat{box-shadow:6px 0 #f97316,9px 0 #f97316,12px 0 #f97316,15px 0 #f97316,3px 3px #ea580c,6px 3px #f97316,9px 3px #fb923c,12px 3px #fb923c,15px 3px #f97316,18px 3px #ea580c,6px 6px var(--px-skin),9px 6px var(--px-skin),12px 6px var(--px-skin),15px 6px var(--px-skin),6px 9px var(--px-skin),9px 9px var(--px-dark),12px 9px var(--px-skin),15px 9px var(--px-dark),6px 12px var(--px-skin),9px 12px var(--px-skin),12px 12px var(--px-skindk),15px 12px var(--px-skin),3px 15px #c2410c,6px 15px #ea580c,9px 15px #ea580c,12px 15px #f97316,15px 15px #ea580c,18px 15px #c2410c,3px 18px #c2410c,6px 18px #ea580c,9px 18px #f97316,12px 18px #fb923c,15px 18px #ea580c,18px 18px #c2410c,21px 18px var(--px-skindk),0px 18px var(--px-skindk),6px 21px #ea580c,9px 21px #ea580c,12px 21px #ea580c,15px 21px #ea580c,6px 24px var(--px-pants),9px 24px var(--px-pants),15px 24px var(--px-pants),6px 27px var(--px-hair),9px 27px var(--px-hair),15px 27px var(--px-hair)}
     .sp-token{box-shadow:6px 0 var(--px-gold),9px 0 var(--px-gold2),12px 0 var(--px-gold),6px 6px var(--px-skin),9px 6px var(--px-skin),12px 6px var(--px-skin),6px 9px var(--px-dark),9px 9px var(--px-skin),12px 9px var(--px-dark),3px 12px var(--px-gold),6px 12px var(--px-gold),9px 12px var(--px-gold),12px 12px var(--px-gold),15px 12px var(--px-gold),6px 15px var(--px-gold),9px 15px #b8922a,12px 15px var(--px-gold),6px 18px var(--px-pants),12px 18px var(--px-pants),6px 21px var(--px-hair),12px 21px var(--px-hair)}
 
     /* ═══ PROFILE CARDS ═══ */
@@ -222,6 +233,8 @@
       <div class="rm rm-briefing" data-name="BRIEFING ROOM"></div>
       <div class="rm rm-resting" data-name="REST AREA"></div>
       <div class="rm rm-vault" data-name="VAULT"></div>
+      <div class="rm rm-prison" data-name="⛓️ PRISON"></div>
+      <div class="rm rm-yard" data-name="🛡️ POLICE HQ"></div>
 
       <!-- Doors — horizontal (between rows) -->
       <!-- Row 1 ↔ Row 2 -->
@@ -261,13 +274,19 @@
       <div class="door-mark door-mark-h" style="left:calc(50% - 7px);top:calc(33% - 2px)"></div>
       <div class="door-mark door-mark-h" style="left:calc(84% - 7px);top:calc(33% - 2px)"></div>
       <!-- Row 2↔3 markers -->
-      <div class="door-mark door-mark-h" style="left:calc(16% - 7px);top:calc(67% - 2px)"></div>
-      <div class="door-mark door-mark-h" style="left:calc(50% - 7px);top:calc(67% - 2px)"></div>
-      <div class="door-mark door-mark-h" style="left:calc(84% - 7px);top:calc(67% - 2px)"></div>
+      <div class="door-mark door-mark-h" style="left:calc(16% - 7px);top:calc(55% - 2px)"></div>
+      <div class="door-mark door-mark-h" style="left:calc(50% - 7px);top:calc(55% - 2px)"></div>
+      <div class="door-mark door-mark-h" style="left:calc(84% - 7px);top:calc(55% - 2px)"></div>
+      <!-- Row 3↔4 markers (prison) -->
+      <div class="door-mark door-mark-h" style="left:calc(16% - 7px);top:calc(79% - 2px)"></div>
+      <div class="door-mark door-mark-h" style="left:calc(50% - 7px);top:calc(79% - 2px)"></div>
+      <div class="door-mark door-mark-h" style="left:calc(75% - 7px);top:calc(79% - 2px)"></div>
       <!-- Col 1↔2 markers -->
       <div class="door-mark door-mark-v" style="left:calc(33% - 2px);top:calc(16% - 7px)"></div>
       <div class="door-mark door-mark-v" style="left:calc(33% - 2px);top:calc(50% - 7px)"></div>
-      <div class="door-mark door-mark-v" style="left:calc(33% - 2px);top:calc(84% - 7px)"></div>
+      <div class="door-mark door-mark-v" style="left:calc(33% - 2px);top:calc(66% - 7px)"></div>
+      <!-- Col prison↔yard -->
+      <div class="door-mark door-mark-v" style="left:calc(51% - 2px);top:calc(90% - 7px)"></div>
       <!-- Col 2↔3 markers -->
       <div class="door-mark door-mark-v" style="left:calc(67% - 2px);top:calc(16% - 7px)"></div>
       <div class="door-mark door-mark-v" style="left:calc(67% - 2px);top:calc(50% - 7px)"></div>
@@ -300,28 +319,33 @@
       <div class="furn safe" style="left:90%;top:40%"></div>
       <div class="furn bookshelf" style="left:70%;top:38%"></div>
       <!-- Furniture — Briefing Room -->
-      <div class="furn round-table" style="left:11%;top:78%"></div>
-      <div class="furn chair" style="left:8%;top:75%"></div>
-      <div class="furn chair" style="left:18%;top:75%"></div>
-      <div class="furn chair" style="left:8%;top:87%"></div>
-      <div class="furn chair" style="left:18%;top:87%"></div>
-      <div class="furn chair" style="left:5%;top:81%"></div>
-      <div class="furn chair" style="left:23%;top:81%"></div>
+      <div class="furn round-table" style="left:11%;top:62%"></div>
+      <div class="furn chair" style="left:8%;top:59%"></div>
+      <div class="furn chair" style="left:18%;top:59%"></div>
+      <div class="furn chair" style="left:8%;top:69%"></div>
+      <div class="furn chair" style="left:18%;top:69%"></div>
       <!-- Furniture — Rest Area -->
-      <div class="furn bed" style="left:37%;top:76%"></div>
-      <div class="furn bed" style="left:52%;top:76%"></div>
-      <div class="furn bed" style="left:37%;top:86%"></div>
-      <div class="furn chair" style="left:48%;top:90%"></div>
+      <div class="furn bed" style="left:37%;top:60%"></div>
+      <div class="furn bed" style="left:52%;top:60%"></div>
+      <div class="furn bed" style="left:37%;top:68%"></div>
       <!-- Furniture — Vault -->
-      <div class="furn safe" style="left:72%;top:72%"></div>
-      <div class="furn safe" style="left:80%;top:72%"></div>
-      <div class="furn safe" style="left:90%;top:72%"></div>
-      <div class="furn safe" style="left:72%;top:84%"></div>
-      <div class="furn safe" style="left:80%;top:84%"></div>
-      <div class="furn gold-bar" style="left:86%;top:80%"></div>
-      <div class="furn gold-bar" style="left:90%;top:80%"></div>
-      <div class="furn gold-bar" style="left:88%;top:83%"></div>
-      <div class="furn gold-bar" style="left:92%;top:76%"></div>
+      <div class="furn safe" style="left:72%;top:58%"></div>
+      <div class="furn safe" style="left:80%;top:58%"></div>
+      <div class="furn safe" style="left:90%;top:58%"></div>
+      <div class="furn gold-bar" style="left:86%;top:65%"></div>
+      <div class="furn gold-bar" style="left:90%;top:65%"></div>
+      <div class="furn gold-bar" style="left:92%;top:62%"></div>
+      <!-- Furniture — Prison -->
+      <div class="furn jail-bars" style="left:2%;top:80%;width:10%;height:18%;border:2px solid #6b7280;border-radius:2px;background:repeating-linear-gradient(90deg,#4b5563 0px,#4b5563 2px,transparent 2px,transparent 8px);opacity:.6"></div>
+      <div class="furn jail-bars" style="left:14%;top:80%;width:10%;height:18%;border:2px solid #6b7280;border-radius:2px;background:repeating-linear-gradient(90deg,#4b5563 0px,#4b5563 2px,transparent 2px,transparent 8px);opacity:.6"></div>
+      <div class="furn jail-bars" style="left:26%;top:80%;width:10%;height:18%;border:2px solid #6b7280;border-radius:2px;background:repeating-linear-gradient(90deg,#4b5563 0px,#4b5563 2px,transparent 2px,transparent 8px);opacity:.6"></div>
+      <div class="furn" style="left:38%;top:82%;width:2%;height:14%;background:#6b7280;border-radius:1px;opacity:.5"></div>
+      <!-- Furniture — Yard (Police patrol area) -->
+      <div class="furn desk" style="left:56%;top:86%"></div>
+      <div class="furn monitor" style="left:58%;top:82%"></div>
+      <div class="furn shield-decor" style="left:70%;top:81%"></div>
+      <div class="furn shield-decor" style="left:76%;top:81%"></div>
+      <div class="furn chart-decor" style="left:85%;top:81%;width:10%"></div>
 
       <!-- Characters injected by JS -->
     </div>
@@ -344,9 +368,17 @@ const AGENTS = {
   risk:{name:'RiskAgent',role:'Risk Guard',sprite:'sp-risk',tag:'RISK',
     station:{x:82,y:18},room:'security'},
   trader:{name:'TraderAgent',role:'Trade Executor',sprite:'sp-trader',tag:'EXEC',
-    station:{x:10,y:52},room:'trading'},
+    station:{x:10,y:48},room:'trading'},
   accountant:{name:'AccountantAgent',role:'Trade Auditor',sprite:'sp-acct',tag:'ACCT',
-    station:{x:82,y:52},room:'accountant'},
+    station:{x:82,y:48},room:'accountant'},
+  kronos:{name:'KronosAgent',role:'AI Oracle',sprite:'sp-kronos',tag:'KRON',
+    station:{x:22,y:65},room:'briefing'},
+  strategy:{name:'StrategyAgent',role:'Strategy Researcher',sprite:'sp-strat',tag:'STRT',
+    station:{x:10,y:65},room:'briefing'},
+  police:{name:'PoliceAgent',role:'Internal Affairs',sprite:'sp-police',tag:'COPS',
+    station:{x:36,y:88},room:'yard'},
+  coder:{name:'CoderAgent',role:'Code Engineer',sprite:'sp-coder',tag:'CODE',
+    station:{x:78,y:88},room:'yard'},
 };
 
 /* Room bounding boxes (x, y, w, h in % of map) */
@@ -357,9 +389,11 @@ const ROOMS = {
   trading:    {x:0, y:34,w:32, h:32, col:0, row:1},
   hall:       {x:34,y:34,w:32, h:32, col:1, row:1},
   accountant: {x:68,y:34,w:32, h:32, col:2, row:1},
-  briefing:   {x:0, y:68,w:32, h:32, col:0, row:2},
-  resting:    {x:34,y:68,w:32, h:32, col:1, row:2},
-  vault:      {x:68,y:68,w:32, h:32, col:2, row:2},
+  briefing:   {x:0, y:55,w:32, h:22, col:0, row:2},
+  resting:    {x:34,y:55,w:32, h:22, col:1, row:2},
+  vault:      {x:68,y:55,w:32, h:22, col:2, row:2},
+  prison:     {x:0, y:79,w:50, h:21, col:0, row:3},
+  yard:       {x:52,y:79,w:48, h:21, col:1, row:3},
 };
 
 /* ═══ DOOR WAYPOINTS ═══
@@ -373,11 +407,15 @@ const DOORS = {
   'security-accountant':  {x:84, y:33},
   'trading-hall':         {x:33, y:50},
   'hall-accountant':      {x:67, y:50},
-  'trading-briefing':     {x:16, y:67},
-  'hall-resting':         {x:50, y:67},
-  'accountant-vault':     {x:84, y:67},
-  'briefing-resting':     {x:33, y:84},
-  'resting-vault':        {x:67, y:84},
+  'trading-briefing':     {x:16, y:55},
+  'hall-resting':         {x:50, y:55},
+  'accountant-vault':     {x:84, y:55},
+  'briefing-resting':     {x:33, y:66},
+  'resting-vault':        {x:67, y:66},
+  'briefing-prison':      {x:16, y:79},
+  'resting-yard':         {x:50, y:79},
+  'vault-yard':           {x:75, y:79},
+  'prison-yard':          {x:51, y:90},
 };
 
 /* Room adjacency graph built from DOORS */
@@ -462,6 +500,7 @@ function randInRoom(room) {
 
 function getTargetRoom(state) {
   if (state === 'running') return 'station';
+  if (state === 'jailed') return 'prison';
   if (state === 'paused' || state === 'stopped') return 'resting';
   if (state === 'error') return 'station';
   return 'hall';
@@ -469,6 +508,7 @@ function getTargetRoom(state) {
 
 function getAnimClass(state) {
   if (state === 'running') return 'working';
+  if (state === 'jailed') return 'jailed';
   if (state === 'error') return 'dizzy';
   if (state === 'paused' || state === 'stopped') return 'asleep';
   return 'idle';
@@ -476,6 +516,10 @@ function getAnimClass(state) {
 
 function getThought(agentData) {
   if (!agentData) return '';
+  // Show personality thought if available
+  const p = agentData.personality;
+  if (p && p.latestThought && Math.random() > 0.4) return p.latestThought;
+  if (agentData.state === 'jailed') return 'I shouldn\'t have done that...';
   if (agentData.currentTask) return agentData.currentTask.description || '';
   const act = agentData.recentActivity;
   if (act && act.length > 0) return act[0].message || '';
@@ -607,6 +651,12 @@ function updateCharacter(key, agentData, cfg) {
       destX = r.x + r.w / 2 + offset.dx;
       destY = r.y + r.h / 2 + offset.dy;
     }
+  } else if (desiredTarget === 'prison') {
+    destRoom = 'prison';
+    const offset = getSlotOffset(key, 'prison');
+    const r = ROOMS.prison;
+    destX = r.x + r.w / 2 + offset.dx;
+    destY = r.y + r.h / 2 + offset.dy;
   } else if (desiredTarget === 'resting') {
     destRoom = 'resting';
     const offset = getSlotOffset(key, 'resting');
@@ -734,6 +784,8 @@ function renderCards(healthData) {
 function renderCard(key, d, cfg) {
   const state = d.state || 'stopped';
   const rpg = d.rpg || {};
+  const pers = d.personality || {};
+  const comp = d.competition || {};
   const lvl = rpg.level || 1;
   const xpProg = rpg.xpProgress || 0;
   const xpNext = rpg.xpForNext || 100;
@@ -741,7 +793,17 @@ function renderCard(key, d, cfg) {
   const earned = rpg.totalEarned || 0;
   const tasks = rpg.tasksCompleted || 0;
   const rate = rpg.successRate || 0;
-  const cls = state === 'running' ? ' on' : state === 'error' ? ' err' : '';
+  const tier = pers.tier || 'Rookie';
+  const mood = pers.mood || 'focused';
+  const trait = pers.trait || '';
+  const rival = pers.rivalry || '';
+  const streak = pers.streakWins || 0;
+  const bestStreak = pers.bestStreak || 0;
+  const rank = comp.rank || 0;
+  const thought = pers.latestThought || '';
+  const cls = state === 'jailed' ? ' err' : state === 'running' ? ' on' : state === 'error' ? ' err' : '';
+  const moodIcon = mood === 'confident' ? '😎' : mood === 'competitive' ? '🔥' : mood === 'anxious' ? '😰' : mood === 'determined' ? '💪' : mood === 'reflective' ? '🤔' : mood === 'ambitious' ? '🚀' : '🎯';
+  const tierColor = tier === 'Legend' ? 'color:#fbbf24' : tier === 'Master' ? 'color:#a78bfa' : tier === 'Expert' ? 'color:#34d399' : tier === 'Skilled' ? 'color:#60a5fa' : 'color:var(--fg3)';
   const act = (d.recentActivity || []).slice(0, 2).map(a =>
     '<div>' + esc(a.message || '') + '</div>'
   ).join('') || '<div>No activity</div>';
@@ -750,10 +812,10 @@ function renderCard(key, d, cfg) {
     <div class="card-top">
       <div class="card-av"><div class="pxs ${cfg.sprite}"></div></div>
       <div class="card-info">
-        <div class="card-name">${esc(cfg.name)}</div>
-        <div class="card-role">${esc(cfg.role)}</div>
+        <div class="card-name">${esc(cfg.name)}${rank > 0 ? ' <span style="color:var(--fg3);font-size:.6rem">#' + rank + '</span>' : ''}</div>
+        <div class="card-role">${esc(cfg.role)} <span style="${tierColor};font-weight:600">[${tier}]</span></div>
       </div>
-      <span class="card-st ${state}">${state}</span>
+      <span class="card-st ${state}">${state === 'jailed' ? '⛓️ JAILED' : state}</span>
     </div>
     <div class="lvl-row">
       <span class="lvl-badge">Lv.${lvl}</span>
@@ -764,7 +826,14 @@ function renderCard(key, d, cfg) {
       <div class="cs"><div class="cs-v grn">${fmtMoney(earned)}</div><div class="cs-l">Earned</div></div>
       <div class="cs"><div class="cs-v gld">${tasks}</div><div class="cs-l">Tasks</div></div>
       <div class="cs"><div class="cs-v">${rate}%</div><div class="cs-l">Success</div></div>
+      <div class="cs"><div class="cs-v" style="color:#fb923c">${streak > 0 ? '🔥' + streak : bestStreak > 0 ? '⭐' + bestStreak : '-'}</div><div class="cs-l">Streak</div></div>
     </div>
+    <div style="font-size:.6rem;color:var(--fg3);padding:2px 4px;display:flex;gap:6px;flex-wrap:wrap">
+      <span>${moodIcon} ${mood}</span>
+      <span>⚡ ${trait}</span>
+      ${rival ? '<span>⚔️ vs ' + esc(rival) + '</span>' : ''}
+    </div>
+    ${thought ? `<div style="font-size:.6rem;color:var(--fg2);padding:2px 4px;font-style:italic;border-left:2px solid var(--border2);margin:2px 4px">"${esc(thought.slice(0,80))}"</div>` : ''}
     ${d.currentTask ? `<div class="card-task"><div class="td"></div>${esc(d.currentTask.description||'')}</div>` : ''}
     <div class="card-act">${act}</div>
   </div>`;
@@ -783,7 +852,7 @@ function updateFeed(activity) {
   scroll.innerHTML = feedEntries.slice(-25).map(a => {
     const t = new Date(a.ts).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
     const n = (a.agent||'').toLowerCase();
-    const bc = n.includes('coordinator')?'b-coord':n.includes('sentiment')?'b-sent':n.includes('chart')?'b-chart':n.includes('risk')?'b-risk':n.includes('trader')?'b-trade':n.includes('accountant')?'b-acct':'b-tok';
+    const bc = n.includes('coordinator')?'b-coord':n.includes('sentiment')?'b-sent':n.includes('chart')?'b-chart':n.includes('risk')?'b-risk':n.includes('trader')?'b-trade':n.includes('accountant')?'b-acct':n.includes('police')?'b-risk':n.includes('kronos')?'b-sent':n.includes('strategy')?'b-chart':n.includes('coder')?'b-acct':'b-tok';
     const sn = (a.agent||'').replace('Agent','').slice(0,6);
     return `<div class="fe"><span class="fe-t">${t}</span><span class="fe-b ${bc}">${esc(sn)}</span><span class="fe-m">${esc(a.message||'')}</span></div>`;
   }).join('');

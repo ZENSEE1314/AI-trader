@@ -76,6 +76,15 @@ class TraderAgent extends BaseAgent {
     const { signals = [], mode = 'signals' } = context;
     this.cycleCount++;
 
+    // Consume inter-agent messages from KronosAgent
+    const kronosSignals = this.consumeMessages('kronos-signals');
+    if (kronosSignals.length > 0) {
+      const latest = kronosSignals[kronosSignals.length - 1].payload?.signals || [];
+      if (latest.length > 0) {
+        this.addActivity('info', `Kronos shared ${latest.length} strong signal(s): ${latest.map(s => `${s.symbol} ${s.direction}`).join(', ')}`);
+      }
+    }
+
     if (mode === 'full') {
       // Fallback: delegate to cycle.run()
       this.currentTask = { description: 'Full cycle (legacy)', startedAt: Date.now() };

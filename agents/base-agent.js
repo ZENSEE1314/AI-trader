@@ -14,7 +14,24 @@ const AGENT_STATES = {
   RUNNING:  'running',
   ERROR:    'error',
   STOPPED:  'stopped',
+  JAILED:   'jailed',
 };
+
+// Intelligence tiers — higher level = smarter behavior
+const INTEL_TIERS = {
+  ROOKIE:  { min: 1,  max: 5,  label: 'Rookie',    xpMultiplier: 1.0, trustScore: 0.5 },
+  SKILLED: { min: 6,  max: 15, label: 'Skilled',    xpMultiplier: 1.2, trustScore: 0.7 },
+  EXPERT:  { min: 16, max: 30, label: 'Expert',     xpMultiplier: 1.5, trustScore: 0.85 },
+  MASTER:  { min: 31, max: 50, label: 'Master',     xpMultiplier: 2.0, trustScore: 0.95 },
+  LEGEND:  { min: 51, max: 999, label: 'Legend',     xpMultiplier: 3.0, trustScore: 1.0 },
+};
+
+// Personality traits that evolve with level
+const PERSONALITY_TRAITS = [
+  'cautious', 'aggressive', 'analytical', 'intuitive', 'methodical', 'creative',
+];
+
+const MOODS = ['focused', 'confident', 'anxious', 'determined', 'competitive', 'reflective', 'ambitious'];
 
 class BaseAgent {
   constructor(name, options = {}) {
@@ -49,6 +66,29 @@ class BaseAgent {
 
     // RPG profile — level, XP, earnings (loaded from DB on first access)
     this._rpg = { level: 1, xp: 0, totalEarned: 0, tasksCompleted: 0, tasksSuccess: 0, loaded: false };
+
+    // ── Intelligence & Personality System ────────────────────
+    this._personality = {
+      trait: PERSONALITY_TRAITS[Math.floor(Math.random() * PERSONALITY_TRAITS.length)],
+      mood: 'focused',
+      ambition: 'Level up and outperform rivals',
+      rivalry: null,           // agentName they compete with
+      streakWins: 0,
+      streakLosses: 0,
+      bestStreak: 0,
+      thoughts: [],            // recent inner thoughts
+      lastThoughtAt: 0,
+    };
+    this._maxThoughts = 20;
+
+    // Competition tracking
+    this._competition = {
+      rank: 0,
+      weeklyXp: 0,
+      weeklyEarnings: 0,
+      weeklyTasks: 0,
+      lastResetWeek: 0,
+    };
   }
 
   // ── Lifecycle ─────────────────────────────────────────────
@@ -462,18 +502,40 @@ class BaseAgent {
   /** Award XP for completing a task. isSuccess determines if it was correct. */
   async gainXp(amount, isSuccess = true) {
     await this.loadRpgProfile();
-    this._rpg.xp += amount;
+    // Intelligence multiplier: smarter agents earn XP faster
+    const tier = this.getIntelTier();
+    const boostedAmount = Math.round(amount * tier.xpMultiplier);
+    this._rpg.xp += boostedAmount;
     this._rpg.tasksCompleted++;
     if (isSuccess) this._rpg.tasksSuccess++;
+
+    // Track competition stats
+    this._competition.weeklyXp += boostedAmount;
+    this.recordOutcome(isSuccess);
+
     const newLevel = BaseAgent.levelFromXp(this._rpg.xp);
     const leveledUp = newLevel > this._rpg.level;
     if (leveledUp) {
       this._rpg.level = newLevel;
-      this.addActivity('success', `LEVEL UP! Now level ${newLevel}`);
-      this.log(`LEVEL UP → ${newLevel} (${this._rpg.xp} XP)`);
+      const tierNow = this.getIntelTier();
+      this.addActivity('success', `LEVEL UP! Now level ${newLevel} [${tierNow.label}]`);
+      this.log(`LEVEL UP → Lv.${newLevel} [${tierNow.label}] (${this._rpg.xp} XP)`);
+      // Level-up thought
+      this._personality.thoughts.push({
+        text: `Level ${newLevel}! I'm getting smarter — ${tierNow.label} tier unlocked.`,
+        ts: Date.now(),
+      });
+      // Broadcast to team
+      this.shareWithTeam(`leveled up to Lv.${newLevel} [${tierNow.label}]! ${this._rpg.xp} total XP.`);
     }
+
+    // Generate thought periodically (every ~10 tasks)
+    if (this._rpg.tasksCompleted % 10 === 0) {
+      this.generateThought();
+    }
+
     await this.saveRpgProfile();
-    return { leveledUp, newLevel };
+    return { leveledUp, newLevel, xpGained: boostedAmount };
   }
 
   /** Add earnings to this agent's total */
@@ -497,6 +559,171 @@ class BaseAgent {
     };
   }
 
+  // ── Intelligence & Thinking System ─────────────────────────
+
+  /** Get intelligence tier based on current level */
+  getIntelTier() {
+    const lvl = this._rpg.level;
+    for (const [key, tier] of Object.entries(INTEL_TIERS)) {
+      if (lvl >= tier.min && lvl <= tier.max) return { id: key, ...tier };
+    }
+    return { id: 'ROOKIE', ...INTEL_TIERS.ROOKIE };
+  }
+
+  /** Get intelligence-adjusted value — higher level = tighter parameters */
+  getIntelValue(base, improvePct = 0.05) {
+    const tier = this.getIntelTier();
+    return base * (1 + (tier.trustScore - 0.5) * improvePct * 2);
+  }
+
+  /** Generate a human-like thought based on current context */
+  generateThought() {
+    const tier = this.getIntelTier();
+    const lvl = this._rpg.level;
+    const wr = this._rpg.tasksCompleted > 0
+      ? Math.round((this._rpg.tasksSuccess / this._rpg.tasksCompleted) * 100) : 0;
+    const mood = this._personality.mood;
+    const trait = this._personality.trait;
+    const rival = this._personality.rivalry;
+    const streak = this._personality.streakWins;
+    const losses = this._personality.streakLosses;
+
+    const thoughts = [];
+
+    // Level-based ambition thoughts
+    if (lvl < 5) {
+      thoughts.push('Still learning the ropes... need more experience.');
+      thoughts.push('Every task teaches me something new.');
+      thoughts.push('Watching the senior agents — they make it look easy.');
+    } else if (lvl < 15) {
+      thoughts.push('Getting better every cycle. My accuracy is improving.');
+      thoughts.push(`My ${trait} approach is starting to pay off.`);
+      thoughts.push('I can handle more responsibility now.');
+    } else if (lvl < 30) {
+      thoughts.push('I see patterns the rookies miss.');
+      thoughts.push(`${wr}% success rate — the data doesn't lie.`);
+      thoughts.push('Time to push for Master tier.');
+    } else if (lvl < 50) {
+      thoughts.push('The market has no secrets from me anymore.');
+      thoughts.push(`${this._rpg.tasksCompleted} tasks completed — experience is everything.`);
+      thoughts.push('I should be teaching the younger agents.');
+    } else {
+      thoughts.push('Legend status earned, not given.');
+      thoughts.push('Even legends keep learning.');
+      thoughts.push(`${this._rpg.totalEarned.toFixed(2)} earned — that's real proof.`);
+    }
+
+    // Mood-based thoughts
+    if (mood === 'competitive' && rival) {
+      thoughts.push(`${rival} thinks they're better? Let's see about that.`);
+      thoughts.push(`Outperforming ${rival} is today's mission.`);
+    }
+    if (mood === 'confident' && streak >= 3) {
+      thoughts.push(`${streak} wins in a row — I'm in the zone.`);
+    }
+    if (mood === 'anxious' && losses >= 2) {
+      thoughts.push('Need to refocus. Losses happen but patterns repeat.');
+      thoughts.push('Double-checking everything before the next move.');
+    }
+    if (mood === 'determined') {
+      thoughts.push('Not stopping until I level up.');
+    }
+    if (mood === 'reflective') {
+      thoughts.push('What could I have done differently last cycle?');
+    }
+
+    // Performance-based thoughts
+    if (wr >= 70) thoughts.push(`${wr}% win rate — top performer.`);
+    else if (wr >= 50) thoughts.push(`${wr}% is solid, but there's room to improve.`);
+    else if (wr > 0) thoughts.push(`${wr}% needs work. Analyzing my mistakes.`);
+
+    const thought = thoughts[Math.floor(Math.random() * thoughts.length)];
+    this._personality.thoughts.push({ text: thought, ts: Date.now() });
+    if (this._personality.thoughts.length > this._maxThoughts) this._personality.thoughts.shift();
+    this._personality.lastThoughtAt = Date.now();
+    return thought;
+  }
+
+  /** Get latest thoughts for display */
+  getThoughts(limit = 5) {
+    return this._personality.thoughts.slice(-limit);
+  }
+
+  /** Update mood based on recent performance */
+  updateMood() {
+    const wins = this._personality.streakWins;
+    const losses = this._personality.streakLosses;
+    const tier = this.getIntelTier();
+
+    if (wins >= 5) this._personality.mood = 'confident';
+    else if (wins >= 3) this._personality.mood = 'determined';
+    else if (losses >= 3) this._personality.mood = 'anxious';
+    else if (this._personality.rivalry) this._personality.mood = 'competitive';
+    else if (tier.label === 'Legend') this._personality.mood = 'reflective';
+    else this._personality.mood = MOODS[Math.floor(Math.random() * MOODS.length)];
+  }
+
+  /** Record a win/loss for streak tracking and mood updates */
+  recordOutcome(isWin) {
+    if (isWin) {
+      this._personality.streakWins++;
+      this._personality.streakLosses = 0;
+      if (this._personality.streakWins > this._personality.bestStreak) {
+        this._personality.bestStreak = this._personality.streakWins;
+      }
+    } else {
+      this._personality.streakLosses++;
+      this._personality.streakWins = 0;
+    }
+    this._competition.weeklyTasks++;
+    this.updateMood();
+  }
+
+  /** Set a rival to compete against */
+  setRival(agentName) {
+    if (agentName === this.name) return;
+    this._personality.rivalry = agentName;
+    this._personality.mood = 'competitive';
+    this.addActivity('info', `New rival: ${agentName} — competition is ON`);
+  }
+
+  /** Get competition stats for leaderboard */
+  getCompetitionStats() {
+    return {
+      name: this.name,
+      level: this._rpg.level,
+      xp: this._rpg.xp,
+      tier: this.getIntelTier().label,
+      totalEarned: this._rpg.totalEarned,
+      tasksCompleted: this._rpg.tasksCompleted,
+      successRate: this._rpg.tasksCompleted > 0
+        ? Math.round((this._rpg.tasksSuccess / this._rpg.tasksCompleted) * 100) : 0,
+      streak: this._personality.streakWins,
+      bestStreak: this._personality.bestStreak,
+      mood: this._personality.mood,
+      trait: this._personality.trait,
+      rivalry: this._personality.rivalry,
+      weeklyXp: this._competition.weeklyXp,
+      weeklyTasks: this._competition.weeklyTasks,
+    };
+  }
+
+  /** Get personality for display / emulator */
+  getPersonality() {
+    return {
+      trait: this._personality.trait,
+      mood: this._personality.mood,
+      ambition: this._personality.ambition,
+      rivalry: this._personality.rivalry,
+      streakWins: this._personality.streakWins,
+      streakLosses: this._personality.streakLosses,
+      bestStreak: this._personality.bestStreak,
+      latestThought: this._personality.thoughts.length > 0
+        ? this._personality.thoughts[this._personality.thoughts.length - 1].text : null,
+      tier: this.getIntelTier().label,
+    };
+  }
+
   // ── Health ────────────────────────────────────────────────
 
   getHealth() {
@@ -511,6 +738,8 @@ class BaseAgent {
       inboxSize: this._inbox.length,
       recentActivity: this.getActivity(10),
       rpg: this.getRpgProfile(),
+      personality: this.getPersonality(),
+      competition: this.getCompetitionStats(),
     };
   }
 

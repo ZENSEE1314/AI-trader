@@ -1817,21 +1817,26 @@ async function syncTradeStatus() {
               await recordProfitSplit(db, trade.user_id, trade.api_key_id, pnlUsdt, trade.symbol);
             }
 
-            // RPG: reward agents with XP and earnings
+            // RPG: XP only from winning trades — all agents involved get rewarded
             try {
               const { getCoordinator } = require('./agents');
               const coord = getCoordinator();
               const tokenKey = trade.symbol.toLowerCase().replace('usdt', '');
               const tokenAgent = coord._agents.get(tokenKey);
-              if (tokenAgent) {
-                const xpAmount = pnlUsdt > 0 ? 100 : 10;
-                tokenAgent.gainXp(xpAmount, pnlUsdt > 0).catch(() => {});
-                tokenAgent.addEarnings(Math.abs(pnlUsdt)).catch(() => {});
-              }
-              coord.traderAgent.addEarnings(Math.abs(pnlUsdt)).catch(() => {});
               if (pnlUsdt > 0) {
-                coord.traderAgent.gainXp(30, true).catch(() => {});
+                // Winning trade — reward all agents in the pipeline
+                if (tokenAgent) tokenAgent.gainXp(100, true).catch(() => {});
+                coord.traderAgent.gainXp(50, true).catch(() => {});
+                coord.chartAgent.gainXp(30, true).catch(() => {});
+                coord.riskAgent.gainXp(20, true).catch(() => {});
+                coord.sentimentAgent.gainXp(15, true).catch(() => {});
+                coord.kronosAgent.gainXp(15, true).catch(() => {});
+                coord.strategyAgent.gainXp(10, true).catch(() => {});
+                coord.gainXp(10, true).catch(() => {});
               }
+              // Track earnings regardless of win/loss
+              if (tokenAgent) tokenAgent.addEarnings(Math.abs(pnlUsdt)).catch(() => {});
+              coord.traderAgent.addEarnings(Math.abs(pnlUsdt)).catch(() => {});
             } catch (_) {}
           } else {
             // Still open — update live PnL

@@ -592,25 +592,20 @@ async function main() {
     log(`Initial scan error (non-fatal): ${err.message}`);
   }
 
-  // Main loop — these MUST start regardless of errors above
-  log(`Starting main loop: scan every ${INTERVAL_MIN} min`);
+  // Main loop — command polling + spike checks
+  // NOTE: Trading cycles are now managed by the Coordinator's CEO always-on loop
+  // (30s micro-cycles + 60s full pipeline scans + staggered token scanning)
+  log('Starting main loop: CEO always-on mode (30s micro-cycles)');
 
   setInterval(async () => {
     try { await pollCommands(); } catch (err) { log(`Poll error: ${err.message}`); }
   }, 5000);
 
-  let tradingCycleRunning = false;
-  setInterval(async () => {
-    if (tradingCycleRunning) { log('Cycle still running — skipping'); return; }
-    tradingCycleRunning = true;
-    try { await runTradingCycle(); } catch (err) { log(`Cycle error: ${err.message}`); } finally { tradingCycleRunning = false; }
-  }, INTERVAL_MIN * 60 * 1000);
-
   setInterval(async () => {
     try { await checkSpikes(); } catch (err) { log(`Spike check error: ${err.message}`); }
   }, SPIKE_INTERVAL);
 
-  log('Bot loop is running');
+  log('Bot loop is running — CEO commanding all agents');
 }
 
 main().catch(err => {

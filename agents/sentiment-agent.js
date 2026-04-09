@@ -57,6 +57,13 @@ class SentimentAgent extends BaseAgent {
     this.currentTask = { description: 'Fetching market sentiment', startedAt: Date.now() };
     this.scansCompleted++;
 
+    // Consume Kronos market bias intel
+    const kronosBias = this.consumeMessages('kronos-bias');
+    if (kronosBias.length > 0) {
+      const bias = kronosBias[kronosBias.length - 1].payload;
+      this.addActivity('info', `Kronos market bias: ${bias.bias} (${bias.longs}L/${bias.shorts}S out of ${bias.total})`);
+    }
+
     // 1. Fetch scores from all sources
     const scores = await getSentimentScores();
     this.lastScores = scores;

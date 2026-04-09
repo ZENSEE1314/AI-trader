@@ -10,6 +10,10 @@ const { SentimentAgent } = require('./sentiment-agent');
 const { AccountantAgent } = require('./accountant-agent');
 const { TokenAgent } = require('./token-agent');
 const { WatcherAgent } = require('./watcher-agent');
+const { KronosAgent } = require('./kronos-agent');
+const { StrategyAgent } = require('./strategy-agent');
+const { PoliceAgent } = require('./police-agent');
+const { CoderAgent } = require('./coder-agent');
 const { AgentCoordinator, getCoordinator } = require('./agent-coordinator');
 const hermesBridge = require('../hermes-bridge');
 
@@ -23,6 +27,10 @@ module.exports = {
   AccountantAgent,
   TokenAgent,
   WatcherAgent,
+  KronosAgent,
+  StrategyAgent,
+  PoliceAgent,
+  CoderAgent,
   AgentCoordinator,
   getCoordinator,
   hermesBridge,

@@ -856,4 +856,143 @@ router.get('/hermes-status', async (req, res) => {
   }
 });
 
+// ── Strategy Backtests ────────────────────────────────────
+router.get('/strategy-backtests', async (req, res) => {
+  try {
+    const rows = await query(
+      `SELECT id, name, params, total_trades, wins, losses, win_rate, total_pnl,
+              avg_win, avg_loss, max_drawdown, symbols, top_trades, created_at
+       FROM strategy_backtests
+       ORDER BY created_at DESC
+       LIMIT 50`
+    );
+    res.json({ backtests: rows });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Agent Leaderboard ────────────────────────────────────
+router.get('/leaderboard', async (req, res) => {
+  try {
+    const { getCoordinator } = require('../agents/agent-coordinator');
+    const coord = getCoordinator();
+    const board = coord.getLeaderboard();
+    res.json({ leaderboard: board });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Agent Jail ───────────────────────────────────────────
+router.get('/jail', async (req, res) => {
+  try {
+    const { getCoordinator } = require('../agents/agent-coordinator');
+    const coord = getCoordinator();
+    const jailed = coord.getJailedAgents();
+    res.json({ jailed });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/jail/release', async (req, res) => {
+  try {
+    const { agentKey } = req.body;
+    if (!agentKey) return res.status(400).json({ error: 'agentKey required' });
+    const { getCoordinator } = require('../agents/agent-coordinator');
+    const coord = getCoordinator();
+    const released = await coord.releaseAgent(agentKey);
+    res.json({ ok: released, agentKey });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/jail/report/:agentKey', async (req, res) => {
+  try {
+    const { getCoordinator } = require('../agents/agent-coordinator');
+    const coord = getCoordinator();
+    const report = await coord.getViolationReport(req.params.agentKey);
+    res.json(report);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Agent Jail History ───────────────────────────────────
+router.get('/jail/history', async (req, res) => {
+  try {
+    const rows = await query(
+      `SELECT id, agent_key, agent_name, reason, violation_type, severity, warnings,
+              jailed_at, released_at, released_by
+       FROM agent_jail ORDER BY jailed_at DESC LIMIT 50`
+    );
+    res.json({ history: rows });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── CoderAgent Patch Review ──────────────────────────────────
+
+router.get('/patches/pending', async (req, res) => {
+  try {
+    const { getCoordinator } = require('../agents');
+    const coord = getCoordinator();
+    res.json({ patches: coord.coderAgent.getPendingPatches() });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/patches/applied', async (req, res) => {
+  try {
+    const { getCoordinator } = require('../agents');
+    const coord = getCoordinator();
+    res.json({ patches: coord.coderAgent.getAppliedPatches() });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/patches/approve', async (req, res) => {
+  try {
+    const { patchId } = req.body;
+    if (!patchId) return res.status(400).json({ error: 'patchId required' });
+    const { getCoordinator } = require('../agents');
+    const coord = getCoordinator();
+    const result = await coord.coderAgent.approvePatch(patchId);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/patches/reject', async (req, res) => {
+  try {
+    const { patchId } = req.body;
+    if (!patchId) return res.status(400).json({ error: 'patchId required' });
+    const { getCoordinator } = require('../agents');
+    const coord = getCoordinator();
+    const result = coord.coderAgent.rejectPatch(patchId);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/patches/revert', async (req, res) => {
+  try {
+    const { filePath } = req.body;
+    if (!filePath) return res.status(400).json({ error: 'filePath required' });
+    const { getCoordinator } = require('../agents');
+    const coord = getCoordinator();
+    const result = await coord.coderAgent.revertPatch(filePath);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 module.exports = router;

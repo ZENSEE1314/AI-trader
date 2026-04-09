@@ -42,6 +42,13 @@ class ChartAgent extends BaseAgent {
   async execute(context = {}) {
     const { topNCoins = 50, forceScan = false, kronosPredictions = null } = context;
 
+    // Consume winning strategy intel from StrategyAgent
+    const stratMsgs = this.consumeMessages('winning-strategy');
+    if (stratMsgs.length > 0) {
+      const strat = stratMsgs[stratMsgs.length - 1].payload;
+      this.addActivity('info', `Strategy intel: "${strat.name}" won with ${strat.winRate?.toFixed(1)}% WR — noted for scanning`);
+    }
+
     this.logScan('Starting market scan...');
 
     // 1. Load AI params for scoring adjustments

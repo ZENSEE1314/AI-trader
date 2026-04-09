@@ -16,6 +16,10 @@ const { RiskAgent } = require('./risk-agent');
 const { SentimentAgent } = require('./sentiment-agent');
 const { AccountantAgent } = require('./accountant-agent');
 const { TokenAgent } = require('./token-agent');
+const { KronosAgent } = require('./kronos-agent');
+const { StrategyAgent } = require('./strategy-agent');
+const { PoliceAgent } = require('./police-agent');
+const { CoderAgent } = require('./coder-agent');
 
 // Top tokens that always get their own agent
 const DEFAULT_TOKEN_AGENTS = [
@@ -31,6 +35,10 @@ class AgentCoordinator extends BaseAgent {
     this.riskAgent = new RiskAgent(options);
     this.sentimentAgent = new SentimentAgent(options);
     this.accountantAgent = new AccountantAgent(options);
+    this.kronosAgent = new KronosAgent(options);
+    this.strategyAgent = new StrategyAgent(options);
+    this.policeAgent = new PoliceAgent(options);
+    this.coderAgent = new CoderAgent(options);
 
     // Agent registry — order matters for display
     this._agents = new Map();
@@ -39,6 +47,10 @@ class AgentCoordinator extends BaseAgent {
     this._agents.set('risk', this.riskAgent);
     this._agents.set('trader', this.traderAgent);
     this._agents.set('accountant', this.accountantAgent);
+    this._agents.set('kronos', this.kronosAgent);
+    this._agents.set('strategy', this.strategyAgent);
+    this._agents.set('police', this.policeAgent);
+    this._agents.set('coder', this.coderAgent);
 
     // Wire up inter-agent events
     this.chartAgent.on('signals', (data) => {
@@ -52,6 +64,21 @@ class AgentCoordinator extends BaseAgent {
 
     this.cycleRunning = false;
     this.tokenAgents = new Map(); // symbol → TokenAgent
+
+    // CEO always-on state
+    this._ceoTimer = null;
+    this._microCycleRunning = false;
+    this._microCycleCount = 0;
+    this._lastFullCycleAt = 0;
+    this._tokenScanQueue = [];     // round-robin scan queue
+    this._tokenScanIdx = 0;
+    this._tokenScanTimer = null;
+
+    // Intervals
+    this.MICRO_CYCLE_MS = 30_000;           // CEO checks every 30s
+    this.TOKEN_SCAN_INTERVAL_MS = 30_000;   // each token scanned every 30s
+    this.FULL_CYCLE_INTERVAL_MS = 60_000;   // full pipeline every 60s
+    this.TOKEN_BATCH_SIZE = 5;              // scan 5 tokens per tick to stagger load
   }
 
   async init() {
@@ -105,7 +132,21 @@ class AgentCoordinator extends BaseAgent {
       } catch {}
     }
 
+    // Start StrategyAgent 24/7 background loop
+    this.strategyAgent.init().catch(err => this.logError(`StrategyAgent init failed: ${err.message}`));
+
+    // Start PoliceAgent patrol loop
+    this.policeAgent.init().catch(err => this.logError(`PoliceAgent init failed: ${err.message}`));
+
+    // Start CoderAgent self-healing loop
+    this.coderAgent.setCoordinator(this);
+    this.coderAgent.init().catch(err => this.logError(`CoderAgent init failed: ${err.message}`));
+
     this.log(`Agent framework ready — ${this._agents.size} system agents + ${this.tokenAgents.size} token agents`);
+
+    // CEO always-on: permanently at desk, monitoring everything
+    this._startCeoLoop();
+    this._startTokenScanLoop();
   }
 
   addTokenAgent(symbol) {
@@ -115,6 +156,12 @@ class AgentCoordinator extends BaseAgent {
     const key = symbol.toLowerCase().replace('usdt', '');
     this._agents.set(key, agent);
     agent.init();
+    // Keep token agents permanently active at their stations
+    agent.managedByCoordinator = true;
+    agent.state = 'running';
+    agent.currentTask = { description: `Watching ${symbol}`, startedAt: Date.now() };
+    // Rebuild scan queue when new token added
+    this._rebuildScanQueue();
   }
 
   removeTokenAgent(symbol) {
@@ -125,13 +172,269 @@ class AgentCoordinator extends BaseAgent {
     this._agents.delete(key);
   }
 
+  // ── CEO Always-On Loop ──────────────────────────────────────
+  // Coordinator stays permanently "running" at its desk.
+  // Every 30s it runs a micro-cycle: monitor positions, sync trades,
+  // and decide whether to trigger a full pipeline scan.
+
+  _startCeoLoop() {
+    // CEO is always running — never goes idle
+    this.state = 'running';
+    this.managedByCoordinator = true;
+    this.currentTask = { description: 'Commanding agents — monitoring markets', startedAt: Date.now() };
+    this.addActivity('info', 'CEO online — always-on mode activated');
+
+    // Keep all core agents at their stations permanently
+    const coreAgents = [this.sentimentAgent, this.chartAgent, this.riskAgent, this.traderAgent, this.accountantAgent, this.kronosAgent, this.strategyAgent, this.policeAgent, this.coderAgent];
+    for (const a of coreAgents) {
+      if (!a.paused) {
+        a.managedByCoordinator = true;
+        a.state = 'running';
+        a.currentTask = { description: 'Monitoring — standing by', startedAt: Date.now() };
+      }
+    }
+
+    this._ceoTimer = setInterval(async () => {
+      if (this.paused) return;
+      try {
+        await this._microCycle();
+      } catch (err) {
+        this.addActivity('error', `Micro-cycle error: ${err.message}`);
+      }
+    }, this.MICRO_CYCLE_MS);
+
+    this.log('CEO always-on loop started (30s micro-cycles)');
+  }
+
+  async _microCycle() {
+    this._microCycleCount++;
+    const now = Date.now();
+
+    // Update CEO task display
+    this.currentTask = { description: `Cycle #${this._microCycleCount} — monitoring ${this.tokenAgents.size} tokens`, startedAt: now };
+
+    // 1. Sync trade status + check top-ups (every micro-cycle)
+    try {
+      this.traderAgent.currentTask = { description: 'Syncing positions...', startedAt: now };
+      const { syncTradeStatus, checkUsdtTopups } = require('../cycle');
+      await syncTradeStatus();
+      await checkUsdtTopups();
+      this.traderAgent.currentTask = { description: 'Monitoring positions', startedAt: now };
+    } catch (err) {
+      this.addActivity('error', `Sync error: ${err.message}`);
+    }
+
+    // 2. Check if it's time for a full pipeline scan
+    const timeSinceFullCycle = now - this._lastFullCycleAt;
+    if (timeSinceFullCycle >= this.FULL_CYCLE_INTERVAL_MS && !this.cycleRunning) {
+      this.run({ forced: false }).catch(err => {
+        this.addActivity('error', `Full cycle error: ${err.message}`);
+      });
+    }
+
+    // 3. Competition: update leaderboard and rivalries every 5 micro-cycles
+    if (this._microCycleCount % 5 === 0) {
+      this.updateRivalries();
+    }
+
+    // 4. Generate thoughts for all agents every 10 micro-cycles (~5 min)
+    if (this._microCycleCount % 10 === 0) {
+      this.generateAllThoughts();
+      this.getLeaderboard(); // refresh ranks
+    }
+
+    // 5. Run police patrol (pass coordinator context)
+    if (this._microCycleCount % 2 === 0 && !this.policeAgent.paused) {
+      this.policeAgent.run({ coordinator: this }).catch(() => {});
+    }
+
+    // 6. Update CEO display
+    const board = this.getLeaderboard();
+    const topAgent = board[0];
+    const topDisplay = topAgent ? ` | #1: ${topAgent.name} Lv.${topAgent.level}` : '';
+    this.currentTask = { description: `Commanding ${this.tokenAgents.size} tokens${topDisplay}`, startedAt: Date.now() };
+  }
+
+  // ── Staggered Token Scan Loop ──────────────────────────────
+  // Scans tokens in rotating batches every few seconds so each
+  // token gets checked ~every 30 seconds.
+
+  _startTokenScanLoop() {
+    // Calculate tick interval: scan TOKEN_BATCH_SIZE tokens per tick
+    // so all tokens are covered within TOKEN_SCAN_INTERVAL_MS
+    this._rebuildScanQueue();
+
+    const tickMs = Math.max(2000, Math.floor(this.TOKEN_SCAN_INTERVAL_MS / Math.ceil(this.tokenAgents.size / this.TOKEN_BATCH_SIZE)) || 5000);
+
+    this._tokenScanTimer = setInterval(async () => {
+      if (this.paused || this.cycleRunning) return;
+      try {
+        await this._scanTokenBatch();
+      } catch (err) {
+        this.addActivity('error', `Token scan batch error: ${err.message}`);
+      }
+    }, tickMs);
+
+    this.log(`Token scan loop started — ${this.TOKEN_BATCH_SIZE} tokens every ${(tickMs / 1000).toFixed(1)}s`);
+  }
+
+  _rebuildScanQueue() {
+    this._tokenScanQueue = [...this.tokenAgents.keys()];
+    this._tokenScanIdx = 0;
+  }
+
+  async _scanTokenBatch() {
+    if (this._tokenScanQueue.length === 0) {
+      this._rebuildScanQueue();
+      if (this._tokenScanQueue.length === 0) return;
+    }
+
+    // Pick next batch from queue
+    const batch = [];
+    for (let i = 0; i < this.TOKEN_BATCH_SIZE && this._tokenScanIdx < this._tokenScanQueue.length; i++) {
+      const sym = this._tokenScanQueue[this._tokenScanIdx++];
+      const agent = this.tokenAgents.get(sym);
+      if (agent && !agent.paused) batch.push([sym, agent]);
+    }
+
+    // Wrap around when we reach the end
+    if (this._tokenScanIdx >= this._tokenScanQueue.length) {
+      this._tokenScanIdx = 0;
+    }
+
+    if (batch.length === 0) return;
+
+    // Get cached Kronos predictions for token scans
+    let kronosPredictions = null;
+    if (this.kronosAgent.lastPredictions?.size > 0) {
+      kronosPredictions = this.kronosAgent.lastPredictions;
+    }
+    const dailyBiasCache = new Map();
+
+    // Scan batch
+    const signals = [];
+    for (const [sym, agent] of batch) {
+      agent.currentTask = { description: `Quick-scanning ${sym}...`, startedAt: Date.now() };
+      try {
+        const result = await agent.run({ kronosPredictions, dailyBiasCache });
+        if (result && result.direction) {
+          signals.push(result);
+          agent.addActivity('success', `SIGNAL: ${sym} ${result.direction}`);
+        }
+      } catch {
+        // Skip failed scans silently
+      }
+      agent.currentTask = { description: `Watching ${sym}`, startedAt: Date.now() };
+    }
+
+    // If any signals found during background scan, feed them through risk + trader
+    if (signals.length > 0) {
+      this.addActivity('info', `Background scan: ${signals.length} signal(s) — ${signals.map(s => `${s.symbol} ${s.direction}`).join(', ')}`);
+
+      // Quick risk check + execute
+      try {
+        let approved = signals;
+        if (!this.riskAgent.paused) {
+          let openPositions = [];
+          try {
+            const { query: dbQuery } = require('../db');
+            const openTrades = await dbQuery("SELECT symbol FROM trades WHERE status = 'OPEN'");
+            openPositions = openTrades.map(t => t.symbol);
+          } catch {}
+          const riskResult = await this.riskAgent.run({ signals, openPositions });
+          approved = riskResult?.approved || [];
+        }
+        if (approved.length > 0 && !this.traderAgent.paused) {
+          this.addActivity('trade', `Background signal approved: ${approved.map(s => `${s.symbol} ${s.direction}`).join(', ')}`);
+          await this.traderAgent.run({ signals: approved, mode: 'signals' });
+        }
+      } catch (err) {
+        this.addActivity('error', `Background trade error: ${err.message}`);
+      }
+    }
+  }
+
+  // ── Competition & Leaderboard System ────────────────────────
+  // Agents compete against each other — ranked by XP, earnings, and success rate.
+  // Rivalries form automatically between agents of similar level.
+
+  getLeaderboard() {
+    const board = [];
+    for (const [key, agent] of this._agents) {
+      if (key === 'coordinator') continue;
+      const stats = agent.getCompetitionStats();
+      board.push({ key, ...stats });
+    }
+    board.sort((a, b) => b.xp - a.xp);
+    board.forEach((entry, idx) => {
+      entry.rank = idx + 1;
+      const agent = this._agents.get(entry.key);
+      if (agent) agent._competition.rank = idx + 1;
+    });
+    return board;
+  }
+
+  /** Auto-assign rivalries between agents of similar level for competition */
+  updateRivalries() {
+    const board = this.getLeaderboard();
+    for (let i = 0; i < board.length; i++) {
+      const agent = this._agents.get(board[i].key);
+      if (!agent) continue;
+      // Rival is the agent directly above or below in ranking
+      const rivalIdx = i > 0 ? i - 1 : (i < board.length - 1 ? i + 1 : -1);
+      if (rivalIdx >= 0) {
+        const rivalAgent = this._agents.get(board[rivalIdx].key);
+        if (rivalAgent && rivalAgent.name !== agent.name && rivalAgent.state !== 'jailed') {
+          agent.setRival(rivalAgent.name);
+        }
+      }
+    }
+  }
+
+  /** Generate thoughts for all agents — called periodically */
+  generateAllThoughts() {
+    for (const [, agent] of this._agents) {
+      if (agent.state === 'jailed' || agent.paused) continue;
+      agent.generateThought();
+    }
+  }
+
+  // ── Jail Review (for user/admin) ───────────────────────────
+
+  getJailedAgents() {
+    return this.policeAgent.getJailedAgents();
+  }
+
+  async releaseAgent(agentKey) {
+    const released = await this.policeAgent.releaseAgent(agentKey, this);
+    if (released) {
+      const agent = this._agents.get(agentKey);
+      if (agent) {
+        agent.managedByCoordinator = true;
+        agent.state = 'running';
+        agent.currentTask = { description: 'Back on duty after jail release', startedAt: Date.now() };
+        agent.addActivity('success', 'CEO approved release — proving myself again');
+        agent.generateThought();
+      }
+    }
+    return released;
+  }
+
+  async getViolationReport(agentKey) {
+    return this.policeAgent.getViolationReport(agentKey);
+  }
+
   /**
    * Run one full trading cycle through the decoupled agent pipeline.
    *
    * Flow:
-   *   1. ChartAgent scans market for SMC signals
-   *   2. Coordinator logs signal count
-   *   3. TraderAgent syncs positions, executes signals, manages trailing SL
+   *   1. SentimentAgent fetches market mood
+   *   2. KronosAgent runs AI predictions
+   *   3. TokenAgents + ChartAgent scan for SMC signals
+   *   4. SentimentAgent enriches signals
+   *   5. RiskAgent filters signals
+   *   6. TraderAgent executes approved signals
+   *   7. AccountantAgent audits (every 10 cycles)
    */
   async execute(context = {}) {
     if (this.cycleRunning) {
@@ -140,17 +443,18 @@ class AgentCoordinator extends BaseAgent {
     }
 
     this.cycleRunning = true;
+    this._lastFullCycleAt = Date.now();
     const cycleStart = Date.now();
-    this.addActivity('info', 'Cycle started');
+    this.addActivity('info', 'Full pipeline cycle started');
+    this.currentTask = { description: 'Running full pipeline scan...', startedAt: cycleStart };
 
-    // Keep all agents visually "running" for the entire cycle duration
-    // so the emulator shows them at their stations instead of idle in the hall
-    const coreAgents = [this.sentimentAgent, this.chartAgent, this.riskAgent, this.traderAgent, this.accountantAgent];
+    // All agents stay permanently managed by CEO loop — just update their tasks
+    const coreAgents = [this.sentimentAgent, this.chartAgent, this.riskAgent, this.traderAgent, this.accountantAgent, this.kronosAgent, this.strategyAgent, this.policeAgent, this.coderAgent];
     for (const a of coreAgents) {
-      if (!a.paused) {
+      if (!a.paused && a.state !== 'jailed') {
         a.managedByCoordinator = true;
         a.state = 'running';
-        a.currentTask = { description: 'Standing by for pipeline...', startedAt: Date.now() };
+        a.currentTask = { description: 'Pipeline active...', startedAt: Date.now() };
       }
     }
 
@@ -166,33 +470,36 @@ class AgentCoordinator extends BaseAgent {
       // ── Step 1: SentimentAgent fetches market mood ──
       let mood = 'neutral';
       if (!this.sentimentAgent.paused) {
-        this.currentTask = { description: 'Step 1/6: SentimentAgent checking mood', startedAt: Date.now() };
+        this.currentTask = { description: 'Step 1/7: SentimentAgent checking mood', startedAt: Date.now() };
         this.sentimentAgent.currentTask = { description: 'Analyzing market mood...', startedAt: Date.now() };
         try {
           const sentResult = await this.sentimentAgent.run();
           if (sentResult) mood = sentResult.mood;
           this.addActivity('info', `Mood: ${mood}`);
-          this.sentimentAgent.gainXp(5, true).catch(() => {});
         } catch (err) {
           this.addActivity('error', `Sentiment error (non-fatal): ${err.message}`);
-          this.sentimentAgent.gainXp(1, false).catch(() => {});
         }
       } else {
         this.sentimentAgent.addActivity('skip', 'Paused — skipping mood check');
       }
 
-      // ── Step 1.5: Kronos AI batch prediction ──
+      // ── Step 1.5: KronosAgent runs AI predictions ──
       let kronosPredictions = null;
-      try {
-        const kronos = require('../kronos');
-        const tokenSymbols = [...this.tokenAgents.keys()];
-        if (tokenSymbols.length > 0) {
-          this.currentTask = { description: `Step 2/6: Kronos scanning ${tokenSymbols.length} tokens`, startedAt: Date.now() };
-          kronosPredictions = await kronos.scanAllTokens(tokenSymbols, '15m', 20, 3);
-          this.addActivity('info', `Kronos scanned ${kronosPredictions.size} tokens`);
+      if (!this.kronosAgent.paused) {
+        this.currentTask = { description: `Step 2/7: KronosAgent predicting...`, startedAt: Date.now() };
+        this.kronosAgent.currentTask = { description: `Scanning ${this.tokenAgents.size} tokens...`, startedAt: Date.now() };
+        try {
+          const tokenSymbols = [...this.tokenAgents.keys()];
+          const kronosResult = await this.kronosAgent.run({ symbols: tokenSymbols, coordinator: this });
+          if (kronosResult?.predictions > 0) {
+            kronosPredictions = this.kronosAgent.lastPredictions;
+            this.addActivity('info', `KronosAgent: ${kronosResult.predictions} predictions (${kronosResult.highConf} high-conf)`);
+          }
+        } catch (kronosErr) {
+          this.addActivity('error', `KronosAgent error (non-fatal): ${kronosErr.message}`);
         }
-      } catch (kronosErr) {
-        this.addActivity('error', `Kronos batch error (non-fatal): ${kronosErr.message}`);
+      } else {
+        this.kronosAgent.addActivity('skip', 'Paused — skipping predictions');
       }
 
       // ── Step 2: All TokenAgents scan in parallel ──
@@ -201,7 +508,7 @@ class AgentCoordinator extends BaseAgent {
       const dailyBiasCache = new Map();
 
       const tokenEntries = [...this.tokenAgents.entries()].filter(([, a]) => !a.paused);
-      this.currentTask = { description: `Step 3/6: Scanning ${tokenEntries.length} tokens`, startedAt: Date.now() };
+      this.currentTask = { description: `Step 3/7: Scanning ${tokenEntries.length} tokens`, startedAt: Date.now() };
       this.chartAgent.currentTask = { description: `Scanning ${tokenEntries.length} tokens for setups...`, startedAt: Date.now() };
       this.chartAgent.addActivity('info', `Scanning ${tokenEntries.length} tokens for SMC setups...`);
 
@@ -225,19 +532,16 @@ class AgentCoordinator extends BaseAgent {
           const [, batchAgent] = batch[ri];
           if (r.status === 'fulfilled' && r.value && r.value.direction) {
             signals.push(r.value);
-            batchAgent.gainXp(20, true).catch(() => {}); // Signal found — big XP
-          } else {
-            batchAgent.gainXp(2, true).catch(() => {}); // Scanned OK, no signal
           }
         }
         scannedCount += batch.length;
-        this.currentTask = { description: `Step 3/6: Scanned ${scannedCount}/${tokenEntries.length} tokens (${signals.length} signals)`, startedAt: Date.now() };
+        this.currentTask = { description: `Step 3/7: Scanned ${scannedCount}/${tokenEntries.length} tokens (${signals.length} signals)`, startedAt: Date.now() };
         if (i + BATCH_SIZE < tokenEntries.length) await new Promise(r => setTimeout(r, 200));
       }
 
       // Also run ChartAgent for any tokens that don't have dedicated agents
       if (!this.chartAgent.paused) {
-        this.currentTask = { description: 'Step 3/6: ChartAgent checking remaining tokens', startedAt: Date.now() };
+        this.currentTask = { description: 'Step 3/7: ChartAgent checking remaining tokens', startedAt: Date.now() };
         try {
           const chartOutput = await this.chartAgent.run({ topNCoins, kronosPredictions });
           if (chartOutput?.signals) {
@@ -250,27 +554,25 @@ class AgentCoordinator extends BaseAgent {
         } catch {}
       }
 
-      // Release token agents back to idle after scanning
+      // Token agents stay active — background scan loop keeps them watching
       for (const [, ta] of tokenEntries) {
-        ta.managedByCoordinator = false;
-        ta.state = 'idle';
-        ta.currentTask = null;
+        ta.managedByCoordinator = true;
+        ta.state = 'running';
+        ta.currentTask = { description: `Watching ${ta.symbol}`, startedAt: Date.now() };
       }
 
       if (signals.length > 0) {
         const signalDetails = signals.map(s => `${s.symbol.replace('USDT','')} ${s.direction} score=${s.score || '?'}`).join(', ');
         this.addActivity('info', `${signals.length} signal(s): ${signalDetails}`);
         this.chartAgent.addActivity('success', `Found ${signals.length} signal(s) from ${tokenEntries.length} tokens`);
-        this.chartAgent.gainXp(10 + signals.length * 5, true).catch(() => {});
       } else {
         this.addActivity('skip', `Scanned ${tokenEntries.length} tokens — no signals`);
         this.chartAgent.addActivity('info', `Scanned ${tokenEntries.length} tokens — no setups passed filters`);
-        this.chartAgent.gainXp(3, true).catch(() => {});
       }
 
       // ── Step 3: SentimentAgent enriches signals ──
       if (signals.length > 0 && !this.sentimentAgent.paused) {
-        this.currentTask = { description: 'Step 4/6: Enriching signals with sentiment', startedAt: Date.now() };
+        this.currentTask = { description: 'Step 4/7: Enriching signals with sentiment', startedAt: Date.now() };
         signals = this.sentimentAgent.enrichSignals(signals);
         const enriched = signals.filter(s => s._sentimentModifier !== 0);
         if (enriched.length) {
@@ -283,7 +585,7 @@ class AgentCoordinator extends BaseAgent {
       let riskReport = null;
 
       if (signals.length > 0 && !this.riskAgent.paused) {
-        this.currentTask = { description: 'Step 5/6: RiskAgent evaluating', startedAt: Date.now() };
+        this.currentTask = { description: 'Step 5/7: RiskAgent evaluating', startedAt: Date.now() };
         this.riskAgent.currentTask = { description: 'Evaluating signal risk...', startedAt: Date.now() };
         let openPositions = [];
         try {
@@ -303,33 +605,27 @@ class AgentCoordinator extends BaseAgent {
           if (approvedSignals.length > 0) {
             this.addActivity('success', `RiskAgent approved ${approvedSignals.length}: ${approvedSignals.map(s => `${s.symbol.replace('USDT','')} ${s.direction}`).join(', ')}`);
           }
-          // XP: 10 base + 5 per correctly filtered signal
-          this.riskAgent.gainXp(10 + (riskResult.rejected?.length || 0) * 3, true).catch(() => {});
         }
       } else if (signals.length === 0) {
         this.riskAgent.addActivity('info', 'No signals to evaluate — standing by');
-        this.riskAgent.gainXp(2, true).catch(() => {});
       }
 
       // ── Step 5: TraderAgent executes approved signals ──
       let tradeResult = null;
 
       if (!this.traderAgent.paused) {
-        this.currentTask = { description: 'Step 6/6: TraderAgent executing', startedAt: Date.now() };
+        this.currentTask = { description: 'Step 6/7: TraderAgent executing', startedAt: Date.now() };
         this.traderAgent.currentTask = { description: 'Executing approved trades...', startedAt: Date.now() };
         tradeResult = await this.traderAgent.run({ signals: approvedSignals, mode: 'signals' });
         if (tradeResult?.executed) {
           const execSymbols = approvedSignals.map(s => `${s.symbol.replace('USDT','')} ${s.direction}`).join(', ');
           this.addActivity('trade', `Trade executed: ${execSymbols}`);
           this.traderAgent.addActivity('trade', `Executed: ${execSymbols}`);
-          this.traderAgent.gainXp(50, true).catch(() => {});
         } else if (approvedSignals.length > 0) {
           this.addActivity('skip', `TraderAgent received ${approvedSignals.length} signal(s) but none executed`);
           this.traderAgent.addActivity('skip', `${approvedSignals.length} signal(s) received — none met execution criteria`);
-          this.traderAgent.gainXp(5, true).catch(() => {});
         } else {
           this.traderAgent.addActivity('info', 'No approved signals — monitoring positions');
-          this.traderAgent.gainXp(2, true).catch(() => {});
         }
       } else {
         this.addActivity('skip', 'TraderAgent paused — skipping execution');
@@ -343,18 +639,13 @@ class AgentCoordinator extends BaseAgent {
           const auditResult = await this.accountantAgent.run({ mode: 'audit' });
           if (auditResult?.fixed > 0) {
             this.addActivity('success', `Accountant fixed ${auditResult.fixed} trade(s)`);
-            this.accountantAgent.gainXp(30 + auditResult.fixed * 20, true).catch(() => {});
-          } else {
-            this.accountantAgent.gainXp(5, true).catch(() => {});
           }
         } catch (err) {
           this.addActivity('error', `Audit error: ${err.message}`);
-          this.accountantAgent.gainXp(1, false).catch(() => {});
         }
       }
 
-      // Coordinator earns XP for every completed cycle
-      this.gainXp(10, true).catch(() => {});
+      // XP only earned when trades win — no task-based XP
 
       this.currentTask = null;
       const elapsed = ((Date.now() - cycleStart) / 1000).toFixed(1);
@@ -384,13 +675,14 @@ class AgentCoordinator extends BaseAgent {
       throw err;
     } finally {
       this.cycleRunning = false;
-      this.currentTask = null;
-      // Reset all agents back to idle after cycle completes
+      // CEO stays running — agents stay at their stations between cycles
+      this.currentTask = { description: `Commanding agents — ${this.tokenAgents.size} tokens monitored`, startedAt: Date.now() };
       for (const a of coreAgents) {
-        a.managedByCoordinator = false;
-        if (a.state === 'running') {
-          a.state = 'idle';
-          a.currentTask = null;
+        if (a.state === 'jailed') continue; // jailed agents stay in prison
+        if (!a.paused) {
+          a.managedByCoordinator = true;
+          a.state = 'running';
+          a.currentTask = { description: 'Monitoring — standing by', startedAt: Date.now() };
         }
       }
     }
@@ -472,6 +764,10 @@ class AgentCoordinator extends BaseAgent {
       risk: this.riskAgent, riskagent: this.riskAgent, 'risk agent': this.riskAgent,
       sentiment: this.sentimentAgent, sentimentagent: this.sentimentAgent, 'sentiment agent': this.sentimentAgent,
       accountant: this.accountantAgent, accountantagent: this.accountantAgent, 'accountant agent': this.accountantAgent,
+      kronos: this.kronosAgent, kronosagent: this.kronosAgent, 'kronos agent': this.kronosAgent, oracle: this.kronosAgent,
+      strategy: this.strategyAgent, strategyagent: this.strategyAgent, 'strategy agent': this.strategyAgent, researcher: this.strategyAgent,
+      police: this.policeAgent, policeagent: this.policeAgent, 'police agent': this.policeAgent, 'internal affairs': this.policeAgent,
+      coder: this.coderAgent, coderagent: this.coderAgent, 'coder agent': this.coderAgent, engineer: this.coderAgent,
     };
     for (const [name, agent] of Object.entries(agentNameMap)) {
       if (agent && text.includes(name) && /how|what|why|explain|tell|describe|skill|work|do you/.test(text)) {
@@ -517,6 +813,58 @@ class AgentCoordinator extends BaseAgent {
       return { from: 'Coordinator', message: result.error };
     }
 
+    // Jail review
+    if (/^(jail|prison|jailed|arrested|who.*jail|inmates|prisoners)/.test(text)) {
+      const jailed = this.getJailedAgents();
+      if (!jailed.length) return { from: 'PoliceAgent', message: 'No agents in jail. Everyone is behaving.' };
+      const lines = [`**Prison Report — ${jailed.length} inmate(s)**\n`];
+      for (const j of jailed) {
+        const dur = Math.round((Date.now() - j.jailedAt) / 60000);
+        lines.push(`• **${j.agentKey}** — ${j.reason}\n  Severity: ${j.severity} | In jail ${dur}m | Warnings: ${j.warnings}`);
+      }
+      lines.push(`\nSay "release <agent>" to free an agent.`);
+      return { from: 'PoliceAgent', message: lines.join('\n') };
+    }
+
+    // Release from jail
+    const releaseMatch = text.match(/^release\s+(\w+)/);
+    if (releaseMatch) {
+      const key = releaseMatch[1].toLowerCase();
+      // Find the agent key - try direct match first, then by agent property name
+      let agentKey = null;
+      const searchKeys = [key, key + 'Agent', key + 'agent'];
+      for (const sk of searchKeys) {
+        if (this._agents.has(sk) || this.policeAgent._jailedAgents.has(sk)) {
+          agentKey = sk;
+          break;
+        }
+      }
+      if (!agentKey) {
+        // Try matching agent properties like 'chartAgent', 'traderAgent', etc.
+        for (const [jailKey] of this.policeAgent._jailedAgents) {
+          if (jailKey.toLowerCase().includes(key)) { agentKey = jailKey; break; }
+        }
+      }
+      if (!agentKey) return { from: 'PoliceAgent', message: `Agent "${key}" not found in jail.` };
+      const released = await this.releaseAgent(agentKey);
+      if (released) return { from: 'PoliceAgent', message: `Released **${agentKey}** from jail. Agent is back on duty.` };
+      return { from: 'PoliceAgent', message: `Failed to release "${agentKey}".` };
+    }
+
+    // Leaderboard
+    if (/^(leaderboard|ranking|rank|who.*(best|top|#1)|competition|compete|scoreboard)/.test(text)) {
+      const board = this.getLeaderboard();
+      const lines = [`**Agent Leaderboard**\n`];
+      const medals = ['🥇', '🥈', '🥉'];
+      for (let i = 0; i < Math.min(board.length, 15); i++) {
+        const a = board[i];
+        const medal = medals[i] || `#${i + 1}`;
+        const rival = a.rivalry ? ` vs ${a.rivalry}` : '';
+        lines.push(`${medal} **${a.name}** Lv.${a.level} [${a.tier}] — ${a.xp} XP | ${a.successRate}% WR | streak: ${a.streak}${rival}`);
+      }
+      return { from: 'Coordinator', message: lines.join('\n') };
+    }
+
     // Check memories
     if (/what.*(remember|learned|know|memory)|memories|lessons|brain/.test(text)) {
       return this._buildMemoryChat(text);
@@ -552,6 +900,9 @@ class AgentCoordinator extends BaseAgent {
         else if (/risk|exposure|max.?pos|drawdown|correlat|safe|block|reject/.test(text)) targetAgent = this.riskAgent;
         else if (/mood|sentiment|bull|bear|fomo|fud|news|trend|market/.test(text)) targetAgent = this.sentimentAgent;
         else if (/audit|pnl|fee|accountant|fix.*trade|check.*trade/.test(text)) targetAgent = this.accountantAgent;
+        else if (/kronos|predict|forecast|oracle|ai.?predict/.test(text)) targetAgent = this.kronosAgent;
+        else if (/strategy|backtest|variation|discover|win.?rate|parameter/.test(text)) targetAgent = this.strategyAgent;
+        else if (/coder|patch|heal|fix.*code|module.*health|self.?heal|bug|error.*log/.test(text)) targetAgent = this.coderAgent;
       }
 
       const agent = targetAgent || this;
@@ -596,6 +947,9 @@ class AgentCoordinator extends BaseAgent {
       else if (/risk|drawdown/.test(text)) fallbackAgent = this.riskAgent;
       else if (/mood|sentiment/.test(text)) fallbackAgent = this.sentimentAgent;
       else if (/audit|pnl|fee/.test(text)) fallbackAgent = this.accountantAgent;
+      else if (/kronos|predict|forecast/.test(text)) fallbackAgent = this.kronosAgent;
+      else if (/strategy|backtest/.test(text)) fallbackAgent = this.strategyAgent;
+      else if (/coder|patch|heal|bug/.test(text)) fallbackAgent = this.coderAgent;
     }
     if (fallbackAgent) return { from: fallbackAgent.name, message: await fallbackAgent.explain(message) };
 
@@ -1079,7 +1433,7 @@ class AgentCoordinator extends BaseAgent {
 
   removeAgent(agentKey) {
     // Don't allow removing core agents
-    const core = ['chart', 'trader', 'risk', 'sentiment'];
+    const core = ['chart', 'trader', 'risk', 'sentiment', 'accountant', 'kronos', 'strategy', 'police', 'coder'];
     if (core.includes(agentKey)) return { ok: false, error: 'Cannot remove core agents' };
     const agent = this._agents.get(agentKey);
     if (!agent) return { ok: false, error: `Agent "${agentKey}" not found` };
@@ -1202,6 +1556,12 @@ class AgentCoordinator extends BaseAgent {
 
   async shutdown() {
     this.log('Shutting down all agents...');
+    // Stop CEO and token scan loops
+    if (this._ceoTimer) clearInterval(this._ceoTimer);
+    if (this._tokenScanTimer) clearInterval(this._tokenScanTimer);
+    // Shut down strategy agent background loop
+    await this.strategyAgent.shutdown().catch(() => {});
+    await this.coderAgent.shutdown().catch(() => {});
     for (const [name, agent] of this._agents) {
       await agent.shutdown();
       this.log(`  ${name}: stopped`);
