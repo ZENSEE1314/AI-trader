@@ -365,6 +365,19 @@ async function initAllTables() {
       created_at TIMESTAMPTZ DEFAULT NOW(),
       updated_at TIMESTAMPTZ DEFAULT NOW()
     )`,
+    // Kronos AI predictions (persisted so dashboard can read them)
+    `CREATE TABLE IF NOT EXISTS kronos_predictions (
+      symbol VARCHAR(20) PRIMARY KEY,
+      direction VARCHAR(10),
+      current_price NUMERIC,
+      predicted_price NUMERIC,
+      change_pct NUMERIC,
+      confidence VARCHAR(10),
+      trend VARCHAR(20),
+      pred_high NUMERIC,
+      pred_low NUMERIC,
+      scanned_at TIMESTAMPTZ DEFAULT NOW()
+    )`,
     // Optimizer candle cache (survives redeploys)
     `CREATE TABLE IF NOT EXISTS optimizer_cache (
       id INTEGER PRIMARY KEY,

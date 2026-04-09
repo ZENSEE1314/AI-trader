@@ -92,6 +92,20 @@ async function scanAllTokens(symbols, interval = '15m', predLen = 20, concurrenc
 
   bLog.ai(`Kronos scan done in ${elapsed}s: ${longs.length} LONG, ${shorts.length} SHORT, ${neutrals.length} NEUTRAL, ${errors.length} errors`);
 
+  // Persist predictions to DB so dashboard can read them across processes
+  try {
+    const { query } = require('./db');
+    for (const pred of results) {
+      if (!pred || !pred.symbol || pred.error) continue;
+      await query(
+        `INSERT INTO kronos_predictions (symbol, direction, current_price, predicted_price, change_pct, confidence, trend, pred_high, pred_low, scanned_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NOW())
+         ON CONFLICT (symbol) DO UPDATE SET direction=$2, current_price=$3, predicted_price=$4, change_pct=$5, confidence=$6, trend=$7, pred_high=$8, pred_low=$9, scanned_at=NOW()`,
+        [pred.symbol, pred.direction, pred.current, pred.predicted, pred.change_pct, pred.confidence, pred.trend || null, pred.pred_high || null, pred.pred_low || null]
+      ).catch(() => {});
+    }
+  } catch (_) {}
+
   return predictions;
 }
 

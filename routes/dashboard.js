@@ -797,11 +797,30 @@ router.put('/watchlist/:symbol/toggle', async (req, res) => {
   }
 });
 
-// Kronos AI predictions — latest batch results
+// Kronos AI predictions — read from DB (persisted across processes)
 router.get('/kronos-predictions', async (req, res) => {
   try {
-    const { getAllPredictions } = require('../kronos');
-    const predictions = getAllPredictions();
+    // Read from DB — predictions older than 15 min are stale
+    const rows = await query(
+      `SELECT symbol, direction, current_price, predicted_price, change_pct,
+              confidence, trend, pred_high, pred_low, scanned_at
+       FROM kronos_predictions
+       WHERE scanned_at > NOW() - INTERVAL '15 minutes'
+       ORDER BY ABS(change_pct) DESC`
+    );
+
+    const predictions = rows.map(r => ({
+      symbol: r.symbol,
+      direction: r.direction,
+      current: parseFloat(r.current_price) || 0,
+      predicted: parseFloat(r.predicted_price) || 0,
+      change_pct: parseFloat(r.change_pct) || 0,
+      confidence: r.confidence,
+      trend: r.trend,
+      pred_high: parseFloat(r.pred_high) || 0,
+      pred_low: parseFloat(r.pred_low) || 0,
+      scanned_at: r.scanned_at,
+    }));
 
     const longs = predictions.filter(p => p.direction === 'LONG');
     const shorts = predictions.filter(p => p.direction === 'SHORT');
@@ -815,7 +834,6 @@ router.get('/kronos-predictions', async (req, res) => {
       predictions,
     });
   } catch (err) {
-    // Return empty predictions instead of 500 — Kronos may not have run yet
     console.error('Kronos predictions error:', err.message);
     res.json({ total: 0, longs: 0, shorts: 0, neutrals: 0, predictions: [] });
   }
