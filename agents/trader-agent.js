@@ -115,6 +115,32 @@ class TraderAgent extends BaseAgent {
           continue;
         }
 
+        // Kronos AI hard gate — block trades where Kronos disagrees
+        try {
+          const kronosModule = require('../kronos');
+          const sym = pick.symbol || pick.sym;
+          const kronosResult = kronosModule.getCachedPrediction(sym) || await kronosModule.getKronosPrediction(sym, '15m', 20);
+
+          this.logTrade(`Kronos: ${sym} → ${kronosResult.direction} ${kronosResult.change_pct}% conf=${kronosResult.confidence}`);
+
+          if (kronosResult.direction !== 'NEUTRAL' && kronosResult.direction !== pick.direction && kronosResult.confidence !== 'low') {
+            this.logTrade(`KRONOS BLOCKED: ${sym} SMC=${pick.direction} but Kronos=${kronosResult.direction} (${kronosResult.confidence}) — skipping`);
+            this.tradesSkipped++;
+            this.addActivity('skip', `${sym} blocked by Kronos (${kronosResult.direction})`);
+            const { log: bLog } = require('../bot-logger');
+            bLog.trade(`KRONOS BLOCKED (agent): ${sym} SMC=${pick.direction} Kronos=${kronosResult.direction} ${kronosResult.change_pct}%`);
+            continue;
+          }
+
+          if (kronosResult.direction === pick.direction && kronosResult.confidence === 'high') {
+            this.logTrade(`KRONOS CONFIRMED: ${sym} ${pick.direction} HIGH confidence`);
+          }
+        } catch (kronosErr) {
+          this.logTrade(`Kronos error — blocking trade for safety: ${kronosErr.message}`);
+          this.addActivity('skip', `${pick.symbol} Kronos unavailable — skipped for safety`);
+          continue;
+        }
+
         // Execute for all registered users
         this.currentTask = { description: `Trading ${pick.symbol} ${pick.direction}`, startedAt: Date.now() };
         this.addActivity('trade', `Executing ${pick.symbol} ${pick.direction} for users...`);

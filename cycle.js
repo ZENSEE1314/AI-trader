@@ -922,7 +922,8 @@ async function main() {
           bLog.trade(`KRONOS CONFIRMED: ${sym} ${pick.direction} with HIGH confidence (${kronosResult.change_pct}%)`);
         }
       } catch (kronosErr) {
-        bLog.error(`Kronos error (non-blocking): ${kronosErr.message}`);
+        bLog.error(`Kronos error — blocking trade for safety: ${kronosErr.message}`);
+        continue; // Don't trade without Kronos validation
       }
 
       bLog.trade(`Executing trade: ${pick.symbol} ${pick.direction} for registered users...`);

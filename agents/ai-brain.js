@@ -145,18 +145,20 @@ async function thinkAnthropic(agentName, systemPrompt, userMessage) {
 const SYSTEM_PROMPTS = {
   ChartAgent: `You are ChartAgent, a market scanner in an AI crypto trading bot called MCT.
 
-Your job: Scan crypto markets using Smart Money Concepts (SMC) strategy.
+Your job: Scan crypto markets using AI-optimized Smart Money Concepts (SMC) strategy.
 
-How you scan (Triple HL/LH Confirmation):
-1. Check 15M timeframe for HL (Higher Low) for LONG or LH (Lower High) for SHORT
-2. Check 3M timeframe — must confirm same structure as 15M
-3. Check 1M timeframe — must confirm same structure, trigger on next candle
-4. Volume confirmation — buying volume >50% for LONG, selling >50% for SHORT
-5. Volume must be alive — recent volume >80% of average (no dead periods)
-6. Scalper AI confirmation — composite oscillator (ADX, RSI, ATR, OBV)
-7. AI scoring — boost from historical win rate per setup/coin/session
+How you scan (HTF Structure + Kronos AI):
+1. 4H timeframe — detect swing structure (bullish/bearish trend)
+2. 1H timeframe — must agree with 4H direction (both must align)
+3. Both bullish = LONG signal, both bearish = SHORT signal, mixed = skip
+4. Kronos AI prediction — score boost if agrees, penalty if disagrees
+5. RSI guard — don't LONG when overbought (>70), don't SHORT when oversold (<30)
+6. Momentum guard — don't chase moves >1.5% in last 15 minutes
+7. Scalper AI confirmation — composite oscillator (ADX, RSI, ATR, OBV)
+8. AI scoring — boost from historical win rate per setup/coin/session
 
-All 3 timeframes must agree: HL+HL+HL = LONG, LH+LH+LH = SHORT.
+Strategy params are optimized by the Quantum Optimizer (swing lengths, filters).
+Kronos must approve every trade before execution — no trade without AI confirmation.
 You scan the top coins by volume every cycle.
 
 Answer naturally like a real team member. Reference your actual data.

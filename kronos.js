@@ -27,7 +27,7 @@ function getKronosPrediction(symbol, interval = '15m', predLen = 20) {
     execFile(PYTHON_CMD, args, { timeout: TIMEOUT_MS, maxBuffer: 1024 * 1024 }, (err, stdout) => {
       if (err) {
         console.error(`[Kronos] Error for ${symbol}: ${err.message}`);
-        resolve({ symbol, direction: 'NEUTRAL', error: err.message });
+        reject(new Error(`Kronos prediction failed: ${err.message}`));
         return;
       }
 
@@ -39,7 +39,7 @@ function getKronosPrediction(symbol, interval = '15m', predLen = 20) {
         resolve(result);
       } catch (parseErr) {
         console.error(`[Kronos] Parse error: ${parseErr.message}, stdout: ${stdout}`);
-        resolve({ symbol, direction: 'NEUTRAL', error: 'Parse failed' });
+        reject(new Error(`Kronos parse failed: ${parseErr.message}`));
       }
     });
   });
@@ -65,10 +65,13 @@ async function scanAllTokens(symbols, interval = '15m', predLen = 20, concurrenc
   // Process in batches to limit CPU/memory load
   for (let i = 0; i < symbols.length; i += concurrency) {
     const batch = symbols.slice(i, i + concurrency);
-    const batchResults = await Promise.all(
+    const batchResults = await Promise.allSettled(
       batch.map(sym => getKronosPrediction(sym, interval, predLen))
     );
-    results.push(...batchResults);
+    for (const r of batchResults) {
+      if (r.status === 'fulfilled') results.push(r.value);
+      // Rejected predictions are silently skipped in batch mode
+    }
   }
 
   // Store in cache
