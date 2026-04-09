@@ -14,6 +14,7 @@ const { KronosAgent } = require('./kronos-agent');
 const { StrategyAgent } = require('./strategy-agent');
 const { PoliceAgent } = require('./police-agent');
 const { CoderAgent } = require('./coder-agent');
+const { OptimizerAgent } = require('./optimizer-agent');
 const { AgentCoordinator, getCoordinator } = require('./agent-coordinator');
 const hermesBridge = require('../hermes-bridge');
 
@@ -31,6 +32,7 @@ module.exports = {
   StrategyAgent,
   PoliceAgent,
   CoderAgent,
+  OptimizerAgent,
   AgentCoordinator,
   getCoordinator,
   hermesBridge,

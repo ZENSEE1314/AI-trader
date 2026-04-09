@@ -20,6 +20,7 @@ const { KronosAgent } = require('./kronos-agent');
 const { StrategyAgent } = require('./strategy-agent');
 const { PoliceAgent } = require('./police-agent');
 const { CoderAgent } = require('./coder-agent');
+const { OptimizerAgent } = require('./optimizer-agent');
 
 // Top tokens that always get their own agent
 const DEFAULT_TOKEN_AGENTS = [
@@ -39,6 +40,7 @@ class AgentCoordinator extends BaseAgent {
     this.strategyAgent = new StrategyAgent(options);
     this.policeAgent = new PoliceAgent(options);
     this.coderAgent = new CoderAgent(options);
+    this.optimizerAgent = new OptimizerAgent(options);
 
     // Agent registry — order matters for display
     this._agents = new Map();
@@ -51,6 +53,7 @@ class AgentCoordinator extends BaseAgent {
     this._agents.set('strategy', this.strategyAgent);
     this._agents.set('police', this.policeAgent);
     this._agents.set('coder', this.coderAgent);
+    this._agents.set('optimizer', this.optimizerAgent);
 
     // Wire up inter-agent events
     this.chartAgent.on('signals', (data) => {
@@ -142,6 +145,10 @@ class AgentCoordinator extends BaseAgent {
     this.coderAgent.setCoordinator(this);
     this.coderAgent.init().catch(err => this.logError(`CoderAgent init failed: ${err.message}`));
 
+    // Start OptimizerAgent 24/7 strategy optimization loop
+    this.optimizerAgent.setCoordinator(this);
+    this.optimizerAgent.init().catch(err => this.logError(`OptimizerAgent init failed: ${err.message}`));
+
     this.log(`Agent framework ready — ${this._agents.size} system agents + ${this.tokenAgents.size} token agents`);
 
     // CEO always-on: permanently at desk, monitoring everything
@@ -185,7 +192,7 @@ class AgentCoordinator extends BaseAgent {
     this.addActivity('info', 'CEO online — always-on mode activated');
 
     // Keep all core agents at their stations permanently
-    const coreAgents = [this.sentimentAgent, this.chartAgent, this.riskAgent, this.traderAgent, this.accountantAgent, this.kronosAgent, this.strategyAgent, this.policeAgent, this.coderAgent];
+    const coreAgents = [this.sentimentAgent, this.chartAgent, this.riskAgent, this.traderAgent, this.accountantAgent, this.kronosAgent, this.strategyAgent, this.policeAgent, this.coderAgent, this.optimizerAgent];
     for (const a of coreAgents) {
       if (!a.paused) {
         a.managedByCoordinator = true;
@@ -449,7 +456,7 @@ class AgentCoordinator extends BaseAgent {
     this.currentTask = { description: 'Running full pipeline scan...', startedAt: cycleStart };
 
     // All agents stay permanently managed by CEO loop — just update their tasks
-    const coreAgents = [this.sentimentAgent, this.chartAgent, this.riskAgent, this.traderAgent, this.accountantAgent, this.kronosAgent, this.strategyAgent, this.policeAgent, this.coderAgent];
+    const coreAgents = [this.sentimentAgent, this.chartAgent, this.riskAgent, this.traderAgent, this.accountantAgent, this.kronosAgent, this.strategyAgent, this.policeAgent, this.coderAgent, this.optimizerAgent];
     for (const a of coreAgents) {
       if (!a.paused && a.state !== 'jailed') {
         a.managedByCoordinator = true;
@@ -768,6 +775,7 @@ class AgentCoordinator extends BaseAgent {
       strategy: this.strategyAgent, strategyagent: this.strategyAgent, 'strategy agent': this.strategyAgent, researcher: this.strategyAgent,
       police: this.policeAgent, policeagent: this.policeAgent, 'police agent': this.policeAgent, 'internal affairs': this.policeAgent,
       coder: this.coderAgent, coderagent: this.coderAgent, 'coder agent': this.coderAgent, engineer: this.coderAgent,
+      optimizer: this.optimizerAgent, optimizeragent: this.optimizerAgent, 'optimizer agent': this.optimizerAgent,
     };
     for (const [name, agent] of Object.entries(agentNameMap)) {
       if (agent && text.includes(name) && /how|what|why|explain|tell|describe|skill|work|do you/.test(text)) {
@@ -851,6 +859,23 @@ class AgentCoordinator extends BaseAgent {
       return { from: 'PoliceAgent', message: `Failed to release "${agentKey}".` };
     }
 
+    // Backtest
+    if (/^(backtest|back.?test|optimize|find.*best|test.*strateg|best.*formula)/.test(text)) {
+      this.addActivity('command', 'Starting backtest — testing all strategies over 60 days...');
+      const { runBacktest, applyBestStrategy } = require('../backtester');
+      runBacktest({
+        symbols: [...this.tokenAgents.keys()].slice(0, 10),
+        days: 60,
+      }).then(async (result) => {
+        if (result.bestStrategy) {
+          await applyBestStrategy(result);
+          this.addActivity('success', `Backtest done: Best = ${result.bestStrategy.strategy} (${result.bestStrategy.winRate}% WR, ${result.bestStrategy.avgPnl}% avg PnL). Auto-applied.`);
+          this.shareWithTeam(`Backtest winner: ${result.bestStrategy.strategy} — ${result.bestStrategy.winRate}% WR, ${result.bestStrategy.avgPnl}% avg. Applied to live trading.`);
+        }
+      }).catch(err => this.addActivity('error', `Backtest failed: ${err.message}`));
+      return { from: 'Coordinator', message: 'Backtest started — testing 7 strategies × 8 TP/SL configs × top 10 tokens over 60 days of data. This will take a few minutes. Results will appear in the activity feed and auto-apply the best strategy.' };
+    }
+
     // Leaderboard
     if (/^(leaderboard|ranking|rank|who.*(best|top|#1)|competition|compete|scoreboard)/.test(text)) {
       const board = this.getLeaderboard();
@@ -903,6 +928,7 @@ class AgentCoordinator extends BaseAgent {
         else if (/kronos|predict|forecast|oracle|ai.?predict/.test(text)) targetAgent = this.kronosAgent;
         else if (/strategy|backtest|variation|discover|win.?rate|parameter/.test(text)) targetAgent = this.strategyAgent;
         else if (/coder|patch|heal|fix.*code|module.*health|self.?heal|bug|error.*log/.test(text)) targetAgent = this.coderAgent;
+        else if (/optimi|backtest|best.*formula|best.*strateg|winning.*rate/.test(text)) targetAgent = this.optimizerAgent;
       }
 
       const agent = targetAgent || this;
@@ -950,6 +976,7 @@ class AgentCoordinator extends BaseAgent {
       else if (/kronos|predict|forecast/.test(text)) fallbackAgent = this.kronosAgent;
       else if (/strategy|backtest/.test(text)) fallbackAgent = this.strategyAgent;
       else if (/coder|patch|heal|bug/.test(text)) fallbackAgent = this.coderAgent;
+      else if (/optimi|backtest|formula/.test(text)) fallbackAgent = this.optimizerAgent;
     }
     if (fallbackAgent) return { from: fallbackAgent.name, message: await fallbackAgent.explain(message) };
 
@@ -1433,7 +1460,7 @@ class AgentCoordinator extends BaseAgent {
 
   removeAgent(agentKey) {
     // Don't allow removing core agents
-    const core = ['chart', 'trader', 'risk', 'sentiment', 'accountant', 'kronos', 'strategy', 'police', 'coder'];
+    const core = ['chart', 'trader', 'risk', 'sentiment', 'accountant', 'kronos', 'strategy', 'police', 'coder', 'optimizer'];
     if (core.includes(agentKey)) return { ok: false, error: 'Cannot remove core agents' };
     const agent = this._agents.get(agentKey);
     if (!agent) return { ok: false, error: `Agent "${agentKey}" not found` };
@@ -1562,6 +1589,7 @@ class AgentCoordinator extends BaseAgent {
     // Shut down strategy agent background loop
     await this.strategyAgent.shutdown().catch(() => {});
     await this.coderAgent.shutdown().catch(() => {});
+    await this.optimizerAgent.shutdown().catch(() => {});
     for (const [name, agent] of this._agents) {
       await agent.shutdown();
       this.log(`  ${name}: stopped`);

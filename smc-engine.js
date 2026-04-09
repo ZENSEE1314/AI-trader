@@ -483,11 +483,11 @@ async function analyzeLHHL(ticker, params, dailyBiasCache, kronosPredictions = n
       const period = closes15.length - 1;
       const rs = (losses / period) > 0 ? (gains / period) / (losses / period) : 100;
       const rsi = 100 - (100 / (1 + rs));
-      if (direction === 'LONG' && rsi > 70) {
+      if (direction === 'LONG' && rsi > 78) {
         bLog.scan(`${symbol}: LONG blocked — 15m RSI ${rsi.toFixed(0)} overbought`);
         return null;
       }
-      if (direction === 'SHORT' && rsi < 30) {
+      if (direction === 'SHORT' && rsi < 22) {
         bLog.scan(`${symbol}: SHORT blocked — 15m RSI ${rsi.toFixed(0)} oversold`);
         return null;
       }
@@ -499,11 +499,11 @@ async function analyzeLHHL(ticker, params, dailyBiasCache, kronosPredictions = n
     const recent = klines1m.slice(-15);
     const startPrice = parseFloat(recent[0][1]);
     const movePct = (price - startPrice) / startPrice;
-    if (direction === 'LONG' && movePct > 0.015) {
+    if (direction === 'LONG' && movePct > 0.025) {
       bLog.scan(`${symbol}: LONG blocked — already +${(movePct * 100).toFixed(1)}% in 15min (chasing)`);
       return null;
     }
-    if (direction === 'SHORT' && movePct < -0.015) {
+    if (direction === 'SHORT' && movePct < -0.025) {
       bLog.scan(`${symbol}: SHORT blocked — already ${(movePct * 100).toFixed(1)}% in 15min (chasing)`);
       return null;
     }
@@ -527,13 +527,10 @@ async function analyzeLHHL(ticker, params, dailyBiasCache, kronosPredictions = n
   const tp = direction === 'LONG' ? price * (1 + tpPct) : price * (1 - tpPct);
 
   // ┌─────────────────────────────────────────────────────────┐
-  // │ Pro Scalper AI Confirmation                              │
+  // │ Pro Scalper AI — score modifier (not a gate)            │
   // └─────────────────────────────────────────────────────────┘
   const scalperResult = confirmSignal(klines15m, direction);
-  if (!scalperResult.confirmed) {
-    bLog.scan(`${symbol}: ${direction} blocked by Scalper AI — ${scalperResult.signal}`);
-    return null;
-  }
+  // NOTE: Scalper AI no longer blocks trades outright — it adjusts score instead
 
   // ┌─────────────────────────────────────────────────────────┐
   // │ Score                                                    │
@@ -660,7 +657,7 @@ async function scanSMC(log, opts = {}) {
     .slice(0, opts.topNCoins || TOP_N_COINS);
 
   const params = await aiLearner.getOptimalParams();
-  const minScore = params.MIN_SCORE || 8;
+  const minScore = Math.min(params.MIN_SCORE || 5, 6); // cap at 6 to allow more trades
   const dailyBiasCache = new Map();
 
   bLog.scan(`Triple HL/LH scan: ${topCoins.length} coins | minScore=${minScore}`);

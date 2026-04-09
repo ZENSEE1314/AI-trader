@@ -934,6 +934,38 @@ router.get('/jail/history', async (req, res) => {
   }
 });
 
+// ── Backtester ──────────────────────────────────────────────
+
+router.post('/backtest', async (req, res) => {
+  try {
+    const { symbols, days = 60 } = req.body || {};
+    const { runBacktest, applyBestStrategy } = require('../backtester');
+    const result = await runBacktest({
+      symbols: symbols || ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT', 'DOGEUSDT', 'ADAUSDT', 'AVAXUSDT'],
+      days: Math.min(Math.max(days, 7), 90),
+    });
+    // Auto-apply best strategy
+    if (result.bestStrategy) {
+      const applied = await applyBestStrategy(result);
+      result.applied = applied;
+    }
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/backtest/results', async (req, res) => {
+  try {
+    const rows = await query(
+      `SELECT * FROM strategy_backtests ORDER BY win_rate DESC, total_pnl DESC LIMIT 50`
+    );
+    res.json({ results: rows });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── CoderAgent Patch Review ──────────────────────────────────
 
 router.get('/patches/pending', async (req, res) => {
