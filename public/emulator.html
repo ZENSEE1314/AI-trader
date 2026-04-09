@@ -130,7 +130,7 @@
     /* ═══ MAP CONTAINER ═══ */
     .map-wrap{padding:12px 16px 8px;display:flex;justify-content:center;flex-shrink:0}
     .rpg-map{
-      position:relative;width:100%;max-width:720px;aspect-ratio:1/1;
+      position:relative;width:100%;max-width:900px;aspect-ratio:4/5;
       background:var(--corridor);border:3px solid #333;border-radius:6px;
       image-rendering:pixelated;overflow:hidden;
       box-shadow:0 0 40px rgba(0,0,0,.6),inset 0 0 60px rgba(0,0,0,.3),0 0 80px rgba(212,175,55,.05);
@@ -143,21 +143,22 @@
       background:repeating-linear-gradient(0deg,transparent,transparent 19px,rgba(255,255,255,.08) 19px,rgba(255,255,255,.08) 20px),
                  repeating-linear-gradient(90deg,transparent,transparent 19px,rgba(255,255,255,.08) 19px,rgba(255,255,255,.08) 20px)}
 
-    /* Row 1 */
-    .rm-research{left:0%;top:0%;width:32%;height:32%;background:linear-gradient(135deg,#121828,#0f1520)}
-    .rm-command{left:34%;top:0%;width:32%;height:32%;background:linear-gradient(135deg,#1a1520,#161020)}
-    .rm-security{left:68%;top:0%;width:32%;height:32%;background:linear-gradient(135deg,#101820,#0c1418)}
-    /* Row 2 */
-    .rm-trading{left:0%;top:34%;width:32%;height:32%;background:linear-gradient(135deg,#1a1218,#160e14)}
-    .rm-hall{left:34%;top:34%;width:32%;height:32%;background:linear-gradient(135deg,#14121e,#100e18);border-color:#333}
-    .rm-accountant{left:68%;top:34%;width:32%;height:32%;background:linear-gradient(135deg,#151020,#110c1a)}
-    /* Row 3 */
-    .rm-briefing{left:0%;top:55%;width:32%;height:22%;background:linear-gradient(135deg,#18140c,#141008)}
-    .rm-resting{left:34%;top:55%;width:32%;height:22%;background:linear-gradient(135deg,#12100a,#0e0c08)}
-    .rm-vault{left:68%;top:55%;width:32%;height:22%;background:linear-gradient(135deg,#1a1810,#16140c)}
-    /* Row 4 */
-    .rm-prison{left:0%;top:79%;width:50%;height:21%;background:linear-gradient(135deg,#1a0c0c,#140808);border-color:#4b2020}
-    .rm-yard{left:52%;top:79%;width:48%;height:21%;background:linear-gradient(135deg,#0c1428,#081020);border-color:#1e3a5f}
+    /* Row 1 — Core agent rooms */
+    .rm-research{left:0%;top:0%;width:24%;height:24%;background:linear-gradient(135deg,#121828,#0f1520)}
+    .rm-command{left:26%;top:0%;width:24%;height:24%;background:linear-gradient(135deg,#1a1520,#161020)}
+    .rm-security{left:52%;top:0%;width:24%;height:24%;background:linear-gradient(135deg,#101820,#0c1418)}
+    .rm-accountant{left:78%;top:0%;width:22%;height:24%;background:linear-gradient(135deg,#151020,#110c1a)}
+    /* Row 2 — Utility rooms */
+    .rm-hall{left:0%;top:26%;width:20%;height:18%;background:linear-gradient(135deg,#14121e,#100e18);border-color:#333}
+    .rm-briefing{left:22%;top:26%;width:18%;height:18%;background:linear-gradient(135deg,#18140c,#141008)}
+    .rm-resting{left:42%;top:26%;width:18%;height:18%;background:linear-gradient(135deg,#12100a,#0e0c08)}
+    .rm-vault{left:62%;top:26%;width:18%;height:18%;background:linear-gradient(135deg,#1a1810,#16140c)}
+    .rm-yard{left:82%;top:26%;width:18%;height:18%;background:linear-gradient(135deg,#0c1428,#081020);border-color:#1e3a5f}
+    /* Row 3 — TRADING FLOOR (massive, 50-seat room) */
+    .rm-trading{left:0%;top:46%;width:100%;height:40%;background:linear-gradient(135deg,#1a1218 0%,#160e14 30%,#14101a 60%,#120e18 100%);border-color:rgba(212,175,55,.2)}
+    .rm-trading::before{font-size:8px !important;color:rgba(212,175,55,.3) !important}
+    /* Row 4 — Prison (below trading) */
+    .rm-prison{left:0%;top:88%;width:50%;height:12%;background:linear-gradient(135deg,#1a0c0c,#140808);border-color:#4b2020}
 
     /* Door gaps */
     .door{position:absolute;background:var(--corridor);z-index:3}
@@ -401,118 +402,129 @@
       <div class="map-wrap">
         <div class="rpg-map" id="rpgMap">
           <!-- Rooms -->
+          <!-- Row 1: Core agent rooms -->
           <div class="rm rm-research" data-name="RESEARCH LAB"></div>
           <div class="rm rm-command" data-name="COMMAND CENTER"></div>
           <div class="rm rm-security" data-name="SECURITY"></div>
-          <div class="rm rm-trading" data-name="TRADING ROOM"></div>
-          <div class="rm rm-hall" data-name="MAIN HALL"></div>
           <div class="rm rm-accountant" data-name="ACCOUNTS"></div>
-          <div class="rm rm-briefing" data-name="BRIEFING ROOM"></div>
+          <!-- Row 2: Utility rooms -->
+          <div class="rm rm-hall" data-name="MAIN HALL"></div>
+          <div class="rm rm-briefing" data-name="BRIEFING"></div>
           <div class="rm rm-resting" data-name="REST AREA"></div>
           <div class="rm rm-vault" data-name="VAULT"></div>
-          <div class="rm rm-prison" data-name="&#x26D3;&#xFE0F; PRISON"></div>
           <div class="rm rm-yard" data-name="&#x1F6E1;&#xFE0F; POLICE HQ"></div>
+          <!-- Row 3: Massive trading floor -->
+          <div class="rm rm-trading" data-name="&#x1F4B9; TRADING FLOOR &#x2014; 50 SEATS"></div>
+          <!-- Row 4: Prison -->
+          <div class="rm rm-prison" data-name="&#x26D3;&#xFE0F; PRISON"></div>
 
-          <!-- Doors horizontal -->
-          <div class="door door-h" style="left:11%;top:calc(32% - 4px)"></div>
-          <div class="door door-h" style="left:11%;top:calc(34% - 4px)"></div>
-          <div class="door door-h" style="left:45%;top:calc(32% - 4px)"></div>
-          <div class="door door-h" style="left:45%;top:calc(34% - 4px)"></div>
-          <div class="door door-h" style="left:79%;top:calc(32% - 4px)"></div>
-          <div class="door door-h" style="left:79%;top:calc(34% - 4px)"></div>
-          <div class="door door-h" style="left:11%;top:calc(66% - 4px)"></div>
-          <div class="door door-h" style="left:11%;top:calc(68% - 4px)"></div>
-          <div class="door door-h" style="left:45%;top:calc(66% - 4px)"></div>
-          <div class="door door-h" style="left:45%;top:calc(68% - 4px)"></div>
-          <div class="door door-h" style="left:79%;top:calc(66% - 4px)"></div>
-          <div class="door door-h" style="left:79%;top:calc(68% - 4px)"></div>
-
-          <!-- Doors vertical -->
-          <div class="door door-v" style="top:11%;left:calc(32% - 4px)"></div>
-          <div class="door door-v" style="top:11%;left:calc(34% - 4px)"></div>
-          <div class="door door-v" style="top:45%;left:calc(32% - 4px)"></div>
-          <div class="door door-v" style="top:45%;left:calc(34% - 4px)"></div>
-          <div class="door door-v" style="top:79%;left:calc(32% - 4px)"></div>
-          <div class="door door-v" style="top:79%;left:calc(34% - 4px)"></div>
-          <div class="door door-v" style="top:11%;left:calc(66% - 4px)"></div>
-          <div class="door door-v" style="top:11%;left:calc(68% - 4px)"></div>
-          <div class="door door-v" style="top:45%;left:calc(66% - 4px)"></div>
-          <div class="door door-v" style="top:45%;left:calc(68% - 4px)"></div>
-          <div class="door door-v" style="top:79%;left:calc(66% - 4px)"></div>
-          <div class="door door-v" style="top:79%;left:calc(68% - 4px)"></div>
+          <!-- Doors — Row 1 to Row 2 (vertical between rows) -->
+          <div class="door door-h" style="left:6%;top:calc(25% - 4px);width:8%"></div>
+          <div class="door door-h" style="left:28%;top:calc(25% - 4px);width:8%"></div>
+          <div class="door door-h" style="left:52%;top:calc(25% - 4px);width:8%"></div>
+          <div class="door door-h" style="left:72%;top:calc(25% - 4px);width:8%"></div>
+          <div class="door door-h" style="left:86%;top:calc(25% - 4px);width:8%"></div>
+          <!-- Doors — Row 1 horizontal (between rooms) -->
+          <div class="door door-v" style="top:8%;left:calc(25% - 4px)"></div>
+          <div class="door door-v" style="top:8%;left:calc(51% - 4px)"></div>
+          <div class="door door-v" style="top:8%;left:calc(77% - 4px)"></div>
+          <!-- Doors — Row 2 horizontal -->
+          <div class="door door-v" style="top:32%;left:calc(21% - 4px)"></div>
+          <div class="door door-v" style="top:32%;left:calc(41% - 4px)"></div>
+          <div class="door door-v" style="top:32%;left:calc(61% - 4px)"></div>
+          <div class="door door-v" style="top:32%;left:calc(81% - 4px)"></div>
+          <!-- Doors — Row 2 to Trading Floor -->
+          <div class="door door-h" style="left:6%;top:calc(45% - 4px);width:8%"></div>
+          <div class="door door-h" style="left:26%;top:calc(45% - 4px);width:8%"></div>
+          <div class="door door-h" style="left:46%;top:calc(45% - 4px);width:8%"></div>
+          <div class="door door-h" style="left:66%;top:calc(45% - 4px);width:8%"></div>
+          <div class="door door-h" style="left:86%;top:calc(45% - 4px);width:8%"></div>
+          <!-- Doors — Trading to Prison -->
+          <div class="door door-h" style="left:20%;top:calc(87% - 4px);width:8%"></div>
 
           <!-- Door markers -->
-          <div class="door-mark door-mark-h" style="left:calc(16% - 7px);top:calc(33% - 2px)"></div>
-          <div class="door-mark door-mark-h" style="left:calc(50% - 7px);top:calc(33% - 2px)"></div>
-          <div class="door-mark door-mark-h" style="left:calc(84% - 7px);top:calc(33% - 2px)"></div>
-          <div class="door-mark door-mark-h" style="left:calc(16% - 7px);top:calc(55% - 2px)"></div>
-          <div class="door-mark door-mark-h" style="left:calc(50% - 7px);top:calc(55% - 2px)"></div>
-          <div class="door-mark door-mark-h" style="left:calc(84% - 7px);top:calc(55% - 2px)"></div>
-          <div class="door-mark door-mark-h" style="left:calc(16% - 7px);top:calc(79% - 2px)"></div>
-          <div class="door-mark door-mark-h" style="left:calc(50% - 7px);top:calc(79% - 2px)"></div>
-          <div class="door-mark door-mark-h" style="left:calc(75% - 7px);top:calc(79% - 2px)"></div>
-          <div class="door-mark door-mark-v" style="left:calc(33% - 2px);top:calc(16% - 7px)"></div>
-          <div class="door-mark door-mark-v" style="left:calc(33% - 2px);top:calc(50% - 7px)"></div>
-          <div class="door-mark door-mark-v" style="left:calc(33% - 2px);top:calc(66% - 7px)"></div>
-          <div class="door-mark door-mark-v" style="left:calc(51% - 2px);top:calc(90% - 7px)"></div>
-          <div class="door-mark door-mark-v" style="left:calc(67% - 2px);top:calc(16% - 7px)"></div>
-          <div class="door-mark door-mark-v" style="left:calc(67% - 2px);top:calc(50% - 7px)"></div>
-          <div class="door-mark door-mark-v" style="left:calc(67% - 2px);top:calc(84% - 7px)"></div>
+          <div class="door-mark door-mark-v" style="left:calc(25% - 2px);top:calc(12% - 7px)"></div>
+          <div class="door-mark door-mark-v" style="left:calc(51% - 2px);top:calc(12% - 7px)"></div>
+          <div class="door-mark door-mark-v" style="left:calc(77% - 2px);top:calc(12% - 7px)"></div>
+          <div class="door-mark door-mark-h" style="left:calc(10% - 7px);top:calc(25% - 2px)"></div>
+          <div class="door-mark door-mark-h" style="left:calc(30% - 7px);top:calc(25% - 2px)"></div>
+          <div class="door-mark door-mark-h" style="left:calc(52% - 7px);top:calc(25% - 2px)"></div>
+          <div class="door-mark door-mark-h" style="left:calc(72% - 7px);top:calc(25% - 2px)"></div>
+          <div class="door-mark door-mark-h" style="left:calc(89% - 7px);top:calc(25% - 2px)"></div>
+          <div class="door-mark door-mark-h" style="left:calc(10% - 7px);top:calc(45% - 2px)"></div>
+          <div class="door-mark door-mark-h" style="left:calc(30% - 7px);top:calc(45% - 2px)"></div>
+          <div class="door-mark door-mark-h" style="left:calc(50% - 7px);top:calc(45% - 2px)"></div>
+          <div class="door-mark door-mark-h" style="left:calc(70% - 7px);top:calc(45% - 2px)"></div>
+          <div class="door-mark door-mark-h" style="left:calc(90% - 7px);top:calc(45% - 2px)"></div>
+          <div class="door-mark door-mark-h" style="left:calc(25% - 7px);top:calc(87% - 2px)"></div>
 
           <!-- Furniture — Research Lab -->
-          <div class="furn desk" style="left:5%;top:16%"></div>
-          <div class="furn desk" style="left:16%;top:16%"></div>
-          <div class="furn bookshelf" style="left:1.5%;top:10%"></div>
-          <div class="furn chart-decor" style="left:10%;top:4%"></div>
+          <div class="furn desk" style="left:3%;top:12%"></div>
+          <div class="furn desk" style="left:13%;top:12%"></div>
+          <div class="furn bookshelf" style="left:1%;top:4%"></div>
+          <div class="furn chart-decor" style="left:8%;top:3%;width:10%"></div>
           <!-- Furniture — Command Center -->
-          <div class="furn desk" style="left:44%;top:14%;width:10%;height:5%"></div>
-          <div class="furn monitor" style="left:46%;top:8%"></div>
-          <div class="furn monitor" style="left:52%;top:8%"></div>
-          <div class="furn chart-decor" style="left:40%;top:3%;width:16%"></div>
+          <div class="furn desk" style="left:34%;top:10%;width:10%;height:4%"></div>
+          <div class="furn monitor" style="left:36%;top:5%"></div>
+          <div class="furn monitor" style="left:42%;top:5%"></div>
+          <div class="furn chart-decor" style="left:30%;top:2%;width:14%"></div>
           <!-- Furniture — Security -->
-          <div class="furn shield-decor" style="left:74%;top:4%"></div>
-          <div class="furn shield-decor" style="left:80%;top:4%"></div>
-          <div class="furn shield-decor" style="left:86%;top:4%"></div>
-          <div class="furn desk" style="left:76%;top:16%"></div>
-          <div class="furn monitor" style="left:78%;top:10%"></div>
-          <!-- Furniture — Trading Room -->
-          <div class="furn desk" style="left:4%;top:48%"></div>
-          <div class="furn desk" style="left:15%;top:48%"></div>
-          <div class="furn monitor" style="left:6%;top:42%"></div>
-          <div class="furn monitor" style="left:17%;top:42%"></div>
-          <div class="furn chart-decor" style="left:4%;top:36%"></div>
+          <div class="furn shield-decor" style="left:56%;top:3%"></div>
+          <div class="furn shield-decor" style="left:62%;top:3%"></div>
+          <div class="furn desk" style="left:58%;top:12%"></div>
+          <div class="furn monitor" style="left:60%;top:7%"></div>
           <!-- Furniture — Accountant -->
-          <div class="furn desk" style="left:76%;top:48%"></div>
-          <div class="furn safe" style="left:90%;top:40%"></div>
-          <div class="furn bookshelf" style="left:70%;top:38%"></div>
-          <!-- Furniture — Briefing Room -->
-          <div class="furn round-table" style="left:11%;top:62%"></div>
-          <div class="furn chair" style="left:8%;top:59%"></div>
-          <div class="furn chair" style="left:18%;top:59%"></div>
-          <div class="furn chair" style="left:8%;top:69%"></div>
-          <div class="furn chair" style="left:18%;top:69%"></div>
+          <div class="furn desk" style="left:82%;top:12%"></div>
+          <div class="furn safe" style="left:92%;top:6%"></div>
+          <div class="furn bookshelf" style="left:80%;top:4%"></div>
+          <!-- Furniture — Hall -->
+          <div class="furn chair" style="left:5%;top:30%"></div>
+          <div class="furn chair" style="left:12%;top:30%"></div>
+          <!-- Furniture — Briefing -->
+          <div class="furn round-table" style="left:28%;top:32%"></div>
+          <div class="furn chair" style="left:26%;top:29%"></div>
+          <div class="furn chair" style="left:34%;top:29%"></div>
           <!-- Furniture — Rest Area -->
-          <div class="furn bed" style="left:37%;top:60%"></div>
-          <div class="furn bed" style="left:52%;top:60%"></div>
-          <div class="furn bed" style="left:37%;top:68%"></div>
+          <div class="furn bed" style="left:45%;top:30%"></div>
+          <div class="furn bed" style="left:54%;top:30%"></div>
           <!-- Furniture — Vault -->
-          <div class="furn safe" style="left:72%;top:58%"></div>
-          <div class="furn safe" style="left:80%;top:58%"></div>
-          <div class="furn safe" style="left:90%;top:58%"></div>
-          <div class="furn gold-bar" style="left:86%;top:65%"></div>
-          <div class="furn gold-bar" style="left:90%;top:65%"></div>
-          <div class="furn gold-bar" style="left:92%;top:62%"></div>
+          <div class="furn safe" style="left:65%;top:29%"></div>
+          <div class="furn safe" style="left:72%;top:29%"></div>
+          <!-- Furniture — Police HQ / Yard -->
+          <div class="furn desk" style="left:85%;top:31%"></div>
+          <div class="furn shield-decor" style="left:90%;top:28%"></div>
+          <div class="furn shield-decor" style="left:95%;top:28%"></div>
+          <!-- Furniture — TRADING FLOOR (rows of desks for 50 seats) -->
+          <div class="furn desk" style="left:3%;top:52%;width:6%;height:3%"></div>
+          <div class="furn desk" style="left:12%;top:52%;width:6%;height:3%"></div>
+          <div class="furn desk" style="left:21%;top:52%;width:6%;height:3%"></div>
+          <div class="furn desk" style="left:30%;top:52%;width:6%;height:3%"></div>
+          <div class="furn desk" style="left:39%;top:52%;width:6%;height:3%"></div>
+          <div class="furn desk" style="left:48%;top:52%;width:6%;height:3%"></div>
+          <div class="furn desk" style="left:57%;top:52%;width:6%;height:3%"></div>
+          <div class="furn desk" style="left:66%;top:52%;width:6%;height:3%"></div>
+          <div class="furn desk" style="left:75%;top:52%;width:6%;height:3%"></div>
+          <div class="furn desk" style="left:84%;top:52%;width:6%;height:3%"></div>
+          <div class="furn desk" style="left:3%;top:62%;width:6%;height:3%"></div>
+          <div class="furn desk" style="left:12%;top:62%;width:6%;height:3%"></div>
+          <div class="furn desk" style="left:21%;top:62%;width:6%;height:3%"></div>
+          <div class="furn desk" style="left:30%;top:62%;width:6%;height:3%"></div>
+          <div class="furn desk" style="left:39%;top:62%;width:6%;height:3%"></div>
+          <div class="furn desk" style="left:48%;top:62%;width:6%;height:3%"></div>
+          <div class="furn desk" style="left:57%;top:62%;width:6%;height:3%"></div>
+          <div class="furn desk" style="left:66%;top:62%;width:6%;height:3%"></div>
+          <div class="furn desk" style="left:75%;top:62%;width:6%;height:3%"></div>
+          <div class="furn desk" style="left:84%;top:62%;width:6%;height:3%"></div>
+          <!-- Trading floor chart screens on walls -->
+          <div class="furn chart-decor" style="left:5%;top:47%;width:18%;height:4%"></div>
+          <div class="furn chart-decor" style="left:28%;top:47%;width:18%;height:4%"></div>
+          <div class="furn chart-decor" style="left:52%;top:47%;width:18%;height:4%"></div>
+          <div class="furn chart-decor" style="left:76%;top:47%;width:18%;height:4%"></div>
           <!-- Furniture — Prison -->
-          <div class="furn jail-bars" style="left:2%;top:80%;width:10%;height:18%;border:2px solid #6b7280;border-radius:2px;background:repeating-linear-gradient(90deg,#4b5563 0px,#4b5563 2px,transparent 2px,transparent 8px);opacity:.6"></div>
-          <div class="furn jail-bars" style="left:14%;top:80%;width:10%;height:18%;border:2px solid #6b7280;border-radius:2px;background:repeating-linear-gradient(90deg,#4b5563 0px,#4b5563 2px,transparent 2px,transparent 8px);opacity:.6"></div>
-          <div class="furn jail-bars" style="left:26%;top:80%;width:10%;height:18%;border:2px solid #6b7280;border-radius:2px;background:repeating-linear-gradient(90deg,#4b5563 0px,#4b5563 2px,transparent 2px,transparent 8px);opacity:.6"></div>
-          <div class="furn" style="left:38%;top:82%;width:2%;height:14%;background:#6b7280;border-radius:1px;opacity:.5"></div>
-          <!-- Furniture — Yard -->
-          <div class="furn desk" style="left:56%;top:86%"></div>
-          <div class="furn monitor" style="left:58%;top:82%"></div>
-          <div class="furn shield-decor" style="left:70%;top:81%"></div>
-          <div class="furn shield-decor" style="left:76%;top:81%"></div>
-          <div class="furn chart-decor" style="left:85%;top:81%;width:10%"></div>
+          <div class="furn jail-bars" style="left:2%;top:89%;width:10%;height:10%;border:2px solid #6b7280;border-radius:2px;background:repeating-linear-gradient(90deg,#4b5563 0px,#4b5563 2px,transparent 2px,transparent 8px);opacity:.6"></div>
+          <div class="furn jail-bars" style="left:14%;top:89%;width:10%;height:10%;border:2px solid #6b7280;border-radius:2px;background:repeating-linear-gradient(90deg,#4b5563 0px,#4b5563 2px,transparent 2px,transparent 8px);opacity:.6"></div>
+          <div class="furn jail-bars" style="left:26%;top:89%;width:10%;height:10%;border:2px solid #6b7280;border-radius:2px;background:repeating-linear-gradient(90deg,#4b5563 0px,#4b5563 2px,transparent 2px,transparent 8px);opacity:.6"></div>
+          <div class="furn" style="left:38%;top:90%;width:2%;height:8%;background:#6b7280;border-radius:1px;opacity:.5"></div>
         </div>
       </div>
 
@@ -565,62 +577,70 @@
    ═══════════════════════════════════════════ */
 const AGENTS = {
   coordinator:{name:'Coordinator',role:'Pipeline Boss',sprite:'sp-coord',tag:'BOSS',
-    station:{x:50,y:18},room:'command'},
+    station:{x:38,y:12},room:'command'},
   sentiment:{name:'SentimentAgent',role:'Mood Analyst',sprite:'sp-sent',tag:'SENT',
-    station:{x:10,y:18},room:'research'},
+    station:{x:6,y:12},room:'research'},
   chart:{name:'ChartAgent',role:'Signal Scanner',sprite:'sp-chart',tag:'SCAN',
-    station:{x:22,y:18},room:'research'},
+    station:{x:16,y:12},room:'research'},
   risk:{name:'RiskAgent',role:'Risk Guard',sprite:'sp-risk',tag:'RISK',
-    station:{x:82,y:18},room:'security'},
+    station:{x:64,y:12},room:'security'},
   trader:{name:'TraderAgent',role:'Trade Executor',sprite:'sp-trader',tag:'EXEC',
-    station:{x:10,y:48},room:'trading'},
+    station:{x:8,y:60},room:'trading'},
   accountant:{name:'AccountantAgent',role:'Trade Auditor',sprite:'sp-acct',tag:'ACCT',
-    station:{x:82,y:48},room:'accountant'},
+    station:{x:86,y:12},room:'accountant'},
   kronos:{name:'KronosAgent',role:'AI Oracle',sprite:'sp-kronos',tag:'KRON',
-    station:{x:22,y:65},room:'briefing'},
+    station:{x:30,y:34},room:'briefing'},
   strategy:{name:'StrategyAgent',role:'Strategy Researcher',sprite:'sp-strat',tag:'STRT',
-    station:{x:10,y:65},room:'briefing'},
+    station:{x:6,y:34},room:'hall'},
   police:{name:'PoliceAgent',role:'Internal Affairs',sprite:'sp-police',tag:'COPS',
-    station:{x:36,y:88},room:'yard'},
+    station:{x:90,y:34},room:'yard'},
   coder:{name:'CoderAgent',role:'Code Engineer',sprite:'sp-coder',tag:'CODE',
-    station:{x:78,y:88},room:'yard'},
+    station:{x:70,y:34},room:'vault'},
   optimizer:{name:'OptimizerAgent',role:'Strategy Optimizer',sprite:'sp-optim',tag:'OPTM',
-    station:{x:58,y:88},room:'yard'},
+    station:{x:50,y:34},room:'resting'},
 };
 
-/* Room bounding boxes (x, y, w, h in % of map) */
+/* Room bounding boxes (x, y, w, h in % of map)
+   Layout:
+   Row 1: research | command | security | accountant   (top 24%)
+   Row 2: hall | briefing | resting | vault | yard     (18%)
+   Row 3: ████████ TRADING FLOOR (full width) █████████ (40%)
+   Row 4: prison                                        (12%)
+*/
 const ROOMS = {
-  research:   {x:0, y:0, w:32, h:32, col:0, row:0},
-  command:    {x:34,y:0, w:32, h:32, col:1, row:0},
-  security:   {x:68,y:0, w:32, h:32, col:2, row:0},
-  trading:    {x:0, y:34,w:32, h:32, col:0, row:1},
-  hall:       {x:34,y:34,w:32, h:32, col:1, row:1},
-  accountant: {x:68,y:34,w:32, h:32, col:2, row:1},
-  briefing:   {x:0, y:55,w:32, h:22, col:0, row:2},
-  resting:    {x:34,y:55,w:32, h:22, col:1, row:2},
-  vault:      {x:68,y:55,w:32, h:22, col:2, row:2},
-  prison:     {x:0, y:79,w:50, h:21, col:0, row:3},
-  yard:       {x:52,y:79,w:48, h:21, col:1, row:3},
+  research:   {x:0,  y:0,  w:24, h:24, col:0, row:0},
+  command:    {x:26, y:0,  w:24, h:24, col:1, row:0},
+  security:   {x:52, y:0,  w:24, h:24, col:2, row:0},
+  accountant: {x:78, y:0,  w:22, h:24, col:3, row:0},
+  hall:       {x:0,  y:26, w:20, h:18, col:0, row:1},
+  briefing:   {x:22, y:26, w:18, h:18, col:1, row:1},
+  resting:    {x:42, y:26, w:18, h:18, col:2, row:1},
+  vault:      {x:62, y:26, w:18, h:18, col:3, row:1},
+  yard:       {x:82, y:26, w:18, h:18, col:4, row:1},
+  trading:    {x:0,  y:46, w:100,h:40, col:0, row:2},
+  prison:     {x:0,  y:88, w:50, h:12, col:0, row:3},
 };
 
 /* ═══ DOOR WAYPOINTS ═══ */
 const DOORS = {
-  'research-command':     {x:33, y:16},
-  'command-security':     {x:67, y:16},
-  'research-trading':     {x:16, y:33},
-  'command-hall':         {x:50, y:33},
-  'security-accountant':  {x:84, y:33},
-  'trading-hall':         {x:33, y:50},
-  'hall-accountant':      {x:67, y:50},
-  'trading-briefing':     {x:16, y:55},
-  'hall-resting':         {x:50, y:55},
-  'accountant-vault':     {x:84, y:55},
-  'briefing-resting':     {x:33, y:66},
-  'resting-vault':        {x:67, y:66},
-  'briefing-prison':      {x:16, y:79},
-  'resting-yard':         {x:50, y:79},
-  'vault-yard':           {x:75, y:79},
-  'prison-yard':          {x:51, y:90},
+  'research-command':     {x:25, y:12},
+  'command-security':     {x:51, y:12},
+  'security-accountant':  {x:77, y:12},
+  'research-hall':        {x:10, y:25},
+  'command-briefing':     {x:30, y:25},
+  'security-resting':     {x:52, y:25},
+  'accountant-vault':     {x:72, y:25},
+  'accountant-yard':      {x:89, y:25},
+  'hall-briefing':        {x:21, y:35},
+  'briefing-resting':     {x:41, y:35},
+  'resting-vault':        {x:61, y:35},
+  'vault-yard':           {x:81, y:35},
+  'hall-trading':         {x:10, y:45},
+  'briefing-trading':     {x:30, y:45},
+  'resting-trading':      {x:50, y:45},
+  'vault-trading':        {x:70, y:45},
+  'yard-trading':         {x:90, y:45},
+  'trading-prison':       {x:25, y:87},
 };
 
 /* Room adjacency graph built from DOORS */
@@ -678,6 +698,13 @@ function getSlotOffset(agentKey, room) {
     roomSlotCounters[room][agentKey] = idx;
   }
   const idx = roomSlotCounters[room][agentKey];
+  if (room === 'trading') {
+    // 10 columns × 5 rows = 50 seats in the big trading floor
+    const cols = 10;
+    const col = idx % cols;
+    const row = Math.floor(idx / cols);
+    return {dx: (col - 4.5) * 9, dy: (row - 2) * 7};
+  }
   const col = idx % 3;
   const row = Math.floor(idx / 3);
   return {dx: (col - 1) * 5, dy: (row - 1) * 5};
@@ -930,11 +957,11 @@ function updateCharacters(healthData) {
   const tokenKeys = Object.keys(agents).filter(k => !Object.keys(AGENTS).includes(k) && k !== 'coordinator');
   tokenKeys.sort((a, b) => (agents[b]?.rpg?.level || 1) - (agents[a]?.rpg?.level || 1));
   for (const k of tokenKeys) {
-    const tokenRoom = (agents[k]?.state === 'running') ? 'research' : undefined;
+    const tokenRoom = (agents[k]?.state === 'running') ? 'trading' : 'trading';
     updateCharacter(k, agents[k], {
       name: agents[k]?.name || k,
       sprite: 'sp-token',
-      room: tokenRoom || 'hall'
+      room: tokenRoom
     });
   }
 
