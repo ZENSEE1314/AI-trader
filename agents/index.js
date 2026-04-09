@@ -11,6 +11,7 @@ const { AccountantAgent } = require('./accountant-agent');
 const { TokenAgent } = require('./token-agent');
 const { WatcherAgent } = require('./watcher-agent');
 const { AgentCoordinator, getCoordinator } = require('./agent-coordinator');
+const hermesBridge = require('../hermes-bridge');
 
 module.exports = {
   BaseAgent,
@@ -24,4 +25,5 @@ module.exports = {
   WatcherAgent,
   AgentCoordinator,
   getCoordinator,
+  hermesBridge,
 };

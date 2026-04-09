@@ -794,4 +794,21 @@ router.get('/kronos-predictions', async (req, res) => {
   }
 });
 
+// ── Hermes Integration Status ────────────────────────────────
+router.get('/hermes-status', async (req, res) => {
+  try {
+    const hermes = require('../hermes-bridge');
+    const status = hermes.getHermesStatus();
+    const teamMemory = hermes.readTeamMemory();
+
+    res.json({
+      ...status,
+      teamMemoryEntries: teamMemory.length,
+      recentTeamMemory: teamMemory.slice(-5),
+    });
+  } catch (err) {
+    res.json({ installed: false, error: err.message });
+  }
+});
+
 module.exports = router;

@@ -91,6 +91,9 @@ class SentimentAgent extends BaseAgent {
       this.extremeEvents.push(event);
       if (this.extremeEvents.length > 20) this.extremeEvents.shift();
       this.addActivity('warning', `Extreme event: ${event.type} — ${event.coins.join(', ')}`);
+      // Hermes: share extreme events with team + persistent memory
+      this.hermesRemember(`[${new Date().toISOString().slice(0, 16)}] ${event.type}: ${event.coins.join(', ')}`);
+      this.shareWithTeam(`⚠️ ${event.type} detected: ${event.coins.join(', ')}`);
     }
 
     // 4. Summary stats

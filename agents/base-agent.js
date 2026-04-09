@@ -7,6 +7,7 @@
 
 const { log: bLog } = require('../bot-logger');
 const { think, isAvailable, getSystemPrompt } = require('./ai-brain');
+const hermes = require('../hermes-bridge');
 
 const AGENT_STATES = {
   IDLE:     'idle',
@@ -223,9 +224,20 @@ class BaseAgent {
       if (this._getAIContext) {
         Object.assign(context, await this._getAIContext());
       }
+
+      // Inject Hermes memory + team memory + soul into system prompt
+      const soul = this.getSoul();
+      const agentMemory = this.getHermesMemoryPrompt();
+      const teamMemory = hermes.getTeamMemoryPrompt();
+
+      let enrichedPrompt = getSystemPrompt(this.name);
+      if (soul) enrichedPrompt = `${soul}\n\n${enrichedPrompt}`;
+      if (agentMemory) enrichedPrompt += `\n\n${agentMemory}`;
+      if (teamMemory) enrichedPrompt += `\n\n${teamMemory}`;
+
       const aiResponse = await think({
         agentName: this.name,
-        systemPrompt: getSystemPrompt(this.name),
+        systemPrompt: enrichedPrompt,
         userMessage: question,
         context,
       });
@@ -236,6 +248,64 @@ class BaseAgent {
     const profile = this.getProfile();
     const skillList = profile.skills.map(s => `• **${s.name}** ${s.enabled ? '' : '(OFF)'} — ${s.description}`).join('\n');
     return `I'm **${this.name}** (${profile.role}). ${profile.description}\n\n**Skills:**\n${skillList}`;
+  }
+
+  // ── Hermes Integration ────────────────────────────────────
+
+  /**
+   * Add a persistent memory entry (Hermes-style § delimited file).
+   * Complements DB memory — survives even without DB.
+   */
+  hermesRemember(entry) {
+    return hermes.addMemory(this.name, entry);
+  }
+
+  /**
+   * Read all Hermes memory entries for this agent.
+   */
+  hermesRecallAll() {
+    return hermes.readMemory(this.name);
+  }
+
+  /**
+   * Get Hermes memory formatted for system prompt injection.
+   */
+  getHermesMemoryPrompt() {
+    return hermes.getMemoryPrompt(this.name);
+  }
+
+  /**
+   * Share a learning with the whole team via shared memory.
+   */
+  shareWithTeam(entry) {
+    return hermes.addTeamMemory(`[${this.name}] ${entry}`);
+  }
+
+  /**
+   * Generate TTS voice note for Telegram notifications.
+   * @param {string} text - Text to speak
+   * @param {object} opts - { voice }
+   * @returns {Promise<{success: boolean, filePath?: string}>}
+   */
+  async speak(text, opts = {}) {
+    return hermes.generateTTS(text, opts);
+  }
+
+  /**
+   * Ask Hermes for deep reasoning on a complex question.
+   * Runs as subprocess — use sparingly (slow, 30-90s).
+   * @param {string} question
+   * @returns {Promise<string|null>}
+   */
+  async askHermes(question) {
+    return hermes.askHermes(question, { maxTurns: 2, quiet: true });
+  }
+
+  /**
+   * Get the soul/personality context for this bot.
+   */
+  getSoul() {
+    return hermes.loadSoul();
   }
 
   // ── Memory (DB-backed, survives restarts) ──────────────────

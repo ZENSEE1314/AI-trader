@@ -9,9 +9,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN pip3 install --no-cache-dir --break-system-packages \
     torch --index-url https://download.pytorch.org/whl/cpu
 
-# Install remaining Kronos dependencies
+# Install remaining Kronos dependencies + Hermes TTS
 RUN pip3 install --no-cache-dir --break-system-packages \
-    numpy pandas tqdm einops huggingface_hub safetensors
+    numpy pandas tqdm einops huggingface_hub safetensors edge-tts
 
 WORKDIR /app
 

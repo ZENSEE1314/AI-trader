@@ -157,11 +157,21 @@ class TraderAgent extends BaseAgent {
         executionResult = result;
         this.tradesExecuted++;
         this.addActivity('success', `${pick.symbol} ${pick.direction} executed for users`);
-        // Memory: record trade entry
+        // Memory: record trade entry (DB + Hermes)
         if (this.isSkillEnabled('memory')) {
           await this.remember(`last_trade_${pick.symbol}`, {
             direction: pick.direction, score: pick.score, ts: Date.now(),
           }, 'trades');
+
+          // Hermes persistent memory
+          const ts = new Date().toISOString().slice(0, 16);
+          this.hermesRemember(`[${ts}] EXECUTED: ${pick.symbol} ${pick.direction} score=${pick.score}`);
+          this.shareWithTeam(`Trade executed: ${pick.symbol} ${pick.direction} score=${pick.score}`);
+        }
+
+        // TTS voice alert for high-confidence trades
+        if (pick.score >= 70) {
+          this.speak(`New ${pick.direction} trade opened on ${pick.symbol.replace('USDT', '')} with score ${pick.score}`).catch(() => {});
         }
         break; // One trade per cycle
       }

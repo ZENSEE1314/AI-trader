@@ -153,6 +153,10 @@ class RiskAgent extends BaseAgent {
           this.learn('rejection', { symbol: sym, direction: signal.direction, score: signal.score },
             { reasons }, `Blocked ${sym}: ${reasons[0]}`, 0).catch(() => {});
         }
+        // Hermes: share important blocks with team
+        if (reasons.some(r => r.includes('Correlated') || r.includes('Max positions'))) {
+          this.shareWithTeam(`Risk blocked ${sym} ${signal.direction}: ${reasons[0]}`);
+        }
       } else {
         approved.push(signal);
         this.signalsApproved++;

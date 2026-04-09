@@ -9,6 +9,8 @@
 // Each agent gets a system prompt with its role + real-time data.
 // ============================================================
 
+const hermes = require('../hermes-bridge');
+
 let googleClient = null;
 let anthropicClient = null;
 
@@ -88,7 +90,15 @@ async function think(opts) {
     ? `\n\n<current_data>\n${JSON.stringify(context, null, 2).substring(0, 2000)}\n</current_data>`
     : '';
 
-  const fullSystem = systemPrompt + contextBlock;
+  // Inject Hermes soul + team memory into system prompt
+  const soul = hermes.loadSoul();
+  const teamMemory = hermes.getTeamMemoryPrompt();
+  const agentMemory = hermes.getMemoryPrompt(agentName);
+
+  let fullSystem = systemPrompt + contextBlock;
+  if (soul) fullSystem = `${soul}\n\n${fullSystem}`;
+  if (teamMemory) fullSystem += `\n\n${teamMemory}`;
+  if (agentMemory) fullSystem += `\n\n${agentMemory}`;
 
   try {
     requestLog.push(Date.now());

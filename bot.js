@@ -156,6 +156,44 @@ async function tgSendTo(chatId, html) {
   }
 }
 
+/**
+ * Send a voice message to Telegram using Hermes TTS (edge-tts).
+ * Falls back silently if TTS unavailable.
+ */
+async function tgSendVoice(text) {
+  if (!TELEGRAM_TOKEN || !TELEGRAM_CHATS.length) return;
+  try {
+    const hermes = require('./hermes-bridge');
+    const result = await hermes.generateTTS(text);
+    if (!result.success || !result.filePath) return;
+
+    const voiceData = fs.readFileSync(result.filePath);
+    const boundary = `----HermesTTS${Date.now()}`;
+
+    for (const chatId of TELEGRAM_CHATS) {
+      const parts = [
+        `--${boundary}\r\nContent-Disposition: form-data; name="chat_id"\r\n\r\n${chatId}\r\n`,
+        `--${boundary}\r\nContent-Disposition: form-data; name="voice"; filename="voice.mp3"\r\nContent-Type: audio/mpeg\r\n\r\n`,
+      ];
+      const head = Buffer.from(parts.join(''));
+      const tail = Buffer.from(`\r\n--${boundary}--\r\n`);
+      const body = Buffer.concat([head, voiceData, tail]);
+
+      await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendVoice`, {
+        method: 'POST',
+        headers: { 'Content-Type': `multipart/form-data; boundary=${boundary}` },
+        body,
+        timeout: REQUEST_TIMEOUT,
+      });
+    }
+
+    // Clean up temp file
+    try { fs.unlinkSync(result.filePath); } catch {}
+  } catch (err) {
+    log(`TTS voice error (non-fatal): ${err.message}`);
+  }
+}
+
 let lastMsgAt = 0;
 const MSG_INTERVAL = 3 * 1000;
 
@@ -189,6 +227,8 @@ async function handleCommand(text, fromChatId) {
       `<b>Control</b>\n` +
       `/pause — Pause auto trading\n` +
       `/resume — Resume auto trading\n` +
+      `/voice — Voice status update (TTS)\n` +
+      `/hermes — Hermes AI integration status\n` +
       `/help — Show this menu\n\n` +
       `<i>Auto scan every ${INTERVAL_MIN} min | AI adapts after each trade</i>`
     );
@@ -207,6 +247,10 @@ async function handleCommand(text, fromChatId) {
     await sendSentiment(fromChatId);
   } else if (cmd === '/agents' || cmd === 'agents') {
     await sendAgentHealth(fromChatId);
+  } else if (cmd === '/voice') {
+    await sendVoiceStatus(fromChatId);
+  } else if (cmd === '/hermes') {
+    await sendHermesStatus(fromChatId);
   } else {
     await tgSendTo(fromChatId, `Unknown command: <code>${e(cmd)}</code>\nSend /help for all commands.`);
   }
@@ -311,6 +355,60 @@ async function sendAgentHealth(chatId) {
     await tgSendTo(chatId, msg);
   } catch (err) {
     await tgSendTo(chatId, `<b>Agent Health Error</b>\n<code>${e(err.message)}</code>`);
+  }
+}
+
+// ── /voice — Voice Status Update via TTS ─────────────────────
+async function sendVoiceStatus(chatId) {
+  try {
+    const coordinator = getCoordinator();
+    const health = coordinator.getHealth();
+    const mood = coordinator.sentimentAgent?.getMood() || 'neutral';
+
+    let openCount = 0;
+    try {
+      const { query } = require('./db');
+      const rows = await query("SELECT COUNT(*) as cnt FROM trades WHERE status = 'OPEN'");
+      openCount = parseInt(rows[0]?.cnt) || 0;
+    } catch {}
+
+    const text = `Trading bot status update. ` +
+      `Market mood is ${mood}. ` +
+      `We have ${openCount} open positions. ` +
+      `${health.runCount} cycles completed. ` +
+      `All agents are ${health.state === 'idle' || health.state === 'running' ? 'operational' : health.state}.`;
+
+    await tgSendVoice(text);
+    await tgSendTo(chatId, `<i>Voice status sent.</i>`);
+  } catch (err) {
+    await tgSendTo(chatId, `<b>Voice Error</b>\n<code>${e(err.message)}</code>\nMake sure edge-tts is installed: <code>pip install edge-tts</code>`);
+  }
+}
+
+// ── /hermes — Hermes Integration Status ──────────────────────
+async function sendHermesStatus(chatId) {
+  try {
+    const hermes = require('./hermes-bridge');
+    const status = hermes.getHermesStatus();
+    const teamMem = hermes.readTeamMemory();
+
+    let msg = `<b>Hermes AI Integration</b>\n━━━━━━━━━━━━━━━━━━\n`;
+    msg += `Installed: ${status.installed ? '✅' : '❌'}\n`;
+    msg += `Skills: ${status.skillCount}\n`;
+    msg += `Soul: ${status.hasSoul ? '✅ Loaded' : '❌ Not found'}\n`;
+    msg += `Team memory: ${teamMem.length} entries\n`;
+    msg += `Home: <code>${status.hermesHome}</code>\n`;
+
+    if (teamMem.length > 0) {
+      msg += `\n<b>Recent Team Memory:</b>\n`;
+      for (const entry of teamMem.slice(-3)) {
+        msg += `• ${e(entry.substring(0, 80))}\n`;
+      }
+    }
+
+    await tgSendTo(chatId, msg);
+  } catch (err) {
+    await tgSendTo(chatId, `<b>Hermes Status Error</b>\n<code>${e(err.message)}</code>`);
   }
 }
 

@@ -267,6 +267,14 @@ class AgentCoordinator extends BaseAgent {
       this.log(`Cycle complete in ${elapsed}s | Mood: ${mood} | Signals: ${signals.length} → ${approvedSignals.length} approved | Executed: ${tradeResult?.executed || false}`);
       this.addActivity('success', `Cycle #${this.runCount} done in ${elapsed}s | mood=${mood} | scanned=${tokenEntries.length} | signals=${signals.length} | approved=${approvedSignals.length} | traded=${tradeResult?.executed ? 'YES' : 'no'}`);
 
+      // Hermes: record cycle summary to team memory (only when something happened)
+      if (signals.length > 0 || tradeResult?.executed) {
+        const hermes = require('../hermes-bridge');
+        const ts = new Date().toISOString().slice(0, 16);
+        const summary = `[${ts}] Cycle #${this.runCount}: mood=${mood} signals=${signals.length} approved=${approvedSignals.length} traded=${tradeResult?.executed ? 'YES' : 'no'} (${elapsed}s)`;
+        hermes.addTeamMemory(summary);
+      }
+
       return {
         elapsed: parseFloat(elapsed),
         mood,
@@ -829,6 +837,8 @@ class AgentCoordinator extends BaseAgent {
   }
 
   async _buildMemoryChat(text) {
+    const hermes = require('../hermes-bridge');
+
     // Check if asking about specific agent
     const agentMatch = text.match(/(chart|trader|risk|sentiment|accountant)/);
     const agentKey = agentMatch ? agentMatch[1] : null;
@@ -840,23 +850,40 @@ class AgentCoordinator extends BaseAgent {
       if (!agent) continue;
       const memories = await agent.recallAll();
       const lessons = await agent.getLessons(null, 5);
+      const hermesMemories = agent.hermesRecallAll ? agent.hermesRecallAll() : [];
 
-      if (memories.length === 0 && lessons.length === 0) continue;
+      if (memories.length === 0 && lessons.length === 0 && hermesMemories.length === 0) continue;
 
       lines.push(`**${agent.name}:**`);
       if (memories.length > 0) {
-        lines.push(`  Memories: ${memories.length}`);
+        lines.push(`  DB Memories: ${memories.length}`);
         for (const m of memories.slice(0, 3)) {
           const val = typeof m.value === 'object' ? JSON.stringify(m.value).substring(0, 60) : String(m.value);
           lines.push(`  • [${m.category}] ${m.key}: ${val}`);
         }
         if (memories.length > 3) lines.push(`  ...and ${memories.length - 3} more`);
       }
+      if (hermesMemories.length > 0) {
+        lines.push(`  Persistent Memories: ${hermesMemories.length}`);
+        for (const entry of hermesMemories.slice(-3)) {
+          lines.push(`  • ${entry.substring(0, 80)}`);
+        }
+      }
       if (lessons.length > 0) {
         lines.push(`  Lessons: ${lessons.length}`);
         for (const l of lessons.slice(0, 3)) {
           lines.push(`  • ${l.lesson.substring(0, 70)}`);
         }
+      }
+      lines.push('');
+    }
+
+    // Team memory
+    const teamMemories = hermes.readTeamMemory();
+    if (teamMemories.length > 0) {
+      lines.push(`**Team Shared Memory:**`);
+      for (const entry of teamMemories.slice(-5)) {
+        lines.push(`  • ${entry.substring(0, 80)}`);
       }
       lines.push('');
     }

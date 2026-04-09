@@ -1,0 +1,1630 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MCT Trading Floor — Agent Emulator</title>
+  <meta name="description" content="MCT Trading Floor — Real-time AI agent visualization and control center.">
+  <link rel="icon" href="/img/logo.jpeg" type="image/jpeg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=IBM+Plex+Sans:wght@200;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    /* ============================================================
+       Tokens (inline copy from tokens.css for standalone page)
+       ============================================================ */
+    :root {
+      --color-bg:          #08070c;
+      --color-bg-raised:   #110f18;
+      --color-bg-inset:    #0a0910;
+      --color-surface:     #14121e;
+      --color-surface-alt: #1a1726;
+      --color-border:      #2a2438;
+      --color-border-muted:#1e1830;
+      --color-fg:          #f0e8df;
+      --color-fg-muted:    #9a8e80;
+      --color-fg-subtle:   #6a5f52;
+      --color-accent:      #d4af37;
+      --color-accent-fg:   #08070c;
+      --color-accent-muted:rgba(212, 175, 55, 0.10);
+      --color-accent-hover:#e8c84a;
+      --color-accent-soft: rgba(212, 175, 55, 0.06);
+      --color-accent-dim:  #b8922a;
+      --color-success:     #34d399;
+      --color-success-muted:rgba(52, 211, 153, 0.1);
+      --color-danger:      #f43f5e;
+      --color-danger-muted:rgba(244, 63, 94, 0.1);
+      --color-warning:     #fbbf24;
+      --color-warning-muted:rgba(251, 191, 36, 0.1);
+      --color-info:        #60a5fa;
+      --color-info-muted:  rgba(96, 165, 250, 0.1);
+      --glow-gold:         0 0 16px rgba(212, 175, 55, 0.25), 0 0 48px rgba(212, 175, 55, 0.08);
+      --glow-green:        0 0 16px rgba(52, 211, 153, 0.15), 0 0 48px rgba(52, 211, 153, 0.05);
+      --glow-red:          0 0 16px rgba(244, 63, 94, 0.15), 0 0 48px rgba(244, 63, 94, 0.05);
+      --glass-bg:          rgba(17, 15, 24, 0.7);
+      --glass-border:      rgba(212, 175, 55, 0.06);
+      --glass-blur:        16px;
+      --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px;
+      --space-5: 20px; --space-6: 24px; --space-8: 32px; --space-10: 40px;
+      --space-12: 48px; --space-16: 64px;
+      --radius-sm: 4px; --radius-md: 8px; --radius-lg: 14px; --radius-xl: 20px; --radius-full: 9999px;
+      --shadow-sm:    0 1px 3px rgba(0,0,0,.5), 0 0 1px rgba(212,175,55,0.03);
+      --shadow-md:    0 4px 16px rgba(0,0,0,.6), 0 0 1px rgba(212,175,55,0.04);
+      --shadow-lg:    0 8px 32px rgba(0,0,0,.7), 0 0 1px rgba(212,175,55,0.05);
+      --shadow-xl:    0 20px 60px rgba(0,0,0,.8), 0 0 1px rgba(212,175,55,0.06);
+      --font-display: 'Space Grotesk', system-ui, sans-serif;
+      --font-body:    'IBM Plex Sans', system-ui, sans-serif;
+      --font-mono:    'JetBrains Mono', 'Fira Code', monospace;
+      --text-xs: 0.75rem; --text-sm: 0.875rem; --text-base: 1rem;
+      --text-lg: 1.125rem; --text-xl: 1.25rem; --text-2xl: 1.5rem;
+      --text-3xl: 2rem; --text-4xl: 2.5rem;
+      --weight-light: 200; --weight-normal: 400; --weight-medium: 500;
+      --weight-semibold: 600; --weight-bold: 700; --weight-black: 800;
+      --leading-tight: 1.15; --leading-normal: 1.5;
+      --z-base: 1; --z-dropdown: 10; --z-sticky: 20; --z-overlay: 30;
+      --z-modal: 40; --z-toast: 60; --z-tooltip: 70;
+      --duration-fast: 120ms; --duration-normal: 250ms; --duration-slow: 450ms;
+      --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+      --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+    }
+
+    /* ============================================================
+       Reset & Base
+       ============================================================ */
+    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+    html { font-size: 16px; -webkit-text-size-adjust: 100%; }
+    body {
+      font-family: var(--font-body);
+      font-weight: var(--weight-normal);
+      line-height: var(--leading-normal);
+      color: var(--color-fg);
+      background: var(--color-bg);
+      min-height: 100vh;
+      overflow-x: hidden;
+    }
+
+    /* Dot grid background */
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      z-index: -1;
+      background-image:
+        radial-gradient(circle at 20% 20%, rgba(212,175,55,0.03) 0%, transparent 50%),
+        radial-gradient(circle at 80% 80%, rgba(212,175,55,0.015) 0%, transparent 50%),
+        radial-gradient(circle, rgba(42,36,56,0.35) 1px, transparent 1px);
+      background-size: 100% 100%, 100% 100%, 28px 28px;
+      pointer-events: none;
+    }
+
+    /* Scanlines */
+    body::after {
+      content: '';
+      position: fixed;
+      inset: 0;
+      z-index: -1;
+      background: repeating-linear-gradient(
+        0deg,
+        transparent,
+        transparent 2px,
+        rgba(0,0,0,0.03) 2px,
+        rgba(0,0,0,0.03) 4px
+      );
+      pointer-events: none;
+    }
+
+    a { color: var(--color-accent); text-decoration: none; }
+    a:hover { color: var(--color-accent-hover); }
+
+    /* ============================================================
+       Header Bar
+       ============================================================ */
+    .header {
+      position: sticky;
+      top: 0;
+      z-index: var(--z-sticky);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: var(--space-3) var(--space-6);
+      background: var(--glass-bg);
+      backdrop-filter: blur(var(--glass-blur));
+      -webkit-backdrop-filter: blur(var(--glass-blur));
+      border-bottom: 1px solid var(--color-border-muted);
+      gap: var(--space-4);
+      flex-wrap: wrap;
+    }
+
+    .header-left {
+      display: flex;
+      align-items: center;
+      gap: var(--space-3);
+    }
+
+    .header-title {
+      font-family: var(--font-display);
+      font-weight: var(--weight-bold);
+      font-size: var(--text-lg);
+      letter-spacing: 0.08em;
+      color: var(--color-accent);
+      text-transform: uppercase;
+    }
+
+    .live-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: var(--radius-full);
+      background: var(--color-accent);
+      box-shadow: 0 0 8px rgba(212,175,55,0.5);
+      animation: pulse-dot 2s ease-in-out infinite;
+    }
+
+    .live-dot.disconnected {
+      background: var(--color-danger);
+      box-shadow: 0 0 8px rgba(244,63,94,0.5);
+      animation: none;
+    }
+
+    @keyframes pulse-dot {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.5; transform: scale(0.7); }
+    }
+
+    .header-center {
+      display: flex;
+      align-items: center;
+      gap: var(--space-6);
+      font-family: var(--font-mono);
+      font-size: var(--text-sm);
+      color: var(--color-fg-muted);
+    }
+
+    .header-stat { display: flex; align-items: center; gap: var(--space-2); }
+    .header-stat-label { color: var(--color-fg-subtle); font-size: var(--text-xs); text-transform: uppercase; letter-spacing: 0.06em; }
+    .header-stat-value { color: var(--color-fg); font-weight: var(--weight-medium); }
+
+    .state-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: var(--space-1);
+      padding: 2px var(--space-2);
+      border-radius: var(--radius-full);
+      font-size: var(--text-xs);
+      font-weight: var(--weight-semibold);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+    .state-badge.idle { background: var(--color-accent-muted); color: var(--color-accent); }
+    .state-badge.running { background: rgba(52,211,153,0.15); color: var(--color-success); }
+    .state-badge.error { background: var(--color-danger-muted); color: var(--color-danger); }
+    .state-badge.stopped { background: rgba(107,114,128,0.15); color: #9ca3af; }
+    .state-badge.paused { background: rgba(107,114,128,0.15); color: #9ca3af; }
+
+    .header-right {
+      display: flex;
+      align-items: center;
+      gap: var(--space-4);
+    }
+
+    .toggle-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: var(--space-2);
+      padding: var(--space-1) var(--space-3);
+      border: 1px solid var(--color-border);
+      border-radius: var(--radius-md);
+      background: transparent;
+      color: var(--color-fg-muted);
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+      cursor: pointer;
+      transition: all var(--duration-fast) var(--ease-out);
+      min-height: 32px;
+    }
+    .toggle-btn:hover { border-color: var(--color-accent); color: var(--color-accent); }
+    .toggle-btn:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+    .toggle-btn.active { border-color: var(--color-accent); color: var(--color-accent); background: var(--color-accent-muted); }
+
+    .back-link {
+      font-family: var(--font-body);
+      font-size: var(--text-sm);
+      color: var(--color-fg-muted);
+      display: flex;
+      align-items: center;
+      gap: var(--space-1);
+    }
+    .back-link:hover { color: var(--color-accent); }
+
+    /* ============================================================
+       Main Layout
+       ============================================================ */
+    .floor {
+      padding: var(--space-6);
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-6);
+      max-width: 1800px;
+      margin: 0 auto;
+    }
+
+    /* ============================================================
+       Room (Agent Card)
+       ============================================================ */
+    .room {
+      background: var(--glass-bg);
+      backdrop-filter: blur(var(--glass-blur));
+      -webkit-backdrop-filter: blur(var(--glass-blur));
+      border: 1px solid var(--color-border-muted);
+      border-radius: var(--radius-lg);
+      padding: var(--space-5);
+      transition: border-color var(--duration-normal) var(--ease-out),
+                  box-shadow var(--duration-normal) var(--ease-out);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .room.state-running {
+      border-color: rgba(212,175,55,0.2);
+      box-shadow: var(--glow-gold);
+      animation: room-pulse-gold 3s ease-in-out infinite;
+    }
+    .room.state-error {
+      border-color: rgba(244,63,94,0.25);
+      box-shadow: var(--glow-red);
+    }
+    .room.state-paused {
+      opacity: 0.55;
+      filter: saturate(0.3);
+    }
+    .room.state-idle {
+      border-color: var(--color-border-muted);
+    }
+
+    @keyframes room-pulse-gold {
+      0%, 100% { box-shadow: 0 0 16px rgba(212,175,55,0.15), 0 0 48px rgba(212,175,55,0.05); }
+      50% { box-shadow: 0 0 24px rgba(212,175,55,0.3), 0 0 64px rgba(212,175,55,0.1); }
+    }
+
+    .room-header {
+      display: flex;
+      align-items: center;
+      gap: var(--space-3);
+      margin-bottom: var(--space-4);
+    }
+
+    .room-icon {
+      font-size: var(--text-2xl);
+      line-height: 1;
+      width: 40px;
+      height: 40px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--color-accent-muted);
+      border-radius: var(--radius-md);
+      flex-shrink: 0;
+    }
+
+    .room-meta { flex: 1; min-width: 0; }
+
+    .room-name {
+      font-family: var(--font-display);
+      font-weight: var(--weight-bold);
+      font-size: var(--text-base);
+      color: var(--color-fg);
+      line-height: var(--leading-tight);
+    }
+
+    .room-role {
+      font-size: var(--text-xs);
+      color: var(--color-fg-subtle);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
+    .room-state-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: var(--radius-full);
+      flex-shrink: 0;
+    }
+    .room-state-dot.idle { background: var(--color-accent-dim); }
+    .room-state-dot.running { background: var(--color-success); animation: pulse-dot 1.5s ease-in-out infinite; }
+    .room-state-dot.error { background: var(--color-danger); animation: pulse-dot 1s ease-in-out infinite; }
+    .room-state-dot.paused { background: #6b7280; }
+    .room-state-dot.stopped { background: #6b7280; }
+
+    /* Stats Row */
+    .room-stats {
+      display: flex;
+      gap: var(--space-4);
+      margin-bottom: var(--space-4);
+      flex-wrap: wrap;
+    }
+
+    .stat-block {
+      flex: 1;
+      min-width: 80px;
+      background: var(--color-bg-inset);
+      border-radius: var(--radius-md);
+      padding: var(--space-2) var(--space-3);
+    }
+
+    .stat-label {
+      font-size: 0.65rem;
+      color: var(--color-fg-subtle);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-bottom: 2px;
+    }
+
+    .stat-value {
+      font-family: var(--font-mono);
+      font-size: var(--text-base);
+      font-weight: var(--weight-semibold);
+      color: var(--color-fg);
+    }
+    .stat-value.accent { color: var(--color-accent); }
+    .stat-value.success { color: var(--color-success); }
+    .stat-value.danger { color: var(--color-danger); }
+
+    /* Current Task */
+    .current-task {
+      display: flex;
+      align-items: center;
+      gap: var(--space-2);
+      padding: var(--space-2) var(--space-3);
+      background: rgba(52,211,153,0.06);
+      border: 1px solid rgba(52,211,153,0.1);
+      border-radius: var(--radius-md);
+      margin-bottom: var(--space-4);
+      font-size: var(--text-sm);
+      color: var(--color-success);
+      font-family: var(--font-mono);
+    }
+
+    .task-spinner {
+      width: 14px;
+      height: 14px;
+      border: 2px solid rgba(52,211,153,0.2);
+      border-top-color: var(--color-success);
+      border-radius: var(--radius-full);
+      animation: spin 0.8s linear infinite;
+      flex-shrink: 0;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* Activity Feed */
+    .activity-feed {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+    }
+
+    .activity-item {
+      display: flex;
+      align-items: flex-start;
+      gap: var(--space-2);
+      font-size: var(--text-xs);
+      padding: 3px 0;
+      animation: slide-in var(--duration-normal) var(--ease-out);
+    }
+
+    @keyframes slide-in {
+      from { opacity: 0; transform: translateX(-8px); }
+      to { opacity: 1; transform: translateX(0); }
+    }
+
+    .activity-dot {
+      width: 5px;
+      height: 5px;
+      border-radius: var(--radius-full);
+      flex-shrink: 0;
+      margin-top: 5px;
+    }
+    .activity-dot.success { background: var(--color-success); }
+    .activity-dot.error { background: var(--color-danger); }
+    .activity-dot.info { background: var(--color-info); }
+    .activity-dot.warning { background: var(--color-warning); }
+    .activity-dot.trade { background: var(--color-accent); }
+    .activity-dot.skip { background: var(--color-fg-subtle); }
+
+    .activity-msg {
+      color: var(--color-fg-muted);
+      font-family: var(--font-mono);
+      line-height: 1.4;
+      word-break: break-word;
+    }
+
+    .activity-time {
+      color: var(--color-fg-subtle);
+      font-family: var(--font-mono);
+      font-size: 0.65rem;
+      flex-shrink: 0;
+      margin-left: auto;
+      padding-left: var(--space-2);
+    }
+
+    /* ============================================================
+       Coordinator Room (full-width)
+       ============================================================ */
+    .coordinator-room { grid-column: 1 / -1; }
+
+    .pipeline {
+      display: flex;
+      align-items: center;
+      gap: var(--space-2);
+      padding: var(--space-3) 0;
+      overflow-x: auto;
+      margin-bottom: var(--space-4);
+    }
+
+    .pipeline-stage {
+      display: flex;
+      align-items: center;
+      gap: var(--space-2);
+      padding: var(--space-2) var(--space-3);
+      background: var(--color-bg-inset);
+      border-radius: var(--radius-md);
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+      color: var(--color-fg-muted);
+      white-space: nowrap;
+      border: 1px solid transparent;
+      transition: all var(--duration-normal) var(--ease-out);
+    }
+
+    .pipeline-stage.active {
+      border-color: var(--color-accent);
+      color: var(--color-accent);
+      background: var(--color-accent-muted);
+    }
+
+    .pipeline-arrow {
+      color: var(--color-fg-subtle);
+      font-size: var(--text-sm);
+      flex-shrink: 0;
+      position: relative;
+    }
+
+    .pipeline-arrow .particle {
+      position: absolute;
+      width: 4px;
+      height: 4px;
+      border-radius: var(--radius-full);
+      background: var(--color-accent);
+      box-shadow: 0 0 6px rgba(212,175,55,0.6);
+      animation: flow-particle 1.5s ease-in-out infinite;
+      opacity: 0;
+    }
+
+    .pipeline.cycle-active .pipeline-arrow .particle {
+      opacity: 1;
+    }
+
+    @keyframes flow-particle {
+      0% { transform: translateX(-8px); opacity: 0; }
+      30% { opacity: 1; }
+      70% { opacity: 1; }
+      100% { transform: translateX(8px); opacity: 0; }
+    }
+
+    /* ============================================================
+       System Agents Grid
+       ============================================================ */
+    .system-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: var(--space-4);
+    }
+
+    @media (max-width: 1280px) {
+      .system-grid { grid-template-columns: repeat(2, 1fr); }
+    }
+    @media (max-width: 768px) {
+      .system-grid { grid-template-columns: 1fr; }
+    }
+
+    /* ============================================================
+       Token Agents
+       ============================================================ */
+    .token-section {
+      border: 1px solid var(--color-border-muted);
+      border-radius: var(--radius-lg);
+      background: var(--glass-bg);
+      backdrop-filter: blur(var(--glass-blur));
+      -webkit-backdrop-filter: blur(var(--glass-blur));
+      padding: var(--space-5);
+    }
+
+    .token-section-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: var(--space-4);
+    }
+
+    .token-section-title {
+      font-family: var(--font-display);
+      font-weight: var(--weight-bold);
+      font-size: var(--text-base);
+      color: var(--color-fg);
+      display: flex;
+      align-items: center;
+      gap: var(--space-2);
+    }
+
+    .count-badge {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 22px;
+      height: 22px;
+      padding: 0 var(--space-2);
+      border-radius: var(--radius-full);
+      background: var(--color-accent-muted);
+      color: var(--color-accent);
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+      font-weight: var(--weight-semibold);
+    }
+
+    .token-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+      gap: var(--space-3);
+      max-height: 400px;
+      overflow-y: auto;
+      scrollbar-width: thin;
+      scrollbar-color: var(--color-border) transparent;
+    }
+
+    .token-grid::-webkit-scrollbar { width: 4px; }
+    .token-grid::-webkit-scrollbar-track { background: transparent; }
+    .token-grid::-webkit-scrollbar-thumb { background: var(--color-border); border-radius: var(--radius-full); }
+
+    .token-card {
+      display: flex;
+      align-items: center;
+      gap: var(--space-3);
+      padding: var(--space-3);
+      background: var(--color-bg-inset);
+      border: 1px solid var(--color-border-muted);
+      border-radius: var(--radius-md);
+      transition: border-color var(--duration-fast) var(--ease-out),
+                  box-shadow var(--duration-fast) var(--ease-out);
+    }
+
+    .token-card.signal-long {
+      border-color: rgba(52,211,153,0.2);
+      box-shadow: 0 0 12px rgba(52,211,153,0.06);
+    }
+    .token-card.signal-short {
+      border-color: rgba(244,63,94,0.2);
+      box-shadow: 0 0 12px rgba(244,63,94,0.06);
+    }
+
+    .token-symbol {
+      font-family: var(--font-display);
+      font-weight: var(--weight-bold);
+      font-size: var(--text-sm);
+      color: var(--color-fg);
+    }
+
+    .token-price {
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+      color: var(--color-fg-muted);
+    }
+
+    .token-signal {
+      margin-left: auto;
+      display: flex;
+      align-items: center;
+      gap: var(--space-1);
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+      font-weight: var(--weight-semibold);
+    }
+    .token-signal.long { color: var(--color-success); }
+    .token-signal.short { color: var(--color-danger); }
+    .token-signal.none { color: var(--color-fg-subtle); }
+
+    .token-signal-arrow {
+      font-size: var(--text-base);
+      line-height: 1;
+    }
+
+    .token-info {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .token-signal-count {
+      font-family: var(--font-mono);
+      font-size: 0.65rem;
+      color: var(--color-fg-subtle);
+    }
+
+    /* ============================================================
+       Accountant + Hermes row
+       ============================================================ */
+    .bottom-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: var(--space-4);
+    }
+
+    @media (max-width: 768px) {
+      .bottom-row { grid-template-columns: 1fr; }
+    }
+
+    /* Hermes */
+    .hermes-card {
+      background: var(--glass-bg);
+      backdrop-filter: blur(var(--glass-blur));
+      -webkit-backdrop-filter: blur(var(--glass-blur));
+      border: 1px solid var(--color-border-muted);
+      border-radius: var(--radius-lg);
+      padding: var(--space-5);
+    }
+
+    .hermes-header {
+      display: flex;
+      align-items: center;
+      gap: var(--space-3);
+      margin-bottom: var(--space-4);
+    }
+
+    .hermes-indicator {
+      display: flex;
+      align-items: center;
+      gap: var(--space-2);
+      font-size: var(--text-xs);
+      padding: var(--space-1) var(--space-3);
+      border-radius: var(--radius-full);
+    }
+    .hermes-indicator.active {
+      background: rgba(52,211,153,0.1);
+      color: var(--color-success);
+    }
+    .hermes-indicator.inactive {
+      background: rgba(107,114,128,0.1);
+      color: #9ca3af;
+    }
+
+    .hermes-memories {
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-2);
+      max-height: 150px;
+      overflow-y: auto;
+      scrollbar-width: thin;
+      scrollbar-color: var(--color-border) transparent;
+    }
+
+    .hermes-memory {
+      font-family: var(--font-mono);
+      font-size: 0.7rem;
+      color: var(--color-fg-muted);
+      padding: var(--space-2) var(--space-3);
+      background: var(--color-bg-inset);
+      border-radius: var(--radius-sm);
+      line-height: 1.4;
+      word-break: break-word;
+    }
+
+    /* ============================================================
+       Live Feed (bottom panel)
+       ============================================================ */
+    .live-feed {
+      background: var(--glass-bg);
+      backdrop-filter: blur(var(--glass-blur));
+      -webkit-backdrop-filter: blur(var(--glass-blur));
+      border: 1px solid var(--color-border-muted);
+      border-radius: var(--radius-lg);
+      padding: var(--space-4);
+    }
+
+    .live-feed-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: var(--space-3);
+    }
+
+    .live-feed-title {
+      font-family: var(--font-display);
+      font-weight: var(--weight-bold);
+      font-size: var(--text-sm);
+      color: var(--color-fg);
+      display: flex;
+      align-items: center;
+      gap: var(--space-2);
+    }
+
+    .feed-scroll {
+      max-height: 240px;
+      overflow-y: auto;
+      scrollbar-width: thin;
+      scrollbar-color: var(--color-border) transparent;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+    .feed-scroll::-webkit-scrollbar { width: 4px; }
+    .feed-scroll::-webkit-scrollbar-track { background: transparent; }
+    .feed-scroll::-webkit-scrollbar-thumb { background: var(--color-border); border-radius: var(--radius-full); }
+
+    .feed-entry {
+      display: flex;
+      align-items: flex-start;
+      gap: var(--space-3);
+      padding: var(--space-2) var(--space-3);
+      border-radius: var(--radius-sm);
+      font-size: var(--text-xs);
+      animation: slide-in var(--duration-normal) var(--ease-out);
+      transition: background var(--duration-fast) var(--ease-out);
+    }
+    .feed-entry:hover { background: var(--color-bg-inset); }
+
+    .feed-time {
+      font-family: var(--font-mono);
+      color: var(--color-fg-subtle);
+      flex-shrink: 0;
+      min-width: 52px;
+      font-size: 0.65rem;
+    }
+
+    .feed-agent-badge {
+      font-family: var(--font-mono);
+      font-size: 0.65rem;
+      font-weight: var(--weight-semibold);
+      padding: 1px var(--space-2);
+      border-radius: var(--radius-sm);
+      flex-shrink: 0;
+      min-width: 60px;
+      text-align: center;
+    }
+    .feed-agent-badge.coordinator { background: var(--color-accent-muted); color: var(--color-accent); }
+    .feed-agent-badge.sentiment { background: rgba(96,165,250,0.1); color: var(--color-info); }
+    .feed-agent-badge.chart { background: rgba(52,211,153,0.1); color: var(--color-success); }
+    .feed-agent-badge.risk { background: rgba(251,191,36,0.1); color: var(--color-warning); }
+    .feed-agent-badge.trader { background: rgba(212,175,55,0.1); color: var(--color-accent); }
+    .feed-agent-badge.accountant { background: rgba(167,139,250,0.1); color: #a78bfa; }
+    .feed-agent-badge.token { background: rgba(244,114,182,0.1); color: #f472b6; }
+    .feed-agent-badge.unknown { background: rgba(107,114,128,0.1); color: #9ca3af; }
+
+    .feed-type-icon {
+      font-size: 0.7rem;
+      flex-shrink: 0;
+    }
+
+    .feed-msg {
+      font-family: var(--font-mono);
+      color: var(--color-fg-muted);
+      line-height: 1.4;
+      word-break: break-word;
+    }
+
+    /* ============================================================
+       Scanning wave animation
+       ============================================================ */
+    .scan-line {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 2px;
+      background: linear-gradient(90deg, transparent, var(--color-accent), transparent);
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    .room.state-running .scan-line {
+      opacity: 1;
+      animation: scan-wave 2s ease-in-out infinite;
+    }
+
+    @keyframes scan-wave {
+      0% { top: 0; opacity: 0; }
+      10% { opacity: 0.8; }
+      90% { opacity: 0.8; }
+      100% { top: 100%; opacity: 0; }
+    }
+
+    /* ============================================================
+       Ratio bar (Risk Agent)
+       ============================================================ */
+    .ratio-bar {
+      display: flex;
+      height: 6px;
+      border-radius: var(--radius-full);
+      overflow: hidden;
+      background: var(--color-bg-inset);
+      margin-top: var(--space-2);
+    }
+
+    .ratio-fill-approve {
+      background: var(--color-success);
+      transition: width var(--duration-normal) var(--ease-out);
+    }
+    .ratio-fill-reject {
+      background: var(--color-danger);
+      transition: width var(--duration-normal) var(--ease-out);
+    }
+
+    /* ============================================================
+       Placeholder / Empty State
+       ============================================================ */
+    .placeholder {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: var(--space-16) var(--space-8);
+      color: var(--color-fg-subtle);
+      font-family: var(--font-mono);
+      font-size: var(--text-sm);
+      text-align: center;
+    }
+
+    .placeholder-icon {
+      font-size: var(--text-4xl);
+      margin-bottom: var(--space-4);
+      opacity: 0.3;
+    }
+
+    /* ============================================================
+       Keyboard hint
+       ============================================================ */
+    .kbd-hints {
+      display: flex;
+      gap: var(--space-4);
+      align-items: center;
+      font-size: 0.65rem;
+      color: var(--color-fg-subtle);
+      font-family: var(--font-mono);
+    }
+    .kbd {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 20px;
+      height: 18px;
+      padding: 0 4px;
+      border: 1px solid var(--color-border);
+      border-radius: 3px;
+      background: var(--color-bg-inset);
+      font-size: 0.6rem;
+      margin-right: 3px;
+    }
+
+    /* ============================================================
+       Reduced motion
+       ============================================================ */
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+      }
+    }
+
+    /* ============================================================
+       Mobile refinements
+       ============================================================ */
+    @media (max-width: 640px) {
+      .floor { padding: var(--space-3); gap: var(--space-3); }
+      .header { padding: var(--space-2) var(--space-3); }
+      .header-center { display: none; }
+      .kbd-hints { display: none; }
+      .pipeline { font-size: 0.65rem; }
+      .token-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+
+<body>
+  <!-- Header -->
+  <header class="header" role="banner">
+    <div class="header-left">
+      <div class="live-dot" id="liveDot" title="Connection status"></div>
+      <span class="header-title">MCT Trading Floor</span>
+    </div>
+    <div class="header-center" id="headerCenter">
+      <div class="header-stat">
+        <span class="header-stat-label">Uptime</span>
+        <span class="header-stat-value" id="uptimeValue">--</span>
+      </div>
+      <div class="header-stat">
+        <span class="header-stat-label">Cycles</span>
+        <span class="header-stat-value" id="cycleCount">--</span>
+      </div>
+      <div class="header-stat" id="stateContainer">
+        <span class="state-badge idle" id="stateBadge">IDLE</span>
+      </div>
+    </div>
+    <div class="header-right">
+      <div class="kbd-hints">
+        <span><span class="kbd">Space</span> Refresh</span>
+        <span><span class="kbd">S</span> Scan</span>
+      </div>
+      <button class="toggle-btn active" id="autoRefreshBtn" aria-label="Toggle auto-refresh" aria-pressed="true">
+        Auto
+      </button>
+      <a href="/" class="back-link" aria-label="Back to dashboard">&larr; Dashboard</a>
+    </div>
+  </header>
+
+  <!-- Main Floor -->
+  <main class="floor" id="floorContainer">
+    <div class="placeholder" id="loadingPlaceholder">
+      <div>
+        <div class="placeholder-icon">&#x1F4E1;</div>
+        <div>Connecting to trading floor...</div>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    /* ============================================================
+       State
+       ============================================================ */
+    const POLL_INTERVAL = 3000;
+    const MAX_FEED_ENTRIES = 50;
+    const MAX_ACTIVITY_PER_ROOM = 5;
+
+    let isAutoRefresh = true;
+    let pollTimer = null;
+    let isConnected = false;
+    let previousData = null;
+    let feedEntries = [];
+
+    /* ============================================================
+       Helpers
+       ============================================================ */
+    function formatRelativeTime(ts) {
+      if (!ts) return '--';
+      const now = Date.now();
+      const diff = now - ts;
+      if (diff < 0) return 'just now';
+      if (diff < 5000) return 'just now';
+      if (diff < 60000) return Math.floor(diff / 1000) + 's ago';
+      if (diff < 3600000) return Math.floor(diff / 60000) + 'm ago';
+      if (diff < 86400000) return Math.floor(diff / 3600000) + 'h ago';
+      return Math.floor(diff / 86400000) + 'd ago';
+    }
+
+    function formatUptime(seconds) {
+      if (!seconds && seconds !== 0) return '--';
+      const d = Math.floor(seconds / 86400);
+      const h = Math.floor((seconds % 86400) / 3600);
+      const m = Math.floor((seconds % 3600) / 60);
+      const parts = [];
+      if (d > 0) parts.push(d + 'd');
+      parts.push(h + 'h');
+      parts.push(m + 'm');
+      return parts.join(' ');
+    }
+
+    function formatPrice(price, symbol) {
+      if (price == null) return '--';
+      const s = (symbol || '').toUpperCase();
+      if (s.includes('BTC')) return '$' + Number(price).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      if (s.includes('ETH') || s.includes('BNB') || s.includes('SOL'))
+        return '$' + Number(price).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      if (price >= 1) return '$' + Number(price).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 4 });
+      return '$' + Number(price).toLocaleString('en-US', { minimumFractionDigits: 4, maximumFractionDigits: 6 });
+    }
+
+    function escapeHtml(str) {
+      const el = document.createElement('span');
+      el.textContent = str;
+      return el.innerHTML;
+    }
+
+    function getAgentBadgeClass(agentName) {
+      const n = (agentName || '').toLowerCase();
+      if (n.includes('coordinator')) return 'coordinator';
+      if (n.includes('sentiment')) return 'sentiment';
+      if (n.includes('chart') || n.includes('scanner')) return 'chart';
+      if (n.includes('risk')) return 'risk';
+      if (n.includes('trader')) return 'trader';
+      if (n.includes('accountant')) return 'accountant';
+      if (n.includes('agent') && !n.includes('coordinator')) return 'token';
+      return 'unknown';
+    }
+
+    function getTypeIcon(type) {
+      switch (type) {
+        case 'success': return '\u2713';
+        case 'error': return '\u2717';
+        case 'trade': return '\u25C6';
+        case 'skip': return '\u25CB';
+        case 'warning': return '\u26A0';
+        case 'info': return '\u25CF';
+        default: return '\u25CF';
+      }
+    }
+
+    /* ============================================================
+       Render: Coordinator
+       ============================================================ */
+    function renderCoordinator(health) {
+      const state = health.state || 'stopped';
+      const isCycleActive = health.cycleRunning;
+      const stageNames = ['Sentiment', 'Scanner', 'Risk', 'Trader', 'Accountant'];
+
+      return `
+        <div class="room coordinator-room state-${state}" role="region" aria-label="Coordinator Agent">
+          <div class="scan-line"></div>
+          <div class="room-header">
+            <div class="room-icon">&#x1F3DB;</div>
+            <div class="room-meta">
+              <div class="room-name">${escapeHtml(health.name || 'Coordinator')}</div>
+              <div class="room-role">Pipeline Orchestrator</div>
+            </div>
+            <div class="room-state-dot ${state}" title="${state}"></div>
+            <span class="state-badge ${state}">${state}</span>
+          </div>
+          <div class="pipeline ${isCycleActive ? 'cycle-active' : ''}">
+            ${stageNames.map(name => `
+              <div class="pipeline-stage" data-stage="${name.toLowerCase()}">${name}</div>
+              ${name !== 'Accountant' ? '<div class="pipeline-arrow">\u2192<div class="particle"></div></div>' : ''}
+            `).join('')}
+          </div>
+          <div class="room-stats">
+            <div class="stat-block">
+              <div class="stat-label">Cycles</div>
+              <div class="stat-value accent">${health.runCount ?? '--'}</div>
+            </div>
+            <div class="stat-block">
+              <div class="stat-label">Last Run</div>
+              <div class="stat-value">${formatRelativeTime(health.lastRunAt)}</div>
+            </div>
+            <div class="stat-block">
+              <div class="stat-label">Paused</div>
+              <div class="stat-value ${health.paused ? 'danger' : 'success'}">${health.paused ? 'YES' : 'NO'}</div>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    /* ============================================================
+       Render: System Agents
+       ============================================================ */
+    function renderSentiment(agent) {
+      if (!agent) return '';
+      const state = agent.state || 'stopped';
+      const moodEmoji = agent.mood === 'bullish' ? '\u{1F402}' : agent.mood === 'bearish' ? '\u{1F43B}' : '\u{2696}';
+      return `
+        <div class="room state-${state}" role="region" aria-label="Sentiment Agent">
+          <div class="scan-line"></div>
+          <div class="room-header">
+            <div class="room-icon">${moodEmoji}</div>
+            <div class="room-meta">
+              <div class="room-name">${escapeHtml(agent.name || 'SentimentAgent')}</div>
+              <div class="room-role">Market Mood Analyzer</div>
+            </div>
+            <div class="room-state-dot ${state}" title="${state}"></div>
+          </div>
+          ${agent.currentTask ? `<div class="current-task"><div class="task-spinner"></div>${escapeHtml(agent.currentTask.description || 'Working...')}</div>` : ''}
+          <div class="room-stats">
+            <div class="stat-block">
+              <div class="stat-label">Mood</div>
+              <div class="stat-value accent">${escapeHtml(agent.mood || '--')}</div>
+            </div>
+            <div class="stat-block">
+              <div class="stat-label">Coins</div>
+              <div class="stat-value">${agent.coinsTracked ?? '--'}</div>
+            </div>
+            <div class="stat-block">
+              <div class="stat-label">Extremes</div>
+              <div class="stat-value ${(agent.extremeEvents || 0) > 0 ? 'danger' : ''}">${agent.extremeEvents ?? 0}</div>
+            </div>
+          </div>
+          <div class="activity-feed">${renderActivityList(agent.recentActivity)}</div>
+        </div>
+      `;
+    }
+
+    function renderChart(agent) {
+      if (!agent) return '';
+      const state = agent.state || 'stopped';
+      return `
+        <div class="room state-${state}" role="region" aria-label="Chart Agent">
+          <div class="scan-line"></div>
+          <div class="room-header">
+            <div class="room-icon">&#x1F4CA;</div>
+            <div class="room-meta">
+              <div class="room-name">${escapeHtml(agent.name || 'ChartAgent')}</div>
+              <div class="room-role">Technical Scanner</div>
+            </div>
+            <div class="room-state-dot ${state}" title="${state}"></div>
+          </div>
+          ${agent.currentTask ? `<div class="current-task"><div class="task-spinner"></div>${escapeHtml(agent.currentTask.description || 'Scanning...')}</div>` : ''}
+          <div class="room-stats">
+            <div class="stat-block">
+              <div class="stat-label">Signals</div>
+              <div class="stat-value accent">${agent.lastSignalCount ?? '--'}</div>
+            </div>
+            <div class="stat-block">
+              <div class="stat-label">Scans</div>
+              <div class="stat-value">${agent.totalScans ?? '--'}</div>
+            </div>
+            <div class="stat-block">
+              <div class="stat-label">Runs</div>
+              <div class="stat-value">${agent.runCount ?? '--'}</div>
+            </div>
+          </div>
+          <div class="activity-feed">${renderActivityList(agent.recentActivity)}</div>
+        </div>
+      `;
+    }
+
+    function renderRisk(agent) {
+      if (!agent) return '';
+      const state = agent.state || 'stopped';
+      const approved = agent.signalsApproved || 0;
+      const rejected = agent.signalsRejected || 0;
+      const total = approved + rejected;
+      const approvePercent = total > 0 ? (approved / total) * 100 : 50;
+      return `
+        <div class="room state-${state}" role="region" aria-label="Risk Agent">
+          <div class="scan-line"></div>
+          <div class="room-header">
+            <div class="room-icon">&#x1F6E1;</div>
+            <div class="room-meta">
+              <div class="room-name">${escapeHtml(agent.name || 'RiskAgent')}</div>
+              <div class="room-role">Risk Gatekeeper</div>
+            </div>
+            <div class="room-state-dot ${state}" title="${state}"></div>
+          </div>
+          <div class="room-stats">
+            <div class="stat-block">
+              <div class="stat-label">Approved</div>
+              <div class="stat-value success">${approved}</div>
+            </div>
+            <div class="stat-block">
+              <div class="stat-label">Rejected</div>
+              <div class="stat-value danger">${rejected}</div>
+            </div>
+            <div class="stat-block">
+              <div class="stat-label">Consec. Loss</div>
+              <div class="stat-value ${(agent.consecutiveLosses || 0) >= 3 ? 'danger' : ''}">${agent.consecutiveLosses ?? 0}</div>
+            </div>
+          </div>
+          ${total > 0 ? `
+          <div style="display:flex;align-items:center;gap:var(--space-2);margin-bottom:var(--space-3);">
+            <span style="font-size:0.65rem;color:var(--color-fg-subtle);font-family:var(--font-mono);">${approved}/${total}</span>
+            <div class="ratio-bar" style="flex:1;">
+              <div class="ratio-fill-approve" style="width:${approvePercent}%"></div>
+              <div class="ratio-fill-reject" style="width:${100 - approvePercent}%"></div>
+            </div>
+          </div>` : ''}
+          <div class="activity-feed">${renderActivityList(agent.recentActivity)}</div>
+        </div>
+      `;
+    }
+
+    function renderTrader(agent) {
+      if (!agent) return '';
+      const state = agent.state || 'stopped';
+      return `
+        <div class="room state-${state}" role="region" aria-label="Trader Agent">
+          <div class="scan-line"></div>
+          <div class="room-header">
+            <div class="room-icon">&#x1F4B0;</div>
+            <div class="room-meta">
+              <div class="room-name">${escapeHtml(agent.name || 'TraderAgent')}</div>
+              <div class="room-role">Trade Executor</div>
+            </div>
+            <div class="room-state-dot ${state}" title="${state}"></div>
+          </div>
+          ${agent.currentTask ? `<div class="current-task"><div class="task-spinner"></div>${escapeHtml(agent.currentTask.description || 'Executing...')}</div>` : ''}
+          <div class="room-stats">
+            <div class="stat-block">
+              <div class="stat-label">Open</div>
+              <div class="stat-value accent">${agent.openPositions ?? '--'}</div>
+            </div>
+            <div class="stat-block">
+              <div class="stat-label">Executed</div>
+              <div class="stat-value success">${agent.tradesExecuted ?? '--'}</div>
+            </div>
+            <div class="stat-block">
+              <div class="stat-label">Skipped</div>
+              <div class="stat-value">${agent.tradesSkipped ?? '--'}</div>
+            </div>
+          </div>
+          <div class="activity-feed">${renderActivityList(agent.recentActivity)}</div>
+        </div>
+      `;
+    }
+
+    /* ============================================================
+       Render: Activity list (shared)
+       ============================================================ */
+    function renderActivityList(activities) {
+      if (!activities || activities.length === 0) {
+        return '<div style="font-size:var(--text-xs);color:var(--color-fg-subtle);font-family:var(--font-mono);padding:var(--space-2) 0;">No recent activity</div>';
+      }
+      return activities.slice(0, MAX_ACTIVITY_PER_ROOM).map(a => `
+        <div class="activity-item">
+          <div class="activity-dot ${a.type || 'info'}"></div>
+          <span class="activity-msg">${escapeHtml(a.message || '')}</span>
+          <span class="activity-time">${formatRelativeTime(a.ts)}</span>
+        </div>
+      `).join('');
+    }
+
+    /* ============================================================
+       Render: Token Agents
+       ============================================================ */
+    function renderTokenAgents(agents) {
+      const tokenAgents = Object.entries(agents)
+        .filter(([, a]) => a.tokenAgent)
+        .sort(([, a], [, b]) => {
+          const pa = a.lastPrice || 0;
+          const pb = b.lastPrice || 0;
+          return pb - pa;
+        });
+
+      if (tokenAgents.length === 0) return '';
+
+      const cards = tokenAgents.map(([key, agent]) => {
+        const dir = agent.lastSignal?.direction;
+        const signalClass = dir === 'LONG' ? 'signal-long' : dir === 'SHORT' ? 'signal-short' : '';
+        const signalTextClass = dir === 'LONG' ? 'long' : dir === 'SHORT' ? 'short' : 'none';
+        const arrow = dir === 'LONG' ? '\u2191' : dir === 'SHORT' ? '\u2193' : '\u2014';
+        const symbol = agent.symbol || key.toUpperCase();
+        const displayName = symbol.replace('USDT', '');
+
+        return `
+          <div class="token-card ${signalClass}" role="listitem">
+            <div class="token-info">
+              <div class="token-symbol">${escapeHtml(displayName)}</div>
+              <div class="token-price">${formatPrice(agent.lastPrice, symbol)}</div>
+            </div>
+            <div style="text-align:right;">
+              <div class="token-signal ${signalTextClass}">
+                <span class="token-signal-arrow">${arrow}</span>
+                ${dir ? escapeHtml(dir) : '--'}
+              </div>
+              <div class="token-signal-count">${agent.signalCount || 0} signals</div>
+            </div>
+          </div>
+        `;
+      }).join('');
+
+      return `
+        <div class="token-section">
+          <div class="token-section-header">
+            <div class="token-section-title">
+              Token Specialists
+              <span class="count-badge">${tokenAgents.length}</span>
+            </div>
+          </div>
+          <div class="token-grid" role="list">
+            ${cards}
+          </div>
+        </div>
+      `;
+    }
+
+    /* ============================================================
+       Render: Accountant
+       ============================================================ */
+    function renderAccountant(agent) {
+      if (!agent) return '';
+      const state = agent.state || 'stopped';
+      return `
+        <div class="room state-${state}" role="region" aria-label="Accountant Agent">
+          <div class="scan-line"></div>
+          <div class="room-header">
+            <div class="room-icon">&#x1F4D1;</div>
+            <div class="room-meta">
+              <div class="room-name">${escapeHtml(agent.name || 'AccountantAgent')}</div>
+              <div class="room-role">Trade Auditor</div>
+            </div>
+            <div class="room-state-dot ${state}" title="${state}"></div>
+          </div>
+          <div class="room-stats">
+            <div class="stat-block">
+              <div class="stat-label">Audits</div>
+              <div class="stat-value">${agent.auditsRun ?? '--'}</div>
+            </div>
+            <div class="stat-block">
+              <div class="stat-label">Fixed</div>
+              <div class="stat-value ${(agent.tradesFixed || 0) > 0 ? 'warning' : ''}">${agent.tradesFixed ?? 0}</div>
+            </div>
+            <div class="stat-block">
+              <div class="stat-label">Last Run</div>
+              <div class="stat-value">${formatRelativeTime(agent.lastRunAt)}</div>
+            </div>
+          </div>
+          <div class="activity-feed">${renderActivityList(agent.recentActivity)}</div>
+        </div>
+      `;
+    }
+
+    /* ============================================================
+       Render: Hermes
+       ============================================================ */
+    function renderHermes(hermes) {
+      if (!hermes) return `
+        <div class="hermes-card">
+          <div class="hermes-header">
+            <div class="room-icon">&#x1F9E0;</div>
+            <div class="room-meta">
+              <div class="room-name">Hermes AI</div>
+              <div class="room-role">Intelligence Layer</div>
+            </div>
+            <div class="hermes-indicator inactive">Offline</div>
+          </div>
+          <div style="font-size:var(--text-xs);color:var(--color-fg-subtle);font-family:var(--font-mono);">Not connected</div>
+        </div>
+      `;
+
+      const memories = (hermes.recentTeamMemory || []).map(m => `
+        <div class="hermes-memory">${escapeHtml(m)}</div>
+      `).join('');
+
+      return `
+        <div class="hermes-card">
+          <div class="hermes-header">
+            <div class="room-icon">&#x1F9E0;</div>
+            <div class="room-meta">
+              <div class="room-name">Hermes AI</div>
+              <div class="room-role">Intelligence Layer</div>
+            </div>
+            <div class="hermes-indicator ${hermes.installed ? 'active' : 'inactive'}">
+              ${hermes.installed ? 'Online' : 'Offline'}
+            </div>
+          </div>
+          <div class="room-stats">
+            <div class="stat-block">
+              <div class="stat-label">Skills</div>
+              <div class="stat-value accent">${hermes.skillCount ?? '--'}</div>
+            </div>
+            <div class="stat-block">
+              <div class="stat-label">Soul</div>
+              <div class="stat-value ${hermes.hasSoul ? 'success' : ''}">${hermes.hasSoul ? 'Loaded' : 'No'}</div>
+            </div>
+            <div class="stat-block">
+              <div class="stat-label">Memory</div>
+              <div class="stat-value">${hermes.teamMemoryEntries ?? 0}</div>
+            </div>
+          </div>
+          ${memories ? `<div class="hermes-memories">${memories}</div>` : ''}
+        </div>
+      `;
+    }
+
+    /* ============================================================
+       Render: Live Feed
+       ============================================================ */
+    function renderLiveFeed(activities) {
+      if (!activities || activities.length === 0) {
+        return `
+          <div class="live-feed">
+            <div class="live-feed-header">
+              <div class="live-feed-title">
+                <div class="live-dot" style="width:6px;height:6px;"></div>
+                Live Feed
+              </div>
+            </div>
+            <div style="font-size:var(--text-xs);color:var(--color-fg-subtle);font-family:var(--font-mono);padding:var(--space-4);text-align:center;">Waiting for activity...</div>
+          </div>
+        `;
+      }
+
+      // Merge new activities into feedEntries (deduplicate by ts + message)
+      activities.forEach(a => {
+        const key = a.ts + '|' + a.message;
+        if (!feedEntries.some(e => (e.ts + '|' + e.message) === key)) {
+          feedEntries.push(a);
+        }
+      });
+      feedEntries.sort((a, b) => (a.ts || 0) - (b.ts || 0));
+      if (feedEntries.length > MAX_FEED_ENTRIES) {
+        feedEntries = feedEntries.slice(feedEntries.length - MAX_FEED_ENTRIES);
+      }
+
+      const entries = feedEntries.map(a => {
+        const agentClass = getAgentBadgeClass(a.agent);
+        const agentLabel = (a.agent || 'System').replace('Agent', '');
+        return `
+          <div class="feed-entry">
+            <span class="feed-time">${formatRelativeTime(a.ts)}</span>
+            <span class="feed-agent-badge ${agentClass}">${escapeHtml(agentLabel)}</span>
+            <span class="feed-type-icon activity-dot ${a.type || 'info'}" style="display:inline-block;width:6px;height:6px;margin-top:4px;"></span>
+            <span class="feed-msg">${escapeHtml(a.message || '')}</span>
+          </div>
+        `;
+      }).join('');
+
+      return `
+        <div class="live-feed">
+          <div class="live-feed-header">
+            <div class="live-feed-title">
+              <div class="live-dot" style="width:6px;height:6px;"></div>
+              Live Feed
+            </div>
+            <span class="count-badge">${feedEntries.length}</span>
+          </div>
+          <div class="feed-scroll" id="feedScroll">
+            ${entries}
+          </div>
+        </div>
+      `;
+    }
+
+    /* ============================================================
+       Full Render
+       ============================================================ */
+    function renderFloor(data, hermes) {
+      const health = data.health || {};
+      const agents = health.agents || {};
+      const container = document.getElementById('floorContainer');
+
+      // Update header
+      document.getElementById('uptimeValue').textContent = formatUptime(data.uptime);
+      document.getElementById('cycleCount').textContent = health.runCount ?? '--';
+
+      const stateBadge = document.getElementById('stateBadge');
+      const state = health.state || 'stopped';
+      const displayState = health.cycleRunning ? 'SCANNING' : state.toUpperCase();
+      stateBadge.textContent = displayState;
+      stateBadge.className = 'state-badge ' + (health.cycleRunning ? 'running' : state);
+
+      // Render all sections
+      const html = [
+        renderCoordinator(health),
+        '<div class="system-grid">',
+          renderSentiment(agents.sentiment),
+          renderChart(agents.chart),
+          renderRisk(agents.risk),
+          renderTrader(agents.trader),
+        '</div>',
+        renderTokenAgents(agents),
+        '<div class="bottom-row">',
+          renderAccountant(agents.accountant),
+          renderHermes(hermes),
+        '</div>',
+        renderLiveFeed(data.activity),
+      ].join('');
+
+      container.innerHTML = html;
+
+      // Auto-scroll feed
+      requestAnimationFrame(() => {
+        const feedScroll = document.getElementById('feedScroll');
+        if (feedScroll) {
+          feedScroll.scrollTop = feedScroll.scrollHeight;
+        }
+      });
+    }
+
+    /* ============================================================
+       Auth — Reuse token from main dashboard (localStorage)
+       ============================================================ */
+    function getAuthHeaders() {
+      const token = localStorage.getItem('token');
+      if (!token) return {};
+      return { 'Authorization': 'Bearer ' + token };
+    }
+
+    /* ============================================================
+       Data Fetching
+       ============================================================ */
+    async function fetchData() {
+      try {
+        const headers = getAuthHeaders();
+        const [healthRes, hermesRes] = await Promise.all([
+          fetch('/api/admin/agents/health', { headers }),
+          fetch('/api/dashboard/hermes-status', { headers }).catch(() => null),
+        ]);
+
+        if (!healthRes.ok) throw new Error('Health API returned ' + healthRes.status);
+
+        const data = await healthRes.json();
+        const hermes = hermesRes && hermesRes.ok ? await hermesRes.json() : null;
+
+        if (!isConnected) {
+          isConnected = true;
+          document.getElementById('liveDot').classList.remove('disconnected');
+        }
+
+        previousData = data;
+        renderFloor(data, hermes);
+      } catch (err) {
+        console.error('Fetch error:', err);
+        isConnected = false;
+        document.getElementById('liveDot').classList.add('disconnected');
+
+        const container = document.getElementById('floorContainer');
+        if (!previousData) {
+          container.innerHTML = `
+            <div class="placeholder">
+              <div>
+                <div class="placeholder-icon" style="color:var(--color-danger);">&#x26A0;</div>
+                <div style="color:var(--color-danger);margin-bottom:var(--space-2);">Disconnected</div>
+                <div style="font-size:var(--text-xs);color:var(--color-fg-subtle);">Unable to reach the trading floor API. Retrying...</div>
+              </div>
+            </div>
+          `;
+        }
+      }
+    }
+
+    /* ============================================================
+       Polling
+       ============================================================ */
+    function startPolling() {
+      stopPolling();
+      fetchData();
+      pollTimer = setInterval(fetchData, POLL_INTERVAL);
+    }
+
+    function stopPolling() {
+      if (pollTimer) {
+        clearInterval(pollTimer);
+        pollTimer = null;
+      }
+    }
+
+    function toggleAutoRefresh() {
+      isAutoRefresh = !isAutoRefresh;
+      const btn = document.getElementById('autoRefreshBtn');
+      btn.classList.toggle('active', isAutoRefresh);
+      btn.setAttribute('aria-pressed', String(isAutoRefresh));
+      if (isAutoRefresh) {
+        startPolling();
+      } else {
+        stopPolling();
+      }
+    }
+
+    /* ============================================================
+       Keyboard Shortcuts
+       ============================================================ */
+    document.addEventListener('keydown', (e) => {
+      // Ignore if user is typing in an input
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+
+      if (e.code === 'Space') {
+        e.preventDefault();
+        toggleAutoRefresh();
+      }
+      if (e.code === 'KeyS' && !e.ctrlKey && !e.metaKey) {
+        e.preventDefault();
+        fetchData();
+      }
+    });
+
+    /* ============================================================
+       Init
+       ============================================================ */
+    document.getElementById('autoRefreshBtn').addEventListener('click', toggleAutoRefresh);
+
+    // Check auth — redirect to dashboard login if no token
+    if (!localStorage.getItem('token')) {
+      document.getElementById('floorContainer').innerHTML = `
+        <div class="placeholder">
+          <div>
+            <div class="placeholder-icon">&#x1F512;</div>
+            <div>Authentication Required</div>
+            <div style="font-size:var(--text-sm);color:var(--color-fg-subtle);margin-top:var(--space-3);">
+              <a href="/">Log in on the dashboard</a> first, then return here.
+            </div>
+          </div>
+        </div>
+      `;
+    } else {
+      startPolling();
+    }
+  </script>
+</body>
+</html>
