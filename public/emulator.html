@@ -16,35 +16,124 @@
       --px-gold:#d4af37; --px-gold2:#e8c84a; --px-skin:#f0e8df; --px-skindk:#d4c4a8;
       --px-hair:#5a4a3a; --px-blue:#3b82f6; --px-green:#34d399; --px-red:#f43f5e;
       --px-purple:#a78bfa; --px-pants:#2a2438; --px-dark:#08070c; --px-glass:#93c5fd;
+
+      --cyber-glow:rgba(212,175,55,.35);
+      --cyber-cyan:#22d3ee;
+      --cyber-cyan-glow:rgba(34,211,238,.25);
+      --glass-bg:rgba(14,12,20,.72);
+      --glass-border:rgba(255,255,255,.06);
+      --panel-radius:8px;
+      --sidebar-w:280px;
+      --duration-fast:.15s;
+      --duration-normal:.3s;
     }
     *,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
     body{font-family:'IBM Plex Sans',sans-serif;color:var(--fg);background:var(--bg);min-height:100vh;overflow-x:hidden}
 
+    /* Scan lines overlay on entire page */
+    body::after{
+      content:'';position:fixed;inset:0;z-index:9999;pointer-events:none;
+      background:repeating-linear-gradient(
+        0deg,
+        transparent 0px,transparent 2px,
+        rgba(0,0,0,.04) 2px,rgba(0,0,0,.04) 4px
+      );
+    }
+
     /* ═══ HEADER ═══ */
-    .hdr{position:sticky;top:0;z-index:50;display:flex;align-items:center;justify-content:space-between;padding:6px 20px;background:rgba(8,7,12,.92);backdrop-filter:blur(12px);border-bottom:1px solid var(--border2);gap:12px}
+    .hdr{position:sticky;top:0;z-index:50;display:flex;align-items:center;justify-content:space-between;padding:6px 20px;background:rgba(8,7,12,.94);backdrop-filter:blur(16px);border-bottom:1px solid var(--border2);gap:12px}
+    .hdr::after{content:'';position:absolute;bottom:0;left:0;right:0;height:1px;background:linear-gradient(90deg,transparent,var(--accent),var(--cyber-cyan),var(--accent),transparent);opacity:.4}
     .hdr-left{display:flex;align-items:center;gap:10px}
-    .dot{width:8px;height:8px;border-radius:50%;background:var(--success);box-shadow:0 0 6px var(--success);animation:pulse 2s ease-in-out infinite}
+    .dot{width:8px;height:8px;border-radius:50%;background:var(--success);box-shadow:0 0 6px var(--success),0 0 12px var(--success);animation:pulse 2s ease-in-out infinite}
     .dot.off{background:var(--danger);box-shadow:0 0 6px var(--danger)}
     @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
-    .hdr-title{font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:1.1rem;color:var(--accent)}
+    .hdr-title{font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:1.1rem;color:var(--accent);text-shadow:0 0 12px var(--cyber-glow)}
     .hdr-center{display:flex;gap:20px}
     .hdr-stat{display:flex;flex-direction:column;align-items:center;gap:1px}
     .hdr-stat-l{font-size:.6rem;color:var(--fg3);text-transform:uppercase;letter-spacing:.5px}
     .hdr-stat-v{font-family:'JetBrains Mono',monospace;font-size:.8rem}
     .badge{font-family:'JetBrains Mono',monospace;font-size:.6rem;font-weight:600;padding:2px 8px;border-radius:99px;border:1px solid var(--border)}
-    .badge.idle{color:var(--fg2)}.badge.running{color:var(--accent);border-color:var(--accent);background:rgba(212,175,55,.1)}
+    .badge.idle{color:var(--fg2)}.badge.running{color:var(--accent);border-color:var(--accent);background:rgba(212,175,55,.1);box-shadow:0 0 8px var(--cyber-glow)}
     .hdr-right{display:flex;align-items:center;gap:10px}
     .back-link{color:var(--fg2);text-decoration:none;font-size:.85rem}.back-link:hover{color:var(--accent)}
-    .tbtn{background:0;border:1px solid var(--border);border-radius:99px;color:var(--fg3);padding:3px 12px;font-size:.75rem;cursor:pointer}
-    .tbtn.on{border-color:var(--accent);color:var(--accent)}
+    .tbtn{background:0;border:1px solid var(--border);border-radius:99px;color:var(--fg3);padding:3px 12px;font-size:.75rem;cursor:pointer;transition:all var(--duration-fast)}
+    .tbtn.on{border-color:var(--accent);color:var(--accent);box-shadow:0 0 8px var(--cyber-glow)}
+
+    /* ═══ MAIN LAYOUT ═══ */
+    .main-layout{display:flex;gap:0;min-height:calc(100vh - 44px)}
+
+    /* ═══ LEFT SIDEBAR ═══ */
+    .sidebar{
+      width:var(--sidebar-w);min-width:var(--sidebar-w);max-width:var(--sidebar-w);
+      background:var(--glass-bg);backdrop-filter:blur(12px);
+      border-right:1px solid var(--border2);
+      display:flex;flex-direction:column;overflow:hidden;
+      position:relative;
+    }
+    .sidebar::after{content:'';position:absolute;top:0;right:0;bottom:0;width:1px;background:linear-gradient(180deg,transparent,var(--accent),transparent);opacity:.2;pointer-events:none}
+    .sidebar-hdr{
+      padding:12px 14px;border-bottom:1px solid var(--border2);flex-shrink:0;
+      display:flex;align-items:center;gap:8px;
+      background:rgba(0,0,0,.25);
+    }
+    .sidebar-hdr-title{font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:.85rem;color:var(--cyber-cyan);text-transform:uppercase;letter-spacing:1px}
+    .sidebar-hdr-count{font-family:'JetBrains Mono',monospace;font-size:.6rem;color:var(--fg3);background:var(--surface2);padding:1px 6px;border-radius:99px;border:1px solid var(--border)}
+    .sidebar-scroll{flex:1;overflow-y:auto;padding:6px;scrollbar-width:thin;scrollbar-color:var(--border) transparent}
+
+    /* Sidebar agent cards */
+    .sb-card{
+      background:rgba(20,18,30,.6);border:1px solid var(--border2);border-radius:6px;
+      padding:8px 10px;margin-bottom:4px;cursor:default;transition:border-color var(--duration-fast),box-shadow var(--duration-fast);
+      position:relative;overflow:hidden;
+    }
+    .sb-card:hover{border-color:var(--border)}
+    .sb-card.on{border-color:rgba(212,175,55,.35);box-shadow:inset 0 0 12px rgba(212,175,55,.05)}
+    .sb-card.on::before{
+      content:'';position:absolute;top:0;left:0;bottom:0;width:2px;
+      background:var(--accent);box-shadow:0 0 6px var(--cyber-glow);
+    }
+    .sb-card.err{border-color:rgba(244,63,94,.4)}
+    .sb-card.err::before{content:'';position:absolute;top:0;left:0;bottom:0;width:2px;background:var(--danger);box-shadow:0 0 6px rgba(244,63,94,.3)}
+    .sb-card.jailed-card{border-color:rgba(244,63,94,.4);cursor:pointer}
+    .sb-card.jailed-card::before{content:'';position:absolute;top:0;left:0;bottom:0;width:2px;background:var(--danger);box-shadow:0 0 6px rgba(244,63,94,.3)}
+    /* Animated border for running agents */
+    @keyframes borderGlow{0%,100%{border-color:rgba(212,175,55,.2)}50%{border-color:rgba(212,175,55,.5)}}
+    .sb-card.running-anim{animation:borderGlow 2.5s ease-in-out infinite}
+
+    .sb-top{display:flex;align-items:center;gap:8px;margin-bottom:4px}
+    .sb-av{width:28px;height:28px;background:var(--surface2);border-radius:4px;display:flex;align-items:center;justify-content:center;border:1px solid var(--border2);flex-shrink:0;position:relative;overflow:hidden;image-rendering:pixelated}
+    .sb-av .pxs{transform:scale(.9);transform-origin:center;position:absolute;top:0;left:2px}
+    .sb-info{flex:1;min-width:0}
+    .sb-name{font-family:'Space Grotesk',sans-serif;font-weight:600;font-size:.75rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.2}
+    .sb-role{font-size:.55rem;color:var(--fg3);line-height:1.2}
+    .sb-state{font-family:'JetBrains Mono',monospace;font-size:.5rem;font-weight:600;padding:1px 5px;border-radius:99px;border:1px solid var(--border);white-space:nowrap;flex-shrink:0}
+    .sb-state.running{color:var(--accent);border-color:var(--accent);background:rgba(212,175,55,.12);box-shadow:0 0 6px var(--cyber-glow)}
+    .sb-state.error{color:var(--danger);border-color:var(--danger);box-shadow:0 0 4px rgba(244,63,94,.2)}
+    .sb-state.idle{color:var(--fg3)}
+    .sb-state.jailed{color:var(--danger);border-color:var(--danger);background:rgba(244,63,94,.1)}
+    .sb-state.stopped{color:var(--fg3)}
+    .sb-state.paused{color:var(--warn);border-color:var(--warn)}
+
+    .sb-xp-row{display:flex;align-items:center;gap:4px;margin-bottom:3px}
+    .sb-lvl{font-family:'Press Start 2P',monospace;font-size:5px;color:var(--accent);white-space:nowrap}
+    .sb-xp-bar{flex:1;height:4px;background:var(--bg);border-radius:99px;overflow:hidden;border:1px solid rgba(255,255,255,.04)}
+    .sb-xp-fill{height:100%;border-radius:99px;background:linear-gradient(90deg,var(--accent),var(--accent2));transition:width .5s;min-width:1px}
+    .sb-xp-txt{font-family:'JetBrains Mono',monospace;font-size:.45rem;color:var(--fg3);white-space:nowrap}
+
+    .sb-task{font-family:'JetBrains Mono',monospace;font-size:.5rem;color:var(--fg2);display:flex;align-items:center;gap:3px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .sb-task .td{width:4px;height:4px;border-radius:50%;background:var(--accent);animation:pulse 1s ease-in-out infinite;flex-shrink:0}
+    .sb-mood{font-size:.5rem;color:var(--fg3);margin-top:1px}
+
+    /* ═══ CENTER CONTENT ═══ */
+    .center-content{flex:1;min-width:0;display:flex;flex-direction:column;overflow-y:auto;padding:0}
 
     /* ═══ MAP CONTAINER ═══ */
-    .map-wrap{padding:16px;display:flex;justify-content:center}
+    .map-wrap{padding:12px 16px 8px;display:flex;justify-content:center;flex-shrink:0}
     .rpg-map{
-      position:relative;width:100%;max-width:960px;aspect-ratio:1/1;
-      background:var(--corridor);border:4px solid #333;border-radius:6px;
+      position:relative;width:100%;max-width:720px;aspect-ratio:1/1;
+      background:var(--corridor);border:3px solid #333;border-radius:6px;
       image-rendering:pixelated;overflow:hidden;
-      box-shadow:0 0 40px rgba(0,0,0,.6),inset 0 0 60px rgba(0,0,0,.3);
+      box-shadow:0 0 40px rgba(0,0,0,.6),inset 0 0 60px rgba(0,0,0,.3),0 0 80px rgba(212,175,55,.05);
     }
 
     /* ═══ ROOMS — 3x3 grid ═══ */
@@ -66,15 +155,14 @@
     .rm-briefing{left:0%;top:55%;width:32%;height:22%;background:linear-gradient(135deg,#18140c,#141008)}
     .rm-resting{left:34%;top:55%;width:32%;height:22%;background:linear-gradient(135deg,#12100a,#0e0c08)}
     .rm-vault{left:68%;top:55%;width:32%;height:22%;background:linear-gradient(135deg,#1a1810,#16140c)}
-    /* Row 4 — Prison & Police HQ */
+    /* Row 4 */
     .rm-prison{left:0%;top:79%;width:50%;height:21%;background:linear-gradient(135deg,#1a0c0c,#140808);border-color:#4b2020}
     .rm-yard{left:52%;top:79%;width:48%;height:21%;background:linear-gradient(135deg,#0c1428,#081020);border-color:#1e3a5f}
 
-    /* Door gaps — overlay strips that hide wall */
+    /* Door gaps */
     .door{position:absolute;background:var(--corridor);z-index:3}
     .door-h{height:8px;width:10%}
     .door-v{width:8px;height:10%}
-    /* Door markers — colored rectangles at gap positions */
     .door-mark{position:absolute;z-index:4;border-radius:1px;opacity:.6}
     .door-mark-h{width:14px;height:4px;background:var(--accent)}
     .door-mark-v{width:4px;height:14px;background:var(--accent)}
@@ -97,10 +185,8 @@
       opacity:.3}
     .safe{background:#333;border:2px solid #555;width:4.5%;height:6%;border-radius:2px}
     .safe::after{content:'';position:absolute;top:35%;left:50%;transform:translateX(-50%);width:20%;height:25%;background:var(--accent);opacity:.3;border-radius:50%}
-    /* Briefing room table */
     .round-table{background:#2a2420;border:2px solid #3a3430;width:10%;height:10%;border-radius:50%;opacity:.7}
     .round-table::after{content:'';position:absolute;inset:20%;background:#1a1410;border-radius:50%;opacity:.5}
-    /* Vault gold bar */
     .gold-bar{background:var(--accent);width:3%;height:2%;border-radius:1px;opacity:.25;border:1px solid var(--accent2)}
 
     /* ═══ PIXEL CHARACTERS ═══ */
@@ -135,7 +221,7 @@
     .agent-char.working .pxs{animation:work-bob .4s steps(2) infinite;filter:drop-shadow(0 0 4px rgba(212,175,55,.4))}
     .agent-char.dizzy .pxs{animation:err-spin .5s ease-in-out infinite;filter:drop-shadow(0 0 3px rgba(244,63,94,.5))}
     .agent-char.jailed .pxs{opacity:.5;animation:jail-shake .6s ease-in-out infinite;filter:grayscale(.7) drop-shadow(0 0 3px rgba(244,63,94,.4))}
-    .agent-char.jailed::before{content:'⛓️';position:absolute;top:-14px;left:50%;transform:translateX(-50%);font-size:8px;animation:jail-rattle 1.5s ease-in-out infinite}
+    .agent-char.jailed::before{content:'';position:absolute;top:-14px;left:50%;transform:translateX(-50%);font-size:8px;animation:jail-rattle 1.5s ease-in-out infinite}
     .agent-char.asleep .pxs{opacity:.35;animation:none}
     .agent-char.asleep::before{content:'z z z';position:absolute;top:-16px;left:50%;transform:translateX(-50%);font-family:'Press Start 2P',monospace;font-size:4px;color:var(--fg3);animation:zzz 2s ease-in-out infinite;white-space:nowrap}
     @keyframes walk-bob{0%,100%{transform:scale(2) translateY(0)}50%{transform:scale(2) translateY(-3px)}}
@@ -146,7 +232,7 @@
     @keyframes jail-shake{0%,100%{transform:scale(2) translateX(0)}25%{transform:scale(2) translateX(-1px)}75%{transform:scale(2) translateX(1px)}}
     @keyframes jail-rattle{0%,100%{transform:translateX(-50%) rotate(0)}30%{transform:translateX(-50%) rotate(-8deg)}60%{transform:translateX(-50%) rotate(8deg)}}
 
-    /* ═══ SPRITES (box-shadow pixel art) ═══ */
+    /* ═══ SPRITES ═══ */
     .sp-coord{box-shadow:6px 0 var(--px-gold),12px 0 var(--px-gold2),18px 0 var(--px-gold),3px 3px var(--px-gold),6px 3px var(--px-gold2),9px 3px var(--px-gold),12px 3px var(--px-gold2),15px 3px var(--px-gold),18px 3px var(--px-gold2),21px 3px var(--px-gold),3px 6px var(--px-gold),6px 6px var(--px-gold2),9px 6px var(--px-gold2),12px 6px var(--px-gold2),15px 6px var(--px-gold2),18px 6px var(--px-gold2),21px 6px var(--px-gold),6px 9px var(--px-skin),9px 9px var(--px-skin),12px 9px var(--px-skin),15px 9px var(--px-skin),18px 9px var(--px-skin),6px 12px var(--px-skin),9px 12px var(--px-dark),12px 12px var(--px-skin),15px 12px var(--px-dark),18px 12px var(--px-skin),6px 15px var(--px-skin),9px 15px var(--px-skin),12px 15px var(--px-skindk),15px 15px var(--px-skin),18px 15px var(--px-skin),3px 18px var(--px-gold),6px 18px #1a1726,9px 18px #1a1726,12px 18px var(--px-gold),15px 18px #1a1726,18px 18px #1a1726,21px 18px var(--px-gold),3px 21px var(--px-gold),6px 21px #1a1726,9px 21px #1a1726,12px 21px var(--px-gold),15px 21px #1a1726,18px 21px #1a1726,21px 21px var(--px-gold),0px 18px var(--px-skindk),24px 18px var(--px-skindk),6px 24px var(--px-pants),9px 24px var(--px-pants),15px 24px var(--px-pants),18px 24px var(--px-pants),6px 27px var(--px-pants),9px 27px var(--px-pants),15px 27px var(--px-pants),18px 27px var(--px-pants),6px 30px var(--px-hair),9px 30px var(--px-hair),15px 30px var(--px-hair),18px 30px var(--px-hair)}
     .sp-sent{box-shadow:6px 0 var(--px-hair),9px 0 var(--px-hair),12px 0 var(--px-hair),15px 0 var(--px-hair),3px 3px var(--px-hair),6px 3px var(--px-hair),9px 3px var(--px-hair),12px 3px var(--px-hair),15px 3px var(--px-hair),18px 3px var(--px-hair),6px 6px var(--px-skin),9px 6px var(--px-skin),12px 6px var(--px-skin),15px 6px var(--px-skin),6px 9px var(--px-skin),9px 9px var(--px-dark),12px 9px var(--px-skin),15px 9px var(--px-dark),6px 12px var(--px-skin),9px 12px var(--px-skin),12px 12px var(--px-skindk),15px 12px var(--px-skin),3px 15px var(--px-blue),6px 15px var(--px-blue),9px 15px var(--px-blue),12px 15px var(--px-blue),15px 15px var(--px-blue),18px 15px var(--px-blue),3px 18px var(--px-blue),6px 18px #2563eb,9px 18px var(--px-blue),12px 18px var(--px-blue),15px 18px #2563eb,18px 18px var(--px-blue),3px 21px var(--px-blue),6px 21px var(--px-blue),9px 21px var(--px-blue),12px 21px var(--px-blue),15px 21px var(--px-blue),18px 21px var(--px-blue),21px 18px var(--px-skindk),0px 18px var(--px-skindk),6px 24px var(--px-pants),9px 24px var(--px-pants),12px 24px var(--px-pants),15px 24px var(--px-pants),6px 27px var(--px-pants),9px 27px var(--px-pants),15px 27px var(--px-pants),6px 30px var(--px-hair),9px 30px var(--px-hair),15px 30px var(--px-hair)}
     .sp-chart{box-shadow:6px 0 var(--px-hair),9px 0 var(--px-hair),12px 0 var(--px-hair),15px 0 var(--px-hair),3px 3px var(--px-hair),6px 3px var(--px-hair),9px 3px var(--px-hair),12px 3px var(--px-hair),15px 3px var(--px-hair),18px 3px var(--px-hair),6px 6px var(--px-skin),9px 6px var(--px-skin),12px 6px var(--px-skin),15px 6px var(--px-skin),6px 9px var(--px-skin),9px 9px var(--px-dark),12px 9px var(--px-skin),15px 9px var(--px-dark),6px 12px var(--px-skin),9px 12px var(--px-skin),12px 12px var(--px-skindk),15px 12px var(--px-skin),3px 15px var(--px-green),6px 15px var(--px-green),9px 15px var(--px-green),12px 15px var(--px-green),15px 15px var(--px-green),18px 15px var(--px-green),3px 18px var(--px-green),6px 18px #059669,9px 18px var(--px-green),12px 18px var(--px-green),15px 18px #059669,18px 18px var(--px-green),3px 21px var(--px-green),6px 21px var(--px-green),9px 21px var(--px-green),12px 21px var(--px-green),15px 21px var(--px-green),18px 21px var(--px-green),21px 18px var(--px-skindk),0px 18px var(--px-skindk),6px 24px var(--px-pants),9px 24px var(--px-pants),12px 24px var(--px-pants),15px 24px var(--px-pants),6px 27px var(--px-pants),9px 27px var(--px-pants),15px 27px var(--px-pants),6px 30px var(--px-hair),9px 30px var(--px-hair),15px 30px var(--px-hair)}
@@ -159,6 +245,80 @@
     .sp-coder{box-shadow:6px 0 #a855f7,9px 0 #a855f7,12px 0 #a855f7,15px 0 #a855f7,3px 3px #9333ea,6px 3px #a855f7,9px 3px #c084fc,12px 3px #c084fc,15px 3px #a855f7,18px 3px #9333ea,6px 6px var(--px-skin),9px 6px var(--px-skin),12px 6px var(--px-skin),15px 6px var(--px-skin),6px 9px var(--px-skin),9px 9px #22d3ee,12px 9px var(--px-skin),15px 9px #22d3ee,6px 12px var(--px-skin),9px 12px var(--px-skin),12px 12px var(--px-skindk),15px 12px var(--px-skin),3px 15px #7e22ce,6px 15px #9333ea,9px 15px #9333ea,12px 15px #22d3ee,15px 15px #9333ea,18px 15px #7e22ce,3px 18px #7e22ce,6px 18px #9333ea,9px 18px #a855f7,12px 18px #22d3ee,15px 18px #9333ea,18px 18px #7e22ce,21px 18px var(--px-skindk),0px 18px var(--px-skindk),6px 21px #9333ea,9px 21px #9333ea,12px 21px #9333ea,15px 21px #9333ea,6px 24px var(--px-pants),9px 24px var(--px-pants),15px 24px var(--px-pants),6px 27px var(--px-hair),9px 27px var(--px-hair),15px 27px var(--px-hair)}
     .sp-strat{box-shadow:6px 0 #f97316,9px 0 #f97316,12px 0 #f97316,15px 0 #f97316,3px 3px #ea580c,6px 3px #f97316,9px 3px #fb923c,12px 3px #fb923c,15px 3px #f97316,18px 3px #ea580c,6px 6px var(--px-skin),9px 6px var(--px-skin),12px 6px var(--px-skin),15px 6px var(--px-skin),6px 9px var(--px-skin),9px 9px var(--px-dark),12px 9px var(--px-skin),15px 9px var(--px-dark),6px 12px var(--px-skin),9px 12px var(--px-skin),12px 12px var(--px-skindk),15px 12px var(--px-skin),3px 15px #c2410c,6px 15px #ea580c,9px 15px #ea580c,12px 15px #f97316,15px 15px #ea580c,18px 15px #c2410c,3px 18px #c2410c,6px 18px #ea580c,9px 18px #f97316,12px 18px #fb923c,15px 18px #ea580c,18px 18px #c2410c,21px 18px var(--px-skindk),0px 18px var(--px-skindk),6px 21px #ea580c,9px 21px #ea580c,12px 21px #ea580c,15px 21px #ea580c,6px 24px var(--px-pants),9px 24px var(--px-pants),15px 24px var(--px-pants),6px 27px var(--px-hair),9px 27px var(--px-hair),15px 27px var(--px-hair)}
     .sp-token{box-shadow:6px 0 var(--px-gold),9px 0 var(--px-gold2),12px 0 var(--px-gold),6px 6px var(--px-skin),9px 6px var(--px-skin),12px 6px var(--px-skin),6px 9px var(--px-dark),9px 9px var(--px-skin),12px 9px var(--px-dark),3px 12px var(--px-gold),6px 12px var(--px-gold),9px 12px var(--px-gold),12px 12px var(--px-gold),15px 12px var(--px-gold),6px 15px var(--px-gold),9px 15px #b8922a,12px 15px var(--px-gold),6px 18px var(--px-pants),12px 18px var(--px-pants),6px 21px var(--px-hair),12px 21px var(--px-hair)}
+
+    /* ═══ BELOW-MAP PANELS ═══ */
+    .panels-row{display:grid;grid-template-columns:1fr 1fr;gap:8px;padding:0 16px 8px;max-width:752px;margin:0 auto;width:100%}
+    .panel{
+      background:var(--glass-bg);backdrop-filter:blur(10px);
+      border:1px solid var(--border2);border-radius:var(--panel-radius);
+      overflow:hidden;position:relative;
+    }
+    .panel::before{
+      content:'';position:absolute;top:0;left:0;right:0;height:1px;
+      background:linear-gradient(90deg,transparent,var(--glass-border),transparent);
+      pointer-events:none;
+    }
+    .panel-hdr{
+      display:flex;align-items:center;gap:6px;padding:8px 12px;
+      border-bottom:1px solid var(--border2);background:rgba(0,0,0,.2);
+    }
+    .panel-hdr-dot{width:6px;height:6px;border-radius:50%;animation:pulse 2s ease-in-out infinite;flex-shrink:0}
+    .panel-hdr-dot.live{background:var(--success);box-shadow:0 0 6px var(--success)}
+    .panel-hdr-dot.feed{background:var(--cyber-cyan);box-shadow:0 0 6px var(--cyber-cyan)}
+    .panel-hdr-title{font-family:'Space Grotesk',sans-serif;font-size:.7rem;font-weight:600;color:var(--fg2);text-transform:uppercase;letter-spacing:.5px}
+    .panel-body{max-height:200px;overflow-y:auto;scrollbar-width:thin;scrollbar-color:var(--border) transparent;padding:4px 0}
+
+    /* Log entries */
+    .log-entry{display:flex;gap:6px;padding:2px 10px;font-size:.65rem;color:var(--fg2);border-bottom:1px solid rgba(255,255,255,.015)}
+    .log-ts{font-family:'JetBrains Mono',monospace;font-size:.55rem;color:var(--fg3);flex-shrink:0;width:56px}
+    .log-level{font-family:'JetBrains Mono',monospace;font-size:.5rem;font-weight:600;padding:0 4px;border-radius:2px;flex-shrink:0;min-width:32px;text-align:center}
+    .log-level.info{color:var(--info);background:rgba(96,165,250,.1)}
+    .log-level.warn{color:var(--warn);background:rgba(251,191,36,.1)}
+    .log-level.error{color:var(--danger);background:rgba(244,63,94,.1)}
+    .log-level.debug{color:var(--fg3);background:rgba(255,255,255,.04)}
+    .log-msg{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:'JetBrains Mono',monospace;font-size:.55rem}
+
+    /* Feed entries */
+    .fe{display:flex;gap:6px;padding:2px 10px;font-size:.65rem;color:var(--fg2);border-bottom:1px solid rgba(255,255,255,.015)}
+    .fe-t{font-family:'JetBrains Mono',monospace;font-size:.55rem;color:var(--fg3);flex-shrink:0;width:48px}
+    .fe-b{font-family:'JetBrains Mono',monospace;font-size:.5rem;font-weight:600;padding:0 3px;border-radius:2px;flex-shrink:0}
+    .fe-b.b-coord{color:var(--accent);background:rgba(212,175,55,.1)}.fe-b.b-sent{color:var(--info);background:rgba(96,165,250,.1)}.fe-b.b-chart{color:var(--success);background:rgba(52,211,153,.1)}.fe-b.b-risk{color:var(--warn);background:rgba(251,191,36,.1)}.fe-b.b-trade{color:var(--accent);background:rgba(212,175,55,.1)}.fe-b.b-acct{color:var(--purple);background:rgba(167,139,250,.1)}.fe-b.b-tok{color:var(--fg2);background:var(--surface2)}
+    .fe-m{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+    .placeholder{display:flex;justify-content:center;align-items:center;min-height:120px;color:var(--fg3);font-size:.75rem;text-align:center}
+    .placeholder-icon{font-size:1.5rem;margin-bottom:8px;animation:pulse 2s ease-in-out infinite}
+
+    /* ═══ REWARD TOASTS ═══ */
+    .toast-container{position:fixed;bottom:20px;right:20px;z-index:200;display:flex;flex-direction:column-reverse;gap:6px;pointer-events:none;max-width:320px}
+    .toast{
+      padding:10px 16px;
+      background:rgba(14,12,20,.88);backdrop-filter:blur(12px);
+      border:1px solid var(--border2);border-radius:8px;
+      font-family:'JetBrains Mono',monospace;font-size:.75rem;color:var(--fg);
+      transform:translateX(120%);opacity:0;
+      animation:toastIn .4s ease-out forwards;
+      pointer-events:auto;position:relative;overflow:hidden;
+    }
+    .toast::before{content:'';position:absolute;top:0;left:0;bottom:0;width:3px;border-radius:3px 0 0 3px}
+    .toast.toast-xp::before{background:var(--accent);box-shadow:0 0 8px var(--cyber-glow)}
+    .toast.toast-xp{border-color:rgba(212,175,55,.3)}
+    .toast.toast-money::before{background:var(--success);box-shadow:0 0 8px rgba(52,211,153,.3)}
+    .toast.toast-money{border-color:rgba(52,211,153,.3)}
+    .toast.toast-trade::before{background:var(--info);box-shadow:0 0 8px rgba(96,165,250,.3)}
+    .toast.toast-trade{border-color:rgba(96,165,250,.3)}
+    .toast.toast-jail::before{background:var(--danger);box-shadow:0 0 8px rgba(244,63,94,.3)}
+    .toast.toast-jail{border-color:rgba(244,63,94,.3)}
+    .toast.toast-release::before{background:var(--success);box-shadow:0 0 8px rgba(52,211,153,.3)}
+    .toast.toast-release{border-color:rgba(52,211,153,.3)}
+
+    @keyframes toastIn{
+      0%{transform:translateX(120%);opacity:0}
+      100%{transform:translateX(0);opacity:1}
+    }
+    @keyframes toastOut{
+      0%{transform:translateX(0);opacity:1}
+      100%{transform:translateX(120%);opacity:0}
+    }
 
     /* ═══ JAIL MODAL ═══ */
     .jail-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:100;align-items:center;justify-content:center;backdrop-filter:blur(4px)}
@@ -191,51 +351,24 @@
     .btn-unjail-cancel:hover{border-color:var(--fg3);color:var(--fg)}
     .jail-improve{font-size:.75rem;color:var(--success);padding:8px 10px;background:rgba(34,197,94,.08);border:1px solid rgba(34,197,94,.2);border-radius:6px;display:none;margin-top:10px}
 
-    /* ═══ PROFILE CARDS ═══ */
-    .cards-wrap{padding:0 16px 16px}
-    .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px;max-width:960px;margin:0 auto}
-    .card{background:rgba(17,15,24,.7);border:1px solid var(--border2);border-radius:10px;padding:12px;transition:border-color .2s;position:relative;overflow:hidden}
-    .card:hover{border-color:var(--border)}.card.on{border-color:var(--accent);box-shadow:0 0 16px rgba(212,175,55,.15)}.card.err{border-color:var(--danger)}
-    .card-top{display:flex;align-items:center;gap:10px;margin-bottom:8px}
-    .card-av{width:36px;height:36px;background:var(--surface2);border-radius:6px;display:flex;align-items:center;justify-content:center;border:1px solid var(--border2);flex-shrink:0;position:relative;overflow:hidden;image-rendering:pixelated}
-    .card-av .pxs{transform:scale(1.1);transform-origin:center;position:absolute;top:1px;left:3px}
-    .card-info{flex:1;min-width:0}
-    .card-name{font-family:'Space Grotesk',sans-serif;font-weight:600;font-size:.85rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-    .card-role{font-size:.65rem;color:var(--fg3)}
-    .card-st{font-family:'JetBrains Mono',monospace;font-size:.55rem;font-weight:600;padding:1px 5px;border-radius:99px;border:1px solid var(--border)}
-    .card-st.running{color:var(--accent);border-color:var(--accent);background:rgba(212,175,55,.1)}
-    .card-st.error{color:var(--danger);border-color:var(--danger)}
-    .card-st.idle{color:var(--fg2)}
-    .lvl-row{display:flex;align-items:center;gap:6px;margin-bottom:6px}
-    .lvl-badge{font-family:'Press Start 2P',monospace;font-size:6px;color:var(--accent);background:rgba(212,175,55,.1);padding:2px 5px;border-radius:3px;border:1px solid rgba(212,175,55,.15)}
-    .xp-bar{flex:1;height:7px;background:var(--bg);border-radius:99px;overflow:hidden;border:1px solid var(--border2)}
-    .xp-fill{height:100%;border-radius:99px;background:linear-gradient(90deg,var(--accent),var(--accent2));transition:width .5s;min-width:1px}
-    .xp-txt{font-family:'JetBrains Mono',monospace;font-size:.55rem;color:var(--fg3);white-space:nowrap}
-    .card-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-bottom:8px}
-    .cs{text-align:center;padding:3px 0;background:var(--bg);border-radius:4px}
-    .cs-v{font-family:'JetBrains Mono',monospace;font-size:.8rem;font-weight:600}
-    .cs-v.grn{color:var(--success)}.cs-v.gld{color:var(--accent)}
-    .cs-l{font-size:.55rem;color:var(--fg3);text-transform:uppercase}
-    .card-task{font-family:'JetBrains Mono',monospace;font-size:.6rem;color:var(--accent);display:flex;align-items:center;gap:4px;margin-bottom:4px}
-    .card-task .td{width:5px;height:5px;border-radius:50%;background:var(--accent);animation:pulse 1s ease-in-out infinite}
-    .card-act{font-size:.65rem;color:var(--fg2);max-height:44px;overflow-y:auto;scrollbar-width:thin;scrollbar-color:var(--border) transparent}
-    .card-act div{padding:1px 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    /* Hidden original profile cards container (cards now render in sidebar) */
+    .cards-wrap{display:none}
 
-    /* ═══ FEED ═══ */
-    .feed-wrap{padding:0 16px 24px}
-    .feed{background:rgba(17,15,24,.7);border:1px solid var(--border2);border-radius:10px;padding:12px;max-width:960px;margin:0 auto}
-    .feed-title{font-family:'Space Grotesk',sans-serif;font-size:.85rem;font-weight:600;color:var(--fg2);margin-bottom:8px}
-    .feed-scroll{max-height:160px;overflow-y:auto;scrollbar-width:thin;scrollbar-color:var(--border) transparent}
-    .fe{display:flex;gap:6px;padding:2px 0;font-size:.7rem;color:var(--fg2);border-bottom:1px solid rgba(255,255,255,.02)}
-    .fe-t{font-family:'JetBrains Mono',monospace;font-size:.6rem;color:var(--fg3);flex-shrink:0;width:48px}
-    .fe-b{font-family:'JetBrains Mono',monospace;font-size:.5rem;font-weight:600;padding:0 3px;border-radius:2px;flex-shrink:0}
-    .fe-b.b-coord{color:var(--accent);background:rgba(212,175,55,.1)}.fe-b.b-sent{color:var(--info);background:rgba(96,165,250,.1)}.fe-b.b-chart{color:var(--success);background:rgba(52,211,153,.1)}.fe-b.b-risk{color:var(--warn);background:rgba(251,191,36,.1)}.fe-b.b-trade{color:var(--accent);background:rgba(212,175,55,.1)}.fe-b.b-acct{color:var(--purple);background:rgba(167,139,250,.1)}.fe-b.b-tok{color:var(--fg2);background:var(--surface2)}
-    .fe-m{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-
-    .placeholder{display:flex;justify-content:center;align-items:center;min-height:200px;color:var(--fg3);font-size:.85rem;text-align:center}
-    .placeholder-icon{font-size:2rem;margin-bottom:10px;animation:pulse 2s ease-in-out infinite}
-
-    @media(max-width:640px){.hdr-center{display:none}.rpg-map{aspect-ratio:1/1}.cards{grid-template-columns:1fr}}
+    /* ═══ RESPONSIVE ═══ */
+    @media(max-width:900px){
+      .main-layout{flex-direction:column}
+      .sidebar{width:100%;max-width:100%;min-width:0;border-right:0;border-bottom:1px solid var(--border2);max-height:220px}
+      .sidebar-scroll{display:flex;flex-wrap:nowrap;overflow-x:auto;overflow-y:hidden;gap:6px;padding:6px}
+      .sb-card{min-width:200px;flex-shrink:0;margin-bottom:0}
+      .panels-row{grid-template-columns:1fr;max-width:100%}
+      .rpg-map{max-width:100%}
+      .hdr-center{display:none}
+    }
+    @media(max-width:480px){
+      .sidebar{max-height:180px}
+      .sb-card{min-width:170px}
+      .toast-container{right:10px;bottom:10px;max-width:260px}
+    }
     @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;transition-duration:.01ms!important}}
   </style>
 </head>
@@ -253,144 +386,171 @@
     </div>
   </header>
 
-  <div class="map-wrap">
-    <div class="rpg-map" id="rpgMap">
-      <!-- Rooms — 3x3 grid -->
-      <div class="rm rm-research" data-name="RESEARCH LAB"></div>
-      <div class="rm rm-command" data-name="COMMAND CENTER"></div>
-      <div class="rm rm-security" data-name="SECURITY"></div>
-      <div class="rm rm-trading" data-name="TRADING ROOM"></div>
-      <div class="rm rm-hall" data-name="MAIN HALL"></div>
-      <div class="rm rm-accountant" data-name="ACCOUNTS"></div>
-      <div class="rm rm-briefing" data-name="BRIEFING ROOM"></div>
-      <div class="rm rm-resting" data-name="REST AREA"></div>
-      <div class="rm rm-vault" data-name="VAULT"></div>
-      <div class="rm rm-prison" data-name="⛓️ PRISON"></div>
-      <div class="rm rm-yard" data-name="🛡️ POLICE HQ"></div>
+  <div class="main-layout">
+    <!-- LEFT SIDEBAR — Agent Crew List -->
+    <aside class="sidebar">
+      <div class="sidebar-hdr">
+        <span class="sidebar-hdr-title">Crew Roster</span>
+        <span class="sidebar-hdr-count" id="crewCount">0</span>
+      </div>
+      <div class="sidebar-scroll" id="sidebarScroll"></div>
+    </aside>
 
-      <!-- Doors — horizontal (between rows) -->
-      <!-- Row 1 ↔ Row 2 -->
-      <div class="door door-h" style="left:11%;top:calc(32% - 4px)"></div>
-      <div class="door door-h" style="left:11%;top:calc(34% - 4px)"></div>
-      <div class="door door-h" style="left:45%;top:calc(32% - 4px)"></div>
-      <div class="door door-h" style="left:45%;top:calc(34% - 4px)"></div>
-      <div class="door door-h" style="left:79%;top:calc(32% - 4px)"></div>
-      <div class="door door-h" style="left:79%;top:calc(34% - 4px)"></div>
-      <!-- Row 2 ↔ Row 3 -->
-      <div class="door door-h" style="left:11%;top:calc(66% - 4px)"></div>
-      <div class="door door-h" style="left:11%;top:calc(68% - 4px)"></div>
-      <div class="door door-h" style="left:45%;top:calc(66% - 4px)"></div>
-      <div class="door door-h" style="left:45%;top:calc(68% - 4px)"></div>
-      <div class="door door-h" style="left:79%;top:calc(66% - 4px)"></div>
-      <div class="door door-h" style="left:79%;top:calc(68% - 4px)"></div>
+    <!-- CENTER CONTENT -->
+    <main class="center-content">
+      <div class="map-wrap">
+        <div class="rpg-map" id="rpgMap">
+          <!-- Rooms -->
+          <div class="rm rm-research" data-name="RESEARCH LAB"></div>
+          <div class="rm rm-command" data-name="COMMAND CENTER"></div>
+          <div class="rm rm-security" data-name="SECURITY"></div>
+          <div class="rm rm-trading" data-name="TRADING ROOM"></div>
+          <div class="rm rm-hall" data-name="MAIN HALL"></div>
+          <div class="rm rm-accountant" data-name="ACCOUNTS"></div>
+          <div class="rm rm-briefing" data-name="BRIEFING ROOM"></div>
+          <div class="rm rm-resting" data-name="REST AREA"></div>
+          <div class="rm rm-vault" data-name="VAULT"></div>
+          <div class="rm rm-prison" data-name="&#x26D3;&#xFE0F; PRISON"></div>
+          <div class="rm rm-yard" data-name="&#x1F6E1;&#xFE0F; POLICE HQ"></div>
 
-      <!-- Doors — vertical (between columns) -->
-      <!-- Col 1 ↔ Col 2 -->
-      <div class="door door-v" style="top:11%;left:calc(32% - 4px)"></div>
-      <div class="door door-v" style="top:11%;left:calc(34% - 4px)"></div>
-      <div class="door door-v" style="top:45%;left:calc(32% - 4px)"></div>
-      <div class="door door-v" style="top:45%;left:calc(34% - 4px)"></div>
-      <div class="door door-v" style="top:79%;left:calc(32% - 4px)"></div>
-      <div class="door door-v" style="top:79%;left:calc(34% - 4px)"></div>
-      <!-- Col 2 ↔ Col 3 -->
-      <div class="door door-v" style="top:11%;left:calc(66% - 4px)"></div>
-      <div class="door door-v" style="top:11%;left:calc(68% - 4px)"></div>
-      <div class="door door-v" style="top:45%;left:calc(66% - 4px)"></div>
-      <div class="door door-v" style="top:45%;left:calc(68% - 4px)"></div>
-      <div class="door door-v" style="top:79%;left:calc(66% - 4px)"></div>
-      <div class="door door-v" style="top:79%;left:calc(68% - 4px)"></div>
+          <!-- Doors horizontal -->
+          <div class="door door-h" style="left:11%;top:calc(32% - 4px)"></div>
+          <div class="door door-h" style="left:11%;top:calc(34% - 4px)"></div>
+          <div class="door door-h" style="left:45%;top:calc(32% - 4px)"></div>
+          <div class="door door-h" style="left:45%;top:calc(34% - 4px)"></div>
+          <div class="door door-h" style="left:79%;top:calc(32% - 4px)"></div>
+          <div class="door door-h" style="left:79%;top:calc(34% - 4px)"></div>
+          <div class="door door-h" style="left:11%;top:calc(66% - 4px)"></div>
+          <div class="door door-h" style="left:11%;top:calc(68% - 4px)"></div>
+          <div class="door door-h" style="left:45%;top:calc(66% - 4px)"></div>
+          <div class="door door-h" style="left:45%;top:calc(68% - 4px)"></div>
+          <div class="door door-h" style="left:79%;top:calc(66% - 4px)"></div>
+          <div class="door door-h" style="left:79%;top:calc(68% - 4px)"></div>
 
-      <!-- Door markers — colored indicators at doorway positions -->
-      <!-- Row 1↔2 markers -->
-      <div class="door-mark door-mark-h" style="left:calc(16% - 7px);top:calc(33% - 2px)"></div>
-      <div class="door-mark door-mark-h" style="left:calc(50% - 7px);top:calc(33% - 2px)"></div>
-      <div class="door-mark door-mark-h" style="left:calc(84% - 7px);top:calc(33% - 2px)"></div>
-      <!-- Row 2↔3 markers -->
-      <div class="door-mark door-mark-h" style="left:calc(16% - 7px);top:calc(55% - 2px)"></div>
-      <div class="door-mark door-mark-h" style="left:calc(50% - 7px);top:calc(55% - 2px)"></div>
-      <div class="door-mark door-mark-h" style="left:calc(84% - 7px);top:calc(55% - 2px)"></div>
-      <!-- Row 3↔4 markers (prison) -->
-      <div class="door-mark door-mark-h" style="left:calc(16% - 7px);top:calc(79% - 2px)"></div>
-      <div class="door-mark door-mark-h" style="left:calc(50% - 7px);top:calc(79% - 2px)"></div>
-      <div class="door-mark door-mark-h" style="left:calc(75% - 7px);top:calc(79% - 2px)"></div>
-      <!-- Col 1↔2 markers -->
-      <div class="door-mark door-mark-v" style="left:calc(33% - 2px);top:calc(16% - 7px)"></div>
-      <div class="door-mark door-mark-v" style="left:calc(33% - 2px);top:calc(50% - 7px)"></div>
-      <div class="door-mark door-mark-v" style="left:calc(33% - 2px);top:calc(66% - 7px)"></div>
-      <!-- Col prison↔yard -->
-      <div class="door-mark door-mark-v" style="left:calc(51% - 2px);top:calc(90% - 7px)"></div>
-      <!-- Col 2↔3 markers -->
-      <div class="door-mark door-mark-v" style="left:calc(67% - 2px);top:calc(16% - 7px)"></div>
-      <div class="door-mark door-mark-v" style="left:calc(67% - 2px);top:calc(50% - 7px)"></div>
-      <div class="door-mark door-mark-v" style="left:calc(67% - 2px);top:calc(84% - 7px)"></div>
+          <!-- Doors vertical -->
+          <div class="door door-v" style="top:11%;left:calc(32% - 4px)"></div>
+          <div class="door door-v" style="top:11%;left:calc(34% - 4px)"></div>
+          <div class="door door-v" style="top:45%;left:calc(32% - 4px)"></div>
+          <div class="door door-v" style="top:45%;left:calc(34% - 4px)"></div>
+          <div class="door door-v" style="top:79%;left:calc(32% - 4px)"></div>
+          <div class="door door-v" style="top:79%;left:calc(34% - 4px)"></div>
+          <div class="door door-v" style="top:11%;left:calc(66% - 4px)"></div>
+          <div class="door door-v" style="top:11%;left:calc(68% - 4px)"></div>
+          <div class="door door-v" style="top:45%;left:calc(66% - 4px)"></div>
+          <div class="door door-v" style="top:45%;left:calc(68% - 4px)"></div>
+          <div class="door door-v" style="top:79%;left:calc(66% - 4px)"></div>
+          <div class="door door-v" style="top:79%;left:calc(68% - 4px)"></div>
 
-      <!-- Furniture — Research Lab -->
-      <div class="furn desk" style="left:5%;top:16%"></div>
-      <div class="furn desk" style="left:16%;top:16%"></div>
-      <div class="furn bookshelf" style="left:1.5%;top:10%"></div>
-      <div class="furn chart-decor" style="left:10%;top:4%"></div>
-      <!-- Furniture — Command Center -->
-      <div class="furn desk" style="left:44%;top:14%;width:10%;height:5%"></div>
-      <div class="furn monitor" style="left:46%;top:8%"></div>
-      <div class="furn monitor" style="left:52%;top:8%"></div>
-      <div class="furn chart-decor" style="left:40%;top:3%;width:16%"></div>
-      <!-- Furniture — Security -->
-      <div class="furn shield-decor" style="left:74%;top:4%"></div>
-      <div class="furn shield-decor" style="left:80%;top:4%"></div>
-      <div class="furn shield-decor" style="left:86%;top:4%"></div>
-      <div class="furn desk" style="left:76%;top:16%"></div>
-      <div class="furn monitor" style="left:78%;top:10%"></div>
-      <!-- Furniture — Trading Room -->
-      <div class="furn desk" style="left:4%;top:48%"></div>
-      <div class="furn desk" style="left:15%;top:48%"></div>
-      <div class="furn monitor" style="left:6%;top:42%"></div>
-      <div class="furn monitor" style="left:17%;top:42%"></div>
-      <div class="furn chart-decor" style="left:4%;top:36%"></div>
-      <!-- Furniture — Accountant -->
-      <div class="furn desk" style="left:76%;top:48%"></div>
-      <div class="furn safe" style="left:90%;top:40%"></div>
-      <div class="furn bookshelf" style="left:70%;top:38%"></div>
-      <!-- Furniture — Briefing Room -->
-      <div class="furn round-table" style="left:11%;top:62%"></div>
-      <div class="furn chair" style="left:8%;top:59%"></div>
-      <div class="furn chair" style="left:18%;top:59%"></div>
-      <div class="furn chair" style="left:8%;top:69%"></div>
-      <div class="furn chair" style="left:18%;top:69%"></div>
-      <!-- Furniture — Rest Area -->
-      <div class="furn bed" style="left:37%;top:60%"></div>
-      <div class="furn bed" style="left:52%;top:60%"></div>
-      <div class="furn bed" style="left:37%;top:68%"></div>
-      <!-- Furniture — Vault -->
-      <div class="furn safe" style="left:72%;top:58%"></div>
-      <div class="furn safe" style="left:80%;top:58%"></div>
-      <div class="furn safe" style="left:90%;top:58%"></div>
-      <div class="furn gold-bar" style="left:86%;top:65%"></div>
-      <div class="furn gold-bar" style="left:90%;top:65%"></div>
-      <div class="furn gold-bar" style="left:92%;top:62%"></div>
-      <!-- Furniture — Prison -->
-      <div class="furn jail-bars" style="left:2%;top:80%;width:10%;height:18%;border:2px solid #6b7280;border-radius:2px;background:repeating-linear-gradient(90deg,#4b5563 0px,#4b5563 2px,transparent 2px,transparent 8px);opacity:.6"></div>
-      <div class="furn jail-bars" style="left:14%;top:80%;width:10%;height:18%;border:2px solid #6b7280;border-radius:2px;background:repeating-linear-gradient(90deg,#4b5563 0px,#4b5563 2px,transparent 2px,transparent 8px);opacity:.6"></div>
-      <div class="furn jail-bars" style="left:26%;top:80%;width:10%;height:18%;border:2px solid #6b7280;border-radius:2px;background:repeating-linear-gradient(90deg,#4b5563 0px,#4b5563 2px,transparent 2px,transparent 8px);opacity:.6"></div>
-      <div class="furn" style="left:38%;top:82%;width:2%;height:14%;background:#6b7280;border-radius:1px;opacity:.5"></div>
-      <!-- Furniture — Yard (Police patrol area) -->
-      <div class="furn desk" style="left:56%;top:86%"></div>
-      <div class="furn monitor" style="left:58%;top:82%"></div>
-      <div class="furn shield-decor" style="left:70%;top:81%"></div>
-      <div class="furn shield-decor" style="left:76%;top:81%"></div>
-      <div class="furn chart-decor" style="left:85%;top:81%;width:10%"></div>
+          <!-- Door markers -->
+          <div class="door-mark door-mark-h" style="left:calc(16% - 7px);top:calc(33% - 2px)"></div>
+          <div class="door-mark door-mark-h" style="left:calc(50% - 7px);top:calc(33% - 2px)"></div>
+          <div class="door-mark door-mark-h" style="left:calc(84% - 7px);top:calc(33% - 2px)"></div>
+          <div class="door-mark door-mark-h" style="left:calc(16% - 7px);top:calc(55% - 2px)"></div>
+          <div class="door-mark door-mark-h" style="left:calc(50% - 7px);top:calc(55% - 2px)"></div>
+          <div class="door-mark door-mark-h" style="left:calc(84% - 7px);top:calc(55% - 2px)"></div>
+          <div class="door-mark door-mark-h" style="left:calc(16% - 7px);top:calc(79% - 2px)"></div>
+          <div class="door-mark door-mark-h" style="left:calc(50% - 7px);top:calc(79% - 2px)"></div>
+          <div class="door-mark door-mark-h" style="left:calc(75% - 7px);top:calc(79% - 2px)"></div>
+          <div class="door-mark door-mark-v" style="left:calc(33% - 2px);top:calc(16% - 7px)"></div>
+          <div class="door-mark door-mark-v" style="left:calc(33% - 2px);top:calc(50% - 7px)"></div>
+          <div class="door-mark door-mark-v" style="left:calc(33% - 2px);top:calc(66% - 7px)"></div>
+          <div class="door-mark door-mark-v" style="left:calc(51% - 2px);top:calc(90% - 7px)"></div>
+          <div class="door-mark door-mark-v" style="left:calc(67% - 2px);top:calc(16% - 7px)"></div>
+          <div class="door-mark door-mark-v" style="left:calc(67% - 2px);top:calc(50% - 7px)"></div>
+          <div class="door-mark door-mark-v" style="left:calc(67% - 2px);top:calc(84% - 7px)"></div>
 
-      <!-- Characters injected by JS -->
-    </div>
+          <!-- Furniture — Research Lab -->
+          <div class="furn desk" style="left:5%;top:16%"></div>
+          <div class="furn desk" style="left:16%;top:16%"></div>
+          <div class="furn bookshelf" style="left:1.5%;top:10%"></div>
+          <div class="furn chart-decor" style="left:10%;top:4%"></div>
+          <!-- Furniture — Command Center -->
+          <div class="furn desk" style="left:44%;top:14%;width:10%;height:5%"></div>
+          <div class="furn monitor" style="left:46%;top:8%"></div>
+          <div class="furn monitor" style="left:52%;top:8%"></div>
+          <div class="furn chart-decor" style="left:40%;top:3%;width:16%"></div>
+          <!-- Furniture — Security -->
+          <div class="furn shield-decor" style="left:74%;top:4%"></div>
+          <div class="furn shield-decor" style="left:80%;top:4%"></div>
+          <div class="furn shield-decor" style="left:86%;top:4%"></div>
+          <div class="furn desk" style="left:76%;top:16%"></div>
+          <div class="furn monitor" style="left:78%;top:10%"></div>
+          <!-- Furniture — Trading Room -->
+          <div class="furn desk" style="left:4%;top:48%"></div>
+          <div class="furn desk" style="left:15%;top:48%"></div>
+          <div class="furn monitor" style="left:6%;top:42%"></div>
+          <div class="furn monitor" style="left:17%;top:42%"></div>
+          <div class="furn chart-decor" style="left:4%;top:36%"></div>
+          <!-- Furniture — Accountant -->
+          <div class="furn desk" style="left:76%;top:48%"></div>
+          <div class="furn safe" style="left:90%;top:40%"></div>
+          <div class="furn bookshelf" style="left:70%;top:38%"></div>
+          <!-- Furniture — Briefing Room -->
+          <div class="furn round-table" style="left:11%;top:62%"></div>
+          <div class="furn chair" style="left:8%;top:59%"></div>
+          <div class="furn chair" style="left:18%;top:59%"></div>
+          <div class="furn chair" style="left:8%;top:69%"></div>
+          <div class="furn chair" style="left:18%;top:69%"></div>
+          <!-- Furniture — Rest Area -->
+          <div class="furn bed" style="left:37%;top:60%"></div>
+          <div class="furn bed" style="left:52%;top:60%"></div>
+          <div class="furn bed" style="left:37%;top:68%"></div>
+          <!-- Furniture — Vault -->
+          <div class="furn safe" style="left:72%;top:58%"></div>
+          <div class="furn safe" style="left:80%;top:58%"></div>
+          <div class="furn safe" style="left:90%;top:58%"></div>
+          <div class="furn gold-bar" style="left:86%;top:65%"></div>
+          <div class="furn gold-bar" style="left:90%;top:65%"></div>
+          <div class="furn gold-bar" style="left:92%;top:62%"></div>
+          <!-- Furniture — Prison -->
+          <div class="furn jail-bars" style="left:2%;top:80%;width:10%;height:18%;border:2px solid #6b7280;border-radius:2px;background:repeating-linear-gradient(90deg,#4b5563 0px,#4b5563 2px,transparent 2px,transparent 8px);opacity:.6"></div>
+          <div class="furn jail-bars" style="left:14%;top:80%;width:10%;height:18%;border:2px solid #6b7280;border-radius:2px;background:repeating-linear-gradient(90deg,#4b5563 0px,#4b5563 2px,transparent 2px,transparent 8px);opacity:.6"></div>
+          <div class="furn jail-bars" style="left:26%;top:80%;width:10%;height:18%;border:2px solid #6b7280;border-radius:2px;background:repeating-linear-gradient(90deg,#4b5563 0px,#4b5563 2px,transparent 2px,transparent 8px);opacity:.6"></div>
+          <div class="furn" style="left:38%;top:82%;width:2%;height:14%;background:#6b7280;border-radius:1px;opacity:.5"></div>
+          <!-- Furniture — Yard -->
+          <div class="furn desk" style="left:56%;top:86%"></div>
+          <div class="furn monitor" style="left:58%;top:82%"></div>
+          <div class="furn shield-decor" style="left:70%;top:81%"></div>
+          <div class="furn shield-decor" style="left:76%;top:81%"></div>
+          <div class="furn chart-decor" style="left:85%;top:81%;width:10%"></div>
+        </div>
+      </div>
+
+      <!-- Below-map panels -->
+      <div class="panels-row">
+        <div class="panel" id="logsPanel">
+          <div class="panel-hdr">
+            <div class="panel-hdr-dot live"></div>
+            <span class="panel-hdr-title">Live Bot Logs</span>
+          </div>
+          <div class="panel-body" id="logsScroll">
+            <div class="placeholder"><div><div class="placeholder-icon">&#x1F4E1;</div><div>Waiting for logs...</div></div></div>
+          </div>
+        </div>
+        <div class="panel" id="feedPanel">
+          <div class="panel-hdr">
+            <div class="panel-hdr-dot feed"></div>
+            <span class="panel-hdr-title">Activity Feed</span>
+          </div>
+          <div class="panel-body" id="feedScroll">
+            <div class="placeholder"><div><div class="placeholder-icon">&#x1F50D;</div><div>No activity yet</div></div></div>
+          </div>
+        </div>
+      </div>
+    </main>
   </div>
 
+  <!-- Hidden container for backward compat -->
   <div class="cards-wrap"><div class="cards" id="profileCards"></div></div>
-  <div class="feed-wrap"><div class="feed" id="feedBox"><div class="feed-title">&#x1F4E1; Live Activity</div><div class="feed-scroll" id="feedScroll"></div></div></div>
+
+  <!-- Toast container -->
+  <div class="toast-container" id="toastContainer"></div>
 
   <!-- Jail Modal Overlay -->
   <div class="jail-overlay" id="jailOverlay">
     <div class="jail-modal">
       <div class="jail-hdr">
-        <span class="jail-hdr-icon">🔒</span>
+        <span class="jail-hdr-icon">&#x1F512;</span>
         <span class="jail-hdr-title" id="jailTitle">Agent Violation Report</span>
         <button class="jail-close" onclick="closeJailModal()">&times;</button>
       </div>
@@ -443,9 +603,7 @@ const ROOMS = {
   yard:       {x:52,y:79,w:48, h:21, col:1, row:3},
 };
 
-/* ═══ DOOR WAYPOINTS ═══
-   Each door connects two rooms and has an (x,y) position on the map.
-   Doors are at corridor midpoints between adjacent rooms. */
+/* ═══ DOOR WAYPOINTS ═══ */
 const DOORS = {
   'research-command':     {x:33, y:16},
   'command-security':     {x:67, y:16},
@@ -537,7 +695,12 @@ let feedEntries = [];
 let prevData = null;
 let autoRefresh = true;
 let pollTimer = null;
+let logPollTimer = null;
 const STEP_DURATION = 800;
+
+/* Track previous agent levels/states for reward detection */
+let prevAgentLevels = {};
+let prevAgentStates = {};
 
 function randInRoom(room) {
   const r = ROOMS[room];
@@ -563,7 +726,6 @@ function getAnimClass(state) {
 
 function getThought(agentData) {
   if (!agentData) return '';
-  // Show personality thought if available
   const p = agentData.personality;
   if (p && p.latestThought && Math.random() > 0.4) return p.latestThought;
   if (agentData.state === 'jailed') return 'I shouldn\'t have done that...';
@@ -776,7 +938,6 @@ function updateCharacters(healthData) {
     });
   }
 
-  // Remove token chars no longer in top 8
   const activeTokenKeys = new Set(tokenKeys.slice(0, 8));
   for (const k of Object.keys(chars)) {
     if (!AGENTS[k] && !activeTokenKeys.has(k)) {
@@ -808,10 +969,80 @@ setInterval(() => {
   }
 }, 7000);
 
-/* ═══ PROFILE CARDS ═══ */
+/* ═══ UTILITY ═══ */
 function esc(s) { const e = document.createElement('span'); e.textContent = s; return e.innerHTML; }
 function fmtMoney(n) { if (!n) return '$0'; if (n >= 1000) return '$'+(n/1000).toFixed(1)+'k'; return '$'+n.toFixed(2); }
 
+/* ═══ SIDEBAR CARDS (new crew roster) ═══ */
+function renderSidebar(healthData) {
+  const agents = healthData.agents || {};
+  const container = document.getElementById('sidebarScroll');
+  let html = '';
+  let count = 0;
+
+  for (const [key, cfg] of Object.entries(AGENTS)) {
+    const d = key === 'coordinator' ? healthData : agents[key];
+    if (!d) continue;
+    html += renderSidebarCard(key, d, cfg);
+    count++;
+  }
+
+  const tokenKeys = Object.keys(agents).filter(k => !Object.keys(AGENTS).includes(k) && k !== 'coordinator');
+  tokenKeys.sort((a, b) => (agents[b]?.rpg?.level || 1) - (agents[a]?.rpg?.level || 1));
+  for (const k of tokenKeys.slice(0, 12)) {
+    html += renderSidebarCard(k, agents[k], {
+      name: agents[k]?.name || k,
+      role: (agents[k]?.name || k).replace('Agent','') + ' Specialist',
+      sprite: 'sp-token',
+    });
+    count++;
+  }
+
+  container.innerHTML = html;
+  document.getElementById('crewCount').textContent = count;
+}
+
+function renderSidebarCard(key, d, cfg) {
+  const state = d.state || 'stopped';
+  const rpg = d.rpg || {};
+  const pers = d.personality || {};
+  const lvl = rpg.level || 1;
+  const xpProg = rpg.xpProgress || 0;
+  const xpNext = rpg.xpForNext || 100;
+  const xpCur = Math.round(xpProg * xpNext);
+  const mood = pers.mood || 'focused';
+  const moodIcon = mood === 'confident' ? '\u{1F60E}' : mood === 'competitive' ? '\u{1F525}' : mood === 'anxious' ? '\u{1F630}' : mood === 'determined' ? '\u{1F4AA}' : mood === 'reflective' ? '\u{1F914}' : mood === 'ambitious' ? '\u{1F680}' : '\u{1F3AF}';
+  const task = d.currentTask ? (d.currentTask.description || '') : '';
+
+  let cls = 'sb-card';
+  if (state === 'running') cls += ' on running-anim';
+  else if (state === 'error') cls += ' err';
+  else if (state === 'jailed') cls += ' jailed-card';
+
+  const jailClick = state === 'jailed' ? ` onclick="openJailModal('${key}')"` : '';
+
+  const stateLabel = state === 'jailed' ? '\u26D3 JAILED' : state.toUpperCase();
+
+  return `<div class="${cls}"${jailClick}>
+    <div class="sb-top">
+      <div class="sb-av"><div class="pxs ${cfg.sprite}"></div></div>
+      <div class="sb-info">
+        <div class="sb-name">${esc(cfg.name)}</div>
+        <div class="sb-role">${esc(cfg.role)}</div>
+      </div>
+      <span class="sb-state ${state}">${stateLabel}</span>
+    </div>
+    <div class="sb-xp-row">
+      <span class="sb-lvl">Lv.${lvl}</span>
+      <div class="sb-xp-bar"><div class="sb-xp-fill" style="width:${Math.round(xpProg*100)}%"></div></div>
+      <span class="sb-xp-txt">${xpCur}/${xpNext}</span>
+    </div>
+    ${task ? `<div class="sb-task"><div class="td"></div>${esc(task.slice(0,50))}</div>` : ''}
+    <div class="sb-mood">${moodIcon} ${mood}</div>
+  </div>`;
+}
+
+/* ═══ PROFILE CARDS (kept for backward compat, renders hidden) ═══ */
 function renderCards(healthData) {
   const agents = healthData.agents || {};
   const container = document.getElementById('profileCards');
@@ -857,7 +1088,7 @@ function renderCard(key, d, cfg) {
   const rank = comp.rank || 0;
   const thought = pers.latestThought || '';
   const cls = state === 'jailed' ? ' err' : state === 'running' ? ' on' : state === 'error' ? ' err' : '';
-  const moodIcon = mood === 'confident' ? '😎' : mood === 'competitive' ? '🔥' : mood === 'anxious' ? '😰' : mood === 'determined' ? '💪' : mood === 'reflective' ? '🤔' : mood === 'ambitious' ? '🚀' : '🎯';
+  const moodIcon = mood === 'confident' ? '\u{1F60E}' : mood === 'competitive' ? '\u{1F525}' : mood === 'anxious' ? '\u{1F630}' : mood === 'determined' ? '\u{1F4AA}' : mood === 'reflective' ? '\u{1F914}' : mood === 'ambitious' ? '\u{1F680}' : '\u{1F3AF}';
   const tierColor = tier === 'Legend' ? 'color:#fbbf24' : tier === 'Master' ? 'color:#a78bfa' : tier === 'Expert' ? 'color:#34d399' : tier === 'Skilled' ? 'color:#60a5fa' : 'color:var(--fg3)';
   const act = (d.recentActivity || []).slice(0, 2).map(a =>
     '<div>' + esc(a.message || '') + '</div>'
@@ -871,7 +1102,7 @@ function renderCard(key, d, cfg) {
         <div class="card-name">${esc(cfg.name)}${rank > 0 ? ' <span style="color:var(--fg3);font-size:.6rem">#' + rank + '</span>' : ''}</div>
         <div class="card-role">${esc(cfg.role)} <span style="${tierColor};font-weight:600">[${tier}]</span></div>
       </div>
-      <span class="card-st ${state}">${state === 'jailed' ? '⛓️ JAILED — click to review' : state}</span>
+      <span class="card-st ${state}">${state === 'jailed' ? '\u26D3\uFE0F JAILED \u2014 click to review' : state}</span>
     </div>
     <div class="lvl-row">
       <span class="lvl-badge">Lv.${lvl}</span>
@@ -882,12 +1113,12 @@ function renderCard(key, d, cfg) {
       <div class="cs"><div class="cs-v grn">${fmtMoney(earned)}</div><div class="cs-l">Earned</div></div>
       <div class="cs"><div class="cs-v gld">${tasks}</div><div class="cs-l">Tasks</div></div>
       <div class="cs"><div class="cs-v">${rate}%</div><div class="cs-l">Success</div></div>
-      <div class="cs"><div class="cs-v" style="color:#fb923c">${streak > 0 ? '🔥' + streak : bestStreak > 0 ? '⭐' + bestStreak : '-'}</div><div class="cs-l">Streak</div></div>
+      <div class="cs"><div class="cs-v" style="color:#fb923c">${streak > 0 ? '\u{1F525}' + streak : bestStreak > 0 ? '\u2B50' + bestStreak : '-'}</div><div class="cs-l">Streak</div></div>
     </div>
     <div style="font-size:.6rem;color:var(--fg3);padding:2px 4px;display:flex;gap:6px;flex-wrap:wrap">
       <span>${moodIcon} ${mood}</span>
-      <span>⚡ ${trait}</span>
-      ${rival ? '<span>⚔️ vs ' + esc(rival) + '</span>' : ''}
+      <span>\u26A1 ${trait}</span>
+      ${rival ? '<span>\u2694\uFE0F vs ' + esc(rival) + '</span>' : ''}
     </div>
     ${thought ? `<div style="font-size:.6rem;color:var(--fg2);padding:2px 4px;font-style:italic;border-left:2px solid var(--border2);margin:2px 4px">"${esc(thought.slice(0,80))}"</div>` : ''}
     ${d.currentTask ? `<div class="card-task"><div class="td"></div>${esc(d.currentTask.description||'')}</div>` : ''}
@@ -915,6 +1146,106 @@ function updateFeed(activity) {
   requestAnimationFrame(() => { scroll.scrollTop = scroll.scrollHeight; });
 }
 
+/* ═══ LIVE BOT LOGS ═══ */
+async function fetchLogs() {
+  try {
+    const res = await fetch('/api/dashboard/logs?limit=30', { credentials: 'same-origin' });
+    if (!res.ok) return;
+    const data = await res.json();
+    const logs = Array.isArray(data) ? data : (data.logs || data.entries || []);
+    if (!logs.length) return;
+
+    const scroll = document.getElementById('logsScroll');
+    scroll.innerHTML = logs.map(log => {
+      const ts = log.timestamp || log.ts || log.time || '';
+      let t = '';
+      if (ts) {
+        try {
+          t = new Date(ts).toLocaleTimeString('en-GB',{timeZone:'Asia/Jakarta',hour:'2-digit',minute:'2-digit',second:'2-digit'});
+        } catch(e) { t = String(ts).slice(0,8); }
+      }
+      const level = (log.level || log.severity || 'info').toLowerCase();
+      const levelCls = level.includes('err') ? 'error' : level.includes('warn') ? 'warn' : level.includes('debug') ? 'debug' : 'info';
+      const msg = log.message || log.msg || log.text || '';
+      return `<div class="log-entry"><span class="log-ts">${esc(t)}</span><span class="log-level ${levelCls}">${esc(level.slice(0,5).toUpperCase())}</span><span class="log-msg">${esc(msg)}</span></div>`;
+    }).join('');
+    requestAnimationFrame(() => { scroll.scrollTop = scroll.scrollHeight; });
+  } catch(e) {
+    /* silent — logs endpoint may not exist */
+  }
+}
+
+/* ═══ REWARD TOAST SYSTEM ═══ */
+function showToast(message, type) {
+  const container = document.getElementById('toastContainer');
+  const toast = document.createElement('div');
+  toast.className = 'toast toast-' + type;
+  toast.textContent = message;
+  container.appendChild(toast);
+
+  setTimeout(() => {
+    toast.style.animation = 'toastOut .4s ease-in forwards';
+    setTimeout(() => toast.remove(), 400);
+  }, 4000);
+
+  /* Keep max 5 toasts visible */
+  while (container.children.length > 5) {
+    container.firstChild.remove();
+  }
+}
+
+function detectRewards(healthData) {
+  const agents = healthData.agents || {};
+
+  for (const [key, cfg] of Object.entries(AGENTS)) {
+    const d = key === 'coordinator' ? healthData : agents[key];
+    if (!d) continue;
+    const rpg = d.rpg || {};
+    const state = d.state || 'idle';
+    const name = cfg.name.replace('Agent','');
+    const lvl = rpg.level || 1;
+
+    /* Level up detection */
+    if (prevAgentLevels[key] && lvl > prevAgentLevels[key]) {
+      showToast('\u{1F389} ' + name + ' leveled up to Lv.' + lvl + '!', 'xp');
+    }
+    prevAgentLevels[key] = lvl;
+
+    /* Jail detection */
+    if (prevAgentStates[key] && prevAgentStates[key] !== 'jailed' && state === 'jailed') {
+      showToast('\u26D3\uFE0F ' + name + ' arrested!', 'jail');
+    }
+    if (prevAgentStates[key] === 'jailed' && state !== 'jailed') {
+      showToast('\u{1F513} ' + name + ' released!', 'release');
+    }
+    prevAgentStates[key] = state;
+  }
+
+  /* Parse activity feed for trade/money events */
+  const activity = healthData.activity || [];
+  if (activity.length && prevData) {
+    const prevTs = prevData._lastActivityTs || 0;
+    for (const a of activity) {
+      if (a.ts <= prevTs) continue;
+      const msg = (a.message || '').toLowerCase();
+      const agentName = (a.agent || '').replace('Agent','').slice(0,10);
+
+      if (msg.includes('profit') || msg.includes('+$') || msg.includes('earned')) {
+        const match = (a.message || '').match(/\+?\$[\d,.]+/);
+        if (match) {
+          showToast('\u{1F4B0} ' + match[0] + ' ' + agentName, 'money');
+        }
+      }
+      if ((msg.includes('trade') || msg.includes('order')) && msg.includes('open')) {
+        showToast('\u{1F4C8} ' + agentName + ' opened trade', 'trade');
+      }
+    }
+    if (activity.length > 0) {
+      healthData._lastActivityTs = Math.max(...activity.map(a => a.ts || 0));
+    }
+  }
+}
+
 /* ═══ HEADER ═══ */
 function updateHeader(data) {
   const h = data.health || {};
@@ -937,26 +1268,37 @@ async function fetchData() {
   try {
     const res = await fetch('/api/admin/agents/health', { credentials: 'same-origin' });
     if (res.status === 401 || res.status === 403) {
-      document.getElementById('profileCards').innerHTML = '<div class="placeholder"><div><div class="placeholder-icon">&#x1F512;</div><div>Log in on <a href="/" style="color:var(--accent)">dashboard</a> first</div></div></div>';
+      document.getElementById('sidebarScroll').innerHTML = '<div class="placeholder"><div><div class="placeholder-icon">&#x1F512;</div><div>Log in on <a href="/" style="color:var(--accent)">dashboard</a> first</div></div></div>';
       stopPolling(); return;
     }
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const data = await res.json();
     document.getElementById('dot').classList.remove('off');
-    prevData = data;
 
     updateHeader(data);
     updateCharacters(data.health || {});
     renderCards(data.health || {});
+    renderSidebar(data.health || {});
     updateFeed(data.activity);
+    detectRewards(data.health || {});
+
+    prevData = data;
   } catch (err) {
     console.error(err);
     document.getElementById('dot').classList.add('off');
   }
 }
 
-function startPolling() { pollTimer = setInterval(fetchData, 3000); fetchData(); }
-function stopPolling() { clearInterval(pollTimer); pollTimer = null; }
+function startPolling() {
+  pollTimer = setInterval(fetchData, 3000);
+  logPollTimer = setInterval(fetchLogs, 5000);
+  fetchData();
+  fetchLogs();
+}
+function stopPolling() {
+  clearInterval(pollTimer); pollTimer = null;
+  clearInterval(logPollTimer); logPollTimer = null;
+}
 
 document.getElementById('autoBtn').addEventListener('click', () => {
   autoRefresh = !autoRefresh;
@@ -980,7 +1322,7 @@ function openJailModal(agentKey) {
   const footer = document.getElementById('jailFooter');
   const title = document.getElementById('jailTitle');
 
-  title.textContent = '⛓️ Loading...';
+  title.textContent = '\u26D3\uFE0F Loading...';
   body.innerHTML = '<div style="text-align:center;padding:20px;color:var(--fg3)">Fetching violation report...</div>';
   footer.innerHTML = '';
   overlay.classList.add('show');
@@ -992,7 +1334,7 @@ function openJailModal(agentKey) {
       const jr = report.jailRecord || {};
       const isJailed = report.isJailed;
       const agentName = agentKey.charAt(0).toUpperCase() + agentKey.slice(1);
-      title.textContent = isJailed ? `⛓️ ${agentName} — JAILED` : `📋 ${agentName} — Report`;
+      title.textContent = isJailed ? `\u26D3\uFE0F ${agentName} \u2014 JAILED` : `\u{1F4CB} ${agentName} \u2014 Report`;
 
       let html = '';
 
@@ -1023,7 +1365,7 @@ function openJailModal(agentKey) {
       if (!isJailed) {
         html += `<div class="jail-section">
           <div class="jail-label">Status</div>
-          <div class="jail-value" style="color:var(--success)">✅ Not currently jailed</div>
+          <div class="jail-value" style="color:var(--success)">\u2705 Not currently jailed</div>
         </div>`;
         html += `<div class="jail-section">
           <div class="jail-label">Current Warnings</div>
@@ -1038,7 +1380,7 @@ function openJailModal(agentKey) {
           <ul class="jail-history">`;
         for (const w of history.slice(0, 10)) {
           const t = w.ts ? new Date(w.ts).toLocaleString('en-GB', {timeZone:'Asia/Jakarta', day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit'}) : '';
-          html += `<li><span class="jh-num">Warning #${w.warningNumber || '?'}</span> — ${esc(w.violation || w.reason || 'unknown')}<span class="jh-time">${t}</span></li>`;
+          html += `<li><span class="jh-num">Warning #${w.warningNumber || '?'}</span> \u2014 ${esc(w.violation || w.reason || 'unknown')}<span class="jh-time">${t}</span></li>`;
         }
         html += `</ul></div>`;
       }
@@ -1048,7 +1390,7 @@ function openJailModal(agentKey) {
 
       if (isJailed) {
         footer.innerHTML = `
-          <button class="btn-unjail" id="btnUnjail" onclick="unjailAgent('${esc(agentKey)}')">🔓 Release & Improve</button>
+          <button class="btn-unjail" id="btnUnjail" onclick="unjailAgent('${esc(agentKey)}')">\u{1F513} Release & Improve</button>
           <button class="btn-unjail-cancel" onclick="closeJailModal()">Cancel</button>
         `;
       } else {
@@ -1068,7 +1410,7 @@ function closeJailModal() {
 async function unjailAgent(agentKey) {
   const btn = document.getElementById('btnUnjail');
   btn.disabled = true;
-  btn.textContent = '⏳ Releasing...';
+  btn.textContent = '\u23F3 Releasing...';
 
   try {
     const res = await fetch('/api/dashboard/jail/release', {
@@ -1080,7 +1422,7 @@ async function unjailAgent(agentKey) {
     const data = await res.json();
 
     if (data.ok) {
-      btn.textContent = '✅ Released!';
+      btn.textContent = '\u2705 Released!';
       btn.style.background = 'linear-gradient(135deg,#059669,#10b981)';
 
       const improveEl = document.getElementById('jailImprove');
@@ -1089,24 +1431,24 @@ async function unjailAgent(agentKey) {
         const lessons = {
           excessive_losses: 'I will reduce position sizes and wait for stronger confirmations.',
           high_error_rate: 'I will validate inputs more carefully and handle edge cases.',
-          ignoring_risk: 'I will always respect RiskAgent rejection — safety first.',
+          ignoring_risk: 'I will always respect RiskAgent rejection \u2014 safety first.',
           stale_agent: 'I will stay active and report status regularly.',
           repeated_failures: 'I will diagnose root causes instead of repeating failed patterns.',
         };
-        improveEl.innerHTML = `🧠 <strong>Self-improvement:</strong> "${lessons[violation] || 'I will be more careful and follow protocol.'}"`;
+        improveEl.innerHTML = `\u{1F9E0} <strong>Self-improvement:</strong> "${lessons[violation] || 'I will be more careful and follow protocol.'}"`;
         improveEl.style.display = 'block';
       }
 
       setTimeout(() => { closeJailModal(); fetchData(); }, 2500);
     } else {
-      btn.textContent = '❌ Failed';
+      btn.textContent = '\u274C Failed';
       btn.disabled = false;
-      setTimeout(() => { btn.textContent = '🔓 Release & Improve'; }, 2000);
+      setTimeout(() => { btn.textContent = '\u{1F513} Release & Improve'; }, 2000);
     }
   } catch (err) {
-    btn.textContent = '❌ Error';
+    btn.textContent = '\u274C Error';
     btn.disabled = false;
-    setTimeout(() => { btn.textContent = '🔓 Release & Improve'; }, 2000);
+    setTimeout(() => { btn.textContent = '\u{1F513} Release & Improve'; }, 2000);
   }
 }
 

@@ -1027,4 +1027,16 @@ router.post('/patches/revert', async (req, res) => {
   }
 });
 
+// ── Bot Logs (for emulator live logs panel) ──────────────
+router.get('/logs', async (req, res) => {
+  try {
+    const { getRecentLogs } = require('../bot-logger');
+    const limit = Math.min(parseInt(req.query.limit) || 30, 100);
+    const logs = getRecentLogs(limit, null, 'all');
+    res.json({ logs });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 module.exports = router;
