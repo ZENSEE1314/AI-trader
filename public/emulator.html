@@ -321,6 +321,19 @@
     }
     .chat-qc:hover{background:rgba(212,175,55,.15);color:var(--accent);border-color:var(--accent)}
 
+    /* ═══ STATS BAR ═══ */
+    .stats-bar{display:flex;gap:8px;padding:8px 16px;background:rgba(14,12,20,.6);border-bottom:1px solid var(--border2);flex-wrap:wrap;align-items:center}
+    .stat-card{
+      flex:1;min-width:100px;padding:8px 14px;background:var(--glass-bg);backdrop-filter:blur(8px);
+      border:1px solid var(--border2);border-radius:8px;display:flex;flex-direction:column;gap:2px;
+    }
+    .stat-card-label{font-size:.6rem;color:var(--fg3);text-transform:uppercase;letter-spacing:.5px}
+    .stat-card-value{font-family:'JetBrains Mono',monospace;font-size:1.1rem;font-weight:600}
+    .stat-card.accent{border-left:3px solid var(--accent)}
+    .stat-card.success{border-left:3px solid var(--success)}
+    .stat-card.warn{border-left:3px solid var(--warn)}
+    .stat-card.danger{border-left:3px solid var(--danger)}
+
     .placeholder{display:flex;justify-content:center;align-items:center;min-height:120px;color:var(--fg3);font-size:.75rem;text-align:center}
     .placeholder-icon{font-size:1.5rem;margin-bottom:8px;animation:pulse 2s ease-in-out infinite}
 
@@ -424,6 +437,26 @@
       <a href="/" class="back-link">&larr; Dashboard</a>
     </div>
   </header>
+
+  <!-- Stats Bar -->
+  <div class="stats-bar">
+    <div class="stat-card accent">
+      <span class="stat-card-label">Total Agents</span>
+      <span class="stat-card-value" id="statTotal" style="color:var(--fg)">--</span>
+    </div>
+    <div class="stat-card success">
+      <span class="stat-card-label">Running</span>
+      <span class="stat-card-value" id="statRunning" style="color:var(--success)">--</span>
+    </div>
+    <div class="stat-card warn">
+      <span class="stat-card-label">Signals</span>
+      <span class="stat-card-value" id="statSignals" style="color:var(--warn)">--</span>
+    </div>
+    <div class="stat-card danger">
+      <span class="stat-card-label">Errors</span>
+      <span class="stat-card-value" id="statErrors" style="color:var(--danger)">--</span>
+    </div>
+  </div>
 
   <div class="main-layout">
     <!-- LEFT SIDEBAR — Agent Crew List -->
@@ -1367,6 +1400,17 @@ function updateHeader(data) {
   const st = h.cycleRunning ? 'SCANNING' : (h.state || 'stopped').toUpperCase();
   b.textContent = st;
   b.className = 'badge ' + (h.cycleRunning ? 'running' : (h.state || 'idle'));
+
+  // Stats bar
+  const agents = h.agents || {};
+  const allKeys = Object.keys(agents);
+  const running = allKeys.filter(k => agents[k]?.state === 'running').length;
+  const errors = allKeys.filter(k => agents[k]?.state === 'error').length;
+  const signals = h.signalCount ?? (h.recentSignals || 0);
+  document.getElementById('statTotal').textContent = allKeys.length;
+  document.getElementById('statRunning').textContent = running;
+  document.getElementById('statSignals').textContent = signals;
+  document.getElementById('statErrors').textContent = errors;
 }
 
 function formatUptime(s) {

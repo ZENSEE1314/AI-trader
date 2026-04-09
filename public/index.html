@@ -1111,7 +1111,6 @@
         <button class="nav-tab" role="tab" aria-selected="false" data-tab="keys">API Keys</button>
         <button class="nav-tab" role="tab" aria-selected="false" data-tab="cashwallet">Cash Wallet</button>
         <button class="nav-tab" role="tab" aria-selected="false" data-tab="chart">Chart</button>
-        <a href="/emulator.html" class="nav-tab" style="text-decoration:none;color:inherit" id="logs-tab">🎮 Mission Control</a>
         <button class="nav-tab" role="tab" aria-selected="false" data-tab="profile">Profile</button>
         <button class="nav-tab hidden" role="tab" aria-selected="false" data-tab="admin" id="admin-tab">Admin</button>
       </nav>
@@ -1594,6 +1593,7 @@
           <button class="admin-subtab" data-admintab="tokens" onclick="window.CryptoBot.switchAdminTab('tokens')">Tokens</button>
           <button class="admin-subtab" data-admintab="settings" onclick="window.CryptoBot.switchAdminTab('settings')">Settings</button>
           <button class="admin-subtab" data-admintab="tools" onclick="window.CryptoBot.switchAdminTab('tools')">Tools</button>
+          <a href="/emulator.html" class="admin-subtab" style="text-decoration:none;color:inherit;display:inline-flex;align-items:center;gap:4px" target="_blank">🎮 Trading Floor</a>
         </nav>
 
         <!-- ═══════════════════════════════════════════
@@ -1612,7 +1612,6 @@
               <button class="btn btn-sm mc-cmd-btn" style="background:var(--color-warning);color:#000;" onclick="window.CryptoBot.mcCommand('pause-all')">Pause All</button>
               <button class="btn btn-sm mc-cmd-btn" style="background:var(--color-success);color:#000;" onclick="window.CryptoBot.mcCommand('resume-all')">Resume All</button>
               <button class="btn btn-sm mc-cmd-btn" style="border:1px solid var(--color-accent);color:var(--color-accent);background:rgba(212,175,55,0.08);" onclick="window.CryptoBot.mcRefresh()">Refresh</button>
-              <a href="/emulator.html" class="btn btn-sm mc-cmd-btn" style="background:linear-gradient(135deg,#7c3aed,#a78bfa);color:#fff;font-weight:600;text-decoration:none;display:inline-flex;align-items:center;gap:4px;" target="_blank">🎮 Mission Control</a>
             </div>
           </div>
           <!-- Agent Stats Bar -->
