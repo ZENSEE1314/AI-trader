@@ -1236,7 +1236,7 @@ router.post('/emergency-close', async (req, res) => {
             }
           }
         } else {
-          // Binance — close via market order
+          // Binance — cancel orders first, then close via market order
           try {
             const { USDMClient } = require('binance');
             const getBinanceRequestOptions = () => {
@@ -1245,20 +1245,28 @@ router.post('/emergency-close', async (req, res) => {
               const { HttpsProxyAgent } = require('https-proxy-agent');
               return { requestOptions: { agent: new HttpsProxyAgent(PROXY_URL) } };
             };
-            const client = new USDMClient({ api_key: apiKey, api_secret: apiSecret, ...getBinanceRequestOptions() });
-            const positions = await client.getPositions({ symbol });
-            const openPos = positions.filter(p => parseFloat(p.positionAmt) !== 0);
+            const client = new USDMClient({ api_key: apiKey, api_secret: apiSecret }, getBinanceRequestOptions());
+            const account = await client.getAccountInformation({ omitZeroBalances: false });
+            const openPos = account.positions.filter(p => p.symbol === symbol && parseFloat(p.positionAmt) !== 0);
 
             if (openPos.length > 0) {
+              // Cancel all existing orders (SL/TP) first so they don't interfere
+              try { await client.cancelAllOpenOrders({ symbol }); } catch (_) {}
+              try { await client.cancelAllAlgoOpenOrders({ symbol }); } catch (_) {}
+
               for (const pos of openPos) {
                 try {
                   const amt = parseFloat(pos.positionAmt);
                   const closeSide = amt > 0 ? 'SELL' : 'BUY';
-                  await client.submitNewOrder({ symbol, side: closeSide, type: 'MARKET', quantity: String(Math.abs(amt)), reduceOnly: 'true' });
-                  await query(`UPDATE trades SET status = 'CLOSED', exit_price = $1, closed_at = NOW() WHERE api_key_id = $2 AND symbol = $3 AND status = 'OPEN'`, [parseFloat(pos.markPrice || 0), key.id, symbol]);
+                  const absAmt = Math.abs(amt);
+                  console.log(`[EMERGENCY] Binance closing ${symbol} ${closeSide} qty=${absAmt} for ${key.email}`);
+                  await client.submitNewOrder({ symbol, side: closeSide, type: 'MARKET', quantity: absAmt, reduceOnly: 'true' });
+                  const exitPrice = parseFloat(pos.markPrice || pos.entryPrice || 0);
+                  await query(`UPDATE trades SET status = 'CLOSED', exit_price = $1, closed_at = NOW() WHERE api_key_id = $2 AND symbol = $3 AND status = 'OPEN'`, [exitPrice, key.id, symbol]);
                   totalClosed++;
-                  results.push({ user: key.email, symbol, side: amt > 0 ? 'LONG' : 'SHORT', qty: Math.abs(amt), status: 'CLOSED' });
+                  results.push({ user: key.email, symbol, side: amt > 0 ? 'LONG' : 'SHORT', qty: absAmt, status: 'CLOSED' });
                 } catch (closeErr) {
+                  console.error(`[EMERGENCY] Binance close failed for ${key.email} ${symbol}:`, closeErr.message);
                   results.push({ user: key.email, symbol, status: 'FAILED', error: closeErr.message });
                 }
               }
@@ -1270,6 +1278,7 @@ router.post('/emergency-close', async (req, res) => {
               }
             }
           } catch (binErr) {
+            console.error(`[EMERGENCY] Binance error for ${key.email}:`, binErr.message);
             results.push({ user: key.email, symbol, status: 'BINANCE_ERROR', error: binErr.message });
           }
         }
@@ -1278,7 +1287,48 @@ router.post('/emergency-close', async (req, res) => {
       }
     }
 
-    console.log(`[ADMIN] Emergency close ${symbol}: ${totalClosed} positions closed across ${keys.length} users`);
+    // Also close owner account position
+    try {
+      const ownerKey = process.env.BINANCE_API_KEY;
+      const ownerSecret = process.env.BINANCE_API_SECRET;
+      if (ownerKey && ownerSecret) {
+        const { USDMClient } = require('binance');
+        const getBinanceRequestOptions = () => {
+          const PROXY_URL = process.env.QUOTAGUARDSTATIC_URL;
+          if (!PROXY_URL) return {};
+          const { HttpsProxyAgent } = require('https-proxy-agent');
+          return { requestOptions: { agent: new HttpsProxyAgent(PROXY_URL) } };
+        };
+        const ownerClient = new USDMClient({ api_key: ownerKey, api_secret: ownerSecret }, getBinanceRequestOptions());
+        const ownerAccount = await ownerClient.getAccountInformation({ omitZeroBalances: false });
+        const ownerPos = ownerAccount.positions.filter(p => p.symbol === symbol && parseFloat(p.positionAmt) !== 0);
+        if (ownerPos.length > 0) {
+          try { await ownerClient.cancelAllOpenOrders({ symbol }); } catch (_) {}
+          try { await ownerClient.cancelAllAlgoOpenOrders({ symbol }); } catch (_) {}
+          for (const pos of ownerPos) {
+            const amt = parseFloat(pos.positionAmt);
+            const closeSide = amt > 0 ? 'SELL' : 'BUY';
+            console.log(`[EMERGENCY] Owner closing ${symbol} ${closeSide} qty=${Math.abs(amt)}`);
+            await ownerClient.submitNewOrder({ symbol, side: closeSide, type: 'MARKET', quantity: Math.abs(amt), reduceOnly: 'true' });
+            totalClosed++;
+            results.push({ user: 'OWNER', symbol, side: amt > 0 ? 'LONG' : 'SHORT', qty: Math.abs(amt), status: 'CLOSED' });
+          }
+          // Clean up tradeState in cycle.js
+          try {
+            const { tradeState } = require('../cycle');
+            if (tradeState && tradeState.has(symbol)) {
+              tradeState.delete(symbol);
+              console.log(`[EMERGENCY] Cleared tradeState for ${symbol}`);
+            }
+          } catch (_) {}
+        }
+      }
+    } catch (ownerErr) {
+      console.error(`[EMERGENCY] Owner close error:`, ownerErr.message);
+      results.push({ user: 'OWNER', symbol, status: 'FAILED', error: ownerErr.message });
+    }
+
+    console.log(`[ADMIN] Emergency close ${symbol}: ${totalClosed} positions closed across ${keys.length + 1} accounts`);
     res.json({ ok: true, symbol, totalClosed, totalUsers: keys.length, results });
   } catch (err) {
     console.error('Emergency close error:', err);
