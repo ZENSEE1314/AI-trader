@@ -1822,6 +1822,23 @@ async function syncTradeStatus() {
             if (pnlUsdt > 0) {
               await recordProfitSplit(db, trade.user_id, trade.api_key_id, pnlUsdt, trade.symbol);
             }
+
+            // RPG: reward agents with XP and earnings
+            try {
+              const { getCoordinator } = require('./agents');
+              const coord = getCoordinator();
+              const tokenKey = trade.symbol.toLowerCase().replace('usdt', '');
+              const tokenAgent = coord._agents.get(tokenKey);
+              if (tokenAgent) {
+                const xpAmount = pnlUsdt > 0 ? 100 : 10;
+                tokenAgent.gainXp(xpAmount, pnlUsdt > 0).catch(() => {});
+                tokenAgent.addEarnings(Math.abs(pnlUsdt)).catch(() => {});
+              }
+              coord.traderAgent.addEarnings(Math.abs(pnlUsdt)).catch(() => {});
+              if (pnlUsdt > 0) {
+                coord.traderAgent.gainXp(30, true).catch(() => {});
+              }
+            } catch (_) {}
           } else {
             // Still open — update live PnL
             const livePnl = parseFloat(exchangePos.pnl.toFixed(4));

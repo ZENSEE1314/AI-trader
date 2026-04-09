@@ -354,6 +354,17 @@ async function initAllTables() {
       created_at TIMESTAMPTZ DEFAULT NOW()
     )`,
     `CREATE INDEX IF NOT EXISTS idx_agent_lessons_agent ON agent_lessons (agent, type)`,
+    // Agent profiles — level, XP, earnings tracking (RPG system)
+    `CREATE TABLE IF NOT EXISTS agent_profiles (
+      agent TEXT PRIMARY KEY,
+      level INTEGER DEFAULT 1,
+      xp INTEGER DEFAULT 0,
+      total_earned NUMERIC DEFAULT 0,
+      tasks_completed INTEGER DEFAULT 0,
+      tasks_success INTEGER DEFAULT 0,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )`,
     // Optimizer candle cache (survives redeploys)
     `CREATE TABLE IF NOT EXISTS optimizer_cache (
       id INTEGER PRIMARY KEY,

@@ -45,6 +45,9 @@ class BaseAgent {
 
     // Event listeners: { eventName: [fn, ...] }
     this._listeners = {};
+
+    // RPG profile — level, XP, earnings (loaded from DB on first access)
+    this._rpg = { level: 1, xp: 0, totalEarned: 0, tasksCompleted: 0, tasksSuccess: 0, loaded: false };
   }
 
   // ── Lifecycle ─────────────────────────────────────────────
@@ -393,6 +396,101 @@ class BaseAgent {
     } catch { return []; }
   }
 
+  // ── RPG Level System ────────────────────────────────────────
+
+  /** XP needed to reach a given level: level * 100 (cumulative: L*(L+1)/2 * 100) */
+  static xpForLevel(level) { return level * 100; }
+
+  /** Calculate level from total XP */
+  static levelFromXp(totalXp) {
+    let level = 1;
+    let xpNeeded = 0;
+    while (true) {
+      xpNeeded += BaseAgent.xpForLevel(level);
+      if (totalXp < xpNeeded) return level;
+      level++;
+      if (level > 100) return 100;
+    }
+  }
+
+  /** XP progress within current level (0-1) */
+  getXpProgress() {
+    let consumed = 0;
+    for (let l = 1; l < this._rpg.level; l++) consumed += BaseAgent.xpForLevel(l);
+    const needed = BaseAgent.xpForLevel(this._rpg.level);
+    const current = this._rpg.xp - consumed;
+    return Math.min(1, Math.max(0, current / needed));
+  }
+
+  /** Load RPG profile from DB (called once) */
+  async loadRpgProfile() {
+    if (this._rpg.loaded) return;
+    try {
+      const { query } = require('../db');
+      const rows = await query('SELECT * FROM agent_profiles WHERE agent = $1', [this.name]);
+      if (rows.length > 0) {
+        const r = rows[0];
+        this._rpg.level = r.level;
+        this._rpg.xp = r.xp;
+        this._rpg.totalEarned = parseFloat(r.total_earned) || 0;
+        this._rpg.tasksCompleted = r.tasks_completed;
+        this._rpg.tasksSuccess = r.tasks_success;
+      }
+      this._rpg.loaded = true;
+    } catch { this._rpg.loaded = true; }
+  }
+
+  /** Save RPG profile to DB */
+  async saveRpgProfile() {
+    try {
+      const { query } = require('../db');
+      await query(`
+        INSERT INTO agent_profiles (agent, level, xp, total_earned, tasks_completed, tasks_success, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, NOW())
+        ON CONFLICT (agent) DO UPDATE SET
+          level = $2, xp = $3, total_earned = $4, tasks_completed = $5, tasks_success = $6, updated_at = NOW()
+      `, [this.name, this._rpg.level, this._rpg.xp, this._rpg.totalEarned, this._rpg.tasksCompleted, this._rpg.tasksSuccess]);
+    } catch {}
+  }
+
+  /** Award XP for completing a task. isSuccess determines if it was correct. */
+  async gainXp(amount, isSuccess = true) {
+    await this.loadRpgProfile();
+    this._rpg.xp += amount;
+    this._rpg.tasksCompleted++;
+    if (isSuccess) this._rpg.tasksSuccess++;
+    const newLevel = BaseAgent.levelFromXp(this._rpg.xp);
+    const leveledUp = newLevel > this._rpg.level;
+    if (leveledUp) {
+      this._rpg.level = newLevel;
+      this.addActivity('success', `LEVEL UP! Now level ${newLevel}`);
+      this.log(`LEVEL UP → ${newLevel} (${this._rpg.xp} XP)`);
+    }
+    await this.saveRpgProfile();
+    return { leveledUp, newLevel };
+  }
+
+  /** Add earnings to this agent's total */
+  async addEarnings(amount) {
+    await this.loadRpgProfile();
+    this._rpg.totalEarned += amount;
+    await this.saveRpgProfile();
+  }
+
+  getRpgProfile() {
+    return {
+      level: this._rpg.level,
+      xp: this._rpg.xp,
+      xpProgress: this.getXpProgress(),
+      xpForNext: BaseAgent.xpForLevel(this._rpg.level),
+      totalEarned: this._rpg.totalEarned,
+      tasksCompleted: this._rpg.tasksCompleted,
+      tasksSuccess: this._rpg.tasksSuccess,
+      successRate: this._rpg.tasksCompleted > 0
+        ? Math.round((this._rpg.tasksSuccess / this._rpg.tasksCompleted) * 100) : 0,
+    };
+  }
+
   // ── Health ────────────────────────────────────────────────
 
   getHealth() {
@@ -406,6 +504,7 @@ class BaseAgent {
       currentTask: this.currentTask,
       inboxSize: this._inbox.length,
       recentActivity: this.getActivity(10),
+      rpg: this.getRpgProfile(),
     };
   }
 
