@@ -136,9 +136,24 @@ class AgentCoordinator extends BaseAgent {
         }
       }
 
+      // ── Step 1.5: Kronos AI batch prediction ──
+      let kronosPredictions = null;
+      try {
+        const kronos = require('../kronos');
+        const tokenSymbols = [...this.tokenAgents.keys()];
+        if (tokenSymbols.length > 0) {
+          this.currentTask = { description: `Kronos scanning ${tokenSymbols.length} tokens`, startedAt: Date.now() };
+          kronosPredictions = await kronos.scanAllTokens(tokenSymbols, '15m', 20, 3);
+          this.addActivity('info', `Kronos scanned ${kronosPredictions.size} tokens`);
+        }
+      } catch (kronosErr) {
+        this.addActivity('error', `Kronos batch error (non-fatal): ${kronosErr.message}`);
+      }
+
       // ── Step 2: All TokenAgents scan in parallel ──
       let signals = [];
       let scanResult = null;
+      const dailyBiasCache = new Map();
 
       this.currentTask = { description: `Scanning ${this.tokenAgents.size} tokens in parallel`, startedAt: Date.now() };
 
@@ -148,7 +163,7 @@ class AgentCoordinator extends BaseAgent {
       for (let i = 0; i < tokenEntries.length; i += batchSize) {
         const batch = tokenEntries.slice(i, i + batchSize);
         const results = await Promise.allSettled(
-          batch.map(([sym, agent]) => agent.run().catch(e => null))
+          batch.map(([sym, agent]) => agent.run({ kronosPredictions, dailyBiasCache }).catch(e => null))
         );
         for (const r of results) {
           if (r.status === 'fulfilled' && r.value && r.value.direction) {
@@ -162,7 +177,7 @@ class AgentCoordinator extends BaseAgent {
       // Also run ChartAgent for any tokens that don't have dedicated agents
       if (!this.chartAgent.paused) {
         try {
-          const chartOutput = await this.chartAgent.run({ topNCoins });
+          const chartOutput = await this.chartAgent.run({ topNCoins, kronosPredictions });
           if (chartOutput?.signals) {
             for (const s of chartOutput.signals) {
               // Only add if not already found by a token agent

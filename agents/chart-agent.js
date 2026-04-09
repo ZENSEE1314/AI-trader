@@ -40,7 +40,7 @@ class ChartAgent extends BaseAgent {
   }
 
   async execute(context = {}) {
-    const { topNCoins = 50, forceScan = false } = context;
+    const { topNCoins = 50, forceScan = false, kronosPredictions = null } = context;
 
     this.logScan('Starting market scan...');
 
@@ -56,7 +56,7 @@ class ChartAgent extends BaseAgent {
     // 3. Run SMC scan
     const signals = await scanSMC(
       (msg) => this.logScan(msg),
-      { topNCoins }
+      { topNCoins, kronosPredictions }
     );
 
     // 4. Record scan result
