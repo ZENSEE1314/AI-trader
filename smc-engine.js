@@ -490,8 +490,16 @@ async function analyzeLHHL(ticker, params, dailyBiasCache, kronosPredictions = n
   }
 
   // ┌─────────────────────────────────────────────────────────┐
-  // │ Safety Guards (always on — protect against bad entries)  │
+  // │ Volatility Shield: Stop scans during extreme volatility  │
   // └─────────────────────────────────────────────────────────┘
+  const vols15 = klines15m.slice(-20).map(k => parseFloat(k[5]));
+  const avgVol = vols15.reduce((a, b) => a + b, 0) / vols15.length;
+  const currentVol = parseFloat(klines15m[klines15m.length - 1][5]);
+
+  if (avgVol > 0 && currentVol / avgVol > 4.0) {
+    bLog.scan(`${symbol}: Volatility Shield active — volume spike ${ (currentVol/avgVol).toFixed(1) }x (blocking entry)`);
+    return null;
+  }
 
   // RSI Overbought/Oversold — don't chase extended moves
   {
@@ -597,13 +605,13 @@ async function analyzeLHHL(ticker, params, dailyBiasCache, kronosPredictions = n
   const aiModifier = await aiLearner.getAIScoreModifier(symbol, setup, direction);
   score = score * aiModifier;
 
-  // Pattern-specific penalty from Loss Autopsy
+  // Combined Modifier = Boost - Penalty
   const trend1h = struct1h.trend || 'unknown';
   const session = aiLearner.getCurrentSession();
-  const patternPenalty = await aiLearner.getPatternPenalty(symbol, setup, direction, session, trend1h);
-  if (patternPenalty !== 0) {
-    score += patternPenalty;
-    bLog.scan(`${symbol}: applying pattern penalty ${patternPenalty} for DNA ${[symbol, setup, direction, session, trend1h].join('|')}`);
+  const patternMod = await aiLearner.getPatternModifier(symbol, setup, direction, session, trend1h);
+  if (patternMod !== 0) {
+    score += patternMod;
+    bLog.scan(`${symbol}: applying pattern modifier ${patternMod > 0 ? 'boost' : 'penalty'} ${patternMod} for DNA ${[symbol, setup, direction, session, trend1h].join('|')}`);
   }
 
   bLog.scan(

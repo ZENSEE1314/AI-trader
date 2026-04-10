@@ -1492,6 +1492,48 @@ async function syncTradeStatus() {
             }
           }
 
+          // ── Swarm-based Dynamic Exit ─────────────────────────────────────
+          // Check if the swarm consensus has shifted against our positions
+          for (const trade of trades) {
+            const exchangePos = openSymbols.get(trade.symbol);
+            if (exchangePos) {
+              try {
+                const { runSwarm } = require('./agents/swarm-engine');
+                // Fetch minimal seeds for a quick swarm check
+                const seeds = {
+                  current: exchangePos.entryPrice, // simplified for exit check
+                  indicators: {},
+                  pred_high: 0, pred_low: 0, trend: 'unknown'
+                };
+                const swarm = await runSwarm(trade.symbol, seeds);
+
+                let shouldExit = false;
+                if (trade.direction === 'LONG' && (swarm.direction === 'SHORT' || swarm.confidence < 40)) {
+                  shouldExit = true;
+                } else if (trade.direction === 'SHORT' && (swarm.direction === 'LONG' || swarm.confidence < 40)) {
+                  shouldExit = true;
+                }
+
+                if (shouldExit) {
+                  bLog.trade(`DYNAMIC EXIT: Swarm shift detected for ${trade.symbol} (${trade.direction}). Consensus: ${swarm.direction} (${swarm.confidence}%). Closing position.`);
+                  const closeSide = trade.direction === 'LONG' ? 'SELL' : 'BUY';
+                  await userClient.createOrder({
+                    symbol: trade.symbol,
+                    side: closeSide,
+                    type: 'MARKET',
+                    quantity: Math.abs(exchangePos.amt),
+                    reduceOnly: true
+                  });
+                  await db.query(`UPDATE trades SET status = 'CLOSED', exit_reason = 'swarm_consensus_shift' WHERE id = $1`, [trade.id]);
+                  await notify(`📉 *Dynamic AI Exit*\n${trade.symbol} ${trade.direction} closed early due to Swarm shift to ${swarm.direction} (${swarm.confidence}% confidence).`);
+                  continue; // Move to next trade, position is now closed
+                }
+              } catch (e) {
+                bLog.error(`Swarm dynamic exit failed for ${trade.symbol}: ${e.message}`);
+              }
+            }
+          }
+
           // Check trailing SL for open positions
           for (const trade of trades) {
             const exchangePos = openSymbols.get(trade.symbol);
@@ -1874,14 +1916,49 @@ async function syncTradeStatus() {
               await recordProfitSplit(db, trade.user_id, trade.api_key_id, pnlUsdt, trade.symbol);
             }
 
-            // RPG: XP only from winning trades — all agents involved get rewarded
+            // RPG: XP and Point Distribution System
             try {
               const { getCoordinator } = require('./agents');
               const coord = getCoordinator();
               const tokenKey = trade.symbol.toLowerCase().replace('usdt', '');
               const tokenAgent = coord._agents.get(tokenKey);
+
+              // 1. Point Distribution (New Economy Logic)
               if (pnlUsdt > 0) {
-                // Winning trade — reward all agents in the pipeline
+                // Credit (Wins)
+                // Signal Discoverer (Chart): +10 pts
+                if (coord.chartAgent) await coord.chartAgent.adjustPoints(10);
+                // Signal Approver (Risk): +5 pts
+                if (coord.riskAgent) await coord.riskAgent.adjustPoints(5);
+                // Trade Executor (Trader): +2 pts
+                if (coord.traderAgent) await coord.traderAgent.adjustPoints(2);
+
+                // TP3 Hit multiplier (2x points)
+                // We estimate TP3 hit if pnl is significantly high (e.g. > 2% absolute price move)
+                const priceMove = Math.abs((exitPrice - entryPrice) / entryPrice);
+                if (priceMove >= 0.02) {
+                  if (coord.chartAgent) await coord.chartAgent.adjustPoints(10); // Extra 10
+                  if (coord.riskAgent) await coord.riskAgent.adjustPoints(5);  // Extra 5
+                }
+              } else {
+                // Blame (Losses): -5 pts for all involved
+                if (coord.chartAgent) await coord.chartAgent.adjustPoints(-5);
+                if (coord.riskAgent) await coord.riskAgent.adjustPoints(-5);
+                if (coord.traderAgent) await coord.traderAgent.adjustPoints(-5);
+
+                // RiskAgent Penalty: Harsh penalty if it was a "Trap Pattern"
+                try {
+                  const { getPatternPenalty } = require('./ai-learner');
+                  const penalty = await getPatternPenalty(trade.symbol, trade.direction);
+                  if (penalty > 0) {
+                    if (coord.riskAgent) await coord.riskAgent.adjustPoints(-15);
+                    bLog.trade(`Economy: RiskAgent penalized -15pts for approving trap pattern on ${trade.symbol}`);
+                  }
+                } catch (_) {}
+              }
+
+              // 2. Legacy XP System (Keep for consistency)
+              if (pnlUsdt > 0) {
                 if (tokenAgent) tokenAgent.gainXp(100, true).catch(() => {});
                 coord.traderAgent.gainXp(50, true).catch(() => {});
                 coord.chartAgent.gainXp(30, true).catch(() => {});

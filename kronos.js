@@ -277,8 +277,8 @@ async function fetchKlines(symbol, interval) {
 }
 
 // ── Single prediction ───────────────────────────────────────
-
-async function getKronosPrediction(symbol, interval = '15m', predLen = 20) {
+// This now returns "Seeds" for the Swarm Simulation Engine
+async function getMarketSeeds(symbol, interval = '15m', predLen = 20) {
   const candles = await fetchKlines(symbol, interval);
 
   if (candles.length < 60) {
@@ -338,6 +338,11 @@ async function getKronosPrediction(symbol, interval = '15m', predLen = 20) {
   };
 }
 
+// Legacy wrapper for backward compatibility
+async function getKronosPrediction(symbol, interval = '15m', predLen = 20) {
+  return await getMarketSeeds(symbol, interval, predLen);
+}
+
 // ── Batch scan ──────────────────────────────────────────────
 
 async function scanAllTokens(symbols, interval = '15m', predLen = 20, concurrency = 3) {
@@ -390,7 +395,69 @@ async function scanAllTokens(symbols, interval = '15m', predLen = 20, concurrenc
   return predictions;
 }
 
+async function verifySwarmPredictions() {
+  try {
+    const { query } = require('./db');
+    const unverified = await query(
+      `SELECT id, symbol, direction, target_price, predicted_at
+       FROM swarm_predictions
+       WHERE verified_at IS NULL
+       AND predicted_at < NOW() - INTERVAL '30 minutes'
+       LIMIT 20`
+    );
+
+    if (!unverified.length) return;
+
+    for (const pred of unverified) {
+      try {
+        const candles = await fetchKlines(pred.symbol, '15m', 50);
+        if (candles.length < 20) continue;
+
+        // We want the price ~20 candles after predicted_at
+        // Since we use 15m candles, 20 candles = 300 minutes = 5 hours
+        // predicted_at is the start point. We look for the close price at the end of the window.
+        const currentPrice = candles[candles.length - 1].close;
+        const startPrice = candles[0].close;
+
+        const movePct = ((currentPrice - startPrice) / startPrice) * 100;
+        const isCorrect = pred.direction === 'LONG' ? currentPrice > startPrice : currentPrice < startPrice;
+
+        await query(
+          `UPDATE swarm_predictions SET
+            verified_at = NOW(),
+            is_correct = $1,
+            actual_move_pct = $2
+           WHERE id = $3`,
+          [isCorrect, movePct, pred.id]
+        );
+      } catch (e) {
+        console.error(`[Kronos Auditor] Failed to verify ${pred.symbol}: ${e.message}`);
+      }
+    }
+  } catch (err) {
+    console.error(`[Kronos Auditor] Loop error: ${err.message}`);
+  }
+}
+
 // ── Cache accessors ─────────────────────────────────────────
+  try {
+    const { query } = require('./db');
+    const rows = await query(
+      `SELECT
+        COUNT(*) as total,
+        SUM(CASE WHEN is_correct = true THEN 1 ELSE 0 END) as correct
+       FROM swarm_predictions
+       WHERE verified_at IS NOT NULL
+       AND predicted_at > NOW() - INTERVAL '7 days'`
+    );
+    const { total, correct } = rows[0];
+    if (!total || total === 0) return 0;
+    return Math.round((correct / total) * 100 * 10) / 10;
+  } catch (err) {
+    console.error(`[Kronos] Accuracy calc failed: ${err.message}`);
+    return 0;
+  }
+}
 
 function getCachedPrediction(symbol) {
   if (Date.now() - lastScanTime > CACHE_TTL_MS) return null;
@@ -405,7 +472,7 @@ function getAllPredictions() {
 
 // ── Telegram summary ────────────────────────────────────────
 
-function formatPredictionSummary() {
+async function formatPredictionSummary(coordinator) {
   const all = getAllPredictions();
   if (!all.length) return null;
 
@@ -444,6 +511,19 @@ function formatPredictionSummary() {
     msg += '\n';
   }
 
+  // ── Telemetry: Agent Leaderboard & Swarm Accuracy ──
+  if (coordinator) {
+    const leaderboard = await coordinator.getAgentLeaderboard();
+    msg += `\n🏆 *Agent Leaderboard*\n`;
+    leaderboard.slice(0, 3).forEach((a, i) => {
+      msg += `${i + 1}. ${a.name} (Lv.${a.level}) - ${a.earnings.toFixed(2)} USDT\n`;
+    });
+
+    // Real Swarm Accuracy tracking
+    const accuracy = await calculateSwarmAccuracy();
+    msg += `\n🎯 *Swarm Accuracy*: ${accuracy}%\n`;
+  }
+
   return msg;
 }
 
@@ -453,4 +533,5 @@ module.exports = {
   getCachedPrediction,
   getAllPredictions,
   formatPredictionSummary,
+  verifySwarmPredictions,
 };

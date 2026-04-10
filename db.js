@@ -386,9 +386,32 @@ async function initAllTables() {
       total_earned NUMERIC DEFAULT 0,
       tasks_completed INTEGER DEFAULT 0,
       tasks_success INTEGER DEFAULT 0,
+      points DECIMAL DEFAULT 0,
+      tier VARCHAR(20) DEFAULT 'Bronze',
+      monthly_pnl NUMERIC DEFAULT 0,
+      monthly_risk NUMERIC DEFAULT 0,
       created_at TIMESTAMPTZ DEFAULT NOW(),
       updated_at TIMESTAMPTZ DEFAULT NOW()
     )`,
+    `CREATE TABLE IF NOT EXISTS agent_trophies (
+      id SERIAL PRIMARY KEY,
+      agent TEXT NOT NULL,
+      month VARCHAR(10) NOT NULL,
+      trophy_type VARCHAR(50),
+      buff_multiplier DECIMAL DEFAULT 1.0,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE(agent, month)
+    )`,
+    `CREATE TABLE IF NOT EXISTS user_agent_preferences (
+      id SERIAL PRIMARY KEY,
+      api_key_id INTEGER NOT NULL REFERENCES api_keys(id) ON DELETE CASCADE,
+      preferred_agent TEXT,
+      min_tier VARCHAR(20),
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE(api_key_id)
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_at_agent ON agent_trophies (agent)`,
+    `CREATE INDEX IF NOT EXISTS idx_uap_key ON user_agent_preferences (api_key_id)`,
     // Kronos AI predictions (persisted so dashboard can read them)
     `CREATE TABLE IF NOT EXISTS kronos_predictions (
       symbol VARCHAR(20) PRIMARY KEY,
@@ -451,6 +474,19 @@ async function initAllTables() {
       created_at TIMESTAMPTZ DEFAULT NOW()
     )`,
     `CREATE INDEX IF NOT EXISTS idx_code_patches_status ON code_patches (status)`,
+    `CREATE TABLE IF NOT EXISTS swarm_predictions (
+      id SERIAL PRIMARY KEY,
+      symbol VARCHAR(20),
+      direction VARCHAR(10),
+      target_price DECIMAL,
+      confidence INTEGER,
+      predicted_at TIMESTAMPTZ DEFAULT NOW(),
+      verified_at TIMESTAMPTZ,
+      is_correct BOOLEAN,
+      actual_move_pct DECIMAL
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_swarm_pred_symbol ON swarm_predictions (symbol)`,
+    `CREATE INDEX IF NOT EXISTS idx_swarm_pred_verified ON swarm_predictions (verified_at)`,
     // Optimizer candle cache (survives redeploys)
     `CREATE TABLE IF NOT EXISTS optimizer_cache (
       id INTEGER PRIMARY KEY,

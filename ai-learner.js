@@ -711,15 +711,64 @@ async function performLossAutopsy(tradeData) {
   }
 }
 
-async function getPatternPenalty(symbol, setup, direction, session, trend1h) {
+async function performWinAutopsy(tradeData) {
+  try {
+    // DNA: symbol | setup | direction | session | trend1h
+    const dna = [
+      tradeData.symbol,
+      tradeData.setup,
+      tradeData.direction,
+      tradeData.session || getCurrentSession(),
+      tradeData.trend1h || 'unknown'
+    ].join('|').toUpperCase();
+
+    // 1. Update pattern stats (increment win count)
+    await query(
+      `INSERT INTO pattern_penalties (pattern_dna, win_count, last_updated)
+       VALUES ($1, 1, NOW())
+       ON CONFLICT (pattern_dna) DO UPDATE SET
+         win_count = pattern_penalties.win_count + 1,
+         last_updated = NOW()`,
+      [dna]
+    );
+
+    // 2. Calculate positive boost
+    const [row] = await query(
+      `SELECT loss_count, win_count FROM pattern_penalties WHERE pattern_dna = $1`,
+      [dna]
+    );
+
+    if (row) {
+      const total = row.loss_count + row.win_count;
+      const winRate = total > 0 ? row.win_count / total : 0;
+
+      let boost = 0;
+      if (winRate > 0.60) {
+        // Scale: +1 point per win, cap at +10
+        boost = Math.min(row.win_count * 1, 10);
+      }
+
+      await query(
+        `UPDATE pattern_penalties SET positive_boost = $1 WHERE pattern_dna = $2`,
+        [boost, dna]
+      );
+    }
+  } catch (err) {
+    console.error(`[AI Learner] Win Autopsy failed: ${err.message}`);
+  }
+}
+
+async function getPatternModifier(symbol, setup, direction, session, trend1h) {
   try {
     const dna = [symbol, setup, direction, session || getCurrentSession(), trend1h || 'unknown']
       .join('|').toUpperCase();
     const [row] = await query(
-      `SELECT current_penalty FROM pattern_penalties WHERE pattern_dna = $1`,
+      `SELECT current_penalty, positive_boost FROM pattern_penalties WHERE pattern_dna = $1`,
       [dna]
     );
-    return row ? parseFloat(row.current_penalty) : 0;
+    if (!row) return 0;
+    // Combined Modifier = Boost - Penalty
+    return (parseFloat(row.positive_boost) || 0) + (parseFloat(row.current_penalty) || 0);
   } catch (err) {
     return 0;
   }
@@ -830,7 +879,8 @@ module.exports = {
   getCurrentVersion,
   getLearningSummary,
   performLossAutopsy,
-  getPatternPenalty,
+  performWinAutopsy,
+  getPatternModifier,
   analyzeWorstPatterns,
   DEFAULT_PARAMS,
 };

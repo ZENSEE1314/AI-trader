@@ -65,7 +65,7 @@ class BaseAgent {
     this._listeners = {};
 
     // RPG profile — level, XP, earnings (loaded from DB on first access)
-    this._rpg = { level: 1, xp: 0, totalEarned: 0, tasksCompleted: 0, tasksSuccess: 0, loaded: false };
+    this._rpg = { level: 1, xp: 0, totalEarned: 0, tasksCompleted: 0, tasksSuccess: 0, loaded: false, points: 0 };
 
     // ── Intelligence & Personality System ────────────────────
     this._personality = {
@@ -481,6 +481,7 @@ class BaseAgent {
         this._rpg.totalEarned = parseFloat(r.total_earned) || 0;
         this._rpg.tasksCompleted = r.tasks_completed;
         this._rpg.tasksSuccess = r.tasks_success;
+        this._rpg.points = parseFloat(r.points) || 0;
       }
       this._rpg.loaded = true;
     } catch { this._rpg.loaded = true; }
@@ -491,12 +492,55 @@ class BaseAgent {
     try {
       const { query } = require('../db');
       await query(`
-        INSERT INTO agent_profiles (agent, level, xp, total_earned, tasks_completed, tasks_success, updated_at)
-        VALUES ($1, $2, $3, $4, $5, $6, NOW())
+        INSERT INTO agent_profiles (agent, level, xp, total_earned, tasks_completed, tasks_success, points, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
         ON CONFLICT (agent) DO UPDATE SET
-          level = $2, xp = $3, total_earned = $4, tasks_completed = $5, tasks_success = $6, updated_at = NOW()
-      `, [this.name, this._rpg.level, this._rpg.xp, this._rpg.totalEarned, this._rpg.tasksCompleted, this._rpg.tasksSuccess]);
+          level = $2, xp = $3, total_earned = $4, tasks_completed = $5, tasks_success = $6, points = $7, updated_at = NOW()
+      `, [this.name, this._rpg.level, this._rpg.xp, this._rpg.totalEarned, this._rpg.tasksCompleted, this._rpg.tasksSuccess, this._rpg.points]);
     } catch {}
+  }
+
+  /** Adjust agent points based on trade outcome */
+  async adjustPoints(amount) {
+    await this.loadRpgProfile();
+    this._rpg.points += amount;
+    await this.saveRpgProfile();
+    this.addActivity('economy', `Points adjusted: ${amount > 0 ? '+' : ''}${amount} (Total: ${this._rpg.points})`);
+  }
+
+  /** Update prestige tier based on points */
+  updateTier() {
+    const pts = this._rpg.points;
+    let tier = 'Bronze';
+    if (pts >= 5001) tier = 'Legend';
+    else if (pts >= 2001) tier = 'Diamond';
+    else if (pts >= 501) tier = 'Gold';
+    else if (pts >= 101) tier = 'Silver';
+
+    this._profile.tier = tier;
+    return tier;
+  }
+
+  /** Get point-based influence multiplier (buff) */
+  getPrestigeBuff() {
+    const tier = this.updateTier();
+    const buffs = { 'Legend': 1.5, 'Diamond': 1.3, 'Gold': 1.2, 'Silver': 1.1, 'Bronze': 1.0 };
+
+    // Check for monthly trophy buff
+    let finalBuff = buffs[tier] || 1.0;
+    try {
+      const { query } = require('../db');
+      const trophies = await query(
+        'SELECT buff_multiplier FROM agent_trophies WHERE agent = $1 AND month = to_char(NOW(), \'Mon YYYY\')',
+        [this.name]
+      );
+      if (trophies.length > 0) {
+        finalBuff += (parseFloat(trophies[0].buff_multiplier) || 0);
+      }
+    } catch (e) {
+      // Fallback to tier buff if trophy check fails
+    }
+    return finalBuff;
   }
 
   /** Award XP for completing a task. isSuccess determines if it was correct. */
@@ -552,6 +596,8 @@ class BaseAgent {
       xpProgress: this.getXpProgress(),
       xpForNext: BaseAgent.xpForLevel(this._rpg.level),
       totalEarned: this._rpg.totalEarned,
+      points: this._rpg.points,
+      tier: this.updateTier(),
       tasksCompleted: this._rpg.tasksCompleted,
       tasksSuccess: this._rpg.tasksSuccess,
       successRate: this._rpg.tasksCompleted > 0

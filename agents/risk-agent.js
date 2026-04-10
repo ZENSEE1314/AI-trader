@@ -66,11 +66,15 @@ class RiskAgent extends BaseAgent {
     // Consume inter-agent messages from KronosAgent and StrategyAgent
     const kronosMsgs = this.consumeMessages('kronos-predictions');
     const strategyMsgs = this.consumeMessages('strategy-risk');
+
+    const swarmIntel = new Map();
     if (kronosMsgs.length > 0) {
-      const highConf = kronosMsgs[kronosMsgs.length - 1].payload?.highConf || [];
-      if (highConf.length > 0) {
-        this.addActivity('info', `Kronos intel: ${highConf.length} high-confidence prediction(s)`);
-        this.remember('kronos_highconf', highConf.map(p => `${p.symbol} ${p.direction}`).join(', ')).catch(() => {});
+      const lastKronos = kronosMsgs[kronosMsgs.length - 1].payload;
+      if (lastKronos?.highConf) {
+        lastKronos.highConf.forEach(p => {
+          swarmIntel.set(p.symbol, { confidence: p.confidence, direction: p.direction, logic: p.logic });
+        });
+        this.addActivity('info', `Swarm intel: ${lastKronos.highConf.length} high-conf consensus results cached`);
       }
     }
     if (strategyMsgs.length > 0) {
@@ -148,6 +152,19 @@ class RiskAgent extends BaseAgent {
       // Rule 4: Min score gate
       if (signal.score < minScore) {
         reasons.push(`Score ${signal.score} < min ${minScore}`);
+      }
+
+      // Rule 4b: Swarm Consensus Gate
+      const swarm = swarmIntel.get(sym);
+      if (swarm) {
+        // If the swarm is heavily conflicted (confidence < 50%), block it even if score is high
+        if (swarm.confidence < 50) {
+          reasons.push(`Swarm conflict (Conf: ${swarm.confidence}%)`);
+        }
+        // If the swarm direction contradicts the signal direction, it's a major red flag
+        if (swarm.direction !== 'NEUTRAL' && swarm.direction !== signal.direction) {
+          reasons.push(`Swarm contradiction (${swarm.direction} vs ${signal.direction})`);
+        }
       }
 
       // Rule 5: Drawdown protection — reduce after 3+ consecutive losses

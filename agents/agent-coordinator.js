@@ -258,7 +258,17 @@ class AgentCoordinator extends BaseAgent {
       this.getLeaderboard(); // refresh ranks
     }
 
-    // 5. Run police patrol (pass coordinator context)
+    // 5. Swarm Accuracy Auditor (verify predictions every 20 micro-cycles ~10 min)
+    if (this._microCycleCount % 20 === 0) {
+      try {
+        const { verifySwarmPredictions } = require('../kronos');
+        await verifySwarmPredictions();
+      } catch (err) {
+        this.addActivity('error', `Swarm Auditor error: ${err.message}`);
+      }
+    }
+
+    // 6. Run police patrol (pass coordinator context)
     if (this._microCycleCount % 2 === 0 && !this.policeAgent.paused) {
       this.policeAgent.run({ coordinator: this }).catch(() => {});
     }
@@ -389,8 +399,17 @@ class AgentCoordinator extends BaseAgent {
     return board;
   }
 
-  /** Auto-assign rivalries between agents of similar level for competition */
-  updateRivalries() {
+  async getAgentLeaderboard() {
+    const board = this.getLeaderboard();
+    return board.slice(0, 10).map((entry, idx) => ({
+      rank: idx + 1,
+      name: this._agents.get(entry.key)?.name || entry.key,
+      level: this._agents.get(entry.key)?._rpg?.level || 1,
+      xp: entry.xp,
+      earnings: entry.earnings || 0,
+      winRate: entry.winRate || 0
+    }));
+  }
     const board = this.getLeaderboard();
     for (let i = 0; i < board.length; i++) {
       const agent = this._agents.get(board[i].key);
@@ -1053,7 +1072,49 @@ class AgentCoordinator extends BaseAgent {
     return { from: 'Coordinator', message: `Set **ANTHROPIC_API_KEY** on Railway for AI-powered responses. Without it, I can only run commands like "scan now", "status", "audit trades", etc. Type "help" for the full list.` };
   }
 
-  _buildStatusChat() {
+  async _getSignalAdjustment(agent, signalText, apiKeyId = null) {
+    try {
+      // Priority: If this user has a preferred agent, and that agent is the one being polled,
+      // we grant it absolute priority by boosting its weight significantly.
+      let weightMultiplier = agent.getPrestigeBuff();
+      if (apiKeyId) {
+        const { getPreferredAgent } = require('./governance-engine');
+        const preferred = await getPreferredAgent(apiKeyId);
+        if (preferred === agent.name) {
+          weightMultiplier *= 5.0; // Absolute priority for the preferred agent
+        }
+      }
+
+      const systemPrompt = getSystemPrompt(agent.name) +
+        `\\n\\nYour role in the War Room is to be a critical reviewer.
+        Analyze the proposed signal and return a JSON object with:
+        - value: number (adjustment to the score, e.g., -3.0 for overextended, +2.0 for strong trend)
+        - reasoning: string (concise explanation why)`;
+
+      const aiResponse = await think({
+        agentName: agent.name,
+        systemPrompt,
+        userMessage: `Proposed Signal: ${signalText}. What is your adjustment to the score?`,
+        context: {
+          health: agent.getHealth(),
+          recentActivity: agent.getActivity(5)
+        }
+      });
+
+      // Attempt to parse JSON from response
+      const match = aiResponse.match(/\{.*\}/s);
+      if (match) {
+        const result = JSON.parse(match[0]);
+        return {
+          value: result.value * weightMultiplier,
+          reasoning: result.reasoning
+        };
+      }
+      return { value: 0, reasoning: 'No clear adjustment provided.' };
+    } catch (e) {
+      return { value: 0, reasoning: 'Could not calculate adjustment.' };
+    }
+  }
     const h = this.getHealth();
     const agents = h.agents || {};
     const lines = [];
