@@ -410,6 +410,8 @@ class AgentCoordinator extends BaseAgent {
       winRate: entry.winRate || 0
     }));
   }
+
+  updateRivalries() {
     const board = this.getLeaderboard();
     for (let i = 0; i < board.length; i++) {
       const agent = this._agents.get(board[i].key);
@@ -1115,10 +1117,12 @@ class AgentCoordinator extends BaseAgent {
       return { value: 0, reasoning: 'Could not calculate adjustment.' };
     }
   }
+  _buildHealthChat() {
     const h = this.getHealth();
     const agents = h.agents || {};
     const lines = [];
     lines.push(`**Team Status Report**`);
+
 
     for (const [key, a] of Object.entries(agents)) {
       const state = a.paused ? 'PAUSED' : a.state.toUpperCase();

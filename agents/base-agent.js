@@ -522,9 +522,10 @@ class BaseAgent {
   }
 
   /** Get point-based influence multiplier (buff) */
-  getPrestigeBuff() {
+  async getPrestigeBuff() {
     const tier = this.updateTier();
     const buffs = { 'Legend': 1.5, 'Diamond': 1.3, 'Gold': 1.2, 'Silver': 1.1, 'Bronze': 1.0 };
+
 
     // Check for monthly trophy buff
     let finalBuff = buffs[tier] || 1.0;
