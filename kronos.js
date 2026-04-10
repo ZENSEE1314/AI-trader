@@ -440,6 +440,7 @@ async function verifySwarmPredictions() {
 }
 
 // ── Cache accessors ─────────────────────────────────────────
+async function calculateSwarmAccuracy() {
   try {
     const { query } = require('./db');
     const rows = await query(
@@ -457,6 +458,7 @@ async function verifySwarmPredictions() {
     console.error(`[Kronos] Accuracy calc failed: ${err.message}`);
     return 0;
   }
+}
 }
 
 function getCachedPrediction(symbol) {
