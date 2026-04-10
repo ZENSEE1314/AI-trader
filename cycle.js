@@ -76,13 +76,13 @@ function getDailyCapital(key, currentBalance) {
   return currentBalance;
 }
 
-// Get token-specific leverage: user per-key → admin global → risk level → 20x default
-async function getTokenLeverage(symbol, apiKeyId = null) {
-  const MAX_LEVERAGE = 20;
+// Get token-specific leverage: user per-key → admin global → risk level → price-based default
+async function getTokenLeverage(symbol, apiKeyId = null, price = 0) {
+  const MAX_LEVERAGE = 125; // Exchange max — user/admin settings decide actual value
   try {
     const { query } = require('./db');
 
-    // Priority 1: User per-key per-token leverage override
+    // Priority 1: User per-key per-token leverage override (user explicitly set this)
     if (apiKeyId) {
       const userTokenRows = await query(
         'SELECT leverage FROM user_token_leverage WHERE api_key_id = $1 AND symbol = $2',
@@ -116,10 +116,12 @@ async function getTokenLeverage(symbol, apiKeyId = null) {
       }
     }
 
-    return MAX_LEVERAGE;
+    // Priority 4: Price-based default (same logic as owner account)
+    return getLeverage(symbol, price);
   } catch (err) {
     console.error('Error getting token leverage:', err.message);
-    return 20;
+    // Fallback: price-based
+    return getLeverage(symbol, price);
   }
 }
 
@@ -1177,7 +1179,7 @@ async function executeForAllUsers(pick) {
         const aiParams = await aiLearner.getOptimalParams();
 
         // Per-user settings: use user_token_leverage first, then key default
-        const userLev = await getTokenLeverage(symbol, key.id);
+        const userLev = await getTokenLeverage(symbol, key.id, price);
         const walletSizePct = (await getCapitalPercentage(key.id)) / 100;
         // SL: 10% capital risk, scaled by user's leverage
         const userTrailConfig = getTrailingSLConfig(userLev);
