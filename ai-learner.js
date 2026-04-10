@@ -403,6 +403,91 @@ async function getOptimalParams() {
 
   // ── 9. (removed — SL is now capital-based, no min/max filtering needed) ──
 
+  // ── 10. Swing length optimization: learn which swing lengths produce better WR ──
+  try {
+    const swingAnalysis = await query(
+      `SELECT tf_15m, tf_1m, is_win, pnl_pct
+       FROM ai_trades
+       WHERE pnl_pct IS NOT NULL AND tf_15m IS NOT NULL
+       ORDER BY created_at DESC LIMIT 80`
+    );
+    if (swingAnalysis.length >= 30) {
+      // Analyze win rate by structure quality reported in tf_15m/tf_1m
+      const wins = swingAnalysis.filter(t => t.is_win);
+      const losses = swingAnalysis.filter(t => !t.is_win);
+
+      // If losses consistently have weak 1m confirmation, tighten maxEntryAge
+      const lossesWithOld1m = losses.filter(t => {
+        const tf1m = typeof t.tf_1m === 'string' ? t.tf_1m : '';
+        return tf1m.includes('aged') || tf1m.includes('stale');
+      });
+      if (losses.length >= 10 && lossesWithOld1m.length / losses.length > 0.3) {
+        const newAge = Math.max(params.maxEntryAge - 3, 15);
+        if (newAge < params.maxEntryAge) {
+          await logParamChange('maxEntryAge', params.maxEntryAge, newAge,
+            `${((lossesWithOld1m.length/losses.length)*100).toFixed(0)}% of losses had aged 1m swings — tightening`, totalTrades);
+          params.maxEntryAge = newAge;
+        }
+      }
+    }
+  } catch (_) {}
+
+  // ── 11. Apply winning backtest strategies from StrategyAgent ──
+  try {
+    const bestBacktest = await query(
+      `SELECT params, win_rate, total_pnl, total_trades
+       FROM strategy_backtests
+       WHERE win_rate >= 60 AND total_trades >= 20 AND total_pnl > 0
+       ORDER BY win_rate * total_pnl DESC
+       LIMIT 1`
+    );
+    if (bestBacktest.length) {
+      const bt = bestBacktest[0];
+      const btParams = typeof bt.params === 'string' ? JSON.parse(bt.params) : bt.params;
+      // Only adopt swing lengths from backtests (conservative — don't change SL/TP from backtest)
+      const ADOPTABLE = ['swing_15m', 'swing_1m'];
+      const PARAM_MAP = { swing_15m: 'swingLen15m', swing_1m: 'swingLen1m' };
+      for (const key of ADOPTABLE) {
+        if (btParams[key] !== undefined && PARAM_MAP[key]) {
+          const mapped = PARAM_MAP[key];
+          const oldVal = params[mapped];
+          const newVal = btParams[key];
+          // Only shift by MAX_WEIGHT_SHIFT toward the backtest value
+          const shifted = Math.round(oldVal + (newVal - oldVal) * MAX_WEIGHT_SHIFT);
+          if (shifted !== oldVal) {
+            await logParamChange(mapped, oldVal, shifted,
+              `Backtest WR ${bt.win_rate.toFixed(1)}% suggests ${key}=${newVal}, shifting toward it`, totalTrades);
+            params[mapped] = shifted;
+          }
+        }
+      }
+    }
+  } catch (_) {}
+
+  // ── 12. Per-coin learning: avoid coins that consistently lose ──
+  try {
+    const coinPerf = await query(
+      `SELECT symbol, COUNT(*) as total,
+        SUM(CASE WHEN is_win = 1 THEN 1 ELSE 0 END) as wins,
+        AVG(pnl_pct) as avg_pnl
+       FROM ai_trades WHERE pnl_pct IS NOT NULL
+       GROUP BY symbol HAVING COUNT(*) >= 10
+       ORDER BY AVG(pnl_pct) ASC LIMIT 5`
+    );
+    params.AVOID_COINS = [];
+    for (const coin of coinPerf) {
+      const wr = parseInt(coin.wins) / parseInt(coin.total);
+      if (wr < 0.30 && parseFloat(coin.avg_pnl) < -1.0) {
+        params.AVOID_COINS.push(coin.symbol);
+      }
+    }
+    if (params.AVOID_COINS.length > 0) {
+      console.log(`[AI] Avoiding coins with <30% WR: ${params.AVOID_COINS.join(', ')}`);
+    }
+  } catch (_) {
+    params.AVOID_COINS = [];
+  }
+
   _paramsCache = { data: { ...params }, ts: Date.now() };
   return params;
 }

@@ -404,6 +404,18 @@ async function analyzeLHHL(ticker, params, dailyBiasCache, kronosPredictions = n
     return null;
   }
 
+  // AI direction bias: if learner says one direction is losing, block it
+  if (params.DIRECTION_BIAS && params.DIRECTION_BIAS !== direction) {
+    bLog.scan(`${symbol}: ${direction} blocked — AI bias toward ${params.DIRECTION_BIAS} (opposite direction losing)`);
+    return null;
+  }
+
+  // AI coin avoidance: skip coins the learner flagged as consistent losers
+  if (params.AVOID_COINS && params.AVOID_COINS.includes(symbol)) {
+    bLog.scan(`${symbol}: blocked — AI learned this coin has <30% WR`);
+    return null;
+  }
+
   // ┌─────────────────────────────────────────────────────────┐
   // │ Step 3: Key Level Filter (optional — AI decides)        │
   // └─────────────────────────────────────────────────────────┘
@@ -611,7 +623,11 @@ async function analyzeLHHL(ticker, params, dailyBiasCache, kronosPredictions = n
       tf4h: struct4h.trend,
       tf1h: struct1h.trend,
       tf15: struct15m.label,
-      tf1: struct1m ? struct1m.label : 'N/A',
+      tf1: struct1m ? (() => {
+        const swingIdx = direction === 'LONG' ? struct1m.lastLow?.index : struct1m.lastHigh?.index;
+        const age = swingIdx ? klines1m.length - swingIdx : 0;
+        return `${struct1m.label}${age > (params.maxEntryAge || 35) * 0.7 ? '_aged' : ''}`;
+      })() : 'N/A',
     },
     scalperAI: scalperResult.details ? {
       signal: scalperResult.signal,
