@@ -913,7 +913,7 @@ class AgentCoordinator extends BaseAgent {
     }
 
     // Check memories
-    if (/what.*(remember|learned|know|memory)|memories|lessons|brain/.test(text)) {
+    if (/what.*(remember|learned|know|memory)|memories|lessons|brain|pattern|penalty|trap/.test(text)) {
       return this._buildMemoryChat(text);
     }
 
@@ -956,13 +956,55 @@ class AgentCoordinator extends BaseAgent {
       const agent = targetAgent || this;
       const agentName = agent.name || 'Coordinator';
 
-      // Build context from agent + system state
+      // ── ENHANCED CONTEXT FETCHING (Chain-of-Thought) ──
       const context = {
         health: agent.getHealth ? agent.getHealth() : {},
         profile: agent.getProfile ? agent.getProfile() : {},
-        recentActivity: agent.getActivity ? agent.getActivity(5) : [],
+        recentActivity: agent.getActivity ? agent.getActivity(10) : [],
       };
       if (agent._getAIContext) Object.assign(context, await agent._getAIContext());
+
+      // Add specific data for "Why" and "What" questions
+      if (text.includes('why') || text.includes('how') || text.includes('what') || text.includes('pattern') || text.includes('penalty')) {
+        try {
+          const { query } = require('../db');
+          // 1. Recent trades context
+          const recentTrades = await query(
+            `SELECT symbol, direction, pnl_pct, setup, created_at
+             FROM trades ORDER BY created_at DESC LIMIT 15`
+          );
+          context.recent_trades = recentTrades.map(t => ({
+            symbol: t.symbol, dir: t.direction, pnl: t.pnl_pct, setup: t.setup, date: t.created_at
+          }));
+
+          // 2. Current open positions
+          const openTrades = await query(
+            `SELECT symbol, direction, entry_price, leverage FROM trades WHERE status = 'OPEN'`
+          );
+          context.open_positions = openTrades;
+
+          // 3. Recent signals that didn't become trades
+          const recentSignals = await query(
+            `SELECT symbol, direction, score, setup FROM bot_logs
+             WHERE category = 'scan' AND result = 'SIGNAL'
+             ORDER BY ts DESC LIMIT 10`
+          );
+          context.recent_signals = recentSignals;
+
+          // 4. Learned Trap Patterns (The "Mistake Memory")
+          const penalties = await query(
+            `SELECT pattern_dna, loss_count, win_count, current_penalty
+             FROM pattern_penalties
+             WHERE current_penalty < 0
+             ORDER BY current_penalty ASC LIMIT 10`
+          );
+          context.learned_traps = penalties.map(p => ({
+            dna: p.pattern_dna, losses: p.loss_count, wins: p.win_count, penalty: p.current_penalty
+          }));
+        } catch (e) {
+          console.error(`[Coordinator] Failed to fetch extended context: ${e.message}`);
+        }
+      }
 
       // Also add memories if available
       try {
@@ -976,7 +1018,13 @@ class AgentCoordinator extends BaseAgent {
         }
       } catch {}
 
-      const aiReply = await think({ agentName, systemPrompt: getSystemPrompt(agentName), userMessage: message, context });
+      // Force Deep Reasoning for "Why" questions
+      let systemPrompt = getSystemPrompt(agentName);
+      if (text.includes('why') || text.includes('how') || text.includes('pattern')) {
+        systemPrompt += `\n\nCRITICAL: This is a "Why/How/Pattern" query. Use Chain-of-Thought reasoning:\n1. Analyze the provided context (trades, positions, signals, and learned_traps).\n2. Compare current state with the strategy rules (SMC, Kronos, Risk) and the learned penalties.\n3. Explain the specific logic that led to these actions or why a specific pattern is being penalized.\n4. If the bot made a mistake, identify exactly which rule was bypassed or how the Pattern DNA system is correcting it.`;
+      }
+
+      const aiReply = await think({ agentName, systemPrompt, userMessage: message, context });
       if (aiReply) return { from: agentName, message: aiReply };
     }
 

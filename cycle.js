@@ -596,6 +596,24 @@ async function checkTrailingStop(client) {
             exitReason: 'position_closed',
           });
 
+          if (pnlPct < 0) {
+            await aiLearner.performLossAutopsy({
+              symbol: sym,
+              setup: state.setup || 'unknown',
+              direction: state.isLong ? 'LONG' : 'SHORT',
+              session: aiLearner.getCurrentSession(),
+              trend1h: state.trend1h || 'unknown'
+            });
+          }
+
+          // Trigger systematic pattern analysis every 50 trades
+          const countRes = await require('./db').query('SELECT COUNT(*) as c FROM ai_trades');
+          const totalTrades = parseInt(countRes[0].c);
+          if (totalTrades > 0 && totalTrades % 50 === 0) {
+            bLog.ai(`Periodic AI Maintenance: analyzing worst patterns (Trade #${totalTrades})`);
+            await aiLearner.analyzeWorstPatterns();
+          }
+
           recordDailyTrade(pnlPct > 0);
           log(`AI recorded: ${sym} PnL=${pnlPct.toFixed(2)}% duration=${durationMin}min setup=${state.setup}`);
 
@@ -644,6 +662,16 @@ async function checkTrailingStop(client) {
               tf15m: st.tf15m || null, tf3m: st.tf3m || null, tf1m: st.tf1m || null,
               exitReason: 'structure_break_15m',
             });
+
+            if (gain < 0) {
+              await aiLearner.performLossAutopsy({
+                symbol: sym,
+                setup: st.setup || 'unknown',
+                direction: isLong ? 'LONG' : 'SHORT',
+                session: aiLearner.getCurrentSession(),
+                trend1h: st.trend1h || 'unknown'
+              });
+            }
             recordDailyTrade(gain > 0);
             tradeState.delete(sym);
           }

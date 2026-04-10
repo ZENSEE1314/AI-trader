@@ -368,7 +368,16 @@ async function initAllTables() {
       score NUMERIC DEFAULT 0,
       created_at TIMESTAMPTZ DEFAULT NOW()
     )`,
-    `CREATE INDEX IF NOT EXISTS idx_agent_lessons_agent ON agent_lessons (agent, type)`,
+    `CREATE TABLE IF NOT EXISTS pattern_penalties (
+      id SERIAL PRIMARY KEY,
+      pattern_dna TEXT UNIQUE NOT NULL,
+      loss_count INTEGER DEFAULT 0,
+      win_count INTEGER DEFAULT 0,
+      current_penalty DECIMAL DEFAULT 0.0,
+      last_updated TIMESTAMPTZ DEFAULT NOW()
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_pattern_dna ON pattern_penalties (pattern_dna)`,
+
     // Agent profiles — level, XP, earnings tracking (RPG system)
     `CREATE TABLE IF NOT EXISTS agent_profiles (
       agent TEXT PRIMARY KEY,

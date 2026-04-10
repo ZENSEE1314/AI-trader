@@ -597,6 +597,15 @@ async function analyzeLHHL(ticker, params, dailyBiasCache, kronosPredictions = n
   const aiModifier = await aiLearner.getAIScoreModifier(symbol, setup, direction);
   score = score * aiModifier;
 
+  // Pattern-specific penalty from Loss Autopsy
+  const trend1h = struct1h.trend || 'unknown';
+  const session = aiLearner.getCurrentSession();
+  const patternPenalty = await aiLearner.getPatternPenalty(symbol, setup, direction, session, trend1h);
+  if (patternPenalty !== 0) {
+    score += patternPenalty;
+    bLog.scan(`${symbol}: applying pattern penalty ${patternPenalty} for DNA ${[symbol, setup, direction, session, trend1h].join('|')}`);
+  }
+
   bLog.scan(
     `SIGNAL: ${symbol} ${direction} | 4h=${struct4h.trend} 1h=${struct1h.trend} 15m=${struct15m.label} ` +
     `| score=${Math.round(score)} | Scalper=${scalperResult.signal}` +
