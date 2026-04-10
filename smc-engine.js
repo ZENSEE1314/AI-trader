@@ -323,7 +323,7 @@ async function analyzeLHHL(ticker, params, dailyBiasCache, kronosPredictions = n
   const NEED_DAILY = sc.requireDailyBias !== undefined ? !!sc.requireDailyBias : false;
   // NEED_BOTH_HTF removed — 4H takes priority, falls back to 1H (no mixed-structure blocking)
   const NEED_KL = sc.requireKeyLevel !== undefined ? !!sc.requireKeyLevel : false;
-  const NEED_15M = sc.require15m !== undefined ? !!sc.require15m : false;
+  const NEED_15M = true; // Always require 15m structure alignment
   const NEED_1M = true; // Always require 1m swing confirmation: HL for LONG, LH for SHORT
   const NEED_VOL = sc.requireVolSpike !== undefined ? !!sc.requireVolSpike : false;
   const VOL_MULT = sc.volSpikeMultiplier || 1.5;
@@ -386,21 +386,21 @@ async function analyzeLHHL(ticker, params, dailyBiasCache, kronosPredictions = n
   const bear4h = struct4h.trend === 'bearish';
   const bear1h = struct1h.trend === 'bearish';
 
-  // Direction from HTF: 4H takes priority, fall back to 1H
+  // Direction from HTF: 4H primary, 1H must not contradict
   let direction = null;
   if (NEED_DAILY && dailyBias) {
-    if (dailyBias === 'bullish' && (bull4h || bull1h)) direction = 'LONG';
-    else if (dailyBias === 'bearish' && (bear4h || bear1h)) direction = 'SHORT';
+    if (dailyBias === 'bullish' && (bull4h || bull1h) && !bear4h && !bear1h) direction = 'LONG';
+    else if (dailyBias === 'bearish' && (bear4h || bear1h) && !bull4h && !bull1h) direction = 'SHORT';
   } else {
-    // Use 4H as primary; if neutral, defer to 1H
-    if (bull4h) direction = 'LONG';
-    else if (bear4h) direction = 'SHORT';
-    else if (bull1h) direction = 'LONG';
-    else if (bear1h) direction = 'SHORT';
+    // 4H primary, but 1H must not be opposing
+    if (bull4h && !bear1h) direction = 'LONG';
+    else if (bear4h && !bull1h) direction = 'SHORT';
+    else if (bull1h && !bear4h) direction = 'LONG';
+    else if (bear1h && !bull4h) direction = 'SHORT';
   }
 
   if (!direction) {
-    bLog.scan(`${symbol}: 4h=${struct4h.trend} 1h=${struct1h.trend} daily=${dailyBias || 'N/A'} — no HTF direction found`);
+    bLog.scan(`${symbol}: 4h=${struct4h.trend} 1h=${struct1h.trend} daily=${dailyBias || 'N/A'} — HTF conflict or no direction`);
     return null;
   }
 
@@ -445,6 +445,21 @@ async function analyzeLHHL(ticker, params, dailyBiasCache, kronosPredictions = n
       if (direction === 'SHORT' && !struct1m.hasLH) {
         bLog.scan(`${symbol}: SHORT blocked — 1m has no LH confirmation`);
         return null;
+      }
+      // Anti-chase: don't enter if price already moved too far from 1m swing point
+      if (struct1m.lastLow && direction === 'LONG') {
+        const distFromHL = (price - struct1m.lastLow.price) / struct1m.lastLow.price;
+        if (distFromHL > 0.005) {
+          bLog.scan(`${symbol}: LONG blocked — price ${(distFromHL*100).toFixed(2)}% above 1m HL (chasing)`);
+          return null;
+        }
+      }
+      if (struct1m.lastHigh && direction === 'SHORT') {
+        const distFromLH = (struct1m.lastHigh.price - price) / struct1m.lastHigh.price;
+        if (distFromLH > 0.005) {
+          bLog.scan(`${symbol}: SHORT blocked — price ${(distFromLH*100).toFixed(2)}% below 1m LH (chasing)`);
+          return null;
+        }
       }
     }
   }
