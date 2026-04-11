@@ -196,6 +196,7 @@
   }
 
   function goToAuth() {
+    console.log('goToAuth called');
     showSection('auth');
   }
 
