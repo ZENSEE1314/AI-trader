@@ -99,6 +99,20 @@ class AgentCoordinator extends BaseAgent {
       await agent.init();
       await agent.loadRpgProfile().catch(() => {});
       this.log(`  ${name}: initialized (Lv.${agent._rpg.level})`);
+
+      // Listen for agent crashes to trigger self-healing
+      agent.on('agent_crash', async (report) => {
+        this.log(`CRASH DETECTED: ${report.agentName} failed. Notifying CoderAgent...`);
+        try {
+          await this.coderAgent.healAgent({
+            agent: agent,
+            error: report.error,
+            timestamp: report.timestamp
+          });
+        } catch (err) {
+          this.logError(`Self-healing trigger failed: ${err.message}`);
+        }
+      });
     }
 
     // Create dedicated token agents for top coins by volume
@@ -162,6 +176,25 @@ class AgentCoordinator extends BaseAgent {
     // CEO always-on: permanently at desk, monitoring everything
     this._startCeoLoop();
     this._startTokenScanLoop();
+  }
+
+  async verifyAgentFix(agent) {
+    this.log(`Verifying fix for ${agent.name}...`);
+
+    // 1. Reset agent state
+    agent.state = 'idle';
+    agent.lastError = null;
+    agent.currentTask = { description: 'Verifying self-healing patch...', startedAt: Date.now() };
+
+    try {
+      // 2. Trigger a single run to verify the fix
+      await agent.run();
+      this.log(`Verification successful: ${agent.name} is back online.`);
+      return true;
+    } catch (err) {
+      this.logError(`Verification failed for ${agent.name}: ${err.message}`);
+      return false;
+    }
   }
 
   addTokenAgent(symbol) {

@@ -130,6 +130,14 @@ class BaseAgent {
       this.currentTask = null;
       this.addActivity('error', `Cycle #${this.runCount} failed: ${err.message}`);
       this.logError(`Execute failed: ${err.message}`);
+
+      // Reactive Trigger: Notify coordinator/system of the crash
+      this.emit('agent_crash', {
+        agentName: this.name,
+        error: err,
+        timestamp: Date.now()
+      });
+
       throw err;
     }
   }
