@@ -378,6 +378,7 @@ class AgentCoordinator extends BaseAgent {
 
     // Scan batch
     const signals = [];
+    bLog.scan(`[SCAN-BATCH] Starting scan of ${batch.length} tokens...`);
     for (const [sym, agent] of batch) {
       agent.currentTask = { description: `Quick-scanning ${sym}...`, startedAt: Date.now() };
       try {
@@ -386,8 +387,8 @@ class AgentCoordinator extends BaseAgent {
           signals.push(result);
           agent.addActivity('success', `SIGNAL: ${sym} ${result.direction}`);
         }
-      } catch {
-        // Skip failed scans silently
+      } catch (err) {
+        bLog.error(`[SCAN-BATCH] Failed to scan ${sym}: ${err.message}`);
       }
       agent.currentTask = { description: `Watching ${sym}`, startedAt: Date.now() };
     }

@@ -422,6 +422,7 @@ function isGoodTradingSession() {
 
 async function analyzeLHHL(ticker, params, dailyBiasCache, kronosPredictions = null) {
   const symbol = ticker.symbol;
+  bLog.scan(`[HEARTBEAT] Analyzing ${symbol}...`);
   const price = parseFloat(ticker.lastPrice);
 
   // Load AI-optimized strategy params from DB (set by Quantum Optimizer)
