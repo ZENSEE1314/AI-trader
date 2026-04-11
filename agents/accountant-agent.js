@@ -341,6 +341,15 @@ class AccountantAgent extends BaseAgent {
     return { ok: true, synced: totalSynced, updated: totalUpdated };
   },
 
+  async _getAIContext() {
+    return {
+      auditsRun: this.auditsRun,
+      tradesFixed: this.tradesFixed,
+      totalFeesRecovered: this.totalFeesRecovered,
+      lastAuditResult: this.lastAuditResult,
+    };
+  }
+
   getHealth() {
     return {
       ...super.getHealth(),
