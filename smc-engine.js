@@ -235,7 +235,7 @@ function detectTentativePivot(klines, len) {
 // ── Market Structure Labels ─────────────────────────────────
 
 function getStructure(klines, len) {
-  const { swings, tentative } = detectSwings(klines, len);
+  const { swings } = detectSwings(klines, len);
   const swingHighs = swings.filter(s => s.type === 'high');
   const swingLows = swings.filter(s => s.type === 'low');
 
