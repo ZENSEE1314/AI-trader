@@ -193,13 +193,15 @@ function detectSwings(klines, len) {
     }
   }
 
-  // ── Fast-Track: Tentative Pivot Detection ──────────────────────
-  // A pivot is tentative if it is the lowest/highest of its local neighborhood
-  // but hasn't waited for the full 'len' window to close.
+  return swings;
+}
+
+function detectTentativePivot(klines, len) {
+  const highs = klines.map(k => parseFloat(k[2]));
+  const lows = klines.map(k => parseFloat(k[3]));
   const tentative = { isLow: false, isHigh: false, index: -1, price: 0 };
   const lastIdx = klines.length - 1;
 
-  // Look back from the end for a potential pivot that is currently "unconfirmed"
   for (let i = lastIdx - 1; i >= Math.max(0, lastIdx - len); i--) {
     let isLocalLow = true;
     for (let j = i - len; j < i; j++) {
@@ -226,8 +228,7 @@ function detectSwings(klines, len) {
       break;
     }
   }
-
-  return { swings, tentative };
+  return tentative;
 }
 
 // ── Market Structure Labels ─────────────────────────────────
