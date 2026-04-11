@@ -3339,20 +3339,14 @@ router.delete('/token-board/:symbol', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// GET /api/admin/agents/health — Full agent health + activity
-router.get('/agents/health', async (req, res) => {
-  try {
-    const { getCoordinator } = require('../agents');
-    const coordinator = getCoordinator();
-    res.json({
-      health: coordinator.getHealth(),
-      activity: coordinator.getAllActivity(100),
-      uptime: process.uptime(),
-    });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({
+      error: err.message,
+      stack: err.stack,
+      path: 'agents/health'
+    });
   }
-});
+
 
 // POST /api/admin/agents/command — Send command to coordinator
 router.post('/agents/command', async (req, res) => {
