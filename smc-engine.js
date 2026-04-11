@@ -196,6 +196,7 @@ function detectSwings(klines, len) {
   return swings;
 }
 
+
 function detectTentativePivot(klines, len) {
   const highs = klines.map(k => parseFloat(k[2]));
   const lows = klines.map(k => parseFloat(k[3]));
@@ -617,14 +618,36 @@ async function analyzeLHHL(ticker, params, dailyBiasCache, kronosPredictions = n
     // ──────────────────────────────────────────────────────────
 
     if (NEED_1M) {
+      // 1. Strict Trend Alignment: 1m trend must match HTF direction
+      const targetTrend = direction === 'LONG' ? 'bullish' : 'bearish';
+      if (struct1m.trend !== targetTrend) {
+        bLog.scan(`${symbol}: ${direction} blocked — 1m trend is ${struct1m.trend} (must be ${targetTrend})`);
+        return null;
+      }
+
+      // 2. Strict HL/LH Requirement (No bypasses)
       if (direction === 'LONG' && !struct1m.hasHL) {
-        bLog.scan(`${symbol}: LONG blocked — 1m has no HL confirmation`);
+        bLog.scan(`${symbol}: LONG blocked — 1m has no confirmed HL`);
         return null;
       }
       if (direction === 'SHORT' && !struct1m.hasLH) {
-        bLog.scan(`${symbol}: SHORT blocked — 1m has no LH confirmation`);
+        bLog.scan(`${symbol}: SHORT blocked — 1m has no confirmed LH`);
         return null;
       }
+
+      // 3. "Next Candle" Trigger: Trade must fire immediately after confirmation
+      const swingIdx = direction === 'LONG' ? struct1m.lastLow?.index : struct1m.lastHigh?.index;
+      if (swingIdx === undefined) return null;
+
+      const confirmationIdx = swingIdx + SWING_LENGTHS['1m'];
+      const currentIdx = klines1m.length - 1;
+      const candleAge = currentIdx - confirmationIdx;
+
+      if (candleAge !== 1) {
+        bLog.scan(`${symbol}: ${direction} blocked — swing age ${candleAge} (must be exactly 1 candle after confirmation)`);
+        return null;
+      }
+
       // Anti-chase: don't enter if price already moved too far from 1m swing point
       if (struct1m.lastLow && direction === 'LONG') {
         const distFromHL = (price - struct1m.lastLow.price) / struct1m.lastLow.price;
