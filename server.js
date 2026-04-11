@@ -8,6 +8,17 @@ const app = express();
 // Ensure all tables exist on startup
 initAllTables().catch(err => console.error('DB init error:', err.message));
 
+// Initialize Agent Framework
+(async () => {
+  try {
+    const { getCoordinator } = require('./agents');
+    await getCoordinator().init();
+    console.log('[SERVER] Agent framework initialized successfully');
+  } catch (err) {
+    console.error('[SERVER] Agent framework init failed:', err);
+  }
+})();
+
 // Skip JSON parsing for Stripe webhook — needs raw body for signature verification
 app.get('/login', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 app.get('/signup', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
