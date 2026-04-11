@@ -3337,8 +3337,16 @@ router.delete('/token-board/:symbol', async (req, res) => {
     await query('DELETE FROM global_token_settings WHERE symbol = $1', [req.params.symbol.toUpperCase()]);
     res.json({ ok: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
+// GET /api/admin/agents/health — Full agent health + activity
+router.get('/agents/health', async (req, res) => {
+  try {
+    const { getCoordinator } = require('../agents');
+    const coordinator = getCoordinator();
+    res.json({
+      health: coordinator.getHealth(),
+      activity: coordinator.getAllActivity(100),
+      uptime: process.uptime(),
+    });
   } catch (err) {
     res.status(500).json({
       error: err.message,
@@ -3346,7 +3354,7 @@ router.delete('/token-board/:symbol', async (req, res) => {
       path: 'agents/health'
     });
   }
-
+});
 
 // POST /api/admin/agents/command — Send command to coordinator
 router.post('/agents/command', async (req, res) => {
