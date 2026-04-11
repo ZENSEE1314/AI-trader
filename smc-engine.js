@@ -81,6 +81,67 @@ async function fetchTickers() {
 
 // ── Swing Detection ─────────────────────────────────────────
 
+function detectFVGs(klines) {
+  const fvgs = [];
+  for (let i = 2; i < klines.length - 1; i++) {
+    const c1 = { high: parseFloat(klines[i - 2][2]), low: parseFloat(klines[i - 2][3]) };
+    const c3 = { high: parseFloat(klines[i][2]), low: parseFloat(klines[i][3]) };
+
+    if (c3.low > c1.high) {
+      const gapSize = c3.low - c1.high;
+      if (gapSize > c1.high * 0.0001) {
+        fvgs.push({
+          type: 'BULLISH',
+          top: c3.low,
+          bottom: c1.high,
+          index: i - 1,
+          strength: gapSize / c1.high
+        });
+      }
+    } else if (c3.high < c1.low) {
+      const gapSize = c1.low - c3.high;
+      if (gapSize > c1.low * 0.0001) {
+        fvgs.push({
+          type: 'BEARISH',
+          top: c1.low,
+          bottom: c3.high,
+          index: i - 1,
+          strength: gapSize / c1.low
+        });
+      }
+    }
+  }
+  return fvgs;
+}
+
+function detectOrderBlocks(klines, swings) {
+  const obs = [];
+  if (swings.length < 2) return obs;
+
+  const lastSwing = swings[swings.length - 1];
+  const prevSwing = swings[swings.length - 2];
+
+  if (lastSwing.type === 'high' && lastSwing.price > prevSwing.price) {
+    let lowestIdx = prevSwing.index;
+    let minPrice = parseFloat(klines[prevSwing.index][3]);
+
+    for (let i = prevSwing.index; i < lastSwing.index; i++) {
+      const low = parseFloat(klines[i][3]);
+      if (low < minPrice) {
+        minPrice = low;
+        lowestIdx = i;
+      }
+    }
+    obs.push({
+      type: 'BULLISH',
+      top: parseFloat(klines[lowestIdx][2]),
+      bottom: parseFloat(klines[lowestIdx][3]),
+      index: lowestIdx
+    });
+  }
+  return obs;
+}
+
 function detectSwings(klines, len) {
   const highs = klines.map(k => parseFloat(k[2]));
   const lows = klines.map(k => parseFloat(k[3]));
@@ -167,14 +228,21 @@ function getStructure(klines, len) {
   const lastLow = sigLows.length ? sigLows[sigLows.length - 1] : (lowLabels.length ? lowLabels[lowLabels.length - 1] : null);
 
   let trend = 'neutral';
+  let isChoCh = false;
+
   if (lastHigh && lastLow) {
     const isBearish = lastHigh.label === 'LH' && lastLow.label === 'LL';
     const isBullish = lastHigh.label === 'HH' && lastLow.label === 'HL';
     if (isBearish) trend = 'bearish';
     else if (isBullish) trend = 'bullish';
-    // Mixed structures: use the most recent swing's bias instead of neutral
     else if (lastHigh.label === 'LH') trend = 'bearish';
     else if (lastLow.label === 'HL') trend = 'bullish';
+  }
+
+  // Detect Change of Character (ChoCh)
+  // Bullish ChoCh: Price breaks the most recent significant LH
+  if (lastHigh && lastHigh.label === 'LH' && klines[klines.length - 1][4] > lastHigh.price) {
+    isChoCh = true;
   }
 
   return {
@@ -183,6 +251,7 @@ function getStructure(klines, len) {
     hasHL: lastLow?.label === 'HL',
     hasHH: lastHigh?.label === 'HH',
     hasLL: lastLow?.label === 'LL',
+    isChoCh,
     label: `${lastHigh?.label || '--'}/${lastLow?.label || '--'}`,
   };
 }
@@ -449,6 +518,28 @@ async function analyzeLHHL(ticker, params, dailyBiasCache, kronosPredictions = n
   let struct1m = null;
   if (klines1m && klines1m.length >= 15) {
     struct1m = getStructure(klines1m, SWING_LENGTHS['1m']);
+
+    // ── SMC-Sling "Buy-In" Logic ────────────────────────────
+    // 1. Must have a ChoCh (Market Structure Shift)
+    // 2. Price must currently be inside a Bullish FVG or Order Block
+    if (direction === 'LONG' && struct1m.isChoCh) {
+      const fvgs = detectFVGs(klines1m);
+      const obs = detectOrderBlocks(klines1m, struct1m.swings);
+
+      const inFVG = fvgs.some(f => f.type === 'BULLISH' && price <= f.top && price >= f.bottom);
+      const inOB = obs.some(o => o.type === 'BULLISH' && price <= o.top && price >= o.bottom);
+
+      if (inFVG || inOB) {
+        bLog.scan(`${symbol}: SMC-Sling DETECTED — Price in Buy-In zone after ChoCh`);
+        // We can bypass 1m HL requirement if we have a perfect SMC-Sling
+        if (NEED_1M) {
+          // Overwrite the block logic below
+          struct1m.hasHL = true;
+        }
+      }
+    }
+    // ──────────────────────────────────────────────────────────
+
     if (NEED_1M) {
       if (direction === 'LONG' && !struct1m.hasHL) {
         bLog.scan(`${symbol}: LONG blocked — 1m has no HL confirmation`);

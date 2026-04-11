@@ -459,7 +459,6 @@ async function calculateSwarmAccuracy() {
     return 0;
   }
 }
-}
 
 function getCachedPrediction(symbol) {
   if (Date.now() - lastScanTime > CACHE_TTL_MS) return null;
