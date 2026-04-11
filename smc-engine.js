@@ -556,65 +556,9 @@ async function analyzeLHHL(ticker, params, dailyBiasCache, kronosPredictions = n
   if (klines1m && klines1m.length >= 15) {
     struct1m = getStructure(klines1m, SWING_LENGTHS['1m']);
 
-    // ── SMC-Sling "Buy-In" Logic ────────────────────────────
-    // 1. Must have a ChoCh (Market Structure Shift)
-    // 2. Price must currently be inside a Bullish FVG or Order Block
-    if (direction === 'LONG' && struct1m.isChoCh) {
-      const fvgs = detectFVGs(klines1m);
-      const obs = detectOrderBlocks(klines1m, struct1m.swings);
-
-      const inFVG = fvgs.some(f => f.type === 'BULLISH' && price <= f.top && price >= f.bottom);
-      const inOB = obs.some(o => o.type === 'BULLISH' && price <= o.top && price >= o.bottom);
-
-      if (inFVG || inOB) {
-        bLog.scan(`${symbol}: SMC-Sling DETECTED — Price in Buy-In zone after ChoCh`);
-        // We can bypass 1m HL requirement if we have a perfect SMC-Sling
-        if (NEED_1M) {
-          // Overwrite the block logic below
-          struct1m.hasHL = true;
-        }
-      }
-    } else if (direction === 'SHORT' && struct1m.isChoCh) {
-      const fvgs = detectFVGs(klines1m);
-      const obs = detectOrderBlocks(klines1m, struct1m.swings);
-
-      const inFVG = fvgs.some(f => f.type === 'BEARISH' && price >= f.bottom && price <= f.top);
-      const inOB = obs.some(o => o.type === 'BEARISH' && price >= o.bottom && price <= o.top);
-
-      if (inFVG || inOB) {
-        bLog.scan(`${symbol}: SMC-Sling DETECTED — Price in Sell-In zone after ChoCh`);
-        if (NEED_1M) {
-          struct1m.hasLH = true;
-        }
-      }
-    }
-
-    // ── Fast-Entry: Tentative Swing Bypass ──────────────────────
-    // If we have a tentative pivot and strong alignment, we bypass the full swing window
-    if (NEED_1M) {
-      if (direction === 'LONG' && struct1m.tentative?.isLow) {
-        // Entry is allowed if tentative HL is supported by ChoCh + FVG/OB
-        const fvgs = detectFVGs(klines1m);
-        const obs = detectOrderBlocks(klines1m, struct1m.swings);
-        const inZone = fvgs.some(f => f.type === 'BULLISH' && price <= f.top && price >= f.bottom) ||
-                       obs.some(o => o.type === 'BULLISH' && price <= o.top && price >= o.bottom);
-
-        if (struct1m.isChoCh && inZone) {
-          bLog.scan(`${symbol}: Fast-Entry LONG — Tentative HL + ChoCh + Zone`);
-          struct1m.hasHL = true;
-        }
-      } else if (direction === 'SHORT' && struct1m.tentative?.isHigh) {
-        const fvgs = detectFVGs(klines1m);
-        const obs = detectOrderBlocks(klines1m, struct1m.swings);
-        const inZone = fvgs.some(f => f.type === 'BEARISH' && price >= f.bottom && price <= f.top) ||
-                       obs.some(o => o.type === 'BEARISH' && price >= o.bottom && price <= o.top);
-
-        if (struct1m.isChoCh && inZone) {
-          bLog.scan(`${symbol}: Fast-Entry SHORT — Tentative LH + ChoCh + Zone`);
-          struct1m.hasLH = true;
-        }
-      }
-    }
+    // ── Strict 1m Structure Confirmation Only ──────────────────────
+    // Removed SMC-Sling and Fast-Entry bypasses to ensure trades only fire
+    // on confirmed HL/LH swings.
     // ──────────────────────────────────────────────────────────
 
     if (NEED_1M) {
