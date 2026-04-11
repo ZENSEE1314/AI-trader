@@ -620,8 +620,8 @@ async function analyzeLHHL(ticker, params, dailyBiasCache, kronosPredictions = n
     if (NEED_1M) {
       // 1. Strict Trend Alignment: 1m trend must match HTF direction
       const targetTrend = direction === 'LONG' ? 'bullish' : 'bearish';
-      if (struct1m.trend !== targetTrend) {
-        bLog.scan(`${symbol}: ${direction} blocked — 1m trend is ${struct1m.trend} (must be ${targetTrend})`);
+      if (struct1m.trend !== targetTrend && struct1m.trend !== 'neutral') {
+        bLog.scan(`${symbol}: ${direction} blocked — 1m trend is ${struct1m.trend} (must be ${targetTrend} or neutral)`);
         return null;
       }
 
@@ -643,8 +643,8 @@ async function analyzeLHHL(ticker, params, dailyBiasCache, kronosPredictions = n
       const currentIdx = klines1m.length - 1;
       const candleAge = currentIdx - confirmationIdx;
 
-      if (candleAge !== 1) {
-        bLog.scan(`${symbol}: ${direction} blocked — swing age ${candleAge} (must be exactly 1 candle after confirmation)`);
+      if (candleAge < 1 || candleAge > 3) {
+        bLog.scan(`${symbol}: ${direction} blocked — swing age ${candleAge} (must be 1-3 candles after confirmation)`);
         return null;
       }
 
