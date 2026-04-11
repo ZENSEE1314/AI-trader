@@ -3470,3 +3470,11 @@
     init();
   }
 })();
+
+<div id='brain-display' style='display:none; padding:20px; background:#1a1a1a; color:#00ff00; font-family:monospace; white-space:pre-wrap;'></div>
+function loadBrain() {
+  document.getElementById('brain-display').style.display = 'block';
+  fetch('/admin/brain-status').then(r => r.json()).then(data => {
+    document.getElementById('brain-display').innerText = data.report;
+  });
+}
