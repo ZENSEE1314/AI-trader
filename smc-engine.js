@@ -193,13 +193,47 @@ function detectSwings(klines, len) {
     }
   }
 
-  return swings;
+  // ── Fast-Track: Tentative Pivot Detection ──────────────────────
+  // A pivot is tentative if it is the lowest/highest of its local neighborhood
+  // but hasn't waited for the full 'len' window to close.
+  const tentative = { isLow: false, isHigh: false, index: -1, price: 0 };
+  const lastIdx = klines.length - 1;
+
+  // Look back from the end for a potential pivot that is currently "unconfirmed"
+  for (let i = lastIdx - 1; i >= Math.max(0, lastIdx - len); i--) {
+    let isLocalLow = true;
+    for (let j = i - len; j < i; j++) {
+      if (j < 0) continue;
+      if (lows[i] >= lows[j]) { isLocalLow = false; break; }
+    }
+    if (isLocalLow) {
+      tentative.isLow = true;
+      tentative.index = i;
+      tentative.price = lows[i];
+      break;
+    }
+  }
+  for (let i = lastIdx - 1; i >= Math.max(0, lastIdx - len); i--) {
+    let isLocalHigh = true;
+    for (let j = i - len; j < i; j++) {
+      if (j < 0) continue;
+      if (highs[i] >= highs[j]) { isLocalHigh = false; break; }
+    }
+    if (isLocalHigh) {
+      tentative.isHigh = true;
+      tentative.index = i;
+      tentative.price = highs[i];
+      break;
+    }
+  }
+
+  return { swings, tentative };
 }
 
 // ── Market Structure Labels ─────────────────────────────────
 
 function getStructure(klines, len) {
-  const swings = detectSwings(klines, len);
+  const { swings, tentative } = detectSwings(klines, len);
   const swingHighs = swings.filter(s => s.type === 'high');
   const swingLows = swings.filter(s => s.type === 'low');
 
@@ -252,6 +286,7 @@ function getStructure(klines, len) {
     hasHH: lastHigh?.label === 'HH',
     hasLL: lastLow?.label === 'LL',
     isChoCh,
+    tentative,
     label: `${lastHigh?.label || '--'}/${lastLow?.label || '--'}`,
   };
 }
@@ -535,6 +570,46 @@ async function analyzeLHHL(ticker, params, dailyBiasCache, kronosPredictions = n
         if (NEED_1M) {
           // Overwrite the block logic below
           struct1m.hasHL = true;
+        }
+      }
+    } else if (direction === 'SHORT' && struct1m.isChoCh) {
+      const fvgs = detectFVGs(klines1m);
+      const obs = detectOrderBlocks(klines1m, struct1m.swings);
+
+      const inFVG = fvgs.some(f => f.type === 'BEARISH' && price >= f.bottom && price <= f.top);
+      const inOB = obs.some(o => o.type === 'BEARISH' && price >= o.bottom && price <= o.top);
+
+      if (inFVG || inOB) {
+        bLog.scan(`${symbol}: SMC-Sling DETECTED — Price in Sell-In zone after ChoCh`);
+        if (NEED_1M) {
+          struct1m.hasLH = true;
+        }
+      }
+    }
+
+    // ── Fast-Entry: Tentative Swing Bypass ──────────────────────
+    // If we have a tentative pivot and strong alignment, we bypass the full swing window
+    if (NEED_1M) {
+      if (direction === 'LONG' && struct1m.tentative?.isLow) {
+        // Entry is allowed if tentative HL is supported by ChoCh + FVG/OB
+        const fvgs = detectFVGs(klines1m);
+        const obs = detectOrderBlocks(klines1m, struct1m.swings);
+        const inZone = fvgs.some(f => f.type === 'BULLISH' && price <= f.top && price >= f.bottom) ||
+                       obs.some(o => o.type === 'BULLISH' && price <= o.top && price >= o.bottom);
+
+        if (struct1m.isChoCh && inZone) {
+          bLog.scan(`${symbol}: Fast-Entry LONG — Tentative HL + ChoCh + Zone`);
+          struct1m.hasHL = true;
+        }
+      } else if (direction === 'SHORT' && struct1m.tentative?.isHigh) {
+        const fvgs = detectFVGs(klines1m);
+        const obs = detectOrderBlocks(klines1m, struct1m.swings);
+        const inZone = fvgs.some(f => f.type === 'BEARISH' && price >= f.bottom && price <= f.top) ||
+                       obs.some(o => o.type === 'BEARISH' && price >= o.bottom && price <= o.top);
+
+        if (struct1m.isChoCh && inZone) {
+          bLog.scan(`${symbol}: Fast-Entry SHORT — Tentative LH + ChoCh + Zone`);
+          struct1m.hasLH = true;
         }
       }
     }

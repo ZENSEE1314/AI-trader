@@ -40,10 +40,10 @@ const CONFIG = {
   ],
 };
 
-// ── Circuit Breaker: pause after consecutive losses ────────
-const CIRCUIT_BREAKER = { MAX_CONSECUTIVE_LOSSES: 3, COOLDOWN_MS: 30 * 60 * 1000 }; // 30 min pause
+// ── Global State ──────────────────────────────────────────────
 let consecutiveLosses = 0;
 let circuitBreakerUntil = 0;
+let lastBitunixSync = 0;
 
 // ── Trailing SL config ─────────────────────────────────────
 // All values are PRICE % (not capital %).
@@ -880,6 +880,21 @@ async function main() {
   if (banUntil > Date.now()) {
     log(`Still banned — skipping cycle`);
     return;
+  }
+
+  // ── Maintenance & Sync ───────────────────────────────────────
+  const now = Date.now();
+  if (!lastBitunixSync || now - lastBitunixSync > 12 * 60 * 60 * 1000) {
+    bLog.info('Running periodic Bitunix trade history sync...');
+    try {
+      const { AccountantAgent } = require('./agents/accountant-agent');
+      const accAgent = new AccountantAgent();
+      const syncResult = await accAgent.syncBitunixHistory();
+      lastBitunixSync = now;
+      bLog.info(`Bitunix Sync Complete: ${syncResult.synced} new, ${syncResult.updated} updated`);
+    } catch (e) {
+      bLog.error(`Bitunix sync loop failed: ${e.message}`);
+    }
   }
 
   // Circuit breaker: pause after consecutive losses
