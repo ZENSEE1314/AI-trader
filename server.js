@@ -9,6 +9,8 @@ const app = express();
 initAllTables().catch(err => console.error('DB init error:', err.message));
 
 // Skip JSON parsing for Stripe webhook — needs raw body for signature verification
+app.get('/login', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
+app.get('/signup', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 app.use((req, res, next) => {
   if (req.path === '/api/subscription/stripe-webhook') return next();
   express.json()(req, res, next);
