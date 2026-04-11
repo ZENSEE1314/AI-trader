@@ -3337,6 +3337,8 @@ router.delete('/token-board/:symbol', async (req, res) => {
     await query('DELETE FROM global_token_settings WHERE symbol = $1', [req.params.symbol.toUpperCase()]);
     res.json({ ok: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // GET /api/admin/agents/health — Full agent health + activity
 router.get('/agents/health', async (req, res) => {
   try {
