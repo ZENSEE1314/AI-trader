@@ -247,6 +247,100 @@ class AccountantAgent extends BaseAgent {
     };
   }
 
+  async syncBitunixHistory() {
+    this.currentTask = { description: 'Syncing full Bitunix trade history', startedAt: Date.now() };
+    this.addActivity('info', 'Starting Bitunix trade history synchronization...');
+
+    let db;
+    try { db = require('../db'); } catch (e) {
+      this.addActivity('error', 'Database not available');
+      return { ok: false, error: 'Database not available' };
+    }
+
+    let keys;
+    try {
+      keys = await db.query(`SELECT * FROM api_keys WHERE platform = 'bitunix' AND enabled = true`);
+    } catch (e) {
+      this.addActivity('error', `Failed to fetch API keys: ${e.message}`);
+      return { ok: false, error: e.message };
+    }
+
+    let totalSynced = 0;
+    let totalUpdated = 0;
+
+    for (const key of keys) {
+      try {
+        let cryptoUtils;
+        try { cryptoUtils = require('../crypto-utils'); } catch { continue; }
+        const apiKey = cryptoUtils.decrypt(key.api_key_enc, key.iv, key.auth_tag);
+        const apiSecret = cryptoUtils.decrypt(key.api_secret_enc, key.secret_iv, key.secret_auth_tag);
+
+        const { BitunixClient } = require('../bitunix-client');
+        const client = new BitunixClient({ apiKey, apiSecret });
+
+        // Fetch all historical positions
+        const historyPositions = await client.getHistoryPositions({ all: true });
+        this.addActivity('info', `Fetched ${historyPositions.length} historical positions for ${key.email}`);
+
+        for (const p of historyPositions) {
+          const symbol = p.symbol;
+          const entryPrice = p.avgOpenPrice || p.entryPrice || p.openPrice;
+          const exitPrice = p.closePrice || p.exitPrice;
+          const pnl = p.unrealizedPNL || p.realizedPNL || p.pnl || 0;
+          const fee = p.fee || 0;
+          const qty = p.qty || p.positionAmt;
+          const side = p.side; // BUY/SELL
+
+          if (!symbol || !entryPrice) continue;
+
+          // Check if trade already exists in DB
+          const existing = await db.query(
+            `SELECT id FROM trades WHERE symbol = $1 AND entry_price = $2 AND api_key_id = $3`,
+            [symbol, entryPrice, key.id]
+          );
+
+          if (existing.length === 0) {
+            // Insert missing trade
+            await db.query(
+              `INSERT INTO trades (symbol, direction, entry_price, exit_price, quantity, pnl_usdt, trading_fee, status, api_key_id, platform, closed_at)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+              [
+                symbol,
+                side === 'BUY' ? 'LONG' : 'SHORT',
+                entryPrice,
+                exitPrice,
+                qty,
+                pnl,
+                fee,
+                pnl >= 0 ? 'WIN' : 'LOSS',
+                key.id,
+                'bitunix',
+                p.closedAt || new Date().toISOString()
+              ]
+            );
+            totalSynced++;
+          } else {
+            // Update existing trade if exit data is missing
+            const trade = existing[0];
+            if (!trade.exit_price || trade.pnl_usdt === 0) {
+              await db.query(
+                `UPDATE trades SET exit_price = $1, pnl_usdt = $2, trading_fee = $3, status = $4 WHERE id = $5`,
+                [exitPrice, pnl, fee, pnl >= 0 ? 'WIN' : 'LOSS', trade.id]
+              );
+              totalUpdated++;
+            }
+          }
+        }
+      } catch (e) {
+        this.addActivity('error', `Sync failed for ${key.email}: ${e.message}`);
+      }
+    }
+
+    this.currentTask = null;
+    this.addActivity('success', `Bitunix sync complete: ${totalSynced} new trades, ${totalUpdated} updated`);
+    return { ok: true, synced: totalSynced, updated: totalUpdated };
+  },
+
   async _getAIContext() {
     return {
       auditsRun: this.auditsRun,

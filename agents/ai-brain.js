@@ -70,7 +70,7 @@ function getProviderName() {
 async function think(opts) {
   const { agentName, systemPrompt, userMessage, context = {} } = opts;
   const provider = getProvider();
-  if (!provider) return null;
+  if (!provider) return `[Critical Error] No AI provider configured. Please check ANTHROPIC_API_KEY or GOOGLE_AI_KEY.`;
 
   // Check cache first
   const cacheKey = `${agentName}:${userMessage.substring(0, 100)}`;
@@ -103,11 +103,33 @@ async function think(opts) {
   try {
     requestLog.push(Date.now());
     let text;
-    if (provider === 'google') {
-      text = await thinkGoogle(agentName, fullSystem, userMessage);
-    } else {
-      text = await thinkAnthropic(agentName, fullSystem, userMessage);
+
+    // Retry mechanism for transient provider errors (like 424, 500, 503)
+    let attempts = 0;
+    const maxAttempts = 3; // Increased to 3 for better resilience
+
+    while (attempts < maxAttempts) {
+      try {
+        if (provider === 'google') {
+          text = await thinkGoogle(agentName, fullSystem, userMessage);
+        } else {
+          text = await thinkAnthropic(agentName, fullSystem, userMessage);
+        }
+        if (text) break; // Success, exit loop
+        throw new Error('AI returned empty response');
+      } catch (err) {
+        attempts++;
+        const isTransient = err.message?.includes('424') || err.message?.includes('500') || err.message?.includes('503') || err.message?.includes('Could not serve request') || err.message === 'AI returned empty response';
+
+        if (isTransient && attempts < maxAttempts) {
+          console.log(`[AI Brain] Transient error ${err.message} — retrying (${attempts}/${maxAttempts})...`);
+          await new Promise(resolve => setTimeout(resolve, 1500 * attempts)); // Slightly longer backoff
+          continue;
+        }
+        throw err; // Not transient or max attempts reached
+      }
     }
+
     // Cache the response
     if (text) responseCache.set(cacheKey, { text, ts: Date.now() });
     return text;
@@ -116,7 +138,8 @@ async function think(opts) {
     if (err.message?.includes('429') || err.message?.includes('quota')) {
       return `I'm being rate limited by ${provider === 'google' ? 'Google' : 'Anthropic'}. Please wait 30 seconds and try again.`;
     }
-    return `[AI Error: ${err.message}]`;
+    // Return a more helpful error that suggests a retry
+    return `I'm having a momentary brain-freeze (AI Error: ${err.message.substring(0, 50)}). Please try asking me again in a few seconds!`;
   }
 }
 

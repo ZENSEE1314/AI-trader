@@ -1,22 +1,23 @@
 // ============================================================
 // KronosAgent — Dedicated Kronos AI prediction runner
 //
-// Runs Kronos predictions on its own schedule, persists to DB,
-// and shares insights with other agents via messaging.
+// Runs Swarm Simulation predictions on its own schedule, persists to DB,
+// and shares consolidated insights with other agents via messaging.
 // ============================================================
 
 const { BaseAgent } = require('./base-agent');
+const swarmEngine = require('./swarm-engine');
 
 class KronosAgent extends BaseAgent {
   constructor(options = {}) {
     super('KronosAgent', options);
     this._profile = {
-      description: 'Runs Kronos AI time-series predictions and shares forecasts with the team.',
+      description: 'Runs MiroFish-style Swarm AI simulations and shares forecasts with the team.',
       role: 'AI Oracle',
       icon: 'kronos',
       skills: [
-        { id: 'predict', name: 'Predict', description: 'Run Kronos predictions on all tokens', enabled: true },
-        { id: 'share', name: 'Share Insights', description: 'Broadcast predictions to other agents', enabled: true },
+        { id: 'predict', name: 'Predict', description: 'Run Swarm simulations on all tokens', enabled: true },
+        { id: 'share', name: 'Share Insights', description: 'Broadcast consolidated predictions to other agents', enabled: true },
       ],
       config: [
         { key: 'interval', label: 'Candle Interval', type: 'string', value: '15m' },
@@ -41,17 +42,28 @@ class KronosAgent extends BaseAgent {
     const predLen = this.getConfig().predLen || 20;
     const concurrency = this.getConfig().concurrency || 3;
 
-    this.currentTask = { description: `Predicting ${symbols.length} tokens...`, startedAt: Date.now() };
-    this.addActivity('info', `Scanning ${symbols.length} tokens with Kronos AI...`);
+    this.currentTask = { description: `Simulating ${symbols.length} tokens...`, startedAt: Date.now() };
+    this.addActivity('info', `Running Swarm Simulations for ${symbols.length} tokens...`);
 
     const kronos = require('../kronos');
     const startTime = Date.now();
 
-    let predictions;
+    let predictions = new Map();
     try {
-      predictions = await kronos.scanAllTokens(symbols, interval, predLen, concurrency);
+      // 1. Get Seeds for all tokens
+      const seedResults = await kronos.scanAllTokens(symbols, interval, predLen, concurrency);
+
+      // 2. Run Swarm Simulation for each seed
+      const swarmResults = [];
+      for (const [symbol, seeds] of seedResults.entries()) {
+        const result = await swarmEngine.runSwarm(symbol, seeds);
+        if (result) {
+          predictions.set(symbol, result);
+          swarmResults.push(result);
+        }
+      }
     } catch (err) {
-      this.addActivity('error', `Kronos scan failed: ${err.message}`);
+      this.addActivity('error', `Swarm scan failed: ${err.message}`);
       return { predictions: 0, error: err.message };
     }
 
@@ -60,10 +72,10 @@ class KronosAgent extends BaseAgent {
     this.totalPredictions += predictions.size;
 
     // Analyze results
-    const results = Array.from(predictions.values()).filter(p => !p.error);
+    const results = Array.from(predictions.values());
     const longs = results.filter(r => r.direction === 'LONG');
     const shorts = results.filter(r => r.direction === 'SHORT');
-    const highConf = results.filter(r => r.confidence === 'high');
+    const highConf = results.filter(r => r.confidence >= 70); // Swarm confidence threshold
     this.highConfCount += highConf.length;
 
     this.lastPredictions = predictions;
@@ -72,25 +84,40 @@ class KronosAgent extends BaseAgent {
     if (context.coordinator) {
       const coord = context.coordinator;
 
-      // Tell RiskAgent about high-confidence predictions
+      // Tell RiskAgent about high-confidence swarm predictions
       if (highConf.length > 0 && coord.riskAgent) {
         coord.riskAgent.receive({
           from: 'KronosAgent', type: 'kronos-predictions',
-          payload: { highConf: highConf.map(p => ({ symbol: p.symbol, direction: p.direction, change_pct: p.change_pct, confidence: p.confidence })) },
+          payload: {
+            highConf: highConf.map(p => ({
+              symbol: p.symbol,
+              direction: p.direction,
+              confidence: p.confidence,
+              target: p.target_price,
+              logic: p.swarm_logic
+            }))
+          },
           ts: Date.now(),
         });
       }
 
-      // Tell TraderAgent about strong signals
+      // Tell TraderAgent about strong consolidated signals
       if (coord.traderAgent) {
-        const strong = results.filter(r => r.confidence !== 'low' && Math.abs(r.change_pct) >= 1.5);
+        const strong = results.filter(r => r.confidence >= 80);
         if (strong.length > 0) {
           coord.traderAgent.receive({
             from: 'KronosAgent', type: 'kronos-signals',
-            payload: { signals: strong.map(p => ({ symbol: p.symbol, direction: p.direction, change_pct: p.change_pct, confidence: p.confidence })) },
+            payload: {
+              signals: strong.map(p => ({
+                symbol: p.symbol,
+                direction: p.direction,
+                confidence: p.confidence,
+                target: p.target_price
+              }))
+            },
             ts: Date.now(),
           });
-          this.addActivity('info', `Shared ${strong.length} strong signal(s) with TraderAgent`);
+          this.addActivity('info', `Shared ${strong.length} high-conf swarm signals with TraderAgent`);
         }
       }
 
@@ -105,16 +132,16 @@ class KronosAgent extends BaseAgent {
       }
 
       // Share team memory summary
-      this.shareWithTeam(`Kronos scan #${this.scanCount}: ${results.length} predictions in ${elapsed}s — ${longs.length} LONG, ${shorts.length} SHORT, ${highConf.length} high-confidence`);
+      this.shareWithTeam(`Swarm Scan #${this.scanCount}: ${results.length} simulations in ${elapsed}s — ${longs.length} LONG, ${shorts.length} SHORT, ${highConf.length} high-conf`);
     }
 
-    // Learn from predictions
+    // Learn from high-confidence predictions
     if (highConf.length > 0) {
       const topPred = highConf[0];
-      this.learn('prediction', { symbol: topPred.symbol, direction: topPred.direction }, { change_pct: topPred.change_pct }, `High-confidence ${topPred.direction} on ${topPred.symbol} (${topPred.change_pct}%)`, Math.abs(topPred.change_pct)).catch(() => {});
+      this.learn('prediction', { symbol: topPred.symbol, direction: topPred.direction }, { target: topPred.target_price }, `Swarm confidence ${topPred.confidence}% ${topPred.direction} on ${topPred.symbol}`, topPred.confidence).catch(() => {});
     }
 
-    const summary = `${results.length} predictions in ${elapsed}s — ${longs.length} LONG, ${shorts.length} SHORT, ${highConf.length} high-conf`;
+    const summary = `${results.length} simulations in ${elapsed}s — ${longs.length} LONG, ${shorts.length} SHORT, ${highConf.length} high-conf`;
     this.addActivity('success', summary);
     this.currentTask = null;
 

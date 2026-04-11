@@ -81,6 +81,67 @@ async function fetchTickers() {
 
 // ── Swing Detection ─────────────────────────────────────────
 
+function detectFVGs(klines) {
+  const fvgs = [];
+  for (let i = 2; i < klines.length - 1; i++) {
+    const c1 = { high: parseFloat(klines[i - 2][2]), low: parseFloat(klines[i - 2][3]) };
+    const c3 = { high: parseFloat(klines[i][2]), low: parseFloat(klines[i][3]) };
+
+    if (c3.low > c1.high) {
+      const gapSize = c3.low - c1.high;
+      if (gapSize > c1.high * 0.0001) {
+        fvgs.push({
+          type: 'BULLISH',
+          top: c3.low,
+          bottom: c1.high,
+          index: i - 1,
+          strength: gapSize / c1.high
+        });
+      }
+    } else if (c3.high < c1.low) {
+      const gapSize = c1.low - c3.high;
+      if (gapSize > c1.low * 0.0001) {
+        fvgs.push({
+          type: 'BEARISH',
+          top: c1.low,
+          bottom: c3.high,
+          index: i - 1,
+          strength: gapSize / c1.low
+        });
+      }
+    }
+  }
+  return fvgs;
+}
+
+function detectOrderBlocks(klines, swings) {
+  const obs = [];
+  if (swings.length < 2) return obs;
+
+  const lastSwing = swings[swings.length - 1];
+  const prevSwing = swings[swings.length - 2];
+
+  if (lastSwing.type === 'high' && lastSwing.price > prevSwing.price) {
+    let lowestIdx = prevSwing.index;
+    let minPrice = parseFloat(klines[prevSwing.index][3]);
+
+    for (let i = prevSwing.index; i < lastSwing.index; i++) {
+      const low = parseFloat(klines[i][3]);
+      if (low < minPrice) {
+        minPrice = low;
+        lowestIdx = i;
+      }
+    }
+    obs.push({
+      type: 'BULLISH',
+      top: parseFloat(klines[lowestIdx][2]),
+      bottom: parseFloat(klines[lowestIdx][3]),
+      index: lowestIdx
+    });
+  }
+  return obs;
+}
+
 function detectSwings(klines, len) {
   const highs = klines.map(k => parseFloat(k[2]));
   const lows = klines.map(k => parseFloat(k[3]));
@@ -135,10 +196,45 @@ function detectSwings(klines, len) {
   return swings;
 }
 
+function detectTentativePivot(klines, len) {
+  const highs = klines.map(k => parseFloat(k[2]));
+  const lows = klines.map(k => parseFloat(k[3]));
+  const tentative = { isLow: false, isHigh: false, index: -1, price: 0 };
+  const lastIdx = klines.length - 1;
+
+  for (let i = lastIdx - 1; i >= Math.max(0, lastIdx - len); i--) {
+    let isLocalLow = true;
+    for (let j = i - len; j < i; j++) {
+      if (j < 0) continue;
+      if (lows[i] >= lows[j]) { isLocalLow = false; break; }
+    }
+    if (isLocalLow) {
+      tentative.isLow = true;
+      tentative.index = i;
+      tentative.price = lows[i];
+      break;
+    }
+  }
+  for (let i = lastIdx - 1; i >= Math.max(0, lastIdx - len); i--) {
+    let isLocalHigh = true;
+    for (let j = i - len; j < i; j++) {
+      if (j < 0) continue;
+      if (highs[i] >= highs[j]) { isLocalHigh = false; break; }
+    }
+    if (isLocalHigh) {
+      tentative.isHigh = true;
+      tentative.index = i;
+      tentative.price = highs[i];
+      break;
+    }
+  }
+  return tentative;
+}
+
 // ── Market Structure Labels ─────────────────────────────────
 
 function getStructure(klines, len) {
-  const swings = detectSwings(klines, len);
+  const { swings, tentative } = detectSwings(klines, len);
   const swingHighs = swings.filter(s => s.type === 'high');
   const swingLows = swings.filter(s => s.type === 'low');
 
@@ -167,14 +263,21 @@ function getStructure(klines, len) {
   const lastLow = sigLows.length ? sigLows[sigLows.length - 1] : (lowLabels.length ? lowLabels[lowLabels.length - 1] : null);
 
   let trend = 'neutral';
+  let isChoCh = false;
+
   if (lastHigh && lastLow) {
     const isBearish = lastHigh.label === 'LH' && lastLow.label === 'LL';
     const isBullish = lastHigh.label === 'HH' && lastLow.label === 'HL';
     if (isBearish) trend = 'bearish';
     else if (isBullish) trend = 'bullish';
-    // Mixed structures: use the most recent swing's bias instead of neutral
     else if (lastHigh.label === 'LH') trend = 'bearish';
     else if (lastLow.label === 'HL') trend = 'bullish';
+  }
+
+  // Detect Change of Character (ChoCh)
+  // Bullish ChoCh: Price breaks the most recent significant LH
+  if (lastHigh && lastHigh.label === 'LH' && klines[klines.length - 1][4] > lastHigh.price) {
+    isChoCh = true;
   }
 
   return {
@@ -183,6 +286,8 @@ function getStructure(klines, len) {
     hasHL: lastLow?.label === 'HL',
     hasHH: lastHigh?.label === 'HH',
     hasLL: lastLow?.label === 'LL',
+    isChoCh,
+    tentative,
     label: `${lastHigh?.label || '--'}/${lastLow?.label || '--'}`,
   };
 }
@@ -449,6 +554,68 @@ async function analyzeLHHL(ticker, params, dailyBiasCache, kronosPredictions = n
   let struct1m = null;
   if (klines1m && klines1m.length >= 15) {
     struct1m = getStructure(klines1m, SWING_LENGTHS['1m']);
+
+    // ── SMC-Sling "Buy-In" Logic ────────────────────────────
+    // 1. Must have a ChoCh (Market Structure Shift)
+    // 2. Price must currently be inside a Bullish FVG or Order Block
+    if (direction === 'LONG' && struct1m.isChoCh) {
+      const fvgs = detectFVGs(klines1m);
+      const obs = detectOrderBlocks(klines1m, struct1m.swings);
+
+      const inFVG = fvgs.some(f => f.type === 'BULLISH' && price <= f.top && price >= f.bottom);
+      const inOB = obs.some(o => o.type === 'BULLISH' && price <= o.top && price >= o.bottom);
+
+      if (inFVG || inOB) {
+        bLog.scan(`${symbol}: SMC-Sling DETECTED — Price in Buy-In zone after ChoCh`);
+        // We can bypass 1m HL requirement if we have a perfect SMC-Sling
+        if (NEED_1M) {
+          // Overwrite the block logic below
+          struct1m.hasHL = true;
+        }
+      }
+    } else if (direction === 'SHORT' && struct1m.isChoCh) {
+      const fvgs = detectFVGs(klines1m);
+      const obs = detectOrderBlocks(klines1m, struct1m.swings);
+
+      const inFVG = fvgs.some(f => f.type === 'BEARISH' && price >= f.bottom && price <= f.top);
+      const inOB = obs.some(o => o.type === 'BEARISH' && price >= o.bottom && price <= o.top);
+
+      if (inFVG || inOB) {
+        bLog.scan(`${symbol}: SMC-Sling DETECTED — Price in Sell-In zone after ChoCh`);
+        if (NEED_1M) {
+          struct1m.hasLH = true;
+        }
+      }
+    }
+
+    // ── Fast-Entry: Tentative Swing Bypass ──────────────────────
+    // If we have a tentative pivot and strong alignment, we bypass the full swing window
+    if (NEED_1M) {
+      if (direction === 'LONG' && struct1m.tentative?.isLow) {
+        // Entry is allowed if tentative HL is supported by ChoCh + FVG/OB
+        const fvgs = detectFVGs(klines1m);
+        const obs = detectOrderBlocks(klines1m, struct1m.swings);
+        const inZone = fvgs.some(f => f.type === 'BULLISH' && price <= f.top && price >= f.bottom) ||
+                       obs.some(o => o.type === 'BULLISH' && price <= o.top && price >= o.bottom);
+
+        if (struct1m.isChoCh && inZone) {
+          bLog.scan(`${symbol}: Fast-Entry LONG — Tentative HL + ChoCh + Zone`);
+          struct1m.hasHL = true;
+        }
+      } else if (direction === 'SHORT' && struct1m.tentative?.isHigh) {
+        const fvgs = detectFVGs(klines1m);
+        const obs = detectOrderBlocks(klines1m, struct1m.swings);
+        const inZone = fvgs.some(f => f.type === 'BEARISH' && price >= f.bottom && price <= f.top) ||
+                       obs.some(o => o.type === 'BEARISH' && price >= o.bottom && price <= o.top);
+
+        if (struct1m.isChoCh && inZone) {
+          bLog.scan(`${symbol}: Fast-Entry SHORT — Tentative LH + ChoCh + Zone`);
+          struct1m.hasLH = true;
+        }
+      }
+    }
+    // ──────────────────────────────────────────────────────────
+
     if (NEED_1M) {
       if (direction === 'LONG' && !struct1m.hasHL) {
         bLog.scan(`${symbol}: LONG blocked — 1m has no HL confirmation`);
@@ -490,8 +657,16 @@ async function analyzeLHHL(ticker, params, dailyBiasCache, kronosPredictions = n
   }
 
   // ┌─────────────────────────────────────────────────────────┐
-  // │ Safety Guards (always on — protect against bad entries)  │
+  // │ Volatility Shield: Stop scans during extreme volatility  │
   // └─────────────────────────────────────────────────────────┘
+  const vols15 = klines15m.slice(-20).map(k => parseFloat(k[5]));
+  const avgVol = vols15.reduce((a, b) => a + b, 0) / vols15.length;
+  const currentVol = parseFloat(klines15m[klines15m.length - 1][5]);
+
+  if (avgVol > 0 && currentVol / avgVol > 4.0) {
+    bLog.scan(`${symbol}: Volatility Shield active — volume spike ${ (currentVol/avgVol).toFixed(1) }x (blocking entry)`);
+    return null;
+  }
 
   // RSI Overbought/Oversold — don't chase extended moves
   {
@@ -596,6 +771,15 @@ async function analyzeLHHL(ticker, params, dailyBiasCache, kronosPredictions = n
   const setup = direction === 'LONG' ? 'HTF_LONG' : 'HTF_SHORT';
   const aiModifier = await aiLearner.getAIScoreModifier(symbol, setup, direction);
   score = score * aiModifier;
+
+  // Combined Modifier = Boost - Penalty
+  const trend1h = struct1h.trend || 'unknown';
+  const session = aiLearner.getCurrentSession();
+  const patternMod = await aiLearner.getPatternModifier(symbol, setup, direction, session, trend1h);
+  if (patternMod !== 0) {
+    score += patternMod;
+    bLog.scan(`${symbol}: applying pattern modifier ${patternMod > 0 ? 'boost' : 'penalty'} ${patternMod} for DNA ${[symbol, setup, direction, session, trend1h].join('|')}`);
+  }
 
   bLog.scan(
     `SIGNAL: ${symbol} ${direction} | 4h=${struct4h.trend} 1h=${struct1h.trend} 15m=${struct15m.label} ` +

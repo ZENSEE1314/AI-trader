@@ -73,7 +73,11 @@ class CoderAgent extends BaseAgent {
     this._errorPatterns = new Map(); // error message → count
     this._moduleHealth = new Map();  // module path → { ok, error, lastCheck }
     this._lastDiagnostic = null;
+
+    // Healing sessions: Map<agentName, { attempts: number, lastErrorHash: string, lastAttemptAt: number }>
+    this._activeHealingSessions = new Map();
   }
+
 
   async init() {
     await super.init();
@@ -209,6 +213,137 @@ class CoderAgent extends BaseAgent {
     }
 
     return report;
+  }
+
+  // ── Self-Healing Loop ──────────────────────────────────────
+
+  /**
+   * Reactive entry point for self-healing.
+   * Triggered by AgentCoordinator when an agent crashes.
+   */
+  async healAgent({ agent, error, timestamp }) {
+    const agentName = agent.name;
+    const errorMsg = error.message || 'Unknown error';
+    const stack = error.stack || '';
+    const errorHash = Buffer.from(errorMsg + stack).toString('base64').slice(0, 16);
+
+    this.log(`Healing triggered for ${agentName}: ${errorMsg}`);
+    this.addActivity('info', `Sensing crash in ${agentName}... diagnosing.`);
+
+    // 1. Loop Prevention
+    const session = this._activeHealingSessions.get(agentName) || { attempts: 0, lastErrorHash: null, lastAttemptAt: 0 };
+    if (session.lastErrorHash === errorHash && session.attempts >= 3) {
+      this.log(`Auto-healing limit reached for ${agentName} (Error: ${errorHash}). Manual intervention required.`);
+      this.addActivity('error', `Healing limit reached for ${agentName} — marking as human_required.`);
+      this.shareWithTeam(`⚠️ CRITICAL: ${agentName} is in a crash loop. Self-healing exhausted. Human review required.`);
+      return { ok: false, reason: 'healing_limit_reached' };
+    }
+
+    // Update session
+    session.attempts = session.lastErrorHash === errorHash ? session.attempts + 1 : 1;
+    session.lastErrorHash = errorHash;
+    session.lastAttemptAt = Date.now();
+    this._activeHealingSessions.set(agentName, session);
+
+    try {
+      // 2. Diagnosis
+      this.currentTask = { description: `Diagnosing crash in ${agentName}...`, startedAt: Date.now() };
+      const diagnosis = await this._diagnoseCrash(agent, error, stack);
+
+      if (!diagnosis || !diagnosis.patches || diagnosis.patches.length === 0) {
+        this.log(`AI could not find a fix for ${agentName} crash.`);
+        return { ok: false, reason: 'no_fix_found' };
+      }
+
+      // 3. Patch Application (take the best patch)
+      const patch = diagnosis.patches[0];
+      if (patch.confidence < 0.7) {
+        this.log(`Patch confidence too low (${patch.confidence}) for auto-apply. Marking as pending.`);
+        this._pendingPatches.push({ ...patch, createdAt: Date.now(), status: 'pending' });
+        return { ok: false, reason: 'low_confidence' };
+      }
+
+      this.log(`Applying fix for ${agentName} (${patch.description})`);
+      const applyResult = await this._applyPatch(patch);
+
+      if (applyResult.ok) {
+        this.addActivity('success', `Healed ${agentName}: ${patch.description}`);
+        this.shareWithTeam(`🛠️ Self-Healed ${agentName}: ${patch.description}`);
+
+        // 4. Verification Trigger
+        if (this._coordinator) {
+          this.log(`Requesting verification cycle for ${agentName}...`);
+          await this._coordinator.verifyAgentFix(agent);
+        }
+        return { ok: true, patchId: patch.id };
+      } else {
+        this.log(`Patch application failed for ${agentName}: ${applyResult.error}`);
+        return { ok: false, reason: 'patch_failed', error: applyResult.error };
+      }
+    } catch (err) {
+      this.logError(`Healing process failed for ${agentName}: ${err.message}`);
+      return { ok: false, reason: 'healing_process_error', error: err.message };
+    }
+  }
+
+  async _diagnoseCrash(agent, error, stack) {
+    const { think, isAvailable } = require('./ai-brain');
+    if (!isAvailable()) return null;
+
+    // Find the failing file from stack trace
+    const stackLines = stack.split('\n');
+    const fileMatch = stackLines.find(line => line.includes('at ') && (line.includes('.js') || line.includes('module.js')));
+    let failingFile = null;
+    if (fileMatch) {
+      const match = fileMatch.match(/([a-zA-Z0-9_/.-]+\.js)/);
+      if (match) failingFile = match[1];
+    }
+
+    let fileContent = 'Unknown';
+    if (failingFile) {
+      try {
+        const fullPath = path.resolve(PROJECT_ROOT, failingFile.replace('internal/modules/cjs/loader.js', ''));
+        fileContent = fs.readFileSync(fullPath, 'utf8');
+      } catch {}
+    }
+
+    const prompt = `You are CoderAgent, the self-healing engineer. An agent has crashed.
+
+    AGENT: ${agent.name}
+    ERROR: ${error.message}
+    STACK TRACE:
+    ${stack}
+
+    FILE CONTENT:
+    ${fileContent}
+
+    Respond ONLY with JSON:
+    {
+      "summary": "What happened",
+      "patches": [
+        {
+          "file": "relative/path.js",
+          "description": "The fix",
+          "type": "fix",
+          "search": "exact code to find",
+          "replace": "exact code to replace",
+          "confidence": 0.0-1.0
+        }
+      ]
+    }`;
+
+    try {
+      const response = await think({
+        agentName: this.name,
+        systemPrompt: 'You are a precision code-fixing AI. Respond ONLY with valid JSON. No markdown.',
+        userMessage: prompt,
+        context: {},
+      });
+      const jsonMatch = response.match(/\{[\s\S]*\}/);
+      return jsonMatch ? JSON.parse(jsonMatch[0]) : null;
+    } catch (err) {
+      return null;
+    }
   }
 
   // ── Phase 1: Error Log Analysis ─────────────────────────

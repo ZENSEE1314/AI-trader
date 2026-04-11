@@ -172,20 +172,44 @@ class BitunixClient {
 
   // ── Order / Trade History ───────────────────────────────────
 
-  async getHistoryOrders({ symbol, pageNum = 1, pageSize = 10 } = {}) {
+  async getHistoryOrders({ symbol, pageNum = 1, pageSize = 10, all = false } = {}) {
     const params = { pageNum, pageSize };
     if (symbol) params.symbol = symbol;
-    const data = await this._get('/api/v1/futures/trade/get_history_orders', params);
-    if (Array.isArray(data)) return data;
-    return data?.orderList || data?.list || [];
+
+    const results = [];
+    let currentPage = pageNum;
+
+    do {
+      params.pageNum = currentPage;
+      const data = await this._get('/api/v1/futures/trade/get_history_orders', params);
+      const list = Array.isArray(data) ? data : (data?.orderList || data?.list || []);
+      results.push(...list);
+
+      if (!all || list.length < pageSize) break;
+      currentPage++;
+    } while (true);
+
+    return results;
   }
 
-  async getHistoryPositions({ symbol, pageNum = 1, pageSize = 10 } = {}) {
+  async getHistoryPositions({ symbol, pageNum = 1, pageSize = 10, all = false } = {}) {
     const params = { pageNum, pageSize };
     if (symbol) params.symbol = symbol;
-    const data = await this._get('/api/v1/futures/position/get_history_positions', params);
-    if (Array.isArray(data)) return data;
-    return data?.positionList || data?.list || [];
+
+    const results = [];
+    let currentPage = pageNum;
+
+    do {
+      params.pageNum = currentPage;
+      const data = await this._get('/api/v1/futures/position/get_history_positions', params);
+      const list = Array.isArray(data) ? data : (data?.positionList || data?.list || []);
+      results.push(...list);
+
+      if (!all || list.length < pageSize) break;
+      currentPage++;
+    } while (true);
+
+    return results;
   }
 
   // Raw methods — return full response including code/msg for debugging

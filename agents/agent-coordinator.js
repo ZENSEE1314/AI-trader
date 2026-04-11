@@ -106,6 +106,20 @@ class AgentCoordinator extends BaseAgent {
       await agent.init();
       await agent.loadRpgProfile().catch(() => {});
       this.log(`  ${name}: initialized (Lv.${agent._rpg.level})`);
+
+      // Listen for agent crashes to trigger self-healing
+      agent.on('agent_crash', async (report) => {
+        this.log(`CRASH DETECTED: ${report.agentName} failed. Notifying CoderAgent...`);
+        try {
+          await this.coderAgent.healAgent({
+            agent: agent,
+            error: report.error,
+            timestamp: report.timestamp
+          });
+        } catch (err) {
+          this.logError(`Self-healing trigger failed: ${err.message}`);
+        }
+      });
     }
 
     // Create dedicated token agents for top coins by volume
@@ -169,6 +183,25 @@ class AgentCoordinator extends BaseAgent {
     // CEO always-on: permanently at desk, monitoring everything
     this._startCeoLoop();
     this._startTokenScanLoop();
+  }
+
+  async verifyAgentFix(agent) {
+    this.log(`Verifying fix for ${agent.name}...`);
+
+    // 1. Reset agent state
+    agent.state = 'idle';
+    agent.lastError = null;
+    agent.currentTask = { description: 'Verifying self-healing patch...', startedAt: Date.now() };
+
+    try {
+      // 2. Trigger a single run to verify the fix
+      await agent.run();
+      this.log(`Verification successful: ${agent.name} is back online.`);
+      return true;
+    } catch (err) {
+      this.logError(`Verification failed for ${agent.name}: ${err.message}`);
+      return false;
+    }
   }
 
   addTokenAgent(symbol) {
@@ -265,7 +298,17 @@ class AgentCoordinator extends BaseAgent {
       this.getLeaderboard(); // refresh ranks
     }
 
-    // 5. Run police patrol (pass coordinator context)
+    // 5. Swarm Accuracy Auditor (verify predictions every 20 micro-cycles ~10 min)
+    if (this._microCycleCount % 20 === 0) {
+      try {
+        const { verifySwarmPredictions } = require('../kronos');
+        await verifySwarmPredictions();
+      } catch (err) {
+        this.addActivity('error', `Swarm Auditor error: ${err.message}`);
+      }
+    }
+
+    // 6. Run police patrol (pass coordinator context)
     if (this._microCycleCount % 2 === 0 && !this.policeAgent.paused) {
       this.policeAgent.run({ coordinator: this }).catch(() => {});
     }
@@ -396,7 +439,18 @@ class AgentCoordinator extends BaseAgent {
     return board;
   }
 
-  /** Auto-assign rivalries between agents of similar level for competition */
+  async getAgentLeaderboard() {
+    const board = this.getLeaderboard();
+    return board.slice(0, 10).map((entry, idx) => ({
+      rank: idx + 1,
+      name: this._agents.get(entry.key)?.name || entry.key,
+      level: this._agents.get(entry.key)?._rpg?.level || 1,
+      xp: entry.xp,
+      earnings: entry.earnings || 0,
+      winRate: entry.winRate || 0
+    }));
+  }
+
   updateRivalries() {
     const board = this.getLeaderboard();
     for (let i = 0; i < board.length; i++) {
@@ -920,7 +974,7 @@ class AgentCoordinator extends BaseAgent {
     }
 
     // Check memories
-    if (/what.*(remember|learned|know|memory)|memories|lessons|brain/.test(text)) {
+    if (/what.*(remember|learned|know|memory)|memories|lessons|brain|pattern|penalty|trap/.test(text)) {
       return this._buildMemoryChat(text);
     }
 
@@ -963,13 +1017,55 @@ class AgentCoordinator extends BaseAgent {
       const agent = targetAgent || this;
       const agentName = agent.name || 'Coordinator';
 
-      // Build context from agent + system state
+      // ── ENHANCED CONTEXT FETCHING (Chain-of-Thought) ──
       const context = {
         health: agent.getHealth ? agent.getHealth() : {},
         profile: agent.getProfile ? agent.getProfile() : {},
-        recentActivity: agent.getActivity ? agent.getActivity(5) : [],
+        recentActivity: agent.getActivity ? agent.getActivity(10) : [],
       };
       if (agent._getAIContext) Object.assign(context, await agent._getAIContext());
+
+      // Add specific data for "Why" and "What" questions
+      if (text.includes('why') || text.includes('how') || text.includes('what') || text.includes('pattern') || text.includes('penalty')) {
+        try {
+          const { query } = require('../db');
+          // 1. Recent trades context
+          const recentTrades = await query(
+            `SELECT symbol, direction, pnl_pct, setup, created_at
+             FROM trades ORDER BY created_at DESC LIMIT 15`
+          );
+          context.recent_trades = recentTrades.map(t => ({
+            symbol: t.symbol, dir: t.direction, pnl: t.pnl_pct, setup: t.setup, date: t.created_at
+          }));
+
+          // 2. Current open positions
+          const openTrades = await query(
+            `SELECT symbol, direction, entry_price, leverage FROM trades WHERE status = 'OPEN'`
+          );
+          context.open_positions = openTrades;
+
+          // 3. Recent signals that didn't become trades
+          const recentSignals = await query(
+            `SELECT symbol, direction, score, setup FROM bot_logs
+             WHERE category = 'scan' AND result = 'SIGNAL'
+             ORDER BY ts DESC LIMIT 10`
+          );
+          context.recent_signals = recentSignals;
+
+          // 4. Learned Trap Patterns (The "Mistake Memory")
+          const penalties = await query(
+            `SELECT pattern_dna, loss_count, win_count, current_penalty
+             FROM pattern_penalties
+             WHERE current_penalty < 0
+             ORDER BY current_penalty ASC LIMIT 10`
+          );
+          context.learned_traps = penalties.map(p => ({
+            dna: p.pattern_dna, losses: p.loss_count, wins: p.win_count, penalty: p.current_penalty
+          }));
+        } catch (e) {
+          console.error(`[Coordinator] Failed to fetch extended context: ${e.message}`);
+        }
+      }
 
       // Also add memories if available
       try {
@@ -983,7 +1079,13 @@ class AgentCoordinator extends BaseAgent {
         }
       } catch {}
 
-      const aiReply = await think({ agentName, systemPrompt: getSystemPrompt(agentName), userMessage: message, context });
+      // Force Deep Reasoning for "Why" questions
+      let systemPrompt = getSystemPrompt(agentName);
+      if (text.includes('why') || text.includes('how') || text.includes('pattern')) {
+        systemPrompt += `\n\nCRITICAL: This is a "Why/How/Pattern" query. Use Chain-of-Thought reasoning:\n1. Analyze the provided context (trades, positions, signals, and learned_traps).\n2. Compare current state with the strategy rules (SMC, Kronos, Risk) and the learned penalties.\n3. Explain the specific logic that led to these actions or why a specific pattern is being penalized.\n4. If the bot made a mistake, identify exactly which rule was bypassed or how the Pattern DNA system is correcting it.`;
+      }
+
+      const aiReply = await think({ agentName, systemPrompt, userMessage: message, context });
       if (aiReply) return { from: agentName, message: aiReply };
     }
 
@@ -1012,11 +1114,55 @@ class AgentCoordinator extends BaseAgent {
     return { from: 'Coordinator', message: `Set **ANTHROPIC_API_KEY** on Railway for AI-powered responses. Without it, I can only run commands like "scan now", "status", "audit trades", etc. Type "help" for the full list.` };
   }
 
-  _buildStatusChat() {
+  async _getSignalAdjustment(agent, signalText, apiKeyId = null) {
+    try {
+      // Priority: If this user has a preferred agent, and that agent is the one being polled,
+      // we grant it absolute priority by boosting its weight significantly.
+      let weightMultiplier = agent.getPrestigeBuff();
+      if (apiKeyId) {
+        const { getPreferredAgent } = require('./governance-engine');
+        const preferred = await getPreferredAgent(apiKeyId);
+        if (preferred === agent.name) {
+          weightMultiplier *= 5.0; // Absolute priority for the preferred agent
+        }
+      }
+
+      const systemPrompt = getSystemPrompt(agent.name) +
+        `\\n\\nYour role in the War Room is to be a critical reviewer.
+        Analyze the proposed signal and return a JSON object with:
+        - value: number (adjustment to the score, e.g., -3.0 for overextended, +2.0 for strong trend)
+        - reasoning: string (concise explanation why)`;
+
+      const aiResponse = await think({
+        agentName: agent.name,
+        systemPrompt,
+        userMessage: `Proposed Signal: ${signalText}. What is your adjustment to the score?`,
+        context: {
+          health: agent.getHealth(),
+          recentActivity: agent.getActivity(5)
+        }
+      });
+
+      // Attempt to parse JSON from response
+      const match = aiResponse.match(/\{.*\}/s);
+      if (match) {
+        const result = JSON.parse(match[0]);
+        return {
+          value: result.value * weightMultiplier,
+          reasoning: result.reasoning
+        };
+      }
+      return { value: 0, reasoning: 'No clear adjustment provided.' };
+    } catch (e) {
+      return { value: 0, reasoning: 'Could not calculate adjustment.' };
+    }
+  }
+  _buildHealthChat() {
     const h = this.getHealth();
     const agents = h.agents || {};
     const lines = [];
     lines.push(`**Team Status Report**`);
+
 
     for (const [key, a] of Object.entries(agents)) {
       const state = a.paused ? 'PAUSED' : a.state.toUpperCase();
@@ -1520,7 +1666,17 @@ class AgentCoordinator extends BaseAgent {
   getAgentHealthSummary() {
     const summary = {};
     for (const [name, agent] of this._agents) {
-      summary[name] = agent.getHealth();
+      try {
+        summary[name] = agent.getHealth();
+      } catch (e) {
+        this.log(`Error fetching health for agent ${name}: ${e.message}`);
+        summary[name] = {
+          name: name,
+          state: 'error',
+          error: e.message,
+          paused: agent?.paused || false,
+        };
+      }
     }
     return summary;
   }
