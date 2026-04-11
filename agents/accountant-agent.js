@@ -339,7 +339,7 @@ class AccountantAgent extends BaseAgent {
     this.currentTask = null;
     this.addActivity('success', `Bitunix sync complete: ${totalSynced} new trades, ${totalUpdated} updated`);
     return { ok: true, synced: totalSynced, updated: totalUpdated };
-  },
+  }
 
   async _getAIContext() {
     return {
