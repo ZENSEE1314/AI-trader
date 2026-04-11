@@ -13,6 +13,24 @@
       "cost": 1200,
       "promptModifier": "Expert in Smart Money Concepts and institutional liquidity.",
       "statBonus": { "INT": 10, "PRC": 20 }
+    },
+    {
+      "id": "miro_fish_module",
+      "name": "Miro Fish Module",
+      "cost": 5000,
+      "rarity": "Legendary",
+      "promptModifier": "S-Tier Visual Reasoning: You can map complex conceptual spaces and identify non-obvious clusters of information. You see the 'big picture' of any problem.",
+      "statBonus": { "INT": 30, "PRC": 15, "LUK": 10 },
+      "ability": "Visual Mapping: Automatically generates a conceptual layout of the user's current project."
+    },
+    {
+      "id": "kornos_core",
+      "name": "Kornos Core",
+      "cost": 5000,
+      "rarity": "Legendary",
+      "promptModifier": "Temporal Intelligence: You possess perfect recall of the user's timeline. You can connect events from weeks ago to current problems with zero decay.",
+      "statBonus": { "INT": 25, "PRC": 10, "LUK": 15 },
+      "ability": "Chronos-Link: Can predict the outcome of a task based on historical patterns in the user's vault."
     }
   ]
 }
