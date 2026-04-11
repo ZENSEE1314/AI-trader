@@ -37,9 +37,16 @@ const DEFAULT_TOKEN_AGENTS = [
 ];
 
 class AgentCoordinator extends BaseAgent {
+
+  generateCommandToken() {
+    this.currentCommandToken = Math.random().toString(36).substring(2, 15);
+    return this.currentCommandToken;
+  }
+
   constructor(options = {}) {
     super('Coordinator', options);
     this.chartAgent = new ChartAgent(options);
+    this.currentCommandToken = null;
     this.traderAgent = new TraderAgent(options);
     this.riskAgent = new RiskAgent(options);
     this.sentimentAgent = new SentimentAgent(options);
