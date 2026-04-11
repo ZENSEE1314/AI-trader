@@ -1659,7 +1659,17 @@ class AgentCoordinator extends BaseAgent {
   getAgentHealthSummary() {
     const summary = {};
     for (const [name, agent] of this._agents) {
-      summary[name] = agent.getHealth();
+      try {
+        summary[name] = agent.getHealth();
+      } catch (e) {
+        this.log(`Error fetching health for agent ${name}: ${e.message}`);
+        summary[name] = {
+          name: name,
+          state: 'error',
+          error: e.message,
+          paused: agent?.paused || false,
+        };
+      }
     }
     return summary;
   }
