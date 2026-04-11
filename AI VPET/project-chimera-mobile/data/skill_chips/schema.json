@@ -1,0 +1,18 @@
+{
+  "chips": [
+    {
+      "id": "python_expert_01",
+      "name": "Python Expert Chip",
+      "cost": 500,
+      "promptModifier": "Expert in Python architecture, optimized and PEP8 compliant.",
+      "statBonus": { "INT": 15, "PRC": 5 }
+    },
+    {
+      "id": "smc_trading_01",
+      "name": "SMC Trading Chip",
+      "cost": 1200,
+      "promptModifier": "Expert in Smart Money Concepts and institutional liquidity.",
+      "statBonus": { "INT": 10, "PRC": 20 }
+    }
+  ]
+}
