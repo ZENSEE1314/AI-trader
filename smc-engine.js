@@ -444,16 +444,17 @@ async function analyzeLHHL(ticker, params, dailyBiasCache, kronosPredictions = n
   // │ SL/trailing unchanged — risk is user-configured         │
   // └─────────────────────────────────────────────────────────┘
 
-  const [klinesDaily, klines4h, klines1h, klines15m, klines1m] = await Promise.all([
+  const [klinesDaily, klines4h, klines1h, klines15m, klines3m, klines1m] = await Promise.all([
     fetchKlines(symbol, '1d', 10),
     fetchKlines(symbol, '4h', 60),
     fetchKlines(symbol, '1h', 60),
     fetchKlines(symbol, '15m', 100),
+    fetchKlines(symbol, '3m', 100),
     fetchKlines(symbol, '1m', 100),
   ]);
 
-  if (!klines4h || !klines1h || !klines15m) return null;
-  if (klines4h.length < 10 || klines1h.length < 10 || klines15m.length < 30) return null;
+  if (!klines4h || !klines1h || !klines15m || !klines3m) return null;
+  if (klines4h.length < 10 || klines1h.length < 10 || klines15m.length < 30 || klines3m.length < 30) return null;
 
   // ┌─────────────────────────────────────────────────────────┐
   // │ Step 1: Daily Bias (optional — AI decides)              │
@@ -548,6 +549,19 @@ async function analyzeLHHL(ticker, params, dailyBiasCache, kronosPredictions = n
       bLog.scan(`${symbol}: SHORT blocked — 15m has no LH confirmation`);
       return null;
     }
+  }
+
+  // ┌─────────────────────────────────────────────────────────┐
+  // │ Step 4.5: 3m Structure Confirmation (STRICT ALIGNMENT)     │
+  // └─────────────────────────────────────────────────────────┘
+  const struct3m = getStructure(klines3m, SWING_LENGTHS['3m']);
+  if (direction === 'LONG' && !struct3m.hasHL) {
+    bLog.scan(`${symbol}: LONG blocked — 3m has no HL confirmation (Trend Misalignment)`);
+    return null;
+  }
+  if (direction === 'SHORT' && !struct3m.hasLH) {
+    bLog.scan(`${symbol}: SHORT blocked — 3m has no LH confirmation (Trend Misalignment)`);
+    return null;
   }
 
   // ┌─────────────────────────────────────────────────────────┐
