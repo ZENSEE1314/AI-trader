@@ -3348,11 +3348,7 @@ router.get('/agents/health', async (req, res) => {
       uptime: process.uptime(),
     });
   } catch (err) {
-    res.status(500).json({
-      error: err.message,
-      stack: err.stack,
-      path: 'agents/health'
-    });
+    res.status(500).json({ error: err.message });
   }
 });
 
