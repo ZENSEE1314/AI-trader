@@ -6,7 +6,8 @@
       "Bash(python3 -c \"import sys; open\\('.graphify_python', 'w'\\).write\\(sys.executable\\)\")",
       "Bash(git remote:*)",
       "Bash(git push:*)",
-      "Bash(git rm:*)"
+      "Bash(git rm:*)",
+      "Bash(git ls-tree:*)"
     ]
   }
 }
