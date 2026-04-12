@@ -493,7 +493,11 @@ class BaseAgent {
         this._rpg.points = parseFloat(r.points) || 0;
       }
       this._rpg.loaded = true;
-    } catch { this._rpg.loaded = true; }
+      this.log(`RPG loaded: Lv.${this._rpg.level} XP=${this._rpg.xp} Earned=$${this._rpg.totalEarned}`);
+    } catch (err) {
+      this._rpg.loaded = true;
+      this.log(`RPG load failed: ${err.message}`);
+    }
   }
 
   /** Save RPG profile to DB */
@@ -506,7 +510,9 @@ class BaseAgent {
         ON CONFLICT (agent) DO UPDATE SET
           level = $2, xp = $3, total_earned = $4, tasks_completed = $5, tasks_success = $6, points = $7, updated_at = NOW()
       `, [this.name, this._rpg.level, this._rpg.xp, this._rpg.totalEarned, this._rpg.tasksCompleted, this._rpg.tasksSuccess, this._rpg.points]);
-    } catch {}
+    } catch (err) {
+      this.log(`RPG save failed: ${err.message}`);
+    }
   }
 
   /** Adjust agent points based on trade outcome */

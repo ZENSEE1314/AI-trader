@@ -81,10 +81,12 @@ class ChartAgent extends BaseAgent {
 
     if (signals.length === 0) {
       this.logScan('No signals found this scan.');
+      await this.gainXp(2, true); // XP for completing a scan
     } else {
       for (const s of signals) {
         this.logScan(`Signal: ${s.symbol} ${s.direction} score=${s.score} setup=${s.setupName}`);
       }
+      await this.gainXp(5 + signals.length * 3, true); // Bonus XP for finding signals
     }
 
     // 5. Memory: remember best coins and signal patterns
