@@ -271,7 +271,7 @@ async function thinkOllama(agentName, systemPrompt, userMessage, complexity = 'l
     const timeout = setTimeout(() => controller.abort(), 30000); // 30s timeout
     const response = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true' },
       body: JSON.stringify({
         model,
         messages: [
