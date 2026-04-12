@@ -1718,6 +1718,7 @@
         rightPriceScale: {
           borderColor: '#30363d',
           scaleMargins: { top: 0.05, bottom: 0.15 },
+          precision: 8,
         },
         timeScale: {
           borderColor: '#30363d',
@@ -3344,10 +3345,10 @@
         }
       }
 
-      // Fit to show last ~80 candles
+      // Fit to show last ~150 candles
       const totalCandles = data.candles.length;
       const containerWidth = document.getElementById(entry.containerId).clientWidth - 40;
-      const targetCandles = Math.min(80, totalCandles);
+      const targetCandles = Math.min(150, totalCandles);
       const spacing = Math.max(3, containerWidth / targetCandles);
       mc.timeScale().applyOptions({ barSpacing: spacing });
       mc.timeScale().scrollToRealTime();

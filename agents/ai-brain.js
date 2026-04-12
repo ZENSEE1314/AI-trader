@@ -5,14 +5,15 @@
 //   1. Anthropic Claude — set ANTHROPIC_API_KEY
 //   2. Google Gemini (fallback) — set GOOGLE_AI_KEY
 //
-// Priority: Claude first, Gemini fallback.
-// Each agent gets a system prompt with its role + real-time data.
+// Priority: Local LLM (Ollama) -> Google Gemini (Free) -> Anthropic Claude (Premium)
+// Local LLM is used for general tasks, higher tiers for complex tasks or when local fails.
 // ============================================================
 
 const hermes = require('../hermes-bridge');
 
 let googleClient = null;
 let anthropicClient = null;
+let ollamaClient = null;
 
 // Rate limiting — max 10 requests per minute for free tier
 const requestLog = [];
@@ -34,8 +35,25 @@ function getCached(key) {
   return null;
 }
 
-function getProvider() {
-  // Priority 1: Anthropic Claude
+function getProvider(complexity = 'low') {
+  // Priority 1: Local LLM (Ollama) - Always first for low/medium tasks
+  if (process.env.OLLAMA_URL) {
+    if (complexity === 'low' || complexity === 'medium') {
+      return 'ollama';
+    }
+    // For high complexity, we still check local first but can upgrade
+  }
+
+  // Priority 2: Google Gemini (Free/Medium)
+  if (process.env.GOOGLE_AI_KEY) {
+    if (!googleClient) {
+      const { GoogleGenerativeAI } = require('@google/generative-ai');
+      googleClient = new GoogleGenerativeAI(process.env.GOOGLE_AI_KEY);
+    }
+    if (complexity !== 'high') return 'google';
+  }
+
+  // Priority 3: Anthropic Claude (Premium/High)
   if (process.env.ANTHROPIC_API_KEY) {
     if (!anthropicClient) {
       const Anthropic = require('@anthropic-ai/sdk');
@@ -43,24 +61,23 @@ function getProvider() {
     }
     return 'anthropic';
   }
-  // Priority 2: Google Gemini (fallback)
-  if (process.env.GOOGLE_AI_KEY) {
-    if (!googleClient) {
-      const { GoogleGenerativeAI } = require('@google/generative-ai');
-      googleClient = new GoogleGenerativeAI(process.env.GOOGLE_AI_KEY);
-    }
-    return 'google';
-  }
+
+  // Final fallback: if nothing else is available, return whatever we have
+  if (process.env.OLLAMA_URL) return 'ollama';
+  if (process.env.GOOGLE_AI_KEY) return 'google';
+  if (process.env.ANTHROPIC_API_KEY) return 'anthropic';
+
   return null;
 }
 
 function isAvailable() {
-  return !!(process.env.ANTHROPIC_API_KEY || process.env.GOOGLE_AI_KEY);
+  return !!(process.env.ANTHROPIC_API_KEY || process.env.GOOGLE_AI_KEY || process.env.OLLAMA_URL);
 }
 
 function getProviderName() {
-  if (process.env.ANTHROPIC_API_KEY) return 'Anthropic Claude';
+  if (process.env.OLLAMA_URL) return 'Ollama (Local)';
   if (process.env.GOOGLE_AI_KEY) return 'Google Gemini';
+  if (process.env.ANTHROPIC_API_KEY) return 'Anthropic Claude';
   return 'none';
 }
 
@@ -68,9 +85,9 @@ function getProviderName() {
  * Ask the AI brain a question with agent context.
  */
 async function think(opts) {
-  const { agentName, systemPrompt, userMessage, context = {} } = opts;
-  const provider = getProvider();
-  if (!provider) return `[Critical Error] No AI provider configured. Please check ANTHROPIC_API_KEY or GOOGLE_AI_KEY.`;
+  const { agentName, systemPrompt, userMessage, context = {}, complexity = 'low' } = opts;
+  const provider = getProvider(complexity);
+  if (!provider) return `[Critical Error] No AI provider configured. Please check OLLAMA_URL, GOOGLE_AI_KEY, or ANTHROPIC_API_KEY.`;
 
   // Check cache first
   const cacheKey = `${agentName}:${userMessage.substring(0, 100)}`;
@@ -131,6 +148,8 @@ async function think(opts) {
       try {
         if (provider === 'google') {
           text = await thinkGoogle(agentName, fullSystem, userMessage);
+        } else if (provider === 'ollama') {
+          text = await thinkOllama(agentName, fullSystem, userMessage);
         } else {
           text = await thinkAnthropic(agentName, fullSystem, userMessage);
         }
@@ -193,6 +212,36 @@ async function thinkAnthropic(agentName, systemPrompt, userMessage) {
   const text = response.content[0]?.text || null;
   console.log(`[AI Brain] ${agentName} responded: ${text ? text.substring(0, 80) + '...' : 'EMPTY'}`);
   return text;
+}
+
+async function thinkOllama(agentName, systemPrompt, userMessage) {
+  const model = process.env.OLLAMA_MODEL || 'llama3';
+  const url = process.env.OLLAMA_URL || 'http://localhost:11434/api/generate';
+  console.log(`[AI Brain] ${agentName} thinking with Local LLM (${model})...`);
+
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: model,
+        prompt: `${systemPrompt}\n\nUser: ${userMessage}`,
+        stream: false,
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`Ollama API error: ${response.status} ${response.statusText}`);
+    }
+
+    const data = await response.json();
+    const text = data.response;
+    console.log(`[AI Brain] ${agentName} responded: ${text ? text.substring(0, 80) + '...' : 'EMPTY'}`);
+    return text || null;
+  } catch (err) {
+    console.error(`[AI Brain] Ollama Error: ${err.message}`);
+    throw err;
+  }
 }
 
 // ── System prompts per agent role ───────────────────────────
