@@ -1064,7 +1064,7 @@
         <button class="tf-btn" data-tf="1m" data-tv-interval="1">1m</button>
         <button class="tf-btn" data-tf="3m" data-tv-interval="3">3m</button>
         <button class="tf-btn" data-tf="5m" data-tv-interval="5">5m</button>
-        <button class="tf-btn active" data-tf="15m" data-tv-interval="15">15m</button>
+        <button class="tf-btn" data-tf="15m" data-tv-interval="15">15m</button>
         <button class="tf-btn" data-tf="1h" data-tv-interval="60">1h</button>
         <button class="tf-btn" data-tf="4h" data-tv-interval="240">4h</button>
         <button class="tf-btn" data-tf="1d" data-tv-interval="D">1D</button>
@@ -1112,7 +1112,7 @@
 
       <div class="layout-toggle-wrap">
         <button class="layout-btn" data-layout="1" title="1 Chart">1</button>
-        <button class="layout-btn active" data-layout="3" title="3 Charts">3</button>
+        <button class="layout-btn" data-layout="3" title="3 Charts">3</button>
       </div>
 
       <div class="trend-box" id="trend-box">
@@ -2898,7 +2898,7 @@
               // Horizontal dashed line extending from break point to right
               var breakLine = p.chart.addLineSeries({
                 color: color, lineWidth: 1, lineStyle: 2,
-                priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
+                priceLineVisible: true, lastValueVisible: true, crosshairMarkerVisible: false,
               });
               // Extend line ~20 candles to the right from break point
               var sbIdx = -1;
@@ -2928,7 +2928,7 @@
             if (smc.pdh > 0) {
               var pdhLine = p.chart.addLineSeries({
                 color: 'rgba(244,63,94,0.7)', lineWidth: 1, lineStyle: 2,
-                priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, title: 'PDH',
+                priceLineVisible: true, lastValueVisible: true, crosshairMarkerVisible: false, title: 'PDH',
               });
               pdhLine.setData([{ time: firstTime, value: smc.pdh }, { time: lastTime, value: smc.pdh }]);
               p.overlaySeries.push(pdhLine);
@@ -2936,7 +2936,7 @@
             if (smc.pdl > 0) {
               var pdlLine = p.chart.addLineSeries({
                 color: 'rgba(52,211,153,0.7)', lineWidth: 1, lineStyle: 2,
-                priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, title: 'PDL',
+                priceLineVisible: true, lastValueVisible: true, crosshairMarkerVisible: false, title: 'PDL',
               });
               pdlLine.setData([{ time: firstTime, value: smc.pdl }, { time: lastTime, value: smc.pdl }]);
               p.overlaySeries.push(pdlLine);
@@ -2946,7 +2946,7 @@
             if (smc.pwh > 0) {
               var pwhLine = p.chart.addLineSeries({
                 color: 'rgba(167,139,250,0.7)', lineWidth: 1, lineStyle: 2,
-                priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, title: 'PWH',
+                priceLineVisible: true, lastValueVisible: true, crosshairMarkerVisible: false, title: 'PWH',
               });
               pwhLine.setData([{ time: firstTime, value: smc.pwh }, { time: lastTime, value: smc.pwh }]);
               p.overlaySeries.push(pwhLine);
@@ -2954,7 +2954,7 @@
             if (smc.pwl > 0) {
               var pwlLine = p.chart.addLineSeries({
                 color: 'rgba(167,139,250,0.7)', lineWidth: 1, lineStyle: 2,
-                priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, title: 'PWL',
+                priceLineVisible: true, lastValueVisible: true, crosshairMarkerVisible: false, title: 'PWL',
               });
               pwlLine.setData([{ time: firstTime, value: smc.pwl }, { time: lastTime, value: smc.pwl }]);
               p.overlaySeries.push(pwlLine);
@@ -2964,7 +2964,7 @@
             if (smc.midRange > 0) {
               var midLine = p.chart.addLineSeries({
                 color: 'rgba(251,191,36,0.6)', lineWidth: 1, lineStyle: 3,
-                priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
+                priceLineVisible: true, lastValueVisible: true, crosshairMarkerVisible: false,
               });
               var startIdx = Math.max(0, p.candles.length - 100);
               midLine.setData([{ time: p.candles[startIdx].time, value: smc.midRange }, { time: lastTime, value: smc.midRange }]);
@@ -2975,7 +2975,7 @@
             smc.eqlLines.forEach(function(eq) {
               var eqLine = p.chart.addLineSeries({
                 color: 'rgba(251,191,36,0.7)', lineWidth: 1, lineStyle: 3,
-                priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
+                priceLineVisible: true, lastValueVisible: true, crosshairMarkerVisible: false,
               });
               // Extend slightly beyond the two points
               var extEnd = lastTime;
@@ -3006,11 +3006,11 @@
 
               var topLine = p.chart.addLineSeries({
                 color: lineColor, lineWidth: 1, lineStyle: 0,
-                priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
+                priceLineVisible: true, lastValueVisible: true, crosshairMarkerVisible: false,
               });
               var botLine = p.chart.addLineSeries({
                 color: lineColor, lineWidth: 1, lineStyle: 0,
-                priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
+                priceLineVisible: true, lastValueVisible: true, crosshairMarkerVisible: false,
               });
               var areaFill = p.chart.addAreaSeries({
                 topColor: fillColor, bottomColor: 'transparent',
@@ -3725,13 +3725,6 @@
         });
       });
 
-      // Restore saved layout
-      if (CHART_COUNT === 1) {
-        document.getElementById('chart-area').classList.add('layout-1');
-        document.querySelector('.layout-btn[data-layout="1"]').classList.add('active');
-        document.querySelector('.layout-btn[data-layout="3"]').classList.remove('active');
-      }
-
       DOM.bottomPanelToggle.addEventListener('click', function() {
         var isCollapsed = DOM.bottomPanel.classList.toggle('collapsed');
         DOM.bottomPanelToggle.textContent = isCollapsed ? '\u25B2' : '\u25BC';
@@ -3793,6 +3786,13 @@
       // Restore saved settings to UI
       DOM.toolbarSymbol.textContent = STATE.symbol;
 
+      // Restore main toolbar TF active button
+      var mainTfBtns = document.querySelectorAll('#tf-group .tf-btn');
+      mainTfBtns.forEach(function(b) { b.classList.remove('active'); });
+      var savedTf = STATE.interval || '15m';
+      var matchedTf = document.querySelector('#tf-group .tf-btn[data-tf="' + savedTf + '"]');
+      if (matchedTf) matchedTf.classList.add('active');
+
       // Restore per-panel TF active buttons
       for (var i = 0; i < 3; i++) {
         var tfGroup = document.querySelector('.chart-panel-tf[data-panel="' + i + '"]');
@@ -3802,6 +3802,20 @@
           if (match) match.classList.add('active');
         }
       }
+
+      // Restore layout button active state
+      document.querySelectorAll('.layout-btn').forEach(function(b) { b.classList.remove('active'); });
+      var layoutMatch = document.querySelector('.layout-btn[data-layout="' + CHART_COUNT + '"]');
+      if (layoutMatch) layoutMatch.classList.add('active');
+      if (CHART_COUNT === 1) {
+        document.getElementById('chart-area').classList.add('layout-1');
+      }
+
+      // Restore indicator toggle checkboxes from saved prefs
+      var prefs = loadIndicatorPrefs();
+      document.querySelectorAll('.ind-toggle input[data-ind]').forEach(function(cb) {
+        cb.checked = !!prefs[cb.dataset.ind];
+      });
 
       setupEventListeners();
       createAllCharts();
