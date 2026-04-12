@@ -2254,6 +2254,20 @@
       wickUpColor: '#34d399', wickDownColor: '#f43f5e',
     };
 
+    // Track user-closed oscillator sub-charts so they don't reappear
+    function getClosedOscillators() {
+      var saved = localStorage.getItem('mct_closed_oscillators');
+      return saved ? JSON.parse(saved) : [];
+    }
+    function closeOscillator(label) {
+      var list = getClosedOscillators();
+      if (list.indexOf(label) === -1) { list.push(label); localStorage.setItem('mct_closed_oscillators', JSON.stringify(list)); }
+    }
+    function reopenOscillator(label) {
+      var list = getClosedOscillators().filter(function(l) { return l !== label; });
+      localStorage.setItem('mct_closed_oscillators', JSON.stringify(list));
+    }
+
     function destroyPanel(idx) {
       var p = chartPanels[idx];
       p.subCharts.forEach(function(sc) { if (sc.chart) sc.chart.remove(); if (sc.container) sc.container.remove(); });
@@ -2624,6 +2638,8 @@
             p.overlaySeries.push(series);
           }
         } else if (result.type === 'oscillator') {
+          // Skip if user previously closed this oscillator
+          if (getClosedOscillators().indexOf(result.label) >= 0) return;
           // Create sub-chart
           var subDiv = document.createElement('div');
           subDiv.className = 'sub-chart-container';
@@ -2655,13 +2671,16 @@
             height: 80,
           }));
 
-          // Close handler
-          (function(sd, sc) {
+          // Close handler — persist so it stays closed on reapply
+          (function(sd, sc, lbl) {
             closeBtn.addEventListener('click', function() {
+              closeOscillator(lbl);
               sc.remove();
               sd.remove();
+              // Show reopen bar if not already visible
+              updateReopenBar(idx);
             });
-          })(subDiv, subChart);
+          })(subDiv, subChart, result.label);
 
           // Drag-to-resize handler
           (function(sd, sc) {
@@ -2752,6 +2771,41 @@
           p.subCharts.push({ chart: subChart, container: subDiv, resizeObserver: subRo });
         }
       });
+
+      // Show reopen bar for any closed oscillators
+      updateReopenBar(idx);
+    }
+
+    function updateReopenBar(idx) {
+      var panelBody = document.getElementById('chart-main-' + idx).parentElement;
+      var existing = panelBody.querySelector('.reopen-bar');
+      if (existing) existing.remove();
+
+      var closed = getClosedOscillators();
+      if (!closed.length) return;
+
+      var bar = document.createElement('div');
+      bar.className = 'reopen-bar';
+      bar.style.cssText = 'display:flex;gap:6px;padding:4px 8px;background:#1a1625;border-top:1px solid #2a2438;align-items:center;flex-wrap:wrap;';
+
+      var label = document.createElement('span');
+      label.style.cssText = 'color:#9a8e80;font-size:10px;margin-right:4px;';
+      label.textContent = 'Closed:';
+      bar.appendChild(label);
+
+      closed.forEach(function(name) {
+        var btn = document.createElement('button');
+        btn.style.cssText = 'background:#2a2438;color:#d4af37;border:1px solid #3a3448;border-radius:4px;padding:2px 8px;font-size:10px;cursor:pointer;font-family:inherit;';
+        btn.textContent = name + ' \u21BB';
+        btn.title = 'Reopen ' + name;
+        btn.addEventListener('click', function() {
+          reopenOscillator(name);
+          applyIndicators(idx);
+        });
+        bar.appendChild(btn);
+      });
+
+      panelBody.appendChild(bar);
     }
 
     function createAllCharts() {
