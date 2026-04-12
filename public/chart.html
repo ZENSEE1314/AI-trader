@@ -2990,13 +2990,14 @@
       });
 
       // Indicator toggles
-      const toggleIds = [
-        'tog-swings', 'tog-labels', 'tog-ob', 'tog-fvg',
-        'tog-levels', 'tog-ema7', 'tog-ema22', 'tog-ema200', 'tog-vwap',
-        'tog-curved', 'tog-dailylvl', 'tog-eqheql', 'tog-choch', 'tog-strongweak', 'tog-premium',
+      // These are now handled by initIndicatorUI() via the INDICATOR_REGISTRY
+      const manualToggles = [
+        'tog-swings', 'tog-labels', 'tog-choch', 'tog-strongweak'
       ];
-      toggleIds.forEach(id => {
+      manualToggles.forEach(id => {
         const el = document.getElementById(id);
+        if (el) el.addEventListener('change', applyMarkers);
+      });
         if (el) el.addEventListener('change', applyToggleVisibility);
       });
 
