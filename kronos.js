@@ -306,17 +306,21 @@ async function getMarketSeeds(symbol, interval = '15m', predLen = 20) {
   changePct = Math.max(-MAX_CHANGE_PCT, Math.min(MAX_CHANGE_PCT, changePct));
   changePct = Math.round(changePct * 100) / 100;
 
-  const predictedPrice = Math.round(currentPrice * (1 + changePct / 100) * 100) / 100;
+  // Use adaptive precision: more decimals for low-priced coins
+  const rawPredicted = currentPrice * (1 + changePct / 100);
+  const decimals = currentPrice >= 100 ? 2 : currentPrice >= 1 ? 4 : currentPrice >= 0.01 ? 6 : 8;
+  const factor = Math.pow(10, decimals);
+  const predictedPrice = Math.round(rawPredicted * factor) / factor;
 
   let trend = 'mixed';
   if (indicators.ema_score > 0 && indicators.macd_score > 0) trend = 'bullish';
   else if (indicators.ema_score < 0 && indicators.macd_score < 0) trend = 'bearish';
 
   const predHigh = indicators.bb_upper != null
-    ? Math.round(indicators.bb_upper * 100) / 100
+    ? Math.round(indicators.bb_upper * factor) / factor
     : null;
   const predLow = indicators.bb_lower != null
-    ? Math.round(indicators.bb_lower * 100) / 100
+    ? Math.round(indicators.bb_lower * factor) / factor
     : null;
 
   // Remove internal-only fields before returning

@@ -352,12 +352,18 @@
         const changeColor = changePct > 0 ? 'var(--color-success)' : changePct < 0 ? 'var(--color-danger)' : 'var(--color-text-secondary)';
         const trendColor = p.trend === 'bullish' ? 'var(--color-success)' : p.trend === 'bearish' ? 'var(--color-danger)' : 'var(--color-text-secondary)';
 
-        // Calculate Time Horizon
+        // Calculate Time Horizon based on change % magnitude
         let timeHorizon = '--';
-        if (window.calculateTimeToTarget) {
-          const currentPrice = STATE.lastPrice || 0;
-          const candles = STATE.lastCandles || [];
-          timeHorizon = window.calculateTimeToTarget(currentPrice, p.predicted, candles);
+        const absPct = Math.abs(p.change_pct || 0);
+        if (absPct > 0) {
+          // Rough estimate: small moves happen fast, large moves take longer
+          // <0.5% = ~15m, 0.5-1% = ~1h, 1-2% = ~4h, 2-5% = ~12h, >5% = ~1d+
+          if (absPct < 0.3) timeHorizon = '5-15m';
+          else if (absPct < 0.5) timeHorizon = '15-30m';
+          else if (absPct < 1) timeHorizon = '30m-1h';
+          else if (absPct < 2) timeHorizon = '1-4h';
+          else if (absPct < 5) timeHorizon = '4-12h';
+          else timeHorizon = '12h-1d';
         }
 
         // Generate a synthetic "Why" based on technicals (until news API is integrated)

@@ -127,6 +127,21 @@ router.get('/trades', async (req, res) => {
   }
 });
 
+// Sync full Bitunix trade history
+router.post('/sync-trades', async (req, res) => {
+  try {
+    const { AgentCoordinator } = require('../agents/agent-coordinator');
+    const coordinator = AgentCoordinator.getInstance();
+    const accAgent = coordinator?.agents?.accountant;
+    if (!accAgent) return res.status(503).json({ error: 'Accountant agent not available' });
+    const result = await accAgent.syncBitunixHistory();
+    res.json(result);
+  } catch (err) {
+    console.error('Sync trades error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Pause/resume bot for this user
 router.post('/toggle-pause', async (req, res) => {
   try {

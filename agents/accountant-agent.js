@@ -284,51 +284,62 @@ class AccountantAgent extends BaseAgent {
 
         for (const p of historyPositions) {
           const symbol = p.symbol;
-          const entryPrice = p.avgOpenPrice || p.entryPrice || p.openPrice;
-          const exitPrice = p.closePrice || p.exitPrice;
-          const pnl = p.unrealizedPNL || p.realizedPNL || p.pnl || 0;
-          const fee = p.fee || 0;
-          const qty = p.qty || p.positionAmt;
-          const side = p.side; // BUY/SELL
+          const entryPrice = parseFloat(p.avgOpenPrice || p.entryPrice || p.openPrice || 0);
+          const exitPrice = parseFloat(p.closePrice || p.exitPrice || 0);
+          const qty = parseFloat(p.qty || p.positionAmt || 0);
+          const side = (p.side || '').toUpperCase();
 
           if (!symbol || !entryPrice) continue;
 
-          // Check if trade already exists in DB
+          // Extract accurate PnL and fees from Bitunix
+          const profit = parseFloat(p.profit || 0);
+          const rawPnl = parseFloat(p.pnl || 0);
+          const rpnl = parseFloat(p.realizedPNL || 0);
+          const fee = Math.abs(parseFloat(p.fee || 0));
+          const funding = Math.abs(parseFloat(p.funding || 0));
+          const totalFee = parseFloat((fee + funding).toFixed(8));
+
+          // Net PnL (after fees): profit > pnl > (realizedPNL - fee - funding)
+          let netPnl;
+          if (profit !== 0) {
+            netPnl = profit;
+          } else if (rawPnl !== 0) {
+            netPnl = rawPnl;
+          } else {
+            netPnl = rpnl - fee - funding;
+          }
+          netPnl = parseFloat(netPnl.toFixed(8));
+
+          // Gross PnL = net + fees
+          const grossPnl = parseFloat((netPnl + totalFee).toFixed(8));
+
+          const direction = (side === 'BUY' || side === 'LONG') ? 'LONG' : 'SHORT';
+          const status = netPnl > 0 ? 'WIN' : 'LOSS';
+          const closedAt = p.mtime ? new Date(parseInt(p.mtime)).toISOString()
+            : p.ctime ? new Date(parseInt(p.ctime)).toISOString()
+            : p.closedAt || new Date().toISOString();
+
+          // Check if trade already exists in DB (match by symbol + entry + direction + api_key)
           const existing = await db.query(
-            `SELECT id FROM trades WHERE symbol = $1 AND entry_price = $2 AND api_key_id = $3`,
-            [symbol, entryPrice, key.id]
+            `SELECT id, pnl_usdt, exit_price, trading_fee FROM trades WHERE symbol = $1 AND entry_price = $2 AND api_key_id = $3 AND direction = $4`,
+            [symbol, entryPrice, key.id, direction]
           );
 
           if (existing.length === 0) {
-            // Insert missing trade
             await db.query(
-              `INSERT INTO trades (symbol, direction, entry_price, exit_price, quantity, pnl_usdt, trading_fee, status, api_key_id, platform, closed_at)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
-              [
-                symbol,
-                side === 'BUY' ? 'LONG' : 'SHORT',
-                entryPrice,
-                exitPrice,
-                qty,
-                pnl,
-                fee,
-                pnl >= 0 ? 'WIN' : 'LOSS',
-                key.id,
-                'bitunix',
-                p.closedAt || new Date().toISOString()
-              ]
+              `INSERT INTO trades (symbol, direction, entry_price, exit_price, quantity, pnl_usdt, trading_fee, gross_pnl, status, api_key_id, platform, closed_at)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+              [symbol, direction, entryPrice, exitPrice, qty, netPnl, totalFee, grossPnl, status, key.id, 'bitunix', closedAt]
             );
             totalSynced++;
           } else {
-            // Update existing trade if exit data is missing
+            // Always update with latest Bitunix data for accuracy
             const trade = existing[0];
-            if (!trade.exit_price || trade.pnl_usdt === 0) {
-              await db.query(
-                `UPDATE trades SET exit_price = $1, pnl_usdt = $2, trading_fee = $3, status = $4 WHERE id = $5`,
-                [exitPrice, pnl, fee, pnl >= 0 ? 'WIN' : 'LOSS', trade.id]
-              );
-              totalUpdated++;
-            }
+            await db.query(
+              `UPDATE trades SET exit_price = $1, pnl_usdt = $2, trading_fee = $3, gross_pnl = $4, status = $5, quantity = COALESCE(NULLIF($6, 0), quantity), closed_at = COALESCE($7, closed_at) WHERE id = $8`,
+              [exitPrice || trade.exit_price, netPnl, totalFee, grossPnl, status, qty, closedAt, trade.id]
+            );
+            totalUpdated++;
           }
         }
       } catch (e) {

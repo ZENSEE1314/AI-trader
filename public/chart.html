@@ -461,6 +461,58 @@
     }
     .chart-zoom-btn:hover { background: var(--color-bg-raised); color: var(--color-fg); }
 
+    .chart-panel-close {
+      background: transparent;
+      border: 1px solid var(--color-border-muted);
+      color: var(--color-fg-subtle);
+      font-size: 0.7rem;
+      padding: 0 5px;
+      cursor: pointer;
+      border-radius: 3px;
+      line-height: 1.4;
+      margin-left: 2px;
+      font-family: var(--font-mono);
+      transition: all var(--duration-fast) var(--ease-out);
+    }
+    .chart-panel-close:hover { border-color: #f43f5e; color: #f43f5e; }
+
+    .chart-panel.collapsed {
+      display: none !important;
+    }
+
+    /* When C2 closed, C1 spans 2 cols */
+    .chart-area.c1-closed .chart-panel:not(.collapsed) { }
+    .chart-area.c2-closed #chart-panel-0 { grid-column: 1 / 3; }
+    .chart-area.c3-closed #chart-panel-0 { grid-column: 1 / 2; }
+    .chart-area.c3-closed #chart-panel-1 { grid-column: 2 / 4; }
+    .chart-area.c2-closed.c3-closed { grid-template-columns: 1fr; }
+    .chart-area.c2-closed.c3-closed #chart-panel-0 { grid-column: 1; }
+
+    .chart-reopen-bar {
+      display: none;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      padding: 3px 0;
+      background: var(--color-bg-raised);
+      border-top: 1px solid var(--color-border-muted);
+      grid-column: 1 / -1;
+    }
+    .chart-area.has-closed .chart-reopen-bar { display: flex; }
+
+    .chart-reopen-btn {
+      background: var(--color-surface);
+      border: 1px solid var(--color-border-muted);
+      color: var(--color-fg-subtle);
+      font-size: 0.6rem;
+      padding: 2px 8px;
+      cursor: pointer;
+      border-radius: 3px;
+      font-family: var(--font-mono);
+      transition: all var(--duration-fast) var(--ease-out);
+    }
+    .chart-reopen-btn:hover { border-color: var(--color-accent); color: var(--color-accent); }
+
     .layout-toggle-wrap {
       display: flex;
       gap: 2px;
@@ -526,11 +578,28 @@
     .tv-lightweight-charts a[href*="tradingview"],
     .main-chart-container a[href*="tradingview"],
     [class*="chart"] a[href*="tradingview"] { display: none !important; }
-    .sub-chart-container { flex: 1; min-height: 0; border-top: 1px solid var(--color-border-muted); }
+    .sub-chart-container { flex: none; min-height: 40px; border-top: 1px solid var(--color-border-muted); overflow: hidden; }
     .sub-chart-label {
       position: absolute; top: 2px; left: 6px; font-size: 0.55rem;
       color: var(--color-fg-subtle); font-family: var(--font-mono); z-index: 2; pointer-events: none;
     }
+    .sub-chart-controls {
+      position: absolute; top: 1px; right: 4px; z-index: 3;
+      display: flex; gap: 2px; align-items: center;
+    }
+    .sub-chart-btn {
+      background: transparent; border: none; color: var(--color-fg-subtle);
+      font-size: 0.6rem; cursor: pointer; padding: 0 3px; line-height: 1;
+      font-family: var(--font-mono); opacity: 0; transition: opacity 0.15s;
+    }
+    .sub-chart-container:hover .sub-chart-btn { opacity: 1; }
+    .sub-chart-btn:hover { color: var(--color-fg); }
+    .sub-chart-btn.close-btn:hover { color: #f43f5e; }
+    .sub-chart-resize-handle {
+      position: absolute; bottom: 0; left: 0; right: 0; height: 4px;
+      cursor: ns-resize; z-index: 3;
+    }
+    .sub-chart-resize-handle:hover { background: rgba(212, 175, 55, 0.3); }
 
 
     /* --- Bottom Panel --- */
@@ -1095,6 +1164,7 @@
             <button class="chart-zoom-btn" data-panel="1" data-zoom="out" title="Zoom out">&minus;</button>
             <button class="chart-zoom-btn" data-panel="1" data-zoom="fit" title="Fit all">&#x21C6;</button>
           </div>
+          <button class="chart-panel-close" data-close-panel="1" title="Close C2">&times;</button>
         </div>
         <div class="chart-panel-body">
           <div class="main-chart-container" id="chart-main-1"></div>
@@ -1119,10 +1189,16 @@
             <button class="chart-zoom-btn" data-panel="2" data-zoom="out" title="Zoom out">&minus;</button>
             <button class="chart-zoom-btn" data-panel="2" data-zoom="fit" title="Fit all">&#x21C6;</button>
           </div>
+          <button class="chart-panel-close" data-close-panel="2" title="Close C3">&times;</button>
         </div>
         <div class="chart-panel-body">
           <div class="main-chart-container" id="chart-main-2"></div>
         </div>
+      </div>
+
+      <div class="chart-reopen-bar" id="chart-reopen-bar">
+        <button class="chart-reopen-btn" data-reopen="1" style="display:none;">Open C2</button>
+        <button class="chart-reopen-btn" data-reopen="2" style="display:none;">Open C3</button>
       </div>
     </main>
 
@@ -2533,6 +2609,7 @@
           var subDiv = document.createElement('div');
           subDiv.className = 'sub-chart-container';
           subDiv.style.position = 'relative';
+          subDiv.style.height = '80px';
           panelBody.appendChild(subDiv);
 
           var labelEl = document.createElement('div');
@@ -2540,10 +2617,57 @@
           labelEl.textContent = result.label;
           subDiv.appendChild(labelEl);
 
+          // Close and resize controls
+          var controlsEl = document.createElement('div');
+          controlsEl.className = 'sub-chart-controls';
+          var closeBtn = document.createElement('button');
+          closeBtn.className = 'sub-chart-btn close-btn';
+          closeBtn.title = 'Close ' + result.label;
+          closeBtn.textContent = '\u00D7';
+          controlsEl.appendChild(closeBtn);
+          subDiv.appendChild(controlsEl);
+
+          var resizeHandle = document.createElement('div');
+          resizeHandle.className = 'sub-chart-resize-handle';
+          subDiv.appendChild(resizeHandle);
+
           var subChart = LightweightCharts.createChart(subDiv, Object.assign({}, CHART_THEME, {
             width: subDiv.clientWidth || panelBody.clientWidth,
             height: 80,
           }));
+
+          // Close handler
+          (function(sd, sc) {
+            closeBtn.addEventListener('click', function() {
+              sc.remove();
+              sd.remove();
+            });
+          })(subDiv, subChart);
+
+          // Drag-to-resize handler
+          (function(sd, sc) {
+            var startY, startH;
+            function onMouseMove(e) {
+              var newH = Math.max(40, startH + (e.clientY - startY));
+              sd.style.height = newH + 'px';
+              sc.applyOptions({ height: newH });
+            }
+            function onMouseUp() {
+              document.removeEventListener('mousemove', onMouseMove);
+              document.removeEventListener('mouseup', onMouseUp);
+              document.body.style.userSelect = '';
+              document.body.style.cursor = '';
+            }
+            resizeHandle.addEventListener('mousedown', function(e) {
+              e.preventDefault();
+              startY = e.clientY;
+              startH = sd.offsetHeight;
+              document.body.style.userSelect = 'none';
+              document.body.style.cursor = 'ns-resize';
+              document.addEventListener('mousemove', onMouseMove);
+              document.addEventListener('mouseup', onMouseUp);
+            });
+          })(subDiv, subChart);
           subChart.priceScale('right').applyOptions({ scaleMargins: { top: 0.1, bottom: 0.1 } });
           subChart.timeScale().applyOptions({ visible: false });
 
@@ -2948,6 +3072,50 @@
       });
 
       DOM.coinSearch.addEventListener('input', function(e) { renderCoinList(STATE.coins, e.target.value); });
+
+      // Close/reopen panel controls
+      function updatePanelLayout() {
+        var chartArea = document.getElementById('chart-area');
+        var c2closed = document.getElementById('chart-panel-1').classList.contains('collapsed');
+        var c3closed = document.getElementById('chart-panel-2').classList.contains('collapsed');
+
+        chartArea.classList.toggle('c2-closed', c2closed);
+        chartArea.classList.toggle('c3-closed', c3closed);
+        chartArea.classList.toggle('has-closed', c2closed || c3closed);
+
+        // Show/hide reopen buttons
+        document.querySelector('[data-reopen="1"]').style.display = c2closed ? '' : 'none';
+        document.querySelector('[data-reopen="2"]').style.display = c3closed ? '' : 'none';
+
+        // Resize C1 chart after layout change
+        setTimeout(function() {
+          var p0 = chartPanels[0];
+          if (p0 && p0.chart) {
+            var c = document.getElementById('chart-main-0');
+            p0.chart.applyOptions({ width: c.clientWidth, height: c.clientHeight });
+          }
+        }, 50);
+      }
+
+      document.querySelectorAll('.chart-panel-close').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+          var idx = parseInt(btn.dataset.closePanel);
+          var panel = document.getElementById('chart-panel-' + idx);
+          panel.classList.add('collapsed');
+          updatePanelLayout();
+        });
+      });
+
+      document.querySelectorAll('.chart-reopen-btn').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+          var idx = parseInt(btn.dataset.reopen);
+          var panel = document.getElementById('chart-panel-' + idx);
+          panel.classList.remove('collapsed');
+          updatePanelLayout();
+          // Recreate chart since panel was hidden
+          createChart(idx);
+        });
+      });
 
       // Zoom controls
       document.querySelectorAll('.chart-zoom-btn').forEach(function(btn) {

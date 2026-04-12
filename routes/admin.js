@@ -37,15 +37,20 @@ router.get('/weekly-earnings', async (req, res) => {
        ORDER BY u.email, ak.id`
     );
 
-    // Get this week's trades — all closed trades (wins AND losses)
-    // Use COALESCE to catch trades where closed_at was not set
+    // Get all unpaid trades — trades since each user's last_paid_at (or account creation)
+    // The per-user filter happens below; here we fetch a broad window
+    const earliestPaidAt = users.reduce((min, u) => {
+      const pa = u.last_paid_at ? new Date(u.last_paid_at) : new Date(u.created_at);
+      return pa < min ? pa : min;
+    }, now);
+
     const trades = await query(
-      `SELECT t.user_id, t.api_key_id, t.pnl_usdt, t.status, t.symbol
+      `SELECT t.user_id, t.api_key_id, t.pnl_usdt, t.status, t.symbol,
+              COALESCE(t.closed_at, t.created_at) as closed_at
        FROM trades t
        WHERE t.status IN ('WIN', 'LOSS', 'TP', 'SL', 'CLOSED')
-         AND COALESCE(t.closed_at, t.created_at) >= $1
-         AND COALESCE(t.closed_at, t.created_at) <= $2`,
-      [monday, sunday]
+         AND COALESCE(t.closed_at, t.created_at) >= $1`,
+      [earliestPaidAt]
     );
 
     let grandTotalNet = 0;
@@ -80,7 +85,12 @@ router.get('/weekly-earnings', async (req, res) => {
         };
       }
       if (u.key_id) {
-        const keyTrades = trades.filter(t => t.api_key_id === u.key_id);
+        // Only count trades AFTER last payment (rolling window resets on payment)
+        const paidAt = u.last_paid_at ? new Date(u.last_paid_at) : new Date(u.created_at);
+        const keyTrades = trades.filter(t => {
+          if (t.api_key_id !== u.key_id) return false;
+          return new Date(t.closed_at) > paidAt;
+        });
         const wins = keyTrades.filter(t => parseFloat(t.pnl_usdt) > 0);
         const losses = keyTrades.filter(t => parseFloat(t.pnl_usdt) <= 0);
         // Net P&L = wins + losses (losses are negative)
