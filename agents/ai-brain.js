@@ -86,8 +86,27 @@ async function think(opts) {
     return `I'm thinking too fast — please wait a moment and try again. (${requestLog.length}/${MAX_REQUESTS_PER_MIN} requests/min)`;
   }
 
-  const contextBlock = Object.keys(context).length > 0
-    ? `\n\n<current_data>\n${JSON.stringify(context, null, 2).substring(0, 2000)}\n</current_data>`
+  // Safe context pruning to avoid malformed JSON and 400 errors
+  const pruneContext = (ctx) => {
+    if (!ctx) return {};
+    const pruned = {};
+    for (const [key, value] of Object.entries(ctx)) {
+      if (Array.isArray(value)) {
+        // Limit arrays to 10 items to keep prompt size manageable
+        pruned[key] = value.slice(0, 10);
+      } else if (typeof value === 'object' && value !== null) {
+        // Recurse for nested objects
+        pruned[key] = pruneContext(value);
+      } else {
+        pruned[key] = value;
+      }
+    }
+    return pruned;
+  };
+
+  const prunedContext = pruneContext(context);
+  const contextBlock = Object.keys(prunedContext).length > 0
+    ? `\n\n<current_data>\n${JSON.stringify(prunedContext, null, 2)}\n</current_data>`
     : '';
 
   // Inject Hermes soul + team memory into system prompt
@@ -134,11 +153,14 @@ async function think(opts) {
     if (text) responseCache.set(cacheKey, { text, ts: Date.now() });
     return text;
   } catch (err) {
+    // Return a more helpful error that suggests a retry
     console.error(`[AI Brain] ${agentName} FAILED (${provider}): ${err.message}`);
+    if (err.message?.includes('400')) {
+      console.error(`[AI Brain] Malformed Request (400) detected. Payload preview: ${JSON.stringify(opts).substring(0, 500)}...`);
+    }
     if (err.message?.includes('429') || err.message?.includes('quota')) {
       return `I'm being rate limited by ${provider === 'google' ? 'Google' : 'Anthropic'}. Please wait 30 seconds and try again.`;
     }
-    // Return a more helpful error that suggests a retry
     return `I'm having a momentary brain-freeze (AI Error: ${err.message.substring(0, 50)}). Please try asking me again in a few seconds!`;
   }
 }
