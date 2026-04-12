@@ -2378,7 +2378,7 @@
     };
 
     function loadIndicatorPrefs() {
-      var defaults = { vwap: true, ema200: true, ema7: true, ema22: true, rsi: true, macd: true, volume: true, bb: true, supertrend: true, trendstructure: false, dtfxzones: false, vsa: true, stoch: false, atr: false, ichimoku: false, psar: false, smcpro: true };
+      var defaults = { vwap: false, ema200: true, ema7: false, ema22: false, rsi: false, macd: false, volume: true, bb: false, supertrend: false, trendstructure: false, dtfxzones: false, vsa: false, stoch: false, atr: false, ichimoku: false, psar: false, smcpro: true };
       var saved = localStorage.getItem('mct_indicator_prefs');
       if (!saved) return defaults;
       var prefs = JSON.parse(saved);
@@ -2448,7 +2448,7 @@
     // ============================================================
 
     async function fetchKlines(symbol, interval, limit) {
-      limit = limit || 300;
+      limit = limit || 200;
       var key = symbol + '_' + interval;
       var cached = candleCache.get(key);
       if (cached && Date.now() - cached.timestamp < CACHE_TTL) return cached.candles;
@@ -3344,8 +3344,9 @@
       }
       candleCache.clear();
       recreateAllCharts();
-      loadSmcData();
       connectWebSocket();
+      // Load sidebar data after charts are done (non-blocking)
+      setTimeout(loadSmcData, 500);
     }
 
     // ============================================================
