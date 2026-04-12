@@ -1518,6 +1518,80 @@
         }
         return result;
       },
+
+      trendStructure: function(candles, lbL, lbR) {
+        lbL = lbL || 5; lbR = lbR || 5;
+        // Detect pivot highs and lows
+        var pivotHighs = [], pivotLows = [];
+        for (var i = lbL; i < candles.length - lbR; i++) {
+          var isHigh = true, isLow = true;
+          for (var j = 1; j <= lbL; j++) {
+            if (candles[i].high <= candles[i - j].high) isHigh = false;
+            if (candles[i].low >= candles[i - j].low) isLow = false;
+          }
+          for (var j = 1; j <= lbR; j++) {
+            if (candles[i].high <= candles[i + j].high) isHigh = false;
+            if (candles[i].low >= candles[i + j].low) isLow = false;
+          }
+          if (isHigh) pivotHighs.push({ idx: i, price: candles[i].high, time: candles[i].time });
+          if (isLow) pivotLows.push({ idx: i, price: candles[i].low, time: candles[i].time });
+        }
+
+        // Track trend state
+        var trend = []; // per-bar trend: 'up', 'down', or 'none'
+        var trendLines = [];
+        var markers = [];
+        var lastPH = null, prevPH = null, lastPL = null, prevPL = null;
+        var phIdx = 0, plIdx = 0;
+        var currentTrend = 'none';
+
+        for (var i = 0; i < candles.length; i++) {
+          // Check if a pivot high was confirmed at this bar (pivot detected at i - lbR)
+          if (phIdx < pivotHighs.length && pivotHighs[phIdx].idx + lbR === i) {
+            prevPH = lastPH;
+            lastPH = pivotHighs[phIdx];
+            phIdx++;
+          }
+          if (plIdx < pivotLows.length && pivotLows[plIdx].idx + lbR === i) {
+            prevPL = lastPL;
+            lastPL = pivotLows[plIdx];
+            plIdx++;
+          }
+
+          var prevTrend = currentTrend;
+          if (lastPH && prevPH && lastPL && prevPL) {
+            var isHH = lastPH.price > prevPH.price;
+            var isHL = lastPL.price > prevPL.price;
+            var isLH = lastPH.price < prevPH.price;
+            var isLL = lastPL.price < prevPL.price;
+            if (isHL && isHH) currentTrend = 'up';
+            else if (isLH && isLL) currentTrend = 'down';
+          }
+
+          trend.push(currentTrend);
+
+          // Trend change markers
+          if (currentTrend !== prevTrend) {
+            if (currentTrend === 'up') {
+              markers.push({ time: candles[i].time, position: 'belowBar', color: '#34d399', shape: 'arrowUp', text: 'Bull' });
+            } else if (currentTrend === 'down') {
+              markers.push({ time: candles[i].time, position: 'aboveBar', color: '#f43f5e', shape: 'arrowDown', text: 'Bear' });
+            }
+          }
+
+          // Draw trend lines when new pivots are confirmed
+          if (currentTrend === 'up' && lastPL && prevPL && lastPL !== prevPL) {
+            var exists = trendLines.some(function(tl) { return tl.t1 === prevPL.time && tl.t2 === lastPL.time; });
+            if (!exists) trendLines.push({ t1: prevPL.time, p1: prevPL.price, t2: lastPL.time, p2: lastPL.price, color: '#34d399' });
+          }
+          if (currentTrend === 'down' && lastPH && prevPH && lastPH !== prevPH) {
+            var exists = trendLines.some(function(tl) { return tl.t1 === prevPH.time && tl.t2 === lastPH.time; });
+            if (!exists) trendLines.push({ t1: prevPH.time, p1: prevPH.price, t2: lastPH.time, p2: lastPH.price, color: '#f43f5e' });
+          }
+        }
+
+        return { trend: trend, trendLines: trendLines, markers: markers };
+      },
     };
 
     // ============================================================
@@ -1542,9 +1616,14 @@
         'hull ma': 'hma(close, 9)',
         'vwap': 'vwap()',
         'volume': 'volume()',
+        'trend structure': 'trendstructure(5, 5)',
+        'trend lines': 'trendstructure(5, 5)',
+        'hh hl': 'trendstructure(5, 5)',
+        'lh ll': 'trendstructure(5, 5)',
+        'market structure': 'trendstructure(5, 5)',
       },
 
-      OVERLAY_FNS: ['ema', 'sma', 'wma', 'hma', 'vwap', 'bb', 'supertrend', 'psar', 'ichimoku', 'donchian'],
+      OVERLAY_FNS: ['ema', 'sma', 'wma', 'hma', 'vwap', 'bb', 'supertrend', 'psar', 'ichimoku', 'donchian', 'trendstructure'],
       OSCILLATOR_FNS: ['rsi', 'macd', 'stoch', 'atr', 'obv', 'mfi', 'cci', 'momentum'],
 
       parse: function(input) {
@@ -1625,6 +1704,10 @@
               { data: dc.middle, color: '#6b7280', label: 'DC Mid' },
               { data: dc.lower, color: '#f43f5e', label: 'DC Lower' },
             ]};
+          }
+          case 'trendstructure': {
+            var ts = Calc.trendStructure(candles, a[0] || 5, a[1] || 5);
+            return { type: 'overlay', label: 'Trend Structure', trendStructureData: ts };
           }
 
           case 'rsi': return { type: 'oscillator', label: 'RSI(' + (a[1] || 14) + ')', data: Calc.rsi(getSrc(a[0] || 'close'), a[1] || 14), color: '#a78bfa', range: [0, 100], levels: [30, 70] };
@@ -1886,6 +1969,32 @@
               series.setData(data);
               p.overlaySeries.push(series);
             });
+          } else if (result.trendStructureData) {
+            // Trend Structure: trend lines + markers + background
+            var tsd = result.trendStructureData;
+
+            // Draw trend lines as line series segments
+            tsd.trendLines.forEach(function(tl) {
+              var lineSeries = p.chart.addLineSeries({
+                color: tl.color, lineWidth: 2, lineStyle: 2,
+                priceLineVisible: false, lastValueVisible: false,
+                crosshairMarkerVisible: false,
+              });
+              lineSeries.setData([
+                { time: tl.t1, value: tl.p1 },
+                { time: tl.t2, value: tl.p2 },
+              ]);
+              p.overlaySeries.push(lineSeries);
+            });
+
+            // Add markers (arrows for trend change)
+            if (tsd.markers.length && p.candleSeries) {
+              var existingMarkers = p.candleSeries.markers ? p.candleSeries.markers() : [];
+              var allMarkers = existingMarkers.concat(tsd.markers);
+              allMarkers.sort(function(a, b) { return a.time - b.time; });
+              p.candleSeries.setMarkers(allMarkers);
+            }
+
           } else if (result.coloredData) {
             // Supertrend: colored line
             var series = p.chart.addLineSeries({ lineWidth: 2, priceLineVisible: false, lastValueVisible: false, color: '#34d399' });
