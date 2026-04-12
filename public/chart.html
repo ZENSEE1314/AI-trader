@@ -578,7 +578,7 @@
     .chart-loading-overlay {
       position: absolute; inset: 0; z-index: 10;
       display: flex; align-items: center; justify-content: center;
-      background: rgba(8,7,12,0.7); pointer-events: none;
+      background: rgba(0,0,0,0.7); pointer-events: none;
       font-family: var(--font-mono); font-size: var(--text-xs); color: var(--color-fg-muted);
       transition: opacity 0.2s;
     }
@@ -2480,8 +2480,8 @@
     // ============================================================
 
     var CHART_THEME = {
-      layout: { background: { color: '#08070c' }, textColor: '#9a8e80', fontFamily: 'JetBrains Mono, monospace', fontSize: 10 },
-      grid: { vertLines: { color: 'rgba(42, 36, 56, 0.4)' }, horzLines: { color: 'rgba(42, 36, 56, 0.4)' } },
+      layout: { background: { color: '#000000' }, textColor: '#9a8e80', fontFamily: 'JetBrains Mono, monospace', fontSize: 10 },
+      grid: { vertLines: { color: 'rgba(30, 30, 30, 0.5)' }, horzLines: { color: 'rgba(30, 30, 30, 0.5)' } },
       crosshair: { mode: LightweightCharts.CrosshairMode.Normal, vertLine: { color: 'rgba(212,175,55,0.3)', labelBackgroundColor: '#d4af37' }, horzLine: { color: 'rgba(212,175,55,0.3)', labelBackgroundColor: '#d4af37' } },
       rightPriceScale: { borderColor: '#2a2438' },
       timeScale: { borderColor: '#2a2438', timeVisible: true, secondsVisible: false },
@@ -2677,10 +2677,9 @@
             // DTFX Algo Zones: zone boxes + fib lines + HH/HL/LH/LL markers
             var dzd = result.dtfxData;
 
-            // Draw zone boxes as area between two lines
+            // Draw zone boxes — lines only, no area fill
             dzd.zones.forEach(function(zone) {
               var isBull = zone.type === 'bull';
-              var topColor = isBull ? 'rgba(52,211,153,0.15)' : 'rgba(244,63,94,0.15)';
               var lineColor = isBull ? 'rgba(52,211,153,0.4)' : 'rgba(244,63,94,0.4)';
 
               // Top boundary line
@@ -2689,37 +2688,23 @@
                 priceLineVisible: false, lastValueVisible: false,
                 crosshairMarkerVisible: false,
               });
-              // Bottom boundary as area series for fill
-              var areaS = p.chart.addAreaSeries({
-                topColor: topColor, bottomColor: 'transparent',
-                lineColor: lineColor, lineWidth: 1, lineStyle: 2,
-                priceLineVisible: false, lastValueVisible: false,
-                crosshairMarkerVisible: false,
-              });
 
-              // Build data points spanning the zone time range
               var zoneData = [];
-              var areaData = [];
               for (var ci = 0; ci < p.candles.length; ci++) {
                 var t = p.candles[ci].time;
                 if (t >= zone.startTime && t <= zone.endTime) {
                   zoneData.push({ time: t, value: zone.top });
-                  areaData.push({ time: t, value: zone.top });
                 }
               }
-              // Extend zone to the right edge
               if (zoneData.length > 0) {
                 var lastCandle = p.candles[p.candles.length - 1];
                 if (lastCandle.time > zone.endTime) {
                   zoneData.push({ time: lastCandle.time, value: zone.top });
-                  areaData.push({ time: lastCandle.time, value: zone.top });
                 }
               }
 
               topLine.setData(zoneData);
-              areaS.setData(areaData);
               p.overlaySeries.push(topLine);
-              p.overlaySeries.push(areaS);
 
               // Bottom boundary line
               var botLine = p.chart.addLineSeries({
@@ -2800,30 +2785,20 @@
                 priceLineVisible: false, lastValueVisible: false,
                 crosshairMarkerVisible: false,
               });
-              // Area fill between top and bottom
-              var areaFill = p.chart.addAreaSeries({
-                topColor: baseColor + '0.1)', bottomColor: 'transparent',
-                lineColor: baseColor + '0.3)', lineWidth: 0,
-                priceLineVisible: false, lastValueVisible: false,
-                crosshairMarkerVisible: false,
-              });
 
-              var topData = [], botData = [], areaData = [];
+              var topData = [], botData = [];
               for (var ci = 0; ci < p.candles.length; ci++) {
                 var t = p.candles[ci].time;
                 if (t >= box.startTime && t <= box.endTime) {
                   topData.push({ time: t, value: box.high });
                   botData.push({ time: t, value: box.low });
-                  areaData.push({ time: t, value: box.high });
                 }
               }
 
               topLine.setData(topData);
               botLine.setData(botData);
-              areaFill.setData(areaData);
               p.overlaySeries.push(topLine);
               p.overlaySeries.push(botLine);
-              p.overlaySeries.push(areaFill);
 
               // Signal marker at box end
               if (box.signal !== 'neutral') {
@@ -2999,11 +2974,10 @@
               p.candleSeries.setMarkers(allMarkers);
             }
 
-            // 10. Order Blocks (supply/demand zones)
+            // 10. Order Blocks (supply/demand zones) — lines only, no fill
             smc.orderBlocks.forEach(function(ob) {
               var isDemand = ob.type === 'demand';
-              var fillColor = isDemand ? 'rgba(52,211,153,0.12)' : 'rgba(244,63,94,0.12)';
-              var lineColor = isDemand ? 'rgba(52,211,153,0.5)' : 'rgba(244,63,94,0.5)';
+              var lineColor = isDemand ? 'rgba(52,211,153,0.6)' : 'rgba(244,63,94,0.6)';
 
               var topLine = p.chart.addLineSeries({
                 color: lineColor, lineWidth: 1, lineStyle: 0,
@@ -3013,23 +2987,17 @@
                 color: lineColor, lineWidth: 1, lineStyle: 0,
                 priceLineVisible: true, lastValueVisible: true, crosshairMarkerVisible: false,
               });
-              var areaFill = p.chart.addAreaSeries({
-                topColor: fillColor, bottomColor: 'transparent',
-                lineColor: lineColor, lineWidth: 0,
-                priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
-              });
 
-              var topData = [], botData = [], areaData = [];
+              var topData = [], botData = [];
               for (var ci = 0; ci < p.candles.length; ci++) {
                 var t = p.candles[ci].time;
                 if (t >= ob.startTime && t <= lastTime) {
                   topData.push({ time: t, value: ob.top });
                   botData.push({ time: t, value: ob.bottom });
-                  areaData.push({ time: t, value: ob.top });
                 }
               }
-              topLine.setData(topData); botLine.setData(botData); areaFill.setData(areaData);
-              p.overlaySeries.push(topLine); p.overlaySeries.push(botLine); p.overlaySeries.push(areaFill);
+              topLine.setData(topData); botLine.setData(botData);
+              p.overlaySeries.push(topLine); p.overlaySeries.push(botLine);
 
               // "OP" label marker at order block start
               var opMarkers = [];
@@ -3052,7 +3020,7 @@
               + '<div><span style="color:#9a8e80;">Upper Range:</span> <span style="color:#eee;">' + smc.upperRange.toFixed(dp) + '</span></div>'
               + '<div><span style="color:#9a8e80;">Lower Range:</span> <span style="color:#eee;">' + smc.lowerRange.toFixed(dp) + '</span></div>'
               + '<div><span style="color:#9a8e80;">Mid:</span> <span style="color:#fbbf24;">' + smc.midRange.toFixed(dp) + '</span></div>';
-            statsBox.style.cssText = 'position:absolute;top:8px;right:8px;z-index:10;background:rgba(8,7,12,0.85);border:1px solid #2a2438;border-radius:6px;padding:6px 10px;font-size:10px;line-height:1.5;pointer-events:none;font-family:JetBrains Mono,monospace;';
+            statsBox.style.cssText = 'position:absolute;top:8px;right:8px;z-index:10;background:rgba(0,0,0,0.9);border:1px solid #2a2438;border-radius:6px;padding:6px 10px;font-size:10px;line-height:1.5;pointer-events:none;font-family:JetBrains Mono,monospace;';
             var chartContainer = document.getElementById('chart-main-' + idx);
             if (chartContainer) chartContainer.appendChild(statsBox);
 
@@ -3266,19 +3234,20 @@
 
     async function createAllCharts() {
       _chartCreating = true;
-      for (var i = 0; i < CHART_COUNT; i++) await createChart(i);
+      // Create all panels in parallel for speed
+      await Promise.all(Array.from({ length: CHART_COUNT }, function(_, i) { return createChart(i); }));
       _chartCreating = false;
     }
 
     function recreateAllCharts() {
-      // Debounce: if called rapidly (TF clicks), only run the last one
+      if (_chartCreating) return; // skip if already creating
       if (_recreateTimer) clearTimeout(_recreateTimer);
       _recreateTimer = setTimeout(async function() {
-        if (_chartCreating) return; // skip if already creating
+        if (_chartCreating) return;
         _chartCreating = true;
-        for (var i = 0; i < CHART_COUNT; i++) await createChart(i);
+        await Promise.all(Array.from({ length: CHART_COUNT }, function(_, i) { return createChart(i); }));
         _chartCreating = false;
-      }, 80);
+      }, 50);
     }
 
     // ============================================================

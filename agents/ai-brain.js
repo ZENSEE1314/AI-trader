@@ -226,6 +226,8 @@ async function thinkOllama(agentName, systemPrompt, userMessage, complexity = 'l
   console.log(`[AI Brain] ${agentName} thinking with Ollama ${model} (${complexity})...`);
 
   try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 30000); // 30s timeout
     const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -237,7 +239,9 @@ async function thinkOllama(agentName, systemPrompt, userMessage, complexity = 'l
         ],
         stream: false,
       }),
+      signal: controller.signal,
     });
+    clearTimeout(timeout);
 
     if (!response.ok) {
       throw new Error(`Ollama API error: ${response.status} ${response.statusText}`);
