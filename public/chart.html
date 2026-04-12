@@ -972,7 +972,7 @@
           <div class="ind-section-label" style="margin-top:4px;">Add Script / Indicator</div>
           <div class="ind-script-input-wrap">
             <input type="text" id="script-name-input" class="ind-script-input" placeholder="e.g. Bollinger Bands">
-            <button id="btn-add-script" class="ind-script-add-btn">+</button>
+            <button id="btn-add-script" class="ind-script-add-btn" onclick="event.stopPropagation(); addCustomScript();">+</button>
           </div>
           <div class="ind-section-label" style="font-size:0.55rem;color:var(--color-fg-subtle);padding-top:0;">Paste TradingView indicator name exactly as shown on TradingView</div>
           <div id="custom-scripts-list" class="custom-scripts-list"></div>
@@ -1651,6 +1651,73 @@
     }
 
     // ============================================================
+    // Add Custom Script (global so inline onclick can access)
+    // ============================================================
+
+    var KNOWN_SCRIPTS = {
+      'bollinger bands': 'BB@tv-basicstudies',
+      'ichimoku': 'IchimokuCloud@tv-basicstudies',
+      'stochastic': 'Stochastic@tv-basicstudies',
+      'atr': 'ATR@tv-basicstudies',
+      'adx': 'ADX@tv-basicstudies',
+      'cci': 'CCI@tv-basicstudies',
+      'williams %r': 'WilliamsR@tv-basicstudies',
+      'parabolic sar': 'PSAR@tv-basicstudies',
+      'pivot points': 'PivotPointsStandard@tv-basicstudies',
+      'obv': 'OBV@tv-basicstudies',
+      'mfi': 'MFI@tv-basicstudies',
+      'momentum': 'Momentum@tv-basicstudies',
+      'roc': 'ROC@tv-basicstudies',
+      'awesome oscillator': 'AwesomeOscillator@tv-basicstudies',
+      'donchian channels': 'DONCH@tv-basicstudies',
+      'keltner channels': 'KLTNR@tv-basicstudies',
+      'supertrend': 'Supertrend@tv-basicstudies',
+      'zigzag': 'ZigZag@tv-basicstudies',
+      'vwma': 'VWMA@tv-basicstudies',
+      'hull ma': 'HullMA@tv-basicstudies',
+      'linear regression': 'LinearRegression@tv-basicstudies',
+      'chaikin money flow': 'CMF@tv-basicstudies',
+      'elder ray': 'ElderRay@tv-basicstudies',
+      'ma cross': 'MAcross@tv-basicstudies',
+      'envelope': 'ENV@tv-basicstudies',
+    };
+
+    function addCustomScript() {
+      var scriptInput = document.getElementById('script-name-input');
+      var indDropdown = document.getElementById('indicator-dropdown');
+      var indBtn = document.getElementById('btn-indicators');
+      var name = scriptInput.value.trim();
+      if (!name) {
+        showToast('Type an indicator name first', 'warning');
+        scriptInput.focus();
+        return;
+      }
+
+      var study = name;
+      var lower = name.toLowerCase();
+      if (KNOWN_SCRIPTS[lower]) {
+        study = KNOWN_SCRIPTS[lower];
+      } else if (!name.includes('@') && !name.startsWith('PUB;')) {
+        study = name + '@tv-basicstudies';
+      }
+
+      var scripts = loadCustomScripts();
+      if (scripts.some(function(s) { return s.name === name; })) {
+        showToast('Script already added', 'warning');
+        return;
+      }
+
+      scripts.push({ name: name, study: study });
+      saveCustomScripts(scripts);
+      scriptInput.value = '';
+      renderCustomScripts();
+      recreateAllCharts();
+      indDropdown.classList.add('open');
+      indBtn.classList.add('active');
+      showToast('Added: ' + name, 'success');
+    }
+
+    // ============================================================
     // Event Handlers
     // ============================================================
 
@@ -1776,77 +1843,8 @@
         recreateAllCharts();
       });
 
-      // ── Add Custom Script ──
-      var scriptInput = document.getElementById('script-name-input');
-      var addScriptBtn = document.getElementById('btn-add-script');
-
-      function addCustomScript() {
-        var name = scriptInput.value.trim();
-        if (!name) return;
-
-        // Build the study string — try common TradingView study ID formats
-        var study = name;
-        // If user typed a known shorthand, map it
-        var KNOWN_SCRIPTS = {
-          'bollinger bands': 'BB@tv-basicstudies',
-          'ichimoku': 'IchimokuCloud@tv-basicstudies',
-          'stochastic': 'Stochastic@tv-basicstudies',
-          'atr': 'ATR@tv-basicstudies',
-          'adx': 'ADX@tv-basicstudies',
-          'cci': 'CCI@tv-basicstudies',
-          'williams %r': 'WilliamsR@tv-basicstudies',
-          'parabolic sar': 'PSAR@tv-basicstudies',
-          'pivot points': 'PivotPointsStandard@tv-basicstudies',
-          'obv': 'OBV@tv-basicstudies',
-          'mfi': 'MFI@tv-basicstudies',
-          'momentum': 'Momentum@tv-basicstudies',
-          'roc': 'ROC@tv-basicstudies',
-          'awesome oscillator': 'AwesomeOscillator@tv-basicstudies',
-          'donchian channels': 'DONCH@tv-basicstudies',
-          'keltner channels': 'KLTNR@tv-basicstudies',
-          'supertrend': 'Supertrend@tv-basicstudies',
-          'zigzag': 'ZigZag@tv-basicstudies',
-          'vwma': 'VWMA@tv-basicstudies',
-          'hull ma': 'HullMA@tv-basicstudies',
-          'linear regression': 'LinearRegression@tv-basicstudies',
-          'chaikin money flow': 'CMF@tv-basicstudies',
-          'elder ray': 'ElderRay@tv-basicstudies',
-          'ma cross': 'MAcross@tv-basicstudies',
-          'envelope': 'ENV@tv-basicstudies',
-        };
-
-        var lower = name.toLowerCase();
-        if (KNOWN_SCRIPTS[lower]) {
-          study = KNOWN_SCRIPTS[lower];
-        } else if (!name.includes('@') && !name.startsWith('PUB;')) {
-          // Try as a basic study
-          study = name + '@tv-basicstudies';
-        }
-
-        var scripts = loadCustomScripts();
-        // Check duplicate
-        if (scripts.some(function(s) { return s.name === name; })) {
-          showToast('Script already added', 'warning');
-          return;
-        }
-
-        scripts.push({ name: name, study: study });
-        saveCustomScripts(scripts);
-        scriptInput.value = '';
-        renderCustomScripts();
-        recreateAllCharts();
-        // Keep dropdown open after rebuild
-        indDropdown.classList.add('open');
-        indBtn.classList.add('active');
-        showToast('Added: ' + name, 'success');
-      }
-
-      addScriptBtn.addEventListener('click', function(e) {
-        e.preventDefault();
-        e.stopPropagation();
-        addCustomScript();
-      });
-      scriptInput.addEventListener('keydown', function(e) {
+      // ── Add Custom Script (Enter key) ──
+      document.getElementById('script-name-input').addEventListener('keydown', function(e) {
         if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); addCustomScript(); }
       });
     }
