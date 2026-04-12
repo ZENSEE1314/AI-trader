@@ -115,12 +115,12 @@ async function getTokenLeverage(symbol, apiKeyId = null, price = 0) {
       }
     }
 
-    // Priority 4: Price-based default (same logic as owner account)
-    return getLeverage(symbol, price);
+    // Priority 4: No explicit config found — block trade
+    return null;
   } catch (err) {
     console.error('Error getting token leverage:', err.message);
-    // Fallback: price-based
-    return getLeverage(symbol, price);
+    // Return null instead of fallback to ensure safety
+    return null;
   }
 }
 
@@ -1222,6 +1222,10 @@ async function executeForAllUsers(pick) {
 
         // Per-user settings: use user_token_leverage first, then key default
         const userLev = await getTokenLeverage(symbol, key.id, price);
+        if (userLev === null) {
+          userLog.trade(`User ${key.email}: ${symbol} has no token configuration — skipped`);
+          return;
+        }
         const walletSizePct = (await getCapitalPercentage(key.id)) / 100;
         // SL: 10% capital risk, scaled by user's leverage
         const userTrailConfig = getTrailingSLConfig(userLev);

@@ -209,7 +209,12 @@ class TraderAgent extends BaseAgent {
           const openPos = account.positions.filter(p => parseFloat(p.positionAmt) !== 0);
           this.openPositionCount = openPos.length;
 
-          if (avail >= CONFIG.MIN_BALANCE) {
+          const userLev = await require('../cycle').getTokenLeverage(pick.symbol, null, price);
+          if (userLev === null) {
+            this.logTrade(`Owner: ${pick.symbol} has no token configuration — skipping`);
+            this.tradesSkipped++;
+            this.addActivity('skip', `${pick.symbol} no token config — skipped`);
+          } else if (avail >= CONFIG.MIN_BALANCE) {
             const alreadyInSymbol = openPos.find(p => p.symbol === pick.symbol);
             if (alreadyInSymbol) {
               this.logTrade(`Owner already in ${pick.symbol} — skipping`);

@@ -428,10 +428,10 @@ async function analyzeLHHL(ticker, params, dailyBiasCache, kronosPredictions = n
   // Load AI-optimized strategy params from DB (set by Quantum Optimizer)
   const sc = await getStrategyConfig() || {};
   const NEED_DAILY = sc.requireDailyBias !== undefined ? !!sc.requireDailyBias : false;
-  // NEED_BOTH_HTF removed — 4H takes priority, falls back to 1H (no mixed-structure blocking)
   const NEED_KL = sc.requireKeyLevel !== undefined ? !!sc.requireKeyLevel : false;
-  const NEED_15M = true; // Always require 15m structure alignment
-  const NEED_1M = true; // Always require 1m swing confirmation: HL for LONG, LH for SHORT
+  const NEED_15M = false; // Keep disabled as per previous request
+  const NEED_3M = true; // Now require 3m HL/LH confirmation
+  const NEED_1M = true; // Now require 1m HL/LH confirmation
   const NEED_VOL = sc.requireVolSpike !== undefined ? !!sc.requireVolSpike : false;
   const VOL_MULT = sc.volSpikeMultiplier || 1.5;
   const INDECISIVE_THRESH = sc.indecisiveThresh || 0.3;
@@ -537,9 +537,11 @@ async function analyzeLHHL(ticker, params, dailyBiasCache, kronosPredictions = n
   }
 
   // ┌─────────────────────────────────────────────────────────┐
-  // │ Step 4: 15m Structure Confirmation (optional — AI)       │
+  // │ Step 4: 15m Structure Confirmation (SMC Setup)             │
   // └─────────────────────────────────────────────────────────┘
   const struct15m = getStructure(klines15m, SWING_LENGTHS['15m']);
+  // Simplified: 15m check disabled to prioritize 1m trigger
+  /*
   if (NEED_15M) {
     if (direction === 'LONG' && !struct15m.hasHL) {
       bLog.scan(`${symbol}: LONG blocked — 15m has no HL confirmation`);
@@ -550,17 +552,18 @@ async function analyzeLHHL(ticker, params, dailyBiasCache, kronosPredictions = n
       return null;
     }
   }
+  */
 
   // ┌─────────────────────────────────────────────────────────┐
   // │ Step 4.5: 3m Structure Confirmation (STRICT ALIGNMENT)     │
   // └─────────────────────────────────────────────────────────┘
   const struct3m = getStructure(klines3m, SWING_LENGTHS['3m']);
   if (direction === 'LONG' && !struct3m.hasHL) {
-    bLog.scan(`${symbol}: LONG blocked — 3m has no HL confirmation (Trend Misalignment)`);
+    bLog.scan(`${symbol}: LONG blocked — 3m has no HL confirmation`);
     return null;
   }
   if (direction === 'SHORT' && !struct3m.hasLH) {
-    bLog.scan(`${symbol}: SHORT blocked — 3m has no LH confirmation (Trend Misalignment)`);
+    bLog.scan(`${symbol}: SHORT blocked — 3m has no LH confirmation`);
     return null;
   }
 
