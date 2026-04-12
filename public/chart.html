@@ -574,7 +574,15 @@
       display: flex;
       flex-direction: column;
     }
-    .main-chart-container { flex: 3; min-height: 0; }
+    .main-chart-container { flex: 3; min-height: 0; position: relative; }
+    .chart-loading-overlay {
+      position: absolute; inset: 0; z-index: 10;
+      display: flex; align-items: center; justify-content: center;
+      background: rgba(8,7,12,0.7); pointer-events: none;
+      font-family: var(--font-mono); font-size: var(--text-xs); color: var(--color-fg-muted);
+      transition: opacity 0.2s;
+    }
+    .chart-loading-overlay.hidden { opacity: 0; pointer-events: none; }
     .tv-lightweight-charts a[href*="tradingview"],
     .main-chart-container a[href*="tradingview"],
     [class*="chart"] a[href*="tradingview"] { display: none !important; }
@@ -1292,7 +1300,7 @@
     // Binance kline interval mapping (panel TF data-tv -> Binance interval string)
     var TV_TO_BINANCE = {
       '1': '1m', '3': '3m', '5': '5m', '15': '15m',
-      '30': '30m', '60': '1h', '240': '4h', 'D': '1d',
+      '30': '30m', '60': '1h', '240': '4h', 'D': '1d', 'W': '1w',
     };
 
     // Per-panel chart state
@@ -1310,7 +1318,12 @@
 
     // Candle data cache
     var candleCache = new Map();
-    var CACHE_TTL = 15000;
+    var CACHE_TTL = 60000; // 60s cache to avoid constant refetches
+
+    // Debounce/throttle helpers
+    var _recreateTimer = null;
+    var _chartCreating = false;
+    var _lastIndicatorApply = [0, 0, 0]; // timestamp per panel
 
     // --- DOM References ---
     var DOM = {
@@ -2528,6 +2541,12 @@
       if (!container) return;
       container.innerHTML = '';
 
+      // Show loading overlay
+      var loadingEl = document.createElement('div');
+      loadingEl.className = 'chart-loading-overlay';
+      loadingEl.textContent = 'Loading...';
+      container.appendChild(loadingEl);
+
       var chart = LightweightCharts.createChart(container, Object.assign({}, CHART_THEME, {
         width: container.clientWidth,
         height: container.clientHeight,
@@ -2554,8 +2573,12 @@
 
         // Apply indicators
         applyIndicators(idx);
+        // Hide loading overlay
+        if (loadingEl.parentNode) loadingEl.remove();
       } catch (err) {
         console.error('Failed to load candles for panel ' + idx + ':', err);
+        loadingEl.textContent = 'Failed to load';
+        setTimeout(function() { if (loadingEl.parentNode) loadingEl.remove(); }, 2000);
       }
 
       // Resize observer
@@ -3263,12 +3286,21 @@
       panelBody.appendChild(bar);
     }
 
-    function createAllCharts() {
-      for (var i = 0; i < CHART_COUNT; i++) createChart(i);
+    async function createAllCharts() {
+      _chartCreating = true;
+      for (var i = 0; i < CHART_COUNT; i++) await createChart(i);
+      _chartCreating = false;
     }
 
     function recreateAllCharts() {
-      for (var i = 0; i < CHART_COUNT; i++) createChart(i);
+      // Debounce: if called rapidly (TF clicks), only run the last one
+      if (_recreateTimer) clearTimeout(_recreateTimer);
+      _recreateTimer = setTimeout(async function() {
+        if (_chartCreating) return; // skip if already creating
+        _chartCreating = true;
+        for (var i = 0; i < CHART_COUNT; i++) await createChart(i);
+        _chartCreating = false;
+      }, 80);
     }
 
     // ============================================================
@@ -3361,6 +3393,7 @@
     }
 
     function handleCoinSelect(symbol) {
+      if (_chartCreating) return; // prevent double-click while loading
       document.getElementById('left-sidebar').classList.remove('mobile-open');
       document.getElementById('mobile-overlay').classList.remove('active');
       STATE.symbol = symbol;
@@ -3509,9 +3542,13 @@
                 });
               }
 
-              // Reapply indicators when a candle closes
+              // Reapply indicators when a candle closes (throttled: max once per 10s per panel)
               if (isClosed) {
-                applyIndicators(i);
+                var now = Date.now();
+                if (now - _lastIndicatorApply[i] > 10000) {
+                  _lastIndicatorApply[i] = now;
+                  applyIndicators(i);
+                }
               }
             }
           }
@@ -3594,6 +3631,7 @@
       // Main toolbar TF buttons
       document.querySelectorAll('#tf-group .tf-btn').forEach(function(btn) {
         btn.addEventListener('click', function() {
+          if (_chartCreating) return; // prevent clicks while charts are loading
           document.querySelectorAll('#tf-group .tf-btn').forEach(function(b) { b.classList.remove('active'); });
           btn.classList.add('active');
           STATE.interval = btn.dataset.tf;
@@ -3607,6 +3645,7 @@
               if (match) match.classList.add('active');
             }
           }
+          candleCache.clear(); // clear cache so new TF fetches fresh data
           saveChartSettings();
           recreateAllCharts();
           loadSmcData();
@@ -3619,9 +3658,11 @@
         var panelIdx = parseInt(group.dataset.panel);
         group.querySelectorAll('.panel-tf-btn').forEach(function(btn) {
           btn.addEventListener('click', function() {
+            if (_chartCreating) return;
             group.querySelectorAll('.panel-tf-btn').forEach(function(b) { b.classList.remove('active'); });
             btn.classList.add('active');
             chartIntervals[panelIdx] = btn.dataset.tv;
+            candleCache.clear();
             saveChartSettings();
             createChart(panelIdx);
             connectWebSocket();
