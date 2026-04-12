@@ -30,6 +30,103 @@
     *,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
     body{font-family:'IBM Plex Sans',sans-serif;color:var(--fg);background:var(--bg);min-height:100vh;overflow-x:hidden}
 
+    /* TradingView Chart Overlay Styles */
+    #tv-chart-overlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 100;
+      background: rgba(8, 7, 12, 0.85);
+      backdrop-filter: blur(8px);
+      display: none;
+      flex-direction: column;
+      transition: opacity 0.3s ease;
+    }
+    #tv-chart-overlay.visible {
+      display: flex;
+      opacity: 1;
+    }
+    .tv-chart-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 20px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      color: var(--fg);
+      font-family: 'JetBrains Mono', monospace;
+    }
+    .tv-chart-controls {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+    }
+    #tv-chart-container {
+      flex: 1;
+      position: relative;
+      width: 100%;
+      height: 100%;
+    }
+    .tv-indicator-panel {
+      position: absolute;
+      top: 60px;
+      right: 20px;
+      width: 300px;
+      background: var(--glass-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 15px;
+      z-index: 110;
+      backdrop-filter: blur(12px);
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .tv-indicator-panel h3 {
+      font-size: 0.8rem;
+      color: var(--accent);
+      margin: 0 0 10px 0;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+    }
+    .tv-indicator-panel textarea {
+      width: 100%;
+      height: 200px;
+      background: #000;
+      color: #0f0;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      border: 1px solid var(--border);
+      padding: 8px;
+      border-radius: 4px;
+      resize: none;
+    }
+    .tv-btn-apply {
+      background: var(--accent);
+      color: #000;
+      border: none;
+      padding: 8px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-weight: 600;
+      font-size: 0.75rem;
+    }
+    .tv-btn-close {
+      background: transparent;
+      color: var(--fg2);
+      border: 1px solid var(--border);
+      padding: 4px 12px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 0.75rem;
+    }
+    .tv-btn-close:hover {
+      color: var(--fg);
+      border-color: var(--fg2);
+    }
+
     /* Scan lines overlay on entire page */
     body::after{
       content:'';position:fixed;inset:0;z-index:9999;pointer-events:none;
@@ -477,6 +574,7 @@
     }
     @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;transition-duration:.01ms!important}}
   </style>
+  <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
 </head>
 <body>
   <header class="hdr">
@@ -822,6 +920,133 @@
   </div>
 
 <script>
+/* ═══ TRADINGVIEW CHART ENGINE ═══ */
+let tvChart = null;
+let tvCandleSeries = null;
+let tvIndicatorSeries = null;
+
+function toggleTVChart(show) {
+  const overlay = document.getElementById('tv-chart-overlay');
+  if (show) {
+    overlay.classList.add('visible');
+    initTVChart();
+  } else {
+    overlay.classList.remove('visible');
+  }
+}
+
+async function initTVChart() {
+  const container = document.getElementById('tv-chart-container');
+  if (container.children.length > 0) return;
+
+  tvChart = LightweightCharts.createChart(container, {
+    layout: {
+      backgroundColor: '#08070c',
+      textColor: '#f0e8df',
+      fontSize: 12,
+    },
+    grid: {
+      vertLines: { color: '#2a2438' },
+      horzLines: { color: '#2a2438' },
+    },
+    crosshair: {
+      mode: LightweightCharts.CrosshairMode.Normal,
+      algos: {
+        vertical: { params: { snapPriceBridges: true } },
+      },
+    },
+    rightPriceScale: {
+      borderColor: '#2a2438',
+    },
+    timeScale: {
+      borderColor: '#2a2438',
+      timeVisible: true,
+      secondsVisible: false,
+    },
+  });
+
+  tvCandleSeries = tvChart.addCandlestickSeries({
+    upColor: '#34d399',
+    downColor: '#f43f5e',
+    borderUpColor: '#34d399',
+    borderDownColor: '#f43f5e',
+    wickUpColor: '#34d399',
+    wickDownColor: '#f43f5e',
+  });
+
+  await updateTVData();
+
+  // Listeners
+  document.getElementById('tv-symbol-select').onchange = async (e) => {
+    document.getElementById('tv-current-symbol').textContent = e.target.value;
+    await updateTVData();
+  };
+  document.getElementById('tv-tf-select').onchange = async (e) => {
+    await updateTVData();
+  };
+}
+
+async function updateTVData() {
+  const symbol = document.getElementById('tv-symbol-select').value;
+  const tf = document.getElementById('tv-tf-select').value;
+
+  try {
+    const r = await fetch(`/api/chart?symbol=${symbol}&tf=${tf}`);
+    const data = await r.json();
+
+    const formattedData = data.map(d => ({
+      time: d.time / 1000,
+      open: d.open,
+      high: d.high,
+      low: d.low,
+      close: d.close,
+    }));
+
+    tvCandleSeries.setData(formattedData);
+    tvChart.timeScale().fitContent();
+
+    // Clear old indicators
+    if (tvIndicatorSeries) {
+      tvChart.removeSeries(tvIndicatorSeries);
+      tvIndicatorSeries = null;
+    }
+  } catch (e) {
+    console.error('TV Data fetch failed', e);
+  }
+}
+
+async function applyTVIndicator() {
+  const script = document.getElementById('tv-indicator-script').value;
+  if (!script) return;
+
+  try {
+    const userFunc = new Function('data', script);
+    const symbol = document.getElementById('tv-symbol-select').value;
+    const tf = document.getElementById('tv-tf-select').value;
+    const r = await fetch(`/api/chart?symbol=${symbol}&tf=${tf}`);
+    const data = await r.json();
+
+    const results = userFunc(data);
+    if (!Array.isArray(results)) throw new Error('Script must return an array');
+
+    if (tvIndicatorSeries) tvChart.removeSeries(tvIndicatorSeries);
+
+    tvIndicatorSeries = tvChart.addLineSeries({
+      color: '#d4af37',
+      lineWidth: 2,
+    });
+
+    const indicatorData = results.map((val, i) => ({
+      time: data[i].time / 1000,
+      value: val,
+    }));
+
+    tvIndicatorSeries.setData(indicatorData);
+  } catch (e) {
+    alert('Indicator Error: ' + e.message);
+  }
+}
+
 /* ═══════════════════════════════════════════
    AGENT DEFINITIONS
    ═══════════════════════════════════════════ */
@@ -2034,5 +2259,35 @@ function quickChat(text) {
 initCharacters();
 startPolling();
 </script>
+    <div id="tv-chart-overlay">
+      <div class="tv-chart-header">
+        <div class="tv-chart-title">
+          <span style="color:var(--accent); font-weight:bold;">MCT</span> Market Analysis
+          <span id="tv-current-symbol" style="margin-left:10px; color:var(--fg2);">BTCUSDT</span>
+        </div>
+        <div class="tv-chart-controls">
+          <select id="tv-symbol-select" class="tbtn">
+            <option value="BTCUSDT">BTCUSDT</option>
+            <option value="ETHUSDT">ETHUSDT</option>
+            <option value="SOLUSDT">SOLUSDT</option>
+          </select>
+          <select id="tv-tf-select" class="tbtn">
+            <option value="1m">1m</option>
+            <option value="3m">3m</option>
+            <option value="15m" selected>15m</option>
+            <option value="1h">1h</option>
+            <option value="4h">4h</option>
+            <option value="1d">1d</option>
+          </select>
+          <button class="tv-btn-close" onclick="toggleTVChart(false)">Close Chart</button>
+        </div>
+      </div>
+      <div id="tv-chart-container"></div>
+      <div class="tv-indicator-panel">
+        <h3>Custom Indicator</h3>
+        <textarea id="tv-indicator-script" placeholder="function(data) { return data.map(d => d.close * 1.1); }"></textarea>
+        <button class="tv-btn-apply" onclick="applyTVIndicator()">Apply Script</button>
+      </div>
+    </div>
 </body>
 </html>

@@ -239,9 +239,9 @@ function getStructure(klines, len) {
   const swingHighs = swings.filter(s => s.type === 'high');
   const swingLows = swings.filter(s => s.type === 'low');
 
-  // Minimum swing size: HL/LH must differ by at least 0.15% from previous swing
-  // to filter out noise bounces in strong trends
-  const MIN_SWING_PCT = 0.0015;
+  // Minimum swing size: HL/LH must differ by at least 0.05% from previous swing
+  // Lowered from 0.15% to 0.05% to capture deeper, more significant structure changes
+  const MIN_SWING_PCT = 0.0005;
 
   const highLabels = [];
   for (let i = 1; i < swingHighs.length; i++) {
