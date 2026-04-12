@@ -1835,12 +1835,19 @@
         scriptInput.value = '';
         renderCustomScripts();
         recreateAllCharts();
+        // Keep dropdown open after rebuild
+        indDropdown.classList.add('open');
+        indBtn.classList.add('active');
         showToast('Added: ' + name, 'success');
       }
 
-      addScriptBtn.addEventListener('click', addCustomScript);
+      addScriptBtn.addEventListener('click', function(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        addCustomScript();
+      });
       scriptInput.addEventListener('keydown', function(e) {
-        if (e.key === 'Enter') { e.preventDefault(); addCustomScript(); }
+        if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); addCustomScript(); }
       });
     }
 
