@@ -576,20 +576,23 @@ class AgentCoordinator extends BaseAgent {
         this.sentimentAgent.addActivity('skip', 'Paused — skipping mood check');
       }
 
-      // ── Step 1.5: KronosAgent runs AI predictions ──
+      // ── Step 1.5: KronosAgent runs AI predictions (30s max — don't block pipeline) ──
       let kronosPredictions = null;
       if (!this.kronosAgent.paused) {
         this.currentTask = { description: `Step 2/7: KronosAgent predicting...`, startedAt: Date.now() };
         this.kronosAgent.currentTask = { description: `Scanning ${this.tokenAgents.size} tokens...`, startedAt: Date.now() };
         try {
-          const tokenSymbols = [...this.tokenAgents.keys()];
-          const kronosResult = await this.kronosAgent.run({ symbols: tokenSymbols, coordinator: this });
+          const tokenSymbols = [...this.tokenAgents.keys()].slice(0, 5); // Only predict top 5 to keep it fast
+          const kronosResult = await Promise.race([
+            this.kronosAgent.run({ symbols: tokenSymbols, coordinator: this }),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('Kronos timed out')), 30000)),
+          ]);
           if (kronosResult?.predictions > 0) {
             kronosPredictions = this.kronosAgent.lastPredictions;
             this.addActivity('info', `KronosAgent: ${kronosResult.predictions} predictions (${kronosResult.highConf} high-conf)`);
           }
         } catch (kronosErr) {
-          this.addActivity('error', `KronosAgent error (non-fatal): ${kronosErr.message}`);
+          this.addActivity('warning', `KronosAgent skipped: ${kronosErr.message} — pipeline continues without AI predictions`);
         }
       } else {
         this.kronosAgent.addActivity('skip', 'Paused — skipping predictions');
