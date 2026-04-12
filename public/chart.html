@@ -1889,16 +1889,7 @@
       // Build markers for swings and labels
       buildMarkers(data);
 
-    function renderIndicators(data) {
-      Object.entries(INDICATOR_REGISTRY).forEach(([id, config]) => {
-        if (data[config.dataKey] || (config.type === 'collection' && data.candles)) {
-          const result = config.render(chart, data);
-          if (result) {
-            indicatorSeries[id] = result;
-          }
-        }
-      });
-    }
+      renderIndicators(data);
 
       // Update trend box and range info
       updateTrendBox(data);
@@ -1928,6 +1919,17 @@
           chart.timeScale().setVisibleLogicalRange(savedRange);
         }
       }
+    }
+
+    function renderIndicators(data) {
+      Object.entries(INDICATOR_REGISTRY).forEach(([id, config]) => {
+        if (data[config.dataKey] || (config.type === 'collection' && data.candles)) {
+          const result = config.render(chart, data);
+          if (result) {
+            indicatorSeries[id] = result;
+          }
+        }
+      });
     }
 
     // Shared options for indicator lines: don't affect Y-axis auto-scaling
