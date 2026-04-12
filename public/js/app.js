@@ -367,7 +367,7 @@
           <td>${confIcon} ${p.confidence}</td>
           <td style="color:${trendColor};">${p.trend}</td>
           <td><span style="font-size:0.7rem;padding:2px 6px;border-radius:4px;background:rgba(139, 92, 246, 0.1);color:var(--color-accent);border:1px solid rgba(139, 92, 246, 0.3);font-weight:700;">${timeHorizon}</span></td>
-          <td class="text-mono" style="font-size:0.75rem;">$${(p.predicted || 0).toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:6})}</td>
+          <td class="text-mono" style="font-size:0.75rem;">$${(p.predicted || 0).toLocaleString(undefined, {minimumFractionDigits: 8, maximumFractionDigits: 8})}</td>
         </tr>`;
       }).join('');
     } catch (err) {
