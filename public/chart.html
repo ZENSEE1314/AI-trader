@@ -1160,21 +1160,7 @@
         <span class="toolbar-label">Indicators</span>
         <button class="mobile-menu-btn" id="btn-indicators-toggle" title="Toggle Indicators" aria-label="Toggle indicators panel" style="display:none;">&#9881;</button>
         <div class="ind-list" id="ind-list">
-          <label class="ind-toggle"><input type="checkbox" id="tog-swings" checked> Swings</label>
-          <label class="ind-toggle"><input type="checkbox" id="tog-labels" checked> Labels</label>
-          <label class="ind-toggle"><input type="checkbox" id="tog-ob" checked> OB</label>
-          <label class="ind-toggle"><input type="checkbox" id="tog-fvg"> FVG</label>
-          <label class="ind-toggle"><input type="checkbox" id="tog-levels"> Key Levels</label>
-          <label class="ind-toggle"><input type="checkbox" id="tog-ema7" checked> EMA7</label>
-          <label class="ind-toggle"><input type="checkbox" id="tog-ema22" checked> EMA22</label>
-          <label class="ind-toggle"><input type="checkbox" id="tog-ema200"> EMA200</label>
-          <label class="ind-toggle"><input type="checkbox" id="tog-vwap"> VWAP</label>
-          <label class="ind-toggle"><input type="checkbox" id="tog-curved"> Curved Bands</label>
-          <label class="ind-toggle"><input type="checkbox" id="tog-dailylvl" checked> OP/PDH/PDL</label>
-          <label class="ind-toggle"><input type="checkbox" id="tog-eqheql"> EQH/EQL</label>
-          <label class="ind-toggle"><input type="checkbox" id="tog-choch" checked> CHoCH/BMS</label>
-          <label class="ind-toggle"><input type="checkbox" id="tog-strongweak"> Strong/Weak</label>
-          <label class="ind-toggle"><input type="checkbox" id="tog-premium"> Premium/Disc</label>
+          <!-- Dynamically generated indicator toggles -->
         </div>
       </div>
 
@@ -1430,27 +1416,238 @@
     let candleSeries = null;
     let volumeSeries = null;
 
-    // Indicator series references for show/hide
-    const indicatorSeries = {
-      ema7: null,
-      ema22: null,
-      ema200: null,
-      vwap: null,
-      curvedUpper: null,
-      curvedLower: null,
-      dailyOP: null,
-      dailyPDH: null,
-      dailyPDL: null,
-      obSeries: [],
-      fvgSeries: [],
-      keyLevelLines: [],
-      eqhEqlLines: [],
-      chochBmsLines: [],
-      strongWeakLines: [],
-      premiumSeries: null,
-      discountSeries: null,
-      midSeries: null,
+    const INDICATOR_REGISTRY = {
+      ema7: {
+        name: 'EMA 7',
+        dataKey: 'ema7',
+        type: 'line',
+        options: { color: '#58a6ff', lineWidth: 1 },
+        visible: true,
+        render: (chart, data) => {
+          const s = chart.addLineSeries({ ...OVERLAY_OPTS, color: '#58a6ff', lineWidth: 1 });
+          s.setData(data.ema7);
+          return s;
+        }
+      },
+      ema22: {
+        name: 'EMA 22',
+        dataKey: 'ema22',
+        type: 'line',
+        options: { color: '#ffa726', lineWidth: 1 },
+        visible: true,
+        render: (chart, data) => {
+          const s = chart.addLineSeries({ ...OVERLAY_OPTS, color: '#ffa726', lineWidth: 1 });
+          s.setData(data.ema22);
+          return s;
+        }
+      },
+      ema200: {
+        name: 'EMA 200',
+        dataKey: 'ema200',
+        type: 'line',
+        options: { color: '#e6edf3', lineWidth: 2 },
+        visible: false,
+        render: (chart, data) => {
+          const s = chart.addLineSeries({ ...OVERLAY_OPTS, color: '#e6edf3', lineWidth: 2 });
+          s.setData(data.ema200);
+          return s;
+        }
+      },
+      vwap: {
+        name: 'VWAP',
+        dataKey: 'vwap',
+        type: 'line',
+        options: { color: '#aa46f5', lineWidth: 2 },
+        visible: false,
+        render: (chart, data) => {
+          const s = chart.addLineSeries({ ...OVERLAY_OPTS, color: '#aa46f5', lineWidth: 2 });
+          s.setData(data.vwap);
+          return s;
+        }
+      },
+      curved: {
+        name: 'Curved Bands',
+        dataKey: 'curved',
+        type: 'collection',
+        visible: false,
+        render: (chart, data) => {
+          const upper = chart.addLineSeries({ ...OVERLAY_OPTS, color: '#f23645', lineWidth: 2 });
+          const lower = chart.addLineSeries({ ...OVERLAY_OPTS, color: '#089981', lineWidth: 2 });
+          upper.setData(data.curvedUpper);
+          lower.setData(data.curvedLower);
+          return [upper, lower];
+        }
+      },
+      dailylvl: {
+        name: 'OP/PDH/PDL',
+        dataKey: 'dailyLevels',
+        type: 'collection',
+        visible: true,
+        render: (chart, data) => {
+          const kl = data.keyLevels || {};
+          const dl = data.dailyLevels || {};
+          const op = kl.OP || dl.openingPrice;
+          const pdh = kl.PDH || dl.pdh;
+          const pdl = kl.PDL || dl.pdl;
+          const firstTime = data.candles[0]?.time;
+          const lastTime = data.candles[data.candles.length - 1]?.time;
+          if (!firstTime || !lastTime) return [];
+
+          const makeLine = (p, c, t) => {
+            if (!p) return null;
+            const s = chart.addLineSeries({ ...OVERLAY_OPTS, color: c, lineWidth: 1, lineStyle: 2, title: t });
+            s.setData([{ time: firstTime, value: p }, { time: lastTime, value: p }]);
+            return s;
+          };
+          return [makeLine(op, '#ffffff', 'OP'), makeLine(pdh, '#ff6b6b', 'PDH'), makeLine(pdl, '#51cf66', 'PDL')].filter(Boolean);
+        }
+      },
+      ob: {
+        name: 'OB',
+        dataKey: 'orderBlocks',
+        type: 'collection',
+        visible: true,
+        render: (chart, data) => {
+          const seriesList = [];
+          if (!data.orderBlocks) return [];
+          const lastTime = data.candles[data.candles.length - 1]?.time;
+          for (const ob of data.orderBlocks) {
+            const isBullish = ob.type === 'bullish';
+            const color = isBullish ? 'rgba(0, 212, 170, 0.35)' : 'rgba(255, 71, 87, 0.35)';
+            const top = chart.addLineSeries({ ...OVERLAY_OPTS, color, lineWidth: 1, lineStyle: 2 });
+            const bot = chart.addLineSeries({ ...OVERLAY_OPTS, color, lineWidth: 1, lineStyle: 2 });
+            top.setData([{ time: ob.time, value: Math.max(ob.high, ob.low) }, { time: lastTime, value: Math.max(ob.high, ob.low) }]);
+            bot.setData([{ time: ob.time, value: Math.min(ob.high, ob.low) }, { time: lastTime, value: Math.min(ob.high, ob.low) }]);
+            seriesList.push(top, bot);
+          }
+          return seriesList;
+        }
+      },
+      fvg: {
+        name: 'FVG',
+        dataKey: 'fvgs',
+        type: 'collection',
+        visible: false,
+        render: (chart, data) => {
+          const seriesList = [];
+          if (!data.fvgs) return [];
+          const lastTime = data.candles[data.candles.length - 1]?.time;
+          for (const fvg of data.fvgs) {
+            const isBullish = fvg.type === 'bullish';
+            const color = isBullish ? 'rgba(0, 186, 255, 0.3)' : 'rgba(255, 167, 38, 0.3)';
+            const top = chart.addLineSeries({ ...OVERLAY_OPTS, color, lineWidth: 1, lineStyle: 2 });
+            const bot = chart.addLineSeries({ ...OVERLAY_OPTS, color, lineWidth: 1, lineStyle: 2 });
+            top.setData([{ time: fvg.time, value: fvg.high }, { time: lastTime, value: fvg.high }]);
+            bot.setData([{ time: fvg.time, value: fvg.low }, { time: lastTime, value: fvg.low }]);
+            seriesList.push(top, bot);
+          }
+          return seriesList;
+        }
+      },
+      levels: {
+        name: 'Key Levels',
+        dataKey: 'keyLevels',
+        type: 'collection',
+        visible: false,
+        render: (chart, data) => {
+          const seriesList = [];
+          if (!data.keyLevels) return [];
+          const configs = [
+            { key: 'PDH', color: '#ffa726', label: 'PDH' }, { key: 'PDL', color: '#ffa726', label: 'PDL' },
+            { key: 'OP',  color: '#e6edf3', label: 'OP' }, { key: 'PWH', color: '#a855f7', label: 'PWH' },
+            { key: 'PWL', color: '#a855f7', label: 'PWL' },
+          ];
+          const firstTime = data.candles[0]?.time;
+          const lastTime = data.candles[data.candles.length - 1]?.time;
+          for (const cfg of configs) {
+            const price = data.keyLevels[cfg.key];
+            if (price == null) continue;
+            const s = chart.addLineSeries({ ...OVERLAY_OPTS, color: cfg.color, lineWidth: 1, lineStyle: 2, title: cfg.label });
+            s.setData([{ time: firstTime, value: price }, { time: lastTime, value: price }]);
+            seriesList.push(s);
+          }
+          return seriesList;
+        }
+      },
+      eqheql: {
+        name: 'EQH/EQL',
+        dataKey: 'eqhEql',
+        type: 'collection',
+        visible: false,
+        render: (chart, data) => {
+          const seriesList = [];
+          if (!data.eqhEql) return [];
+          const lastTime = data.candles[data.candles.length - 1]?.time;
+          for (const eq of data.eqhEql) {
+            const color = eq.type === 'EQH' ? 'rgba(255, 71, 87, 0.5)' : 'rgba(0, 212, 170, 0.5)';
+            const s = chart.addLineSeries({ ...OVERLAY_OPTS, color, lineWidth: 1, lineStyle: 3, title: eq.type });
+            s.setData([{ time: eq.time, value: eq.price }, { time: lastTime, value: eq.price }]);
+            seriesList.push(s);
+          }
+          return seriesList;
+        }
+      },
+      choch: {
+        name: 'CHoCH/BMS',
+        dataKey: 'chochBms',
+        type: 'collection',
+        visible: true,
+        render: (chart, data) => {
+          const seriesList = [];
+          if (!data.chochBms) return [];
+          for (const item of data.chochBms) {
+            const isBull = item.direction === 'bullish';
+            let color = isBull ? 'rgba(0, 212, 170, 0.5)' : 'rgba(255, 71, 87, 0.5)';
+            let lw = 1, ls = 2;
+            if (item.type === 'CHoCH') { color = isBull ? 'rgba(8, 236, 126, 0.8)' : 'rgba(255, 34, 34, 0.8)'; lw = 2; ls = 0; }
+            else if (item.type === 'SMS') { color = isBull ? 'rgba(0, 212, 170, 0.7)' : 'rgba(242, 54, 69, 0.7)'; lw = 2; ls = 0; }
+            const s = chart.addLineSeries({ ...OVERLAY_OPTS, color, lineWidth: lw, lineStyle: ls, title: item.type });
+            s.setData([{ time: item.time, value: item.price }, { time: item.breakTime, value: item.price }]);
+            seriesList.push(s);
+          }
+          return seriesList;
+        }
+      },
+      strongweak: {
+        name: 'Strong/Weak',
+        dataKey: 'strongWeak',
+        type: 'collection',
+        visible: false,
+        render: (chart, data) => {
+          const seriesList = [];
+          if (!data.strongWeak) return [];
+          const levels = [...data.strongWeak.filter(s => s.type === 'high').slice(-3), ...data.strongWeak.filter(s => s.type === 'low').slice(-3)];
+          const lastTime = data.candles[data.candles.length - 1]?.time;
+          for (const level of levels) {
+            const isHigh = level.type === 'high';
+            const color = isHigh ? (level.isBroken ? 'rgba(255, 167, 38, 0.4)' : 'rgba(255, 71, 87, 0.6)') : (level.isBroken ? 'rgba(255, 167, 38, 0.4)' : 'rgba(0, 212, 170, 0.6)');
+            const s = chart.addLineSeries({ ...OVERLAY_OPTS, color, lineWidth: level.isBroken ? 1 : 2, lineStyle: level.isBroken ? 3 : 0, title: level.label });
+            s.setData([{ time: level.time, value: level.price }, { time: lastTime, value: level.price }]);
+            seriesList.push(s);
+          }
+          return seriesList;
+        }
+      },
+      premium: {
+        name: 'Premium/Disc',
+        dataKey: 'premiumDiscount',
+        type: 'collection',
+        visible: false,
+        render: (chart, data) => {
+          const pd = data.premiumDiscount;
+          if (!pd) return [];
+          const times = data.candles.map(c => c.time);
+          const up = chart.addLineSeries({ ...OVERLAY_OPTS, color: 'rgba(255, 71, 87, 0.06)', lineWidth: 0 });
+          const low = chart.addLineSeries({ ...OVERLAY_OPTS, color: 'rgba(0, 212, 170, 0.06)', lineWidth: 0 });
+          const mid = chart.addLineSeries({ ...OVERLAY_OPTS, color: 'rgba(255, 255, 255, 0.1)', lineWidth: 1 });
+          up.setData(times.map(t => ({ time: t, value: pd.upperRange })));
+          low.setData(times.map(t => ({ time: t, value: pd.lowerRange })));
+          mid.setData(times.map(t => ({ time: t, value: pd.mid })));
+          return [up, low, mid];
+        }
+      }
     };
+
 
     // Markers are stored and re-applied based on toggle state
     let allMarkers = [];
@@ -1481,48 +1678,12 @@
       }, 4000);
     }
 
-    // --- Zone Hit Detection ---
+// --- Zone Hit Detection ---
     const alertCooldowns = new Map();
 
     function checkZoneHits(price) {
       if (!STATE.chartData) return;
-      const now = Date.now();
-
-      // 1. Check Order Blocks
-      if (STATE.chartData.orderBlocks) {
-        for (const ob of STATE.chartData.orderBlocks) {
-          const isBull = ob.type === 'bullish';
-          const hit = isBull
-            ? (price <= ob.high && price >= ob.low)
-            : (price >= ob.low && price <= ob.high);
-
-          if (hit) {
-            const key = `ob_${ob.time}`;
-            if (!alertCooldowns.has(key) || now - alertCooldowns.get(key) > 30000) {
-              showToast(`${STATE.symbol} hit ${isBull ? 'Bullish' : 'Bearish'} OB @ ${formatPrice(price)}`, isBull ? 'success' : 'warning');
-              alertCooldowns.set(key, now);
-            }
-          }
-        }
-      }
-
-      // 2. Check FVGs
-      if (STATE.chartData.fvgs) {
-        for (const fvg of STATE.chartData.fvgs) {
-          const isBull = fvg.type === 'bullish';
-          const hit = isBull
-            ? (price <= fvg.high && price >= fvg.low)
-            : (price >= fvg.low && price <= fvg.high);
-
-          if (hit) {
-            const key = `fvg_${fvg.time}`;
-            if (!alertCooldowns.has(key) || now - alertCooldowns.get(key) > 30000) {
-              showToast(`${STATE.symbol} hit ${isBull ? 'Bullish' : 'Bearish'} FVG @ ${formatPrice(price)}`, isBull ? 'success' : 'warning');
-              alertCooldowns.set(key, now);
-            }
-          }
-        }
-      }
+      // Removed Bullish/Bearish OB and FVG alerts as requested
     }
 
     // ============================================================
@@ -1691,50 +1852,14 @@
     // ============================================================
 
     function clearIndicators() {
-      [indicatorSeries.ema7, indicatorSeries.ema22, indicatorSeries.ema200,
-       indicatorSeries.vwap,
-       indicatorSeries.curvedUpper, indicatorSeries.curvedLower,
-       indicatorSeries.dailyOP, indicatorSeries.dailyPDH, indicatorSeries.dailyPDL,
-       indicatorSeries.premiumSeries, indicatorSeries.discountSeries, indicatorSeries.midSeries]
-        .forEach(s => { if (s) chart.removeSeries(s); });
-
-      indicatorSeries.obSeries.forEach(s => chart.removeSeries(s));
-      indicatorSeries.fvgSeries.forEach(s => chart.removeSeries(s));
-
-      indicatorSeries.keyLevelLines.forEach(line => {
-        if (line.series) chart.removeSeries(line.series);
+      Object.values(indicatorSeries).forEach(series => {
+        if (Array.isArray(series)) {
+          series.forEach(s => { if (s) chart.removeSeries(s); });
+        } else if (series) {
+          chart.removeSeries(series);
+        }
       });
-
-      indicatorSeries.eqhEqlLines.forEach(line => {
-        if (line.series) chart.removeSeries(line.series);
-      });
-
-      indicatorSeries.chochBmsLines.forEach(line => {
-        if (line.series) chart.removeSeries(line.series);
-      });
-
-      indicatorSeries.strongWeakLines.forEach(line => {
-        if (line.series) chart.removeSeries(line.series);
-      });
-
-      indicatorSeries.ema7 = null;
-      indicatorSeries.ema22 = null;
-      indicatorSeries.ema200 = null;
-      indicatorSeries.vwap = null;
-      indicatorSeries.curvedUpper = null;
-      indicatorSeries.curvedLower = null;
-      indicatorSeries.dailyOP = null;
-      indicatorSeries.dailyPDH = null;
-      indicatorSeries.dailyPDL = null;
-      indicatorSeries.obSeries = [];
-      indicatorSeries.fvgSeries = [];
-      indicatorSeries.keyLevelLines = [];
-      indicatorSeries.eqhEqlLines = [];
-      indicatorSeries.chochBmsLines = [];
-      indicatorSeries.strongWeakLines = [];
-      indicatorSeries.premiumSeries = null;
-      indicatorSeries.discountSeries = null;
-      indicatorSeries.midSeries = null;
+      indicatorSeries = {};
       allMarkers = [];
     }
 
@@ -1764,38 +1889,16 @@
       // Build markers for swings and labels
       buildMarkers(data);
 
-      // EMA lines
-      renderEMALines(data);
-
-      // VWAP
-      renderVWAP(data);
-
-      // Curved Structure Bands (Zeiierman)
-      renderCurvedBands(data);
-
-      // Daily Levels (OP, PDH, PDL)
-      renderDailyLevels(data);
-
-      // Order Blocks
-      renderOrderBlocks(data);
-
-      // Fair Value Gaps
-      renderFVGs(data);
-
-      // Key Levels
-      renderKeyLevels(data);
-
-      // Equal Highs/Lows
-      renderEQHEQL(data);
-
-      // CHoCH / BMS
-      renderCHoCHBMS(data);
-
-      // Strong/Weak Highs and Lows
-      renderStrongWeak(data);
-
-      // Premium/Discount zones
-      renderPremiumDiscount(data);
+    function renderIndicators(data) {
+      Object.entries(INDICATOR_REGISTRY).forEach(([id, config]) => {
+        if (data[config.dataKey] || (config.type === 'collection' && data.candles)) {
+          const result = config.render(chart, data);
+          if (result) {
+            indicatorSeries[id] = result;
+          }
+        }
+      });
+    }
 
       // Update trend box and range info
       updateTrendBox(data);
@@ -2451,64 +2554,45 @@
     }
 
     function applyToggleVisibility() {
-      // Markers
-      applyMarkers();
+      Object.entries(INDICATOR_REGISTRY).forEach(([id, config]) => {
+        const el = document.getElementById(`tog-${id}`);
+        const isVisible = el ? el.checked : config.visible;
+        const series = indicatorSeries[id];
+        if (!series) return;
 
-      // EMAs
-      setSeriesVisible(indicatorSeries.ema7, document.getElementById('tog-ema7').checked);
-      setSeriesVisible(indicatorSeries.ema22, document.getElementById('tog-ema22').checked);
-      setSeriesVisible(indicatorSeries.ema200, document.getElementById('tog-ema200').checked);
-      setSeriesVisible(indicatorSeries.vwap, document.getElementById('tog-vwap').checked);
-      const curvedEl = document.getElementById('tog-curved');
-      const isCurvedOn = curvedEl ? curvedEl.checked : false;
-      setSeriesVisible(indicatorSeries.curvedUpper, isCurvedOn);
-      setSeriesVisible(indicatorSeries.curvedLower, isCurvedOn);
-
-      // Daily Levels (OP, PDH, PDL)
-      const isDailyOn = document.getElementById('tog-dailylvl').checked;
-      setSeriesVisible(indicatorSeries.dailyOP, isDailyOn);
-      setSeriesVisible(indicatorSeries.dailyPDH, isDailyOn);
-      setSeriesVisible(indicatorSeries.dailyPDL, isDailyOn);
-
-      // OB
-      const isOBOn = document.getElementById('tog-ob').checked;
-      indicatorSeries.obSeries.forEach(s => setSeriesVisible(s, isOBOn));
-
-      // FVG
-      const isFVGOn = document.getElementById('tog-fvg').checked;
-      indicatorSeries.fvgSeries.forEach(s => setSeriesVisible(s, isFVGOn));
-
-      // Key Levels
-      const isLevelsOn = document.getElementById('tog-levels').checked;
-      indicatorSeries.keyLevelLines.forEach(l => setSeriesVisible(l.series, isLevelsOn));
-
-      // EQH/EQL
-      const isEqOn = document.getElementById('tog-eqheql').checked;
-      indicatorSeries.eqhEqlLines.forEach(l => setSeriesVisible(l.series, isEqOn));
-
-      // CHoCH/BMS
-      const isChochOn = document.getElementById('tog-choch').checked;
-      indicatorSeries.chochBmsLines.forEach(l => setSeriesVisible(l.series, isChochOn));
-
-      // Strong/Weak
-      const isSwOn = document.getElementById('tog-strongweak').checked;
-      indicatorSeries.strongWeakLines.forEach(l => setSeriesVisible(l.series, isSwOn));
-
-      // Premium/Discount
-      const isPdOn = document.getElementById('tog-premium').checked;
-      setSeriesVisible(indicatorSeries.premiumSeries, isPdOn);
-      setSeriesVisible(indicatorSeries.discountSeries, isPdOn);
-      setSeriesVisible(indicatorSeries.midSeries, isPdOn);
+        if (Array.isArray(series)) {
+          series.forEach(s => { if (s) setSeriesVisible(s, isVisible); });
+        } else {
+          setSeriesVisible(series, isVisible);
+        }
+      });
     }
 
-    // ============================================================
-    // Coin List
-    // ============================================================
+    function initIndicatorUI() {
+      const container = document.getElementById('ind-list');
+      if (!container) return;
+
+      container.innerHTML = Object.entries(INDICATOR_REGISTRY).map(([id, config]) => {
+        return `
+          <label class="ind-toggle">
+            <input type="checkbox" id="tog-${id}" ${config.visible ? 'checked' : ''}>
+            ${config.name}
+          </label>
+        `;
+      }).join('');
+
+      // Attach listeners
+      Object.keys(INDICATOR_REGISTRY).forEach(id => {
+        const el = document.getElementById(`tog-${id}`);
+        if (el) el.addEventListener('change', applyToggleVisibility);
+      });
+    }
+
 
     function formatPrice(price) {
       if (price >= 1000) return price.toFixed(2);
       if (price >= 1) return price.toFixed(4);
-      if (price >= 0.01) return price.toFixed(6);
+      if (price >= 0.001) return price.toFixed(6);
       return price.toFixed(8);
     }
 
@@ -2821,10 +2905,14 @@
     // ============================================================
 
     function setupEventListeners() {
+      // Initialize Indicator UI
+      initIndicatorUI();
+
       // Mobile sidebar toggles
       const overlay = document.getElementById('mobile-overlay');
       const leftSidebar = document.getElementById('left-sidebar');
       const rightSidebar = document.getElementById('right-sidebar');
+
 
       function closeMobilePanels() {
         leftSidebar.classList.remove('mobile-open');
