@@ -975,7 +975,7 @@
           </div>
           <div class="ind-section-label" style="margin-top:4px;">Add Script / Indicator</div>
           <div class="ind-script-input-wrap">
-            <input type="text" id="script-name-input" class="ind-script-input" placeholder="e.g. ema(close, 50) or Bollinger Bands">
+            <input type="text" id="script-name-input" class="ind-script-input" placeholder="e.g. ema(close, 50) or Bollinger Bands" maxlength="50">
             <button id="btn-add-script" class="ind-script-add-btn" onclick="event.stopPropagation(); addCustomScript();">+</button>
           </div>
           <div class="ind-section-label" style="font-size:0.55rem;color:var(--color-fg-subtle);padding-top:0;">Type a formula like ema(close, 50) or a preset name like Bollinger Bands</div>
@@ -2227,6 +2227,7 @@
       var indBtn = document.getElementById('btn-indicators');
       var name = scriptInput.value.trim();
       if (!name) { showToast('Type a formula or indicator name', 'warning'); scriptInput.focus(); return; }
+      if (name.length > 50) { showToast('Max 50 characters', 'warning'); return; }
 
       // Try parsing as formula first, then as preset name
       var parsed = FormulaParser.parse(name);
