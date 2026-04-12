@@ -4,7 +4,7 @@
     {
       "name": "static",
       "runtimeExecutable": "npx",
-      "runtimeArgs": ["serve", "public", "-l", "3099", "--no-clipboard"],
+      "runtimeArgs": ["serve", "public", "-l", "3099", "--no-clipboard", "--no-request-logging", "-c", "0"],
       "port": 3099
     }
   ]

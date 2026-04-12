@@ -84,7 +84,8 @@ Return ONLY a JSON object: {"direction": "...", "target": 0.0, "confidence": 0-1
         agentName: persona.name,
         systemPrompt: persona.prompt,
         userMessage: userMessage,
-        context: { symbol, seeds }
+        context: { symbol, seeds },
+        complexity: 'medium',
       });
 
       // Extract JSON from response

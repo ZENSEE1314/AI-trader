@@ -2,18 +2,21 @@
 // AI Brain — Multi-provider AI for agent intelligence
 //
 // Supports:
-//   1. Anthropic Claude — set ANTHROPIC_API_KEY
+//   1. Ollama (Local) — set OLLAMA_URL
+//      - OLLAMA_MODEL for normal tasks (default: gemma3:4b)
+//      - OLLAMA_MODEL_HIGH for complex tasks (default: gemma4:31b-cloud)
 //   2. Google Gemini (fallback) — set GOOGLE_AI_KEY
+//   3. Anthropic Claude (premium) — set ANTHROPIC_API_KEY
 //
-// Priority: Local LLM (Ollama) -> Google Gemini (Free) -> Anthropic Claude (Premium)
-// Local LLM is used for general tasks, higher tiers for complex tasks or when local fails.
+// Priority: Ollama (Local) -> Google Gemini (Free) -> Anthropic Claude (Premium)
+// All agents run on Ollama by default. Complex tasks use the high model.
+// No API keys required — Ollama handles everything locally.
 // ============================================================
 
 const hermes = require('../hermes-bridge');
 
 let googleClient = null;
 let anthropicClient = null;
-let ollamaClient = null;
 
 // Rate limiting — max 10 requests per minute for free tier
 const requestLog = [];
@@ -36,12 +39,10 @@ function getCached(key) {
 }
 
 function getProvider(complexity = 'low') {
-  // Priority 1: Local LLM (Ollama) - Always first for low/medium tasks
+  // Priority 1: Ollama (Local) — handles ALL complexity levels
+  // Low/medium tasks use OLLAMA_MODEL, high tasks use OLLAMA_MODEL_HIGH
   if (process.env.OLLAMA_URL) {
-    if (complexity === 'low' || complexity === 'medium') {
-      return 'ollama';
-    }
-    // For high complexity, we still check local first but can upgrade
+    return 'ollama';
   }
 
   // Priority 2: Google Gemini (Free/Medium)
@@ -50,10 +51,10 @@ function getProvider(complexity = 'low') {
       const { GoogleGenerativeAI } = require('@google/generative-ai');
       googleClient = new GoogleGenerativeAI(process.env.GOOGLE_AI_KEY);
     }
-    if (complexity !== 'high') return 'google';
+    return 'google';
   }
 
-  // Priority 3: Anthropic Claude (Premium/High)
+  // Priority 3: Anthropic Claude (Premium)
   if (process.env.ANTHROPIC_API_KEY) {
     if (!anthropicClient) {
       const Anthropic = require('@anthropic-ai/sdk');
@@ -62,20 +63,19 @@ function getProvider(complexity = 'low') {
     return 'anthropic';
   }
 
-  // Final fallback: if nothing else is available, return whatever we have
-  if (process.env.OLLAMA_URL) return 'ollama';
-  if (process.env.GOOGLE_AI_KEY) return 'google';
-  if (process.env.ANTHROPIC_API_KEY) return 'anthropic';
-
   return null;
 }
 
 function isAvailable() {
-  return !!(process.env.ANTHROPIC_API_KEY || process.env.GOOGLE_AI_KEY || process.env.OLLAMA_URL);
+  return !!(process.env.OLLAMA_URL || process.env.GOOGLE_AI_KEY || process.env.ANTHROPIC_API_KEY);
 }
 
 function getProviderName() {
-  if (process.env.OLLAMA_URL) return 'Ollama (Local)';
+  if (process.env.OLLAMA_URL) {
+    const model = process.env.OLLAMA_MODEL || 'gemma3:4b';
+    const modelHigh = process.env.OLLAMA_MODEL_HIGH || 'gemma4:31b-cloud';
+    return `Ollama (${model} / ${modelHigh})`;
+  }
   if (process.env.GOOGLE_AI_KEY) return 'Google Gemini';
   if (process.env.ANTHROPIC_API_KEY) return 'Anthropic Claude';
   return 'none';
@@ -149,7 +149,7 @@ async function think(opts) {
         if (provider === 'google') {
           text = await thinkGoogle(agentName, fullSystem, userMessage);
         } else if (provider === 'ollama') {
-          text = await thinkOllama(agentName, fullSystem, userMessage);
+          text = await thinkOllama(agentName, fullSystem, userMessage, complexity);
         } else {
           text = await thinkAnthropic(agentName, fullSystem, userMessage);
         }
@@ -214,18 +214,27 @@ async function thinkAnthropic(agentName, systemPrompt, userMessage) {
   return text;
 }
 
-async function thinkOllama(agentName, systemPrompt, userMessage) {
-  const model = process.env.OLLAMA_MODEL || 'llama3';
-  const url = process.env.OLLAMA_URL || 'http://localhost:11434/api/generate';
-  console.log(`[AI Brain] ${agentName} thinking with Local LLM (${model})...`);
+async function thinkOllama(agentName, systemPrompt, userMessage, complexity = 'low') {
+  // Dual-model: use high model for complex tasks, normal model for everything else
+  const modelNormal = process.env.OLLAMA_MODEL || 'gemma3:4b';
+  const modelHigh = process.env.OLLAMA_MODEL_HIGH || 'gemma4:31b-cloud';
+  const model = complexity === 'high' ? modelHigh : modelNormal;
+
+  // Use /api/chat endpoint for proper system/user message separation
+  const baseUrl = (process.env.OLLAMA_URL || 'http://localhost:11434').replace(/\/api\/(generate|chat)\/?$/, '');
+  const url = `${baseUrl}/api/chat`;
+  console.log(`[AI Brain] ${agentName} thinking with Ollama ${model} (${complexity})...`);
 
   try {
     const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: model,
-        prompt: `${systemPrompt}\n\nUser: ${userMessage}`,
+        model,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userMessage },
+        ],
         stream: false,
       }),
     });
@@ -235,9 +244,9 @@ async function thinkOllama(agentName, systemPrompt, userMessage) {
     }
 
     const data = await response.json();
-    const text = data.response;
+    const text = data.message?.content || null;
     console.log(`[AI Brain] ${agentName} responded: ${text ? text.substring(0, 80) + '...' : 'EMPTY'}`);
-    return text || null;
+    return text;
   } catch (err) {
     console.error(`[AI Brain] Ollama Error: ${err.message}`);
     throw err;

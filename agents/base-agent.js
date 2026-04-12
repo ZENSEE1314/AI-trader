@@ -297,6 +297,7 @@ class BaseAgent {
         systemPrompt: enrichedPrompt,
         userMessage: question,
         context,
+        complexity: 'medium',
       });
       if (aiResponse) return aiResponse;
     }

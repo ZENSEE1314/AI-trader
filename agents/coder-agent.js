@@ -338,6 +338,7 @@ class CoderAgent extends BaseAgent {
         systemPrompt: 'You are a precision code-fixing AI. Respond ONLY with valid JSON. No markdown.',
         userMessage: prompt,
         context: {},
+        complexity: 'high',
       });
       const jsonMatch = response.match(/\{[\s\S]*\}/);
       return jsonMatch ? JSON.parse(jsonMatch[0]) : null;
@@ -547,6 +548,7 @@ Rules:
         systemPrompt: 'You are a code maintenance AI. Respond ONLY with valid JSON. No markdown.',
         userMessage: prompt,
         context: {},
+        complexity: 'high',
       });
 
       if (!response) return { summary: 'AI returned no response', patches: [] };

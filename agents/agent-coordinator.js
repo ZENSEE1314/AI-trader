@@ -1088,13 +1088,15 @@ class AgentCoordinator extends BaseAgent {
         systemPrompt += `\n\nCRITICAL: This is a "Why/How/Pattern" query. Use Chain-of-Thought reasoning:\n1. Analyze the provided context (trades, positions, signals, and learned_traps).\n2. Compare current state with the strategy rules (SMC, Kronos, Risk) and the learned penalties.\n3. Explain the specific logic that led to these actions or why a specific pattern is being penalized.\n4. If the bot made a mistake, identify exactly which rule was bypassed or how the Pattern DNA system is correcting it.`;
       }
 
-      const aiReply = await think({ agentName, systemPrompt, userMessage: message, context });
+      // Use high complexity for deep reasoning (why/how/pattern queries) and coordinator-level analysis
+      const isDeepQuery = text.includes('why') || text.includes('how') || text.includes('pattern') || text.includes('analyze');
+      const aiReply = await think({ agentName, systemPrompt, userMessage: message, context, complexity: isDeepQuery ? 'high' : 'medium' });
       if (aiReply) return { from: agentName, message: aiReply };
     }
 
     // ── Fallback: no API key — use hardcoded explain() ──
     if (/^(help|what can you|commands)/.test(text)) {
-      return { from: 'Coordinator', message: 'Set ANTHROPIC_API_KEY on Railway for smart AI responses.\n\nCommands that always work:\n• scan now\n• status / team\n• pause/resume <agent>\n• audit trades\n• create agent to watch BTCUSDT\n• help' };
+      return { from: 'Coordinator', message: 'Set OLLAMA_URL (e.g. http://localhost:11434) for AI responses. No API key needed — runs locally with Ollama.\n\nCommands that always work:\n• scan now\n• status / team\n• pause/resume <agent>\n• audit trades\n• create agent to watch BTCUSDT\n• help' };
     }
     // Route to agent explain fallback
     let fallbackAgent = null;
@@ -1114,7 +1116,7 @@ class AgentCoordinator extends BaseAgent {
     }
     if (fallbackAgent) return { from: fallbackAgent.name, message: await fallbackAgent.explain(message) };
 
-    return { from: 'Coordinator', message: `Set **ANTHROPIC_API_KEY** on Railway for AI-powered responses. Without it, I can only run commands like "scan now", "status", "audit trades", etc. Type "help" for the full list.` };
+    return { from: 'Coordinator', message: `Set **OLLAMA_URL** (e.g. http://localhost:11434) for AI-powered responses. No API key needed — runs locally with Ollama.\n\nWithout it, I can only run commands like "scan now", "status", "audit trades", etc. Type "help" for the full list.` };
   }
 
   async _getSignalAdjustment(agent, signalText, apiKeyId = null) {
@@ -1143,7 +1145,8 @@ class AgentCoordinator extends BaseAgent {
         context: {
           health: agent.getHealth(),
           recentActivity: agent.getActivity(5)
-        }
+        },
+        complexity: 'high',
       });
 
       // Attempt to parse JSON from response
