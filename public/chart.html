@@ -2268,6 +2268,16 @@
       localStorage.setItem('mct_closed_oscillators', JSON.stringify(list));
     }
 
+    function getOscillatorSizes() {
+      var saved = localStorage.getItem('mct_oscillator_sizes');
+      return saved ? JSON.parse(saved) : {};
+    }
+    function saveOscillatorSize(label, height) {
+      var sizes = getOscillatorSizes();
+      sizes[label] = height;
+      localStorage.setItem('mct_oscillator_sizes', JSON.stringify(sizes));
+    }
+
     function destroyPanel(idx) {
       var p = chartPanels[idx];
       p.subCharts.forEach(function(sc) { if (sc.chart) sc.chart.remove(); if (sc.container) sc.container.remove(); });
@@ -2640,11 +2650,13 @@
         } else if (result.type === 'oscillator') {
           // Skip if user previously closed this oscillator
           if (getClosedOscillators().indexOf(result.label) >= 0) return;
-          // Create sub-chart
+          // Create sub-chart — restore saved height or default 80
+          var savedSizes = getOscillatorSizes();
+          var subH = savedSizes[result.label] || 80;
           var subDiv = document.createElement('div');
           subDiv.className = 'sub-chart-container';
           subDiv.style.position = 'relative';
-          subDiv.style.height = '80px';
+          subDiv.style.height = subH + 'px';
           panelBody.appendChild(subDiv);
 
           var labelEl = document.createElement('div');
@@ -2668,7 +2680,7 @@
 
           var subChart = LightweightCharts.createChart(subDiv, Object.assign({}, CHART_THEME, {
             width: subDiv.clientWidth || panelBody.clientWidth,
-            height: 80,
+            height: subH,
           }));
 
           // Close handler — persist so it stays closed on reapply
@@ -2682,8 +2694,8 @@
             });
           })(subDiv, subChart, result.label);
 
-          // Drag-to-resize handler
-          (function(sd, sc) {
+          // Drag-to-resize handler — saves height to localStorage on release
+          (function(sd, sc, lbl) {
             var startY, startH;
             function onMouseMove(e) {
               var newH = Math.max(40, startH + (e.clientY - startY));
@@ -2695,6 +2707,7 @@
               document.removeEventListener('mouseup', onMouseUp);
               document.body.style.userSelect = '';
               document.body.style.cursor = '';
+              saveOscillatorSize(lbl, sd.offsetHeight);
             }
             resizeHandle.addEventListener('mousedown', function(e) {
               e.preventDefault();
@@ -2705,7 +2718,7 @@
               document.addEventListener('mousemove', onMouseMove);
               document.addEventListener('mouseup', onMouseUp);
             });
-          })(subDiv, subChart);
+          })(subDiv, subChart, result.label);
           subChart.priceScale('right').applyOptions({ scaleMargins: { top: 0.1, bottom: 0.1 } });
           subChart.timeScale().applyOptions({ visible: false });
 
