@@ -496,6 +496,9 @@
       flex-direction: column;
     }
     .main-chart-container { flex: 3; min-height: 0; }
+    .tv-lightweight-charts a[href*="tradingview"],
+    .main-chart-container a[href*="tradingview"],
+    [class*="chart"] a[href*="tradingview"] { display: none !important; }
     .sub-chart-container { flex: 1; min-height: 0; border-top: 1px solid var(--color-border-muted); }
     .sub-chart-label {
       position: absolute; top: 2px; left: 6px; font-size: 0.55rem;
@@ -1592,6 +1595,231 @@
 
         return { trend: trend, trendLines: trendLines, markers: markers };
       },
+
+      dtfxZones: function(candles, structureLen, fibLevels) {
+        structureLen = structureLen || 10;
+        fibLevels = fibLevels || [0.3, 0.5, 0.7];
+
+        var markers = [];
+        var zones = [];
+        var dir = 0;
+        var tPrice = null, tBar = -1, prevTPrice = null;
+        var bPrice = null, bBar = -1, prevBPrice = null;
+        var bosUpCheck = false, bosDownCheck = false;
+        var lastTop = '', lastBot = '';
+        var tDir = 0;
+
+        for (var i = structureLen; i < candles.length; i++) {
+          // Calculate highest/lowest over structureLen bars
+          var upper = -Infinity, lower = Infinity;
+          for (var j = i - structureLen; j <= i; j++) {
+            if (candles[j].high > upper) upper = candles[j].high;
+            if (candles[j].low < lower) lower = candles[j].low;
+          }
+
+          var topConf = false, botConf = false;
+
+          if (dir >= 0 && candles[i - structureLen].high > upper) {
+            // Actually check if bar at i-structureLen was the highest
+            var isHighest = true;
+            for (var j = i - structureLen * 2; j <= i; j++) {
+              if (j < 0 || j === i - structureLen) continue;
+              if (j < candles.length && candles[j].high >= candles[i - structureLen].high) { isHighest = false; break; }
+            }
+            if (isHighest) { dir = -1; topConf = true; }
+          }
+
+          if (dir <= 0 && candles[i - structureLen].low < lower) {
+            var isLowest = true;
+            for (var j = i - structureLen * 2; j <= i; j++) {
+              if (j < 0 || j === i - structureLen) continue;
+              if (j < candles.length && candles[j].low <= candles[i - structureLen].low) { isLowest = false; break; }
+            }
+            if (isLowest) { dir = 1; botConf = true; }
+          }
+
+          // Use simpler pivot detection as fallback
+          if (!topConf && !botConf) {
+            var pivotIdx = i - structureLen;
+            if (pivotIdx >= structureLen && pivotIdx < candles.length - structureLen) {
+              var isPivotHigh = true, isPivotLow = true;
+              for (var j = 1; j <= structureLen; j++) {
+                if (pivotIdx - j >= 0 && candles[pivotIdx].high <= candles[pivotIdx - j].high) isPivotHigh = false;
+                if (pivotIdx + j < candles.length && candles[pivotIdx].high <= candles[pivotIdx + j].high) isPivotHigh = false;
+                if (pivotIdx - j >= 0 && candles[pivotIdx].low >= candles[pivotIdx - j].low) isPivotLow = false;
+                if (pivotIdx + j < candles.length && candles[pivotIdx].low >= candles[pivotIdx + j].low) isPivotLow = false;
+              }
+              if (isPivotHigh) { topConf = true; dir = -1; }
+              if (isPivotLow) { botConf = true; dir = 1; }
+            }
+          }
+
+          if (topConf) {
+            prevTPrice = tPrice;
+            tPrice = candles[i - structureLen].high;
+            tBar = i - structureLen;
+            bosUpCheck = true;
+
+            var label = '';
+            if (prevTPrice !== null) {
+              if (tPrice > prevTPrice) { label = 'HH'; lastTop = 'HH'; }
+              else if (tPrice < prevTPrice) { label = 'LH'; lastTop = 'LH'; }
+              else { label = lastTop || 'EQ'; }
+            }
+            if (label) {
+              markers.push({
+                time: candles[tBar].time, position: 'aboveBar',
+                color: label === 'HH' ? '#34d399' : '#f43f5e',
+                shape: 'circle', text: label,
+              });
+            }
+          }
+
+          if (botConf) {
+            prevBPrice = bPrice;
+            bPrice = candles[i - structureLen].low;
+            bBar = i - structureLen;
+            bosDownCheck = true;
+
+            var label = '';
+            if (prevBPrice !== null) {
+              if (bPrice > prevBPrice) { label = 'HL'; lastBot = 'HL'; }
+              else if (bPrice < prevBPrice) { label = 'LL'; lastBot = 'LL'; }
+              else { label = lastBot || 'EQ'; }
+            }
+            if (label) {
+              markers.push({
+                time: candles[bBar].time, position: 'belowBar',
+                color: label === 'HL' ? '#34d399' : '#f43f5e',
+                shape: 'circle', text: label,
+              });
+            }
+          }
+
+          // BOS / CHoCH detection
+          var close = candles[i].close;
+          var chochUp = tPrice !== null && close > tPrice && candles[i].high >= upper && tDir <= 0;
+          var chochDown = bPrice !== null && close < bPrice && candles[i].low <= lower && tDir >= 0;
+
+          if (chochUp) tDir = 1;
+          if (chochDown) tDir = -1;
+
+          var bosUp = tPrice !== null && close > tPrice && bosUpCheck && tDir >= 0;
+          var bosDown = bPrice !== null && close < bPrice && bosDownCheck && tDir <= 0;
+
+          var mssUp = bosUp || chochUp;
+          var mssDown = bosDown || chochDown;
+
+          if (mssUp && tBar >= 0) {
+            bosUpCheck = false;
+            var zoneTop = tPrice;
+            var zoneBot = dir === -1 ? lower : (bPrice || lower);
+            var fibs = fibLevels.map(function(fl) {
+              return zoneBot + (zoneTop - zoneBot) * fl;
+            });
+            zones.push({
+              type: 'bull', startTime: candles[tBar].time, endTime: candles[i].time,
+              top: zoneTop, bottom: zoneBot, fibs: fibs,
+            });
+          }
+
+          if (mssDown && bBar >= 0) {
+            bosDownCheck = false;
+            var zoneTop = dir === 1 ? upper : (tPrice || upper);
+            var zoneBot = bPrice;
+            var fibs = fibLevels.map(function(fl) {
+              return zoneTop - (zoneTop - zoneBot) * fl;
+            });
+            zones.push({
+              type: 'bear', startTime: candles[bBar].time, endTime: candles[i].time,
+              top: zoneTop, bottom: zoneBot, fibs: fibs,
+            });
+          }
+        }
+
+        return { markers: markers, zones: zones };
+      },
+
+      vsa: function(candles, minEffectBars, vmaPeriod, scanRange) {
+        minEffectBars = minEffectBars || 5;
+        vmaPeriod = vmaPeriod || 20;
+        scanRange = Math.min(scanRange || 500, candles.length - 1);
+
+        var vmaData = this.sma(candles.map(function(c) { return c.volume; }), vmaPeriod);
+        var boxes = [];
+        var efforts = [];
+
+        for (var i = vmaPeriod + 2; i < candles.length; i++) {
+          // Detect: volume crossed under vma at i-1 and still below at i
+          var prevVol = candles[i - 1].volume;
+          var prevPrevVol = candles[i - 2].volume;
+          var prevVma = vmaData[i - 1];
+          var prevPrevVma = vmaData[i - 2];
+          if (prevVma === null || prevPrevVma === null) continue;
+
+          var crossedUnder = prevPrevVol >= prevPrevVma && prevVol < prevVma;
+          if (!crossedUnder || candles[i].volume >= (vmaData[i] || 0)) continue;
+
+          // Scan backwards to collect volume event bars (where vol >= vma)
+          var volData = [];
+          var maxScan = Math.min(scanRange, i - 2);
+          for (var j = 2; j <= maxScan + 1; j++) {
+            var idx = i - j;
+            if (idx < 0) break;
+            volData.push({ vol: candles[idx].volume, vma: vmaData[idx] || 0, idx: idx });
+          }
+
+          // Filter: trim to first consecutive block above vma from the start
+          var filtered = [];
+          for (var k = 0; k < volData.length; k++) {
+            if (volData[k].vol < volData[k].vma) {
+              if (k + 1 < volData.length && volData[k + 1].vol < volData[k + 1].vma) break;
+            }
+            filtered.push(volData[k]);
+          }
+
+          if (filtered.length < minEffectBars) continue;
+
+          // Calculate box boundaries and effort
+          var startIdx = filtered[filtered.length - 1].idx;
+          var endIdx = i - 1;
+          var totalVol = 0;
+          var boxHigh = -Infinity;
+          var boxLow = Infinity;
+
+          for (var k = 0; k < filtered.length; k++) {
+            totalVol += filtered[k].vol;
+          }
+
+          for (var k = startIdx; k <= endIdx && k < candles.length; k++) {
+            if (candles[k].high > boxHigh) boxHigh = candles[k].high;
+            if (candles[k].low < boxLow) boxLow = candles[k].low;
+          }
+
+          var priceRange = Math.abs(candles[endIdx].close - candles[startIdx].open);
+          var effort = priceRange > 0 ? totalVol / priceRange : 0;
+          var isBull = candles[endIdx].close >= candles[startIdx].open;
+
+          // Divergence/convergence vs last effort
+          var signal = 'neutral';
+          if (efforts.length > 0) {
+            var lastEffort = efforts[efforts.length - 1];
+            if (effort > lastEffort) signal = 'divergence';
+            else if (effort < lastEffort) signal = 'convergence';
+          }
+
+          if (effort > 0) efforts.push(effort);
+
+          boxes.push({
+            startTime: candles[startIdx].time,
+            endTime: candles[endIdx].time,
+            high: boxHigh, low: boxLow,
+            isBull: isBull, signal: signal,
+          });
+        }
+
+        return { boxes: boxes, vma: vmaData };
+      },
     };
 
     // ============================================================
@@ -1621,9 +1849,17 @@
         'hh hl': 'trendstructure(5, 5)',
         'lh ll': 'trendstructure(5, 5)',
         'market structure': 'trendstructure(5, 5)',
+        'dtfx': 'dtfxzones(10)',
+        'dtfx zones': 'dtfxzones(10)',
+        'algo zones': 'dtfxzones(10)',
+        'dtfx algo': 'dtfxzones(10)',
+        'zones': 'dtfxzones(10)',
+        'vsa': 'vsa(5, 20)',
+        'volume spread': 'vsa(5, 20)',
+        'volume spread analysis': 'vsa(5, 20)',
       },
 
-      OVERLAY_FNS: ['ema', 'sma', 'wma', 'hma', 'vwap', 'bb', 'supertrend', 'psar', 'ichimoku', 'donchian', 'trendstructure'],
+      OVERLAY_FNS: ['ema', 'sma', 'wma', 'hma', 'vwap', 'bb', 'supertrend', 'psar', 'ichimoku', 'donchian', 'trendstructure', 'dtfxzones', 'vsa'],
       OSCILLATOR_FNS: ['rsi', 'macd', 'stoch', 'atr', 'obv', 'mfi', 'cci', 'momentum'],
 
       parse: function(input) {
@@ -1708,6 +1944,14 @@
           case 'trendstructure': {
             var ts = Calc.trendStructure(candles, a[0] || 5, a[1] || 5);
             return { type: 'overlay', label: 'Trend Structure', trendStructureData: ts };
+          }
+          case 'dtfxzones': {
+            var dz = Calc.dtfxZones(candles, a[0] || 10);
+            return { type: 'overlay', label: 'DTFX Zones', dtfxData: dz };
+          }
+          case 'vsa': {
+            var vsaResult = Calc.vsa(candles, a[0] || 5, a[1] || 20);
+            return { type: 'overlay', label: 'VSA', vsaData: vsaResult };
           }
 
           case 'rsi': return { type: 'oscillator', label: 'RSI(' + (a[1] || 14) + ')', data: Calc.rsi(getSrc(a[0] || 'close'), a[1] || 14), color: '#a78bfa', range: [0, 100], levels: [30, 70] };
@@ -1850,6 +2094,7 @@
       crosshair: { mode: LightweightCharts.CrosshairMode.Normal, vertLine: { color: 'rgba(212,175,55,0.3)', labelBackgroundColor: '#d4af37' }, horzLine: { color: 'rgba(212,175,55,0.3)', labelBackgroundColor: '#d4af37' } },
       rightPriceScale: { borderColor: '#2a2438' },
       timeScale: { borderColor: '#2a2438', timeVisible: true, secondsVisible: false },
+      watermark: { visible: false },
     };
 
     var CANDLE_OPTIONS = {
@@ -1993,6 +2238,198 @@
               var allMarkers = existingMarkers.concat(tsd.markers);
               allMarkers.sort(function(a, b) { return a.time - b.time; });
               p.candleSeries.setMarkers(allMarkers);
+            }
+
+          } else if (result.dtfxData) {
+            // DTFX Algo Zones: zone boxes + fib lines + HH/HL/LH/LL markers
+            var dzd = result.dtfxData;
+
+            // Draw zone boxes as area between two lines
+            dzd.zones.forEach(function(zone) {
+              var isBull = zone.type === 'bull';
+              var topColor = isBull ? 'rgba(52,211,153,0.15)' : 'rgba(244,63,94,0.15)';
+              var lineColor = isBull ? 'rgba(52,211,153,0.4)' : 'rgba(244,63,94,0.4)';
+
+              // Top boundary line
+              var topLine = p.chart.addLineSeries({
+                color: lineColor, lineWidth: 1, lineStyle: 2,
+                priceLineVisible: false, lastValueVisible: false,
+                crosshairMarkerVisible: false,
+              });
+              // Bottom boundary as area series for fill
+              var areaS = p.chart.addAreaSeries({
+                topColor: topColor, bottomColor: 'transparent',
+                lineColor: lineColor, lineWidth: 1, lineStyle: 2,
+                priceLineVisible: false, lastValueVisible: false,
+                crosshairMarkerVisible: false,
+              });
+
+              // Build data points spanning the zone time range
+              var zoneData = [];
+              var areaData = [];
+              for (var ci = 0; ci < p.candles.length; ci++) {
+                var t = p.candles[ci].time;
+                if (t >= zone.startTime && t <= zone.endTime) {
+                  zoneData.push({ time: t, value: zone.top });
+                  areaData.push({ time: t, value: zone.top });
+                }
+              }
+              // Extend zone to the right edge
+              if (zoneData.length > 0) {
+                var lastCandle = p.candles[p.candles.length - 1];
+                if (lastCandle.time > zone.endTime) {
+                  zoneData.push({ time: lastCandle.time, value: zone.top });
+                  areaData.push({ time: lastCandle.time, value: zone.top });
+                }
+              }
+
+              topLine.setData(zoneData);
+              areaS.setData(areaData);
+              p.overlaySeries.push(topLine);
+              p.overlaySeries.push(areaS);
+
+              // Bottom boundary line
+              var botLine = p.chart.addLineSeries({
+                color: lineColor, lineWidth: 1, lineStyle: 2,
+                priceLineVisible: false, lastValueVisible: false,
+                crosshairMarkerVisible: false,
+              });
+              var botData = [];
+              for (var ci = 0; ci < p.candles.length; ci++) {
+                var t = p.candles[ci].time;
+                if (t >= zone.startTime) {
+                  botData.push({ time: t, value: zone.bottom });
+                }
+              }
+              if (botData.length > 0) {
+                var lastCandle = p.candles[p.candles.length - 1];
+                if (lastCandle.time > zone.endTime && botData[botData.length - 1].time !== lastCandle.time) {
+                  botData.push({ time: lastCandle.time, value: zone.bottom });
+                }
+              }
+              botLine.setData(botData);
+              p.overlaySeries.push(botLine);
+
+              // Fib level lines inside the zone
+              var fibColors = ['rgba(251,191,36,0.4)', 'rgba(167,139,250,0.5)', 'rgba(251,191,36,0.4)'];
+              zone.fibs.forEach(function(fv, fi) {
+                var fibLine = p.chart.addLineSeries({
+                  color: fibColors[fi] || 'rgba(167,139,250,0.3)', lineWidth: 1, lineStyle: 3,
+                  priceLineVisible: false, lastValueVisible: false,
+                  crosshairMarkerVisible: false,
+                });
+                var fibData = [];
+                for (var ci = 0; ci < p.candles.length; ci++) {
+                  var t = p.candles[ci].time;
+                  if (t >= zone.startTime) {
+                    fibData.push({ time: t, value: fv });
+                  }
+                }
+                if (fibData.length > 0) {
+                  var lastCandle = p.candles[p.candles.length - 1];
+                  if (lastCandle.time > zone.endTime && fibData[fibData.length - 1].time !== lastCandle.time) {
+                    fibData.push({ time: lastCandle.time, value: fv });
+                  }
+                }
+                fibLine.setData(fibData);
+                p.overlaySeries.push(fibLine);
+              });
+            });
+
+            // Add HH/HL/LH/LL markers
+            if (dzd.markers.length && p.candleSeries) {
+              var existingMarkers = [];
+              try { existingMarkers = p.candleSeries.markers() || []; } catch(_) {}
+              var allMarkers = existingMarkers.concat(dzd.markers);
+              allMarkers.sort(function(a, b) { return a.time - b.time; });
+              p.candleSeries.setMarkers(allMarkers);
+            }
+
+          } else if (result.vsaData) {
+            // Volume Spread Analysis: boxes for volume events + VMA overlay
+            var vsa = result.vsaData;
+
+            // Draw effect boxes
+            vsa.boxes.forEach(function(box) {
+              var bullColor = 'rgba(0,255,187,';
+              var bearColor = 'rgba(255,17,0,';
+              var baseColor = box.isBull ? bullColor : bearColor;
+
+              // Top line of box
+              var topLine = p.chart.addLineSeries({
+                color: baseColor + '0.5)', lineWidth: 1, lineStyle: 0,
+                priceLineVisible: false, lastValueVisible: false,
+                crosshairMarkerVisible: false,
+              });
+              // Bottom line of box
+              var botLine = p.chart.addLineSeries({
+                color: baseColor + '0.5)', lineWidth: 1, lineStyle: 0,
+                priceLineVisible: false, lastValueVisible: false,
+                crosshairMarkerVisible: false,
+              });
+              // Area fill between top and bottom
+              var areaFill = p.chart.addAreaSeries({
+                topColor: baseColor + '0.1)', bottomColor: 'transparent',
+                lineColor: baseColor + '0.3)', lineWidth: 0,
+                priceLineVisible: false, lastValueVisible: false,
+                crosshairMarkerVisible: false,
+              });
+
+              var topData = [], botData = [], areaData = [];
+              for (var ci = 0; ci < p.candles.length; ci++) {
+                var t = p.candles[ci].time;
+                if (t >= box.startTime && t <= box.endTime) {
+                  topData.push({ time: t, value: box.high });
+                  botData.push({ time: t, value: box.low });
+                  areaData.push({ time: t, value: box.high });
+                }
+              }
+
+              topLine.setData(topData);
+              botLine.setData(botData);
+              areaFill.setData(areaData);
+              p.overlaySeries.push(topLine);
+              p.overlaySeries.push(botLine);
+              p.overlaySeries.push(areaFill);
+
+              // Signal marker at box end
+              if (box.signal !== 'neutral') {
+                var sigColor = box.signal === 'divergence' ? '#ff1100' : '#00ffbb';
+                var sigText = box.signal === 'divergence' ? 'DIV' : 'CON';
+                // Find closest candle to endTime for marker
+                for (var ci = 0; ci < p.candles.length; ci++) {
+                  if (p.candles[ci].time === box.endTime) {
+                    var existingMarkers = [];
+                    try { existingMarkers = p.candleSeries.markers() || []; } catch(_) {}
+                    existingMarkers.push({
+                      time: box.endTime,
+                      position: box.isBull ? 'belowBar' : 'aboveBar',
+                      color: sigColor, shape: 'square', text: sigText,
+                    });
+                    existingMarkers.sort(function(a, b) { return a.time - b.time; });
+                    p.candleSeries.setMarkers(existingMarkers);
+                    break;
+                  }
+                }
+              }
+            });
+
+            // Draw Volume MA as overlay line
+            if (vsa.vma) {
+              var vmaLine = p.chart.addLineSeries({
+                color: '#1848cc', lineWidth: 1,
+                priceLineVisible: false, lastValueVisible: false,
+                priceScaleId: 'vol-vsa',
+              });
+              p.chart.priceScale('vol-vsa').applyOptions({ scaleMargins: { top: 0.8, bottom: 0 }, visible: false });
+              var vmaLineData = [];
+              for (var ci = 0; ci < p.candles.length && ci < vsa.vma.length; ci++) {
+                if (vsa.vma[ci] !== null) {
+                  vmaLineData.push({ time: p.candles[ci].time, value: vsa.vma[ci] });
+                }
+              }
+              vmaLine.setData(vmaLineData);
+              p.overlaySeries.push(vmaLine);
             }
 
           } else if (result.coloredData) {
