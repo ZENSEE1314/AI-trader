@@ -1,5 +1,8 @@
 #!/usr/bin/env node
 
+// Load .env file for local development (ignored on Render where env vars are set in dashboard)
+require('dotenv').config();
+
 // Minimal entry point: bind PORT instantly for Railway healthcheck,
 // then load the full app + bot after.
 
