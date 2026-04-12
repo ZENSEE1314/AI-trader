@@ -113,7 +113,7 @@ class SentimentAgent extends BaseAgent {
     };
 
     this.addActivity('success', `Mood: ${mood} (${bullishCount}B/${bearishCount}R/${stats.neutral}N) — ${entries.length} coins`);
-    await this.gainXp(3, true);
+    // NOTE: XP awarded only when trade wins (see cycle.js)
 
     // Memory: persist mood and extreme events
     if (this.isSkillEnabled('memory')) {

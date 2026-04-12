@@ -193,7 +193,7 @@ class RiskAgent extends BaseAgent {
         approved.push(signal);
         this.signalsApproved++;
         this.addActivity('success', `Approved ${sym} ${signal.direction} score=${signal.score}`);
-        this.gainXp(5, true).catch(() => {});
+        // NOTE: XP awarded only when approved signal wins (see cycle.js)
         // Memory: remember approved signals
         if (this.isSkillEnabled('memory')) {
           this.remember(`approved_${sym}`, { direction: signal.direction, score: signal.score, ts: Date.now() }, 'approved').catch(() => {});

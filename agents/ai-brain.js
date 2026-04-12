@@ -18,9 +18,9 @@ const hermes = require('../hermes-bridge');
 let googleClient = null;
 let anthropicClient = null;
 
-// Rate limiting — max 10 requests per minute for free tier
+// Rate limiting — relaxed for Ollama (local) since it's free; tighter for cloud APIs
 const requestLog = [];
-const MAX_REQUESTS_PER_MIN = 10;
+const MAX_REQUESTS_PER_MIN = process.env.OLLAMA_URL ? 60 : 30;
 
 // Response cache — avoid duplicate API calls
 const responseCache = new Map();

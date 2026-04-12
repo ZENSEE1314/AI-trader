@@ -113,7 +113,7 @@ class StrategyAgent extends BaseAgent {
       if (isWinner) {
         this.addActivity('success', `WINNER: ${summary}`);
         this.log(`STRATEGY WINNER: ${summary}`);
-        this.gainXp(20, true).catch(() => {});
+        // NOTE: XP awarded only on winning trades (see cycle.js)
 
         // Share winning strategy with team
         if (context.coordinator) {

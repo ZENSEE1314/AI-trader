@@ -150,8 +150,7 @@ class AccountantAgent extends BaseAgent {
     };
     this.lastAuditResult = result;
     this.addActivity('success', `Audit done: ${trades.length} trades, ${issues.length} issues, ${fixed} fixed, $${totalFeeRecovered.toFixed(2)} fees recovered`);
-    await this.gainXp(10 + fixed * 5, true); // XP for auditing + bonus per fix
-    if (totalFeeRecovered > 0) await this.addEarnings(totalFeeRecovered);
+    // NOTE: XP awarded only on winning trades (see cycle.js). Earnings tracked there too.
 
     // Memory: remember audit results
     if (this.isSkillEnabled('memory')) {

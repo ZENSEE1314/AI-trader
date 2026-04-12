@@ -167,7 +167,7 @@ class TraderAgent extends BaseAgent {
         executionResult = result;
         this.tradesExecuted++;
         this.addActivity('success', `${pick.symbol} ${pick.direction} executed for users`);
-        await this.gainXp(15, true); // XP for executing a trade
+        // NOTE: XP awarded only when trade wins (see cycle.js)
         // Memory: record trade entry (DB + Hermes)
         if (this.isSkillEnabled('memory')) {
           await this.remember(`last_trade_${pick.symbol}`, {

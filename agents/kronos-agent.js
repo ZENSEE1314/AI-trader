@@ -143,7 +143,7 @@ class KronosAgent extends BaseAgent {
 
     const summary = `${results.length} simulations in ${elapsed}s — ${longs.length} LONG, ${shorts.length} SHORT, ${highConf.length} high-conf`;
     this.addActivity('success', summary);
-    await this.gainXp(5 + highConf.length * 2, true);
+    // NOTE: XP awarded only when prediction leads to winning trade (see cycle.js)
     this.currentTask = null;
 
     return {
