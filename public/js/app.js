@@ -338,7 +338,7 @@
       if (neutralEl) neutralEl.textContent = `➖ ${data.neutrals} Neutral`;
 
       if (!data.predictions || data.predictions.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--color-text-secondary);padding:20px;">No predictions yet — waiting for next cycle scan</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--color-text-secondary);padding:20px;">No predictions yet — waiting for next cycle scan</td></tr>';
         return;
       }
 
@@ -352,18 +352,27 @@
         const changeColor = changePct > 0 ? 'var(--color-success)' : changePct < 0 ? 'var(--color-danger)' : 'var(--color-text-secondary)';
         const trendColor = p.trend === 'bullish' ? 'var(--color-success)' : p.trend === 'bearish' ? 'var(--color-danger)' : 'var(--color-text-secondary)';
 
+        // Calculate Time Horizon
+        let timeHorizon = '--';
+        if (window.calculateTimeToTarget) {
+          const currentPrice = STATE.lastPrice || 0;
+          const candles = STATE.lastCandles || [];
+          timeHorizon = window.calculateTimeToTarget(currentPrice, p.predicted, candles);
+        }
+
         return `<tr>
           <td style="font-weight:600;">${p.symbol.replace('USDT', '')}</td>
           <td style="color:${dirColor};font-weight:700;">${dirIcon} ${p.direction}</td>
           <td style="color:${changeColor};font-weight:600;">${changePct > 0 ? '+' : ''}${changePct}%</td>
           <td>${confIcon} ${p.confidence}</td>
           <td style="color:${trendColor};">${p.trend}</td>
+          <td><span style="font-size:0.7rem;padding:2px 6px;border-radius:4px;background:rgba(139, 92, 246, 0.1);color:var(--color-accent);border:1px solid rgba(139, 92, 246, 0.3);font-weight:700;">${timeHorizon}</span></td>
           <td class="text-mono" style="font-size:0.75rem;">$${(p.predicted || 0).toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:6})}</td>
         </tr>`;
       }).join('');
     } catch (err) {
       console.warn('Kronos predictions:', err.message);
-      tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--color-text-secondary);padding:20px;">No predictions available — Kronos scans during trading cycles</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--color-text-secondary);padding:20px;">No predictions available — Kronos scans during trading cycles</td></tr>';
     }
   }
 
