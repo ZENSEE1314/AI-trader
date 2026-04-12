@@ -872,6 +872,11 @@ class AgentCoordinator extends BaseAgent {
       }
     }
 
+    // "Why no trade" — instant answer from DB, no AI needed
+    if (/why.*(no|not|zero|0).*(trade|trading|position|signal|open)|no.*trade.*why|not.*trading.*why/.test(text)) {
+      return this._buildWhyNoTradeChat();
+    }
+
     if (/^(status|sitrep|update)$/.test(text) || /^(what.*(doing|happening|going on))/.test(text) || /^how are (you|things|we)/.test(text)) {
       return this._buildStatusChat();
     }
@@ -1037,7 +1042,11 @@ class AgentCoordinator extends BaseAgent {
       } catch {}
 
       const systemPrompt = getSystemPrompt(agentName);
-      const aiReply = await think({ agentName, systemPrompt, userMessage: message, context, complexity: 'medium', priority: 'chat' });
+      // 20s timeout — must respond before Railway's 30s gateway timeout
+      const aiReply = await Promise.race([
+        think({ agentName, systemPrompt, userMessage: message, context, complexity: 'low', priority: 'chat' }),
+        new Promise(resolve => setTimeout(() => resolve(null), 20000)),
+      ]);
       if (aiReply) return { from: agentName, message: aiReply };
     }
 
@@ -1110,6 +1119,66 @@ class AgentCoordinator extends BaseAgent {
       return { value: 0, reasoning: 'Could not calculate adjustment.' };
     }
   }
+  _buildStatusChat() {
+    return this._buildHealthChat();
+  }
+
+  async _buildWhyNoTradeChat() {
+    const lines = ['**Why No Trades — Diagnostic Report**\n'];
+    try {
+      const { query } = require('../db');
+
+      // 1. Check open positions
+      const openTrades = await query("SELECT symbol, direction FROM trades WHERE status = 'OPEN'");
+      if (openTrades.length > 0) {
+        lines.push(`**Open positions:** ${openTrades.length} — ${openTrades.map(t => `${t.symbol.replace('USDT','')} ${t.direction}`).join(', ')}`);
+      } else {
+        lines.push(`**Open positions:** None`);
+      }
+
+      // 2. Check recent signals
+      const recentSignals = await query(
+        `SELECT symbol, direction, result, details FROM bot_logs WHERE category = 'scan' ORDER BY ts DESC LIMIT 10`
+      ).catch(() => []);
+      const signalCount = recentSignals.filter(s => s.result === 'SIGNAL').length;
+      const blockedCount = recentSignals.filter(s => s.result === 'BLOCKED' || s.result === 'REJECTED').length;
+      lines.push(`**Recent scans:** ${recentSignals.length} scans, ${signalCount} signals found, ${blockedCount} blocked by risk`);
+
+      // 3. Check last trade
+      const lastTrade = await query("SELECT symbol, direction, pnl_pct, status, created_at FROM trades ORDER BY created_at DESC LIMIT 1").catch(() => []);
+      if (lastTrade.length) {
+        const t = lastTrade[0];
+        const ago = Math.round((Date.now() - new Date(t.created_at).getTime()) / 60000);
+        lines.push(`**Last trade:** ${t.symbol.replace('USDT','')} ${t.direction} — ${t.status} ${t.pnl_pct ? `(${t.pnl_pct > 0 ? '+' : ''}${t.pnl_pct}%)` : ''} — ${ago}m ago`);
+      } else {
+        lines.push(`**Last trade:** Never — no trades executed yet`);
+      }
+
+      // 4. Check API keys
+      const apiKeys = await query("SELECT exchange, enabled FROM api_keys WHERE enabled = true").catch(() => []);
+      lines.push(`**API keys:** ${apiKeys.length} active (${apiKeys.map(k => k.exchange).join(', ') || 'none'})`);
+
+      // 5. Agent states
+      const agents = this.getHealth().agents || {};
+      const paused = Object.values(agents).filter(a => a.paused);
+      const errors = Object.values(agents).filter(a => a.errorCount > 0);
+      if (paused.length) lines.push(`**Paused agents:** ${paused.map(a => a.name).join(', ')}`);
+      if (errors.length) lines.push(`**Agents with errors:** ${errors.map(a => `${a.name} (${a.errorCount})`).join(', ')}`);
+
+      // 6. Common reasons
+      lines.push('\n**Common reasons for no trades:**');
+      if (apiKeys.length === 0) lines.push('- No API keys configured — bot cannot execute trades');
+      if (signalCount === 0) lines.push('- No signals found — market may not have valid SMC setups right now');
+      if (blockedCount > 0) lines.push(`- ${blockedCount} signals blocked by RiskAgent (max positions, correlation, or drawdown protection)`);
+      lines.push('- Strategy requires both 4H + 1H timeframes to agree on direction');
+      lines.push('- RSI guard blocks overbought longs / oversold shorts');
+      lines.push('\nType **"scan now"** to force a scan, or **"status"** to see agent states.');
+    } catch (err) {
+      lines.push(`Error fetching diagnostics: ${err.message}`);
+    }
+    return { from: 'Coordinator', message: lines.join('\n') };
+  }
+
   _buildHealthChat() {
     const h = this.getHealth();
     const agents = h.agents || {};
