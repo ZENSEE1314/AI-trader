@@ -1746,10 +1746,10 @@
         return { trend: trend, trendLines: trendLines, markers: markers };
       },
 
-      // SMC Pro — Zeiierman-style full SMC indicator
+      // SMC Pro — Zeiierman-style full SMC indicator (clean, selective)
       smcPro: function(candles, lbL, lbR) {
-        lbL = lbL || 5; lbR = lbR || 5;
-        var EQL_THRESHOLD = 0.001; // 0.1% tolerance for equal highs/lows
+        lbL = lbL || 10; lbR = lbR || 10; // wider lookback = fewer, stronger pivots
+        var EQL_THRESHOLD = 0.0004; // 0.04% tolerance — very strict equal highs/lows
         var pivotHighs = [], pivotLows = [];
         for (var i = lbL; i < candles.length - lbR; i++) {
           var isHigh = true, isLow = true;
@@ -1765,20 +1765,25 @@
           if (isLow) pivotLows.push({ idx: i, price: candles[i].low, time: candles[i].time });
         }
 
-        // Build swing sequence
+        // Build alternating swing sequence (high-low-high-low)
+        var allPivots = [];
+        pivotHighs.forEach(function(p) { allPivots.push({ type: 'high', idx: p.idx, price: p.price, time: p.time }); });
+        pivotLows.forEach(function(p) { allPivots.push({ type: 'low', idx: p.idx, price: p.price, time: p.time }); });
+        allPivots.sort(function(a, b) { return a.idx - b.idx; });
+
+        // Deduplicate: keep only alternating highs and lows
         var swings = [];
-        var phi = 0, pli = 0;
-        for (var i = 0; i < candles.length; i++) {
-          while (phi < pivotHighs.length && pivotHighs[phi].idx <= i) {
-            swings.push({ type: 'high', idx: pivotHighs[phi].idx, price: pivotHighs[phi].price, time: pivotHighs[phi].time });
-            phi++;
-          }
-          while (pli < pivotLows.length && pivotLows[pli].idx <= i) {
-            swings.push({ type: 'low', idx: pivotLows[pli].idx, price: pivotLows[pli].price, time: pivotLows[pli].time });
-            pli++;
+        for (var i = 0; i < allPivots.length; i++) {
+          if (swings.length === 0) { swings.push(allPivots[i]); continue; }
+          var last = swings[swings.length - 1];
+          if (allPivots[i].type === last.type) {
+            // Same type: keep the more extreme one
+            if (allPivots[i].type === 'high' && allPivots[i].price > last.price) swings[swings.length - 1] = allPivots[i];
+            if (allPivots[i].type === 'low' && allPivots[i].price < last.price) swings[swings.length - 1] = allPivots[i];
+          } else {
+            swings.push(allPivots[i]);
           }
         }
-        swings.sort(function(a, b) { return a.idx - b.idx; });
 
         var markers = [];
         var swingLines = [];
@@ -1787,9 +1792,7 @@
         var currentTrend = 'none';
         var trendZones = [];
         var zoneStart = 0;
-        var eqlLines = []; // Equal Highs/Lows
-
-        // Track all labeled highs/lows for Weak/Strong detection
+        var eqlLines = [];
         var labeledHighs = [];
         var labeledLows = [];
 
@@ -1798,11 +1801,12 @@
           if (s.type === 'high') {
             var label = '';
             if (lastHigh) {
-              if (s.price > lastHigh.price) label = 'HH';
-              else label = 'LH';
-              swingLines.push({ t1: lastHigh.time, p1: lastHigh.price, t2: s.time, p2: s.price, color: label === 'HH' ? 'rgba(52,211,153,0.6)' : 'rgba(244,63,94,0.6)' });
-
-              // EQH — Equal Highs detection
+              label = s.price > lastHigh.price ? 'HH' : 'LH';
+              // Only draw swing connector for the last few swings (reduce clutter)
+              if (si >= swings.length - 12) {
+                swingLines.push({ t1: lastHigh.time, p1: lastHigh.price, t2: s.time, p2: s.price, color: label === 'HH' ? 'rgba(52,211,153,0.5)' : 'rgba(244,63,94,0.5)' });
+              }
+              // EQH detection
               var diff = Math.abs(s.price - lastHigh.price) / lastHigh.price;
               if (diff < EQL_THRESHOLD) {
                 eqlLines.push({ price: (s.price + lastHigh.price) / 2, t1: lastHigh.time, t2: s.time, type: 'EQH' });
@@ -1812,13 +1816,12 @@
               markers.push({ time: s.time, position: 'aboveBar', color: label === 'HH' ? '#34d399' : '#f43f5e', shape: 'circle', text: label });
               labeledHighs.push({ time: s.time, idx: s.idx, price: s.price, label: label });
             }
-
             // Structure breaks
             if (lastHigh && lastLow) {
               if (label === 'LH' && currentTrend === 'up') {
                 structureBreaks.push({ time: s.time, idx: s.idx, price: lastHigh.price, type: 'CHoCH', dir: 'bear' });
                 var prevTrend = currentTrend; currentTrend = 'down';
-                if (prevTrend !== currentTrend) { trendZones.push({ startIdx: zoneStart, endIdx: s.idx, trend: prevTrend }); zoneStart = s.idx; }
+                trendZones.push({ startIdx: zoneStart, endIdx: s.idx, trend: prevTrend }); zoneStart = s.idx;
               } else if (label === 'HH' && currentTrend !== 'up') {
                 structureBreaks.push({ time: s.time, idx: s.idx, price: lastHigh.price, type: 'BOS', dir: 'bull' });
                 var prevTrend = currentTrend; currentTrend = 'up';
@@ -1829,11 +1832,10 @@
           } else {
             var label = '';
             if (lastLow) {
-              if (s.price < lastLow.price) label = 'LL';
-              else label = 'HL';
-              swingLines.push({ t1: lastLow.time, p1: lastLow.price, t2: s.time, p2: s.price, color: label === 'HL' ? 'rgba(52,211,153,0.6)' : 'rgba(244,63,94,0.6)' });
-
-              // EQL — Equal Lows detection
+              label = s.price < lastLow.price ? 'LL' : 'HL';
+              if (si >= swings.length - 12) {
+                swingLines.push({ t1: lastLow.time, p1: lastLow.price, t2: s.time, p2: s.price, color: label === 'HL' ? 'rgba(52,211,153,0.5)' : 'rgba(244,63,94,0.5)' });
+              }
               var diff = Math.abs(s.price - lastLow.price) / lastLow.price;
               if (diff < EQL_THRESHOLD) {
                 eqlLines.push({ price: (s.price + lastLow.price) / 2, t1: lastLow.time, t2: s.time, type: 'EQL' });
@@ -1843,12 +1845,11 @@
               markers.push({ time: s.time, position: 'belowBar', color: label === 'HL' ? '#34d399' : '#f43f5e', shape: 'circle', text: label });
               labeledLows.push({ time: s.time, idx: s.idx, price: s.price, label: label });
             }
-
             if (lastLow && lastHigh) {
               if (label === 'HL' && currentTrend === 'down') {
                 structureBreaks.push({ time: s.time, idx: s.idx, price: lastLow.price, type: 'CHoCH', dir: 'bull' });
                 var prevTrend = currentTrend; currentTrend = 'up';
-                if (prevTrend !== currentTrend) { trendZones.push({ startIdx: zoneStart, endIdx: s.idx, trend: prevTrend }); zoneStart = s.idx; }
+                trendZones.push({ startIdx: zoneStart, endIdx: s.idx, trend: prevTrend }); zoneStart = s.idx;
               } else if (label === 'LL' && currentTrend !== 'down') {
                 structureBreaks.push({ time: s.time, idx: s.idx, price: lastLow.price, type: 'BMS', dir: 'bear' });
                 var prevTrend = currentTrend; currentTrend = 'down';
@@ -1860,33 +1861,28 @@
         }
         trendZones.push({ startIdx: zoneStart, endIdx: candles.length - 1, trend: currentTrend });
 
-        // Weak High / Strong Low detection
-        // A high is "Weak" if price hasn't swept it yet (still valid liquidity target)
-        // A low is "Strong" if it formed during an uptrend (higher probability to hold)
+        // Weak High / Strong Low — only the most recent unswept ones (max 2 each)
         var weakStrongMarkers = [];
         var lastPrice = candles.length > 0 ? candles[candles.length - 1].close : 0;
+        var whCount = 0, slCount = 0;
 
-        // Check recent highs: unswept = Weak High
-        for (var hi = labeledHighs.length - 1; hi >= Math.max(0, labeledHighs.length - 5); hi--) {
+        for (var hi = labeledHighs.length - 1; hi >= 0 && whCount < 2; hi--) {
           var h = labeledHighs[hi];
           var swept = false;
-          for (var ci = h.idx + 1; ci < candles.length; ci++) {
-            if (candles[ci].high > h.price) { swept = true; break; }
-          }
+          for (var ci = h.idx + 1; ci < candles.length; ci++) { if (candles[ci].high > h.price) { swept = true; break; } }
           if (!swept && lastPrice < h.price) {
             weakStrongMarkers.push({ time: h.time, price: h.price, text: 'Weak High', color: '#f43f5e', position: 'aboveBar' });
+            whCount++;
           }
         }
-        // Check recent lows: unswept = Strong Low (in uptrend) or Weak Low (in downtrend)
-        for (var li = labeledLows.length - 1; li >= Math.max(0, labeledLows.length - 5); li--) {
+        for (var li = labeledLows.length - 1; li >= 0 && slCount < 2; li--) {
           var l = labeledLows[li];
           var swept = false;
-          for (var ci = l.idx + 1; ci < candles.length; ci++) {
-            if (candles[ci].low < l.price) { swept = true; break; }
-          }
+          for (var ci = l.idx + 1; ci < candles.length; ci++) { if (candles[ci].low < l.price) { swept = true; break; } }
           if (!swept && lastPrice > l.price) {
             var isStrong = l.label === 'HL';
             weakStrongMarkers.push({ time: l.time, price: l.price, text: isStrong ? 'Strong Low' : 'Weak Low', color: isStrong ? '#34d399' : '#fbbf24', position: 'belowBar' });
+            slCount++;
           }
         }
 
@@ -1896,7 +1892,6 @@
         var today = new Date(lastCandleTime);
         var todayStart = new Date(today); todayStart.setUTCHours(0,0,0,0);
         var yesterdayStart = new Date(todayStart.getTime() - 86400000);
-        // PWH/PWL: find start of current week (Monday) and previous week
         var dayOfWeek = todayStart.getUTCDay();
         var mondayOffset = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
         var thisWeekStart = new Date(todayStart.getTime() - mondayOffset * 86400000);
@@ -1904,12 +1899,10 @@
 
         for (var i = 0; i < candles.length; i++) {
           var ct = candles[i].time * 1000;
-          // PDH/PDL
           if (ct >= yesterdayStart.getTime() && ct < todayStart.getTime()) {
             if (candles[i].high > pdh) pdh = candles[i].high;
             if (candles[i].low < pdl) pdl = candles[i].low;
           }
-          // PWH/PWL
           if (ct >= lastWeekStart.getTime() && ct < thisWeekStart.getTime()) {
             if (candles[i].high > pwh) pwh = candles[i].high;
             if (candles[i].low < pwl) pwl = candles[i].low;
@@ -1918,21 +1911,22 @@
         if (pdl === Infinity) pdl = 0;
         if (pwl === Infinity) pwl = 0;
 
-        // Order Blocks
+        // Order Blocks — only from recent structure breaks (last 5)
         var orderBlocks = [];
-        for (var bi = 0; bi < structureBreaks.length; bi++) {
-          var sb = structureBreaks[bi];
+        var recentBreaks = structureBreaks.slice(-5);
+        for (var bi = 0; bi < recentBreaks.length; bi++) {
+          var sb = recentBreaks[bi];
           if (sb.type === 'BOS' || sb.type === 'BMS') {
             var bIdx = sb.idx;
             if (bIdx < 1) continue;
-            for (var ci = bIdx - 1; ci >= Math.max(0, bIdx - 10); ci--) {
+            for (var ci = bIdx - 1; ci >= Math.max(0, bIdx - 5); ci--) {
               var c = candles[ci];
               if (sb.dir === 'bull' && c.close < c.open) {
-                orderBlocks.push({ startTime: c.time, endTime: candles[Math.min(candles.length - 1, bIdx + 10)].time, top: c.open, bottom: c.low, type: 'demand', startIdx: ci });
+                orderBlocks.push({ startTime: c.time, endTime: candles[Math.min(candles.length - 1, bIdx + 15)].time, top: c.open, bottom: c.low, type: 'demand', startIdx: ci });
                 break;
               }
               if (sb.dir === 'bear' && c.close > c.open) {
-                orderBlocks.push({ startTime: c.time, endTime: candles[Math.min(candles.length - 1, bIdx + 10)].time, top: c.high, bottom: c.close, type: 'supply', startIdx: ci });
+                orderBlocks.push({ startTime: c.time, endTime: candles[Math.min(candles.length - 1, bIdx + 15)].time, top: c.high, bottom: c.close, type: 'supply', startIdx: ci });
                 break;
               }
             }
@@ -1952,7 +1946,7 @@
           markers: markers,
           swingLines: swingLines,
           structureBreaks: structureBreaks,
-          trendZones: trendZones,
+          trendZones: [], // no background shading — keep chart clean
           pdh: pdh, pdl: pdl,
           pwh: pwh, pwl: pwl,
           orderBlocks: orderBlocks,
@@ -2223,14 +2217,14 @@
         'algo zones': 'dtfxzones(10)',
         'dtfx algo': 'dtfxzones(10)',
         'zones': 'dtfxzones(10)',
-        'smc pro': 'smcpro(5, 5)',
-        'smc': 'smcpro(5, 5)',
-        'zeiierman': 'smcpro(5, 5)',
-        'bos': 'smcpro(5, 5)',
-        'choch': 'smcpro(5, 5)',
-        'order block': 'smcpro(5, 5)',
-        'ob': 'smcpro(5, 5)',
-        'pdh pdl': 'smcpro(5, 5)',
+        'smc pro': 'smcpro(10, 10)',
+        'smc': 'smcpro(10, 10)',
+        'zeiierman': 'smcpro(10, 10)',
+        'bos': 'smcpro(10, 10)',
+        'choch': 'smcpro(10, 10)',
+        'order block': 'smcpro(10, 10)',
+        'ob': 'smcpro(10, 10)',
+        'pdh pdl': 'smcpro(10, 10)',
         'vsa': 'vsa(5, 20)',
         'volume spread': 'vsa(5, 20)',
         'volume spread analysis': 'vsa(5, 20)',
@@ -2376,7 +2370,7 @@
       atr:            { name: 'ATR',               formula: 'atr(14)' },
       ichimoku:       { name: 'Ichimoku',          formula: 'ichimoku(9, 26, 52, 26)' },
       psar:           { name: 'Parabolic SAR',     formula: 'psar(0.02, 0.2)' },
-      smcpro:         { name: 'SMC Pro',            formula: 'smcpro(5, 5)' },
+      smcpro:         { name: 'SMC Pro',            formula: 'smcpro(10, 10)' },
     };
 
     var INDICATOR_COLORS = {
@@ -2877,26 +2871,9 @@
             var lastTime = p.candles[p.candles.length - 1].time;
             var firstTime = p.candles[0].time;
 
-            // 1. Background trend shading
-            smc.trendZones.forEach(function(zone) {
-              if (zone.trend === 'none') return;
-              var isBull = zone.trend === 'up';
-              var shadeArea = p.chart.addAreaSeries({
-                topColor: isBull ? 'rgba(52,211,153,0.06)' : 'rgba(244,63,94,0.06)',
-                bottomColor: 'transparent',
-                lineColor: 'transparent', lineWidth: 0,
-                priceLineVisible: false, lastValueVisible: false,
-                crosshairMarkerVisible: false, priceScaleId: 'smc-shade',
-              });
-              var shadeData = [];
-              for (var ci = zone.startIdx; ci <= zone.endIdx && ci < p.candles.length; ci++) {
-                shadeData.push({ time: p.candles[ci].time, value: p.candles[ci].high * 1.001 });
-              }
-              if (shadeData.length) { shadeArea.setData(shadeData); p.overlaySeries.push(shadeArea); }
-            });
-            try { p.chart.priceScale('smc-shade').applyOptions({ visible: false }); } catch(_) {}
+            // 1. Background shading removed — clean black chart
 
-            // 2. Swing connector lines (dashed)
+            // 2. Swing connector lines (dashed, recent only)
             smc.swingLines.forEach(function(sl) {
               var line = p.chart.addLineSeries({
                 color: sl.color, lineWidth: 1, lineStyle: 2,
@@ -2906,10 +2883,11 @@
               p.overlaySeries.push(line);
             });
 
-            // 3. BOS/BMS/CHoCH — markers + horizontal dashed lines at break level
+            // 3. BOS/BMS/CHoCH — markers + horizontal dashed lines (last 6 only)
             var allMarkers = [];
             try { allMarkers = p.candleSeries.markers() || []; } catch(_) {}
-            smc.structureBreaks.forEach(function(sb) {
+            var recentBreaks = smc.structureBreaks.slice(-6);
+            recentBreaks.forEach(function(sb) {
               var isBull = sb.dir === 'bull';
               var color = isBull ? '#34d399' : '#f43f5e';
               // Marker label
@@ -2994,8 +2972,8 @@
               p.overlaySeries.push(midLine);
             }
 
-            // 9. EQL/EQH (Equal Lows/Highs) — dotted yellow lines
-            smc.eqlLines.forEach(function(eq) {
+            // 9. EQL/EQH (Equal Lows/Highs) — dotted yellow lines (max 3)
+            smc.eqlLines.slice(-3).forEach(function(eq) {
               var eqLine = p.chart.addLineSeries({
                 color: 'rgba(251,191,36,0.7)', lineWidth: 1, lineStyle: 3,
                 priceLineVisible: true, lastValueVisible: true, crosshairMarkerVisible: false,
