@@ -1644,8 +1644,13 @@
 
     function loadCustomScripts() {
       var saved = localStorage.getItem('mct_custom_scripts');
-      if (saved) return JSON.parse(saved);
-      return [];
+      if (!saved) return [];
+      var scripts = JSON.parse(saved);
+      var clean = scripts.filter(function(s) { return (s.name || '').length <= 50; });
+      if (clean.length !== scripts.length) {
+        localStorage.setItem('mct_custom_scripts', JSON.stringify(clean));
+      }
+      return clean;
     }
 
     function saveCustomScripts(scripts) {
