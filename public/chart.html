@@ -443,6 +443,24 @@
       min-width: 28px;
     }
 
+    .chart-zoom-controls {
+      display: flex;
+      gap: 2px;
+      margin-left: auto;
+    }
+    .chart-zoom-btn {
+      background: var(--color-surface);
+      border: 1px solid var(--color-border-muted);
+      color: var(--color-fg-muted);
+      font-family: var(--font-mono);
+      font-size: 0.65rem;
+      padding: 1px 6px;
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      line-height: 1.2;
+    }
+    .chart-zoom-btn:hover { background: var(--color-bg-raised); color: var(--color-fg); }
+
     .chart-panel-tf {
       display: flex;
       gap: 2px;
@@ -1004,6 +1022,11 @@
             <button class="panel-tf-btn" data-tv="240">4h</button>
             <button class="panel-tf-btn" data-tv="D">1D</button>
           </div>
+          <div class="chart-zoom-controls">
+            <button class="chart-zoom-btn" data-panel="0" data-zoom="in" title="Zoom in">+</button>
+            <button class="chart-zoom-btn" data-panel="0" data-zoom="out" title="Zoom out">&minus;</button>
+            <button class="chart-zoom-btn" data-panel="0" data-zoom="fit" title="Fit all">&#x21C6;</button>
+          </div>
         </div>
         <div class="chart-panel-body">
           <div class="main-chart-container" id="chart-main-0"></div>
@@ -1023,6 +1046,11 @@
             <button class="panel-tf-btn" data-tv="240">4h</button>
             <button class="panel-tf-btn" data-tv="D">1D</button>
           </div>
+          <div class="chart-zoom-controls">
+            <button class="chart-zoom-btn" data-panel="1" data-zoom="in" title="Zoom in">+</button>
+            <button class="chart-zoom-btn" data-panel="1" data-zoom="out" title="Zoom out">&minus;</button>
+            <button class="chart-zoom-btn" data-panel="1" data-zoom="fit" title="Fit all">&#x21C6;</button>
+          </div>
         </div>
         <div class="chart-panel-body">
           <div class="main-chart-container" id="chart-main-1"></div>
@@ -1041,6 +1069,11 @@
             <button class="panel-tf-btn" data-tv="60">1h</button>
             <button class="panel-tf-btn" data-tv="240">4h</button>
             <button class="panel-tf-btn" data-tv="D">1D</button>
+          </div>
+          <div class="chart-zoom-controls">
+            <button class="chart-zoom-btn" data-panel="2" data-zoom="in" title="Zoom in">+</button>
+            <button class="chart-zoom-btn" data-panel="2" data-zoom="out" title="Zoom out">&minus;</button>
+            <button class="chart-zoom-btn" data-panel="2" data-zoom="fit" title="Fit all">&#x21C6;</button>
           </div>
         </div>
         <div class="chart-panel-body">
@@ -2307,6 +2340,33 @@
       });
 
       DOM.coinSearch.addEventListener('input', function(e) { renderCoinList(STATE.coins, e.target.value); });
+
+      // Zoom controls
+      document.querySelectorAll('.chart-zoom-btn').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+          var idx = parseInt(btn.dataset.panel);
+          var p = chartPanels[idx];
+          if (!p || !p.chart) return;
+          var ts = p.chart.timeScale();
+          var action = btn.dataset.zoom;
+
+          if (action === 'fit') {
+            ts.fitContent();
+            return;
+          }
+
+          var range = ts.getVisibleLogicalRange();
+          if (!range) return;
+          var barsCount = range.to - range.from;
+          var center = (range.from + range.to) / 2;
+          var factor = action === 'in' ? 0.6 : 1.5;
+          var newBars = Math.max(10, barsCount * factor);
+          ts.setVisibleLogicalRange({
+            from: center - newBars / 2,
+            to: center + newBars / 2,
+          });
+        });
+      });
 
       DOM.bottomPanelToggle.addEventListener('click', function() {
         var isCollapsed = DOM.bottomPanel.classList.toggle('collapsed');
