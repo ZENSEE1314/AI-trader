@@ -3378,17 +3378,17 @@ router.post('/agents/command', async (req, res) => {
   }
 });
 
-// POST /api/admin/agents/chat — Natural language chat with agents (45s timeout)
+// POST /api/admin/agents/chat — Natural language chat with agents (120s timeout for tunnel-routed Ollama)
 router.post('/agents/chat', async (req, res) => {
   try {
     const { message } = req.body;
     if (!message) return res.status(400).json({ error: 'No message' });
     const { getCoordinator } = require('../agents');
     const coordinator = getCoordinator();
-    const timeoutMs = 45000;
+    const timeoutMs = 120000;
     const reply = await Promise.race([
       coordinator.handleChat(message),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('Chat timed out after 45s — Ollama may be slow or offline')), timeoutMs)),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('Chat timed out — AI is taking too long. Try a simpler question.')), timeoutMs)),
     ]);
     res.json(reply);
   } catch (err) {

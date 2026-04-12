@@ -159,14 +159,14 @@ async function think(opts) {
     ? `\n\n<current_data>\n${JSON.stringify(prunedContext, null, 2)}\n</current_data>`
     : '';
 
-  // Inject Hermes soul + team memory into system prompt
+  // Inject Hermes soul + team memory into system prompt (capped to avoid huge payloads)
   const soul = hermes.loadSoul();
   const teamMemory = hermes.getTeamMemoryPrompt();
   const agentMemory = hermes.getMemoryPrompt(agentName);
 
   let fullSystem = systemPrompt + contextBlock;
-  if (soul) fullSystem = `${soul}\n\n${fullSystem}`;
-  if (teamMemory) fullSystem += `\n\n${teamMemory}`;
+  if (soul) fullSystem = `${soul.substring(0, 500)}\n\n${fullSystem}`;
+  if (teamMemory) fullSystem += `\n\n${teamMemory.substring(0, 500)}`;
   if (agentMemory) fullSystem += `\n\n${agentMemory}`;
 
   try {

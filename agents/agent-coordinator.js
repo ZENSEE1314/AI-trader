@@ -1020,77 +1020,21 @@ class AgentCoordinator extends BaseAgent {
       const agent = targetAgent || this;
       const agentName = agent.name || 'Coordinator';
 
-      // ── ENHANCED CONTEXT FETCHING (Chain-of-Thought) ──
-      const context = {
-        health: agent.getHealth ? agent.getHealth() : {},
-        profile: agent.getProfile ? agent.getProfile() : {},
-        recentActivity: agent.getActivity ? agent.getActivity(10) : [],
-      };
-      if (agent._getAIContext) Object.assign(context, await agent._getAIContext());
-
-      // Add specific data for "Why" and "What" questions
-      if (text.includes('why') || text.includes('how') || text.includes('what') || text.includes('pattern') || text.includes('penalty')) {
-        try {
-          const { query } = require('../db');
-          // 1. Recent trades context
-          const recentTrades = await query(
-            `SELECT symbol, direction, pnl_pct, setup, created_at
-             FROM trades ORDER BY created_at DESC LIMIT 15`
-          );
-          context.recent_trades = recentTrades.map(t => ({
-            symbol: t.symbol, dir: t.direction, pnl: t.pnl_pct, setup: t.setup, date: t.created_at
-          }));
-
-          // 2. Current open positions
-          const openTrades = await query(
-            `SELECT symbol, direction, entry_price, leverage FROM trades WHERE status = 'OPEN'`
-          );
-          context.open_positions = openTrades;
-
-          // 3. Recent signals that didn't become trades
-          const recentSignals = await query(
-            `SELECT symbol, direction, score, setup FROM bot_logs
-             WHERE category = 'scan' AND result = 'SIGNAL'
-             ORDER BY ts DESC LIMIT 10`
-          );
-          context.recent_signals = recentSignals;
-
-          // 4. Learned Trap Patterns (The "Mistake Memory")
-          const penalties = await query(
-            `SELECT pattern_dna, loss_count, win_count, current_penalty
-             FROM pattern_penalties
-             WHERE current_penalty < 0
-             ORDER BY current_penalty ASC LIMIT 10`
-          );
-          context.learned_traps = penalties.map(p => ({
-            dna: p.pattern_dna, losses: p.loss_count, wins: p.win_count, penalty: p.current_penalty
-          }));
-        } catch (e) {
-          console.error(`[Coordinator] Failed to fetch extended context: ${e.message}`);
-        }
-      }
-
-      // Also add memories if available
+      // ── LEAN CONTEXT — keep payload small for fast tunnel responses ──
+      const context = {};
       try {
-        if (agent.recallAll) {
-          const memories = await agent.recallAll();
-          if (memories.length) context.memories = memories.slice(0, 10).map(m => ({ key: m.key, value: m.value, category: m.category }));
-        }
-        if (agent.getLessons) {
-          const lessons = await agent.getLessons(null, 5);
-          if (lessons.length) context.lessons = lessons.map(l => ({ type: l.type, lesson: l.lesson, score: l.score }));
-        }
+        const { query: dbQuery } = require('../db');
+        // Only fetch the essentials — 5 recent trades + open positions
+        const [recentTrades, openTrades] = await Promise.all([
+          dbQuery(`SELECT symbol, direction, pnl_pct, setup FROM trades ORDER BY created_at DESC LIMIT 5`).catch(() => []),
+          dbQuery(`SELECT symbol, direction, entry_price FROM trades WHERE status = 'OPEN'`).catch(() => []),
+        ]);
+        if (recentTrades.length) context.recent_trades = recentTrades;
+        if (openTrades.length) context.open_positions = openTrades;
       } catch {}
 
-      // Force Deep Reasoning for "Why" questions
-      let systemPrompt = getSystemPrompt(agentName);
-      if (text.includes('why') || text.includes('how') || text.includes('pattern')) {
-        systemPrompt += `\n\nCRITICAL: This is a "Why/How/Pattern" query. Use Chain-of-Thought reasoning:\n1. Analyze the provided context (trades, positions, signals, and learned_traps).\n2. Compare current state with the strategy rules (SMC, Kronos, Risk) and the learned penalties.\n3. Explain the specific logic that led to these actions or why a specific pattern is being penalized.\n4. If the bot made a mistake, identify exactly which rule was bypassed or how the Pattern DNA system is correcting it.`;
-      }
-
-      // Use high complexity for deep reasoning (why/how/pattern queries) and coordinator-level analysis
-      const isDeepQuery = text.includes('why') || text.includes('how') || text.includes('pattern') || text.includes('analyze');
-      const aiReply = await think({ agentName, systemPrompt, userMessage: message, context, complexity: isDeepQuery ? 'high' : 'medium', priority: 'chat' });
+      const systemPrompt = getSystemPrompt(agentName);
+      const aiReply = await think({ agentName, systemPrompt, userMessage: message, context, complexity: 'medium', priority: 'chat' });
       if (aiReply) return { from: agentName, message: aiReply };
     }
 
