@@ -18,9 +18,9 @@ const hermes = require('../hermes-bridge');
 let googleClient = null;
 let anthropicClient = null;
 
-// Rate limiting — Ollama is local/free so virtually unlimited; tighter for cloud APIs
+// Rate limiting — Ollama (local) virtually unlimited; cloud APIs get generous limit
 const requestLog = [];
-const MAX_REQUESTS_PER_MIN = process.env.OLLAMA_URL ? 999 : 30;
+const MAX_REQUESTS_PER_MIN = process.env.OLLAMA_URL ? 999 : 120;
 
 // Response cache — avoid duplicate API calls
 const responseCache = new Map();
@@ -160,7 +160,7 @@ async function think(opts) {
         throw new Error('AI returned empty response');
       } catch (err) {
         attempts++;
-        const isTransient = err.message?.includes('424') || err.message?.includes('500') || err.message?.includes('503') || err.message?.includes('Could not serve request') || err.message === 'AI returned empty response';
+        const isTransient = err.message?.includes('424') || err.message?.includes('500') || err.message?.includes('503') || err.message?.includes('429') || err.message?.includes('Could not serve request') || err.message?.includes('Error fetching') || err.message?.includes('fetch failed') || err.message?.includes('ECONNRESET') || err.message?.includes('ETIMEDOUT') || err.message === 'AI returned empty response';
 
         if (isTransient && attempts < maxAttempts) {
           console.log(`[AI Brain] Transient error ${err.message} — retrying (${attempts}/${maxAttempts})...`);

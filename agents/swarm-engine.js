@@ -60,10 +60,11 @@ async function runSwarm(symbol, seeds) {
   // 1. Simulation Phase: Poll each persona
   const personaKeys = Object.keys(PERSONAS);
 
-  const simulationPromises = personaKeys.map(async (key) => {
+  // Run personas sequentially with delay to avoid overwhelming cloud APIs
+  const results = [];
+  for (const key of personaKeys) {
     const persona = PERSONAS[key];
 
-    // Calculate dynamic weight based on expertise
     let weight = persona.weight;
     if (EXPERT_MAPPING[symbol] && EXPERT_MAPPING[symbol][key]) {
       weight = EXPERT_MAPPING[symbol][key];
@@ -88,23 +89,22 @@ Return ONLY a JSON object: {"direction": "...", "target": 0.0, "confidence": 0-1
         complexity: 'medium',
       });
 
-      // Extract JSON from response
       const jsonMatch = response.match(/\{.*\}/s);
       if (!jsonMatch) throw new Error(`Invalid JSON from ${persona.name}`);
 
       const result = JSON.parse(jsonMatch[0]);
-      return {
+      results.push({
         persona: persona.name,
         ...result,
         weight: weight
-      };
+      });
     } catch (err) {
       console.error(`[Swarm] ${persona.name} simulation failed: ${err.message}`);
-      return null;
     }
-  });
 
-  const results = (await Promise.all(simulationPromises)).filter(r => r !== null);
+    // Small delay between calls to avoid API throttling
+    await new Promise(resolve => setTimeout(resolve, 500));
+  }
 
   if (results.length === 0) {
     return { symbol, direction: 'NEUTRAL', confidence: 0, consensus: 'Simulation failed' };
