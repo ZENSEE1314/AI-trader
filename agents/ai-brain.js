@@ -18,6 +18,12 @@ const hermes = require('../hermes-bridge');
 let googleClient = null;
 let anthropicClient = null;
 
+// Startup diagnostics — log which AI provider is configured
+console.log(`[AI Brain] OLLAMA_URL=${process.env.OLLAMA_URL || 'NOT SET'}`);
+console.log(`[AI Brain] OLLAMA_MODEL=${process.env.OLLAMA_MODEL || 'NOT SET'}`);
+console.log(`[AI Brain] GOOGLE_AI_KEY=${process.env.GOOGLE_AI_KEY ? 'SET' : 'NOT SET'}`);
+console.log(`[AI Brain] Provider priority: ${process.env.OLLAMA_URL ? 'Ollama → ' : ''}${process.env.GOOGLE_AI_KEY ? 'Google → ' : ''}${process.env.ANTHROPIC_API_KEY ? 'Anthropic' : ''}`);
+
 // Rate limiting — Ollama (local) virtually unlimited; cloud APIs get generous limit
 const requestLog = [];
 const MAX_REQUESTS_PER_MIN = process.env.OLLAMA_URL ? 999 : 120;
@@ -268,7 +274,7 @@ async function thinkOllama(agentName, systemPrompt, userMessage, complexity = 'l
 
   try {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 30000); // 30s timeout
+    const timeout = setTimeout(() => controller.abort(), 60000); // 60s timeout for cloud-routed models via tunnel
     const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true' },
