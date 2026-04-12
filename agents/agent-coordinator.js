@@ -1173,8 +1173,8 @@ class AgentCoordinator extends BaseAgent {
       lines.push('\n**Possible reasons:**');
       if (apiKeys.length === 0) lines.push('- No API keys enabled — bot cannot execute trades');
       if (!scanActivities.length) lines.push('- Pipeline not running — no scan activity detected');
-      lines.push('- No valid SMC setup — 4H + 1H timeframes must agree on direction');
-      lines.push('- RSI guard — won\'t LONG when overbought, won\'t SHORT when oversold');
+      lines.push('- RSI guard — won\'t LONG when overbought (>80), won\'t SHORT when oversold (<20)');
+      lines.push('- Anti-chase — won\'t enter if price moved >0.5% in last 15 minutes');
       lines.push('\nType **"scan now"** to force a scan, or **"status"** to see agent states.');
     } catch (err) {
       lines.push(`Error fetching diagnostics: ${err.message}`);
