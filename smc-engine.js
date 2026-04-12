@@ -236,6 +236,7 @@ function detectTentativePivot(klines, len) {
 
 function getStructure(klines, len) {
   const { swings } = detectSwings(klines, len);
+  const tentative = detectTentativePivot(klines, len);
   const swingHighs = (swings || []).filter(s => s.type === 'high');
   const swingLows = (swings || []).filter(s => s.type === 'low');
 
