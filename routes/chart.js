@@ -455,6 +455,29 @@ function detectEQHEQL(swings) {
   return eqs;
 }
 
+// ── Kline Proxy (for client-side charting) ──────────────────
+router.get('/klines', async (req, res) => {
+  try {
+    const symbol = (req.query.symbol || 'BTCUSDT').toUpperCase();
+    const interval = req.query.interval || '1m';
+    const limit = Math.min(parseInt(req.query.limit) || 300, 1000);
+    const klines = await fetchKlines(symbol, interval, limit);
+    if (!klines || !klines.length) return res.status(404).json({ error: 'No data' });
+    const candles = klines.map(k => ({
+      time: Math.floor(parseInt(k[0]) / 1000),
+      open: parseFloat(k[1]),
+      high: parseFloat(k[2]),
+      low: parseFloat(k[3]),
+      close: parseFloat(k[4]),
+      volume: parseFloat(k[5]),
+    }));
+    res.json(candles);
+  } catch (err) {
+    console.error('Kline proxy error:', err.message);
+    res.status(500).json({ error: 'Failed to fetch klines' });
+  }
+});
+
 // ── Main Chart Data Endpoint ────────────────────────────────
 router.get('/data', async (req, res) => {
   try {

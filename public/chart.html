@@ -9,7 +9,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;500;700&family=IBM+Plex+Sans:wght@200;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/css/tokens.css">
-  <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
+  <script src="https://unpkg.com/lightweight-charts@4.2.1/dist/lightweight-charts.standalone.production.js"></script>
 
   <style>
     /* --- Reset --- */
@@ -474,10 +474,14 @@
       flex: 1;
       min-height: 0;
       position: relative;
+      display: flex;
+      flex-direction: column;
     }
-    .chart-panel-body > div {
-      width: 100%;
-      height: 100%;
+    .main-chart-container { flex: 3; min-height: 0; }
+    .sub-chart-container { flex: 1; min-height: 0; border-top: 1px solid var(--color-border-muted); }
+    .sub-chart-label {
+      position: absolute; top: 2px; left: 6px; font-size: 0.55rem;
+      color: var(--color-fg-subtle); font-family: var(--font-mono); z-index: 2; pointer-events: none;
     }
 
 
@@ -971,10 +975,10 @@
           </div>
           <div class="ind-section-label" style="margin-top:4px;">Add Script / Indicator</div>
           <div class="ind-script-input-wrap">
-            <input type="text" id="script-name-input" class="ind-script-input" placeholder="e.g. Bollinger Bands">
+            <input type="text" id="script-name-input" class="ind-script-input" placeholder="e.g. ema(close, 50) or Bollinger Bands">
             <button id="btn-add-script" class="ind-script-add-btn" onclick="event.stopPropagation(); addCustomScript();">+</button>
           </div>
-          <div class="ind-section-label" style="font-size:0.55rem;color:var(--color-fg-subtle);padding-top:0;">Paste TradingView indicator name exactly as shown on TradingView</div>
+          <div class="ind-section-label" style="font-size:0.55rem;color:var(--color-fg-subtle);padding-top:0;">Type a formula like ema(close, 50) or a preset name like Bollinger Bands</div>
           <div id="custom-scripts-list" class="custom-scripts-list"></div>
         </div>
       </div>
@@ -1001,7 +1005,9 @@
             <button class="panel-tf-btn" data-tv="D">1D</button>
           </div>
         </div>
-        <div class="chart-panel-body"><div id="tv-chart-0"></div></div>
+        <div class="chart-panel-body">
+          <div class="main-chart-container" id="chart-main-0"></div>
+        </div>
       </div>
 
       <div class="chart-panel" id="chart-panel-1">
@@ -1018,7 +1024,9 @@
             <button class="panel-tf-btn" data-tv="D">1D</button>
           </div>
         </div>
-        <div class="chart-panel-body"><div id="tv-chart-1"></div></div>
+        <div class="chart-panel-body">
+          <div class="main-chart-container" id="chart-main-1"></div>
+        </div>
       </div>
 
       <div class="chart-panel" id="chart-panel-2">
@@ -1035,7 +1043,9 @@
             <button class="panel-tf-btn" data-tv="D">1D</button>
           </div>
         </div>
-        <div class="chart-panel-body"><div id="tv-chart-2"></div></div>
+        <div class="chart-panel-body">
+          <div class="main-chart-container" id="chart-main-2"></div>
+        </div>
       </div>
     </main>
 
@@ -1088,13 +1098,12 @@
 
   <script>
     // ============================================================
-    // MCT SMC Chart -- TradingView Advanced Chart Widget
+    // MCT SMC Chart -- Custom Lightweight Charts Pro Widget
     // ============================================================
 
-    const STATE = {
+    var STATE = {
       symbol: 'BTCUSDT',
       interval: '15m',
-      tvInterval: '15',
       coins: [],
       chartData: null,
       refreshTimer: null,
@@ -1102,23 +1111,36 @@
       lastPrice: null,
     };
 
-    const REFRESH_INTERVAL = 60000;
-    const API_BASE = '/api/chart';
+    var REFRESH_INTERVAL = 60000;
+    var API_BASE = '/api/chart';
+    var CHART_COUNT = 3;
+    var chartIntervals = ['1', '3', '15'];
 
-    // Timeframe -> TradingView interval mapping
-    const TF_TO_TV = {
-      '1m': '1',
-      '3m': '3',
-      '5m': '5',
-      '15m': '15',
-      '1h': '60',
-      '4h': '240',
-      '1d': 'D',
-      '1w': 'W',
+    // Binance kline interval mapping (panel TF data-tv -> Binance interval string)
+    var TV_TO_BINANCE = {
+      '1': '1m', '3': '3m', '5': '5m', '15': '15m',
+      '30': '30m', '60': '1h', '240': '4h', 'D': '1d',
     };
 
+    // Per-panel chart state
+    var chartPanels = [];
+    for (var _i = 0; _i < CHART_COUNT; _i++) {
+      chartPanels.push({
+        chart: null,
+        candleSeries: null,
+        volumeSeries: null,
+        overlaySeries: [],
+        subCharts: [],
+        candles: [],
+      });
+    }
+
+    // Candle data cache
+    var candleCache = new Map();
+    var CACHE_TTL = 15000;
+
     // --- DOM References ---
-    const DOM = {
+    var DOM = {
       coinList: document.getElementById('coin-list'),
       coinLoading: document.getElementById('coin-loading'),
       coinSearch: document.getElementById('coin-search'),
@@ -1135,11 +1157,6 @@
       sumFvg: document.getElementById('sum-fvg'),
       sumPdhl: document.getElementById('sum-pdhl'),
     };
-
-    // --- Multi-Chart: 3 TradingView Widget Instances ---
-    var CHART_COUNT = 3;
-    var tvWidgets = [null, null, null];
-    var chartIntervals = ['1', '3', '15'];  // default TF per panel
 
     // ============================================================
     // Toast Notifications
@@ -1159,34 +1176,472 @@
     }
 
     // ============================================================
-    // Indicator Registry + Management
+    // Indicator Calculation Engine
     // ============================================================
 
-    // Built-in indicators that work in the studies config array
+    var Calc = {
+      sma: function(src, period) {
+        var result = [];
+        for (var i = 0; i < src.length; i++) {
+          if (i < period - 1) { result.push(null); continue; }
+          var sum = 0;
+          for (var j = i - period + 1; j <= i; j++) sum += src[j];
+          result.push(sum / period);
+        }
+        return result;
+      },
+
+      ema: function(src, period) {
+        var result = [];
+        var k = 2 / (period + 1);
+        var prev = null;
+        for (var i = 0; i < src.length; i++) {
+          if (prev === null) {
+            if (i < period - 1) { result.push(null); continue; }
+            var sum = 0;
+            for (var j = i - period + 1; j <= i; j++) sum += src[j];
+            prev = sum / period;
+          } else {
+            prev = src[i] * k + prev * (1 - k);
+          }
+          result.push(prev);
+        }
+        return result;
+      },
+
+      rsi: function(src, period) {
+        var result = [];
+        var gains = [], losses = [];
+        for (var i = 0; i < src.length; i++) {
+          if (i === 0) { result.push(null); continue; }
+          var change = src[i] - src[i - 1];
+          gains.push(change > 0 ? change : 0);
+          losses.push(change < 0 ? -change : 0);
+
+          if (i < period) { result.push(null); continue; }
+
+          var avgGain, avgLoss;
+          if (i === period) {
+            avgGain = 0; avgLoss = 0;
+            for (var j = 0; j < period; j++) { avgGain += gains[j]; avgLoss += losses[j]; }
+            avgGain /= period; avgLoss /= period;
+          } else {
+            avgGain = (result._ag * (period - 1) + gains[gains.length - 1]) / period;
+            avgLoss = (result._al * (period - 1) + losses[losses.length - 1]) / period;
+          }
+          result._ag = avgGain;
+          result._al = avgLoss;
+          var rs = avgLoss === 0 ? 100 : avgGain / avgLoss;
+          result.push(100 - (100 / (1 + rs)));
+        }
+        return result;
+      },
+
+      macd: function(src, fast, slow, signal) {
+        var emaFast = Calc.ema(src, fast);
+        var emaSlow = Calc.ema(src, slow);
+        var macdLine = [];
+        for (var i = 0; i < src.length; i++) {
+          if (emaFast[i] === null || emaSlow[i] === null) { macdLine.push(null); continue; }
+          macdLine.push(emaFast[i] - emaSlow[i]);
+        }
+        var validMacd = macdLine.filter(function(v) { return v !== null; });
+        var signalLine = Calc.ema(validMacd, signal);
+        var sigIdx = 0;
+        var fullSignal = [];
+        var histogram = [];
+        for (var i = 0; i < macdLine.length; i++) {
+          if (macdLine[i] === null) { fullSignal.push(null); histogram.push(null); continue; }
+          var sv = signalLine[sigIdx++];
+          fullSignal.push(sv);
+          histogram.push(sv !== null ? macdLine[i] - sv : null);
+        }
+        return { macd: macdLine, signal: fullSignal, histogram: histogram };
+      },
+
+      bollingerBands: function(src, period, mult) {
+        var sma = Calc.sma(src, period);
+        var upper = [], lower = [];
+        for (var i = 0; i < src.length; i++) {
+          if (sma[i] === null) { upper.push(null); lower.push(null); continue; }
+          var sum = 0;
+          for (var j = i - period + 1; j <= i; j++) sum += Math.pow(src[j] - sma[i], 2);
+          var std = Math.sqrt(sum / period);
+          upper.push(sma[i] + mult * std);
+          lower.push(sma[i] - mult * std);
+        }
+        return { upper: upper, middle: sma, lower: lower };
+      },
+
+      vwap: function(candles) {
+        var result = [];
+        var cumVol = 0, cumTP = 0;
+        var dayStart = null;
+        for (var i = 0; i < candles.length; i++) {
+          var c = candles[i];
+          var d = new Date(c.time * 1000);
+          var day = d.getUTCFullYear() * 10000 + d.getUTCMonth() * 100 + d.getUTCDate();
+          if (day !== dayStart) { cumVol = 0; cumTP = 0; dayStart = day; }
+          var tp = (c.high + c.low + c.close) / 3;
+          cumVol += c.volume;
+          cumTP += tp * c.volume;
+          result.push(cumVol > 0 ? cumTP / cumVol : c.close);
+        }
+        return result;
+      },
+
+      atr: function(candles, period) {
+        var result = [];
+        var trs = [];
+        for (var i = 0; i < candles.length; i++) {
+          if (i === 0) { trs.push(candles[i].high - candles[i].low); result.push(null); continue; }
+          var tr = Math.max(
+            candles[i].high - candles[i].low,
+            Math.abs(candles[i].high - candles[i - 1].close),
+            Math.abs(candles[i].low - candles[i - 1].close)
+          );
+          trs.push(tr);
+          if (i < period) { result.push(null); continue; }
+          if (i === period) {
+            var sum = 0; for (var j = 0; j < period; j++) sum += trs[i - j]; result.push(sum / period);
+          } else {
+            result.push((result[i - 1] * (period - 1) + tr) / period);
+          }
+        }
+        return result;
+      },
+
+      supertrend: function(candles, period, mult) {
+        var atr = Calc.atr(candles, period);
+        var result = [], direction = [];
+        var upperBand = 0, lowerBand = 0, prevDir = 1;
+        for (var i = 0; i < candles.length; i++) {
+          if (atr[i] === null) { result.push(null); direction.push(1); continue; }
+          var hl2 = (candles[i].high + candles[i].low) / 2;
+          var up = hl2 - mult * atr[i];
+          var dn = hl2 + mult * atr[i];
+          if (i > 0 && result[i - 1] !== null) {
+            up = (up > lowerBand || candles[i - 1].close < lowerBand) ? up : lowerBand;
+            dn = (dn < upperBand || candles[i - 1].close > upperBand) ? dn : upperBand;
+          }
+          lowerBand = up; upperBand = dn;
+          var dir;
+          if (prevDir === 1 && candles[i].close < lowerBand) dir = -1;
+          else if (prevDir === -1 && candles[i].close > upperBand) dir = 1;
+          else dir = prevDir;
+          prevDir = dir;
+          result.push(dir === 1 ? lowerBand : upperBand);
+          direction.push(dir);
+        }
+        return { value: result, direction: direction };
+      },
+
+      stochastic: function(candles, kPeriod, dPeriod, smooth) {
+        var kRaw = [];
+        for (var i = 0; i < candles.length; i++) {
+          if (i < kPeriod - 1) { kRaw.push(null); continue; }
+          var highest = -Infinity, lowest = Infinity;
+          for (var j = i - kPeriod + 1; j <= i; j++) {
+            if (candles[j].high > highest) highest = candles[j].high;
+            if (candles[j].low < lowest) lowest = candles[j].low;
+          }
+          kRaw.push(highest === lowest ? 50 : ((candles[i].close - lowest) / (highest - lowest)) * 100);
+        }
+        var validK = kRaw.filter(function(v) { return v !== null; });
+        var kSmoothed = smooth > 1 ? Calc.sma(validK, smooth) : validK;
+        var d = Calc.sma(kSmoothed.filter(function(v) { return v !== null; }), dPeriod);
+        return { k: kRaw, d: d };
+      },
+
+      obv: function(candles) {
+        var result = [0];
+        for (var i = 1; i < candles.length; i++) {
+          if (candles[i].close > candles[i - 1].close) result.push(result[i - 1] + candles[i].volume);
+          else if (candles[i].close < candles[i - 1].close) result.push(result[i - 1] - candles[i].volume);
+          else result.push(result[i - 1]);
+        }
+        return result;
+      },
+
+      mfi: function(candles, period) {
+        var result = [];
+        for (var i = 0; i < candles.length; i++) {
+          if (i < period) { result.push(null); continue; }
+          var posFlow = 0, negFlow = 0;
+          for (var j = i - period + 1; j <= i; j++) {
+            var tp = (candles[j].high + candles[j].low + candles[j].close) / 3;
+            var prevTp = j > 0 ? (candles[j - 1].high + candles[j - 1].low + candles[j - 1].close) / 3 : tp;
+            var mf = tp * candles[j].volume;
+            if (tp > prevTp) posFlow += mf; else negFlow += mf;
+          }
+          result.push(negFlow === 0 ? 100 : 100 - (100 / (1 + posFlow / negFlow)));
+        }
+        return result;
+      },
+
+      cci: function(candles, period) {
+        var tps = candles.map(function(c) { return (c.high + c.low + c.close) / 3; });
+        var sma = Calc.sma(tps, period);
+        var result = [];
+        for (var i = 0; i < candles.length; i++) {
+          if (sma[i] === null) { result.push(null); continue; }
+          var md = 0;
+          for (var j = i - period + 1; j <= i; j++) md += Math.abs(tps[j] - sma[i]);
+          md /= period;
+          result.push(md === 0 ? 0 : (tps[i] - sma[i]) / (0.015 * md));
+        }
+        return result;
+      },
+
+      momentum: function(src, period) {
+        var result = [];
+        for (var i = 0; i < src.length; i++) {
+          result.push(i < period ? null : src[i] - src[i - period]);
+        }
+        return result;
+      },
+
+      wma: function(src, period) {
+        var result = [];
+        var denom = period * (period + 1) / 2;
+        for (var i = 0; i < src.length; i++) {
+          if (i < period - 1) { result.push(null); continue; }
+          var sum = 0;
+          for (var j = 0; j < period; j++) sum += src[i - j] * (period - j);
+          result.push(sum / denom);
+        }
+        return result;
+      },
+
+      hma: function(src, period) {
+        var halfWma = Calc.wma(src, Math.floor(period / 2));
+        var fullWma = Calc.wma(src, period);
+        var diff = [];
+        for (var i = 0; i < src.length; i++) {
+          diff.push(halfWma[i] !== null && fullWma[i] !== null ? 2 * halfWma[i] - fullWma[i] : null);
+        }
+        var validDiff = diff.filter(function(v) { return v !== null; });
+        return Calc.wma(validDiff, Math.floor(Math.sqrt(period)));
+      },
+
+      donchian: function(candles, period) {
+        var upper = [], lower = [], mid = [];
+        for (var i = 0; i < candles.length; i++) {
+          if (i < period - 1) { upper.push(null); lower.push(null); mid.push(null); continue; }
+          var hi = -Infinity, lo = Infinity;
+          for (var j = i - period + 1; j <= i; j++) {
+            if (candles[j].high > hi) hi = candles[j].high;
+            if (candles[j].low < lo) lo = candles[j].low;
+          }
+          upper.push(hi); lower.push(lo); mid.push((hi + lo) / 2);
+        }
+        return { upper: upper, middle: mid, lower: lower };
+      },
+
+      ichimoku: function(candles, tenkan, kijun, senkou, displacement) {
+        function donch(len, i) {
+          if (i < len - 1) return null;
+          var hi = -Infinity, lo = Infinity;
+          for (var j = i - len + 1; j <= i; j++) {
+            if (candles[j].high > hi) hi = candles[j].high;
+            if (candles[j].low < lo) lo = candles[j].low;
+          }
+          return (hi + lo) / 2;
+        }
+        var tenkanSen = [], kijunSen = [], senkouA = [], senkouB = [], chikou = [];
+        for (var i = 0; i < candles.length; i++) {
+          tenkanSen.push(donch(tenkan, i));
+          kijunSen.push(donch(kijun, i));
+          var sa = (tenkanSen[i] !== null && kijunSen[i] !== null) ? (tenkanSen[i] + kijunSen[i]) / 2 : null;
+          senkouA.push(sa);
+          senkouB.push(donch(senkou, i));
+          chikou.push(candles[i].close);
+        }
+        return { tenkan: tenkanSen, kijun: kijunSen, senkouA: senkouA, senkouB: senkouB, chikou: chikou, displacement: displacement };
+      },
+
+      psar: function(candles, step, max) {
+        step = step || 0.02; max = max || 0.2;
+        var result = [];
+        if (candles.length < 2) return result;
+        var isLong = candles[1].close > candles[0].close;
+        var af = step;
+        var ep = isLong ? candles[0].high : candles[0].low;
+        var sar = isLong ? candles[0].low : candles[0].high;
+        result.push(sar);
+        for (var i = 1; i < candles.length; i++) {
+          var prevSar = sar;
+          sar = prevSar + af * (ep - prevSar);
+          if (isLong) {
+            sar = Math.min(sar, candles[i - 1].low, i > 1 ? candles[i - 2].low : candles[i - 1].low);
+            if (candles[i].low < sar) { isLong = false; sar = ep; ep = candles[i].low; af = step; }
+            else { if (candles[i].high > ep) { ep = candles[i].high; af = Math.min(af + step, max); } }
+          } else {
+            sar = Math.max(sar, candles[i - 1].high, i > 1 ? candles[i - 2].high : candles[i - 1].high);
+            if (candles[i].high > sar) { isLong = true; sar = ep; ep = candles[i].high; af = step; }
+            else { if (candles[i].low < ep) { ep = candles[i].low; af = Math.min(af + step, max); } }
+          }
+          result.push(sar);
+        }
+        return result;
+      },
+    };
+
+    // ============================================================
+    // Formula Parser -- parse expressions like ema(close, 50)
+    // ============================================================
+
+    var FormulaParser = {
+      PRESETS: {
+        'bollinger bands': 'bb(close, 20, 2)',
+        'supertrend': 'supertrend(10, 3)',
+        'stochastic': 'stoch(14, 3, 3)',
+        'atr': 'atr(14)',
+        'rsi': 'rsi(close, 14)',
+        'macd': 'macd(close, 12, 26, 9)',
+        'obv': 'obv()',
+        'mfi': 'mfi(14)',
+        'cci': 'cci(20)',
+        'momentum': 'momentum(close, 10)',
+        'parabolic sar': 'psar(0.02, 0.2)',
+        'ichimoku': 'ichimoku(9, 26, 52, 26)',
+        'donchian channels': 'donchian(20)',
+        'hull ma': 'hma(close, 9)',
+        'vwap': 'vwap()',
+        'volume': 'volume()',
+      },
+
+      OVERLAY_FNS: ['ema', 'sma', 'wma', 'hma', 'vwap', 'bb', 'supertrend', 'psar', 'ichimoku', 'donchian'],
+      OSCILLATOR_FNS: ['rsi', 'macd', 'stoch', 'atr', 'obv', 'mfi', 'cci', 'momentum'],
+
+      parse: function(input) {
+        var lower = input.trim().toLowerCase();
+        if (this.PRESETS[lower]) input = this.PRESETS[lower];
+        else input = input.trim();
+
+        var match = input.match(/^(\w+)\s*\((.*)\)$/);
+        if (!match) return null;
+
+        var fn = match[1].toLowerCase();
+        var argsStr = match[2].trim();
+        var args = argsStr ? argsStr.split(',').map(function(a) {
+          a = a.trim();
+          var num = parseFloat(a);
+          return isNaN(num) ? a : num;
+        }) : [];
+
+        var type = this.OVERLAY_FNS.indexOf(fn) >= 0 ? 'overlay' : 'oscillator';
+        return { fn: fn, args: args, type: type, formula: input };
+      },
+
+      execute: function(parsed, candles) {
+        var closes = candles.map(function(c) { return c.close; });
+        var highs = candles.map(function(c) { return c.high; });
+        var lows = candles.map(function(c) { return c.low; });
+
+        function getSrc(name) {
+          if (name === 'high') return highs;
+          if (name === 'low') return lows;
+          if (name === 'open') return candles.map(function(c) { return c.open; });
+          if (name === 'volume') return candles.map(function(c) { return c.volume; });
+          if (name === 'hl2') return candles.map(function(c) { return (c.high + c.low) / 2; });
+          if (name === 'hlc3') return candles.map(function(c) { return (c.high + c.low + c.close) / 3; });
+          return closes;
+        }
+
+        var fn = parsed.fn;
+        var a = parsed.args;
+
+        switch (fn) {
+          case 'sma': return { type: 'overlay', label: 'SMA(' + (a[1] || 20) + ')', data: Calc.sma(getSrc(a[0] || 'close'), a[1] || 20), color: '#60a5fa' };
+          case 'ema': return { type: 'overlay', label: 'EMA(' + (a[1] || 20) + ')', data: Calc.ema(getSrc(a[0] || 'close'), a[1] || 20), color: '#fbbf24' };
+          case 'wma': return { type: 'overlay', label: 'WMA(' + (a[1] || 20) + ')', data: Calc.wma(getSrc(a[0] || 'close'), a[1] || 20), color: '#34d399' };
+          case 'hma': return { type: 'overlay', label: 'HMA(' + (a[1] || 9) + ')', data: Calc.hma(getSrc(a[0] || 'close'), a[1] || 9), color: '#e879f9' };
+          case 'vwap': return { type: 'overlay', label: 'VWAP', data: Calc.vwap(candles), color: '#a78bfa' };
+          case 'volume': return { type: 'volume', label: 'Volume', data: candles };
+
+          case 'bb': {
+            var bb = Calc.bollingerBands(getSrc(a[0] || 'close'), a[1] || 20, a[2] || 2);
+            return { type: 'overlay', label: 'BB(' + (a[1] || 20) + ',' + (a[2] || 2) + ')', multi: [
+              { data: bb.upper, color: 'rgba(107,114,128,0.6)', label: 'BB Upper' },
+              { data: bb.middle, color: '#6b7280', label: 'BB Mid' },
+              { data: bb.lower, color: 'rgba(107,114,128,0.6)', label: 'BB Lower' },
+            ]};
+          }
+          case 'supertrend': {
+            var st = Calc.supertrend(candles, a[0] || 10, a[1] || 3);
+            return { type: 'overlay', label: 'ST(' + (a[0] || 10) + ',' + (a[1] || 3) + ')', coloredData: st };
+          }
+          case 'psar': {
+            var ps = Calc.psar(candles, a[0] || 0.02, a[1] || 0.2);
+            return { type: 'overlay', label: 'PSAR', data: ps, color: '#fbbf24', lineType: 'dots' };
+          }
+          case 'ichimoku': {
+            var ichi = Calc.ichimoku(candles, a[0] || 9, a[1] || 26, a[2] || 52, a[3] || 26);
+            return { type: 'overlay', label: 'Ichimoku', multi: [
+              { data: ichi.tenkan, color: '#60a5fa', label: 'Tenkan' },
+              { data: ichi.kijun, color: '#f43f5e', label: 'Kijun' },
+              { data: ichi.senkouA, color: 'rgba(52,211,153,0.5)', label: 'Senkou A' },
+              { data: ichi.senkouB, color: 'rgba(244,63,94,0.5)', label: 'Senkou B' },
+            ]};
+          }
+          case 'donchian': {
+            var dc = Calc.donchian(candles, a[0] || 20);
+            return { type: 'overlay', label: 'DC(' + (a[0] || 20) + ')', multi: [
+              { data: dc.upper, color: '#60a5fa', label: 'DC Upper' },
+              { data: dc.middle, color: '#6b7280', label: 'DC Mid' },
+              { data: dc.lower, color: '#f43f5e', label: 'DC Lower' },
+            ]};
+          }
+
+          case 'rsi': return { type: 'oscillator', label: 'RSI(' + (a[1] || 14) + ')', data: Calc.rsi(getSrc(a[0] || 'close'), a[1] || 14), color: '#a78bfa', range: [0, 100], levels: [30, 70] };
+          case 'macd': {
+            var m = Calc.macd(getSrc(a[0] || 'close'), a[1] || 12, a[2] || 26, a[3] || 9);
+            return { type: 'oscillator', label: 'MACD', macdData: m, colors: { macd: '#60a5fa', signal: '#f43f5e', histogram: '#6b7280' } };
+          }
+          case 'stoch': {
+            var s = Calc.stochastic(candles, a[0] || 14, a[1] || 3, a[2] || 3);
+            return { type: 'oscillator', label: 'Stoch(' + (a[0] || 14) + ')', stochData: s, range: [0, 100], levels: [20, 80] };
+          }
+          case 'atr': return { type: 'oscillator', label: 'ATR(' + (a[0] || 14) + ')', data: Calc.atr(candles, a[0] || 14), color: '#fbbf24' };
+          case 'obv': return { type: 'oscillator', label: 'OBV', data: Calc.obv(candles), color: '#34d399' };
+          case 'mfi': return { type: 'oscillator', label: 'MFI(' + (a[0] || 14) + ')', data: Calc.mfi(candles, a[0] || 14), color: '#e879f9', range: [0, 100], levels: [20, 80] };
+          case 'cci': return { type: 'oscillator', label: 'CCI(' + (a[0] || 20) + ')', data: Calc.cci(candles, a[0] || 20), color: '#fb923c' };
+          case 'momentum': return { type: 'oscillator', label: 'MOM(' + (a[1] || 10) + ')', data: Calc.momentum(getSrc(a[0] || 'close'), a[1] || 10), color: '#60a5fa' };
+
+          default: return null;
+        }
+      }
+    };
+
+    // ============================================================
+    // Indicator Registry
+    // ============================================================
+
     var INDICATOR_MAP = {
-      vwap:    { name: 'VWAP',    study: 'VWAP@tv-basicstudies' },
-      ema200:  { name: '200 EMA', study: 'MAExp@tv-basicstudies', inputs: { length: 200 } },
-      ema7:    { name: '7 EMA',   study: 'MAExp@tv-basicstudies', inputs: { length: 7 } },
-      ema22:   { name: '22 EMA',  study: 'MAExp@tv-basicstudies', inputs: { length: 22 } },
-      rsi:     { name: 'RSI',     study: 'RSI@tv-basicstudies' },
-      macd:    { name: 'MACD',    study: 'MACD@tv-basicstudies' },
-      volume:  { name: 'Volume',  study: 'Volume@tv-basicstudies' },
+      vwap:   { name: 'VWAP',    formula: 'vwap()' },
+      ema200: { name: '200 EMA', formula: 'ema(close, 200)' },
+      ema7:   { name: '7 EMA',   formula: 'ema(close, 7)' },
+      ema22:  { name: '22 EMA',  formula: 'ema(close, 22)' },
+      rsi:    { name: 'RSI',     formula: 'rsi(close, 14)' },
+      macd:   { name: 'MACD',    formula: 'macd(close, 12, 26, 9)' },
+      volume: { name: 'Volume',  formula: 'volume()' },
+    };
+
+    var INDICATOR_COLORS = {
+      vwap: '#a78bfa', ema200: '#f43f5e', ema7: '#fbbf24', ema22: '#60a5fa',
     };
 
     function loadIndicatorPrefs() {
       var saved = localStorage.getItem('mct_indicator_prefs');
       if (saved) return JSON.parse(saved);
-      return {
-        vwap: true, ema200: true, ema7: true, ema22: true,
-        rsi: true, macd: true, volume: true,
-      };
+      return { vwap: true, ema200: true, ema7: true, ema22: true, rsi: true, macd: true, volume: true };
     }
 
     function saveIndicatorPrefs(prefs) {
       localStorage.setItem('mct_indicator_prefs', JSON.stringify(prefs));
     }
 
-    // Load user-added custom scripts from localStorage
     function loadCustomScripts() {
       var saved = localStorage.getItem('mct_custom_scripts');
       if (saved) return JSON.parse(saved);
@@ -1203,31 +1658,6 @@
       });
     }
 
-    // Build the studies array from current prefs + custom scripts
-    function buildStudiesArray() {
-      var prefs = loadIndicatorPrefs();
-      var studies = [];
-
-      Object.keys(INDICATOR_MAP).forEach(function(key) {
-        if (!prefs[key]) return;
-        var def = INDICATOR_MAP[key];
-        if (def.inputs) {
-          studies.push({ id: def.study, inputs: def.inputs });
-        } else {
-          studies.push(def.study);
-        }
-      });
-
-      // Add custom scripts
-      var customs = loadCustomScripts();
-      customs.forEach(function(script) {
-        studies.push(script.study);
-      });
-
-      return studies;
-    }
-
-    // Render the custom scripts list in the dropdown
     function renderCustomScripts() {
       var list = document.getElementById('custom-scripts-list');
       if (!list) return;
@@ -1243,7 +1673,6 @@
           + '</div>';
       }).join('');
 
-      // Attach remove handlers
       list.querySelectorAll('.custom-script-remove').forEach(function(btn) {
         btn.addEventListener('click', function(e) {
           e.stopPropagation();
@@ -1259,106 +1688,293 @@
     }
 
     // ============================================================
-    // TradingView Widget Creation (per panel)
+    // Binance Kline Data Fetching
     // ============================================================
 
-    var TV_WIDGET_CONFIG = {
-      timezone: 'Etc/UTC',
-      theme: 'dark',
-      style: '1',
-      locale: 'en',
-      toolbar_bg: '#08070c',
-      enable_publishing: false,
-      allow_symbol_change: false,
-      hide_side_toolbar: true,
-      hide_top_toolbar: false,
-      details: false,
-      hotlist: false,
-      calendar: false,
-      withdateranges: false,
-      hide_legend: false,
-      save_image: false,
-      enabled_features: [
-        'header_indicators',
-        'header_chart_type',
-        'header_settings',
-        'header_fullscreen_button',
-        'header_screenshot',
-        'use_localstorage_for_settings',
-        'context_menus',
-        'control_bar',
-        'legend_widget',
-      ],
-      disabled_features: [
-        'header_symbol_search',
-        'header_compare',
-        'header_undo_redo',
-        'timeframes_toolbar',
-        'left_toolbar',
-      ],
-      backgroundColor: '#08070c',
-      gridColor: 'rgba(42, 36, 56, 0.4)',
-      overrides: {
-        'paneProperties.background': '#08070c',
-        'paneProperties.backgroundType': 'solid',
-        'paneProperties.vertGridProperties.color': 'rgba(42, 36, 56, 0.4)',
-        'paneProperties.horzGridProperties.color': 'rgba(42, 36, 56, 0.4)',
-        'scalesProperties.textColor': '#9a8e80',
-        'scalesProperties.lineColor': '#2a2438',
-        'mainSeriesProperties.candleStyle.upColor': '#34d399',
-        'mainSeriesProperties.candleStyle.downColor': '#f43f5e',
-        'mainSeriesProperties.candleStyle.borderUpColor': '#34d399',
-        'mainSeriesProperties.candleStyle.borderDownColor': '#f43f5e',
-        'mainSeriesProperties.candleStyle.wickUpColor': '#34d399',
-        'mainSeriesProperties.candleStyle.wickDownColor': '#f43f5e',
-      },
-      loading_screen: { backgroundColor: '#08070c', foregroundColor: '#d4af37' },
-    };
+    async function fetchKlines(symbol, interval, limit) {
+      limit = limit || 300;
+      var key = symbol + '_' + interval;
+      var cached = candleCache.get(key);
+      if (cached && Date.now() - cached.timestamp < CACHE_TTL) return cached.candles;
 
-    function createChartWidget(idx) {
-      var containerId = 'tv-chart-' + idx;
-      var container = document.getElementById(containerId);
-      if (!container) return;
-      container.innerHTML = '';
+      var url = API_BASE + '/klines?symbol=' + symbol + '&interval=' + interval + '&limit=' + limit;
+      var resp = await fetch(url);
+      if (!resp.ok) throw new Error('Kline API ' + resp.status);
+      var candles = await resp.json();
 
-      var config = Object.assign({}, TV_WIDGET_CONFIG, {
-        autosize: true,
-        symbol: 'BINANCE:' + STATE.symbol,
-        interval: chartIntervals[idx],
-        container_id: containerId,
-        studies: buildStudiesArray(),
-      });
-
-      tvWidgets[idx] = new TradingView.widget(config);
+      candleCache.set(key, { candles: candles, timestamp: Date.now() });
+      return candles;
     }
-
-    function createAllCharts() {
-      for (var i = 0; i < CHART_COUNT; i++) createChartWidget(i);
-    }
-
-    function recreateAllCharts() {
-      for (var i = 0; i < CHART_COUNT; i++) createChartWidget(i);
-    }
-
-    // ============================================================
-    // Data Fetching
-    // ============================================================
 
     async function fetchChartData() {
-      const url = API_BASE + '/data?symbol=' + STATE.symbol + '&interval=' + STATE.interval + '&limit=300';
-      const response = await fetch(url);
+      var url = API_BASE + '/data?symbol=' + STATE.symbol + '&interval=' + STATE.interval + '&limit=300';
+      var response = await fetch(url);
       if (!response.ok) throw new Error('HTTP ' + response.status);
       return response.json();
     }
 
     async function fetchScanData() {
-      const response = await fetch(API_BASE + '/scan');
+      var response = await fetch(API_BASE + '/scan');
       if (!response.ok) throw new Error('HTTP ' + response.status);
       return response.json();
     }
 
     // ============================================================
-    // Right Sidebar + Bottom Panel Updates from SMC Data
+    // Chart Creation with Lightweight Charts
+    // ============================================================
+
+    var CHART_THEME = {
+      layout: { background: { color: '#08070c' }, textColor: '#9a8e80', fontFamily: 'JetBrains Mono, monospace', fontSize: 10 },
+      grid: { vertLines: { color: 'rgba(42, 36, 56, 0.4)' }, horzLines: { color: 'rgba(42, 36, 56, 0.4)' } },
+      crosshair: { mode: LightweightCharts.CrosshairMode.Normal, vertLine: { color: 'rgba(212,175,55,0.3)', labelBackgroundColor: '#d4af37' }, horzLine: { color: 'rgba(212,175,55,0.3)', labelBackgroundColor: '#d4af37' } },
+      rightPriceScale: { borderColor: '#2a2438' },
+      timeScale: { borderColor: '#2a2438', timeVisible: true, secondsVisible: false },
+    };
+
+    var CANDLE_OPTIONS = {
+      upColor: '#34d399', downColor: '#f43f5e',
+      borderUpColor: '#34d399', borderDownColor: '#f43f5e',
+      wickUpColor: '#34d399', wickDownColor: '#f43f5e',
+    };
+
+    function destroyPanel(idx) {
+      var p = chartPanels[idx];
+      p.subCharts.forEach(function(sc) { if (sc.chart) sc.chart.remove(); if (sc.container) sc.container.remove(); });
+      if (p.chart) p.chart.remove();
+      p.chart = null; p.candleSeries = null; p.volumeSeries = null;
+      p.overlaySeries = []; p.subCharts = []; p.candles = [];
+    }
+
+    async function createChart(idx) {
+      destroyPanel(idx);
+
+      var container = document.getElementById('chart-main-' + idx);
+      if (!container) return;
+      container.innerHTML = '';
+
+      var chart = LightweightCharts.createChart(container, Object.assign({}, CHART_THEME, {
+        width: container.clientWidth,
+        height: container.clientHeight,
+      }));
+
+      var candleSeries = chart.addCandlestickSeries(CANDLE_OPTIONS);
+      var p = chartPanels[idx];
+      p.chart = chart;
+      p.candleSeries = candleSeries;
+
+      // Fetch data
+      var binanceInterval = TV_TO_BINANCE[chartIntervals[idx]] || '1m';
+      try {
+        var candles = await fetchKlines(STATE.symbol, binanceInterval);
+        p.candles = candles;
+        candleSeries.setData(candles);
+        chart.timeScale().fitContent();
+
+        // Apply indicators
+        applyIndicators(idx);
+      } catch (err) {
+        console.error('Failed to load candles for panel ' + idx + ':', err);
+      }
+
+      // Resize observer
+      var ro = new ResizeObserver(function() {
+        chart.applyOptions({ width: container.clientWidth, height: container.clientHeight });
+      });
+      ro.observe(container);
+      p._resizeObserver = ro;
+    }
+
+    function applyIndicators(idx) {
+      var p = chartPanels[idx];
+      if (!p.chart || !p.candles.length) return;
+
+      // Clear existing overlays and sub-charts
+      p.overlaySeries.forEach(function(s) { try { p.chart.removeSeries(s); } catch(_) {} });
+      p.overlaySeries = [];
+      p.subCharts.forEach(function(sc) { if (sc.chart) sc.chart.remove(); if (sc.container) sc.container.remove(); });
+      p.subCharts = [];
+      if (p.volumeSeries) { try { p.chart.removeSeries(p.volumeSeries); } catch(_) {} p.volumeSeries = null; }
+
+      var prefs = loadIndicatorPrefs();
+      var allFormulas = [];
+
+      // Built-in indicators
+      Object.keys(INDICATOR_MAP).forEach(function(key) {
+        if (!prefs[key]) return;
+        var def = INDICATOR_MAP[key];
+        var parsed = FormulaParser.parse(def.formula);
+        if (parsed) {
+          parsed._builtinKey = key;
+          allFormulas.push(parsed);
+        }
+      });
+
+      // Custom scripts
+      var customs = loadCustomScripts();
+      customs.forEach(function(s) {
+        var parsed = FormulaParser.parse(s.formula || s.name);
+        if (parsed) allFormulas.push(parsed);
+      });
+
+      var panelBody = document.getElementById('chart-main-' + idx).parentElement;
+
+      allFormulas.forEach(function(parsed) {
+        var result = FormulaParser.execute(parsed, p.candles);
+        if (!result) return;
+
+        var times = p.candles.map(function(c) { return c.time; });
+
+        if (result.type === 'volume') {
+          var volSeries = p.chart.addHistogramSeries({
+            priceScaleId: 'vol', priceFormat: { type: 'volume' },
+            color: 'rgba(212,175,55,0.3)',
+          });
+          p.chart.priceScale('vol').applyOptions({ scaleMargins: { top: 0.8, bottom: 0 } });
+          volSeries.setData(p.candles.map(function(c) {
+            return { time: c.time, value: c.volume, color: c.close >= c.open ? 'rgba(52,211,153,0.3)' : 'rgba(244,63,94,0.3)' };
+          }));
+          p.volumeSeries = volSeries;
+          return;
+        }
+
+        if (result.type === 'overlay') {
+          if (result.multi) {
+            result.multi.forEach(function(line) {
+              var series = p.chart.addLineSeries({ color: line.color, lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
+              var data = [];
+              for (var i = 0; i < times.length && i < line.data.length; i++) {
+                if (line.data[i] !== null) data.push({ time: times[i], value: line.data[i] });
+              }
+              series.setData(data);
+              p.overlaySeries.push(series);
+            });
+          } else if (result.coloredData) {
+            // Supertrend: colored line
+            var series = p.chart.addLineSeries({ lineWidth: 2, priceLineVisible: false, lastValueVisible: false, color: '#34d399' });
+            var data = [];
+            for (var i = 0; i < times.length && i < result.coloredData.value.length; i++) {
+              if (result.coloredData.value[i] !== null) {
+                data.push({ time: times[i], value: result.coloredData.value[i], color: result.coloredData.direction[i] === 1 ? '#34d399' : '#f43f5e' });
+              }
+            }
+            series.setData(data);
+            p.overlaySeries.push(series);
+          } else if (result.lineType === 'dots') {
+            // PSAR dots
+            var series = p.chart.addLineSeries({
+              color: result.color || '#fbbf24', lineWidth: 0, priceLineVisible: false, lastValueVisible: false,
+              pointMarkersVisible: true, pointMarkersRadius: 2,
+            });
+            var data = [];
+            for (var i = 0; i < times.length && i < result.data.length; i++) {
+              if (result.data[i] !== null) data.push({ time: times[i], value: result.data[i] });
+            }
+            series.setData(data);
+            p.overlaySeries.push(series);
+          } else {
+            var color = result.color;
+            if (parsed._builtinKey && INDICATOR_COLORS[parsed._builtinKey]) color = INDICATOR_COLORS[parsed._builtinKey];
+            var series = p.chart.addLineSeries({ color: color || '#60a5fa', lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
+            var data = [];
+            for (var i = 0; i < times.length && i < result.data.length; i++) {
+              if (result.data[i] !== null) data.push({ time: times[i], value: result.data[i] });
+            }
+            series.setData(data);
+            p.overlaySeries.push(series);
+          }
+        } else if (result.type === 'oscillator') {
+          // Create sub-chart
+          var subDiv = document.createElement('div');
+          subDiv.className = 'sub-chart-container';
+          subDiv.style.position = 'relative';
+          panelBody.appendChild(subDiv);
+
+          var labelEl = document.createElement('div');
+          labelEl.className = 'sub-chart-label';
+          labelEl.textContent = result.label;
+          subDiv.appendChild(labelEl);
+
+          var subChart = LightweightCharts.createChart(subDiv, Object.assign({}, CHART_THEME, {
+            width: subDiv.clientWidth || panelBody.clientWidth,
+            height: 80,
+          }));
+          subChart.priceScale('right').applyOptions({ scaleMargins: { top: 0.1, bottom: 0.1 } });
+          subChart.timeScale().applyOptions({ visible: false });
+
+          // Sync time scale
+          p.chart.timeScale().subscribeVisibleLogicalRangeChange(function(range) {
+            if (range) subChart.timeScale().setVisibleLogicalRange(range);
+          });
+
+          if (result.macdData) {
+            var macdSeries = subChart.addLineSeries({ color: result.colors.macd, lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
+            var sigSeries = subChart.addLineSeries({ color: result.colors.signal, lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
+            var histSeries = subChart.addHistogramSeries({ priceLineVisible: false, lastValueVisible: false });
+            var mData = [], sData = [], hData = [];
+            for (var i = 0; i < times.length; i++) {
+              if (result.macdData.macd[i] !== null) mData.push({ time: times[i], value: result.macdData.macd[i] });
+              if (result.macdData.signal[i] !== null) sData.push({ time: times[i], value: result.macdData.signal[i] });
+              if (result.macdData.histogram[i] !== null) hData.push({ time: times[i], value: result.macdData.histogram[i], color: result.macdData.histogram[i] >= 0 ? 'rgba(52,211,153,0.5)' : 'rgba(244,63,94,0.5)' });
+            }
+            macdSeries.setData(mData);
+            sigSeries.setData(sData);
+            histSeries.setData(hData);
+          } else if (result.stochData) {
+            var kSeries = subChart.addLineSeries({ color: '#60a5fa', lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
+            var dSeries = subChart.addLineSeries({ color: '#f43f5e', lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
+            var kData = [], dData = [];
+            for (var i = 0; i < times.length; i++) {
+              if (result.stochData.k[i] !== null) kData.push({ time: times[i], value: result.stochData.k[i] });
+            }
+            var dIdx = 0;
+            for (var i = 0; i < times.length; i++) {
+              if (result.stochData.k[i] !== null && dIdx < result.stochData.d.length) {
+                if (result.stochData.d[dIdx] !== null) dData.push({ time: times[i], value: result.stochData.d[dIdx] });
+                dIdx++;
+              }
+            }
+            kSeries.setData(kData);
+            dSeries.setData(dData);
+            if (result.levels) {
+              result.levels.forEach(function(lv) {
+                kSeries.createPriceLine({ price: lv, color: 'rgba(107,114,128,0.4)', lineWidth: 1, lineStyle: 2 });
+              });
+            }
+          } else {
+            var lineSeries = subChart.addLineSeries({ color: result.color || '#a78bfa', lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
+            var lineData = [];
+            for (var i = 0; i < times.length && i < result.data.length; i++) {
+              if (result.data[i] !== null) lineData.push({ time: times[i], value: result.data[i] });
+            }
+            lineSeries.setData(lineData);
+            if (result.levels) {
+              result.levels.forEach(function(lv) {
+                lineSeries.createPriceLine({ price: lv, color: 'rgba(107,114,128,0.4)', lineWidth: 1, lineStyle: 2 });
+              });
+            }
+          }
+
+          // Resize sub-chart
+          var subRo = new ResizeObserver(function() {
+            subChart.applyOptions({ width: subDiv.clientWidth });
+          });
+          subRo.observe(subDiv);
+
+          p.subCharts.push({ chart: subChart, container: subDiv, resizeObserver: subRo });
+        }
+      });
+    }
+
+    function createAllCharts() {
+      for (var i = 0; i < CHART_COUNT; i++) createChart(i);
+    }
+
+    function recreateAllCharts() {
+      for (var i = 0; i < CHART_COUNT; i++) createChart(i);
+    }
+
+    // ============================================================
+    // SMC Data + UI Updates (unchanged)
     // ============================================================
 
     function formatPrice(price) {
@@ -1371,10 +1987,7 @@
     function updateRightSidebar(data) {
       if (!data) return;
       STATE.chartData = data;
-
       var trend = data.trend || 'Neutral';
-
-      // Toolbar trend box
       var trendEl = document.getElementById('trend-value');
       trendEl.textContent = trend;
       trendEl.className = 'trend-value ' + trend.toLowerCase();
@@ -1382,45 +1995,34 @@
 
     function updateSummary(data) {
       if (!data) return;
-
       var highLabels = data.labels?.filter(function(l) { return l.type === 'high'; }) || [];
       var lowLabels = data.labels?.filter(function(l) { return l.type === 'low'; }) || [];
       var lastHigh = highLabels[highLabels.length - 1];
       var lastLow = lowLabels[lowLabels.length - 1];
-
       var structure = (lastHigh?.label || '--') + ' / ' + (lastLow?.label || '--');
       var isBullish = lastHigh?.label === 'HH' && lastLow?.label === 'HL';
       var isBearish = lastHigh?.label === 'LH' && lastLow?.label === 'LL';
       var trend = isBullish ? 'Bullish' : isBearish ? 'Bearish' : 'Neutral';
       var trendColor = isBullish ? 'var(--color-success)' : isBearish ? 'var(--color-danger)' : 'var(--color-fg-muted)';
-
       DOM.sumTrend.textContent = trend;
       DOM.sumTrend.style.color = trendColor;
       DOM.sumStructure.textContent = structure;
-
       var swingHighs = data.swings?.filter(function(s) { return s.type === 'high'; }) || [];
       var swingLows = data.swings?.filter(function(s) { return s.type === 'low'; }) || [];
-      var lastSH = swingHighs[swingHighs.length - 1];
-      var lastSL = swingLows[swingLows.length - 1];
-      DOM.sumSh.textContent = lastSH ? formatPrice(lastSH.price) : '--';
-      DOM.sumSl.textContent = lastSL ? formatPrice(lastSL.price) : '--';
-
+      DOM.sumSh.textContent = swingHighs.length ? formatPrice(swingHighs[swingHighs.length - 1].price) : '--';
+      DOM.sumSl.textContent = swingLows.length ? formatPrice(swingLows[swingLows.length - 1].price) : '--';
       var bullOB = data.orderBlocks?.filter(function(o) { return o.type === 'bullish'; }).length || 0;
       var bearOB = data.orderBlocks?.filter(function(o) { return o.type === 'bearish'; }).length || 0;
       DOM.sumOb.textContent = bullOB + ' Bull / ' + bearOB + ' Bear';
-
       var bullFVG = data.fvgs?.filter(function(f) { return f.type === 'bullish'; }).length || 0;
       var bearFVG = data.fvgs?.filter(function(f) { return f.type === 'bearish'; }).length || 0;
       DOM.sumFvg.textContent = bullFVG + ' Bull / ' + bearFVG + ' Bear';
-
       var kl = data.keyLevels || {};
-      DOM.sumPdhl.textContent = kl.PDH && kl.PDL
-        ? formatPrice(kl.PDH) + ' / ' + formatPrice(kl.PDL)
-        : '--';
+      DOM.sumPdhl.textContent = kl.PDH && kl.PDL ? formatPrice(kl.PDH) + ' / ' + formatPrice(kl.PDL) : '--';
     }
 
     // ============================================================
-    // Coin List Rendering
+    // Coin List
     // ============================================================
 
     function renderCoinList(coins, filter) {
@@ -1429,10 +2031,7 @@
         ? coins.filter(function(c) { return c.symbol.toLowerCase().includes(filter.toLowerCase()); })
         : coins;
 
-      if (!filtered.length) {
-        DOM.coinList.innerHTML = '<div class="coin-loading">No coins found</div>';
-        return;
-      }
+      if (!filtered.length) { DOM.coinList.innerHTML = '<div class="coin-loading">No coins found</div>'; return; }
 
       DOM.coinList.innerHTML = filtered.map(function(coin) {
         var isActive = coin.symbol === STATE.symbol;
@@ -1444,78 +2043,44 @@
           ? 'https://www.bitunix.com/futures/USDT-M/' + coin.symbol
           : 'https://www.binance.com/en/futures/' + coin.symbol;
         var exchangeBadge = exchange === 'bitunix'
-          ? '<span style="font-size:9px;color:var(--color-bitunix);margin-left:4px;">BTX</span>'
-          : '';
+          ? '<span style="font-size:9px;color:var(--color-bitunix);margin-left:4px;">BTX</span>' : '';
 
-        return '<div class="coin-item ' + (isActive ? 'active' : '') + '"'
-          + ' role="option"'
-          + ' aria-selected="' + isActive + '"'
-          + ' data-symbol="' + coin.symbol + '"'
-          + ' tabindex="0">'
-          + '<div class="coin-info">'
-          + '<div class="coin-symbol">'
-          + coin.symbol.replace('USDT', '') + exchangeBadge
-          + ' <span class="coin-structure ' + trendClass + '">' + coin.structure + '</span>'
-          + '</div>'
-          + '</div>'
-          + '<div class="coin-actions">'
-          + '<div>'
+        return '<div class="coin-item ' + (isActive ? 'active' : '') + '" role="option" aria-selected="' + isActive + '" data-symbol="' + coin.symbol + '" tabindex="0">'
+          + '<div class="coin-info"><div class="coin-symbol">' + coin.symbol.replace('USDT', '') + exchangeBadge
+          + ' <span class="coin-structure ' + trendClass + '">' + coin.structure + '</span></div></div>'
+          + '<div class="coin-actions"><div>'
           + '<div class="coin-price">' + formatPrice(coin.price) + '</div>'
           + '<div class="coin-change ' + changeClass + '">' + changeSign + coin.change24h.toFixed(2) + '%</div>'
-          + '</div>'
-          + '<a class="coin-link"'
-          + ' href="' + exchangeUrl + '"'
-          + ' target="_blank"'
-          + ' rel="noopener noreferrer"'
-          + ' title="Open on ' + exchange + '"'
-          + ' aria-label="Open ' + coin.symbol + ' on ' + exchange + '"'
-          + ' onclick="event.stopPropagation()">&#x2197;</a>'
-          + '</div>'
-          + '</div>';
+          + '</div><a class="coin-link" href="' + exchangeUrl + '" target="_blank" rel="noopener noreferrer" title="Open on ' + exchange + '" onclick="event.stopPropagation()">&#x2197;</a></div></div>';
       }).join('');
 
-      // Attach click handlers
       DOM.coinList.querySelectorAll('.coin-item').forEach(function(el) {
         el.addEventListener('click', function() { handleCoinSelect(el.dataset.symbol); });
         el.addEventListener('keydown', function(e) {
-          if (e.key === 'Enter' || e.key === ' ') {
-            e.preventDefault();
-            handleCoinSelect(el.dataset.symbol);
-          }
+          if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleCoinSelect(el.dataset.symbol); }
         });
       });
     }
 
     function handleCoinSelect(symbol) {
-      // Close mobile panels if open
       document.getElementById('left-sidebar').classList.remove('mobile-open');
       document.getElementById('mobile-overlay').classList.remove('active');
-
       STATE.symbol = symbol;
       DOM.toolbarSymbol.textContent = symbol;
-
-      // Update active state in sidebar
       DOM.coinList.querySelectorAll('.coin-item').forEach(function(el) {
         var isActive = el.dataset.symbol === symbol;
         el.classList.toggle('active', isActive);
         el.setAttribute('aria-selected', isActive);
       });
-
-      // Update toolbar price/change from cached coin data
       var coin = STATE.coins.find(function(c) { return c.symbol === symbol; });
       if (coin) {
         DOM.toolbarPrice.textContent = formatPrice(coin.price);
         DOM.toolbarChange.textContent = (coin.change24h >= 0 ? '+' : '') + coin.change24h.toFixed(2) + '%';
         DOM.toolbarChange.className = 'toolbar-change ' + (coin.change24h >= 0 ? 'positive' : 'negative');
       }
-
-      // Recreate the TradingView widget with the new symbol
+      candleCache.clear();
       recreateAllCharts();
-
-      // Fetch new SMC data for the right sidebar
       loadSmcData();
-
-      // Reconnect kline WebSocket for the new symbol
       connectWebSocket();
     }
 
@@ -1528,9 +2093,7 @@
         var data = await fetchChartData();
         updateRightSidebar(data);
         updateSummary(data);
-      } catch (err) {
-        console.error('Failed to load SMC data:', err);
-      }
+      } catch (err) { console.error('Failed to load SMC data:', err); }
     }
 
     async function loadCoinList() {
@@ -1549,50 +2112,48 @@
     function startAutoRefresh() {
       if (STATE.refreshTimer) clearInterval(STATE.refreshTimer);
       STATE.refreshTimer = setInterval(async function() {
-        try {
-          var data = await fetchChartData();
-          updateRightSidebar(data);
-          updateSummary(data);
-        } catch (_) {}
+        try { var data = await fetchChartData(); updateRightSidebar(data); updateSummary(data); } catch (_) {}
       }, REFRESH_INTERVAL);
     }
 
     // ============================================================
-    // Binance WebSocket -- Live Price Streaming (toolbar + sidebar)
+    // WebSocket -- Live Price + Candle Updates
     // ============================================================
 
     function connectWebSocket() {
-      if (STATE.ws) {
-        STATE.ws.onclose = null;
-        STATE.ws.close();
-        STATE.ws = null;
-      }
+      if (STATE.ws) { STATE.ws.onclose = null; STATE.ws.close(); STATE.ws = null; }
 
+      // Build combined stream for all active panel intervals
       var sym = STATE.symbol.toLowerCase();
-      var tf = STATE.interval;
-      var wsUrl = 'wss://fstream.binance.com/ws/' + sym + '@kline_' + tf;
+      var streams = [];
+      var seenIntervals = {};
+      for (var i = 0; i < CHART_COUNT; i++) {
+        var bi = TV_TO_BINANCE[chartIntervals[i]] || '1m';
+        if (!seenIntervals[bi]) { streams.push(sym + '@kline_' + bi); seenIntervals[bi] = true; }
+      }
+      // Also include the STATE.interval for toolbar
+      if (!seenIntervals[STATE.interval]) streams.push(sym + '@kline_' + STATE.interval);
 
+      var wsUrl = 'wss://fstream.binance.com/stream?streams=' + streams.join('/');
       var ws = new WebSocket(wsUrl);
       STATE.ws = ws;
 
-      ws.onopen = function() {
-        console.log('[WS] Connected: ' + STATE.symbol + ' ' + tf);
-      };
+      ws.onopen = function() { console.log('[WS] Connected: ' + streams.join(', ')); };
 
       ws.onmessage = function(event) {
         try {
           var msg = JSON.parse(event.data);
-          if (!msg.k) return;
+          var data = msg.data;
+          if (!data || !data.k) return;
 
-          var k = msg.k;
+          var k = data.k;
           var closePrice = parseFloat(k.c);
 
-          // Update toolbar price with tick color flash
+          // Update toolbar price
           if (DOM.toolbarPrice) {
             var prevPrice = STATE.lastPrice;
             STATE.lastPrice = closePrice;
             DOM.toolbarPrice.textContent = '$' + formatPrice(closePrice);
-
             if (prevPrice !== null && closePrice !== prevPrice) {
               var tickClass = closePrice > prevPrice ? 'tick-up' : 'tick-down';
               DOM.toolbarPrice.classList.remove('tick-up', 'tick-down');
@@ -1601,113 +2162,83 @@
             }
           }
 
-          // Update price in coin list sidebar
           var coinEl = document.querySelector('.coin-item[data-symbol="' + STATE.symbol + '"] .coin-price');
           if (coinEl) coinEl.textContent = '$' + formatPrice(closePrice);
+
+          // Update live candle on matching chart panels
+          var candle = {
+            time: Math.floor(parseInt(k.t) / 1000),
+            open: parseFloat(k.o),
+            high: parseFloat(k.h),
+            low: parseFloat(k.l),
+            close: closePrice,
+            volume: parseFloat(k.v),
+          };
+
+          var kInterval = k.i;
+          for (var i = 0; i < CHART_COUNT; i++) {
+            var panelInterval = TV_TO_BINANCE[chartIntervals[i]];
+            if (panelInterval === kInterval && chartPanels[i].candleSeries) {
+              chartPanels[i].candleSeries.update(candle);
+              // Update volume if active
+              if (chartPanels[i].volumeSeries) {
+                chartPanels[i].volumeSeries.update({
+                  time: candle.time, value: candle.volume,
+                  color: candle.close >= candle.open ? 'rgba(52,211,153,0.3)' : 'rgba(244,63,94,0.3)',
+                });
+              }
+            }
+          }
         } catch (_) {}
       };
 
       ws.onclose = function() {
         console.log('[WS] Disconnected, reconnecting in 3s...');
-        setTimeout(function() {
-          if (STATE.symbol && STATE.interval) connectWebSocket();
-        }, 3000);
+        setTimeout(function() { if (STATE.symbol) connectWebSocket(); }, 3000);
       };
-
-      ws.onerror = function(err) {
-        console.error('[WS] Error:', err);
-        ws.close();
-      };
+      ws.onerror = function(err) { console.error('[WS] Error:', err); ws.close(); };
     }
 
-    // Stream mini ticker for all coins in sidebar
     var miniTickerWs = null;
-
     function connectMiniTickerStream() {
-      if (miniTickerWs) {
-        miniTickerWs.onclose = null;
-        miniTickerWs.close();
-      }
-
+      if (miniTickerWs) { miniTickerWs.onclose = null; miniTickerWs.close(); }
       miniTickerWs = new WebSocket('wss://fstream.binance.com/ws/!miniTicker@arr');
-
       miniTickerWs.onmessage = function(event) {
         try {
           var tickers = JSON.parse(event.data);
           for (var i = 0; i < tickers.length; i++) {
             var t = tickers[i];
-            var sym = t.s;
-            var price = parseFloat(t.c);
-            var coinEl = document.querySelector('.coin-item[data-symbol="' + sym + '"] .coin-price');
-            if (coinEl) coinEl.textContent = '$' + formatPrice(price);
+            var coinEl = document.querySelector('.coin-item[data-symbol="' + t.s + '"] .coin-price');
+            if (coinEl) coinEl.textContent = '$' + formatPrice(parseFloat(t.c));
           }
         } catch (_) {}
       };
-
-      miniTickerWs.onclose = function() {
-        setTimeout(connectMiniTickerStream, 5000);
-      };
+      miniTickerWs.onclose = function() { setTimeout(connectMiniTickerStream, 5000); };
       miniTickerWs.onerror = function() { miniTickerWs.close(); };
     }
 
     // ============================================================
-    // Add Custom Script (global so inline onclick can access)
+    // Add Custom Script (global for inline onclick)
     // ============================================================
-
-    var KNOWN_SCRIPTS = {
-      'bollinger bands': 'BB@tv-basicstudies',
-      'ichimoku': 'IchimokuCloud@tv-basicstudies',
-      'stochastic': 'Stochastic@tv-basicstudies',
-      'atr': 'ATR@tv-basicstudies',
-      'adx': 'ADX@tv-basicstudies',
-      'cci': 'CCI@tv-basicstudies',
-      'williams %r': 'WilliamsR@tv-basicstudies',
-      'parabolic sar': 'PSAR@tv-basicstudies',
-      'pivot points': 'PivotPointsStandard@tv-basicstudies',
-      'obv': 'OBV@tv-basicstudies',
-      'mfi': 'MFI@tv-basicstudies',
-      'momentum': 'Momentum@tv-basicstudies',
-      'roc': 'ROC@tv-basicstudies',
-      'awesome oscillator': 'AwesomeOscillator@tv-basicstudies',
-      'donchian channels': 'DONCH@tv-basicstudies',
-      'keltner channels': 'KLTNR@tv-basicstudies',
-      'supertrend': 'Supertrend@tv-basicstudies',
-      'zigzag': 'ZigZag@tv-basicstudies',
-      'vwma': 'VWMA@tv-basicstudies',
-      'hull ma': 'HullMA@tv-basicstudies',
-      'linear regression': 'LinearRegression@tv-basicstudies',
-      'chaikin money flow': 'CMF@tv-basicstudies',
-      'elder ray': 'ElderRay@tv-basicstudies',
-      'ma cross': 'MAcross@tv-basicstudies',
-      'envelope': 'ENV@tv-basicstudies',
-    };
 
     function addCustomScript() {
       var scriptInput = document.getElementById('script-name-input');
       var indDropdown = document.getElementById('indicator-dropdown');
       var indBtn = document.getElementById('btn-indicators');
       var name = scriptInput.value.trim();
-      if (!name) {
-        showToast('Type an indicator name first', 'warning');
-        scriptInput.focus();
-        return;
-      }
+      if (!name) { showToast('Type a formula or indicator name', 'warning'); scriptInput.focus(); return; }
 
-      var study = name;
-      var lower = name.toLowerCase();
-      if (KNOWN_SCRIPTS[lower]) {
-        study = KNOWN_SCRIPTS[lower];
-      } else if (!name.includes('@') && !name.startsWith('PUB;')) {
-        study = name + '@tv-basicstudies';
-      }
+      // Try parsing as formula first, then as preset name
+      var parsed = FormulaParser.parse(name);
+      if (!parsed) { showToast('Unknown formula. Try: ema(close, 50), rsi(close, 14), bb(close, 20, 2)', 'error'); return; }
 
+      var formula = parsed.formula;
       var scripts = loadCustomScripts();
-      if (scripts.some(function(s) { return s.name === name; })) {
-        showToast('Script already added', 'warning');
-        return;
+      if (scripts.some(function(s) { return s.formula === formula || s.name === name; })) {
+        showToast('Already added', 'warning'); return;
       }
 
-      scripts.push({ name: name, study: study });
+      scripts.push({ name: name, formula: formula });
       saveCustomScripts(scripts);
       scriptInput.value = '';
       renderCustomScripts();
@@ -1722,34 +2253,26 @@
     // ============================================================
 
     function setupEventListeners() {
-      // Mobile sidebar toggles
       var overlay = document.getElementById('mobile-overlay');
       var leftSidebar = document.getElementById('left-sidebar');
 
-      function closeMobilePanels() {
-        leftSidebar.classList.remove('mobile-open');
-        overlay.classList.remove('active');
-      }
+      function closeMobilePanels() { leftSidebar.classList.remove('mobile-open'); overlay.classList.remove('active'); }
 
       document.getElementById('btn-coins').addEventListener('click', function() {
         var isOpen = leftSidebar.classList.toggle('mobile-open');
         overlay.classList.toggle('active', isOpen);
       });
-
       overlay.addEventListener('click', closeMobilePanels);
 
-      // Main toolbar TF buttons -- set all 3 charts to same timeframe
+      // Main toolbar TF buttons
       document.querySelectorAll('#tf-group .tf-btn').forEach(function(btn) {
         btn.addEventListener('click', function() {
           document.querySelectorAll('#tf-group .tf-btn').forEach(function(b) { b.classList.remove('active'); });
           btn.classList.add('active');
           STATE.interval = btn.dataset.tf;
-          STATE.tvInterval = btn.dataset.tvInterval;
 
-          // Set all 3 charts to the selected timeframe
           for (var i = 0; i < CHART_COUNT; i++) {
             chartIntervals[i] = btn.dataset.tvInterval;
-            // Update panel TF button UI
             var panel = document.querySelector('.chart-panel-tf[data-panel="' + i + '"]');
             if (panel) {
               panel.querySelectorAll('.panel-tf-btn').forEach(function(b) { b.classList.remove('active'); });
@@ -1763,7 +2286,7 @@
         });
       });
 
-      // Per-panel TF buttons -- change individual chart timeframe
+      // Per-panel TF buttons
       document.querySelectorAll('.chart-panel-tf').forEach(function(group) {
         var panelIdx = parseInt(group.dataset.panel);
         group.querySelectorAll('.panel-tf-btn').forEach(function(btn) {
@@ -1771,79 +2294,62 @@
             group.querySelectorAll('.panel-tf-btn').forEach(function(b) { b.classList.remove('active'); });
             btn.classList.add('active');
             chartIntervals[panelIdx] = btn.dataset.tv;
-            createChartWidget(panelIdx);
+            createChart(panelIdx);
+            connectWebSocket();
           });
         });
       });
 
-      // Coin search
-      DOM.coinSearch.addEventListener('input', function(e) {
-        renderCoinList(STATE.coins, e.target.value);
-      });
+      DOM.coinSearch.addEventListener('input', function(e) { renderCoinList(STATE.coins, e.target.value); });
 
-      // Bottom panel toggle
       DOM.bottomPanelToggle.addEventListener('click', function() {
         var isCollapsed = DOM.bottomPanel.classList.toggle('collapsed');
         DOM.bottomPanelToggle.textContent = isCollapsed ? '\u25B2' : '\u25BC';
         DOM.bottomPanelToggle.setAttribute('aria-expanded', !isCollapsed);
       });
 
-      // ── Indicator Dropdown ──
+      // Indicator Dropdown
       var indBtn = document.getElementById('btn-indicators');
       var indDropdown = document.getElementById('indicator-dropdown');
       var prefs = loadIndicatorPrefs();
       syncIndicatorUI(prefs);
       renderCustomScripts();
 
-      // Toggle dropdown open/close
       indBtn.addEventListener('click', function(e) {
         e.stopPropagation();
         var isOpen = indDropdown.classList.toggle('open');
         indBtn.classList.toggle('active', isOpen);
       });
 
-      // Close dropdown when clicking outside
       document.addEventListener('click', function(e) {
         if (!indDropdown.contains(e.target) && e.target !== indBtn) {
-          indDropdown.classList.remove('open');
-          indBtn.classList.remove('active');
+          indDropdown.classList.remove('open'); indBtn.classList.remove('active');
         }
       });
 
-      // Prevent dropdown close when clicking inside
-      indDropdown.addEventListener('click', function(e) {
-        e.stopPropagation();
-      });
+      indDropdown.addEventListener('click', function(e) { e.stopPropagation(); });
 
-      // Individual indicator toggles — rebuild charts on change
       indDropdown.querySelectorAll('input[data-ind]').forEach(function(cb) {
         cb.addEventListener('change', function() {
-          var key = cb.dataset.ind;
           var prefs = loadIndicatorPrefs();
-          prefs[key] = cb.checked;
+          prefs[cb.dataset.ind] = cb.checked;
           saveIndicatorPrefs(prefs);
           recreateAllCharts();
         });
       });
 
-      // All On / All Off buttons
       document.getElementById('ind-all-on').addEventListener('click', function() {
         var prefs = loadIndicatorPrefs();
         Object.keys(INDICATOR_MAP).forEach(function(key) { prefs[key] = true; });
-        saveIndicatorPrefs(prefs);
-        syncIndicatorUI(prefs);
-        recreateAllCharts();
+        saveIndicatorPrefs(prefs); syncIndicatorUI(prefs); recreateAllCharts();
       });
 
       document.getElementById('ind-all-off').addEventListener('click', function() {
         var prefs = loadIndicatorPrefs();
         Object.keys(INDICATOR_MAP).forEach(function(key) { prefs[key] = false; });
-        saveIndicatorPrefs(prefs);
-        syncIndicatorUI(prefs);
-        recreateAllCharts();
+        saveIndicatorPrefs(prefs); syncIndicatorUI(prefs); recreateAllCharts();
       });
 
-      // ── Add Custom Script (Enter key) ──
       document.getElementById('script-name-input').addEventListener('keydown', function(e) {
         if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); addCustomScript(); }
       });
@@ -1853,18 +2359,11 @@
     // Init
     // ============================================================
 
-
     async function init() {
       setupEventListeners();
-
-      // Create all 3 chart panels (1m, 3m, 15m)
       createAllCharts();
 
-      // Load coin list and SMC data in parallel
-      await Promise.all([
-        loadCoinList(),
-        loadSmcData(),
-      ]);
+      await Promise.all([loadCoinList(), loadSmcData()]);
 
       startAutoRefresh();
       connectWebSocket();
