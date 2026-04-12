@@ -1136,13 +1136,17 @@ class AgentCoordinator extends BaseAgent {
         lines.push(`**Open positions:** None`);
       }
 
-      // 2. Check recent signals
-      const recentSignals = await query(
-        `SELECT symbol, direction, result, details FROM bot_logs WHERE category = 'scan' ORDER BY ts DESC LIMIT 10`
-      ).catch(() => []);
-      const signalCount = recentSignals.filter(s => s.result === 'SIGNAL').length;
-      const blockedCount = recentSignals.filter(s => s.result === 'BLOCKED' || s.result === 'REJECTED').length;
-      lines.push(`**Recent scans:** ${recentSignals.length} scans, ${signalCount} signals found, ${blockedCount} blocked by risk`);
+      // 2. Check recent activity from agents (in-memory, not DB)
+      const coordActivity = this.getActivity ? this.getActivity(20) : [];
+      const scanActivities = coordActivity.filter(a => /signal|scan|scanned/i.test(a.message || ''));
+      const signalActivities = coordActivity.filter(a => /signal/i.test(a.message || '') && a.type === 'info');
+      const chartActivity = this.chartAgent?.getActivity ? this.chartAgent.getActivity(5) : [];
+      lines.push(`**Recent pipeline:** ${this.runCount || 0} total cycles run`);
+      if (scanActivities.length) {
+        lines.push(`**Last scan:** ${scanActivities[0].message}`);
+      } else {
+        lines.push(`**Last scan:** No recent scans found — pipeline may not be running`);
+      }
 
       // 3. Check last trade
       const lastTrade = await query("SELECT symbol, direction, pnl_pct, status, created_at FROM trades ORDER BY created_at DESC LIMIT 1").catch(() => []);
@@ -1155,8 +1159,8 @@ class AgentCoordinator extends BaseAgent {
       }
 
       // 4. Check API keys
-      const apiKeys = await query("SELECT exchange, enabled FROM api_keys WHERE enabled = true").catch(() => []);
-      lines.push(`**API keys:** ${apiKeys.length} active (${apiKeys.map(k => k.exchange).join(', ') || 'none'})`);
+      const apiKeys = await query("SELECT platform, label, enabled FROM api_keys WHERE enabled = true").catch(() => []);
+      lines.push(`**API keys:** ${apiKeys.length} active (${apiKeys.map(k => k.platform + (k.label ? ' — ' + k.label : '')).join(', ') || 'none'})`);
 
       // 5. Agent states
       const agents = this.getHealth().agents || {};
@@ -1166,12 +1170,11 @@ class AgentCoordinator extends BaseAgent {
       if (errors.length) lines.push(`**Agents with errors:** ${errors.map(a => `${a.name} (${a.errorCount})`).join(', ')}`);
 
       // 6. Common reasons
-      lines.push('\n**Common reasons for no trades:**');
-      if (apiKeys.length === 0) lines.push('- No API keys configured — bot cannot execute trades');
-      if (signalCount === 0) lines.push('- No signals found — market may not have valid SMC setups right now');
-      if (blockedCount > 0) lines.push(`- ${blockedCount} signals blocked by RiskAgent (max positions, correlation, or drawdown protection)`);
-      lines.push('- Strategy requires both 4H + 1H timeframes to agree on direction');
-      lines.push('- RSI guard blocks overbought longs / oversold shorts');
+      lines.push('\n**Possible reasons:**');
+      if (apiKeys.length === 0) lines.push('- No API keys enabled — bot cannot execute trades');
+      if (!scanActivities.length) lines.push('- Pipeline not running — no scan activity detected');
+      lines.push('- No valid SMC setup — 4H + 1H timeframes must agree on direction');
+      lines.push('- RSI guard — won\'t LONG when overbought, won\'t SHORT when oversold');
       lines.push('\nType **"scan now"** to force a scan, or **"status"** to see agent states.');
     } catch (err) {
       lines.push(`Error fetching diagnostics: ${err.message}`);
