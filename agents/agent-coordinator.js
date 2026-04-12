@@ -95,7 +95,7 @@ class AgentCoordinator extends BaseAgent {
 
     // Intervals
     this.MICRO_CYCLE_MS = 30_000;           // CEO checks every 30s
-    this.TOKEN_SCAN_INTERVAL_MS = 30_000;   // each token scanned every 30s
+    this.TOKEN_SCAN_INTERVAL_MS = 3_000;    // each token scanned every 3s
     this.FULL_CYCLE_INTERVAL_MS = 60_000;   // full pipeline every 60s
     this.TOKEN_BATCH_SIZE = 5;              // scan 5 tokens per tick to stagger load
   }
