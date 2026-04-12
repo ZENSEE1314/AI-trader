@@ -1089,6 +1089,7 @@
           <label class="ind-toggle"><input type="checkbox" data-ind="dtfxzones" checked><span class="ind-name">DTFX Zones</span><span class="ind-slider"></span></label>
           <label class="ind-toggle"><input type="checkbox" data-ind="vsa" checked><span class="ind-name">VSA</span><span class="ind-slider"></span></label>
           <label class="ind-toggle"><input type="checkbox" data-ind="psar"><span class="ind-name">Parabolic SAR</span><span class="ind-slider"></span></label>
+          <label class="ind-toggle"><input type="checkbox" data-ind="smcpro" checked><span class="ind-name">SMC Pro</span><span class="ind-slider"></span></label>
           <label class="ind-toggle"><input type="checkbox" data-ind="ichimoku"><span class="ind-name">Ichimoku</span><span class="ind-slider"></span></label>
           <label class="ind-toggle"><input type="checkbox" data-ind="rsi" checked><span class="ind-name">RSI</span><span class="ind-slider"></span></label>
           <label class="ind-toggle"><input type="checkbox" data-ind="macd" checked><span class="ind-name">MACD</span><span class="ind-slider"></span></label>
@@ -1732,6 +1733,225 @@
         return { trend: trend, trendLines: trendLines, markers: markers };
       },
 
+      // SMC Pro — Zeiierman-style full SMC indicator
+      smcPro: function(candles, lbL, lbR) {
+        lbL = lbL || 5; lbR = lbR || 5;
+        var EQL_THRESHOLD = 0.001; // 0.1% tolerance for equal highs/lows
+        var pivotHighs = [], pivotLows = [];
+        for (var i = lbL; i < candles.length - lbR; i++) {
+          var isHigh = true, isLow = true;
+          for (var j = 1; j <= lbL; j++) {
+            if (candles[i].high <= candles[i - j].high) isHigh = false;
+            if (candles[i].low >= candles[i - j].low) isLow = false;
+          }
+          for (var j = 1; j <= lbR; j++) {
+            if (candles[i].high <= candles[i + j].high) isHigh = false;
+            if (candles[i].low >= candles[i + j].low) isLow = false;
+          }
+          if (isHigh) pivotHighs.push({ idx: i, price: candles[i].high, time: candles[i].time });
+          if (isLow) pivotLows.push({ idx: i, price: candles[i].low, time: candles[i].time });
+        }
+
+        // Build swing sequence
+        var swings = [];
+        var phi = 0, pli = 0;
+        for (var i = 0; i < candles.length; i++) {
+          while (phi < pivotHighs.length && pivotHighs[phi].idx <= i) {
+            swings.push({ type: 'high', idx: pivotHighs[phi].idx, price: pivotHighs[phi].price, time: pivotHighs[phi].time });
+            phi++;
+          }
+          while (pli < pivotLows.length && pivotLows[pli].idx <= i) {
+            swings.push({ type: 'low', idx: pivotLows[pli].idx, price: pivotLows[pli].price, time: pivotLows[pli].time });
+            pli++;
+          }
+        }
+        swings.sort(function(a, b) { return a.idx - b.idx; });
+
+        var markers = [];
+        var swingLines = [];
+        var lastHigh = null, lastLow = null;
+        var structureBreaks = [];
+        var currentTrend = 'none';
+        var trendZones = [];
+        var zoneStart = 0;
+        var eqlLines = []; // Equal Highs/Lows
+
+        // Track all labeled highs/lows for Weak/Strong detection
+        var labeledHighs = [];
+        var labeledLows = [];
+
+        for (var si = 0; si < swings.length; si++) {
+          var s = swings[si];
+          if (s.type === 'high') {
+            var label = '';
+            if (lastHigh) {
+              if (s.price > lastHigh.price) label = 'HH';
+              else label = 'LH';
+              swingLines.push({ t1: lastHigh.time, p1: lastHigh.price, t2: s.time, p2: s.price, color: label === 'HH' ? 'rgba(52,211,153,0.6)' : 'rgba(244,63,94,0.6)' });
+
+              // EQH — Equal Highs detection
+              var diff = Math.abs(s.price - lastHigh.price) / lastHigh.price;
+              if (diff < EQL_THRESHOLD) {
+                eqlLines.push({ price: (s.price + lastHigh.price) / 2, t1: lastHigh.time, t2: s.time, type: 'EQH' });
+              }
+            }
+            if (label) {
+              markers.push({ time: s.time, position: 'aboveBar', color: label === 'HH' ? '#34d399' : '#f43f5e', shape: 'circle', text: label });
+              labeledHighs.push({ time: s.time, idx: s.idx, price: s.price, label: label });
+            }
+
+            // Structure breaks
+            if (lastHigh && lastLow) {
+              if (label === 'LH' && currentTrend === 'up') {
+                structureBreaks.push({ time: s.time, idx: s.idx, price: lastHigh.price, type: 'CHoCH', dir: 'bear' });
+                var prevTrend = currentTrend; currentTrend = 'down';
+                if (prevTrend !== currentTrend) { trendZones.push({ startIdx: zoneStart, endIdx: s.idx, trend: prevTrend }); zoneStart = s.idx; }
+              } else if (label === 'HH' && currentTrend !== 'up') {
+                structureBreaks.push({ time: s.time, idx: s.idx, price: lastHigh.price, type: 'BOS', dir: 'bull' });
+                var prevTrend = currentTrend; currentTrend = 'up';
+                if (prevTrend !== currentTrend) { trendZones.push({ startIdx: zoneStart, endIdx: s.idx, trend: prevTrend }); zoneStart = s.idx; }
+              }
+            }
+            lastHigh = s;
+          } else {
+            var label = '';
+            if (lastLow) {
+              if (s.price < lastLow.price) label = 'LL';
+              else label = 'HL';
+              swingLines.push({ t1: lastLow.time, p1: lastLow.price, t2: s.time, p2: s.price, color: label === 'HL' ? 'rgba(52,211,153,0.6)' : 'rgba(244,63,94,0.6)' });
+
+              // EQL — Equal Lows detection
+              var diff = Math.abs(s.price - lastLow.price) / lastLow.price;
+              if (diff < EQL_THRESHOLD) {
+                eqlLines.push({ price: (s.price + lastLow.price) / 2, t1: lastLow.time, t2: s.time, type: 'EQL' });
+              }
+            }
+            if (label) {
+              markers.push({ time: s.time, position: 'belowBar', color: label === 'HL' ? '#34d399' : '#f43f5e', shape: 'circle', text: label });
+              labeledLows.push({ time: s.time, idx: s.idx, price: s.price, label: label });
+            }
+
+            if (lastLow && lastHigh) {
+              if (label === 'HL' && currentTrend === 'down') {
+                structureBreaks.push({ time: s.time, idx: s.idx, price: lastLow.price, type: 'CHoCH', dir: 'bull' });
+                var prevTrend = currentTrend; currentTrend = 'up';
+                if (prevTrend !== currentTrend) { trendZones.push({ startIdx: zoneStart, endIdx: s.idx, trend: prevTrend }); zoneStart = s.idx; }
+              } else if (label === 'LL' && currentTrend !== 'down') {
+                structureBreaks.push({ time: s.time, idx: s.idx, price: lastLow.price, type: 'BMS', dir: 'bear' });
+                var prevTrend = currentTrend; currentTrend = 'down';
+                if (prevTrend !== currentTrend) { trendZones.push({ startIdx: zoneStart, endIdx: s.idx, trend: prevTrend }); zoneStart = s.idx; }
+              }
+            }
+            lastLow = s;
+          }
+        }
+        trendZones.push({ startIdx: zoneStart, endIdx: candles.length - 1, trend: currentTrend });
+
+        // Weak High / Strong Low detection
+        // A high is "Weak" if price hasn't swept it yet (still valid liquidity target)
+        // A low is "Strong" if it formed during an uptrend (higher probability to hold)
+        var weakStrongMarkers = [];
+        var lastPrice = candles.length > 0 ? candles[candles.length - 1].close : 0;
+
+        // Check recent highs: unswept = Weak High
+        for (var hi = labeledHighs.length - 1; hi >= Math.max(0, labeledHighs.length - 5); hi--) {
+          var h = labeledHighs[hi];
+          var swept = false;
+          for (var ci = h.idx + 1; ci < candles.length; ci++) {
+            if (candles[ci].high > h.price) { swept = true; break; }
+          }
+          if (!swept && lastPrice < h.price) {
+            weakStrongMarkers.push({ time: h.time, price: h.price, text: 'Weak High', color: '#f43f5e', position: 'aboveBar' });
+          }
+        }
+        // Check recent lows: unswept = Strong Low (in uptrend) or Weak Low (in downtrend)
+        for (var li = labeledLows.length - 1; li >= Math.max(0, labeledLows.length - 5); li--) {
+          var l = labeledLows[li];
+          var swept = false;
+          for (var ci = l.idx + 1; ci < candles.length; ci++) {
+            if (candles[ci].low < l.price) { swept = true; break; }
+          }
+          if (!swept && lastPrice > l.price) {
+            var isStrong = l.label === 'HL';
+            weakStrongMarkers.push({ time: l.time, price: l.price, text: isStrong ? 'Strong Low' : 'Weak Low', color: isStrong ? '#34d399' : '#fbbf24', position: 'belowBar' });
+          }
+        }
+
+        // PDH/PDL + PWH/PWL
+        var pdh = 0, pdl = Infinity, pwh = 0, pwl = Infinity;
+        var lastCandleTime = candles.length > 0 ? candles[candles.length - 1].time * 1000 : 0;
+        var today = new Date(lastCandleTime);
+        var todayStart = new Date(today); todayStart.setUTCHours(0,0,0,0);
+        var yesterdayStart = new Date(todayStart.getTime() - 86400000);
+        // PWH/PWL: find start of current week (Monday) and previous week
+        var dayOfWeek = todayStart.getUTCDay();
+        var mondayOffset = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
+        var thisWeekStart = new Date(todayStart.getTime() - mondayOffset * 86400000);
+        var lastWeekStart = new Date(thisWeekStart.getTime() - 7 * 86400000);
+
+        for (var i = 0; i < candles.length; i++) {
+          var ct = candles[i].time * 1000;
+          // PDH/PDL
+          if (ct >= yesterdayStart.getTime() && ct < todayStart.getTime()) {
+            if (candles[i].high > pdh) pdh = candles[i].high;
+            if (candles[i].low < pdl) pdl = candles[i].low;
+          }
+          // PWH/PWL
+          if (ct >= lastWeekStart.getTime() && ct < thisWeekStart.getTime()) {
+            if (candles[i].high > pwh) pwh = candles[i].high;
+            if (candles[i].low < pwl) pwl = candles[i].low;
+          }
+        }
+        if (pdl === Infinity) pdl = 0;
+        if (pwl === Infinity) pwl = 0;
+
+        // Order Blocks
+        var orderBlocks = [];
+        for (var bi = 0; bi < structureBreaks.length; bi++) {
+          var sb = structureBreaks[bi];
+          if (sb.type === 'BOS' || sb.type === 'BMS') {
+            var bIdx = sb.idx;
+            if (bIdx < 1) continue;
+            for (var ci = bIdx - 1; ci >= Math.max(0, bIdx - 10); ci--) {
+              var c = candles[ci];
+              if (sb.dir === 'bull' && c.close < c.open) {
+                orderBlocks.push({ startTime: c.time, endTime: candles[Math.min(candles.length - 1, bIdx + 10)].time, top: c.open, bottom: c.low, type: 'demand', startIdx: ci });
+                break;
+              }
+              if (sb.dir === 'bear' && c.close > c.open) {
+                orderBlocks.push({ startTime: c.time, endTime: candles[Math.min(candles.length - 1, bIdx + 10)].time, top: c.high, bottom: c.close, type: 'supply', startIdx: ci });
+                break;
+              }
+            }
+          }
+        }
+
+        // Range stats
+        var recentHighs = pivotHighs.slice(-3);
+        var recentLows = pivotLows.slice(-3);
+        var upperRange = 0, lowerRange = Infinity;
+        for (var i = 0; i < recentHighs.length; i++) { if (recentHighs[i].price > upperRange) upperRange = recentHighs[i].price; }
+        for (var i = 0; i < recentLows.length; i++) { if (recentLows[i].price < lowerRange) lowerRange = recentLows[i].price; }
+        if (lowerRange === Infinity) lowerRange = 0;
+        var midRange = (upperRange + lowerRange) / 2;
+
+        return {
+          markers: markers,
+          swingLines: swingLines,
+          structureBreaks: structureBreaks,
+          trendZones: trendZones,
+          pdh: pdh, pdl: pdl,
+          pwh: pwh, pwl: pwl,
+          orderBlocks: orderBlocks,
+          currentTrend: currentTrend,
+          upperRange: upperRange,
+          lowerRange: lowerRange,
+          midRange: midRange,
+          eqlLines: eqlLines,
+          weakStrongMarkers: weakStrongMarkers,
+        };
+      },
+
       dtfxZones: function(candles, structureLen, fibLevels) {
         structureLen = structureLen || 10;
         fibLevels = fibLevels || [0.3, 0.5, 0.7];
@@ -1990,12 +2210,20 @@
         'algo zones': 'dtfxzones(10)',
         'dtfx algo': 'dtfxzones(10)',
         'zones': 'dtfxzones(10)',
+        'smc pro': 'smcpro(5, 5)',
+        'smc': 'smcpro(5, 5)',
+        'zeiierman': 'smcpro(5, 5)',
+        'bos': 'smcpro(5, 5)',
+        'choch': 'smcpro(5, 5)',
+        'order block': 'smcpro(5, 5)',
+        'ob': 'smcpro(5, 5)',
+        'pdh pdl': 'smcpro(5, 5)',
         'vsa': 'vsa(5, 20)',
         'volume spread': 'vsa(5, 20)',
         'volume spread analysis': 'vsa(5, 20)',
       },
 
-      OVERLAY_FNS: ['ema', 'sma', 'wma', 'hma', 'vwap', 'bb', 'supertrend', 'psar', 'ichimoku', 'donchian', 'trendstructure', 'dtfxzones', 'vsa'],
+      OVERLAY_FNS: ['ema', 'sma', 'wma', 'hma', 'vwap', 'bb', 'supertrend', 'psar', 'ichimoku', 'donchian', 'trendstructure', 'dtfxzones', 'vsa', 'smcpro'],
       OSCILLATOR_FNS: ['rsi', 'macd', 'stoch', 'atr', 'obv', 'mfi', 'cci', 'momentum'],
 
       parse: function(input) {
@@ -2089,6 +2317,10 @@
             var vsaResult = Calc.vsa(candles, a[0] || 5, a[1] || 20);
             return { type: 'overlay', label: 'VSA', vsaData: vsaResult };
           }
+          case 'smcpro': {
+            var sp = Calc.smcPro(candles, a[0] || 5, a[1] || 5);
+            return { type: 'overlay', label: 'SMC Pro', smcProData: sp };
+          }
 
           case 'rsi': return { type: 'oscillator', label: 'RSI(' + (a[1] || 14) + ')', data: Calc.rsi(getSrc(a[0] || 'close'), a[1] || 14), color: '#a78bfa', range: [0, 100], levels: [30, 70] };
           case 'macd': {
@@ -2131,6 +2363,7 @@
       atr:            { name: 'ATR',               formula: 'atr(14)' },
       ichimoku:       { name: 'Ichimoku',          formula: 'ichimoku(9, 26, 52, 26)' },
       psar:           { name: 'Parabolic SAR',     formula: 'psar(0.02, 0.2)' },
+      smcpro:         { name: 'SMC Pro',            formula: 'smcpro(5, 5)' },
     };
 
     var INDICATOR_COLORS = {
@@ -2138,7 +2371,7 @@
     };
 
     function loadIndicatorPrefs() {
-      var defaults = { vwap: true, ema200: true, ema7: true, ema22: true, rsi: true, macd: true, volume: true, bb: true, supertrend: true, trendstructure: true, dtfxzones: true, vsa: true, stoch: false, atr: false, ichimoku: false, psar: false };
+      var defaults = { vwap: true, ema200: true, ema7: true, ema22: true, rsi: true, macd: true, volume: true, bb: true, supertrend: true, trendstructure: false, dtfxzones: false, vsa: true, stoch: false, atr: false, ichimoku: false, psar: false, smcpro: true };
       var saved = localStorage.getItem('mct_indicator_prefs');
       if (!saved) return defaults;
       var prefs = JSON.parse(saved);
@@ -2282,6 +2515,8 @@
       var p = chartPanels[idx];
       p.subCharts.forEach(function(sc) { if (sc.chart) sc.chart.remove(); if (sc.container) sc.container.remove(); });
       if (p.chart) p.chart.remove();
+      var statsEl = document.getElementById('smc-stats-' + idx);
+      if (statsEl) statsEl.remove();
       p.chart = null; p.candleSeries = null; p.volumeSeries = null;
       p.overlaySeries = []; p.subCharts = []; p.candles = [];
     }
@@ -2612,6 +2847,213 @@
               vmaLine.setData(vmaLineData);
               p.overlaySeries.push(vmaLine);
             }
+
+          } else if (result.smcProData) {
+            // SMC Pro: full Zeiierman-style SMC visualization
+            var smc = result.smcProData;
+            var lastTime = p.candles[p.candles.length - 1].time;
+            var firstTime = p.candles[0].time;
+
+            // 1. Background trend shading
+            smc.trendZones.forEach(function(zone) {
+              if (zone.trend === 'none') return;
+              var isBull = zone.trend === 'up';
+              var shadeArea = p.chart.addAreaSeries({
+                topColor: isBull ? 'rgba(52,211,153,0.06)' : 'rgba(244,63,94,0.06)',
+                bottomColor: 'transparent',
+                lineColor: 'transparent', lineWidth: 0,
+                priceLineVisible: false, lastValueVisible: false,
+                crosshairMarkerVisible: false, priceScaleId: 'smc-shade',
+              });
+              var shadeData = [];
+              for (var ci = zone.startIdx; ci <= zone.endIdx && ci < p.candles.length; ci++) {
+                shadeData.push({ time: p.candles[ci].time, value: p.candles[ci].high * 1.001 });
+              }
+              if (shadeData.length) { shadeArea.setData(shadeData); p.overlaySeries.push(shadeArea); }
+            });
+            try { p.chart.priceScale('smc-shade').applyOptions({ visible: false }); } catch(_) {}
+
+            // 2. Swing connector lines (dashed)
+            smc.swingLines.forEach(function(sl) {
+              var line = p.chart.addLineSeries({
+                color: sl.color, lineWidth: 1, lineStyle: 2,
+                priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
+              });
+              line.setData([{ time: sl.t1, value: sl.p1 }, { time: sl.t2, value: sl.p2 }]);
+              p.overlaySeries.push(line);
+            });
+
+            // 3. BOS/BMS/CHoCH — markers + horizontal dashed lines at break level
+            var allMarkers = [];
+            try { allMarkers = p.candleSeries.markers() || []; } catch(_) {}
+            smc.structureBreaks.forEach(function(sb) {
+              var isBull = sb.dir === 'bull';
+              var color = isBull ? '#34d399' : '#f43f5e';
+              // Marker label
+              allMarkers.push({
+                time: sb.time,
+                position: isBull ? 'belowBar' : 'aboveBar',
+                color: color, shape: 'square', text: sb.type,
+              });
+              // Horizontal dashed line extending from break point to right
+              var breakLine = p.chart.addLineSeries({
+                color: color, lineWidth: 1, lineStyle: 2,
+                priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
+              });
+              // Extend line ~20 candles to the right from break point
+              var sbIdx = -1;
+              for (var ci = 0; ci < p.candles.length; ci++) { if (p.candles[ci].time === sb.time) { sbIdx = ci; break; } }
+              if (sbIdx >= 0) {
+                var endIdx = Math.min(p.candles.length - 1, sbIdx + 20);
+                breakLine.setData([{ time: sb.time, value: sb.price }, { time: p.candles[endIdx].time, value: sb.price }]);
+                p.overlaySeries.push(breakLine);
+              }
+            });
+
+            // 4. HH/HL/LH/LL swing labels
+            smc.markers.forEach(function(m) { allMarkers.push(m); });
+
+            // 5. Weak High / Strong Low / Weak Low labels
+            smc.weakStrongMarkers.forEach(function(ws) {
+              allMarkers.push({
+                time: ws.time, position: ws.position,
+                color: ws.color, shape: 'square', text: ws.text,
+              });
+            });
+
+            allMarkers.sort(function(a, b) { return a.time - b.time; });
+            p.candleSeries.setMarkers(allMarkers);
+
+            // 6. PDH/PDL horizontal lines
+            if (smc.pdh > 0) {
+              var pdhLine = p.chart.addLineSeries({
+                color: 'rgba(244,63,94,0.7)', lineWidth: 1, lineStyle: 2,
+                priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, title: 'PDH',
+              });
+              pdhLine.setData([{ time: firstTime, value: smc.pdh }, { time: lastTime, value: smc.pdh }]);
+              p.overlaySeries.push(pdhLine);
+            }
+            if (smc.pdl > 0) {
+              var pdlLine = p.chart.addLineSeries({
+                color: 'rgba(52,211,153,0.7)', lineWidth: 1, lineStyle: 2,
+                priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, title: 'PDL',
+              });
+              pdlLine.setData([{ time: firstTime, value: smc.pdl }, { time: lastTime, value: smc.pdl }]);
+              p.overlaySeries.push(pdlLine);
+            }
+
+            // 7. PWH/PWL (Previous Week High/Low) horizontal lines
+            if (smc.pwh > 0) {
+              var pwhLine = p.chart.addLineSeries({
+                color: 'rgba(167,139,250,0.7)', lineWidth: 1, lineStyle: 2,
+                priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, title: 'PWH',
+              });
+              pwhLine.setData([{ time: firstTime, value: smc.pwh }, { time: lastTime, value: smc.pwh }]);
+              p.overlaySeries.push(pwhLine);
+            }
+            if (smc.pwl > 0) {
+              var pwlLine = p.chart.addLineSeries({
+                color: 'rgba(167,139,250,0.7)', lineWidth: 1, lineStyle: 2,
+                priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, title: 'PWL',
+              });
+              pwlLine.setData([{ time: firstTime, value: smc.pwl }, { time: lastTime, value: smc.pwl }]);
+              p.overlaySeries.push(pwlLine);
+            }
+
+            // 8. Mid range dotted line (yellow)
+            if (smc.midRange > 0) {
+              var midLine = p.chart.addLineSeries({
+                color: 'rgba(251,191,36,0.6)', lineWidth: 1, lineStyle: 3,
+                priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
+              });
+              var startIdx = Math.max(0, p.candles.length - 100);
+              midLine.setData([{ time: p.candles[startIdx].time, value: smc.midRange }, { time: lastTime, value: smc.midRange }]);
+              p.overlaySeries.push(midLine);
+            }
+
+            // 9. EQL/EQH (Equal Lows/Highs) — dotted yellow lines
+            smc.eqlLines.forEach(function(eq) {
+              var eqLine = p.chart.addLineSeries({
+                color: 'rgba(251,191,36,0.7)', lineWidth: 1, lineStyle: 3,
+                priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
+              });
+              // Extend slightly beyond the two points
+              var extEnd = lastTime;
+              for (var ci = 0; ci < p.candles.length; ci++) {
+                if (p.candles[ci].time === eq.t2) {
+                  var extIdx = Math.min(p.candles.length - 1, ci + 15);
+                  extEnd = p.candles[extIdx].time;
+                  break;
+                }
+              }
+              eqLine.setData([{ time: eq.t1, value: eq.price }, { time: extEnd, value: eq.price }]);
+              p.overlaySeries.push(eqLine);
+
+              // EQL/EQH marker at midpoint
+              allMarkers.push({ time: eq.t2, position: eq.type === 'EQL' ? 'belowBar' : 'aboveBar', color: '#fbbf24', shape: 'square', text: eq.type });
+            });
+            // Re-sort and set markers if EQL/EQH were added
+            if (smc.eqlLines.length) {
+              allMarkers.sort(function(a, b) { return a.time - b.time; });
+              p.candleSeries.setMarkers(allMarkers);
+            }
+
+            // 10. Order Blocks (supply/demand zones)
+            smc.orderBlocks.forEach(function(ob) {
+              var isDemand = ob.type === 'demand';
+              var fillColor = isDemand ? 'rgba(52,211,153,0.12)' : 'rgba(244,63,94,0.12)';
+              var lineColor = isDemand ? 'rgba(52,211,153,0.5)' : 'rgba(244,63,94,0.5)';
+
+              var topLine = p.chart.addLineSeries({
+                color: lineColor, lineWidth: 1, lineStyle: 0,
+                priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
+              });
+              var botLine = p.chart.addLineSeries({
+                color: lineColor, lineWidth: 1, lineStyle: 0,
+                priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
+              });
+              var areaFill = p.chart.addAreaSeries({
+                topColor: fillColor, bottomColor: 'transparent',
+                lineColor: lineColor, lineWidth: 0,
+                priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
+              });
+
+              var topData = [], botData = [], areaData = [];
+              for (var ci = 0; ci < p.candles.length; ci++) {
+                var t = p.candles[ci].time;
+                if (t >= ob.startTime && t <= lastTime) {
+                  topData.push({ time: t, value: ob.top });
+                  botData.push({ time: t, value: ob.bottom });
+                  areaData.push({ time: t, value: ob.top });
+                }
+              }
+              topLine.setData(topData); botLine.setData(botData); areaFill.setData(areaData);
+              p.overlaySeries.push(topLine); p.overlaySeries.push(botLine); p.overlaySeries.push(areaFill);
+
+              // "OP" label marker at order block start
+              var opMarkers = [];
+              try { opMarkers = p.candleSeries.markers() || []; } catch(_) {}
+              opMarkers.push({ time: ob.startTime, position: isDemand ? 'belowBar' : 'aboveBar', color: isDemand ? '#34d399' : '#f43f5e', shape: 'square', text: 'OP' });
+              opMarkers.sort(function(a, b) { return a.time - b.time; });
+              p.candleSeries.setMarkers(opMarkers);
+            });
+
+            // 11. Stats box (HTML overlay)
+            var statsId = 'smc-stats-' + idx;
+            var existingStats = document.getElementById(statsId);
+            if (existingStats) existingStats.remove();
+            var statsBox = document.createElement('div');
+            statsBox.id = statsId;
+            var trendLabel = smc.currentTrend === 'up' ? 'Positive' : smc.currentTrend === 'down' ? 'Negative' : 'Neutral';
+            var trendColor = smc.currentTrend === 'up' ? '#34d399' : smc.currentTrend === 'down' ? '#f43f5e' : '#9a8e80';
+            var dp = smc.upperRange >= 100 ? 2 : smc.upperRange >= 1 ? 4 : 6;
+            statsBox.innerHTML = '<div style="display:flex;gap:8px;align-items:center;margin-bottom:2px;"><span style="color:#9a8e80;">Trend:</span><span style="color:' + trendColor + ';font-weight:600;">' + trendLabel + '</span></div>'
+              + '<div><span style="color:#9a8e80;">Upper Range:</span> <span style="color:#eee;">' + smc.upperRange.toFixed(dp) + '</span></div>'
+              + '<div><span style="color:#9a8e80;">Lower Range:</span> <span style="color:#eee;">' + smc.lowerRange.toFixed(dp) + '</span></div>'
+              + '<div><span style="color:#9a8e80;">Mid:</span> <span style="color:#fbbf24;">' + smc.midRange.toFixed(dp) + '</span></div>';
+            statsBox.style.cssText = 'position:absolute;top:8px;right:8px;z-index:10;background:rgba(8,7,12,0.85);border:1px solid #2a2438;border-radius:6px;padding:6px 10px;font-size:10px;line-height:1.5;pointer-events:none;font-family:JetBrains Mono,monospace;';
+            var chartContainer = document.getElementById('chart-main-' + idx);
+            if (chartContainer) chartContainer.appendChild(statsBox);
 
           } else if (result.coloredData) {
             // Supertrend: colored line
