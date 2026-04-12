@@ -461,6 +461,33 @@
     }
     .chart-zoom-btn:hover { background: var(--color-bg-raised); color: var(--color-fg); }
 
+    .layout-toggle-wrap {
+      display: flex;
+      gap: 2px;
+      margin-left: auto;
+    }
+    .layout-btn {
+      background: transparent;
+      border: 1px solid var(--color-border-muted);
+      color: var(--color-fg-subtle);
+      font-size: 0.6rem;
+      padding: 2px 6px;
+      cursor: pointer;
+      border-radius: 3px;
+      font-family: var(--font-mono);
+      transition: all var(--duration-fast) var(--ease-out);
+    }
+    .layout-btn:hover { border-color: var(--color-accent); color: var(--color-fg); }
+    .layout-btn.active { background: var(--color-accent); color: var(--color-bg); border-color: var(--color-accent); }
+
+    .chart-area.layout-1 {
+      grid-template-columns: 1fr;
+    }
+    .chart-area.layout-1 .chart-panel:nth-child(2),
+    .chart-area.layout-1 .chart-panel:nth-child(3) {
+      display: none;
+    }
+
     .chart-panel-tf {
       display: flex;
       gap: 2px;
@@ -987,8 +1014,17 @@
           <label class="ind-toggle"><input type="checkbox" data-ind="ema200" checked><span class="ind-name">200 EMA</span><span class="ind-slider"></span></label>
           <label class="ind-toggle"><input type="checkbox" data-ind="ema7" checked><span class="ind-name">7 EMA</span><span class="ind-slider"></span></label>
           <label class="ind-toggle"><input type="checkbox" data-ind="ema22" checked><span class="ind-name">22 EMA</span><span class="ind-slider"></span></label>
+          <label class="ind-toggle"><input type="checkbox" data-ind="bb" checked><span class="ind-name">Bollinger Bands</span><span class="ind-slider"></span></label>
+          <label class="ind-toggle"><input type="checkbox" data-ind="supertrend" checked><span class="ind-name">Supertrend</span><span class="ind-slider"></span></label>
+          <label class="ind-toggle"><input type="checkbox" data-ind="trendstructure" checked><span class="ind-name">Trend Structure</span><span class="ind-slider"></span></label>
+          <label class="ind-toggle"><input type="checkbox" data-ind="dtfxzones" checked><span class="ind-name">DTFX Zones</span><span class="ind-slider"></span></label>
+          <label class="ind-toggle"><input type="checkbox" data-ind="vsa" checked><span class="ind-name">VSA</span><span class="ind-slider"></span></label>
+          <label class="ind-toggle"><input type="checkbox" data-ind="psar"><span class="ind-name">Parabolic SAR</span><span class="ind-slider"></span></label>
+          <label class="ind-toggle"><input type="checkbox" data-ind="ichimoku"><span class="ind-name">Ichimoku</span><span class="ind-slider"></span></label>
           <label class="ind-toggle"><input type="checkbox" data-ind="rsi" checked><span class="ind-name">RSI</span><span class="ind-slider"></span></label>
           <label class="ind-toggle"><input type="checkbox" data-ind="macd" checked><span class="ind-name">MACD</span><span class="ind-slider"></span></label>
+          <label class="ind-toggle"><input type="checkbox" data-ind="stoch"><span class="ind-name">Stochastic</span><span class="ind-slider"></span></label>
+          <label class="ind-toggle"><input type="checkbox" data-ind="atr"><span class="ind-name">ATR</span><span class="ind-slider"></span></label>
           <label class="ind-toggle"><input type="checkbox" data-ind="volume" checked><span class="ind-name">Volume</span><span class="ind-slider"></span></label>
           <div class="ind-dropdown-footer">
             <button class="ind-btn-all" id="ind-all-on">All On</button>
@@ -1002,6 +1038,11 @@
           <div class="ind-section-label" style="font-size:0.55rem;color:var(--color-fg-subtle);padding-top:0;">Type a formula like ema(close, 50) or a preset name like Bollinger Bands</div>
           <div id="custom-scripts-list" class="custom-scripts-list"></div>
         </div>
+      </div>
+
+      <div class="layout-toggle-wrap">
+        <button class="layout-btn" data-layout="1" title="1 Chart">1</button>
+        <button class="layout-btn active" data-layout="3" title="3 Charts">3</button>
       </div>
 
       <div class="trend-box" id="trend-box">
@@ -1979,13 +2020,22 @@
     // ============================================================
 
     var INDICATOR_MAP = {
-      vwap:   { name: 'VWAP',    formula: 'vwap()' },
-      ema200: { name: '200 EMA', formula: 'ema(close, 200)' },
-      ema7:   { name: '7 EMA',   formula: 'ema(close, 7)' },
-      ema22:  { name: '22 EMA',  formula: 'ema(close, 22)' },
-      rsi:    { name: 'RSI',     formula: 'rsi(close, 14)' },
-      macd:   { name: 'MACD',    formula: 'macd(close, 12, 26, 9)' },
-      volume: { name: 'Volume',  formula: 'volume()' },
+      vwap:           { name: 'VWAP',             formula: 'vwap()' },
+      ema200:         { name: '200 EMA',           formula: 'ema(close, 200)' },
+      ema7:           { name: '7 EMA',             formula: 'ema(close, 7)' },
+      ema22:          { name: '22 EMA',            formula: 'ema(close, 22)' },
+      rsi:            { name: 'RSI',               formula: 'rsi(close, 14)' },
+      macd:           { name: 'MACD',              formula: 'macd(close, 12, 26, 9)' },
+      volume:         { name: 'Volume',            formula: 'volume()' },
+      bb:             { name: 'Bollinger Bands',   formula: 'bb(close, 20, 2)' },
+      supertrend:     { name: 'Supertrend',        formula: 'supertrend(10, 3)' },
+      trendstructure: { name: 'Trend Structure',   formula: 'trendstructure(5, 5)' },
+      dtfxzones:      { name: 'DTFX Zones',        formula: 'dtfxzones(10)' },
+      vsa:            { name: 'VSA',               formula: 'vsa(5, 20)' },
+      stoch:          { name: 'Stochastic',        formula: 'stoch(14, 3, 3)' },
+      atr:            { name: 'ATR',               formula: 'atr(14)' },
+      ichimoku:       { name: 'Ichimoku',          formula: 'ichimoku(9, 26, 52, 26)' },
+      psar:           { name: 'Parabolic SAR',     formula: 'psar(0.02, 0.2)' },
     };
 
     var INDICATOR_COLORS = {
@@ -1993,9 +2043,15 @@
     };
 
     function loadIndicatorPrefs() {
+      var defaults = { vwap: true, ema200: true, ema7: true, ema22: true, rsi: true, macd: true, volume: true, bb: true, supertrend: true, trendstructure: true, dtfxzones: true, vsa: true, stoch: false, atr: false, ichimoku: false, psar: false };
       var saved = localStorage.getItem('mct_indicator_prefs');
-      if (saved) return JSON.parse(saved);
-      return { vwap: true, ema200: true, ema7: true, ema22: true, rsi: true, macd: true, volume: true };
+      if (!saved) return defaults;
+      var prefs = JSON.parse(saved);
+      // Merge: add any new indicator defaults that aren't in saved prefs
+      Object.keys(defaults).forEach(function(k) {
+        if (!(k in prefs)) prefs[k] = defaults[k];
+      });
+      return prefs;
     }
 
     function saveIndicatorPrefs(prefs) {
@@ -2134,7 +2190,13 @@
         var candles = await fetchKlines(STATE.symbol, binanceInterval);
         p.candles = candles;
         candleSeries.setData(candles);
-        chart.timeScale().fitContent();
+        // Default zoom: show last 100 candles
+        var totalBars = candles.length;
+        if (totalBars > 100) {
+          chart.timeScale().setVisibleLogicalRange({ from: totalBars - 100, to: totalBars });
+        } else {
+          chart.timeScale().fitContent();
+        }
 
         // Apply indicators
         applyIndicators(idx);
@@ -2913,6 +2975,38 @@
           });
         });
       });
+
+      // Layout toggle (1 or 3 screens)
+      document.querySelectorAll('.layout-btn').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+          var layout = btn.dataset.layout;
+          var chartArea = document.getElementById('chart-area');
+          document.querySelectorAll('.layout-btn').forEach(function(b) { b.classList.remove('active'); });
+          btn.classList.add('active');
+
+          if (layout === '1') {
+            chartArea.classList.add('layout-1');
+            chartArea.classList.remove('layout-3');
+            CHART_COUNT = 1;
+          } else {
+            chartArea.classList.remove('layout-1');
+            chartArea.classList.add('layout-3');
+            CHART_COUNT = 3;
+          }
+
+          localStorage.setItem('mct_chart_layout', layout);
+          recreateAllCharts();
+        });
+      });
+
+      // Restore saved layout
+      var savedLayout = localStorage.getItem('mct_chart_layout');
+      if (savedLayout === '1') {
+        document.getElementById('chart-area').classList.add('layout-1');
+        document.querySelector('.layout-btn[data-layout="1"]').classList.add('active');
+        document.querySelector('.layout-btn[data-layout="3"]').classList.remove('active');
+        CHART_COUNT = 1;
+      }
 
       DOM.bottomPanelToggle.addEventListener('click', function() {
         var isCollapsed = DOM.bottomPanel.classList.toggle('collapsed');
