@@ -674,6 +674,76 @@
     }
     .ind-btn-all:hover { background: var(--color-border); color: var(--color-fg); }
 
+    /* Script input */
+    .ind-script-input-wrap {
+      display: flex;
+      gap: 4px;
+      padding: 4px var(--space-3);
+    }
+    .ind-script-input {
+      flex: 1;
+      background: var(--color-surface);
+      border: 1px solid var(--color-border);
+      color: var(--color-fg);
+      font-family: var(--font-mono);
+      font-size: 0.7rem;
+      padding: 4px 8px;
+      border-radius: var(--radius-sm);
+      outline: none;
+    }
+    .ind-script-input:focus { border-color: var(--color-accent); }
+    .ind-script-input::placeholder { color: var(--color-fg-subtle); }
+    .ind-script-add-btn {
+      background: var(--color-accent);
+      color: var(--color-bg);
+      border: none;
+      width: 28px;
+      height: 28px;
+      border-radius: var(--radius-sm);
+      font-size: 16px;
+      font-weight: var(--weight-bold);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+    .ind-script-add-btn:hover { background: var(--color-accent-hover); }
+
+    /* Custom scripts list */
+    .custom-scripts-list {
+      padding: 2px var(--space-3) var(--space-2);
+      max-height: 120px;
+      overflow-y: auto;
+    }
+    .custom-script-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 3px 0;
+      border-bottom: 1px solid rgba(42,36,56,0.3);
+    }
+    .custom-script-item:last-child { border-bottom: none; }
+    .custom-script-name {
+      font-family: var(--font-mono);
+      font-size: 0.68rem;
+      color: var(--color-fg);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .custom-script-remove {
+      background: none;
+      border: none;
+      color: var(--color-danger);
+      font-size: 14px;
+      cursor: pointer;
+      padding: 0 4px;
+      line-height: 1;
+      flex-shrink: 0;
+    }
+    .custom-script-remove:hover { color: var(--color-danger-hover); }
+
     /* --- Mobile Menu Buttons --- */
     .mobile-menu-btn {
       display: none;
@@ -887,7 +957,7 @@
         <button class="tf-btn indicator-btn" id="btn-indicators" title="Indicators">fx</button>
         <div class="indicator-dropdown" id="indicator-dropdown">
           <div class="ind-dropdown-header">Indicators</div>
-          <div class="ind-section-label">Default (built-in)</div>
+          <div class="ind-section-label">Built-in</div>
           <label class="ind-toggle"><input type="checkbox" data-ind="vwap" checked><span class="ind-name">VWAP</span><span class="ind-slider"></span></label>
           <label class="ind-toggle"><input type="checkbox" data-ind="ema200" checked><span class="ind-name">200 EMA</span><span class="ind-slider"></span></label>
           <label class="ind-toggle"><input type="checkbox" data-ind="ema7" checked><span class="ind-name">7 EMA</span><span class="ind-slider"></span></label>
@@ -895,14 +965,17 @@
           <label class="ind-toggle"><input type="checkbox" data-ind="rsi" checked><span class="ind-name">RSI</span><span class="ind-slider"></span></label>
           <label class="ind-toggle"><input type="checkbox" data-ind="macd" checked><span class="ind-name">MACD</span><span class="ind-slider"></span></label>
           <label class="ind-toggle"><input type="checkbox" data-ind="volume" checked><span class="ind-name">Volume</span><span class="ind-slider"></span></label>
-          <div class="ind-section-label" style="margin-top:6px;">Community Scripts</div>
-          <label class="ind-toggle"><input type="checkbox" data-ind="smc_luxalgo"><span class="ind-name">SMC [LuxAlgo]</span><span class="ind-slider"></span></label>
-          <label class="ind-toggle"><input type="checkbox" data-ind="smc_zeiierman"><span class="ind-name">SMC [Zeiierman]</span><span class="ind-slider"></span></label>
-          <label class="ind-toggle"><input type="checkbox" data-ind="vsa"><span class="ind-name">Volume Spread Analysis</span><span class="ind-slider"></span></label>
           <div class="ind-dropdown-footer">
             <button class="ind-btn-all" id="ind-all-on">All On</button>
             <button class="ind-btn-all" id="ind-all-off">All Off</button>
           </div>
+          <div class="ind-section-label" style="margin-top:4px;">Add Script / Indicator</div>
+          <div class="ind-script-input-wrap">
+            <input type="text" id="script-name-input" class="ind-script-input" placeholder="e.g. Bollinger Bands">
+            <button id="btn-add-script" class="ind-script-add-btn">+</button>
+          </div>
+          <div class="ind-section-label" style="font-size:0.55rem;color:var(--color-fg-subtle);padding-top:0;">Paste TradingView indicator name exactly as shown on TradingView</div>
+          <div id="custom-scripts-list" class="custom-scripts-list"></div>
         </div>
       </div>
 
@@ -1067,8 +1140,6 @@
     var CHART_COUNT = 3;
     var tvWidgets = [null, null, null];
     var chartIntervals = ['1', '3', '15'];  // default TF per panel
-    var chartsReady = [false, false, false];
-    var chartStudies = [{}, {}, {}];  // track entity IDs per chart
 
     // ============================================================
     // Toast Notifications
@@ -1091,17 +1162,15 @@
     // Indicator Registry + Management
     // ============================================================
 
+    // Built-in indicators that work in the studies config array
     var INDICATOR_MAP = {
-      vwap:           { name: 'VWAP',                           study: 'VWAP@tv-basicstudies',    inputs: {} },
-      ema200:         { name: '200 EMA',                        study: 'MAExp@tv-basicstudies',   inputs: { length: 200 } },
-      ema7:           { name: '7 EMA',                          study: 'MAExp@tv-basicstudies',   inputs: { length: 7 } },
-      ema22:          { name: '22 EMA',                         study: 'MAExp@tv-basicstudies',   inputs: { length: 22 } },
-      rsi:            { name: 'RSI',                            study: 'RSI@tv-basicstudies',     inputs: {} },
-      macd:           { name: 'MACD',                           study: 'MACD@tv-basicstudies',    inputs: {} },
-      volume:         { name: 'Volume',                         study: 'Volume@tv-basicstudies',  inputs: {} },
-      smc_luxalgo:    { name: 'Smart Money Concepts [LuxAlgo]', study: 'PUB;5nawr3gCESvSHQfOhrLPbX', inputs: {}, community: true },
-      smc_zeiierman:  { name: 'SMC [Zeiierman]',                study: 'PUB;wrPE3nim5gtrDdHMPMiVMV', inputs: {}, community: true },
-      vsa:            { name: 'Volume Spread Analysis',          study: 'PUB;4mMCp2XOQH0cOqpaxoY6tO', inputs: {}, community: true },
+      vwap:    { name: 'VWAP',    study: 'VWAP@tv-basicstudies' },
+      ema200:  { name: '200 EMA', study: 'MAExp@tv-basicstudies', inputs: { length: 200 } },
+      ema7:    { name: '7 EMA',   study: 'MAExp@tv-basicstudies', inputs: { length: 7 } },
+      ema22:   { name: '22 EMA',  study: 'MAExp@tv-basicstudies', inputs: { length: 22 } },
+      rsi:     { name: 'RSI',     study: 'RSI@tv-basicstudies' },
+      macd:    { name: 'MACD',    study: 'MACD@tv-basicstudies' },
+      volume:  { name: 'Volume',  study: 'Volume@tv-basicstudies' },
     };
 
     function loadIndicatorPrefs() {
@@ -1110,12 +1179,22 @@
       return {
         vwap: true, ema200: true, ema7: true, ema22: true,
         rsi: true, macd: true, volume: true,
-        smc_luxalgo: false, smc_zeiierman: false, vsa: false,
       };
     }
 
     function saveIndicatorPrefs(prefs) {
       localStorage.setItem('mct_indicator_prefs', JSON.stringify(prefs));
+    }
+
+    // Load user-added custom scripts from localStorage
+    function loadCustomScripts() {
+      var saved = localStorage.getItem('mct_custom_scripts');
+      if (saved) return JSON.parse(saved);
+      return [];
+    }
+
+    function saveCustomScripts(scripts) {
+      localStorage.setItem('mct_custom_scripts', JSON.stringify(scripts));
     }
 
     function syncIndicatorUI(prefs) {
@@ -1124,48 +1203,58 @@
       });
     }
 
-    // Add study to a specific chart index
-    function addStudyToChart(idx, key) {
-      if (!chartsReady[idx] || !tvWidgets[idx]) return;
-      var def = INDICATOR_MAP[key];
-      if (!def) return;
-      try {
-        var chart = tvWidgets[idx].activeChart();
-        chart.createStudy(def.study, false, false, Object.keys(def.inputs).map(function(k) { return def.inputs[k]; }))
-          .then(function(entityId) {
-            chartStudies[idx][key] = entityId;
-          })
-          .catch(function() {});
-      } catch (e) {}
-    }
-
-    function removeStudyFromChart(idx, key) {
-      if (!chartsReady[idx] || !tvWidgets[idx] || !chartStudies[idx][key]) return;
-      try {
-        tvWidgets[idx].activeChart().removeEntity(chartStudies[idx][key]);
-        delete chartStudies[idx][key];
-      } catch (e) {}
-    }
-
-    // Add study to ALL charts
-    function addStudy(key) {
-      for (var i = 0; i < CHART_COUNT; i++) addStudyToChart(i, key);
-      var def = INDICATOR_MAP[key];
-      if (def && def.community && !chartStudies[0][key]) {
-        showToast(def.name + ': use chart Indicators button to add', 'info');
-      }
-    }
-
-    // Remove study from ALL charts
-    function removeStudy(key) {
-      for (var i = 0; i < CHART_COUNT; i++) removeStudyFromChart(i, key);
-    }
-
-    // Apply all saved indicators to a specific chart
-    function applyIndicatorsToChart(idx) {
+    // Build the studies array from current prefs + custom scripts
+    function buildStudiesArray() {
       var prefs = loadIndicatorPrefs();
-      Object.keys(prefs).forEach(function(key) {
-        if (prefs[key]) addStudyToChart(idx, key);
+      var studies = [];
+
+      Object.keys(INDICATOR_MAP).forEach(function(key) {
+        if (!prefs[key]) return;
+        var def = INDICATOR_MAP[key];
+        if (def.inputs) {
+          studies.push({ id: def.study, inputs: def.inputs });
+        } else {
+          studies.push(def.study);
+        }
+      });
+
+      // Add custom scripts
+      var customs = loadCustomScripts();
+      customs.forEach(function(script) {
+        studies.push(script.study);
+      });
+
+      return studies;
+    }
+
+    // Render the custom scripts list in the dropdown
+    function renderCustomScripts() {
+      var list = document.getElementById('custom-scripts-list');
+      if (!list) return;
+      var scripts = loadCustomScripts();
+      if (!scripts.length) {
+        list.innerHTML = '<div style="font-size:0.6rem;color:var(--color-fg-subtle);padding:2px 0;">No custom scripts added</div>';
+        return;
+      }
+      list.innerHTML = scripts.map(function(s, i) {
+        return '<div class="custom-script-item">'
+          + '<span class="custom-script-name">' + s.name + '</span>'
+          + '<button class="custom-script-remove" data-idx="' + i + '" title="Remove">&times;</button>'
+          + '</div>';
+      }).join('');
+
+      // Attach remove handlers
+      list.querySelectorAll('.custom-script-remove').forEach(function(btn) {
+        btn.addEventListener('click', function(e) {
+          e.stopPropagation();
+          var idx = parseInt(btn.dataset.idx);
+          var scripts = loadCustomScripts();
+          scripts.splice(idx, 1);
+          saveCustomScripts(scripts);
+          renderCustomScripts();
+          recreateAllCharts();
+          showToast('Script removed', 'info');
+        });
       });
     }
 
@@ -1231,22 +1320,16 @@
       var container = document.getElementById(containerId);
       if (!container) return;
       container.innerHTML = '';
-      chartsReady[idx] = false;
-      chartStudies[idx] = {};
 
       var config = Object.assign({}, TV_WIDGET_CONFIG, {
         autosize: true,
         symbol: 'BINANCE:' + STATE.symbol,
         interval: chartIntervals[idx],
         container_id: containerId,
+        studies: buildStudiesArray(),
       });
 
       tvWidgets[idx] = new TradingView.widget(config);
-
-      tvWidgets[idx].onChartReady(function() {
-        chartsReady[idx] = true;
-        applyIndicatorsToChart(idx);
-      });
     }
 
     function createAllCharts() {
@@ -1643,6 +1726,7 @@
       var indDropdown = document.getElementById('indicator-dropdown');
       var prefs = loadIndicatorPrefs();
       syncIndicatorUI(prefs);
+      renderCustomScripts();
 
       // Toggle dropdown open/close
       indBtn.addEventListener('click', function(e) {
@@ -1659,41 +1743,104 @@
         }
       });
 
-      // Individual indicator toggles
+      // Prevent dropdown close when clicking inside
+      indDropdown.addEventListener('click', function(e) {
+        e.stopPropagation();
+      });
+
+      // Individual indicator toggles — rebuild charts on change
       indDropdown.querySelectorAll('input[data-ind]').forEach(function(cb) {
         cb.addEventListener('change', function() {
           var key = cb.dataset.ind;
           var prefs = loadIndicatorPrefs();
           prefs[key] = cb.checked;
           saveIndicatorPrefs(prefs);
-
-          if (cb.checked) {
-            addStudy(key);
-          } else {
-            removeStudy(key);
-          }
+          recreateAllCharts();
         });
       });
 
       // All On / All Off buttons
       document.getElementById('ind-all-on').addEventListener('click', function() {
         var prefs = loadIndicatorPrefs();
-        Object.keys(INDICATOR_MAP).forEach(function(key) {
-          prefs[key] = true;
-          if (!activeStudies[key]) addStudy(key);
-        });
+        Object.keys(INDICATOR_MAP).forEach(function(key) { prefs[key] = true; });
         saveIndicatorPrefs(prefs);
         syncIndicatorUI(prefs);
+        recreateAllCharts();
       });
 
       document.getElementById('ind-all-off').addEventListener('click', function() {
         var prefs = loadIndicatorPrefs();
-        Object.keys(INDICATOR_MAP).forEach(function(key) {
-          prefs[key] = false;
-          removeStudy(key);
-        });
+        Object.keys(INDICATOR_MAP).forEach(function(key) { prefs[key] = false; });
         saveIndicatorPrefs(prefs);
         syncIndicatorUI(prefs);
+        recreateAllCharts();
+      });
+
+      // ── Add Custom Script ──
+      var scriptInput = document.getElementById('script-name-input');
+      var addScriptBtn = document.getElementById('btn-add-script');
+
+      function addCustomScript() {
+        var name = scriptInput.value.trim();
+        if (!name) return;
+
+        // Build the study string — try common TradingView study ID formats
+        var study = name;
+        // If user typed a known shorthand, map it
+        var KNOWN_SCRIPTS = {
+          'bollinger bands': 'BB@tv-basicstudies',
+          'ichimoku': 'IchimokuCloud@tv-basicstudies',
+          'stochastic': 'Stochastic@tv-basicstudies',
+          'atr': 'ATR@tv-basicstudies',
+          'adx': 'ADX@tv-basicstudies',
+          'cci': 'CCI@tv-basicstudies',
+          'williams %r': 'WilliamsR@tv-basicstudies',
+          'parabolic sar': 'PSAR@tv-basicstudies',
+          'pivot points': 'PivotPointsStandard@tv-basicstudies',
+          'obv': 'OBV@tv-basicstudies',
+          'mfi': 'MFI@tv-basicstudies',
+          'momentum': 'Momentum@tv-basicstudies',
+          'roc': 'ROC@tv-basicstudies',
+          'awesome oscillator': 'AwesomeOscillator@tv-basicstudies',
+          'donchian channels': 'DONCH@tv-basicstudies',
+          'keltner channels': 'KLTNR@tv-basicstudies',
+          'supertrend': 'Supertrend@tv-basicstudies',
+          'zigzag': 'ZigZag@tv-basicstudies',
+          'vwma': 'VWMA@tv-basicstudies',
+          'hull ma': 'HullMA@tv-basicstudies',
+          'linear regression': 'LinearRegression@tv-basicstudies',
+          'chaikin money flow': 'CMF@tv-basicstudies',
+          'elder ray': 'ElderRay@tv-basicstudies',
+          'ma cross': 'MAcross@tv-basicstudies',
+          'envelope': 'ENV@tv-basicstudies',
+        };
+
+        var lower = name.toLowerCase();
+        if (KNOWN_SCRIPTS[lower]) {
+          study = KNOWN_SCRIPTS[lower];
+        } else if (!name.includes('@') && !name.startsWith('PUB;')) {
+          // Try as a basic study
+          study = name + '@tv-basicstudies';
+        }
+
+        var scripts = loadCustomScripts();
+        // Check duplicate
+        if (scripts.some(function(s) { return s.name === name; })) {
+          showToast('Script already added', 'warning');
+          return;
+        }
+
+        scripts.push({ name: name, study: study });
+        saveCustomScripts(scripts);
+        scriptInput.value = '';
+        renderCustomScripts();
+        recreateAllCharts();
+        showToast('Added: ' + name, 'success');
+      }
+
+      addScriptBtn.addEventListener('click', addCustomScript);
+      scriptInput.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') { e.preventDefault(); addCustomScript(); }
       });
     }
 
