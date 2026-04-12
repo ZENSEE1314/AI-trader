@@ -18,17 +18,20 @@ const hermes = require('../hermes-bridge');
 let googleClient = null;
 let anthropicClient = null;
 
-// Rate limiting — relaxed for Ollama (local) since it's free; tighter for cloud APIs
+// Rate limiting — Ollama is local/free so virtually unlimited; tighter for cloud APIs
 const requestLog = [];
-const MAX_REQUESTS_PER_MIN = process.env.OLLAMA_URL ? 60 : 30;
+const MAX_REQUESTS_PER_MIN = process.env.OLLAMA_URL ? 999 : 30;
 
 // Response cache — avoid duplicate API calls
 const responseCache = new Map();
 const CACHE_TTL = 60000; // 1 minute
 
-function isRateLimited() {
+function isRateLimited(priority = 'normal') {
   const now = Date.now();
   while (requestLog.length && requestLog[0] < now - 60000) requestLog.shift();
+  // Chat/high-priority requests get reserved slots — never blocked by background agents
+  if (priority === 'chat') return false;
+  // Background agents are blocked if they'd eat into chat-reserved slots
   return requestLog.length >= MAX_REQUESTS_PER_MIN;
 }
 
@@ -85,7 +88,7 @@ function getProviderName() {
  * Ask the AI brain a question with agent context.
  */
 async function think(opts) {
-  const { agentName, systemPrompt, userMessage, context = {}, complexity = 'low' } = opts;
+  const { agentName, systemPrompt, userMessage, context = {}, complexity = 'low', priority = 'normal' } = opts;
   const provider = getProvider(complexity);
   if (!provider) return `[Critical Error] No AI provider configured. Please check OLLAMA_URL, GOOGLE_AI_KEY, or ANTHROPIC_API_KEY.`;
 
@@ -97,8 +100,8 @@ async function think(opts) {
     return cached;
   }
 
-  // Rate limit check
-  if (isRateLimited()) {
+  // Rate limit check — chat requests always pass through
+  if (isRateLimited(priority)) {
     console.log(`[AI Brain] Rate limited — ${requestLog.length} requests in last minute`);
     return `I'm thinking too fast — please wait a moment and try again. (${requestLog.length}/${MAX_REQUESTS_PER_MIN} requests/min)`;
   }

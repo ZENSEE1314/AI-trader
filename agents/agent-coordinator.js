@@ -1090,7 +1090,7 @@ class AgentCoordinator extends BaseAgent {
 
       // Use high complexity for deep reasoning (why/how/pattern queries) and coordinator-level analysis
       const isDeepQuery = text.includes('why') || text.includes('how') || text.includes('pattern') || text.includes('analyze');
-      const aiReply = await think({ agentName, systemPrompt, userMessage: message, context, complexity: isDeepQuery ? 'high' : 'medium' });
+      const aiReply = await think({ agentName, systemPrompt, userMessage: message, context, complexity: isDeepQuery ? 'high' : 'medium', priority: 'chat' });
       if (aiReply) return { from: agentName, message: aiReply };
     }
 
