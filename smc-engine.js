@@ -236,8 +236,8 @@ function detectTentativePivot(klines, len) {
 
 function getStructure(klines, len) {
   const { swings } = detectSwings(klines, len);
-  const swingHighs = swings.filter(s => s.type === 'high');
-  const swingLows = swings.filter(s => s.type === 'low');
+  const swingHighs = (swings || []).filter(s => s.type === 'high');
+  const swingLows = (swings || []).filter(s => s.type === 'low');
 
   // Minimum swing size: HL/LH must differ by at least 0.05% from previous swing
   // Lowered from 0.15% to 0.05% to capture deeper, more significant structure changes
@@ -258,8 +258,8 @@ function getStructure(klines, len) {
   }
 
   // Only consider significant swings for direction decisions
-  const sigHighs = highLabels.filter(h => h.significant);
-  const sigLows = lowLabels.filter(l => l.significant);
+  const sigHighs = (highLabels || []).filter(h => h.significant);
+  const sigLows = (lowLabels || []).filter(l => l.significant);
   const lastHigh = sigHighs.length ? sigHighs[sigHighs.length - 1] : (highLabels.length ? highLabels[highLabels.length - 1] : null);
   const lastLow = sigLows.length ? sigLows[sigLows.length - 1] : (lowLabels.length ? lowLabels[lowLabels.length - 1] : null);
 
@@ -847,7 +847,7 @@ async function scanSMC(log, opts = {}) {
     bLog.error(`Failed to load banned tokens: ${err.message}`);
   }
 
-  const topCoins = tickers
+  const topCoins = (tickers || [])
     .filter(t => t.symbol.endsWith('USDT') && !t.symbol.includes('_'))
     .filter(t => !BLACKLIST.has(t.symbol))
     .filter(t => !bannedTokens.has(t.symbol))

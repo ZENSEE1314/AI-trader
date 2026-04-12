@@ -1905,7 +1905,7 @@
         const totalCandles = data.candles.length;
         const containerWidth = DOM.chartContainer.clientWidth - 60;
         // Show last ~100 candles by default
-        const targetCandles = Math.min(100, totalCandles);
+        const targetCandles = Math.min(150, totalCandles);
         const defaultSpacing = Math.max(4, containerWidth / targetCandles);
         chart.timeScale().applyOptions({ barSpacing: defaultSpacing });
         // Scroll to the end

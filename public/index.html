@@ -1193,23 +1193,8 @@
             <span id="kronos-bear" style="font-size:0.8rem;color:var(--color-danger);font-weight:700;background:rgba(255,0,0,0.08);padding:3px 10px;border-radius:6px;border:1px solid rgba(255,0,0,0.2);">📉 0 Bearish</span>
             <span id="kronos-neutral" style="font-size:0.8rem;color:var(--color-text-secondary);font-weight:700;background:rgba(128,128,128,0.08);padding:3px 10px;border-radius:6px;border:1px solid rgba(128,128,128,0.2);">➖ 0 Neutral</span>
           </div>
-          <div id="kronos-table-wrap" style="max-height:300px;overflow-y:auto;background:var(--color-bg);">
-            <table class="data-table" style="margin:0;border-collapse:collapse;width:100%;">
-              <thead style="position:sticky;top:0;background:var(--color-bg-raised);z-index:1;border-bottom:2px solid var(--color-accent);">
-                <tr style="color:var(--color-text-muted);font-size:0.7rem;text-transform:uppercase;letter-spacing:1px;">
-                  <th style="width:90px;padding:12px;text-align:left;">Token</th>
-                  <th style="width:70px;padding:12px;text-align:left;">Direction</th>
-                  <th style="width:70px;padding:12px;text-align:left;">Change</th>
-                  <th style="width:70px;padding:12px;text-align:left;">Confidence</th>
-                  <th style="width:60px;padding:12px;text-align:left;">Trend</th>
-                  <th style="width:80px;padding:12px;text-align:left;">Horizon</th>
-                  <th style="padding:12px;text-align:left;">Predicted</th>
-                </tr>
-              </thead>
-              <tbody id="kronos-tbody">
-                <tr><td colspan="6" style="text-align:center;color:var(--color-text-secondary);padding:20px;">Loading predictions...</td></tr>
-              </tbody>
-            </table>
+          <div id="kronos-cards-container" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px;padding:16px;background:var(--color-bg);max-height:600px;overflow-y:auto;">
+            <!-- Cards populated by JS -->
           </div>
         </div>
 

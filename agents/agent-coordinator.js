@@ -10,6 +10,7 @@
 // ============================================================
 
 const { BaseAgent, AGENT_STATES } = require('./base-agent');
+const { log: bLog } = require('../bot-logger');
 const { ChartAgent } = require('./chart-agent');
 const { TraderAgent } = require('./trader-agent');
 const { RiskAgent } = require('./risk-agent');
