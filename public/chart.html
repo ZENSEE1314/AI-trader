@@ -1254,9 +1254,28 @@
     // MCT SMC Chart -- Custom Lightweight Charts Pro Widget
     // ============================================================
 
+    // Load saved chart settings or use defaults
+    function loadChartSettings() {
+      var saved = localStorage.getItem('mct_chart_settings');
+      if (saved) {
+        try { return JSON.parse(saved); } catch (_) {}
+      }
+      return null;
+    }
+    function saveChartSettings() {
+      localStorage.setItem('mct_chart_settings', JSON.stringify({
+        symbol: STATE.symbol,
+        interval: STATE.interval,
+        panelIntervals: chartIntervals.slice(),
+        layout: CHART_COUNT,
+      }));
+    }
+
+    var _saved = loadChartSettings();
+
     var STATE = {
-      symbol: 'BTCUSDT',
-      interval: '15m',
+      symbol: (_saved && _saved.symbol) || 'BTCUSDT',
+      interval: (_saved && _saved.interval) || '15m',
       coins: [],
       chartData: null,
       refreshTimer: null,
@@ -1266,8 +1285,8 @@
 
     var REFRESH_INTERVAL = 60000;
     var API_BASE = '/api/chart';
-    var CHART_COUNT = 3;
-    var chartIntervals = ['1', '3', '15'];
+    var CHART_COUNT = (_saved && _saved.layout) || 3;
+    var chartIntervals = (_saved && _saved.panelIntervals) || ['1', '3', '15'];
 
     // Binance kline interval mapping (panel TF data-tv -> Binance interval string)
     var TV_TO_BINANCE = {
@@ -2836,6 +2855,7 @@
       document.getElementById('left-sidebar').classList.remove('mobile-open');
       document.getElementById('mobile-overlay').classList.remove('active');
       STATE.symbol = symbol;
+      saveChartSettings();
       DOM.toolbarSymbol.textContent = symbol;
       DOM.coinList.querySelectorAll('.coin-item').forEach(function(el) {
         var isActive = el.dataset.symbol === symbol;
@@ -2946,16 +2966,43 @@
           };
 
           var kInterval = k.i;
+          var isClosed = k.x === true;
           for (var i = 0; i < CHART_COUNT; i++) {
             var panelInterval = TV_TO_BINANCE[chartIntervals[i]];
             if (panelInterval === kInterval && chartPanels[i].candleSeries) {
-              chartPanels[i].candleSeries.update(candle);
+              var p = chartPanels[i];
+
+              // Update or append candle in the data array
+              if (p.candles.length > 0) {
+                var lastCandle = p.candles[p.candles.length - 1];
+                if (lastCandle.time === candle.time) {
+                  // Update existing candle
+                  lastCandle.open = candle.open;
+                  lastCandle.high = candle.high;
+                  lastCandle.low = candle.low;
+                  lastCandle.close = candle.close;
+                  lastCandle.volume = candle.volume;
+                } else if (candle.time > lastCandle.time) {
+                  // New candle
+                  p.candles.push(candle);
+                  // Keep array from growing unbounded
+                  if (p.candles.length > 500) p.candles.shift();
+                }
+              }
+
+              p.candleSeries.update(candle);
+
               // Update volume if active
-              if (chartPanels[i].volumeSeries) {
-                chartPanels[i].volumeSeries.update({
+              if (p.volumeSeries) {
+                p.volumeSeries.update({
                   time: candle.time, value: candle.volume,
                   color: candle.close >= candle.open ? 'rgba(52,211,153,0.3)' : 'rgba(244,63,94,0.3)',
                 });
+              }
+
+              // Reapply indicators when a candle closes
+              if (isClosed) {
+                applyIndicators(i);
               }
             }
           }
@@ -3051,6 +3098,7 @@
               if (match) match.classList.add('active');
             }
           }
+          saveChartSettings();
           recreateAllCharts();
           loadSmcData();
           connectWebSocket();
@@ -3065,6 +3113,7 @@
             group.querySelectorAll('.panel-tf-btn').forEach(function(b) { b.classList.remove('active'); });
             btn.classList.add('active');
             chartIntervals[panelIdx] = btn.dataset.tv;
+            saveChartSettings();
             createChart(panelIdx);
             connectWebSocket();
           });
@@ -3162,18 +3211,16 @@
             CHART_COUNT = 3;
           }
 
-          localStorage.setItem('mct_chart_layout', layout);
+          saveChartSettings();
           recreateAllCharts();
         });
       });
 
       // Restore saved layout
-      var savedLayout = localStorage.getItem('mct_chart_layout');
-      if (savedLayout === '1') {
+      if (CHART_COUNT === 1) {
         document.getElementById('chart-area').classList.add('layout-1');
         document.querySelector('.layout-btn[data-layout="1"]').classList.add('active');
         document.querySelector('.layout-btn[data-layout="3"]').classList.remove('active');
-        CHART_COUNT = 1;
       }
 
       DOM.bottomPanelToggle.addEventListener('click', function() {
@@ -3234,6 +3281,19 @@
     // ============================================================
 
     async function init() {
+      // Restore saved settings to UI
+      DOM.toolbarSymbol.textContent = STATE.symbol;
+
+      // Restore per-panel TF active buttons
+      for (var i = 0; i < 3; i++) {
+        var tfGroup = document.querySelector('.chart-panel-tf[data-panel="' + i + '"]');
+        if (tfGroup && chartIntervals[i]) {
+          tfGroup.querySelectorAll('.panel-tf-btn').forEach(function(b) { b.classList.remove('active'); });
+          var match = tfGroup.querySelector('.panel-tf-btn[data-tv="' + chartIntervals[i] + '"]');
+          if (match) match.classList.add('active');
+        }
+      }
+
       setupEventListeners();
       createAllCharts();
 
