@@ -2587,12 +2587,14 @@
       var p = chartPanels[idx];
       if (!p.chart || !p.candles.length) return;
 
-      // Clear existing overlays and sub-charts
+      // Clear ALL existing overlays, sub-charts, and markers
       p.overlaySeries.forEach(function(s) { try { p.chart.removeSeries(s); } catch(_) {} });
       p.overlaySeries = [];
       p.subCharts.forEach(function(sc) { if (sc.chart) sc.chart.remove(); if (sc.container) sc.container.remove(); });
       p.subCharts = [];
       if (p.volumeSeries) { try { p.chart.removeSeries(p.volumeSeries); } catch(_) {} p.volumeSeries = null; }
+      // Clear markers to prevent accumulation on each reapply
+      if (p.candleSeries) { try { p.candleSeries.setMarkers([]); } catch(_) {} }
 
       var prefs = loadIndicatorPrefs();
       var allFormulas = [];
@@ -2897,8 +2899,7 @@
               });
             });
 
-            allMarkers.sort(function(a, b) { return a.time - b.time; });
-            p.candleSeries.setMarkers(allMarkers);
+            // Markers set once after all SMC elements are collected (step 10)
 
             // 6. PDH/PDL horizontal lines
             if (smc.pdh > 0) {
@@ -2968,11 +2969,7 @@
               // EQL/EQH marker at midpoint
               allMarkers.push({ time: eq.t2, position: eq.type === 'EQL' ? 'belowBar' : 'aboveBar', color: '#fbbf24', shape: 'square', text: eq.type });
             });
-            // Re-sort and set markers if EQL/EQH were added
-            if (smc.eqlLines.length) {
-              allMarkers.sort(function(a, b) { return a.time - b.time; });
-              p.candleSeries.setMarkers(allMarkers);
-            }
+            // EQL/EQH markers already added to allMarkers above — final set happens after Order Blocks
 
             // 10. Order Blocks (supply/demand zones) — lines only, no fill
             smc.orderBlocks.forEach(function(ob) {
@@ -2999,13 +2996,12 @@
               topLine.setData(topData); botLine.setData(botData);
               p.overlaySeries.push(topLine); p.overlaySeries.push(botLine);
 
-              // "OP" label marker at order block start
-              var opMarkers = [];
-              try { opMarkers = p.candleSeries.markers() || []; } catch(_) {}
-              opMarkers.push({ time: ob.startTime, position: isDemand ? 'belowBar' : 'aboveBar', color: isDemand ? '#34d399' : '#f43f5e', shape: 'square', text: 'OP' });
-              opMarkers.sort(function(a, b) { return a.time - b.time; });
-              p.candleSeries.setMarkers(opMarkers);
+              // Collect OP marker (set once after loop)
+              allMarkers.push({ time: ob.startTime, position: isDemand ? 'belowBar' : 'aboveBar', color: isDemand ? '#34d399' : '#f43f5e', shape: 'square', text: 'OP' });
             });
+            // Final marker set — all SMC markers at once
+            allMarkers.sort(function(a, b) { return a.time - b.time; });
+            p.candleSeries.setMarkers(allMarkers);
 
             // 11. Stats box (HTML overlay)
             var statsId = 'smc-stats-' + idx;

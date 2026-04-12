@@ -612,22 +612,22 @@ async function analyzeLHHL(ticker, params, dailyBiasCache, kronosPredictions = n
       const currentIdx = klines1m.length - 1;
       const candleAge = currentIdx - confirmationIdx;
 
-      if (candleAge !== 1) {
-        bLog.scan(`${symbol}: ${direction} blocked — swing age ${candleAge} (must be next candle only)`);
+      if (candleAge < 0 || candleAge > 3) {
+        bLog.scan(`${symbol}: ${direction} blocked — swing age ${candleAge} (must be 0-3 candles)`);
         return null;
       }
 
       // Anti-chase: don't enter if price already moved too far from 1m swing point
       if (struct1m.lastLow && direction === 'LONG') {
         const distFromHL = (price - struct1m.lastLow.price) / struct1m.lastLow.price;
-        if (distFromHL > 0.003) {
+        if (distFromHL > 0.005) {
           bLog.scan(`${symbol}: LONG blocked — price ${(distFromHL*100).toFixed(2)}% above 1m HL (chasing)`);
           return null;
         }
       }
       if (struct1m.lastHigh && direction === 'SHORT') {
         const distFromLH = (struct1m.lastHigh.price - price) / struct1m.lastHigh.price;
-        if (distFromLH > 0.003) {
+        if (distFromLH > 0.005) {
           bLog.scan(`${symbol}: SHORT blocked — price ${(distFromLH*100).toFixed(2)}% below 1m LH (chasing)`);
           return null;
         }
