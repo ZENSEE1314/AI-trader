@@ -2596,6 +2596,9 @@
       // Clear markers to prevent accumulation on each reapply
       if (p.candleSeries) { try { p.candleSeries.setMarkers([]); } catch(_) {} }
 
+      // Shared marker array — all indicators push here, set once at end
+      var _allChartMarkers = [];
+
       var prefs = loadIndicatorPrefs();
       var allFormulas = [];
 
@@ -2667,12 +2670,9 @@
               p.overlaySeries.push(lineSeries);
             });
 
-            // Add markers (arrows for trend change)
-            if (tsd.markers.length && p.candleSeries) {
-              var existingMarkers = p.candleSeries.markers ? p.candleSeries.markers() : [];
-              var allMarkers = existingMarkers.concat(tsd.markers);
-              allMarkers.sort(function(a, b) { return a.time - b.time; });
-              p.candleSeries.setMarkers(allMarkers);
+            // Collect markers (set once at end of applyIndicators)
+            if (tsd.markers.length) {
+              tsd.markers.forEach(function(m) { _allChartMarkers.push(m); });
             }
 
           } else if (result.dtfxData) {
@@ -2756,13 +2756,9 @@
               });
             });
 
-            // Add HH/HL/LH/LL markers
-            if (dzd.markers.length && p.candleSeries) {
-              var existingMarkers = [];
-              try { existingMarkers = p.candleSeries.markers() || []; } catch(_) {}
-              var allMarkers = existingMarkers.concat(dzd.markers);
-              allMarkers.sort(function(a, b) { return a.time - b.time; });
-              p.candleSeries.setMarkers(allMarkers);
+            // Collect markers (set once at end of applyIndicators)
+            if (dzd.markers.length) {
+              dzd.markers.forEach(function(m) { _allChartMarkers.push(m); });
             }
 
           } else if (result.vsaData) {
@@ -2806,21 +2802,11 @@
               if (box.signal !== 'neutral') {
                 var sigColor = box.signal === 'divergence' ? '#ff1100' : '#00ffbb';
                 var sigText = box.signal === 'divergence' ? 'DIV' : 'CON';
-                // Find closest candle to endTime for marker
-                for (var ci = 0; ci < p.candles.length; ci++) {
-                  if (p.candles[ci].time === box.endTime) {
-                    var existingMarkers = [];
-                    try { existingMarkers = p.candleSeries.markers() || []; } catch(_) {}
-                    existingMarkers.push({
-                      time: box.endTime,
-                      position: box.isBull ? 'belowBar' : 'aboveBar',
-                      color: sigColor, shape: 'square', text: sigText,
-                    });
-                    existingMarkers.sort(function(a, b) { return a.time - b.time; });
-                    p.candleSeries.setMarkers(existingMarkers);
-                    break;
-                  }
-                }
+                _allChartMarkers.push({
+                  time: box.endTime,
+                  position: box.isBull ? 'belowBar' : 'aboveBar',
+                  color: sigColor, shape: 'square', text: sigText,
+                });
               }
             });
 
@@ -2861,8 +2847,7 @@
             });
 
             // 3. BOS/BMS/CHoCH — markers + horizontal dashed lines (last 6 only)
-            var allMarkers = [];
-            try { allMarkers = p.candleSeries.markers() || []; } catch(_) {}
+            var allMarkers = _allChartMarkers; // use shared array
             var recentBreaks = smc.structureBreaks.slice(-6);
             recentBreaks.forEach(function(sb) {
               var isBull = sb.dir === 'bull';
@@ -2999,9 +2984,7 @@
               // Collect OP marker (set once after loop)
               allMarkers.push({ time: ob.startTime, position: isDemand ? 'belowBar' : 'aboveBar', color: isDemand ? '#34d399' : '#f43f5e', shape: 'square', text: 'OP' });
             });
-            // Final marker set — all SMC markers at once
-            allMarkers.sort(function(a, b) { return a.time - b.time; });
-            p.candleSeries.setMarkers(allMarkers);
+            // Markers collected in _allChartMarkers — set once at end of applyIndicators
 
             // 11. Stats box (HTML overlay)
             var statsId = 'smc-stats-' + idx;
@@ -3191,6 +3174,12 @@
           p.subCharts.push({ chart: subChart, container: subDiv, resizeObserver: subRo });
         }
       });
+
+      // Set ALL collected markers once at the end (prevents duplication)
+      if (p.candleSeries && _allChartMarkers.length > 0) {
+        _allChartMarkers.sort(function(a, b) { return a.time - b.time; });
+        p.candleSeries.setMarkers(_allChartMarkers);
+      }
 
       // Show reopen bar for any closed oscillators
       updateReopenBar(idx);
