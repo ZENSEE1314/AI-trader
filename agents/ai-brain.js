@@ -41,14 +41,24 @@ function getCached(key) {
   return null;
 }
 
+// Track Ollama health — if it fails, temporarily fall back to cloud
+let ollamaHealthy = true;
+let ollamaLastCheck = 0;
+const OLLAMA_HEALTH_RECHECK_MS = 60000; // Re-check every 60s after failure
+
 function getProvider(complexity = 'low') {
-  // Priority 1: Ollama (Local) — handles ALL complexity levels
-  // Low/medium tasks use OLLAMA_MODEL, high tasks use OLLAMA_MODEL_HIGH
-  if (process.env.OLLAMA_URL) {
+  // Priority 1: Ollama (Local/Tunnel) — handles ALL complexity levels
+  if (process.env.OLLAMA_URL && ollamaHealthy) {
     return 'ollama';
   }
 
-  // Priority 2: Google Gemini (Free/Medium)
+  // Re-check Ollama health periodically (maybe PC came back online)
+  if (process.env.OLLAMA_URL && !ollamaHealthy && Date.now() - ollamaLastCheck > OLLAMA_HEALTH_RECHECK_MS) {
+    ollamaHealthy = true; // Optimistic — will be set false again on next failure
+    return 'ollama';
+  }
+
+  // Priority 2: Google Gemini (Free fallback)
   if (process.env.GOOGLE_AI_KEY) {
     if (!googleClient) {
       const { GoogleGenerativeAI } = require('@google/generative-ai');
@@ -69,6 +79,19 @@ function getProvider(complexity = 'low') {
   return null;
 }
 
+function markOllamaDown() {
+  ollamaHealthy = false;
+  ollamaLastCheck = Date.now();
+  console.log('[AI Brain] Ollama marked DOWN — falling back to cloud provider');
+}
+
+function markOllamaUp() {
+  if (!ollamaHealthy) {
+    ollamaHealthy = true;
+    console.log('[AI Brain] Ollama is back UP — using local AI');
+  }
+}
+
 function isAvailable() {
   return !!(process.env.OLLAMA_URL || process.env.GOOGLE_AI_KEY || process.env.ANTHROPIC_API_KEY);
 }
@@ -77,7 +100,8 @@ function getProviderName() {
   if (process.env.OLLAMA_URL) {
     const model = process.env.OLLAMA_MODEL || 'gemma3:4b';
     const modelHigh = process.env.OLLAMA_MODEL_HIGH || 'gemma4:31b-cloud';
-    return `Ollama (${model} / ${modelHigh})`;
+    const status = ollamaHealthy ? 'UP' : 'DOWN→fallback';
+    return `Ollama [${status}] (${model} / ${modelHigh})`;
   }
   if (process.env.GOOGLE_AI_KEY) return 'Google Gemini';
   if (process.env.ANTHROPIC_API_KEY) return 'Anthropic Claude';
@@ -142,32 +166,47 @@ async function think(opts) {
   try {
     requestLog.push(Date.now());
     let text;
+    let currentProvider = provider;
 
-    // Retry mechanism for transient provider errors (like 424, 500, 503)
+    // Retry mechanism with automatic fallback (Ollama → Google → Anthropic)
     let attempts = 0;
-    const maxAttempts = 3; // Increased to 3 for better resilience
+    const maxAttempts = 3;
 
     while (attempts < maxAttempts) {
       try {
-        if (provider === 'google') {
+        if (currentProvider === 'google') {
           text = await thinkGoogle(agentName, fullSystem, userMessage);
-        } else if (provider === 'ollama') {
+        } else if (currentProvider === 'ollama') {
           text = await thinkOllama(agentName, fullSystem, userMessage, complexity);
+          markOllamaUp(); // Success — Ollama is healthy
         } else {
           text = await thinkAnthropic(agentName, fullSystem, userMessage);
         }
-        if (text) break; // Success, exit loop
+        if (text) break;
         throw new Error('AI returned empty response');
       } catch (err) {
         attempts++;
+
+        // If Ollama failed, mark it down and try cloud fallback immediately
+        if (currentProvider === 'ollama') {
+          markOllamaDown();
+          const fallback = getProvider(complexity);
+          if (fallback && fallback !== 'ollama') {
+            console.log(`[AI Brain] Ollama failed — falling back to ${fallback}`);
+            currentProvider = fallback;
+            attempts--; // Don't count the fallback switch as an attempt
+            continue;
+          }
+        }
+
         const isTransient = err.message?.includes('424') || err.message?.includes('500') || err.message?.includes('503') || err.message?.includes('429') || err.message?.includes('Could not serve request') || err.message?.includes('Error fetching') || err.message?.includes('fetch failed') || err.message?.includes('ECONNRESET') || err.message?.includes('ETIMEDOUT') || err.message === 'AI returned empty response';
 
         if (isTransient && attempts < maxAttempts) {
           console.log(`[AI Brain] Transient error ${err.message} — retrying (${attempts}/${maxAttempts})...`);
-          await new Promise(resolve => setTimeout(resolve, 1500 * attempts)); // Slightly longer backoff
+          await new Promise(resolve => setTimeout(resolve, 1500 * attempts));
           continue;
         }
-        throw err; // Not transient or max attempts reached
+        throw err;
       }
     }
 
@@ -175,7 +214,6 @@ async function think(opts) {
     if (text) responseCache.set(cacheKey, { text, ts: Date.now() });
     return text;
   } catch (err) {
-    // Return a more helpful error that suggests a retry
     console.error(`[AI Brain] ${agentName} FAILED (${provider}): ${err.message}`);
     if (err.message?.includes('400')) {
       console.error(`[AI Brain] Malformed Request (400) detected. Payload preview: ${JSON.stringify(opts).substring(0, 500)}...`);
