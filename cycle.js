@@ -21,10 +21,9 @@ const PRIVATE_CHATS  = TELEGRAM_CHATS.filter(id => !id.startsWith('-'));
 
 // ── CONFIG (defaults — AI may override some via getOptimalParams) ─
 const BTC_ETH_SYMBOLS = new Set(['BTCUSDT', 'ETHUSDT']);
-// Tokens priced $100+ need 100x leverage — small % moves matter more
+// Tokens priced $1000+ use 100x leverage — everything else 20x
 const HIGH_PRICE_SYMBOLS = new Set([
-  'BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'SOLUSDT', 'AAVEUSDT',
-  'MKRUSDT', 'BCHUSDT', 'LTCUSDT', 'AVAXUSDT', 'LINKUSDT',
+  'BTCUSDT', 'ETHUSDT',
 ]);
 
 const CONFIG = {

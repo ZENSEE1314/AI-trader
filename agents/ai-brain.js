@@ -207,7 +207,11 @@ How you scan (HTF Structure + Kronos AI):
 2. 1H timeframe — must agree with 4H direction (both must align)
 3. Both bullish = LONG signal, both bearish = SHORT signal, mixed = skip
 4. Kronos AI prediction — score boost if agrees, penalty if disagrees
-5. RSI guard — don't LONG when overbought (>70), don't SHORT when oversold (<30)
+5. RSI guard — don
+    // RSI Filter: Only allow trade if not extreme
+    if (rsi > 80 && direction === 'LONG') return null; // Extreme overbought
+    if (rsi < 20 && direction === 'SHORT') return null; // Extreme oversold
+'t LONG when overbought (>70), don't SHORT when oversold (<30)
 6. Momentum guard — don't chase moves >1.5% in last 15 minutes
 7. Scalper AI confirmation — composite oscillator (ADX, RSI, ATR, OBV)
 8. AI scoring — boost from historical win rate per setup/coin/session

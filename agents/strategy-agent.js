@@ -186,7 +186,7 @@ class StrategyAgent extends BaseAgent {
 
           // Simple trend: 2 of 3 recent candles direction
           const greens = recent.filter(c => c.close > c.open).length;
-          const direction = greens >= 2 ? 'LONG' : greens <= 1 ? 'SHORT' : null;
+          const direction = greens >= 3 ? 'LONG' : greens === 0 ? 'SHORT' : null; // Strong signals only
           if (!direction) continue;
 
           // Only take signals every 10 candles min

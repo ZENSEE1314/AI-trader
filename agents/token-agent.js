@@ -39,6 +39,7 @@ class TokenAgent extends BaseAgent {
 
   async execute(context = {}) {
     this.currentTask = { description: `Scanning ${this.symbol}`, startedAt: Date.now() };
+    bLog.scan(`[HEARTBEAT] ${this.name} starting execution...`);
 
     const aiLearner = require('../ai-learner');
     const aiParams = await aiLearner.getOptimalParams();

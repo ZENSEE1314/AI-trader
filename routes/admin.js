@@ -3403,6 +3403,12 @@ router.get('/agents/profiles', async (req, res) => {
 });
 
 // GET /api/admin/agents/profiles/:key — Single agent profile
+
+router.get('/brain-status', (req, res) => {
+  const graphPath = Path('graphify-out/GRAPH_REPORT.md');
+  const report = graphPath.exists() ? graphPath.read_text() : 'No report available';
+  res.json({ report, status: 'Operational' });
+});
 router.get('/agents/profiles/:key', async (req, res) => {
   try {
     const { getCoordinator } = require('../agents');

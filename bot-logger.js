@@ -98,6 +98,24 @@ function addLog(category, message, data = null, userId = null) {
   const tag = category.toUpperCase().padEnd(9);
   console.log(`[${entry.tsLocal}] [${tag}] ${message}`);
 
+  // Trigger alerts for big movements, whale spikes, or SMC signals
+  if (category === 'scan' || category === 'trade') {
+    const symbol = extractSymbol(message);
+    if (symbol) {
+      // Logic to detect "Big Movement" / "Whale Spike" / "SMC Call"
+      const isSMC = message.includes('SIGNAL') || message.includes('HL') || message.includes('LH');
+      const isSpike = message.includes('vol') && message.includes('x') && parseFloat(message.match(/(\d+\.\d+)x/)?.[1] || 0) > 3;
+      const isWhale = message.toLowerCase().includes('whale') || message.toLowerCase().includes('massive');
+
+      if (isSMC || isSpike || isWhale) {
+        // This can be hooked into a WebSocket or Push Notification system
+        // For now, we mark it in the data for the frontend to pick up as a "priority" alert
+        entry.priority = 'HIGH';
+        entry.alertType = isSMC ? 'SMC_CALL' : isSpike ? 'VOL_SPIKE' : 'WHALE_MOVE';
+      }
+    }
+  }
+
   // Persist to PostgreSQL (non-blocking)
   if (dbReady) {
     const symbol = extractSymbol(message);

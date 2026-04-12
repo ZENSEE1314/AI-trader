@@ -37,9 +37,16 @@ const DEFAULT_TOKEN_AGENTS = [
 ];
 
 class AgentCoordinator extends BaseAgent {
+
+  generateCommandToken() {
+    this.currentCommandToken = Math.random().toString(36).substring(2, 15);
+    return this.currentCommandToken;
+  }
+
   constructor(options = {}) {
     super('Coordinator', options);
     this.chartAgent = new ChartAgent(options);
+    this.currentCommandToken = null;
     this.traderAgent = new TraderAgent(options);
     this.riskAgent = new RiskAgent(options);
     this.sentimentAgent = new SentimentAgent(options);
@@ -93,89 +100,90 @@ class AgentCoordinator extends BaseAgent {
   }
 
   async init() {
-    this.log('Initializing agent framework...');
+    this.log('[BOOT] Starting Agent framework initialization...');
 
-    for (const [name, agent] of this._agents) {
-      await agent.init();
-      await agent.loadRpgProfile().catch(() => {});
-      this.log(`  ${name}: initialized (Lv.${agent._rpg.level})`);
-
-      // Listen for agent crashes to trigger self-healing
-      agent.on('agent_crash', async (report) => {
-        this.log(`CRASH DETECTED: ${report.agentName} failed. Notifying CoderAgent...`);
-        try {
-          await this.coderAgent.healAgent({
-            agent: agent,
-            error: report.error,
-            timestamp: report.timestamp
-          });
-        } catch (err) {
-          this.logError(`Self-healing trigger failed: ${err.message}`);
-        }
-      });
-    }
-
-    // Create dedicated token agents for top coins by volume
-    // Dashboard enabled/disabled is per-user trading preference — scanning is global
-    for (const symbol of DEFAULT_TOKEN_AGENTS) {
-      this.addTokenAgent(symbol);
-    }
-
-    // Fetch top coins by volume from Binance and create agents for all of them
     try {
-      const fetch = require('node-fetch');
-      const res = await fetch('https://fapi.binance.com/fapi/v1/ticker/24hr', { timeout: 10000 });
-      if (res.ok) {
-        const tickers = await res.json();
-        // Get banned tokens from DB
-        const { query } = require('../db');
-        const bannedRows = await query('SELECT symbol FROM global_token_settings WHERE banned = true').catch(() => []);
-        const banned = new Set(bannedRows.map(r => r.symbol));
+      for (const [name, agent] of this._agents) {
+        this.log(`[BOOT] Initializing system agent: ${name}...`);
+        await agent.init();
+        await agent.loadRpgProfile().catch(() => {});
+        this.log(`[BOOT] ${name} ready (Lv.${agent._rpg.level})`);
 
-        const topCoins = tickers
-          .filter(t => t.symbol.endsWith('USDT') && !t.symbol.includes('_'))
-          .filter(t => !banned.has(t.symbol))
-          .filter(t => parseFloat(t.quoteVolume) >= 10_000_000)
-          .sort((a, b) => parseFloat(b.quoteVolume) - parseFloat(a.quoteVolume))
-          .slice(0, 50)
-          .map(t => t.symbol);
-
-        for (const sym of topCoins) {
-          if (!this.tokenAgents.has(sym)) this.addTokenAgent(sym);
-        }
-        this.log(`Loaded top ${topCoins.length} tokens by volume`);
+        // Listen for agent crashes to trigger self-healing
+        agent.on('agent_crash', async (report) => {
+          this.log(`CRASH DETECTED: ${report.agentName} failed. Notifying CoderAgent...`);
+          try {
+            await this.coderAgent.healAgent({
+              agent: agent,
+              error: report.error,
+              timestamp: report.timestamp
+            });
+          } catch (err) {
+            this.logError(`Self-healing trigger failed: ${err.message}`);
+          }
+        });
       }
-    } catch (err) {
-      this.logError(`Failed to fetch top tokens: ${err.message}`);
-      // Fallback: load from global_token_settings
+
+      this.log('[BOOT] System agents initialized. Loading token agents...');
+      // Create dedicated token agents for top coins by volume
+      for (const symbol of DEFAULT_TOKEN_AGENTS) {
+        this.addTokenAgent(symbol);
+      }
+
+      // Fetch top coins by volume from Binance and create agents for all of them
       try {
-        const { query } = require('../db');
-        const rows = await query('SELECT symbol FROM global_token_settings WHERE banned = false');
-        for (const r of rows) {
-          if (!this.tokenAgents.has(r.symbol)) this.addTokenAgent(r.symbol);
+        this.log('[BOOT] Fetching top tokens from Binance...');
+        const fetch = require('node-fetch');
+        const res = await fetch('https://fapi.binance.com/fapi/v1/ticker/24hr', { timeout: 10000 });
+        if (res.ok) {
+          const tickers = await res.json();
+          const { query } = require('../db');
+          const bannedRows = await query('SELECT symbol FROM global_token_settings WHERE banned = true').catch(() => []);
+          const banned = new Set(bannedRows.map(r => r.symbol));
+
+          const topCoins = tickers
+            .filter(t => t.symbol.endsWith('USDT') && !t.symbol.includes('_'))
+            .filter(t => !banned.has(t.symbol))
+            .filter(t => parseFloat(t.quoteVolume) >= 10_000_000)
+            .sort((a, b) => parseFloat(b.quoteVolume) - parseFloat(a.quoteVolume))
+            .slice(0, 50)
+            .map(t => t.symbol);
+
+          for (const sym of topCoins) {
+            if (!this.tokenAgents.has(sym)) this.addTokenAgent(sym);
+          }
+          this.log(`[BOOT] Loaded top ${topCoins.length} tokens by volume`);
         }
-      } catch {}
+      } catch (err) {
+        this.logError(`[BOOT] Failed to fetch top tokens: ${err.message}`);
+        try {
+          const { query } = require('../db');
+          const rows = await query('SELECT symbol FROM global_token_settings WHERE banned = false');
+          for (const r of rows) {
+            if (!this.tokenAgents.has(r.symbol)) this.addTokenAgent(r.symbol);
+          }
+        } catch {}
+      }
+
+      this.log('[BOOT] Starting background agent loops...');
+      this.strategyAgent.init().catch(err => this.logError(`StrategyAgent init failed: ${err.message}`));
+      this.policeAgent.init().catch(err => this.logError(`PoliceAgent init failed: ${err.message}`));
+      this.coderAgent.setCoordinator(this);
+      this.coderAgent.init().catch(err => this.logError(`CoderAgent init failed: ${err.message}`));
+      this.optimizerAgent.setCoordinator(this);
+      this.optimizerAgent.init().catch(err => this.logError(`OptimizerAgent init failed: ${err.message}`));
+
+      this.log(`[BOOT] Agent framework ready — ${this._agents.size} system agents + ${this.tokenAgents.size} token agents`);
+
+      this.log('[BOOT] Activating CEO and Token Scan loops...');
+      this._startCeoLoop();
+      this._startTokenScanLoop();
+      this.log('[BOOT] FULLY OPERATIONAL.');
+    } catch (criticalError) {
+      this.logError(`[BOOT] CRITICAL INITIALIZATION FAILURE: ${criticalError.message}`);
+      this.logError(criticalError.stack);
+      throw criticalError;
     }
-
-    // Start StrategyAgent 24/7 background loop
-    this.strategyAgent.init().catch(err => this.logError(`StrategyAgent init failed: ${err.message}`));
-
-    // Start PoliceAgent patrol loop
-    this.policeAgent.init().catch(err => this.logError(`PoliceAgent init failed: ${err.message}`));
-
-    // Start CoderAgent self-healing loop
-    this.coderAgent.setCoordinator(this);
-    this.coderAgent.init().catch(err => this.logError(`CoderAgent init failed: ${err.message}`));
-
-    // Start OptimizerAgent 24/7 strategy optimization loop
-    this.optimizerAgent.setCoordinator(this);
-    this.optimizerAgent.init().catch(err => this.logError(`OptimizerAgent init failed: ${err.message}`));
-
-    this.log(`Agent framework ready — ${this._agents.size} system agents + ${this.tokenAgents.size} token agents`);
-
-    // CEO always-on: permanently at desk, monitoring everything
-    this._startCeoLoop();
-    this._startTokenScanLoop();
   }
 
   async verifyAgentFix(agent) {
@@ -371,6 +379,7 @@ class AgentCoordinator extends BaseAgent {
 
     // Scan batch
     const signals = [];
+    bLog.scan(`[SCAN-BATCH] Starting scan of ${batch.length} tokens...`);
     for (const [sym, agent] of batch) {
       agent.currentTask = { description: `Quick-scanning ${sym}...`, startedAt: Date.now() };
       try {
@@ -379,8 +388,8 @@ class AgentCoordinator extends BaseAgent {
           signals.push(result);
           agent.addActivity('success', `SIGNAL: ${sym} ${result.direction}`);
         }
-      } catch {
-        // Skip failed scans silently
+      } catch (err) {
+        bLog.error(`[SCAN-BATCH] Failed to scan ${sym}: ${err.message}`);
       }
       agent.currentTask = { description: `Watching ${sym}`, startedAt: Date.now() };
     }

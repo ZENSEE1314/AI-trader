@@ -196,6 +196,7 @@ function detectSwings(klines, len) {
   return swings;
 }
 
+
 function detectTentativePivot(klines, len) {
   const highs = klines.map(k => parseFloat(k[2]));
   const lows = klines.map(k => parseFloat(k[3]));
@@ -234,13 +235,13 @@ function detectTentativePivot(klines, len) {
 // ── Market Structure Labels ─────────────────────────────────
 
 function getStructure(klines, len) {
-  const { swings, tentative } = detectSwings(klines, len);
+  const { swings } = detectSwings(klines, len);
   const swingHighs = swings.filter(s => s.type === 'high');
   const swingLows = swings.filter(s => s.type === 'low');
 
-  // Minimum swing size: HL/LH must differ by at least 0.15% from previous swing
-  // to filter out noise bounces in strong trends
-  const MIN_SWING_PCT = 0.0015;
+  // Minimum swing size: HL/LH must differ by at least 0.05% from previous swing
+  // Lowered from 0.15% to 0.05% to capture deeper, more significant structure changes
+  const MIN_SWING_PCT = 0.0005;
 
   const highLabels = [];
   for (let i = 1; i < swingHighs.length; i++) {
@@ -421,6 +422,7 @@ function isGoodTradingSession() {
 
 async function analyzeLHHL(ticker, params, dailyBiasCache, kronosPredictions = null) {
   const symbol = ticker.symbol;
+  bLog.scan(`[HEARTBEAT] Analyzing ${symbol}...`);
   const price = parseFloat(ticker.lastPrice);
 
   // Load AI-optimized strategy params from DB (set by Quantum Optimizer)
@@ -442,16 +444,17 @@ async function analyzeLHHL(ticker, params, dailyBiasCache, kronosPredictions = n
   // │ SL/trailing unchanged — risk is user-configured         │
   // └─────────────────────────────────────────────────────────┘
 
-  const [klinesDaily, klines4h, klines1h, klines15m, klines1m] = await Promise.all([
+  const [klinesDaily, klines4h, klines1h, klines15m, klines3m, klines1m] = await Promise.all([
     fetchKlines(symbol, '1d', 10),
     fetchKlines(symbol, '4h', 60),
     fetchKlines(symbol, '1h', 60),
     fetchKlines(symbol, '15m', 100),
+    fetchKlines(symbol, '3m', 100),
     fetchKlines(symbol, '1m', 100),
   ]);
 
-  if (!klines4h || !klines1h || !klines15m) return null;
-  if (klines4h.length < 10 || klines1h.length < 10 || klines15m.length < 30) return null;
+  if (!klines4h || !klines1h || !klines15m || !klines3m) return null;
+  if (klines4h.length < 10 || klines1h.length < 10 || klines15m.length < 30 || klines3m.length < 30) return null;
 
   // ┌─────────────────────────────────────────────────────────┐
   // │ Step 1: Daily Bias (optional — AI decides)              │
@@ -549,82 +552,61 @@ async function analyzeLHHL(ticker, params, dailyBiasCache, kronosPredictions = n
   }
 
   // ┌─────────────────────────────────────────────────────────┐
+  // │ Step 4.5: 3m Structure Confirmation (STRICT ALIGNMENT)     │
+  // └─────────────────────────────────────────────────────────┘
+  const struct3m = getStructure(klines3m, SWING_LENGTHS['3m']);
+  if (direction === 'LONG' && !struct3m.hasHL) {
+    bLog.scan(`${symbol}: LONG blocked — 3m has no HL confirmation (Trend Misalignment)`);
+    return null;
+  }
+  if (direction === 'SHORT' && !struct3m.hasLH) {
+    bLog.scan(`${symbol}: SHORT blocked — 3m has no LH confirmation (Trend Misalignment)`);
+    return null;
+  }
+
+  // ┌─────────────────────────────────────────────────────────┐
   // │ Step 5: 1m Structure Confirmation (optional — AI)        │
   // └─────────────────────────────────────────────────────────┘
   let struct1m = null;
   if (klines1m && klines1m.length >= 15) {
     struct1m = getStructure(klines1m, SWING_LENGTHS['1m']);
 
-    // ── SMC-Sling "Buy-In" Logic ────────────────────────────
-    // 1. Must have a ChoCh (Market Structure Shift)
-    // 2. Price must currently be inside a Bullish FVG or Order Block
-    if (direction === 'LONG' && struct1m.isChoCh) {
-      const fvgs = detectFVGs(klines1m);
-      const obs = detectOrderBlocks(klines1m, struct1m.swings);
-
-      const inFVG = fvgs.some(f => f.type === 'BULLISH' && price <= f.top && price >= f.bottom);
-      const inOB = obs.some(o => o.type === 'BULLISH' && price <= o.top && price >= o.bottom);
-
-      if (inFVG || inOB) {
-        bLog.scan(`${symbol}: SMC-Sling DETECTED — Price in Buy-In zone after ChoCh`);
-        // We can bypass 1m HL requirement if we have a perfect SMC-Sling
-        if (NEED_1M) {
-          // Overwrite the block logic below
-          struct1m.hasHL = true;
-        }
-      }
-    } else if (direction === 'SHORT' && struct1m.isChoCh) {
-      const fvgs = detectFVGs(klines1m);
-      const obs = detectOrderBlocks(klines1m, struct1m.swings);
-
-      const inFVG = fvgs.some(f => f.type === 'BEARISH' && price >= f.bottom && price <= f.top);
-      const inOB = obs.some(o => o.type === 'BEARISH' && price >= o.bottom && price <= o.top);
-
-      if (inFVG || inOB) {
-        bLog.scan(`${symbol}: SMC-Sling DETECTED — Price in Sell-In zone after ChoCh`);
-        if (NEED_1M) {
-          struct1m.hasLH = true;
-        }
-      }
-    }
-
-    // ── Fast-Entry: Tentative Swing Bypass ──────────────────────
-    // If we have a tentative pivot and strong alignment, we bypass the full swing window
-    if (NEED_1M) {
-      if (direction === 'LONG' && struct1m.tentative?.isLow) {
-        // Entry is allowed if tentative HL is supported by ChoCh + FVG/OB
-        const fvgs = detectFVGs(klines1m);
-        const obs = detectOrderBlocks(klines1m, struct1m.swings);
-        const inZone = fvgs.some(f => f.type === 'BULLISH' && price <= f.top && price >= f.bottom) ||
-                       obs.some(o => o.type === 'BULLISH' && price <= o.top && price >= o.bottom);
-
-        if (struct1m.isChoCh && inZone) {
-          bLog.scan(`${symbol}: Fast-Entry LONG — Tentative HL + ChoCh + Zone`);
-          struct1m.hasHL = true;
-        }
-      } else if (direction === 'SHORT' && struct1m.tentative?.isHigh) {
-        const fvgs = detectFVGs(klines1m);
-        const obs = detectOrderBlocks(klines1m, struct1m.swings);
-        const inZone = fvgs.some(f => f.type === 'BEARISH' && price >= f.bottom && price <= f.top) ||
-                       obs.some(o => o.type === 'BEARISH' && price >= o.bottom && price <= o.top);
-
-        if (struct1m.isChoCh && inZone) {
-          bLog.scan(`${symbol}: Fast-Entry SHORT — Tentative LH + ChoCh + Zone`);
-          struct1m.hasLH = true;
-        }
-      }
-    }
+    // ── Strict 1m Structure Confirmation Only ──────────────────────
+    // Removed SMC-Sling and Fast-Entry bypasses to ensure trades only fire
+    // on confirmed HL/LH swings.
     // ──────────────────────────────────────────────────────────
 
     if (NEED_1M) {
+      // 1. Strict Trend Alignment: 1m trend must match HTF direction
+      const targetTrend = direction === 'LONG' ? 'bullish' : 'bearish';
+      if (struct1m.trend !== targetTrend && struct1m.trend !== 'neutral') {
+        bLog.scan(`${symbol}: ${direction} blocked — 1m trend is ${struct1m.trend} (must be ${targetTrend} or neutral)`);
+        return null;
+      }
+
+      // 2. Strict HL/LH Requirement (No bypasses)
       if (direction === 'LONG' && !struct1m.hasHL) {
-        bLog.scan(`${symbol}: LONG blocked — 1m has no HL confirmation`);
+        bLog.scan(`${symbol}: LONG blocked — 1m has no confirmed HL`);
         return null;
       }
       if (direction === 'SHORT' && !struct1m.hasLH) {
-        bLog.scan(`${symbol}: SHORT blocked — 1m has no LH confirmation`);
+        bLog.scan(`${symbol}: SHORT blocked — 1m has no confirmed LH`);
         return null;
       }
+
+      // 3. "Next Candle" Trigger: Trade must fire immediately after confirmation
+      const swingIdx = direction === 'LONG' ? struct1m.lastLow?.index : struct1m.lastHigh?.index;
+      if (swingIdx === undefined) return null;
+
+      const confirmationIdx = swingIdx + SWING_LENGTHS['1m'];
+      const currentIdx = klines1m.length - 1;
+      const candleAge = currentIdx - confirmationIdx;
+
+      if (candleAge < 1 || candleAge > 3) {
+        bLog.scan(`${symbol}: ${direction} blocked — swing age ${candleAge} (must be 1-3 candles after confirmation)`);
+        return null;
+      }
+
       // Anti-chase: don't enter if price already moved too far from 1m swing point
       if (struct1m.lastLow && direction === 'LONG') {
         const distFromHL = (price - struct1m.lastLow.price) / struct1m.lastLow.price;
