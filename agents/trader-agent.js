@@ -138,13 +138,9 @@ class TraderAgent extends BaseAgent {
 
           this.logTrade(`Kronos: ${sym} → ${kronosResult.direction} ${kronosResult.change_pct}% conf=${kronosResult.confidence}`);
 
-          if (kronosResult.direction !== 'NEUTRAL' && kronosResult.direction !== pick.direction && kronosResult.confidence !== 'low') {
-            this.logTrade(`KRONOS BLOCKED: ${sym} SMC=${pick.direction} but Kronos=${kronosResult.direction} (${kronosResult.confidence}) — skipping`);
-            this.tradesSkipped++;
-            this.addActivity('skip', `${sym} blocked by Kronos (${kronosResult.direction})`);
-            const { log: bLog } = require('../bot-logger');
-            bLog.trade(`KRONOS BLOCKED (agent): ${sym} SMC=${pick.direction} Kronos=${kronosResult.direction} ${kronosResult.change_pct}%`);
-            continue;
+          if (kronosResult.direction !== 'NEUTRAL' && kronosResult.direction !== pick.direction && kronosResult.confidence === 'high') {
+            this.logTrade(`KRONOS WARNING: ${sym} SMC=${pick.direction} but Kronos=${kronosResult.direction} (high) — proceeding with caution`);
+            this.addActivity('info', `${sym} Kronos disagrees (${kronosResult.direction}) but 3m+1m confirmed — trading`);
           }
 
           if (kronosResult.direction === pick.direction && kronosResult.confidence === 'high') {

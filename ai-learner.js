@@ -148,7 +148,7 @@ const DEFAULT_PARAMS = {
   // Capital-based SL/TP (smc-engine.js)
   SL_MARGIN_PCT: 0.30,     // lose max 30% of position margin per trade
   TP_MARGIN_PCT: 0.45,     // target 45% of position margin per trade
-  MIN_SCORE: 5,            // minimum confluence score (lowered for more trades)
+  MIN_SCORE: 2,            // minimum confluence score — 3m+1m HL/LH is primary trigger
 
   // Sizing params (cycle.js)
   WALLET_SIZE_PCT: 0.10,   // 10% of wallet per trade

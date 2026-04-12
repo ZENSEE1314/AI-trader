@@ -509,8 +509,15 @@ async function analyzeLHHL(ticker, params, dailyBiasCache, kronosPredictions = n
   }
 
   if (!direction) {
-    bLog.scan(`${symbol}: 4h=${struct4h.trend} 1h=${struct1h.trend} daily=${dailyBias || 'N/A'} — HTF conflict or no direction`);
-    return null;
+    // Fallback: let 3m structure decide direction when HTF conflicts
+    const struct3mFallback = getStructure(klines3m, SWING_LENGTHS['3m']);
+    if (struct3mFallback.hasHL) direction = 'LONG';
+    else if (struct3mFallback.hasLH) direction = 'SHORT';
+    if (!direction) {
+      bLog.scan(`${symbol}: 4h=${struct4h.trend} 1h=${struct1h.trend} daily=${dailyBias || 'N/A'} — HTF conflict + no 3m setup`);
+      return null;
+    }
+    bLog.scan(`${symbol}: HTF conflict — using 3m ${direction} fallback`);
   }
 
   // AI direction bias: if learner says one direction is losing, block it
@@ -581,11 +588,10 @@ async function analyzeLHHL(ticker, params, dailyBiasCache, kronosPredictions = n
     // ──────────────────────────────────────────────────────────
 
     if (NEED_1M) {
-      // 1. Strict Trend Alignment: 1m trend must match HTF direction
+      // 1. Trend alignment: 1m trend should match — log warning but don't block if 3m confirms
       const targetTrend = direction === 'LONG' ? 'bullish' : 'bearish';
       if (struct1m.trend !== targetTrend && struct1m.trend !== 'neutral') {
-        bLog.scan(`${symbol}: ${direction} blocked — 1m trend is ${struct1m.trend} (must be ${targetTrend} or neutral)`);
-        return null;
+        bLog.scan(`${symbol}: ${direction} — 1m trend is ${struct1m.trend} (not ideal, but 3m confirmed)`);
       }
 
       // 2. Strict HL/LH Requirement (No bypasses)
@@ -606,22 +612,22 @@ async function analyzeLHHL(ticker, params, dailyBiasCache, kronosPredictions = n
       const currentIdx = klines1m.length - 1;
       const candleAge = currentIdx - confirmationIdx;
 
-      if (candleAge < 1 || candleAge > 3) {
-        bLog.scan(`${symbol}: ${direction} blocked — swing age ${candleAge} (must be 1-3 candles after confirmation)`);
+      if (candleAge !== 1) {
+        bLog.scan(`${symbol}: ${direction} blocked — swing age ${candleAge} (must be next candle only)`);
         return null;
       }
 
       // Anti-chase: don't enter if price already moved too far from 1m swing point
       if (struct1m.lastLow && direction === 'LONG') {
         const distFromHL = (price - struct1m.lastLow.price) / struct1m.lastLow.price;
-        if (distFromHL > 0.005) {
+        if (distFromHL > 0.003) {
           bLog.scan(`${symbol}: LONG blocked — price ${(distFromHL*100).toFixed(2)}% above 1m HL (chasing)`);
           return null;
         }
       }
       if (struct1m.lastHigh && direction === 'SHORT') {
         const distFromLH = (struct1m.lastHigh.price - price) / struct1m.lastHigh.price;
-        if (distFromLH > 0.005) {
+        if (distFromLH > 0.003) {
           bLog.scan(`${symbol}: SHORT blocked — price ${(distFromLH*100).toFixed(2)}% below 1m LH (chasing)`);
           return null;
         }
@@ -682,11 +688,11 @@ async function analyzeLHHL(ticker, params, dailyBiasCache, kronosPredictions = n
     const recent = klines1m.slice(-15);
     const startPrice = parseFloat(recent[0][1]);
     const movePct = (price - startPrice) / startPrice;
-    if (direction === 'LONG' && movePct > 0.025) {
+    if (direction === 'LONG' && movePct > 0.04) {
       bLog.scan(`${symbol}: LONG blocked — already +${(movePct * 100).toFixed(1)}% in 15min (chasing)`);
       return null;
     }
-    if (direction === 'SHORT' && movePct < -0.025) {
+    if (direction === 'SHORT' && movePct < -0.04) {
       bLog.scan(`${symbol}: SHORT blocked — already ${(movePct * 100).toFixed(1)}% in 15min (chasing)`);
       return null;
     }
@@ -857,7 +863,7 @@ async function scanSMC(log, opts = {}) {
     .slice(0, opts.topNCoins || TOP_N_COINS);
 
   const params = await aiLearner.getOptimalParams();
-  const minScore = Math.min(params.MIN_SCORE || 5, 6); // cap at 6 to allow more trades
+  const minScore = Math.min(params.MIN_SCORE || 2, 6); // 3m+1m HL/LH is primary gate
   const dailyBiasCache = new Map();
 
   bLog.scan(`Triple HL/LH scan: ${topCoins.length} coins | minScore=${minScore}`);
