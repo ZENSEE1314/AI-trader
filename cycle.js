@@ -965,6 +965,18 @@ async function main() {
   try {
     const { query: dbQuery, initAllTables } = require('./db');
     await initAllTables();
+
+    // One-time diagnostic: dump all API keys on first cycle after deploy
+    if (!runCycle._keyDiagDone) {
+      runCycle._keyDiagDone = true;
+      try {
+        const allDbKeys = await dbQuery(
+          `SELECT ak.id, ak.user_id, ak.enabled, ak.paused_by_admin, ak.paused_by_user, ak.exchange, u.email
+           FROM api_keys ak LEFT JOIN users u ON u.id = ak.user_id ORDER BY ak.id`
+        );
+        bLog.system(`[KEY-DIAG] ALL ${allDbKeys.length} api_keys: ${allDbKeys.map(k => `#${k.id} ${k.email || 'NO-USER(uid='+k.user_id+')'} ex=${k.exchange||'?'} en=${k.enabled} ap=${k.paused_by_admin} up=${k.paused_by_user}`).join(' | ')}`);
+      } catch (_) {}
+    }
     const topNRows = await dbQuery('SELECT MAX(top_n_coins) as max_n FROM api_keys WHERE enabled = true');
     const topNCoins = parseInt(topNRows[0]?.max_n) || 50;
 
