@@ -115,8 +115,11 @@ async function getTokenLeverage(symbol, apiKeyId = null, price = 0) {
       }
     }
 
-    // Priority 4: No explicit config found — block trade
-    return null;
+    // Priority 4: No explicit config — use default based on price tier
+    const HIGH_PRICE_TOKENS = new Set(['BTCUSDT','ETHUSDT','BNBUSDT','SOLUSDT','AAVEUSDT','MKRUSDT','BCHUSDT','LTCUSDT','AVAXUSDT','LINKUSDT']);
+    if (HIGH_PRICE_TOKENS.has(symbol) || price >= 100) return 100;
+    if (price >= 10) return 50;
+    return 20;
   } catch (err) {
     console.error('Error getting token leverage:', err.message);
     // Return null instead of fallback to ensure safety
@@ -1112,10 +1115,10 @@ async function executeForAllUsers(pick) {
       try {
         const symbol = sym;
 
-        // Dedup guard: skip if this user+symbol was already executed this cycle
-        const dedupKey = `${key.user_id}:${symbol}`;
+        // Dedup guard: skip if this API key+symbol was already executed this cycle
+        const dedupKey = `${key.id}:${symbol}`;
         if (executedUserSymbols.has(dedupKey)) {
-          userLog.trade(`User ${key.email}: ${symbol} already executed this cycle — skipping duplicate key`);
+          userLog.trade(`User ${key.email}: ${symbol} already executed on key ${key.id} this cycle — skipping`);
           return;
         }
 
@@ -1143,23 +1146,23 @@ async function executeForAllUsers(pick) {
           return;
         }
 
-        // Check DB for existing open trade on same symbol
+        // Check DB for existing open trade on same API key + symbol
         const existingTrade = await db.query(
-          `SELECT id FROM trades WHERE user_id = $1 AND symbol = $2 AND status = 'OPEN' LIMIT 1`,
-          [key.user_id, symbol]
+          `SELECT id FROM trades WHERE api_key_id = $1 AND symbol = $2 AND status = 'OPEN' LIMIT 1`,
+          [key.id, symbol]
         );
         if (existingTrade.length > 0) {
-          userLog.trade(`User ${key.email}: already has OPEN trade on ${symbol} in DB — skipping duplicate`);
+          userLog.trade(`User ${key.email}: already has OPEN trade on ${symbol} (key ${key.id}) — skipping duplicate`);
           return;
         }
 
-        // Cooldown: don't re-enter same token within 4 hours after last closed trade
+        // Cooldown: don't re-enter same token within 4 hours after last closed trade (per API key)
         const recentClosed = await db.query(
-          `SELECT id, closed_at FROM trades WHERE user_id = $1 AND symbol = $2 AND status IN ('WIN','LOSS','TP','SL','CLOSED') AND closed_at > NOW() - INTERVAL '4 hours' ORDER BY closed_at DESC LIMIT 1`,
-          [key.user_id, symbol]
+          `SELECT id, closed_at FROM trades WHERE api_key_id = $1 AND symbol = $2 AND status IN ('WIN','LOSS','TP','SL','CLOSED') AND closed_at > NOW() - INTERVAL '4 hours' ORDER BY closed_at DESC LIMIT 1`,
+          [key.id, symbol]
         );
         if (recentClosed.length > 0) {
-          userLog.trade(`User ${key.email}: ${symbol} recently closed — cooldown active, skipping re-entry`);
+          userLog.trade(`User ${key.email}: ${symbol} recently closed on key ${key.id} — cooldown active, skipping`);
           return;
         }
 
