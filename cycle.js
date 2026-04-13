@@ -1264,13 +1264,13 @@ async function executeForAllUsers(pick) {
           return;
         }
 
-        // Cooldown: don't re-enter same token within 4 hours after last closed trade (per API key)
+        // Cooldown: don't re-enter same token within 30 min after last closed trade (per API key)
         const recentClosed = await db.query(
-          `SELECT id, closed_at FROM trades WHERE api_key_id = $1 AND symbol = $2 AND status IN ('WIN','LOSS','TP','SL','CLOSED') AND closed_at > NOW() - INTERVAL '4 hours' ORDER BY closed_at DESC LIMIT 1`,
+          `SELECT id, closed_at FROM trades WHERE api_key_id = $1 AND symbol = $2 AND status IN ('WIN','LOSS','TP','SL','CLOSED') AND closed_at > NOW() - INTERVAL '30 minutes' ORDER BY closed_at DESC LIMIT 1`,
           [key.id, symbol]
         );
         if (recentClosed.length > 0) {
-          userLog.trade(`User ${key.email}: ${symbol} recently closed on key ${key.id} — cooldown active, skipping`);
+          userLog.trade(`User ${key.email}: ${symbol} recently closed on key ${key.id} — 30min cooldown active, skipping`);
           return;
         }
 

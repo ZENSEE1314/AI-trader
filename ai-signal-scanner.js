@@ -141,6 +141,7 @@ async function fetchTopCoins(n = TOP_N_COINS) {
       'NEIROETHUSDT', 'COSUSDT', 'YALAUSDT', 'TANSSIUSDT', 'EPTUSDT',
       'LEVERUSDT', 'AGLDUSDT', 'LOOKSUSDT', 'TRUUSDT',
       'XAUUSDT', 'XAGUSDT', 'EURUSDT', 'GBPUSDT', 'JPYUSDT',
+      'ZECUSDT', 'RAVEUSDT', 'CLUSDT',
     ]);
 
     return tickers
