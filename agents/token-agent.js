@@ -78,7 +78,7 @@ class TokenAgent extends BaseAgent {
     this.lastSignal = signal;
     this.signalCount++;
     this.addActivity('success', `SIGNAL: ${this.symbol} ${signal.direction} score=${signal.score} @ $${signal.price}`);
-    bLog.scan(`[${this.name}] SIGNAL: ${this.symbol} ${signal.direction} score=${signal.score} 4h=${signal.structure?.tf4h} 1h=${signal.structure?.tf1h} 15m=${signal.structure?.tf15}`);
+    bLog.scan(`[${this.name}] SIGNAL: ${this.symbol} ${signal.direction} score=${signal.score} 3m=${signal.structure?.tf3m} 1m=${signal.structure?.tf1m}`);
 
     // Memory: remember this signal (DB + Hermes file)
     if (this.isSkillEnabled('memory')) {
@@ -90,7 +90,7 @@ class TokenAgent extends BaseAgent {
       const ts = new Date().toISOString().slice(0, 16);
       this.hermesRemember(
         `[${ts}] ${this.symbol} ${signal.direction} score=${signal.score} ` +
-        `4h=${signal.structure?.tf4h || '?'} 1h=${signal.structure?.tf1h || '?'} ` +
+        `3m=${signal.structure?.tf3m || '?'} 1m=${signal.structure?.tf1m || '?'} ` +
         `price=$${signal.price}`
       );
     }

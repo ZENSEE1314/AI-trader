@@ -531,9 +531,9 @@ async function openTrade(client, pick, wallet) {
     pricePrec, qtyPrec,
     setup: pick.setup,
     openedAt: Date.now(),
-    tf15m: pick.structure?.tf15 || null,
-    tf3m: pick.structure?.tf3 || null,
-    tf1m: pick.structure?.tf1 || null,
+    tf15m: null,
+    tf3m: pick.structure?.tf3m || null,
+    tf1m: pick.structure?.tf1m || null,
     trailingSlPrice: initialSlPrice,
     trailingSlLastStep: 0,
     leverage,
@@ -1332,7 +1332,7 @@ async function executeForAllUsers(pick) {
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'OPEN', $10, 0, $11, $12, $13)`,
             [key.id, key.user_id, symbol, pick.direction, price, fmtP(slPrice), fmtP(userTp), qty, userLev,
              fmtP(slPrice),
-             pick.structure?.tf4h || pick.structure?.tf15 || null, pick.structure?.tf1h || pick.structure?.tf3 || null, pick.structure?.tf15 || pick.structure?.tf1 || null]
+             null, pick.structure?.tf3m || null, pick.structure?.tf1m || null]
           );
           executedUserSymbols.add(dedupKey);
           userLog.trade(`Binance OK: ${key.email} ${symbol} ${pick.direction} x${userLev} qty=${qty} entry=$${fmtPrice(price)} SL=$${fmtPrice(slPrice)} TP=$${fmtPrice(userTp)}`);
@@ -1418,7 +1418,7 @@ async function executeForAllUsers(pick) {
                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'OPEN', $10, 0, $11, $12, $13)`,
               [key.id, key.user_id, symbol, pick.direction, actualEntry,
                slFmtActual, tpFmtActual, qty, userLev, slFmtActual,
-               pick.structure?.tf4h || pick.structure?.tf15 || null, pick.structure?.tf1h || pick.structure?.tf3 || null, pick.structure?.tf15 || pick.structure?.tf1 || null]
+               null, pick.structure?.tf3m || null, pick.structure?.tf1m || null]
             );
           } else {
             userLog.error(`Bitunix position not found after order — verify on exchange`);
@@ -1430,7 +1430,7 @@ async function executeForAllUsers(pick) {
                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'OPEN', $10, 0, $11, $12, $13)`,
               [key.id, key.user_id, symbol, pick.direction, price,
                parseFloat(slPrice.toFixed(8)), 0, qty, userLev, parseFloat(slPrice.toFixed(8)),
-               pick.structure?.tf4h || pick.structure?.tf15 || null, pick.structure?.tf1h || pick.structure?.tf3 || null, pick.structure?.tf15 || pick.structure?.tf1 || null]
+               null, pick.structure?.tf3m || null, pick.structure?.tf1m || null]
             );
           }
           executedUserSymbols.add(dedupKey);
