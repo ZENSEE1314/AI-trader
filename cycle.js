@@ -1164,8 +1164,9 @@ async function executeForAllUsers(pick) {
 
     const keys = allKeys;
     const sym = pick.symbol || pick.sym;
-    bLog.trade(`Found ${keys.length} unique API key(s) — executing ${sym} ${pick.direction}...`);
-    log(`Executing ${sym} ${pick.direction} for ${keys.length} user keys`);
+    const userEmails = [...new Set(keys.map(k => k.email))].join(', ');
+    bLog.trade(`Found ${keys.length} unique API key(s) — executing ${sym} ${pick.direction} for: ${userEmails}`);
+    log(`Executing ${sym} ${pick.direction} for ${keys.length} user keys: ${userEmails}`);
 
     // Track which user+symbol combos have been executed this cycle to prevent duplicates
     const executedUserSymbols = new Set();
