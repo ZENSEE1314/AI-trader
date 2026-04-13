@@ -932,7 +932,7 @@ async function main() {
         .filter(t => t.symbol.endsWith('USDT') && !t.symbol.includes('_'))
         .filter(t => parseFloat(t.quoteVolume) >= 10_000_000)
         .sort((a, b) => parseFloat(b.quoteVolume) - parseFloat(a.quoteVolume))
-        .slice(0, Math.min(topNCoins, 30))  // Cap at 30 to limit prediction time
+        .slice(0, 10)  // Top 10 only — matches SMC engine scan
         .map(t => t.symbol);
 
       bLog.ai(`Kronos batch scan starting: ${topSymbols.length} tokens`);

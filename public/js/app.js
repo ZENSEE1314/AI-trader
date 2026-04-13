@@ -1874,7 +1874,7 @@
 
         // Structure label
         const struct = t.structure;
-        const structTip = struct ? `15m:${struct.tf15m||'?'} 3m:${struct.tf3m||'?'} 1m:${struct.tf1m||'?'}` : '';
+        const structTip = struct ? `3m:${struct.tf3m||'?'} 1m:${struct.tf1m||'?'}` : '';
 
         return `<tr${t.banned ? ' style="opacity:0.4;"' : ''}>
           <td title="${structTip}">${signalHtml}</td>
@@ -1903,9 +1903,9 @@
 
   async function adminPopulateTop50() {
     try {
-      showToast('Loading top 50 tokens...', 'info');
+      showToast('Loading top 10 tokens by volume...', 'info');
       const result = await api('POST', '/api/admin/token-board/populate-top50');
-      showToast(`Done: ${result.added} active, ${result.banned} banned`, 'success');
+      showToast(`Done: ${result.added} tokens loaded`, 'success');
       adminLoadTokenBoard();
     } catch (err) { showToast(err.message, 'error'); }
   }

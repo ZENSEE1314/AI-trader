@@ -315,8 +315,8 @@ async function analyzeLHHL(ticker, params, dailyBiasCache, kronosPredictions = n
   const currentIdx = klines1m.length - 1;
   const candleAge = currentIdx - confirmationIdx;
 
-  if (candleAge < 0 || candleAge > 1) {
-    bLog.scan(`${symbol}: ${direction} — swing age ${candleAge} (need 0-1 for next candle entry)`);
+  if (candleAge < 0 || candleAge > 3) {
+    bLog.scan(`${symbol}: ${direction} — swing age ${candleAge} (need 0-3 for fresh entry)`);
     return null;
   }
 
@@ -438,7 +438,7 @@ async function scanSMC(log, opts = {}) {
     'ALPACAUSDT','BNXUSDT','ALPHAUSDT','BANANAS31USDT',
     'LYNUSDT','PORT3USDT','RVVUSDT','BSWUSDT',
     'NEIROETHUSDT','COSUSDT','YALAUSDT','TANSSIUSDT','EPTUSDT',
-    'LEVERUSDT','AGLDUSDT','LOOKSUSDT',
+    'LEVERUSDT','AGLDUSDT','LOOKSUSDT','TRUUSDT',
     'XAUUSDT','XAGUSDT','EURUSDT','GBPUSDT','JPYUSDT',
   ]);
 

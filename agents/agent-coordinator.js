@@ -147,13 +147,13 @@ class AgentCoordinator extends BaseAgent {
             .filter(t => !banned.has(t.symbol))
             .filter(t => parseFloat(t.quoteVolume) >= 10_000_000)
             .sort((a, b) => parseFloat(b.quoteVolume) - parseFloat(a.quoteVolume))
-            .slice(0, 50)
+            .slice(0, 10)
             .map(t => t.symbol);
 
           for (const sym of topCoins) {
             if (!this.tokenAgents.has(sym)) this.addTokenAgent(sym);
           }
-          this.log(`[BOOT] Loaded top ${topCoins.length} tokens by volume`);
+          this.log(`[BOOT] Loaded top ${topCoins.length} tokens by volume (top 10)`);
         }
       } catch (err) {
         this.logError(`[BOOT] Failed to fetch top tokens: ${err.message}`);
@@ -582,7 +582,7 @@ class AgentCoordinator extends BaseAgent {
         this.currentTask = { description: `Step 2/7: KronosAgent predicting...`, startedAt: Date.now() };
         this.kronosAgent.currentTask = { description: `Scanning ${this.tokenAgents.size} tokens...`, startedAt: Date.now() };
         try {
-          const tokenSymbols = [...this.tokenAgents.keys()].slice(0, 5); // Only predict top 5 to keep it fast
+          const tokenSymbols = [...this.tokenAgents.keys()].slice(0, 10); // Predict top 10 tokens
           const kronosResult = await Promise.race([
             this.kronosAgent.run({ symbols: tokenSymbols, coordinator: this }),
             new Promise((_, reject) => setTimeout(() => reject(new Error('Kronos timed out')), 30000)),

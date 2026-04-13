@@ -3287,26 +3287,36 @@ router.put('/token-board/:symbol/featured', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// POST /api/admin/token-board/populate-top50 — auto-add top 50 by volume, ban the rest
+// POST /api/admin/token-board/populate-top50 — auto-add top 10 by volume
 router.post('/token-board/populate-top50', async (req, res) => {
   try {
     const fetch = require('node-fetch');
     const r = await fetch('https://fapi.binance.com/fapi/v1/ticker/24hr', { timeout: 15000 });
     const tickers = await r.json();
-    const top50 = tickers
+
+    const BLACKLIST = new Set([
+      'ALPACAUSDT','BNXUSDT','ALPHAUSDT','BANANAS31USDT',
+      'LYNUSDT','PORT3USDT','RVVUSDT','BSWUSDT',
+      'NEIROETHUSDT','COSUSDT','YALAUSDT','TANSSIUSDT','EPTUSDT',
+      'LEVERUSDT','AGLDUSDT','LOOKSUSDT','TRUUSDT',
+      'XAUUSDT','XAGUSDT','EURUSDT','GBPUSDT','JPYUSDT',
+    ]);
+
+    const top10 = tickers
       .filter(t => t.symbol.endsWith('USDT') && !t.symbol.includes('_'))
+      .filter(t => !BLACKLIST.has(t.symbol))
+      .filter(t => parseFloat(t.quoteVolume) >= 10_000_000)
       .sort((a, b) => parseFloat(b.quoteVolume) - parseFloat(a.quoteVolume))
-      .slice(0, 50)
+      .slice(0, 10)
       .map((t, i) => ({ symbol: t.symbol, rank: i + 1 }));
 
     let added = 0;
 
     // Step 1: Ban ALL existing tokens first
     await query('UPDATE global_token_settings SET banned = true, enabled = false');
-    const beforeCount = await query('SELECT COUNT(*) as c FROM global_token_settings WHERE banned = false');
 
-    // Step 2: Enable only top 50
-    for (const t of top50) {
+    // Step 2: Enable only top 10
+    for (const t of top10) {
       await query(
         `INSERT INTO global_token_settings (symbol, enabled, banned, "rank")
          VALUES ($1, true, false, $2)
@@ -3316,13 +3326,12 @@ router.post('/token-board/populate-top50', async (req, res) => {
       added++;
     }
 
-    // Step 3: Delete banned tokens that aren't in top 50 (clean up table)
-    const top50Set = new Set(top50.map(t => t.symbol));
+    // Step 3: Delete banned tokens (clean up table — only keep top 10)
     await query('DELETE FROM global_token_settings WHERE banned = true');
 
     const afterCount = await query('SELECT COUNT(*) as c FROM global_token_settings');
 
-    res.json({ ok: true, active: added, total: parseInt(afterCount[0].c) });
+    res.json({ ok: true, added, banned: 0, total: parseInt(afterCount[0].c) });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
