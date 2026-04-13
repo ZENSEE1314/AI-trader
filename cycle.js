@@ -1139,7 +1139,7 @@ async function executeForAllUsers(pick) {
     );
 
     if (!allKeys.length) {
-      // Debug: check WHY no keys are found
+      // Debug + auto-fix: check WHY no keys are found
       try {
         const debugKeys = await db.query(
           `SELECT ak.id, u.email, ak.enabled, ak.paused_by_admin, ak.paused_by_user
@@ -1148,6 +1148,13 @@ async function executeForAllUsers(pick) {
         if (debugKeys.length > 0) {
           const reasons = debugKeys.map(k => `${k.email}(enabled=${k.enabled} admin_pause=${k.paused_by_admin} user_pause=${k.paused_by_user})`);
           bLog.trade(`No tradeable keys — all ${debugKeys.length} keys blocked: ${reasons.join(', ')}`);
+
+          // Auto-fix: if ALL keys are disabled (not paused), re-enable them
+          const allDisabled = debugKeys.every(k => k.enabled === false && !k.paused_by_admin && !k.paused_by_user);
+          if (allDisabled) {
+            await db.query(`UPDATE api_keys SET enabled = true`);
+            bLog.trade(`AUTO-FIX: Re-enabled all ${debugKeys.length} API keys (all were disabled without pause flags)`);
+          }
         } else {
           bLog.trade('No API keys in database at all');
         }
