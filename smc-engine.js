@@ -563,16 +563,14 @@ async function analyzeLHHL(ticker, params, dailyBiasCache, kronosPredictions = n
   */
 
   // ┌─────────────────────────────────────────────────────────┐
-  // │ Step 4.5: 3m Structure Confirmation (STRICT ALIGNMENT)     │
+  // │ Step 4.5: 3m Structure Confirmation (SOFT — log only)      │
   // └─────────────────────────────────────────────────────────┘
   const struct3m = getStructure(klines3m, SWING_LENGTHS['3m']);
   if (direction === 'LONG' && !struct3m.hasHL) {
-    bLog.scan(`${symbol}: LONG blocked — 3m has no HL confirmation`);
-    return null;
+    bLog.scan(`${symbol}: LONG — 3m has no HL (non-blocking, 4H/1H confirmed)`);
   }
   if (direction === 'SHORT' && !struct3m.hasLH) {
-    bLog.scan(`${symbol}: SHORT blocked — 3m has no LH confirmation`);
-    return null;
+    bLog.scan(`${symbol}: SHORT — 3m has no LH (non-blocking, 4H/1H confirmed)`);
   }
 
   // ┌─────────────────────────────────────────────────────────┐
@@ -612,22 +610,22 @@ async function analyzeLHHL(ticker, params, dailyBiasCache, kronosPredictions = n
       const currentIdx = klines1m.length - 1;
       const candleAge = currentIdx - confirmationIdx;
 
-      if (candleAge < 0 || candleAge > 3) {
-        bLog.scan(`${symbol}: ${direction} blocked — swing age ${candleAge} (must be 0-3 candles)`);
+      if (candleAge < 0 || candleAge > 10) {
+        bLog.scan(`${symbol}: ${direction} blocked — swing age ${candleAge} (must be 0-10 candles)`);
         return null;
       }
 
       // Anti-chase: don't enter if price already moved too far from 1m swing point
       if (struct1m.lastLow && direction === 'LONG') {
         const distFromHL = (price - struct1m.lastLow.price) / struct1m.lastLow.price;
-        if (distFromHL > 0.005) {
+        if (distFromHL > 0.01) {
           bLog.scan(`${symbol}: LONG blocked — price ${(distFromHL*100).toFixed(2)}% above 1m HL (chasing)`);
           return null;
         }
       }
       if (struct1m.lastHigh && direction === 'SHORT') {
         const distFromLH = (struct1m.lastHigh.price - price) / struct1m.lastHigh.price;
-        if (distFromLH > 0.005) {
+        if (distFromLH > 0.01) {
           bLog.scan(`${symbol}: SHORT blocked — price ${(distFromLH*100).toFixed(2)}% below 1m LH (chasing)`);
           return null;
         }
