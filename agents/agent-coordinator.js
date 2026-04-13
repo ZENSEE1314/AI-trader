@@ -392,6 +392,9 @@ class AgentCoordinator extends BaseAgent {
       this.logError(`Failed to hook trade outcomes: ${err.message}`);
     }
 
+    // Retroactive sync: apply past trade results to agent survival (runs once on boot)
+    this._retroSyncSurvival().catch(e => this.logError(`Retro sync failed: ${e.message}`));
+
     this._ceoTimer = setInterval(async () => {
       if (this.paused) return;
       try {
@@ -1906,6 +1909,91 @@ class AgentCoordinator extends BaseAgent {
       }
     }
     return summary;
+  }
+
+  /**
+   * One-time retroactive sync: read all closed trades from DB and apply
+   * survival HP/capital to agents that haven't been updated yet.
+   * Only runs when agents have zero total_trades (fresh survival state).
+   */
+  async _retroSyncSurvival() {
+    try {
+      const db = require('../db');
+
+      // Only run if TraderAgent has 0 trades tracked (survival never updated)
+      if (this.traderAgent._survival.totalTrades > 0) {
+        this.log('[RETRO-SYNC] Survival already has trade data — skipping');
+        return;
+      }
+
+      const closedTrades = await db.query(
+        `SELECT symbol, direction, pnl_usdt, status, closed_at
+         FROM trades
+         WHERE status IN ('WIN', 'LOSS', 'TP', 'SL')
+         ORDER BY closed_at ASC`
+      );
+
+      if (!closedTrades.length) {
+        this.log('[RETRO-SYNC] No closed trades found — nothing to sync');
+        return;
+      }
+
+      this.log(`[RETRO-SYNC] Found ${closedTrades.length} closed trades — applying to agent survival...`);
+      let wins = 0, losses = 0;
+
+      for (const t of closedTrades) {
+        const pnl = Math.abs(parseFloat(t.pnl_usdt) || 0);
+        const isWin = t.status === 'WIN' || t.status === 'TP';
+        if (isWin) wins++; else losses++;
+
+        // TraderAgent gets full impact
+        if (this.traderAgent) {
+          if (isWin) this.traderAgent.recordSurvivalWin(pnl, { symbol: t.symbol, direction: t.direction, retroSync: true });
+          else this.traderAgent.recordSurvivalLoss(pnl, { symbol: t.symbol, direction: t.direction, retroSync: true });
+        }
+
+        // TokenAgent gets full impact
+        const tokenAgent = this.tokenAgents?.get(t.symbol);
+        if (tokenAgent) {
+          if (isWin) tokenAgent.recordSurvivalWin(pnl, { symbol: t.symbol, direction: t.direction, retroSync: true });
+          else tokenAgent.recordSurvivalLoss(pnl, { symbol: t.symbol, direction: t.direction, retroSync: true });
+        }
+
+        // Core agents get smaller impact (±5 HP, 20% of PnL)
+        for (const agent of [this.chartAgent, this.riskAgent, this.kronosAgent]) {
+          if (!agent) continue;
+          if (isWin) {
+            agent._survival.health = Math.min(100, agent._survival.health + 5);
+            agent._survival.capital += pnl * 0.2;
+            agent._survival.monthlyPnl += pnl * 0.2;
+            agent._survival.totalWins++;
+          } else {
+            agent._survival.health = Math.max(0, agent._survival.health - 5);
+            agent._survival.capital -= pnl * 0.2;
+            agent._survival.monthlyPnl -= pnl * 0.2;
+            agent._survival.totalLosses++;
+          }
+          agent._survival.totalTrades++;
+          agent._survival.totalRevenue = (agent._survival.totalRevenue || 0) + (isWin ? pnl * 0.2 : -pnl * 0.2);
+        }
+      }
+
+      // Save all survival states
+      const savePromises = [];
+      if (this.traderAgent) savePromises.push(this.traderAgent._saveSurvival());
+      if (this.chartAgent) savePromises.push(this.chartAgent._saveSurvival());
+      if (this.riskAgent) savePromises.push(this.riskAgent._saveSurvival());
+      if (this.kronosAgent) savePromises.push(this.kronosAgent._saveSurvival());
+      for (const [, agent] of this.tokenAgents || []) {
+        savePromises.push(agent._saveSurvival());
+      }
+      await Promise.all(savePromises);
+
+      this.log(`[RETRO-SYNC] Done — ${closedTrades.length} trades applied (${wins}W/${losses}L). Agent HP and capital updated.`);
+      this.addActivity('success', `Retro-synced ${closedTrades.length} past trades to agent survival (${wins}W/${losses}L)`);
+    } catch (err) {
+      this.logError(`[RETRO-SYNC] Error: ${err.message}`);
+    }
   }
 
   getRufloStats() {
