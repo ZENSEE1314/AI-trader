@@ -1514,6 +1514,8 @@ function renderSidebarCard(key, d, cfg) {
   const state = d.state || 'stopped';
   const rpg = d.rpg || {};
   const pers = d.personality || {};
+  const sv = d.survival || {};
+  const isDead = sv.isAlive === false;
   const lvl = rpg.level || 1;
   const xpProg = rpg.xpProgress || 0;
   const xpNext = rpg.xpForNext || 100;
@@ -1522,13 +1524,17 @@ function renderSidebarCard(key, d, cfg) {
   const mood = pers.mood || 'focused';
   const moodIcon = mood === 'confident' ? '\u{1F60E}' : mood === 'competitive' ? '\u{1F525}' : mood === 'anxious' ? '\u{1F630}' : mood === 'determined' ? '\u{1F4AA}' : mood === 'reflective' ? '\u{1F914}' : mood === 'ambitious' ? '\u{1F680}' : '\u{1F3AF}';
   const task = d.currentTask ? (d.currentTask.description || '') : '';
+  const hp = isDead ? 0 : (sv.health != null ? sv.health : 100);
+  const hpColor = isDead ? '#ff3333' : hp > 50 ? '#00ff88' : hp > 20 ? '#ffaa00' : '#ff3333';
+  const capital = isDead ? 0 : (sv.capital != null ? Number(sv.capital).toFixed(0) : '1000');
 
   let cls = 'sb-card';
-  if (state === 'running') cls += ' on running-anim';
+  if (isDead) cls += ' err';
+  else if (state === 'running') cls += ' on running-anim';
   else if (state === 'error') cls += ' err';
   else if (state === 'jailed') cls += ' jailed-card';
 
-  const stateLabel = state === 'jailed' ? '\u26D3 JAILED' : state.toUpperCase();
+  const stateLabel = isDead ? '\u2620 DEAD' : state === 'jailed' ? '\u26D3 JAILED' : state.toUpperCase();
 
   return `<div class="${cls}" onclick="openAgentModal('${key}')" style="cursor:pointer">
     <div class="sb-top">
@@ -1538,6 +1544,19 @@ function renderSidebarCard(key, d, cfg) {
         <div class="sb-role">${esc(cfg.role)}</div>
       </div>
       <span class="sb-state ${state}">${stateLabel}</span>
+    </div>
+    <div style="margin:4px 0 2px;">
+      <div style="display:flex;justify-content:space-between;font-size:.65rem;margin-bottom:1px;">
+        <span>\u2764\uFE0F ${hp}/100</span>
+        <span style="font-family:'JetBrains Mono',monospace;color:${Number(capital) > 1000 ? 'var(--success)' : Number(capital) < 1000 ? 'var(--danger)' : 'var(--fg2)'}">\u{1F4B0} $${capital}</span>
+      </div>
+      <div style="height:6px;background:#333;border-radius:3px;overflow:hidden;">
+        <div style="height:100%;width:${hp}%;background:${hpColor};border-radius:3px;transition:width .5s;"></div>
+      </div>
+      <div style="display:flex;justify-content:space-between;font-size:.6rem;color:var(--fg3);margin-top:1px;">
+        <span>W/L: ${sv.totalWins || 0}/${sv.totalLosses || 0} (${sv.winRate || 0}%)</span>
+        <span style="color:${(sv.monthlyPct || 0) >= 0 ? 'var(--success)' : 'var(--danger)'}">Mo: ${(sv.monthlyPct || 0) >= 0 ? '+' : ''}${sv.monthlyPct || 0}%</span>
+      </div>
     </div>
     <div class="sb-xp-row">
       <span class="sb-lvl">Lv.${lvl}</span>
@@ -1580,6 +1599,8 @@ function renderCard(key, d, cfg) {
   const rpg = d.rpg || {};
   const pers = d.personality || {};
   const comp = d.competition || {};
+  const sv = d.survival || {};
+  const isDead = sv.isAlive === false;
   const lvl = rpg.level || 1;
   const xpProg = rpg.xpProgress || 0;
   const xpNext = rpg.xpForNext || 100;
@@ -1595,7 +1616,10 @@ function renderCard(key, d, cfg) {
   const bestStreak = pers.bestStreak || 0;
   const rank = comp.rank || 0;
   const thought = pers.latestThought || '';
-  const cls = state === 'jailed' ? ' err' : state === 'running' ? ' on' : state === 'error' ? ' err' : '';
+  const hp = isDead ? 0 : (sv.health != null ? sv.health : 100);
+  const hpColor = isDead ? '#ff3333' : hp > 50 ? '#00ff88' : hp > 20 ? '#ffaa00' : '#ff3333';
+  const capital = isDead ? 0 : (sv.capital != null ? Number(sv.capital).toFixed(0) : '1000');
+  const cls = isDead ? ' err' : state === 'jailed' ? ' err' : state === 'running' ? ' on' : state === 'error' ? ' err' : '';
   const moodIcon = mood === 'confident' ? '\u{1F60E}' : mood === 'competitive' ? '\u{1F525}' : mood === 'anxious' ? '\u{1F630}' : mood === 'determined' ? '\u{1F4AA}' : mood === 'reflective' ? '\u{1F914}' : mood === 'ambitious' ? '\u{1F680}' : '\u{1F3AF}';
   const tierColor = tier === 'Legend' ? 'color:#fbbf24' : tier === 'Master' ? 'color:#a78bfa' : tier === 'Expert' ? 'color:#34d399' : tier === 'Skilled' ? 'color:#60a5fa' : 'color:var(--fg3)';
   const act = (d.recentActivity || []).slice(0, 2).map(a =>
@@ -1610,7 +1634,22 @@ function renderCard(key, d, cfg) {
         <div class="card-name">${esc(cfg.name)}${rank > 0 ? ' <span style="color:var(--fg3);font-size:.6rem">#' + rank + '</span>' : ''}</div>
         <div class="card-role">${esc(cfg.role)} <span style="${tierColor};font-weight:600">[${tier}]</span></div>
       </div>
-      <span class="card-st ${state}">${state === 'jailed' ? '\u26D3\uFE0F JAILED \u2014 click to review' : state}</span>
+      <span class="card-st ${state}">${isDead ? '\u2620\uFE0F DEAD' : state === 'jailed' ? '\u26D3\uFE0F JAILED \u2014 click to review' : state}</span>
+    </div>
+    ${isDead ? '<div style="background:#ff000030;border:1px solid #ff0000;border-radius:4px;padding:4px 6px;margin:4px 0;text-align:center;font-size:.7rem;"><b style="color:#ff4444;">\u2620 KILLED</b> <span style="color:#ff8888">' + esc(sv.killReason || 'Unknown') + '</span></div>' : ''}
+    <div style="margin:4px 0;">
+      <div style="display:flex;justify-content:space-between;font-size:.65rem;margin-bottom:1px;">
+        <span>\u2764\uFE0F HP: ${hp}/100</span>
+        <span style="font-family:'JetBrains Mono',monospace;color:${Number(capital) > 1000 ? 'var(--success)' : Number(capital) < 1000 ? 'var(--danger)' : 'var(--fg2)'}">\u{1F4B0} $${capital}</span>
+      </div>
+      <div style="height:7px;background:#333;border-radius:3px;overflow:hidden;">
+        <div style="height:100%;width:${hp}%;background:${hpColor};border-radius:3px;transition:width .5s;"></div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:1px;font-size:.58rem;color:var(--fg3);margin-top:2px;">
+        <span>W/L: ${sv.totalWins || 0}/${sv.totalLosses || 0} (${sv.winRate || 0}%)</span>
+        <span style="color:${(sv.totalRevenue || 0) >= 0 ? 'var(--success)' : 'var(--danger)'}">Rev: ${(sv.totalRevenue || 0) >= 0 ? '+' : ''}$${Number(sv.totalRevenue || 0).toFixed(2)}</span>
+        <span style="color:${(sv.monthlyPct || 0) >= 0 ? 'var(--success)' : 'var(--danger)'}">Mo: ${(sv.monthlyPct || 0) >= 0 ? '+' : ''}${sv.monthlyPct || 0}%</span>
+      </div>
     </div>
     <div class="lvl-row">
       <span class="lvl-badge">Lv.${lvl}</span>
@@ -2020,6 +2059,32 @@ function openAgentModal(agentKey) {
   bodyHtml += `<div class="am-section">
     <div class="am-section-title">About</div>
     <div class="am-desc">${esc(desc)}</div>
+  </div>`;
+
+  // Survival (HP + Capital)
+  const sv = d.survival || {};
+  const isDead = sv.isAlive === false;
+  const hp = isDead ? 0 : (sv.health != null ? sv.health : 100);
+  const hpColor = isDead ? '#ff3333' : hp > 50 ? '#00ff88' : hp > 20 ? '#ffaa00' : '#ff3333';
+  const capital = isDead ? 0 : (sv.capital != null ? Number(sv.capital).toFixed(0) : '1000');
+
+  bodyHtml += `<div class="am-section">
+    <div class="am-section-title">${isDead ? '\u2620 DEAD' : '\u2764\uFE0F Survival'}</div>
+    ${isDead ? '<div style="background:#ff000030;border:1px solid #ff0000;border-radius:6px;padding:6px;margin-bottom:6px;text-align:center;font-size:.8rem;"><b style="color:#ff4444;">KILLED</b> \u2014 ' + esc(sv.killReason || 'Unknown') + '</div>' : ''}
+    <div style="display:flex;justify-content:space-between;font-size:.8rem;margin-bottom:3px;">
+      <span>\u2764\uFE0F HP: ${hp}/100</span>
+      <span style="font-family:'JetBrains Mono',monospace;font-weight:700;color:${Number(capital) > 1000 ? 'var(--success)' : Number(capital) < 1000 ? 'var(--danger)' : 'var(--fg)'}">\u{1F4B0} $${capital}</span>
+    </div>
+    <div style="height:8px;background:#333;border-radius:4px;overflow:hidden;margin-bottom:6px;">
+      <div style="height:100%;width:${hp}%;background:${hpColor};border-radius:4px;transition:width .5s;"></div>
+    </div>
+    <div class="am-stat-row">
+      <div class="am-stat"><span class="am-stat-val">${sv.totalWins || 0}/${sv.totalLosses || 0}</span><span class="am-stat-lbl">W/L</span></div>
+      <div class="am-stat"><span class="am-stat-val">${sv.winRate || 0}%</span><span class="am-stat-lbl">Win Rate</span></div>
+      <div class="am-stat"><span class="am-stat-val" style="color:${(sv.totalRevenue || 0) >= 0 ? 'var(--success)' : 'var(--danger)'}">$${Number(sv.totalRevenue || 0).toFixed(2)}</span><span class="am-stat-lbl">Revenue</span></div>
+      <div class="am-stat"><span class="am-stat-val" style="color:${(sv.monthlyPct || 0) >= 0 ? 'var(--success)' : 'var(--danger)'}">${(sv.monthlyPct || 0) >= 0 ? '+' : ''}${sv.monthlyPct || 0}%</span><span class="am-stat-lbl">Monthly</span></div>
+      <div class="am-stat"><span class="am-stat-val">${sv.totalTrades || 0}</span><span class="am-stat-lbl">Trades</span></div>
+    </div>
   </div>`;
 
   // Stats row
