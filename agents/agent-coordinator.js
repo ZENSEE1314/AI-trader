@@ -697,6 +697,19 @@ class AgentCoordinator extends BaseAgent {
     this.addActivity('info', 'Full pipeline cycle started');
     this.currentTask = { description: 'Running full pipeline scan...', startedAt: cycleStart };
 
+    // One-time diagnostic: dump all API keys on first cycle after deploy
+    if (!this._keyDiagDone) {
+      this._keyDiagDone = true;
+      try {
+        const { query } = require('../db');
+        const allDbKeys = await query(
+          `SELECT ak.id, ak.user_id, ak.enabled, ak.paused_by_admin, ak.paused_by_user, ak.exchange, u.email
+           FROM api_keys ak LEFT JOIN users u ON u.id = ak.user_id ORDER BY ak.id`
+        );
+        bLog.system(`[KEY-DIAG] ALL ${allDbKeys.length} api_keys: ${allDbKeys.map(k => `#${k.id} ${k.email || 'NO-USER(uid='+k.user_id+')'} ex=${k.exchange||'?'} en=${k.enabled} ap=${k.paused_by_admin} up=${k.paused_by_user}`).join(' | ')}`);
+      } catch (e) { bLog.error(`[KEY-DIAG] ${e.message}`); }
+    }
+
     // All agents stay permanently managed by CEO loop — just update their tasks
     const coreAgents = [this.sentimentAgent, this.chartAgent, this.riskAgent, this.traderAgent, this.accountantAgent, this.kronosAgent, this.strategyAgent, this.policeAgent, this.coderAgent, this.optimizerAgent];
     for (const a of coreAgents) {
