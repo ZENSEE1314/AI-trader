@@ -16,7 +16,7 @@ const { log: bLog } = require('./bot-logger');
 const { confirmSignal } = require('./scalper-ai');
 
 const REQUEST_TIMEOUT = 15000;
-const TOP_N_COINS = 100;
+const TOP_N_COINS = 10;
 const MIN_24H_VOLUME = 10_000_000;
 
 const SL_PCT = 0.005;          // 0.5% price = 10% capital at 20x
@@ -610,8 +610,8 @@ async function analyzeLHHL(ticker, params, dailyBiasCache, kronosPredictions = n
       const currentIdx = klines1m.length - 1;
       const candleAge = currentIdx - confirmationIdx;
 
-      if (candleAge < 0 || candleAge > 10) {
-        bLog.scan(`${symbol}: ${direction} blocked — swing age ${candleAge} (must be 0-10 candles)`);
+      if (candleAge < 0 || candleAge > 1) {
+        bLog.scan(`${symbol}: ${direction} blocked — swing age ${candleAge} (must be 0-1 candles — next candle entry)`);
         return null;
       }
 
