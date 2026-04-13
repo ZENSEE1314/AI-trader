@@ -512,6 +512,28 @@ async function initAllTables() {
     )`,
     `CREATE INDEX IF NOT EXISTS idx_disc_strat_wr ON discovered_strategies (win_rate DESC)`,
     `CREATE INDEX IF NOT EXISTS idx_disc_strat_source ON discovered_strategies (source)`,
+    // Agent trade history — full record of every trade per agent
+    `CREATE TABLE IF NOT EXISTS agent_trade_history (
+      id SERIAL PRIMARY KEY,
+      agent VARCHAR(100) NOT NULL,
+      symbol VARCHAR(30),
+      direction VARCHAR(10),
+      entry_price NUMERIC,
+      exit_price NUMERIC,
+      pnl_usdt NUMERIC,
+      is_win BOOLEAN,
+      strategy VARCHAR(200),
+      setup VARCHAR(100),
+      leverage INTEGER DEFAULT 20,
+      capital_after NUMERIC,
+      health_after INTEGER,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_agent_trades_agent ON agent_trade_history (agent)`,
+    `CREATE INDEX IF NOT EXISTS idx_agent_trades_created ON agent_trade_history (created_at DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_agent_trades_symbol ON agent_trade_history (symbol)`,
+    // Add total_revenue column to agent_survival
+    `ALTER TABLE agent_survival ADD COLUMN IF NOT EXISTS total_revenue NUMERIC DEFAULT 0`,
     `CREATE TABLE IF NOT EXISTS swarm_predictions (
       id SERIAL PRIMARY KEY,
       symbol VARCHAR(20),

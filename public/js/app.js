@@ -1614,10 +1614,15 @@
           <div style="height:8px;background:#333;border-radius:4px;overflow:hidden;">
             <div style="height:100%;width:${isDead ? 0 : (sv.health != null ? sv.health : 100)}%;background:${isDead ? '#ff3333' : (sv.health || 100) > 50 ? '#00ff88' : (sv.health || 100) > 20 ? '#ffaa00' : '#ff3333'};border-radius:4px;transition:width 0.5s;"></div>
           </div>
-          <div style="display:flex;justify-content:space-between;font-size:0.65rem;color:var(--color-text-muted);margin-top:2px;">
-            <span>💰 $${isDead ? '0' : ((sv.capital != null ? sv.capital : 1000).toFixed ? (sv.capital != null ? sv.capital : 1000).toFixed(0) : '1000')}</span>
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:2px;font-size:0.65rem;color:var(--color-text-muted);margin-top:3px;">
+            <span>💰 $${isDead ? '0' : (sv.capital != null ? Number(sv.capital).toFixed(0) : '1000')}</span>
             <span>W/L: ${sv.totalWins || 0}/${sv.totalLosses || 0} (${sv.winRate || 0}%)</span>
             <span>Target: ${sv.monthlyTarget || 60}%</span>
+            <span style="color:${(sv.totalRevenue || 0) >= 0 ? 'var(--color-success)' : 'var(--color-danger)'}">Revenue: ${(sv.totalRevenue || 0) >= 0 ? '+' : ''}$${Number(sv.totalRevenue || 0).toFixed(2)}</span>
+            <span>Trades: ${sv.totalTrades || 0}</span>
+            <span>
+              <a href="#" onclick="event.stopPropagation();window.CryptoBot.mcDownloadTrades('${key}')" style="color:var(--color-accent);text-decoration:underline;font-size:0.6rem;">📥 Export CSV</a>
+            </span>
           </div>
         </div>
         ${a.populationSize !== undefined ? `
@@ -1730,6 +1735,16 @@
       mcProfilesCache = null;
       mcRefresh();
     } catch (err) { showToast(err.message, 'error'); }
+  }
+
+  function mcDownloadTrades(agentKey) {
+    const url = `/api/admin/agents/trade-history/csv?agent=${encodeURIComponent(agentKey)}`;
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${agentKey}-trades.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
   }
 
   function formatTimeAgo(ts) {
@@ -3535,7 +3550,7 @@
     mcRefresh, mcCommand, mcChat, mcChatQuick, switchAdminTab, filterAgents, customerChat,
     loadSignalBoard, toggleWatch, watchAll, setUserLeverage,
     adminLoadTokenBoard, adminAddTokenBoard, adminPopulateTop50, adminSetRiskTag, adminSetTokenLev, adminToggleBan, adminRemoveTokenBoard,
-    mcToggleSkill, mcUpdateConfig, mcCreateAgent, mcRemoveAgent,
+    mcToggleSkill, mcUpdateConfig, mcCreateAgent, mcRemoveAgent, mcDownloadTrades,
   };
 
   // ----- Init -----

@@ -3373,6 +3373,102 @@ router.get('/agents/health', async (req, res) => {
   }
 });
 
+// GET /api/admin/agents/trade-history — All agent trade history (JSON)
+router.get('/agents/trade-history', async (req, res) => {
+  try {
+    const { query } = require('../db');
+    const agent = req.query.agent || null;
+    const limit = Math.min(parseInt(req.query.limit) || 500, 5000);
+
+    let sql = 'SELECT * FROM agent_trade_history';
+    const params = [];
+    if (agent) {
+      sql += ' WHERE agent = $1';
+      params.push(agent);
+    }
+    sql += ' ORDER BY created_at DESC LIMIT $' + (params.length + 1);
+    params.push(limit);
+
+    const rows = await query(sql, params);
+    res.json({ trades: rows, total: rows.length });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/admin/agents/trade-history/csv — Download trade history as CSV (Excel-compatible)
+router.get('/agents/trade-history/csv', async (req, res) => {
+  try {
+    const { query } = require('../db');
+    const agent = req.query.agent || null;
+
+    let sql = 'SELECT * FROM agent_trade_history';
+    const params = [];
+    if (agent) {
+      sql += ' WHERE agent = $1';
+      params.push(agent);
+    }
+    sql += ' ORDER BY created_at DESC LIMIT 10000';
+
+    const rows = await query(sql, params);
+
+    // Build CSV
+    const headers = ['ID','Agent','Symbol','Direction','Entry Price','Exit Price','PnL (USDT)','Win','Strategy','Setup','Leverage','Capital After','Health After','Date'];
+    const csvRows = [headers.join(',')];
+    for (const r of rows) {
+      csvRows.push([
+        r.id,
+        `"${r.agent}"`,
+        r.symbol,
+        r.direction,
+        r.entry_price,
+        r.exit_price,
+        r.pnl_usdt,
+        r.is_win ? 'WIN' : 'LOSS',
+        `"${(r.strategy || '').replace(/"/g, '""')}"`,
+        `"${(r.setup || '').replace(/"/g, '""')}"`,
+        r.leverage,
+        r.capital_after,
+        r.health_after,
+        r.created_at ? new Date(r.created_at).toISOString() : '',
+      ].join(','));
+    }
+
+    const csv = csvRows.join('\n');
+    const filename = agent ? `agent_trades_${agent}_${new Date().toISOString().slice(0,10)}.csv` : `all_agent_trades_${new Date().toISOString().slice(0,10)}.csv`;
+
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(csv);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/admin/agents/revenue-summary — Revenue stats per agent
+router.get('/agents/revenue-summary', async (req, res) => {
+  try {
+    const { query } = require('../db');
+    const rows = await query(`
+      SELECT agent,
+        COUNT(*) as total_trades,
+        SUM(CASE WHEN is_win THEN 1 ELSE 0 END) as wins,
+        SUM(CASE WHEN NOT is_win THEN 1 ELSE 0 END) as losses,
+        ROUND(SUM(pnl_usdt)::numeric, 2) as total_pnl,
+        ROUND(AVG(pnl_usdt)::numeric, 2) as avg_pnl,
+        ROUND(SUM(CASE WHEN is_win THEN pnl_usdt ELSE 0 END)::numeric, 2) as total_wins_pnl,
+        ROUND(SUM(CASE WHEN NOT is_win THEN pnl_usdt ELSE 0 END)::numeric, 2) as total_losses_pnl,
+        MAX(created_at) as last_trade_at
+      FROM agent_trade_history
+      GROUP BY agent
+      ORDER BY total_pnl DESC
+    `);
+    res.json({ agents: rows });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/admin/agents/strategies — Strategy discovery population
 router.get('/agents/strategies', async (req, res) => {
   try {

@@ -114,6 +114,8 @@ class BaseAgent {
 
   async init() {
     await this._loadSurvival();
+    // Always persist survival defaults on first boot so data survives restarts
+    await this._saveSurvival();
     this.log('Initialized');
   }
 
@@ -147,6 +149,8 @@ class BaseAgent {
         this.currentTask = null;
       }
       this.addActivity('success', `Cycle #${this.runCount} complete`);
+      // Save survival every 10 runs to persist state
+      if (this.runCount % 10 === 0) this._saveSurvival().catch(() => {});
       return result;
     } catch (err) {
       this.state = AGENT_STATES.ERROR;
@@ -714,7 +718,7 @@ What specific changes would make you perform better? Be concrete — suggest par
   // ── Survival System Methods ───────────────────────────────
 
   /** Record a trade win — +10 HP, capital increases */
-  recordSurvivalWin(pnlUsdt) {
+  recordSurvivalWin(pnlUsdt, tradeDetails = {}) {
     if (!this._survival.isAlive) return;
     this._checkMonthReset();
     this._survival.health = Math.min(100, this._survival.health + 10);
@@ -722,13 +726,15 @@ What specific changes would make you perform better? Be concrete — suggest par
     this._survival.monthlyPnl += Math.abs(pnlUsdt);
     this._survival.totalTrades++;
     this._survival.totalWins++;
+    this._survival.totalRevenue = (this._survival.totalRevenue || 0) + Math.abs(pnlUsdt);
     this._survival.lastTradeAt = Date.now();
-    this.addActivity('win', `💚 HP ${this._survival.health}/100 | +$${Math.abs(pnlUsdt).toFixed(2)} | Capital: $${this._survival.capital.toFixed(2)}`);
+    this.addActivity('win', `HP ${this._survival.health}/100 | +$${Math.abs(pnlUsdt).toFixed(2)} | Capital: $${this._survival.capital.toFixed(2)}`);
     this._saveSurvival();
+    this._saveTradeHistory({ ...tradeDetails, pnlUsdt: Math.abs(pnlUsdt), isWin: true });
   }
 
   /** Record a trade loss — -10 HP, capital decreases. May kill agent. */
-  recordSurvivalLoss(pnlUsdt) {
+  recordSurvivalLoss(pnlUsdt, tradeDetails = {}) {
     if (!this._survival.isAlive) return;
     this._checkMonthReset();
     this._survival.health = Math.max(0, this._survival.health - 10);
@@ -736,6 +742,7 @@ What specific changes would make you perform better? Be concrete — suggest par
     this._survival.monthlyPnl -= Math.abs(pnlUsdt);
     this._survival.totalTrades++;
     this._survival.totalLosses++;
+    this._survival.totalRevenue = (this._survival.totalRevenue || 0) - Math.abs(pnlUsdt);
     this._survival.lastTradeAt = Date.now();
 
     if (this._survival.capital <= 0) {
@@ -743,9 +750,48 @@ What specific changes would make you perform better? Be concrete — suggest par
     } else if (this._survival.health <= 0) {
       this._killAgent('Health reached 0 HP — too many losses');
     } else {
-      this.addActivity('loss', `💔 HP ${this._survival.health}/100 | -$${Math.abs(pnlUsdt).toFixed(2)} | Capital: $${this._survival.capital.toFixed(2)}`);
+      this.addActivity('loss', `HP ${this._survival.health}/100 | -$${Math.abs(pnlUsdt).toFixed(2)} | Capital: $${this._survival.capital.toFixed(2)}`);
     }
     this._saveSurvival();
+    this._saveTradeHistory({ ...tradeDetails, pnlUsdt: -Math.abs(pnlUsdt), isWin: false });
+  }
+
+  /** Save a trade to the agent's trade history in DB */
+  async _saveTradeHistory(trade) {
+    try {
+      const { query } = require('../db');
+      await query(
+        `INSERT INTO agent_trade_history (agent, symbol, direction, entry_price, exit_price, pnl_usdt, is_win, strategy, setup, leverage, capital_after, health_after, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW())`,
+        [
+          this.name,
+          trade.symbol || 'UNKNOWN',
+          trade.direction || 'UNKNOWN',
+          trade.entryPrice || 0,
+          trade.exitPrice || 0,
+          trade.pnlUsdt || 0,
+          trade.isWin,
+          trade.strategy || trade.setupName || 'AI',
+          trade.setup || '',
+          trade.leverage || 20,
+          this._survival.capital,
+          this._survival.health,
+        ]
+      );
+    } catch {}
+  }
+
+  /** Get trade history for this agent */
+  async getTradeHistory(limit = 100) {
+    try {
+      const { query } = require('../db');
+      return await query(
+        `SELECT * FROM agent_trade_history WHERE agent = $1 ORDER BY created_at DESC LIMIT $2`,
+        [this.name, limit]
+      );
+    } catch {
+      return [];
+    }
   }
 
   /** Kill this agent permanently */
@@ -797,6 +843,7 @@ What specific changes would make you perform better? Be concrete — suggest par
       totalTrades: this._survival.totalTrades,
       totalWins: this._survival.totalWins,
       totalLosses: this._survival.totalLosses,
+      totalRevenue: Math.round((this._survival.totalRevenue || 0) * 100) / 100,
       winRate: this._survival.totalTrades > 0
         ? Math.round(this._survival.totalWins / this._survival.totalTrades * 100) : 0,
       killReason: this._survival.killReason,
@@ -809,18 +856,21 @@ What specific changes would make you perform better? Be concrete — suggest par
     try {
       const db = require('../db');
       await db.query(
-        `INSERT INTO agent_survival (agent, health, is_alive, capital, monthly_pnl, month_start, start_capital, total_trades, total_wins, total_losses, kill_reason, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW())
+        `INSERT INTO agent_survival (agent, health, is_alive, capital, monthly_pnl, month_start, start_capital, total_trades, total_wins, total_losses, kill_reason, total_revenue, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW())
          ON CONFLICT (agent) DO UPDATE SET
            health = $2, is_alive = $3, capital = $4, monthly_pnl = $5,
            month_start = $6, start_capital = $7, total_trades = $8,
-           total_wins = $9, total_losses = $10, kill_reason = $11, updated_at = NOW()`,
+           total_wins = $9, total_losses = $10, kill_reason = $11,
+           total_revenue = $12, updated_at = NOW()`,
         [this.name, this._survival.health, this._survival.isAlive, this._survival.capital,
          this._survival.monthlyPnl, this._survival.monthStart, this._survival.startCapital,
          this._survival.totalTrades, this._survival.totalWins, this._survival.totalLosses,
-         this._survival.killReason]
+         this._survival.killReason, this._survival.totalRevenue || 0]
       );
-    } catch (_) {}
+    } catch (err) {
+      this.logError(`Save survival failed: ${err.message}`);
+    }
   }
 
   /** Load survival state from DB */
@@ -830,22 +880,26 @@ What specific changes would make you perform better? Be concrete — suggest par
       const rows = await db.query('SELECT * FROM agent_survival WHERE agent = $1', [this.name]);
       if (rows.length) {
         const r = rows[0];
-        this._survival.health = parseInt(r.health);
-        this._survival.isAlive = r.is_alive;
-        this._survival.capital = parseFloat(r.capital);
-        this._survival.monthlyPnl = parseFloat(r.monthly_pnl);
-        this._survival.monthStart = r.month_start;
-        this._survival.startCapital = parseFloat(r.start_capital);
-        this._survival.totalTrades = parseInt(r.total_trades);
-        this._survival.totalWins = parseInt(r.total_wins);
-        this._survival.totalLosses = parseInt(r.total_losses);
+        this._survival.health = parseInt(r.health) || 100;
+        this._survival.isAlive = r.is_alive !== false;
+        this._survival.capital = parseFloat(r.capital) || 1000;
+        this._survival.monthlyPnl = parseFloat(r.monthly_pnl) || 0;
+        this._survival.monthStart = r.month_start || new Date().toISOString().slice(0, 7);
+        this._survival.startCapital = parseFloat(r.start_capital) || 1000;
+        this._survival.totalTrades = parseInt(r.total_trades) || 0;
+        this._survival.totalWins = parseInt(r.total_wins) || 0;
+        this._survival.totalLosses = parseInt(r.total_losses) || 0;
+        this._survival.totalRevenue = parseFloat(r.total_revenue) || 0;
         this._survival.killReason = r.kill_reason;
         if (!this._survival.isAlive) {
           this.state = AGENT_STATES.STOPPED;
           this.paused = true;
         }
+        this.log(`Survival loaded: HP=${this._survival.health} Capital=$${this._survival.capital.toFixed(0)} W/L=${this._survival.totalWins}/${this._survival.totalLosses}`);
       }
-    } catch (_) {}
+    } catch (err) {
+      this.logError(`Load survival failed: ${err.message}`);
+    }
   }
 
   getRpgProfile() {
