@@ -1550,8 +1550,10 @@
   function renderAgentCards(grid, agents) {
     const entries = Object.entries(agents);
     let html = entries.map(([key, a]) => {
-      const st = a.paused ? 'paused' : a.state;
-      const cardClass = st === 'running' ? 'mc-card-running' : st === 'error' ? 'mc-card-error' : a.paused ? 'mc-card-paused' : '';
+      const sv = a.survival || {};
+      const isDead = sv.isAlive === false;
+      const st = isDead ? 'dead' : a.paused ? 'paused' : a.state;
+      const cardClass = isDead ? 'mc-card-dead' : st === 'running' ? 'mc-card-running' : st === 'error' ? 'mc-card-error' : a.paused ? 'mc-card-paused' : '';
       const lastRun = a.lastRunAt ? formatTimeAgo(a.lastRunAt) : 'never';
       const taskHtml = a.currentTask
         ? `<div class="mc-agent-task"><span class="mc-pulse"></span>${escapeHtml(a.currentTask.description)} (${formatTimeAgo(a.currentTask.startedAt)})</div>`
@@ -1603,6 +1605,22 @@
           </div>
         </div>
         ${desc ? `<div style="font-size:0.75rem;color:var(--color-text-muted);margin-bottom:6px;">${escapeHtml(desc)}</div>` : ''}
+        ${isDead ? `<div style="background:#ff000030;border:1px solid #ff0000;border-radius:6px;padding:6px;margin-bottom:6px;text-align:center;"><span style="font-size:1.2rem;">☠️</span> <b style="color:#ff4444;">KILLED</b><br><span style="font-size:0.7rem;color:#ff8888;">${escapeHtml(sv.killReason || 'Unknown')}</span></div>` : ''}
+        ${!isDead && sv.health !== undefined ? `
+        <div style="margin-bottom:6px;">
+          <div style="display:flex;justify-content:space-between;font-size:0.7rem;margin-bottom:2px;">
+            <span>❤️ HP: ${sv.health}/100</span>
+            <span style="color:${sv.monthlyPct >= 0 ? 'var(--color-success)' : 'var(--color-danger)'}">Month: ${sv.monthlyPct >= 0 ? '+' : ''}${sv.monthlyPct}%</span>
+          </div>
+          <div style="height:8px;background:#333;border-radius:4px;overflow:hidden;">
+            <div style="height:100%;width:${sv.health}%;background:${sv.health > 50 ? '#00ff88' : sv.health > 20 ? '#ffaa00' : '#ff3333'};border-radius:4px;transition:width 0.5s;"></div>
+          </div>
+          <div style="display:flex;justify-content:space-between;font-size:0.65rem;color:var(--color-text-muted);margin-top:2px;">
+            <span>💰 $${sv.capital?.toFixed(0) || '1000'}</span>
+            <span>W/L: ${sv.totalWins || 0}/${sv.totalLosses || 0} (${sv.winRate || 0}%)</span>
+            <span>Target: ${sv.monthlyTarget || 60}%</span>
+          </div>
+        </div>` : ''}
         ${taskHtml}${errHtml}
         <div class="mc-agent-meta">
           <span class="mc-meta-label">Runs:</span><span>${a.runCount}</span>

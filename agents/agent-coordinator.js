@@ -251,6 +251,53 @@ class AgentCoordinator extends BaseAgent {
       }
     }
 
+    // ── Hook into trade outcomes for agent survival system ──
+    try {
+      const { onTradeOutcome } = require('../cycle');
+      onTradeOutcome(({ symbol, direction, status, pnlUsdt, structure }) => {
+        // Update TraderAgent survival
+        if (this.traderAgent) {
+          if (status === 'WIN' || status === 'TP') {
+            this.traderAgent.recordSurvivalWin(Math.abs(pnlUsdt));
+          } else {
+            this.traderAgent.recordSurvivalLoss(Math.abs(pnlUsdt));
+          }
+        }
+        // Update the responsible TokenAgent survival
+        const tokenKey = symbol.replace('USDT', '');
+        const tokenAgent = this.tokenAgents?.get(symbol);
+        if (tokenAgent) {
+          if (status === 'WIN' || status === 'TP') {
+            tokenAgent.recordSurvivalWin(Math.abs(pnlUsdt));
+          } else {
+            tokenAgent.recordSurvivalLoss(Math.abs(pnlUsdt));
+          }
+        }
+        // Update all core agents (they share responsibility)
+        const coreAgents = [this.chartAgent, this.riskAgent, this.kronosAgent];
+        for (const agent of coreAgents) {
+          if (!agent) continue;
+          // Smaller impact on support agents: ±5 HP instead of ±10
+          if (status === 'WIN' || status === 'TP') {
+            agent._survival.health = Math.min(100, agent._survival.health + 5);
+            agent._survival.capital += Math.abs(pnlUsdt) * 0.2;
+            agent._survival.monthlyPnl += Math.abs(pnlUsdt) * 0.2;
+          } else {
+            agent._survival.health = Math.max(0, agent._survival.health - 5);
+            agent._survival.capital -= Math.abs(pnlUsdt) * 0.2;
+            agent._survival.monthlyPnl -= Math.abs(pnlUsdt) * 0.2;
+          }
+          agent._survival.totalTrades++;
+          if (status === 'WIN' || status === 'TP') agent._survival.totalWins++;
+          else agent._survival.totalLosses++;
+          agent._saveSurvival();
+        }
+      });
+      this.log('Trade outcome hook registered for agent survival system');
+    } catch (err) {
+      this.logError(`Failed to hook trade outcomes: ${err.message}`);
+    }
+
     this._ceoTimer = setInterval(async () => {
       if (this.paused) return;
       try {

@@ -89,15 +89,39 @@ class BaseAgent {
       weeklyTasks: 0,
       lastResetWeek: 0,
     };
+
+    // ── Survival System — trade with $1000 virtual capital ──
+    // Health: 100 max. Win +10, Lose -10. At 0 HP → agent dies (permanently disabled)
+    // Capital: $1000 starting. Trade outcomes adjust this. At $0 → dead
+    // Monthly target: 60% profit ($600 from $1000). Must hit or face penalty.
+    this._survival = {
+      health: 100,           // HP: 0-100
+      isAlive: true,         // False = permanently killed
+      capital: 1000,         // Virtual $1000 starting capital
+      startCapital: 1000,    // Baseline for monthly % calc
+      monthlyPnl: 0,         // This month's PnL in $
+      monthStart: new Date().toISOString().slice(0, 7), // YYYY-MM
+      totalTrades: 0,
+      totalWins: 0,
+      totalLosses: 0,
+      killReason: null,      // Why agent was killed
+      monthlyTarget: 0.60,   // 60% monthly target
+      lastTradeAt: null,
+    };
   }
 
   // ── Lifecycle ─────────────────────────────────────────────
 
   async init() {
+    await this._loadSurvival();
     this.log('Initialized');
   }
 
   async run(context = {}) {
+    // Dead agents cannot run
+    if (!this._survival.isAlive) {
+      return null;
+    }
     // When managedByCoordinator is true, skip the "already running" guard
     // because the coordinator pre-sets state to 'running' for the full pipeline
     if (this.state === AGENT_STATES.RUNNING && !this.managedByCoordinator) {
@@ -605,6 +629,143 @@ class BaseAgent {
     await this.saveRpgProfile();
   }
 
+  // ── Survival System Methods ───────────────────────────────
+
+  /** Record a trade win — +10 HP, capital increases */
+  recordSurvivalWin(pnlUsdt) {
+    if (!this._survival.isAlive) return;
+    this._checkMonthReset();
+    this._survival.health = Math.min(100, this._survival.health + 10);
+    this._survival.capital += Math.abs(pnlUsdt);
+    this._survival.monthlyPnl += Math.abs(pnlUsdt);
+    this._survival.totalTrades++;
+    this._survival.totalWins++;
+    this._survival.lastTradeAt = Date.now();
+    this.addActivity('win', `💚 HP ${this._survival.health}/100 | +$${Math.abs(pnlUsdt).toFixed(2)} | Capital: $${this._survival.capital.toFixed(2)}`);
+    this._saveSurvival();
+  }
+
+  /** Record a trade loss — -10 HP, capital decreases. May kill agent. */
+  recordSurvivalLoss(pnlUsdt) {
+    if (!this._survival.isAlive) return;
+    this._checkMonthReset();
+    this._survival.health = Math.max(0, this._survival.health - 10);
+    this._survival.capital -= Math.abs(pnlUsdt);
+    this._survival.monthlyPnl -= Math.abs(pnlUsdt);
+    this._survival.totalTrades++;
+    this._survival.totalLosses++;
+    this._survival.lastTradeAt = Date.now();
+
+    if (this._survival.capital <= 0) {
+      this._killAgent('Capital depleted — $0 remaining');
+    } else if (this._survival.health <= 0) {
+      this._killAgent('Health reached 0 HP — too many losses');
+    } else {
+      this.addActivity('loss', `💔 HP ${this._survival.health}/100 | -$${Math.abs(pnlUsdt).toFixed(2)} | Capital: $${this._survival.capital.toFixed(2)}`);
+    }
+    this._saveSurvival();
+  }
+
+  /** Kill this agent permanently */
+  _killAgent(reason) {
+    this._survival.isAlive = false;
+    this._survival.killReason = reason;
+    this.state = AGENT_STATES.STOPPED;
+    this.paused = true;
+    this._personality.mood = 'dead';
+    this.addActivity('death', `☠️ KILLED: ${reason} | Final capital: $${this._survival.capital.toFixed(2)} | W/L: ${this._survival.totalWins}/${this._survival.totalLosses}`);
+    this.log(`AGENT KILLED: ${reason}`);
+    bLog.error(`${this.name} KILLED: ${reason}`);
+  }
+
+  /** Check if month rolled over — reset monthly PnL tracking */
+  _checkMonthReset() {
+    const currentMonth = new Date().toISOString().slice(0, 7);
+    if (this._survival.monthStart !== currentMonth) {
+      // Check if last month hit 60% target
+      const monthlyPct = this._survival.monthlyPnl / this._survival.startCapital;
+      if (this._survival.totalTrades >= 10 && monthlyPct < this._survival.monthlyTarget) {
+        // Penalty: lose 20 HP for missing monthly target
+        this._survival.health = Math.max(0, this._survival.health - 20);
+        this.addActivity('penalty', `📉 Missed ${(this._survival.monthlyTarget*100).toFixed(0)}% target: only ${(monthlyPct*100).toFixed(1)}% — lost 20 HP`);
+        if (this._survival.health <= 0) {
+          this._killAgent('Failed monthly target — 0 HP');
+          return;
+        }
+      }
+      // Reset month tracking
+      this._survival.monthStart = currentMonth;
+      this._survival.startCapital = this._survival.capital;
+      this._survival.monthlyPnl = 0;
+    }
+  }
+
+  /** Get survival status for dashboard */
+  getSurvival() {
+    this._checkMonthReset();
+    const monthlyPct = this._survival.startCapital > 0
+      ? (this._survival.monthlyPnl / this._survival.startCapital * 100) : 0;
+    return {
+      health: this._survival.health,
+      isAlive: this._survival.isAlive,
+      capital: Math.round(this._survival.capital * 100) / 100,
+      monthlyPnl: Math.round(this._survival.monthlyPnl * 100) / 100,
+      monthlyPct: Math.round(monthlyPct * 10) / 10,
+      monthlyTarget: this._survival.monthlyTarget * 100,
+      totalTrades: this._survival.totalTrades,
+      totalWins: this._survival.totalWins,
+      totalLosses: this._survival.totalLosses,
+      winRate: this._survival.totalTrades > 0
+        ? Math.round(this._survival.totalWins / this._survival.totalTrades * 100) : 0,
+      killReason: this._survival.killReason,
+      lastTradeAt: this._survival.lastTradeAt,
+    };
+  }
+
+  /** Save survival state to DB */
+  async _saveSurvival() {
+    try {
+      const db = require('../db');
+      await db.query(
+        `INSERT INTO agent_survival (agent, health, is_alive, capital, monthly_pnl, month_start, start_capital, total_trades, total_wins, total_losses, kill_reason, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW())
+         ON CONFLICT (agent) DO UPDATE SET
+           health = $2, is_alive = $3, capital = $4, monthly_pnl = $5,
+           month_start = $6, start_capital = $7, total_trades = $8,
+           total_wins = $9, total_losses = $10, kill_reason = $11, updated_at = NOW()`,
+        [this.name, this._survival.health, this._survival.isAlive, this._survival.capital,
+         this._survival.monthlyPnl, this._survival.monthStart, this._survival.startCapital,
+         this._survival.totalTrades, this._survival.totalWins, this._survival.totalLosses,
+         this._survival.killReason]
+      );
+    } catch (_) {}
+  }
+
+  /** Load survival state from DB */
+  async _loadSurvival() {
+    try {
+      const db = require('../db');
+      const rows = await db.query('SELECT * FROM agent_survival WHERE agent = $1', [this.name]);
+      if (rows.length) {
+        const r = rows[0];
+        this._survival.health = parseInt(r.health);
+        this._survival.isAlive = r.is_alive;
+        this._survival.capital = parseFloat(r.capital);
+        this._survival.monthlyPnl = parseFloat(r.monthly_pnl);
+        this._survival.monthStart = r.month_start;
+        this._survival.startCapital = parseFloat(r.start_capital);
+        this._survival.totalTrades = parseInt(r.total_trades);
+        this._survival.totalWins = parseInt(r.total_wins);
+        this._survival.totalLosses = parseInt(r.total_losses);
+        this._survival.killReason = r.kill_reason;
+        if (!this._survival.isAlive) {
+          this.state = AGENT_STATES.STOPPED;
+          this.paused = true;
+        }
+      }
+    } catch (_) {}
+  }
+
   getRpgProfile() {
     return {
       level: this._rpg.level,
@@ -791,7 +952,7 @@ class BaseAgent {
   getHealth() {
     return {
       name: this.name,
-      state: this.state,
+      state: this._survival.isAlive === false ? 'dead' : this.state,
       paused: this.paused,
       runCount: this.runCount,
       lastRunAt: this.lastRunAt,
@@ -802,6 +963,7 @@ class BaseAgent {
       rpg: this.getRpgProfile(),
       personality: this.getPersonality(),
       competition: this.getCompetitionStats(),
+      survival: this.getSurvival(),
       profile: this._profile,
     };
   }

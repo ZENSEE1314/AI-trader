@@ -13,6 +13,10 @@ const { getSentimentScores } = require('./sentiment-scraper');
 const { log: bLog } = require('./bot-logger');
 const { getBinanceRequestOptions, getFetchOptions } = require('./proxy-agent');
 
+// ── Trade outcome callback — agents hook in to track survival ──
+let _onTradeOutcome = null;
+function onTradeOutcome(fn) { _onTradeOutcome = fn; }
+
 const API_KEY        = process.env.BINANCE_API_KEY    || '';
 const API_SECRET     = process.env.BINANCE_API_SECRET || '';
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN     || '';
@@ -1965,6 +1969,11 @@ async function syncTradeStatus() {
             );
             bLog.trade(`DB synced: ${trade.symbol} -> ${status} gross=$${grossPnl} fee=$${tradingFee} net=$${pnlUsdt} exit=$${fmtPrice(exitPrice)}`);
 
+            // Notify agents of trade outcome (for survival system)
+            if (_onTradeOutcome) {
+              try { _onTradeOutcome({ symbol: trade.symbol, direction: trade.direction, status, pnlUsdt, structure: trade.market_structure }); } catch (_) {}
+            }
+
             // Circuit breaker: track consecutive losses
             if (status === 'LOSS') {
               consecutiveLosses++;
@@ -2164,4 +2173,5 @@ module.exports = {
   TRAILING_SL_CAPITAL,
   getTrailingSLConfig,
   tradeState,
+  onTradeOutcome,
 };

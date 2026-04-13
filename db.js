@@ -322,6 +322,21 @@ async function initAllTables() {
     // Market structure and user trailing config
     `ALTER TABLE trades ADD COLUMN IF NOT EXISTS market_structure VARCHAR(50)`,
     `ALTER TABLE trades ADD COLUMN IF NOT EXISTS key_trailing_sl_step NUMERIC DEFAULT 0`,
+    // Agent survival system — $1000 capital, HP health, kill on 0
+    `CREATE TABLE IF NOT EXISTS agent_survival (
+      agent VARCHAR(50) PRIMARY KEY,
+      health INTEGER DEFAULT 100,
+      is_alive BOOLEAN DEFAULT true,
+      capital NUMERIC DEFAULT 1000,
+      monthly_pnl NUMERIC DEFAULT 0,
+      month_start VARCHAR(7) DEFAULT '',
+      start_capital NUMERIC DEFAULT 1000,
+      total_trades INTEGER DEFAULT 0,
+      total_wins INTEGER DEFAULT 0,
+      total_losses INTEGER DEFAULT 0,
+      kill_reason TEXT,
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )`,
     // Trade fee tracking
     `ALTER TABLE trades ADD COLUMN IF NOT EXISTS trading_fee NUMERIC DEFAULT 0`,
     `ALTER TABLE trades ADD COLUMN IF NOT EXISTS gross_pnl NUMERIC`,
