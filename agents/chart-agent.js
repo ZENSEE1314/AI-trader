@@ -9,7 +9,8 @@
 // ============================================================
 
 const { BaseAgent } = require('./base-agent');
-const { scanSMC, isGoodTradingSession } = require('../smc-engine');
+const { isGoodTradingSession } = require('../smc-engine');
+const { scanAI } = require('../ai-signal-scanner');
 const { getSentimentScores } = require('../sentiment-scraper');
 const aiLearner = require('../ai-learner');
 
@@ -60,8 +61,8 @@ class ChartAgent extends BaseAgent {
     const sessionGood = isGoodTradingSession();
     this.logScan(`Session: ${session} | Good session: ${sessionGood}`);
 
-    // 3. Run SMC scan
-    const signals = await scanSMC(
+    // 3. Run AI strategy scan (uses discovered strategies, not hardcoded SMC)
+    const signals = await scanAI(
       (msg) => this.logScan(msg),
       { topNCoins, kronosPredictions }
     );

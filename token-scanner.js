@@ -6,7 +6,7 @@
 // Users pick tokens from the signal board to auto-trade.
 // ============================================================
 
-const { scanSMC } = require('./smc-engine');
+const { scanAI } = require('./ai-signal-scanner');
 const { log: bLog } = require('./bot-logger');
 
 // In-memory signal board — refreshed every cycle
@@ -18,7 +18,7 @@ let lastScanAt = 0;
  * Returns { BTCUSDT: { direction, score, ... }, ... }
  */
 async function scanAllTokens(log, opts = {}) {
-  const signals = await scanSMC(log, opts);
+  const signals = await scanAI(log, opts);
 
   // Update signal board with fresh signals
   const now = Date.now();

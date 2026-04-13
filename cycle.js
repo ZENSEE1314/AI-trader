@@ -8,7 +8,8 @@
 const { USDMClient } = require('binance');
 const fetch = require('node-fetch');
 const aiLearner = require('./ai-learner');
-const { scanSMC, recordDailyTrade, detectSwings, SWING_LENGTHS } = require('./smc-engine');
+const { recordDailyTrade, detectSwings, SWING_LENGTHS, checkDailyLimits } = require('./smc-engine');
+const { scanAI } = require('./ai-signal-scanner');
 const { getSentimentScores } = require('./sentiment-scraper');
 const { log: bLog } = require('./bot-logger');
 const { getBinanceRequestOptions, getFetchOptions } = require('./proxy-agent');
@@ -985,10 +986,11 @@ async function main() {
       bLog.error(`Kronos batch scan failed (non-blocking): ${kronosBatchErr.message}`);
     }
 
-    const signals = await scanSMC(log, { topNCoins, kronosPredictions });
+    // AI-driven signals — uses best discovered strategies from StrategyAgent
+    const signals = await scanAI(log, { topNCoins, kronosPredictions });
 
     if (!signals.length) {
-      log('No SMC signals found this cycle.');
+      log('No AI signals found this cycle — agents still learning.');
 
       if (hasOwnerKeys) {
         const client = getClient();
@@ -1018,7 +1020,7 @@ async function main() {
         log(`Kronos: ${sym} → ${kronosResult.direction} ${kronosResult.change_pct}% conf=${kronosResult.confidence}`);
 
         if (kronosResult.direction !== 'NEUTRAL' && kronosResult.direction !== pick.direction && kronosResult.confidence !== 'low') {
-          bLog.trade(`KRONOS BLOCKED: ${sym} SMC=${pick.direction} but Kronos=${kronosResult.direction} (${kronosResult.change_pct}% ${kronosResult.confidence}) — skipping`);
+          bLog.trade(`KRONOS BLOCKED: ${sym} AI=${pick.direction} but Kronos=${kronosResult.direction} (${kronosResult.change_pct}% ${kronosResult.confidence}) — skipping`);
           await notify(`🚫 Kronos blocked *${sym}* ${pick.direction}\nAI predicts ${kronosResult.direction} (${kronosResult.change_pct}%)`);
           continue;
         }
