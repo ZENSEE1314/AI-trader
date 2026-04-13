@@ -15,11 +15,8 @@
 const { BaseAgent } = require('./base-agent');
 const {
   executeForAllUsers,
-  openTrade,
-  checkTrailingStop,
   syncTradeStatus,
   checkUsdtTopups,
-  getClient,
   isTokenBanned,
   getDailyCapital,
   notify,
@@ -28,9 +25,6 @@ const {
 } = require('../cycle');
 const { log: bLog } = require('../bot-logger');
 const aiLearner = require('../ai-learner');
-
-const API_KEY    = process.env.BINANCE_API_KEY    || '';
-const API_SECRET = process.env.BINANCE_API_SECRET || '';
 
 class TraderAgent extends BaseAgent {
 
@@ -187,75 +181,11 @@ class TraderAgent extends BaseAgent {
         break; // One trade per cycle
       }
 
-      // Step 3: Owner account trade (first signal)
-      const pick = signals[0];
-      const hasOwnerKeys = !!(API_KEY && API_SECRET);
-
-      if (hasOwnerKeys) {
-        this.currentTask = { description: 'Owner account check', startedAt: Date.now() };
-        try {
-          const client = getClient();
-          const account = await client.getAccountInformation({ omitZeroBalances: false });
-          const rawWallet = parseFloat(account.totalWalletBalance);
-          const avail = parseFloat(account.availableBalance);
-          const wallet = getDailyCapital('owner-binance', rawWallet);
-
-          // Manage trailing stops
-          await checkTrailingStop(client);
-
-          const openPos = account.positions.filter(p => parseFloat(p.positionAmt) !== 0);
-          this.openPositionCount = openPos.length;
-
-          const userLev = await require('../cycle').getTokenLeverage(pick.symbol, null, price);
-          if (userLev === null) {
-            this.logTrade(`Owner: ${pick.symbol} has no token configuration — skipping`);
-            this.tradesSkipped++;
-            this.addActivity('skip', `${pick.symbol} no token config — skipped`);
-          } else if (avail >= CONFIG.MIN_BALANCE) {
-            const alreadyInSymbol = openPos.find(p => p.symbol === pick.symbol);
-            if (alreadyInSymbol) {
-              this.logTrade(`Owner already in ${pick.symbol} — skipping`);
-            } else {
-              const result = await openTrade(client, pick, wallet);
-              if (result && result !== 'TOO_EXPENSIVE') {
-                this.tradesExecuted++;
-                this.addActivity('success', `Owner: ${result.sym} ${result.direction} x${result.leverage}`);
-                const dirEmoji = result.direction !== 'SHORT' ? '🟢' : '🔴';
-                await notify(
-                  `*AI Trade — ${this._ts()}*\n` +
-                  `*${result.sym}* ${dirEmoji} *${result.direction} x${result.leverage}*\n` +
-                  `Setup: *${result.setup}*\n` +
-                  `Entry: \`$${this._fmtPrice(result.entry)}\`\n` +
-                  `TP: \`$${this._fmtPrice(result.tp1)}\`\n` +
-                  `SL: \`$${this._fmtPrice(result.sl)}\`\n` +
-                  `Qty: \`${result.qty}\` | Wallet: *$${avail.toFixed(2)}*\n` +
-                  `AI Score: *${pick.score}*`
-                );
-              }
-            }
-          } else {
-            this.logTrade(`Owner balance too low: $${avail.toFixed(2)}`);
-          }
-        } catch (err) {
-          this.logError(`Owner trade error: ${err.message}`);
-        }
-      }
+      // Owner account handled via executeForAllUsers (DB keys with pause/enabled checks)
     } else {
       // No signals — still manage existing positions
       this.currentTask = { description: 'Managing positions (no signals)', startedAt: Date.now() };
       this.addActivity('info', 'No signals — managing existing positions');
-
-      const hasOwnerKeys = !!(API_KEY && API_SECRET);
-      if (hasOwnerKeys) {
-        try {
-          const client = getClient();
-          await checkTrailingStop(client);
-          const account = await client.getAccountInformation({ omitZeroBalances: false });
-          this.openPositionCount = account.positions.filter(p => parseFloat(p.positionAmt) !== 0).length;
-        } catch (err) {
-          this.logError(`Position management error: ${err.message}`);
-        }
-      }
     }
 
     this.currentTask = null;

@@ -1001,57 +1001,8 @@ async function main() {
       executed = true;
       break;
     }
-    const pick = signals[0];
-
-    // Owner's Binance account
-    if (hasOwnerKeys) {
-      bLog.trade(`Executing trade on owner Binance account...`);
-      try {
-        const client = getClient();
-        const account = await client.getAccountInformation({ omitZeroBalances: false });
-        const rawWallet = parseFloat(account.totalWalletBalance);
-        const avail = parseFloat(account.availableBalance);
-        const wallet = getDailyCapital('owner-binance', rawWallet);
-        bLog.trade(`Owner wallet: $${rawWallet.toFixed(2)} (daily capital: $${wallet.toFixed(2)}) available: $${avail.toFixed(2)}`);
-
-        await checkTrailingStop(client);
-
-        if (avail >= CONFIG.MIN_BALANCE) {
-          const openPos = account.positions.filter(p => parseFloat(p.positionAmt) !== 0);
-          const alreadyInSymbol = openPos.find(p => p.symbol === pick.symbol);
-
-          if (alreadyInSymbol) {
-            bLog.trade(`Owner already in ${pick.symbol} — skipping duplicate. Open: ${openPos.map(p => p.symbol).join(', ')}`);
-          } else {
-            bLog.trade(`Owner has ${openPos.length} open position(s) — opening ${pick.symbol}...`);
-            const result = await openTrade(client, pick, wallet);
-            if (result && result !== 'TOO_EXPENSIVE') {
-              const dirEmoji = result.direction !== 'SHORT' ? '🟢' : '🔴';
-              bLog.trade(`TRADE OPENED: ${result.sym} ${result.direction} x${result.leverage} qty=${result.qty} entry=$${fmtPrice(result.entry)}`);
-              await notify(
-                `*AI Trade — ${now()}*\n` +
-                `*${result.sym}* ${dirEmoji} *${result.direction} x${result.leverage}*\n` +
-                `Setup: *${result.setup}* (3-TF LH/HL)\n` +
-                `Entry: \`$${fmtPrice(result.entry)}\`\n` +
-                `TP: \`$${fmtPrice(result.tp1)}\` (RR 1:1.5)\n` +
-                `SL: \`$${fmtPrice(result.sl)}\` (trailing -1%)\n` +
-                `Qty: \`${result.qty}\` | Wallet: *$${avail.toFixed(2)}*\n` +
-                `AI Score: *${pick.score}*`
-              );
-            } else if (!result) {
-              bLog.trade(`openTrade returned null for ${pick.symbol} — trade rejected`);
-            }
-          }
-        } else {
-          bLog.trade(`Owner balance too low: $${avail.toFixed(2)} < min $${CONFIG.MIN_BALANCE}`);
-        }
-      } catch (ownerErr) {
-        bLog.error(`Owner trade error: ${ownerErr.message}`);
-        log(`Owner trade error: ${ownerErr.message}`);
-      }
-    } else {
-      // No owner env keys — normal mode, using user keys from dashboard
-    }
+    // Owner account handled via executeForAllUsers (DB keys with pause/enabled checks)
+    // No separate owner path — all accounts go through the same pipeline
 
   } catch (err) {
     if (checkBanError(err)) return;
