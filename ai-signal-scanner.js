@@ -360,7 +360,17 @@ async function scanAI(log, opts = {}) {
     }
   }
 
-  return deduped.slice(0, MAX_SIGNALS);
+  // Prioritize monitored tokens — they go first, then fill remaining with others
+  const monSet = new Set(opts.monitoredSymbols || []);
+  const monitoredSignals = deduped.filter(s => monSet.has(s.symbol));
+  const otherSignals = deduped.filter(s => !monSet.has(s.symbol));
+  const finalSignals = [...monitoredSignals, ...otherSignals].slice(0, Math.max(MAX_SIGNALS, monitoredSignals.length));
+
+  if (monitoredSignals.length > 0) {
+    bLog.scan(`AI Scanner: ${monitoredSignals.length} monitored signals prioritized (${monitoredSignals.map(s => s.symbol.replace('USDT','')).join(', ')})`);
+  }
+
+  return finalSignals;
 }
 
 // Force reload strategies (called after optimizer applies new strategy)
