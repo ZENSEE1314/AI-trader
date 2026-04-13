@@ -1939,13 +1939,13 @@
 
   async function adminToggleBan(symbol, banned) {
     try {
-      if (banned) {
-        await api('POST', '/api/admin/global-tokens', { symbol, type: 'ban' });
-      } else {
-        await api('POST', '/api/admin/remove-global-token', { symbol, list: 'banned' }).catch(() =>
-          api('DELETE', `/api/admin/global-tokens/${symbol}`).catch(() => {})
-        );
-      }
+      await api('POST', '/api/admin/global-tokens', {
+        symbol,
+        enabled: !banned,
+        banned: banned,
+      });
+      showToast(`${symbol} ${banned ? 'BANNED' : 'UNBANNED'}`, banned ? 'error' : 'success');
+      adminLoadTokenBoard();
     } catch (err) { showToast(err.message, 'error'); }
   }
 
