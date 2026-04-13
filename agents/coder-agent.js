@@ -125,6 +125,9 @@ class CoderAgent extends BaseAgent {
       moduleHealth: {},
     };
 
+    // ── Phase 0: Process upgrade/skill requests from other agents ──
+    await this._processAgentRequests(context.coordinator);
+
     // ── Phase 1: Scan error logs for recurring patterns ──
     this.currentTask = { description: 'Phase 1: Analyzing error logs...', startedAt: Date.now() };
     const errorReport = await this._scanErrorLogs();
@@ -213,6 +216,98 @@ class CoderAgent extends BaseAgent {
     }
 
     return report;
+  }
+
+  // ── Agent Request Processing ────────────────────────────────
+
+  /**
+   * Process upgrade-request and skill-request messages from other agents.
+   * Agents can ask CoderAgent to add capabilities, fix issues, or learn new skills.
+   */
+  async _processAgentRequests(coordinator) {
+    if (!this._inbox?.length) return;
+
+    const requests = this._inbox.filter(msg =>
+      msg.type === 'upgrade-request' || msg.type === 'skill-request'
+    );
+    // Clear processed messages
+    this._inbox = this._inbox.filter(msg =>
+      msg.type !== 'upgrade-request' && msg.type !== 'skill-request'
+    );
+
+    if (requests.length === 0) return;
+
+    this.currentTask = { description: `Processing ${requests.length} agent request(s)...`, startedAt: Date.now() };
+    this.addActivity('info', `Processing ${requests.length} request(s) from team agents`);
+
+    for (const req of requests.slice(0, 3)) {
+      const from = req.from || 'Unknown';
+      const payload = req.payload || {};
+
+      if (req.type === 'upgrade-request') {
+        this.addActivity('info', `Upgrade request from ${from}: ${payload.reason || 'no reason'}`);
+
+        // Use AI to analyze and suggest improvements
+        const { think: aiThink, isAvailable: aiOk } = require('./ai-brain');
+        if (aiOk()) {
+          try {
+            const response = await aiThink({
+              agentName: this.name,
+              systemPrompt: 'You are CoderAgent, the self-healing code engineer. An agent is requesting an upgrade. Analyze and suggest concrete code improvements.',
+              userMessage: `Agent "${from}" requests an upgrade.
+Reason: ${payload.reason || 'unknown'}
+Suggestion: ${payload.suggestion || 'none'}
+Agent level: ${payload.level || 1}
+Agent health: ${payload.health || 100}/100
+
+Analyze this request. If it's actionable, suggest a specific code change.
+Respond in JSON: {"summary": "...", "actionable": true/false, "recommendation": "..."}`,
+              context: {},
+              complexity: 'low',
+            });
+
+            if (response) {
+              const summary = response.slice(0, 200);
+              this.addActivity('info', `AI analysis for ${from}: ${summary}`);
+              this.shareWithTeam(`CoderAgent reviewed ${from}'s upgrade request: ${summary}`);
+
+              // Store the upgrade request for the admin to review
+              this._pendingPatches.push({
+                file: `agents/${from.toLowerCase().replace('agent', '-agent')}.js`,
+                description: `Upgrade requested by ${from}: ${payload.reason || 'performance improvement'}`,
+                type: 'upgrade',
+                search: '',
+                replace: '',
+                confidence: 0.3, // Low confidence = human review needed
+                createdAt: Date.now(),
+                status: 'pending',
+                scanNumber: this._scanCount,
+                requestedBy: from,
+              });
+            }
+          } catch (err) {
+            this.addActivity('error', `Failed to analyze upgrade request from ${from}: ${err.message}`);
+          }
+        }
+      }
+
+      if (req.type === 'skill-request') {
+        const topic = payload.topic || 'unknown';
+        this.addActivity('info', `Skill request from ${from}: "${topic}"`);
+        this.shareWithTeam(`${from} wants to learn: ${topic}. CoderAgent is investigating.`);
+
+        // Log to DB for tracking
+        try {
+          const { query } = require('../db');
+          await query(
+            `INSERT INTO agent_memory (agent, key, value, category, updated_at)
+             VALUES ($1, $2, $3, $4, NOW())
+             ON CONFLICT (agent, key) DO UPDATE SET value = $3, updated_at = NOW()`,
+            [this.name, `skill_req_${from}_${Date.now()}`, JSON.stringify({ from, topic, ts: Date.now() }), 'skill_requests']
+          );
+        } catch {}
+      }
+    }
   }
 
   // ── Self-Healing Loop ──────────────────────────────────────

@@ -106,6 +106,8 @@ class AgentCoordinator extends BaseAgent {
     try {
       for (const [name, agent] of this._agents) {
         this.log(`[BOOT] Initializing system agent: ${name}...`);
+        // Give every agent a reference to the coordinator for cross-agent communication
+        agent._coordinator = this;
         await agent.init();
         await agent.loadRpgProfile().catch(() => {});
         this.log(`[BOOT] ${name} ready (Lv.${agent._rpg.level})`);
@@ -410,7 +412,16 @@ class AgentCoordinator extends BaseAgent {
       this.policeAgent.run({ coordinator: this }).catch(() => {});
     }
 
-    // 6. Update CEO display
+    // 7. Agent self-reflection — every 60 micro-cycles (~30 min) one agent reflects
+    if (this._microCycleCount % 60 === 0) {
+      const agentList = [...this._agents.values()].filter(a => a !== this && a._survival?.isAlive !== false);
+      const reflectAgent = agentList[this._microCycleCount % agentList.length];
+      if (reflectAgent) {
+        reflectAgent.selfReflect().catch(() => {});
+      }
+    }
+
+    // 8. Update CEO display
     const board = this.getLeaderboard();
     const topAgent = board[0];
     const topDisplay = topAgent ? ` | #1: ${topAgent.name} Lv.${topAgent.level}` : '';

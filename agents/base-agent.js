@@ -364,6 +364,88 @@ class BaseAgent {
   }
 
   /**
+   * Request CoderAgent to upgrade this agent's capabilities.
+   * Any agent can call this when it identifies a gap in its skills.
+   * @param {string} reason - Why the upgrade is needed
+   * @param {string} suggestion - What to add or change
+   */
+  requestSelfUpgrade(reason, suggestion) {
+    if (!this._coordinator?.coderAgent) return;
+    this._coordinator.coderAgent.receive({
+      from: this.name,
+      type: 'upgrade-request',
+      payload: {
+        agent: this.name,
+        reason,
+        suggestion,
+        level: this._rpg?.level || 1,
+        health: this._survival?.health || 100,
+        ts: Date.now(),
+      },
+      ts: Date.now(),
+    });
+    this.addActivity('info', `Requested upgrade: ${reason}`);
+  }
+
+  /**
+   * Request to learn a new skill from online knowledge or AI.
+   * Triggers StrategyAgent/CoderAgent to research and implement.
+   * @param {string} skillTopic - What skill/knowledge to acquire
+   */
+  requestSkillInstall(skillTopic) {
+    if (!this._coordinator) return;
+    // Broadcast to team — whoever can help will pick it up
+    const msg = {
+      from: this.name,
+      type: 'skill-request',
+      payload: { topic: skillTopic, requestedBy: this.name, ts: Date.now() },
+      ts: Date.now(),
+    };
+    if (this._coordinator.strategyAgent) this._coordinator.strategyAgent.receive(msg);
+    if (this._coordinator.coderAgent) this._coordinator.coderAgent.receive(msg);
+    this.addActivity('info', `Requested new skill: ${skillTopic}`);
+    this.shareWithTeam(`${this.name} wants to learn: ${skillTopic}`);
+  }
+
+  /**
+   * Self-reflect and identify improvement areas using AI brain.
+   * Returns actionable insights about what this agent should improve.
+   */
+  async selfReflect() {
+    if (!isAvailable()) return null;
+    const health = this.getHealth();
+    const survival = this._survival || {};
+    const prompt = `You are ${this.name} (Level ${this._rpg?.level || 1}). Reflect on your performance and identify 2-3 specific improvements.
+
+Current status:
+- Health: ${survival.health || 100}/100 HP
+- Capital: $${(survival.capital || 1000).toFixed(0)}
+- Win/Loss: ${survival.totalWins || 0}/${survival.totalLosses || 0}
+- Run count: ${this.runCount}
+- State: ${this.state}
+- Last error: ${this.lastError?.message || 'none'}
+
+What specific changes would make you perform better? Be concrete — suggest parameter changes, new indicators, or strategy modifications.`;
+
+    try {
+      const response = await think({
+        agentName: this.name,
+        systemPrompt: getSystemPrompt(this.name),
+        userMessage: prompt,
+        context: {},
+        complexity: 'low',
+      });
+      if (response) {
+        this.addActivity('info', `Self-reflection: ${response.slice(0, 100)}...`);
+        this.shareWithTeam(`[Reflection] ${response.slice(0, 150)}`);
+      }
+      return response;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * Generate TTS voice note for Telegram notifications.
    * @param {string} text - Text to speak
    * @param {object} opts - { voice }
