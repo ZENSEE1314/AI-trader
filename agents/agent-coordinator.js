@@ -167,12 +167,17 @@ class AgentCoordinator extends BaseAgent {
       }
 
       this.log('[BOOT] Starting background agent loops...');
+      // Wire cross-agent collaboration before init
+      this.strategyAgent.setCoordinator(this);
       this.strategyAgent.init().catch(err => this.logError(`StrategyAgent init failed: ${err.message}`));
       this.policeAgent.init().catch(err => this.logError(`PoliceAgent init failed: ${err.message}`));
       this.coderAgent.setCoordinator(this);
       this.coderAgent.init().catch(err => this.logError(`CoderAgent init failed: ${err.message}`));
       this.optimizerAgent.setCoordinator(this);
       this.optimizerAgent.init().catch(err => this.logError(`OptimizerAgent init failed: ${err.message}`));
+
+      // Cross-agent knowledge sharing — strategies flow between agents
+      this._wireStrategySharing();
 
       this.log(`[BOOT] Agent framework ready — ${this._agents.size} system agents + ${this.tokenAgents.size} token agents`);
 
@@ -185,6 +190,49 @@ class AgentCoordinator extends BaseAgent {
       this.logError(criticalError.stack);
       throw criticalError;
     }
+  }
+
+  // Wire cross-agent knowledge sharing for autonomous strategy discovery
+  _wireStrategySharing() {
+    // When StrategyAgent finds a winner, register it in the backtester
+    // so OptimizerAgent can fine-tune it alongside built-in strategies
+    this.strategyAgent.on('message', (msg) => {
+      if (msg.type === 'winning-strategy' && msg.payload?.scan) {
+        try {
+          const { registerDynamicStrategy } = require('../backtester');
+          const key = `discovered_${msg.payload.recipe || 'unknown'}_${Date.now().toString(36).slice(-4)}`;
+          registerDynamicStrategy(key, {
+            name: msg.payload.name,
+            description: `AI-discovered: ${msg.payload.recipeDescription || msg.payload.recipe}`,
+            scan: msg.payload.scan,
+          });
+          this.log(`Registered discovered strategy in backtester: ${key}`);
+        } catch (err) {
+          this.logError(`Failed to register dynamic strategy: ${err.message}`);
+        }
+      }
+    });
+
+    // When CoderAgent receives upgrade requests from StrategyAgent, log them
+    this.coderAgent.on('message', (msg) => {
+      if (msg.type === 'upgrade-request') {
+        this.log(`CoderAgent received upgrade request from ${msg.from}: ${msg.payload?.reason || 'unknown'}`);
+      }
+    });
+
+    // OptimizerAgent shares best results back to StrategyAgent
+    this.optimizerAgent.on('message', (msg) => {
+      if (msg.type === 'best-params' && this.strategyAgent) {
+        this.strategyAgent.receive({
+          from: 'OptimizerAgent',
+          type: 'optimized-params',
+          payload: msg.payload,
+          ts: Date.now(),
+        });
+      }
+    });
+
+    this.log('[WIRE] Cross-agent strategy sharing enabled');
   }
 
   async verifyAgentFix(agent) {

@@ -1621,6 +1621,21 @@
             <span>Target: ${sv.monthlyTarget || 60}%</span>
           </div>
         </div>` : ''}
+        ${a.populationSize !== undefined ? `
+        <div style="margin-bottom:6px;padding:4px 6px;background:rgba(0,255,136,0.05);border:1px solid rgba(0,255,136,0.15);border-radius:6px;">
+          <div style="font-size:0.7rem;color:var(--color-accent);font-weight:600;margin-bottom:2px;">🧬 Strategy Discovery</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:2px;font-size:0.65rem;color:var(--color-text-muted);">
+            <span>Population: ${a.populationSize || 0}</span>
+            <span>Elite: ${a.eliteCount || 0}</span>
+            <span>Generated: ${a.totalGenerated || 0}</span>
+            <span>Evolved: ${a.totalEvolved || 0}</span>
+            <span>Culled: ${a.totalCulled || 0}</span>
+            <span>Best WR: ${(a.bestEverWinRate || 0).toFixed(1)}%</span>
+            <span>Web: ${a.totalWebSearches || 0} searches</span>
+            <span>AI: ${a.totalAiDiscoveries || 0} ideas</span>
+          </div>
+          ${a.bestEverStrategy && a.bestEverStrategy !== 'N/A' ? `<div style="font-size:0.65rem;color:var(--color-success);margin-top:2px;">🏆 ${escapeHtml(a.bestEverStrategy)}</div>` : ''}
+        </div>` : ''}
         ${taskHtml}${errHtml}
         <div class="mc-agent-meta">
           <span class="mc-meta-label">Runs:</span><span>${a.runCount}</span>

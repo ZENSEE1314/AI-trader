@@ -94,7 +94,7 @@ class OptimizerAgent extends BaseAgent {
     this.addActivity('info', `Optimization round #${this._runIdx} — ${days} day backtest`);
 
     try {
-      const { runBacktest, applyBestStrategy, STRATEGIES } = require('../backtester');
+      const { runBacktest, applyBestStrategy, STRATEGIES, getRegisteredStrategies } = require('../backtester');
 
       // Get symbols from coordinator's token agents
       let symbols = [];
@@ -123,6 +123,13 @@ class OptimizerAgent extends BaseAgent {
         if (STRATEGIES.smc_ema) STRATEGIES.smc_ema.swingLen = swLen;
       }
 
+      // Include any AI-discovered strategies from StrategyAgent
+      const allStrats = getRegisteredStrategies();
+      const dynamicKeys = allStrats.filter(s => s.isDynamic).map(s => s.key);
+      if (dynamicKeys.length > 0) {
+        this.addActivity('info', `Including ${dynamicKeys.length} AI-discovered strategies in optimization`);
+      }
+
       // Run backtests on both 3m (live) and 15m timeframes
       const result3m = await runBacktest({
         symbols: batch,
@@ -131,10 +138,13 @@ class OptimizerAgent extends BaseAgent {
         strategies: smcStrategies,
       });
 
+      // Include built-in + discovered strategies
+      const allStratKeys = dynamicKeys.length > 0 ? [...Object.keys(STRATEGIES)] : null;
       const result = await runBacktest({
         symbols: batch,
         days,
         interval: '15m',
+        strategies: allStratKeys, // null = all built-in, or explicit list includes dynamic
       });
 
       // Merge results — prefer 3m SMC results since that's the live strategy

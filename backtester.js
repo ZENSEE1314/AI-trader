@@ -725,12 +725,77 @@ async function applyBestStrategy(backtestResult) {
   }
 }
 
+// ── Dynamic Strategy Registration ──────────────────────────
+// Allows StrategyAgent/OptimizerAgent to register AI-discovered
+// strategies at runtime for backtesting alongside built-in ones.
+
+function registerDynamicStrategy(key, strategy) {
+  if (!key || !strategy || typeof strategy.scan !== 'function') return false;
+  STRATEGIES[key] = strategy;
+  bLog.ai(`Registered dynamic strategy: ${key} (${strategy.name || 'unnamed'})`);
+  return true;
+}
+
+function unregisterDynamicStrategy(key) {
+  // Only remove dynamic (non-built-in) strategies
+  const builtIn = ['ema_cross', 'rsi_reversal', 'macd_momentum', 'bb_bounce',
+    'kronos_composite', 'ema_rsi_macd', 'ema_bb_rsi', 'smc_2gate', 'smc_rsi', 'smc_ema'];
+  if (builtIn.includes(key)) return false;
+  delete STRATEGIES[key];
+  return true;
+}
+
+function getRegisteredStrategies() {
+  return Object.keys(STRATEGIES).map(k => ({
+    key: k,
+    name: STRATEGIES[k].name || k,
+    description: STRATEGIES[k].description || '',
+    isDynamic: !['ema_cross', 'rsi_reversal', 'macd_momentum', 'bb_bounce',
+      'kronos_composite', 'ema_rsi_macd', 'ema_bb_rsi', 'smc_2gate', 'smc_rsi', 'smc_ema'].includes(k),
+  }));
+}
+
+// Run backtest on a single dynamic strategy (for StrategyLab)
+async function backtestSingleStrategy(scanFn, options = {}) {
+  const {
+    symbols = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT'],
+    days = 14,
+    interval = '15m',
+    tpPct = 0.015,
+    slPct = 0.01,
+  } = options;
+
+  const allTrades = [];
+
+  for (const symbol of symbols) {
+    const klines = await fetchHistoricalKlines(symbol, interval, days);
+    if (!klines || klines.length < 100) continue;
+
+    const closes = klines.map(k => parseFloat(k[4]));
+    const highs = klines.map(k => parseFloat(k[2]));
+    const lows = klines.map(k => parseFloat(k[3]));
+
+    const trades = simulateTrades(closes, highs, lows, scanFn, tpPct, slPct);
+    for (const t of trades) {
+      allTrades.push({ ...t, symbol });
+    }
+  }
+
+  return analyzeResults(allTrades);
+}
+
 module.exports = {
   runBacktest,
   applyBestStrategy,
   STRATEGIES,
   TP_SL_CONFIGS,
-  // Expose indicator helpers for other modules
+  registerDynamicStrategy,
+  unregisterDynamicStrategy,
+  getRegisteredStrategies,
+  backtestSingleStrategy,
+  fetchHistoricalKlines,
+  simulateTrades,
+  analyzeResults,
   calcEMA,
   calcRSI,
   calcMACD,

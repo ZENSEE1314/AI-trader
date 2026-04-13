@@ -493,6 +493,25 @@ async function initAllTables() {
       created_at TIMESTAMPTZ DEFAULT NOW()
     )`,
     `CREATE INDEX IF NOT EXISTS idx_code_patches_status ON code_patches (status)`,
+    // Discovered strategies (StrategyAgent autonomous discovery)
+    `CREATE TABLE IF NOT EXISTS discovered_strategies (
+      strategy_id VARCHAR(100) PRIMARY KEY,
+      name VARCHAR(200),
+      recipe VARCHAR(100),
+      params JSONB,
+      win_rate NUMERIC DEFAULT 0,
+      total_pnl NUMERIC DEFAULT 0,
+      total_trades INTEGER DEFAULT 0,
+      generation INTEGER DEFAULT 1,
+      source VARCHAR(50) DEFAULT 'random',
+      parent_id VARCHAR(200),
+      is_active BOOLEAN DEFAULT true,
+      adopted_at TIMESTAMPTZ,
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_disc_strat_wr ON discovered_strategies (win_rate DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_disc_strat_source ON discovered_strategies (source)`,
     `CREATE TABLE IF NOT EXISTS swarm_predictions (
       id SERIAL PRIMARY KEY,
       symbol VARCHAR(20),

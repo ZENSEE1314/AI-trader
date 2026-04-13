@@ -3373,6 +3373,29 @@ router.get('/agents/health', async (req, res) => {
   }
 });
 
+// GET /api/admin/agents/strategies — Strategy discovery population
+router.get('/agents/strategies', async (req, res) => {
+  try {
+    const { getCoordinator } = require('../agents');
+    const coordinator = getCoordinator();
+    const stratAgent = coordinator.strategyAgent;
+    if (!stratAgent) return res.json({ population: [], hallOfFame: [] });
+    res.json({
+      population: stratAgent.getPopulation(),
+      hallOfFame: stratAgent.getHallOfFame(),
+      stats: {
+        cycleCount: stratAgent._cycleCount,
+        totalGenerated: stratAgent._totalGenerated,
+        totalEvolved: stratAgent._totalEvolved,
+        totalCulled: stratAgent._totalCulled,
+        bestEverWinRate: stratAgent._bestEverWinRate,
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // POST /api/admin/agents/command — Send command to coordinator
 router.post('/agents/command', async (req, res) => {
   try {
