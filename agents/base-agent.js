@@ -8,6 +8,7 @@
 const { log: bLog } = require('../bot-logger');
 const { think, isAvailable, getSystemPrompt } = require('./ai-brain');
 const hermes = require('../hermes-bridge');
+const { QLearning, encodeMarketState, TRADING_ACTIONS } = require('../ruflo-bridge');
 
 const AGENT_STATES = {
   IDLE:     'idle',
@@ -108,14 +109,28 @@ class BaseAgent {
       monthlyTarget: 0.60,   // 60% monthly target
       lastTradeAt: null,
     };
+
+    // ── Ruflo Q-Learning — reinforcement learning for decisions ──
+    // Each agent learns which actions are optimal in different market states.
+    // Actions: trade, skip, reduce_size, increase_size
+    this._qlearner = new QLearning({
+      learningRate: 0.1,
+      gamma: 0.95,
+      explorationInitial: 0.8,
+      explorationFinal: 0.05,
+      explorationDecay: 3000,
+      maxStates: 5000,
+    });
+    this._lastMarketState = null;
+    this._lastAction = null;
   }
 
   // ── Lifecycle ─────────────────────────────────────────────
 
   async init() {
     await this._loadSurvival();
-    // Always persist survival defaults on first boot so data survives restarts
     await this._saveSurvival();
+    await this.loadQLState();
     this.log('Initialized');
   }
 
@@ -150,7 +165,10 @@ class BaseAgent {
       }
       this.addActivity('success', `Cycle #${this.runCount} complete`);
       // Save survival every 10 runs to persist state
-      if (this.runCount % 10 === 0) this._saveSurvival().catch(() => {});
+      if (this.runCount % 10 === 0) {
+        this._saveSurvival().catch(() => {});
+        this.saveQLState().catch(() => {});
+      }
       return result;
     } catch (err) {
       this.state = AGENT_STATES.ERROR;
@@ -731,6 +749,8 @@ What specific changes would make you perform better? Be concrete — suggest par
     this.addActivity('win', `HP ${this._survival.health}/100 | +$${Math.abs(pnlUsdt).toFixed(2)} | Capital: $${this._survival.capital.toFixed(2)}`);
     this._saveSurvival();
     this._saveTradeHistory({ ...tradeDetails, pnlUsdt: Math.abs(pnlUsdt), isWin: true });
+    // Feed positive reward to Q-Learning
+    this.feedQLReward(1.0, tradeDetails.indicators || {});
   }
 
   /** Record a trade loss — -10 HP, capital decreases. May kill agent. */
@@ -754,6 +774,8 @@ What specific changes would make you perform better? Be concrete — suggest par
     }
     this._saveSurvival();
     this._saveTradeHistory({ ...tradeDetails, pnlUsdt: -Math.abs(pnlUsdt), isWin: false });
+    // Feed negative reward to Q-Learning
+    this.feedQLReward(-1.0, tradeDetails.indicators || {});
   }
 
   /** Save a trade to the agent's trade history in DB */
@@ -899,6 +921,82 @@ What specific changes would make you perform better? Be concrete — suggest par
       }
     } catch (err) {
       this.logError(`Load survival failed: ${err.message}`);
+    }
+  }
+
+  // ── Ruflo Q-Learning Methods ────────────────────────────────
+
+  /**
+   * Get Q-Learning's recommended action for a market state.
+   * @param {object} indicators - raw market indicators (RSI, MACD, etc.)
+   * @param {boolean} explore - whether to explore or exploit
+   * @returns {{ action: string, actionIndex: number, confidence: number, qValues: Float32Array }}
+   */
+  getQLAdvice(indicators, explore = true) {
+    const state = encodeMarketState(indicators);
+    const actionIndex = this._qlearner.getAction(state, explore);
+    const confidence = this._qlearner.getConfidence(state);
+    this._lastMarketState = state;
+    this._lastAction = actionIndex;
+    return {
+      action: TRADING_ACTIONS[actionIndex],
+      actionIndex,
+      confidence,
+      qValues: this._qlearner.getQValues(state),
+    };
+  }
+
+  /**
+   * Feed a trade outcome into Q-Learning as a reward signal.
+   * Called automatically by recordSurvivalWin/Loss.
+   * @param {number} reward - positive for wins, negative for losses
+   * @param {object} indicators - current market state after outcome
+   */
+  feedQLReward(reward, indicators = {}) {
+    if (!this._lastMarketState) return;
+    const stateAfter = encodeMarketState(indicators);
+    const trajectory = {
+      steps: [{
+        stateBefore: this._lastMarketState,
+        action: this._lastAction != null ? this._lastAction : 0,
+        reward,
+        stateAfter,
+      }],
+    };
+    this._qlearner.update(trajectory);
+    this._lastMarketState = stateAfter;
+  }
+
+  /** Get Q-Learning statistics for dashboard display. */
+  getQLStats() {
+    return this._qlearner.getStats();
+  }
+
+  /**
+   * Save Q-Learning state to DB for persistence across restarts.
+   */
+  async saveQLState() {
+    try {
+      const qlData = JSON.stringify(this._qlearner.toJSON());
+      await this.remember('ql_state', qlData, 'ruflo');
+    } catch (err) {
+      this.logError(`Save QL state failed: ${err.message}`);
+    }
+  }
+
+  /**
+   * Load Q-Learning state from DB.
+   */
+  async loadQLState() {
+    try {
+      const raw = await this.recall('ql_state');
+      if (raw) {
+        const json = typeof raw === 'string' ? JSON.parse(raw) : raw;
+        this._qlearner = QLearning.fromJSON(json);
+        this.log(`QL loaded: ${this._qlearner.getStats().qTableSize} states, ε=${this._qlearner.getStats().epsilon}`);
+      }
+    } catch (err) {
+      this.logError(`Load QL state failed: ${err.message}`);
     }
   }
 
@@ -1101,6 +1199,7 @@ What specific changes would make you perform better? Be concrete — suggest par
       competition: this.getCompetitionStats(),
       survival: this.getSurvival(),
       profile: this._profile,
+      qlearning: this.getQLStats(),
     };
   }
 

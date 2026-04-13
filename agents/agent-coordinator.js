@@ -22,6 +22,7 @@ const { StrategyAgent } = require('./strategy-agent');
 const { PoliceAgent } = require('./police-agent');
 const { CoderAgent } = require('./coder-agent');
 const { OptimizerAgent } = require('./optimizer-agent');
+const { TradeConsensus, PatternLearner, encodeMarketState, extractIndicatorsFromKlines } = require('../ruflo-bridge');
 
 const SELF_IMPROVE_LESSONS = {
   excessive_losses: 'I will reduce position sizes and wait for stronger confirmations.',
@@ -98,6 +99,18 @@ class AgentCoordinator extends BaseAgent {
     this.TOKEN_SCAN_INTERVAL_MS = 3_000;    // each token scanned every 3s
     this.FULL_CYCLE_INTERVAL_MS = 60_000;   // full pipeline every 60s
     this.TOKEN_BATCH_SIZE = 5;              // scan 5 tokens per tick to stagger load
+
+    // ── Ruflo Intelligence Layer ──────────────────────────────
+    // Consensus: multi-agent voting on trade signals
+    this.consensus = new TradeConsensus({ threshold: 0.6, timeoutMs: 5000 });
+    // Pattern memory: remembers market setups + outcomes
+    this.patternLearner = new PatternLearner({ maxPatterns: 500, matchThreshold: 0.65 });
+    // Register core agents as consensus voters
+    this.consensus.registerVoter('chart', { weight: 1.5 });
+    this.consensus.registerVoter('risk', { weight: 1.8 });
+    this.consensus.registerVoter('sentiment', { weight: 1.0 });
+    this.consensus.registerVoter('kronos', { weight: 1.3 });
+    this.consensus.registerVoter('strategy', { weight: 1.2 });
   }
 
   async init() {
@@ -342,6 +355,23 @@ class AgentCoordinator extends BaseAgent {
           else agent._survival.totalLosses++;
           agent._saveSurvival();
         }
+
+        // ── Ruflo: Store pattern + record consensus outcome ──
+        try {
+          const indicators = structure || {};
+          const stateVec = encodeMarketState(indicators);
+          const isWin = status === 'WIN' || status === 'TP';
+          const quality = isWin ? Math.min(1, 0.6 + Math.abs(pnlUsdt) / 100) : Math.max(0, 0.4 - Math.abs(pnlUsdt) / 100);
+
+          this.patternLearner.storePattern({
+            embedding: stateVec,
+            symbol,
+            direction,
+            strategy: structure?.strategy || 'AI',
+            quality,
+            context: { pnlUsdt, status },
+          });
+        } catch (_) {}
       });
       this.log('Trade outcome hook registered for agent survival system');
     } catch (err) {
@@ -810,6 +840,55 @@ class AgentCoordinator extends BaseAgent {
         }
       } else if (signals.length === 0) {
         this.riskAgent.addActivity('info', 'No signals to evaluate — standing by');
+      }
+
+      // ── Step 4.5: Ruflo Consensus + Pattern Memory ──
+      if (approvedSignals.length > 0) {
+        for (const signal of approvedSignals) {
+          try {
+            // Build market state vector from signal indicators
+            const indicators = signal.indicators || signal.structure || {};
+            const stateVec = encodeMarketState(indicators);
+
+            // Check pattern memory: have we seen this setup before?
+            const similar = this.patternLearner.findMatches(stateVec, 3);
+            if (similar.length > 0) {
+              const avgWinRate = similar.reduce((s, m) => s + m.pattern.successRate, 0) / similar.length;
+              signal._patternWinRate = Math.round(avgWinRate * 100);
+              signal._patternMatches = similar.length;
+              signal._patternConfidence = Math.round(similar[0].confidence * 100);
+              // Boost/reduce score based on historical pattern performance
+              if (avgWinRate > 0.6) signal.score = (signal.score || 5) + 2;
+              else if (avgWinRate < 0.35) signal.score = Math.max(0, (signal.score || 5) - 3);
+            }
+
+            // Run consensus vote: each core agent votes
+            const votes = [];
+            votes.push({ voterId: 'chart', vote: { approve: true, direction: signal.direction, confidence: (signal.score || 5) / 15, reasoning: 'Chart setup detected' } });
+            votes.push({ voterId: 'risk', vote: { approve: riskReport ? !riskReport.maxDrawdownHit : true, direction: signal.direction, confidence: 0.7, reasoning: 'Risk within limits' } });
+            votes.push({ voterId: 'sentiment', vote: { approve: mood !== 'extreme_fear', direction: signal.direction, confidence: mood === 'greed' ? 0.8 : 0.5, reasoning: `Mood: ${mood}` } });
+            votes.push({ voterId: 'kronos', vote: { approve: true, direction: signal.direction, confidence: kronosPredictions ? 0.7 : 0.4, reasoning: 'Kronos prediction' } });
+            votes.push({ voterId: 'strategy', vote: { approve: true, direction: signal.direction, confidence: signal._patternWinRate ? signal._patternWinRate / 100 : 0.5, reasoning: 'Strategy signal' } });
+
+            const result = this.consensus.runRound(signal.symbol, signal, votes);
+            signal._consensus = result;
+
+            // Reject signal if consensus fails
+            if (!result.approved) {
+              signal._consensusRejected = true;
+              this.addActivity('warning', `Consensus rejected ${signal.symbol} ${signal.direction} (${Math.round(result.approvalRate * 100)}% approval)`);
+            }
+          } catch (err) {
+            this.logError(`Consensus/pattern error: ${err.message}`);
+          }
+        }
+
+        // Filter out consensus-rejected signals
+        const preCount = approvedSignals.length;
+        approvedSignals = approvedSignals.filter(s => !s._consensusRejected);
+        if (preCount > approvedSignals.length) {
+          this.addActivity('info', `Consensus filtered: ${preCount} → ${approvedSignals.length} signals`);
+        }
       }
 
       // ── Step 5: TraderAgent executes approved signals ──
@@ -1815,11 +1894,19 @@ class AgentCoordinator extends BaseAgent {
     return summary;
   }
 
+  getRufloStats() {
+    return {
+      consensus: this.consensus.getStats(),
+      patterns: this.patternLearner.getStats(),
+    };
+  }
+
   getHealth() {
     return {
       ...super.getHealth(),
       cycleRunning: this.cycleRunning,
       agents: this.getAgentHealthSummary(),
+      ruflo: this.getRufloStats(),
     };
   }
 

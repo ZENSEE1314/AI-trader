@@ -7,6 +7,10 @@
 // ============================================================
 
 const aiBrain = require('./ai-brain');
+const { TradeConsensus } = require('../ruflo-bridge');
+
+// Singleton consensus engine for swarm decisions
+const swarmConsensus = new TradeConsensus({ threshold: 0.5, timeoutMs: 10000 });
 
 // ── Swarm Persona Configurations ──────────────────────────────
 
@@ -110,23 +114,34 @@ Return ONLY a JSON object: {"direction": "...", "target": 0.0, "confidence": 0-1
     return { symbol, direction: 'NEUTRAL', confidence: 0, consensus: 'Simulation failed' };
   }
 
-  // 2. Consensus Phase: Aggregate results
-  const votes = { LONG: 0, SHORT: 0, NEUTRAL: 0 };
-  let weightedSum = 0;
-  let totalWeight = 0;
-  let targets = [];
-
-  results.forEach(res => {
-    votes[res.direction] += res.weight;
-    totalWeight += res.weight;
-    if (res.direction !== 'NEUTRAL') {
-      targets.push(res.target);
+  // 2. Consensus Phase: Ruflo Gossip-backed voting (replaces simple weighted average)
+  // Register personas as voters if not already registered
+  for (const res of results) {
+    if (!swarmConsensus.voters.has(res.persona)) {
+      swarmConsensus.registerVoter(res.persona, { weight: res.weight });
     }
-  });
+  }
 
-  const winningDirection = Object.keys(votes).reduce((a, b) => votes[a] > votes[b] ? a : b);
-  const confidence = Math.round((votes[winningDirection] / totalWeight) * 100);
+  // Build votes for consensus engine
+  const consensusVotes = results.map(res => ({
+    voterId: res.persona,
+    vote: {
+      approve: res.direction !== 'NEUTRAL',
+      direction: res.direction,
+      confidence: (res.confidence || 50) / 100,
+      reasoning: res.reasoning || '',
+    },
+  }));
 
+  const consensusResult = swarmConsensus.runRound(symbol, { seeds }, consensusVotes);
+
+  const winningDirection = consensusResult.direction;
+  const confidence = Math.round(consensusResult.directionConfidence * 100);
+
+  // Legacy vote tracking for compatibility
+  const votes = consensusResult.directionSplit;
+
+  let targets = results.filter(r => r.direction !== 'NEUTRAL').map(r => r.target);
   const avgTarget = targets.length > 0
     ? targets.reduce((a, b) => a + b, 0) / targets.length
     : seeds.current;
@@ -158,7 +173,12 @@ Return ONLY a JSON object: {"direction": "...", "target": 0.0, "confidence": 0-1
   return finalResult;
 }
 
+function getSwarmConsensusStats() {
+  return swarmConsensus.getStats();
+}
+
 module.exports = {
   runSwarm,
-  PERSONAS
+  PERSONAS,
+  getSwarmConsensusStats,
 };

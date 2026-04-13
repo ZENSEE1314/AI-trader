@@ -3492,6 +3492,33 @@ router.get('/agents/strategies', async (req, res) => {
   }
 });
 
+// GET /api/admin/agents/ruflo — Ruflo intelligence layer stats
+router.get('/agents/ruflo', async (req, res) => {
+  try {
+    const { getCoordinator } = require('../agents');
+    const coordinator = getCoordinator();
+    const ruflo = coordinator.getRufloStats();
+    const { getSwarmConsensusStats } = require('../agents/swarm-engine');
+
+    // Add per-agent Q-Learning stats
+    const agentQL = {};
+    for (const [name, agent] of coordinator._agents) {
+      try {
+        agentQL[name] = agent.getQLStats();
+      } catch (_) {}
+    }
+
+    res.json({
+      consensus: ruflo.consensus,
+      patterns: ruflo.patterns,
+      swarmConsensus: getSwarmConsensusStats(),
+      agentQLearning: agentQL,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // POST /api/admin/agents/command — Send command to coordinator
 router.post('/agents/command', async (req, res) => {
   try {

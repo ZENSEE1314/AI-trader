@@ -1481,6 +1481,45 @@
       if (errorEl) errorEl.textContent = agents.filter(a => a.state === 'error').length;
     }
 
+    // Ruflo Intelligence Panel — create container if missing
+    let rufloEl = document.getElementById('mc-ruflo-panel');
+    if (!rufloEl) {
+      const grid = document.getElementById('mc-agents-grid');
+      if (grid && grid.parentElement) {
+        rufloEl = document.createElement('div');
+        rufloEl.id = 'mc-ruflo-panel';
+        rufloEl.style.cssText = 'margin-bottom:12px;padding:8px 10px;background:rgba(10,15,25,0.5);border:1px solid rgba(100,149,237,0.15);border-radius:8px;';
+        grid.parentElement.insertBefore(rufloEl, grid);
+      }
+    }
+    if (rufloEl && health.ruflo) {
+      const rf = health.ruflo;
+      const pat = rf.patterns || {};
+      const con = rf.consensus || {};
+      rufloEl.innerHTML = `
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;font-size:0.75rem;">
+          <div style="background:rgba(100,149,237,0.1);padding:6px 8px;border-radius:6px;border:1px solid rgba(100,149,237,0.2);">
+            <div style="color:#6495ED;font-weight:700;margin-bottom:4px;">🧠 Pattern Memory</div>
+            <div style="color:var(--color-text-muted);">Patterns: <b style="color:var(--color-text)">${pat.totalPatterns || 0}</b></div>
+            <div style="color:var(--color-text-muted);">Stable: <b style="color:var(--color-text)">${pat.stablePatterns || 0}</b></div>
+            <div style="color:var(--color-text-muted);">Avg WR: <b style="color:${(pat.avgSuccessRate||0)>0.5?'var(--color-success)':'var(--color-danger)'}">${Math.round((pat.avgSuccessRate || 0) * 100)}%</b></div>
+            <div style="color:var(--color-text-muted);">Match: <b style="color:var(--color-text)">${pat.avgMatchTimeMs || 0}ms</b></div>
+          </div>
+          <div style="background:rgba(0,255,136,0.05);padding:6px 8px;border-radius:6px;border:1px solid rgba(0,255,136,0.15);">
+            <div style="color:var(--color-accent);font-weight:700;margin-bottom:4px;">🗳️ Trade Consensus</div>
+            <div style="color:var(--color-text-muted);">Proposals: <b style="color:var(--color-text)">${con.totalProposals || 0}</b></div>
+            <div style="color:var(--color-text-muted);">Voters: <b style="color:var(--color-text)">${con.voterCount || 0}</b></div>
+            ${(con.voters||[]).slice(0,3).map(v => `<div style="color:var(--color-text-muted);font-size:0.65rem;">${v.id}: w=${v.weight} acc=${v.accuracy}%</div>`).join('')}
+          </div>
+          <div style="background:rgba(255,215,0,0.05);padding:6px 8px;border-radius:6px;border:1px solid rgba(255,215,0,0.15);">
+            <div style="color:#FFD700;font-weight:700;margin-bottom:4px;">⚡ RL Learning</div>
+            <div style="color:var(--color-text-muted);">Matched: <b style="color:var(--color-text)">${pat.matchCount || 0}</b></div>
+            <div style="color:var(--color-text-muted);">Extracted: <b style="color:var(--color-text)">${pat.extractionCount || 0}</b></div>
+            <div style="color:var(--color-text-muted);">Evolved: <b style="color:var(--color-text)">${pat.evolutionCount || 0}</b></div>
+          </div>
+        </div>`;
+    }
+
     // Agent cards — load profiles, store all agents for filtering
     mcAllAgents = health.agents || {};
     const grid = document.getElementById('mc-agents-grid');
@@ -1639,6 +1678,16 @@
             <span>AI: ${a.totalAiDiscoveries || 0} ideas</span>
           </div>
           ${a.bestEverStrategy && a.bestEverStrategy !== 'N/A' ? `<div style="font-size:0.65rem;color:var(--color-success);margin-top:2px;">🏆 ${escapeHtml(a.bestEverStrategy)}</div>` : ''}
+        </div>` : ''}
+        ${a.qlearning && a.qlearning.qTableSize > 0 ? `
+        <div style="margin-bottom:6px;padding:4px 6px;background:rgba(100,149,237,0.08);border:1px solid rgba(100,149,237,0.2);border-radius:6px;">
+          <div style="font-size:0.7rem;color:#6495ED;font-weight:600;margin-bottom:2px;">🧠 Q-Learning (Ruflo)</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:2px;font-size:0.65rem;color:var(--color-text-muted);">
+            <span>States: ${a.qlearning.qTableSize}</span>
+            <span>ε: ${a.qlearning.epsilon}</span>
+            <span>Updates: ${a.qlearning.updateCount}</span>
+            <span>Reward: ${a.qlearning.totalReward}</span>
+          </div>
         </div>` : ''}
         ${taskHtml}${errHtml}
         <div class="mc-agent-meta">
