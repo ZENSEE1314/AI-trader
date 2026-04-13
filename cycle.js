@@ -341,19 +341,28 @@ async function updateStopLoss(client, symbol, newSlPrice, closeSide, platform, p
 // At +1% profit → SL locks at +0.5%.
 // Every +1% more: +2%→SL+1%, +3%→SL+1.5%, +4%→SL+2%, etc.
 // SL only moves up, never down.
-function calculateTrailingStep(entryPrice, currentPrice, isLong, lastStep, leverage = 20) {
+function calculateTrailingStep(entryPrice, currentPrice, isLong, lastStep, leverage = 20, userTrailStepPct = 0) {
   const pricePct = isLong
     ? (currentPrice - entryPrice) / entryPrice
     : (entryPrice - currentPrice) / entryPrice;
 
-  const { FIRST_TRIGGER, FIRST_SL, STEP_TRIGGER, STEP_SL } = getTrailingSLConfig(leverage);
+  // Use user's trailing_sl_step if provided, otherwise use capital-based config
+  let FIRST_TRIGGER, FIRST_SL, STEP_TRIGGER, STEP_SL;
+  if (userTrailStepPct > 0) {
+    // User setting is in price % (e.g. 1.2 = 1.2%)
+    const stepPct = userTrailStepPct / 100;
+    FIRST_TRIGGER = stepPct;          // Trail triggers at 1 step of profit
+    FIRST_SL = stepPct * 0.5;        // Lock SL at half a step
+    STEP_TRIGGER = stepPct;           // Each additional step
+    STEP_SL = stepPct * 0.5;         // Each step locks half a step more
+  } else {
+    ({ FIRST_TRIGGER, FIRST_SL, STEP_TRIGGER, STEP_SL } = getTrailingSLConfig(leverage));
+  }
+
   let bestSl = null;
 
   if (pricePct >= FIRST_TRIGGER) {
-    // First tier: lock SL at FIRST_SL profit
     bestSl = FIRST_SL;
-
-    // Additional steps
     const stepsAbove = Math.floor((pricePct - FIRST_TRIGGER + 1e-10) / STEP_TRIGGER);
     if (stepsAbove > 0) {
       bestSl = FIRST_SL + stepsAbove * STEP_SL;
@@ -361,7 +370,7 @@ function calculateTrailingStep(entryPrice, currentPrice, isLong, lastStep, lever
   }
 
   if (bestSl === null) return null;
-  if (bestSl <= lastStep) return null; // SL only moves up, never down
+  if (bestSl <= lastStep) return null;
 
   const newSlPrice = isLong
     ? entryPrice * (1 + bestSl)
@@ -1172,20 +1181,44 @@ async function executeForAllUsers(pick) {
 
         const price = pick.lastPrice || pick.price || pick.entry;
         const isLong = pick.direction !== 'SHORT';
-        const aiParams = await aiLearner.getOptimalParams();
 
-        // Per-user settings: use user_token_leverage first, then key default
+        // ── Read ALL user settings from DB ──
         const userLev = await getTokenLeverage(symbol, key.id, price);
         if (userLev === null) {
           userLog.trade(`User ${key.email}: ${symbol} has no token configuration — skipped`);
           return;
         }
+
+        // Stop After Losses: check consecutive losses for this API key
+        const maxConsecLoss = parseInt(key.max_consec_loss) || 10;
+        if (maxConsecLoss > 0) {
+          const recentTrades = await db.query(
+            `SELECT status FROM trades WHERE api_key_id = $1 AND status IN ('WIN','LOSS','TP','SL') ORDER BY closed_at DESC LIMIT $2`,
+            [key.id, maxConsecLoss]
+          );
+          const consecLosses = recentTrades.length > 0
+            ? recentTrades.findIndex(t => t.status === 'WIN' || t.status === 'TP')
+            : 0;
+          const actualConsec = consecLosses === -1 ? recentTrades.length : consecLosses;
+          if (actualConsec >= maxConsecLoss) {
+            userLog.trade(`User ${key.email}: ${actualConsec} consecutive losses (max ${maxConsecLoss}) — paused`);
+            return;
+          }
+        }
+
+        // User's risk settings
         const walletSizePct = (await getCapitalPercentage(key.id)) / 100;
-        // SL: 10% capital risk, scaled by user's leverage
-        const userTrailConfig = getTrailingSLConfig(userLev);
-        const slPricePct = userTrailConfig.INITIAL_SL_PCT;
+        const userSlPct = parseFloat(key.sl_pct) || 0.015;       // Initial SL % (price distance)
+        const userTpPct = parseFloat(key.tp_pct) || 0.025;       // Take Profit % (price distance)
+        const userTrailStep = parseFloat(key.trailing_sl_step) || 1.2;  // Trailing SL step %
+        const userMaxLoss = parseFloat(key.max_loss_usdt) || 0;  // Max loss per trade in USDT (0 = no limit)
+
+        // SL/TP from user settings
+        const slPricePct = userSlPct;
         const initialSlPrice = isLong ? price * (1 - slPricePct) : price * (1 + slPricePct);
-        const userTp = pick.tp1 || (isLong ? price * 1.01 : price * 0.99);
+        const userTp = isLong ? price * (1 + userTpPct) : price * (1 - userTpPct);
+
+        userLog.trade(`User ${key.email} settings: SL=${(userSlPct*100).toFixed(2)}% TP=${(userTpPct*100).toFixed(2)}% trail=${userTrailStep}% cap=${(walletSizePct*100).toFixed(0)}% maxLoss=$${userMaxLoss || 'none'}`);
 
         let account, wallet, openPosCount;
 
@@ -1220,8 +1253,16 @@ async function executeForAllUsers(pick) {
           const pricePrec = sinfo.pricePrecision ?? 2;
           const fmtP = (p) => parseFloat(p.toFixed(pricePrec));
 
-          // Position sizing: walletSizePct of wallet = margin
-          const tradeUsdt = wallet * walletSizePct;
+          // Position sizing: walletSizePct of wallet = margin, capped by max_loss_usdt
+          let tradeUsdt = wallet * walletSizePct;
+          // Cap by max loss: if user sets max loss per trade, limit margin so SL loss <= max_loss
+          if (userMaxLoss > 0) {
+            const maxMarginByLoss = userMaxLoss / slPricePct;
+            if (tradeUsdt > maxMarginByLoss) {
+              userLog.trade(`User ${key.email}: capping margin $${tradeUsdt.toFixed(2)} → $${maxMarginByLoss.toFixed(2)} (max loss $${userMaxLoss})`);
+              tradeUsdt = maxMarginByLoss;
+            }
+          }
           const notionalUsdt = tradeUsdt * userLev;
           let qty = notionalUsdt / price;
 
@@ -1311,7 +1352,15 @@ async function executeForAllUsers(pick) {
 
           userLog.trade(`User ${key.email} Bitunix: wallet=$${wallet.toFixed(2)} pos=${openPosCount}/${maxPos} lev=x${userLev}`);
 
-          const tradeUsdtBx = wallet * walletSizePct;
+          // Position sizing: walletSizePct of wallet, capped by max_loss_usdt
+          let tradeUsdtBx = wallet * walletSizePct;
+          if (userMaxLoss > 0) {
+            const maxMarginByLoss = userMaxLoss / slPricePct;
+            if (tradeUsdtBx > maxMarginByLoss) {
+              userLog.trade(`User ${key.email}: capping margin $${tradeUsdtBx.toFixed(2)} → $${maxMarginByLoss.toFixed(2)} (max loss $${userMaxLoss})`);
+              tradeUsdtBx = maxMarginByLoss;
+            }
+          }
           const notionalUsdtBx = tradeUsdtBx * userLev;
           let qty = notionalUsdtBx / price;
           if (qty * price < 5.5) qty = 5.5 / price;
@@ -1518,7 +1567,8 @@ async function syncTradeStatus() {
                 : entryPrice;
               const lastStep = parseFloat(trade.trailing_sl_last_step) || 0;
               const tradeLev = parseFloat(trade.leverage) || 20;
-              const trailResult = calculateTrailingStep(entryPrice, curPrice, isLong, lastStep, tradeLev);
+              const userTrailPct = parseFloat(trade.key_trailing_sl_step) || 0;
+              const trailResult = calculateTrailingStep(entryPrice, curPrice, isLong, lastStep, tradeLev, userTrailPct);
               if (trailResult) {
                 const closeSide = isLong ? 'SELL' : 'BUY';
                 let slUpdated = false;
@@ -1626,7 +1676,8 @@ async function syncTradeStatus() {
 
               bLog.trade(`Bitunix trailing: ${trade.symbol} entry=$${entryPrice} cur=$${curPrice} pricePct=${(profitPct*100).toFixed(3)}% capitalPct=${(capitalPct*100).toFixed(2)}% lev=${tradeLev}x lastStep=${(lastStep*100).toFixed(1)}%`);
 
-              const trailResult = calculateTrailingStep(entryPrice, curPrice, isLong, lastStep, tradeLev);
+              const userTrailPctBx = parseFloat(trade.key_trailing_sl_step) || 0;
+              const trailResult = calculateTrailingStep(entryPrice, curPrice, isLong, lastStep, tradeLev, userTrailPctBx);
               if (!trailResult) continue;
 
               // ── Step 3: Update SL on exchange (retry up to 3 times) ──

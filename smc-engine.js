@@ -290,20 +290,23 @@ async function analyzeLHHL(ticker, params, dailyBiasCache, kronosPredictions = n
   if (struct3m.hasHL) direction = 'LONG';
   else if (struct3m.hasLH) direction = 'SHORT';
 
+  bLog.scan(`${symbol}: 3m structure=${struct3m.label} trend=${struct3m.trend} hasHL=${struct3m.hasHL} hasLH=${struct3m.hasLH}`);
+
   if (!direction) {
-    bLog.scan(`${symbol}: 3m no HL/LH — skipped`);
     return null;
   }
 
   // ── Gate 2: 1m Structure — confirms direction + next candle entry ──
   const struct1m = getStructure(klines1m, SWING_LENGTHS['1m']);
 
+  bLog.scan(`${symbol}: 1m structure=${struct1m.label} trend=${struct1m.trend} hasHL=${struct1m.hasHL} hasLH=${struct1m.hasLH} → ${direction}`);
+
   if (direction === 'LONG' && !struct1m.hasHL) {
-    bLog.scan(`${symbol}: LONG — 3m has HL but 1m has no HL confirmation`);
+    bLog.scan(`${symbol}: LONG rejected — 1m no HL`);
     return null;
   }
   if (direction === 'SHORT' && !struct1m.hasLH) {
-    bLog.scan(`${symbol}: SHORT — 3m has LH but 1m has no LH confirmation`);
+    bLog.scan(`${symbol}: SHORT rejected — 1m no LH`);
     return null;
   }
 
