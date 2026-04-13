@@ -2556,6 +2556,23 @@
       try {
         var candles = await fetchKlines(STATE.symbol, binanceInterval);
         p.candles = candles;
+
+        // Auto-detect price precision for small-cap tokens (e.g. PEPE at $0.003)
+        if (candles.length > 0) {
+          var samplePrice = candles[candles.length - 1].close;
+          var minMove = samplePrice >= 1000 ? 0.01
+            : samplePrice >= 1 ? 0.0001
+            : samplePrice >= 0.01 ? 0.000001
+            : samplePrice >= 0.0001 ? 0.00000001
+            : 0.0000000001;
+          var precision = samplePrice >= 1000 ? 2
+            : samplePrice >= 1 ? 4
+            : samplePrice >= 0.01 ? 6
+            : samplePrice >= 0.0001 ? 8
+            : 10;
+          candleSeries.applyOptions({ priceFormat: { type: 'price', precision: precision, minMove: minMove } });
+        }
+
         candleSeries.setData(candles);
         // Default zoom: show last 100 candles
         var totalBars = candles.length;
