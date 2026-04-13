@@ -332,9 +332,12 @@ class AgentCoordinator extends BaseAgent {
     try {
       const { onTradeOutcome } = require('../cycle');
       onTradeOutcome(({ symbol, direction, status, pnlUsdt, structure }) => {
+        // Determine win/loss by actual PnL — trailing SL that still profits = WIN
+        const isWin = pnlUsdt > 0 || status === 'WIN' || status === 'TP';
+
         // Update TraderAgent survival
         if (this.traderAgent) {
-          if (status === 'WIN' || status === 'TP') {
+          if (isWin) {
             this.traderAgent.recordSurvivalWin(Math.abs(pnlUsdt));
           } else {
             this.traderAgent.recordSurvivalLoss(Math.abs(pnlUsdt));
@@ -344,7 +347,7 @@ class AgentCoordinator extends BaseAgent {
         const tokenKey = symbol.replace('USDT', '');
         const tokenAgent = this.tokenAgents?.get(symbol);
         if (tokenAgent) {
-          if (status === 'WIN' || status === 'TP') {
+          if (isWin) {
             tokenAgent.recordSurvivalWin(Math.abs(pnlUsdt));
           } else {
             tokenAgent.recordSurvivalLoss(Math.abs(pnlUsdt));
@@ -355,7 +358,7 @@ class AgentCoordinator extends BaseAgent {
         for (const agent of coreAgents) {
           if (!agent) continue;
           // Smaller impact on support agents: ±5 HP instead of ±10
-          if (status === 'WIN' || status === 'TP') {
+          if (isWin) {
             agent._survival.health = Math.min(100, agent._survival.health + 5);
             agent._survival.capital += Math.abs(pnlUsdt) * 0.2;
             agent._survival.monthlyPnl += Math.abs(pnlUsdt) * 0.2;
@@ -365,7 +368,7 @@ class AgentCoordinator extends BaseAgent {
             agent._survival.monthlyPnl -= Math.abs(pnlUsdt) * 0.2;
           }
           agent._survival.totalTrades++;
-          if (status === 'WIN' || status === 'TP') agent._survival.totalWins++;
+          if (isWin) agent._survival.totalWins++;
           else agent._survival.totalLosses++;
           agent._saveSurvival();
         }

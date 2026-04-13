@@ -2447,6 +2447,9 @@
     // Binance Kline Data Fetching
     // ============================================================
 
+    // Timezone offset in seconds — shift UTC timestamps to user's local time
+    var TZ_OFFSET_SEC = -(new Date().getTimezoneOffset() * 60);
+
     async function fetchKlines(symbol, interval, limit) {
       limit = limit || 200;
       var key = symbol + '_' + interval;
@@ -2457,6 +2460,11 @@
       var resp = await fetch(url);
       if (!resp.ok) throw new Error('Kline API ' + resp.status);
       var candles = await resp.json();
+
+      // Shift timestamps from UTC to user's local timezone
+      for (var i = 0; i < candles.length; i++) {
+        candles[i].time += TZ_OFFSET_SEC;
+      }
 
       candleCache.set(key, { candles: candles, timestamp: Date.now() });
       return candles;
@@ -3447,9 +3455,9 @@
           var coinEl = document.querySelector('.coin-item[data-symbol="' + STATE.symbol + '"] .coin-price');
           if (coinEl) coinEl.textContent = '$' + formatPrice(closePrice);
 
-          // Update live candle on matching chart panels
+          // Update live candle on matching chart panels (shifted to local time)
           var candle = {
-            time: Math.floor(parseInt(k.t) / 1000),
+            time: Math.floor(parseInt(k.t) / 1000) + TZ_OFFSET_SEC,
             open: parseFloat(k.o),
             high: parseFloat(k.h),
             low: parseFloat(k.l),
