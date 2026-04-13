@@ -17,6 +17,7 @@ const { getBinanceRequestOptions, getFetchOptions } = require('./proxy-agent');
 // ── Trade outcome callback — agents hook in to track survival ──
 let _onTradeOutcome = null;
 function onTradeOutcome(fn) { _onTradeOutcome = fn; }
+function fireTradeOutcome(data) { if (_onTradeOutcome) { try { _onTradeOutcome(data); } catch (_) {} } }
 
 const API_KEY        = process.env.BINANCE_API_KEY    || '';
 const API_SECRET     = process.env.BINANCE_API_SECRET || '';
@@ -642,6 +643,16 @@ async function checkTrailingStop(client) {
 
           recordDailyTrade(pnlPct > 0);
           log(`AI recorded: ${sym} PnL=${pnlPct.toFixed(2)}% duration=${durationMin}min setup=${state.setup}`);
+
+          // Notify agents of trade outcome (for survival HP + capital tracking)
+          if (_onTradeOutcome) {
+            const tradeQty = Math.abs(parseFloat(state.qty || 0));
+            const pnlUsdt = parseFloat(((pnlPct / 100) * exitPrice * tradeQty).toFixed(4)) || 0;
+            try {
+              _onTradeOutcome({ symbol: sym, direction: state.isLong ? 'LONG' : 'SHORT', status: winLoss, pnlUsdt, structure: state.marketStructure });
+              bLog.trade(`Survival updated: ${sym} ${winLoss} pnl=$${pnlUsdt.toFixed(4)}`);
+            } catch (_) {}
+          }
 
           // NOTE: User trades are updated by syncTradeStatus() with per-user PnL.
           // Owner account has no rows in the trades table.
@@ -2176,4 +2187,5 @@ module.exports = {
   getTrailingSLConfig,
   tradeState,
   onTradeOutcome,
+  fireTradeOutcome,
 };

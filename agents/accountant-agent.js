@@ -333,6 +333,12 @@ class AccountantAgent extends BaseAgent {
               [symbol, direction, entryPrice, exitPrice, qty, netPnl, totalFee, grossPnl, status, key.id, 'bitunix', closedAt]
             );
             totalSynced++;
+
+            // Notify survival system for new trades discovered by Accountant
+            try {
+              const { fireTradeOutcome } = require('../cycle');
+              fireTradeOutcome({ symbol, direction, status, pnlUsdt: netPnl, structure: {} });
+            } catch (_) {}
           } else {
             // Always update with latest Bitunix data for accuracy
             const trade = existing[0];
