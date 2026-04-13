@@ -1606,21 +1606,20 @@
         </div>
         ${desc ? `<div style="font-size:0.75rem;color:var(--color-text-muted);margin-bottom:6px;">${escapeHtml(desc)}</div>` : ''}
         ${isDead ? `<div style="background:#ff000030;border:1px solid #ff0000;border-radius:6px;padding:6px;margin-bottom:6px;text-align:center;"><span style="font-size:1.2rem;">☠️</span> <b style="color:#ff4444;">KILLED</b><br><span style="font-size:0.7rem;color:#ff8888;">${escapeHtml(sv.killReason || 'Unknown')}</span></div>` : ''}
-        ${!isDead && sv.health !== undefined ? `
         <div style="margin-bottom:6px;">
           <div style="display:flex;justify-content:space-between;font-size:0.7rem;margin-bottom:2px;">
-            <span>❤️ HP: ${sv.health}/100</span>
-            <span style="color:${sv.monthlyPct >= 0 ? 'var(--color-success)' : 'var(--color-danger)'}">Month: ${sv.monthlyPct >= 0 ? '+' : ''}${sv.monthlyPct}%</span>
+            <span>❤️ HP: ${isDead ? 0 : (sv.health != null ? sv.health : 100)}/100</span>
+            <span style="color:${(sv.monthlyPct || 0) >= 0 ? 'var(--color-success)' : 'var(--color-danger)'}">Month: ${(sv.monthlyPct || 0) >= 0 ? '+' : ''}${sv.monthlyPct || 0}%</span>
           </div>
           <div style="height:8px;background:#333;border-radius:4px;overflow:hidden;">
-            <div style="height:100%;width:${sv.health}%;background:${sv.health > 50 ? '#00ff88' : sv.health > 20 ? '#ffaa00' : '#ff3333'};border-radius:4px;transition:width 0.5s;"></div>
+            <div style="height:100%;width:${isDead ? 0 : (sv.health != null ? sv.health : 100)}%;background:${isDead ? '#ff3333' : (sv.health || 100) > 50 ? '#00ff88' : (sv.health || 100) > 20 ? '#ffaa00' : '#ff3333'};border-radius:4px;transition:width 0.5s;"></div>
           </div>
           <div style="display:flex;justify-content:space-between;font-size:0.65rem;color:var(--color-text-muted);margin-top:2px;">
-            <span>💰 $${sv.capital?.toFixed(0) || '1000'}</span>
+            <span>💰 $${isDead ? '0' : ((sv.capital != null ? sv.capital : 1000).toFixed ? (sv.capital != null ? sv.capital : 1000).toFixed(0) : '1000')}</span>
             <span>W/L: ${sv.totalWins || 0}/${sv.totalLosses || 0} (${sv.winRate || 0}%)</span>
             <span>Target: ${sv.monthlyTarget || 60}%</span>
           </div>
-        </div>` : ''}
+        </div>
         ${a.populationSize !== undefined ? `
         <div style="margin-bottom:6px;padding:4px 6px;background:rgba(0,255,136,0.05);border:1px solid rgba(0,255,136,0.15);border-radius:6px;">
           <div style="font-size:0.7rem;color:var(--color-accent);font-weight:600;margin-bottom:2px;">🧬 Strategy Discovery</div>
