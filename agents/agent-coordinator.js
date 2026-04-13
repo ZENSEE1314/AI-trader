@@ -1173,8 +1173,11 @@ class AgentCoordinator extends BaseAgent {
       lines.push('\n**Possible reasons:**');
       if (apiKeys.length === 0) lines.push('- No API keys enabled — bot cannot execute trades');
       if (!scanActivities.length) lines.push('- Pipeline not running — no scan activity detected');
-      lines.push('- RSI guard — won\'t LONG when overbought (>80), won\'t SHORT when oversold (<20)');
-      lines.push('- Anti-chase — won\'t enter if price moved >0.5% in last 15 minutes');
+      lines.push('- Max positions reached — each API key has a max open positions limit');
+      lines.push('- 4-hour cooldown — won\'t re-enter same token within 4h of last close');
+      lines.push('- RiskAgent rejected — correlation or position limit filter');
+      lines.push('- Only 1 trade per cycle — highest score signal wins');
+      lines.push('- Token not in top 10 by volume — won\'t be scanned');
       lines.push('\nType **"scan now"** to force a scan, or **"status"** to see agent states.');
     } catch (err) {
       lines.push(`Error fetching diagnostics: ${err.message}`);
