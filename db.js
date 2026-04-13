@@ -319,6 +319,9 @@ async function initAllTables() {
     // Trailing SL columns on trades
     `ALTER TABLE trades ADD COLUMN IF NOT EXISTS trailing_sl_price NUMERIC`,
     `ALTER TABLE trades ADD COLUMN IF NOT EXISTS trailing_sl_last_step NUMERIC DEFAULT 0`,
+    // Market structure and user trailing config
+    `ALTER TABLE trades ADD COLUMN IF NOT EXISTS market_structure VARCHAR(50)`,
+    `ALTER TABLE trades ADD COLUMN IF NOT EXISTS key_trailing_sl_step NUMERIC DEFAULT 0`,
     // Trade fee tracking
     `ALTER TABLE trades ADD COLUMN IF NOT EXISTS trading_fee NUMERIC DEFAULT 0`,
     `ALTER TABLE trades ADD COLUMN IF NOT EXISTS gross_pnl NUMERIC`,

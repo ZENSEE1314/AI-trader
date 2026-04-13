@@ -665,13 +665,13 @@ async function getDirectionPreference(symbol) {
 
 async function performLossAutopsy(tradeData) {
   try {
-    // DNA: symbol | setup | direction | session | trend1h
+    // DNA: symbol | setup | direction | session | structure (3m/1m labels)
     const dna = [
       tradeData.symbol,
       tradeData.setup,
       tradeData.direction,
       tradeData.session || getCurrentSession(),
-      tradeData.trend1h || 'unknown'
+      tradeData.marketStructure || tradeData.trend1h || 'unknown'
     ].join('|').toUpperCase();
 
     // 1. Update pattern stats
@@ -713,13 +713,13 @@ async function performLossAutopsy(tradeData) {
 
 async function performWinAutopsy(tradeData) {
   try {
-    // DNA: symbol | setup | direction | session | trend1h
+    // DNA: symbol | setup | direction | session | structure (3m/1m labels)
     const dna = [
       tradeData.symbol,
       tradeData.setup,
       tradeData.direction,
       tradeData.session || getCurrentSession(),
-      tradeData.trend1h || 'unknown'
+      tradeData.marketStructure || tradeData.trend1h || 'unknown'
     ].join('|').toUpperCase();
 
     // 1. Update pattern stats (increment win count)
@@ -758,9 +758,9 @@ async function performWinAutopsy(tradeData) {
   }
 }
 
-async function getPatternModifier(symbol, setup, direction, session, trend1h) {
+async function getPatternModifier(symbol, setup, direction, session, trend1hOrStructure) {
   try {
-    const dna = [symbol, setup, direction, session || getCurrentSession(), trend1h || 'unknown']
+    const dna = [symbol, setup, direction, session || getCurrentSession(), trend1hOrStructure || 'unknown']
       .join('|').toUpperCase();
     const [row] = await query(
       `SELECT current_penalty, positive_boost FROM pattern_penalties WHERE pattern_dna = $1`,
@@ -793,6 +793,33 @@ async function analyzeWorstPatterns() {
     }
   } catch (err) {
     console.error(`[AI Learner] Worst pattern analysis failed: ${err.message}`);
+  }
+}
+
+// ── Structure Win Rate Check ─────────────────────────────────
+// Check if a specific 3m/1m structure combination historically wins
+
+async function getStructureWinRate(structure3m, structure1m, direction) {
+  try {
+    const structLabel = `${structure3m}|${structure1m}`;
+    const rows = await query(
+      `SELECT COUNT(*) as total,
+        SUM(CASE WHEN is_win = 1 THEN 1 ELSE 0 END) as wins
+       FROM ai_trades
+       WHERE direction = $1
+         AND market_structure LIKE $2
+         AND pnl_pct IS NOT NULL`,
+      [direction, `%${structLabel}%`]
+    );
+    const row = rows[0];
+    if (!row || parseInt(row.total) < 5) return null; // Not enough data
+    return {
+      winRate: parseInt(row.wins) / parseInt(row.total),
+      total: parseInt(row.total),
+      wins: parseInt(row.wins),
+    };
+  } catch (_) {
+    return null;
   }
 }
 
@@ -881,6 +908,7 @@ module.exports = {
   performLossAutopsy,
   performWinAutopsy,
   getPatternModifier,
+  getStructureWinRate,
   analyzeWorstPatterns,
   DEFAULT_PARAMS,
 };

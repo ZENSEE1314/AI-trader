@@ -546,6 +546,7 @@ async function openTrade(client, pick, wallet) {
     tf15m: null,
     tf3m: pick.structure?.tf3m || null,
     tf1m: pick.structure?.tf1m || null,
+    marketStructure: pick.marketStructure || null,
     trailingSlPrice: initialSlPrice,
     trailingSlLastStep: 0,
     leverage,
@@ -604,6 +605,7 @@ async function checkTrailingStop(client) {
             tf15m: state.tf15m || null,
             tf3m: state.tf3m || null,
             tf1m: state.tf1m || null,
+            marketStructure: state.marketStructure || null,
             exitReason: 'position_closed',
           });
 
@@ -613,7 +615,15 @@ async function checkTrailingStop(client) {
               setup: state.setup || 'unknown',
               direction: state.isLong ? 'LONG' : 'SHORT',
               session: aiLearner.getCurrentSession(),
-              trend1h: state.trend1h || 'unknown'
+              marketStructure: state.marketStructure || 'unknown',
+            });
+          } else {
+            await aiLearner.performWinAutopsy({
+              symbol: sym,
+              setup: state.setup || 'unknown',
+              direction: state.isLong ? 'LONG' : 'SHORT',
+              session: aiLearner.getCurrentSession(),
+              marketStructure: state.marketStructure || 'unknown',
             });
           }
 
@@ -671,16 +681,23 @@ async function checkTrailingStop(client) {
               slDistancePct: Math.abs(entry - st.sl) / entry * 100,
               tpDistancePct: Math.abs(st.tp1 - entry) / entry * 100,
               tf15m: st.tf15m || null, tf3m: st.tf3m || null, tf1m: st.tf1m || null,
+              marketStructure: st.marketStructure || null,
               exitReason: 'structure_break_15m',
             });
 
             if (gain < 0) {
               await aiLearner.performLossAutopsy({
-                symbol: sym,
-                setup: st.setup || 'unknown',
+                symbol: sym, setup: st.setup || 'unknown',
                 direction: isLong ? 'LONG' : 'SHORT',
                 session: aiLearner.getCurrentSession(),
-                trend1h: st.trend1h || 'unknown'
+                marketStructure: st.marketStructure || 'unknown',
+              });
+            } else {
+              await aiLearner.performWinAutopsy({
+                symbol: sym, setup: st.setup || 'unknown',
+                direction: isLong ? 'LONG' : 'SHORT',
+                session: aiLearner.getCurrentSession(),
+                marketStructure: st.marketStructure || 'unknown',
               });
             }
             recordDailyTrade(gain > 0);
@@ -733,7 +750,14 @@ async function checkTrailingStop(client) {
                 slDistancePct: Math.abs(entry - st.sl) / entry * 100,
                 tpDistancePct: Math.abs(st.tp1 - entry) / entry * 100,
                 tf15m: st.tf15m || null, tf3m: st.tf3m || null, tf1m: st.tf1m || null,
+                marketStructure: st.marketStructure || null,
                 exitReason: 'spike_tp',
+              });
+              await aiLearner.performWinAutopsy({
+                symbol: sym, setup: st.setup || 'unknown',
+                direction: isLong ? 'LONG' : 'SHORT',
+                session: aiLearner.getCurrentSession(),
+                marketStructure: st.marketStructure || 'unknown',
               });
               recordDailyTrade(true);
               tradeState.delete(sym);
@@ -1208,17 +1232,37 @@ async function executeForAllUsers(pick) {
 
         // User's risk settings
         const walletSizePct = (await getCapitalPercentage(key.id)) / 100;
-        const userSlPct = parseFloat(key.sl_pct) || 0.015;       // Initial SL % (price distance)
-        const userTpPct = parseFloat(key.tp_pct) || 0.025;       // Take Profit % (price distance)
+        const userSlPct = parseFloat(key.sl_pct) || 0.015;       // User's SL % fallback
+        const userTpPct = parseFloat(key.tp_pct) || 0.025;       // User's TP % fallback
         const userTrailStep = parseFloat(key.trailing_sl_step) || 1.2;  // Trailing SL step %
         const userMaxLoss = parseFloat(key.max_loss_usdt) || 0;  // Max loss per trade in USDT (0 = no limit)
 
-        // SL/TP from user settings
-        const slPricePct = userSlPct;
-        const initialSlPrice = isLong ? price * (1 - slPricePct) : price * (1 + slPricePct);
-        const userTp = isLong ? price * (1 + userTpPct) : price * (1 - userTpPct);
+        // SL/TP: prefer engine's SMC-based levels (below prev swing), fall back to user %
+        // Engine SL is placed below the previous swing low (SMC structure-based)
+        const engineSl = pick.sl;
+        const engineTp = pick.tp1;
+        const engineSlDist = pick.slDist;
 
-        userLog.trade(`User ${key.email} settings: SL=${(userSlPct*100).toFixed(2)}% TP=${(userTpPct*100).toFixed(2)}% trail=${userTrailStep}% cap=${(walletSizePct*100).toFixed(0)}% maxLoss=$${userMaxLoss || 'none'}`);
+        let initialSlPrice, userTp, slPricePct;
+        if (engineSl && engineSlDist && engineSlDist > 0.001) {
+          // Use engine's structure-based SL — it's placed at a logical SMC level
+          // But ensure SL is at least as wide as user's setting (don't make it tighter than user wants)
+          const userSlPrice = isLong ? price * (1 - userSlPct) : price * (1 + userSlPct);
+          if (isLong) {
+            initialSlPrice = Math.min(engineSl, userSlPrice); // wider (lower) SL for longs
+          } else {
+            initialSlPrice = Math.max(engineSl, userSlPrice); // wider (higher) SL for shorts
+          }
+          slPricePct = Math.abs(price - initialSlPrice) / price;
+          userTp = engineTp || (isLong ? price * (1 + userTpPct) : price * (1 - userTpPct));
+        } else {
+          // Fallback to user's fixed % settings
+          slPricePct = userSlPct;
+          initialSlPrice = isLong ? price * (1 - slPricePct) : price * (1 + slPricePct);
+          userTp = isLong ? price * (1 + userTpPct) : price * (1 - userTpPct);
+        }
+
+        userLog.trade(`User ${key.email} settings: SL=${(slPricePct*100).toFixed(2)}% TP=${(Math.abs(userTp-price)/price*100).toFixed(2)}% trail=${userTrailStep}% cap=${(walletSizePct*100).toFixed(0)}% maxLoss=$${userMaxLoss || 'none'} ${engineSl ? 'SMC-SL' : 'fixed-SL'}`);
 
         let account, wallet, openPosCount;
 
@@ -1323,11 +1367,12 @@ async function executeForAllUsers(pick) {
 
           await db.query(
             `INSERT INTO trades (api_key_id, user_id, symbol, direction, entry_price, sl_price, tp_price, quantity, leverage, status,
-             trailing_sl_price, trailing_sl_last_step, tf_15m, tf_3m, tf_1m)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'OPEN', $10, 0, $11, $12, $13)`,
+             trailing_sl_price, trailing_sl_last_step, tf_15m, tf_3m, tf_1m, market_structure, key_trailing_sl_step)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'OPEN', $10, 0, $11, $12, $13, $14, $15)`,
             [key.id, key.user_id, symbol, pick.direction, price, fmtP(slPrice), fmtP(userTp), qty, userLev,
              fmtP(slPrice),
-             null, pick.structure?.tf3m || null, pick.structure?.tf1m || null]
+             null, pick.structure?.tf3m || null, pick.structure?.tf1m || null,
+             pick.marketStructure || null, userTrailStep]
           );
           executedUserSymbols.add(dedupKey);
           userLog.trade(`Binance OK: ${key.email} ${symbol} ${pick.direction} x${userLev} qty=${qty} entry=$${fmtPrice(price)} SL=$${fmtPrice(slPrice)} TP=$${fmtPrice(userTp)}`);
@@ -1417,11 +1462,12 @@ async function executeForAllUsers(pick) {
             // Store actual entry price in DB
             await db.query(
               `INSERT INTO trades (api_key_id, user_id, symbol, direction, entry_price, sl_price, tp_price, quantity, leverage, status,
-               trailing_sl_price, trailing_sl_last_step, tf_15m, tf_3m, tf_1m)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'OPEN', $10, 0, $11, $12, $13)`,
+               trailing_sl_price, trailing_sl_last_step, tf_15m, tf_3m, tf_1m, market_structure, key_trailing_sl_step)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'OPEN', $10, 0, $11, $12, $13, $14, $15)`,
               [key.id, key.user_id, symbol, pick.direction, actualEntry,
                slFmtActual, tpFmtActual, qty, userLev, slFmtActual,
-               null, pick.structure?.tf3m || null, pick.structure?.tf1m || null]
+               null, pick.structure?.tf3m || null, pick.structure?.tf1m || null,
+               pick.marketStructure || null, userTrailStep]
             );
           } else {
             userLog.error(`Bitunix position not found after order — verify on exchange`);
@@ -1429,11 +1475,12 @@ async function executeForAllUsers(pick) {
 
             await db.query(
               `INSERT INTO trades (api_key_id, user_id, symbol, direction, entry_price, sl_price, tp_price, quantity, leverage, status,
-               trailing_sl_price, trailing_sl_last_step, tf_15m, tf_3m, tf_1m)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'OPEN', $10, 0, $11, $12, $13)`,
+               trailing_sl_price, trailing_sl_last_step, tf_15m, tf_3m, tf_1m, market_structure, key_trailing_sl_step)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'OPEN', $10, 0, $11, $12, $13, $14, $15)`,
               [key.id, key.user_id, symbol, pick.direction, price,
                parseFloat(slPrice.toFixed(8)), 0, qty, userLev, parseFloat(slPrice.toFixed(8)),
-               null, pick.structure?.tf3m || null, pick.structure?.tf1m || null]
+               null, pick.structure?.tf3m || null, pick.structure?.tf1m || null,
+               pick.marketStructure || null, userTrailStep]
             );
           }
           executedUserSymbols.add(dedupKey);

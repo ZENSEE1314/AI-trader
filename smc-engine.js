@@ -279,10 +279,9 @@ async function analyzeLHHL(ticker, params, dailyBiasCache, kronosPredictions = n
   if (klines3m.length < 30 || klines1m.length < 30) return null;
 
   // ── Gate 1: 3m Structure — determines direction ──
+  // REQUIRES full trend alignment: HH+HL for LONG, LH+LL for SHORT
+  // Mixed structure (LH+HL or HH+LL) = ranging → skip
   const struct3m = getStructure(klines3m, SWING_LENGTHS['3m']);
-  let direction = null;
-  if (struct3m.hasHL) direction = 'LONG';
-  else if (struct3m.hasLH) direction = 'SHORT';
 
   // Log swing details for chart comparison
   const fmtSwing = (s) => {
@@ -292,11 +291,17 @@ async function analyzeLHHL(ticker, params, dailyBiasCache, kronosPredictions = n
   };
   bLog.scan(`${symbol}: 3m sw=${SWING_LENGTHS['3m']} lastH=${fmtSwing(struct3m.lastHigh)} lastL=${fmtSwing(struct3m.lastLow)} → ${struct3m.label} trend=${struct3m.trend}`);
 
+  let direction = null;
+  // Only trade when BOTH high and low labels agree on direction
+  if (struct3m.hasHL && struct3m.hasHH) direction = 'LONG';     // HH+HL = confirmed uptrend
+  else if (struct3m.hasLH && struct3m.hasLL) direction = 'SHORT'; // LH+LL = confirmed downtrend
+  // Mixed (LH+HL or HH+LL) = ranging → no trade
+
   if (!direction) {
     return null;
   }
 
-  // ── Gate 2: 1m Structure — confirms direction + next candle entry ──
+  // ── Gate 2: 1m Structure — confirms direction ──
   const struct1m = getStructure(klines1m, SWING_LENGTHS['1m']);
 
   bLog.scan(`${symbol}: 1m sw=${SWING_LENGTHS['1m']} lastH=${fmtSwing(struct1m.lastHigh)} lastL=${fmtSwing(struct1m.lastLow)} → ${struct1m.label} trend=${struct1m.trend}`);
@@ -310,16 +315,13 @@ async function analyzeLHHL(ticker, params, dailyBiasCache, kronosPredictions = n
     return null;
   }
 
-  // ── Entry at HL/LH swing point ──
-  // LONG: enter near the HL swing low (buy the dip, not the rally)
-  // SHORT: enter near the LH swing high (sell the spike, not the drop)
+  // ── Entry timing: swing must be fresh (within 3 candles of confirmation) ──
   const swingPoint = direction === 'LONG' ? struct1m.lastLow : struct1m.lastHigh;
   if (!swingPoint) return null;
 
   const swingIdx = swingPoint.index;
   const swingPrice = swingPoint.price;
 
-  // Freshness: swing must be recent (within 3 candles of confirmation)
   const confirmationIdx = swingIdx + SWING_LENGTHS['1m'];
   const currentIdx = klines1m.length - 1;
   const candleAge = currentIdx - confirmationIdx;
@@ -329,44 +331,34 @@ async function analyzeLHHL(ticker, params, dailyBiasCache, kronosPredictions = n
     return null;
   }
 
-  // Proximity: price must still be near the swing point (within 0.5% for entry)
-  // If price already ran away from the HL/LH, we missed the entry
-  const MAX_ENTRY_DIST = 0.005; // 0.5% max distance from swing point
-  const distFromSwing = Math.abs(price - swingPrice) / swingPrice;
-
-  if (direction === 'LONG' && price > swingPrice * (1 + MAX_ENTRY_DIST)) {
-    bLog.scan(`${symbol}: LONG missed — price $${price} already ${(distFromSwing * 100).toFixed(2)}% above HL@$${swingPrice}`);
-    return null;
-  }
-  if (direction === 'SHORT' && price < swingPrice * (1 - MAX_ENTRY_DIST)) {
-    bLog.scan(`${symbol}: SHORT missed — price $${price} already ${(distFromSwing * 100).toFixed(2)}% below LH@$${swingPrice}`);
-    return null;
-  }
-
   // ── SL below the previous swing low (LONG) / above previous swing high (SHORT) ──
-  // This is proper SMC: stop below the low that formed the HL
+  // Proper SMC: stop below the low that formed the HL, with 0.1% buffer
   const swingLows1m = struct1m.swingLows;
   const swingHighs1m = struct1m.swingHighs;
   let sl, slDist;
 
   if (direction === 'LONG') {
-    // SL below the swing low BEFORE the HL (the LL or low that the HL is higher than)
     const prevLow = swingLows1m.length >= 2 ? swingLows1m[swingLows1m.length - 2] : null;
-    const slPrice = prevLow ? prevLow.price * 0.999 : swingPrice * 0.995; // 0.1% buffer below prev low
+    const slPrice = prevLow ? prevLow.price * 0.999 : swingPrice * 0.995;
     sl = slPrice;
     slDist = (price - sl) / price;
   } else {
-    // SL above the swing high BEFORE the LH (the HH or high that the LH is lower than)
     const prevHigh = swingHighs1m.length >= 2 ? swingHighs1m[swingHighs1m.length - 2] : null;
-    const slPrice = prevHigh ? prevHigh.price * 1.001 : swingPrice * 1.005; // 0.1% buffer above prev high
+    const slPrice = prevHigh ? prevHigh.price * 1.001 : swingPrice * 1.005;
     sl = slPrice;
     slDist = (sl - price) / price;
+  }
+
+  // Sanity: SL distance must be between 0.1% and 2% — outside that range = bad structure
+  if (slDist < 0.001 || slDist > 0.02) {
+    bLog.scan(`${symbol}: ${direction} — SL distance ${(slDist*100).toFixed(3)}% out of range (0.1%-2%) — skipped`);
+    return null;
   }
 
   // TP at 2:1 risk:reward from entry
   const tp = direction === 'LONG' ? price + (price - sl) * 2 : price - (sl - price) * 2;
 
-  bLog.scan(`${symbol}: ${direction} entry@$${price} swing@$${swingPrice} dist=${(distFromSwing*100).toFixed(2)}% SL=$${sl.toFixed(4)} TP=$${tp.toFixed(4)} RR=2:1`);
+  bLog.scan(`${symbol}: ${direction} entry@$${price} swing@$${swingPrice} SL=$${sl.toFixed(4)} TP=$${tp.toFixed(4)} slDist=${(slDist*100).toFixed(2)}% RR=2:1`);
 
   // Leverage based on token price: $100+ → 100x, $10-99 → 50x, <$10 → 20x
   const HIGH_PRICE = new Set(['BTCUSDT','ETHUSDT','BNBUSDT','SOLUSDT','AAVEUSDT','MKRUSDT','BCHUSDT','LTCUSDT','AVAXUSDT','LINKUSDT']);
@@ -410,10 +402,26 @@ async function analyzeLHHL(ticker, params, dailyBiasCache, kronosPredictions = n
   const aiModifier = await aiLearner.getAIScoreModifier(symbol, setup, direction);
   score = score * aiModifier;
 
-  // Pattern modifier
+  // Structure-based learning: check if this 3m/1m structure combo historically wins
+  const structLabel = `${struct3m.label}|${struct1m.label}`;
+  const structWR = await aiLearner.getStructureWinRate(struct3m.label, struct1m.label, direction);
+  if (structWR && structWR.total >= 5) {
+    if (structWR.winRate < 0.25) {
+      bLog.scan(`${symbol}: structure ${structLabel} historically loses (${(structWR.winRate*100).toFixed(0)}% WR, ${structWR.total} trades) — BLOCKED`);
+      return null;
+    }
+    if (structWR.winRate < 0.40) {
+      score -= 5;
+      bLog.scan(`${symbol}: structure ${structLabel} weak WR ${(structWR.winRate*100).toFixed(0)}% (-5)`);
+    } else if (structWR.winRate > 0.60) {
+      score += 3;
+      bLog.scan(`${symbol}: structure ${structLabel} strong WR ${(structWR.winRate*100).toFixed(0)}% (+3)`);
+    }
+  }
+
+  // Pattern modifier (now uses structure label instead of just trend)
   const session = aiLearner.getCurrentSession();
-  const trend1m = struct1m.trend || 'unknown';
-  const patternMod = await aiLearner.getPatternModifier(symbol, setup, direction, session, trend1m);
+  const patternMod = await aiLearner.getPatternModifier(symbol, setup, direction, session, structLabel);
   if (patternMod !== 0) {
     score += patternMod;
     bLog.scan(`${symbol}: pattern modifier ${patternMod > 0 ? '+' : ''}${patternMod}`);
@@ -421,8 +429,9 @@ async function analyzeLHHL(ticker, params, dailyBiasCache, kronosPredictions = n
 
   bLog.scan(
     `SIGNAL: ${symbol} ${direction} | 3m=${struct3m.label} 1m=${struct1m.label} ` +
-    `| entry@$${price} swing@$${swingPrice} SL=$${sl.toFixed(4)} TP=$${tp.toFixed(4)} ` +
-    `| score=${Math.round(score)} | age=${candleAge}`
+    `| entry@$${price} SL=$${sl.toFixed(4)} TP=$${tp.toFixed(4)} slDist=${(slDist*100).toFixed(2)}% ` +
+    `| score=${Math.round(score)} | age=${candleAge}` +
+    (structWR ? ` | structWR=${(structWR.winRate*100).toFixed(0)}%/${structWR.total}t` : '')
   );
 
   return {
@@ -442,6 +451,7 @@ async function analyzeLHHL(ticker, params, dailyBiasCache, kronosPredictions = n
     setup,
     setupName: `${direction}-3m1m`,
     aiModifier: Math.round(aiModifier * 100) / 100,
+    marketStructure: structLabel,
     structure: {
       tf3m: struct3m.label,
       tf1m: struct1m.label,
