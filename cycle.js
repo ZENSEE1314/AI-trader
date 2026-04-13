@@ -1129,6 +1129,20 @@ async function executeForAllUsers(pick) {
       bLog.error(`Auto-pause check failed: ${pauseErr.message}`);
     }
 
+    // Full diagnostic: show ALL keys in DB (once per deploy)
+    if (!executeForAllUsers._diagDone) {
+      executeForAllUsers._diagDone = true;
+      try {
+        const allDbKeys = await db.query(
+          `SELECT ak.id, ak.user_id, ak.enabled, ak.paused_by_admin, ak.paused_by_user, ak.exchange, u.email
+           FROM api_keys ak LEFT JOIN users u ON u.id = ak.user_id ORDER BY ak.id`
+        );
+        bLog.trade(`[DIAG] ALL api_keys in DB (${allDbKeys.length}): ${allDbKeys.map(k => `#${k.id} ${k.email || 'NO-USER(uid='+k.user_id+')'} ex=${k.exchange} en=${k.enabled} ap=${k.paused_by_admin} up=${k.paused_by_user}`).join(' | ')}`);
+      } catch (diagErr) {
+        bLog.error(`[DIAG] Failed: ${diagErr.message}`);
+      }
+    }
+
     const allKeys = await db.query(
       `SELECT ak.*, u.email
        FROM api_keys ak
@@ -1161,6 +1175,18 @@ async function executeForAllUsers(pick) {
       } catch (_) {}
       return;
     }
+
+    // Also check for orphan keys (api_keys without matching users row)
+    try {
+      const orphanKeys = await db.query(
+        `SELECT ak.id, ak.user_id, ak.enabled, ak.paused_by_admin, ak.paused_by_user
+         FROM api_keys ak LEFT JOIN users u ON u.id = ak.user_id
+         WHERE u.id IS NULL`
+      );
+      if (orphanKeys.length > 0) {
+        bLog.trade(`WARNING: ${orphanKeys.length} orphan API key(s) with no matching user record — ids: ${orphanKeys.map(k => `key=${k.id} user_id=${k.user_id}`).join(', ')}`);
+      }
+    } catch (_) {}
 
     const keys = allKeys;
     const sym = pick.symbol || pick.sym;
