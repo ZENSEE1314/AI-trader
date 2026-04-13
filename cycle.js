@@ -1052,7 +1052,8 @@ async function main() {
         continue;
       }
       executed = true;
-      break;
+      // Continue processing remaining signals so ALL users get a trade opportunity.
+      // Users who already traded are protected by: max_positions, dedup guard, open trade check.
     }
     // Owner account handled via executeForAllUsers (DB keys with pause/enabled checks)
     // No separate owner path — all accounts go through the same pipeline
