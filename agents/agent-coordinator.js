@@ -793,7 +793,14 @@ class AgentCoordinator extends BaseAgent {
         this.currentTask = { description: 'Step 3/7: ChartAgent checking remaining tokens', startedAt: Date.now() };
         try {
           const monitoredSymbols = [...this.tokenAgents.keys()];
+          // Ensure ChartAgent is alive before scanning
+          if (!this.chartAgent._survival.isAlive) {
+            this.chartAgent._survival.isAlive = true;
+            this.chartAgent._survival.health = 10;
+            bLog.trade('ChartAgent was dead — revived for scanning');
+          }
           const chartOutput = await this.chartAgent.run({ topNCoins, kronosPredictions, monitoredSymbols });
+          bLog.scan(`ChartAgent returned: ${chartOutput ? `${chartOutput.signals?.length || 0} signals` : 'null (dead or error)'}`);
           if (chartOutput?.signals) {
             for (const s of chartOutput.signals) {
               if (!signals.find(existing => existing.symbol === s.symbol)) {
@@ -801,7 +808,9 @@ class AgentCoordinator extends BaseAgent {
               }
             }
           }
-        } catch {}
+        } catch (chartErr) {
+          bLog.error(`ChartAgent scan failed: ${chartErr.message}`);
+        }
       }
 
       // Token agents stay active — background scan loop keeps them watching
