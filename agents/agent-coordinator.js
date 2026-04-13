@@ -117,13 +117,22 @@ class AgentCoordinator extends BaseAgent {
     this.log('[BOOT] Starting Agent framework initialization...');
 
     try {
-      for (const [name, agent] of this._agents) {
-        this.log(`[BOOT] Initializing system agent: ${name}...`);
-        // Give every agent a reference to the coordinator for cross-agent communication
+      // Wire coordinator reference first (sync, instant)
+      for (const [, agent] of this._agents) {
         agent._coordinator = this;
-        await agent.init();
-        await agent.loadRpgProfile().catch(() => {});
-        this.log(`[BOOT] ${name} ready (Lv.${agent._rpg.level})`);
+      }
+
+      // Boot all system agents in parallel for fast startup
+      const initPromises = [...this._agents.entries()].map(async ([name, agent]) => {
+        try {
+          await Promise.all([
+            agent.init(),
+            agent.loadRpgProfile().catch(() => {}),
+          ]);
+          this.log(`[BOOT] ${name} ready (Lv.${agent._rpg.level})`);
+        } catch (err) {
+          this.logError(`[BOOT] ${name} init failed (non-fatal): ${err.message}`);
+        }
 
         // Listen for agent crashes to trigger self-healing
         agent.on('agent_crash', async (report) => {
@@ -138,7 +147,8 @@ class AgentCoordinator extends BaseAgent {
             this.logError(`Self-healing trigger failed: ${err.message}`);
           }
         });
-      }
+      });
+      await Promise.all(initPromises);
 
       this.log('[BOOT] System agents initialized. Loading token agents...');
       // Create dedicated token agents for top coins by volume
@@ -146,40 +156,8 @@ class AgentCoordinator extends BaseAgent {
         this.addTokenAgent(symbol);
       }
 
-      // Fetch top coins by volume from Binance and create agents for all of them
-      try {
-        this.log('[BOOT] Fetching top tokens from Binance...');
-        const fetch = require('node-fetch');
-        const res = await fetch('https://fapi.binance.com/fapi/v1/ticker/24hr', { timeout: 10000 });
-        if (res.ok) {
-          const tickers = await res.json();
-          const { query } = require('../db');
-          const bannedRows = await query('SELECT symbol FROM global_token_settings WHERE banned = true').catch(() => []);
-          const banned = new Set(bannedRows.map(r => r.symbol));
-
-          const topCoins = tickers
-            .filter(t => t.symbol.endsWith('USDT') && !t.symbol.includes('_'))
-            .filter(t => !banned.has(t.symbol))
-            .filter(t => parseFloat(t.quoteVolume) >= 10_000_000)
-            .sort((a, b) => parseFloat(b.quoteVolume) - parseFloat(a.quoteVolume))
-            .slice(0, 10)
-            .map(t => t.symbol);
-
-          for (const sym of topCoins) {
-            if (!this.tokenAgents.has(sym)) this.addTokenAgent(sym);
-          }
-          this.log(`[BOOT] Loaded top ${topCoins.length} tokens by volume (top 10)`);
-        }
-      } catch (err) {
-        this.logError(`[BOOT] Failed to fetch top tokens: ${err.message}`);
-        try {
-          const { query } = require('../db');
-          const rows = await query('SELECT symbol FROM global_token_settings WHERE banned = false');
-          for (const r of rows) {
-            if (!this.tokenAgents.has(r.symbol)) this.addTokenAgent(r.symbol);
-          }
-        } catch {}
-      }
+      // Fetch top coins by volume from Binance — non-blocking (don't delay boot)
+      this._fetchTopTokens().catch(err => this.logError(`[BOOT] Top tokens fetch failed: ${err.message}`));
 
       this.log('[BOOT] Starting background agent loops...');
       // Wire cross-agent collaboration before init
@@ -266,6 +244,42 @@ class AgentCoordinator extends BaseAgent {
     } catch (err) {
       this.logError(`Verification failed for ${agent.name}: ${err.message}`);
       return false;
+    }
+  }
+
+  async _fetchTopTokens() {
+    try {
+      this.log('[BOOT] Fetching top tokens from Binance...');
+      const fetch = require('node-fetch');
+      const res = await fetch('https://fapi.binance.com/fapi/v1/ticker/24hr', { timeout: 10000 });
+      if (res.ok) {
+        const tickers = await res.json();
+        const { query } = require('../db');
+        const bannedRows = await query('SELECT symbol FROM global_token_settings WHERE banned = true').catch(() => []);
+        const banned = new Set(bannedRows.map(r => r.symbol));
+
+        const topCoins = tickers
+          .filter(t => t.symbol.endsWith('USDT') && !t.symbol.includes('_'))
+          .filter(t => !banned.has(t.symbol))
+          .filter(t => parseFloat(t.quoteVolume) >= 10_000_000)
+          .sort((a, b) => parseFloat(b.quoteVolume) - parseFloat(a.quoteVolume))
+          .slice(0, 10)
+          .map(t => t.symbol);
+
+        for (const sym of topCoins) {
+          if (!this.tokenAgents.has(sym)) this.addTokenAgent(sym);
+        }
+        this.log(`[BOOT] Loaded top ${topCoins.length} tokens by volume`);
+      }
+    } catch (err) {
+      this.logError(`[BOOT] Binance fetch failed: ${err.message} — trying DB fallback`);
+      try {
+        const { query } = require('../db');
+        const rows = await query('SELECT symbol FROM global_token_settings WHERE banned = false');
+        for (const r of rows) {
+          if (!this.tokenAgents.has(r.symbol)) this.addTokenAgent(r.symbol);
+        }
+      } catch {}
     }
   }
 

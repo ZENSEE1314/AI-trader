@@ -128,9 +128,13 @@ class BaseAgent {
   // ── Lifecycle ─────────────────────────────────────────────
 
   async init() {
-    await this._loadSurvival();
-    await this._saveSurvival();
-    await this.loadQLState();
+    // Load survival + Q-Learning in parallel for faster boot
+    await Promise.all([
+      this._loadSurvival(),
+      this.loadQLState(),
+    ]);
+    // Defer save to background — don't block init
+    this._saveSurvival().catch(() => {});
     this.log('Initialized');
   }
 
