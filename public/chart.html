@@ -1673,7 +1673,7 @@
       },
 
       trendStructure: function(candles, lbL, lbR) {
-        lbL = lbL || 5; lbR = lbR || 5;
+        lbL = lbL || 5; lbR = lbR || 2; // right lookback=2 for near-real-time detection
         // Detect pivot highs and lows
         var pivotHighs = [], pivotLows = [];
         for (var i = lbL; i < candles.length - lbR; i++) {
@@ -1748,7 +1748,7 @@
 
       // SMC Pro — Zeiierman-style full SMC indicator (clean, selective)
       smcPro: function(candles, lbL, lbR) {
-        lbL = lbL || 10; lbR = lbR || 10; // wider lookback = fewer, stronger pivots
+        lbL = lbL || 5; lbR = lbR || 2; // fast right lookback for near-real-time labels
         var EQL_THRESHOLD = 0.0004; // 0.04% tolerance — very strict equal highs/lows
         var pivotHighs = [], pivotLows = [];
         for (var i = lbL; i < candles.length - lbR; i++) {
@@ -2207,24 +2207,24 @@
         'hull ma': 'hma(close, 9)',
         'vwap': 'vwap()',
         'volume': 'volume()',
-        'trend structure': 'trendstructure(5, 5)',
-        'trend lines': 'trendstructure(5, 5)',
-        'hh hl': 'trendstructure(5, 5)',
-        'lh ll': 'trendstructure(5, 5)',
-        'market structure': 'trendstructure(5, 5)',
+        'trend structure': 'trendstructure(5, 2)',
+        'trend lines': 'trendstructure(5, 2)',
+        'hh hl': 'trendstructure(5, 2)',
+        'lh ll': 'trendstructure(5, 2)',
+        'market structure': 'trendstructure(5, 2)',
         'dtfx': 'dtfxzones(10)',
         'dtfx zones': 'dtfxzones(10)',
         'algo zones': 'dtfxzones(10)',
         'dtfx algo': 'dtfxzones(10)',
         'zones': 'dtfxzones(10)',
-        'smc pro': 'smcpro(10, 10)',
-        'smc': 'smcpro(10, 10)',
-        'zeiierman': 'smcpro(10, 10)',
-        'bos': 'smcpro(10, 10)',
-        'choch': 'smcpro(10, 10)',
-        'order block': 'smcpro(10, 10)',
-        'ob': 'smcpro(10, 10)',
-        'pdh pdl': 'smcpro(10, 10)',
+        'smc pro': 'smcpro(5, 2)',
+        'smc': 'smcpro(5, 2)',
+        'zeiierman': 'smcpro(5, 2)',
+        'bos': 'smcpro(5, 2)',
+        'choch': 'smcpro(5, 2)',
+        'order block': 'smcpro(5, 2)',
+        'ob': 'smcpro(5, 2)',
+        'pdh pdl': 'smcpro(5, 2)',
         'vsa': 'vsa(5, 20)',
         'volume spread': 'vsa(5, 20)',
         'volume spread analysis': 'vsa(5, 20)',
@@ -2313,7 +2313,7 @@
             ]};
           }
           case 'trendstructure': {
-            var ts = Calc.trendStructure(candles, a[0] || 5, a[1] || 5);
+            var ts = Calc.trendStructure(candles, a[0] || 5, a[1] || 2);
             return { type: 'overlay', label: 'Trend Structure', trendStructureData: ts };
           }
           case 'dtfxzones': {
@@ -2325,7 +2325,7 @@
             return { type: 'overlay', label: 'VSA', vsaData: vsaResult };
           }
           case 'smcpro': {
-            var sp = Calc.smcPro(candles, a[0] || 5, a[1] || 5);
+            var sp = Calc.smcPro(candles, a[0] || 5, a[1] || 2);
             return { type: 'overlay', label: 'SMC Pro', smcProData: sp };
           }
 
@@ -2363,14 +2363,14 @@
       volume:         { name: 'Volume',            formula: 'volume()' },
       bb:             { name: 'Bollinger Bands',   formula: 'bb(close, 20, 2)' },
       supertrend:     { name: 'Supertrend',        formula: 'supertrend(10, 3)' },
-      trendstructure: { name: 'Trend Structure',   formula: 'trendstructure(5, 5)' },
+      trendstructure: { name: 'Trend Structure',   formula: 'trendstructure(5, 2)' },
       dtfxzones:      { name: 'DTFX Zones',        formula: 'dtfxzones(10)' },
       vsa:            { name: 'VSA',               formula: 'vsa(5, 20)' },
       stoch:          { name: 'Stochastic',        formula: 'stoch(14, 3, 3)' },
       atr:            { name: 'ATR',               formula: 'atr(14)' },
       ichimoku:       { name: 'Ichimoku',          formula: 'ichimoku(9, 26, 52, 26)' },
       psar:           { name: 'Parabolic SAR',     formula: 'psar(0.02, 0.2)' },
-      smcpro:         { name: 'SMC Pro',            formula: 'smcpro(10, 10)' },
+      smcpro:         { name: 'SMC Pro',            formula: 'smcpro(5, 2)' },
     };
 
     var INDICATOR_COLORS = {
