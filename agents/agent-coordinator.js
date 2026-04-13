@@ -792,7 +792,8 @@ class AgentCoordinator extends BaseAgent {
       if (!this.chartAgent.paused) {
         this.currentTask = { description: 'Step 3/7: ChartAgent checking remaining tokens', startedAt: Date.now() };
         try {
-          const chartOutput = await this.chartAgent.run({ topNCoins, kronosPredictions });
+          const monitoredSymbols = [...this.tokenAgents.keys()];
+          const chartOutput = await this.chartAgent.run({ topNCoins, kronosPredictions, monitoredSymbols });
           if (chartOutput?.signals) {
             for (const s of chartOutput.signals) {
               if (!signals.find(existing => existing.symbol === s.symbol)) {

@@ -41,7 +41,7 @@ class ChartAgent extends BaseAgent {
   }
 
   async execute(context = {}) {
-    const { topNCoins = 50, forceScan = false, kronosPredictions = null } = context;
+    const { topNCoins = 50, forceScan = false, kronosPredictions = null, monitoredSymbols = null } = context;
 
     // Consume winning strategy intel from StrategyAgent
     const stratMsgs = this.consumeMessages('winning-strategy');
@@ -64,7 +64,7 @@ class ChartAgent extends BaseAgent {
     // 3. Run AI strategy scan (uses discovered strategies, not hardcoded SMC)
     const signals = await scanAI(
       (msg) => this.logScan(msg),
-      { topNCoins, kronosPredictions }
+      { topNCoins, kronosPredictions, monitoredSymbols }
     );
 
     // 4. Record scan result

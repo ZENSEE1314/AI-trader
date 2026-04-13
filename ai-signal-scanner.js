@@ -180,8 +180,35 @@ async function scanAI(log, opts = {}) {
 
   bLog.scan(`AI Scanner: ${strategies.length} strategies loaded (best: ${strategies[0]?.name} ${strategies[0]?.winRate?.toFixed(1)}% WR)`);
 
-  // Fetch top coins
-  const topCoins = await fetchTopCoins(opts.topNCoins || TOP_N_COINS);
+  // Fetch top coins — prioritize monitored tokens (dedicated agents)
+  let topCoins;
+  if (opts.monitoredSymbols && opts.monitoredSymbols.length > 0) {
+    // Scan monitored tokens first, then fill remaining slots with top volume coins
+    const monSet = new Set(opts.monitoredSymbols);
+    const allCoins = await fetchTopCoins(Math.max(opts.topNCoins || TOP_N_COINS, 100));
+    const monitored = allCoins.filter(t => monSet.has(t.symbol));
+    const others = allCoins.filter(t => !monSet.has(t.symbol));
+
+    // Monitored tokens that weren't in the ticker list — fetch prices individually
+    const missingSymbols = opts.monitoredSymbols.filter(s => !monitored.find(t => t.symbol === s));
+    for (const sym of missingSymbols) {
+      try {
+        const res = await fetch(`https://fapi.binance.com/fapi/v1/ticker/price?symbol=${sym}`, { timeout: 8000 });
+        if (res.ok) {
+          const data = await res.json();
+          monitored.push({ symbol: sym, lastPrice: data.price, quoteVolume: '999999999' });
+        }
+      } catch {}
+    }
+
+    // Monitored tokens go first, then fill remaining slots
+    const maxOthers = Math.max(0, (opts.topNCoins || TOP_N_COINS) - monitored.length);
+    topCoins = [...monitored, ...others.slice(0, maxOthers)];
+    bLog.scan(`AI Scanner: ${monitored.length} monitored + ${Math.min(others.length, maxOthers)} others = ${topCoins.length} coins`);
+  } else {
+    topCoins = await fetchTopCoins(opts.topNCoins || TOP_N_COINS);
+  }
+
   if (topCoins.length === 0) {
     bLog.error('AI Scanner: failed to fetch tickers');
     return [];
