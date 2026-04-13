@@ -264,6 +264,13 @@ async function analyzeLHHL(ticker, params, dailyBiasCache, kronosPredictions = n
   bLog.scan(`[HEARTBEAT] Analyzing ${symbol}...`);
   const price = parseFloat(ticker.lastPrice);
 
+  // ── AI-learned hour check: skip historically losing hours ──
+  const hourCheck = await aiLearner.shouldTradeNow();
+  if (!hourCheck.trade) {
+    bLog.scan(`${symbol}: ${hourCheck.reason} — skipping`);
+    return null;
+  }
+
   // Load AI-optimized strategy params from DB (set by Quantum Optimizer)
   // ┌─────────────────────────────────────────────────────────┐
   // │ Simple 2-Gate Strategy: 3m HL/LH → 1m HL/LH confirm    │
@@ -451,6 +458,7 @@ async function analyzeLHHL(ticker, params, dailyBiasCache, kronosPredictions = n
     setup,
     setupName: `${direction}-3m1m`,
     aiModifier: Math.round(aiModifier * 100) / 100,
+    sizeMod: hourCheck.reduceSizeBy || hourCheck.boostSizeBy || 1.0,
     marketStructure: structLabel,
     structure: {
       tf3m: struct3m.label,

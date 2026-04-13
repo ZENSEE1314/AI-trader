@@ -153,21 +153,22 @@ const DEFAULT_PARAMS = {
   // Sizing params (cycle.js)
   WALLET_SIZE_PCT: 0.10,   // 10% of wallet per trade
   LEV_BTC_ETH: 100,        // BTC/ETH leverage
+  LEV_MID: 50,             // mid-cap ($10-99) leverage
   LEV_ALT: 20,             // all altcoin leverage
 
-  // Strategy config — LOCKED to Genetic Gen5 (v3.0): 71.4% WR, +$242
-  // NOTE: Do not change these defaults without user approval
-  requireBothHTF: false,    // either 4H or 1H aligned (not both required)
-  requireKeyLevel: false,   // skip PDH/PDL/VWAP proximity check
-  require15m: true,         // 15M swing setup REQUIRED
-  require1m: true,          // 1M entry confirmation REQUIRED
-  requireVolSpike: false,   // volume spike filter off
-  maxEntryAge: 35,          // 1M swing must be within 35 candles
-  indecisiveThresh: 0.2,    // daily candle body/range ratio below this = indecisive
-  keyLevelProximity: 0.005, // 0.5% proximity to key levels (if enabled)
+  // Strategy config — learned by AI, backtested continuously
+  requireBothHTF: false,
+  requireKeyLevel: false,
+  require15m: true,
+  require1m: true,
+  requireVolSpike: false,
+  maxEntryAge: 35,
+  indecisiveThresh: 0.2,
+  keyLevelProximity: 0.005,
   swingLen4h: 11,
   swingLen1h: 10,
   swingLen15m: 8,
+  swingLen3m: 5,           // 3m swing length (live strategy)
   swingLen1m: 3,
 };
 
@@ -197,7 +198,7 @@ async function getOptimalParams() {
       const strategyKeys = [
         'requireBothHTF', 'requireKeyLevel', 'require15m', 'require1m',
         'requireVolSpike', 'maxEntryAge', 'indecisiveThresh', 'keyLevelProximity',
-        'swingLen4h', 'swingLen1h', 'swingLen15m', 'swingLen1m',
+        'swingLen4h', 'swingLen1h', 'swingLen15m', 'swingLen3m', 'swingLen1m',
       ];
       for (const key of strategyKeys) {
         if (prev[key] !== undefined) params[key] = prev[key];
@@ -445,8 +446,8 @@ async function getOptimalParams() {
       const bt = bestBacktest[0];
       const btParams = typeof bt.params === 'string' ? JSON.parse(bt.params) : bt.params;
       // Only adopt swing lengths from backtests (conservative — don't change SL/TP from backtest)
-      const ADOPTABLE = ['swing_15m', 'swing_1m'];
-      const PARAM_MAP = { swing_15m: 'swingLen15m', swing_1m: 'swingLen1m' };
+      const ADOPTABLE = ['swing_15m', 'swing_3m', 'swing_1m'];
+      const PARAM_MAP = { swing_15m: 'swingLen15m', swing_3m: 'swingLen3m', swing_1m: 'swingLen1m' };
       for (const key of ADOPTABLE) {
         if (btParams[key] !== undefined && PARAM_MAP[key]) {
           const mapped = PARAM_MAP[key];
@@ -796,6 +797,75 @@ async function analyzeWorstPatterns() {
   }
 }
 
+// ── Hourly Win Rate Analysis ─────────────────────────────────
+// Learn which hours of the day are profitable vs losing
+
+async function getHourlyAnalysis() {
+  try {
+    const rows = await query(
+      `SELECT
+        EXTRACT(HOUR FROM created_at) as hour,
+        COUNT(*) as total,
+        SUM(CASE WHEN is_win = 1 THEN 1 ELSE 0 END) as wins,
+        AVG(pnl_pct) as avg_pnl,
+        SUM(pnl_pct) as total_pnl
+       FROM ai_trades
+       WHERE pnl_pct IS NOT NULL
+       GROUP BY EXTRACT(HOUR FROM created_at)
+       HAVING COUNT(*) >= 3
+       ORDER BY EXTRACT(HOUR FROM created_at)`
+    );
+    const analysis = {};
+    for (const r of rows) {
+      const h = parseInt(r.hour);
+      const wr = parseInt(r.wins) / parseInt(r.total);
+      analysis[h] = {
+        hour: h,
+        total: parseInt(r.total),
+        wins: parseInt(r.wins),
+        winRate: wr,
+        avgPnl: parseFloat(r.avg_pnl),
+        totalPnl: parseFloat(r.total_pnl),
+        shouldTrade: wr >= 0.35 || parseInt(r.total) < 5, // Block hours with <35% WR
+      };
+    }
+    return analysis;
+  } catch (_) {
+    return {};
+  }
+}
+
+async function shouldTradeNow() {
+  try {
+    const utcH = new Date().getUTCHours();
+    const rows = await query(
+      `SELECT COUNT(*) as total,
+        SUM(CASE WHEN is_win = 1 THEN 1 ELSE 0 END) as wins,
+        AVG(pnl_pct) as avg_pnl
+       FROM ai_trades
+       WHERE pnl_pct IS NOT NULL
+         AND EXTRACT(HOUR FROM created_at) = $1`,
+      [utcH]
+    );
+    const r = rows[0];
+    if (!r || parseInt(r.total) < 10) return { trade: true, reason: 'not enough data' };
+    const wr = parseInt(r.wins) / parseInt(r.total);
+    const avgPnl = parseFloat(r.avg_pnl);
+    if (wr < 0.25 && avgPnl < -1.0) {
+      return { trade: false, reason: `UTC ${utcH}h: ${(wr*100).toFixed(0)}% WR, avg ${avgPnl.toFixed(1)}% — bad hour` };
+    }
+    if (wr < 0.35) {
+      return { trade: true, reason: `UTC ${utcH}h: ${(wr*100).toFixed(0)}% WR — reducing size`, reduceSizeBy: 0.5 };
+    }
+    if (wr > 0.60 && avgPnl > 0.5) {
+      return { trade: true, reason: `UTC ${utcH}h: ${(wr*100).toFixed(0)}% WR — good hour`, boostSizeBy: 1.2 };
+    }
+    return { trade: true, reason: `UTC ${utcH}h: ${(wr*100).toFixed(0)}% WR — normal` };
+  } catch (_) {
+    return { trade: true, reason: 'error checking hourly stats' };
+  }
+}
+
 // ── Structure Win Rate Check ─────────────────────────────────
 // Check if a specific 3m/1m structure combination historically wins
 
@@ -909,6 +979,8 @@ module.exports = {
   performWinAutopsy,
   getPatternModifier,
   getStructureWinRate,
+  getHourlyAnalysis,
+  shouldTradeNow,
   analyzeWorstPatterns,
   DEFAULT_PARAMS,
 };

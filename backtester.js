@@ -118,7 +118,7 @@ function calcADX(highs, lows, closes, period = 14) {
 // ── Fetch Historical Klines ─────────────────────────────────
 
 async function fetchHistoricalKlines(symbol, interval, days) {
-  const intervalMs = { '15m': 900000, '1h': 3600000, '4h': 14400000 };
+  const intervalMs = { '1m': 60000, '3m': 180000, '5m': 300000, '15m': 900000, '1h': 3600000, '4h': 14400000 };
   const ms = intervalMs[interval] || 900000;
   const totalCandles = Math.ceil((days * 24 * 3600 * 1000) / ms);
   const limit = 1000; // Binance max per request
@@ -329,6 +329,118 @@ const STRATEGIES = {
       // Bear trend: sell on BB upper touch, RSI not oversold
       if (trend === 'bear' && closes[i] >= upper * 0.995 && rsiVal > 35 && rsiVal < 70) return 'SHORT';
       return null;
+    },
+  },
+
+  // ── 2-Gate SMC Strategy (LIVE strategy) ──
+  // Same logic as smc-engine.js: HH+HL → LONG, LH+LL → SHORT
+  smc_2gate: {
+    name: 'SMC 2-Gate (HH+HL / LH+LL)',
+    description: 'Swing structure: requires full trend (HH+HL=LONG, LH+LL=SHORT). Uses configurable swing length.',
+    swingLen: 5, // Configurable via optimizer
+    scan(closes, highs, lows, i) {
+      const len = this.swingLen || 5;
+      if (i < len * 6) return null; // Need enough candles for swing detection
+
+      // Detect swings in the lookback window
+      const swings = [];
+      let lastType = null;
+      for (let j = len; j <= i - len; j++) {
+        let isHigh = true;
+        for (let k = -len; k <= len; k++) {
+          if (k === 0) continue;
+          if (highs[j] <= highs[j + k]) { isHigh = false; break; }
+        }
+        let isLow = true;
+        for (let k = -len; k <= len; k++) {
+          if (k === 0) continue;
+          if (lows[j] >= lows[j + k]) { isLow = false; break; }
+        }
+        if (isHigh && isLow) {
+          const hd = highs[j] - Math.max(highs[j - 1], highs[j + 1]);
+          const ld = Math.min(lows[j - 1], lows[j + 1]) - lows[j];
+          if (hd > ld) isLow = false; else isHigh = false;
+        }
+        if (isHigh) {
+          if (lastType === 'high') {
+            if (highs[j] > swings[swings.length - 1].price) {
+              swings[swings.length - 1] = { type: 'high', price: highs[j], index: j };
+            }
+          } else {
+            swings.push({ type: 'high', price: highs[j], index: j });
+            lastType = 'high';
+          }
+        }
+        if (isLow) {
+          if (lastType === 'low') {
+            if (lows[j] < swings[swings.length - 1].price) {
+              swings[swings.length - 1] = { type: 'low', price: lows[j], index: j };
+            }
+          } else {
+            swings.push({ type: 'low', price: lows[j], index: j });
+            lastType = 'low';
+          }
+        }
+      }
+
+      // Label swing highs and lows
+      const swingHighs = swings.filter(s => s.type === 'high');
+      const swingLows = swings.filter(s => s.type === 'low');
+      if (swingHighs.length < 2 || swingLows.length < 2) return null;
+
+      const lastH1 = swingHighs[swingHighs.length - 1];
+      const lastH2 = swingHighs[swingHighs.length - 2];
+      const lastL1 = swingLows[swingLows.length - 1];
+      const lastL2 = swingLows[swingLows.length - 2];
+
+      const isHH = lastH1.price > lastH2.price;
+      const isHL = lastL1.price > lastL2.price;
+      const isLH = lastH1.price < lastH2.price;
+      const isLL = lastL1.price < lastL2.price;
+
+      // Freshness: last swing must be within 5 candles
+      const lastSwingAge = i - Math.max(lastH1.index, lastL1.index);
+      if (lastSwingAge > len + 5) return null;
+
+      // Full trend required
+      if (isHH && isHL) return 'LONG';
+      if (isLH && isLL) return 'SHORT';
+      return null;
+    },
+  },
+
+  // ── SMC + RSI Filter ──
+  smc_rsi: {
+    name: 'SMC 2-Gate + RSI Filter',
+    description: 'SMC structure + RSI confirmation: LONG needs RSI<65, SHORT needs RSI>35.',
+    swingLen: 5,
+    scan(closes, highs, lows, i) {
+      // Reuse smc_2gate logic
+      const dir = STRATEGIES.smc_2gate.scan.call({ swingLen: this.swingLen }, closes, highs, lows, i);
+      if (!dir) return null;
+      const rsi = calcRSI(closes.slice(0, i + 1), 14);
+      const rsiVal = rsi[rsi.length - 1];
+      if (dir === 'LONG' && rsiVal > 65) return null;   // Overbought → skip
+      if (dir === 'SHORT' && rsiVal < 35) return null;   // Oversold → skip
+      return dir;
+    },
+  },
+
+  // ── SMC + EMA Trend ──
+  smc_ema: {
+    name: 'SMC 2-Gate + EMA Trend',
+    description: 'SMC structure + EMA21/50 trend alignment.',
+    swingLen: 5,
+    scan(closes, highs, lows, i) {
+      if (i < 55) return null;
+      const dir = STRATEGIES.smc_2gate.scan.call({ swingLen: this.swingLen }, closes, highs, lows, i);
+      if (!dir) return null;
+      const slice = closes.slice(0, i + 1);
+      const ema21 = calcEMA(slice, 21);
+      const ema50 = calcEMA(slice, 50);
+      if (dir === 'LONG' && ema21[i] < ema50[i]) return null;  // Against EMA trend
+      if (dir === 'SHORT' && ema21[i] > ema50[i]) return null;
+      return dir;
     },
   },
 };

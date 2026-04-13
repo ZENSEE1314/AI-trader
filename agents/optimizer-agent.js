@@ -115,12 +115,32 @@ class OptimizerAgent extends BaseAgent {
       this.currentTask = { description: `Testing ${batch.length} tokens: ${batch.map(s => s.replace('USDT', '')).join(', ')}`, startedAt: Date.now() };
       this.addActivity('info', `Testing: ${batch.map(s => s.replace('USDT', '')).join(', ')}`);
 
-      // Run backtest
+      // Test SMC strategies with different swing lengths (the live strategy)
+      const smcStrategies = ['smc_2gate', 'smc_rsi', 'smc_ema'];
+      for (const swLen of [3, 4, 5, 6, 7]) {
+        if (STRATEGIES.smc_2gate) STRATEGIES.smc_2gate.swingLen = swLen;
+        if (STRATEGIES.smc_rsi) STRATEGIES.smc_rsi.swingLen = swLen;
+        if (STRATEGIES.smc_ema) STRATEGIES.smc_ema.swingLen = swLen;
+      }
+
+      // Run backtests on both 3m (live) and 15m timeframes
+      const result3m = await runBacktest({
+        symbols: batch,
+        days: Math.min(days, 14), // 3m data = many candles, limit to 14 days
+        interval: '3m',
+        strategies: smcStrategies,
+      });
+
       const result = await runBacktest({
         symbols: batch,
         days,
         interval: '15m',
       });
+
+      // Merge results — prefer 3m SMC results since that's the live strategy
+      if (result3m.viableStrategies > 0) {
+        this.addActivity('info', `3m SMC backtest: ${result3m.viableStrategies} viable (best: ${result3m.bestStrategy?.strategy || 'none'} ${result3m.bestStrategy?.winRate || 0}% WR)`);
+      }
 
       this._totalBacktests += result.totalCombinations;
 

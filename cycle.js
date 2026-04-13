@@ -1297,8 +1297,10 @@ async function executeForAllUsers(pick) {
           const pricePrec = sinfo.pricePrecision ?? 2;
           const fmtP = (p) => parseFloat(p.toFixed(pricePrec));
 
-          // Position sizing: walletSizePct of wallet = margin, capped by max_loss_usdt
-          let tradeUsdt = wallet * walletSizePct;
+          // Position sizing: walletSizePct of wallet, adjusted by AI hour learning, capped by max_loss
+          const sizeMod = pick.sizeMod || 1.0;
+          let tradeUsdt = wallet * walletSizePct * sizeMod;
+          if (sizeMod !== 1.0) userLog.trade(`User ${key.email}: AI hour sizing ${sizeMod < 1 ? 'reduced' : 'boosted'} ×${sizeMod}`);
           // Cap by max loss: if user sets max loss per trade, limit margin so SL loss <= max_loss
           if (userMaxLoss > 0) {
             const maxMarginByLoss = userMaxLoss / slPricePct;
@@ -1397,8 +1399,8 @@ async function executeForAllUsers(pick) {
 
           userLog.trade(`User ${key.email} Bitunix: wallet=$${wallet.toFixed(2)} pos=${openPosCount}/${maxPos} lev=x${userLev}`);
 
-          // Position sizing: walletSizePct of wallet, capped by max_loss_usdt
-          let tradeUsdtBx = wallet * walletSizePct;
+          // Position sizing: walletSizePct of wallet, adjusted by AI hour learning, capped by max_loss
+          let tradeUsdtBx = wallet * walletSizePct * (pick.sizeMod || 1.0);
           if (userMaxLoss > 0) {
             const maxMarginByLoss = userMaxLoss / slPricePct;
             if (tradeUsdtBx > maxMarginByLoss) {
