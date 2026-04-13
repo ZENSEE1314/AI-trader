@@ -810,6 +810,17 @@ class AgentCoordinator extends BaseAgent {
         ta.currentTask = { description: `Watching ${ta.symbol}`, startedAt: Date.now() };
       }
 
+      // Filter out globally banned tokens before further processing
+      if (signals.length > 0) {
+        const { isTokenBanned } = require('../cycle');
+        const beforeBan = signals.length;
+        const banChecks = await Promise.all(signals.map(s => isTokenBanned(s.symbol || s.sym).catch(() => false)));
+        signals = signals.filter((_, i) => !banChecks[i]);
+        if (beforeBan > signals.length) {
+          this.addActivity('info', `Filtered ${beforeBan - signals.length} globally banned token(s) from signals`);
+        }
+      }
+
       if (signals.length > 0) {
         const signalDetails = signals.map(s => `${s.symbol.replace('USDT','')} ${s.direction} score=${s.score || '?'}`).join(', ');
         this.addActivity('info', `${signals.length} signal(s): ${signalDetails}`);
