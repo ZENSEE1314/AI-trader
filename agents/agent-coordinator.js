@@ -707,6 +707,13 @@ class AgentCoordinator extends BaseAgent {
            FROM api_keys ak LEFT JOIN users u ON u.id = ak.user_id ORDER BY ak.id`
         );
         bLog.system(`[KEY-DIAG] ALL ${allDbKeys.length} api_keys: ${allDbKeys.map(k => `#${k.id} ${k.email || 'NO-USER(uid='+k.user_id+')'} label=${k.label||'?'} en=${k.enabled} ap=${k.paused_by_admin} up=${k.paused_by_user}`).join(' | ')}`);
+        // Also check for users WITHOUT api keys
+        const usersNoKeys = await query(
+          `SELECT u.id, u.email FROM users u LEFT JOIN api_keys ak ON ak.user_id = u.id WHERE ak.id IS NULL`
+        );
+        if (usersNoKeys.length > 0) {
+          bLog.system(`[KEY-DIAG] Users with NO api_keys: ${usersNoKeys.map(u => `${u.email}(uid=${u.id})`).join(', ')}`);
+        }
       } catch (e) { bLog.error(`[KEY-DIAG] ${e.message}`); }
     }
 
