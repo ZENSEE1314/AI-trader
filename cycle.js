@@ -1139,8 +1139,19 @@ async function executeForAllUsers(pick) {
     );
 
     if (!allKeys.length) {
-      bLog.trade('No enabled user API keys found — no users to trade for');
-      log('No enabled user API keys — skipping multi-user execution');
+      // Debug: check WHY no keys are found
+      try {
+        const debugKeys = await db.query(
+          `SELECT ak.id, u.email, ak.enabled, ak.paused_by_admin, ak.paused_by_user
+           FROM api_keys ak JOIN users u ON u.id = ak.user_id`
+        );
+        if (debugKeys.length > 0) {
+          const reasons = debugKeys.map(k => `${k.email}(enabled=${k.enabled} admin_pause=${k.paused_by_admin} user_pause=${k.paused_by_user})`);
+          bLog.trade(`No tradeable keys — all ${debugKeys.length} keys blocked: ${reasons.join(', ')}`);
+        } else {
+          bLog.trade('No API keys in database at all');
+        }
+      } catch (_) {}
       return;
     }
 
