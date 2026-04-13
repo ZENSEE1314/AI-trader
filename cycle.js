@@ -1613,10 +1613,15 @@ async function syncTradeStatus() {
                 };
                 const swarm = await runSwarm(trade.symbol, seeds);
 
+                // Skip dynamic exit if swarm has no valid votes (all agents failed)
+                if (!swarm.totalVotes || swarm.totalVotes === 0 || swarm.confidence === 0) {
+                  continue;
+                }
+
                 let shouldExit = false;
-                if (trade.direction === 'LONG' && (swarm.direction === 'SHORT' || swarm.confidence < 40)) {
+                if (trade.direction === 'LONG' && swarm.direction === 'SHORT' && swarm.confidence >= 60) {
                   shouldExit = true;
-                } else if (trade.direction === 'SHORT' && (swarm.direction === 'LONG' || swarm.confidence < 40)) {
+                } else if (trade.direction === 'SHORT' && swarm.direction === 'LONG' && swarm.confidence >= 60) {
                   shouldExit = true;
                 }
 
