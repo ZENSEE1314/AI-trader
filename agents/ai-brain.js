@@ -232,7 +232,11 @@ async function think(opts) {
 }
 
 async function thinkGoogle(agentName, systemPrompt, userMessage) {
-  const model = process.env.AGENT_AI_MODEL || 'gemini-2.0-flash';
+  let model = process.env.AGENT_AI_MODEL || 'gemini-2.0-flash';
+  // Guard: if env var contains an Ollama model name, fall back to Gemini default
+  if (model.includes(':') || model.startsWith('gemma') || model.startsWith('llama') || model.startsWith('mistral')) {
+    model = 'gemini-2.0-flash';
+  }
   console.log(`[AI Brain] ${agentName} thinking with Google ${model}...`);
 
   const genModel = googleClient.getGenerativeModel({

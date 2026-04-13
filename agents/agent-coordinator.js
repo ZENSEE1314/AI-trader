@@ -258,9 +258,14 @@ class AgentCoordinator extends BaseAgent {
         const bannedRows = await query('SELECT symbol FROM global_token_settings WHERE banned = true').catch(() => []);
         const banned = new Set(bannedRows.map(r => r.symbol));
 
+        // Non-crypto pairs that should never get token agents
+        const NON_CRYPTO = new Set([
+          'XAUUSDT', 'XAGUSDT', 'EURUSDT', 'GBPUSDT', 'JPYUSDT',
+        ]);
+
         const topCoins = tickers
           .filter(t => t.symbol.endsWith('USDT') && !t.symbol.includes('_'))
-          .filter(t => !banned.has(t.symbol))
+          .filter(t => !banned.has(t.symbol) && !NON_CRYPTO.has(t.symbol))
           .filter(t => parseFloat(t.quoteVolume) >= 10_000_000)
           .sort((a, b) => parseFloat(b.quoteVolume) - parseFloat(a.quoteVolume))
           .slice(0, 10)
