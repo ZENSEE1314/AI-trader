@@ -392,8 +392,8 @@ class AgentCoordinator extends BaseAgent {
       this.logError(`Failed to hook trade outcomes: ${err.message}`);
     }
 
-    // Retroactive sync: apply past trade results to agent survival (runs once on boot)
-    this._retroSyncSurvival().catch(e => this.logError(`Retro sync failed: ${e.message}`));
+    // Retroactive sync: reset any dead agents from bad retro-sync, recalculate survival
+    this._resetAndRetroSync().catch(e => this.logError(`Retro sync failed: ${e.message}`));
 
     this._ceoTimer = setInterval(async () => {
       if (this.paused) return;
@@ -1912,9 +1912,58 @@ class AgentCoordinator extends BaseAgent {
   }
 
   /**
+   * Reset dead agents and re-run retro sync with safe calculation.
+   * Clears the agent_survival table, revives all agents, then recalculates.
+   */
+  async _resetAndRetroSync() {
+    try {
+      const db = require('../db');
+      // Wipe old survival data so retro-sync recalculates cleanly
+      await db.query('DELETE FROM agent_survival');
+      this.log('[RETRO-SYNC] Cleared agent_survival table for fresh recalculation');
+
+      // Revive all agents in memory (they may have loaded dead state)
+      const allAgents = [this.traderAgent, this.chartAgent, this.riskAgent, this.kronosAgent,
+        this.sentimentAgent, this.accountantAgent, this.strategyAgent, this.policeAgent,
+        this.coderAgent, this.optimizerAgent];
+      for (const agent of allAgents) {
+        if (!agent) continue;
+        agent._survival.health = 100;
+        agent._survival.capital = 1000;
+        agent._survival.isAlive = true;
+        agent._survival.killReason = null;
+        agent._survival.totalTrades = 0;
+        agent._survival.totalWins = 0;
+        agent._survival.totalLosses = 0;
+        agent._survival.totalRevenue = 0;
+        agent._survival.monthlyPnl = 0;
+        agent.state = 'idle';
+        agent.paused = false;
+      }
+      for (const [, agent] of this.tokenAgents || []) {
+        agent._survival.health = 100;
+        agent._survival.capital = 1000;
+        agent._survival.isAlive = true;
+        agent._survival.killReason = null;
+        agent._survival.totalTrades = 0;
+        agent._survival.totalWins = 0;
+        agent._survival.totalLosses = 0;
+        agent._survival.totalRevenue = 0;
+        agent._survival.monthlyPnl = 0;
+      }
+
+      // Now run safe retro-sync
+      await this._retroSyncSurvival();
+    } catch (err) {
+      this.logError(`[RETRO-SYNC] Reset failed: ${err.message}`);
+    }
+  }
+
+  /**
    * One-time retroactive sync: read all closed trades from DB and apply
-   * survival HP/capital to agents that haven't been updated yet.
-   * Only runs when agents have zero total_trades (fresh survival state).
+   * survival stats to agents. Calculates final HP/capital directly instead
+   * of calling recordSurvivalLoss repeatedly (which would kill agents).
+   * Never kills agents during retro-sync — just sets accurate stats.
    */
   async _retroSyncSurvival() {
     try {
@@ -1938,59 +1987,69 @@ class AgentCoordinator extends BaseAgent {
         return;
       }
 
-      this.log(`[RETRO-SYNC] Found ${closedTrades.length} closed trades — applying to agent survival...`);
-      let wins = 0, losses = 0;
+      this.log(`[RETRO-SYNC] Found ${closedTrades.length} closed trades — calculating survival stats...`);
+
+      // Aggregate stats per symbol (for token agents) and totals
+      let totalWins = 0, totalLosses = 0, totalRevenue = 0;
+      const perSymbol = {};
 
       for (const t of closedTrades) {
-        const pnl = Math.abs(parseFloat(t.pnl_usdt) || 0);
+        const pnl = parseFloat(t.pnl_usdt) || 0;
         const isWin = t.status === 'WIN' || t.status === 'TP';
-        if (isWin) wins++; else losses++;
+        if (isWin) totalWins++; else totalLosses++;
+        totalRevenue += pnl;
 
-        // TraderAgent gets full impact
-        if (this.traderAgent) {
-          if (isWin) this.traderAgent.recordSurvivalWin(pnl, { symbol: t.symbol, direction: t.direction, retroSync: true });
-          else this.traderAgent.recordSurvivalLoss(pnl, { symbol: t.symbol, direction: t.direction, retroSync: true });
-        }
+        if (!perSymbol[t.symbol]) perSymbol[t.symbol] = { wins: 0, losses: 0, revenue: 0 };
+        if (isWin) perSymbol[t.symbol].wins++; else perSymbol[t.symbol].losses++;
+        perSymbol[t.symbol].revenue += pnl;
+      }
 
-        // TokenAgent gets full impact
-        const tokenAgent = this.tokenAgents?.get(t.symbol);
+      // Helper: set survival stats directly (no kill, no recursive calls)
+      const applyStats = (agent, wins, losses, revenue, hpPerLoss, hpPerWin, capitalFraction) => {
+        if (!agent || !agent._survival) return;
+        const totalTrades = wins + losses;
+        const hpDelta = (wins * hpPerWin) - (losses * hpPerLoss);
+        // HP floors at 10 during retro-sync — never kill agents from past data
+        agent._survival.health = Math.max(10, Math.min(100, 100 + hpDelta));
+        agent._survival.capital = Math.max(100, 1000 + (revenue * capitalFraction));
+        agent._survival.monthlyPnl = revenue * capitalFraction;
+        agent._survival.totalTrades = totalTrades;
+        agent._survival.totalWins = wins;
+        agent._survival.totalLosses = losses;
+        agent._survival.totalRevenue = revenue * capitalFraction;
+        agent._survival.isAlive = true;
+        agent._survival.killReason = null;
+        agent._survival.lastTradeAt = Date.now();
+      };
+
+      // TraderAgent: full impact (10 HP per trade, 100% of revenue)
+      applyStats(this.traderAgent, totalWins, totalLosses, totalRevenue, 10, 10, 1.0);
+      this.log(`[RETRO-SYNC] TraderAgent: HP=${this.traderAgent._survival.health} Capital=$${this.traderAgent._survival.capital.toFixed(2)} W/L=${totalWins}/${totalLosses}`);
+
+      // Core agents: smaller impact (5 HP per trade, 20% of revenue)
+      for (const agent of [this.chartAgent, this.riskAgent, this.kronosAgent]) {
+        applyStats(agent, totalWins, totalLosses, totalRevenue, 5, 5, 0.2);
+      }
+
+      // Token agents: per-symbol impact
+      for (const [symbol, stats] of Object.entries(perSymbol)) {
+        const tokenAgent = this.tokenAgents?.get(symbol);
         if (tokenAgent) {
-          if (isWin) tokenAgent.recordSurvivalWin(pnl, { symbol: t.symbol, direction: t.direction, retroSync: true });
-          else tokenAgent.recordSurvivalLoss(pnl, { symbol: t.symbol, direction: t.direction, retroSync: true });
-        }
-
-        // Core agents get smaller impact (±5 HP, 20% of PnL)
-        for (const agent of [this.chartAgent, this.riskAgent, this.kronosAgent]) {
-          if (!agent) continue;
-          if (isWin) {
-            agent._survival.health = Math.min(100, agent._survival.health + 5);
-            agent._survival.capital += pnl * 0.2;
-            agent._survival.monthlyPnl += pnl * 0.2;
-            agent._survival.totalWins++;
-          } else {
-            agent._survival.health = Math.max(0, agent._survival.health - 5);
-            agent._survival.capital -= pnl * 0.2;
-            agent._survival.monthlyPnl -= pnl * 0.2;
-            agent._survival.totalLosses++;
-          }
-          agent._survival.totalTrades++;
-          agent._survival.totalRevenue = (agent._survival.totalRevenue || 0) + (isWin ? pnl * 0.2 : -pnl * 0.2);
+          applyStats(tokenAgent, stats.wins, stats.losses, stats.revenue, 10, 10, 1.0);
         }
       }
 
       // Save all survival states
       const savePromises = [];
-      if (this.traderAgent) savePromises.push(this.traderAgent._saveSurvival());
-      if (this.chartAgent) savePromises.push(this.chartAgent._saveSurvival());
-      if (this.riskAgent) savePromises.push(this.riskAgent._saveSurvival());
-      if (this.kronosAgent) savePromises.push(this.kronosAgent._saveSurvival());
-      for (const [, agent] of this.tokenAgents || []) {
-        savePromises.push(agent._saveSurvival());
+      const allAgents = [this.traderAgent, this.chartAgent, this.riskAgent, this.kronosAgent];
+      for (const [, agent] of this.tokenAgents || []) allAgents.push(agent);
+      for (const agent of allAgents) {
+        if (agent) savePromises.push(agent._saveSurvival());
       }
       await Promise.all(savePromises);
 
-      this.log(`[RETRO-SYNC] Done — ${closedTrades.length} trades applied (${wins}W/${losses}L). Agent HP and capital updated.`);
-      this.addActivity('success', `Retro-synced ${closedTrades.length} past trades to agent survival (${wins}W/${losses}L)`);
+      this.log(`[RETRO-SYNC] Done — ${closedTrades.length} trades applied (${totalWins}W/${totalLosses}L). Revenue: $${totalRevenue.toFixed(2)}`);
+      this.addActivity('success', `Retro-synced ${closedTrades.length} past trades to agent survival (${totalWins}W/${totalLosses}L)`);
     } catch (err) {
       this.logError(`[RETRO-SYNC] Error: ${err.message}`);
     }
