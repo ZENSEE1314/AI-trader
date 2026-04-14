@@ -35,21 +35,22 @@ const CONFIG = {
 };
 
 // ── Trailing SL config ─────────────────────────────────────
-// Fixed tiers up to 20%, then 5% steps from 25% (gap 2%)
+// Capital-based SL: at 20x lev, 8% capital = 0.4% price distance
+// This gives enough room to breathe vs market noise (0.3-0.5%)
 const TRAILING_SL = {
-  INITIAL_SL_PCT: 0.03,          // -3% initial SL from entry
+  INITIAL_SL_PCT: 0.08,          // -8% capital SL (0.4% price at 20x — room to breathe)
   FIXED_TIERS: [
-    { trigger: 0.01,  sl: 0.005 },  //  +1%   → SL at +0.5%  (gap 0.5%)
-    { trigger: 0.025, sl: 0.02  },  //  +2.5% → SL at +2%    (gap 0.5%)
-    { trigger: 0.05,  sl: 0.03  },  //  +5%   → SL at +3%    (gap 2%)
-    { trigger: 0.08,  sl: 0.06  },  //  +8%   → SL at +6%    (gap 2%)
-    { trigger: 0.10,  sl: 0.08  },  //  +10%  → SL at +8%    (gap 2%)
-    { trigger: 0.13,  sl: 0.10  },  //  +13%  → SL at +10%   (gap 3%)
-    { trigger: 0.16,  sl: 0.13  },  //  +16%  → SL at +13%   (gap 3%)
-    { trigger: 0.20,  sl: 0.19  },  //  +20%  → SL at +19%   (gap 1%)
+    { trigger: 0.02,  sl: 0.005 },  //  +2%   → SL at +0.5%  (lock small profit early)
+    { trigger: 0.04,  sl: 0.02  },  //  +4%   → SL at +2%    (meaningful lock)
+    { trigger: 0.06,  sl: 0.04  },  //  +6%   → SL at +4%    (tight trail)
+    { trigger: 0.08,  sl: 0.06  },  //  +8%   → SL at +6%    (tight trail)
+    { trigger: 0.10,  sl: 0.08  },  //  +10%  → SL at +8%    (original risk recovered)
+    { trigger: 0.15,  sl: 0.12  },  //  +15%  → SL at +12%   (tight gap 3%)
+    { trigger: 0.20,  sl: 0.17  },  //  +20%  → SL at +17%   (tight gap 3%)
+    { trigger: 0.25,  sl: 0.23  },  //  +25%  → SL at +23%   (tight gap 2%)
   ],
-  // 25%+: trigger every 5%, SL = trigger - 2%
-  HIGH_START: 0.25, HIGH_STEP: 0.05, HIGH_GAP: 0.02,
+  // 30%+: trigger every 5%, SL = trigger - 2%
+  HIGH_START: 0.30, HIGH_STEP: 0.05, HIGH_GAP: 0.02,
 };
 
 // ── Compound: always use current wallet balance ─────────────
@@ -686,14 +687,16 @@ async function checkTrailingStop(client) {
       const floorQ = (q) => Math.floor(q * Math.pow(10, state.qtyPrec)) / Math.pow(10, state.qtyPrec);
       const origQty = Math.abs(state.qty);
 
-      // TP1 hit: close 50%, SL -> break even
+      // TP1 hit: close 30% (not 50% — let winners run), SL -> break even
       if (!state.tpHit1) {
         const tp1Hit = isLong ? cur >= state.tp1 : cur <= state.tp1;
         if (tp1Hit) {
           state.tpHit1 = true;
-          const closeQty = floorQ(origQty * 0.5);
-          const newSl = fmtP(state.entry);
-          log(`TP1 hit ${sym} @ $${fmtPrice(cur)}: closing 50%, SL -> BE`);
+          const closeQty = floorQ(origQty * 0.30); // 30% not 50%
+          // SL moves to entry + small profit buffer (not exact BE — gives room)
+          const bePad = isLong ? state.entry * 1.001 : state.entry * 0.999; // 0.1% above/below entry
+          const newSl = fmtP(bePad);
+          log(`TP1 hit ${sym} @ $${fmtPrice(cur)}: closing 30%, SL -> BE+0.1%`);
           try {
             try { await client.cancelAllOpenOrders({ symbol: sym }); } catch (_) {}
             try { await client.cancelAllAlgoOpenOrders({ symbol: sym }); } catch (_) {}
@@ -712,22 +715,24 @@ async function checkTrailingStop(client) {
             });
           } catch (e) { log(`TP1 exec warn: ${e.message}`); state.tpHit1 = false; }
           await notify(
-            `*TP1 Hit! (1%)* — *${sym}* ${isLong ? 'LONG' : 'SHORT'}\n` +
-            `50% closed @ \`$${fmtPrice(cur)}\`\n` +
-            `SL -> break even | TP2: \`$${fmtPrice(state.tp2)}\``
+            `*TP1 Hit!* — *${sym}* ${isLong ? 'LONG' : 'SHORT'}\n` +
+            `30% secured @ \`$${fmtPrice(cur)}\`\n` +
+            `SL -> BE+buffer | 70% riding → TP2: \`$${fmtPrice(state.tp2)}\``
           );
           continue;
         }
       }
 
-      // TP2 hit: close 25%, SL -> TP1
+      // TP2 hit: close 40% more (total 70% taken), SL -> halfway between entry and TP1
       if (state.tpHit1 && !state.tpHit2) {
         const tp2Hit = isLong ? cur >= state.tp2 : cur <= state.tp2;
         if (tp2Hit) {
           state.tpHit2 = true;
-          const closeQty = floorQ(origQty * 0.25);
-          const newSl = fmtP(state.tp1);
-          log(`TP2 hit ${sym} @ $${fmtPrice(cur)}: closing 25%, SL -> TP1`);
+          const closeQty = floorQ(origQty * 0.40); // 40% not 25%
+          // SL moves to midpoint between entry and TP1 (locks meaningful profit)
+          const midSl = (state.entry + state.tp1) / 2;
+          const newSl = fmtP(midSl);
+          log(`TP2 hit ${sym} @ $${fmtPrice(cur)}: closing 40%, SL -> mid(entry,TP1)`);
           try {
             try { await client.cancelAllOpenOrders({ symbol: sym }); } catch (_) {}
             try { await client.cancelAllAlgoOpenOrders({ symbol: sym }); } catch (_) {}
@@ -746,9 +751,9 @@ async function checkTrailingStop(client) {
             });
           } catch (e) { log(`TP2 exec warn: ${e.message}`); state.tpHit2 = false; }
           await notify(
-            `*TP2 Hit! (1.5%)* — *${sym}* ${isLong ? 'LONG' : 'SHORT'}\n` +
-            `25% closed @ \`$${fmtPrice(cur)}\`\n` +
-            `SL locked at TP1 | Riding 25% -> TP3: \`$${fmtPrice(state.tp3)}\``
+            `*TP2 Hit!* — *${sym}* ${isLong ? 'LONG' : 'SHORT'}\n` +
+            `40% secured @ \`$${fmtPrice(cur)}\` (70% total taken)\n` +
+            `SL locked at profit | Riding 30% → TP3: \`$${fmtPrice(state.tp3)}\``
           );
           continue;
         }
