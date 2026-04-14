@@ -243,8 +243,18 @@ router.get('/trades/csv', async (req, res) => {
 });
 
 // P&L summary (supports ?period=1d|7d|30d|6m|1y filter)
+// Cache summaries for 15s to avoid repeated DB hits on page load/refresh
+const summaryCache = new Map();
+const SUMMARY_CACHE_TTL = 15_000;
+
 router.get('/summary', async (req, res) => {
   try {
+    const cacheKey = `${req.userId}:${req.query.period || 'all'}`;
+    const cached = summaryCache.get(cacheKey);
+    if (cached && Date.now() - cached.ts < SUMMARY_CACHE_TTL) {
+      return res.json(cached.data);
+    }
+
     const period = PERIOD_INTERVALS[req.query.period];
     const dateFilter = period
       ? `AND created_at > NOW() - INTERVAL '${period}'`
@@ -282,6 +292,7 @@ router.get('/summary', async (req, res) => {
     summary.win_rate = (wins + losses) > 0 ? ((wins / (wins + losses)) * 100).toFixed(1) : '0';
     summary.per_key = perKey;
 
+    summaryCache.set(cacheKey, { data: summary, ts: Date.now() });
     res.json(summary);
   } catch (err) {
     console.error('Summary error:', err.message);
@@ -290,8 +301,18 @@ router.get('/summary', async (req, res) => {
 });
 
 // Futures wallet balances from ALL connected exchanges
+// Cache per user for 30s — exchange API calls are the #1 page load bottleneck
+const walletCache = new Map();
+const WALLET_CACHE_TTL = 30_000; // 30 seconds
+
 router.get('/futures-wallet', async (req, res) => {
   try {
+    // Serve from cache if fresh (avoids expensive exchange API calls)
+    const cached = walletCache.get(req.userId);
+    if (cached && Date.now() - cached.ts < WALLET_CACHE_TTL) {
+      return res.json(cached.data);
+    }
+
     const keys = await query(
       `SELECT id, platform, label, api_key_enc, iv, auth_tag, api_secret_enc, secret_iv, secret_auth_tag
        FROM api_keys WHERE user_id = $1 AND enabled = true ORDER BY id`,
@@ -348,12 +369,14 @@ router.get('/futures-wallet', async (req, res) => {
       }
     }
 
-    res.json({
+    const responseData = {
       balance: totalBalance,
       available: totalAvailable,
       unrealizedPnl: totalUnrealizedPnl,
       wallets,
-    });
+    };
+    walletCache.set(req.userId, { data: responseData, ts: Date.now() });
+    res.json(responseData);
   } catch (err) {
     console.error('Futures wallet error:', err.message);
     res.json({ balance: 0, available: 0, unrealizedPnl: 0, wallets: [] });

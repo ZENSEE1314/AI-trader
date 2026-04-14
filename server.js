@@ -1,6 +1,7 @@
 require('dotenv').config();
 const express = require('express');
 const cookieParser = require('cookie-parser');
+const compression = require('compression');
 const path = require('path');
 const { initAllTables } = require('./db');
 
@@ -20,6 +21,9 @@ initAllTables().catch(err => console.error('DB init error:', err.message));
   }
 })();
 
+// ── Performance: gzip compression (saves 60-80% bandwidth) ──
+app.use(compression({ threshold: 1024 }));
+
 // Skip JSON parsing for Stripe webhook — needs raw body for signature verification
 app.get('/login', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 app.get('/signup', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
@@ -28,7 +32,13 @@ app.use((req, res, next) => {
   express.json()(req, res, next);
 });
 app.use(cookieParser());
-app.use(express.static(path.resolve(__dirname, 'public')));
+
+// ── Performance: static files with 1-day cache + ETag ──
+app.use(express.static(path.resolve(__dirname, 'public'), {
+  maxAge: '1d',
+  etag: true,
+  lastModified: true,
+}));
 
 // API routes
 app.use('/api/auth', require('./routes/auth'));

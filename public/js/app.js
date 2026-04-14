@@ -294,18 +294,22 @@
       const summaryUrl = state.tradesPeriod && state.tradesPeriod !== 'all'
         ? `/api/dashboard/summary?period=${state.tradesPeriod}`
         : '/api/dashboard/summary';
+
+      // Phase 1: Load critical data in parallel (summary + trades render first)
       const [summary, walletData, weeklyEarnings, cashData] = await Promise.all([
         api('GET', summaryUrl),
         api('GET', '/api/dashboard/futures-wallet').catch(() => ({ balance: 0, wallets: [] })),
         api('GET', '/api/dashboard/weekly-earnings').catch(() => null),
         api('GET', '/api/dashboard/cash-wallet').catch(() => null),
-        loadTrades(),
       ]);
       renderSummary(summary);
       renderWallets(walletData);
       if (weeklyEarnings) renderWeeklyEarnings(weeklyEarnings);
-      loadSignalBoard();
       if (cashData) renderDashCashWallet(cashData);
+
+      // Phase 2: Non-critical data loads after first paint (doesn't block UI)
+      loadTrades();
+      loadSignalBoard();
       loadPauseStatus();
       loadKronosPredictions();
     } catch (err) {
