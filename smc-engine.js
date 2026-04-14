@@ -338,6 +338,25 @@ async function analyzeLHHL(ticker, params, dailyBiasCache, kronosPredictions = n
     return null;
   }
 
+  // ── PULLBACK CHECK: only enter when price is near the swing zone ──
+  // LONG: buy near the HL (the low), NOT at the HH (the high)
+  // SHORT: sell near the LH (the high), NOT at the LL (the low)
+  // Max allowed distance from swing point: 0.4% — beyond that we're chasing
+  const MAX_CHASE_PCT = 0.004; // 0.4% max distance from swing
+  if (direction === 'LONG') {
+    const distFromSwing = (price - swingPrice) / swingPrice;
+    if (distFromSwing > MAX_CHASE_PCT) {
+      bLog.scan(`${symbol}: LONG rejected — price $${price} is ${(distFromSwing*100).toFixed(2)}% above HL@$${swingPrice} (chasing the high, max ${MAX_CHASE_PCT*100}%)`);
+      return null;
+    }
+  } else {
+    const distFromSwing = (swingPrice - price) / swingPrice;
+    if (distFromSwing > MAX_CHASE_PCT) {
+      bLog.scan(`${symbol}: SHORT rejected — price $${price} is ${(distFromSwing*100).toFixed(2)}% below LH@$${swingPrice} (chasing the low, max ${MAX_CHASE_PCT*100}%)`);
+      return null;
+    }
+  }
+
   // ── SL below the previous swing low (LONG) / above previous swing high (SHORT) ──
   // Proper SMC: stop below the low that formed the HL, with 0.1% buffer
   const swingLows1m = struct1m.swingLows;
