@@ -1906,58 +1906,57 @@ async function syncTradeStatus() {
               let found = false;
               const tradeOpenTime = trade.created_at ? new Date(trade.created_at).getTime() : 0;
               const tradeEntry = parseFloat(trade.entry_price);
-              // Bitunix position history uses LONG/SHORT (not BUY/SELL)
               const tradeSideLong = trade.direction !== 'SHORT';
 
               // Method 1: Position history — match by symbol + side + entry price + time
               try {
                 const positions = await bxClient.getHistoryPositions({ symbol: trade.symbol, pageSize: 50 });
-                // Log first result's ALL keys so we know exact Bitunix field names
                 if (positions.length > 0) {
-                  bLog.system(`Bitunix posHistory FIELDS for ${trade.symbol}: ${JSON.stringify(Object.keys(positions[0]))}`);
-                  bLog.system(`Bitunix posHistory FIRST RAW: ${JSON.stringify(positions[0])}`);
+                  bLog.system(`[SYNC] Bitunix posHistory ${trade.symbol}: ${positions.length} results, fields=${JSON.stringify(Object.keys(positions[0]))}`);
                 }
                 for (const p of positions) {
-                  // Bitunix may use avgOpenPrice instead of entryPrice
                   const cp = parseFloat(p.closePrice || p.avgClosePrice || 0);
                   const ep = parseFloat(p.entryPrice || p.avgOpenPrice || 0);
-                  const pSideLong = (p.side || '').toUpperCase() === 'LONG';
+                  const pSide = (p.side || p.positionSide || '').toUpperCase();
+                  const pSideLong = pSide === 'LONG' || pSide === 'BUY';
                   const closeMs = parseInt(p.mtime || p.ctime || 0);
 
-                  const entryMatch = ep > 0 && Math.abs(ep - tradeEntry) / tradeEntry < 0.002;
+                  // Wider tolerance (1%) — Bitunix entry can differ from our recorded price
+                  const entryMatch = ep > 0 && Math.abs(ep - tradeEntry) / tradeEntry < 0.01;
                   const sideMatch = pSideLong === tradeSideLong;
                   const timeMatch = !tradeOpenTime || !closeMs || closeMs > tradeOpenTime;
 
-                  if (cp > 0 && p.symbol === trade.symbol && entryMatch && sideMatch && timeMatch) {
+                  if (cp > 0 && p.symbol === trade.symbol && sideMatch && (entryMatch || timeMatch)) {
                     exitPrice = cp;
-                    // Log ALL raw fields so we can verify which one matches Bitunix dashboard
-                    bLog.system(`Bitunix RAW posHistory: ${trade.symbol} | ${JSON.stringify({
-                      entryPrice: p.entryPrice, closePrice: p.closePrice, side: p.side,
-                      realizedPNL: p.realizedPNL, profit: p.profit, pnl: p.pnl,
-                      fee: p.fee, funding: p.funding, qty: p.qty, volume: p.volume,
-                      marginMode: p.marginMode, leverage: p.leverage
-                    })}`);
-                    // Try all possible net P&L fields from Bitunix
+                    bLog.system(`[SYNC] Bitunix posHistory MATCH: ${trade.symbol} entry=${ep} exit=${cp} side=${pSide}`);
+                    // Extract PnL — try all known Bitunix field names
                     const profit = parseFloat(p.profit || 0);
                     const pnl = parseFloat(p.pnl || 0);
                     const rpnl = parseFloat(p.realizedPNL || 0);
                     const fee = Math.abs(parseFloat(p.fee || 0));
                     const funding = Math.abs(parseFloat(p.funding || 0));
                     tradingFee = fee + funding;
-                    // Priority: profit > pnl > (realizedPNL - fee - funding)
                     if (profit !== 0) {
                       realizedPnl = profit;
                     } else if (pnl !== 0) {
                       realizedPnl = pnl;
-                    } else {
+                    } else if (rpnl !== 0) {
                       realizedPnl = rpnl - fee - funding;
                     }
                     found = true;
-                    bLog.system(`Bitunix posHistory RESULT: ${trade.symbol} net=${realizedPnl} (used: ${profit !== 0 ? 'profit' : pnl !== 0 ? 'pnl' : 'rpnl-fee-funding'})`);
+                    bLog.system(`[SYNC] Bitunix posHistory PnL: net=${realizedPnl} fee=${tradingFee} (profit=${profit} pnl=${pnl} rpnl=${rpnl})`);
                     break;
                   }
                 }
-              } catch (e) { bLog.error(`Bitunix posHistory error: ${e.message}`); }
+                if (!found && positions.length > 0) {
+                  // Log why no match — dump first 3 for debugging
+                  const sample = positions.slice(0, 3).map(p => ({
+                    sym: p.symbol, side: p.side || p.positionSide, entry: p.entryPrice || p.avgOpenPrice,
+                    close: p.closePrice || p.avgClosePrice, mtime: p.mtime
+                  }));
+                  bLog.system(`[SYNC] NO MATCH for trade#${trade.id} ${trade.symbol} ${trade.direction} entry=${tradeEntry} openTime=${tradeOpenTime}. Top posHistory: ${JSON.stringify(sample)}`);
+                }
+              } catch (e) { bLog.error(`[SYNC] Bitunix posHistory error: ${e.message}`); }
 
               // Method 2: Order history — CLOSE orders
               if (!found) {
@@ -1965,13 +1964,13 @@ async function syncTradeStatus() {
                   const orderList = await bxClient.getHistoryOrders({ symbol: trade.symbol, pageSize: 50 });
                   for (const o of orderList) {
                     const oPrice = parseFloat(o.avgPrice || o.price || 0);
-                    const isClose = o.reduceOnly || o.tradeSide === 'CLOSE';
+                    const isClose = o.reduceOnly || o.tradeSide === 'CLOSE' || (o.effect || '').toUpperCase() === 'CLOSE';
                     const oMs = parseInt(o.ctime || o.mtime || 0);
                     const timeMatch = !tradeOpenTime || !oMs || oMs > tradeOpenTime;
 
                     if (isClose && oPrice > 0 && timeMatch) {
                       exitPrice = oPrice;
-                      bLog.system(`Bitunix RAW orderHistory: ${trade.symbol} | ${JSON.stringify({
+                      bLog.system(`[SYNC] Bitunix orderHistory: ${trade.symbol} | ${JSON.stringify({
                         avgPrice: o.avgPrice, price: o.price, realizedPNL: o.realizedPNL,
                         profit: o.profit, pnl: o.pnl, fee: o.fee, tradeSide: o.tradeSide,
                         reduceOnly: o.reduceOnly, qty: o.qty
