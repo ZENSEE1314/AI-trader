@@ -1073,15 +1073,44 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
 
   // 1h trend for multi-TF alignment
   let h1Trend = 'neutral';
+  let h1Ema21 = null;
   if (klines1h && klines1h.length >= 20) {
     const parsed1h = klines1h.map(parseCandle);
     const h1Closes = parsed1h.map(c => c.close);
     const h1Ema9 = calcEMA(h1Closes, 9);
-    const h1Ema21 = calcEMA(h1Closes, 21);
+    h1Ema21 = calcEMA(h1Closes, 21);
     if (h1Ema9 !== null && h1Ema21 !== null) {
       h1Trend = h1Ema9 > h1Ema21 ? 'bullish' : 'bearish';
     }
   }
+
+  // 15m EMA for pullback detection (buy low, sell high)
+  const closes15 = parsed15.map(c => c.close);
+  const ema21_15m = calcEMA(closes15, 21);
+  const ema9_15m = calcEMA(closes15, 9);
+
+  // Position quality: is price at a good entry or chasing?
+  // LONG entry = price should be near or below EMA21 (pulled back, not extended)
+  // SHORT entry = price should be near or above EMA21 (bounced, not crashed)
+  let entryQuality = 'neutral';
+  if (ema21_15m !== null) {
+    const distFromEma = (price - ema21_15m) / ema21_15m;
+    // For LONG: price near/below EMA21 = good dip buy (within -1% to +0.3%)
+    // For LONG: price far above EMA21 (>0.5%) = chasing, bad entry
+    // For SHORT: price near/above EMA21 = good sell point
+    // For SHORT: price far below EMA21 = chasing the dump
+    if (distFromEma > 0.005) entryQuality = 'extended_up';     // >0.5% above EMA = chasing up
+    else if (distFromEma < -0.005) entryQuality = 'extended_down'; // >0.5% below EMA = chasing down
+    else if (distFromEma >= -0.003 && distFromEma <= 0.003) entryQuality = 'at_ema'; // at EMA = best entry
+    else entryQuality = 'near_ema'; // slightly off but acceptable
+  }
+
+  // Recent high/low to detect if we're at extreme
+  const recent20 = parsed15.slice(-20);
+  const recentHigh = Math.max(...recent20.map(c => c.high));
+  const recentLow = Math.min(...recent20.map(c => c.low));
+  const recentRange = recentHigh - recentLow;
+  const priceInRange = recentRange > 0 ? (price - recentLow) / recentRange : 0.5; // 0=bottom, 1=top
 
   // Volume on latest candle
   const lastVolOK = parsed15.length >= 22 && hasVolumeConfirm(parsed15, parsed15.length - 1, 1.0);
@@ -1240,17 +1269,50 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
 
   // Apply confluence bonuses + global filters to all signals
   for (const sig of signals) {
-    // RSI filter: reject overbought longs, oversold shorts
-    if (sig.direction === 'LONG' && rsi14 > 75) { sig.score -= 5; sig.rsiRejected = true; }
-    if (sig.direction === 'SHORT' && rsi14 < 25) { sig.score -= 5; sig.rsiRejected = true; }
-    if (rsi14 >= 30 && rsi14 <= 70) sig.score += 1; // RSI in healthy zone
+    // ── POSITION QUALITY: buy low, sell high — don't chase ──
 
-    // 1h trend alignment — BLOCK counter-trend trades (don't just penalize)
-    // Uptrend = only LONG. Downtrend = only SHORT. Neutral = both OK.
+    // RSI: LONG should enter on pullback (RSI 25-55), not when overbought
+    //       SHORT should enter on bounce (RSI 45-75), not when oversold
+    if (sig.direction === 'LONG') {
+      if (rsi14 > 70) { sig.score = -99; sig.blocked = 'LONG rejected — RSI ' + rsi14.toFixed(0) + ' overbought, chasing'; }
+      else if (rsi14 > 55) sig.score -= 2; // slightly extended
+      else if (rsi14 >= 30 && rsi14 <= 50) sig.score += 2; // pullback zone — ideal buy
+      else if (rsi14 < 25) sig.score += 1; // oversold bounce possible
+    }
+    if (sig.direction === 'SHORT') {
+      if (rsi14 < 30) { sig.score = -99; sig.blocked = 'SHORT rejected — RSI ' + rsi14.toFixed(0) + ' oversold, chasing'; }
+      else if (rsi14 < 45) sig.score -= 2; // slightly extended
+      else if (rsi14 >= 50 && rsi14 <= 70) sig.score += 2; // bounce zone — ideal sell
+      else if (rsi14 > 75) sig.score += 1; // overbought reversal possible
+    }
+
+    // EMA position: don't chase extended moves
+    if (sig.direction === 'LONG') {
+      if (entryQuality === 'extended_up') { sig.score -= 4; sig.chasing = true; } // chasing pump
+      if (entryQuality === 'at_ema' || entryQuality === 'near_ema') sig.score += 2; // pullback to EMA = good
+      if (entryQuality === 'extended_down') sig.score += 1; // dip buy
+    }
+    if (sig.direction === 'SHORT') {
+      if (entryQuality === 'extended_down') { sig.score -= 4; sig.chasing = true; } // chasing dump
+      if (entryQuality === 'at_ema' || entryQuality === 'near_ema') sig.score += 2; // bounce from EMA = good
+      if (entryQuality === 'extended_up') sig.score += 1; // sell the rally
+    }
+
+    // Price position in range: LONG near bottom is good, LONG near top is chasing
+    if (sig.direction === 'LONG') {
+      if (priceInRange > 0.85) sig.score -= 3; // buying at the top — bad
+      if (priceInRange < 0.35) sig.score += 2; // buying near the bottom — good
+    }
+    if (sig.direction === 'SHORT') {
+      if (priceInRange < 0.15) sig.score -= 3; // selling at the bottom — bad
+      if (priceInRange > 0.65) sig.score += 2; // selling near the top — good
+    }
+
+    // 1h trend alignment — BLOCK counter-trend trades
     if (sig.direction === 'LONG' && h1Trend === 'bullish') sig.score += 2;
     if (sig.direction === 'SHORT' && h1Trend === 'bearish') sig.score += 2;
-    if (sig.direction === 'LONG' && h1Trend === 'bearish') { sig.score = -99; sig.blocked = 'SHORT in uptrend blocked'; }
-    if (sig.direction === 'SHORT' && h1Trend === 'bullish') { sig.score = -99; sig.blocked = 'LONG against downtrend blocked'; }
+    if (sig.direction === 'LONG' && h1Trend === 'bearish') { sig.score = -99; sig.blocked = 'LONG blocked — 1h downtrend'; }
+    if (sig.direction === 'SHORT' && h1Trend === 'bullish') { sig.score = -99; sig.blocked = 'SHORT blocked — 1h uptrend'; }
 
     // Volume confirmation
     if (lastVolOK) sig.score += 2;
