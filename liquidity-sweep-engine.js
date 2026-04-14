@@ -1245,11 +1245,12 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     if (sig.direction === 'SHORT' && rsi14 < 25) { sig.score -= 5; sig.rsiRejected = true; }
     if (rsi14 >= 30 && rsi14 <= 70) sig.score += 1; // RSI in healthy zone
 
-    // 1h trend alignment
+    // 1h trend alignment — BLOCK counter-trend trades (don't just penalize)
+    // Uptrend = only LONG. Downtrend = only SHORT. Neutral = both OK.
     if (sig.direction === 'LONG' && h1Trend === 'bullish') sig.score += 2;
     if (sig.direction === 'SHORT' && h1Trend === 'bearish') sig.score += 2;
-    if (sig.direction === 'LONG' && h1Trend === 'bearish') sig.score -= 3; // fighting trend
-    if (sig.direction === 'SHORT' && h1Trend === 'bullish') sig.score -= 3;
+    if (sig.direction === 'LONG' && h1Trend === 'bearish') { sig.score = -99; sig.blocked = 'SHORT in uptrend blocked'; }
+    if (sig.direction === 'SHORT' && h1Trend === 'bullish') { sig.score = -99; sig.blocked = 'LONG against downtrend blocked'; }
 
     // Volume confirmation
     if (lastVolOK) sig.score += 2;
@@ -1300,7 +1301,13 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     sig.rr = sig.slDist > 0 ? Math.round(tpDist / sig.slDist * 10) / 10 : 1.0;
   }
 
-  // Filter: RR minimum 1.2 (lowered from 1.5), SL reasonable
+  // Log blocked signals for debugging
+  const blocked = signals.filter(s => s.blocked);
+  for (const b of blocked) {
+    bLog.scan(`${symbol}: ${b.direction} ${b.setup} BLOCKED — ${b.blocked} (1h trend=${h1Trend})`);
+  }
+
+  // Filter: RR minimum 1.2, SL reasonable, not blocked by trend
   const validSignals = signals.filter(s => s.rr >= 1.2 && s.slDist > 0.001 && s.slDist < 0.03 && s.score >= 0);
 
   if (!validSignals.length) return null;
