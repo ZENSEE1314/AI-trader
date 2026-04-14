@@ -38,6 +38,11 @@
     .tip-btn:hover{box-shadow:0 0 8px rgba(212,175,55,0.2);}
     .tip-btn:hover .tip-text{display:block;}
     .tip-text{display:none;position:absolute;bottom:calc(100% + 6px);left:50%;transform:translateX(-50%);background:var(--color-bg-raised);border:1px solid rgba(212,175,55,0.1);color:var(--color-text);font-size:0.72rem;font-weight:400;padding:8px 12px;border-radius:var(--radius-md);white-space:normal;width:200px;z-index:100;box-shadow:0 4px 20px rgba(0,0,0,0.5),0 0 16px rgba(212,175,55,0.05);line-height:1.4;text-align:left;backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);}
+    .pw-wrap{position:relative;}
+    .pw-wrap .form-input{padding-right:40px;}
+    .pw-toggle{position:absolute;right:10px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;color:var(--color-text-muted);padding:4px;font-size:1rem;line-height:1;display:flex;align-items:center;justify-content:center;transition:color 0.15s;}
+    .pw-toggle:hover{color:var(--color-accent);}
+    .pw-toggle svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;}
   </style>
 </head>
 
@@ -1065,7 +1070,10 @@
         </div>
         <div class="form-group">
           <label class="form-label" for="login-password">Password</label>
-          <input class="form-input" type="password" id="login-password" placeholder="Your password" required autocomplete="current-password" minlength="6">
+          <div class="pw-wrap">
+            <input class="form-input" type="password" id="login-password" placeholder="Your password" required autocomplete="current-password" minlength="6">
+            <button type="button" class="pw-toggle" tabindex="-1" aria-label="Show password"></button>
+          </div>
         </div>
         <div style="display:flex;justify-content:space-between;align-items:center;margin-top:var(--space-2);">
           <label style="display:flex;align-items:center;gap:var(--space-2);font-size:var(--text-xs);color:var(--color-text-muted);cursor:pointer;">
@@ -1104,7 +1112,10 @@
         </div>
         <div class="form-group">
           <label class="form-label" for="signup-password">Password</label>
-          <input class="form-input" type="password" id="signup-password" placeholder="Min. 6 characters" required autocomplete="new-password" minlength="6">
+          <div class="pw-wrap">
+            <input class="form-input" type="password" id="signup-password" placeholder="Min. 6 characters" required autocomplete="new-password" minlength="6">
+            <button type="button" class="pw-toggle" tabindex="-1" aria-label="Show password"></button>
+          </div>
         </div>
         <div class="form-group">
           <label class="form-label" for="signup-referral">Referral Code (optional)</label>
@@ -1582,15 +1593,24 @@
           <div style="display:flex;flex-direction:column;gap:var(--space-3);max-width:400px;">
             <div>
               <label class="form-label" for="profile-current-pw">Current Password</label>
-              <input class="form-input" type="password" id="profile-current-pw" placeholder="Current password" autocomplete="current-password">
+              <div class="pw-wrap">
+                <input class="form-input" type="password" id="profile-current-pw" placeholder="Current password" autocomplete="current-password">
+                <button type="button" class="pw-toggle" tabindex="-1" aria-label="Show password"></button>
+              </div>
             </div>
             <div>
               <label class="form-label" for="profile-new-pw">New Password</label>
-              <input class="form-input" type="password" id="profile-new-pw" placeholder="Min. 6 characters" autocomplete="new-password" minlength="6">
+              <div class="pw-wrap">
+                <input class="form-input" type="password" id="profile-new-pw" placeholder="Min. 6 characters" autocomplete="new-password" minlength="6">
+                <button type="button" class="pw-toggle" tabindex="-1" aria-label="Show password"></button>
+              </div>
             </div>
             <div>
               <label class="form-label" for="profile-confirm-pw">Confirm New Password</label>
-              <input class="form-input" type="password" id="profile-confirm-pw" placeholder="Confirm new password" autocomplete="new-password" minlength="6">
+              <div class="pw-wrap">
+                <input class="form-input" type="password" id="profile-confirm-pw" placeholder="Confirm new password" autocomplete="new-password" minlength="6">
+                <button type="button" class="pw-toggle" tabindex="-1" aria-label="Show password"></button>
+              </div>
             </div>
           </div>
           <button class="btn btn-primary btn-sm" style="margin-top:var(--space-3);" onclick="window.CryptoBot.changePassword()">Change Password</button>
@@ -1982,7 +2002,10 @@
         </div>
         <div class="form-group">
           <label class="form-label" for="key-api-secret">API Secret <span class="tip-btn">?<span class="tip-text">Your exchange API secret. Encrypted at rest — we never store it in plain text.</span></span></label>
-          <input class="form-input text-mono" type="password" id="key-api-secret" placeholder="Paste your API secret" required autocomplete="off">
+          <div class="pw-wrap">
+            <input class="form-input text-mono" type="password" id="key-api-secret" placeholder="Paste your API secret" required autocomplete="off">
+            <button type="button" class="pw-toggle" tabindex="-1" aria-label="Show secret"></button>
+          </div>
         </div>
         <div id="add-key-error" class="form-error" role="alert"></div>
         <button type="submit" id="btn-submit-key" class="btn btn-primary" style="width:100%; margin-top:var(--space-2);">
@@ -2028,6 +2051,21 @@
 
   <script src="/js/app.js?v=20260414" defer></script>
   <script src="/js/cashwallet-fix.js" defer></script>
+  <script>
+    // Password show/hide toggle
+    (function(){
+      var EYE='<svg viewBox="0 0 24 24"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg>';
+      var EYE_OFF='<svg viewBox="0 0 24 24"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>';
+      document.querySelectorAll('.pw-toggle').forEach(function(btn){
+        btn.innerHTML=EYE;
+        btn.addEventListener('click',function(){
+          var input=this.parentElement.querySelector('input');
+          if(input.type==='password'){input.type='text';this.innerHTML=EYE_OFF;this.setAttribute('aria-label','Hide password');}
+          else{input.type='password';this.innerHTML=EYE;this.setAttribute('aria-label','Show password');}
+        });
+      });
+    })();
+  </script>
 
 </body>
 </html>
