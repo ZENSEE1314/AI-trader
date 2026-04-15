@@ -1050,35 +1050,37 @@ async function main() {
         continue;
       }
 
-      // AI Brain (Ollama/Gemma) — analyze signal before trading
+      // AI Brain (Ollama/Gemma 4) — analyze signal before trading
       try {
-        const aiBrain = require('./ai-brain');
-        const sym = pick.symbol || pick.sym;
-        const aiResult = await aiBrain.analyzeSignal(sym, pick.direction, {
-          price: pick.price || pick.entry,
-          rsi: pick.rsi,
-          trend15m: pick.trend15m,
-          trend1h: pick.trend1h,
-          volRatio: pick.volRatio,
-          btcTrend: pick.btcTrend,
-          strategy: pick.setupName || pick.setup,
-          score: pick.score,
-        });
+        const { think, isAvailable } = require('./agents/ai-brain');
+        if (isAvailable()) {
+          const sym = pick.symbol || pick.sym;
+          const aiResponse = await think({
+            agentName: 'TradeGate',
+            systemPrompt: 'You are a crypto futures trade validator. Analyze the signal and respond ONLY with JSON: {"action":"LONG"|"SHORT"|"SKIP","confidence":"high"|"medium"|"low","reason":"one line"}. You CANNOT change SL/TP/leverage. Only validate direction.',
+            userMessage: `Signal: ${sym} ${pick.direction} | Strategy: ${pick.setupName || pick.setup} | Score: ${pick.score} | Price: ${pick.price || pick.entry}`,
+            complexity: 'low',
+            priority: 'normal',
+          });
 
-        bLog.ai(`AI Brain ${sym}: ${aiResult.action} (${aiResult.confidence}) — ${aiResult.reason}`);
+          if (aiResponse && !aiResponse.includes('[Critical Error]')) {
+            try {
+              const jsonMatch = aiResponse.match(/\{[\s\S]*\}/);
+              if (jsonMatch) {
+                const parsed = JSON.parse(jsonMatch[0]);
+                bLog.ai(`AI Brain ${sym}: ${parsed.action} (${parsed.confidence}) — ${parsed.reason || ''}`);
 
-        if (aiResult.action === 'SKIP') {
-          bLog.trade(`AI BRAIN BLOCKED: ${sym} ${pick.direction} — ${aiResult.reason}`);
-          continue;
-        }
-
-        if (aiResult.action !== pick.direction && aiResult.confidence !== 'low') {
-          bLog.trade(`AI BRAIN DISAGREES: ${sym} signal=${pick.direction} but AI=${aiResult.action} (${aiResult.confidence}) — skipping`);
-          continue;
-        }
-
-        if (aiResult.action === pick.direction && aiResult.confidence === 'high') {
-          bLog.trade(`AI BRAIN CONFIRMED: ${sym} ${pick.direction} with HIGH confidence`);
+                if (parsed.action === 'SKIP' && parsed.confidence !== 'low') {
+                  bLog.trade(`AI BRAIN BLOCKED: ${sym} ${pick.direction} — ${parsed.reason}`);
+                  continue;
+                }
+                if (parsed.action && parsed.action !== 'SKIP' && parsed.action !== pick.direction && parsed.confidence === 'high') {
+                  bLog.trade(`AI BRAIN DISAGREES: ${sym} signal=${pick.direction} but AI=${parsed.action} (high confidence) — skipping`);
+                  continue;
+                }
+              }
+            } catch { /* JSON parse failed — let trade through */ }
+          }
         }
       } catch (aiErr) {
         // AI is optional — if unavailable, let the trade through (backtest gate already passed)
