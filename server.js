@@ -106,6 +106,7 @@ Do NOT give financial advice. Always remind users that crypto trading involves r
     const faq = customerFAQ(message.toLowerCase());
     res.json({ reply: faq });
   } catch (err) {
+    console.error('[CHATBOT] Request failed:', err.message);
     res.json({ reply: 'Sorry, I\'m having trouble right now. Please try again or contact us on Telegram.' });
   }
 });

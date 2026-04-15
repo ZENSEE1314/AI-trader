@@ -95,7 +95,7 @@ Return ONLY a JSON object: {"direction": "...", "target": 0.0, "confidence": 0-1
         systemPrompt: persona.prompt + teamContext,
         userMessage: userMessage,
         context: { symbol, seeds },
-        complexity: 'medium',
+        complexity: 'high',
       });
 
       const jsonMatch = response.match(/\{.*\}/s);

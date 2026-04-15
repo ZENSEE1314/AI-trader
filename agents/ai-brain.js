@@ -122,8 +122,8 @@ async function think(opts) {
   const provider = getProvider(complexity);
   if (!provider) return `[Critical Error] No AI provider configured. Please check OLLAMA_URL, GOOGLE_AI_KEY, or ANTHROPIC_API_KEY.`;
 
-  // Check cache first
-  const cacheKey = `${agentName}:${userMessage.substring(0, 100)}`;
+  // Cache key includes systemPrompt snippet to prevent different prompts sharing cached replies
+  const cacheKey = `${agentName}:${systemPrompt.substring(0, 40)}:${userMessage.substring(0, 100)}`;
   const cached = getCached(cacheKey);
   if (cached) {
     console.log(`[AI Brain] ${agentName} cache hit`);
@@ -174,6 +174,11 @@ async function think(opts) {
   if (agentMemory) fullSystem += `\n\n${agentMemory}`;
   // Available skills — agent knows what tools are available
   if (skillsPrompt) fullSystem += `\n\n${skillsPrompt.substring(0, 400)}`;
+  // Hard cap — Google Gemini rejects system instructions > ~4000 chars with a 400 error
+  const MAX_SYSTEM_CHARS = 3800;
+  if (fullSystem.length > MAX_SYSTEM_CHARS) {
+    fullSystem = fullSystem.substring(0, MAX_SYSTEM_CHARS);
+  }
 
   try {
     requestLog.push(Date.now());
@@ -215,6 +220,21 @@ async function think(opts) {
         if ((err.message?.includes('429') || err.message?.includes('quota')) && currentProvider === 'google') {
           if (process.env.ANTHROPIC_API_KEY) {
             console.log(`[AI Brain] Google quota exhausted — switching to Anthropic`);
+            if (!anthropicClient) {
+              const Anthropic = require('@anthropic-ai/sdk');
+              anthropicClient = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+            }
+            currentProvider = 'anthropic';
+            attempts--;
+            continue;
+          }
+        }
+
+        // 400 Bad Request from Google/Anthropic = oversized prompt or bad model name.
+        // Fall through to the next provider rather than crashing the request.
+        if (err.message?.includes('400') && currentProvider !== 'ollama') {
+          console.warn(`[AI Brain] ${currentProvider} returned 400 (likely oversized prompt) — trying next provider`);
+          if (currentProvider === 'google' && process.env.ANTHROPIC_API_KEY) {
             if (!anthropicClient) {
               const Anthropic = require('@anthropic-ai/sdk');
               anthropicClient = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
@@ -271,7 +291,12 @@ async function thinkGoogle(agentName, systemPrompt, userMessage) {
 }
 
 async function thinkAnthropic(agentName, systemPrompt, userMessage) {
-  const model = process.env.AGENT_AI_MODEL || 'claude-3-5-sonnet-20241022';
+  let model = process.env.AGENT_AI_MODEL || 'claude-3-5-sonnet-20241022';
+  // Guard: reject Ollama model names (e.g. gemma3:4b, qwen2.5:7b, phi3) — they cause Anthropic 404
+  const ANTHROPIC_PREFIXES = ['claude-3', 'claude-2', 'claude-'];
+  if (!ANTHROPIC_PREFIXES.some(p => model.startsWith(p))) {
+    model = 'claude-3-5-sonnet-20241022';
+  }
   console.log(`[AI Brain] ${agentName} thinking with Anthropic ${model}...`);
 
   const response = await anthropicClient.messages.create({

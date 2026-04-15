@@ -115,12 +115,30 @@ class OptimizerAgent extends BaseAgent {
       this.currentTask = { description: `Testing ${batch.length} tokens: ${batch.map(s => s.replace('USDT', '')).join(', ')}`, startedAt: Date.now() };
       this.addActivity('info', `Testing: ${batch.map(s => s.replace('USDT', '')).join(', ')}`);
 
-      // Test SMC strategies with different swing lengths (the live strategy)
+      // Test SMC strategies across different swing lengths and pick the best
       const smcStrategies = ['smc_2gate', 'smc_rsi', 'smc_ema'];
+      const smcResults = [];
       for (const swLen of [3, 4, 5, 6, 7]) {
         if (STRATEGIES.smc_2gate) STRATEGIES.smc_2gate.swingLen = swLen;
         if (STRATEGIES.smc_rsi) STRATEGIES.smc_rsi.swingLen = swLen;
         if (STRATEGIES.smc_ema) STRATEGIES.smc_ema.swingLen = swLen;
+        const r = await runBacktest({
+          symbols: batch,
+          days: Math.min(days, 14),
+          interval: '3m',
+          strategies: smcStrategies,
+        });
+        smcResults.push({ swLen, ...r });
+      }
+      // Pick the swingLen that found the most viable strategies
+      smcResults.sort((a, b) => b.viableStrategies - a.viableStrategies);
+      const result3m = smcResults[0];
+      if (result3m.viableStrategies > 0) {
+        const bestSwLen = smcResults[0].swLen;
+        // Lock in best swing length for the rest of this round
+        if (STRATEGIES.smc_2gate) STRATEGIES.smc_2gate.swingLen = bestSwLen;
+        if (STRATEGIES.smc_rsi) STRATEGIES.smc_rsi.swingLen = bestSwLen;
+        if (STRATEGIES.smc_ema) STRATEGIES.smc_ema.swingLen = bestSwLen;
       }
 
       // Include any AI-discovered strategies from StrategyAgent
@@ -129,14 +147,6 @@ class OptimizerAgent extends BaseAgent {
       if (dynamicKeys.length > 0) {
         this.addActivity('info', `Including ${dynamicKeys.length} AI-discovered strategies in optimization`);
       }
-
-      // Run backtests on both 3m (live) and 15m timeframes
-      const result3m = await runBacktest({
-        symbols: batch,
-        days: Math.min(days, 14), // 3m data = many candles, limit to 14 days
-        interval: '3m',
-        strategies: smcStrategies,
-      });
 
       // Include built-in + discovered strategies
       const allStratKeys = dynamicKeys.length > 0 ? [...Object.keys(STRATEGIES)] : null;

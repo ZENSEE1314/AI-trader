@@ -160,14 +160,12 @@ class AgentCoordinator extends BaseAgent {
       this._fetchTopTokens().catch(err => this.logError(`[BOOT] Top tokens fetch failed: ${err.message}`));
 
       this.log('[BOOT] Starting background agent loops...');
-      // Wire cross-agent collaboration before init
+      // Wire coordinator reference for agents that need it (already init()-ed above)
+      // NOTE: do NOT call .init() again here — initPromises already booted all agents.
+      // Double-init causes duplicate scan timers and race conditions in CoderAgent.
       this.strategyAgent.setCoordinator(this);
-      this.strategyAgent.init().catch(err => this.logError(`StrategyAgent init failed: ${err.message}`));
-      this.policeAgent.init().catch(err => this.logError(`PoliceAgent init failed: ${err.message}`));
       this.coderAgent.setCoordinator(this);
-      this.coderAgent.init().catch(err => this.logError(`CoderAgent init failed: ${err.message}`));
       this.optimizerAgent.setCoordinator(this);
-      this.optimizerAgent.init().catch(err => this.logError(`OptimizerAgent init failed: ${err.message}`));
 
       // Cross-agent knowledge sharing — strategies flow between agents
       this._wireStrategySharing();

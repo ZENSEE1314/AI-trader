@@ -184,7 +184,12 @@ class CoderAgent extends BaseAgent {
     }
 
     // ── Phase 7: Auto-apply if enabled and patches are safe ──
-    if (this.options.autoApply && this._pendingPatches.length > 0) {
+    // Read from profile config (the source of truth for UI toggles) with options as override
+    const autoApplyCfg = this._profile.config.find(c => c.key === 'autoApply');
+    const shouldAutoApply = this.options.autoApply !== undefined
+      ? this.options.autoApply
+      : (autoApplyCfg?.value ?? false);
+    if (shouldAutoApply && this._pendingPatches.length > 0) {
       this.currentTask = { description: 'Phase 7: Applying safe patches...', startedAt: Date.now() };
       await this._applyPendingPatches();
     }
@@ -482,7 +487,8 @@ Respond in JSON: {"summary": "...", "actionable": true/false, "recommendation": 
       // Also scan in-memory logs
       try {
         const { getLogs } = require('../bot-logger');
-        const logs = getLogs ? getLogs('error', 50) : [];
+        // getLogs(since, category, scope) — since=0 means all, category='error'
+        const logs = getLogs ? getLogs(0, 'error') : [];
         const counts = new Map();
         for (const log of logs) {
           const key = (log.message || '').slice(0, 100);
@@ -521,9 +527,9 @@ Respond in JSON: {"summary": "...", "actionable": true/false, "recommendation": 
           continue;
         }
 
-        // Syntax check via require (cached — won't re-execute)
-        delete require.cache[require.resolve(`../${mod}`)];
-        require(`../${mod}`);
+        // Syntax-only check — never re-require (that re-executes timers/DB connections)
+        const { execSync } = require('child_process');
+        execSync(`node -c "${fullPath}"`, { timeout: 3000, stdio: 'pipe' });
         results[mod] = { ok: true, lastCheck: Date.now() };
         this._moduleHealth.set(mod, { ok: true });
       } catch (err) {
@@ -732,11 +738,6 @@ Rules:
       return { ok: false, error: 'Cannot read file' };
     }
 
-    // Verify search text exists
-    if (!content.includes(patch.search)) {
-      return { ok: false, error: 'Search text not found — code may have changed' };
-    }
-
     // Create backup
     const backupPath = filePath + '.coder-backup';
     try {
@@ -745,7 +746,21 @@ Rules:
       return { ok: false, error: 'Cannot create backup' };
     }
 
-    // Apply replacement
+    // Safety: reject empty search/replace — would silently prepend nothing and log ok
+    if (!patch.search || patch.replace === undefined) {
+      return { ok: false, error: 'Patch has empty search or replace — not applicable' };
+    }
+
+    // Count occurrences — reject ambiguous patches (multiple matches risk wrong replacement)
+    const occurrences = content.split(patch.search).length - 1;
+    if (occurrences === 0) {
+      return { ok: false, error: 'Search text not found — code may have changed' };
+    }
+    if (occurrences > 1) {
+      return { ok: false, error: `Ambiguous patch: search text appears ${occurrences} times — manual review required` };
+    }
+
+    // Apply replacement (single exact occurrence confirmed above)
     const newContent = content.replace(patch.search, patch.replace);
 
     // Validate the patched content loads (syntax check)
