@@ -124,25 +124,23 @@ class TraderAgent extends BaseAgent {
           continue;
         }
 
-        // Kronos AI hard gate — block trades where Kronos disagrees
+        // Backtest gate — block strategies with <80% WR on this token
         try {
-          const kronosModule = require('../kronos');
-          const sym = pick.symbol || pick.sym;
-          const kronosResult = kronosModule.getCachedPrediction(sym) || await kronosModule.getKronosPrediction(sym, '15m', 20);
-
-          this.logTrade(`Kronos: ${sym} → ${kronosResult.direction} ${kronosResult.change_pct}% conf=${kronosResult.confidence}`);
-
-          if (kronosResult.direction !== 'NEUTRAL' && kronosResult.direction !== pick.direction && kronosResult.confidence === 'high') {
-            this.logTrade(`KRONOS WARNING: ${sym} SMC=${pick.direction} but Kronos=${kronosResult.direction} (high) — proceeding with caution`);
-            this.addActivity('info', `${sym} Kronos disagrees (${kronosResult.direction}) but 3m+1m confirmed — trading`);
+          const backtestGate = require('../backtest-gate');
+          const gateSym = pick.symbol || pick.sym;
+          const gateStrategy = pick.setupName || pick.setup || 'ALL';
+          const gatePasses = await backtestGate.passesGate(gateSym, gateStrategy);
+          if (!gatePasses) {
+            this.logTrade(`BACKTEST GATE BLOCKED: ${gateSym} ${gateStrategy} — WR below ${backtestGate.MIN_WIN_RATE}%`);
+            this.tradesSkipped++;
+            this.addActivity('skip', `${gateSym} backtest WR too low — skipped`);
+            continue;
           }
-
-          if (kronosResult.direction === pick.direction && kronosResult.confidence === 'high') {
-            this.logTrade(`KRONOS CONFIRMED: ${sym} ${pick.direction} HIGH confidence`);
-          }
-        } catch (kronosErr) {
-          this.logTrade(`Kronos unavailable — proceeding with SMC signal only: ${kronosErr.message}`);
-          this.addActivity('info', `${pick.symbol} Kronos unavailable — trading on SMC signal`);
+          this.logTrade(`BACKTEST GATE PASSED: ${gateSym} ${gateStrategy}`);
+        } catch (gateErr) {
+          this.logTrade(`Backtest gate error: ${gateErr.message} — blocking for safety`);
+          this.tradesSkipped++;
+          continue;
         }
 
         // Execute for all registered users

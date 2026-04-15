@@ -205,7 +205,17 @@ async function think(opts) {
           }
         }
 
-        const isTransient = err.message?.includes('424') || err.message?.includes('500') || err.message?.includes('503') || err.message?.includes('429') || err.message?.includes('Could not serve request') || err.message?.includes('Error fetching') || err.message?.includes('fetch failed') || err.message?.includes('ECONNRESET') || err.message?.includes('ETIMEDOUT') || err.message === 'AI returned empty response';
+        // Google 429 quota — cascade to Anthropic immediately, don't retry Google
+        if ((err.message?.includes('429') || err.message?.includes('quota')) && currentProvider === 'google') {
+          if (process.env.ANTHROPIC_API_KEY) {
+            console.log(`[AI Brain] Google quota exhausted — switching to Anthropic`);
+            currentProvider = 'anthropic';
+            attempts--;
+            continue;
+          }
+        }
+
+        const isTransient = err.message?.includes('424') || err.message?.includes('500') || err.message?.includes('503') || err.message?.includes('Could not serve request') || err.message?.includes('Error fetching') || err.message?.includes('fetch failed') || err.message?.includes('ECONNRESET') || err.message?.includes('ETIMEDOUT') || err.message === 'AI returned empty response';
 
         if (isTransient && attempts < maxAttempts) {
           console.log(`[AI Brain] Transient error ${err.message} — retrying (${attempts}/${maxAttempts})...`);
