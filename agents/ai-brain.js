@@ -209,6 +209,10 @@ async function think(opts) {
         if ((err.message?.includes('429') || err.message?.includes('quota')) && currentProvider === 'google') {
           if (process.env.ANTHROPIC_API_KEY) {
             console.log(`[AI Brain] Google quota exhausted — switching to Anthropic`);
+            if (!anthropicClient) {
+              const Anthropic = require('@anthropic-ai/sdk');
+              anthropicClient = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+            }
             currentProvider = 'anthropic';
             attempts--;
             continue;

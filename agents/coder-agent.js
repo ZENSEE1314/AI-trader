@@ -56,7 +56,7 @@ class CoderAgent extends BaseAgent {
         { id: 'dep_check', name: 'Dependency Check', description: 'Verify all required packages are installed', enabled: true },
       ],
       config: [
-        { key: 'autoApply', label: 'Auto-Apply Patches', type: 'boolean', value: false },
+        { key: 'autoApply', label: 'Auto-Apply Patches', type: 'boolean', value: true },
         { key: 'scanInterval', label: 'Scan Interval (min)', type: 'number', value: 5, min: 1, max: 60 },
         { key: 'maxPatchSize', label: 'Max Patch Lines', type: 'number', value: MAX_PATCH_SIZE, min: 10, max: 1000 },
       ],
@@ -435,6 +435,7 @@ Respond in JSON: {"summary": "...", "actionable": true/false, "recommendation": 
         context: {},
         complexity: 'high',
       });
+      if (!response) return null;
       const jsonMatch = response.match(/\{[\s\S]*\}/);
       return jsonMatch ? JSON.parse(jsonMatch[0]) : null;
     } catch (err) {
