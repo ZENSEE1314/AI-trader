@@ -3714,7 +3714,7 @@ function loadBrain() {
   const display = document.getElementById('brain-display');
   if (display) {
     display.style.display = 'block';
-    fetch('/admin/brain-status').then(r => r.json()).then(data => {
+    fetch('/api/admin/brain-status').then(r => r.json()).then(data => {
       display.innerText = data.report;
     });
   }
