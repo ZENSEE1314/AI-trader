@@ -165,7 +165,7 @@ const DEFAULT_PARAMS = {
 
   // Sizing params (cycle.js)
   WALLET_SIZE_PCT: 0.10,   // 10% of wallet per trade
-  LEV_BTC_ETH: 100,        // BTC/ETH leverage
+  LEV_BTC_ETH: 20,         // BTC/ETH leverage (capped at 20 — higher = liquidated on noise)
   LEV_ALT: 20,             // all altcoin leverage
 
   // Strategy config (smc-engine.js uses these via getStrategyConfig)

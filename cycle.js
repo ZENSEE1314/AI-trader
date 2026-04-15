@@ -38,16 +38,16 @@ const CONFIG = {
 // Capital-based SL: at 20x lev, 8% capital = 0.4% price distance
 // This gives enough room to breathe vs market noise (0.3-0.5%)
 const TRAILING_SL = {
-  INITIAL_SL_PCT: 0.08,          // -8% capital SL (0.4% price at 20x — room to breathe)
+  INITIAL_SL_PCT: 0.15,          // -15% capital SL (0.75% price at 20x — real room to breathe)
   FIXED_TIERS: [
-    { trigger: 0.02,  sl: 0.005 },  //  +2%   → SL at +0.5%  (lock small profit early)
-    { trigger: 0.04,  sl: 0.02  },  //  +4%   → SL at +2%    (meaningful lock)
-    { trigger: 0.06,  sl: 0.04  },  //  +6%   → SL at +4%    (tight trail)
-    { trigger: 0.08,  sl: 0.06  },  //  +8%   → SL at +6%    (tight trail)
-    { trigger: 0.10,  sl: 0.08  },  //  +10%  → SL at +8%    (original risk recovered)
-    { trigger: 0.15,  sl: 0.12  },  //  +15%  → SL at +12%   (tight gap 3%)
-    { trigger: 0.20,  sl: 0.17  },  //  +20%  → SL at +17%   (tight gap 3%)
-    { trigger: 0.25,  sl: 0.23  },  //  +25%  → SL at +23%   (tight gap 2%)
+    { trigger: 0.04,  sl: 0.005 },  //  +4%   → SL at +0.5%  (lock tiny profit, wider trigger)
+    { trigger: 0.06,  sl: 0.02  },  //  +6%   → SL at +2%    (meaningful lock)
+    { trigger: 0.08,  sl: 0.04  },  //  +8%   → SL at +4%    (decent lock)
+    { trigger: 0.10,  sl: 0.06  },  //  +10%  → SL at +6%    (tight trail)
+    { trigger: 0.15,  sl: 0.10  },  //  +15%  → SL at +10%   (original risk recovered)
+    { trigger: 0.20,  sl: 0.16  },  //  +20%  → SL at +16%   (tight gap 4%)
+    { trigger: 0.25,  sl: 0.22  },  //  +25%  → SL at +22%   (tight gap 3%)
+    { trigger: 0.30,  sl: 0.27  },  //  +30%  → SL at +27%   (tight gap 3%)
   ],
   // 30%+: trigger every 5%, SL = trigger - 2%
   HIGH_START: 0.30, HIGH_STEP: 0.05, HIGH_GAP: 0.02,
@@ -412,18 +412,33 @@ async function openTrade(client, pick, wallet) {
   const floorQ = (q) => Math.floor(q * Math.pow(10, qtyPrec)) / Math.pow(10, qtyPrec);
   const fmtP = (p) => parseFloat(p.toFixed(pricePrec));
 
-  // SL from engine (1m swing candle + AI-tuned buffer)
-  const sl = fmtP(pick.sl);
-  const slDist = Math.abs(price - sl) / price;
+  // SL from engine (ATR-based, gives room to breathe per actual volatility)
+  const engineSl = fmtP(pick.sl);
+  const engineSlDist = Math.abs(price - engineSl) / price;
 
   // TP from engine (AI-tuned RR ratio)
   const tp1 = fmtP(pick.tp1);
   const tp2 = fmtP(pick.tp2);
   const tp3 = fmtP(pick.tp3);
 
-  // Initial SL: INITIAL_SL_PCT is % of capital, convert to price distance using leverage
-  const slPricePct = TRAILING_SL.INITIAL_SL_PCT / leverage;
+  // Capital-based SL: INITIAL_SL_PCT is % of capital, convert to price distance
+  const capitalSlPct = TRAILING_SL.INITIAL_SL_PCT / leverage;
+
+  // Use the WIDER of: capital-based SL or engine's ATR-based SL (give room to breathe)
+  let slPricePct = Math.max(capitalSlPct, engineSlDist);
+
+  // Liquidation guard: ensure SL is always closer to entry than liquidation price
+  const maxSlPct = (1 / leverage) * 0.80;
+  if (slPricePct > maxSlPct) {
+    bLog.trade(`SL clamped: ${(slPricePct*100).toFixed(3)}% > liq limit ${(maxSlPct*100).toFixed(3)}% at ${leverage}x`);
+    slPricePct = maxSlPct;
+  }
+
+  const slDist = slPricePct;
   const initialSlPrice = fmtP(isLong ? price * (1 - slPricePct) : price * (1 + slPricePct));
+  if (engineSlDist > capitalSlPct) {
+    bLog.trade(`Using engine ATR-SL (${(engineSlDist*100).toFixed(2)}%) wider than capital SL (${(capitalSlPct*100).toFixed(2)}%) — more room`);
+  }
 
   // Position size: 10% of wallet = margin, notional = margin * leverage
   const MIN_NOTIONAL = 5.5;
@@ -1023,7 +1038,15 @@ async function executeForAllUsers(pick) {
         // Consecutive loss cooldown removed — let it run
 
         // Initial SL: sl_pct is % of capital at risk, convert to price distance using leverage
-        const slPricePct = userSL / userLev;
+        let slPricePct = userSL / userLev;
+
+        // Liquidation guard: SL must be closer to entry than liquidation price
+        const maxSlPct = (1 / userLev) * 0.80;
+        if (slPricePct > maxSlPct) {
+          userLog.trade(`User ${key.email}: SL clamped from ${(slPricePct*100).toFixed(3)}% to ${(maxSlPct*100).toFixed(3)}% (liq guard at ${userLev}x)`);
+          slPricePct = maxSlPct;
+        }
+
         const initialSlPrice = isLong ? price * (1 - slPricePct) : price * (1 + slPricePct);
         const userTpPrice = isLong ? price * (1 + userTP) : price * (1 - userTP);
         const userTp3Price = isLong ? price * (1 + userTP * 1.5) : price * (1 - userTP * 1.5);

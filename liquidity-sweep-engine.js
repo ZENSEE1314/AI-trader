@@ -1099,10 +1099,10 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     // For LONG: price far above EMA21 (>0.5%) = chasing, bad entry
     // For SHORT: price near/above EMA21 = good sell point
     // For SHORT: price far below EMA21 = chasing the dump
-    if (distFromEma > 0.005) entryQuality = 'extended_up';     // >0.5% above EMA = chasing up
-    else if (distFromEma < -0.005) entryQuality = 'extended_down'; // >0.5% below EMA = chasing down
-    else if (distFromEma >= -0.003 && distFromEma <= 0.003) entryQuality = 'at_ema'; // at EMA = best entry
-    else entryQuality = 'near_ema'; // slightly off but acceptable
+    if (distFromEma > 0.015) entryQuality = 'extended_up';     // >1.5% above EMA = chasing up
+    else if (distFromEma < -0.015) entryQuality = 'extended_down'; // >1.5% below EMA = chasing down
+    else if (distFromEma >= -0.005 && distFromEma <= 0.005) entryQuality = 'at_ema'; // within 0.5% of EMA = best
+    else entryQuality = 'near_ema'; // 0.5-1.5% off EMA — acceptable
   }
 
   // Recent high/low to detect if we're at extreme
@@ -1308,11 +1308,11 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
       if (priceInRange > 0.65) sig.score += 2; // selling near the top — good
     }
 
-    // 1h trend alignment — BLOCK counter-trend trades
-    if (sig.direction === 'LONG' && h1Trend === 'bullish') sig.score += 2;
-    if (sig.direction === 'SHORT' && h1Trend === 'bearish') sig.score += 2;
-    if (sig.direction === 'LONG' && h1Trend === 'bearish') { sig.score = -99; sig.blocked = 'LONG blocked — 1h downtrend'; }
-    if (sig.direction === 'SHORT' && h1Trend === 'bullish') { sig.score = -99; sig.blocked = 'SHORT blocked — 1h uptrend'; }
+    // 1h trend alignment — bonus for with-trend, penalty for counter-trend
+    if (sig.direction === 'LONG' && h1Trend === 'bullish') sig.score += 3;
+    if (sig.direction === 'SHORT' && h1Trend === 'bearish') sig.score += 3;
+    if (sig.direction === 'LONG' && h1Trend === 'bearish') sig.score -= 4; // counter-trend penalty (was hard block)
+    if (sig.direction === 'SHORT' && h1Trend === 'bullish') sig.score -= 4;
 
     // Volume confirmation
     if (lastVolOK) sig.score += 2;
@@ -1337,12 +1337,12 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
       sig.zoneStrength = nearestZone.strength;
     }
 
-    // Dynamic ATR-based SL (override hardcoded SL if ATR is available)
+    // Dynamic ATR-based SL: use ATR as MINIMUM distance — give room to breathe
     if (atr15 > 0) {
-      const atrSl = sig.direction === 'LONG' ? sig.price - atr15 * 1.0 : sig.price + atr15 * 1.0;
-      // Use ATR SL if it's tighter than the strategy SL
-      if (sig.direction === 'LONG' && atrSl > sig.sl) sig.sl = atrSl;
-      if (sig.direction === 'SHORT' && atrSl < sig.sl) sig.sl = atrSl;
+      const atrSl = sig.direction === 'LONG' ? sig.price - atr15 * 1.2 : sig.price + atr15 * 1.2;
+      // Use ATR SL if it's WIDER than strategy SL (more room = fewer stop-outs on noise)
+      if (sig.direction === 'LONG' && atrSl < sig.sl) sig.sl = atrSl;
+      if (sig.direction === 'SHORT' && atrSl > sig.sl) sig.sl = atrSl;
       sig.slDist = Math.abs(sig.price - sig.sl) / sig.price;
     }
 
