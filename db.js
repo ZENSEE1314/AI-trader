@@ -82,6 +82,8 @@ async function initAllTables() {
       created_at TIMESTAMPTZ DEFAULT NOW()
     )`,
     // Admin can approve users to trade without subscription
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS username VARCHAR(100)`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS wallet_balance DECIMAL DEFAULT 0`,
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS approved_no_sub BOOLEAN DEFAULT false`,
     // Profit share columns on api_keys (per-user configurable by admin)
     `ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS profit_share_user_pct DECIMAL DEFAULT 60`,

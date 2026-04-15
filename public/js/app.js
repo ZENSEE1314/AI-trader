@@ -183,12 +183,12 @@
       const data = await api('GET', '/api/auth/me');
       state.user = data;
       els.userEmail.textContent = data.username || data.email;
-      // Show admin tab if admin
       const adminTab = $('#admin-tab');
       if (adminTab) adminTab.classList.toggle('hidden', !data.is_admin);
       showSection('app');
       switchTab('dashboard');
-    } catch {
+    } catch (err) {
+      console.log('checkSession failed:', err.message);
       showSection('landing');
     }
   }
@@ -232,9 +232,19 @@
       const password = $('#login-password').value;
       try {
         const remember = $('#login-remember')?.checked ?? true;
-        await api('POST', '/api/auth/login', { email, password, remember });
-        await checkSession();
-        showToast('Welcome back!', 'success');
+        const loginRes = await api('POST', '/api/auth/login', { email, password, remember });
+        // Small delay to ensure cookie is set before /me call
+        await new Promise(r => setTimeout(r, 300));
+        try {
+          await checkSession();
+          showToast('Welcome back!', 'success');
+        } catch (sessionErr) {
+          // Login succeeded but session check failed — retry once
+          console.warn('Session check failed after login, retrying...', sessionErr.message);
+          await new Promise(r => setTimeout(r, 500));
+          await checkSession();
+          showToast('Welcome back!', 'success');
+        }
       } catch (err) {
         showError(els.loginError, err.message);
       }
