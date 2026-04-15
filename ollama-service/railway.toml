@@ -1,0 +1,13 @@
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+healthcheckPath = "/api/tags"
+healthcheckTimeout = 30
+restartPolicyType = "ALWAYS"
+restartPolicyMaxRetries = 5
+
+[variables]
+OLLAMA_MODEL = "gemma3:4b"
+PORT = "11434"

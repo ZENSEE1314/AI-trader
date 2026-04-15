@@ -1050,27 +1050,39 @@ async function main() {
         continue;
       }
 
-      // Kronos AI prediction — use cached batch result or fetch fresh
+      // AI Brain (Ollama/Gemma) — analyze signal before trading
       try {
-        const kronosModule = require('./kronos');
+        const aiBrain = require('./ai-brain');
         const sym = pick.symbol || pick.sym;
-        const kronosResult = kronosModule.getCachedPrediction(sym) || await kronosModule.getKronosPrediction(sym, '15m', 20);
+        const aiResult = await aiBrain.analyzeSignal(sym, pick.direction, {
+          price: pick.price || pick.entry,
+          rsi: pick.rsi,
+          trend15m: pick.trend15m,
+          trend1h: pick.trend1h,
+          volRatio: pick.volRatio,
+          btcTrend: pick.btcTrend,
+          strategy: pick.setupName || pick.setup,
+          score: pick.score,
+        });
 
-        bLog.ai(`Kronos ${sym}: ${kronosResult.direction} (${kronosResult.change_pct > 0 ? '+' : ''}${kronosResult.change_pct}%) confidence=${kronosResult.confidence} trend=${kronosResult.trend}`);
-        log(`Kronos: ${sym} → ${kronosResult.direction} ${kronosResult.change_pct}% conf=${kronosResult.confidence}`);
+        bLog.ai(`AI Brain ${sym}: ${aiResult.action} (${aiResult.confidence}) — ${aiResult.reason}`);
 
-        if (kronosResult.direction !== 'NEUTRAL' && kronosResult.direction !== pick.direction && kronosResult.confidence !== 'low') {
-          bLog.trade(`KRONOS BLOCKED: ${sym} AI=${pick.direction} but Kronos=${kronosResult.direction} (${kronosResult.change_pct}% ${kronosResult.confidence}) — skipping`);
-          await notify(`🚫 Kronos blocked *${sym}* ${pick.direction}\nAI predicts ${kronosResult.direction} (${kronosResult.change_pct}%)`);
+        if (aiResult.action === 'SKIP') {
+          bLog.trade(`AI BRAIN BLOCKED: ${sym} ${pick.direction} — ${aiResult.reason}`);
           continue;
         }
 
-        if (kronosResult.direction === pick.direction && kronosResult.confidence === 'high') {
-          bLog.trade(`KRONOS CONFIRMED: ${sym} ${pick.direction} with HIGH confidence (${kronosResult.change_pct}%)`);
+        if (aiResult.action !== pick.direction && aiResult.confidence !== 'low') {
+          bLog.trade(`AI BRAIN DISAGREES: ${sym} signal=${pick.direction} but AI=${aiResult.action} (${aiResult.confidence}) — skipping`);
+          continue;
         }
-      } catch (kronosErr) {
-        bLog.error(`Kronos error — blocking trade for safety: ${kronosErr.message}`);
-        continue; // Don't trade without Kronos validation
+
+        if (aiResult.action === pick.direction && aiResult.confidence === 'high') {
+          bLog.trade(`AI BRAIN CONFIRMED: ${sym} ${pick.direction} with HIGH confidence`);
+        }
+      } catch (aiErr) {
+        // AI is optional — if unavailable, let the trade through (backtest gate already passed)
+        bLog.error(`AI Brain error (non-blocking): ${aiErr.message}`);
       }
 
       bLog.trade(`Executing trade: ${pick.symbol} ${pick.direction} for registered users...`);
