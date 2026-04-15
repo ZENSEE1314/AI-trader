@@ -115,31 +115,21 @@ class OptimizerAgent extends BaseAgent {
       this.currentTask = { description: `Testing ${batch.length} tokens: ${batch.map(s => s.replace('USDT', '')).join(', ')}`, startedAt: Date.now() };
       this.addActivity('info', `Testing: ${batch.map(s => s.replace('USDT', '')).join(', ')}`);
 
-      // Test SMC strategies across different swing lengths and pick the best
+      // Test SMC strategies — pick the swingLen for this round based on run index (rotates 3→7)
       const smcStrategies = ['smc_2gate', 'smc_rsi', 'smc_ema'];
-      const smcResults = [];
-      for (const swLen of [3, 4, 5, 6, 7]) {
-        if (STRATEGIES.smc_2gate) STRATEGIES.smc_2gate.swingLen = swLen;
-        if (STRATEGIES.smc_rsi) STRATEGIES.smc_rsi.swingLen = swLen;
-        if (STRATEGIES.smc_ema) STRATEGIES.smc_ema.swingLen = swLen;
-        const r = await runBacktest({
-          symbols: batch,
-          days: Math.min(days, 14),
-          interval: '3m',
-          strategies: smcStrategies,
-        });
-        smcResults.push({ swLen, ...r });
-      }
-      // Pick the swingLen that found the most viable strategies
-      smcResults.sort((a, b) => b.viableStrategies - a.viableStrategies);
-      const result3m = smcResults[0];
-      if (result3m.viableStrategies > 0) {
-        const bestSwLen = smcResults[0].swLen;
-        // Lock in best swing length for the rest of this round
-        if (STRATEGIES.smc_2gate) STRATEGIES.smc_2gate.swingLen = bestSwLen;
-        if (STRATEGIES.smc_rsi) STRATEGIES.smc_rsi.swingLen = bestSwLen;
-        if (STRATEGIES.smc_ema) STRATEGIES.smc_ema.swingLen = bestSwLen;
-      }
+      const swingLens = [3, 4, 5, 6, 7];
+      const swLen = swingLens[(this._runIdx - 1) % swingLens.length];
+      if (STRATEGIES.smc_2gate) STRATEGIES.smc_2gate.swingLen = swLen;
+      if (STRATEGIES.smc_rsi) STRATEGIES.smc_rsi.swingLen = swLen;
+      if (STRATEGIES.smc_ema) STRATEGIES.smc_ema.swingLen = swLen;
+      this.addActivity('info', `Testing swingLen=${swLen} this round`);
+
+      const result3m = await runBacktest({
+        symbols: batch,
+        days: Math.min(days, 14),
+        interval: '3m',
+        strategies: smcStrategies,
+      });
 
       // Include any AI-discovered strategies from StrategyAgent
       const allStrats = getRegisteredStrategies();

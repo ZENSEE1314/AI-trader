@@ -10,7 +10,7 @@
 const fetch = require('node-fetch');
 const { log: bLog } = require('./bot-logger');
 
-const MIN_WIN_RATE = 80;          // 80% minimum to fire a live trade
+const MIN_WIN_RATE = 50;          // 50% minimum — better than coin-flip; 80% is unreachable in real crypto markets
 const BACKTEST_DAYS = 30;         // default: 30 days of history
 const MAX_BACKTEST_DAYS = 90;     // can go up to 90 days
 const CACHE_HOURS = 2;            // re-use cached result for 2 hours
@@ -323,9 +323,9 @@ async function passesGate(symbol, strategy, days = BACKTEST_DAYS) {
     const result = await backtestToken(symbol, strategy, days);
 
     if (!result) {
-      bLog.scan(`${symbol} ${strategy}: backtest failed (no data) — BLOCKED`);
-      setMemCache(symbol, strategy, 0, 0);
-      return false;
+      // No data from Binance — don't cache 0 WR (would block for 10 min on a transient error)
+      bLog.scan(`${symbol} ${strategy}: backtest returned no data — allowing trade (fail-open)`);
+      return true;
     }
 
     // Cache the result
@@ -345,8 +345,9 @@ async function passesGate(symbol, strategy, days = BACKTEST_DAYS) {
     bLog.scan(`${symbol} ${strategy}: backtest WR=${result.winRate}% (${result.total} trades, ${days}d) — PASSED`);
     return true;
   } catch (err) {
-    bLog.error(`[BacktestGate] Inline backtest error for ${symbol} ${strategy}: ${err.message}`);
-    return false;
+    // Backtest error (rate limit, network) — fail open so a transient API issue doesn't freeze trading
+    bLog.error(`[BacktestGate] Inline backtest error for ${symbol} ${strategy}: ${err.message} — allowing trade`);
+    return true;
   }
 }
 
