@@ -5,13 +5,28 @@ const pool = new Pool({
   connectionString: dbUrl.includes('sslmode=') ? dbUrl : `${dbUrl}${dbUrl.includes('?') ? '&' : '?'}sslmode=require`,
   ssl: { rejectUnauthorized: false },
   max: 10,
+  connectionTimeoutMillis: 30000,
+  idleTimeoutMillis: 60000,
+  statement_timeout: 30000,
+  query_timeout: 30000,
 });
 
 pool.on('error', (err) => console.error('[DB] Pool error:', err.message));
 
-async function query(sql, params) {
-  const res = await pool.query(sql, params);
-  return res.rows;
+async function query(sql, params, retries = 2) {
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const res = await pool.query(sql, params);
+      return res.rows;
+    } catch (err) {
+      const isTransient = err.message.includes('timeout') || err.message.includes('Connection terminated') || err.code === 'ECONNRESET';
+      if (isTransient && attempt < retries) {
+        await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
+        continue;
+      }
+      throw err;
+    }
+  }
 }
 
 // ── Auto-create all required tables ─────────────────────────
@@ -85,6 +100,7 @@ async function initAllTables() {
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS username VARCHAR(100)`,
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS wallet_balance DECIMAL DEFAULT 0`,
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS approved_no_sub BOOLEAN DEFAULT false`,
+    `ALTER TABLE agent_profiles ADD COLUMN IF NOT EXISTS points DECIMAL DEFAULT 0`,
     // Profit share columns on api_keys (per-user configurable by admin)
     `ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS profit_share_user_pct DECIMAL DEFAULT 60`,
     `ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS profit_share_admin_pct DECIMAL DEFAULT 40`,
@@ -177,7 +193,7 @@ async function initAllTables() {
       name VARCHAR(50) NOT NULL,
       description TEXT,
       tp_pct DECIMAL DEFAULT 0.045,
-      sl_pct DECIMAL DEFAULT 0.03,
+      sl_pct DECIMAL DEFAULT 0.20,
       max_consec_loss INTEGER DEFAULT 2,
       top_n_coins INTEGER DEFAULT 50,
       capital_percentage DECIMAL DEFAULT 10.0,
@@ -274,7 +290,7 @@ async function initAllTables() {
       allowed_coins TEXT DEFAULT '',
       banned_coins TEXT DEFAULT '',
       tp_pct DECIMAL DEFAULT 0.045,
-      sl_pct DECIMAL DEFAULT 0.03,
+      sl_pct DECIMAL DEFAULT 0.20,
       max_consec_loss INTEGER DEFAULT 2,
       top_n_coins INTEGER DEFAULT 50,
       created_at TIMESTAMPTZ DEFAULT NOW()
@@ -322,8 +338,12 @@ async function initAllTables() {
       symbol VARCHAR(20) NOT NULL UNIQUE,
       enabled BOOLEAN DEFAULT true,
       banned BOOLEAN DEFAULT false,
+      "rank" INTEGER DEFAULT 999,
       created_at TIMESTAMPTZ DEFAULT NOW()
     )`,
+    `ALTER TABLE global_token_settings ADD COLUMN IF NOT EXISTS "rank" INTEGER DEFAULT 999`,
+    `ALTER TABLE global_token_settings ADD COLUMN IF NOT EXISTS risk_tag VARCHAR(20) DEFAULT NULL`,
+    `ALTER TABLE global_token_settings ADD COLUMN IF NOT EXISTS featured BOOLEAN DEFAULT false`,
     // Per-key per-token user leverage overrides
     `CREATE TABLE IF NOT EXISTS user_token_leverage (
       id SERIAL PRIMARY KEY,
@@ -341,6 +361,241 @@ async function initAllTables() {
     `ALTER TABLE trades ADD COLUMN IF NOT EXISTS tf_1m VARCHAR(30)`,
     `ALTER TABLE trades ADD COLUMN IF NOT EXISTS trailing_sl_price NUMERIC`,
     `ALTER TABLE trades ADD COLUMN IF NOT EXISTS trailing_sl_last_step NUMERIC DEFAULT 0`,
+    // Market structure and user trailing config
+    `ALTER TABLE trades ADD COLUMN IF NOT EXISTS market_structure VARCHAR(50)`,
+    `ALTER TABLE trades ADD COLUMN IF NOT EXISTS key_trailing_sl_step NUMERIC DEFAULT 0`,
+    // Agent survival system — $1000 capital, HP health, kill on 0
+    `CREATE TABLE IF NOT EXISTS agent_survival (
+      agent VARCHAR(50) PRIMARY KEY,
+      health INTEGER DEFAULT 100,
+      is_alive BOOLEAN DEFAULT true,
+      capital NUMERIC DEFAULT 1000,
+      monthly_pnl NUMERIC DEFAULT 0,
+      month_start VARCHAR(7) DEFAULT '',
+      start_capital NUMERIC DEFAULT 1000,
+      total_trades INTEGER DEFAULT 0,
+      total_wins INTEGER DEFAULT 0,
+      total_losses INTEGER DEFAULT 0,
+      kill_reason TEXT,
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )`,
+    // Trade fee tracking
+    `ALTER TABLE trades ADD COLUMN IF NOT EXISTS trading_fee NUMERIC DEFAULT 0`,
+    `ALTER TABLE trades ADD COLUMN IF NOT EXISTS gross_pnl NUMERIC`,
+    // User token watchlist (which tokens each user wants to trade)
+    `CREATE TABLE IF NOT EXISTS user_watchlist (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER NOT NULL,
+      symbol VARCHAR(30) NOT NULL,
+      enabled BOOLEAN DEFAULT true,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE(user_id, symbol)
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_user_watchlist_user ON user_watchlist (user_id)`,
+    // Token daily results (aggregated daily P&L per token)
+    `CREATE TABLE IF NOT EXISTS token_daily_results (
+      id SERIAL PRIMARY KEY,
+      symbol VARCHAR(30) NOT NULL,
+      trade_date DATE NOT NULL,
+      total_trades INTEGER DEFAULT 0,
+      wins INTEGER DEFAULT 0,
+      losses INTEGER DEFAULT 0,
+      total_pnl NUMERIC DEFAULT 0,
+      total_fee NUMERIC DEFAULT 0,
+      avg_pnl NUMERIC DEFAULT 0,
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE(symbol, trade_date)
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_token_daily_date ON token_daily_results (trade_date DESC)`,
+    // Agent memory (persists across restarts)
+    `CREATE TABLE IF NOT EXISTS agent_memory (
+      id SERIAL PRIMARY KEY,
+      agent TEXT NOT NULL,
+      key TEXT NOT NULL,
+      value JSONB,
+      category TEXT DEFAULT 'general',
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE(agent, key)
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_agent_memory_agent ON agent_memory (agent)`,
+    // Agent learning log
+    `CREATE TABLE IF NOT EXISTS agent_lessons (
+      id SERIAL PRIMARY KEY,
+      agent TEXT NOT NULL,
+      type TEXT NOT NULL,
+      input JSONB,
+      outcome JSONB,
+      lesson TEXT,
+      score NUMERIC DEFAULT 0,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )`,
+    `CREATE TABLE IF NOT EXISTS pattern_penalties (
+      id SERIAL PRIMARY KEY,
+      pattern_dna TEXT UNIQUE NOT NULL,
+      loss_count INTEGER DEFAULT 0,
+      win_count INTEGER DEFAULT 0,
+      current_penalty DECIMAL DEFAULT 0.0,
+      last_updated TIMESTAMPTZ DEFAULT NOW()
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_pattern_dna ON pattern_penalties (pattern_dna)`,
+
+    // Agent profiles — level, XP, earnings tracking (RPG system)
+    `CREATE TABLE IF NOT EXISTS agent_profiles (
+      agent TEXT PRIMARY KEY,
+      level INTEGER DEFAULT 1,
+      xp INTEGER DEFAULT 0,
+      total_earned NUMERIC DEFAULT 0,
+      tasks_completed INTEGER DEFAULT 0,
+      tasks_success INTEGER DEFAULT 0,
+      points DECIMAL DEFAULT 0,
+      tier VARCHAR(20) DEFAULT 'Bronze',
+      monthly_pnl NUMERIC DEFAULT 0,
+      monthly_risk NUMERIC DEFAULT 0,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )`,
+    `CREATE TABLE IF NOT EXISTS agent_trophies (
+      id SERIAL PRIMARY KEY,
+      agent TEXT NOT NULL,
+      month VARCHAR(10) NOT NULL,
+      trophy_type VARCHAR(50),
+      buff_multiplier DECIMAL DEFAULT 1.0,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE(agent, month)
+    )`,
+    `CREATE TABLE IF NOT EXISTS user_agent_preferences (
+      id SERIAL PRIMARY KEY,
+      api_key_id INTEGER NOT NULL REFERENCES api_keys(id) ON DELETE CASCADE,
+      preferred_agent TEXT,
+      min_tier VARCHAR(20),
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE(api_key_id)
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_at_agent ON agent_trophies (agent)`,
+    `CREATE INDEX IF NOT EXISTS idx_uap_key ON user_agent_preferences (api_key_id)`,
+    // Kronos AI predictions (persisted so dashboard can read them)
+    `CREATE TABLE IF NOT EXISTS kronos_predictions (
+      symbol VARCHAR(20) PRIMARY KEY,
+      direction VARCHAR(10),
+      current_price NUMERIC,
+      predicted_price NUMERIC,
+      change_pct NUMERIC,
+      confidence VARCHAR(10),
+      trend VARCHAR(20),
+      pred_high NUMERIC,
+      pred_low NUMERIC,
+      scanned_at TIMESTAMPTZ DEFAULT NOW()
+    )`,
+    // Strategy backtests (StrategyAgent saves results here)
+    `CREATE TABLE IF NOT EXISTS strategy_backtests (
+      id SERIAL PRIMARY KEY,
+      name VARCHAR(100) NOT NULL,
+      params JSONB NOT NULL,
+      total_trades INTEGER DEFAULT 0,
+      wins INTEGER DEFAULT 0,
+      losses INTEGER DEFAULT 0,
+      win_rate NUMERIC DEFAULT 0,
+      total_pnl NUMERIC DEFAULT 0,
+      avg_win NUMERIC DEFAULT 0,
+      avg_loss NUMERIC DEFAULT 0,
+      max_drawdown NUMERIC DEFAULT 0,
+      symbols JSONB DEFAULT '[]',
+      top_trades JSONB DEFAULT '[]',
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_strategy_backtests_name ON strategy_backtests (name)`,
+    `CREATE INDEX IF NOT EXISTS idx_strategy_backtests_created ON strategy_backtests (created_at DESC)`,
+    // Agent jail records (PoliceAgent tracks violations)
+    `CREATE TABLE IF NOT EXISTS agent_jail (
+      id SERIAL PRIMARY KEY,
+      agent_key VARCHAR(50) NOT NULL,
+      agent_name VARCHAR(100) NOT NULL,
+      reason TEXT NOT NULL,
+      violation_type VARCHAR(50),
+      severity VARCHAR(20),
+      warnings INTEGER DEFAULT 0,
+      jailed_at TIMESTAMPTZ DEFAULT NOW(),
+      released_at TIMESTAMPTZ,
+      released_by VARCHAR(100)
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_agent_jail_key ON agent_jail (agent_key)`,
+    `CREATE INDEX IF NOT EXISTS idx_agent_jail_active ON agent_jail (released_at) WHERE released_at IS NULL`,
+    // CoderAgent patch records (self-healing code history)
+    `CREATE TABLE IF NOT EXISTS code_patches (
+      id SERIAL PRIMARY KEY,
+      file VARCHAR(200) NOT NULL,
+      description TEXT,
+      patch_type VARCHAR(30),
+      search_text TEXT,
+      replace_text TEXT,
+      confidence NUMERIC DEFAULT 0,
+      status VARCHAR(20) DEFAULT 'pending',
+      applied_at TIMESTAMPTZ,
+      reverted_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_code_patches_status ON code_patches (status)`,
+    // Discovered strategies (StrategyAgent autonomous discovery)
+    `CREATE TABLE IF NOT EXISTS discovered_strategies (
+      strategy_id VARCHAR(100) PRIMARY KEY,
+      name VARCHAR(200),
+      recipe VARCHAR(100),
+      params JSONB,
+      win_rate NUMERIC DEFAULT 0,
+      total_pnl NUMERIC DEFAULT 0,
+      total_trades INTEGER DEFAULT 0,
+      generation INTEGER DEFAULT 1,
+      source VARCHAR(50) DEFAULT 'random',
+      parent_id VARCHAR(200),
+      is_active BOOLEAN DEFAULT true,
+      adopted_at TIMESTAMPTZ,
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_disc_strat_wr ON discovered_strategies (win_rate DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_disc_strat_source ON discovered_strategies (source)`,
+    // Agent trade history — full record of every trade per agent
+    `CREATE TABLE IF NOT EXISTS agent_trade_history (
+      id SERIAL PRIMARY KEY,
+      agent VARCHAR(100) NOT NULL,
+      symbol VARCHAR(30),
+      direction VARCHAR(10),
+      entry_price NUMERIC,
+      exit_price NUMERIC,
+      pnl_usdt NUMERIC,
+      is_win BOOLEAN,
+      strategy VARCHAR(200),
+      setup VARCHAR(100),
+      leverage INTEGER DEFAULT 20,
+      capital_after NUMERIC,
+      health_after INTEGER,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_agent_trades_agent ON agent_trade_history (agent)`,
+    `CREATE INDEX IF NOT EXISTS idx_agent_trades_created ON agent_trade_history (created_at DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_agent_trades_symbol ON agent_trade_history (symbol)`,
+    // Add total_revenue column to agent_survival
+    `ALTER TABLE agent_survival ADD COLUMN IF NOT EXISTS total_revenue NUMERIC DEFAULT 0`,
+    `CREATE TABLE IF NOT EXISTS swarm_predictions (
+      id SERIAL PRIMARY KEY,
+      symbol VARCHAR(20),
+      direction VARCHAR(10),
+      target_price DECIMAL,
+      confidence INTEGER,
+      predicted_at TIMESTAMPTZ DEFAULT NOW(),
+      verified_at TIMESTAMPTZ,
+      is_correct BOOLEAN,
+      actual_move_pct DECIMAL
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_swarm_pred_symbol ON swarm_predictions (symbol)`,
+    `CREATE INDEX IF NOT EXISTS idx_swarm_pred_verified ON swarm_predictions (verified_at)`,
+    // Optimizer candle cache (survives redeploys)
+    `CREATE TABLE IF NOT EXISTS optimizer_cache (
+      id INTEGER PRIMARY KEY,
+      cache_key TEXT,
+      candle_data JSONB,
+      created_at BIGINT
+    )`,
   ];
 
   for (const sql of statements) {
@@ -378,12 +633,17 @@ async function initAllTables() {
     try { await pool.query(sql); } catch (_) {}
   }
 
-  // Seed approved tokens
+  // Seed approved tokens (admin can add/remove via dashboard)
   const approvedTokens = [
+    // Major coins (use Binance futures symbols: 1000PEPE, 1000SHIB, POL not MATIC)
+    'BTCUSDT','ETHUSDT','SOLUSDT','BNBUSDT','XRPUSDT','DOGEUSDT','ADAUSDT',
+    'AVAXUSDT','DOTUSDT','LINKUSDT','POLUSDT','UNIUSDT','LTCUSDT','NEARUSDT',
+    'SUIUSDT','1000PEPEUSDT','1000SHIBUSDT','TONUSDT','TRXUSDT','ICPUSDT',
+    // Mid caps
     '1000BONKUSDT','CAKEUSDT','ZROUSDT','VIRTUALUSDT','DEXEUSDT','PENGUUSDT',
-    'STXUSDT','SEIUSDT','APTUSDT','FLRUSDT','FILUSDT','VETUSDT','STABLEUSDT',
-    'JUPUSDT','ARBUSDT','FETUSDT','POLUSDT','RENDERUSDT','KASUSDT','ATOMUSDT',
-    'WLDUSDT','MORPHOUSDT','NIGHTUSDT','ENAUSDT','TRUMPUSDT',
+    'STXUSDT','SEIUSDT','APTUSDT','FLRUSDT','FILUSDT','VETUSDT',
+    'JUPUSDT','ARBUSDT','FETUSDT','RENDERUSDT','KASUSDT','ATOMUSDT',
+    'WLDUSDT','MORPHOUSDT','ENAUSDT','TRUMPUSDT',
   ];
   for (const symbol of approvedTokens) {
     try {
@@ -393,6 +653,18 @@ async function initAllTables() {
       );
     } catch (_) {}
   }
+
+  // Clean up wrong symbols (renamed/delisted)
+  const badSymbols = ['MATICUSDT', 'PEPEUSDT', 'SHIBUSDT', 'STABLEUSDT', 'NIGHTUSDT'];
+  for (const sym of badSymbols) {
+    try { await pool.query('DELETE FROM global_token_settings WHERE symbol = $1', [sym]); } catch (_) {}
+  }
+
+  // Reset all agent XP, levels, and earnings to 0 (fresh start)
+  try {
+    await pool.query(`UPDATE agent_profiles SET level = 1, xp = 0, total_earned = 0, tasks_completed = 0, tasks_success = 0, updated_at = NOW()`);
+    console.log('[DB] Agent profiles reset to 0 — fresh start');
+  } catch (_) {}
 
   console.log('[DB] All tables verified');
 }

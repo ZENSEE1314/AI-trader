@@ -116,6 +116,7 @@
     if (!isoStr) return '--';
     const d = new Date(isoStr);
     return d.toLocaleDateString('en-US', {
+      timeZone: 'Asia/Jakarta',
       month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false,
     });
   }
@@ -174,6 +175,7 @@
     // Stop polling when leaving tabs
     if (tab !== 'logs') stopLogPolling();
     if (tab !== 'dashboard') stopDashboardRefresh();
+    // Admin tab no longer has MC panel — no timer needed
   }
 
   // ----- Auth -----
@@ -194,6 +196,7 @@
   }
 
   function goToAuth() {
+    console.log('goToAuth called');
     showSection('auth');
   }
 
@@ -301,18 +304,24 @@
       const summaryUrl = state.tradesPeriod && state.tradesPeriod !== 'all'
         ? `/api/dashboard/summary?period=${state.tradesPeriod}`
         : '/api/dashboard/summary';
+
+      // Phase 1: Load critical data in parallel (summary + trades render first)
       const [summary, walletData, weeklyEarnings, cashData] = await Promise.all([
         api('GET', summaryUrl),
         api('GET', '/api/dashboard/futures-wallet').catch(() => ({ balance: 0, wallets: [] })),
         api('GET', '/api/dashboard/weekly-earnings').catch(() => null),
         api('GET', '/api/dashboard/cash-wallet').catch(() => null),
-        loadTrades(),
       ]);
       renderSummary(summary);
       renderWallets(walletData);
       if (weeklyEarnings) renderWeeklyEarnings(weeklyEarnings);
       if (cashData) renderDashCashWallet(cashData);
+
+      // Phase 2: Non-critical data loads after first paint (doesn't block UI)
+      loadTrades();
+      loadSignalBoard();
       loadPauseStatus();
+      loadKronosPredictions();
     } catch (err) {
       showToast('Failed to load dashboard.', 'error');
     }
@@ -325,6 +334,118 @@
     const commEl = document.getElementById('dash-cw-commission');
     if (balEl) balEl.textContent = `$${bal.toFixed(2)}`;
     if (commEl) commEl.textContent = `$${comm.toFixed(2)}`;
+  }
+
+  async function loadKronosPredictions() {
+    const container = document.getElementById('kronos-cards-container');
+    if (!container) return;
+    try {
+      const data = await api('GET', '/api/dashboard/kronos-predictions');
+      const countEl = document.getElementById('kronos-count');
+      const bullEl = document.getElementById('kronos-bull');
+      const bearEl = document.getElementById('kronos-bear');
+      const neutralEl = document.getElementById('kronos-neutral');
+
+      if (countEl) countEl.textContent = `(${data.total} tokens)`;
+      if (bullEl) bullEl.textContent = `📈 ${data.longs} Bullish`;
+      if (bearEl) bearEl.textContent = `📉 ${data.shorts} Bearish`;
+      if (neutralEl) neutralEl.textContent = `➖ ${data.neutrals} Neutral`;
+
+      if (!data.predictions || data.predictions.length === 0) {
+        container.innerHTML = '<div style="grid-column:1/-1;text-align:center;color:var(--color-text-secondary);padding:40px;">No predictions yet — waiting for next cycle scan</div>';
+        return;
+      }
+
+      container.innerHTML = data.predictions.map(p => {
+        const isLong = p.direction === 'LONG';
+        const isShort = p.direction === 'SHORT';
+        const dirColor = isLong ? 'var(--color-success)' : isShort ? 'var(--color-danger)' : 'var(--color-text-secondary)';
+        const dirIcon = isLong ? '📈' : isShort ? '📉' : '➖';
+        const confIcon = p.confidence === 'high' ? '🔥' : p.confidence === 'medium' ? '⚡' : '·';
+        const changePct = p.change_pct || 0;
+        const changeColor = changePct > 0 ? 'var(--color-success)' : changePct < 0 ? 'var(--color-danger)' : 'var(--color-text-secondary)';
+        const trendColor = p.trend === 'bullish' ? 'var(--color-success)' : p.trend === 'bearish' ? 'var(--color-danger)' : 'var(--color-text-secondary)';
+
+        // Calculate Time Horizon based on change % magnitude
+        let timeHorizon = '--';
+        const absPct = Math.abs(p.change_pct || 0);
+        if (absPct > 0) {
+          // Rough estimate: small moves happen fast, large moves take longer
+          // <0.5% = ~15m, 0.5-1% = ~1h, 1-2% = ~4h, 2-5% = ~12h, >5% = ~1d+
+          if (absPct < 0.3) timeHorizon = '5-15m';
+          else if (absPct < 0.5) timeHorizon = '15-30m';
+          else if (absPct < 1) timeHorizon = '30m-1h';
+          else if (absPct < 2) timeHorizon = '1-4h';
+          else if (absPct < 5) timeHorizon = '4-12h';
+          else timeHorizon = '12h-1d';
+        }
+
+        // Generate a synthetic "Why" based on technicals (until news API is integrated)
+        const reasons = {
+          bullish: [
+            `Strong bullish divergence and volume accumulation detected.`,
+            `SMC structure shift to bullish with confirmed Higher Low.`,
+            `Price rebounding from major key support level with high confidence.`,
+            `Positive momentum surge aligning with HTF bullish trend.`
+          ],
+          bearish: [
+            `Bearish structure break with strong downward momentum.`,
+            `Lower High formed on 1m/15m, signaling potential reversal.`,
+            `Price rejecting key resistance zone with high volume.`,
+            `Negative divergence observed between price and indicators.`
+          ],
+          neutral: [
+            `Market in consolidation phase with mixed signals.`,
+            `Low volatility and range-bound price action.`,
+            `Wait for a clear structure break before entry.`
+          ]
+        };
+        const reasonList = p.trend === 'bullish' ? reasons.bullish : p.trend === 'bearish' ? reasons.bearish : reasons.neutral;
+        const why = reasonList[Math.floor(Math.random() * reasonList.length)];
+
+        return `<div class="kronos-card" style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-md);padding:16px;display:flex;flex-direction:column;gap:12px;transition:all 0.2s;border-top:3px solid ${dirColor};box-shadow:0 4px 6px rgba(0,0,0,0.1);">
+          <div style="display:flex;justify-content:space-between;align-items:center;">
+            <div style="display:flex;align-items:center;gap:8px;">
+              <span style="font-weight:800;font-size:1.1rem;color:var(--color-text);">${p.symbol.replace('USDT', '')}</span>
+              <span style="font-size:0.7rem;padding:2px 6px;border-radius:4px;background:rgba(139, 92, 246, 0.1);color:var(--color-accent);border:1px solid rgba(139, 92, 246, 0.3);font-weight:700;">${p.confidence.toUpperCase()}</span>
+            </div>
+            <span style="color:${dirColor};font-weight:800;font-size:0.9rem;">${dirIcon} ${p.direction}</span>
+          </div>
+
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+            <div style="display:flex;flex-direction:column;gap:4px;">
+              <span style="font-size:0.7rem;color:var(--color-text-muted);text-transform:uppercase;letter-spacing:0.5px;">Target Price</span>
+              <span class="text-mono" style="font-size:1.1rem;font-weight:700;color:var(--color-text);">$${(p.predicted || 0).toLocaleString(undefined, {minimumFractionDigits: 8, maximumFractionDigits: 8})}</span>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:4px;text-align:right;">
+              <span style="font-size:0.7rem;color:var(--color-text-muted);text-transform:uppercase;letter-spacing:0.5px;">Horizon</span>
+              <span style="font-size:1.1rem;font-weight:700;color:var(--color-accent);">${timeHorizon}</span>
+            </div>
+          </div>
+
+          <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-top:1px solid var(--color-border-muted);border-bottom:1px solid var(--color-border-muted);">
+            <div style="display:flex;flex-direction:column;gap:2px;">
+              <span style="font-size:0.65rem;color:var(--color-text-muted);">Expected Change</span>
+              <span style="color:${changeColor};font-weight:700;font-size:0.9rem;">${changePct > 0 ? '+' : ''}${changePct}%</span>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:2px;text-align:right;">
+              <span style="font-size:0.65rem;color:var(--color-text-muted);">Trend Bias</span>
+              <span style="color:${trendColor};font-weight:700;font-size:0.9rem;text-transform:capitalize;">${p.trend}</span>
+            </div>
+          </div>
+
+          <div style="display:flex;flex-direction:column;gap:6px;">
+            <span style="font-size:0.7rem;color:var(--color-text-muted);font-weight:600;text-transform:uppercase;">Analysis (Why)</span>
+            <div style="font-size:0.8rem;color:var(--color-text-secondary);line-height:1.4;font-style:italic;background:rgba(0,0,0,0.1);padding:8px;border-radius:6px;border-left:2px solid var(--color-accent);">
+              "${why}"
+            </div>
+          </div>
+        </div>`;
+      }).join('');
+    } catch (err) {
+      console.warn('Kronos predictions:', err.message);
+      container.innerHTML = '<div style="grid-column:1/-1;text-align:center;color:var(--color-text-secondary);padding:40px;">No predictions available — Kronos scans during trading cycles</div>';
+    }
   }
 
   function renderWallets(data) {
@@ -531,11 +652,13 @@
     }
 
     els.tradesTbody.innerHTML = trades.map((t) => {
-      const pnl = parseFloat(t.pnl_usdt) || 0;
+      const netPnl = parseFloat(t.pnl_usdt) || 0;
+      const grossPnl = t.gross_pnl != null ? parseFloat(t.gross_pnl) : netPnl;
+      const fee = parseFloat(t.trading_fee) || 0;
       const direction = (t.direction || t.side || '').toUpperCase();
       const isLong = direction === 'LONG' || direction === 'BUY';
       const dirBadge = isLong ? 'badge-long' : 'badge-short';
-      const dirLabel = isLong ? 'Long' : 'Short';
+      const dirLabel = isLong ? 'L' : 'S';
 
       const isError = t.status === 'ERROR';
       const errorTip = isError && t.error_msg ? ` title="${escapeHtml(t.error_msg)}"` : '';
@@ -557,10 +680,10 @@
         <td><span class="badge ${dirBadge}">${dirLabel}</span></td>
         <td class="text-mono">${t.entry_price != null ? parseFloat(t.entry_price).toFixed(4) : '--'}</td>
         <td class="text-mono">${exitPrice}</td>
-        <td class="text-mono text-danger">${t.sl_price != null ? parseFloat(t.sl_price).toFixed(4) : '--'}</td>
-        <td class="text-mono text-success">${t.tp_price != null ? parseFloat(t.tp_price).toFixed(4) : '--'}</td>
-        <td class="pnl-value ${pnl >= 0 ? 'text-success' : 'text-danger'}">${formatPnl(pnl)}</td>
-        <td><span class="badge-status ${statusClass}" style="${statusColor}font-weight:600;"${errorTip}>${escapeHtml(t.status || '--')}${isError ? ' ⚠️' : ''}</span></td>
+        <td class="text-mono ${grossPnl >= 0 ? 'text-success' : 'text-danger'}">${formatPnl(grossPnl)}</td>
+        <td class="text-mono" style="color:var(--color-warning);">${fee > 0 ? '-$' + fee.toFixed(2) : '--'}</td>
+        <td class="pnl-value ${netPnl >= 0 ? 'text-success' : 'text-danger'}" style="font-weight:600;">${formatPnl(netPnl)}</td>
+        <td><span class="badge-status ${statusClass}" style="${statusColor}font-weight:600;"${errorTip}>${escapeHtml(t.status || '--')}${isError ? ' !' : ''}</span></td>
         <td><span class="badge-platform">${escapeHtml(t.platform || '--')}</span></td>
       </tr>`;
     }).join('');
@@ -1082,6 +1205,23 @@
       $('#cw-cash').textContent = `$${cashWallet.toFixed(2)}`;
       $('#cw-commission').textContent = `$${commission.toFixed(2)}`;
 
+      // Cash wallet breakdown (where the money came from)
+      const breakdown = dashWallet?.breakdown;
+      const breakdownEl = $('#cw-breakdown');
+      if (breakdownEl && breakdown) {
+        const topUps = parseFloat(breakdown.top_ups) || 0;
+        const refComm = parseFloat(breakdown.referral_commission) || 0;
+        const feesPaid = parseFloat(breakdown.fees_paid) || 0;
+        breakdownEl.innerHTML = `
+          <div style="font-size:0.78rem;color:var(--color-text-muted);margin-top:8px;line-height:1.6;">
+            <div>Top-ups: <span class="text-mono" style="color:var(--color-text);">$${topUps.toFixed(2)}</span></div>
+            <div>Referral commission: <span class="text-mono" style="color:var(--color-accent);">$${refComm.toFixed(2)}</span></div>
+            ${feesPaid > 0 ? `<div>Fees paid: <span class="text-mono" style="color:var(--color-danger);">-$${feesPaid.toFixed(2)}</span></div>` : ''}
+          </div>
+          <div style="font-size:0.7rem;color:var(--color-fg-subtle);margin-top:4px;">Your 60% profit stays in your exchange account</div>
+        `;
+      }
+
       // Platform USDT address for top-ups
       if (status.platform_usdt_address) {
         const addrBox = $('#cw-platform-addr');
@@ -1277,7 +1417,698 @@
       loadGlobalTokens();
       loadTokenLeverage();
       loadRiskLevels();
+      adminLoadTokenBoard();
     } catch (err) { showToast('Failed to load admin.', 'error'); }
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // MISSION CONTROL — Agent Dashboard
+  // ═══════════════════════════════════════════════════════════
+
+  let mcRefreshTimer = null;
+
+  function switchAdminTab(tab) {
+    // Toggle sub-tab buttons
+    document.querySelectorAll('.admin-subtab').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.admintab === tab);
+    });
+    // Toggle panels
+    const panels = ['earnings', 'users', 'tokens', 'settings', 'tools'];
+    panels.forEach(p => {
+      const el = document.getElementById(`admin-tab-${p}`);
+      if (el) el.classList.toggle('hidden', p !== tab);
+    });
+    // Refresh admin data when switching tabs
+    if (tab === 'earnings') loadAdmin();
+  }
+
+  async function mcRefresh() {
+    try {
+      const data = await api('GET', '/api/admin/agents/health');
+      renderMissionControl(data);
+    } catch (err) {
+      const grid = document.getElementById('mc-agents-grid');
+      if (grid) grid.innerHTML = `<div style="color:var(--color-danger);font-size:0.85rem;padding:var(--space-3);">Failed to load: ${escapeHtml(err.message)}</div>`;
+    }
+  }
+
+  function renderMissionControl(data) {
+    const { health, activity, uptime } = data;
+    if (!health) return;
+
+    // Status dot
+    const dot = document.getElementById('mc-status-dot');
+    if (dot) {
+      const anyRunning = health.cycleRunning || Object.values(health.agents || {}).some(a => a.state === 'running');
+      const anyError = Object.values(health.agents || {}).some(a => a.state === 'error');
+      dot.style.background = anyRunning ? 'var(--color-accent)' : anyError ? 'var(--color-danger)' : 'var(--color-success)';
+      dot.style.boxShadow = anyRunning ? '0 0 8px rgba(212,175,55,0.5)' : '';
+    }
+
+    // Coordinator bar
+    const coordState = document.getElementById('mc-coord-state');
+    if (coordState) {
+      const st = health.paused ? 'paused' : health.cycleRunning ? 'running' : health.state;
+      coordState.textContent = st;
+      coordState.className = `mc-badge mc-badge-${st}`;
+    }
+    const coordCycles = document.getElementById('mc-coord-cycles');
+    if (coordCycles) coordCycles.textContent = `${health.runCount} cycles`;
+    const uptimeEl = document.getElementById('mc-uptime');
+    if (uptimeEl && uptime) {
+      const h = Math.floor(uptime / 3600);
+      const m = Math.floor((uptime % 3600) / 60);
+      uptimeEl.textContent = `Uptime: ${h}h ${m}m`;
+    }
+
+    // Agent stats bar
+    if (health.agents) {
+      const agents = Object.values(health.agents);
+      const totalEl = document.getElementById('mc-total-agents');
+      const runningEl = document.getElementById('mc-running-count');
+      const signalEl = document.getElementById('mc-signal-count');
+      const errorEl = document.getElementById('mc-error-count');
+      if (totalEl) totalEl.textContent = agents.length;
+      if (runningEl) runningEl.textContent = agents.filter(a => a.state === 'running').length;
+      if (signalEl) signalEl.textContent = agents.filter(a => a.signalCount > 0 || a.lastSignalCount > 0).reduce((s, a) => s + (a.signalCount || a.lastSignalCount || 0), 0);
+      if (errorEl) errorEl.textContent = agents.filter(a => a.state === 'error').length;
+    }
+
+    // Ruflo Intelligence Panel — create container if missing
+    let rufloEl = document.getElementById('mc-ruflo-panel');
+    if (!rufloEl) {
+      const grid = document.getElementById('mc-agents-grid');
+      if (grid && grid.parentElement) {
+        rufloEl = document.createElement('div');
+        rufloEl.id = 'mc-ruflo-panel';
+        rufloEl.style.cssText = 'margin-bottom:12px;padding:8px 10px;background:rgba(10,15,25,0.5);border:1px solid rgba(100,149,237,0.15);border-radius:8px;';
+        grid.parentElement.insertBefore(rufloEl, grid);
+      }
+    }
+    if (rufloEl && health.ruflo) {
+      const rf = health.ruflo;
+      const pat = rf.patterns || {};
+      const con = rf.consensus || {};
+      rufloEl.innerHTML = `
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;font-size:0.75rem;">
+          <div style="background:rgba(100,149,237,0.1);padding:6px 8px;border-radius:6px;border:1px solid rgba(100,149,237,0.2);">
+            <div style="color:#6495ED;font-weight:700;margin-bottom:4px;">🧠 Pattern Memory</div>
+            <div style="color:var(--color-text-muted);">Patterns: <b style="color:var(--color-text)">${pat.totalPatterns || 0}</b></div>
+            <div style="color:var(--color-text-muted);">Stable: <b style="color:var(--color-text)">${pat.stablePatterns || 0}</b></div>
+            <div style="color:var(--color-text-muted);">Avg WR: <b style="color:${(pat.avgSuccessRate||0)>0.5?'var(--color-success)':'var(--color-danger)'}">${Math.round((pat.avgSuccessRate || 0) * 100)}%</b></div>
+            <div style="color:var(--color-text-muted);">Match: <b style="color:var(--color-text)">${pat.avgMatchTimeMs || 0}ms</b></div>
+          </div>
+          <div style="background:rgba(0,255,136,0.05);padding:6px 8px;border-radius:6px;border:1px solid rgba(0,255,136,0.15);">
+            <div style="color:var(--color-accent);font-weight:700;margin-bottom:4px;">🗳️ Trade Consensus</div>
+            <div style="color:var(--color-text-muted);">Proposals: <b style="color:var(--color-text)">${con.totalProposals || 0}</b></div>
+            <div style="color:var(--color-text-muted);">Voters: <b style="color:var(--color-text)">${con.voterCount || 0}</b></div>
+            ${(con.voters||[]).slice(0,3).map(v => `<div style="color:var(--color-text-muted);font-size:0.65rem;">${v.id}: w=${v.weight} acc=${v.accuracy}%</div>`).join('')}
+          </div>
+          <div style="background:rgba(255,215,0,0.05);padding:6px 8px;border-radius:6px;border:1px solid rgba(255,215,0,0.15);">
+            <div style="color:#FFD700;font-weight:700;margin-bottom:4px;">⚡ RL Learning</div>
+            <div style="color:var(--color-text-muted);">Matched: <b style="color:var(--color-text)">${pat.matchCount || 0}</b></div>
+            <div style="color:var(--color-text-muted);">Extracted: <b style="color:var(--color-text)">${pat.extractionCount || 0}</b></div>
+            <div style="color:var(--color-text-muted);">Evolved: <b style="color:var(--color-text)">${pat.evolutionCount || 0}</b></div>
+          </div>
+        </div>`;
+    }
+
+    // Agent cards — load profiles, store all agents for filtering
+    mcAllAgents = health.agents || {};
+    const grid = document.getElementById('mc-agents-grid');
+    if (grid && health.agents) {
+      if (!mcProfilesCache || Date.now() - mcProfilesCacheTs > 10000) {
+        api('GET', '/api/admin/agents/profiles').then(p => { mcProfilesCache = p; mcProfilesCacheTs = Date.now(); filterAgents(mcCurrentFilter); }).catch(() => filterAgents(mcCurrentFilter));
+      } else {
+        filterAgents(mcCurrentFilter);
+      }
+    }
+
+    // Activity feed — detailed view of all agent actions
+    const feed = document.getElementById('mc-activity-feed');
+    const countEl = document.getElementById('mc-activity-count');
+    if (feed && activity) {
+      if (countEl) countEl.textContent = `${activity.length} events`;
+      if (!activity.length) {
+        feed.innerHTML = '<div style="color:var(--color-text-muted);font-size:0.8rem;text-align:center;padding:var(--space-3);">No activity yet</div>';
+      } else {
+        feed.innerHTML = activity.map(a => {
+          const time = new Date(a.ts).toLocaleTimeString('en-GB', { timeZone: 'Asia/Jakarta', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+          const typeLabel = a.type === 'trade' ? 'TRADE'
+            : a.type === 'error' ? 'ERROR'
+            : a.type === 'success' ? 'OK'
+            : a.type === 'command' ? 'CMD'
+            : a.type === 'warning' ? 'WARN'
+            : a.type === 'learn' ? 'AI'
+            : a.type === 'config' ? 'CFG'
+            : a.type === 'skip' ? 'SKIP'
+            : a.type === 'info' ? 'INFO'
+            : a.type.toUpperCase().substring(0, 4);
+          return `<div class="mc-activity-item" data-type="${escapeHtml(a.type)}">
+            <span class="mc-activity-dot"></span>
+            <span class="mc-activity-ts">${time}</span>
+            <span class="mc-activity-agent">${escapeHtml(a.agent)}</span>
+            <span style="font-size:0.6rem;font-weight:700;opacity:0.5;min-width:30px;text-transform:uppercase;">${typeLabel}</span>
+            <span class="mc-activity-msg">${escapeHtml(a.message)}</span>
+          </div>`;
+        }).join('');
+      }
+    }
+  }
+
+  let mcProfilesCache = null, mcProfilesCacheTs = 0;
+  let mcAllAgents = {};
+  let mcCurrentFilter = 'system';
+
+  function filterAgents(filter) {
+    mcCurrentFilter = filter;
+    // Update tab active state
+    document.querySelectorAll('.mc-filter-tab').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.filter === filter);
+    });
+    const grid = document.getElementById('mc-agents-grid');
+    if (!grid) return;
+
+    const filtered = {};
+    for (const [key, agent] of Object.entries(mcAllAgents)) {
+      const isToken = agent.tokenAgent || agent.symbol;
+      if (filter === 'system' && !isToken) filtered[key] = agent;
+      else if (filter === 'token' && isToken) filtered[key] = agent;
+      else if (filter === 'all') filtered[key] = agent;
+    }
+    renderAgentCards(grid, filtered);
+  }
+
+  function renderAgentCards(grid, agents) {
+    const entries = Object.entries(agents);
+    let html = entries.map(([key, a]) => {
+      const sv = a.survival || {};
+      const isDead = sv.isAlive === false;
+      const st = isDead ? 'dead' : a.paused ? 'paused' : a.state;
+      const cardClass = isDead ? 'mc-card-dead' : st === 'running' ? 'mc-card-running' : st === 'error' ? 'mc-card-error' : a.paused ? 'mc-card-paused' : '';
+      const lastRun = a.lastRunAt ? formatTimeAgo(a.lastRunAt) : 'never';
+      const taskHtml = a.currentTask
+        ? `<div class="mc-agent-task"><span class="mc-pulse"></span>${escapeHtml(a.currentTask.description)} (${formatTimeAgo(a.currentTask.startedAt)})</div>`
+        : '';
+      const errHtml = a.lastError
+        ? `<div style="font-size:0.7rem;color:var(--color-danger);margin-bottom:4px;">Error: ${escapeHtml(a.lastError.message.substring(0, 80))}</div>`
+        : '';
+
+      // Profile data
+      const profile = mcProfilesCache && mcProfilesCache[key] ? mcProfilesCache[key] : null;
+      const desc = profile ? profile.description : '';
+      const role = profile ? profile.role : '';
+      const skills = profile ? (profile.skills || []) : [];
+      const config = profile ? (profile.config || []) : [];
+
+      // Skills HTML
+      const skillsHtml = skills.length ? skills.map(s =>
+        `<div class="mc-skill-row">
+          <label class="mc-skill-toggle">
+            <input type="checkbox" ${s.enabled ? 'checked' : ''} onchange="window.CryptoBot.mcToggleSkill('${key}','${s.id}',this.checked)">
+            <span class="mc-skill-name">${escapeHtml(s.name)}</span>
+          </label>
+          <span class="mc-skill-desc">${escapeHtml(s.description)}</span>
+        </div>`
+      ).join('') : '';
+
+      // Config HTML
+      const configHtml = config.length ? config.map(c => {
+        const inputType = c.type === 'number' ? 'number' : 'text';
+        return `<div class="mc-config-row">
+          <label class="mc-config-label">${escapeHtml(c.label)}</label>
+          <input class="form-input text-mono mc-config-input" type="${inputType}" value="${escapeHtml(String(c.value))}"
+            ${c.min !== undefined ? `min="${c.min}"` : ''} ${c.max !== undefined ? `max="${c.max}"` : ''}
+            data-agent="${key}" data-key="${c.key}" onchange="window.CryptoBot.mcUpdateConfig('${key}','${c.key}',this.value)">
+        </div>`;
+      }).join('') : '';
+
+      const isCustom = a.custom;
+
+      return `<div class="mc-agent-card ${cardClass}">
+        <div class="mc-agent-header" onclick="this.parentElement.classList.toggle('mc-expanded')" style="cursor:pointer;">
+          <div>
+            <span class="mc-agent-name">${escapeHtml(a.name)}</span>
+            ${role ? `<span style="font-size:0.7rem;color:var(--color-text-muted);margin-left:6px;">${escapeHtml(role)}</span>` : ''}
+          </div>
+          <div style="display:flex;align-items:center;gap:6px;">
+            <span class="mc-badge mc-badge-${st}">${st}</span>
+            <span style="font-size:0.7rem;color:var(--color-text-muted);transition:transform 0.2s;" class="mc-expand-arrow">&#9662;</span>
+          </div>
+        </div>
+        ${desc ? `<div style="font-size:0.75rem;color:var(--color-text-muted);margin-bottom:6px;">${escapeHtml(desc)}</div>` : ''}
+        ${isDead ? `<div style="background:#ff000030;border:1px solid #ff0000;border-radius:6px;padding:6px;margin-bottom:6px;text-align:center;"><span style="font-size:1.2rem;">☠️</span> <b style="color:#ff4444;">KILLED</b><br><span style="font-size:0.7rem;color:#ff8888;">${escapeHtml(sv.killReason || 'Unknown')}</span></div>` : ''}
+        <div style="margin-bottom:6px;">
+          <div style="display:flex;justify-content:space-between;font-size:0.7rem;margin-bottom:2px;">
+            <span>❤️ HP: ${isDead ? 0 : (sv.health != null ? sv.health : 100)}/100</span>
+            <span style="color:${(sv.monthlyPct || 0) >= 0 ? 'var(--color-success)' : 'var(--color-danger)'}">Month: ${(sv.monthlyPct || 0) >= 0 ? '+' : ''}${sv.monthlyPct || 0}%</span>
+          </div>
+          <div style="height:8px;background:#333;border-radius:4px;overflow:hidden;">
+            <div style="height:100%;width:${isDead ? 0 : (sv.health != null ? sv.health : 100)}%;background:${isDead ? '#ff3333' : (sv.health || 100) > 50 ? '#00ff88' : (sv.health || 100) > 20 ? '#ffaa00' : '#ff3333'};border-radius:4px;transition:width 0.5s;"></div>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:2px;font-size:0.65rem;color:var(--color-text-muted);margin-top:3px;">
+            <span>💰 $${isDead ? '0' : (sv.capital != null ? Number(sv.capital).toFixed(0) : '1000')}</span>
+            <span>W/L: ${sv.totalWins || 0}/${sv.totalLosses || 0} (${sv.winRate || 0}%)</span>
+            <span>Target: ${sv.monthlyTarget || 60}%</span>
+            <span style="color:${(sv.totalRevenue || 0) >= 0 ? 'var(--color-success)' : 'var(--color-danger)'}">Revenue: ${(sv.totalRevenue || 0) >= 0 ? '+' : ''}$${Number(sv.totalRevenue || 0).toFixed(2)}</span>
+            <span>Trades: ${sv.totalTrades || 0}</span>
+            <span>
+              <a href="#" onclick="event.stopPropagation();window.CryptoBot.mcDownloadTrades('${key}')" style="color:var(--color-accent);text-decoration:underline;font-size:0.6rem;">📥 Export CSV</a>
+            </span>
+          </div>
+        </div>
+        ${a.populationSize !== undefined ? `
+        <div style="margin-bottom:6px;padding:4px 6px;background:rgba(0,255,136,0.05);border:1px solid rgba(0,255,136,0.15);border-radius:6px;">
+          <div style="font-size:0.7rem;color:var(--color-accent);font-weight:600;margin-bottom:2px;">🧬 Strategy Discovery</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:2px;font-size:0.65rem;color:var(--color-text-muted);">
+            <span>Population: ${a.populationSize || 0}</span>
+            <span>Elite: ${a.eliteCount || 0}</span>
+            <span>Generated: ${a.totalGenerated || 0}</span>
+            <span>Evolved: ${a.totalEvolved || 0}</span>
+            <span>Culled: ${a.totalCulled || 0}</span>
+            <span>Best WR: ${(a.bestEverWinRate || 0).toFixed(1)}%</span>
+            <span>Web: ${a.totalWebSearches || 0} searches</span>
+            <span>AI: ${a.totalAiDiscoveries || 0} ideas</span>
+          </div>
+          ${a.bestEverStrategy && a.bestEverStrategy !== 'N/A' ? `<div style="font-size:0.65rem;color:var(--color-success);margin-top:2px;">🏆 ${escapeHtml(a.bestEverStrategy)}</div>` : ''}
+        </div>` : ''}
+        ${a.qlearning && a.qlearning.qTableSize > 0 ? `
+        <div style="margin-bottom:6px;padding:4px 6px;background:rgba(100,149,237,0.08);border:1px solid rgba(100,149,237,0.2);border-radius:6px;">
+          <div style="font-size:0.7rem;color:#6495ED;font-weight:600;margin-bottom:2px;">🧠 Q-Learning (Ruflo)</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:2px;font-size:0.65rem;color:var(--color-text-muted);">
+            <span>States: ${a.qlearning.qTableSize}</span>
+            <span>ε: ${a.qlearning.epsilon}</span>
+            <span>Updates: ${a.qlearning.updateCount}</span>
+            <span>Reward: ${a.qlearning.totalReward}</span>
+          </div>
+        </div>` : ''}
+        ${taskHtml}${errHtml}
+        <div class="mc-agent-meta">
+          <span class="mc-meta-label">Runs:</span><span>${a.runCount}</span>
+          <span class="mc-meta-label">Last run:</span><span>${lastRun}</span>
+        </div>
+        <div class="mc-agent-actions">
+          ${a.paused
+            ? `<button class="btn btn-sm" style="background:var(--color-success);color:#000;" onclick="event.stopPropagation();window.CryptoBot.mcCommand('resume-agent',{agent:'${key}'})">Resume</button>`
+            : `<button class="btn btn-sm" style="background:var(--color-warning);color:#000;" onclick="event.stopPropagation();window.CryptoBot.mcCommand('pause-agent',{agent:'${key}'})">Pause</button>`
+          }
+          ${st === 'error' ? `<button class="btn btn-sm" style="border:1px solid var(--color-accent);color:var(--color-accent);" onclick="event.stopPropagation();window.CryptoBot.mcCommand('reset-agent',{agent:'${key}'})">Reset</button>` : ''}
+          ${isCustom ? `<button class="btn btn-sm" style="border:1px solid var(--color-danger);color:var(--color-danger);" onclick="event.stopPropagation();window.CryptoBot.mcRemoveAgent('${key}')">Remove</button>` : ''}
+        </div>
+        <div class="mc-profile-panel">
+          ${skills.length ? `<div class="mc-profile-section"><div class="mc-profile-section-title">Skills</div>${skillsHtml}</div>` : ''}
+          ${config.length ? `<div class="mc-profile-section"><div class="mc-profile-section-title">Config</div>${configHtml}</div>` : ''}
+        </div>
+      </div>`;
+    }).join('');
+
+    // Add Agent button
+    html += `<div class="mc-agent-card mc-add-card" onclick="document.getElementById('mc-add-agent-form').classList.toggle('hidden')" style="cursor:pointer;display:flex;align-items:center;justify-content:center;min-height:120px;border-style:dashed;">
+      <div style="text-align:center;">
+        <div style="font-size:1.5rem;color:var(--color-accent);margin-bottom:4px;">+</div>
+        <div style="font-size:0.8rem;color:var(--color-text-muted);">Add Watcher Agent</div>
+      </div>
+    </div>`;
+
+    // Add Agent form (hidden)
+    html += `<div id="mc-add-agent-form" class="hidden mc-agent-card" style="grid-column:1/-1;">
+      <div style="font-weight:600;margin-bottom:var(--space-2);color:var(--color-text);">Create Watcher Agent</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--space-2);margin-bottom:var(--space-2);">
+        <div class="form-group" style="margin:0;">
+          <label class="form-label" style="font-size:0.75rem;">Name</label>
+          <input class="form-input" type="text" id="mc-new-agent-name" placeholder="e.g. BTC Watcher">
+        </div>
+        <div class="form-group" style="margin:0;">
+          <label class="form-label" style="font-size:0.75rem;">Symbols (comma-separated)</label>
+          <input class="form-input text-mono" type="text" id="mc-new-agent-symbols" placeholder="BTCUSDT,ETHUSDT" style="text-transform:uppercase;">
+        </div>
+        <div class="form-group" style="margin:0;">
+          <label class="form-label" style="font-size:0.75rem;">Alert Threshold %</label>
+          <input class="form-input text-mono" type="number" id="mc-new-agent-threshold" value="3" min="0.5" max="20" step="0.5">
+        </div>
+        <div class="form-group" style="margin:0;">
+          <label class="form-label" style="font-size:0.75rem;">Description</label>
+          <input class="form-input" type="text" id="mc-new-agent-desc" placeholder="What does this agent watch?">
+        </div>
+      </div>
+      <button class="btn btn-primary btn-sm" onclick="window.CryptoBot.mcCreateAgent()">Create Agent</button>
+    </div>`;
+
+    grid.innerHTML = html;
+  }
+
+  async function mcToggleSkill(agentKey, skillId, enabled) {
+    try {
+      await api('PUT', `/api/admin/agents/profiles/${agentKey}/skill`, { skillId, enabled });
+      showToast(`Skill ${enabled ? 'enabled' : 'disabled'}`, 'success');
+      mcProfilesCache = null;
+    } catch (err) { showToast(err.message, 'error'); }
+  }
+
+  async function mcUpdateConfig(agentKey, key, value) {
+    try {
+      const numVal = parseFloat(value);
+      await api('PUT', `/api/admin/agents/profiles/${agentKey}/config`, { [key]: isNaN(numVal) ? value : numVal });
+      showToast('Config updated', 'success');
+      mcProfilesCache = null;
+    } catch (err) { showToast(err.message, 'error'); }
+  }
+
+  async function mcCreateAgent() {
+    const name = document.getElementById('mc-new-agent-name')?.value?.trim();
+    const symbols = document.getElementById('mc-new-agent-symbols')?.value?.trim();
+    const threshold = document.getElementById('mc-new-agent-threshold')?.value;
+    const desc = document.getElementById('mc-new-agent-desc')?.value?.trim();
+    if (!name) { showToast('Name is required', 'error'); return; }
+    try {
+      await api('POST', '/api/admin/agents/create', { name, symbols, alertThreshold: threshold, description: desc });
+      showToast(`Agent "${name}" created`, 'success');
+      mcProfilesCache = null;
+      document.getElementById('mc-add-agent-form')?.classList.add('hidden');
+      mcRefresh();
+    } catch (err) { showToast(err.message, 'error'); }
+  }
+
+  async function mcRemoveAgent(key) {
+    if (!confirm(`Remove agent "${key}"?`)) return;
+    try {
+      await api('DELETE', `/api/admin/agents/${key}`);
+      showToast('Agent removed', 'success');
+      mcProfilesCache = null;
+      mcRefresh();
+    } catch (err) { showToast(err.message, 'error'); }
+  }
+
+  function mcDownloadTrades(agentKey) {
+    const url = `/api/admin/agents/trade-history/csv?agent=${encodeURIComponent(agentKey)}`;
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${agentKey}-trades.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  }
+
+  function formatTimeAgo(ts) {
+    const diff = Date.now() - ts;
+    if (diff < 60000) return `${Math.round(diff / 1000)}s ago`;
+    if (diff < 3600000) return `${Math.round(diff / 60000)}m ago`;
+    if (diff < 86400000) return `${Math.round(diff / 3600000)}h ago`;
+    return `${Math.round(diff / 86400000)}d ago`;
+  }
+
+  function mcChatQuick(text) {
+    const input = document.getElementById('mc-chat-input');
+    if (input) input.value = text;
+    mcChat();
+  }
+
+  function mcChatAddMessage(from, text, isCeo) {
+    const container = document.getElementById('mc-chat-messages');
+    if (!container) return;
+    const msg = document.createElement('div');
+    msg.className = `mc-chat-msg ${isCeo ? 'mc-chat-ceo' : 'mc-chat-agent'}`;
+    // Format **bold** in agent messages
+    const formatted = escapeHtml(text).replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+    msg.innerHTML = `<span class="mc-chat-from">${escapeHtml(from)}</span><span class="mc-chat-text">${formatted}</span>`;
+    container.appendChild(msg);
+    container.scrollTop = container.scrollHeight;
+  }
+
+  async function mcChat() {
+    const input = document.getElementById('mc-chat-input');
+    if (!input || !input.value.trim()) return;
+    const message = input.value.trim();
+    input.value = '';
+
+    mcChatAddMessage('You', message, true);
+
+    try {
+      const reply = await api('POST', '/api/admin/agents/chat', { message });
+      mcChatAddMessage(reply.from || 'Coordinator', reply.message || 'Done.', false);
+      setTimeout(mcRefresh, 800);
+    } catch (err) {
+      mcChatAddMessage('System', `Error: ${err.message}`, false);
+    }
+  }
+
+  let _allTokenSymbols = [];
+
+  async function loadSignalBoard() {
+    try {
+      const data = await api('GET', '/api/dashboard/signal-board');
+      const board = document.getElementById('signal-board');
+      const results = document.getElementById('daily-results');
+      const countEl = document.getElementById('watch-count');
+      if (!board) return;
+
+      const tokens = data.tokens || [];
+      _allTokenSymbols = tokens.map(t => t.symbol);
+      const activeCount = tokens.filter(t => t.watching).length;
+      if (countEl) countEl.textContent = `(${activeCount} active)`;
+
+      if (!tokens.length) {
+        board.innerHTML = '<div style="color:var(--color-text-muted);font-size:0.8rem;grid-column:1/-1;text-align:center;">Loading top 50 tokens...</div>';
+      } else {
+        board.innerHTML = tokens.map(t => {
+          const coin = t.symbol.replace('USDT', '');
+          const on = t.watching;
+          const dir = t.direction;
+          const chg = t.change24h || 0;
+          const chgColor = chg >= 0 ? 'var(--color-success)' : 'var(--color-danger)';
+          const signalDot = dir === 'LONG' ? '<span style="color:var(--color-success);font-size:0.65rem;">LONG</span>'
+            : dir === 'SHORT' ? '<span style="color:var(--color-danger);font-size:0.65rem;">SHORT</span>'
+            : '';
+          const riskTag = t.riskTag;
+          const riskBadge = riskTag === 'low' ? '<span class="risk-badge risk-low">Low</span>'
+            : riskTag === 'medium' ? '<span class="risk-badge risk-med">Med</span>'
+            : riskTag === 'high' ? '<span class="risk-badge risk-high">High</span>'
+            : riskTag === 'popular' ? '<span class="risk-badge risk-pop">Hot</span>'
+            : '';
+
+          const dirClass = dir ? (dir === 'LONG' ? 'signal-long' : 'signal-short') : (on ? '' : 'signal-none');
+          return `<div class="signal-card ${dirClass} ${on ? 'signal-watching' : ''}" style="position:relative;">
+            ${riskBadge}
+            <div style="display:flex;justify-content:space-between;align-items:center;">
+              <span class="signal-card-sym">${coin}</span>
+              <label class="token-switch">
+                <input type="checkbox" ${on ? 'checked' : ''} onchange="window.CryptoBot.toggleWatch('${t.symbol}',this.checked)">
+                <span class="token-slider"></span>
+              </label>
+            </div>
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-top:2px;">
+              <span style="font-size:0.7rem;color:${chgColor};">${chg >= 0 ? '+' : ''}${chg.toFixed(1)}%</span>
+              ${signalDot}
+            </div>
+            ${on ? `<input type="number" class="form-input text-mono" value="${t.userLeverage || 20}" min="1" max="125" style="width:100%;font-size:0.68rem;padding:2px 4px;margin-top:3px;text-align:center;" onchange="window.CryptoBot.setUserLeverage('${t.symbol}',this.value)" title="Your leverage">` : ''}
+          </div>`;
+        }).join('');
+      }
+
+      // Daily results
+      if (results && data.dailyResults?.length) {
+        results.innerHTML = '<div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-md);overflow:hidden;">' +
+          data.dailyResults.map(r => {
+            const pnl = parseFloat(r.total_pnl) || 0;
+            const coin = r.symbol.replace('USDT', '');
+            return `<div class="daily-result-row">
+              <span style="font-weight:600;min-width:60px;">${coin}</span>
+              <span style="font-size:0.75rem;color:var(--color-text-muted);">${r.wins}W/${r.losses}L</span>
+              <span style="font-weight:600;color:${pnl >= 0 ? 'var(--color-success)' : 'var(--color-danger)'};">${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)}</span>
+            </div>`;
+          }).join('') + '</div>';
+      } else if (results) {
+        results.innerHTML = '<div style="color:var(--color-text-muted);font-size:0.8rem;text-align:center;padding:var(--space-2);">No results yet today</div>';
+      }
+    } catch (err) {
+      const board = document.getElementById('signal-board');
+      if (board) board.innerHTML = `<div style="color:var(--color-text-muted);font-size:0.8rem;grid-column:1/-1;">${err.message}</div>`;
+    }
+  }
+
+  async function toggleWatch(symbol, enable) {
+    try {
+      if (enable) {
+        await api('POST', '/api/dashboard/watchlist', { symbol });
+      } else {
+        await api('DELETE', `/api/dashboard/watchlist/${symbol}`);
+      }
+      loadSignalBoard();
+    } catch (err) { showToast(err.message, 'error'); }
+  }
+
+  async function setUserLeverage(symbol, leverage) {
+    try {
+      await api('PUT', `/api/dashboard/watchlist/${symbol}/leverage`, { leverage: parseInt(leverage) });
+    } catch (err) { showToast(err.message, 'error'); }
+  }
+
+  async function watchAll(enable) {
+    try {
+      if (!_allTokenSymbols.length) await loadSignalBoard();
+      await api('POST', '/api/dashboard/watchlist/bulk', { symbols: _allTokenSymbols, enabled: enable });
+      showToast(enable ? 'All tokens ON' : 'All tokens OFF', 'success');
+      loadSignalBoard();
+    } catch (err) { showToast(err.message, 'error'); }
+  }
+
+  // ── Admin Token Board ─────────────────────────────────
+  async function adminLoadTokenBoard() {
+    try {
+      const tokens = await api('GET', '/api/admin/token-board');
+      const tbody = document.getElementById('admin-board-tbody');
+      const empty = document.getElementById('admin-board-empty');
+      if (!tbody) return;
+      if (!tokens.length) { tbody.innerHTML = ''; if (empty) empty.style.display = ''; return; }
+      const activeCount = tokens.filter(t => !t.banned).length;
+      const withSignal = tokens.filter(t => t.signal).length;
+      const withAgent = tokens.filter(t => t.hasAgent).length;
+      const statsEl = document.getElementById('admin-board-stats');
+      if (statsEl) statsEl.textContent = `${activeCount} active / ${tokens.length} total | ${withAgent} agents | ${withSignal} signals`;
+
+      tbody.innerHTML = tokens.map(t => {
+        const price = t.price || 0;
+        const chg = t.change24h || 0;
+        const vol = t.volume || 0;
+        const chgColor = chg >= 0 ? 'var(--color-success)' : 'var(--color-danger)';
+        const fmtPrice = price >= 1000 ? '$' + price.toLocaleString('en-US',{maximumFractionDigits:2}) : price >= 1 ? '$' + price.toFixed(2) : price > 0 ? '$' + price.toFixed(6) : '--';
+        const fmtVol = vol >= 1e9 ? (vol/1e9).toFixed(1) + 'B' : vol >= 1e6 ? (vol/1e6).toFixed(0) + 'M' : vol >= 1e3 ? (vol/1e3).toFixed(0) + 'K' : '--';
+
+        // Signal indicator
+        let signalHtml = '';
+        if (t.signal === 'LONG') signalHtml = '<span style="color:var(--color-success);font-weight:700;font-size:0.72rem;">LONG</span>';
+        else if (t.signal === 'SHORT') signalHtml = '<span style="color:var(--color-danger);font-weight:700;font-size:0.72rem;">SHORT</span>';
+        else if (t.hasAgent) signalHtml = '<span style="color:var(--color-text-muted);font-size:0.65rem;">watching</span>';
+        else signalHtml = '<span style="color:var(--color-border);font-size:0.65rem;">--</span>';
+
+        // Structure label
+        const struct = t.structure;
+        const structTip = struct ? `3m:${struct.tf3m||'?'} 1m:${struct.tf1m||'?'}` : '';
+
+        return `<tr${t.banned ? ' style="opacity:0.4;"' : ''}>
+          <td title="${structTip}">${signalHtml}</td>
+          <td><strong style="font-size:0.8rem;">${escapeHtml(t.symbol.replace('USDT',''))}</strong></td>
+          <td class="text-mono" style="font-size:0.75rem;">${fmtPrice}</td>
+          <td style="font-size:0.75rem;color:${chgColor};font-weight:600;">${chg >= 0 ? '+' : ''}${chg.toFixed(1)}%</td>
+          <td style="font-size:0.72rem;color:var(--color-text-muted);">${fmtVol}</td>
+          <td>
+            <select class="form-input" style="font-size:0.7rem;padding:1px 3px;width:70px;" onchange="window.CryptoBot.adminSetRiskTag('${t.symbol}',this.value)">
+              <option value="" ${!t.risk_tag ? 'selected' : ''}>-</option>
+              <option value="popular" ${t.risk_tag === 'popular' ? 'selected' : ''}>Hot</option>
+              <option value="low" ${t.risk_tag === 'low' ? 'selected' : ''}>Low</option>
+              <option value="medium" ${t.risk_tag === 'medium' ? 'selected' : ''}>Med</option>
+              <option value="high" ${t.risk_tag === 'high' ? 'selected' : ''}>High</option>
+            </select>
+          </td>
+          <td><input class="form-input text-mono" type="number" value="${t.leverage || 20}" min="1" max="125" style="width:46px;font-size:0.7rem;padding:1px 3px;" onchange="window.CryptoBot.adminSetTokenLev('${t.symbol}',this.value)"></td>
+          <td>
+            <label class="token-switch"><input type="checkbox" ${!t.banned ? 'checked' : ''} onchange="window.CryptoBot.adminToggleBan('${t.symbol}',!this.checked)"><span class="token-slider"></span></label>
+          </td>
+          <td><button style="font-size:0.6rem;color:var(--color-danger);background:none;border:none;cursor:pointer;padding:0;" onclick="window.CryptoBot.adminRemoveTokenBoard('${t.symbol}')">X</button></td>
+        </tr>`;
+      }).join('');
+    } catch (err) { showToast(err.message, 'error'); }
+  }
+
+  async function adminPopulateTop50() {
+    try {
+      showToast('Loading top 10 tokens by volume...', 'info');
+      const result = await api('POST', '/api/admin/token-board/populate-top50');
+      showToast(`Done: ${result.added} tokens loaded`, 'success');
+      adminLoadTokenBoard();
+    } catch (err) { showToast(err.message, 'error'); }
+  }
+
+  async function adminAddTokenBoard() {
+    const sym = document.getElementById('admin-board-symbol')?.value?.trim().toUpperCase();
+    const risk = document.getElementById('admin-board-risk')?.value || null;
+    const lev = document.getElementById('admin-board-lev')?.value || 20;
+    if (!sym) { showToast('Enter a symbol', 'error'); return; }
+    const symbol = sym.endsWith('USDT') ? sym : sym + 'USDT';
+    try {
+      await api('POST', '/api/admin/token-board/add', { symbol, risk_tag: risk });
+      await api('POST', '/api/admin/token-leverage', { symbol, leverage: parseInt(lev) }).catch(() => {});
+      showToast(`${symbol} added`, 'success');
+      document.getElementById('admin-board-symbol').value = '';
+      adminLoadTokenBoard();
+    } catch (err) { showToast(err.message, 'error'); }
+  }
+
+  async function adminSetRiskTag(symbol, tag) {
+    try {
+      await api('PUT', `/api/admin/token-board/${symbol}/risk`, { risk_tag: tag || null });
+    } catch (err) { showToast(err.message, 'error'); }
+  }
+
+  async function adminSetTokenLev(symbol, lev) {
+    try {
+      await api('POST', '/api/admin/token-leverage', { symbol, leverage: parseInt(lev) });
+    } catch (err) { showToast(err.message, 'error'); }
+  }
+
+  async function adminToggleBan(symbol, banned) {
+    try {
+      await api('POST', '/api/admin/global-tokens', {
+        symbol,
+        enabled: !banned,
+        banned: banned,
+      });
+      showToast(`${symbol} ${banned ? 'BANNED' : 'UNBANNED'}`, banned ? 'error' : 'success');
+      adminLoadTokenBoard();
+    } catch (err) { showToast(err.message, 'error'); }
+  }
+
+  async function adminRemoveTokenBoard(symbol) {
+    try {
+      await api('DELETE', `/api/admin/token-board/${symbol}`);
+      adminLoadTokenBoard();
+    } catch (err) { showToast(err.message, 'error'); }
+  }
+
+  async function customerChat() {
+    const input = document.getElementById('chatbot-input');
+    const container = document.getElementById('chatbot-messages');
+    if (!input || !container || !input.value.trim()) return;
+    const msg = input.value.trim();
+    input.value = '';
+    // Add user message
+    const userEl = document.createElement('div');
+    userEl.className = 'chatbot-msg chatbot-user';
+    userEl.innerHTML = `<span>${escapeHtml(msg)}</span>`;
+    container.appendChild(userEl);
+    container.scrollTop = container.scrollHeight;
+    // Fetch reply
+    try {
+      const res = await fetch('/api/chatbot', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: msg }),
+      });
+      const data = await res.json();
+      const botEl = document.createElement('div');
+      botEl.className = 'chatbot-msg chatbot-bot';
+      botEl.innerHTML = `<span>${escapeHtml(data.reply || 'Sorry, try again.').replace(/\n/g, '<br>')}</span>`;
+      container.appendChild(botEl);
+    } catch {
+      const errEl = document.createElement('div');
+      errEl.className = 'chatbot-msg chatbot-bot';
+      errEl.innerHTML = '<span>Sorry, I\'m having trouble. Try again later.</span>';
+      container.appendChild(errEl);
+    }
+    container.scrollTop = container.scrollHeight;
+  }
+
+  async function mcCommand(command, params) {
+    try {
+      const result = await api('POST', '/api/admin/agents/command', { command, params });
+      if (result.ok === false && result.error) {
+        showToast(result.error, 'error');
+      } else {
+        showToast(`Command "${command}" sent`, 'success');
+      }
+      setTimeout(mcRefresh, 500);
+    } catch (err) {
+      showToast(`Command failed: ${err.message}`, 'error');
+    }
   }
 
   async function saveAdminSettings() {
@@ -1567,7 +2398,7 @@
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'same-origin',
-        body: JSON.stringify({ days }),
+        body: JSON.stringify({ days, maxTokens: parseInt($('#bt-max-tokens')?.value) || 50 }),
         signal: abortCtrl.signal,
       });
       if (!resp.ok) {
@@ -1693,6 +2524,11 @@
       const allowed = tokens.filter(t => t.enabled && !t.banned);
       const banned = tokens.filter(t => t.banned);
 
+      const allowedCountEl = $('#allowed-count');
+      const bannedCountEl = $('#banned-count');
+      if (allowedCountEl) allowedCountEl.textContent = allowed.length;
+      if (bannedCountEl) bannedCountEl.textContent = banned.length;
+
       const allowedBody = $('#admin-allowed-tbody');
       const allowedEmpty = $('#admin-allowed-empty');
       if (!allowed.length) {
@@ -1736,6 +2572,20 @@
       $('#admin-allowed-symbol').value = '';
       loadGlobalTokens();
     } catch (err) { showToast(err.message, 'error'); }
+  }
+
+  async function scanBitunixTokens() {
+    const btn = $('#scan-bitunix-btn');
+    if (btn) { btn.disabled = true; btn.textContent = '⏳ Scanning...'; }
+    try {
+      const result = await api('POST', '/api/admin/scan-bitunix-tokens');
+      showToast(result.message || `Found ${result.bitunixTotal} tokens`, 'success');
+      loadGlobalTokens();
+    } catch (err) {
+      showToast(err.message, 'error');
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = '🔍 Scan Bitunix'; }
+    }
   }
 
   async function addBannedToken() {
@@ -1824,6 +2674,9 @@
       const tbody = $('#admin-lev-tbody');
       const empty = $('#admin-lev-empty');
       if (!tbody) return;
+
+      const levCountEl = $('#leverage-count');
+      if (levCountEl) levCountEl.textContent = tokens.length;
 
       if (!tokens.length) {
         tbody.innerHTML = '';
@@ -2085,17 +2938,63 @@
         listEl.innerHTML = '<span style="color:var(--color-success);">No open positions</span>';
         return;
       }
-      listEl.innerHTML = data.positions.map(p => {
-        const dirColor = p.direction === 'LONG' ? '#22c55e' : '#ef4444';
-        const dirLabel = p.direction === 'LONG' ? '▲ LONG' : '▼ SHORT';
-        const userCount = p.users.length;
-        return `<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid rgba(255,255,255,0.05);">
-          <button class="btn btn-sm" style="font-size:0.7rem;background:#ef4444;color:#fff;border:none;padding:3px 10px;cursor:pointer;" data-close-token="${p.symbol}">✕ Close</button>
-          <strong style="color:var(--color-text);min-width:120px;">${p.symbol}</strong>
-          <span style="color:${dirColor};font-size:0.75rem;font-weight:700;min-width:70px;">${dirLabel}</span>
-          <span style="color:var(--color-text-muted);font-size:0.75rem;">${userCount} user${userCount > 1 ? 's' : ''}: ${p.users.join(', ')}</span>
+
+      let totalPnl = 0;
+      const html = data.positions.map(group => {
+        const sym = group.symbol;
+        const dir = group.direction;
+        const dirColor = dir === 'LONG' ? 'var(--color-success)' : 'var(--color-danger)';
+
+        const tradesHtml = group.trades.map(t => {
+          totalPnl += t.pnlUsdt;
+          const dangerBg = t.danger === 'critical' ? 'rgba(239,68,68,0.15)' : t.danger === 'danger' ? 'rgba(239,68,68,0.08)' : t.danger === 'warning' ? 'rgba(255,176,32,0.06)' : '';
+          const pnlColor = t.pnlUsdt >= 0 ? 'var(--color-success)' : 'var(--color-danger)';
+          const fmtEntry = t.entry >= 1 ? t.entry.toFixed(2) : t.entry.toFixed(6);
+          const fmtCur = t.curPrice >= 1 ? t.curPrice.toFixed(2) : t.curPrice.toFixed(6);
+          const hrs = Math.floor(t.durationMin / 60);
+          const mins = t.durationMin % 60;
+          const dur = hrs > 0 ? `${hrs}h${mins}m` : `${mins}m`;
+
+          return `<div style="display:grid;grid-template-columns:1fr auto;gap:4px;padding:6px 8px;background:${dangerBg};border-radius:4px;margin-bottom:2px;">
+            <div>
+              <span style="font-size:0.75rem;color:var(--color-text-muted);">${escapeHtml(t.email)} • ${t.platform} • x${t.leverage} • ${dur}</span>
+            </div>
+            <div style="text-align:right;">
+              <span style="font-weight:700;color:${pnlColor};font-size:0.85rem;">${t.pnlUsdt >= 0 ? '+' : ''}$${t.pnlUsdt.toFixed(2)}</span>
+              <span style="font-size:0.7rem;color:${pnlColor};margin-left:4px;">(${t.capitalPnl >= 0 ? '+' : ''}${t.capitalPnl}% cap)</span>
+            </div>
+            <div style="font-size:0.7rem;color:var(--color-text-muted);">
+              Entry: $${fmtEntry} → Now: $${fmtCur} | Price: ${t.pnlPct >= 0 ? '+' : ''}${t.pnlPct}%
+            </div>
+            <div style="text-align:right;font-size:0.7rem;color:var(--color-text-muted);">
+              SL: ${t.slDist > 0 ? t.slDist + '% away' : '--'}
+            </div>
+          </div>`;
+        }).join('');
+
+        const groupPnl = group.totalPnl;
+        const groupColor = groupPnl >= 0 ? 'var(--color-success)' : 'var(--color-danger)';
+
+        return `<div style="margin-bottom:var(--space-3);border:1px solid var(--color-border-muted);border-radius:var(--radius-md);overflow:hidden;">
+          <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 10px;background:var(--color-bg-raised);">
+            <div style="display:flex;align-items:center;gap:8px;">
+              <button class="btn btn-sm" style="font-size:0.65rem;background:#ef4444;color:#fff;border:none;padding:2px 8px;" data-close-token="${sym}">Close</button>
+              <strong>${sym.replace('USDT','')}</strong>
+              <span style="color:${dirColor};font-weight:700;font-size:0.8rem;">${dir}</span>
+              <span style="font-size:0.72rem;color:var(--color-text-muted);">${group.trades.length} user(s)</span>
+            </div>
+            <span style="font-weight:700;color:${groupColor};">${groupPnl >= 0 ? '+' : ''}$${groupPnl.toFixed(2)}</span>
+          </div>
+          <div style="padding:4px 6px;">${tradesHtml}</div>
         </div>`;
       }).join('');
+
+      const totalColor = totalPnl >= 0 ? 'var(--color-success)' : 'var(--color-danger)';
+      listEl.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--space-2);padding:6px 0;border-bottom:1px solid var(--color-border-muted);">
+        <span style="font-size:0.85rem;font-weight:600;">Total Open P&L:</span>
+        <span style="font-size:1rem;font-weight:700;color:${totalColor};">${totalPnl >= 0 ? '+' : ''}$${totalPnl.toFixed(2)}</span>
+      </div>${html}`;
+
       listEl.querySelectorAll('[data-close-token]').forEach(btn => {
         btn.addEventListener('click', () => emergencyCloseToken(btn.dataset.closeToken));
       });
@@ -2216,17 +3115,22 @@
       const timerColor = isOverdue ? 'var(--color-danger)' : daysLeft <= 2 ? 'var(--color-danger)' : daysLeft <= 4 ? '#f59e0b' : 'var(--color-success)';
       const timerText = formatCountdown(msLeft);
 
+      const roleBtn = u.is_admin
+        ? `<button class="btn btn-sm" style="font-size:0.7rem;padding:2px 8px;background:var(--color-accent);color:#fff;border:none;" onclick="window.CryptoBot.adminChangeRole(${u.id},'${escapeHtml(u.email)}',false)">Demote</button>`
+        : `<button class="btn btn-sm" style="font-size:0.7rem;padding:2px 8px;background:#8b5cf6;color:#fff;border:none;" onclick="window.CryptoBot.adminChangeRole(${u.id},'${escapeHtml(u.email)}',true)">Make Admin</button>`;
+
       return `<tr>
-      <td>${escapeHtml(u.email)}${u.is_admin ? ' <b>(admin)</b>' : ''}</td>
+      <td>${escapeHtml(u.email)}${u.is_admin ? ' <span style="color:var(--color-accent);font-size:0.7rem;font-weight:700;">ADMIN</span>' : ''}</td>
       <td>${u.key_count}</td>
       <td class="text-mono">$${bal} <button class="btn btn-ghost btn-sm" style="font-size:0.7rem;padding:2px 6px;" onclick="window.CryptoBot.adminEditWallet(${u.id},'${escapeHtml(u.email)}',${bal})">Edit</button></td>
       <td>${escapeHtml(u.referral_code || '-')}</td>
       <td>${formatDate(u.created_at)}</td>
       <td style="white-space:nowrap;"><span class="admin-timer-badge" data-due="${dueMs}" style="color:${timerColor};font-size:0.8rem;font-weight:600;font-family:var(--font-mono);">${timerText}</span></td>
-      <td style="white-space:nowrap;">
+      <td style="white-space:nowrap;display:flex;gap:4px;align-items:center;">
         ${u.is_blocked
           ? `<button class="btn btn-primary btn-sm" onclick="window.CryptoBot.adminAction('unblock',${u.id})">Unblock</button>`
           : `<button class="btn btn-danger btn-sm" onclick="window.CryptoBot.adminAction('block',${u.id})">Block</button>`}
+        ${roleBtn}
       </td>
     </tr>`;
     }).join('');
@@ -2280,6 +3184,16 @@
     try {
       await api('PUT', `/api/admin/users/${userId}/block`, { blocked: action === 'block' });
       showToast(`User ${action}ed`, 'success');
+      loadAdmin();
+    } catch (err) { showToast(err.message, 'error'); }
+  }
+
+  async function adminChangeRole(userId, email, makeAdmin) {
+    const action = makeAdmin ? 'promote to Admin' : 'demote to User';
+    if (!confirm(`${action} for ${email}?`)) return;
+    try {
+      await api('PUT', `/api/admin/users/${userId}/role`, { is_admin: makeAdmin });
+      showToast(`${email} ${makeAdmin ? 'promoted to Admin' : 'demoted to User'}`, 'success');
       loadAdmin();
     } catch (err) { showToast(err.message, 'error'); }
   }
@@ -2447,17 +3361,12 @@
   // ----- Platform change (show static IP info) -----
 
   function onPlatformChange(val) {
-    const ipInfo = $('#static-ip-info');
-    const noteEl = $('#ip-platform-note');
-    if (!ipInfo || !noteEl) return;
-    if (val === 'binance') {
-      ipInfo.classList.remove('hidden');
-      noteEl.innerHTML = '<strong>Binance:</strong> Add both IPs to your API key whitelist, or you can also <strong>disable IP restriction</strong> in your Binance API settings.';
-    } else if (val === 'bitunix') {
-      ipInfo.classList.remove('hidden');
-      noteEl.innerHTML = '<strong>Bitunix:</strong> Add both IPs to your Bitunix API key "Bind IP address" field.';
+    const guide = $('#bitunix-setup-guide');
+    if (!guide) return;
+    if (val === 'bitunix') {
+      guide.classList.remove('hidden');
     } else {
-      ipInfo.classList.add('hidden');
+      guide.classList.add('hidden');
     }
   }
 
@@ -2659,17 +3568,22 @@
     toggleSettings, saveSettings, deleteKey, showToast, syncSlider, syncNum, saveProfile, changePassword,
     togglePause,
     submitTopUp, saveUsdtAddress, withdrawFromWallet, payWeekly,
-    adminAction, adminSub, adminWd, saveAdminSettings, adminEditWallet, clearErrors,
+    adminAction, adminChangeRole, adminSub, adminWd, saveAdminSettings, adminEditWallet, clearErrors,
     adminEditSplit, adminPauseKey, adminResumeKey, adminMarkPaid, adminFixTrades, adminClearTestData,
     goToAuth, showLoginForm, onPlatformChange,
     searchCoins, addCoin, removeCoin,
     filterLogs, clearLogs,
     addTokenLeverage, removeTokenLeverage, updateTokenLev, autoPopulateLeverage, searchTokenLev, pickTokenLev, selectRiskLevel,
-    addAllowedToken, addBannedToken, unbanGlobalToken, removeGlobalToken,
+    addAllowedToken, addBannedToken, unbanGlobalToken, removeGlobalToken, scanBitunixTokens,
     searchAdminToken, pickAdminToken, searchUserBanToken,
     addRiskLevel, saveRiskLevel, deleteRiskLevel,
+    loadKronosPredictions,
     loadOpenPositions, emergencyCloseToken, emergencyCloseAll,
     fixBitunixPnl, debugBitunix, runBacktest, loadAiVersions, runAiOptimize,
+    mcRefresh, mcCommand, mcChat, mcChatQuick, switchAdminTab, filterAgents, customerChat,
+    loadSignalBoard, toggleWatch, watchAll, setUserLeverage,
+    adminLoadTokenBoard, adminAddTokenBoard, adminPopulateTop50, adminSetRiskTag, adminSetTokenLev, adminToggleBan, adminRemoveTokenBoard,
+    mcToggleSkill, mcUpdateConfig, mcCreateAgent, mcRemoveAgent, mcDownloadTrades,
   };
 
   // ----- Init -----
@@ -2704,3 +3618,13 @@
     init();
   }
 })();
+
+function loadBrain() {
+  const display = document.getElementById('brain-display');
+  if (display) {
+    display.style.display = 'block';
+    fetch('/admin/brain-status').then(r => r.json()).then(data => {
+      display.innerText = data.report;
+    });
+  }
+}

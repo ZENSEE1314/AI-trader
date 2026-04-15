@@ -455,6 +455,29 @@ function detectEQHEQL(swings) {
   return eqs;
 }
 
+// ── Kline Proxy (for client-side charting) ──────────────────
+router.get('/klines', async (req, res) => {
+  try {
+    const symbol = (req.query.symbol || 'BTCUSDT').toUpperCase();
+    const interval = req.query.interval || '1m';
+    const limit = Math.min(parseInt(req.query.limit) || 300, 1000);
+    const klines = await fetchKlines(symbol, interval, limit);
+    if (!klines || !klines.length) return res.status(404).json({ error: 'No data' });
+    const candles = klines.map(k => ({
+      time: Math.floor(parseInt(k[0]) / 1000),
+      open: parseFloat(k[1]),
+      high: parseFloat(k[2]),
+      low: parseFloat(k[3]),
+      close: parseFloat(k[4]),
+      volume: parseFloat(k[5]),
+    }));
+    res.json(candles);
+  } catch (err) {
+    console.error('Kline proxy error:', err.message);
+    res.status(500).json({ error: 'Failed to fetch klines' });
+  }
+});
+
 // ── Main Chart Data Endpoint ────────────────────────────────
 router.get('/data', async (req, res) => {
   try {
@@ -595,30 +618,28 @@ router.get('/scan', async (req, res) => {
       .sort((a, b) => b.volume24h - a.volume24h)
       .slice(0, 100);
 
-    // Analyze structure for top 30 coins (limit API calls to avoid rate limits)
+    // Analyze structure for top 30 coins — parallel batches for speed
+    const toAnalyze = allCoins.slice(0, 30);
+    const BATCH = 10;
     const analyzed = [];
-    for (const coin of allCoins.slice(0, 30)) {
-      try {
+    for (let i = 0; i < toAnalyze.length; i += BATCH) {
+      const batch = toAnalyze.slice(i, i + BATCH);
+      const results = await Promise.allSettled(batch.map(async (coin) => {
         const klines = await fetchKlines(coin.symbol, '15m', 100);
-        if (!klines || klines.length < 50) {
-          analyzed.push({ ...coin, structure: '--/--', trend: 'neutral' });
-          continue;
-        }
-        // Use shorter swing length (10) for scan overview — full 20 needs more data
+        if (!klines || klines.length < 50) return { ...coin, structure: '--/--', trend: 'neutral' };
         const swings = detectSwings(klines, 10);
         const structLabels = getStructureLabels(swings);
-
         const lastHigh = structLabels.filter(l => l.type === 'high').pop();
         const lastLow = structLabels.filter(l => l.type === 'low').pop();
-
-        analyzed.push({
+        return {
           ...coin,
           structure: `${lastHigh?.label || '--'}/${lastLow?.label || '--'}`,
           trend: lastHigh?.label === 'HH' && lastLow?.label === 'HL' ? 'bullish'
             : lastHigh?.label === 'LH' && lastLow?.label === 'LL' ? 'bearish' : 'neutral',
-        });
-      } catch (_) {
-        analyzed.push({ ...coin, structure: '--/--', trend: 'neutral' });
+        };
+      }));
+      for (const r of results) {
+        analyzed.push(r.status === 'fulfilled' ? r.value : { ...batch[results.indexOf(r)], structure: '--/--', trend: 'neutral' });
       }
     }
 

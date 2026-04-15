@@ -12,6 +12,11 @@ const { getSentimentScores } = require('./sentiment-scraper');
 const { log: bLog } = require('./bot-logger');
 const { getBinanceRequestOptions, getFetchOptions } = require('./proxy-agent');
 
+// ── Trade outcome callback — agents hook in to track survival ──
+let _onTradeOutcome = null;
+function onTradeOutcome(fn) { _onTradeOutcome = fn; }
+function fireTradeOutcome(data) { if (_onTradeOutcome) { try { _onTradeOutcome(data); } catch (_) {} } }
+
 const API_KEY        = process.env.BINANCE_API_KEY    || '';
 const API_SECRET     = process.env.BINANCE_API_SECRET || '';
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN     || '';
@@ -20,6 +25,10 @@ const PRIVATE_CHATS  = TELEGRAM_CHATS.filter(id => !id.startsWith('-'));
 
 // ── CONFIG (defaults — AI may override some via getOptimalParams) ─
 const BTC_ETH_SYMBOLS = new Set(['BTCUSDT', 'ETHUSDT']);
+// Tokens priced $1000+ use 100x leverage — everything else 20x
+const HIGH_PRICE_SYMBOLS = new Set([
+  'BTCUSDT', 'ETHUSDT',
+]);
 
 const CONFIG = {
   MIN_BALANCE:     5,
@@ -33,6 +42,11 @@ const CONFIG = {
     'XAUUSDT','XAGUSDT','EURUSDT','GBPUSDT','JPYUSDT',
   ],
 };
+
+// ── Global State ──────────────────────────────────────────────
+let consecutiveLosses = 0;
+let circuitBreakerUntil = 0;
+let lastBitunixSync = 0;
 
 // ── Trailing SL config ─────────────────────────────────────
 // Capital-based SL: at 20x lev, 8% capital = 0.4% price distance
@@ -53,24 +67,36 @@ const TRAILING_SL = {
   HIGH_START: 0.30, HIGH_STEP: 0.05, HIGH_GAP: 0.02,
 };
 
+function getTrailingSLConfig(leverage) {
+  const c = TRAILING_SL_CAPITAL;
+  return {
+    INITIAL_SL_PCT: c.INITIAL_SL_CAPITAL / leverage,
+    FIRST_TRIGGER: c.FIRST_TRIGGER_CAPITAL / leverage,
+    FIRST_SL: c.FIRST_SL_CAPITAL / leverage,
+    STEP_TRIGGER: c.STEP_TRIGGER_CAPITAL / leverage,
+    STEP_SL: c.STEP_SL_CAPITAL / leverage,
+  };
+}
+
 // ── Compound: always use current wallet balance ─────────────
 function getDailyCapital(key, currentBalance) {
   return currentBalance;
 }
 
-// Get token-specific leverage: user per-key → admin global → risk level → 20x default
-async function getTokenLeverage(symbol, apiKeyId = null) {
+// Get token-specific leverage: user per-key → admin global → risk level → price-based default
+async function getTokenLeverage(symbol, apiKeyId = null, price = 0) {
+  const MAX_LEVERAGE = 125; // Exchange max — user/admin settings decide actual value
   try {
     const { query } = require('./db');
 
-    // Priority 1: User per-key per-token leverage override
+    // Priority 1: User per-key per-token leverage override (user explicitly set this)
     if (apiKeyId) {
       const userTokenRows = await query(
         'SELECT leverage FROM user_token_leverage WHERE api_key_id = $1 AND symbol = $2',
         [apiKeyId, symbol]
       );
       if (userTokenRows.length > 0) {
-        return parseInt(userTokenRows[0].leverage);
+        return Math.min(parseInt(userTokenRows[0].leverage), MAX_LEVERAGE);
       }
     }
 
@@ -80,7 +106,7 @@ async function getTokenLeverage(symbol, apiKeyId = null) {
       [symbol]
     );
     if (tokenRows.length > 0) {
-      return parseInt(tokenRows[0].leverage);
+      return Math.min(parseInt(tokenRows[0].leverage), MAX_LEVERAGE);
     }
 
     // Priority 3: Risk level max_leverage from API key
@@ -93,14 +119,19 @@ async function getTokenLeverage(symbol, apiKeyId = null) {
         [apiKeyId]
       );
       if (keyRows.length > 0 && keyRows[0].max_leverage) {
-        return parseInt(keyRows[0].max_leverage);
+        return Math.min(parseInt(keyRows[0].max_leverage), MAX_LEVERAGE);
       }
     }
 
+    // Priority 4: No explicit config — use default based on price tier
+    const HIGH_PRICE_TOKENS = new Set(['BTCUSDT','ETHUSDT','BNBUSDT','SOLUSDT','AAVEUSDT','MKRUSDT','BCHUSDT','LTCUSDT','AVAXUSDT','LINKUSDT']);
+    if (HIGH_PRICE_TOKENS.has(symbol) || price >= 100) return 100;
+    if (price >= 10) return 50;
     return 20;
   } catch (err) {
     console.error('Error getting token leverage:', err.message);
-    return 20;
+    // Return null instead of fallback to ensure safety
+    return null;
   }
 }
 
@@ -129,7 +160,7 @@ async function getCapitalPercentage(apiKeyId = null) {
   }
 }
 
-// Check if a token is globally banned by admin
+// Check if a token is allowed by admin (must be in approved list)
 async function isTokenBanned(symbol) {
   try {
     const { query } = require('./db');
@@ -146,14 +177,22 @@ async function isTokenBanned(symbol) {
 
 // AI-tuned leverage — params come from getOptimalParams()
 function getLeverage(symbol, price, params = {}) {
-  if (BTC_ETH_SYMBOLS.has(symbol)) return Math.min(params.LEV_BTC_ETH || 20, 20);
-  return Math.min(params.LEV_ALT || 20, 20);
+  // Tokens priced $100+ use 100x — small % moves need higher leverage to hit TP
+  if (HIGH_PRICE_SYMBOLS.has(symbol) || price >= 100) {
+    return params.LEV_BTC_ETH || 100;
+  }
+  // Mid-price tokens ($10-99) use 50x
+  if (price >= 10) {
+    return params.LEV_MID || 50;
+  }
+  // Low-price tokens use 20x
+  return params.LEV_ALT || 20;
 }
 
 // ── UTILS ─────────────────────────────────────────────────────
 function now() {
   return new Date().toLocaleString('en-GB', {
-    timeZone: 'Asia/Singapore',
+    timeZone: 'Asia/Jakarta',
     day: '2-digit', month: 'short', year: 'numeric',
     hour: '2-digit', minute: '2-digit', second: '2-digit',
     hour12: false,
@@ -296,42 +335,44 @@ async function updateStopLoss(client, symbol, newSlPrice, closeSide, platform, p
   return false;
 }
 
-// ── TRAILING SL: Fixed tiers + 3% steps (10-19%) + 5% steps (20%+) ────
-// 1%→+0.5%, 2.5%→+0.5%, 5%→+2%
-// 10%→+3%, 13%→+6%, 16%→+9%, 19%→+12%   (3% steps, 7% gap)
-// 20%→+15%, 25%→+20%, 30%→+25%, ...      (5% steps, 5% gap)
-function calculateTrailingStep(entryPrice, currentPrice, isLong, lastStep, leverage = 20) {
+// ── TRAILING SL ────────────────────────────────────────────
+// At +1% profit → SL locks at +0.5%.
+// Every +1% more: +2%→SL+1%, +3%→SL+1.5%, +4%→SL+2%, etc.
+// SL only moves up, never down.
+function calculateTrailingStep(entryPrice, currentPrice, isLong, lastStep, leverage = 20, userTrailStepPct = 0) {
   const pricePct = isLong
     ? (currentPrice - entryPrice) / entryPrice
     : (entryPrice - currentPrice) / entryPrice;
 
-  // Tiers are in capital %, convert price move to capital profit
-  const capitalPct = pricePct * leverage;
-
-  const { FIXED_TIERS, HIGH_START, HIGH_STEP, HIGH_GAP } = TRAILING_SL;
-  let bestSl = null;
-
-  // Phase 1: Fixed tiers (1% through 20% capital)
-  for (const tier of FIXED_TIERS) {
-    if (capitalPct >= tier.trigger) bestSl = tier.sl;
+  // Use user's trailing_sl_step if provided, otherwise use capital-based config
+  let FIRST_TRIGGER, FIRST_SL, STEP_TRIGGER, STEP_SL;
+  if (userTrailStepPct > 0) {
+    // User setting is in price % (e.g. 1.2 = 1.2%)
+    const stepPct = userTrailStepPct / 100;
+    FIRST_TRIGGER = stepPct;          // Trail triggers at 1 step of profit
+    FIRST_SL = stepPct * 0.5;        // Lock SL at half a step
+    STEP_TRIGGER = stepPct;           // Each additional step
+    STEP_SL = stepPct * 0.5;         // Each step locks half a step more
+  } else {
+    ({ FIRST_TRIGGER, FIRST_SL, STEP_TRIGGER, STEP_SL } = getTrailingSLConfig(leverage));
   }
 
-  // Phase 2: 25%+ capital — trigger every 5%, SL = trigger - 2%
-  if (capitalPct >= HIGH_START) {
-    const stepsReached = Math.floor((capitalPct - HIGH_START) / HIGH_STEP);
-    const trigger = HIGH_START + stepsReached * HIGH_STEP;
-    const sl = trigger - HIGH_GAP;
-    if (sl > (bestSl || 0)) bestSl = sl;
+  let bestSl = null;
+
+  if (pricePct >= FIRST_TRIGGER) {
+    bestSl = FIRST_SL;
+    const stepsAbove = Math.floor((pricePct - FIRST_TRIGGER + 1e-10) / STEP_TRIGGER);
+    if (stepsAbove > 0) {
+      bestSl = FIRST_SL + stepsAbove * STEP_SL;
+    }
   }
 
   if (bestSl === null) return null;
-  if (bestSl <= lastStep) return null; // SL only moves up, never down
+  if (bestSl <= lastStep) return null;
 
-  // Convert capital % back to price distance
-  const slPricePct = bestSl / leverage;
   const newSlPrice = isLong
-    ? entryPrice * (1 + slPricePct)
-    : entryPrice * (1 - slPricePct);
+    ? entryPrice * (1 + bestSl)
+    : entryPrice * (1 - bestSl);
 
   return { stepped: true, newSlPrice, newLastStep: bestSl };
 }
@@ -354,26 +395,21 @@ async function recordProfitSplit(db, userId, apiKeyId, pnlUsdt, symbol) {
 
     // Record platform fee as wallet transaction
     await db.query(
-      `INSERT INTO wallet_transactions (user_id, type, amount, status, note)
+      `INSERT INTO wallet_transactions (user_id, type, amount, status, description)
        VALUES ($1, 'platform_fee', $2, 'completed', $3)`,
       [userId, platformFee, `${adminPct}% platform fee on ${symbol} profit $${pnlUsdt.toFixed(2)}`]
     );
 
-    // Record user profit share
+    // Record user profit share (for tracking only — profit stays on exchange)
     await db.query(
-      `INSERT INTO wallet_transactions (user_id, type, amount, status, note)
+      `INSERT INTO wallet_transactions (user_id, type, amount, status, description)
        VALUES ($1, 'profit_share', $2, 'completed', $3)`,
       [userId, userShare, `${userPct}% profit share on ${symbol} profit $${pnlUsdt.toFixed(2)}`]
     );
 
-    // Credit user's 60% to their cash wallet
-    await db.query(
-      `UPDATE users SET cash_wallet = cash_wallet + $1 WHERE id = $2`,
-      [userShare, userId]
-    );
-
-    // NOTE: Referral commission is paid weekly when admin marks user as paid,
-    // not per-trade. See routes/admin.js mark-paid endpoint.
+    // NOTE: User's 60% profit stays in their Binance/Bitunix account.
+    // Cash wallet is only for top-ups and referral commissions.
+    // Platform's 40% fee is collected separately (admin marks paid weekly).
 
     bLog.trade(`Profit split: ${symbol} PnL=$${pnlUsdt.toFixed(2)} → user ${userPct}%=$${userShare.toFixed(2)} platform ${adminPct}%=$${platformFee.toFixed(2)}`);
   } catch (err) {
@@ -464,17 +500,15 @@ async function openTrade(client, pick, wallet) {
     return 'TOO_EXPENSIVE';
   }
 
-  // Fee check
+  // Fee check: ensure trailing SL first trigger profit covers fees
   const totalFees = notional * CONFIG.TAKER_FEE * 2;
-  const tpDist = Math.abs(tp1 - price) / price;
-  const tp1Profit = notional * tpDist;
-  const slMarginLoss = slDist * leverage * 100;
-  const tpMarginGain = Math.abs(tp1 - price) / price * leverage * 100;
-  bLog.trade(`Size: ${(walletSizePct*100).toFixed(0)}% wallet=$${tradeUsdt.toFixed(2)} notional=$${notional.toFixed(2)} lev=${leverage}x margin=$${requiredMargin.toFixed(2)} | SL=${slMarginLoss.toFixed(0)}%margin TP=${tpMarginGain.toFixed(0)}%margin`);
+  const trailProfit = notional * trailConfig.FIRST_TRIGGER;
+  const slMarginLoss = slPricePct * leverage * 100;
+  bLog.trade(`Size: ${(walletSizePct*100).toFixed(0)}% wallet=$${tradeUsdt.toFixed(2)} notional=$${notional.toFixed(2)} lev=${leverage}x margin=$${requiredMargin.toFixed(2)} | SL=${slMarginLoss.toFixed(0)}%margin | trail trigger=${(trailConfig.FIRST_TRIGGER*100).toFixed(3)}%`);
   log(`Trade: ${sym} ${direction} lev=${leverage}x qty=${qty} notional=$${notional.toFixed(2)} margin=$${requiredMargin.toFixed(2)}`);
-  if (tp1Profit < totalFees * 1.5) {
-    bLog.trade(`Trade rejected: TP profit $${tp1Profit.toFixed(4)} < 1.5x fees $${(totalFees * 1.5).toFixed(4)}`);
-    throw new Error(`Trade rejected: TP profit < 1.5x fees`);
+  if (trailProfit < totalFees * 1.5) {
+    bLog.trade(`Trade rejected: trailing profit $${trailProfit.toFixed(4)} < 1.5x fees $${(totalFees * 1.5).toFixed(4)}`);
+    throw new Error(`Trade rejected: trailing profit < 1.5x fees`);
   }
 
   const entrySide = isLong ? 'BUY' : 'SELL';
@@ -484,8 +518,9 @@ async function openTrade(client, pick, wallet) {
   const order = await client.submitNewOrder({ symbol: sym, side: entrySide, type: 'MARKET', quantity: qty });
   await sleep(1500);
 
-  // Set initial trailing SL at -1% (not the engine SL)
-  let slOk = false, tpOk = false;
+  // Set initial SL and TP on exchange
+  let slOk = false;
+  let tpOk = false;
 
   try {
     await client.submitNewAlgoOrder({
@@ -494,23 +529,23 @@ async function openTrade(client, pick, wallet) {
       closePosition: 'true', workingType: 'MARK_PRICE',
     });
     slOk = true;
-    bLog.trade(`SL set at $${fmtPrice(initialSlPrice)} (-${(TRAILING_SL.INITIAL_SL_PCT*100).toFixed(0)}% trailing)`);
+    bLog.trade(`SL set at $${fmtPrice(initialSlPrice)} (-${(slPricePct*100).toFixed(2)}% price = ${(slPricePct*leverage*100).toFixed(0)}% capital)`);
   } catch (e) { bLog.error(`Owner SL algo failed: ${e.message}`); }
 
+  // Place TP order on exchange (take profit at tp1)
   try {
     await client.submitNewAlgoOrder({
       algoType: 'CONDITIONAL', symbol: sym, side: closeSide,
-      type: 'TAKE_PROFIT_MARKET', triggerPrice: tp3,
+      type: 'TAKE_PROFIT_MARKET', triggerPrice: tp1,
       closePosition: 'true', workingType: 'MARK_PRICE',
     });
     tpOk = true;
-    bLog.trade(`TP set at $${fmtPrice(tp3)}`);
+    bLog.trade(`TP set at $${fmtPrice(tp1)} (+${(tpPct*100).toFixed(1)}% from entry)`);
   } catch (e) { bLog.error(`Owner TP algo failed: ${e.message}`); }
 
-  if (!slOk || !tpOk) {
-    const missing = [!slOk ? 'SL' : '', !tpOk ? 'TP' : ''].filter(Boolean).join('+');
-    bLog.error(`Owner ${sym} missing ${missing} — set manually!`);
-    await notify(`*${sym} ${direction}* opened without *${missing}*! Set manually NOW.`);
+  if (!slOk) {
+    bLog.error(`Owner ${sym} missing SL — set manually!`);
+    await notify(`*${sym} ${direction}* opened without *SL*! Set manually NOW.`);
   }
 
   tradeState.set(sym, {
@@ -520,9 +555,10 @@ async function openTrade(client, pick, wallet) {
     setup: pick.setup,
     comboId: pick.comboId || 15,
     openedAt: Date.now(),
-    tf15m: pick.structure?.tf15 || null,
-    tf3m: pick.structure?.tf3 || null,
-    tf1m: pick.structure?.tf1 || null,
+    tf15m: null,
+    tf3m: pick.structure?.tf3m || null,
+    tf1m: pick.structure?.tf1m || null,
+    marketStructure: pick.marketStructure || null,
     trailingSlPrice: initialSlPrice,
     trailingSlLastStep: 0,
     leverage,
@@ -581,12 +617,49 @@ async function checkTrailingStop(client) {
             tf15m: state.tf15m || null,
             tf3m: state.tf3m || null,
             tf1m: state.tf1m || null,
+            marketStructure: state.marketStructure || null,
             exitReason: 'position_closed',
             comboId: state.comboId || 15,
           });
 
+          if (pnlPct < 0) {
+            await aiLearner.performLossAutopsy({
+              symbol: sym,
+              setup: state.setup || 'unknown',
+              direction: state.isLong ? 'LONG' : 'SHORT',
+              session: aiLearner.getCurrentSession(),
+              marketStructure: state.marketStructure || 'unknown',
+            });
+          } else {
+            await aiLearner.performWinAutopsy({
+              symbol: sym,
+              setup: state.setup || 'unknown',
+              direction: state.isLong ? 'LONG' : 'SHORT',
+              session: aiLearner.getCurrentSession(),
+              marketStructure: state.marketStructure || 'unknown',
+            });
+          }
+
+          // Trigger systematic pattern analysis every 50 trades
+          const countRes = await require('./db').query('SELECT COUNT(*) as c FROM ai_trades');
+          const totalTrades = parseInt(countRes[0].c);
+          if (totalTrades > 0 && totalTrades % 50 === 0) {
+            bLog.ai(`Periodic AI Maintenance: analyzing worst patterns (Trade #${totalTrades})`);
+            await aiLearner.analyzeWorstPatterns();
+          }
+
           recordDailyTrade(pnlPct > 0);
           log(`AI recorded: ${sym} PnL=${pnlPct.toFixed(2)}% duration=${durationMin}min setup=${state.setup}`);
+
+          // Notify agents of trade outcome (for survival HP + capital tracking)
+          if (_onTradeOutcome) {
+            const tradeQty = Math.abs(parseFloat(state.qty || 0));
+            const pnlUsdt = parseFloat(((pnlPct / 100) * exitPrice * tradeQty).toFixed(4)) || 0;
+            try {
+              _onTradeOutcome({ symbol: sym, direction: state.isLong ? 'LONG' : 'SHORT', status: winLoss, pnlUsdt, structure: state.marketStructure });
+              bLog.trade(`Survival updated: ${sym} ${winLoss} pnl=$${pnlUsdt.toFixed(4)}`);
+            } catch (_) {}
+          }
 
           // NOTE: User trades are updated by syncTradeStatus() with per-user PnL.
           // Owner account has no rows in the trades table.
@@ -631,9 +704,26 @@ async function checkTrailingStop(client) {
               slDistancePct: Math.abs(entry - st.sl) / entry * 100,
               tpDistancePct: Math.abs(st.tp1 - entry) / entry * 100,
               tf15m: st.tf15m || null, tf3m: st.tf3m || null, tf1m: st.tf1m || null,
+              marketStructure: st.marketStructure || null,
               exitReason: 'structure_break_15m',
               comboId: st.comboId || 15,
             });
+
+            if (gain < 0) {
+              await aiLearner.performLossAutopsy({
+                symbol: sym, setup: st.setup || 'unknown',
+                direction: isLong ? 'LONG' : 'SHORT',
+                session: aiLearner.getCurrentSession(),
+                marketStructure: st.marketStructure || 'unknown',
+              });
+            } else {
+              await aiLearner.performWinAutopsy({
+                symbol: sym, setup: st.setup || 'unknown',
+                direction: isLong ? 'LONG' : 'SHORT',
+                session: aiLearner.getCurrentSession(),
+                marketStructure: st.marketStructure || 'unknown',
+              });
+            }
             recordDailyTrade(gain > 0);
             tradeState.delete(sym);
           }
@@ -650,6 +740,64 @@ async function checkTrailingStop(client) {
 
       const state = tradeState.get(sym);
       if (!state) continue;
+
+      // ── Spike TP: close at 0.5% profit if token spiked ──
+      // Detect spike: price moved >1.5% in last 5 minutes (5x 1m candles)
+      const priceProfitPct = gain * 100; // gain is already directional
+      if (priceProfitPct >= 0.5) {
+        try {
+          const klines1m = await client.getKlines({ symbol: sym, interval: '1m', limit: 6 });
+          if (klines1m && klines1m.length >= 5) {
+            const opens = klines1m.map(k => parseFloat(k[1]));
+            const highs = klines1m.map(k => parseFloat(k[2]));
+            const lows = klines1m.map(k => parseFloat(k[3]));
+            const startPrice = opens[0];
+            const maxHigh = Math.max(...highs);
+            const minLow = Math.min(...lows);
+            const spikeUp = (maxHigh - startPrice) / startPrice;
+            const spikeDown = (startPrice - minLow) / startPrice;
+            const spikeSize = isLong ? spikeUp : spikeDown;
+
+            if (spikeSize >= 0.015) { // 1.5%+ move in 5 minutes = spike
+              bLog.trade(`SPIKE TP: ${sym} spiked ${(spikeSize*100).toFixed(2)}% in 5min — closing at +${priceProfitPct.toFixed(2)}% profit`);
+              try { await client.cancelAllOpenOrders({ symbol: sym }); } catch (_) {}
+              try { await client.cancelAllAlgoOpenOrders({ symbol: sym }); } catch (_) {}
+              await client.submitNewOrder({ symbol: sym, side: closeSide, type: 'MARKET', quantity: Math.abs(amt), reduceOnly: 'true' });
+
+              const st = state;
+              await aiLearner.recordTrade({
+                symbol: sym, direction: isLong ? 'LONG' : 'SHORT',
+                setup: st.setup || 'unknown', entryPrice: entry, exitPrice: cur,
+                pnlPct: priceProfitPct, leverage: st.leverage || 20,
+                durationMin: Math.round((Date.now() - st.openedAt) / 60000),
+                session: aiLearner.getCurrentSession(),
+                slDistancePct: Math.abs(entry - st.sl) / entry * 100,
+                tpDistancePct: Math.abs(st.tp1 - entry) / entry * 100,
+                tf15m: st.tf15m || null, tf3m: st.tf3m || null, tf1m: st.tf1m || null,
+                marketStructure: st.marketStructure || null,
+                exitReason: 'spike_tp',
+              });
+              await aiLearner.performWinAutopsy({
+                symbol: sym, setup: st.setup || 'unknown',
+                direction: isLong ? 'LONG' : 'SHORT',
+                session: aiLearner.getCurrentSession(),
+                marketStructure: st.marketStructure || 'unknown',
+              });
+              recordDailyTrade(true);
+              tradeState.delete(sym);
+
+              await notify(
+                `*Spike TP — Quick Profit Locked*\n` +
+                `*${sym}* ${isLong ? 'LONG' : 'SHORT'}\n` +
+                `Spike: *${(spikeSize*100).toFixed(1)}%* in 5min\n` +
+                `Entry: \`$${fmtPrice(entry)}\` Exit: \`$${fmtPrice(cur)}\`\n` +
+                `PnL: *+${priceProfitPct.toFixed(2)}%*`
+              );
+              continue;
+            }
+          }
+        } catch (e) { bLog.error(`Spike TP check failed for ${sym}: ${e.message}`); }
+      }
 
       // ── Trailing SL step check ──
       const trailResult = calculateTrailingStep(
@@ -797,18 +945,87 @@ async function main() {
     return;
   }
 
+  // ── Maintenance & Sync ───────────────────────────────────────
+  const now = Date.now();
+  if (!lastBitunixSync || now - lastBitunixSync > 12 * 60 * 60 * 1000) {
+    bLog.info('Running periodic Bitunix trade history sync...');
+    try {
+      const { AccountantAgent } = require('./agents/accountant-agent');
+      const accAgent = new AccountantAgent();
+      const syncResult = await accAgent.syncBitunixHistory();
+      lastBitunixSync = now;
+      bLog.info(`Bitunix Sync Complete: ${syncResult.synced} new, ${syncResult.updated} updated`);
+    } catch (e) {
+      bLog.error(`Bitunix sync loop failed: ${e.message}`);
+    }
+  }
+
+  // Circuit breaker: pause after consecutive losses
+  if (Date.now() < circuitBreakerUntil) {
+    const remainMin = Math.ceil((circuitBreakerUntil - Date.now()) / 60000);
+    log(`Circuit breaker active — ${consecutiveLosses} consecutive losses. Pausing ${remainMin}min. Only checking trailing SL.`);
+    // Still check trailing SL on existing positions
+    try {
+      if (API_KEY && API_SECRET) await checkTrailingStop(getClient());
+    } catch (e) { bLog.error(`Trailing check during breaker: ${e.message}`); }
+    return;
+  }
+
   log('=== AI Smart Trader v4 Cycle Start ===');
   const hasOwnerKeys = !!(API_KEY && API_SECRET);
 
   try {
     const { query: dbQuery, initAllTables } = require('./db');
     await initAllTables();
+
+    // One-time diagnostic: dump all API keys on first cycle after deploy
+    if (!runCycle._keyDiagDone) {
+      runCycle._keyDiagDone = true;
+      try {
+        const allDbKeys = await dbQuery(
+          `SELECT ak.id, ak.user_id, ak.enabled, ak.paused_by_admin, ak.paused_by_user, ak.exchange, u.email
+           FROM api_keys ak LEFT JOIN users u ON u.id = ak.user_id ORDER BY ak.id`
+        );
+        bLog.system(`[KEY-DIAG] ALL ${allDbKeys.length} api_keys: ${allDbKeys.map(k => `#${k.id} ${k.email || 'NO-USER(uid='+k.user_id+')'} ex=${k.exchange||'?'} en=${k.enabled} ap=${k.paused_by_admin} up=${k.paused_by_user}`).join(' | ')}`);
+      } catch (_) {}
+    }
     const topNRows = await dbQuery('SELECT MAX(top_n_coins) as max_n FROM api_keys WHERE enabled = true');
     const topNCoins = parseInt(topNRows[0]?.max_n) || 50;
-    const signals = await scanSMC(log, { topNCoins });
+
+    // ── Kronos AI Batch Scan: predict ALL top tokens ──────────
+    let kronosPredictions = null;
+    try {
+      const kronos = require('./kronos');
+      const fetch = require('node-fetch');
+
+      // Fetch top coins list (same as SMC uses)
+      const tickerRes = await fetch('https://fapi.binance.com/fapi/v1/ticker/24hr', { timeout: 15000 });
+      const tickers = await tickerRes.json();
+      const topSymbols = tickers
+        .filter(t => t.symbol.endsWith('USDT') && !t.symbol.includes('_'))
+        .filter(t => parseFloat(t.quoteVolume) >= 10_000_000)
+        .sort((a, b) => parseFloat(b.quoteVolume) - parseFloat(a.quoteVolume))
+        .slice(0, 10)  // Top 10 only — matches SMC engine scan
+        .map(t => t.symbol);
+
+      bLog.ai(`Kronos batch scan starting: ${topSymbols.length} tokens`);
+      kronosPredictions = await kronos.scanAllTokens(topSymbols, '15m', 20, 3);
+
+      // Send summary to Telegram
+      const summary = kronos.formatPredictionSummary();
+      if (summary) {
+        await notify(summary);
+        bLog.ai(`Kronos summary sent to Telegram (${kronosPredictions.size} predictions)`);
+      }
+    } catch (kronosBatchErr) {
+      bLog.error(`Kronos batch scan failed (non-blocking): ${kronosBatchErr.message}`);
+    }
+
+    // AI-driven signals — uses best discovered strategies from StrategyAgent
+    const signals = await scanAI(log, { topNCoins, kronosPredictions });
 
     if (!signals.length) {
-      log('No SMC signals found this cycle.');
+      log('No AI signals found this cycle — agents still learning.');
 
       if (hasOwnerKeys) {
         const client = getClient();
@@ -828,6 +1045,29 @@ async function main() {
         continue;
       }
 
+      // Kronos AI prediction — use cached batch result or fetch fresh
+      try {
+        const kronosModule = require('./kronos');
+        const sym = pick.symbol || pick.sym;
+        const kronosResult = kronosModule.getCachedPrediction(sym) || await kronosModule.getKronosPrediction(sym, '15m', 20);
+
+        bLog.ai(`Kronos ${sym}: ${kronosResult.direction} (${kronosResult.change_pct > 0 ? '+' : ''}${kronosResult.change_pct}%) confidence=${kronosResult.confidence} trend=${kronosResult.trend}`);
+        log(`Kronos: ${sym} → ${kronosResult.direction} ${kronosResult.change_pct}% conf=${kronosResult.confidence}`);
+
+        if (kronosResult.direction !== 'NEUTRAL' && kronosResult.direction !== pick.direction && kronosResult.confidence !== 'low') {
+          bLog.trade(`KRONOS BLOCKED: ${sym} AI=${pick.direction} but Kronos=${kronosResult.direction} (${kronosResult.change_pct}% ${kronosResult.confidence}) — skipping`);
+          await notify(`🚫 Kronos blocked *${sym}* ${pick.direction}\nAI predicts ${kronosResult.direction} (${kronosResult.change_pct}%)`);
+          continue;
+        }
+
+        if (kronosResult.direction === pick.direction && kronosResult.confidence === 'high') {
+          bLog.trade(`KRONOS CONFIRMED: ${sym} ${pick.direction} with HIGH confidence (${kronosResult.change_pct}%)`);
+        }
+      } catch (kronosErr) {
+        bLog.error(`Kronos error — blocking trade for safety: ${kronosErr.message}`);
+        continue; // Don't trade without Kronos validation
+      }
+
       bLog.trade(`Executing trade: ${pick.symbol} ${pick.direction} for registered users...`);
       const result = await executeForAllUsers(pick);
 
@@ -836,59 +1076,11 @@ async function main() {
         continue;
       }
       executed = true;
-      break;
+      // Continue processing remaining signals so ALL users get a trade opportunity.
+      // Users who already traded are protected by: max_positions, dedup guard, open trade check.
     }
-    const pick = signals[0];
-
-    // Owner's Binance account
-    if (hasOwnerKeys) {
-      bLog.trade(`Executing trade on owner Binance account...`);
-      try {
-        const client = getClient();
-        const account = await client.getAccountInformation({ omitZeroBalances: false });
-        const rawWallet = parseFloat(account.totalWalletBalance);
-        const avail = parseFloat(account.availableBalance);
-        const wallet = getDailyCapital('owner-binance', rawWallet);
-        bLog.trade(`Owner wallet: $${rawWallet.toFixed(2)} (daily capital: $${wallet.toFixed(2)}) available: $${avail.toFixed(2)}`);
-
-        await checkTrailingStop(client);
-
-        if (avail >= CONFIG.MIN_BALANCE) {
-          const openPos = account.positions.filter(p => parseFloat(p.positionAmt) !== 0);
-          const alreadyInSymbol = openPos.find(p => p.symbol === pick.symbol);
-
-          if (alreadyInSymbol) {
-            bLog.trade(`Owner already in ${pick.symbol} — skipping duplicate. Open: ${openPos.map(p => p.symbol).join(', ')}`);
-          } else {
-            bLog.trade(`Owner has ${openPos.length} open position(s) — opening ${pick.symbol}...`);
-            const result = await openTrade(client, pick, wallet);
-            if (result && result !== 'TOO_EXPENSIVE') {
-              const dirEmoji = result.direction !== 'SHORT' ? '🟢' : '🔴';
-              bLog.trade(`TRADE OPENED: ${result.sym} ${result.direction} x${result.leverage} qty=${result.qty} entry=$${fmtPrice(result.entry)}`);
-              await notify(
-                `*AI Trade — ${now()}*\n` +
-                `*${result.sym}* ${dirEmoji} *${result.direction} x${result.leverage}*\n` +
-                `Setup: *${result.setup}* (3-TF LH/HL)\n` +
-                `Entry: \`$${fmtPrice(result.entry)}\`\n` +
-                `TP: \`$${fmtPrice(result.tp1)}\` (RR 1:1.5)\n` +
-                `SL: \`$${fmtPrice(result.sl)}\` (trailing -1%)\n` +
-                `Qty: \`${result.qty}\` | Wallet: *$${avail.toFixed(2)}*\n` +
-                `AI Score: *${pick.score}*`
-              );
-            } else if (!result) {
-              bLog.trade(`openTrade returned null for ${pick.symbol} — trade rejected`);
-            }
-          }
-        } else {
-          bLog.trade(`Owner balance too low: $${avail.toFixed(2)} < min $${CONFIG.MIN_BALANCE}`);
-        }
-      } catch (ownerErr) {
-        bLog.error(`Owner trade error: ${ownerErr.message}`);
-        log(`Owner trade error: ${ownerErr.message}`);
-      }
-    } else {
-      bLog.system(`No owner API keys in env — relying on user keys from dashboard`);
-    }
+    // Owner account handled via executeForAllUsers (DB keys with pause/enabled checks)
+    // No separate owner path — all accounts go through the same pipeline
 
   } catch (err) {
     if (checkBanError(err)) return;
@@ -961,6 +1153,20 @@ async function executeForAllUsers(pick) {
       bLog.error(`Auto-pause check failed: ${pauseErr.message}`);
     }
 
+    // Full diagnostic: show ALL keys in DB (once per deploy)
+    if (!executeForAllUsers._diagDone) {
+      executeForAllUsers._diagDone = true;
+      try {
+        const allDbKeys = await db.query(
+          `SELECT ak.id, ak.user_id, ak.enabled, ak.paused_by_admin, ak.paused_by_user, ak.exchange, u.email
+           FROM api_keys ak LEFT JOIN users u ON u.id = ak.user_id ORDER BY ak.id`
+        );
+        bLog.trade(`[DIAG] ALL api_keys in DB (${allDbKeys.length}): ${allDbKeys.map(k => `#${k.id} ${k.email || 'NO-USER(uid='+k.user_id+')'} ex=${k.exchange} en=${k.enabled} ap=${k.paused_by_admin} up=${k.paused_by_user}`).join(' | ')}`);
+      } catch (diagErr) {
+        bLog.error(`[DIAG] Failed: ${diagErr.message}`);
+      }
+    }
+
     const allKeys = await db.query(
       `SELECT ak.*, u.email
        FROM api_keys ak
@@ -971,18 +1177,53 @@ async function executeForAllUsers(pick) {
     );
 
     if (!allKeys.length) {
-      bLog.trade('No enabled user API keys found — no users to trade for');
-      log('No enabled user API keys — skipping multi-user execution');
+      // Debug + auto-fix: check WHY no keys are found
+      try {
+        const debugKeys = await db.query(
+          `SELECT ak.id, u.email, ak.enabled, ak.paused_by_admin, ak.paused_by_user
+           FROM api_keys ak JOIN users u ON u.id = ak.user_id`
+        );
+        if (debugKeys.length > 0) {
+          const reasons = debugKeys.map(k => `${k.email}(enabled=${k.enabled} admin_pause=${k.paused_by_admin} user_pause=${k.paused_by_user})`);
+          bLog.trade(`No tradeable keys — all ${debugKeys.length} keys blocked: ${reasons.join(', ')}`);
+
+          // Auto-fix: if ALL keys are disabled (not paused), re-enable them
+          const allDisabled = debugKeys.every(k => k.enabled === false && !k.paused_by_admin && !k.paused_by_user);
+          if (allDisabled) {
+            await db.query(`UPDATE api_keys SET enabled = true`);
+            bLog.trade(`AUTO-FIX: Re-enabled all ${debugKeys.length} API keys (all were disabled without pause flags)`);
+          }
+        } else {
+          bLog.trade('No API keys in database at all');
+        }
+      } catch (_) {}
       return;
     }
 
+    // Also check for orphan keys (api_keys without matching users row)
+    try {
+      const orphanKeys = await db.query(
+        `SELECT ak.id, ak.user_id, ak.enabled, ak.paused_by_admin, ak.paused_by_user
+         FROM api_keys ak LEFT JOIN users u ON u.id = ak.user_id
+         WHERE u.id IS NULL`
+      );
+      if (orphanKeys.length > 0) {
+        bLog.trade(`WARNING: ${orphanKeys.length} orphan API key(s) with no matching user record — ids: ${orphanKeys.map(k => `key=${k.id} user_id=${k.user_id}`).join(', ')}`);
+      }
+    } catch (_) {}
+
     const keys = allKeys;
     const sym = pick.symbol || pick.sym;
-    bLog.trade(`Found ${keys.length} unique API key(s) — executing ${sym} ${pick.direction}...`);
-    log(`Executing ${sym} ${pick.direction} for ${keys.length} user keys`);
+    const userEmails = [...new Set(keys.map(k => k.email))].join(', ');
+    bLog.trade(`Found ${keys.length} unique API key(s) — executing ${sym} ${pick.direction} for: ${userEmails}`);
+    log(`Executing ${sym} ${pick.direction} for ${keys.length} user keys: ${userEmails}`);
 
-    // Fire to ALL accounts in parallel so everyone gets the trade at the same time
-    const promises = keys.map(key => {
+    // Track which user+symbol combos have been executed this cycle to prevent duplicates
+    const executedUserSymbols = new Set();
+
+    // Execute sequentially per key to prevent race condition duplicates
+    // (parallel execution caused all keys to check DB simultaneously, find no trade, and all open)
+    for (const key of keys) {
       const userLog = {
         trade:     (msg, data) => bLog.trade(msg, data, key.user_id),
         scan:      (msg, data) => bLog.scan(msg, data, key.user_id),
@@ -990,20 +1231,34 @@ async function executeForAllUsers(pick) {
         system:    (msg, data) => bLog.system(msg, data, key.user_id),
         ai:        (msg, data) => bLog.ai(msg, data, key.user_id),
       };
-      return (async () => {
+      await (async () => {
       try {
         const symbol = sym;
-        const allowedCoins = (key.allowed_coins || '').split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
-        const bannedCoins = (key.banned_coins || '').split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
 
-        if (allowedCoins.length > 0 && !allowedCoins.includes(symbol)) {
-          userLog.trade(`User ${key.email}: ${symbol} not in allowed list — skipped`);
+        // Dedup guard: skip if this API key+symbol was already executed this cycle
+        const dedupKey = `${key.id}:${symbol}`;
+        if (executedUserSymbols.has(dedupKey)) {
+          userLog.trade(`User ${key.email}: ${symbol} already executed on key ${key.id} this cycle — skipping`);
           return;
         }
+
+        const bannedCoins = (key.banned_coins || '').split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
         if (bannedCoins.includes(symbol)) {
           userLog.trade(`User ${key.email}: ${symbol} is banned — skipped`);
           return;
         }
+
+        // Check user's watchlist — if they have one, only trade their picks
+        try {
+          const watchlist = await db.query(
+            'SELECT symbol FROM user_watchlist WHERE user_id = $1 AND enabled = true',
+            [key.user_id]
+          );
+          if (watchlist.length > 0 && !watchlist.some(w => w.symbol === symbol)) {
+            userLog.trade(`User ${key.email}: ${symbol} not in watchlist — skipped`);
+            return;
+          }
+        } catch (_) {}
 
         // Check global token ban
         if (await isTokenBanned(symbol)) {
@@ -1011,13 +1266,23 @@ async function executeForAllUsers(pick) {
           return;
         }
 
-        // Check DB for existing open trade on same symbol
+        // Check DB for existing open trade on same API key + symbol
         const existingTrade = await db.query(
-          `SELECT id FROM trades WHERE user_id = $1 AND symbol = $2 AND status = 'OPEN' LIMIT 1`,
-          [key.user_id, symbol]
+          `SELECT id FROM trades WHERE api_key_id = $1 AND symbol = $2 AND status = 'OPEN' LIMIT 1`,
+          [key.id, symbol]
         );
         if (existingTrade.length > 0) {
-          userLog.trade(`User ${key.email}: already has OPEN trade on ${symbol} in DB — skipping duplicate`);
+          userLog.trade(`User ${key.email}: already has OPEN trade on ${symbol} (key ${key.id}) — skipping duplicate`);
+          return;
+        }
+
+        // Cooldown: don't re-enter same token within 30 min after last closed trade (per API key)
+        const recentClosed = await db.query(
+          `SELECT id, closed_at FROM trades WHERE api_key_id = $1 AND symbol = $2 AND status IN ('WIN','LOSS','TP','SL','CLOSED') AND closed_at > NOW() - INTERVAL '30 minutes' ORDER BY closed_at DESC LIMIT 1`,
+          [key.id, symbol]
+        );
+        if (recentClosed.length > 0) {
+          userLog.trade(`User ${key.email}: ${symbol} recently closed on key ${key.id} — 30min cooldown active, skipping`);
           return;
         }
 
@@ -1027,15 +1292,37 @@ async function executeForAllUsers(pick) {
 
         const price = pick.lastPrice || pick.price || pick.entry;
         const isLong = pick.direction !== 'SHORT';
-        const aiParams = await aiLearner.getOptimalParams();
 
-        // Per-user settings: use user_token_leverage first, then key default
-        const userLev = await getTokenLeverage(symbol, key.id);
+        // ── Read ALL user settings from DB ──
+        const userLev = await getTokenLeverage(symbol, key.id, price);
+        if (userLev === null) {
+          userLog.trade(`User ${key.email}: ${symbol} has no token configuration — skipped`);
+          return;
+        }
+
+        // Stop After Losses: check consecutive losses for this API key
+        const maxConsecLoss = parseInt(key.max_consec_loss) || 10;
+        if (maxConsecLoss > 0) {
+          const recentTrades = await db.query(
+            `SELECT status FROM trades WHERE api_key_id = $1 AND status IN ('WIN','LOSS','TP','SL') ORDER BY closed_at DESC LIMIT $2`,
+            [key.id, maxConsecLoss]
+          );
+          const consecLosses = recentTrades.length > 0
+            ? recentTrades.findIndex(t => t.status === 'WIN' || t.status === 'TP')
+            : 0;
+          const actualConsec = consecLosses === -1 ? recentTrades.length : consecLosses;
+          if (actualConsec >= maxConsecLoss) {
+            userLog.trade(`User ${key.email}: ${actualConsec} consecutive losses (max ${maxConsecLoss}) — paused`);
+            return;
+          }
+        }
+
+        // User's risk settings
         const walletSizePct = (await getCapitalPercentage(key.id)) / 100;
-        const rawTP = parseFloat(key.tp_pct);
-        const userTP = isNaN(rawTP) ? 0.01 : rawTP;
-        const userSL = parseFloat(key.sl_pct) || 0.02;
-        // Consecutive loss cooldown removed — let it run
+        const userSlPct = parseFloat(key.sl_pct) || 0.015;       // User's SL % fallback
+        const userTpPct = parseFloat(key.tp_pct) || 0.025;       // User's TP % fallback
+        const userTrailStep = parseFloat(key.trailing_sl_step) || 1.2;  // Trailing SL step %
+        const userMaxLoss = parseFloat(key.max_loss_usdt) || 0;  // Max loss per trade in USDT (0 = no limit)
 
         // Initial SL: sl_pct is % of capital at risk, convert to price distance using leverage
         let slPricePct = userSL / userLev;
@@ -1070,10 +1357,9 @@ async function executeForAllUsers(pick) {
             return;
           }
 
-          userLog.trade(`User ${key.email} Binance: wallet=$${rawWallet.toFixed(2)} available=$${parseFloat(account.availableBalance).toFixed(2)} pos=${openPosCount}/${maxPos} lev=x${userLev} TP=${(userTP*100).toFixed(1)}% SL=trailing`);
+          userLog.trade(`User ${key.email} Binance: wallet=$${rawWallet.toFixed(2)} available=$${parseFloat(account.availableBalance).toFixed(2)} pos=${openPosCount}/${maxPos} lev=x${userLev} SL=${(slPricePct*100).toFixed(0)}% trailing`);
 
           const slPrice = initialSlPrice;
-          const tp3Price = userTp3Price;
 
           try { await userClient.setLeverage({ symbol, leverage: userLev }); } catch (_) {}
           try { await userClient.setMarginType({ symbol, marginType: 'ISOLATED' }); } catch (e) { if (!e.message?.includes('No need')) throw e; }
@@ -1085,8 +1371,18 @@ async function executeForAllUsers(pick) {
           const pricePrec = sinfo.pricePrecision ?? 2;
           const fmtP = (p) => parseFloat(p.toFixed(pricePrec));
 
-          // Position sizing: walletSizePct of wallet = margin
-          const tradeUsdt = wallet * walletSizePct;
+          // Position sizing: walletSizePct of wallet, adjusted by AI hour learning, capped by max_loss
+          const sizeMod = pick.sizeMod || 1.0;
+          let tradeUsdt = wallet * walletSizePct * sizeMod;
+          if (sizeMod !== 1.0) userLog.trade(`User ${key.email}: AI hour sizing ${sizeMod < 1 ? 'reduced' : 'boosted'} ×${sizeMod}`);
+          // Cap by max loss: if user sets max loss per trade, limit margin so SL loss <= max_loss
+          if (userMaxLoss > 0) {
+            const maxMarginByLoss = userMaxLoss / slPricePct;
+            if (tradeUsdt > maxMarginByLoss) {
+              userLog.trade(`User ${key.email}: capping margin $${tradeUsdt.toFixed(2)} → $${maxMarginByLoss.toFixed(2)} (max loss $${userMaxLoss})`);
+              tradeUsdt = maxMarginByLoss;
+            }
+          }
           const notionalUsdt = tradeUsdt * userLev;
           let qty = notionalUsdt / price;
 
@@ -1110,10 +1406,11 @@ async function executeForAllUsers(pick) {
 
           const closeSide = isLong ? 'SELL' : 'BUY';
           const slFmt = fmtP(slPrice);
-          const tpFmt = fmtP(tp3Price);
-          userLog.trade(`Setting trailing SL=$${slFmt} TP=$${tpFmt} for ${symbol}...`);
+          const tpFmt = fmtP(userTp);
+          userLog.trade(`Setting SL=$${slFmt} TP=$${tpFmt} for ${symbol}...`);
 
-          let slOk = false, tpOk = false;
+          let slOk = false;
+          let tpOk = false;
 
           try {
             await userClient.submitNewAlgoOrder({
@@ -1122,7 +1419,7 @@ async function executeForAllUsers(pick) {
               closePosition: 'true', workingType: 'MARK_PRICE',
             });
             slOk = true;
-            userLog.trade(`SL set at $${slFmt} (-1% trailing)`);
+            userLog.trade(`SL set at $${slFmt} (-${(slPricePct*100).toFixed(1)}% from entry)`);
           } catch (e) {
             userLog.error(`SL algo failed for ${symbol}: ${e.message}`);
           }
@@ -1139,21 +1436,22 @@ async function executeForAllUsers(pick) {
             userLog.error(`TP algo failed for ${symbol}: ${e.message}`);
           }
 
-          if (!slOk || !tpOk) {
-            const missing = [!slOk ? 'SL' : '', !tpOk ? 'TP' : ''].filter(Boolean).join(' and ');
-            userLog.error(`${symbol} OPEN without ${missing} — SET MANUALLY!`);
-            await notify(`*${symbol} ${pick.direction}*\nPosition opened but *${missing} failed to set!*\nSet manually on Binance NOW.`);
+          if (!slOk) {
+            userLog.error(`${symbol} OPEN without SL — SET MANUALLY!`);
+            await notify(`*${symbol} ${pick.direction}*\nPosition opened but *SL failed to set!*\nSet manually on Binance NOW.`);
           }
 
           await db.query(
             `INSERT INTO trades (api_key_id, user_id, symbol, direction, entry_price, sl_price, tp_price, quantity, leverage, status,
-             trailing_sl_price, trailing_sl_last_step, tf_15m, tf_3m, tf_1m)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'OPEN', $10, 0, $11, $12, $13)`,
-            [key.id, key.user_id, symbol, pick.direction, price, fmtP(slPrice), fmtP(tp3Price), qty, userLev,
+             trailing_sl_price, trailing_sl_last_step, tf_15m, tf_3m, tf_1m, market_structure, key_trailing_sl_step)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'OPEN', $10, 0, $11, $12, $13, $14, $15)`,
+            [key.id, key.user_id, symbol, pick.direction, price, fmtP(slPrice), fmtP(userTp), qty, userLev,
              fmtP(slPrice),
-             pick.structure?.tf15 || null, pick.structure?.tf3 || null, pick.structure?.tf1 || null]
+             null, pick.structure?.tf3m || null, pick.structure?.tf1m || null,
+             pick.marketStructure || null, userTrailStep]
           );
-          userLog.trade(`Binance OK: ${key.email} ${symbol} ${pick.direction} x${userLev} qty=${qty} entry=$${fmtPrice(price)} SL=trailing`);
+          executedUserSymbols.add(dedupKey);
+          userLog.trade(`Binance OK: ${key.email} ${symbol} ${pick.direction} x${userLev} qty=${qty} entry=$${fmtPrice(price)} SL=$${fmtPrice(slPrice)} TP=$${fmtPrice(userTp)}`);
           log(`Binance OK: ${key.email} ${symbol} ${pick.direction} x${userLev}`);
 
         } else if (key.platform === 'bitunix') {
@@ -1175,7 +1473,15 @@ async function executeForAllUsers(pick) {
 
           userLog.trade(`User ${key.email} Bitunix: wallet=$${wallet.toFixed(2)} pos=${openPosCount}/${maxPos} lev=x${userLev}`);
 
-          const tradeUsdtBx = wallet * walletSizePct;
+          // Position sizing: walletSizePct of wallet, adjusted by AI hour learning, capped by max_loss
+          let tradeUsdtBx = wallet * walletSizePct * (pick.sizeMod || 1.0);
+          if (userMaxLoss > 0) {
+            const maxMarginByLoss = userMaxLoss / slPricePct;
+            if (tradeUsdtBx > maxMarginByLoss) {
+              userLog.trade(`User ${key.email}: capping margin $${tradeUsdtBx.toFixed(2)} → $${maxMarginByLoss.toFixed(2)} (max loss $${userMaxLoss})`);
+              tradeUsdtBx = maxMarginByLoss;
+            }
+          }
           const notionalUsdtBx = tradeUsdtBx * userLev;
           let qty = notionalUsdtBx / price;
           if (qty * price < 5.5) qty = 5.5 / price;
@@ -1189,16 +1495,13 @@ async function executeForAllUsers(pick) {
           }
 
           const slPrice = initialSlPrice;
-          const hasTp = userTP > 0;
-          const tp3Price = hasTp ? userTp3Price : 0;
 
           try { await userClient.changeMarginMode(symbol, 'ISOLATION'); } catch (_) {}
           try { await userClient.changeLeverage(symbol, userLev); } catch (_) {}
 
           const slFmtBx = parseFloat(slPrice.toFixed(8));
-          const tpFmtBx = hasTp ? parseFloat(tp3Price.toFixed(8)) : 0;
 
-          userLog.trade(`User ${key.email}: placing Bitunix MARKET ${isLong ? 'BUY' : 'SELL'} ${symbol} qty=${qty} SL=$${slFmtBx}${hasTp ? ` TP=$${tpFmtBx}` : ' (trailing SL only, no TP)'}...`);
+          userLog.trade(`User ${key.email}: placing Bitunix MARKET ${isLong ? 'BUY' : 'SELL'} ${symbol} qty=${qty} SL=$${slFmtBx} TP=$${parseFloat(userTp.toFixed(8))}...`);
           const order = await userClient.placeOrder({
             symbol, side: isLong ? 'BUY' : 'SELL',
             qty: String(qty), orderType: 'MARKET', tradeSide: 'OPEN',
@@ -1211,28 +1514,52 @@ async function executeForAllUsers(pick) {
           userLog.trade(`Bitunix position lookup: ${JSON.stringify(pos ? { id: pos.positionId, symbol: pos.symbol, side: pos.side, qty: pos.qty } : null)}`);
 
           if (pos && pos.positionId) {
-            userLog.trade(`Bitunix position confirmed: ${pos.positionId} — setting TP/SL...`);
+            // Recalculate SL from actual entry price to avoid stale-price rejection
+            const actualEntry = parseFloat(pos.avgOpenPrice || pos.entryPrice || pos.avgPrice) || price;
+            const actualSlPrice = isLong
+              ? actualEntry * (1 - slPricePct)
+              : actualEntry * (1 + slPricePct);
+            const slFmtActual = parseFloat(actualSlPrice.toFixed(8));
+
+            const actualTpPrice = isLong
+              ? actualEntry * (1 + Math.abs(userTp - price) / price)
+              : actualEntry * (1 - Math.abs(userTp - price) / price);
+            const tpFmtActual = parseFloat(actualTpPrice.toFixed(8));
+
+            userLog.trade(`Bitunix position confirmed: ${pos.positionId} entry=$${actualEntry} — setting SL=$${slFmtActual} TP=$${tpFmtActual}...`);
             try {
-              const tpslArgs = { symbol, positionId: pos.positionId, slPrice: slFmtBx };
-              if (hasTp) tpslArgs.tpPrice = tpFmtBx;
-              await userClient.placePositionTpSl(tpslArgs);
-              userLog.trade(`Bitunix ${hasTp ? `TP=$${tpFmtBx} ` : ''}SL=$${slFmtBx} set on position ${pos.positionId}${hasTp ? '' : ' (trailing SL only)'}`);
+              await userClient.placePositionTpSl({ symbol, positionId: pos.positionId, slPrice: slFmtActual, tpPrice: tpFmtActual });
+              userLog.trade(`Bitunix SL/TP set on ${pos.positionId}: SL=$${slFmtActual} TP=$${tpFmtActual}`);
             } catch (e) {
-              userLog.error(`Bitunix TP/SL FAILED: ${e.message} — SET MANUALLY`);
-              await notify(`*Bitunix ${symbol} ${pick.direction}*\nTP/SL failed! Set manually on Bitunix NOW.`);
+              userLog.error(`Bitunix SL FAILED: ${e.message} — SET MANUALLY`);
+              await notify(`*Bitunix ${symbol} ${pick.direction}*\nSL failed! Set manually on Bitunix NOW.`);
             }
+
+            // Store actual entry price in DB
+            await db.query(
+              `INSERT INTO trades (api_key_id, user_id, symbol, direction, entry_price, sl_price, tp_price, quantity, leverage, status,
+               trailing_sl_price, trailing_sl_last_step, tf_15m, tf_3m, tf_1m, market_structure, key_trailing_sl_step)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'OPEN', $10, 0, $11, $12, $13, $14, $15)`,
+              [key.id, key.user_id, symbol, pick.direction, actualEntry,
+               slFmtActual, tpFmtActual, qty, userLev, slFmtActual,
+               null, pick.structure?.tf3m || null, pick.structure?.tf1m || null,
+               pick.marketStructure || null, userTrailStep]
+            );
           } else {
             userLog.error(`Bitunix position not found after order — verify on exchange`);
             await notify(`*Bitunix ${symbol}*\nOrder placed but position not found. Check Bitunix manually.`);
-          }
 
-          await db.query(
-            `INSERT INTO trades (api_key_id, user_id, symbol, direction, entry_price, sl_price, tp_price, quantity, leverage, status,
-             trailing_sl_price, trailing_sl_last_step)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'OPEN', $10, 0)`,
-            [key.id, key.user_id, symbol, pick.direction, price, parseFloat(slPrice.toFixed(8)), parseFloat(tp3Price.toFixed(8)), qty, userLev,
-             parseFloat(slPrice.toFixed(8))]
-          );
+            await db.query(
+              `INSERT INTO trades (api_key_id, user_id, symbol, direction, entry_price, sl_price, tp_price, quantity, leverage, status,
+               trailing_sl_price, trailing_sl_last_step, tf_15m, tf_3m, tf_1m, market_structure, key_trailing_sl_step)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'OPEN', $10, 0, $11, $12, $13, $14, $15)`,
+              [key.id, key.user_id, symbol, pick.direction, price,
+               parseFloat(slPrice.toFixed(8)), 0, qty, userLev, parseFloat(slPrice.toFixed(8)),
+               null, pick.structure?.tf3m || null, pick.structure?.tf1m || null,
+               pick.marketStructure || null, userTrailStep]
+            );
+          }
+          executedUserSymbols.add(dedupKey);
           userLog.trade(`Bitunix OK: ${key.email} ${symbol} ${pick.direction} x${userLev} qty=${qty}`);
           log(`Bitunix OK: ${key.email} ${symbol} ${pick.direction} x${userLev}`);
         } else {
@@ -1252,18 +1579,15 @@ async function executeForAllUsers(pick) {
       }
     })().catch(e => {
         userLog.error(`User trade execution failed: ${e.message}`);
-        return 'ERROR';
       });
-    });
+    }
 
-    const settled = await Promise.allSettled(promises);
-    const results = settled.map(s => s.status === 'fulfilled' ? s.value : 'ERROR');
-    const tooExpensive = results.filter(r => r === 'TOO_EXPENSIVE').length;
-    const ok = results.length - tooExpensive;
-    bLog.trade(`Multi-user execution done: ${ok} traded, ${tooExpensive} too expensive`);
-    log(`Multi-user done: ${ok} ok, ${tooExpensive} too expensive`);
+    const okCount = keys.length - executedUserSymbols.size;
+    const tradedCount = executedUserSymbols.size;
+    bLog.trade(`Multi-user execution done: ${tradedCount} traded, ${okCount} skipped/failed`);
+    log(`Multi-user done: ${tradedCount} traded, ${okCount} skipped/failed`);
 
-    if (tooExpensive === keys.length) return 'ALL_TOO_EXPENSIVE';
+    if (tradedCount === 0) return 'ALL_TOO_EXPENSIVE';
     return 'OK';
   } catch (err) {
     bLog.error(`Multi-user error: ${err.message}`);
@@ -1320,6 +1644,53 @@ async function syncTradeStatus() {
             }
           }
 
+          // ── Swarm-based Dynamic Exit ─────────────────────────────────────
+          // Check if the swarm consensus has shifted against our positions
+          for (const trade of trades) {
+            const exchangePos = openSymbols.get(trade.symbol);
+            if (exchangePos) {
+              try {
+                const { runSwarm } = require('./agents/swarm-engine');
+                // Fetch minimal seeds for a quick swarm check
+                const seeds = {
+                  current: exchangePos.entryPrice, // simplified for exit check
+                  indicators: {},
+                  pred_high: 0, pred_low: 0, trend: 'unknown'
+                };
+                const swarm = await runSwarm(trade.symbol, seeds);
+
+                // Skip dynamic exit if swarm has no valid votes (all agents failed)
+                if (!swarm.totalVotes || swarm.totalVotes === 0 || swarm.confidence === 0) {
+                  continue;
+                }
+
+                let shouldExit = false;
+                if (trade.direction === 'LONG' && swarm.direction === 'SHORT' && swarm.confidence >= 60) {
+                  shouldExit = true;
+                } else if (trade.direction === 'SHORT' && swarm.direction === 'LONG' && swarm.confidence >= 60) {
+                  shouldExit = true;
+                }
+
+                if (shouldExit) {
+                  bLog.trade(`DYNAMIC EXIT: Swarm shift detected for ${trade.symbol} (${trade.direction}). Consensus: ${swarm.direction} (${swarm.confidence}%). Closing position.`);
+                  const closeSide = trade.direction === 'LONG' ? 'SELL' : 'BUY';
+                  await userClient.createOrder({
+                    symbol: trade.symbol,
+                    side: closeSide,
+                    type: 'MARKET',
+                    quantity: Math.abs(exchangePos.amt),
+                    reduceOnly: true
+                  });
+                  await db.query(`UPDATE trades SET status = 'CLOSED', exit_reason = 'swarm_consensus_shift' WHERE id = $1`, [trade.id]);
+                  await notify(`📉 *Dynamic AI Exit*\n${trade.symbol} ${trade.direction} closed early due to Swarm shift to ${swarm.direction} (${swarm.confidence}% confidence).`);
+                  continue; // Move to next trade, position is now closed
+                }
+              } catch (e) {
+                bLog.error(`Swarm dynamic exit failed for ${trade.symbol}: ${e.message}`);
+              }
+            }
+          }
+
           // Check trailing SL for open positions
           for (const trade of trades) {
             const exchangePos = openSymbols.get(trade.symbol);
@@ -1332,7 +1703,8 @@ async function syncTradeStatus() {
                 : entryPrice;
               const lastStep = parseFloat(trade.trailing_sl_last_step) || 0;
               const tradeLev = parseFloat(trade.leverage) || 20;
-              const trailResult = calculateTrailingStep(entryPrice, curPrice, isLong, lastStep, tradeLev);
+              const userTrailPct = parseFloat(trade.key_trailing_sl_step) || 0;
+              const trailResult = calculateTrailingStep(entryPrice, curPrice, isLong, lastStep, tradeLev, userTrailPct);
               if (trailResult) {
                 const closeSide = isLong ? 'SELL' : 'BUY';
                 let slUpdated = false;
@@ -1381,7 +1753,18 @@ async function syncTradeStatus() {
               // ── Step 1: Get current price (3 methods, must succeed) ──
               let curPrice = null;
               const priceMethods = [
-                // Method A: Binance futures public API
+                // Method A: Bitunix client getMarketPrice (native to this exchange)
+                async () => {
+                  const p = await userClient.getMarketPrice(trade.symbol);
+                  if (!p || isNaN(p)) throw new Error('invalid');
+                  return p;
+                },
+                // Method B: Bitunix markPrice from position data
+                async () => {
+                  if (exchangePos.markPrice) return exchangePos.markPrice;
+                  throw new Error('no markPrice');
+                },
+                // Method C: Binance futures public API (fallback for shared symbols)
                 async () => {
                   const fetch = require('node-fetch');
                   const res = await fetch(
@@ -1392,23 +1775,6 @@ async function syncTradeStatus() {
                   const p = parseFloat(d.price);
                   if (!p || isNaN(p)) throw new Error('invalid');
                   return p;
-                },
-                // Method B: Binance spot API
-                async () => {
-                  const fetch = require('node-fetch');
-                  const res = await fetch(
-                    `https://api.binance.com/api/v3/ticker/price?symbol=${trade.symbol}`,
-                    { timeout: 5000, ...getFetchOptions() }
-                  );
-                  const d = await res.json();
-                  const p = parseFloat(d.price);
-                  if (!p || isNaN(p)) throw new Error('invalid');
-                  return p;
-                },
-                // Method C: Bitunix markPrice from position
-                async () => {
-                  if (exchangePos.markPrice) return exchangePos.markPrice;
-                  throw new Error('no markPrice');
                 },
                 // Method D: Calculate from PnL
                 async () => {
@@ -1446,7 +1812,8 @@ async function syncTradeStatus() {
 
               bLog.trade(`Bitunix trailing: ${trade.symbol} entry=$${entryPrice} cur=$${curPrice} pricePct=${(profitPct*100).toFixed(3)}% capitalPct=${(capitalPct*100).toFixed(2)}% lev=${tradeLev}x lastStep=${(lastStep*100).toFixed(1)}%`);
 
-              const trailResult = calculateTrailingStep(entryPrice, curPrice, isLong, lastStep, tradeLev);
+              const userTrailPctBx = parseFloat(trade.key_trailing_sl_step) || 0;
+              const trailResult = calculateTrailingStep(entryPrice, curPrice, isLong, lastStep, tradeLev, userTrailPctBx);
               if (!trailResult) continue;
 
               // ── Step 3: Update SL on exchange (retry up to 3 times) ──
@@ -1503,6 +1870,7 @@ async function syncTradeStatus() {
             const isLong = trade.direction !== 'SHORT';
             let exitPrice = entryPrice;
             let realizedPnl = null;
+            let tradingFee = 0;
 
             if (key.platform === 'binance') {
               try {
@@ -1511,6 +1879,10 @@ async function syncTradeStatus() {
                 const openTime = trade.created_at ? new Date(trade.created_at).getTime() : Date.now() - 86400000;
                 const fills = await binClient.getAccountTradeList({ symbol: trade.symbol, startTime: openTime, limit: 50 });
                 if (fills && fills.length > 0) {
+                  // Calculate total fees from ALL fills (entry + exit)
+                  for (const f of fills) {
+                    tradingFee += Math.abs(parseFloat(f.commission || 0));
+                  }
                   // Find the close fills (opposite side of entry)
                   const closeSide = isLong ? 'SELL' : 'BUY';
                   const closeFills = fills.filter(f => f.side === closeSide);
@@ -1541,54 +1913,89 @@ async function syncTradeStatus() {
               let found = false;
               const tradeOpenTime = trade.created_at ? new Date(trade.created_at).getTime() : 0;
               const tradeEntry = parseFloat(trade.entry_price);
-              // Bitunix position history uses LONG/SHORT (not BUY/SELL)
               const tradeSideLong = trade.direction !== 'SHORT';
 
               // Method 1: Position history — match by symbol + side + entry price + time
-              // Fields: entryPrice, closePrice, side (LONG/SHORT), realizedPNL (excludes fees), fee, funding
               try {
                 const positions = await bxClient.getHistoryPositions({ symbol: trade.symbol, pageSize: 50 });
+                if (positions.length > 0) {
+                  bLog.system(`[SYNC] Bitunix posHistory ${trade.symbol}: ${positions.length} results, fields=${JSON.stringify(Object.keys(positions[0]))}`);
+                }
                 for (const p of positions) {
-                  const cp = parseFloat(p.closePrice || 0);
-                  const ep = parseFloat(p.entryPrice || 0);
-                  const pSideLong = (p.side || '').toUpperCase() === 'LONG';
+                  const cp = parseFloat(p.closePrice || p.avgClosePrice || 0);
+                  const ep = parseFloat(p.entryPrice || p.avgOpenPrice || 0);
+                  const pSide = (p.side || p.positionSide || '').toUpperCase();
+                  const pSideLong = pSide === 'LONG' || pSide === 'BUY';
                   const closeMs = parseInt(p.mtime || p.ctime || 0);
 
-                  const entryMatch = ep > 0 && Math.abs(ep - tradeEntry) / tradeEntry < 0.002;
+                  // Wider tolerance (1%) — Bitunix entry can differ from our recorded price
+                  const entryMatch = ep > 0 && Math.abs(ep - tradeEntry) / tradeEntry < 0.01;
                   const sideMatch = pSideLong === tradeSideLong;
                   const timeMatch = !tradeOpenTime || !closeMs || closeMs > tradeOpenTime;
 
-                  if (cp > 0 && p.symbol === trade.symbol && entryMatch && sideMatch && timeMatch) {
+                  if (cp > 0 && p.symbol === trade.symbol && sideMatch && (entryMatch || timeMatch)) {
                     exitPrice = cp;
-                    // Net PnL = realizedPNL - fee - funding (Bitunix realizedPNL excludes fees)
-                    const grossPnl = parseFloat(p.realizedPNL || 0);
+                    bLog.system(`[SYNC] Bitunix posHistory MATCH: ${trade.symbol} entry=${ep} exit=${cp} side=${pSide}`);
+                    // Extract PnL — try all known Bitunix field names
+                    const profit = parseFloat(p.profit || 0);
+                    const pnl = parseFloat(p.pnl || 0);
+                    const rpnl = parseFloat(p.realizedPNL || 0);
                     const fee = Math.abs(parseFloat(p.fee || 0));
-                    const funding = parseFloat(p.funding || 0);
-                    realizedPnl = grossPnl - fee - funding;
+                    const funding = Math.abs(parseFloat(p.funding || 0));
+                    tradingFee = fee + funding;
+                    if (profit !== 0) {
+                      realizedPnl = profit;
+                    } else if (pnl !== 0) {
+                      realizedPnl = pnl;
+                    } else if (rpnl !== 0) {
+                      realizedPnl = rpnl - fee - funding;
+                    }
                     found = true;
-                    bLog.system(`Bitunix posHistory: ${trade.symbol} entry=$${ep} exit=$${cp} pnl=${grossPnl} fee=${fee} funding=${funding} net=${realizedPnl}`);
+                    bLog.system(`[SYNC] Bitunix posHistory PnL: net=${realizedPnl} fee=${tradingFee} (profit=${profit} pnl=${pnl} rpnl=${rpnl})`);
                     break;
                   }
                 }
-              } catch (e) { bLog.error(`Bitunix posHistory error: ${e.message}`); }
+                if (!found && positions.length > 0) {
+                  // Log why no match — dump first 3 for debugging
+                  const sample = positions.slice(0, 3).map(p => ({
+                    sym: p.symbol, side: p.side || p.positionSide, entry: p.entryPrice || p.avgOpenPrice,
+                    close: p.closePrice || p.avgClosePrice, mtime: p.mtime
+                  }));
+                  bLog.system(`[SYNC] NO MATCH for trade#${trade.id} ${trade.symbol} ${trade.direction} entry=${tradeEntry} openTime=${tradeOpenTime}. Top posHistory: ${JSON.stringify(sample)}`);
+                }
+              } catch (e) { bLog.error(`[SYNC] Bitunix posHistory error: ${e.message}`); }
 
-              // Method 2: Order history — CLOSE orders (fee included in realizedPNL here)
+              // Method 2: Order history — CLOSE orders
               if (!found) {
                 try {
                   const orderList = await bxClient.getHistoryOrders({ symbol: trade.symbol, pageSize: 50 });
                   for (const o of orderList) {
                     const oPrice = parseFloat(o.avgPrice || o.price || 0);
-                    const isClose = o.reduceOnly || o.tradeSide === 'CLOSE';
+                    const isClose = o.reduceOnly || o.tradeSide === 'CLOSE' || (o.effect || '').toUpperCase() === 'CLOSE';
                     const oMs = parseInt(o.ctime || o.mtime || 0);
                     const timeMatch = !tradeOpenTime || !oMs || oMs > tradeOpenTime;
 
                     if (isClose && oPrice > 0 && timeMatch) {
                       exitPrice = oPrice;
-                      const pnlVal = parseFloat(o.realizedPNL || 0);
+                      bLog.system(`[SYNC] Bitunix orderHistory: ${trade.symbol} | ${JSON.stringify({
+                        avgPrice: o.avgPrice, price: o.price, realizedPNL: o.realizedPNL,
+                        profit: o.profit, pnl: o.pnl, fee: o.fee, tradeSide: o.tradeSide,
+                        reduceOnly: o.reduceOnly, qty: o.qty
+                      })}`);
+                      const profit = parseFloat(o.profit || 0);
+                      const pnl = parseFloat(o.pnl || 0);
+                      const rpnl = parseFloat(o.realizedPNL || 0);
                       const fee = Math.abs(parseFloat(o.fee || 0));
-                      realizedPnl = pnlVal - fee;
+                      // Priority: profit > pnl > realizedPNL > (realizedPNL - fee)
+                      if (profit !== 0) {
+                        realizedPnl = profit;
+                      } else if (pnl !== 0) {
+                        realizedPnl = pnl;
+                      } else if (rpnl !== 0) {
+                        realizedPnl = rpnl;
+                      }
                       found = true;
-                      bLog.system(`Bitunix orderHistory: ${trade.symbol} exit=$${oPrice} pnl=${pnlVal} fee=${fee} net=${realizedPnl}`);
+                      bLog.system(`Bitunix orderHistory RESULT: ${trade.symbol} net=${realizedPnl} (used: ${profit !== 0 ? 'profit' : pnl !== 0 ? 'pnl' : 'rpnl'})`);
                       break;
                     }
                   }
@@ -1606,28 +2013,128 @@ async function syncTradeStatus() {
             }
 
             // Calculate PnL: use exchange realized PnL if available, otherwise compute
+            // Binance: realizedPnl = gross (before fees), so net = gross - fees
+            // Bitunix: profit/pnl fields are NET (fees already included), so net = as-is
+            let grossPnl;
             let pnlUsdt;
             if (realizedPnl !== null) {
-              pnlUsdt = parseFloat(realizedPnl.toFixed(4));
+              if (key.platform === 'bitunix') {
+                // Bitunix Position PnL is NET (fees already deducted)
+                pnlUsdt = parseFloat(realizedPnl.toFixed(4));
+                grossPnl = parseFloat((realizedPnl + tradingFee).toFixed(4));
+              } else {
+                // Binance realizedPnl is GROSS (before fees)
+                grossPnl = parseFloat(realizedPnl.toFixed(4));
+                pnlUsdt = parseFloat((realizedPnl - tradingFee).toFixed(4));
+              }
             } else {
-              // PnL = (exit - entry) * qty for LONG, (entry - exit) * qty for SHORT
-              pnlUsdt = isLong
+              grossPnl = isLong
                 ? parseFloat(((exitPrice - entryPrice) * qty).toFixed(4))
                 : parseFloat(((entryPrice - exitPrice) * qty).toFixed(4));
+              // Estimate fees when exchange data unavailable: ~0.06% per side (open+close)
+              if (tradingFee === 0) {
+                const notional = exitPrice * qty;
+                tradingFee = parseFloat((notional * 0.0012).toFixed(4)); // 0.12% round trip
+                bLog.trade(`Estimated trading fee for ${trade.symbol}: $${tradingFee.toFixed(4)} (0.12% of $${notional.toFixed(2)} notional)`);
+              }
+              pnlUsdt = parseFloat((grossPnl - tradingFee).toFixed(4));
             }
+            tradingFee = parseFloat(tradingFee.toFixed(4));
+            grossPnl = parseFloat(grossPnl.toFixed(4));
             const status = pnlUsdt > 0 ? 'WIN' : 'LOSS';
 
             await db.query(
-              `UPDATE trades SET status = $1, pnl_usdt = $2, exit_price = $3, closed_at = NOW()
+              `UPDATE trades SET status = $1, pnl_usdt = $2, exit_price = $3, closed_at = NOW(),
+               trading_fee = $5, gross_pnl = $6
                WHERE id = $4`,
-              [status, pnlUsdt, exitPrice, trade.id]
+              [status, pnlUsdt, exitPrice, trade.id, tradingFee, grossPnl]
             );
-            bLog.trade(`DB synced: ${trade.symbol} -> ${status} PnL=$${pnlUsdt} exit=$${fmtPrice(exitPrice)}`);
+            bLog.trade(`DB synced: ${trade.symbol} -> ${status} gross=$${grossPnl} fee=$${tradingFee} net=$${pnlUsdt} exit=$${fmtPrice(exitPrice)}`);
+
+            // Notify agents of trade outcome (for survival system)
+            if (_onTradeOutcome) {
+              try { _onTradeOutcome({ symbol: trade.symbol, direction: trade.direction, status, pnlUsdt, structure: trade.market_structure }); } catch (_) {}
+            }
+
+            // Circuit breaker: track consecutive losses
+            if (status === 'LOSS') {
+              consecutiveLosses++;
+              if (consecutiveLosses >= CIRCUIT_BREAKER.MAX_CONSECUTIVE_LOSSES) {
+                circuitBreakerUntil = Date.now() + CIRCUIT_BREAKER.COOLDOWN_MS;
+                bLog.trade(`CIRCUIT BREAKER: ${consecutiveLosses} consecutive losses — pausing ${CIRCUIT_BREAKER.COOLDOWN_MS / 60000}min`);
+                await notify(`*Circuit Breaker Activated*\n${consecutiveLosses} consecutive losses — pausing new trades for 30 minutes.`);
+              }
+            } else {
+              consecutiveLosses = 0; // Reset on any win
+            }
+
+            // Record token daily result
+            try {
+              const { recordTokenResult } = require('./token-scanner');
+              await recordTokenResult(trade.symbol, pnlUsdt, tradingFee, pnlUsdt > 0);
+            } catch (_) {}
 
             // Record profit split for winning trades
             if (pnlUsdt > 0) {
               await recordProfitSplit(db, trade.user_id, trade.api_key_id, pnlUsdt, trade.symbol);
             }
+
+            // RPG: XP and Point Distribution System
+            try {
+              const { getCoordinator } = require('./agents');
+              const coord = getCoordinator();
+              const tokenKey = trade.symbol.toLowerCase().replace('usdt', '');
+              const tokenAgent = coord._agents.get(tokenKey);
+
+              // 1. Point Distribution (New Economy Logic)
+              if (pnlUsdt > 0) {
+                // Credit (Wins)
+                // Signal Discoverer (Chart): +10 pts
+                if (coord.chartAgent) await coord.chartAgent.adjustPoints(10);
+                // Signal Approver (Risk): +5 pts
+                if (coord.riskAgent) await coord.riskAgent.adjustPoints(5);
+                // Trade Executor (Trader): +2 pts
+                if (coord.traderAgent) await coord.traderAgent.adjustPoints(2);
+
+                // TP3 Hit multiplier (2x points)
+                // We estimate TP3 hit if pnl is significantly high (e.g. > 2% absolute price move)
+                const priceMove = Math.abs((exitPrice - entryPrice) / entryPrice);
+                if (priceMove >= 0.02) {
+                  if (coord.chartAgent) await coord.chartAgent.adjustPoints(10); // Extra 10
+                  if (coord.riskAgent) await coord.riskAgent.adjustPoints(5);  // Extra 5
+                }
+              } else {
+                // Blame (Losses): -5 pts for all involved
+                if (coord.chartAgent) await coord.chartAgent.adjustPoints(-5);
+                if (coord.riskAgent) await coord.riskAgent.adjustPoints(-5);
+                if (coord.traderAgent) await coord.traderAgent.adjustPoints(-5);
+
+                // RiskAgent Penalty: Harsh penalty if it was a "Trap Pattern"
+                try {
+                  const { getPatternPenalty } = require('./ai-learner');
+                  const penalty = await getPatternPenalty(trade.symbol, trade.direction);
+                  if (penalty > 0) {
+                    if (coord.riskAgent) await coord.riskAgent.adjustPoints(-15);
+                    bLog.trade(`Economy: RiskAgent penalized -15pts for approving trap pattern on ${trade.symbol}`);
+                  }
+                } catch (_) {}
+              }
+
+              // 2. Legacy XP System (Keep for consistency)
+              if (pnlUsdt > 0) {
+                if (tokenAgent) tokenAgent.gainXp(100, true).catch(() => {});
+                coord.traderAgent.gainXp(50, true).catch(() => {});
+                coord.chartAgent.gainXp(30, true).catch(() => {});
+                coord.riskAgent.gainXp(20, true).catch(() => {});
+                coord.sentimentAgent.gainXp(15, true).catch(() => {});
+                coord.kronosAgent.gainXp(15, true).catch(() => {});
+                coord.strategyAgent.gainXp(10, true).catch(() => {});
+                coord.gainXp(10, true).catch(() => {});
+              }
+              // Track earnings regardless of win/loss
+              if (tokenAgent) tokenAgent.addEarnings(Math.abs(pnlUsdt)).catch(() => {});
+              coord.traderAgent.addEarnings(Math.abs(pnlUsdt)).catch(() => {});
+            } catch (_) {}
           } else {
             // Still open — update live PnL
             const livePnl = parseFloat(exchangePos.pnl.toFixed(4));
@@ -1727,4 +2234,27 @@ async function run() {
   await main();
 }
 
-module.exports = { run };
+module.exports = {
+  run,
+  // Exported for agent framework (Phase 2)
+  executeForAllUsers,
+  openTrade,
+  checkTrailingStop,
+  syncTradeStatus,
+  checkUsdtTopups,
+  getClient,
+  isTokenBanned,
+  getTokenLeverage,
+  getCapitalPercentage,
+  getDailyCapital,
+  calculateTrailingStep,
+  updateStopLoss,
+  recordProfitSplit,
+  notify,
+  CONFIG,
+  TRAILING_SL_CAPITAL,
+  getTrailingSLConfig,
+  tradeState,
+  onTradeOutcome,
+  fireTradeOutcome,
+};

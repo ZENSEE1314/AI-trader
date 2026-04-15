@@ -161,7 +161,7 @@ const DEFAULT_PARAMS = {
   // Capital-based SL/TP (smc-engine.js)
   SL_MARGIN_PCT: 0.30,     // lose max 30% of position margin per trade
   TP_MARGIN_PCT: 0.45,     // target 45% of position margin per trade
-  MIN_SCORE: 8,            // minimum confluence score
+  MIN_SCORE: 2,            // minimum confluence score — 3m+1m HL/LH is primary trigger
 
   // Sizing params (cycle.js)
   WALLET_SIZE_PCT: 0.10,   // 10% of wallet per trade
@@ -415,6 +415,91 @@ async function getOptimalParams() {
 
   // ── 9. (removed — SL is now capital-based, no min/max filtering needed) ──
 
+  // ── 10. Swing length optimization: learn which swing lengths produce better WR ──
+  try {
+    const swingAnalysis = await query(
+      `SELECT tf_15m, tf_1m, is_win, pnl_pct
+       FROM ai_trades
+       WHERE pnl_pct IS NOT NULL AND tf_15m IS NOT NULL
+       ORDER BY created_at DESC LIMIT 80`
+    );
+    if (swingAnalysis.length >= 30) {
+      // Analyze win rate by structure quality reported in tf_15m/tf_1m
+      const wins = swingAnalysis.filter(t => t.is_win);
+      const losses = swingAnalysis.filter(t => !t.is_win);
+
+      // If losses consistently have weak 1m confirmation, tighten maxEntryAge
+      const lossesWithOld1m = losses.filter(t => {
+        const tf1m = typeof t.tf_1m === 'string' ? t.tf_1m : '';
+        return tf1m.includes('aged') || tf1m.includes('stale');
+      });
+      if (losses.length >= 10 && lossesWithOld1m.length / losses.length > 0.3) {
+        const newAge = Math.max(params.maxEntryAge - 3, 15);
+        if (newAge < params.maxEntryAge) {
+          await logParamChange('maxEntryAge', params.maxEntryAge, newAge,
+            `${((lossesWithOld1m.length/losses.length)*100).toFixed(0)}% of losses had aged 1m swings — tightening`, totalTrades);
+          params.maxEntryAge = newAge;
+        }
+      }
+    }
+  } catch (_) {}
+
+  // ── 11. Apply winning backtest strategies from StrategyAgent ──
+  try {
+    const bestBacktest = await query(
+      `SELECT params, win_rate, total_pnl, total_trades
+       FROM strategy_backtests
+       WHERE win_rate >= 60 AND total_trades >= 20 AND total_pnl > 0
+       ORDER BY win_rate * total_pnl DESC
+       LIMIT 1`
+    );
+    if (bestBacktest.length) {
+      const bt = bestBacktest[0];
+      const btParams = typeof bt.params === 'string' ? JSON.parse(bt.params) : bt.params;
+      // Only adopt swing lengths from backtests (conservative — don't change SL/TP from backtest)
+      const ADOPTABLE = ['swing_15m', 'swing_3m', 'swing_1m'];
+      const PARAM_MAP = { swing_15m: 'swingLen15m', swing_3m: 'swingLen3m', swing_1m: 'swingLen1m' };
+      for (const key of ADOPTABLE) {
+        if (btParams[key] !== undefined && PARAM_MAP[key]) {
+          const mapped = PARAM_MAP[key];
+          const oldVal = params[mapped];
+          const newVal = btParams[key];
+          // Only shift by MAX_WEIGHT_SHIFT toward the backtest value
+          const shifted = Math.round(oldVal + (newVal - oldVal) * MAX_WEIGHT_SHIFT);
+          if (shifted !== oldVal) {
+            await logParamChange(mapped, oldVal, shifted,
+              `Backtest WR ${bt.win_rate.toFixed(1)}% suggests ${key}=${newVal}, shifting toward it`, totalTrades);
+            params[mapped] = shifted;
+          }
+        }
+      }
+    }
+  } catch (_) {}
+
+  // ── 12. Per-coin learning: avoid coins that consistently lose ──
+  try {
+    const coinPerf = await query(
+      `SELECT symbol, COUNT(*) as total,
+        SUM(CASE WHEN is_win = 1 THEN 1 ELSE 0 END) as wins,
+        AVG(pnl_pct) as avg_pnl
+       FROM ai_trades WHERE pnl_pct IS NOT NULL
+       GROUP BY symbol HAVING COUNT(*) >= 10
+       ORDER BY AVG(pnl_pct) ASC LIMIT 5`
+    );
+    params.AVOID_COINS = [];
+    for (const coin of coinPerf) {
+      const wr = parseInt(coin.wins) / parseInt(coin.total);
+      if (wr < 0.30 && parseFloat(coin.avg_pnl) < -1.0) {
+        params.AVOID_COINS.push(coin.symbol);
+      }
+    }
+    if (params.AVOID_COINS.length > 0) {
+      console.log(`[AI] Avoiding coins with <30% WR: ${params.AVOID_COINS.join(', ')}`);
+    }
+  } catch (_) {
+    params.AVOID_COINS = [];
+  }
+
   _paramsCache = { data: { ...params }, ts: Date.now() };
   return params;
 }
@@ -588,6 +673,237 @@ async function getDirectionPreference(symbol) {
   return null;
 }
 
+// ── Pattern DNA & Loss Autopsy ─────────────────────────────────
+
+async function performLossAutopsy(tradeData) {
+  try {
+    // DNA: symbol | setup | direction | session | structure (3m/1m labels)
+    const dna = [
+      tradeData.symbol,
+      tradeData.setup,
+      tradeData.direction,
+      tradeData.session || getCurrentSession(),
+      tradeData.marketStructure || tradeData.trend1h || 'unknown'
+    ].join('|').toUpperCase();
+
+    // 1. Update pattern stats
+    await query(
+      `INSERT INTO pattern_penalties (pattern_dna, loss_count, last_updated)
+       VALUES ($1, 1, NOW())
+       ON CONFLICT (pattern_dna) DO UPDATE SET
+         loss_count = pattern_penalties.loss_count + 1,
+         last_updated = NOW()`,
+      [dna]
+    );
+
+    // 2. Calculate new penalty
+    const [row] = await query(
+      `SELECT loss_count, win_count FROM pattern_penalties WHERE pattern_dna = $1`,
+      [dna]
+    );
+
+    if (row) {
+      const total = row.loss_count + row.win_count;
+      const winRate = total > 0 ? row.win_count / total : 1;
+
+      let penalty = 0;
+      if (winRate < 0.30) {
+        // Aggressive penalty for high-failure patterns
+        // Scale: -2 points per loss, cap at -15
+        penalty = -Math.min(row.loss_count * 2, 15);
+      }
+
+      await query(
+        `UPDATE pattern_penalties SET current_penalty = $1 WHERE pattern_dna = $2`,
+        [penalty, dna]
+      );
+    }
+  } catch (err) {
+    console.error(`[AI Learner] Autopsy failed: ${err.message}`);
+  }
+}
+
+async function performWinAutopsy(tradeData) {
+  try {
+    // DNA: symbol | setup | direction | session | structure (3m/1m labels)
+    const dna = [
+      tradeData.symbol,
+      tradeData.setup,
+      tradeData.direction,
+      tradeData.session || getCurrentSession(),
+      tradeData.marketStructure || tradeData.trend1h || 'unknown'
+    ].join('|').toUpperCase();
+
+    // 1. Update pattern stats (increment win count)
+    await query(
+      `INSERT INTO pattern_penalties (pattern_dna, win_count, last_updated)
+       VALUES ($1, 1, NOW())
+       ON CONFLICT (pattern_dna) DO UPDATE SET
+         win_count = pattern_penalties.win_count + 1,
+         last_updated = NOW()`,
+      [dna]
+    );
+
+    // 2. Calculate positive boost
+    const [row] = await query(
+      `SELECT loss_count, win_count FROM pattern_penalties WHERE pattern_dna = $1`,
+      [dna]
+    );
+
+    if (row) {
+      const total = row.loss_count + row.win_count;
+      const winRate = total > 0 ? row.win_count / total : 0;
+
+      let boost = 0;
+      if (winRate > 0.60) {
+        // Scale: +1 point per win, cap at +10
+        boost = Math.min(row.win_count * 1, 10);
+      }
+
+      await query(
+        `UPDATE pattern_penalties SET positive_boost = $1 WHERE pattern_dna = $2`,
+        [boost, dna]
+      );
+    }
+  } catch (err) {
+    console.error(`[AI Learner] Win Autopsy failed: ${err.message}`);
+  }
+}
+
+async function getPatternModifier(symbol, setup, direction, session, trend1hOrStructure) {
+  try {
+    const dna = [symbol, setup, direction, session || getCurrentSession(), trend1hOrStructure || 'unknown']
+      .join('|').toUpperCase();
+    const [row] = await query(
+      `SELECT current_penalty, positive_boost FROM pattern_penalties WHERE pattern_dna = $1`,
+      [dna]
+    );
+    if (!row) return 0;
+    // Combined Modifier = Boost - Penalty
+    return (parseFloat(row.positive_boost) || 0) + (parseFloat(row.current_penalty) || 0);
+  } catch (err) {
+    return 0;
+  }
+}
+
+async function analyzeWorstPatterns() {
+  try {
+    const worst = await query(
+      `SELECT pattern_dna, loss_count, win_count, current_penalty
+       FROM pattern_penalties
+       WHERE (loss_count + win_count) >= 5 AND (win_count::float / (loss_count + win_count)) < 0.25
+       ORDER BY loss_count DESC LIMIT 10`
+    );
+
+    for (const p of worst) {
+      // Bump penalty for absolute trap patterns
+      const newPenalty = Math.max(p.current_penalty - 2, -20);
+      await query(
+        `UPDATE pattern_penalties SET current_penalty = $1 WHERE pattern_dna = $2`,
+        [newPenalty, p.pattern_dna]
+      );
+    }
+  } catch (err) {
+    console.error(`[AI Learner] Worst pattern analysis failed: ${err.message}`);
+  }
+}
+
+// ── Hourly Win Rate Analysis ─────────────────────────────────
+// Learn which hours of the day are profitable vs losing
+
+async function getHourlyAnalysis() {
+  try {
+    const rows = await query(
+      `SELECT
+        EXTRACT(HOUR FROM created_at) as hour,
+        COUNT(*) as total,
+        SUM(CASE WHEN is_win = 1 THEN 1 ELSE 0 END) as wins,
+        AVG(pnl_pct) as avg_pnl,
+        SUM(pnl_pct) as total_pnl
+       FROM ai_trades
+       WHERE pnl_pct IS NOT NULL
+       GROUP BY EXTRACT(HOUR FROM created_at)
+       HAVING COUNT(*) >= 3
+       ORDER BY EXTRACT(HOUR FROM created_at)`
+    );
+    const analysis = {};
+    for (const r of rows) {
+      const h = parseInt(r.hour);
+      const wr = parseInt(r.wins) / parseInt(r.total);
+      analysis[h] = {
+        hour: h,
+        total: parseInt(r.total),
+        wins: parseInt(r.wins),
+        winRate: wr,
+        avgPnl: parseFloat(r.avg_pnl),
+        totalPnl: parseFloat(r.total_pnl),
+        shouldTrade: wr >= 0.35 || parseInt(r.total) < 5, // Block hours with <35% WR
+      };
+    }
+    return analysis;
+  } catch (_) {
+    return {};
+  }
+}
+
+async function shouldTradeNow() {
+  try {
+    const utcH = new Date().getUTCHours();
+    const rows = await query(
+      `SELECT COUNT(*) as total,
+        SUM(CASE WHEN is_win = 1 THEN 1 ELSE 0 END) as wins,
+        AVG(pnl_pct) as avg_pnl
+       FROM ai_trades
+       WHERE pnl_pct IS NOT NULL
+         AND EXTRACT(HOUR FROM created_at) = $1`,
+      [utcH]
+    );
+    const r = rows[0];
+    if (!r || parseInt(r.total) < 10) return { trade: true, reason: 'not enough data' };
+    const wr = parseInt(r.wins) / parseInt(r.total);
+    const avgPnl = parseFloat(r.avg_pnl);
+    if (wr < 0.25 && avgPnl < -1.0) {
+      return { trade: false, reason: `UTC ${utcH}h: ${(wr*100).toFixed(0)}% WR, avg ${avgPnl.toFixed(1)}% — bad hour` };
+    }
+    if (wr < 0.35) {
+      return { trade: true, reason: `UTC ${utcH}h: ${(wr*100).toFixed(0)}% WR — reducing size`, reduceSizeBy: 0.5 };
+    }
+    if (wr > 0.60 && avgPnl > 0.5) {
+      return { trade: true, reason: `UTC ${utcH}h: ${(wr*100).toFixed(0)}% WR — good hour`, boostSizeBy: 1.2 };
+    }
+    return { trade: true, reason: `UTC ${utcH}h: ${(wr*100).toFixed(0)}% WR — normal` };
+  } catch (_) {
+    return { trade: true, reason: 'error checking hourly stats' };
+  }
+}
+
+// ── Structure Win Rate Check ─────────────────────────────────
+// Check if a specific 3m/1m structure combination historically wins
+
+async function getStructureWinRate(structure3m, structure1m, direction) {
+  try {
+    const structLabel = `${structure3m}|${structure1m}`;
+    const rows = await query(
+      `SELECT COUNT(*) as total,
+        SUM(CASE WHEN is_win = 1 THEN 1 ELSE 0 END) as wins
+       FROM ai_trades
+       WHERE direction = $1
+         AND market_structure LIKE $2
+         AND pnl_pct IS NOT NULL`,
+      [direction, `%${structLabel}%`]
+    );
+    const row = rows[0];
+    if (!row || parseInt(row.total) < 5) return null; // Not enough data
+    return {
+      winRate: parseInt(row.wins) / parseInt(row.total),
+      total: parseInt(row.total),
+      wins: parseInt(row.wins),
+    };
+  } catch (_) {
+    return null;
+  }
+}
+
 // ── Composite AI Score Modifier ──────────────────────────────
 
 async function getAIScoreModifier(symbol, setup, direction) {
@@ -670,5 +986,12 @@ module.exports = {
   getVersions,
   getCurrentVersion,
   getLearningSummary,
+  performLossAutopsy,
+  performWinAutopsy,
+  getPatternModifier,
+  getStructureWinRate,
+  getHourlyAnalysis,
+  shouldTradeNow,
+  analyzeWorstPatterns,
   DEFAULT_PARAMS,
 };

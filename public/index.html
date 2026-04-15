@@ -28,16 +28,21 @@
 
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
   <link rel="stylesheet" href="/css/tokens.css">
-  <link rel="stylesheet" href="/css/style.css?v=20260406a">
+  <link rel="stylesheet" href="/css/style.css?v=20260413">
 
   <link rel="icon" href="/img/logo.jpeg" type="image/jpeg">
   <style>
-    .tip-btn{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;border-radius:50%;background:rgba(0,229,255,0.1);color:var(--color-accent);font-size:0.6rem;font-weight:700;cursor:help;position:relative;margin-left:4px;vertical-align:middle;flex-shrink:0;border:1px solid rgba(0,229,255,0.15);transition:box-shadow 0.15s ease;}
-    .tip-btn:hover{box-shadow:0 0 8px rgba(0,229,255,0.2);}
+    .tip-btn{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;border-radius:50%;background:rgba(212,175,55,0.1);color:var(--color-accent);font-size:0.6rem;font-weight:700;cursor:help;position:relative;margin-left:4px;vertical-align:middle;flex-shrink:0;border:1px solid rgba(212,175,55,0.15);transition:box-shadow 0.15s ease;}
+    .tip-btn:hover{box-shadow:0 0 8px rgba(212,175,55,0.2);}
     .tip-btn:hover .tip-text{display:block;}
-    .tip-text{display:none;position:absolute;bottom:calc(100% + 6px);left:50%;transform:translateX(-50%);background:var(--color-bg-raised);border:1px solid rgba(0,229,255,0.1);color:var(--color-text);font-size:0.72rem;font-weight:400;padding:8px 12px;border-radius:var(--radius-md);white-space:normal;width:200px;z-index:100;box-shadow:0 4px 20px rgba(0,0,0,0.5),0 0 16px rgba(0,229,255,0.05);line-height:1.4;text-align:left;backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);}
+    .tip-text{display:none;position:absolute;bottom:calc(100% + 6px);left:50%;transform:translateX(-50%);background:var(--color-bg-raised);border:1px solid rgba(212,175,55,0.1);color:var(--color-text);font-size:0.72rem;font-weight:400;padding:8px 12px;border-radius:var(--radius-md);white-space:normal;width:200px;z-index:100;box-shadow:0 4px 20px rgba(0,0,0,0.5),0 0 16px rgba(212,175,55,0.05);line-height:1.4;text-align:left;backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);}
+    .pw-wrap{position:relative;}
+    .pw-wrap .form-input{padding-right:40px;}
+    .pw-toggle{position:absolute;right:10px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;color:var(--color-text-muted);padding:4px;font-size:1rem;line-height:1;display:flex;align-items:center;justify-content:center;transition:color 0.15s;}
+    .pw-toggle:hover{color:var(--color-accent);}
+    .pw-toggle svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;}
   </style>
 </head>
 
@@ -51,8 +56,21 @@
        LANDING PAGE
        ======================================================== -->
   <section id="section-landing" class="landing">
+    <canvas id="particle-canvas"></canvas>
     <div class="landing-bg"></div>
     <div class="landing-noise"></div>
+    <div class="scroll-progress" id="scroll-progress"></div>
+
+    <!-- Floating geometric shapes -->
+    <div class="landing-shapes">
+      <div class="landing-shape landing-shape--hex" style="top:8%;left:5%;"></div>
+      <div class="landing-shape landing-shape--ring" style="top:15%;right:8%;"></div>
+      <div class="landing-shape landing-shape--triangle" style="top:45%;left:3%;"></div>
+      <div class="landing-shape landing-shape--diamond" style="top:60%;right:5%;"></div>
+      <div class="landing-shape landing-shape--cross" style="top:75%;left:8%;"></div>
+      <div class="landing-shape landing-shape--hex" style="top:85%;right:10%;opacity:0.03;"></div>
+      <div class="landing-shape landing-shape--ring" style="top:35%;left:92%;width:100px;height:100px;"></div>
+    </div>
 
     <!-- ── Navbar ── -->
     <nav class="landing-nav" id="landing-nav">
@@ -86,15 +104,16 @@
     <div class="landing-content">
 
       <!-- ── Hero ── -->
-      <section class="landing-hero">
+      <section class="landing-hero" style="position:relative;">
+        <div class="hero-mouse-glow" id="hero-mouse-glow"></div>
         <div class="landing-hero-grid">
           <div class="landing-hero-text">
             <div class="landing-hero-tag">
               <span class="landing-hero-tag-dot"></span>
               AI-Powered Trading Engine
             </div>
-            <h1 class="landing-title">Trade Like The<br><span class="landing-title-gold">Top 1%</span></h1>
-            <p class="landing-tagline">AI-powered trading engine scans 40+ coins 24/7, executing high-probability futures trades on your exchange. No monthly fees — we only earn when you profit. 60/40 split.</p>
+            <h1 class="landing-title">Trade Like The<br><span class="landing-title-gradient">Top 1%</span></h1>
+            <p class="landing-tagline" id="hero-tagline"></p>
             <div class="landing-hero-btns">
               <button class="btn btn-gold btn-lg" onclick="window.CryptoBot.goToAuth()">
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
@@ -106,16 +125,54 @@
               </a>
             </div>
           </div>
-          <div class="landing-hero-visual">
-            <img src="/img/logo.jpeg" alt="MCT Logo" class="landing-logo" width="260" height="260">
-            <div class="landing-hero-orbit landing-hero-orbit-1"></div>
-            <div class="landing-hero-orbit landing-hero-orbit-2"></div>
-            <div class="landing-hero-orbit landing-hero-orbit-3"></div>
+          <div class="landing-hero-visual" id="hero-visual">
+            <div class="landing-hero-visual-inner" id="hero-visual-inner">
+              <img src="/img/logo.jpeg" alt="MCT Logo" class="landing-logo" width="260" height="260">
+              <div class="landing-hero-orbit landing-hero-orbit-1"></div>
+              <div class="landing-hero-orbit landing-hero-orbit-2"></div>
+              <div class="landing-hero-orbit landing-hero-orbit-3"></div>
+            </div>
+            <!-- Floating crypto symbols -->
+            <span class="landing-crypto-float" style="top:5%;left:10%;animation:shape-float-1 12s ease-in-out infinite;">BTC</span>
+            <span class="landing-crypto-float" style="top:20%;right:5%;animation:shape-float-2 15s ease-in-out infinite;color:var(--gold);">ETH</span>
+            <span class="landing-crypto-float" style="bottom:15%;left:5%;animation:shape-float-3 18s ease-in-out infinite;color:var(--color-success);">SOL</span>
+            <span class="landing-crypto-float" style="bottom:5%;right:15%;animation:shape-float-4 14s ease-in-out infinite;">XRP</span>
+          </div>
+        </div>
+
+        <!-- Live Ticker -->
+        <div class="landing-ticker" data-animate>
+          <div class="landing-ticker-track" id="ticker-track">
+            <span class="landing-ticker-item"><span class="ticker-symbol">BTC</span> <span class="ticker-up">+2.4%</span></span>
+            <span class="landing-ticker-item"><span class="ticker-symbol">ETH</span> <span class="ticker-up">+1.8%</span></span>
+            <span class="landing-ticker-item"><span class="ticker-symbol">SOL</span> <span class="ticker-up">+5.2%</span></span>
+            <span class="landing-ticker-item"><span class="ticker-symbol">BNB</span> <span class="ticker-down">-0.3%</span></span>
+            <span class="landing-ticker-item"><span class="ticker-symbol">XRP</span> <span class="ticker-up">+3.1%</span></span>
+            <span class="landing-ticker-item"><span class="ticker-symbol">DOGE</span> <span class="ticker-up">+4.7%</span></span>
+            <span class="landing-ticker-item"><span class="ticker-symbol">ADA</span> <span class="ticker-down">-1.2%</span></span>
+            <span class="landing-ticker-item"><span class="ticker-symbol">AVAX</span> <span class="ticker-up">+2.9%</span></span>
+            <span class="landing-ticker-item"><span class="ticker-symbol">LINK</span> <span class="ticker-up">+1.5%</span></span>
+            <span class="landing-ticker-item"><span class="ticker-symbol">SUI</span> <span class="ticker-up">+6.3%</span></span>
+            <span class="landing-ticker-item"><span class="ticker-symbol">NEAR</span> <span class="ticker-up">+3.8%</span></span>
+            <span class="landing-ticker-item"><span class="ticker-symbol">DOT</span> <span class="ticker-down">-0.7%</span></span>
+            <!-- Duplicated for seamless scroll -->
+            <span class="landing-ticker-item"><span class="ticker-symbol">BTC</span> <span class="ticker-up">+2.4%</span></span>
+            <span class="landing-ticker-item"><span class="ticker-symbol">ETH</span> <span class="ticker-up">+1.8%</span></span>
+            <span class="landing-ticker-item"><span class="ticker-symbol">SOL</span> <span class="ticker-up">+5.2%</span></span>
+            <span class="landing-ticker-item"><span class="ticker-symbol">BNB</span> <span class="ticker-down">-0.3%</span></span>
+            <span class="landing-ticker-item"><span class="ticker-symbol">XRP</span> <span class="ticker-up">+3.1%</span></span>
+            <span class="landing-ticker-item"><span class="ticker-symbol">DOGE</span> <span class="ticker-up">+4.7%</span></span>
+            <span class="landing-ticker-item"><span class="ticker-symbol">ADA</span> <span class="ticker-down">-1.2%</span></span>
+            <span class="landing-ticker-item"><span class="ticker-symbol">AVAX</span> <span class="ticker-up">+2.9%</span></span>
+            <span class="landing-ticker-item"><span class="ticker-symbol">LINK</span> <span class="ticker-up">+1.5%</span></span>
+            <span class="landing-ticker-item"><span class="ticker-symbol">SUI</span> <span class="ticker-up">+6.3%</span></span>
+            <span class="landing-ticker-item"><span class="ticker-symbol">NEAR</span> <span class="ticker-up">+3.8%</span></span>
+            <span class="landing-ticker-item"><span class="ticker-symbol">DOT</span> <span class="ticker-down">-0.7%</span></span>
           </div>
         </div>
 
         <!-- Stats Bar -->
-        <div class="landing-stats" data-animate>
+        <div class="landing-stats" data-animate style="margin-top:var(--space-8);">
           <div class="landing-stat">
             <span class="landing-stat-num" data-count="12847">0</span>
             <span class="landing-stat-label">Trades Executed</span>
@@ -137,6 +194,149 @@
           </div>
         </div>
       </section>
+
+      <div class="landing-section-divider"></div>
+
+      <!-- ── Crypto Network Scroll Animation ── -->
+      <section class="landing-section crypto-network-section" id="crypto-network">
+        <div class="crypto-network-stage">
+          <!-- Background floating particles -->
+          <div class="cn-particles" aria-hidden="true">
+            <span class="cn-particle" style="--p-x:12%;--p-y:18%;--p-delay:0s;--p-dur:14s;">BTC</span>
+            <span class="cn-particle" style="--p-x:82%;--p-y:22%;--p-delay:2s;--p-dur:18s;">ETH</span>
+            <span class="cn-particle" style="--p-x:8%;--p-y:72%;--p-delay:4s;--p-dur:16s;">SOL</span>
+            <span class="cn-particle" style="--p-x:88%;--p-y:68%;--p-delay:1s;--p-dur:20s;">BNB</span>
+            <span class="cn-particle" style="--p-x:25%;--p-y:85%;--p-delay:3s;--p-dur:15s;">XRP</span>
+            <span class="cn-particle" style="--p-x:72%;--p-y:12%;--p-delay:5s;--p-dur:17s;">DOGE</span>
+            <span class="cn-particle" style="--p-x:50%;--p-y:8%;--p-delay:2.5s;--p-dur:19s;">ADA</span>
+            <span class="cn-particle" style="--p-x:38%;--p-y:92%;--p-delay:1.5s;--p-dur:13s;">AVAX</span>
+          </div>
+
+          <!-- 3D Perspective Container -->
+          <div class="cn-perspective">
+            <div class="cn-network" id="cn-network">
+
+              <!-- SVG Connection Lines -->
+              <svg class="cn-lines" viewBox="0 0 800 600" preserveAspectRatio="xMidYMid meet" aria-hidden="true">
+                <defs>
+                  <linearGradient id="cn-grad-binance" x1="0%" y1="0%" x2="100%" y2="0%">
+                    <stop offset="0%" stop-color="#d4af37" stop-opacity="0.8"/>
+                    <stop offset="100%" stop-color="#f0b90b" stop-opacity="0.8"/>
+                  </linearGradient>
+                  <linearGradient id="cn-grad-bitunix" x1="0%" y1="0%" x2="100%" y2="0%">
+                    <stop offset="0%" stop-color="#d4af37" stop-opacity="0.8"/>
+                    <stop offset="100%" stop-color="#7c7fff" stop-opacity="0.8"/>
+                  </linearGradient>
+                  <linearGradient id="cn-grad-ai" x1="0%" y1="0%" x2="100%" y2="100%">
+                    <stop offset="0%" stop-color="#d4af37" stop-opacity="0.8"/>
+                    <stop offset="100%" stop-color="#a855f7" stop-opacity="0.8"/>
+                  </linearGradient>
+                  <linearGradient id="cn-grad-wallet" x1="0%" y1="0%" x2="100%" y2="100%">
+                    <stop offset="0%" stop-color="#d4af37" stop-opacity="0.8"/>
+                    <stop offset="100%" stop-color="#22c55e" stop-opacity="0.8"/>
+                  </linearGradient>
+                  <filter id="cn-glow-filter">
+                    <feGaussianBlur stdDeviation="3" result="blur"/>
+                    <feMerge>
+                      <feMergeNode in="blur"/>
+                      <feMergeNode in="SourceGraphic"/>
+                    </feMerge>
+                  </filter>
+                </defs>
+                <!-- Connection: Hub -> Binance (top-left) -->
+                <path class="cn-line cn-line-binance" d="M400,300 C300,300 220,200 160,160" stroke="url(#cn-grad-binance)" fill="none" stroke-width="2" filter="url(#cn-glow-filter)"/>
+                <path class="cn-line-glow cn-line-binance" d="M400,300 C300,300 220,200 160,160" stroke="#f0b90b" fill="none" stroke-width="1" opacity="0.4"/>
+                <!-- Connection: Hub -> Bitunix (top-right) -->
+                <path class="cn-line cn-line-bitunix" d="M400,300 C500,300 580,200 640,160" stroke="url(#cn-grad-bitunix)" fill="none" stroke-width="2" filter="url(#cn-glow-filter)"/>
+                <path class="cn-line-glow cn-line-bitunix" d="M400,300 C500,300 580,200 640,160" stroke="#7c7fff" fill="none" stroke-width="1" opacity="0.4"/>
+                <!-- Connection: Hub -> AI Brain (bottom-left) -->
+                <path class="cn-line cn-line-ai" d="M400,300 C320,340 240,400 180,440" stroke="url(#cn-grad-ai)" fill="none" stroke-width="2" filter="url(#cn-glow-filter)"/>
+                <path class="cn-line-glow cn-line-ai" d="M400,300 C320,340 240,400 180,440" stroke="#a855f7" fill="none" stroke-width="1" opacity="0.4"/>
+                <!-- Connection: Hub -> Wallet (bottom-right) -->
+                <path class="cn-line cn-line-wallet" d="M400,300 C480,340 560,400 620,440" stroke="url(#cn-grad-wallet)" fill="none" stroke-width="2" filter="url(#cn-glow-filter)"/>
+                <path class="cn-line-glow cn-line-wallet" d="M400,300 C480,340 560,400 620,440" stroke="#22c55e" fill="none" stroke-width="1" opacity="0.4"/>
+
+                <!-- Animated pulse dots along paths -->
+                <circle class="cn-pulse-dot cn-pulse-binance" r="4" fill="#f0b90b" opacity="0">
+                  <animateMotion dur="2.5s" repeatCount="indefinite" path="M400,300 C300,300 220,200 160,160"/>
+                </circle>
+                <circle class="cn-pulse-dot cn-pulse-bitunix" r="4" fill="#7c7fff" opacity="0">
+                  <animateMotion dur="3s" repeatCount="indefinite" path="M400,300 C500,300 580,200 640,160"/>
+                </circle>
+                <circle class="cn-pulse-dot cn-pulse-ai" r="4" fill="#a855f7" opacity="0">
+                  <animateMotion dur="2.8s" repeatCount="indefinite" path="M400,300 C320,340 240,400 180,440"/>
+                </circle>
+                <circle class="cn-pulse-dot cn-pulse-wallet" r="4" fill="#22c55e" opacity="0">
+                  <animateMotion dur="3.2s" repeatCount="indefinite" path="M400,300 C480,340 560,400 620,440"/>
+                </circle>
+                <!-- Reverse pulse dots (data flowing back to hub) -->
+                <circle class="cn-pulse-dot cn-pulse-binance-rev" r="3" fill="#d4af37" opacity="0">
+                  <animateMotion dur="2.5s" repeatCount="indefinite" path="M160,160 C220,200 300,300 400,300"/>
+                </circle>
+                <circle class="cn-pulse-dot cn-pulse-bitunix-rev" r="3" fill="#d4af37" opacity="0">
+                  <animateMotion dur="3s" repeatCount="indefinite" path="M640,160 C580,200 500,300 400,300"/>
+                </circle>
+              </svg>
+
+              <!-- Central MCT Hub -->
+              <div class="cn-hub" id="cn-hub">
+                <div class="cn-hub-glow"></div>
+                <div class="cn-hub-ring"></div>
+                <div class="cn-hub-core">
+                  <img src="/img/logo.jpeg" alt="MCT Hub" width="52" height="52" class="cn-hub-logo">
+                  <span class="cn-hub-label">MCT</span>
+                </div>
+              </div>
+
+              <!-- Node: Binance (top-left) -->
+              <div class="cn-node cn-node-binance" data-cn-step="2">
+                <div class="cn-node-icon">
+                  <svg width="22" height="22" viewBox="0 0 24 24" fill="none"><path d="M12 2L6.5 7.5 8.36 9.36 12 5.71l3.64 3.65L17.5 7.5 12 2zm-7.5 10L2 14.5 4.5 17l2.5-2.5L4.5 12zm15 0l-2.5 2.5L17.5 17l2.5-2.5L22 14.5 19.5 12zM12 8.29L7.54 12.75 9.4 14.6 12 12l2.6 2.6 1.86-1.85L12 8.29zM12 22l5.5-5.5-1.86-1.86L12 18.29l-3.64-3.65L6.5 16.5 12 22z" fill="#f0b90b"/></svg>
+                </div>
+                <span class="cn-node-name">Binance</span>
+                <span class="cn-node-tag">Exchange</span>
+              </div>
+
+              <!-- Node: Bitunix (top-right) -->
+              <div class="cn-node cn-node-bitunix" data-cn-step="2">
+                <div class="cn-node-icon">
+                  <span style="font-weight:700;font-size:1rem;color:#7c7fff;">BX</span>
+                </div>
+                <span class="cn-node-name">Bitunix</span>
+                <span class="cn-node-tag">Exchange</span>
+              </div>
+
+              <!-- Node: AI Brain (bottom-left) -->
+              <div class="cn-node cn-node-ai" data-cn-step="3">
+                <div class="cn-node-icon">
+                  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#a855f7" stroke-width="1.5"><path d="M12 2a4 4 0 0 0-4 4v2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8a2 2 0 0 0-2-2h-2V6a4 4 0 0 0-4-4z"/><circle cx="9" cy="14" r="1.5" fill="#a855f7"/><circle cx="15" cy="14" r="1.5" fill="#a855f7"/><path d="M9 18h6" stroke-linecap="round"/></svg>
+                </div>
+                <span class="cn-node-name">AI Brain</span>
+                <span class="cn-node-tag">Analysis</span>
+              </div>
+
+              <!-- Node: Your Wallet (bottom-right) -->
+              <div class="cn-node cn-node-wallet" data-cn-step="3">
+                <div class="cn-node-icon">
+                  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="1.5"><rect x="2" y="6" width="20" height="14" rx="2"/><path d="M2 10h20"/><circle cx="17" cy="15" r="1.5" fill="#22c55e"/></svg>
+                </div>
+                <span class="cn-node-name">Your Wallet</span>
+                <span class="cn-node-tag">Profits</span>
+              </div>
+
+            </div>
+          </div>
+
+          <!-- Section header overlay -->
+          <div class="cn-header">
+            <span class="landing-section-tag">The Network</span>
+            <h2 class="landing-section-title">Your Money. Our AI. Their Liquidity.</h2>
+            <p class="landing-section-sub">MCT connects your exchange accounts to our AI engine, scanning 40+ coins and executing trades automatically.</p>
+          </div>
+        </div>
+      </section>
+
+      <div class="landing-section-divider"></div>
 
       <!-- ── Social Proof ── -->
       <section class="landing-section landing-proof" data-animate>
@@ -177,6 +377,8 @@
         </div>
       </section>
 
+      <div class="landing-section-divider"></div>
+
       <!-- ── How It Works Steps ── -->
       <section class="landing-section" data-animate>
         <div class="landing-section-header">
@@ -205,6 +407,8 @@
         </div>
       </section>
 
+      <div class="landing-section-divider"></div>
+
       <!-- ── Features ── -->
       <section class="landing-section" id="features" data-animate>
         <div class="landing-section-header">
@@ -212,7 +416,7 @@
           <h2 class="landing-section-title">Why Traders Choose MCT</h2>
           <p class="landing-section-sub">Built for serious traders who want institutional-grade execution without the complexity.</p>
         </div>
-        <div class="landing-features">
+        <div class="landing-features" data-stagger>
           <div class="landing-feature">
             <div class="landing-feature-icon-wrap">
               <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--color-accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
@@ -388,13 +592,220 @@
             <a href="#pricing">Profit Split</a>
           </div>
         </div>
+        <div class="landing-footer-powered">
+          <span class="landing-footer-powered-label">Powered by</span>
+          <div class="landing-footer-powered-logos">
+            <a href="https://www.tradingview.com" target="_blank" rel="noopener" title="TradingView">
+              <svg width="24" height="24" viewBox="0 0 36 28" fill="none"><path d="M14 22V6h8v2h-6v14h-2zM24 6l6 16h-2.2l-1.5-4h-6.6l-1.5 4H16l6-16h2zm-3.5 10h5l-2.5-7-2.5 7z" fill="currentColor"/></svg>
+              <span>TradingView</span>
+            </a>
+            <a href="https://www.bitunix.com" target="_blank" rel="noopener" title="Bitunix">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><rect x="3" y="3" width="18" height="18" rx="4" stroke="currentColor" stroke-width="1.5"/><path d="M8 8h3v8H8V8zm5 0h3v8h-3V8z" fill="currentColor"/></svg>
+              <span>Bitunix</span>
+            </a>
+            <a href="https://www.binance.com" target="_blank" rel="noopener" title="Binance">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M12 2L9.5 4.5 12 7l2.5-2.5L12 2zM5.5 8.5L3 11l2.5 2.5L8 11 5.5 8.5zM18.5 8.5L16 11l2.5 2.5L21 11l-2.5-2.5zM12 9.5L9.5 12 12 14.5 14.5 12 12 9.5zM12 17l-2.5-2.5L7 17l5 5 5-5-2.5-2.5L12 17z" fill="currentColor"/></svg>
+              <span>Binance</span>
+            </a>
+            <a href="https://www.coingecko.com" target="_blank" rel="noopener" title="CoinGecko">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.5"/><circle cx="10" cy="10" r="2" fill="currentColor"/><circle cx="14.5" cy="10" r="1" fill="currentColor"/><path d="M9 15c1.5 1.5 4.5 1.5 6 0" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+              <span>CoinGecko</span>
+            </a>
+            <a href="https://www.coinbase.com" target="_blank" rel="noopener" title="Coinbase">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.5"/><path d="M14 10h-2a2 2 0 000 4h0a2 2 0 000-4z" fill="currentColor"/></svg>
+              <span>Coinbase</span>
+            </a>
+            <a href="https://metamask.io" target="_blank" rel="noopener" title="MetaMask">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M20 4l-8 5-1.5-3.5L20 4zM4 4l8 5 1.5-3.5L4 4zM18 16l-2 4-3-1 5-3zM6 16l2 4 3-1-5-3zM10 12l-2 2 4 1 4-1-2-2h-4z" stroke="currentColor" stroke-width="1" stroke-linejoin="round" fill="none"/></svg>
+              <span>MetaMask</span>
+            </a>
+          </div>
+        </div>
       </footer>
     </div>
 
     <!-- Landing page scripts -->
     <script>
     (function() {
-      /* -- Smooth scroll for anchor links -- */
+      var reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+      /* ═══════════════════════════════════════════════════
+         Particle Canvas Background
+         ═══════════════════════════════════════════════════ */
+      if (!reducedMotion) {
+        var canvas = document.getElementById('particle-canvas');
+        if (canvas) {
+          var ctx = canvas.getContext('2d');
+          var particles = [];
+          var PARTICLE_COUNT = 60;
+          var CONNECT_DIST = 140;
+          var mouseX = -9999, mouseY = -9999;
+
+          function resizeCanvas() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+          }
+          resizeCanvas();
+          window.addEventListener('resize', resizeCanvas, { passive: true });
+
+          for (var i = 0; i < PARTICLE_COUNT; i++) {
+            particles.push({
+              x: Math.random() * canvas.width,
+              y: Math.random() * canvas.height,
+              vx: (Math.random() - 0.5) * 0.4,
+              vy: (Math.random() - 0.5) * 0.4,
+              r: Math.random() * 2 + 0.5,
+              color: ['rgba(212,175,55,', 'rgba(232,200,74,', 'rgba(184,146,42,'][Math.floor(Math.random() * 3)]
+            });
+          }
+
+          document.addEventListener('mousemove', function(e) {
+            mouseX = e.clientX;
+            mouseY = e.clientY;
+          }, { passive: true });
+
+          function drawParticles() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            for (var i = 0; i < particles.length; i++) {
+              var p = particles[i];
+              p.x += p.vx;
+              p.y += p.vy;
+              if (p.x < 0 || p.x > canvas.width) p.vx *= -1;
+              if (p.y < 0 || p.y > canvas.height) p.vy *= -1;
+
+              /* Mouse repel */
+              var dx = p.x - mouseX, dy = p.y - mouseY;
+              var dist = Math.sqrt(dx * dx + dy * dy);
+              if (dist < 120) {
+                p.x += dx * 0.02;
+                p.y += dy * 0.02;
+              }
+
+              ctx.beginPath();
+              ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+              ctx.fillStyle = p.color + '0.4)';
+              ctx.fill();
+
+              /* Connection lines */
+              for (var j = i + 1; j < particles.length; j++) {
+                var p2 = particles[j];
+                var ddx = p.x - p2.x, ddy = p.y - p2.y;
+                var d = Math.sqrt(ddx * ddx + ddy * ddy);
+                if (d < CONNECT_DIST) {
+                  ctx.beginPath();
+                  ctx.moveTo(p.x, p.y);
+                  ctx.lineTo(p2.x, p2.y);
+                  ctx.strokeStyle = 'rgba(212,175,55,' + (0.06 * (1 - d / CONNECT_DIST)) + ')';
+                  ctx.lineWidth = 0.5;
+                  ctx.stroke();
+                }
+              }
+            }
+            requestAnimationFrame(drawParticles);
+          }
+          requestAnimationFrame(drawParticles);
+        }
+      }
+
+      /* ═══════════════════════════════════════════════════
+         Typing Effect for Hero Tagline
+         ═══════════════════════════════════════════════════ */
+      var taglineEl = document.getElementById('hero-tagline');
+      if (taglineEl) {
+        var fullText = 'AI-powered trading engine scans 40+ coins 24/7, executing high-probability futures trades on your exchange. No monthly fees \u2014 we only earn when you profit. 60/40 split.';
+        if (reducedMotion) {
+          taglineEl.textContent = fullText;
+        } else {
+          var charIndex = 0;
+          var cursor = document.createElement('span');
+          cursor.className = 'typing-cursor';
+          taglineEl.appendChild(cursor);
+          function typeChar() {
+            if (charIndex < fullText.length) {
+              taglineEl.insertBefore(document.createTextNode(fullText[charIndex]), cursor);
+              charIndex++;
+              setTimeout(typeChar, 18);
+            } else {
+              setTimeout(function() { cursor.remove(); }, 2000);
+            }
+          }
+          setTimeout(typeChar, 600);
+        }
+      }
+
+      /* ═══════════════════════════════════════════════════
+         Scroll Progress Bar
+         ═══════════════════════════════════════════════════ */
+      var progressBar = document.getElementById('scroll-progress');
+      if (progressBar && !reducedMotion) {
+        window.addEventListener('scroll', function() {
+          var landing = document.getElementById('section-landing');
+          if (!landing || landing.classList.contains('hidden')) return;
+          var h = document.documentElement.scrollHeight - window.innerHeight;
+          var pct = h > 0 ? window.scrollY / h : 0;
+          progressBar.style.transform = 'scaleX(' + Math.min(pct, 1) + ')';
+        }, { passive: true });
+      }
+
+      /* ═══════════════════════════════════════════════════
+         Mouse-follow Glow on Hero
+         ═══════════════════════════════════════════════════ */
+      if (!reducedMotion) {
+        var glow = document.getElementById('hero-mouse-glow');
+        var heroSection = document.querySelector('.landing-hero');
+        if (glow && heroSection) {
+          heroSection.addEventListener('mousemove', function(e) {
+            var rect = heroSection.getBoundingClientRect();
+            glow.style.left = (e.clientX - rect.left) + 'px';
+            glow.style.top = (e.clientY - rect.top) + 'px';
+          }, { passive: true });
+        }
+      }
+
+      /* ═══════════════════════════════════════════════════
+         3D Tilt on Hero Logo (mouse reactive)
+         ═══════════════════════════════════════════════════ */
+      if (!reducedMotion) {
+        var heroVisual = document.getElementById('hero-visual');
+        var heroInner = document.getElementById('hero-visual-inner');
+        if (heroVisual && heroInner) {
+          heroVisual.addEventListener('mousemove', function(e) {
+            var rect = heroVisual.getBoundingClientRect();
+            var x = (e.clientX - rect.left) / rect.width - 0.5;
+            var y = (e.clientY - rect.top) / rect.height - 0.5;
+            heroInner.style.transform = 'rotateY(' + (x * 15) + 'deg) rotateX(' + (-y * 15) + 'deg)';
+          }, { passive: true });
+          heroVisual.addEventListener('mouseleave', function() {
+            heroInner.style.transform = 'rotateY(0deg) rotateX(0deg)';
+          });
+        }
+      }
+
+      /* ═══════════════════════════════════════════════════
+         Feature Card Tilt + Glow Follow
+         ═══════════════════════════════════════════════════ */
+      if (!reducedMotion) {
+        document.querySelectorAll('.landing-feature').forEach(function(card) {
+          card.addEventListener('mousemove', function(e) {
+            var rect = card.getBoundingClientRect();
+            var x = e.clientX - rect.left;
+            var y = e.clientY - rect.top;
+            var cx = rect.width / 2, cy = rect.height / 2;
+            var rotateX = ((y - cy) / cy) * -8;
+            var rotateY = ((x - cx) / cx) * 8;
+            card.style.transform = 'perspective(600px) rotateX(' + rotateX + 'deg) rotateY(' + rotateY + 'deg) translateY(-6px)';
+            card.style.setProperty('--glow-x', x + 'px');
+            card.style.setProperty('--glow-y', y + 'px');
+          }, { passive: true });
+          card.addEventListener('mouseleave', function() {
+            card.style.transform = '';
+          });
+        });
+      }
+
+      /* ═══════════════════════════════════════════════════
+         Smooth Scroll for Anchor Links
+         ═══════════════════════════════════════════════════ */
       document.querySelectorAll('#section-landing a[href^="#"]').forEach(function(anchor) {
         anchor.addEventListener('click', function(e) {
           var target = document.querySelector(this.getAttribute('href'));
@@ -405,7 +816,9 @@
         });
       });
 
-      /* -- Mobile nav toggle -- */
+      /* ═══════════════════════════════════════════════════
+         Mobile Nav Toggle
+         ═══════════════════════════════════════════════════ */
       var toggle = document.querySelector('.landing-nav-toggle');
       var mobileMenu = document.querySelector('.landing-nav-mobile');
       if (toggle && mobileMenu) {
@@ -423,7 +836,9 @@
         });
       }
 
-      /* -- Navbar background on scroll -- */
+      /* ═══════════════════════════════════════════════════
+         Navbar Background on Scroll
+         ═══════════════════════════════════════════════════ */
       var nav = document.getElementById('landing-nav');
       if (nav) {
         window.addEventListener('scroll', function() {
@@ -431,9 +846,11 @@
         }, { passive: true });
       }
 
-      /* -- Intersection Observer for fade-in -- */
-      var animatedEls = document.querySelectorAll('[data-animate]');
-      if ('IntersectionObserver' in window) {
+      /* ═══════════════════════════════════════════════════
+         IntersectionObserver — Fade-in + Stagger
+         ═══════════════════════════════════════════════════ */
+      var animatedEls = document.querySelectorAll('[data-animate], [data-stagger]');
+      if ('IntersectionObserver' in window && !reducedMotion) {
         var observer = new IntersectionObserver(function(entries) {
           entries.forEach(function(entry) {
             if (entry.isIntersecting) {
@@ -447,7 +864,9 @@
         animatedEls.forEach(function(el) { el.classList.add('is-visible'); });
       }
 
-      /* -- Animated stat counters -- */
+      /* ═══════════════════════════════════════════════════
+         Animated Stat Counters
+         ═══════════════════════════════════════════════════ */
       var counters = document.querySelectorAll('[data-count]');
       if ('IntersectionObserver' in window && counters.length) {
         var counterObserver = new IntersectionObserver(function(entries) {
@@ -456,7 +875,6 @@
               var el = entry.target;
               var target = parseInt(el.getAttribute('data-count'), 10);
               var duration = 2000;
-              var start = 0;
               var startTime = null;
               function step(timestamp) {
                 if (!startTime) startTime = timestamp;
@@ -473,7 +891,25 @@
         counters.forEach(function(c) { counterObserver.observe(c); });
       }
 
-      /* -- FAQ accordion -- */
+      /* ═══════════════════════════════════════════════════
+         Parallax on Scroll (subtle)
+         ═══════════════════════════════════════════════════ */
+      if (!reducedMotion) {
+        var shapes = document.querySelectorAll('.landing-shape');
+        if (shapes.length) {
+          window.addEventListener('scroll', function() {
+            var scrollY = window.scrollY;
+            shapes.forEach(function(shape, i) {
+              var speed = 0.02 + (i * 0.008);
+              shape.style.transform = 'translateY(' + (-scrollY * speed) + 'px)';
+            });
+          }, { passive: true });
+        }
+      }
+
+      /* ═══════════════════════════════════════════════════
+         FAQ Accordion
+         ═══════════════════════════════════════════════════ */
       document.querySelectorAll('.landing-faq-item').forEach(function(item) {
         item.addEventListener('toggle', function() {
           if (this.open) {
@@ -484,9 +920,125 @@
         });
       });
 
-      /* -- Respect prefers-reduced-motion -- */
-      if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
-        document.querySelectorAll('[data-animate]').forEach(function(el) {
+      /* ═══════════════════════════════════════════════════
+         Crypto Network — Scroll-Driven Animation
+         ═══════════════════════════════════════════════════ */
+      (function initCryptoNetwork() {
+        var section = document.getElementById('crypto-network');
+        var network = document.getElementById('cn-network');
+        if (!section || !network) return;
+
+        var hub = network.querySelector('.cn-hub');
+        var nodes = network.querySelectorAll('.cn-node');
+        var lines = network.querySelectorAll('.cn-line');
+        var lineGlows = network.querySelectorAll('.cn-line-glow');
+        var pulseDots = network.querySelectorAll('.cn-pulse-dot');
+        var header = section.querySelector('.cn-header');
+
+        // Set initial hidden state
+        hub.style.opacity = '0';
+        hub.style.transform = 'translate(-50%,-50%) scale(0.3)';
+        nodes.forEach(function(n) { n.style.opacity = '0'; n.style.transform = 'scale(0.5) translateY(20px)'; });
+        lines.forEach(function(l) {
+          var len = l.getTotalLength ? l.getTotalLength() : 300;
+          l.style.strokeDasharray = len;
+          l.style.strokeDashoffset = len;
+          l.style.opacity = '0';
+        });
+        lineGlows.forEach(function(g) {
+          var len = g.getTotalLength ? g.getTotalLength() : 300;
+          g.style.strokeDasharray = len;
+          g.style.strokeDashoffset = len;
+          g.style.opacity = '0';
+        });
+        pulseDots.forEach(function(d) { d.style.opacity = '0'; });
+        if (header) { header.style.opacity = '0'; header.style.transform = 'translateY(20px)'; }
+
+        // Web Animations API helper — bypasses CSS transition compositing bugs
+        function fadeIn(el, props, dur, easing, fill) {
+          var from = {};
+          var to = {};
+          for (var k in props) { from[k] = getComputedStyle(el)[k] || '0'; to[k] = props[k]; }
+          var anim = el.animate([from, to], { duration: dur, easing: easing || 'ease', fill: fill || 'forwards' });
+          anim.onfinish = function() { for (var k in props) el.style[k] = props[k]; };
+          return anim;
+        }
+
+        function animateIn() {
+          // Phase 1: Header + Hub
+          if (header) {
+            fadeIn(header, { opacity: '1', transform: 'translateY(0)' }, 800);
+          }
+          fadeIn(hub, { opacity: '1', transform: 'translate(-50%,-50%) scale(1)' }, 800, 'cubic-bezier(0.34,1.56,0.64,1)');
+
+          // Phase 2: Lines extend (400ms delay)
+          setTimeout(function() {
+            lines.forEach(function(l) {
+              fadeIn(l, { strokeDashoffset: '0', opacity: '1' }, 1200);
+            });
+            lineGlows.forEach(function(g) {
+              fadeIn(g, { strokeDashoffset: '0', opacity: '0.4' }, 1200);
+            });
+          }, 400);
+
+          // Phase 3: Exchange nodes (800ms delay, staggered)
+          var step2Nodes = [];
+          var step3Nodes = [];
+          nodes.forEach(function(n) {
+            var step = parseInt(n.getAttribute('data-cn-step'), 10);
+            if (step === 2) step2Nodes.push(n); else step3Nodes.push(n);
+          });
+
+          setTimeout(function() {
+            step2Nodes.forEach(function(n, i) {
+              setTimeout(function() {
+                fadeIn(n, { opacity: '1', transform: 'scale(1) translateY(0)' }, 600, 'cubic-bezier(0.34,1.56,0.64,1)');
+              }, i * 150);
+            });
+          }, 800);
+
+          // Phase 4: AI + Wallet nodes (1200ms)
+          setTimeout(function() {
+            step3Nodes.forEach(function(n, i) {
+              setTimeout(function() {
+                fadeIn(n, { opacity: '1', transform: 'scale(1) translateY(0)' }, 600, 'cubic-bezier(0.34,1.56,0.64,1)');
+              }, i * 150);
+            });
+          }, 1200);
+
+          // Phase 5: Pulse dots (1600ms)
+          setTimeout(function() {
+            pulseDots.forEach(function(d) {
+              fadeIn(d, { opacity: '0.9' }, 500);
+            });
+          }, 1600);
+        }
+
+        if (!reducedMotion && 'IntersectionObserver' in window) {
+          var obs = new IntersectionObserver(function(entries) {
+            if (entries[0].isIntersecting) {
+              animateIn();
+              obs.unobserve(section);
+            }
+          }, { threshold: 0.15 });
+          obs.observe(section);
+        } else {
+          // Show everything immediately
+          hub.style.opacity = '1';
+          hub.style.transform = 'translate(-50%,-50%) scale(1)';
+          nodes.forEach(function(n) { n.style.opacity = '1'; n.style.transform = 'scale(1) translateY(0)'; });
+          lines.forEach(function(l) { l.style.opacity = '1'; l.style.strokeDashoffset = '0'; });
+          lineGlows.forEach(function(g) { g.style.opacity = '0.4'; g.style.strokeDashoffset = '0'; });
+          pulseDots.forEach(function(d) { d.style.opacity = '0.9'; });
+          if (header) { header.style.opacity = '1'; header.style.transform = 'translateY(0)'; }
+        }
+      })();
+
+      /* ═══════════════════════════════════════════════════
+         Reduced Motion Fallback
+         ═══════════════════════════════════════════════════ */
+      if (reducedMotion) {
+        document.querySelectorAll('[data-animate], [data-stagger]').forEach(function(el) {
           el.classList.add('is-visible');
         });
       }
@@ -518,7 +1070,10 @@
         </div>
         <div class="form-group">
           <label class="form-label" for="login-password">Password</label>
-          <input class="form-input" type="password" id="login-password" placeholder="Your password" required autocomplete="current-password" minlength="6">
+          <div class="pw-wrap">
+            <input class="form-input" type="password" id="login-password" placeholder="Your password" required autocomplete="current-password" minlength="6">
+            <button type="button" class="pw-toggle" tabindex="-1" aria-label="Show password"></button>
+          </div>
         </div>
         <div style="display:flex;justify-content:space-between;align-items:center;margin-top:var(--space-2);">
           <label style="display:flex;align-items:center;gap:var(--space-2);font-size:var(--text-xs);color:var(--color-text-muted);cursor:pointer;">
@@ -557,7 +1112,10 @@
         </div>
         <div class="form-group">
           <label class="form-label" for="signup-password">Password</label>
-          <input class="form-input" type="password" id="signup-password" placeholder="Min. 6 characters" required autocomplete="new-password" minlength="6">
+          <div class="pw-wrap">
+            <input class="form-input" type="password" id="signup-password" placeholder="Min. 6 characters" required autocomplete="new-password" minlength="6">
+            <button type="button" class="pw-toggle" tabindex="-1" aria-label="Show password"></button>
+          </div>
         </div>
         <div class="form-group">
           <label class="form-label" for="signup-referral">Referral Code (optional)</label>
@@ -593,7 +1151,6 @@
         <button class="nav-tab" role="tab" aria-selected="false" data-tab="keys">API Keys</button>
         <button class="nav-tab" role="tab" aria-selected="false" data-tab="cashwallet">Cash Wallet</button>
         <button class="nav-tab" role="tab" aria-selected="false" data-tab="chart">Chart</button>
-        <button class="nav-tab" role="tab" aria-selected="false" data-tab="logs" id="logs-tab">Logs</button>
         <button class="nav-tab" role="tab" aria-selected="false" data-tab="profile">Profile</button>
         <button class="nav-tab hidden" role="tab" aria-selected="false" data-tab="admin" id="admin-tab">Admin</button>
       </nav>
@@ -602,6 +1159,41 @@
            Dashboard Tab
            ==================================================== -->
       <section id="tab-dashboard" role="tabpanel" aria-label="Dashboard">
+        <!-- Mini Crypto Network Widget -->
+        <div class="cn-mini-widget" id="cn-mini-widget">
+          <div class="cn-mini-header">
+            <span class="cn-mini-title">Network Status</span>
+            <span class="cn-mini-status"><span class="cn-mini-dot"></span>Live</span>
+          </div>
+          <div class="cn-mini-stage">
+            <svg class="cn-mini-lines" viewBox="0 0 300 200" preserveAspectRatio="xMidYMid meet" aria-hidden="true">
+              <path d="M150,100 C110,100 70,60 40,50" stroke="rgba(240,185,11,0.4)" fill="none" stroke-width="1.5"/>
+              <path d="M150,100 C190,100 230,60 260,50" stroke="rgba(124,127,255,0.4)" fill="none" stroke-width="1.5"/>
+              <path d="M150,100 C120,120 80,150 50,160" stroke="rgba(168,85,247,0.3)" fill="none" stroke-width="1.5"/>
+              <path d="M150,100 C180,120 220,150 250,160" stroke="rgba(34,197,94,0.4)" fill="none" stroke-width="1.5"/>
+              <circle r="3" fill="#f0b90b" opacity="0.8">
+                <animateMotion dur="2s" repeatCount="indefinite" path="M150,100 C110,100 70,60 40,50"/>
+              </circle>
+              <circle r="3" fill="#7c7fff" opacity="0.8">
+                <animateMotion dur="2.4s" repeatCount="indefinite" path="M150,100 C190,100 230,60 260,50"/>
+              </circle>
+              <circle r="2.5" fill="#a855f7" opacity="0.6">
+                <animateMotion dur="2.6s" repeatCount="indefinite" path="M150,100 C120,120 80,150 50,160"/>
+              </circle>
+              <circle r="3" fill="#22c55e" opacity="0.8">
+                <animateMotion dur="2.2s" repeatCount="indefinite" path="M150,100 C180,120 220,150 250,160"/>
+              </circle>
+            </svg>
+            <div class="cn-mini-hub">
+              <img src="/img/logo.jpeg" alt="" width="28" height="28" style="border-radius:50%;">
+            </div>
+            <span class="cn-mini-node cn-mini-n1" title="Binance" style="color:#f0b90b;">BN</span>
+            <span class="cn-mini-node cn-mini-n2" title="Bitunix" style="color:#7c7fff;">BX</span>
+            <span class="cn-mini-node cn-mini-n3" title="AI Brain" style="color:#a855f7;">AI</span>
+            <span class="cn-mini-node cn-mini-n4" title="Wallet" style="color:#22c55e;">W</span>
+          </div>
+        </div>
+
         <!-- Cash Wallet on Dashboard -->
         <div id="dash-cash-wallet" class="summary-grid" style="margin-bottom:var(--space-4);">
           <div class="summary-card" style="border-left:3px solid var(--color-success);">
@@ -625,6 +1217,26 @@
 
         <!-- Exchange Wallets -->
         <div id="wallets-grid" class="summary-grid" style="margin-bottom:var(--space-4);"></div>
+
+        <!-- Kronos AI Predictions Panel -->
+        <div id="kronos-panel" style="margin-bottom:var(--space-4);border:1px solid var(--color-accent);border-radius:var(--radius-md);overflow:hidden;background:var(--color-bg-raised);box-shadow: 0 0 20px rgba(139, 92, 246, 0.15);border-left:4px solid var(--color-accent);">
+          <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;background:linear-gradient(90deg, var(--color-bg-raised), var(--color-bg));border-bottom:1px solid var(--color-border-muted);">
+            <div style="display:flex;align-items:center;gap:8px;">
+              <span style="font-size:1.2rem;filter:drop-shadow(0 0 6px var(--color-accent));">🔮</span>
+              <span style="font-weight:800;font-size:0.95rem;color:var(--color-text);letter-spacing:0.8px;text-transform:uppercase;">Kronos AI Predictions</span>
+              <span id="kronos-count" style="font-size:0.7rem;color:var(--color-accent);background:rgba(139, 92, 246, 0.1);padding:2px 8px;border-radius:10px;border:1px solid rgba(139, 92, 246, 0.3);font-weight:700;"></span>
+            </div>
+            <button class="btn btn-sm" style="font-size:0.7rem;padding:4px 12px;min-height:24px;background:var(--color-accent);color:#fff;border:none;cursor:pointer;transition:all 0.2s;font-weight:600;box-shadow: 0 2px 4px rgba(0,0,0,0.2);" onclick="window.CryptoBot.loadKronosPredictions()">Refresh</button>
+          </div>
+          <div id="kronos-summary" style="display:flex;gap:12px;padding:10px 16px;background:var(--color-bg);border-bottom:1px solid var(--color-border-muted);flex-wrap:wrap;">
+            <span id="kronos-bull" style="font-size:0.8rem;color:var(--color-success);font-weight:700;background:rgba(0,255,0,0.08);padding:3px 10px;border-radius:6px;border:1px solid rgba(0,255,0,0.2);">📈 0 Bullish</span>
+            <span id="kronos-bear" style="font-size:0.8rem;color:var(--color-danger);font-weight:700;background:rgba(255,0,0,0.08);padding:3px 10px;border-radius:6px;border:1px solid rgba(255,0,0,0.2);">📉 0 Bearish</span>
+            <span id="kronos-neutral" style="font-size:0.8rem;color:var(--color-text-secondary);font-weight:700;background:rgba(128,128,128,0.08);padding:3px 10px;border-radius:6px;border:1px solid rgba(128,128,128,0.2);">➖ 0 Neutral</span>
+          </div>
+          <div id="kronos-cards-container" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px;padding:16px;background:var(--color-bg);max-height:600px;overflow-y:auto;">
+            <!-- Cards populated by JS -->
+          </div>
+        </div>
 
         <div id="summary-grid" class="summary-grid">
           <div class="summary-card">
@@ -719,6 +1331,27 @@
           <button class="btn btn-sm period-btn" data-period="1y">1 Year</button>
           <button class="btn btn-sm" id="btn-export-csv" style="margin-left:auto;background:var(--color-accent);color:#fff;padding:4px 12px;" title="Download trade history as CSV">Download CSV</button>
         </div>
+        <!-- Token Selector — Top 50 by volume with on/off switches -->
+        <div style="margin-bottom:var(--space-4);">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--space-2);">
+            <h3 style="margin:0;font-size:0.95rem;color:var(--color-text);">My Tokens <span id="watch-count" style="font-size:0.75rem;color:var(--color-accent);">(0 active)</span></h3>
+            <div style="display:flex;gap:6px;">
+              <button class="btn btn-sm" style="font-size:0.7rem;background:var(--color-success);color:#000;" onclick="window.CryptoBot.watchAll(true)">All ON</button>
+              <button class="btn btn-sm" style="font-size:0.7rem;background:var(--color-danger);color:#fff;" onclick="window.CryptoBot.watchAll(false)">All OFF</button>
+              <button class="btn btn-sm" style="font-size:0.7rem;border:1px solid var(--color-accent);color:var(--color-accent);background:rgba(212,175,55,0.08);" onclick="window.CryptoBot.loadSignalBoard()">Refresh</button>
+            </div>
+          </div>
+          <div id="signal-board" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(105px,1fr));gap:4px;margin-bottom:var(--space-3);">
+            <div style="color:var(--color-text-muted);font-size:0.8rem;grid-column:1/-1;text-align:center;padding:var(--space-2);">Loading tokens...</div>
+          </div>
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--space-2);">
+            <h3 style="margin:0;font-size:0.95rem;color:var(--color-text);">Today's Results</h3>
+          </div>
+          <div id="daily-results" style="margin-bottom:var(--space-3);">
+            <div style="color:var(--color-text-muted);font-size:0.8rem;text-align:center;padding:var(--space-2);">No results yet today</div>
+          </div>
+        </div>
+
         <div id="trades-wrapper">
           <div class="table-wrapper">
             <table class="data-table">
@@ -726,12 +1359,12 @@
                 <tr>
                   <th>Date</th>
                   <th>Symbol</th>
-                  <th>Direction</th>
+                  <th>Dir</th>
                   <th>Entry</th>
                   <th>Exit</th>
-                  <th>SL</th>
-                  <th>TP</th>
-                  <th>P&amp;L</th>
+                  <th>Gross P&amp;L</th>
+                  <th>Fee</th>
+                  <th>Net P&amp;L</th>
                   <th>Status</th>
                   <th>Platform</th>
                 </tr>
@@ -783,9 +1416,10 @@
         <!-- Wallet Summary -->
         <div class="summary-grid" style="margin-bottom:var(--space-5);">
           <div class="summary-card" style="border-left:3px solid var(--color-success);">
-            <span class="summary-card-label">Cash Wallet Balance <span class="tip-btn">?<span class="tip-text">Your total USDT balance. Includes top-ups and referral commissions. Use this to pay platform fees or withdraw.</span></span></span>
+            <span class="summary-card-label">Cash Wallet Balance <span class="tip-btn">?<span class="tip-text">Your USDT balance from top-ups and referral commissions. Trading profits (60%) stay in your Binance/Bitunix account.</span></span></span>
             <span id="cw-cash" class="summary-card-value text-mono" style="color:var(--color-success);font-size:1.3rem;">$0.00</span>
-            <span style="font-size:0.75rem;color:var(--color-text-muted);">Top-ups + commissions combined</span>
+            <span style="font-size:0.75rem;color:var(--color-text-muted);">Top-ups + referral commissions</span>
+            <div id="cw-breakdown"></div>
           </div>
           <div class="summary-card" style="border-left:3px solid var(--color-accent);">
             <span class="summary-card-label">Commission Earned <span class="tip-btn">?<span class="tip-text">Total referral commission earned from your referrals' weekly profits. Automatically added to your cash wallet.</span></span></span>
@@ -905,7 +1539,7 @@
       </section>
 
       <section id="tab-logs" class="hidden" role="tabpanel" aria-label="Logs">
-        <h2 class="section-heading">Bot Live Logs <span class="tip-btn">?<span class="tip-text">Real-time logs from the trading bot. Filter by category to see scans, trades, AI learning, sentiment analysis, and errors.</span></span></h2>
+        <h2 class="section-heading">Bot Logs <span class="tip-btn">?<span class="tip-text">Real-time logs from the trading bot. Filter by category to see scans, trades, AI learning, sentiment analysis, and errors.</span></span></h2>
 
         <div style="display:flex;gap:var(--space-2);margin-bottom:var(--space-3);flex-wrap:wrap;">
           <button class="btn btn-sm log-filter-btn active" data-log-cat="all" onclick="window.CryptoBot.filterLogs('all',this)">All</button>
@@ -959,15 +1593,24 @@
           <div style="display:flex;flex-direction:column;gap:var(--space-3);max-width:400px;">
             <div>
               <label class="form-label" for="profile-current-pw">Current Password</label>
-              <input class="form-input" type="password" id="profile-current-pw" placeholder="Current password" autocomplete="current-password">
+              <div class="pw-wrap">
+                <input class="form-input" type="password" id="profile-current-pw" placeholder="Current password" autocomplete="current-password">
+                <button type="button" class="pw-toggle" tabindex="-1" aria-label="Show password"></button>
+              </div>
             </div>
             <div>
               <label class="form-label" for="profile-new-pw">New Password</label>
-              <input class="form-input" type="password" id="profile-new-pw" placeholder="Min. 6 characters" autocomplete="new-password" minlength="6">
+              <div class="pw-wrap">
+                <input class="form-input" type="password" id="profile-new-pw" placeholder="Min. 6 characters" autocomplete="new-password" minlength="6">
+                <button type="button" class="pw-toggle" tabindex="-1" aria-label="Show password"></button>
+              </div>
             </div>
             <div>
               <label class="form-label" for="profile-confirm-pw">Confirm New Password</label>
-              <input class="form-input" type="password" id="profile-confirm-pw" placeholder="Confirm new password" autocomplete="new-password" minlength="6">
+              <div class="pw-wrap">
+                <input class="form-input" type="password" id="profile-confirm-pw" placeholder="Confirm new password" autocomplete="new-password" minlength="6">
+                <button type="button" class="pw-toggle" tabindex="-1" aria-label="Show password"></button>
+              </div>
             </div>
           </div>
           <button class="btn btn-primary btn-sm" style="margin-top:var(--space-3);" onclick="window.CryptoBot.changePassword()">Change Password</button>
@@ -975,13 +1618,129 @@
       </section>
 
       <section id="tab-admin" class="hidden" role="tabpanel" aria-label="Admin">
-        <h2 class="section-heading">Admin Panel <span class="tip-btn">?<span class="tip-text">Admin-only controls for managing users, platform settings, global tokens, risk levels, and weekly earnings settlement.</span></span></h2>
+        <h2 class="section-heading">Admin Panel</h2>
 
-        <div style="margin-bottom:var(--space-4);">
-          <button class="btn btn-sm" id="btn-admin-csv" style="background:var(--color-accent);color:#fff;padding:6px 16px;" onclick="window.location.href='/api/admin/trades/csv'">Download All Trades CSV</button>
+        <!-- Admin Sub-Tabs -->
+        <nav class="admin-subtabs" role="tablist">
+          <button class="admin-subtab active" data-admintab="earnings" onclick="window.CryptoBot.switchAdminTab('earnings')">Earnings</button>
+          <button class="admin-subtab" data-admintab="users" onclick="window.CryptoBot.switchAdminTab('users')">Users</button>
+          <button class="admin-subtab" data-admintab="tokens" onclick="window.CryptoBot.switchAdminTab('tokens')">Tokens</button>
+          <button class="admin-subtab" data-admintab="settings" onclick="window.CryptoBot.switchAdminTab('settings')">Settings</button>
+          <button class="admin-subtab" data-admintab="tools" onclick="window.CryptoBot.switchAdminTab('tools')">Tools</button>
+          <a href="/emulator.html" class="admin-subtab" style="text-decoration:none;color:inherit;display:inline-flex;align-items:center;gap:4px" target="_blank">🎮 Trading Floor</a>
+        </nav>
+
+        <!-- ═══════════════════════════════════════════
+             TAB: Earnings
+             ═══════════════════════════════════════════ -->
+        <div id="admin-tab-earnings" class="admin-tab-panel">
+          <div id="admin-weekly-summary" class="summary-grid" style="margin-bottom:var(--space-4);">
+            <div class="summary-card" style="border-left:3px solid var(--color-success);">
+              <span class="summary-card-label">Net P&L (All Users)</span>
+              <span id="awe-total-net" class="summary-card-value text-mono" style="font-size:1.2rem;">--</span>
+            </div>
+            <div class="summary-card" style="border-left:3px solid var(--color-accent);">
+              <span class="summary-card-label">Admin Share</span>
+              <span id="awe-admin-share" class="summary-card-value text-mono" style="color:var(--color-accent);font-size:1.2rem;">--</span>
+            </div>
+            <div class="summary-card" style="border-left:3px solid #d4af37;">
+              <span class="summary-card-label">User Share</span>
+              <span id="awe-user-share" class="summary-card-value text-mono" style="color:#d4af37;font-size:1.2rem;">--</span>
+            </div>
+          </div>
+          <div style="margin-bottom:var(--space-3);padding:var(--space-3);border:2px solid #ef4444;border-radius:var(--radius-lg);background:rgba(239,68,68,0.05);">
+            <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:8px;">
+              <strong style="color:#ef4444;font-size:0.9rem;">Emergency Close Positions</strong>
+              <div style="display:flex;align-items:center;gap:6px;">
+                <button class="btn btn-sm" style="font-size:0.75rem;background:transparent;color:#ef4444;border:1px solid #ef4444;padding:4px 12px;" onclick="window.CryptoBot.loadOpenPositions()">Refresh</button>
+                <button class="btn btn-sm" style="font-size:0.75rem;background:#ef4444;color:#fff;border:none;font-weight:700;padding:4px 12px;" onclick="window.CryptoBot.emergencyCloseAll()">CLOSE ALL</button>
+                <span id="emergency-stop-status" style="font-size:0.75rem;color:var(--color-text-muted);"></span>
+              </div>
+            </div>
+            <div id="open-positions-list" style="font-size:0.8rem;color:var(--color-text-muted);">Click Refresh to load open positions</div>
+          </div>
+          <div style="margin-bottom:var(--space-3);">
+            <button class="btn btn-sm" style="font-size:0.75rem;" onclick="window.CryptoBot.adminFixTrades()">Fix Corrupted Trades</button>
+            <span id="fix-trades-status" style="font-size:0.75rem;color:var(--color-text-muted);margin-left:8px;"></span>
+            <button class="btn btn-danger btn-sm" style="font-size:0.75rem;margin-left:12px;" onclick="window.CryptoBot.adminClearTestData()">Clear Test Data</button>
+            <span id="clear-data-status" style="font-size:0.75rem;color:var(--color-text-muted);margin-left:8px;"></span>
+          </div>
+          <div id="admin-earnings-per-user" style="margin-bottom:var(--space-4);"></div>
         </div>
 
-        <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Platform Settings <span class="tip-btn">?<span class="tip-text">Global settings that apply to the entire platform. Configure referral tiers, USDT addresses, and commission percentages.</span></span></h3>
+        <!-- ═══════════════════════════════════════════
+             TAB: Users
+             ═══════════════════════════════════════════ -->
+        <div id="admin-tab-users" class="admin-tab-panel hidden">
+          <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Users</h3>
+          <div class="table-wrap" style="margin-bottom:var(--space-5);overflow-x:auto;">
+            <table class="data-table" id="admin-users-table">
+              <thead><tr><th>Email</th><th>Keys</th><th>Wallet</th><th>Referral</th><th>Joined</th><th>Payment</th><th>Action</th></tr></thead>
+              <tbody id="admin-users-tbody"></tbody>
+            </table>
+          </div>
+          <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Pending Payments</h3>
+          <div class="table-wrap" style="margin-bottom:var(--space-5);">
+            <table class="data-table">
+              <thead><tr><th>User</th><th>Amount</th><th>Method</th><th>Proof</th><th>Date</th><th>Action</th></tr></thead>
+              <tbody id="admin-subs-tbody"></tbody>
+            </table>
+          </div>
+          <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Pending Withdrawals</h3>
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead><tr><th>User</th><th>Amount</th><th>Bank</th><th>Acc No.</th><th>Name</th><th>Date</th><th>Action</th></tr></thead>
+              <tbody id="admin-wd-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════
+             TAB: Tokens
+             ═══════════════════════════════════════════ -->
+        <div id="admin-tab-tokens" class="admin-tab-panel hidden">
+          <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Token Board</h3>
+          <div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-4);margin-bottom:var(--space-4);">
+            <div style="display:flex;gap:var(--space-2);align-items:end;margin-bottom:var(--space-3);flex-wrap:wrap;">
+              <div class="form-group" style="margin-bottom:0;flex:1;min-width:140px;">
+                <label class="form-label">Add Token</label>
+                <input class="form-input text-mono" type="text" id="admin-board-symbol" placeholder="BTCUSDT" style="text-transform:uppercase;">
+              </div>
+              <div class="form-group" style="margin-bottom:0;width:100px;">
+                <label class="form-label">Risk</label>
+                <select class="form-input" id="admin-board-risk">
+                  <option value="">None</option>
+                  <option value="popular">Popular</option>
+                  <option value="low">Low</option>
+                  <option value="medium">Med</option>
+                  <option value="high">High</option>
+                </select>
+              </div>
+              <div class="form-group" style="margin-bottom:0;width:70px;">
+                <label class="form-label">Lev</label>
+                <input class="form-input text-mono" type="number" id="admin-board-lev" value="20" min="1" max="125">
+              </div>
+              <button class="btn btn-primary btn-sm" onclick="window.CryptoBot.adminAddTokenBoard()">Add</button>
+            </div>
+            <div style="display:flex;gap:var(--space-2);margin-bottom:var(--space-3);flex-wrap:wrap;">
+              <button class="btn btn-sm" style="background:var(--color-accent);color:#000;font-weight:600;" onclick="window.CryptoBot.adminPopulateTop50()">Auto Top 50</button>
+              <button class="btn btn-sm" style="border:1px solid var(--color-accent);color:var(--color-accent);background:rgba(212,175,55,0.08);" onclick="window.CryptoBot.adminLoadTokenBoard()">Refresh</button>
+              <span id="admin-board-stats" style="font-size:0.75rem;color:var(--color-text-muted);align-self:center;"></span>
+            </div>
+            <div class="table-wrap" style="max-height:600px;overflow-y:auto;">
+              <table class="data-table" style="font-size:0.8rem;">
+                <thead style="position:sticky;top:0;z-index:1;"><tr><th>Signal</th><th>Symbol</th><th>Price</th><th>24h</th><th>Volume</th><th>Risk</th><th>Lev</th><th>Active</th><th></th></tr></thead>
+                <tbody id="admin-board-tbody"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════
+             TAB: Settings
+             ═══════════════════════════════════════════ -->
+        <div id="admin-tab-settings" class="admin-tab-panel hidden">
+          <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Platform Settings <span class="tip-btn">?<span class="tip-text">Global settings that apply to the entire platform. Configure referral tiers, USDT addresses, and commission percentages.</span></span></h3>
         <div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-4);margin-bottom:var(--space-5);">
           <div class="settings-grid">
             <div class="form-group" style="margin-bottom:0">
@@ -1027,8 +1786,7 @@
           <button class="btn btn-primary btn-sm" style="margin-top:var(--space-3);" onclick="window.CryptoBot.saveAdminSettings()">Save Settings</button>
         </div>
 
-        <!-- Risk Level Settings -->
-        <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Risk Level Settings <span class="tip-btn">?<span class="tip-text">Create risk presets (Low/Medium/High) that users can pick. Each preset controls TP, SL, leverage, capital %, and trailing SL step.</span></span></h3>
+          <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Risk Level Settings</h3>
         <div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-4);margin-bottom:var(--space-5);">
           <div id="admin-risk-levels"></div>
           <div style="margin-top:var(--space-3);border-top:1px solid var(--color-border-muted);padding-top:var(--space-3);">
@@ -1102,138 +1860,25 @@
             <button class="btn btn-primary btn-sm" style="margin-top:var(--space-3);" onclick="window.CryptoBot.addRiskLevel()">Add Risk Level</button>
           </div>
         </div>
+        </div><!-- /admin-tab-settings -->
 
-        <!-- Allowed Tokens (whitelist — only trade these) -->
-        <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Allowed Tokens <span class="tip-btn">?<span class="tip-text">Whitelist: if any tokens are listed here, the bot will ONLY trade these tokens. Leave empty to trade top coins by volume.</span></span> <span style="font-size:0.75rem;color:var(--color-text-muted);">(only trade these)</span></h3>
-        <div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-4);margin-bottom:var(--space-4);">
-          <div style="display:flex;gap:var(--space-2);align-items:end;margin-bottom:var(--space-3);flex-wrap:wrap;">
-            <div class="form-group" style="margin-bottom:0;flex:1;min-width:140px;position:relative;">
-              <label class="form-label" for="admin-allowed-symbol">Token Symbol</label>
-              <input class="form-input text-mono" type="text" id="admin-allowed-symbol" placeholder="Type to search..." autocomplete="off" style="text-transform:uppercase;" oninput="window.CryptoBot.searchAdminToken(this,'admin-allowed')" onfocus="window.CryptoBot.searchAdminToken(this,'admin-allowed')">
-              <div class="coin-dropdown hidden" id="admin-allowed-dropdown"></div>
-            </div>
-            <button class="btn btn-primary btn-sm" onclick="window.CryptoBot.addAllowedToken()">Add Allowed</button>
+        <!-- Tokens tab is already above, skip old inline tokens -->
+        <!-- ═══════════════════════════════════════════
+             TAB: Tools
+             ═══════════════════════════════════════════ -->
+        <div id="admin-tab-tools" class="admin-tab-panel hidden">
+          <div style="margin-bottom:var(--space-3);display:flex;gap:var(--space-2);flex-wrap:wrap;">
+            <button class="btn btn-sm" style="background:var(--color-accent);color:#fff;padding:6px 16px;" onclick="window.location.href='/api/admin/trades/csv'">Download All Trades CSV</button>
+            <button class="btn btn-primary btn-sm" onclick="window.CryptoBot.fixBitunixPnl()">Sync All Trades</button>
+            <button class="btn btn-ghost btn-sm" onclick="window.CryptoBot.debugBitunix()">Debug Bitunix API</button>
           </div>
-          <div class="table-wrap" style="max-height:300px;overflow-y:auto;">
-            <table class="data-table">
-              <thead style="position:sticky;top:0;z-index:1;"><tr><th>Symbol</th><th>Action</th></tr></thead>
-              <tbody id="admin-allowed-tbody"></tbody>
-            </table>
-          </div>
-          <div id="admin-allowed-empty" style="color:var(--color-text-muted);font-size:0.85rem;padding:var(--space-3);text-align:center;">No allowed tokens set. Bot trades top coins by volume.</div>
-        </div>
-
-        <!-- Banned Tokens (blacklist — never trade these) -->
-        <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Banned Tokens <span class="tip-btn">?<span class="tip-text">Blacklist: the bot will never open new trades on these tokens. Existing positions will close normally.</span></span> <span style="font-size:0.75rem;color:var(--color-text-muted);">(never trade these)</span></h3>
-        <div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-4);margin-bottom:var(--space-5);">
-          <div style="display:flex;gap:var(--space-2);align-items:end;margin-bottom:var(--space-3);flex-wrap:wrap;">
-            <div class="form-group" style="margin-bottom:0;flex:1;min-width:140px;position:relative;">
-              <label class="form-label" for="admin-banned-symbol">Token Symbol</label>
-              <input class="form-input text-mono" type="text" id="admin-banned-symbol" placeholder="Type to search..." autocomplete="off" style="text-transform:uppercase;" oninput="window.CryptoBot.searchAdminToken(this,'admin-banned')" onfocus="window.CryptoBot.searchAdminToken(this,'admin-banned')">
-              <div class="coin-dropdown hidden" id="admin-banned-dropdown"></div>
-            </div>
-            <button class="btn btn-danger btn-sm" onclick="window.CryptoBot.addBannedToken()">Ban Token</button>
-          </div>
-          <div class="table-wrap" style="max-height:300px;overflow-y:auto;">
-            <table class="data-table">
-              <thead style="position:sticky;top:0;z-index:1;"><tr><th>Symbol</th><th>Action</th></tr></thead>
-              <tbody id="admin-banned-tbody"></tbody>
-            </table>
-          </div>
-          <div id="admin-banned-empty" style="color:var(--color-text-muted);font-size:0.85rem;padding:var(--space-3);text-align:center;">No banned tokens. Bot can trade any coin.</div>
-        </div>
-
-        <!-- Token Leverage Settings -->
-        <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Token Leverage <span class="tip-btn">?<span class="tip-text">Set custom leverage per token. BTC/ETH default 100x. Auto-populate adds all tokens above $1000. This overrides user risk level leverage.</span></span></h3>
-        <div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-4);margin-bottom:var(--space-5);">
-          <div style="display:flex;gap:var(--space-2);align-items:end;margin-bottom:var(--space-3);flex-wrap:wrap;">
-            <div class="form-group" style="margin-bottom:0;flex:1;min-width:140px;position:relative;">
-              <label class="form-label" for="admin-lev-symbol">Token Symbol</label>
-              <input class="form-input text-mono" type="text" id="admin-lev-symbol" placeholder="Type to search..." autocomplete="off" style="text-transform:uppercase;" oninput="window.CryptoBot.searchAdminToken(this,'admin-lev')" onfocus="window.CryptoBot.searchAdminToken(this,'admin-lev')">
-              <div class="coin-dropdown hidden" id="admin-lev-dropdown"></div>
-            </div>
-            <div class="form-group" style="margin-bottom:0;width:90px;">
-              <label class="form-label" for="admin-lev-value">Leverage</label>
-              <input class="form-input text-mono" type="number" id="admin-lev-value" placeholder="20" min="1" max="125" value="20">
-            </div>
-            <button class="btn btn-primary btn-sm" onclick="window.CryptoBot.addTokenLeverage()">Set Leverage</button>
-          </div>
-          <div style="display:flex;gap:var(--space-2);margin-bottom:var(--space-3);flex-wrap:wrap;align-items:center;">
-            <button class="btn btn-sm" style="background:var(--color-accent);color:#fff;" onclick="window.CryptoBot.autoPopulateLeverage()">Auto-Populate ($1000+ tokens)</button>
-            <span style="font-size:0.75rem;color:var(--color-text-muted);">Adds all tokens above $1000 at 20x. BTC/ETH set to 100x.</span>
-          </div>
-          <div class="table-wrap" style="max-height:400px;overflow-y:auto;">
-            <table class="data-table">
-              <thead style="position:sticky;top:0;z-index:1;"><tr><th>Symbol</th><th>Price</th><th>Leverage</th><th>Action</th></tr></thead>
-              <tbody id="admin-lev-tbody"></tbody>
-            </table>
-          </div>
-          <div id="admin-lev-empty" style="color:var(--color-text-muted);font-size:0.85rem;padding:var(--space-3);text-align:center;">No token leverage set. Default 20x for all tokens.</div>
-        </div>
-
-        <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Weekly Earnings Overview <span class="tip-btn">?<span class="tip-text">Summary of all users' weekly profits. Shows the 60/40 split, admin share, and per-user breakdown. Settle earnings here.</span></span></h3>
-        <div id="admin-weekly-summary" class="summary-grid" style="margin-bottom:var(--space-4);">
-          <div class="summary-card" style="border-left:3px solid var(--color-success);">
-            <span class="summary-card-label">Net P&L (All Users) <span class="tip-btn">?<span class="tip-text">Combined net profit/loss across all users' trades this week.</span></span></span>
-            <span id="awe-total-net" class="summary-card-value text-mono" style="font-size:1.2rem;">--</span>
-          </div>
-          <div class="summary-card" style="border-left:3px solid var(--color-accent);">
-            <span class="summary-card-label">Admin Share <span class="tip-btn">?<span class="tip-text">Platform's 40% share of net profits across all users this week.</span></span></span>
-            <span id="awe-admin-share" class="summary-card-value text-mono" style="color:var(--color-accent);font-size:1.2rem;">--</span>
-          </div>
-          <div class="summary-card" style="border-left:3px solid #d4af37;">
-            <span class="summary-card-label">User Share <span class="tip-btn">?<span class="tip-text">Users' 60% share of net profits this week.</span></span></span>
-            <span id="awe-user-share" class="summary-card-value text-mono" style="color:#d4af37;font-size:1.2rem;">--</span>
-          </div>
-        </div>
-        <div style="margin-bottom:var(--space-3);">
-          <button class="btn btn-sm" style="font-size:0.75rem;" onclick="window.CryptoBot.adminFixTrades()">🔧 Fix Corrupted Trades</button>
-          <span id="fix-trades-status" style="font-size:0.75rem;color:var(--color-text-muted);margin-left:8px;"></span>
-          <button class="btn btn-danger btn-sm" style="font-size:0.75rem;margin-left:12px;" onclick="window.CryptoBot.adminClearTestData()">🗑 Clear Test Data</button>
-          <span id="clear-data-status" style="font-size:0.75rem;color:var(--color-text-muted);margin-left:8px;"></span>
-        </div>
-        <div style="margin-bottom:var(--space-3);padding:var(--space-3);border:2px solid #ef4444;border-radius:var(--radius-lg);background:rgba(239,68,68,0.05);">
-          <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:8px;">
-            <strong style="color:#ef4444;font-size:0.9rem;">🚨 Emergency Close Positions</strong>
-            <div style="display:flex;align-items:center;gap:6px;">
-              <button class="btn btn-sm" style="font-size:0.75rem;background:transparent;color:#ef4444;border:1px solid #ef4444;padding:4px 12px;" onclick="window.CryptoBot.loadOpenPositions()">↻ Refresh</button>
-              <button class="btn btn-sm" style="font-size:0.75rem;background:#ef4444;color:#fff;border:none;font-weight:700;padding:4px 12px;" onclick="window.CryptoBot.emergencyCloseAll()">CLOSE ALL</button>
-              <span id="emergency-stop-status" style="font-size:0.75rem;color:var(--color-text-muted);"></span>
-            </div>
-          </div>
-          <div id="open-positions-list" style="font-size:0.8rem;color:var(--color-text-muted);">Click Refresh to load open positions</div>
-        </div>
-        <div id="admin-earnings-per-user" style="margin-bottom:var(--space-5);"></div>
-
-        <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Users <span class="tip-btn">?<span class="tip-text">All registered users. Manage approval, block/unblock, pause trading, adjust profit-share ratios, and view payment status.</span></span></h3>
-        <div class="table-wrap" style="margin-bottom:var(--space-5);overflow-x:auto;">
-          <table class="data-table" id="admin-users-table">
-            <thead><tr><th>Email</th><th>Keys</th><th>Wallet</th><th>Referral</th><th>Joined</th><th>Payment</th><th>Action</th></tr></thead>
-            <tbody id="admin-users-tbody"></tbody>
-          </table>
-        </div>
-
-        <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Pending Payments <span class="tip-btn">?<span class="tip-text">Subscription payments awaiting admin approval. Review proof of payment and approve or reject.</span></span></h3>
-        <div class="table-wrap" style="margin-bottom:var(--space-5);">
-          <table class="data-table">
-            <thead><tr><th>User</th><th>Amount</th><th>Method</th><th>Proof</th><th>Date</th><th>Action</th></tr></thead>
-            <tbody id="admin-subs-tbody"></tbody>
-          </table>
-        </div>
-
-        <!-- Fix Tools -->
-        <div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-4);margin-bottom:var(--space-5);">
-          <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Tools <span class="tip-btn">?<span class="tip-text">Admin utilities: sync trades with exchanges, debug APIs, run backtests, and fix corrupted data.</span></span></h3>
-          <button class="btn btn-primary btn-sm" onclick="window.CryptoBot.fixBitunixPnl()">Sync All Trades with Exchange</button>
-          <button class="btn btn-ghost btn-sm" onclick="window.CryptoBot.debugBitunix()">Debug Bitunix API</button>
+        <!-- old duplicate sections removed -->
 
           <!-- Backtest Settings -->
-          <div style="margin-top:var(--space-4);border-top:1px solid var(--color-border-muted);padding-top:var(--space-3);">
-            <strong style="font-size:0.9rem;color:var(--color-text);">Backtest Settings <span class="tip-btn">?<span class="tip-text">Configure all risk parameters before running a backtest. Pick an AI version to load its saved settings, or set manually.</span></span></strong>
-
-            <!-- AI Version Selector -->
+          <div style="margin-top:var(--space-4);background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-4);">
+            <strong style="font-size:0.9rem;color:var(--color-text);">Backtest Settings</strong>
             <div style="margin-top:var(--space-2);margin-bottom:var(--space-3);">
-              <label class="form-label" style="font-size:0.8rem;">AI Version <span class="tip-btn">?<span class="tip-text">Load risk parameters from a saved AI version. Each version was trained on different trade data and has different optimized settings.</span></span></label>
+              <label class="form-label" style="font-size:0.8rem;">AI Version</label>
               <div style="display:flex;gap:var(--space-2);align-items:center;flex-wrap:wrap;">
                 <select id="bt-ai-version" class="form-input" style="max-width:400px;font-size:0.8rem;">
                   <option value="">Manual Settings</option>
@@ -1241,11 +1886,9 @@
                 <button class="btn btn-ghost btn-sm" onclick="window.CryptoBot.loadAiVersions()" style="font-size:0.75rem;">Refresh</button>
               </div>
             </div>
-
-            <!-- Settings Grid -->
             <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:var(--space-2);margin-bottom:var(--space-3);">
               <div class="form-group" style="margin-bottom:0;">
-                <label class="form-label" style="font-size:0.75rem;">Days <span class="tip-btn">?<span class="tip-text">How many days of historical data to backtest. More days = longer wait but more trades.</span></span></label>
+                <label class="form-label" style="font-size:0.75rem;">Days</label>
                 <select id="backtest-days" class="form-input" style="font-size:0.8rem;">
                   <option value="7" selected>7 days</option>
                   <option value="14">14 days</option>
@@ -1255,59 +1898,51 @@
                 </select>
               </div>
               <div class="form-group" style="margin-bottom:0;">
-                <label class="form-label" style="font-size:0.75rem;">SL % <span class="tip-btn">?<span class="tip-text">Initial stop-loss distance from entry. e.g. 3 = 3% SL.</span></span></label>
+                <label class="form-label" style="font-size:0.75rem;">Max Tokens</label>
+                <input class="form-input text-mono" type="number" id="bt-max-tokens" min="10" max="200" step="10" value="50" style="font-size:0.8rem;">
+              </div>
+              <div class="form-group" style="margin-bottom:0;">
+                <label class="form-label" style="font-size:0.75rem;">SL %</label>
                 <input class="form-input text-mono" type="number" id="bt-sl" min="0.5" max="10" step="0.1" value="3.0" style="font-size:0.8rem;">
               </div>
               <div class="form-group" style="margin-bottom:0;">
-                <label class="form-label" style="font-size:0.75rem;">TP % <span class="tip-btn">?<span class="tip-text">Fixed take-profit %. Set 0 for trailing-only (no fixed TP). e.g. 2.25 = close at +2.25% profit.</span></span></label>
+                <label class="form-label" style="font-size:0.75rem;">TP %</label>
                 <input class="form-input text-mono" type="number" id="bt-tp" min="0" max="20" step="0.1" value="0" style="font-size:0.8rem;">
               </div>
               <div class="form-group" style="margin-bottom:0;">
-                <label class="form-label" style="font-size:0.75rem;">Trail Step % <span class="tip-btn">?<span class="tip-text">Trailing SL step increment. At each step, SL moves up to lock profit. e.g. 1.2 = trail every +1.2%.</span></span></label>
+                <label class="form-label" style="font-size:0.75rem;">Trail Step %</label>
                 <input class="form-input text-mono" type="number" id="bt-trail" min="0.3" max="5" step="0.1" value="1.2" style="font-size:0.8rem;">
               </div>
               <div class="form-group" style="margin-bottom:0;">
-                <label class="form-label" style="font-size:0.75rem;">Leverage <span class="tip-btn">?<span class="tip-text">Leverage multiplier for all trades in this backtest.</span></span></label>
+                <label class="form-label" style="font-size:0.75rem;">Leverage</label>
                 <input class="form-input text-mono" type="number" id="bt-leverage" min="1" max="125" step="1" value="20" style="font-size:0.8rem;">
               </div>
               <div class="form-group" style="margin-bottom:0;">
-                <label class="form-label" style="font-size:0.75rem;">Risk % <span class="tip-btn">?<span class="tip-text">% of wallet used per trade. e.g. 10 = use 10% of $1000 = $100 per trade.</span></span></label>
+                <label class="form-label" style="font-size:0.75rem;">Risk %</label>
                 <input class="form-input text-mono" type="number" id="bt-risk" min="1" max="50" step="1" value="10" style="font-size:0.8rem;">
               </div>
               <div class="form-group" style="margin-bottom:0;">
-                <label class="form-label" style="font-size:0.75rem;">Max Positions <span class="tip-btn">?<span class="tip-text">Maximum simultaneous open trades.</span></span></label>
+                <label class="form-label" style="font-size:0.75rem;">Max Positions</label>
                 <input class="form-input text-mono" type="number" id="bt-maxpos" min="1" max="20" step="1" value="3" style="font-size:0.8rem;">
               </div>
               <div class="form-group" style="margin-bottom:0;">
-                <label class="form-label" style="font-size:0.75rem;">Stop After Losses <span class="tip-btn">?<span class="tip-text">Pause trading after N consecutive losses per day. Resets at 7am. Set 0 for unlimited.</span></span></label>
+                <label class="form-label" style="font-size:0.75rem;">Stop After Losses</label>
                 <input class="form-input text-mono" type="number" id="bt-consec" min="0" max="20" step="1" value="2" style="font-size:0.8rem;">
               </div>
               <div class="form-group" style="margin-bottom:0;">
-                <label class="form-label" style="font-size:0.75rem;">Wallet $ <span class="tip-btn">?<span class="tip-text">Starting wallet balance for the backtest simulation.</span></span></label>
+                <label class="form-label" style="font-size:0.75rem;">Wallet $</label>
                 <input class="form-input text-mono" type="number" id="bt-wallet" min="100" max="100000" step="100" value="1000" style="font-size:0.8rem;">
               </div>
-              <!-- Tokens come from admin token settings, no Top N needed -->
             </div>
-
-            <div style="font-size:0.75rem;color:var(--color-text-muted);margin-bottom:var(--space-2);">Daily→4H+1H→KeyLvl→15M→1M (configurable SL/TP, trailing steps)</div>
             <div style="display:flex;gap:var(--space-2);flex-wrap:wrap;align-items:center;">
-              <button class="btn btn-primary btn-sm" onclick="window.CryptoBot.runBacktest('strict', false)">▶ Run Backtest</button>
-              <button class="btn btn-ghost btn-sm" onclick="window.CryptoBot.runBacktest('strict', true)">↻ Reverse</button>
-              <span style="color:var(--color-border-muted);">|</span>
-              <button class="btn btn-sm" style="background:linear-gradient(135deg,#8b5cf6,#6366f1);color:#fff;border:none;" onclick="window.CryptoBot.runAiOptimize()">⚛️ Quantum AI Optimize</button>
-              <span class="tip-btn">?<span class="tip-text">Strategy-only optimizer using admin tokens. 10 presets → 25 genetic → QAOA + SPSA + Annealing. Tests ~130 strategy combos + per-token scoring. Risk is user-set.</span></span>
+              <button class="btn btn-primary btn-sm" onclick="window.CryptoBot.runBacktest('strict', false)">Run Backtest</button>
+              <button class="btn btn-ghost btn-sm" onclick="window.CryptoBot.runBacktest('strict', true)">Reverse</button>
+              <button class="btn btn-sm" style="background:linear-gradient(135deg,#8b5cf6,#6366f1);color:#fff;border:none;" onclick="window.CryptoBot.runAiOptimize()">Quantum AI Optimize</button>
             </div>
           </div>
           <pre id="fix-bitunix-result" style="margin-top:var(--space-2);font-size:0.75rem;color:var(--color-text-muted);max-height:70vh;overflow:auto;white-space:pre-wrap;word-break:break-all;border:1px solid var(--color-border-muted);border-radius:var(--radius-md);padding:var(--space-3);background:var(--color-bg-base);"></pre>
-        </div>
+        </div><!-- /admin-tab-tools -->
 
-        <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Pending Withdrawals <span class="tip-btn">?<span class="tip-text">User withdrawal requests awaiting admin processing. Approve or reject with a note.</span></span></h3>
-        <div class="table-wrap">
-          <table class="data-table">
-            <thead><tr><th>User</th><th>Amount</th><th>Bank</th><th>Acc No.</th><th>Name</th><th>Date</th><th>Action</th></tr></thead>
-            <tbody id="admin-wd-tbody"></tbody>
-          </table>
-        </div>
       </section>
     </main>
   </div>
@@ -1337,20 +1972,29 @@
           </select>
         </div>
 
-        <!-- Static IP info for API key whitelisting -->
-        <div id="static-ip-info" class="hidden" style="background:var(--color-bg);border:1px solid var(--color-accent);border-radius:var(--radius-md);padding:var(--space-3);margin-bottom:var(--space-3);">
-          <div style="font-size:var(--text-xs);color:var(--color-text-muted);margin-bottom:var(--space-2);">
-            <strong style="color:var(--color-accent);">Add these static IPs to your API key whitelist:</strong>
+        <!-- Bitunix setup guide -->
+        <div id="bitunix-setup-guide" class="hidden" style="background:var(--color-bg);border:1px solid var(--color-accent);border-radius:var(--radius-md);padding:var(--space-3);margin-bottom:var(--space-3);">
+          <div style="font-size:var(--text-xs);margin-bottom:var(--space-2);">
+            <strong style="color:var(--color-accent);">Bitunix Setup — 2 API Keys Required:</strong>
           </div>
-          <div style="display:flex;align-items:center;gap:var(--space-2);margin-bottom:var(--space-2);">
-            <input class="form-input text-mono" readonly style="flex:1;font-size:var(--text-sm);" value="52.192.89.194">
-            <button type="button" class="btn btn-ghost btn-sm" onclick="navigator.clipboard.writeText('52.192.89.194');window.CryptoBot.showToast('IP copied!','success')">Copy</button>
+          <div style="font-size:var(--text-xs);color:var(--color-text-muted);line-height:1.6;">
+            <div style="margin-bottom:var(--space-2);">
+              <strong style="color:var(--color-success);">Key 1 — Trading Key</strong><br>
+              Bitunix → API Management → <strong>Create API</strong><br>
+              Permissions: <strong>Read + Trade</strong> (never enable Withdraw)<br>
+              Paste this key below.
+            </div>
+            <div style="margin-bottom:var(--space-2);">
+              <strong style="color:var(--color-warning);">Key 2 — 3rd Party App Key</strong><br>
+              Bitunix → API Management → <strong>Create for 3rd Party App</strong><br>
+              This is read-only for market data access.
+            </div>
+            <div style="background:var(--color-danger-bg, rgba(239,68,68,0.1));border:1px solid var(--color-danger);border-radius:var(--radius-sm);padding:var(--space-2);margin-top:var(--space-2);">
+              <strong style="color:var(--color-danger);">IMPORTANT — Remove IP Restriction:</strong><br>
+              For BOTH keys → Edit → IP Restriction → <strong>Delete all IPs</strong> or leave blank.<br>
+              Do NOT whitelist any IP. The bot uses dynamic IPs.
+            </div>
           </div>
-          <div style="display:flex;align-items:center;gap:var(--space-2);margin-bottom:var(--space-2);">
-            <input class="form-input text-mono" readonly style="flex:1;font-size:var(--text-sm);" value="52.193.106.127">
-            <button type="button" class="btn btn-ghost btn-sm" onclick="navigator.clipboard.writeText('52.193.106.127');window.CryptoBot.showToast('IP copied!','success')">Copy</button>
-          </div>
-          <div id="ip-platform-note" style="font-size:var(--text-xs);color:var(--color-text-muted);"></div>
         </div>
         <div class="form-group">
           <label class="form-label" for="key-label">Label <span class="tip-btn">?<span class="tip-text">A friendly name for this API key, e.g. "Main account" or "Scalp key".</span></span></label>
@@ -1362,7 +2006,10 @@
         </div>
         <div class="form-group">
           <label class="form-label" for="key-api-secret">API Secret <span class="tip-btn">?<span class="tip-text">Your exchange API secret. Encrypted at rest — we never store it in plain text.</span></span></label>
-          <input class="form-input text-mono" type="password" id="key-api-secret" placeholder="Paste your API secret" required autocomplete="off">
+          <div class="pw-wrap">
+            <input class="form-input text-mono" type="password" id="key-api-secret" placeholder="Paste your API secret" required autocomplete="off">
+            <button type="button" class="pw-toggle" tabindex="-1" aria-label="Show secret"></button>
+          </div>
         </div>
         <div id="add-key-error" class="form-error" role="alert"></div>
         <button type="submit" id="btn-submit-key" class="btn btn-primary" style="width:100%; margin-top:var(--space-2);">
@@ -1383,8 +2030,46 @@
     </div>
   </div>
 
-  <script src="/js/app.js?v=20260405ad"></script>
-  <script src="/js/cashwallet-fix.js"></script>
+  <!-- Customer Chatbot Widget -->
+  <div id="chatbot-widget" class="chatbot-widget">
+    <button id="chatbot-toggle" class="chatbot-toggle" onclick="document.getElementById('chatbot-panel').classList.toggle('hidden')">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
+    </button>
+    <div id="chatbot-panel" class="chatbot-panel hidden">
+      <div class="chatbot-header">
+        <strong>MCT Support</strong>
+        <button onclick="document.getElementById('chatbot-panel').classList.add('hidden')" style="background:none;border:none;color:#fff;font-size:1.2rem;cursor:pointer;">&times;</button>
+      </div>
+      <div id="chatbot-messages" class="chatbot-messages">
+        <div class="chatbot-msg chatbot-bot">
+          <span>Hi! I'm MCT's AI assistant. I can help with:</span>
+          <span style="margin-top:4px;font-size:0.75rem;color:var(--color-text-muted);">- How our trading bot works<br>- Setting up your account<br>- Connecting exchange API keys<br>- Understanding profit split<br>- Troubleshooting issues</span>
+        </div>
+      </div>
+      <div style="display:flex;gap:4px;padding:8px;">
+        <input type="text" id="chatbot-input" class="form-input" placeholder="Ask me anything..." style="flex:1;font-size:0.85rem;padding:8px 12px;" onkeydown="if(event.key==='Enter')window.CryptoBot?.customerChat?.()">
+        <button class="btn btn-primary btn-sm" style="padding:8px 14px;" onclick="window.CryptoBot?.customerChat?.()">Send</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/js/app.js?v=20260414" defer></script>
+  <script src="/js/cashwallet-fix.js" defer></script>
+  <script>
+    // Password show/hide toggle
+    (function(){
+      var EYE='<svg viewBox="0 0 24 24"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg>';
+      var EYE_OFF='<svg viewBox="0 0 24 24"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>';
+      document.querySelectorAll('.pw-toggle').forEach(function(btn){
+        btn.innerHTML=EYE;
+        btn.addEventListener('click',function(){
+          var input=this.parentElement.querySelector('input');
+          if(input.type==='password'){input.type='text';this.innerHTML=EYE_OFF;this.setAttribute('aria-label','Hide password');}
+          else{input.type='password';this.innerHTML=EYE;this.setAttribute('aria-label','Show password');}
+        });
+      });
+    })();
+  </script>
 
 </body>
 </html>

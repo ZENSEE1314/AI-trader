@@ -5,3 +5,4 @@ node_modules/
 data/trades.db
 data/trades.db-wal
 data/trades.db-shm
+ruflo/

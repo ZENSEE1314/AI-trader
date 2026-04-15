@@ -172,20 +172,44 @@ class BitunixClient {
 
   // ── Order / Trade History ───────────────────────────────────
 
-  async getHistoryOrders({ symbol, pageNum = 1, pageSize = 10 } = {}) {
+  async getHistoryOrders({ symbol, pageNum = 1, pageSize = 10, all = false } = {}) {
     const params = { pageNum, pageSize };
     if (symbol) params.symbol = symbol;
-    const data = await this._get('/api/v1/futures/trade/get_history_orders', params);
-    if (Array.isArray(data)) return data;
-    return data?.orderList || data?.list || [];
+
+    const results = [];
+    let currentPage = pageNum;
+
+    do {
+      params.pageNum = currentPage;
+      const data = await this._get('/api/v1/futures/trade/get_history_orders', params);
+      const list = Array.isArray(data) ? data : (data?.orderList || data?.list || []);
+      results.push(...list);
+
+      if (!all || list.length < pageSize) break;
+      currentPage++;
+    } while (true);
+
+    return results;
   }
 
-  async getHistoryPositions({ symbol, pageNum = 1, pageSize = 10 } = {}) {
+  async getHistoryPositions({ symbol, pageNum = 1, pageSize = 10, all = false } = {}) {
     const params = { pageNum, pageSize };
     if (symbol) params.symbol = symbol;
-    const data = await this._get('/api/v1/futures/position/get_history_positions', params);
-    if (Array.isArray(data)) return data;
-    return data?.positionList || data?.list || [];
+
+    const results = [];
+    let currentPage = pageNum;
+
+    do {
+      params.pageNum = currentPage;
+      const data = await this._get('/api/v1/futures/position/get_history_positions', params);
+      const list = Array.isArray(data) ? data : (data?.positionList || data?.list || []);
+      results.push(...list);
+
+      if (!all || list.length < pageSize) break;
+      currentPage++;
+    } while (true);
+
+    return results;
   }
 
   // Raw methods — return full response including code/msg for debugging
@@ -232,15 +256,23 @@ class BitunixClient {
       totalWalletBalance: String(parseFloat(acc.available || 0) + parseFloat(acc.margin || 0) + parseFloat(acc.frozen || 0)),
       availableBalance: acc.available || '0',
       totalUnrealizedProfit: String(parseFloat(acc.crossUnrealizedPNL || 0) + parseFloat(acc.isolationUnrealizedPNL || 0)),
-      positions: positions.map(p => ({
-        symbol: p.symbol,
-        positionAmt: (p.side === 'BUY' || p.side === 'LONG') ? p.qty : `-${p.qty}`,
-        entryPrice: p.avgOpenPrice,
-        markPrice: p.markPrice || null,
-        unrealizedProfit: p.unrealizedPNL,
-        leverage: String(p.leverage),
-        positionId: p.positionId,
-      })),
+      positions: positions.map(p => {
+        // Log raw position fields on first call for debugging
+        if (!this._posFieldsLogged) {
+          console.log(`[Bitunix] Raw position fields: ${JSON.stringify(Object.keys(p))}`);
+          console.log(`[Bitunix] Raw position data: ${JSON.stringify(p)}`);
+          this._posFieldsLogged = true;
+        }
+        return {
+          symbol: p.symbol,
+          positionAmt: (p.side === 'BUY' || p.side === 'LONG') ? (p.qty || p.positionAmt) : `-${p.qty || p.positionAmt}`,
+          entryPrice: p.avgOpenPrice || p.entryPrice || p.openPrice,
+          markPrice: p.markPrice || p.lastPrice || null,
+          unrealizedProfit: p.unrealizedPNL || p.unrealizedProfit || p.unrealizedPnl || '0',
+          leverage: String(p.leverage || 20),
+          positionId: p.positionId || p.id,
+        };
+      }),
     };
   }
 }

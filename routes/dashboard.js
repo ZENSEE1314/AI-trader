@@ -43,10 +43,35 @@ router.get('/cash-wallet', async (req, res) => {
     const commissionEarned = parseFloat(u.commission_earned) || 0;
     const cashWallet = rawCash + commissionEarned;
 
+    // Break down cash wallet sources for transparency
+    let profitShareTotal = 0;
+    let topUpTotal = 0;
+    let feesPaid = 0;
+    try {
+      const sources = await query(
+        `SELECT type, COALESCE(SUM(amount), 0) as total
+         FROM wallet_transactions
+         WHERE user_id = $1 AND status = 'completed'
+         GROUP BY type`,
+        [req.userId]
+      );
+      for (const s of sources) {
+        if (s.type === 'profit_share') profitShareTotal = parseFloat(s.total) || 0;
+        else if (s.type === 'topup' || s.type === 'deposit') topUpTotal = parseFloat(s.total) || 0;
+        else if (s.type === 'platform_fee' || s.type === 'weekly_fee') feesPaid += parseFloat(s.total) || 0;
+      }
+    } catch {}
+
     res.json({
       cash_wallet: cashWallet,
       commission_earned: commissionEarned,
       total_balance: cashWallet,
+      breakdown: {
+        top_ups: topUpTotal,
+        profit_shares: profitShareTotal,
+        referral_commission: commissionEarned,
+        fees_paid: feesPaid,
+      },
       referral_code: u.referral_code || '',
       referral_count: referrals.length,
       referral_tier: parseInt(u.referral_tier) || 1,
@@ -99,6 +124,21 @@ router.get('/trades', async (req, res) => {
   } catch (err) {
     console.error('Trades error:', err.message);
     res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Sync full Bitunix trade history
+router.post('/sync-trades', async (req, res) => {
+  try {
+    const { AgentCoordinator } = require('../agents/agent-coordinator');
+    const coordinator = AgentCoordinator.getInstance();
+    const accAgent = coordinator?.agents?.accountant;
+    if (!accAgent) return res.status(503).json({ error: 'Accountant agent not available' });
+    const result = await accAgent.syncBitunixHistory();
+    res.json(result);
+  } catch (err) {
+    console.error('Sync trades error:', err.message);
+    res.status(500).json({ error: err.message });
   }
 });
 
@@ -203,8 +243,18 @@ router.get('/trades/csv', async (req, res) => {
 });
 
 // P&L summary (supports ?period=1d|7d|30d|6m|1y filter)
+// Cache summaries for 15s to avoid repeated DB hits on page load/refresh
+const summaryCache = new Map();
+const SUMMARY_CACHE_TTL = 15_000;
+
 router.get('/summary', async (req, res) => {
   try {
+    const cacheKey = `${req.userId}:${req.query.period || 'all'}`;
+    const cached = summaryCache.get(cacheKey);
+    if (cached && Date.now() - cached.ts < SUMMARY_CACHE_TTL) {
+      return res.json(cached.data);
+    }
+
     const period = PERIOD_INTERVALS[req.query.period];
     const dateFilter = period
       ? `AND created_at > NOW() - INTERVAL '${period}'`
@@ -242,6 +292,7 @@ router.get('/summary', async (req, res) => {
     summary.win_rate = (wins + losses) > 0 ? ((wins / (wins + losses)) * 100).toFixed(1) : '0';
     summary.per_key = perKey;
 
+    summaryCache.set(cacheKey, { data: summary, ts: Date.now() });
     res.json(summary);
   } catch (err) {
     console.error('Summary error:', err.message);
@@ -250,8 +301,18 @@ router.get('/summary', async (req, res) => {
 });
 
 // Futures wallet balances from ALL connected exchanges
+// Cache per user for 30s — exchange API calls are the #1 page load bottleneck
+const walletCache = new Map();
+const WALLET_CACHE_TTL = 30_000; // 30 seconds
+
 router.get('/futures-wallet', async (req, res) => {
   try {
+    // Serve from cache if fresh (avoids expensive exchange API calls)
+    const cached = walletCache.get(req.userId);
+    if (cached && Date.now() - cached.ts < WALLET_CACHE_TTL) {
+      return res.json(cached.data);
+    }
+
     const keys = await query(
       `SELECT id, platform, label, api_key_enc, iv, auth_tag, api_secret_enc, secret_iv, secret_auth_tag
        FROM api_keys WHERE user_id = $1 AND enabled = true ORDER BY id`,
@@ -308,12 +369,14 @@ router.get('/futures-wallet', async (req, res) => {
       }
     }
 
-    res.json({
+    const responseData = {
       balance: totalBalance,
       available: totalAvailable,
       unrealizedPnl: totalUnrealizedPnl,
       wallets,
-    });
+    };
+    walletCache.set(req.userId, { data: responseData, ts: Date.now() });
+    res.json(responseData);
   } catch (err) {
     console.error('Futures wallet error:', err.message);
     res.json({ balance: 0, available: 0, unrealizedPnl: 0, wallets: [] });
@@ -587,6 +650,430 @@ router.post('/pay-weekly', async (req, res) => {
   } catch (err) {
     console.error('Pay weekly error:', err.message);
     res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// ── Token Signal Board & Watchlist ───────────────────────────
+
+// GET /api/dashboard/signal-board — top 50 tokens with signals + watchlist
+router.get('/signal-board', async (req, res) => {
+  try {
+    const { getSignalBoard } = require('../token-scanner');
+    const { getDailyResults } = require('../token-scanner');
+    const board = getSignalBoard();
+    const dailyResults = await getDailyResults();
+
+    // Get ALL active tokens from admin board (not just top 50)
+    let adminTokens = new Set();
+    try {
+      const adminRows = await query('SELECT symbol FROM global_token_settings WHERE enabled = true AND banned = false');
+      for (const r of adminRows) adminTokens.add(r.symbol);
+    } catch {}
+
+    // Fetch live prices from Binance
+    let topCoins = [];
+    try {
+      const fetch = require('node-fetch');
+      const r = await fetch('https://fapi.binance.com/fapi/v1/ticker/24hr', { timeout: 10000 });
+      const tickers = await r.json();
+      const tickerMap = {};
+      for (const t of tickers) {
+        if (t.symbol.endsWith('USDT') && !t.symbol.includes('_')) {
+          tickerMap[t.symbol] = {
+            symbol: t.symbol,
+            price: parseFloat(t.lastPrice),
+            change24h: parseFloat(t.priceChangePercent),
+            volume: parseFloat(t.quoteVolume),
+          };
+        }
+      }
+      // If admin has tokens, show those. Otherwise fall back to top 50 by volume
+      if (adminTokens.size > 0) {
+        for (const sym of adminTokens) {
+          if (tickerMap[sym]) topCoins.push(tickerMap[sym]);
+        }
+        topCoins.sort((a, b) => b.volume - a.volume);
+      } else {
+        topCoins = Object.values(tickerMap)
+          .sort((a, b) => b.volume - a.volume)
+          .slice(0, 50);
+      }
+    } catch {}
+
+    // Get user's watchlist
+    const watchlist = await query(
+      'SELECT symbol, enabled FROM user_watchlist WHERE user_id = $1',
+      [req.userId]
+    );
+    const watchMap = {};
+    for (const w of watchlist) watchMap[w.symbol] = w.enabled;
+
+    // Get user's per-token leverage
+    let userLevMap = {};
+    try {
+      const keys = await query('SELECT id FROM api_keys WHERE user_id = $1 LIMIT 1', [req.userId]);
+      if (keys.length) {
+        const levs = await query('SELECT symbol, leverage FROM user_token_leverage WHERE api_key_id = $1', [keys[0].id]);
+        for (const l of levs) userLevMap[l.symbol] = parseInt(l.leverage);
+      }
+    } catch {}
+
+    // Get admin risk tags
+    let riskTags = {};
+    try {
+      const tags = await query('SELECT symbol, risk_tag, featured FROM global_token_settings WHERE risk_tag IS NOT NULL OR featured = true');
+      for (const t of tags) riskTags[t.symbol] = { risk: t.risk_tag, featured: t.featured };
+    } catch {}
+
+    // Merge: top coins + signal status + watchlist + risk tags
+    const tokens = topCoins.map(c => ({
+      ...c,
+      signal: board.tokens[c.symbol] || null,
+      direction: board.tokens[c.symbol]?.direction || null,
+      score: board.tokens[c.symbol]?.score || 0,
+      watching: watchMap[c.symbol] === true,
+      riskTag: riskTags[c.symbol]?.risk || null,
+      featured: riskTags[c.symbol]?.featured || false,
+      userLeverage: userLevMap[c.symbol] || 20,
+    }));
+
+    res.json({ tokens, lastScanAt: board.lastScanAt, dailyResults, watchlist: watchMap });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/dashboard/daily-results — token leaderboard
+router.get('/daily-results', async (req, res) => {
+  try {
+    const { getDailyResults } = require('../token-scanner');
+    const date = req.query.date || null;
+    const results = await getDailyResults(date);
+    res.json(results);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/dashboard/watchlist — add token to user's watchlist
+router.post('/watchlist', async (req, res) => {
+  try {
+    const { symbol } = req.body;
+    if (!symbol) return res.status(400).json({ error: 'Missing symbol' });
+    await query(
+      `INSERT INTO user_watchlist (user_id, symbol, enabled)
+       VALUES ($1, $2, true)
+       ON CONFLICT (user_id, symbol) DO UPDATE SET enabled = true`,
+      [req.userId, symbol.toUpperCase()]
+    );
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// DELETE /api/dashboard/watchlist/:symbol — remove from watchlist
+router.delete('/watchlist/:symbol', async (req, res) => {
+  try {
+    await query(
+      'DELETE FROM user_watchlist WHERE user_id = $1 AND symbol = $2',
+      [req.userId, req.params.symbol.toUpperCase()]
+    );
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/dashboard/watchlist/bulk — enable/disable all
+router.post('/watchlist/bulk', async (req, res) => {
+  try {
+    const { symbols, enabled } = req.body;
+    if (!symbols || !Array.isArray(symbols)) return res.status(400).json({ error: 'Missing symbols array' });
+    for (const sym of symbols) {
+      await query(
+        `INSERT INTO user_watchlist (user_id, symbol, enabled) VALUES ($1, $2, $3)
+         ON CONFLICT (user_id, symbol) DO UPDATE SET enabled = $3`,
+        [req.userId, sym.toUpperCase(), !!enabled]
+      );
+    }
+    res.json({ ok: true, count: symbols.length });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// PUT /api/dashboard/watchlist/:symbol/leverage — set user per-token leverage
+router.put('/watchlist/:symbol/leverage', async (req, res) => {
+  try {
+    const { leverage } = req.body;
+    const lev = parseInt(leverage) || 20;
+    const symbol = req.params.symbol.toUpperCase();
+    // Get user's first API key for the leverage override
+    const keys = await query('SELECT id FROM api_keys WHERE user_id = $1 LIMIT 1', [req.userId]);
+    if (keys.length) {
+      await query(
+        `INSERT INTO user_token_leverage (api_key_id, symbol, leverage)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (api_key_id, symbol) DO UPDATE SET leverage = $3`,
+        [keys[0].id, symbol, lev]
+      );
+    }
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// PUT /api/dashboard/watchlist/:symbol/toggle — enable/disable
+router.put('/watchlist/:symbol/toggle', async (req, res) => {
+  try {
+    const { enabled } = req.body;
+    await query(
+      `UPDATE user_watchlist SET enabled = $1 WHERE user_id = $2 AND symbol = $3`,
+      [!!enabled, req.userId, req.params.symbol.toUpperCase()]
+    );
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Kronos AI predictions — read from DB (persisted across processes)
+router.get('/kronos-predictions', async (req, res) => {
+  try {
+    // Read from DB — predictions older than 15 min are stale
+    const rows = await query(
+      `SELECT symbol, direction, current_price, predicted_price, change_pct,
+              confidence, trend, pred_high, pred_low, scanned_at
+       FROM kronos_predictions
+       WHERE scanned_at > NOW() - INTERVAL '15 minutes'
+       ORDER BY ABS(change_pct) DESC`
+    );
+
+    const predictions = rows.map(r => ({
+      symbol: r.symbol,
+      direction: r.direction,
+      current: parseFloat(r.current_price) || 0,
+      predicted: parseFloat(r.predicted_price) || 0,
+      change_pct: parseFloat(r.change_pct) || 0,
+      confidence: r.confidence,
+      trend: r.trend,
+      pred_high: parseFloat(r.pred_high) || 0,
+      pred_low: parseFloat(r.pred_low) || 0,
+      scanned_at: r.scanned_at,
+    }));
+
+    const longs = predictions.filter(p => p.direction === 'LONG');
+    const shorts = predictions.filter(p => p.direction === 'SHORT');
+    const neutrals = predictions.filter(p => p.direction === 'NEUTRAL');
+
+    res.json({
+      total: predictions.length,
+      longs: longs.length,
+      shorts: shorts.length,
+      neutrals: neutrals.length,
+      predictions,
+    });
+  } catch (err) {
+    console.error('Kronos predictions error:', err.message);
+    res.json({ total: 0, longs: 0, shorts: 0, neutrals: 0, predictions: [] });
+  }
+});
+
+// ── Hermes Integration Status ────────────────────────────────
+router.get('/hermes-status', async (req, res) => {
+  try {
+    const hermes = require('../hermes-bridge');
+    const status = hermes.getHermesStatus();
+    const teamMemory = hermes.readTeamMemory();
+
+    res.json({
+      ...status,
+      teamMemoryEntries: teamMemory.length,
+      recentTeamMemory: teamMemory.slice(-5),
+    });
+  } catch (err) {
+    res.json({ installed: false, error: err.message });
+  }
+});
+
+// ── Strategy Backtests ────────────────────────────────────
+router.get('/strategy-backtests', async (req, res) => {
+  try {
+    const rows = await query(
+      `SELECT id, name, params, total_trades, wins, losses, win_rate, total_pnl,
+              avg_win, avg_loss, max_drawdown, symbols, top_trades, created_at
+       FROM strategy_backtests
+       ORDER BY created_at DESC
+       LIMIT 50`
+    );
+    res.json({ backtests: rows });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Agent Leaderboard ────────────────────────────────────
+router.get('/leaderboard', async (req, res) => {
+  try {
+    const { getCoordinator } = require('../agents/agent-coordinator');
+    const coord = getCoordinator();
+    const board = coord.getLeaderboard();
+    res.json({ leaderboard: board });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Agent Jail ───────────────────────────────────────────
+router.get('/jail', async (req, res) => {
+  try {
+    const { getCoordinator } = require('../agents/agent-coordinator');
+    const coord = getCoordinator();
+    const jailed = coord.getJailedAgents();
+    res.json({ jailed });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/jail/release', async (req, res) => {
+  try {
+    const { agentKey } = req.body;
+    if (!agentKey) return res.status(400).json({ error: 'agentKey required' });
+    const { getCoordinator } = require('../agents/agent-coordinator');
+    const coord = getCoordinator();
+    const { released, report } = await coord.releaseAgent(agentKey);
+    res.json({ ok: released, agentKey, report });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/jail/report/:agentKey', async (req, res) => {
+  try {
+    const { getCoordinator } = require('../agents/agent-coordinator');
+    const coord = getCoordinator();
+    const report = await coord.getViolationReport(req.params.agentKey);
+    res.json(report);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Agent Jail History ───────────────────────────────────
+router.get('/jail/history', async (req, res) => {
+  try {
+    const rows = await query(
+      `SELECT id, agent_key, agent_name, reason, violation_type, severity, warnings,
+              jailed_at, released_at, released_by
+       FROM agent_jail ORDER BY jailed_at DESC LIMIT 50`
+    );
+    res.json({ history: rows });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Backtester ──────────────────────────────────────────────
+
+router.post('/backtest', async (req, res) => {
+  try {
+    const { symbols, days = 60 } = req.body || {};
+    const { runBacktest, applyBestStrategy } = require('../backtester');
+    const result = await runBacktest({
+      symbols: symbols || ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT', 'DOGEUSDT', 'ADAUSDT', 'AVAXUSDT'],
+      days: Math.min(Math.max(days, 7), 90),
+    });
+    // Auto-apply best strategy
+    if (result.bestStrategy) {
+      const applied = await applyBestStrategy(result);
+      result.applied = applied;
+    }
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/backtest/results', async (req, res) => {
+  try {
+    const rows = await query(
+      `SELECT * FROM strategy_backtests ORDER BY win_rate DESC, total_pnl DESC LIMIT 50`
+    );
+    res.json({ results: rows });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── CoderAgent Patch Review ──────────────────────────────────
+
+router.get('/patches/pending', async (req, res) => {
+  try {
+    const { getCoordinator } = require('../agents');
+    const coord = getCoordinator();
+    res.json({ patches: coord.coderAgent.getPendingPatches() });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/patches/applied', async (req, res) => {
+  try {
+    const { getCoordinator } = require('../agents');
+    const coord = getCoordinator();
+    res.json({ patches: coord.coderAgent.getAppliedPatches() });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/patches/approve', async (req, res) => {
+  try {
+    const { patchId } = req.body;
+    if (!patchId) return res.status(400).json({ error: 'patchId required' });
+    const { getCoordinator } = require('../agents');
+    const coord = getCoordinator();
+    const result = await coord.coderAgent.approvePatch(patchId);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/patches/reject', async (req, res) => {
+  try {
+    const { patchId } = req.body;
+    if (!patchId) return res.status(400).json({ error: 'patchId required' });
+    const { getCoordinator } = require('../agents');
+    const coord = getCoordinator();
+    const result = coord.coderAgent.rejectPatch(patchId);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/patches/revert', async (req, res) => {
+  try {
+    const { filePath } = req.body;
+    if (!filePath) return res.status(400).json({ error: 'filePath required' });
+    const { getCoordinator } = require('../agents');
+    const coord = getCoordinator();
+    const result = await coord.coderAgent.revertPatch(filePath);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Bot Logs (for emulator live logs panel) ──────────────
+router.get('/logs', async (req, res) => {
+  try {
+    const { getRecentLogs } = require('../bot-logger');
+    const limit = Math.min(parseInt(req.query.limit) || 30, 100);
+    const logs = getRecentLogs(limit, null, 'all');
+    res.json({ logs });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 

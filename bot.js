@@ -11,6 +11,7 @@ const { run: runTrader } = require('./cycle');
 const aiLearner = require('./ai-learner');
 const { getSentimentSummary } = require('./sentiment-scraper');
 const { log: bLog } = require('./bot-logger');
+const { getCoordinator } = require('./agents');
 
 const TELEGRAM_TOKEN  = process.env.TELEGRAM_TOKEN;
 const TELEGRAM_CHATS  = (process.env.TELEGRAM_CHAT_ID || '').split(',').map(s => s.trim()).filter(Boolean);
@@ -155,6 +156,44 @@ async function tgSendTo(chatId, html) {
   }
 }
 
+/**
+ * Send a voice message to Telegram using Hermes TTS (edge-tts).
+ * Falls back silently if TTS unavailable.
+ */
+async function tgSendVoice(text) {
+  if (!TELEGRAM_TOKEN || !TELEGRAM_CHATS.length) return;
+  try {
+    const hermes = require('./hermes-bridge');
+    const result = await hermes.generateTTS(text);
+    if (!result.success || !result.filePath) return;
+
+    const voiceData = fs.readFileSync(result.filePath);
+    const boundary = `----HermesTTS${Date.now()}`;
+
+    for (const chatId of TELEGRAM_CHATS) {
+      const parts = [
+        `--${boundary}\r\nContent-Disposition: form-data; name="chat_id"\r\n\r\n${chatId}\r\n`,
+        `--${boundary}\r\nContent-Disposition: form-data; name="voice"; filename="voice.mp3"\r\nContent-Type: audio/mpeg\r\n\r\n`,
+      ];
+      const head = Buffer.from(parts.join(''));
+      const tail = Buffer.from(`\r\n--${boundary}--\r\n`);
+      const body = Buffer.concat([head, voiceData, tail]);
+
+      await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendVoice`, {
+        method: 'POST',
+        headers: { 'Content-Type': `multipart/form-data; boundary=${boundary}` },
+        body,
+        timeout: REQUEST_TIMEOUT,
+      });
+    }
+
+    // Clean up temp file
+    try { fs.unlinkSync(result.filePath); } catch {}
+  } catch (err) {
+    log(`TTS voice error (non-fatal): ${err.message}`);
+  }
+}
+
 let lastMsgAt = 0;
 const MSG_INTERVAL = 3 * 1000;
 
@@ -183,10 +222,13 @@ async function handleCommand(text, fromChatId) {
       `<b>Trading</b>\n` +
       `/scan — Force SMC scan now\n` +
       `/stats — AI learning stats &amp; performance\n` +
-      `/sentiment — Current market sentiment\n\n` +
+      `/sentiment — Current market sentiment\n` +
+      `/agents — Agent framework health\n\n` +
       `<b>Control</b>\n` +
       `/pause — Pause auto trading\n` +
       `/resume — Resume auto trading\n` +
+      `/voice — Voice status update (TTS)\n` +
+      `/hermes — Hermes AI integration status\n` +
       `/help — Show this menu\n\n` +
       `<i>Auto scan every ${INTERVAL_MIN} min | AI adapts after each trade</i>`
     );
@@ -203,6 +245,12 @@ async function handleCommand(text, fromChatId) {
     await sendAIStats(fromChatId);
   } else if (cmd === '/sentiment' || cmd === 'sentiment') {
     await sendSentiment(fromChatId);
+  } else if (cmd === '/agents' || cmd === 'agents') {
+    await sendAgentHealth(fromChatId);
+  } else if (cmd === '/voice') {
+    await sendVoiceStatus(fromChatId);
+  } else if (cmd === '/hermes') {
+    await sendHermesStatus(fromChatId);
   } else {
     await tgSendTo(fromChatId, `Unknown command: <code>${e(cmd)}</code>\nSend /help for all commands.`);
   }
@@ -271,6 +319,96 @@ async function sendAIStats(chatId) {
     await tgSendTo(chatId, msg);
   } catch (err) {
     await tgSendTo(chatId, `<b>Stats Error</b>\n<code>${e(err.message)}</code>`);
+  }
+}
+
+// ── /agents — Agent Framework Health ─────────────────────────
+async function sendAgentHealth(chatId) {
+  try {
+    const coordinator = getCoordinator();
+    const health = coordinator.getHealth();
+    let msg = `<b>Agent Framework</b>\n━━━━━━━━━━━━━━━━━━\n`;
+    msg += `Coordinator: <b>${health.state}</b> | Runs: ${health.runCount}\n`;
+    msg += `Cycle running: ${health.cycleRunning ? 'Yes' : 'No'}\n\n`;
+
+    for (const [name, agentHealth] of Object.entries(health.agents || {})) {
+      msg += `<b>${agentHealth.name}</b>\n`;
+      msg += `  State: ${agentHealth.state} | Runs: ${agentHealth.runCount}\n`;
+      if (agentHealth.lastRunAt) {
+        const ago = Math.round((Date.now() - agentHealth.lastRunAt) / 60000);
+        msg += `  Last run: ${ago}m ago\n`;
+      }
+      if (agentHealth.lastError) {
+        const errAgo = Math.round((Date.now() - agentHealth.lastError.at) / 60000);
+        msg += `  Last error: ${agentHealth.lastError.message.substring(0, 60)} (${errAgo}m ago)\n`;
+      }
+      // ChartAgent extras
+      if (agentHealth.lastSignalCount !== undefined) {
+        msg += `  Signals: ${agentHealth.lastSignalCount} | Scans: ${agentHealth.totalScans}\n`;
+      }
+      // TraderAgent extras
+      if (agentHealth.cycleCount !== undefined) {
+        msg += `  Cycles: ${agentHealth.cycleCount}\n`;
+      }
+      msg += '\n';
+    }
+    await tgSendTo(chatId, msg);
+  } catch (err) {
+    await tgSendTo(chatId, `<b>Agent Health Error</b>\n<code>${e(err.message)}</code>`);
+  }
+}
+
+// ── /voice — Voice Status Update via TTS ─────────────────────
+async function sendVoiceStatus(chatId) {
+  try {
+    const coordinator = getCoordinator();
+    const health = coordinator.getHealth();
+    const mood = coordinator.sentimentAgent?.getMood() || 'neutral';
+
+    let openCount = 0;
+    try {
+      const { query } = require('./db');
+      const rows = await query("SELECT COUNT(*) as cnt FROM trades WHERE status = 'OPEN'");
+      openCount = parseInt(rows[0]?.cnt) || 0;
+    } catch {}
+
+    const text = `Trading bot status update. ` +
+      `Market mood is ${mood}. ` +
+      `We have ${openCount} open positions. ` +
+      `${health.runCount} cycles completed. ` +
+      `All agents are ${health.state === 'idle' || health.state === 'running' ? 'operational' : health.state}.`;
+
+    await tgSendVoice(text);
+    await tgSendTo(chatId, `<i>Voice status sent.</i>`);
+  } catch (err) {
+    await tgSendTo(chatId, `<b>Voice Error</b>\n<code>${e(err.message)}</code>\nMake sure edge-tts is installed: <code>pip install edge-tts</code>`);
+  }
+}
+
+// ── /hermes — Hermes Integration Status ──────────────────────
+async function sendHermesStatus(chatId) {
+  try {
+    const hermes = require('./hermes-bridge');
+    const status = hermes.getHermesStatus();
+    const teamMem = hermes.readTeamMemory();
+
+    let msg = `<b>Hermes AI Integration</b>\n━━━━━━━━━━━━━━━━━━\n`;
+    msg += `Installed: ${status.installed ? '✅' : '❌'}\n`;
+    msg += `Skills: ${status.skillCount}\n`;
+    msg += `Soul: ${status.hasSoul ? '✅ Loaded' : '❌ Not found'}\n`;
+    msg += `Team memory: ${teamMem.length} entries\n`;
+    msg += `Home: <code>${status.hermesHome}</code>\n`;
+
+    if (teamMem.length > 0) {
+      msg += `\n<b>Recent Team Memory:</b>\n`;
+      for (const entry of teamMem.slice(-3)) {
+        msg += `• ${e(entry.substring(0, 80))}\n`;
+      }
+    }
+
+    await tgSendTo(chatId, msg);
+  } catch (err) {
+    await tgSendTo(chatId, `<b>Hermes Status Error</b>\n<code>${e(err.message)}</code>`);
   }
 }
 
@@ -353,14 +491,18 @@ async function checkSpikes() {
   } catch (err) { log(`spike err: ${err.message}`); }
 }
 
-// ── MAIN TRADING CYCLE ───────────────────────────────────────
+// ── MAIN TRADING CYCLE (via Agent Coordinator) ──────────────
 async function runTradingCycle(forced = false) {
   if (paused && !forced) { log('Paused.'); bLog.system('Bot is paused'); return; }
   if (isBanned()) { bLog.system('Binance IP banned — skipping cycle'); return; }
 
   bLog.system('Trading cycle started' + (forced ? ' (manual)' : ''));
   try {
-    await runTrader();
+    const coordinator = getCoordinator();
+    const result = await coordinator.run({ forced });
+    if (result) {
+      bLog.system(`Cycle done in ${result.elapsed}s`);
+    }
   } catch (err) {
     bLog.error(`Trading cycle error: ${err.message}`);
     log(`Trading cycle error: ${err.message}`);
@@ -392,6 +534,15 @@ async function main() {
     log('DB tables initialized');
   } catch (err) {
     log(`DB init error: ${err.message}`);
+  }
+
+  // Initialize agent framework
+  try {
+    const coordinator = getCoordinator();
+    await coordinator.init();
+    log('Agent framework initialized');
+  } catch (err) {
+    log(`Agent init error (non-fatal): ${err.message}`);
   }
 
   // Log AI state on startup (non-critical — don't block boot)
@@ -441,28 +592,22 @@ async function main() {
     log(`Initial scan error (non-fatal): ${err.message}`);
   }
 
-  // Main loop — these MUST start regardless of errors above
-  log(`Starting main loop: scan every ${INTERVAL_MIN} min`);
+  // Main loop — command polling + spike checks
+  // NOTE: Trading cycles are now managed by the Coordinator's CEO always-on loop
+  // (30s micro-cycles + 60s full pipeline scans + staggered token scanning)
+  log('Starting main loop: CEO always-on mode (30s micro-cycles)');
 
   setInterval(async () => {
     try { await pollCommands(); } catch (err) { log(`Poll error: ${err.message}`); }
   }, 5000);
 
-  let tradingCycleRunning = false;
-  setInterval(async () => {
-    if (tradingCycleRunning) { log('Cycle still running — skipping'); return; }
-    tradingCycleRunning = true;
-    try { await runTradingCycle(); } catch (err) { log(`Cycle error: ${err.message}`); } finally { tradingCycleRunning = false; }
-  }, INTERVAL_MIN * 60 * 1000);
-
   setInterval(async () => {
     try { await checkSpikes(); } catch (err) { log(`Spike check error: ${err.message}`); }
   }, SPIKE_INTERVAL);
 
-  log('Bot loop is running');
+  log('Bot loop is running — CEO commanding all agents');
 }
 
 main().catch(err => {
-  console.error('FATAL:', err);
-  process.exit(1);
+  console.error('FATAL bot error (not exiting — server stays up):', err);
 });

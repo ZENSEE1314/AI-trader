@@ -1,0 +1,39 @@
+// ============================================================
+// Agent Framework — Public API
+// ============================================================
+
+const { BaseAgent, AGENT_STATES } = require('./base-agent');
+const { ChartAgent } = require('./chart-agent');
+const { TraderAgent } = require('./trader-agent');
+const { RiskAgent } = require('./risk-agent');
+const { SentimentAgent } = require('./sentiment-agent');
+const { AccountantAgent } = require('./accountant-agent');
+const { TokenAgent } = require('./token-agent');
+const { WatcherAgent } = require('./watcher-agent');
+const { KronosAgent } = require('./kronos-agent');
+const { StrategyAgent } = require('./strategy-agent');
+const { PoliceAgent } = require('./police-agent');
+const { CoderAgent } = require('./coder-agent');
+const { OptimizerAgent } = require('./optimizer-agent');
+const { AgentCoordinator, getCoordinator } = require('./agent-coordinator');
+const hermesBridge = require('../hermes-bridge');
+
+module.exports = {
+  BaseAgent,
+  AGENT_STATES,
+  ChartAgent,
+  TraderAgent,
+  RiskAgent,
+  SentimentAgent,
+  AccountantAgent,
+  TokenAgent,
+  WatcherAgent,
+  KronosAgent,
+  StrategyAgent,
+  PoliceAgent,
+  CoderAgent,
+  OptimizerAgent,
+  AgentCoordinator,
+  getCoordinator,
+  hermesBridge,
+};

@@ -37,13 +37,20 @@ router.get('/weekly-earnings', async (req, res) => {
        ORDER BY u.email, ak.id`
     );
 
-    // Get this week's trades — all closed trades (wins AND losses)
+    // Get all unpaid trades — trades since each user's last_paid_at (or account creation)
+    // The per-user filter happens below; here we fetch a broad window
+    const earliestPaidAt = users.reduce((min, u) => {
+      const pa = u.last_paid_at ? new Date(u.last_paid_at) : new Date(u.created_at);
+      return pa < min ? pa : min;
+    }, now);
+
     const trades = await query(
-      `SELECT t.user_id, t.api_key_id, t.pnl_usdt, t.status, t.symbol
+      `SELECT t.user_id, t.api_key_id, t.pnl_usdt, t.status, t.symbol,
+              COALESCE(t.closed_at, t.created_at) as closed_at
        FROM trades t
        WHERE t.status IN ('WIN', 'LOSS', 'TP', 'SL', 'CLOSED')
-         AND t.closed_at >= $1 AND t.closed_at <= $2`,
-      [monday, sunday]
+         AND COALESCE(t.closed_at, t.created_at) >= $1`,
+      [earliestPaidAt]
     );
 
     let grandTotalNet = 0;
@@ -78,7 +85,12 @@ router.get('/weekly-earnings', async (req, res) => {
         };
       }
       if (u.key_id) {
-        const keyTrades = trades.filter(t => t.api_key_id === u.key_id);
+        // Only count trades AFTER last payment (rolling window resets on payment)
+        const paidAt = u.last_paid_at ? new Date(u.last_paid_at) : new Date(u.created_at);
+        const keyTrades = trades.filter(t => {
+          if (t.api_key_id !== u.key_id) return false;
+          return new Date(t.closed_at) > paidAt;
+        });
         const wins = keyTrades.filter(t => parseFloat(t.pnl_usdt) > 0);
         const losses = keyTrades.filter(t => parseFloat(t.pnl_usdt) <= 0);
         // Net P&L = wins + losses (losses are negative)
@@ -380,6 +392,22 @@ router.put('/users/:id/approve-no-sub', async (req, res) => {
     res.json({ ok: true, approved: !!approved });
   } catch (err) {
     console.error('Approve no-sub error:', err.message);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Change user role (admin/user)
+router.put('/users/:id/role', async (req, res) => {
+  try {
+    const { is_admin } = req.body;
+    const targetId = parseInt(req.params.id);
+    if (targetId === req.userId) {
+      return res.status(400).json({ error: 'Cannot change your own role' });
+    }
+    await query('UPDATE users SET is_admin = $1 WHERE id = $2', [!!is_admin, targetId]);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Change role error:', err.message);
     res.status(500).json({ error: 'Server error' });
   }
 });
@@ -782,7 +810,7 @@ router.delete('/risk-levels/:id', async (req, res) => {
 // List all global token settings
 router.get('/global-tokens', async (req, res) => {
   try {
-    const rows = await query('SELECT * FROM global_token_settings ORDER BY symbol');
+    const rows = await query('SELECT * FROM global_token_settings ORDER BY "rank" ASC, symbol ASC');
     res.json(rows);
   } catch (err) {
     console.error('Global tokens list error:', err.message);
@@ -831,6 +859,93 @@ router.post('/remove-global-token', async (req, res) => {
     res.json({ ok: true, symbol });
   } catch (err) {
     console.error('Global token remove error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Scan Bitunix for all available futures pairs and sync to global_token_settings
+router.post('/scan-bitunix-tokens', async (req, res) => {
+  try {
+    const fetch = require('node-fetch');
+    const { getFetchOptions } = require('../proxy-agent');
+
+    const url = 'https://fapi.bitunix.com/api/v1/futures/market/trading_pairs';
+    const r = await fetch(url, { timeout: 15000, ...getFetchOptions() });
+    const json = await r.json();
+    if (json.code !== 0 || !Array.isArray(json.data)) {
+      return res.status(502).json({ error: `Bitunix API error: ${json.msg || 'unknown'}` });
+    }
+
+    const pairs = json.data
+      .filter(p => p.quote === 'USDT' && p.symbolStatus === 'OPEN')
+      .sort((a, b) => parseInt(b.maxLeverage || 0) - parseInt(a.maxLeverage || 0));
+
+    if (!pairs.length) {
+      return res.status(502).json({ error: 'No USDT pairs found on Bitunix' });
+    }
+
+    // Get existing tokens so we preserve their enabled/banned state
+    const existing = await query('SELECT symbol, enabled, banned FROM global_token_settings');
+    const existingMap = {};
+    for (const row of existing) existingMap[row.symbol] = row;
+
+    let added = 0;
+    let unchanged = 0;
+    let removed = 0;
+
+    // Upsert all Bitunix pairs — new ones default to enabled + not banned, store rank by order
+    for (let i = 0; i < pairs.length; i++) {
+      const p = pairs[i];
+      const pairRank = i + 1;
+      if (existingMap[p.symbol]) {
+        // Update rank for existing tokens (only if still default 999)
+        await query(
+          'UPDATE global_token_settings SET "rank" = LEAST("rank", $1) WHERE symbol = $2',
+          [pairRank, p.symbol]
+        );
+        unchanged++;
+      } else {
+        await query(
+          `INSERT INTO global_token_settings (symbol, enabled, banned, "rank")
+           VALUES ($1, true, false, $2)
+           ON CONFLICT (symbol) DO UPDATE SET "rank" = LEAST(global_token_settings."rank", EXCLUDED."rank")`,
+          [p.symbol, pairRank]
+        );
+        added++;
+      }
+    }
+
+    // Mark tokens that don't exist on Bitunix as banned (if they were previously added)
+    const bitunixSet = new Set(pairs.map(p => p.symbol));
+    for (const row of existing) {
+      if (!bitunixSet.has(row.symbol) && !row.banned) {
+        await query(
+          'UPDATE global_token_settings SET banned = true WHERE symbol = $1',
+          [row.symbol]
+        );
+        removed++;
+      }
+    }
+
+    // Clear candle cache since token list changed
+    try {
+      await query('DELETE FROM optimizer_cache');
+    } catch (_) {}
+
+    const finalRows = await query('SELECT COUNT(*) as total FROM global_token_settings WHERE enabled = true AND banned = false');
+    const enabledCount = parseInt(finalRows[0].total);
+
+    res.json({
+      ok: true,
+      bitunixTotal: pairs.length,
+      added,
+      unchanged,
+      bannedInvalid: removed,
+      enabledCount,
+      message: `Found ${pairs.length} Bitunix pairs. Added ${added} new, ${removed} invalid banned. ${enabledCount} tokens now enabled.`,
+    });
+  } catch (err) {
+    console.error('Scan Bitunix tokens error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -923,21 +1038,73 @@ router.post('/token-leverage/auto-populate', async (req, res) => {
 router.get('/open-positions', async (req, res) => {
   try {
     const rows = await query(
-      `SELECT t.symbol, t.direction, t.entry_price, t.quantity, t.sl_price, t.tp_price,
-              t.trailing_sl_price, t.created_at, u.email
+      `SELECT t.id, t.symbol, t.direction, t.entry_price, t.quantity, t.leverage,
+              t.sl_price, t.tp_price, t.trailing_sl_price, t.pnl_usdt,
+              t.created_at, u.email, ak.platform
        FROM trades t
        JOIN api_keys ak ON ak.id = t.api_key_id
        JOIN users u ON u.id = t.user_id
        WHERE t.status = 'OPEN'
        ORDER BY t.symbol, u.email`
     );
+
+    // Fetch live prices
+    let priceMap = {};
+    try {
+      const fetch = require('node-fetch');
+      const r = await fetch('https://fapi.binance.com/fapi/v1/ticker/price', { timeout: 8000 });
+      const tickers = await r.json();
+      for (const t of tickers) priceMap[t.symbol] = parseFloat(t.price);
+    } catch {}
+
+    // Build positions with live P&L
+    const positions = rows.map(t => {
+      const entry = parseFloat(t.entry_price) || 0;
+      const qty = parseFloat(t.quantity) || 0;
+      const lev = parseInt(t.leverage) || 20;
+      const curPrice = priceMap[t.symbol] || entry;
+      const isLong = t.direction !== 'SHORT';
+
+      const pricePnl = isLong ? (curPrice - entry) / entry : (entry - curPrice) / entry;
+      const capitalPnl = pricePnl * lev;
+      const pnlUsdt = isLong ? (curPrice - entry) * qty : (entry - curPrice) * qty;
+      const sl = parseFloat(t.trailing_sl_price || t.sl_price) || 0;
+      const tp = parseFloat(t.tp_price) || 0;
+      const slDist = sl > 0 ? (isLong ? (curPrice - sl) / curPrice * 100 : (sl - curPrice) / curPrice * 100) : 0;
+
+      const durationMin = Math.round((Date.now() - new Date(t.created_at).getTime()) / 60000);
+
+      // Danger level
+      let danger = 'safe';
+      if (capitalPnl < -0.5) danger = 'critical'; // -50%+ capital
+      else if (capitalPnl < -0.2) danger = 'danger'; // -20%+ capital
+      else if (capitalPnl < 0) danger = 'warning'; // losing
+
+      return {
+        id: t.id,
+        symbol: t.symbol,
+        direction: t.direction,
+        email: t.email,
+        platform: t.platform,
+        entry, curPrice, qty, leverage: lev,
+        pnlUsdt: parseFloat(pnlUsdt.toFixed(2)),
+        pnlPct: parseFloat((pricePnl * 100).toFixed(2)),
+        capitalPnl: parseFloat((capitalPnl * 100).toFixed(1)),
+        sl, tp, slDist: parseFloat(slDist.toFixed(1)),
+        durationMin,
+        danger,
+      };
+    });
+
     // Group by symbol
     const grouped = {};
-    for (const r of rows) {
-      if (!grouped[r.symbol]) grouped[r.symbol] = { symbol: r.symbol, users: [], direction: r.direction, entry: r.entry_price };
-      grouped[r.symbol].users.push(r.email);
+    for (const p of positions) {
+      if (!grouped[p.symbol]) grouped[p.symbol] = { symbol: p.symbol, direction: p.direction, trades: [], totalPnl: 0 };
+      grouped[p.symbol].trades.push(p);
+      grouped[p.symbol].totalPnl += p.pnlUsdt;
     }
-    res.json({ positions: Object.values(grouped), total: rows.length });
+
+    res.json({ positions: Object.values(grouped), all: positions, total: rows.length });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -1046,22 +1213,83 @@ router.post('/emergency-close', async (req, res) => {
           const positions = await client.getOpenPositions(symbol);
           const openPos = Array.isArray(positions) ? positions.filter(p => p.symbol === symbol && parseFloat(p.qty) > 0) : [];
 
-          for (const pos of openPos) {
-            try {
-              console.log(`[EMERGENCY] Flash closing ${pos.symbol} positionId=${pos.positionId} side=${pos.side} qty=${pos.qty} for ${key.email}`);
-              const closeResult = await client.flashClose({ positionId: pos.positionId });
-              console.log(`[EMERGENCY] Close result:`, JSON.stringify(closeResult));
-              await query(
-                `UPDATE trades SET status = 'CLOSED', exit_price = $1, closed_at = NOW()
-                 WHERE api_key_id = $2 AND symbol = $3 AND status = 'OPEN'`,
-                [parseFloat(pos.avgOpenPrice || 0), key.id, pos.symbol]
-              );
-              totalClosed++;
-              results.push({ user: key.email, symbol: pos.symbol, side: pos.side, qty: pos.qty, status: 'CLOSED' });
-              console.log(`[EMERGENCY] Closed ${pos.symbol} ${pos.side} qty=${pos.qty} for ${key.email}`);
-            } catch (closeErr) {
-              results.push({ user: key.email, symbol: pos.symbol, status: 'FAILED', error: closeErr.message });
+          if (openPos.length > 0) {
+            for (const pos of openPos) {
+              try {
+                console.log(`[EMERGENCY] Flash closing ${pos.symbol} positionId=${pos.positionId} side=${pos.side} qty=${pos.qty} for ${key.email}`);
+                const closeResult = await client.flashClose({ positionId: pos.positionId });
+                console.log(`[EMERGENCY] Close result:`, JSON.stringify(closeResult));
+                await query(
+                  `UPDATE trades SET status = 'CLOSED', exit_price = $1, closed_at = NOW()
+                   WHERE api_key_id = $2 AND symbol = $3 AND status = 'OPEN'`,
+                  [parseFloat(pos.avgOpenPrice || 0), key.id, pos.symbol]
+                );
+                totalClosed++;
+                results.push({ user: key.email, symbol: pos.symbol, side: pos.side, qty: pos.qty, status: 'CLOSED' });
+                console.log(`[EMERGENCY] Closed ${pos.symbol} ${pos.side} qty=${pos.qty} for ${key.email}`);
+              } catch (closeErr) {
+                results.push({ user: key.email, symbol: pos.symbol, status: 'FAILED', error: closeErr.message });
+              }
             }
+          } else {
+            // No exchange position found — mark DB trades as closed (phantom cleanup)
+            const phantomRows = await query(
+              `UPDATE trades SET status = 'CLOSED', closed_at = NOW()
+               WHERE api_key_id = $1 AND symbol = $2 AND status = 'OPEN'
+               RETURNING id`,
+              [key.id, symbol]
+            );
+            if (phantomRows.length > 0) {
+              console.log(`[EMERGENCY] Cleaned ${phantomRows.length} phantom DB trade(s) for ${key.email} ${symbol}`);
+              totalClosed += phantomRows.length;
+              results.push({ user: key.email, symbol, status: 'PHANTOM_CLEANED', count: phantomRows.length });
+            }
+          }
+        } else {
+          // Binance — cancel orders first, then close via market order
+          try {
+            const { USDMClient } = require('binance');
+            const getBinanceRequestOptions = () => {
+              const PROXY_URL = process.env.QUOTAGUARDSTATIC_URL;
+              if (!PROXY_URL) return {};
+              const { HttpsProxyAgent } = require('https-proxy-agent');
+              return { requestOptions: { agent: new HttpsProxyAgent(PROXY_URL) } };
+            };
+            const client = new USDMClient({ api_key: apiKey, api_secret: apiSecret }, getBinanceRequestOptions());
+            const account = await client.getAccountInformation({ omitZeroBalances: false });
+            const openPos = account.positions.filter(p => p.symbol === symbol && parseFloat(p.positionAmt) !== 0);
+
+            if (openPos.length > 0) {
+              // Cancel all existing orders (SL/TP) first so they don't interfere
+              try { await client.cancelAllOpenOrders({ symbol }); } catch (_) {}
+              try { await client.cancelAllAlgoOpenOrders({ symbol }); } catch (_) {}
+
+              for (const pos of openPos) {
+                try {
+                  const amt = parseFloat(pos.positionAmt);
+                  const closeSide = amt > 0 ? 'SELL' : 'BUY';
+                  const absAmt = Math.abs(amt);
+                  console.log(`[EMERGENCY] Binance closing ${symbol} ${closeSide} qty=${absAmt} for ${key.email}`);
+                  await client.submitNewOrder({ symbol, side: closeSide, type: 'MARKET', quantity: absAmt, reduceOnly: 'true' });
+                  const exitPrice = parseFloat(pos.markPrice || pos.entryPrice || 0);
+                  await query(`UPDATE trades SET status = 'CLOSED', exit_price = $1, closed_at = NOW() WHERE api_key_id = $2 AND symbol = $3 AND status = 'OPEN'`, [exitPrice, key.id, symbol]);
+                  totalClosed++;
+                  results.push({ user: key.email, symbol, side: amt > 0 ? 'LONG' : 'SHORT', qty: absAmt, status: 'CLOSED' });
+                } catch (closeErr) {
+                  console.error(`[EMERGENCY] Binance close failed for ${key.email} ${symbol}:`, closeErr.message);
+                  results.push({ user: key.email, symbol, status: 'FAILED', error: closeErr.message });
+                }
+              }
+            } else {
+              const phantomRows = await query(`UPDATE trades SET status = 'CLOSED', closed_at = NOW() WHERE api_key_id = $1 AND symbol = $2 AND status = 'OPEN' RETURNING id`, [key.id, symbol]);
+              if (phantomRows.length > 0) {
+                totalClosed += phantomRows.length;
+                results.push({ user: key.email, symbol, status: 'PHANTOM_CLEANED', count: phantomRows.length });
+              }
+            }
+          } catch (binErr) {
+            console.error(`[EMERGENCY] Binance error for ${key.email}:`, binErr.message);
+            results.push({ user: key.email, symbol, status: 'BINANCE_ERROR', error: binErr.message });
           }
         }
       } catch (keyErr) {
@@ -1069,7 +1297,48 @@ router.post('/emergency-close', async (req, res) => {
       }
     }
 
-    console.log(`[ADMIN] Emergency close ${symbol}: ${totalClosed} positions closed across ${keys.length} users`);
+    // Also close owner account position
+    try {
+      const ownerKey = process.env.BINANCE_API_KEY;
+      const ownerSecret = process.env.BINANCE_API_SECRET;
+      if (ownerKey && ownerSecret) {
+        const { USDMClient } = require('binance');
+        const getBinanceRequestOptions = () => {
+          const PROXY_URL = process.env.QUOTAGUARDSTATIC_URL;
+          if (!PROXY_URL) return {};
+          const { HttpsProxyAgent } = require('https-proxy-agent');
+          return { requestOptions: { agent: new HttpsProxyAgent(PROXY_URL) } };
+        };
+        const ownerClient = new USDMClient({ api_key: ownerKey, api_secret: ownerSecret }, getBinanceRequestOptions());
+        const ownerAccount = await ownerClient.getAccountInformation({ omitZeroBalances: false });
+        const ownerPos = ownerAccount.positions.filter(p => p.symbol === symbol && parseFloat(p.positionAmt) !== 0);
+        if (ownerPos.length > 0) {
+          try { await ownerClient.cancelAllOpenOrders({ symbol }); } catch (_) {}
+          try { await ownerClient.cancelAllAlgoOpenOrders({ symbol }); } catch (_) {}
+          for (const pos of ownerPos) {
+            const amt = parseFloat(pos.positionAmt);
+            const closeSide = amt > 0 ? 'SELL' : 'BUY';
+            console.log(`[EMERGENCY] Owner closing ${symbol} ${closeSide} qty=${Math.abs(amt)}`);
+            await ownerClient.submitNewOrder({ symbol, side: closeSide, type: 'MARKET', quantity: Math.abs(amt), reduceOnly: 'true' });
+            totalClosed++;
+            results.push({ user: 'OWNER', symbol, side: amt > 0 ? 'LONG' : 'SHORT', qty: Math.abs(amt), status: 'CLOSED' });
+          }
+          // Clean up tradeState in cycle.js
+          try {
+            const { tradeState } = require('../cycle');
+            if (tradeState && tradeState.has(symbol)) {
+              tradeState.delete(symbol);
+              console.log(`[EMERGENCY] Cleared tradeState for ${symbol}`);
+            }
+          } catch (_) {}
+        }
+      }
+    } catch (ownerErr) {
+      console.error(`[EMERGENCY] Owner close error:`, ownerErr.message);
+      results.push({ user: 'OWNER', symbol, status: 'FAILED', error: ownerErr.message });
+    }
+
+    console.log(`[ADMIN] Emergency close ${symbol}: ${totalClosed} positions closed across ${keys.length + 1} accounts`);
     res.json({ ok: true, symbol, totalClosed, totalUsers: keys.length, results });
   } catch (err) {
     console.error('Emergency close error:', err);
@@ -1367,6 +1636,13 @@ router.post('/backtest', async (req, res) => {
     const DAYS = Math.min(parseInt(req.body.days) || 7, 30);
     const REVERSE = req.body.reverse === true;
     const endTime = Date.now();
+
+    // Per-token leverage from admin settings
+    const leverageMap = {};
+    try {
+      const levRows = await query('SELECT symbol, leverage FROM token_leverage WHERE enabled = true');
+      for (const r of levRows) leverageMap[r.symbol] = parseInt(r.leverage) || MAX_LEVERAGE;
+    } catch (_) {}
 
     async function fetchK(symbol, interval, limit, et) {
       const url = `https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=${interval}&limit=${limit}${et ? '&endTime=' + et : ''}`;
@@ -1730,9 +2006,10 @@ router.post('/backtest', async (req, res) => {
 
           if (REVERSE) dir = dir === 'LONG' ? 'SHORT' : 'LONG';
 
-          // Step 6: Risk — configurable SL, trailing steps, optional TP
-          const leverage = MAX_LEVERAGE;
-          const sl = dir === 'LONG' ? price * (1 - SL_PCT) : price * (1 + SL_PCT);
+          // Step 6: Risk — per-token leverage from admin settings, SL scaled to leverage
+          const leverage = leverageMap[sym] || MAX_LEVERAGE;
+          const tokenSlPct = SL_PCT > 0 ? SL_PCT : 0.25;
+          const sl = dir === 'LONG' ? price * (1 - tokenSlPct) : price * (1 + tokenSlPct);
           const tp = TP_PCT > 0
             ? (dir === 'LONG' ? price * (1 + TP_PCT) : price * (1 - TP_PCT))
             : null;
@@ -2170,6 +2447,7 @@ router.post('/fix-trades', async (req, res) => {
   try {
     const cryptoUtils = require('../crypto-utils');
     const { USDMClient } = require('binance');
+    const { BitunixClient } = require('../bitunix-client');
     let getBinanceRequestOptions;
     try { getBinanceRequestOptions = require('../proxy-agent').getBinanceRequestOptions; } catch { getBinanceRequestOptions = () => ({}); }
 
@@ -2216,28 +2494,52 @@ router.post('/fix-trades', async (req, res) => {
       let actualExit = null;
       let actualPnl = null;
 
-      if (t.platform === 'binance' && qty > 0) {
+      if (qty > 0) {
         try {
           const apiKey = cryptoUtils.decrypt(t.api_key_enc, t.iv, t.auth_tag);
           const apiSecret = cryptoUtils.decrypt(t.api_secret_enc, t.secret_iv, t.secret_auth_tag);
-          const client = new USDMClient({ api_key: apiKey, api_secret: apiSecret }, getBinanceRequestOptions());
 
-          const openTime = new Date(t.created_at).getTime();
-          const fills = await client.getAccountTradeList({ symbol: t.symbol, startTime: openTime, limit: 50 });
+          if (t.platform === 'binance') {
+            const client = new USDMClient({ api_key: apiKey, api_secret: apiSecret }, getBinanceRequestOptions());
+            const openTime = new Date(t.created_at).getTime();
+            const fills = await client.getAccountTradeList({ symbol: t.symbol, startTime: openTime, limit: 50 });
 
-          if (fills && fills.length > 0) {
-            const closeSide = isLong ? 'SELL' : 'BUY';
-            const closeFills = fills.filter(f => f.side === closeSide);
-            if (closeFills.length > 0) {
-              let totalQty = 0, totalValue = 0, totalRealizedPnl = 0;
-              for (const f of closeFills) {
-                const fQty = parseFloat(f.qty);
-                totalQty += fQty;
-                totalValue += fQty * parseFloat(f.price);
-                totalRealizedPnl += parseFloat(f.realizedPnl || 0);
+            if (fills && fills.length > 0) {
+              const closeSide = isLong ? 'SELL' : 'BUY';
+              const closeFills = fills.filter(f => f.side === closeSide);
+              if (closeFills.length > 0) {
+                let totalQty = 0, totalValue = 0, totalRealizedPnl = 0;
+                for (const f of closeFills) {
+                  const fQty = parseFloat(f.qty);
+                  totalQty += fQty;
+                  totalValue += fQty * parseFloat(f.price);
+                  totalRealizedPnl += parseFloat(f.realizedPnl || 0);
+                }
+                if (totalQty > 0) actualExit = totalValue / totalQty;
+                if (totalRealizedPnl !== 0) actualPnl = totalRealizedPnl;
               }
-              if (totalQty > 0) actualExit = totalValue / totalQty;
-              if (totalRealizedPnl !== 0) actualPnl = totalRealizedPnl;
+            }
+          } else if (t.platform === 'bitunix') {
+            const bxClient = new BitunixClient({ apiKey, apiSecret });
+            const positions = await bxClient.getHistoryPositions({ symbol: t.symbol, pageSize: 50 });
+            const tradeEntry = entry;
+            const tradeSideLong = isLong;
+
+            for (const p of positions) {
+              const cp = parseFloat(p.closePrice || p.avgClosePrice || 0);
+              const ep = parseFloat(p.entryPrice || p.avgOpenPrice || 0);
+              const pSideLong = (p.side || '').toUpperCase() === 'LONG';
+              const entryMatch = ep > 0 && Math.abs(ep - tradeEntry) / tradeEntry < 0.002;
+              const sideMatch = pSideLong === tradeSideLong;
+
+              if (cp > 0 && p.symbol === t.symbol && entryMatch && sideMatch) {
+                actualExit = cp;
+                const profit = parseFloat(p.profit || 0);
+                const pnl = parseFloat(p.pnl || 0);
+                if (profit !== 0) actualPnl = profit;
+                else if (pnl !== 0) actualPnl = pnl;
+                break;
+              }
             }
           }
         } catch (e) {
@@ -2297,6 +2599,463 @@ router.post('/clear-test-data', async (req, res) => {
     console.error('Clear test data error:', err.message);
     res.status(500).json({ error: 'Server error' });
   }
+});
+
+// ── Mission Control: Agent Framework ────────────────────────
+
+// ── Token Board Management ──────────────────────────────────
+
+// GET /api/admin/token-board — all tokens with risk tags + leverage + live price
+router.get('/token-board', async (req, res) => {
+  try {
+    const tokens = await query(
+      `SELECT g.symbol, g.enabled, g.banned, g.risk_tag, g.featured, g."rank",
+              COALESCE(tl.leverage, 20) as leverage
+       FROM global_token_settings g
+       LEFT JOIN token_leverage tl ON tl.symbol = g.symbol AND tl.enabled = true
+       ORDER BY g."rank" ASC, g.symbol ASC`
+    );
+
+    // Get live signal status from token agents
+    let signalMap = {};
+    try {
+      const { getCoordinator } = require('../agents');
+      const coord = getCoordinator();
+      for (const [sym, agent] of coord.tokenAgents || new Map()) {
+        const h = agent.getHealth();
+        signalMap[sym] = {
+          direction: h.lastSignal?.direction || null,
+          score: h.lastSignal?.score || 0,
+          structure: h.structure || {},
+          hasAgent: true,
+        };
+      }
+    } catch {}
+
+    // Fetch live prices + volume from Binance
+    let priceMap = {};
+    try {
+      const fetch = require('node-fetch');
+      const r = await fetch('https://fapi.binance.com/fapi/v1/ticker/24hr', { timeout: 10000 });
+      const tickers = await r.json();
+      for (const t of tickers) {
+        priceMap[t.symbol] = {
+          price: parseFloat(t.lastPrice),
+          change24h: parseFloat(t.priceChangePercent),
+          volume: parseFloat(t.quoteVolume),
+        };
+      }
+    } catch {}
+
+    const result = tokens.map(t => ({
+      ...t,
+      price: priceMap[t.symbol]?.price || 0,
+      change24h: priceMap[t.symbol]?.change24h || 0,
+      volume: priceMap[t.symbol]?.volume || 0,
+      signal: signalMap[t.symbol]?.direction || null,
+      signalScore: signalMap[t.symbol]?.score || 0,
+      structure: signalMap[t.symbol]?.structure || null,
+      hasAgent: signalMap[t.symbol]?.hasAgent || false,
+    }));
+
+    res.json(result);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// PUT /api/admin/token-board/:symbol/risk — set risk tag
+router.put('/token-board/:symbol/risk', async (req, res) => {
+  try {
+    const { risk_tag } = req.body; // 'low', 'medium', 'high', 'popular', null
+    await query(
+      `INSERT INTO global_token_settings (symbol, enabled, banned, risk_tag)
+       VALUES ($1, true, false, $2)
+       ON CONFLICT (symbol) DO UPDATE SET risk_tag = $2`,
+      [req.params.symbol.toUpperCase(), risk_tag || null]
+    );
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// PUT /api/admin/token-board/:symbol/featured — toggle featured
+router.put('/token-board/:symbol/featured', async (req, res) => {
+  try {
+    const { featured } = req.body;
+    await query(
+      `INSERT INTO global_token_settings (symbol, enabled, banned, featured)
+       VALUES ($1, true, false, $2)
+       ON CONFLICT (symbol) DO UPDATE SET featured = $2`,
+      [req.params.symbol.toUpperCase(), !!featured]
+    );
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// POST /api/admin/token-board/populate-top50 — auto-add top 10 by volume
+router.post('/token-board/populate-top50', async (req, res) => {
+  try {
+    const fetch = require('node-fetch');
+    const r = await fetch('https://fapi.binance.com/fapi/v1/ticker/24hr', { timeout: 15000 });
+    const tickers = await r.json();
+
+    const BLACKLIST = new Set([
+      'ALPACAUSDT','BNXUSDT','ALPHAUSDT','BANANAS31USDT',
+      'LYNUSDT','PORT3USDT','RVVUSDT','BSWUSDT',
+      'NEIROETHUSDT','COSUSDT','YALAUSDT','TANSSIUSDT','EPTUSDT',
+      'LEVERUSDT','AGLDUSDT','LOOKSUSDT','TRUUSDT',
+      'XAUUSDT','XAGUSDT','EURUSDT','GBPUSDT','JPYUSDT',
+    ]);
+
+    const top10 = tickers
+      .filter(t => t.symbol.endsWith('USDT') && !t.symbol.includes('_'))
+      .filter(t => !BLACKLIST.has(t.symbol))
+      .filter(t => parseFloat(t.quoteVolume) >= 10_000_000)
+      .sort((a, b) => parseFloat(b.quoteVolume) - parseFloat(a.quoteVolume))
+      .slice(0, 10)
+      .map((t, i) => ({ symbol: t.symbol, rank: i + 1 }));
+
+    let added = 0;
+
+    // Step 1: Ban ALL existing tokens first
+    await query('UPDATE global_token_settings SET banned = true, enabled = false');
+
+    // Step 2: Enable only top 10
+    for (const t of top10) {
+      await query(
+        `INSERT INTO global_token_settings (symbol, enabled, banned, "rank")
+         VALUES ($1, true, false, $2)
+         ON CONFLICT (symbol) DO UPDATE SET enabled = true, banned = false, "rank" = $2`,
+        [t.symbol, t.rank]
+      );
+      added++;
+    }
+
+    // Step 3: Delete banned tokens (clean up table — only keep top 10)
+    await query('DELETE FROM global_token_settings WHERE banned = true');
+
+    const afterCount = await query('SELECT COUNT(*) as c FROM global_token_settings');
+
+    res.json({ ok: true, added, banned: 0, total: parseInt(afterCount[0].c) });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// POST /api/admin/token-board/add — add token to board
+router.post('/token-board/add', async (req, res) => {
+  try {
+    const { symbol, risk_tag } = req.body;
+    if (!symbol) return res.status(400).json({ error: 'Missing symbol' });
+    await query(
+      `INSERT INTO global_token_settings (symbol, enabled, banned, risk_tag, featured)
+       VALUES ($1, true, false, $2, false)
+       ON CONFLICT (symbol) DO UPDATE SET enabled = true, banned = false, risk_tag = COALESCE($2, global_token_settings.risk_tag)`,
+      [symbol.toUpperCase(), risk_tag || null]
+    );
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// DELETE /api/admin/token-board/:symbol — remove from board
+router.delete('/token-board/:symbol', async (req, res) => {
+  try {
+    await query('DELETE FROM global_token_settings WHERE symbol = $1', [req.params.symbol.toUpperCase()]);
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// GET /api/admin/agents/health — Full agent health + activity
+router.get('/agents/health', async (req, res) => {
+  try {
+    const { getCoordinator } = require('../agents');
+    const coordinator = getCoordinator();
+    res.json({
+      health: coordinator.getHealth(),
+      activity: coordinator.getAllActivity(100),
+      uptime: process.uptime(),
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/admin/agents/trade-history — All agent trade history (JSON)
+router.get('/agents/trade-history', async (req, res) => {
+  try {
+    const { query } = require('../db');
+    const agent = req.query.agent || null;
+    const limit = Math.min(parseInt(req.query.limit) || 500, 5000);
+
+    let sql = 'SELECT * FROM agent_trade_history';
+    const params = [];
+    if (agent) {
+      sql += ' WHERE agent = $1';
+      params.push(agent);
+    }
+    sql += ' ORDER BY created_at DESC LIMIT $' + (params.length + 1);
+    params.push(limit);
+
+    const rows = await query(sql, params);
+    res.json({ trades: rows, total: rows.length });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/admin/agents/trade-history/csv — Download trade history as CSV (Excel-compatible)
+router.get('/agents/trade-history/csv', async (req, res) => {
+  try {
+    const { query } = require('../db');
+    const agent = req.query.agent || null;
+
+    let sql = 'SELECT * FROM agent_trade_history';
+    const params = [];
+    if (agent) {
+      sql += ' WHERE agent = $1';
+      params.push(agent);
+    }
+    sql += ' ORDER BY created_at DESC LIMIT 10000';
+
+    const rows = await query(sql, params);
+
+    // Build CSV
+    const headers = ['ID','Agent','Symbol','Direction','Entry Price','Exit Price','PnL (USDT)','Win','Strategy','Setup','Leverage','Capital After','Health After','Date'];
+    const csvRows = [headers.join(',')];
+    for (const r of rows) {
+      csvRows.push([
+        r.id,
+        `"${r.agent}"`,
+        r.symbol,
+        r.direction,
+        r.entry_price,
+        r.exit_price,
+        r.pnl_usdt,
+        r.is_win ? 'WIN' : 'LOSS',
+        `"${(r.strategy || '').replace(/"/g, '""')}"`,
+        `"${(r.setup || '').replace(/"/g, '""')}"`,
+        r.leverage,
+        r.capital_after,
+        r.health_after,
+        r.created_at ? new Date(r.created_at).toISOString() : '',
+      ].join(','));
+    }
+
+    const csv = csvRows.join('\n');
+    const filename = agent ? `agent_trades_${agent}_${new Date().toISOString().slice(0,10)}.csv` : `all_agent_trades_${new Date().toISOString().slice(0,10)}.csv`;
+
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(csv);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/admin/agents/revenue-summary — Revenue stats per agent
+router.get('/agents/revenue-summary', async (req, res) => {
+  try {
+    const { query } = require('../db');
+    const rows = await query(`
+      SELECT agent,
+        COUNT(*) as total_trades,
+        SUM(CASE WHEN is_win THEN 1 ELSE 0 END) as wins,
+        SUM(CASE WHEN NOT is_win THEN 1 ELSE 0 END) as losses,
+        ROUND(SUM(pnl_usdt)::numeric, 2) as total_pnl,
+        ROUND(AVG(pnl_usdt)::numeric, 2) as avg_pnl,
+        ROUND(SUM(CASE WHEN is_win THEN pnl_usdt ELSE 0 END)::numeric, 2) as total_wins_pnl,
+        ROUND(SUM(CASE WHEN NOT is_win THEN pnl_usdt ELSE 0 END)::numeric, 2) as total_losses_pnl,
+        MAX(created_at) as last_trade_at
+      FROM agent_trade_history
+      GROUP BY agent
+      ORDER BY total_pnl DESC
+    `);
+    res.json({ agents: rows });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/admin/agents/strategies — Strategy discovery population
+router.get('/agents/strategies', async (req, res) => {
+  try {
+    const { getCoordinator } = require('../agents');
+    const coordinator = getCoordinator();
+    const stratAgent = coordinator.strategyAgent;
+    if (!stratAgent) return res.json({ population: [], hallOfFame: [] });
+    res.json({
+      population: stratAgent.getPopulation(),
+      hallOfFame: stratAgent.getHallOfFame(),
+      stats: {
+        cycleCount: stratAgent._cycleCount,
+        totalGenerated: stratAgent._totalGenerated,
+        totalEvolved: stratAgent._totalEvolved,
+        totalCulled: stratAgent._totalCulled,
+        bestEverWinRate: stratAgent._bestEverWinRate,
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/admin/agents/ruflo — Ruflo intelligence layer stats
+router.get('/agents/ruflo', async (req, res) => {
+  try {
+    const { getCoordinator } = require('../agents');
+    const coordinator = getCoordinator();
+    const ruflo = coordinator.getRufloStats();
+    const { getSwarmConsensusStats } = require('../agents/swarm-engine');
+
+    // Add per-agent Q-Learning stats
+    const agentQL = {};
+    for (const [name, agent] of coordinator._agents) {
+      try {
+        agentQL[name] = agent.getQLStats();
+      } catch (_) {}
+    }
+
+    res.json({
+      consensus: ruflo.consensus,
+      patterns: ruflo.patterns,
+      swarmConsensus: getSwarmConsensusStats(),
+      agentQLearning: agentQL,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/admin/agents/command — Send command to coordinator
+router.post('/agents/command', async (req, res) => {
+  try {
+    const { command, params } = req.body;
+    if (!command) return res.status(400).json({ error: 'Missing command' });
+    const { getCoordinator } = require('../agents');
+    const coordinator = getCoordinator();
+    const result = await coordinator.handleCommand(command, params || {});
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// POST /api/admin/agents/chat — Natural language chat with agents (120s timeout for tunnel-routed Ollama)
+router.post('/agents/chat', async (req, res) => {
+  try {
+    const { message } = req.body;
+    if (!message) return res.status(400).json({ error: 'No message' });
+    const { getCoordinator } = require('../agents');
+    const coordinator = getCoordinator();
+    const timeoutMs = 120000;
+    const reply = await Promise.race([
+      coordinator.handleChat(message),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('Chat timed out — AI is taking too long. Try a simpler question.')), timeoutMs)),
+    ]);
+    res.json(reply);
+  } catch (err) {
+    res.status(500).json({ from: 'Coordinator', message: err.message || 'Something went wrong' });
+  }
+});
+
+// GET /api/admin/agents/activity — Activity feed only
+router.get('/agents/activity', async (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit) || 30;
+    const { getCoordinator } = require('../agents');
+    const coordinator = getCoordinator();
+    res.json(coordinator.getAllActivity(limit));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/admin/agents/profiles — All agent profiles with skills & config
+router.get('/agents/profiles', async (req, res) => {
+  try {
+    const { getCoordinator } = require('../agents');
+    res.json(getCoordinator().getAllProfiles());
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// GET /api/admin/agents/profiles/:key — Single agent profile
+
+router.get('/brain-status', (req, res) => {
+  const graphPath = Path('graphify-out/GRAPH_REPORT.md');
+  const report = graphPath.exists() ? graphPath.read_text() : 'No report available';
+  res.json({ report, status: 'Operational' });
+});
+router.get('/agents/profiles/:key', async (req, res) => {
+  try {
+    const { getCoordinator } = require('../agents');
+    const profile = getCoordinator().getAgentProfile(req.params.key);
+    if (!profile) return res.status(404).json({ error: 'Agent not found' });
+    res.json(profile);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// PUT /api/admin/agents/profiles/:key/config — Update agent config
+router.put('/agents/profiles/:key/config', async (req, res) => {
+  try {
+    const { getCoordinator } = require('../agents');
+    const result = getCoordinator().updateAgentConfig(req.params.key, req.body);
+    res.json(result);
+  } catch (err) { res.status(500).json({ ok: false, error: err.message }); }
+});
+
+// PUT /api/admin/agents/profiles/:key/skill — Toggle a skill
+router.put('/agents/profiles/:key/skill', async (req, res) => {
+  try {
+    const { skillId, enabled } = req.body;
+    if (!skillId) return res.status(400).json({ error: 'Missing skillId' });
+    const { getCoordinator } = require('../agents');
+    const result = getCoordinator().toggleAgentSkill(req.params.key, skillId, !!enabled);
+    res.json(result);
+  } catch (err) { res.status(500).json({ ok: false, error: err.message }); }
+});
+
+// POST /api/admin/agents/create — Create a custom watcher agent
+router.post('/agents/create', async (req, res) => {
+  try {
+    const { name, symbols, alertThreshold, description } = req.body;
+    if (!name) return res.status(400).json({ error: 'Missing name' });
+    const { getCoordinator } = require('../agents');
+    const result = getCoordinator().addWatcherAgent(name, {
+      symbols: (symbols || '').split(',').map(s => s.trim().toUpperCase()).filter(Boolean),
+      alertThreshold: parseFloat(alertThreshold) || 3,
+      description: description || '',
+    });
+    res.json(result);
+  } catch (err) { res.status(500).json({ ok: false, error: err.message }); }
+});
+
+// DELETE /api/admin/agents/:key — Remove a custom agent
+router.delete('/agents/:key', async (req, res) => {
+  try {
+    const { getCoordinator } = require('../agents');
+    const result = getCoordinator().removeAgent(req.params.key);
+    res.json(result);
+  } catch (err) { res.status(500).json({ ok: false, error: err.message }); }
+});
+
+// POST /api/admin/agents/add — Deploy a new token agent with AI-generated soul
+router.post('/agents/add', async (req, res) => {
+  try {
+    const { symbol } = req.body;
+    if (!symbol) return res.status(400).json({ ok: false, error: 'Missing symbol' });
+    const sym = symbol.toUpperCase().endsWith('USDT') ? symbol.toUpperCase() : symbol.toUpperCase() + 'USDT';
+    const { getCoordinator } = require('../agents');
+    const coordinator = getCoordinator();
+    if (coordinator.tokenAgents.has(sym)) {
+      return res.json({ ok: false, error: `${sym} agent already exists` });
+    }
+    coordinator.addTokenAgent(sym);
+    const key = sym.toLowerCase().replace('usdt', '');
+    const agent = coordinator._agents.get(key);
+    const profile = agent ? (agent._profile || agent.profile || {}) : {};
+    res.json({
+      ok: true,
+      symbol: sym,
+      key,
+      profile,
+    });
+  } catch (err) { res.status(500).json({ ok: false, error: err.message }); }
 });
 
 module.exports = router;

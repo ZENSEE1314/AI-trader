@@ -1,5 +1,7 @@
+require('dotenv').config();
 const express = require('express');
 const cookieParser = require('cookie-parser');
+const compression = require('compression');
 const path = require('path');
 const { initAllTables } = require('./db');
 
@@ -9,13 +11,35 @@ app.set('trust proxy', 1); // Railway runs behind proxy — needed for secure co
 // Ensure all tables exist on startup
 initAllTables().catch(err => console.error('DB init error:', err.message));
 
+// Initialize Agent Framework
+(async () => {
+  try {
+    const { getCoordinator } = require('./agents');
+    await getCoordinator().init();
+    console.log('[SERVER] Agent framework initialized successfully');
+  } catch (err) {
+    console.error('[SERVER] Agent framework init failed:', err);
+  }
+})();
+
+// ── Performance: gzip compression (saves 60-80% bandwidth) ──
+app.use(compression({ threshold: 1024 }));
+
 // Skip JSON parsing for Stripe webhook — needs raw body for signature verification
+app.get('/login', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
+app.get('/signup', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 app.use((req, res, next) => {
   if (req.path === '/api/subscription/stripe-webhook') return next();
   express.json()(req, res, next);
 });
 app.use(cookieParser());
-app.use(express.static(path.join(__dirname, 'public')));
+
+// ── Performance: static files with 1-day cache + ETag ──
+app.use(express.static(path.resolve(__dirname, 'public'), {
+  maxAge: '1d',
+  etag: true,
+  lastModified: true,
+}));
 
 // API routes
 app.use('/api/auth', require('./routes/auth'));
@@ -31,6 +55,81 @@ app.use('/api/quantum', require('./routes/quantum'));
 // Fast health endpoint for Railway healthcheck (no DB queries)
 app.get('/health', (req, res) => res.json({ status: 'ok', uptime: process.uptime() }));
 app.use('/health/details', require('./health'));
+
+// Customer chatbot (public — no auth needed)
+app.post('/api/chatbot', async (req, res) => {
+  try {
+    const { message } = req.body;
+    if (!message) return res.status(400).json({ reply: 'Please type a message.' });
+    const { think, isAvailable } = require('./agents/ai-brain');
+    console.log(`[CHATBOT] AI available: ${isAvailable()} | provider: ${require('./agents/ai-brain').getProviderName()}`);
+    if (isAvailable()) {
+      const reply = await think({
+        agentName: 'CustomerBot',
+        systemPrompt: `You are the customer support chatbot for MCT (Millionaire Crypto Traders), an AI-powered crypto auto-trading platform.
+
+About MCT:
+- AI bot trades crypto futures 24/7 on user's exchange account (Binance, Bitunix)
+- Users connect their exchange API keys (trading only, never withdrawal)
+- Bot uses SMC (Smart Money Concepts) strategy with multi-timeframe analysis
+- Profit split: 60% user / 40% platform
+- No monthly fees — we only earn when users profit
+- Bot manages trailing stop-loss, take-profit, and position sizing automatically
+
+How to get started:
+1. Sign up at the website
+2. Create API keys on Binance or Bitunix (trading permission only)
+3. Add API keys to the dashboard
+4. Bot starts trading automatically
+
+Be helpful, concise, and friendly. If asked about specific trades or account details, tell them to log in to their dashboard or contact admin on Telegram.
+Do NOT give financial advice. Always remind users that crypto trading involves risk.`,
+        userMessage: message,
+        context: {},
+      });
+      if (reply) return res.json({ reply });
+    }
+    // Fallback: simple FAQ
+    const faq = customerFAQ(message.toLowerCase());
+    res.json({ reply: faq });
+  } catch (err) {
+    res.json({ reply: 'Sorry, I\'m having trouble right now. Please try again or contact us on Telegram.' });
+  }
+});
+
+function customerFAQ(text) {
+  if (/how.*work|what.*do|about/.test(text)) return 'MCT is an AI-powered crypto trading bot. It trades futures 24/7 on your exchange using Smart Money Concepts. You connect your API key, and the bot handles everything — scanning, executing, and managing positions. Profit split is 60% you / 40% platform.';
+  if (/start|sign up|register|join/.test(text)) return 'Getting started is easy:\n1. Sign up on this website\n2. Create API keys on Binance or Bitunix (trading permission only, never enable withdrawal)\n3. Add your keys to the dashboard\n4. The bot starts trading automatically!';
+  if (/api.*key|connect|setup/.test(text)) return 'To connect your exchange:\n1. Go to Binance/Bitunix → API Management\n2. Create a new API key with Trading permission only\n3. Never enable Withdrawal permission\n4. Paste the key and secret in our dashboard under API Keys tab';
+  if (/profit|split|fee|cost|price/.test(text)) return 'No monthly fees! We use a 60/40 profit split:\n- You keep 60% of all profits\n- Platform takes 40% as performance fee\n- If you don\'t profit, you don\'t pay anything\n- Losses are 100% yours (no platform fee on losing trades)';
+  if (/safe|security|trust|scam/.test(text)) return 'Your funds stay on YOUR exchange account at all times. We never have access to withdraw. API keys are encrypted at rest. The bot only has permission to place and manage trades. You can revoke API keys anytime from your exchange.';
+  if (/risk|lose|loss/.test(text)) return 'Crypto trading involves risk. The bot uses stop-losses and risk management, but losses can happen. Never trade with money you can\'t afford to lose. The bot\'s risk management includes: 5% SL, 10% TP, trailing stops, and position size limits.';
+  if (/contact|support|help|telegram/.test(text)) return 'For support, reach out to our admin on Telegram. You can also check the dashboard for trade logs and performance stats.';
+  if (/withdraw|payout|payment/.test(text)) return 'Your profits stay on your exchange. The platform\'s 40% share is settled weekly by admin. You can withdraw from your exchange anytime — we never touch your funds.';
+  return 'I can help with:\n- How the trading bot works\n- Setting up your account\n- Connecting API keys\n- Understanding the profit split\n- Security questions\n\nWhat would you like to know?';
+}
+
+// Agent framework health (public — basic status only)
+app.get('/api/agents/status', (req, res) => {
+  try {
+    const { getCoordinator } = require('./agents');
+    const { isAvailable, getProviderName } = require('./agents/ai-brain');
+    const coordinator = getCoordinator();
+    const h = coordinator.getHealth();
+    res.json({
+      state: h.state,
+      cycleRunning: h.cycleRunning,
+      runCount: h.runCount,
+      agentCount: Object.keys(h.agents || {}).length,
+      aiEnabled: isAvailable(),
+      aiProvider: getProviderName(),
+      googleKeySet: !!process.env.GOOGLE_AI_KEY,
+      anthropicKeySet: !!process.env.ANTHROPIC_API_KEY,
+    });
+  } catch (err) {
+    res.json({ state: 'offline', error: err.message });
+  }
+});
 
 // Available trading pairs (cached 1 hour)
 let coinListCache = { data: null, ts: 0 };
