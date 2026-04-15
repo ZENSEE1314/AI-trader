@@ -4,6 +4,7 @@ const bcrypt = require('bcryptjs');
 const fetch = require('node-fetch');
 const { query } = require('../db');
 const { authMiddleware, signToken } = require('../middleware/auth');
+const emailService = require('../email-service');
 
 const router = express.Router();
 
@@ -45,6 +46,9 @@ router.post('/signup', async (req, res) => {
     const token = signToken(rows[0].id, email.toLowerCase());
     res.cookie('token', token, { httpOnly: true, maxAge: 30 * 24 * 60 * 60 * 1000, sameSite: 'lax' });
     res.json({ ok: true });
+
+    // Send welcome email in background — don't block the response
+    emailService.sendWelcome(email.toLowerCase(), '').catch(() => {});
   } catch (err) {
     console.error('Signup error:', err.message);
     res.status(500).json({ error: 'Server error' });
@@ -107,11 +111,15 @@ router.post('/forgot-password', async (req, res) => {
     const appUrl = process.env.APP_URL || 'https://millionairecryptotraders.up.railway.app';
     const resetLink = `${appUrl}/?reset=${resetToken}&uid=${rows[0].id}`;
 
-    // Send via Telegram to admin (simple notification — no email service needed)
+    // 1. Send reset email directly to the user
+    const emailResult = await emailService.sendPasswordReset(email.toLowerCase(), resetLink);
+
+    // 2. Also notify admin via Telegram (as backup / audit trail)
     const tgToken = process.env.TELEGRAM_TOKEN;
     const tgChats = (process.env.TELEGRAM_CHAT_ID || '').split(',').filter(Boolean);
     if (tgToken && tgChats.length) {
-      const msg = `🔑 Password Reset Request\nUser: ${email}\nLink: ${resetLink}\n\nSend this link to the user.`;
+      const emailStatus = emailResult.ok ? '✅ Email sent to user' : `⚠️ Email failed (${emailResult.reason}) — send manually`;
+      const msg = `🔑 Password Reset Request\nUser: ${email}\nLink: ${resetLink}\n\n${emailStatus}`;
       for (const chatId of tgChats) {
         try {
           await fetch(`https://api.telegram.org/bot${tgToken}/sendMessage`, {
@@ -123,7 +131,11 @@ router.post('/forgot-password', async (req, res) => {
       }
     }
 
-    res.json({ ok: true, message: 'If that email exists, a reset link has been sent to admin. Contact support to receive it.' });
+    const message = emailResult.ok
+      ? 'If that email exists, a reset link has been sent to your inbox.'
+      : 'If that email exists, a reset link has been sent. Please also check with support if you don\'t receive it.';
+
+    res.json({ ok: true, message });
   } catch (err) {
     console.error('Forgot password error:', err.message);
     res.status(500).json({ error: 'Server error' });

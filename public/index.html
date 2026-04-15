@@ -1627,6 +1627,7 @@
           <button class="admin-subtab" data-admintab="tokens" onclick="window.CryptoBot.switchAdminTab('tokens')">Tokens</button>
           <button class="admin-subtab" data-admintab="settings" onclick="window.CryptoBot.switchAdminTab('settings')">Settings</button>
           <button class="admin-subtab" data-admintab="tools" onclick="window.CryptoBot.switchAdminTab('tools')">Tools</button>
+          <button class="admin-subtab" data-admintab="email" onclick="window.CryptoBot.switchAdminTab('email')">✉️ Email</button>
           <a href="/emulator.html" class="admin-subtab" style="text-decoration:none;color:inherit;display:inline-flex;align-items:center;gap:4px" target="_blank">🎮 Trading Floor</a>
         </nav>
 
@@ -1942,6 +1943,72 @@
           </div>
           <pre id="fix-bitunix-result" style="margin-top:var(--space-2);font-size:0.75rem;color:var(--color-text-muted);max-height:70vh;overflow:auto;white-space:pre-wrap;word-break:break-all;border:1px solid var(--color-border-muted);border-radius:var(--radius-md);padding:var(--space-3);background:var(--color-bg-base);"></pre>
         </div><!-- /admin-tab-tools -->
+
+        <!-- ═══════════════════════════════════════════
+             TAB: Email
+             ═══════════════════════════════════════════ -->
+        <div id="admin-tab-email" class="admin-tab-panel hidden">
+          <!-- SMTP Status banner -->
+          <div id="email-smtp-status" style="padding:10px 14px;border-radius:8px;font-size:0.82rem;margin-bottom:var(--space-3);background:rgba(100,116,139,0.15);border:1px solid var(--color-border-muted);display:flex;align-items:center;gap:8px;">
+            <span id="email-smtp-dot" style="width:8px;height:8px;border-radius:50%;background:#64748b;flex-shrink:0;"></span>
+            <span id="email-smtp-label">Checking SMTP status...</span>
+            <button class="btn btn-ghost btn-sm" style="margin-left:auto;font-size:0.75rem;" onclick="window.CryptoBot.checkEmailSmtp()">Refresh</button>
+            <button class="btn btn-sm" style="font-size:0.75rem;padding:4px 12px;background:transparent;border:1px solid var(--color-border-muted);" onclick="window.CryptoBot.sendTestEmail()">Send Test</button>
+          </div>
+
+          <!-- Broadcast composer -->
+          <div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-4);margin-bottom:var(--space-4);">
+            <strong style="font-size:0.95rem;color:var(--color-text);">Send Email to Members</strong>
+            <p style="font-size:0.8rem;color:var(--color-text-muted);margin:6px 0 16px;">Compose a message and blast it to all or filtered members. HTML is supported in the body.</p>
+
+            <div class="form-group">
+              <label class="form-label">Recipients</label>
+              <select id="email-filter" class="form-input" style="max-width:260px;">
+                <option value="all">All members (not blocked)</option>
+                <option value="active">Active traders (have API keys)</option>
+                <option value="overdue">Overdue fee members</option>
+              </select>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Subject</label>
+              <input id="email-subject" class="form-input" type="text" placeholder="Important update from MCT" maxlength="200"/>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Message Body</label>
+              <div style="display:flex;gap:8px;margin-bottom:8px;">
+                <button class="btn btn-ghost btn-sm" style="font-size:0.72rem;" onclick="window.CryptoBot.emailSetMode('text')">Plain Text</button>
+                <button class="btn btn-ghost btn-sm" style="font-size:0.72rem;" onclick="window.CryptoBot.emailSetMode('html')">HTML</button>
+                <span id="email-mode-badge" style="font-size:0.72rem;color:var(--color-text-muted);margin-left:4px;align-self:center;">mode: plain text</span>
+              </div>
+              <textarea id="email-body" class="form-input" rows="9" placeholder="Write your message here...&#10;&#10;HTML is supported — e.g. &lt;b&gt;bold&lt;/b&gt;, &lt;a href=&quot;...&quot;&gt;link&lt;/a&gt;" style="font-family:monospace;font-size:0.82rem;resize:vertical;"></textarea>
+            </div>
+
+            <div style="display:flex;gap:var(--space-2);align-items:center;flex-wrap:wrap;">
+              <button class="btn btn-primary" onclick="window.CryptoBot.sendBroadcastEmail()" id="email-send-btn">Send Broadcast</button>
+              <span id="email-send-status" style="font-size:0.8rem;color:var(--color-text-muted);"></span>
+            </div>
+          </div>
+
+          <!-- SMTP setup guide -->
+          <details style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-3);">
+            <summary style="cursor:pointer;font-size:0.85rem;font-weight:600;color:var(--color-text);list-style:none;display:flex;align-items:center;gap:8px;">
+              <span>⚙️</span> SMTP Setup Guide
+            </summary>
+            <div style="margin-top:var(--space-3);font-size:0.8rem;color:var(--color-text-muted);line-height:1.7;">
+              <p style="margin:0 0 10px;">Add these environment variables in your Railway project settings:</p>
+              <pre style="background:var(--color-bg-base);border:1px solid var(--color-border-muted);border-radius:8px;padding:12px;font-size:0.78rem;overflow-x:auto;white-space:pre-wrap;word-break:break-all;color:var(--color-text);">SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USER=you@gmail.com
+SMTP_PASS=your-app-password
+EMAIL_FROM=MCT &lt;you@gmail.com&gt;</pre>
+              <p style="margin:10px 0 4px;"><strong style="color:var(--color-text);">Gmail:</strong> Use an App Password (Google Account → Security → 2FA → App Passwords)</p>
+              <p style="margin:0 0 4px;"><strong style="color:var(--color-text);">SendGrid:</strong> SMTP_HOST=smtp.sendgrid.net, SMTP_USER=apikey, SMTP_PASS=your-api-key</p>
+              <p style="margin:0;"><strong style="color:var(--color-text);">Brevo / Mailgun:</strong> Use their SMTP relay settings, same pattern.</p>
+            </div>
+          </details>
+        </div><!-- /admin-tab-email -->
 
       </section>
     </main>

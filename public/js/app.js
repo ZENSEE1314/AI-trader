@@ -1433,13 +1433,14 @@
       btn.classList.toggle('active', btn.dataset.admintab === tab);
     });
     // Toggle panels
-    const panels = ['earnings', 'users', 'tokens', 'settings', 'tools'];
+    const panels = ['earnings', 'users', 'tokens', 'settings', 'tools', 'email'];
     panels.forEach(p => {
       const el = document.getElementById(`admin-tab-${p}`);
       if (el) el.classList.toggle('hidden', p !== tab);
     });
     // Refresh admin data when switching tabs
     if (tab === 'earnings') loadAdmin();
+    if (tab === 'email') checkEmailSmtp();
   }
 
   async function mcRefresh() {
@@ -3564,6 +3565,92 @@
     }
   }
 
+  // ── Admin Email Broadcast ─────────────────────────────────
+
+  let _emailMode = 'text'; // 'text' | 'html'
+
+  function emailSetMode(mode) {
+    _emailMode = mode;
+    const badge = document.getElementById('email-mode-badge');
+    if (badge) badge.textContent = `mode: ${mode === 'html' ? 'HTML' : 'plain text'}`;
+    const ta = document.getElementById('email-body');
+    if (ta) ta.placeholder = mode === 'html'
+      ? 'Write HTML here — e.g. <b>Bold text</b>, <a href="https://...">Link</a>\n\n<p>Your message paragraph.</p>'
+      : 'Write your message here...\n\nPlain text — line breaks are preserved.';
+  }
+
+  async function checkEmailSmtp() {
+    const dot   = document.getElementById('email-smtp-dot');
+    const label = document.getElementById('email-smtp-label');
+    if (!dot || !label) return;
+    try {
+      const data = await api('GET', '/api/admin/email/status');
+      if (data.configured) {
+        dot.style.background = '#22c55e';
+        label.textContent = `SMTP ready — sending from ${data.from} via ${data.host}`;
+        label.style.color = '#86efac';
+      } else {
+        dot.style.background = '#f59e0b';
+        label.textContent = 'SMTP not configured — see setup guide below to enable email';
+        label.style.color = '#fcd34d';
+      }
+    } catch {
+      dot.style.background = '#ef4444';
+      label.textContent = 'Could not check SMTP status';
+      label.style.color = '#fca5a5';
+    }
+  }
+
+  async function sendTestEmail() {
+    const label = document.getElementById('email-smtp-label');
+    if (label) label.textContent = 'Sending test email...';
+    try {
+      const data = await api('POST', '/api/admin/email/test', {});
+      showToast(data.message || 'Test email sent!', 'success');
+      if (label) label.textContent = data.message || 'Test email sent!';
+    } catch (err) {
+      showToast(err.message || 'Test failed', 'error');
+      if (label) label.textContent = `Error: ${err.message}`;
+    }
+  }
+
+  async function sendBroadcastEmail() {
+    const subject = (document.getElementById('email-subject')?.value || '').trim();
+    const body    = (document.getElementById('email-body')?.value || '').trim();
+    const filter  = document.getElementById('email-filter')?.value || 'all';
+    const status  = document.getElementById('email-send-status');
+    const btn     = document.getElementById('email-send-btn');
+
+    if (!subject) return showToast('Subject is required', 'error');
+    if (!body)    return showToast('Email body is required', 'error');
+
+    const isHtml = _emailMode === 'html';
+    const bodyHtml = isHtml ? body : `<p>${body.replace(/\n/g, '<br/>')}</p>`;
+    const bodyText = isHtml ? body.replace(/<[^>]+>/g, '') : body;
+
+    const confirmMsg = `Send to all "${filter}" members?\n\nSubject: ${subject}`;
+    if (!confirm(confirmMsg)) return;
+
+    if (btn) { btn.disabled = true; btn.textContent = 'Sending...'; }
+    if (status) status.textContent = '';
+
+    try {
+      const data = await api('POST', '/api/admin/email/broadcast', {
+        subject,
+        body_html: bodyHtml,
+        body_text: bodyText,
+        filter,
+      });
+      showToast(`✅ ${data.message}`, 'success');
+      if (status) status.textContent = data.message || `Sending to ${data.recipientCount} members...`;
+    } catch (err) {
+      showToast(err.message || 'Broadcast failed', 'error');
+      if (status) { status.textContent = `Error: ${err.message}`; status.style.color = 'var(--color-danger)'; }
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = 'Send Broadcast'; }
+    }
+  }
+
   window.CryptoBot = {
     toggleSettings, saveSettings, deleteKey, showToast, syncSlider, syncNum, saveProfile, changePassword,
     togglePause,
@@ -3581,6 +3668,7 @@
     loadOpenPositions, emergencyCloseToken, emergencyCloseAll,
     fixBitunixPnl, debugBitunix, runBacktest, loadAiVersions, runAiOptimize,
     mcRefresh, mcCommand, mcChat, mcChatQuick, switchAdminTab, filterAgents, customerChat,
+    checkEmailSmtp, sendTestEmail, sendBroadcastEmail, emailSetMode,
     loadSignalBoard, toggleWatch, watchAll, setUserLeverage,
     adminLoadTokenBoard, adminAddTokenBoard, adminPopulateTop50, adminSetRiskTag, adminSetTokenLev, adminToggleBan, adminRemoveTokenBoard,
     mcToggleSkill, mcUpdateConfig, mcCreateAgent, mcRemoveAgent, mcDownloadTrades,

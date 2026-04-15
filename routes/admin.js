@@ -1,6 +1,7 @@
 const express = require('express');
 const { query } = require('../db');
 const { authMiddleware } = require('../middleware/auth');
+const emailService = require('../email-service');
 
 const router = express.Router();
 router.use(authMiddleware);
@@ -3056,6 +3057,100 @@ router.post('/agents/add', async (req, res) => {
       profile,
     });
   } catch (err) { res.status(500).json({ ok: false, error: err.message }); }
+});
+
+// ── Email Broadcast ─────────────────────────────────────────
+
+// GET /api/admin/email/status — check if SMTP is configured
+router.get('/email/status', adminOnly, (req, res) => {
+  res.json({
+    configured: emailService.isConfigured(),
+    from: process.env.EMAIL_FROM || 'not set',
+    host: process.env.SMTP_HOST || 'not set',
+  });
+});
+
+// POST /api/admin/email/broadcast — send custom email to all (or filtered) members
+router.post('/email/broadcast', adminOnly, async (req, res) => {
+  try {
+    const { subject, body_html, body_text, filter } = req.body;
+    if (!subject?.trim()) return res.status(400).json({ error: 'Subject is required' });
+    if (!body_html?.trim() && !body_text?.trim()) return res.status(400).json({ error: 'Email body is required' });
+
+    if (!emailService.isConfigured()) {
+      return res.status(503).json({ error: 'SMTP not configured. Add SMTP_HOST, SMTP_USER, SMTP_PASS to environment variables.' });
+    }
+
+    // Determine recipient list
+    let whereClause = 'WHERE is_blocked = false';
+    if (filter === 'active') {
+      // Only users who have connected API keys
+      whereClause = `WHERE is_blocked = false AND id IN (SELECT DISTINCT user_id FROM api_keys WHERE enabled = true)`;
+    } else if (filter === 'overdue') {
+      // Users with overdue fees
+      whereClause = `WHERE is_blocked = false AND weekly_fee_due < NOW()`;
+    }
+
+    const rows = await query(`SELECT email FROM users ${whereClause} ORDER BY created_at ASC`);
+    const emails = rows.map(r => r.email).filter(Boolean);
+
+    if (emails.length === 0) {
+      return res.json({ ok: true, sent: 0, failed: 0, message: 'No recipients matched the filter.' });
+    }
+
+    // Log the broadcast to DB for audit trail
+    await query(
+      `INSERT INTO settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = $2`,
+      [`email_broadcast_last`, JSON.stringify({
+        subject,
+        filter: filter || 'all',
+        recipientCount: emails.length,
+        sentBy: req.userId,
+        sentAt: new Date().toISOString(),
+      })]
+    );
+
+    // Respond immediately — send in background to avoid HTTP timeout on large lists
+    res.json({ ok: true, recipientCount: emails.length, message: `Sending to ${emails.length} members...` });
+
+    // Background send (non-blocking)
+    const html = body_html || `<p>${(body_text || '').replace(/\n/g, '<br/>')}</p>`;
+    const text = body_text || body_html?.replace(/<[^>]+>/g, '') || '';
+    emailService.broadcastToAll(subject, html, text, emails).catch(err => {
+      console.error('[Admin Email] Broadcast error:', err.message);
+    });
+
+  } catch (err) {
+    console.error('[Admin Email] Broadcast failed:', err.message);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// POST /api/admin/email/test — send a test email to the admin
+router.post('/email/test', adminOnly, async (req, res) => {
+  try {
+    if (!emailService.isConfigured()) {
+      return res.status(503).json({ error: 'SMTP not configured.' });
+    }
+    const adminRow = await query('SELECT email FROM users WHERE id = $1', [req.userId]);
+    const adminEmail = adminRow[0]?.email;
+    if (!adminEmail) return res.status(404).json({ error: 'Admin email not found' });
+
+    const result = await emailService.sendMail({
+      to: adminEmail,
+      subject: 'MCT Email Test ✅',
+      html: `<p style="font-family:sans-serif;color:#1e293b;">SMTP is working correctly. Sent at ${new Date().toISOString()}.</p>`,
+      text: `MCT Email Test — SMTP is working. Sent at ${new Date().toISOString()}.`,
+    });
+
+    if (result.ok) {
+      res.json({ ok: true, message: `Test email sent to ${adminEmail}` });
+    } else {
+      res.status(500).json({ error: `Failed: ${result.reason}` });
+    }
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 module.exports = router;
