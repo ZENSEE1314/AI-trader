@@ -4,6 +4,7 @@ const path = require('path');
 const { initAllTables } = require('./db');
 
 const app = express();
+app.set('trust proxy', 1); // Railway runs behind proxy — needed for secure cookies
 
 // Ensure all tables exist on startup
 initAllTables().catch(err => console.error('DB init error:', err.message));
