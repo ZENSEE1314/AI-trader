@@ -277,7 +277,17 @@ async function storeResult(symbol, strategy, data) {
 
 // Main gate check — called inline before each trade
 // Runs backtest on the spot if no cached result exists
-async function passesGate(symbol, strategy, days = BACKTEST_DAYS) {
+// signalWinRate: the AI strategy's own backtested WR (0 if not provided / unknown strategy)
+async function passesGate(symbol, strategy, days = BACKTEST_DAYS, signalWinRate = 0) {
+  // AI/evolved strategies (e.g. AI-adx_trend, vwap_rsi_*, evo_*) can't be simulated by
+  // this engine. If the signal already carries its own backtested WR >= 55%, trust it
+  // directly instead of running a proxy simulation on a different strategy set.
+  const isUnknownStrategy = !KNOWN_STRATEGIES.has(strategy);
+  if (isUnknownStrategy && signalWinRate >= 55) {
+    bLog.scan(`${symbol} ${strategy}: AI strategy WR=${signalWinRate.toFixed(1)}% — PASSED (trusted signal WR)`);
+    return true;
+  }
+
   // Map AI-discovered / unknown strategy names to 'ALL' for cache + backtest lookup.
   // Unknown strategies produce 0 signals in backtestToken → WR=0% → permanent block.
   // Using 'ALL' asks "is this TOKEN generally tradeable?" which is the right question.

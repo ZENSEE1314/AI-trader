@@ -1039,7 +1039,8 @@ async function main() {
         const backtestGate = require('./backtest-gate');
         const gateSym = pick.symbol || pick.sym;
         const gateStrategy = pick.setupName || pick.setup || 'ALL';
-        const gatePasses = await backtestGate.passesGate(gateSym, gateStrategy);
+        const signalWr = pick.strategyWinRate || 0;
+        const gatePasses = await backtestGate.passesGate(gateSym, gateStrategy, undefined, signalWr);
         if (!gatePasses) {
           bLog.trade(`BACKTEST GATE BLOCKED: ${gateSym} ${gateStrategy} — WR below ${backtestGate.MIN_WIN_RATE}%`);
           continue;
