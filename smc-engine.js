@@ -333,8 +333,8 @@ async function analyzeLHHL(ticker, params, dailyBiasCache, kronosPredictions = n
   const currentIdx = klines1m.length - 1;
   const candleAge = currentIdx - confirmationIdx;
 
-  if (candleAge < 0 || candleAge > 3) {
-    bLog.scan(`${symbol}: ${direction} — swing age ${candleAge} (need 0-3 for fresh entry)`);
+  if (candleAge < 0 || candleAge > 6) {
+    bLog.scan(`${symbol}: ${direction} — swing age ${candleAge} (need 0-6 for fresh entry)`);
     return null;
   }
 
@@ -342,7 +342,7 @@ async function analyzeLHHL(ticker, params, dailyBiasCache, kronosPredictions = n
   // LONG: buy near the HL (the low), NOT at the HH (the high)
   // SHORT: sell near the LH (the high), NOT at the LL (the low)
   // Max allowed distance from swing point: 0.4% — beyond that we're chasing
-  const MAX_CHASE_PCT = 0.004; // 0.4% max distance from swing
+  const MAX_CHASE_PCT = 0.006; // 0.6% max distance from swing
   if (direction === 'LONG') {
     const distFromSwing = (price - swingPrice) / swingPrice;
     if (distFromSwing > MAX_CHASE_PCT) {
