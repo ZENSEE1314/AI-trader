@@ -265,7 +265,7 @@ async function thinkGoogle(agentName, systemPrompt, userMessage) {
 }
 
 async function thinkAnthropic(agentName, systemPrompt, userMessage) {
-  const model = process.env.AGENT_AI_MODEL || 'claude-sonnet-4-6';
+  const model = process.env.AGENT_AI_MODEL || 'claude-3-5-sonnet-20241022';
   console.log(`[AI Brain] ${agentName} thinking with Anthropic ${model}...`);
 
   const response = await anthropicClient.messages.create({

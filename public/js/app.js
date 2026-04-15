@@ -1433,11 +1433,14 @@
       btn.classList.toggle('active', btn.dataset.admintab === tab);
     });
     // Toggle panels
-    const panels = ['earnings', 'users', 'tokens', 'settings', 'tools', 'email'];
+    const panels = ['earnings', 'users', 'tokens', 'settings', 'tools'];
     panels.forEach(p => {
       const el = document.getElementById(`admin-tab-${p}`);
       if (el) el.classList.toggle('hidden', p !== tab);
     });
+    // Email panel uses explicit display toggle (not hidden class) to avoid CSS conflicts
+    const emailPanel = document.getElementById('admin-tab-email');
+    if (emailPanel) emailPanel.style.display = (tab === 'email') ? 'block' : 'none';
     // Refresh admin data when switching tabs
     if (tab === 'earnings') loadAdmin();
     if (tab === 'email') checkEmailSmtp();
