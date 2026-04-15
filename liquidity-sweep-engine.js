@@ -1046,7 +1046,7 @@ function detectSwings(klines, len) {
 
 // ── Analyze Single Coin ────────────────────────────────────
 
-async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg = {}) {
+async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg = {}, btcTrend = 'neutral') {
   const symbol = ticker.symbol;
   const price = parseFloat(ticker.lastPrice);
 
@@ -1311,8 +1311,24 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     // 1h trend alignment — bonus for with-trend, penalty for counter-trend
     if (sig.direction === 'LONG' && h1Trend === 'bullish') sig.score += 3;
     if (sig.direction === 'SHORT' && h1Trend === 'bearish') sig.score += 3;
-    if (sig.direction === 'LONG' && h1Trend === 'bearish') sig.score -= 4; // counter-trend penalty (was hard block)
+    if (sig.direction === 'LONG' && h1Trend === 'bearish') sig.score -= 4;
     if (sig.direction === 'SHORT' && h1Trend === 'bullish') sig.score -= 4;
+
+    // BTC market correlation: don't fight BTC's direction on altcoins
+    // When BTC is clearly bullish, shorting alts is fighting the market
+    if (symbol !== 'BTCUSDT') {
+      if (btcTrend === 'bullish' && sig.direction === 'SHORT') {
+        sig.score -= 5;
+        sig.blocked = 'SHORT rejected — BTC is bullish, alts follow BTC';
+      }
+      if (btcTrend === 'bearish' && sig.direction === 'LONG') {
+        sig.score -= 5;
+        sig.blocked = 'LONG rejected — BTC is bearish, alts follow BTC';
+      }
+      // Bonus for trading WITH BTC direction
+      if (btcTrend === 'bullish' && sig.direction === 'LONG') sig.score += 2;
+      if (btcTrend === 'bearish' && sig.direction === 'SHORT') sig.score += 2;
+    }
 
     // Volume confirmation
     if (lastVolOK) sig.score += 2;
@@ -1457,7 +1473,25 @@ async function scanSMC(log, opts = {}) {
     bLog.error(`Quantum optimizer not available: ${err.message} — using all strategies`);
   }
 
-  bLog.scan(`Quantum combo=${comboName} (${activeCombo}) | ${topCoins.length} coins | S/R zones + trendlines + candle confirm`);
+  // BTC market trend: when BTC is clearly trending, don't fight it on alts
+  let btcTrend = 'neutral';
+  try {
+    const btcKlines = await fetchKlines('BTCUSDT', '1h', 30);
+    if (btcKlines && btcKlines.length >= 20) {
+      const btcParsed = btcKlines.map(parseCandle);
+      const btcCloses = btcParsed.map(c => c.close);
+      const btcEma9 = calcEMA(btcCloses, 9);
+      const btcEma21 = calcEMA(btcCloses, 21);
+      if (btcEma9 !== null && btcEma21 !== null) {
+        const btcDist = (btcEma9 - btcEma21) / btcEma21;
+        // Only set trend when clear (>0.2% EMA spread)
+        if (btcDist > 0.002) btcTrend = 'bullish';
+        else if (btcDist < -0.002) btcTrend = 'bearish';
+      }
+    }
+  } catch (_) { /* BTC fetch failed — continue with neutral */ }
+
+  bLog.scan(`BTC trend=${btcTrend} | Quantum combo=${comboName} (${activeCombo}) | ${topCoins.length} coins`);
 
   const results = [];
   let analyzed = 0;
@@ -1469,7 +1503,7 @@ async function scanSMC(log, opts = {}) {
       continue;
     }
 
-    const signal = await analyzeCoin(ticker, params, enabledStrategies, bestParams);
+    const signal = await analyzeCoin(ticker, params, enabledStrategies, bestParams, btcTrend);
     if (signal) signal.comboId = activeCombo;
     analyzed++;
 
