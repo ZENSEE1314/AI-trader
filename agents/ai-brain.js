@@ -159,15 +159,21 @@ async function think(opts) {
     ? `\n\n<current_data>\n${JSON.stringify(prunedContext, null, 2)}\n</current_data>`
     : '';
 
-  // Inject Hermes soul + team memory into system prompt (capped to avoid huge payloads)
+  // Inject Hermes soul + team memory + agent memory + skills into every AI call
   const soul = hermes.loadSoul();
   const teamMemory = hermes.getTeamMemoryPrompt();
   const agentMemory = hermes.getMemoryPrompt(agentName);
+  const skillsPrompt = hermes.getSkillsPrompt();
 
   let fullSystem = systemPrompt + contextBlock;
-  if (soul) fullSystem = `${soul.substring(0, 500)}\n\n${fullSystem}`;
-  if (teamMemory) fullSystem += `\n\n${teamMemory.substring(0, 500)}`;
+  // Soul first — sets the fundamental personality and values
+  if (soul) fullSystem = `${soul.substring(0, 600)}\n\n${fullSystem}`;
+  // Team memory — shared learnings from all agents (larger cap = smarter decisions)
+  if (teamMemory) fullSystem += `\n\n${teamMemory.substring(0, 800)}`;
+  // Agent-specific memory — this agent's personal experience
   if (agentMemory) fullSystem += `\n\n${agentMemory}`;
+  // Available skills — agent knows what tools are available
+  if (skillsPrompt) fullSystem += `\n\n${skillsPrompt.substring(0, 400)}`;
 
   try {
     requestLog.push(Date.now());

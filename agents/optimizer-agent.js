@@ -180,12 +180,20 @@ class OptimizerAgent extends BaseAgent {
 
         this._currentBest = best;
 
+        // Persist winning strategy to Hermes memory for cross-agent learning
+        this.hermesRemember(
+          `WINNER round#${this._runIdx}: ${best.strategy} ${best.config} — ${best.winRate}% WR, ${best.avgPnl}% avgPnL, PF ${best.profitFactor} (${best.trades} trades)`
+        ).catch(() => {});
+
         // Auto-apply if enabled
         if (this.options.autoApply !== false) {
           const applied = await applyBestStrategy(result);
           if (applied.ok) {
             this.addActivity('success', `AUTO-APPLIED: ${applied.strategy} — ${applied.winRate.toFixed(1)}% WR`);
             this.shareWithTeam(`Optimizer applied new strategy: ${applied.strategy} ${applied.config} — ${applied.winRate.toFixed(1)}% WR, ${applied.avgPnl.toFixed(2)}% avg PnL per trade`);
+            this.hermesRemember(
+              `APPLIED: ${applied.strategy} ${applied.config} → ${applied.winRate.toFixed(1)}% WR live`
+            ).catch(() => {});
           }
         }
 
@@ -252,6 +260,12 @@ class OptimizerAgent extends BaseAgent {
       if (total !== null) this._totalBacktests = parseInt(total) || 0;
       const best = await this.recall('current_best');
       if (best) this._currentBest = typeof best === 'string' ? JSON.parse(best) : best;
+
+      // Load Hermes memory — past wins inform current search direction
+      const memories = await this.hermesRecallAll();
+      if (memories?.length) {
+        this.log(`Loaded ${memories.length} Hermes memories — prior optimization knowledge active`);
+      }
     } catch {}
   }
 

@@ -261,6 +261,11 @@ class PoliceAgent extends BaseAgent {
       ts: Date.now(),
     }, 'violations').catch(() => {});
 
+    // Persist to Hermes — pattern recognition across restarts
+    this.hermesRemember(
+      `WARNING #${newCount} → ${agent.name}: [${violation.type}] ${violation.message}`
+    ).catch(() => {});
+
     if (newCount >= threshold) {
       this._jailAgent(agentKey, agent, violation);
     }
@@ -288,6 +293,10 @@ class PoliceAgent extends BaseAgent {
     this.log(arrestMessage);
 
     this.shareWithTeam(arrestMessage);
+    // Hermes memory — survives redeploys, informs future patrols of recurring offenders
+    this.hermesRemember(
+      `ARREST: ${agent.name} jailed for [${violation.type}] "${violation.message}" after ${this._warningCounts.get(agentKey) || 0} warnings`
+    ).catch(() => {});
 
     await this._saveJailToDb(agentKey, agent.name, jailRecord);
   }

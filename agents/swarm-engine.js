@@ -7,6 +7,7 @@
 // ============================================================
 
 const aiBrain = require('./ai-brain');
+const hermes = require('../hermes-bridge');
 const { TradeConsensus } = require('../ruflo-bridge');
 
 // Singleton consensus engine for swarm decisions
@@ -61,6 +62,10 @@ const EXPERT_MAPPING = {
 async function runSwarm(symbol, seeds) {
   const simulations = [];
 
+  // Inject shared team memory so every persona benefits from agent learnings
+  const teamMemory = hermes.getTeamMemoryPrompt() || '';
+  const teamContext = teamMemory ? `\n\n${teamMemory.substring(0, 400)}` : '';
+
   // 1. Simulation Phase: Poll each persona
   const personaKeys = Object.keys(PERSONAS);
 
@@ -87,7 +92,7 @@ Return ONLY a JSON object: {"direction": "...", "target": 0.0, "confidence": 0-1
     try {
       const response = await aiBrain.think({
         agentName: persona.name,
-        systemPrompt: persona.prompt,
+        systemPrompt: persona.prompt + teamContext,
         userMessage: userMessage,
         context: { symbol, seeds },
         complexity: 'medium',
@@ -168,6 +173,14 @@ Return ONLY a JSON object: {"direction": "...", "target": 0.0, "confidence": 0-1
     ).catch(err => console.error(`[Swarm] Failed to log prediction: ${err.message}`));
   } catch (err) {
     console.error(`[Swarm] DB error during logging: ${err.message}`);
+  }
+
+  // Share high-confidence consensus with the whole team via Hermes
+  if (confidence >= 70) {
+    const voteStr = Object.entries(votes || {}).map(([d, v]) => `${d}:${v}`).join(' ');
+    hermes.addTeamMemory(
+      `[SwarmEngine] ${symbol} → ${winningDirection} ${confidence}% confidence (${voteStr}) target=${finalResult.target_price}`
+    ).catch(() => {});
   }
 
   return finalResult;

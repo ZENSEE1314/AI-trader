@@ -307,9 +307,15 @@ class StrategyAgent extends BaseAgent {
             totalPnl: result.totalPnl,
             trades: result.totalTrades,
             foundAt: Date.now(),
+            // NOTE: hermesRemember called after push below
           });
           if (this._hallOfFame.length > 20) this._hallOfFame = this._hallOfFame.slice(-20);
           this.addActivity('success', `NEW BEST: "${strat.name}" — ${result.winRate.toFixed(1)}% WR, ${result.totalPnl.toFixed(2)}% PnL`);
+          // Persist new record to Hermes — every agent benefits from this discovery
+          this.hermesRemember(
+            `HALL-OF-FAME: "${strat.name}" recipe=${strat.recipe} — ${result.winRate.toFixed(1)}% WR, ${result.totalPnl.toFixed(2)}% PnL, ${result.totalTrades} trades`
+          ).catch(() => {});
+          this.shareWithTeam(`NEW BEST strategy: "${strat.name}" — ${result.winRate.toFixed(1)}% WR, ${result.totalPnl.toFixed(2)}% PnL`);
         }
 
         const label = result.winRate >= ELITE_WIN_RATE ? 'WINNER' : result.winRate >= CULL_WIN_RATE ? 'OK' : 'WEAK';
@@ -472,6 +478,10 @@ class StrategyAgent extends BaseAgent {
         killedAt: Date.now(),
       });
       this._totalCulled++;
+      // Remember what failed — prevents re-evolving dead-end recipe+param combos
+      this.hermesRemember(
+        `CULLED: "${loser.name}" recipe=${loser.recipe} — only ${loser.results.winRate.toFixed(1)}% WR (dead-end)`
+      ).catch(() => {});
     }
 
     // Keep graveyard small

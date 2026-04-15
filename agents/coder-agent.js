@@ -364,6 +364,9 @@ Respond in JSON: {"summary": "...", "actionable": true/false, "recommendation": 
       if (applyResult.ok) {
         this.addActivity('success', `Healed ${agentName}: ${patch.description}`);
         this.shareWithTeam(`🛠️ Self-Healed ${agentName}: ${patch.description}`);
+        this.hermesRemember(
+          `HEALED ${agentName}: ${patch.description} (file: ${patch.file})`
+        ).catch(() => {});
 
         // 4. Verification Trigger
         if (this._coordinator) {
@@ -402,13 +405,17 @@ Respond in JSON: {"summary": "...", "actionable": true/false, "recommendation": 
       } catch {}
     }
 
+    // Inject past fixes from Hermes memory — avoid re-diagnosing solved bugs
+    const pastFixes = this.getHermesMemoryPrompt();
+    const memoryBlock = pastFixes ? `\nPAST FIXES (do not duplicate):\n${pastFixes.substring(0, 600)}\n` : '';
+
     const prompt = `You are CoderAgent, the self-healing engineer. An agent has crashed.
 
     AGENT: ${agent.name}
     ERROR: ${error.message}
     STACK TRACE:
     ${stack}
-
+    ${memoryBlock}
     FILE CONTENT:
     ${fileContent}
 
@@ -687,6 +694,9 @@ Rules:
           this._appliedPatches.push(patch);
           this.addActivity('success', `PATCH APPLIED: ${patch.file} — ${patch.description}`);
           this.shareWithTeam(`Auto-patched ${patch.file}: ${patch.description}`);
+          this.hermesRemember(
+            `PATCH: ${patch.file} — ${patch.description}`
+          ).catch(() => {});
         } else {
           patch.status = 'failed';
           patch.failReason = result.error;
