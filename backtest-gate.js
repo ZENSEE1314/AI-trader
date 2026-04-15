@@ -85,9 +85,19 @@ function calcRSI(closes, period = 14) {
   return 100 - 100 / (1 + rs);
 }
 
+// Strategies the backtest engine knows how to simulate
+const KNOWN_STRATEGIES = new Set(['LIQUIDITY_SWEEP', 'STOP_LOSS_HUNT', 'MOMENTUM_SCALP', 'BRR_FIBO', 'SMC_CLASSIC', 'ALL']);
+
 // Backtest a SINGLE token × strategy combo on recent data
 // Called inline by the agent right before it wants to trade
 async function backtestToken(symbol, strategy, days = BACKTEST_DAYS) {
+  // AI-discovered and custom strategy names (e.g. AI-vwap_rsi, SHORT-3m1m) can't be
+  // simulated by this engine — fall back to 'ALL' which checks if the TOKEN is generally
+  // tradeable using all known strategies. If any known strategy is profitable on this
+  // token the AI strategy gets a green light too.
+  if (!KNOWN_STRATEGIES.has(strategy)) {
+    return backtestToken(symbol, 'ALL', days);
+  }
   const clampedDays = Math.min(days, MAX_BACKTEST_DAYS);
   const limit15m = clampedDays * 24 * 4; // 15m candles
   const limit1h = clampedDays * 24;
@@ -268,8 +278,13 @@ async function storeResult(symbol, strategy, data) {
 // Main gate check — called inline before each trade
 // Runs backtest on the spot if no cached result exists
 async function passesGate(symbol, strategy, days = BACKTEST_DAYS) {
+  // Map AI-discovered / unknown strategy names to 'ALL' for cache + backtest lookup.
+  // Unknown strategies produce 0 signals in backtestToken → WR=0% → permanent block.
+  // Using 'ALL' asks "is this TOKEN generally tradeable?" which is the right question.
+  const cacheStrategy = KNOWN_STRATEGIES.has(strategy) ? strategy : 'ALL';
+
   // 1. Check in-memory cache first (fastest)
-  const mem = getMemCached(symbol, strategy);
+  const mem = getMemCached(symbol, cacheStrategy);
   if (mem) {
     if (mem.total === 0) {
       bLog.scan(`${symbol} ${strategy}: 0 backtest signals (${days}d) — BLOCKED (cached)`);
@@ -292,13 +307,13 @@ async function passesGate(symbol, strategy, days = BACKTEST_DAYS) {
          WHERE symbol = $1 AND strategy = $2
          AND tested_at > NOW() - INTERVAL '${CACHE_HOURS} hours'
          LIMIT 1`,
-        [symbol, strategy]
+        [symbol, cacheStrategy]
       );
 
       if (rows.length > 0) {
         const wr = parseFloat(rows[0].win_rate);
         const total = parseInt(rows[0].total_trades);
-        setMemCache(symbol, strategy, wr, total);
+        setMemCache(symbol, cacheStrategy, wr, total);
 
         if (total === 0) {
           bLog.scan(`${symbol} ${strategy}: 0 backtest signals — BLOCKED (DB cache)`);
@@ -320,7 +335,7 @@ async function passesGate(symbol, strategy, days = BACKTEST_DAYS) {
   bLog.scan(`${symbol} ${strategy}: running ${days}-day backtest inline...`);
 
   try {
-    const result = await backtestToken(symbol, strategy, days);
+    const result = await backtestToken(symbol, cacheStrategy, days);
 
     if (!result) {
       // No data from Binance — don't cache 0 WR (would block for 10 min on a transient error)
@@ -328,9 +343,9 @@ async function passesGate(symbol, strategy, days = BACKTEST_DAYS) {
       return true;
     }
 
-    // Cache the result
-    setMemCache(symbol, strategy, result.winRate, result.total);
-    await storeResult(symbol, strategy, result);
+    // Cache the result under cacheStrategy key
+    setMemCache(symbol, cacheStrategy, result.winRate, result.total);
+    await storeResult(symbol, cacheStrategy, result);
 
     if (result.total === 0) {
       bLog.scan(`${symbol} ${strategy}: 0 signals in ${days}d backtest — BLOCKED`);
