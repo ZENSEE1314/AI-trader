@@ -30,7 +30,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
   <link rel="stylesheet" href="/css/tokens.css">
-  <link rel="stylesheet" href="/css/style.css?v=20260413">
+  <link rel="stylesheet" href="/css/style.css?v=20260416">
 
   <link rel="icon" href="/img/logo.jpeg" type="image/jpeg">
   <style>
@@ -2122,7 +2122,35 @@ EMAIL_FROM=MCT &lt;a83c06001@smtp-brevo.com&gt;</pre>
     </div>
   </div>
 
-  <script src="/js/app.js?v=20260414" defer></script>
+  <script src="/js/app.js?v=20260416" defer></script>
+  <!-- Email tab patch: inline so it works regardless of JS cache (HTML is never cached) -->
+  <script>
+    document.addEventListener('DOMContentLoaded', function() {
+      // Re-patch switchAdminTab after app.js loads to ensure 'email' panel is included
+      var _orig = window.CryptoBot && window.CryptoBot.switchAdminTab;
+      function patchedSwitch(tab) {
+        document.querySelectorAll('.admin-subtab').forEach(function(btn) {
+          btn.classList.toggle('active', btn.dataset.admintab === tab);
+        });
+        var panels = ['earnings', 'users', 'tokens', 'settings', 'tools', 'email'];
+        panels.forEach(function(p) {
+          var el = document.getElementById('admin-tab-' + p);
+          if (el) el.classList.toggle('hidden', p !== tab);
+        });
+        if (tab === 'earnings' && window.CryptoBot && window.CryptoBot.loadAdmin) window.CryptoBot.loadAdmin();
+        if (tab === 'email' && window.CryptoBot && window.CryptoBot.checkEmailSmtp) window.CryptoBot.checkEmailSmtp().catch(function(){});
+      }
+      // Wait for CryptoBot to be defined (app.js is deferred)
+      var tries = 0;
+      var interval = setInterval(function() {
+        if (window.CryptoBot) {
+          window.CryptoBot.switchAdminTab = patchedSwitch;
+          clearInterval(interval);
+        }
+        if (++tries > 50) clearInterval(interval);
+      }, 100);
+    });
+  </script>
   <script src="/js/cashwallet-fix.js" defer></script>
   <script>
     // Password show/hide toggle

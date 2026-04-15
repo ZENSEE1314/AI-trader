@@ -1440,7 +1440,7 @@
     });
     // Refresh admin data when switching tabs
     if (tab === 'earnings') loadAdmin();
-    if (tab === 'email') checkEmailSmtp();
+    if (tab === 'email') checkEmailSmtp().catch(() => {});
   }
 
   async function mcRefresh() {
