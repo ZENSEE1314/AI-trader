@@ -1949,63 +1949,65 @@
              ═══════════════════════════════════════════ -->
         <div id="admin-tab-email" class="admin-tab-panel hidden">
           <!-- SMTP Status banner -->
-          <div id="email-smtp-status" style="padding:10px 14px;border-radius:8px;font-size:0.82rem;margin-bottom:var(--space-3);background:rgba(100,116,139,0.15);border:1px solid var(--color-border-muted);display:flex;align-items:center;gap:8px;">
-            <span id="email-smtp-dot" style="width:8px;height:8px;border-radius:50%;background:#64748b;flex-shrink:0;"></span>
-            <span id="email-smtp-label">Checking SMTP status...</span>
-            <button class="btn btn-ghost btn-sm" style="margin-left:auto;font-size:0.75rem;" onclick="window.CryptoBot.checkEmailSmtp()">Refresh</button>
-            <button class="btn btn-sm" style="font-size:0.75rem;padding:4px 12px;background:transparent;border:1px solid var(--color-border-muted);" onclick="window.CryptoBot.sendTestEmail()">Send Test</button>
+          <div id="email-smtp-status" style="padding:10px 14px;border-radius:8px;font-size:0.82rem;margin-bottom:12px;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.12);display:flex;align-items:center;gap:8px;color:#e2e8f0;">
+            <span id="email-smtp-dot" style="width:8px;height:8px;border-radius:50%;background:#64748b;flex-shrink:0;display:inline-block;"></span>
+            <span id="email-smtp-label" style="color:#e2e8f0;">Checking SMTP status...</span>
+            <button class="btn btn-ghost btn-sm" style="margin-left:auto;font-size:0.75rem;color:#e2e8f0;border:1px solid rgba(255,255,255,0.2);" onclick="window.CryptoBot.checkEmailSmtp()">Refresh</button>
+            <button class="btn btn-sm" style="font-size:0.75rem;padding:4px 12px;background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.2);color:#e2e8f0;" onclick="window.CryptoBot.sendTestEmail()">Send Test</button>
           </div>
 
           <!-- Broadcast composer -->
-          <div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-4);margin-bottom:var(--space-4);">
-            <strong style="font-size:0.95rem;color:var(--color-text);">Send Email to Members</strong>
-            <p style="font-size:0.8rem;color:var(--color-text-muted);margin:6px 0 16px;">Compose a message and blast it to all or filtered members. HTML is supported in the body.</p>
+          <div style="background:#1a1a2e;border:1px solid rgba(255,255,255,0.12);border-radius:12px;padding:20px;margin-bottom:16px;">
+            <div style="font-size:1rem;font-weight:700;color:#f59e0b;margin-bottom:6px;">✉️ Send Email to Members</div>
+            <p style="font-size:0.82rem;color:#94a3b8;margin:0 0 18px;">Compose a message and send to all or filtered members. HTML supported.</p>
 
-            <div class="form-group">
-              <label class="form-label">Recipients</label>
-              <select id="email-filter" class="form-input" style="max-width:260px;">
+            <div style="margin-bottom:14px;">
+              <label style="display:block;font-size:0.8rem;font-weight:600;color:#e2e8f0;margin-bottom:6px;">Recipients</label>
+              <select id="email-filter" style="background:#0f172a;color:#e2e8f0;border:1px solid rgba(255,255,255,0.2);border-radius:8px;padding:8px 12px;font-size:0.85rem;width:100%;max-width:280px;">
                 <option value="all">All members (not blocked)</option>
                 <option value="active">Active traders (have API keys)</option>
                 <option value="overdue">Overdue fee members</option>
               </select>
             </div>
 
-            <div class="form-group">
-              <label class="form-label">Subject</label>
-              <input id="email-subject" class="form-input" type="text" placeholder="Important update from MCT" maxlength="200"/>
+            <div style="margin-bottom:14px;">
+              <label style="display:block;font-size:0.8rem;font-weight:600;color:#e2e8f0;margin-bottom:6px;">Subject</label>
+              <input id="email-subject" type="text" placeholder="Important update from MCT" maxlength="200"
+                style="background:#0f172a;color:#e2e8f0;border:1px solid rgba(255,255,255,0.2);border-radius:8px;padding:8px 12px;font-size:0.85rem;width:100%;box-sizing:border-box;"/>
             </div>
 
-            <div class="form-group">
-              <label class="form-label">Message Body</label>
+            <div style="margin-bottom:18px;">
+              <label style="display:block;font-size:0.8rem;font-weight:600;color:#e2e8f0;margin-bottom:6px;">Message Body</label>
               <div style="display:flex;gap:8px;margin-bottom:8px;">
-                <button class="btn btn-ghost btn-sm" style="font-size:0.72rem;" onclick="window.CryptoBot.emailSetMode('text')">Plain Text</button>
-                <button class="btn btn-ghost btn-sm" style="font-size:0.72rem;" onclick="window.CryptoBot.emailSetMode('html')">HTML</button>
-                <span id="email-mode-badge" style="font-size:0.72rem;color:var(--color-text-muted);margin-left:4px;align-self:center;">mode: plain text</span>
+                <button onclick="window.CryptoBot.emailSetMode('text')" style="background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.2);color:#e2e8f0;border-radius:6px;padding:4px 12px;font-size:0.75rem;cursor:pointer;">Plain Text</button>
+                <button onclick="window.CryptoBot.emailSetMode('html')" style="background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.2);color:#e2e8f0;border-radius:6px;padding:4px 12px;font-size:0.75rem;cursor:pointer;">HTML</button>
+                <span id="email-mode-badge" style="font-size:0.75rem;color:#64748b;align-self:center;">mode: plain text</span>
               </div>
-              <textarea id="email-body" class="form-input" rows="9" placeholder="Write your message here...&#10;&#10;HTML is supported — e.g. &lt;b&gt;bold&lt;/b&gt;, &lt;a href=&quot;...&quot;&gt;link&lt;/a&gt;" style="font-family:monospace;font-size:0.82rem;resize:vertical;"></textarea>
+              <textarea id="email-body" rows="8" placeholder="Write your message here..."
+                style="background:#0f172a;color:#e2e8f0;border:1px solid rgba(255,255,255,0.2);border-radius:8px;padding:10px 12px;font-size:0.85rem;width:100%;box-sizing:border-box;resize:vertical;font-family:monospace;"></textarea>
             </div>
 
-            <div style="display:flex;gap:var(--space-2);align-items:center;flex-wrap:wrap;">
-              <button class="btn btn-primary" onclick="window.CryptoBot.sendBroadcastEmail()" id="email-send-btn">Send Broadcast</button>
-              <span id="email-send-status" style="font-size:0.8rem;color:var(--color-text-muted);"></span>
+            <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
+              <button id="email-send-btn" onclick="window.CryptoBot.sendBroadcastEmail()"
+                style="background:linear-gradient(135deg,#f59e0b,#d97706);color:#000;border:none;border-radius:8px;padding:10px 24px;font-size:0.9rem;font-weight:700;cursor:pointer;">
+                Send Broadcast
+              </button>
+              <span id="email-send-status" style="font-size:0.82rem;color:#94a3b8;"></span>
             </div>
           </div>
 
           <!-- SMTP setup guide -->
-          <details style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-3);">
-            <summary style="cursor:pointer;font-size:0.85rem;font-weight:600;color:var(--color-text);list-style:none;display:flex;align-items:center;gap:8px;">
-              <span>⚙️</span> SMTP Setup Guide
+          <details style="background:#1a1a2e;border:1px solid rgba(255,255,255,0.1);border-radius:12px;padding:16px;">
+            <summary style="cursor:pointer;font-size:0.85rem;font-weight:600;color:#e2e8f0;list-style:none;display:flex;align-items:center;gap:8px;">
+              ⚙️ SMTP Setup Guide
             </summary>
-            <div style="margin-top:var(--space-3);font-size:0.8rem;color:var(--color-text-muted);line-height:1.7;">
-              <p style="margin:0 0 10px;">Add these environment variables in your Railway project settings:</p>
-              <pre style="background:var(--color-bg-base);border:1px solid var(--color-border-muted);border-radius:8px;padding:12px;font-size:0.78rem;overflow-x:auto;white-space:pre-wrap;word-break:break-all;color:var(--color-text);">SMTP_HOST=smtp.gmail.com
+            <div style="margin-top:14px;font-size:0.8rem;color:#94a3b8;line-height:1.7;">
+              <p style="margin:0 0 10px;color:#e2e8f0;">Add these to your Railway environment variables:</p>
+              <pre style="background:#0f172a;border:1px solid rgba(255,255,255,0.1);border-radius:8px;padding:12px;font-size:0.78rem;overflow-x:auto;white-space:pre-wrap;word-break:break-all;color:#86efac;">SMTP_HOST=smtp-relay.brevo.com
 SMTP_PORT=587
-SMTP_USER=you@gmail.com
-SMTP_PASS=your-app-password
-EMAIL_FROM=MCT &lt;you@gmail.com&gt;</pre>
-              <p style="margin:10px 0 4px;"><strong style="color:var(--color-text);">Gmail:</strong> Use an App Password (Google Account → Security → 2FA → App Passwords)</p>
-              <p style="margin:0 0 4px;"><strong style="color:var(--color-text);">SendGrid:</strong> SMTP_HOST=smtp.sendgrid.net, SMTP_USER=apikey, SMTP_PASS=your-api-key</p>
-              <p style="margin:0;"><strong style="color:var(--color-text);">Brevo / Mailgun:</strong> Use their SMTP relay settings, same pattern.</p>
+SMTP_USER=a83c06001@smtp-brevo.com
+SMTP_PASS=your-brevo-smtp-key
+EMAIL_FROM=MCT &lt;a83c06001@smtp-brevo.com&gt;</pre>
             </div>
           </details>
         </div><!-- /admin-tab-email -->
