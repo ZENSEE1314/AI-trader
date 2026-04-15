@@ -1033,6 +1033,20 @@ async function main() {
         continue;
       }
 
+      // Backtest gate — only trade strategies with 80%+ backtest WR
+      try {
+        const backtestGate = require('./backtest-gate');
+        const gateStrategy = pick.setupName || pick.setup || 'ALL';
+        const gatePasses = await backtestGate.passesGate(pick.symbol || pick.sym, gateStrategy);
+        if (!gatePasses) {
+          bLog.trade(`BACKTEST GATE BLOCKED: ${pick.symbol} ${gateStrategy} — WR below ${backtestGate.MIN_WIN_RATE}%`);
+          continue;
+        }
+        bLog.trade(`BACKTEST GATE PASSED: ${pick.symbol} ${gateStrategy}`);
+      } catch (gateErr) {
+        bLog.error(`Backtest gate error: ${gateErr.message} — allowing trade`);
+      }
+
       // Kronos AI prediction — use cached batch result or fetch fresh
       try {
         const kronosModule = require('./kronos');

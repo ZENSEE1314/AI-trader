@@ -596,6 +596,17 @@ async function initAllTables() {
       candle_data JSONB,
       created_at BIGINT
     )`,
+    `CREATE TABLE IF NOT EXISTS backtest_gate (
+      id SERIAL PRIMARY KEY,
+      symbol VARCHAR(30) NOT NULL,
+      strategy VARCHAR(50) NOT NULL,
+      wins INTEGER DEFAULT 0,
+      losses INTEGER DEFAULT 0,
+      total_trades INTEGER DEFAULT 0,
+      win_rate DECIMAL DEFAULT 0,
+      tested_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE(symbol, strategy)
+    )`,
   ];
 
   for (const sql of statements) {
