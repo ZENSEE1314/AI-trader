@@ -158,29 +158,32 @@ async function shouldAvoidCoin(symbol) {
 // These match the LH/HL 3-TF strategy in smc-engine.js and cycle.js
 
 const DEFAULT_PARAMS = {
-  // Capital-based SL/TP (smc-engine.js)
-  SL_MARGIN_PCT: 0.30,     // lose max 30% of position margin per trade
-  TP_MARGIN_PCT: 0.45,     // target 45% of position margin per trade
-  MIN_SCORE: 2,            // minimum confluence score — 3m+1m HL/LH is primary trigger
+  // ── LOCKED by safety agent — AI CANNOT modify these ──
+  SL_MARGIN_PCT: 0.30,     // -30% margin loss (hardcoded in cycle.js)
+  TP_MARGIN_PCT: 0.45,     // +45% margin target (hardcoded in cycle.js)
+  WALLET_SIZE_PCT: 0.10,   // 10% of wallet per trade (locked)
+  LEV_BTC_ETH: 20,         // BTC/ETH leverage (admin-only via dashboard)
+  LEV_ALT: 20,             // altcoin leverage (admin-only via dashboard)
+  EARLY_EXIT_ENABLED: false, // trailing SL handles all exits (locked)
 
-  // Sizing params (cycle.js)
-  WALLET_SIZE_PCT: 0.10,   // 10% of wallet per trade
-  LEV_BTC_ETH: 20,         // BTC/ETH leverage (capped at 20 — higher = liquidated on noise)
-  LEV_ALT: 20,             // all altcoin leverage
+  // ── AI CAN LEARN these — entry quality, indicators, direction ──
+  MIN_SCORE: 8,            // min confluence score for entry (AI learns optimal cutoff)
+  DIRECTION_BIAS: null,    // null = both, 'LONG' or 'SHORT' (AI learns from WR)
 
-  // Strategy config (smc-engine.js uses these via getStrategyConfig)
-  requireBothHTF: false,    // only need 1 of 4H/1H aligned (true = both required)
-  requireKeyLevel: false,   // skip PDH/PDL/VWAP proximity check
-  require15m: true,         // 15M swing setup required
-  require1m: true,          // 1M entry confirmation required
-  requireVolSpike: false,   // volume spike filter off
-  maxEntryAge: 30,          // 1M swing must be within 30 candles
-  indecisiveThresh: 0.3,    // daily candle body/range ratio below this = indecisive
-  keyLevelProximity: 0.005, // 0.5% proximity to key levels (if enabled)
+  // Strategy/indicator config (AI learns which settings work best)
+  requireBothHTF: false,
+  requireKeyLevel: false,
+  require15m: true,
+  require1m: true,
+  requireVolSpike: false,
+  maxEntryAge: 30,          // 1M swing freshness (AI can tighten)
+  indecisiveThresh: 0.3,
+  keyLevelProximity: 0.005,
   swingLen4h: 10,
   swingLen1h: 10,
   swingLen15m: 10,
   swingLen1m: 5,
+  AVOID_COINS: [],          // AI learns which coins to skip
 };
 
 let _paramsCache = { data: null, ts: 0 };
@@ -217,45 +220,10 @@ async function getOptimalParams() {
     }
   } catch (_) {}
 
-  // ── 1. SL margin %: learn if 30% margin loss is right or needs adjustment ──
-  const slMarginAnalysis = await query(
-    `SELECT
-      COUNT(*) FILTER (WHERE is_win = 1) as wins,
-      COUNT(*) FILTER (WHERE is_win = 0) as losses,
-      AVG(pnl_pct) as avg_pnl
-     FROM (SELECT * FROM ai_trades WHERE pnl_pct IS NOT NULL
-           ORDER BY created_at DESC LIMIT 50) sub`
-  );
-  const slm = slMarginAnalysis[0];
-  if (slm && parseInt(slm.wins) + parseInt(slm.losses) >= 20) {
-    const winRate = parseInt(slm.wins) / (parseInt(slm.wins) + parseInt(slm.losses));
-    // If win rate < 35%, SL too tight — widen to give more room
-    if (winRate < 0.35) {
-      const newSl = Math.min(params.SL_MARGIN_PCT * (1 + MAX_WEIGHT_SHIFT), 0.50); // max 50%
-      const newTp = newSl * 1.5; // keep 1.5 RR
-      if (newSl !== params.SL_MARGIN_PCT) {
-        await logParamChange('SL_MARGIN_PCT', params.SL_MARGIN_PCT, newSl,
-          `WR ${(winRate*100).toFixed(0)}%, widening SL margin to give room`, totalTrades);
-        params.SL_MARGIN_PCT = newSl;
-        params.TP_MARGIN_PCT = Math.min(newTp, 0.75);
-      }
-    }
-    // If win rate > 65%, can tighten SL to protect capital more
-    if (winRate > 0.65) {
-      const newSl = Math.max(params.SL_MARGIN_PCT * (1 - MAX_WEIGHT_SHIFT), 0.15); // min 15%
-      const newTp = newSl * 1.5;
-      if (newSl !== params.SL_MARGIN_PCT) {
-        await logParamChange('SL_MARGIN_PCT', params.SL_MARGIN_PCT, newSl,
-          `WR ${(winRate*100).toFixed(0)}%, tightening SL to protect capital`, totalTrades);
-        params.SL_MARGIN_PCT = newSl;
-        params.TP_MARGIN_PCT = Math.max(newTp, 0.225);
-      }
-    }
-  }
-
-  // ── 2. (removed — RR is now fixed at TP/SL = 1.5) ──
-
-  // ── 3. (removed — SL range is now capital-based, not swing-based) ──
+  // ── 1-3. LOCKED: SL/TP are fixed constants in cycle.js (30%/45% margin)
+  // AI cannot modify SL_MARGIN_PCT or TP_MARGIN_PCT — risk management is human-controlled
+  params.SL_MARGIN_PCT = 0.30;  // locked
+  params.TP_MARGIN_PCT = 0.45;  // locked
 
   // ── 4. Min Score threshold: find cutoff that filters losers ──
   const scoreAnalysis = await query(
@@ -283,82 +251,12 @@ async function getOptimalParams() {
     }
   }
 
-  // ── 5. Wallet size: reduce if losing streak, increase if winning ──
-  const recentPerf = await query(
-    `SELECT is_win, pnl_pct
-     FROM ai_trades WHERE pnl_pct IS NOT NULL
-     ORDER BY created_at DESC LIMIT 20`
-  );
-  if (recentPerf.length >= 10) {
-    const recentWinRate = recentPerf.filter(t => t.is_win).length / recentPerf.length;
-    const recentPnl = recentPerf.reduce((s, t) => s + parseFloat(t.pnl_pct), 0);
-    // Losing badly → reduce trade size to protect capital
-    if (recentWinRate < 0.35 || recentPnl < -5) {
-      const newSize = Math.max(params.WALLET_SIZE_PCT * 0.95, 0.05); // min 5%
-      if (newSize < params.WALLET_SIZE_PCT) {
-        await logParamChange('WALLET_SIZE_PCT', params.WALLET_SIZE_PCT, newSize, `recent WR ${(recentWinRate*100).toFixed(0)}%, reducing size`, totalTrades);
-        params.WALLET_SIZE_PCT = newSize;
-      }
-    }
-    // Winning consistently → allow slightly bigger trades
-    if (recentWinRate > 0.60 && recentPnl > 5) {
-      const newSize = Math.min(params.WALLET_SIZE_PCT * 1.05, 0.15); // max 15%
-      if (newSize > params.WALLET_SIZE_PCT) {
-        await logParamChange('WALLET_SIZE_PCT', params.WALLET_SIZE_PCT, newSize, `recent WR ${(recentWinRate*100).toFixed(0)}%, increasing size`, totalTrades);
-        params.WALLET_SIZE_PCT = newSize;
-      }
-    }
-  }
+  // ── 5. LOCKED: Wallet size is fixed at 10% — AI cannot change position sizing
+  params.WALLET_SIZE_PCT = 0.10;  // locked
 
-  // ── 6. Leverage: analyze wins/losses by leverage tier ──
-  const levAnalysis = await query(
-    `SELECT leverage,
-      COUNT(*) as total,
-      SUM(CASE WHEN is_win = 1 THEN 1 ELSE 0 END) as wins,
-      AVG(pnl_pct) as avg_pnl
-     FROM ai_trades WHERE pnl_pct IS NOT NULL AND leverage IS NOT NULL
-     GROUP BY leverage HAVING COUNT(*) >= 5
-     ORDER BY leverage`
-  );
-  if (levAnalysis.length >= 2) {
-    for (const lev of levAnalysis) {
-      const levVal = parseInt(lev.leverage);
-      const wr = parseInt(lev.wins) / parseInt(lev.total);
-      const avgPnl = parseFloat(lev.avg_pnl);
-      // If a leverage tier is losing badly, reduce it
-      if (wr < 0.35 && avgPnl < -0.5) {
-        if (levVal === 100) {
-          const newLev = Math.max(params.LEV_BTC_ETH - 10, 50);
-          if (newLev !== params.LEV_BTC_ETH) {
-            await logParamChange('LEV_BTC_ETH', params.LEV_BTC_ETH, newLev, `100x WR ${(wr*100).toFixed(0)}%, reducing`, totalTrades);
-            params.LEV_BTC_ETH = newLev;
-          }
-        } else if (levVal === 20) {
-          const newLev = Math.max(params.LEV_ALT - 5, 10);
-          if (newLev !== params.LEV_ALT) {
-            await logParamChange('LEV_ALT', params.LEV_ALT, newLev, `20x WR ${(wr*100).toFixed(0)}%, reducing`, totalTrades);
-            params.LEV_ALT = newLev;
-          }
-        }
-      }
-      // If a tier is winning well, consider increasing
-      if (wr > 0.60 && avgPnl > 1.0) {
-        if (levVal >= 50 && levVal < 125) {
-          const newLev = Math.min(params.LEV_BTC_ETH + 5, 125);
-          if (newLev !== params.LEV_BTC_ETH) {
-            await logParamChange('LEV_BTC_ETH', params.LEV_BTC_ETH, newLev, `${levVal}x WR ${(wr*100).toFixed(0)}%, increasing`, totalTrades);
-            params.LEV_BTC_ETH = newLev;
-          }
-        } else if (levVal >= 10 && levVal <= 25) {
-          const newLev = Math.min(params.LEV_ALT + 5, 50);
-          if (newLev !== params.LEV_ALT) {
-            await logParamChange('LEV_ALT', params.LEV_ALT, newLev, `${levVal}x WR ${(wr*100).toFixed(0)}%, increasing`, totalTrades);
-            params.LEV_ALT = newLev;
-          }
-        }
-      }
-    }
-  }
+  // ── 6. LOCKED: Leverage is set by admin via token_leverage table — AI cannot change
+  params.LEV_BTC_ETH = 20;  // locked — admin controls via dashboard
+  params.LEV_ALT = 20;      // locked — admin controls via dashboard
 
   // ── 7. Direction bias: if SHORT consistently loses, prefer LONG (and vice versa) ──
   // Uses lower threshold (5 trades per direction instead of 10) for faster adaptation
@@ -388,32 +286,8 @@ async function getOptimalParams() {
     }
   }
 
-  // ── 8. Early exit learning: track if structure_break_15m exits help or hurt ──
-  const exitAnalysis = await query(
-    `SELECT exit_reason,
-      COUNT(*) as total,
-      SUM(CASE WHEN is_win = 1 THEN 1 ELSE 0 END) as wins,
-      AVG(pnl_pct) as avg_pnl
-     FROM ai_trades
-     WHERE exit_reason IS NOT NULL AND pnl_pct IS NOT NULL
-     GROUP BY exit_reason HAVING COUNT(*) >= 5`
-  );
-  // Store early exit effectiveness for the engine to use
-  params.EARLY_EXIT_ENABLED = true; // default on
-  for (const ex of exitAnalysis) {
-    if (ex.exit_reason === 'structure_break_15m') {
-      const wr = parseInt(ex.wins) / parseInt(ex.total);
-      const avgPnl = parseFloat(ex.avg_pnl);
-      // If early exits are consistently losing us money, disable them
-      if (wr < 0.25 && avgPnl < -1.0) {
-        params.EARLY_EXIT_ENABLED = false;
-        await logParamChange('EARLY_EXIT_ENABLED', 1, 0,
-          `15m exits WR ${(wr*100).toFixed(0)}% avg ${avgPnl.toFixed(1)}%, disabling`, totalTrades);
-      }
-    }
-  }
-
-  // ── 9. (removed — SL is now capital-based, no min/max filtering needed) ──
+  // ── 8-9. LOCKED: Early exit is managed by trailing SL system — AI cannot change exit logic
+  params.EARLY_EXIT_ENABLED = false;  // locked — trailing SL handles all exits
 
   // ── 10. Swing length optimization: learn which swing lengths produce better WR ──
   try {

@@ -442,7 +442,7 @@ async function openTrade(client, pick, wallet) {
   // Get AI-tuned params for leverage and sizing
   const aiParams = await aiLearner.getOptimalParams();
   const leverage = getLeverage(sym, price, aiParams);
-  const walletSizePct = aiParams.WALLET_SIZE_PCT || 0.10;
+  const walletSizePct = 0.10; // locked — 10% of wallet per trade (safety agent)
 
   await client.setLeverage({ symbol: sym, leverage });
   try {
