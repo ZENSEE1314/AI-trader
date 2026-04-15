@@ -99,10 +99,15 @@ Be helpful, concise, and friendly. If asked about specific trades or account det
 Do NOT give financial advice. Always remind users that crypto trading involves risk.`,
         userMessage: message,
         context: {},
+        priority: 'chat',    // bypass rate limiting for user-facing chat
+        complexity: 'low',   // use fast model (Ollama normal / Gemini flash)
       });
-      if (reply) return res.json({ reply });
+      // If AI replied and it's not an error message, use it; otherwise fall through to FAQ
+      if (reply && !reply.startsWith('AI Error:') && !reply.startsWith("I'm having a momentary")) {
+        return res.json({ reply });
+      }
     }
-    // Fallback: simple FAQ
+    // Fallback: simple keyword FAQ (always works, no AI needed)
     const faq = customerFAQ(message.toLowerCase());
     res.json({ reply: faq });
   } catch (err) {
