@@ -12,10 +12,11 @@
 const fetch = require('node-fetch');
 const { log: bLog } = require('./bot-logger');
 
-const OLLAMA_URL = process.env.OLLAMA_URL || 'http://ollama.railway.internal:11434';
-const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'gemma3:4b';
+const OLLAMA_URL = process.env.OLLAMA_URL || process.env.OLLAMA_ENDPOINT || 'http://ollama.railway.internal:11434';
+const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'gemma4:31b-cloud';
+const OLLAMA_MODEL_HIGH = process.env.OLLAMA_MODEL_HIGH || OLLAMA_MODEL;
 const GOOGLE_AI_KEY = process.env.GOOGLE_AI_KEY || '';
-const REQUEST_TIMEOUT_MS = 30000;
+const REQUEST_TIMEOUT_MS = 60000; // 60s for cloud-routed models
 const MAX_RETRIES = 2;
 
 // Rate limiter — prevent flooding the AI
@@ -57,7 +58,10 @@ async function isOllamaHealthy() {
   _lastHealthCheck = Date.now();
 
   try {
-    const r = await fetch(`${OLLAMA_URL}/api/tags`, { timeout: 5000 });
+    const r = await fetch(`${OLLAMA_URL}/api/tags`, {
+      timeout: 5000,
+      headers: { 'ngrok-skip-browser-warning': 'true' },
+    });
     if (r.ok) {
       const data = await r.json();
       const models = (data.models || []).map(m => m.name);
@@ -90,7 +94,10 @@ async function callOllama(systemPrompt, userMessage, model = OLLAMA_MODEL) {
 
   const r = await fetch(`${OLLAMA_URL}/api/chat`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      'ngrok-skip-browser-warning': 'true',
+    },
     body: JSON.stringify(body),
     timeout: REQUEST_TIMEOUT_MS,
   });
