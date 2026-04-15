@@ -1033,18 +1033,21 @@ async function main() {
         continue;
       }
 
-      // Backtest gate — only trade strategies with 80%+ backtest WR
+      // Backtest gate — each agent backtests its own token inline
+      // Runs 30-day backtest on the spot, cached for 2 hours
       try {
         const backtestGate = require('./backtest-gate');
+        const gateSym = pick.symbol || pick.sym;
         const gateStrategy = pick.setupName || pick.setup || 'ALL';
-        const gatePasses = await backtestGate.passesGate(pick.symbol || pick.sym, gateStrategy);
+        const gatePasses = await backtestGate.passesGate(gateSym, gateStrategy);
         if (!gatePasses) {
-          bLog.trade(`BACKTEST GATE BLOCKED: ${pick.symbol} ${gateStrategy} — WR below ${backtestGate.MIN_WIN_RATE}%`);
+          bLog.trade(`BACKTEST GATE BLOCKED: ${gateSym} ${gateStrategy} — WR below ${backtestGate.MIN_WIN_RATE}%`);
           continue;
         }
-        bLog.trade(`BACKTEST GATE PASSED: ${pick.symbol} ${gateStrategy}`);
+        bLog.trade(`BACKTEST GATE PASSED: ${gateSym} ${gateStrategy}`);
       } catch (gateErr) {
-        bLog.error(`Backtest gate error: ${gateErr.message} — allowing trade`);
+        bLog.error(`Backtest gate error: ${gateErr.message} — blocking trade for safety`);
+        continue;
       }
 
       // Kronos AI prediction — use cached batch result or fetch fresh

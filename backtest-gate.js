@@ -1,18 +1,19 @@
 // ============================================================
-// Backtest Gate — Only trade strategies with 80%+ backtest WR
+// Backtest Gate — Inline per-token backtest before each trade
 //
-// Runs quick backtests per token × strategy on recent data.
-// Stores results in DB. Trades are BLOCKED unless WR >= 80%.
-// Background job refreshes results every 2 hours.
+// Each agent backtests its OWN token right before trading.
+// No bulk background job — fast, focused, per-token.
+// Results cached in DB for 2 hours to avoid redundant runs.
+// No minimum trade count — even 1 signal is valid data.
 // ============================================================
 
 const fetch = require('node-fetch');
 const { log: bLog } = require('./bot-logger');
 
-const MIN_WIN_RATE = 80;        // 80% minimum to fire a live trade
-const BACKTEST_DAYS = 7;        // test on last 7 days of data
-const REFRESH_INTERVAL_MS = 2 * 60 * 60 * 1000; // re-test every 2 hours
-const MIN_TRADES_REQUIRED = 5;  // need at least 5 simulated trades to be valid
+const MIN_WIN_RATE = 80;          // 80% minimum to fire a live trade
+const BACKTEST_DAYS = 30;         // default: 30 days of history
+const MAX_BACKTEST_DAYS = 90;     // can go up to 90 days
+const CACHE_HOURS = 2;            // re-use cached result for 2 hours
 
 let _db = null;
 function getDB() {
@@ -20,12 +21,35 @@ function getDB() {
   return _db;
 }
 
+// In-memory cache to avoid DB hits every cycle
+const _memCache = new Map();
+const MEM_CACHE_TTL_MS = 10 * 60 * 1000; // 10 min in-memory
+
+function getMemCached(symbol, strategy) {
+  const key = `${symbol}:${strategy}`;
+  const entry = _memCache.get(key);
+  if (!entry) return null;
+  if (Date.now() - entry.time > MEM_CACHE_TTL_MS) {
+    _memCache.delete(key);
+    return null;
+  }
+  return entry;
+}
+
+function setMemCache(symbol, strategy, winRate, total) {
+  _memCache.set(`${symbol}:${strategy}`, {
+    winRate, total, time: Date.now(),
+  });
+}
+
 // Fetch klines from Binance
 async function fetchKlines(symbol, interval, limit) {
   try {
     const url = `https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`;
     const r = await fetch(url, { timeout: 15000 });
-    return await r.json();
+    const data = await r.json();
+    if (!Array.isArray(data)) return [];
+    return data;
   } catch { return []; }
 }
 
@@ -37,7 +61,6 @@ function parseCandle(k) {
   };
 }
 
-// Simple indicators for backtest signal generation
 function calcEMA(closes, period) {
   if (closes.length < period) return null;
   const k = 2 / (period + 1);
@@ -62,46 +85,42 @@ function calcRSI(closes, period = 14) {
   return 100 - 100 / (1 + rs);
 }
 
-// Run a quick backtest for a specific token using the LIVE strategy logic
-// Tests: given recent candle data, how many signals would have won vs lost?
-async function backtestToken(symbol, days = BACKTEST_DAYS) {
-  const limit15m = days * 24 * 4; // 15m candles
-  const klines15m = await fetchKlines(symbol, '15m', Math.min(limit15m, 1000));
-  const klines1h = await fetchKlines(symbol, '1h', Math.min(days * 24, 500));
+// Backtest a SINGLE token × strategy combo on recent data
+// Called inline by the agent right before it wants to trade
+async function backtestToken(symbol, strategy, days = BACKTEST_DAYS) {
+  const clampedDays = Math.min(days, MAX_BACKTEST_DAYS);
+  const limit15m = clampedDays * 24 * 4; // 15m candles
+  const limit1h = clampedDays * 24;
 
-  if (!klines15m || klines15m.length < 50) return null;
+  // Binance max 1500 klines per request — split if needed
+  const klines15m = await fetchKlines(symbol, '15m', Math.min(limit15m, 1500));
+  const klines1h = await fetchKlines(symbol, '1h', Math.min(limit1h, 720));
+
+  if (!klines15m || klines15m.length < 30) return null;
 
   const candles15m = klines15m.map(parseCandle);
   const candles1h = (klines1h || []).map(parseCandle);
   const closes15m = candles15m.map(c => c.close);
 
   // SL/TP: fixed 30% margin / 45% margin at 20x leverage
-  const slPct = 0.30 / 20; // 1.5% price
-  const tpPct = 0.45 / 20; // 2.25% price
+  const slPct = 0.30 / 20; // 1.5% price move
+  const tpPct = 0.45 / 20; // 2.25% price move
 
-  const results = {
-    LIQUIDITY_SWEEP: { wins: 0, losses: 0, trades: [] },
-    STOP_LOSS_HUNT: { wins: 0, losses: 0, trades: [] },
-    MOMENTUM_SCALP: { wins: 0, losses: 0, trades: [] },
-    BRR_FIBO: { wins: 0, losses: 0, trades: [] },
-    SMC_CLASSIC: { wins: 0, losses: 0, trades: [] },
-    ALL: { wins: 0, losses: 0, trades: [] },
-  };
+  let wins = 0;
+  let losses = 0;
 
-  // Walk through candles, simulate entries and check outcomes
-  const WINDOW = 30; // need at least 30 candles of context
+  const WINDOW = 30;
   for (let i = WINDOW; i < candles15m.length - 10; i++) {
     const slice15m = candles15m.slice(Math.max(0, i - 80), i + 1);
     const currentPrice = candles15m[i].close;
-    const futureCandles = candles15m.slice(i + 1, i + 40); // next 10h of 15m candles
+    const futureCandles = candles15m.slice(i + 1, i + 40);
+    if (futureCandles.length < 3) continue;
 
-    if (futureCandles.length < 5) continue;
-
-    // Get 1h context
+    const sweepCandle = candles15m[i];
     const candleTime = candles15m[i].time;
-    const h1Slice = candles1h.filter(c => c.time <= candleTime).slice(-30);
 
-    // Determine trend
+    // 1h trend context
+    const h1Slice = candles1h.filter(c => c.time <= candleTime).slice(-30);
     let h1Trend = 'neutral';
     if (h1Slice.length >= 21) {
       const h1Closes = h1Slice.map(c => c.close);
@@ -112,86 +131,91 @@ async function backtestToken(symbol, days = BACKTEST_DAYS) {
       }
     }
 
-    // RSI
     const rsi = calcRSI(closes15m.slice(0, i + 1));
-
-    // EMA on 15m
     const ema9_15 = calcEMA(closes15m.slice(0, i + 1), 9);
     const ema21_15 = calcEMA(closes15m.slice(0, i + 1), 21);
-    const trend15m = (ema9_15 && ema21_15) ? (ema9_15 > ema21_15 ? 'bullish' : 'bearish') : 'neutral';
+    const trend15m = (ema9_15 && ema21_15)
+      ? (ema9_15 > ema21_15 ? 'bullish' : 'bearish')
+      : 'neutral';
 
-    // Simple signal detection per strategy
+    // Detect signals for the REQUESTED strategy only
     const signals = [];
 
-    // LIQUIDITY SWEEP: sweep below recent low + close back inside
-    const recentLow = Math.min(...slice15m.slice(-6, -1).map(c => c.low));
-    const recentHigh = Math.max(...slice15m.slice(-6, -1).map(c => c.high));
-    const sweepCandle = candles15m[i];
-    if (sweepCandle.low < recentLow && sweepCandle.close > recentLow) {
-      signals.push({ strategy: 'LIQUIDITY_SWEEP', direction: 'LONG', price: currentPrice });
-    }
-    if (sweepCandle.high > recentHigh && sweepCandle.close < recentHigh) {
-      signals.push({ strategy: 'LIQUIDITY_SWEEP', direction: 'SHORT', price: currentPrice });
-    }
-
-    // STOP LOSS HUNT: price breaks S/R level then reverses
-    const pivotHigh = Math.max(...slice15m.slice(-20, -3).map(c => c.high));
-    const pivotLow = Math.min(...slice15m.slice(-20, -3).map(c => c.low));
-    if (sweepCandle.high > pivotHigh * 1.001 && sweepCandle.close < pivotHigh) {
-      signals.push({ strategy: 'STOP_LOSS_HUNT', direction: 'SHORT', price: currentPrice });
-    }
-    if (sweepCandle.low < pivotLow * 0.999 && sweepCandle.close > pivotLow) {
-      signals.push({ strategy: 'STOP_LOSS_HUNT', direction: 'LONG', price: currentPrice });
-    }
-
-    // MOMENTUM SCALP: trend + reversal candle
-    if (trend15m === 'bullish' && rsi > 40 && rsi < 65) {
-      const prev = candles15m[i - 1];
-      if (prev.close < prev.open && sweepCandle.close > sweepCandle.open && sweepCandle.close > prev.high) {
-        signals.push({ strategy: 'MOMENTUM_SCALP', direction: 'LONG', price: currentPrice });
+    if (strategy === 'LIQUIDITY_SWEEP' || strategy === 'ALL') {
+      const recentLow = Math.min(...slice15m.slice(-6, -1).map(c => c.low));
+      const recentHigh = Math.max(...slice15m.slice(-6, -1).map(c => c.high));
+      if (sweepCandle.low < recentLow && sweepCandle.close > recentLow) {
+        signals.push({ direction: 'LONG', price: currentPrice });
       }
-    }
-    if (trend15m === 'bearish' && rsi > 35 && rsi < 60) {
-      const prev = candles15m[i - 1];
-      if (prev.close > prev.open && sweepCandle.close < sweepCandle.open && sweepCandle.close < prev.low) {
-        signals.push({ strategy: 'MOMENTUM_SCALP', direction: 'SHORT', price: currentPrice });
+      if (sweepCandle.high > recentHigh && sweepCandle.close < recentHigh) {
+        signals.push({ direction: 'SHORT', price: currentPrice });
       }
     }
 
-    // BRR: breakout above resistance then pullback
-    if (h1Trend === 'bullish' && sweepCandle.close > pivotHigh && rsi < 70) {
-      signals.push({ strategy: 'BRR_FIBO', direction: 'LONG', price: currentPrice });
-    }
-    if (h1Trend === 'bearish' && sweepCandle.close < pivotLow && rsi > 30) {
-      signals.push({ strategy: 'BRR_FIBO', direction: 'SHORT', price: currentPrice });
-    }
-
-    // SMC CLASSIC: higher-high + higher-low for LONG
-    if (slice15m.length >= 10) {
-      const r = slice15m.slice(-10);
-      const highs = r.map(c => c.high);
-      const lows = r.map(c => c.low);
-      const hh = highs[highs.length - 1] > Math.max(...highs.slice(0, -1));
-      const hl = lows[lows.length - 1] > Math.min(...lows.slice(2, -1));
-      if (hh && hl && h1Trend === 'bullish') {
-        signals.push({ strategy: 'SMC_CLASSIC', direction: 'LONG', price: currentPrice });
+    if (strategy === 'STOP_LOSS_HUNT' || strategy === 'ALL') {
+      const pivotHigh = Math.max(...slice15m.slice(-20, -3).map(c => c.high));
+      const pivotLow = Math.min(...slice15m.slice(-20, -3).map(c => c.low));
+      if (sweepCandle.high > pivotHigh * 1.001 && sweepCandle.close < pivotHigh) {
+        signals.push({ direction: 'SHORT', price: currentPrice });
       }
-      const lh = highs[highs.length - 1] < Math.max(...highs.slice(0, -3));
-      const ll = lows[lows.length - 1] < Math.min(...lows.slice(0, -1));
-      if (lh && ll && h1Trend === 'bearish') {
-        signals.push({ strategy: 'SMC_CLASSIC', direction: 'SHORT', price: currentPrice });
+      if (sweepCandle.low < pivotLow * 0.999 && sweepCandle.close > pivotLow) {
+        signals.push({ direction: 'LONG', price: currentPrice });
       }
     }
 
-    // Filter by trend alignment
-    const filteredSignals = signals.filter(s => {
+    if (strategy === 'MOMENTUM_SCALP' || strategy === 'ALL') {
+      if (trend15m === 'bullish' && rsi > 40 && rsi < 65 && i > 0) {
+        const prev = candles15m[i - 1];
+        if (prev.close < prev.open && sweepCandle.close > sweepCandle.open && sweepCandle.close > prev.high) {
+          signals.push({ direction: 'LONG', price: currentPrice });
+        }
+      }
+      if (trend15m === 'bearish' && rsi > 35 && rsi < 60 && i > 0) {
+        const prev = candles15m[i - 1];
+        if (prev.close > prev.open && sweepCandle.close < sweepCandle.open && sweepCandle.close < prev.low) {
+          signals.push({ direction: 'SHORT', price: currentPrice });
+        }
+      }
+    }
+
+    if (strategy === 'BRR_FIBO' || strategy === 'ALL') {
+      const pivotHigh = Math.max(...slice15m.slice(-20, -3).map(c => c.high));
+      const pivotLow = Math.min(...slice15m.slice(-20, -3).map(c => c.low));
+      if (h1Trend === 'bullish' && sweepCandle.close > pivotHigh && rsi < 70) {
+        signals.push({ direction: 'LONG', price: currentPrice });
+      }
+      if (h1Trend === 'bearish' && sweepCandle.close < pivotLow && rsi > 30) {
+        signals.push({ direction: 'SHORT', price: currentPrice });
+      }
+    }
+
+    if (strategy === 'SMC_CLASSIC' || strategy === 'ALL') {
+      if (slice15m.length >= 10) {
+        const r = slice15m.slice(-10);
+        const highs = r.map(c => c.high);
+        const lows = r.map(c => c.low);
+        const hh = highs[highs.length - 1] > Math.max(...highs.slice(0, -1));
+        const hl = lows[lows.length - 1] > Math.min(...lows.slice(2, -1));
+        if (hh && hl && h1Trend === 'bullish') {
+          signals.push({ direction: 'LONG', price: currentPrice });
+        }
+        const lh = highs[highs.length - 1] < Math.max(...highs.slice(0, -3));
+        const ll = lows[lows.length - 1] < Math.min(...lows.slice(0, -1));
+        if (lh && ll && h1Trend === 'bearish') {
+          signals.push({ direction: 'SHORT', price: currentPrice });
+        }
+      }
+    }
+
+    // Trend alignment filter
+    const filtered = signals.filter(s => {
       if (s.direction === 'LONG' && h1Trend === 'bearish') return false;
       if (s.direction === 'SHORT' && h1Trend === 'bullish') return false;
       return true;
     });
 
-    // Simulate each signal against future candles
-    for (const sig of filteredSignals) {
+    // Simulate each signal
+    for (const sig of filtered) {
       const entry = sig.price;
       const isLong = sig.direction === 'LONG';
       const tp = isLong ? entry * (1 + tpPct) : entry * (1 - tpPct);
@@ -208,202 +232,144 @@ async function backtestToken(symbol, days = BACKTEST_DAYS) {
         }
       }
 
-      // Timeout = check if in profit at end
       if (outcome === 'TIMEOUT') {
         const lastClose = futureCandles[futureCandles.length - 1].close;
         outcome = (isLong && lastClose > entry) || (!isLong && lastClose < entry) ? 'WIN' : 'LOSS';
       }
 
-      const isWin = outcome === 'WIN';
-      results[sig.strategy].trades.push({ outcome, direction: sig.direction });
-      if (isWin) results[sig.strategy].wins++;
-      else results[sig.strategy].losses++;
-
-      results.ALL.trades.push({ outcome, direction: sig.direction, strategy: sig.strategy });
-      if (isWin) results.ALL.wins++;
-      else results.ALL.losses++;
+      if (outcome === 'WIN') wins++;
+      else losses++;
     }
   }
 
-  // Calculate win rates
-  const output = {};
-  for (const [strategy, data] of Object.entries(results)) {
-    const total = data.wins + data.losses;
-    output[strategy] = {
-      wins: data.wins,
-      losses: data.losses,
-      total,
-      winRate: total > 0 ? Math.round(data.wins / total * 100) : 0,
-      valid: total >= MIN_TRADES_REQUIRED,
-    };
-  }
+  const total = wins + losses;
+  const winRate = total > 0 ? Math.round(wins / total * 100) : 0;
 
-  return output;
+  return { wins, losses, total, winRate };
 }
 
-// Store backtest results in DB
-async function storeResults(symbol, results) {
+// Store single token×strategy result in DB
+async function storeResult(symbol, strategy, data) {
   const db = getDB();
   if (!db) return;
-
-  for (const [strategy, data] of Object.entries(results)) {
-    if (strategy === 'ALL') continue; // skip aggregate
-    try {
-      await db.query(
-        `INSERT INTO backtest_gate (symbol, strategy, wins, losses, total_trades, win_rate, tested_at)
-         VALUES ($1, $2, $3, $4, $5, $6, NOW())
-         ON CONFLICT (symbol, strategy) DO UPDATE SET
-           wins = $3, losses = $4, total_trades = $5, win_rate = $6, tested_at = NOW()`,
-        [symbol, strategy, data.wins, data.losses, data.total, data.winRate]
-      );
-    } catch (err) {
-      console.error(`[BacktestGate] Store error: ${err.message}`);
-    }
+  try {
+    await db.query(
+      `INSERT INTO backtest_gate (symbol, strategy, wins, losses, total_trades, win_rate, tested_at)
+       VALUES ($1, $2, $3, $4, $5, $6, NOW())
+       ON CONFLICT (symbol, strategy) DO UPDATE SET
+         wins = $3, losses = $4, total_trades = $5, win_rate = $6, tested_at = NOW()`,
+      [symbol, strategy, data.wins, data.losses, data.total, data.winRate]
+    );
+  } catch (err) {
+    console.error(`[BacktestGate] Store error: ${err.message}`);
   }
 }
 
-// Check if a signal passes the 80% WR gate
-async function passesGate(symbol, strategy, minWR = MIN_WIN_RATE) {
+// Main gate check — called inline before each trade
+// Runs backtest on the spot if no cached result exists
+async function passesGate(symbol, strategy, days = BACKTEST_DAYS) {
+  // 1. Check in-memory cache first (fastest)
+  const mem = getMemCached(symbol, strategy);
+  if (mem) {
+    if (mem.total === 0) {
+      bLog.scan(`${symbol} ${strategy}: 0 backtest signals (${days}d) — BLOCKED (cached)`);
+      return false;
+    }
+    if (mem.winRate < MIN_WIN_RATE) {
+      bLog.scan(`${symbol} ${strategy}: backtest WR=${mem.winRate}% < ${MIN_WIN_RATE}% — BLOCKED (cached)`);
+      return false;
+    }
+    bLog.scan(`${symbol} ${strategy}: backtest WR=${mem.winRate}% (${mem.total} trades) — PASSED (cached)`);
+    return true;
+  }
+
+  // 2. Check DB cache (still fast, avoids re-running backtest)
   const db = getDB();
-  if (!db) return false;
+  if (db) {
+    try {
+      const rows = await db.query(
+        `SELECT win_rate, total_trades, tested_at FROM backtest_gate
+         WHERE symbol = $1 AND strategy = $2
+         AND tested_at > NOW() - INTERVAL '${CACHE_HOURS} hours'
+         LIMIT 1`,
+        [symbol, strategy]
+      );
+
+      if (rows.length > 0) {
+        const wr = parseFloat(rows[0].win_rate);
+        const total = parseInt(rows[0].total_trades);
+        setMemCache(symbol, strategy, wr, total);
+
+        if (total === 0) {
+          bLog.scan(`${symbol} ${strategy}: 0 backtest signals — BLOCKED (DB cache)`);
+          return false;
+        }
+        if (wr < MIN_WIN_RATE) {
+          bLog.scan(`${symbol} ${strategy}: backtest WR=${wr}% < ${MIN_WIN_RATE}% — BLOCKED (DB cache)`);
+          return false;
+        }
+        bLog.scan(`${symbol} ${strategy}: backtest WR=${wr}% (${total} trades) — PASSED (DB cache)`);
+        return true;
+      }
+    } catch (err) {
+      bLog.error(`[BacktestGate] DB cache check error: ${err.message}`);
+    }
+  }
+
+  // 3. No cache — run backtest inline for THIS token × strategy
+  bLog.scan(`${symbol} ${strategy}: running ${days}-day backtest inline...`);
 
   try {
-    const rows = await db.query(
-      `SELECT win_rate, total_trades, tested_at FROM backtest_gate
-       WHERE symbol = $1 AND strategy = $2 LIMIT 1`,
-      [symbol, strategy]
-    );
+    const result = await backtestToken(symbol, strategy, days);
 
-    if (!rows.length) {
-      bLog.scan(`${symbol} ${strategy}: no backtest data — BLOCKED`);
+    if (!result) {
+      bLog.scan(`${symbol} ${strategy}: backtest failed (no data) — BLOCKED`);
+      setMemCache(symbol, strategy, 0, 0);
       return false;
     }
 
-    const { win_rate, total_trades, tested_at } = rows[0];
-    const wr = parseFloat(win_rate);
-    const trades = parseInt(total_trades);
+    // Cache the result
+    setMemCache(symbol, strategy, result.winRate, result.total);
+    await storeResult(symbol, strategy, result);
 
-    if (trades < MIN_TRADES_REQUIRED) {
-      bLog.scan(`${symbol} ${strategy}: only ${trades} backtest trades (need ${MIN_TRADES_REQUIRED}) — BLOCKED`);
+    if (result.total === 0) {
+      bLog.scan(`${symbol} ${strategy}: 0 signals in ${days}d backtest — BLOCKED`);
       return false;
     }
 
-    if (wr < minWR) {
-      bLog.scan(`${symbol} ${strategy}: backtest WR=${wr}% < ${minWR}% — BLOCKED`);
+    if (result.winRate < MIN_WIN_RATE) {
+      bLog.scan(`${symbol} ${strategy}: backtest WR=${result.winRate}% (${result.total} trades, ${days}d) — BLOCKED`);
       return false;
     }
 
+    bLog.scan(`${symbol} ${strategy}: backtest WR=${result.winRate}% (${result.total} trades, ${days}d) — PASSED`);
     return true;
   } catch (err) {
-    bLog.error(`[BacktestGate] Check error: ${err.message}`);
+    bLog.error(`[BacktestGate] Inline backtest error for ${symbol} ${strategy}: ${err.message}`);
     return false;
   }
 }
 
-// Get all passing strategies for a symbol
-async function getPassingStrategies(symbol, minWR = MIN_WIN_RATE) {
-  const db = getDB();
-  if (!db) return [];
+// Get all strategies that pass for a symbol (useful for dashboard)
+async function getPassingStrategies(symbol, days = BACKTEST_DAYS) {
+  const strategies = ['LIQUIDITY_SWEEP', 'STOP_LOSS_HUNT', 'MOMENTUM_SCALP', 'BRR_FIBO', 'SMC_CLASSIC'];
+  const passing = [];
 
-  try {
-    const rows = await db.query(
-      `SELECT strategy, win_rate FROM backtest_gate
-       WHERE symbol = $1 AND win_rate >= $2 AND total_trades >= $3`,
-      [symbol, minWR, MIN_TRADES_REQUIRED]
-    );
-    return rows.map(r => ({ strategy: r.strategy, winRate: parseFloat(r.win_rate) }));
-  } catch { return []; }
-}
-
-// Run backtests for all enabled tokens — called on startup + every 2 hours
-async function runAllBacktests() {
-  const db = getDB();
-  if (!db) return;
-
-  bLog.ai('[BacktestGate] Starting backtest run for all enabled tokens...');
-
-  let tokens = [];
-  try {
-    // Get admin-enabled tokens
-    const rows = await db.query(
-      "SELECT symbol FROM global_token_settings WHERE enabled = true AND banned = false ORDER BY symbol"
-    );
-    tokens = rows.map(r => r.symbol);
-  } catch {
-    // Fallback to top volume tokens
-    try {
-      const r = await fetch('https://fapi.binance.com/fapi/v1/ticker/24hr', { timeout: 15000 });
-      const tickers = await r.json();
-      tokens = tickers
-        .filter(t => t.symbol.endsWith('USDT') && !t.symbol.includes('_'))
-        .sort((a, b) => parseFloat(b.quoteVolume) - parseFloat(a.quoteVolume))
-        .slice(0, 30)
-        .map(t => t.symbol);
-    } catch { return; }
-  }
-
-  if (!tokens.length) {
-    bLog.ai('[BacktestGate] No tokens to backtest');
-    return;
-  }
-
-  let tested = 0;
-  let passed = 0;
-
-  for (const symbol of tokens) {
-    try {
-      // Skip if recently tested (within refresh interval)
-      const recent = await db.query(
-        `SELECT tested_at FROM backtest_gate WHERE symbol = $1 AND tested_at > NOW() - INTERVAL '2 hours' LIMIT 1`,
-        [symbol]
-      );
-      if (recent.length > 0) continue;
-
-      const results = await backtestToken(symbol, BACKTEST_DAYS);
-      if (results) {
-        await storeResults(symbol, results);
-        tested++;
-
-        const passing = Object.entries(results)
-          .filter(([k, v]) => k !== 'ALL' && v.valid && v.winRate >= MIN_WIN_RATE);
-        passed += passing.length;
-
-        if (passing.length > 0) {
-          bLog.ai(`[BacktestGate] ${symbol}: ${passing.map(([k, v]) => `${k}=${v.winRate}%`).join(', ')} ✅`);
-        }
-      }
-
-      // Rate limit: 300ms between tokens
-      await new Promise(r => setTimeout(r, 300));
-    } catch (err) {
-      bLog.error(`[BacktestGate] ${symbol} backtest error: ${err.message}`);
+  for (const strat of strategies) {
+    const passes = await passesGate(symbol, strat, days);
+    if (passes) {
+      const mem = getMemCached(symbol, strat);
+      passing.push({ strategy: strat, winRate: mem ? mem.winRate : 0 });
     }
   }
 
-  bLog.ai(`[BacktestGate] Complete: ${tested} tokens tested, ${passed} strategy+token combos passed ${MIN_WIN_RATE}% WR gate`);
-}
-
-// Start background refresh loop
-let _refreshTimer = null;
-function startBackgroundRefresh() {
-  if (_refreshTimer) return;
-
-  // Initial run after 30s (let server start up first)
-  setTimeout(() => {
-    runAllBacktests().catch(err => console.error('[BacktestGate] Initial run error:', err.message));
-  }, 30000);
-
-  // Refresh every 2 hours
-  _refreshTimer = setInterval(() => {
-    runAllBacktests().catch(err => console.error('[BacktestGate] Refresh error:', err.message));
-  }, REFRESH_INTERVAL_MS);
+  return passing;
 }
 
 module.exports = {
   backtestToken,
   passesGate,
   getPassingStrategies,
-  runAllBacktests,
-  startBackgroundRefresh,
   MIN_WIN_RATE,
+  BACKTEST_DAYS,
 };

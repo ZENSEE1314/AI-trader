@@ -536,15 +536,6 @@ async function main() {
     log(`DB init error: ${err.message}`);
   }
 
-  // Start backtest gate background refresh (tests all tokens every 2 hours)
-  try {
-    const backtestGate = require('./backtest-gate');
-    backtestGate.startBackgroundRefresh();
-    log('Backtest gate background refresh started');
-  } catch (err) {
-    log(`Backtest gate init error: ${err.message}`);
-  }
-
   // Initialize agent framework
   try {
     const coordinator = getCoordinator();
