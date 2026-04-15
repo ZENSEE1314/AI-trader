@@ -34,11 +34,24 @@ app.use((req, res, next) => {
 });
 app.use(cookieParser());
 
-// ── Performance: static files with 1-day cache + ETag ──
+// ── Static files: HTML never cached, assets cached 7 days ──
+// HTML files must not be cached so updates deploy instantly
+app.use((req, res, next) => {
+  if (req.path.endsWith('.html') || req.path === '/') {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+  }
+  next();
+});
 app.use(express.static(path.resolve(__dirname, 'public'), {
-  maxAge: '1d',
+  maxAge: '7d',
   etag: true,
   lastModified: true,
+  setHeaders(res, filePath) {
+    // Never cache HTML
+    if (filePath.endsWith('.html')) {
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+    }
+  },
 }));
 
 // API routes
