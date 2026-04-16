@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git pull:*)",
+      "Bash(git merge:*)",
+      "Bash(git reset:*)",
+      "Bash(git push:*)",
+      "Bash(psql:*)",
+      "Bash(npm list:*)",
+      "Bash(node:*)"
+    ]
+  }
+}

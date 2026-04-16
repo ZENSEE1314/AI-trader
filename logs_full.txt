@@ -1,0 +1,1000 @@
+[14 Apr 2026, 03:02:25] [ERROR    ] Bitunix trailing: price method 2 failed for BTCUSDT: no markPrice
+[14 Apr 2026, 03:02:26] [TRADE    ] Bitunix trailing: BTCUSDT price from fallback method 3: $73296.5
+[14 Apr 2026, 03:02:26] [TRADE    ] Bitunix trailing: BTCUSDT entry=$73277.4 cur=$73296.5 pricePct=0.026% capitalPct=2.61% lev=100x lastStep=0.0%
+[14 Apr 2026, 03:02:26] [SYSTEM   ] Sync: exchange has 1 open positions, DB has 1 OPEN trades
+[14 Apr 2026, 03:02:26] [PoliceAgent] Patrol #10: 26 agents checked, 0 violations
+[14 Apr 2026, 03:02:26] [SYSTEM   ] [PoliceAgent] Patrol #10: 26 agents checked, 0 violations
+[14 Apr 2026, 03:02:26] [TRADE    ] User zensee1314@gmail.com settings: SL=1.64% TP=3.28% trail=1.2% cap=10% maxLoss=$1 SMC-SL
+[AI Brain] Bullish Momentumist thinking with Google gemini-2.0-flash...
+[AI Brain] Transient error [GoogleGenerativeAI Error]: Error fetching from https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent: [429 Too Many Requests] You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. 
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+Please retry in 33.20573602s. [{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Learn more about Gemini API quotas","url":"https://ai.google.dev/gemini-api/docs/rate-limits"}]},{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_input_token_count","quotaId":"GenerateContentInputTokensPerModelPerMinute-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerMinutePerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"33s"}] — retrying (2/3)...
+[Bitunix] Raw position fields: ["positionId","symbol","marginCoin","qty","entryValue","side","marginMode","positionMode","leverage","fee","funding","realizedPNL","margin","unrealizedPNL","liqPrice","avgOpenPrice","marginRate","ctime","mtime"]
+[Bitunix] Raw position data: {"positionId":"4418560084350029393","symbol":"XRPUSDT","marginCoin":null,"qty":"92.4","entryValue":"124.86012","side":"BUY","marginMode":"ISOLATION","positionMode":"HEDGE","leverage":20,"fee":"-0.074916072","funding":"0","realizedPNL":"-0.074916072","margin":"6.319413408","unrealizedPNL":"0.19404","liqPrice":"1.29","avgOpenPrice":"1.3513","marginRate":"0","ctime":"1776109616000","mtime":"1776109616000"}
+[14 Apr 2026, 03:02:27] [TRADE    ] User zensee1314@gmail.com Bitunix: wallet=$62.18 pos=1/5 lev=x20
+[14 Apr 2026, 03:02:27] [TRADE    ] User zensee1314@gmail.com: placing Bitunix MARKET BUY ZECUSDT qty=0.34061 SL=$359.1405 TP=$377.079...
+[14 Apr 2026, 03:02:28] [ERROR    ] User zensee1314@gmail.com trade error: Bitunix API error: This futures does not allow trading (code 20012)
+[14 Apr 2026, 03:02:28] User zensee1314@gmail.com trade error: Bitunix API error: This futures does not allow trading (code 20012)
+[AI Brain] Bullish Momentumist thinking with Google gemini-2.0-flash...
+[AI Brain] Bullish Momentumist FAILED (google): [GoogleGenerativeAI Error]: Error fetching from https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent: [429 Too Many Requests] You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. 
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-2.0-flash
+Please retry in 30.159254048s. [{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Learn more about Gemini API quotas","url":"https://ai.google.dev/gemini-api/docs/rate-limits"}]},{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier","quotaDimensions":{"model":"gemini-2.0-flash","location":"global"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerMinutePerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_input_token_count","quotaId":"GenerateContentInputTokensPerModelPerMinute-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"30s"}]
+[Swarm] Bullish Momentumist simulation failed: Invalid JSON from Bullish Momentumist
+[Bitunix] Raw position fields: ["positionId","symbol","marginCoin","qty","entryValue","side","marginMode","positionMode","leverage","fee","funding","realizedPNL","margin","unrealizedPNL","liqPrice","avgOpenPrice","marginRate","ctime","mtime"]
+[Bitunix] Raw position data: {"positionId":"4134024514227113320","symbol":"BTCUSDT","marginCoin":null,"qty":"0.0234","entryValue":"1714.69116","side":"BUY","marginMode":"ISOLATION","positionMode":"HEDGE","leverage":100,"fee":"-1.028814696","funding":"0","realizedPNL":"-1.028814696","margin":"18.186013404","unrealizedPNL":"-0.16848","liqPrice":"72738.2","avgOpenPrice":"73277.4","marginRate":"0","ctime":"1776110379000","mtime":"1776110379000"}
+[14 Apr 2026, 03:02:30] [TRADE    ] User scavex88@gmail.com Bitunix: wallet=$170.81 pos=1/10 lev=x20
+[AI Brain] Bearish Contrarian thinking with Google gemini-2.0-flash...
+[AI Brain] Transient error [GoogleGenerativeAI Error]: Error fetching from https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent: [429 Too Many Requests] You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. 
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-2.0-flash
+Please retry in 29.619898296s. [{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Learn more about Gemini API quotas","url":"https://ai.google.dev/gemini-api/docs/rate-limits"}]},{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerMinutePerProjectPerModel-FreeTier","quotaDimensions":{"model":"gemini-2.0-flash","location":"global"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_input_token_count","quotaId":"GenerateContentInputTokensPerModelPerMinute-FreeTier","quotaDimensions":{"model":"gemini-2.0-flash","location":"global"}}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"29s"}] — retrying (1/3)...
+[14 Apr 2026, 03:02:30] [TRADE    ] User scavex88@gmail.com: placing Bitunix MARKET BUY ZECUSDT qty=0.935611 SL=$328.608 TP=$377.079...
+[14 Apr 2026, 03:02:31] [ERROR    ] User scavex88@gmail.com trade error: Bitunix API error: This futures does not allow trading (code 20012)
+[14 Apr 2026, 03:02:31] User scavex88@gmail.com trade error: Bitunix API error: This futures does not allow trading (code 20012)
+[14 Apr 2026, 03:02:31] [TRADE    ] Multi-user execution done: 0 traded, 2 skipped/failed
+[14 Apr 2026, 03:02:31] Multi-user done: 0 traded, 2 skipped/failed
+[14 Apr 2026, 03:02:31] [TraderAgent] ZECUSDT too expensive for all users — trying next
+[14 Apr 2026, 03:02:31] [TRADE    ] [TraderAgent] ZECUSDT too expensive for all users — trying next
+[14 Apr 2026, 03:02:31] [TraderAgent] Signal: SOLUSDT LONG score=15.3 setup=AI-adx_trend
+[14 Apr 2026, 03:02:31] [TRADE    ] [TraderAgent] Signal: SOLUSDT LONG score=15.3 setup=AI-adx_trend
+[14 Apr 2026, 03:02:31] [TraderAgent] Kronos: SOLUSDT → LONG 2.7% conf=high
+[14 Apr 2026, 03:02:31] [TRADE    ] [TraderAgent] Kronos: SOLUSDT → LONG 2.7% conf=high
+[14 Apr 2026, 03:02:31] [TraderAgent] KRONOS CONFIRMED: SOLUSDT LONG HIGH confidence
+[14 Apr 2026, 03:02:31] [TRADE    ] [TraderAgent] KRONOS CONFIRMED: SOLUSDT LONG HIGH confidence
+[14 Apr 2026, 03:02:31] [TRADE    ] Found 2 unique API key(s) — executing SOLUSDT LONG for: zensee1314@gmail.com, scavex88@gmail.com
+[14 Apr 2026, 03:02:31] Executing SOLUSDT LONG for 2 user keys: zensee1314@gmail.com, scavex88@gmail.com
+[AI Brain] Bearish Contrarian thinking with Google gemini-2.0-flash...
+[AI Brain] Transient error [GoogleGenerativeAI Error]: Error fetching from https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent: [429 Too Many Requests] You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. 
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-2.0-flash
+Please retry in 28.075211742s. [{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Learn more about Gemini API quotas","url":"https://ai.google.dev/gemini-api/docs/rate-limits"}]},{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerMinutePerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_input_token_count","quotaId":"GenerateContentInputTokensPerModelPerMinute-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"28s"}] — retrying (2/3)...
+[14 Apr 2026, 03:02:34] [TRADE    ] User scavex88@gmail.com settings: SL=10.00% TP=0.50% trail=1.5% cap=10% maxLoss=$30 SMC-SL
+[Bitunix] Raw position fields: ["positionId","symbol","marginCoin","qty","entryValue","side","marginMode","positionMode","leverage","fee","funding","realizedPNL","margin","unrealizedPNL","liqPrice","avgOpenPrice","marginRate","ctime","mtime"]
+[Bitunix] Raw position data: {"positionId":"4134024514227113320","symbol":"BTCUSDT","marginCoin":null,"qty":"0.0234","entryValue":"1714.69116","side":"BUY","marginMode":"ISOLATION","positionMode":"HEDGE","leverage":100,"fee":"-1.028814696","funding":"0","realizedPNL":"-1.028814696","margin":"18.186013404","unrealizedPNL":"0.0585","liqPrice":"72738.2","avgOpenPrice":"73277.4","marginRate":"0","ctime":"1776110379000","mtime":"1776110379000"}
+[14 Apr 2026, 03:02:34] [TRADE    ] User scavex88@gmail.com Bitunix: wallet=$170.81 pos=1/10 lev=x20
+[AI Brain] Bearish Contrarian thinking with Google gemini-2.0-flash...
+[AI Brain] Bearish Contrarian FAILED (google): [GoogleGenerativeAI Error]: Error fetching from https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent: [429 Too Many Requests] You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. 
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-2.0-flash
+Please retry in 25.038673979s. [{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Learn more about Gemini API quotas","url":"https://ai.google.dev/gemini-api/docs/rate-limits"}]},{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier","quotaDimensions":{"model":"gemini-2.0-flash","location":"global"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerMinutePerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_input_token_count","quotaId":"GenerateContentInputTokensPerModelPerMinute-FreeTier","quotaDimensions":{"model":"gemini-2.0-flash","location":"global"}}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"25s"}]
+[Swarm] Bearish Contrarian simulation failed: Invalid JSON from Bearish Contrarian
+[14 Apr 2026, 03:02:35] [TRADE    ] User scavex88@gmail.com: placing Bitunix MARKET BUY SOLUSDT qty=4.059057 SL=$75.744 TP=$84.5808...
+[AI Brain] SMC Purist thinking with Google gemini-2.0-flash...
+[AI Brain] Transient error [GoogleGenerativeAI Error]: Error fetching from https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent: [429 Too Many Requests] You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. 
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-2.0-flash
+Please retry in 24.499938896s. [{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Learn more about Gemini API quotas","url":"https://ai.google.dev/gemini-api/docs/rate-limits"}]},{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerMinutePerProjectPerModel-FreeTier","quotaDimensions":{"model":"gemini-2.0-flash","location":"global"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_input_token_count","quotaId":"GenerateContentInputTokensPerModelPerMinute-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"24s"}] — retrying (1/3)...
+[14 Apr 2026, 03:02:35] [TRADE    ] Bitunix order placed: {"orderId":"2043781918000779264","clientId":"2043781917983432706"}
+[AI Brain] SMC Purist thinking with Google gemini-2.0-flash...
+[AI Brain] Transient error [GoogleGenerativeAI Error]: Error fetching from https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent: [429 Too Many Requests] You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. 
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+Please retry in 22.962780368s. [{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Learn more about Gemini API quotas","url":"https://ai.google.dev/gemini-api/docs/rate-limits"}]},{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_input_token_count","quotaId":"GenerateContentInputTokensPerModelPerMinute-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerMinutePerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"22s"}] — retrying (2/3)...
+[14 Apr 2026, 03:02:37] [TRADE    ] Bitunix position lookup: {"id":"4455109944346306034","symbol":"SOLUSDT","side":"BUY","qty":"4.05"}
+[14 Apr 2026, 03:02:37] [TRADE    ] Bitunix position confirmed: 4455109944346306034 entry=$84.1 — setting SL=$75.69 TP=$84.5205...
+[14 Apr 2026, 03:02:38] [TRADE    ] Bitunix SL/TP set on 4455109944346306034: SL=$75.69 TP=$84.5205
+[14 Apr 2026, 03:02:38] [TRADE    ] Bitunix OK: scavex88@gmail.com SOLUSDT LONG x20 qty=4.059057
+[14 Apr 2026, 03:02:38] [TRADE    ] Multi-user execution done: 1 traded, 1 skipped/failed
+[14 Apr 2026, 03:02:38] Multi-user done: 1 traded, 1 skipped/failed
+[14 Apr 2026, 03:02:38] [Coordinator] Cycle complete in 160.7s | Mood: neutral | Signals: 12 → 3 approved | Executed: true
+[14 Apr 2026, 03:02:38] [SYSTEM   ] [Coordinator] Cycle complete in 160.7s | Mood: neutral | Signals: 12 → 3 approved | Executed: true
+[14 Apr 2026, 03:02:38] [SYSTEM   ] Cycle done in 160.7s
+[14 Apr 2026, 03:02] Starting main loop: CEO always-on mode (30s micro-cycles)
+[14 Apr 2026, 03:02] Bot loop is running — CEO commanding all agents
+[14 Apr 2026, 03:02:39] [SCAN     ] [SCAN-BATCH] Starting scan of 5 tokens...
+[14 Apr 2026, 03:02:39] [SCAN     ] [HEARTBEAT] Analyzing BTCUSDT...
+[14 Apr 2026, 03:02:39] [SCAN     ] [HEARTBEAT] Analyzing DOGEUSDT...
+[14 Apr 2026, 03:02:39] [SCAN     ] BTCUSDT: 3m sw=5 lastH=LH@72424.9(18:54) lastL=HL@72248.5(19:09) → LH/HL trend=bearish
+[14 Apr 2026, 03:02:39] [SCAN     ] [HEARTBEAT] ETHAgent starting execution...
+[14 Apr 2026, 03:02:39] [SCAN     ] DOGEUSDT: 3m sw=5 lastH=LH@0.09172(18:21) lastL=HL@0.09133(18:27) → LH/HL trend=bearish
+[14 Apr 2026, 03:02:39] [SCAN     ] [HEARTBEAT] ADAAgent starting execution...
+[14 Apr 2026, 03:02:40] [SCAN     ] [HEARTBEAT] Analyzing ADAUSDT...
+[AI Brain] SMC Purist thinking with Google gemini-2.0-flash...
+[14 Apr 2026, 03:02:39] [SCAN     ] [HEARTBEAT] Analyzing ETHUSDT...
+[AI Brain] SMC Purist FAILED (google): [GoogleGenerativeAI Error]: Error fetching from https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent: [429 Too Many Requests] You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. 
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-2.0-flash
+Please retry in 19.921859733s. [{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Learn more about Gemini API quotas","url":"https://ai.google.dev/gemini-api/docs/rate-limits"}]},{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier","quotaDimensions":{"model":"gemini-2.0-flash","location":"global"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerMinutePerProjectPerModel-FreeTier","quotaDimensions":{"model":"gemini-2.0-flash","location":"global"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_input_token_count","quotaId":"GenerateContentInputTokensPerModelPerMinute-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"19s"}]
+[Swarm] SMC Purist simulation failed: Invalid JSON from SMC Purist
+[14 Apr 2026, 03:02:40] [SCAN     ] ETHUSDT: 3m sw=5 lastH=HH@2233(18:42) lastL=HL@2226.84(19:12) → HH/HL trend=bullish
+[14 Apr 2026, 03:02:40] [SCAN     ] ETHUSDT: 1m sw=4 lastH=HH@2268.7(19:56) lastL=HL@2248(19:43) → HH/HL trend=bullish
+[14 Apr 2026, 03:02:40] [SCAN     ] ETHUSDT: LONG — swing age 15 (need 0-3 for fresh entry)
+[14 Apr 2026, 03:02:40] [SCAN     ] [HEARTBEAT] SOLAgent starting execution...
+[14 Apr 2026, 03:02:40] [SCAN     ] ADAUSDT: 3m sw=5 lastH=LH@0.2388(18:21) lastL=HL@0.2397(19:45) → LH/HL trend=bearish
+[14 Apr 2026, 03:02:40] [SCAN     ] [HEARTBEAT] AVAXAgent starting execution...
+[AI Brain] Risk-Averse Scalper thinking with Google gemini-2.0-flash...
+[14 Apr 2026, 03:02:40] [SCAN     ] [HEARTBEAT] Analyzing SOLUSDT...
+[AI Brain] Transient error [GoogleGenerativeAI Error]: Error fetching from https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent: [429 Too Many Requests] You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. 
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-2.0-flash
+Please retry in 19.389574604s. [{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Learn more about Gemini API quotas","url":"https://ai.google.dev/gemini-api/docs/rate-limits"}]},{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerMinutePerProjectPerModel-FreeTier","quotaDimensions":{"model":"gemini-2.0-flash","location":"global"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_input_token_count","quotaId":"GenerateContentInputTokensPerModelPerMinute-FreeTier","quotaDimensions":{"model":"gemini-2.0-flash","location":"global"}}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"19s"}] — retrying (1/3)...
+[14 Apr 2026, 03:02:40] [SCAN     ] [HEARTBEAT] Analyzing AVAXUSDT...
+[14 Apr 2026, 03:02:41] [SCAN     ] SOLUSDT: 3m sw=5 lastH=LH@83.25(18:54) lastL=LL@82.54(18:27) → LH/LL trend=bearish
+[14 Apr 2026, 03:02:41] [SCAN     ] SOLUSDT: 1m sw=4 lastH=HH@83.8(19:34) lastL=HL@83.53(19:35) → HH/HL trend=bullish
+[14 Apr 2026, 03:02:41] [SCAN     ] SOLUSDT: SHORT rejected — 1m no LH
+[14 Apr 2026, 03:02:41] [SCAN     ] [HEARTBEAT] BNBAgent starting execution...
+[14 Apr 2026, 03:02:41] [SCAN     ] AVAXUSDT: 3m sw=5 lastH=HH@9.387(17:30) lastL=LL@9.172(18:27) → HH/LL trend=neutral
+[14 Apr 2026, 03:02:41] [SCAN     ] [HEARTBEAT] SUIAgent starting execution...
+[14 Apr 2026, 03:02:41] [SCAN     ] [SCAN-BATCH] Starting scan of 5 tokens...
+[14 Apr 2026, 03:02:41] [SCAN     ] [HEARTBEAT] RAVEAgent starting execution...
+[14 Apr 2026, 03:02:41] [SCAN     ] [SCAN-BATCH] Starting scan of 1 tokens...
+[14 Apr 2026, 03:02:41] [SCAN     ] [HEARTBEAT] 币安人生Agent starting execution...
+[14 Apr 2026, 03:02:41] [SCAN     ] [HEARTBEAT] Analyzing BNBUSDT...
+[14 Apr 2026, 03:02:41] [SCAN     ] [HEARTBEAT] Analyzing SUIUSDT...
+[14 Apr 2026, 03:02:41] [SCAN     ] [HEARTBEAT] Analyzing RAVEUSDT...
+[14 Apr 2026, 03:02:41] [SCAN     ] [HEARTBEAT] Analyzing 币安人生USDT...
+[14 Apr 2026, 03:02:41] [SCAN     ] BNBUSDT: 3m sw=5 lastH=LH@605.6(18:45) lastL=HL@604.27(19:09) → LH/HL trend=bearish
+[14 Apr 2026, 03:02:41] [SCAN     ] [HEARTBEAT] XRPAgent starting execution...
+[14 Apr 2026, 03:02:41] [SCAN     ] SUIUSDT: 3m sw=5 lastH=HH@0.928(17:30) lastL=LL@0.9122(18:24) → HH/LL trend=neutral
+[14 Apr 2026, 03:02:41] [SCAN     ] [HEARTBEAT] LINKAgent starting execution...
+[14 Apr 2026, 03:02:41] [SCAN     ] 币安人生USDT: 3m sw=5 lastH=HH@0.21633(19:24) lastL=HL@0.20919(19:09) → HH/HL trend=bullish
+[14 Apr 2026, 03:02:41] [SCAN     ] 币安人生USDT: 1m sw=4 lastH=HH@0.21758(19:58) lastL=HL@0.21292(19:46) → HH/HL trend=bullish
+[14 Apr 2026, 03:02:41] [SCAN     ] 币安人生USDT: LONG — swing age 12 (need 0-3 for fresh entry)
+[14 Apr 2026, 03:02:41] [SCAN     ] [HEARTBEAT] Analyzing XRPUSDT...
+[14 Apr 2026, 03:02:41] [SCAN     ] [HEARTBEAT] Analyzing LINKUSDT...
+[AI Brain] Risk-Averse Scalper thinking with Google gemini-2.0-flash...
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+Please retry in 17.852298816s. [{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Learn more about Gemini API quotas","url":"https://ai.google.dev/gemini-api/docs/rate-limits"}]},{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_input_token_count","quotaId":"GenerateContentInputTokensPerModelPerMinute-FreeTier","quotaDimensions":{"model":"gemini-2.0-flash","location":"global"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerMinutePerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"17s"}] — retrying (2/3)...
+[AI Brain] Transient error [GoogleGenerativeAI Error]: Error fetching from https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent: [429 Too Many Requests] You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. 
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-2.0-flash
+[14 Apr 2026, 03:02:42] [SCAN     ] XRPUSDT: 3m sw=5 lastH=HH@1.3449(17:30) lastL=LL@1.3336(18:27) → HH/LL trend=neutral
+[14 Apr 2026, 03:02:42] [SCAN     ] LINKUSDT: 3m sw=5 lastH=none lastL=HL@8.83(18:27) → --/HL trend=neutral
+[14 Apr 2026, 03:02:42] [SCAN     ] RAVEUSDT: 3m sw=5 lastH=HH@12.4613(19:33) lastL=HL@10.92(18:54) → HH/HL trend=bullish
+[14 Apr 2026, 03:02:42] [SCAN     ] RAVEUSDT: 1m sw=4 lastH=HH@12.59993(19:55) lastL=LL@11.41698(19:51) → HH/LL trend=neutral
+[14 Apr 2026, 03:02:42] [SCAN     ] RAVEUSDT: LONG rejected — 1m no HL
+[14 Apr 2026, 03:02:42] [SCAN     ] [HEARTBEAT] ALPACAAgent starting execution...
+[14 Apr 2026, 03:02:43] [SCAN     ] [HEARTBEAT] Analyzing ALPACAUSDT...
+[14 Apr 2026, 03:02:43] [SCAN     ] [HEARTBEAT] BTCAgent starting execution...
+[14 Apr 2026, 03:02:43] [SCAN     ] [HEARTBEAT] DOGEAgent starting execution...
+[14 Apr 2026, 03:02:43] [SCAN     ] ALPACAUSDT: 3m sw=5 lastH=none lastL=none → --/-- trend=neutral
+[14 Apr 2026, 03:02:43] [SCAN     ] [HEARTBEAT] CLAgent starting execution...
+[14 Apr 2026, 03:02:43] [SCAN     ] [HEARTBEAT] Analyzing BTCUSDT...
+[14 Apr 2026, 03:02:43] [SCAN     ] [HEARTBEAT] Analyzing CLUSDT...
+[14 Apr 2026, 03:02:43] [SCAN     ] DOGEUSDT: 3m sw=5 lastH=LH@0.09172(18:21) lastL=HL@0.09133(18:27) → LH/HL trend=bearish
+[14 Apr 2026, 03:02:43] [SCAN     ] [HEARTBEAT] ADAAgent starting execution...
+[14 Apr 2026, 03:02:43] [SCAN     ] [HEARTBEAT] Analyzing ADAUSDT...
+[14 Apr 2026, 03:02:44] [SCAN     ] BTCUSDT: 3m sw=5 lastH=LH@72424.9(18:54) lastL=HL@72248.5(19:09) → LH/HL trend=bearish
+[14 Apr 2026, 03:02:44] [SCAN     ] [HEARTBEAT] ETHAgent starting execution...
+[14 Apr 2026, 03:02:44] [SCAN     ] ADAUSDT: 3m sw=5 lastH=LH@0.2388(18:21) lastL=HL@0.2397(19:45) → LH/HL trend=bearish
+[14 Apr 2026, 03:02:44] [SCAN     ] [HEARTBEAT] AVAXAgent starting execution...
+[14 Apr 2026, 03:02:44] [SCAN     ] CLUSDT: 3m sw=5 lastH=HH@95.12(18:27) lastL=LL@92.8(18:54) → HH/LL trend=neutral
+[14 Apr 2026, 03:02:44] [SCAN     ] [HEARTBEAT] ZECAgent starting execution...
+[14 Apr 2026, 03:02:44] [SCAN     ] [HEARTBEAT] Analyzing ETHUSDT...
+[14 Apr 2026, 03:02:44] [SCAN     ] [HEARTBEAT] Analyzing AVAXUSDT...
+[14 Apr 2026, 03:02:44] [SCAN     ] [HEARTBEAT] Analyzing ZECUSDT...
+[14 Apr 2026, 03:02:44] [SCAN     ] ETHUSDT: 3m sw=5 lastH=HH@2233(18:42) lastL=HL@2226.84(19:12) → HH/HL trend=bullish
+[14 Apr 2026, 03:02:44] [SCAN     ] ETHUSDT: 1m sw=4 lastH=HH@2268.7(19:56) lastL=HL@2248(19:43) → HH/HL trend=bullish
+[14 Apr 2026, 03:02:44] [SCAN     ] ETHUSDT: LONG — swing age 15 (need 0-3 for fresh entry)
+[14 Apr 2026, 03:02:44] [SCAN     ] [HEARTBEAT] SOLAgent starting execution...
+[14 Apr 2026, 03:02:45] [SCAN     ] AVAXUSDT: 3m sw=5 lastH=HH@9.387(17:30) lastL=LL@9.172(18:27) → HH/LL trend=neutral
+[14 Apr 2026, 03:02:45] [SCAN     ] [HEARTBEAT] SUIAgent starting execution...
+[14 Apr 2026, 03:02:45] [SCAN     ] ZECUSDT: 3m sw=5 lastH=HH@361.99(19:27) lastL=HL@353.1(17:48) → HH/HL trend=bullish
+[14 Apr 2026, 03:02:45] [SCAN     ] [SCAN-BATCH] Starting scan of 5 tokens...
+[14 Apr 2026, 03:02:45] [SCAN     ] [HEARTBEAT] RAVEAgent starting execution...
+[14 Apr 2026, 03:02:45] [SCAN     ] [SCAN-BATCH] Starting scan of 1 tokens...
+[14 Apr 2026, 03:02:45] [SCAN     ] [HEARTBEAT] 币安人生Agent starting execution...
+[AI Brain] Risk-Averse Scalper thinking with Google gemini-2.0-flash...
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-2.0-flash
+Please retry in 14.811303358s. [{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Learn more about Gemini API quotas","url":"https://ai.google.dev/gemini-api/docs/rate-limits"}]},{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerMinutePerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_input_token_count","quotaId":"GenerateContentInputTokensPerModelPerMinute-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"14s"}]
+[Swarm] Risk-Averse Scalper simulation failed: Invalid JSON from Risk-Averse Scalper
+[14 Apr 2026, 03:02:45] [SCAN     ] [HEARTBEAT] Analyzing SUIUSDT...
+[14 Apr 2026, 03:02:45] [SCAN     ] [HEARTBEAT] Analyzing RAVEUSDT...
+[14 Apr 2026, 03:02:45] [SCAN     ] [HEARTBEAT] Analyzing 币安人生USDT...
+[14 Apr 2026, 03:02:45] [SCAN     ] SOLUSDT: 3m sw=5 lastH=LH@83.25(18:54) lastL=LL@82.54(18:27) → LH/LL trend=bearish
+[14 Apr 2026, 03:02:45] [SCAN     ] SOLUSDT: 1m sw=4 lastH=HH@83.8(19:34) lastL=HL@83.53(19:35) → HH/HL trend=bullish
+[14 Apr 2026, 03:02:45] [SCAN     ] [HEARTBEAT] BNBAgent starting execution...
+[14 Apr 2026, 03:02:45] [SCAN     ] SUIUSDT: 3m sw=5 lastH=HH@0.928(17:30) lastL=LL@0.9122(18:24) → HH/LL trend=neutral
+[AI Brain] Bullish Momentumist thinking with Google gemini-2.0-flash...
+[14 Apr 2026, 03:02:45] [SCAN     ] [HEARTBEAT] Analyzing BNBUSDT...
+[14 Apr 2026, 03:02:45] [SCAN     ] RAVEUSDT: 3m sw=5 lastH=HH@12.4613(19:33) lastL=HL@10.92(18:54) → HH/HL trend=bullish
+[14 Apr 2026, 03:02:45] [SCAN     ] RAVEUSDT: 1m sw=4 lastH=HH@12.59993(19:55) lastL=LL@11.41698(19:51) → HH/LL trend=neutral
+[14 Apr 2026, 03:02:45] [SCAN     ] RAVEUSDT: LONG rejected — 1m no HL
+[14 Apr 2026, 03:02:45] [SCAN     ] [HEARTBEAT] ALPACAAgent starting execution...
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+Please retry in 14.269936694s. [{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Learn more about Gemini API quotas","url":"https://ai.google.dev/gemini-api/docs/rate-limits"}]},{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerMinutePerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_input_token_count","quotaId":"GenerateContentInputTokensPerModelPerMinute-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"14s"}] — retrying (1/3)...
+[14 Apr 2026, 03:02:45] [SCAN     ] 币安人生USDT: 1m sw=4 lastH=HH@0.21758(19:58) lastL=HL@0.21292(19:46) → HH/HL trend=bullish
+[14 Apr 2026, 03:02:45] [SCAN     ] 币安人生USDT: LONG — swing age 12 (need 0-3 for fresh entry)
+[14 Apr 2026, 03:02:45] [SCAN     ] [HEARTBEAT] Analyzing LINKUSDT...
+[14 Apr 2026, 03:02:46] [SCAN     ] [HEARTBEAT] Analyzing ALPACAUSDT...
+[14 Apr 2026, 03:02:46] [SCAN     ] SIGNAL: ZECUSDT LONG | 3m=HH/HL 1m=LH/HL | entry@$365.8 SL=$359.1405 TP=$379.1190 slDist=1.82% | score=12 | age=3
+[14 Apr 2026, 03:02:46] [SCAN     ] [ZECAgent] SIGNAL: ZECUSDT LONG score=11.7 3m=HH/HL 1m=LH/HL
+[14 Apr 2026, 03:02:46] [SCAN     ] [HEARTBEAT] Analyzing XRPUSDT...
+[14 Apr 2026, 03:02:46] [SCAN     ] [HEARTBEAT] CLAgent starting execution...
+[14 Apr 2026, 03:02:46] [SCAN     ] [HEARTBEAT] Analyzing CLUSDT...
+[14 Apr 2026, 03:02:46] [SCAN     ] XRPUSDT: 3m sw=5 lastH=HH@1.3449(17:30) lastL=LL@1.3336(18:27) → HH/LL trend=neutral
+[14 Apr 2026, 03:02:46] [SCAN     ] [HEARTBEAT] Analyzing BNXUSDT...
+[14 Apr 2026, 03:02:47] [SCAN     ] CLUSDT: 3m sw=5 lastH=HH@95.12(18:27) lastL=LL@92.8(18:54) → HH/LL trend=neutral
+[14 Apr 2026, 03:02:47] [SCAN     ] [HEARTBEAT] ZECAgent starting execution...
+[14 Apr 2026, 03:02:47] [SCAN     ] [SCAN-BATCH] Starting scan of 5 tokens...
+[14 Apr 2026, 03:02:47] [SCAN     ] [HEARTBEAT] BTCAgent starting execution...
+[14 Apr 2026, 03:02:47] [SCAN     ] [SCAN-BATCH] Starting scan of 5 tokens...
+[14 Apr 2026, 03:02:47] [SCAN     ] [HEARTBEAT] DOGEAgent starting execution...
+[AI Brain] Bullish Momentumist thinking with Google gemini-2.0-flash...
+[14 Apr 2026, 03:02:47] [SCAN     ] [HEARTBEAT] Analyzing ZECUSDT...
+[AI Brain] Transient error [GoogleGenerativeAI Error]: Error fetching from https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent: [429 Too Many Requests] You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. 
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+Please retry in 12.723636207s. [{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Learn more about Gemini API quotas","url":"https://ai.google.dev/gemini-api/docs/rate-limits"}]},{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_input_token_count","quotaId":"GenerateContentInputTokensPerModelPerMinute-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerMinutePerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"12s"}] — retrying (2/3)...
+[14 Apr 2026, 03:02:47] [SCAN     ] [HEARTBEAT] Analyzing BTCUSDT...
+[14 Apr 2026, 03:02:47] [SCAN     ] [HEARTBEAT] Analyzing DOGEUSDT...
+[14 Apr 2026, 03:02:47] [SCAN     ] BNXUSDT: 3m sw=5 lastH=none lastL=none → --/-- trend=neutral
+[14 Apr 2026, 03:02:47] [SCAN     ] ZECUSDT: 3m sw=5 lastH=HH@361.99(19:27) lastL=HL@353.1(17:48) → HH/HL trend=bullish
+[14 Apr 2026, 03:02:47] [SCAN     ] ZECUSDT: 1m sw=4 lastH=LH@366.33(19:56) lastL=HL@364.28(19:55) → LH/HL trend=bearish
+[14 Apr 2026, 03:02:47] [SCAN     ] ZECUSDT: LONG entry@$364.47 swing@$364.28 SL=$359.1405 TP=$375.1290 slDist=1.46% RR=2:1
+[14 Apr 2026, 03:02:47] [SCAN     ] DOGEUSDT: 3m sw=5 lastH=LH@0.09172(18:21) lastL=HL@0.09133(18:27) → LH/HL trend=bearish
+[14 Apr 2026, 03:02:47] [SCAN     ] [HEARTBEAT] ADAAgent starting execution...
+[14 Apr 2026, 03:02:47] [SCAN     ] BTCUSDT: 3m sw=5 lastH=LH@72424.9(18:54) lastL=HL@72248.5(19:09) → LH/HL trend=bearish
+[14 Apr 2026, 03:02:47] [SCAN     ] [HEARTBEAT] ETHAgent starting execution...
+[14 Apr 2026, 03:02:47] [SCAN     ] [HEARTBEAT] Analyzing ADAUSDT...
+[14 Apr 2026, 03:02:48] [SCAN     ] [HEARTBEAT] Analyzing ETHUSDT...
+[14 Apr 2026, 03:02:48] [SCAN     ] ADAUSDT: 3m sw=5 lastH=LH@0.2388(18:21) lastL=HL@0.2397(19:45) → LH/HL trend=bearish
+[14 Apr 2026, 03:02:48] [SCAN     ] [HEARTBEAT] AVAXAgent starting execution...
+[14 Apr 2026, 03:02:48] [RiskAgent] Risk check: 1 approved, 0 rejected | Open: 3/5
+[14 Apr 2026, 03:02:48] [TRADE    ] [RiskAgent] Risk check: 1 approved, 0 rejected | Open: 3/5
+[14 Apr 2026, 03:02:48] [SCAN     ] ETHUSDT: 3m sw=5 lastH=HH@2233(18:42) lastL=HL@2226.84(19:12) → HH/HL trend=bullish
+[14 Apr 2026, 03:02:48] [SCAN     ] ETHUSDT: 1m sw=4 lastH=HH@2268.7(19:56) lastL=HL@2248(19:43) → HH/HL trend=bullish
+[14 Apr 2026, 03:02:48] [SCAN     ] ETHUSDT: LONG — swing age 15 (need 0-3 for fresh entry)
+[14 Apr 2026, 03:02:48] [SCAN     ] [HEARTBEAT] SOLAgent starting execution...
+[14 Apr 2026, 03:02:48] [SCAN     ] [HEARTBEAT] Analyzing AVAXUSDT...
+[14 Apr 2026, 03:02:48] [SCAN     ] [HEARTBEAT] Analyzing SOLUSDT...
+[14 Apr 2026, 03:02:48] [SCAN     ] SIGNAL: ZECUSDT LONG | 3m=HH/HL 1m=LH/HL | entry@$364.47 SL=$359.1405 TP=$375.1290 slDist=1.46% | score=12 | age=3
+[14 Apr 2026, 03:02:48] [SCAN     ] [ZECAgent] SIGNAL: ZECUSDT LONG score=11.7 3m=HH/HL 1m=LH/HL
+[14 Apr 2026, 03:02:49] [SCAN     ] [SCAN-BATCH] Starting scan of 5 tokens...
+[14 Apr 2026, 03:02:49] [SCAN     ] [HEARTBEAT] RAVEAgent starting execution...
+[14 Apr 2026, 03:02:49] [SCAN     ] AVAXUSDT: 3m sw=5 lastH=HH@9.387(17:30) lastL=LL@9.172(18:27) → HH/LL trend=neutral
+[14 Apr 2026, 03:02:49] [SCAN     ] [HEARTBEAT] SUIAgent starting execution...
+[14 Apr 2026, 03:02:49] [SCAN     ] [SCAN-BATCH] Starting scan of 1 tokens...
+[14 Apr 2026, 03:02:49] [SCAN     ] [HEARTBEAT] 币安人生Agent starting execution...
+[Bitunix] Raw position data: {"positionId":"4418560084350029393","symbol":"XRPUSDT","marginCoin":null,"qty":"92.4","entryValue":"124.86012","side":"BUY","marginMode":"ISOLATION","positionMode":"HEDGE","leverage":20,"fee":"-0.074916072","funding":"0","realizedPNL":"-0.074916072","margin":"6.319413408","unrealizedPNL":"0.17556","liqPrice":"1.29","avgOpenPrice":"1.3513","marginRate":"0","ctime":"1776109616000","mtime":"1776109616000"}
+[14 Apr 2026, 03:02:49] [SCAN     ] SOLUSDT: 1m sw=4 lastH=HH@83.8(19:34) lastL=HL@83.53(19:35) → HH/HL trend=bullish
+[14 Apr 2026, 03:02:49] [SCAN     ] [HEARTBEAT] BNBAgent starting execution...
+[14 Apr 2026, 03:02:49] [ERROR    ] Bitunix trailing: price method 1 failed for XRPUSDT: Bitunix API error: Parameter error (code 2)
+[14 Apr 2026, 03:02:49] [ERROR    ] Bitunix trailing: price method 2 failed for XRPUSDT: no markPrice
+[14 Apr 2026, 03:02:49] [SCAN     ] [HEARTBEAT] Analyzing BNXUSDT...
+[14 Apr 2026, 03:02:49] [SCAN     ] SUIUSDT: 3m sw=5 lastH=HH@0.928(17:30) lastL=LL@0.9122(18:24) → HH/LL trend=neutral
+[14 Apr 2026, 03:02:49] [SCAN     ] RAVEUSDT: 3m sw=5 lastH=HH@12.4613(19:33) lastL=HL@10.92(18:54) → HH/HL trend=bullish
+[14 Apr 2026, 03:02:49] [SCAN     ] RAVEUSDT: 1m sw=4 lastH=HH@12.59993(19:55) lastL=LL@11.41698(19:51) → HH/LL trend=neutral
+[14 Apr 2026, 03:02:49] [SCAN     ] [HEARTBEAT] ALPACAAgent starting execution...
+[14 Apr 2026, 03:02:49] [SCAN     ] 币安人生USDT: 3m sw=5 lastH=HH@0.21633(19:24) lastL=HL@0.20919(19:09) → HH/HL trend=bullish
+[14 Apr 2026, 03:02:49] [SCAN     ] 币安人生USDT: 1m sw=4 lastH=HH@0.21758(19:58) lastL=HL@0.21292(19:46) → HH/HL trend=bullish
+[14 Apr 2026, 03:02:49] [SCAN     ] 币安人生USDT: LONG — swing age 12 (need 0-3 for fresh entry)
+[14 Apr 2026, 03:02:49] [TRADE    ] Bitunix trailing: XRPUSDT price from fallback method 3: $1.3526
+[14 Apr 2026, 03:02:49] [TRADE    ] Bitunix trailing: XRPUSDT entry=$1.3513 cur=$1.3526 pricePct=0.096% capitalPct=1.92% lev=20x lastStep=0.0%
+[14 Apr 2026, 03:02:49] [SYSTEM   ] Sync: exchange has 1 open positions, DB has 1 OPEN trades
+[14 Apr 2026, 03:02:49] [SCAN     ] BNXUSDT: 3m sw=5 lastH=none lastL=none → --/-- trend=neutral
+[14 Apr 2026, 03:02:49] [SCAN     ] [HEARTBEAT] Analyzing LINKUSDT...
+[14 Apr 2026, 03:02:49] [SCAN     ] [HEARTBEAT] Analyzing ALPACAUSDT...
+[14 Apr 2026, 03:02:49] [SCAN     ] [HEARTBEAT] Analyzing BNBUSDT...
+[AI Brain] Bullish Momentumist thinking with Google gemini-2.0-flash...
+[AI Brain] Bullish Momentumist FAILED (google): [GoogleGenerativeAI Error]: Error fetching from https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent: [429 Too Many Requests] You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. 
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+Please retry in 9.685352508s. [{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Learn more about Gemini API quotas","url":"https://ai.google.dev/gemini-api/docs/rate-limits"}]},{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_input_token_count","quotaId":"GenerateContentInputTokensPerModelPerMinute-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerMinutePerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"9s"}]
+[Swarm] Bullish Momentumist simulation failed: Invalid JSON from Bullish Momentumist
+[14 Apr 2026, 03:02:50] [SCAN     ] ALPACAUSDT: 3m sw=5 lastH=none lastL=none → --/-- trend=neutral
+[14 Apr 2026, 03:02:50] [SCAN     ] [HEARTBEAT] CLAgent starting execution...
+[14 Apr 2026, 03:02:50] [SCAN     ] BNBUSDT: 3m sw=5 lastH=LH@605.6(18:45) lastL=HL@604.27(19:09) → LH/HL trend=bearish
+[14 Apr 2026, 03:02:50] [SCAN     ] [HEARTBEAT] XRPAgent starting execution...
+[14 Apr 2026, 03:02:50] [SCAN     ] LINKUSDT: 3m sw=5 lastH=none lastL=HL@8.83(18:27) → --/HL trend=neutral
+[Bitunix] Raw position fields: ["positionId","symbol","marginCoin","qty","entryValue","side","marginMode","positionMode","leverage","fee","funding","realizedPNL","margin","unrealizedPNL","liqPrice","avgOpenPrice","marginRate","ctime","mtime"]
+[Bitunix] Raw position data: {"positionId":"4455109944346306034","symbol":"SOLUSDT","marginCoin":null,"qty":"4.05","entryValue":"340.605","side":"BUY","marginMode":"ISOLATION","positionMode":"HEDGE","leverage":20,"fee":"-0.204363","funding":"0","realizedPNL":"-0.204363","margin":"17.2366542","unrealizedPNL":"0.0405","liqPrice":"80.29","avgOpenPrice":"84.10","marginRate":"0","ctime":"1776110555000","mtime":"1776110555000"}
+[14 Apr 2026, 03:02:50] [SCAN     ] [HEARTBEAT] Analyzing CLUSDT...
+[14 Apr 2026, 03:02:50] [SCAN     ] [HEARTBEAT] Analyzing XRPUSDT...
+[AI Brain] Bearish Contrarian thinking with Google gemini-2.0-flash...
+[14 Apr 2026, 03:02:50] [ERROR    ] Bitunix trailing: price method 1 failed for BTCUSDT: Bitunix API error: Parameter error (code 2)
+[14 Apr 2026, 03:02:50] [ERROR    ] Bitunix trailing: price method 2 failed for BTCUSDT: no markPrice
+[AI Brain] Transient error [GoogleGenerativeAI Error]: Error fetching from https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent: [429 Too Many Requests] You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. 
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+Please retry in 9.155244197s. [{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Learn more about Gemini API quotas","url":"https://ai.google.dev/gemini-api/docs/rate-limits"}]},{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_input_token_count","quotaId":"GenerateContentInputTokensPerModelPerMinute-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerMinutePerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"9s"}] — retrying (1/3)...
+[14 Apr 2026, 03:02:51] [SCAN     ] [HEARTBEAT] DOGEAgent starting execution...
+[14 Apr 2026, 03:02:51] [SCAN     ] CLUSDT: 3m sw=5 lastH=HH@95.12(18:27) lastL=LL@92.8(18:54) → HH/LL trend=neutral
+[14 Apr 2026, 03:02:51] [TRADE    ] Bitunix trailing: BTCUSDT price from fallback method 3: $73250
+[14 Apr 2026, 03:02:51] [TRADE    ] Bitunix trailing: BTCUSDT entry=$73277.4 cur=$73250 pricePct=-0.037% capitalPct=-3.74% lev=100x lastStep=0.0%
+[14 Apr 2026, 03:02:51] [SCAN     ] [SCAN-BATCH] Starting scan of 5 tokens...
+[14 Apr 2026, 03:02:51] [SCAN     ] [HEARTBEAT] Analyzing ZECUSDT...
+[14 Apr 2026, 03:02:51] [ERROR    ] Bitunix trailing: price method 1 failed for SOLUSDT: Bitunix API error: Parameter error (code 2)
+[14 Apr 2026, 03:02:51] [ERROR    ] Bitunix trailing: price method 2 failed for SOLUSDT: no markPrice
+[14 Apr 2026, 03:02:51] [SCAN     ] [HEARTBEAT] Analyzing BTCUSDT...
+[14 Apr 2026, 03:02:51] [SCAN     ] [HEARTBEAT] Analyzing DOGEUSDT...
+[14 Apr 2026, 03:02:51] [TRADE    ] Bitunix trailing: SOLUSDT entry=$84.1 cur=$84.11 pricePct=0.012% capitalPct=0.24% lev=20x lastStep=0.0%
+[14 Apr 2026, 03:02:51] [SYSTEM   ] Sync: exchange has 2 open positions, DB has 2 OPEN trades
+[14 Apr 2026, 03:02:51] [SCAN     ] ZECUSDT: 3m sw=5 lastH=HH@361.99(19:27) lastL=HL@353.1(17:48) → HH/HL trend=bullish
+[14 Apr 2026, 03:02:51] [SCAN     ] ZECUSDT: 1m sw=4 lastH=LH@366.33(19:56) lastL=HL@364.28(19:55) → LH/HL trend=bearish
+[14 Apr 2026, 03:02:51] [SCAN     ] BTCUSDT: 3m sw=5 lastH=LH@72424.9(18:54) lastL=HL@72248.5(19:09) → LH/HL trend=bearish
+[14 Apr 2026, 03:02:51] [SCAN     ] DOGEUSDT: 3m sw=5 lastH=LH@0.09172(18:21) lastL=HL@0.09133(18:27) → LH/HL trend=bearish
+[14 Apr 2026, 03:02:51] [SCAN     ] [HEARTBEAT] ADAAgent starting execution...
+[Bitunix] Raw position fields: ["positionId","symbol","marginCoin","qty","entryValue","side","marginMode","positionMode","leverage","fee","funding","realizedPNL","margin","unrealizedPNL","liqPrice","avgOpenPrice","marginRate","ctime","mtime"]
+[Bitunix] Raw position data: {"positionId":"4418560084350029393","symbol":"XRPUSDT","marginCoin":null,"qty":"92.4","entryValue":"124.86012","side":"BUY","marginMode":"ISOLATION","positionMode":"HEDGE","leverage":20,"fee":"-0.074916072","funding":"0","realizedPNL":"-0.074916072","margin":"6.319413408","unrealizedPNL":"0.17556","liqPrice":"1.29","avgOpenPrice":"1.3513","marginRate":"0","ctime":"1776109616000","mtime":"1776109616000"}
+[14 Apr 2026, 03:02:51] [SCAN     ] [HEARTBEAT] Analyzing ETHUSDT...
+[14 Apr 2026, 03:02:51] [SCAN     ] [HEARTBEAT] Analyzing ADAUSDT...
+[14 Apr 2026, 03:02:51] [TraderAgent] Signal: ZECUSDT LONG score=11.7 setup=LONG-3m1m
+[14 Apr 2026, 03:02:51] [TRADE    ] [TraderAgent] Signal: ZECUSDT LONG score=11.7 setup=LONG-3m1m
+[14 Apr 2026, 03:02:52] [ERROR    ] Bitunix trailing: price method 1 failed for XRPUSDT: Bitunix API error: Parameter error (code 2)
+[14 Apr 2026, 03:02:52] [ERROR    ] Bitunix trailing: price method 2 failed for XRPUSDT: no markPrice
+[14 Apr 2026, 03:02:52] [TRADE    ] Bitunix trailing: XRPUSDT price from fallback method 3: $1.3526
+[14 Apr 2026, 03:02:52] [TRADE    ] Bitunix trailing: XRPUSDT entry=$1.3513 cur=$1.3526 pricePct=0.096% capitalPct=1.92% lev=20x lastStep=0.0%
+[14 Apr 2026, 03:02:52] [SYSTEM   ] Sync: exchange has 1 open positions, DB has 1 OPEN trades
+[14 Apr 2026, 03:02:52] [SCAN     ] ETHUSDT: 3m sw=5 lastH=HH@2233(18:42) lastL=HL@2226.84(19:12) → HH/HL trend=bullish
+[14 Apr 2026, 03:02:52] [SCAN     ] ETHUSDT: 1m sw=4 lastH=HH@2268.7(19:56) lastL=HL@2248(19:43) → HH/HL trend=bullish
+[14 Apr 2026, 03:02:52] [SCAN     ] ETHUSDT: LONG — swing age 15 (need 0-3 for fresh entry)
+[14 Apr 2026, 03:02:52] [SCAN     ] [HEARTBEAT] SOLAgent starting execution...
+[AI Brain] Bearish Contrarian thinking with Google gemini-2.0-flash...
+[14 Apr 2026, 03:02:52] [SCAN     ] ADAUSDT: 3m sw=5 lastH=LH@0.2388(18:21) lastL=HL@0.2397(19:45) → LH/HL trend=bearish
+[14 Apr 2026, 03:02:52] [SCAN     ] [HEARTBEAT] AVAXAgent starting execution...
+[AI Brain] Transient error [GoogleGenerativeAI Error]: Error fetching from https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent: [429 Too Many Requests] You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. 
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-2.0-flash
+Please retry in 7.612575515s. [{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Learn more about Gemini API quotas","url":"https://ai.google.dev/gemini-api/docs/rate-limits"}]},{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerMinutePerProjectPerModel-FreeTier","quotaDimensions":{"model":"gemini-2.0-flash","location":"global"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_input_token_count","quotaId":"GenerateContentInputTokensPerModelPerMinute-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"7s"}] — retrying (2/3)...
+[14 Apr 2026, 03:02:52] [SCAN     ] [HEARTBEAT] Analyzing SOLUSDT...
+[14 Apr 2026, 03:02:52] [SCAN     ] [HEARTBEAT] Analyzing AVAXUSDT...
+[14 Apr 2026, 03:02:52] [TraderAgent] Kronos: ZECUSDT → LONG 1.8% conf=high
+[14 Apr 2026, 03:02:52] [TRADE    ] [TraderAgent] Kronos: ZECUSDT → LONG 1.8% conf=high
+[14 Apr 2026, 03:02:52] [TraderAgent] KRONOS CONFIRMED: ZECUSDT LONG HIGH confidence
+[14 Apr 2026, 03:02:52] [TRADE    ] [TraderAgent] KRONOS CONFIRMED: ZECUSDT LONG HIGH confidence
+[14 Apr 2026, 03:02:52] [SCAN     ] SIGNAL: ZECUSDT LONG | 3m=HH/HL 1m=LH/HL | entry@$364.68 SL=$359.1405 TP=$375.7590 slDist=1.52% | score=12 | age=3
+[14 Apr 2026, 03:02:52] [SCAN     ] [ZECAgent] SIGNAL: ZECUSDT LONG score=11.7 3m=HH/HL 1m=LH/HL
+[Bitunix] Raw position fields: ["positionId","symbol","marginCoin","qty","entryValue","side","marginMode","positionMode","leverage","fee","funding","realizedPNL","margin","unrealizedPNL","liqPrice","avgOpenPrice","marginRate","ctime","mtime"]
+[Bitunix] Raw position data: {"positionId":"4455109944346306034","symbol":"SOLUSDT","marginCoin":null,"qty":"4.05","entryValue":"340.605","side":"BUY","marginMode":"ISOLATION","positionMode":"HEDGE","leverage":20,"fee":"-0.204363","funding":"0","realizedPNL":"-0.204363","margin":"17.2366542","unrealizedPNL":"0.0405","liqPrice":"80.29","avgOpenPrice":"84.10","marginRate":"0","ctime":"1776110555000","mtime":"1776110555000"}
+[14 Apr 2026, 03:02:52] [SCAN     ] SOLUSDT: 3m sw=5 lastH=LH@83.25(18:54) lastL=LL@82.54(18:27) → LH/LL trend=bearish
+[14 Apr 2026, 03:02:52] [SCAN     ] SOLUSDT: 1m sw=4 lastH=HH@83.8(19:34) lastL=HL@83.53(19:35) → HH/HL trend=bullish
+[14 Apr 2026, 03:02:52] [SCAN     ] SOLUSDT: SHORT rejected — 1m no LH
+[14 Apr 2026, 03:02:52] [SCAN     ] [HEARTBEAT] BNBAgent starting execution...
+[14 Apr 2026, 03:02:53] [SCAN     ] [SCAN-BATCH] Starting scan of 5 tokens...
+[14 Apr 2026, 03:02:53] [SCAN     ] [HEARTBEAT] RAVEAgent starting execution...
+[14 Apr 2026, 03:02:53] [SCAN     ] [SCAN-BATCH] Starting scan of 1 tokens...
+[14 Apr 2026, 03:02:53] [SCAN     ] [HEARTBEAT] 币安人生Agent starting execution...
+[14 Apr 2026, 03:02:53] [TRADE    ] Found 2 unique API key(s) — executing ZECUSDT LONG for: zensee1314@gmail.com, scavex88@gmail.com
+[14 Apr 2026, 03:02:53] Executing ZECUSDT LONG for 2 user keys: zensee1314@gmail.com, scavex88@gmail.com
+[14 Apr 2026, 03:02:53] [SCAN     ] AVAXUSDT: 3m sw=5 lastH=HH@9.387(17:30) lastL=LL@9.172(18:27) → HH/LL trend=neutral
+[14 Apr 2026, 03:02:53] [SCAN     ] [HEARTBEAT] SUIAgent starting execution...
+[14 Apr 2026, 03:02:53] [ERROR    ] Bitunix trailing: price method 1 failed for BTCUSDT: Bitunix API error: Parameter error (code 2)
+[14 Apr 2026, 03:02:53] [ERROR    ] Bitunix trailing: price method 2 failed for BTCUSDT: no markPrice
+[14 Apr 2026, 03:02:53] [SCAN     ] [HEARTBEAT] Analyzing BNBUSDT...
+[14 Apr 2026, 03:02:53] [SCAN     ] [HEARTBEAT] Analyzing RAVEUSDT...
+[14 Apr 2026, 03:02:53] [SCAN     ] [HEARTBEAT] Analyzing 币安人生USDT...
+[14 Apr 2026, 03:02:53] [TRADE    ] Bitunix trailing: BTCUSDT price from fallback method 3: $73248.4
+[14 Apr 2026, 03:02:53] [TRADE    ] Bitunix trailing: BTCUSDT entry=$73277.4 cur=$73248.4 pricePct=-0.040% capitalPct=-3.96% lev=100x lastStep=0.0%
+[14 Apr 2026, 03:02:53] [SCAN     ] [HEARTBEAT] Analyzing SUIUSDT...
+[14 Apr 2026, 03:02:53] [SCAN     ] BNBUSDT: 3m sw=5 lastH=LH@605.6(18:45) lastL=HL@604.27(19:09) → LH/HL trend=bearish
+[14 Apr 2026, 03:02:53] [SCAN     ] [HEARTBEAT] XRPAgent starting execution...
+[Bitunix] Raw position fields: ["positionId","symbol","marginCoin","qty","entryValue","side","marginMode","positionMode","leverage","fee","funding","realizedPNL","margin","unrealizedPNL","liqPrice","avgOpenPrice","marginRate","ctime","mtime"]
+[Bitunix] Raw position data: {"positionId":"4418560084350029393","symbol":"XRPUSDT","marginCoin":null,"qty":"92.4","entryValue":"124.86012","side":"BUY","marginMode":"ISOLATION","positionMode":"HEDGE","leverage":20,"fee":"-0.074916072","funding":"0","realizedPNL":"-0.074916072","margin":"6.319413408","unrealizedPNL":"0.16632","liqPrice":"1.29","avgOpenPrice":"1.3513","marginRate":"0","ctime":"1776109616000","mtime":"1776109616000"}
+[Bitunix] Raw position fields: ["positionId","symbol","marginCoin","qty","entryValue","side","marginMode","positionMode","leverage","fee","funding","realizedPNL","margin","unrealizedPNL","liqPrice","avgOpenPrice","marginRate","ctime","mtime"]
+[Bitunix] Raw position data: {"positionId":"4418560084350029393","symbol":"XRPUSDT","marginCoin":null,"qty":"92.4","entryValue":"124.86012","side":"BUY","marginMode":"ISOLATION","positionMode":"HEDGE","leverage":20,"fee":"-0.074916072","funding":"0","realizedPNL":"-0.074916072","margin":"6.319413408","unrealizedPNL":"0.16632","liqPrice":"1.29","avgOpenPrice":"1.3513","marginRate":"0","ctime":"1776109616000","mtime":"1776109616000"}
+[14 Apr 2026, 03:02:53] [SCAN     ] 币安人生USDT: 3m sw=5 lastH=HH@0.21633(19:24) lastL=HL@0.20919(19:09) → HH/HL trend=bullish
+[14 Apr 2026, 03:02:53] [SCAN     ] 币安人生USDT: 1m sw=4 lastH=HH@0.21758(19:58) lastL=HL@0.21292(19:46) → HH/HL trend=bullish
+[14 Apr 2026, 03:02:53] [SCAN     ] 币安人生USDT: LONG — swing age 12 (need 0-3 for fresh entry)
+[14 Apr 2026, 03:02:53] [SCAN     ] RAVEUSDT: 3m sw=5 lastH=HH@12.4613(19:33) lastL=HL@10.92(18:54) → HH/HL trend=bullish
+[14 Apr 2026, 03:02:53] [SCAN     ] RAVEUSDT: 1m sw=4 lastH=HH@12.59993(19:55) lastL=LL@11.41698(19:51) → HH/LL trend=neutral
+[14 Apr 2026, 03:02:53] [SCAN     ] RAVEUSDT: LONG rejected — 1m no HL
+[14 Apr 2026, 03:02:53] [SCAN     ] [HEARTBEAT] ALPACAAgent starting execution...
+[14 Apr 2026, 03:02:53] [SCAN     ] SUIUSDT: 3m sw=5 lastH=HH@0.928(17:30) lastL=LL@0.9122(18:24) → HH/LL trend=neutral
+[14 Apr 2026, 03:02:53] [SCAN     ] [HEARTBEAT] LINKAgent starting execution...
+[14 Apr 2026, 03:02:53] [SCAN     ] [HEARTBEAT] Analyzing XRPUSDT...
+[14 Apr 2026, 03:02:53] [ERROR    ] Bitunix trailing: price method 1 failed for XRPUSDT: Bitunix API error: Parameter error (code 2)
+[14 Apr 2026, 03:02:53] [ERROR    ] Bitunix trailing: price method 2 failed for XRPUSDT: no markPrice
+[14 Apr 2026, 03:02:54] [ERROR    ] Bitunix trailing: price method 1 failed for XRPUSDT: Bitunix API error: Parameter error (code 2)
+[14 Apr 2026, 03:02:54] [ERROR    ] Bitunix trailing: price method 2 failed for XRPUSDT: no markPrice
+[14 Apr 2026, 03:02:54] [SCAN     ] [HEARTBEAT] Analyzing LINKUSDT...
+[14 Apr 2026, 03:02:54] [SCAN     ] [HEARTBEAT] BNXAgent starting execution...
+[14 Apr 2026, 03:02:54] [TRADE    ] Bitunix trailing: XRPUSDT price from fallback method 3: $1.3532
+[14 Apr 2026, 03:02:54] [TRADE    ] Bitunix trailing: XRPUSDT entry=$1.3513 cur=$1.3532 pricePct=0.141% capitalPct=2.81% lev=20x lastStep=0.0%
+[14 Apr 2026, 03:02:54] [SYSTEM   ] Sync: exchange has 1 open positions, DB has 1 OPEN trades
+[14 Apr 2026, 03:02:54] [TRADE    ] Bitunix trailing: XRPUSDT price from fallback method 3: $1.3532
+[14 Apr 2026, 03:02:54] [TRADE    ] Bitunix trailing: XRPUSDT entry=$1.3513 cur=$1.3532 pricePct=0.141% capitalPct=2.81% lev=20x lastStep=0.0%
+[14 Apr 2026, 03:02:54] [SYSTEM   ] Sync: exchange has 1 open positions, DB has 1 OPEN trades
+[14 Apr 2026, 03:02:54] [SCAN     ] XRPUSDT: 3m sw=5 lastH=HH@1.3449(17:30) lastL=LL@1.3336(18:27) → HH/LL trend=neutral
+[14 Apr 2026, 03:02:54] [SCAN     ] [HEARTBEAT] Analyzing BNXUSDT...
+[14 Apr 2026, 03:02:54] [SCAN     ] [HEARTBEAT] Analyzing ALPACAUSDT...
+[14 Apr 2026, 03:02:54] [ERROR    ] Bitunix trailing: price method 1 failed for SOLUSDT: Bitunix API error: Parameter error (code 2)
+[14 Apr 2026, 03:02:54] [ERROR    ] Bitunix trailing: price method 2 failed for SOLUSDT: no markPrice
+[14 Apr 2026, 03:02:54] [SCAN     ] LINKUSDT: 3m sw=5 lastH=none lastL=HL@8.83(18:27) → --/HL trend=neutral
+[14 Apr 2026, 03:02:54] [TRADE    ] Bitunix trailing: SOLUSDT price from fallback method 3: $84.11
+[14 Apr 2026, 03:02:54] [TRADE    ] Bitunix trailing: SOLUSDT entry=$84.1 cur=$84.11 pricePct=0.012% capitalPct=0.24% lev=20x lastStep=0.0%
+[14 Apr 2026, 03:02:54] [SYSTEM   ] Sync: exchange has 2 open positions, DB has 2 OPEN trades
+[14 Apr 2026, 03:02:54] [SCAN     ] BNXUSDT: 3m sw=5 lastH=none lastL=none → --/-- trend=neutral
+[14 Apr 2026, 03:02:54] [SCAN     ] ALPACAUSDT: 3m sw=5 lastH=none lastL=none → --/-- trend=neutral
+[14 Apr 2026, 03:02:54] [SCAN     ] [HEARTBEAT] CLAgent starting execution...
+[14 Apr 2026, 03:02:54] [TRADE    ] User zensee1314@gmail.com settings: SL=1.82% TP=3.64% trail=1.2% cap=10% maxLoss=$1 SMC-SL
+[Bitunix] Raw position fields: ["positionId","symbol","marginCoin","qty","entryValue","side","marginMode","positionMode","leverage","fee","funding","realizedPNL","margin","unrealizedPNL","liqPrice","avgOpenPrice","marginRate","ctime","mtime"]
+[Bitunix] Raw position data: {"positionId":"4455109944346306034","symbol":"SOLUSDT","marginCoin":null,"qty":"4.05","entryValue":"340.605","side":"BUY","marginMode":"ISOLATION","positionMode":"HEDGE","leverage":20,"fee":"-0.204363","funding":"0","realizedPNL":"-0.204363","margin":"17.2366542","unrealizedPNL":"0.0405","liqPrice":"80.29","avgOpenPrice":"84.10","marginRate":"0","ctime":"1776110555000","mtime":"1776110555000"}
+[Bitunix] Raw position fields: ["positionId","symbol","marginCoin","qty","entryValue","side","marginMode","positionMode","leverage","fee","funding","realizedPNL","margin","unrealizedPNL","liqPrice","avgOpenPrice","marginRate","ctime","mtime"]
+[Bitunix] Raw position data: {"positionId":"4455109944346306034","symbol":"SOLUSDT","marginCoin":null,"qty":"4.05","entryValue":"340.605","side":"BUY","marginMode":"ISOLATION","positionMode":"HEDGE","leverage":20,"fee":"-0.204363","funding":"0","realizedPNL":"-0.204363","margin":"17.2366542","unrealizedPNL":"0.0405","liqPrice":"80.29","avgOpenPrice":"84.10","marginRate":"0","ctime":"1776110555000","mtime":"1776110555000"}
+[14 Apr 2026, 03:02:55] [SCAN     ] [HEARTBEAT] Analyzing CLUSDT...
+[14 Apr 2026, 03:02:55] [SCAN     ] [SCAN-BATCH] Starting scan of 5 tokens...
+[14 Apr 2026, 03:02:55] [SCAN     ] [HEARTBEAT] BTCAgent starting execution...
+[14 Apr 2026, 03:02:55] [SCAN     ] [SCAN-BATCH] Starting scan of 5 tokens...
+[14 Apr 2026, 03:02:55] [SCAN     ] [HEARTBEAT] DOGEAgent starting execution...
+[14 Apr 2026, 03:02:55] [TraderAgent] Signal: ZECUSDT LONG score=11.7 setup=LONG-3m1m
+[14 Apr 2026, 03:02:55] [TRADE    ] [TraderAgent] Signal: ZECUSDT LONG score=11.7 setup=LONG-3m1m
+[14 Apr 2026, 03:02:55] [ERROR    ] Bitunix trailing: price method 1 failed for BTCUSDT: Bitunix API error: Parameter error (code 2)
+[14 Apr 2026, 03:02:55] [ERROR    ] Bitunix trailing: price method 2 failed for BTCUSDT: no markPrice
+[14 Apr 2026, 03:02:55] [ERROR    ] Bitunix trailing: price method 1 failed for BTCUSDT: Bitunix API error: Parameter error (code 2)
+[14 Apr 2026, 03:02:55] [ERROR    ] Bitunix trailing: price method 2 failed for BTCUSDT: no markPrice
+[14 Apr 2026, 03:02:55] [SCAN     ] [HEARTBEAT] Analyzing BTCUSDT...
+[14 Apr 2026, 03:02:55] [SCAN     ] [HEARTBEAT] Analyzing DOGEUSDT...
+[Bitunix] Raw position fields: ["positionId","symbol","marginCoin","qty","entryValue","side","marginMode","positionMode","leverage","fee","funding","realizedPNL","margin","unrealizedPNL","liqPrice","avgOpenPrice","marginRate","ctime","mtime"]
+[Bitunix] Raw position data: {"positionId":"4418560084350029393","symbol":"XRPUSDT","marginCoin":null,"qty":"92.4","entryValue":"124.86012","side":"BUY","marginMode":"ISOLATION","positionMode":"HEDGE","leverage":20,"fee":"-0.074916072","funding":"0","realizedPNL":"-0.074916072","margin":"6.319413408","unrealizedPNL":"0.17556","liqPrice":"1.29","avgOpenPrice":"1.3513","marginRate":"0","ctime":"1776109616000","mtime":"1776109616000"}
+[14 Apr 2026, 03:02:55] [TRADE    ] User zensee1314@gmail.com Bitunix: wallet=$62.18 pos=1/5 lev=x20
+[14 Apr 2026, 03:02:55] [TRADE    ] Bitunix trailing: BTCUSDT price from fallback method 3: $73257.5
+[14 Apr 2026, 03:02:55] [TRADE    ] Bitunix trailing: BTCUSDT entry=$73277.4 cur=$73257.5 pricePct=-0.027% capitalPct=-2.72% lev=100x lastStep=0.0%
+[14 Apr 2026, 03:02:55] [TRADE    ] Bitunix trailing: BTCUSDT price from fallback method 3: $73250
+[14 Apr 2026, 03:02:55] [TRADE    ] Bitunix trailing: BTCUSDT entry=$73277.4 cur=$73250 pricePct=-0.037% capitalPct=-3.74% lev=100x lastStep=0.0%
+[AI Brain] Bearish Contrarian thinking with Google gemini-2.0-flash...
+[AI Brain] Bearish Contrarian FAILED (google): [GoogleGenerativeAI Error]: Error fetching from https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent: [429 Too Many Requests] You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. 
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-2.0-flash
+Please retry in 4.579598098s. [{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Learn more about Gemini API quotas","url":"https://ai.google.dev/gemini-api/docs/rate-limits"}]},{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier","quotaDimensions":{"model":"gemini-2.0-flash","location":"global"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerMinutePerProjectPerModel-FreeTier","quotaDimensions":{"model":"gemini-2.0-flash","location":"global"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_input_token_count","quotaId":"GenerateContentInputTokensPerModelPerMinute-FreeTier","quotaDimensions":{"model":"gemini-2.0-flash","location":"global"}}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"4s"}]
+[Swarm] Bearish Contrarian simulation failed: Invalid JSON from Bearish Contrarian
+[14 Apr 2026, 03:02:55] [SCAN     ] CLUSDT: 3m sw=5 lastH=HH@95.12(18:27) lastL=LL@92.8(18:54) → HH/LL trend=neutral
+[14 Apr 2026, 03:02:55] [SCAN     ] [HEARTBEAT] ZECAgent starting execution...
+[14 Apr 2026, 03:02:55] [ERROR    ] Bitunix trailing: price method 1 failed for SOLUSDT: Bitunix API error: Parameter error (code 2)
+[14 Apr 2026, 03:02:55] [ERROR    ] Bitunix trailing: price method 2 failed for SOLUSDT: no markPrice
+[14 Apr 2026, 03:02:55] [TraderAgent] Kronos: ZECUSDT → LONG 1.8% conf=high
+[14 Apr 2026, 03:02:55] [TRADE    ] [TraderAgent] Kronos: ZECUSDT → LONG 1.8% conf=high
+[14 Apr 2026, 03:02:55] [TraderAgent] KRONOS CONFIRMED: ZECUSDT LONG HIGH confidence
+[14 Apr 2026, 03:02:55] [TRADE    ] [TraderAgent] KRONOS CONFIRMED: ZECUSDT LONG HIGH confidence
+[14 Apr 2026, 03:02:55] [SCAN     ] BTCUSDT: 3m sw=5 lastH=LH@72424.9(18:54) lastL=HL@72248.5(19:09) → LH/HL trend=bearish
+[14 Apr 2026, 03:02:55] [SCAN     ] [HEARTBEAT] ETHAgent starting execution...
+[14 Apr 2026, 03:02:55] [SCAN     ] [HEARTBEAT] Analyzing ZECUSDT...
+[14 Apr 2026, 03:02:55] [ERROR    ] Bitunix trailing: price method 1 failed for SOLUSDT: Bitunix API error: Parameter error (code 2)
+[14 Apr 2026, 03:02:55] [ERROR    ] Bitunix trailing: price method 2 failed for SOLUSDT: no markPrice
+[14 Apr 2026, 03:02:55] [SCAN     ] DOGEUSDT: 3m sw=5 lastH=LH@0.09172(18:21) lastL=HL@0.09133(18:27) → LH/HL trend=bearish
+[14 Apr 2026, 03:02:55] [SCAN     ] [HEARTBEAT] ADAAgent starting execution...
+[14 Apr 2026, 03:02:55] [RiskAgent] Risk check: 1 approved, 0 rejected | Open: 3/5
+[14 Apr 2026, 03:02:55] [TRADE    ] [RiskAgent] Risk check: 1 approved, 0 rejected | Open: 3/5
+[14 Apr 2026, 03:02:55] [TRADE    ] Bitunix trailing: SOLUSDT price from fallback method 3: $84.11
+[14 Apr 2026, 03:02:55] [TRADE    ] Bitunix trailing: SOLUSDT entry=$84.1 cur=$84.11 pricePct=0.012% capitalPct=0.24% lev=20x lastStep=0.0%
+[14 Apr 2026, 03:02:55] [SYSTEM   ] Sync: exchange has 2 open positions, DB has 2 OPEN trades
+[14 Apr 2026, 03:02:55] [TRADE    ] User zensee1314@gmail.com: placing Bitunix MARKET BUY ZECUSDT qty=0.339977 SL=$359.1405 TP=$379.119...
+[AI Brain] SMC Purist thinking with Google gemini-2.0-flash...
+[14 Apr 2026, 03:02:55] [SCAN     ] [HEARTBEAT] Analyzing ETHUSDT...
+[AI Brain] Transient error [GoogleGenerativeAI Error]: Error fetching from https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent: [429 Too Many Requests] You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. 
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-2.0-flash
+Please retry in 4.03766215s. [{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Learn more about Gemini API quotas","url":"https://ai.google.dev/gemini-api/docs/rate-limits"}]},{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerMinutePerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_input_token_count","quotaId":"GenerateContentInputTokensPerModelPerMinute-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"4s"}] — retrying (1/3)...
+[14 Apr 2026, 03:02:56] [TRADE    ] Bitunix trailing: SOLUSDT price from fallback method 3: $84.11
+[14 Apr 2026, 03:02:56] [TRADE    ] Bitunix trailing: SOLUSDT entry=$84.1 cur=$84.11 pricePct=0.012% capitalPct=0.24% lev=20x lastStep=0.0%
+[14 Apr 2026, 03:02:56] [SYSTEM   ] Sync: exchange has 2 open positions, DB has 2 OPEN trades
+[14 Apr 2026, 03:02:56] [TRADE    ] Found 2 unique API key(s) — executing ZECUSDT LONG for: zensee1314@gmail.com, scavex88@gmail.com
+[14 Apr 2026, 03:02:56] Executing ZECUSDT LONG for 2 user keys: zensee1314@gmail.com, scavex88@gmail.com
+[14 Apr 2026, 03:02:56] [SCAN     ] ZECUSDT: 3m sw=5 lastH=HH@361.99(19:27) lastL=HL@353.1(17:48) → HH/HL trend=bullish
+[14 Apr 2026, 03:02:56] [SCAN     ] ZECUSDT: 1m sw=4 lastH=LH@366.33(19:56) lastL=HL@364.28(19:55) → LH/HL trend=bearish
+[14 Apr 2026, 03:02:56] [SCAN     ] ZECUSDT: LONG entry@$364.71 swing@$364.28 SL=$359.1405 TP=$375.8490 slDist=1.53% RR=2:1
+[14 Apr 2026, 03:02:56] [SCAN     ] [HEARTBEAT] Analyzing ADAUSDT...
+[14 Apr 2026, 03:02:56] [ERROR    ] User zensee1314@gmail.com trade error: Bitunix API error: This futures does not allow trading (code 20012)
+[14 Apr 2026, 03:02:56] User zensee1314@gmail.com trade error: Bitunix API error: This futures does not allow trading (code 20012)
+[14 Apr 2026, 03:02:56] [PoliceAgent] Patrol #11: 26 agents checked, 0 violations
+[14 Apr 2026, 03:02:56] [SYSTEM   ] [PoliceAgent] Patrol #11: 26 agents checked, 0 violations
+[14 Apr 2026, 03:02:56] [SCAN     ] ETHUSDT: 3m sw=5 lastH=HH@2233(18:42) lastL=HL@2226.84(19:12) → HH/HL trend=bullish
+[14 Apr 2026, 03:02:56] [SCAN     ] ETHUSDT: 1m sw=4 lastH=HH@2268.7(19:56) lastL=HL@2248(19:43) → HH/HL trend=bullish
+[14 Apr 2026, 03:02:56] [SCAN     ] ETHUSDT: LONG — swing age 15 (need 0-3 for fresh entry)
+[14 Apr 2026, 03:02:56] [SCAN     ] [HEARTBEAT] SOLAgent starting execution...
+[Bitunix] Raw position fields: ["positionId","symbol","marginCoin","qty","entryValue","side","marginMode","positionMode","leverage","fee","funding","realizedPNL","margin","unrealizedPNL","liqPrice","avgOpenPrice","marginRate","ctime","mtime"]
+[Bitunix] Raw position data: {"positionId":"4418560084350029393","symbol":"XRPUSDT","marginCoin":null,"qty":"92.4","entryValue":"124.86012","side":"BUY","marginMode":"ISOLATION","positionMode":"HEDGE","leverage":20,"fee":"-0.074916072","funding":"0","realizedPNL":"-0.074916072","margin":"6.319413408","unrealizedPNL":"0.17556","liqPrice":"1.29","avgOpenPrice":"1.3513","marginRate":"0","ctime":"1776109616000","mtime":"1776109616000"}
+[14 Apr 2026, 03:02:56] [PoliceAgent] Patrol #12: 26 agents checked, 0 violations
+[14 Apr 2026, 03:02:56] [SYSTEM   ] [PoliceAgent] Patrol #12: 26 agents checked, 0 violations
+[14 Apr 2026, 03:02:56] [SCAN     ] ADAUSDT: 3m sw=5 lastH=LH@0.2388(18:21) lastL=HL@0.2397(19:45) → LH/HL trend=bearish
+[14 Apr 2026, 03:02:56] [SCAN     ] [HEARTBEAT] AVAXAgent starting execution...
+[14 Apr 2026, 03:02:56] [SCAN     ] [HEARTBEAT] Analyzing SOLUSDT...
+[14 Apr 2026, 03:02:56] [ERROR    ] Bitunix trailing: price method 1 failed for XRPUSDT: Bitunix API error: Parameter error (code 2)
+[14 Apr 2026, 03:02:56] [ERROR    ] Bitunix trailing: price method 2 failed for XRPUSDT: no markPrice
+[14 Apr 2026, 03:02:56] [SCAN     ] [HEARTBEAT] Analyzing AVAXUSDT...
+[14 Apr 2026, 03:02:56] [AI       ] Kronos scanning 10 tokens (15m, 20 candles)...
+[14 Apr 2026, 03:02:57] [SCAN     ] SOLUSDT: 3m sw=5 lastH=LH@83.25(18:54) lastL=LL@82.54(18:27) → LH/LL trend=bearish
+[14 Apr 2026, 03:02:57] [SCAN     ] SOLUSDT: 1m sw=4 lastH=HH@83.8(19:34) lastL=HL@83.53(19:35) → HH/HL trend=bullish
+[14 Apr 2026, 03:02:57] [SCAN     ] SOLUSDT: SHORT rejected — 1m no LH
+[14 Apr 2026, 03:02:57] [SCAN     ] [HEARTBEAT] BNBAgent starting execution...
+[14 Apr 2026, 03:02:57] [SCAN     ] AVAXUSDT: 3m sw=5 lastH=HH@9.387(17:30) lastL=LL@9.172(18:27) → HH/LL trend=neutral
+[14 Apr 2026, 03:02:57] [SCAN     ] [HEARTBEAT] SUIAgent starting execution...
+[14 Apr 2026, 03:02:57] [SCAN     ] SIGNAL: ZECUSDT LONG | 3m=HH/HL 1m=LH/HL | entry@$364.71 SL=$359.1405 TP=$375.8490 slDist=1.53% | score=12 | age=3
+[14 Apr 2026, 03:02:57] [SCAN     ] [ZECAgent] SIGNAL: ZECUSDT LONG score=11.7 3m=HH/HL 1m=LH/HL
+[14 Apr 2026, 03:02:57] [TRADE    ] Bitunix trailing: XRPUSDT entry=$1.3513 cur=$1.3532 pricePct=0.141% capitalPct=2.81% lev=20x lastStep=0.0%
+[14 Apr 2026, 03:02:57] [SYSTEM   ] Sync: exchange has 1 open positions, DB has 1 OPEN trades
+[14 Apr 2026, 03:02:57] [SCAN     ] [HEARTBEAT] Analyzing BNBUSDT...
+[14 Apr 2026, 03:02:57] [SCAN     ] [HEARTBEAT] Analyzing SUIUSDT...
+[AI Brain] SMC Purist thinking with Google gemini-2.0-flash...
+[AI Brain] Transient error [GoogleGenerativeAI Error]: Error fetching from https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent: [429 Too Many Requests] You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. 
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+Please retry in 2.498574874s. [{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Learn more about Gemini API quotas","url":"https://ai.google.dev/gemini-api/docs/rate-limits"}]},{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_input_token_count","quotaId":"GenerateContentInputTokensPerModelPerMinute-FreeTier","quotaDimensions":{"model":"gemini-2.0-flash","location":"global"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerMinutePerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"2s"}] — retrying (2/3)...
+[14 Apr 2026, 03:02:57] [SCAN     ] [HEARTBEAT] BNXAgent starting execution...
+[14 Apr 2026, 03:02:57] [SCAN     ] BNBUSDT: 3m sw=5 lastH=LH@605.6(18:45) lastL=HL@604.27(19:09) → LH/HL trend=bearish
+[14 Apr 2026, 03:02:57] [SCAN     ] [HEARTBEAT] XRPAgent starting execution...
+[14 Apr 2026, 03:02:57] [TRADE    ] User zensee1314@gmail.com settings: SL=1.50% TP=2.92% trail=1.2% cap=10% maxLoss=$1 SMC-SL
+[14 Apr 2026, 03:02:57] [SCAN     ] SUIUSDT: 3m sw=5 lastH=HH@0.928(17:30) lastL=LL@0.9122(18:24) → HH/LL trend=neutral
+[14 Apr 2026, 03:02:57] [AI       ] Kronos scan done in 1.0s: 10 LONG, 0 SHORT, 0 NEUTRAL
+[Bitunix] Raw position fields: ["positionId","symbol","marginCoin","qty","entryValue","side","marginMode","positionMode","leverage","fee","funding","realizedPNL","margin","unrealizedPNL","liqPrice","avgOpenPrice","marginRate","ctime","mtime"]
+[Bitunix] Raw position data: {"positionId":"4455109944346306034","symbol":"SOLUSDT","marginCoin":null,"qty":"4.05","entryValue":"340.605","side":"BUY","marginMode":"ISOLATION","positionMode":"HEDGE","leverage":20,"fee":"-0.204363","funding":"0","realizedPNL":"-0.204363","margin":"17.2366542","unrealizedPNL":"0.0405","liqPrice":"80.29","avgOpenPrice":"84.10","marginRate":"0","ctime":"1776110555000","mtime":"1776110555000"}
+[14 Apr 2026, 03:02:57] [SCAN     ] [HEARTBEAT] Analyzing XRPUSDT...
+[14 Apr 2026, 03:02:58] [SCAN     ] [HEARTBEAT] Analyzing LINKUSDT...
+[14 Apr 2026, 03:02:58] [ERROR    ] Bitunix trailing: price method 1 failed for BTCUSDT: Bitunix API error: Parameter error (code 2)
+[14 Apr 2026, 03:02:58] [ERROR    ] Bitunix trailing: price method 2 failed for BTCUSDT: no markPrice
+[Bitunix] Raw position fields: ["positionId","symbol","marginCoin","qty","entryValue","side","marginMode","positionMode","leverage","fee","funding","realizedPNL","margin","unrealizedPNL","liqPrice","avgOpenPrice","marginRate","ctime","mtime"]
+[Bitunix] Raw position data: {"positionId":"4455109944346306034","symbol":"SOLUSDT","marginCoin":null,"qty":"4.05","entryValue":"340.605","side":"BUY","marginMode":"ISOLATION","positionMode":"HEDGE","leverage":20,"fee":"-0.204363","funding":"0","realizedPNL":"-0.204363","margin":"17.2366542","unrealizedPNL":"0.0405","liqPrice":"80.29","avgOpenPrice":"84.10","marginRate":"0","ctime":"1776110555000","mtime":"1776110555000"}
+[14 Apr 2026, 03:02:58] [TRADE    ] User scavex88@gmail.com Bitunix: wallet=$170.60 pos=2/10 lev=x20
+[14 Apr 2026, 03:02:58] [SCAN     ] BNXUSDT: 3m sw=5 lastH=none lastL=none → --/-- trend=neutral
+[Bitunix] Raw position fields: ["positionId","symbol","marginCoin","qty","entryValue","side","marginMode","positionMode","leverage","fee","funding","realizedPNL","margin","unrealizedPNL","liqPrice","avgOpenPrice","marginRate","ctime","mtime"]
+[14 Apr 2026, 03:02:58] [TRADE    ] User zensee1314@gmail.com Bitunix: wallet=$62.18 pos=1/5 lev=x20
+[14 Apr 2026, 03:02:58] [SCAN     ] XRPUSDT: 3m sw=5 lastH=HH@1.3449(17:30) lastL=LL@1.3336(18:27) → HH/LL trend=neutral
+[14 Apr 2026, 03:02:58] [TRADE    ] Bitunix trailing: BTCUSDT price from fallback method 3: $73257.5
+[14 Apr 2026, 03:02:58] [TRADE    ] Bitunix trailing: BTCUSDT entry=$73277.4 cur=$73257.5 pricePct=-0.027% capitalPct=-2.72% lev=100x lastStep=0.0%
+[14 Apr 2026, 03:02:58] [SCAN     ] LINKUSDT: 3m sw=5 lastH=none lastL=HL@8.83(18:27) → --/HL trend=neutral
+[14 Apr 2026, 03:02:58] [ERROR    ] Bitunix trailing: price method 1 failed for SOLUSDT: Bitunix API error: Parameter error (code 2)
+[14 Apr 2026, 03:02:58] [TRADE    ] User scavex88@gmail.com: placing Bitunix MARKET BUY ZECUSDT qty=0.932754 SL=$329.22 TP=$379.119...
+[14 Apr 2026, 03:02:58] [TRADE    ] User zensee1314@gmail.com: placing Bitunix MARKET BUY ZECUSDT qty=0.341218 SL=$359.00295 TP=$375.129...
+[14 Apr 2026, 03:02:58] [TRADE    ] Bitunix trailing: SOLUSDT price from fallback method 3: $84.11
+[14 Apr 2026, 03:02:58] [TRADE    ] Bitunix trailing: SOLUSDT entry=$84.1 cur=$84.11 pricePct=0.012% capitalPct=0.24% lev=20x lastStep=0.0%
+[14 Apr 2026, 03:02:58] [SYSTEM   ] Sync: exchange has 2 open positions, DB has 2 OPEN trades
+[14 Apr 2026, 03:02:59] User scavex88@gmail.com trade error: Bitunix API error: This futures does not allow trading (code 20012)
+[14 Apr 2026, 03:02:59] [TRADE    ] Multi-user execution done: 0 traded, 2 skipped/failed
+[14 Apr 2026, 03:02:59] Multi-user done: 0 traded, 2 skipped/failed
+[14 Apr 2026, 03:02:59] [TraderAgent] ZECUSDT too expensive for all users — trying next
+[14 Apr 2026, 03:02:59] [TRADE    ] [TraderAgent] ZECUSDT too expensive for all users — trying next
+[14 Apr 2026, 03:02:59] [ERROR    ] User zensee1314@gmail.com trade error: Bitunix API error: This futures does not allow trading (code 20012)
+[14 Apr 2026, 03:02:59] User zensee1314@gmail.com trade error: Bitunix API error: This futures does not allow trading (code 20012)
+[AI Brain] Bullish Momentumist thinking with Google gemini-2.0-flash...
+[14 Apr 2026, 03:02:59] [TraderAgent] Signal: ZECUSDT LONG score=11.7 setup=LONG-3m1m
+[14 Apr 2026, 03:02:59] [TRADE    ] [TraderAgent] Signal: ZECUSDT LONG score=11.7 setup=LONG-3m1m
+[AI Brain] Transient error [GoogleGenerativeAI Error]: Error fetching from https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent: [429 Too Many Requests] You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. 
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+Please retry in 665.565593ms. [{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Learn more about Gemini API quotas","url":"https://ai.google.dev/gemini-api/docs/rate-limits"}]},{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_input_token_count","quotaId":"GenerateContentInputTokensPerModelPerMinute-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerMinutePerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"0s"}] — retrying (1/3)...
+[14 Apr 2026, 03:02:59] [RiskAgent] Risk check: 1 approved, 0 rejected | Open: 3/5
+[14 Apr 2026, 03:02:59] [TRADE    ] [RiskAgent] Risk check: 1 approved, 0 rejected | Open: 3/5
+[14 Apr 2026, 03:03:00] [TraderAgent] Kronos: ZECUSDT → LONG 1.8% conf=high
+[14 Apr 2026, 03:03:00] [TRADE    ] [TraderAgent] Kronos: ZECUSDT → LONG 1.8% conf=high
+[14 Apr 2026, 03:03:00] [TraderAgent] KRONOS CONFIRMED: ZECUSDT LONG HIGH confidence
+[14 Apr 2026, 03:03:00] [TRADE    ] [TraderAgent] KRONOS CONFIRMED: ZECUSDT LONG HIGH confidence
+[Bitunix] Raw position fields: ["positionId","symbol","marginCoin","qty","entryValue","side","marginMode","positionMode","leverage","fee","funding","realizedPNL","margin","unrealizedPNL","liqPrice","avgOpenPrice","marginRate","ctime","mtime"]
+[Bitunix] Raw position data: {"positionId":"4418560084350029393","symbol":"XRPUSDT","marginCoin":null,"qty":"92.4","entryValue":"124.86012","side":"BUY","marginMode":"ISOLATION","positionMode":"HEDGE","leverage":20,"fee":"-0.074916072","funding":"0","realizedPNL":"-0.074916072","margin":"6.319413408","unrealizedPNL":"0.16632","liqPrice":"1.29","avgOpenPrice":"1.3513","marginRate":"0","ctime":"1776109616000","mtime":"1776109616000"}
+[14 Apr 2026, 03:03:00] [TRADE    ] Found 2 unique API key(s) — executing ZECUSDT LONG for: zensee1314@gmail.com, scavex88@gmail.com
+[AI Brain] SMC Purist thinking with Google gemini-2.0-flash...
+[14 Apr 2026, 03:03:00] [ERROR    ] Bitunix trailing: price method 2 failed for XRPUSDT: no markPrice
+[AI Brain] SMC Purist FAILED (google): [GoogleGenerativeAI Error]: Error fetching from https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent: [429 Too Many Requests] You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. 
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+Please retry in 59.456718088s. [{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Learn more about Gemini API quotas","url":"https://ai.google.dev/gemini-api/docs/rate-limits"}]},{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_input_token_count","quotaId":"GenerateContentInputTokensPerModelPerMinute-FreeTier","quotaDimensions":{"model":"gemini-2.0-flash","location":"global"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerMinutePerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier","quotaDimensions":{"model":"gemini-2.0-flash","location":"global"}}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"59s"}]
+[Bitunix] Raw position fields: ["positionId","symbol","marginCoin","qty","entryValue","side","marginMode","positionMode","leverage","fee","funding","realizedPNL","margin","unrealizedPNL","liqPrice","avgOpenPrice","marginRate","ctime","mtime"]
+[Bitunix] Raw position data: {"positionId":"4418560084350029393","symbol":"XRPUSDT","marginCoin":null,"qty":"92.4","entryValue":"124.86012","side":"BUY","marginMode":"ISOLATION","positionMode":"HEDGE","leverage":20,"fee":"-0.074916072","funding":"0","realizedPNL":"-0.074916072","margin":"6.319413408","unrealizedPNL":"0.16632","liqPrice":"1.29","avgOpenPrice":"1.3513","marginRate":"0","ctime":"1776109616000","mtime":"1776109616000"}
+[14 Apr 2026, 03:03:00] [TRADE    ] User scavex88@gmail.com settings: SL=10.00% TP=2.92% trail=1.5% cap=10% maxLoss=$30 SMC-SL
+[14 Apr 2026, 03:03:00] [TRADE    ] Bitunix trailing: XRPUSDT price from fallback method 3: $1.3528
+[14 Apr 2026, 03:03:00] [TRADE    ] Bitunix trailing: XRPUSDT entry=$1.3513 cur=$1.3528 pricePct=0.111% capitalPct=2.22% lev=20x lastStep=0.0%
+[14 Apr 2026, 03:03:00] [SYSTEM   ] Sync: exchange has 1 open positions, DB has 1 OPEN trades
+[AI Brain] Bullish Momentumist thinking with Google gemini-2.0-flash...
+[AI Brain] Transient error [GoogleGenerativeAI Error]: Error fetching from https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent: [429 Too Many Requests] You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. 
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+Please retry in 59.130780141s. [{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Learn more about Gemini API quotas","url":"https://ai.google.dev/gemini-api/docs/rate-limits"}]},{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_input_token_count","quotaId":"GenerateContentInputTokensPerModelPerMinute-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerMinutePerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"59s"}] — retrying (2/3)...
+[AI Brain] Transient error [GoogleGenerativeAI Error]: Error fetching from https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent: [429 Too Many Requests] You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. 
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-2.0-flash
+Please retry in 58.919782698s. [{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Learn more about Gemini API quotas","url":"https://ai.google.dev/gemini-api/docs/rate-limits"}]},{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerMinutePerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_input_token_count","quotaId":"GenerateContentInputTokensPerModelPerMinute-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"58s"}] — retrying (1/3)...
+[Bitunix] Raw position data: {"positionId":"4455109944346306034","symbol":"SOLUSDT","marginCoin":null,"qty":"4.05","entryValue":"340.605","side":"BUY","marginMode":"ISOLATION","positionMode":"HEDGE","leverage":20,"fee":"-0.204363","funding":"0","realizedPNL":"-0.204363","margin":"17.2366542","unrealizedPNL":"0.0405","liqPrice":"80.29","avgOpenPrice":"84.10","marginRate":"0","ctime":"1776110555000","mtime":"1776110555000"}
+[14 Apr 2026, 03:03:01] [TRADE    ] User scavex88@gmail.com Bitunix: wallet=$170.60 pos=2/10 lev=x20
+[Bitunix] Raw position fields: ["positionId","symbol","marginCoin","qty","entryValue","side","marginMode","positionMode","leverage","fee","funding","realizedPNL","margin","unrealizedPNL","liqPrice","avgOpenPrice","marginRate","ctime","mtime"]
+[Bitunix] Raw position data: {"positionId":"4455109944346306034","symbol":"SOLUSDT","marginCoin":null,"qty":"4.05","entryValue":"340.605","side":"BUY","marginMode":"ISOLATION","positionMode":"HEDGE","leverage":20,"fee":"-0.204363","funding":"0","realizedPNL":"-0.204363","margin":"17.2366542","unrealizedPNL":"0.0405","liqPrice":"80.29","avgOpenPrice":"84.10","marginRate":"0","ctime":"1776110555000","mtime":"1776110555000"}
+[14 Apr 2026, 03:03:01] [ERROR    ] Bitunix trailing: price method 2 failed for BTCUSDT: no markPrice
+[14 Apr 2026, 03:03:01] [TRADE    ] User scavex88@gmail.com: placing Bitunix MARKET BUY ZECUSDT qty=0.936158 SL=$328.023 TP=$375.129...
+[14 Apr 2026, 03:03:01] [TRADE    ] Bitunix trailing: BTCUSDT price from fallback method 3: $73251.8
+[14 Apr 2026, 03:03:02] User scavex88@gmail.com trade error: Bitunix API error: This futures does not allow trading (code 20012)
+[14 Apr 2026, 03:03:02] [TRADE    ] Multi-user execution done: 0 traded, 2 skipped/failed
+[14 Apr 2026, 03:03:02] Multi-user done: 0 traded, 2 skipped/failed
+[14 Apr 2026, 03:03:02] [TRADE    ] [TraderAgent] ZECUSDT too expensive for all users — trying next
+[14 Apr 2026, 03:03:02] [TRADE    ] User zensee1314@gmail.com settings: SL=1.52% TP=3.04% trail=1.2% cap=10% maxLoss=$1 SMC-SL
+[14 Apr 2026, 03:03:02] [ERROR    ] Bitunix trailing: price method 1 failed for SOLUSDT: Bitunix API error: Parameter error (code 2)
+[14 Apr 2026, 03:03:02] [ERROR    ] Bitunix trailing: price method 2 failed for SOLUSDT: no markPrice
+[14 Apr 2026, 03:03:02] [TRADE    ] Bitunix trailing: SOLUSDT price from fallback method 3: $84.11
+[14 Apr 2026, 03:03:02] [TRADE    ] Bitunix trailing: SOLUSDT entry=$84.1 cur=$84.11 pricePct=0.012% capitalPct=0.24% lev=20x lastStep=0.0%
+[14 Apr 2026, 03:03:02] [SYSTEM   ] Sync: exchange has 2 open positions, DB has 2 OPEN trades
+[AI Brain] Risk-Averse Scalper thinking with Google gemini-2.0-flash...
+[Bitunix] Raw position fields: ["positionId","symbol","marginCoin","qty","entryValue","side","marginMode","positionMode","leverage","fee","funding","realizedPNL","margin","unrealizedPNL","liqPrice","avgOpenPrice","marginRate","ctime","mtime"]
+[Bitunix] Raw position data: {"positionId":"4418560084350029393","symbol":"XRPUSDT","marginCoin":null,"qty":"92.4","entryValue":"124.86012","side":"BUY","marginMode":"ISOLATION","positionMode":"HEDGE","leverage":20,"fee":"-0.074916072","funding":"0","realizedPNL":"-0.074916072","margin":"6.319413408","unrealizedPNL":"0.16632","liqPrice":"1.29","avgOpenPrice":"1.3513","marginRate":"0","ctime":"1776109616000","mtime":"1776109616000"}
+[14 Apr 2026, 03:03:02] [TRADE    ] User zensee1314@gmail.com Bitunix: wallet=$62.18 pos=1/5 lev=x20
+[AI Brain] Transient error [GoogleGenerativeAI Error]: Error fetching from https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent: [429 Too Many Requests] You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. 
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-2.0-flash
+Please retry in 57.389549614s. [{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Learn more about Gemini API quotas","url":"https://ai.google.dev/gemini-api/docs/rate-limits"}]},{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerMinutePerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_input_token_count","quotaId":"GenerateContentInputTokensPerModelPerMinute-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"57s"}] — retrying (2/3)...
+[14 Apr 2026, 03:03:02] [TraderAgent] Signal: ZECUSDT LONG score=11.7 setup=LONG-3m1m
+[14 Apr 2026, 03:03:02] [TRADE    ] [TraderAgent] Signal: ZECUSDT LONG score=11.7 setup=LONG-3m1m
+[14 Apr 2026, 03:03:03] [TRADE    ] User zensee1314@gmail.com: placing Bitunix MARKET BUY ZECUSDT qty=0.341021 SL=$359.1405 TP=$375.759...
+[14 Apr 2026, 03:03:03] [ERROR    ] User zensee1314@gmail.com trade error: Bitunix API error: This futures does not allow trading (code 20012)
+[14 Apr 2026, 03:03:03] User zensee1314@gmail.com trade error: Bitunix API error: This futures does not allow trading (code 20012)
+[14 Apr 2026, 03:03:03] [TraderAgent] Kronos: ZECUSDT → LONG 1.8% conf=high
+[14 Apr 2026, 03:03:03] [TRADE    ] [TraderAgent] Kronos: ZECUSDT → LONG 1.8% conf=high
+[14 Apr 2026, 03:03:03] [TraderAgent] KRONOS CONFIRMED: ZECUSDT LONG HIGH confidence
+[14 Apr 2026, 03:03:03] [TRADE    ] [TraderAgent] KRONOS CONFIRMED: ZECUSDT LONG HIGH confidence
+[AI Brain] Bullish Momentumist thinking with Google gemini-2.0-flash...
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-2.0-flash
+Please retry in 56.098389026s. [{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Learn more about Gemini API quotas","url":"https://ai.google.dev/gemini-api/docs/rate-limits"}]},{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier","quotaDimensions":{"model":"gemini-2.0-flash","location":"global"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerMinutePerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_input_token_count","quotaId":"GenerateContentInputTokensPerModelPerMinute-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"56s"}]
+[14 Apr 2026, 03:03:04] [TRADE    ] Found 2 unique API key(s) — executing ZECUSDT LONG for: zensee1314@gmail.com, scavex88@gmail.com
+[AI Brain] Bearish Contrarian thinking with Google gemini-2.0-flash...
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+Please retry in 55.561869138s. [{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Learn more about Gemini API quotas","url":"https://ai.google.dev/gemini-api/docs/rate-limits"}]},{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerMinutePerProjectPerModel-FreeTier","quotaDimensions":{"model":"gemini-2.0-flash","location":"global"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_input_token_count","quotaId":"GenerateContentInputTokensPerModelPerMinute-FreeTier","quotaDimensions":{"model":"gemini-2.0-flash","location":"global"}}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"55s"}] — retrying (1/3)...
+[14 Apr 2026, 03:03:04] [TRADE    ] User scavex88@gmail.com settings: SL=10.00% TP=3.04% trail=1.5% cap=10% maxLoss=$30 SMC-SL
+[Bitunix] Raw position fields: ["positionId","symbol","marginCoin","qty","entryValue","side","marginMode","positionMode","leverage","fee","funding","realizedPNL","margin","unrealizedPNL","liqPrice","avgOpenPrice","marginRate","ctime","mtime"]
+[Bitunix] Raw position data: {"positionId":"4455109944346306034","symbol":"SOLUSDT","marginCoin":null,"qty":"4.05","entryValue":"340.605","side":"BUY","marginMode":"ISOLATION","positionMode":"HEDGE","leverage":20,"fee":"-0.204363","funding":"0","realizedPNL":"-0.204363","margin":"17.2366542","unrealizedPNL":"0.0405","liqPrice":"80.29","avgOpenPrice":"84.10","marginRate":"0","ctime":"1776110555000","mtime":"1776110555000"}
+[14 Apr 2026, 03:03:05] [TRADE    ] User scavex88@gmail.com Bitunix: wallet=$170.60 pos=2/10 lev=x20
+[AI Brain] Risk-Averse Scalper thinking with Google gemini-2.0-flash...
+[AI Brain] Risk-Averse Scalper FAILED (google): [GoogleGenerativeAI Error]: Error fetching from https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent: [429 Too Many Requests] You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. 
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+Please retry in 54.354140271s. [{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Learn more about Gemini API quotas","url":"https://ai.google.dev/gemini-api/docs/rate-limits"}]},{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_input_token_count","quotaId":"GenerateContentInputTokensPerModelPerMinute-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerMinutePerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"54s"}]
+[Swarm] Risk-Averse Scalper simulation failed: Invalid JSON from Risk-Averse Scalper
+[14 Apr 2026, 03:03:05] [TRADE    ] User zensee1314@gmail.com settings: SL=1.53% TP=3.05% trail=1.2% cap=10% maxLoss=$1 SMC-SL
+[14 Apr 2026, 03:03:05] [TRADE    ] User scavex88@gmail.com: placing Bitunix MARKET BUY ZECUSDT qty=0.935619 SL=$328.212 TP=$375.759...
+[AI Brain] Bearish Contrarian thinking with Google gemini-2.0-flash...
+[AI Brain] Transient error [GoogleGenerativeAI Error]: Error fetching from https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent: [429 Too Many Requests] You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. 
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+Please retry in 54.023900067s. [{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Learn more about Gemini API quotas","url":"https://ai.google.dev/gemini-api/docs/rate-limits"}]},{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_input_token_count","quotaId":"GenerateContentInputTokensPerModelPerMinute-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerMinutePerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"54s"}] — retrying (2/3)...
+[AI Brain] Bullish Momentumist thinking with Ollama gemma4:31b-cloud (medium)...
+[14 Apr 2026, 03:03:06] [ERROR    ] User scavex88@gmail.com trade error: Bitunix API error: This futures does not allow trading (code 20012)
+[14 Apr 2026, 03:03:06] User scavex88@gmail.com trade error: Bitunix API error: This futures does not allow trading (code 20012)
+[14 Apr 2026, 03:03:06] [TRADE    ] Multi-user execution done: 0 traded, 2 skipped/failed
+[14 Apr 2026, 03:03:06] Multi-user done: 0 traded, 2 skipped/failed
+[14 Apr 2026, 03:03:06] [TraderAgent] ZECUSDT too expensive for all users — trying next
+[14 Apr 2026, 03:03:06] [TRADE    ] [TraderAgent] ZECUSDT too expensive for all users — trying next
+[Bitunix] Raw position fields: ["positionId","symbol","marginCoin","qty","entryValue","side","marginMode","positionMode","leverage","fee","funding","realizedPNL","margin","unrealizedPNL","liqPrice","avgOpenPrice","marginRate","ctime","mtime"]
+[Bitunix] Raw position data: {"positionId":"4418560084350029393","symbol":"XRPUSDT","marginCoin":null,"qty":"92.4","entryValue":"124.86012","side":"BUY","marginMode":"ISOLATION","positionMode":"HEDGE","leverage":20,"fee":"-0.074916072","funding":"0","realizedPNL":"-0.074916072","margin":"6.319413408","unrealizedPNL":"0.16632","liqPrice":"1.29","avgOpenPrice":"1.3513","marginRate":"0","ctime":"1776109616000","mtime":"1776109616000"}
+[14 Apr 2026, 03:03:06] [TRADE    ] User zensee1314@gmail.com Bitunix: wallet=$62.18 pos=1/5 lev=x20
+[AI Brain] Ollama Error: Ollama API error: 404 Not Found
+[AI Brain] Ollama marked DOWN — falling back to cloud provider
+[AI Brain] Ollama failed — falling back to google
+[AI Brain] Bullish Momentumist thinking with Google gemini-2.0-flash...
+[AI Brain] Transient error [GoogleGenerativeAI Error]: Error fetching from https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent: [429 Too Many Requests] You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. 
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-2.0-flash
+Please retry in 53.756866875s. [{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Learn more about Gemini API quotas","url":"https://ai.google.dev/gemini-api/docs/rate-limits"}]},{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier","quotaDimensions":{"model":"gemini-2.0-flash","location":"global"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerMinutePerProjectPerModel-FreeTier","quotaDimensions":{"model":"gemini-2.0-flash","location":"global"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_input_token_count","quotaId":"GenerateContentInputTokensPerModelPerMinute-FreeTier","quotaDimensions":{"model":"gemini-2.0-flash","location":"global"}}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"53s"}] — retrying (1/3)...
+[14 Apr 2026, 03:03:06] [TRADE    ] User zensee1314@gmail.com: placing Bitunix MARKET BUY ZECUSDT qty=0.340993 SL=$359.1405 TP=$375.849...
+[14 Apr 2026, 03:03:06] [ERROR    ] User zensee1314@gmail.com trade error: Bitunix API error: This futures does not allow trading (code 20012)
+[14 Apr 2026, 03:03:06] User zensee1314@gmail.com trade error: Bitunix API error: This futures does not allow trading (code 20012)
+[AI Brain] Transient error [GoogleGenerativeAI Error]: Error fetching from https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent: [429 Too Many Requests] You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. 
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-2.0-flash
+Please retry in 52.221917226s. [{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Learn more about Gemini API quotas","url":"https://ai.google.dev/gemini-api/docs/rate-limits"}]},{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerMinutePerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_input_token_count","quotaId":"GenerateContentInputTokensPerModelPerMinute-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"52s"}] — retrying (2/3)...
+[14 Apr 2026, 03:03:08] [TRADE    ] User scavex88@gmail.com settings: SL=10.00% TP=3.05% trail=1.5% cap=10% maxLoss=$30 SMC-SL
+[AI Brain] Bearish Contrarian thinking with Google gemini-2.0-flash...
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+Please retry in 50.991616806s. [{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Learn more about Gemini API quotas","url":"https://ai.google.dev/gemini-api/docs/rate-limits"}]},{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerMinutePerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_input_token_count","quotaId":"GenerateContentInputTokensPerModelPerMinute-FreeTier","quotaDimensions":{"model":"gemini-2.0-flash","location":"global"}}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"50s"}]
+[Swarm] Bearish Contrarian simulation failed: Invalid JSON from Bearish Contrarian
+[Bitunix] Raw position fields: ["positionId","symbol","marginCoin","qty","entryValue","side","marginMode","positionMode","leverage","fee","funding","realizedPNL","margin","unrealizedPNL","liqPrice","avgOpenPrice","marginRate","ctime","mtime"]
+[Bitunix] Raw position data: {"positionId":"4455109944346306034","symbol":"SOLUSDT","marginCoin":null,"qty":"4.05","entryValue":"340.605","side":"BUY","marginMode":"ISOLATION","positionMode":"HEDGE","leverage":20,"fee":"-0.204363","funding":"0","realizedPNL":"-0.204363","margin":"17.2366542","unrealizedPNL":"0.162","liqPrice":"80.29","avgOpenPrice":"84.10","marginRate":"0","ctime":"1776110555000","mtime":"1776110555000"}
+[AI Brain] SMC Purist thinking with Google gemini-2.0-flash...
+[AI Brain] Transient error [GoogleGenerativeAI Error]: Error fetching from https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent: [429 Too Many Requests] You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. 
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-2.0-flash
+Please retry in 50.453743725s. [{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Learn more about Gemini API quotas","url":"https://ai.google.dev/gemini-api/docs/rate-limits"}]},{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerMinutePerProjectPerModel-FreeTier","quotaDimensions":{"model":"gemini-2.0-flash","location":"global"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_input_token_count","quotaId":"GenerateContentInputTokensPerModelPerMinute-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"50s"}] — retrying (1/3)...
+[14 Apr 2026, 03:03:09] [TRADE    ] User scavex88@gmail.com: placing Bitunix MARKET BUY ZECUSDT qty=0.935542 SL=$328.239 TP=$375.849...
+[14 Apr 2026, 03:03:10] [ERROR    ] User scavex88@gmail.com trade error: Bitunix API error: This futures does not allow trading (code 20012)
+[14 Apr 2026, 03:03:10] User scavex88@gmail.com trade error: Bitunix API error: This futures does not allow trading (code 20012)
+[14 Apr 2026, 03:03:10] [TRADE    ] Multi-user execution done: 0 traded, 2 skipped/failed
+[14 Apr 2026, 03:03:10] Multi-user done: 0 traded, 2 skipped/failed
+[14 Apr 2026, 03:03:10] [TraderAgent] ZECUSDT too expensive for all users — trying next
+[14 Apr 2026, 03:03:10] [TRADE    ] [TraderAgent] ZECUSDT too expensive for all users — trying next
+[AI Brain] Bullish Momentumist thinking with Google gemini-2.0-flash...
+[AI Brain] Bullish Momentumist FAILED (ollama): [GoogleGenerativeAI Error]: Error fetching from https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent: [429 Too Many Requests] You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. 
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-2.0-flash
+Please retry in 49.183686838s. [{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Learn more about Gemini API quotas","url":"https://ai.google.dev/gemini-api/docs/rate-limits"}]},{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier","quotaDimensions":{"model":"gemini-2.0-flash","location":"global"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerMinutePerProjectPerModel-FreeTier","quotaDimensions":{"model":"gemini-2.0-flash","location":"global"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_input_token_count","quotaId":"GenerateContentInputTokensPerModelPerMinute-FreeTier","quotaDimensions":{"model":"gemini-2.0-flash","location":"global"}}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"49s"}]
+[Swarm] Bullish Momentumist simulation failed: Invalid JSON from Bullish Momentumist
+[AI Brain] SMC Purist thinking with Google gemini-2.0-flash...
+[AI Brain] Transient error [GoogleGenerativeAI Error]: Error fetching from https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent: [429 Too Many Requests] You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. 
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+Please retry in 48.919484605s. [{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Learn more about Gemini API quotas","url":"https://ai.google.dev/gemini-api/docs/rate-limits"}]},{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_input_token_count","quotaId":"GenerateContentInputTokensPerModelPerMinute-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerMinutePerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"48s"}] — retrying (2/3)...
+[AI Brain] Bearish Contrarian thinking with Google gemini-2.0-flash...
+[AI Brain] Transient error [GoogleGenerativeAI Error]: Error fetching from https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent: [429 Too Many Requests] You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. 
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-2.0-flash
+Please retry in 48.644435367s. [{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Learn more about Gemini API quotas","url":"https://ai.google.dev/gemini-api/docs/rate-limits"}]},{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier","quotaDimensions":{"model":"gemini-2.0-flash","location":"global"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerMinutePerProjectPerModel-FreeTier","quotaDimensions":{"model":"gemini-2.0-flash","location":"global"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_input_token_count","quotaId":"GenerateContentInputTokensPerModelPerMinute-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"48s"}] — retrying (1/3)...
+[AI Brain] Bearish Contrarian thinking with Google gemini-2.0-flash...
+[AI Brain] Transient error [GoogleGenerativeAI Error]: Error fetching from https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent: [429 Too Many Requests] You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. 
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-2.0-flash
+Please retry in 47.10672508s. [{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Learn more about Gemini API quotas","url":"https://ai.google.dev/gemini-api/docs/rate-limits"}]},{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_input_token_count","quotaId":"GenerateContentInputTokensPerModelPerMinute-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerMinutePerProjectPerModel-FreeTier","quotaDimensions":{"model":"gemini-2.0-flash","location":"global"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"47s"}] — retrying (2/3)...
+[AI Brain] SMC Purist thinking with Google gemini-2.0-flash...
+[AI Brain] SMC Purist FAILED (google): [GoogleGenerativeAI Error]: Error fetching from https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent: [429 Too Many Requests] You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. 
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-2.0-flash
+Please retry in 45.883823133s. [{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Learn more about Gemini API quotas","url":"https://ai.google.dev/gemini-api/docs/rate-limits"}]},{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier","quotaDimensions":{"model":"gemini-2.0-flash","location":"global"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerMinutePerProjectPerModel-FreeTier","quotaDimensions":{"model":"gemini-2.0-flash","location":"global"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_input_token_count","quotaId":"GenerateContentInputTokensPerModelPerMinute-FreeTier","quotaDimensions":{"model":"gemini-2.0-flash","location":"global"}}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"45s"}]
+[Swarm] SMC Purist simulation failed: Invalid JSON from SMC Purist
+[AI Brain] Risk-Averse Scalper thinking with Google gemini-2.0-flash...
+[AI Brain] Transient error [GoogleGenerativeAI Error]: Error fetching from https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent: [429 Too Many Requests] You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. 
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-2.0-flash
+Please retry in 45.350149435s. [{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Learn more about Gemini API quotas","url":"https://ai.google.dev/gemini-api/docs/rate-limits"}]},{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerMinutePerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_input_token_count","quotaId":"GenerateContentInputTokensPerModelPerMinute-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"45s"}] — retrying (1/3)...
+[AI Brain] Bearish Contrarian thinking with Google gemini-2.0-flash...
+[AI Brain] Bearish Contrarian FAILED (google): [GoogleGenerativeAI Error]: Error fetching from https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent: [429 Too Many Requests] You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. 
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-2.0-flash
+[Swarm] Bearish Contrarian simulation failed: Invalid JSON from Bearish Contrarian
+[AI Brain] Risk-Averse Scalper thinking with Google gemini-2.0-flash...
+[AI Brain] Transient error [GoogleGenerativeAI Error]: Error fetching from https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent: [429 Too Many Requests] You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. 
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-2.0-flash
+Please retry in 43.818637686s. [{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Learn more about Gemini API quotas","url":"https://ai.google.dev/gemini-api/docs/rate-limits"}]},{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerMinutePerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_input_token_count","quotaId":"GenerateContentInputTokensPerModelPerMinute-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"43s"}] — retrying (2/3)...
+[AI Brain] Transient error [GoogleGenerativeAI Error]: Error fetching from https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent: [429 Too Many Requests] You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. 
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-2.0-flash
+Please retry in 43.534630675s. [{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Learn more about Gemini API quotas","url":"https://ai.google.dev/gemini-api/docs/rate-limits"}]},{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerMinutePerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_input_token_count","quotaId":"GenerateContentInputTokensPerModelPerMinute-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"43s"}] — retrying (1/3)...
+[AI Brain] SMC Purist thinking with Google gemini-2.0-flash...
+[AI Brain] Transient error [GoogleGenerativeAI Error]: Error fetching from https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent: [429 Too Many Requests] You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. 
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+Please retry in 41.997357723s. [{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Learn more about Gemini API quotas","url":"https://ai.google.dev/gemini-api/docs/rate-limits"}]},{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_input_token_count","quotaId":"GenerateContentInputTokensPerModelPerMinute-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerMinutePerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"41s"}] — retrying (2/3)...
+[AI Brain] Risk-Averse Scalper thinking with Google gemini-2.0-flash...
+[AI Brain] Risk-Averse Scalper FAILED (google): [GoogleGenerativeAI Error]: Error fetching from https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent: [429 Too Many Requests] You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. 
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-2.0-flash
+Please retry in 40.786389725s. [{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Learn more about Gemini API quotas","url":"https://ai.google.dev/gemini-api/docs/rate-limits"}]},{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier","quotaDimensions":{"model":"gemini-2.0-flash","location":"global"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerMinutePerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_input_token_count","quotaId":"GenerateContentInputTokensPerModelPerMinute-FreeTier","quotaDimensions":{"model":"gemini-2.0-flash","location":"global"}}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"40s"}]
+[Swarm] Risk-Averse Scalper simulation failed: Invalid JSON from Risk-Averse Scalper
+[AI Brain] Bullish Momentumist thinking with Google gemini-2.0-flash...
+[AI Brain] Transient error [GoogleGenerativeAI Error]: Error fetching from https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent: [429 Too Many Requests] You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. 
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+Please retry in 40.242451518s. [{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Learn more about Gemini API quotas","url":"https://ai.google.dev/gemini-api/docs/rate-limits"}]},{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_input_token_count","quotaId":"GenerateContentInputTokensPerModelPerMinute-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerMinutePerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"40s"}] — retrying (1/3)...
+[AI Brain] SMC Purist thinking with Google gemini-2.0-flash...
+[AI Brain] SMC Purist FAILED (google): [GoogleGenerativeAI Error]: Error fetching from https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent: [429 Too Many Requests] You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. 
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+Please retry in 38.958383843s. [{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Learn more about Gemini API quotas","url":"https://ai.google.dev/gemini-api/docs/rate-limits"}]},{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_input_token_count","quotaId":"GenerateContentInputTokensPerModelPerMinute-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerMinutePerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"38s"}]
+[Swarm] SMC Purist simulation failed: Invalid JSON from SMC Purist
+[AI Brain] Bullish Momentumist thinking with Google gemini-2.0-flash...
+[AI Brain] Transient error [GoogleGenerativeAI Error]: Error fetching from https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent: [429 Too Many Requests] You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. 
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+Please retry in 38.704219019s. [{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Learn more about Gemini API quotas","url":"https://ai.google.dev/gemini-api/docs/rate-limits"}]},{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_input_token_count","quotaId":"GenerateContentInputTokensPerModelPerMinute-FreeTier","quotaDimensions":{"model":"gemini-2.0-flash","location":"global"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerMinutePerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"38s"}] — retrying (2/3)...
+[AI Brain] Risk-Averse Scalper thinking with Google gemini-2.0-flash...
+[AI Brain] Transient error [GoogleGenerativeAI Error]: Error fetching from https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent: [429 Too Many Requests] You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. 
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-2.0-flash
+Please retry in 38.426595521s. [{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Learn more about Gemini API quotas","url":"https://ai.google.dev/gemini-api/docs/rate-limits"}]},{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerMinutePerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_input_token_count","quotaId":"GenerateContentInputTokensPerModelPerMinute-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"38s"}] — retrying (1/3)...
+[AI Brain] Risk-Averse Scalper thinking with Google gemini-2.0-flash...
+[AI Brain] Transient error [GoogleGenerativeAI Error]: Error fetching from https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent: [429 Too Many Requests] You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. 
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-2.0-flash
+Please retry in 36.895710923s. [{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Learn more about Gemini API quotas","url":"https://ai.google.dev/gemini-api/docs/rate-limits"}]},{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerMinutePerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_input_token_count","quotaId":"GenerateContentInputTokensPerModelPerMinute-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"36s"}] — retrying (2/3)...
+[Bitunix] Raw position fields: ["positionId","symbol","marginCoin","qty","entryValue","side","marginMode","positionMode","leverage","fee","funding","realizedPNL","margin","unrealizedPNL","liqPrice","avgOpenPrice","marginRate","ctime","mtime"]
+[Bitunix] Raw position data: {"positionId":"4418560084350029393","symbol":"XRPUSDT","marginCoin":null,"qty":"92.4","entryValue":"124.86012","side":"BUY","marginMode":"ISOLATION","positionMode":"HEDGE","leverage":20,"fee":"-0.074916072","funding":"0","realizedPNL":"-0.074916072","margin":"6.319413408","unrealizedPNL":"0.24024","liqPrice":"1.29","avgOpenPrice":"1.3513","marginRate":"0","ctime":"1776109616000","mtime":"1776109616000"}
+[Bitunix] Raw position fields: ["positionId","symbol","marginCoin","qty","entryValue","side","marginMode","positionMode","leverage","fee","funding","realizedPNL","margin","unrealizedPNL","liqPrice","avgOpenPrice","marginRate","ctime","mtime"]
+[Bitunix] Raw position data: {"positionId":"4418560084350029393","symbol":"XRPUSDT","marginCoin":null,"qty":"92.4","entryValue":"124.86012","side":"BUY","marginMode":"ISOLATION","positionMode":"HEDGE","leverage":20,"fee":"-0.074916072","funding":"0","realizedPNL":"-0.074916072","margin":"6.319413408","unrealizedPNL":"0.24024","liqPrice":"1.29","avgOpenPrice":"1.3513","marginRate":"0","ctime":"1776109616000","mtime":"1776109616000"}
+[14 Apr 2026, 03:03:24] [ERROR    ] Bitunix trailing: price method 1 failed for XRPUSDT: Bitunix API error: Parameter error (code 2)
+[14 Apr 2026, 03:03:24] [ERROR    ] Bitunix trailing: price method 2 failed for XRPUSDT: no markPrice
+[14 Apr 2026, 03:03:24] [ERROR    ] Bitunix trailing: price method 1 failed for XRPUSDT: Bitunix API error: Parameter error (code 2)
+[14 Apr 2026, 03:03:24] [ERROR    ] Bitunix trailing: price method 2 failed for XRPUSDT: no markPrice
+[14 Apr 2026, 03:03:24] [TRADE    ] Bitunix trailing: XRPUSDT price from fallback method 3: $1.3536
+[14 Apr 2026, 03:03:24] [TRADE    ] Bitunix trailing: XRPUSDT entry=$1.3513 cur=$1.3536 pricePct=0.170% capitalPct=3.40% lev=20x lastStep=0.0%
+[14 Apr 2026, 03:03:24] [SYSTEM   ] Sync: exchange has 1 open positions, DB has 1 OPEN trades
+[AI Brain] Bullish Momentumist thinking with Google gemini-2.0-flash...
+[AI Brain] Bullish Momentumist FAILED (google): [GoogleGenerativeAI Error]: Error fetching from https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent: [429 Too Many Requests] You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. 
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+Please retry in 35.665021097s. [{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Learn more about Gemini API quotas","url":"https://ai.google.dev/gemini-api/docs/rate-limits"}]},{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_input_token_count","quotaId":"GenerateContentInputTokensPerModelPerMinute-FreeTier","quotaDimensions":{"model":"gemini-2.0-flash","location":"global"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerMinutePerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"35s"}]
+[Swarm] Bullish Momentumist simulation failed: Invalid JSON from Bullish Momentumist
+[14 Apr 2026, 03:03:24] [TRADE    ] Bitunix trailing: XRPUSDT price from fallback method 3: $1.3536
+[14 Apr 2026, 03:03:24] [TRADE    ] Bitunix trailing: XRPUSDT entry=$1.3513 cur=$1.3536 pricePct=0.170% capitalPct=3.40% lev=20x lastStep=0.0%
+[14 Apr 2026, 03:03:24] [SYSTEM   ] Sync: exchange has 1 open positions, DB has 1 OPEN trades
+[AI Brain] Bearish Contrarian thinking with Google gemini-2.0-flash...
+[AI Brain] Transient error [GoogleGenerativeAI Error]: Error fetching from https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent: [429 Too Many Requests] You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. 
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-2.0-flash
+Please retry in 35.117241211s. [{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Learn more about Gemini API quotas","url":"https://ai.google.dev/gemini-api/docs/rate-limits"}]},{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerMinutePerProjectPerModel-FreeTier","quotaDimensions":{"model":"gemini-2.0-flash","location":"global"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_input_token_count","quotaId":"GenerateContentInputTokensPerModelPerMinute-FreeTier","quotaDimensions":{"model":"gemini-2.0-flash","location":"global"}}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"35s"}] — retrying (1/3)...
+[Bitunix] Raw position fields: ["positionId","symbol","marginCoin","qty","entryValue","side","marginMode","positionMode","leverage","fee","funding","realizedPNL","margin","unrealizedPNL","liqPrice","avgOpenPrice","marginRate","ctime","mtime"]
+[Bitunix] Raw position data: {"positionId":"4455109944346306034","symbol":"SOLUSDT","marginCoin":null,"qty":"4.05","entryValue":"340.605","side":"BUY","marginMode":"ISOLATION","positionMode":"HEDGE","leverage":20,"fee":"-0.204363","funding":"0","realizedPNL":"-0.204363","margin":"17.2366542","unrealizedPNL":"-0.081","liqPrice":"80.29","avgOpenPrice":"84.10","marginRate":"0","ctime":"1776110555000","mtime":"1776110555000"}
+[Bitunix] Raw position fields: ["positionId","symbol","marginCoin","qty","entryValue","side","marginMode","positionMode","leverage","fee","funding","realizedPNL","margin","unrealizedPNL","liqPrice","avgOpenPrice","marginRate","ctime","mtime"]
+[Bitunix] Raw position data: {"positionId":"4455109944346306034","symbol":"SOLUSDT","marginCoin":null,"qty":"4.05","entryValue":"340.605","side":"BUY","marginMode":"ISOLATION","positionMode":"HEDGE","leverage":20,"fee":"-0.204363","funding":"0","realizedPNL":"-0.204363","margin":"17.2366542","unrealizedPNL":"-0.081","liqPrice":"80.29","avgOpenPrice":"84.10","marginRate":"0","ctime":"1776110555000","mtime":"1776110555000"}
+[14 Apr 2026, 03:03:25] [ERROR    ] Bitunix trailing: price method 1 failed for BTCUSDT: Bitunix API error: Parameter error (code 2)
+[14 Apr 2026, 03:03:25] [ERROR    ] Bitunix trailing: price method 2 failed for BTCUSDT: no markPrice
+[14 Apr 2026, 03:03:25] [ERROR    ] Bitunix trailing: price method 1 failed for BTCUSDT: Bitunix API error: Parameter error (code 2)
+[14 Apr 2026, 03:03:25] [TRADE    ] Bitunix trailing: BTCUSDT price from fallback method 3: $73237.3
+[14 Apr 2026, 03:03:25] [TRADE    ] Bitunix trailing: BTCUSDT price from fallback method 3: $73223.2
+[14 Apr 2026, 03:03:25] [TRADE    ] Bitunix trailing: BTCUSDT entry=$73277.4 cur=$73223.2 pricePct=-0.074% capitalPct=-7.40% lev=100x lastStep=0.0%
+[14 Apr 2026, 03:03:25] [ERROR    ] Bitunix trailing: price method 1 failed for SOLUSDT: Bitunix API error: Parameter error (code 2)
+[14 Apr 2026, 03:03:25] [ERROR    ] Bitunix trailing: price method 2 failed for SOLUSDT: no markPrice
+[14 Apr 2026, 03:03:25] [ERROR    ] Bitunix trailing: price method 1 failed for SOLUSDT: Bitunix API error: Parameter error (code 2)
+[14 Apr 2026, 03:03:25] [ERROR    ] Bitunix trailing: price method 2 failed for SOLUSDT: no markPrice
+[14 Apr 2026, 03:03:26] [TRADE    ] Bitunix trailing: SOLUSDT price from fallback method 3: $84.04
+[14 Apr 2026, 03:03:26] [SYSTEM   ] Sync: exchange has 2 open positions, DB has 2 OPEN trades
+[AI Brain] Risk-Averse Scalper thinking with Google gemini-2.0-flash...
+[14 Apr 2026, 03:03:26] [TRADE    ] Bitunix trailing: SOLUSDT price from fallback method 3: $84.04
+[14 Apr 2026, 03:03:26] [TRADE    ] Bitunix trailing: SOLUSDT entry=$84.1 cur=$84.04 pricePct=-0.071% capitalPct=-1.43% lev=20x lastStep=0.0%
+[14 Apr 2026, 03:03:26] [SYSTEM   ] Sync: exchange has 2 open positions, DB has 2 OPEN trades
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-2.0-flash
+[AI Brain] Bearish Contrarian thinking with Google gemini-2.0-flash...
+[AI Brain] Transient error [GoogleGenerativeAI Error]: Error fetching from https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent: [429 Too Many Requests] You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. 
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+Please retry in 33.576743514s. [{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Learn more about Gemini API quotas","url":"https://ai.google.dev/gemini-api/docs/rate-limits"}]},{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_input_token_count","quotaId":"GenerateContentInputTokensPerModelPerMinute-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerMinutePerProjectPerModel-FreeTier","quotaDimensions":{"model":"gemini-2.0-flash","location":"global"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier","quotaDimensions":{"model":"gemini-2.0-flash","location":"global"}}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"33s"}] — retrying (2/3)...
+[14 Apr 2026, 03:03:26] [PoliceAgent] Patrol #13: 26 agents checked, 0 violations
+[14 Apr 2026, 03:03:26] [SYSTEM   ] [PoliceAgent] Patrol #13: 26 agents checked, 0 violations
+[14 Apr 2026, 03:03:26] [PoliceAgent] Patrol #14: 26 agents checked, 0 violations
+[14 Apr 2026, 03:03:26] [SYSTEM   ] [PoliceAgent] Patrol #14: 26 agents checked, 0 violations
+[AI Brain] Bullish Momentumist thinking with Google gemini-2.0-flash...
+[AI Brain] Transient error [GoogleGenerativeAI Error]: Error fetching from https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent: [429 Too Many Requests] You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. 
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-2.0-flash
+Please retry in 33.32631543s. [{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Learn more about Gemini API quotas","url":"https://ai.google.dev/gemini-api/docs/rate-limits"}]},{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerMinutePerProjectPerModel-FreeTier","quotaDimensions":{"model":"gemini-2.0-flash","location":"global"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_input_token_count","quotaId":"GenerateContentInputTokensPerModelPerMinute-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"33s"}] — retrying (1/3)...
+[14 Apr 2026, 03:03:26] [SCAN     ] [HEARTBEAT] BTCAgent starting execution...
+[14 Apr 2026, 03:03:26] [SCAN     ] [HEARTBEAT] ETHAgent starting execution...
+[14 Apr 2026, 03:03:26] [SCAN     ] [HEARTBEAT] SOLAgent starting execution...
+[14 Apr 2026, 03:03:26] [SCAN     ] [HEARTBEAT] BNBAgent starting execution...
+[14 Apr 2026, 03:03:26] [SCAN     ] [HEARTBEAT] XRPAgent starting execution...
+[14 Apr 2026, 03:03:26] [SCAN     ] [HEARTBEAT] DOGEAgent starting execution...
+[14 Apr 2026, 03:03:26] [SCAN     ] [HEARTBEAT] ADAAgent starting execution...
+[14 Apr 2026, 03:03:26] [SCAN     ] [HEARTBEAT] AVAXAgent starting execution...
+[14 Apr 2026, 03:03:27] [SCAN     ] [HEARTBEAT] Analyzing ETHUSDT...
+[14 Apr 2026, 03:03:27] [SCAN     ] [HEARTBEAT] Analyzing BTCUSDT...
+[14 Apr 2026, 03:03:27] [SCAN     ] [HEARTBEAT] Analyzing BNBUSDT...
+[14 Apr 2026, 03:03:27] [SCAN     ] [HEARTBEAT] Analyzing SOLUSDT...
+[14 Apr 2026, 03:03:27] [SCAN     ] [HEARTBEAT] Analyzing DOGEUSDT...
+[14 Apr 2026, 03:03:27] [SCAN     ] [HEARTBEAT] Analyzing AVAXUSDT...
+[14 Apr 2026, 03:03:27] [SCAN     ] [HEARTBEAT] Analyzing XRPUSDT...
+[14 Apr 2026, 03:03:27] [SCAN     ] [HEARTBEAT] Analyzing ADAUSDT...
+[14 Apr 2026, 03:03:27] [SCAN     ] BNBUSDT: 3m sw=5 lastH=LH@605.6(18:45) lastL=HL@604.27(19:09) → LH/HL trend=bearish
+[14 Apr 2026, 03:03:27] [SCAN     ] SOLUSDT: 1m sw=4 lastH=HH@83.8(19:34) lastL=HL@83.53(19:35) → HH/HL trend=bullish
+[14 Apr 2026, 03:03:27] [SCAN     ] SOLUSDT: SHORT rejected — 1m no LH
+[14 Apr 2026, 03:03:27] [SCAN     ] ETHUSDT: 1m sw=4 lastH=HH@2268.7(19:56) lastL=HL@2248(19:43) → HH/HL trend=bullish
+[14 Apr 2026, 03:03:27] [SCAN     ] ETHUSDT: LONG — swing age 16 (need 0-3 for fresh entry)
+[14 Apr 2026, 03:03:27] [SCAN     ] XRPUSDT: 3m sw=5 lastH=HH@1.3449(17:30) lastL=LL@1.3336(18:27) → HH/LL trend=neutral
+[14 Apr 2026, 03:03:27] [SCAN     ] AVAXUSDT: 3m sw=5 lastH=HH@9.387(17:30) lastL=LL@9.172(18:27) → HH/LL trend=neutral
+[14 Apr 2026, 03:03:27] [SCAN     ] [HEARTBEAT] LINKAgent starting execution...
+[14 Apr 2026, 03:03:27] [SCAN     ] [HEARTBEAT] RAVEAgent starting execution...
+[14 Apr 2026, 03:03:27] [SCAN     ] [HEARTBEAT] ALPACAAgent starting execution...
+[14 Apr 2026, 03:03:27] [SCAN     ] [HEARTBEAT] CLAgent starting execution...
+[14 Apr 2026, 03:03:27] [SCAN     ] [HEARTBEAT] ZECAgent starting execution...
+[14 Apr 2026, 03:03:27] [SCAN     ] [HEARTBEAT] BNXAgent starting execution...
+[14 Apr 2026, 03:03:27] [SCAN     ] [HEARTBEAT] 币安人生Agent starting execution...
+[14 Apr 2026, 03:03:28] [SCAN     ] [HEARTBEAT] Analyzing RAVEUSDT...
+[14 Apr 2026, 03:03:28] [SCAN     ] [HEARTBEAT] Analyzing LINKUSDT...
+[14 Apr 2026, 03:03:28] [SCAN     ] [HEARTBEAT] Analyzing BNXUSDT...
+[14 Apr 2026, 03:03:28] [SCAN     ] [HEARTBEAT] Analyzing CLUSDT...
+[AI Brain] Bullish Momentumist thinking with Google gemini-2.0-flash...
+[AI Brain] Transient error [GoogleGenerativeAI Error]: Error fetching from https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent: [429 Too Many Requests] You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. 
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+[14 Apr 2026, 03:03:28] [SCAN     ] RAVEUSDT: 3m sw=5 lastH=HH@12.4613(19:33) lastL=HL@10.92(18:54) → HH/HL trend=bullish
+[14 Apr 2026, 03:03:28] [SCAN     ] RAVEUSDT: 1m sw=4 lastH=HH@12.59993(19:55) lastL=LL@11.41698(19:51) → HH/LL trend=neutral
+[14 Apr 2026, 03:03:28] [SCAN     ] RAVEUSDT: LONG rejected — 1m no HL
+[14 Apr 2026, 03:03:28] [SCAN     ] LINKUSDT: 3m sw=5 lastH=none lastL=HL@8.83(18:27) → --/HL trend=neutral
+[14 Apr 2026, 03:03:28] [SCAN     ] BNXUSDT: 3m sw=5 lastH=none lastL=none → --/-- trend=neutral
+[14 Apr 2026, 03:03:28] [SCAN     ] ALPACAUSDT: 3m sw=5 lastH=none lastL=none → --/-- trend=neutral
+[14 Apr 2026, 03:03:28] [SCAN     ] ZECUSDT: 3m sw=5 lastH=HH@367(19:48) lastL=HL@353.1(17:48) → HH/HL trend=bullish
+[14 Apr 2026, 03:03:28] [SCAN     ] ZECUSDT: 1m sw=4 lastH=LH@366.33(19:56) lastL=HL@364.28(19:55) → LH/HL trend=bearish
+[14 Apr 2026, 03:03:28] [SCAN     ] ZECUSDT: LONG — swing age 4 (need 0-3 for fresh entry)
+[14 Apr 2026, 03:03:28] [SCAN     ] SUIUSDT: 3m sw=5 lastH=HH@0.928(17:30) lastL=LL@0.9122(18:24) → HH/LL trend=neutral
+[14 Apr 2026, 03:03:28] [SCAN     ] CLUSDT: 3m sw=5 lastH=HH@95.12(18:27) lastL=LL@92.8(18:54) → HH/LL trend=neutral
+[14 Apr 2026, 03:03:28] [SCAN     ] 币安人生USDT: 3m sw=5 lastH=HH@0.21633(19:24) lastL=HL@0.20919(19:09) → HH/HL trend=bullish
+[14 Apr 2026, 03:03:28] [SCAN     ] 币安人生USDT: LONG — swing age 13 (need 0-3 for fresh entry)
+[14 Apr 2026, 03:03:28] [ChartAgent] Starting market scan...
+[14 Apr 2026, 03:03:28] [ChartAgent] AI params loaded: minScore=2 TP=45.0% SL=30.0%
+[14 Apr 2026, 03:03:28] [SCAN     ] [ChartAgent] AI params loaded: minScore=2 TP=45.0% SL=30.0%
+[14 Apr 2026, 03:03:28] [ChartAgent] Session: off_hours | Good session: true
+[14 Apr 2026, 03:03:28] [SCAN     ] AI Scanner: 8 strategies loaded (best: BB band + RSI filter [evo_bihe] 71.8% WR)
+[AI Brain] Bearish Contrarian thinking with Google gemini-2.0-flash...
+[AI Brain] Bearish Contrarian FAILED (google): [GoogleGenerativeAI Error]: Error fetching from https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent: [429 Too Many Requests] You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. 
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-2.0-flash
+Please retry in 30.536052896s. [{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Learn more about Gemini API quotas","url":"https://ai.google.dev/gemini-api/docs/rate-limits"}]},{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier","quotaDimensions":{"model":"gemini-2.0-flash","location":"global"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerMinutePerProjectPerModel-FreeTier","quotaDimensions":{"model":"gemini-2.0-flash","location":"global"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_input_token_count","quotaId":"GenerateContentInputTokensPerModelPerMinute-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"30s"}]
+[Swarm] Bearish Contrarian simulation failed: Invalid JSON from Bearish Contrarian
+[14 Apr 2026, 03:03:29] [SCAN     ] AI Scanner: 16 monitored + 34 others = 50 coins
+[AI Brain] SMC Purist thinking with Google gemini-2.0-flash...
+[AI Brain] Transient error [GoogleGenerativeAI Error]: Error fetching from https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent: [429 Too Many Requests] You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. 
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+Please retry in 30.004724583s. [{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Learn more about Gemini API quotas","url":"https://ai.google.dev/gemini-api/docs/rate-limits"}]},{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_input_token_count","quotaId":"GenerateContentInputTokensPerModelPerMinute-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerMinutePerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"30s"}] — retrying (1/3)...
+[AI Brain] Bullish Momentumist thinking with Google gemini-2.0-flash...
+[AI Brain] Bullish Momentumist FAILED (google): [GoogleGenerativeAI Error]: Error fetching from https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent: [429 Too Many Requests] You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. 
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+[Swarm] Bullish Momentumist simulation failed: Invalid JSON from Bullish Momentumist
+[AI Brain] SMC Purist thinking with Google gemini-2.0-flash...
+[AI Brain] Transient error [GoogleGenerativeAI Error]: Error fetching from https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent: [429 Too Many Requests] You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. 
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-2.0-flash
+Please retry in 28.468859417s. [{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Learn more about Gemini API quotas","url":"https://ai.google.dev/gemini-api/docs/rate-limits"}]},{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerMinutePerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_input_token_count","quotaId":"GenerateContentInputTokensPerModelPerMinute-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"28s"}] — retrying (2/3)...
+[AI Brain] Bearish Contrarian thinking with Google gemini-2.0-flash...
+[AI Brain] Transient error [GoogleGenerativeAI Error]: Error fetching from https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent: [429 Too Many Requests] You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. 
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+Please retry in 28.214561996s. [{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Learn more about Gemini API quotas","url":"https://ai.google.dev/gemini-api/docs/rate-limits"}]},{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_input_token_count","quotaId":"GenerateContentInputTokensPerModelPerMinute-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerMinutePerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"28s"}] — retrying (1/3)...
+[14 Apr 2026, 03:03:31] [SCAN     ] AI SIGNAL: BTCUSDT LONG | strategy=AI: ADX trend + EMA direction [ai_24mc] (60.0% WR) | SL=$72507.6000 TP=$73606.2000 | score=12.6
+[14 Apr 2026, 03:03:32] [SCAN     ] AI SIGNAL: BTCUSDT LONG | strategy=VWAP zone + RSI filter [vwap_rsi_q2bw] (59.5% WR) | SL=$72654.0800 TP=$73606.2000 | score=12.5
+[AI Brain] Bearish Contrarian thinking with Google gemini-2.0-flash...
+[AI Brain] Transient error [GoogleGenerativeAI Error]: Error fetching from https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent: [429 Too Many Requests] You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. 
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+[14 Apr 2026, 03:03:33] [SCAN     ] AI SIGNAL: ETHUSDT LONG | strategy=AI: ADX trend + EMA direction [ai_24mc] (60.0% WR) | SL=$2234.1033 TP=$2267.9533 | score=12.6
+[AI Brain] SMC Purist thinking with Google gemini-2.0-flash...
+[AI Brain] SMC Purist FAILED (google): [GoogleGenerativeAI Error]: Error fetching from https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent: [429 Too Many Requests] You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. 
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+Please retry in 25.434142965s. [{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Learn more about Gemini API quotas","url":"https://ai.google.dev/gemini-api/docs/rate-limits"}]},{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_input_token_count","quotaId":"GenerateContentInputTokensPerModelPerMinute-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerMinutePerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"25s"}]
+[Swarm] SMC Purist simulation failed: Invalid JSON from SMC Purist
+[14 Apr 2026, 03:03:34] [SCAN     ] AI SIGNAL: ETHUSDT LONG | strategy=VWAP zone + RSI filter [vwap_rsi_q2bw] (59.5% WR) | SL=$2238.6166 TP=$2267.9533 | score=12.5
+[AI Brain] Risk-Averse Scalper thinking with Google gemini-2.0-flash...
+[AI Brain] Transient error [GoogleGenerativeAI Error]: Error fetching from https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent: [429 Too Many Requests] You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. 
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-2.0-flash
+[14 Apr 2026, 03:03:35] [SCAN     ] AI SIGNAL: ETHUSDT SHORT | strategy=Crossover [bb_bounce_bihe] (56.4% WR) | SL=$2274.7234 TP=$2245.3866 | score=12.0
+[AI Brain] Bearish Contrarian thinking with Google gemini-2.0-flash...
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+Please retry in 23.651285263s. [{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Learn more about Gemini API quotas","url":"https://ai.google.dev/gemini-api/docs/rate-limits"}]},{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_input_token_count","quotaId":"GenerateContentInputTokensPerModelPerMinute-FreeTier","quotaDimensions":{"model":"gemini-2.0-flash","location":"global"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerMinutePerProjectPerModel-FreeTier","quotaDimensions":{"model":"gemini-2.0-flash","location":"global"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"23s"}]
+[Swarm] Bearish Contrarian simulation failed: Invalid JSON from Bearish Contrarian
+[AI Brain] Risk-Averse Scalper thinking with Google gemini-2.0-flash...
+Please retry in 23.369646585s. [{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Learn more about Gemini API quotas","url":"https://ai.google.dev/gemini-api/docs/rate-limits"}]},{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_input_token_count","quotaId":"GenerateContentInputTokensPerModelPerMinute-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerMinutePerProjectPerModel-FreeTier","quotaDimensions":{"model":"gemini-2.0-flash","location":"global"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"23s"}] — retrying (2/3)...
+[AI Brain] Transient error [GoogleGenerativeAI Error]: Error fetching from https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent: [429 Too Many Requests] You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. 
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+Please retry in 23.117411394s. [{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Learn more about Gemini API quotas","url":"https://ai.google.dev/gemini-api/docs/rate-limits"}]},{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_input_token_count","quotaId":"GenerateContentInputTokensPerModelPerMinute-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerMinutePerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"23s"}] — retrying (1/3)...
+[14 Apr 2026, 03:03:37] [SCAN     ] AI SIGNAL: RAVEUSDT LONG | strategy=AI: ADX trend + EMA direction [ai_24mc] (60.0% WR) | SL=$12.0335 TP=$12.2158 | score=12.6
+[14 Apr 2026, 03:03:38] [SCAN     ] AI SIGNAL: RAVEUSDT LONG | strategy=VWAP zone + RSI filter [vwap_rsi_q2bw] (59.5% WR) | SL=$12.0578 TP=$12.2158 | score=12.5
+[AI Brain] SMC Purist thinking with Google gemini-2.0-flash...
+[AI Brain] Transient error [GoogleGenerativeAI Error]: Error fetching from https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent: [429 Too Many Requests] You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. 
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+Please retry in 21.578585487s. [{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Learn more about Gemini API quotas","url":"https://ai.google.dev/gemini-api/docs/rate-limits"}]},{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_input_token_count","quotaId":"GenerateContentInputTokensPerModelPerMinute-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerMinutePerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"21s"}] — retrying (2/3)...
+[14 Apr 2026, 03:03:38] [SCAN     ] AI SIGNAL: RAVEUSDT LONG | strategy=VWAP zone + RSI filter [evo_0w3v] (53.8% WR) | SL=$12.0578 TP=$12.2158 | score=11.5
+[AI Brain] Risk-Averse Scalper thinking with Google gemini-2.0-flash...
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+Please retry in 20.337410659s. [{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Learn more about Gemini API quotas","url":"https://ai.google.dev/gemini-api/docs/rate-limits"}]},{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier","quotaDimensions":{"model":"gemini-2.0-flash","location":"global"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerMinutePerProjectPerModel-FreeTier","quotaDimensions":{"model":"gemini-2.0-flash","location":"global"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_input_token_count","quotaId":"GenerateContentInputTokensPerModelPerMinute-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"20s"}]
+[AI Brain] Transient error [GoogleGenerativeAI Error]: Error fetching from https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent: [429 Too Many Requests] You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. 
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+Please retry in 19.800874959s. [{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Learn more about Gemini API quotas","url":"https://ai.google.dev/gemini-api/docs/rate-limits"}]},{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_input_token_count","quotaId":"GenerateContentInputTokensPerModelPerMinute-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerMinutePerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"19s"}] — retrying (1/3)...
+[14 Apr 2026, 03:03:40] [SCAN     ] AI SIGNAL: SOLUSDT SHORT | strategy=BB band + RSI filter [evo_bihe] (71.8% WR) | SL=$85.3310 TP=$83.6496 | score=14.7

@@ -54,8 +54,10 @@ const OLLAMA_HEALTH_RECHECK_MS = 60000; // Re-check every 60s after failure
 
 function getProvider(complexity = 'low') {
   // Priority 1: Ollama (Local/Tunnel) — handles ALL complexity levels
-  if (process.env.OLLAMA_URL && ollamaHealthy) {
-    return 'ollama';
+  if (process.env.OLLAMA_URL || true) {
+    if (ollamaHealthy) {
+      return 'ollama';
+    }
   }
 
   // Re-check Ollama health periodically (maybe PC came back online)

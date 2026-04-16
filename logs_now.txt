@@ -1,0 +1,500 @@
+[14 Apr 2026, 03:09:31] [SCAN     ] SUIUSDT: 3m sw=5 lastH=HH@0.938(19:54) lastL=LL@0.9122(18:24) → HH/LL trend=neutral
+[14 Apr 2026, 03:09:31] [SCAN     ] LINKUSDT: 3m sw=5 lastH=HH@9.035(19:54) lastL=HL@8.83(18:27) → HH/HL trend=bullish
+[14 Apr 2026, 03:09:31] [SCAN     ] LINKUSDT: 1m sw=4 lastH=HH@9.035(19:56) lastL=HL@8.957(19:43) → HH/HL trend=bullish
+[14 Apr 2026, 03:09:31] [SCAN     ] LINKUSDT: LONG — swing age 22 (need 0-3 for fresh entry)
+[14 Apr 2026, 03:09:31] [SCAN     ] ZECUSDT: 3m sw=5 lastH=HH@367(19:48) lastL=HL@353.1(17:48) → HH/HL trend=bullish
+[14 Apr 2026, 03:09:31] [SCAN     ] ZECUSDT: 1m sw=4 lastH=LH@366.54(20:01) lastL=LL@362.6(20:04) → LH/LL trend=bearish
+[14 Apr 2026, 03:09:31] [SCAN     ] ZECUSDT: LONG rejected — 1m no HL
+[14 Apr 2026, 03:09:32] [SCAN     ] ALPACAUSDT: 3m sw=5 lastH=none lastL=none → --/-- trend=neutral
+[14 Apr 2026, 03:09:32] [ChartAgent] Starting market scan...
+[14 Apr 2026, 03:09:32] [SCAN     ] [ChartAgent] Starting market scan...
+[14 Apr 2026, 03:09:32] [ChartAgent] AI params loaded: minScore=2 TP=45.0% SL=30.0%
+[14 Apr 2026, 03:09:32] [SCAN     ] [ChartAgent] AI params loaded: minScore=2 TP=45.0% SL=30.0%
+[14 Apr 2026, 03:09:32] [ChartAgent] Session: off_hours | Good session: true
+[14 Apr 2026, 03:09:32] [SCAN     ] [ChartAgent] Session: off_hours | Good session: true
+[14 Apr 2026, 03:09:32] [SCAN     ] AI Scanner: 8 strategies loaded (best: BB band + RSI filter [evo_bihe] 71.8% WR)
+[AI Brain] Bearish Contrarian responded: ```json
+{
+  "direction": "SHORT",
+  "target": 2208.50,
+  "confidence": 82,
+  "re...
+[14 Apr 2026, 03:09:34] [SCAN     ] AI Scanner: 16 monitored + 34 others = 50 coins
+[AI Brain] Bearish Contrarian responded: ```json
+{
+  "direction": "SHORT",
+  "target": 2200.77,
+  "confidence": 82,
+  "re...
+[AI Brain] SMC Purist thinking with Ollama gemma4:31b-cloud (medium)...
+[AI Brain] SMC Purist thinking with Ollama gemma4:31b-cloud (medium)...
+[14 Apr 2026, 03:09:35] [SCAN     ] AI SIGNAL: BTCUSDT SHORT | strategy=BB band + RSI filter [bb_bounce_q2bw] (67.2% WR) | SL=$74358.6970 TP=$72893.5010 | score=13.9
+[14 Apr 2026, 03:09:36] [SCAN     ] AI SIGNAL: BTCUSDT LONG | strategy=AI: ADX trend + EMA direction [ai_24mc] (60.0% WR) | SL=$72527.2020 TP=$73626.0990 | score=15.3
+[14 Apr 2026, 03:09:36] [SCAN     ] AI SIGNAL: BTCUSDT LONG | strategy=VWAP zone + RSI filter [vwap_rsi_q2bw] (59.5% WR) | SL=$72673.7216 TP=$73626.0990 | score=15.2
+[14 Apr 2026, 03:09:38] [SCAN     ] AI SIGNAL: ETHUSDT SHORT | strategy=BB band + RSI filter [evo_bihe] (71.8% WR) | SL=$2290.4997 TP=$2245.3668 | score=14.7
+[AI Brain] SMC Purist responded: ```json
+{
+  "direction": "LONG",
+  "target": 2318.07,
+  "confidence": 85,
+  "rea...
+[AI Brain] SMC Purist responded: ```json
+{
+  "direction": "LONG",
+  "target": 2318.07,
+  "confidence": 85,
+  "rea...
+[AI Brain] Risk-Averse Scalper thinking with Ollama gemma4:31b-cloud (medium)...
+[14 Apr 2026, 03:09:39] [SCAN     ] AI SIGNAL: ETHUSDT SHORT | strategy=BB band + RSI filter [bb_bounce_q2bw] (67.2% WR) | SL=$2290.4997 TP=$2245.3668 | score=13.9
+[AI Brain] Risk-Averse Scalper thinking with Ollama gemma4:31b-cloud (medium)...
+[14 Apr 2026, 03:09:40] [SCAN     ] AI SIGNAL: ETHUSDT LONG | strategy=AI: ADX trend + EMA direction [ai_24mc] (60.0% WR) | SL=$2234.0835 TP=$2267.9333 | score=12.6
+[14 Apr 2026, 03:09:41] [SCAN     ] AI SIGNAL: ETHUSDT LONG | strategy=VWAP zone + RSI filter [vwap_rsi_q2bw] (59.5% WR) | SL=$2238.5968 TP=$2267.9333 | score=12.5
+[14 Apr 2026, 03:09:41] [SCAN     ] AI SIGNAL: ETHUSDT SHORT | strategy=Crossover [bb_bounce_bihe] (56.4% WR) | SL=$2274.7032 TP=$2245.3668 | score=12.0
+[14 Apr 2026, 03:09:42] [SCAN     ] AI SIGNAL: ETHUSDT LONG | strategy=VWAP zone + RSI filter [evo_0w3v] (53.8% WR) | SL=$2238.5968 TP=$2267.9333 | score=11.5
+[AI Brain] Risk-Averse Scalper responded: ```json
+{
+  "direction": "LONG",
+  "target": 2318.07,
+  "confidence": 88,
+  "rea...
+[AI Brain] Risk-Averse Scalper responded: ```json
+{
+  "direction": "LONG",
+  "target": 2318.07,
+  "confidence": 85,
+  "rea...
+[14 Apr 2026, 03:09:44] [SCAN     ] AI SIGNAL: SOLUSDT LONG | strategy=AI: ADX trend + EMA direction [ai_24mc] (60.0% WR) | SL=$83.2392 TP=$84.5004 | score=15.3
+[AI Brain] Bullish Momentumist thinking with Ollama gemma4:31b-cloud (medium)...
+[AI Brain] Bullish Momentumist thinking with Ollama gemma4:31b-cloud (medium)...
+[14 Apr 2026, 03:09:45] [SCAN     ] AI SIGNAL: SOLUSDT LONG | strategy=VWAP zone + RSI filter [vwap_rsi_q2bw] (59.5% WR) | SL=$83.4074 TP=$84.5004 | score=15.2
+[14 Apr 2026, 03:09:46] [SCAN     ] AI SIGNAL: SOLUSDT LONG | strategy=VWAP zone + RSI filter [evo_0w3v] (53.8% WR) | SL=$83.4074 TP=$84.5004 | score=14.2
+[14 Apr 2026, 03:09:47] [SCAN     ] AI SIGNAL: XRPUSDT LONG | strategy=AI: ADX trend + EMA direction [ai_24mc] (60.0% WR) | SL=$1.3407 TP=$1.3610 | score=15.3
+[14 Apr 2026, 03:09:48] [SCAN     ] AI SIGNAL: XRPUSDT LONG | strategy=VWAP zone + RSI filter [vwap_rsi_q2bw] (59.5% WR) | SL=$1.3434 TP=$1.3610 | score=15.2
+[14 Apr 2026, 03:09:48] [SCAN     ] AI SIGNAL: XRPUSDT LONG | strategy=VWAP zone + RSI filter [evo_0w3v] (53.8% WR) | SL=$1.3434 TP=$1.3610 | score=14.2
+[AI Brain] Bullish Momentumist responded: ```json
+{
+  "direction": "LONG",
+  "target": 86.35,
+  "confidence": 88,
+  "reaso...
+[AI Brain] Bearish Contrarian thinking with Ollama gemma4:31b-cloud (medium)...
+[14 Apr 2026, 03:09:50] [SCAN     ] AI SIGNAL: 币安人生USDT LONG | strategy=VWAP zone + RSI filter [vwap_rsi_q2bw] (59.5% WR) | SL=$0.2131 TP=$0.2159 | score=13.9
+[14 Apr 2026, 03:09:52] [SCAN     ] AI SIGNAL: DOGEUSDT SHORT | strategy=BB band + RSI filter [bb_bounce_q2bw] (67.2% WR) | SL=$0.0945 TP=$0.0926 | score=13.9
+[14 Apr 2026, 03:09:52] [SCAN     ] AI SIGNAL: DOGEUSDT LONG | strategy=AI: ADX trend + EMA direction [ai_24mc] (60.0% WR) | SL=$0.0921 TP=$0.0935 | score=12.6
+[14 Apr 2026, 03:09:53] [SCAN     ] AI SIGNAL: DOGEUSDT LONG | strategy=VWAP zone + RSI filter [vwap_rsi_q2bw] (59.5% WR) | SL=$0.0923 TP=$0.0935 | score=12.5
+[Bitunix] Raw position fields: ["positionId","symbol","marginCoin","qty","entryValue","side","marginMode","positionMode","leverage","fee","funding","realizedPNL","margin","unrealizedPNL","liqPrice","avgOpenPrice","marginRate","ctime","mtime"]
+[Bitunix] Raw position data: {"positionId":"4418560084350029393","symbol":"XRPUSDT","marginCoin":null,"qty":"92.4","entryValue":"124.86012","side":"BUY","marginMode":"ISOLATION","positionMode":"HEDGE","leverage":20,"fee":"-0.074916072","funding":"0","realizedPNL":"-0.074916072","margin":"6.319413408","unrealizedPNL":"0.17556","liqPrice":"1.29","avgOpenPrice":"1.3513","marginRate":"0","ctime":"1776109616000","mtime":"1776109616000"}
+[Bitunix] Raw position fields: ["positionId","symbol","marginCoin","qty","entryValue","side","marginMode","positionMode","leverage","fee","funding","realizedPNL","margin","unrealizedPNL","liqPrice","avgOpenPrice","marginRate","ctime","mtime"]
+[Bitunix] Raw position data: {"positionId":"4418560084350029393","symbol":"XRPUSDT","marginCoin":null,"qty":"92.4","entryValue":"124.86012","side":"BUY","marginMode":"ISOLATION","positionMode":"HEDGE","leverage":20,"fee":"-0.074916072","funding":"0","realizedPNL":"-0.074916072","margin":"6.319413408","unrealizedPNL":"0.17556","liqPrice":"1.29","avgOpenPrice":"1.3513","marginRate":"0","ctime":"1776109616000","mtime":"1776109616000"}
+[14 Apr 2026, 03:09:54] [ERROR    ] Bitunix trailing: price method 1 failed for XRPUSDT: Bitunix API error: Parameter error (code 2)
+[14 Apr 2026, 03:09:54] [ERROR    ] Bitunix trailing: price method 2 failed for XRPUSDT: no markPrice
+[14 Apr 2026, 03:09:54] [ERROR    ] Bitunix trailing: price method 1 failed for XRPUSDT: Bitunix API error: Parameter error (code 2)
+[14 Apr 2026, 03:09:54] [ERROR    ] Bitunix trailing: price method 2 failed for XRPUSDT: no markPrice
+[14 Apr 2026, 03:09:54] [TRADE    ] Bitunix trailing: XRPUSDT price from fallback method 3: $1.353
+[14 Apr 2026, 03:09:54] [TRADE    ] Bitunix trailing: XRPUSDT entry=$1.3513 cur=$1.353 pricePct=0.126% capitalPct=2.52% lev=20x lastStep=0.0%
+[14 Apr 2026, 03:09:54] [SYSTEM   ] Sync: exchange has 1 open positions, DB has 1 OPEN trades
+[14 Apr 2026, 03:09:54] [TRADE    ] Bitunix trailing: XRPUSDT price from fallback method 3: $1.3529
+[14 Apr 2026, 03:09:54] [TRADE    ] Bitunix trailing: XRPUSDT entry=$1.3513 cur=$1.3529 pricePct=0.118% capitalPct=2.37% lev=20x lastStep=0.0%
+[14 Apr 2026, 03:09:54] [SYSTEM   ] Sync: exchange has 1 open positions, DB has 1 OPEN trades
+[14 Apr 2026, 03:09:54] [SCAN     ] AI SIGNAL: DOGEUSDT SHORT | strategy=Crossover [bb_bounce_bihe] (56.4% WR) | SL=$0.0938 TP=$0.0926 | score=12.0
+[Bitunix] Raw position fields: ["positionId","symbol","marginCoin","qty","entryValue","side","marginMode","positionMode","leverage","fee","funding","realizedPNL","margin","unrealizedPNL","liqPrice","avgOpenPrice","marginRate","ctime","mtime"]
+[Bitunix] Raw position data: {"positionId":"265432795013169240","symbol":"SUIUSDT","marginCoin":null,"qty":"365.5","entryValue":"340.82875","side":"SELL","marginMode":"ISOLATION","positionMode":"HEDGE","leverage":20,"fee":"-0.20449725","funding":"0","realizedPNL":"-0.20449725","margin":"17.2561059453886528","unrealizedPNL":"0.18275","liqPrice":"0.9734","avgOpenPrice":"0.9325","marginRate":"0","ctime":"1776110918000","mtime":"1776110918000"}
+[Bitunix] Raw position fields: ["positionId","symbol","marginCoin","qty","entryValue","side","marginMode","positionMode","leverage","fee","funding","realizedPNL","margin","unrealizedPNL","liqPrice","avgOpenPrice","marginRate","ctime","mtime"]
+[Bitunix] Raw position data: {"positionId":"265432795013169240","symbol":"SUIUSDT","marginCoin":null,"qty":"365.5","entryValue":"340.82875","side":"SELL","marginMode":"ISOLATION","positionMode":"HEDGE","leverage":20,"fee":"-0.20449725","funding":"0","realizedPNL":"-0.20449725","margin":"17.2561059453886528","unrealizedPNL":"0.18275","liqPrice":"0.9734","avgOpenPrice":"0.9325","marginRate":"0","ctime":"1776110918000","mtime":"1776110918000"}
+[14 Apr 2026, 03:09:55] [ERROR    ] Bitunix trailing: price method 1 failed for SOLUSDT: Bitunix API error: Parameter error (code 2)
+[14 Apr 2026, 03:09:55] [ERROR    ] Bitunix trailing: price method 2 failed for SOLUSDT: no markPrice
+[14 Apr 2026, 03:09:55] [ERROR    ] Bitunix trailing: price method 1 failed for SOLUSDT: Bitunix API error: Parameter error (code 2)
+[14 Apr 2026, 03:09:55] [ERROR    ] Bitunix trailing: price method 2 failed for SOLUSDT: no markPrice
+[14 Apr 2026, 03:09:55] [TRADE    ] Bitunix trailing: SOLUSDT price from fallback method 3: $84.07
+[14 Apr 2026, 03:09:55] [TRADE    ] Bitunix trailing: SOLUSDT entry=$84.1 cur=$84.07 pricePct=-0.036% capitalPct=-0.71% lev=20x lastStep=0.0%
+[14 Apr 2026, 03:09:55] [TRADE    ] Bitunix trailing: SOLUSDT price from fallback method 3: $84.06
+[14 Apr 2026, 03:09:55] [TRADE    ] Bitunix trailing: SOLUSDT entry=$84.1 cur=$84.06 pricePct=-0.048% capitalPct=-0.95% lev=20x lastStep=0.0%
+[14 Apr 2026, 03:09:55] [ERROR    ] Bitunix trailing: price method 1 failed for DOGEUSDT: Bitunix API error: Parameter error (code 2)
+[14 Apr 2026, 03:09:55] [ERROR    ] Bitunix trailing: price method 2 failed for DOGEUSDT: no markPrice
+[14 Apr 2026, 03:09:55] [SCAN     ] AI SIGNAL: BNBUSDT LONG | strategy=AI: ADX trend + EMA direction [ai_24mc] (60.0% WR) | SL=$602.8308 TP=$611.9646 | score=15.3
+[14 Apr 2026, 03:09:55] [ERROR    ] Bitunix trailing: price method 1 failed for DOGEUSDT: Bitunix API error: Parameter error (code 2)
+[14 Apr 2026, 03:09:55] [ERROR    ] Bitunix trailing: price method 2 failed for DOGEUSDT: no markPrice
+[14 Apr 2026, 03:09:55] [TRADE    ] Bitunix trailing: DOGEUSDT price from fallback method 3: $0.09298
+[14 Apr 2026, 03:09:55] [TRADE    ] Bitunix trailing: DOGEUSDT entry=$0.09295 cur=$0.09298 pricePct=0.032% capitalPct=0.65% lev=20x lastStep=0.0%
+[14 Apr 2026, 03:09:55] [TRADE    ] Bitunix trailing: DOGEUSDT price from fallback method 3: $0.093
+[14 Apr 2026, 03:09:55] [TRADE    ] Bitunix trailing: DOGEUSDT entry=$0.09295 cur=$0.093 pricePct=0.054% capitalPct=1.08% lev=20x lastStep=0.0%
+[14 Apr 2026, 03:09:56] [ERROR    ] Bitunix trailing: price method 1 failed for BTCUSDT: Bitunix API error: Parameter error (code 2)
+[14 Apr 2026, 03:09:56] [ERROR    ] Bitunix trailing: price method 2 failed for BTCUSDT: no markPrice
+[14 Apr 2026, 03:09:56] [ERROR    ] Bitunix trailing: price method 1 failed for BTCUSDT: Bitunix API error: Parameter error (code 2)
+[14 Apr 2026, 03:09:56] [ERROR    ] Bitunix trailing: price method 2 failed for BTCUSDT: no markPrice
+[14 Apr 2026, 03:09:56] [TRADE    ] Bitunix trailing: BTCUSDT price from fallback method 3: $73213.2
+[14 Apr 2026, 03:09:56] [TRADE    ] Bitunix trailing: BTCUSDT entry=$73277.4 cur=$73213.2 pricePct=-0.088% capitalPct=-8.76% lev=100x lastStep=0.0%
+[14 Apr 2026, 03:09:56] [TRADE    ] Bitunix trailing: BTCUSDT price from fallback method 3: $73213.2
+[14 Apr 2026, 03:09:56] [TRADE    ] Bitunix trailing: BTCUSDT entry=$73277.4 cur=$73213.2 pricePct=-0.088% capitalPct=-8.76% lev=100x lastStep=0.0%
+[14 Apr 2026, 03:09:56] [SCAN     ] AI SIGNAL: BNBUSDT LONG | strategy=VWAP zone + RSI filter [vwap_rsi_q2bw] (59.5% WR) | SL=$604.0486 TP=$611.9646 | score=15.2
+[14 Apr 2026, 03:09:56] [ERROR    ] Bitunix trailing: price method 1 failed for SUIUSDT: Bitunix API error: Parameter error (code 2)
+[14 Apr 2026, 03:09:56] [ERROR    ] Bitunix trailing: price method 2 failed for SUIUSDT: no markPrice
+[14 Apr 2026, 03:09:56] [ERROR    ] Bitunix trailing: price method 1 failed for SUIUSDT: Bitunix API error: Parameter error (code 2)
+[14 Apr 2026, 03:09:56] [ERROR    ] Bitunix trailing: price method 2 failed for SUIUSDT: no markPrice
+[14 Apr 2026, 03:09:56] [TRADE    ] Bitunix trailing: SUIUSDT price from fallback method 3: $0.9319
+[14 Apr 2026, 03:09:56] [TRADE    ] Bitunix trailing: SUIUSDT entry=$0.9325 cur=$0.9319 pricePct=0.064% capitalPct=1.29% lev=20x lastStep=0.0%
+[14 Apr 2026, 03:09:56] [SYSTEM   ] Sync: exchange has 4 open positions, DB has 4 OPEN trades
+[14 Apr 2026, 03:09:56] [TRADE    ] Bitunix trailing: SUIUSDT price from fallback method 3: $0.9319
+[14 Apr 2026, 03:09:56] [TRADE    ] Bitunix trailing: SUIUSDT entry=$0.9325 cur=$0.9319 pricePct=0.064% capitalPct=1.29% lev=20x lastStep=0.0%
+[14 Apr 2026, 03:09:56] [SYSTEM   ] Sync: exchange has 4 open positions, DB has 4 OPEN trades
+[14 Apr 2026, 03:09:56] [AI       ] Backtester starting: 5 symbols × 14 days × 10 strategies × 8 configs
+[14 Apr 2026, 03:09:56] [AI       ] Fetching 14d of 3m data for ADAUSDT...
+[14 Apr 2026, 03:09:57] [SCAN     ] AI SIGNAL: BNBUSDT LONG | strategy=VWAP zone + RSI filter [evo_0w3v] (53.8% WR) | SL=$604.0486 TP=$611.9646 | score=14.2
+[14 Apr 2026, 03:09:57] [PoliceAgent] Patrol #39: 26 agents checked, 0 violations
+[14 Apr 2026, 03:09:57] [SYSTEM   ] [PoliceAgent] Patrol #39: 26 agents checked, 0 violations
+[14 Apr 2026, 03:09:57] [PoliceAgent] Patrol #40: 26 agents checked, 0 violations
+[14 Apr 2026, 03:09:57] [SYSTEM   ] [PoliceAgent] Patrol #40: 26 agents checked, 0 violations
+[14 Apr 2026, 03:09:58] [SCAN     ] AI SIGNAL: ADAUSDT LONG | strategy=AI: ADX trend + EMA direction [ai_24mc] (60.0% WR) | SL=$0.2387 TP=$0.2423 | score=12.6
+[14 Apr 2026, 03:09:59] [SCAN     ] AI SIGNAL: ADAUSDT LONG | strategy=VWAP zone + RSI filter [vwap_rsi_q2bw] (59.5% WR) | SL=$0.2392 TP=$0.2423 | score=12.5
+[14 Apr 2026, 03:09:59] [AI       ] ADAUSDT: 6720 candles loaded
+[14 Apr 2026, 03:10:02] [AI       ] Fetching 14d of 3m data for AVAXUSDT...
+[AI Brain] Bullish Momentumist responded: ```json
+{
+  "direction": "LONG",
+  "target": 86.35,
+  "confidence": 85,
+  "reaso...
+[14 Apr 2026, 03:10:02] [SCAN     ] AI SIGNAL: ADAUSDT LONG | strategy=VWAP zone + RSI filter [evo_0w3v] (53.8% WR) | SL=$0.2392 TP=$0.2423 | score=11.5
+[AI Brain] Bearish Contrarian thinking with Ollama gemma4:31b-cloud (medium)...
+[Bitunix] Raw position fields: ["positionId","symbol","marginCoin","qty","entryValue","side","marginMode","positionMode","leverage","fee","funding","realizedPNL","margin","unrealizedPNL","liqPrice","avgOpenPrice","marginRate","ctime","mtime"]
+[Bitunix] Raw position data: {"positionId":"4418560084350029393","symbol":"XRPUSDT","marginCoin":null,"qty":"92.4","entryValue":"124.86012","side":"BUY","marginMode":"ISOLATION","positionMode":"HEDGE","leverage":20,"fee":"-0.074916072","funding":"0","realizedPNL":"-0.074916072","margin":"6.319413408","unrealizedPNL":"0.15708","liqPrice":"1.29","avgOpenPrice":"1.3513","marginRate":"0","ctime":"1776109616000","mtime":"1776109616000"}
+[AI Brain] Bearish Contrarian responded: ```json
+{
+  "direction": "SHORT",
+  "target": 82.45,
+  "confidence": 78,
+  "reas...
+[AI Brain] CoderAgent thinking with Ollama gemma4:31b-cloud (high)...
+[AI Brain] SMC Purist thinking with Ollama gemma4:31b-cloud (medium)...
+[14 Apr 2026, 03:10:04] [SCAN     ] AI SIGNAL: AVAXUSDT LONG | strategy=AI: ADX trend + EMA direction [ai_24mc] (60.0% WR) | SL=$9.3080 TP=$9.4490 | score=12.6
+[14 Apr 2026, 03:10:05] [SCAN     ] AI SIGNAL: AVAXUSDT LONG | strategy=VWAP zone + RSI filter [vwap_rsi_q2bw] (59.5% WR) | SL=$9.3268 TP=$9.4490 | score=12.5
+[LOGGER] PostgreSQL bot_logs table ready
+[14 Apr 2026, 03:10:05] [SCAN     ] AI SIGNAL: AVAXUSDT SHORT | strategy=Crossover [bb_bounce_bihe] (56.4% WR) | SL=$9.4772 TP=$9.3550 | score=12.0
+[14 Apr 2026, 03:10:06] [AI       ] AVAXUSDT: 6720 candles loaded
+[14 Apr 2026, 03:10:08] [AI       ] Fetching 14d of 3m data for SUIUSDT...
+[AI Brain] SMC Purist responded: ```json
+{
+  "direction": "LONG",
+  "target": 86.35,
+  "confidence": 85,
+  "reaso...
+[14 Apr 2026, 03:10:08] [SCAN     ] AI SIGNAL: AVAXUSDT LONG | strategy=VWAP zone + RSI filter [evo_0w3v] (53.8% WR) | SL=$9.3268 TP=$9.4490 | score=11.5
+[AI Brain] Risk-Averse Scalper thinking with Ollama gemma4:31b-cloud (medium)...
+[14 Apr 2026, 03:10:10] [SCAN     ] AI SIGNAL: SUIUSDT SHORT | strategy=BB band + RSI filter [evo_bihe] (71.8% WR) | SL=$0.9464 TP=$0.9277 | score=14.7
+[14 Apr 2026, 03:10:10] [SCAN     ] AI SIGNAL: SUIUSDT SHORT | strategy=BB band + RSI filter [bb_bounce_q2bw] (67.2% WR) | SL=$0.9464 TP=$0.9277 | score=13.9
+[14 Apr 2026, 03:10:11] [AI       ] SUIUSDT: 6720 candles loaded
+[14 Apr 2026, 03:10:13] [AI       ] Fetching 14d of 3m data for LINKUSDT...
+  "target": 86.35,
+  "confidence": 88,
+  "reaso...
+[AI Brain] CoderAgent responded: {
+  "summary": "Systemic failure of Bitunix trailing stop logic and API compatib...
+[AI Brain] Bearish Contrarian responded: ```json
+{
+  "direction": "SHORT",
+  "target": 82.40,
+  "confidence": 78,
+  "reas...
+[AI Brain] Risk-Averse Scalper responded: ```json
+{
+  "direction": "LONG",
+[14 Apr 2026, 03:10:13] [SCAN     ] AI SIGNAL: SUIUSDT LONG | strategy=AI: ADX trend + EMA direction [ai_24mc] (60.0% WR) | SL=$0.9231 TP=$0.9371 | score=12.6
+[AI Brain] SMC Purist cache hit
+[AI Brain] Risk-Averse Scalper cache hit
+[14 Apr 2026, 03:10:14] [SCAN     ] AI SIGNAL: SUIUSDT LONG | strategy=VWAP zone + RSI filter [vwap_rsi_q2bw] (59.5% WR) | SL=$0.9249 TP=$0.9371 | score=12.5
+[AI Brain] Bullish Momentumist thinking with Ollama gemma4:31b-cloud (medium)...
+[AI Brain] Bullish Momentumist thinking with Ollama gemma4:31b-cloud (medium)...
+[14 Apr 2026, 03:10:15] [SCAN     ] AI SIGNAL: SUIUSDT SHORT | strategy=Crossover [bb_bounce_bihe] (56.4% WR) | SL=$0.9399 TP=$0.9277 | score=12.0
+[14 Apr 2026, 03:10:15] [AI       ] LINKUSDT: 6720 candles loaded
+[14 Apr 2026, 03:10:17] [AI       ] Fetching 14d of 3m data for RAVEUSDT...
+[14 Apr 2026, 03:10:17] [SCAN     ] AI SIGNAL: SUIUSDT LONG | strategy=VWAP zone + RSI filter [evo_0w3v] (53.8% WR) | SL=$0.9249 TP=$0.9371 | score=11.5
+[14 Apr 2026, 03:10:19] [SCAN     ] AI SIGNAL: LINKUSDT LONG | strategy=AI: ADX trend + EMA direction [ai_24mc] (60.0% WR) | SL=$8.9060 TP=$9.0410 | score=12.6
+[14 Apr 2026, 03:10:19] [SCAN     ] AI SIGNAL: LINKUSDT LONG | strategy=VWAP zone + RSI filter [vwap_rsi_q2bw] (59.5% WR) | SL=$8.9240 TP=$9.0410 | score=12.5
+[AI Brain] Bullish Momentumist responded: ```json
+{
+  "direction": "LONG",
+  "target": 625.49,
+  "confidence": 88,
+  "reas...
+[AI Brain] Bullish Momentumist responded: ```json
+{
+  "direction": "LONG",
+  "target": 625.49,
+  "confidence": 88,
+  "reas...
+[AI Brain] Bearish Contrarian thinking with Ollama gemma4:31b-cloud (medium)...
+[14 Apr 2026, 03:10:20] [SCAN     ] AI SIGNAL: LINKUSDT SHORT | strategy=Crossover [bb_bounce_bihe] (56.4% WR) | SL=$9.0680 TP=$8.9510 | score=12.0
+[14 Apr 2026, 03:10:20] [AI       ] RAVEUSDT: 6720 candles loaded
+[14 Apr 2026, 03:10:27] [AI       ] Backtest done in 30.1s: 120 combinations tested
+[14 Apr 2026, 03:10:27] [AI       ] Backtester starting: 5 symbols × 60 days × 10 strategies × 8 configs
+[14 Apr 2026, 03:10:27] [AI       ] Fetching 60d of 15m data for ADAUSDT...
+[AI Brain] Bearish Contrarian thinking with Ollama gemma4:31b-cloud (medium)...
+[14 Apr 2026, 03:10:27] [SCAN     ] AI SIGNAL: LINKUSDT LONG | strategy=VWAP zone + RSI filter [evo_0w3v] (53.8% WR) | SL=$8.9240 TP=$9.0410 | score=11.5
+[Bitunix] Raw position fields: ["positionId","symbol","marginCoin","qty","entryValue","side","marginMode","positionMode","leverage","fee","funding","realizedPNL","margin","unrealizedPNL","liqPrice","avgOpenPrice","marginRate","ctime","mtime"]
+[Bitunix] Raw position data: {"positionId":"4418560084350029393","symbol":"XRPUSDT","marginCoin":null,"qty":"92.4","entryValue":"124.86012","side":"BUY","marginMode":"ISOLATION","positionMode":"HEDGE","leverage":20,"fee":"-0.074916072","funding":"0","realizedPNL":"-0.074916072","margin":"6.319413408","unrealizedPNL":"0.10164","liqPrice":"1.29","avgOpenPrice":"1.3513","marginRate":"0","ctime":"1776109616000","mtime":"1776109616000"}
+[14 Apr 2026, 03:10:28] [ERROR    ] Bitunix trailing: price method 1 failed for XRPUSDT: Bitunix API error: Parameter error (code 2)
+[14 Apr 2026, 03:10:28] [ERROR    ] Bitunix trailing: price method 2 failed for XRPUSDT: no markPrice
+[Bitunix] Raw position fields: ["positionId","symbol","marginCoin","qty","entryValue","side","marginMode","positionMode","leverage","fee","funding","realizedPNL","margin","unrealizedPNL","liqPrice","avgOpenPrice","marginRate","ctime","mtime"]
+[Bitunix] Raw position data: {"positionId":"4418560084350029393","symbol":"XRPUSDT","marginCoin":null,"qty":"92.4","entryValue":"124.86012","side":"BUY","marginMode":"ISOLATION","positionMode":"HEDGE","leverage":20,"fee":"-0.074916072","funding":"0","realizedPNL":"-0.074916072","margin":"6.319413408","unrealizedPNL":"0.10164","liqPrice":"1.29","avgOpenPrice":"1.3513","marginRate":"0","ctime":"1776109616000","mtime":"1776109616000"}
+[14 Apr 2026, 03:10:28] [TRADE    ] Bitunix trailing: XRPUSDT price from fallback method 3: $1.3518
+[14 Apr 2026, 03:10:28] [TRADE    ] Bitunix trailing: XRPUSDT entry=$1.3513 cur=$1.3518 pricePct=0.037% capitalPct=0.74% lev=20x lastStep=0.0%
+[14 Apr 2026, 03:10:28] [SYSTEM   ] Sync: exchange has 1 open positions, DB has 1 OPEN trades
+[14 Apr 2026, 03:10:28] [ERROR    ] Bitunix trailing: price method 1 failed for XRPUSDT: Bitunix API error: Parameter error (code 2)
+[14 Apr 2026, 03:10:28] [ERROR    ] Bitunix trailing: price method 2 failed for XRPUSDT: no markPrice
+[AI Brain] Bearish Contrarian responded: ```json
+{
+  "direction": "SHORT",
+  "target": 601.97,
+  "confidence": 75,
+  "rea...
+[14 Apr 2026, 03:10:29] [TRADE    ] Bitunix trailing: XRPUSDT price from fallback method 3: $1.3518
+[14 Apr 2026, 03:10:29] [TRADE    ] Bitunix trailing: XRPUSDT entry=$1.3513 cur=$1.3518 pricePct=0.037% capitalPct=0.74% lev=20x lastStep=0.0%
+[14 Apr 2026, 03:10:29] [SYSTEM   ] Sync: exchange has 1 open positions, DB has 1 OPEN trades
+[Bitunix] Raw position fields: ["positionId","symbol","marginCoin","qty","entryValue","side","marginMode","positionMode","leverage","fee","funding","realizedPNL","margin","unrealizedPNL","liqPrice","avgOpenPrice","marginRate","ctime","mtime"]
+[Bitunix] Raw position data: {"positionId":"265432795013169240","symbol":"SUIUSDT","marginCoin":null,"qty":"365.5","entryValue":"340.82875","side":"SELL","marginMode":"ISOLATION","positionMode":"HEDGE","leverage":20,"fee":"-0.20449725","funding":"0","realizedPNL":"-0.20449725","margin":"17.2561059453886528","unrealizedPNL":"0.0731","liqPrice":"0.9734","avgOpenPrice":"0.9325","marginRate":"0","ctime":"1776110918000","mtime":"1776110918000"}
+[AI Brain] SMC Purist thinking with Ollama gemma4:31b-cloud (medium)...
+[14 Apr 2026, 03:10:29] [ERROR    ] Bitunix trailing: price method 1 failed for BTCUSDT: Bitunix API error: Parameter error (code 2)
+[14 Apr 2026, 03:10:29] [ERROR    ] Bitunix trailing: price method 2 failed for BTCUSDT: no markPrice
+[14 Apr 2026, 03:10:29] [AI       ] ADAUSDT: 5760 candles loaded
+[14 Apr 2026, 03:11:08] [AI       ] Fetching 60d of 15m data for AVAXUSDT...
+[14 Apr 2026, 03:11:08] [ERROR    ] Bitunix trailing: price method 3 failed for BTCUSDT: network timeout at: https://fapi.binance.com/fapi/v1/ticker/price?symbol=BTCUSDT
+[14 Apr 2026, 03:11:08] [TRADE    ] Bitunix trailing: BTCUSDT price from fallback method 4: $73179.4
+[14 Apr 2026, 03:11:08] [TRADE    ] Bitunix trailing: BTCUSDT entry=$73277.4 cur=$73179.4 pricePct=-0.134% capitalPct=-13.37% lev=100x lastStep=0.0%
+[14 Apr 2026, 03:11:08] [SYSTEM   ] Sync: exchange has 0 open positions, DB has 4 OPEN trades
+[AI Brain] SMC Purist responded: ```json
+{
+  "direction": "LONG",
+  "target": 625.49,
+  "confidence": 85,
+  "reas...
+[AI Brain] Bearish Contrarian responded: ```json
+{
+  "direction": "SHORT",
+  "target": 602.50,
+  "confidence": 75,
+  "rea...
+[14 Apr 2026, 03:11:08] [ERROR    ] Bitunix trailing: price method 1 failed for SUIUSDT: Bitunix API error: Parameter error (code 2)
+[14 Apr 2026, 03:11:08] [ERROR    ] Bitunix trailing: price method 2 failed for SUIUSDT: no markPrice
+[14 Apr 2026, 03:11:08] [SYSTEM   ] Bitunix posHistory FIELDS for BTCUSDT: ["positionId","symbol","marginCoin","maxQty","qty","entryPrice","closePrice","liqQty","side","marginMode","positionMode","leverage","fee","funding","realizedPNL","margin","liqPrice","ctime","mtime"]
+[14 Apr 2026, 03:11:08] [SYSTEM   ] Bitunix posHistory FIRST RAW: {"positionId":"283151141937381566","symbol":"BTCUSDT","marginCoin":null,"maxQty":"0.0243","qty":"0.0243","entryPrice":"71086","closePrice":"71113","liqQty":null,"side":"BUY","marginMode":"ISOLATION","positionMode":"HEDGE","leverage":"100","fee":"1.72771785","funding":"0","realizedPNL":"-1.07161785","margin":null,"liqPrice":"0","ctime":"1776041475000","mtime":"1776041749000"}
+[AI Brain] Risk-Averse Scalper thinking with Ollama gemma4:31b-cloud (medium)...
+[AI Brain] SMC Purist cache hit
+[14 Apr 2026, 03:11:09] [TRADE    ] Bitunix trailing: SUIUSDT price from fallback method 3: $0.9321
+[14 Apr 2026, 03:11:09] [TRADE    ] Bitunix trailing: SUIUSDT entry=$0.9325 cur=$0.9321 pricePct=0.043% capitalPct=0.86% lev=20x lastStep=0.0%
+[Bitunix] Raw position fields: ["positionId","symbol","marginCoin","qty","entryValue","side","marginMode","positionMode","leverage","fee","funding","realizedPNL","margin","unrealizedPNL","liqPrice","avgOpenPrice","marginRate","ctime","mtime"]
+[Bitunix] Raw position data: {"positionId":"4418560084350029393","symbol":"XRPUSDT","marginCoin":null,"qty":"92.4","entryValue":"124.86012","side":"BUY","marginMode":"ISOLATION","positionMode":"HEDGE","leverage":20,"fee":"-0.074916072","funding":"0","realizedPNL":"-0.074916072","margin":"6.319413408","unrealizedPNL":"-0.01848","liqPrice":"1.29","avgOpenPrice":"1.3513","marginRate":"0","ctime":"1776109616000","mtime":"1776109616000"}
+[Bitunix] Raw position fields: ["positionId","symbol","marginCoin","qty","entryValue","side","marginMode","positionMode","leverage","fee","funding","realizedPNL","margin","unrealizedPNL","liqPrice","avgOpenPrice","marginRate","ctime","mtime"]
+[Bitunix] Raw position data: {"positionId":"4418560084350029393","symbol":"XRPUSDT","marginCoin":null,"qty":"92.4","entryValue":"124.86012","side":"BUY","marginMode":"ISOLATION","positionMode":"HEDGE","leverage":20,"fee":"-0.074916072","funding":"0","realizedPNL":"-0.074916072","margin":"6.319413408","unrealizedPNL":"-0.01848","liqPrice":"1.29","avgOpenPrice":"1.3513","marginRate":"0","ctime":"1776109616000","mtime":"1776109616000"}
+[14 Apr 2026, 03:11:09] [ERROR    ] Bitunix trailing: price method 1 failed for SOLUSDT: Bitunix API error: Parameter error (code 2)
+[14 Apr 2026, 03:11:09] [ERROR    ] Bitunix trailing: price method 2 failed for SOLUSDT: no markPrice
+[14 Apr 2026, 03:11:09] [ERROR    ] Bitunix marketPrice error: Bitunix API error: Parameter error (code 2)
+[14 Apr 2026, 03:11:09] [TRADE    ] Estimated trading fee for BTCUSDT: $2.0614 (0.12% of $1717.84 notional)
+[14 Apr 2026, 03:11:09] [ERROR    ] Bitunix trailing: price method 1 failed for XRPUSDT: Bitunix API error: Parameter error (code 2)
+[14 Apr 2026, 03:11:09] [ERROR    ] Bitunix trailing: price method 2 failed for XRPUSDT: no markPrice
+[14 Apr 2026, 03:11:09] [ERROR    ] Bitunix trailing: price method 1 failed for XRPUSDT: Bitunix API error: Parameter error (code 2)
+[14 Apr 2026, 03:11:09] [ERROR    ] Bitunix trailing: price method 2 failed for XRPUSDT: no markPrice
+[14 Apr 2026, 03:11:09] [TRADE    ] DB synced: BTCUSDT -> LOSS gross=$0 fee=$2.0614 net=$-2.0614 exit=$73,277.40
+[14 Apr 2026, 03:11:09] [ERROR    ] Sync error for key 7: CIRCUIT_BREAKER is not defined
+[14 Apr 2026, 03:11:09] [TRADE    ] Bitunix trailing: SOLUSDT price from fallback method 3: $84.01
+[14 Apr 2026, 03:11:09] [TRADE    ] Bitunix trailing: SOLUSDT entry=$84.1 cur=$84.01 pricePct=-0.107% capitalPct=-2.14% lev=20x lastStep=0.0%
+[AI Brain] Risk-Averse Scalper thinking with Ollama gemma4:31b-cloud (medium)...
+[14 Apr 2026, 03:11:09] [PoliceAgent] Patrol #41: 26 agents checked, 0 violations
+[14 Apr 2026, 03:11:09] [SYSTEM   ] [PoliceAgent] Patrol #41: 26 agents checked, 0 violations
+[14 Apr 2026, 03:11:09] [TRADE    ] Bitunix trailing: XRPUSDT price from fallback method 3: $1.3509
+[14 Apr 2026, 03:11:09] [TRADE    ] Bitunix trailing: XRPUSDT entry=$1.3513 cur=$1.3509 pricePct=-0.030% capitalPct=-0.59% lev=20x lastStep=0.0%
+[14 Apr 2026, 03:11:09] [SYSTEM   ] Sync: exchange has 1 open positions, DB has 1 OPEN trades
+[14 Apr 2026, 03:11:09] [TRADE    ] Bitunix trailing: XRPUSDT price from fallback method 3: $1.3509
+[14 Apr 2026, 03:11:09] [TRADE    ] Bitunix trailing: XRPUSDT entry=$1.3513 cur=$1.3509 pricePct=-0.030% capitalPct=-0.59% lev=20x lastStep=0.0%
+[14 Apr 2026, 03:11:09] [SYSTEM   ] Sync: exchange has 1 open positions, DB has 1 OPEN trades
+[14 Apr 2026, 03:11:09] [ERROR    ] Bitunix trailing: price method 1 failed for DOGEUSDT: Bitunix API error: Parameter error (code 2)
+[14 Apr 2026, 03:11:09] [ERROR    ] Bitunix trailing: price method 2 failed for DOGEUSDT: no markPrice
+[14 Apr 2026, 03:11:10] [TRADE    ] Bitunix trailing: DOGEUSDT price from fallback method 3: $0.09287
+[14 Apr 2026, 03:11:10] [TRADE    ] Bitunix trailing: DOGEUSDT entry=$0.09295 cur=$0.09287 pricePct=-0.086% capitalPct=-1.72% lev=20x lastStep=0.0%
+[14 Apr 2026, 03:11:10] [SYSTEM   ] Sync: exchange has 4 open positions, DB has 4 OPEN trades
+[Bitunix] Raw position fields: ["positionId","symbol","marginCoin","qty","entryValue","side","marginMode","positionMode","leverage","fee","funding","realizedPNL","margin","unrealizedPNL","liqPrice","avgOpenPrice","marginRate","ctime","mtime"]
+[Bitunix] Raw position data: {"positionId":"4418560084350029393","symbol":"XRPUSDT","marginCoin":null,"qty":"92.4","entryValue":"124.86012","side":"BUY","marginMode":"ISOLATION","positionMode":"HEDGE","leverage":20,"fee":"-0.074916072","funding":"0","realizedPNL":"-0.074916072","margin":"6.319413408","unrealizedPNL":"-0.01848","liqPrice":"1.29","avgOpenPrice":"1.3513","marginRate":"0","ctime":"1776109616000","mtime":"1776109616000"}
+[14 Apr 2026, 03:11:10] [SCAN     ] AI SIGNAL: CLUSDT SHORT | strategy=AI: ADX trend + EMA direction [ai_24mc] (60.0% WR) | SL=$94.3340 TP=$92.9330 | score=15.3
+[Bitunix] Raw position fields: ["positionId","symbol","marginCoin","qty","entryValue","side","marginMode","positionMode","leverage","fee","funding","realizedPNL","margin","unrealizedPNL","liqPrice","avgOpenPrice","marginRate","ctime","mtime"]
+[Bitunix] Raw position data: {"positionId":"265432795013169240","symbol":"SUIUSDT","marginCoin":null,"qty":"365.5","entryValue":"340.82875","side":"SELL","marginMode":"ISOLATION","positionMode":"HEDGE","leverage":20,"fee":"-0.20449725","funding":"0","realizedPNL":"-0.20449725","margin":"17.2561059453886528","unrealizedPNL":"0.1462","liqPrice":"0.9734","avgOpenPrice":"0.9325","marginRate":"0","ctime":"1776110918000","mtime":"1776110918000"}
+[Bitunix] Raw position fields: ["positionId","symbol","marginCoin","qty","entryValue","side","marginMode","positionMode","leverage","fee","funding","realizedPNL","margin","unrealizedPNL","liqPrice","avgOpenPrice","marginRate","ctime","mtime"]
+[Bitunix] Raw position data: {"positionId":"265432795013169240","symbol":"SUIUSDT","marginCoin":null,"qty":"365.5","entryValue":"340.82875","side":"SELL","marginMode":"ISOLATION","positionMode":"HEDGE","leverage":20,"fee":"-0.20449725","funding":"0","realizedPNL":"-0.20449725","margin":"17.2561059453886528","unrealizedPNL":"0.1462","liqPrice":"0.9734","avgOpenPrice":"0.9325","marginRate":"0","ctime":"1776110918000","mtime":"1776110918000"}
+[14 Apr 2026, 03:11:10] [ERROR    ] Bitunix trailing: price method 1 failed for BTCUSDT: Bitunix API error: Parameter error (code 2)
+[14 Apr 2026, 03:11:10] [ERROR    ] Bitunix trailing: price method 2 failed for BTCUSDT: no markPrice
+[14 Apr 2026, 03:11:10] [AI       ] AVAXUSDT: 5760 candles loaded
+[14 Apr 2026, 03:11:47] [AI       ] Fetching 60d of 15m data for SUIUSDT...
+[14 Apr 2026, 03:11:47] [ERROR    ] Bitunix trailing: price method 3 failed for BTCUSDT: network timeout at: https://fapi.binance.com/fapi/v1/ticker/price?symbol=BTCUSDT
+[14 Apr 2026, 03:11:47] [TRADE    ] Bitunix trailing: BTCUSDT price from fallback method 4: $73168.5
+[14 Apr 2026, 03:11:47] [TRADE    ] Bitunix trailing: BTCUSDT entry=$73277.4 cur=$73168.5 pricePct=-0.149% capitalPct=-14.86% lev=100x lastStep=0.0%
+[14 Apr 2026, 03:11:47] [ERROR    ] Bitunix trailing: price method 1 failed for BTCUSDT: network timeout at: https://fapi.bitunix.com/api/v1/futures/market/get_latest_price?symbol=BTCUSDT
+[14 Apr 2026, 03:11:47] [ERROR    ] Bitunix trailing: price method 2 failed for BTCUSDT: no markPrice
+[AI Brain] Risk-Averse Scalper responded: ```json
+{
+  "direction": "LONG",
+  "target": 625.49,
+  "confidence": 85,
+  "reas...
+[AI Brain] Risk-Averse Scalper responded: ```json
+{
+  "direction": "LONG",
+  "target": 625.49,
+  "confidence": 88,
+  "reas...
+[14 Apr 2026, 03:11:47] [TRADE    ] Bitunix trailing: BTCUSDT price from fallback method 3: $73158.8
+[14 Apr 2026, 03:11:47] [TRADE    ] Bitunix trailing: BTCUSDT entry=$73277.4 cur=$73158.8 pricePct=-0.162% capitalPct=-16.19% lev=100x lastStep=0.0%
+[14 Apr 2026, 03:11:48] [ERROR    ] Bitunix trailing: price method 1 failed for SUIUSDT: Bitunix API error: Parameter error (code 2)
+[14 Apr 2026, 03:11:48] [ERROR    ] Bitunix trailing: price method 2 failed for SUIUSDT: no markPrice
+[14 Apr 2026, 03:11:48] [TRADE    ] Bitunix trailing: SUIUSDT price from fallback method 3: $0.9318
+[14 Apr 2026, 03:11:48] [TRADE    ] Bitunix trailing: SUIUSDT entry=$0.9325 cur=$0.9318 pricePct=0.075% capitalPct=1.50% lev=20x lastStep=0.0%
+[AI Brain] Bullish Momentumist thinking with Ollama gemma4:31b-cloud (medium)...
+[Bitunix] Raw position fields: ["positionId","symbol","marginCoin","qty","entryValue","side","marginMode","positionMode","leverage","fee","funding","realizedPNL","margin","unrealizedPNL","liqPrice","avgOpenPrice","marginRate","ctime","mtime"]
+[Bitunix] Raw position data: {"positionId":"4418560084350029393","symbol":"XRPUSDT","marginCoin":null,"qty":"92.4","entryValue":"124.86012","side":"BUY","marginMode":"ISOLATION","positionMode":"HEDGE","leverage":20,"fee":"-0.074916072","funding":"0","realizedPNL":"-0.074916072","margin":"6.319413408","unrealizedPNL":"-0.00924","liqPrice":"1.29","avgOpenPrice":"1.3513","marginRate":"0","ctime":"1776109616000","mtime":"1776109616000"}
+[14 Apr 2026, 03:11:48] [ERROR    ] Bitunix trailing: price method 1 failed for SOLUSDT: Bitunix API error: Parameter error (code 2)
+[14 Apr 2026, 03:11:48] [ERROR    ] Bitunix trailing: price method 2 failed for SOLUSDT: no markPrice
+[14 Apr 2026, 03:11:48] [ERROR    ] Bitunix trailing: price method 1 failed for XRPUSDT: Bitunix API error: Parameter error (code 2)
+[14 Apr 2026, 03:11:48] [ERROR    ] Bitunix trailing: price method 2 failed for XRPUSDT: no markPrice
+[14 Apr 2026, 03:11:48] [TRADE    ] Bitunix trailing: SOLUSDT price from fallback method 3: $83.93
+[14 Apr 2026, 03:11:48] [TRADE    ] Bitunix trailing: SOLUSDT entry=$84.1 cur=$83.93 pricePct=-0.202% capitalPct=-4.04% lev=20x lastStep=0.0%
+[14 Apr 2026, 03:11:48] [ERROR    ] Bitunix trailing: price method 1 failed for SUIUSDT: Bitunix API error: Parameter error (code 2)
+[14 Apr 2026, 03:11:48] [ERROR    ] Bitunix trailing: price method 2 failed for SUIUSDT: no markPrice
+[14 Apr 2026, 03:11:48] [PoliceAgent] Patrol #42: 26 agents checked, 0 violations
+[14 Apr 2026, 03:11:48] [SYSTEM   ] [PoliceAgent] Patrol #42: 26 agents checked, 0 violations
+[14 Apr 2026, 03:11:48] [TRADE    ] Bitunix trailing: XRPUSDT price from fallback method 3: $1.3512
+[14 Apr 2026, 03:11:48] [TRADE    ] Bitunix trailing: XRPUSDT entry=$1.3513 cur=$1.3512 pricePct=-0.007% capitalPct=-0.15% lev=20x lastStep=0.0%
+[14 Apr 2026, 03:11:48] [SYSTEM   ] Sync: exchange has 1 open positions, DB has 1 OPEN trades
+[14 Apr 2026, 03:11:48] [ERROR    ] Bitunix trailing: price method 1 failed for DOGEUSDT: Bitunix API error: Parameter error (code 2)
+[14 Apr 2026, 03:11:48] [ERROR    ] Bitunix trailing: price method 2 failed for DOGEUSDT: no markPrice
+[14 Apr 2026, 03:11:49] [TRADE    ] Bitunix trailing: SUIUSDT price from fallback method 3: $0.9318
+[14 Apr 2026, 03:11:49] [TRADE    ] Bitunix trailing: SUIUSDT entry=$0.9325 cur=$0.9318 pricePct=0.075% capitalPct=1.50% lev=20x lastStep=0.0%
+[14 Apr 2026, 03:11:49] [SCAN     ] AI SIGNAL: CLUSDT SHORT | strategy=VWAP zone + RSI filter [vwap_rsi_q2bw] (59.5% WR) | SL=$94.1472 TP=$92.9330 | score=15.2
+[14 Apr 2026, 03:11:49] [TRADE    ] Bitunix trailing: DOGEUSDT price from fallback method 3: $0.09291
+[14 Apr 2026, 03:11:49] [TRADE    ] Bitunix trailing: DOGEUSDT entry=$0.09295 cur=$0.09291 pricePct=-0.043% capitalPct=-0.86% lev=20x lastStep=0.0%
+[14 Apr 2026, 03:11:49] [SYSTEM   ] Sync: exchange has 4 open positions, DB has 4 OPEN trades
+[14 Apr 2026, 03:11:49] [ERROR    ] Bitunix trailing: price method 1 failed for SOLUSDT: Bitunix API error: Parameter error (code 2)
+[14 Apr 2026, 03:11:49] [ERROR    ] Bitunix trailing: price method 2 failed for SOLUSDT: no markPrice
+[AI Brain] Bullish Momentumist thinking with Ollama gemma4:31b-cloud (medium)...
+[Bitunix] Raw position fields: ["positionId","symbol","marginCoin","qty","entryValue","side","marginMode","positionMode","leverage","fee","funding","realizedPNL","margin","unrealizedPNL","liqPrice","avgOpenPrice","marginRate","ctime","mtime"]
+[Bitunix] Raw position data: {"positionId":"4418560084350029393","symbol":"XRPUSDT","marginCoin":null,"qty":"92.4","entryValue":"124.86012","side":"BUY","marginMode":"ISOLATION","positionMode":"HEDGE","leverage":20,"fee":"-0.074916072","funding":"0","realizedPNL":"-0.074916072","margin":"6.319413408","unrealizedPNL":"-0.00924","liqPrice":"1.29","avgOpenPrice":"1.3513","marginRate":"0","ctime":"1776109616000","mtime":"1776109616000"}
+[14 Apr 2026, 03:11:49] [TRADE    ] Bitunix trailing: SOLUSDT price from fallback method 3: $83.93
+[14 Apr 2026, 03:11:49] [TRADE    ] Bitunix trailing: SOLUSDT entry=$84.1 cur=$83.93 pricePct=-0.202% capitalPct=-4.04% lev=20x lastStep=0.0%
+[14 Apr 2026, 03:11:49] [ERROR    ] Bitunix trailing: price method 1 failed for XRPUSDT: Bitunix API error: Parameter error (code 2)
+[14 Apr 2026, 03:11:49] [ERROR    ] Bitunix trailing: price method 2 failed for XRPUSDT: no markPrice
+[Bitunix] Raw position fields: ["positionId","symbol","marginCoin","qty","entryValue","side","marginMode","positionMode","leverage","fee","funding","realizedPNL","margin","unrealizedPNL","liqPrice","avgOpenPrice","marginRate","ctime","mtime"]
+[Bitunix] Raw position data: {"positionId":"265432795013169240","symbol":"SUIUSDT","marginCoin":null,"qty":"365.5","entryValue":"340.82875","side":"SELL","marginMode":"ISOLATION","positionMode":"HEDGE","leverage":20,"fee":"-0.20449725","funding":"0","realizedPNL":"-0.20449725","margin":"17.2561059453886528","unrealizedPNL":"0.3655","liqPrice":"0.9734","avgOpenPrice":"0.9325","marginRate":"0","ctime":"1776110918000","mtime":"1776110918000"}
+[14 Apr 2026, 03:11:49] [ERROR    ] Bitunix trailing: price method 1 failed for DOGEUSDT: Bitunix API error: Parameter error (code 2)
+[14 Apr 2026, 03:11:49] [ERROR    ] Bitunix trailing: price method 2 failed for DOGEUSDT: no markPrice
+[14 Apr 2026, 03:11:49] [TRADE    ] Bitunix trailing: XRPUSDT price from fallback method 3: $1.3512
+[14 Apr 2026, 03:11:49] [TRADE    ] Bitunix trailing: XRPUSDT entry=$1.3513 cur=$1.3512 pricePct=-0.007% capitalPct=-0.15% lev=20x lastStep=0.0%
+[14 Apr 2026, 03:11:49] [SYSTEM   ] Sync: exchange has 1 open positions, DB has 1 OPEN trades
+[14 Apr 2026, 03:11:49] [ERROR    ] Bitunix trailing: price method 1 failed for SUIUSDT: Bitunix API error: Parameter error (code 2)
+[14 Apr 2026, 03:11:49] [ERROR    ] Bitunix trailing: price method 2 failed for SUIUSDT: no markPrice
+[14 Apr 2026, 03:11:49] [AI       ] SUIUSDT: 5760 candles loaded
+  "reas...
+[14 Apr 2026, 03:12:29] [ERROR    ] Bitunix trailing: price method 1 failed for SOLUSDT: Bitunix API error: Parameter error (code 2)
+[14 Apr 2026, 03:12:29] [ERROR    ] Bitunix trailing: price method 2 failed for SOLUSDT: no markPrice
+[14 Apr 2026, 03:12:29] [AI       ] Fetching 60d of 15m data for LINKUSDT...
+[14 Apr 2026, 03:12:29] [ERROR    ] Bitunix trailing: price method 3 failed for DOGEUSDT: network timeout at: https://fapi.binance.com/fapi/v1/ticker/price?symbol=DOGEUSDT
+[14 Apr 2026, 03:12:29] [TRADE    ] Bitunix trailing: DOGEUSDT price from fallback method 4: $0.09289
+[14 Apr 2026, 03:12:29] [TRADE    ] Bitunix trailing: DOGEUSDT entry=$0.09295 cur=$0.09289 pricePct=-0.065% capitalPct=-1.29% lev=20x lastStep=0.0%
+[14 Apr 2026, 03:12:29] [SYSTEM   ] Sync: exchange has 4 open positions, DB has 4 OPEN trades
+[14 Apr 2026, 03:12:29] [ERROR    ] Bitunix trailing: price method 3 failed for SUIUSDT: network timeout at: https://fapi.binance.com/fapi/v1/ticker/price?symbol=SUIUSDT
+[14 Apr 2026, 03:12:29] [TRADE    ] Bitunix trailing: SUIUSDT price from fallback method 4: $0.9315
+[14 Apr 2026, 03:12:29] [TRADE    ] Bitunix trailing: SUIUSDT entry=$0.9325 cur=$0.9315 pricePct=0.107% capitalPct=2.14% lev=20x lastStep=0.0%
+[AI Brain] Bullish Momentumist responded: ```json
+{
+  "direction": "LONG",
+  "target": 1.3906,
+  "confidence": 88,
+[14 Apr 2026, 03:12:29] [TRADE    ] Bitunix trailing: SOLUSDT price from fallback method 3: $83.96
+[14 Apr 2026, 03:12:29] [TRADE    ] Bitunix trailing: SOLUSDT entry=$84.1 cur=$83.96 pricePct=-0.166% capitalPct=-3.33% lev=20x lastStep=0.0%
+[AI Brain] Bearish Contrarian thinking with Ollama gemma4:31b-cloud (medium)...
+[14 Apr 2026, 03:12:29] [ERROR    ] Bitunix trailing: price method 1 failed for DOGEUSDT: Bitunix API error: Parameter error (code 2)
+[14 Apr 2026, 03:12:29] [ERROR    ] Bitunix trailing: price method 2 failed for DOGEUSDT: no markPrice
+[14 Apr 2026, 03:12:29] [PoliceAgent] Patrol #43: 26 agents checked, 0 violations
+[14 Apr 2026, 03:12:29] [SYSTEM   ] [PoliceAgent] Patrol #43: 26 agents checked, 0 violations
+[14 Apr 2026, 03:12:30] [TRADE    ] Bitunix trailing: DOGEUSDT price from fallback method 3: $0.09292
+[14 Apr 2026, 03:12:30] [TRADE    ] Bitunix trailing: DOGEUSDT entry=$0.09295 cur=$0.09292 pricePct=-0.032% capitalPct=-0.65% lev=20x lastStep=0.0%
+[14 Apr 2026, 03:12:30] [SYSTEM   ] Sync: exchange has 4 open positions, DB has 3 OPEN trades
+[Bitunix] Raw position fields: ["positionId","symbol","marginCoin","qty","entryValue","side","marginMode","positionMode","leverage","fee","funding","realizedPNL","margin","unrealizedPNL","liqPrice","avgOpenPrice","marginRate","ctime","mtime"]
+[Bitunix] Raw position data: {"positionId":"4418560084350029393","symbol":"XRPUSDT","marginCoin":null,"qty":"92.4","entryValue":"124.86012","side":"BUY","marginMode":"ISOLATION","positionMode":"HEDGE","leverage":20,"fee":"-0.074916072","funding":"0","realizedPNL":"-0.074916072","margin":"6.319413408","unrealizedPNL":"0","liqPrice":"1.29","avgOpenPrice":"1.3513","marginRate":"0","ctime":"1776109616000","mtime":"1776109616000"}
+[Bitunix] Raw position fields: ["positionId","symbol","marginCoin","qty","entryValue","side","marginMode","positionMode","leverage","fee","funding","realizedPNL","margin","unrealizedPNL","liqPrice","avgOpenPrice","marginRate","ctime","mtime"]
+[Bitunix] Raw position data: {"positionId":"4418560084350029393","symbol":"XRPUSDT","marginCoin":null,"qty":"92.4","entryValue":"124.86012","side":"BUY","marginMode":"ISOLATION","positionMode":"HEDGE","leverage":20,"fee":"-0.074916072","funding":"0","realizedPNL":"-0.074916072","margin":"6.319413408","unrealizedPNL":"0","liqPrice":"1.29","avgOpenPrice":"1.3513","marginRate":"0","ctime":"1776109616000","mtime":"1776109616000"}
+[Bitunix] Raw position fields: ["positionId","symbol","marginCoin","qty","entryValue","side","marginMode","positionMode","leverage","fee","funding","realizedPNL","margin","unrealizedPNL","liqPrice","avgOpenPrice","marginRate","ctime","mtime"]
+[Bitunix] Raw position data: {"positionId":"4418560084350029393","symbol":"XRPUSDT","marginCoin":null,"qty":"92.4","entryValue":"124.86012","side":"BUY","marginMode":"ISOLATION","positionMode":"HEDGE","leverage":20,"fee":"-0.074916072","funding":"0","realizedPNL":"-0.074916072","margin":"6.319413408","unrealizedPNL":"0","liqPrice":"1.29","avgOpenPrice":"1.3513","marginRate":"0","ctime":"1776109616000","mtime":"1776109616000"}
+[14 Apr 2026, 03:12:30] [PoliceAgent] Patrol #44: 26 agents checked, 0 violations
+[14 Apr 2026, 03:12:30] [SYSTEM   ] [PoliceAgent] Patrol #44: 26 agents checked, 0 violations
+[14 Apr 2026, 03:12:30] [SCAN     ] AI SIGNAL: ZECUSDT LONG | strategy=AI: ADX trend + EMA direction [ai_24mc] (60.0% WR) | SL=$360.0729 TP=$365.5285 | score=12.6
+[14 Apr 2026, 03:12:30] [ERROR    ] Bitunix trailing: price method 1 failed for XRPUSDT: Bitunix API error: Parameter error (code 2)
+[14 Apr 2026, 03:12:30] [ERROR    ] Bitunix trailing: price method 2 failed for XRPUSDT: no markPrice
+[14 Apr 2026, 03:12:30] [ERROR    ] Bitunix trailing: price method 1 failed for XRPUSDT: Bitunix API error: Parameter error (code 2)
+[14 Apr 2026, 03:12:30] [ERROR    ] Bitunix trailing: price method 2 failed for XRPUSDT: no markPrice
+[14 Apr 2026, 03:12:31] [TRADE    ] Bitunix trailing: XRPUSDT price from fallback method 3: $1.351
+[14 Apr 2026, 03:12:31] [TRADE    ] Bitunix trailing: XRPUSDT entry=$1.3513 cur=$1.351 pricePct=-0.022% capitalPct=-0.44% lev=20x lastStep=0.0%
+[14 Apr 2026, 03:12:31] [SYSTEM   ] Sync: exchange has 1 open positions, DB has 1 OPEN trades
+[14 Apr 2026, 03:12:31] [PoliceAgent] Patrol #45: 26 agents checked, 0 violations
+[14 Apr 2026, 03:12:31] [SYSTEM   ] [PoliceAgent] Patrol #45: 26 agents checked, 0 violations
+[14 Apr 2026, 03:12:31] [TRADE    ] Bitunix trailing: XRPUSDT price from fallback method 3: $1.351
+[14 Apr 2026, 03:12:31] [TRADE    ] Bitunix trailing: XRPUSDT entry=$1.3513 cur=$1.351 pricePct=-0.022% capitalPct=-0.44% lev=20x lastStep=0.0%
+[14 Apr 2026, 03:12:31] [SYSTEM   ] Sync: exchange has 1 open positions, DB has 1 OPEN trades
+[14 Apr 2026, 03:12:31] [AI       ] LINKUSDT: 5760 candles loaded
+  "rea...
+[AI Brain] Ollama is back UP — using local AI
+[AI Brain] Transient error [GoogleGenerativeAI Error]: Error fetching from https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent: [429 Too Many Requests] You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. 
+[14 Apr 2026, 03:13:06] [AI       ] Fetching 60d of 15m data for RAVEUSDT...
+[14 Apr 2026, 03:13:06] [ERROR    ] Sync error for key 7: network timeout at: https://fapi.bitunix.com/api/v1/futures/account?marginCoin=USDT
+[14 Apr 2026, 03:13:06] [ERROR    ] Sync error for key 7: network timeout at: https://fapi.bitunix.com/api/v1/futures/account?marginCoin=USDT
+[14 Apr 2026, 03:13:06] [ERROR    ] Sync error for key 7: network timeout at: https://fapi.bitunix.com/api/v1/futures/account?marginCoin=USDT
+[AI Brain] Ollama Error: This operation was aborted
+[AI Brain] Ollama marked DOWN — falling back to cloud provider
+[AI Brain] Ollama failed — falling back to google
+[AI Brain] Bullish Momentumist thinking with Google gemini-2.0-flash...
+[AI Brain] Bearish Contrarian responded: ```json
+{
+  "direction": "SHORT",
+  "target": 1.3287,
+  "confidence": 85,
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+Please retry in 53.110669155s. [{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Learn more about Gemini API quotas","url":"https://ai.google.dev/gemini-api/docs/rate-limits"}]},{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_input_token_count","quotaId":"GenerateContentInputTokensPerModelPerMinute-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerMinutePerProjectPerModel-FreeTier","quotaDimensions":{"model":"gemini-2.0-flash","location":"global"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier","quotaDimensions":{"model":"gemini-2.0-flash","location":"global"}}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"53s"}] — retrying (1/3)...
+[14 Apr 2026, 03:13:06] [PoliceAgent] Patrol #46: 26 agents checked, 0 violations
+[14 Apr 2026, 03:13:06] [SYSTEM   ] [PoliceAgent] Patrol #46: 26 agents checked, 0 violations
+[14 Apr 2026, 03:13:06] [PoliceAgent] Patrol #47: 26 agents checked, 0 violations
+[14 Apr 2026, 03:13:06] [SYSTEM   ] [PoliceAgent] Patrol #47: 26 agents checked, 0 violations
+[14 Apr 2026, 03:13:06] [PoliceAgent] Patrol #48: 26 agents checked, 0 violations
+[14 Apr 2026, 03:13:06] [SYSTEM   ] [PoliceAgent] Patrol #48: 26 agents checked, 0 violations
+[AI Brain] SMC Purist thinking with Ollama gemma4:31b-cloud (medium)...
+[Bitunix] Raw position fields: ["positionId","symbol","marginCoin","qty","entryValue","side","marginMode","positionMode","leverage","fee","funding","realizedPNL","margin","unrealizedPNL","liqPrice","avgOpenPrice","marginRate","ctime","mtime"]
+[Bitunix] Raw position data: {"positionId":"4418560084350029393","symbol":"XRPUSDT","marginCoin":null,"qty":"92.4","entryValue":"124.86012","side":"BUY","marginMode":"ISOLATION","positionMode":"HEDGE","leverage":20,"fee":"-0.074916072","funding":"0","realizedPNL":"-0.074916072","margin":"6.319413408","unrealizedPNL":"-0.03696","liqPrice":"1.29","avgOpenPrice":"1.3513","marginRate":"0","ctime":"1776109616000","mtime":"1776109616000"}
+[14 Apr 2026, 03:13:07] [ERROR    ] Bitunix trailing: price method 1 failed for XRPUSDT: Bitunix API error: Parameter error (code 2)
+[14 Apr 2026, 03:13:07] [ERROR    ] Bitunix trailing: price method 2 failed for XRPUSDT: no markPrice
+[14 Apr 2026, 03:13:07] [TRADE    ] Bitunix trailing: XRPUSDT price from fallback method 3: $1.3508
+[14 Apr 2026, 03:13:07] [TRADE    ] Bitunix trailing: XRPUSDT entry=$1.3513 cur=$1.3508 pricePct=-0.037% capitalPct=-0.74% lev=20x lastStep=0.0%
+[14 Apr 2026, 03:13:07] [SYSTEM   ] Sync: exchange has 1 open positions, DB has 1 OPEN trades
+[14 Apr 2026, 03:13:07] [SCAN     ] AI SIGNAL: ZECUSDT LONG | strategy=VWAP zone + RSI filter [vwap_rsi_q2bw] (59.5% WR) | SL=$360.8003 TP=$365.5285 | score=12.5
+[Bitunix] Raw position fields: ["positionId","symbol","marginCoin","qty","entryValue","side","marginMode","positionMode","leverage","fee","funding","realizedPNL","margin","unrealizedPNL","liqPrice","avgOpenPrice","marginRate","ctime","mtime"]
+[Bitunix] Raw position data: {"positionId":"4418560084350029393","symbol":"XRPUSDT","marginCoin":null,"qty":"92.4","entryValue":"124.86012","side":"BUY","marginMode":"ISOLATION","positionMode":"HEDGE","leverage":20,"fee":"-0.074916072","funding":"0","realizedPNL":"-0.074916072","margin":"6.319413408","unrealizedPNL":"-0.03696","liqPrice":"1.29","avgOpenPrice":"1.3513","marginRate":"0","ctime":"1776109616000","mtime":"1776109616000"}
+[Bitunix] Raw position fields: ["positionId","symbol","marginCoin","qty","entryValue","side","marginMode","positionMode","leverage","fee","funding","realizedPNL","margin","unrealizedPNL","liqPrice","avgOpenPrice","marginRate","ctime","mtime"]
+[Bitunix] Raw position data: {"positionId":"4418560084350029393","symbol":"XRPUSDT","marginCoin":null,"qty":"92.4","entryValue":"124.86012","side":"BUY","marginMode":"ISOLATION","positionMode":"HEDGE","leverage":20,"fee":"-0.074916072","funding":"0","realizedPNL":"-0.074916072","margin":"6.319413408","unrealizedPNL":"-0.03696","liqPrice":"1.29","avgOpenPrice":"1.3513","marginRate":"0","ctime":"1776109616000","mtime":"1776109616000"}
+[AI Brain] Bullish Momentumist thinking with Google gemini-2.0-flash...
+[AI Brain] Transient error [GoogleGenerativeAI Error]: Error fetching from https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent: [429 Too Many Requests] You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. 
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-2.0-flash
+Please retry in 51.561533657s. [{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Learn more about Gemini API quotas","url":"https://ai.google.dev/gemini-api/docs/rate-limits"}]},{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier","quotaDimensions":{"model":"gemini-2.0-flash","location":"global"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerMinutePerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_input_token_count","quotaId":"GenerateContentInputTokensPerModelPerMinute-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.0-flash"}}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"51s"}] — retrying (2/3)...
+[Bitunix] Raw position fields: ["positionId","symbol","marginCoin","qty","entryValue","side","marginMode","positionMode","leverage","fee","funding","realizedPNL","margin","unrealizedPNL","liqPrice","avgOpenPrice","marginRate","ctime","mtime"]
+[Bitunix] Raw position data: {"positionId":"265432795013169240","symbol":"SUIUSDT","marginCoin":null,"qty":"365.5","entryValue":"340.82875","side":"SELL","marginMode":"ISOLATION","positionMode":"HEDGE","leverage":20,"fee":"-0.20449725","funding":"0","realizedPNL":"-0.20449725","margin":"17.2561059453886528","unrealizedPNL":"0.40205","liqPrice":"0.9734","avgOpenPrice":"0.9325","marginRate":"0","ctime":"1776110918000","mtime":"1776110918000"}
+[14 Apr 2026, 03:13:08] [ERROR    ] Bitunix trailing: price method 1 failed for XRPUSDT: Bitunix API error: Parameter error (code 2)
+[14 Apr 2026, 03:13:08] [ERROR    ] Bitunix trailing: price method 2 failed for XRPUSDT: no markPrice
+[14 Apr 2026, 03:13:08] [SCAN     ] AI SIGNAL: ZECUSDT LONG | strategy=VWAP zone + RSI filter [evo_0w3v] (53.8% WR) | SL=$360.8003 TP=$365.5285 | score=11.5
+[14 Apr 2026, 03:13:08] [TRADE    ] Bitunix trailing: XRPUSDT price from fallback method 3: $1.3508
+[14 Apr 2026, 03:13:08] [TRADE    ] Bitunix trailing: XRPUSDT entry=$1.3513 cur=$1.3508 pricePct=-0.037% capitalPct=-0.74% lev=20x lastStep=0.0%
+[14 Apr 2026, 03:13:08] [SYSTEM   ] Sync: exchange has 1 open positions, DB has 1 OPEN trades
+[14 Apr 2026, 03:13:08] [ERROR    ] Bitunix trailing: price method 1 failed for SUIUSDT: Bitunix API error: Parameter error (code 2)
+[14 Apr 2026, 03:13:08] [ERROR    ] Bitunix trailing: price method 2 failed for SUIUSDT: no markPrice
+[14 Apr 2026, 03:13:09] [TRADE    ] Bitunix trailing: SUIUSDT price from fallback method 3: $0.9311
+[14 Apr 2026, 03:13:09] [TRADE    ] Bitunix trailing: SUIUSDT entry=$0.9325 cur=$0.9311 pricePct=0.150% capitalPct=3.00% lev=20x lastStep=0.0%
+[14 Apr 2026, 03:13:09] [ERROR    ] Bitunix trailing: price method 1 failed for SOLUSDT: Bitunix API error: Parameter error (code 2)
+[14 Apr 2026, 03:13:09] [ERROR    ] Bitunix trailing: price method 2 failed for SOLUSDT: no markPrice
+[Bitunix] Raw position fields: ["positionId","symbol","marginCoin","qty","entryValue","side","marginMode","positionMode","leverage","fee","funding","realizedPNL","margin","unrealizedPNL","liqPrice","avgOpenPrice","marginRate","ctime","mtime"]
+[Bitunix] Raw position data: {"positionId":"265432795013169240","symbol":"SUIUSDT","marginCoin":null,"qty":"365.5","entryValue":"340.82875","side":"SELL","marginMode":"ISOLATION","positionMode":"HEDGE","leverage":20,"fee":"-0.20449725","funding":"0","realizedPNL":"-0.20449725","margin":"17.2561059453886528","unrealizedPNL":"0.40205","liqPrice":"0.9734","avgOpenPrice":"0.9325","marginRate":"0","ctime":"1776110918000","mtime":"1776110918000"}
+[14 Apr 2026, 03:13:09] [AI       ] RAVEUSDT: 5760 candles loaded
