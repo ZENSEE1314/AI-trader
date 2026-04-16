@@ -1073,14 +1073,14 @@ function detectBRR(candles1h, candles15m, candles1m, cfg = {}) {
 }
 
 // ── Strategy 6: SMC HL HL HL / LH LH LH Structure Trade ────
-// Multi-timeframe cascade:
+// Multi-timeframe cascade (per PDF + Zeiierman style):
 //   15m: Zeiierman curved structure (HL HL = bullish, LH LH = bearish)
 //   15m: EMA55 strength confirms direction (slope not opposing)
 //   3m:  EMA9 > EMA21 alignment (trend continuation, not reversal)
 //   1m:  Trigger on NEXT closed candle (broke prior 1m high/low) + volume
 //
-// Based on "Curved Smart Money Concept Probability" (Zeiierman) for structure,
-// with practical multi-TF entry cascade used in professional SMC trading.
+// ONLY fires during institutional session windows (Asia/Europe/US open).
+// Trailing SL handles exit — no fixed TP (per PDF rule).
 
 function detectSMCStructureTrade(candles15m, candles3m, candles1m, h1Trend = 'neutral') {
   if (candles15m.length < 60 || candles3m.length < 20 || candles1m.length < 10) return null;
@@ -1167,16 +1167,73 @@ function detectSMCStructureTrade(candles15m, candles3m, candles1m, h1Trend = 'ne
   return null;
 }
 
+// ── MCT Session Windows (from PDF strategy) ────────────────
+// Only trade during the 3 institutional opening windows.
+// Outside these windows: institutions are not active, moves are unreliable.
+//
+// Asia-Pacific:  23:00–02:00 UTC  (7:00–10:00 AM SGT)
+// European:      07:00–10:00 UTC  (3:00–6:00 PM SGT)
+// U.S.:          12:00–16:00 UTC  (8:00 PM–12:00 AM SGT)
+
+const SESSION_WINDOWS = [
+  { name: 'Asia',   startH: 23, endH: 2  },  // wraps midnight
+  { name: 'Europe', startH: 7,  endH: 10 },
+  { name: 'US',     startH: 12, endH: 16 },
+];
+
+// Hours and minutes to AVOID entering (per PDF):
+// "Avoid entries at 8am, 12pm, 4pm, and 8pm UTC"
+// "Avoid minute timings like 00, 15, 30, 45"
+const AVOID_HOURS_UTC   = new Set([8, 12, 16, 20]);
+const AVOID_MINUTES_UTC = new Set([0, 15, 30, 45]);
+
+function getActiveSession() {
+  const now = new Date();
+  const utcH = now.getUTCHours();
+  for (const win of SESSION_WINDOWS) {
+    if (win.startH > win.endH) {
+      // Wraps midnight (Asia: 23–02)
+      if (utcH >= win.startH || utcH < win.endH) return win;
+    } else {
+      if (utcH >= win.startH && utcH < win.endH) return win;
+    }
+  }
+  return null; // outside all windows
+}
+
+function isAvoidTime() {
+  const now = new Date();
+  const utcH = now.getUTCHours();
+  const utcM = now.getUTCMinutes();
+  if (AVOID_HOURS_UTC.has(utcH) && utcM < 3) return true;   // ±3 min buffer around candle open
+  if (AVOID_MINUTES_UTC.has(utcM)) return true;               // avoid 00, 15, 30, 45 min marks
+  return false;
+}
+
+// True only when inside a session window AND not at a candle-open time to avoid
+function isGoodTradingSession() {
+  if (isAvoidTime()) return false;
+  return getActiveSession() !== null;
+}
+
 // ── Daily Stats ────────────────────────────────────────────
+// PDF rule: max 2 trades weekdays, max 1 trade weekends.
+// Stop immediately after 2 consecutive losses.
 
 const dailyStats = { date: '', trades: 0, consecutiveLosses: 0 };
 
 function getTradingDay() {
+  // Trading day resets at 7am UTC (PDF: "resets at 7am")
   const now = new Date();
-  const h = now.getHours();
+  const utcH = now.getUTCHours();
   const d = new Date(now);
-  if (h < 7) d.setDate(d.getDate() - 1);
+  if (utcH < 7) d.setUTCDate(d.getUTCDate() - 1);
   return d.toISOString().slice(0, 10);
+}
+
+function getDailyTradeLimit() {
+  const dow = new Date().getUTCDay(); // 0=Sun, 6=Sat
+  return (dow === 0 || dow === 6) ? 1 : 2; // 1 on weekends, 2 on weekdays
 }
 
 function recordDailyTrade(isWin) {
@@ -1202,14 +1259,13 @@ function checkDailyLimits() {
     dailyStats.consecutiveLosses = 0;
   }
   if (dailyStats.consecutiveLosses >= 2) {
-    return { canTrade: false, reason: `${dailyStats.consecutiveLosses} consecutive losses — stopped for today. Resets at 7am.` };
+    return { canTrade: false, reason: `${dailyStats.consecutiveLosses} consecutive losses — stopped for today. Resets at 7am UTC.` };
+  }
+  const limit = getDailyTradeLimit();
+  if (dailyStats.trades >= limit) {
+    return { canTrade: false, reason: `Daily trade limit reached (${dailyStats.trades}/${limit}). Resets at 7am UTC.` };
   }
   return { canTrade: true };
-}
-
-function isGoodTradingSession() {
-  const utcH = new Date().getUTCHours();
-  return !(utcH >= 4 && utcH <= 5);
 }
 
 // ── Swing Detection (kept for 15m exit monitoring) ─────────
@@ -1295,16 +1351,54 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
   // RSI filter
   const rsi14 = calcRSI(parsed15);
 
-  // 1h trend for multi-TF alignment
+  // 1h trend + EMA200 bias (PDF: "above MA200 → look long, below → look short")
   let h1Trend = 'neutral';
   let h1Ema21 = null;
+  let ema200_bias = 'neutral'; // 'bullish' | 'bearish' — hard filter from PDF
   if (klines1h && klines1h.length >= 20) {
     const parsed1h = klines1h.map(parseCandle);
     const h1Closes = parsed1h.map(c => c.close);
-    const h1Ema9 = calcEMA(h1Closes, 9);
+    const h1Ema9  = calcEMA(h1Closes, 9);
     h1Ema21 = calcEMA(h1Closes, 21);
     if (h1Ema9 !== null && h1Ema21 !== null) {
       h1Trend = h1Ema9 > h1Ema21 ? 'bullish' : 'bearish';
+    }
+    // EMA200 needs ≥200 candles — use whatever we have (60 is often the max fetched)
+    // Fall back to EMA55 as a medium-term proxy when <200 bars available
+    const ema200period = Math.min(200, h1Closes.length - 1);
+    const ema200_1h = ema200period >= 10 ? calcEMA(h1Closes, ema200period) : null;
+    if (ema200_1h !== null) {
+      ema200_bias = price > ema200_1h ? 'bullish' : 'bearish';
+    }
+  }
+
+  // ── VWAP + OP daily bias (PDF rule) ─────────────────────
+  // "If price > OP AND > VWAP → look LONG only. If < OP AND < VWAP → look SHORT only."
+  // Opening Price (OP) = first 15m candle open of the UTC day
+  let opBias = 'neutral';
+  {
+    const now = new Date();
+    const dayStartMs = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+    // Find the first 15m candle from today
+    const todayCandles = parsed15.filter(c => c.openTime >= dayStartMs);
+    const opPrice = todayCandles.length > 0 ? todayCandles[0].open : null;
+
+    // Simple VWAP approximation from today's 15m candles
+    let vwapVal = null;
+    if (todayCandles.length > 0) {
+      let cumTV = 0, cumV = 0;
+      for (const c of todayCandles) {
+        const typical = (c.high + c.low + c.close) / 3;
+        cumTV += typical * c.volume;
+        cumV  += c.volume;
+      }
+      vwapVal = cumV > 0 ? cumTV / cumV : null;
+    }
+
+    if (opPrice && vwapVal) {
+      if (price > opPrice && price > vwapVal)        opBias = 'bullish'; // above both → prefer LONG
+      else if (price < opPrice && price < vwapVal)   opBias = 'bearish'; // below both → prefer SHORT
+      // else: price between OP and VWAP → gap too small, PDF says avoid entering
     }
   }
 
@@ -1534,6 +1628,45 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
 
   // Apply confluence bonuses + global filters to all signals
   for (const sig of signals) {
+    // ── PDF HARD FILTERS ─────────────────────────────────────
+
+    // EMA200 bias (PDF: "above MA200 → look long, below → look short")
+    // Hard block if direction conflicts with EMA200 trend
+    if (ema200_bias === 'bullish' && sig.direction === 'SHORT') {
+      sig.score = -99;
+      sig.blocked = `SHORT blocked — price above EMA200 (bullish bias per PDF)`;
+      continue;
+    }
+    if (ema200_bias === 'bearish' && sig.direction === 'LONG') {
+      sig.score = -99;
+      sig.blocked = `LONG blocked — price below EMA200 (bearish bias per PDF)`;
+      continue;
+    }
+
+    // VWAP + OP bias (PDF: "avoid entering in between VWAP and OP if gap is small")
+    // Hard block if direction conflicts with OP+VWAP combined bias
+    if (opBias === 'bullish' && sig.direction === 'SHORT') {
+      sig.score -= 3; // strong headwind — not a hard block, but very costly
+      sig.opVwapContra = true;
+    }
+    if (opBias === 'bearish' && sig.direction === 'LONG') {
+      sig.score -= 3;
+      sig.opVwapContra = true;
+    }
+    if (opBias === 'neutral') {
+      // Between OP and VWAP — small gap zone, PDF says avoid
+      sig.score -= 2;
+    }
+    // Bonus: direction aligns with both OP and VWAP
+    if ((opBias === 'bullish' && sig.direction === 'LONG') ||
+        (opBias === 'bearish' && sig.direction === 'SHORT')) {
+      sig.score += 3;
+    }
+
+    // Session tag — add active session name to signal
+    const sess = getActiveSession();
+    if (sess) sig.session = sess.name;
+
     // ── POSITION QUALITY: buy low, sell high — don't chase ──
 
     // RSI: LONG should enter on pullback (RSI 25-55), not when overbought
@@ -1678,6 +1811,9 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     candlePattern: best.candlePattern || null,
     zoneStrength: best.zoneStrength || null,
     zeiierProb: best.zeiierProb || null,
+    session: best.session || null,
+    ema200bias: ema200_bias,
+    opVwapBias: opBias,
   };
 
   return best;
@@ -1693,14 +1829,23 @@ async function scanSMC(log, opts = {}) {
     return [];
   }
 
-  if (!isGoodTradingSession()) {
+  if (isAvoidTime()) {
+    log('Liquidity Engine: Candle-open avoid time (UTC 8/12/16/20 or minute 0/15/30/45). Skipping entry.');
+    bLog.scan('Avoid candle-open time per PDF rules.');
+    return [];
+  }
+
+  const activeSession = getActiveSession();
+  if (!activeSession) {
     const sessionW = await aiLearner.getSessionWeight();
     if (sessionW < 1.2) {
-      log('Liquidity Engine: Dead zone (UTC 4-5). Skipping.');
-      bLog.scan('Dead zone hours. Waiting for volume.');
+      log('Liquidity Engine: Outside session windows (Asia 23-02/Europe 07-10/US 12-16 UTC). Waiting.');
+      bLog.scan('Outside institutional session windows. No trades until next opening.');
       return [];
     }
-    bLog.ai(`AI override: session weight ${sessionW.toFixed(2)} > 1.2 — scanning in dead zone`);
+    bLog.ai(`AI override: session weight ${sessionW.toFixed(2)} > 1.2 — scanning outside session window`);
+  } else {
+    bLog.scan(`Active session: ${activeSession.name} (${activeSession.startH}:00–${activeSession.endH}:00 UTC)`);
   }
 
   const tickers = await fetchTickers();
@@ -1757,7 +1902,9 @@ async function scanSMC(log, opts = {}) {
     }
   } catch (_) { /* BTC fetch failed — continue with neutral */ }
 
-  bLog.scan(`BTC trend=${btcTrend} | Quantum combo=${comboName} (${activeCombo}) | ${topCoins.length} coins`);
+  const sessionTag = activeSession ? activeSession.name : 'AI-override';
+  const dailyLimit = getDailyTradeLimit();
+  bLog.scan(`Session=${sessionTag} | BTC trend=${btcTrend} | Quantum combo=${comboName} (${activeCombo}) | ${topCoins.length} coins | daily trades=${dailyStats.trades}/${dailyLimit}`);
 
   const results = [];
   let analyzed = 0;
@@ -1802,6 +1949,10 @@ module.exports = {
   recordDailyTrade,
   checkDailyLimits,
   isGoodTradingSession,
+  getActiveSession,
+  isAvoidTime,
+  getDailyTradeLimit,
+  SESSION_WINDOWS,
   detectSwings,
   SWING_LENGTHS,
   detectLiquiditySweep,
