@@ -2452,19 +2452,7 @@ router.post('/fix-trades', async (req, res) => {
     let getBinanceRequestOptions;
     try { getBinanceRequestOptions = require('../proxy-agent').getBinanceRequestOptions; } catch { getBinanceRequestOptions = () => ({}); }
 
-    const now = new Date();
-    const dayOfWeek = now.getDay();
-    const mondayOffset = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
-    const monday = new Date(now);
-    monday.setDate(now.getDate() + mondayOffset);
-    monday.setHours(0, 0, 0, 0);
-    const sunday = new Date(monday);
-    sunday.setDate(monday.getDate() + 6);
-    sunday.setHours(23, 59, 59, 999);
-
-    // Also check trades from last 2 weeks to catch older corruption
-    const twoWeeksAgo = new Date(monday);
-    twoWeeksAgo.setDate(twoWeeksAgo.getDate() - 14);
+    const twoWeeksAgo = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
 
     const trades = await query(
       `SELECT t.id, t.user_id, t.api_key_id, t.symbol, t.direction,
@@ -2479,32 +2467,50 @@ router.post('/fix-trades', async (req, res) => {
        JOIN api_keys ak ON ak.id = t.api_key_id
        WHERE t.status IN ('WIN', 'LOSS', 'TP', 'SL', 'CLOSED')
          AND t.closed_at >= $1
-       ORDER BY u.email, t.closed_at`,
+       ORDER BY t.api_key_id, t.symbol, t.closed_at`,
       [twoWeeksAgo]
     );
 
     const results = [];
     let fixed = 0;
 
+    // Group by api_key_id to avoid redundant decrypts + batch per-symbol fetches
+    const byKey = {};
     for (const t of trades) {
-      const entry = parseFloat(t.entry_price);
-      const dbPnl = parseFloat(t.pnl_usdt);
-      const qty = parseFloat(t.quantity || 0);
-      const isLong = t.direction !== 'SHORT';
+      const k = t.api_key_id;
+      if (!byKey[k]) byKey[k] = { key: t, trades: [] };
+      byKey[k].trades.push(t);
+    }
 
-      let actualExit = null;
-      let actualPnl = null;
+    for (const { key: keyRow, trades: keyTrades } of Object.values(byKey)) {
+      let apiKey, apiSecret;
+      try {
+        apiKey = cryptoUtils.decrypt(keyRow.api_key_enc, keyRow.iv, keyRow.auth_tag);
+        apiSecret = cryptoUtils.decrypt(keyRow.api_secret_enc, keyRow.secret_iv, keyRow.secret_auth_tag);
+      } catch (e) {
+        for (const t of keyTrades) results.push({ id: t.id, symbol: t.symbol, error: 'decrypt failed' });
+        continue;
+      }
 
-      if (qty > 0) {
+      // For Bitunix: fetch position history once per symbol, match all trades locally
+      // This is O(symbols) API calls instead of O(trades)
+      const posCache = {}; // symbol → position array
+
+      for (const t of keyTrades) {
+        const entry = parseFloat(t.entry_price);
+        const dbPnl = parseFloat(t.pnl_usdt);
+        const qty = parseFloat(t.quantity || 0);
+        const isLong = t.direction !== 'SHORT';
+        let actualExit = null;
+        let actualPnl = null;
+
+        if (qty <= 0) continue;
+
         try {
-          const apiKey = cryptoUtils.decrypt(t.api_key_enc, t.iv, t.auth_tag);
-          const apiSecret = cryptoUtils.decrypt(t.api_secret_enc, t.secret_iv, t.secret_auth_tag);
-
           if (t.platform === 'binance') {
             const client = new USDMClient({ api_key: apiKey, api_secret: apiSecret }, getBinanceRequestOptions());
             const openTime = new Date(t.created_at).getTime();
             const fills = await client.getAccountTradeList({ symbol: t.symbol, startTime: openTime, limit: 50 });
-
             if (fills && fills.length > 0) {
               const closeSide = isLong ? 'SELL' : 'BUY';
               const closeFills = fills.filter(f => f.side === closeSide);
@@ -2521,23 +2527,29 @@ router.post('/fix-trades', async (req, res) => {
               }
             }
           } else if (t.platform === 'bitunix') {
-            const bxClient = new BitunixClient({ apiKey, apiSecret });
-            const positions = await bxClient.getHistoryPositions({ symbol: t.symbol, pageSize: 50 });
-            const tradeEntry = entry;
-            const tradeSideLong = isLong;
+            // Fetch per-symbol position history once and cache
+            if (!posCache[t.symbol]) {
+              const bxClient = new BitunixClient({ apiKey, apiSecret });
+              try {
+                posCache[t.symbol] = await bxClient.getHistoryPositions({ symbol: t.symbol, pageSize: 100 });
+              } catch { posCache[t.symbol] = []; }
+            }
 
-            for (const p of positions) {
+            for (const p of posCache[t.symbol]) {
               const cp = parseFloat(p.closePrice || p.avgClosePrice || 0);
               const ep = parseFloat(p.entryPrice || p.avgOpenPrice || 0);
               // Bitunix returns side as "BUY"/"SELL", not "LONG"/"SHORT"
               const pSide = (p.side || '').toUpperCase();
               const pSideLong = pSide === 'BUY' || pSide === 'LONG';
-              const entryMatch = ep > 0 && Math.abs(ep - tradeEntry) / tradeEntry < 0.002;
-              const sideMatch = pSideLong === tradeSideLong;
+              const entryMatch = ep > 0 && Math.abs(ep - entry) / entry < 0.002;
+              const sideMatch = pSideLong === isLong;
+              const tradeMs = t.created_at ? new Date(t.created_at).getTime() : 0;
+              const closeMs = parseInt(p.mtime || p.ctime || 0);
+              const timeMatch = !tradeMs || !closeMs || closeMs > tradeMs;
 
-              if (cp > 0 && p.symbol === t.symbol && entryMatch && sideMatch) {
+              if (cp > 0 && p.symbol === t.symbol && entryMatch && sideMatch && timeMatch) {
                 actualExit = cp;
-                // realizedPNL is already net (fee + funding already deducted by Bitunix)
+                // realizedPNL is already net of fee + funding on Bitunix
                 const rpnl = parseFloat(p.realizedPNL || 0);
                 if (rpnl !== 0) actualPnl = rpnl;
                 break;
@@ -2548,36 +2560,36 @@ router.post('/fix-trades', async (req, res) => {
           results.push({ id: t.id, email: t.email, symbol: t.symbol, error: e.message });
           continue;
         }
-      }
 
-      // Calculate correct PnL
-      let correctPnl;
-      if (actualPnl !== null) {
-        correctPnl = parseFloat(actualPnl.toFixed(4));
-      } else if (actualExit !== null && qty > 0) {
-        correctPnl = isLong
-          ? parseFloat(((actualExit - entry) * qty).toFixed(4))
-          : parseFloat(((entry - actualExit) * qty).toFixed(4));
-      } else {
-        continue;
-      }
+        // Calculate correct PnL
+        let correctPnl;
+        if (actualPnl !== null) {
+          correctPnl = parseFloat(actualPnl.toFixed(4));
+        } else if (actualExit !== null) {
+          correctPnl = isLong
+            ? parseFloat(((actualExit - entry) * qty).toFixed(4))
+            : parseFloat(((entry - actualExit) * qty).toFixed(4));
+        } else {
+          continue;
+        }
 
-      const correctStatus = correctPnl > 0 ? 'WIN' : 'LOSS';
-      const correctExit = actualExit || parseFloat(t.exit_price);
-      const isWrong = Math.abs(correctPnl - dbPnl) > 0.01 || correctStatus !== t.status;
+        const correctStatus = correctPnl > 0 ? 'WIN' : 'LOSS';
+        const correctExit = actualExit || parseFloat(t.exit_price);
+        const isWrong = Math.abs(correctPnl - dbPnl) > 0.01 || correctStatus !== t.status;
 
-      if (isWrong) {
-        await query(
-          `UPDATE trades SET status = $1, pnl_usdt = $2, exit_price = $3 WHERE id = $4`,
-          [correctStatus, correctPnl, correctExit, t.id]
-        );
-        results.push({
-          id: t.id, email: t.email, symbol: t.symbol, direction: t.direction,
-          old_status: t.status, old_pnl: dbPnl,
-          new_status: correctStatus, new_pnl: correctPnl,
-          fixed: true,
-        });
-        fixed++;
+        if (isWrong) {
+          await query(
+            `UPDATE trades SET status = $1, pnl_usdt = $2, exit_price = $3 WHERE id = $4`,
+            [correctStatus, correctPnl, correctExit, t.id]
+          );
+          results.push({
+            id: t.id, email: t.email, symbol: t.symbol, direction: t.direction,
+            old_status: t.status, old_pnl: dbPnl,
+            new_status: correctStatus, new_pnl: correctPnl,
+            fixed: true,
+          });
+          fixed++;
+        }
       }
     }
 
