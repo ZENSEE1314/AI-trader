@@ -2139,13 +2139,13 @@ EMAIL_FROM=MCT &lt;a83c06001@smtp-brevo.com&gt;</pre>
 
   <!-- Customer Chatbot Widget -->
   <div id="chatbot-widget" class="chatbot-widget">
-    <button id="chatbot-toggle" class="chatbot-toggle" onclick="document.getElementById('chatbot-panel').classList.toggle('hidden')">
+    <button id="chatbot-toggle" class="chatbot-toggle" onclick="document.getElementById('chatbot-panel').classList.toggle('hidden')" aria-label="Open support chat">
       <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
     </button>
     <div id="chatbot-panel" class="chatbot-panel hidden">
       <div class="chatbot-header">
         <strong>MCT Support</strong>
-        <button onclick="document.getElementById('chatbot-panel').classList.add('hidden')" style="background:none;border:none;color:#fff;font-size:1.2rem;cursor:pointer;">&times;</button>
+        <button onclick="document.getElementById('chatbot-panel').classList.add('hidden')" style="background:none;border:none;color:#fff;font-size:1.4rem;line-height:1;cursor:pointer;padding:0 4px;" aria-label="Close chat">&times;</button>
       </div>
       <div id="chatbot-messages" class="chatbot-messages">
         <div class="chatbot-msg chatbot-bot">
@@ -2153,10 +2153,19 @@ EMAIL_FROM=MCT &lt;a83c06001@smtp-brevo.com&gt;</pre>
           <span style="margin-top:4px;font-size:0.75rem;color:var(--color-text-muted);">- How our trading bot works<br>- Setting up your account<br>- Connecting exchange API keys<br>- Understanding profit split<br>- Troubleshooting issues</span>
         </div>
       </div>
-      <div style="display:flex;gap:4px;padding:8px;">
-        <input type="text" id="chatbot-input" class="form-input" placeholder="Ask me anything..." style="flex:1;font-size:0.85rem;padding:8px 12px;" onkeydown="if(event.key==='Enter')window.CryptoBot?.customerChat?.()">
-        <button class="btn btn-primary btn-sm" style="padding:8px 14px;" onclick="window.CryptoBot?.customerChat?.()">Send</button>
-      </div>
+      <!-- Form wrapper: handles Enter/Go on ALL mobile keyboards correctly -->
+      <form class="chatbot-input-row" onsubmit="event.preventDefault();window.CryptoBot?.customerChat?.()">
+        <input type="text" id="chatbot-input" class="form-input"
+          placeholder="Ask me anything..."
+          style="flex:1;font-size:0.85rem;padding:8px 12px;"
+          inputmode="text"
+          enterkeyhint="send"
+          autocomplete="off"
+          autocorrect="off"
+          autocapitalize="off"
+          spellcheck="false">
+        <button id="chatbot-send" type="submit" class="btn btn-primary btn-sm" style="padding:8px 14px;flex-shrink:0;">Send</button>
+      </form>
     </div>
   </div>
 

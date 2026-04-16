@@ -3212,11 +3212,18 @@ img[src*="logo"] {
   box-shadow: 0 4px 20px rgba(212, 175, 55, 0.3);
   transition: transform 0.2s ease, box-shadow 0.2s ease;
   display: flex; align-items: center; justify-content: center;
+  -webkit-tap-highlight-color: transparent;
 }
 .chatbot-toggle:hover { transform: scale(1.08); box-shadow: 0 6px 28px rgba(212, 175, 55, 0.4); }
+
+/* Panel: fixed so it never overflows off-screen when mobile keyboard opens */
 .chatbot-panel {
-  position: absolute; bottom: 70px; right: 0;
-  width: 340px; max-height: 480px;
+  position: fixed;
+  bottom: 88px; right: 16px;
+  width: 340px;
+  /* dvh = dynamic viewport height — shrinks with keyboard; fallback for older browsers */
+  max-height: min(480px, calc(100dvh - 110px));
+  max-height: min(480px, calc(100vh - 110px));
   background: var(--color-bg-raised); border: 1px solid var(--color-border-muted);
   border-radius: var(--radius-lg); overflow: hidden;
   box-shadow: 0 8px 40px rgba(0, 0, 0, 0.4);
@@ -3224,6 +3231,7 @@ img[src*="logo"] {
   animation: adminTabIn 0.2s ease-out;
 }
 .chatbot-header {
+  flex-shrink: 0;
   display: flex; align-items: center; justify-content: space-between;
   padding: 12px 16px; background: linear-gradient(135deg, var(--color-accent), #0088cc);
   color: #fff; font-size: 0.9rem;
@@ -3231,11 +3239,20 @@ img[src*="logo"] {
 .chatbot-messages {
   flex: 1; overflow-y: auto; padding: 12px;
   display: flex; flex-direction: column; gap: 8px;
-  max-height: 320px; min-height: 200px;
+  /* Smooth momentum scroll on iOS */
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+}
+.chatbot-input-row {
+  flex-shrink: 0;
+  display: flex; gap: 4px; padding: 8px;
+  border-top: 1px solid var(--color-border-muted);
+  background: var(--color-bg-raised);
 }
 .chatbot-msg {
   padding: 8px 12px; border-radius: 12px; font-size: 0.82rem;
   line-height: 1.5; max-width: 90%; display: flex; flex-direction: column;
+  word-break: break-word;
 }
 .chatbot-bot {
   background: var(--color-bg); border: 1px solid var(--color-border-muted);
@@ -3245,8 +3262,21 @@ img[src*="logo"] {
   background: rgba(212, 175, 55, 0.1); border: 1px solid rgba(212, 175, 55, 0.15);
   align-self: flex-end; color: var(--color-text);
 }
-@media (max-width: 480px) {
-  .chatbot-panel { width: calc(100vw - 32px); right: -4px; }
+.chatbot-typing {
+  align-self: flex-start; color: var(--color-text-muted); font-size: 0.8rem;
+  padding: 6px 12px; font-style: italic;
+}
+@media (max-width: 520px) {
+  .chatbot-widget { bottom: 16px; right: 12px; }
+  .chatbot-panel {
+    /* Full-width minus safe margins; bottom clears the toggle button */
+    right: 0; left: 0; margin: 0 8px;
+    width: auto;
+    bottom: 80px;
+    /* Shorter on mobile so keyboard doesn't cover it */
+    max-height: min(380px, calc(100dvh - 110px));
+    max-height: min(380px, calc(100vh - 110px));
+  }
 }
 .mc-agent-card.mc-card-running {
   border-color: var(--color-accent);

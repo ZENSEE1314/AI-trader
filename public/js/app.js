@@ -2082,36 +2082,59 @@
     } catch (err) { showToast(err.message, 'error'); }
   }
 
+  let _chatBusy = false;
   async function customerChat() {
     const input = document.getElementById('chatbot-input');
     const container = document.getElementById('chatbot-messages');
-    if (!input || !container || !input.value.trim()) return;
+    const sendBtn = document.getElementById('chatbot-send');
+    if (!input || !container) return;
     const msg = input.value.trim();
+    if (!msg || _chatBusy) return;
+
+    // Lock to prevent double-send
+    _chatBusy = true;
     input.value = '';
-    // Add user message
+    if (sendBtn) { sendBtn.disabled = true; sendBtn.textContent = '...'; }
+
+    // Dismiss mobile keyboard after send
+    input.blur();
+
+    // Show user message
     const userEl = document.createElement('div');
     userEl.className = 'chatbot-msg chatbot-user';
     userEl.innerHTML = `<span>${escapeHtml(msg)}</span>`;
     container.appendChild(userEl);
+
+    // Show typing indicator
+    const typingEl = document.createElement('div');
+    typingEl.className = 'chatbot-typing';
+    typingEl.textContent = 'MCT is typing…';
+    container.appendChild(typingEl);
     container.scrollTop = container.scrollHeight;
-    // Fetch reply
+
     try {
       const res = await fetch('/api/chatbot', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: msg }),
       });
       const data = await res.json();
+      typingEl.remove();
       const botEl = document.createElement('div');
       botEl.className = 'chatbot-msg chatbot-bot';
       botEl.innerHTML = `<span>${escapeHtml(data.reply || 'Sorry, try again.').replace(/\n/g, '<br>')}</span>`;
       container.appendChild(botEl);
     } catch {
+      typingEl.remove();
       const errEl = document.createElement('div');
       errEl.className = 'chatbot-msg chatbot-bot';
       errEl.innerHTML = '<span>Sorry, I\'m having trouble. Try again later.</span>';
       container.appendChild(errEl);
+    } finally {
+      _chatBusy = false;
+      if (sendBtn) { sendBtn.disabled = false; sendBtn.textContent = 'Send'; }
+      // Scroll to bottom — requestAnimationFrame ensures DOM paint is done first
+      requestAnimationFrame(() => { container.scrollTop = container.scrollHeight; });
     }
-    container.scrollTop = container.scrollHeight;
   }
 
   async function mcCommand(command, params) {
