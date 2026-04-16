@@ -1454,8 +1454,10 @@ router.post('/fix-bitunix-pnl', async (req, res) => {
             const positions = await client.getHistoryPositions({ symbol: trade.symbol, pageSize: 50 });
             for (const p of positions) {
               const cp = parseFloat(p.closePrice || 0);
-              const ep = parseFloat(p.entryPrice || 0);
-              const pSideLong = (p.side || '').toUpperCase() === 'LONG';
+              const ep = parseFloat(p.entryPrice || p.avgOpenPrice || 0);
+              // Bitunix returns side as "BUY"/"SELL", not "LONG"/"SHORT"
+              const pSide = (p.side || '').toUpperCase();
+              const pSideLong = pSide === 'BUY' || pSide === 'LONG';
               const closeMs = parseInt(p.mtime || p.ctime || 0);
               const entryMatch = ep > 0 && Math.abs(ep - tradeEntry) / tradeEntry < 0.002;
               const sideMatch = pSideLong === tradeSideLong;
@@ -1463,10 +1465,8 @@ router.post('/fix-bitunix-pnl', async (req, res) => {
 
               if (cp > 0 && p.symbol === trade.symbol && entryMatch && sideMatch && timeMatch) {
                 exitPrice = cp;
-                const grossPnl = parseFloat(p.realizedPNL || 0);
-                const fee = Math.abs(parseFloat(p.fee || 0));
-                const funding = parseFloat(p.funding || 0);
-                realizedPnl = grossPnl - fee - funding;
+                // NOTE: Bitunix realizedPNL is already net (fees + funding deducted)
+                realizedPnl = parseFloat(p.realizedPNL || 0);
                 found = true;
                 break;
               }
@@ -2529,16 +2529,17 @@ router.post('/fix-trades', async (req, res) => {
             for (const p of positions) {
               const cp = parseFloat(p.closePrice || p.avgClosePrice || 0);
               const ep = parseFloat(p.entryPrice || p.avgOpenPrice || 0);
-              const pSideLong = (p.side || '').toUpperCase() === 'LONG';
+              // Bitunix returns side as "BUY"/"SELL", not "LONG"/"SHORT"
+              const pSide = (p.side || '').toUpperCase();
+              const pSideLong = pSide === 'BUY' || pSide === 'LONG';
               const entryMatch = ep > 0 && Math.abs(ep - tradeEntry) / tradeEntry < 0.002;
               const sideMatch = pSideLong === tradeSideLong;
 
               if (cp > 0 && p.symbol === t.symbol && entryMatch && sideMatch) {
                 actualExit = cp;
-                const profit = parseFloat(p.profit || 0);
-                const pnl = parseFloat(p.pnl || 0);
-                if (profit !== 0) actualPnl = profit;
-                else if (pnl !== 0) actualPnl = pnl;
+                // realizedPNL is already net (fee + funding already deducted by Bitunix)
+                const rpnl = parseFloat(p.realizedPNL || 0);
+                if (rpnl !== 0) actualPnl = rpnl;
                 break;
               }
             }

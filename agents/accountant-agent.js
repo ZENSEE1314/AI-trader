@@ -285,31 +285,19 @@ class AccountantAgent extends BaseAgent {
 
         for (const p of historyPositions) {
           const symbol = p.symbol;
-          const entryPrice = parseFloat(p.avgOpenPrice || p.entryPrice || p.openPrice || 0);
+          // NOTE: Bitunix history positions use entryPrice (not avgOpenPrice)
+          const entryPrice = parseFloat(p.entryPrice || p.avgOpenPrice || p.openPrice || 0);
           const exitPrice = parseFloat(p.closePrice || p.exitPrice || 0);
           const qty = parseFloat(p.qty || p.positionAmt || 0);
           const side = (p.side || '').toUpperCase();
 
           if (!symbol || !entryPrice) continue;
 
-          // Extract accurate PnL and fees from Bitunix
-          const profit = parseFloat(p.profit || 0);
-          const rawPnl = parseFloat(p.pnl || 0);
-          const rpnl = parseFloat(p.realizedPNL || 0);
+          // Bitunix realizedPNL is already net (fee + funding already deducted)
+          const netPnl = parseFloat((parseFloat(p.realizedPNL || 0)).toFixed(8));
           const fee = Math.abs(parseFloat(p.fee || 0));
           const funding = Math.abs(parseFloat(p.funding || 0));
           const totalFee = parseFloat((fee + funding).toFixed(8));
-
-          // Net PnL (after fees): profit > pnl > (realizedPNL - fee - funding)
-          let netPnl;
-          if (profit !== 0) {
-            netPnl = profit;
-          } else if (rawPnl !== 0) {
-            netPnl = rawPnl;
-          } else {
-            netPnl = rpnl - fee - funding;
-          }
-          netPnl = parseFloat(netPnl.toFixed(8));
 
           // Gross PnL = net + fees
           const grossPnl = parseFloat((netPnl + totalFee).toFixed(8));
