@@ -110,14 +110,14 @@ router.get('/trades', async (req, res) => {
       `SELECT t.*, ak.label as key_label, ak.platform
        FROM trades t
        LEFT JOIN api_keys ak ON t.api_key_id = ak.id
-       WHERE t.user_id = $1 ${dateFilter}
+       WHERE t.user_id = $1 AND t.status != 'ERROR' ${dateFilter}
        ORDER BY t.created_at DESC
        LIMIT $2 OFFSET $3`,
       [req.userId, limit, offset]
     );
 
     const countRes = await query(
-      `SELECT COUNT(*) as cnt FROM trades WHERE user_id = $1 ${dateFilterCount}`,
+      `SELECT COUNT(*) as cnt FROM trades WHERE user_id = $1 AND status != 'ERROR' ${dateFilterCount}`,
       [req.userId]
     );
     res.json({ trades: rows, total: parseInt(countRes[0].cnt), page, pages: Math.ceil(countRes[0].cnt / limit) });

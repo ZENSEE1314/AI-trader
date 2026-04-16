@@ -157,6 +157,7 @@ router.get('/trades/csv', async (req, res) => {
        FROM trades t
        LEFT JOIN api_keys ak ON t.api_key_id = ak.id
        LEFT JOIN users u ON t.user_id = u.id
+       WHERE t.status != 'ERROR'
        ORDER BY t.created_at DESC`
     );
 

@@ -1570,14 +1570,8 @@ async function executeForAllUsers(pick) {
       } catch (err) {
         userLog.error(`User ${key.email} trade error: ${err.message}`);
         log(`User ${key.email} trade error: ${err.message}`);
-        // Record ERROR trade in DB so dashboard shows what happened
-        try {
-          await db.query(
-            `INSERT INTO trades (api_key_id, user_id, symbol, direction, status, error_msg, created_at)
-             VALUES ($1, $2, $3, $4, 'ERROR', $5, NOW())`,
-            [key.id, key.user_id, sym, pick.direction, err.message.substring(0, 200)]
-          );
-        } catch (_) {}
+        // NOTE: not saving ERROR trades to DB — they pollute trade history with no useful data.
+        // Errors are visible in bot logs already.
       }
     })().catch(e => {
         userLog.error(`User trade execution failed: ${e.message}`);
