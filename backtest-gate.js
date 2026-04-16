@@ -86,7 +86,7 @@ function calcRSI(closes, period = 14) {
 }
 
 // Strategies the backtest engine knows how to simulate
-const KNOWN_STRATEGIES = new Set(['LIQUIDITY_SWEEP', 'STOP_LOSS_HUNT', 'MOMENTUM_SCALP', 'BRR_FIBO', 'SMC_CLASSIC', 'ALL']);
+const KNOWN_STRATEGIES = new Set(['LIQUIDITY_SWEEP', 'STOP_LOSS_HUNT', 'MOMENTUM_SCALP', 'BRR_FIBO', 'SMC_CLASSIC', 'SMC_HL_STRUCTURE', 'ALL']);
 
 // Backtest a SINGLE token × strategy combo on recent data
 // Called inline by the agent right before it wants to trade
@@ -212,6 +212,32 @@ async function backtestToken(symbol, strategy, days = BACKTEST_DAYS) {
         const lh = highs[highs.length - 1] < Math.max(...highs.slice(0, -3));
         const ll = lows[lows.length - 1] < Math.min(...lows.slice(0, -1));
         if (lh && ll && h1Trend === 'bearish') {
+          signals.push({ direction: 'SHORT', price: currentPrice });
+        }
+      }
+    }
+
+    // SMC HL Structure backtest: consecutive HLs (bullish) or LHs (bearish) on 15m
+    // EMA55 direction + 1m trigger candle simulated via next 15m bar
+    if (strategy === 'SMC_HL_STRUCTURE' || strategy === 'ALL') {
+      if (slice15m.length >= 30) {
+        const closes15 = slice15m.map(c => c.close);
+        const ema55_now  = calcEMA(closes15, Math.min(55, closes15.length - 1));
+        const ema55_prev = calcEMA(closes15.slice(0, -5), Math.min(55, closes15.length - 6));
+        const slope = ema55_now && ema55_prev ? (ema55_now - ema55_prev) / ema55_prev : 0;
+
+        // Check for 2+ consecutive HLs in last 20 bars (swing lows going up)
+        const lows20  = slice15m.slice(-20).map(c => c.low);
+        const highs20 = slice15m.slice(-20).map(c => c.high);
+        const swingLows  = lows20.filter((v, i) => i > 0 && i < lows20.length - 1 && v < lows20[i - 1] && v < lows20[i + 1]);
+        const swingHighs = highs20.filter((v, i) => i > 0 && i < highs20.length - 1 && v > highs20[i - 1] && v > highs20[i + 1]);
+        const hlPattern = swingLows.length >= 2 && swingLows[swingLows.length - 1] > swingLows[swingLows.length - 2];
+        const lhPattern = swingHighs.length >= 2 && swingHighs[swingHighs.length - 1] < swingHighs[swingHighs.length - 2];
+
+        if (hlPattern && ema55_now && currentPrice > ema55_now && slope > -0.0003 && h1Trend !== 'bearish') {
+          signals.push({ direction: 'LONG', price: currentPrice });
+        }
+        if (lhPattern && ema55_now && currentPrice < ema55_now && slope < 0.0003 && h1Trend !== 'bullish') {
           signals.push({ direction: 'SHORT', price: currentPrice });
         }
       }
@@ -378,7 +404,7 @@ async function passesGate(symbol, strategy, days = BACKTEST_DAYS, signalWinRate 
 
 // Get all strategies that pass for a symbol (useful for dashboard)
 async function getPassingStrategies(symbol, days = BACKTEST_DAYS) {
-  const strategies = ['LIQUIDITY_SWEEP', 'STOP_LOSS_HUNT', 'MOMENTUM_SCALP', 'BRR_FIBO', 'SMC_CLASSIC'];
+  const strategies = ['LIQUIDITY_SWEEP', 'STOP_LOSS_HUNT', 'MOMENTUM_SCALP', 'BRR_FIBO', 'SMC_CLASSIC', 'SMC_HL_STRUCTURE'];
   const passing = [];
 
   for (const strat of strategies) {

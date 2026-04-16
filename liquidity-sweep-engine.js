@@ -134,6 +134,133 @@ function calcATR(candles, period = 14) {
   return sum / period;
 }
 
+// ── RMA (Wilder Smoothing — matches Pine Script ta.rma()) ──
+// Alpha = 1/period, giving slower smoothing that follows structure curves
+// This is the basis for Zeiierman's "Curved Smart Money Concept Probability"
+
+function calcRMAArray(values, period) {
+  if (values.length < period) return [];
+  const result = new Array(period - 1).fill(null);
+  let rma = values.slice(0, period).reduce((a, b) => a + b, 0) / period;
+  result.push(rma);
+  for (let i = period; i < values.length; i++) {
+    rma = (values[i] + rma * (period - 1)) / period;
+    result.push(rma);
+  }
+  return result;
+}
+
+// ── EMA slope strength ─────────────────────────────────────
+// Returns EMA value and slope (% change over last N bars)
+// Used to verify trend direction has conviction, not just flat
+
+function calcEMAStrength(candles, period = 55, slopeBars = 5) {
+  if (candles.length < period + slopeBars) return { ema: null, slope: 0, isBullish: false, isBearish: false };
+  const closes = candles.map(c => c.close);
+  const k = 2 / (period + 1);
+
+  // Compute EMA up to (length - slopeBars) for the "past" value
+  let emaPast = closes.slice(0, period).reduce((a, b) => a + b, 0) / period;
+  const pastEnd = closes.length - slopeBars;
+  for (let i = period; i < pastEnd; i++) emaPast = closes[i] * k + emaPast * (1 - k);
+
+  // Compute full EMA for current value
+  let emaNow = closes.slice(0, period).reduce((a, b) => a + b, 0) / period;
+  for (let i = period; i < closes.length; i++) emaNow = closes[i] * k + emaNow * (1 - k);
+
+  const slope = (emaNow - emaPast) / emaPast; // % slope over slopeBars
+  const price = closes[closes.length - 1];
+
+  return {
+    ema: emaNow,
+    slope,
+    isBullish: price > emaNow && slope > -0.0003,   // above EMA + not declining hard
+    isBearish: price < emaNow && slope < 0.0003,    // below EMA + not rising hard
+  };
+}
+
+// ── Zeiierman Curved SMC Structure Detection ───────────────
+// Inspired by "Curved Smart Money Concept Probability" (Zeiierman, TradingView)
+// Uses RMA-smoothed highs/lows to curve out noise, then finds pivot structure.
+// Detects HL HL (bullish — Higher Lows sequence) and LH LH (bearish — Lower Highs).
+// Returns a probability score based on how extreme price is within the curved band.
+
+function detectCurvedStructure(candles, rmaLen = 10, pivotLen = 4) {
+  const minLen = rmaLen + pivotLen * 2 + 5;
+  if (candles.length < minLen) return null;
+
+  const highs = candles.map(c => c.high);
+  const lows  = candles.map(c => c.low);
+
+  // Step 1: Smooth highs and lows with RMA (curves out micro-noise)
+  const rmaHighs = calcRMAArray(highs, rmaLen);
+  const rmaLows  = calcRMAArray(lows, rmaLen);
+
+  // Step 2: Find swing pivots in smoothed data (left-right comparison)
+  const swingHighs = [];
+  const swingLows  = [];
+
+  for (let i = pivotLen; i < rmaHighs.length - pivotLen; i++) {
+    if (rmaHighs[i] === null || rmaLows[i] === null) continue;
+
+    let isSwingHigh = true;
+    let isSwingLow  = true;
+
+    for (let j = 1; j <= pivotLen; j++) {
+      if (rmaHighs[i] <= rmaHighs[i - j] || rmaHighs[i] <= rmaHighs[i + j]) isSwingHigh = false;
+      if (rmaLows[i]  >= rmaLows[i - j]  || rmaLows[i]  >= rmaLows[i + j])  isSwingLow  = false;
+    }
+
+    if (isSwingHigh) swingHighs.push({ idx: i, price: rmaHighs[i], rawHigh: highs[i] });
+    if (isSwingLow)  swingLows.push ({ idx: i, price: rmaLows[i],  rawLow:  lows[i]  });
+  }
+
+  // Step 3: Count consecutive Higher Lows (HL HL) and Lower Highs (LH LH)
+  const recentHighs = swingHighs.slice(-3);
+  const recentLows  = swingLows.slice(-3);
+
+  let hlCount = 0; // consecutive Higher Lows
+  for (let i = 1; i < recentLows.length; i++) {
+    if (recentLows[i].price > recentLows[i - 1].price) hlCount++;
+  }
+
+  let lhCount = 0; // consecutive Lower Highs
+  for (let i = 1; i < recentHighs.length; i++) {
+    if (recentHighs[i].price < recentHighs[i - 1].price) lhCount++;
+  }
+
+  const isBullish = hlCount >= 1 && recentLows.length >= 2;
+  const isBearish = lhCount >= 1 && recentHighs.length >= 2;
+
+  // Step 4: Zeiierman probability — position within the curved band
+  // 0 = at lower band (prime LONG zone), 1 = at upper band (prime SHORT zone)
+  const lastH = rmaHighs.filter(v => v !== null).slice(-1)[0] || 0;
+  const lastL = rmaLows.filter(v => v !== null).slice(-1)[0] || 0;
+  const price  = candles[candles.length - 1].close;
+  const bandW  = lastH - lastL;
+  const pos    = bandW > 0 ? (price - lastL) / bandW : 0.5;
+
+  // Probability scores (0–100): higher = better setup quality
+  const longProb  = isBullish ? Math.min(100, Math.round((1 - pos) * 50 + hlCount * 30)) : 0;
+  const shortProb = isBearish ? Math.min(100, Math.round(pos * 50 + lhCount * 30))        : 0;
+
+  return {
+    isBullish,
+    isBearish,
+    hlCount,
+    lhCount,
+    swingHighs: recentHighs,
+    swingLows:  recentLows,
+    nearLowerBand: pos < 0.35,
+    nearUpperBand: pos > 0.65,
+    normalizedPos: pos,
+    longProbability:  longProb,
+    shortProbability: shortProb,
+    curvedHigh: lastH,
+    curvedLow:  lastL,
+  };
+}
+
 // ── S/R Zone Detection (6-Criteria Scoring) ────────────────
 // Levels are ZONES not lines. Scored on 6 criteria:
 //   1. Major swing high/low (is it a significant turning point?)
@@ -945,6 +1072,101 @@ function detectBRR(candles1h, candles15m, candles1m, cfg = {}) {
   return null;
 }
 
+// ── Strategy 6: SMC HL HL HL / LH LH LH Structure Trade ────
+// Multi-timeframe cascade:
+//   15m: Zeiierman curved structure (HL HL = bullish, LH LH = bearish)
+//   15m: EMA55 strength confirms direction (slope not opposing)
+//   3m:  EMA9 > EMA21 alignment (trend continuation, not reversal)
+//   1m:  Trigger on NEXT closed candle (broke prior 1m high/low) + volume
+//
+// Based on "Curved Smart Money Concept Probability" (Zeiierman) for structure,
+// with practical multi-TF entry cascade used in professional SMC trading.
+
+function detectSMCStructureTrade(candles15m, candles3m, candles1m, h1Trend = 'neutral') {
+  if (candles15m.length < 60 || candles3m.length < 20 || candles1m.length < 10) return null;
+
+  // ── STEP 1: EMA55 strength on 15m ──────────────────────────
+  // 55 × 15min ≈ 13.75h — reliable medium-term trend proxy
+  const ema55 = calcEMAStrength(candles15m, Math.min(55, candles15m.length - 5), 5);
+  if (!ema55.ema) return null;
+
+  // ── STEP 2: Zeiierman curved structure on 15m ───────────────
+  const structure = detectCurvedStructure(candles15m);
+  if (!structure) return null;
+
+  // ── STEP 3: 3m EMA alignment ───────────────────────────────
+  const closes3 = candles3m.map(c => c.close);
+  const ema9_3m  = calcEMA(closes3, 9);
+  const ema21_3m = calcEMA(closes3, 21);
+  if (!ema9_3m || !ema21_3m) return null;
+  const trend3Bullish = ema9_3m > ema21_3m;
+  const trend3Bearish = ema9_3m < ema21_3m;
+
+  // ── STEP 4: 1m trigger ─────────────────────────────────────
+  const last1 = candles1m[candles1m.length - 1];
+  const prev1 = candles1m[candles1m.length - 2];
+  const vol1m = hasVolumeConfirm(candles1m, candles1m.length - 1, 1.2);
+  const atr15 = calcATR(candles15m);
+
+  // ── LONG: HL HL structure + EMA55 above + 3m bullish + 1m breakout ──
+  if (
+    structure.isBullish &&
+    ema55.isBullish &&
+    (h1Trend === 'bullish' || h1Trend === 'neutral') &&
+    trend3Bullish &&
+    isGreenCandle(last1) &&
+    last1.close > prev1.high &&   // 1m close breaks prior high = trigger confirmation
+    vol1m
+  ) {
+    const lastHL   = structure.swingLows.length > 0 ? structure.swingLows[structure.swingLows.length - 1].rawLow : null;
+    const atrSl    = last1.close - atr15 * 1.5;
+    const slPrice  = lastHL ? Math.min(lastHL * 0.999, atrSl) : atrSl;
+
+    return {
+      direction: 'LONG',
+      setup: 'SMC_HL_STRUCTURE',
+      entryPrice: last1.close,
+      sl: slPrice,
+      hlCount:     structure.hlCount,
+      probability: structure.longProbability,
+      ema55Slope:  Math.round(ema55.slope * 10000) / 100, // in basis points
+      tf15: 'HL_HL_bullish',
+      tf3:  'EMA_aligned',
+      tf1:  '1m_breakout',
+    };
+  }
+
+  // ── SHORT: LH LH structure + EMA55 below + 3m bearish + 1m breakdown ──
+  if (
+    structure.isBearish &&
+    ema55.isBearish &&
+    (h1Trend === 'bearish' || h1Trend === 'neutral') &&
+    trend3Bearish &&
+    isRedCandle(last1) &&
+    last1.close < prev1.low &&    // 1m close breaks prior low = trigger confirmation
+    vol1m
+  ) {
+    const lastLH   = structure.swingHighs.length > 0 ? structure.swingHighs[structure.swingHighs.length - 1].rawHigh : null;
+    const atrSl    = last1.close + atr15 * 1.5;
+    const slPrice  = lastLH ? Math.max(lastLH * 1.001, atrSl) : atrSl;
+
+    return {
+      direction: 'SHORT',
+      setup: 'SMC_HL_STRUCTURE',
+      entryPrice: last1.close,
+      sl: slPrice,
+      lhCount:     structure.lhCount,
+      probability: structure.shortProbability,
+      ema55Slope:  Math.round(ema55.slope * 10000) / 100,
+      tf15: 'LH_LH_bearish',
+      tf3:  'EMA_aligned',
+      tf1:  '1m_breakdown',
+    };
+  }
+
+  return null;
+}
+
 // ── Daily Stats ────────────────────────────────────────────
 
 const dailyStats = { date: '', trades: 0, consecutiveLosses: 0 };
@@ -1050,9 +1272,10 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
   const symbol = ticker.symbol;
   const price = parseFloat(ticker.lastPrice);
 
-  const [klines1h, klines15m, klines1m] = await Promise.all([
+  const [klines1h, klines15m, klines3m, klines1m] = await Promise.all([
     fetchKlines(symbol, '1h', 60),
     fetchKlines(symbol, '15m', 100),
+    fetchKlines(symbol, '3m', 50),
     fetchKlines(symbol, '1m', 50),
   ]);
 
@@ -1060,7 +1283,8 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
   if (klines15m.length < 30 || klines1m.length < 10) return null;
 
   const parsed15 = klines15m.map(parseCandle);
-  const parsed1 = klines1m.map(parseCandle);
+  const parsed3  = klines3m ? klines3m.map(parseCandle) : [];
+  const parsed1  = klines1m.map(parseCandle);
   const atr15 = calcATR(parsed15);
 
   // ── GLOBAL FILTERS ──────────────────────────────────────
@@ -1265,6 +1489,47 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     } catch { /* SMC engine error — skip */ }
   } // end SMC_CLASSIC gate
 
+  // Strategy 6: SMC HL Structure (Zeiierman curved + EMA55 + 3m/1m cascade)
+  if (!enabledStrategies || enabledStrategies.SMC_HL_STRUCTURE !== false) {
+    if (parsed3.length >= 20) {
+      const hlSignal = detectSMCStructureTrade(parsed15, parsed3, parsed1, h1Trend);
+      if (hlSignal) {
+        const slDist  = Math.abs(hlSignal.entryPrice - hlSignal.sl) / hlSignal.entryPrice;
+        const atrTp   = calcATR(parsed15) * 2.5;
+        const tp1     = hlSignal.direction === 'LONG'
+          ? hlSignal.entryPrice + atrTp
+          : hlSignal.entryPrice - atrTp;
+        const rr      = slDist > 0 ? atrTp / (hlSignal.entryPrice * slDist) : 1.5;
+
+        // Base score 10: premium strategy with all 3 TF alignment + volume
+        // Bonus: high probability from Zeiierman band position, hlCount
+        let score = 10;
+        if ((hlSignal.probability || 0) > 60) score += 2;
+        if ((hlSignal.hlCount || hlSignal.lhCount || 0) >= 2) score += 2;
+
+        signals.push({
+          symbol,
+          direction: hlSignal.direction,
+          price: hlSignal.entryPrice,
+          lastPrice: price,
+          sl: hlSignal.sl,
+          tp1,
+          tp2: hlSignal.direction === 'LONG' ? hlSignal.entryPrice + atrTp * 1.5 : hlSignal.entryPrice - atrTp * 1.5,
+          tp3: hlSignal.direction === 'LONG' ? hlSignal.entryPrice + atrTp * 2   : hlSignal.entryPrice - atrTp * 2,
+          slDist,
+          rr,
+          setup: 'SMC_HL_STRUCTURE',
+          setupName: `${hlSignal.direction}-HL${hlSignal.hlCount || hlSignal.lhCount || ''}`,
+          score,
+          zeiierProb: hlSignal.probability || 0,
+          tf15: hlSignal.tf15,
+          tf3:  hlSignal.tf3,
+          tf1:  hlSignal.tf1,
+        });
+      }
+    }
+  } // end SMC_HL_STRUCTURE gate
+
   if (!signals.length) return null;
 
   // Apply confluence bonuses + global filters to all signals
@@ -1406,12 +1671,13 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
   // Add structure info for logging
   best.structure = {
     setup: best.setup,
-    tf15: 'sweep-engine',
-    tf3: null,
-    tf1: 'entry-confirmed',
+    tf15: best.tf15 || 'sweep-engine',
+    tf3:  best.tf3  || null,
+    tf1:  best.tf1  || 'entry-confirmed',
     trendline: best.trendlineConfluence || null,
     candlePattern: best.candlePattern || null,
     zoneStrength: best.zoneStrength || null,
+    zeiierProb: best.zeiierProb || null,
   };
 
   return best;
@@ -1542,6 +1808,9 @@ module.exports = {
   detectStopLossHunt,
   detectMomentumScalp,
   detectBRR,
+  detectSMCStructureTrade,
+  detectCurvedStructure,
+  calcEMAStrength,
   findKeyLevels,
   detectTrendlines,
   hasCandleConfirmation,

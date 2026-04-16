@@ -1316,9 +1316,10 @@
       });
     }
 
-    // Candle data cache
+    // Candle data cache — interval-aware TTL so 1m candles are always fresh
     var candleCache = new Map();
-    var CACHE_TTL = 60000; // 60s cache to avoid constant refetches
+    var CACHE_TTL_MAP = { '1m': 12000, '3m': 25000, '5m': 40000 };
+    function getCacheTTL(interval) { return CACHE_TTL_MAP[interval] || 60000; }
 
     // Debounce/throttle helpers
     var _recreateTimer = null;
@@ -2454,7 +2455,7 @@
       limit = limit || 200;
       var key = symbol + '_' + interval;
       var cached = candleCache.get(key);
-      if (cached && Date.now() - cached.timestamp < CACHE_TTL) return cached.candles;
+      if (cached && Date.now() - cached.timestamp < getCacheTTL(interval)) return cached.candles;
 
       var url = API_BASE + '/klines?symbol=' + symbol + '&interval=' + interval + '&limit=' + limit;
       var resp = await fetch(url);
@@ -2582,10 +2583,11 @@
         }
 
         candleSeries.setData(candles);
-        // Default zoom: show last 100 candles
+        // Default zoom: 1m shows 50 candles (wider bars), others show 100
         var totalBars = candles.length;
-        if (totalBars > 100) {
-          chart.timeScale().setVisibleLogicalRange({ from: totalBars - 100, to: totalBars });
+        var visibleBars = binanceInterval === '1m' ? 50 : 100;
+        if (totalBars > visibleBars) {
+          chart.timeScale().setVisibleLogicalRange({ from: totalBars - visibleBars, to: totalBars });
         } else {
           chart.timeScale().fitContent();
         }

@@ -10,15 +10,16 @@
 const { log: bLog } = require('./bot-logger');
 
 const STRATEGIES = {
-  LIQUIDITY_SWEEP: 0, // bit 0
-  STOP_LOSS_HUNT: 1,  // bit 1
-  MOMENTUM_SCALP: 2,  // bit 2
-  BRR_FIBO: 3,        // bit 3
-  SMC_CLASSIC: 4,     // bit 4
+  LIQUIDITY_SWEEP:  0, // bit 0
+  STOP_LOSS_HUNT:   1, // bit 1
+  MOMENTUM_SCALP:   2, // bit 2
+  BRR_FIBO:         3, // bit 3
+  SMC_CLASSIC:      4, // bit 4
+  SMC_HL_STRUCTURE: 5, // bit 5 — Zeiierman curved HL/LH + EMA55 + 3m/1m cascade
 };
 
-const STRATEGY_SHORT = ['SWEEP', 'HUNT', 'MOMENTUM', 'BRR', 'SMC'];
-const TOTAL_COMBOS = 31; // 1-31 (5 strategies = 2^5 - 1)
+const STRATEGY_SHORT = ['SWEEP', 'HUNT', 'MOMENTUM', 'BRR', 'SMC', 'HL'];
+const TOTAL_COMBOS = 63; // 1-63 (6 strategies = 2^6 - 1)
 const MIN_TRADES_PER_COMBO = 20;
 const EXPLORE_EPSILON = 0.15;
 const SWITCH_MARGIN = 0.05; // 5% improvement needed to switch
@@ -45,11 +46,12 @@ function isStrategyEnabled(comboId, strategyName) {
 
 function getEnabledStrategies(comboId) {
   return {
-    LIQUIDITY_SWEEP: isStrategyEnabled(comboId, 'LIQUIDITY_SWEEP'),
-    STOP_LOSS_HUNT: isStrategyEnabled(comboId, 'STOP_LOSS_HUNT'),
-    MOMENTUM_SCALP: isStrategyEnabled(comboId, 'MOMENTUM_SCALP'),
-    BRR_FIBO: isStrategyEnabled(comboId, 'BRR_FIBO'),
-    SMC_CLASSIC: isStrategyEnabled(comboId, 'SMC_CLASSIC'),
+    LIQUIDITY_SWEEP:  isStrategyEnabled(comboId, 'LIQUIDITY_SWEEP'),
+    STOP_LOSS_HUNT:   isStrategyEnabled(comboId, 'STOP_LOSS_HUNT'),
+    MOMENTUM_SCALP:   isStrategyEnabled(comboId, 'MOMENTUM_SCALP'),
+    BRR_FIBO:         isStrategyEnabled(comboId, 'BRR_FIBO'),
+    SMC_CLASSIC:      isStrategyEnabled(comboId, 'SMC_CLASSIC'),
+    SMC_HL_STRUCTURE: isStrategyEnabled(comboId, 'SMC_HL_STRUCTURE'),
   };
 }
 

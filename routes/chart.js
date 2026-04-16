@@ -9,13 +9,24 @@ const fetch = require('node-fetch');
 const router = express.Router();
 
 const REQUEST_TIMEOUT = 12000;
-const CACHE_TTL = 60000; // 1 min cache
 const cache = new Map();
+
+// Interval-aware cache TTL — short-lived candles need fresher data
+const CACHE_TTL_BY_INTERVAL = {
+  '1m': 12000,  // 12s — live candle updates every ~250ms
+  '3m': 25000,  // 25s
+  '5m': 40000,  // 40s
+};
+const CACHE_TTL_DEFAULT = 60000; // 60s for 15m+
+
+function getCacheTTL(interval) {
+  return CACHE_TTL_BY_INTERVAL[interval] ?? CACHE_TTL_DEFAULT;
+}
 
 async function fetchKlines(symbol, interval, limit = 200) {
   const key = `${symbol}_${interval}_${limit}`;
   const cached = cache.get(key);
-  if (cached && Date.now() - cached.ts < CACHE_TTL) return cached.data;
+  if (cached && Date.now() - cached.ts < getCacheTTL(interval)) return cached.data;
 
   const url = `https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`;
   const res = await fetch(url, { timeout: REQUEST_TIMEOUT });
@@ -630,12 +641,31 @@ router.get('/scan', async (req, res) => {
         const swings = detectSwings(klines, 10);
         const structLabels = getStructureLabels(swings);
         const lastHigh = structLabels.filter(l => l.type === 'high').pop();
-        const lastLow = structLabels.filter(l => l.type === 'low').pop();
+        const lastLow  = structLabels.filter(l => l.type === 'low').pop();
+
+        // Zeiierman curved HL/LH probability
+        const parseC = k => ({ open: parseFloat(k[1]), high: parseFloat(k[2]), low: parseFloat(k[3]), close: parseFloat(k[4]), volume: parseFloat(k[5]) });
+        const candles15 = klines.map(parseC);
+        const curved = calcCurvedBands(klines);
+        const lastPrice = candles15[candles15.length - 1].close;
+        const bandW = curved.upper.length > 0 && curved.lower.length > 0
+          ? (curved.upper[curved.upper.length - 1] - curved.lower[curved.lower.length - 1]) : 0;
+        const bandPos = bandW > 0
+          ? (lastPrice - curved.lower[curved.lower.length - 1]) / bandW : 0.5;
+        // HL/LH sequence from structure labels
+        const lastLows  = structLabels.filter(l => l.type === 'low').slice(-3);
+        const lastHighs = structLabels.filter(l => l.type === 'high').slice(-3);
+        const hlCount = lastLows.filter((v, i) => i > 0 && v.price > lastLows[i - 1].price).length;
+        const lhCount = lastHighs.filter((v, i) => i > 0 && v.price < lastHighs[i - 1].price).length;
+
         return {
           ...coin,
           structure: `${lastHigh?.label || '--'}/${lastLow?.label || '--'}`,
           trend: lastHigh?.label === 'HH' && lastLow?.label === 'HL' ? 'bullish'
             : lastHigh?.label === 'LH' && lastLow?.label === 'LL' ? 'bearish' : 'neutral',
+          hlCount,
+          lhCount,
+          zeiierPos: Math.round(bandPos * 100), // 0=bottom of band, 100=top
         };
       }));
       for (const r of results) {
