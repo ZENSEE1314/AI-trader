@@ -1411,7 +1411,7 @@ router.post('/fix-bitunix-pnl', async (req, res) => {
           // Closed — get fill data
           try {
             const openTime = trade.created_at ? new Date(trade.created_at).getTime() : Date.now() - 7 * 86400000;
-            const fills = await client.getAccountTradeList({ symbol: trade.symbol, startTime: openTime, limit: 50 });
+            const fills = await client.getAccountTrades({ symbol: trade.symbol, startTime: openTime, limit: 50 });
             const closeSide = isLong ? 'SELL' : 'BUY';
             const closeFills = (fills || []).filter(f => f.side === closeSide);
             if (closeFills.length > 0) {
@@ -2510,7 +2510,7 @@ router.post('/fix-trades', async (req, res) => {
           if (t.platform === 'binance') {
             const client = new USDMClient({ api_key: apiKey, api_secret: apiSecret }, getBinanceRequestOptions());
             const openTime = new Date(t.created_at).getTime();
-            const fills = await client.getAccountTradeList({ symbol: t.symbol, startTime: openTime, limit: 50 });
+            const fills = await client.getAccountTrades({ symbol: t.symbol, startTime: openTime, limit: 50 });
             if (fills && fills.length > 0) {
               const closeSide = isLong ? 'SELL' : 'BUY';
               const closeFills = fills.filter(f => f.side === closeSide);

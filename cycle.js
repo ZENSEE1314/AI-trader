@@ -572,7 +572,7 @@ async function checkTrailingStop(client) {
         if (state) {
           let exitPrice = state.entry;
           try {
-            const trades = await client.getAccountTradeList({ symbol: sym, limit: 5 });
+            const trades = await client.getAccountTrades({ symbol: sym, limit: 5 });
             if (trades && trades.length > 0) {
               const lastTrade = trades[trades.length - 1];
               exitPrice = parseFloat(lastTrade.price);
@@ -1879,7 +1879,7 @@ async function syncTradeStatus() {
                 const binClient = new USDMClient({ api_key: apiKey, api_secret: apiSecret }, getBinanceRequestOptions());
                 // Get fills after the trade was opened
                 const openTime = trade.created_at ? new Date(trade.created_at).getTime() : Date.now() - 86400000;
-                const fills = await binClient.getAccountTradeList({ symbol: trade.symbol, startTime: openTime, limit: 50 });
+                const fills = await binClient.getAccountTrades({ symbol: trade.symbol, startTime: openTime, limit: 50 });
                 if (fills && fills.length > 0) {
                   // Calculate total fees from ALL fills (entry + exit)
                   for (const f of fills) {

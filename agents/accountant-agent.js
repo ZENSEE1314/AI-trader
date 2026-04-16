@@ -188,7 +188,7 @@ class AccountantAgent extends BaseAgent {
       const { getBinanceRequestOptions } = require('../proxy-agent');
       const client = new USDMClient({ api_key: apiKey, api_secret: apiSecret }, getBinanceRequestOptions());
       const openTime = trade.created_at ? new Date(trade.created_at).getTime() : Date.now() - 7 * 86400000;
-      const fills = await client.getAccountTradeList({ symbol: trade.symbol, startTime: openTime, limit: 50 });
+      const fills = await client.getAccountTrades({ symbol: trade.symbol, startTime: openTime, limit: 50 });
       let totalFee = 0;
       for (const f of (fills || [])) {
         totalFee += Math.abs(parseFloat(f.commission || 0));
