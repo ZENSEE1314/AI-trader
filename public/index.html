@@ -1384,6 +1384,7 @@
                   <th>Exit</th>
                   <th>Gross P&amp;L</th>
                   <th>Fee</th>
+                  <th>Funding</th>
                   <th>Net P&amp;L</th>
                   <th>Status</th>
                   <th>Platform</th>
@@ -1698,6 +1699,8 @@
           <div style="margin-bottom:var(--space-3);">
             <button class="btn btn-sm" style="font-size:0.75rem;" onclick="window.CryptoBot.adminFixTrades()">Fix Corrupted Trades</button>
             <span id="fix-trades-status" style="font-size:0.75rem;color:var(--color-text-muted);margin-left:8px;"></span>
+            <button class="btn btn-sm" style="font-size:0.75rem;margin-left:12px;background:linear-gradient(135deg,#6366f1,#8b5cf6);color:#fff;border:none;" onclick="window.CryptoBot.adminResyncFees()">Resync Fees</button>
+            <span id="resync-fees-status" style="font-size:0.75rem;color:var(--color-text-muted);margin-left:8px;"></span>
             <button class="btn btn-danger btn-sm" style="font-size:0.75rem;margin-left:12px;" onclick="window.CryptoBot.adminClearTestData()">Clear Test Data</button>
             <span id="clear-data-status" style="font-size:0.75rem;color:var(--color-text-muted);margin-left:8px;"></span>
           </div>

@@ -384,6 +384,8 @@ async function initAllTables() {
     // Trade fee tracking
     `ALTER TABLE trades ADD COLUMN IF NOT EXISTS trading_fee NUMERIC DEFAULT 0`,
     `ALTER TABLE trades ADD COLUMN IF NOT EXISTS gross_pnl NUMERIC`,
+    // Funding fee tracked separately from exchange trading fee
+    `ALTER TABLE trades ADD COLUMN IF NOT EXISTS funding_fee NUMERIC DEFAULT 0`,
     // User token watchlist (which tokens each user wants to trade)
     `CREATE TABLE IF NOT EXISTS user_watchlist (
       id SERIAL PRIMARY KEY,

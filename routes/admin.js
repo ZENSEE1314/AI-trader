@@ -1558,6 +1558,8 @@ router.post('/fix-bitunix-pnl', async (req, res) => {
           }
 
           let found = false;
+          let posExchangeFee = 0;
+          let posFundingFee = 0;
           const tradeOpenTime = trade.created_at ? new Date(trade.created_at).getTime() : 0;
           const tradeEntry = parseFloat(trade.entry_price);
           const tradeSideLong = trade.direction !== 'SHORT';
@@ -1581,6 +1583,8 @@ router.post('/fix-bitunix-pnl', async (req, res) => {
                 exitPrice = cp;
                 // NOTE: Bitunix realizedPNL is already net (fees + funding deducted)
                 realizedPnl = parseFloat(p.realizedPNL || 0);
+                posExchangeFee = Math.abs(parseFloat(p.fee || 0));
+                posFundingFee  = Math.abs(parseFloat(p.funding || 0));
                 found = true;
                 break;
               }
@@ -1629,11 +1633,15 @@ router.post('/fix-bitunix-pnl', async (req, res) => {
             : parseFloat(((entryPrice - exitPrice) * qty).toFixed(4));
         }
         const status = pnlUsdt > 0 ? 'WIN' : 'LOSS';
+        const totalFee = posExchangeFee + posFundingFee;
+        const grossPnl = parseFloat((pnlUsdt + totalFee).toFixed(4));
 
         await query(
-          `UPDATE trades SET status = $1, pnl_usdt = $2, exit_price = $3, closed_at = COALESCE(closed_at, NOW())
+          `UPDATE trades SET status = $1, pnl_usdt = $2, exit_price = $3,
+           trading_fee = $5, funding_fee = $6, gross_pnl = $7,
+           closed_at = COALESCE(closed_at, NOW())
            WHERE id = $4`,
-          [status, pnlUsdt, exitPrice, trade.id]
+          [status, pnlUsdt, exitPrice, trade.id, posExchangeFee, posFundingFee, grossPnl]
         );
 
         results.push({ id: trade.id, symbol: trade.symbol, platform: trade.platform, status, pnl: pnlUsdt, exitPrice, entryPrice, qty, realizedPnl });
@@ -2617,6 +2625,8 @@ router.post('/fix-trades', async (req, res) => {
         const isLong = t.direction !== 'SHORT';
         let actualExit = null;
         let actualPnl = null;
+        let actualExchangeFee = 0;
+        let actualFundingFee = 0;
 
         if (qty <= 0) continue;
 
@@ -2666,6 +2676,8 @@ router.post('/fix-trades', async (req, res) => {
                 // realizedPNL is already net of fee + funding on Bitunix
                 const rpnl = parseFloat(p.realizedPNL || 0);
                 if (rpnl !== 0) actualPnl = rpnl;
+                actualExchangeFee = Math.abs(parseFloat(p.fee || 0));
+                actualFundingFee  = Math.abs(parseFloat(p.funding || 0));
                 break;
               }
             }
@@ -2689,12 +2701,15 @@ router.post('/fix-trades', async (req, res) => {
 
         const correctStatus = correctPnl > 0 ? 'WIN' : 'LOSS';
         const correctExit = actualExit || parseFloat(t.exit_price);
+        const correctGross = parseFloat((correctPnl + actualExchangeFee + actualFundingFee).toFixed(4));
         const isWrong = Math.abs(correctPnl - dbPnl) > 0.01 || correctStatus !== t.status;
 
         if (isWrong) {
           await query(
-            `UPDATE trades SET status = $1, pnl_usdt = $2, exit_price = $3 WHERE id = $4`,
-            [correctStatus, correctPnl, correctExit, t.id]
+            `UPDATE trades SET status = $1, pnl_usdt = $2, exit_price = $3,
+             trading_fee = $5, funding_fee = $6, gross_pnl = $7
+             WHERE id = $4`,
+            [correctStatus, correctPnl, correctExit, t.id, actualExchangeFee, actualFundingFee, correctGross]
           );
           results.push({
             id: t.id, email: t.email, symbol: t.symbol, direction: t.direction,
@@ -2710,6 +2725,86 @@ router.post('/fix-trades', async (req, res) => {
     res.json({ total_checked: trades.length, fixed, details: results });
   } catch (err) {
     console.error('Fix trades error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Backfill trading_fee + funding_fee + gross_pnl for all closed Bitunix trades
+router.post('/resync-fees', async (req, res) => {
+  try {
+    const cryptoUtils = require('../crypto-utils');
+    const { BitunixClient } = require('../bitunix-client');
+
+    const trades = await query(
+      `SELECT t.id, t.symbol, t.direction, t.entry_price, t.quantity, t.pnl_usdt,
+              t.created_at,
+              ak.api_key_enc, ak.iv, ak.auth_tag,
+              ak.api_secret_enc, ak.secret_iv, ak.secret_auth_tag,
+              ak.id AS api_key_id
+       FROM trades t
+       JOIN api_keys ak ON ak.id = t.api_key_id
+       WHERE ak.platform = 'bitunix'
+         AND t.status IN ('WIN','LOSS','TP','SL','CLOSED')
+       ORDER BY t.api_key_id, t.symbol, t.created_at DESC`
+    );
+
+    let updated = 0;
+    const byKey = {};
+    for (const t of trades) {
+      if (!byKey[t.api_key_id]) byKey[t.api_key_id] = { keyRow: t, trades: [] };
+      byKey[t.api_key_id].trades.push(t);
+    }
+
+    for (const { keyRow, trades: keyTrades } of Object.values(byKey)) {
+      let apiKey, apiSecret;
+      try {
+        apiKey  = cryptoUtils.decrypt(keyRow.api_key_enc, keyRow.iv, keyRow.auth_tag);
+        apiSecret = cryptoUtils.decrypt(keyRow.api_secret_enc, keyRow.secret_iv, keyRow.secret_auth_tag);
+      } catch { continue; }
+
+      const posCache = {};
+
+      for (const t of keyTrades) {
+        const entry = parseFloat(t.entry_price);
+        const isLong = t.direction !== 'SHORT';
+        const tradeMs = t.created_at ? new Date(t.created_at).getTime() : 0;
+
+        if (!posCache[t.symbol]) {
+          try {
+            const client = new BitunixClient({ apiKey, apiSecret });
+            posCache[t.symbol] = await client.getHistoryPositions({ symbol: t.symbol, pageSize: 100 });
+          } catch { posCache[t.symbol] = []; }
+        }
+
+        for (const p of posCache[t.symbol]) {
+          const ep = parseFloat(p.entryPrice || p.avgOpenPrice || 0);
+          const pSide = (p.side || '').toUpperCase();
+          const pSideLong = pSide === 'BUY' || pSide === 'LONG';
+          const closeMs = parseInt(p.mtime || p.ctime || 0);
+          const entryMatch = ep > 0 && Math.abs(ep - entry) / entry < 0.002;
+          const sideMatch = pSideLong === isLong;
+          const timeMatch = !tradeMs || !closeMs || closeMs > tradeMs;
+
+          if (p.symbol === t.symbol && entryMatch && sideMatch && timeMatch) {
+            const exchangeFee = Math.abs(parseFloat(p.fee || 0));
+            const fundingFee  = Math.abs(parseFloat(p.funding || 0));
+            const pnl = parseFloat(t.pnl_usdt) || 0;
+            const grossPnl = parseFloat((pnl + exchangeFee + fundingFee).toFixed(4));
+
+            await query(
+              `UPDATE trades SET trading_fee = $1, funding_fee = $2, gross_pnl = $3 WHERE id = $4`,
+              [exchangeFee, fundingFee, grossPnl, t.id]
+            );
+            updated++;
+            break;
+          }
+        }
+      }
+    }
+
+    res.json({ ok: true, total_checked: trades.length, updated });
+  } catch (err) {
+    console.error('Resync fees error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });

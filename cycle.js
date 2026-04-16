@@ -1867,6 +1867,7 @@ async function syncTradeStatus() {
             let exitPrice = entryPrice;
             let realizedPnl = null;
             let tradingFee = 0;
+            let fundingFee = 0;
 
             if (key.platform === 'binance') {
               try {
@@ -1935,11 +1936,12 @@ async function syncTradeStatus() {
                     // Extract PnL — try all known Bitunix field names
                     const fee = Math.abs(parseFloat(p.fee || 0));
                     const funding = Math.abs(parseFloat(p.funding || 0));
-                    tradingFee = fee + funding;
+                    tradingFee = fee;      // exchange fee only
+                    fundingFee = funding;  // funding fee separately
                     // NOTE: Bitunix realizedPNL is already net (fee + funding deducted)
                     realizedPnl = parseFloat(p.realizedPNL || 0);
                     found = true;
-                    bLog.system(`[SYNC] Bitunix posHistory PnL: net=${realizedPnl} fee=${tradingFee} rpnl=${p.realizedPNL}`);
+                    bLog.system(`[SYNC] Bitunix posHistory PnL: net=${realizedPnl} fee=${fee} funding=${funding} rpnl=${p.realizedPNL}`);
                     break;
                   }
                 }
@@ -2005,39 +2007,41 @@ async function syncTradeStatus() {
             // Bitunix: profit/pnl fields are NET (fees already included), so net = as-is
             let grossPnl;
             let pnlUsdt;
+            const totalFee = tradingFee + fundingFee; // combined for math
             if (realizedPnl !== null) {
               if (key.platform === 'bitunix') {
                 // Bitunix Position PnL is NET (fees already deducted)
                 pnlUsdt = parseFloat(realizedPnl.toFixed(4));
-                grossPnl = parseFloat((realizedPnl + tradingFee).toFixed(4));
+                grossPnl = parseFloat((realizedPnl + totalFee).toFixed(4));
               } else {
                 // Binance realizedPnl is GROSS (before fees)
                 grossPnl = parseFloat(realizedPnl.toFixed(4));
-                pnlUsdt = parseFloat((realizedPnl - tradingFee).toFixed(4));
+                pnlUsdt = parseFloat((realizedPnl - totalFee).toFixed(4));
               }
             } else {
               grossPnl = isLong
                 ? parseFloat(((exitPrice - entryPrice) * qty).toFixed(4))
                 : parseFloat(((entryPrice - exitPrice) * qty).toFixed(4));
               // Estimate fees when exchange data unavailable: ~0.06% per side (open+close)
-              if (tradingFee === 0) {
+              if (tradingFee === 0 && fundingFee === 0) {
                 const notional = exitPrice * qty;
                 tradingFee = parseFloat((notional * 0.0012).toFixed(4)); // 0.12% round trip
                 bLog.trade(`Estimated trading fee for ${trade.symbol}: $${tradingFee.toFixed(4)} (0.12% of $${notional.toFixed(2)} notional)`);
               }
-              pnlUsdt = parseFloat((grossPnl - tradingFee).toFixed(4));
+              pnlUsdt = parseFloat((grossPnl - tradingFee - fundingFee).toFixed(4));
             }
             tradingFee = parseFloat(tradingFee.toFixed(4));
+            fundingFee = parseFloat(fundingFee.toFixed(4));
             grossPnl = parseFloat(grossPnl.toFixed(4));
             const status = pnlUsdt > 0 ? 'WIN' : 'LOSS';
 
             await db.query(
               `UPDATE trades SET status = $1, pnl_usdt = $2, exit_price = $3, closed_at = NOW(),
-               trading_fee = $5, gross_pnl = $6
+               trading_fee = $5, gross_pnl = $6, funding_fee = $7
                WHERE id = $4`,
-              [status, pnlUsdt, exitPrice, trade.id, tradingFee, grossPnl]
+              [status, pnlUsdt, exitPrice, trade.id, tradingFee, grossPnl, fundingFee]
             );
-            bLog.trade(`DB synced: ${trade.symbol} -> ${status} gross=$${grossPnl} fee=$${tradingFee} net=$${pnlUsdt} exit=$${fmtPrice(exitPrice)}`);
+            bLog.trade(`DB synced: ${trade.symbol} -> ${status} gross=$${grossPnl} fee=$${tradingFee} funding=$${fundingFee} net=$${pnlUsdt} exit=$${fmtPrice(exitPrice)}`);
 
             // Notify agents of trade outcome (for survival system)
             if (_onTradeOutcome) {

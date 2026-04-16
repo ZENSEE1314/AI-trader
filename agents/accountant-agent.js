@@ -295,9 +295,9 @@ class AccountantAgent extends BaseAgent {
 
           // Bitunix realizedPNL is already net (fee + funding already deducted)
           const netPnl = parseFloat((parseFloat(p.realizedPNL || 0)).toFixed(8));
-          const fee = Math.abs(parseFloat(p.fee || 0));
-          const funding = Math.abs(parseFloat(p.funding || 0));
-          const totalFee = parseFloat((fee + funding).toFixed(8));
+          const exchangeFee = Math.abs(parseFloat(p.fee || 0));
+          const fundingFee  = Math.abs(parseFloat(p.funding || 0));
+          const totalFee    = parseFloat((exchangeFee + fundingFee).toFixed(8));
 
           // Gross PnL = net + fees
           const grossPnl = parseFloat((netPnl + totalFee).toFixed(8));
@@ -316,9 +316,9 @@ class AccountantAgent extends BaseAgent {
 
           if (existing.length === 0) {
             await db.query(
-              `INSERT INTO trades (symbol, direction, entry_price, exit_price, quantity, pnl_usdt, trading_fee, gross_pnl, status, api_key_id, platform, closed_at)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
-              [symbol, direction, entryPrice, exitPrice, qty, netPnl, totalFee, grossPnl, status, key.id, 'bitunix', closedAt]
+              `INSERT INTO trades (symbol, direction, entry_price, exit_price, quantity, pnl_usdt, trading_fee, funding_fee, gross_pnl, status, api_key_id, platform, closed_at)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+              [symbol, direction, entryPrice, exitPrice, qty, netPnl, exchangeFee, fundingFee, grossPnl, status, key.id, 'bitunix', closedAt]
             );
             totalSynced++;
 
@@ -331,8 +331,8 @@ class AccountantAgent extends BaseAgent {
             // Always update with latest Bitunix data for accuracy
             const trade = existing[0];
             await db.query(
-              `UPDATE trades SET exit_price = $1, pnl_usdt = $2, trading_fee = $3, gross_pnl = $4, status = $5, quantity = COALESCE(NULLIF($6, 0), quantity), closed_at = COALESCE($7, closed_at) WHERE id = $8`,
-              [exitPrice || trade.exit_price, netPnl, totalFee, grossPnl, status, qty, closedAt, trade.id]
+              `UPDATE trades SET exit_price = $1, pnl_usdt = $2, trading_fee = $3, funding_fee = $4, gross_pnl = $5, status = $6, quantity = COALESCE(NULLIF($7, 0), quantity), closed_at = COALESCE($8, closed_at) WHERE id = $9`,
+              [exitPrice || trade.exit_price, netPnl, exchangeFee, fundingFee, grossPnl, status, qty, closedAt, trade.id]
             );
             totalUpdated++;
           }

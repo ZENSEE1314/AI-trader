@@ -655,6 +655,7 @@
       const netPnl = parseFloat(t.pnl_usdt) || 0;
       const grossPnl = t.gross_pnl != null ? parseFloat(t.gross_pnl) : netPnl;
       const fee = parseFloat(t.trading_fee) || 0;
+      const fundingFee = parseFloat(t.funding_fee) || 0;
       const direction = (t.direction || t.side || '').toUpperCase();
       const isLong = direction === 'LONG' || direction === 'BUY';
       const dirBadge = isLong ? 'badge-long' : 'badge-short';
@@ -681,7 +682,8 @@
         <td class="text-mono">${t.entry_price != null ? parseFloat(t.entry_price).toFixed(4) : '--'}</td>
         <td class="text-mono">${exitPrice}</td>
         <td class="text-mono ${grossPnl >= 0 ? 'text-success' : 'text-danger'}">${formatPnl(grossPnl)}</td>
-        <td class="text-mono" style="color:var(--color-warning);">${fee > 0 ? '-$' + fee.toFixed(2) : '--'}</td>
+        <td class="text-mono" style="color:var(--color-warning);">${fee > 0 ? '-$' + fee.toFixed(4) : '--'}</td>
+        <td class="text-mono" style="color:#7c7fff;">${fundingFee > 0 ? '-$' + fundingFee.toFixed(4) : '--'}</td>
         <td class="pnl-value ${netPnl >= 0 ? 'text-success' : 'text-danger'}" style="font-weight:600;">${formatPnl(netPnl)}</td>
         <td><span class="badge-status ${statusClass}" style="${statusColor}font-weight:600;"${errorTip}>${escapeHtml(t.status || '--')}${isError ? ' !' : ''}</span></td>
         <td><span class="badge-platform">${escapeHtml(t.platform || '--')}</span></td>
@@ -3098,6 +3100,23 @@
     }
   }
 
+  async function adminResyncFees() {
+    if (!confirm('Backfill trading_fee + funding_fee for all closed Bitunix trades? This may take a while.')) return;
+    const statusEl = document.getElementById('resync-fees-status');
+    statusEl.textContent = 'Resyncing... (may take a minute)';
+    statusEl.style.color = 'var(--color-accent)';
+    try {
+      const result = await api('POST', '/api/admin/resync-fees');
+      statusEl.textContent = `Updated ${result.updated} of ${result.total_checked} trades`;
+      statusEl.style.color = 'var(--color-success)';
+      showToast(`Fee resync: ${result.updated} trades updated`, 'success');
+    } catch (err) {
+      statusEl.textContent = `Error: ${err.message}`;
+      statusEl.style.color = 'var(--color-danger)';
+      showToast(err.message, 'error');
+    }
+  }
+
   async function adminPauseKey(keyId) {
     if (!confirm('Pause this API key? The bot will stop trading for this key.')) return;
     try {
@@ -3696,7 +3715,7 @@
     addRiskLevel, saveRiskLevel, deleteRiskLevel,
     loadKronosPredictions,
     loadOpenPositions, emergencyCloseToken, emergencyCloseAll,
-    fixBitunixPnl, debugBitunix, runBacktest, loadAiVersions, runAiOptimize,
+    fixBitunixPnl, debugBitunix, runBacktest, loadAiVersions, runAiOptimize, adminResyncFees,
     mcRefresh, mcCommand, mcChat, mcChatQuick, switchAdminTab, filterAgents, customerChat,
     checkEmailSmtp, sendTestEmail, sendBroadcastEmail, emailSetMode,
     loadSignalBoard, toggleWatch, watchAll, setUserLeverage,
