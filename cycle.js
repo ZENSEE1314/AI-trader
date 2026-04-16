@@ -1939,21 +1939,13 @@ async function syncTradeStatus() {
                     exitPrice = cp;
                     bLog.system(`[SYNC] Bitunix posHistory MATCH: ${trade.symbol} entry=${ep} exit=${cp} side=${pSide}`);
                     // Extract PnL — try all known Bitunix field names
-                    const profit = parseFloat(p.profit || 0);
-                    const pnl = parseFloat(p.pnl || 0);
-                    const rpnl = parseFloat(p.realizedPNL || 0);
                     const fee = Math.abs(parseFloat(p.fee || 0));
                     const funding = Math.abs(parseFloat(p.funding || 0));
                     tradingFee = fee + funding;
-                    if (profit !== 0) {
-                      realizedPnl = profit;
-                    } else if (pnl !== 0) {
-                      realizedPnl = pnl;
-                    } else if (rpnl !== 0) {
-                      realizedPnl = rpnl - fee - funding;
-                    }
+                    // NOTE: Bitunix realizedPNL is already net (fee + funding deducted)
+                    realizedPnl = parseFloat(p.realizedPNL || 0);
                     found = true;
-                    bLog.system(`[SYNC] Bitunix posHistory PnL: net=${realizedPnl} fee=${tradingFee} (profit=${profit} pnl=${pnl} rpnl=${rpnl})`);
+                    bLog.system(`[SYNC] Bitunix posHistory PnL: net=${realizedPnl} fee=${tradingFee} rpnl=${p.realizedPNL}`);
                     break;
                   }
                 }
