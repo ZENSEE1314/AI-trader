@@ -265,4 +265,26 @@ router.put('/change-password', authMiddleware, async (req, res) => {
   }
 });
 
+// Public: look up referrer info by referral code (used on landing page)
+// Returns only the Bitunix referral link — no sensitive data
+router.get('/referral-info', async (req, res) => {
+  try {
+    const code = (req.query.ref || '').trim().toUpperCase();
+    if (!code) return res.json({ found: false });
+    const rows = await query(
+      `SELECT email, bitunix_referral_link FROM users WHERE referral_code = $1 LIMIT 1`,
+      [code]
+    );
+    if (!rows.length) return res.json({ found: false });
+    const u = rows[0];
+    res.json({
+      found: true,
+      referrer_email: u.email ? u.email.replace(/(.{2}).*(@.*)/, '$1***$2') : '',
+      bitunix_referral_link: u.bitunix_referral_link || '',
+    });
+  } catch (err) {
+    res.json({ found: false });
+  }
+});
+
 module.exports = router;

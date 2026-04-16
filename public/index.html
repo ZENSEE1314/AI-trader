@@ -85,7 +85,10 @@
           <a href="#pricing">Profit Split</a>
           <a href="/chart.html" target="_blank" style="color:var(--color-accent);">Chart</a>
         </div>
-        <div class="landing-nav-right">
+        <div class="landing-nav-right" style="display:flex;align-items:center;gap:8px;">
+          <a href="/download/MCT-AI-Trader-Guide.pptx" download class="btn btn-ghost btn-sm" style="font-size:0.78rem;border:1px solid var(--color-border);color:var(--color-accent);" title="Download Platform Guide">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:4px;vertical-align:-2px;"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>Guide
+          </a>
           <button class="btn btn-primary btn-sm" onclick="window.CryptoBot.goToAuth()">Login / Sign Up</button>
         </div>
         <button class="landing-nav-toggle" aria-label="Toggle menu" aria-expanded="false">
@@ -100,6 +103,18 @@
         <button class="btn btn-primary btn-sm landing-nav-mobile-btn" onclick="window.CryptoBot.goToAuth()">Login / Sign Up</button>
       </div>
     </nav>
+
+    <!-- Referral welcome banner — shown when visiting via ?ref=CODE -->
+    <div id="referral-welcome-banner" style="display:none;position:fixed;top:0;left:0;right:0;z-index:200;background:linear-gradient(90deg,#1a1408 0%,#2a1f06 50%,#1a1408 100%);border-bottom:1px solid #d4af37;padding:10px 20px;">
+      <div style="max-width:900px;margin:0 auto;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">
+        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+          <span style="color:#d4af37;font-weight:700;font-size:0.9rem;">🎁 You were invited!</span>
+          <span id="referral-banner-text" style="color:#f0e8df;font-size:0.85rem;"></span>
+          <a id="referral-bitunix-link" href="#" target="_blank" rel="noopener" style="display:none;background:#7c7fff;color:#fff;padding:4px 14px;border-radius:6px;font-size:0.8rem;font-weight:600;text-decoration:none;">🔵 Sign up to Bitunix</a>
+        </div>
+        <button onclick="document.getElementById('referral-welcome-banner').style.display='none'" style="background:none;border:none;color:#9a8e80;font-size:1.1rem;cursor:pointer;padding:2px 6px;">✕</button>
+      </div>
+    </div>
 
     <div class="landing-content">
 
@@ -122,6 +137,10 @@
               <a href="#how-it-works" class="btn btn-ghost btn-lg">
                 See How It Works
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+              </a>
+              <a href="/download/MCT-AI-Trader-Guide.pptx" download class="btn btn-ghost btn-lg" style="border-color:var(--color-accent);color:var(--color-accent);">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                Download Guide
               </a>
             </div>
           </div>
@@ -590,6 +609,7 @@
             <a href="#how-it-works">How It Works</a>
             <a href="#features">Features</a>
             <a href="#pricing">Profit Split</a>
+            <a href="/download/MCT-AI-Trader-Guide.pptx" download style="color:var(--color-accent);">📥 Platform Guide</a>
           </div>
         </div>
         <div class="landing-footer-powered">
@@ -1498,6 +1518,18 @@
             <button class="btn btn-ghost btn-sm" onclick="navigator.clipboard.writeText(document.getElementById('referral-link').value);window.CryptoBot.showToast('Copied!','success')">Copy</button>
           </div>
           <div style="color:var(--color-text-muted);font-size:0.8rem;margin-top:var(--space-2);">Earn weekly commission from your referrals' profits. Paid when admin settles each week.</div>
+
+          <!-- Bitunix referral link -->
+          <div style="margin-top:var(--space-4);padding-top:var(--space-3);border-top:1px solid var(--color-border-muted);">
+            <div style="font-weight:600;color:var(--color-text);margin-bottom:var(--space-2);font-size:0.9rem;">🔵 Your Bitunix Referral Link <span class="tip-btn">?<span class="tip-text">Add your personal Bitunix affiliate link here. It will appear on your referral page so people you invite can sign up to Bitunix through you directly.</span></span></div>
+            <div style="display:flex;gap:var(--space-2);align-items:center;">
+              <input class="form-input text-mono" id="bitunix-referral-link-input" placeholder="https://www.bitunix.com/register?vipCode=YOURCODE" style="flex:1;font-size:0.85rem;">
+              <button class="btn btn-ghost btn-sm" onclick="navigator.clipboard.writeText(document.getElementById('bitunix-referral-link-input').value);window.CryptoBot.showToast('Copied!','success')">Copy</button>
+              <button class="btn btn-primary btn-sm" onclick="window.CryptoBot.saveBitunixReferralLink()">Save</button>
+            </div>
+            <div style="color:var(--color-text-muted);font-size:0.75rem;margin-top:var(--space-1);">Your referrals will see this link when they sign up to Bitunix through your page.</div>
+          </div>
+
           <div style="margin-top:var(--space-3);display:flex;gap:16px;flex-wrap:wrap;">
             <div>Referrals: <strong id="cw-ref-count">0</strong></div>
             <div>Total Earned: <strong id="cw-ref-total" class="text-mono" style="color:var(--color-accent);">$0.00</strong></div>
@@ -1651,7 +1683,10 @@
           </div>
           <div style="margin-bottom:var(--space-3);padding:var(--space-3);border:2px solid #ef4444;border-radius:var(--radius-lg);background:rgba(239,68,68,0.05);">
             <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:8px;">
-              <strong style="color:#ef4444;font-size:0.9rem;">Emergency Close Positions</strong>
+              <div>
+                <strong style="color:#ef4444;font-size:0.9rem;">Emergency Close Positions</strong>
+                <div style="font-size:0.72rem;color:var(--color-text-muted);margin-top:2px;">Shows DB-tracked positions + live exchange positions. <span style="color:#f59e0b;font-weight:600;">EXCHANGE ONLY</span> = on exchange but not in DB.</div>
+              </div>
               <div style="display:flex;align-items:center;gap:6px;">
                 <button class="btn btn-sm" style="font-size:0.75rem;background:transparent;color:#ef4444;border:1px solid #ef4444;padding:4px 12px;" onclick="window.CryptoBot.loadOpenPositions()">Refresh</button>
                 <button class="btn btn-sm" style="font-size:0.75rem;background:#ef4444;color:#fff;border:none;font-weight:700;padding:4px 12px;" onclick="window.CryptoBot.emergencyCloseAll()">CLOSE ALL</button>

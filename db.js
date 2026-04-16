@@ -219,6 +219,8 @@ async function initAllTables() {
     // Add referral tier columns
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS referral_tier INTEGER DEFAULT 1`,
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS total_referral_commission DECIMAL DEFAULT 0`,
+    // Per-user Bitunix affiliate referral link (set by user or admin)
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS bitunix_referral_link TEXT`,
     `CREATE TABLE IF NOT EXISTS ai_versions (
       id SERIAL PRIMARY KEY,
       version VARCHAR(20),

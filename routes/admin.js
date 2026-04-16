@@ -93,7 +93,7 @@ router.get('/weekly-earnings', async (req, res) => {
           return new Date(t.closed_at) > paidAt;
         });
         const wins = keyTrades.filter(t => parseFloat(t.pnl_usdt) > 0);
-        const losses = keyTrades.filter(t => parseFloat(t.pnl_usdt) <= 0);
+        const losses = keyTrades.filter(t => parseFloat(t.pnl_usdt) < 0);
         // Net P&L = wins + losses (losses are negative)
         const netPnl = keyTrades.reduce((s, t) => s + parseFloat(t.pnl_usdt), 0);
         const userPct = parseFloat(u.profit_share_user_pct) || 60;
@@ -374,6 +374,7 @@ router.get('/users', async (req, res) => {
       `SELECT u.id, u.email, u.is_blocked, u.is_admin, u.approved_no_sub,
               u.referral_code, u.wallet_balance, u.cash_wallet, u.commission_earned,
               u.weekly_fee_amount, u.weekly_fee_due, u.usdt_address, u.usdt_network,
+              u.bitunix_referral_link,
               u.created_at, u.last_paid_at,
               (SELECT COUNT(*) FROM api_keys WHERE user_id = u.id) as key_count,
               (SELECT email FROM users WHERE id = u.referred_by) as referred_by_email
@@ -653,6 +654,19 @@ router.put('/topups/:id', async (req, res) => {
     res.json({ ok: true });
   } catch (err) {
     console.error('Admin topup action error:', err.message);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// ── Set Bitunix referral link for a user (admin override) ────
+router.put('/users/:id/bitunix-referral-link', async (req, res) => {
+  try {
+    const { link } = req.body;
+    const cleaned = (link || '').trim().slice(0, 500);
+    await query('UPDATE users SET bitunix_referral_link = $1 WHERE id = $2', [cleaned || null, req.params.id]);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Admin set Bitunix referral link error:', err.message);
     res.status(500).json({ error: 'Server error' });
   }
 });
@@ -1037,12 +1051,17 @@ router.post('/token-leverage/auto-populate', async (req, res) => {
 });
 
 // ── List all open positions across all users ────
+// Merges DB-tracked OPEN trades with live positions from all exchanges
 router.get('/open-positions', async (req, res) => {
   try {
+    const cryptoUtils = require('../crypto-utils');
+    const { BitunixClient } = require('../bitunix-client');
+
+    // 1. DB-tracked OPEN trades
     const rows = await query(
       `SELECT t.id, t.symbol, t.direction, t.entry_price, t.quantity, t.leverage,
               t.sl_price, t.tp_price, t.trailing_sl_price, t.pnl_usdt,
-              t.created_at, u.email, ak.platform
+              t.created_at, u.email, ak.platform, ak.id as key_id
        FROM trades t
        JOIN api_keys ak ON ak.id = t.api_key_id
        JOIN users u ON u.id = t.user_id
@@ -1050,7 +1069,91 @@ router.get('/open-positions', async (req, res) => {
        ORDER BY t.symbol, u.email`
     );
 
-    // Fetch live prices
+    // 2. Fetch live positions from ALL enabled exchanges in parallel
+    const allKeys = await query(
+      `SELECT ak.id, ak.api_key_enc, ak.iv, ak.auth_tag,
+              ak.api_secret_enc, ak.secret_iv, ak.secret_auth_tag,
+              ak.platform, ak.leverage, u.email
+       FROM api_keys ak
+       JOIN users u ON u.id = ak.user_id
+       WHERE ak.enabled = true`
+    );
+
+    // key: "keyId:symbol" → true — for dedup against DB rows
+    const dbKeySymSet = new Set(rows.map(r => `${r.key_id}:${r.symbol}`));
+
+    // Fetch live positions from each key in parallel (timeout 8s per key)
+    const livePositions = []; // extra positions only on exchange, not in DB
+    const liveResults = await Promise.allSettled(allKeys.map(async key => {
+      try {
+        const apiKey    = cryptoUtils.decrypt(key.api_key_enc, key.iv, key.auth_tag);
+        const apiSecret = cryptoUtils.decrypt(key.api_secret_enc, key.secret_iv, key.secret_auth_tag);
+
+        if (key.platform === 'bitunix') {
+          const client = new BitunixClient({ apiKey, apiSecret });
+          const raw = await Promise.race([
+            client.getOpenPositions(),
+            new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 8000)),
+          ]);
+          const positions = Array.isArray(raw) ? raw : [];
+          for (const p of positions) {
+            if (parseFloat(p.qty || p.size || 0) === 0) continue;
+            const sym = (p.symbol || '').toUpperCase();
+            // Only add if NOT already tracked in DB
+            if (!dbKeySymSet.has(`${key.id}:${sym}`)) {
+              livePositions.push({
+                keyId: key.id,
+                email: key.email,
+                platform: 'bitunix',
+                symbol: sym,
+                direction: (p.side || '').toUpperCase() === 'BUY' ? 'LONG' : 'SHORT',
+                entry: parseFloat(p.entryPrice || p.avgOpenPrice || 0),
+                qty: parseFloat(p.qty || p.size || 0),
+                leverage: parseInt(key.leverage) || 20,
+                unrealizedPnl: parseFloat(p.unrealizedPNL || p.unrealizedPnl || 0),
+                liveOnly: true, // not in DB
+              });
+            }
+          }
+        } else if (key.platform === 'binance') {
+          try {
+            const { USDMClient } = require('binance');
+            const getBinanceRequestOptions = () => {
+              const PROXY_URL = process.env.QUOTAGUARDSTATIC_URL;
+              if (!PROXY_URL) return {};
+              const { HttpsProxyAgent } = require('https-proxy-agent');
+              return { requestOptions: { agent: new HttpsProxyAgent(PROXY_URL) } };
+            };
+            const client = new USDMClient({ api_key: apiKey, api_secret: apiSecret }, getBinanceRequestOptions());
+            const account = await Promise.race([
+              client.getAccountInformation({ omitZeroBalances: true }),
+              new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 8000)),
+            ]);
+            for (const p of (account.positions || [])) {
+              const amt = parseFloat(p.positionAmt);
+              if (amt === 0) continue;
+              const sym = (p.symbol || '').toUpperCase();
+              if (!dbKeySymSet.has(`${key.id}:${sym}`)) {
+                livePositions.push({
+                  keyId: key.id,
+                  email: key.email,
+                  platform: 'binance',
+                  symbol: sym,
+                  direction: amt > 0 ? 'LONG' : 'SHORT',
+                  entry: parseFloat(p.entryPrice || 0),
+                  qty: Math.abs(amt),
+                  leverage: parseInt(p.leverage) || 20,
+                  unrealizedPnl: parseFloat(p.unrealizedProfit || 0),
+                  liveOnly: true,
+                });
+              }
+            }
+          } catch (_) {} // Binance errors are non-fatal
+        }
+      } catch (_) {} // Key-level errors are non-fatal
+    }));
+
+    // 3. Fetch live prices from Binance (fastest public endpoint)
     let priceMap = {};
     try {
       const fetch = require('node-fetch');
@@ -1059,46 +1162,56 @@ router.get('/open-positions', async (req, res) => {
       for (const t of tickers) priceMap[t.symbol] = parseFloat(t.price);
     } catch {}
 
-    // Build positions with live P&L
-    const positions = rows.map(t => {
-      const entry = parseFloat(t.entry_price) || 0;
-      const qty = parseFloat(t.quantity) || 0;
-      const lev = parseInt(t.leverage) || 20;
-      const curPrice = priceMap[t.symbol] || entry;
-      const isLong = t.direction !== 'SHORT';
+    function buildPosition(t, overrides = {}) {
+      const entry    = overrides.entry    ?? (parseFloat(t.entry_price) || 0);
+      const qty      = overrides.qty      ?? (parseFloat(t.quantity) || 0);
+      const lev      = overrides.leverage ?? (parseInt(t.leverage) || 20);
+      const isLong   = (overrides.direction ?? t.direction) !== 'SHORT';
+      const curPrice = priceMap[overrides.symbol ?? t.symbol] || entry;
 
-      const pricePnl = isLong ? (curPrice - entry) / entry : (entry - curPrice) / entry;
+      const pricePnl  = isLong ? (curPrice - entry) / entry : (entry - curPrice) / entry;
       const capitalPnl = pricePnl * lev;
-      const pnlUsdt = isLong ? (curPrice - entry) * qty : (entry - curPrice) * qty;
-      const sl = parseFloat(t.trailing_sl_price || t.sl_price) || 0;
-      const tp = parseFloat(t.tp_price) || 0;
+      // For live-only positions, prefer exchange-reported unrealizedPnl if available
+      const pnlUsdt = overrides.unrealizedPnl != null
+        ? overrides.unrealizedPnl
+        : (isLong ? (curPrice - entry) * qty : (entry - curPrice) * qty);
+
+      const sl     = parseFloat((t.trailing_sl_price || t.sl_price) ?? 0) || 0;
       const slDist = sl > 0 ? (isLong ? (curPrice - sl) / curPrice * 100 : (sl - curPrice) / curPrice * 100) : 0;
+      const durationMin = t.created_at ? Math.round((Date.now() - new Date(t.created_at).getTime()) / 60000) : 0;
 
-      const durationMin = Math.round((Date.now() - new Date(t.created_at).getTime()) / 60000);
-
-      // Danger level
       let danger = 'safe';
-      if (capitalPnl < -0.5) danger = 'critical'; // -50%+ capital
-      else if (capitalPnl < -0.2) danger = 'danger'; // -20%+ capital
-      else if (capitalPnl < 0) danger = 'warning'; // losing
+      if (capitalPnl < -0.5) danger = 'critical';
+      else if (capitalPnl < -0.2) danger = 'danger';
+      else if (capitalPnl < 0) danger = 'warning';
 
       return {
-        id: t.id,
-        symbol: t.symbol,
-        direction: t.direction,
-        email: t.email,
-        platform: t.platform,
+        id: t.id || null,
+        symbol:    overrides.symbol    ?? t.symbol,
+        direction: overrides.direction ?? t.direction,
+        email:     overrides.email     ?? t.email,
+        platform:  overrides.platform  ?? t.platform,
+        liveOnly:  overrides.liveOnly  ?? false,
         entry, curPrice, qty, leverage: lev,
-        pnlUsdt: parseFloat(pnlUsdt.toFixed(2)),
-        pnlPct: parseFloat((pricePnl * 100).toFixed(2)),
+        pnlUsdt:    parseFloat(pnlUsdt.toFixed(2)),
+        pnlPct:     parseFloat((pricePnl * 100).toFixed(2)),
         capitalPnl: parseFloat((capitalPnl * 100).toFixed(1)),
-        sl, tp, slDist: parseFloat(slDist.toFixed(1)),
-        durationMin,
-        danger,
+        sl, tp: parseFloat(t.tp_price ?? 0) || 0, slDist: parseFloat(slDist.toFixed(1)),
+        durationMin, danger,
       };
-    });
+    }
 
-    // Group by symbol
+    // 4. Build full position list: DB rows first, then live-only
+    const positions = [
+      ...rows.map(t => buildPosition(t)),
+      ...livePositions.map(p => buildPosition({}, {
+        symbol: p.symbol, direction: p.direction, email: p.email,
+        platform: p.platform, leverage: p.leverage, entry: p.entry,
+        qty: p.qty, unrealizedPnl: p.unrealizedPnl, liveOnly: true,
+      })),
+    ];
+
+    // 5. Group by symbol
     const grouped = {};
     for (const p of positions) {
       if (!grouped[p.symbol]) grouped[p.symbol] = { symbol: p.symbol, direction: p.direction, trades: [], totalPnl: 0 };
@@ -1106,7 +1219,7 @@ router.get('/open-positions', async (req, res) => {
       grouped[p.symbol].totalPnl += p.pnlUsdt;
     }
 
-    res.json({ positions: Object.values(grouped), all: positions, total: rows.length });
+    res.json({ positions: Object.values(grouped), all: positions, total: positions.length });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

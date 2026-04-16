@@ -54,6 +54,17 @@ app.use(express.static(path.resolve(__dirname, 'public'), {
   },
 }));
 
+// Downloadable files (e.g. platform guide PPTX)
+app.get('/download/:filename', (req, res) => {
+  const allowed = ['MCT-AI-Trader-Guide.pptx'];
+  const name = req.params.filename;
+  if (!allowed.includes(name)) return res.status(404).send('Not found');
+  const filePath = path.resolve(__dirname, 'public', 'download', name);
+  res.setHeader('Content-Disposition', `attachment; filename="${name}"`);
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.presentationml.presentation');
+  res.sendFile(filePath, err => { if (err && !res.headersSent) res.status(404).send('File not found'); });
+});
+
 // API routes
 app.use('/api/auth', require('./routes/auth'));
 app.use('/api/keys', require('./routes/api-keys'));

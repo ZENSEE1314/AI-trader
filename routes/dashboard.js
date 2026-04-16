@@ -20,7 +20,7 @@ router.get('/cash-wallet', async (req, res) => {
   try {
     const user = await query(
       `SELECT cash_wallet, commission_earned, referral_code, usdt_address, usdt_network,
-              referral_tier, total_referral_commission
+              referral_tier, total_referral_commission, bitunix_referral_link
        FROM users WHERE id = $1`,
       [req.userId]
     );
@@ -78,6 +78,7 @@ router.get('/cash-wallet', async (req, res) => {
       total_referral_commission: parseFloat(u.total_referral_commission) || 0,
       usdt_address: u.usdt_address || '',
       usdt_network: u.usdt_network || 'BEP20',
+      bitunix_referral_link: u.bitunix_referral_link || '',
       referrals: referrals.map(r => ({
         email: r.email,
         joined: r.created_at,
@@ -87,6 +88,19 @@ router.get('/cash-wallet', async (req, res) => {
   } catch (err) {
     console.error('Cash wallet error:', err.message);
     res.json({ cash_wallet: 0, commission_earned: 0, total_balance: 0, referral_code: '', referral_count: 0 });
+  }
+});
+
+// Save user's personal Bitunix referral link
+router.put('/bitunix-referral-link', async (req, res) => {
+  try {
+    const { link } = req.body;
+    const cleaned = (link || '').trim().slice(0, 500);
+    await query('UPDATE users SET bitunix_referral_link = $1 WHERE id = $2', [cleaned || null, req.userId]);
+    res.json({ ok: true, bitunix_referral_link: cleaned });
+  } catch (err) {
+    console.error('Save Bitunix referral link error:', err.message);
+    res.status(500).json({ error: 'Server error' });
   }
 });
 

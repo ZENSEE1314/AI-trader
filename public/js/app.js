@@ -1236,6 +1236,12 @@
       const appUrl = window.location.origin;
       $('#referral-link').value = `${appUrl}/?ref=${status.referral_code}`;
 
+      // Bitunix referral link (user's personal affiliate link)
+      const bxRefInput = $('#bitunix-referral-link-input');
+      if (bxRefInput && dashWallet?.bitunix_referral_link) {
+        bxRefInput.value = dashWallet.bitunix_referral_link;
+      }
+
       // USDT address
       if (status.usdt_address) {
         $('#cw-usdt-addr').value = status.usdt_address;
@@ -1374,6 +1380,14 @@
       await api('POST', '/api/subscription/usdt-address', { address, network });
       showToast('USDT address saved', 'success');
       $('#cw-wd-address-display').textContent = `Sending to: ${address.slice(0, 10)}...${address.slice(-6)} (${network})`;
+    } catch (err) { showToast(err.message, 'error'); }
+  }
+
+  async function saveBitunixReferralLink() {
+    const link = ($('#bitunix-referral-link-input')?.value || '').trim();
+    try {
+      await api('PUT', '/api/dashboard/bitunix-referral-link', { link });
+      showToast('Bitunix referral link saved', 'success');
     } catch (err) { showToast(err.message, 'error'); }
   }
 
@@ -2955,10 +2969,14 @@
           const hrs = Math.floor(t.durationMin / 60);
           const mins = t.durationMin % 60;
           const dur = hrs > 0 ? `${hrs}h${mins}m` : `${mins}m`;
+          // liveOnly = on exchange but not tracked in DB — highlight in orange
+          const liveOnlyBadge = t.liveOnly
+            ? `<span style="font-size:0.65rem;background:#f59e0b;color:#000;border-radius:3px;padding:0 4px;margin-left:4px;font-weight:700;">EXCHANGE ONLY</span>`
+            : '';
 
-          return `<div style="display:grid;grid-template-columns:1fr auto;gap:4px;padding:6px 8px;background:${dangerBg};border-radius:4px;margin-bottom:2px;">
+          return `<div style="display:grid;grid-template-columns:1fr auto;gap:4px;padding:6px 8px;background:${dangerBg};border-radius:4px;margin-bottom:2px;${t.liveOnly ? 'border-left:2px solid #f59e0b;' : ''}">
             <div>
-              <span style="font-size:0.75rem;color:var(--color-text-muted);">${escapeHtml(t.email)} • ${t.platform} • x${t.leverage} • ${dur}</span>
+              <span style="font-size:0.75rem;color:var(--color-text-muted);">${escapeHtml(t.email)} • ${t.platform} • x${t.leverage} • ${dur}${liveOnlyBadge}</span>
             </div>
             <div style="text-align:right;">
               <span style="font-weight:700;color:${pnlColor};font-size:0.85rem;">${t.pnlUsdt >= 0 ? '+' : ''}$${t.pnlUsdt.toFixed(2)}</span>
@@ -3120,11 +3138,13 @@
         ? `<button class="btn btn-sm" style="font-size:0.7rem;padding:2px 8px;background:var(--color-accent);color:#fff;border:none;" onclick="window.CryptoBot.adminChangeRole(${u.id},'${escapeHtml(u.email)}',false)">Demote</button>`
         : `<button class="btn btn-sm" style="font-size:0.7rem;padding:2px 8px;background:#8b5cf6;color:#fff;border:none;" onclick="window.CryptoBot.adminChangeRole(${u.id},'${escapeHtml(u.email)}',true)">Make Admin</button>`;
 
+      const bxLink = u.bitunix_referral_link || '';
+      const bxLinkLabel = bxLink ? '🔵 Set' : '🔵 —';
       return `<tr>
       <td>${escapeHtml(u.email)}${u.is_admin ? ' <span style="color:var(--color-accent);font-size:0.7rem;font-weight:700;">ADMIN</span>' : ''}</td>
       <td>${u.key_count}</td>
       <td class="text-mono">$${bal} <button class="btn btn-ghost btn-sm" style="font-size:0.7rem;padding:2px 6px;" onclick="window.CryptoBot.adminEditWallet(${u.id},'${escapeHtml(u.email)}',${bal})">Edit</button></td>
-      <td>${escapeHtml(u.referral_code || '-')}</td>
+      <td>${escapeHtml(u.referral_code || '-')} <button class="btn btn-ghost btn-sm" style="font-size:0.7rem;padding:2px 6px;" title="${escapeHtml(bxLink) || 'No Bitunix link set'}" onclick="window.CryptoBot.adminSetBitunixReferralLink(${u.id},'${escapeHtml(u.email)}','${escapeHtml(bxLink)}')">${bxLinkLabel}</button></td>
       <td>${formatDate(u.created_at)}</td>
       <td style="white-space:nowrap;"><span class="admin-timer-badge" data-due="${dueMs}" style="color:${timerColor};font-size:0.8rem;font-weight:600;font-family:var(--font-mono);">${timerText}</span></td>
       <td style="white-space:nowrap;display:flex;gap:4px;align-items:center;">
@@ -3135,6 +3155,16 @@
       </td>
     </tr>`;
     }).join('');
+  }
+
+  async function adminSetBitunixReferralLink(userId, email, currentLink) {
+    const link = prompt(`Set Bitunix referral link for ${email}\nCurrent: ${currentLink || '(none)'}\n\nEnter Bitunix referral URL (blank to clear):`, currentLink || '');
+    if (link === null) return; // cancelled
+    try {
+      await api('PUT', `/api/admin/users/${userId}/bitunix-referral-link`, { link: link.trim() });
+      showToast('Bitunix referral link updated', 'success');
+      loadAdmin();
+    } catch (err) { showToast(err.message, 'error'); }
   }
 
   async function adminEditWallet(userId, email, currentBal) {
@@ -3654,8 +3684,8 @@
   window.CryptoBot = {
     toggleSettings, saveSettings, deleteKey, showToast, syncSlider, syncNum, saveProfile, changePassword,
     togglePause,
-    submitTopUp, saveUsdtAddress, withdrawFromWallet, payWeekly,
-    adminAction, adminChangeRole, adminSub, adminWd, saveAdminSettings, adminEditWallet, clearErrors,
+    submitTopUp, saveUsdtAddress, withdrawFromWallet, payWeekly, saveBitunixReferralLink,
+    adminAction, adminChangeRole, adminSub, adminWd, saveAdminSettings, adminEditWallet, adminSetBitunixReferralLink, clearErrors,
     adminEditSplit, adminPauseKey, adminResumeKey, adminMarkPaid, adminFixTrades, adminClearTestData,
     goToAuth, showLoginForm, onPlatformChange,
     searchCoins, addCoin, removeCoin,
@@ -3689,12 +3719,32 @@
     // Check for password reset token in URL
     checkResetToken();
 
-    // Auto-fill referral code from URL (?ref=XXXX)
+    // Auto-fill referral code from URL (?ref=XXXX) and show welcome banner
     const params = new URLSearchParams(window.location.search);
     const ref = params.get('ref');
     if (ref) {
       const refInput = $('#signup-referral');
       if (refInput) refInput.value = ref;
+
+      // Fetch referrer info and show welcome banner
+      api('GET', `/api/auth/referral-info?ref=${encodeURIComponent(ref)}`)
+        .then(info => {
+          if (!info || !info.found) return;
+          const banner = $('#referral-welcome-banner');
+          const text   = $('#referral-banner-text');
+          const bxBtn  = $('#referral-bitunix-link');
+          if (!banner) return;
+          if (text) text.textContent = `Invited by ${info.referrer_email} — sign up now and start trading!`;
+          if (bxBtn && info.bitunix_referral_link) {
+            bxBtn.href = info.bitunix_referral_link;
+            bxBtn.style.display = 'inline-block';
+          }
+          banner.style.display = 'block';
+          // Push landing content down so banner doesn't overlap navbar
+          const content = document.querySelector('.landing-content');
+          if (content) content.style.paddingTop = '48px';
+        })
+        .catch(() => {});
     }
 
     checkSession();
