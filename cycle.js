@@ -50,6 +50,12 @@ const CONFIG = {
   ],
 };
 
+// ── Circuit Breaker Config ────────────────────────────────────
+const CIRCUIT_BREAKER = {
+  MAX_CONSECUTIVE_LOSSES: 3,   // pause after 3 consecutive losses
+  COOLDOWN_MS: 30 * 60 * 1000, // 30-minute cooldown
+};
+
 // ── Global State ──────────────────────────────────────────────
 let consecutiveLosses = 0;
 let circuitBreakerUntil = 0;

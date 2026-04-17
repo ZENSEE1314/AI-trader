@@ -70,7 +70,7 @@ async function loadBestStrategies() {
     const rows = await query(
       `SELECT strategy_id, name, recipe, params, win_rate, total_pnl, total_trades
        FROM discovered_strategies
-       WHERE is_active = true AND win_rate >= 60 AND total_trades >= 10
+       WHERE is_active = true AND win_rate >= 55 AND total_trades >= 5
        ORDER BY win_rate DESC
        LIMIT 10`
     );
@@ -109,7 +109,7 @@ async function loadBestStrategies() {
     if (coordinator?.strategyAgent) {
       const pop = coordinator.strategyAgent._population || [];
       const elites = pop
-        .filter(s => s.results && s.results.winRate >= 60 && s.results.totalTrades >= 10 && s.scan)
+        .filter(s => s.results && s.results.winRate >= 55 && s.results.totalTrades >= 5 && s.scan)
         .sort((a, b) => b.results.winRate - a.results.winRate)
         .slice(0, 5);
 

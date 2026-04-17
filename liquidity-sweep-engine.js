@@ -1192,10 +1192,10 @@ const AVOID_MINUTES_UTC = new Set([0, 15, 30, 45]);
 // retail before the real direction. Don't enter during this window.
 const SESSION_OPEN_BLACKOUT_MIN = 30;
 
-function isSessionOpenBlackout() {
-  const now  = new Date();
-  const utcH = now.getUTCHours();
-  const utcM = now.getUTCMinutes();
+function isSessionOpenBlackout(tsMs = Date.now()) {
+  const d    = new Date(tsMs);
+  const utcH = d.getUTCHours();
+  const utcM = d.getUTCMinutes();
   for (const win of SESSION_WINDOWS) {
     if (utcH === win.startH && utcM < SESSION_OPEN_BLACKOUT_MIN) return true;
   }
