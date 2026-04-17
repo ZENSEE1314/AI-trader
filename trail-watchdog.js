@@ -13,16 +13,22 @@ const { getFetchOptions, getBinanceRequestOptions } = require('./proxy-agent');
 const INTERVAL_MS = 15 * 1000;
 const db = require('./db');
 
-// Profit tier guarantees — capital % (margin)
-// At 30% profit → SL locks minimum 20% so you NEVER give back more than 10%
+// Taker fee: 0.04% entry + 0.04% exit = 0.08% of notional both legs
+// In margin % = 0.08% × leverage  (e.g. 20x = 1.6%, 100x = 8%)
+const TAKER_FEE_BOTH_LEGS = 0.0008; // 0.08% of notional
+
+// Profit tier guarantees — all values in capital % (margin)
+// First trigger fires as soon as profit covers fees + 1% extra — NEVER lose on a winner
 const TRAIL_TIERS = [
-  { trigger: 0.10, sl: 0.05  }, // +10% → lock 5%
-  { trigger: 0.20, sl: 0.12  }, // +20% → lock 12%
-  { trigger: 0.30, sl: 0.20  }, // +30% → lock 20%  (user: min 15%, we do 20%)
-  { trigger: 0.45, sl: 0.35  }, // +45% → lock 35%
-  { trigger: 0.60, sl: 0.50  }, // +60% → lock 50%
-  { trigger: 0.80, sl: 0.70  }, // +80% → lock 70%
-  { trigger: 1.00, sl: 0.90  }, // +100% → lock 90%
+  // First tier: fires once profit > fees, SL = fees covered + 1% buffer
+  // This is computed dynamically per-trade below using actual leverage
+  { trigger: 0.10, sl: 0.06  }, // +10% → lock 6%
+  { trigger: 0.20, sl: 0.14  }, // +20% → lock 14%
+  { trigger: 0.30, sl: 0.22  }, // +30% → lock 22%  (never lose on a 30% winner)
+  { trigger: 0.45, sl: 0.37  }, // +45% → lock 37%
+  { trigger: 0.60, sl: 0.52  }, // +60% → lock 52%
+  { trigger: 0.80, sl: 0.72  }, // +80% → lock 72%
+  { trigger: 1.00, sl: 0.92  }, // +100% → lock 92%
 ];
 
 function log(msg) {
@@ -52,16 +58,33 @@ async function getLivePrice(symbol) {
 }
 
 // Tier-based minimum SL price — guarantees profit lock at milestone levels
+// Also enforces a FEE FLOOR: once profit > fees+1%, SL can never go below
+// entry + fees + 1% profit so you NEVER lose a cent on a winning trade.
 function calcTierSlPrice(entryPrice, curPrice, isLong, leverage) {
   const pricePct = isLong
     ? (curPrice - entryPrice) / entryPrice
     : (entryPrice - curPrice) / entryPrice;
   const capitalPct = pricePct * leverage;
 
+  // Dynamic fee floor: fees (both legs) + 1% profit buffer, in capital %
+  const feesCapital   = TAKER_FEE_BOTH_LEGS * leverage; // e.g. 20x→1.6%, 100x→8%
+  const feeFloorCap   = feesCapital + 0.01;             // fees + 1% = absolute minimum lock
+  const feeFloorPrice = isLong
+    ? entryPrice * (1 + feeFloorCap / leverage)
+    : entryPrice * (1 - feeFloorCap / leverage);
+
+  // Tier lookup
   let bestSlCapital = null;
   for (const tier of TRAIL_TIERS) {
     if (capitalPct >= tier.trigger) bestSlCapital = tier.sl;
   }
+
+  // Apply fee floor as soon as profit covers fees+1%
+  if (capitalPct >= feeFloorCap) {
+    const feeFloorSl = feeFloorCap;
+    if (bestSlCapital === null || feeFloorSl > bestSlCapital) bestSlCapital = feeFloorSl;
+  }
+
   if (bestSlCapital === null) return null;
 
   const slPricePct = bestSlCapital / leverage;

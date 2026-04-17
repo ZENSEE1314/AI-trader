@@ -69,14 +69,19 @@ const TP_PCT = 0.45;   // +45% of margin = target (trailing SL lets it go higher
 
 // Trailing SL tiers: as profit grows, lock more profit
 // All values are % of MARGIN (capital), not price
+// Taker fee: 0.04% entry + 0.04% exit = 0.08% notional both legs
+const TAKER_FEE_BOTH_LEGS = 0.0008;
+
+// Profit tiers — capital % (margin). Fee floor applied dynamically in calculateTrailingStep.
+// First thing that fires: SL = fees covered + 1% profit so you NEVER lose on a winner.
 const TRAILING_TIERS = [
-  { trigger: 0.10, sl: 0.05  }, // +10% profit → lock 5%
-  { trigger: 0.20, sl: 0.12  }, // +20% profit → lock 12%
-  { trigger: 0.30, sl: 0.20  }, // +30% profit → lock 20%  (never lose a 30% winner)
-  { trigger: 0.45, sl: 0.35  }, // +45% profit → lock 35%
-  { trigger: 0.60, sl: 0.50  }, // +60% profit → lock 50%
-  { trigger: 0.80, sl: 0.70  }, // +80% profit → lock 70%
-  { trigger: 1.00, sl: 0.90  }, // +100% profit → lock 90%
+  { trigger: 0.10, sl: 0.06  }, // +10% → lock 6%
+  { trigger: 0.20, sl: 0.14  }, // +20% → lock 14%
+  { trigger: 0.30, sl: 0.22  }, // +30% → lock 22%
+  { trigger: 0.45, sl: 0.37  }, // +45% → lock 37%
+  { trigger: 0.60, sl: 0.52  }, // +60% → lock 52%
+  { trigger: 0.80, sl: 0.72  }, // +80% → lock 72%
+  { trigger: 1.00, sl: 0.92  }, // +100% → lock 92%
 ];
 // Beyond 100%: trail with 8% gap
 const TRAIL_HIGH_START = 1.00;
@@ -436,6 +441,14 @@ function calculateTrailingStep(entryPrice, currentPrice, isLong, lastStep, lever
       const highSl = TRAIL_HIGH_START + stepsAbove * TRAIL_HIGH_STEP - TRAIL_HIGH_GAP;
       if (highSl > (bestSlCapital || 0)) bestSlCapital = highSl;
     }
+  }
+
+  // Fee floor: once profit > fees+1%, SL must cover fees + 1% minimum
+  // Ensures you NEVER lose money on a trade that was profitable
+  const feesCapital = TAKER_FEE_BOTH_LEGS * leverage; // 0.08% × leverage
+  const feeFloorCap = feesCapital + 0.01;             // fees + 1% buffer
+  if (capitalPct >= feeFloorCap) {
+    if (bestSlCapital === null || feeFloorCap > bestSlCapital) bestSlCapital = feeFloorCap;
   }
 
   if (bestSlCapital === null) return null;

@@ -1767,14 +1767,16 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     if (sig.direction === 'LONG') {
       if (priceInRange > 0.80) {
         sig.score = -99;
-        sig.blocked = `LONG blocked — price at ${(priceInRange * 100).toFixed(0)}% of 5h range (top — wait for HL pullback)`;
+        sig.blocked = `LONG blocked — price at ${(priceInRange * 100).toFixed(0)}% of 5h range (top — should SHORT not LONG)`;
       } else if (priceInRange < 0.35) sig.score += 2; // near the bottom — ideal HL/LL entry
+      else if (priceInRange > 0.65) sig.score -= 3;   // upper half but not blocked — risky
     }
     if (sig.direction === 'SHORT') {
       if (priceInRange < 0.20) {
         sig.score = -99;
-        sig.blocked = `SHORT blocked — price at ${(priceInRange * 100).toFixed(0)}% of 5h range (bottom — wait for LH bounce)`;
-      } else if (priceInRange > 0.65) sig.score += 2; // near the top — ideal HH/LH entry
+        sig.blocked = `SHORT blocked — price at ${(priceInRange * 100).toFixed(0)}% of 5h range (bottom — should LONG not SHORT)`;
+      } else if (priceInRange > 0.75) sig.score += 4; // at the very top — ideal SHORT zone
+      else if (priceInRange > 0.65) sig.score += 2;   // near the top — good SHORT zone
     }
 
     // Structural proximity: reward entries tight to actual swing structure (HL/LL for LONG, HH/LH for SHORT)
