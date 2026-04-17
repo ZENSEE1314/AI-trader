@@ -70,13 +70,13 @@ const TP_PCT = 0.45;   // +45% of margin = target (trailing SL lets it go higher
 // Trailing SL tiers: as profit grows, lock more profit
 // All values are % of MARGIN (capital), not price
 const TRAILING_TIERS = [
-  { trigger: 0.10, sl: 0.005 },  // +10% profit → SL at +0.5% (breakeven + buffer)
-  { trigger: 0.20, sl: 0.10  },  // +20% profit → SL at +10%
-  { trigger: 0.30, sl: 0.20  },  // +30% profit → SL at +20%
-  { trigger: 0.45, sl: 0.38  },  // +45% profit → SL at +38% (near target, tight)
-  { trigger: 0.60, sl: 0.52  },  // +60% profit → SL at +52% (riding the wave)
-  { trigger: 0.80, sl: 0.72  },  // +80% profit → SL at +72%
-  { trigger: 1.00, sl: 0.92  },  // +100% profit → SL at +92%
+  { trigger: 0.10, sl: 0.05  }, // +10% profit → lock 5%
+  { trigger: 0.20, sl: 0.12  }, // +20% profit → lock 12%
+  { trigger: 0.30, sl: 0.20  }, // +30% profit → lock 20%  (never lose a 30% winner)
+  { trigger: 0.45, sl: 0.35  }, // +45% profit → lock 35%
+  { trigger: 0.60, sl: 0.50  }, // +60% profit → lock 50%
+  { trigger: 0.80, sl: 0.70  }, // +80% profit → lock 70%
+  { trigger: 1.00, sl: 0.90  }, // +100% profit → lock 90%
 ];
 // Beyond 100%: trail with 8% gap
 const TRAIL_HIGH_START = 1.00;

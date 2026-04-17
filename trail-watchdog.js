@@ -1,7 +1,8 @@
 // ============================================================
 // Trailing SL Watchdog — runs every 15 seconds
-// Moves SL to last completed 15m candle low (LONG) or high (SHORT)
-// Operates independently of the main cycle so trailing is always live
+// Two mechanisms combined, takes the better (higher protection):
+//   1. Candle trail  — SL = last completed 15m candle low/high
+//   2. Profit tiers  — at 30% profit, SL locks 20% minimum (never lose a winner)
 // ============================================================
 
 const fetch = require('node-fetch');
@@ -9,8 +10,20 @@ const { BitunixClient } = require('./bitunix-client');
 const { USDMClient } = require('binance');
 const { getFetchOptions, getBinanceRequestOptions } = require('./proxy-agent');
 
-const INTERVAL_MS = 15 * 1000; // 15 seconds
+const INTERVAL_MS = 15 * 1000;
 const db = require('./db');
+
+// Profit tier guarantees — capital % (margin)
+// At 30% profit → SL locks minimum 20% so you NEVER give back more than 10%
+const TRAIL_TIERS = [
+  { trigger: 0.10, sl: 0.05  }, // +10% → lock 5%
+  { trigger: 0.20, sl: 0.12  }, // +20% → lock 12%
+  { trigger: 0.30, sl: 0.20  }, // +30% → lock 20%  (user: min 15%, we do 20%)
+  { trigger: 0.45, sl: 0.35  }, // +45% → lock 35%
+  { trigger: 0.60, sl: 0.50  }, // +60% → lock 50%
+  { trigger: 0.80, sl: 0.70  }, // +80% → lock 70%
+  { trigger: 1.00, sl: 0.90  }, // +100% → lock 90%
+];
 
 function log(msg) {
   const t = new Date().toLocaleString('en-GB', { timeZone: 'Asia/Jakarta' });
@@ -23,15 +36,48 @@ function inferPricePrec(storedPrice) {
   return dot === -1 ? 0 : s.length - dot - 1;
 }
 
-// Fetch last completed 15m candle low (LONG) or high (SHORT)
-async function getCandleTrailSl(symbol, isLong, currentSl) {
+// Get live mark price from Binance public API (works for both exchanges)
+async function getLivePrice(symbol) {
+  try {
+    const res = await fetch(
+      `https://fapi.binance.com/fapi/v1/ticker/price?symbol=${symbol}`,
+      { timeout: 5000, ...getFetchOptions() }
+    );
+    const d = await res.json();
+    const p = parseFloat(d.price);
+    return p > 0 ? p : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+// Tier-based minimum SL price — guarantees profit lock at milestone levels
+function calcTierSlPrice(entryPrice, curPrice, isLong, leverage) {
+  const pricePct = isLong
+    ? (curPrice - entryPrice) / entryPrice
+    : (entryPrice - curPrice) / entryPrice;
+  const capitalPct = pricePct * leverage;
+
+  let bestSlCapital = null;
+  for (const tier of TRAIL_TIERS) {
+    if (capitalPct >= tier.trigger) bestSlCapital = tier.sl;
+  }
+  if (bestSlCapital === null) return null;
+
+  const slPricePct = bestSlCapital / leverage;
+  return isLong
+    ? entryPrice * (1 + slPricePct)
+    : entryPrice * (1 - slPricePct);
+}
+
+// Last completed 15m candle structural SL
+async function calcCandleSlPrice(symbol, isLong, currentSl) {
   try {
     const url = `https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=15m&limit=3`;
     const res = await fetch(url, { timeout: 6000, ...getFetchOptions() });
     const data = await res.json();
     if (!Array.isArray(data) || data.length < 2) return null;
 
-    // Last item is still-forming — use second-to-last
     const completed = data[data.length - 2];
     const candleLow  = parseFloat(completed[3]);
     const candleHigh = parseFloat(completed[2]);
@@ -40,7 +86,7 @@ async function getCandleTrailSl(symbol, isLong, currentSl) {
     if (!isLong && candleHigh < currentSl) return candleHigh;
     return null;
   } catch (e) {
-    log(`getCandleTrailSl ${symbol}: ${e.message}`);
+    log(`calcCandleSlPrice ${symbol}: ${e.message}`);
     return null;
   }
 }
@@ -52,10 +98,7 @@ async function updateSlBitunix(client, symbol, newSlPrice, pricePrec, existingTp
       : (posData?.positionList || posData?.list || (posData && typeof posData === 'object' ? [posData] : []));
     const pos = posList.find(p => p.symbol === symbol);
     const posId = pos ? (pos.positionId || pos.id) : null;
-    if (!pos || !posId) {
-      log(`Bitunix: no open position found for ${symbol}`);
-      return false;
-    }
+    if (!pos || !posId) { log(`Bitunix: no position found for ${symbol}`); return false; }
     const payload = { symbol, positionId: posId, slPrice: String(newSlPrice.toFixed(pricePrec)) };
     if (existingTp) payload.tpPrice = String(parseFloat(existingTp).toFixed(pricePrec));
     await client.placePositionTpSl(payload);
@@ -66,9 +109,8 @@ async function updateSlBitunix(client, symbol, newSlPrice, pricePrec, existingTp
   }
 }
 
-async function updateSlBinance(client, symbol, newSlPrice, isLong, pricePrec, existingTp) {
+async function updateSlBinance(client, symbol, newSlPrice, isLong, pricePrec) {
   try {
-    // Cancel existing stop orders
     const openOrders = await client.getAllOpenOrders({ symbol });
     const stops = (openOrders || []).filter(o =>
       o.type === 'STOP_MARKET' || o.type === 'STOP' || o.origType === 'STOP_MARKET'
@@ -94,16 +136,13 @@ async function updateSlBinance(client, symbol, newSlPrice, isLong, pricePrec, ex
 
 async function runTrailCycle() {
   try {
-    // Load all open trades with their api key info
     const trades = await db.query(`
       SELECT t.id, t.symbol, t.direction, t.entry_price, t.sl_price,
-             t.trailing_sl_price, t.trailing_sl_last_step, t.tp_price,
-             t.leverage, t.user_id,
+             t.trailing_sl_price, t.tp_price, t.leverage,
              ak.platform, ak.api_key, ak.api_secret
       FROM trades t
       JOIN api_keys ak ON ak.id = t.api_key_id
-      WHERE t.status = 'OPEN'
-        AND ak.enabled = true
+      WHERE t.status = 'OPEN' AND ak.enabled = true
     `);
 
     if (!trades.length) return;
@@ -114,44 +153,59 @@ async function runTrailCycle() {
         const currentSl  = parseFloat(trade.trailing_sl_price) || parseFloat(trade.sl_price) || 0;
         const pricePrec  = inferPricePrec(trade.sl_price);
         const entryPrice = parseFloat(trade.entry_price);
+        const leverage   = parseFloat(trade.leverage) || 20;
 
-        // Get candle trail SL
-        const newSl = await getCandleTrailSl(trade.symbol, isLong, currentSl);
-        if (!newSl) continue;
+        // Get live price
+        const curPrice = await getLivePrice(trade.symbol);
+        if (!curPrice) continue;
 
-        // Safety: don't set SL beyond entry if trade isn't profitable yet
-        // Allow slight tolerance (0.05%) to avoid flip-flopping at entry
-        const slOnWrongSide = isLong
-          ? (newSl < entryPrice * 0.9995 && currentSl < entryPrice * 0.9995)
-          : (newSl > entryPrice * 1.0005 && currentSl > entryPrice * 1.0005);
-        // Always allow improvement even if still at loss — candle low is a valid SL
-        // but reject if new SL would be WORSE than current (move against trade)
-        const isImprovement = isLong ? newSl > currentSl : newSl < currentSl;
-        if (!isImprovement) continue;
+        const profitPct = isLong
+          ? (curPrice - entryPrice) / entryPrice
+          : (entryPrice - curPrice) / entryPrice;
+        const capitalPct = profitPct * leverage;
 
-        log(`${trade.symbol} ${isLong ? 'LONG' : 'SHORT'} trail SL: $${currentSl.toFixed(pricePrec)} → $${newSl.toFixed(pricePrec)} (15m candle ${isLong ? 'low' : 'high'})`);
+        // Mechanism 1: Profit tier guarantee
+        const tierSl = calcTierSlPrice(entryPrice, curPrice, isLong, leverage);
+
+        // Mechanism 2: Candle structural trail
+        const candleSl = await calcCandleSlPrice(trade.symbol, isLong, currentSl);
+
+        // Take the BETTER of the two (highest SL for LONG, lowest for SHORT)
+        let bestSl = currentSl;
+        if (tierSl) bestSl = isLong ? Math.max(bestSl, tierSl) : Math.min(bestSl, tierSl);
+        if (candleSl) bestSl = isLong ? Math.max(bestSl, candleSl) : Math.min(bestSl, candleSl);
+
+        // Only update if improved beyond current SL
+        const improved = isLong ? bestSl > currentSl + 0.001 : bestSl < currentSl - 0.001;
+        if (!improved) continue;
+
+        const source = [];
+        if (tierSl && (isLong ? tierSl > currentSl : tierSl < currentSl)) source.push(`tier(+${(capitalPct*100).toFixed(0)}%cap)`);
+        if (candleSl && (isLong ? candleSl > currentSl : candleSl < currentSl)) source.push('candle');
+
+        log(`${trade.symbol} ${isLong ? 'LONG' : 'SHORT'} [${source.join('+')}] SL: $${currentSl.toFixed(pricePrec)} → $${bestSl.toFixed(pricePrec)} | profit +${(capitalPct*100).toFixed(1)}% capital`);
 
         let updated = false;
         if (trade.platform === 'bitunix') {
           const client = new BitunixClient({ apiKey: trade.api_key, apiSecret: trade.api_secret });
-          updated = await updateSlBitunix(client, trade.symbol, newSl, pricePrec, trade.tp_price);
+          updated = await updateSlBitunix(client, trade.symbol, bestSl, pricePrec, trade.tp_price);
         } else if (trade.platform === 'binance') {
           const client = new USDMClient(
             { api_key: trade.api_key, api_secret: trade.api_secret },
             getBinanceRequestOptions()
           );
-          updated = await updateSlBinance(client, trade.symbol, newSl, isLong, pricePrec, trade.tp_price);
+          updated = await updateSlBinance(client, trade.symbol, bestSl, isLong, pricePrec);
         }
 
         if (updated) {
           await db.query(
             `UPDATE trades SET trailing_sl_price = $1 WHERE id = $2`,
-            [newSl, trade.id]
+            [bestSl, trade.id]
           );
-          log(`✓ ${trade.symbol} SL updated → $${newSl.toFixed(pricePrec)}`);
+          log(`✓ ${trade.symbol} SL locked → $${bestSl.toFixed(pricePrec)}`);
         }
       } catch (e) {
-        log(`Error processing ${trade.symbol}: ${e.message}`);
+        log(`Error ${trade.symbol}: ${e.message}`);
       }
     }
   } catch (e) {
@@ -159,8 +213,6 @@ async function runTrailCycle() {
   }
 }
 
-log('Trail watchdog started — running every 15 seconds');
-
-// Run immediately, then every 15 seconds
+log('Trail watchdog started — 15s interval | candle trail + profit tier');
 runTrailCycle();
 setInterval(runTrailCycle, INTERVAL_MS);
