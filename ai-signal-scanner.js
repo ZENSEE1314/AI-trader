@@ -348,6 +348,25 @@ async function scanAI(log, opts = {}) {
           }
         }
 
+        // Range position filter — NEVER buy at the top, NEVER short at the bottom
+        // LONG only in bottom 35% of the last 5h range (HL/LL zone)
+        // SHORT only in top 65%+ of range (HH/LH zone)
+        {
+          const recent20High = Math.max(...highs15m.slice(-20));
+          const recent20Low  = Math.min(...lows15m.slice(-20));
+          const rangeSize    = recent20High - recent20Low;
+          const priceInRange = rangeSize > 0 ? (price - recent20Low) / rangeSize : 0.5;
+
+          if (signal === 'LONG' && priceInRange > 0.80) {
+            bLog.scan(`${symbol}: LONG blocked — price at ${(priceInRange*100).toFixed(0)}% of 5h range (top — wait for HL pullback)`);
+            continue;
+          }
+          if (signal === 'SHORT' && priceInRange < 0.20) {
+            bLog.scan(`${symbol}: SHORT blocked — price at ${(priceInRange*100).toFixed(0)}% of 5h range (bottom — wait for LH bounce)`);
+            continue;
+          }
+        }
+
         // TP capped at 1.5% — backtest proves lower TP → 55% WR vs 33% WR at 3%
         // DB strategies may carry stale tp_pct=0.03; override enforced here.
         const slPct = SMC_SL_PCT;
