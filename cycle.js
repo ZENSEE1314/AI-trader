@@ -354,6 +354,15 @@ async function updateStopLoss(client, symbol, newSlPrice, closeSide, platform, p
 // At +1% profit → SL locks at +0.5%.
 // Trailing SL: margin-based tiers — SL only moves up, never down.
 // Converts margin % to price % using leverage, so dollar result is same at any leverage.
+
+// Infer price decimal precision from a stored price string/number.
+// Used so trailing SL respects Binance PRICE_FILTER tick sizes (e.g. BTCUSDT = 1 decimal).
+function inferPricePrec(storedPrice) {
+  const s = String(parseFloat(storedPrice) || 0);
+  const dot = s.indexOf('.');
+  return dot === -1 ? 0 : s.length - dot - 1;
+}
+
 function calculateTrailingStep(entryPrice, currentPrice, isLong, lastStep, leverage = 20, userTrailStepPct = 0) {
   const pricePct = isLong
     ? (currentPrice - entryPrice) / entryPrice
@@ -1339,13 +1348,15 @@ async function executeForAllUsers(pick) {
           return;
         }
 
-        // Cooldown: don't re-enter same token within 30 min after last closed trade (per API key)
+        // Cooldown: don't re-enter same token within 60 min after last closed trade.
+        // NOTE: checks across ALL api keys for this user so a manual close on Binance
+        //       also blocks re-entry on the Bitunix key (and vice-versa).
         const recentClosed = await db.query(
-          `SELECT id, closed_at FROM trades WHERE api_key_id = $1 AND symbol = $2 AND status IN ('WIN','LOSS','TP','SL','CLOSED') AND closed_at > NOW() - INTERVAL '30 minutes' ORDER BY closed_at DESC LIMIT 1`,
-          [key.id, symbol]
+          `SELECT id, closed_at FROM trades WHERE user_id = $1 AND symbol = $2 AND status IN ('WIN','LOSS','TP','SL','CLOSED') AND closed_at > NOW() - INTERVAL '60 minutes' ORDER BY closed_at DESC LIMIT 1`,
+          [key.user_id, symbol]
         );
         if (recentClosed.length > 0) {
-          userLog.trade(`User ${key.email}: ${symbol} recently closed on key ${key.id} — 30min cooldown active, skipping`);
+          userLog.trade(`User ${key.email}: ${symbol} recently closed (user-wide cooldown) — 60min active, skipping`);
           return;
         }
 
@@ -1785,14 +1796,23 @@ async function syncTradeStatus() {
               const lastStep = parseFloat(trade.trailing_sl_last_step) || 0;
               const tradeLev = parseFloat(trade.leverage) || 20;
               const userTrailPct = parseFloat(trade.key_trailing_sl_step) || 0;
+              const pricePctDebug = isLong
+                ? (curPrice - entryPrice) / entryPrice
+                : (entryPrice - curPrice) / entryPrice;
+              const capitalPctDebug = pricePctDebug * tradeLev;
+              bLog.trade(`Binance trail check: ${trade.symbol} cur=$${fmtPrice(curPrice)} entry=$${entryPrice} pricePct=${(pricePctDebug*100).toFixed(3)}% capitalPct=${(capitalPctDebug*100).toFixed(2)}% lev=${tradeLev}x lastStep=${(lastStep*100).toFixed(2)}%`);
               const trailResult = calculateTrailingStep(entryPrice, curPrice, isLong, lastStep, tradeLev, userTrailPct);
               if (trailResult) {
                 const closeSide = isLong ? 'SELL' : 'BUY';
+                // Use the same decimal precision as the original SL price so Binance
+                // doesn't reject the order with PRICE_FILTER (e.g. BTCUSDT needs 1 decimal).
+                const binSlPrec = inferPricePrec(trade.sl_price);
+                bLog.trade(`Binance trailing SL: ${trade.symbol} entry=$${entryPrice} cur=$${fmtPrice(curPrice)} pricePct=${(((isLong?(curPrice-entryPrice):(entryPrice-curPrice))/entryPrice)*100).toFixed(3)}% → newSL=$${trailResult.newSlPrice.toFixed(binSlPrec)} (step=${(trailResult.newLastStep*100).toFixed(2)}%)`);
                 let slUpdated = false;
                 for (let attempt = 1; attempt <= 3; attempt++) {
                   try {
                     const userTp = parseFloat(trade.tp_price) || 0;
-                    slUpdated = await updateStopLoss(userClient, trade.symbol, trailResult.newSlPrice, closeSide, 'binance', 8, userTp || undefined);
+                    slUpdated = await updateStopLoss(userClient, trade.symbol, trailResult.newSlPrice, closeSide, 'binance', binSlPrec, userTp || undefined);
                     if (slUpdated) break;
                   } catch (e) {
                     bLog.error(`WATCHDOG: Binance SL update failed for ${trade.symbol} attempt ${attempt}/3: ${e.message}`);
@@ -1921,10 +1941,11 @@ async function syncTradeStatus() {
               if (mktStructure.startsWith('TRIPLE_MA_B')) {
                 const bTrail = calcTripleMABTrailStep(entryPrice, curPrice, lastStep);
                 if (bTrail) {
-                  bLog.trade(`Triple MA Scenario B: ${trade.symbol} +${(profitPct*100).toFixed(1)}% gain — moving SL to $${bTrail.newSlPrice.toFixed(8)} (+${(bTrail.newLastStep*100).toFixed(1)}%)`);
+                  const bPrec = inferPricePrec(trade.sl_price);
+                  bLog.trade(`Triple MA Scenario B: ${trade.symbol} +${(profitPct*100).toFixed(1)}% gain — moving SL to $${bTrail.newSlPrice.toFixed(bPrec)} (+${(bTrail.newLastStep*100).toFixed(1)}%)`);
                   let slUpdatedB = false;
                   try {
-                    slUpdatedB = await updateStopLoss(userClient, trade.symbol, bTrail.newSlPrice, null, 'bitunix', 8, undefined);
+                    slUpdatedB = await updateStopLoss(userClient, trade.symbol, bTrail.newSlPrice, null, 'bitunix', bPrec, undefined);
                   } catch (e) {
                     bLog.error(`Triple MA B trailing SL failed: ${e.message}`);
                   }
@@ -1948,9 +1969,10 @@ async function syncTradeStatus() {
                 try {
                   const spikeTrail = await calcSpikeHLTrailSl(trade.symbol, trade.direction, entryPrice, parseFloat(trade.trailing_sl_price) || parseFloat(trade.sl_price));
                   if (spikeTrail.updated && spikeTrail.newSl) {
+                    const spikePrec = inferPricePrec(trade.sl_price);
                     let slMovedSpike = false;
                     try {
-                      slMovedSpike = await updateStopLoss(userClient, trade.symbol, spikeTrail.newSl, null, 'bitunix', 8, undefined);
+                      slMovedSpike = await updateStopLoss(userClient, trade.symbol, spikeTrail.newSl, null, 'bitunix', spikePrec, undefined);
                     } catch (e) {
                       bLog.error(`Spike-HL trail SL update failed: ${e.message}`);
                     }
@@ -1973,15 +1995,23 @@ async function syncTradeStatus() {
               }
 
               const userTrailPctBx = parseFloat(trade.key_trailing_sl_step) || 0;
+              const bxProfitPct = isLong
+                ? (curPrice - entryPrice) / entryPrice
+                : (entryPrice - curPrice) / entryPrice;
+              bLog.trade(`Bitunix trail check: ${trade.symbol} cur=$${fmtPrice(curPrice)} entry=$${entryPrice} pricePct=${(bxProfitPct*100).toFixed(3)}% capitalPct=${(bxProfitPct*tradeLev*100).toFixed(2)}% lev=${tradeLev}x lastStep=${(lastStep*100).toFixed(2)}%`);
               const trailResult = calculateTrailingStep(entryPrice, curPrice, isLong, lastStep, tradeLev, userTrailPctBx);
               if (!trailResult) continue;
+
+              // Use same decimal precision as original SL to avoid exchange rejection
+              const bxSlPrec = inferPricePrec(trade.sl_price);
+              bLog.trade(`Bitunix trailing SL: ${trade.symbol} → newSL=$${trailResult.newSlPrice.toFixed(bxSlPrec)} (step=${(trailResult.newLastStep*100).toFixed(2)}%)`);
 
               // ── Step 3: Update SL on exchange (retry up to 3 times) ──
               let slUpdated = false;
               for (let attempt = 1; attempt <= 3; attempt++) {
                 try {
                   const existingTp = parseFloat(trade.tp_price) || 0;
-                  slUpdated = await updateStopLoss(userClient, trade.symbol, trailResult.newSlPrice, null, 'bitunix', 8, existingTp || undefined);
+                  slUpdated = await updateStopLoss(userClient, trade.symbol, trailResult.newSlPrice, null, 'bitunix', bxSlPrec, existingTp || undefined);
                   if (slUpdated) break;
                   bLog.error(`WATCHDOG: updateStopLoss returned false for ${trade.symbol} (attempt ${attempt}/3)`);
                 } catch (e) {
@@ -1996,12 +2026,12 @@ async function syncTradeStatus() {
                   `UPDATE trades SET trailing_sl_price = $1, trailing_sl_last_step = $2 WHERE id = $3`,
                   [trailResult.newSlPrice, trailResult.newLastStep, trade.id]
                 );
-                bLog.trade(`✓ Trailing SL (Bitunix): ${trade.symbol} stepped to ${(trailResult.newLastStep*100).toFixed(1)}% SL=$${trailResult.newSlPrice.toFixed(8)}`);
+                bLog.trade(`✓ Trailing SL (Bitunix): ${trade.symbol} stepped to ${(trailResult.newLastStep*100).toFixed(1)}% SL=$${trailResult.newSlPrice.toFixed(bxSlPrec)}`);
                 await notify(
                   `*Trailing SL Stepped*\n` +
                   `*${trade.symbol}* ${isLong ? 'LONG' : 'SHORT'}\n` +
                   `Capital profit: *+${(trailResult.newLastStep*100).toFixed(1)}%*\n` +
-                  `SL locked at: \`$${trailResult.newSlPrice.toFixed(8)}\``
+                  `SL locked at: \`$${trailResult.newSlPrice.toFixed(bxSlPrec)}\``
                 );
               } else {
                 // All 3 attempts failed — emergency alert
