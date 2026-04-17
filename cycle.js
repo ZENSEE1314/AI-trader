@@ -9,7 +9,10 @@ const fetch = require('node-fetch');
 const aiLearner = require('./ai-learner');
 const { recordDailyTrade, detectSwings, SWING_LENGTHS } = require('./liquidity-sweep-engine');
 const { scanAI } = require('./ai-signal-scanner');
-const { scanTripleMA, shouldExitScenarioA, calcTripleMABTrailStep } = require('./triple-ma-strategy');
+// Triple MA disabled — 24.1% WR in combined backtest (net -24.7%). Real markets
+// outside sessions are noisy enough to hit 1% SL before MA20 converges.
+// Exit logic kept so any trades already open in DB close cleanly.
+const { shouldExitScenarioA, calcTripleMABTrailStep } = require('./triple-ma-strategy');
 const { scanSpikeHL, calcSpikeHLTrailSl } = require('./spike-hl-strategy');
 const { scanTjunction } = require('./tjunction-strategy');
 const { getSentimentScores } = require('./sentiment-scraper');
@@ -1017,11 +1020,8 @@ async function main() {
     // Runs only during institutional sessions (Asia / Europe / US opens)
     const aiSignals = await scanAI(log, { topNCoins, kronosPredictions });
 
-    // Triple MA Sideways signals — runs only OUTSIDE session windows
-    const tripleMASignals = await scanTripleMA(log);
-    if (tripleMASignals.length > 0) {
-      bLog.scan(`Triple MA: ${tripleMASignals.length} sideways signal(s) — ${tripleMASignals.map(s => `${s.symbol} ${s.scenario}`).join(', ')}`);
-    }
+    // Triple MA disabled — combined backtest WR 24.1%, net -24.7%. Removed.
+    const tripleMASignals = [];
 
     // Spike-HL Liquidity Sweep — runs DURING session windows (91% WR backtest)
     // Detects smart-money stop sweeps on 1m chart and enters at the rejection close
