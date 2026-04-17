@@ -337,14 +337,26 @@ async function updateStopLoss(client, symbol, newSlPrice, closeSide, platform, p
   } else if (platform === 'bitunix') {
     // NOTE: Bitunix replaces the entire TP/SL config on each call.
     // Must re-send TP alongside SL to avoid wiping it.
-    const positions = await client.getOpenPositions(symbol);
-    const pos = Array.isArray(positions) ? positions.find(p => p.symbol === symbol) : null;
-    if (pos && pos.positionId) {
-      const tpslPayload = { symbol, positionId: pos.positionId, slPrice: slFmt };
+    const posData = await client.getOpenPositions(symbol);
+
+    // Bitunix may return a bare array OR a wrapped object (positionList / list).
+    // Also handles single-object response when a symbol filter is applied.
+    const posList = Array.isArray(posData) ? posData
+      : (posData?.positionList || posData?.list || (posData && typeof posData === 'object' ? [posData] : []));
+
+    const pos = posList.find(p => p.symbol === symbol);
+    // Bitunix API uses 'positionId' in some versions, 'id' in others — check both.
+    const posId = pos ? (pos.positionId || pos.id) : null;
+
+    if (pos && posId) {
+      const tpslPayload = { symbol, positionId: posId, slPrice: slFmt };
       if (existingTpPrice) tpslPayload.tpPrice = fmtP(existingTpPrice);
       await client.placePositionTpSl(tpslPayload);
       return true;
     }
+
+    // Log exactly what came back so we can debug field names if it ever fails
+    bLog.error(`[Bitunix updateStopLoss] ${symbol}: posId=${posId} pos=${pos ? JSON.stringify(Object.keys(pos)) : 'null'} rawType=${Array.isArray(posData)?'array':typeof posData}`);
     return false;
   }
   return false;
@@ -1591,11 +1603,16 @@ async function executeForAllUsers(pick) {
           userLog.trade(`Bitunix order placed: ${JSON.stringify(order)}`);
 
           await sleep(2000);
-          const positions = await userClient.getOpenPositions(symbol);
-          const pos = Array.isArray(positions) ? positions.find(p => p.symbol === symbol) : null;
-          userLog.trade(`Bitunix position lookup: ${JSON.stringify(pos ? { id: pos.positionId, symbol: pos.symbol, side: pos.side, qty: pos.qty } : null)}`);
+          const posRaw = await userClient.getOpenPositions(symbol);
+          // Handle bare array OR wrapped response (positionList / list)
+          const posArr = Array.isArray(posRaw) ? posRaw
+            : (posRaw?.positionList || posRaw?.list || (posRaw && typeof posRaw === 'object' ? [posRaw] : []));
+          const pos = posArr.find(p => p.symbol === symbol);
+          // Bitunix uses 'positionId' or 'id' depending on API version
+          const posId = pos ? (pos.positionId || pos.id) : null;
+          userLog.trade(`Bitunix position lookup: ${JSON.stringify(pos ? { id: posId, symbol: pos.symbol, side: pos.side, qty: pos.qty } : null)}`);
 
-          if (pos && pos.positionId) {
+          if (pos && posId) {
             // Recalculate SL from actual entry price to avoid stale-price rejection
             const actualEntry = parseFloat(pos.avgOpenPrice || pos.entryPrice || pos.avgPrice) || price;
 
@@ -1609,12 +1626,12 @@ async function executeForAllUsers(pick) {
             }
 
             if (slFmtActual) {
-              userLog.trade(`Bitunix position confirmed: ${pos.positionId} entry=$${actualEntry} — setting SL=$${slFmtActual} (trailing, no hard TP)...`);
+              userLog.trade(`Bitunix position confirmed: ${posId} entry=$${actualEntry} — setting SL=$${slFmtActual} (trailing, no hard TP)...`);
               try {
-                const tpSLPayload = { symbol, positionId: pos.positionId, slPrice: slFmtActual };
+                const tpSLPayload = { symbol, positionId: posId, slPrice: slFmtActual };
                 if (bxTpPrice && isScenarioA) tpSLPayload.tpPrice = String(bxTpPrice);
                 await userClient.placePositionTpSl(tpSLPayload);
-                userLog.trade(`Bitunix SL set on ${pos.positionId}: SL=$${slFmtActual}${bxTpPrice ? ` TP=$${bxTpPrice}` : ''}`);
+                userLog.trade(`Bitunix SL set on ${posId}: SL=$${slFmtActual}${bxTpPrice ? ` TP=$${bxTpPrice}` : ''}`);
               } catch (e) {
                 userLog.error(`Bitunix SL FAILED: ${e.message} — SET MANUALLY`);
                 await notify(`*Bitunix ${symbol} ${pick.direction}*\nSL failed! Set manually on Bitunix NOW.`);
@@ -1623,7 +1640,7 @@ async function executeForAllUsers(pick) {
               // Scenario A: no SL, but set the TP
               userLog.trade(`Bitunix Scenario A: no SL — setting TP=$${bxTpPrice} only (MA20 touch exit will handle downside)...`);
               try {
-                await userClient.placePositionTpSl({ symbol, positionId: pos.positionId, tpPrice: String(bxTpPrice), tpOrderType: 'MARKET', tpStopType: 'MARK_PRICE' });
+                await userClient.placePositionTpSl({ symbol, positionId: posId, tpPrice: String(bxTpPrice), tpOrderType: 'MARKET', tpStopType: 'MARK_PRICE' });
               } catch (e) {
                 userLog.error(`Bitunix TP FAILED: ${e.message}`);
               }
