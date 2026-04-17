@@ -217,8 +217,16 @@ async function scanAI(log, opts = {}) {
   // Load strategies
   const strategies = await loadBestStrategies();
   if (strategies.length === 0) {
-    bLog.scan('AI Scanner: no elite strategies available yet — agents still learning');
-    return [];
+    // No elite strategies in DB yet — agents still building their history.
+    // Fall back to the classic hardcoded SMC scanner so trading doesn't stop.
+    bLog.scan('AI Scanner: no elite strategies yet — running classic SMC fallback');
+    try {
+      const { scanSMC } = require('./liquidity-sweep-engine');
+      return await scanSMC(msg => bLog.scan(msg), { topNCoins: opts.topNCoins || TOP_N_COINS });
+    } catch (err) {
+      bLog.error(`SMC fallback error: ${err.message}`);
+      return [];
+    }
   }
 
   bLog.scan(`AI Scanner: ${strategies.length} strategies loaded (best: ${strategies[0]?.name} ${strategies[0]?.winRate?.toFixed(1)}% WR)`);
