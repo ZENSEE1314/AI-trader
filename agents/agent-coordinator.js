@@ -32,10 +32,11 @@ const SELF_IMPROVE_LESSONS = {
   repeated_failures: 'I will diagnose root causes instead of repeating failed patterns.',
 };
 
-// Top tokens that always get their own agent
+// Only the 4 tokens we actively trade get dedicated agents.
+// Removed: XRPUSDT, DOGEUSDT, ADAUSDT, AVAXUSDT, SUIUSDT, LINKUSDT
+// — none of them are in the SMC/Spike-HL/T-Junction/Triple-MA whitelists.
 const DEFAULT_TOKEN_AGENTS = [
-  'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT',
-  'DOGEUSDT', 'ADAUSDT', 'AVAXUSDT', 'SUIUSDT', 'LINKUSDT',
+  'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT',
 ];
 
 class AgentCoordinator extends BaseAgent {

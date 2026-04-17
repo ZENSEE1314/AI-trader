@@ -1964,6 +1964,7 @@ module.exports = {
   isGoodTradingSession,
   getActiveSession,
   isAvoidTime,
+  isSessionOpenBlackout,
   getDailyTradeLimit,
   SESSION_WINDOWS,
   detectSwings,

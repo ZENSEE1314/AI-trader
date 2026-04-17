@@ -24,6 +24,8 @@
 
 const fetch = require('node-fetch');
 const { log: bLog } = require('./bot-logger');
+// isSessionOpenBlackout is shared from liquidity-sweep-engine to stay in sync
+const { isSessionOpenBlackout } = require('./liquidity-sweep-engine');
 
 const REQUEST_TIMEOUT = 12000;
 
@@ -67,8 +69,9 @@ async function fetchKlines(symbol, interval, limit) {
 function calcEma(closes, period) {
   if (closes.length < period) return null;
   const k = 2 / (period + 1);
-  let ema = closes[0];
-  for (let i = 1; i < closes.length; i++) {
+  // Seed with SMA of first `period` bars — prevents large initial error
+  let ema = closes.slice(0, period).reduce((a, b) => a + b, 0) / period;
+  for (let i = period; i < closes.length; i++) {
     ema = closes[i] * k + ema * (1 - k);
   }
   return ema;
@@ -88,21 +91,6 @@ const SESSIONS = [
 ];
 const AVOID_MINUTES    = new Set([0, 15, 30, 45]);
 const GRACE_MS         = 90_000; // 90s grace past session end
-// First 30 min of each session = institutional fake-out zone.
-// Institutions sweep stops in the open minutes before committing to direction.
-// Spike-HL signals fired here have lower WR — skip them.
-const SESSION_OPEN_BLACKOUT_MIN = 30;
-
-function isSessionOpenBlackout(tsMs = Date.now()) {
-  const d = new Date(tsMs);
-  const h = d.getUTCHours();
-  const m = d.getUTCMinutes();
-  for (const [start] of SESSIONS) {
-    if (h === start && m < SESSION_OPEN_BLACKOUT_MIN) return true;
-  }
-  return false;
-}
-
 function isInSession(tsMs = Date.now()) {
   // Check the timestamp itself AND the current time (with grace)
   // Either being in-session is enough — catches late scans
@@ -327,7 +315,7 @@ async function scanSpikeHL(log) {
       }
       } // end offset loop
 
-      if (!signals.find(s => s.symbol === symbol)) {
+      if (!foundSignal) {
         log(`Spike-HL ${symbol}: no sweep pattern — EMA200=$${ema200.toFixed(4)} price=$${price.toFixed(4)} bias=${bullish?'bullish':bearish?'bearish':'neutral'}`);
       }
 

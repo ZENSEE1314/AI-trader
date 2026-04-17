@@ -93,12 +93,19 @@ function calcRSI(closes, period) {
   return 100 - (100 / (1 + rs));
 }
 
-// Average True Range — measures volatility. Low ATR = genuine sideways
-function calcATR(closes, period) {
+// Average True Range — true ATR using high/low/prev-close.
+// Close-to-close differences understate volatility on spike/gap candles.
+// TR = max(high-low, |high-prevClose|, |low-prevClose|)
+function calcATR(closes, highs, lows, period) {
   if (closes.length < period + 1) return null;
   const trs = [];
   for (let i = closes.length - period; i < closes.length; i++) {
-    trs.push(Math.abs(closes[i] - closes[i - 1]));
+    const tr = Math.max(
+      highs[i]  - lows[i],
+      Math.abs(highs[i]  - closes[i - 1]),
+      Math.abs(lows[i]   - closes[i - 1])
+    );
+    trs.push(tr);
   }
   return trs.reduce((a, b) => a + b, 0) / period;
 }
@@ -147,6 +154,8 @@ async function scanTripleMA(log) {
       }
 
       const closes = klines.map(k => parseFloat(k[4]));
+      const highs  = klines.map(k => parseFloat(k[2]));
+      const lows   = klines.map(k => parseFloat(k[3]));
       const price  = closes[closes.length - 1];
 
       const ma5  = calcSMA(closes, MA_FAST);
@@ -154,7 +163,7 @@ async function scanTripleMA(log) {
       const ma20 = calcSMA(closes, MA_SLOW);
       const rsi  = calcRSI(closes, RSI_PERIOD);
       const bb   = calcBollingerBands(closes, BB_PERIOD, BB_STD);
-      const atr  = calcATR(closes, ATR_PERIOD);
+      const atr  = calcATR(closes, highs, lows, ATR_PERIOD);
 
       if (!ma5 || !ma10 || !ma20) continue;
 
@@ -266,7 +275,7 @@ async function scanTripleMA(log) {
           tp1:              null, // no fixed TP — trailing SL handles exit
           tp2:              null,
           tp3:              null,
-          sl:               null,  // no hard SL — trailing only
+          sl:               entryPrice * (1 - 0.030), // 3% emergency SL — trailing tightens it
           slDist:           0.025,
           leverage,
           sizePct:          SIZE_PCT,

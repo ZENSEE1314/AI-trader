@@ -202,8 +202,8 @@ async function scanTjunction(log) {
         // ── VWAP filter ──
         const vwap  = sessionVwap(bars, endIdx - 1);
         const price = spikeBar.close;
-        if (sig.dir === 'LONG'  && price < vwap * 0.9990) continue; // Above VWAP
-        if (sig.dir === 'SHORT' && price > vwap * 1.0010) continue; // Below VWAP
+        if (sig.dir === 'LONG'  && price < vwap * 0.9990) continue; // price too far below VWAP — skip LONG
+        if (sig.dir === 'SHORT' && price > vwap * 1.0010) continue; // price too far above VWAP — skip SHORT
 
         // ── Volume filter ──
         const avgVol = volSma9(bars, endIdx - 2); // SMA9 of bars before signal

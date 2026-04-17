@@ -7,7 +7,8 @@
 const { USDMClient } = require('binance');
 const fetch = require('node-fetch');
 const aiLearner = require('./ai-learner');
-const { scanSMC, recordDailyTrade, detectSwings, SWING_LENGTHS } = require('./liquidity-sweep-engine');
+const { recordDailyTrade, detectSwings, SWING_LENGTHS } = require('./liquidity-sweep-engine');
+const { scanAI } = require('./ai-signal-scanner');
 const { scanTripleMA, shouldExitScenarioA, calcTripleMABTrailStep } = require('./triple-ma-strategy');
 const { scanSpikeHL, calcSpikeHLTrailSl } = require('./spike-hl-strategy');
 const { scanTjunction } = require('./tjunction-strategy');
@@ -1050,7 +1051,7 @@ async function main() {
 
     let executed = false;
     for (const pick of signals) {
-      log(`Signal: ${pick.symbol} ${pick.direction} score=${pick.score} setup=${pick.setupName} AI=${pick.aiModifier}`);
+      log(`Signal: ${pick.symbol} ${pick.direction} score=${pick.score} setup=${pick.setupName} AI=${pick.aiModifier ?? 'n/a'}`);
       bLog.trade(`TRYING: ${pick.symbol} ${pick.direction} | setup=${pick.setupName} score=${pick.score} | TP=$${fmtPrice(pick.tp1)} SL=$${fmtPrice(pick.sl)} | RR=1:1.5`);
 
       // Check global token ban
