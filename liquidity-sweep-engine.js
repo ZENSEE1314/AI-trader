@@ -1459,6 +1459,16 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
   const recentRange = recentHigh - recentLow;
   const priceInRange = recentRange > 0 ? (price - recentLow) / recentRange : 0.5; // 0=bottom, 1=top
 
+  // ── 1m SPIKE DETECTION ───────────────────────────────────
+  // The 15m RSI lags by up to 3 candles during a short-timeframe spike.
+  // Directly measure 1m momentum: if price moved >1.0% in the last 3×1m candles
+  // it's an active spike — entering in the spike direction means buying the top.
+  let spike3mPct = 0;
+  if (parsed1.length >= 3) {
+    const spBase = parsed1[parsed1.length - 3].open;
+    if (spBase > 0) spike3mPct = (parsed1[parsed1.length - 1].close - spBase) / spBase;
+  }
+
   // Volume on latest candle
   const lastVolOK = parsed15.length >= 22 && hasVolumeConfirm(parsed15, parsed15.length - 1, 1.0);
 
@@ -1723,6 +1733,19 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
       if (entryQuality === 'extended_down') { sig.score -= 4; sig.chasing = true; } // chasing dump
       if (entryQuality === 'at_ema' || entryQuality === 'near_ema') sig.score += 2; // bounce from EMA = good
       if (entryQuality === 'extended_up') sig.score += 1; // sell the rally
+    }
+
+    // ── 1m SPIKE HARD BLOCK ──────────────────────────────────
+    // RSI(14) on 15m candles lags 3×5m candles behind a spike. Measure it
+    // directly: if price moved >1.0% in the last 3×1m candles, entering in
+    // the spike direction = buying the top / selling the bottom.
+    if (sig.direction === 'LONG' && spike3mPct > 0.010) {
+      sig.score = -99;
+      sig.blocked = `LONG blocked — 1m up-spike +${(spike3mPct * 100).toFixed(2)}% in 3 candles (chasing top)`;
+    }
+    if (sig.direction === 'SHORT' && spike3mPct < -0.010) {
+      sig.score = -99;
+      sig.blocked = `SHORT blocked — 1m down-spike ${(spike3mPct * 100).toFixed(2)}% in 3 candles (chasing bottom)`;
     }
 
     // Price position in range: LONG near bottom is good, LONG near top is chasing
