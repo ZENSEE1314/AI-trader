@@ -375,6 +375,37 @@ function inferPricePrec(storedPrice) {
   return dot === -1 ? 0 : s.length - dot - 1;
 }
 
+// ── CANDLE-LOW TRAILING SL ────────────────────────────────────
+// After each completed 15m candle, move SL to:
+//   LONG  → low  of the last completed 15m candle (if higher than current SL)
+//   SHORT → high of the last completed 15m candle (if lower than current SL)
+// Only moves SL in the profitable direction — never against the trade.
+async function calcCandleTrailSl(symbol, isLong, currentSlPrice) {
+  try {
+    const url = `https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=15m&limit=3`;
+    const res = await fetch(url, { timeout: 6000, ...getFetchOptions() });
+    const data = await res.json();
+    if (!Array.isArray(data) || data.length < 2) return null;
+
+    // data[data.length - 1] is the still-forming candle — use data[data.length - 2]
+    const lastCompleted = data[data.length - 2];
+    const candleLow  = parseFloat(lastCompleted[3]); // index 3 = low
+    const candleHigh = parseFloat(lastCompleted[2]); // index 2 = high
+
+    if (isLong) {
+      // Move SL up to the completed candle's low — only if it's higher than current SL
+      if (candleLow > currentSlPrice) return { newSl: candleLow, source: '15m_candle_low' };
+    } else {
+      // Move SL down to the completed candle's high — only if it's lower than current SL
+      if (candleHigh < currentSlPrice) return { newSl: candleHigh, source: '15m_candle_high' };
+    }
+    return null; // candle didn't improve — keep current SL
+  } catch (e) {
+    bLog.error(`calcCandleTrailSl ${symbol}: ${e.message}`);
+    return null;
+  }
+}
+
 function calculateTrailingStep(entryPrice, currentPrice, isLong, lastStep, leverage = 20, userTrailStepPct = 0) {
   const pricePct = isLong
     ? (currentPrice - entryPrice) / entryPrice
@@ -1817,19 +1848,33 @@ async function syncTradeStatus() {
                 ? (curPrice - entryPrice) / entryPrice
                 : (entryPrice - curPrice) / entryPrice;
               const capitalPctDebug = pricePctDebug * tradeLev;
-              bLog.trade(`Binance trail check: ${trade.symbol} cur=$${fmtPrice(curPrice)} entry=$${entryPrice} pricePct=${(pricePctDebug*100).toFixed(3)}% capitalPct=${(capitalPctDebug*100).toFixed(2)}% lev=${tradeLev}x lastStep=${(lastStep*100).toFixed(2)}%`);
-              const trailResult = calculateTrailingStep(entryPrice, curPrice, isLong, lastStep, tradeLev, userTrailPct);
-              if (trailResult) {
+              const binSlPrec = inferPricePrec(trade.sl_price);
+              const currentSlBin = parseFloat(trade.trailing_sl_price) || parseFloat(trade.sl_price) || 0;
+              bLog.trade(`Binance trail check: ${trade.symbol} cur=$${fmtPrice(curPrice)} entry=$${entryPrice} pricePct=${(pricePctDebug*100).toFixed(3)}% capitalPct=${(capitalPctDebug*100).toFixed(2)}% lev=${tradeLev}x currentSL=$${currentSlBin.toFixed(binSlPrec)}`);
+
+              // ── Candle-low trail: move SL to last completed 15m candle low/high ──
+              let binNewSl = null;
+              let binSlSource = '';
+              const binCandleTrail = await calcCandleTrailSl(trade.symbol, isLong, currentSlBin);
+              if (binCandleTrail && pricePctDebug > 0.002) {
+                binNewSl = binCandleTrail.newSl;
+                binSlSource = binCandleTrail.source;
+              }
+
+              // ── Fallback: tier-based if candle trail didn't fire ──
+              if (!binNewSl) {
+                const trailResult = calculateTrailingStep(entryPrice, curPrice, isLong, lastStep, tradeLev, userTrailPct);
+                if (trailResult) { binNewSl = trailResult.newSlPrice; binSlSource = 'tier'; }
+              }
+
+              if (binNewSl) {
                 const closeSide = isLong ? 'SELL' : 'BUY';
-                // Use the same decimal precision as the original SL price so Binance
-                // doesn't reject the order with PRICE_FILTER (e.g. BTCUSDT needs 1 decimal).
-                const binSlPrec = inferPricePrec(trade.sl_price);
-                bLog.trade(`Binance trailing SL: ${trade.symbol} entry=$${entryPrice} cur=$${fmtPrice(curPrice)} pricePct=${(((isLong?(curPrice-entryPrice):(entryPrice-curPrice))/entryPrice)*100).toFixed(3)}% → newSL=$${trailResult.newSlPrice.toFixed(binSlPrec)} (step=${(trailResult.newLastStep*100).toFixed(2)}%)`);
+                bLog.trade(`Binance trailing SL (${binSlSource}): ${trade.symbol} → newSL=$${binNewSl.toFixed(binSlPrec)}`);
                 let slUpdated = false;
                 for (let attempt = 1; attempt <= 3; attempt++) {
                   try {
                     const userTp = parseFloat(trade.tp_price) || 0;
-                    slUpdated = await updateStopLoss(userClient, trade.symbol, trailResult.newSlPrice, closeSide, 'binance', binSlPrec, userTp || undefined);
+                    slUpdated = await updateStopLoss(userClient, trade.symbol, binNewSl, closeSide, 'binance', binSlPrec, userTp || undefined);
                     if (slUpdated) break;
                   } catch (e) {
                     bLog.error(`WATCHDOG: Binance SL update failed for ${trade.symbol} attempt ${attempt}/3: ${e.message}`);
@@ -1837,11 +1882,14 @@ async function syncTradeStatus() {
                   }
                 }
                 if (slUpdated) {
+                  const tierRes = binSlSource === 'tier'
+                    ? calculateTrailingStep(entryPrice, curPrice, isLong, lastStep, tradeLev, 0)
+                    : null;
                   await db.query(
                     `UPDATE trades SET trailing_sl_price = $1, trailing_sl_last_step = $2 WHERE id = $3`,
-                    [trailResult.newSlPrice, trailResult.newLastStep, trade.id]
+                    [binNewSl, tierRes ? tierRes.newLastStep : lastStep, trade.id]
                   );
-                  bLog.trade(`Sync trailing SL: ${trade.symbol} stepped to ${(trailResult.newLastStep*100).toFixed(1)}% SL=$${fmtPrice(trailResult.newSlPrice)}`);
+                  bLog.trade(`✓ Binance trailing SL (${binSlSource}): ${trade.symbol} SL=$${binNewSl.toFixed(binSlPrec)}`);
                 } else {
                   bLog.error(`WATCHDOG ALERT: Binance SL failed 3x for ${trade.symbol}`);
                   await notify(`🚨 *TRAILING SL FAILED*\n${trade.symbol} Binance SL update failed 3 times!`);
@@ -2011,24 +2059,48 @@ async function syncTradeStatus() {
                 continue; // skip normal trailing SL for Spike-HL
               }
 
-              const userTrailPctBx = parseFloat(trade.key_trailing_sl_step) || 0;
+              const bxSlPrec = inferPricePrec(trade.sl_price);
+              const currentSl = parseFloat(trade.trailing_sl_price) || parseFloat(trade.sl_price) || 0;
               const bxProfitPct = isLong
                 ? (curPrice - entryPrice) / entryPrice
                 : (entryPrice - curPrice) / entryPrice;
-              bLog.trade(`Bitunix trail check: ${trade.symbol} cur=$${fmtPrice(curPrice)} entry=$${entryPrice} pricePct=${(bxProfitPct*100).toFixed(3)}% capitalPct=${(bxProfitPct*tradeLev*100).toFixed(2)}% lev=${tradeLev}x lastStep=${(lastStep*100).toFixed(2)}%`);
-              const trailResult = calculateTrailingStep(entryPrice, curPrice, isLong, lastStep, tradeLev, userTrailPctBx);
-              if (!trailResult) continue;
+              bLog.trade(`Bitunix trail check: ${trade.symbol} cur=$${fmtPrice(curPrice)} entry=$${entryPrice} pricePct=${(bxProfitPct*100).toFixed(3)}% capitalPct=${(bxProfitPct*tradeLev*100).toFixed(2)}% lev=${tradeLev}x currentSL=$${currentSl.toFixed(bxSlPrec)}`);
 
-              // Use same decimal precision as original SL to avoid exchange rejection
-              const bxSlPrec = inferPricePrec(trade.sl_price);
-              bLog.trade(`Bitunix trailing SL: ${trade.symbol} → newSL=$${trailResult.newSlPrice.toFixed(bxSlPrec)} (step=${(trailResult.newLastStep*100).toFixed(2)}%)`);
+              // ── Candle-low trail: move SL to last completed 15m candle low/high ──
+              // This runs every cycle and keeps SL tight to structure as price moves.
+              let newSlPrice = null;
+              let slSource = '';
+              const candleTrail = await calcCandleTrailSl(trade.symbol, isLong, currentSl);
+              if (candleTrail) {
+                // Only accept if the candle SL is on the profitable side of entry
+                const isBeyondEntry = isLong
+                  ? candleTrail.newSl > entryPrice * 0.9995 // allow SL slightly below entry
+                  : candleTrail.newSl < entryPrice * 1.0005;
+                if (isBeyondEntry || bxProfitPct > 0.002) { // use candle trail once >0.2% profit
+                  newSlPrice = candleTrail.newSl;
+                  slSource = candleTrail.source;
+                }
+              }
 
-              // ── Step 3: Update SL on exchange (retry up to 3 times) ──
+              // ── Fallback: tier-based trail if candle trail didn't improve SL ──
+              if (!newSlPrice) {
+                const userTrailPctBx = parseFloat(trade.key_trailing_sl_step) || 0;
+                const trailResult = calculateTrailingStep(entryPrice, curPrice, isLong, lastStep, tradeLev, userTrailPctBx);
+                if (trailResult) {
+                  newSlPrice = trailResult.newSlPrice;
+                  slSource = 'tier';
+                }
+              }
+
+              if (!newSlPrice) continue;
+              bLog.trade(`Bitunix trailing SL (${slSource}): ${trade.symbol} → newSL=$${newSlPrice.toFixed(bxSlPrec)}`);
+
+              // ── Update SL on exchange (retry up to 3 times) ──
               let slUpdated = false;
               for (let attempt = 1; attempt <= 3; attempt++) {
                 try {
                   const existingTp = parseFloat(trade.tp_price) || 0;
-                  slUpdated = await updateStopLoss(userClient, trade.symbol, trailResult.newSlPrice, null, 'bitunix', bxSlPrec, existingTp || undefined);
+                  slUpdated = await updateStopLoss(userClient, trade.symbol, newSlPrice, null, 'bitunix', bxSlPrec, existingTp || undefined);
                   if (slUpdated) break;
                   bLog.error(`WATCHDOG: updateStopLoss returned false for ${trade.symbol} (attempt ${attempt}/3)`);
                 } catch (e) {
@@ -2037,26 +2109,27 @@ async function syncTradeStatus() {
                 }
               }
 
-              // ── Step 4: Verify SL was actually set ──
               if (slUpdated) {
+                const tierResult = slSource === 'tier'
+                  ? calculateTrailingStep(entryPrice, curPrice, isLong, lastStep, tradeLev, 0)
+                  : null;
+                const newLastStep = tierResult ? tierResult.newLastStep : lastStep;
                 await db.query(
                   `UPDATE trades SET trailing_sl_price = $1, trailing_sl_last_step = $2 WHERE id = $3`,
-                  [trailResult.newSlPrice, trailResult.newLastStep, trade.id]
+                  [newSlPrice, newLastStep, trade.id]
                 );
-                bLog.trade(`✓ Trailing SL (Bitunix): ${trade.symbol} stepped to ${(trailResult.newLastStep*100).toFixed(1)}% SL=$${trailResult.newSlPrice.toFixed(bxSlPrec)}`);
+                bLog.trade(`✓ Trailing SL (Bitunix/${slSource}): ${trade.symbol} SL=$${newSlPrice.toFixed(bxSlPrec)}`);
                 await notify(
-                  `*Trailing SL Stepped*\n` +
+                  `📈 *Trailing SL Moved*\n` +
                   `*${trade.symbol}* ${isLong ? 'LONG' : 'SHORT'}\n` +
-                  `Capital profit: *+${(trailResult.newLastStep*100).toFixed(1)}%*\n` +
-                  `SL locked at: \`$${trailResult.newSlPrice.toFixed(bxSlPrec)}\``
+                  `SL → \`$${newSlPrice.toFixed(bxSlPrec)}\` (${slSource})`
                 );
               } else {
-                // All 3 attempts failed — emergency alert
                 bLog.error(`WATCHDOG ALERT: Failed to set trailing SL for ${trade.symbol} after 3 attempts!`);
                 await notify(
                   `🚨 *TRAILING SL FAILED*\n` +
                   `*${trade.symbol}* ${isLong ? 'LONG' : 'SHORT'}\n` +
-                  `Profit: +${(capitalPct*100).toFixed(1)}% capital\n` +
+                  `Profit: +${(bxProfitPct*tradeLev*100).toFixed(1)}% capital\n` +
                   `SL update FAILED 3 times!\n` +
                   `⚠️ Check position manually!`
                 );
