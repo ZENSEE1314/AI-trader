@@ -1,4 +1,4 @@
-// Persistent loop — runs cycle every 2 minutes forever
+// Persistent loop — runs cycle every minute + trail watchdog every 15s
 const { spawn } = require('child_process');
 const path = require('path');
 const { runNightlyAnalysis } = require('./nightly-analysis');
@@ -11,6 +11,7 @@ const botDir = __dirname;
 
 let lastNightlyRunDate = null;
 let cycleRunning = false;
+let trailWatchdog = null;
 
 function log(msg) {
   const t = new Date().toLocaleString('en-GB', { timeZone: 'Asia/Jakarta' });
@@ -73,13 +74,36 @@ function runCycle() {
   });
 }
 
+function startTrailWatchdog() {
+  if (trailWatchdog) return; // already running
+  trailWatchdog = spawn('node', [path.join(botDir, 'trail-watchdog.js')], {
+    cwd: botDir,
+    stdio: 'inherit',
+  });
+  trailWatchdog.on('close', (code) => {
+    log(`Trail watchdog exited (code ${code}) — restarting in 5s`);
+    trailWatchdog = null;
+    setTimeout(startTrailWatchdog, 5000);
+  });
+  trailWatchdog.on('error', (err) => {
+    log(`Trail watchdog error: ${err.message} — restarting in 5s`);
+    trailWatchdog = null;
+    setTimeout(startTrailWatchdog, 5000);
+  });
+  log('Trail watchdog started (15s interval)');
+}
+
 log(`===================================`);
 log(`  CryptoBot Loop Started`);
-log(`  Interval: every ${INTERVAL_MIN} minutes`);
+log(`  Cycle: every ${INTERVAL_MIN} minutes`);
+log(`  Trail SL: every 15 seconds`);
 log(`  Nightly analysis: ${NIGHTLY_JAKARTA_HOUR}:00 Jakarta`);
 log(`===================================\n`);
 
-// Run immediately, then every 2 min
+// Start trail watchdog first (runs continuously)
+startTrailWatchdog();
+
+// Run cycle immediately, then every minute
 runCycle();
 setInterval(runCycle, INTERVAL_MIN * 60 * 1000);
 
