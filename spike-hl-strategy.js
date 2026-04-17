@@ -113,25 +113,54 @@ function isInSession(tsMs = Date.now()) {
   return checkTs(tsMs) || checkTs(Date.now() - GRACE_MS);
 }
 
+// ─── Pivot Detection ──────────────────────────────────────────
+//
+// A CONFIRMED swing low (pivot low) requires:
+//   bars[i].low < bars[i-1].low  AND  bars[i].low < bars[i+1].low
+//
+// Only checking the LEFT neighbor caused the prevHL to drift every
+// 60 seconds as new bars closed — any bar with a slightly higher low
+// than its left neighbor qualified, making the level unstable on screen.
+//
+// With bilateral confirmation the pivot only forms when both the bar
+// before AND the bar after are higher — a real structural swing point
+// that NEVER changes once set. The HL/LH marker on the chart stays
+// fixed until a brand-new pivot forms.
+//
+// Search starts at back=3 (bars[length-3]) so bars[idx+1] = bars[length-2]
+// is already a confirmed closed candle (not the still-forming bar).
+
+function findPivotLow(bars, maxLookback = 15) {
+  // Returns the most recent confirmed swing low (bilateral pivot)
+  for (let i = bars.length - 3; i >= Math.max(1, bars.length - maxLookback); i--) {
+    if (bars[i].low < bars[i - 1].low && bars[i].low < bars[i + 1].low) {
+      return bars[i].low;
+    }
+  }
+  return null;
+}
+
+function findPivotHigh(bars, maxLookback = 15) {
+  // Returns the most recent confirmed swing high (bilateral pivot)
+  for (let i = bars.length - 3; i >= Math.max(1, bars.length - maxLookback); i--) {
+    if (bars[i].high > bars[i - 1].high && bars[i].high > bars[i + 1].high) {
+      return bars[i].high;
+    }
+  }
+  return null;
+}
+
 // ─── Spike Detection ─────────────────────────────────────────
 
-// Detects a LONG spike: bar[i] spiked below prevHL and closed back above.
-// Returns signal object or null.
+// Detects a LONG spike: spike bar wicked below prevHL pivot and closed back above.
 function detectLongSpike(bars) {
-  if (bars.length < 6) return null;
+  if (bars.length < 8) return null;
 
   const spike = bars[bars.length - 1]; // most recent closed candle
 
-  // Find prevHL in the last 5 bars: a candle whose low > its predecessor's low
-  let prevHL = null;
-  for (let back = 2; back <= 6; back++) {
-    const idx = bars.length - back;
-    if (idx < 1) break;
-    if (bars[idx].low > bars[idx - 1].low) {
-      prevHL = bars[idx].low;
-      break;
-    }
-  }
+  // prevHL = most recent confirmed pivot low (swing low with both neighbors higher)
+  // This level is STABLE — it won't shift until a new pivot forms
+  const prevHL = findPivotLow(bars.slice(0, -1)); // exclude spike bar itself
   if (!prevHL) return null;
 
   // Spike must breach below prevHL
@@ -142,7 +171,7 @@ function detectLongSpike(bars) {
   // Must close BACK ABOVE prevHL (rejection confirmed)
   if (spike.close <= prevHL) return null;
 
-  // Wick ratio: lower wick must dominate
+  // Wick ratio: lower wick must dominate body (spike candle shape)
   const body      = Math.abs(spike.close - spike.open);
   const lowerWick = Math.min(spike.open, spike.close) - spike.low;
   if (body < 0.000001 || lowerWick < MIN_WICK_RATIO * body) return null;
@@ -161,22 +190,14 @@ function detectLongSpike(bars) {
   };
 }
 
-// Detects a SHORT spike: bar[i] spiked above prevLH and closed back below.
+// Detects a SHORT spike: spike bar wicked above prevLH pivot and closed back below.
 function detectShortSpike(bars) {
-  if (bars.length < 6) return null;
+  if (bars.length < 8) return null;
 
   const spike = bars[bars.length - 1];
 
-  // Find prevLH: a candle whose high < its predecessor's high
-  let prevLH = null;
-  for (let back = 2; back <= 6; back++) {
-    const idx = bars.length - back;
-    if (idx < 1) break;
-    if (bars[idx].high < bars[idx - 1].high) {
-      prevLH = bars[idx].high;
-      break;
-    }
-  }
+  // prevLH = most recent confirmed pivot high (swing high with both neighbors lower)
+  const prevLH = findPivotHigh(bars.slice(0, -1)); // exclude spike bar itself
   if (!prevLH) return null;
 
   if (spike.high <= prevLH) return null;

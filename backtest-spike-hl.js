@@ -118,19 +118,19 @@ function inSession(ts) {
 //   lower wick > MIN_WICK_RATIO × body (spike, not just a drop)
 
 function detectSpike(bars, i) {
-  if (i < 4) return null;
+  if (i < 6) return null;
 
-  // Find the prevHL: scan back up to 5 bars for a clear local low
-  // that is HIGHER than the bar before it (confirmed Higher Low)
+  // Find prevHL: confirmed swing low (bilateral pivot) in bars before the spike.
+  // A pivot low requires bars[j].low < bars[j-1].low AND bars[j].low < bars[j+1].low.
+  // Starting at j = i-2 ensures bars[j+1] = bars[i-1] is already closed (not the spike bar).
+  // This prevents the prevHL from drifting every minute — it only changes when a
+  // genuinely new pivot forms, so the level is stable on the chart.
   let prevHL = null;
   let prevHL_idx = -1;
-  for (let back = 1; back <= 5; back++) {
-    const c = bars[i - back];
-    const cPrev = bars[i - back - 1];
-    if (!c || !cPrev) continue;
-    if (c.low > cPrev.low) { // c.low is a Higher Low vs cPrev
-      prevHL = c.low;
-      prevHL_idx = i - back;
+  for (let j = i - 2; j >= Math.max(1, i - 14); j--) {
+    if (bars[j].low < bars[j - 1].low && bars[j].low < bars[j + 1].low) {
+      prevHL = bars[j].low;
+      prevHL_idx = j;
       break;
     }
   }
