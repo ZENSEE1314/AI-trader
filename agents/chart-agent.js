@@ -10,8 +10,7 @@
 
 const { BaseAgent } = require('./base-agent');
 const { isGoodTradingSession } = require('../smc-engine');
-const { scanAI } = require('../ai-signal-scanner');
-const { getSentimentScores } = require('../sentiment-scraper');
+const { scanSMC } = require('../liquidity-sweep-engine');
 const aiLearner = require('../ai-learner');
 
 class ChartAgent extends BaseAgent {
@@ -50,21 +49,19 @@ class ChartAgent extends BaseAgent {
       this.addActivity('info', `Strategy intel: "${strat.name}" won with ${strat.winRate?.toFixed(1)}% WR — noted for scanning`);
     }
 
-    this.logScan('Starting market scan...');
+    this.logScan('Starting market scan (Liquidity Sweep Engine only)...');
 
-    // 1. Load AI params for scoring adjustments
-    const aiParams = await aiLearner.getOptimalParams();
-    this.logScan(`AI params loaded: minScore=${aiParams.MIN_SCORE} TP=${(aiParams.TP_MARGIN_PCT * 100).toFixed(1)}% SL=${(aiParams.SL_MARGIN_PCT * 100).toFixed(1)}%`);
-
-    // 2. Check trading session quality
+    // 1. Check trading session quality
     const session = aiLearner.getCurrentSession();
     const sessionGood = isGoodTradingSession();
     this.logScan(`Session: ${session} | Good session: ${sessionGood}`);
 
-    // 3. Run AI strategy scan (uses discovered strategies, not hardcoded SMC)
-    const signals = await scanAI(
+    // 2. Scan using liquidity-sweep-engine only — hardcoded SMC strategies with
+    //    all filters: range position, swing proximity, RSI, spike, trend alignment.
+    //    ai-signal-scanner (evolved/AI strategies) disabled — too many top-entries.
+    const signals = await scanSMC(
       (msg) => this.logScan(msg),
-      { topNCoins, kronosPredictions, monitoredSymbols }
+      { topNCoins }
     );
 
     // 4. Record scan result
