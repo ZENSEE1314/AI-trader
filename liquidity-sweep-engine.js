@@ -1187,6 +1187,21 @@ const SESSION_WINDOWS = [
 const AVOID_HOURS_UTC   = new Set([8, 12, 16, 20]);
 const AVOID_MINUTES_UTC = new Set([0, 15, 30, 45]);
 
+// Session open blackout: first 30 minutes of each session = institutional fake-out zone.
+// EU opens at 07:00, Asia at 23:00, US at 12:00 — institutions run fake sweeps to trap
+// retail before the real direction. Don't enter during this window.
+const SESSION_OPEN_BLACKOUT_MIN = 30;
+
+function isSessionOpenBlackout() {
+  const now  = new Date();
+  const utcH = now.getUTCHours();
+  const utcM = now.getUTCMinutes();
+  for (const win of SESSION_WINDOWS) {
+    if (utcH === win.startH && utcM < SESSION_OPEN_BLACKOUT_MIN) return true;
+  }
+  return false;
+}
+
 function getActiveSession() {
   const now = new Date();
   const utcH = now.getUTCHours();
@@ -1205,8 +1220,9 @@ function isAvoidTime() {
   const now = new Date();
   const utcH = now.getUTCHours();
   const utcM = now.getUTCMinutes();
-  if (AVOID_HOURS_UTC.has(utcH) && utcM < 3) return true;   // ±3 min buffer around candle open
+  if (AVOID_HOURS_UTC.has(utcH) && utcM < 3) return true;   // ±3 min buffer around avoid hours
   if (AVOID_MINUTES_UTC.has(utcM)) return true;               // avoid 00, 15, 30, 45 min marks
+  if (isSessionOpenBlackout()) return true;                   // first 30 min of each session = fake-out zone
   return false;
 }
 
@@ -1837,16 +1853,13 @@ async function scanSMC(log, opts = {}) {
 
   const activeSession = getActiveSession();
   if (!activeSession) {
-    const sessionW = await aiLearner.getSessionWeight();
-    if (sessionW < 1.2) {
-      log('Liquidity Engine: Outside session windows (Asia 23-02/Europe 07-10/US 12-16 UTC). Waiting.');
-      bLog.scan('Outside institutional session windows. No trades until next opening.');
-      return [];
-    }
-    bLog.ai(`AI override: session weight ${sessionW.toFixed(2)} > 1.2 — scanning outside session window`);
-  } else {
-    bLog.scan(`Active session: ${activeSession.name} (${activeSession.startH}:00–${activeSession.endH}:00 UTC)`);
+    // NOTE: AI session override removed — trading outside institutional windows causes losses.
+    // Sessions (Asia 23-02, Europe 07-10, US 12-16 UTC) are hard boundaries, not suggestions.
+    log('Liquidity Engine: Outside session windows (Asia 23-02/Europe 07-10/US 12-16 UTC). Waiting.');
+    bLog.scan('Outside institutional session windows. No trades until next opening.');
+    return [];
   }
+  bLog.scan(`Active session: ${activeSession.name} (${activeSession.startH}:00–${activeSession.endH}:00 UTC)`);
 
   const tickers = await fetchTickers();
   if (!tickers.length) { bLog.error('Failed to fetch tickers'); return []; }

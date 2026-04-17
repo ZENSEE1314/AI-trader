@@ -8,6 +8,9 @@ const { USDMClient } = require('binance');
 const fetch = require('node-fetch');
 const aiLearner = require('./ai-learner');
 const { scanSMC, recordDailyTrade, detectSwings, SWING_LENGTHS } = require('./liquidity-sweep-engine');
+const { scanTripleMA, shouldExitScenarioA, calcTripleMABTrailStep } = require('./triple-ma-strategy');
+const { scanSpikeHL, calcSpikeHLTrailSl } = require('./spike-hl-strategy');
+const { scanTjunction } = require('./tjunction-strategy');
 const { getSentimentScores } = require('./sentiment-scraper');
 const { log: bLog } = require('./bot-logger');
 const { getBinanceRequestOptions, getFetchOptions } = require('./proxy-agent');
@@ -1010,7 +1013,30 @@ async function main() {
     }
 
     // AI-driven signals — uses best discovered strategies from StrategyAgent
-    const signals = await scanAI(log, { topNCoins, kronosPredictions });
+    // Runs only during institutional sessions (Asia / Europe / US opens)
+    const aiSignals = await scanAI(log, { topNCoins, kronosPredictions });
+
+    // Triple MA Sideways signals — runs only OUTSIDE session windows
+    const tripleMASignals = await scanTripleMA(log);
+    if (tripleMASignals.length > 0) {
+      bLog.scan(`Triple MA: ${tripleMASignals.length} sideways signal(s) — ${tripleMASignals.map(s => `${s.symbol} ${s.scenario}`).join(', ')}`);
+    }
+
+    // Spike-HL Liquidity Sweep — runs DURING session windows (91% WR backtest)
+    // Detects smart-money stop sweeps on 1m chart and enters at the rejection close
+    const spikeHLSignals = await scanSpikeHL(log);
+    if (spikeHLSignals.length > 0) {
+      bLog.scan(`Spike-HL: ${spikeHLSignals.length} sweep signal(s) — ${spikeHLSignals.map(s => `${s.symbol} ${s.direction}`).join(', ')}`);
+    }
+
+    // T-Junction MA convergence — fires during 02-04 & 16-22 UTC prime slots
+    // Pattern: MA5/10/20 converge (T-stem) → fan bearish/bullish → entry at breakout close
+    const tjunctionSignals = await scanTjunction(log);
+    if (tjunctionSignals.length > 0) {
+      bLog.scan(`T-Junction: ${tjunctionSignals.length} convergence signal(s) — ${tjunctionSignals.map(s => `${s.symbol} ${s.direction}`).join(', ')}`);
+    }
+
+    const signals = [...aiSignals, ...tripleMASignals, ...spikeHLSignals, ...tjunctionSignals];
 
     if (!signals.length) {
       log('No AI signals found this cycle — agents still learning.');
@@ -1086,6 +1112,16 @@ async function main() {
       } catch (aiErr) {
         // AI is optional — if unavailable, let the trade through (backtest gate already passed)
         bLog.error(`AI Brain error (non-blocking): ${aiErr.message}`);
+      }
+
+      // Final EMA200 safety gate — belt-and-suspenders check before any trade fires
+      if (pick.ema200Bias === 'bullish' && pick.direction === 'SHORT') {
+        bLog.trade(`FINAL GATE BLOCKED: ${pick.symbol} SHORT rejected — price above EMA200 (bullish bias)`);
+        continue;
+      }
+      if (pick.ema200Bias === 'bearish' && pick.direction === 'LONG') {
+        bLog.trade(`FINAL GATE BLOCKED: ${pick.symbol} LONG rejected — price below EMA200 (bearish bias)`);
+        continue;
       }
 
       bLog.trade(`Executing trade: ${pick.symbol} ${pick.direction} for registered users...`);
@@ -1499,18 +1535,41 @@ async function executeForAllUsers(pick) {
             return 'TOO_EXPENSIVE';
           }
 
-          const slPrice = initialSlPrice;
+          const isTripleMA  = pick.setup === 'TRIPLE_MA_A' || pick.setup === 'TRIPLE_MA_B';
+          const isScenarioA = pick.setup === 'TRIPLE_MA_A';
+          const isScenarioB = pick.setup === 'TRIPLE_MA_B';
+
+          // Triple MA Scenario A: SL at -1.5% (safety net) + MA20-touch exit, TP at +3.5%
+          // Triple MA Scenario B: no hard SL, trailing only (entry on RSI<30 + lower BB touch)
+          // All other strategies: use normal SL from risk params
+          const slPrice = isScenarioB ? null : (isScenarioA && pick.sl ? pick.sl : initialSlPrice);
 
           try { await userClient.changeMarginMode(symbol, 'ISOLATION'); } catch (_) {}
           try { await userClient.changeLeverage(symbol, userLev); } catch (_) {}
 
-          const slFmtBx = parseFloat(slPrice.toFixed(8));
+          // Scenario B is now MARKET on RSI<30 + BB lower touch (no longer 50% crash-buy)
+          const bxOrderType  = 'MARKET';
+          const bxLimitPrice = undefined;
 
-          userLog.trade(`User ${key.email}: placing Bitunix MARKET ${isLong ? 'BUY' : 'SELL'} ${symbol} qty=${qty} SL=$${slFmtBx} (-${(SL_PCT*100).toFixed(0)}% margin)...`);
-          const order = await userClient.placeOrder({
+          // Determine TP price (Scenario A: pick.tp1 = +3.5% from entry, others: use pick.tp1)
+          const bxEntryRef = price;
+          let bxTpPrice = null;
+          if (isScenarioA && pick.tp1) {
+            bxTpPrice = parseFloat(parseFloat(pick.tp1).toFixed(8));
+          }
+
+          const slFmtBx = slPrice ? parseFloat(slPrice.toFixed(8)) : null;
+
+          userLog.trade(`User ${key.email}: placing Bitunix ${bxOrderType} ${isLong ? 'BUY' : 'SELL'} ${symbol} qty=${qty}${slFmtBx ? ` SL=$${slFmtBx}` : ' (no SL)'}${bxTpPrice ? ` TP=$${bxTpPrice}` : ''} setup=${pick.setup || 'SMC'}...`);
+
+          const orderPayload = {
             symbol, side: isLong ? 'BUY' : 'SELL',
-            qty: String(qty), orderType: 'MARKET', tradeSide: 'OPEN',
-          });
+            qty: String(qty), orderType: bxOrderType, tradeSide: 'OPEN',
+          };
+          if (bxLimitPrice)                   orderPayload.price = String(bxLimitPrice);
+          if (bxTpPrice && isScenarioA)        { orderPayload.tpPrice = String(bxTpPrice); orderPayload.tpOrderType = 'MARKET'; orderPayload.tpStopType = 'MARK_PRICE'; }
+
+          const order = await userClient.placeOrder(orderPayload);
           userLog.trade(`Bitunix order placed: ${JSON.stringify(order)}`);
 
           await sleep(2000);
@@ -1521,29 +1580,48 @@ async function executeForAllUsers(pick) {
           if (pos && pos.positionId) {
             // Recalculate SL from actual entry price to avoid stale-price rejection
             const actualEntry = parseFloat(pos.avgOpenPrice || pos.entryPrice || pos.avgPrice) || price;
-            const actualSlPrice = isLong
-              ? actualEntry * (1 - slPricePct)
-              : actualEntry * (1 + slPricePct);
-            const slFmtActual = parseFloat(actualSlPrice.toFixed(8));
 
-            // SL only — no hard TP, trailing SL handles exit
-            userLog.trade(`Bitunix position confirmed: ${pos.positionId} entry=$${actualEntry} — setting SL=$${slFmtActual} (trailing, no hard TP)...`);
-            try {
-              await userClient.placePositionTpSl({ symbol, positionId: pos.positionId, slPrice: slFmtActual });
-              userLog.trade(`Bitunix SL set on ${pos.positionId}: SL=$${slFmtActual} (-${(SL_PCT*100).toFixed(0)}% margin) — trailing rides winners`);
-            } catch (e) {
-              userLog.error(`Bitunix SL FAILED: ${e.message} — SET MANUALLY`);
-              await notify(`*Bitunix ${symbol} ${pick.direction}*\nSL failed! Set manually on Bitunix NOW.`);
+            let slFmtActual = null;
+            if (!isTripleMA) {
+              // Normal SMC trades: set SL
+              const actualSlPrice = isLong
+                ? actualEntry * (1 - slPricePct)
+                : actualEntry * (1 + slPricePct);
+              slFmtActual = parseFloat(actualSlPrice.toFixed(8));
             }
 
-            const actualTpRef = isLong ? actualEntry * (1 + tpPricePct) : actualEntry * (1 - tpPricePct);
+            if (slFmtActual) {
+              userLog.trade(`Bitunix position confirmed: ${pos.positionId} entry=$${actualEntry} — setting SL=$${slFmtActual} (trailing, no hard TP)...`);
+              try {
+                const tpSLPayload = { symbol, positionId: pos.positionId, slPrice: slFmtActual };
+                if (bxTpPrice && isScenarioA) tpSLPayload.tpPrice = String(bxTpPrice);
+                await userClient.placePositionTpSl(tpSLPayload);
+                userLog.trade(`Bitunix SL set on ${pos.positionId}: SL=$${slFmtActual}${bxTpPrice ? ` TP=$${bxTpPrice}` : ''}`);
+              } catch (e) {
+                userLog.error(`Bitunix SL FAILED: ${e.message} — SET MANUALLY`);
+                await notify(`*Bitunix ${symbol} ${pick.direction}*\nSL failed! Set manually on Bitunix NOW.`);
+              }
+            } else if (isScenarioA && bxTpPrice) {
+              // Scenario A: no SL, but set the TP
+              userLog.trade(`Bitunix Scenario A: no SL — setting TP=$${bxTpPrice} only (MA20 touch exit will handle downside)...`);
+              try {
+                await userClient.placePositionTpSl({ symbol, positionId: pos.positionId, tpPrice: String(bxTpPrice), tpOrderType: 'MARKET', tpStopType: 'MARK_PRICE' });
+              } catch (e) {
+                userLog.error(`Bitunix TP FAILED: ${e.message}`);
+              }
+            }
+
+            const tpRef = isScenarioA
+              ? parseFloat(parseFloat(actualEntry * 1.10).toFixed(8))
+              : isLong ? actualEntry * (1 + tpPricePct) : actualEntry * (1 - tpPricePct);
 
             await db.query(
               `INSERT INTO trades (api_key_id, user_id, symbol, direction, entry_price, sl_price, tp_price, quantity, leverage, status,
                trailing_sl_price, trailing_sl_last_step, tf_15m, tf_3m, tf_1m, market_structure, key_trailing_sl_step)
                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'OPEN', $10, 0, $11, $12, $13, $14, $15)`,
               [key.id, key.user_id, symbol, pick.direction, actualEntry,
-               slFmtActual, parseFloat(actualTpRef.toFixed(8)), qty, userLev, slFmtActual,
+               slFmtActual || 0, parseFloat(tpRef.toFixed(8)), qty, userLev,
+               slFmtActual || 0,
                null, pick.structure?.tf3m || null, pick.structure?.tf1m || null,
                pick.marketStructure || null, userTrailStep]
             );
@@ -1807,6 +1885,85 @@ async function syncTradeStatus() {
               const lastStep = parseFloat(trade.trailing_sl_last_step) || 0;
 
               bLog.trade(`Bitunix trailing: ${trade.symbol} entry=$${entryPrice} cur=$${curPrice} pricePct=${(profitPct*100).toFixed(3)}% capitalPct=${(capitalPct*100).toFixed(2)}% lev=${tradeLev}x lastStep=${(lastStep*100).toFixed(1)}%`);
+
+              // ── Triple MA Scenario A: exit when MA20 converges to entry ──
+              // LONG: MA20 drops to entry. SHORT: MA20 rises to entry.
+              const mktStructure = trade.market_structure || '';
+              if (mktStructure.startsWith('TRIPLE_MA_A')) {
+                try {
+                  const ma20Exit = await shouldExitScenarioA(trade.symbol, entryPrice, trade.direction);
+                  if (ma20Exit) {
+                    const dirLabel = trade.direction || 'LONG';
+                    bLog.trade(`Triple MA Scenario A EXIT: ${trade.symbol} ${dirLabel} MA20 touched entry $${entryPrice}`);
+                    const closeSide = trade.direction === 'SHORT' ? 'BUY' : 'SELL';
+                    await userClient.closePosition({ symbol: trade.symbol, positionId: pos?.positionId });
+                    await db.query(
+                      `UPDATE trades SET status = 'CLOSED', exit_reason = 'triple_ma_a_ma20_touch', closed_at = NOW(), exit_price = $1 WHERE id = $2`,
+                      [curPrice, trade.id]
+                    );
+                    const verb = trade.direction === 'SHORT' ? 'rose' : 'dropped';
+                    await notify(`📊 *Triple MA A Exit*\n${trade.symbol} ${dirLabel} closed — MA20 ${verb} to entry $${entryPrice.toFixed(4)}\nExit $${curPrice.toFixed(4)}`);
+                    continue;
+                  }
+                } catch (ma20Err) {
+                  bLog.error(`Triple MA A exit check failed for ${trade.symbol}: ${ma20Err.message}`);
+                }
+              }
+
+              // ── Triple MA Scenario B: custom every-5%-gain trailing SL ──
+              if (mktStructure.startsWith('TRIPLE_MA_B')) {
+                const bTrail = calcTripleMABTrailStep(entryPrice, curPrice, lastStep);
+                if (bTrail) {
+                  bLog.trade(`Triple MA Scenario B: ${trade.symbol} +${(profitPct*100).toFixed(1)}% gain — moving SL to $${bTrail.newSlPrice.toFixed(8)} (+${(bTrail.newLastStep*100).toFixed(1)}%)`);
+                  let slUpdatedB = false;
+                  try {
+                    slUpdatedB = await updateStopLoss(userClient, trade.symbol, bTrail.newSlPrice, null, 'bitunix', 8, undefined);
+                  } catch (e) {
+                    bLog.error(`Triple MA B trailing SL failed: ${e.message}`);
+                  }
+                  if (slUpdatedB) {
+                    await db.query(
+                      `UPDATE trades SET trailing_sl_price = $1, trailing_sl_last_step = $2 WHERE id = $3`,
+                      [bTrail.newSlPrice, bTrail.newLastStep, trade.id]
+                    );
+                    bLog.trade(`✓ Triple MA B trailing SL: ${trade.symbol} SL=$${bTrail.newSlPrice.toFixed(4)} (trigger was +${(bTrail.trigger*100).toFixed(0)}%)`);
+                    await notify(`📈 *Triple MA B Trailing SL*\n${trade.symbol} LONG\nPrice gained +${(profitPct*100).toFixed(1)}%\nSL locked at +${(bTrail.newLastStep*100).toFixed(1)}% ($${bTrail.newSlPrice.toFixed(4)})`);
+                  }
+                }
+                continue; // skip normal trailing SL for Scenario B
+              }
+
+              // ── Spike-HL: trail SL to each rising/falling 1m candle low/high ──
+              // SL starts just below the spike wick. After each closed candle:
+              //   LONG: if new candle is bullish and its low > entry & > current SL → move SL up
+              //   SHORT: if new candle is bearish and its high < entry & < current SL → move SL down
+              if (mktStructure.startsWith('SPIKE_HL')) {
+                try {
+                  const spikeTrail = await calcSpikeHLTrailSl(trade.symbol, trade.direction, entryPrice, parseFloat(trade.trailing_sl_price) || parseFloat(trade.sl_price));
+                  if (spikeTrail.updated && spikeTrail.newSl) {
+                    let slMovedSpike = false;
+                    try {
+                      slMovedSpike = await updateStopLoss(userClient, trade.symbol, spikeTrail.newSl, null, 'bitunix', 8, undefined);
+                    } catch (e) {
+                      bLog.error(`Spike-HL trail SL update failed: ${e.message}`);
+                    }
+                    if (slMovedSpike) {
+                      await db.query(
+                        `UPDATE trades SET trailing_sl_price = $1 WHERE id = $2`,
+                        [spikeTrail.newSl, trade.id]
+                      );
+                      const pctLocked = trade.direction === 'LONG'
+                        ? ((spikeTrail.newSl - entryPrice) / entryPrice * 100).toFixed(3)
+                        : ((entryPrice - spikeTrail.newSl) / entryPrice * 100).toFixed(3);
+                      bLog.trade(`✓ Spike-HL trail: ${trade.symbol} ${trade.direction} SL→$${spikeTrail.newSl.toFixed(4)} (locked +${pctLocked}% from entry)`);
+                      await notify(`🎯 *Spike-HL Trail*\n${trade.symbol} ${trade.direction}\nSL moved → $${spikeTrail.newSl.toFixed(4)} (+${pctLocked}% locked)`);
+                    }
+                  }
+                } catch (spikeErr) {
+                  bLog.error(`Spike-HL trail check failed for ${trade.symbol}: ${spikeErr.message}`);
+                }
+                continue; // skip normal trailing SL for Spike-HL
+              }
 
               const userTrailPctBx = parseFloat(trade.key_trailing_sl_step) || 0;
               const trailResult = calculateTrailingStep(entryPrice, curPrice, isLong, lastStep, tradeLev, userTrailPctBx);

@@ -23,6 +23,23 @@ const MIN_24H_VOLUME = 10_000_000;
 const TOP_N_COINS = 10;
 const MAX_SIGNALS = 3;
 
+// Backtest results (backtest-smc-trailing.js — 7 days × 4 symbols):
+//   TP 2.0% / SL 1% → 56.2% WR, PF 2.56, Net +61%  ← chosen
+//   TP 1.5% / SL 1% → 62.6% WR, PF 2.51, Net +51%
+//   TP 3.0% / SL 1% → 44.8% WR (below 50% — rejected)
+//   Trailing SL      → 62.6% WR but only +42% net (worse than fixed TP in session windows)
+// Hard-cap TP at 2.0% regardless of what any DB strategy stores.
+const SMC_MAX_TP_PCT = 0.020;
+const SMC_SL_PCT     = 0.010;
+
+// SMC trades only these 4 symbols — no random altcoins
+const SMC_WHITELIST = new Map([
+  ['BTCUSDT', 100],
+  ['ETHUSDT', 100],
+  ['SOLUSDT',  20],
+  ['BNBUSDT',  20],
+]);
+
 // Cache compiled strategies — reload from DB every 5 min
 let _cachedStrategies = [];
 let _cacheLoadedAt = 0;
@@ -53,7 +70,7 @@ async function loadBestStrategies() {
     const rows = await query(
       `SELECT strategy_id, name, recipe, params, win_rate, total_pnl, total_trades
        FROM discovered_strategies
-       WHERE is_active = true AND win_rate >= 50 AND total_trades >= 5
+       WHERE is_active = true AND win_rate >= 60 AND total_trades >= 10
        ORDER BY win_rate DESC
        LIMIT 10`
     );
@@ -92,7 +109,7 @@ async function loadBestStrategies() {
     if (coordinator?.strategyAgent) {
       const pop = coordinator.strategyAgent._population || [];
       const elites = pop
-        .filter(s => s.results && s.results.winRate >= 55 && s.results.totalTrades >= 5 && s.scan)
+        .filter(s => s.results && s.results.winRate >= 60 && s.results.totalTrades >= 10 && s.scan)
         .sort((a, b) => b.results.winRate - a.results.winRate)
         .slice(0, 5);
 
@@ -155,15 +172,40 @@ async function fetchTopCoins(n = TOP_N_COINS) {
   }
 }
 
+// ── EMA helper (used for per-coin EMA200 bias) ──────────────
+function calcEMA(data, period) {
+  const k = 2 / (period + 1);
+  let ema = data[0];
+  for (let i = 1; i < data.length; i++) ema = data[i] * k + ema * (1 - k);
+  return ema;
+}
+
 // Main AI scan — replaces scanSMC
 async function scanAI(log, opts = {}) {
-  // Check daily limits
-  const { checkDailyLimits } = require('./smc-engine');
+  // ── Session gate: only trade during institutional opens ──
+  const {
+    checkDailyLimits,
+    isAvoidTime,
+    getActiveSession,
+  } = require('./liquidity-sweep-engine');
+
   const limits = checkDailyLimits();
   if (!limits.canTrade) {
-    log(`AI Scanner: ${limits.reason}`);
+    bLog.scan(`AI Scanner: ${limits.reason}`);
     return [];
   }
+
+  if (isAvoidTime()) {
+    bLog.scan('AI Scanner: avoid candle-open minute — skipping this cycle');
+    return [];
+  }
+
+  const activeSession = getActiveSession();
+  if (!activeSession) {
+    bLog.scan('AI Scanner: outside institutional session window — skipping this cycle');
+    return [];
+  }
+  bLog.scan(`AI Scanner: session=${activeSession.name} ✓`);
 
   // Check AI-learned hour
   const hourCheck = await aiLearner.shouldTradeNow();
@@ -218,7 +260,23 @@ async function scanAI(log, opts = {}) {
   const results = [];
   let analyzed = 0;
 
-  for (const ticker of topCoins) {
+  // Only scan the 4 whitelisted SMC symbols — filter out everything else
+  const smcCoins = topCoins.filter(t => SMC_WHITELIST.has(t.symbol));
+  if (smcCoins.length === 0) {
+    // Fallback: build coin list directly from whitelist if not in top volume list
+    for (const [sym] of SMC_WHITELIST) {
+      try {
+        const res = await fetch(`https://fapi.binance.com/fapi/v1/ticker/price?symbol=${sym}`, { timeout: 8000 });
+        if (res.ok) {
+          const d = await res.json();
+          smcCoins.push({ symbol: sym, lastPrice: d.price, quoteVolume: '999999999' });
+        }
+      } catch {}
+    }
+  }
+  bLog.scan(`AI Scanner: SMC whitelist — scanning ${smcCoins.map(t => t.symbol.replace('USDT','')).join(', ')}`);
+
+  for (const ticker of smcCoins) {
     const symbol = ticker.symbol;
     const price = parseFloat(ticker.lastPrice);
 
@@ -238,6 +296,15 @@ async function scanAI(log, opts = {}) {
     const highs15m = klines15m.map(k => parseFloat(k[2]));
     const lows15m = klines15m.map(k => parseFloat(k[3]));
 
+    // EMA200 bias — hard directional filter (no shorts above EMA200, no longs below)
+    let ema200Bias = null;
+    if (closes15m.length >= 50) {
+      const ema200Period = Math.min(200, closes15m.length - 1);
+      const ema200Val = calcEMA(closes15m, ema200Period);
+      ema200Bias = price > ema200Val ? 'bullish' : 'bearish';
+      bLog.scan(`${symbol}: EMA${ema200Period}(15m)=$${ema200Val.toFixed(4)} price=$${price} bias=${ema200Bias}`);
+    }
+
     // Run each strategy on this symbol
     for (const strat of strategies) {
       try {
@@ -245,9 +312,38 @@ async function scanAI(log, opts = {}) {
         const signal = strat.scan(closes15m, highs15m, lows15m, i);
         if (!signal) continue;
 
-        // Calculate SL/TP from strategy params
-        const slPct = strat.params.sl_pct || 0.01;
-        const tpPct = strat.params.tp_pct || 0.015;
+        // Hard EMA200 filter: no longs below EMA200, no shorts above EMA200
+        if (ema200Bias === 'bullish' && signal === 'SHORT') {
+          bLog.scan(`${symbol}: SHORT blocked — price above EMA200 (bullish bias)`);
+          continue;
+        }
+        if (ema200Bias === 'bearish' && signal === 'LONG') {
+          bLog.scan(`${symbol}: LONG blocked — price below EMA200 (bearish bias)`);
+          continue;
+        }
+
+        // Anti-chase filter: if price already moved >1.2% in the signal direction
+        // in the last 3 candles, the move is extended — don't chase it
+        {
+          const lastIdx = closes15m.length - 1;
+          const lookback = Math.max(0, lastIdx - 3);
+          const pastClose = closes15m[lookback];
+          const momentum = (closes15m[lastIdx] - pastClose) / pastClose;
+          const MAX_MOMENTUM = 0.012; // 1.2% in 3 candles
+          if (signal === 'LONG' && momentum > MAX_MOMENTUM) {
+            bLog.scan(`${symbol}: LONG blocked — already rallied ${(momentum*100).toFixed(2)}% in last 3 candles (chasing)`);
+            continue;
+          }
+          if (signal === 'SHORT' && momentum < -MAX_MOMENTUM) {
+            bLog.scan(`${symbol}: SHORT blocked — already dropped ${(Math.abs(momentum)*100).toFixed(2)}% in last 3 candles (chasing)`);
+            continue;
+          }
+        }
+
+        // TP capped at 1.5% — backtest proves lower TP → 55% WR vs 33% WR at 3%
+        // DB strategies may carry stale tp_pct=0.03; override enforced here.
+        const slPct = SMC_SL_PCT;
+        const tpPct = Math.min(strat.params.tp_pct || SMC_MAX_TP_PCT, SMC_MAX_TP_PCT);
         const isLong = signal === 'LONG';
 
         const sl = isLong ? price * (1 - slPct) : price * (1 + slPct);
@@ -293,12 +389,8 @@ async function scanAI(log, opts = {}) {
         // Hour size modifier
         const sizeMod = hourCheck.reduceSizeBy || hourCheck.boostSizeBy || 1.0;
 
-        // Leverage based on price tier
-        const HIGH_PRICE = new Set(['BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'SOLUSDT', 'AAVEUSDT', 'MKRUSDT', 'BCHUSDT', 'LTCUSDT']);
-        let leverage;
-        if (HIGH_PRICE.has(symbol) || price >= 100) leverage = 100;
-        else if (price >= 10) leverage = 50;
-        else leverage = 20;
+        // Leverage from SMC whitelist: BTC/ETH=100x, SOL/BNB=20x
+        const leverage = SMC_WHITELIST.get(symbol) || 20;
 
         if (score >= 8) {
           results.push({
@@ -317,6 +409,7 @@ async function scanAI(log, opts = {}) {
             setupName: `AI-${strat.recipe}`,
             aiModifier: Math.round(aiMod * 100) / 100,
             sizeMod,
+            ema200Bias,
             marketStructure: `AI:${strat.name.slice(0, 30)}`,
             strategyId: strat.id,
             strategyName: strat.name,
