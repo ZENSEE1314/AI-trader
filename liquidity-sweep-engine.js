@@ -1459,6 +1459,20 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
   const recentRange = recentHigh - recentLow;
   const priceInRange = recentRange > 0 ? (price - recentLow) / recentRange : 0.5; // 0=bottom, 1=top
 
+  // ── SWING POINT PROXIMITY (buy HL/LL, sell HH/LH) ────────
+  // Detect 15m pivot swing lows and highs for structural entry quality.
+  // A LONG entry must be near a swing low (HL or LL), a SHORT near a swing high.
+  const structSwingLows  = [];
+  const structSwingHighs = [];
+  for (let i = 2; i < parsed15.length - 1; i++) {
+    if (parsed15[i].low  < parsed15[i-1].low  && parsed15[i].low  < parsed15[i+1].low)  structSwingLows.push(parsed15[i].low);
+    if (parsed15[i].high > parsed15[i-1].high && parsed15[i].high > parsed15[i+1].high) structSwingHighs.push(parsed15[i].high);
+  }
+  // Nearest swing low AT or below current price (support below us)
+  const nearestSwingLow  = [...structSwingLows].filter(l => l <= price * 1.002).sort((a, b) => b - a)[0] || null;
+  // Nearest swing high AT or above current price (resistance above us)
+  const nearestSwingHigh = [...structSwingHighs].filter(h => h >= price * 0.998).sort((a, b) => a - b)[0] || null;
+
   // ── 1m SPIKE DETECTION ───────────────────────────────────
   // The 15m RSI lags by up to 3 candles during a short-timeframe spike.
   // Directly measure 1m momentum: if price moved >1.0% in the last 3×1m candles
@@ -1748,14 +1762,31 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
       sig.blocked = `SHORT blocked — 1m down-spike ${(spike3mPct * 100).toFixed(2)}% in 3 candles (chasing bottom)`;
     }
 
-    // Price position in range: LONG near bottom is good, LONG near top is chasing
+    // Price position in range: LONG must be near the LOW, SHORT near the HIGH.
+    // Hard block if price is at the wrong extreme — never buy tops, never sell bottoms.
     if (sig.direction === 'LONG') {
-      if (priceInRange > 0.85) sig.score -= 3; // buying at the top — bad
-      if (priceInRange < 0.35) sig.score += 2; // buying near the bottom — good
+      if (priceInRange > 0.80) {
+        sig.score = -99;
+        sig.blocked = `LONG blocked — price at ${(priceInRange * 100).toFixed(0)}% of 5h range (top — wait for HL pullback)`;
+      } else if (priceInRange < 0.35) sig.score += 2; // near the bottom — ideal HL/LL entry
     }
     if (sig.direction === 'SHORT') {
-      if (priceInRange < 0.15) sig.score -= 3; // selling at the bottom — bad
-      if (priceInRange > 0.65) sig.score += 2; // selling near the top — good
+      if (priceInRange < 0.20) {
+        sig.score = -99;
+        sig.blocked = `SHORT blocked — price at ${(priceInRange * 100).toFixed(0)}% of 5h range (bottom — wait for LH bounce)`;
+      } else if (priceInRange > 0.65) sig.score += 2; // near the top — ideal HH/LH entry
+    }
+
+    // Structural proximity: reward entries tight to actual swing structure (HL/LL for LONG, HH/LH for SHORT)
+    if (sig.direction === 'LONG' && nearestSwingLow) {
+      const pctFromLow = (price - nearestSwingLow) / nearestSwingLow;
+      if (pctFromLow <= 0.005)       sig.score += 3; // price at swing low — perfect HL/LL retest
+      else if (pctFromLow <= 0.015)  sig.score += 1; // within 1.5% — acceptable pullback
+    }
+    if (sig.direction === 'SHORT' && nearestSwingHigh) {
+      const pctFromHigh = (nearestSwingHigh - price) / nearestSwingHigh;
+      if (pctFromHigh <= 0.005)      sig.score += 3; // price at swing high — perfect HH/LH test
+      else if (pctFromHigh <= 0.015) sig.score += 1; // within 1.5% — acceptable bounce
     }
 
     // 1h trend alignment — bonus for with-trend, penalty for counter-trend
