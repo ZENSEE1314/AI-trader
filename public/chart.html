@@ -1103,6 +1103,7 @@
           <label class="ind-toggle"><input type="checkbox" data-ind="macd" checked><span class="ind-name">MACD</span><span class="ind-slider"></span></label>
           <label class="ind-toggle"><input type="checkbox" data-ind="stoch"><span class="ind-name">Stochastic</span><span class="ind-slider"></span></label>
           <label class="ind-toggle"><input type="checkbox" data-ind="atr"><span class="ind-name">ATR</span><span class="ind-slider"></span></label>
+          <label class="ind-toggle"><input type="checkbox" data-ind="vsahistogram"><span class="ind-name">VSA Histogram</span><span class="ind-slider"></span></label>
           <label class="ind-toggle"><input type="checkbox" data-ind="volume" checked><span class="ind-name">Volume</span><span class="ind-slider"></span></label>
           <div class="ind-dropdown-footer">
             <button class="ind-btn-all" id="ind-all-on">All On</button>
@@ -2184,6 +2185,80 @@
 
         return { boxes: boxes, vma: vmaData };
       },
+
+      // VSA Multi Volume Histogram — port of the MT4 "Better Volume" indicator
+      // Classifies each bar's volume into 6 signal types using vol×range and vol/range
+      // maPeriod: moving average for the volume baseline (default 100)
+      // lookback: window to find extreme vol×range and vol/range (default 20)
+      vsaHistogram: function(candles, maPeriod, lookback) {
+        maPeriod  = maPeriod  || 100;
+        lookback  = lookback  || 20;
+        var len   = candles.length;
+        var bars  = [];
+
+        // VSA colors keyed to the MQ4 original
+        var COLOR = {
+          red:     '#ef4444',   // Climax High   — start/end uptrend, pullback in downtrend
+          white:   '#e2e8f0',   // Climax Low    — start/end downtrend, pullback in uptrend
+          lime:    '#4ade80',   // High Churn    — profit-taking, end of up/down trend
+          magenta: '#e879f9',   // Climax Churn  — tops & bottoms, reversal or continuation
+          yellow:  '#facc15',   // Low Volume    — end of trend / pullback mid-trend
+          blue:    '#38bdf8',   // Neutral       — no signal
+        };
+
+        // Volume MA (simple, over maPeriod bars)
+        var vma = [];
+        for (var i = 0; i < len; i++) {
+          if (i < maPeriod - 1) { vma.push(null); continue; }
+          var sum = 0;
+          for (var k = i - maPeriod + 1; k <= i; k++) sum += candles[k].volume;
+          vma.push(sum / maPeriod);
+        }
+
+        for (var i = 0; i < len; i++) {
+          var c     = candles[i];
+          var vol   = c.volume;
+          var range = c.high - c.low;
+          var mid   = (c.high + c.low) / 2;
+
+          // Lowest volume in last 20 bars (inclusive)
+          var volLowest = Infinity;
+          for (var j = Math.max(0, i - 19); j <= i; j++) {
+            if (candles[j].volume < volLowest) volLowest = candles[j].volume;
+          }
+
+          // Highest vol×range and vol/range in lookback window
+          var hiValue2 = 0, hiValue3 = 0;
+          for (var j = Math.max(0, i - lookback + 1); j <= i; j++) {
+            var r = candles[j].high - candles[j].low;
+            if (r <= 0) continue;
+            var v2 = candles[j].volume * r;
+            var v3 = candles[j].volume / r;
+            if (v2 > hiValue2) hiValue2 = v2;
+            if (v3 > hiValue3) hiValue3 = v3;
+          }
+
+          var value2   = (range > 0) ? vol * range : 0;
+          var value3   = (range > 0) ? vol / range : 0;
+          var isClimax = (value2 > 0 && value2 === hiValue2);
+          var isChurn  = (value3 > 0 && value3 === hiValue3);
+          var aboveMid = c.close > mid;
+          var isLowest = (vol === volLowest);
+
+          // Priority: White > Magenta > Lime > Red > Yellow > Blue
+          var color;
+          if      (isClimax && !aboveMid)          color = COLOR.white;    // Climax Low
+          else if (isClimax && isChurn)             color = COLOR.magenta;  // Climax Churn
+          else if (isClimax && aboveMid)            color = COLOR.red;      // Climax High
+          else if (isChurn)                         color = COLOR.lime;     // High Churn
+          else if (isLowest)                        color = COLOR.yellow;   // Low Volume
+          else                                      color = COLOR.blue;     // Neutral
+
+          bars.push({ time: c.time, value: vol, color: color });
+        }
+
+        return { bars: bars, vma: vma, candles: candles };
+      },
     };
 
     // ============================================================
@@ -2229,6 +2304,9 @@
         'vsa': 'vsa(5, 20)',
         'volume spread': 'vsa(5, 20)',
         'volume spread analysis': 'vsa(5, 20)',
+        'vsa histogram': 'vsahistogram(100, 20)',
+        'better volume': 'vsahistogram(100, 20)',
+        'volume histogram': 'vsahistogram(100, 20)',
       },
 
       OVERLAY_FNS: ['ema', 'sma', 'wma', 'hma', 'vwap', 'bb', 'supertrend', 'psar', 'ichimoku', 'donchian', 'trendstructure', 'dtfxzones', 'vsa', 'smcpro'],
@@ -2325,6 +2403,10 @@
             var vsaResult = Calc.vsa(candles, a[0] || 5, a[1] || 20);
             return { type: 'overlay', label: 'VSA', vsaData: vsaResult };
           }
+          case 'vsahistogram': {
+            var vh = Calc.vsaHistogram(candles, a[0] || 100, a[1] || 20);
+            return { type: 'vsahistogram', label: 'VSA Histogram', vsaHistData: vh };
+          }
           case 'smcpro': {
             var sp = Calc.smcPro(candles, a[0] || 5, a[1] || 2);
             return { type: 'overlay', label: 'SMC Pro', smcProData: sp };
@@ -2367,6 +2449,7 @@
       trendstructure: { name: 'Trend Structure',   formula: 'trendstructure(5, 2)' },
       dtfxzones:      { name: 'DTFX Zones',        formula: 'dtfxzones(10)' },
       vsa:            { name: 'VSA',               formula: 'vsa(5, 20)' },
+      vsahistogram:   { name: 'VSA Histogram',    formula: 'vsahistogram(100, 20)' },
       stoch:          { name: 'Stochastic',        formula: 'stoch(14, 3, 3)' },
       atr:            { name: 'ATR',               formula: 'atr(14)' },
       ichimoku:       { name: 'Ichimoku',          formula: 'ichimoku(9, 26, 52, 26)' },
@@ -2379,7 +2462,7 @@
     };
 
     function loadIndicatorPrefs() {
-      var defaults = { vwap: false, ema200: true, ema7: false, ema22: false, rsi: false, macd: false, volume: true, bb: false, supertrend: false, trendstructure: false, dtfxzones: false, vsa: false, stoch: false, atr: false, ichimoku: false, psar: false, smcpro: true };
+      var defaults = { vwap: false, ema200: true, ema7: false, ema22: false, rsi: false, macd: false, volume: true, bb: false, supertrend: false, trendstructure: false, dtfxzones: false, vsa: false, vsahistogram: false, stoch: false, atr: false, ichimoku: false, psar: false, smcpro: true };
       var saved = localStorage.getItem('mct_indicator_prefs');
       if (!saved) return defaults;
       var prefs = JSON.parse(saved);
@@ -2665,6 +2748,41 @@
             return { time: c.time, value: c.volume, color: c.close >= c.open ? 'rgba(52,211,153,0.3)' : 'rgba(244,63,94,0.3)' };
           }));
           p.volumeSeries = volSeries;
+          return;
+        }
+
+        if (result.type === 'vsahistogram') {
+          var vhd = result.vsaHistData;
+
+          // Colored histogram bars in their own sub-pane
+          var vsaHistSeries = p.chart.addHistogramSeries({
+            priceScaleId: 'vsa-hist',
+            priceFormat: { type: 'volume' },
+            lastValueVisible: false,
+            priceLineVisible: false,
+          });
+          p.chart.priceScale('vsa-hist').applyOptions({
+            scaleMargins: { top: 0.7, bottom: 0 },
+            visible: false,
+          });
+          vsaHistSeries.setData(vhd.bars);
+          p.overlaySeries.push(vsaHistSeries);
+
+          // Volume MA line (gray) overlaid on same pane
+          var vmaSeries = p.chart.addLineSeries({
+            color: '#94a3b8',
+            lineWidth: 1,
+            priceScaleId: 'vsa-hist',
+            priceLineVisible: false,
+            lastValueVisible: false,
+            crosshairMarkerVisible: false,
+          });
+          var vmaData = [];
+          for (var vi = 0; vi < vhd.candles.length && vi < vhd.vma.length; vi++) {
+            if (vhd.vma[vi] !== null) vmaData.push({ time: vhd.candles[vi].time, value: vhd.vma[vi] });
+          }
+          vmaSeries.setData(vmaData);
+          p.overlaySeries.push(vmaSeries);
           return;
         }
 
