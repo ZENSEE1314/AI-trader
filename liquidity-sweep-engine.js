@@ -1104,23 +1104,32 @@ function detectSMCStructureTrade(candles15m, candles3m, candles1m, h1Trend = 'ne
 
   // ── STEP 4: 1m trigger ─────────────────────────────────────
   const last1 = candles1m[candles1m.length - 1];
-  const prev1 = candles1m[candles1m.length - 2];
   const vol1m = hasVolumeConfirm(candles1m, candles1m.length - 1, 1.2);
   const atr15 = calcATR(candles15m);
 
-  // ── LONG: HL HL structure + EMA55 above + 3m bullish + 1m breakout ──
+  // ── LONG: HL HL structure + EMA55 above + 3m bullish + 1m retest of HL ──
+  // SMC/ICT: BUY at the BOTTOM of the HL (when price pulls back to the HL zone
+  // and rejects bullishly), NOT on a breakout above a prior high (which buys the top).
+  // Entry condition:
+  //   1. 1m candle's LOW came within 0.5% of the last swing low (HL level) — it tested support
+  //   2. Candle closed BULLISH (rejection of the HL)
+  //   3. Close is in the upper 60% of the candle — strong rejection, not a doji
+  //   4. Volume confirmed
+  const lastHL = structure.swingLows.length > 0 ? structure.swingLows[structure.swingLows.length - 1].rawLow : null;
+
   if (
     structure.isBullish &&
     ema55.isBullish &&
     (h1Trend === 'bullish' || h1Trend === 'neutral') &&
     trend3Bullish &&
-    isGreenCandle(last1) &&
-    last1.close > prev1.high &&   // 1m close breaks prior high = trigger confirmation
+    lastHL &&
+    last1.low  <= lastHL * 1.005 &&                                     // wick tested the HL zone
+    isGreenCandle(last1) &&                                             // closed bullish (rejection)
+    last1.close >= last1.low + (last1.high - last1.low) * 0.6 &&       // closed in upper 60%
     vol1m
   ) {
-    const lastHL   = structure.swingLows.length > 0 ? structure.swingLows[structure.swingLows.length - 1].rawLow : null;
-    const atrSl    = last1.close - atr15 * 1.5;
-    const slPrice  = lastHL ? Math.min(lastHL * 0.999, atrSl) : atrSl;
+    // SL just below the HL — tight because we're entering right at support
+    const slPrice = lastHL * 0.997;
 
     return {
       direction: 'LONG',
@@ -1129,26 +1138,30 @@ function detectSMCStructureTrade(candles15m, candles3m, candles1m, h1Trend = 'ne
       sl: slPrice,
       hlCount:     structure.hlCount,
       probability: structure.longProbability,
-      ema55Slope:  Math.round(ema55.slope * 10000) / 100, // in basis points
+      ema55Slope:  Math.round(ema55.slope * 10000) / 100,
       tf15: 'HL_HL_bullish',
       tf3:  'EMA_aligned',
-      tf1:  '1m_breakout',
+      tf1:  '1m_hl_retest',
     };
   }
 
-  // ── SHORT: LH LH structure + EMA55 below + 3m bearish + 1m breakdown ──
+  // ── SHORT: LH LH structure + EMA55 below + 3m bearish + 1m retest of LH ──
+  // Sell at the TOP of the LH (when price rallies back to the LH zone and rejects bearishly).
+  const lastLH = structure.swingHighs.length > 0 ? structure.swingHighs[structure.swingHighs.length - 1].rawHigh : null;
+
   if (
     structure.isBearish &&
     ema55.isBearish &&
     (h1Trend === 'bearish' || h1Trend === 'neutral') &&
     trend3Bearish &&
-    isRedCandle(last1) &&
-    last1.close < prev1.low &&    // 1m close breaks prior low = trigger confirmation
+    lastLH &&
+    last1.high >= lastLH * 0.995 &&                                     // wick tested the LH zone
+    isRedCandle(last1) &&                                               // closed bearish (rejection)
+    last1.close <= last1.high - (last1.high - last1.low) * 0.6 &&      // closed in lower 60%
     vol1m
   ) {
-    const lastLH   = structure.swingHighs.length > 0 ? structure.swingHighs[structure.swingHighs.length - 1].rawHigh : null;
-    const atrSl    = last1.close + atr15 * 1.5;
-    const slPrice  = lastLH ? Math.max(lastLH * 1.001, atrSl) : atrSl;
+    // SL just above the LH — tight because we're entering right at resistance
+    const slPrice = lastLH * 1.003;
 
     return {
       direction: 'SHORT',
@@ -1160,7 +1173,7 @@ function detectSMCStructureTrade(candles15m, candles3m, candles1m, h1Trend = 'ne
       ema55Slope:  Math.round(ema55.slope * 10000) / 100,
       tf15: 'LH_LH_bearish',
       tf3:  'EMA_aligned',
-      tf1:  '1m_breakdown',
+      tf1:  '1m_lh_retest',
     };
   }
 
