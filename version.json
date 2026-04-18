@@ -5,25 +5,104 @@
   "changelog": [
     {
       "version": "1.0.0",
+      "tag": "v1.0.0",
       "date": "2026-04-18",
-      "label": "Baseline — Swing Walls + 4-Token Trading",
+      "commit": "9b7592d",
+      "label": "Filter Fixes + 24/7 Optimizer + Versioning",
       "changes": [
-        "RANGE_BOUNCE: detect walls from swing clusters, not absolute max/min",
-        "Wall-only entries — no mid-range, strict 0.3% tolerance",
+        "Fix: all strategies run 24/7 — session gate changed from hard block to +2 score bonus in-session / -1 out-of-session",
+        "Fix: EMA200 bias changed from hard block (score=-99) to -3 penalty / +2 bonus",
+        "Fix: removed AVOID_MINUTES blackout (00/15/30/45 min) — was killing too many valid entries",
+        "Fix: session open 30-min blackout removed",
+        "Fix: MIN_SCORE fallback lowered 8→6",
+        "Fix: MOMENTUM_SCALP trendStrength 7→5, pinBarWickRatio 2.5→2.0",
+        "Fix: RSI hard block raised to RSI>78 long / RSI<22 short",
+        "RANGE_BOUNCE: detect walls from swing clusters (findSwingWalls), not absolute max/min",
+        "RANGE_BOUNCE: wall-only entries — 0.3% tolerance, mid-range (25-75%) blocked",
         "Per-symbol daily trade limits — all 4 coins trade independently",
         "Remove daily trade count cap — trade on valid signals only",
-        "Kronos + AI scanner limited to BTCUSDT/ETHUSDT/SOLUSDT/BNBUSDT",
+        "Kronos + AI scanner limited to BTCUSDT/ETHUSDT/SOLUSDT/BNBUSDT only",
         "Chart indicator font set to 15pt",
         "RANGE_BOUNCE added to backtest gate (KNOWN_STRATEGIES)",
         "Token pool seeding: only on first boot, not on every restart",
-        "Exhaustive 24/7 optimizer (genetic search) added — runs in background",
+        "Exhaustive 24/7 optimizer (genetic search) added — background agent",
         "Optimizer results API: GET /api/dashboard/optimizer/results",
-        "Fix: all strategies run 24/7 — session gate changed from hard block to score bonus",
-        "Fix: EMA200 bias changed from hard block to score penalty",
-        "Fix: removed AVOID_MINUTES blackout (00/15/30/45)",
-        "Fix: MIN_SCORE lowered 8→6",
-        "Fix: MOMENTUM_SCALP trendStrength 7→5, pinBarWickRatio 2.5→2.0",
-        "Fix: RSI hard block raised to RSI>78 long / RSI<22 short"
+        "Version system: version.json + bump-version.js + GET /api/version"
+      ]
+    },
+    {
+      "version": "0.9.0",
+      "tag": "v0.9.0",
+      "date": "2026-04-17",
+      "commit": "bea854d",
+      "label": "Trailing SL Watchdog + Structural Entry Guards + Range Filter",
+      "changes": [
+        "Candle-low trailing SL — SL follows previous 15m candle low (LONG) / high (SHORT)",
+        "Trail SL watchdog runs as separate process every 15s — persistent, never misses a move",
+        "Trailing SL profit tier guarantee — locks in profit before candle trail kicks in",
+        "Fee floor on first SL — minimum 1% gain before SL trails to protect from fee loss",
+        "SHORT bias at range top — detects resistance and prefers short signals near highs",
+        "Block LONG/SHORT at structural extremes — buy HL/LL only, sell HH/LH only",
+        "Add 1m spike hard block — stops entering during fast pump/dump candles",
+        "Fix Bitunix trailing SL: positionId lookup was silently returning false",
+        "Fix SMC_HL_STRUCTURE: buy at HL retest bottom, not breakout top",
+        "Fix trailing SL precision + extend re-entry cooldown to 60min",
+        "Fix: scanAI falls back to classic SMC when no learned strategies exist",
+        "Add range filter to ai-signal-scanner — the real signal source for Kronos",
+        "Switch ChartAgent to liquidity-sweep-engine — disable ai-signal-scanner",
+        "Add auto-deploy script — pulls latest code and restarts on new push",
+        "Add VSA Multi Volume Histogram to MCT chart",
+        "Fix 3 blockers causing zero trades to execute",
+        "Disable Triple MA strategy — 24.1% WR in backtest (net -24.7%)"
+      ]
+    },
+    {
+      "version": "2.0-stable",
+      "tag": "v2.0-stable",
+      "date": "2026-04-17",
+      "commit": "bf7d6db",
+      "label": "Stable Checkpoint — Bitunix SL Fix (early Apr 17)",
+      "changes": [
+        "Fix Bitunix trailing SL: positionId lookup was silently returning false",
+        "This tag was set as a stable rollback point before further Apr 17 changes"
+      ]
+    },
+    {
+      "version": "1.0-before-fixes",
+      "tag": "v1.0-before-fixes",
+      "date": "2026-04-17",
+      "commit": "2d39570",
+      "label": "Pre-fix Checkpoint — scanAI fallback (mid Apr 17)",
+      "changes": [
+        "Fix: scanAI falls back to classic SMC when no learned strategies exist",
+        "This tag was set as a checkpoint before the trailing SL watchdog changes"
+      ]
+    },
+    {
+      "version": "0.8.0",
+      "tag": "v0.8.0",
+      "date": "2026-04-16",
+      "commit": "e7b7cd5",
+      "label": "MCT PDF Strategy + SMC HL/LH Structure + Zeiierman",
+      "changes": [
+        "Implement MCT PDF strategy rules for SMC HL/LH trades",
+        "SMC HL/LH structure strategy with Zeiierman curved band detection",
+        "Chart 1m candle display fix",
+        "Add funding_fee as separate tracked field across all trade paths",
+        "Bitunix referral link per user, platform guide download",
+        "Live exchange positions visible in emergency close panel",
+        "Remove ERROR trades from trade history for all accounts",
+        "Fix Binance API method name: getAccountTradeList → getAccountTrades",
+        "Fix double fee deduction in cycle.js Bitunix trade close sync",
+        "Fix Bitunix trade history sync: wrong side check + double fee",
+        "Fix backtest gate blocking AI signals that already have their own WR",
+        "Relax SMC entry timing: swing age 3→6, chase distance 0.4%→0.6%",
+        "Fix zero-trade issue: backtest gate blocked everything at 80% WR",
+        "Fix 11 critical/high/medium bugs found in code review",
+        "Wire Hermes memory into all agents — persistent cross-agent intelligence",
+        "Fix email tab visibility on dark theme",
+        "Disable HTML caching so updates deploy instantly",
+        "Fix JSON parse crash: missing /api prefix on brain-status fetch"
       ]
     }
   ]
