@@ -30,7 +30,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
   <link rel="stylesheet" href="/css/tokens.css">
-  <link rel="stylesheet" href="/css/style.css?v=20260416">
+  <link rel="stylesheet" href="/css/style.css?v=20260420">
 
   <link rel="icon" href="/img/logo.jpeg" type="image/jpeg">
   <style>
@@ -1160,19 +1160,19 @@
       </div>
       <div class="header-actions">
         <span id="user-email" class="user-email"></span>
-        <button id="btn-logout" class="btn btn-ghost btn-sm">Log Out</button>
+        <button id="btn-logout" class="btn btn-ghost btn-sm" data-i18n="header.logout">Log Out</button>
       </div>
     </header>
 
     <main class="main-content">
       <!-- Navigation Tabs -->
       <nav class="nav-tabs" role="tablist" aria-label="Main navigation">
-        <button class="nav-tab active" role="tab" aria-selected="true" data-tab="dashboard">Dashboard</button>
-        <button class="nav-tab" role="tab" aria-selected="false" data-tab="keys">API Keys</button>
-        <button class="nav-tab" role="tab" aria-selected="false" data-tab="cashwallet">Cash Wallet</button>
-        <button class="nav-tab" role="tab" aria-selected="false" data-tab="chart">Chart</button>
-        <button class="nav-tab" role="tab" aria-selected="false" data-tab="profile">Profile</button>
-        <button class="nav-tab hidden" role="tab" aria-selected="false" data-tab="admin" id="admin-tab">Admin</button>
+        <button class="nav-tab active" role="tab" aria-selected="true" data-tab="dashboard" data-i18n="nav.dashboard">Dashboard</button>
+        <button class="nav-tab" role="tab" aria-selected="false" data-tab="keys" data-i18n="nav.apikeys">API Keys</button>
+        <button class="nav-tab" role="tab" aria-selected="false" data-tab="cashwallet" data-i18n="nav.cashwallet">Cash Wallet</button>
+        <button class="nav-tab" role="tab" aria-selected="false" data-tab="chart" data-i18n="nav.chart">Chart</button>
+        <button class="nav-tab" role="tab" aria-selected="false" data-tab="profile" data-i18n="nav.profile">Profile</button>
+        <button class="nav-tab hidden" role="tab" aria-selected="false" data-tab="admin" id="admin-tab" data-i18n="nav.admin">Admin</button>
       </nav>
 
       <!-- ====================================================
@@ -1182,8 +1182,8 @@
         <!-- Mini Crypto Network Widget -->
         <div class="cn-mini-widget" id="cn-mini-widget">
           <div class="cn-mini-header">
-            <span class="cn-mini-title">Network Status</span>
-            <span class="cn-mini-status"><span class="cn-mini-dot"></span>Live</span>
+            <span class="cn-mini-title" data-i18n="widget.networkstatus">Network Status</span>
+            <span class="cn-mini-status"><span class="cn-mini-dot"></span><span data-i18n="widget.live">Live</span></span>
           </div>
           <div class="cn-mini-stage">
             <svg class="cn-mini-lines" viewBox="0 0 300 200" preserveAspectRatio="xMidYMid meet" aria-hidden="true">
@@ -1230,9 +1230,9 @@
         <div id="pause-banner" style="display:flex;align-items:center;justify-content:space-between;padding:12px 20px;border-radius:var(--radius-md);background:var(--color-bg);border:1px solid var(--color-border-muted);margin-bottom:var(--space-4);">
           <div style="display:flex;align-items:center;gap:10px;">
             <span id="pause-status-dot" style="width:10px;height:10px;border-radius:50%;background:var(--color-success);display:inline-block;"></span>
-            <span id="pause-status-text" style="font-size:0.85rem;font-weight:600;">Bot Active</span>
+            <span id="pause-status-text" style="font-size:0.85rem;font-weight:600;" data-i18n="pause.active">Bot Active</span>
           </div>
-          <button id="pause-btn" class="btn btn-sm" style="font-size:0.8rem;padding:6px 18px;min-height:30px;border-radius:var(--radius-md);font-weight:600;" onclick="window.CryptoBot.togglePause()">Pause Bot</button>
+          <button id="pause-btn" class="btn btn-sm" style="font-size:0.8rem;padding:6px 18px;min-height:30px;border-radius:var(--radius-md);font-weight:600;" onclick="window.CryptoBot.togglePause()" data-i18n="pause.pause">Pause Bot</button>
         </div>
 
         <!-- Exchange Wallets -->
@@ -1243,10 +1243,10 @@
           <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;background:linear-gradient(90deg, var(--color-bg-raised), var(--color-bg));border-bottom:1px solid var(--color-border-muted);">
             <div style="display:flex;align-items:center;gap:8px;">
               <span style="font-size:1.2rem;filter:drop-shadow(0 0 6px var(--color-accent));">🔮</span>
-              <span style="font-weight:800;font-size:0.95rem;color:var(--color-text);letter-spacing:0.8px;text-transform:uppercase;">Kronos AI Predictions</span>
+              <span style="font-weight:800;font-size:0.95rem;color:var(--color-text);letter-spacing:0.8px;text-transform:uppercase;" data-i18n="kronos.title">Kronos AI Predictions</span>
               <span id="kronos-count" style="font-size:0.7rem;color:var(--color-accent);background:rgba(139, 92, 246, 0.1);padding:2px 8px;border-radius:10px;border:1px solid rgba(139, 92, 246, 0.3);font-weight:700;"></span>
             </div>
-            <button class="btn btn-sm" style="font-size:0.7rem;padding:4px 12px;min-height:24px;background:var(--color-accent);color:#fff;border:none;cursor:pointer;transition:all 0.2s;font-weight:600;box-shadow: 0 2px 4px rgba(0,0,0,0.2);" onclick="window.CryptoBot.loadKronosPredictions()">Refresh</button>
+            <button class="btn btn-sm" style="font-size:0.7rem;padding:4px 12px;min-height:24px;background:var(--color-accent);color:#fff;border:none;cursor:pointer;transition:all 0.2s;font-weight:600;box-shadow: 0 2px 4px rgba(0,0,0,0.2);" onclick="window.CryptoBot.loadKronosPredictions()" data-i18n="kronos.refresh">Refresh</button>
           </div>
           <div id="kronos-summary" style="display:flex;gap:12px;padding:10px 16px;background:var(--color-bg);border-bottom:1px solid var(--color-border-muted);flex-wrap:wrap;">
             <span id="kronos-bull" style="font-size:0.8rem;color:var(--color-success);font-weight:700;background:rgba(0,255,0,0.08);padding:3px 10px;border-radius:6px;border:1px solid rgba(0,255,0,0.2);">📈 0 Bullish</span>
@@ -1302,17 +1302,17 @@
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--space-3);flex-wrap:wrap;gap:8px;">
             <h2 class="section-heading" style="margin-bottom:0;">This Week's Earnings <span class="tip-btn">?<span class="tip-text">Your weekly profit split. You keep 60% of net profits, 40% goes to the platform. Payment is due weekly — pay before the timer runs out to keep trading.</span></span></h2>
             <div id="we-timer" style="display:flex;align-items:center;gap:10px;padding:8px 16px;border-radius:var(--radius-md);background:var(--color-bg);border:1px solid var(--color-border-muted);">
-              <span style="font-size:0.7rem;color:var(--color-text-muted);white-space:nowrap;">Due in</span>
+              <span style="font-size:0.7rem;color:var(--color-text-muted);white-space:nowrap;" data-i18n="weekly.duein">Due in</span>
               <div style="text-align:center;">
                 <span id="we-timer-countdown" style="font-size:1.2rem;font-weight:700;color:var(--color-accent);font-family:var(--font-mono);letter-spacing:1px;">--:--:--:--</span>
                 <div style="display:flex;justify-content:space-between;padding:0 2px;margin-top:1px;">
-                  <span style="font-size:0.55rem;color:var(--color-text-muted);width:25%;text-align:center;">days</span>
-                  <span style="font-size:0.55rem;color:var(--color-text-muted);width:25%;text-align:center;">hrs</span>
-                  <span style="font-size:0.55rem;color:var(--color-text-muted);width:25%;text-align:center;">min</span>
-                  <span style="font-size:0.55rem;color:var(--color-text-muted);width:25%;text-align:center;">sec</span>
+                  <span style="font-size:0.55rem;color:var(--color-text-muted);width:25%;text-align:center;" data-i18n="misc.days">days</span>
+                  <span style="font-size:0.55rem;color:var(--color-text-muted);width:25%;text-align:center;" data-i18n="misc.hrs">hrs</span>
+                  <span style="font-size:0.55rem;color:var(--color-text-muted);width:25%;text-align:center;" data-i18n="misc.min">min</span>
+                  <span style="font-size:0.55rem;color:var(--color-text-muted);width:25%;text-align:center;" data-i18n="misc.sec">sec</span>
                 </div>
               </div>
-              <button id="we-pay-btn" class="btn btn-primary btn-sm hidden" style="font-size:0.7rem;padding:2px 10px;min-height:24px;" onclick="window.CryptoBot.payWeekly()">Pay Now</button>
+              <button id="we-pay-btn" class="btn btn-primary btn-sm hidden" style="font-size:0.7rem;padding:2px 10px;min-height:24px;" onclick="window.CryptoBot.payWeekly()" data-i18n="weekly.paynow">Pay Now</button>
             </div>
           </div>
           <div id="weekly-earnings-grid" class="summary-grid">
@@ -1343,32 +1343,32 @@
           <button id="btn-clear-errors" class="btn btn-danger btn-sm hidden" onclick="window.CryptoBot.clearErrors()">Clear Errors</button>
         </div>
         <div id="trades-period-filter" style="display:flex;gap:8px;margin-bottom:var(--space-3);flex-wrap:wrap;align-items:center;">
-          <button class="btn btn-sm period-btn active" data-period="all">All</button>
-          <button class="btn btn-sm period-btn" data-period="1d">1 Day</button>
-          <button class="btn btn-sm period-btn" data-period="7d">7 Days</button>
-          <button class="btn btn-sm period-btn" data-period="30d">30 Days</button>
-          <button class="btn btn-sm period-btn" data-period="6m">6 Months</button>
-          <button class="btn btn-sm period-btn" data-period="1y">1 Year</button>
-          <button class="btn btn-sm" id="btn-export-csv" style="margin-left:auto;background:var(--color-accent);color:#fff;padding:4px 12px;" title="Download trade history as CSV">Download CSV</button>
+          <button class="btn btn-sm period-btn active" data-period="all" data-i18n="period.all">All</button>
+          <button class="btn btn-sm period-btn" data-period="1d" data-i18n="period.1d">1 Day</button>
+          <button class="btn btn-sm period-btn" data-period="7d" data-i18n="period.7d">7 Days</button>
+          <button class="btn btn-sm period-btn" data-period="30d" data-i18n="period.30d">30 Days</button>
+          <button class="btn btn-sm period-btn" data-period="6m" data-i18n="period.6m">6 Months</button>
+          <button class="btn btn-sm period-btn" data-period="1y" data-i18n="period.1y">1 Year</button>
+          <button class="btn btn-sm" id="btn-export-csv" style="margin-left:auto;background:var(--color-accent);color:#fff;padding:4px 12px;" title="Download trade history as CSV" data-i18n="trade.downloadcsv">Download CSV</button>
         </div>
         <!-- Token Selector — Top 50 by volume with on/off switches -->
         <div style="margin-bottom:var(--space-4);">
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--space-2);">
             <h3 style="margin:0;font-size:0.95rem;color:var(--color-text);">My Tokens <span id="watch-count" style="font-size:0.75rem;color:var(--color-accent);">(0 active)</span></h3>
             <div style="display:flex;gap:6px;">
-              <button class="btn btn-sm" style="font-size:0.7rem;background:var(--color-success);color:#000;" onclick="window.CryptoBot.watchAll(true)">All ON</button>
-              <button class="btn btn-sm" style="font-size:0.7rem;background:var(--color-danger);color:#fff;" onclick="window.CryptoBot.watchAll(false)">All OFF</button>
-              <button class="btn btn-sm" style="font-size:0.7rem;border:1px solid var(--color-accent);color:var(--color-accent);background:rgba(212,175,55,0.08);" onclick="window.CryptoBot.loadSignalBoard()">Refresh</button>
+              <button class="btn btn-sm" style="font-size:0.7rem;background:var(--color-success);color:#000;" onclick="window.CryptoBot.watchAll(true)" data-i18n="tokens.allon">All ON</button>
+              <button class="btn btn-sm" style="font-size:0.7rem;background:var(--color-danger);color:#fff;" onclick="window.CryptoBot.watchAll(false)" data-i18n="tokens.alloff">All OFF</button>
+              <button class="btn btn-sm" style="font-size:0.7rem;border:1px solid var(--color-accent);color:var(--color-accent);background:rgba(212,175,55,0.08);" onclick="window.CryptoBot.loadSignalBoard()" data-i18n="tokens.refresh">Refresh</button>
             </div>
           </div>
           <div id="signal-board" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(105px,1fr));gap:4px;margin-bottom:var(--space-3);">
-            <div style="color:var(--color-text-muted);font-size:0.8rem;grid-column:1/-1;text-align:center;padding:var(--space-2);">Loading tokens...</div>
+            <div style="color:var(--color-text-muted);font-size:0.8rem;grid-column:1/-1;text-align:center;padding:var(--space-2);" data-i18n="tokens.loading">Loading tokens...</div>
           </div>
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--space-2);">
             <h3 style="margin:0;font-size:0.95rem;color:var(--color-text);">Today's Results</h3>
           </div>
           <div id="daily-results" style="margin-bottom:var(--space-3);">
-            <div style="color:var(--color-text-muted);font-size:0.8rem;text-align:center;padding:var(--space-2);">No results yet today</div>
+            <div style="color:var(--color-text-muted);font-size:0.8rem;text-align:center;padding:var(--space-2);" data-i18n="tokens.noresults">No results yet today</div>
           </div>
         </div>
 
@@ -1377,17 +1377,17 @@
             <table class="data-table">
               <thead>
                 <tr>
-                  <th>Date</th>
-                  <th>Symbol</th>
-                  <th>Dir</th>
-                  <th>Entry</th>
-                  <th>Exit</th>
-                  <th>Gross P&amp;L</th>
-                  <th>Fee</th>
-                  <th>Funding</th>
-                  <th>Net P&amp;L</th>
-                  <th>Status</th>
-                  <th>Platform</th>
+                  <th data-i18n="trade.date">Date</th>
+                  <th data-i18n="trade.symbol">Symbol</th>
+                  <th data-i18n="trade.dir">Dir</th>
+                  <th data-i18n="trade.entry">Entry</th>
+                  <th data-i18n="trade.exit">Exit</th>
+                  <th data-i18n="trade.grosspnl">Gross P&amp;L</th>
+                  <th data-i18n="trade.fee">Fee</th>
+                  <th data-i18n="trade.funding">Funding</th>
+                  <th data-i18n="trade.netpnl">Net P&amp;L</th>
+                  <th data-i18n="trade.status">Status</th>
+                  <th data-i18n="trade.platform">Platform</th>
                 </tr>
               </thead>
               <tbody id="trades-tbody">
@@ -1397,8 +1397,8 @@
           </div>
           <div id="trades-empty" class="empty-state hidden">
             <div class="empty-state-icon" aria-hidden="true">📊</div>
-            <div class="empty-state-text">No trades yet</div>
-            <div class="empty-state-sub">Trades will appear here once your bot starts executing.</div>
+            <div class="empty-state-text" data-i18n="trade.notrades">No trades yet</div>
+            <div class="empty-state-sub" data-i18n="trade.tradesub">Trades will appear here once your bot starts executing.</div>
           </div>
           <div id="trades-pagination" class="pagination hidden">
             <button id="btn-prev-page" class="btn btn-ghost btn-sm" aria-label="Previous page">&larr; Prev</button>
@@ -1414,7 +1414,7 @@
       <section id="tab-keys" class="hidden" role="tabpanel" aria-label="API Keys">
         <div class="keys-header">
           <h2 class="section-heading" style="margin-bottom:0;">Your API Keys <span class="tip-btn">?<span class="tip-text">Manage your exchange API keys. Each key connects to one exchange account. Configure risk settings, leverage, and token preferences per key.</span></span></h2>
-          <button id="btn-add-key" class="btn btn-primary btn-sm">+ Add Key</button>
+          <button id="btn-add-key" class="btn btn-primary btn-sm" data-i18n="keys.addkey">+ Add Key</button>
         </div>
 
         <div id="keys-list" class="keys-list">
@@ -1423,8 +1423,8 @@
 
         <div id="keys-empty" class="empty-state hidden">
           <div class="empty-state-icon" aria-hidden="true">🔑</div>
-          <div class="empty-state-text">No API keys configured</div>
-          <div class="empty-state-sub">Add your exchange API key to start automated trading.</div>
+          <div class="empty-state-text" data-i18n="keys.empty">No API keys configured</div>
+          <div class="empty-state-sub" data-i18n="keys.emptysub">Add your exchange API key to start automated trading.</div>
         </div>
       </section>
 
@@ -1471,7 +1471,7 @@
               <input class="form-input text-mono" type="text" id="cw-topup-txhash" placeholder="Transaction hash or screenshot URL">
             </div>
           </div>
-          <button class="btn btn-primary btn-sm" onclick="window.CryptoBot.submitTopUp()">Submit Top-Up</button>
+          <button class="btn btn-primary btn-sm" onclick="window.CryptoBot.submitTopUp()" data-i18n="cw.submittopup">Submit Top-Up</button>
         </div>
 
         <!-- Commission is auto-added to cash wallet -->
@@ -1494,7 +1494,7 @@
               </select>
             </div>
           </div>
-          <button class="btn btn-primary btn-sm" onclick="window.CryptoBot.saveUsdtAddress()">Save Address</button>
+          <button class="btn btn-primary btn-sm" onclick="window.CryptoBot.saveUsdtAddress()" data-i18n="cw.saveaddr">Save Address</button>
           <div style="font-size:0.75rem;color:var(--color-text-muted);margin-top:var(--space-2);">Commission withdrawals are sent as USDT only. No bank transfers.</div>
         </div>
 
@@ -1506,7 +1506,7 @@
               <label class="form-label" for="cw-wd-amount">Amount (min $10)</label>
               <input class="form-input text-mono" type="number" id="cw-wd-amount" min="10" step="0.01" placeholder="0.00">
             </div>
-            <button class="btn btn-primary btn-sm" onclick="window.CryptoBot.withdrawFromWallet()">Request Withdrawal</button>
+            <button class="btn btn-primary btn-sm" onclick="window.CryptoBot.withdrawFromWallet()" data-i18n="cw.requestwd">Request Withdrawal</button>
           </div>
           <div id="cw-wd-address-display" style="font-size:0.8rem;color:var(--color-text-muted);margin-top:var(--space-2);"></div>
         </div>
@@ -1518,7 +1518,7 @@
             <input class="form-input text-mono" id="referral-link" readonly style="flex:1;font-size:0.85rem;">
             <button class="btn btn-ghost btn-sm" onclick="navigator.clipboard.writeText(document.getElementById('referral-link').value);window.CryptoBot.showToast('Copied!','success')">Copy</button>
           </div>
-          <div style="color:var(--color-text-muted);font-size:0.8rem;margin-top:var(--space-2);">Earn weekly commission from your referrals' profits. Paid when admin settles each week.</div>
+          <div style="color:var(--color-text-muted);font-size:0.8rem;margin-top:var(--space-2);" data-i18n="cw.referralnote">Earn weekly commission from your referrals' profits. Paid when admin settles each week.</div>
 
           <!-- Bitunix referral link -->
           <div style="margin-top:var(--space-4);padding-top:var(--space-3);border-top:1px solid var(--color-border-muted);">
@@ -1617,7 +1617,7 @@
               <input class="form-input" type="email" id="profile-email" placeholder="Your email">
             </div>
           </div>
-          <button class="btn btn-primary btn-sm" style="margin-top:var(--space-3);" onclick="window.CryptoBot.saveProfile()">Save Profile</button>
+          <button class="btn btn-primary btn-sm" style="margin-top:var(--space-3);" onclick="window.CryptoBot.saveProfile()" data-i18n="profile.saveprofile">Save Profile</button>
         </div>
 
         <!-- Change Password -->
@@ -1646,7 +1646,7 @@
               </div>
             </div>
           </div>
-          <button class="btn btn-primary btn-sm" style="margin-top:var(--space-3);" onclick="window.CryptoBot.changePassword()">Change Password</button>
+          <button class="btn btn-primary btn-sm" style="margin-top:var(--space-3);" onclick="window.CryptoBot.changePassword()" data-i18n="profile.changepw">Change Password</button>
         </div>
       </section>
 
@@ -1655,13 +1655,13 @@
 
         <!-- Admin Sub-Tabs -->
         <nav class="admin-subtabs" role="tablist">
-          <button class="admin-subtab active" data-admintab="earnings" onclick="window.CryptoBot.switchAdminTab('earnings')">Earnings</button>
-          <button class="admin-subtab" data-admintab="users" onclick="window.CryptoBot.switchAdminTab('users')">Users</button>
-          <button class="admin-subtab" data-admintab="tokens" onclick="window.CryptoBot.switchAdminTab('tokens')">Tokens</button>
-          <button class="admin-subtab" data-admintab="settings" onclick="window.CryptoBot.switchAdminTab('settings')">Settings</button>
-          <button class="admin-subtab" data-admintab="tools" onclick="window.CryptoBot.switchAdminTab('tools')">Tools</button>
-          <button class="admin-subtab" data-admintab="email" onclick="window.CryptoBot.switchAdminTab('email')">✉️ Email</button>
-          <a href="/emulator.html" class="admin-subtab" style="text-decoration:none;color:inherit;display:inline-flex;align-items:center;gap:4px" target="_blank">🎮 Trading Floor</a>
+          <button class="admin-subtab active" data-admintab="earnings" onclick="window.CryptoBot.switchAdminTab('earnings')" data-i18n="admin.earnings">Earnings</button>
+          <button class="admin-subtab" data-admintab="users" onclick="window.CryptoBot.switchAdminTab('users')" data-i18n="admin.users">Users</button>
+          <button class="admin-subtab" data-admintab="tokens" onclick="window.CryptoBot.switchAdminTab('tokens')" data-i18n="admin.tokens">Tokens</button>
+          <button class="admin-subtab" data-admintab="settings" onclick="window.CryptoBot.switchAdminTab('settings')" data-i18n="admin.settings">Settings</button>
+          <button class="admin-subtab" data-admintab="tools" onclick="window.CryptoBot.switchAdminTab('tools')" data-i18n="admin.tools">Tools</button>
+          <button class="admin-subtab" data-admintab="email" onclick="window.CryptoBot.switchAdminTab('email')" data-i18n="admin.email">✉️ Email</button>
+          <a href="/emulator.html" class="admin-subtab" style="text-decoration:none;color:inherit;display:inline-flex;align-items:center;gap:4px" target="_blank" data-i18n="admin.tradingfloor">🎮 Trading Floor</a>
         </nav>
 
         <!-- ═══════════════════════════════════════════
@@ -1714,21 +1714,21 @@
           <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Users</h3>
           <div class="table-wrap" style="margin-bottom:var(--space-5);overflow-x:auto;">
             <table class="data-table" id="admin-users-table">
-              <thead><tr><th>Email</th><th>Keys</th><th>Wallet</th><th>Referral</th><th>Joined</th><th>Payment</th><th>Action</th></tr></thead>
+              <thead><tr><th data-i18n="th.email">Email</th><th data-i18n="th.keys">Keys</th><th data-i18n="th.wallet">Wallet</th><th data-i18n="th.referral">Referral</th><th data-i18n="th.joined">Joined</th><th data-i18n="th.payment">Payment</th><th data-i18n="th.action">Action</th></tr></thead>
               <tbody id="admin-users-tbody"></tbody>
             </table>
           </div>
           <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Pending Payments</h3>
           <div class="table-wrap" style="margin-bottom:var(--space-5);">
             <table class="data-table">
-              <thead><tr><th>User</th><th>Amount</th><th>Method</th><th>Proof</th><th>Date</th><th>Action</th></tr></thead>
+              <thead><tr><th data-i18n="th.user">User</th><th data-i18n="th.amount">Amount</th><th data-i18n="th.method">Method</th><th data-i18n="th.proof">Proof</th><th data-i18n="th.date">Date</th><th data-i18n="th.action">Action</th></tr></thead>
               <tbody id="admin-subs-tbody"></tbody>
             </table>
           </div>
           <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Pending Withdrawals</h3>
           <div class="table-wrap">
             <table class="data-table">
-              <thead><tr><th>User</th><th>Amount</th><th>Bank</th><th>Acc No.</th><th>Name</th><th>Date</th><th>Action</th></tr></thead>
+              <thead><tr><th data-i18n="th.user">User</th><th data-i18n="th.amount">Amount</th><th data-i18n="th.bank">Bank</th><th data-i18n="th.accno">Acc No.</th><th data-i18n="th.name">Name</th><th data-i18n="th.date">Date</th><th data-i18n="th.action">Action</th></tr></thead>
               <tbody id="admin-wd-tbody"></tbody>
             </table>
           </div>
@@ -1738,40 +1738,78 @@
              TAB: Tokens
              ═══════════════════════════════════════════ -->
         <div id="admin-tab-tokens" class="admin-tab-panel hidden">
-          <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Token Board</h3>
+          <h3 style="margin-bottom:var(--space-1);color:var(--color-text);">Strategy Tokens</h3>
+          <p style="font-size:0.8rem;color:var(--color-text-muted);margin-bottom:var(--space-4);">Select which tokens the bot trades. Leverage is fixed per strategy.</p>
+
+          <!-- SMC Tokens -->
           <div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-4);margin-bottom:var(--space-4);">
-            <div style="display:flex;gap:var(--space-2);align-items:end;margin-bottom:var(--space-3);flex-wrap:wrap;">
-              <div class="form-group" style="margin-bottom:0;flex:1;min-width:140px;">
-                <label class="form-label">Add Token</label>
-                <input class="form-input text-mono" type="text" id="admin-board-symbol" placeholder="BTCUSDT" style="text-transform:uppercase;">
-              </div>
-              <div class="form-group" style="margin-bottom:0;width:100px;">
-                <label class="form-label">Risk</label>
-                <select class="form-input" id="admin-board-risk">
-                  <option value="">None</option>
-                  <option value="popular">Popular</option>
-                  <option value="low">Low</option>
-                  <option value="medium">Med</option>
-                  <option value="high">High</option>
-                </select>
-              </div>
-              <div class="form-group" style="margin-bottom:0;width:70px;">
-                <label class="form-label">Lev</label>
-                <input class="form-input text-mono" type="number" id="admin-board-lev" value="20" min="1" max="125">
-              </div>
-              <button class="btn btn-primary btn-sm" onclick="window.CryptoBot.adminAddTokenBoard()">Add</button>
+            <div style="display:flex;align-items:center;gap:var(--space-2);margin-bottom:var(--space-3);">
+              <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--color-accent);"></span>
+              <strong style="font-size:0.88rem;color:var(--color-text);">SMC Strategy</strong>
+              <span style="font-size:0.72rem;color:var(--color-text-muted);margin-left:4px;">Asia / Europe / US session opens only</span>
             </div>
-            <div style="display:flex;gap:var(--space-2);margin-bottom:var(--space-3);flex-wrap:wrap;">
-              <button class="btn btn-sm" style="background:var(--color-accent);color:#000;font-weight:600;" onclick="window.CryptoBot.adminPopulateTop50()">Auto Top 50</button>
-              <button class="btn btn-sm" style="border:1px solid var(--color-accent);color:var(--color-accent);background:rgba(212,175,55,0.08);" onclick="window.CryptoBot.adminLoadTokenBoard()">Refresh</button>
-              <span id="admin-board-stats" style="font-size:0.75rem;color:var(--color-text-muted);align-self:center;"></span>
+            <div id="smc-token-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:var(--space-3);">
+              <!-- BTC -->
+              <div class="token-card" data-symbol="BTCUSDT" data-strategy="SMC">
+                <div class="token-card-header">
+                  <span class="token-card-name">BTC</span>
+                  <label class="token-switch"><input type="checkbox" class="token-card-toggle" checked onchange="window.CryptoBot.toggleStrategyToken('BTCUSDT','SMC',this.checked)"><span class="token-slider"></span></label>
+                </div>
+                <div class="token-card-lev">×100 leverage</div>
+                <div class="token-card-price" id="smc-price-BTCUSDT">--</div>
+              </div>
+              <!-- ETH -->
+              <div class="token-card" data-symbol="ETHUSDT" data-strategy="SMC">
+                <div class="token-card-header">
+                  <span class="token-card-name">ETH</span>
+                  <label class="token-switch"><input type="checkbox" class="token-card-toggle" checked onchange="window.CryptoBot.toggleStrategyToken('ETHUSDT','SMC',this.checked)"><span class="token-slider"></span></label>
+                </div>
+                <div class="token-card-lev">×100 leverage</div>
+                <div class="token-card-price" id="smc-price-ETHUSDT">--</div>
+              </div>
+              <!-- SOL -->
+              <div class="token-card" data-symbol="SOLUSDT" data-strategy="SMC">
+                <div class="token-card-header">
+                  <span class="token-card-name">SOL</span>
+                  <label class="token-switch"><input type="checkbox" class="token-card-toggle" checked onchange="window.CryptoBot.toggleStrategyToken('SOLUSDT','SMC',this.checked)"><span class="token-slider"></span></label>
+                </div>
+                <div class="token-card-lev">×20 leverage</div>
+                <div class="token-card-price" id="smc-price-SOLUSDT">--</div>
+              </div>
+              <!-- BNB -->
+              <div class="token-card" data-symbol="BNBUSDT" data-strategy="SMC">
+                <div class="token-card-header">
+                  <span class="token-card-name">BNB</span>
+                  <label class="token-switch"><input type="checkbox" class="token-card-toggle" checked onchange="window.CryptoBot.toggleStrategyToken('BNBUSDT','SMC',this.checked)"><span class="token-slider"></span></label>
+                </div>
+                <div class="token-card-lev">×20 leverage</div>
+                <div class="token-card-price" id="smc-price-BNBUSDT">--</div>
+              </div>
             </div>
-            <div class="table-wrap" style="max-height:600px;overflow-y:auto;">
-              <table class="data-table" style="font-size:0.8rem;">
-                <thead style="position:sticky;top:0;z-index:1;"><tr><th>Signal</th><th>Symbol</th><th>Price</th><th>24h</th><th>Volume</th><th>Risk</th><th>Lev</th><th>Active</th><th></th></tr></thead>
-                <tbody id="admin-board-tbody"></tbody>
-              </table>
+          </div>
+
+          <!-- Win Rate Summary -->
+          <div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-4);">
+            <strong style="font-size:0.85rem;color:var(--color-text);display:block;margin-bottom:var(--space-3);">Strategy Performance</strong>
+            <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:var(--space-3);" id="token-perf-grid">
+              <div style="text-align:center;padding:var(--space-3);background:var(--color-bg);border-radius:var(--radius-md);">
+                <div style="font-size:1.4rem;font-weight:700;color:var(--color-accent);" id="stat-win-rate">--</div>
+                <div style="font-size:0.7rem;color:var(--color-text-muted);margin-top:2px;">Win Rate</div>
+              </div>
+              <div style="text-align:center;padding:var(--space-3);background:var(--color-bg);border-radius:var(--radius-md);">
+                <div style="font-size:1.4rem;font-weight:700;color:var(--color-success);" id="stat-net-pnl">--</div>
+                <div style="font-size:0.7rem;color:var(--color-text-muted);margin-top:2px;">Net P&amp;L (USDT)</div>
+              </div>
+              <div style="text-align:center;padding:var(--space-3);background:var(--color-bg);border-radius:var(--radius-md);">
+                <div style="font-size:1.4rem;font-weight:700;color:var(--color-text);" id="stat-total-trades">--</div>
+                <div style="font-size:0.7rem;color:var(--color-text-muted);margin-top:2px;">Total Trades</div>
+              </div>
+              <div style="text-align:center;padding:var(--space-3);background:var(--color-bg);border-radius:var(--radius-md);">
+                <div style="font-size:1.4rem;font-weight:700;color:var(--color-text);" id="stat-profit-factor">--</div>
+                <div style="font-size:0.7rem;color:var(--color-text-muted);margin-top:2px;">Profit Factor</div>
+              </div>
             </div>
+            <button class="btn btn-sm" style="margin-top:var(--space-3);border:1px solid var(--color-border-muted);" onclick="window.CryptoBot.loadTokenStats()">Refresh Stats</button>
           </div>
         </div>
 
@@ -2131,9 +2169,11 @@ EMAIL_FROM=MCT &lt;a83c06001@smtp-brevo.com&gt;</pre>
        ======================================================== -->
   <div id="loading-screen" class="auth-wrapper">
     <div class="loading-overlay">
-      <div class="spinner" role="status">
+      <img src="/img/logo.jpeg" alt="MCT" width="56" height="56" style="border-radius:50%;margin-bottom:16px;opacity:0.9;">
+      <div class="spinner" role="status" style="margin-bottom:12px;">
         <span class="sr-only">Loading...</span>
       </div>
+      <div id="loading-msg" style="color:var(--color-text-muted);font-size:0.8rem;font-family:var(--font-mono);letter-spacing:0.02em;">Connecting...</div>
     </div>
   </div>
 
@@ -2169,7 +2209,7 @@ EMAIL_FROM=MCT &lt;a83c06001@smtp-brevo.com&gt;</pre>
     </div>
   </div>
 
-  <script src="/js/app.js?v=20260416" defer></script>
+  <script src="/js/app.js?v=20260419" defer></script>
   <!-- Email tab patch: inline so it works regardless of JS cache (HTML is never cached) -->
   <script>
     document.addEventListener('DOMContentLoaded', function() {
@@ -2198,6 +2238,7 @@ EMAIL_FROM=MCT &lt;a83c06001@smtp-brevo.com&gt;</pre>
       }, 100);
     });
   </script>
+  <script src="/js/i18n.js"></script>
   <script src="/js/cashwallet-fix.js" defer></script>
   <script>
     // Password show/hide toggle

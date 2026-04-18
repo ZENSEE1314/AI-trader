@@ -382,9 +382,10 @@
       const neutralEl = document.getElementById('kronos-neutral');
 
       if (countEl) countEl.textContent = `(${data.total} tokens — BTC/ETH/SOL/BNB)`;
-      if (bullEl) bullEl.textContent = `📈 ${data.longs} Bullish`;
-      if (bearEl) bearEl.textContent = `📉 ${data.shorts} Bearish`;
-      if (neutralEl) neutralEl.textContent = `➖ ${data.neutrals} Neutral`;
+      const _tr = window.i18n ? window.i18n.t : function(k) { return k; };
+      if (bullEl) bullEl.textContent = `📈 ${data.longs} ${_tr('kronos.bullish')}`;
+      if (bearEl) bearEl.textContent = `📉 ${data.shorts} ${_tr('kronos.bearish')}`;
+      if (neutralEl) neutralEl.textContent = `➖ ${data.neutrals} ${_tr('kronos.neutral')}`;
 
       if (!data.predictions || data.predictions.length === 0) {
         container.innerHTML = '<div style="grid-column:1/-1;text-align:center;color:var(--color-text-secondary);padding:40px;">No predictions yet — waiting for next cycle scan</div>';
@@ -3699,19 +3700,24 @@
     const btn = $('#pause-btn');
     if (!dot || !text || !btn) return;
 
+    const tr = window.i18n ? window.i18n.t.bind(window.i18n) : function(k) { return k; };
     if (isPaused) {
       dot.style.background = 'var(--color-danger)';
-      text.textContent = 'Bot Paused';
+      text.textContent = tr('pause.paused');
+      text.setAttribute('data-i18n', 'pause.paused');
       text.style.color = 'var(--color-danger)';
-      btn.textContent = 'Resume Bot';
+      btn.textContent = tr('pause.resume');
+      btn.setAttribute('data-i18n', 'pause.resume');
       btn.style.background = 'var(--color-success)';
       btn.style.borderColor = 'var(--color-success)';
       btn.style.color = '#fff';
     } else {
       dot.style.background = 'var(--color-success)';
-      text.textContent = 'Bot Active';
+      text.textContent = tr('pause.active');
+      text.setAttribute('data-i18n', 'pause.active');
       text.style.color = 'var(--color-success)';
-      btn.textContent = 'Pause Bot';
+      btn.textContent = tr('pause.pause');
+      btn.setAttribute('data-i18n', 'pause.pause');
       btn.style.background = '';
       btn.style.borderColor = 'var(--color-danger)';
       btn.style.color = 'var(--color-danger)';
@@ -3720,7 +3726,7 @@
 
   async function togglePause() {
     const btn = $('#pause-btn');
-    const isPaused = btn.textContent.trim() === 'Resume Bot';
+    const isPaused = btn.getAttribute('data-i18n') === 'pause.resume';
     const action = isPaused ? 'resume' : 'pause';
     if (!confirm(`Are you sure you want to ${action} the bot? ${isPaused ? 'Trading will resume and the weekly timer will continue.' : 'No new trades will be opened and the weekly timer will pause.'}`)) return;
 

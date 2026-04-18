@@ -1349,54 +1349,16 @@ function detectRangeBounce(candles15m, candles1m) {
   return null;
 }
 
-// ── MCT Session Windows (from PDF strategy) ────────────────
-// Only trade during the 3 institutional opening windows.
-// Outside these windows: institutions are not active, moves are unreliable.
-//
-// Asia-Pacific:  23:00–02:00 UTC  (7:00–10:00 AM SGT)
-// European:      07:00–10:00 UTC  (3:00–6:00 PM SGT)
-// U.S.:          12:00–16:00 UTC  (8:00 PM–12:00 AM SGT)
+// ── Session / Timing — DISABLED: bot trades 24/7 on signal only ─
+// All session windows and avoid-hour filters removed per user instruction.
+// Signal quality (score) is the only gate — no time-based restrictions.
 
-const SESSION_WINDOWS = [
-  { name: 'Asia',   startH: 23, endH: 2  },  // wraps midnight
-  { name: 'Europe', startH: 7,  endH: 10 },
-  { name: 'US',     startH: 12, endH: 16 },
-];
-
-// Hours to AVOID entering (per PDF): "Avoid entries at 8am, 12pm, 4pm, and 8pm UTC"
-// Only the ±2min window around those exact hours is blocked (tight buffer, not whole minute-marks).
-const AVOID_HOURS_UTC = new Set([8, 12, 16, 20]);
-
-function getActiveSession() {
-  const now = new Date();
-  const utcH = now.getUTCHours();
-  for (const win of SESSION_WINDOWS) {
-    if (win.startH > win.endH) {
-      // Wraps midnight (Asia: 23–02)
-      if (utcH >= win.startH || utcH < win.endH) return win;
-    } else {
-      if (utcH >= win.startH && utcH < win.endH) return win;
-    }
-  }
-  return null; // outside all windows
-}
-
-// NOTE: Only block the exact avoid-hour ±2min window. Removed per-minute blackout
-// (00/15/30/45) — it was blocking too many valid entries during active sessions.
-function isAvoidTime() {
-  const now  = new Date();
-  const utcH = now.getUTCHours();
-  const utcM = now.getUTCMinutes();
-  return AVOID_HOURS_UTC.has(utcH) && utcM < 2; // only first 2 min of those hours
-}
-
-// isSessionOpenBlackout kept for legacy exports — now always returns false
-function isSessionOpenBlackout() { return false; }
-
-// True whenever we're not in an avoid-hour window (session no longer gates this)
-function isGoodTradingSession() {
-  return !isAvoidTime();
-}
+// NOTE: kept as stubs so legacy imports/exports don't break
+const SESSION_WINDOWS = [];
+function getActiveSession()      { return null;  } // always "outside session"
+function isAvoidTime()           { return false; } // never avoid
+function isSessionOpenBlackout() { return false; } // never blocked
+function isGoodTradingSession()  { return true;  } // always good
 
 // ── Daily Stats — Consecutive Loss Guard Only ───────────────
 // No hard trade count limit — bot trades whenever a valid signal appears.
@@ -1526,9 +1488,57 @@ function detectSwings(klines, len) {
   return swings;
 }
 
+// ── Strategy 8: VWAP Rejection ────────────────────────────
+// Detects price poking through VWAP then closing back on the other side.
+// SHORT: 15m candle high > VWAP but close < VWAP (bearish rejection wick above VWAP)
+// LONG:  15m candle low  < VWAP but close > VWAP (bullish rejection wick below VWAP)
+// Entry: current 1m close after the rejection candle forms.
+// SL: beyond the tip of the rejection wick + 0.5 × ATR buffer.
+
+function detectVwapRejection(parsed15, vwapVal, parsed1) {
+  if (!vwapVal || parsed15.length < 10 || parsed1.length < 1) return null;
+  const atr = calcATR(parsed15);
+  if (!atr) return null;
+
+  // Check last 3 completed 15m candles (exclude the currently forming one)
+  const lookback = parsed15.slice(-4, -1);
+
+  for (let i = lookback.length - 1; i >= 0; i--) {
+    const c = lookback[i];
+    const body   = bodySize(c);
+    const range  = totalRange(c);
+    if (range === 0 || body === 0) continue;
+
+    // SHORT: wick pokes above VWAP, close back below — bearish rejection
+    if (c.high > vwapVal && c.close < vwapVal && isRedCandle(c)) {
+      const wickAbove = c.high - Math.max(c.open, c.close);
+      // Wick above VWAP must be at least 50% of body (meaningful rejection)
+      if (wickAbove < body * 0.5) continue;
+      const sl = c.high + atr * 0.5;
+      const last1m = parsed1[parsed1.length - 1];
+      const entryPrice = last1m.close;
+      // Confirm entry is still below VWAP — don't chase if price recovered
+      if (entryPrice >= vwapVal * 1.001) continue;
+      return { direction: 'SHORT', setup: 'VWAP_REJECTION', entryPrice, sl, vwap: vwapVal };
+    }
+
+    // LONG: wick pokes below VWAP, close back above — bullish rejection
+    if (c.low < vwapVal && c.close > vwapVal && isGreenCandle(c)) {
+      const wickBelow = Math.min(c.open, c.close) - c.low;
+      if (wickBelow < body * 0.5) continue;
+      const sl = c.low - atr * 0.5;
+      const last1m = parsed1[parsed1.length - 1];
+      const entryPrice = last1m.close;
+      if (entryPrice <= vwapVal * 0.999) continue;
+      return { direction: 'LONG', setup: 'VWAP_REJECTION', entryPrice, sl, vwap: vwapVal };
+    }
+  }
+  return null;
+}
+
 // ── Analyze Single Coin ────────────────────────────────────
 
-async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg = {}, btcTrend = 'neutral', outsideSession = false) {
+async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg = {}, btcTrend = 'neutral') {
   const symbol = ticker.symbol;
   const price = parseFloat(ticker.lastPrice);
 
@@ -1580,6 +1590,7 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
   // "If price > OP AND > VWAP → look LONG only. If < OP AND < VWAP → look SHORT only."
   // Opening Price (OP) = first 15m candle open of the UTC day
   let opBias = 'neutral';
+  let vwapVal = null; // hoisted — used by VWAP_REJECTION strategy below
   {
     const now = new Date();
     const dayStartMs = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
@@ -1588,7 +1599,6 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     const opPrice = todayCandles.length > 0 ? todayCandles[0].open : null;
 
     // Simple VWAP approximation from today's 15m candles
-    let vwapVal = null;
     if (todayCandles.length > 0) {
       let cumTV = 0, cumV = 0;
       for (const c of todayCandles) {
@@ -1906,6 +1916,36 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     }
   } // end RANGE_BOUNCE gate
 
+  // Strategy 8: VWAP Rejection — wick through VWAP, close back on rejection side
+  if (!enabledStrategies || enabledStrategies.VWAP_REJECTION !== false) {
+    const vrej = detectVwapRejection(parsed15, vwapVal, parsed1);
+    if (vrej) {
+      const slDist = Math.abs(vrej.entryPrice - vrej.sl) / vrej.entryPrice;
+      const atr15  = calcATR(parsed15);
+      const tpDist = atr15 > 0 ? (atr15 * 2.0) / vrej.entryPrice : slDist * 2;
+      const tpPrice = vrej.direction === 'LONG'
+        ? vrej.entryPrice * (1 + tpDist)
+        : vrej.entryPrice * (1 - tpDist);
+      const rr = slDist > 0 ? tpDist / slDist : 1.5;
+
+      if (rr >= 1.2 && slDist > 0.001 && slDist < 0.05) {
+        signals.push({
+          symbol, direction: vrej.direction, price: vrej.entryPrice,
+          lastPrice: price,
+          sl: vrej.sl,
+          tp1: tpPrice,
+          tp2: vrej.direction === 'LONG' ? vrej.entryPrice * (1 + tpDist * 1.5) : vrej.entryPrice * (1 - tpDist * 1.5),
+          tp3: vrej.direction === 'LONG' ? vrej.entryPrice * (1 + tpDist * 2)   : vrej.entryPrice * (1 - tpDist * 2),
+          slDist, rr: Math.round(rr * 10) / 10,
+          setup: 'VWAP_REJECTION',
+          setupName: `${vrej.direction}-VWAP-REJ`,
+          score: 7, // solid base — VWAP is a high-confluence level
+          vwap: vrej.vwap,
+        });
+      }
+    }
+  } // end VWAP_REJECTION gate
+
   if (!signals.length) return null;
 
   // Apply confluence bonuses + global filters to all signals
@@ -1948,15 +1988,6 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     if ((opBias === 'bullish' && sig.direction === 'LONG') ||
         (opBias === 'bearish' && sig.direction === 'SHORT')) {
       sig.score += 3;
-    }
-
-    // Session bonus/penalty — in-session = institutional flow, out-of-session = softer market
-    const sess = getActiveSession();
-    if (sess) {
-      sig.session = sess.name;
-      sig.score  += 2; // in-session bonus: institutional activity = higher quality moves
-    } else if (outsideSession && !sig.isRangeSetup) {
-      sig.score -= 1; // small penalty for off-hours trend trades — range bounces exempt
     }
 
     // ── POSITION QUALITY: buy low, sell high — don't chase ──
@@ -2085,8 +2116,9 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
 
     // Dynamic ATR-based SL: use ATR as MINIMUM distance — give room to breathe
     // Range setups keep their SL exactly at the range boundary — ATR doesn't apply
+    // 1.5× ATR (was 1.2×): extra buffer so normal candle wicks don't clip the SL
     if (atr15 > 0 && !sig.isRangeSetup) {
-      const atrSl = sig.direction === 'LONG' ? sig.price - atr15 * 1.2 : sig.price + atr15 * 1.2;
+      const atrSl = sig.direction === 'LONG' ? sig.price - atr15 * 1.5 : sig.price + atr15 * 1.5;
       // Use ATR SL if it's WIDER than strategy SL (more room = fewer stop-outs on noise)
       if (sig.direction === 'LONG' && atrSl < sig.sl) sig.sl = atrSl;
       if (sig.direction === 'SHORT' && atrSl > sig.sl) sig.sl = atrSl;
@@ -2163,23 +2195,6 @@ async function scanSMC(log, opts = {}) {
     log(`Liquidity Engine: ${limits.reason}. Stopped trading.`);
     bLog.scan(limits.reason);
     return [];
-  }
-
-  // Check avoid-hour window (brief blackout around 08/12/16/20 UTC)
-  const avoidTrend = isAvoidTime();
-  if (avoidTrend) {
-    bLog.scan('Avoid-hour window — brief pause, resuming next cycle.');
-  }
-
-  const activeSession = getActiveSession();
-  const outsideSession = !activeSession;
-
-  // Outside session: all strategies still run but get a score penalty in the signal filter.
-  // Previously blocked entirely (15h/day with no trades). Now always scan, reward in-session signals.
-  if (outsideSession) {
-    bLog.scan('Outside institutional session — strategies active with reduced score bonus (Asia 23-02 / Europe 07-10 / US 12-16 UTC).');
-  } else {
-    bLog.scan(`Active session: ${activeSession.name} (${activeSession.startH}:00–${activeSession.endH}:00 UTC)`);
   }
 
   // Load scan list from DB: union of all enabled user watchlists + admin global tokens.
@@ -2260,10 +2275,9 @@ async function scanSMC(log, opts = {}) {
     }
   } catch (_) { /* BTC fetch failed — continue with neutral */ }
 
-  const sessionTag = activeSession ? activeSession.name : 'AI-override';
   const dailyLimit = getDailyTradeLimit();
   const symbolSummary = Object.entries(dailyStats.bySymbol).map(([s, st]) => `${s.replace('USDT','')}=${st.trades}t/${st.consecutiveLosses}L`).join(' ') || 'none yet';
-  bLog.scan(`Session=${sessionTag} | BTC trend=${btcTrend} | Quantum combo=${comboName} (${activeCombo}) | ${topCoins.length} coins | today: ${symbolSummary}`);
+  bLog.scan(`24/7 | BTC trend=${btcTrend} | Quantum combo=${comboName} (${activeCombo}) | ${topCoins.length} coins | today: ${symbolSummary}`);
 
   const results = [];
   let analyzed = 0;
@@ -2282,9 +2296,8 @@ async function scanSMC(log, opts = {}) {
       continue;
     }
 
-    // All strategies run at all hours. Session status is passed to analyzeCoin
-    // so in-session signals get score bonuses; outside-session get small penalty.
-    const signal = await analyzeCoin(ticker, params, enabledStrategies, bestParams, btcTrend, outsideSession);
+    // Bot runs 24/7 — no time restrictions. Signal score is the only gate.
+    const signal = await analyzeCoin(ticker, params, enabledStrategies, bestParams, btcTrend);
     if (signal) signal.comboId = activeCombo;
     analyzed++;
 

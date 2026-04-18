@@ -1,8 +1,83 @@
 {
-  "version": "1.0.4",
+  "version": "1.1.5",
   "name": "MCT AI Trader",
-  "released": "2026-04-18",
+  "released": "2026-04-19",
   "changelog": [
+    {
+      "version": "1.1.5",
+      "tag": "v1.1.5",
+      "date": "2026-04-19",
+      "label": "24/7 trading + VWAP Rejection strategy",
+      "changes": [
+        "Remove ALL time restrictions — bot scans and trades 24/7 based purely on signal score",
+        "Removed: SESSION_WINDOWS, AVOID_HOURS_UTC, getActiveSession(), isAvoidTime() logic",
+        "Removed: session score bonus (+2 in-session) and penalty (-1 outside session)",
+        "Removed: outsideSession parameter from analyzeCoin()",
+        "scanSMC log now shows '24/7' instead of session name",
+        "Add Strategy 8: VWAP Rejection — detects price poking through VWAP then closing back",
+        "VWAP SHORT: 15m candle high > VWAP, close < VWAP, rejection wick ≥ 50% of body",
+        "VWAP LONG: 15m candle low < VWAP, close > VWAP, rejection wick ≥ 50% of body",
+        "SL: beyond wick tip + 0.5×ATR buffer. TP: 2×ATR dynamic target (RR ~1:2)",
+        "VWAP hoisted to function scope so both bias check and rejection strategy share it"
+      ]
+    },
+    {
+      "version": "1.1.4",
+      "tag": "v1.1.4",
+      "date": "2026-04-19",
+      "label": "Fix SL back to margin-based (30% of trade), keep price-based trailing",
+      "changes": [
+        "SL: always 30% from entry PRICE regardless of leverage (was SL_PCT/leverage = 0.3% at 100x, now capped at liquidation guard 80% of liq distance)",
+        "At 20x (BNB/SOL): SL capped at 4% from entry (80% of 5% liq distance) — was 1.5%",
+        "At 100x (BTC/ETH): SL capped at 0.8% from entry (80% of 1% liq distance) — was 0.3%",
+        "Trailing SL: rewritten to price-based tiers (no leverage conversion)",
+        "Trailing rule: first fires at +30% price gain → lock +10% above entry",
+        "Every +15% more price gain → add +10% to the locked SL",
+        "Gap between current price and trailing SL: always ~20% — much more breathing room",
+        "Candle-low trail (15m) unchanged — still provides early locking during normal moves"
+      ]
+    },
+    {
+      "version": "1.1.2",
+      "tag": "v1.1.2",
+      "date": "2026-04-19",
+      "label": "Fix BNB/SOL defaulting to 100x leverage — root cause of tight SL",
+      "changes": [
+        "Bug: getTokenLeverage() fallback (priority 4) put BNB and SOL in HIGH_PRICE_TOKENS with BTC/ETH → all defaulted to 100x when no DB setting existed",
+        "At 100x: BNB SL = 0.30/100 = 0.3% = $1.80 at $600 BNB — clipped by normal candle wicks",
+        "Fix: explicit per-symbol defaults — BTC/ETH → 100x, BNB/SOL → 20x, matches admin UI token card labels",
+        "At 20x: BNB SL = 0.30/20 = 1.5% = $9 — survives normal volatility",
+        "Price-based fallback for other tokens updated: ≥$1000 → 100x, ≥$100 → 50x, else → 20x"
+      ]
+    },
+    {
+      "version": "1.1.1",
+      "tag": "v1.1.1",
+      "date": "2026-04-19",
+      "label": "Fix SL + trailing SL too near at high leverage",
+      "changes": [
+        "Add MIN_SL_PRICE_PCT = 0.005 (0.5%) — hard floor on SL distance from entry regardless of leverage",
+        "At 100x: SL was 0.3% (too tight) → now guaranteed minimum 0.5% ($450 on BTC $90k)",
+        "Applied to both owner account entry and all user account entries",
+        "Trailing tier gap widened: 4% → 8% margin between trigger and lock-in level",
+        "Trailing SL now stays further behind current price, reducing premature stop-outs on retracements",
+        "Scanner ATR SL multiplier: 1.2× → 1.5× — signal-level SL gets more breathing room vs candle wicks"
+      ]
+    },
+    {
+      "version": "1.1.0",
+      "tag": "v1.1.0",
+      "date": "2026-04-19",
+      "label": "Multi-language support — EN / 中文 / BM",
+      "changes": [
+        "Add i18n system: client-side translation dictionary for English, Chinese Simplified, Bahasa Malaysia",
+        "Language switcher dropdown in app header (flag + label, persists across sessions via localStorage)",
+        "data-i18n attributes on all static UI elements: nav tabs, table headers, period filters, empty states, buttons, labels",
+        "Dynamic UI (pause bot status, Kronos bullish/bearish/neutral counts) uses i18n.t() at render time",
+        "togglePause state detection rewritten to use data-i18n attribute (not textContent) — language-safe",
+        "CSS: .i18n-switcher, .i18n-dropdown styles added to style.css"
+      ]
+    },
     {
       "version": "1.0.4",
       "tag": "v1.0.4",

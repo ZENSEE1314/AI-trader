@@ -431,6 +431,8 @@ router.put('/users/:id/block', async (req, res) => {
 });
 
 // Edit user wallet balance
+// NOTE: UI displays cash_wallet + commission_earned. We update cash_wallet — the
+// spendable balance. commission_earned is a read-only running total and stays intact.
 router.put('/users/:id/wallet', async (req, res) => {
   try {
     const { amount, reason } = req.body;
@@ -439,15 +441,17 @@ router.put('/users/:id/wallet', async (req, res) => {
     const parsedAmount = parseFloat(amount);
     if (isNaN(parsedAmount)) return res.status(400).json({ error: 'Invalid amount' });
 
-    // Get current balance
-    const user = await query('SELECT wallet_balance, email FROM users WHERE id = $1', [req.params.id]);
+    // Get current displayed balance (cash_wallet + commission_earned) and email
+    const user = await query('SELECT cash_wallet, commission_earned, email FROM users WHERE id = $1', [req.params.id]);
     if (!user.length) return res.status(404).json({ error: 'User not found' });
 
-    const currentBalance = parseFloat(user[0].wallet_balance);
+    const currentBalance = parseFloat(user[0].cash_wallet) + parseFloat(user[0].commission_earned || 0);
     const diff = parsedAmount - currentBalance;
 
-    // Update balance
-    await query('UPDATE users SET wallet_balance = $1 WHERE id = $2', [parsedAmount, req.params.id]);
+    // Update cash_wallet to match the target displayed balance
+    // target cash_wallet = parsedAmount - commission_earned (keeps displayed total correct)
+    const newCashWallet = parsedAmount - parseFloat(user[0].commission_earned || 0);
+    await query('UPDATE users SET cash_wallet = $1 WHERE id = $2', [newCashWallet, req.params.id]);
 
     // Log the adjustment
     if (diff !== 0) {

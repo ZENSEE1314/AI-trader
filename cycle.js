@@ -62,39 +62,42 @@ let circuitBreakerUntil = 0;
 let lastBitunixSync = 0;
 
 // ── SL/TP Config ──────────────────────────────────────────
-// Fixed % of margin — same dollar result at any leverage
-// $100 trade → lose max $30, target $45+, trailing lets winners ride
-const SL_PCT = 0.30;   // -30% of margin = max loss
-const TP_PCT = 0.45;   // +45% of margin = target (trailing SL lets it go higher)
+// Capital $100 → trade $10 → SL = $3 (30% of the $10 margin).
+// In price terms: SL_PCT / leverage = 0.30 / 20 = 1.5% for BNB/SOL at 20x
+//                                   = 0.30 / 100 = 0.3% for BTC/ETH at 100x
+const SL_PCT = 0.30;   // 30% of margin = max loss per trade
+const TP_PCT = 0.45;   // reference TP — trailing SL handles the actual exit
 
-// Trailing SL tiers: as profit grows, lock more profit
-// All values are % of MARGIN (capital), not price
 // Taker fee: 0.04% entry + 0.04% exit = 0.08% notional both legs
 const TAKER_FEE_BOTH_LEGS = 0.0008;
 
-// Profit tiers — capital % (margin). Fee floor applied dynamically in calculateTrailingStep.
-// First thing that fires: SL = fees covered + 1% profit so you NEVER lose on a winner.
+// Trailing SL tiers — all in PRICE % from entry (no leverage conversion).
+// Rule: first fires at +30% price gain → lock +10% above entry.
+//       every +15% more price gain → add another +10% to the lock.
+// Gap between current price and trailing SL is always ~20% price,
+// giving trades room to breathe on normal retracements.
+//
+// trigger = price % gain from entry needed to activate
+// lock    = price % above entry to move SL to
 const TRAILING_TIERS = [
-  { trigger: 0.10, sl: 0.06  }, // +10% → lock 6%
-  { trigger: 0.20, sl: 0.14  }, // +20% → lock 14%
-  { trigger: 0.30, sl: 0.22  }, // +30% → lock 22%
-  { trigger: 0.45, sl: 0.37  }, // +45% → lock 37%
-  { trigger: 0.60, sl: 0.52  }, // +60% → lock 52%
-  { trigger: 0.80, sl: 0.72  }, // +80% → lock 72%
-  { trigger: 1.00, sl: 0.92  }, // +100% → lock 92%
+  { trigger: 0.30, lock: 0.10 }, // +30% price → SL at +10% above entry
+  { trigger: 0.45, lock: 0.20 }, // +45% price → SL at +20% above entry
+  { trigger: 0.60, lock: 0.30 }, // +60% price → SL at +30% above entry
+  { trigger: 0.75, lock: 0.40 }, // +75% price → SL at +40% above entry
+  { trigger: 0.90, lock: 0.50 }, // +90% price → SL at +50% above entry
+  { trigger: 1.05, lock: 0.60 }, // +105% price → SL at +60% above entry
+  { trigger: 1.20, lock: 0.70 }, // +120% price → SL at +70% above entry
+  { trigger: 1.35, lock: 0.80 }, // +135% price → SL at +80% above entry
+  { trigger: 1.50, lock: 0.90 }, // +150% price → SL at +90% above entry
 ];
-// Beyond 100%: trail with 8% gap
-const TRAIL_HIGH_START = 1.00;
-const TRAIL_HIGH_STEP = 0.10;
-const TRAIL_HIGH_GAP = 0.08;
 
 function getTrailingSLConfig(leverage) {
   return {
     INITIAL_SL_PCT: SL_PCT / leverage,
-    FIRST_TRIGGER: 0.10 / leverage,   // Trail starts at +10% margin
-    FIRST_SL: 0.005 / leverage,       // Lock at +0.5% margin
-    STEP_TRIGGER: 0.10 / leverage,    // Each step = +10% margin
-    STEP_SL: 0.10 / leverage,         // Each step locks +10% more
+    FIRST_TRIGGER: 0.30,  // Trail starts at +30% price gain from entry
+    FIRST_SL: 0.10,       // Lock at +10% above entry
+    STEP_TRIGGER: 0.15,   // Every +15% more price → add +10% to lock
+    STEP_SL: 0.10,
   };
 }
 
@@ -143,10 +146,17 @@ async function getTokenLeverage(symbol, apiKeyId = null, price = 0) {
       }
     }
 
-    // Priority 4: No explicit config — use default based on price tier
-    const HIGH_PRICE_TOKENS = new Set(['BTCUSDT','ETHUSDT','BNBUSDT','SOLUSDT','AAVEUSDT','MKRUSDT','BCHUSDT','LTCUSDT','AVAXUSDT','LINKUSDT']);
-    if (HIGH_PRICE_TOKENS.has(symbol) || price >= 100) return 100;
-    if (price >= 10) return 50;
+    // Priority 4: No explicit config — use sensible defaults by symbol/price
+    // BTC and ETH: 100x (high liquidity, tight spreads, handles it)
+    // BNB, SOL: 20x — volatile mid-cap, 100x gives 0.3% SL which gets clipped by normal wicks
+    const HUNDRED_X_TOKENS = new Set(['BTCUSDT', 'ETHUSDT']);
+    const TWENTY_X_TOKENS  = new Set(['BNBUSDT', 'SOLUSDT']);
+    if (HUNDRED_X_TOKENS.has(symbol)) return 100;
+    if (TWENTY_X_TOKENS.has(symbol))  return 20;
+    // Price-based fallback for any other token
+    if (price >= 1000) return 100;
+    if (price >= 100)  return 50;
+    if (price >= 10)   return 20;
     return 20;
   } catch (err) {
     console.error('Error getting token leverage:', err.message);
@@ -411,57 +421,54 @@ async function calcCandleTrailSl(symbol, isLong, currentSlPrice) {
   }
 }
 
+// calculateTrailingStep — price-based trailing SL.
+// leverage param kept for signature compatibility but no longer used in logic.
+// lastStep: the last lock % applied (price % above entry), to avoid going backwards.
+//
+// Tier logic (all in price % from entry):
+//   +30% price → lock SL at +10% above entry   (gap: 20%)
+//   +45% price → lock SL at +20% above entry   (gap: 25%)
+//   +60% price → lock SL at +30% above entry   (gap: 30%)
+//   ... every +15% price gain adds +10% to the lock
+//
+// Candle-low trail (separate function) handles the earlier locking during normal moves.
 function calculateTrailingStep(entryPrice, currentPrice, isLong, lastStep, leverage = 20, userTrailStepPct = 0) {
   const pricePct = isLong
     ? (currentPrice - entryPrice) / entryPrice
     : (entryPrice - currentPrice) / entryPrice;
 
-  // Convert price movement to margin/capital % (multiply by leverage)
-  const capitalPct = pricePct * leverage;
-
-  let bestSlCapital = null;
+  let bestLockPct = null;
 
   if (userTrailStepPct > 0) {
-    // User custom trailing step (in price %)
+    // User custom trailing: fire at stepPct, lock at half the step, add step each time
     const stepPct = userTrailStepPct / 100;
-    const firstTrigger = stepPct;
-    if (pricePct >= firstTrigger) {
-      bestSlCapital = stepPct * 0.5 * leverage;
-      const stepsAbove = Math.floor((pricePct - firstTrigger + 1e-10) / stepPct);
-      if (stepsAbove > 0) bestSlCapital += stepsAbove * stepPct * 0.5 * leverage;
+    if (pricePct >= stepPct) {
+      const stepsAbove = Math.floor((pricePct + 1e-10) / stepPct);
+      bestLockPct = (stepsAbove - 1) * stepPct; // lock at one full step behind current
     }
   } else {
-    // Fixed tiers: all in margin % terms
+    // Fixed tiers: all in PRICE % (no leverage conversion)
     for (const tier of TRAILING_TIERS) {
-      if (capitalPct >= tier.trigger) bestSlCapital = tier.sl;
+      if (pricePct >= tier.trigger) bestLockPct = tier.lock;
     }
-    // Beyond 100% margin profit: trail with 8% gap
-    if (capitalPct >= TRAIL_HIGH_START) {
-      const stepsAbove = Math.floor((capitalPct - TRAIL_HIGH_START) / TRAIL_HIGH_STEP);
-      const highSl = TRAIL_HIGH_START + stepsAbove * TRAIL_HIGH_STEP - TRAIL_HIGH_GAP;
-      if (highSl > (bestSlCapital || 0)) bestSlCapital = highSl;
+    // Beyond last tier: continue adding 10% lock for every 15% gain
+    const lastTier = TRAILING_TIERS[TRAILING_TIERS.length - 1];
+    if (pricePct > lastTier.trigger) {
+      const stepsAbove = Math.floor((pricePct - lastTier.trigger) / 0.15);
+      const extraLock = lastTier.lock + stepsAbove * 0.10;
+      if (extraLock > (bestLockPct || 0)) bestLockPct = extraLock;
     }
   }
 
-  // Fee floor: once profit > fees+1%, SL must cover fees + 1% minimum
-  // Ensures you NEVER lose money on a trade that was profitable
-  const feesCapital = TAKER_FEE_BOTH_LEGS * leverage; // 0.08% × leverage
-  const feeFloorCap = feesCapital + 0.01;             // fees + 1% buffer
-  if (capitalPct >= feeFloorCap) {
-    if (bestSlCapital === null || feeFloorCap > bestSlCapital) bestSlCapital = feeFloorCap;
-  }
-
-  if (bestSlCapital === null) return null;
-
-  // Convert back to price % for SL placement
-  const bestSlPrice = bestSlCapital / leverage;
-  if (bestSlPrice <= lastStep) return null;
+  if (bestLockPct === null) return null;
+  // Never move SL backwards
+  if (bestLockPct <= lastStep) return null;
 
   const newSlPrice = isLong
-    ? entryPrice * (1 + bestSlPrice)
-    : entryPrice * (1 - bestSlPrice);
+    ? entryPrice * (1 + bestLockPct)
+    : entryPrice * (1 - bestLockPct);
 
-  return { stepped: true, newSlPrice, newLastStep: bestSlPrice };
+  return { stepped: true, newSlPrice, newLastStep: bestLockPct };
 }
 
 // ── PROFIT SPLIT: Credit 60% user, 40% platform fee ─────────
@@ -530,12 +537,12 @@ async function openTrade(client, pick, wallet) {
   const floorQ = (q) => Math.floor(q * Math.pow(10, qtyPrec)) / Math.pow(10, qtyPrec);
   const fmtP = (p) => parseFloat(p.toFixed(pricePrec));
 
-  // Fixed SL/TP: 30% margin loss, 45% margin target — same $ at any leverage
-  // SL price distance = 30% / leverage, TP price distance = 45% / leverage
+  // SL = 30% of margin. Capital $100 → trade $10 → SL = $3 if hit.
+  // In price terms: SL_PCT / leverage (e.g. 20x = 1.5%, 100x = 0.3%)
   let slPricePct = SL_PCT / leverage;
   const tpPricePct = TP_PCT / leverage;
 
-  // Liquidation guard: SL must be closer to entry than liquidation price
+  // Liquidation guard: SL must not exceed liquidation distance
   const maxSlPct = (1 / leverage) * 0.80;
   if (slPricePct > maxSlPct) {
     bLog.trade(`SL clamped: ${(slPricePct*100).toFixed(3)}% > liq limit ${(maxSlPct*100).toFixed(3)}% at ${leverage}x`);
@@ -577,7 +584,7 @@ async function openTrade(client, pick, wallet) {
   // Fee check: ensure TP profit covers fees
   const totalFees = notional * CONFIG.TAKER_FEE * 2;
   const tpProfit = notional * tpPricePct;
-  bLog.trade(`Size: ${(walletSizePct*100).toFixed(0)}% wallet=$${tradeUsdt.toFixed(2)} notional=$${notional.toFixed(2)} lev=${leverage}x margin=$${requiredMargin.toFixed(2)} | SL=-${(SL_PCT*100).toFixed(0)}%margin TP=+${(TP_PCT*100).toFixed(0)}%margin`);
+  bLog.trade(`Size: ${(walletSizePct*100).toFixed(0)}% wallet=$${tradeUsdt.toFixed(2)} notional=$${notional.toFixed(2)} lev=${leverage}x margin=$${requiredMargin.toFixed(2)} | SL=${(slPricePct*100).toFixed(2)}%price TP=${(tpPricePct*100).toFixed(2)}%price`);
   log(`Trade: ${sym} ${direction} lev=${leverage}x qty=${qty} notional=$${notional.toFixed(2)} margin=$${requiredMargin.toFixed(2)}`);
   if (tpProfit < totalFees * 1.5) {
     bLog.trade(`Trade rejected: TP profit $${tpProfit.toFixed(4)} < 1.5x fees $${(totalFees * 1.5).toFixed(4)}`);
@@ -601,7 +608,7 @@ async function openTrade(client, pick, wallet) {
       closePosition: 'true', workingType: 'MARK_PRICE',
     });
     slOk = true;
-    bLog.trade(`SL set at $${fmtPrice(initialSlPrice)} (-${(SL_PCT*100).toFixed(0)}% margin) | TP target $${fmtPrice(tp1)} (+${(TP_PCT*100).toFixed(0)}% margin) — trailing SL, no hard TP`);
+    bLog.trade(`SL set at $${fmtPrice(initialSlPrice)} (${(slPricePct*100).toFixed(2)}% from entry) | Trailing: starts at +30% price, locks +10% per +15% — trailing SL, no hard TP`);
   } catch (e) { bLog.error(`Owner SL algo failed: ${e.message}`); }
 
   if (!slOk) {
@@ -1439,11 +1446,12 @@ async function executeForAllUsers(pick) {
         const userTrailStep = parseFloat(key.trailing_sl_step) || 1.2;
         const userMaxLoss = parseFloat(key.max_loss_usdt) || 0;
 
-        // Fixed SL/TP: 30% margin loss, 45% margin win — same at any leverage
+        // SL = 30% of margin. Capital $100 → trade $10 → SL = $3.
+        // Price distance: SL_PCT / leverage (20x = 1.5%, 100x = 0.3%)
         let slPricePct = SL_PCT / userLev;
         const tpPricePct = TP_PCT / userLev;
 
-        // Liquidation guard: SL must be closer to entry than liquidation price
+        // Liquidation guard
         const maxSlPct = (1 / userLev) * 0.80;
         if (slPricePct > maxSlPct) {
           userLog.trade(`User ${key.email}: SL clamped from ${(slPricePct*100).toFixed(3)}% to ${(maxSlPct*100).toFixed(3)}% (liq guard at ${userLev}x)`);
@@ -1473,7 +1481,7 @@ async function executeForAllUsers(pick) {
             return;
           }
 
-          userLog.trade(`User ${key.email} Binance: wallet=$${rawWallet.toFixed(2)} pos=${openPosCount}/${maxPos} lev=x${userLev} SL=-${(SL_PCT*100).toFixed(0)}%margin TP=+${(TP_PCT*100).toFixed(0)}%margin`);
+          userLog.trade(`User ${key.email} Binance: wallet=$${rawWallet.toFixed(2)} pos=${openPosCount}/${maxPos} lev=x${userLev} SL=${(slPricePct*100).toFixed(2)}%price TP=${(tpPricePct*100).toFixed(2)}%price`);
 
           // Range Bounce: use signal's range-wall SL + hard TP at opposite wall
           // Other strategies: fixed 30% margin SL, no hard TP (trailing handles exit)
