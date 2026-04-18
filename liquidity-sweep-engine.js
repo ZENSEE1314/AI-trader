@@ -1414,12 +1414,10 @@ function isGoodTradingSession() {
   return getActiveSession() !== null;
 }
 
-// ── Daily Stats — Per-Symbol ────────────────────────────────
-// Each coin gets its own independent daily trade limit so one active
-// token doesn't block the other three from trading.
-// Max 2 trades per coin per weekday, 1 per coin per weekend.
-// Stop a coin after 2 consecutive losses on THAT coin.
-// Global hard stop: 4+ consecutive losses across ALL coins combined.
+// ── Daily Stats — Consecutive Loss Guard Only ───────────────
+// No hard trade count limit — bot trades whenever a valid signal appears.
+// Safety: pause a coin after 3 consecutive losses on THAT coin.
+// Hard global stop: 6+ consecutive losses across ALL coins combined.
 
 const dailyStats = {
   date: '',
@@ -1436,10 +1434,8 @@ function getTradingDay() {
   return d.toISOString().slice(0, 10);
 }
 
-function getDailyTradeLimit() {
-  const dow = new Date().getUTCDay(); // 0=Sun, 6=Sat
-  return (dow === 0 || dow === 6) ? 1 : 2; // 1 per coin on weekends, 2 per coin on weekdays
-}
+// kept for log display — no longer used as a hard limit
+function getDailyTradeLimit() { return Infinity; }
 
 function _resetIfNewDay() {
   const tradingDay = getTradingDay();
@@ -1458,7 +1454,6 @@ function _symbolStats(symbol) {
   return dailyStats.bySymbol[symbol];
 }
 
-// symbol is required — pass the coin being traded (e.g. 'BNBUSDT')
 function recordDailyTrade(isWin, symbol = 'UNKNOWN') {
   const st = _symbolStats(symbol);
   st.trades++;
@@ -1471,38 +1466,25 @@ function recordDailyTrade(isWin, symbol = 'UNKNOWN') {
   }
 }
 
-// symbol = specific coin to check; omit to check if ANY coin can still trade
+// symbol = specific coin to check; omit for top-level scan gate
 function checkDailyLimits(symbol = null) {
   _resetIfNewDay();
-  const limit = getDailyTradeLimit();
 
-  // Hard global stop: 4+ consecutive losses across all coins combined
-  if (dailyStats.globalConsecLosses >= 4) {
+  // Hard global stop: 6+ consecutive losses across all coins combined
+  if (dailyStats.globalConsecLosses >= 6) {
     return { canTrade: false, reason: `${dailyStats.globalConsecLosses} consecutive losses across all coins — stopped for today. Resets at 7am UTC.` };
   }
 
   if (symbol) {
-    // Per-coin check
     const st = _symbolStats(symbol);
-    if (st.consecutiveLosses >= 2) {
+    // Pause that specific coin after 3 consecutive losses — others keep trading
+    if (st.consecutiveLosses >= 3) {
       return { canTrade: false, reason: `${symbol}: ${st.consecutiveLosses} consecutive losses — paused for today` };
-    }
-    if (st.trades >= limit) {
-      return { canTrade: false, reason: `${symbol}: daily limit reached (${st.trades}/${limit})` };
     }
     return { canTrade: true };
   }
 
-  // No symbol: true only when every watched coin is already at its limit
-  // (used for top-level early-exit check before the per-coin scan loop)
-  const watchedCoins = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT'];
-  const allBlocked = watchedCoins.every(sym => {
-    const st = _symbolStats(sym);
-    return st.trades >= limit || st.consecutiveLosses >= 2;
-  });
-  if (allBlocked) {
-    return { canTrade: false, reason: 'All 4 coins at daily limit or loss pause — nothing to trade today' };
-  }
+  // No symbol given: only block if global hard stop triggered
   return { canTrade: true };
 }
 
@@ -2294,8 +2276,8 @@ async function scanSMC(log, opts = {}) {
 
   const sessionTag = activeSession ? activeSession.name : 'AI-override';
   const dailyLimit = getDailyTradeLimit();
-  const symbolSummary = Object.entries(dailyStats.bySymbol).map(([s, st]) => `${s.replace('USDT','')}=${st.trades}/${dailyLimit}`).join(' ') || 'none yet';
-  bLog.scan(`Session=${sessionTag} | BTC trend=${btcTrend} | Quantum combo=${comboName} (${activeCombo}) | ${topCoins.length} coins | trades today: ${symbolSummary}`);
+  const symbolSummary = Object.entries(dailyStats.bySymbol).map(([s, st]) => `${s.replace('USDT','')}=${st.trades}t/${st.consecutiveLosses}L`).join(' ') || 'none yet';
+  bLog.scan(`Session=${sessionTag} | BTC trend=${btcTrend} | Quantum combo=${comboName} (${activeCombo}) | ${topCoins.length} coins | today: ${symbolSummary}`);
 
   const results = [];
   let analyzed = 0;
