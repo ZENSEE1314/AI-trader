@@ -180,16 +180,45 @@
 
   // ----- Auth -----
 
+  // Optimistic auth: if user was logged in before, keep showing the loading
+  // spinner instead of flashing the landing page while we verify the session.
+  // This eliminates the "just logo" screen on refresh for logged-in users.
+  const SESSION_KEY = 'mct_was_authed';
+
   async function checkSession() {
-    try {
+    const wasAuthed = sessionStorage.getItem(SESSION_KEY);
+
+    // Keep loading screen visible while we check — don't flash landing
+    if (!wasAuthed) {
+      // First-time or logged-out visitor: show landing immediately
+      // checkSession will hide it again if login succeeds
+    }
+
+    const attempt = async () => {
       const data = await api('GET', '/api/auth/me');
       state.user = data;
       els.userEmail.textContent = data.username || data.email;
       const adminTab = $('#admin-tab');
       if (adminTab) adminTab.classList.toggle('hidden', !data.is_admin);
+      sessionStorage.setItem(SESSION_KEY, '1');
       showSection('app');
       switchTab('dashboard');
+    };
+
+    try {
+      await attempt();
     } catch (err) {
+      // Server may still be warming up after a deploy — retry once after 2s
+      if (wasAuthed) {
+        try {
+          const msg = document.getElementById('loading-msg');
+          if (msg) msg.textContent = 'Server starting, retrying...';
+          await new Promise(r => setTimeout(r, 2000));
+          await attempt();
+          return;
+        } catch (_) {}
+      }
+      sessionStorage.removeItem(SESSION_KEY);
       console.log('checkSession failed:', err.message);
       showSection('landing');
     }
@@ -305,23 +334,29 @@
         ? `/api/dashboard/summary?period=${state.tradesPeriod}`
         : '/api/dashboard/summary';
 
-      // Phase 1: Load critical data in parallel (summary + trades render first)
-      const [summary, walletData, weeklyEarnings, cashData] = await Promise.all([
+      // Phase 1: Fast data — renders the dashboard immediately
+      // futures-wallet is intentionally excluded here (it calls exchanges = slow)
+      const [summary, weeklyEarnings, cashData] = await Promise.all([
         api('GET', summaryUrl),
-        api('GET', '/api/dashboard/futures-wallet').catch(() => ({ balance: 0, wallets: [] })),
         api('GET', '/api/dashboard/weekly-earnings').catch(() => null),
         api('GET', '/api/dashboard/cash-wallet').catch(() => null),
       ]);
       renderSummary(summary);
-      renderWallets(walletData);
       if (weeklyEarnings) renderWeeklyEarnings(weeklyEarnings);
       if (cashData) renderDashCashWallet(cashData);
 
-      // Phase 2: Non-critical data loads after first paint (doesn't block UI)
-      loadTrades();
-      loadSignalBoard();
-      loadPauseStatus();
-      loadKronosPredictions();
+      // Phase 2: Non-critical — deferred so Phase 1 paints first
+      // futures-wallet hits exchanges (slow), run it after UI is visible
+      setTimeout(() => {
+        api('GET', '/api/dashboard/futures-wallet')
+          .then(walletData => renderWallets(walletData))
+          .catch(() => renderWallets({ balance: 0, wallets: [] }));
+
+        loadTrades();
+        loadSignalBoard();
+        loadPauseStatus();
+        loadKronosPredictions();
+      }, 0);
     } catch (err) {
       showToast('Failed to load dashboard.', 'error');
     }
@@ -346,7 +381,7 @@
       const bearEl = document.getElementById('kronos-bear');
       const neutralEl = document.getElementById('kronos-neutral');
 
-      if (countEl) countEl.textContent = `(${data.total} tokens)`;
+      if (countEl) countEl.textContent = `(${data.total} tokens — BTC/ETH/SOL/BNB)`;
       if (bullEl) bullEl.textContent = `📈 ${data.longs} Bullish`;
       if (bearEl) bearEl.textContent = `📉 ${data.shorts} Bearish`;
       if (neutralEl) neutralEl.textContent = `➖ ${data.neutrals} Neutral`;
@@ -1211,16 +1246,32 @@
       const breakdown = dashWallet?.breakdown;
       const breakdownEl = $('#cw-breakdown');
       if (breakdownEl && breakdown) {
-        const topUps = parseFloat(breakdown.top_ups) || 0;
-        const refComm = parseFloat(breakdown.referral_commission) || 0;
-        const feesPaid = parseFloat(breakdown.fees_paid) || 0;
+        const topUps      = parseFloat(breakdown.top_ups) || 0;
+        const refComm     = parseFloat(breakdown.referral_commission) || 0;
+        const profitShare = parseFloat(breakdown.profit_shares) || 0;
+        const feesPaid    = parseFloat(breakdown.fees_paid) || 0;
         breakdownEl.innerHTML = `
-          <div style="font-size:0.78rem;color:var(--color-text-muted);margin-top:8px;line-height:1.6;">
-            <div>Top-ups: <span class="text-mono" style="color:var(--color-text);">$${topUps.toFixed(2)}</span></div>
-            <div>Referral commission: <span class="text-mono" style="color:var(--color-accent);">$${refComm.toFixed(2)}</span></div>
-            ${feesPaid > 0 ? `<div>Fees paid: <span class="text-mono" style="color:var(--color-danger);">-$${feesPaid.toFixed(2)}</span></div>` : ''}
+          <div style="font-size:0.82rem;color:var(--color-text-muted);margin-top:10px;line-height:2;border:1px solid var(--color-border-muted);border-radius:8px;padding:10px 14px;">
+            <div style="display:flex;justify-content:space-between;">
+              <span>Top-ups (deposited)</span>
+              <span class="text-mono" style="color:var(--color-text);">+$${topUps.toFixed(2)}</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;">
+              <span>Referral commissions</span>
+              <span class="text-mono" style="color:var(--color-accent);">+$${refComm.toFixed(2)}</span>
+            </div>
+            ${profitShare > 0 ? `
+            <div style="display:flex;justify-content:space-between;">
+              <span>Your 60% trade profits <span style="font-size:0.7rem;opacity:0.6;">(on exchange)</span></span>
+              <span class="text-mono" style="color:var(--color-success);">+$${profitShare.toFixed(2)}</span>
+            </div>` : ''}
+            ${feesPaid > 0 ? `
+            <div style="display:flex;justify-content:space-between;border-top:1px solid var(--color-border-muted);margin-top:4px;padding-top:4px;">
+              <span>Platform fees paid</span>
+              <span class="text-mono" style="color:var(--color-danger);">-$${feesPaid.toFixed(2)}</span>
+            </div>` : ''}
           </div>
-          <div style="font-size:0.7rem;color:var(--color-fg-subtle);margin-top:4px;">Your 60% profit stays in your exchange account</div>
+          <div style="font-size:0.7rem;color:var(--color-text-muted);margin-top:6px;">💡 Trade profits (60%) stay in your Binance/Bitunix account — shown above for reference only</div>
         `;
       }
 
@@ -1457,6 +1508,7 @@
     // Refresh admin data when switching tabs
     if (tab === 'earnings') loadAdmin();
     if (tab === 'email') checkEmailSmtp().catch(() => {});
+    if (tab === 'tokens') { loadTokenCardPrices(); loadTokenStats(); }
   }
 
   async function mcRefresh() {
@@ -2025,6 +2077,59 @@
         </tr>`;
       }).join('');
     } catch (err) { showToast(err.message, 'error'); }
+  }
+
+  // ── Strategy Token Picker ────────────────────────────────────
+
+  // Toggle a strategy token on/off (persists via global_token_settings ban flag)
+  async function toggleStrategyToken(symbol, strategy, enabled) {
+    try {
+      if (enabled) {
+        // Unban (enable) token
+        await api('POST', '/api/admin/token-board/add', { symbol });
+        await api('POST', '/api/admin/token-board/unban', { symbol }).catch(() => {});
+      } else {
+        // Ban (disable) token — scanner skips banned tokens
+        await api('POST', '/api/admin/token-board/ban', { symbol });
+      }
+      showToast(`${symbol.replace('USDT','')} ${enabled ? 'enabled' : 'disabled'} for ${strategy}`, enabled ? 'success' : 'info');
+    } catch (err) {
+      showToast(`Failed: ${err.message}`, 'error');
+    }
+  }
+
+  // Load live prices for token cards
+  async function loadTokenCardPrices() {
+    const symbols = ['BTCUSDT','ETHUSDT','SOLUSDT','BNBUSDT'];
+    for (const sym of symbols) {
+      try {
+        const res = await fetch(`https://fapi.binance.com/fapi/v1/ticker/price?symbol=${sym}`);
+        if (!res.ok) continue;
+        const d = await res.json();
+        const price = parseFloat(d.price);
+        const fmt = price >= 1000 ? '$' + price.toLocaleString('en-US',{maximumFractionDigits:2})
+                  : price >= 1   ? '$' + price.toFixed(2)
+                                 : '$' + price.toFixed(6);
+        // Update all cards for this symbol (could appear in multiple strategy grids)
+        document.querySelectorAll(`[id$="price-${sym}"]`).forEach(el => { el.textContent = fmt; });
+      } catch {}
+    }
+  }
+
+  // Load win-rate stats from closed trades
+  async function loadTokenStats() {
+    try {
+      const stats = await api('GET', '/api/admin/stats').catch(() => null);
+      if (!stats) return;
+      const wr = stats.winRate ?? stats.win_rate;
+      const net = stats.netPnl ?? stats.net_pnl;
+      const total = stats.totalTrades ?? stats.total_trades;
+      const pf = stats.profitFactor ?? stats.profit_factor;
+      if (wr    != null) { const el = document.getElementById('stat-win-rate');      if (el) el.textContent = parseFloat(wr).toFixed(1) + '%'; }
+      if (net   != null) { const el = document.getElementById('stat-net-pnl');       if (el) { el.textContent = '$' + parseFloat(net).toFixed(2); el.style.color = parseFloat(net) >= 0 ? 'var(--color-success)' : 'var(--color-danger)'; } }
+      if (total != null) { const el = document.getElementById('stat-total-trades');  if (el) el.textContent = total; }
+      if (pf    != null) { const el = document.getElementById('stat-profit-factor'); if (el) el.textContent = parseFloat(pf).toFixed(2); }
+    } catch {}
   }
 
   async function adminPopulateTop50() {
@@ -3743,6 +3848,7 @@
     checkEmailSmtp, sendTestEmail, sendBroadcastEmail, emailSetMode,
     loadSignalBoard, toggleWatch, watchAll, setUserLeverage,
     adminLoadTokenBoard, adminAddTokenBoard, adminPopulateTop50, adminSetRiskTag, adminSetTokenLev, adminToggleBan, adminRemoveTokenBoard,
+    toggleStrategyToken, loadTokenCardPrices, loadTokenStats,
     mcToggleSkill, mcUpdateConfig, mcCreateAgent, mcRemoveAgent, mcDownloadTrades,
   };
 

@@ -1,8 +1,21 @@
 {
-  "version": "1.0.0",
+  "version": "1.0.1",
   "name": "MCT AI Trader",
   "released": "2026-04-18",
   "changelog": [
+    {
+      "version": "1.0.1",
+      "tag": "v1.0.1",
+      "date": "2026-04-19",
+      "label": "Fix Kronos 4-token filter + cash wallet breakdown display",
+      "changes": [
+        "Kronos route: filter DB results to only BTCUSDT/ETHUSDT/SOLUSDT/BNBUSDT — old 10-token rows excluded",
+        "Kronos header: updated label from '(10 tokens)' to '(N tokens — BTC/ETH/SOL/BNB)'",
+        "Cash wallet breakdown: profit_shares were computed server-side but never rendered on screen — now shown",
+        "Cash wallet breakdown: replaced flat text with itemised table (top-ups / referral commission / 60% profits / fees paid)",
+        "Cash wallet: added note clarifying 60% trade profits stay on exchange, shown for reference only"
+      ]
+    },
     {
       "version": "1.0.0",
       "tag": "v1.0.0",
