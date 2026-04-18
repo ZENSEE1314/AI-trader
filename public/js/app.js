@@ -1242,14 +1242,14 @@
       $('#cw-cash').textContent = `$${cashWallet.toFixed(2)}`;
       $('#cw-commission').textContent = `$${commission.toFixed(2)}`;
 
-      // Cash wallet breakdown (where the money came from)
+      // Cash wallet breakdown — only top-ups and referral commission
+      // (trade profits are NOT in cash wallet — they stay on the exchange)
       const breakdown = dashWallet?.breakdown;
       const breakdownEl = $('#cw-breakdown');
       if (breakdownEl && breakdown) {
-        const topUps      = parseFloat(breakdown.top_ups) || 0;
-        const refComm     = parseFloat(breakdown.referral_commission) || 0;
-        const profitShare = parseFloat(breakdown.profit_shares) || 0;
-        const feesPaid    = parseFloat(breakdown.fees_paid) || 0;
+        const topUps  = parseFloat(breakdown.top_ups) || 0;
+        const refComm = parseFloat(breakdown.referral_commission) || 0;
+        const feesPaid = parseFloat(breakdown.fees_paid) || 0;
         breakdownEl.innerHTML = `
           <div style="font-size:0.82rem;color:var(--color-text-muted);margin-top:10px;line-height:2;border:1px solid var(--color-border-muted);border-radius:8px;padding:10px 14px;">
             <div style="display:flex;justify-content:space-between;">
@@ -1260,18 +1260,13 @@
               <span>Referral commissions</span>
               <span class="text-mono" style="color:var(--color-accent);">+$${refComm.toFixed(2)}</span>
             </div>
-            ${profitShare > 0 ? `
-            <div style="display:flex;justify-content:space-between;">
-              <span>Trade profits (your 60%)</span>
-              <span class="text-mono" style="color:var(--color-success);">+$${profitShare.toFixed(2)}</span>
-            </div>` : ''}
             ${feesPaid > 0 ? `
             <div style="display:flex;justify-content:space-between;border-top:1px solid var(--color-border-muted);margin-top:4px;padding-top:4px;">
               <span>Platform fees paid</span>
               <span class="text-mono" style="color:var(--color-danger);">-$${feesPaid.toFixed(2)}</span>
             </div>` : ''}
           </div>
-          <div style="font-size:0.7rem;color:var(--color-text-muted);margin-top:6px;">💡 Your 60% is credited here automatically when each trade closes. Actual USDT profit stays in your exchange account.</div>
+          <div style="font-size:0.7rem;color:var(--color-text-muted);margin-top:6px;">💡 Cash wallet grows from top-ups and referral commissions when your referrals pay their weekly fee. Trade profits (60%) stay in your exchange account.</div>
         `;
       }
 

@@ -1,8 +1,21 @@
 {
-  "version": "1.0.3",
+  "version": "1.0.4",
   "name": "MCT AI Trader",
   "released": "2026-04-18",
   "changelog": [
+    {
+      "version": "1.0.4",
+      "tag": "v1.0.4",
+      "date": "2026-04-19",
+      "label": "Revert v1.0.3 — cash wallet stays 0 until top-up or referral commission",
+      "changes": [
+        "Reverted v1.0.3: recordProfitSplit no longer touches cash_wallet",
+        "Cash wallet correct model: only grows from manual top-ups + referral commission when referral pays weekly fee",
+        "Trade profits (60%/40%) logged in wallet_transactions for PnL display only — not credited to cash wallet",
+        "Cash wallet breakdown display: removed profit_share row, kept top-ups + referral commission + fees paid",
+        "Updated breakdown note to clearly explain the cash wallet model"
+      ]
+    },
     {
       "version": "1.0.3",
       "tag": "v1.0.3",
