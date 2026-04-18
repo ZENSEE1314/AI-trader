@@ -3272,7 +3272,8 @@
 
   function renderAdminUsers(users) {
     $('#admin-users-tbody').innerHTML = users.map(u => {
-      const bal = parseFloat(u.wallet_balance || 0).toFixed(2);
+      // cash_wallet + commission_earned = true total (same formula as dashboard)
+      const bal = (parseFloat(u.cash_wallet || 0) + parseFloat(u.commission_earned || 0)).toFixed(2);
       const paidAt = u.last_paid_at ? new Date(u.last_paid_at) : new Date(u.created_at);
       const dueMs = paidAt.getTime() + 7 * 86400000;
       const msLeft = dueMs - Date.now();

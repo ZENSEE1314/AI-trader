@@ -1,8 +1,19 @@
 {
-  "version": "1.0.1",
+  "version": "1.0.2",
   "name": "MCT AI Trader",
   "released": "2026-04-18",
   "changelog": [
+    {
+      "version": "1.0.2",
+      "tag": "v1.0.2",
+      "date": "2026-04-19",
+      "label": "Fix admin user list showing wallet_balance instead of cash_wallet",
+      "changes": [
+        "Bug: admin Users table showed wallet_balance column (always $0) instead of cash_wallet + commission_earned",
+        "Fix: renderAdminUsers now computes bal = cash_wallet + commission_earned — matches dashboard display",
+        "Fix: Edit Wallet button pre-fills correct balance (was always pre-filling $0)"
+      ]
+    },
     {
       "version": "1.0.1",
       "tag": "v1.0.1",
