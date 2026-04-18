@@ -676,8 +676,8 @@ function detectStopLossHunt(candles15m, candles1m, cfg = {}) {
 // 15m: strong trend → 1m: pin bar forms → pin bar FAILS → enter
 
 function detectMomentumScalp(candles15m, candles1m, cfg = {}) {
-  const trendStrength = cfg.trendStrength || 7;
-  const pinBarWickRatio = cfg.pinBarWickRatio || 2.5; // tightened from 2.0
+  const trendStrength = cfg.trendStrength || 5; // lowered from 7 — 7/10 green candles was rarely met
+  const pinBarWickRatio = cfg.pinBarWickRatio || 2.0;
 
   if (candles15m.length < 15 || candles1m.length < 10) return null;
 
@@ -1363,26 +1363,9 @@ const SESSION_WINDOWS = [
   { name: 'US',     startH: 12, endH: 16 },
 ];
 
-// Hours and minutes to AVOID entering (per PDF):
-// "Avoid entries at 8am, 12pm, 4pm, and 8pm UTC"
-// "Avoid minute timings like 00, 15, 30, 45"
-const AVOID_HOURS_UTC   = new Set([8, 12, 16, 20]);
-const AVOID_MINUTES_UTC = new Set([0, 15, 30, 45]);
-
-// Session open blackout: first 30 minutes of each session = institutional fake-out zone.
-// EU opens at 07:00, Asia at 23:00, US at 12:00 — institutions run fake sweeps to trap
-// retail before the real direction. Don't enter during this window.
-const SESSION_OPEN_BLACKOUT_MIN = 30;
-
-function isSessionOpenBlackout(tsMs = Date.now()) {
-  const d    = new Date(tsMs);
-  const utcH = d.getUTCHours();
-  const utcM = d.getUTCMinutes();
-  for (const win of SESSION_WINDOWS) {
-    if (utcH === win.startH && utcM < SESSION_OPEN_BLACKOUT_MIN) return true;
-  }
-  return false;
-}
+// Hours to AVOID entering (per PDF): "Avoid entries at 8am, 12pm, 4pm, and 8pm UTC"
+// Only the ±2min window around those exact hours is blocked (tight buffer, not whole minute-marks).
+const AVOID_HOURS_UTC = new Set([8, 12, 16, 20]);
 
 function getActiveSession() {
   const now = new Date();
@@ -1398,20 +1381,21 @@ function getActiveSession() {
   return null; // outside all windows
 }
 
+// NOTE: Only block the exact avoid-hour ±2min window. Removed per-minute blackout
+// (00/15/30/45) — it was blocking too many valid entries during active sessions.
 function isAvoidTime() {
-  const now = new Date();
+  const now  = new Date();
   const utcH = now.getUTCHours();
   const utcM = now.getUTCMinutes();
-  if (AVOID_HOURS_UTC.has(utcH) && utcM < 3) return true;   // ±3 min buffer around avoid hours
-  if (AVOID_MINUTES_UTC.has(utcM)) return true;               // avoid 00, 15, 30, 45 min marks
-  if (isSessionOpenBlackout()) return true;                   // first 30 min of each session = fake-out zone
-  return false;
+  return AVOID_HOURS_UTC.has(utcH) && utcM < 2; // only first 2 min of those hours
 }
 
-// True only when inside a session window AND not at a candle-open time to avoid
+// isSessionOpenBlackout kept for legacy exports — now always returns false
+function isSessionOpenBlackout() { return false; }
+
+// True whenever we're not in an avoid-hour window (session no longer gates this)
 function isGoodTradingSession() {
-  if (isAvoidTime()) return false;
-  return getActiveSession() !== null;
+  return !isAvoidTime();
 }
 
 // ── Daily Stats — Consecutive Loss Guard Only ───────────────
@@ -1544,7 +1528,7 @@ function detectSwings(klines, len) {
 
 // ── Analyze Single Coin ────────────────────────────────────
 
-async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg = {}, btcTrend = 'neutral') {
+async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg = {}, btcTrend = 'neutral', outsideSession = false) {
   const symbol = ticker.symbol;
   const price = parseFloat(ticker.lastPrice);
 
@@ -1929,19 +1913,21 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     // ── PDF HARD FILTERS ─────────────────────────────────────
 
     // EMA200 bias (PDF: "above MA200 → look long, below → look short")
-    // Hard block if direction conflicts with EMA200 trend.
-    // Range setups are exempt — range trades are bidirectional by design.
+    // Apply as a score modifier — not a hard block. A counter-EMA200 trade can still
+    // pass if other confluences are strong (e.g. key S/R + volume + in-session).
+    // Range setups are exempt — bidirectional by design.
     if (!sig.isRangeSetup) {
       if (ema200_bias === 'bullish' && sig.direction === 'SHORT') {
-        sig.score = -99;
-        sig.blocked = `SHORT blocked — price above EMA200 (bullish bias per PDF)`;
-        continue;
+        sig.score -= 3; // headwind — fighting the bigger trend
+        sig.ema200Contra = true;
       }
       if (ema200_bias === 'bearish' && sig.direction === 'LONG') {
-        sig.score = -99;
-        sig.blocked = `LONG blocked — price below EMA200 (bearish bias per PDF)`;
-        continue;
+        sig.score -= 3; // headwind — fighting the bigger trend
+        sig.ema200Contra = true;
       }
+      // Bonus for aligning with EMA200 bias
+      if (ema200_bias === 'bullish' && sig.direction === 'LONG')  sig.score += 2;
+      if (ema200_bias === 'bearish' && sig.direction === 'SHORT') sig.score += 2;
     }
 
     // VWAP + OP bias (PDF: "avoid entering in between VWAP and OP if gap is small")
@@ -1964,24 +1950,29 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
       sig.score += 3;
     }
 
-    // Session tag — add active session name to signal
+    // Session bonus/penalty — in-session = institutional flow, out-of-session = softer market
     const sess = getActiveSession();
-    if (sess) sig.session = sess.name;
+    if (sess) {
+      sig.session = sess.name;
+      sig.score  += 2; // in-session bonus: institutional activity = higher quality moves
+    } else if (outsideSession && !sig.isRangeSetup) {
+      sig.score -= 1; // small penalty for off-hours trend trades — range bounces exempt
+    }
 
     // ── POSITION QUALITY: buy low, sell high — don't chase ──
 
-    // RSI: LONG should enter on pullback (RSI 25-55), not when overbought
-    //       SHORT should enter on bounce (RSI 45-75), not when oversold
+    // RSI: LONG should enter on pullback (RSI 25-65), not when extremely overbought
+    //       SHORT should enter on bounce (RSI 35-75), not when extremely oversold
     if (sig.direction === 'LONG') {
-      if (rsi14 > 70) { sig.score = -99; sig.blocked = 'LONG rejected — RSI ' + rsi14.toFixed(0) + ' overbought, chasing'; }
-      else if (rsi14 > 55) sig.score -= 2; // slightly extended
-      else if (rsi14 >= 30 && rsi14 <= 50) sig.score += 2; // pullback zone — ideal buy
+      if (rsi14 > 78) { sig.score = -99; sig.blocked = 'LONG rejected — RSI ' + rsi14.toFixed(0) + ' extremely overbought'; }
+      else if (rsi14 > 65) sig.score -= 1; // slightly extended — minor penalty only
+      else if (rsi14 >= 30 && rsi14 <= 55) sig.score += 2; // pullback zone — ideal buy
       else if (rsi14 < 25) sig.score += 1; // oversold bounce possible
     }
     if (sig.direction === 'SHORT') {
-      if (rsi14 < 30) { sig.score = -99; sig.blocked = 'SHORT rejected — RSI ' + rsi14.toFixed(0) + ' oversold, chasing'; }
-      else if (rsi14 < 45) sig.score -= 2; // slightly extended
-      else if (rsi14 >= 50 && rsi14 <= 70) sig.score += 2; // bounce zone — ideal sell
+      if (rsi14 < 22) { sig.score = -99; sig.blocked = 'SHORT rejected — RSI ' + rsi14.toFixed(0) + ' extremely oversold'; }
+      else if (rsi14 < 35) sig.score -= 1; // slightly extended — minor penalty only
+      else if (rsi14 >= 45 && rsi14 <= 70) sig.score += 2; // bounce zone — ideal sell
       else if (rsi14 > 75) sig.score += 1; // overbought reversal possible
     }
 
@@ -2174,24 +2165,19 @@ async function scanSMC(log, opts = {}) {
     return [];
   }
 
-  // Candle-open avoid time applies to trend strategies only.
-  // Range bounces are exempt — a boundary test at :00 or :15 is still valid.
+  // Check avoid-hour window (brief blackout around 08/12/16/20 UTC)
   const avoidTrend = isAvoidTime();
   if (avoidTrend) {
-    log('Liquidity Engine: Candle-open avoid time — trend strategies blocked, range bounce still active.');
-    bLog.scan('Avoid candle-open time — only RANGE_BOUNCE allowed this minute.');
+    bLog.scan('Avoid-hour window — brief pause, resuming next cycle.');
   }
 
   const activeSession = getActiveSession();
   const outsideSession = !activeSession;
 
-  // Outside session: only RANGE_BOUNCE is allowed — it trades mechanical
-  // support/resistance boundaries that work at any hour.
-  // All trend-following strategies (SWEEP, HUNT, MOMENTUM, BRR, SMC) need
-  // institutional session activity and are blocked outside windows.
+  // Outside session: all strategies still run but get a score penalty in the signal filter.
+  // Previously blocked entirely (15h/day with no trades). Now always scan, reward in-session signals.
   if (outsideSession) {
-    log('Liquidity Engine: Outside session — scanning for RANGE_BOUNCE setups only.');
-    bLog.scan('Outside session windows — range bounce scan only (Asia 23-02 / Europe 07-10 / US 12-16 UTC).');
+    bLog.scan('Outside institutional session — strategies active with reduced score bonus (Asia 23-02 / Europe 07-10 / US 12-16 UTC).');
   } else {
     bLog.scan(`Active session: ${activeSession.name} (${activeSession.startH}:00–${activeSession.endH}:00 UTC)`);
   }
@@ -2239,7 +2225,7 @@ async function scanSMC(log, opts = {}) {
   const topCoins = priceResults.filter(Boolean);
 
   const params = await aiLearner.getOptimalParams();
-  const minScore = params.MIN_SCORE || 8;
+  const minScore = params.MIN_SCORE || 6; // lowered from 8 — filters were too tight, bot wasn't trading
 
   // Quantum optimizer: get active strategy combo + best params from backtest
   let activeCombo = 15;
@@ -2296,14 +2282,9 @@ async function scanSMC(log, opts = {}) {
       continue;
     }
 
-    // Outside session OR candle-open avoid time: force RANGE_BOUNCE only
-    // — trend strategies need clean session flow; range bounces are mechanical S/R
-    const rangeOnlyMode = outsideSession || avoidTrend;
-    const sessionStrategies = rangeOnlyMode
-      ? { RANGE_BOUNCE: true, LIQUIDITY_SWEEP: false, STOP_LOSS_HUNT: false, MOMENTUM_SCALP: false, BRR_FIBO: false, SMC_CLASSIC: false, SMC_HL_STRUCTURE: false }
-      : enabledStrategies;
-
-    const signal = await analyzeCoin(ticker, params, sessionStrategies, bestParams, btcTrend);
+    // All strategies run at all hours. Session status is passed to analyzeCoin
+    // so in-session signals get score bonuses; outside-session get small penalty.
+    const signal = await analyzeCoin(ticker, params, enabledStrategies, bestParams, btcTrend, outsideSession);
     if (signal) signal.comboId = activeCombo;
     analyzed++;
 
