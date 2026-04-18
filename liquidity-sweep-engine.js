@@ -1414,14 +1414,21 @@ function isGoodTradingSession() {
   return getActiveSession() !== null;
 }
 
-// ── Daily Stats ────────────────────────────────────────────
-// PDF rule: max 2 trades weekdays, max 1 trade weekends.
-// Stop immediately after 2 consecutive losses.
+// ── Daily Stats — Per-Symbol ────────────────────────────────
+// Each coin gets its own independent daily trade limit so one active
+// token doesn't block the other three from trading.
+// Max 2 trades per coin per weekday, 1 per coin per weekend.
+// Stop a coin after 2 consecutive losses on THAT coin.
+// Global hard stop: 4+ consecutive losses across ALL coins combined.
 
-const dailyStats = { date: '', trades: 0, consecutiveLosses: 0 };
+const dailyStats = {
+  date: '',
+  bySymbol: {},          // { [symbol]: { trades, consecutiveLosses } }
+  globalConsecLosses: 0, // cross-symbol consecutive loss counter
+};
 
 function getTradingDay() {
-  // Trading day resets at 7am UTC (PDF: "resets at 7am")
+  // Trading day resets at 7am UTC
   const now = new Date();
   const utcH = now.getUTCHours();
   const d = new Date(now);
@@ -1431,37 +1438,70 @@ function getTradingDay() {
 
 function getDailyTradeLimit() {
   const dow = new Date().getUTCDay(); // 0=Sun, 6=Sat
-  return (dow === 0 || dow === 6) ? 1 : 2; // 1 on weekends, 2 on weekdays
+  return (dow === 0 || dow === 6) ? 1 : 2; // 1 per coin on weekends, 2 per coin on weekdays
 }
 
-function recordDailyTrade(isWin) {
+function _resetIfNewDay() {
   const tradingDay = getTradingDay();
   if (dailyStats.date !== tradingDay) {
     dailyStats.date = tradingDay;
-    dailyStats.trades = 0;
-    dailyStats.consecutiveLosses = 0;
+    dailyStats.bySymbol = {};
+    dailyStats.globalConsecLosses = 0;
   }
-  dailyStats.trades++;
+}
+
+function _symbolStats(symbol) {
+  _resetIfNewDay();
+  if (!dailyStats.bySymbol[symbol]) {
+    dailyStats.bySymbol[symbol] = { trades: 0, consecutiveLosses: 0 };
+  }
+  return dailyStats.bySymbol[symbol];
+}
+
+// symbol is required — pass the coin being traded (e.g. 'BNBUSDT')
+function recordDailyTrade(isWin, symbol = 'UNKNOWN') {
+  const st = _symbolStats(symbol);
+  st.trades++;
   if (isWin) {
-    dailyStats.consecutiveLosses = 0;
+    st.consecutiveLosses = 0;
+    dailyStats.globalConsecLosses = 0;
   } else {
-    dailyStats.consecutiveLosses++;
+    st.consecutiveLosses++;
+    dailyStats.globalConsecLosses++;
   }
 }
 
-function checkDailyLimits() {
-  const tradingDay = getTradingDay();
-  if (dailyStats.date !== tradingDay) {
-    dailyStats.date = tradingDay;
-    dailyStats.trades = 0;
-    dailyStats.consecutiveLosses = 0;
-  }
-  if (dailyStats.consecutiveLosses >= 2) {
-    return { canTrade: false, reason: `${dailyStats.consecutiveLosses} consecutive losses — stopped for today. Resets at 7am UTC.` };
-  }
+// symbol = specific coin to check; omit to check if ANY coin can still trade
+function checkDailyLimits(symbol = null) {
+  _resetIfNewDay();
   const limit = getDailyTradeLimit();
-  if (dailyStats.trades >= limit) {
-    return { canTrade: false, reason: `Daily trade limit reached (${dailyStats.trades}/${limit}). Resets at 7am UTC.` };
+
+  // Hard global stop: 4+ consecutive losses across all coins combined
+  if (dailyStats.globalConsecLosses >= 4) {
+    return { canTrade: false, reason: `${dailyStats.globalConsecLosses} consecutive losses across all coins — stopped for today. Resets at 7am UTC.` };
+  }
+
+  if (symbol) {
+    // Per-coin check
+    const st = _symbolStats(symbol);
+    if (st.consecutiveLosses >= 2) {
+      return { canTrade: false, reason: `${symbol}: ${st.consecutiveLosses} consecutive losses — paused for today` };
+    }
+    if (st.trades >= limit) {
+      return { canTrade: false, reason: `${symbol}: daily limit reached (${st.trades}/${limit})` };
+    }
+    return { canTrade: true };
+  }
+
+  // No symbol: true only when every watched coin is already at its limit
+  // (used for top-level early-exit check before the per-coin scan loop)
+  const watchedCoins = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT'];
+  const allBlocked = watchedCoins.every(sym => {
+    const st = _symbolStats(sym);
+    return st.trades >= limit || st.consecutiveLosses >= 2;
+  });
+  if (allBlocked) {
+    return { canTrade: false, reason: 'All 4 coins at daily limit or loss pause — nothing to trade today' };
   }
   return { canTrade: true };
 }
@@ -2254,13 +2294,21 @@ async function scanSMC(log, opts = {}) {
 
   const sessionTag = activeSession ? activeSession.name : 'AI-override';
   const dailyLimit = getDailyTradeLimit();
-  bLog.scan(`Session=${sessionTag} | BTC trend=${btcTrend} | Quantum combo=${comboName} (${activeCombo}) | ${topCoins.length} coins | daily trades=${dailyStats.trades}/${dailyLimit}`);
+  const symbolSummary = Object.entries(dailyStats.bySymbol).map(([s, st]) => `${s.replace('USDT','')}=${st.trades}/${dailyLimit}`).join(' ') || 'none yet';
+  bLog.scan(`Session=${sessionTag} | BTC trend=${btcTrend} | Quantum combo=${comboName} (${activeCombo}) | ${topCoins.length} coins | trades today: ${symbolSummary}`);
 
   const results = [];
   let analyzed = 0;
   let skippedAI = 0;
 
   for (const ticker of topCoins) {
+    // Per-coin daily limit — each symbol gets its own independent allowance
+    const symLimits = checkDailyLimits(ticker.symbol);
+    if (!symLimits.canTrade) {
+      bLog.scan(`${ticker.symbol}: ${symLimits.reason} — skipping`);
+      continue;
+    }
+
     if (await aiLearner.shouldAvoidCoin(ticker.symbol)) {
       skippedAI++;
       continue;

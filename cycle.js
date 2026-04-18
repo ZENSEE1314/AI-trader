@@ -714,7 +714,7 @@ async function checkTrailingStop(client) {
             await aiLearner.analyzeWorstPatterns();
           }
 
-          recordDailyTrade(pnlPct > 0);
+          recordDailyTrade(pnlPct > 0, sym);
           log(`AI recorded: ${sym} PnL=${pnlPct.toFixed(2)}% duration=${durationMin}min setup=${state.setup}`);
 
           // Notify agents of trade outcome (for survival HP + capital tracking)
@@ -790,7 +790,7 @@ async function checkTrailingStop(client) {
                 marketStructure: st.marketStructure || 'unknown',
               });
             }
-            recordDailyTrade(gain > 0);
+            recordDailyTrade(gain > 0, sym);
             tradeState.delete(sym);
           }
 
@@ -849,7 +849,7 @@ async function checkTrailingStop(client) {
                 session: aiLearner.getCurrentSession(),
                 marketStructure: st.marketStructure || 'unknown',
               });
-              recordDailyTrade(true);
+              recordDailyTrade(true, sym);
               tradeState.delete(sym);
 
               await notify(
@@ -1488,7 +1488,11 @@ async function executeForAllUsers(pick) {
 
           userLog.trade(`User ${key.email} Binance: wallet=$${rawWallet.toFixed(2)} pos=${openPosCount}/${maxPos} lev=x${userLev} SL=-${(SL_PCT*100).toFixed(0)}%margin TP=+${(TP_PCT*100).toFixed(0)}%margin`);
 
-          const slPrice = initialSlPrice;
+          // Range Bounce: use signal's range-wall SL + hard TP at opposite wall
+          // Other strategies: fixed 30% margin SL, no hard TP (trailing handles exit)
+          const isRangeBounce = pick.setup === 'RANGE_BOUNCE';
+          const slPrice = (isRangeBounce && pick.sl) ? pick.sl : initialSlPrice;
+          const bnTpPrice = (isRangeBounce && pick.tp1) ? pick.tp1 : null;
 
           try { await userClient.setLeverage({ symbol, leverage: userLev }); } catch (_) {}
           try { await userClient.setMarginType({ symbol, marginType: 'ISOLATED' }); } catch (e) { if (!e.message?.includes('No need')) throw e; }
@@ -1535,7 +1539,8 @@ async function executeForAllUsers(pick) {
 
           const closeSide = isLong ? 'SELL' : 'BUY';
           const slFmt = fmtP(slPrice);
-          userLog.trade(`Setting SL=$${slFmt} (-${(SL_PCT*100).toFixed(0)}% margin) for ${symbol} — no hard TP, trailing SL rides winners...`);
+          const tpNote = bnTpPrice ? ` TP=$${fmtP(bnTpPrice)} (hard close at range wall)` : ` TP target $${fmtP(userTpPrice)} (+${(TP_PCT*100).toFixed(0)}% margin) — trailing rides higher`;
+          userLog.trade(`Setting SL=$${slFmt} for ${symbol} —${tpNote}...`);
 
           let slOk = false;
 
@@ -1546,9 +1551,22 @@ async function executeForAllUsers(pick) {
               closePosition: 'true', workingType: 'MARK_PRICE',
             });
             slOk = true;
-            userLog.trade(`SL set at $${slFmt} (-${(SL_PCT*100).toFixed(0)}% margin) | TP target $${fmtP(userTpPrice)} (+${(TP_PCT*100).toFixed(0)}% margin) — trailing rides higher`);
           } catch (e) {
             userLog.error(`SL algo failed for ${symbol}: ${e.message}`);
+          }
+
+          // Range Bounce: set hard TP at opposite range wall
+          if (bnTpPrice) {
+            try {
+              await userClient.submitNewAlgoOrder({
+                algoType: 'CONDITIONAL', symbol, side: closeSide,
+                type: 'TAKE_PROFIT_MARKET', triggerPrice: fmtP(bnTpPrice),
+                closePosition: 'true', workingType: 'MARK_PRICE',
+              });
+              userLog.trade(`TP set at $${fmtP(bnTpPrice)} (opposite range wall) for ${symbol}`);
+            } catch (e) {
+              userLog.error(`Range TP failed for ${symbol}: ${e.message}`);
+            }
           }
 
           if (!slOk) {
@@ -1556,17 +1574,18 @@ async function executeForAllUsers(pick) {
             await notify(`*${symbol} ${pick.direction}*\nPosition opened but *SL failed to set!*\nSet manually on Binance NOW.`);
           }
 
+          const bnTpRef = bnTpPrice ?? fmtP(userTpPrice);
           await db.query(
             `INSERT INTO trades (api_key_id, user_id, symbol, direction, entry_price, sl_price, tp_price, quantity, leverage, status,
              trailing_sl_price, trailing_sl_last_step, tf_15m, tf_3m, tf_1m, market_structure, key_trailing_sl_step)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'OPEN', $10, 0, $11, $12, $13, $14, $15)`,
-            [key.id, key.user_id, symbol, pick.direction, price, fmtP(slPrice), fmtP(userTpPrice), qty, userLev,
+            [key.id, key.user_id, symbol, pick.direction, price, fmtP(slPrice), bnTpRef, qty, userLev,
              fmtP(slPrice),
              null, pick.structure?.tf3m || null, pick.structure?.tf1m || null,
              pick.marketStructure || null, userTrailStep]
           );
           executedUserSymbols.add(dedupKey);
-          userLog.trade(`Binance OK: ${key.email} ${symbol} ${pick.direction} x${userLev} qty=${qty} entry=$${fmtPrice(price)} SL=$${fmtPrice(slPrice)} TP=$${fmtPrice(userTpPrice)}`);
+          userLog.trade(`Binance OK: ${key.email} ${symbol} ${pick.direction} x${userLev} qty=${qty} entry=$${fmtPrice(price)} SL=$${fmtPrice(slPrice)} ${bnTpPrice ? `TP=$${fmtPrice(bnTpPrice)}` : `TP(ref)=$${fmtPrice(userTpPrice)}`}`);
           log(`Binance OK: ${key.email} ${symbol} ${pick.direction} x${userLev}`);
 
         } else if (key.platform === 'bitunix') {
@@ -1609,14 +1628,19 @@ async function executeForAllUsers(pick) {
             return 'TOO_EXPENSIVE';
           }
 
-          const isTripleMA  = pick.setup === 'TRIPLE_MA_A' || pick.setup === 'TRIPLE_MA_B';
-          const isScenarioA = pick.setup === 'TRIPLE_MA_A';
-          const isScenarioB = pick.setup === 'TRIPLE_MA_B';
+          const isTripleMA    = pick.setup === 'TRIPLE_MA_A' || pick.setup === 'TRIPLE_MA_B';
+          const isScenarioA   = pick.setup === 'TRIPLE_MA_A';
+          const isScenarioB   = pick.setup === 'TRIPLE_MA_B';
+          const isRangeBounce = pick.setup === 'RANGE_BOUNCE';
 
-          // Triple MA Scenario A: SL at -1.5% (safety net) + MA20-touch exit, TP at +3.5%
-          // Triple MA Scenario B: no hard SL, trailing only (entry on RSI<30 + lower BB touch)
-          // All other strategies: use normal SL from risk params
-          const slPrice = isScenarioB ? null : (isScenarioA && pick.sl ? pick.sl : initialSlPrice);
+          // Range Bounce: SL at range wall ± 0.5% (tight), hard TP at opposite wall
+          // Triple MA Scenario A: SL from signal, TP at +3.5%
+          // Triple MA Scenario B: no hard SL, trailing only
+          // All other strategies: fixed 30% margin SL, trailing handles exit
+          const slPrice = isScenarioB ? null
+            : (isRangeBounce && pick.sl) ? pick.sl
+            : (isScenarioA   && pick.sl) ? pick.sl
+            : initialSlPrice;
 
           try { await userClient.changeMarginMode(symbol, 'ISOLATION'); } catch (_) {}
           try { await userClient.changeLeverage(symbol, userLev); } catch (_) {}
@@ -1625,10 +1649,10 @@ async function executeForAllUsers(pick) {
           const bxOrderType  = 'MARKET';
           const bxLimitPrice = undefined;
 
-          // Determine TP price (Scenario A: pick.tp1 = +3.5% from entry, others: use pick.tp1)
+          // TP: Range Bounce uses hard TP at opposite wall, Scenario A at +3.5%, others none
           const bxEntryRef = price;
           let bxTpPrice = null;
-          if (isScenarioA && pick.tp1) {
+          if ((isScenarioA || isRangeBounce) && pick.tp1) {
             bxTpPrice = parseFloat(parseFloat(pick.tp1).toFixed(8));
           }
 
@@ -1640,8 +1664,8 @@ async function executeForAllUsers(pick) {
             symbol, side: isLong ? 'BUY' : 'SELL',
             qty: String(qty), orderType: bxOrderType, tradeSide: 'OPEN',
           };
-          if (bxLimitPrice)                   orderPayload.price = String(bxLimitPrice);
-          if (bxTpPrice && isScenarioA)        { orderPayload.tpPrice = String(bxTpPrice); orderPayload.tpOrderType = 'MARKET'; orderPayload.tpStopType = 'MARK_PRICE'; }
+          if (bxLimitPrice)                               orderPayload.price = String(bxLimitPrice);
+          if (bxTpPrice && (isScenarioA || isRangeBounce)) { orderPayload.tpPrice = String(bxTpPrice); orderPayload.tpOrderType = 'MARKET'; orderPayload.tpStopType = 'MARK_PRICE'; }
 
           const order = await userClient.placeOrder(orderPayload);
           userLog.trade(`Bitunix order placed: ${JSON.stringify(order)}`);
@@ -1662,27 +1686,32 @@ async function executeForAllUsers(pick) {
 
             let slFmtActual = null;
             if (!isTripleMA) {
-              // Normal SMC trades: set SL
-              const actualSlPrice = isLong
-                ? actualEntry * (1 - slPricePct)
-                : actualEntry * (1 + slPricePct);
-              slFmtActual = parseFloat(actualSlPrice.toFixed(8));
+              if (isRangeBounce && pick.sl) {
+                // Range Bounce: SL is at the range wall — not relative to actual entry
+                slFmtActual = parseFloat(parseFloat(pick.sl).toFixed(8));
+              } else {
+                // Normal SMC trades: recalculate SL from actual fill price
+                const actualSlPrice = isLong
+                  ? actualEntry * (1 - slPricePct)
+                  : actualEntry * (1 + slPricePct);
+                slFmtActual = parseFloat(actualSlPrice.toFixed(8));
+              }
             }
 
             if (slFmtActual) {
-              userLog.trade(`Bitunix position confirmed: ${posId} entry=$${actualEntry} — setting SL=$${slFmtActual} (trailing, no hard TP)...`);
+              const tpNote = bxTpPrice ? ` TP=$${bxTpPrice} (hard close)` : '';
+              userLog.trade(`Bitunix position confirmed: ${posId} entry=$${actualEntry} — setting SL=$${slFmtActual}${tpNote}...`);
               try {
                 const tpSLPayload = { symbol, positionId: posId, slPrice: slFmtActual };
-                if (bxTpPrice && isScenarioA) tpSLPayload.tpPrice = String(bxTpPrice);
+                if (bxTpPrice && (isScenarioA || isRangeBounce)) tpSLPayload.tpPrice = String(bxTpPrice);
                 await userClient.placePositionTpSl(tpSLPayload);
                 userLog.trade(`Bitunix SL set on ${posId}: SL=$${slFmtActual}${bxTpPrice ? ` TP=$${bxTpPrice}` : ''}`);
               } catch (e) {
                 userLog.error(`Bitunix SL FAILED: ${e.message} — SET MANUALLY`);
                 await notify(`*Bitunix ${symbol} ${pick.direction}*\nSL failed! Set manually on Bitunix NOW.`);
               }
-            } else if (isScenarioA && bxTpPrice) {
-              // Scenario A: no SL, but set the TP
-              userLog.trade(`Bitunix Scenario A: no SL — setting TP=$${bxTpPrice} only (MA20 touch exit will handle downside)...`);
+            } else if ((isScenarioA || isRangeBounce) && bxTpPrice) {
+              userLog.trade(`Bitunix: no SL — setting TP=$${bxTpPrice} only...`);
               try {
                 await userClient.placePositionTpSl({ symbol, positionId: posId, tpPrice: String(bxTpPrice), tpOrderType: 'MARKET', tpStopType: 'MARK_PRICE' });
               } catch (e) {
@@ -1690,8 +1719,8 @@ async function executeForAllUsers(pick) {
               }
             }
 
-            const tpRef = isScenarioA
-              ? parseFloat(parseFloat(actualEntry * 1.10).toFixed(8))
+            const tpRef = (isScenarioA || isRangeBounce) && bxTpPrice
+              ? bxTpPrice
               : isLong ? actualEntry * (1 + tpPricePct) : actualEntry * (1 - tpPricePct);
 
             await db.query(
