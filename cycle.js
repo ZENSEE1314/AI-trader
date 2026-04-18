@@ -1058,23 +1058,15 @@ async function main() {
     const topNRows = await dbQuery('SELECT MAX(top_n_coins) as max_n FROM api_keys WHERE enabled = true');
     const topNCoins = parseInt(topNRows[0]?.max_n) || 50;
 
-    // ── Kronos AI Batch Scan: predict ALL top tokens ──────────
+    // ── Kronos AI Batch Scan: only the 4 watchlist tokens ──────
     let kronosPredictions = null;
     try {
       const kronos = require('./kronos');
-      const fetch = require('node-fetch');
 
-      // Fetch top coins list (same as SMC uses)
-      const tickerRes = await fetch('https://fapi.binance.com/fapi/v1/ticker/24hr', { timeout: 15000 });
-      const tickers = await tickerRes.json();
-      const topSymbols = tickers
-        .filter(t => t.symbol.endsWith('USDT') && !t.symbol.includes('_'))
-        .filter(t => parseFloat(t.quoteVolume) >= 10_000_000)
-        .sort((a, b) => parseFloat(b.quoteVolume) - parseFloat(a.quoteVolume))
-        .slice(0, 10)  // Top 10 only — matches SMC engine scan
-        .map(t => t.symbol);
+      // Only scan the 4 coins we actually trade — no top-volume sweep
+      const topSymbols = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT'];
 
-      bLog.ai(`Kronos batch scan starting: ${topSymbols.length} tokens`);
+      bLog.ai(`Kronos batch scan starting: ${topSymbols.join(', ')}`);
       kronosPredictions = await kronos.scanAllTokens(topSymbols, '15m', 20, 3);
 
       // Send summary to Telegram
