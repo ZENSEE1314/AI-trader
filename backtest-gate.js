@@ -86,7 +86,7 @@ function calcRSI(closes, period = 14) {
 }
 
 // Strategies the backtest engine knows how to simulate
-const KNOWN_STRATEGIES = new Set(['LIQUIDITY_SWEEP', 'STOP_LOSS_HUNT', 'MOMENTUM_SCALP', 'BRR_FIBO', 'SMC_CLASSIC', 'SMC_HL_STRUCTURE', 'ALL']);
+const KNOWN_STRATEGIES = new Set(['LIQUIDITY_SWEEP', 'STOP_LOSS_HUNT', 'MOMENTUM_SCALP', 'BRR_FIBO', 'SMC_CLASSIC', 'SMC_HL_STRUCTURE', 'RANGE_BOUNCE', 'ALL']);
 
 // Backtest a SINGLE token × strategy combo on recent data
 // Called inline by the agent right before it wants to trade
@@ -243,8 +243,49 @@ async function backtestToken(symbol, strategy, days = BACKTEST_DAYS) {
       }
     }
 
-    // Trend alignment filter
+    // RANGE_BOUNCE: sideways market, buy at range low, sell at range high
+    // Uses range-wall SL (0.5% beyond wall) and opposite-wall TP — different from trend strategies
+    if (strategy === 'RANGE_BOUNCE') {
+      const rangeWindow = slice15m.slice(-20);
+      if (rangeWindow.length >= 15) {
+        const rangeHigh = Math.max(...rangeWindow.map(c => c.high));
+        const rangeLow  = Math.min(...rangeWindow.map(c => c.low));
+        const rangeSize = (rangeHigh - rangeLow) / rangeHigh;
+
+        // Only trade sideways markets: range < 3%, not a big trending move
+        if (rangeSize > 0.005 && rangeSize < 0.03) {
+          const nearLow  = currentPrice <= rangeLow  * 1.003; // within 0.3% of range low
+          const nearHigh = currentPrice >= rangeHigh * 0.997; // within 0.3% of range high
+          const isBullishCandle = sweepCandle.close > sweepCandle.open;
+          const isBearishCandle = sweepCandle.close < sweepCandle.open;
+
+          if (nearLow && isBullishCandle) {
+            // LONG at range bottom — TP at range high, SL 0.5% below range low
+            signals.push({
+              direction: 'LONG',
+              price: currentPrice,
+              tp: rangeHigh * 0.998,
+              sl: rangeLow  * 0.995,
+              useOwnSlTp: true,
+            });
+          }
+          if (nearHigh && isBearishCandle) {
+            // SHORT at range top — TP at range low, SL 0.5% above range high
+            signals.push({
+              direction: 'SHORT',
+              price: currentPrice,
+              tp: rangeLow  * 1.002,
+              sl: rangeHigh * 1.005,
+              useOwnSlTp: true,
+            });
+          }
+        }
+      }
+    }
+
+    // Trend alignment filter — RANGE_BOUNCE skips this (works in both directions)
     const filtered = signals.filter(s => {
+      if (s.useOwnSlTp) return true; // range-bounce trades both directions by design
       if (s.direction === 'LONG' && h1Trend === 'bearish') return false;
       if (s.direction === 'SHORT' && h1Trend === 'bullish') return false;
       return true;
@@ -254,8 +295,9 @@ async function backtestToken(symbol, strategy, days = BACKTEST_DAYS) {
     for (const sig of filtered) {
       const entry = sig.price;
       const isLong = sig.direction === 'LONG';
-      const tp = isLong ? entry * (1 + tpPct) : entry * (1 - tpPct);
-      const sl = isLong ? entry * (1 - slPct) : entry * (1 + slPct);
+      // RANGE_BOUNCE supplies its own SL/TP; others use fixed margin-based values
+      const tp = sig.useOwnSlTp ? sig.tp : (isLong ? entry * (1 + tpPct) : entry * (1 - tpPct));
+      const sl = sig.useOwnSlTp ? sig.sl : (isLong ? entry * (1 - slPct) : entry * (1 + slPct));
 
       let outcome = 'TIMEOUT';
       for (const fc of futureCandles) {
@@ -404,7 +446,7 @@ async function passesGate(symbol, strategy, days = BACKTEST_DAYS, signalWinRate 
 
 // Get all strategies that pass for a symbol (useful for dashboard)
 async function getPassingStrategies(symbol, days = BACKTEST_DAYS) {
-  const strategies = ['LIQUIDITY_SWEEP', 'STOP_LOSS_HUNT', 'MOMENTUM_SCALP', 'BRR_FIBO', 'SMC_CLASSIC', 'SMC_HL_STRUCTURE'];
+  const strategies = ['LIQUIDITY_SWEEP', 'STOP_LOSS_HUNT', 'MOMENTUM_SCALP', 'BRR_FIBO', 'SMC_CLASSIC', 'SMC_HL_STRUCTURE', 'RANGE_BOUNCE'];
   const passing = [];
 
   for (const strat of strategies) {

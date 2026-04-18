@@ -648,37 +648,33 @@ async function initAllTables() {
     try { await pool.query(sql); } catch (_) {}
   }
 
-  // Seed approved tokens (admin can add/remove via dashboard)
-  const approvedTokens = [
-    // Major coins (use Binance futures symbols: 1000PEPE, 1000SHIB, POL not MATIC)
-    'BTCUSDT','ETHUSDT','SOLUSDT','BNBUSDT','XRPUSDT','DOGEUSDT','ADAUSDT',
-    'AVAXUSDT','DOTUSDT','LINKUSDT','POLUSDT','UNIUSDT','LTCUSDT','NEARUSDT',
-    'SUIUSDT','1000PEPEUSDT','1000SHIBUSDT','TONUSDT','TRXUSDT','ICPUSDT',
-    // Mid caps
-    '1000BONKUSDT','CAKEUSDT','ZROUSDT','VIRTUALUSDT','DEXEUSDT','PENGUUSDT',
-    'STXUSDT','SEIUSDT','APTUSDT','FLRUSDT','FILUSDT','VETUSDT',
-    'JUPUSDT','ARBUSDT','FETUSDT','RENDERUSDT','KASUSDT','ATOMUSDT',
-    'WLDUSDT','MORPHOUSDT','ENAUSDT','TRUMPUSDT',
-  ];
-  for (const symbol of approvedTokens) {
-    try {
-      await pool.query(
-        `INSERT INTO global_token_settings (symbol, enabled, banned) VALUES ($1, true, false) ON CONFLICT (symbol) DO NOTHING`,
-        [symbol]
-      );
-    } catch (_) {}
-  }
-
   // Clean up wrong symbols (renamed/delisted)
   const badSymbols = ['MATICUSDT', 'PEPEUSDT', 'SHIBUSDT', 'STABLEUSDT', 'NIGHTUSDT'];
   for (const sym of badSymbols) {
     try { await pool.query('DELETE FROM global_token_settings WHERE symbol = $1', [sym]); } catch (_) {}
   }
 
-  // Reset all agent XP, levels, and earnings to 0 (fresh start)
+  // Seed 4 core coins on first boot only — preserve any admin-added tokens on restarts
   try {
-    await pool.query(`UPDATE agent_profiles SET level = 1, xp = 0, total_earned = 0, tasks_completed = 0, tasks_success = 0, updated_at = NOW()`);
-    console.log('[DB] Agent profiles reset to 0 — fresh start');
+    const countRes = await pool.query('SELECT COUNT(*) FROM global_token_settings');
+    const tokenCount = parseInt(countRes.rows[0].count, 10);
+    if (tokenCount === 0) {
+      const defaults = [
+        { symbol: 'BTCUSDT',  rank: 1 },
+        { symbol: 'ETHUSDT',  rank: 2 },
+        { symbol: 'SOLUSDT',  rank: 3 },
+        { symbol: 'BNBUSDT',  rank: 4 },
+      ];
+      for (const d of defaults) {
+        await pool.query(
+          `INSERT INTO global_token_settings (symbol, enabled, banned, "rank")
+           VALUES ($1, true, false, $2)
+           ON CONFLICT (symbol) DO NOTHING`,
+          [d.symbol, d.rank]
+        );
+      }
+      console.log('[DB] Token pool seeded: BTCUSDT, ETHUSDT, SOLUSDT, BNBUSDT');
+    }
   } catch (_) {}
 
   console.log('[DB] All tables verified');
