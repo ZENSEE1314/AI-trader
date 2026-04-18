@@ -87,8 +87,19 @@ app.use('/api/chart', require('./routes/chart'));
 app.use('/api/token-leverage', require('./routes/token-leverage'));
 app.use('/api/risk-levels', require('./routes/risk-levels'));
 app.use('/api/quantum', require('./routes/quantum'));
+// Version info — public, no auth required
+const VERSION_INFO = require('./version.json');
+app.get('/api/version', (req, res) => {
+  res.json({
+    version:  VERSION_INFO.version,
+    name:     VERSION_INFO.name,
+    released: VERSION_INFO.released,
+    changelog: VERSION_INFO.changelog,
+  });
+});
+
 // Fast health endpoint for Railway healthcheck (no DB queries)
-app.get('/health', (req, res) => res.json({ status: 'ok', uptime: process.uptime() }));
+app.get('/health', (req, res) => res.json({ status: 'ok', uptime: process.uptime(), version: VERSION_INFO.version }));
 app.use('/health/details', require('./health'));
 
 // Customer chatbot (public — no auth needed)

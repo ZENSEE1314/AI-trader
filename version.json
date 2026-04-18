@@ -1,0 +1,30 @@
+{
+  "version": "1.0.0",
+  "name": "MCT AI Trader",
+  "released": "2026-04-18",
+  "changelog": [
+    {
+      "version": "1.0.0",
+      "date": "2026-04-18",
+      "label": "Baseline — Swing Walls + 4-Token Trading",
+      "changes": [
+        "RANGE_BOUNCE: detect walls from swing clusters, not absolute max/min",
+        "Wall-only entries — no mid-range, strict 0.3% tolerance",
+        "Per-symbol daily trade limits — all 4 coins trade independently",
+        "Remove daily trade count cap — trade on valid signals only",
+        "Kronos + AI scanner limited to BTCUSDT/ETHUSDT/SOLUSDT/BNBUSDT",
+        "Chart indicator font set to 15pt",
+        "RANGE_BOUNCE added to backtest gate (KNOWN_STRATEGIES)",
+        "Token pool seeding: only on first boot, not on every restart",
+        "Exhaustive 24/7 optimizer (genetic search) added — runs in background",
+        "Optimizer results API: GET /api/dashboard/optimizer/results",
+        "Fix: all strategies run 24/7 — session gate changed from hard block to score bonus",
+        "Fix: EMA200 bias changed from hard block to score penalty",
+        "Fix: removed AVOID_MINUTES blackout (00/15/30/45)",
+        "Fix: MIN_SCORE lowered 8→6",
+        "Fix: MOMENTUM_SCALP trendStrength 7→5, pinBarWickRatio 2.5→2.0",
+        "Fix: RSI hard block raised to RSI>78 long / RSI<22 short"
+      ]
+    }
+  ]
+}
