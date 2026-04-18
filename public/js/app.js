@@ -1262,7 +1262,7 @@
             </div>
             ${profitShare > 0 ? `
             <div style="display:flex;justify-content:space-between;">
-              <span>Your 60% trade profits <span style="font-size:0.7rem;opacity:0.6;">(on exchange)</span></span>
+              <span>Trade profits (your 60%)</span>
               <span class="text-mono" style="color:var(--color-success);">+$${profitShare.toFixed(2)}</span>
             </div>` : ''}
             ${feesPaid > 0 ? `
@@ -1271,7 +1271,7 @@
               <span class="text-mono" style="color:var(--color-danger);">-$${feesPaid.toFixed(2)}</span>
             </div>` : ''}
           </div>
-          <div style="font-size:0.7rem;color:var(--color-text-muted);margin-top:6px;">💡 Trade profits (60%) stay in your Binance/Bitunix account — shown above for reference only</div>
+          <div style="font-size:0.7rem;color:var(--color-text-muted);margin-top:6px;">💡 Your 60% is credited here automatically when each trade closes. Actual USDT profit stays in your exchange account.</div>
         `;
       }
 

@@ -1,8 +1,22 @@
 {
-  "version": "1.0.2",
+  "version": "1.0.3",
   "name": "MCT AI Trader",
   "released": "2026-04-18",
   "changelog": [
+    {
+      "version": "1.0.3",
+      "tag": "v1.0.3",
+      "date": "2026-04-19",
+      "label": "Auto-credit profit splits to cash wallet on every trade close",
+      "changes": [
+        "recordProfitSplit: user's 60% share now credited to users.cash_wallet immediately when trade closes",
+        "recordProfitSplit: platform's 40% fee now credited to all admin users' cash_wallet automatically",
+        "Admins split equally if multiple admin accounts exist",
+        "wallet_transactions still recorded for full audit trail",
+        "Cash wallet breakdown note updated: 60% shown as real credited amount, not exchange-only reference",
+        "Previously: profit split was logged only, no cash_wallet was ever updated from trades"
+      ]
+    },
     {
       "version": "1.0.2",
       "tag": "v1.0.2",

@@ -474,31 +474,58 @@ async function recordProfitSplit(db, userId, apiKeyId, pnlUsdt, symbol) {
       'SELECT profit_share_user_pct, profit_share_admin_pct FROM api_keys WHERE id = $1',
       [apiKeyId]
     );
-    const userPct = keyRows.length > 0 ? (parseFloat(keyRows[0].profit_share_user_pct) || 60) : 60;
+    const userPct  = keyRows.length > 0 ? (parseFloat(keyRows[0].profit_share_user_pct)  || 60) : 60;
     const adminPct = keyRows.length > 0 ? (parseFloat(keyRows[0].profit_share_admin_pct) || 40) : 40;
 
-    const userShare = pnlUsdt * userPct / 100;
+    const userShare   = pnlUsdt * userPct  / 100;
     const platformFee = pnlUsdt * adminPct / 100;
 
-    // Record platform fee as wallet transaction
+    // ── 1. Credit user's share to their cash wallet ───────────────
+    // The actual USDT profit stays in their Binance/Bitunix account,
+    // but we mirror it in cash_wallet so they can see their earnings grow.
     await db.query(
-      `INSERT INTO wallet_transactions (user_id, type, amount, status, description)
-       VALUES ($1, 'platform_fee', $2, 'completed', $3)`,
-      [userId, platformFee, `${adminPct}% platform fee on ${symbol} profit $${pnlUsdt.toFixed(2)}`]
+      `UPDATE users SET cash_wallet = cash_wallet + $1 WHERE id = $2`,
+      [userShare, userId]
     );
-
-    // Record user profit share (for tracking only — profit stays on exchange)
     await db.query(
       `INSERT INTO wallet_transactions (user_id, type, amount, status, description)
        VALUES ($1, 'profit_share', $2, 'completed', $3)`,
-      [userId, userShare, `${userPct}% profit share on ${symbol} profit $${pnlUsdt.toFixed(2)}`]
+      [userId, userShare, `${userPct}% profit share — ${symbol} trade profit $${pnlUsdt.toFixed(2)} (on exchange)`]
     );
 
-    // NOTE: User's 60% profit stays in their Binance/Bitunix account.
-    // Cash wallet is only for top-ups and referral commissions.
-    // Platform's 40% fee is collected separately (admin marks paid weekly).
+    // ── 2. Credit platform's 40% cut to admin cash wallets ────────
+    // Distribute equally among all admin accounts so revenue is tracked live.
+    const adminRows = await db.query(
+      `SELECT id FROM users WHERE is_admin = true`
+    );
+    if (adminRows.length > 0) {
+      const perAdmin = platformFee / adminRows.length;
+      for (const admin of adminRows) {
+        await db.query(
+          `UPDATE users SET cash_wallet = cash_wallet + $1 WHERE id = $2`,
+          [perAdmin, admin.id]
+        );
+        await db.query(
+          `INSERT INTO wallet_transactions (user_id, type, amount, status, description)
+           VALUES ($1, 'platform_fee', $2, 'completed', $3)`,
+          [admin.id, perAdmin,
+           `${adminPct}% platform fee — ${symbol} trade profit $${pnlUsdt.toFixed(2)} (user #${userId})`]
+        );
+      }
+    } else {
+      // No admin found — log the fee for manual reconciliation
+      await db.query(
+        `INSERT INTO wallet_transactions (user_id, type, amount, status, description)
+         VALUES ($1, 'platform_fee', $2, 'completed', $3)`,
+        [userId, platformFee, `${adminPct}% platform fee on ${symbol} profit $${pnlUsdt.toFixed(2)} (unassigned — no admin)`]
+      );
+    }
 
-    bLog.trade(`Profit split: ${symbol} PnL=$${pnlUsdt.toFixed(2)} → user ${userPct}%=$${userShare.toFixed(2)} platform ${adminPct}%=$${platformFee.toFixed(2)}`);
+    bLog.trade(
+      `Profit split: ${symbol} PnL=$${pnlUsdt.toFixed(2)} → ` +
+      `user ${userPct}%=$${userShare.toFixed(2)} credited to cash wallet | ` +
+      `platform ${adminPct}%=$${platformFee.toFixed(2)} credited to ${adminRows.length || 0} admin(s)`
+    );
   } catch (err) {
     bLog.error(`Profit split error for ${symbol}: ${err.message}`);
   }
