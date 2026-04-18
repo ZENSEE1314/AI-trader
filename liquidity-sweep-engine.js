@@ -16,12 +16,11 @@
 const fetch = require('node-fetch');
 const aiLearner = require('./ai-learner');
 const { log: bLog } = require('./bot-logger');
+const db = require('./db');
 let smcEngine = null;
 try { smcEngine = require('./smc-engine'); } catch (e) { console.warn('[Engine] SMC engine not available:', e.message); }
 
 const REQUEST_TIMEOUT = 15000;
-const TOP_N_COINS = 100;
-const MIN_24H_VOLUME = 10_000_000;
 
 // ── Fetch Helpers ────────────────────────────────────────────
 
@@ -40,12 +39,6 @@ async function fetchKlines(symbol, interval, limit = 100) {
   const url = `https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`;
   const res = await fetchWithRetry(url);
   if (!res) return null;
-  return res.json();
-}
-
-async function fetchTickers() {
-  const res = await fetchWithRetry('https://fapi.binance.com/fapi/v1/ticker/24hr');
-  if (!res) return [];
   return res.json();
 }
 
@@ -1180,6 +1173,144 @@ function detectSMCStructureTrade(candles15m, candles3m, candles1m, h1Trend = 'ne
   return null;
 }
 
+// ── Strategy 7: Range Bounce ───────────────────────────────
+// Sideways market: price oscillates between a well-tested high and low.
+// Entry at the range boundaries with TP at the opposite boundary.
+// Captures the FULL range width — ideal for consolidation phases.
+//
+// Detection requirements:
+//   • Range 0.5%–5% wide over last 30 × 15m candles
+//   • EMA9 and EMA21 spread < 1.5% (EMAs flat = no trend = ranging)
+//   • Both range high and low touched at least 2× (well-respected boundaries)
+//   • Price within 0.6% of the boundary to enter
+//   • 1m candle shows rejection (bullish at low, bearish at high)
+
+function detectRangeBounce(candles15m, candles1m) {
+  if (candles15m.length < 30 || candles1m.length < 5) return null;
+
+  const parsed15 = candles15m.map(parseCandle);
+  const parsed1  = candles1m.map(parseCandle);
+
+  // Define range from last 30 candles
+  const lookback = parsed15.slice(-30);
+  const rangeHigh = Math.max(...lookback.map(c => c.high));
+  const rangeLow  = Math.min(...lookback.map(c => c.low));
+  const rangeSize = rangeHigh - rangeLow;
+  const rangePct  = rangeSize / rangeLow;
+
+  // Range must be meaningful — too narrow = noise, too wide = trending
+  if (rangePct < 0.005 || rangePct > 0.05) return null;
+
+  // EMA spread: flat EMAs signal no trend (ranging)
+  const closes15 = lookback.map(c => c.close);
+  const ema9  = calcEMA(closes15, 9);
+  const ema21 = calcEMA(closes15, 21);
+  if (!ema9 || !ema21) return null;
+  const emaSpread = Math.abs(ema9 - ema21) / ema21;
+  if (emaSpread > 0.015) return null; // EMAs spread > 1.5% = trend present, skip
+
+  // Count how many candles touched each boundary (within 0.5% tolerance)
+  const TOUCH_TOL = 0.005;
+  let highTouches = 0;
+  let lowTouches  = 0;
+  for (const c of lookback) {
+    if ((rangeHigh - c.high) / rangeHigh < TOUCH_TOL) highTouches++;
+    if ((c.low - rangeLow)  / rangeLow  < TOUCH_TOL) lowTouches++;
+  }
+  // Need at least 2 touches of both walls to confirm the range is real
+  if (highTouches < 2 || lowTouches < 2) return null;
+
+  const price = parsed15[parsed15.length - 1].close;
+  const distFromHigh = (rangeHigh - price) / rangeHigh;
+  const distFromLow  = (price - rangeLow)  / rangeLow;
+
+  // Reject entries in the middle of the range (must be in bottom 30% for LONG, top 30% for SHORT)
+  const rangePos = (price - rangeLow) / rangeSize; // 0 = at low, 1 = at high
+  if (rangePos > 0.30 && rangePos < 0.70) return null; // mid-range = no trade
+
+  // Entry zone: within 0.4% of the boundary (tighter than before — ensures we're at the wall)
+  const ENTRY_ZONE = 0.004;
+
+  // ── LONG at range low — only when price is in the BOTTOM 30% of range ──
+  if (distFromLow < ENTRY_ZONE && rangePos <= 0.30) {
+    const last1m = parsed1[parsed1.length - 1];
+    const prev1m = parsed1[parsed1.length - 2];
+
+    // 1m confirmation: wick must have tested range low (within 0.3%)
+    const prevTestedLow = prev1m && prev1m.low <= rangeLow * 1.003;
+    const lastTestedLow = last1m.low <= rangeLow * 1.003;
+
+    // Prefer entering RIGHT at the rejection candle close (prev touched low + current bullish)
+    // — catches the bounce earlier at a better price near the wall
+    if (prevTestedLow && isGreenCandle(prev1m) && (isGreenCandle(last1m) || last1m.close > last1m.open)) {
+      return {
+        direction: 'LONG',
+        setup: 'RANGE_BOUNCE',
+        entryPrice: last1m.close,           // enter at current price (just bounced off wall)
+        sl: rangeLow * (1 - TOUCH_TOL),    // just below range floor
+        tp1: rangeHigh * (1 - TOUCH_TOL),  // opposite wall is the target
+        rangeHigh, rangeLow, rangePct,
+        highTouches, lowTouches,
+      };
+    }
+
+    // Fallback: current 1m wicked to low and is now closing bullish
+    if (lastTestedLow && (isGreenCandle(last1m) || last1m.close > prev1m.close)) {
+      return {
+        direction: 'LONG',
+        setup: 'RANGE_BOUNCE',
+        entryPrice: last1m.close,
+        sl: rangeLow * (1 - TOUCH_TOL),
+        tp1: rangeHigh * (1 - TOUCH_TOL),
+        rangeHigh, rangeLow, rangePct,
+        highTouches, lowTouches,
+      };
+    }
+
+    return null;
+  }
+
+  // ── SHORT at range high — only when price is in the TOP 30% of range ──
+  if (distFromHigh < ENTRY_ZONE && rangePos >= 0.70) {
+    const last1m = parsed1[parsed1.length - 1];
+    const prev1m = parsed1[parsed1.length - 2];
+
+    // 1m confirmation: wick must have tested range high (within 0.3%)
+    const prevTestedHigh = prev1m && prev1m.high >= rangeHigh * 0.997;
+    const lastTestedHigh = last1m.high >= rangeHigh * 0.997;
+
+    // Prefer entering RIGHT at the rejection candle close (prev touched high + current bearish)
+    if (prevTestedHigh && isRedCandle(prev1m) && (isRedCandle(last1m) || last1m.close < last1m.open)) {
+      return {
+        direction: 'SHORT',
+        setup: 'RANGE_BOUNCE',
+        entryPrice: last1m.close,           // enter at current price (just rejected from wall)
+        sl: rangeHigh * (1 + TOUCH_TOL),   // just above range ceiling
+        tp1: rangeLow  * (1 + TOUCH_TOL),  // opposite wall is the target
+        rangeHigh, rangeLow, rangePct,
+        highTouches, lowTouches,
+      };
+    }
+
+    // Fallback: current 1m wicked to high and is now closing bearish
+    if (lastTestedHigh && (isRedCandle(last1m) || last1m.close < prev1m.close)) {
+      return {
+        direction: 'SHORT',
+        setup: 'RANGE_BOUNCE',
+        entryPrice: last1m.close,
+        sl: rangeHigh * (1 + TOUCH_TOL),
+        tp1: rangeLow  * (1 + TOUCH_TOL),
+        rangeHigh, rangeLow, rangePct,
+        highTouches, lowTouches,
+      };
+    }
+
+    return null;
+  }
+
+  return null;
+}
+
 // ── MCT Session Windows (from PDF strategy) ────────────────
 // Only trade during the 3 institutional opening windows.
 // Outside these windows: institutions are not active, moves are unreliable.
@@ -1459,6 +1590,28 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
   const recentRange = recentHigh - recentLow;
   const priceInRange = recentRange > 0 ? (price - recentLow) / recentRange : 0.5; // 0=bottom, 1=top
 
+  // ── RANGING MARKET DETECTOR ──────────────────────────────
+  // When EMA9 and EMA21 are flat and close together, the market is sideways.
+  // In a range, ANY strategy entry must be near the range extreme — not the middle.
+  // This prevents the classic mistake: buying at 60-70% of the range.
+  const emaSpreadPct = (ema9_15m && ema21_15m)
+    ? Math.abs(ema9_15m - ema21_15m) / ema21_15m
+    : 1;
+  // Count how many times each boundary was touched over last 30 candles
+  const range30 = parsed15.slice(-30);
+  const r30High = Math.max(...range30.map(c => c.high));
+  const r30Low  = Math.min(...range30.map(c => c.low));
+  let r30HighTouches = 0, r30LowTouches = 0;
+  for (const c of range30) {
+    if ((r30High - c.high) / r30High < 0.005) r30HighTouches++;
+    if ((c.low  - r30Low)  / r30Low  < 0.005) r30LowTouches++;
+  }
+  // Market is ranging when: EMAs flat AND both walls touched 2+
+  const isRangingMarket = emaSpreadPct < 0.015 && r30HighTouches >= 2 && r30LowTouches >= 2;
+  if (isRangingMarket) {
+    bLog.scan(`${symbol}: RANGING market detected (EMA spread=${(emaSpreadPct*100).toFixed(2)}%, walls H=${r30HighTouches} L=${r30LowTouches}) — only range-extreme entries allowed`);
+  }
+
   // ── SWING POINT PROXIMITY (buy HL/LL, sell HH/LH) ────────
   // Detect 15m pivot swing lows and highs for structural entry quality.
   // A LONG entry must be near a swing low (HL or LL), a SHORT near a swing high.
@@ -1677,6 +1830,38 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     }
   } // end SMC_HL_STRUCTURE gate
 
+  // Strategy 7: Range Bounce — sideways market, buy low sell high
+  if (!enabledStrategies || enabledStrategies.RANGE_BOUNCE !== false) {
+    const range = detectRangeBounce(klines15m, klines1m);
+    if (range) {
+      const slDist = Math.abs(range.entryPrice - range.sl) / range.entryPrice;
+      const tpDist = Math.abs(range.tp1 - range.entryPrice) / range.entryPrice;
+      const rr     = slDist > 0 ? tpDist / slDist : 1.5;
+
+      if (rr >= 1.2 && slDist > 0.001 && slDist < 0.05) {
+        const touchQuality = range.highTouches + range.lowTouches;
+        signals.push({
+          symbol, direction: range.direction, price: range.entryPrice,
+          lastPrice: price,
+          sl: range.sl,
+          tp1: range.tp1,
+          tp2: range.tp1, // full range is the target — no extension
+          tp3: range.tp1,
+          slDist, rr: Math.round(rr * 10) / 10,
+          setup: 'RANGE_BOUNCE',
+          setupName: `${range.direction}-RANGE(${(range.rangePct * 100).toFixed(1)}%)`,
+          // Base 9: strong signal — both boundaries well-defined
+          // +2 for many touches (high confidence range), +2 for tight EMA (clean range)
+          score: 9 + (touchQuality >= 6 ? 2 : touchQuality >= 4 ? 1 : 0),
+          rangeHigh: range.rangeHigh,
+          rangeLow:  range.rangeLow,
+          rangePct:  range.rangePct,
+          isRangeSetup: true, // bypass trend hard-blocks — range trades are bidirectional
+        });
+      }
+    }
+  } // end RANGE_BOUNCE gate
+
   if (!signals.length) return null;
 
   // Apply confluence bonuses + global filters to all signals
@@ -1684,16 +1869,19 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     // ── PDF HARD FILTERS ─────────────────────────────────────
 
     // EMA200 bias (PDF: "above MA200 → look long, below → look short")
-    // Hard block if direction conflicts with EMA200 trend
-    if (ema200_bias === 'bullish' && sig.direction === 'SHORT') {
-      sig.score = -99;
-      sig.blocked = `SHORT blocked — price above EMA200 (bullish bias per PDF)`;
-      continue;
-    }
-    if (ema200_bias === 'bearish' && sig.direction === 'LONG') {
-      sig.score = -99;
-      sig.blocked = `LONG blocked — price below EMA200 (bearish bias per PDF)`;
-      continue;
+    // Hard block if direction conflicts with EMA200 trend.
+    // Range setups are exempt — range trades are bidirectional by design.
+    if (!sig.isRangeSetup) {
+      if (ema200_bias === 'bullish' && sig.direction === 'SHORT') {
+        sig.score = -99;
+        sig.blocked = `SHORT blocked — price above EMA200 (bullish bias per PDF)`;
+        continue;
+      }
+      if (ema200_bias === 'bearish' && sig.direction === 'LONG') {
+        sig.score = -99;
+        sig.blocked = `LONG blocked — price below EMA200 (bearish bias per PDF)`;
+        continue;
+      }
     }
 
     // VWAP + OP bias (PDF: "avoid entering in between VWAP and OP if gap is small")
@@ -1763,20 +1951,25 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     }
 
     // Price position in range: LONG must be near the LOW, SHORT near the HIGH.
-    // Hard block if price is at the wrong extreme — never buy tops, never sell bottoms.
+    // In a RANGING market: tighter entry zone enforced — no mid-range entries allowed.
+    // In a TRENDING market: standard 80/20 hard blocks apply.
     if (sig.direction === 'LONG') {
-      if (priceInRange > 0.80) {
+      const longTopBlock = isRangingMarket ? 0.45 : 0.80; // ranging = must be below 45% of range
+      if (priceInRange > longTopBlock) {
         sig.score = -99;
-        sig.blocked = `LONG blocked — price at ${(priceInRange * 100).toFixed(0)}% of 5h range (top — should SHORT not LONG)`;
-      } else if (priceInRange < 0.35) sig.score += 2; // near the bottom — ideal HL/LL entry
-      else if (priceInRange > 0.65) sig.score -= 3;   // upper half but not blocked — risky
+        sig.blocked = `LONG blocked — price at ${(priceInRange * 100).toFixed(0)}% of ${isRangingMarket ? 'RANGING' : '5h'} range (${isRangingMarket ? 'wait for range bottom <45%' : 'top'})`;
+      } else if (priceInRange < 0.25) sig.score += 4; // very near range bottom — prime LONG
+      else if (priceInRange < 0.35) sig.score += 2;   // near bottom — good
+      else if (priceInRange > 0.60) sig.score -= 3;   // upper half — risky
     }
     if (sig.direction === 'SHORT') {
-      if (priceInRange < 0.20) {
+      const shortBotBlock = isRangingMarket ? 0.55 : 0.20; // ranging = must be above 55% of range
+      if (priceInRange < shortBotBlock) {
         sig.score = -99;
-        sig.blocked = `SHORT blocked — price at ${(priceInRange * 100).toFixed(0)}% of 5h range (bottom — should LONG not SHORT)`;
-      } else if (priceInRange > 0.75) sig.score += 4; // at the very top — ideal SHORT zone
-      else if (priceInRange > 0.65) sig.score += 2;   // near the top — good SHORT zone
+        sig.blocked = `SHORT blocked — price at ${(priceInRange * 100).toFixed(0)}% of ${isRangingMarket ? 'RANGING' : '5h'} range (${isRangingMarket ? 'wait for range top >55%' : 'bottom'})`;
+      } else if (priceInRange > 0.80) sig.score += 5; // very near range top — prime SHORT
+      else if (priceInRange > 0.70) sig.score += 3;   // near top — good
+      else if (priceInRange > 0.65) sig.score += 1;
     }
 
     // Structural proximity: reward entries tight to actual swing structure (HL/LL for LONG, HH/LH for SHORT)
@@ -1792,21 +1985,24 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     }
 
     // 1h trend alignment — bonus for with-trend, penalty for counter-trend
-    if (sig.direction === 'LONG' && h1Trend === 'bullish') sig.score += 3;
+    // Range setups get a smaller counter-trend penalty (both directions are valid in a range)
+    const trendPenalty = sig.isRangeSetup ? 1 : 4;
+    if (sig.direction === 'LONG'  && h1Trend === 'bullish') sig.score += 3;
     if (sig.direction === 'SHORT' && h1Trend === 'bearish') sig.score += 3;
-    if (sig.direction === 'LONG' && h1Trend === 'bearish') sig.score -= 4;
-    if (sig.direction === 'SHORT' && h1Trend === 'bullish') sig.score -= 4;
+    if (sig.direction === 'LONG'  && h1Trend === 'bearish') sig.score -= trendPenalty;
+    if (sig.direction === 'SHORT' && h1Trend === 'bullish') sig.score -= trendPenalty;
 
     // BTC market correlation: don't fight BTC's direction on altcoins
-    // When BTC is clearly bullish, shorting alts is fighting the market
+    // Range setups get a softer penalty — if a coin is ranging it may be disconnected from BTC
     if (symbol !== 'BTCUSDT') {
+      const btcPenalty = sig.isRangeSetup ? 2 : 5;
       if (btcTrend === 'bullish' && sig.direction === 'SHORT') {
-        sig.score -= 5;
-        sig.blocked = 'SHORT rejected — BTC is bullish, alts follow BTC';
+        sig.score -= btcPenalty;
+        if (!sig.isRangeSetup) sig.blocked = 'SHORT rejected — BTC is bullish, alts follow BTC';
       }
       if (btcTrend === 'bearish' && sig.direction === 'LONG') {
-        sig.score -= 5;
-        sig.blocked = 'LONG rejected — BTC is bearish, alts follow BTC';
+        sig.score -= btcPenalty;
+        if (!sig.isRangeSetup) sig.blocked = 'LONG rejected — BTC is bearish, alts follow BTC';
       }
       // Bonus for trading WITH BTC direction
       if (btcTrend === 'bullish' && sig.direction === 'LONG') sig.score += 2;
@@ -1837,7 +2033,8 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     }
 
     // Dynamic ATR-based SL: use ATR as MINIMUM distance — give room to breathe
-    if (atr15 > 0) {
+    // Range setups keep their SL exactly at the range boundary — ATR doesn't apply
+    if (atr15 > 0 && !sig.isRangeSetup) {
       const atrSl = sig.direction === 'LONG' ? sig.price - atr15 * 1.2 : sig.price + atr15 * 1.2;
       // Use ATR SL if it's WIDER than strategy SL (more room = fewer stop-outs on noise)
       if (sig.direction === 'LONG' && atrSl < sig.sl) sig.sl = atrSl;
@@ -1846,16 +2043,19 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     }
 
     // Smart TP: find nearest strong S/R level in direction
-    const strongLevels = allLevels.filter(l => l.strength >= 3);
-    const tpLevel = findNearestLevel(sig.price, strongLevels, sig.direction, sig.slDist * 1.2);
-    if (tpLevel) {
-      sig.tp1 = tpLevel.price;
-    } else {
-      // Fallback: ATR-based TP (2x ATR)
-      sig.tp1 = sig.direction === 'LONG' ? sig.price + atr15 * 2.0 : sig.price - atr15 * 2.0;
+    // Range setups keep their TP at the opposite range boundary — don't override
+    if (!sig.isRangeSetup) {
+      const strongLevels = allLevels.filter(l => l.strength >= 3);
+      const tpLevel = findNearestLevel(sig.price, strongLevels, sig.direction, sig.slDist * 1.2);
+      if (tpLevel) {
+        sig.tp1 = tpLevel.price;
+      } else {
+        // Fallback: ATR-based TP (2x ATR)
+        sig.tp1 = sig.direction === 'LONG' ? sig.price + atr15 * 2.0 : sig.price - atr15 * 2.0;
+      }
+      sig.tp2 = sig.direction === 'LONG' ? sig.price + Math.abs(sig.tp1 - sig.price) * 1.5 : sig.price - Math.abs(sig.tp1 - sig.price) * 1.5;
+      sig.tp3 = sig.direction === 'LONG' ? sig.price + Math.abs(sig.tp1 - sig.price) * 2.0 : sig.price - Math.abs(sig.tp1 - sig.price) * 2.0;
     }
-    sig.tp2 = sig.direction === 'LONG' ? sig.price + Math.abs(sig.tp1 - sig.price) * 1.5 : sig.price - Math.abs(sig.tp1 - sig.price) * 1.5;
-    sig.tp3 = sig.direction === 'LONG' ? sig.price + Math.abs(sig.tp1 - sig.price) * 2.0 : sig.price - Math.abs(sig.tp1 - sig.price) * 2.0;
 
     // Recalculate RR with updated SL/TP
     const tpDist = Math.abs(sig.tp1 - sig.price) / sig.price;
@@ -1914,39 +2114,69 @@ async function scanSMC(log, opts = {}) {
     return [];
   }
 
-  if (isAvoidTime()) {
-    log('Liquidity Engine: Candle-open avoid time (UTC 8/12/16/20 or minute 0/15/30/45). Skipping entry.');
-    bLog.scan('Avoid candle-open time per PDF rules.');
-    return [];
+  // Candle-open avoid time applies to trend strategies only.
+  // Range bounces are exempt — a boundary test at :00 or :15 is still valid.
+  const avoidTrend = isAvoidTime();
+  if (avoidTrend) {
+    log('Liquidity Engine: Candle-open avoid time — trend strategies blocked, range bounce still active.');
+    bLog.scan('Avoid candle-open time — only RANGE_BOUNCE allowed this minute.');
   }
 
   const activeSession = getActiveSession();
-  if (!activeSession) {
-    // NOTE: AI session override removed — trading outside institutional windows causes losses.
-    // Sessions (Asia 23-02, Europe 07-10, US 12-16 UTC) are hard boundaries, not suggestions.
-    log('Liquidity Engine: Outside session windows (Asia 23-02/Europe 07-10/US 12-16 UTC). Waiting.');
-    bLog.scan('Outside institutional session windows. No trades until next opening.');
+  const outsideSession = !activeSession;
+
+  // Outside session: only RANGE_BOUNCE is allowed — it trades mechanical
+  // support/resistance boundaries that work at any hour.
+  // All trend-following strategies (SWEEP, HUNT, MOMENTUM, BRR, SMC) need
+  // institutional session activity and are blocked outside windows.
+  if (outsideSession) {
+    log('Liquidity Engine: Outside session — scanning for RANGE_BOUNCE setups only.');
+    bLog.scan('Outside session windows — range bounce scan only (Asia 23-02 / Europe 07-10 / US 12-16 UTC).');
+  } else {
+    bLog.scan(`Active session: ${activeSession.name} (${activeSession.startH}:00–${activeSession.endH}:00 UTC)`);
+  }
+
+  // Load scan list from DB: union of all enabled user watchlists + admin global tokens.
+  // Scans only coins users have actually chosen — no more top-100 volume sweep.
+  let watchlistSymbols = [];
+  try {
+    const rows = await db.query(`
+      SELECT DISTINCT symbol FROM (
+        SELECT uw.symbol
+        FROM user_watchlist uw
+        JOIN api_keys ak ON ak.user_id = uw.user_id
+        WHERE uw.enabled = true AND ak.enabled = true
+        UNION
+        SELECT symbol
+        FROM global_token_settings
+        WHERE enabled = true AND (banned IS NULL OR banned = false)
+      ) combined
+      ORDER BY symbol
+    `);
+    watchlistSymbols = rows.map(r => r.symbol.toUpperCase());
+  } catch (e) {
+    bLog.error(`Failed to load watchlist from DB: ${e.message}`);
+  }
+
+  if (!watchlistSymbols.length) {
+    bLog.error('No enabled tokens in any watchlist — nothing to scan. Add tokens in My Tokens.');
     return [];
   }
-  bLog.scan(`Active session: ${activeSession.name} (${activeSession.startH}:00–${activeSession.endH}:00 UTC)`);
 
-  const tickers = await fetchTickers();
-  if (!tickers.length) { bLog.error('Failed to fetch tickers'); return []; }
-
-  const BLACKLIST = new Set([
-    'ALPACAUSDT','BNXUSDT','ALPHAUSDT','BANANAS31USDT',
-    'LYNUSDT','PORT3USDT','RVVUSDT','BSWUSDT',
-    'NEIROETHUSDT','COSUSDT','YALAUSDT','TANSSIUSDT','EPTUSDT',
-    'LEVERUSDT','AGLDUSDT','LOOKSUSDT',
-    'XAUUSDT','XAGUSDT','EURUSDT','GBPUSDT','JPYUSDT',
-  ]);
-
-  const topCoins = tickers
-    .filter(t => t.symbol.endsWith('USDT') && !t.symbol.includes('_'))
-    .filter(t => !BLACKLIST.has(t.symbol))
-    .filter(t => parseFloat(t.quoteVolume) >= MIN_24H_VOLUME)
-    .sort((a, b) => parseFloat(b.quoteVolume) - parseFloat(a.quoteVolume))
-    .slice(0, opts.topNCoins || TOP_N_COINS);
+  // Fetch live prices for watchlist symbols in parallel (fast — only our coins)
+  const priceResults = await Promise.all(
+    watchlistSymbols.map(async sym => {
+      try {
+        const res = await fetchWithRetry(`https://fapi.binance.com/fapi/v1/ticker/price?symbol=${sym}`);
+        if (!res) return null;
+        const d = await res.json();
+        const price = parseFloat(d.price);
+        if (!price || price <= 0) return null;
+        return { symbol: sym, lastPrice: String(price) };
+      } catch { return null; }
+    })
+  );
+  const topCoins = priceResults.filter(Boolean);
 
   const params = await aiLearner.getOptimalParams();
   const minScore = params.MIN_SCORE || 8;
@@ -1998,7 +2228,14 @@ async function scanSMC(log, opts = {}) {
       continue;
     }
 
-    const signal = await analyzeCoin(ticker, params, enabledStrategies, bestParams, btcTrend);
+    // Outside session OR candle-open avoid time: force RANGE_BOUNCE only
+    // — trend strategies need clean session flow; range bounces are mechanical S/R
+    const rangeOnlyMode = outsideSession || avoidTrend;
+    const sessionStrategies = rangeOnlyMode
+      ? { RANGE_BOUNCE: true, LIQUIDITY_SWEEP: false, STOP_LOSS_HUNT: false, MOMENTUM_SCALP: false, BRR_FIBO: false, SMC_CLASSIC: false, SMC_HL_STRUCTURE: false }
+      : enabledStrategies;
+
+    const signal = await analyzeCoin(ticker, params, sessionStrategies, bestParams, btcTrend);
     if (signal) signal.comboId = activeCombo;
     analyzed++;
 
