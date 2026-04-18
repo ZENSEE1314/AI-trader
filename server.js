@@ -22,6 +22,17 @@ initAllTables().catch(err => console.error('DB init error:', err.message));
   }
 })();
 
+// Start 24/7 exhaustive strategy optimizer (background — non-blocking)
+(async () => {
+  try {
+    const optimizer = require('./exhaustive-optimizer');
+    await optimizer.start();
+    console.log('[SERVER] Exhaustive optimizer started');
+  } catch (err) {
+    console.error('[SERVER] Exhaustive optimizer failed to start:', err.message);
+  }
+})();
+
 // ── Performance: gzip compression (saves 60-80% bandwidth) ──
 app.use(compression({ threshold: 1024 }));
 

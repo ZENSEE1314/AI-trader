@@ -677,50 +677,51 @@ router.get('/signal-board', async (req, res) => {
     const board = getSignalBoard();
     const dailyResults = await getDailyResults();
 
-    // Get ALL active tokens from admin board (not just top 50)
-    let adminTokens = new Set();
-    try {
-      const adminRows = await query('SELECT symbol FROM global_token_settings WHERE enabled = true AND banned = false');
-      for (const r of adminRows) adminTokens.add(r.symbol);
-    } catch {}
+    // Source of truth: admin's global_token_settings defines WHICH tokens are available.
+    // Users toggle on/off from that fixed pool — user_watchlist stores their toggle state.
+    // This ensures My Tokens always matches what the bot actually scans.
+    const adminTokenRows = await query(
+      `SELECT symbol FROM global_token_settings
+       WHERE enabled = true AND (banned IS NULL OR banned = false)
+       ORDER BY symbol ASC`
+    );
+    const symbols = adminTokenRows.map(r => r.symbol);
 
-    // Fetch live prices from Binance
-    let topCoins = [];
-    try {
-      const fetch = require('node-fetch');
-      const r = await fetch('https://fapi.binance.com/fapi/v1/ticker/24hr', { timeout: 10000 });
-      const tickers = await r.json();
-      const tickerMap = {};
-      for (const t of tickers) {
-        if (t.symbol.endsWith('USDT') && !t.symbol.includes('_')) {
-          tickerMap[t.symbol] = {
-            symbol: t.symbol,
-            price: parseFloat(t.lastPrice),
-            change24h: parseFloat(t.priceChangePercent),
-            volume: parseFloat(t.quoteVolume),
-          };
-        }
-      }
-      // If admin has tokens, show those. Otherwise fall back to top 50 by volume
-      if (adminTokens.size > 0) {
-        for (const sym of adminTokens) {
-          if (tickerMap[sym]) topCoins.push(tickerMap[sym]);
-        }
-        topCoins.sort((a, b) => b.volume - a.volume);
-      } else {
-        topCoins = Object.values(tickerMap)
-          .sort((a, b) => b.volume - a.volume)
-          .slice(0, 50);
-      }
-    } catch {}
+    if (!symbols.length) {
+      return res.json({ tokens: [], lastScanAt: board.lastScanAt, dailyResults, watchlist: {} });
+    }
 
-    // Get user's watchlist
+    // User's toggle state for these symbols
     const watchlist = await query(
       'SELECT symbol, enabled FROM user_watchlist WHERE user_id = $1',
       [req.userId]
     );
     const watchMap = {};
     for (const w of watchlist) watchMap[w.symbol] = w.enabled;
+    // Symbols not yet in user's watchlist default to enabled
+    for (const sym of symbols) {
+      if (watchMap[sym] === undefined) watchMap[sym] = true;
+    }
+
+    // Fetch live prices for only these symbols (parallel — fast)
+    const fetch = require('node-fetch');
+    const priceResults = await Promise.all(
+      symbols.map(async sym => {
+        try {
+          const r = await fetch(`https://fapi.binance.com/fapi/v1/ticker/24hr?symbol=${sym}`, { timeout: 6000 });
+          if (!r.ok) return null;
+          const d = await r.json();
+          return {
+            symbol: sym,
+            price: parseFloat(d.lastPrice),
+            change24h: parseFloat(d.priceChangePercent),
+            volume: parseFloat(d.quoteVolume),
+          };
+        } catch { return null; }
+      })
+    );
+    const priceMap = {};
+    for (const p of priceResults) if (p) priceMap[p.symbol] = p;
 
     // Get user's per-token leverage
     let userLevMap = {};
@@ -739,17 +740,20 @@ router.get('/signal-board', async (req, res) => {
       for (const t of tags) riskTags[t.symbol] = { risk: t.risk_tag, featured: t.featured };
     } catch {}
 
-    // Merge: top coins + signal status + watchlist + risk tags
-    const tokens = topCoins.map(c => ({
-      ...c,
-      signal: board.tokens[c.symbol] || null,
-      direction: board.tokens[c.symbol]?.direction || null,
-      score: board.tokens[c.symbol]?.score || 0,
-      watching: watchMap[c.symbol] === true,
-      riskTag: riskTags[c.symbol]?.risk || null,
-      featured: riskTags[c.symbol]?.featured || false,
-      userLeverage: userLevMap[c.symbol] || 20,
-    }));
+    // Merge: watchlist tokens + live price + signal status + risk tags
+    const tokens = symbols.map(sym => {
+      const p = priceMap[sym] || { symbol: sym, price: 0, change24h: 0, volume: 0 };
+      return {
+        ...p,
+        signal: board.tokens[sym] || null,
+        direction: board.tokens[sym]?.direction || null,
+        score: board.tokens[sym]?.score || 0,
+        watching: watchMap[sym] === true,
+        riskTag: riskTags[sym]?.risk || null,
+        featured: riskTags[sym]?.featured || false,
+        userLeverage: userLevMap[sym] || 20,
+      };
+    });
 
     res.json({ tokens, lastScanAt: board.lastScanAt, dailyResults, watchlist: watchMap });
   } catch (err) {
@@ -1087,6 +1091,59 @@ router.get('/logs', async (req, res) => {
     const logs = getRecentLogs(limit, null, 'all');
     res.json({ logs });
   } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Exhaustive Optimizer Results ──────────────────────────
+router.get('/optimizer/results', async (req, res) => {
+  try {
+    const limit  = Math.min(parseInt(req.query.limit)  || 50, 200);
+    const offset = Math.max(parseInt(req.query.offset) || 0, 0);
+    const symbol = req.query.symbol || null;
+    const minWR  = parseFloat(req.query.min_wr)  || 0;
+    const minPF  = parseFloat(req.query.min_pf)  || 0;
+
+    const conditions = ['total_trades >= 10'];
+    const params     = [];
+
+    if (symbol) { params.push(symbol); conditions.push(`symbol = $${params.length}`); }
+    if (minWR > 0) { params.push(minWR); conditions.push(`win_rate >= $${params.length}`); }
+    if (minPF > 0) { params.push(minPF); conditions.push(`profit_factor >= $${params.length}`); }
+
+    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+    params.push(limit, offset);
+
+    const rows = await query(
+      `SELECT id, generation, genome, symbol, win_rate, profit_factor, total_return,
+              max_drawdown, expectancy, sharpe, avg_win, avg_loss,
+              total_trades, wins, losses, fitness, tested_at
+       FROM strategy_search_results
+       ${where}
+       ORDER BY fitness DESC
+       LIMIT $${params.length - 1} OFFSET $${params.length}`,
+      params
+    );
+
+    const countParams = params.slice(0, params.length - 2);
+    const countRow = await query(
+      `SELECT COUNT(*) as total FROM strategy_search_results ${where}`,
+      countParams
+    );
+
+    // Optimizer runtime status
+    let optimizerStatus = null;
+    try { optimizerStatus = require('../exhaustive-optimizer').status(); } catch {}
+
+    res.json({
+      total:   parseInt(countRow[0]?.total) || 0,
+      limit,
+      offset,
+      results: rows,
+      optimizer: optimizerStatus,
+    });
+  } catch (err) {
+    console.error('[optimizer/results]', err.message);
     res.status(500).json({ error: err.message });
   }
 });
