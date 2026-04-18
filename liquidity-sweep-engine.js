@@ -1175,92 +1175,128 @@ function detectSMCStructureTrade(candles15m, candles3m, candles1m, h1Trend = 'ne
 
 // ── Strategy 7: Range Bounce ───────────────────────────────
 // Sideways market: price oscillates between a well-tested high and low.
-// Entry at the range boundaries with TP at the opposite boundary.
-// Captures the FULL range width — ideal for consolidation phases.
+// Range walls are found from SWING CLUSTERS — where price has repeatedly
+// bounced — not from absolute max/min (which can be skewed by outlier wicks).
+// Entry at the actual wall with TP at the opposite wall.
 //
 // Detection requirements:
-//   • Range 0.5%–5% wide over last 30 × 15m candles
-//   • EMA9 and EMA21 spread < 1.5% (EMAs flat = no trend = ranging)
-//   • Both range high and low touched at least 2× (well-respected boundaries)
-//   • Price within 0.6% of the boundary to enter
-//   • 1m candle shows rejection (bullish at low, bearish at high)
+//   • EMA9/EMA21 spread < 1.5% on 15m (flat = ranging, no trend)
+//   • At least 2 swing highs clustered near resistance AND 2 swing lows near support
+//   • Range 0.5%–5% wide
+//   • Price within 0.3% of the identified wall
+//   • 1m candle shows rejection at the wall (wick + close direction)
+
+function findSwingWalls(candles) {
+  // Identify pivot swing highs and lows (local extremes with 2-bar confirmation each side)
+  const pivotHighs = [];
+  const pivotLows  = [];
+
+  for (let i = 2; i < candles.length - 2; i++) {
+    const c = candles[i];
+    const isSwingHigh = c.high >= candles[i - 1].high && c.high >= candles[i - 2].high
+                     && c.high >= candles[i + 1].high && c.high >= candles[i + 2].high;
+    const isSwingLow  = c.low  <= candles[i - 1].low  && c.low  <= candles[i - 2].low
+                     && c.low  <= candles[i + 1].low  && c.low  <= candles[i + 2].low;
+
+    if (isSwingHigh) pivotHighs.push(c.high);
+    if (isSwingLow)  pivotLows.push(c.low);
+  }
+
+  if (pivotHighs.length < 2 || pivotLows.length < 2) return null;
+
+  // Cluster highs: the wall is where most swing highs landed within 0.8% of each other.
+  // Start from the highest pivot high and pull in all highs within 0.8% — that cluster is resistance.
+  pivotHighs.sort((a, b) => b - a);
+  const topAnchor    = pivotHighs[0];
+  const highCluster  = pivotHighs.filter(h => (topAnchor - h) / topAnchor <= 0.008);
+  if (highCluster.length < 2) return null;
+  const resistanceWall = highCluster.reduce((s, h) => s + h, 0) / highCluster.length;
+
+  // Cluster lows: same logic from the lowest pivot low upward.
+  pivotLows.sort((a, b) => a - b);
+  const botAnchor   = pivotLows[0];
+  const lowCluster  = pivotLows.filter(l => (l - botAnchor) / botAnchor <= 0.008);
+  if (lowCluster.length < 2) return null;
+  const supportWall = lowCluster.reduce((s, l) => s + l, 0) / lowCluster.length;
+
+  return {
+    rangeHigh:   resistanceWall,
+    rangeLow:    supportWall,
+    highTouches: highCluster.length,
+    lowTouches:  lowCluster.length,
+  };
+}
 
 function detectRangeBounce(candles15m, candles1m) {
   if (candles15m.length < 30 || candles1m.length < 5) return null;
 
   const parsed15 = candles15m.map(parseCandle);
   const parsed1  = candles1m.map(parseCandle);
+  const lookback = parsed15.slice(-40); // use 40 candles for better swing detection
 
-  // Define range from last 30 candles
-  const lookback = parsed15.slice(-30);
-  const rangeHigh = Math.max(...lookback.map(c => c.high));
-  const rangeLow  = Math.min(...lookback.map(c => c.low));
-  const rangeSize = rangeHigh - rangeLow;
-  const rangePct  = rangeSize / rangeLow;
-
-  // Range must be meaningful — too narrow = noise, too wide = trending
-  if (rangePct < 0.005 || rangePct > 0.05) return null;
-
-  // EMA spread: flat EMAs signal no trend (ranging)
-  const closes15 = lookback.map(c => c.close);
+  // EMA spread: flat EMAs confirm ranging market (no trend)
+  const closes15  = lookback.map(c => c.close);
   const ema9  = calcEMA(closes15, 9);
   const ema21 = calcEMA(closes15, 21);
   if (!ema9 || !ema21) return null;
   const emaSpread = Math.abs(ema9 - ema21) / ema21;
-  if (emaSpread > 0.015) return null; // EMAs spread > 1.5% = trend present, skip
+  if (emaSpread > 0.015) return null; // EMAs spread > 1.5% = trending, skip
 
-  // Count how many candles touched each boundary (within 0.5% tolerance)
-  const TOUCH_TOL = 0.005;
-  let highTouches = 0;
-  let lowTouches  = 0;
-  for (const c of lookback) {
-    if ((rangeHigh - c.high) / rangeHigh < TOUCH_TOL) highTouches++;
-    if ((c.low - rangeLow)  / rangeLow  < TOUCH_TOL) lowTouches++;
-  }
-  // Need at least 2 touches of both walls to confirm the range is real
-  if (highTouches < 2 || lowTouches < 2) return null;
+  // Find walls from actual swing clusters (not absolute high/low)
+  const walls = findSwingWalls(lookback);
+  if (!walls) return null;
+
+  const { rangeHigh, rangeLow, highTouches, lowTouches } = walls;
+  const rangeSize = rangeHigh - rangeLow;
+  const rangePct  = rangeSize / rangeLow;
+
+  // Range sanity: 0.5%–5% wide
+  if (rangePct < 0.005 || rangePct > 0.05) return null;
 
   const price = parsed15[parsed15.length - 1].close;
-  const distFromHigh = (rangeHigh - price) / rangeHigh;
-  const distFromLow  = (price - rangeLow)  / rangeLow;
 
-  // Reject entries in the middle of the range (must be in bottom 30% for LONG, top 30% for SHORT)
-  const rangePos = (price - rangeLow) / rangeSize; // 0 = at low, 1 = at high
-  if (rangePos > 0.30 && rangePos < 0.70) return null; // mid-range = no trade
+  // Reject mid-range: must be within 25% of either wall
+  const rangePos = (price - rangeLow) / rangeSize; // 0 = at support wall, 1 = at resistance wall
+  if (rangePos > 0.25 && rangePos < 0.75) return null;
 
-  // Entry zone: within 0.4% of the boundary (tighter than before — ensures we're at the wall)
-  const ENTRY_ZONE = 0.004;
+  // Entry tolerance: within 0.3% of the identified wall
+  const WALL_TOL   = 0.003;
+  const TOUCH_TOL  = 0.003; // SL/TP set just beyond the wall by this amount
 
-  // ── LONG at range low — only when price is in the BOTTOM 30% of range ──
-  if (distFromLow < ENTRY_ZONE && rangePos <= 0.30) {
+  const atSupport    = (price - rangeLow)  / rangeLow  <= WALL_TOL;
+  const atResistance = (rangeHigh - price) / rangeHigh <= WALL_TOL;
+
+  // ── LONG at support wall ──
+  if (atSupport && rangePos <= 0.25) {
     const last1m = parsed1[parsed1.length - 1];
     const prev1m = parsed1[parsed1.length - 2];
 
-    // 1m confirmation: wick must have tested range low (within 0.3%)
-    const prevTestedLow = prev1m && prev1m.low <= rangeLow * 1.003;
-    const lastTestedLow = last1m.low <= rangeLow * 1.003;
+    // 1m must show a wick into the support zone + bullish close (rejection off the wall)
+    const prevWickedLow = prev1m && prev1m.low <= rangeLow * (1 + WALL_TOL);
+    const lastWickedLow = last1m.low <= rangeLow * (1 + WALL_TOL);
+    const prevBullish   = prev1m && isGreenCandle(prev1m);
+    const lastBullish   = isGreenCandle(last1m) || last1m.close > last1m.open;
 
-    // Prefer entering RIGHT at the rejection candle close (prev touched low + current bullish)
-    // — catches the bounce earlier at a better price near the wall
-    if (prevTestedLow && isGreenCandle(prev1m) && (isGreenCandle(last1m) || last1m.close > last1m.open)) {
+    // Best case: prev1m wicked the wall and closed bullish → enter at current price (after bounce confirmed)
+    if (prevWickedLow && prevBullish && lastBullish) {
       return {
         direction: 'LONG',
         setup: 'RANGE_BOUNCE',
-        entryPrice: last1m.close,           // enter at current price (just bounced off wall)
-        sl: rangeLow * (1 - TOUCH_TOL),    // just below range floor
-        tp1: rangeHigh * (1 - TOUCH_TOL),  // opposite wall is the target
+        entryPrice: last1m.close,
+        sl:  rangeLow  * (1 - TOUCH_TOL),   // stop just below support wall
+        tp1: rangeHigh * (1 - TOUCH_TOL),   // target: resistance wall
         rangeHigh, rangeLow, rangePct,
         highTouches, lowTouches,
       };
     }
 
-    // Fallback: current 1m wicked to low and is now closing bullish
-    if (lastTestedLow && (isGreenCandle(last1m) || last1m.close > prev1m.close)) {
+    // Fallback: current 1m is wicking the wall and showing bullish close
+    if (lastWickedLow && lastBullish) {
       return {
         direction: 'LONG',
         setup: 'RANGE_BOUNCE',
         entryPrice: last1m.close,
-        sl: rangeLow * (1 - TOUCH_TOL),
+        sl:  rangeLow  * (1 - TOUCH_TOL),
         tp1: rangeHigh * (1 - TOUCH_TOL),
         rangeHigh, rangeLow, rangePct,
         highTouches, lowTouches,
@@ -1270,35 +1306,37 @@ function detectRangeBounce(candles15m, candles1m) {
     return null;
   }
 
-  // ── SHORT at range high — only when price is in the TOP 30% of range ──
-  if (distFromHigh < ENTRY_ZONE && rangePos >= 0.70) {
+  // ── SHORT at resistance wall ──
+  if (atResistance && rangePos >= 0.75) {
     const last1m = parsed1[parsed1.length - 1];
     const prev1m = parsed1[parsed1.length - 2];
 
-    // 1m confirmation: wick must have tested range high (within 0.3%)
-    const prevTestedHigh = prev1m && prev1m.high >= rangeHigh * 0.997;
-    const lastTestedHigh = last1m.high >= rangeHigh * 0.997;
+    // 1m must show a wick into the resistance zone + bearish close (rejection off the wall)
+    const prevWickedHigh = prev1m && prev1m.high >= rangeHigh * (1 - WALL_TOL);
+    const lastWickedHigh = last1m.high >= rangeHigh * (1 - WALL_TOL);
+    const prevBearish    = prev1m && isRedCandle(prev1m);
+    const lastBearish    = isRedCandle(last1m) || last1m.close < last1m.open;
 
-    // Prefer entering RIGHT at the rejection candle close (prev touched high + current bearish)
-    if (prevTestedHigh && isRedCandle(prev1m) && (isRedCandle(last1m) || last1m.close < last1m.open)) {
+    // Best case: prev1m wicked the wall and closed bearish → enter at current price
+    if (prevWickedHigh && prevBearish && lastBearish) {
       return {
         direction: 'SHORT',
         setup: 'RANGE_BOUNCE',
-        entryPrice: last1m.close,           // enter at current price (just rejected from wall)
-        sl: rangeHigh * (1 + TOUCH_TOL),   // just above range ceiling
-        tp1: rangeLow  * (1 + TOUCH_TOL),  // opposite wall is the target
+        entryPrice: last1m.close,
+        sl:  rangeHigh * (1 + TOUCH_TOL),   // stop just above resistance wall
+        tp1: rangeLow  * (1 + TOUCH_TOL),   // target: support wall
         rangeHigh, rangeLow, rangePct,
         highTouches, lowTouches,
       };
     }
 
-    // Fallback: current 1m wicked to high and is now closing bearish
-    if (lastTestedHigh && (isRedCandle(last1m) || last1m.close < prev1m.close)) {
+    // Fallback: current 1m is wicking the wall and showing bearish close
+    if (lastWickedHigh && lastBearish) {
       return {
         direction: 'SHORT',
         setup: 'RANGE_BOUNCE',
         entryPrice: last1m.close,
-        sl: rangeHigh * (1 + TOUCH_TOL),
+        sl:  rangeHigh * (1 + TOUCH_TOL),
         tp1: rangeLow  * (1 + TOUCH_TOL),
         rangeHigh, rangeLow, rangePct,
         highTouches, lowTouches,
