@@ -1,18 +1,21 @@
 {
-  "version": "1.2.2",
+  "version": "1.2.3",
   "name": "MCT AI Trader",
   "released": "2026-04-19",
   "changelog": [
     {
-      "version": "1.2.2",
-      "tag": "v1.2.2",
+      "version": "1.2.3",
+      "tag": "v1.2.3",
       "date": "2026-04-19",
-      "label": "Admin fee exemption + unblock all auto-paused users",
+      "label": "Admin fee exemption + Mark as Paid button in Users tab",
       "changes": [
-        "Admin accounts (is_admin=true) are fully exempt from platform fee — 100% of trade profit recorded as theirs",
-        "Admin accounts: last_paid_at refreshed on every deploy — subscription timer never applies to admin",
-        "recordProfitSplit: checks is_admin before applying 60/40 split — admins skip platform_fee entirely",
-        "One-time unblock: clears all paused_by_admin=true flags from old auto-pause + refreshes admin last_paid_at"
+        "Dashboard: admin account never shows OVERDUE — last_paid_at auto-refreshed on weekly-earnings load",
+        "Dashboard: Pay button for admin is no-op (returns success with admin_exempt:true)",
+        "Admin Users tab: green '✓ Paid' button added for every non-admin user",
+        "Admin Users tab: admin rows show 'No Fee' label instead of countdown timer",
+        "Admin Users tab: overdue rows highlighted red for easy identification",
+        "recordProfitSplit: admin gets 100% profit, no 40% platform fee",
+        "cycle.js: admin last_paid_at refreshed on every deploy, all auto-paused keys unblocked"
       ]
     },
     {

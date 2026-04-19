@@ -404,14 +404,22 @@ router.get('/weekly-earnings', async (req, res) => {
 
     // Rolling window: last_paid_at → now. Resets to 0 after each payment.
     const userRow = await query(
-      `SELECT created_at, last_paid_at FROM users WHERE id = $1`, [req.userId]
+      `SELECT created_at, last_paid_at, is_admin FROM users WHERE id = $1`, [req.userId]
     );
+    const isAdminUser = userRow[0]?.is_admin === true;
+
+    // Admin accounts are never overdue — keep last_paid_at fresh
+    if (isAdminUser) {
+      await query(`UPDATE users SET last_paid_at = NOW() WHERE id = $1`, [req.userId]);
+      userRow[0].last_paid_at = now;
+    }
+
     const paidAt = userRow[0]?.last_paid_at ? new Date(userRow[0].last_paid_at) : new Date(userRow[0]?.created_at || now);
     const periodStart = paidAt;
     const dueDate = new Date(paidAt.getTime() + 7 * 86400000);
     const msRemaining = dueDate - now;
     const daysRemaining = Math.max(0, Math.ceil(msRemaining / 86400000));
-    const isOverdue = msRemaining <= 0;
+    const isOverdue = isAdminUser ? false : msRemaining <= 0;
 
     // Get user's profit share settings per key
     const keys = await query(
@@ -523,6 +531,13 @@ router.post('/pay-weekly', async (req, res) => {
   try {
     const userId = req.userId;
     const now = new Date();
+
+    // Admin accounts never pay — just refresh their timer
+    const adminCheck = await query(`SELECT is_admin FROM users WHERE id = $1`, [userId]);
+    if (adminCheck[0]?.is_admin === true) {
+      await query(`UPDATE users SET last_paid_at = NOW() WHERE id = $1`, [userId]);
+      return res.json({ ok: true, admin_exempt: true, message: 'Admin account — no fee required' });
+    }
 
     // Rolling window: last_paid_at → now
     const userInfo = await query(
