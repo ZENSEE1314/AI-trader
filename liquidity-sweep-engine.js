@@ -1232,15 +1232,19 @@ function detectRangeBounce(candles15m, candles1m) {
 
   const parsed15 = candles15m.map(parseCandle);
   const parsed1  = candles1m.map(parseCandle);
-  const lookback = parsed15.slice(-40); // use 40 candles for better swing detection
 
-  // EMA spread: flat EMAs confirm ranging market (no trend)
-  const closes15  = lookback.map(c => c.close);
+  // Use last 25 candles (not 40) — tighter window focuses on the current consolidation,
+  // not trend candles from before the range formed. 25×15m = ~6 hours.
+  const lookback = parsed15.slice(-25);
+
+  // EMA spread: flat EMAs confirm ranging market. Loosened to 2.5% (was 1.5%) because
+  // fresh consolidations after a trend still show some EMA divergence for several hours.
+  const closes15 = lookback.map(c => c.close);
   const ema9  = calcEMA(closes15, 9);
   const ema21 = calcEMA(closes15, 21);
   if (!ema9 || !ema21) return null;
   const emaSpread = Math.abs(ema9 - ema21) / ema21;
-  if (emaSpread > 0.015) return null; // EMAs spread > 1.5% = trending, skip
+  if (emaSpread > 0.025) return null; // > 2.5% = actively trending, skip
 
   // Find walls from actual swing clusters (not absolute high/low)
   const walls = findSwingWalls(lookback);
@@ -1259,8 +1263,8 @@ function detectRangeBounce(candles15m, candles1m) {
   const rangePos = (price - rangeLow) / rangeSize; // 0 = at support wall, 1 = at resistance wall
   if (rangePos > 0.25 && rangePos < 0.75) return null;
 
-  // Entry tolerance: within 0.3% of the identified wall
-  const WALL_TOL   = 0.003;
+  // Entry tolerance: within 0.5% of the identified wall (was 0.3% — too tight)
+  const WALL_TOL   = 0.005;
   const TOUCH_TOL  = 0.003; // SL/TP set just beyond the wall by this amount
 
   const atSupport    = (price - rangeLow)  / rangeLow  <= WALL_TOL;
@@ -1488,7 +1492,93 @@ function detectSwings(klines, len) {
   return swings;
 }
 
-// ── Strategy 8: VWAP Rejection ────────────────────────────
+// ── Strategy 8: Consolidation Rejection ───────────────────
+// Detects consolidation (coiling) after a strong trend move and enters
+// when price tests the extreme of the consolidation against the trend.
+// SHORT: downtrend (EMA9 < EMA21) + price at top 30% of consolid. + bearish close
+// LONG:  uptrend  (EMA9 > EMA21) + price at bot 30% of consolid. + bullish close
+// SL: beyond the consolid. extreme + 0.5×ATR. TP: ATR × 2.
+
+function detectConsolRejection(parsed15, parsed1) {
+  if (parsed15.length < 25 || parsed1.length < 2) return null;
+
+  const last1 = parsed1[parsed1.length - 1];
+  const price  = last1.close;
+
+  // Trend direction: EMA9 vs EMA21 on 15m (use last 30 candles)
+  const trend30  = parsed15.slice(-30);
+  const closes30 = trend30.map(c => c.close);
+  const ema9  = calcEMA(closes30, 9);
+  const ema21 = calcEMA(closes30, 21);
+  if (!ema9 || !ema21) return null;
+
+  const isBearish = ema9 < ema21;
+  const isBullish = ema9 > ema21;
+  if (!isBearish && !isBullish) return null;
+
+  // Consolidation: compare ATR of recent 10 candles vs prior 15
+  const recent10 = parsed15.slice(-10);
+  const prior15  = parsed15.slice(-25, -10);
+  const atrRecent = calcATR(recent10.length >= 5 ? recent10 : parsed15.slice(-10));
+  const atrPrior  = calcATR(prior15.length  >= 5 ? prior15  : parsed15.slice(-25, -10));
+  if (!atrRecent || !atrPrior || atrPrior === 0) return null;
+
+  // Consolidation confirmed when recent ATR < 65% of prior ATR (price coiling)
+  if (atrRecent >= atrPrior * 0.65) return null;
+
+  // Consolid. range over the 10 recent candles
+  const consHigh = Math.max(...recent10.map(c => c.high));
+  const consLow  = Math.min(...recent10.map(c => c.low));
+  const consRange = consHigh - consLow;
+  if (consRange <= 0) return null;
+
+  const posInCons = (price - consLow) / consRange; // 0=bottom, 1=top
+
+  // Last two completed 15m candles for pattern confirmation
+  const lastClosed = parsed15[parsed15.length - 2];
+  const prevClosed = parsed15[parsed15.length - 3];
+  if (!lastClosed || !prevClosed) return null;
+
+  const atr = atrRecent;
+
+  // SHORT: bearish trend + price near consolidation top + bearish candle(s)
+  if (isBearish && posInCons >= 0.65) {
+    const bearishClose = isRedCandle(lastClosed) || isBearishPinBar(lastClosed);
+    const priorBearish = isRedCandle(prevClosed) || isBearishPinBar(prevClosed);
+    if (!bearishClose && !priorBearish) return null; // need at least one bearish close
+
+    return {
+      direction: 'SHORT',
+      setup: 'CONSOL_REJECTION',
+      entryPrice: price,
+      sl: consHigh + atr * 0.5,
+      consHigh,
+      consLow,
+      atrRatio: atrRecent / atrPrior,
+    };
+  }
+
+  // LONG: bullish trend + price near consolidation bottom + bullish candle(s)
+  if (isBullish && posInCons <= 0.35) {
+    const bullishClose = isGreenCandle(lastClosed) || isBullishPinBar(lastClosed);
+    const priorBullish = isGreenCandle(prevClosed) || isBullishPinBar(prevClosed);
+    if (!bullishClose && !priorBullish) return null;
+
+    return {
+      direction: 'LONG',
+      setup: 'CONSOL_REJECTION',
+      entryPrice: price,
+      sl: consLow - atr * 0.5,
+      consHigh,
+      consLow,
+      atrRatio: atrRecent / atrPrior,
+    };
+  }
+
+  return null;
+}
+
+// ── Strategy 9: VWAP Rejection ────────────────────────────
 // Detects price poking through VWAP then closing back on the other side.
 // SHORT: 15m candle high > VWAP but close < VWAP (bearish rejection wick above VWAP)
 // LONG:  15m candle low  < VWAP but close > VWAP (bullish rejection wick below VWAP)
@@ -1916,7 +2006,39 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     }
   } // end RANGE_BOUNCE gate
 
-  // Strategy 8: VWAP Rejection — wick through VWAP, close back on rejection side
+  // Strategy 8: Consolidation Rejection — short/long at the extreme of a post-trend coil
+  if (!enabledStrategies || enabledStrategies.CONSOL_REJECTION !== false) {
+    const consol = detectConsolRejection(parsed15, parsed1);
+    if (consol) {
+      const slDist = Math.abs(consol.entryPrice - consol.sl) / consol.entryPrice;
+      const atr15  = calcATR(parsed15);
+      const tpDist = atr15 > 0 ? (atr15 * 2.0) / consol.entryPrice : slDist * 2;
+      const tpPrice = consol.direction === 'LONG'
+        ? consol.entryPrice * (1 + tpDist)
+        : consol.entryPrice * (1 - tpDist);
+      const rr = slDist > 0 ? tpDist / slDist : 1.5;
+
+      if (rr >= 1.2 && slDist > 0.001 && slDist < 0.05) {
+        signals.push({
+          symbol, direction: consol.direction, price: consol.entryPrice,
+          lastPrice: price,
+          sl: consol.sl,
+          tp1: tpPrice,
+          tp2: consol.direction === 'LONG' ? consol.entryPrice * (1 + tpDist * 1.5) : consol.entryPrice * (1 - tpDist * 1.5),
+          tp3: consol.direction === 'LONG' ? consol.entryPrice * (1 + tpDist * 2)   : consol.entryPrice * (1 - tpDist * 2),
+          slDist, rr: Math.round(rr * 10) / 10,
+          setup: 'CONSOL_REJECTION',
+          setupName: `${consol.direction}-CONSOL-REJ`,
+          // Base 8: trend-aligned entry at coil extreme — high-conviction setup
+          score: 8,
+          consolHigh: consol.consHigh,
+          consolLow:  consol.consLow,
+        });
+      }
+    }
+  } // end CONSOL_REJECTION gate
+
+  // Strategy 9: VWAP Rejection — wick through VWAP, close back on rejection side
   if (!enabledStrategies || enabledStrategies.VWAP_REJECTION !== false) {
     const vrej = detectVwapRejection(parsed15, vwapVal, parsed1);
     if (vrej) {

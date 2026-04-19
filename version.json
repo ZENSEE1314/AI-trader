@@ -1,8 +1,25 @@
 {
-  "version": "1.1.5",
+  "version": "1.1.6",
   "name": "MCT AI Trader",
   "released": "2026-04-19",
   "changelog": [
+    {
+      "version": "1.1.6",
+      "tag": "v1.1.6",
+      "date": "2026-04-19",
+      "label": "Fix range detection + add Consolidation Rejection strategy",
+      "changes": [
+        "Fix RANGE_BOUNCE: EMA spread threshold loosened 1.5% → 2.5% (was blocking all post-trend consolidations)",
+        "Fix RANGE_BOUNCE: lookback reduced 40 → 25 candles (focuses on current range, not old trend candles)",
+        "Fix RANGE_BOUNCE: wall proximity tolerance widened 0.3% → 0.5% (catches more valid entries)",
+        "Add Strategy 8: CONSOL_REJECTION — detects price coiling after a strong move then rejecting at extreme",
+        "SHORT: EMA9<EMA21 (downtrend) + price at top 65%+ of consolidation + bearish candle → short the coil top",
+        "LONG: EMA9>EMA21 (uptrend) + price at bottom 35% of consolidation + bullish candle → long the coil bottom",
+        "Consolidation confirmed when recent-10 ATR < 65% of prior-15 ATR (price coiling = energy building)",
+        "VWAP_REJECTION renamed Strategy 9 (was 8) to make room",
+        "This fix catches the ETH/BNB consolidation-top short that was previously missed"
+      ]
+    },
     {
       "version": "1.1.5",
       "tag": "v1.1.5",
