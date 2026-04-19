@@ -847,26 +847,20 @@ class AgentCoordinator extends BaseAgent {
         ta.currentTask = { description: `Watching ${ta.symbol}`, startedAt: Date.now() };
       }
 
-      // ── Also run SMC strategy engine (9 strategies: SWEEP, HUNT, MOMENTUM, etc.) ──
-      // This runs the full liquidity-sweep-engine alongside the smc-engine HTF strategy.
+      // ── Also run unified trade-engine (all 5 strategies in one file) ──
       try {
-        const { scanSMC: sweepScanSMC } = require('../liquidity-sweep-engine');
-        const sweepSignals = await sweepScanSMC(bLog.scan.bind(bLog));
-        const sweepMapped = (sweepSignals || []).map(s => ({
-          ...s,
-          strategyWinRate: s.score >= 10 ? 70 : 60,
-          source: 'sweep-engine',
-        }));
-        if (sweepMapped.length > 0) {
-          bLog.scan(`[Coordinator] Sweep engine: ${sweepMapped.length} signal(s) — ${sweepMapped.map(s => `${s.symbol} ${s.direction} [${s.setupName}] score=${s.score}`).join(', ')}`);
-          for (const s of sweepMapped) {
-            if (!signals.find(existing => existing.symbol === s.symbol)) {
-              signals.push(s);
-            }
+        const { scanAll } = require('../trade-engine');
+        const engineSignals = await scanAll(bLog.scan.bind(bLog), { kronosPredictions });
+        for (const s of (engineSignals || [])) {
+          if (!signals.find(existing => existing.symbol === s.symbol)) {
+            signals.push(s);
           }
         }
-      } catch (sweepErr) {
-        bLog.error(`[Coordinator] Sweep engine scan failed (non-blocking): ${sweepErr.message}`);
+        if (engineSignals.length > 0) {
+          bLog.scan(`[Coordinator] trade-engine: ${engineSignals.length} signal(s)`);
+        }
+      } catch (engineErr) {
+        bLog.error(`[Coordinator] trade-engine scan failed (non-blocking): ${engineErr.message}`);
       }
 
       // Filter out globally banned tokens before further processing

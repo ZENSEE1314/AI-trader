@@ -10,7 +10,7 @@
 // ============================================================
 
 const { BaseAgent } = require('./base-agent');
-const { analyzeLHHL, SWING_LENGTHS } = require('../smc-engine');
+const { analyzeSymbol } = require('../trade-engine');
 const { log: bLog } = require('../bot-logger');
 
 class TokenAgent extends BaseAgent {
@@ -41,34 +41,23 @@ class TokenAgent extends BaseAgent {
     this.currentTask = { description: `Scanning ${this.symbol}`, startedAt: Date.now() };
     bLog.scan(`[HEARTBEAT] ${this.name} starting execution...`);
 
-    const aiLearner = require('../ai-learner');
-    const aiParams = await aiLearner.getOptimalParams();
-
-    // Build a ticker-like object for analyzeLHHL
+    // Fetch current price
     const fetch = require('node-fetch');
-    let tickerPrice;
+    let price;
     try {
       const res = await fetch(`https://fapi.binance.com/fapi/v1/ticker/price?symbol=${this.symbol}`, { timeout: 8000 });
       if (!res.ok) { this.currentTask = null; return null; }
       const data = await res.json();
-      tickerPrice = parseFloat(data.price);
+      price = parseFloat(data.price);
     } catch {
       this.currentTask = null;
       return null;
     }
 
-    this.lastPrice = tickerPrice;
+    this.lastPrice = price;
 
-    const ticker = {
-      symbol: this.symbol,
-      lastPrice: String(tickerPrice),
-    };
-
-    // Use Kronos cached predictions if available from the coordinator
-    const kronosPredictions = context.kronosPredictions || null;
-
-    // Run the SAME analysis as smc-engine (4H+1H HTF, AI-configured filters, Kronos scoring)
-    const signal = await analyzeLHHL(ticker, aiParams, context.dailyBiasCache || new Map(), kronosPredictions);
+    // Run unified trade-engine (all 5 strategies, all filters in one place)
+    const signal = await analyzeSymbol(this.symbol, price, context.kronosPredictions || null);
 
     if (!signal || !signal.direction) {
       this.currentTask = null;
@@ -77,22 +66,16 @@ class TokenAgent extends BaseAgent {
 
     this.lastSignal = signal;
     this.signalCount++;
-    this.addActivity('success', `SIGNAL: ${this.symbol} ${signal.direction} score=${signal.score} @ $${signal.price}`);
-    bLog.scan(`[${this.name}] SIGNAL: ${this.symbol} ${signal.direction} score=${signal.score} 3m=${signal.structure?.tf3m} 1m=${signal.structure?.tf1m}`);
+    this.addActivity('success', `SIGNAL: ${this.symbol} ${signal.direction} [${signal.setupName}] score=${signal.score} @ $${price}`);
+    bLog.scan(`[${this.name}] SIGNAL: ${this.symbol} ${signal.direction} [${signal.setupName}] score=${signal.score}`);
 
-    // Memory: remember this signal (DB + Hermes file)
+    // Memory
     if (this.isSkillEnabled('memory')) {
-      await this.remember('last_signal', { direction: signal.direction, score: signal.score, price: signal.price, ts: Date.now() }, 'signals');
+      await this.remember('last_signal', { direction: signal.direction, score: signal.score, price, ts: Date.now() }, 'signals');
       const count = (await this.recall('total_signals')) || 0;
       await this.remember('total_signals', count + 1, 'stats');
-
-      // Hermes persistent memory — survives across deployments
       const ts = new Date().toISOString().slice(0, 16);
-      this.hermesRemember(
-        `[${ts}] ${this.symbol} ${signal.direction} score=${signal.score} ` +
-        `3m=${signal.structure?.tf3m || '?'} 1m=${signal.structure?.tf1m || '?'} ` +
-        `price=$${signal.price}`
-      );
+      this.hermesRemember(`[${ts}] ${this.symbol} ${signal.direction} [${signal.setupName}] score=${signal.score} price=$${price}`);
     }
 
     this.currentTask = null;
