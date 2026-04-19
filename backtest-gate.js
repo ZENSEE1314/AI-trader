@@ -10,7 +10,7 @@
 const fetch = require('node-fetch');
 const { log: bLog } = require('./bot-logger');
 
-const MIN_WIN_RATE = 50;          // 50% minimum — better than coin-flip; 80% is unreachable in real crypto markets
+const MIN_WIN_RATE = 40;          // 40% minimum — profitable at 1:2 RR (40 wins×2 - 60 losses×1 = net +20). 50% was too strict given trailing SL dynamic exits.
 const BACKTEST_DAYS = 30;         // default: 30 days of history
 const MAX_BACKTEST_DAYS = 90;     // can go up to 90 days
 const CACHE_HOURS = 2;            // re-use cached result for 2 hours
@@ -86,7 +86,7 @@ function calcRSI(closes, period = 14) {
 }
 
 // Strategies the backtest engine knows how to simulate
-const KNOWN_STRATEGIES = new Set(['LIQUIDITY_SWEEP', 'STOP_LOSS_HUNT', 'MOMENTUM_SCALP', 'BRR_FIBO', 'SMC_CLASSIC', 'SMC_HL_STRUCTURE', 'RANGE_BOUNCE', 'ALL']);
+const KNOWN_STRATEGIES = new Set(['LIQUIDITY_SWEEP', 'STOP_LOSS_HUNT', 'MOMENTUM_SCALP', 'BRR_FIBO', 'SMC_CLASSIC', 'SMC_HL_STRUCTURE', 'RANGE_BOUNCE', 'CONSOL_REJECTION', 'VWAP_REJECTION', 'ALL']);
 
 // Backtest a SINGLE token × strategy combo on recent data
 // Called inline by the agent right before it wants to trade

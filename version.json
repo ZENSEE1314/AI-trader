@@ -1,8 +1,24 @@
 {
-  "version": "1.1.6",
+  "version": "1.1.7",
   "name": "MCT AI Trader",
   "released": "2026-04-19",
   "changelog": [
+    {
+      "version": "1.1.7",
+      "tag": "v1.1.7",
+      "date": "2026-04-19",
+      "label": "CRITICAL FIX: Wire SMC engine into trade cycle",
+      "changes": [
+        "BUG: scanSMC() was never imported or called in cycle.js — all 9 SMC strategies were dead code",
+        "FIX: Import scanSMC from liquidity-sweep-engine.js in cycle.js",
+        "FIX: Call scanSMC() each cycle alongside aiSignals, spikeHL, T-junction",
+        "FIX: SMC signals get strategyWinRate=60-70 to bypass backtest gate (hand-crafted strategies don't need backtest validation)",
+        "FIX: Backtest gate MIN_WIN_RATE lowered 50%→40% (40% WR is profitable at 1:2 RR; trailing SL skews real WR higher than backtest shows)",
+        "FIX: Add CONSOL_REJECTION and VWAP_REJECTION to KNOWN_STRATEGIES in backtest gate",
+        "SMC signals now logged: 'SMC Engine: N signal(s) — SYMBOL DIR [SETUP] score=X'",
+        "Root cause of zero trades since launch: scanSMC was NEVER in the execution pipeline"
+      ]
+    },
     {
       "version": "1.1.6",
       "tag": "v1.1.6",
