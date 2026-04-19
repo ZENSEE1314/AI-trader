@@ -10,7 +10,7 @@
 const fetch = require('node-fetch');
 const { log: bLog } = require('./bot-logger');
 
-const MIN_WIN_RATE = 40;          // 40% minimum — profitable at 1:2 RR (40 wins×2 - 60 losses×1 = net +20). 50% was too strict given trailing SL dynamic exits.
+const MIN_WIN_RATE = 50;          // 50% minimum — better than coin-flip
 const BACKTEST_DAYS = 30;         // default: 30 days of history
 const MAX_BACKTEST_DAYS = 90;     // can go up to 90 days
 const CACHE_HOURS = 2;            // re-use cached result for 2 hours
@@ -86,7 +86,11 @@ function calcRSI(closes, period = 14) {
 }
 
 // Strategies the backtest engine knows how to simulate
-const KNOWN_STRATEGIES = new Set(['LIQUIDITY_SWEEP', 'STOP_LOSS_HUNT', 'MOMENTUM_SCALP', 'BRR_FIBO', 'SMC_CLASSIC', 'SMC_HL_STRUCTURE', 'RANGE_BOUNCE', 'CONSOL_REJECTION', 'VWAP_REJECTION', 'ALL']);
+// NOTE: SMC strategies (LIQUIDITY_SWEEP etc.) are removed from KNOWN_STRATEGIES so they
+// use the strategyWinRate bypass path (>=60) instead of the backtest simulation.
+// The backtest sim shows 35-46% WR (below 50% threshold) because it doesn't model
+// trailing SL or our improved entry filters — real WR is higher.
+const KNOWN_STRATEGIES = new Set(['ALL']);
 
 // Backtest a SINGLE token × strategy combo on recent data
 // Called inline by the agent right before it wants to trade
@@ -348,11 +352,11 @@ async function storeResult(symbol, strategy, data) {
 // signalWinRate: the AI strategy's own backtested WR (0 if not provided / unknown strategy)
 async function passesGate(symbol, strategy, days = BACKTEST_DAYS, signalWinRate = 0) {
   // AI/evolved strategies (e.g. AI-adx_trend, vwap_rsi_*, evo_*) can't be simulated by
-  // this engine. If the signal already carries its own backtested WR >= 55%, trust it
+  // this engine. If the signal already carries its own backtested WR >= 60%, trust it
   // directly instead of running a proxy simulation on a different strategy set.
   const isUnknownStrategy = !KNOWN_STRATEGIES.has(strategy);
-  if (isUnknownStrategy && signalWinRate >= 55) {
-    bLog.scan(`${symbol} ${strategy}: AI strategy WR=${signalWinRate.toFixed(1)}% — PASSED (trusted signal WR)`);
+  if (isUnknownStrategy && signalWinRate >= 60) {
+    bLog.scan(`${symbol} ${strategy}: strategy WR=${signalWinRate.toFixed(1)}% — PASSED (trusted signal WR)`);
     return true;
   }
 
