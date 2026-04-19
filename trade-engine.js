@@ -592,9 +592,106 @@ function stratSwingReversal(c15, c1, price, atr) {
   return null;
 }
 
+// ── STRATEGY 7: 10-Candle Extreme ───────────────────────────
+//
+// "Buy at the lowest price, sell at the highest price."
+//
+// Looks at the last 10 completed 15m candles as a window.
+// LONG:  current 1m price is in the BOTTOM 15% of that window's range
+//        AND at least 7 of the 10 candle closes are ABOVE current price
+//        → we are sitting at the very floor of the recent range → BUY.
+//
+// SHORT: current 1m price is in the TOP 15% of the window's range
+//        AND at least 7 of the 10 candle closes are BELOW current price
+//        → we are sitting at the very ceiling of the recent range → SELL.
+//
+// 1m confirmation required: green/hammer for LONG, red/bear-pin for SHORT.
+// SL: 0.5% beyond the 10-candle range extreme.
+// Base score 9 — this is a precise level entry, same priority as SWING_REVERSAL.
+// Counter-trend exception applies (same as SWING_REVERSAL):
+//   may enter against h1Trend at RSI extremes (oversold bottom / overbought top).
+
+function stratTenCandleExtreme(c15, c1) {
+  if (c15.length < 12 || c1.length < 2) return null;
+
+  const window10 = c15.slice(-11, -1); // last 10 completed 15m candles
+  if (window10.length < 10) return null;
+
+  const last1m = c1[c1.length - 1];
+  const prev1m = c1[c1.length - 2];
+  const price  = last1m.close;
+
+  const rangeHigh = Math.max(...window10.map(c => c.high));
+  const rangeLow  = Math.min(...window10.map(c => c.low));
+  const rangeSize = rangeHigh - rangeLow;
+  if (rangeSize === 0) return null;
+
+  const posInRange    = (price - rangeLow) / rangeSize; // 0=bottom 1=top
+  const closesAbove   = window10.filter(c => c.close > price).length;
+  const closesBelow   = window10.filter(c => c.close < price).length;
+
+  // ── LONG: at the floor of the 10-candle window ───────────────
+  // posInRange ≤ 0.15 = bottom 15% of range
+  // 7+ candles with closes above = we are genuinely at the bottom
+  if (posInRange <= 0.15 && closesAbove >= 7) {
+    // 1m must show a first sign of reversal (green body or hammer)
+    if (!isGreen(last1m) && !isBullPin(last1m)) return null;
+
+    const sl     = rangeLow * (1 - 0.005); // 0.5% below the 10-candle low
+    const slDist = (price - sl) / price;
+    if (slDist < 0.001 || slDist > 0.04) return null;
+
+    // Tighter entry = bigger bonus
+    const tightBonus   = posInRange <= 0.05 ? 3 : posInRange <= 0.10 ? 2 : 1;
+    const patternBonus = (isGreen(last1m) && isRed(prev1m) &&
+                          last1m.close > prev1m.open) ? 2 : 1; // engulf pattern
+
+    return {
+      setupName: 'TEN_CANDLE_EXTREME',
+      direction: 'LONG',
+      sl,
+      scoreBonus: tightBonus + patternBonus,
+      meta: {
+        posInRange:  posInRange.toFixed(3),
+        closesAbove,
+        rangeLow:    rangeLow.toFixed(4),
+        rangeSize:   rangeSize.toFixed(4),
+      },
+    };
+  }
+
+  // ── SHORT: at the ceiling of the 10-candle window ────────────
+  if (posInRange >= 0.85 && closesBelow >= 7) {
+    if (!isRed(last1m) && !isBearPin(last1m)) return null;
+
+    const sl     = rangeHigh * (1 + 0.005); // 0.5% above the 10-candle high
+    const slDist = (sl - price) / price;
+    if (slDist < 0.001 || slDist > 0.04) return null;
+
+    const tightBonus   = posInRange >= 0.95 ? 3 : posInRange >= 0.90 ? 2 : 1;
+    const patternBonus = (isRed(last1m) && isGreen(prev1m) &&
+                          last1m.close < prev1m.open) ? 2 : 1;
+
+    return {
+      setupName: 'TEN_CANDLE_EXTREME',
+      direction: 'SHORT',
+      sl,
+      scoreBonus: tightBonus + patternBonus,
+      meta: {
+        posInRange:  posInRange.toFixed(3),
+        closesBelow,
+        rangeHigh:   rangeHigh.toFixed(4),
+        rangeSize:   rangeSize.toFixed(4),
+      },
+    };
+  }
+
+  return null;
+}
+
 // ── Main: Analyze One Coin ───────────────────────────────────
 //
-// Runs global filters, then all 6 strategies.
+// Runs global filters, then all 7 strategies.
 // Returns the best signal (highest score) or null.
 
 async function analyzeSymbol(symbol, price, kronosPredictions = null) {
@@ -730,18 +827,22 @@ async function analyzeSymbol(symbol, price, kronosPredictions = null) {
   const r5 = stratMomentum(c15, c1);
   if (r5) candidates.push(r5);
 
-  // Strategy 6: Swing Low/High Reversal — enters AT the key level on first reversal candle
-  // Fixes late entry problem: other strategies confirm AFTER the full bounce, this fires at the bottom
+  // Strategy 6: Swing Low/High Reversal
   const r6 = stratSwingReversal(c15, c1, price, atr);
   if (r6) candidates.push(r6);
+
+  // Strategy 7: 10-Candle Extreme — buy at floor / sell at ceiling of 10-candle window
+  // "Check every 10 candles — if 9 are above current price (bottom 15% of range) → LONG"
+  const r7 = stratTenCandleExtreme(c15, c1);
+  if (r7) candidates.push(r7);
 
   if (candidates.length === 0) return null;
 
   // ── SCORE ALL CANDIDATES ───────────────────────────────────
   //
   // Base scores by strategy type:
-  //   SWING_REVERSAL: 9 — enters directly AT 15m swing low/high
-  //   HTF_SWING:      8 — enters at confirmed 1m Higher Low / Lower High
+  //   SWING_REVERSAL / TEN_CANDLE_EXTREME: 9 — precise level entries (bottom/top of range)
+  //   HTF_SWING:      8 — structure-based (1m HL / LH)
   //   All others:     6 — pattern-based, must earn through context bonuses
   //
   // ═══════════════════════════════════════════════════════════
@@ -751,7 +852,7 @@ async function analyzeSymbol(symbol, price, kronosPredictions = null) {
   //   h1Trend = 'bearish' → ONLY SHORT trades are allowed
   //   h1Trend = 'neutral' → both allowed, but confirmation still needed
   //
-  // EXCEPTION — SWING_REVERSAL only:
+  // EXCEPTION — SWING_REVERSAL and TEN_CANDLE_EXTREME only:
   //   SHORT in bullish h1 → allowed ONLY if RSI > 70 (overbought blow-off top)
   //   LONG  in bearish h1 → allowed ONLY if RSI < 35 (oversold capitulation low)
   //   Even then, a -3 counter-trend penalty applies. All other strategies
@@ -759,39 +860,40 @@ async function analyzeSymbol(symbol, price, kronosPredictions = null) {
   //   only — they NEVER go counter-trend.
   // ═══════════════════════════════════════════════════════════
 
-  const STRUCTURE_STRATEGIES = new Set(['SWING_REVERSAL', 'HTF_SWING', 'LIQ_SWEEP']);
+  // Structure strategies gate their own level proximity — exempt from the global range filter
+  const STRUCTURE_STRATEGIES = new Set(['SWING_REVERSAL', 'TEN_CANDLE_EXTREME', 'HTF_SWING', 'LIQ_SWEEP']);
+  // Reversal strategies may trade counter-trend at RSI extremes
+  const REVERSAL_STRATEGIES  = new Set(['SWING_REVERSAL', 'TEN_CANDLE_EXTREME']);
 
   for (const sig of candidates) {
-    let score = sig.setupName === 'SWING_REVERSAL' ? 9
-              : sig.setupName === 'HTF_SWING'      ? 8
+    let score = (sig.setupName === 'SWING_REVERSAL' || sig.setupName === 'TEN_CANDLE_EXTREME') ? 9
+              :  sig.setupName === 'HTF_SWING'                                                  ? 8
               : 6;
     score += sig.scoreBonus || 0;
 
     const dir        = sig.direction;
-    const isSwingRev = sig.setupName === 'SWING_REVERSAL';
+    const isReversal = REVERSAL_STRATEGIES.has(sig.setupName);
 
     // ── MASTER DIRECTIONAL BLOCK ──────────────────────────────
     // Applied first. Sets score to -99 for any violation.
-    // Only SWING_REVERSAL at RSI extremes may trade counter-trend.
+    // SWING_REVERSAL and TEN_CANDLE_EXTREME may trade counter-trend at RSI extremes.
 
     if (dir === 'SHORT' && h1Trend === 'bullish') {
-      if (isSwingRev && rsi > 70) {
-        // Overbought blow-off top at swing high — valid reversal signal.
-        // Still penalised because it's counter-trend on the 1h.
+      if (isReversal && rsi > 70) {
+        // Overbought blow-off top at the 10-candle ceiling or swing high.
+        // Valid reversal signal but still penalised — it's counter-trend.
         score -= 3;
       } else {
-        // All other strategies cannot short into a 1h uptrend.
-        score = -99;
+        score = -99; // hard block — no shorting in 1h uptrend
       }
     }
 
     if (dir === 'LONG' && h1Trend === 'bearish') {
-      if (isSwingRev && rsi < 35) {
-        // Oversold capitulation at swing low — valid reversal signal.
+      if (isReversal && rsi < 35) {
+        // Oversold capitulation at the 10-candle floor or swing low.
         score -= 3;
       } else {
-        // All other strategies cannot long into a 1h downtrend.
-        score = -99;
+        score = -99; // hard block — no longing in 1h downtrend
       }
     }
 

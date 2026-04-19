@@ -1,8 +1,27 @@
 {
-  "version": "1.2.9",
+  "version": "1.3.0",
   "name": "MCT AI Trader",
   "released": "2026-04-19",
   "changelog": [
+    {
+      "version": "1.3.0",
+      "tag": "v1.3.0",
+      "date": "2026-04-19",
+      "label": "Strategy 7: 10-Candle Extreme — buy at the floor, sell at the ceiling",
+      "changes": [
+        "New Strategy 7: TEN_CANDLE_EXTREME — checks last 10 completed 15m candles",
+        "LONG trigger: current price in bottom 15% of 10-candle range AND 7+ of 10 candles close ABOVE current price → buying at the very floor",
+        "SHORT trigger: current price in top 15% of 10-candle range AND 7+ of 10 candles close BELOW current price → selling at the very ceiling",
+        "1m confirmation required: green candle or hammer for LONG, red candle or bear-pin for SHORT",
+        "Tighter position = higher bonus: bottom 5% = +3, bottom 10% = +2, bottom 15% = +1 (same for SHORT top)",
+        "Engulf pattern on 1m adds +2 bonus (strong reversal confirmation)",
+        "SL: 0.5% beyond the 10-candle range extreme",
+        "Base score: 9 (same as SWING_REVERSAL — precise level entry)",
+        "Counter-trend exception: may enter against h1Trend at RSI extremes (RSI>70 for SHORT, RSI<35 for LONG)",
+        "Exempt from the global range-position filter (has its own stricter 15% internal check)",
+        "Both SWING_REVERSAL and TEN_CANDLE_EXTREME now in REVERSAL_STRATEGIES set for the counter-trend exception"
+      ]
+    },
     {
       "version": "1.2.9",
       "tag": "v1.2.9",
