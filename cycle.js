@@ -471,6 +471,21 @@ function calculateTrailingStep(entryPrice, currentPrice, isLong, lastStep, lever
   // lastStep is stored in capital % — never move SL backwards
   if (bestLockCapitalPct <= lastStep) return null;
 
+  // ── Minimum first-lock: must clear fees + small profit ──────
+  // On the FIRST trailing step (lastStep === 0), ensure the locked SL is high enough
+  // that if hit it covers: entry taker + exit taker + estimated funding + a small profit.
+  // Fee cost in capital % = (taker_both_legs + funding_estimate) × leverage
+  //   20x:  (0.08% + 0.03%) × 20  =  2.2% capital in fees
+  //   100x: (0.08% + 0.03%) × 100 = 11.0% capital in fees
+  // Add MIN_PROFIT_BUFFER (5% capital) so there's always real profit left after fees.
+  if (lastStep === 0) {
+    const FEE_RATE  = TAKER_FEE_BOTH_LEGS + 0.0003; // entry+exit taker + one funding period
+    const feeCapitalPct    = FEE_RATE * leverage;
+    const MIN_PROFIT_BUFFER = 0.05;                  // 5% capital profit minimum
+    const minFirstLock = feeCapitalPct + MIN_PROFIT_BUFFER;
+    if (bestLockCapitalPct < minFirstLock) bestLockCapitalPct = minFirstLock;
+  }
+
   // Convert capital lock % → price % for actual SL price
   const lockPricePct = bestLockCapitalPct / leverage;
   const newSlPrice = isLong

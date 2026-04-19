@@ -1,8 +1,23 @@
 {
-  "version": "1.3.4",
+  "version": "1.3.5",
   "name": "MCT AI Trader",
   "released": "2026-04-20",
   "changelog": [
+    {
+      "version": "1.3.5",
+      "tag": "v1.3.5",
+      "date": "2026-04-20",
+      "label": "Trailing SL first lock must clear fees + profit",
+      "changes": [
+        "First trailing SL lock now dynamically adjusted to cover entry fee + exit fee + funding + 5% capital profit minimum",
+        "Fee cost in capital % = (0.08% taker both legs + 0.03% funding) × leverage",
+        "At 20x: fees = 2.2% capital → first lock stays at 10% capital (already covers fees)",
+        "At 50x: fees = 5.5% capital → first lock raised to 10.5% capital",
+        "At 100x: fees = 11% capital → first lock raised to 16% capital (was 10%, was losing money after fees)",
+        "Subsequent trailing steps are unaffected — only the first step (lastStep=0) gets the minimum floor",
+        "Ensures every trailing SL exit is profitable, not just break-even or a loss"
+      ]
+    },
     {
       "version": "1.3.4",
       "tag": "v1.3.4",
