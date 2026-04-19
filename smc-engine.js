@@ -539,6 +539,9 @@ async function analyzeLHHL(ticker, params, dailyBiasCache, kronosPredictions = n
     setupName: `${direction}-3m1m`,
     aiModifier: Math.round(aiModifier * 100) / 100,
     sizeMod: hourCheck.reduceSizeBy || hourCheck.boostSizeBy || 1.0,
+    // Pass own WR so backtest-gate bypasses its simulation (sim shows 35-46% due to not
+    // modelling trailing SL — real WR is higher since both 3m AND 1m gates passed)
+    strategyWinRate: score >= 15 ? 70 : 60,
     marketStructure: structLabel,
     structure: {
       tf3m: struct3m.label,

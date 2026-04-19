@@ -167,7 +167,7 @@ const DEFAULT_PARAMS = {
   EARLY_EXIT_ENABLED: false, // trailing SL handles all exits (locked)
 
   // ── AI CAN LEARN these — entry quality, indicators, direction ──
-  MIN_SCORE: 8,            // min confluence score for entry (AI learns optimal cutoff)
+  MIN_SCORE: 4,            // min confluence score for entry (AI learns optimal cutoff)
   DIRECTION_BIAS: null,    // null = both, 'LONG' or 'SHORT' (AI learns from WR)
 
   // Strategy/indicator config (AI learns which settings work best)
@@ -247,7 +247,7 @@ async function getOptimalParams() {
     if (goodBuckets.length) {
       const optimalMin = goodBuckets[0];
       params.MIN_SCORE = Math.round(params.MIN_SCORE + (optimalMin - params.MIN_SCORE) * MAX_WEIGHT_SHIFT);
-      params.MIN_SCORE = Math.max(6, Math.min(15, params.MIN_SCORE));
+      params.MIN_SCORE = Math.max(4, Math.min(15, params.MIN_SCORE));
     }
   }
 

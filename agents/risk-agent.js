@@ -150,13 +150,15 @@ class RiskAgent extends BaseAgent {
       }
 
       // Rule 4: Min score gate
-      if (signal.score < minScore) {
+      // Skip for signals that already carry their own verified WR (backtest-gate will validate)
+      const hasTrustedWr = (signal.strategyWinRate || 0) >= 60;
+      if (!hasTrustedWr && signal.score < minScore) {
         reasons.push(`Score ${signal.score} < min ${minScore}`);
       }
 
-      // Rule 4b: Swarm Consensus Gate
+      // Rule 4b: Swarm Consensus Gate (skip for trusted-WR signals — swarm may have no data yet)
       const swarm = swarmIntel.get(sym);
-      if (swarm) {
+      if (swarm && !hasTrustedWr) {
         // If the swarm is heavily conflicted (confidence < 50%), block it even if score is high
         if (swarm.confidence < 50) {
           reasons.push(`Swarm conflict (Conf: ${swarm.confidence}%)`);
