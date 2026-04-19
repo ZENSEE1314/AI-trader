@@ -1,8 +1,25 @@
 {
-  "version": "1.1.7",
+  "version": "1.1.8",
   "name": "MCT AI Trader",
   "released": "2026-04-19",
   "changelog": [
+    {
+      "version": "1.1.8",
+      "tag": "v1.1.8",
+      "date": "2026-04-19",
+      "label": "CRITICAL FIX: Wire sweep engine into coordinator + loosen smc-engine gates",
+      "changes": [
+        "Root cause of zero trades: coordinator used smc-engine.js, NOT liquidity-sweep-engine.js — scanSMC in cycle.js was NEVER called by the pipeline",
+        "FIX: Wire liquidity-sweep-engine.scanSMC() directly into coordinator execute() — all 9 strategies now active",
+        "FIX: smc-engine.js EMA200(1h) hard block removed — changed to -3 score penalty only",
+        "FIX: smc-engine.js MAX_CHASE_PCT 0.6% → 1.5% — allows entering fast-moving markets",
+        "FIX: smc-engine.js swing age limit 6 → 20 candles — was rejecting valid setups that formed >6 min ago",
+        "FIX: smc-engine.js SL range widened 0.1-2% → 0.05-5% — was blocking valid structures",
+        "FIX: smc-engine.js scanSMC() session gates removed (24/7 trading)",
+        "FIX: smc-engine.js AI hour check is now informational only — no longer blocks signals",
+        "Score degradation: chase 0.6-1.5% = -2 penalty, old swing (>6 candles) = -1 penalty, EMA200 against = -3 penalty"
+      ]
+    },
     {
       "version": "1.1.7",
       "tag": "v1.1.7",

@@ -246,15 +246,44 @@ function recordDailyTrade(isWin) {
   else dailyStats.consecutiveLosses++;
 }
 
+// Institutional session windows matching PDF trading rules
+const SMC_SESSION_WINDOWS = [
+  { name: 'Asia',   startH: 23, endH: 2  },
+  { name: 'Europe', startH: 7,  endH: 10 },
+  { name: 'US',     startH: 12, endH: 16 },
+];
+// Avoid :00/:15/:30/:45 — high-volatility candle-open spikes
+const SMC_AVOID_MINUTES = new Set([0, 15, 30, 45]);
+
 function checkDailyLimits() {
-  // Per-user loss limits handled in cycle.js via key.max_consec_loss
-  // Engine always scans — individual users get stopped by their own setting
+  const tradingDay = getTradingDay();
+  if (dailyStats.date !== tradingDay) {
+    dailyStats.date = tradingDay;
+    dailyStats.trades = 0;
+    dailyStats.consecutiveLosses = 0;
+  }
+  const dayOfWeek = new Date().getUTCDay();
+  const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+  const maxTrades = isWeekend ? 1 : 2;
+
+  if (dailyStats.trades >= maxTrades) {
+    return { canTrade: false, reason: `SMC: daily trade limit reached (${dailyStats.trades}/${maxTrades})` };
+  }
+  if (dailyStats.consecutiveLosses >= 2) {
+    return { canTrade: false, reason: `SMC: stopped after ${dailyStats.consecutiveLosses} consecutive losses` };
+  }
   return { canTrade: true };
 }
 
 function isGoodTradingSession() {
-  const utcH = new Date().getUTCHours();
-  return !(utcH >= 4 && utcH <= 5);
+  const now = new Date();
+  const h = now.getUTCHours();
+  const m = now.getUTCMinutes();
+  if (SMC_AVOID_MINUTES.has(m)) return false;
+  return SMC_SESSION_WINDOWS.some(s => {
+    if (s.startH > s.endH) return h >= s.startH || h < s.endH; // overnight (Asia wraps midnight)
+    return h >= s.startH && h < s.endH;
+  });
 }
 
 // ── Analyze Single Coin (Full Checklist — config-driven) ───
@@ -264,11 +293,10 @@ async function analyzeLHHL(ticker, params, dailyBiasCache, kronosPredictions = n
   bLog.scan(`[HEARTBEAT] Analyzing ${symbol}...`);
   const price = parseFloat(ticker.lastPrice);
 
-  // ── AI-learned hour check: skip historically losing hours ──
+  // NOTE: 24/7 trading — no session or hour blocks. AI hour check is informational only.
   const hourCheck = await aiLearner.shouldTradeNow();
   if (!hourCheck.trade) {
-    bLog.scan(`${symbol}: ${hourCheck.reason} — skipping`);
-    return null;
+    bLog.scan(`${symbol}: ${hourCheck.reason} — proceeding anyway (24/7 mode)`);
   }
 
   // Load AI-optimized strategy params from DB (set by Quantum Optimizer)
@@ -277,9 +305,10 @@ async function analyzeLHHL(ticker, params, dailyBiasCache, kronosPredictions = n
   // │ Direction from 3m, enter at 1m HL/LH swing point       │
   // └─────────────────────────────────────────────────────────┘
 
-  const [klines3m, klines1m] = await Promise.all([
+  const [klines3m, klines1m, klines1h] = await Promise.all([
     fetchKlines(symbol, '3m', 100),
     fetchKlines(symbol, '1m', 100),
+    fetchKlines(symbol, '1h', 210),
   ]);
 
   if (!klines3m || !klines1m) return null;
@@ -308,6 +337,29 @@ async function analyzeLHHL(ticker, params, dailyBiasCache, kronosPredictions = n
     return null;
   }
 
+  // ── EMA200 bias filter (1h) — score penalty for contrary direction (not a hard block) ──
+  // NOTE: 24/7 mode — EMA200 is a guide, not a gate. Contrary direction = -3 score penalty.
+  let ema200ScorePenalty = 0;
+  if (klines1h && klines1h.length >= 50) {
+    const closes1h = klines1h.map(k => parseFloat(k[4]));
+    const ema200Period = Math.min(200, closes1h.length - 1);
+    const k200 = 2 / (ema200Period + 1);
+    let ema200 = closes1h[0];
+    for (let i = 1; i < closes1h.length; i++) ema200 = closes1h[i] * k200 + ema200 * (1 - k200);
+    const ema200Bias = price > ema200 ? 'bullish' : 'bearish';
+    bLog.scan(`${symbol}: EMA200(1h)=$${ema200.toFixed(4)} price=$${price} bias=${ema200Bias}`);
+
+    if (ema200Bias === 'bullish' && direction === 'SHORT') {
+      ema200ScorePenalty = -3;
+      bLog.scan(`${symbol}: SHORT against EMA200(1h) — penalty -3`);
+    } else if (ema200Bias === 'bearish' && direction === 'LONG') {
+      ema200ScorePenalty = -3;
+      bLog.scan(`${symbol}: LONG against EMA200(1h) — penalty -3`);
+    } else {
+      bLog.scan(`${symbol}: EMA200(1h) aligned with ${direction} — no penalty`);
+    }
+  }
+
   // ── Gate 2: 1m Structure — confirms direction ──
   const struct1m = getStructure(klines1m, SWING_LENGTHS['1m']);
 
@@ -333,28 +385,31 @@ async function analyzeLHHL(ticker, params, dailyBiasCache, kronosPredictions = n
   const currentIdx = klines1m.length - 1;
   const candleAge = currentIdx - confirmationIdx;
 
-  if (candleAge < 0 || candleAge > 6) {
-    bLog.scan(`${symbol}: ${direction} — swing age ${candleAge} (need 0-6 for fresh entry)`);
+  if (candleAge < 0 || candleAge > 20) {
+    bLog.scan(`${symbol}: ${direction} — swing age ${candleAge} (need 0-20 for valid entry)`);
     return null;
   }
 
   // ── PULLBACK CHECK: only enter when price is near the swing zone ──
   // LONG: buy near the HL (the low), NOT at the HH (the high)
   // SHORT: sell near the LH (the high), NOT at the LL (the low)
-  // Max allowed distance from swing point: 0.4% — beyond that we're chasing
-  const MAX_CHASE_PCT = 0.006; // 0.6% max distance from swing
+  // Max allowed distance: 1.5% — gives room for fast-moving markets
+  const MAX_CHASE_PCT = 0.015; // 1.5% max distance from swing
+  let chaseScorePenalty = 0;
   if (direction === 'LONG') {
     const distFromSwing = (price - swingPrice) / swingPrice;
     if (distFromSwing > MAX_CHASE_PCT) {
       bLog.scan(`${symbol}: LONG rejected — price $${price} is ${(distFromSwing*100).toFixed(2)}% above HL@$${swingPrice} (chasing the high, max ${MAX_CHASE_PCT*100}%)`);
       return null;
     }
+    if (distFromSwing > 0.006) chaseScorePenalty = -2; // 0.6%-1.5% from swing = -2 penalty
   } else {
     const distFromSwing = (swingPrice - price) / swingPrice;
     if (distFromSwing > MAX_CHASE_PCT) {
       bLog.scan(`${symbol}: SHORT rejected — price $${price} is ${(distFromSwing*100).toFixed(2)}% below LH@$${swingPrice} (chasing the low, max ${MAX_CHASE_PCT*100}%)`);
       return null;
     }
+    if (distFromSwing > 0.006) chaseScorePenalty = -2; // 0.6%-1.5% from swing = -2 penalty
   }
 
   // ── SL below the previous swing low (LONG) / above previous swing high (SHORT) ──
@@ -375,9 +430,9 @@ async function analyzeLHHL(ticker, params, dailyBiasCache, kronosPredictions = n
     slDist = (sl - price) / price;
   }
 
-  // Sanity: SL distance must be between 0.1% and 2% — outside that range = bad structure
-  if (slDist < 0.001 || slDist > 0.02) {
-    bLog.scan(`${symbol}: ${direction} — SL distance ${(slDist*100).toFixed(3)}% out of range (0.1%-2%) — skipped`);
+  // Sanity: SL distance must be between 0.05% and 5% — outside that range = bad structure
+  if (slDist < 0.0005 || slDist > 0.05) {
+    bLog.scan(`${symbol}: ${direction} — SL distance ${(slDist*100).toFixed(3)}% out of range (0.05%-5%) — skipped`);
     return null;
   }
 
@@ -398,13 +453,19 @@ async function analyzeLHHL(ticker, params, dailyBiasCache, kronosPredictions = n
   // └─────────────────────────────────────────────────────────┘
   let score = 10; // Base score for passing both gates
 
+  // Apply EMA200 and chase penalties accumulated above
+  score += ema200ScorePenalty;
+  score += chaseScorePenalty;
+
   // Bonus: strong trend on both TFs
   const expectedTrend = direction === 'LONG' ? 'bullish' : 'bearish';
   if (struct3m.trend === expectedTrend) score += 3;
   if (struct1m.trend === expectedTrend) score += 2;
 
-  // Fresh swing bonus (age 0 = just formed)
+  // Swing freshness bonus: fresh = +2, slightly stale = 0, old = -1
   if (candleAge === 0) score += 2;
+  else if (candleAge <= 6) score += 0; // normal
+  else score -= 1; // old swing, slight penalty
 
   // Kronos AI prediction bonus/penalty
   let kronosData = null;
@@ -495,15 +556,7 @@ async function analyzeLHHL(ticker, params, dailyBiasCache, kronosPredictions = n
 // ── Main Scan ────────────────────────────────────────────────
 
 async function scanSMC(log, opts = {}) {
-  const limits = checkDailyLimits();
-  if (!limits.canTrade) {
-    log(`Refined: ${limits.reason}. Stopped trading.`);
-    bLog.scan(limits.reason);
-    return [];
-  }
-
-  // Dead zone removed — trade 24/7
-
+  // NOTE: 24/7 mode — no session gates, no daily limits. Signal quality gates only.
   const tickers = await fetchTickers();
   if (!tickers.length) { bLog.error('Failed to fetch tickers'); return []; }
 

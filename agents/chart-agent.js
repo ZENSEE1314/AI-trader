@@ -70,7 +70,6 @@ class ChartAgent extends BaseAgent {
       session,
       signalCount: signals.length,
       topSignal: signals[0] || null,
-      aiParams,
     };
     this.scanHistory.push(scanResult);
     if (this.scanHistory.length > this.maxHistory) this.scanHistory.shift();

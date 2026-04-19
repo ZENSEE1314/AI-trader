@@ -1,8 +1,9 @@
 // ============================================================
 // Trailing SL Watchdog — runs every 15 seconds
 // Two mechanisms combined, takes the better (higher protection):
-//   1. Candle trail  — SL = last completed 15m candle low/high
-//   2. Profit tiers  — at 30% profit, SL locks 20% minimum (never lose a winner)
+//   1. Candle trail  — SL = lowest low of last 2 completed 15m candles,
+//                      with minimum 0.5% breathing room from current price
+//   2. Profit tiers  — milestone locks with generous gaps so trades have room to run
 // ============================================================
 
 const fetch = require('node-fetch');
@@ -18,17 +19,15 @@ const db = require('./db');
 const TAKER_FEE_BOTH_LEGS = 0.0008; // 0.08% of notional
 
 // Profit tier guarantees — all values in capital % (margin)
-// First trigger fires as soon as profit covers fees + 1% extra — NEVER lose on a winner
+// Gaps are wide so trades have room to breathe and not get stopped prematurely.
+// Fee floor (dynamic, computed per-trade below) is the only early trigger.
 const TRAIL_TIERS = [
-  // First tier: fires once profit > fees, SL = fees covered + 1% buffer
-  // This is computed dynamically per-trade below using actual leverage
-  { trigger: 0.10, sl: 0.06  }, // +10% → lock 6%
-  { trigger: 0.20, sl: 0.14  }, // +20% → lock 14%
-  { trigger: 0.30, sl: 0.22  }, // +30% → lock 22%  (never lose on a 30% winner)
-  { trigger: 0.45, sl: 0.37  }, // +45% → lock 37%
-  { trigger: 0.60, sl: 0.52  }, // +60% → lock 52%
-  { trigger: 0.80, sl: 0.72  }, // +80% → lock 72%
-  { trigger: 1.00, sl: 0.92  }, // +100% → lock 92%
+  { trigger: 0.20, sl: 0.10  }, // +20%  → lock 10%  (gap=10%)
+  { trigger: 0.35, sl: 0.22  }, // +35%  → lock 22%  (gap=13%)
+  { trigger: 0.50, sl: 0.35  }, // +50%  → lock 35%  (gap=15%)
+  { trigger: 0.70, sl: 0.55  }, // +70%  → lock 55%  (gap=15%)
+  { trigger: 0.90, sl: 0.75  }, // +90%  → lock 75%  (gap=15%)
+  { trigger: 1.20, sl: 1.05  }, // +120% → lock 105% (gap=15%)
 ];
 
 function log(msg) {
@@ -93,20 +92,38 @@ function calcTierSlPrice(entryPrice, curPrice, isLong, leverage) {
     : entryPrice * (1 - slPricePct);
 }
 
-// Last completed 15m candle structural SL
-async function calcCandleSlPrice(symbol, isLong, currentSl) {
+// Minimum price distance between SL and current price (0.5%)
+// Prevents SL from being placed too close and getting clipped by normal volatility
+const MIN_SL_DISTANCE = 0.005;
+
+// Structural SL based on the lowest low of the last 2 completed 15m candles.
+// Uses 2 candles (not 1) for wider structural support.
+// Enforces MIN_SL_DISTANCE from current price so the trade has breathing room.
+async function calcCandleSlPrice(symbol, isLong, currentSl, curPrice) {
   try {
-    const url = `https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=15m&limit=3`;
+    const url = `https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=15m&limit=5`;
     const res = await fetch(url, { timeout: 6000, ...getFetchOptions() });
     const data = await res.json();
-    if (!Array.isArray(data) || data.length < 2) return null;
+    if (!Array.isArray(data) || data.length < 3) return null;
 
-    const completed = data[data.length - 2];
-    const candleLow  = parseFloat(completed[3]);
-    const candleHigh = parseFloat(completed[2]);
+    // Last 2 completed candles (exclude the forming candle at index -1)
+    const c1 = data[data.length - 2];
+    const c2 = data[data.length - 3];
 
-    if (isLong  && candleLow  > currentSl) return candleLow;
-    if (!isLong && candleHigh < currentSl) return candleHigh;
+    // For LONG: use the lowest low of both candles — deeper structural support
+    // For SHORT: use the highest high — deeper structural resistance
+    const structLow  = Math.min(parseFloat(c1[3]), parseFloat(c2[3]));
+    const structHigh = Math.max(parseFloat(c1[2]), parseFloat(c2[2]));
+
+    if (isLong) {
+      // Reject if candle low is too close to current price — no breathing room
+      if (structLow > curPrice * (1 - MIN_SL_DISTANCE)) return null;
+      if (structLow > currentSl) return structLow;
+    } else {
+      // Reject if candle high is too close to current price
+      if (structHigh < curPrice * (1 + MIN_SL_DISTANCE)) return null;
+      if (structHigh < currentSl) return structHigh;
+    }
     return null;
   } catch (e) {
     log(`calcCandleSlPrice ${symbol}: ${e.message}`);
@@ -190,8 +207,8 @@ async function runTrailCycle() {
         // Mechanism 1: Profit tier guarantee
         const tierSl = calcTierSlPrice(entryPrice, curPrice, isLong, leverage);
 
-        // Mechanism 2: Candle structural trail
-        const candleSl = await calcCandleSlPrice(trade.symbol, isLong, currentSl);
+        // Mechanism 2: Candle structural trail (last 2 candles, min 0.5% from price)
+        const candleSl = await calcCandleSlPrice(trade.symbol, isLong, currentSl, curPrice);
 
         // Take the BETTER of the two (highest SL for LONG, lowest for SHORT)
         let bestSl = currentSl;
@@ -236,6 +253,108 @@ async function runTrailCycle() {
   }
 }
 
-log('Trail watchdog started — 15s interval | candle trail + profit tier');
+// ── Orphan Position Guard ──────────────────────────────────
+// Positions that exist on exchange but NOT in DB have no SL protection.
+// If they lose more than 25% capital with no stop, this guard closes them.
+// Runs every 2 minutes (less aggressive than main trail cycle).
+
+const ORPHAN_LOSS_THRESHOLD = 0.25; // auto-close at -25% capital loss
+const ORPHAN_CHECK_INTERVAL = 2 * 60 * 1000; // every 2 minutes
+
+async function runOrphanGuard() {
+  try {
+    // Get all DB-tracked open trades to know which are already managed
+    const dbTrades = await db.query(
+      `SELECT t.symbol, ak.id as key_id
+       FROM trades t
+       JOIN api_keys ak ON ak.id = t.api_key_id
+       WHERE t.status = 'OPEN' AND ak.enabled = true`
+    );
+    const managed = new Set(dbTrades.map(r => `${r.key_id}:${r.symbol}`));
+
+    // Get all active Bitunix API keys
+    const keys = await db.query(
+      `SELECT ak.id, ak.api_key, ak.api_secret, ak.leverage, u.email
+       FROM api_keys ak
+       JOIN users u ON u.id = ak.user_id
+       WHERE ak.platform = 'bitunix' AND ak.enabled = true`
+    );
+
+    for (const key of keys) {
+      try {
+        const client = new BitunixClient({ apiKey: key.api_key, apiSecret: key.api_secret });
+        const raw = await Promise.race([
+          client.getOpenPositions(),
+          new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 6000)),
+        ]);
+        const positions = Array.isArray(raw) ? raw
+          : (raw?.positionList || raw?.list || []);
+
+        for (const p of positions) {
+          const qty = parseFloat(p.qty || p.size || 0);
+          if (qty === 0) continue;
+
+          const sym = (p.symbol || '').toUpperCase();
+          const posKey = `${key.id}:${sym}`;
+
+          // Skip if this position is DB-managed (trail watchdog handles it)
+          if (managed.has(posKey)) continue;
+
+          const entry     = parseFloat(p.entryPrice || p.avgOpenPrice || 0);
+          const isLong    = (p.side || '').toUpperCase() === 'BUY';
+          const lev       = parseFloat(p.leverage || key.leverage || 20);
+          const upnl      = parseFloat(p.unrealizedPNL || p.unrealizedPnl || 0);
+
+          // Calculate approximate capital loss %
+          const curPrice = await getLivePrice(sym);
+          if (!curPrice || entry === 0) continue;
+
+          const pricePct  = isLong ? (curPrice - entry) / entry : (entry - curPrice) / entry;
+          const capitalPct = pricePct * lev;
+
+          if (capitalPct >= -ORPHAN_LOSS_THRESHOLD) continue; // not bad enough yet
+
+          log(`⚠ ORPHAN ${sym} ${isLong ? 'LONG' : 'SHORT'} [${key.email}] — no DB record, ${(capitalPct * 100).toFixed(1)}% capital loss — AUTO-CLOSING`);
+
+          // Market close: place a market order in the opposite direction
+          try {
+            const posData = await client.getOpenPositions(sym);
+            const posList = Array.isArray(posData) ? posData
+              : (posData?.positionList || posData?.list || []);
+            const pos   = posList.find(x => (x.symbol || '').toUpperCase() === sym);
+            const posId = pos ? (pos.positionId || pos.id) : null;
+
+            if (posId) {
+              await client.placeOrder({
+                symbol: sym,
+                side: isLong ? 'SELL' : 'BUY',
+                orderType: 'MARKET',
+                qty: String(qty),
+                positionId: posId,
+                reduceOnly: true,
+              });
+              log(`✓ ORPHAN ${sym} closed — saved from further loss`);
+            }
+          } catch (closeErr) {
+            log(`ORPHAN close failed ${sym}: ${closeErr.message}`);
+          }
+        }
+      } catch (keyErr) {
+        // Key unavailable — skip silently
+      }
+    }
+  } catch (e) {
+    log(`runOrphanGuard error: ${e.message}`);
+  }
+}
+
+log('Trail watchdog started — 15s interval | 2-candle trail (0.5% min gap) + profit tier');
+log('Orphan guard started — 2min interval | auto-close unmanaged positions > -25% capital');
 runTrailCycle();
 setInterval(runTrailCycle, INTERVAL_MS);
+
+// Stagger orphan guard by 30s so it doesn't overlap with first trail cycle
+setTimeout(() => {
+  runOrphanGuard();
+  setInterval(runOrphanGuard, ORPHAN_CHECK_INTERVAL);
+}, 30000);
