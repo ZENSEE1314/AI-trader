@@ -1,8 +1,26 @@
 {
-  "version": "1.2.8",
+  "version": "1.2.9",
   "name": "MCT AI Trader",
   "released": "2026-04-19",
   "changelog": [
+    {
+      "version": "1.2.9",
+      "tag": "v1.2.9",
+      "date": "2026-04-19",
+      "label": "COMPREHENSIVE FIX: Master directional law — correct direction every trade",
+      "changes": [
+        "ROOT CAUSE AUDIT: 5 independent bugs all allowed wrong-direction trades",
+        "BUG 1 — Hard block required BOTH h1Trend AND EMA200 to agree. If h1=bullish but EMA200=bearish, SHORTs still passed. FIX: hard block now triggers on h1Trend ALONE",
+        "BUG 2 — SWING_REVERSAL SHORT had zero h1Trend check. Would fire SHORT at any swing high even in uptrend. FIX: SWING_REVERSAL counter-trend only allowed at RSI extremes (SHORT in h1 bull only if RSI>70, LONG in h1 bear only if RSI<35)",
+        "BUG 3 — HTF_SWING SHORT had no 1h check. 3m LH+LL fires during ANY pullback, even healthy uptrend retracements. FIX: master directional block at scoring level now blocks HTF_SWING SHORT in h1 uptrend (score=-99)",
+        "BUG 4 — Momentum block required ALL 3 candles green/red. One doji cancelled the whole block (e.g. green+doji+green bounce = momentumDir stays neutral). FIX: upgraded to 2-of-3 rule — 2+ candles same direction AND >0.8% move = momentum confirmed",
+        "BUG 5 — CONSOL_REJECT SHORT had no 1h check. Only looked at 15m EMAs. FIX: master directional block catches this — h1=bullish blocks all CONSOL_REJECT SHORTs",
+        "MASTER DIRECTIONAL LAW: h1Trend=bullish → ONLY LONG | h1Trend=bearish → ONLY SHORT | neutral → both with strong confirmation needed",
+        "Counter-trend exception: SWING_REVERSAL at RSI extremes may trade against h1 (catches blow-off tops and capitulation lows) but with -3 penalty",
+        "opBias penalty doubled: -1 → -2 for trading against daily VWAP bias",
+        "EMA200 alignment now also gives +1 bonus when trade aligns (was penalty-only before)"
+      ]
+    },
     {
       "version": "1.2.8",
       "tag": "v1.2.8",

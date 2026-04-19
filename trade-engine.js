@@ -674,19 +674,21 @@ async function analyzeSymbol(symbol, price, kronosPredictions = null) {
     }
   }
 
-  // ── GLOBAL FILTER 5: Strong momentum block ────────────────
-  // If last 3 completed 15m candles are all moving strongly in ONE direction
-  // (>0.8% total move), block counter-trend entries.
-  // Prevents shorting into a bull breakout or longing into a crash.
+  // ── GLOBAL FILTER 5: Strong momentum direction ────────────
+  // Uses 2-of-3 rule: if at least 2 of the last 3 completed 15m candles
+  // move the same way AND total move > 0.8%, that IS momentum.
+  // Previous ALL-3 rule was broken by a single doji cancelling the block
+  // (e.g. BNB bounce: green + doji + green = strong bull but allGreen=false).
   let momentumDir = 'neutral';
   {
     const last3 = c15.slice(-4, -1); // 3 completed candles
     if (last3.length === 3) {
-      const totalMove = (last3[2].close - last3[0].open) / last3[0].open;
-      const allGreen  = last3.every(c => c.close > c.open);
-      const allRed    = last3.every(c => c.close < c.open);
-      const strongUp  = totalMove >  0.008 && allGreen; // >0.8% up in 3 candles
-      const strongDn  = totalMove < -0.008 && allRed;   // >0.8% down in 3 candles
+      const totalMove     = (last3[2].close - last3[0].open) / last3[0].open;
+      const greenCount    = last3.filter(c => c.close > c.open).length;
+      const redCount      = last3.filter(c => c.close < c.open).length;
+      // 2-of-3 rule: majority direction + significant total move
+      const strongUp = totalMove >  0.008 && greenCount >= 2;
+      const strongDn = totalMove < -0.008 && redCount   >= 2;
       if (strongUp) momentumDir = 'bullish';
       if (strongDn) momentumDir = 'bearish';
     }
@@ -736,19 +738,26 @@ async function analyzeSymbol(symbol, price, kronosPredictions = null) {
   if (candidates.length === 0) return null;
 
   // ── SCORE ALL CANDIDATES ───────────────────────────────────
-  // Base scores reflect how precisely each strategy targets structural levels:
-  //   SWING_REVERSAL: 9 — enters directly AT the 15m swing low/high (most precise)
-  //   HTF_SWING:      8 — enters at 1m Higher Low / Lower High (structure-based)
-  //   Everything else: 6 — pattern-based, must earn through confirmations
   //
-  // Range position bonus/penalty (applies to pattern strategies only):
-  //   LONG in bottom 30% of 20-candle range: +2 (buying near the low = correct)
-  //   LONG in top 60-100% (mid/high range): -4 (buying near top = wrong)
-  //   SHORT in top 30% of range: +2 (shorting near high = correct)
-  //   SHORT in bottom 0-40% (mid/low range): -4 (shorting near bottom = wrong)
+  // Base scores by strategy type:
+  //   SWING_REVERSAL: 9 — enters directly AT 15m swing low/high
+  //   HTF_SWING:      8 — enters at confirmed 1m Higher Low / Lower High
+  //   All others:     6 — pattern-based, must earn through context bonuses
   //
-  // Structure strategies (SWING_REVERSAL, HTF_SWING, LIQ_SWEEP) already gate their
-  // own level proximity — skip the range penalty for them.
+  // ═══════════════════════════════════════════════════════════
+  // MASTER DIRECTIONAL LAW (applied before ANY other scoring):
+  //
+  //   h1Trend = 'bullish' → ONLY LONG trades are allowed
+  //   h1Trend = 'bearish' → ONLY SHORT trades are allowed
+  //   h1Trend = 'neutral' → both allowed, but confirmation still needed
+  //
+  // EXCEPTION — SWING_REVERSAL only:
+  //   SHORT in bullish h1 → allowed ONLY if RSI > 70 (overbought blow-off top)
+  //   LONG  in bearish h1 → allowed ONLY if RSI < 35 (oversold capitulation low)
+  //   Even then, a -3 counter-trend penalty applies. All other strategies
+  //   (HTF_SWING, CONSOL_REJECT, MOMENTUM, VWAP, LIQ_SWEEP) are TREND-FOLLOWING
+  //   only — they NEVER go counter-trend.
+  // ═══════════════════════════════════════════════════════════
 
   const STRUCTURE_STRATEGIES = new Set(['SWING_REVERSAL', 'HTF_SWING', 'LIQ_SWEEP']);
 
@@ -758,77 +767,94 @@ async function analyzeSymbol(symbol, price, kronosPredictions = null) {
               : 6;
     score += sig.scoreBonus || 0;
 
-    const dir = sig.direction;
+    const dir        = sig.direction;
+    const isSwingRev = sig.setupName === 'SWING_REVERSAL';
 
-    // Range position filter — skip for structure-based strategies that already
-    // check proximity to a specific level (they'd be at the extremes by definition)
+    // ── MASTER DIRECTIONAL BLOCK ──────────────────────────────
+    // Applied first. Sets score to -99 for any violation.
+    // Only SWING_REVERSAL at RSI extremes may trade counter-trend.
+
+    if (dir === 'SHORT' && h1Trend === 'bullish') {
+      if (isSwingRev && rsi > 70) {
+        // Overbought blow-off top at swing high — valid reversal signal.
+        // Still penalised because it's counter-trend on the 1h.
+        score -= 3;
+      } else {
+        // All other strategies cannot short into a 1h uptrend.
+        score = -99;
+      }
+    }
+
+    if (dir === 'LONG' && h1Trend === 'bearish') {
+      if (isSwingRev && rsi < 35) {
+        // Oversold capitulation at swing low — valid reversal signal.
+        score -= 3;
+      } else {
+        // All other strategies cannot long into a 1h downtrend.
+        score = -99;
+      }
+    }
+
+    // Skip all further scoring for hard-blocked signals
+    if (score === -99) { sig.score = -99; continue; }
+
+    // ── Range position filter ─────────────────────────────────
+    // Pattern strategies must enter near the range extremes.
+    // Structure strategies (HTF_SWING, SWING_REVERSAL, LIQ_SWEEP) gate
+    // their own proximity internally — exempt from this filter.
     if (!STRUCTURE_STRATEGIES.has(sig.setupName)) {
       if (dir === 'LONG') {
-        if (rangePosRatio <= 0.30)      score += 2; // buying at 20c low → excellent
-        else if (rangePosRatio >= 0.60) score -= 4; // buying 60%+ into range → wrong zone
+        if (rangePosRatio <= 0.30)      score += 2; // near 20-candle low → correct zone
+        else if (rangePosRatio >= 0.65) score -= 4; // buying 65%+ into the range → wrong
       }
       if (dir === 'SHORT') {
-        if (rangePosRatio >= 0.70)      score += 2; // shorting at 20c high → excellent
-        else if (rangePosRatio <= 0.40) score -= 4; // shorting 40%- into range → wrong zone
+        if (rangePosRatio >= 0.70)      score += 2; // near 20-candle high → correct zone
+        else if (rangePosRatio <= 0.35) score -= 4; // shorting 35%- into the range → wrong
       }
     }
 
-    // RSI bonus/penalty
+    // ── RSI filter ────────────────────────────────────────────
     if (dir === 'LONG'  && rsi > 50 && rsi < 70) score += 1; // healthy bull RSI
     if (dir === 'SHORT' && rsi < 50 && rsi > 30) score += 1; // healthy bear RSI
-    if (dir === 'LONG'  && rsi > 75) score -= 3; // overbought — don't long
-    if (dir === 'SHORT' && rsi < 25) score -= 3; // oversold — don't short
+    if (dir === 'LONG'  && rsi > 75) score -= 3;             // overbought — risky long
+    if (dir === 'SHORT' && rsi < 25) score -= 3;             // oversold — risky short
 
-    // SWING_REVERSAL: oversold/overbought at the extreme is a BONUS (it's the reversal point)
-    if (sig.setupName === 'SWING_REVERSAL') {
-      if (dir === 'LONG'  && rsi < 35) score += 2; // oversold at swing low = perfect
-      if (dir === 'SHORT' && rsi > 65) score += 2; // overbought at swing high = perfect
-    }
+    // SWING_REVERSAL RSI extreme bonus (it IS the reversal point — RSI extreme is a signal)
+    if (isSwingRev && dir === 'LONG'  && rsi < 35) score += 3;
+    if (isSwingRev && dir === 'SHORT' && rsi > 65) score += 3;
 
-    // EMA200(1h) directional penalty
+    // ── EMA200(1h) directional alignment ─────────────────────
     if (typeof ema200Penalty === 'object' && ema200Penalty.bias) {
       if (dir === 'SHORT' && ema200Penalty.bias === 'bullish') score -= 3;
       if (dir === 'LONG'  && ema200Penalty.bias === 'bearish') score -= 3;
+      if (dir === 'LONG'  && ema200Penalty.bias === 'bullish') score += 1;
+      if (dir === 'SHORT' && ema200Penalty.bias === 'bearish') score += 1;
     }
 
-    // ── Hard directional block: don't trade against confirmed multi-timeframe trend ──
-    // If h1Trend and EMA200 BOTH confirm bullish → block ALL SHORTs outright (set score to -99).
-    // Same for bearish — block ALL LONGs. Belt and suspenders on top of penalty system.
-    if (dir === 'SHORT' && h1Trend === 'bullish' &&
-        typeof ema200Penalty === 'object' && ema200Penalty.bias === 'bullish') {
-      score = -99; // confirmed uptrend — no shorts allowed
-    }
-    if (dir === 'LONG' && h1Trend === 'bearish' &&
-        typeof ema200Penalty === 'object' && ema200Penalty.bias === 'bearish') {
-      score = -99; // confirmed downtrend — no longs allowed
-    }
-
-    // ── Momentum block: -8 penalty for trading against strong momentum ──
-    // If last 3 candles are all green >0.8% total, DON'T short. And vice versa.
-    // This prevents the CONSOL_REJECT / HTF_SWING from shorting into bull breakouts.
-    if (score > -99 && dir === 'SHORT' && momentumDir === 'bullish') score -= 8;
-    if (score > -99 && dir === 'LONG'  && momentumDir === 'bearish') score -= 8;
-    // With the momentum block: also reward signals that RIDE the momentum
+    // ── Momentum block (2-of-3 candle rule) ──────────────────
+    // Counter-trend vs confirmed momentum: -8 (functionally a block at MIN_SCORE 8).
+    // Aligned with momentum: +3 bonus.
+    if (dir === 'SHORT' && momentumDir === 'bullish') score -= 8;
+    if (dir === 'LONG'  && momentumDir === 'bearish') score -= 8;
     if (dir === 'LONG'  && momentumDir === 'bullish') score += 3;
     if (dir === 'SHORT' && momentumDir === 'bearish') score += 3;
 
-    // h1Trend alignment
+    // ── 1h trend alignment bonus ─────────────────────────────
     if (dir === 'LONG'  && h1Trend === 'bullish') score += 2;
     if (dir === 'SHORT' && h1Trend === 'bearish') score += 2;
-    if (dir === 'LONG'  && h1Trend === 'bearish') score -= 1;
-    if (dir === 'SHORT' && h1Trend === 'bullish') score -= 1;
+    // No penalty here — misaligned trades are already hard-blocked above
 
-    // VWAP/OP daily bias alignment
+    // ── VWAP / daily opening price bias ─────────────────────
     if (dir === 'LONG'  && opBias === 'bullish') score += 2;
     if (dir === 'SHORT' && opBias === 'bearish') score += 2;
-    if (dir === 'LONG'  && opBias === 'bearish') score -= 1;
-    if (dir === 'SHORT' && opBias === 'bullish') score -= 1;
+    if (dir === 'LONG'  && opBias === 'bearish') score -= 2;
+    if (dir === 'SHORT' && opBias === 'bullish') score -= 2;
 
-    // Volume confirmation on entry candle
+    // ── Volume confirmation ───────────────────────────────────
     const lastIdx = c15.length - 1;
     if (hasVolume(c15, lastIdx, 1.2)) score += 1;
 
-    // Kronos AI prediction
+    // ── Kronos AI prediction ──────────────────────────────────
     if (kronosPredictions && kronosPredictions.has(symbol)) {
       const kron = kronosPredictions.get(symbol);
       if (!kron.error) {
