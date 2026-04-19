@@ -1,8 +1,21 @@
 {
-  "version": "1.3.0",
+  "version": "1.3.1",
   "name": "MCT AI Trader",
   "released": "2026-04-19",
   "changelog": [
+    {
+      "version": "1.3.1",
+      "tag": "v1.3.1",
+      "date": "2026-04-19",
+      "label": "Run TEN_CANDLE_EXTREME only — disable all other strategies",
+      "changes": [
+        "Disabled strategies 1-6 (HTF_SWING, VWAP_REJECTION, CONSOL_REJECT, LIQ_SWEEP, MOMENTUM, SWING_REVERSAL)",
+        "Only TEN_CANDLE_EXTREME is active — one clean strategy with no conflicting signals",
+        "Buy at the floor of the last 10 candles (bottom 15% + 7+ closes above)",
+        "Sell at the ceiling of the last 10 candles (top 15% + 7+ closes below)",
+        "All directional rules (master law, momentum block, RSI, h1Trend, opBias) still apply as safety filters"
+      ]
+    },
     {
       "version": "1.3.0",
       "tag": "v1.3.0",

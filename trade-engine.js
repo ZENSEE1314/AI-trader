@@ -805,34 +805,9 @@ async function analyzeSymbol(symbol, price, kronosPredictions = null) {
 
   const candidates = [];
 
-  // Strategy 1: HTF Swing (needs 3m + 1m klines)
-  if (k3m && k3m.length >= 30) {
-    const r = stratHtfSwing(k3m, k1m, price);
-    if (r) candidates.push(r);
-  }
-
-  // Strategy 2: VWAP Rejection
-  const r2 = stratVwapRejection(c15, vwap, c1, atr);
-  if (r2) candidates.push(r2);
-
-  // Strategy 3: Consolidation Rejection
-  const r3 = stratConsolReject(c15, c1, atr);
-  if (r3) candidates.push(r3);
-
-  // Strategy 4: Liquidity Sweep
-  const r4 = stratLiqSweep(c15, c1);
-  if (r4) candidates.push(r4);
-
-  // Strategy 5: Momentum Scalp
-  const r5 = stratMomentum(c15, c1);
-  if (r5) candidates.push(r5);
-
-  // Strategy 6: Swing Low/High Reversal
-  const r6 = stratSwingReversal(c15, c1, price, atr);
-  if (r6) candidates.push(r6);
-
-  // Strategy 7: 10-Candle Extreme — buy at floor / sell at ceiling of 10-candle window
-  // "Check every 10 candles — if 9 are above current price (bottom 15% of range) → LONG"
+  // ── ACTIVE STRATEGY: TEN_CANDLE_EXTREME only ─────────────────
+  // Strategies 1-6 disabled — one clean strategy, no conflicting signals.
+  // Logic: check last 10 candles, buy at floor (bottom 15%), sell at ceiling (top 15%).
   const r7 = stratTenCandleExtreme(c15, c1);
   if (r7) candidates.push(r7);
 
