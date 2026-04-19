@@ -33,8 +33,9 @@ const TOP_N_COINS      = 20;           // how many coins to scan per cycle
 const ATR_PERIOD       = 14;
 const STRATEGY_WIN_RATE = 65;          // passed to backtest-gate bypass
 
-// Coins always scanned (our 4 main tokens)
+// ONLY these 4 coins are traded — no exceptions
 const CORE_SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT'];
+const ALLOWED_SYMBOLS = new Set(CORE_SYMBOLS);
 
 // ── Fetch Helpers ────────────────────────────────────────────
 
@@ -699,21 +700,12 @@ async function scanAll(log, opts = {}) {
     'XAUUSDT','XAGUSDT','EURUSDT','GBPUSDT','JPYUSDT',
   ]);
 
-  // Top coins by volume + always include core 4
-  const topCoins = (tickers || [])
-    .filter(t => t.symbol.endsWith('USDT') && !t.symbol.includes('_'))
-    .filter(t => !BLACKLIST.has(t.symbol) && !banned.has(t.symbol))
-    .filter(t => parseFloat(t.quoteVolume) >= MIN_24H_VOLUME)
-    .sort((a, b) => parseFloat(b.quoteVolume) - parseFloat(a.quoteVolume))
-    .slice(0, opts.topNCoins || TOP_N_COINS)
-    .map(t => ({ symbol: t.symbol, price: parseFloat(t.lastPrice) }));
-
-  // Ensure core 4 are always included
+  // ONLY scan the 4 allowed symbols — BTC, ETH, SOL, BNB
+  const topCoins = [];
   for (const sym of CORE_SYMBOLS) {
-    if (!topCoins.find(c => c.symbol === sym)) {
-      const t = tickers.find(t => t.symbol === sym);
-      if (t) topCoins.unshift({ symbol: sym, price: parseFloat(t.lastPrice) });
-    }
+    if (banned.has(sym)) continue;
+    const t = tickers.find(t => t.symbol === sym);
+    if (t) topCoins.push({ symbol: sym, price: parseFloat(t.lastPrice) });
   }
 
   const kronosPredictions = opts.kronosPredictions || null;

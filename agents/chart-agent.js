@@ -9,8 +9,7 @@
 // ============================================================
 
 const { BaseAgent } = require('./base-agent');
-const { isGoodTradingSession } = require('../smc-engine');
-const { scanSMC } = require('../liquidity-sweep-engine');
+const { scanAll } = require('../trade-engine');
 const aiLearner = require('../ai-learner');
 
 class ChartAgent extends BaseAgent {
@@ -49,19 +48,15 @@ class ChartAgent extends BaseAgent {
       this.addActivity('info', `Strategy intel: "${strat.name}" won with ${strat.winRate?.toFixed(1)}% WR — noted for scanning`);
     }
 
-    this.logScan('Starting market scan (Liquidity Sweep Engine only)...');
+    this.logScan('Starting market scan (trade-engine — BTC/ETH/SOL/BNB only)...');
 
-    // 1. Check trading session quality
     const session = aiLearner.getCurrentSession();
-    const sessionGood = isGoodTradingSession();
-    this.logScan(`Session: ${session} | Good session: ${sessionGood}`);
+    this.logScan(`Session: ${session}`);
 
-    // 2. Scan using liquidity-sweep-engine only — hardcoded SMC strategies with
-    //    all filters: range position, swing proximity, RSI, spike, trend alignment.
-    //    ai-signal-scanner (evolved/AI strategies) disabled — too many top-entries.
-    const signals = await scanSMC(
+    // Scan using unified trade-engine — only 4 allowed coins (BTC/ETH/SOL/BNB)
+    const signals = await scanAll(
       (msg) => this.logScan(msg),
-      { topNCoins }
+      { kronosPredictions }
     );
 
     // 4. Record scan result
