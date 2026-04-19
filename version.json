@@ -1,21 +1,20 @@
 {
-  "version": "1.2.5",
+  "version": "1.2.6",
   "name": "MCT AI Trader",
   "released": "2026-04-19",
   "changelog": [
     {
-      "version": "1.2.5",
-      "tag": "v1.2.5",
+      "version": "1.2.6",
+      "tag": "v1.2.6",
       "date": "2026-04-19",
-      "label": "Strategy 6: SWING_REVERSAL — buy AT bottom not after bounce",
+      "label": "Momentum block — stop shorting into bull breakouts",
       "changes": [
-        "Root cause of late entry (buy 300-500pts after bottom): all 5 strategies are reactive — wait for structure after bounce, not at the turning point",
-        "Add Strategy 6: SWING_REVERSAL — detects 15m swing low/high, enters on first 1m reversal candle (hammer or engulfing) within 0.4% of that level",
-        "LONG: 15m swing low (lowest of last 8 candles) + 1m hammer/bullish engulf within 0.4% → enter, SL 0.6% below swing low",
-        "SHORT: 15m swing high (highest of last 8 candles) + 1m shooting star/bearish engulf within 0.4% → enter, SL 0.6% above swing high",
-        "SWING_REVERSAL gets base score 9 (vs 6 for others) — most direct key-level entry",
-        "RSI bonus: oversold at swing low LONG (+2) / overbought at swing high SHORT (+2) — extreme RSI at key level = perfect reversal",
-        "This catches BTC/ETH bottoms in real time, not after the full recovery"
+        "Root cause of SOL short into bull breakout: CONSOL_REJECT saw EMA9<EMA21 (all-day downtrend) + price at coil top → fired SHORT, but price had already broken above both EMAs = it was a reversal, not a rejection",
+        "Global Filter 5: momentum block — if last 3 completed 15m candles are ALL green/red AND total move >0.8%, counter-trend signals get -8 score penalty (effectively blocked)",
+        "CONSOL_REJECT SHORT now requires price to still be BELOW both EMA9 and EMA21 — if price broke above both EMAs, it's a bullish reversal not a coil top",
+        "CONSOL_REJECT LONG now requires price to still be ABOVE both EMAs",
+        "CONSOL_REJECT: added EMA separation check (emaSep > 0.1%) — prevents firing when EMAs have converged and trend is unclear",
+        "Momentum riding bonus: signals aligned WITH strong momentum get +3 score bonus"
       ]
     },
     {

@@ -347,6 +347,11 @@ function stratConsolReject(c15, c1, atr) {
   if (!last || !prev) return null;
 
   if (isBearish && posInCons >= 0.65) {
+    // Require BOTH EMA lines to still be bearishly separated (not just a mild cross)
+    // AND price must still be below the EMAs — if price has broken ABOVE both EMAs it's a reversal not a rejection
+    if (price > ema9 && price > ema21) return null; // price above both EMAs = not a bearish coil top
+    const emaSep = Math.abs(ema9 - ema21) / ema21;
+    if (emaSep < 0.001) return null; // EMAs too close — no clear trend, skip SHORT
     if (!isRed(last) && !isBearPin(last) && !isRed(prev) && !isBearPin(prev)) return null;
     return {
       setupName: 'CONSOL_REJECT',
@@ -358,6 +363,10 @@ function stratConsolReject(c15, c1, atr) {
   }
 
   if (isBullish && posInCons <= 0.35) {
+    // Price must still be above both EMAs — if it has broken BELOW both it's a reversal not a bounce
+    if (price < ema9 && price < ema21) return null; // price below both EMAs = not a bullish coil bottom
+    const emaSep = Math.abs(ema9 - ema21) / ema21;
+    if (emaSep < 0.001) return null; // EMAs too close — no clear trend
     if (!isGreen(last) && !isBullPin(last) && !isGreen(prev) && !isBullPin(prev)) return null;
     return {
       setupName: 'CONSOL_REJECT',
@@ -665,6 +674,24 @@ async function analyzeSymbol(symbol, price, kronosPredictions = null) {
     }
   }
 
+  // ── GLOBAL FILTER 5: Strong momentum block ────────────────
+  // If last 3 completed 15m candles are all moving strongly in ONE direction
+  // (>0.8% total move), block counter-trend entries.
+  // Prevents shorting into a bull breakout or longing into a crash.
+  let momentumDir = 'neutral';
+  {
+    const last3 = c15.slice(-4, -1); // 3 completed candles
+    if (last3.length === 3) {
+      const totalMove = (last3[2].close - last3[0].open) / last3[0].open;
+      const allGreen  = last3.every(c => c.close > c.open);
+      const allRed    = last3.every(c => c.close < c.open);
+      const strongUp  = totalMove >  0.008 && allGreen; // >0.8% up in 3 candles
+      const strongDn  = totalMove < -0.008 && allRed;   // >0.8% down in 3 candles
+      if (strongUp) momentumDir = 'bullish';
+      if (strongDn) momentumDir = 'bearish';
+    }
+  }
+
   // ── RUN ALL 6 STRATEGIES ───────────────────────────────────
 
   const candidates = [];
@@ -725,6 +752,15 @@ async function analyzeSymbol(symbol, price, kronosPredictions = null) {
       if (dir === 'SHORT' && ema200Penalty.bias === 'bullish') score -= 3;
       if (dir === 'LONG'  && ema200Penalty.bias === 'bearish') score -= 3;
     }
+
+    // ── Momentum block: -8 penalty for trading against strong momentum ──
+    // If last 3 candles are all green >0.8% total, DON'T short. And vice versa.
+    // This prevents the CONSOL_REJECT / HTF_SWING from shorting into bull breakouts.
+    if (dir === 'SHORT' && momentumDir === 'bullish') score -= 8;
+    if (dir === 'LONG'  && momentumDir === 'bearish') score -= 8;
+    // With the momentum block: also reward signals that RIDE the momentum
+    if (dir === 'LONG'  && momentumDir === 'bullish') score += 3;
+    if (dir === 'SHORT' && momentumDir === 'bearish') score += 3;
 
     // h1Trend alignment
     if (dir === 'LONG'  && h1Trend === 'bullish') score += 2;
