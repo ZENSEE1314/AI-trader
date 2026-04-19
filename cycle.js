@@ -71,33 +71,32 @@ const TP_PCT = 0.45;   // reference TP — trailing SL handles the actual exit
 // Taker fee: 0.04% entry + 0.04% exit = 0.08% notional both legs
 const TAKER_FEE_BOTH_LEGS = 0.0008;
 
-// Trailing SL tiers — all in PRICE % from entry (no leverage conversion).
-// Rule: first fires at +30% price gain → lock +10% above entry.
-//       every +15% more price gain → add another +10% to the lock.
-// Gap between current price and trailing SL is always ~20% price,
-// giving trades room to breathe on normal retracements.
+// Trailing SL tiers — all in CAPITAL % (profit as % of margin, = price% × leverage).
+// Rule: first fires when capital gain hits +30% → lock SL at +10% capital above entry.
+//       every +15% more capital gain → add another +15% to the locked SL.
 //
-// trigger = price % gain from entry needed to activate
-// lock    = price % above entry to move SL to
+// At 20x leverage: +30% capital = +1.5% price move (fires quickly on real moves)
+// At 100x leverage: +30% capital = +0.3% price move
+//
+// trigger = capital % gain needed to activate (price % × leverage)
+// lock    = capital % above entry to lock the SL at
 const TRAILING_TIERS = [
-  { trigger: 0.30, lock: 0.10 }, // +30% price → SL at +10% above entry
-  { trigger: 0.45, lock: 0.20 }, // +45% price → SL at +20% above entry
-  { trigger: 0.60, lock: 0.30 }, // +60% price → SL at +30% above entry
-  { trigger: 0.75, lock: 0.40 }, // +75% price → SL at +40% above entry
-  { trigger: 0.90, lock: 0.50 }, // +90% price → SL at +50% above entry
-  { trigger: 1.05, lock: 0.60 }, // +105% price → SL at +60% above entry
-  { trigger: 1.20, lock: 0.70 }, // +120% price → SL at +70% above entry
-  { trigger: 1.35, lock: 0.80 }, // +135% price → SL at +80% above entry
-  { trigger: 1.50, lock: 0.90 }, // +150% price → SL at +90% above entry
+  { trigger: 0.30, lock: 0.10 }, // +30% capital → SL locks +10% capital above entry
+  { trigger: 0.45, lock: 0.25 }, // +45% capital → SL locks +25% capital above entry
+  { trigger: 0.60, lock: 0.40 }, // +60% capital → SL locks +40% capital above entry
+  { trigger: 0.75, lock: 0.55 }, // +75% capital → SL locks +55% capital above entry
+  { trigger: 0.90, lock: 0.70 }, // +90% capital → SL locks +70% capital above entry
+  { trigger: 1.05, lock: 0.85 }, // +105% capital → SL locks +85% capital above entry
+  { trigger: 1.20, lock: 1.00 }, // +120% capital → SL locks +100% capital (2× margin)
 ];
 
 function getTrailingSLConfig(leverage) {
   return {
     INITIAL_SL_PCT: SL_PCT / leverage,
-    FIRST_TRIGGER: 0.30,  // Trail starts at +30% price gain from entry
-    FIRST_SL: 0.10,       // Lock at +10% above entry
-    STEP_TRIGGER: 0.15,   // Every +15% more price → add +10% to lock
-    STEP_SL: 0.10,
+    FIRST_TRIGGER: 0.30,  // Trail starts at +30% CAPITAL gain from entry
+    FIRST_SL: 0.10,       // Lock at +10% CAPITAL above entry
+    STEP_TRIGGER: 0.15,   // Every +15% more CAPITAL → add +15% to lock
+    STEP_SL: 0.15,
   };
 }
 
@@ -378,9 +377,9 @@ async function updateStopLoss(client, symbol, newSlPrice, closeSide, platform, p
 }
 
 // ── TRAILING SL ────────────────────────────────────────────
-// At +1% profit → SL locks at +0.5%.
-// Trailing SL: margin-based tiers — SL only moves up, never down.
-// Converts margin % to price % using leverage, so dollar result is same at any leverage.
+// Trailing SL: capital%-based tiers — SL only moves up (LONG) or down (SHORT), never backwards.
+// Triggers fire at CAPITAL % gain (price % × leverage).
+// SL lock is also in CAPITAL %, converted to price % for the actual order price.
 
 // Infer price decimal precision from a stored price string/number.
 // Used so trailing SL respects Binance PRICE_FILTER tick sizes (e.g. BTCUSDT = 1 decimal).
@@ -421,54 +420,64 @@ async function calcCandleTrailSl(symbol, isLong, currentSlPrice) {
   }
 }
 
-// calculateTrailingStep — price-based trailing SL.
-// leverage param kept for signature compatibility but no longer used in logic.
-// lastStep: the last lock % applied (price % above entry), to avoid going backwards.
+// calculateTrailingStep — capital%-based trailing SL.
+// Uses CAPITAL % (profit as % of margin = pricePct × leverage) for tier triggers.
+// Converts capital lock % back to price % when computing the new SL price.
 //
-// Tier logic (all in price % from entry):
-//   +30% price → lock SL at +10% above entry   (gap: 20%)
-//   +45% price → lock SL at +20% above entry   (gap: 25%)
-//   +60% price → lock SL at +30% above entry   (gap: 30%)
-//   ... every +15% price gain adds +10% to the lock
+// lastStep: last capital % lock applied — stored in DB as trailing_sl_last_step.
+//           Prevents SL from moving backwards.
 //
-// Candle-low trail (separate function) handles the earlier locking during normal moves.
+// Tier logic (capital % = price % × leverage):
+//   +30% capital → lock SL at +10% capital above entry  (price: 10%/lev)
+//   +45% capital → lock SL at +25% capital above entry  (+15% step)
+//   +60% capital → lock SL at +40% capital above entry  (+15% step)
+//   ... every +15% capital gain adds +15% to the lock
+//
+// Example — 20x leverage, BTC entry $90,000:
+//   +1.5% price (+30% capital) → SL moves to entry + 0.5% ($90,450)
+//   +2.25% price (+45% capital) → SL moves to entry + 1.25% ($91,125)
 function calculateTrailingStep(entryPrice, currentPrice, isLong, lastStep, leverage = 20, userTrailStepPct = 0) {
   const pricePct = isLong
     ? (currentPrice - entryPrice) / entryPrice
     : (entryPrice - currentPrice) / entryPrice;
 
-  let bestLockPct = null;
+  // Convert price move to capital % (profit relative to margin)
+  const capitalPct = pricePct * leverage;
+
+  let bestLockCapitalPct = null;
 
   if (userTrailStepPct > 0) {
-    // User custom trailing: fire at stepPct, lock at half the step, add step each time
+    // User custom trailing (step in capital %): fire at stepPct, lock one step behind
     const stepPct = userTrailStepPct / 100;
-    if (pricePct >= stepPct) {
-      const stepsAbove = Math.floor((pricePct + 1e-10) / stepPct);
-      bestLockPct = (stepsAbove - 1) * stepPct; // lock at one full step behind current
+    if (capitalPct >= stepPct) {
+      const stepsAbove = Math.floor((capitalPct + 1e-10) / stepPct);
+      bestLockCapitalPct = (stepsAbove - 1) * stepPct;
     }
   } else {
-    // Fixed tiers: all in PRICE % (no leverage conversion)
+    // Fixed tiers — all thresholds in CAPITAL %
     for (const tier of TRAILING_TIERS) {
-      if (pricePct >= tier.trigger) bestLockPct = tier.lock;
+      if (capitalPct >= tier.trigger) bestLockCapitalPct = tier.lock;
     }
-    // Beyond last tier: continue adding 10% lock for every 15% gain
+    // Beyond last tier: every +15% more capital → add +15% to lock
     const lastTier = TRAILING_TIERS[TRAILING_TIERS.length - 1];
-    if (pricePct > lastTier.trigger) {
-      const stepsAbove = Math.floor((pricePct - lastTier.trigger) / 0.15);
-      const extraLock = lastTier.lock + stepsAbove * 0.10;
-      if (extraLock > (bestLockPct || 0)) bestLockPct = extraLock;
+    if (capitalPct > lastTier.trigger) {
+      const stepsAbove = Math.floor((capitalPct - lastTier.trigger) / 0.15);
+      const extraLock = lastTier.lock + stepsAbove * 0.15;
+      if (extraLock > (bestLockCapitalPct || 0)) bestLockCapitalPct = extraLock;
     }
   }
 
-  if (bestLockPct === null) return null;
-  // Never move SL backwards
-  if (bestLockPct <= lastStep) return null;
+  if (bestLockCapitalPct === null) return null;
+  // lastStep is stored in capital % — never move SL backwards
+  if (bestLockCapitalPct <= lastStep) return null;
 
+  // Convert capital lock % → price % for actual SL price
+  const lockPricePct = bestLockCapitalPct / leverage;
   const newSlPrice = isLong
-    ? entryPrice * (1 + bestLockPct)
-    : entryPrice * (1 - bestLockPct);
+    ? entryPrice * (1 + lockPricePct)
+    : entryPrice * (1 - lockPricePct);
 
-  return { stepped: true, newSlPrice, newLastStep: bestLockPct };
+  return { stepped: true, newSlPrice, newLastStep: bestLockCapitalPct };
 }
 
 // ── PROFIT SPLIT: Credit 60% user, 40% platform fee ─────────
@@ -624,7 +633,7 @@ async function openTrade(client, pick, wallet) {
       closePosition: 'true', workingType: 'MARK_PRICE',
     });
     slOk = true;
-    bLog.trade(`SL set at $${fmtPrice(initialSlPrice)} (${(slPricePct*100).toFixed(2)}% from entry) | Trailing: starts at +30% price, locks +10% per +15% — trailing SL, no hard TP`);
+    bLog.trade(`SL set at $${fmtPrice(initialSlPrice)} (${(slPricePct*100).toFixed(2)}% from entry) | Trailing: starts at +30% capital gain, locks +10% capital, +15% capital per step`);
   } catch (e) { bLog.error(`Owner SL algo failed: ${e.message}`); }
 
   if (!slOk) {
@@ -1251,9 +1260,14 @@ async function main() {
     await notify(`*Bot Error — ${now()}*\n\`${msg.substring(0, 200)}\``);
   }
 
-  // Sync trades and check for USDT top-ups at end of each cycle
+  // Sync trades + trailing SL for all users (including owner via DB) every cycle
   await syncTradeStatus();
   await checkUsdtTopups();
+
+  // Also check owner tradeState positions (Binance direct / not stored in DB)
+  try {
+    if (API_KEY && API_SECRET && tradeState.size > 0) await checkTrailingStop(getClient());
+  } catch (e) { bLog.error(`End-of-cycle trailing check: ${e.message}`); }
 
   log('=== Cycle End ===');
 }

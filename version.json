@@ -1,8 +1,26 @@
 {
-  "version": "1.3.2",
+  "version": "1.3.3",
   "name": "MCT AI Trader",
   "released": "2026-04-19",
   "changelog": [
+    {
+      "version": "1.3.3",
+      "tag": "v1.3.3",
+      "date": "2026-04-19",
+      "label": "Fix trailing SL — capital % triggers, 15% step increments",
+      "changes": [
+        "TRAILING_TIERS converted from PRICE % to CAPITAL % (profit as % of margin)",
+        "First trigger: +30% capital gain → lock SL at +10% capital above entry",
+        "Each additional +15% capital gain → add +15% more to the SL lock (not +10%)",
+        "calculateTrailingStep now uses capitalPct = pricePct × leverage for tier comparison",
+        "SL lock % converted back to price % (capitalLock / leverage) for actual order price",
+        "At 20x leverage: trailing SL fires at +1.5% price move (+30% capital) — realistic for crypto",
+        "At 100x leverage: fires at +0.3% price move (+30% capital)",
+        "Beyond last tier (+120% capital): keeps adding +15% lock per +15% capital gain",
+        "checkTrailingStop() now called at end of every cycle (not just when no signals)",
+        "lastStep stored in DB is now in capital % (consistent with tier comparison)"
+      ]
+    },
     {
       "version": "1.3.2",
       "tag": "v1.3.2",
