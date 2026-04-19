@@ -1,20 +1,21 @@
 {
-  "version": "1.2.4",
+  "version": "1.2.5",
   "name": "MCT AI Trader",
   "released": "2026-04-19",
   "changelog": [
     {
-      "version": "1.2.4",
-      "tag": "v1.2.4",
+      "version": "1.2.5",
+      "tag": "v1.2.5",
       "date": "2026-04-19",
-      "label": "CRITICAL: Block all non-BTC/ETH/SOL/BNB coins at every layer",
+      "label": "Strategy 6: SWING_REVERSAL — buy AT bottom not after bounce",
       "changes": [
-        "Root cause of DOGE/XRP/PEPE trades: coordinator boot fetched top 10 coins by volume from Binance — DOGE has massive volume so it was always included",
-        "FIX 1 — agent-coordinator _fetchTopTokens(): replaced dynamic top-10 fetch with hard-coded 4 symbols only",
-        "FIX 2 — trade-engine analyzeSymbol(): added ALLOWED_SYMBOLS guard at top — returns null for any non-whitelisted coin",
-        "FIX 3 — cycle.js executeForAllUsers(): TRADE_WHITELIST hard block before any exchange order is placed",
-        "FIX 4 — agent-coordinator execute(): COORD_WHITELIST filter on signals before they reach TraderAgent",
-        "4 independent layers now block wrong coins: engine level, scanner level, coordinator level, execution level"
+        "Root cause of late entry (buy 300-500pts after bottom): all 5 strategies are reactive — wait for structure after bounce, not at the turning point",
+        "Add Strategy 6: SWING_REVERSAL — detects 15m swing low/high, enters on first 1m reversal candle (hammer or engulfing) within 0.4% of that level",
+        "LONG: 15m swing low (lowest of last 8 candles) + 1m hammer/bullish engulf within 0.4% → enter, SL 0.6% below swing low",
+        "SHORT: 15m swing high (highest of last 8 candles) + 1m shooting star/bearish engulf within 0.4% → enter, SL 0.6% above swing high",
+        "SWING_REVERSAL gets base score 9 (vs 6 for others) — most direct key-level entry",
+        "RSI bonus: oversold at swing low LONG (+2) / overbought at swing high SHORT (+2) — extreme RSI at key level = perfect reversal",
+        "This catches BTC/ETH bottoms in real time, not after the full recovery"
       ]
     },
     {

@@ -1,14 +1,16 @@
 // ============================================================
-// trade-engine.js — Unified Trading Engine (v1.2.0)
+// trade-engine.js — Unified Trading Engine (v1.2.5)
 //
 // ONE file. All strategies. Easy to see what's happening.
 //
-// 5 Strategies (best from smc-engine + liquidity-sweep-engine):
-//   1. HTF_SWING      — 3m structure (LH+LL / HH+HL) + 1m confirm
-//   2. VWAP_REJECTION — wick through VWAP then close back
-//   3. CONSOL_REJECT  — price coils after trend, reject at coil edge
-//   4. LIQ_SWEEP      — 15m range swept then closed back inside
-//   5. MOMENTUM       — EMA trend + 1m pin bar fails → enter
+// 6 Strategies:
+//   1. HTF_SWING       — 3m structure (LH+LL / HH+HL) + 1m confirm
+//   2. VWAP_REJECTION  — wick through VWAP then close back
+//   3. CONSOL_REJECT   — price coils after trend, reject at coil edge
+//   4. LIQ_SWEEP       — 15m range swept then closed back inside
+//   5. MOMENTUM        — EMA trend + 1m pin bar fails → enter
+//   6. SWING_REVERSAL  — enter AT swing low/high on first reversal candle
+//                        (fixes late-entry problem: buy AT bottom, not after bounce)
 //
 // Global filters run FIRST on every coin before any strategy:
 //   - ATR volatility check (0.2% – 3%)
@@ -476,9 +478,114 @@ function stratMomentum(c15, c1) {
   return null;
 }
 
+// ── STRATEGY 6: Swing Low/High Reversal ─────────────────────
+//
+// SOLVES: "why buy not at bottom" — all other strategies wait for
+// structure to form AFTER the bounce, entering 300-500pts too late.
+//
+// This strategy enters AT the key swing level on the first reversal
+// candle, not after the whole move has already happened.
+//
+// LONG: 15m makes a clear swing low (lowest of last 8 candles) →
+//   price retests within 0.4% → 1m shows hammer or bullish engulf.
+//
+// SHORT: 15m makes a clear swing high (highest of last 8 candles) →
+//   price retests within 0.4% → 1m shows shooting star or bearish engulf.
+//
+// SL: 0.6% below swing low (LONG) / above swing high (SHORT).
+// Score: high (base 9) — this is the most direct bottom/top entry.
+
+function stratSwingReversal(c15, c1, price, atr) {
+  if (c15.length < 12 || c1.length < 3) return null;
+  const last1m  = c1[c1.length - 1];
+  const prev1m  = c1[c1.length - 2];
+  if (!last1m || !prev1m) return null;
+
+  const lookback = c15.slice(-9, -1); // last 8 completed 15m candles
+  if (lookback.length < 6) return null;
+
+  // Find swing low: minimum of last 8 candles
+  const swingLow  = Math.min(...lookback.map(c => c.low));
+  const swingHigh = Math.max(...lookback.map(c => c.high));
+
+  // Swing low must be a real extreme — at least 0.3% below the 4th candle from end
+  const midRef = lookback[Math.floor(lookback.length / 2)].close;
+  const isRealLow  = (midRef - swingLow)  / midRef > 0.003;
+  const isRealHigh = (swingHigh - midRef) / midRef > 0.003;
+
+  // ── LONG: price retesting swing low ──────────────────────────
+  if (isRealLow) {
+    const distToLow = (price - swingLow) / swingLow;
+    if (distToLow >= 0 && distToLow <= 0.004) { // within 0.4% of swing low
+
+      // 1m reversal signal: hammer (long lower wick) OR bullish engulf
+      const isHammer = isBullPin(last1m);
+      const isEngulf = isGreen(last1m) && isRed(prev1m) &&
+                       last1m.close > prev1m.open &&
+                       last1m.open  < prev1m.close;
+
+      if (isHammer || isEngulf) {
+        const sl    = swingLow * (1 - 0.006);   // 0.6% below swing low
+        const slDist = (price - sl) / price;
+        if (slDist < 0.001 || slDist > 0.04) return null;
+
+        const tightBonus = distToLow <= 0.001 ? 3 : distToLow <= 0.002 ? 2 : 1;
+        const patternBonus = isEngulf ? 2 : 1;
+
+        return {
+          setupName: 'SWING_REVERSAL',
+          direction: 'LONG',
+          sl,
+          scoreBonus: tightBonus + patternBonus,
+          meta: {
+            swingLow: swingLow.toFixed(4),
+            distPct:  (distToLow * 100).toFixed(3) + '%',
+            pattern:  isEngulf ? 'engulf' : 'hammer',
+          },
+        };
+      }
+    }
+  }
+
+  // ── SHORT: price retesting swing high ────────────────────────
+  if (isRealHigh) {
+    const distToHigh = (swingHigh - price) / swingHigh;
+    if (distToHigh >= 0 && distToHigh <= 0.004) { // within 0.4% of swing high
+
+      const isStar   = isBearPin(last1m);
+      const isEngulf = isRed(last1m) && isGreen(prev1m) &&
+                       last1m.close < prev1m.open &&
+                       last1m.open  > prev1m.close;
+
+      if (isStar || isEngulf) {
+        const sl    = swingHigh * (1 + 0.006);
+        const slDist = (sl - price) / price;
+        if (slDist < 0.001 || slDist > 0.04) return null;
+
+        const tightBonus = distToHigh <= 0.001 ? 3 : distToHigh <= 0.002 ? 2 : 1;
+        const patternBonus = isEngulf ? 2 : 1;
+
+        return {
+          setupName: 'SWING_REVERSAL',
+          direction: 'SHORT',
+          sl,
+          scoreBonus: tightBonus + patternBonus,
+          meta: {
+            swingHigh: swingHigh.toFixed(4),
+            distPct:   (distToHigh * 100).toFixed(3) + '%',
+            pattern:   isEngulf ? 'engulf' : 'star',
+          },
+        };
+      }
+    }
+  }
+
+  return null;
+}
+
 // ── Main: Analyze One Coin ───────────────────────────────────
 //
-// Runs global filters, then all 5 strategies.
+// Runs global filters, then all 6 strategies.
 // Returns the best signal (highest score) or null.
 
 async function analyzeSymbol(symbol, price, kronosPredictions = null) {
@@ -558,7 +665,7 @@ async function analyzeSymbol(symbol, price, kronosPredictions = null) {
     }
   }
 
-  // ── RUN ALL 5 STRATEGIES ───────────────────────────────────
+  // ── RUN ALL 6 STRATEGIES ───────────────────────────────────
 
   const candidates = [];
 
@@ -584,13 +691,19 @@ async function analyzeSymbol(symbol, price, kronosPredictions = null) {
   const r5 = stratMomentum(c15, c1);
   if (r5) candidates.push(r5);
 
+  // Strategy 6: Swing Low/High Reversal — enters AT the key level on first reversal candle
+  // Fixes late entry problem: other strategies confirm AFTER the full bounce, this fires at the bottom
+  const r6 = stratSwingReversal(c15, c1, price, atr);
+  if (r6) candidates.push(r6);
+
   if (candidates.length === 0) return null;
 
   // ── SCORE ALL CANDIDATES ───────────────────────────────────
   // Base score 6 (passed global filters). Bonuses from strategy + context.
+  // SWING_REVERSAL gets base 9 — it's the most direct entry at key levels.
 
   for (const sig of candidates) {
-    let score = 6;
+    let score = sig.setupName === 'SWING_REVERSAL' ? 9 : 6;
     score += sig.scoreBonus || 0;
 
     const dir = sig.direction;
@@ -600,6 +713,12 @@ async function analyzeSymbol(symbol, price, kronosPredictions = null) {
     if (dir === 'SHORT' && rsi < 50 && rsi > 30) score += 1; // healthy bear RSI
     if (dir === 'LONG'  && rsi > 75) score -= 3; // overbought — don't long
     if (dir === 'SHORT' && rsi < 25) score -= 3; // oversold — don't short
+
+    // SWING_REVERSAL: oversold/overbought at the extreme is a BONUS (it's the reversal point)
+    if (sig.setupName === 'SWING_REVERSAL') {
+      if (dir === 'LONG'  && rsi < 35) score += 2; // oversold at swing low = perfect
+      if (dir === 'SHORT' && rsi > 65) score += 2; // overbought at swing high = perfect
+    }
 
     // EMA200(1h) directional penalty
     if (typeof ema200Penalty === 'object' && ema200Penalty.bias) {
