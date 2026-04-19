@@ -1653,6 +1653,72 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     }
   } // end SMC_HL_STRUCTURE gate
 
+  // ── Strategy 7: Break of Structure SHORT (BOS_SHORT) ──────
+  // Fires when price crashes through recent support with a strong bearish candle.
+  // Catches sudden drops that pattern strategies miss (they need setup before the move).
+  // EMA200 block is softened to a penalty only for this strategy — breakdowns happen
+  // even in bullish trends and the whole point is to catch the reversal.
+  if (!enabledStrategies || enabledStrategies.BOS_SHORT !== false) {
+    if (parsed15.length >= 22 && rsi14 !== null && rsi14 < 65) {
+      // Support level: lowest low of the 5-15 candles before the last 2
+      const lookback = parsed15.slice(-15, -2);
+      const supportLow = Math.min(...lookback.map(c => c.low));
+      const last  = parsed15[parsed15.length - 1];
+      const prev  = parsed15[parsed15.length - 2];
+
+      const lastBody     = Math.abs(last.close - last.open) / last.open;  // last candle body %
+      const prevBody     = Math.abs(prev.close - prev.open) / prev.open;
+      const isBearishLast = last.close < last.open;
+      const isBearishPrev = prev.close < prev.open;
+
+      // Break confirmation: last close must be below support by at least 0.15%
+      const brokeSupport  = last.close < supportLow * (1 - 0.0015);
+      // At least one of the last 2 candles must be strongly bearish (body > 0.3%)
+      const strongCandle  = (isBearishLast && lastBody > 0.003) || (isBearishPrev && prevBody > 0.003);
+      // 15m short-term trend must be bearish
+      const ema15Bearish  = ema9_15m !== null && ema21_15m !== null && ema9_15m < ema21_15m;
+      // Volume confirmation on recent candles
+      const hasVol = hasVolumeConfirm(parsed15, parsed15.length - 1, 1.1) ||
+                     hasVolumeConfirm(parsed15, parsed15.length - 2, 1.1);
+
+      if (brokeSupport && strongCandle && ema15Bearish && hasVol) {
+        const atr = calcATR(parsed15);
+        const entryPrice = price;
+        // SL: just above the broken support level (failed support becomes resistance)
+        const slPrice = supportLow * 1.003;
+        const slDist  = (slPrice - entryPrice) / entryPrice;
+        // TP: 2× ATR below entry
+        const tp1 = entryPrice - atr * 2;
+        const rr  = slDist > 0 ? (atr * 2) / (entryPrice * slDist) : 1.5;
+
+        // Base score 9 — high-confidence breakdown setup
+        let score = 9;
+        if (isBearishLast && lastBody > 0.005) score += 2;    // very large bearish body (>0.5%)
+        if (isBearishPrev && isBearishLast)    score += 1;    // consecutive bear candles
+        if (rsi14 < 50)                        score += 1;    // RSI already weakening
+        if (h1Trend === 'bearish')             score += 2;    // with 1h trend
+        // Do NOT add the h1Trend='bullish' penalty here — BOS_SHORT is a counter-trend reversal
+
+        signals.push({
+          symbol,
+          direction: 'SHORT',
+          price: entryPrice,
+          lastPrice: price,
+          sl: slPrice,
+          tp1,
+          tp2: entryPrice - atr * 3,
+          tp3: entryPrice - atr * 4,
+          slDist: Math.abs(slDist),
+          rr,
+          setup: 'BOS_SHORT',
+          setupName: 'BOS-SHORT',
+          score,
+          bosSupport: supportLow,
+        });
+      }
+    }
+  } // end BOS_SHORT gate
+
   if (!signals.length) return null;
 
   // Apply confluence bonuses + global filters to all signals
@@ -1660,11 +1726,17 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     // ── PDF HARD FILTERS ─────────────────────────────────────
 
     // EMA200 bias (PDF: "above MA200 → look long, below → look short")
-    // Hard block if direction conflicts with EMA200 trend
+    // Hard block if direction conflicts with EMA200 trend.
+    // EXCEPTION: BOS_SHORT is a breakdown strategy — breakdowns happen in bull trends.
+    // Apply a score penalty instead of hard block so strong setups can still pass.
     if (ema200_bias === 'bullish' && sig.direction === 'SHORT') {
-      sig.score = -99;
-      sig.blocked = `SHORT blocked — price above EMA200 (bullish bias per PDF)`;
-      continue;
+      if (sig.setup === 'BOS_SHORT') {
+        sig.score -= 3; // penalty (not block) — breakdown can occur even in bull trend
+      } else {
+        sig.score = -99;
+        sig.blocked = `SHORT blocked — price above EMA200 (bullish bias per PDF)`;
+        continue;
+      }
     }
     if (ema200_bias === 'bearish' && sig.direction === 'LONG') {
       sig.score = -99;
@@ -1735,16 +1807,18 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
       if (priceInRange > 0.65) sig.score += 2; // selling near the top — good
     }
 
-    // 1h trend alignment — bonus for with-trend, penalty for counter-trend
+    // 1h trend alignment — bonus for with-trend, penalty for counter-trend.
+    // BOS_SHORT is exempt from the bullish h1 penalty: it is a reversal strategy,
+    // designed to catch breakdowns that start while the 1h trend is still bullish.
     if (sig.direction === 'LONG' && h1Trend === 'bullish') sig.score += 3;
     if (sig.direction === 'SHORT' && h1Trend === 'bearish') sig.score += 3;
     if (sig.direction === 'LONG' && h1Trend === 'bearish') sig.score -= 4;
-    if (sig.direction === 'SHORT' && h1Trend === 'bullish') sig.score -= 4;
+    if (sig.direction === 'SHORT' && h1Trend === 'bullish' && sig.setup !== 'BOS_SHORT') sig.score -= 4;
 
-    // BTC market correlation: don't fight BTC's direction on altcoins
-    // When BTC is clearly bullish, shorting alts is fighting the market
+    // BTC market correlation: don't fight BTC's direction on altcoins.
+    // BOS_SHORT exempt: if both BNB and BTC are breaking down, that's confirmation.
     if (symbol !== 'BTCUSDT') {
-      if (btcTrend === 'bullish' && sig.direction === 'SHORT') {
+      if (btcTrend === 'bullish' && sig.direction === 'SHORT' && sig.setup !== 'BOS_SHORT') {
         sig.score -= 5;
         sig.blocked = 'SHORT rejected — BTC is bullish, alts follow BTC';
       }

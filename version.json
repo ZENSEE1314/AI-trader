@@ -1,8 +1,24 @@
 {
-  "version": "1.3.5",
+  "version": "1.3.6",
   "name": "MCT AI Trader",
   "released": "2026-04-20",
   "changelog": [
+    {
+      "version": "1.3.6",
+      "tag": "v1.3.6",
+      "date": "2026-04-20",
+      "label": "Add BOS_SHORT — catch big sudden drops",
+      "changes": [
+        "New strategy: Break of Structure SHORT (BOS_SHORT) — fires when price crashes through recent 15-candle support",
+        "Requires: close below support by 0.15%+, strong bearish candle body (>0.3%), 15m EMA9 < EMA21, volume above average, RSI < 65",
+        "Base score 9 — high confidence breakdown; bonuses for very large candle (+2), consecutive bear candles (+1), RSI < 50 (+1), 1h trend bearish (+2)",
+        "EMA200 hard block softened to -3 penalty for BOS_SHORT only (breakdowns start in bull trends by definition)",
+        "h1Trend bullish penalty (-4) exempted for BOS_SHORT (counter-trend reversal strategy)",
+        "BTC correlation penalty (-5) exempted for BOS_SHORT (BTC dropping with alts = confirmation, not contradiction)",
+        "All other strategies retain their EMA200 hard block and h1Trend penalty",
+        "SL: just above broken support level (support becomes resistance); TP: 2x ATR below entry"
+      ]
+    },
     {
       "version": "1.3.5",
       "tag": "v1.3.5",
