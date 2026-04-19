@@ -1,8 +1,21 @@
 {
-  "version": "1.3.3",
+  "version": "1.3.4",
   "name": "MCT AI Trader",
-  "released": "2026-04-19",
+  "released": "2026-04-20",
   "changelog": [
+    {
+      "version": "1.3.4",
+      "tag": "v1.3.4",
+      "date": "2026-04-20",
+      "label": "Fix duplicate trades — signal dedup + early dedup mark",
+      "changes": [
+        "Signal dedup: filter signals array by symbol before the main loop — only the highest-scored signal per symbol per cycle passes to executeForAllUsers",
+        "Multiple strategies (LiqSweep + SLHunt) can fire on same token; without this both called executeForAllUsers → 2 trades per user",
+        "Move executedUserSymbols.add(dedupKey) to immediately after order placement (Binance + Bitunix), before DB INSERT",
+        "Previously if DB INSERT failed after exchange order succeeded, dedupKey was never added → second key or next signal could open a second trade",
+        "Both fixes together prevent same-symbol duplicates within a cycle regardless of how many strategies fire on the same token"
+      ]
+    },
     {
       "version": "1.3.3",
       "tag": "v1.3.3",

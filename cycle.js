@@ -1157,8 +1157,25 @@ async function main() {
       return;
     }
 
-    let executed = false;
+    // Deduplicate signals by symbol — only the highest-scored signal per symbol per cycle.
+    // Multiple strategies (e.g. LiqSweep + SLHunt) can both fire on BNB in the same scan.
+    // Without this, executeForAllUsers gets called twice for BNB → two trades per user.
+    const seenSignalSymbols = new Map(); // symbol → best signal
     for (const pick of signals) {
+      const sym = pick.symbol || pick.sym;
+      if (!sym) continue;
+      const existing = seenSignalSymbols.get(sym);
+      if (!existing || (pick.score || 0) > (existing.score || 0)) {
+        seenSignalSymbols.set(sym, pick);
+      }
+    }
+    const dedupedSignals = Array.from(seenSignalSymbols.values());
+    if (dedupedSignals.length < signals.length) {
+      bLog.trade(`Signal dedup: ${signals.length} → ${dedupedSignals.length} (removed ${signals.length - dedupedSignals.length} duplicate-symbol signals)`);
+    }
+
+    let executed = false;
+    for (const pick of dedupedSignals) {
       log(`Signal: ${pick.symbol} ${pick.direction} score=${pick.score} setup=${pick.setupName} AI=${pick.aiModifier ?? 'n/a'}`);
       bLog.trade(`TRYING: ${pick.symbol} ${pick.direction} | setup=${pick.setupName} score=${pick.score} | TP=$${fmtPrice(pick.tp1)} SL=$${fmtPrice(pick.sl)} | RR=1:1.5`);
 
@@ -1579,6 +1596,9 @@ async function executeForAllUsers(pick) {
           userLog.trade(`User ${key.email}: placing MARKET ${isLong ? 'BUY' : 'SELL'} ${symbol} qty=${qty}...`);
           await userClient.submitNewOrder({ symbol, side: isLong ? 'BUY' : 'SELL', type: 'MARKET', quantity: qty });
 
+          // Mark dedup immediately after order — before DB INSERT so DB failure can't cause a second trade.
+          executedUserSymbols.add(dedupKey);
+
           await sleep(1500);
 
           const closeSide = isLong ? 'SELL' : 'BUY';
@@ -1628,7 +1648,6 @@ async function executeForAllUsers(pick) {
              null, pick.structure?.tf3m || null, pick.structure?.tf1m || null,
              pick.marketStructure || null, userTrailStep]
           );
-          executedUserSymbols.add(dedupKey);
           userLog.trade(`Binance OK: ${key.email} ${symbol} ${pick.direction} x${userLev} qty=${qty} entry=$${fmtPrice(price)} SL=$${fmtPrice(slPrice)} ${bnTpPrice ? `TP=$${fmtPrice(bnTpPrice)}` : `TP(ref)=$${fmtPrice(userTpPrice)}`}`);
           log(`Binance OK: ${key.email} ${symbol} ${pick.direction} x${userLev}`);
 
@@ -1714,6 +1733,10 @@ async function executeForAllUsers(pick) {
           const order = await userClient.placeOrder(orderPayload);
           userLog.trade(`Bitunix order placed: ${JSON.stringify(order)}`);
 
+          // Mark dedup immediately after order — before DB INSERT.
+          // Prevents a second key from opening the same trade if INSERT later fails.
+          executedUserSymbols.add(dedupKey);
+
           await sleep(2000);
           const posRaw = await userClient.getOpenPositions(symbol);
           // Handle bare array OR wrapped response (positionList / list)
@@ -1791,7 +1814,6 @@ async function executeForAllUsers(pick) {
                pick.marketStructure || null, userTrailStep]
             );
           }
-          executedUserSymbols.add(dedupKey);
           userLog.trade(`Bitunix OK: ${key.email} ${symbol} ${pick.direction} x${userLev} qty=${qty}`);
           log(`Bitunix OK: ${key.email} ${symbol} ${pick.direction} x${userLev}`);
         } else {
