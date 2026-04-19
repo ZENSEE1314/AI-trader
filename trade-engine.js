@@ -753,11 +753,23 @@ async function analyzeSymbol(symbol, price, kronosPredictions = null) {
       if (dir === 'LONG'  && ema200Penalty.bias === 'bearish') score -= 3;
     }
 
+    // ── Hard directional block: don't trade against confirmed multi-timeframe trend ──
+    // If h1Trend and EMA200 BOTH confirm bullish → block ALL SHORTs outright (set score to -99).
+    // Same for bearish — block ALL LONGs. Belt and suspenders on top of penalty system.
+    if (dir === 'SHORT' && h1Trend === 'bullish' &&
+        typeof ema200Penalty === 'object' && ema200Penalty.bias === 'bullish') {
+      score = -99; // confirmed uptrend — no shorts allowed
+    }
+    if (dir === 'LONG' && h1Trend === 'bearish' &&
+        typeof ema200Penalty === 'object' && ema200Penalty.bias === 'bearish') {
+      score = -99; // confirmed downtrend — no longs allowed
+    }
+
     // ── Momentum block: -8 penalty for trading against strong momentum ──
     // If last 3 candles are all green >0.8% total, DON'T short. And vice versa.
     // This prevents the CONSOL_REJECT / HTF_SWING from shorting into bull breakouts.
-    if (dir === 'SHORT' && momentumDir === 'bullish') score -= 8;
-    if (dir === 'LONG'  && momentumDir === 'bearish') score -= 8;
+    if (score > -99 && dir === 'SHORT' && momentumDir === 'bullish') score -= 8;
+    if (score > -99 && dir === 'LONG'  && momentumDir === 'bearish') score -= 8;
     // With the momentum block: also reward signals that RIDE the momentum
     if (dir === 'LONG'  && momentumDir === 'bullish') score += 3;
     if (dir === 'SHORT' && momentumDir === 'bearish') score += 3;
@@ -876,9 +888,14 @@ async function scanAll(log, opts = {}) {
   for (const coin of topCoins) {
     try {
       const signal = await analyzeSymbol(coin.symbol, coin.price, kronosPredictions);
-      if (signal && signal.score >= 4) {
+      // MIN_SCORE = 8 — signals must earn their pass through bonuses, not scrape through on base score.
+      // A counter-trend SHORT in a bull market scores ~4 (base 6 + CONSOL +3 - EMA200 -3 - h1 -1 - opBias -1 = 4).
+      // Raising threshold to 8 blocks these without touching legitimate aligned trades (score 12–19).
+      if (signal && signal.score >= 8) {
         results.push(signal);
         bLog.scan(`[Engine] SIGNAL: ${signal.symbol} ${signal.direction} [${signal.setupName}] score=${signal.score}`);
+      } else if (signal) {
+        bLog.scan(`[Engine] SKIP: ${signal.symbol} ${signal.direction} [${signal.setupName}] score=${signal.score} (below MIN_SCORE 8)`);
       }
     } catch (err) {
       bLog.error(`[Engine] ${coin.symbol} error: ${err.message}`);

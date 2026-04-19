@@ -1,8 +1,23 @@
 {
-  "version": "1.2.6",
+  "version": "1.2.7",
   "name": "MCT AI Trader",
   "released": "2026-04-19",
   "changelog": [
+    {
+      "version": "1.2.7",
+      "tag": "v1.2.7",
+      "date": "2026-04-19",
+      "label": "Fix ETH SHORT in uptrend + raise MIN_SCORE + per-user trade dedup",
+      "changes": [
+        "Root cause of ETH SHORT in bull trend: MIN_SCORE was 4, CONSOL_REJECT SHORT in uptrend scores exactly 4 (6+3-3-1-1) — scraped through",
+        "Raised MIN_SCORE from 4 to 8 in scanAll() — counter-trend signals now rejected, aligned signals still pass at 12-19",
+        "Added hard directional block: if h1Trend bullish AND EMA200 bullish → score set to -99 for ANY SHORT signal (no exceptions)",
+        "Same block for downtrend: h1Trend bearish AND EMA200 bearish → no LONGs",
+        "SKIP log now shown when signal fails MIN_SCORE — visible reason why signal was rejected",
+        "Fixed 3x duplicate trades: dedup now checks by user_id not api_key_id — users with 3 API keys no longer get 3 identical trades",
+        "Dedup key changed from api_key:id:symbol to user:userId:symbol — all keys of same user share the in-cycle dedup set"
+      ]
+    },
     {
       "version": "1.2.6",
       "tag": "v1.2.6",

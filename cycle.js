@@ -1300,15 +1300,15 @@ async function executeForAllUsers(pick) {
       }
     }
 
-    // Full diagnostic: show ALL keys in DB (once per deploy)
-    if (!executeForAllUsers._diagDone) {
-      executeForAllUsers._diagDone = true;
+    // Diagnostic: show ALL api_keys with status every 10 cycles so admin can see why users are skipped
+    executeForAllUsers._diagCount = (executeForAllUsers._diagCount || 0) + 1;
+    if (executeForAllUsers._diagCount === 1 || executeForAllUsers._diagCount % 10 === 0) {
       try {
         const allDbKeys = await db.query(
           `SELECT ak.id, ak.user_id, ak.enabled, ak.paused_by_admin, ak.paused_by_user, ak.platform, u.email
            FROM api_keys ak LEFT JOIN users u ON u.id = ak.user_id ORDER BY ak.id`
         );
-        bLog.trade(`[DIAG] ALL api_keys in DB (${allDbKeys.length}): ${allDbKeys.map(k => `#${k.id} ${k.email || 'NO-USER(uid='+k.user_id+')'} platform=${k.platform||'NULL'} en=${k.enabled} ap=${k.paused_by_admin} up=${k.paused_by_user}`).join(' | ')}`);
+        bLog.trade(`[DIAG] ALL api_keys (${allDbKeys.length}): ${allDbKeys.map(k => `#${k.id} ${k.email || 'NO-USER(uid='+k.user_id+')'} platform=${k.platform||'NULL'} en=${k.enabled} ap=${k.paused_by_admin} up=${k.paused_by_user}`).join(' | ')}`);
       } catch (diagErr) {
         bLog.error(`[DIAG] Failed: ${diagErr.message}`);
       }
@@ -1390,10 +1390,11 @@ async function executeForAllUsers(pick) {
       try {
         const symbol = sym;
 
-        // Dedup guard: skip if this API key+symbol was already executed this cycle
-        const dedupKey = `${key.id}:${symbol}`;
+        // Dedup guard: skip if this USER+symbol was already executed this cycle (across all their keys).
+        // Use user_id not key.id — a user with 3 keys should only get 1 trade per signal.
+        const dedupKey = `user:${key.user_id}:${symbol}`;
         if (executedUserSymbols.has(dedupKey)) {
-          userLog.trade(`User ${key.email}: ${symbol} already executed on key ${key.id} this cycle — skipping`);
+          userLog.trade(`User ${key.email}: ${symbol} already executed for this user this cycle — skipping extra key`);
           return;
         }
 
@@ -1421,13 +1422,14 @@ async function executeForAllUsers(pick) {
           return;
         }
 
-        // Check DB for existing open trade on same API key + symbol
+        // Check DB for existing open trade on same SYMBOL for this USER (across ALL their keys).
+        // Previously checked api_key_id only — if a user has 3 keys, all 3 would open the same trade.
         const existingTrade = await db.query(
-          `SELECT id FROM trades WHERE api_key_id = $1 AND symbol = $2 AND status = 'OPEN' LIMIT 1`,
-          [key.id, symbol]
+          `SELECT id FROM trades WHERE user_id = $1 AND symbol = $2 AND status = 'OPEN' LIMIT 1`,
+          [key.user_id, symbol]
         );
         if (existingTrade.length > 0) {
-          userLog.trade(`User ${key.email}: already has OPEN trade on ${symbol} (key ${key.id}) — skipping duplicate`);
+          userLog.trade(`User ${key.email}: already has OPEN trade on ${symbol} (user-wide check) — skipping duplicate`);
           return;
         }
 
