@@ -1260,37 +1260,24 @@ async function executeForAllUsers(pick) {
   }
 
   try {
-    // Auto-pause users with overdue payment (>7 days since last paid, with positive earnings)
-    const PAYMENT_OVERDUE_DAYS = 7;
-    try {
-      const overdueUsers = await db.query(
-        `SELECT DISTINCT ak.user_id
-         FROM api_keys ak
-         JOIN users u ON u.id = ak.user_id
-         WHERE ak.enabled = true
-           AND (ak.paused_by_admin = false OR ak.paused_by_admin IS NULL)
-           AND u.last_paid_at < NOW() - INTERVAL '${PAYMENT_OVERDUE_DAYS} days'`
-      );
-      for (const row of overdueUsers) {
-        // Only pause if user has net positive earnings since last payment
-        const earningsCheck = await db.query(
-          `SELECT COALESCE(SUM(pnl_usdt), 0) as net_pnl
-           FROM trades
-           WHERE user_id = $1 AND status IN ('WIN','LOSS','TP','SL','CLOSED')
-             AND closed_at > (SELECT last_paid_at FROM users WHERE id = $1)`,
-          [row.user_id]
+    // NOTE: Auto-pause for payment overdue was removed — it silently blocked users who registered
+    // more than 7 days ago. Payment enforcement is handled explicitly via the admin panel.
+
+    // One-time: clear any paused_by_admin flags that were set by the old auto-pause logic
+    if (!executeForAllUsers._unpauseDone) {
+      executeForAllUsers._unpauseDone = true;
+      try {
+        const unpaused = await db.query(
+          `UPDATE api_keys SET paused_by_admin = false
+           WHERE paused_by_admin = true AND paused_by_user = false
+           RETURNING id, user_id`
         );
-        const netPnl = parseFloat(earningsCheck[0]?.net_pnl) || 0;
-        if (netPnl > 0) {
-          await db.query(
-            `UPDATE api_keys SET paused_by_admin = true WHERE user_id = $1 AND enabled = true`,
-            [row.user_id]
-          );
-          bLog.trade(`User ${row.user_id}: auto-paused — payment overdue (>7 days, net P&L: $${netPnl.toFixed(2)})`);
+        if (unpaused.length > 0) {
+          bLog.trade(`[UNBLOCK] Cleared auto-pause on ${unpaused.length} key(s) that were blocked by the payment-overdue auto-pause. Keys: ${unpaused.map(k => `#${k.id}`).join(', ')}`);
         }
+      } catch (e) {
+        bLog.error(`[UNBLOCK] Failed to clear auto-pauses: ${e.message}`);
       }
-    } catch (pauseErr) {
-      bLog.error(`Auto-pause check failed: ${pauseErr.message}`);
     }
 
     // Full diagnostic: show ALL keys in DB (once per deploy)
@@ -1298,10 +1285,10 @@ async function executeForAllUsers(pick) {
       executeForAllUsers._diagDone = true;
       try {
         const allDbKeys = await db.query(
-          `SELECT ak.id, ak.user_id, ak.enabled, ak.paused_by_admin, ak.paused_by_user, ak.exchange, u.email
+          `SELECT ak.id, ak.user_id, ak.enabled, ak.paused_by_admin, ak.paused_by_user, ak.platform, u.email
            FROM api_keys ak LEFT JOIN users u ON u.id = ak.user_id ORDER BY ak.id`
         );
-        bLog.trade(`[DIAG] ALL api_keys in DB (${allDbKeys.length}): ${allDbKeys.map(k => `#${k.id} ${k.email || 'NO-USER(uid='+k.user_id+')'} ex=${k.exchange} en=${k.enabled} ap=${k.paused_by_admin} up=${k.paused_by_user}`).join(' | ')}`);
+        bLog.trade(`[DIAG] ALL api_keys in DB (${allDbKeys.length}): ${allDbKeys.map(k => `#${k.id} ${k.email || 'NO-USER(uid='+k.user_id+')'} platform=${k.platform||'NULL'} en=${k.enabled} ap=${k.paused_by_admin} up=${k.paused_by_user}`).join(' | ')}`);
       } catch (diagErr) {
         bLog.error(`[DIAG] Failed: ${diagErr.message}`);
       }

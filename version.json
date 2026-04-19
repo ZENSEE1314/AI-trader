@@ -1,8 +1,32 @@
 {
-  "version": "1.1.9",
+  "version": "1.2.1",
   "name": "MCT AI Trader",
   "released": "2026-04-19",
   "changelog": [
+    {
+      "version": "1.2.1",
+      "tag": "v1.2.1",
+      "date": "2026-04-19",
+      "label": "CRITICAL FIX: Remove auto-pause that blocked all users silently",
+      "changes": [
+        "Root cause of other users not trading: auto-pause fired every cycle for any user registered >7 days ago with positive PnL",
+        "Removed payment-overdue auto-pause from executeForAllUsers() — payment gating belongs in admin panel only",
+        "Added one-time unblock: clears any paused_by_admin=true flags set by the old auto-pause logic on first deploy",
+        "Diagnostic log now shows 'platform' (not 'exchange') so you can see bitunix/binance correctly",
+        "DIAG log now fires every cycle (not just once) for full visibility of key states"
+      ]
+    },
+    {
+      "version": "1.2.0",
+      "tag": "v1.2.0",
+      "date": "2026-04-19",
+      "label": "4-coin restriction + unified trade-engine",
+      "changes": [
+        "trade-engine.js: hard-coded ALLOWED_SYMBOLS = BTC/ETH/SOL/BNB — no other coins can be scanned",
+        "ChartAgent now uses trade-engine.scanAll() — old scanSMC/liquidity-sweep-engine no longer called",
+        "Fixes SWARMS/XRP/1000PEPE trades: old ChartAgent scanned top 50 coins from Binance ticker"
+      ]
+    },
     {
       "version": "1.1.9",
       "tag": "v1.1.9",
