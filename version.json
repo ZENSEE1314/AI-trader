@@ -1,8 +1,21 @@
 {
-  "version": "1.1.8",
+  "version": "1.1.9",
   "name": "MCT AI Trader",
   "released": "2026-04-19",
   "changelog": [
+    {
+      "version": "1.1.9",
+      "tag": "v1.1.9",
+      "date": "2026-04-19",
+      "label": "Fix signal blockers: backtest gate, risk score gate, MIN_SCORE",
+      "changes": [
+        "smc-engine signals now carry strategyWinRate:60-70 — bypasses backtest-gate 30-day sim",
+        "risk-agent: score gate skipped for signals with strategyWinRate>=60",
+        "risk-agent: swarm contradiction skipped for trusted-WR signals",
+        "ai-learner: MIN_SCORE default 8→4, clamp floor 6→4",
+        "These were the final gates blocking all SMC and HTF signals from reaching execution"
+      ]
+    },
     {
       "version": "1.1.8",
       "tag": "v1.1.8",
