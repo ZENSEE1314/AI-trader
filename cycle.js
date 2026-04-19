@@ -472,10 +472,26 @@ function calculateTrailingStep(entryPrice, currentPrice, isLong, lastStep, lever
 }
 
 // ── PROFIT SPLIT: Credit 60% user, 40% platform fee ─────────
+// Admin accounts are fully exempt — no platform fee, 100% profit recorded as theirs.
 async function recordProfitSplit(db, userId, apiKeyId, pnlUsdt, symbol) {
   if (pnlUsdt <= 0) return;
 
   try {
+    // Check if user is admin — admins pay no platform fee
+    const userRows = await db.query('SELECT is_admin FROM users WHERE id = $1', [userId]);
+    const isAdmin = userRows.length > 0 && userRows[0].is_admin === true;
+
+    if (isAdmin) {
+      // Admin: record 100% as profit share, no platform fee
+      await db.query(
+        `INSERT INTO wallet_transactions (user_id, type, amount, status, description)
+         VALUES ($1, 'profit_share', $2, 'completed', $3)`,
+        [userId, pnlUsdt, `100% profit (admin exempt) — ${symbol} trade profit $${pnlUsdt.toFixed(2)} (stays on exchange)`]
+      );
+      bLog.trade(`Profit (admin exempt): ${symbol} PnL=$${pnlUsdt.toFixed(2)} → 100% to admin, no platform fee`);
+      return;
+    }
+
     // Get profit share settings from the API key
     const keyRows = await db.query(
       'SELECT profit_share_user_pct, profit_share_admin_pct FROM api_keys WHERE id = $1',
@@ -1263,7 +1279,8 @@ async function executeForAllUsers(pick) {
     // NOTE: Auto-pause for payment overdue was removed — it silently blocked users who registered
     // more than 7 days ago. Payment enforcement is handled explicitly via the admin panel.
 
-    // One-time: clear any paused_by_admin flags that were set by the old auto-pause logic
+    // One-time: clear any paused_by_admin flags set by the old auto-pause logic,
+    // and reset last_paid_at for admin accounts so they're never caught by any payment check.
     if (!executeForAllUsers._unpauseDone) {
       executeForAllUsers._unpauseDone = true;
       try {
@@ -1273,8 +1290,11 @@ async function executeForAllUsers(pick) {
            RETURNING id, user_id`
         );
         if (unpaused.length > 0) {
-          bLog.trade(`[UNBLOCK] Cleared auto-pause on ${unpaused.length} key(s) that were blocked by the payment-overdue auto-pause. Keys: ${unpaused.map(k => `#${k.id}`).join(', ')}`);
+          bLog.trade(`[UNBLOCK] Cleared auto-pause on ${unpaused.length} key(s) — were blocked by payment-overdue logic. Keys: ${unpaused.map(k => `#${k.id}`).join(', ')}`);
         }
+        // Keep admin accounts' last_paid_at current so they're always clear
+        await db.query(`UPDATE users SET last_paid_at = NOW() WHERE is_admin = true`);
+        bLog.trade('[UNBLOCK] Admin accounts: last_paid_at refreshed — no subscription required');
       } catch (e) {
         bLog.error(`[UNBLOCK] Failed to clear auto-pauses: ${e.message}`);
       }
