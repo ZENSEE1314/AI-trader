@@ -16,11 +16,12 @@
 const fetch = require('node-fetch');
 const aiLearner = require('./ai-learner');
 const { log: bLog } = require('./bot-logger');
-const db = require('./db');
 let smcEngine = null;
 try { smcEngine = require('./smc-engine'); } catch (e) { console.warn('[Engine] SMC engine not available:', e.message); }
 
 const REQUEST_TIMEOUT = 15000;
+const TOP_N_COINS = 100;
+const MIN_24H_VOLUME = 10_000_000;
 
 // ── Fetch Helpers ────────────────────────────────────────────
 
@@ -39,6 +40,12 @@ async function fetchKlines(symbol, interval, limit = 100) {
   const url = `https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`;
   const res = await fetchWithRetry(url);
   if (!res) return null;
+  return res.json();
+}
+
+async function fetchTickers() {
+  const res = await fetchWithRetry('https://fapi.binance.com/fapi/v1/ticker/24hr');
+  if (!res) return [];
   return res.json();
 }
 
@@ -676,8 +683,8 @@ function detectStopLossHunt(candles15m, candles1m, cfg = {}) {
 // 15m: strong trend → 1m: pin bar forms → pin bar FAILS → enter
 
 function detectMomentumScalp(candles15m, candles1m, cfg = {}) {
-  const trendStrength = cfg.trendStrength || 5; // lowered from 7 — 7/10 green candles was rarely met
-  const pinBarWickRatio = cfg.pinBarWickRatio || 2.0;
+  const trendStrength = cfg.trendStrength || 7;
+  const pinBarWickRatio = cfg.pinBarWickRatio || 2.5; // tightened from 2.0
 
   if (candles15m.length < 15 || candles1m.length < 10) return null;
 
@@ -1173,210 +1180,79 @@ function detectSMCStructureTrade(candles15m, candles3m, candles1m, h1Trend = 'ne
   return null;
 }
 
-// ── Strategy 7: Range Bounce ───────────────────────────────
-// Sideways market: price oscillates between a well-tested high and low.
-// Range walls are found from SWING CLUSTERS — where price has repeatedly
-// bounced — not from absolute max/min (which can be skewed by outlier wicks).
-// Entry at the actual wall with TP at the opposite wall.
+// ── MCT Session Windows (from PDF strategy) ────────────────
+// Only trade during the 3 institutional opening windows.
+// Outside these windows: institutions are not active, moves are unreliable.
 //
-// Detection requirements:
-//   • EMA9/EMA21 spread < 1.5% on 15m (flat = ranging, no trend)
-//   • At least 2 swing highs clustered near resistance AND 2 swing lows near support
-//   • Range 0.5%–5% wide
-//   • Price within 0.3% of the identified wall
-//   • 1m candle shows rejection at the wall (wick + close direction)
+// Asia-Pacific:  23:00–02:00 UTC  (7:00–10:00 AM SGT)
+// European:      07:00–10:00 UTC  (3:00–6:00 PM SGT)
+// U.S.:          12:00–16:00 UTC  (8:00 PM–12:00 AM SGT)
 
-function findSwingWalls(candles) {
-  // Identify pivot swing highs and lows (local extremes with 2-bar confirmation each side)
-  const pivotHighs = [];
-  const pivotLows  = [];
+const SESSION_WINDOWS = [
+  { name: 'Asia',   startH: 23, endH: 2  },  // wraps midnight
+  { name: 'Europe', startH: 7,  endH: 10 },
+  { name: 'US',     startH: 12, endH: 16 },
+];
 
-  for (let i = 2; i < candles.length - 2; i++) {
-    const c = candles[i];
-    const isSwingHigh = c.high >= candles[i - 1].high && c.high >= candles[i - 2].high
-                     && c.high >= candles[i + 1].high && c.high >= candles[i + 2].high;
-    const isSwingLow  = c.low  <= candles[i - 1].low  && c.low  <= candles[i - 2].low
-                     && c.low  <= candles[i + 1].low  && c.low  <= candles[i + 2].low;
+// Hours and minutes to AVOID entering (per PDF):
+// "Avoid entries at 8am, 12pm, 4pm, and 8pm UTC"
+// "Avoid minute timings like 00, 15, 30, 45"
+const AVOID_HOURS_UTC   = new Set([8, 12, 16, 20]);
+const AVOID_MINUTES_UTC = new Set([0, 15, 30, 45]);
 
-    if (isSwingHigh) pivotHighs.push(c.high);
-    if (isSwingLow)  pivotLows.push(c.low);
+// Session open blackout: first 30 minutes of each session = institutional fake-out zone.
+// EU opens at 07:00, Asia at 23:00, US at 12:00 — institutions run fake sweeps to trap
+// retail before the real direction. Don't enter during this window.
+const SESSION_OPEN_BLACKOUT_MIN = 30;
+
+function isSessionOpenBlackout(tsMs = Date.now()) {
+  const d    = new Date(tsMs);
+  const utcH = d.getUTCHours();
+  const utcM = d.getUTCMinutes();
+  for (const win of SESSION_WINDOWS) {
+    if (utcH === win.startH && utcM < SESSION_OPEN_BLACKOUT_MIN) return true;
   }
-
-  if (pivotHighs.length < 2 || pivotLows.length < 2) return null;
-
-  // Cluster highs: the wall is where most swing highs landed within 0.8% of each other.
-  // Start from the highest pivot high and pull in all highs within 0.8% — that cluster is resistance.
-  pivotHighs.sort((a, b) => b - a);
-  const topAnchor    = pivotHighs[0];
-  const highCluster  = pivotHighs.filter(h => (topAnchor - h) / topAnchor <= 0.008);
-  if (highCluster.length < 2) return null;
-  const resistanceWall = highCluster.reduce((s, h) => s + h, 0) / highCluster.length;
-
-  // Cluster lows: same logic from the lowest pivot low upward.
-  pivotLows.sort((a, b) => a - b);
-  const botAnchor   = pivotLows[0];
-  const lowCluster  = pivotLows.filter(l => (l - botAnchor) / botAnchor <= 0.008);
-  if (lowCluster.length < 2) return null;
-  const supportWall = lowCluster.reduce((s, l) => s + l, 0) / lowCluster.length;
-
-  return {
-    rangeHigh:   resistanceWall,
-    rangeLow:    supportWall,
-    highTouches: highCluster.length,
-    lowTouches:  lowCluster.length,
-  };
+  return false;
 }
 
-function detectRangeBounce(candles15m, candles1m) {
-  if (candles15m.length < 30 || candles1m.length < 5) return null;
-
-  const parsed15 = candles15m.map(parseCandle);
-  const parsed1  = candles1m.map(parseCandle);
-
-  // Use last 25 candles (not 40) — tighter window focuses on the current consolidation,
-  // not trend candles from before the range formed. 25×15m = ~6 hours.
-  const lookback = parsed15.slice(-25);
-
-  // EMA spread: flat EMAs confirm ranging market. Loosened to 2.5% (was 1.5%) because
-  // fresh consolidations after a trend still show some EMA divergence for several hours.
-  const closes15 = lookback.map(c => c.close);
-  const ema9  = calcEMA(closes15, 9);
-  const ema21 = calcEMA(closes15, 21);
-  if (!ema9 || !ema21) return null;
-  const emaSpread = Math.abs(ema9 - ema21) / ema21;
-  if (emaSpread > 0.025) return null; // > 2.5% = actively trending, skip
-
-  // Find walls from actual swing clusters (not absolute high/low)
-  const walls = findSwingWalls(lookback);
-  if (!walls) return null;
-
-  const { rangeHigh, rangeLow, highTouches, lowTouches } = walls;
-  const rangeSize = rangeHigh - rangeLow;
-  const rangePct  = rangeSize / rangeLow;
-
-  // Range sanity: 0.5%–5% wide
-  if (rangePct < 0.005 || rangePct > 0.05) return null;
-
-  const price = parsed15[parsed15.length - 1].close;
-
-  // Reject mid-range: must be within 25% of either wall
-  const rangePos = (price - rangeLow) / rangeSize; // 0 = at support wall, 1 = at resistance wall
-  if (rangePos > 0.25 && rangePos < 0.75) return null;
-
-  // Entry tolerance: within 0.5% of the identified wall (was 0.3% — too tight)
-  const WALL_TOL   = 0.005;
-  const TOUCH_TOL  = 0.003; // SL/TP set just beyond the wall by this amount
-
-  const atSupport    = (price - rangeLow)  / rangeLow  <= WALL_TOL;
-  const atResistance = (rangeHigh - price) / rangeHigh <= WALL_TOL;
-
-  // ── LONG at support wall ──
-  if (atSupport && rangePos <= 0.25) {
-    const last1m = parsed1[parsed1.length - 1];
-    const prev1m = parsed1[parsed1.length - 2];
-
-    // 1m must show a wick into the support zone + bullish close (rejection off the wall)
-    const prevWickedLow = prev1m && prev1m.low <= rangeLow * (1 + WALL_TOL);
-    const lastWickedLow = last1m.low <= rangeLow * (1 + WALL_TOL);
-    const prevBullish   = prev1m && isGreenCandle(prev1m);
-    const lastBullish   = isGreenCandle(last1m) || last1m.close > last1m.open;
-
-    // Best case: prev1m wicked the wall and closed bullish → enter at current price (after bounce confirmed)
-    if (prevWickedLow && prevBullish && lastBullish) {
-      return {
-        direction: 'LONG',
-        setup: 'RANGE_BOUNCE',
-        entryPrice: last1m.close,
-        sl:  rangeLow  * (1 - TOUCH_TOL),   // stop just below support wall
-        tp1: rangeHigh * (1 - TOUCH_TOL),   // target: resistance wall
-        rangeHigh, rangeLow, rangePct,
-        highTouches, lowTouches,
-      };
+function getActiveSession() {
+  const now = new Date();
+  const utcH = now.getUTCHours();
+  for (const win of SESSION_WINDOWS) {
+    if (win.startH > win.endH) {
+      // Wraps midnight (Asia: 23–02)
+      if (utcH >= win.startH || utcH < win.endH) return win;
+    } else {
+      if (utcH >= win.startH && utcH < win.endH) return win;
     }
-
-    // Fallback: current 1m is wicking the wall and showing bullish close
-    if (lastWickedLow && lastBullish) {
-      return {
-        direction: 'LONG',
-        setup: 'RANGE_BOUNCE',
-        entryPrice: last1m.close,
-        sl:  rangeLow  * (1 - TOUCH_TOL),
-        tp1: rangeHigh * (1 - TOUCH_TOL),
-        rangeHigh, rangeLow, rangePct,
-        highTouches, lowTouches,
-      };
-    }
-
-    return null;
   }
-
-  // ── SHORT at resistance wall ──
-  if (atResistance && rangePos >= 0.75) {
-    const last1m = parsed1[parsed1.length - 1];
-    const prev1m = parsed1[parsed1.length - 2];
-
-    // 1m must show a wick into the resistance zone + bearish close (rejection off the wall)
-    const prevWickedHigh = prev1m && prev1m.high >= rangeHigh * (1 - WALL_TOL);
-    const lastWickedHigh = last1m.high >= rangeHigh * (1 - WALL_TOL);
-    const prevBearish    = prev1m && isRedCandle(prev1m);
-    const lastBearish    = isRedCandle(last1m) || last1m.close < last1m.open;
-
-    // Best case: prev1m wicked the wall and closed bearish → enter at current price
-    if (prevWickedHigh && prevBearish && lastBearish) {
-      return {
-        direction: 'SHORT',
-        setup: 'RANGE_BOUNCE',
-        entryPrice: last1m.close,
-        sl:  rangeHigh * (1 + TOUCH_TOL),   // stop just above resistance wall
-        tp1: rangeLow  * (1 + TOUCH_TOL),   // target: support wall
-        rangeHigh, rangeLow, rangePct,
-        highTouches, lowTouches,
-      };
-    }
-
-    // Fallback: current 1m is wicking the wall and showing bearish close
-    if (lastWickedHigh && lastBearish) {
-      return {
-        direction: 'SHORT',
-        setup: 'RANGE_BOUNCE',
-        entryPrice: last1m.close,
-        sl:  rangeHigh * (1 + TOUCH_TOL),
-        tp1: rangeLow  * (1 + TOUCH_TOL),
-        rangeHigh, rangeLow, rangePct,
-        highTouches, lowTouches,
-      };
-    }
-
-    return null;
-  }
-
-  return null;
+  return null; // outside all windows
 }
 
-// ── Session / Timing — DISABLED: bot trades 24/7 on signal only ─
-// All session windows and avoid-hour filters removed per user instruction.
-// Signal quality (score) is the only gate — no time-based restrictions.
+function isAvoidTime() {
+  const now = new Date();
+  const utcH = now.getUTCHours();
+  const utcM = now.getUTCMinutes();
+  if (AVOID_HOURS_UTC.has(utcH) && utcM < 3) return true;   // ±3 min buffer around avoid hours
+  if (AVOID_MINUTES_UTC.has(utcM)) return true;               // avoid 00, 15, 30, 45 min marks
+  if (isSessionOpenBlackout()) return true;                   // first 30 min of each session = fake-out zone
+  return false;
+}
 
-// NOTE: kept as stubs so legacy imports/exports don't break
-const SESSION_WINDOWS = [];
-function getActiveSession()      { return null;  } // always "outside session"
-function isAvoidTime()           { return false; } // never avoid
-function isSessionOpenBlackout() { return false; } // never blocked
-function isGoodTradingSession()  { return true;  } // always good
+// True only when inside a session window AND not at a candle-open time to avoid
+function isGoodTradingSession() {
+  if (isAvoidTime()) return false;
+  return getActiveSession() !== null;
+}
 
-// ── Daily Stats — Consecutive Loss Guard Only ───────────────
-// No hard trade count limit — bot trades whenever a valid signal appears.
-// Safety: pause a coin after 3 consecutive losses on THAT coin.
-// Hard global stop: 6+ consecutive losses across ALL coins combined.
+// ── Daily Stats ────────────────────────────────────────────
+// PDF rule: max 2 trades weekdays, max 1 trade weekends.
+// Stop immediately after 2 consecutive losses.
 
-const dailyStats = {
-  date: '',
-  bySymbol: {},          // { [symbol]: { trades, consecutiveLosses } }
-  globalConsecLosses: 0, // cross-symbol consecutive loss counter
-};
+const dailyStats = { date: '', trades: 0, consecutiveLosses: 0 };
 
 function getTradingDay() {
-  // Trading day resets at 7am UTC
+  // Trading day resets at 7am UTC (PDF: "resets at 7am")
   const now = new Date();
   const utcH = now.getUTCHours();
   const d = new Date(now);
@@ -1384,57 +1260,40 @@ function getTradingDay() {
   return d.toISOString().slice(0, 10);
 }
 
-// kept for log display — no longer used as a hard limit
-function getDailyTradeLimit() { return Infinity; }
+function getDailyTradeLimit() {
+  const dow = new Date().getUTCDay(); // 0=Sun, 6=Sat
+  return (dow === 0 || dow === 6) ? 1 : 2; // 1 on weekends, 2 on weekdays
+}
 
-function _resetIfNewDay() {
+function recordDailyTrade(isWin) {
   const tradingDay = getTradingDay();
   if (dailyStats.date !== tradingDay) {
     dailyStats.date = tradingDay;
-    dailyStats.bySymbol = {};
-    dailyStats.globalConsecLosses = 0;
+    dailyStats.trades = 0;
+    dailyStats.consecutiveLosses = 0;
   }
-}
-
-function _symbolStats(symbol) {
-  _resetIfNewDay();
-  if (!dailyStats.bySymbol[symbol]) {
-    dailyStats.bySymbol[symbol] = { trades: 0, consecutiveLosses: 0 };
-  }
-  return dailyStats.bySymbol[symbol];
-}
-
-function recordDailyTrade(isWin, symbol = 'UNKNOWN') {
-  const st = _symbolStats(symbol);
-  st.trades++;
+  dailyStats.trades++;
   if (isWin) {
-    st.consecutiveLosses = 0;
-    dailyStats.globalConsecLosses = 0;
+    dailyStats.consecutiveLosses = 0;
   } else {
-    st.consecutiveLosses++;
-    dailyStats.globalConsecLosses++;
+    dailyStats.consecutiveLosses++;
   }
 }
 
-// symbol = specific coin to check; omit for top-level scan gate
-function checkDailyLimits(symbol = null) {
-  _resetIfNewDay();
-
-  // Hard global stop: 6+ consecutive losses across all coins combined
-  if (dailyStats.globalConsecLosses >= 6) {
-    return { canTrade: false, reason: `${dailyStats.globalConsecLosses} consecutive losses across all coins — stopped for today. Resets at 7am UTC.` };
+function checkDailyLimits() {
+  const tradingDay = getTradingDay();
+  if (dailyStats.date !== tradingDay) {
+    dailyStats.date = tradingDay;
+    dailyStats.trades = 0;
+    dailyStats.consecutiveLosses = 0;
   }
-
-  if (symbol) {
-    const st = _symbolStats(symbol);
-    // Pause that specific coin after 3 consecutive losses — others keep trading
-    if (st.consecutiveLosses >= 3) {
-      return { canTrade: false, reason: `${symbol}: ${st.consecutiveLosses} consecutive losses — paused for today` };
-    }
-    return { canTrade: true };
+  if (dailyStats.consecutiveLosses >= 2) {
+    return { canTrade: false, reason: `${dailyStats.consecutiveLosses} consecutive losses — stopped for today. Resets at 7am UTC.` };
   }
-
-  // No symbol given: only block if global hard stop triggered
+  const limit = getDailyTradeLimit();
+  if (dailyStats.trades >= limit) {
+    return { canTrade: false, reason: `Daily trade limit reached (${dailyStats.trades}/${limit}). Resets at 7am UTC.` };
+  }
   return { canTrade: true };
 }
 
@@ -1492,140 +1351,6 @@ function detectSwings(klines, len) {
   return swings;
 }
 
-// ── Strategy 8: Consolidation Rejection ───────────────────
-// Detects consolidation (coiling) after a strong trend move and enters
-// when price tests the extreme of the consolidation against the trend.
-// SHORT: downtrend (EMA9 < EMA21) + price at top 30% of consolid. + bearish close
-// LONG:  uptrend  (EMA9 > EMA21) + price at bot 30% of consolid. + bullish close
-// SL: beyond the consolid. extreme + 0.5×ATR. TP: ATR × 2.
-
-function detectConsolRejection(parsed15, parsed1) {
-  if (parsed15.length < 25 || parsed1.length < 2) return null;
-
-  const last1 = parsed1[parsed1.length - 1];
-  const price  = last1.close;
-
-  // Trend direction: EMA9 vs EMA21 on 15m (use last 30 candles)
-  const trend30  = parsed15.slice(-30);
-  const closes30 = trend30.map(c => c.close);
-  const ema9  = calcEMA(closes30, 9);
-  const ema21 = calcEMA(closes30, 21);
-  if (!ema9 || !ema21) return null;
-
-  const isBearish = ema9 < ema21;
-  const isBullish = ema9 > ema21;
-  if (!isBearish && !isBullish) return null;
-
-  // Consolidation: compare ATR of recent 10 candles vs prior 15
-  const recent10 = parsed15.slice(-10);
-  const prior15  = parsed15.slice(-25, -10);
-  const atrRecent = calcATR(recent10.length >= 5 ? recent10 : parsed15.slice(-10));
-  const atrPrior  = calcATR(prior15.length  >= 5 ? prior15  : parsed15.slice(-25, -10));
-  if (!atrRecent || !atrPrior || atrPrior === 0) return null;
-
-  // Consolidation confirmed when recent ATR < 65% of prior ATR (price coiling)
-  if (atrRecent >= atrPrior * 0.65) return null;
-
-  // Consolid. range over the 10 recent candles
-  const consHigh = Math.max(...recent10.map(c => c.high));
-  const consLow  = Math.min(...recent10.map(c => c.low));
-  const consRange = consHigh - consLow;
-  if (consRange <= 0) return null;
-
-  const posInCons = (price - consLow) / consRange; // 0=bottom, 1=top
-
-  // Last two completed 15m candles for pattern confirmation
-  const lastClosed = parsed15[parsed15.length - 2];
-  const prevClosed = parsed15[parsed15.length - 3];
-  if (!lastClosed || !prevClosed) return null;
-
-  const atr = atrRecent;
-
-  // SHORT: bearish trend + price near consolidation top + bearish candle(s)
-  if (isBearish && posInCons >= 0.65) {
-    const bearishClose = isRedCandle(lastClosed) || isBearishPinBar(lastClosed);
-    const priorBearish = isRedCandle(prevClosed) || isBearishPinBar(prevClosed);
-    if (!bearishClose && !priorBearish) return null; // need at least one bearish close
-
-    return {
-      direction: 'SHORT',
-      setup: 'CONSOL_REJECTION',
-      entryPrice: price,
-      sl: consHigh + atr * 0.5,
-      consHigh,
-      consLow,
-      atrRatio: atrRecent / atrPrior,
-    };
-  }
-
-  // LONG: bullish trend + price near consolidation bottom + bullish candle(s)
-  if (isBullish && posInCons <= 0.35) {
-    const bullishClose = isGreenCandle(lastClosed) || isBullishPinBar(lastClosed);
-    const priorBullish = isGreenCandle(prevClosed) || isBullishPinBar(prevClosed);
-    if (!bullishClose && !priorBullish) return null;
-
-    return {
-      direction: 'LONG',
-      setup: 'CONSOL_REJECTION',
-      entryPrice: price,
-      sl: consLow - atr * 0.5,
-      consHigh,
-      consLow,
-      atrRatio: atrRecent / atrPrior,
-    };
-  }
-
-  return null;
-}
-
-// ── Strategy 9: VWAP Rejection ────────────────────────────
-// Detects price poking through VWAP then closing back on the other side.
-// SHORT: 15m candle high > VWAP but close < VWAP (bearish rejection wick above VWAP)
-// LONG:  15m candle low  < VWAP but close > VWAP (bullish rejection wick below VWAP)
-// Entry: current 1m close after the rejection candle forms.
-// SL: beyond the tip of the rejection wick + 0.5 × ATR buffer.
-
-function detectVwapRejection(parsed15, vwapVal, parsed1) {
-  if (!vwapVal || parsed15.length < 10 || parsed1.length < 1) return null;
-  const atr = calcATR(parsed15);
-  if (!atr) return null;
-
-  // Check last 3 completed 15m candles (exclude the currently forming one)
-  const lookback = parsed15.slice(-4, -1);
-
-  for (let i = lookback.length - 1; i >= 0; i--) {
-    const c = lookback[i];
-    const body   = bodySize(c);
-    const range  = totalRange(c);
-    if (range === 0 || body === 0) continue;
-
-    // SHORT: wick pokes above VWAP, close back below — bearish rejection
-    if (c.high > vwapVal && c.close < vwapVal && isRedCandle(c)) {
-      const wickAbove = c.high - Math.max(c.open, c.close);
-      // Wick above VWAP must be at least 50% of body (meaningful rejection)
-      if (wickAbove < body * 0.5) continue;
-      const sl = c.high + atr * 0.5;
-      const last1m = parsed1[parsed1.length - 1];
-      const entryPrice = last1m.close;
-      // Confirm entry is still below VWAP — don't chase if price recovered
-      if (entryPrice >= vwapVal * 1.001) continue;
-      return { direction: 'SHORT', setup: 'VWAP_REJECTION', entryPrice, sl, vwap: vwapVal };
-    }
-
-    // LONG: wick pokes below VWAP, close back above — bullish rejection
-    if (c.low < vwapVal && c.close > vwapVal && isGreenCandle(c)) {
-      const wickBelow = Math.min(c.open, c.close) - c.low;
-      if (wickBelow < body * 0.5) continue;
-      const sl = c.low - atr * 0.5;
-      const last1m = parsed1[parsed1.length - 1];
-      const entryPrice = last1m.close;
-      if (entryPrice <= vwapVal * 0.999) continue;
-      return { direction: 'LONG', setup: 'VWAP_REJECTION', entryPrice, sl, vwap: vwapVal };
-    }
-  }
-  return null;
-}
-
 // ── Analyze Single Coin ────────────────────────────────────
 
 async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg = {}, btcTrend = 'neutral') {
@@ -1680,7 +1405,6 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
   // "If price > OP AND > VWAP → look LONG only. If < OP AND < VWAP → look SHORT only."
   // Opening Price (OP) = first 15m candle open of the UTC day
   let opBias = 'neutral';
-  let vwapVal = null; // hoisted — used by VWAP_REJECTION strategy below
   {
     const now = new Date();
     const dayStartMs = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
@@ -1689,6 +1413,7 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     const opPrice = todayCandles.length > 0 ? todayCandles[0].open : null;
 
     // Simple VWAP approximation from today's 15m candles
+    let vwapVal = null;
     if (todayCandles.length > 0) {
       let cumTV = 0, cumV = 0;
       for (const c of todayCandles) {
@@ -1733,52 +1458,6 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
   const recentLow = Math.min(...recent20.map(c => c.low));
   const recentRange = recentHigh - recentLow;
   const priceInRange = recentRange > 0 ? (price - recentLow) / recentRange : 0.5; // 0=bottom, 1=top
-
-  // ── RANGING MARKET DETECTOR ──────────────────────────────
-  // When EMA9 and EMA21 are flat and close together, the market is sideways.
-  // In a range, ANY strategy entry must be near the range extreme — not the middle.
-  // This prevents the classic mistake: buying at 60-70% of the range.
-  const emaSpreadPct = (ema9_15m && ema21_15m)
-    ? Math.abs(ema9_15m - ema21_15m) / ema21_15m
-    : 1;
-  // Count how many times each boundary was touched over last 30 candles
-  const range30 = parsed15.slice(-30);
-  const r30High = Math.max(...range30.map(c => c.high));
-  const r30Low  = Math.min(...range30.map(c => c.low));
-  let r30HighTouches = 0, r30LowTouches = 0;
-  for (const c of range30) {
-    if ((r30High - c.high) / r30High < 0.005) r30HighTouches++;
-    if ((c.low  - r30Low)  / r30Low  < 0.005) r30LowTouches++;
-  }
-  // Market is ranging when: EMAs flat AND both walls touched 2+
-  const isRangingMarket = emaSpreadPct < 0.015 && r30HighTouches >= 2 && r30LowTouches >= 2;
-  if (isRangingMarket) {
-    bLog.scan(`${symbol}: RANGING market detected (EMA spread=${(emaSpreadPct*100).toFixed(2)}%, walls H=${r30HighTouches} L=${r30LowTouches}) — only range-extreme entries allowed`);
-  }
-
-  // ── SWING POINT PROXIMITY (buy HL/LL, sell HH/LH) ────────
-  // Detect 15m pivot swing lows and highs for structural entry quality.
-  // A LONG entry must be near a swing low (HL or LL), a SHORT near a swing high.
-  const structSwingLows  = [];
-  const structSwingHighs = [];
-  for (let i = 2; i < parsed15.length - 1; i++) {
-    if (parsed15[i].low  < parsed15[i-1].low  && parsed15[i].low  < parsed15[i+1].low)  structSwingLows.push(parsed15[i].low);
-    if (parsed15[i].high > parsed15[i-1].high && parsed15[i].high > parsed15[i+1].high) structSwingHighs.push(parsed15[i].high);
-  }
-  // Nearest swing low AT or below current price (support below us)
-  const nearestSwingLow  = [...structSwingLows].filter(l => l <= price * 1.002).sort((a, b) => b - a)[0] || null;
-  // Nearest swing high AT or above current price (resistance above us)
-  const nearestSwingHigh = [...structSwingHighs].filter(h => h >= price * 0.998).sort((a, b) => a - b)[0] || null;
-
-  // ── 1m SPIKE DETECTION ───────────────────────────────────
-  // The 15m RSI lags by up to 3 candles during a short-timeframe spike.
-  // Directly measure 1m momentum: if price moved >1.0% in the last 3×1m candles
-  // it's an active spike — entering in the spike direction means buying the top.
-  let spike3mPct = 0;
-  if (parsed1.length >= 3) {
-    const spBase = parsed1[parsed1.length - 3].open;
-    if (spBase > 0) spike3mPct = (parsed1[parsed1.length - 1].close - spBase) / spBase;
-  }
 
   // Volume on latest candle
   const lastVolOK = parsed15.length >= 22 && hasVolumeConfirm(parsed15, parsed15.length - 1, 1.0);
@@ -1974,100 +1653,6 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     }
   } // end SMC_HL_STRUCTURE gate
 
-  // Strategy 7: Range Bounce — sideways market, buy low sell high
-  if (!enabledStrategies || enabledStrategies.RANGE_BOUNCE !== false) {
-    const range = detectRangeBounce(klines15m, klines1m);
-    if (range) {
-      const slDist = Math.abs(range.entryPrice - range.sl) / range.entryPrice;
-      const tpDist = Math.abs(range.tp1 - range.entryPrice) / range.entryPrice;
-      const rr     = slDist > 0 ? tpDist / slDist : 1.5;
-
-      if (rr >= 1.2 && slDist > 0.001 && slDist < 0.05) {
-        const touchQuality = range.highTouches + range.lowTouches;
-        signals.push({
-          symbol, direction: range.direction, price: range.entryPrice,
-          lastPrice: price,
-          sl: range.sl,
-          tp1: range.tp1,
-          tp2: range.tp1, // full range is the target — no extension
-          tp3: range.tp1,
-          slDist, rr: Math.round(rr * 10) / 10,
-          setup: 'RANGE_BOUNCE',
-          setupName: `${range.direction}-RANGE(${(range.rangePct * 100).toFixed(1)}%)`,
-          // Base 9: strong signal — both boundaries well-defined
-          // +2 for many touches (high confidence range), +2 for tight EMA (clean range)
-          score: 9 + (touchQuality >= 6 ? 2 : touchQuality >= 4 ? 1 : 0),
-          rangeHigh: range.rangeHigh,
-          rangeLow:  range.rangeLow,
-          rangePct:  range.rangePct,
-          isRangeSetup: true, // bypass trend hard-blocks — range trades are bidirectional
-        });
-      }
-    }
-  } // end RANGE_BOUNCE gate
-
-  // Strategy 8: Consolidation Rejection — short/long at the extreme of a post-trend coil
-  if (!enabledStrategies || enabledStrategies.CONSOL_REJECTION !== false) {
-    const consol = detectConsolRejection(parsed15, parsed1);
-    if (consol) {
-      const slDist = Math.abs(consol.entryPrice - consol.sl) / consol.entryPrice;
-      const atr15  = calcATR(parsed15);
-      const tpDist = atr15 > 0 ? (atr15 * 2.0) / consol.entryPrice : slDist * 2;
-      const tpPrice = consol.direction === 'LONG'
-        ? consol.entryPrice * (1 + tpDist)
-        : consol.entryPrice * (1 - tpDist);
-      const rr = slDist > 0 ? tpDist / slDist : 1.5;
-
-      if (rr >= 1.2 && slDist > 0.001 && slDist < 0.05) {
-        signals.push({
-          symbol, direction: consol.direction, price: consol.entryPrice,
-          lastPrice: price,
-          sl: consol.sl,
-          tp1: tpPrice,
-          tp2: consol.direction === 'LONG' ? consol.entryPrice * (1 + tpDist * 1.5) : consol.entryPrice * (1 - tpDist * 1.5),
-          tp3: consol.direction === 'LONG' ? consol.entryPrice * (1 + tpDist * 2)   : consol.entryPrice * (1 - tpDist * 2),
-          slDist, rr: Math.round(rr * 10) / 10,
-          setup: 'CONSOL_REJECTION',
-          setupName: `${consol.direction}-CONSOL-REJ`,
-          // Base 8: trend-aligned entry at coil extreme — high-conviction setup
-          score: 8,
-          consolHigh: consol.consHigh,
-          consolLow:  consol.consLow,
-        });
-      }
-    }
-  } // end CONSOL_REJECTION gate
-
-  // Strategy 9: VWAP Rejection — wick through VWAP, close back on rejection side
-  if (!enabledStrategies || enabledStrategies.VWAP_REJECTION !== false) {
-    const vrej = detectVwapRejection(parsed15, vwapVal, parsed1);
-    if (vrej) {
-      const slDist = Math.abs(vrej.entryPrice - vrej.sl) / vrej.entryPrice;
-      const atr15  = calcATR(parsed15);
-      const tpDist = atr15 > 0 ? (atr15 * 2.0) / vrej.entryPrice : slDist * 2;
-      const tpPrice = vrej.direction === 'LONG'
-        ? vrej.entryPrice * (1 + tpDist)
-        : vrej.entryPrice * (1 - tpDist);
-      const rr = slDist > 0 ? tpDist / slDist : 1.5;
-
-      if (rr >= 1.2 && slDist > 0.001 && slDist < 0.05) {
-        signals.push({
-          symbol, direction: vrej.direction, price: vrej.entryPrice,
-          lastPrice: price,
-          sl: vrej.sl,
-          tp1: tpPrice,
-          tp2: vrej.direction === 'LONG' ? vrej.entryPrice * (1 + tpDist * 1.5) : vrej.entryPrice * (1 - tpDist * 1.5),
-          tp3: vrej.direction === 'LONG' ? vrej.entryPrice * (1 + tpDist * 2)   : vrej.entryPrice * (1 - tpDist * 2),
-          slDist, rr: Math.round(rr * 10) / 10,
-          setup: 'VWAP_REJECTION',
-          setupName: `${vrej.direction}-VWAP-REJ`,
-          score: 7, // solid base — VWAP is a high-confluence level
-          vwap: vrej.vwap,
-        });
-      }
-    }
-  } // end VWAP_REJECTION gate
-
   if (!signals.length) return null;
 
   // Apply confluence bonuses + global filters to all signals
@@ -2075,21 +1660,16 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     // ── PDF HARD FILTERS ─────────────────────────────────────
 
     // EMA200 bias (PDF: "above MA200 → look long, below → look short")
-    // Apply as a score modifier — not a hard block. A counter-EMA200 trade can still
-    // pass if other confluences are strong (e.g. key S/R + volume + in-session).
-    // Range setups are exempt — bidirectional by design.
-    if (!sig.isRangeSetup) {
-      if (ema200_bias === 'bullish' && sig.direction === 'SHORT') {
-        sig.score -= 3; // headwind — fighting the bigger trend
-        sig.ema200Contra = true;
-      }
-      if (ema200_bias === 'bearish' && sig.direction === 'LONG') {
-        sig.score -= 3; // headwind — fighting the bigger trend
-        sig.ema200Contra = true;
-      }
-      // Bonus for aligning with EMA200 bias
-      if (ema200_bias === 'bullish' && sig.direction === 'LONG')  sig.score += 2;
-      if (ema200_bias === 'bearish' && sig.direction === 'SHORT') sig.score += 2;
+    // Hard block if direction conflicts with EMA200 trend
+    if (ema200_bias === 'bullish' && sig.direction === 'SHORT') {
+      sig.score = -99;
+      sig.blocked = `SHORT blocked — price above EMA200 (bullish bias per PDF)`;
+      continue;
+    }
+    if (ema200_bias === 'bearish' && sig.direction === 'LONG') {
+      sig.score = -99;
+      sig.blocked = `LONG blocked — price below EMA200 (bearish bias per PDF)`;
+      continue;
     }
 
     // VWAP + OP bias (PDF: "avoid entering in between VWAP and OP if gap is small")
@@ -2112,20 +1692,24 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
       sig.score += 3;
     }
 
+    // Session tag — add active session name to signal
+    const sess = getActiveSession();
+    if (sess) sig.session = sess.name;
+
     // ── POSITION QUALITY: buy low, sell high — don't chase ──
 
-    // RSI: LONG should enter on pullback (RSI 25-65), not when extremely overbought
-    //       SHORT should enter on bounce (RSI 35-75), not when extremely oversold
+    // RSI: LONG should enter on pullback (RSI 25-55), not when overbought
+    //       SHORT should enter on bounce (RSI 45-75), not when oversold
     if (sig.direction === 'LONG') {
-      if (rsi14 > 78) { sig.score = -99; sig.blocked = 'LONG rejected — RSI ' + rsi14.toFixed(0) + ' extremely overbought'; }
-      else if (rsi14 > 65) sig.score -= 1; // slightly extended — minor penalty only
-      else if (rsi14 >= 30 && rsi14 <= 55) sig.score += 2; // pullback zone — ideal buy
+      if (rsi14 > 70) { sig.score = -99; sig.blocked = 'LONG rejected — RSI ' + rsi14.toFixed(0) + ' overbought, chasing'; }
+      else if (rsi14 > 55) sig.score -= 2; // slightly extended
+      else if (rsi14 >= 30 && rsi14 <= 50) sig.score += 2; // pullback zone — ideal buy
       else if (rsi14 < 25) sig.score += 1; // oversold bounce possible
     }
     if (sig.direction === 'SHORT') {
-      if (rsi14 < 22) { sig.score = -99; sig.blocked = 'SHORT rejected — RSI ' + rsi14.toFixed(0) + ' extremely oversold'; }
-      else if (rsi14 < 35) sig.score -= 1; // slightly extended — minor penalty only
-      else if (rsi14 >= 45 && rsi14 <= 70) sig.score += 2; // bounce zone — ideal sell
+      if (rsi14 < 30) { sig.score = -99; sig.blocked = 'SHORT rejected — RSI ' + rsi14.toFixed(0) + ' oversold, chasing'; }
+      else if (rsi14 < 45) sig.score -= 2; // slightly extended
+      else if (rsi14 >= 50 && rsi14 <= 70) sig.score += 2; // bounce zone — ideal sell
       else if (rsi14 > 75) sig.score += 1; // overbought reversal possible
     }
 
@@ -2141,72 +1725,32 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
       if (entryQuality === 'extended_up') sig.score += 1; // sell the rally
     }
 
-    // ── 1m SPIKE HARD BLOCK ──────────────────────────────────
-    // RSI(14) on 15m candles lags 3×5m candles behind a spike. Measure it
-    // directly: if price moved >1.0% in the last 3×1m candles, entering in
-    // the spike direction = buying the top / selling the bottom.
-    if (sig.direction === 'LONG' && spike3mPct > 0.010) {
-      sig.score = -99;
-      sig.blocked = `LONG blocked — 1m up-spike +${(spike3mPct * 100).toFixed(2)}% in 3 candles (chasing top)`;
-    }
-    if (sig.direction === 'SHORT' && spike3mPct < -0.010) {
-      sig.score = -99;
-      sig.blocked = `SHORT blocked — 1m down-spike ${(spike3mPct * 100).toFixed(2)}% in 3 candles (chasing bottom)`;
-    }
-
-    // Price position in range: LONG must be near the LOW, SHORT near the HIGH.
-    // In a RANGING market: tighter entry zone enforced — no mid-range entries allowed.
-    // In a TRENDING market: standard 80/20 hard blocks apply.
+    // Price position in range: LONG near bottom is good, LONG near top is chasing
     if (sig.direction === 'LONG') {
-      const longTopBlock = isRangingMarket ? 0.45 : 0.80; // ranging = must be below 45% of range
-      if (priceInRange > longTopBlock) {
-        sig.score = -99;
-        sig.blocked = `LONG blocked — price at ${(priceInRange * 100).toFixed(0)}% of ${isRangingMarket ? 'RANGING' : '5h'} range (${isRangingMarket ? 'wait for range bottom <45%' : 'top'})`;
-      } else if (priceInRange < 0.25) sig.score += 4; // very near range bottom — prime LONG
-      else if (priceInRange < 0.35) sig.score += 2;   // near bottom — good
-      else if (priceInRange > 0.60) sig.score -= 3;   // upper half — risky
+      if (priceInRange > 0.85) sig.score -= 3; // buying at the top — bad
+      if (priceInRange < 0.35) sig.score += 2; // buying near the bottom — good
     }
     if (sig.direction === 'SHORT') {
-      const shortBotBlock = isRangingMarket ? 0.55 : 0.20; // ranging = must be above 55% of range
-      if (priceInRange < shortBotBlock) {
-        sig.score = -99;
-        sig.blocked = `SHORT blocked — price at ${(priceInRange * 100).toFixed(0)}% of ${isRangingMarket ? 'RANGING' : '5h'} range (${isRangingMarket ? 'wait for range top >55%' : 'bottom'})`;
-      } else if (priceInRange > 0.80) sig.score += 5; // very near range top — prime SHORT
-      else if (priceInRange > 0.70) sig.score += 3;   // near top — good
-      else if (priceInRange > 0.65) sig.score += 1;
-    }
-
-    // Structural proximity: reward entries tight to actual swing structure (HL/LL for LONG, HH/LH for SHORT)
-    if (sig.direction === 'LONG' && nearestSwingLow) {
-      const pctFromLow = (price - nearestSwingLow) / nearestSwingLow;
-      if (pctFromLow <= 0.005)       sig.score += 3; // price at swing low — perfect HL/LL retest
-      else if (pctFromLow <= 0.015)  sig.score += 1; // within 1.5% — acceptable pullback
-    }
-    if (sig.direction === 'SHORT' && nearestSwingHigh) {
-      const pctFromHigh = (nearestSwingHigh - price) / nearestSwingHigh;
-      if (pctFromHigh <= 0.005)      sig.score += 3; // price at swing high — perfect HH/LH test
-      else if (pctFromHigh <= 0.015) sig.score += 1; // within 1.5% — acceptable bounce
+      if (priceInRange < 0.15) sig.score -= 3; // selling at the bottom — bad
+      if (priceInRange > 0.65) sig.score += 2; // selling near the top — good
     }
 
     // 1h trend alignment — bonus for with-trend, penalty for counter-trend
-    // Range setups get a smaller counter-trend penalty (both directions are valid in a range)
-    const trendPenalty = sig.isRangeSetup ? 1 : 4;
-    if (sig.direction === 'LONG'  && h1Trend === 'bullish') sig.score += 3;
+    if (sig.direction === 'LONG' && h1Trend === 'bullish') sig.score += 3;
     if (sig.direction === 'SHORT' && h1Trend === 'bearish') sig.score += 3;
-    if (sig.direction === 'LONG'  && h1Trend === 'bearish') sig.score -= trendPenalty;
-    if (sig.direction === 'SHORT' && h1Trend === 'bullish') sig.score -= trendPenalty;
+    if (sig.direction === 'LONG' && h1Trend === 'bearish') sig.score -= 4;
+    if (sig.direction === 'SHORT' && h1Trend === 'bullish') sig.score -= 4;
 
     // BTC market correlation: don't fight BTC's direction on altcoins
-    // Range setups get a softer penalty — if a coin is ranging it may be disconnected from BTC
+    // When BTC is clearly bullish, shorting alts is fighting the market
     if (symbol !== 'BTCUSDT') {
-      const btcPenalty = sig.isRangeSetup ? 2 : 5;
       if (btcTrend === 'bullish' && sig.direction === 'SHORT') {
-        sig.score -= btcPenalty;
-        if (!sig.isRangeSetup) sig.blocked = 'SHORT rejected — BTC is bullish, alts follow BTC';
+        sig.score -= 5;
+        sig.blocked = 'SHORT rejected — BTC is bullish, alts follow BTC';
       }
       if (btcTrend === 'bearish' && sig.direction === 'LONG') {
-        sig.score -= btcPenalty;
-        if (!sig.isRangeSetup) sig.blocked = 'LONG rejected — BTC is bearish, alts follow BTC';
+        sig.score -= 5;
+        sig.blocked = 'LONG rejected — BTC is bearish, alts follow BTC';
       }
       // Bonus for trading WITH BTC direction
       if (btcTrend === 'bullish' && sig.direction === 'LONG') sig.score += 2;
@@ -2237,10 +1781,8 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     }
 
     // Dynamic ATR-based SL: use ATR as MINIMUM distance — give room to breathe
-    // Range setups keep their SL exactly at the range boundary — ATR doesn't apply
-    // 1.5× ATR (was 1.2×): extra buffer so normal candle wicks don't clip the SL
-    if (atr15 > 0 && !sig.isRangeSetup) {
-      const atrSl = sig.direction === 'LONG' ? sig.price - atr15 * 1.5 : sig.price + atr15 * 1.5;
+    if (atr15 > 0) {
+      const atrSl = sig.direction === 'LONG' ? sig.price - atr15 * 1.2 : sig.price + atr15 * 1.2;
       // Use ATR SL if it's WIDER than strategy SL (more room = fewer stop-outs on noise)
       if (sig.direction === 'LONG' && atrSl < sig.sl) sig.sl = atrSl;
       if (sig.direction === 'SHORT' && atrSl > sig.sl) sig.sl = atrSl;
@@ -2248,19 +1790,16 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     }
 
     // Smart TP: find nearest strong S/R level in direction
-    // Range setups keep their TP at the opposite range boundary — don't override
-    if (!sig.isRangeSetup) {
-      const strongLevels = allLevels.filter(l => l.strength >= 3);
-      const tpLevel = findNearestLevel(sig.price, strongLevels, sig.direction, sig.slDist * 1.2);
-      if (tpLevel) {
-        sig.tp1 = tpLevel.price;
-      } else {
-        // Fallback: ATR-based TP (2x ATR)
-        sig.tp1 = sig.direction === 'LONG' ? sig.price + atr15 * 2.0 : sig.price - atr15 * 2.0;
-      }
-      sig.tp2 = sig.direction === 'LONG' ? sig.price + Math.abs(sig.tp1 - sig.price) * 1.5 : sig.price - Math.abs(sig.tp1 - sig.price) * 1.5;
-      sig.tp3 = sig.direction === 'LONG' ? sig.price + Math.abs(sig.tp1 - sig.price) * 2.0 : sig.price - Math.abs(sig.tp1 - sig.price) * 2.0;
+    const strongLevels = allLevels.filter(l => l.strength >= 3);
+    const tpLevel = findNearestLevel(sig.price, strongLevels, sig.direction, sig.slDist * 1.2);
+    if (tpLevel) {
+      sig.tp1 = tpLevel.price;
+    } else {
+      // Fallback: ATR-based TP (2x ATR)
+      sig.tp1 = sig.direction === 'LONG' ? sig.price + atr15 * 2.0 : sig.price - atr15 * 2.0;
     }
+    sig.tp2 = sig.direction === 'LONG' ? sig.price + Math.abs(sig.tp1 - sig.price) * 1.5 : sig.price - Math.abs(sig.tp1 - sig.price) * 1.5;
+    sig.tp3 = sig.direction === 'LONG' ? sig.price + Math.abs(sig.tp1 - sig.price) * 2.0 : sig.price - Math.abs(sig.tp1 - sig.price) * 2.0;
 
     // Recalculate RR with updated SL/TP
     const tpDist = Math.abs(sig.tp1 - sig.price) / sig.price;
@@ -2312,57 +1851,25 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
 // ── Main Scan ──────────────────────────────────────────────
 
 async function scanSMC(log, opts = {}) {
-  const limits = checkDailyLimits();
-  if (!limits.canTrade) {
-    log(`Liquidity Engine: ${limits.reason}. Stopped trading.`);
-    bLog.scan(limits.reason);
-    return [];
-  }
+  // 24/7 trading — all session windows, avoid-time, and blackout blocks removed.
+  // The original PDF rules (Asia/Europe/US sessions only) were too restrictive.
+  // Bot now scans continuously and trades whenever a valid signal appears.
 
-  // Load scan list from DB: union of all enabled user watchlists + admin global tokens.
-  // Scans only coins users have actually chosen — no more top-100 volume sweep.
-  let watchlistSymbols = [];
-  try {
-    const rows = await db.query(`
-      SELECT DISTINCT symbol FROM (
-        SELECT uw.symbol
-        FROM user_watchlist uw
-        JOIN api_keys ak ON ak.user_id = uw.user_id
-        WHERE uw.enabled = true AND ak.enabled = true
-        UNION
-        SELECT symbol
-        FROM global_token_settings
-        WHERE enabled = true AND (banned IS NULL OR banned = false)
-      ) combined
-      ORDER BY symbol
-    `);
-    watchlistSymbols = rows.map(r => r.symbol.toUpperCase());
-  } catch (e) {
-    bLog.error(`Failed to load watchlist from DB: ${e.message}`);
-  }
+  // Hard 4-token whitelist — no other coins traded under any circumstances.
+  const ALLOWED_SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT'];
 
-  if (!watchlistSymbols.length) {
-    bLog.error('No enabled tokens in any watchlist — nothing to scan. Add tokens in My Tokens.');
-    return [];
-  }
+  const tickers = await fetchTickers();
+  if (!tickers.length) { bLog.error('Failed to fetch tickers'); return []; }
 
-  // Fetch live prices for watchlist symbols in parallel (fast — only our coins)
-  const priceResults = await Promise.all(
-    watchlistSymbols.map(async sym => {
-      try {
-        const res = await fetchWithRetry(`https://fapi.binance.com/fapi/v1/ticker/price?symbol=${sym}`);
-        if (!res) return null;
-        const d = await res.json();
-        const price = parseFloat(d.price);
-        if (!price || price <= 0) return null;
-        return { symbol: sym, lastPrice: String(price) };
-      } catch { return null; }
-    })
-  );
-  const topCoins = priceResults.filter(Boolean);
+  // Only pass the 4 allowed coins into the scan — ignore everything else.
+  const topCoins = tickers
+    .filter(t => ALLOWED_SYMBOLS.includes(t.symbol))
+    .map(t => ({ ...t }));
+
+  bLog.scan(`[v2.0] Scanning 4 coins: ${ALLOWED_SYMBOLS.join(', ')} | 24/7 mode`);
 
   const params = await aiLearner.getOptimalParams();
-  const minScore = params.MIN_SCORE || 6; // lowered from 8 — filters were too tight, bot wasn't trading
+  const minScore = params.MIN_SCORE || 8;
 
   // Quantum optimizer: get active strategy combo + best params from backtest
   let activeCombo = 15;
@@ -2397,28 +1904,20 @@ async function scanSMC(log, opts = {}) {
     }
   } catch (_) { /* BTC fetch failed — continue with neutral */ }
 
+  const sessionTag = activeSession ? activeSession.name : 'AI-override';
   const dailyLimit = getDailyTradeLimit();
-  const symbolSummary = Object.entries(dailyStats.bySymbol).map(([s, st]) => `${s.replace('USDT','')}=${st.trades}t/${st.consecutiveLosses}L`).join(' ') || 'none yet';
-  bLog.scan(`24/7 | BTC trend=${btcTrend} | Quantum combo=${comboName} (${activeCombo}) | ${topCoins.length} coins | today: ${symbolSummary}`);
+  bLog.scan(`Session=${sessionTag} | BTC trend=${btcTrend} | Quantum combo=${comboName} (${activeCombo}) | ${topCoins.length} coins | daily trades=${dailyStats.trades}/${dailyLimit}`);
 
   const results = [];
   let analyzed = 0;
   let skippedAI = 0;
 
   for (const ticker of topCoins) {
-    // Per-coin daily limit — each symbol gets its own independent allowance
-    const symLimits = checkDailyLimits(ticker.symbol);
-    if (!symLimits.canTrade) {
-      bLog.scan(`${ticker.symbol}: ${symLimits.reason} — skipping`);
-      continue;
-    }
-
     if (await aiLearner.shouldAvoidCoin(ticker.symbol)) {
       skippedAI++;
       continue;
     }
 
-    // Bot runs 24/7 — no time restrictions. Signal score is the only gate.
     const signal = await analyzeCoin(ticker, params, enabledStrategies, bestParams, btcTrend);
     if (signal) signal.comboId = activeCombo;
     analyzed++;

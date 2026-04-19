@@ -816,20 +816,22 @@ class AgentCoordinator extends BaseAgent {
         ta.currentTask = { description: `Watching ${ta.symbol}`, startedAt: Date.now() };
       }
 
-      // ── Also run unified trade-engine (all 5 strategies in one file) ──
+      // ── v2.0 strategy engine: liquidity-sweep-engine scanSMC ──
+      // Restored to v2.0-stable strategies (LiqSweep, SLHunt, MomScalp, BRR-Fib).
+      // 24/7 mode — session windows removed. Hard 4-token whitelist applied inside scanSMC.
       try {
-        const { scanAll } = require('../trade-engine');
-        const engineSignals = await scanAll(bLog.scan.bind(bLog), { kronosPredictions });
-        for (const s of (engineSignals || [])) {
+        const { scanSMC } = require('../liquidity-sweep-engine');
+        const smcSignals = await scanSMC(bLog.scan.bind(bLog), { kronosPredictions });
+        for (const s of (smcSignals || [])) {
           if (!signals.find(existing => existing.symbol === s.symbol)) {
             signals.push(s);
           }
         }
-        if (engineSignals.length > 0) {
-          bLog.scan(`[Coordinator] trade-engine: ${engineSignals.length} signal(s)`);
+        if ((smcSignals || []).length > 0) {
+          bLog.scan(`[Coordinator] v2.0 SMC engine: ${smcSignals.length} signal(s)`);
         }
       } catch (engineErr) {
-        bLog.error(`[Coordinator] trade-engine scan failed (non-blocking): ${engineErr.message}`);
+        bLog.error(`[Coordinator] SMC engine scan failed (non-blocking): ${engineErr.message}`);
       }
 
       // Filter out globally banned tokens before further processing

@@ -1,8 +1,22 @@
 {
-  "version": "1.3.1",
+  "version": "1.3.2",
   "name": "MCT AI Trader",
   "released": "2026-04-19",
   "changelog": [
+    {
+      "version": "1.3.2",
+      "tag": "v1.3.2",
+      "date": "2026-04-19",
+      "label": "Restore v2.0 strategies — 24/7, 4 tokens only",
+      "changes": [
+        "Restored liquidity-sweep-engine.js from v2.0-stable tag (LiqSweep + SLHunt + MomScalp + BRR-Fib strategies)",
+        "Removed all 3 timing restrictions from scanSMC(): isAvoidTime() block gone, getActiveSession() gate gone, checkDailyLimits() block gone",
+        "Bot now trades 24/7 — scans and enters signals at any hour with no session window requirement",
+        "Hard 4-token whitelist inside scanSMC(): BTCUSDT, ETHUSDT, SOLUSDT, BNBUSDT only — all other coins filtered before analysis",
+        "Coordinator updated: now calls scanSMC() from liquidity-sweep-engine instead of trade-engine.scanAll()",
+        "trade-engine.js (TEN_CANDLE_EXTREME) remains in repo but no longer called"
+      ]
+    },
     {
       "version": "1.3.1",
       "tag": "v1.3.1",
