@@ -692,6 +692,16 @@ async function analyzeSymbol(symbol, price, kronosPredictions = null) {
     }
   }
 
+  // ── GLOBAL FILTER 6: Range position — where is price in the 20-candle range? ──
+  // Structure-based entries (HTF_SWING, SWING_REVERSAL) should enter near extremes.
+  // Pattern-based entries (VWAP_REJECTION, MOMENTUM) firing mid-range get penalised.
+  const last20 = c15.slice(-20);
+  const rangeHigh20 = Math.max(...last20.map(c => c.high));
+  const rangeLow20  = Math.min(...last20.map(c => c.low));
+  const rangeTot    = rangeHigh20 - rangeLow20;
+  // 0.0 = at the 20-candle low, 1.0 = at the 20-candle high
+  const rangePosRatio = rangeTot > 0 ? (price - rangeLow20) / rangeTot : 0.5;
+
   // ── RUN ALL 6 STRATEGIES ───────────────────────────────────
 
   const candidates = [];
@@ -726,14 +736,42 @@ async function analyzeSymbol(symbol, price, kronosPredictions = null) {
   if (candidates.length === 0) return null;
 
   // ── SCORE ALL CANDIDATES ───────────────────────────────────
-  // Base score 6 (passed global filters). Bonuses from strategy + context.
-  // SWING_REVERSAL gets base 9 — it's the most direct entry at key levels.
+  // Base scores reflect how precisely each strategy targets structural levels:
+  //   SWING_REVERSAL: 9 — enters directly AT the 15m swing low/high (most precise)
+  //   HTF_SWING:      8 — enters at 1m Higher Low / Lower High (structure-based)
+  //   Everything else: 6 — pattern-based, must earn through confirmations
+  //
+  // Range position bonus/penalty (applies to pattern strategies only):
+  //   LONG in bottom 30% of 20-candle range: +2 (buying near the low = correct)
+  //   LONG in top 60-100% (mid/high range): -4 (buying near top = wrong)
+  //   SHORT in top 30% of range: +2 (shorting near high = correct)
+  //   SHORT in bottom 0-40% (mid/low range): -4 (shorting near bottom = wrong)
+  //
+  // Structure strategies (SWING_REVERSAL, HTF_SWING, LIQ_SWEEP) already gate their
+  // own level proximity — skip the range penalty for them.
+
+  const STRUCTURE_STRATEGIES = new Set(['SWING_REVERSAL', 'HTF_SWING', 'LIQ_SWEEP']);
 
   for (const sig of candidates) {
-    let score = sig.setupName === 'SWING_REVERSAL' ? 9 : 6;
+    let score = sig.setupName === 'SWING_REVERSAL' ? 9
+              : sig.setupName === 'HTF_SWING'      ? 8
+              : 6;
     score += sig.scoreBonus || 0;
 
     const dir = sig.direction;
+
+    // Range position filter — skip for structure-based strategies that already
+    // check proximity to a specific level (they'd be at the extremes by definition)
+    if (!STRUCTURE_STRATEGIES.has(sig.setupName)) {
+      if (dir === 'LONG') {
+        if (rangePosRatio <= 0.30)      score += 2; // buying at 20c low → excellent
+        else if (rangePosRatio >= 0.60) score -= 4; // buying 60%+ into range → wrong zone
+      }
+      if (dir === 'SHORT') {
+        if (rangePosRatio >= 0.70)      score += 2; // shorting at 20c high → excellent
+        else if (rangePosRatio <= 0.40) score -= 4; // shorting 40%- into range → wrong zone
+      }
+    }
 
     // RSI bonus/penalty
     if (dir === 'LONG'  && rsi > 50 && rsi < 70) score += 1; // healthy bull RSI

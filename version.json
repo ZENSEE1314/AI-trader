@@ -1,8 +1,25 @@
 {
-  "version": "1.2.7",
+  "version": "1.2.8",
   "name": "MCT AI Trader",
   "released": "2026-04-19",
   "changelog": [
+    {
+      "version": "1.2.8",
+      "tag": "v1.2.8",
+      "date": "2026-04-19",
+      "label": "Entry precision — buy at HL bottom, not mid-range",
+      "changes": [
+        "Root cause of mid-range entries: CONSOL_REJECT, VWAP_REJECTION, MOMENTUM had no check for WHERE in the range price was — they'd fire anywhere",
+        "Global Filter 6: Range position ratio — measures where current price sits in the last 20 candles (0=low, 1=high)",
+        "LONG mid-range (60%+ into 20-candle range): -4 penalty — buying 60% into a move is wrong zone",
+        "LONG at bottom (≤30% of range): +2 bonus — buying near the low is correct",
+        "SHORT mid-range (≤40% from bottom): -4 penalty — shorting near the bottom is wrong zone",
+        "SHORT at top (≥70% of range): +2 bonus — shorting near the high is correct",
+        "Structure strategies (SWING_REVERSAL, HTF_SWING, LIQ_SWEEP) exempt from range filter — they already check level proximity internally",
+        "HTF_SWING base score raised 6→8 (structure-based, enters at 1m HL/LH = correct levels)",
+        "Score math: LONG mid-range CONSOL_REJECT = 6+3+1+2+2-4 = 10. Still passes if trend is aligned. But counter-trend mid-range = 6+3-3-1-1-4 = 0. Blocked."
+      ]
+    },
     {
       "version": "1.2.7",
       "tag": "v1.2.7",
