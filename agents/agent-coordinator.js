@@ -247,44 +247,13 @@ class AgentCoordinator extends BaseAgent {
   }
 
   async _fetchTopTokens() {
-    try {
-      this.log('[BOOT] Fetching top tokens from Binance...');
-      const fetch = require('node-fetch');
-      const res = await fetch('https://fapi.binance.com/fapi/v1/ticker/24hr', { timeout: 10000 });
-      if (res.ok) {
-        const tickers = await res.json();
-        const { query } = require('../db');
-        const bannedRows = await query('SELECT symbol FROM global_token_settings WHERE banned = true').catch(() => []);
-        const banned = new Set(bannedRows.map(r => r.symbol));
-
-        // Non-crypto pairs that should never get token agents
-        const NON_CRYPTO = new Set([
-          'XAUUSDT', 'XAGUSDT', 'EURUSDT', 'GBPUSDT', 'JPYUSDT',
-        ]);
-
-        const topCoins = tickers
-          .filter(t => t.symbol.endsWith('USDT') && !t.symbol.includes('_'))
-          .filter(t => !banned.has(t.symbol) && !NON_CRYPTO.has(t.symbol))
-          .filter(t => parseFloat(t.quoteVolume) >= 10_000_000)
-          .sort((a, b) => parseFloat(b.quoteVolume) - parseFloat(a.quoteVolume))
-          .slice(0, 10)
-          .map(t => t.symbol);
-
-        for (const sym of topCoins) {
-          if (!this.tokenAgents.has(sym)) this.addTokenAgent(sym);
-        }
-        this.log(`[BOOT] Loaded top ${topCoins.length} tokens by volume`);
-      }
-    } catch (err) {
-      this.logError(`[BOOT] Binance fetch failed: ${err.message} — trying DB fallback`);
-      try {
-        const { query } = require('../db');
-        const rows = await query('SELECT symbol FROM global_token_settings WHERE banned = false');
-        for (const r of rows) {
-          if (!this.tokenAgents.has(r.symbol)) this.addTokenAgent(r.symbol);
-        }
-      } catch {}
+    // Hard-coded to 4 allowed coins only — no dynamic top-N fetching.
+    // Previously this fetched top 10 by volume from Binance which included DOGE, XRP, PEPE etc.
+    const ALLOWED = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT'];
+    for (const sym of ALLOWED) {
+      if (!this.tokenAgents.has(sym)) this.addTokenAgent(sym);
     }
+    this.log(`[BOOT] TokenAgents created for: ${ALLOWED.join(', ')}`);
   }
 
   addTokenAgent(symbol) {
@@ -872,6 +841,14 @@ class AgentCoordinator extends BaseAgent {
         if (beforeBan > signals.length) {
           this.addActivity('info', `Filtered ${beforeBan - signals.length} globally banned token(s) from signals`);
         }
+      }
+
+      // ── Hard whitelist: only 4 coins ever proceed to execution ──
+      const COORD_WHITELIST = new Set(['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT']);
+      const beforeWhitelist = signals.length;
+      signals = signals.filter(s => COORD_WHITELIST.has(s.symbol || s.sym));
+      if (beforeWhitelist > signals.length) {
+        bLog.scan(`[Whitelist] Dropped ${beforeWhitelist - signals.length} signal(s) for non-whitelisted coins`);
       }
 
       if (signals.length > 0) {

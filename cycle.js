@@ -1361,6 +1361,14 @@ async function executeForAllUsers(pick) {
 
     const keys = allKeys;
     const sym = pick.symbol || pick.sym;
+
+    // ── HARD WHITELIST: Only 4 coins ever reach the exchange ──────────────────
+    const TRADE_WHITELIST = new Set(['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT']);
+    if (!TRADE_WHITELIST.has(sym)) {
+      bLog.trade(`BLOCKED: ${sym} is not in the 4-coin whitelist — trade cancelled`);
+      return;
+    }
+
     const userEmails = [...new Set(keys.map(k => k.email))].join(', ');
     bLog.trade(`Found ${keys.length} unique API key(s) — executing ${sym} ${pick.direction} for: ${userEmails}`);
     log(`Executing ${sym} ${pick.direction} for ${keys.length} user keys: ${userEmails}`);

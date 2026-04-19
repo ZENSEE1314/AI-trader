@@ -482,6 +482,11 @@ function stratMomentum(c15, c1) {
 // Returns the best signal (highest score) or null.
 
 async function analyzeSymbol(symbol, price, kronosPredictions = null) {
+  // Hard whitelist — reject any symbol not in the 4 allowed coins
+  if (!ALLOWED_SYMBOLS.has(symbol)) {
+    return null;
+  }
+
   // Fetch all timeframes in parallel
   const [k1h, k15m, k3m, k1m] = await Promise.all([
     fetchKlines(symbol, '1h', 210),
