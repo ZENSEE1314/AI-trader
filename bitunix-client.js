@@ -164,9 +164,19 @@ class BitunixClient {
   // ── TP/SL on existing position ──────────────────────────────
 
   async placePositionTpSl({ symbol, positionId, tpPrice, slPrice }) {
-    const body = { symbol, positionId };
-    if (tpPrice) { body.tpPrice = String(tpPrice); body.tpStopType = 'MARK_PRICE'; }
-    if (slPrice) { body.slPrice = String(slPrice); body.slStopType = 'MARK_PRICE'; }
+    const body = { symbol };
+    // positionId is required by Bitunix in hedge mode — only include if truthy
+    if (positionId) body.positionId = String(positionId);
+    if (tpPrice) {
+      body.tpPrice = String(tpPrice);
+      body.tpStopType = 'MARK_PRICE';
+      body.tpOrderType = 'MARKET';
+    }
+    if (slPrice) {
+      body.slPrice = String(slPrice);
+      body.slStopType = 'MARK_PRICE';
+      body.slOrderType = 'MARKET';
+    }
     return this._post('/api/v1/futures/tpsl/position/place_order', body);
   }
 

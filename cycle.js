@@ -2105,8 +2105,12 @@ async function syncTradeStatus() {
           }
 
           // Check trailing SL for Bitunix positions (self-healing)
+          bLog.system(`Bitunix trailing SL: checking ${trades.length} trade(s), ${openSymbols.size} live position(s): [${[...openSymbols.keys()].join(',')}]`);
           for (const trade of trades) {
             const exchangePos = openSymbols.get(trade.symbol);
+            if (!exchangePos) {
+              bLog.system(`Bitunix trailing SL: ${trade.symbol} not in openSymbols — skipping trail (position may be closed)`);
+            }
             if (exchangePos && trade.trailing_sl_last_step !== undefined) {
               const entryPrice = parseFloat(trade.entry_price);
               const isLong = trade.direction !== 'SHORT';
@@ -2293,13 +2297,16 @@ async function syncTradeStatus() {
 
               // ── Update SL on exchange (retry up to 3 times) ──
               let slUpdated = false;
+              let slLastError = '';
               for (let attempt = 1; attempt <= 3; attempt++) {
                 try {
                   const existingTp = parseFloat(trade.tp_price) || 0;
                   slUpdated = await updateStopLoss(userClient, trade.symbol, newSlPrice, null, 'bitunix', bxSlPrec, existingTp || undefined);
                   if (slUpdated) break;
+                  slLastError = 'updateStopLoss returned false';
                   bLog.error(`WATCHDOG: updateStopLoss returned false for ${trade.symbol} (attempt ${attempt}/3)`);
                 } catch (e) {
+                  slLastError = e.message;
                   bLog.error(`WATCHDOG: updateStopLoss failed for ${trade.symbol} attempt ${attempt}/3: ${e.message}`);
                   if (attempt < 3) await new Promise(r => setTimeout(r, 1000));
                 }
@@ -2321,12 +2328,13 @@ async function syncTradeStatus() {
                   `SL → \`$${newSlPrice.toFixed(bxSlPrec)}\` (${slSource})`
                 );
               } else {
-                bLog.error(`WATCHDOG ALERT: Failed to set trailing SL for ${trade.symbol} after 3 attempts!`);
+                bLog.error(`WATCHDOG ALERT: Failed to set trailing SL for ${trade.symbol} after 3 attempts! Last error: ${slLastError}`);
                 await notify(
                   `🚨 *TRAILING SL FAILED*\n` +
                   `*${trade.symbol}* ${isLong ? 'LONG' : 'SHORT'}\n` +
                   `Profit: +${(bxProfitPct*tradeLev*100).toFixed(1)}% capital\n` +
-                  `SL update FAILED 3 times!\n` +
+                  `SL=$${newSlPrice.toFixed(bxSlPrec)} (${slSource})\n` +
+                  `Error: \`${slLastError.substring(0, 150)}\`\n` +
                   `⚠️ Check position manually!`
                 );
               }
