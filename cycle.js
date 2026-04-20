@@ -2319,12 +2319,18 @@ async function syncTradeStatus() {
               const tradeEntry = parseFloat(trade.entry_price);
               const tradeSideLong = trade.direction !== 'SHORT';
 
-              // Method 1: Position history — match by symbol + side + entry price + time
+              // Method 1: Position history — strict match: entry price + closed after open
+              // MUST require entryMatch — timeMatch alone matches any recent position (wrong)
               try {
                 const positions = await bxClient.getHistoryPositions({ symbol: trade.symbol, pageSize: 50 });
                 if (positions.length > 0) {
                   bLog.system(`[SYNC] Bitunix posHistory ${trade.symbol}: ${positions.length} results, fields=${JSON.stringify(Object.keys(positions[0]))}`);
                 }
+
+                // Find best match: entry price within 0.5% AND closed after trade opened
+                // Among multiple candidates, pick the one whose close time is closest to our open time
+                let bestMatch = null;
+                let bestTimeDiff = Infinity;
                 for (const p of positions) {
                   const cp = parseFloat(p.closePrice || p.avgClosePrice || 0);
                   const ep = parseFloat(p.entryPrice || p.avgOpenPrice || 0);
@@ -2332,29 +2338,37 @@ async function syncTradeStatus() {
                   const pSideLong = pSide === 'LONG' || pSide === 'BUY';
                   const closeMs = parseInt(p.mtime || p.ctime || 0);
 
-                  // Wider tolerance (1%) — Bitunix entry can differ from our recorded price
-                  const entryMatch = ep > 0 && Math.abs(ep - tradeEntry) / tradeEntry < 0.01;
-                  const sideMatch = pSideLong === tradeSideLong;
-                  const timeMatch = !tradeOpenTime || !closeMs || closeMs > tradeOpenTime;
+                  if (cp <= 0 || p.symbol !== trade.symbol || pSideLong !== tradeSideLong) continue;
 
-                  if (cp > 0 && p.symbol === trade.symbol && sideMatch && (entryMatch || timeMatch)) {
-                    exitPrice = cp;
-                    bLog.system(`[SYNC] Bitunix posHistory MATCH: ${trade.symbol} entry=${ep} exit=${cp} side=${pSide}`);
-                    // Extract PnL — try all known Bitunix field names
-                    const fee = Math.abs(parseFloat(p.fee || 0));
-                    const funding = Math.abs(parseFloat(p.funding || 0));
-                    tradingFee = fee;      // exchange fee only
-                    fundingFee = funding;  // funding fee separately
-                    // NOTE: Bitunix realizedPNL is already net (fee + funding deducted)
-                    // Use != null (not || 0) — 0 is a valid PnL and must not be confused with missing data
-                    realizedPnl = p.realizedPNL != null ? parseFloat(p.realizedPNL) : null;
-                    found = true;
-                    bLog.system(`[SYNC] Bitunix posHistory PnL: net=${realizedPnl} fee=${fee} funding=${funding} rpnl=${p.realizedPNL}`);
-                    break;
+                  // Entry price must match within 0.5% (was 1% with OR timeMatch — too loose)
+                  const entryMatch = ep > 0 && Math.abs(ep - tradeEntry) / tradeEntry < 0.005;
+                  // Must have closed at or after our trade opened
+                  const closedAfterOpen = !tradeOpenTime || !closeMs || closeMs >= tradeOpenTime;
+
+                  if (entryMatch && closedAfterOpen) {
+                    const timeDiff = closeMs && tradeOpenTime ? Math.abs(closeMs - tradeOpenTime) : 9e12;
+                    if (timeDiff < bestTimeDiff) {
+                      bestTimeDiff = timeDiff;
+                      bestMatch = p;
+                    }
                   }
                 }
-                if (!found && positions.length > 0) {
-                  // Log why no match — dump first 3 for debugging
+
+                if (bestMatch) {
+                  const p = bestMatch;
+                  const cp = parseFloat(p.closePrice || p.avgClosePrice || 0);
+                  const ep = parseFloat(p.entryPrice || p.avgOpenPrice || 0);
+                  exitPrice = cp;
+                  bLog.system(`[SYNC] Bitunix posHistory MATCH: ${trade.symbol} entry=${ep} exit=${cp}`);
+                  const fee = Math.abs(parseFloat(p.fee || 0));
+                  const funding = Math.abs(parseFloat(p.funding || 0));
+                  tradingFee = fee;
+                  fundingFee = funding;
+                  // realizedPNL is NET (exchange already deducted fees)
+                  realizedPnl = p.realizedPNL != null ? parseFloat(p.realizedPNL) : null;
+                  found = true;
+                  bLog.system(`[SYNC] Bitunix posHistory PnL: net=${realizedPnl} fee=${fee} funding=${funding}`);
+                } else if (positions.length > 0) {
                   const sample = positions.slice(0, 3).map(p => ({
                     sym: p.symbol, side: p.side || p.positionSide, entry: p.entryPrice || p.avgOpenPrice,
                     close: p.closePrice || p.avgClosePrice, mtime: p.mtime

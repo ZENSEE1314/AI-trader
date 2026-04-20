@@ -1,8 +1,22 @@
 {
-  "version": "1.4.2",
+  "version": "1.4.3",
   "name": "MCT AI Trader",
   "released": "2026-04-20",
   "changelog": [
+    {
+      "version": "1.4.3",
+      "tag": "v1.4.3",
+      "date": "2026-04-20",
+      "label": "Fix Bitunix sync matching wrong position — entry price required",
+      "changes": [
+        "Root cause: position history match used (entryMatch OR timeMatch) — timeMatch alone matched ANY SOLUSDT LONG that closed after our trade opened",
+        "Example: SOL LONG SL hit at 83.30 (-$1.18), but sync matched a different SOL LONG that closed at 86.10 — showed as gross +$1.15 when actual was -$1.18",
+        "Fix: require entryMatch (entry price within 0.5%) AND closedAfterOpen — timeMatch alone no longer qualifies",
+        "Among multiple entry-price candidates, pick the one whose close time is closest to our trade open time",
+        "Entry tolerance tightened 1% → 0.5% — at $85 SOL, 0.5% = $0.43 (covers real slippage, rejects unrelated positions)",
+        "Result: sync now reads the correct Bitunix position, correct close price, and correct net P&L"
+      ]
+    },
     {
       "version": "1.4.2",
       "tag": "v1.4.2",
