@@ -2424,43 +2424,32 @@ async function syncTradeStatus() {
               }
             }
 
-            // Calculate PnL: use exchange realized PnL if available, otherwise compute
-            // Binance: realizedPnl = gross (before fees), so net = gross - fees
-            // Bitunix: profit/pnl fields are NET (fees already included), so net = as-is
+            // PnL calculation:
+            // Bitunix: use exchange data exactly as returned — no price math
+            //   realizedPnl = NET (exchange already deducted fees + funding)
+            //   tradingFee + fundingFee = what exchange charged
+            //   grossPnl = net + fee + funding (simple add-back, no price calculation)
+            // Binance: realizedPnl = GROSS, so net = gross - fees
+            // Fallback (no exchange data): estimate from price × qty
             let grossPnl;
             let pnlUsdt;
-            if (realizedPnl !== null) {
-              if (key.platform === 'bitunix') {
-                // Bitunix realizedPnl is NET (fees + funding already deducted by exchange)
-                pnlUsdt = parseFloat(realizedPnl.toFixed(4));
-                // Compute gross from price × qty — more accurate than realizedPnl + fee
-                // because Bitunix net can include slippage and accumulated funding not in our fee field
-                grossPnl = isLong
-                  ? parseFloat(((exitPrice - entryPrice) * qty).toFixed(4))
-                  : parseFloat(((entryPrice - exitPrice) * qty).toFixed(4));
-                // Back-calculate true total fee = gross - net
-                // Bitunix position history p.fee only has one leg; this captures BOTH legs + funding
-                const impliedCost = grossPnl - pnlUsdt;
-                if (impliedCost > 0 && impliedCost < Math.abs(grossPnl) * 5) {
-                  // Sanity check: positive cost that isn't wildly larger than the trade itself
-                  tradingFee = parseFloat(impliedCost.toFixed(4));
-                  fundingFee = 0; // already baked into tradingFee
-                }
-              } else {
-                // Binance realizedPnl is GROSS (before fees)
-                grossPnl = parseFloat(realizedPnl.toFixed(4));
-                const totalFee = tradingFee + fundingFee;
-                pnlUsdt = parseFloat((realizedPnl - totalFee).toFixed(4));
-              }
+            if (realizedPnl !== null && key.platform === 'bitunix') {
+              // Use Bitunix data as-is — no math
+              pnlUsdt   = parseFloat(realizedPnl.toFixed(4));
+              grossPnl  = parseFloat((realizedPnl + tradingFee + fundingFee).toFixed(4));
+            } else if (realizedPnl !== null) {
+              // Binance: realizedPnl is GROSS
+              grossPnl = parseFloat(realizedPnl.toFixed(4));
+              pnlUsdt  = parseFloat((realizedPnl - tradingFee - fundingFee).toFixed(4));
             } else {
+              // No exchange data — fall back to price × qty estimate
               grossPnl = isLong
                 ? parseFloat(((exitPrice - entryPrice) * qty).toFixed(4))
                 : parseFloat(((entryPrice - exitPrice) * qty).toFixed(4));
-              // Estimate fees when exchange data unavailable: ~0.06% per side (open+close)
               if (tradingFee === 0 && fundingFee === 0) {
                 const notional = exitPrice * qty;
-                tradingFee = parseFloat((notional * 0.0012).toFixed(4)); // 0.12% round trip
-                bLog.trade(`Estimated trading fee for ${trade.symbol}: $${tradingFee.toFixed(4)} (0.12% of $${notional.toFixed(2)} notional)`);
+                tradingFee = parseFloat((notional * 0.0012).toFixed(4)); // 0.12% round trip estimate
+                bLog.trade(`Estimated fee ${trade.symbol}: $${tradingFee} (0.12% of $${notional.toFixed(2)})`);
               }
               pnlUsdt = parseFloat((grossPnl - tradingFee - fundingFee).toFixed(4));
             }

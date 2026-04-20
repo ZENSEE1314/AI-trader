@@ -1,8 +1,23 @@
 {
-  "version": "1.4.3",
+  "version": "1.4.4",
   "name": "MCT AI Trader",
   "released": "2026-04-20",
   "changelog": [
+    {
+      "version": "1.4.4",
+      "tag": "v1.4.4",
+      "date": "2026-04-20",
+      "label": "Bitunix sync: use exchange data directly, no math",
+      "changes": [
+        "Removed all price-based math for Bitunix P&L — use exchange values as-is",
+        "pnlUsdt = realizedPNL exactly as Bitunix returns it (NET, fees already deducted)",
+        "tradingFee = p.fee exactly as Bitunix returns it",
+        "fundingFee = p.funding exactly as Bitunix returns it",
+        "grossPnl = realizedPNL + fee + funding (simple add-back only, no price × qty)",
+        "Binance path unchanged: realizedPnl is GROSS, net = gross - fees",
+        "Fallback (no exchange data at all): price × qty estimate with 0.12% fee estimate"
+      ]
+    },
     {
       "version": "1.4.3",
       "tag": "v1.4.3",
