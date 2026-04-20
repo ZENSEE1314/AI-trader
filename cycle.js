@@ -2415,7 +2415,6 @@ async function syncTradeStatus() {
             // Bitunix: profit/pnl fields are NET (fees already included), so net = as-is
             let grossPnl;
             let pnlUsdt;
-            const totalFee = tradingFee + fundingFee; // combined for math
             if (realizedPnl !== null) {
               if (key.platform === 'bitunix') {
                 // Bitunix realizedPnl is NET (fees + funding already deducted by exchange)
@@ -2425,9 +2424,18 @@ async function syncTradeStatus() {
                 grossPnl = isLong
                   ? parseFloat(((exitPrice - entryPrice) * qty).toFixed(4))
                   : parseFloat(((entryPrice - exitPrice) * qty).toFixed(4));
+                // Back-calculate true total fee = gross - net
+                // Bitunix position history p.fee only has one leg; this captures BOTH legs + funding
+                const impliedCost = grossPnl - pnlUsdt;
+                if (impliedCost > 0 && impliedCost < Math.abs(grossPnl) * 5) {
+                  // Sanity check: positive cost that isn't wildly larger than the trade itself
+                  tradingFee = parseFloat(impliedCost.toFixed(4));
+                  fundingFee = 0; // already baked into tradingFee
+                }
               } else {
                 // Binance realizedPnl is GROSS (before fees)
                 grossPnl = parseFloat(realizedPnl.toFixed(4));
+                const totalFee = tradingFee + fundingFee;
                 pnlUsdt = parseFloat((realizedPnl - totalFee).toFixed(4));
               }
             } else {

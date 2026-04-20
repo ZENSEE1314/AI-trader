@@ -1,8 +1,22 @@
 {
-  "version": "1.4.1",
+  "version": "1.4.2",
   "name": "MCT AI Trader",
   "released": "2026-04-20",
   "changelog": [
+    {
+      "version": "1.4.2",
+      "tag": "v1.4.2",
+      "date": "2026-04-20",
+      "label": "Fix Bitunix fee display — show true total cost not partial entry fee",
+      "changes": [
+        "Root cause of gross+$1.15/fee-$0.08/net-$0.20 inconsistency: Bitunix position history p.fee is entry-leg fee only, not round-trip",
+        "True total cost (both legs + funding + any slippage) = gross - net = $1.15 - (-$0.20) = $1.35",
+        "Fix: back-calculate implied total cost as grossPnl - pnlUsdt and store as trading_fee when Bitunix realizedPnl is available",
+        "Fee column now shows the actual total deduction — gross - fee = net will always be consistent",
+        "Sanity check: only use implied cost if it is positive and less than 5× the gross (guards against bad exchange data)",
+        "Removed stale totalFee variable that was computed before the Bitunix fee override — moved into Binance branch only where it is needed"
+      ]
+    },
     {
       "version": "1.4.1",
       "tag": "v1.4.1",
