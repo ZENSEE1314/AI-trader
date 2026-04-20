@@ -2302,38 +2302,70 @@ async function syncTradeStatus() {
                 : (entryPrice - curPrice) / entryPrice;
               bLog.trade(`Bitunix trail check: ${trade.symbol} cur=$${fmtPrice(curPrice)} entry=$${entryPrice} pricePct=${(bxProfitPct*100).toFixed(3)}% capitalPct=${(bxProfitPct*tradeLev*100).toFixed(2)}% lev=${tradeLev}x currentSL=$${currentSl.toFixed(bxSlPrec)}`);
 
-              // ── Candle-low trail: move SL to last completed 15m candle low/high ──
-              // This runs every cycle and keeps SL tight to structure as price moves.
+              // ── Bitunix trailing SL calculation ──────────────────────────────
+              // Rules:
+              //   • Only fire once profit is meaningful (>= 0.5% price from entry, i.e. ~10% capital at 20x)
+              //   • SL must be at least MIN_TRAIL_DIST below current price (Bitunix rejects closer)
+              //   • SL can never go backwards (only improves vs current SL)
+              //   • Lock in progressively more profit as price climbs
+              //
+              // Strategy: trail at TRAIL_LOCK_BEHIND (0.5% of current price) behind current price,
+              // but no closer than MIN_TRAIL_DIST.  This fires reliably and Bitunix always accepts it.
+              const MIN_TRAIL_DIST  = 0.005;  // 0.5% from current price minimum (exchange requirement)
+              const TRAIL_LOCK_PCT  = 0.008;  // lock SL 0.8% behind current price for LONG
+
               let newSlPrice = null;
               let slSource = '';
+
+              if (bxProfitPct >= 0.005) { // only trail once price is 0.5% in profit
+                const rawTrailSl = isLong
+                  ? curPrice * (1 - TRAIL_LOCK_PCT)
+                  : curPrice * (1 + TRAIL_LOCK_PCT);
+
+                // Enforce minimum distance from current price
+                const minSl = isLong
+                  ? curPrice * (1 - MIN_TRAIL_DIST)
+                  : curPrice * (1 + MIN_TRAIL_DIST);
+                const candidateSl = isLong
+                  ? Math.min(rawTrailSl, minSl)   // LONG: SL must be ≤ minSl (further from current)
+                  : Math.max(rawTrailSl, minSl);
+
+                // Must improve current SL (never go backwards)
+                const wouldImprove = isLong
+                  ? candidateSl > currentSl
+                  : candidateSl < currentSl;
+
+                if (wouldImprove) {
+                  newSlPrice = candidateSl;
+                  slSource = 'price_trail';
+                }
+              }
+
+              // ── Candle-low fallback: use 15m candle low if it's better ──
               const candleTrail = await calcCandleTrailSl(trade.symbol, isLong, currentSl);
               if (candleTrail) {
-                // Only accept if the candle SL is on the profitable side of entry
-                const isBeyondEntry = isLong
-                  ? candleTrail.newSl > entryPrice * 0.9995 // allow SL slightly below entry
-                  : candleTrail.newSl < entryPrice * 1.0005;
-                if (isBeyondEntry || bxProfitPct > 0.002) { // use candle trail once >0.2% profit
-                  newSlPrice = candleTrail.newSl;
-                  slSource = candleTrail.source;
-                }
-              }
-
-              // ── Fallback: tier-based trail if candle trail didn't improve SL ──
-              if (!newSlPrice) {
-                const userTrailPctBx = parseFloat(trade.key_trailing_sl_step) || 0;
-                const trailResult = calculateTrailingStep(entryPrice, curPrice, isLong, lastStep, tradeLev, userTrailPctBx);
-                if (trailResult) {
-                  newSlPrice = trailResult.newSlPrice;
-                  slSource = 'tier';
+                const candidateCandle = candleTrail.newSl;
+                // Candle trail must also respect minimum distance
+                const candleTooClose = isLong
+                  ? candidateCandle > curPrice * (1 - MIN_TRAIL_DIST)
+                  : candidateCandle < curPrice * (1 + MIN_TRAIL_DIST);
+                if (!candleTooClose) {
+                  const candleImproves = isLong
+                    ? candidateCandle > (newSlPrice || currentSl)
+                    : candidateCandle < (newSlPrice || currentSl);
+                  if (candleImproves && bxProfitPct > 0.002) {
+                    newSlPrice = candidateCandle;
+                    slSource = candleTrail.source;
+                  }
                 }
               }
 
               if (!newSlPrice) {
-                bLog.trade(`Bitunix trail: ${trade.symbol} newSlPrice=null (candleTrail=${!!candleTrail}, capitalPct=${(bxProfitPct*tradeLev*100).toFixed(1)}%) — skipping`);
+                bLog.trade(`Bitunix trail: ${trade.symbol} no improvement (capitalPct=${(bxProfitPct*tradeLev*100).toFixed(1)}% currentSL=$${currentSl.toFixed(bxSlPrec)}) — skipping`);
                 continue;
               }
               bLog.trade(`Bitunix trailing SL (${slSource}): ${trade.symbol} → newSL=$${newSlPrice.toFixed(bxSlPrec)}`);
-              await notify(`🔧 *Trail SL Debug*\n${trade.symbol} ${isLong ? 'LONG' : 'SHORT'}\nProfit: +${(bxProfitPct*tradeLev*100).toFixed(1)}% capital\nSetting SL → \`$${newSlPrice.toFixed(bxSlPrec)}\` (${slSource})\nentry=$${entryPrice} cur=$${curPrice.toFixed(bxSlPrec)}`);
+              await notify(`🔧 *Trail SL*\n${trade.symbol} ${isLong ? 'LONG' : 'SHORT'}\n+${(bxProfitPct*tradeLev*100).toFixed(1)}% capital\nSL → \`$${newSlPrice.toFixed(bxSlPrec)}\` (was $${currentSl.toFixed(bxSlPrec)})\ncur=$${curPrice.toFixed(bxSlPrec)}`);
 
               // ── Update SL on exchange (retry up to 3 times) ──
               let slUpdated = false;
@@ -2353,10 +2385,8 @@ async function syncTradeStatus() {
               }
 
               if (slUpdated) {
-                const tierResult = slSource === 'tier'
-                  ? calculateTrailingStep(entryPrice, curPrice, isLong, lastStep, tradeLev, 0)
-                  : null;
-                const newLastStep = tierResult ? tierResult.newLastStep : lastStep;
+                // Store current profit % as lastStep so we can track progress
+                const newLastStep = bxProfitPct * tradeLev;
                 await db.query(
                   `UPDATE trades SET trailing_sl_price = $1, trailing_sl_last_step = $2 WHERE id = $3`,
                   [newSlPrice, newLastStep, trade.id]
