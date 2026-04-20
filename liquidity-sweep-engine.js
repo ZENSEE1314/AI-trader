@@ -1377,8 +1377,10 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
   const atrPct = atr15 / price;
   if (atrPct < 0.002 || atrPct > 0.03) return null; // 0.2% - 3% ATR range
 
-  // RSI filter
-  const rsi14 = calcRSI(parsed15);
+  // RSI filter — thresholds come from active genome (strategyCfg) or defaults
+  const rsi14  = calcRSI(parsed15);
+  const RSI_OB = strategyCfg.RSI_OB || 75; // reject LONG if RSI above this
+  const RSI_OS = strategyCfg.RSI_OS || 25; // reject SHORT if RSI below this
 
   // 1h trend + EMA200 bias (PDF: "above MA200 → look long, below → look short")
   let h1Trend = 'neutral';
@@ -2068,8 +2070,16 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     bLog.scan(`${symbol}: ${b.direction} ${b.setup} BLOCKED — ${b.blocked} (1h trend=${h1Trend})`);
   }
 
+  // RSI hard filter: reject LONG if overbought, SHORT if oversold (uses genome thresholds)
+  const rsiFiltered = signals.filter(s => {
+    if (rsi14 === null) return true; // no RSI data — pass through
+    if (s.direction === 'LONG'  && rsi14 > RSI_OB) return false;
+    if (s.direction === 'SHORT' && rsi14 < RSI_OS) return false;
+    return true;
+  });
+
   // Filter: RR minimum 1.2, SL reasonable, not blocked by trend
-  const validSignals = signals.filter(s => s.rr >= 1.2 && s.slDist > 0.001 && s.slDist < 0.03 && s.score >= 0);
+  const validSignals = rsiFiltered.filter(s => s.rr >= 1.2 && s.slDist > 0.001 && s.slDist < 0.03 && s.score >= 0);
 
   if (!validSignals.length) return null;
 
@@ -2082,9 +2092,10 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
   best.score = Math.round(best.score * aiModifier * 10) / 10;
   best.aiModifier = Math.round(aiModifier * 100) / 100;
 
-  // Add leverage
+  // Add leverage — genome override takes priority, capped at 20 for safety
   const BTC_ETH = new Set(['BTCUSDT', 'ETHUSDT']);
-  best.leverage = BTC_ETH.has(symbol) ? Math.min(params.LEV_BTC_ETH || 20, 20) : Math.min(params.LEV_ALT || 20, 20);
+  const genomeLev = strategyCfg.LEVERAGE ? Math.min(strategyCfg.LEVERAGE, 20) : null;
+  best.leverage = genomeLev || (BTC_ETH.has(symbol) ? Math.min(params.LEV_BTC_ETH || 20, 20) : Math.min(params.LEV_ALT || 20, 20));
 
   // Add structure info for logging
   best.structure = {
@@ -2141,6 +2152,31 @@ async function scanSMC(log, opts = {}) {
   } catch (err) {
     bLog.error(`Quantum optimizer not available: ${err.message} — using all strategies`);
   }
+
+  // Strategy Version Manager: load active genome from settings and merge into bestParams.
+  // Activated via admin UI → /api/dashboard/strategy-versions/activate/:id
+  try {
+    const { query: dbQuery } = require('./db');
+    const genomeRow = await dbQuery(
+      `SELECT value FROM settings WHERE key = 'active_strategy_genome'`
+    );
+    if (genomeRow && genomeRow[0]) {
+      const genome = JSON.parse(genomeRow[0].value);
+      // Merge genome overrides into bestParams — engine uses these for RSI/ATR/vol thresholds
+      if (genome.rsi_ob)   bestParams.RSI_OB   = genome.rsi_ob;
+      if (genome.rsi_os)   bestParams.RSI_OS   = genome.rsi_os;
+      if (genome.atr_sl)   bestParams.ATR_SL   = genome.atr_sl;
+      if (genome.atr_tp)   bestParams.ATR_TP   = genome.atr_tp;
+      if (genome.vol_min)  bestParams.VOL_MIN  = genome.vol_min;
+      if (genome.leverage) bestParams.LEVERAGE = genome.leverage;
+      bLog.scan(
+        `[VersionMgr] Active genome loaded — ` +
+        `entry=${genome.entry_type} RSI_OB=${genome.rsi_ob} RSI_OS=${genome.rsi_os} ` +
+        `ATR_SL=${genome.atr_sl}×ATR ATR_TP=${genome.atr_tp}×ATR VOL_MIN=${genome.vol_min}× ` +
+        `L=${genome.leverage}x`
+      );
+    }
+  } catch (_) { /* no active genome or DB unavailable — use defaults */ }
 
   // BTC market trend: when BTC is clearly trending, don't fight it on alts
   let btcTrend = 'neutral';

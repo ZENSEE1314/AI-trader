@@ -10,6 +10,7 @@ const fetch = require('node-fetch');
 const { BitunixClient } = require('./bitunix-client');
 const { USDMClient } = require('binance');
 const { getFetchOptions, getBinanceRequestOptions } = require('./proxy-agent');
+const cryptoUtils = require('./crypto-utils');
 
 const INTERVAL_MS = 15 * 1000;
 const db = require('./db');
@@ -18,17 +19,10 @@ const db = require('./db');
 // In margin % = 0.08% × leverage  (e.g. 20x = 1.6%, 100x = 8%)
 const TAKER_FEE_BOTH_LEGS = 0.0008; // 0.08% of notional
 
-// Profit tier guarantees — all values in capital % (margin)
-// Gaps are wide so trades have room to breathe and not get stopped prematurely.
-// Fee floor (dynamic, computed per-trade below) is the only early trigger.
-const TRAIL_TIERS = [
-  { trigger: 0.20, sl: 0.10  }, // +20%  → lock 10%  (gap=10%)
-  { trigger: 0.35, sl: 0.22  }, // +35%  → lock 22%  (gap=13%)
-  { trigger: 0.50, sl: 0.35  }, // +50%  → lock 35%  (gap=15%)
-  { trigger: 0.70, sl: 0.55  }, // +70%  → lock 55%  (gap=15%)
-  { trigger: 0.90, sl: 0.75  }, // +90%  → lock 75%  (gap=15%)
-  { trigger: 1.20, sl: 1.05  }, // +120% → lock 105% (gap=15%)
-];
+// Continuous profit trail: SL always locks 60% of current capital profit.
+// e.g. +10% profit → SL at +6% | +50% profit → SL at +30% | +100% → SL at +60%
+// Kicks in only after profit covers fees + 1% buffer (fee floor).
+const PROFIT_LOCK_PCT = 0.60; // 60% of capital profit locked at all times
 
 function log(msg) {
   const t = new Date().toLocaleString('en-GB', { timeZone: 'Asia/Jakarta' });
@@ -56,37 +50,26 @@ async function getLivePrice(symbol) {
   }
 }
 
-// Tier-based minimum SL price — guarantees profit lock at milestone levels
-// Also enforces a FEE FLOOR: once profit > fees+1%, SL can never go below
-// entry + fees + 1% profit so you NEVER lose a cent on a winning trade.
+// Continuous trailing SL: locks 60% of current capital profit.
+// Fee floor prevents the SL from going below break-even on tiny early profits.
 function calcTierSlPrice(entryPrice, curPrice, isLong, leverage) {
-  const pricePct = isLong
+  const pricePct   = isLong
     ? (curPrice - entryPrice) / entryPrice
     : (entryPrice - curPrice) / entryPrice;
   const capitalPct = pricePct * leverage;
 
-  // Dynamic fee floor: fees (both legs) + 1% profit buffer, in capital %
-  const feesCapital   = TAKER_FEE_BOTH_LEGS * leverage; // e.g. 20x→1.6%, 100x→8%
-  const feeFloorCap   = feesCapital + 0.01;             // fees + 1% = absolute minimum lock
-  const feeFloorPrice = isLong
-    ? entryPrice * (1 + feeFloorCap / leverage)
-    : entryPrice * (1 - feeFloorCap / leverage);
+  // Fee floor: fees (both legs) + 1% buffer in capital %
+  // e.g. 20x leverage → taker fee both legs = 1.6%, floor = 2.6% capital
+  const feesCapital = TAKER_FEE_BOTH_LEGS * leverage;
+  const feeFloorCap = feesCapital + 0.01;
 
-  // Tier lookup
-  let bestSlCapital = null;
-  for (const tier of TRAIL_TIERS) {
-    if (capitalPct >= tier.trigger) bestSlCapital = tier.sl;
-  }
+  // Don't trigger until profit is above the fee floor (avoid premature locks)
+  if (capitalPct < feeFloorCap) return null;
 
-  // Apply fee floor as soon as profit covers fees+1%
-  if (capitalPct >= feeFloorCap) {
-    const feeFloorSl = feeFloorCap;
-    if (bestSlCapital === null || feeFloorSl > bestSlCapital) bestSlCapital = feeFloorSl;
-  }
+  // Lock 60% of whatever profit we have right now (never below fee floor)
+  const slCapital  = Math.max(capitalPct * PROFIT_LOCK_PCT, feeFloorCap);
+  const slPricePct = slCapital / leverage;
 
-  if (bestSlCapital === null) return null;
-
-  const slPricePct = bestSlCapital / leverage;
   return isLong
     ? entryPrice * (1 + slPricePct)
     : entryPrice * (1 - slPricePct);
@@ -179,7 +162,9 @@ async function runTrailCycle() {
     const trades = await db.query(`
       SELECT t.id, t.symbol, t.direction, t.entry_price, t.sl_price,
              t.trailing_sl_price, t.tp_price, t.leverage,
-             ak.platform, ak.api_key, ak.api_secret
+             ak.platform,
+             ak.api_key_enc, ak.iv, ak.auth_tag,
+             ak.api_secret_enc, ak.secret_iv, ak.secret_auth_tag
       FROM trades t
       JOIN api_keys ak ON ak.id = t.api_key_id
       WHERE t.status = 'OPEN' AND ak.enabled = true
@@ -189,6 +174,14 @@ async function runTrailCycle() {
 
     for (const trade of trades) {
       try {
+        // Decrypt credentials — columns are AES-GCM encrypted at rest
+        const apiKey    = cryptoUtils.decrypt(trade.api_key_enc,    trade.iv,         trade.auth_tag);
+        const apiSecret = cryptoUtils.decrypt(trade.api_secret_enc, trade.secret_iv,  trade.secret_auth_tag);
+        if (!apiKey || !apiSecret) {
+          log(`${trade.symbol}: skipping — could not decrypt API credentials`);
+          continue;
+        }
+
         const isLong     = trade.direction !== 'SHORT';
         const currentSl  = parseFloat(trade.trailing_sl_price) || parseFloat(trade.sl_price) || 0;
         const pricePrec  = inferPricePrec(trade.sl_price);
@@ -220,18 +213,18 @@ async function runTrailCycle() {
         if (!improved) continue;
 
         const source = [];
-        if (tierSl && (isLong ? tierSl > currentSl : tierSl < currentSl)) source.push(`tier(+${(capitalPct*100).toFixed(0)}%cap)`);
+        if (tierSl && (isLong ? tierSl > currentSl : tierSl < currentSl)) source.push(`60%lock(+${(capitalPct*100).toFixed(1)}%cap)`);
         if (candleSl && (isLong ? candleSl > currentSl : candleSl < currentSl)) source.push('candle');
 
         log(`${trade.symbol} ${isLong ? 'LONG' : 'SHORT'} [${source.join('+')}] SL: $${currentSl.toFixed(pricePrec)} → $${bestSl.toFixed(pricePrec)} | profit +${(capitalPct*100).toFixed(1)}% capital`);
 
         let updated = false;
         if (trade.platform === 'bitunix') {
-          const client = new BitunixClient({ apiKey: trade.api_key, apiSecret: trade.api_secret });
+          const client = new BitunixClient({ apiKey, apiSecret });
           updated = await updateSlBitunix(client, trade.symbol, bestSl, pricePrec, trade.tp_price);
         } else if (trade.platform === 'binance') {
           const client = new USDMClient(
-            { api_key: trade.api_key, api_secret: trade.api_secret },
+            { api_key: apiKey, api_secret: apiSecret },
             getBinanceRequestOptions()
           );
           updated = await updateSlBinance(client, trade.symbol, bestSl, isLong, pricePrec);
@@ -274,7 +267,9 @@ async function runOrphanGuard() {
 
     // Get all active Bitunix API keys
     const keys = await db.query(
-      `SELECT ak.id, ak.api_key, ak.api_secret, ak.leverage, u.email
+      `SELECT ak.id, ak.api_key_enc, ak.iv, ak.auth_tag,
+              ak.api_secret_enc, ak.secret_iv, ak.secret_auth_tag,
+              ak.leverage, u.email
        FROM api_keys ak
        JOIN users u ON u.id = ak.user_id
        WHERE ak.platform = 'bitunix' AND ak.enabled = true`
@@ -282,7 +277,10 @@ async function runOrphanGuard() {
 
     for (const key of keys) {
       try {
-        const client = new BitunixClient({ apiKey: key.api_key, apiSecret: key.api_secret });
+        const apiKey    = cryptoUtils.decrypt(key.api_key_enc,    key.iv,        key.auth_tag);
+        const apiSecret = cryptoUtils.decrypt(key.api_secret_enc, key.secret_iv, key.secret_auth_tag);
+        if (!apiKey || !apiSecret) continue;
+        const client = new BitunixClient({ apiKey, apiSecret });
         const raw = await Promise.race([
           client.getOpenPositions(),
           new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 6000)),
@@ -348,7 +346,7 @@ async function runOrphanGuard() {
   }
 }
 
-log('Trail watchdog started — 15s interval | 2-candle trail (0.5% min gap) + profit tier');
+log('Trail watchdog started — 15s interval | 60% profit lock + 2-candle structural trail');
 log('Orphan guard started — 2min interval | auto-close unmanaged positions > -25% capital');
 runTrailCycle();
 setInterval(runTrailCycle, INTERVAL_MS);

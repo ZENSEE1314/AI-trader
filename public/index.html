@@ -30,7 +30,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
   <link rel="stylesheet" href="/css/tokens.css">
-  <link rel="stylesheet" href="/css/style.css?v=20260420">
+  <link rel="stylesheet" href="/css/style.css?v=20260421">
 
   <link rel="icon" href="/img/logo.jpeg" type="image/jpeg">
   <style>
@@ -1660,6 +1660,7 @@
           <button class="admin-subtab" data-admintab="tokens" onclick="window.CryptoBot.switchAdminTab('tokens')" data-i18n="admin.tokens">Tokens</button>
           <button class="admin-subtab" data-admintab="settings" onclick="window.CryptoBot.switchAdminTab('settings')" data-i18n="admin.settings">Settings</button>
           <button class="admin-subtab" data-admintab="tools" onclick="window.CryptoBot.switchAdminTab('tools')" data-i18n="admin.tools">Tools</button>
+          <button class="admin-subtab" data-admintab="versions" onclick="window.CryptoBot.switchAdminTab('versions')">⚡ Versions</button>
           <button class="admin-subtab" data-admintab="email" onclick="window.CryptoBot.switchAdminTab('email')" data-i18n="admin.email">✉️ Email</button>
           <a href="/emulator.html" class="admin-subtab" style="text-decoration:none;color:inherit;display:inline-flex;align-items:center;gap:4px" target="_blank" data-i18n="admin.tradingfloor">🎮 Trading Floor</a>
         </nav>
@@ -2017,6 +2018,86 @@
         </div><!-- /admin-tab-tools -->
 
         <!-- ═══════════════════════════════════════════
+             TAB: ⚡ Versions — Strategy Version Manager
+             ═══════════════════════════════════════════ -->
+        <div id="admin-tab-versions" class="admin-tab-panel hidden">
+
+          <!-- Header bar -->
+          <div style="display:flex;align-items:center;gap:var(--space-3);flex-wrap:wrap;margin-bottom:var(--space-3);">
+            <div>
+              <h3 style="margin:0;font-size:1rem;color:var(--color-text);">⚡ Strategy Version Manager</h3>
+              <p style="margin:2px 0 0;font-size:0.78rem;color:var(--color-text-muted);">Save optimizer runs as named versions. Activate the best one for live trading.</p>
+            </div>
+            <div style="margin-left:auto;display:flex;gap:var(--space-2);flex-wrap:wrap;align-items:center;">
+              <button class="btn btn-sm" id="versions-scan-btn"
+                style="background:linear-gradient(135deg,#d4af37,#b8962e);color:#000;font-weight:700;font-size:0.8rem;"
+                onclick="window.CryptoBot.scanStrategyVersions()">
+                🔍 Scan &amp; Save All Results
+              </button>
+              <button class="btn btn-ghost btn-sm" style="font-size:0.8rem;" onclick="window.CryptoBot.loadStrategyVersions()">↺ Refresh</button>
+              <button class="btn btn-ghost btn-sm" id="versions-deactivate-btn" style="font-size:0.8rem;color:#ef4444;display:none;"
+                onclick="window.CryptoBot.deactivateStrategyVersion()">✕ Deactivate</button>
+            </div>
+          </div>
+
+          <!-- Stats banner -->
+          <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:var(--space-2);margin-bottom:var(--space-3);">
+            <div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-md);padding:var(--space-2) var(--space-3);text-align:center;">
+              <div style="font-size:1.4rem;font-weight:700;color:var(--color-accent);" id="stat-total-versions">—</div>
+              <div style="font-size:0.72rem;color:var(--color-text-muted);">Versions Saved</div>
+            </div>
+            <div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-md);padding:var(--space-2) var(--space-3);text-align:center;">
+              <div style="font-size:1.4rem;font-weight:700;color:#22c55e;" id="stat-best-wr">—</div>
+              <div style="font-size:0.72rem;color:var(--color-text-muted);">Best WR</div>
+            </div>
+            <div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-md);padding:var(--space-2) var(--space-3);text-align:center;">
+              <div style="font-size:1.4rem;font-weight:700;color:#f59e0b;" id="stat-80plus">—</div>
+              <div style="font-size:0.72rem;color:var(--color-text-muted);">80%+ WR Found</div>
+            </div>
+            <div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-md);padding:var(--space-2) var(--space-3);text-align:center;overflow:hidden;">
+              <div style="font-size:0.9rem;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" id="stat-active-name">None</div>
+              <div style="font-size:0.72rem;color:var(--color-text-muted);">Active Version</div>
+            </div>
+          </div>
+
+          <!-- Status message -->
+          <div id="versions-msg" style="display:none;padding:var(--space-2) var(--space-3);border-radius:var(--radius-md);font-size:0.82rem;margin-bottom:var(--space-3);"></div>
+
+          <!-- Versions table -->
+          <div style="overflow-x:auto;border-radius:var(--radius-lg);border:1px solid var(--color-border-muted);">
+            <table style="width:100%;border-collapse:collapse;font-size:0.78rem;">
+              <thead>
+                <tr style="background:var(--color-bg-raised);border-bottom:1px solid var(--color-border-muted);">
+                  <th style="padding:10px 12px;text-align:left;color:var(--color-text-muted);font-weight:600;">Name</th>
+                  <th style="padding:10px 12px;text-align:right;color:var(--color-text-muted);font-weight:600;white-space:nowrap;">WR %</th>
+                  <th style="padding:10px 12px;text-align:right;color:var(--color-text-muted);font-weight:600;">Trades</th>
+                  <th style="padding:10px 12px;text-align:right;color:var(--color-text-muted);font-weight:600;">PF</th>
+                  <th style="padding:10px 12px;text-align:right;color:var(--color-text-muted);font-weight:600;white-space:nowrap;">Return %</th>
+                  <th style="padding:10px 12px;text-align:right;color:var(--color-text-muted);font-weight:600;white-space:nowrap;">Max DD</th>
+                  <th style="padding:10px 12px;text-align:right;color:var(--color-text-muted);font-weight:600;">Fitness</th>
+                  <th style="padding:10px 12px;text-align:center;color:var(--color-text-muted);font-weight:600;">Action</th>
+                </tr>
+              </thead>
+              <tbody id="versions-tbody">
+                <tr><td colspan="8" style="padding:24px;text-align:center;color:var(--color-text-muted);">
+                  Click <strong>Scan &amp; Save All Results</strong> to load optimizer versions.
+                </td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <!-- Genome inspector panel (hidden until user clicks "View") -->
+          <div id="versions-genome-panel" style="display:none;margin-top:var(--space-3);background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-3);">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--space-2);">
+              <strong style="font-size:0.85rem;color:var(--color-text);">📋 Genome Parameters</strong>
+              <button onclick="document.getElementById('versions-genome-panel').style.display='none'"
+                style="background:none;border:none;color:var(--color-text-muted);cursor:pointer;font-size:1rem;">✕</button>
+            </div>
+            <div id="versions-genome-content" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:var(--space-2);"></div>
+          </div>
+        </div><!-- /admin-tab-versions -->
+
+        <!-- ═══════════════════════════════════════════
              TAB: Email
              ═══════════════════════════════════════════ -->
         <div id="admin-tab-email" class="admin-tab-panel hidden" style="padding:4px 0;">
@@ -2205,7 +2286,7 @@ EMAIL_FROM=MCT &lt;a83c06001@smtp-brevo.com&gt;</pre>
     </div>
   </div>
 
-  <script src="/js/app.js?v=20260420" defer></script>
+  <script src="/js/app.js?v=20260421" defer></script>
   <!-- Email tab patch: inline so it works regardless of JS cache (HTML is never cached) -->
   <script>
     document.addEventListener('DOMContentLoaded', function() {
@@ -2215,13 +2296,14 @@ EMAIL_FROM=MCT &lt;a83c06001@smtp-brevo.com&gt;</pre>
         document.querySelectorAll('.admin-subtab').forEach(function(btn) {
           btn.classList.toggle('active', btn.dataset.admintab === tab);
         });
-        var panels = ['earnings', 'users', 'tokens', 'settings', 'tools', 'email'];
+        var panels = ['earnings', 'users', 'tokens', 'settings', 'tools', 'versions', 'email'];
         panels.forEach(function(p) {
           var el = document.getElementById('admin-tab-' + p);
           if (el) el.classList.toggle('hidden', p !== tab);
         });
         if (tab === 'earnings' && window.CryptoBot && window.CryptoBot.loadAdmin) window.CryptoBot.loadAdmin();
         if (tab === 'email' && window.CryptoBot && window.CryptoBot.checkEmailSmtp) window.CryptoBot.checkEmailSmtp().catch(function(){});
+        if (tab === 'versions' && window.CryptoBot && window.CryptoBot.loadStrategyVersions) window.CryptoBot.loadStrategyVersions();
       }
       // Wait for CryptoBot to be defined (app.js is deferred)
       var tries = 0;
@@ -2234,6 +2316,188 @@ EMAIL_FROM=MCT &lt;a83c06001@smtp-brevo.com&gt;</pre>
       }, 100);
     });
   </script>
+  <!-- ── Strategy Version Manager JS ───────────────────────────────── -->
+  <script>
+  (function() {
+    var _activeVersionId = null;
+
+    function showVersionMsg(msg, isErr) {
+      var el = document.getElementById('versions-msg');
+      if (!el) return;
+      el.textContent = msg;
+      el.style.display = 'block';
+      el.style.background = isErr ? 'rgba(239,68,68,0.1)' : 'rgba(34,197,94,0.1)';
+      el.style.border     = isErr ? '1px solid rgba(239,68,68,0.3)' : '1px solid rgba(34,197,94,0.3)';
+      el.style.color      = isErr ? '#f87171' : '#86efac';
+    }
+
+    function renderVersions(versions, activeId) {
+      _activeVersionId = activeId;
+      var tbody = document.getElementById('versions-tbody');
+      if (!tbody) return;
+
+      // Stats
+      var total80 = versions.filter(function(v){ return parseFloat(v.win_rate) >= 80; }).length;
+      var bestWR  = versions.length ? parseFloat(versions[0].win_rate) : 0;
+      var el;
+      if ((el = document.getElementById('stat-total-versions'))) el.textContent = versions.length;
+      if ((el = document.getElementById('stat-best-wr')))       el.textContent = versions.length ? bestWR.toFixed(1) + '%' : '—';
+      if ((el = document.getElementById('stat-80plus')))        el.textContent = total80;
+
+      var activeVer = versions.find(function(v){ return v.id === activeId; });
+      if ((el = document.getElementById('stat-active-name'))) {
+        if (activeVer) {
+          el.textContent = activeVer.name.replace(/^[🏆⭐✅·]\s*/,'').substring(0,30);
+          el.style.color = '#d4af37';
+        } else {
+          el.textContent = 'None';
+          el.style.color = '';
+        }
+      }
+
+      // Deactivate button visibility
+      var deBtn = document.getElementById('versions-deactivate-btn');
+      if (deBtn) deBtn.style.display = activeId ? 'inline-flex' : 'none';
+
+      if (!versions.length) {
+        tbody.innerHTML = '<tr><td colspan="8" style="padding:24px;text-align:center;color:var(--color-text-muted);">No versions saved yet. Click <strong>Scan &amp; Save All Results</strong>.</td></tr>';
+        return;
+      }
+
+      tbody.innerHTML = versions.map(function(v) {
+        var wr   = parseFloat(v.win_rate)      || 0;
+        var pf   = parseFloat(v.profit_factor) || 0;
+        var ret  = parseFloat(v.total_return)  || 0;
+        var dd   = parseFloat(v.max_drawdown)  || 0;
+        var fit  = parseFloat(v.fitness)       || 0;
+        var isAct = v.id === activeId;
+
+        var wrColor = wr >= 80 ? '#d4af37' : wr >= 70 ? '#22c55e' : wr >= 60 ? '#86efac' : '#94a3b8';
+        var rowBg   = isAct ? 'rgba(212,175,55,0.08)' : (wr >= 80 ? 'rgba(212,175,55,0.04)' : 'transparent');
+        var badge   = isAct ? '<span style="background:#d4af37;color:#000;font-size:0.62rem;font-weight:700;padding:2px 6px;border-radius:4px;margin-left:4px;">LIVE</span>' : '';
+
+        return '<tr style="background:' + rowBg + ';border-bottom:1px solid var(--color-border-muted);">' +
+          '<td style="padding:8px 12px;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' +
+            '<span style="color:' + wrColor + ';">' + (v.name || '—') + '</span>' + badge +
+          '</td>' +
+          '<td style="padding:8px 12px;text-align:right;font-weight:700;color:' + wrColor + ';">' + wr.toFixed(1) + '%</td>' +
+          '<td style="padding:8px 12px;text-align:right;color:var(--color-text-muted);">' + (v.total_trades || 0) + '</td>' +
+          '<td style="padding:8px 12px;text-align:right;color:var(--color-text-muted);">' + pf.toFixed(2) + '</td>' +
+          '<td style="padding:8px 12px;text-align:right;color:' + (ret >= 0 ? '#22c55e' : '#ef4444') + ';">' + (ret >= 0 ? '+' : '') + ret.toFixed(1) + '%</td>' +
+          '<td style="padding:8px 12px;text-align:right;color:#ef4444;">' + dd.toFixed(1) + '%</td>' +
+          '<td style="padding:8px 12px;text-align:right;color:var(--color-text-muted);">' + fit.toFixed(1) + '</td>' +
+          '<td style="padding:8px 12px;text-align:center;white-space:nowrap;">' +
+            '<button onclick="window.CryptoBot.viewVersionGenome(' + JSON.stringify(JSON.stringify(v.genome)) + ')" ' +
+              'style="background:none;border:1px solid var(--color-border-muted);border-radius:4px;color:var(--color-text-muted);font-size:0.7rem;padding:3px 7px;cursor:pointer;margin-right:4px;">📋</button>' +
+            (isAct
+              ? '<span style="font-size:0.7rem;color:#d4af37;font-weight:700;">Active</span>'
+              : '<button onclick="window.CryptoBot.activateStrategyVersion(' + v.id + ')" ' +
+                  'style="background:linear-gradient(135deg,#d4af37,#b8962e);color:#000;border:none;border-radius:4px;font-size:0.7rem;padding:3px 10px;font-weight:700;cursor:pointer;">Activate</button>'
+            ) +
+          '</td>' +
+        '</tr>';
+      }).join('');
+    }
+
+    async function loadStrategyVersions() {
+      try {
+        var r = await fetch('/api/dashboard/strategy-versions');
+        var d = await r.json();
+        if (d.error) { showVersionMsg(d.error, true); return; }
+        renderVersions(d.versions || [], d.active_id);
+      } catch(e) {
+        showVersionMsg('Failed to load versions: ' + e.message, true);
+      }
+    }
+
+    async function scanStrategyVersions() {
+      var btn = document.getElementById('versions-scan-btn');
+      if (btn) { btn.textContent = '⏳ Scanning...'; btn.disabled = true; }
+      try {
+        var r = await fetch('/api/dashboard/strategy-versions/scan', { method: 'POST' });
+        var d = await r.json();
+        if (d.error) { showVersionMsg(d.error, true); }
+        else {
+          showVersionMsg(d.message + (d.best ? ' Best: ' + d.best.name : ''), false);
+          await loadStrategyVersions();
+        }
+      } catch(e) {
+        showVersionMsg('Scan failed: ' + e.message, true);
+      } finally {
+        if (btn) { btn.textContent = '🔍 Scan & Save All Results'; btn.disabled = false; }
+      }
+    }
+
+    async function activateStrategyVersion(id) {
+      try {
+        var r = await fetch('/api/dashboard/strategy-versions/activate/' + id, { method: 'POST' });
+        var d = await r.json();
+        if (d.error) { showVersionMsg(d.error, true); return; }
+        showVersionMsg('✅ Activated: ' + (d.activated && d.activated.name ? d.activated.name : 'version ' + id), false);
+        await loadStrategyVersions();
+      } catch(e) {
+        showVersionMsg('Activate failed: ' + e.message, true);
+      }
+    }
+
+    async function deactivateStrategyVersion() {
+      try {
+        var r = await fetch('/api/dashboard/strategy-versions/deactivate', { method: 'POST' });
+        var d = await r.json();
+        if (d.error) { showVersionMsg(d.error, true); return; }
+        showVersionMsg('Deactivated — bot reverted to default engine parameters.', false);
+        await loadStrategyVersions();
+      } catch(e) {
+        showVersionMsg('Deactivate failed: ' + e.message, true);
+      }
+    }
+
+    function viewVersionGenome(genomeStr) {
+      try {
+        var g = typeof genomeStr === 'string' ? JSON.parse(genomeStr) : genomeStr;
+        var panel = document.getElementById('versions-genome-panel');
+        var content = document.getElementById('versions-genome-content');
+        if (!panel || !content) return;
+        var labels = {
+          ema_fast:'EMA Fast', ema_slow:'EMA Slow', ema_trend:'EMA Trend',
+          rsi_period:'RSI Period', rsi_ob:'RSI Overbought', rsi_os:'RSI Oversold',
+          atr_period:'ATR Period', atr_sl:'ATR SL ×', atr_tp:'ATR TP ×',
+          vol_min:'Volume Min ×', leverage:'Leverage', entry_type:'Entry Type',
+          session:'Session', trend_align:'Trend Align'
+        };
+        content.innerHTML = Object.entries(g).map(function(kv) {
+          return '<div style="background:var(--color-bg-base);border:1px solid var(--color-border-muted);border-radius:var(--radius-sm);padding:var(--space-2);">' +
+            '<div style="font-size:0.68rem;color:var(--color-text-muted);margin-bottom:2px;">' + (labels[kv[0]] || kv[0]) + '</div>' +
+            '<div style="font-size:0.85rem;font-weight:600;color:var(--color-text);font-family:var(--font-mono);">' + kv[1] + '</div>' +
+          '</div>';
+        }).join('');
+        panel.style.display = 'block';
+      } catch(e) { console.error('viewVersionGenome:', e); }
+    }
+
+    // Attach to CryptoBot once it's ready
+    var attInterval = setInterval(function() {
+      if (window.CryptoBot) {
+        window.CryptoBot.loadStrategyVersions     = loadStrategyVersions;
+        window.CryptoBot.scanStrategyVersions     = scanStrategyVersions;
+        window.CryptoBot.activateStrategyVersion  = activateStrategyVersion;
+        window.CryptoBot.deactivateStrategyVersion= deactivateStrategyVersion;
+        window.CryptoBot.viewVersionGenome        = viewVersionGenome;
+        clearInterval(attInterval);
+      }
+      // If CryptoBot never loads, still expose them globally
+      if (!window._versionsAttached) {
+        window._versionsAttached = true;
+        window.loadStrategyVersions     = loadStrategyVersions;
+        window.scanStrategyVersions     = scanStrategyVersions;
+        window.activateStrategyVersion  = activateStrategyVersion;
+        window.deactivateStrategyVersion= deactivateStrategyVersion;
+        window.viewVersionGenome        = viewVersionGenome;
+      }
+    }, 200);
+  })();
+  </script>
+
   <script src="/js/i18n.js" defer></script>
   <script src="/js/cashwallet-fix.js" defer></script>
   <script>

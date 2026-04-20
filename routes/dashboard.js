@@ -1438,4 +1438,218 @@ router.get('/debug/bitunix-positions', async (req, res) => {
   }
 });
 
+// ── Strategy Version Manager ──────────────────────────────────────────────────
+// Saves optimizer results as named "versions" — browse, compare, and activate
+// the best genome for live trading. Admin-only write operations.
+
+async function ensureVersionsTable() {
+  try {
+    await query(`
+      CREATE TABLE IF NOT EXISTS strategy_versions (
+        id            SERIAL PRIMARY KEY,
+        name          VARCHAR(200) NOT NULL,
+        genome        JSONB        NOT NULL,
+        win_rate      DECIMAL(8,4),
+        profit_factor DECIMAL(8,4),
+        total_return  DECIMAL(12,4),
+        max_drawdown  DECIMAL(8,4),
+        expectancy    DECIMAL(12,4),
+        sharpe        DECIMAL(8,4),
+        total_trades  INTEGER,
+        wins          INTEGER,
+        losses        INTEGER,
+        fitness       DECIMAL(12,4),
+        source        VARCHAR(50)  DEFAULT 'optimizer',
+        symbols       TEXT,
+        is_active     BOOLEAN      DEFAULT FALSE,
+        activated_at  TIMESTAMPTZ,
+        created_at    TIMESTAMPTZ  DEFAULT NOW()
+      )
+    `);
+  } catch (_) {}
+}
+
+// GET /api/dashboard/strategy-versions
+router.get('/strategy-versions', async (req, res) => {
+  try {
+    await ensureVersionsTable();
+    const rows = await query(
+      `SELECT * FROM strategy_versions ORDER BY win_rate DESC NULLS LAST, fitness DESC NULLS LAST`
+    );
+    const setting = await query(
+      `SELECT value FROM settings WHERE key = 'active_strategy_version_id'`
+    ).catch(() => []);
+    const activeId = setting[0] ? parseInt(setting[0].value) : null;
+    res.json({ versions: rows, active_id: activeId });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/dashboard/strategy-versions/scan
+// Reads ALL strategy_search_results, deduplicates by genome, saves top 100 as versions.
+// 80%+ WR ones are labelled 🏆 and get priority.
+router.post('/strategy-versions/scan', async (req, res) => {
+  try {
+    const adminCheck = await query(`SELECT is_admin FROM users WHERE id = $1`, [req.userId]);
+    if (!adminCheck[0]?.is_admin) return res.status(403).json({ error: 'Admin only' });
+
+    await ensureVersionsTable();
+
+    // Check if there's anything to scan
+    const countRow = await query(
+      `SELECT COUNT(*) AS total FROM strategy_search_results WHERE total_trades >= 5`
+    ).catch(() => [{ total: '0' }]);
+    if (parseInt(countRow[0]?.total) === 0) {
+      return res.json({
+        saved: 0,
+        message: 'No optimizer results found yet. Start the optimizer and let it run first.',
+      });
+    }
+
+    // Group by genome, average metrics across all symbols tested
+    const rows = await query(`
+      SELECT
+        genome,
+        ROUND(AVG(win_rate)::numeric,      4) AS avg_wr,
+        ROUND(AVG(profit_factor)::numeric,  4) AS avg_pf,
+        ROUND(AVG(total_return)::numeric,   4) AS avg_return,
+        ROUND(AVG(max_drawdown)::numeric,   4) AS avg_dd,
+        ROUND(AVG(expectancy)::numeric,     4) AS avg_exp,
+        ROUND(AVG(sharpe)::numeric,         4) AS avg_sharpe,
+        ROUND(AVG(fitness)::numeric,        4) AS avg_fitness,
+        ROUND(AVG(total_trades)::numeric,   0) AS avg_trades,
+        ROUND(AVG(wins)::numeric,           0) AS avg_wins,
+        ROUND(AVG(losses)::numeric,         0) AS avg_losses,
+        string_agg(DISTINCT symbol, ',')        AS symbols,
+        COUNT(*)                                AS result_count
+      FROM strategy_search_results
+      WHERE total_trades >= 5
+      GROUP BY genome
+      ORDER BY avg_wr DESC, avg_fitness DESC
+      LIMIT 100
+    `);
+
+    // Replace all optimizer-sourced versions (keep any manually created ones)
+    await query(`DELETE FROM strategy_versions WHERE source = 'optimizer'`);
+
+    let saved = 0;
+    for (let i = 0; i < rows.length; i++) {
+      const r   = rows[i];
+      const g   = typeof r.genome === 'string' ? JSON.parse(r.genome) : r.genome;
+      const wr  = parseFloat(r.avg_wr) || 0;
+      const pf  = parseFloat(r.avg_pf) || 0;
+      const fit = parseFloat(r.avg_fitness) || 0;
+
+      const medal = wr >= 80 ? '🏆' : wr >= 70 ? '⭐' : wr >= 60 ? '✅' : '·';
+      const name  = `${medal} v${i + 1} — WR ${wr.toFixed(1)}% | ${g.entry_type} L${g.leverage}x | PF ${pf.toFixed(2)}`;
+
+      await query(`
+        INSERT INTO strategy_versions
+          (name, genome, win_rate, profit_factor, total_return, max_drawdown,
+           expectancy, sharpe, total_trades, wins, losses, fitness, source, symbols)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'optimizer',$13)
+      `, [
+        name,
+        JSON.stringify(g),
+        wr,
+        pf,
+        parseFloat(r.avg_return)  || 0,
+        parseFloat(r.avg_dd)      || 0,
+        parseFloat(r.avg_exp)     || 0,
+        parseFloat(r.avg_sharpe)  || 0,
+        parseInt(r.avg_trades)    || 0,
+        parseInt(r.avg_wins)      || 0,
+        parseInt(r.avg_losses)    || 0,
+        fit,
+        r.symbols || 'BTC/ETH/SOL/BNB',
+      ]);
+      saved++;
+    }
+
+    const best = await query(
+      `SELECT id, name, win_rate FROM strategy_versions ORDER BY win_rate DESC LIMIT 1`
+    ).catch(() => []);
+
+    res.json({
+      saved,
+      best: best[0] || null,
+      message: `Saved ${saved} versions. Best WR: ${best[0] ? parseFloat(best[0].win_rate).toFixed(1) + '%' : 'N/A'}`,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/dashboard/strategy-versions/activate/:id
+// Sets a version as active and writes genome to settings for the engine to pick up.
+router.post('/strategy-versions/activate/:id', async (req, res) => {
+  try {
+    const adminCheck = await query(`SELECT is_admin FROM users WHERE id = $1`, [req.userId]);
+    if (!adminCheck[0]?.is_admin) return res.status(403).json({ error: 'Admin only' });
+
+    const vId = parseInt(req.params.id);
+    if (!vId || isNaN(vId)) return res.status(400).json({ error: 'Invalid version id' });
+
+    await ensureVersionsTable();
+    const ver = await query(`SELECT * FROM strategy_versions WHERE id = $1`, [vId]);
+    if (!ver.length) return res.status(404).json({ error: 'Version not found' });
+
+    // Clear all active flags, then set this one
+    await query(`UPDATE strategy_versions SET is_active = FALSE, activated_at = NULL`);
+    await query(
+      `UPDATE strategy_versions SET is_active = TRUE, activated_at = NOW() WHERE id = $1`,
+      [vId]
+    );
+
+    // Write genome to settings so the engine reads it on next scan
+    const genomeStr = JSON.stringify(ver[0].genome);
+    await query(`
+      INSERT INTO settings (key, value) VALUES ('active_strategy_version_id', $1)
+      ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+    `, [String(vId)]);
+    await query(`
+      INSERT INTO settings (key, value) VALUES ('active_strategy_genome', $1)
+      ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+    `, [genomeStr]);
+
+    res.json({ ok: true, activated: { id: vId, name: ver[0].name, win_rate: ver[0].win_rate } });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/dashboard/strategy-versions/deactivate
+// Removes the active version, engine reverts to defaults.
+router.post('/strategy-versions/deactivate', async (req, res) => {
+  try {
+    const adminCheck = await query(`SELECT is_admin FROM users WHERE id = $1`, [req.userId]);
+    if (!adminCheck[0]?.is_admin) return res.status(403).json({ error: 'Admin only' });
+
+    await ensureVersionsTable();
+    await query(`UPDATE strategy_versions SET is_active = FALSE, activated_at = NULL`);
+    await query(
+      `DELETE FROM settings WHERE key IN ('active_strategy_version_id','active_strategy_genome')`
+    );
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// DELETE /api/dashboard/strategy-versions/:id
+router.delete('/strategy-versions/:id', async (req, res) => {
+  try {
+    const adminCheck = await query(`SELECT is_admin FROM users WHERE id = $1`, [req.userId]);
+    if (!adminCheck[0]?.is_admin) return res.status(403).json({ error: 'Admin only' });
+
+    const vId = parseInt(req.params.id);
+    await ensureVersionsTable();
+    await query(`DELETE FROM strategy_versions WHERE id = $1`, [vId]);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 module.exports = router;
