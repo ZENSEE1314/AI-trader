@@ -170,12 +170,12 @@
     }
     else if (tab === 'logs') startLogPolling();
     else if (tab === 'profile') loadProfile();
-    else if (tab === 'admin') loadAdmin();
+    else if (tab === 'admin') { loadAdmin(); startAdminRefresh(); }
 
     // Stop polling when leaving tabs
     if (tab !== 'logs') stopLogPolling();
     if (tab !== 'dashboard') stopDashboardRefresh();
-    // Admin tab no longer has MC panel — no timer needed
+    if (tab !== 'admin') stopAdminRefresh();
   }
 
   // ----- Auth -----
@@ -324,6 +324,20 @@
 
   function stopDashboardRefresh() {
     if (dashboardTimer) { clearInterval(dashboardTimer); dashboardTimer = null; }
+  }
+
+  // ----- Admin Panel Auto-Refresh -----
+
+  let adminRefreshTimer = null;
+  const ADMIN_REFRESH_MS = 30000; // 30 seconds — keeps trade counts + PnL live
+
+  function startAdminRefresh() {
+    stopAdminRefresh();
+    adminRefreshTimer = setInterval(loadAdmin, ADMIN_REFRESH_MS);
+  }
+
+  function stopAdminRefresh() {
+    if (adminRefreshTimer) { clearInterval(adminRefreshTimer); adminRefreshTimer = null; }
   }
 
   // ----- Dashboard -----
