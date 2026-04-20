@@ -79,7 +79,8 @@ function getProvider(complexity = 'low') {
   if (process.env.ANTHROPIC_API_KEY) {
     if (!anthropicClient) {
       const Anthropic = require('@anthropic-ai/sdk');
-      anthropicClient = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+      // Trim key — Railway env vars can have trailing newlines that cause 400 errors
+      anthropicClient = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY.trim() });
     }
     return 'anthropic';
   }
@@ -172,8 +173,8 @@ async function think(opts) {
   if (soul) fullSystem = `${soul.substring(0, 600)}\n\n${fullSystem}`;
   // Team memory — shared learnings from all agents (larger cap = smarter decisions)
   if (teamMemory) fullSystem += `\n\n${teamMemory.substring(0, 800)}`;
-  // Agent-specific memory — this agent's personal experience
-  if (agentMemory) fullSystem += `\n\n${agentMemory}`;
+  // Agent-specific memory — this agent's personal experience (capped to keep prompt clean)
+  if (agentMemory) fullSystem += `\n\n${agentMemory.substring(0, 600)}`;
   // Available skills — agent knows what tools are available
   if (skillsPrompt) fullSystem += `\n\n${skillsPrompt.substring(0, 400)}`;
   // Hard cap — Google Gemini rejects system instructions > ~4000 chars with a 400 error.
@@ -272,7 +273,7 @@ async function think(opts) {
     if (err.message?.includes('429') || err.message?.includes('quota')) {
       return `I'm being rate limited by ${provider === 'google' ? 'Google' : 'Anthropic'}. Please wait 30 seconds and try again.`;
     }
-    return `I'm having a momentary brain-freeze (AI Error: ${err.message.substring(0, 50)}). Please try asking me again in a few seconds!`;
+    return `I'm having a momentary brain-freeze (AI Error: ${err.message.substring(0, 200)}). Please try asking me again in a few seconds!`;
   }
 }
 
@@ -296,22 +297,24 @@ async function thinkGoogle(agentName, systemPrompt, userMessage) {
 }
 
 async function thinkAnthropic(agentName, systemPrompt, userMessage) {
-  let model = process.env.AGENT_AI_MODEL || 'claude-3-5-sonnet-20241022';
-  // Guard: reject Ollama model names (e.g. gemma3:4b, qwen2.5:7b, phi3) — they cause Anthropic 404
+  // Always use a known-good model — ignore env var if it looks like an Ollama model name
+  const envModel = (process.env.AGENT_AI_MODEL || '').trim();
   const ANTHROPIC_PREFIXES = ['claude-3', 'claude-2', 'claude-'];
-  if (!ANTHROPIC_PREFIXES.some(p => model.startsWith(p))) {
-    model = 'claude-3-5-sonnet-20241022';
-  }
+  const model = ANTHROPIC_PREFIXES.some(p => envModel.startsWith(p))
+    ? envModel
+    : 'claude-3-haiku-20240307'; // cheapest + fastest Anthropic model — reliable fallback
 
   // Guard: Anthropic 400s on empty/whitespace content
-  const safeSystem  = (systemPrompt  || '').trim() || 'You are a helpful assistant.';
-  const safeMessage = (userMessage   || '').trim() || 'Hello';
+  // Strip all non-printable control characters except \n and \t that could cause 400
+  const clean = (s) => (s || '').replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '').trim();
+  const safeSystem  = clean(systemPrompt)  || 'You are a helpful assistant.';
+  const safeMessage = clean(userMessage)   || 'Hello';
 
-  console.log(`[AI Brain] ${agentName} thinking with Anthropic ${model}...`);
+  console.log(`[AI Brain] ${agentName} thinking with Anthropic ${model} (sys=${safeSystem.length}chars)...`);
 
   const response = await anthropicClient.messages.create({
     model,
-    max_tokens: 1000,
+    max_tokens: 800,
     system: safeSystem,
     messages: [{ role: 'user', content: safeMessage }],
   });

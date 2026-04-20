@@ -1154,6 +1154,46 @@ class AgentCoordinator extends BaseAgent {
       return this._handleCreateAgent(text, message);
     }
 
+    // ── Strategy list — no AI needed ──
+    if (/\b(strat|strategy|strategies|setup|setups|how.*trade|what.*trade|method|signal.*type|type.*signal)\b/.test(text)) {
+      return { from: 'ChartAgent', message: [
+        '**Active Trading Strategies (9 total)**\n',
+        '**1. LIQUIDITY_SWEEP** — Detects fakeouts below lows / above highs.',
+        '   Price sweeps a level then snaps back → enter in reversal direction.',
+        '',
+        '**2. STOP_LOSS_HUNT** — Catches stop hunts at key zones.',
+        '   Price briefly breaks a support/resistance, triggers stops, then reverses.',
+        '',
+        '**3. MOMENTUM_SCALP** — Pin bar failure → momentum entry.',
+        '   A failed pin bar (doji/wick) closes with body → enter with the momentum.',
+        '',
+        '**4. BRR_FIBO** — Break-Retest-Rejection + Fibonacci.',
+        '   Price breaks a level, retests it, rejects → enter on the rejection.',
+        '   Fib levels 0.382 / 0.5 / 0.618 used for TP targets.',
+        '',
+        '**5. SMC_HL_STRUCTURE** — Smart Money Concepts higher-low structure.',
+        '   Zeiierman curved band detects HL→HL (LONG) or LH→LH (SHORT) on 15m.',
+        '',
+        '**6. SMC_CLASSIC** — Classic SMC 15m→3m→1m confirmation.',
+        '   Triple timeframe swing structure alignment before entry.',
+        '',
+        '**7. BOS_SHORT** — Break of Structure SHORT.',
+        '   Price breaks below 20-candle support + LH LH on 1m + volume spike.',
+        '   Fires at the START of the breakdown, not after it completes.',
+        '',
+        '**8. BOS_LONG** — Break of Structure LONG.',
+        '   Price breaks above 20-candle resistance + HL HL on 1m + volume spike.',
+        '   Fires at the START of the breakout.',
+        '',
+        '**9. RESIST_REJECT** — Resistance Rejection SHORT. *(New)*',
+        '   Price in top 8% of range + shooting star candle OR 2/3 bearish 1m candles.',
+        '   Catches the SHORT AT THE TOP before the break. RSI > 55 required.',
+        '',
+        'All strategies require MIN_SCORE ≥ 8 and pass RSI + volume + trend filters.',
+        'Tokens scanned: BTCUSDT, ETHUSDT, SOLUSDT, BNBUSDT (24/7)',
+      ].join('\n') };
+    }
+
     // Remove/fire agent
     const removeMatch = text.match(/(?:remove|delete|fire|kill|drop)\s+(?:agent\s+)?(\w+)/);
     if (removeMatch) {
