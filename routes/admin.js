@@ -1779,6 +1779,27 @@ router.get('/ai-versions', async (req, res) => {
   }
 });
 
+// POST /api/admin/ai-versions/activate-manual
+// Activates a set of params typed directly in the backtest UI (no saved version needed).
+router.post('/ai-versions/activate-manual', async (req, res) => {
+  try {
+    const adminCheck = await query(`SELECT is_admin FROM users WHERE id = $1`, [req.userId]);
+    if (!adminCheck[0]?.is_admin) return res.status(403).json({ error: 'Admin only' });
+
+    const { name, params } = req.body;
+    if (!params || typeof params !== 'object') return res.status(400).json({ error: 'params required' });
+
+    await query(
+      `INSERT INTO settings (key, value) VALUES ('active_ai_version', $1)
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+      [JSON.stringify({ version: name || 'Manual', ...params })]
+    );
+    res.json({ ok: true, version: name || 'Manual', params });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/admin/ai-versions/active — returns the currently active version params (or null)
 router.get('/ai-versions/active', async (req, res) => {
   try {
@@ -1798,24 +1819,79 @@ router.post('/backtest', async (req, res) => {
     const fetch = require('node-fetch');
     const { getFetchOptions } = require('../proxy-agent');
 
-    // All settings from request body (with sensible defaults)
-    const TOP_N = Math.min(parseInt(req.body.topN) || 100, 200);
-    const WALLET_START = parseFloat(req.body.wallet) || 1000;
-    const RISK_PCT = Math.min(parseFloat(req.body.riskPct) || 0.10, 1);
-    const MAX_POS = parseInt(req.body.maxPositions) || 3;
-    const SL_PCT = parseFloat(req.body.slPct) || 0.03;
-    const TP_PCT = parseFloat(req.body.tpPct) || 0;          // 0 = no fixed TP, trailing only
-    const TRAIL_FIRST = parseFloat(req.body.trailStep) || 0.012;
-    const TRAIL_STEP = TRAIL_FIRST;                           // same step size
-    const MAX_LEVERAGE = parseInt(req.body.leverage) || 20;
-    const MAX_CONSEC_LOSS = parseInt(req.body.maxConsecLoss) ?? 2;  // 0 = unlimited
-    const SWING = { '4h': 10, '1h': 10, '15m': 10, '1m': 5 };
-    const PROXIMITY = 0.003;
+    // ── Risk & Position Management ───────────────────────────────────────────
+    const TOP_N         = Math.min(parseInt(req.body.topN) || 100, 200);
+    const WALLET_START  = parseFloat(req.body.wallet) || 1000;
+    const RISK_PCT      = Math.min(parseFloat(req.body.riskPct) || 0.10, 1);
+    const MAX_POS       = parseInt(req.body.maxPositions) || 3;
+    const SL_PCT        = parseFloat(req.body.slPct) || 0.03;
+    const TP_PCT        = parseFloat(req.body.tpPct) || 0;   // 0 = no fixed TP, trailing only
+    const TRAIL_FIRST   = parseFloat(req.body.trailStep) || 0.012;
+    const TRAIL_STEP    = TRAIL_FIRST;
+    const MAX_LEVERAGE  = parseInt(req.body.leverage) || 20;
+    const MAX_CONSEC_LOSS = parseInt(req.body.maxConsecLoss) ?? 2;
 
-    const STRATEGY = req.body.strategy || 'full';   // full | noKeyLevel | noHTF | momentum | relaxedHTF | volumeSpike
-    const DAYS = Math.min(parseInt(req.body.days) || 7, 30);
-    const REVERSE = req.body.reverse === true;
-    const endTime = Date.now();
+    // ── Structure Analysis ────────────────────────────────────────────────────
+    // Swing lookback: how many candles left+right define a swing high/low
+    const SWING = {
+      '4h':  parseInt(req.body.swing4h)  || 10,
+      '1h':  parseInt(req.body.swing1h)  || 10,
+      '15m': parseInt(req.body.swing15m) || 10,
+      '1m':  parseInt(req.body.swing1m)  || 5,
+    };
+    // Proximity to key level (PDH/PDL/VWAP) — % of price
+    const PROXIMITY       = parseFloat(req.body.proximity)       || 0.003;
+    // 1m entry freshness — max candles ago the swing extreme can be
+    const ENTRY_FRESH     = parseInt(req.body.entryFresh)        || 25;
+    // Daily candle body/range ratio — below this = doji/indecision, skip
+    const DAILY_BODY_RATIO = parseFloat(req.body.dailyBodyRatio) || 0.30;
+
+    // ── RSI Filter ────────────────────────────────────────────────────────────
+    // rsiPeriod = 0 → disabled
+    const RSI_PERIOD = parseInt(req.body.rsiPeriod) ?? 14;
+    const RSI_OB     = parseFloat(req.body.rsiOb)   || 75;   // reject LONG if RSI > this
+    const RSI_OS     = parseFloat(req.body.rsiOs)   || 25;   // reject SHORT if RSI < this
+
+    // ── EMA Filter ────────────────────────────────────────────────────────────
+    // emaFast = 0 → EMA filter disabled
+    const EMA_FAST  = parseInt(req.body.emaFast)  || 0;
+    const EMA_SLOW  = parseInt(req.body.emaSlow)  || 21;
+    const EMA_TREND = parseInt(req.body.emaTrend) || 50;   // 0 = skip trend filter
+
+    // ── Volume Filter ─────────────────────────────────────────────────────────
+    // volMult = 0 → disabled; e.g. 1.5 = entry candle must be 1.5× avg volume
+    const VOL_MULT = parseFloat(req.body.volMult) || 0;
+
+    const STRATEGY = req.body.strategy || 'full';
+    const DAYS     = Math.min(parseInt(req.body.days) || 7, 30);
+    const REVERSE  = req.body.reverse === true;
+    const endTime  = Date.now();
+
+    // ── Indicator helpers ─────────────────────────────────────────────────────
+    function calcRSI(closes, period) {
+      if (closes.length < period + 1) return null;
+      let avgGain = 0, avgLoss = 0;
+      for (let i = 1; i <= period; i++) {
+        const d = closes[i] - closes[i - 1];
+        if (d > 0) avgGain += d; else avgLoss -= d;
+      }
+      avgGain /= period; avgLoss /= period;
+      for (let i = period + 1; i < closes.length; i++) {
+        const d = closes[i] - closes[i - 1];
+        avgGain = (avgGain * (period - 1) + Math.max(d, 0)) / period;
+        avgLoss = (avgLoss * (period - 1) + Math.max(-d, 0)) / period;
+      }
+      if (avgLoss === 0) return 100;
+      return 100 - (100 / (1 + avgGain / avgLoss));
+    }
+
+    function calcEMA(closes, period) {
+      if (closes.length < period) return null;
+      const k = 2 / (period + 1);
+      let ema = closes.slice(0, period).reduce((s, v) => s + v, 0) / period;
+      for (let i = period; i < closes.length; i++) ema = closes[i] * k + ema * (1 - k);
+      return ema;
+    }
 
     // Per-token leverage from admin settings
     const leverageMap = {};
@@ -2031,7 +2107,7 @@ router.post('/backtest', async (req, res) => {
             if (!prevDay) continue;
             const dOpen = parseFloat(prevDay[1]), dClose = parseFloat(prevDay[4]);
             const dHigh = parseFloat(prevDay[2]), dLow = parseFloat(prevDay[3]);
-            if ((dHigh-dLow) > 0 && (Math.abs(dClose-dOpen)/(dHigh-dLow)) < 0.3) continue;
+            if ((dHigh-dLow) > 0 && (Math.abs(dClose-dOpen)/(dHigh-dLow)) < DAILY_BODY_RATIO) continue;
             const bias = dClose > dOpen ? 'bullish' : 'bearish';
             if (k4h.length < 30 || k1h.length < 30) continue;
             const s4h = getStruct(k4h, SWING['4h']), s1h = getStruct(k1h, SWING['1h']);
@@ -2047,7 +2123,7 @@ router.post('/backtest', async (req, res) => {
             const s1 = getStruct(k1, SWING['1m']);
             if ((dir==='LONG'&&!s1.hasHL)||(dir==='SHORT'&&!s1.hasLH)) continue;
             const es = dir==='LONG'?s1.lastLow:s1.lastHigh;
-            if (!es||(k1.length-1-es.index)>25) continue;
+            if (!es||(k1.length-1-es.index)>ENTRY_FRESH) continue;
           }
 
           // ══════════════════════════════════════════════════════
@@ -2058,7 +2134,7 @@ router.post('/backtest', async (req, res) => {
             if (!prevDay) continue;
             const dOpen = parseFloat(prevDay[1]), dClose = parseFloat(prevDay[4]);
             const dHigh = parseFloat(prevDay[2]), dLow = parseFloat(prevDay[3]);
-            if ((dHigh-dLow) > 0 && (Math.abs(dClose-dOpen)/(dHigh-dLow)) < 0.3) continue;
+            if ((dHigh-dLow) > 0 && (Math.abs(dClose-dOpen)/(dHigh-dLow)) < DAILY_BODY_RATIO) continue;
             const bias = dClose > dOpen ? 'bullish' : 'bearish';
             if (k4h.length < 30 || k1h.length < 30) continue;
             const s4h = getStruct(k4h, SWING['4h']), s1h = getStruct(k1h, SWING['1h']);
@@ -2073,7 +2149,7 @@ router.post('/backtest', async (req, res) => {
             const s1 = getStruct(k1, SWING['1m']);
             if ((dir==='LONG'&&!s1.hasHL)||(dir==='SHORT'&&!s1.hasLH)) continue;
             const es = dir==='LONG'?s1.lastLow:s1.lastHigh;
-            if (!es||(k1.length-1-es.index)>25) continue;
+            if (!es||(k1.length-1-es.index)>ENTRY_FRESH) continue;
           }
 
           // ══════════════════════════════════════════════════════
@@ -2084,7 +2160,7 @@ router.post('/backtest', async (req, res) => {
             if (!prevDay) continue;
             const dOpen = parseFloat(prevDay[1]), dClose = parseFloat(prevDay[4]);
             const dHigh = parseFloat(prevDay[2]), dLow = parseFloat(prevDay[3]);
-            if ((dHigh-dLow) > 0 && (Math.abs(dClose-dOpen)/(dHigh-dLow)) < 0.3) continue;
+            if ((dHigh-dLow) > 0 && (Math.abs(dClose-dOpen)/(dHigh-dLow)) < DAILY_BODY_RATIO) continue;
             const bias = dClose > dOpen ? 'bullish' : 'bearish';
             dir = bias === 'bullish' ? 'LONG' : 'SHORT';
             // Skip 4H+1H — go straight to 15M
@@ -2094,7 +2170,7 @@ router.post('/backtest', async (req, res) => {
             const s1 = getStruct(k1, SWING['1m']);
             if ((dir==='LONG'&&!s1.hasHL)||(dir==='SHORT'&&!s1.hasLH)) continue;
             const es = dir==='LONG'?s1.lastLow:s1.lastHigh;
-            if (!es||(k1.length-1-es.index)>25) continue;
+            if (!es||(k1.length-1-es.index)>ENTRY_FRESH) continue;
           }
 
           // ══════════════════════════════════════════════════════
@@ -2116,7 +2192,7 @@ router.post('/backtest', async (req, res) => {
             const s1 = getStruct(k1, SWING['1m']);
             if ((dir==='LONG'&&!s1.hasHL)||(dir==='SHORT'&&!s1.hasLH)) continue;
             const es = dir==='LONG'?s1.lastLow:s1.lastHigh;
-            if (!es||(k1.length-1-es.index)>25) continue;
+            if (!es||(k1.length-1-es.index)>ENTRY_FRESH) continue;
           }
 
           // ══════════════════════════════════════════════════════
@@ -2127,7 +2203,7 @@ router.post('/backtest', async (req, res) => {
             if (!prevDay) continue;
             const dOpen = parseFloat(prevDay[1]), dClose = parseFloat(prevDay[4]);
             const dHigh = parseFloat(prevDay[2]), dLow = parseFloat(prevDay[3]);
-            if ((dHigh-dLow) > 0 && (Math.abs(dClose-dOpen)/(dHigh-dLow)) < 0.3) continue;
+            if ((dHigh-dLow) > 0 && (Math.abs(dClose-dOpen)/(dHigh-dLow)) < DAILY_BODY_RATIO) continue;
             const bias = dClose > dOpen ? 'bullish' : 'bearish';
             if (k4h.length < 30 || k1h.length < 30) continue;
             const s4h = getStruct(k4h, SWING['4h']), s1h = getStruct(k1h, SWING['1h']);
@@ -2147,7 +2223,7 @@ router.post('/backtest', async (req, res) => {
             const s1 = getStruct(k1, SWING['1m']);
             if ((dir==='LONG'&&!s1.hasHL)||(dir==='SHORT'&&!s1.hasLH)) continue;
             const es = dir==='LONG'?s1.lastLow:s1.lastHigh;
-            if (!es||(k1.length-1-es.index)>25) continue;
+            if (!es||(k1.length-1-es.index)>ENTRY_FRESH) continue;
           }
 
           // ══════════════════════════════════════════════════════
@@ -2158,7 +2234,7 @@ router.post('/backtest', async (req, res) => {
             if (!prevDay) continue;
             const dOpen = parseFloat(prevDay[1]), dClose = parseFloat(prevDay[4]);
             const dHigh = parseFloat(prevDay[2]), dLow = parseFloat(prevDay[3]);
-            if ((dHigh-dLow) > 0 && (Math.abs(dClose-dOpen)/(dHigh-dLow)) < 0.3) continue;
+            if ((dHigh-dLow) > 0 && (Math.abs(dClose-dOpen)/(dHigh-dLow)) < DAILY_BODY_RATIO) continue;
             const bias = dClose > dOpen ? 'bullish' : 'bearish';
             if (k4h.length < 30 || k1h.length < 30) continue;
             const s4h = getStruct(k4h, SWING['4h']), s1h = getStruct(k1h, SWING['1h']);
@@ -2179,12 +2255,49 @@ router.post('/backtest', async (req, res) => {
             const s1 = getStruct(k1, SWING['1m']);
             if ((dir==='LONG'&&!s1.hasHL)||(dir==='SHORT'&&!s1.hasLH)) continue;
             const es = dir==='LONG'?s1.lastLow:s1.lastHigh;
-            if (!es||(k1.length-1-es.index)>25) continue;
+            if (!es||(k1.length-1-es.index)>ENTRY_FRESH) continue;
           }
 
           else { continue; } // unknown strategy
 
           if (REVERSE) dir = dir === 'LONG' ? 'SHORT' : 'LONG';
+
+          // ── Shared indicator filters (apply to every strategy) ────────────
+          const closes15 = k15.slice(-Math.max(RSI_PERIOD + 20, EMA_TREND + 5, 55)).map(k => parseFloat(k[4]));
+
+          // RSI filter — reject overbought LONGs and oversold SHORTs
+          if (RSI_PERIOD > 0) {
+            const rsi = calcRSI(closes15, RSI_PERIOD);
+            if (rsi !== null) {
+              if (dir === 'LONG'  && rsi > RSI_OB) continue;
+              if (dir === 'SHORT' && rsi < RSI_OS) continue;
+            }
+          }
+
+          // EMA filter — fast must be above slow for LONG (momentum alignment)
+          if (EMA_FAST > 0) {
+            const emaFast = calcEMA(closes15, EMA_FAST);
+            const emaSlow = calcEMA(closes15, EMA_SLOW);
+            if (emaFast !== null && emaSlow !== null) {
+              if (dir === 'LONG'  && emaFast < emaSlow) continue;
+              if (dir === 'SHORT' && emaFast > emaSlow) continue;
+            }
+            // Trend EMA — price must be on correct side of trend line
+            if (EMA_TREND > 0) {
+              const emaTrend = calcEMA(closes15, EMA_TREND);
+              if (emaTrend !== null) {
+                if (dir === 'LONG'  && price < emaTrend) continue;
+                if (dir === 'SHORT' && price > emaTrend) continue;
+              }
+            }
+          }
+
+          // Volume filter — last 15m candle must be VOL_MULT × 20-bar average
+          if (VOL_MULT > 0 && k15.length >= 21) {
+            const vols = k15.slice(-21).map(k => parseFloat(k[5]));
+            const avgVol = vols.slice(0, 20).reduce((a, b) => a + b, 0) / 20;
+            if (avgVol > 0 && vols[20] / avgVol < VOL_MULT) continue;
+          }
 
           // Step 6: Risk — per-token leverage from admin settings, SL scaled to leverage
           const leverage = leverageMap[sym] || MAX_LEVERAGE;
@@ -2262,8 +2375,19 @@ router.post('/backtest', async (req, res) => {
       strategyName: STRATEGY_NAMES[STRATEGY] || STRATEGY,
       reverse: REVERSE,
       coinsScanned: Object.keys(coinData).length,
-      settings: { slPct: SL_PCT, tpPct: TP_PCT, trailStep: TRAIL_FIRST, leverage: MAX_LEVERAGE,
-        riskPct: RISK_PCT, maxPositions: MAX_POS, maxConsecLoss: MAX_CONSEC_LOSS, wallet: WALLET_START, topN: TOP_N },
+      settings: {
+        // Risk & position management
+        slPct: SL_PCT, tpPct: TP_PCT, trailStep: TRAIL_FIRST, leverage: MAX_LEVERAGE,
+        riskPct: RISK_PCT, maxPositions: MAX_POS, maxConsecLoss: MAX_CONSEC_LOSS, wallet: WALLET_START, topN: TOP_N,
+        // Structure analysis
+        swing4h: SWING['4h'], swing1h: SWING['1h'], swing15m: SWING['15m'], swing1m: SWING['1m'],
+        proximity: PROXIMITY, entryFresh: ENTRY_FRESH, dailyBodyRatio: DAILY_BODY_RATIO,
+        // Indicator filters
+        rsiPeriod: RSI_PERIOD, rsiOb: RSI_OB, rsiOs: RSI_OS,
+        emaFast: EMA_FAST, emaSlow: EMA_SLOW, emaTrend: EMA_TREND,
+        volMult: VOL_MULT,
+        strategy: STRATEGY,
+      },
       dataPoints: {
         k4h: firstData?.k4h?.length || 0, k1h: firstData?.k1h?.length || 0,
         k15m: firstData?.k15?.length || 0, k1m: firstData?.k1?.length || 0,

@@ -1964,7 +1964,8 @@
                 <button class="btn btn-ghost btn-sm" onclick="window.CryptoBot.deactivateVersion()" style="font-size:0.75rem;color:var(--color-text-muted);" title="Revert bot to default hardcoded settings">✕ Clear</button>
               </div>
             </div>
-            <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:var(--space-2);margin-bottom:var(--space-3);">
+            <!-- ── Risk & Position Management ── -->
+            <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:var(--space-2);margin-bottom:var(--space-3);">
               <div class="form-group" style="margin-bottom:0;">
                 <label class="form-label" style="font-size:0.75rem;">Days</label>
                 <select id="backtest-days" class="form-input" style="font-size:0.8rem;">
@@ -1984,7 +1985,7 @@
                 <input class="form-input text-mono" type="number" id="bt-sl" min="0.5" max="10" step="0.1" value="3.0" style="font-size:0.8rem;">
               </div>
               <div class="form-group" style="margin-bottom:0;">
-                <label class="form-label" style="font-size:0.75rem;">TP %</label>
+                <label class="form-label" style="font-size:0.75rem;">TP % (0=trail)</label>
                 <input class="form-input text-mono" type="number" id="bt-tp" min="0" max="20" step="0.1" value="0" style="font-size:0.8rem;">
               </div>
               <div class="form-group" style="margin-bottom:0;">
@@ -2012,6 +2013,91 @@
                 <input class="form-input text-mono" type="number" id="bt-wallet" min="100" max="100000" step="100" value="1000" style="font-size:0.8rem;">
               </div>
             </div>
+
+            <!-- ── Structure Analysis (collapsible) ── -->
+            <details style="margin-bottom:var(--space-2);border:1px solid var(--color-border-muted);border-radius:var(--radius-md);padding:var(--space-2) var(--space-3);">
+              <summary style="cursor:pointer;font-size:0.82rem;font-weight:600;color:var(--color-text);user-select:none;">📐 Structure Analysis <span style="font-size:0.72rem;color:var(--color-text-muted);font-weight:400;">(swing lookback, key level proximity, entry freshness)</span></summary>
+              <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:var(--space-2);margin-top:var(--space-2);">
+                <div class="form-group" style="margin-bottom:0;">
+                  <label class="form-label" style="font-size:0.72rem;">Swing 4H candles</label>
+                  <input class="form-input text-mono" type="number" id="bt-swing4h" min="3" max="30" step="1" value="10" style="font-size:0.8rem;" title="How many candles left+right define a 4H swing high/low">
+                </div>
+                <div class="form-group" style="margin-bottom:0;">
+                  <label class="form-label" style="font-size:0.72rem;">Swing 1H candles</label>
+                  <input class="form-input text-mono" type="number" id="bt-swing1h" min="3" max="30" step="1" value="10" style="font-size:0.8rem;">
+                </div>
+                <div class="form-group" style="margin-bottom:0;">
+                  <label class="form-label" style="font-size:0.72rem;">Swing 15M candles</label>
+                  <input class="form-input text-mono" type="number" id="bt-swing15m" min="3" max="30" step="1" value="10" style="font-size:0.8rem;">
+                </div>
+                <div class="form-group" style="margin-bottom:0;">
+                  <label class="form-label" style="font-size:0.72rem;">Swing 1M candles</label>
+                  <input class="form-input text-mono" type="number" id="bt-swing1m" min="2" max="20" step="1" value="5" style="font-size:0.8rem;">
+                </div>
+                <div class="form-group" style="margin-bottom:0;">
+                  <label class="form-label" style="font-size:0.72rem;">Key Level Prox %</label>
+                  <input class="form-input text-mono" type="number" id="bt-proximity" min="0.1" max="2" step="0.05" value="0.3" style="font-size:0.8rem;" title="How close price must be to PDH/PDL/VWAP to count as 'at key level'">
+                </div>
+                <div class="form-group" style="margin-bottom:0;">
+                  <label class="form-label" style="font-size:0.72rem;">Entry Freshness (1M)</label>
+                  <input class="form-input text-mono" type="number" id="bt-entry-fresh" min="5" max="60" step="1" value="25" style="font-size:0.8rem;" title="Max candles ago the 1M swing extreme can be — lower = fresher entries only">
+                </div>
+                <div class="form-group" style="margin-bottom:0;">
+                  <label class="form-label" style="font-size:0.72rem;">Daily Body Ratio</label>
+                  <input class="form-input text-mono" type="number" id="bt-daily-body" min="0.05" max="0.8" step="0.05" value="0.30" style="font-size:0.8rem;" title="Min candle body/range ratio — below this is a doji, day is skipped">
+                </div>
+              </div>
+            </details>
+
+            <!-- ── RSI Filter (collapsible) ── -->
+            <details style="margin-bottom:var(--space-2);border:1px solid var(--color-border-muted);border-radius:var(--radius-md);padding:var(--space-2) var(--space-3);">
+              <summary style="cursor:pointer;font-size:0.82rem;font-weight:600;color:var(--color-text);user-select:none;">📊 RSI Filter <span style="font-size:0.72rem;color:var(--color-text-muted);font-weight:400;">(period 0 = disabled)</span></summary>
+              <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:var(--space-2);margin-top:var(--space-2);">
+                <div class="form-group" style="margin-bottom:0;">
+                  <label class="form-label" style="font-size:0.72rem;">RSI Period (0=off)</label>
+                  <input class="form-input text-mono" type="number" id="bt-rsi-period" min="0" max="50" step="1" value="14" style="font-size:0.8rem;" title="RSI lookback period. Set to 0 to disable RSI filtering.">
+                </div>
+                <div class="form-group" style="margin-bottom:0;">
+                  <label class="form-label" style="font-size:0.72rem;">Overbought (skip LONG)</label>
+                  <input class="form-input text-mono" type="number" id="bt-rsi-ob" min="50" max="95" step="1" value="75" style="font-size:0.8rem;">
+                </div>
+                <div class="form-group" style="margin-bottom:0;">
+                  <label class="form-label" style="font-size:0.72rem;">Oversold (skip SHORT)</label>
+                  <input class="form-input text-mono" type="number" id="bt-rsi-os" min="5" max="50" step="1" value="25" style="font-size:0.8rem;">
+                </div>
+              </div>
+            </details>
+
+            <!-- ── EMA Filter (collapsible) ── -->
+            <details style="margin-bottom:var(--space-2);border:1px solid var(--color-border-muted);border-radius:var(--radius-md);padding:var(--space-2) var(--space-3);">
+              <summary style="cursor:pointer;font-size:0.82rem;font-weight:600;color:var(--color-text);user-select:none;">📈 EMA Filter <span style="font-size:0.72rem;color:var(--color-text-muted);font-weight:400;">(EMA Fast 0 = disabled)</span></summary>
+              <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:var(--space-2);margin-top:var(--space-2);">
+                <div class="form-group" style="margin-bottom:0;">
+                  <label class="form-label" style="font-size:0.72rem;">EMA Fast (0=off)</label>
+                  <input class="form-input text-mono" type="number" id="bt-ema-fast" min="0" max="50" step="1" value="0" style="font-size:0.8rem;" title="Fast EMA period. Set to 0 to disable EMA trend filter.">
+                </div>
+                <div class="form-group" style="margin-bottom:0;">
+                  <label class="form-label" style="font-size:0.72rem;">EMA Slow</label>
+                  <input class="form-input text-mono" type="number" id="bt-ema-slow" min="2" max="200" step="1" value="21" style="font-size:0.8rem;" title="Slow EMA — LONG needs fast > slow, SHORT needs fast < slow">
+                </div>
+                <div class="form-group" style="margin-bottom:0;">
+                  <label class="form-label" style="font-size:0.72rem;">EMA Trend (0=off)</label>
+                  <input class="form-input text-mono" type="number" id="bt-ema-trend" min="0" max="500" step="1" value="50" style="font-size:0.8rem;" title="Trend EMA — price must be above for LONG, below for SHORT. 0 = skip.">
+                </div>
+              </div>
+            </details>
+
+            <!-- ── Volume Filter (collapsible) ── -->
+            <details style="margin-bottom:var(--space-3);border:1px solid var(--color-border-muted);border-radius:var(--radius-md);padding:var(--space-2) var(--space-3);">
+              <summary style="cursor:pointer;font-size:0.82rem;font-weight:600;color:var(--color-text);user-select:none;">📦 Volume Filter <span style="font-size:0.72rem;color:var(--color-text-muted);font-weight:400;">(0 = disabled)</span></summary>
+              <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:var(--space-2);margin-top:var(--space-2);">
+                <div class="form-group" style="margin-bottom:0;">
+                  <label class="form-label" style="font-size:0.72rem;">Vol Multiplier (0=off)</label>
+                  <input class="form-input text-mono" type="number" id="bt-vol-mult" min="0" max="5" step="0.1" value="0" style="font-size:0.8rem;" title="Entry candle volume must be this × 20-bar average. 0 = disabled. 1.5 = 50% above average.">
+                </div>
+              </div>
+            </details>
+
             <div style="display:flex;gap:var(--space-2);flex-wrap:wrap;align-items:center;">
               <button class="btn btn-primary btn-sm" onclick="window.CryptoBot.runBacktest('strict', false)">Run Backtest</button>
               <button class="btn btn-ghost btn-sm" onclick="window.CryptoBot.runBacktest('strict', true)">Reverse</button>

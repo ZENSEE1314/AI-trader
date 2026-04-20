@@ -2444,17 +2444,7 @@
         const opt = sel.options[sel.selectedIndex];
         const raw = opt?.getAttribute('data-params');
         if (!raw) return;
-        try {
-          const p = JSON.parse(raw);
-          if (p.sl_pct != null) $('#bt-sl').value = (parseFloat(p.sl_pct) * 100).toFixed(1);
-          if (p.tp_pct != null) $('#bt-tp').value = (parseFloat(p.tp_pct) * 100).toFixed(1);
-          if (p.trailing_step != null) $('#bt-trail').value = (parseFloat(p.trailing_step) * 100).toFixed(1);
-          if (p.leverage != null) $('#bt-leverage').value = parseInt(p.leverage);
-          if (p.risk_pct != null) $('#bt-risk').value = (parseFloat(p.risk_pct) * 100).toFixed(0);
-          if (p.max_positions != null) $('#bt-maxpos').value = parseInt(p.max_positions);
-          if (p.max_consec_loss != null) $('#bt-consec').value = parseInt(p.max_consec_loss);
-          if (p.top_n_coins != null) $('#bt-topn').value = parseInt(p.top_n_coins);
-        } catch {}
+        try { applyBacktestParams(JSON.parse(raw)); } catch {}
       };
       // Show active version banner if one is set
       try {
@@ -2480,22 +2470,39 @@
     }
   }
 
-  // Activate a backtest version for live trading
+  // Activate current backtest UI settings for live trading.
+  // Works two ways:
+  //   1. Version selected in dropdown → activate that saved version + overlay current UI params
+  //   2. No version selected → save current UI params as a new "manual" version and activate
   async function activateVersionForTrading() {
-    const sel = $('#bt-ai-version');
-    if (!sel || !sel.value) {
-      showToast('Select a version from the dropdown first', 'error');
-      return;
-    }
-    const opt = sel.options[sel.selectedIndex];
-    const label = opt.textContent;
-    const btn = $('#btn-activate-version');
+    const sel     = $('#bt-ai-version');
+    const versionId = sel?.value || null;
+    const btn     = $('#btn-activate-version');
     if (btn) { btn.disabled = true; btn.textContent = 'Activating…'; }
     try {
-      const result = await api('POST', `/api/admin/ai-versions/${sel.value}/activate`);
+      const uiParams = collectBacktestParams();
+
+      let result;
+      if (versionId) {
+        // Named version — activate it, then patch with any UI overrides
+        result = await api('POST', `/api/admin/ai-versions/${versionId}/activate`, { uiOverride: uiParams });
+      } else {
+        // No version selected — save current settings as a new "Manual" version and activate
+        const name = `Manual ${new Date().toISOString().slice(0, 16).replace('T', ' ')}`;
+        result = await api('POST', '/api/dashboard/strategy-versions/custom', {
+          name,
+          genome: uiParams,
+          activateAfterSave: true,
+        });
+        // Also write to active_ai_version settings via admin endpoint
+        await api('POST', '/api/admin/ai-versions/activate-manual', { name, params: uiParams });
+        result = { ok: true, version: name, params: uiParams };
+      }
+
       if (result.ok) {
-        showToast(`✅ ${result.version} is now live — bot will use these params on next trade`, 'success');
-        updateActiveVersionBanner(result.params ? { version: result.version, ...result.params } : null);
+        showToast(`✅ Settings activated — bot uses these params on next trade`, 'success');
+        const displayParams = result.params || uiParams;
+        updateActiveVersionBanner({ version: result.version || 'Manual', ...displayParams });
       }
     } catch (err) {
       showToast('Activate failed: ' + err.message, 'error');
@@ -2518,30 +2525,85 @@
   window.CryptoBot.activateVersionForTrading = activateVersionForTrading;
   window.CryptoBot.deactivateVersion = deactivateVersion;
 
-  async function runBacktest(mode, reverse) {
-    const days = parseInt($('#backtest-days')?.value) || 7;
-    const slPct = parseFloat($('#bt-sl')?.value) || 3;
-    const tpPct = parseFloat($('#bt-tp')?.value) || 0;
-    const trailStep = parseFloat($('#bt-trail')?.value) || 1.2;
-    const leverage = parseInt($('#bt-leverage')?.value) || 20;
-    const riskPct = parseInt($('#bt-risk')?.value) || 10;
-    const maxPositions = parseInt($('#bt-maxpos')?.value) || 3;
-    const maxConsecLoss = parseInt($('#bt-consec')?.value) ?? 2;
-    const wallet = parseInt($('#bt-wallet')?.value) || 1000;
-    const topN = parseInt($('#bt-topn')?.value) || 100;
+  // Collect all backtest params from the UI — shared by runBacktest and activateVersionForTrading
+  function collectBacktestParams() {
+    return {
+      // Risk & position management
+      days:          parseInt($('#backtest-days')?.value) || 7,
+      slPct:         parseFloat($('#bt-sl')?.value) / 100 || 0.03,
+      tpPct:         parseFloat($('#bt-tp')?.value) / 100 || 0,
+      trailStep:     parseFloat($('#bt-trail')?.value) / 100 || 0.012,
+      leverage:      parseInt($('#bt-leverage')?.value) || 20,
+      riskPct:       parseInt($('#bt-risk')?.value) / 100 || 0.10,
+      maxPositions:  parseInt($('#bt-maxpos')?.value) || 3,
+      maxConsecLoss: parseInt($('#bt-consec')?.value) ?? 2,
+      wallet:        parseInt($('#bt-wallet')?.value) || 1000,
+      topN:          parseInt($('#bt-topn')?.value) || 50,
+      // Structure analysis
+      swing4h:       parseInt($('#bt-swing4h')?.value)   || 10,
+      swing1h:       parseInt($('#bt-swing1h')?.value)   || 10,
+      swing15m:      parseInt($('#bt-swing15m')?.value)  || 10,
+      swing1m:       parseInt($('#bt-swing1m')?.value)   || 5,
+      proximity:     parseFloat($('#bt-proximity')?.value) / 100 || 0.003,
+      entryFresh:    parseInt($('#bt-entry-fresh')?.value) || 25,
+      dailyBodyRatio: parseFloat($('#bt-daily-body')?.value) || 0.30,
+      // RSI filter
+      rsiPeriod:     parseInt($('#bt-rsi-period')?.value) ?? 14,
+      rsiOb:         parseFloat($('#bt-rsi-ob')?.value) || 75,
+      rsiOs:         parseFloat($('#bt-rsi-os')?.value) || 25,
+      // EMA filter
+      emaFast:       parseInt($('#bt-ema-fast')?.value) ?? 0,
+      emaSlow:       parseInt($('#bt-ema-slow')?.value) || 21,
+      emaTrend:      parseInt($('#bt-ema-trend')?.value) ?? 50,
+      // Volume filter
+      volMult:       parseFloat($('#bt-vol-mult')?.value) || 0,
+    };
+  }
 
-    const tag = (reverse ? 'REVERSE ' : '') + `${days}d SL:${slPct}% TP:${tpPct}% Trail:${trailStep}% Lev:${leverage}x`;
+  // Populate backtest UI inputs from a saved settings object (used by AI version dropdown)
+  function applyBacktestParams(p) {
+    if (!p) return;
+    const setV = (id, val) => { const el = $(id); if (el && val != null) el.value = val; };
+    setV('#bt-sl',         p.sl_pct    != null ? (parseFloat(p.sl_pct)    * 100).toFixed(1) : (p.slPct    != null ? (p.slPct    * 100).toFixed(1) : null));
+    setV('#bt-tp',         p.tp_pct    != null ? (parseFloat(p.tp_pct)    * 100).toFixed(1) : (p.tpPct    != null ? (p.tpPct    * 100).toFixed(1) : null));
+    setV('#bt-trail',      p.trailing_step != null ? (parseFloat(p.trailing_step) * 100).toFixed(1) : (p.trailStep != null ? (p.trailStep * 100).toFixed(1) : null));
+    setV('#bt-leverage',   p.leverage);
+    setV('#bt-risk',       p.risk_pct  != null ? (parseFloat(p.risk_pct)  * 100).toFixed(0) : (p.riskPct  != null ? (p.riskPct  * 100).toFixed(0) : null));
+    setV('#bt-maxpos',     p.max_positions ?? p.maxPositions);
+    setV('#bt-consec',     p.max_consec_loss ?? p.maxConsecLoss);
+    setV('#bt-max-tokens', p.top_n_coins ?? p.topN);
+    // Structure
+    setV('#bt-swing4h',     p.swing4h);
+    setV('#bt-swing1h',     p.swing1h);
+    setV('#bt-swing15m',    p.swing15m);
+    setV('#bt-swing1m',     p.swing1m);
+    setV('#bt-proximity',   p.proximity  != null ? (parseFloat(p.proximity)  * 100).toFixed(2) : null);
+    setV('#bt-entry-fresh', p.entryFresh);
+    setV('#bt-daily-body',  p.dailyBodyRatio);
+    // RSI
+    setV('#bt-rsi-period',  p.rsiPeriod);
+    setV('#bt-rsi-ob',      p.rsiOb);
+    setV('#bt-rsi-os',      p.rsiOs);
+    // EMA
+    setV('#bt-ema-fast',    p.emaFast);
+    setV('#bt-ema-slow',    p.emaSlow);
+    setV('#bt-ema-trend',   p.emaTrend);
+    // Volume
+    setV('#bt-vol-mult',    p.volMult);
+  }
+
+  async function runBacktest(mode, reverse) {
+    const p = collectBacktestParams();
+    const { days, slPct, tpPct, trailStep, leverage, riskPct, maxPositions, maxConsecLoss, wallet, topN } = p;
+
+    const slDisplay  = (slPct  * 100).toFixed(1);
+    const tpDisplay  = (tpPct  * 100).toFixed(1);
+    const trDisplay  = (trailStep * 100).toFixed(1);
+    const tag = (reverse ? 'REVERSE ' : '') + `${days}d SL:${slDisplay}% TP:${tpDisplay}% Trail:${trDisplay}% Lev:${leverage}x`;
     const resultEl = $('#fix-bitunix-result');
     if (resultEl) resultEl.textContent = `Running ${tag} backtest (${topN} coins)... please wait`;
     try {
-      const data = await api('POST', '/api/admin/backtest', {
-        strategy: 'full', topN, days, reverse,
-        slPct: slPct / 100,
-        tpPct: tpPct / 100,
-        trailStep: trailStep / 100,
-        leverage, riskPct: riskPct / 100,
-        maxPositions, maxConsecLoss, wallet,
-      });
+      const data = await api('POST', '/api/admin/backtest', { strategy: 'full', reverse, ...p });
       const s = data.strategy;
       let output = '═══════════════════════════════════════════════\n';
       output += `  BACKTEST: ${s.label}\n`;
