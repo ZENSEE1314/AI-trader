@@ -3224,22 +3224,28 @@
     }
   }
 
-  async function adminResyncFees() {
-    if (!confirm('Backfill trading_fee + funding_fee for all closed Bitunix trades? This may take a while.')) return;
-    const statusEl = document.getElementById('resync-fees-status');
-    statusEl.textContent = 'Resyncing... (may take a minute)';
+  async function adminResyncBitunix(btn) {
+    if (!confirm('Re-fetch all closed Bitunix trades from the exchange and correct exit price, P&L, fees and status?\nThis may take 1-2 minutes.')) return;
+    const statusEl = document.getElementById('resync-bitunix-status');
+    statusEl.textContent = 'Resyncing... please wait';
     statusEl.style.color = 'var(--color-accent)';
+    if (btn) { btn.disabled = true; btn.textContent = 'Resyncing...'; }
     try {
-      const result = await api('POST', '/api/admin/resync-fees');
-      statusEl.textContent = `Updated ${result.updated} of ${result.total_checked} trades`;
-      statusEl.style.color = 'var(--color-success)';
-      showToast(`Fee resync: ${result.updated} trades updated`, 'success');
+      const result = await api('POST', '/api/dashboard/resync-bitunix');
+      statusEl.textContent = `Fixed ${result.fixed} / ${result.total} trades (${result.skipped} skipped, ${result.failed} failed)`;
+      statusEl.style.color = result.fixed > 0 ? 'var(--color-success)' : 'var(--color-text-muted)';
+      showToast(`Resync done: ${result.fixed} trades corrected`, result.fixed > 0 ? 'success' : 'info');
+      if (result.fixed > 0) setTimeout(() => loadTradeHistory?.(), 1000);
     } catch (err) {
       statusEl.textContent = `Error: ${err.message}`;
       statusEl.style.color = 'var(--color-danger)';
       showToast(err.message, 'error');
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = 'Resync Bitunix Trades'; }
     }
   }
+
+  async function adminResyncFees() {} // kept for backwards compat — no-op
 
   async function adminPauseKey(keyId) {
     if (!confirm('Pause this API key? The bot will stop trading for this key.')) return;
@@ -3842,7 +3848,7 @@
     togglePause,
     submitTopUp, saveUsdtAddress, withdrawFromWallet, payWeekly, saveBitunixReferralLink,
     adminAction, adminChangeRole, adminSub, adminWd, saveAdminSettings, adminEditWallet, adminSetBitunixReferralLink, clearErrors,
-    adminEditSplit, adminPauseKey, adminResumeKey, adminMarkPaid, adminFixTrades, adminClearTestData,
+    adminEditSplit, adminPauseKey, adminResumeKey, adminMarkPaid, adminResyncBitunix,
     goToAuth, showLoginForm, onPlatformChange,
     searchCoins, addCoin, removeCoin,
     filterLogs, clearLogs,
@@ -3852,7 +3858,7 @@
     addRiskLevel, saveRiskLevel, deleteRiskLevel,
     loadKronosPredictions,
     loadOpenPositions, emergencyCloseToken, emergencyCloseAll,
-    fixBitunixPnl, debugBitunix, runBacktest, loadAiVersions, runAiOptimize, adminResyncFees,
+    fixBitunixPnl, debugBitunix, runBacktest, loadAiVersions, runAiOptimize, adminResyncFees, adminFixTrades, adminClearTestData,
     mcRefresh, mcCommand, mcChat, mcChatQuick, switchAdminTab, filterAgents, customerChat,
     checkEmailSmtp, sendTestEmail, sendBroadcastEmail, emailSetMode,
     loadSignalBoard, toggleWatch, watchAll, setUserLeverage,
