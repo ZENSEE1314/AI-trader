@@ -1196,6 +1196,9 @@ router.post('/resync-bitunix', async (req, res) => {
     const BitunixClient = require('../bitunix-client');
     const cryptoUtils2 = require('../crypto-utils');
 
+    // Ensure column exists — startup migration may have silently failed on first deploy
+    await query(`ALTER TABLE trades ADD COLUMN IF NOT EXISTS bitunix_position_id VARCHAR(64)`).catch(() => {});
+
     // Get all CLOSED Bitunix trades
     const trades = await query(`
       SELECT t.id, t.symbol, t.direction, t.entry_price, t.quantity, t.created_at,
