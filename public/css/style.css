@@ -1527,6 +1527,7 @@ input[type="range"]::-moz-range-thumb {
 .badge-loss { color: var(--color-danger); font-weight: 600; text-shadow: 0 0 6px rgba(255, 56, 96, 0.3); }
 .badge-tp { color: var(--color-success); font-weight: 600; text-shadow: 0 0 6px rgba(0, 255, 136, 0.3); }
 .badge-sl { color: var(--color-danger); font-weight: 600; text-shadow: 0 0 6px rgba(255, 56, 96, 0.3); }
+.badge-closed { color: #888; font-weight: 600; }
 
 /* ── Coin chips + autocomplete dropdown ─── */
 .coin-chips {

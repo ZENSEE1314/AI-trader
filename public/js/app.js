@@ -702,12 +702,14 @@
 
       let statusClass = '';
       let statusColor = '';
-      if (isError) { statusClass = 'badge-error'; }
-      else if (t.status === 'WIN') { statusClass = 'badge-win'; statusColor = 'color:var(--color-success);'; }
+      if (isError)                  { statusClass = 'badge-error'; }
+      else if (t.status === 'WIN')  { statusClass = 'badge-win';  statusColor = 'color:var(--color-success);'; }
       else if (t.status === 'LOSS') { statusClass = 'badge-loss'; statusColor = 'color:var(--color-danger);'; }
       else if (t.status === 'OPEN') { statusClass = 'badge-open'; statusColor = 'color:#f5a623;'; }
-      else if (t.status === 'TP') { statusClass = 'badge-tp'; statusColor = 'color:var(--color-success);'; }
-      else if (t.status === 'SL') { statusClass = 'badge-sl'; statusColor = 'color:var(--color-danger);'; }
+      else if (t.status === 'TP')   { statusClass = 'badge-tp';   statusColor = 'color:var(--color-success);'; }
+      else if (t.status === 'SL')   { statusClass = 'badge-sl';   statusColor = 'color:var(--color-danger);'; }
+      // Closed by swarm consensus or other internal close — show neutral grey badge
+      else if (t.status === 'CLOSED') { statusClass = 'badge-closed'; statusColor = 'color:#aaa;'; }
 
       const exitPrice = t.exit_price != null ? parseFloat(t.exit_price).toFixed(4) : '--';
 
@@ -721,7 +723,7 @@
         <td class="text-mono" style="color:var(--color-warning);">${fee > 0 ? '-$' + fee.toFixed(4) : '--'}</td>
         <td class="text-mono" style="color:#7c7fff;">${fundingFee > 0 ? '-$' + fundingFee.toFixed(4) : '--'}</td>
         <td class="pnl-value ${netPnl >= 0 ? 'text-success' : 'text-danger'}" style="font-weight:600;">${formatPnl(netPnl)}</td>
-        <td><span class="badge-status ${statusClass}" style="${statusColor}font-weight:600;"${errorTip}>${escapeHtml(t.status || '--')}${isError ? ' !' : ''}</span></td>
+        <td><span class="badge-status ${statusClass}" style="${statusColor}font-weight:600;"${errorTip}>${escapeHtml(t.status === 'CLOSED' ? (t.exit_reason === 'swarm_consensus_shift' ? 'SWARM' : 'CLOSED') : (t.status || 'OPEN'))}${isError ? ' !' : ''}</span></td>
         <td><span class="badge-platform">${escapeHtml(t.platform || '--')}</span></td>
       </tr>`;
     }).join('');
