@@ -1,8 +1,21 @@
 {
-  "version": "1.4.4",
+  "version": "1.4.5",
   "name": "MCT AI Trader",
   "released": "2026-04-20",
   "changelog": [
+    {
+      "version": "1.4.5",
+      "tag": "v1.4.5",
+      "date": "2026-04-20",
+      "label": "Bitunix sync: store positionId, match by ID, raw data debug endpoint",
+      "changes": [
+        "Add bitunix_position_id column to trades table — stored when position opens",
+        "Sync now matches by positionId first (exact, no ambiguity), falls back to entry price + time",
+        "Try all known Bitunix field name variations: closePrice/avgClosePrice/closedPrice, realizedPNL/realizedPnl/pnl/profit, fee/tradingFee/commission, etc.",
+        "Log full raw position[0] JSON at every sync — field names visible in Railway logs",
+        "Add GET /api/dashboard/debug/bitunix-positions?symbol=SOLUSDT endpoint (admin only) — returns raw Bitunix history to confirm field names without waiting for a trade close"
+      ]
+    },
     {
       "version": "1.4.4",
       "tag": "v1.4.4",

@@ -1167,4 +1167,40 @@ router.get('/optimizer/results', async (req, res) => {
   }
 });
 
+// ── Debug: raw Bitunix position history (admin only) ─────────────────────────
+// GET /api/dashboard/debug/bitunix-positions?symbol=SOLUSDT
+// Returns the raw API response so we can confirm exact field names + values
+router.get('/debug/bitunix-positions', async (req, res) => {
+  try {
+    const adminCheck = await query(`SELECT is_admin FROM users WHERE id = $1`, [req.userId]);
+    if (!adminCheck[0]?.is_admin) return res.status(403).json({ error: 'Admin only' });
+
+    const { symbol } = req.query;
+    const BitunixClient = require('../bitunix-client');
+    const cryptoUtils2 = require('../crypto-utils');
+
+    // Use first Bitunix API key found for this admin
+    const keys = await query(
+      `SELECT ak.encrypted_api_key, ak.encrypted_api_secret
+       FROM api_keys ak JOIN users u ON ak.user_id = u.id
+       WHERE u.id = $1 AND ak.platform = 'bitunix' AND ak.is_active = true
+       LIMIT 1`,
+      [req.userId]
+    );
+    if (!keys.length) return res.status(404).json({ error: 'No Bitunix key found' });
+
+    const apiKey    = cryptoUtils2.decryptApiKey(keys[0].encrypted_api_key);
+    const apiSecret = cryptoUtils2.decryptApiKey(keys[0].encrypted_api_secret);
+    const bxClient  = new BitunixClient({ apiKey, apiSecret });
+
+    const params = { pageSize: 10 };
+    if (symbol) params.symbol = symbol;
+    const positions = await bxClient.getHistoryPositions(params);
+
+    res.json({ count: positions.length, positions });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 module.exports = router;

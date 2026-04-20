@@ -386,6 +386,8 @@ async function initAllTables() {
     `ALTER TABLE trades ADD COLUMN IF NOT EXISTS gross_pnl NUMERIC`,
     // Funding fee tracked separately from exchange trading fee
     `ALTER TABLE trades ADD COLUMN IF NOT EXISTS funding_fee NUMERIC DEFAULT 0`,
+    // Bitunix position ID — stored at open, used for exact match at sync (no guessing)
+    `ALTER TABLE trades ADD COLUMN IF NOT EXISTS bitunix_position_id VARCHAR(64)`,
     // User token watchlist (which tokens each user wants to trade)
     `CREATE TABLE IF NOT EXISTS user_watchlist (
       id SERIAL PRIMARY KEY,
