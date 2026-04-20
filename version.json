@@ -1,8 +1,24 @@
 {
-  "version": "1.3.8",
+  "version": "1.3.9",
   "name": "MCT AI Trader",
   "released": "2026-04-20",
   "changelog": [
+    {
+      "version": "1.3.9",
+      "tag": "v1.3.9",
+      "date": "2026-04-20",
+      "label": "BOS_SHORT/LONG: Zeiierman 1m LH/HL structure for precise entry",
+      "changes": [
+        "BOS_SHORT rewritten: replaces crude 'count bearish candles' with Zeiierman detectCurvedStructure() on 1m (rmaLen=8, pivotLen=3)",
+        "LH LH (Lower Highs) on 1m = structural shift down confirmed by smart money — far more accurate than candle counting",
+        "Scoring uses Zeiierman shortProbability: >60 = +2, >80 = +1, 2+ consecutive LH = +1",
+        "BOS_LONG added (Strategy 8): mirror strategy using HL HL (Higher Lows) on 1m for breakout entries",
+        "BOS_LONG fires when price breaks above 15m resistance with Zeiierman HL structure + volume — enters at the START of the breakout",
+        "Both strategies exempt from: EMA200 hard block (→ -3 penalty), h1Trend counter-trend penalty, BTC correlation penalty, range-position penalty",
+        "BOS_LONG also exempt from 'buying at top of range' penalty (by definition it fires at resistance)",
+        "Entry: top of the move (beginning) not bottom/end — 1m confirmation fires within 1 minute of break"
+      ]
+    },
     {
       "version": "1.3.8",
       "tag": "v1.3.8",

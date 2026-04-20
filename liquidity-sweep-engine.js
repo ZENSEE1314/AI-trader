@@ -1654,84 +1654,130 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
   } // end SMC_HL_STRUCTURE gate
 
   // ── Strategy 7: Break of Structure SHORT (BOS_SHORT) ──────
-  // Entry timing: support level is identified on 15m, but entry fires on 1m candles
-  // the moment the breakdown starts — not after a full 15m close.
-  // This means entry is near the TOP of the drop, not the bottom.
+  // Uses Zeiierman Curved SMC on 1m to detect LH LH (Lower Highs) structure.
+  // LH LH on 1m = smart money is printing lower highs = trend shifting down.
+  // This is far more accurate than counting bearish candles — it identifies the
+  // structural shift at the beginning of the move.
   //
   // Flow:
-  //   1. 15m: find support_low = lowest low of last 20 closed candles (excl. last 2 forming)
-  //   2. 15m: price must be within 0.3% of that support (approaching or just breaking)
-  //   3. 1m: at least 3 of last 6 candles are bearish (momentum confirmed)
-  //   4. 1m: at least 1 of last 4 candles closed BELOW support (break has started)
-  //   5. 1m: a 1m candle body > 0.1% (real move, not noise)
-  //   6. 1m: volume above 20-candle average (institutional activity)
+  //   1. 15m: find support_low = lowest low of last 20 closed candles
+  //   2. 15m: price within 0.3% of support (approaching or just breaking)
+  //   3. 1m: Zeiierman detects LH LH bearish structure (isBearish = true)
+  //   4. 1m: at least 1 of last 4 candles closed BELOW support (break started)
+  //   5. 1m: volume above average (institutional selling confirmed)
   if (!enabledStrategies || enabledStrategies.BOS_SHORT !== false) {
-    if (parsed15.length >= 22 && parsed1.length >= 10 && rsi14 !== null && rsi14 < 65) {
-      // Step 1: Support level from 15m closed candles (exclude last 2 — may be forming)
+    if (parsed15.length >= 22 && parsed1.length >= 20 && rsi14 !== null && rsi14 < 65) {
       const lookback15 = parsed15.slice(-20, -2);
       const supportLow = Math.min(...lookback15.map(c => c.low));
-
-      // Step 2: Price must be AT or just below support (within 0.3%) — breakdown starting
-      const nearSupport = price <= supportLow * 1.003;
+      const nearSupport = price <= supportLow * 1.003; // within 0.3% of support or below
 
       if (nearSupport) {
-        // Step 3: 1m momentum — 3+ of last 6 candles bearish
-        const recent1m   = parsed1.slice(-6);
-        const bearish1m  = recent1m.filter(c => c.close < c.open);
-        const has3Bearish = bearish1m.length >= 3;
+        // Zeiierman 1m structure: rmaLen=8, pivotLen=3 — tight enough for 1m noise
+        const struct1m   = detectCurvedStructure(parsed1, 8, 3);
+        const is1mBearish = struct1m && struct1m.isBearish;   // LH LH pattern confirmed
+        const shortProb   = (struct1m && struct1m.shortProbability) || 0;
 
-        // Step 4: At least 1 of last 4 1m candles closed below the support level
-        const last4m = parsed1.slice(-4);
+        // At least 1 of last 4 1m candles closed below support (break has started)
+        const last4m         = parsed1.slice(-4);
         const anyBelowSupport = last4m.some(c => c.close < supportLow);
 
-        // Step 5: 1m candle body strength — at least one candle > 0.1% body
-        const strongBody1m = recent1m.some(c => Math.abs(c.close - c.open) / c.open > 0.001);
+        // 1m volume above average
+        const avg1mVol  = parsed1.slice(-20).reduce((s, c) => s + c.volume, 0) / 20;
+        const highVol1m = last4m.some(c => c.volume > avg1mVol * 1.2);
 
-        // Step 6: 1m volume — above 20-candle average
-        const avg1mVol      = parsed1.slice(-20).reduce((s, c) => s + c.volume, 0) / 20;
-        const highVol1m     = recent1m.some(c => c.volume > avg1mVol * 1.2);
-
-        if (has3Bearish && anyBelowSupport && strongBody1m && highVol1m) {
+        if (is1mBearish && anyBelowSupport && highVol1m) {
           const atr        = calcATR(parsed15);
-          const entryPrice = price; // current price = beginning of the breakdown
-          // SL: just above support level (support flips to resistance once broken)
-          const slPrice = supportLow * 1.003;
-          const slDist  = (slPrice - entryPrice) / entryPrice;
+          const entryPrice = price;
+          const slPrice    = supportLow * 1.003; // SL just above broken support (now resistance)
+          const slDist     = (slPrice - entryPrice) / entryPrice;
 
-          if (slDist > 0) { // safety: SL must be above entry for SHORT
+          if (slDist > 0) {
             const tp1 = entryPrice - atr * 2;
             const rr  = (atr * 2) / (entryPrice * slDist);
 
-            // Base score 9
             let score = 9;
-            if (bearish1m.length >= 4)         score += 1; // 4+ bearish 1m candles = stronger momentum
-            if (bearish1m.length >= 5)         score += 1; // 5+ = very strong
-            if (rsi14 < 50)                    score += 1; // RSI already weakening
-            if (h1Trend === 'bearish')         score += 2; // with 1h trend
-            if (ema9_15m !== null && ema21_15m !== null && ema9_15m < ema21_15m) score += 1; // 15m bearish
-            // h1Trend='bullish' — NO penalty here (breakdown can start in bull trend)
+            if (shortProb > 60) score += 2;  // high Zeiierman probability
+            if (shortProb > 80) score += 1;  // very high
+            if ((struct1m.lhCount || 0) >= 2) score += 1; // 2+ consecutive LH
+            if (rsi14 < 50)    score += 1;
+            if (h1Trend === 'bearish') score += 2;
+            if (ema9_15m !== null && ema21_15m !== null && ema9_15m < ema21_15m) score += 1;
 
             signals.push({
-              symbol,
-              direction: 'SHORT',
-              price: entryPrice,
-              lastPrice: price,
-              sl: slPrice,
-              tp1,
+              symbol, direction: 'SHORT',
+              price: entryPrice, lastPrice: price,
+              sl: slPrice, tp1,
               tp2: entryPrice - atr * 3,
               tp3: entryPrice - atr * 4,
-              slDist: Math.abs(slDist),
-              rr,
-              setup: 'BOS_SHORT',
-              setupName: 'BOS-SHORT',
+              slDist: Math.abs(slDist), rr,
+              setup: 'BOS_SHORT', setupName: 'BOS-SHORT',
               score,
-              bosSupport: supportLow,
+              bosSupport: supportLow, zeiierProb: shortProb,
             });
           }
         }
       }
     }
   } // end BOS_SHORT gate
+
+  // ── Strategy 8: Break of Structure LONG (BOS_LONG) ─────────
+  // Mirror of BOS_SHORT — Zeiierman 1m HL HL (Higher Lows) structure on breakout UP.
+  // Fires when price breaks above resistance with HL HL on 1m = momentum starting.
+  // Catches breakouts at the beginning of the move, not after price has already run.
+  if (!enabledStrategies || enabledStrategies.BOS_LONG !== false) {
+    if (parsed15.length >= 22 && parsed1.length >= 20 && rsi14 !== null && rsi14 > 35) {
+      const lookback15    = parsed15.slice(-20, -2);
+      const resistanceHigh = Math.max(...lookback15.map(c => c.high));
+      const nearResistance = price >= resistanceHigh * 0.997; // within 0.3% below resistance or above
+
+      if (nearResistance) {
+        // Zeiierman 1m structure: HL HL = smart money buying higher lows = trend shifting up
+        const struct1m    = detectCurvedStructure(parsed1, 8, 3);
+        const is1mBullish  = struct1m && struct1m.isBullish;  // HL HL pattern confirmed
+        const longProb     = (struct1m && struct1m.longProbability) || 0;
+
+        // At least 1 of last 4 1m candles closed ABOVE resistance (break started)
+        const last4m          = parsed1.slice(-4);
+        const anyAboveResist  = last4m.some(c => c.close > resistanceHigh);
+
+        // 1m volume above average
+        const avg1mVol   = parsed1.slice(-20).reduce((s, c) => s + c.volume, 0) / 20;
+        const highVol1m  = last4m.some(c => c.volume > avg1mVol * 1.2);
+
+        if (is1mBullish && anyAboveResist && highVol1m) {
+          const atr        = calcATR(parsed15);
+          const entryPrice = price;
+          const slPrice    = resistanceHigh * 0.997; // SL just below broken resistance (now support)
+          const slDist     = (entryPrice - slPrice) / entryPrice;
+
+          if (slDist > 0) {
+            const tp1 = entryPrice + atr * 2;
+            const rr  = (atr * 2) / (entryPrice * slDist);
+
+            let score = 9;
+            if (longProb > 60) score += 2;
+            if (longProb > 80) score += 1;
+            if ((struct1m.hlCount || 0) >= 2) score += 1; // 2+ consecutive HL
+            if (rsi14 > 50)    score += 1;
+            if (h1Trend === 'bullish') score += 2;
+            if (ema9_15m !== null && ema21_15m !== null && ema9_15m > ema21_15m) score += 1;
+
+            signals.push({
+              symbol, direction: 'LONG',
+              price: entryPrice, lastPrice: price,
+              sl: slPrice, tp1,
+              tp2: entryPrice + atr * 3,
+              tp3: entryPrice + atr * 4,
+              slDist: Math.abs(slDist), rr,
+              setup: 'BOS_LONG', setupName: 'BOS-LONG',
+              score,
+              bosResistance: resistanceHigh, zeiierProb: longProb,
+            });
+          }
+        }
+      }
+    }
+  } // end BOS_LONG gate
 
   if (!signals.length) return null;
 
@@ -1745,7 +1791,7 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     // Apply a score penalty instead of hard block so strong setups can still pass.
     if (ema200_bias === 'bullish' && sig.direction === 'SHORT') {
       if (sig.setup === 'BOS_SHORT') {
-        sig.score -= 3; // penalty (not block) — breakdown can occur even in bull trend
+        sig.score -= 3; // penalty only — breakdowns start in bull trends
       } else {
         sig.score = -99;
         sig.blocked = `SHORT blocked — price above EMA200 (bullish bias per PDF)`;
@@ -1753,9 +1799,13 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
       }
     }
     if (ema200_bias === 'bearish' && sig.direction === 'LONG') {
-      sig.score = -99;
-      sig.blocked = `LONG blocked — price below EMA200 (bearish bias per PDF)`;
-      continue;
+      if (sig.setup === 'BOS_LONG') {
+        sig.score -= 3; // penalty only — breakouts above resistance can start below EMA200
+      } else {
+        sig.score = -99;
+        sig.blocked = `LONG blocked — price below EMA200 (bearish bias per PDF)`;
+        continue;
+      }
     }
 
     // VWAP + OP bias (PDF: "avoid entering in between VWAP and OP if gap is small")
@@ -1818,7 +1868,8 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
 
     // Price position in range: LONG near bottom is good, LONG near top is chasing
     if (sig.direction === 'LONG') {
-      if (priceInRange > 0.85) sig.score -= 3; // buying at the top — bad
+      // BOS_LONG fires AT resistance (high in range by definition) — exempt from "buying at top" penalty
+      if (priceInRange > 0.85 && sig.setup !== 'BOS_LONG') sig.score -= 3; // buying at the top — bad
       if (priceInRange < 0.35) sig.score += 2; // buying near the bottom — good
     }
     if (sig.direction === 'SHORT') {
@@ -1836,17 +1887,19 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     // designed to catch breakdowns that start while the 1h trend is still bullish.
     if (sig.direction === 'LONG' && h1Trend === 'bullish') sig.score += 3;
     if (sig.direction === 'SHORT' && h1Trend === 'bearish') sig.score += 3;
-    if (sig.direction === 'LONG' && h1Trend === 'bearish') sig.score -= 4;
+    // BOS_LONG/BOS_SHORT are reversal strategies — exempt from counter-trend penalty
+    if (sig.direction === 'LONG' && h1Trend === 'bearish' && sig.setup !== 'BOS_LONG') sig.score -= 4;
     if (sig.direction === 'SHORT' && h1Trend === 'bullish' && sig.setup !== 'BOS_SHORT') sig.score -= 4;
 
     // BTC market correlation: don't fight BTC's direction on altcoins.
     // BOS_SHORT exempt: if both BNB and BTC are breaking down, that's confirmation.
     if (symbol !== 'BTCUSDT') {
+      // BOS_SHORT/BOS_LONG are structural breakouts — exempt from BTC correlation penalty
       if (btcTrend === 'bullish' && sig.direction === 'SHORT' && sig.setup !== 'BOS_SHORT') {
         sig.score -= 5;
         sig.blocked = 'SHORT rejected — BTC is bullish, alts follow BTC';
       }
-      if (btcTrend === 'bearish' && sig.direction === 'LONG') {
+      if (btcTrend === 'bearish' && sig.direction === 'LONG' && sig.setup !== 'BOS_LONG') {
         sig.score -= 5;
         sig.blocked = 'LONG rejected — BTC is bearish, alts follow BTC';
       }
