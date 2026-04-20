@@ -291,9 +291,10 @@ router.get('/trades/csv', async (req, res) => {
 });
 
 // P&L summary (supports ?period=1d|7d|30d|6m|1y filter)
-// Cache summaries for 15s to avoid repeated DB hits on page load/refresh
+// Cache summaries for 45s — longer than the 30s frontend refresh so every
+// refresh hits the cache instead of running a DB scan.
 const summaryCache = new Map();
-const SUMMARY_CACHE_TTL = 15_000;
+const SUMMARY_CACHE_TTL = 45_000;
 
 router.get('/summary', async (req, res) => {
   try {
@@ -349,9 +350,10 @@ router.get('/summary', async (req, res) => {
 });
 
 // Futures wallet balances from ALL connected exchanges
-// Cache per user for 30s — exchange API calls are the #1 page load bottleneck
+// Cache per user for 60s — exchange API calls are the #1 page load bottleneck.
+// Wallet balance doesn't change faster than this in practice.
 const walletCache = new Map();
-const WALLET_CACHE_TTL = 30_000; // 30 seconds
+const WALLET_CACHE_TTL = 60_000; // 60 seconds
 
 router.get('/futures-wallet', async (req, res) => {
   try {
@@ -888,9 +890,14 @@ router.put('/watchlist/:symbol/toggle', async (req, res) => {
 
 // Kronos AI predictions — read from DB (persisted across processes)
 const KRONOS_SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT'];
+const kronosCache = new Map(); // key → { data, ts }
+const KRONOS_CACHE_TTL = 60_000; // predictions update every few minutes, cache 60s
 
 router.get('/kronos-predictions', async (req, res) => {
   try {
+    const cached = kronosCache.get('global');
+    if (cached && Date.now() - cached.ts < KRONOS_CACHE_TTL) return res.json(cached.data);
+
     // Read from DB — only the 4 trading tokens, predictions fresher than 15 min
     const rows = await query(
       `SELECT symbol, direction, current_price, predicted_price, change_pct,
@@ -919,13 +926,15 @@ router.get('/kronos-predictions', async (req, res) => {
     const shorts = predictions.filter(p => p.direction === 'SHORT');
     const neutrals = predictions.filter(p => p.direction === 'NEUTRAL');
 
-    res.json({
+    const payload = {
       total: predictions.length,
       longs: longs.length,
       shorts: shorts.length,
       neutrals: neutrals.length,
       predictions,
-    });
+    };
+    kronosCache.set('global', { data: payload, ts: Date.now() });
+    res.json(payload);
   } catch (err) {
     console.error('Kronos predictions error:', err.message);
     res.json({ total: 0, longs: 0, shorts: 0, neutrals: 0, predictions: [] });

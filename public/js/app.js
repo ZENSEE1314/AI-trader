@@ -315,7 +315,7 @@
   // ----- Dashboard Auto-Refresh -----
 
   let dashboardTimer = null;
-  const DASHBOARD_REFRESH_MS = 15000; // 15 seconds
+  const DASHBOARD_REFRESH_MS = 30000; // 30 seconds — halves server API load
 
   function startDashboardRefresh() {
     stopDashboardRefresh();
@@ -4013,9 +4013,9 @@
     const content = $('#logs-content');
     if (content) content.innerHTML = '';
     fetchLogs();
-    logPollTimer = setInterval(fetchLogs, 3000);
+    logPollTimer = setInterval(fetchLogs, 10000);
     const status = $('#logs-status');
-    if (status) status.textContent = 'Live — polling every 3s';
+    if (status) status.textContent = 'Live — polling every 10s';
   }
 
   function stopLogPolling() {

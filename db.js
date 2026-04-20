@@ -4,7 +4,7 @@ const dbUrl = process.env.DATABASE_URL || '';
 const pool = new Pool({
   connectionString: dbUrl.includes('sslmode=') ? dbUrl : `${dbUrl}${dbUrl.includes('?') ? '&' : '?'}sslmode=require`,
   ssl: { rejectUnauthorized: false },
-  max: 10,
+  max: 20,                    // raised from 10 — exhaustive optimizer + trading cycle + web requests all compete
   connectionTimeoutMillis: 30000,
   idleTimeoutMillis: 60000,
   statement_timeout: 30000,
@@ -681,14 +681,15 @@ async function initAllTables() {
     }
   } catch (_) {}
 
-  // Strategy Version Manager — created here so it exists before any route touches it
+  // Strategy Version Manager — split into separate try blocks so one failure
+  // does not suppress the others. No UNIQUE on column; index is created separately.
   try {
     await pool.query(`
       CREATE TABLE IF NOT EXISTS strategy_versions (
         id            SERIAL PRIMARY KEY,
         name          VARCHAR(200) NOT NULL,
         genome        JSONB        NOT NULL,
-        genome_hash   VARCHAR(64)  UNIQUE,
+        genome_hash   VARCHAR(64),
         win_rate      DECIMAL(8,4),
         profit_factor DECIMAL(8,4),
         total_return  DECIMAL(12,4),
@@ -706,13 +707,15 @@ async function initAllTables() {
         created_at    TIMESTAMPTZ  DEFAULT NOW()
       )
     `);
-    // Add genome_hash column to existing installs that predate this migration
-    await pool.query(
-      `ALTER TABLE strategy_versions ADD COLUMN IF NOT EXISTS genome_hash VARCHAR(64)`
-    );
-    await pool.query(
-      `CREATE UNIQUE INDEX IF NOT EXISTS idx_sv_genome_hash ON strategy_versions (genome_hash) WHERE genome_hash IS NOT NULL`
-    );
+    console.log('[DB] strategy_versions table ready');
+  } catch (e) { console.error('[DB] strategy_versions create error:', e.message); }
+
+  try {
+    await pool.query(`ALTER TABLE strategy_versions ADD COLUMN IF NOT EXISTS genome_hash VARCHAR(64)`);
+  } catch (_) {}
+
+  try {
+    await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_sv_genome_hash ON strategy_versions (genome_hash) WHERE genome_hash IS NOT NULL`);
   } catch (_) {}
 
   console.log('[DB] All tables verified');
