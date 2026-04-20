@@ -2011,17 +2011,32 @@
               </div>
             </div>
 
-            <!-- ── Token List ── -->
+            <!-- ── Token List (tag input with autocomplete) ── -->
             <div style="margin-bottom:var(--space-3);">
-              <label class="form-label" style="font-size:0.75rem;margin-bottom:4px;display:block;">
-                🪙 Token List
-                <span style="font-weight:400;color:var(--color-text-muted);font-size:0.72rem;">
-                  — comma-separated (e.g. BTCUSDT, ETHUSDT). Leave empty to use your enabled tokens from the <strong>Tokens</strong> tab.
-                </span>
+              <label class="form-label" style="font-size:0.75rem;margin-bottom:6px;display:flex;align-items:center;justify-content:space-between;">
+                <span>🪙 Token List</span>
+                <span style="font-weight:400;color:var(--color-text-muted);font-size:0.7rem;">Leave empty = use enabled tokens from Tokens tab</span>
               </label>
-              <input class="form-input text-mono" type="text" id="bt-symbol-list"
-                placeholder="BTCUSDT, ETHUSDT, SOLUSDT, BNBUSDT  — or leave empty"
-                style="width:100%;font-size:0.82rem;letter-spacing:0.02em;">
+              <!-- Tag input container -->
+              <div id="bt-token-tag-wrap" style="
+                display:flex;flex-wrap:wrap;gap:5px;align-items:center;
+                min-height:40px;padding:5px 8px;
+                background:var(--color-bg-input,#0f0f14);border:1px solid var(--color-border-muted);
+                border-radius:var(--radius-md);cursor:text;position:relative;">
+                <!-- tags rendered by JS -->
+                <input type="text" id="bt-token-input" autocomplete="off" spellcheck="false"
+                  placeholder="Type to search…"
+                  style="background:none;border:none;outline:none;color:inherit;font-family:monospace;
+                         font-size:0.82rem;min-width:120px;flex:1;padding:2px 0;">
+                <!-- dropdown -->
+                <div id="bt-token-dropdown" style="
+                  display:none;position:absolute;top:calc(100% + 4px);left:0;right:0;
+                  background:#1a1a2a;border:1px solid var(--color-border-muted);border-radius:var(--radius-md);
+                  max-height:200px;overflow-y:auto;z-index:999;box-shadow:0 8px 24px rgba(0,0,0,.5);">
+                </div>
+              </div>
+              <!-- Hidden value field read by collectBacktestParams -->
+              <input type="hidden" id="bt-symbol-list">
             </div>
 
             <!-- ── Structure Analysis (collapsible) ── -->

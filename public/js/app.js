@@ -1468,6 +1468,7 @@
         api('GET', '/api/admin/weekly-earnings').catch(() => null),
       ]);
       loadAiVersions().catch(() => {});
+      initBtTokenInput().catch(() => {});
       renderAdminUsers(users);
       renderAdminWithdrawals(wds);
       if (weeklyEarnings) renderAdminWeeklyEarnings(weeklyEarnings);
@@ -2625,6 +2626,148 @@
   window.CryptoBot.activateVersionForTrading = activateVersionForTrading;
   window.CryptoBot.deactivateVersion = deactivateVersion;
 
+  // ── Token Tag Input ──────────────────────────────────────────────────────────
+  // A tag-chip input with autocomplete + localStorage persistence.
+  // Reads/writes hidden #bt-symbol-list which collectBacktestParams reads.
+  const BT_TOKEN_LS_KEY = 'bt_symbol_list_v1';
+  let _btAllTokens  = [];   // full symbol list loaded from DB
+  let _btSelected   = [];   // currently selected symbols
+
+  function _btSave() {
+    const hidden = $('#bt-symbol-list');
+    if (hidden) hidden.value = _btSelected.join(',');
+    try { localStorage.setItem(BT_TOKEN_LS_KEY, JSON.stringify(_btSelected)); } catch (_) {}
+  }
+
+  function _btRenderTags() {
+    const wrap = $('#bt-token-tag-wrap');
+    const inp  = $('#bt-token-input');
+    if (!wrap || !inp) return;
+    // Remove old tag elements (leave input and dropdown)
+    wrap.querySelectorAll('.bt-tag').forEach(el => el.remove());
+    // Re-insert tags before input
+    _btSelected.forEach(sym => {
+      const tag = document.createElement('span');
+      tag.className = 'bt-tag';
+      tag.style.cssText = 'display:inline-flex;align-items:center;gap:4px;background:rgba(212,175,55,0.15);border:1px solid rgba(212,175,55,0.4);color:#d4af37;font-size:0.75rem;font-family:monospace;font-weight:600;padding:2px 8px;border-radius:4px;white-space:nowrap;';
+      tag.innerHTML = sym + ' <span style="cursor:pointer;opacity:0.7;font-size:0.85rem;" title="Remove">×</span>';
+      tag.querySelector('span').addEventListener('click', () => {
+        _btSelected = _btSelected.filter(s => s !== sym);
+        _btRenderTags();
+        _btSave();
+      });
+      wrap.insertBefore(tag, inp);
+    });
+    if (_btSelected.length === 0) {
+      inp.placeholder = 'Type to search… (empty = Tokens tab)';
+    } else {
+      inp.placeholder = 'Add more…';
+    }
+  }
+
+  function _btShowDropdown(matches) {
+    const dd = $('#bt-token-dropdown');
+    if (!dd) return;
+    if (!matches.length) { dd.style.display = 'none'; return; }
+    dd.innerHTML = matches.slice(0, 20).map(sym => {
+      const isSel = _btSelected.includes(sym);
+      return '<div data-sym="' + sym + '" style="padding:7px 12px;cursor:pointer;font-family:monospace;font-size:0.82rem;display:flex;justify-content:space-between;align-items:center;' +
+        (isSel ? 'color:#d4af37;background:rgba(212,175,55,0.08);' : '') + '">' +
+        sym +
+        (isSel ? '<span style="font-size:0.7rem;opacity:0.7;">✓ added</span>' : '') +
+        '</div>';
+    }).join('');
+    dd.style.display = 'block';
+    dd.querySelectorAll('[data-sym]').forEach(el => {
+      el.addEventListener('mousedown', e => {
+        e.preventDefault();
+        const sym = el.dataset.sym;
+        if (!_btSelected.includes(sym)) {
+          _btSelected.push(sym);
+          _btRenderTags();
+          _btSave();
+        }
+        const inp = $('#bt-token-input');
+        if (inp) { inp.value = ''; }
+        dd.style.display = 'none';
+      });
+      el.addEventListener('mouseover', () => { el.style.background = 'rgba(255,255,255,0.05)'; });
+      el.addEventListener('mouseout',  () => { el.style.background = _btSelected.includes(el.dataset.sym) ? 'rgba(212,175,55,0.08)' : ''; });
+    });
+  }
+
+  async function initBtTokenInput() {
+    const inp  = $('#bt-token-input');
+    const wrap = $('#bt-token-tag-wrap');
+    if (!inp || !wrap) return;
+
+    // Load persisted selection
+    try {
+      const saved = localStorage.getItem(BT_TOKEN_LS_KEY);
+      if (saved) _btSelected = JSON.parse(saved).filter(Boolean);
+    } catch (_) {}
+    _btRenderTags();
+    _btSave();
+
+    // Load all available tokens from DB (fallback to empty — user can still type manually)
+    try {
+      const rows = await api('GET', '/api/admin/global-tokens');
+      _btAllTokens = rows.map(r => r.symbol).filter(s => s.endsWith('USDT'));
+    } catch (_) { _btAllTokens = []; }
+
+    // Click on wrapper focuses input
+    wrap.addEventListener('click', () => inp.focus());
+
+    // Keyup: filter and show dropdown
+    inp.addEventListener('input', () => {
+      const q = inp.value.trim().toUpperCase();
+      if (!q) { $('#bt-token-dropdown').style.display = 'none'; return; }
+      const matches = _btAllTokens.filter(s => s.startsWith(q) || s.includes(q));
+      _btShowDropdown(matches.length ? matches : (q.endsWith('USDT') ? [q] : [q + 'USDT']));
+    });
+
+    // Enter / comma = add current input as token
+    inp.addEventListener('keydown', e => {
+      if (e.key === 'Enter' || e.key === ',') {
+        e.preventDefault();
+        const sym = inp.value.trim().toUpperCase().replace(/,/g, '');
+        const resolved = sym.endsWith('USDT') ? sym : sym + 'USDT';
+        if (resolved.length > 4 && !_btSelected.includes(resolved)) {
+          _btSelected.push(resolved);
+          _btRenderTags();
+          _btSave();
+        }
+        inp.value = '';
+        const dd = $('#bt-token-dropdown');
+        if (dd) dd.style.display = 'none';
+      }
+      if (e.key === 'Backspace' && !inp.value && _btSelected.length) {
+        _btSelected.pop();
+        _btRenderTags();
+        _btSave();
+      }
+      if (e.key === 'Escape') {
+        const dd = $('#bt-token-dropdown');
+        if (dd) dd.style.display = 'none';
+      }
+    });
+
+    // Close dropdown on outside click
+    document.addEventListener('click', e => {
+      if (!wrap.contains(e.target)) {
+        const dd = $('#bt-token-dropdown');
+        if (dd) dd.style.display = 'none';
+      }
+    }, true);
+  }
+
+  // Public helper: set token list from a saved version
+  function setBtSymbolList(syms) {
+    _btSelected = Array.isArray(syms) ? syms.filter(Boolean) : [];
+    _btRenderTags();
+    _btSave();
+  }
+
   // Collect all backtest params from the UI — shared by runBacktest and activateVersionForTrading
   function collectBacktestParams() {
     // Direction fields are now the only source for SL/TP/Trail
@@ -2688,10 +2831,10 @@
     setV('#bt-risk',       p.risk_pct  != null ? (parseFloat(p.risk_pct)  * 100).toFixed(0) : (p.riskPct  != null ? (p.riskPct  * 100).toFixed(0) : null));
     setV('#bt-maxpos',     p.max_positions ?? p.maxPositions);
     setV('#bt-consec',     p.max_consec_loss ?? p.maxConsecLoss);
-    // Symbol list: restore from saved array or comma string
-    const symEl = $('#bt-symbol-list');
-    if (symEl && p.symbolList) {
-      symEl.value = Array.isArray(p.symbolList) ? p.symbolList.join(', ') : p.symbolList;
+    // Symbol list: restore into tag input if a saved version carries one
+    if (p.symbolList) {
+      const syms = Array.isArray(p.symbolList) ? p.symbolList : String(p.symbolList).split(',').map(s => s.trim()).filter(Boolean);
+      if (syms.length) setBtSymbolList(syms);
     }
     // Structure
     setV('#bt-swing4h',     p.swing4h);
@@ -2734,14 +2877,15 @@
 
   async function runBacktest(mode, reverse) {
     const p = collectBacktestParams();
-    const { days, slPct, tpPct, trailStep, leverage, riskPct, maxPositions, maxConsecLoss, wallet, topN } = p;
+    const { days, slPct, tpPct, trailStep, leverage, riskPct, maxPositions, maxConsecLoss, wallet, symbolList } = p;
 
     const slDisplay  = (slPct  * 100).toFixed(1);
     const tpDisplay  = (tpPct  * 100).toFixed(1);
     const trDisplay  = (trailStep * 100).toFixed(1);
+    const coinLabel  = symbolList?.length ? `${symbolList.length} tokens` : 'Tokens tab';
     const tag = (reverse ? 'REVERSE ' : '') + `${days}d SL:${slDisplay}% TP:${tpDisplay}% Trail:${trDisplay}% Lev:${leverage}x`;
     const resultEl = $('#fix-bitunix-result');
-    if (resultEl) resultEl.textContent = `Running ${tag} backtest (${topN} coins)... please wait`;
+    if (resultEl) resultEl.textContent = `Running ${tag} backtest (${coinLabel})... please wait`;
     try {
       const data = await api('POST', '/api/admin/backtest', { strategy: 'full', reverse, ...p });
       const s = data.strategy;
