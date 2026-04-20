@@ -1196,14 +1196,17 @@ router.post('/resync-bitunix', async (req, res) => {
     const BitunixClient = require('../bitunix-client');
     const cryptoUtils2 = require('../crypto-utils');
 
-    // Ensure column exists — startup migration may have silently failed on first deploy
-    await query(`ALTER TABLE trades ADD COLUMN IF NOT EXISTS bitunix_position_id VARCHAR(64)`).catch(() => {});
+    // Ensure column exists — startup migration may have silently failed on first deploy.
+    // Run BEFORE the SELECT that names it explicitly.
+    try {
+      await query(`ALTER TABLE trades ADD COLUMN IF NOT EXISTS bitunix_position_id VARCHAR(64)`);
+    } catch (_) {}
 
     // Get all CLOSED Bitunix trades
+    // NOTE: select t.* instead of naming bitunix_position_id so this can't crash
+    // even if the ALTER TABLE above somehow didn't take effect.
     const trades = await query(`
-      SELECT t.id, t.symbol, t.direction, t.entry_price, t.quantity, t.created_at,
-             t.bitunix_position_id, t.exit_price, t.pnl_usdt, t.gross_pnl,
-             ak.encrypted_api_key, ak.encrypted_api_secret
+      SELECT t.*, ak.encrypted_api_key, ak.encrypted_api_secret
       FROM trades t
       JOIN api_keys ak ON t.api_key_id = ak.id
       WHERE ak.platform = 'bitunix'
