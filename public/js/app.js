@@ -3675,9 +3675,9 @@
     try {
       const result = await api('POST', '/api/dashboard/pull-bitunix-history');
       if (result.error) throw new Error(result.error);
-      const msg = `Inserted ${result.inserted} new · Updated ${result.updated} · Skipped ${result.skipped}`;
-      if (statusEl) { statusEl.textContent = msg; statusEl.style.color = (result.inserted + result.updated) > 0 ? 'var(--color-success)' : 'var(--color-text-muted)'; }
-      if (result.errors && result.errors.length > 0) console.error('Pull history errors:', result.errors);
+      let msg = `Inserted ${result.inserted} new · Updated ${result.updated} · Skipped ${result.skipped}`;
+      if (result.errors && result.errors.length > 0) msg += ` — Errors: ${result.errors.slice(0, 3).join('; ')}`;
+      if (statusEl) { statusEl.textContent = msg; statusEl.style.color = (result.inserted + result.updated) > 0 ? 'var(--color-success)' : (result.errors?.length ? 'var(--color-danger)' : 'var(--color-text-muted)'); }
       showToast(msg, (result.inserted + result.updated) > 0 ? 'success' : 'info');
       if ((result.inserted + result.updated) > 0) setTimeout(() => loadTradeHistory?.(), 1000);
     } catch (err) {

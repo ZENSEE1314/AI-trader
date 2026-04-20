@@ -1325,9 +1325,10 @@ router.post('/resync-bitunix', async (req, res) => {
     if (!trades.length) return res.json({ total: 0, fixed: 0, skipped: 0, failed: 0, results: [], errors: [] });
 
     // ── Group by api_key_id and build a per-key position history cache ──────
-    // One Bitunix API call per unique key instead of one per trade.
+    // Bitunix requires symbol param — fetch per distinct symbol, merge results.
     const keyHistoryCache = new Map(); // key_id → { positions: [], error: string|null }
     const uniqueKeyIds = [...new Set(trades.map(t => t.key_id))];
+    const RESYNC_DEFAULT_SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT'];
 
     for (const kid of uniqueKeyIds) {
       const t0 = trades.find(t => t.key_id === kid);
@@ -1337,10 +1338,28 @@ router.post('/resync-bitunix', async (req, res) => {
         if (!apiKey || !apiSecret) throw new Error('Decrypt failed — check crypto-utils config');
 
         const bxClient  = new BitunixClient({ apiKey, apiSecret });
-        // Single page of 100 — avoids multi-page pagination loops that trigger Cloudflare 524.
-        // 100 positions covers recent trade history; run again if older trades are needed.
-        const positions = await bxClient.getHistoryPositions({ pageSize: 100 });
-        keyHistoryCache.set(kid, { positions, error: null });
+        // Bitunix silently returns empty without symbol param — fetch per symbol.
+        const keySymbols = trades.filter(t => t.key_id === kid).map(t => t.symbol);
+        const allSymbols = [...new Set([...RESYNC_DEFAULT_SYMBOLS, ...keySymbols])];
+
+        const allPositions = [];
+        for (const sym of allSymbols) {
+          try {
+            const raw = await bxClient._rawGet('/api/v1/futures/position/get_history_positions', {
+              symbol: sym, pageNum: 1, pageSize: 100,
+            });
+            console.log(`[resync-bitunix] ${sym} code=${raw?.code} msg=${raw?.msg}`);
+            if (raw?.code !== 0) continue;
+            const d = raw?.data;
+            const list = Array.isArray(d) ? d
+              : (d?.positionList || d?.resultList || d?.list || d?.data || d?.records || []);
+            allPositions.push(...list);
+          } catch (symErr) {
+            console.warn(`[resync-bitunix] ${sym} error: ${symErr.message}`);
+          }
+        }
+        console.log(`[resync-bitunix] key ${kid}: ${allPositions.length} positions across ${allSymbols.length} symbols`);
+        keyHistoryCache.set(kid, { positions: allPositions, error: null });
       } catch (e) {
         keyHistoryCache.set(kid, { positions: [], error: e.message });
       }
@@ -1490,26 +1509,22 @@ router.post('/pull-bitunix-history', async (req, res) => {
         const positions = [];
         for (const sym of symbols) {
           try {
-            // Use _rawGet to see the exact Bitunix response structure
-            const startTime = Date.now() - 90 * 24 * 60 * 60 * 1000; // last 90 days
             const raw = await client._rawGet('/api/v1/futures/position/get_history_positions', {
-              symbol: sym, pageNum: 1, pageSize: 100, startTime,
+              symbol: sym, pageNum: 1, pageSize: 100,
             });
-            // Log first symbol raw response so Railway logs show the actual structure
-            if (positions.length === 0) {
-              console.log(`[pull-bitunix-history] ${sym} raw:`, JSON.stringify(raw).substring(0, 400));
-            }
+            // Always log so Railway shows what Bitunix actually returns
+            console.log(`[pull-bitunix-history] ${sym} code=${raw?.code} msg=${raw?.msg} dataKeys=${JSON.stringify(Object.keys(raw?.data || {}))}`);
             if (raw?.code !== 0) {
-              console.warn(`[pull-bitunix-history] ${sym} API error: code=${raw?.code} msg=${raw?.msg}`);
+              errors.push(`${sym}: API error code=${raw?.code} msg=${raw?.msg}`);
               continue;
             }
             const d = raw?.data;
-            // Try every known field name Bitunix might use
             const list = Array.isArray(d) ? d
               : (d?.positionList || d?.resultList || d?.list || d?.data || d?.records || []);
             positions.push(...list);
           } catch (e) {
             console.warn(`[pull-bitunix-history] ${sym} fetch error: ${e.message}`);
+            errors.push(`${sym}: ${e.message}`);
           }
         }
 
