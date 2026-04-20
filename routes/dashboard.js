@@ -1450,11 +1450,20 @@ router.post('/pull-bitunix-history', async (req, res) => {
     const { BitunixClient } = require('../bitunix-client');
     const cryptoUtils2 = require('../crypto-utils');
 
-    const keys = await query(
-      `SELECT id, user_id, api_key_enc, iv, auth_tag, api_secret_enc, secret_iv, secret_auth_tag
-       FROM api_keys WHERE user_id = $1 AND platform = 'bitunix' AND enabled = true`,
-      [req.userId]
-    );
+    // Admin pulls history for ALL users; regular users pull only their own
+    const adminRow = await query('SELECT is_admin FROM users WHERE id = $1', [req.userId]);
+    const isAdmin = adminRow[0]?.is_admin;
+
+    const keys = isAdmin
+      ? await query(
+          `SELECT id, user_id, api_key_enc, iv, auth_tag, api_secret_enc, secret_iv, secret_auth_tag
+           FROM api_keys WHERE platform = 'bitunix' AND enabled = true`
+        )
+      : await query(
+          `SELECT id, user_id, api_key_enc, iv, auth_tag, api_secret_enc, secret_iv, secret_auth_tag
+           FROM api_keys WHERE user_id = $1 AND platform = 'bitunix' AND enabled = true`,
+          [req.userId]
+        );
     if (!keys.length) return res.json({ error: 'No Bitunix API keys found' });
 
     let inserted = 0, updated = 0, skipped = 0;
