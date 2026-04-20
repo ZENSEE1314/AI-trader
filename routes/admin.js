@@ -1862,6 +1862,19 @@ router.post('/backtest', async (req, res) => {
     // volMult = 0 → disabled; e.g. 1.5 = entry candle must be 1.5× avg volume
     const VOL_MULT = parseFloat(req.body.volMult) || 0;
 
+    // ── Direction Settings ────────────────────────────────────────────────────
+    // Enable/disable each direction, and optionally override SL/TP/Trail per direction.
+    // If a per-direction value is 0 or absent, falls back to the global value above.
+    const ENABLE_LONG  = req.body.enableLong  !== false && req.body.enableLong  !== 'false';
+    const ENABLE_SHORT = req.body.enableShort !== false && req.body.enableShort !== 'false';
+
+    const SL_LONG   = parseFloat(req.body.slPctLong)     || SL_PCT;
+    const SL_SHORT  = parseFloat(req.body.slPctShort)    || SL_PCT;
+    const TP_LONG   = parseFloat(req.body.tpPctLong)     || TP_PCT;
+    const TP_SHORT  = parseFloat(req.body.tpPctShort)    || TP_PCT;
+    const TRAIL_LONG  = parseFloat(req.body.trailStepLong)  || TRAIL_FIRST;
+    const TRAIL_SHORT = parseFloat(req.body.trailStepShort) || TRAIL_FIRST;
+
     const STRATEGY = req.body.strategy || 'full';
     const DAYS     = Math.min(parseInt(req.body.days) || 7, 30);
     const REVERSE  = req.body.reverse === true;
@@ -2063,16 +2076,17 @@ router.post('/backtest', async (req, res) => {
               continue;
             }
           }
-          // Trailing SL with configurable step
+          // Trailing SL — uses per-position step stored at entry time
+          const trailStep = pos.trailStep || TRAIL_FIRST;
           const profitPct = pos.dir === 'LONG' ? (close - pos.entry) / pos.entry : (pos.entry - close) / pos.entry;
-          const nextStep = pos.lastStep === 0 ? TRAIL_FIRST : pos.lastStep + TRAIL_STEP;
+          const nextStep = pos.lastStep === 0 ? trailStep : pos.lastStep + trailStep;
           if (profitPct >= nextStep) {
             let reached = nextStep;
-            while (profitPct >= reached + TRAIL_STEP) reached += TRAIL_STEP;
+            while (profitPct >= reached + trailStep) reached += trailStep;
             pos.lastStep = reached;
-            const slLevel = reached <= TRAIL_FIRST
-              ? reached - TRAIL_FIRST / 2
-              : reached - TRAIL_STEP;
+            const slLevel = reached <= trailStep
+              ? reached - trailStep / 2
+              : reached - trailStep;
             pos.sl = pos.dir === 'LONG'
               ? pos.entry * (1 + slLevel)
               : pos.entry * (1 - slLevel);
@@ -2299,17 +2313,26 @@ router.post('/backtest', async (req, res) => {
             if (avgVol > 0 && vols[20] / avgVol < VOL_MULT) continue;
           }
 
-          // Step 6: Risk — per-token leverage from admin settings, SL scaled to leverage
-          const leverage = leverageMap[sym] || MAX_LEVERAGE;
-          const tokenSlPct = SL_PCT > 0 ? SL_PCT : 0.25;
-          const sl = dir === 'LONG' ? price * (1 - tokenSlPct) : price * (1 + tokenSlPct);
-          const tp = TP_PCT > 0
-            ? (dir === 'LONG' ? price * (1 + TP_PCT) : price * (1 - TP_PCT))
+          // Direction enable/disable check
+          if (dir === 'LONG'  && !ENABLE_LONG)  continue;
+          if (dir === 'SHORT' && !ENABLE_SHORT) continue;
+
+          // Step 6: Risk — per-direction SL/TP/Trail override, then fall back to global
+          const isLong    = dir === 'LONG';
+          const leverage  = leverageMap[sym] || MAX_LEVERAGE;
+          const dirSlPct  = isLong ? SL_LONG   : SL_SHORT;
+          const dirTpPct  = isLong ? TP_LONG   : TP_SHORT;
+          const dirTrail  = isLong ? TRAIL_LONG : TRAIL_SHORT;
+
+          const sl = isLong ? price * (1 - dirSlPct) : price * (1 + dirSlPct);
+          const tp = dirTpPct > 0
+            ? (isLong ? price * (1 + dirTpPct) : price * (1 - dirTpPct))
             : null;
 
           const tradeUsdt = wallet * RISK_PCT;
           const qty = (tradeUsdt * leverage) / price;
-          const trade = { symbol: sym, dir, entry: price, qty, sl, tp, lastStep: 0, entryTime: now, exit: null, reason: null, pnl: null, exitTime: null };
+          const trade = { symbol: sym, dir, entry: price, qty, sl, tp, trailStep: dirTrail,
+            lastStep: 0, entryTime: now, exit: null, reason: null, pnl: null, exitTime: null };
           openPos.push(trade);
           trades.push(trade);
         }
@@ -2386,6 +2409,11 @@ router.post('/backtest', async (req, res) => {
         rsiPeriod: RSI_PERIOD, rsiOb: RSI_OB, rsiOs: RSI_OS,
         emaFast: EMA_FAST, emaSlow: EMA_SLOW, emaTrend: EMA_TREND,
         volMult: VOL_MULT,
+        // Direction settings
+        enableLong: ENABLE_LONG, enableShort: ENABLE_SHORT,
+        slPctLong: SL_LONG, slPctShort: SL_SHORT,
+        tpPctLong: TP_LONG, tpPctShort: TP_SHORT,
+        trailStepLong: TRAIL_LONG, trailStepShort: TRAIL_SHORT,
         strategy: STRATEGY,
       },
       dataPoints: {

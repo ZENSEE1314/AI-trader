@@ -2541,6 +2541,25 @@
         lines.push(`📦 Vol ≥${a.volMult}× avg`);
       }
 
+      // Direction settings
+      const dirEnabled = [];
+      const enableL = a.enableLong  !== false && a.enableLong  !== 'false';
+      const enableS = a.enableShort !== false && a.enableShort !== 'false';
+      if (enableL && enableS) dirEnabled.push('LONG + SHORT');
+      else if (enableL)       dirEnabled.push('LONG only');
+      else if (enableS)       dirEnabled.push('SHORT only');
+      else                    dirEnabled.push('⚠️ Both disabled');
+
+      const dirOverrides = [];
+      if (fp(a.slPctLong)    > 0) dirOverrides.push(`SL▲ ${pct(a.slPctLong)}`);
+      if (fp(a.slPctShort)   > 0) dirOverrides.push(`SL▼ ${pct(a.slPctShort)}`);
+      if (fp(a.tpPctLong)    > 0) dirOverrides.push(`TP▲ ${pct(a.tpPctLong)}`);
+      if (fp(a.tpPctShort)   > 0) dirOverrides.push(`TP▼ ${pct(a.tpPctShort)}`);
+      if (fp(a.trailStepLong)  > 0) dirOverrides.push(`Trail▲ ${pct(a.trailStepLong)}`);
+      if (fp(a.trailStepShort) > 0) dirOverrides.push(`Trail▼ ${pct(a.trailStepShort)}`);
+
+      lines.push('🔀 ' + dirEnabled[0] + (dirOverrides.length ? '  |  ' + dirOverrides.join(' · ') : ''));
+
       if (paramsEl) paramsEl.innerHTML = lines.map(l => `<span style="display:block;line-height:1.7;">${escapeHtml(l)}</span>`).join('');
 
       if (topBar) topBar.style.display = 'flex';
@@ -2638,6 +2657,15 @@
       emaTrend:      parseInt($('#bt-ema-trend')?.value) ?? 50,
       // Volume filter
       volMult:       parseFloat($('#bt-vol-mult')?.value) || 0,
+      // Direction settings
+      enableLong:    $('#bt-enable-long')?.checked !== false,
+      enableShort:   $('#bt-enable-short')?.checked !== false,
+      slPctLong:     parseFloat($('#bt-sl-long')?.value)    / 100 || 0,
+      slPctShort:    parseFloat($('#bt-sl-short')?.value)   / 100 || 0,
+      tpPctLong:     parseFloat($('#bt-tp-long')?.value)    / 100 || 0,
+      tpPctShort:    parseFloat($('#bt-tp-short')?.value)   / 100 || 0,
+      trailStepLong:  parseFloat($('#bt-trail-long')?.value)  / 100 || 0,
+      trailStepShort: parseFloat($('#bt-trail-short')?.value) / 100 || 0,
     };
   }
 
@@ -2671,6 +2699,18 @@
     setV('#bt-ema-trend',   p.emaTrend);
     // Volume
     setV('#bt-vol-mult',    p.volMult);
+    // Direction
+    const elLong  = $('#bt-enable-long');
+    const elShort = $('#bt-enable-short');
+    if (elLong  && p.enableLong  != null) elLong.checked  = p.enableLong  !== false && p.enableLong  !== 'false';
+    if (elShort && p.enableShort != null) elShort.checked = p.enableShort !== false && p.enableShort !== 'false';
+    const pct2str = (v) => v != null && parseFloat(v) > 0 ? (parseFloat(v) * 100).toFixed(1) : '0';
+    setV('#bt-sl-long',      pct2str(p.slPctLong));
+    setV('#bt-sl-short',     pct2str(p.slPctShort));
+    setV('#bt-tp-long',      pct2str(p.tpPctLong));
+    setV('#bt-tp-short',     pct2str(p.tpPctShort));
+    setV('#bt-trail-long',   pct2str(p.trailStepLong));
+    setV('#bt-trail-short',  pct2str(p.trailStepShort));
   }
 
   async function runBacktest(mode, reverse) {

@@ -1548,15 +1548,35 @@ async function executeForAllUsers(pick) {
         // User's risk settings — active AI version can override SL/trail if admin activated one
         const walletSizePct = (await getCapitalPercentage(key.id)) / 100;
         const activeVer = await getActiveVersionParams();
-        // active version sl_pct is already a price% (e.g. 0.03 = 3%) — no conversion needed
-        const userTrailStep = parseFloat(key.trailing_sl_step) || (activeVer?.trailing_step ? parseFloat(activeVer.trailing_step) : 1.2);
-        const userMaxLoss = parseFloat(key.max_loss_usdt) || 0;
 
-        // SL price distance: active version overrides with its own price%, else use hardcoded margin%/leverage
-        let slPricePct = activeVer?.sl_pct != null ? parseFloat(activeVer.sl_pct) : (SL_PCT / userLev);
-        const tpPricePct = activeVer?.tp_pct != null && parseFloat(activeVer.tp_pct) > 0
-          ? parseFloat(activeVer.tp_pct)
-          : (TP_PCT / userLev);
+        // Direction enable/disable — if active version disables a direction, skip this trade
+        if (activeVer) {
+          const enableL = activeVer.enableLong  !== false && activeVer.enableLong  !== 'false';
+          const enableS = activeVer.enableShort !== false && activeVer.enableShort !== 'false';
+          if (isLong  && !enableL) { userLog.trade(`User ${key.email}: ${symbol} LONG disabled by active version — skipping`); return; }
+          if (!isLong && !enableS) { userLog.trade(`User ${key.email}: ${symbol} SHORT disabled by active version — skipping`); return; }
+        }
+
+        // Per-direction SL/TP/Trail: use direction-specific value if set, else use global value, else hardcoded default
+        const dirSlKey    = isLong ? 'slPctLong'    : 'slPctShort';
+        const dirTpKey    = isLong ? 'tpPctLong'    : 'tpPctShort';
+        const dirTrailKey = isLong ? 'trailStepLong' : 'trailStepShort';
+
+        const globalSl    = activeVer?.slPct     != null ? parseFloat(activeVer.slPct)     : null;
+        const globalTp    = activeVer?.tpPct     != null ? parseFloat(activeVer.tpPct)     : null;
+        const globalTrail = activeVer?.trailStep != null ? parseFloat(activeVer.trailStep) : null;
+
+        const dirSl    = activeVer?.[dirSlKey]    != null && parseFloat(activeVer[dirSlKey])    > 0 ? parseFloat(activeVer[dirSlKey])    : globalSl;
+        const dirTp    = activeVer?.[dirTpKey]    != null && parseFloat(activeVer[dirTpKey])    > 0 ? parseFloat(activeVer[dirTpKey])    : globalTp;
+        const dirTrail = activeVer?.[dirTrailKey] != null && parseFloat(activeVer[dirTrailKey]) > 0 ? parseFloat(activeVer[dirTrailKey]) : globalTrail;
+
+        const userMaxLoss = parseFloat(key.max_loss_usdt) || 0;
+        // Trail step: direction-specific → active version global → api_key setting → hardcoded default
+        const userTrailStep = dirTrail ?? parseFloat(key.trailing_sl_step) ?? 1.2;
+
+        // SL price distance: direction-specific override → active version global → hardcoded margin%/leverage
+        let slPricePct = dirSl != null ? dirSl : (SL_PCT / userLev);
+        const tpPricePct = dirTp != null && dirTp > 0 ? dirTp : (TP_PCT / userLev);
 
         // Liquidation guard
         const maxSlPct = (1 / userLev) * 0.80;
