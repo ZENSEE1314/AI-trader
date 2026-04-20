@@ -1,8 +1,20 @@
 {
-  "version": "1.4.6",
+  "version": "1.4.7",
   "name": "MCT AI Trader",
   "released": "2026-04-20",
   "changelog": [
+    {
+      "version": "1.4.7",
+      "tag": "v1.4.7",
+      "date": "2026-04-20",
+      "label": "App load speed optimisation",
+      "changes": [
+        "Signal board: replace N parallel per-symbol Binance calls with single bulk ticker request cached 30s server-side — was 50 HTTP calls per page load, now 1",
+        "Add defer to i18n.js script tag — was parser-blocking, now non-blocking",
+        "Add DB indexes idx_trades_user_closed (user_id, closed_at DESC) and idx_trades_api_key_status — speeds up weekly earnings and trade history queries",
+        "gzip compression was already enabled — confirmed active"
+      ]
+    },
     {
       "version": "1.4.6",
       "tag": "v1.4.6",

@@ -7,6 +7,40 @@ const cryptoUtils = require('../crypto-utils');
 const router = express.Router();
 router.use(authMiddleware);
 
+// ── Signal board price cache — single bulk Binance call, shared across all users ──
+// Replaces N parallel per-symbol calls on every page load (was 50 calls → now 1)
+let _priceCache = { data: {}, ts: 0 };
+const PRICE_CACHE_TTL = 30000; // 30 seconds
+
+async function getSignalBoardPrices(symbols) {
+  if (Date.now() - _priceCache.ts < PRICE_CACHE_TTL && Object.keys(_priceCache.data).length > 0) {
+    return _priceCache.data;
+  }
+  try {
+    const fetch = require('node-fetch');
+    // Single request for ALL futures tickers — much faster than N individual calls
+    const r = await fetch('https://fapi.binance.com/fapi/v1/ticker/24hr', { timeout: 8000 });
+    if (!r.ok) return _priceCache.data; // return stale on error
+    const list = await r.json();
+    const map = {};
+    const symSet = new Set(symbols);
+    for (const d of list) {
+      if (symSet.has(d.symbol)) {
+        map[d.symbol] = {
+          symbol: d.symbol,
+          price: parseFloat(d.lastPrice),
+          change24h: parseFloat(d.priceChangePercent),
+          volume: parseFloat(d.quoteVolume),
+        };
+      }
+    }
+    _priceCache = { data: map, ts: Date.now() };
+    return map;
+  } catch {
+    return _priceCache.data; // return stale on error
+  }
+}
+
 const PERIOD_INTERVALS = {
   '1d':  '1 day',
   '7d':  '7 days',
@@ -718,25 +752,9 @@ router.get('/signal-board', async (req, res) => {
       if (watchMap[sym] === undefined) watchMap[sym] = true;
     }
 
-    // Fetch live prices for only these symbols (parallel — fast)
-    const fetch = require('node-fetch');
-    const priceResults = await Promise.all(
-      symbols.map(async sym => {
-        try {
-          const r = await fetch(`https://fapi.binance.com/fapi/v1/ticker/24hr?symbol=${sym}`, { timeout: 6000 });
-          if (!r.ok) return null;
-          const d = await r.json();
-          return {
-            symbol: sym,
-            price: parseFloat(d.lastPrice),
-            change24h: parseFloat(d.priceChangePercent),
-            volume: parseFloat(d.quoteVolume),
-          };
-        } catch { return null; }
-      })
-    );
-    const priceMap = {};
-    for (const p of priceResults) if (p) priceMap[p.symbol] = p;
+    // Fetch live prices — single bulk request cached 30s server-side
+    // One call for all symbols beats N parallel per-symbol calls on every page load
+    const priceMap = await getSignalBoardPrices(symbols);
 
     // Get user's per-token leverage
     let userLevMap = {};

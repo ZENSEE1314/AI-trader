@@ -628,6 +628,8 @@ async function initAllTables() {
     'CREATE INDEX IF NOT EXISTS idx_trades_user_status ON trades (user_id, status)',
     'CREATE INDEX IF NOT EXISTS idx_trades_symbol_status ON trades (symbol, status)',
     'CREATE INDEX IF NOT EXISTS idx_trades_created_at ON trades (created_at DESC)',
+    'CREATE INDEX IF NOT EXISTS idx_trades_user_closed ON trades (user_id, closed_at DESC)',
+    'CREATE INDEX IF NOT EXISTS idx_trades_api_key_status ON trades (api_key_id, status)',
     'CREATE INDEX IF NOT EXISTS idx_ai_trades_symbol ON ai_trades (symbol)',
     'CREATE INDEX IF NOT EXISTS idx_ai_trades_setup ON ai_trades (setup)',
     'CREATE INDEX IF NOT EXISTS idx_ai_trades_created_at ON ai_trades (created_at DESC)',
