@@ -61,20 +61,30 @@ router.post('/login', async (req, res) => {
     if (!email || !password) return res.status(400).json({ error: 'Email and password required' });
 
     const { remember } = req.body;
+    console.log(`[LOGIN] attempt for ${email}`);
     const rows = await query('SELECT id, password_hash, is_blocked FROM users WHERE email = $1', [email.toLowerCase()]);
-    if (!rows.length) return res.status(401).json({ error: 'Invalid credentials' });
+    if (!rows.length) {
+      console.log(`[LOGIN] no user found for ${email}`);
+      return res.status(401).json({ error: 'Invalid credentials' });
+    }
     if (rows[0].is_blocked) return res.status(403).json({ error: 'Account is blocked. Contact support.' });
 
     const valid = await bcrypt.compare(password, rows[0].password_hash);
-    if (!valid) return res.status(401).json({ error: 'Invalid credentials' });
+    if (!valid) {
+      console.log(`[LOGIN] wrong password for ${email}`);
+      return res.status(401).json({ error: 'Invalid credentials' });
+    }
 
     const maxAge = remember ? 30 * 24 * 60 * 60 * 1000 : 24 * 60 * 60 * 1000; // 30 days or 1 day
     const token = signToken(rows[0].id, email.toLowerCase(), remember);
-    res.cookie('token', token, { httpOnly: true, maxAge, sameSite: 'lax' });
+    // secure: true required on Railway (HTTPS) so browsers honour the cookie
+    const isSecure = req.secure || req.headers['x-forwarded-proto'] === 'https';
+    res.cookie('token', token, { httpOnly: true, maxAge, sameSite: 'lax', secure: isSecure });
+    console.log(`[LOGIN] success for ${email} (secure=${isSecure})`);
     res.json({ ok: true });
   } catch (err) {
-    console.error('Login error:', err.message);
-    res.status(500).json({ error: 'Server error' });
+    console.error('[LOGIN] error:', err.message, err.stack);
+    res.status(500).json({ error: `Server error: ${err.message}` });
   }
 });
 
@@ -201,8 +211,8 @@ router.get('/me', authMiddleware, async (req, res) => {
       usdt_network: u.usdt_network || 'BEP20',
     });
   } catch (err) {
-    console.error('Me error:', err.message);
-    res.status(500).json({ error: 'Server error' });
+    console.error('[ME] error:', err.message, err.stack);
+    res.status(500).json({ error: `Server error: ${err.message}` });
   }
 });
 
