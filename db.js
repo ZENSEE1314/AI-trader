@@ -388,6 +388,8 @@ async function initAllTables() {
     `ALTER TABLE trades ADD COLUMN IF NOT EXISTS funding_fee NUMERIC DEFAULT 0`,
     // Bitunix position ID — stored at open, used for exact match at sync (no guessing)
     `ALTER TABLE trades ADD COLUMN IF NOT EXISTS bitunix_position_id VARCHAR(64)`,
+    // Exit reason — recorded when bot closes a trade (triple_ma, spike_hl, swarm, etc.)
+    `ALTER TABLE trades ADD COLUMN IF NOT EXISTS exit_reason VARCHAR(100)`,
     // User token watchlist (which tokens each user wants to trade)
     `CREATE TABLE IF NOT EXISTS user_watchlist (
       id SERIAL PRIMARY KEY,

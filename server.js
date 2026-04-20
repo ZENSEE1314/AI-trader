@@ -11,6 +11,23 @@ app.set('trust proxy', 1); // Railway runs behind proxy — needed for secure co
 // Ensure all tables exist on startup
 initAllTables().catch(err => console.error('DB init error:', err.message));
 
+// ── Bot log auto-cleanup — keep only last 3 days, run on startup + every 6h ──
+// bot_logs grows ~100k rows/day and will fill the 512MB Neon free tier in weeks.
+const { query: dbQuery } = require('./db');
+async function cleanBotLogs() {
+  try {
+    const result = await dbQuery(
+      `DELETE FROM bot_logs WHERE ts < NOW() - INTERVAL '3 days'`
+    );
+    const deleted = result?.length ?? 0;
+    if (deleted > 0) console.log(`[CLEANUP] Deleted ${deleted} old bot_log rows`);
+  } catch (e) {
+    console.error('[CLEANUP] bot_logs cleanup error:', e.message);
+  }
+}
+cleanBotLogs();
+setInterval(cleanBotLogs, 6 * 60 * 60 * 1000); // every 6 hours
+
 // Initialize Agent Framework
 (async () => {
   try {
