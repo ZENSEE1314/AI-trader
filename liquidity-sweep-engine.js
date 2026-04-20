@@ -1893,11 +1893,17 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
 
     // EMA200 bias (PDF: "above MA200 → look long, below → look short")
     // Hard block if direction conflicts with EMA200 trend.
-    // EXCEPTION: BOS_SHORT is a breakdown strategy — breakdowns happen in bull trends.
-    // Apply a score penalty instead of hard block so strong setups can still pass.
+    // EXCEPTION for altcoins: BOS_SHORT/RESIST_REJECT can fire reversal SHORTs in bull trends.
+    // NO EXCEPTION for BTCUSDT itself — BTC above EMA200 = macro bull market, never short BTC.
     if (ema200_bias === 'bullish' && sig.direction === 'SHORT') {
+      if (symbol === 'BTCUSDT') {
+        // BTC in a bull market — hard block ALL short strategies, no exceptions.
+        sig.score = -99;
+        sig.blocked = `BTC SHORT blocked — BTCUSDT above EMA200 (macro bull market, never short BTC trend)`;
+        continue;
+      }
       if (sig.setup === 'BOS_SHORT' || sig.setup === 'RESIST_REJECT') {
-        sig.score -= 3; // penalty only — reversals at resistance happen in bull trends too
+        sig.score -= 3; // penalty only — reversals at resistance happen in bull trends on alts
       } else {
         sig.score = -99;
         sig.blocked = `SHORT blocked — price above EMA200 (bullish bias per PDF)`;
@@ -2078,8 +2084,9 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     return true;
   });
 
-  // Filter: RR minimum 1.2, SL reasonable, not blocked by trend
-  const validSignals = rsiFiltered.filter(s => s.rr >= 1.2 && s.slDist > 0.001 && s.slDist < 0.03 && s.score >= 0);
+  // Filter: RR minimum 1.2, SL reasonable, score must be meaningful (>= 8 = earned through real confirmations)
+  const MIN_SIGNAL_SCORE = 8;
+  const validSignals = rsiFiltered.filter(s => s.rr >= 1.2 && s.slDist > 0.001 && s.slDist < 0.03 && s.score >= MIN_SIGNAL_SCORE);
 
   if (!validSignals.length) return null;
 
