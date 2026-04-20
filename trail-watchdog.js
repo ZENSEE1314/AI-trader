@@ -29,6 +29,22 @@ function log(msg) {
   console.log(`[TRAIL ${t}] ${msg}`);
 }
 
+async function notify(msg) {
+  try {
+    const token = process.env.TELEGRAM_TOKEN;
+    const chats = (process.env.TELEGRAM_CHAT_ID || '').split(',').filter(Boolean);
+    if (!token || !chats.length) return;
+    for (const chatId of chats) {
+      await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat_id: chatId.trim(), text: msg, parse_mode: 'Markdown' }),
+        timeout: 5000, ...getFetchOptions(),
+      }).catch(() => {});
+    }
+  } catch (_) {}
+}
+
 function inferPricePrec(storedPrice) {
   const s = String(parseFloat(storedPrice) || 0);
   const dot = s.indexOf('.');
@@ -167,8 +183,10 @@ async function runTrailCycle() {
              ak.api_secret_enc, ak.secret_iv, ak.secret_auth_tag
       FROM trades t
       JOIN api_keys ak ON ak.id = t.api_key_id
-      WHERE t.status = 'OPEN' AND ak.enabled = true
+      WHERE t.status = 'OPEN'
     `);
+    // NOTE: intentionally does NOT filter by ak.enabled — pausing a key sets enabled=false
+    // but existing open positions must still have their SL protected regardless of pause state.
 
     if (!trades.length) return;
 
@@ -236,6 +254,21 @@ async function runTrailCycle() {
             [bestSl, trade.id]
           );
           log(`✓ ${trade.symbol} SL locked → $${bestSl.toFixed(pricePrec)}`);
+          await notify(
+            `📈 *Trail SL Moved*\n` +
+            `*${trade.symbol}* ${isLong ? 'LONG' : 'SHORT'}\n` +
+            `SL: \`$${currentSl.toFixed(pricePrec)}\` → \`$${bestSl.toFixed(pricePrec)}\`\n` +
+            `Source: ${source.join('+')}\n` +
+            `Profit: +${(capitalPct * 100).toFixed(1)}% capital`
+          );
+        } else {
+          log(`✗ ${trade.symbol} SL update FAILED (exchange rejected)`);
+          await notify(
+            `🚨 *Trail SL Failed*\n` +
+            `*${trade.symbol}* ${isLong ? 'LONG' : 'SHORT'}\n` +
+            `Tried SL → \`$${bestSl.toFixed(pricePrec)}\` — exchange rejected\n` +
+            `Profit: +${(capitalPct * 100).toFixed(1)}% capital`
+          );
         }
       } catch (e) {
         log(`Error ${trade.symbol}: ${e.message}`);
