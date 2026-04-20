@@ -1511,25 +1511,33 @@ router.post('/pull-bitunix-history', async (req, res) => {
           ...symRows.map(r => r.symbol),
         ])];
 
+        const PAGE_SIZE = 50;
+        const MAX_PAGES = 5; // cap at 250 per symbol to avoid timeout
         const positions = [];
         for (const sym of symbols) {
-          try {
-            const raw = await client._rawGet('/api/v1/futures/position/get_history_positions', {
-              symbol: sym, pageNum: 1, pageSize: 50,
-            });
-            // Always log so Railway shows what Bitunix actually returns
-            console.log(`[pull-bitunix-history] ${sym} code=${raw?.code} msg=${raw?.msg} dataKeys=${JSON.stringify(Object.keys(raw?.data || {}))}`);
-            if (raw?.code !== 0) {
-              errors.push(`${sym}: API error code=${raw?.code} msg=${raw?.msg}`);
-              continue;
+          let page = 1;
+          while (page <= MAX_PAGES) {
+            try {
+              const raw = await client._rawGet('/api/v1/futures/position/get_history_positions', {
+                symbol: sym, pageNum: page, pageSize: PAGE_SIZE,
+              });
+              if (page === 1) console.log(`[pull-bitunix-history] ${sym} p${page} code=${raw?.code} msg=${raw?.msg}`);
+              if (raw?.code !== 0) {
+                if (page === 1) errors.push(`${sym}: API error code=${raw?.code} msg=${raw?.msg}`);
+                break;
+              }
+              const d = raw?.data;
+              const list = Array.isArray(d) ? d
+                : (d?.positionList || d?.resultList || d?.list || d?.data || d?.records || []);
+              positions.push(...list);
+              // If page returned fewer than PAGE_SIZE, no more pages
+              if (list.length < PAGE_SIZE) break;
+              page++;
+            } catch (e) {
+              console.warn(`[pull-bitunix-history] ${sym} p${page} error: ${e.message}`);
+              if (page === 1) errors.push(`${sym}: ${e.message}`);
+              break;
             }
-            const d = raw?.data;
-            const list = Array.isArray(d) ? d
-              : (d?.positionList || d?.resultList || d?.list || d?.data || d?.records || []);
-            positions.push(...list);
-          } catch (e) {
-            console.warn(`[pull-bitunix-history] ${sym} fetch error: ${e.message}`);
-            errors.push(`${sym}: ${e.message}`);
           }
         }
 
