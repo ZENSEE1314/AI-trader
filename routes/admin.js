@@ -1724,6 +1724,48 @@ router.post('/debug-bitunix', async (req, res) => {
 });
 
 // ── AI Versions — list for backtest version selector ──────────
+// POST /api/admin/ai-versions/:id/activate
+// Saves the selected backtest version's params to the settings table so cycle.js
+// picks them up for live trading (SL%, trail step, max positions, max losses).
+router.post('/ai-versions/:id/activate', async (req, res) => {
+  try {
+    const adminCheck = await query(`SELECT is_admin FROM users WHERE id = $1`, [req.userId]);
+    if (!adminCheck[0]?.is_admin) return res.status(403).json({ error: 'Admin only' });
+
+    const vId = parseInt(req.params.id);
+    if (!vId || isNaN(vId)) return res.status(400).json({ error: 'Invalid id' });
+
+    const rows = await query(`SELECT * FROM ai_versions WHERE id = $1`, [vId]);
+    if (!rows.length) return res.status(404).json({ error: 'Version not found' });
+
+    const v = rows[0];
+    const params = typeof v.params === 'string' ? JSON.parse(v.params) : (v.params || {});
+
+    // Persist to settings table — cycle.js reads this every 60s
+    await query(
+      `INSERT INTO settings (key, value) VALUES ('active_ai_version', $1)
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+      [JSON.stringify({ id: v.id, version: v.version, ...params })]
+    );
+
+    res.json({ ok: true, version: v.version, params });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/admin/ai-versions/deactivate — revert to hardcoded defaults
+router.post('/ai-versions/deactivate', async (req, res) => {
+  try {
+    const adminCheck = await query(`SELECT is_admin FROM users WHERE id = $1`, [req.userId]);
+    if (!adminCheck[0]?.is_admin) return res.status(403).json({ error: 'Admin only' });
+    await query(`DELETE FROM settings WHERE key = 'active_ai_version'`);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.get('/ai-versions', async (req, res) => {
   try {
     const rows = await query(
@@ -1732,6 +1774,17 @@ router.get('/ai-versions', async (req, res) => {
        FROM ai_versions ORDER BY id DESC LIMIT 50`
     );
     res.json({ versions: rows });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/admin/ai-versions/active — returns the currently active version params (or null)
+router.get('/ai-versions/active', async (req, res) => {
+  try {
+    const rows = await query(`SELECT value FROM settings WHERE key = 'active_ai_version'`);
+    if (!rows.length) return res.json(null);
+    res.json(JSON.parse(rows[0].value));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

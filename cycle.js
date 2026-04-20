@@ -65,8 +65,26 @@ let lastBitunixSync = 0;
 // Capital $100 → trade $10 → SL = $3 (30% of the $10 margin).
 // In price terms: SL_PCT / leverage = 0.30 / 20 = 1.5% for BNB/SOL at 20x
 //                                   = 0.30 / 100 = 0.3% for BTC/ETH at 100x
-const SL_PCT = 0.30;   // 30% of margin = max loss per trade
+const SL_PCT = 0.30;   // 30% of margin = max loss per trade (default; active version may override)
 const TP_PCT = 0.45;   // reference TP — trailing SL handles the actual exit
+
+// ── Active AI Version params — loaded from settings table, refreshed every 60s ──
+// Admin activates a backtest version via the UI → params saved to settings.
+// cycle.js reads them here and overrides SL/TP/trail at trade time.
+let _activeVersionCache = { params: null, ts: 0 };
+const ACTIVE_VERSION_TTL = 60_000;
+
+async function getActiveVersionParams() {
+  if (Date.now() - _activeVersionCache.ts < ACTIVE_VERSION_TTL) return _activeVersionCache.params;
+  try {
+    const rows = await db.query(`SELECT value FROM settings WHERE key = 'active_ai_version'`);
+    _activeVersionCache.params = rows.length ? JSON.parse(rows[0].value) : null;
+  } catch {
+    _activeVersionCache.params = null;
+  }
+  _activeVersionCache.ts = Date.now();
+  return _activeVersionCache.params;
+}
 
 // Taker fee: 0.04% entry + 0.04% exit = 0.08% notional both legs
 const TAKER_FEE_BOTH_LEGS = 0.0008;
@@ -1527,15 +1545,18 @@ async function executeForAllUsers(pick) {
           }
         }
 
-        // User's risk settings
+        // User's risk settings — active AI version can override SL/trail if admin activated one
         const walletSizePct = (await getCapitalPercentage(key.id)) / 100;
-        const userTrailStep = parseFloat(key.trailing_sl_step) || 1.2;
+        const activeVer = await getActiveVersionParams();
+        // active version sl_pct is already a price% (e.g. 0.03 = 3%) — no conversion needed
+        const userTrailStep = parseFloat(key.trailing_sl_step) || (activeVer?.trailing_step ? parseFloat(activeVer.trailing_step) : 1.2);
         const userMaxLoss = parseFloat(key.max_loss_usdt) || 0;
 
-        // SL = 30% of margin. Capital $100 → trade $10 → SL = $3.
-        // Price distance: SL_PCT / leverage (20x = 1.5%, 100x = 0.3%)
-        let slPricePct = SL_PCT / userLev;
-        const tpPricePct = TP_PCT / userLev;
+        // SL price distance: active version overrides with its own price%, else use hardcoded margin%/leverage
+        let slPricePct = activeVer?.sl_pct != null ? parseFloat(activeVer.sl_pct) : (SL_PCT / userLev);
+        const tpPricePct = activeVer?.tp_pct != null && parseFloat(activeVer.tp_pct) > 0
+          ? parseFloat(activeVer.tp_pct)
+          : (TP_PCT / userLev);
 
         // Liquidation guard
         const maxSlPct = (1 / userLev) * 0.80;

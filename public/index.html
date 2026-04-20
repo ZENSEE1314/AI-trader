@@ -1953,11 +1953,15 @@
             <strong style="font-size:0.9rem;color:var(--color-text);">Backtest Settings</strong>
             <div style="margin-top:var(--space-2);margin-bottom:var(--space-3);">
               <label class="form-label" style="font-size:0.8rem;">AI Version</label>
+              <!-- Shows which version the live bot is currently trading with -->
+              <div id="active-version-banner" style="display:none;margin-bottom:var(--space-2);padding:6px 10px;background:rgba(0,200,100,0.08);border:1px solid rgba(0,200,100,0.2);border-radius:6px;font-size:0.78rem;color:var(--color-text-muted);"></div>
               <div style="display:flex;gap:var(--space-2);align-items:center;flex-wrap:wrap;">
                 <select id="bt-ai-version" class="form-input" style="max-width:400px;font-size:0.8rem;">
                   <option value="">Manual Settings</option>
                 </select>
                 <button class="btn btn-ghost btn-sm" onclick="window.CryptoBot.loadAiVersions()" style="font-size:0.75rem;">Refresh</button>
+                <button id="btn-activate-version" class="btn btn-sm" onclick="window.CryptoBot.activateVersionForTrading()" style="background:var(--color-accent);color:#fff;font-size:0.75rem;padding:4px 12px;" title="Make the bot trade live with this version's SL/TP/trail settings">🚀 Trade with This</button>
+                <button class="btn btn-ghost btn-sm" onclick="window.CryptoBot.deactivateVersion()" style="font-size:0.75rem;color:var(--color-text-muted);" title="Revert bot to default hardcoded settings">✕ Clear</button>
               </div>
             </div>
             <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:var(--space-2);margin-bottom:var(--space-3);">
@@ -2022,78 +2026,167 @@
              ═══════════════════════════════════════════ -->
         <div id="admin-tab-versions" class="admin-tab-panel hidden">
 
-          <!-- Header bar -->
-          <div style="display:flex;align-items:center;gap:var(--space-3);flex-wrap:wrap;margin-bottom:var(--space-3);">
-            <div>
+          <!-- Header -->
+          <div style="display:flex;align-items:flex-start;gap:var(--space-3);flex-wrap:wrap;margin-bottom:var(--space-3);">
+            <div style="flex:1;min-width:200px;">
               <h3 style="margin:0;font-size:1rem;color:var(--color-text);">⚡ Strategy Version Manager</h3>
-              <p style="margin:2px 0 0;font-size:0.78rem;color:var(--color-text-muted);">Save optimizer runs as named versions. Activate the best one for live trading.</p>
+              <p style="margin:2px 0 0;font-size:0.78rem;color:var(--color-text-muted);">All optimizer results are saved here automatically. Pick any version and activate it — the bot will trade with those parameters immediately.</p>
             </div>
-            <div style="margin-left:auto;display:flex;gap:var(--space-2);flex-wrap:wrap;align-items:center;">
+            <div style="display:flex;gap:var(--space-2);flex-wrap:wrap;align-items:center;flex-shrink:0;">
               <button class="btn btn-sm" id="versions-scan-btn"
                 style="background:linear-gradient(135deg,#d4af37,#b8962e);color:#000;font-weight:700;font-size:0.8rem;"
-                onclick="window.CryptoBot.scanStrategyVersions()">
-                🔍 Scan &amp; Save All Results
-              </button>
+                onclick="window.CryptoBot.scanStrategyVersions()">🔍 Sync from Optimizer</button>
               <button class="btn btn-ghost btn-sm" style="font-size:0.8rem;" onclick="window.CryptoBot.loadStrategyVersions()">↺ Refresh</button>
               <button class="btn btn-ghost btn-sm" id="versions-deactivate-btn" style="font-size:0.8rem;color:#ef4444;display:none;"
                 onclick="window.CryptoBot.deactivateStrategyVersion()">✕ Deactivate</button>
             </div>
           </div>
 
-          <!-- Stats banner -->
-          <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:var(--space-2);margin-bottom:var(--space-3);">
+          <!-- Active version banner -->
+          <div id="versions-active-banner" style="display:none;background:rgba(212,175,55,0.1);border:1px solid rgba(212,175,55,0.3);border-radius:var(--radius-md);padding:var(--space-2) var(--space-3);margin-bottom:var(--space-3);font-size:0.82rem;">
+            <span style="color:#d4af37;font-weight:700;">🟢 ACTIVE: </span>
+            <span id="active-version-name" style="color:var(--color-text);">—</span>
+            <span id="active-version-stats" style="color:var(--color-text-muted);margin-left:8px;">—</span>
+          </div>
+
+          <!-- Stats row -->
+          <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:var(--space-2);margin-bottom:var(--space-3);">
             <div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-md);padding:var(--space-2) var(--space-3);text-align:center;">
-              <div style="font-size:1.4rem;font-weight:700;color:var(--color-accent);" id="stat-total-versions">—</div>
-              <div style="font-size:0.72rem;color:var(--color-text-muted);">Versions Saved</div>
+              <div style="font-size:1.3rem;font-weight:700;color:var(--color-accent);" id="stat-total-versions">—</div>
+              <div style="font-size:0.7rem;color:var(--color-text-muted);">Total Versions</div>
             </div>
             <div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-md);padding:var(--space-2) var(--space-3);text-align:center;">
-              <div style="font-size:1.4rem;font-weight:700;color:#22c55e;" id="stat-best-wr">—</div>
-              <div style="font-size:0.72rem;color:var(--color-text-muted);">Best WR</div>
+              <div style="font-size:1.3rem;font-weight:700;color:#22c55e;" id="stat-best-wr">—</div>
+              <div style="font-size:0.7rem;color:var(--color-text-muted);">Best WR</div>
             </div>
             <div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-md);padding:var(--space-2) var(--space-3);text-align:center;">
-              <div style="font-size:1.4rem;font-weight:700;color:#f59e0b;" id="stat-80plus">—</div>
-              <div style="font-size:0.72rem;color:var(--color-text-muted);">80%+ WR Found</div>
+              <div style="font-size:1.3rem;font-weight:700;color:#f59e0b;" id="stat-80plus">—</div>
+              <div style="font-size:0.7rem;color:var(--color-text-muted);">80%+ WR</div>
             </div>
-            <div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-md);padding:var(--space-2) var(--space-3);text-align:center;overflow:hidden;">
-              <div style="font-size:0.9rem;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" id="stat-active-name">None</div>
-              <div style="font-size:0.72rem;color:var(--color-text-muted);">Active Version</div>
+            <div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-md);padding:var(--space-2) var(--space-3);text-align:center;">
+              <div style="font-size:1.3rem;font-weight:700;color:#a78bfa;" id="stat-optimizer-count">—</div>
+              <div style="font-size:0.7rem;color:var(--color-text-muted);">From Optimizer</div>
             </div>
           </div>
 
           <!-- Status message -->
           <div id="versions-msg" style="display:none;padding:var(--space-2) var(--space-3);border-radius:var(--radius-md);font-size:0.82rem;margin-bottom:var(--space-3);"></div>
 
-          <!-- Versions table -->
+          <!-- ── Manual Version Creator (admin sets own params) ── -->
+          <details id="versions-manual-creator" style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-3);margin-bottom:var(--space-3);">
+            <summary style="cursor:pointer;font-size:0.85rem;font-weight:600;color:var(--color-text);list-style:none;display:flex;align-items:center;gap:8px;">
+              ➕ Create Custom Version <span style="font-size:0.72rem;color:var(--color-text-muted);font-weight:400;">— set your own parameters</span>
+            </summary>
+            <div style="margin-top:var(--space-3);">
+              <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:var(--space-2);margin-bottom:var(--space-3);">
+                <div>
+                  <label style="font-size:0.72rem;color:var(--color-text-muted);display:block;margin-bottom:3px;">Version Name</label>
+                  <input id="cv-name" class="form-input" type="text" placeholder="e.g. My Best Setup" style="font-size:0.8rem;">
+                </div>
+                <div>
+                  <label style="font-size:0.72rem;color:var(--color-text-muted);display:block;margin-bottom:3px;">Entry Type</label>
+                  <select id="cv-entry" class="form-input" style="font-size:0.8rem;">
+                    <option value="ema_cross">EMA Cross</option>
+                    <option value="rsi_bounce">RSI Bounce</option>
+                    <option value="macd_cross">MACD Cross</option>
+                    <option value="engulfing">Engulfing</option>
+                    <option value="bb_bounce">BB Bounce</option>
+                    <option value="structure_break">Structure Break</option>
+                  </select>
+                </div>
+                <div>
+                  <label style="font-size:0.72rem;color:var(--color-text-muted);display:block;margin-bottom:3px;">EMA Fast</label>
+                  <input id="cv-ema-fast" class="form-input" type="number" value="9" min="3" max="50" style="font-size:0.8rem;">
+                </div>
+                <div>
+                  <label style="font-size:0.72rem;color:var(--color-text-muted);display:block;margin-bottom:3px;">EMA Slow</label>
+                  <input id="cv-ema-slow" class="form-input" type="number" value="21" min="10" max="200" style="font-size:0.8rem;">
+                </div>
+                <div>
+                  <label style="font-size:0.72rem;color:var(--color-text-muted);display:block;margin-bottom:3px;">EMA Trend</label>
+                  <input id="cv-ema-trend" class="form-input" type="number" value="200" min="50" max="500" style="font-size:0.8rem;">
+                </div>
+                <div>
+                  <label style="font-size:0.72rem;color:var(--color-text-muted);display:block;margin-bottom:3px;">RSI Period</label>
+                  <input id="cv-rsi-period" class="form-input" type="number" value="14" min="5" max="30" style="font-size:0.8rem;">
+                </div>
+                <div>
+                  <label style="font-size:0.72rem;color:var(--color-text-muted);display:block;margin-bottom:3px;">RSI Overbought</label>
+                  <input id="cv-rsi-ob" class="form-input" type="number" value="70" min="55" max="90" style="font-size:0.8rem;">
+                </div>
+                <div>
+                  <label style="font-size:0.72rem;color:var(--color-text-muted);display:block;margin-bottom:3px;">RSI Oversold</label>
+                  <input id="cv-rsi-os" class="form-input" type="number" value="30" min="10" max="45" style="font-size:0.8rem;">
+                </div>
+                <div>
+                  <label style="font-size:0.72rem;color:var(--color-text-muted);display:block;margin-bottom:3px;">ATR SL ×</label>
+                  <input id="cv-atr-sl" class="form-input" type="number" value="1.0" min="0.5" max="3" step="0.1" style="font-size:0.8rem;">
+                </div>
+                <div>
+                  <label style="font-size:0.72rem;color:var(--color-text-muted);display:block;margin-bottom:3px;">ATR TP ×</label>
+                  <input id="cv-atr-tp" class="form-input" type="number" value="2.0" min="1" max="6" step="0.1" style="font-size:0.8rem;">
+                </div>
+                <div>
+                  <label style="font-size:0.72rem;color:var(--color-text-muted);display:block;margin-bottom:3px;">Vol Min ×</label>
+                  <input id="cv-vol-min" class="form-input" type="number" value="1.2" min="0.5" max="3" step="0.1" style="font-size:0.8rem;">
+                </div>
+                <div>
+                  <label style="font-size:0.72rem;color:var(--color-text-muted);display:block;margin-bottom:3px;">Leverage</label>
+                  <input id="cv-leverage" class="form-input" type="number" value="20" min="1" max="20" style="font-size:0.8rem;">
+                </div>
+                <div>
+                  <label style="font-size:0.72rem;color:var(--color-text-muted);display:block;margin-bottom:3px;">Session</label>
+                  <select id="cv-session" class="form-input" style="font-size:0.8rem;">
+                    <option value="all">All 24/7</option>
+                    <option value="europe">Europe</option>
+                    <option value="us">US</option>
+                    <option value="asia">Asia</option>
+                  </select>
+                </div>
+                <div>
+                  <label style="font-size:0.72rem;color:var(--color-text-muted);display:block;margin-bottom:3px;">Trend Align</label>
+                  <select id="cv-trend-align" class="form-input" style="font-size:0.8rem;">
+                    <option value="1h">1h</option>
+                    <option value="4h">4h</option>
+                    <option value="none">None</option>
+                  </select>
+                </div>
+              </div>
+              <button class="btn btn-primary btn-sm" style="font-size:0.8rem;" onclick="window.CryptoBot.saveCustomVersion()">
+                💾 Save as Version
+              </button>
+            </div>
+          </details>
+
+          <!-- Versions table — all versions, always visible -->
           <div style="overflow-x:auto;border-radius:var(--radius-lg);border:1px solid var(--color-border-muted);">
             <table style="width:100%;border-collapse:collapse;font-size:0.78rem;">
               <thead>
                 <tr style="background:var(--color-bg-raised);border-bottom:1px solid var(--color-border-muted);">
-                  <th style="padding:10px 12px;text-align:left;color:var(--color-text-muted);font-weight:600;">Name</th>
+                  <th style="padding:10px 12px;text-align:left;color:var(--color-text-muted);font-weight:600;min-width:200px;">Version Name</th>
+                  <th style="padding:10px 12px;text-align:center;color:var(--color-text-muted);font-weight:600;">Source</th>
                   <th style="padding:10px 12px;text-align:right;color:var(--color-text-muted);font-weight:600;white-space:nowrap;">WR %</th>
                   <th style="padding:10px 12px;text-align:right;color:var(--color-text-muted);font-weight:600;">Trades</th>
                   <th style="padding:10px 12px;text-align:right;color:var(--color-text-muted);font-weight:600;">PF</th>
                   <th style="padding:10px 12px;text-align:right;color:var(--color-text-muted);font-weight:600;white-space:nowrap;">Return %</th>
                   <th style="padding:10px 12px;text-align:right;color:var(--color-text-muted);font-weight:600;white-space:nowrap;">Max DD</th>
-                  <th style="padding:10px 12px;text-align:right;color:var(--color-text-muted);font-weight:600;">Fitness</th>
                   <th style="padding:10px 12px;text-align:center;color:var(--color-text-muted);font-weight:600;">Action</th>
                 </tr>
               </thead>
               <tbody id="versions-tbody">
-                <tr><td colspan="8" style="padding:24px;text-align:center;color:var(--color-text-muted);">
-                  Click <strong>Scan &amp; Save All Results</strong> to load optimizer versions.
-                </td></tr>
+                <tr><td colspan="8" style="padding:24px;text-align:center;color:var(--color-text-muted);">Loading versions…</td></tr>
               </tbody>
             </table>
           </div>
 
-          <!-- Genome inspector panel (hidden until user clicks "View") -->
+          <!-- Genome inspector -->
           <div id="versions-genome-panel" style="display:none;margin-top:var(--space-3);background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-3);">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--space-2);">
               <strong style="font-size:0.85rem;color:var(--color-text);">📋 Genome Parameters</strong>
               <button onclick="document.getElementById('versions-genome-panel').style.display='none'"
                 style="background:none;border:none;color:var(--color-text-muted);cursor:pointer;font-size:1rem;">✕</button>
             </div>
-            <div id="versions-genome-content" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:var(--space-2);"></div>
+            <div id="versions-genome-content" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:var(--space-2);"></div>
           </div>
         </div><!-- /admin-tab-versions -->
 
@@ -2336,95 +2429,106 @@ EMAIL_FROM=MCT &lt;a83c06001@smtp-brevo.com&gt;</pre>
       var tbody = document.getElementById('versions-tbody');
       if (!tbody) return;
 
-      // Stats
-      var total80 = versions.filter(function(v){ return parseFloat(v.win_rate) >= 80; }).length;
-      var bestWR  = versions.length ? parseFloat(versions[0].win_rate) : 0;
+      var total80   = versions.filter(function(v){ return parseFloat(v.win_rate) >= 80; }).length;
+      var bestWR    = versions.length ? parseFloat(versions[0].win_rate) : 0;
+      var fromOpt   = versions.filter(function(v){ return v.source === 'optimizer'; }).length;
       var el;
-      if ((el = document.getElementById('stat-total-versions'))) el.textContent = versions.length;
-      if ((el = document.getElementById('stat-best-wr')))       el.textContent = versions.length ? bestWR.toFixed(1) + '%' : '—';
-      if ((el = document.getElementById('stat-80plus')))        el.textContent = total80;
 
+      if ((el = document.getElementById('stat-total-versions')))  el.textContent = versions.length;
+      if ((el = document.getElementById('stat-best-wr')))         el.textContent = versions.length ? bestWR.toFixed(1) + '%' : '—';
+      if ((el = document.getElementById('stat-80plus')))          el.textContent = total80;
+      if ((el = document.getElementById('stat-optimizer-count'))) el.textContent = fromOpt;
+
+      // Active banner
       var activeVer = versions.find(function(v){ return v.id === activeId; });
-      if ((el = document.getElementById('stat-active-name'))) {
-        if (activeVer) {
-          el.textContent = activeVer.name.replace(/^[🏆⭐✅·]\s*/,'').substring(0,30);
-          el.style.color = '#d4af37';
-        } else {
-          el.textContent = 'None';
-          el.style.color = '';
-        }
+      var banner = document.getElementById('versions-active-banner');
+      if (banner) banner.style.display = activeVer ? 'block' : 'none';
+      if (activeVer) {
+        var nameEl = document.getElementById('active-version-name');
+        var statEl = document.getElementById('active-version-stats');
+        if (nameEl) nameEl.textContent = activeVer.name;
+        if (statEl) statEl.textContent = 'WR ' + parseFloat(activeVer.win_rate).toFixed(1) + '% | Trades ' + (activeVer.total_trades || 0) + ' | PF ' + parseFloat(activeVer.profit_factor || 0).toFixed(2);
       }
 
-      // Deactivate button visibility
       var deBtn = document.getElementById('versions-deactivate-btn');
       if (deBtn) deBtn.style.display = activeId ? 'inline-flex' : 'none';
 
       if (!versions.length) {
-        tbody.innerHTML = '<tr><td colspan="8" style="padding:24px;text-align:center;color:var(--color-text-muted);">No versions saved yet. Click <strong>Scan &amp; Save All Results</strong>.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="8" style="padding:24px;text-align:center;color:var(--color-text-muted);">' +
+          'No versions yet. Click <strong>🔍 Sync from Optimizer</strong> to import all optimizer results, or create a custom version above.' +
+          '</td></tr>';
         return;
       }
 
       tbody.innerHTML = versions.map(function(v) {
-        var wr   = parseFloat(v.win_rate)      || 0;
-        var pf   = parseFloat(v.profit_factor) || 0;
-        var ret  = parseFloat(v.total_return)  || 0;
-        var dd   = parseFloat(v.max_drawdown)  || 0;
-        var fit  = parseFloat(v.fitness)       || 0;
+        var wr    = parseFloat(v.win_rate)      || 0;
+        var pf    = parseFloat(v.profit_factor) || 0;
+        var ret   = parseFloat(v.total_return)  || 0;
+        var dd    = parseFloat(v.max_drawdown)  || 0;
         var isAct = v.id === activeId;
+        var isMan = v.source === 'manual';
 
         var wrColor = wr >= 80 ? '#d4af37' : wr >= 70 ? '#22c55e' : wr >= 60 ? '#86efac' : '#94a3b8';
-        var rowBg   = isAct ? 'rgba(212,175,55,0.08)' : (wr >= 80 ? 'rgba(212,175,55,0.04)' : 'transparent');
-        var badge   = isAct ? '<span style="background:#d4af37;color:#000;font-size:0.62rem;font-weight:700;padding:2px 6px;border-radius:4px;margin-left:4px;">LIVE</span>' : '';
+        var rowBg   = isAct ? 'rgba(212,175,55,0.10)' : (wr >= 80 ? 'rgba(212,175,55,0.04)' : 'transparent');
+        var liveBadge = isAct ? ' <span style="background:#d4af37;color:#000;font-size:0.6rem;font-weight:700;padding:1px 5px;border-radius:3px;vertical-align:middle;">LIVE</span>' : '';
+        var srcBadge  = isMan ? '<span style="background:rgba(139,92,246,0.2);color:#a78bfa;font-size:0.6rem;padding:1px 5px;border-radius:3px;">manual</span>'
+                               : '<span style="background:rgba(34,197,94,0.1);color:#86efac;font-size:0.6rem;padding:1px 5px;border-radius:3px;">auto</span>';
+
+        var genStr = JSON.stringify(JSON.stringify(v.genome));
 
         return '<tr style="background:' + rowBg + ';border-bottom:1px solid var(--color-border-muted);">' +
-          '<td style="padding:8px 12px;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' +
-            '<span style="color:' + wrColor + ';">' + (v.name || '—') + '</span>' + badge +
+          '<td style="padding:8px 12px;">' +
+            '<div style="color:' + wrColor + ';font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:240px;">' + (v.name || '—') + liveBadge + '</div>' +
           '</td>' +
-          '<td style="padding:8px 12px;text-align:right;font-weight:700;color:' + wrColor + ';">' + wr.toFixed(1) + '%</td>' +
-          '<td style="padding:8px 12px;text-align:right;color:var(--color-text-muted);">' + (v.total_trades || 0) + '</td>' +
-          '<td style="padding:8px 12px;text-align:right;color:var(--color-text-muted);">' + pf.toFixed(2) + '</td>' +
-          '<td style="padding:8px 12px;text-align:right;color:' + (ret >= 0 ? '#22c55e' : '#ef4444') + ';">' + (ret >= 0 ? '+' : '') + ret.toFixed(1) + '%</td>' +
-          '<td style="padding:8px 12px;text-align:right;color:#ef4444;">' + dd.toFixed(1) + '%</td>' +
-          '<td style="padding:8px 12px;text-align:right;color:var(--color-text-muted);">' + fit.toFixed(1) + '</td>' +
-          '<td style="padding:8px 12px;text-align:center;white-space:nowrap;">' +
-            '<button onclick="window.CryptoBot.viewVersionGenome(' + JSON.stringify(JSON.stringify(v.genome)) + ')" ' +
-              'style="background:none;border:1px solid var(--color-border-muted);border-radius:4px;color:var(--color-text-muted);font-size:0.7rem;padding:3px 7px;cursor:pointer;margin-right:4px;">📋</button>' +
+          '<td style="padding:8px 12px;text-align:center;">' + srcBadge + '</td>' +
+          '<td style="padding:8px 12px;text-align:right;font-weight:700;color:' + wrColor + ';">' + (wr > 0 ? wr.toFixed(1) + '%' : '—') + '</td>' +
+          '<td style="padding:8px 12px;text-align:right;color:var(--color-text-muted);">' + (v.total_trades || '—') + '</td>' +
+          '<td style="padding:8px 12px;text-align:right;color:var(--color-text-muted);">' + (pf > 0 ? pf.toFixed(2) : '—') + '</td>' +
+          '<td style="padding:8px 12px;text-align:right;color:' + (ret >= 0 ? '#22c55e' : '#ef4444') + ';">' + (v.total_return != null ? (ret >= 0 ? '+' : '') + ret.toFixed(1) + '%' : '—') + '</td>' +
+          '<td style="padding:8px 12px;text-align:right;color:#ef4444;">' + (dd > 0 ? dd.toFixed(1) + '%' : '—') + '</td>' +
+          '<td style="padding:8px 12px;text-align:center;white-space:nowrap;display:flex;gap:4px;justify-content:center;">' +
+            '<button onclick="window.CryptoBot.viewVersionGenome(' + genStr + ')" title="View parameters" ' +
+              'style="background:none;border:1px solid var(--color-border-muted);border-radius:4px;color:var(--color-text-muted);font-size:0.7rem;padding:3px 7px;cursor:pointer;">📋</button>' +
             (isAct
-              ? '<span style="font-size:0.7rem;color:#d4af37;font-weight:700;">Active</span>'
+              ? '<span style="font-size:0.72rem;color:#d4af37;font-weight:700;padding:3px 8px;">✓ Active</span>'
               : '<button onclick="window.CryptoBot.activateStrategyVersion(' + v.id + ')" ' +
-                  'style="background:linear-gradient(135deg,#d4af37,#b8962e);color:#000;border:none;border-radius:4px;font-size:0.7rem;padding:3px 10px;font-weight:700;cursor:pointer;">Activate</button>'
+                  'style="background:linear-gradient(135deg,#d4af37,#b8962e);color:#000;border:none;border-radius:4px;font-size:0.72rem;padding:3px 12px;font-weight:700;cursor:pointer;">▶ Use</button>'
             ) +
+            '<button onclick="window.CryptoBot.deleteStrategyVersion(' + v.id + ')" title="Delete" ' +
+              'style="background:none;border:1px solid rgba(239,68,68,0.3);border-radius:4px;color:#ef4444;font-size:0.7rem;padding:3px 7px;cursor:pointer;">✕</button>' +
           '</td>' +
         '</tr>';
       }).join('');
     }
 
     async function loadStrategyVersions() {
+      var tbody = document.getElementById('versions-tbody');
+      if (tbody) tbody.innerHTML = '<tr><td colspan="8" style="padding:16px;text-align:center;color:var(--color-text-muted);">Loading…</td></tr>';
       try {
         var r = await fetch('/api/dashboard/strategy-versions');
         var d = await r.json();
         if (d.error) { showVersionMsg(d.error, true); return; }
         renderVersions(d.versions || [], d.active_id);
       } catch(e) {
-        showVersionMsg('Failed to load versions: ' + e.message, true);
+        showVersionMsg('Failed to load: ' + e.message, true);
       }
     }
 
     async function scanStrategyVersions() {
       var btn = document.getElementById('versions-scan-btn');
-      if (btn) { btn.textContent = '⏳ Scanning...'; btn.disabled = true; }
+      if (btn) { btn.textContent = '⏳ Syncing...'; btn.disabled = true; }
       try {
         var r = await fetch('/api/dashboard/strategy-versions/scan', { method: 'POST' });
         var d = await r.json();
-        if (d.error) { showVersionMsg(d.error, true); }
+        if (d.error) { showVersionMsg('Sync error: ' + d.error, true); }
         else {
-          showVersionMsg(d.message + (d.best ? ' Best: ' + d.best.name : ''), false);
+          showVersionMsg(d.message, false);
           await loadStrategyVersions();
         }
       } catch(e) {
-        showVersionMsg('Scan failed: ' + e.message, true);
+        showVersionMsg('Sync failed: ' + e.message, true);
       } finally {
-        if (btn) { btn.textContent = '🔍 Scan & Save All Results'; btn.disabled = false; }
+        if (btn) { btn.textContent = '🔍 Sync from Optimizer'; btn.disabled = false; }
       }
     }
 
@@ -2433,7 +2537,7 @@ EMAIL_FROM=MCT &lt;a83c06001@smtp-brevo.com&gt;</pre>
         var r = await fetch('/api/dashboard/strategy-versions/activate/' + id, { method: 'POST' });
         var d = await r.json();
         if (d.error) { showVersionMsg(d.error, true); return; }
-        showVersionMsg('✅ Activated: ' + (d.activated && d.activated.name ? d.activated.name : 'version ' + id), false);
+        showVersionMsg('✅ Activated: ' + (d.activated ? d.activated.name : 'version ' + id) + ' — bot will use these parameters on next scan', false);
         await loadStrategyVersions();
       } catch(e) {
         showVersionMsg('Activate failed: ' + e.message, true);
@@ -2445,10 +2549,58 @@ EMAIL_FROM=MCT &lt;a83c06001@smtp-brevo.com&gt;</pre>
         var r = await fetch('/api/dashboard/strategy-versions/deactivate', { method: 'POST' });
         var d = await r.json();
         if (d.error) { showVersionMsg(d.error, true); return; }
-        showVersionMsg('Deactivated — bot reverted to default engine parameters.', false);
+        showVersionMsg('Deactivated — bot reverted to default parameters', false);
         await loadStrategyVersions();
       } catch(e) {
         showVersionMsg('Deactivate failed: ' + e.message, true);
+      }
+    }
+
+    async function deleteStrategyVersion(id) {
+      if (!confirm('Delete this version? This cannot be undone.')) return;
+      try {
+        var r = await fetch('/api/dashboard/strategy-versions/' + id, { method: 'DELETE' });
+        var d = await r.json();
+        if (d.error) { showVersionMsg(d.error, true); return; }
+        await loadStrategyVersions();
+      } catch(e) {
+        showVersionMsg('Delete failed: ' + e.message, true);
+      }
+    }
+
+    async function saveCustomVersion() {
+      var name = (document.getElementById('cv-name') || {}).value;
+      if (!name || !name.trim()) { showVersionMsg('Please enter a version name', true); return; }
+      var genome = {
+        ema_fast:    parseInt(document.getElementById('cv-ema-fast').value)    || 9,
+        ema_slow:    parseInt(document.getElementById('cv-ema-slow').value)    || 21,
+        ema_trend:   parseInt(document.getElementById('cv-ema-trend').value)   || 200,
+        rsi_period:  parseInt(document.getElementById('cv-rsi-period').value)  || 14,
+        rsi_ob:      parseInt(document.getElementById('cv-rsi-ob').value)      || 70,
+        rsi_os:      parseInt(document.getElementById('cv-rsi-os').value)      || 30,
+        atr_period:  14,
+        atr_sl:      parseFloat(document.getElementById('cv-atr-sl').value)    || 1.0,
+        atr_tp:      parseFloat(document.getElementById('cv-atr-tp').value)    || 2.0,
+        vol_min:     parseFloat(document.getElementById('cv-vol-min').value)   || 1.2,
+        leverage:    parseInt(document.getElementById('cv-leverage').value)    || 20,
+        entry_type:  document.getElementById('cv-entry').value   || 'ema_cross',
+        session:     document.getElementById('cv-session').value || 'all',
+        trend_align: document.getElementById('cv-trend-align').value || '1h',
+      };
+      try {
+        var r = await fetch('/api/dashboard/strategy-versions/custom', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: name.trim(), genome }),
+        });
+        var d = await r.json();
+        if (d.error) { showVersionMsg(d.error, true); return; }
+        showVersionMsg('✅ Version "' + name.trim() + '" saved. You can now activate it.', false);
+        document.getElementById('cv-name').value = '';
+        document.getElementById('versions-manual-creator').removeAttribute('open');
+        await loadStrategyVersions();
+      } catch(e) {
+        showVersionMsg('Save failed: ' + e.message, true);
       }
     }
 
@@ -2463,7 +2615,7 @@ EMAIL_FROM=MCT &lt;a83c06001@smtp-brevo.com&gt;</pre>
           rsi_period:'RSI Period', rsi_ob:'RSI Overbought', rsi_os:'RSI Oversold',
           atr_period:'ATR Period', atr_sl:'ATR SL ×', atr_tp:'ATR TP ×',
           vol_min:'Volume Min ×', leverage:'Leverage', entry_type:'Entry Type',
-          session:'Session', trend_align:'Trend Align'
+          session:'Session', trend_align:'Trend Align',
         };
         content.innerHTML = Object.entries(g).map(function(kv) {
           return '<div style="background:var(--color-bg-base);border:1px solid var(--color-border-muted);border-radius:var(--radius-sm);padding:var(--space-2);">' +
@@ -2472,27 +2624,31 @@ EMAIL_FROM=MCT &lt;a83c06001@smtp-brevo.com&gt;</pre>
           '</div>';
         }).join('');
         panel.style.display = 'block';
+        panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
       } catch(e) { console.error('viewVersionGenome:', e); }
     }
 
-    // Attach to CryptoBot once it's ready
+    // Auto-load + auto-sync when tab opens
     var attInterval = setInterval(function() {
       if (window.CryptoBot) {
-        window.CryptoBot.loadStrategyVersions     = loadStrategyVersions;
-        window.CryptoBot.scanStrategyVersions     = scanStrategyVersions;
-        window.CryptoBot.activateStrategyVersion  = activateStrategyVersion;
-        window.CryptoBot.deactivateStrategyVersion= deactivateStrategyVersion;
-        window.CryptoBot.viewVersionGenome        = viewVersionGenome;
+        window.CryptoBot.loadStrategyVersions      = loadStrategyVersions;
+        window.CryptoBot.scanStrategyVersions      = scanStrategyVersions;
+        window.CryptoBot.activateStrategyVersion   = activateStrategyVersion;
+        window.CryptoBot.deactivateStrategyVersion = deactivateStrategyVersion;
+        window.CryptoBot.deleteStrategyVersion     = deleteStrategyVersion;
+        window.CryptoBot.saveCustomVersion         = saveCustomVersion;
+        window.CryptoBot.viewVersionGenome         = viewVersionGenome;
         clearInterval(attInterval);
       }
-      // If CryptoBot never loads, still expose them globally
       if (!window._versionsAttached) {
         window._versionsAttached = true;
-        window.loadStrategyVersions     = loadStrategyVersions;
-        window.scanStrategyVersions     = scanStrategyVersions;
-        window.activateStrategyVersion  = activateStrategyVersion;
-        window.deactivateStrategyVersion= deactivateStrategyVersion;
-        window.viewVersionGenome        = viewVersionGenome;
+        window.loadStrategyVersions      = loadStrategyVersions;
+        window.scanStrategyVersions      = scanStrategyVersions;
+        window.activateStrategyVersion   = activateStrategyVersion;
+        window.deactivateStrategyVersion = deactivateStrategyVersion;
+        window.deleteStrategyVersion     = deleteStrategyVersion;
+        window.saveCustomVersion         = saveCustomVersion;
+        window.viewVersionGenome         = viewVersionGenome;
       }
     }, 200);
   })();

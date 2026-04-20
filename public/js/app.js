@@ -2456,11 +2456,67 @@
           if (p.top_n_coins != null) $('#bt-topn').value = parseInt(p.top_n_coins);
         } catch {}
       };
+      // Show active version banner if one is set
+      try {
+        const activeRow = await api('GET', '/api/admin/ai-versions/active');
+        updateActiveVersionBanner(activeRow);
+      } catch {}
+
       showToast(`Loaded ${data.versions.length} AI versions`, 'success');
     } catch (err) {
       showToast('Failed to load AI versions: ' + err.message, 'error');
     }
   }
+
+  function updateActiveVersionBanner(activeRow) {
+    let banner = $('#active-version-banner');
+    if (!banner) return;
+    if (activeRow && activeRow.version) {
+      banner.textContent = `🟢 Live: ${activeRow.version} — SL ${((activeRow.sl_pct||0)*100).toFixed(1)}% · Trail ${((activeRow.trailing_step||0)*100).toFixed(1)}% · ${activeRow.max_positions||3} pos max`;
+      banner.style.display = '';
+    } else {
+      banner.textContent = '⚪ Using default settings (no version active)';
+      banner.style.display = '';
+    }
+  }
+
+  // Activate a backtest version for live trading
+  async function activateVersionForTrading() {
+    const sel = $('#bt-ai-version');
+    if (!sel || !sel.value) {
+      showToast('Select a version from the dropdown first', 'error');
+      return;
+    }
+    const opt = sel.options[sel.selectedIndex];
+    const label = opt.textContent;
+    const btn = $('#btn-activate-version');
+    if (btn) { btn.disabled = true; btn.textContent = 'Activating…'; }
+    try {
+      const result = await api('POST', `/api/admin/ai-versions/${sel.value}/activate`);
+      if (result.ok) {
+        showToast(`✅ ${result.version} is now live — bot will use these params on next trade`, 'success');
+        updateActiveVersionBanner(result.params ? { version: result.version, ...result.params } : null);
+      }
+    } catch (err) {
+      showToast('Activate failed: ' + err.message, 'error');
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = '🚀 Trade with This'; }
+    }
+  }
+
+  // Remove active version — revert bot to default hardcoded params
+  async function deactivateVersion() {
+    try {
+      await api('POST', '/api/admin/ai-versions/deactivate');
+      showToast('Active version cleared — bot reverts to defaults', 'success');
+      updateActiveVersionBanner(null);
+    } catch (err) {
+      showToast('Deactivate failed: ' + err.message, 'error');
+    }
+  }
+
+  window.CryptoBot.activateVersionForTrading = activateVersionForTrading;
+  window.CryptoBot.deactivateVersion = deactivateVersion;
 
   async function runBacktest(mode, reverse) {
     const days = parseInt($('#backtest-days')?.value) || 7;
