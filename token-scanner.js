@@ -108,7 +108,7 @@ async function getDailyResults(date = null) {
          CASE WHEN COUNT(*) > 0 THEN COALESCE(SUM(pnl_usdt), 0) / COUNT(*) ELSE 0 END AS avg_pnl
        FROM trades
        WHERE status IN ('WIN', 'LOSS', 'CLOSED', 'SL', 'TP')
-         AND DATE(closed_at AT TIME ZONE 'UTC') = $1
+         AND DATE(COALESCE(closed_at, created_at) AT TIME ZONE 'UTC') = $1
        GROUP BY symbol
        ORDER BY total_pnl DESC`,
       [d]
