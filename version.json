@@ -1,8 +1,20 @@
 {
-  "version": "1.4.7",
+  "version": "1.4.8",
   "name": "MCT AI Trader",
   "released": "2026-04-20",
   "changelog": [
+    {
+      "version": "1.4.8",
+      "tag": "v1.4.8",
+      "date": "2026-04-20",
+      "label": "Coordinator chat: natural language + useful fallback",
+      "changes": [
+        "Remove ^ anchors from all coordinator chat pattern matchers — phrases like 'show me results', 'list signals', 'what did you find' now work",
+        "Add 'results gen', 'show result', 'list result' patterns → routes to signals chat",
+        "help command now shows a full command list instead of an Ollama nag",
+        "Final fallback (unknown input) now shows status + a helpful hint instead of the Ollama URL message"
+      ]
+    },
     {
       "version": "1.4.7",
       "tag": "v1.4.7",

@@ -1124,28 +1124,29 @@ class AgentCoordinator extends BaseAgent {
       return this._buildWhyNoTradeChat();
     }
 
-    if (/^(status|sitrep|update)$/.test(text) || /^(what.*(doing|happening|going on))/.test(text) || /^how are (you|things|we)/.test(text)) {
+    // ── Natural-language status / report queries (no ^ anchors — match anywhere in sentence) ──
+    if (/\b(status|sitrep|update|what.*doing|what.*happening|going on|how are you|how are things|how are we)\b/.test(text)) {
       return this._buildStatusChat();
     }
-    if (/^(who|which|what).*(trading|open|position)/.test(text)) {
+    if (/\b(who|which|what).*(trading|open position|current position|active trade)/.test(text)) {
       return this._buildPositionsChat();
     }
-    if (/^(mood|market mood|how.*(market|crypto))/.test(text)) {
+    if (/\b(mood|market mood|how.*market|how.*crypto|sentiment|fear|greed)\b/.test(text)) {
       return this._buildSentimentChat();
     }
-    if (/^(signal|what.*(found|see|scan)|any.*(signal|trade|setup))/.test(text)) {
+    if (/\b(signal|what.*found|what.*see|what.*scan|any signal|any trade|any setup|latest signal|recent signal|show.*signal|list.*signal|results.*gen|gen.*result|what.*result|show.*result|list.*result)\b/.test(text)) {
       return this._buildSignalsChat();
     }
-    if (/^(risk report|exposure|drawdown)$/.test(text)) {
+    if (/\b(risk report|exposure|drawdown|risk)\b/.test(text)) {
       return this._buildRiskChat();
     }
-    if (/^(performance|win|loss|how.*doing|results|pnl|profit)/.test(text)) {
+    if (/\b(performance|win rate|win ratio|how.*doing|results|pnl|profit|total.*pnl|overall)\b/.test(text)) {
       return this._buildPerformanceChat();
     }
-    if (/^(pnl|profit|loss|trade history|trades|show.*trade|my.*trade|earnings|revenue|income|how much.*(made|lost|earn))/.test(text)) {
+    if (/\b(trade history|my trades|show.*trade|list.*trade|recent trade|past trade|closed trade|earnings|revenue|income|how much.*made|how much.*lost|how much.*earn)\b/.test(text)) {
       return this._buildTradeHistoryChat();
     }
-    if (/^(fee|commission|cost|how much.*pay|charges)/.test(text)) {
+    if (/\b(fee|commission|cost|how much.*pay|charges)\b/.test(text)) {
       return this._buildFeeChat();
     }
     // Create watcher agent — only when explicitly asking to watch/monitor coins
@@ -1298,8 +1299,23 @@ class AgentCoordinator extends BaseAgent {
     }
 
     // ── Fallback: no API key — use hardcoded explain() ──
-    if (/^(help|what can you|commands)/.test(text)) {
-      return { from: 'Coordinator', message: 'Set OLLAMA_URL (e.g. http://localhost:11434) for AI responses. No API key needed — runs locally with Ollama.\n\nCommands that always work:\n• scan now\n• status / team\n• pause/resume <agent>\n• audit trades\n• create agent to watch BTCUSDT\n• help' };
+    if (/\b(help|what can you|commands|what do you do)\b/.test(text)) {
+      return { from: 'Coordinator', message: [
+        '**Available commands** (no AI key needed):\n',
+        '• **scan now** — force a market scan immediately',
+        '• **status** — agent health + last scan time',
+        '• **signals** — latest signals found',
+        '• **performance** — win rate + total P&L',
+        '• **trade history** — recent closed trades',
+        '• **risk** — risk report + rejection reasons',
+        '• **mood** — market sentiment',
+        '• **audit trades** — fix any wrong P&L in DB',
+        '• **pause all / resume all** — halt or restart all agents',
+        '• **pause <agent> / resume <agent>** — individual agent control',
+        '• **jail** — see any jailed agents',
+        '• **why no trades** — explain why no trades opened',
+        '\nFor free AI chat: set OLLAMA_URL in Railway env vars.',
+      ].join('\n') };
     }
     // Route to agent explain fallback
     let fallbackAgent = null;
@@ -1319,7 +1335,10 @@ class AgentCoordinator extends BaseAgent {
     }
     if (fallbackAgent) return { from: fallbackAgent.name, message: await fallbackAgent.explain(message) };
 
-    return { from: 'Coordinator', message: `Set **OLLAMA_URL** (e.g. http://localhost:11434) for AI-powered responses. No API key needed — runs locally with Ollama.\n\nWithout it, I can only run commands like "scan now", "status", "audit trades", etc. Type "help" for the full list.` };
+    // No AI provider — return status rather than a useless nag message
+    const statusFallback = this._buildStatusChat();
+    statusFallback.message = `I didn't understand that — try **"signals"**, **"status"**, **"performance"**, or **"help"** for a command list.\n\n---\n${statusFallback.message}`;
+    return statusFallback;
   }
 
   async _getSignalAdjustment(agent, signalText, apiKeyId = null) {
