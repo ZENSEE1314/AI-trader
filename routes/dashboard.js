@@ -1481,10 +1481,27 @@ router.post('/pull-bitunix-history', async (req, res) => {
         const positions = [];
         for (const sym of symbols) {
           try {
-            const symPos = await client.getHistoryPositions({ symbol: sym, pageNum: 1, pageSize: 100 });
-            const list = Array.isArray(symPos) ? symPos : (symPos?.positionList || symPos?.list || []);
+            // Use _rawGet to see the exact Bitunix response structure
+            const startTime = Date.now() - 90 * 24 * 60 * 60 * 1000; // last 90 days
+            const raw = await client._rawGet('/api/v1/futures/position/get_history_positions', {
+              symbol: sym, pageNum: 1, pageSize: 100, startTime,
+            });
+            // Log first symbol raw response so Railway logs show the actual structure
+            if (positions.length === 0) {
+              console.log(`[pull-bitunix-history] ${sym} raw:`, JSON.stringify(raw).substring(0, 400));
+            }
+            if (raw?.code !== 0) {
+              console.warn(`[pull-bitunix-history] ${sym} API error: code=${raw?.code} msg=${raw?.msg}`);
+              continue;
+            }
+            const d = raw?.data;
+            // Try every known field name Bitunix might use
+            const list = Array.isArray(d) ? d
+              : (d?.positionList || d?.resultList || d?.list || d?.data || d?.records || []);
             positions.push(...list);
-          } catch (_) { /* symbol may not have history */ }
+          } catch (e) {
+            console.warn(`[pull-bitunix-history] ${sym} fetch error: ${e.message}`);
+          }
         }
 
         console.log(`[pull-bitunix-history] key ${key.id}: fetched ${positions.length} positions across ${symbols.length} symbols`);
