@@ -1282,80 +1282,112 @@ router.get('/strategy-wr', async (req, res) => {
 
 // ── Re-sync all closed Bitunix trades from exchange (admin only) ──────────────
 // POST /api/dashboard/resync-bitunix
-// Fetches real data from Bitunix for every CLOSED trade and corrects the DB
+// Groups trades by API key → fetches position history ONCE per key → matches in memory.
+// This avoids hammering the Bitunix API with 200 calls and surfaces auth errors clearly.
 router.post('/resync-bitunix', async (req, res) => {
   try {
     const adminCheck = await query(`SELECT is_admin FROM users WHERE id = $1`, [req.userId]);
     if (!adminCheck[0]?.is_admin) return res.status(403).json({ error: 'Admin only' });
 
     const BitunixClient = require('../bitunix-client');
-    const cryptoUtils2 = require('../crypto-utils');
+    const cryptoUtils2  = require('../crypto-utils');
 
-    // Ensure column exists — startup migration may have silently failed on first deploy.
-    // Run BEFORE the SELECT that names it explicitly.
     try {
       await query(`ALTER TABLE trades ADD COLUMN IF NOT EXISTS bitunix_position_id VARCHAR(64)`);
     } catch (_) {}
 
-    // Get all CLOSED Bitunix trades
-    // NOTE: select t.* to avoid crashing if bitunix_position_id column doesn't exist yet
+    // Fetch all closed Bitunix trades — no closed_at filter (some closes skip setting it)
     const trades = await query(`
       SELECT t.*,
+             ak.id AS key_id,
              ak.api_key_enc, ak.iv, ak.auth_tag,
              ak.api_secret_enc, ak.secret_iv, ak.secret_auth_tag
       FROM trades t
       JOIN api_keys ak ON t.api_key_id = ak.id
       WHERE ak.platform = 'bitunix'
         AND t.status IN ('CLOSED','WIN','LOSS')
-        AND t.closed_at IS NOT NULL
       ORDER BY t.created_at DESC
-      LIMIT 200
+      LIMIT 500
     `);
 
+    if (!trades.length) return res.json({ total: 0, fixed: 0, skipped: 0, failed: 0, results: [], errors: [] });
+
+    // ── Group by api_key_id and build a per-key position history cache ──────
+    // One Bitunix API call per unique key instead of one per trade.
+    const keyHistoryCache = new Map(); // key_id → { positions: [], error: string|null }
+    const uniqueKeyIds = [...new Set(trades.map(t => t.key_id))];
+
+    for (const kid of uniqueKeyIds) {
+      const t0 = trades.find(t => t.key_id === kid);
+      try {
+        const apiKey    = cryptoUtils2.decrypt(t0.api_key_enc, t0.iv, t0.auth_tag);
+        const apiSecret = cryptoUtils2.decrypt(t0.api_secret_enc, t0.secret_iv, t0.secret_auth_tag);
+        if (!apiKey || !apiSecret) throw new Error('Decrypt failed — check crypto-utils config');
+
+        const bxClient  = new BitunixClient({ apiKey, apiSecret });
+        // Fetch up to 500 history positions (paginated, all symbols)
+        const positions = await bxClient.getHistoryPositions({ pageSize: 50, all: true });
+        keyHistoryCache.set(kid, { positions, error: null });
+      } catch (e) {
+        keyHistoryCache.set(kid, { positions: [], error: e.message });
+      }
+    }
+
+    // ── Match each trade to a history position ───────────────────────────────
     let fixed = 0, skipped = 0, failed = 0;
-    const results = [];
+    const results  = [];
+    const errors   = [];
 
     for (const trade of trades) {
+      const cache = keyHistoryCache.get(trade.key_id);
+
+      if (cache.error) {
+        failed++;
+        const msg = `API key error: ${cache.error}`;
+        results.push({ id: trade.id, symbol: trade.symbol, result: msg });
+        if (!errors.find(e => e.key_id === trade.key_id)) {
+          errors.push({ key_id: trade.key_id, error: cache.error });
+        }
+        continue;
+      }
+
       try {
-        const apiKey    = cryptoUtils2.decrypt(trade.api_key_enc, trade.iv, trade.auth_tag);
-        const apiSecret = cryptoUtils2.decrypt(trade.api_secret_enc, trade.secret_iv, trade.secret_auth_tag);
-        const bxClient  = new BitunixClient({ apiKey, apiSecret });
+        const isLong       = trade.direction !== 'SHORT';
+        const tradeEntry   = parseFloat(trade.entry_price);
+        const tradeOpenMs  = trade.created_at ? new Date(trade.created_at).getTime() : 0;
+        const storedPosId  = trade.bitunix_position_id;
 
-        const isLong = trade.direction !== 'SHORT';
-        const tradeEntry = parseFloat(trade.entry_price);
-        const qty = parseFloat(trade.quantity || 0);
-        const tradeOpenTime = trade.created_at ? new Date(trade.created_at).getTime() : 0;
-        const storedPosId = trade.bitunix_position_id;
-
-        const positions = await bxClient.getHistoryPositions({ symbol: trade.symbol, pageSize: 50 });
-
-        let bestMatch = null;
+        let bestMatch   = null;
         let bestTimeDiff = Infinity;
 
-        for (const p of positions) {
-          const cp  = parseFloat(p.closePrice || p.avgClosePrice || p.closedPrice || p.close_price || 0);
-          const ep  = parseFloat(p.entryPrice  || p.avgOpenPrice  || p.openPrice  || p.open_price  || 0);
-          const pid = String(p.positionId || p.id || p.position_id || '');
+        for (const p of cache.positions) {
+          const cp    = parseFloat(p.closePrice || p.avgClosePrice || p.closedPrice || p.close_price || 0);
+          const ep    = parseFloat(p.entryPrice  || p.avgOpenPrice  || p.openPrice  || p.open_price  || 0);
+          const pid   = String(p.positionId || p.id || p.position_id || '');
           const pSide = (p.side || p.positionSide || p.position_side || '').toUpperCase();
-          const pSideLong = pSide === 'LONG' || pSide === 'BUY';
+          const pLong = pSide === 'LONG' || pSide === 'BUY';
           const closeMs = parseInt(p.closeTime || p.mtime || p.ctime || p.updateTime || p.close_time || 0);
 
-          if (cp <= 0 || p.symbol !== trade.symbol || pSideLong !== isLong) continue;
+          if (cp <= 0 || (p.symbol || '').toUpperCase() !== trade.symbol || pLong !== isLong) continue;
 
-          // ID match = best
+          // Exact position ID match = best possible
           if (storedPosId && pid === String(storedPosId)) { bestMatch = p; break; }
 
-          const entryMatch = ep > 0 && Math.abs(ep - tradeEntry) / tradeEntry < 0.005;
-          const closedAfterOpen = !tradeOpenTime || !closeMs || closeMs >= tradeOpenTime;
-          if (entryMatch && closedAfterOpen) {
-            const timeDiff = closeMs && tradeOpenTime ? Math.abs(closeMs - tradeOpenTime) : 9e12;
-            if (timeDiff < bestTimeDiff) { bestTimeDiff = timeDiff; bestMatch = p; }
+          const entryClose  = ep > 0 && Math.abs(ep - tradeEntry) / tradeEntry < 0.005;
+          const timingOk    = !tradeOpenMs || !closeMs || closeMs >= tradeOpenMs;
+          if (entryClose && timingOk) {
+            const diff = closeMs && tradeOpenMs ? Math.abs(closeMs - tradeOpenMs) : 9e12;
+            if (diff < bestTimeDiff) { bestTimeDiff = diff; bestMatch = p; }
           }
         }
 
-        if (!bestMatch) { skipped++; results.push({ id: trade.id, symbol: trade.symbol, result: 'no_match' }); continue; }
+        if (!bestMatch) {
+          skipped++;
+          results.push({ id: trade.id, symbol: trade.symbol, result: 'no_match' });
+          continue;
+        }
 
-        const p = bestMatch;
+        const p        = bestMatch;
         const exitPrice  = parseFloat(p.closePrice || p.avgClosePrice || p.closedPrice || p.close_price || 0);
         const tradingFee = Math.abs(parseFloat(p.fee || p.tradingFee || p.commission || 0));
         const fundingFee = Math.abs(parseFloat(p.funding || p.fundingFee || p.fund_fee || 0));
@@ -1363,7 +1395,7 @@ router.post('/resync-bitunix', async (req, res) => {
 
         if (pnlRaw == null || exitPrice === 0) {
           skipped++;
-          results.push({ id: trade.id, symbol: trade.symbol, result: 'missing_pnl_or_exit' });
+          results.push({ id: trade.id, symbol: trade.symbol, result: 'missing_pnl_or_exit', raw: JSON.stringify(p).substring(0, 200) });
           continue;
         }
 
@@ -1372,13 +1404,10 @@ router.post('/resync-bitunix', async (req, res) => {
         const status   = pnlUsdt > 0 ? 'WIN' : 'LOSS';
 
         await query(`
-          UPDATE trades SET
-            exit_price   = $1,
-            pnl_usdt     = $2,
-            gross_pnl    = $3,
-            trading_fee  = $4,
-            funding_fee  = $5,
-            status       = $6
+          UPDATE trades
+          SET exit_price = $1, pnl_usdt = $2, gross_pnl = $3,
+              trading_fee = $4, funding_fee = $5, status = $6,
+              closed_at = COALESCE(closed_at, NOW())
           WHERE id = $7
         `, [exitPrice, pnlUsdt, grossPnl, tradingFee, fundingFee, status, trade.id]);
 
@@ -1386,17 +1415,15 @@ router.post('/resync-bitunix', async (req, res) => {
         results.push({
           id: trade.id, symbol: trade.symbol,
           old: { exit: trade.exit_price, net: trade.pnl_usdt },
-          new: { exit: exitPrice, net: pnlUsdt, gross: grossPnl, fee: tradingFee, status }
+          new: { exit: exitPrice, net: pnlUsdt, gross: grossPnl, fee: tradingFee, status },
         });
-
-        await new Promise(r => setTimeout(r, 200)); // rate-limit: 5 req/s
       } catch (e) {
         failed++;
         results.push({ id: trade.id, symbol: trade.symbol, result: `error: ${e.message}` });
       }
     }
 
-    res.json({ total: trades.length, fixed, skipped, failed, results });
+    res.json({ total: trades.length, fixed, skipped, failed, errors, results });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -1449,6 +1476,7 @@ async function ensureVersionsTable() {
         id            SERIAL PRIMARY KEY,
         name          VARCHAR(200) NOT NULL,
         genome        JSONB        NOT NULL,
+        genome_hash   VARCHAR(64),
         win_rate      DECIMAL(8,4),
         profit_factor DECIMAL(8,4),
         total_return  DECIMAL(12,4),
@@ -1466,6 +1494,8 @@ async function ensureVersionsTable() {
         created_at    TIMESTAMPTZ  DEFAULT NOW()
       )
     `);
+    await query(`ALTER TABLE strategy_versions ADD COLUMN IF NOT EXISTS genome_hash VARCHAR(64)`);
+    await query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_sv_genome_hash ON strategy_versions (genome_hash) WHERE genome_hash IS NOT NULL`);
   } catch (_) {}
 }
 
@@ -1487,8 +1517,9 @@ router.get('/strategy-versions', async (req, res) => {
 });
 
 // POST /api/dashboard/strategy-versions/scan
-// Reads ALL strategy_search_results, deduplicates by genome, saves top 100 as versions.
-// 80%+ WR ones are labelled 🏆 and get priority.
+// Reads ALL strategy_search_results, deduplicates by genome hash, UPSERTS into versions.
+// Old versions are NEVER deleted — every unique genome is kept in history so the user
+// can browse all past optimizer discoveries and activate any of them.
 router.post('/strategy-versions/scan', async (req, res) => {
   try {
     const adminCheck = await query(`SELECT is_admin FROM users WHERE id = $1`, [req.userId]);
@@ -1496,7 +1527,6 @@ router.post('/strategy-versions/scan', async (req, res) => {
 
     await ensureVersionsTable();
 
-    // Check if there's anything to scan
     const countRow = await query(
       `SELECT COUNT(*) AS total FROM strategy_search_results WHERE total_trades >= 5`
     ).catch(() => [{ total: '0' }]);
@@ -1507,74 +1537,93 @@ router.post('/strategy-versions/scan', async (req, res) => {
       });
     }
 
-    // Group by genome, average metrics across all symbols tested
+    // Group by genome, average metrics across all symbols — no LIMIT so every unique genome
+    // discovered by the optimizer ends up as a selectable version.
     const rows = await query(`
       SELECT
         genome,
-        ROUND(AVG(win_rate)::numeric,      4) AS avg_wr,
-        ROUND(AVG(profit_factor)::numeric,  4) AS avg_pf,
-        ROUND(AVG(total_return)::numeric,   4) AS avg_return,
-        ROUND(AVG(max_drawdown)::numeric,   4) AS avg_dd,
-        ROUND(AVG(expectancy)::numeric,     4) AS avg_exp,
-        ROUND(AVG(sharpe)::numeric,         4) AS avg_sharpe,
-        ROUND(AVG(fitness)::numeric,        4) AS avg_fitness,
-        ROUND(AVG(total_trades)::numeric,   0) AS avg_trades,
-        ROUND(AVG(wins)::numeric,           0) AS avg_wins,
-        ROUND(AVG(losses)::numeric,         0) AS avg_losses,
+        MD5(genome::text)                       AS ghash,
+        ROUND(AVG(win_rate)::numeric,      4)   AS avg_wr,
+        ROUND(AVG(profit_factor)::numeric,  4)  AS avg_pf,
+        ROUND(AVG(total_return)::numeric,   4)  AS avg_return,
+        ROUND(AVG(max_drawdown)::numeric,   4)  AS avg_dd,
+        ROUND(AVG(expectancy)::numeric,     4)  AS avg_exp,
+        ROUND(AVG(sharpe)::numeric,         4)  AS avg_sharpe,
+        ROUND(AVG(fitness)::numeric,        4)  AS avg_fitness,
+        ROUND(AVG(total_trades)::numeric,   0)  AS avg_trades,
+        ROUND(AVG(wins)::numeric,           0)  AS avg_wins,
+        ROUND(AVG(losses)::numeric,         0)  AS avg_losses,
         string_agg(DISTINCT symbol, ',')        AS symbols,
         COUNT(*)                                AS result_count
       FROM strategy_search_results
       WHERE total_trades >= 5
       GROUP BY genome
       ORDER BY avg_wr DESC, avg_fitness DESC
-      LIMIT 100
     `);
 
-    // Replace all optimizer-sourced versions (keep any manually created ones)
-    await query(`DELETE FROM strategy_versions WHERE source = 'optimizer'`);
+    let saved = 0, updated = 0;
 
-    let saved = 0;
     for (let i = 0; i < rows.length; i++) {
-      const r   = rows[i];
-      const g   = typeof r.genome === 'string' ? JSON.parse(r.genome) : r.genome;
-      const wr  = parseFloat(r.avg_wr) || 0;
-      const pf  = parseFloat(r.avg_pf) || 0;
-      const fit = parseFloat(r.avg_fitness) || 0;
+      const r    = rows[i];
+      const g    = typeof r.genome === 'string' ? JSON.parse(r.genome) : r.genome;
+      const wr   = parseFloat(r.avg_wr)      || 0;
+      const pf   = parseFloat(r.avg_pf)      || 0;
+      const fit  = parseFloat(r.avg_fitness) || 0;
+      const hash = r.ghash;
 
       const medal = wr >= 80 ? '🏆' : wr >= 70 ? '⭐' : wr >= 60 ? '✅' : '·';
-      const name  = `${medal} v${i + 1} — WR ${wr.toFixed(1)}% | ${g.entry_type} L${g.leverage}x | PF ${pf.toFixed(2)}`;
+      // Name encodes rank by WR so the user can see quality at a glance.
+      // If this genome existed before, we keep the original name (updated via DO UPDATE below
+      // only for metrics, not name — so the user's picks stay recognisable).
+      const name = `${medal} v${i + 1} — WR ${wr.toFixed(1)}% | ${g.entry_type} L${g.leverage}x | PF ${pf.toFixed(2)}`;
 
-      await query(`
+      const result = await query(`
         INSERT INTO strategy_versions
-          (name, genome, win_rate, profit_factor, total_return, max_drawdown,
+          (name, genome, genome_hash, win_rate, profit_factor, total_return, max_drawdown,
            expectancy, sharpe, total_trades, wins, losses, fitness, source, symbols)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'optimizer',$13)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'optimizer',$14)
+        ON CONFLICT (genome_hash) DO UPDATE SET
+          win_rate      = EXCLUDED.win_rate,
+          profit_factor = EXCLUDED.profit_factor,
+          total_return  = EXCLUDED.total_return,
+          max_drawdown  = EXCLUDED.max_drawdown,
+          expectancy    = EXCLUDED.expectancy,
+          sharpe        = EXCLUDED.sharpe,
+          total_trades  = EXCLUDED.total_trades,
+          wins          = EXCLUDED.wins,
+          losses        = EXCLUDED.losses,
+          fitness       = EXCLUDED.fitness,
+          symbols       = EXCLUDED.symbols
+        RETURNING (xmax = 0) AS inserted
       `, [
-        name,
-        JSON.stringify(g),
-        wr,
-        pf,
-        parseFloat(r.avg_return)  || 0,
-        parseFloat(r.avg_dd)      || 0,
-        parseFloat(r.avg_exp)     || 0,
-        parseFloat(r.avg_sharpe)  || 0,
-        parseInt(r.avg_trades)    || 0,
-        parseInt(r.avg_wins)      || 0,
-        parseInt(r.avg_losses)    || 0,
+        name, JSON.stringify(g), hash,
+        wr, pf,
+        parseFloat(r.avg_return) || 0,
+        parseFloat(r.avg_dd)     || 0,
+        parseFloat(r.avg_exp)    || 0,
+        parseFloat(r.avg_sharpe) || 0,
+        parseInt(r.avg_trades)   || 0,
+        parseInt(r.avg_wins)     || 0,
+        parseInt(r.avg_losses)   || 0,
         fit,
         r.symbols || 'BTC/ETH/SOL/BNB',
       ]);
-      saved++;
+
+      if (result[0]?.inserted) saved++; else updated++;
     }
 
     const best = await query(
       `SELECT id, name, win_rate FROM strategy_versions ORDER BY win_rate DESC LIMIT 1`
     ).catch(() => []);
 
+    const total = await query(`SELECT COUNT(*) AS c FROM strategy_versions`).catch(() => [{ c: 0 }]);
+
     res.json({
       saved,
+      updated,
+      total: parseInt(total[0]?.c) || 0,
       best: best[0] || null,
-      message: `Saved ${saved} versions. Best WR: ${best[0] ? parseFloat(best[0].win_rate).toFixed(1) + '%' : 'N/A'}`,
+      message: `${saved} new versions added, ${updated} updated. Total: ${total[0]?.c} versions. Best WR: ${best[0] ? parseFloat(best[0].win_rate).toFixed(1) + '%' : 'N/A'}`,
     });
   } catch (err) {
     res.status(500).json({ error: err.message });

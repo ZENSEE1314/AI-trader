@@ -3232,8 +3232,13 @@
     if (btn) { btn.disabled = true; btn.textContent = 'Resyncing...'; }
     try {
       const result = await api('POST', '/api/dashboard/resync-bitunix');
-      statusEl.textContent = `Fixed ${result.fixed} / ${result.total} trades (${result.skipped} skipped, ${result.failed} failed)`;
-      statusEl.style.color = result.fixed > 0 ? 'var(--color-success)' : 'var(--color-text-muted)';
+      let msg = `Fixed ${result.fixed} / ${result.total} trades (${result.skipped} skipped, ${result.failed} failed)`;
+      // Show the actual API error if all failed — helps diagnose auth / endpoint issues
+      if (result.failed > 0 && result.errors && result.errors.length > 0) {
+        msg += ` — Error: ${result.errors[0].error}`;
+      }
+      statusEl.textContent = msg;
+      statusEl.style.color = result.fixed > 0 ? 'var(--color-success)' : (result.failed > 0 ? 'var(--color-danger)' : 'var(--color-text-muted)');
       showToast(`Resync done: ${result.fixed} trades corrected`, result.fixed > 0 ? 'success' : 'info');
       if (result.fixed > 0) setTimeout(() => loadTradeHistory?.(), 1000);
     } catch (err) {

@@ -1479,15 +1479,20 @@ async function executeForAllUsers(pick) {
           return;
         }
 
-        // Cooldown: don't re-enter same token within 60 min after last closed trade.
-        // NOTE: checks across ALL api keys for this user so a manual close on Binance
-        //       also blocks re-entry on the Bitunix key (and vice-versa).
+        // Cooldown: don't re-enter same symbol + same direction within 2 hours after close.
+        // "closed_at IS NULL OR closed_at > NOW() - INTERVAL '2 hours'" handles trades that
+        // were marked CLOSED without a timestamp (treated as just-closed).
+        // Checks across ALL api keys for this user — manual close on any key blocks all keys.
         const recentClosed = await db.query(
-          `SELECT id, closed_at FROM trades WHERE user_id = $1 AND symbol = $2 AND status IN ('WIN','LOSS','TP','SL','CLOSED') AND closed_at > NOW() - INTERVAL '60 minutes' ORDER BY closed_at DESC LIMIT 1`,
-          [key.user_id, symbol]
+          `SELECT id, closed_at, direction FROM trades
+           WHERE user_id = $1 AND symbol = $2 AND direction = $3
+             AND status IN ('WIN','LOSS','TP','SL','CLOSED')
+             AND (closed_at IS NULL OR closed_at > NOW() - INTERVAL '2 hours')
+           ORDER BY COALESCE(closed_at, NOW()) DESC LIMIT 1`,
+          [key.user_id, symbol, pick.direction]
         );
         if (recentClosed.length > 0) {
-          userLog.trade(`User ${key.email}: ${symbol} recently closed (user-wide cooldown) — 60min active, skipping`);
+          userLog.trade(`User ${key.email}: ${symbol} ${pick.direction} recently closed — 2h cooldown active, skipping`);
           return;
         }
 
@@ -1944,7 +1949,7 @@ async function syncTradeStatus() {
                     quantity: Math.abs(exchangePos.amt),
                     reduceOnly: true
                   });
-                  await db.query(`UPDATE trades SET status = 'CLOSED', exit_reason = 'swarm_consensus_shift' WHERE id = $1`, [trade.id]);
+                  await db.query(`UPDATE trades SET status = 'CLOSED', exit_reason = 'swarm_consensus_shift', closed_at = NOW() WHERE id = $1`, [trade.id]);
                   await notify(`📉 *Dynamic AI Exit*\n${trade.symbol} ${trade.direction} closed early due to Swarm shift to ${swarm.direction} (${swarm.confidence}% confidence).`);
                   continue; // Move to next trade, position is now closed
                 }

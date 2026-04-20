@@ -681,6 +681,40 @@ async function initAllTables() {
     }
   } catch (_) {}
 
+  // Strategy Version Manager — created here so it exists before any route touches it
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS strategy_versions (
+        id            SERIAL PRIMARY KEY,
+        name          VARCHAR(200) NOT NULL,
+        genome        JSONB        NOT NULL,
+        genome_hash   VARCHAR(64)  UNIQUE,
+        win_rate      DECIMAL(8,4),
+        profit_factor DECIMAL(8,4),
+        total_return  DECIMAL(12,4),
+        max_drawdown  DECIMAL(8,4),
+        expectancy    DECIMAL(12,4),
+        sharpe        DECIMAL(8,4),
+        total_trades  INTEGER,
+        wins          INTEGER,
+        losses        INTEGER,
+        fitness       DECIMAL(12,4),
+        source        VARCHAR(50)  DEFAULT 'optimizer',
+        symbols       TEXT,
+        is_active     BOOLEAN      DEFAULT FALSE,
+        activated_at  TIMESTAMPTZ,
+        created_at    TIMESTAMPTZ  DEFAULT NOW()
+      )
+    `);
+    // Add genome_hash column to existing installs that predate this migration
+    await pool.query(
+      `ALTER TABLE strategy_versions ADD COLUMN IF NOT EXISTS genome_hash VARCHAR(64)`
+    );
+    await pool.query(
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_sv_genome_hash ON strategy_versions (genome_hash) WHERE genome_hash IS NOT NULL`
+    );
+  } catch (_) {}
+
   console.log('[DB] All tables verified');
 }
 
