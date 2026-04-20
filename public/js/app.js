@@ -2647,7 +2647,8 @@
       maxPositions:  parseInt($('#bt-maxpos')?.value) || 3,
       maxConsecLoss: parseInt($('#bt-consec')?.value) ?? 2,
       wallet:        parseInt($('#bt-wallet')?.value) || 1000,
-      topN:          parseInt($('#bt-topn')?.value) || 50,
+      // Symbol list: parse comma-separated input; empty = use Tokens tab
+      symbolList:    ($('#bt-symbol-list')?.value || '').split(',').map(s => s.trim().toUpperCase()).filter(Boolean),
       // Structure analysis
       swing4h:       parseInt($('#bt-swing4h')?.value)   || 10,
       swing1h:       parseInt($('#bt-swing1h')?.value)   || 10,
@@ -2687,7 +2688,11 @@
     setV('#bt-risk',       p.risk_pct  != null ? (parseFloat(p.risk_pct)  * 100).toFixed(0) : (p.riskPct  != null ? (p.riskPct  * 100).toFixed(0) : null));
     setV('#bt-maxpos',     p.max_positions ?? p.maxPositions);
     setV('#bt-consec',     p.max_consec_loss ?? p.maxConsecLoss);
-    setV('#bt-max-tokens', p.top_n_coins ?? p.topN);
+    // Symbol list: restore from saved array or comma string
+    const symEl = $('#bt-symbol-list');
+    if (symEl && p.symbolList) {
+      symEl.value = Array.isArray(p.symbolList) ? p.symbolList.join(', ') : p.symbolList;
+    }
     // Structure
     setV('#bt-swing4h',     p.swing4h);
     setV('#bt-swing1h',     p.swing1h);

@@ -1820,7 +1820,8 @@ router.post('/backtest', async (req, res) => {
     const { getFetchOptions } = require('../proxy-agent');
 
     // ── Risk & Position Management ───────────────────────────────────────────
-    const TOP_N         = Math.min(parseInt(req.body.topN) || 100, 200);
+    // symbolList: array from UI (e.g. ['BTCUSDT','ETHUSDT']); empty = use Tokens tab
+    const SYMBOL_LIST   = Array.isArray(req.body.symbolList) ? req.body.symbolList.filter(Boolean) : [];
     const WALLET_START  = parseFloat(req.body.wallet) || 1000;
     const RISK_PCT      = Math.min(parseFloat(req.body.riskPct) || 0.10, 1);
     const MAX_POS       = parseInt(req.body.maxPositions) || 3;
@@ -1995,15 +1996,34 @@ router.post('/backtest', async (req, res) => {
       return dir === 'LONG' ? (nL || nPDL || nV) : (nU || nPDH || nV);
     }
 
-    // Get top coins
-    const tickerRes = await fetch('https://fapi.binance.com/fapi/v1/ticker/24hr', { timeout: 15000, ...getFetchOptions() });
-    const tickers = await tickerRes.json();
-    const BL = new Set(['USDCUSDT','ALPACAUSDT','XAUUSDT','XAGUSDT','EURUSDT','GBPUSDT','JPYUSDT']);
-    const topCoins = tickers
-      .filter(t => t.symbol.endsWith('USDT') && !t.symbol.includes('_') && !BL.has(t.symbol))
-      .filter(t => parseFloat(t.quoteVolume) >= 10_000_000)
-      .sort((a, b) => parseFloat(b.quoteVolume) - parseFloat(a.quoteVolume))
-      .slice(0, TOP_N).map(t => t.symbol);
+    // Resolve the token list to backtest
+    // Priority: UI symbol list → Tokens tab (enabled) → top-50 by Binance volume
+    let topCoins;
+    if (SYMBOL_LIST.length > 0) {
+      // User typed specific tokens — use exactly those
+      topCoins = SYMBOL_LIST;
+    } else {
+      // Try enabled tokens from the Tokens tab
+      try {
+        const { query: dbQuery } = require('../db');
+        const enabledRows = await dbQuery(
+          `SELECT symbol FROM global_token_settings WHERE enabled = true AND (banned IS NULL OR banned = false) ORDER BY "rank" ASC NULLS LAST LIMIT 200`
+        );
+        topCoins = enabledRows.map(r => r.symbol);
+      } catch (_) { topCoins = []; }
+
+      if (!topCoins.length) {
+        // Fallback: Binance top-50 by volume
+        const tickerRes = await fetch('https://fapi.binance.com/fapi/v1/ticker/24hr', { timeout: 15000, ...getFetchOptions() });
+        const tickers = await tickerRes.json();
+        const BL = new Set(['USDCUSDT','ALPACAUSDT','XAUUSDT','XAGUSDT','EURUSDT','GBPUSDT','JPYUSDT']);
+        topCoins = tickers
+          .filter(t => t.symbol.endsWith('USDT') && !t.symbol.includes('_') && !BL.has(t.symbol))
+          .filter(t => parseFloat(t.quoteVolume) >= 10_000_000)
+          .sort((a, b) => parseFloat(b.quoteVolume) - parseFloat(a.quoteVolume))
+          .slice(0, 50).map(t => t.symbol);
+      }
+    }
 
     // Fetch: Daily, 4H, 1H, 15M for all coins + 1M — parallel batches of 5
     const coinData = {};
@@ -2401,7 +2421,8 @@ router.post('/backtest', async (req, res) => {
       settings: {
         // Risk & position management
         slPct: SL_PCT, tpPct: TP_PCT, trailStep: TRAIL_FIRST, leverage: MAX_LEVERAGE,
-        riskPct: RISK_PCT, maxPositions: MAX_POS, maxConsecLoss: MAX_CONSEC_LOSS, wallet: WALLET_START, topN: TOP_N,
+        riskPct: RISK_PCT, maxPositions: MAX_POS, maxConsecLoss: MAX_CONSEC_LOSS, wallet: WALLET_START,
+        symbolList: topCoins,
         // Structure analysis
         swing4h: SWING['4h'], swing1h: SWING['1h'], swing15m: SWING['15m'], swing1m: SWING['1m'],
         proximity: PROXIMITY, entryFresh: ENTRY_FRESH, dailyBodyRatio: DAILY_BODY_RATIO,

@@ -1990,10 +1990,6 @@
                 </select>
               </div>
               <div class="form-group" style="margin-bottom:0;">
-                <label class="form-label" style="font-size:0.75rem;">Max Tokens</label>
-                <input class="form-input text-mono" type="number" id="bt-max-tokens" min="10" max="200" step="10" value="50" style="font-size:0.8rem;">
-              </div>
-              <div class="form-group" style="margin-bottom:0;">
                 <label class="form-label" style="font-size:0.75rem;">Leverage</label>
                 <input class="form-input text-mono" type="number" id="bt-leverage" min="1" max="125" step="1" value="20" style="font-size:0.8rem;">
               </div>
@@ -2013,6 +2009,19 @@
                 <label class="form-label" style="font-size:0.75rem;">Wallet $</label>
                 <input class="form-input text-mono" type="number" id="bt-wallet" min="100" max="100000" step="100" value="1000" style="font-size:0.8rem;">
               </div>
+            </div>
+
+            <!-- ── Token List ── -->
+            <div style="margin-bottom:var(--space-3);">
+              <label class="form-label" style="font-size:0.75rem;margin-bottom:4px;display:block;">
+                🪙 Token List
+                <span style="font-weight:400;color:var(--color-text-muted);font-size:0.72rem;">
+                  — comma-separated (e.g. BTCUSDT, ETHUSDT). Leave empty to use your enabled tokens from the <strong>Tokens</strong> tab.
+                </span>
+              </label>
+              <input class="form-input text-mono" type="text" id="bt-symbol-list"
+                placeholder="BTCUSDT, ETHUSDT, SOLUSDT, BNBUSDT  — or leave empty"
+                style="width:100%;font-size:0.82rem;letter-spacing:0.02em;">
             </div>
 
             <!-- ── Structure Analysis (collapsible) ── -->
