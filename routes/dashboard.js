@@ -1608,7 +1608,7 @@ router.post('/pull-bitunix-history', async (req, res) => {
                  ON CONFLICT DO NOTHING`,
                 [key.id, key.user_id, symbol, direction, entryPrice, exitPrice,
                  qty, leverage, status, pnlUsdt, grossPnl, tradingFee, fundingFee,
-                 closeAt || new Date(), openAt || new Date(), entryPrice, posId || null]
+                 closeAt || new Date(), openAt || new Date(), posId || null]
               );
               inserted++;
             }
