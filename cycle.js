@@ -2346,7 +2346,8 @@ async function syncTradeStatus() {
                     tradingFee = fee;      // exchange fee only
                     fundingFee = funding;  // funding fee separately
                     // NOTE: Bitunix realizedPNL is already net (fee + funding deducted)
-                    realizedPnl = parseFloat(p.realizedPNL || 0);
+                    // Use != null (not || 0) — 0 is a valid PnL and must not be confused with missing data
+                    realizedPnl = p.realizedPNL != null ? parseFloat(p.realizedPNL) : null;
                     found = true;
                     bLog.system(`[SYNC] Bitunix posHistory PnL: net=${realizedPnl} fee=${fee} funding=${funding} rpnl=${p.realizedPNL}`);
                     break;
@@ -2379,16 +2380,16 @@ async function syncTradeStatus() {
                         profit: o.profit, pnl: o.pnl, fee: o.fee, tradeSide: o.tradeSide,
                         reduceOnly: o.reduceOnly, qty: o.qty
                       })}`);
-                      const profit = parseFloat(o.profit || 0);
-                      const pnl = parseFloat(o.pnl || 0);
-                      const rpnl = parseFloat(o.realizedPNL || 0);
+                      const profit = o.profit != null ? parseFloat(o.profit) : null;
+                      const pnl    = o.pnl    != null ? parseFloat(o.pnl)    : null;
+                      const rpnl   = o.realizedPNL != null ? parseFloat(o.realizedPNL) : null;
                       const fee = Math.abs(parseFloat(o.fee || 0));
-                      // Priority: profit > pnl > realizedPNL > (realizedPNL - fee)
-                      if (profit !== 0) {
+                      // Priority: profit > pnl > realizedPNL — use first non-null non-zero value
+                      if (profit != null && profit !== 0) {
                         realizedPnl = profit;
-                      } else if (pnl !== 0) {
+                      } else if (pnl != null && pnl !== 0) {
                         realizedPnl = pnl;
-                      } else if (rpnl !== 0) {
+                      } else if (rpnl != null && rpnl !== 0) {
                         realizedPnl = rpnl;
                       }
                       found = true;
@@ -2417,9 +2418,13 @@ async function syncTradeStatus() {
             const totalFee = tradingFee + fundingFee; // combined for math
             if (realizedPnl !== null) {
               if (key.platform === 'bitunix') {
-                // Bitunix Position PnL is NET (fees already deducted)
+                // Bitunix realizedPnl is NET (fees + funding already deducted by exchange)
                 pnlUsdt = parseFloat(realizedPnl.toFixed(4));
-                grossPnl = parseFloat((realizedPnl + totalFee).toFixed(4));
+                // Compute gross from price × qty — more accurate than realizedPnl + fee
+                // because Bitunix net can include slippage and accumulated funding not in our fee field
+                grossPnl = isLong
+                  ? parseFloat(((exitPrice - entryPrice) * qty).toFixed(4))
+                  : parseFloat(((entryPrice - exitPrice) * qty).toFixed(4));
               } else {
                 // Binance realizedPnl is GROSS (before fees)
                 grossPnl = parseFloat(realizedPnl.toFixed(4));

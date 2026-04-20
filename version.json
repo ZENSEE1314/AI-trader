@@ -1,8 +1,23 @@
 {
-  "version": "1.4.0",
+  "version": "1.4.1",
   "name": "MCT AI Trader",
   "released": "2026-04-20",
   "changelog": [
+    {
+      "version": "1.4.1",
+      "tag": "v1.4.1",
+      "date": "2026-04-20",
+      "label": "Fix Bitunix P&L calculation — null handling + gross computation",
+      "changes": [
+        "Bug 1: realizedPnl = parseFloat(p.realizedPNL || 0) — if Bitunix field is absent/null, this set realizedPnl=0, which is not null, so the Bitunix branch ran with zeroed P&L overriding everything",
+        "Fix: p.realizedPNL != null ? parseFloat(p.realizedPNL) : null — properly keeps null when field is missing",
+        "Same fix applied to Method 2 (order history): profit/pnl/realizedPNL all use != null check",
+        "Bug 2: grossPnl reconstructed as realizedPnl + totalFee — Bitunix net P&L can include slippage and accumulated funding not captured in our fee field, making reconstruction inaccurate",
+        "Fix: grossPnl computed from (exitPrice - entryPrice) × qty — matches what the trade history UI shows as the price-based movement",
+        "Net P&L (pnlUsdt) continues to use exchange's authoritative realizedPNL value when available",
+        "Result: gross P&L and net P&L are now consistent and accurate — LOSS when fee > profit is correct behavior"
+      ]
+    },
     {
       "version": "1.4.0",
       "tag": "v1.4.0",
