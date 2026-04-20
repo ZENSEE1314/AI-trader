@@ -1,8 +1,22 @@
 {
-  "version": "1.3.7",
+  "version": "1.3.8",
   "name": "MCT AI Trader",
   "released": "2026-04-20",
   "changelog": [
+    {
+      "version": "1.3.8",
+      "tag": "v1.3.8",
+      "date": "2026-04-20",
+      "label": "BOS_SHORT: entry at breakdown start using 1m candles",
+      "changes": [
+        "Previous BOS_SHORT waited for a full 15m candle to close below support — entry was near the end of the drop, not the beginning",
+        "New flow: support level from 15m closed candles (last 20 excl. forming), entry fires on 1m candles the moment the break starts",
+        "Trigger conditions: price within 0.3% of support AND 3+ of last 6 1m candles bearish AND 1+ of last 4 1m candles closed below support AND strong 1m body (>0.1%) AND 1m volume above average",
+        "Entry price = live price at the top of the breakdown, not the bottom",
+        "SL: just above broken support level (support becomes resistance); TP: 2× ATR below entry",
+        "Bonus scoring: 4+ bearish 1m candles +1, 5+ bearish +1, RSI<50 +1, h1Trend bearish +2, 15m EMA bearish +1"
+      ]
+    },
     {
       "version": "1.3.7",
       "tag": "v1.3.7",

@@ -1654,67 +1654,81 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
   } // end SMC_HL_STRUCTURE gate
 
   // ── Strategy 7: Break of Structure SHORT (BOS_SHORT) ──────
-  // Fires when price crashes through recent support with a strong bearish candle.
-  // Catches sudden drops that pattern strategies miss (they need setup before the move).
-  // EMA200 block is softened to a penalty only for this strategy — breakdowns happen
-  // even in bullish trends and the whole point is to catch the reversal.
+  // Entry timing: support level is identified on 15m, but entry fires on 1m candles
+  // the moment the breakdown starts — not after a full 15m close.
+  // This means entry is near the TOP of the drop, not the bottom.
+  //
+  // Flow:
+  //   1. 15m: find support_low = lowest low of last 20 closed candles (excl. last 2 forming)
+  //   2. 15m: price must be within 0.3% of that support (approaching or just breaking)
+  //   3. 1m: at least 3 of last 6 candles are bearish (momentum confirmed)
+  //   4. 1m: at least 1 of last 4 candles closed BELOW support (break has started)
+  //   5. 1m: a 1m candle body > 0.1% (real move, not noise)
+  //   6. 1m: volume above 20-candle average (institutional activity)
   if (!enabledStrategies || enabledStrategies.BOS_SHORT !== false) {
-    if (parsed15.length >= 22 && rsi14 !== null && rsi14 < 65) {
-      // Support level: lowest low of the 5-15 candles before the last 2
-      const lookback = parsed15.slice(-15, -2);
-      const supportLow = Math.min(...lookback.map(c => c.low));
-      const last  = parsed15[parsed15.length - 1];
-      const prev  = parsed15[parsed15.length - 2];
+    if (parsed15.length >= 22 && parsed1.length >= 10 && rsi14 !== null && rsi14 < 65) {
+      // Step 1: Support level from 15m closed candles (exclude last 2 — may be forming)
+      const lookback15 = parsed15.slice(-20, -2);
+      const supportLow = Math.min(...lookback15.map(c => c.low));
 
-      const lastBody     = Math.abs(last.close - last.open) / last.open;  // last candle body %
-      const prevBody     = Math.abs(prev.close - prev.open) / prev.open;
-      const isBearishLast = last.close < last.open;
-      const isBearishPrev = prev.close < prev.open;
+      // Step 2: Price must be AT or just below support (within 0.3%) — breakdown starting
+      const nearSupport = price <= supportLow * 1.003;
 
-      // Break confirmation: last close must be below support by at least 0.15%
-      const brokeSupport  = last.close < supportLow * (1 - 0.0015);
-      // At least one of the last 2 candles must be strongly bearish (body > 0.3%)
-      const strongCandle  = (isBearishLast && lastBody > 0.003) || (isBearishPrev && prevBody > 0.003);
-      // 15m short-term trend must be bearish
-      const ema15Bearish  = ema9_15m !== null && ema21_15m !== null && ema9_15m < ema21_15m;
-      // Volume confirmation on recent candles
-      const hasVol = hasVolumeConfirm(parsed15, parsed15.length - 1, 1.1) ||
-                     hasVolumeConfirm(parsed15, parsed15.length - 2, 1.1);
+      if (nearSupport) {
+        // Step 3: 1m momentum — 3+ of last 6 candles bearish
+        const recent1m   = parsed1.slice(-6);
+        const bearish1m  = recent1m.filter(c => c.close < c.open);
+        const has3Bearish = bearish1m.length >= 3;
 
-      if (brokeSupport && strongCandle && ema15Bearish && hasVol) {
-        const atr = calcATR(parsed15);
-        const entryPrice = price;
-        // SL: just above the broken support level (failed support becomes resistance)
-        const slPrice = supportLow * 1.003;
-        const slDist  = (slPrice - entryPrice) / entryPrice;
-        // TP: 2× ATR below entry
-        const tp1 = entryPrice - atr * 2;
-        const rr  = slDist > 0 ? (atr * 2) / (entryPrice * slDist) : 1.5;
+        // Step 4: At least 1 of last 4 1m candles closed below the support level
+        const last4m = parsed1.slice(-4);
+        const anyBelowSupport = last4m.some(c => c.close < supportLow);
 
-        // Base score 9 — high-confidence breakdown setup
-        let score = 9;
-        if (isBearishLast && lastBody > 0.005) score += 2;    // very large bearish body (>0.5%)
-        if (isBearishPrev && isBearishLast)    score += 1;    // consecutive bear candles
-        if (rsi14 < 50)                        score += 1;    // RSI already weakening
-        if (h1Trend === 'bearish')             score += 2;    // with 1h trend
-        // Do NOT add the h1Trend='bullish' penalty here — BOS_SHORT is a counter-trend reversal
+        // Step 5: 1m candle body strength — at least one candle > 0.1% body
+        const strongBody1m = recent1m.some(c => Math.abs(c.close - c.open) / c.open > 0.001);
 
-        signals.push({
-          symbol,
-          direction: 'SHORT',
-          price: entryPrice,
-          lastPrice: price,
-          sl: slPrice,
-          tp1,
-          tp2: entryPrice - atr * 3,
-          tp3: entryPrice - atr * 4,
-          slDist: Math.abs(slDist),
-          rr,
-          setup: 'BOS_SHORT',
-          setupName: 'BOS-SHORT',
-          score,
-          bosSupport: supportLow,
-        });
+        // Step 6: 1m volume — above 20-candle average
+        const avg1mVol      = parsed1.slice(-20).reduce((s, c) => s + c.volume, 0) / 20;
+        const highVol1m     = recent1m.some(c => c.volume > avg1mVol * 1.2);
+
+        if (has3Bearish && anyBelowSupport && strongBody1m && highVol1m) {
+          const atr        = calcATR(parsed15);
+          const entryPrice = price; // current price = beginning of the breakdown
+          // SL: just above support level (support flips to resistance once broken)
+          const slPrice = supportLow * 1.003;
+          const slDist  = (slPrice - entryPrice) / entryPrice;
+
+          if (slDist > 0) { // safety: SL must be above entry for SHORT
+            const tp1 = entryPrice - atr * 2;
+            const rr  = (atr * 2) / (entryPrice * slDist);
+
+            // Base score 9
+            let score = 9;
+            if (bearish1m.length >= 4)         score += 1; // 4+ bearish 1m candles = stronger momentum
+            if (bearish1m.length >= 5)         score += 1; // 5+ = very strong
+            if (rsi14 < 50)                    score += 1; // RSI already weakening
+            if (h1Trend === 'bearish')         score += 2; // with 1h trend
+            if (ema9_15m !== null && ema21_15m !== null && ema9_15m < ema21_15m) score += 1; // 15m bearish
+            // h1Trend='bullish' — NO penalty here (breakdown can start in bull trend)
+
+            signals.push({
+              symbol,
+              direction: 'SHORT',
+              price: entryPrice,
+              lastPrice: price,
+              sl: slPrice,
+              tp1,
+              tp2: entryPrice - atr * 3,
+              tp3: entryPrice - atr * 4,
+              slDist: Math.abs(slDist),
+              rr,
+              setup: 'BOS_SHORT',
+              setupName: 'BOS-SHORT',
+              score,
+              bosSupport: supportLow,
+            });
+          }
+        }
       }
     }
   } // end BOS_SHORT gate
