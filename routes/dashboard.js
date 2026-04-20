@@ -1466,11 +1466,28 @@ router.post('/pull-bitunix-history', async (req, res) => {
         const apiSecret = cryptoUtils2.decrypt(key.api_secret_enc, key.secret_iv, key.secret_auth_tag);
         const client    = new BitunixClient({ apiKey, apiSecret });
 
-        // Fetch most recent 100 closed positions (1 page)
-        const data = await client.getHistoryPositions({ pageNum: 1, pageSize: 100 });
-        const positions = Array.isArray(data) ? data : (data?.positionList || data?.list || []);
+        // Bitunix requires a symbol param — pull history per distinct symbol
+        // from this key's trades (same approach used by adminFixTrades, proven working)
+        const symRows = await query(
+          `SELECT DISTINCT symbol FROM trades WHERE api_key_id = $1 ORDER BY symbol`, [key.id]
+        );
+        // Also include the 4 default trading symbols in case they have positions not yet in DB
+        const DEFAULT_SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT'];
+        const symbols = [...new Set([
+          ...DEFAULT_SYMBOLS,
+          ...symRows.map(r => r.symbol),
+        ])];
 
-        console.log(`[pull-bitunix-history] key ${key.id}: fetched ${positions.length} positions`);
+        const positions = [];
+        for (const sym of symbols) {
+          try {
+            const symPos = await client.getHistoryPositions({ symbol: sym, pageNum: 1, pageSize: 100 });
+            const list = Array.isArray(symPos) ? symPos : (symPos?.positionList || symPos?.list || []);
+            positions.push(...list);
+          } catch (_) { /* symbol may not have history */ }
+        }
+
+        console.log(`[pull-bitunix-history] key ${key.id}: fetched ${positions.length} positions across ${symbols.length} symbols`);
         if (!positions.length) continue;
 
         // Batch lookup — one query for all positionIds, one for all key trades
