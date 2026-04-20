@@ -1389,9 +1389,32 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     const h1Closes = parsed1h.map(c => c.close);
     const h1Ema9  = calcEMA(h1Closes, 9);
     h1Ema21 = calcEMA(h1Closes, 21);
+
+    // EMA cross gives the base trend direction
+    let emaTrend = 'neutral';
     if (h1Ema9 !== null && h1Ema21 !== null) {
-      h1Trend = h1Ema9 > h1Ema21 ? 'bullish' : 'bearish';
+      emaTrend = h1Ema9 > h1Ema21 ? 'bullish' : 'bearish';
     }
+
+    // Recent momentum override — EMA9/21 lags 3-6 candles on sharp moves.
+    // If 3 of the last 4 completed 1h candles closed DOWN (bearish momentum),
+    // override a "bullish" EMA reading to neutral so we stop entering LONGs
+    // into a falling market. Same logic inverted for SHORT entries.
+    const recent4 = parsed1h.slice(-5, -1); // last 4 completed candles (exclude forming)
+    const bearishCount = recent4.filter(c => c.close < c.open).length;
+    const bullishCount = recent4.filter(c => c.close > c.open).length;
+
+    if (emaTrend === 'bullish' && bearishCount >= 3) {
+      // EMAs still haven't crossed but price is clearly dropping — treat as neutral
+      // to stop buying LONGs into a falling 1h market
+      h1Trend = 'neutral';
+    } else if (emaTrend === 'bearish' && bullishCount >= 3) {
+      // Recovering but EMAs lagging — neutral so we don't short into a recovery
+      h1Trend = 'neutral';
+    } else {
+      h1Trend = emaTrend;
+    }
+
     // EMA200 needs ≥200 candles — use whatever we have (60 is often the max fetched)
     // Fall back to EMA55 as a medium-term proxy when <200 bars available
     const ema200period = Math.min(200, h1Closes.length - 1);
