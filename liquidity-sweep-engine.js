@@ -1845,9 +1845,9 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
           const avg1mVol  = parsed1.slice(-20).reduce((s, c) => s + c.volume, 0) / 20;
           const highVol   = lastM.volume > avg1mVol * 1.1;
 
-          // Don't short into a very strong bullish h1 (would be fighting the trend hard)
-          // Allow if h1Trend is neutral or bearish, or if the rejection signal is very strong
-          const trendOk   = h1Trend !== 'bullish' || (isRejectionCandle && highVol);
+          // Only take SHORT at resistance if h1 structure is NOT bullish.
+          // Even a "strong" rejection candle isn't worth fighting a confirmed uptrend.
+          const trendOk   = h1Trend !== 'bullish';
 
           if (trendOk) {
             const atr      = calcATR(parsed15);
@@ -1902,8 +1902,15 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
         sig.blocked = `BTC SHORT blocked — BTCUSDT above EMA200 (macro bull market, never short BTC trend)`;
         continue;
       }
+      // Double-confirmed uptrend: EMA200 bullish + h1 structure bullish = hard block ALL SHORTs.
+      // A single confluence (EMA200 only, h1 neutral) still allows reversal setups with a penalty.
+      if (h1Trend === 'bullish') {
+        sig.score = -99;
+        sig.blocked = `SHORT blocked — double uptrend confirmed (EMA200 bullish + h1 bullish)`;
+        continue;
+      }
       if (sig.setup === 'BOS_SHORT' || sig.setup === 'RESIST_REJECT') {
-        sig.score -= 3; // penalty only — reversals at resistance happen in bull trends on alts
+        sig.score -= 3; // penalty — EMA200 bullish but h1 is neutral/bearish, allow with caution
       } else {
         sig.score = -99;
         sig.blocked = `SHORT blocked — price above EMA200 (bullish bias per PDF)`;
