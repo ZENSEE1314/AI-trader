@@ -1653,6 +1653,19 @@
       <section id="tab-admin" class="hidden" role="tabpanel" aria-label="Admin">
         <h2 class="section-heading">Admin Panel</h2>
 
+        <!-- ── Active Trading Version status bar — always visible at top of Admin ── -->
+        <div id="admin-active-version-bar" style="display:none;margin-bottom:var(--space-3);padding:12px 16px;background:rgba(0,200,100,0.07);border:1px solid rgba(0,200,100,0.25);border-radius:8px;">
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;">
+            <span style="font-size:0.78rem;color:#5bffa0;font-weight:700;white-space:nowrap;">🟢 LIVE VERSION</span>
+            <span id="admin-active-version-name" style="font-size:0.92rem;color:var(--color-text);font-weight:700;"></span>
+            <button onclick="window.CryptoBot.deactivateVersion()" style="margin-left:auto;background:none;border:1px solid rgba(255,255,255,0.15);border-radius:4px;color:var(--color-text-muted);font-size:0.72rem;padding:2px 10px;cursor:pointer;" title="Revert to default settings">✕ Clear</button>
+          </div>
+          <div id="admin-active-version-params" style="font-size:0.75rem;color:var(--color-text-muted);font-family:var(--font-mono);"></div>
+        </div>
+        <div id="admin-no-version-bar" style="margin-bottom:var(--space-3);padding:8px 16px;background:rgba(255,255,255,0.03);border:1px solid var(--color-border-muted);border-radius:8px;font-size:0.78rem;color:var(--color-text-muted);">
+          ⚪ No version active — bot uses default hardcoded settings. Go to <strong>Tools → Backtest</strong> and click <strong>🚀 Trade with This</strong> to activate a version.
+        </div>
+
         <!-- Admin Sub-Tabs -->
         <nav class="admin-subtabs" role="tablist">
           <button class="admin-subtab active" data-admintab="earnings" onclick="window.CryptoBot.switchAdminTab('earnings')" data-i18n="admin.earnings">Earnings</button>

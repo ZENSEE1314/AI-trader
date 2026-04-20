@@ -1458,6 +1458,8 @@
 
   async function loadAdmin() {
     if (!state.user?.is_admin) return;
+    // Always refresh active version bar when admin panel opens
+    api('GET', '/api/admin/ai-versions/active').then(updateActiveVersionBanner).catch(() => updateActiveVersionBanner(null));
     try {
       const [users, wds, settings, weeklyEarnings] = await Promise.all([
         api('GET', '/api/admin/users'),
@@ -2459,14 +2461,93 @@
   }
 
   function updateActiveVersionBanner(activeRow) {
-    let banner = $('#active-version-banner');
-    if (!banner) return;
-    if (activeRow && activeRow.version) {
-      banner.textContent = `🟢 Live: ${activeRow.version} — SL ${((activeRow.sl_pct||0)*100).toFixed(1)}% · Trail ${((activeRow.trailing_step||0)*100).toFixed(1)}% · ${activeRow.max_positions||3} pos max`;
-      banner.style.display = '';
+    const hasActive = activeRow && activeRow.version;
+
+    // ── Backtest section inline banner ────────────────────────────────────
+    const btBanner = $('#active-version-banner');
+    if (btBanner) {
+      if (hasActive) {
+        const slPct    = activeRow.slPct    ?? activeRow.sl_pct    ?? null;
+        const trailPct = activeRow.trailStep ?? activeRow.trailing_step ?? null;
+        const maxPos   = activeRow.maxPositions ?? activeRow.max_positions ?? 3;
+        btBanner.textContent = `🟢 Live: ${activeRow.version}`
+          + (slPct    != null ? ` — SL ${(parseFloat(slPct)*100).toFixed(1)}%`    : '')
+          + (trailPct != null ? ` · Trail ${(parseFloat(trailPct)*100).toFixed(1)}%` : '')
+          + ` · ${maxPos} pos max`;
+        btBanner.style.display = '';
+      } else {
+        btBanner.textContent = '⚪ Using default settings (no version active)';
+        btBanner.style.display = '';
+      }
+    }
+
+    // ── Persistent top bar in Admin panel ────────────────────────────────
+    const topBar   = $('#admin-active-version-bar');
+    const noBar    = $('#admin-no-version-bar');
+    const nameEl   = $('#admin-active-version-name');
+    const paramsEl = $('#admin-active-version-params');
+
+    if (hasActive) {
+      const a = activeRow;
+      const pct = (v) => v != null ? (parseFloat(v) * 100).toFixed(1) + '%' : null;
+      const int = (v) => v != null ? parseInt(v) : null;
+      const fp  = (v) => v != null ? parseFloat(v) : null;
+
+      if (nameEl) nameEl.textContent = a.version;
+
+      // Build a full readable summary of every param in the active version
+      const lines = [];
+
+      // Risk & position
+      const riskLine = [
+        a.slPct    != null ? `SL ${pct(a.slPct)}`               : null,
+        a.tpPct    != null && fp(a.tpPct) > 0 ? `TP ${pct(a.tpPct)}` : `TP trail-only`,
+        a.trailStep != null ? `Trail ${pct(a.trailStep)}`        : null,
+        a.leverage  != null ? `Lev ${a.leverage}×`               : null,
+        a.riskPct   != null ? `Risk ${pct(a.riskPct)}`           : null,
+        a.maxPositions  != null ? `${a.maxPositions} pos max`    : null,
+        a.maxConsecLoss != null ? `stop after ${a.maxConsecLoss} losses` : null,
+      ].filter(Boolean).join(' · ');
+      if (riskLine) lines.push('⚖️  ' + riskLine);
+
+      // Structure
+      const structParts = [
+        a.swing4h  != null ? `Swing 4H=${a.swing4h}`   : null,
+        a.swing1h  != null ? `1H=${a.swing1h}`          : null,
+        a.swing15m != null ? `15M=${a.swing15m}`        : null,
+        a.swing1m  != null ? `1M=${a.swing1m}`          : null,
+        a.proximity != null ? `Prox ${pct(a.proximity)}` : null,
+        a.entryFresh != null ? `Fresh ≤${a.entryFresh}c` : null,
+        a.dailyBodyRatio != null ? `Body≥${(parseFloat(a.dailyBodyRatio)*100).toFixed(0)}%` : null,
+      ].filter(Boolean).join(' · ');
+      if (structParts) lines.push('📐 ' + structParts);
+
+      // RSI
+      if (a.rsiPeriod != null && int(a.rsiPeriod) > 0) {
+        lines.push(`📊 RSI(${a.rsiPeriod})  OB>${a.rsiOb}  OS<${a.rsiOs}`);
+      } else if (a.rsiPeriod === 0) {
+        lines.push('📊 RSI off');
+      }
+
+      // EMA
+      if (a.emaFast != null && int(a.emaFast) > 0) {
+        lines.push(`📈 EMA ${a.emaFast}/${a.emaSlow}` + (int(a.emaTrend) > 0 ? ` trend=${a.emaTrend}` : ''));
+      } else if (a.emaFast === 0) {
+        lines.push('📈 EMA off');
+      }
+
+      // Volume
+      if (a.volMult != null && fp(a.volMult) > 0) {
+        lines.push(`📦 Vol ≥${a.volMult}× avg`);
+      }
+
+      if (paramsEl) paramsEl.innerHTML = lines.map(l => `<span style="display:block;line-height:1.7;">${escapeHtml(l)}</span>`).join('');
+
+      if (topBar) topBar.style.display = 'flex';
+      if (noBar)  noBar.style.display  = 'none';
     } else {
-      banner.textContent = '⚪ Using default settings (no version active)';
-      banner.style.display = '';
+      if (topBar) topBar.style.display = 'none';
+      if (noBar)  noBar.style.display  = '';
     }
   }
 
