@@ -1469,6 +1469,11 @@ router.post('/pull-bitunix-history', async (req, res) => {
     const { BitunixClient } = require('../bitunix-client');
     const cryptoUtils2 = require('../crypto-utils');
 
+    // Ensure column exists — may be missing on older DB instances
+    try {
+      await query(`ALTER TABLE trades ADD COLUMN IF NOT EXISTS bitunix_position_id VARCHAR(64)`);
+    } catch (_) {}
+
     // Admin pulls history for ALL users; regular users pull only their own
     const adminRow = await query('SELECT is_admin FROM users WHERE id = $1', [req.userId]);
     const isAdmin = adminRow[0]?.is_admin;
