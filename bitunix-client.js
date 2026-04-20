@@ -234,9 +234,12 @@ class BitunixClient {
 
   async getMarketPrice(symbol) {
     const data = await this._get('/api/v1/futures/market/get_latest_price', { symbol });
-    // API may return array or object
-    if (Array.isArray(data)) return data[0] || {};
-    return data;
+    // API returns array or single object — extract the price field as a number
+    const obj = Array.isArray(data) ? (data[0] || {}) : (data || {});
+    // Try common field names Bitunix uses for price
+    const price = parseFloat(obj.price || obj.lastPrice || obj.markPrice || obj.indexPrice || obj.close || 0);
+    if (!price || isNaN(price)) throw new Error(`Bitunix getMarketPrice: no price in response for ${symbol} — keys: ${JSON.stringify(Object.keys(obj))}`);
+    return price;
   }
 
   // ── Convenience: match Binance-like interface ──────────────

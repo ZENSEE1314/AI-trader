@@ -369,26 +369,45 @@ async function updateStopLoss(client, symbol, newSlPrice, closeSide, platform, p
   } else if (platform === 'bitunix') {
     // NOTE: Bitunix replaces the entire TP/SL config on each call.
     // Must re-send TP alongside SL to avoid wiping it.
-    const posData = await client.getOpenPositions(symbol);
-
-    // Bitunix may return a bare array OR a wrapped object (positionList / list).
-    // Also handles single-object response when a symbol filter is applied.
-    const posList = Array.isArray(posData) ? posData
-      : (posData?.positionList || posData?.list || (posData && typeof posData === 'object' ? [posData] : []));
-
-    const pos = posList.find(p => p.symbol === symbol);
-    // Bitunix API uses 'positionId' in some versions, 'id' in others — check both.
-    const posId = pos ? (pos.positionId || pos.id) : null;
-
-    if (pos && posId) {
-      const tpslPayload = { symbol, positionId: posId, slPrice: slFmt };
-      if (existingTpPrice) tpslPayload.tpPrice = fmtP(existingTpPrice);
-      await client.placePositionTpSl(tpslPayload);
-      return true;
+    let posId = null;
+    try {
+      const posData = await client.getOpenPositions(symbol);
+      // Bitunix may return a bare array OR a wrapped object (positionList / list / single obj).
+      const posList = Array.isArray(posData) ? posData
+        : (posData?.positionList || posData?.list
+            || (posData && typeof posData === 'object' && !Array.isArray(posData) ? [posData] : []));
+      const pos = posList.find(p => p.symbol === symbol);
+      // Try every known field name Bitunix uses for position ID
+      posId = pos ? (pos.positionId || pos.id || pos.position_id || pos.orderId) : null;
+      if (!posId && pos) {
+        bLog.error(`[Bitunix updateStopLoss] ${symbol}: pos found but no ID. Fields: ${JSON.stringify(Object.keys(pos))} Data: ${JSON.stringify(pos)}`);
+      }
+    } catch (e) {
+      bLog.error(`[Bitunix updateStopLoss] ${symbol}: getOpenPositions failed: ${e.message}`);
     }
 
-    // Log exactly what came back so we can debug field names if it ever fails
-    bLog.error(`[Bitunix updateStopLoss] ${symbol}: posId=${posId} pos=${pos ? JSON.stringify(Object.keys(pos)) : 'null'} rawType=${Array.isArray(posData)?'array':typeof posData}`);
+    // Attempt 1: with positionId (required by Bitunix in most modes)
+    if (posId) {
+      try {
+        const tpslPayload = { symbol, positionId: posId, slPrice: slFmt };
+        if (existingTpPrice) tpslPayload.tpPrice = fmtP(existingTpPrice);
+        await client.placePositionTpSl(tpslPayload);
+        return true;
+      } catch (e) {
+        bLog.error(`[Bitunix updateStopLoss] ${symbol}: placePositionTpSl with posId failed: ${e.message}`);
+      }
+    }
+
+    // Attempt 2: without positionId (works in one-way / netting mode)
+    try {
+      const tpslPayload = { symbol, slPrice: slFmt };
+      if (existingTpPrice) tpslPayload.tpPrice = fmtP(existingTpPrice);
+      await client.placePositionTpSl(tpslPayload);
+      bLog.trade(`[Bitunix updateStopLoss] ${symbol}: SL set without positionId (fallback)`);
+      return true;
+    } catch (e) {
+      bLog.error(`[Bitunix updateStopLoss] ${symbol}: placePositionTpSl without posId also failed: ${e.message}`);
+    }
     return false;
   }
   return false;
