@@ -1289,7 +1289,7 @@ router.post('/resync-bitunix', async (req, res) => {
     const adminCheck = await query(`SELECT is_admin FROM users WHERE id = $1`, [req.userId]);
     if (!adminCheck[0]?.is_admin) return res.status(403).json({ error: 'Admin only' });
 
-    const BitunixClient = require('../bitunix-client');
+    const { BitunixClient } = require('../bitunix-client');
     const cryptoUtils2  = require('../crypto-utils');
 
     try {
@@ -1438,7 +1438,7 @@ router.get('/debug/bitunix-positions', async (req, res) => {
     if (!adminCheck[0]?.is_admin) return res.status(403).json({ error: 'Admin only' });
 
     const { symbol } = req.query;
-    const BitunixClient = require('../bitunix-client');
+    const { BitunixClient } = require('../bitunix-client');
     const cryptoUtils2 = require('../crypto-utils');
 
     // Use first Bitunix API key found for this admin
