@@ -370,44 +370,62 @@ async function updateStopLoss(client, symbol, newSlPrice, closeSide, platform, p
     // NOTE: Bitunix replaces the entire TP/SL config on each call.
     // Must re-send TP alongside SL to avoid wiping it.
     let posId = null;
+    let posRawKeys = '';
     try {
       const posData = await client.getOpenPositions(symbol);
+      bLog.trade(`[Bitunix updateStopLoss] ${symbol}: raw posData type=${Array.isArray(posData) ? 'array' : typeof posData}, keys=${JSON.stringify(posData ? Object.keys(posData) : null)}`);
       // Bitunix may return a bare array OR a wrapped object (positionList / list / single obj).
       const posList = Array.isArray(posData) ? posData
         : (posData?.positionList || posData?.list
             || (posData && typeof posData === 'object' && !Array.isArray(posData) ? [posData] : []));
+      bLog.trade(`[Bitunix updateStopLoss] ${symbol}: posList length=${posList.length}`);
       const pos = posList.find(p => p.symbol === symbol);
-      // Try every known field name Bitunix uses for position ID
-      posId = pos ? (pos.positionId || pos.id || pos.position_id || pos.orderId) : null;
-      if (!posId && pos) {
-        bLog.error(`[Bitunix updateStopLoss] ${symbol}: pos found but no ID. Fields: ${JSON.stringify(Object.keys(pos))} Data: ${JSON.stringify(pos)}`);
+      if (pos) {
+        posRawKeys = JSON.stringify(Object.keys(pos));
+        // Try every known field name Bitunix uses for position ID
+        posId = pos.positionId || pos.id || pos.position_id || pos.orderId;
+        bLog.trade(`[Bitunix updateStopLoss] ${symbol}: pos found, posId=${posId}, fields=${posRawKeys}`);
+      } else {
+        bLog.error(`[Bitunix updateStopLoss] ${symbol}: no matching pos in list of ${posList.length}. Symbols: ${posList.map(p => p.symbol).join(',')}`);
       }
     } catch (e) {
       bLog.error(`[Bitunix updateStopLoss] ${symbol}: getOpenPositions failed: ${e.message}`);
     }
 
-    // Attempt 1: with positionId (required by Bitunix in most modes)
-    if (posId) {
-      try {
-        const tpslPayload = { symbol, positionId: posId, slPrice: slFmt };
-        if (existingTpPrice) tpslPayload.tpPrice = fmtP(existingTpPrice);
-        await client.placePositionTpSl(tpslPayload);
-        return true;
-      } catch (e) {
-        bLog.error(`[Bitunix updateStopLoss] ${symbol}: placePositionTpSl with posId failed: ${e.message}`);
+    const buildTpSlBody = (withPosId) => {
+      const body = { symbol };
+      if (withPosId && posId) body.positionId = String(posId);
+      body.slPrice = String(slFmt);
+      body.slStopType = 'MARK_PRICE';
+      body.slOrderType = 'MARKET';
+      if (existingTpPrice) {
+        body.tpPrice = String(fmtP(existingTpPrice));
+        body.tpStopType = 'MARK_PRICE';
+        body.tpOrderType = 'MARKET';
       }
+      return body;
+    };
+
+    // Attempt 1: with positionId (required by Bitunix in hedge mode)
+    if (posId) {
+      const body1 = buildTpSlBody(true);
+      bLog.trade(`[Bitunix updateStopLoss] ${symbol}: attempt 1 body=${JSON.stringify(body1)}`);
+      const raw1 = await client._rawPost('/api/v1/futures/tpsl/position/place_order', body1);
+      bLog.trade(`[Bitunix updateStopLoss] ${symbol}: attempt 1 raw response=${JSON.stringify(raw1)}`);
+      if (raw1?.code === 0) return true;
+      bLog.error(`[Bitunix updateStopLoss] ${symbol}: attempt 1 FAILED code=${raw1?.code} msg=${raw1?.msg}`);
     }
 
-    // Attempt 2: without positionId (works in one-way / netting mode)
-    try {
-      const tpslPayload = { symbol, slPrice: slFmt };
-      if (existingTpPrice) tpslPayload.tpPrice = fmtP(existingTpPrice);
-      await client.placePositionTpSl(tpslPayload);
+    // Attempt 2: without positionId (one-way / netting mode)
+    const body2 = buildTpSlBody(false);
+    bLog.trade(`[Bitunix updateStopLoss] ${symbol}: attempt 2 body=${JSON.stringify(body2)}`);
+    const raw2 = await client._rawPost('/api/v1/futures/tpsl/position/place_order', body2);
+    bLog.trade(`[Bitunix updateStopLoss] ${symbol}: attempt 2 raw response=${JSON.stringify(raw2)}`);
+    if (raw2?.code === 0) {
       bLog.trade(`[Bitunix updateStopLoss] ${symbol}: SL set without positionId (fallback)`);
       return true;
-    } catch (e) {
-      bLog.error(`[Bitunix updateStopLoss] ${symbol}: placePositionTpSl without posId also failed: ${e.message}`);
     }
+    bLog.error(`[Bitunix updateStopLoss] ${symbol}: attempt 2 FAILED code=${raw2?.code} msg=${raw2?.msg}`);
     return false;
   }
   return false;
@@ -2292,8 +2310,12 @@ async function syncTradeStatus() {
                 }
               }
 
-              if (!newSlPrice) continue;
+              if (!newSlPrice) {
+                bLog.trade(`Bitunix trail: ${trade.symbol} newSlPrice=null (candleTrail=${!!candleTrail}, capitalPct=${(bxProfitPct*tradeLev*100).toFixed(1)}%) — skipping`);
+                continue;
+              }
               bLog.trade(`Bitunix trailing SL (${slSource}): ${trade.symbol} → newSL=$${newSlPrice.toFixed(bxSlPrec)}`);
+              await notify(`🔧 *Trail SL Debug*\n${trade.symbol} ${isLong ? 'LONG' : 'SHORT'}\nProfit: +${(bxProfitPct*tradeLev*100).toFixed(1)}% capital\nSetting SL → \`$${newSlPrice.toFixed(bxSlPrec)}\` (${slSource})\nentry=$${entryPrice} cur=$${curPrice.toFixed(bxSlPrec)}`);
 
               // ── Update SL on exchange (retry up to 3 times) ──
               let slUpdated = false;
