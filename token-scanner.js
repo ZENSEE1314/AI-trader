@@ -90,14 +90,27 @@ async function recordTokenResult(symbol, pnlUsdt, fee, isWin) {
 }
 
 /**
- * Get daily results leaderboard.
+ * Get daily results leaderboard — reads directly from trades table so it's
+ * always accurate regardless of which close path was used.
  */
 async function getDailyResults(date = null) {
   try {
     const { query } = require('./db');
     const d = date || new Date().toISOString().split('T')[0];
     const rows = await query(
-      `SELECT * FROM token_daily_results WHERE trade_date = $1 ORDER BY total_pnl DESC`,
+      `SELECT
+         symbol,
+         COUNT(*)                                                    AS total_trades,
+         SUM(CASE WHEN pnl_usdt > 0 THEN 1 ELSE 0 END)             AS wins,
+         SUM(CASE WHEN pnl_usdt IS NULL OR pnl_usdt <= 0 THEN 1 ELSE 0 END) AS losses,
+         COALESCE(SUM(pnl_usdt), 0)                                 AS total_pnl,
+         COALESCE(SUM(trading_fee), 0)                              AS total_fee,
+         CASE WHEN COUNT(*) > 0 THEN COALESCE(SUM(pnl_usdt), 0) / COUNT(*) ELSE 0 END AS avg_pnl
+       FROM trades
+       WHERE status IN ('WIN', 'LOSS', 'CLOSED', 'SL', 'TP')
+         AND DATE(closed_at AT TIME ZONE 'UTC') = $1
+       GROUP BY symbol
+       ORDER BY total_pnl DESC`,
       [d]
     );
     return rows;

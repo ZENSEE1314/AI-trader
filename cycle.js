@@ -1363,6 +1363,12 @@ function getClient() {
   return new USDMClient({ api_key: API_KEY, api_secret: API_SECRET }, getBinanceRequestOptions());
 }
 
+// ── TRADE OPEN LOCK ─────────────────────────────────────────
+// Process-level guard: prevents two concurrent execution paths (main cycle +
+// agent coordinator running at the same time) from both opening the same
+// trade before the first DB INSERT commits.
+const _openTradeInProgress = new Set(); // key: `${userId}:${symbol}`
+
 // ── MULTI-USER TRADE EXECUTION ──────────────────────────────
 async function executeForAllUsers(pick) {
   let db, cryptoUtils, BitunixClient;
@@ -1523,6 +1529,14 @@ async function executeForAllUsers(pick) {
           return;
         }
 
+        // Process-level lock: blocks concurrent opens for same user+symbol before DB INSERT commits.
+        const openLockKey = `${key.user_id}:${symbol}`;
+        if (_openTradeInProgress.has(openLockKey)) {
+          userLog.trade(`User ${key.email}: ${symbol} trade open already in progress — skipping concurrent duplicate`);
+          return;
+        }
+        _openTradeInProgress.add(openLockKey);
+
         // Check DB for existing open trade on same SYMBOL for this USER (across ALL their keys).
         // Previously checked api_key_id only — if a user has 3 keys, all 3 would open the same trade.
         const existingTrade = await db.query(
@@ -1530,6 +1544,7 @@ async function executeForAllUsers(pick) {
           [key.user_id, symbol]
         );
         if (existingTrade.length > 0) {
+          _openTradeInProgress.delete(openLockKey);
           userLog.trade(`User ${key.email}: already has OPEN trade on ${symbol} (user-wide check) — skipping duplicate`);
           return;
         }
@@ -1930,6 +1945,9 @@ async function executeForAllUsers(pick) {
         log(`User ${key.email} trade error: ${err.message}`);
         // NOTE: not saving ERROR trades to DB — they pollute trade history with no useful data.
         // Errors are visible in bot logs already.
+      } finally {
+        // Always release the process-level lock so the next cycle can re-enter.
+        _openTradeInProgress.delete(`${key.user_id}:${sym}`);
       }
     })().catch(e => {
         userLog.error(`User trade execution failed: ${e.message}`);
