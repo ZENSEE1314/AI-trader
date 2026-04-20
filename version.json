@@ -1,8 +1,22 @@
 {
-  "version": "1.3.9",
+  "version": "1.4.0",
   "name": "MCT AI Trader",
   "released": "2026-04-20",
   "changelog": [
+    {
+      "version": "1.4.0",
+      "tag": "v1.4.0",
+      "date": "2026-04-20",
+      "label": "Fix duplicate agent execution — orphaned setInterval timers",
+      "changes": [
+        "Root cause: _startCeoLoop() and _startTokenScanLoop() created new setInterval instances without clearing the previous one",
+        "Each re-init (error recovery, reconnect) stacked another timer — after 4 re-inits, ETHAgent/SOLAgent/BNBAgent each ran 4× per tick",
+        "Fix: clearInterval(this._ceoTimer) added at the start of _startCeoLoop() before creating new interval",
+        "Fix: clearInterval(this._tokenScanTimer) added at the start of _startTokenScanLoop() before creating new interval",
+        "Each timer reference is now cleared before being overwritten — no orphaned intervals can accumulate",
+        "Result: each token agent runs exactly once per scan tick regardless of how many times coordinator re-initializes"
+      ]
+    },
     {
       "version": "1.3.9",
       "tag": "v1.3.9",

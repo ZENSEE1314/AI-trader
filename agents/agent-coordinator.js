@@ -371,6 +371,7 @@ class AgentCoordinator extends BaseAgent {
     // Retroactive sync: reset any dead agents from bad retro-sync, recalculate survival
     this._resetAndRetroSync().catch(e => this.logError(`Retro sync failed: ${e.message}`));
 
+    clearInterval(this._ceoTimer);
     this._ceoTimer = setInterval(async () => {
       if (this.paused) return;
       try {
@@ -458,6 +459,7 @@ class AgentCoordinator extends BaseAgent {
   _startTokenScanLoop() {
     // Calculate tick interval: scan TOKEN_BATCH_SIZE tokens per tick
     // so all tokens are covered within TOKEN_SCAN_INTERVAL_MS
+    clearInterval(this._tokenScanTimer);
     this._rebuildScanQueue();
 
     const tickMs = Math.max(2000, Math.floor(this.TOKEN_SCAN_INTERVAL_MS / Math.ceil(this.tokenAgents.size / this.TOKEN_BATCH_SIZE)) || 5000);
