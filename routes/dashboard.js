@@ -1203,10 +1203,11 @@ router.post('/resync-bitunix', async (req, res) => {
     } catch (_) {}
 
     // Get all CLOSED Bitunix trades
-    // NOTE: select t.* instead of naming bitunix_position_id so this can't crash
-    // even if the ALTER TABLE above somehow didn't take effect.
+    // NOTE: select t.* to avoid crashing if bitunix_position_id column doesn't exist yet
     const trades = await query(`
-      SELECT t.*, ak.encrypted_api_key, ak.encrypted_api_secret
+      SELECT t.*,
+             ak.api_key_enc, ak.iv, ak.auth_tag,
+             ak.api_secret_enc, ak.secret_iv, ak.secret_auth_tag
       FROM trades t
       JOIN api_keys ak ON t.api_key_id = ak.id
       WHERE ak.platform = 'bitunix'
@@ -1221,8 +1222,8 @@ router.post('/resync-bitunix', async (req, res) => {
 
     for (const trade of trades) {
       try {
-        const apiKey    = cryptoUtils2.decryptApiKey(trade.encrypted_api_key);
-        const apiSecret = cryptoUtils2.decryptApiKey(trade.encrypted_api_secret);
+        const apiKey    = cryptoUtils2.decrypt(trade.api_key_enc, trade.iv, trade.auth_tag);
+        const apiSecret = cryptoUtils2.decrypt(trade.api_secret_enc, trade.secret_iv, trade.secret_auth_tag);
         const bxClient  = new BitunixClient({ apiKey, apiSecret });
 
         const isLong = trade.direction !== 'SHORT';
@@ -1320,7 +1321,7 @@ router.get('/debug/bitunix-positions', async (req, res) => {
 
     // Use first Bitunix API key found for this admin
     const keys = await query(
-      `SELECT ak.encrypted_api_key, ak.encrypted_api_secret
+      `SELECT ak.api_key_enc, ak.iv, ak.auth_tag, ak.api_secret_enc, ak.secret_iv, ak.secret_auth_tag
        FROM api_keys ak JOIN users u ON ak.user_id = u.id
        WHERE u.id = $1 AND ak.platform = 'bitunix' AND ak.is_active = true
        LIMIT 1`,
@@ -1328,8 +1329,8 @@ router.get('/debug/bitunix-positions', async (req, res) => {
     );
     if (!keys.length) return res.status(404).json({ error: 'No Bitunix key found' });
 
-    const apiKey    = cryptoUtils2.decryptApiKey(keys[0].encrypted_api_key);
-    const apiSecret = cryptoUtils2.decryptApiKey(keys[0].encrypted_api_secret);
+    const apiKey    = cryptoUtils2.decrypt(keys[0].api_key_enc, keys[0].iv, keys[0].auth_tag);
+    const apiSecret = cryptoUtils2.decrypt(keys[0].api_secret_enc, keys[0].secret_iv, keys[0].secret_auth_tag);
     const bxClient  = new BitunixClient({ apiKey, apiSecret });
 
     const params = { pageSize: 10 };

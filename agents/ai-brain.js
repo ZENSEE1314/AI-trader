@@ -53,8 +53,8 @@ let ollamaLastCheck = 0;
 const OLLAMA_HEALTH_RECHECK_MS = 60000; // Re-check every 60s after failure
 
 function getProvider(complexity = 'low') {
-  // Priority 1: Ollama (Local/Tunnel) — handles ALL complexity levels
-  if (process.env.OLLAMA_URL || true) {
+  // Priority 1: Ollama (Local/Tunnel) — only if URL is configured
+  if (process.env.OLLAMA_URL) {
     if (ollamaHealthy) {
       return 'ollama';
     }
@@ -176,10 +176,13 @@ async function think(opts) {
   if (agentMemory) fullSystem += `\n\n${agentMemory}`;
   // Available skills — agent knows what tools are available
   if (skillsPrompt) fullSystem += `\n\n${skillsPrompt.substring(0, 400)}`;
-  // Hard cap — Google Gemini rejects system instructions > ~4000 chars with a 400 error
+  // Hard cap — Google Gemini rejects system instructions > ~4000 chars with a 400 error.
+  // Use Array.from to count by Unicode code points (not UTF-16 units) so we never
+  // split a surrogate pair, which causes Anthropic to return 400 invalid_request_error.
   const MAX_SYSTEM_CHARS = 3800;
   if (fullSystem.length > MAX_SYSTEM_CHARS) {
-    fullSystem = fullSystem.substring(0, MAX_SYSTEM_CHARS);
+    const codePoints = Array.from(fullSystem);
+    fullSystem = codePoints.slice(0, MAX_SYSTEM_CHARS).join('');
   }
 
   try {
