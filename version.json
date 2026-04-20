@@ -1,8 +1,20 @@
 {
-  "version": "1.4.5",
+  "version": "1.4.6",
   "name": "MCT AI Trader",
   "released": "2026-04-20",
   "changelog": [
+    {
+      "version": "1.4.6",
+      "tag": "v1.4.6",
+      "date": "2026-04-20",
+      "label": "Re-sync closed Bitunix trades + fix AI 400 error",
+      "changes": [
+        "Add POST /api/dashboard/resync-bitunix — re-fetches all closed Bitunix trades from exchange and corrects exit_price, pnl_usdt, gross_pnl, trading_fee, status in DB",
+        "Processes up to 200 most recent closed trades, matches by positionId first then entry price, 200ms delay between requests to avoid rate limits",
+        "Returns JSON with fixed/skipped/failed counts and before/after values for every trade",
+        "Fix AI 400 invalid_request_error — Anthropic rejects empty string content; add fallback to safe defaults before calling API"
+      ]
+    },
     {
       "version": "1.4.5",
       "tag": "v1.4.5",

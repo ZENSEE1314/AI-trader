@@ -299,13 +299,18 @@ async function thinkAnthropic(agentName, systemPrompt, userMessage) {
   if (!ANTHROPIC_PREFIXES.some(p => model.startsWith(p))) {
     model = 'claude-3-5-sonnet-20241022';
   }
+
+  // Guard: Anthropic 400s on empty/whitespace content
+  const safeSystem  = (systemPrompt  || '').trim() || 'You are a helpful assistant.';
+  const safeMessage = (userMessage   || '').trim() || 'Hello';
+
   console.log(`[AI Brain] ${agentName} thinking with Anthropic ${model}...`);
 
   const response = await anthropicClient.messages.create({
     model,
     max_tokens: 1000,
-    system: systemPrompt,
-    messages: [{ role: 'user', content: userMessage }],
+    system: safeSystem,
+    messages: [{ role: 'user', content: safeMessage }],
   });
   const text = response.content[0]?.text || null;
   console.log(`[AI Brain] ${agentName} responded: ${text ? text.substring(0, 80) + '...' : 'EMPTY'}`);
