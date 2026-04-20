@@ -1564,14 +1564,22 @@ async function executeForAllUsers(pick) {
 
         const globalSl    = activeVer?.slPct     != null ? parseFloat(activeVer.slPct)     : null;
         const globalTp    = activeVer?.tpPct     != null ? parseFloat(activeVer.tpPct)     : null;
-        const globalTrail = activeVer?.trailStep != null ? parseFloat(activeVer.trailStep) : null;
+        // Active version stores trail as price % fraction (e.g. 0.012 = 1.2% price).
+        // calculateTrailingStep expects capital % as a plain number (e.g. 1.2 = 1.2% capital).
+        // Convert: price fraction × 100 → percentage number. 0.012 → 1.2
+        const rawGlobalTrail = activeVer?.trailStep != null ? parseFloat(activeVer.trailStep) : null;
+        const globalTrail    = rawGlobalTrail != null ? rawGlobalTrail * 100 : null;
 
-        const dirSl    = activeVer?.[dirSlKey]    != null && parseFloat(activeVer[dirSlKey])    > 0 ? parseFloat(activeVer[dirSlKey])    : globalSl;
-        const dirTp    = activeVer?.[dirTpKey]    != null && parseFloat(activeVer[dirTpKey])    > 0 ? parseFloat(activeVer[dirTpKey])    : globalTp;
-        const dirTrail = activeVer?.[dirTrailKey] != null && parseFloat(activeVer[dirTrailKey]) > 0 ? parseFloat(activeVer[dirTrailKey]) : globalTrail;
+        const dirSl  = activeVer?.[dirSlKey]  != null && parseFloat(activeVer[dirSlKey])  > 0 ? parseFloat(activeVer[dirSlKey])  : globalSl;
+        const dirTp  = activeVer?.[dirTpKey]  != null && parseFloat(activeVer[dirTpKey])  > 0 ? parseFloat(activeVer[dirTpKey])  : globalTp;
+        const rawDirTrail = activeVer?.[dirTrailKey] != null && parseFloat(activeVer[dirTrailKey]) > 0
+          ? parseFloat(activeVer[dirTrailKey]) * 100  // price fraction → capital %
+          : globalTrail;
+        const dirTrail = rawDirTrail;
 
         const userMaxLoss = parseFloat(key.max_loss_usdt) || 0;
         // Trail step: direction-specific → active version global → api_key setting → hardcoded default
+        // key.trailing_sl_step is already stored as capital % (e.g. 1.2 = 1.2% capital per step)
         const userTrailStep = dirTrail ?? parseFloat(key.trailing_sl_step) ?? 1.2;
 
         // SL price distance: direction-specific override → active version global → hardcoded margin%/leverage
