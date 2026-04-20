@@ -1140,7 +1140,10 @@ class AgentCoordinator extends BaseAgent {
     if (/\b(risk report|exposure|drawdown|risk)\b/.test(text)) {
       return this._buildRiskChat();
     }
-    if (/\b(performance|win rate|win ratio|how.*doing|results|pnl|profit|total.*pnl|overall)\b/.test(text)) {
+    if (/\b(backtest|wr backtest|backtest.*wr|strategy.*wr|wr.*strategy|win.*rate.*strategy|strategy.*win|per.*strategy|breakdown.*strategy)\b/.test(text)) {
+      return this._buildStrategyWRChat();
+    }
+    if (/\b(performance|win rate|win ratio|how.*doing|results|pnl|profit|total.*pnl|overall|wr)\b/.test(text)) {
       return this._buildPerformanceChat();
     }
     if (/\b(trade history|my trades|show.*trade|list.*trade|recent trade|past trade|closed trade|earnings|revenue|income|how much.*made|how much.*lost|how much.*earn)\b/.test(text)) {
@@ -1568,6 +1571,60 @@ class AgentCoordinator extends BaseAgent {
       }
     }
     return { from: 'RiskAgent', message: lines.join('\n') };
+  }
+
+  async _buildStrategyWRChat() {
+    try {
+      const { query: dbQuery } = require('../db');
+      const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+
+      const [overall, bySetup] = await Promise.all([
+        dbQuery(`
+          SELECT COUNT(*) AS total,
+                 SUM(CASE WHEN pnl_usdt > 0 THEN 1 ELSE 0 END) AS wins,
+                 ROUND(SUM(pnl_usdt)::numeric,4) AS total_pnl
+          FROM trades
+          WHERE status IN ('WIN','LOSS','CLOSED','TP','SL')
+            AND closed_at >= $1 AND pnl_usdt IS NOT NULL`, [since]),
+        dbQuery(`
+          SELECT COALESCE(market_structure,'UNKNOWN') AS setup,
+                 COUNT(*) AS total,
+                 SUM(CASE WHEN pnl_usdt > 0 THEN 1 ELSE 0 END) AS wins,
+                 ROUND(SUM(pnl_usdt)::numeric,4) AS total_pnl
+          FROM trades
+          WHERE status IN ('WIN','LOSS','CLOSED','TP','SL')
+            AND closed_at >= $1 AND pnl_usdt IS NOT NULL
+          GROUP BY market_structure ORDER BY total DESC`, [since]),
+      ]);
+
+      const o = overall[0] || {};
+      const totalT = parseInt(o.total) || 0;
+      const wins   = parseInt(o.wins)  || 0;
+      const wr     = totalT > 0 ? ((wins / totalT) * 100).toFixed(1) : '0.0';
+
+      if (totalT === 0) {
+        return { from: 'StrategyAgent', message: 'No closed trades in the last 30 days to calculate WR. The bot needs real trades to report performance.' };
+      }
+
+      const lines = [`**Strategy Win Rate Report (last 30 days)**\n`];
+      lines.push(`Overall: **${wr}%** WR — ${wins}W / ${totalT - wins}L — Total P&L: $${parseFloat(o.total_pnl || 0).toFixed(2)}\n`);
+      lines.push(`**Per Strategy:**`);
+
+      for (const r of bySetup) {
+        const t  = parseInt(r.total);
+        const w  = parseInt(r.wins);
+        const rWR = t > 0 ? ((w / t) * 100).toFixed(0) : '0';
+        const pnl = parseFloat(r.total_pnl || 0).toFixed(2);
+        const bar = rWR >= 55 ? '🟢' : rWR >= 45 ? '🟡' : '🔴';
+        lines.push(`${bar} **${r.setup}**: ${rWR}% WR (${w}W/${t-w}L) | P&L: $${pnl}`);
+      }
+
+      lines.push(`\nNote: RESIST_REJECT is new — needs more trades to show here.`);
+      lines.push(`Type "performance" for overall stats or "trade history" to see individual trades.`);
+      return { from: 'StrategyAgent', message: lines.join('\n') };
+    } catch (err) {
+      return { from: 'StrategyAgent', message: `Couldn't load strategy WR: ${err.message}` };
+    }
   }
 
   async _buildPerformanceChat() {

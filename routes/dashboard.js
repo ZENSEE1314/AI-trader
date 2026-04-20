@@ -1185,6 +1185,101 @@ router.get('/optimizer/results', async (req, res) => {
   }
 });
 
+// ── Strategy WR report from real closed trades ────────────────────────────────
+// GET /api/dashboard/strategy-wr?days=30
+router.get('/strategy-wr', async (req, res) => {
+  try {
+    const days = Math.min(parseInt(req.query.days) || 30, 365);
+    const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+
+    // Per-strategy breakdown
+    const bySetup = await query(`
+      SELECT
+        COALESCE(market_structure, 'UNKNOWN') AS setup,
+        COUNT(*)                              AS total,
+        SUM(CASE WHEN pnl_usdt > 0 THEN 1 ELSE 0 END) AS wins,
+        SUM(CASE WHEN pnl_usdt <= 0 THEN 1 ELSE 0 END) AS losses,
+        ROUND(AVG(pnl_usdt)::numeric, 4)     AS avg_pnl,
+        ROUND(SUM(pnl_usdt)::numeric, 4)     AS total_pnl,
+        ROUND(AVG(CASE WHEN pnl_usdt > 0 THEN pnl_usdt END)::numeric, 4) AS avg_win,
+        ROUND(AVG(CASE WHEN pnl_usdt <= 0 THEN pnl_usdt END)::numeric, 4) AS avg_loss
+      FROM trades
+      WHERE status IN ('WIN','LOSS','CLOSED','TP','SL')
+        AND closed_at IS NOT NULL
+        AND closed_at >= $1
+        AND pnl_usdt IS NOT NULL
+      GROUP BY market_structure
+      ORDER BY total DESC
+    `, [since]);
+
+    // Per-symbol breakdown
+    const bySymbol = await query(`
+      SELECT
+        symbol,
+        COUNT(*)  AS total,
+        SUM(CASE WHEN pnl_usdt > 0 THEN 1 ELSE 0 END) AS wins,
+        ROUND(SUM(pnl_usdt)::numeric, 4) AS total_pnl
+      FROM trades
+      WHERE status IN ('WIN','LOSS','CLOSED','TP','SL')
+        AND closed_at IS NOT NULL
+        AND closed_at >= $1
+        AND pnl_usdt IS NOT NULL
+      GROUP BY symbol
+      ORDER BY total DESC
+    `, [since]);
+
+    // Overall
+    const overall = await query(`
+      SELECT
+        COUNT(*)  AS total,
+        SUM(CASE WHEN pnl_usdt > 0 THEN 1 ELSE 0 END) AS wins,
+        ROUND(SUM(pnl_usdt)::numeric, 4)  AS total_pnl,
+        ROUND(AVG(pnl_usdt)::numeric, 4)  AS avg_pnl
+      FROM trades
+      WHERE status IN ('WIN','LOSS','CLOSED','TP','SL')
+        AND closed_at IS NOT NULL
+        AND closed_at >= $1
+        AND pnl_usdt IS NOT NULL
+    `, [since]);
+
+    const o = overall[0] || {};
+    const totalT = parseInt(o.total) || 0;
+    const wins   = parseInt(o.wins)  || 0;
+
+    res.json({
+      days,
+      overall: {
+        total:    totalT,
+        wins,
+        losses:   totalT - wins,
+        wr:       totalT > 0 ? parseFloat(((wins / totalT) * 100).toFixed(1)) : 0,
+        total_pnl: parseFloat(o.total_pnl) || 0,
+        avg_pnl:  parseFloat(o.avg_pnl)   || 0,
+      },
+      by_strategy: bySetup.map(r => ({
+        setup:     r.setup,
+        total:     parseInt(r.total),
+        wins:      parseInt(r.wins),
+        losses:    parseInt(r.losses),
+        wr:        parseInt(r.total) > 0 ? parseFloat(((parseInt(r.wins) / parseInt(r.total)) * 100).toFixed(1)) : 0,
+        avg_pnl:   parseFloat(r.avg_pnl)   || 0,
+        total_pnl: parseFloat(r.total_pnl) || 0,
+        avg_win:   parseFloat(r.avg_win)   || 0,
+        avg_loss:  parseFloat(r.avg_loss)  || 0,
+      })),
+      by_symbol: bySymbol.map(r => ({
+        symbol:    r.symbol,
+        total:     parseInt(r.total),
+        wins:      parseInt(r.wins),
+        wr:        parseInt(r.total) > 0 ? parseFloat(((parseInt(r.wins) / parseInt(r.total)) * 100).toFixed(1)) : 0,
+        total_pnl: parseFloat(r.total_pnl) || 0,
+      })),
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Re-sync all closed Bitunix trades from exchange (admin only) ──────────────
 // POST /api/dashboard/resync-bitunix
 // Fetches real data from Bitunix for every CLOSED trade and corrects the DB
