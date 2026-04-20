@@ -1405,12 +1405,14 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     const bullishCount = recent4.filter(c => c.close > c.open).length;
 
     if (emaTrend === 'bullish' && bearishCount >= 3) {
-      // EMAs still haven't crossed but price is clearly dropping — treat as neutral
-      // to stop buying LONGs into a falling 1h market
-      h1Trend = 'neutral';
+      // EMAs haven't crossed yet but 3/4 recent 1h candles are red — price IS falling.
+      // Override to 'bearish' (not just neutral) so the full -4 counter-trend penalty
+      // applies to LONG signals. Stops buying LONGs into a falling 1h market.
+      h1Trend = 'bearish';
     } else if (emaTrend === 'bearish' && bullishCount >= 3) {
-      // Recovering but EMAs lagging — neutral so we don't short into a recovery
-      h1Trend = 'neutral';
+      // EMA says bearish but price is recovering — override to 'bullish' so we don't
+      // keep shorting into a bounce.
+      h1Trend = 'bullish';
     } else {
       h1Trend = emaTrend;
     }
@@ -1802,6 +1804,85 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     }
   } // end BOS_LONG gate
 
+  // ── Strategy 9: Resistance Rejection SHORT (RESIST_REJECT) ────────────────
+  // Catches the SHORT AT THE TOP before price breaks — a reversal strategy.
+  // BOS_SHORT fires at SUPPORT breakdowns. This fires at RESISTANCE rejections.
+  //
+  // Trigger:
+  //   1. 15m: price in top 8% of last 20-candle range (at or near the high)
+  //   2. 1m: bearish rejection — upper wick > 1.8× body AND close < open (shooting star)
+  //       OR last 2 of 3 candles closed bearish with declining highs (LH forming)
+  //   3. RSI > 58 — approaching overbought (not shorting at a floor)
+  //   4. Volume spike on rejection candle — institutional distribution
+  //   5. h1Trend not bullish (avoid shorting strong uptrends) OR 1m structure very bearish
+  if (!enabledStrategies || enabledStrategies.RESIST_REJECT !== false) {
+    if (parsed15.length >= 22 && parsed1.length >= 10 && rsi14 !== null && rsi14 > 55) {
+      const lookback20    = parsed15.slice(-20, -2);
+      const rangeHigh20   = Math.max(...lookback20.map(c => c.high));
+      const rangeLow20    = Math.min(...lookback20.map(c => c.low));
+      const rangeSize     = rangeHigh20 - rangeLow20;
+      const priceInRange  = rangeSize > 0 ? (price - rangeLow20) / rangeSize : 0.5;
+
+      // Must be in the top 8% of the 20-candle range
+      if (priceInRange >= 0.92 && rangeSize > 0) {
+        const last3m   = parsed1.slice(-4, -1); // last 3 completed 1m candles
+        const lastM    = parsed1[parsed1.length - 2]; // most recent completed 1m
+
+        // Bearish rejection candle: upper wick > 1.8× candle body
+        const body     = Math.abs(lastM.close - lastM.open);
+        const upperW   = lastM.high - Math.max(lastM.close, lastM.open);
+        const isRejectionCandle = body > 0 && upperW > body * 1.8 && lastM.close < lastM.open;
+
+        // OR: 2 of last 3 completed 1m candles are bearish + declining highs (LH forming)
+        const bearish1m = last3m.filter(c => c.close < c.open).length;
+        const declHigh  = last3m.length >= 2 && last3m[last3m.length - 1].high < last3m[0].high;
+        const isLHForming = bearish1m >= 2 && declHigh;
+
+        if (isRejectionCandle || isLHForming) {
+          // Volume confirmation on rejection
+          const avg1mVol  = parsed1.slice(-20).reduce((s, c) => s + c.volume, 0) / 20;
+          const highVol   = lastM.volume > avg1mVol * 1.1;
+
+          // Don't short into a very strong bullish h1 (would be fighting the trend hard)
+          // Allow if h1Trend is neutral or bearish, or if the rejection signal is very strong
+          const trendOk   = h1Trend !== 'bullish' || (isRejectionCandle && highVol);
+
+          if (trendOk) {
+            const atr      = calcATR(parsed15);
+            const slPrice  = rangeHigh20 * 1.002; // SL just above the range high
+            const slDist   = (slPrice - price) / price;
+
+            if (slDist > 0 && slDist < 0.015) { // SL within 1.5% — tight risk
+              const tp1 = price - atr * 2;
+              const rr  = (atr * 2) / (price * slDist);
+
+              let score = 8;
+              if (isRejectionCandle)          score += 2; // clean shooting star / pin bar
+              if (isLHForming)                score += 1; // LH structure forming
+              if (rsi14 > 65)                 score += 1; // overbought = more likely to reject
+              if (highVol)                    score += 1; // volume confirms distribution
+              if (h1Trend === 'bearish')      score += 2; // trend aligned
+              if (ema9_15m !== null && ema21_15m !== null && ema9_15m < ema21_15m) score += 1;
+              if (priceInRange >= 0.96)       score += 1; // very near the top
+
+              signals.push({
+                symbol, direction: 'SHORT',
+                price, lastPrice: price,
+                sl: slPrice, tp1,
+                tp2: price - atr * 3,
+                tp3: price - atr * 4,
+                slDist: Math.abs(slDist), rr,
+                setup: 'RESIST_REJECT', setupName: 'Resistance Rejection',
+                score,
+                rangeHigh: rangeHigh20,
+              });
+            }
+          }
+        }
+      }
+    }
+  } // end RESIST_REJECT gate
+
   if (!signals.length) return null;
 
   // Apply confluence bonuses + global filters to all signals
@@ -1813,8 +1894,8 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     // EXCEPTION: BOS_SHORT is a breakdown strategy — breakdowns happen in bull trends.
     // Apply a score penalty instead of hard block so strong setups can still pass.
     if (ema200_bias === 'bullish' && sig.direction === 'SHORT') {
-      if (sig.setup === 'BOS_SHORT') {
-        sig.score -= 3; // penalty only — breakdowns start in bull trends
+      if (sig.setup === 'BOS_SHORT' || sig.setup === 'RESIST_REJECT') {
+        sig.score -= 3; // penalty only — reversals at resistance happen in bull trends too
       } else {
         sig.score = -99;
         sig.blocked = `SHORT blocked — price above EMA200 (bullish bias per PDF)`;
@@ -1910,15 +1991,16 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     // designed to catch breakdowns that start while the 1h trend is still bullish.
     if (sig.direction === 'LONG' && h1Trend === 'bullish') sig.score += 3;
     if (sig.direction === 'SHORT' && h1Trend === 'bearish') sig.score += 3;
-    // BOS_LONG/BOS_SHORT are reversal strategies — exempt from counter-trend penalty
-    if (sig.direction === 'LONG' && h1Trend === 'bearish' && sig.setup !== 'BOS_LONG') sig.score -= 4;
-    if (sig.direction === 'SHORT' && h1Trend === 'bullish' && sig.setup !== 'BOS_SHORT') sig.score -= 4;
+    // Reversal strategies exempt from counter-trend penalty — they fire against the trend by design
+    const REVERSAL_SETUPS = new Set(['BOS_LONG', 'BOS_SHORT', 'RESIST_REJECT']);
+    if (sig.direction === 'LONG' && h1Trend === 'bearish' && !REVERSAL_SETUPS.has(sig.setup)) sig.score -= 4;
+    if (sig.direction === 'SHORT' && h1Trend === 'bullish' && !REVERSAL_SETUPS.has(sig.setup)) sig.score -= 4;
 
     // BTC market correlation: don't fight BTC's direction on altcoins.
-    // BOS_SHORT exempt: if both BNB and BTC are breaking down, that's confirmation.
+    // BOS_SHORT/RESIST_REJECT exempt: resistance rejections happen at tops in bull markets.
     if (symbol !== 'BTCUSDT') {
-      // BOS_SHORT/BOS_LONG are structural breakouts — exempt from BTC correlation penalty
-      if (btcTrend === 'bullish' && sig.direction === 'SHORT' && sig.setup !== 'BOS_SHORT') {
+      // Reversal strategies exempt from BTC correlation penalty
+      if (btcTrend === 'bullish' && sig.direction === 'SHORT' && sig.setup !== 'BOS_SHORT' && sig.setup !== 'RESIST_REJECT') {
         sig.score -= 5;
         sig.blocked = 'SHORT rejected — BTC is bullish, alts follow BTC';
       }
