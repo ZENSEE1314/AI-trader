@@ -2673,10 +2673,17 @@ EMAIL_FROM=MCT &lt;a83c06001@smtp-brevo.com&gt;</pre>
       try {
         var r = await fetch('/api/dashboard/strategy-versions');
         var d = await r.json();
-        if (!r.ok || d.error) { showVersionMsg('Error: ' + (d.error || r.status), true); return; }
+        if (!r.ok || d.error) {
+          var msg = 'Error loading versions: ' + (d.error || ('HTTP ' + r.status));
+          showVersionMsg(msg, true);
+          if (tbody) tbody.innerHTML = '<tr><td colspan="8" style="padding:24px;text-align:center;color:#f87171;">' + msg + '</td></tr>';
+          return;
+        }
         renderVersions(d.versions || [], d.active_version);
       } catch(e) {
-        showVersionMsg('Failed to load: ' + e.message, true);
+        var msg2 = 'Failed to load versions: ' + e.message;
+        showVersionMsg(msg2, true);
+        if (tbody) tbody.innerHTML = '<tr><td colspan="8" style="padding:24px;text-align:center;color:#f87171;">' + msg2 + '</td></tr>';
       }
     }
 
