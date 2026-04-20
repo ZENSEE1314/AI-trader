@@ -1346,7 +1346,7 @@ router.post('/resync-bitunix', async (req, res) => {
         for (const sym of allSymbols) {
           try {
             const raw = await bxClient._rawGet('/api/v1/futures/position/get_history_positions', {
-              symbol: sym, pageNum: 1, pageSize: 100,
+              symbol: sym, pageNum: 1, pageSize: 50,
             });
             console.log(`[resync-bitunix] ${sym} code=${raw?.code} msg=${raw?.msg}`);
             if (raw?.code !== 0) continue;
@@ -1515,7 +1515,7 @@ router.post('/pull-bitunix-history', async (req, res) => {
         for (const sym of symbols) {
           try {
             const raw = await client._rawGet('/api/v1/futures/position/get_history_positions', {
-              symbol: sym, pageNum: 1, pageSize: 100,
+              symbol: sym, pageNum: 1, pageSize: 50,
             });
             // Always log so Railway shows what Bitunix actually returns
             console.log(`[pull-bitunix-history] ${sym} code=${raw?.code} msg=${raw?.msg} dataKeys=${JSON.stringify(Object.keys(raw?.data || {}))}`);
