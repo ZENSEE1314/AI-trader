@@ -2548,7 +2548,7 @@ EMAIL_FROM=MCT &lt;a83c06001@smtp-brevo.com&gt;</pre>
     </div>
   </div>
 
-  <script src="/js/app.js?v=20260423" defer></script>
+  <script src="/js/app.js?v=20260424" defer></script>
   <!-- Email tab patch: inline so it works regardless of JS cache (HTML is never cached) -->
   <script>
     document.addEventListener('DOMContentLoaded', function() {
@@ -2752,7 +2752,14 @@ EMAIL_FROM=MCT &lt;a83c06001@smtp-brevo.com&gt;</pre>
         showVersionMsg('Error: ' + e.message, true);
       }
     }
-    window.CryptoBot.useVersionFromTab = useVersionFromTab;
+    // Wait for app.js (deferred) to define window.CryptoBot before assigning
+    (function() {
+      var _t = 0;
+      var _iv = setInterval(function() {
+        if (window.CryptoBot) { window.CryptoBot.useVersionFromTab = useVersionFromTab; clearInterval(_iv); }
+        if (++_t > 60) clearInterval(_iv);
+      }, 100);
+    })();
 
     async function scanStrategyVersions() {
       var btn = document.getElementById('versions-scan-btn');

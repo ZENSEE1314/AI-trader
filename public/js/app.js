@@ -2623,8 +2623,8 @@
     }
   }
 
-  window.CryptoBot.activateVersionForTrading = activateVersionForTrading;
-  window.CryptoBot.deactivateVersion = deactivateVersion;
+  // NOTE: activateVersionForTrading + deactivateVersion added to window.CryptoBot
+  // at the exports block below — do NOT assign here, CryptoBot doesn't exist yet.
 
   // ── Token Tag Input ──────────────────────────────────────────────────────────
   // A tag-chip input with autocomplete + localStorage persistence.
@@ -4294,6 +4294,7 @@
     addRiskLevel, saveRiskLevel, deleteRiskLevel,
     loadKronosPredictions,
     loadOpenPositions, emergencyCloseToken, emergencyCloseAll,
+    activateVersionForTrading, deactivateVersion,
     fixBitunixPnl, debugBitunix, runBacktest, loadAiVersions, runAiOptimize, adminResyncFees, adminFixTrades, adminClearTestData,
     mcRefresh, mcCommand, mcChat, mcChatQuick, switchAdminTab, filterAgents, customerChat,
     checkEmailSmtp, sendTestEmail, sendBroadcastEmail, emailSetMode,
