@@ -2580,61 +2580,85 @@ EMAIL_FROM=MCT &lt;a83c06001@smtp-brevo.com&gt;</pre>
       el.style.color      = isErr ? '#f87171' : '#86efac';
     }
 
-    function renderVersions(versions, activeId) {
-      _activeVersionId = activeId;
+    function renderVersions(versions, activeVersion) {
       var tbody = document.getElementById('versions-tbody');
       if (!tbody) return;
 
-      var total80   = versions.filter(function(v){ return parseFloat(v.win_rate) >= 80; }).length;
-      var bestWR    = versions.length ? parseFloat(versions[0].win_rate) : 0;
-      var fromOpt   = versions.filter(function(v){ return v.source === 'optimizer'; }).length;
+      var total80 = versions.filter(function(v){ return parseFloat(v.win_rate) >= 80; }).length;
+      var bestWR  = versions.length ? parseFloat(versions[0].win_rate) : 0;
+      var fromOpt = versions.filter(function(v){ return v.source === 'optimizer'; }).length;
       var el;
-
       if ((el = document.getElementById('stat-total-versions')))  el.textContent = versions.length;
       if ((el = document.getElementById('stat-best-wr')))         el.textContent = versions.length ? bestWR.toFixed(1) + '%' : '—';
       if ((el = document.getElementById('stat-80plus')))          el.textContent = total80;
       if ((el = document.getElementById('stat-optimizer-count'))) el.textContent = fromOpt;
 
-      // Active banner
-      var activeVer = versions.find(function(v){ return v.id === activeId; });
+      // Active banner — show which version is live right now
       var banner = document.getElementById('versions-active-banner');
-      if (banner) banner.style.display = activeVer ? 'block' : 'none';
-      if (activeVer) {
+      if (banner) banner.style.display = activeVersion ? 'block' : 'none';
+      if (activeVersion) {
         var nameEl = document.getElementById('active-version-name');
         var statEl = document.getElementById('active-version-stats');
-        if (nameEl) nameEl.textContent = activeVer.name;
-        if (statEl) statEl.textContent = 'WR ' + parseFloat(activeVer.win_rate).toFixed(1) + '% | Trades ' + (activeVer.total_trades || 0) + ' | PF ' + parseFloat(activeVer.profit_factor || 0).toFixed(2);
+        var slP  = activeVersion.slPct    != null ? (parseFloat(activeVersion.slPct)*100).toFixed(1)+'%'    : '?';
+        var trP  = activeVersion.trailStep != null ? (parseFloat(activeVersion.trailStep)*100).toFixed(1)+'%' : '?';
+        if (nameEl) nameEl.textContent = activeVersion.version || activeVersion.name || '?';
+        if (statEl) statEl.textContent = 'SL ' + slP + ' · Trail ' + trP + ' · Lev ' + (activeVersion.leverage||'?') + '×';
       }
 
       var deBtn = document.getElementById('versions-deactivate-btn');
-      if (deBtn) deBtn.style.display = activeId ? 'inline-flex' : 'none';
+      if (deBtn) deBtn.style.display = activeVersion ? 'inline-flex' : 'none';
 
       if (!versions.length) {
         tbody.innerHTML = '<tr><td colspan="8" style="padding:24px;text-align:center;color:var(--color-text-muted);">' +
-          'No versions yet. Click <strong>🔍 Sync from Optimizer</strong> to import all optimizer results, or create a custom version above.' +
+          'No versions found. Click <strong>↺ Refresh</strong> or add an AI version via the backtest optimizer.' +
           '</td></tr>';
         return;
       }
 
-      tbody.innerHTML = versions.map(function(v) {
-        var wr    = parseFloat(v.win_rate)      || 0;
-        var pf    = parseFloat(v.profit_factor) || 0;
-        var ret   = parseFloat(v.total_return)  || 0;
-        var dd    = parseFloat(v.max_drawdown)  || 0;
-        var isAct = v.id === activeId;
-        var isMan = v.source === 'manual';
+      tbody.innerHTML = versions.map(function(v, idx) {
+        var wr  = parseFloat(v.win_rate)      || 0;
+        var pf  = parseFloat(v.profit_factor) || 0;
+        var ret = parseFloat(v.total_return)  || 0;
+        var dd  = parseFloat(v.max_drawdown)  || 0;
 
-        var wrColor = wr >= 80 ? '#d4af37' : wr >= 70 ? '#22c55e' : wr >= 60 ? '#86efac' : '#94a3b8';
-        var rowBg   = isAct ? 'rgba(212,175,55,0.10)' : (wr >= 80 ? 'rgba(212,175,55,0.04)' : 'transparent');
-        var liveBadge = isAct ? ' <span style="background:#d4af37;color:#000;font-size:0.6rem;font-weight:700;padding:1px 5px;border-radius:3px;vertical-align:middle;">LIVE</span>' : '';
-        var srcBadge  = isMan ? '<span style="background:rgba(139,92,246,0.2);color:#a78bfa;font-size:0.6rem;padding:1px 5px;border-radius:3px;">manual</span>'
-                               : '<span style="background:rgba(34,197,94,0.1);color:#86efac;font-size:0.6rem;padding:1px 5px;border-radius:3px;">auto</span>';
+        // Determine if this version is currently active
+        var isActive = activeVersion && (
+          (v._source === 'ai_version' && activeVersion.id === v._ai_id) ||
+          (activeVersion.version === v.name)
+        );
 
-        var genStr = JSON.stringify(JSON.stringify(v.genome));
+        var wrColor  = wr >= 80 ? '#d4af37' : wr >= 70 ? '#22c55e' : wr >= 60 ? '#86efac' : '#94a3b8';
+        var rowBg    = isActive ? 'rgba(212,175,55,0.10)' : (wr >= 80 ? 'rgba(212,175,55,0.04)' : 'transparent');
+        var liveBadge = isActive ? ' <span style="background:#d4af37;color:#000;font-size:0.6rem;font-weight:700;padding:1px 5px;border-radius:3px;vertical-align:middle;">LIVE</span>' : '';
+
+        // Source badge
+        var srcColor = v._source === 'ai_version' ? 'rgba(99,102,241,0.15);color:#818cf8'
+                     : v._source === 'optimizer'  ? 'rgba(34,197,94,0.1);color:#86efac'
+                     : 'rgba(139,92,246,0.2);color:#a78bfa';
+        var srcLabel = v._source === 'ai_version' ? 'named' : v._source === 'optimizer' ? 'optimizer' : 'manual';
+        var srcBadge = '<span style="background:' + srcColor + ';font-size:0.6rem;padding:1px 6px;border-radius:3px;">' + srcLabel + '</span>';
+
+        // Build activate button — use JSON of the version to pass to the handler
+        var vJson = JSON.stringify(JSON.stringify(v));
+        var paramsJson = JSON.stringify(JSON.stringify(v.params || v.genome || {}));
+        var activateBtn = isActive
+          ? '<span style="font-size:0.72rem;color:#d4af37;font-weight:700;padding:3px 8px;">✓ Live</span>'
+          : '<button onclick="window.CryptoBot.useVersionFromTab(' + vJson + ')" '
+            + 'style="background:linear-gradient(135deg,#d4af37,#b8962e);color:#000;border:none;border-radius:4px;font-size:0.72rem;padding:3px 12px;font-weight:700;cursor:pointer;">▶ Use</button>';
+
+        // Params preview — show key settings inline
+        var paramsObj = v.params || v.genome || {};
+        var paramPreview = '';
+        if (paramsObj.sl_pct   != null) paramPreview += 'SL '   + (parseFloat(paramsObj.sl_pct)*100).toFixed(1)    + '% ';
+        if (paramsObj.slPct    != null) paramPreview += 'SL '   + (parseFloat(paramsObj.slPct)*100).toFixed(1)      + '% ';
+        if (paramsObj.trailing_step != null) paramPreview += 'T ' + (parseFloat(paramsObj.trailing_step)*100).toFixed(1) + '% ';
+        if (paramsObj.trailStep    != null) paramPreview += 'T ' + (parseFloat(paramsObj.trailStep)*100).toFixed(1)  + '% ';
+        if (paramsObj.leverage     != null) paramPreview += paramsObj.leverage + '× ';
 
         return '<tr style="background:' + rowBg + ';border-bottom:1px solid var(--color-border-muted);">' +
           '<td style="padding:8px 12px;">' +
-            '<div style="color:' + wrColor + ';font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:240px;">' + (v.name || '—') + liveBadge + '</div>' +
+            '<div style="font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:220px;color:' + wrColor + ';">' + escHtml(v.name || '—') + liveBadge + '</div>' +
+            (paramPreview ? '<div style="font-size:0.68rem;color:var(--color-text-muted);font-family:monospace;margin-top:2px;">' + escHtml(paramPreview.trim()) + '</div>' : '') +
           '</td>' +
           '<td style="padding:8px 12px;text-align:center;">' + srcBadge + '</td>' +
           '<td style="padding:8px 12px;text-align:right;font-weight:700;color:' + wrColor + ';">' + (wr > 0 ? wr.toFixed(1) + '%' : '—') + '</td>' +
@@ -2643,18 +2667,16 @@ EMAIL_FROM=MCT &lt;a83c06001@smtp-brevo.com&gt;</pre>
           '<td style="padding:8px 12px;text-align:right;color:' + (ret >= 0 ? '#22c55e' : '#ef4444') + ';">' + (v.total_return != null ? (ret >= 0 ? '+' : '') + ret.toFixed(1) + '%' : '—') + '</td>' +
           '<td style="padding:8px 12px;text-align:right;color:#ef4444;">' + (dd > 0 ? dd.toFixed(1) + '%' : '—') + '</td>' +
           '<td style="padding:8px 12px;text-align:center;white-space:nowrap;display:flex;gap:4px;justify-content:center;">' +
-            '<button onclick="window.CryptoBot.viewVersionGenome(' + genStr + ')" title="View parameters" ' +
+            '<button onclick="window.CryptoBot.viewVersionGenome(' + paramsJson + ')" title="View all parameters" ' +
               'style="background:none;border:1px solid var(--color-border-muted);border-radius:4px;color:var(--color-text-muted);font-size:0.7rem;padding:3px 7px;cursor:pointer;">📋</button>' +
-            (isAct
-              ? '<span style="font-size:0.72rem;color:#d4af37;font-weight:700;padding:3px 8px;">✓ Active</span>'
-              : '<button onclick="window.CryptoBot.activateStrategyVersion(' + v.id + ')" ' +
-                  'style="background:linear-gradient(135deg,#d4af37,#b8962e);color:#000;border:none;border-radius:4px;font-size:0.72rem;padding:3px 12px;font-weight:700;cursor:pointer;">▶ Use</button>'
-            ) +
-            '<button onclick="window.CryptoBot.deleteStrategyVersion(' + v.id + ')" title="Delete" ' +
-              'style="background:none;border:1px solid rgba(239,68,68,0.3);border-radius:4px;color:#ef4444;font-size:0.7rem;padding:3px 7px;cursor:pointer;">✕</button>' +
+            activateBtn +
           '</td>' +
         '</tr>';
       }).join('');
+    }
+
+    function escHtml(s) {
+      return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
     }
 
     async function loadStrategyVersions() {
@@ -2663,12 +2685,54 @@ EMAIL_FROM=MCT &lt;a83c06001@smtp-brevo.com&gt;</pre>
       try {
         var r = await fetch('/api/dashboard/strategy-versions');
         var d = await r.json();
-        if (d.error) { showVersionMsg(d.error, true); return; }
-        renderVersions(d.versions || [], d.active_id);
+        if (!r.ok || d.error) { showVersionMsg('Error: ' + (d.error || r.status), true); return; }
+        renderVersions(d.versions || [], d.active_version);
       } catch(e) {
         showVersionMsg('Failed to load: ' + e.message, true);
       }
     }
+
+    // "▶ Use" from the Versions tab — works for all source types
+    async function useVersionFromTab(vJson) {
+      try {
+        var v = JSON.parse(vJson);
+        var params = v.params || v.genome || {};
+        var name   = v.name || 'Version';
+
+        // For named AI versions, activate via the admin ai-versions endpoint
+        if (v._source === 'ai_version' && v._ai_id) {
+          var r = await fetch('/api/admin/ai-versions/' + v._ai_id + '/activate', { method: 'POST' });
+          var d = await r.json();
+          if (d.ok) {
+            showVersionMsg('✅ ' + name + ' is now live!', false);
+            // Also populate the backtest UI inputs so admin can see/modify the settings
+            if (window.CryptoBot && window.CryptoBot.applyBacktestParamsPublic) {
+              window.CryptoBot.applyBacktestParamsPublic(params);
+            }
+            loadStrategyVersions(); // refresh to show LIVE badge
+            return;
+          }
+          showVersionMsg('Activate failed: ' + (d.error || 'unknown'), true); return;
+        }
+
+        // For optimizer/manual results — save as active via manual endpoint
+        var r2 = await fetch('/api/admin/ai-versions/activate-manual', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, params }),
+        });
+        var d2 = await r2.json();
+        if (d2.ok) {
+          showVersionMsg('✅ ' + name + ' is now live!', false);
+          loadStrategyVersions();
+        } else {
+          showVersionMsg('Activate failed: ' + (d2.error || 'unknown'), true);
+        }
+      } catch(e) {
+        showVersionMsg('Error: ' + e.message, true);
+      }
+    }
+    window.CryptoBot.useVersionFromTab = useVersionFromTab;
 
     async function scanStrategyVersions() {
       var btn = document.getElementById('versions-scan-btn');

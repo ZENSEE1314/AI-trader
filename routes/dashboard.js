@@ -1296,7 +1296,9 @@ router.post('/resync-bitunix', async (req, res) => {
       await query(`ALTER TABLE trades ADD COLUMN IF NOT EXISTS bitunix_position_id VARCHAR(64)`);
     } catch (_) {}
 
-    // Fetch all closed Bitunix trades — no closed_at filter (some closes skip setting it)
+    // Only fetch trades that are missing exit data — already-synced WIN/LOSS trades are skipped.
+    // CLOSED = bot closed it but never got PnL from exchange.
+    // WIN/LOSS without exit_price = opened but never matched to exchange position.
     const trades = await query(`
       SELECT t.*,
              ak.id AS key_id,
@@ -1306,8 +1308,9 @@ router.post('/resync-bitunix', async (req, res) => {
       JOIN api_keys ak ON t.api_key_id = ak.id
       WHERE ak.platform = 'bitunix'
         AND t.status IN ('CLOSED','WIN','LOSS')
+        AND (t.exit_price IS NULL OR t.pnl_usdt IS NULL)
       ORDER BY t.created_at DESC
-      LIMIT 500
+      LIMIT 200
     `);
 
     if (!trades.length) return res.json({ total: 0, fixed: 0, skipped: 0, failed: 0, results: [], errors: [] });
@@ -1501,17 +1504,121 @@ async function ensureVersionsTable() {
 }
 
 // GET /api/dashboard/strategy-versions
+// Returns a unified list of all versions from three sources:
+//   1. ai_versions — old named backtest versions (v3.52, etc.)
+//   2. strategy_search_results — optimizer scan results
+//   3. strategy_versions — manually saved / activated versions (if table exists)
 router.get('/strategy-versions', async (req, res) => {
   try {
-    await ensureVersionsTable();
-    const rows = await query(
-      `SELECT * FROM strategy_versions ORDER BY win_rate DESC NULLS LAST, fitness DESC NULLS LAST`
-    );
-    const setting = await query(
-      `SELECT value FROM settings WHERE key = 'active_strategy_version_id'`
+    const combined = [];
+
+    // ── Source 1: Named AI versions (old system, has v3.52 etc.) ──────────────
+    try {
+      const aiRows = await query(
+        `SELECT id, version AS name,
+                ROUND((win_rate * 100)::numeric, 2) AS win_rate,
+                trade_count AS total_trades,
+                total_pnl AS total_return,
+                params, created_at,
+                'named' AS source
+         FROM ai_versions
+         ORDER BY id DESC LIMIT 100`
+      );
+      for (const r of aiRows) {
+        combined.push({
+          _source: 'ai_version',
+          _ai_id: r.id,
+          name: r.name,
+          win_rate: r.win_rate,
+          total_trades: r.total_trades,
+          total_return: r.total_return,
+          params: typeof r.params === 'string' ? JSON.parse(r.params) : r.params,
+          source: 'named',
+          created_at: r.created_at,
+        });
+      }
+    } catch (_) {}
+
+    // ── Source 2: Optimizer scan results (strategy_search_results) ────────────
+    try {
+      const optRows = await query(
+        `SELECT genome,
+                MD5(genome::text) AS ghash,
+                ROUND(AVG(win_rate)::numeric, 4)        AS win_rate,
+                ROUND(AVG(profit_factor)::numeric, 4)   AS profit_factor,
+                ROUND(AVG(total_return)::numeric, 4)    AS total_return,
+                ROUND(AVG(max_drawdown)::numeric, 4)    AS max_drawdown,
+                ROUND(AVG(fitness)::numeric, 4)         AS fitness,
+                SUM(total_trades)                       AS total_trades,
+                SUM(wins)                               AS wins,
+                SUM(losses)                             AS losses,
+                MAX(tested_at)                          AS created_at,
+                COUNT(*)                                AS symbol_count
+         FROM strategy_search_results
+         WHERE total_trades >= 5
+         GROUP BY genome
+         ORDER BY win_rate DESC
+         LIMIT 200`
+      );
+      for (const r of optRows) {
+        combined.push({
+          _source: 'optimizer',
+          _genome_hash: r.ghash,
+          name: `Optimizer ${(parseFloat(r.win_rate || 0) * 100).toFixed(0)}% WR`,
+          win_rate: r.win_rate != null ? parseFloat(r.win_rate) * 100 : null,
+          profit_factor: r.profit_factor,
+          total_return: r.total_return,
+          max_drawdown: r.max_drawdown,
+          fitness: r.fitness,
+          total_trades: r.total_trades,
+          wins: r.wins,
+          losses: r.losses,
+          genome: typeof r.genome === 'string' ? JSON.parse(r.genome) : r.genome,
+          source: 'optimizer',
+          created_at: r.created_at,
+        });
+      }
+    } catch (_) {}
+
+    // ── Source 3: Manually saved strategy_versions (if table exists) ──────────
+    try {
+      await ensureVersionsTable();
+      const svRows = await query(
+        `SELECT * FROM strategy_versions ORDER BY win_rate DESC NULLS LAST LIMIT 100`
+      );
+      for (const r of svRows) {
+        combined.push({
+          _source: 'strategy_version',
+          _sv_id: r.id,
+          name: r.name,
+          win_rate: r.win_rate != null ? parseFloat(r.win_rate) : null,
+          profit_factor: r.profit_factor,
+          total_return: r.total_return,
+          max_drawdown: r.max_drawdown,
+          fitness: r.fitness,
+          total_trades: r.total_trades,
+          genome: typeof r.genome === 'string' ? JSON.parse(r.genome) : r.genome,
+          source: r.source || 'manual',
+          is_active: r.is_active,
+          created_at: r.created_at,
+        });
+      }
+    } catch (_) {}
+
+    // Active version from settings
+    const activeSetting = await query(
+      `SELECT value FROM settings WHERE key = 'active_ai_version'`
     ).catch(() => []);
-    const activeId = setting[0] ? parseInt(setting[0].value) : null;
-    res.json({ versions: rows, active_id: activeId });
+    const activeVersion = activeSetting[0] ? JSON.parse(activeSetting[0].value) : null;
+
+    // Sort: named versions first, then by win_rate desc
+    combined.sort((a, b) => {
+      if (a._source === 'ai_version' && b._source !== 'ai_version') return -1;
+      if (b._source === 'ai_version' && a._source !== 'ai_version') return 1;
+      return (parseFloat(b.win_rate) || 0) - (parseFloat(a.win_rate) || 0);
+    });
+
+    res.json({ versions: combined, active_version: activeVersion });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
