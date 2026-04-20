@@ -237,7 +237,6 @@ const { getLogs, getRecentLogs, getHistoricalLogs, getScanStats, getLogCounts } 
 const { authMiddleware } = require('./middleware/auth');
 const aiLearner = require('./ai-learner');
 const { getLatestReport } = require('./nightly-analysis');
-const { query: dbQuery } = require('./db');
 
 // Helper: check if user is admin
 async function isAdmin(userId) {
