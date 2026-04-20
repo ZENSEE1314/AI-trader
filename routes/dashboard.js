@@ -1325,8 +1325,9 @@ router.post('/resync-bitunix', async (req, res) => {
         if (!apiKey || !apiSecret) throw new Error('Decrypt failed — check crypto-utils config');
 
         const bxClient  = new BitunixClient({ apiKey, apiSecret });
-        // Fetch up to 500 history positions (paginated, all symbols)
-        const positions = await bxClient.getHistoryPositions({ pageSize: 50, all: true });
+        // Single page of 100 — avoids multi-page pagination loops that trigger Cloudflare 524.
+        // 100 positions covers recent trade history; run again if older trades are needed.
+        const positions = await bxClient.getHistoryPositions({ pageSize: 100 });
         keyHistoryCache.set(kid, { positions, error: null });
       } catch (e) {
         keyHistoryCache.set(kid, { positions: [], error: e.message });
@@ -1494,9 +1495,9 @@ async function ensureVersionsTable() {
         created_at    TIMESTAMPTZ  DEFAULT NOW()
       )
     `);
-    await query(`ALTER TABLE strategy_versions ADD COLUMN IF NOT EXISTS genome_hash VARCHAR(64)`);
-    await query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_sv_genome_hash ON strategy_versions (genome_hash) WHERE genome_hash IS NOT NULL`);
   } catch (_) {}
+  try { await query(`ALTER TABLE strategy_versions ADD COLUMN IF NOT EXISTS genome_hash VARCHAR(64)`); } catch (_) {}
+  try { await query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_sv_genome_hash ON strategy_versions (genome_hash) WHERE genome_hash IS NOT NULL`); } catch (_) {}
 }
 
 // GET /api/dashboard/strategy-versions
@@ -1696,6 +1697,39 @@ router.delete('/strategy-versions/:id', async (req, res) => {
     await ensureVersionsTable();
     await query(`DELETE FROM strategy_versions WHERE id = $1`, [vId]);
     res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/dashboard/strategy-versions/custom
+// Admin creates a named version with hand-tuned parameters — no genome deduplication,
+// each manual save is kept as a distinct entry so the admin can track their experiments.
+router.post('/strategy-versions/custom', async (req, res) => {
+  try {
+    const adminCheck = await query(`SELECT is_admin FROM users WHERE id = $1`, [req.userId]);
+    if (!adminCheck[0]?.is_admin) return res.status(403).json({ error: 'Admin only' });
+
+    const { name, genome } = req.body;
+    if (!name || typeof name !== 'string' || name.trim().length === 0) {
+      return res.status(400).json({ error: 'name is required' });
+    }
+    if (!genome || typeof genome !== 'object') {
+      return res.status(400).json({ error: 'genome object is required' });
+    }
+
+    await ensureVersionsTable();
+
+    const rows = await query(
+      `INSERT INTO strategy_versions
+         (name, genome, source, win_rate, profit_factor, total_return, max_drawdown,
+          expectancy, sharpe, total_trades, wins, losses, fitness, is_active, created_at)
+       VALUES ($1, $2, 'manual', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, FALSE, NOW())
+       RETURNING id, name`,
+      [name.trim(), JSON.stringify(genome)]
+    );
+
+    res.json({ ok: true, id: rows[0].id, name: rows[0].name });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
