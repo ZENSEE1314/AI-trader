@@ -1,8 +1,22 @@
 {
-  "version": "1.3.6",
+  "version": "1.3.7",
   "name": "MCT AI Trader",
   "released": "2026-04-20",
   "changelog": [
+    {
+      "version": "1.3.7",
+      "tag": "v1.3.7",
+      "date": "2026-04-20",
+      "label": "Stop shorting at the bottom after a drop",
+      "changes": [
+        "Root cause: 1h EMA lags — trend turns 'bearish' AFTER the drop. Bot was shorting at the bottom when trend finally flipped, then price bounced = loss",
+        "SHORT RSI hard block raised from <30 to <42: RSI 30-42 after a drop = already oversold, don't pile in short",
+        "SHORT price-in-range bottom 20% now a HARD BLOCK (was -3 penalty): if price is at the floor of recent 20-candle range, other strategies cannot open a short",
+        "SHORT price-in-range 20-35% now -4 heavy penalty (near bottom = bad short entry)",
+        "BOS_SHORT exempted from both rules: it fires DURING the breakdown (price is near low by definition) and is designed for that",
+        "Net result: bot only shorts at the top of a range or mid-range moves, never chases drops that already happened"
+      ]
+    },
     {
       "version": "1.3.6",
       "tag": "v1.3.6",

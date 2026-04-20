@@ -1779,10 +1779,15 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
       else if (rsi14 < 25) sig.score += 1; // oversold bounce possible
     }
     if (sig.direction === 'SHORT') {
-      if (rsi14 < 30) { sig.score = -99; sig.blocked = 'SHORT rejected — RSI ' + rsi14.toFixed(0) + ' oversold, chasing'; }
-      else if (rsi14 < 45) sig.score -= 2; // slightly extended
-      else if (rsi14 >= 50 && rsi14 <= 70) sig.score += 2; // bounce zone — ideal sell
-      else if (rsi14 > 75) sig.score += 1; // overbought reversal possible
+      // BOS_SHORT needs RSI < 65 (already checked at entry) — exempt from oversold block
+      // because a breakdown can push RSI to 35-42 while the move continues.
+      // All other SHORT strategies: don't short when already oversold (the drop is over).
+      if (sig.setup !== 'BOS_SHORT') {
+        if (rsi14 < 42) { sig.score = -99; sig.blocked = 'SHORT rejected — RSI ' + rsi14.toFixed(0) + ' oversold, drop already done, chasing bottom'; }
+        else if (rsi14 < 50) sig.score -= 2; // slightly extended
+        else if (rsi14 >= 50 && rsi14 <= 70) sig.score += 2; // bounce zone — ideal sell
+        else if (rsi14 > 75) sig.score += 1; // overbought reversal possible
+      }
     }
 
     // EMA position: don't chase extended moves
@@ -1803,7 +1808,12 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
       if (priceInRange < 0.35) sig.score += 2; // buying near the bottom — good
     }
     if (sig.direction === 'SHORT') {
-      if (priceInRange < 0.15) sig.score -= 3; // selling at the bottom — bad
+      // BOS_SHORT fires DURING the breakdown — price is near the low by definition, allow it.
+      // Other strategies: don't short near the bottom of the recent range (the drop is over).
+      if (sig.setup !== 'BOS_SHORT') {
+        if (priceInRange < 0.20) { sig.score = -99; sig.blocked = 'SHORT blocked — price at bottom 20% of range, shorting at the floor'; }
+        else if (priceInRange < 0.35) sig.score -= 4; // near bottom — heavy penalty
+      }
       if (priceInRange > 0.65) sig.score += 2; // selling near the top — good
     }
 
