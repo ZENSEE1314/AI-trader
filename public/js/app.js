@@ -2627,12 +2627,21 @@
 
   // Collect all backtest params from the UI — shared by runBacktest and activateVersionForTrading
   function collectBacktestParams() {
+    // Direction fields are now the only source for SL/TP/Trail
+    const slLong    = parseFloat($('#bt-sl-long')?.value)    / 100 || 0.03;
+    const slShort   = parseFloat($('#bt-sl-short')?.value)   / 100 || 0.03;
+    const tpLong    = parseFloat($('#bt-tp-long')?.value)    / 100 || 0;
+    const tpShort   = parseFloat($('#bt-tp-short')?.value)   / 100 || 0;
+    const trLong    = parseFloat($('#bt-trail-long')?.value)  / 100 || 0.012;
+    const trShort   = parseFloat($('#bt-trail-short')?.value) / 100 || 0.012;
+
     return {
       // Risk & position management
       days:          parseInt($('#backtest-days')?.value) || 7,
-      slPct:         parseFloat($('#bt-sl')?.value) / 100 || 0.03,
-      tpPct:         parseFloat($('#bt-tp')?.value) / 100 || 0,
-      trailStep:     parseFloat($('#bt-trail')?.value) / 100 || 0.012,
+      // Global SL/TP/Trail derived from direction fields (used as backend fallback)
+      slPct:         slLong,
+      tpPct:         tpLong,
+      trailStep:     trLong,
       leverage:      parseInt($('#bt-leverage')?.value) || 20,
       riskPct:       parseInt($('#bt-risk')?.value) / 100 || 0.10,
       maxPositions:  parseInt($('#bt-maxpos')?.value) || 3,
@@ -2660,12 +2669,12 @@
       // Direction settings
       enableLong:    $('#bt-enable-long')?.checked !== false,
       enableShort:   $('#bt-enable-short')?.checked !== false,
-      slPctLong:     parseFloat($('#bt-sl-long')?.value)    / 100 || 0,
-      slPctShort:    parseFloat($('#bt-sl-short')?.value)   / 100 || 0,
-      tpPctLong:     parseFloat($('#bt-tp-long')?.value)    / 100 || 0,
-      tpPctShort:    parseFloat($('#bt-tp-short')?.value)   / 100 || 0,
-      trailStepLong:  parseFloat($('#bt-trail-long')?.value)  / 100 || 0,
-      trailStepShort: parseFloat($('#bt-trail-short')?.value) / 100 || 0,
+      slPctLong:     slLong,
+      slPctShort:    slShort,
+      tpPctLong:     tpLong,
+      tpPctShort:    tpShort,
+      trailStepLong:  trLong,
+      trailStepShort: trShort,
     };
   }
 
@@ -2673,9 +2682,7 @@
   function applyBacktestParams(p) {
     if (!p) return;
     const setV = (id, val) => { const el = $(id); if (el && val != null) el.value = val; };
-    setV('#bt-sl',         p.sl_pct    != null ? (parseFloat(p.sl_pct)    * 100).toFixed(1) : (p.slPct    != null ? (p.slPct    * 100).toFixed(1) : null));
-    setV('#bt-tp',         p.tp_pct    != null ? (parseFloat(p.tp_pct)    * 100).toFixed(1) : (p.tpPct    != null ? (p.tpPct    * 100).toFixed(1) : null));
-    setV('#bt-trail',      p.trailing_step != null ? (parseFloat(p.trailing_step) * 100).toFixed(1) : (p.trailStep != null ? (p.trailStep * 100).toFixed(1) : null));
+
     setV('#bt-leverage',   p.leverage);
     setV('#bt-risk',       p.risk_pct  != null ? (parseFloat(p.risk_pct)  * 100).toFixed(0) : (p.riskPct  != null ? (p.riskPct  * 100).toFixed(0) : null));
     setV('#bt-maxpos',     p.max_positions ?? p.maxPositions);
@@ -2699,18 +2706,25 @@
     setV('#bt-ema-trend',   p.emaTrend);
     // Volume
     setV('#bt-vol-mult',    p.volMult);
-    // Direction
+    // Direction: if version has per-direction values use them; otherwise fall back to global slPct
     const elLong  = $('#bt-enable-long');
     const elShort = $('#bt-enable-short');
     if (elLong  && p.enableLong  != null) elLong.checked  = p.enableLong  !== false && p.enableLong  !== 'false';
     if (elShort && p.enableShort != null) elShort.checked = p.enableShort !== false && p.enableShort !== 'false';
-    const pct2str = (v) => v != null && parseFloat(v) > 0 ? (parseFloat(v) * 100).toFixed(1) : '0';
-    setV('#bt-sl-long',      pct2str(p.slPctLong));
-    setV('#bt-sl-short',     pct2str(p.slPctShort));
-    setV('#bt-tp-long',      pct2str(p.tpPctLong));
-    setV('#bt-tp-short',     pct2str(p.tpPctShort));
-    setV('#bt-trail-long',   pct2str(p.trailStepLong));
-    setV('#bt-trail-short',  pct2str(p.trailStepShort));
+    // Resolve global fallbacks (support old params with sl_pct / trailing_step keys)
+    const globalSl    = p.slPctLong    > 0 ? p.slPctLong    : (p.slPct    ?? p.sl_pct    ?? 0.03);
+    const globalSlS   = p.slPctShort   > 0 ? p.slPctShort   : globalSl;
+    const globalTp    = p.tpPctLong    > 0 ? p.tpPctLong    : (p.tpPct    ?? p.tp_pct    ?? 0);
+    const globalTpS   = p.tpPctShort   > 0 ? p.tpPctShort   : globalTp;
+    const globalTr    = p.trailStepLong  > 0 ? p.trailStepLong  : (p.trailStep ?? p.trailing_step ?? 0.012);
+    const globalTrS   = p.trailStepShort > 0 ? p.trailStepShort : globalTr;
+    const pct = (v) => (parseFloat(v) * 100).toFixed(1);
+    setV('#bt-sl-long',      pct(globalSl));
+    setV('#bt-sl-short',     pct(globalSlS));
+    setV('#bt-tp-long',      pct(globalTp));
+    setV('#bt-tp-short',     pct(globalTpS));
+    setV('#bt-trail-long',   pct(globalTr));
+    setV('#bt-trail-short',  pct(globalTrS));
   }
 
   async function runBacktest(mode, reverse) {
