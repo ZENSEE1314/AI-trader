@@ -3654,6 +3654,33 @@
     }
   }
 
+  async function adminPullBitunixHistory(btn) {
+    if (!confirm('Pull ALL closed position history from Bitunix?\nThis fetches up to 500 positions, inserts any missing trades, and updates incomplete records.\nMay take 30-60 seconds.')) return;
+    const statusEl = document.getElementById('resync-bitunix-status');
+    statusEl.textContent = 'Pulling history from Bitunix... please wait';
+    statusEl.style.color = 'var(--color-accent)';
+    if (btn) { btn.disabled = true; btn.textContent = 'Pulling...'; }
+    try {
+      const result = await api('POST', '/api/dashboard/pull-bitunix-history');
+      if (result.error) throw new Error(result.error);
+      const msg = `Inserted ${result.inserted} new · Updated ${result.updated} · Skipped ${result.skipped}`;
+      statusEl.textContent = msg;
+      statusEl.style.color = (result.inserted + result.updated) > 0 ? 'var(--color-success)' : 'var(--color-text-muted)';
+      if (result.errors && result.errors.length > 0) {
+        statusEl.textContent += ` (${result.errors.length} errors — check console)`;
+        console.error('Pull history errors:', result.errors);
+      }
+      showToast(msg, (result.inserted + result.updated) > 0 ? 'success' : 'info');
+      if ((result.inserted + result.updated) > 0) setTimeout(() => loadTradeHistory?.(), 1000);
+    } catch (err) {
+      statusEl.textContent = `Error: ${err.message}`;
+      statusEl.style.color = 'var(--color-danger)';
+      showToast(err.message, 'error');
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = '📥 Pull All Bitunix History'; }
+    }
+  }
+
   async function adminResyncFees() {} // kept for backwards compat — no-op
 
   async function adminPauseKey(keyId) {
@@ -4257,7 +4284,7 @@
     togglePause,
     submitTopUp, saveUsdtAddress, withdrawFromWallet, payWeekly, saveBitunixReferralLink,
     adminAction, adminChangeRole, adminSub, adminWd, saveAdminSettings, adminEditWallet, adminSetBitunixReferralLink, clearErrors,
-    adminEditSplit, adminPauseKey, adminResumeKey, adminMarkPaid, adminResyncBitunix,
+    adminEditSplit, adminPauseKey, adminResumeKey, adminMarkPaid, adminResyncBitunix, adminPullBitunixHistory,
     goToAuth, showLoginForm, onPlatformChange,
     searchCoins, addCoin, removeCoin,
     filterLogs, clearLogs,
