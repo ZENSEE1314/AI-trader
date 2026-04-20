@@ -1442,141 +1442,13 @@ router.post('/resync-bitunix', async (req, res) => {
   }
 });
 
-// ── Pull ALL closed Bitunix positions → insert/update trade records ──────────
+// ── Pull recent 100 closed Bitunix positions → insert/update trade records ───
 // POST /api/dashboard/pull-bitunix-history
-// Returns immediately with a job token. Processing happens in background.
-// Poll GET /api/dashboard/pull-bitunix-history/:jobId for status.
-
-const _pullJobs = new Map(); // jobId → { status, inserted, updated, skipped, errors, done }
-
-router.get('/pull-bitunix-history/:jobId', (req, res) => {
-  const job = _pullJobs.get(req.params.jobId);
-  if (!job) return res.status(404).json({ error: 'Job not found' });
-  res.json(job);
-});
-
-async function _runPullJob(jobId, userId, keys) {
-  const job = _pullJobs.get(jobId);
-  const { BitunixClient } = require('../bitunix-client');
-  const cryptoUtils2 = require('../crypto-utils');
-
-  for (const key of keys) {
-    try {
-      const apiKey    = cryptoUtils2.decrypt(key.api_key_enc, key.iv, key.auth_tag);
-      const apiSecret = cryptoUtils2.decrypt(key.api_secret_enc, key.secret_iv, key.secret_auth_tag);
-      const client    = new BitunixClient({ apiKey, apiSecret });
-
-      // Fetch up to 5 pages × 100 = 500 closed positions
-      let allPositions = [];
-      for (let page = 1; page <= 5; page++) {
-        const data = await client.getHistoryPositions({ pageNum: page, pageSize: 100 });
-        const list = Array.isArray(data) ? data : (data?.positionList || data?.list || []);
-        allPositions.push(...list);
-        if (list.length < 100) break;
-      }
-
-      console.log(`[pull-bitunix-history] key ${key.id}: fetched ${allPositions.length} positions`);
-
-      // ── Batch lookup: one query for all known positionIds ──────────
-      const posIds = allPositions
-        .map(p => String(p.positionId || p.id || p.position_id || ''))
-        .filter(Boolean);
-      const existingByPosId = new Map();
-      if (posIds.length) {
-        const rows = await query(
-          `SELECT id, bitunix_position_id, exit_price, pnl_usdt FROM trades
-           WHERE bitunix_position_id = ANY($1)`, [posIds]
-        );
-        for (const r of rows) existingByPosId.set(r.bitunix_position_id, r);
-      }
-
-      // ── Batch lookup: all trades for this key (entry price + time match) ──
-      const allKeyTrades = await query(
-        `SELECT id, symbol, direction, entry_price, created_at, exit_price, pnl_usdt
-         FROM trades WHERE api_key_id = $1`, [key.id]
-      );
-
-      for (const p of allPositions) {
-        try {
-          const symbol    = (p.symbol || '').toUpperCase();
-          const posId     = String(p.positionId || p.id || p.position_id || '');
-          const pSide     = (p.side || p.positionSide || '').toUpperCase();
-          const isLong    = pSide === 'LONG' || pSide === 'BUY';
-          const direction = isLong ? 'LONG' : 'SHORT';
-
-          const entryPrice = parseFloat(p.avgOpenPrice  || p.entryPrice  || p.openPrice  || 0);
-          const exitPrice  = parseFloat(p.avgClosePrice || p.closePrice  || p.closedPrice || 0);
-          const leverage   = parseInt(p.leverage  || 20);
-          const qty        = parseFloat(p.qty || p.size || p.quantity || 0);
-          const pnlRaw     = p.realizedPNL ?? p.realizedPnl ?? p.pnl ?? p.profit ?? p.realPnl ?? null;
-          const pnlUsdt    = pnlRaw != null ? parseFloat(parseFloat(pnlRaw).toFixed(4)) : null;
-          const tradingFee = Math.abs(parseFloat(p.fee || p.tradingFee || p.commission || 0));
-          const fundingFee = Math.abs(parseFloat(p.funding || p.fundingFee || p.fund_fee || 0));
-          const grossPnl   = pnlUsdt != null ? parseFloat((pnlUsdt + tradingFee + fundingFee).toFixed(4)) : null;
-          const openMs     = parseInt(p.openTime  || p.ctime   || p.createTime  || 0);
-          const closeMs    = parseInt(p.closeTime || p.mtime   || p.updateTime  || 0);
-          const openAt     = openMs  ? new Date(openMs)  : null;
-          const closeAt    = closeMs ? new Date(closeMs) : null;
-          const status     = pnlUsdt != null ? (pnlUsdt > 0 ? 'WIN' : 'LOSS') : 'CLOSED';
-
-          if (!symbol || entryPrice <= 0 || exitPrice <= 0) { job.skipped++; continue; }
-
-          // Resolve existing record from in-memory batches
-          let existing = posId ? existingByPosId.get(posId) : null;
-          if (!existing && openAt) {
-            const windowMs = 300_000; // ±5 min
-            existing = allKeyTrades.find(t =>
-              t.symbol === symbol && t.direction === direction &&
-              Math.abs(parseFloat(t.entry_price) - entryPrice) / entryPrice < 0.002 &&
-              Math.abs(new Date(t.created_at).getTime() - openMs) < windowMs
-            );
-          }
-
-          if (existing) {
-            if (existing.exit_price == null || existing.pnl_usdt == null) {
-              await query(
-                `UPDATE trades SET exit_price=$1, pnl_usdt=$2, gross_pnl=$3, trading_fee=$4,
-                 funding_fee=$5, status=$6, closed_at=COALESCE(closed_at,$7),
-                 bitunix_position_id=COALESCE(bitunix_position_id,$8)
-                 WHERE id=$9`,
-                [exitPrice, pnlUsdt, grossPnl, tradingFee, fundingFee, status, closeAt, posId || null, existing.id]
-              );
-              job.updated++;
-            } else {
-              job.skipped++;
-            }
-          } else {
-            await query(
-              `INSERT INTO trades (api_key_id, user_id, symbol, direction, entry_price, exit_price,
-               sl_price, tp_price, quantity, leverage, status, pnl_usdt, gross_pnl, trading_fee,
-               funding_fee, closed_at, created_at, trailing_sl_price, trailing_sl_last_step,
-               bitunix_position_id)
-               VALUES ($1,$2,$3,$4,$5,$6,0,0,$7,$8,$9,$10,$11,$12,$13,$14,$15,$5,0,$16)
-               ON CONFLICT DO NOTHING`,
-              [key.id, key.user_id, symbol, direction, entryPrice, exitPrice,
-               qty, leverage, status, pnlUsdt, grossPnl, tradingFee, fundingFee,
-               closeAt || new Date(), openAt || new Date(), entryPrice, posId || null]
-            );
-            job.inserted++;
-          }
-        } catch (posErr) {
-          job.errors.push(`pos error: ${posErr.message}`);
-        }
-      }
-    } catch (keyErr) {
-      job.errors.push(`key ${key.id}: ${keyErr.message}`);
-    }
-  }
-
-  job.status = 'done';
-  job.done = true;
-  console.log(`[pull-bitunix-history] job ${jobId} done — inserted:${job.inserted} updated:${job.updated} skipped:${job.skipped}`);
-}
-
+// Fetches 1 page × 100 for each of the user's Bitunix keys and syncs to DB.
 router.post('/pull-bitunix-history', async (req, res) => {
   try {
-    const adminCheck = await query(`SELECT is_admin FROM users WHERE id = $1`, [req.userId]);
-    if (!adminCheck[0]?.is_admin) return res.status(403).json({ error: 'Admin only' });
+    const { BitunixClient } = require('../bitunix-client');
+    const cryptoUtils2 = require('../crypto-utils');
 
     const keys = await query(
       `SELECT id, user_id, api_key_enc, iv, auth_tag, api_secret_enc, secret_iv, secret_auth_tag
@@ -1585,15 +1457,109 @@ router.post('/pull-bitunix-history', async (req, res) => {
     );
     if (!keys.length) return res.json({ error: 'No Bitunix API keys found' });
 
-    // Create job and kick off async — respond immediately so Cloudflare doesn't 524
-    const jobId = `bxhist_${Date.now()}`;
-    _pullJobs.set(jobId, { status: 'running', inserted: 0, updated: 0, skipped: 0, errors: [], done: false });
-    _runPullJob(jobId, req.userId, keys).catch(e => {
-      const job = _pullJobs.get(jobId);
-      if (job) { job.status = 'error'; job.errors.push(e.message); job.done = true; }
-    });
+    let inserted = 0, updated = 0, skipped = 0;
+    const errors = [];
 
-    res.json({ started: true, jobId, message: 'Pulling history in background — poll /api/dashboard/pull-bitunix-history/' + jobId + ' for status' });
+    for (const key of keys) {
+      try {
+        const apiKey    = cryptoUtils2.decrypt(key.api_key_enc, key.iv, key.auth_tag);
+        const apiSecret = cryptoUtils2.decrypt(key.api_secret_enc, key.secret_iv, key.secret_auth_tag);
+        const client    = new BitunixClient({ apiKey, apiSecret });
+
+        // Fetch most recent 100 closed positions (1 page)
+        const data = await client.getHistoryPositions({ pageNum: 1, pageSize: 100 });
+        const positions = Array.isArray(data) ? data : (data?.positionList || data?.list || []);
+
+        console.log(`[pull-bitunix-history] key ${key.id}: fetched ${positions.length} positions`);
+        if (!positions.length) continue;
+
+        // Batch lookup — one query for all positionIds, one for all key trades
+        const posIds = positions
+          .map(p => String(p.positionId || p.id || p.position_id || ''))
+          .filter(Boolean);
+        const existingByPosId = new Map();
+        if (posIds.length) {
+          const rows = await query(
+            `SELECT id, bitunix_position_id, exit_price, pnl_usdt FROM trades
+             WHERE bitunix_position_id = ANY($1)`, [posIds]
+          );
+          for (const r of rows) existingByPosId.set(r.bitunix_position_id, r);
+        }
+        const allKeyTrades = await query(
+          `SELECT id, symbol, direction, entry_price, created_at, exit_price, pnl_usdt
+           FROM trades WHERE api_key_id = $1`, [key.id]
+        );
+
+        for (const p of positions) {
+          try {
+            const symbol    = (p.symbol || '').toUpperCase();
+            const posId     = String(p.positionId || p.id || p.position_id || '');
+            const pSide     = (p.side || p.positionSide || '').toUpperCase();
+            const direction = (pSide === 'LONG' || pSide === 'BUY') ? 'LONG' : 'SHORT';
+            const entryPrice = parseFloat(p.avgOpenPrice  || p.entryPrice  || p.openPrice  || 0);
+            const exitPrice  = parseFloat(p.avgClosePrice || p.closePrice  || p.closedPrice || 0);
+            const leverage   = parseInt(p.leverage  || 20);
+            const qty        = parseFloat(p.qty || p.size || p.quantity || 0);
+            const pnlRaw     = p.realizedPNL ?? p.realizedPnl ?? p.pnl ?? p.profit ?? p.realPnl ?? null;
+            const pnlUsdt    = pnlRaw != null ? parseFloat(parseFloat(pnlRaw).toFixed(4)) : null;
+            const tradingFee = Math.abs(parseFloat(p.fee || p.tradingFee || p.commission || 0));
+            const fundingFee = Math.abs(parseFloat(p.funding || p.fundingFee || p.fund_fee || 0));
+            const grossPnl   = pnlUsdt != null ? parseFloat((pnlUsdt + tradingFee + fundingFee).toFixed(4)) : null;
+            const openMs     = parseInt(p.openTime  || p.ctime   || p.createTime  || 0);
+            const closeMs    = parseInt(p.closeTime || p.mtime   || p.updateTime  || 0);
+            const openAt     = openMs  ? new Date(openMs)  : null;
+            const closeAt    = closeMs ? new Date(closeMs) : null;
+            const status     = pnlUsdt != null ? (pnlUsdt > 0 ? 'WIN' : 'LOSS') : 'CLOSED';
+
+            if (!symbol || entryPrice <= 0 || exitPrice <= 0) { skipped++; continue; }
+
+            // Match existing record from in-memory batches (no per-row DB queries)
+            let existing = posId ? existingByPosId.get(posId) : null;
+            if (!existing && openAt) {
+              existing = allKeyTrades.find(t =>
+                t.symbol === symbol && t.direction === direction &&
+                Math.abs(parseFloat(t.entry_price) - entryPrice) / entryPrice < 0.002 &&
+                Math.abs(new Date(t.created_at).getTime() - openMs) < 300_000
+              );
+            }
+
+            if (existing) {
+              if (existing.exit_price == null || existing.pnl_usdt == null) {
+                await query(
+                  `UPDATE trades SET exit_price=$1, pnl_usdt=$2, gross_pnl=$3, trading_fee=$4,
+                   funding_fee=$5, status=$6, closed_at=COALESCE(closed_at,$7),
+                   bitunix_position_id=COALESCE(bitunix_position_id,$8) WHERE id=$9`,
+                  [exitPrice, pnlUsdt, grossPnl, tradingFee, fundingFee, status, closeAt, posId || null, existing.id]
+                );
+                updated++;
+              } else {
+                skipped++;
+              }
+            } else {
+              await query(
+                `INSERT INTO trades (api_key_id, user_id, symbol, direction, entry_price, exit_price,
+                 sl_price, tp_price, quantity, leverage, status, pnl_usdt, gross_pnl, trading_fee,
+                 funding_fee, closed_at, created_at, trailing_sl_price, trailing_sl_last_step,
+                 bitunix_position_id)
+                 VALUES ($1,$2,$3,$4,$5,$6,0,0,$7,$8,$9,$10,$11,$12,$13,$14,$15,$5,0,$16)
+                 ON CONFLICT DO NOTHING`,
+                [key.id, key.user_id, symbol, direction, entryPrice, exitPrice,
+                 qty, leverage, status, pnlUsdt, grossPnl, tradingFee, fundingFee,
+                 closeAt || new Date(), openAt || new Date(), entryPrice, posId || null]
+              );
+              inserted++;
+            }
+          } catch (posErr) {
+            errors.push(posErr.message);
+          }
+        }
+      } catch (keyErr) {
+        errors.push(`key ${key.id}: ${keyErr.message}`);
+      }
+    }
+
+    console.log(`[pull-bitunix-history] user ${req.userId} — inserted:${inserted} updated:${updated} skipped:${skipped}`);
+    res.json({ inserted, updated, skipped, errors: errors.slice(0, 10) });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }

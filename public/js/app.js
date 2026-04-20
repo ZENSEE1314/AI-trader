@@ -3655,49 +3655,22 @@
   }
 
   async function adminPullBitunixHistory(btn) {
-    if (!confirm('Pull ALL closed position history from Bitunix?\nThis fetches up to 500 positions, inserts any missing trades, and updates incomplete records.')) return;
     const statusEl = document.getElementById('resync-bitunix-status');
-    statusEl.textContent = 'Starting background pull...';
-    statusEl.style.color = 'var(--color-accent)';
-    if (btn) { btn.disabled = true; btn.textContent = '⏳ Pulling...'; }
+    if (statusEl) { statusEl.textContent = 'Syncing last 100 trades from Bitunix...'; statusEl.style.color = 'var(--color-accent)'; }
+    if (btn) { btn.disabled = true; btn.textContent = '⏳ Syncing...'; }
     try {
-      const start = await api('POST', '/api/dashboard/pull-bitunix-history');
-      if (start.error) throw new Error(start.error);
-      const { jobId } = start;
-
-      // Poll every 3s until the background job completes
-      let attempts = 0;
-      const poll = setInterval(async () => {
-        try {
-          const result = await api('GET', `/api/dashboard/pull-bitunix-history/${jobId}`);
-          const elapsed = ++attempts * 3;
-          statusEl.textContent = `Running... ${elapsed}s (inserted:${result.inserted} updated:${result.updated})`;
-
-          if (result.done) {
-            clearInterval(poll);
-            const msg = `Done — Inserted ${result.inserted} new · Updated ${result.updated} · Skipped ${result.skipped}`;
-            statusEl.textContent = msg;
-            statusEl.style.color = (result.inserted + result.updated) > 0 ? 'var(--color-success)' : 'var(--color-text-muted)';
-            if (result.errors && result.errors.length > 0) {
-              statusEl.textContent += ` (${result.errors.length} errors)`;
-              console.error('Pull history errors:', result.errors);
-            }
-            showToast(msg, (result.inserted + result.updated) > 0 ? 'success' : 'info');
-            if ((result.inserted + result.updated) > 0) setTimeout(() => loadTradeHistory?.(), 1000);
-            if (btn) { btn.disabled = false; btn.textContent = '📥 Pull All Bitunix History'; }
-          }
-          if (attempts > 60) { // 3-minute timeout
-            clearInterval(poll);
-            statusEl.textContent = 'Timed out waiting — job may still be running in background';
-            if (btn) { btn.disabled = false; btn.textContent = '📥 Pull All Bitunix History'; }
-          }
-        } catch (_) { /* poll failures are transient, keep polling */ }
-      }, 3000);
+      const result = await api('POST', '/api/dashboard/pull-bitunix-history');
+      if (result.error) throw new Error(result.error);
+      const msg = `Inserted ${result.inserted} new · Updated ${result.updated} · Skipped ${result.skipped}`;
+      if (statusEl) { statusEl.textContent = msg; statusEl.style.color = (result.inserted + result.updated) > 0 ? 'var(--color-success)' : 'var(--color-text-muted)'; }
+      if (result.errors && result.errors.length > 0) console.error('Pull history errors:', result.errors);
+      showToast(msg, (result.inserted + result.updated) > 0 ? 'success' : 'info');
+      if ((result.inserted + result.updated) > 0) setTimeout(() => loadTradeHistory?.(), 1000);
     } catch (err) {
-      statusEl.textContent = `Error: ${err.message}`;
-      statusEl.style.color = 'var(--color-danger)';
+      if (statusEl) { statusEl.textContent = `Error: ${err.message}`; statusEl.style.color = 'var(--color-danger)'; }
       showToast(err.message, 'error');
-      if (btn) { btn.disabled = false; btn.textContent = '📥 Pull All Bitunix History'; }
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = '📥 Pull Bitunix History'; }
     }
   }
 
