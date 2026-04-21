@@ -27,6 +27,33 @@ const PROFIT_LOCK_PCT    = 0.60; // lock 60% of current profit (slides up as pro
 //   At 100% profit → SL at 60%
 const CANDLE_TRAIL_CAP   = 0.35; // switch to candle structural trail at 35%+ capital profit
 
+// Fees (capital %)
+const TAKER_FEE_BOTH_LEGS = 0.0008; // 0.08% notional × leverage = taker in+out
+const FUNDING_INTERVAL_H  = 8;      // funding charged every 8 hours
+const FUNDING_FALLBACK    = 0.0001; // 0.01% per 8h if API unavailable
+
+// Cache funding rates to avoid hammering Binance every 15s
+const fundingRateCache = new Map(); // symbol → { rate, fetchedAt }
+const FUNDING_CACHE_TTL = 5 * 60 * 1000; // refresh every 5 minutes
+
+async function getFundingRate(symbol) {
+  const now = Date.now();
+  const cached = fundingRateCache.get(symbol);
+  if (cached && now - cached.fetchedAt < FUNDING_CACHE_TTL) return cached.rate;
+  try {
+    const res = await fetch(
+      `https://fapi.binance.com/fapi/v1/premiumIndex?symbol=${symbol}`,
+      { timeout: 4000, ...getFetchOptions() }
+    );
+    const d = await res.json();
+    const rate = Math.abs(parseFloat(d.lastFundingRate) || FUNDING_FALLBACK);
+    fundingRateCache.set(symbol, { rate, fetchedAt: now });
+    return rate;
+  } catch (_) {
+    return FUNDING_FALLBACK;
+  }
+}
+
 function log(msg) {
   const t = new Date().toLocaleString('en-GB', { timeZone: 'Asia/Jakarta' });
   console.log(`[TRAIL ${t}] ${msg}`);
@@ -70,9 +97,9 @@ async function getLivePrice(symbol) {
 }
 
 // Sliding profit lock: activates at 20% capital profit, then locks 60% of
-// whatever profit exists at that moment — slides up as profit grows.
-// Below 20%: returns null — trade breathes freely, no SL movement.
-function calcTierSlPrice(entryPrice, curPrice, isLong, leverage) {
+// whatever profit exists — slides up as profit grows.
+// feeFloorCap = total fees (taker + funding) + buffer — SL never locks below this.
+function calcTierSlPrice(entryPrice, curPrice, isLong, leverage, feeFloorCap = 0.03) {
   const pricePct   = isLong
     ? (curPrice - entryPrice) / entryPrice
     : (entryPrice - curPrice) / entryPrice;
@@ -81,8 +108,8 @@ function calcTierSlPrice(entryPrice, curPrice, isLong, leverage) {
   // Below 20% capital profit — let trade breathe, no movement
   if (capitalPct < TRAIL_ACTIVATE_CAP) return null;
 
-  // Lock 60% of current profit — slides up as profit grows
-  const slCapital  = capitalPct * PROFIT_LOCK_PCT;
+  // Lock 60% of current profit, but never below total fees (taker + funding + buffer)
+  const slCapital  = Math.max(capitalPct * PROFIT_LOCK_PCT, feeFloorCap);
   const slPricePct = slCapital / leverage;
 
   return isLong
@@ -176,7 +203,7 @@ async function runTrailCycle() {
   try {
     const trades = await db.query(`
       SELECT t.id, t.symbol, t.direction, t.entry_price, t.sl_price,
-             t.trailing_sl_price, t.tp_price, t.leverage,
+             t.trailing_sl_price, t.tp_price, t.leverage, t.created_at,
              ak.platform,
              ak.api_key_enc, ak.iv, ak.auth_tag,
              ak.api_secret_enc, ak.secret_iv, ak.secret_auth_tag
@@ -214,8 +241,20 @@ async function runTrailCycle() {
           : (entryPrice - curPrice) / entryPrice;
         const capitalPct = profitPct * leverage;
 
-        // Stage 1 (30% capital): lock SL at 15% capital profit. Returns null below 30%.
-        const tierSl = calcTierSlPrice(entryPrice, curPrice, isLong, leverage);
+        // ── Total fee cost (taker + funding) ─────────────────────
+        // Taker: entry + exit fee in capital %
+        const takerCapital = TAKER_FEE_BOTH_LEGS * leverage;
+        // Funding: how many 8h periods since trade opened × current rate × leverage
+        const tradeAgeMs      = Date.now() - new Date(trade.created_at).getTime();
+        const tradeAgeH       = tradeAgeMs / (1000 * 3600);
+        const fundingPeriods  = Math.max(1, Math.floor(tradeAgeH / FUNDING_INTERVAL_H));
+        const fundingRate     = await getFundingRate(trade.symbol);
+        const fundingCapital  = fundingRate * fundingPeriods * leverage;
+        // Total fees + 1% comfort buffer — SL must always lock above this
+        const totalFeesCapital = takerCapital + fundingCapital + 0.01;
+
+        // Sliding 60% lock — but floor is total fees so we always profit after all costs
+        const tierSl = calcTierSlPrice(entryPrice, curPrice, isLong, leverage, totalFeesCapital);
 
         // Candle structural trail: activates at 35%+ capital profit.
         // Follows the last 2 candle lows/highs as price moves in our favour.
@@ -261,7 +300,8 @@ async function runTrailCycle() {
             `*${trade.symbol}* ${isLong ? 'LONG' : 'SHORT'}\n` +
             `SL: \`$${currentSl.toFixed(pricePrec)}\` → \`$${bestSl.toFixed(pricePrec)}\`\n` +
             `Source: ${source.join('+')}\n` +
-            `Profit: +${(capitalPct * 100).toFixed(1)}% capital`
+            `Profit: +${(capitalPct * 100).toFixed(1)}% capital\n` +
+            `Fees: taker ${(takerCapital * 100).toFixed(2)}% + funding ${(fundingCapital * 100).toFixed(2)}% = total ${(totalFeesCapital * 100).toFixed(2)}%`
           );
         } else {
           log(`✗ ${trade.symbol} SL update FAILED (exchange rejected)`);
