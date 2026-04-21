@@ -4,9 +4,10 @@
 // Binance Futures + Bitunix Futures
 // ==========================================================
 
-const fetch = require('node-fetch');
-const fs    = require('fs');
-const path  = require('path');
+const fetch  = require('node-fetch');
+const fs     = require('fs');
+const path   = require('path');
+const { spawn } = require('child_process');
 const { run: runTrader } = require('./cycle');
 const aiLearner = require('./ai-learner');
 const { getSentimentSummary } = require('./sentiment-scraper');
@@ -606,6 +607,30 @@ async function main() {
   }, SPIKE_INTERVAL);
 
   log('Bot loop is running — CEO commanding all agents');
+
+  // ── Trail SL Watchdog ─────────────────────────────────────
+  // Runs as a child process every 15s — moves SL as profit grows.
+  // Must be started here (not in loop.js) because loop.js is never launched in production.
+  let trailProc = null;
+  function startTrailWatchdog() {
+    if (trailProc) return;
+    trailProc = spawn('node', [path.join(__dirname, 'trail-watchdog.js')], {
+      cwd: __dirname,
+      stdio: 'inherit',
+    });
+    trailProc.on('close', (code) => {
+      log(`Trail watchdog exited (code ${code}) — restarting in 5s`);
+      trailProc = null;
+      setTimeout(startTrailWatchdog, 5000);
+    });
+    trailProc.on('error', (err) => {
+      log(`Trail watchdog error: ${err.message} — restarting in 5s`);
+      trailProc = null;
+      setTimeout(startTrailWatchdog, 5000);
+    });
+    log('Trail watchdog started (15s interval)');
+  }
+  startTrailWatchdog();
 }
 
 main().catch(err => {
