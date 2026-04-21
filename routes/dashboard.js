@@ -1042,9 +1042,22 @@ router.post('/backtest', async (req, res) => {
   try {
     const { symbols, days = 60 } = req.body || {};
     const { runBacktest, applyBestStrategy } = require('../backtester');
+
+    // Read user's configured TP/SL from their API key settings.
+    // These are price % values (e.g. 0.045 = 4.5% price move = TP hit).
+    // If the user has set them, backtest uses only those instead of the generic config grid.
+    const keyRow = await query(
+      `SELECT tp_pct, sl_pct FROM api_keys WHERE user_id = $1 AND enabled = true ORDER BY id LIMIT 1`,
+      [req.userId]
+    );
+    const userTp = keyRow.length && keyRow[0].tp_pct ? parseFloat(keyRow[0].tp_pct) : null;
+    const userSl = keyRow.length && keyRow[0].sl_pct ? parseFloat(keyRow[0].sl_pct) : null;
+
     const result = await runBacktest({
       symbols: symbols || ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT', 'DOGEUSDT', 'ADAUSDT', 'AVAXUSDT'],
       days: Math.min(Math.max(days, 7), 90),
+      userTp,
+      userSl,
     });
     // Auto-apply best strategy
     if (result.bestStrategy) {

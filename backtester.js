@@ -558,9 +558,17 @@ async function runBacktest(options = {}) {
     days = 60,
     interval = '15m',
     strategies = null, // null = test all
+    userTp = null,     // user's configured TP% (price %) — if set, skip TP_SL_CONFIGS
+    userSl = null,     // user's configured SL% (price %) — if set, skip TP_SL_CONFIGS
   } = options;
 
-  bLog.ai(`Backtester starting: ${symbols.length} symbols × ${days} days × ${Object.keys(STRATEGIES).length} strategies × ${TP_SL_CONFIGS.length} configs`);
+  // If user has configured TP/SL, test only their settings.
+  // Otherwise fall back to the standard config grid.
+  const configsToTest = (userTp && userSl)
+    ? [{ name: `User settings ${(userTp*100).toFixed(2)}%TP/${(userSl*100).toFixed(2)}%SL`, tp: userTp, sl: userSl }]
+    : TP_SL_CONFIGS;
+
+  bLog.ai(`Backtester starting: ${symbols.length} symbols × ${days} days × ${Object.keys(STRATEGIES).length} strategies × ${configsToTest.length} configs${userTp ? ' (user TP/SL)' : ''}`);
   const startTime = Date.now();
 
   const results = [];
@@ -584,7 +592,7 @@ async function runBacktest(options = {}) {
       const strat = STRATEGIES[stratKey];
       if (!strat) continue;
 
-      for (const config of TP_SL_CONFIGS) {
+      for (const config of configsToTest) {
         const trades = simulateTrades(closes, highs, lows, strat.scan, config.tp, config.sl);
         const stats = analyzeResults(trades);
 
