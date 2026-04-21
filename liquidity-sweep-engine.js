@@ -991,7 +991,7 @@ function detectBRR(candles1h, candles15m, candles1m, cfg = {}) {
           const last1m = parsed1[parsed1.length - 1];
           if (last1m.close <= levelPrice) continue;
 
-          const baseScore = 8;
+          const baseScore = 7;
           const fibBonus = fibConfluence ? 4 : 0;
           const momentumBonus = htf.momentum === 'bullish' ? 2 : 0;
           const strongHTFBonus = htf.trend === 'bullish' ? 2 : 0; // full HH+HL trend
@@ -1046,7 +1046,7 @@ function detectBRR(candles1h, candles15m, candles1m, cfg = {}) {
           const last1m = parsed1[parsed1.length - 1];
           if (last1m.close >= levelPrice) continue;
 
-          const baseScore = 8;
+          const baseScore = 7;
           const fibBonus = fibConfluence ? 4 : 0;
           const momentumBonus = htf.momentum === 'bearish' ? 2 : 0;
           const strongHTFBonus = htf.trend === 'bearish' ? 2 : 0;
@@ -1517,7 +1517,7 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
         tp3: sweep.direction === 'LONG' ? sweep.entryPrice + (tpDist * price * 2) : sweep.entryPrice - (tpDist * price * 2),
         slDist, setup: 'LIQUIDITY_SWEEP',
         setupName: `${sweep.direction}-LIQ-SWEEP`,
-        score: 6 + (rr > 2 ? 2 : 0),
+        score: 4 + (rr > 2 ? 2 : 0),
         rr: Math.round(rr * 10) / 10,
       });
     }
@@ -1547,7 +1547,7 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
         tp3: hunt.direction === 'LONG' ? hunt.entryPrice + (tpDist * price * 2) : hunt.entryPrice - (tpDist * price * 2),
         slDist, setup: 'STOP_LOSS_HUNT',
         setupName: `${hunt.direction}-SL-HUNT`,
-        score: 7 + Math.min(touchBonus, 3),
+        score: 5 + Math.min(touchBonus, 3),
         rr: Math.round(rr * 10) / 10,
       });
     }
@@ -1576,7 +1576,7 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
         tp3: momentum.direction === 'LONG' ? momentum.entryPrice + (tpDist * price * 2) : momentum.entryPrice - (tpDist * price * 2),
         slDist, setup: 'MOMENTUM_SCALP',
         setupName: `${momentum.direction}-MOM-SCALP`,
-        score: 5,
+        score: 3,
         rr: Math.round(rr * 10) / 10,
       });
     }
@@ -1722,7 +1722,7 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
             const tp1 = entryPrice - atr * 2;
             const rr  = (atr * 2) / (entryPrice * slDist);
 
-            let score = 9;
+            let score = 7;
             if (shortProb > 60) score += 2;  // high Zeiierman probability
             if (shortProb > 80) score += 1;  // very high
             if ((struct1m.lhCount || 0) >= 2) score += 1; // 2+ consecutive LH
@@ -1781,7 +1781,7 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
             const tp1 = entryPrice + atr * 2;
             const rr  = (atr * 2) / (entryPrice * slDist);
 
-            let score = 9;
+            let score = 7;
             if (longProb > 60) score += 2;
             if (longProb > 80) score += 1;
             if ((struct1m.hlCount || 0) >= 2) score += 1; // 2+ consecutive HL
@@ -1859,7 +1859,7 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
               const tp1 = price - atr * 2;
               const rr  = (atr * 2) / (price * slDist);
 
-              let score = 8;
+              let score = 6;
               if (isRejectionCandle)          score += 2; // clean shooting star / pin bar
               if (isLHForming)                score += 1; // LH structure forming
               if (rsi14 > 65)                 score += 1; // overbought = more likely to reject
@@ -2034,8 +2034,10 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
       if (btcTrend === 'bearish' && sig.direction === 'SHORT') sig.score += 2;
     }
 
-    // Volume confirmation
-    if (lastVolOK) sig.score += 2;
+    // Volume confirmation — hard requirement, not just a bonus.
+    // No volume = no signal, regardless of pattern quality.
+    if (!lastVolOK) { sig.score = -99; sig.blocked = 'No volume confirmation on entry candle'; continue; }
+    sig.score += 2; // volume confirmed — reward it
 
     // Trendline confluence (tightened to 0.2%)
     if (sig.direction === 'LONG' && trendlines.uptrend) {
@@ -2142,6 +2144,14 @@ async function scanSMC(log, opts = {}) {
   // The original PDF rules (Asia/Europe/US sessions only) were too restrictive.
   // Bot now scans continuously and trades whenever a valid signal appears.
 
+  // Asian dead zone: UTC 00:00–07:00 — low liquidity, fake moves, whipsaw.
+  // Skip scanning entirely during this window. Saves API calls too.
+  const utcHour = new Date().getUTCHours();
+  if (utcHour >= 0 && utcHour < 7) {
+    if (log) log(`[scanSMC] Asian session blackout (UTC ${utcHour}:xx) — skipping scan`);
+    return [];
+  }
+
   // Hard 4-token whitelist — no other coins traded under any circumstances.
   const ALLOWED_SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT'];
 
@@ -2156,7 +2166,7 @@ async function scanSMC(log, opts = {}) {
   bLog.scan(`[v2.0] Scanning 4 coins: ${ALLOWED_SYMBOLS.join(', ')} | 24/7 mode`);
 
   const params = await aiLearner.getOptimalParams();
-  const minScore = params.MIN_SCORE || 8;
+  const minScore = params.MIN_SCORE || 10;
 
   // Quantum optimizer: get active strategy combo + best params from backtest
   let activeCombo = 15;
