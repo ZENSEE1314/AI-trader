@@ -1965,7 +1965,17 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
         // RSI in sell zone (not oversold)
         const rsiOk = rsi14 >= 35 && rsi14 <= 65;
 
-        if (nearEma && lastRed && prevGreen && touchedEma && rsiOk) {
+        // Reversal momentum guard: if the bounce candles are strong and accelerating,
+        // it's a V-reversal, NOT a dead-cat bounce to short.
+        // Strong bounce = prevC body > 0.15% AND prevC volume >= recent average.
+        // Accelerating = lastC volume > prevC volume (momentum still building).
+        const avg15VolGuard = parsed15.slice(-10).reduce((s, c) => s + c.volume, 0) / 10;
+        const prevBodyPct   = (prevC.close - prevC.open) / prevC.open; // positive = green body
+        const strongBounce  = prevBodyPct > 0.0015 && prevC.volume >= avg15VolGuard * 0.9;
+        const accelerating  = lastC.volume > prevC.volume;
+        const isReversal    = strongBounce && accelerating;
+
+        if (nearEma && lastRed && prevGreen && touchedEma && rsiOk && !isReversal) {
           const atr     = calcATR(parsed15);
           const slPrice = Math.max(lastC.high, ema21) * 1.002; // SL above candle high / EMA
           const slDist  = (slPrice - price) / price;
@@ -2154,7 +2164,16 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
       // Current price is below EMA200 (failure confirmed, not bouncing back)
       const priceBelowEma = price < ema200_15m;
 
-      if (prevAboveEma && lastBelowEma && (wickedAbove || lastRed) && strongClose && rsiOk && priceBelowEma) {
+      // Reversal momentum guard: if prevC was a very strong green candle + volume surge,
+      // the move through EMA200 might be a genuine reversal, not a fake-out.
+      // Only short if the bounce looks weak/fading, not if it's accelerating.
+      const avg15VolF   = parsed15.slice(-10).reduce((s, c) => s + c.volume, 0) / 10;
+      const prevBodyF   = (prevC.close - prevC.open) / prevC.open; // positive if green
+      const strongBounceF = prevBodyF > 0.002 && prevC.volume > avg15VolF * 1.2;
+      const acceleratingF = lastC.volume > prevC.volume && lastC.close > lastC.open; // volume+price still up
+      const isReversalF   = strongBounceF && acceleratingF;
+
+      if (prevAboveEma && lastBelowEma && (wickedAbove || lastRed) && strongClose && rsiOk && priceBelowEma && !isReversalF) {
         const atr     = calcATR(parsed15);
         const slPrice = Math.max(lastC.high, ema200_15m * 1.001); // SL above EMA200 fail zone
         const slDist  = (slPrice - price) / price;
