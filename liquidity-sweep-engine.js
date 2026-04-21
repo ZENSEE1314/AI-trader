@@ -1996,6 +1996,71 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     }
   } // end EMA_BREAKDOWN gate
 
+  // ── Strategy: EMA200 Cross LONG (reversal — price reclaims EMA200) ──
+  // When price was below EMA200 (bearish) but the last completed candle closes
+  // ABOVE EMA200 with momentum and volume — this is the reversal cross.
+  // Exempt from the EMA200 bearish block because it IS the cross itself.
+  // This catches the "V-reversal" where price dumps then rockets back above EMA200.
+  if (!enabledStrategies || enabledStrategies.EMA200_CROSS_LONG !== false) {
+    if (parsed15.length >= 22 && rsi14 !== null && ema200_15m !== null) {
+      const lastC = parsed15[parsed15.length - 2]; // last completed candle
+      const prevC = parsed15[parsed15.length - 3];
+      const c3    = parsed15[parsed15.length - 4];
+
+      // Previous candle(s) were below EMA200, last candle closed above it
+      const prevBelowEma = prevC.close < ema200_15m;
+      const lastAboveEma = lastC.close > ema200_15m;
+
+      // Strong bullish cross candle: closed above EMA200 with conviction
+      const crossBody    = lastC.close - lastC.open;
+      const crossBodyPct = crossBody / lastC.open;
+      const strongCross  = crossBodyPct > 0.001; // body > 0.1% — not a doji
+
+      // Price had been in a downtrend before the cross (at least 2 red candles)
+      const wasDowntrend = prevC.close < prevC.open || c3.close < c3.open;
+
+      // RSI recovering from oversold but not yet overbought
+      const rsiOk = rsi14 >= 30 && rsi14 <= 65;
+
+      // Current price is above EMA200 (confirm cross held)
+      const priceAboveEma = price > ema200_15m;
+
+      if (prevBelowEma && lastAboveEma && strongCross && wasDowntrend && rsiOk && priceAboveEma) {
+        const atr     = calcATR(parsed15);
+        const slPrice = Math.min(lastC.low, ema200_15m * 0.999); // SL below EMA200 cross
+        const slDist  = (price - slPrice) / price;
+        const tpPrice = price + atr * 2;
+        const rr      = (atr * 2) / (price * slDist);
+
+        if (slDist > 0.001 && slDist < 0.025 && rr >= 1.2) {
+          let score = 7; // higher base — EMA200 reclaim is a strong signal
+          if (rsi14 >= 35 && rsi14 <= 55) score += 2; // RSI in recovery zone
+          if (crossBodyPct > 0.003)        score += 2; // big conviction cross candle
+          if (wasDowntrend)                score += 1; // confirmed prior downtrend
+
+          const avg15Vol = parsed15.slice(-20).reduce((s, c) => s + c.volume, 0) / 20;
+          if (lastC.volume > avg15Vol * 1.3) score += 3; // strong volume on cross — most important
+          else if (lastC.volume > avg15Vol * 1.1) score += 2;
+
+          // NOTE: this signal bypasses the EMA200 bearish LONG block below —
+          // it is added directly with setup tag 'EMA200_CROSS_LONG' so the
+          // filter logic can whitelist it.
+          signals.push({
+            symbol, direction: 'LONG',
+            price, lastPrice: price,
+            sl: slPrice, tp1: tpPrice,
+            tp2: price + atr * 3,
+            tp3: price + atr * 4,
+            slDist, rr: Math.round(rr * 10) / 10,
+            setup: 'EMA200_CROSS_LONG', setupName: 'EMA200 Reclaim LONG',
+            score,
+            bypassEmaBias: true, // reversal cross — exempt from EMA200 bearish LONG block
+          });
+        }
+      }
+    }
+  } // end EMA200_CROSS_LONG gate
+
   if (!signals.length) return null;
 
   // Apply confluence bonuses + global filters to all signals
@@ -2012,9 +2077,12 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
       continue;
     }
     if (ema200_bias === 'bearish' && sig.direction === 'LONG') {
-      sig.score = -99;
-      sig.blocked = `LONG blocked — price below EMA200 (bear market). Only SHORT.`;
-      continue;
+      // EMA200_CROSS_LONG is exempt — it IS the reversal cross back above EMA200.
+      if (!sig.bypassEmaBias) {
+        sig.score = -99;
+        sig.blocked = `LONG blocked — price below EMA200 (bear market). Only SHORT.`;
+        continue;
+      }
     }
 
     // VWAP + OP bias (PDF: "avoid entering in between VWAP and OP if gap is small")
