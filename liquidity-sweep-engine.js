@@ -1941,6 +1941,61 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     }
   } // end EMA_PULLBACK gate
 
+  // ── Strategy: EMA Breakdown SHORT (trend-following drop sell) ──
+  // Mirror of EMA_PULLBACK but for bear markets.
+  // When EMA200 is bearish + h1 bearish, short when price rallies up to EMA21
+  // and gets rejected (red reversal candle after touching EMA from below).
+  if (!enabledStrategies || enabledStrategies.EMA_BREAKDOWN !== false) {
+    if (ema200_bias === 'bearish' && h1Trend === 'bearish' && parsed15.length >= 22 && rsi14 !== null) {
+      const lastC = parsed15[parsed15.length - 2];
+      const prevC = parsed15[parsed15.length - 3];
+      const ema21 = ema21_15m;
+      const ema9  = ema9_15m;
+
+      if (ema21 !== null && ema9 !== null) {
+        // Price bounced up to near EMA21 but rejected
+        const distToEma = (price - ema21) / ema21;
+        const nearEma   = distToEma >= -0.008 && distToEma <= 0.005;
+
+        // Bearish rejection candle: last candle red after touching EMA from below
+        const lastRed  = lastC.close < lastC.open;
+        const prevGreen = prevC.close > prevC.open;
+        const touchedEma = lastC.high >= ema21 * 0.997; // wick touched near EMA
+
+        // RSI in sell zone (not oversold)
+        const rsiOk = rsi14 >= 35 && rsi14 <= 65;
+
+        if (nearEma && lastRed && prevGreen && touchedEma && rsiOk) {
+          const atr     = calcATR(parsed15);
+          const slPrice = Math.max(lastC.high, ema21) * 1.002; // SL above candle high / EMA
+          const slDist  = (slPrice - price) / price;
+          const tpPrice = price - atr * 2;
+          const rr      = (atr * 2) / (price * slDist);
+
+          if (slDist > 0.001 && slDist < 0.02 && rr >= 1.2) {
+            let score = 6;
+            if (rsi14 >= 45 && rsi14 <= 60) score += 2; // ideal rejection RSI
+            if (touchedEma)                 score += 2; // wick hit EMA = clean reject
+            if (prevGreen && lastRed)        score += 2; // rejection candle pattern
+            const avg15Vol = parsed15.slice(-20).reduce((s, c) => s + c.volume, 0) / 20;
+            if (lastC.volume > avg15Vol * 1.1) score += 2; // volume on rejection
+
+            signals.push({
+              symbol, direction: 'SHORT',
+              price, lastPrice: price,
+              sl: slPrice, tp1: tpPrice,
+              tp2: price - atr * 3,
+              tp3: price - atr * 4,
+              slDist, rr: Math.round(rr * 10) / 10,
+              setup: 'EMA_BREAKDOWN', setupName: 'EMA Breakdown SHORT',
+              score,
+            });
+          }
+        }
+      }
+    }
+  } // end EMA_BREAKDOWN gate
+
   if (!signals.length) return null;
 
   // Apply confluence bonuses + global filters to all signals
