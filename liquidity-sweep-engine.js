@@ -2250,10 +2250,10 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
       else if (rsi14 < 25) sig.score += 1; // oversold bounce possible
     }
     if (sig.direction === 'SHORT') {
-      // BOS_SHORT needs RSI < 65 (already checked at entry) — exempt from oversold block
-      // because a breakdown can push RSI to 35-42 while the move continues.
-      // All other SHORT strategies: don't short when already oversold (the drop is over).
-      if (sig.setup !== 'BOS_SHORT') {
+      // Reversal SHORT setups exempt from oversold RSI block — they SHORT bounces/rejections
+      // at EMA200 which happen when RSI is still recovering (can be 35-45 range).
+      const RSI_SHORT_EXEMPT = new Set(['BOS_SHORT', 'EMA200_FAIL_SHORT', 'EMA_BREAKDOWN']);
+      if (!RSI_SHORT_EXEMPT.has(sig.setup)) {
         if (rsi14 < 42) { sig.score = -99; sig.blocked = 'SHORT rejected — RSI ' + rsi14.toFixed(0) + ' oversold, drop already done, chasing bottom'; }
         else if (rsi14 < 50) sig.score -= 2; // slightly extended
         else if (rsi14 >= 50 && rsi14 <= 70) sig.score += 2; // bounce zone — ideal sell
@@ -2280,9 +2280,10 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
       if (priceInRange < 0.35) sig.score += 2; // buying near the bottom — good
     }
     if (sig.direction === 'SHORT') {
-      // BOS_SHORT fires DURING the breakdown — price is near the low by definition, allow it.
-      // Other strategies: don't short near the bottom of the recent range (the drop is over).
-      if (sig.setup !== 'BOS_SHORT') {
+      // Reversal SHORT setups fire at EMA200 resistance — they can trigger when price
+      // is anywhere in the range (the rejection IS the signal, not a range-position trade).
+      const RANGE_SHORT_EXEMPT = new Set(['BOS_SHORT', 'EMA200_FAIL_SHORT', 'EMA_BREAKDOWN']);
+      if (!RANGE_SHORT_EXEMPT.has(sig.setup)) {
         if (priceInRange < 0.20) { sig.score = -99; sig.blocked = 'SHORT blocked — price at bottom 20% of range, shorting at the floor'; }
         else if (priceInRange < 0.35) sig.score -= 4; // near bottom — heavy penalty
       }
@@ -2295,7 +2296,11 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     if (sig.direction === 'LONG' && h1Trend === 'bullish') sig.score += 3;
     if (sig.direction === 'SHORT' && h1Trend === 'bearish') sig.score += 3;
     // Reversal strategies exempt from counter-trend penalty — they fire against the trend by design
-    const REVERSAL_SETUPS = new Set(['BOS_LONG', 'BOS_SHORT', 'RESIST_REJECT']);
+    const REVERSAL_SETUPS = new Set([
+      'BOS_LONG', 'BOS_SHORT', 'RESIST_REJECT',
+      'EMA200_CROSS_LONG', 'EMA200_APPROACH_LONG',   // LONGs in bear trend — reversal entries
+      'EMA200_FAIL_SHORT', 'EMA_BREAKDOWN',           // SHORTs in bull trend — rejection entries
+    ]);
     if (sig.direction === 'LONG' && h1Trend === 'bearish' && !REVERSAL_SETUPS.has(sig.setup)) sig.score -= 4;
     if (sig.direction === 'SHORT' && h1Trend === 'bullish' && !REVERSAL_SETUPS.has(sig.setup)) sig.score -= 4;
 
@@ -2303,11 +2308,15 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     // BOS_SHORT/RESIST_REJECT exempt: resistance rejections happen at tops in bull markets.
     if (symbol !== 'BTCUSDT') {
       // Reversal strategies exempt from BTC correlation penalty
-      if (btcTrend === 'bullish' && sig.direction === 'SHORT' && sig.setup !== 'BOS_SHORT' && sig.setup !== 'RESIST_REJECT') {
+      // EMA200 reversal setups are exempt from BTC correlation penalty —
+      // they specifically trade reversals at EMA200 regardless of BTC short-term direction.
+      const BTC_EXEMPT_SETUPS = new Set(['BOS_SHORT', 'RESIST_REJECT', 'EMA200_FAIL_SHORT', 'EMA_BREAKDOWN']);
+      const BTC_EXEMPT_LONG   = new Set(['BOS_LONG', 'EMA200_CROSS_LONG', 'EMA200_APPROACH_LONG']);
+      if (btcTrend === 'bullish' && sig.direction === 'SHORT' && !BTC_EXEMPT_SETUPS.has(sig.setup)) {
         sig.score -= 5;
         sig.blocked = 'SHORT rejected — BTC is bullish, alts follow BTC';
       }
-      if (btcTrend === 'bearish' && sig.direction === 'LONG' && sig.setup !== 'BOS_LONG') {
+      if (btcTrend === 'bearish' && sig.direction === 'LONG' && !BTC_EXEMPT_LONG.has(sig.setup)) {
         sig.score -= 5;
         sig.blocked = 'LONG rejected — BTC is bearish, alts follow BTC';
       }
