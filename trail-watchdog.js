@@ -215,11 +215,15 @@ async function runTrailCycle() {
           : (entryPrice - curPrice) / entryPrice;
         const capitalPct = profitPct * leverage;
 
-        // Mechanism 1: Profit tier guarantee
+        // Mechanism 1: Profit tier guarantee (only fires when profitable — has built-in fee floor)
         const tierSl = calcTierSlPrice(entryPrice, curPrice, isLong, leverage);
 
-        // Mechanism 2: Candle structural trail (last 2 candles, min 0.5% from price)
-        const candleSl = await calcCandleSlPrice(trade.symbol, isLong, currentSl, curPrice);
+        // Mechanism 2: Candle structural trail — ONLY when trade is in profit.
+        // On a losing trade the candle highs/lows are near current price and would
+        // tighten the SL prematurely, closing the trade early + paying fees on a loss.
+        const candleSl = profitPct > 0
+          ? await calcCandleSlPrice(trade.symbol, isLong, currentSl, curPrice)
+          : null;
 
         // Take the BETTER of the two (highest SL for LONG, lowest for SHORT)
         let bestSl = currentSl;
