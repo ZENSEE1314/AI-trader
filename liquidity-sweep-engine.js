@@ -1893,33 +1893,27 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     // ── PDF HARD FILTERS ─────────────────────────────────────
 
     // EMA200 bias (PDF: "above MA200 → look long, below → look short")
-    // Hard block if direction conflicts with EMA200 trend.
-    // EXCEPTION for altcoins: BOS_SHORT/RESIST_REJECT can fire reversal SHORTs in bull trends.
-    // NO EXCEPTION for BTCUSDT itself — BTC above EMA200 = macro bull market, never short BTC.
+    // Trend-following rule: read the trend and follow it — no counter-trend trades.
+    // Bullish trend (EMA200 + h1 both bullish) → LONG only, buy pullbacks to support.
+    // Bearish trend (EMA200 + h1 both bearish) → SHORT only, sell bounces to resistance.
+    // No exceptions — if the trend is confirmed, only trade WITH it.
+    if (ema200_bias === 'bullish' && h1Trend === 'bullish' && sig.direction === 'SHORT') {
+      sig.score = -99;
+      sig.blocked = `SHORT blocked — confirmed uptrend (EMA200 bullish + h1 bullish). Only LONG from support.`;
+      continue;
+    }
+    if (ema200_bias === 'bearish' && h1Trend === 'bearish' && sig.direction === 'LONG') {
+      sig.score = -99;
+      sig.blocked = `LONG blocked — confirmed downtrend (EMA200 bearish + h1 bearish). Only SHORT from resistance.`;
+      continue;
+    }
+    // Single-confluece bias: EMA200 bullish but h1 neutral/bearish (or vice versa) — allow with penalty.
     if (ema200_bias === 'bullish' && sig.direction === 'SHORT') {
-      if (symbol === 'BTCUSDT') {
-        // BTC in a bull market — hard block ALL short strategies, no exceptions.
-        sig.score = -99;
-        sig.blocked = `BTC SHORT blocked — BTCUSDT above EMA200 (macro bull market, never short BTC trend)`;
-        continue;
-      }
-      // Double-confirmed uptrend: EMA200 bullish + h1 structure bullish.
-      // RESIST_REJECT gets a heavy penalty (not hard block) — resistance rejections happen in uptrends.
-      // BOS_SHORT and all others are hard-blocked — speculative SHORTs don't belong in an uptrend.
-      if (h1Trend === 'bullish') {
-        if (sig.setup === 'RESIST_REJECT') {
-          sig.score -= 5; // heavy penalty — must earn MIN_SCORE through strong rejection + volume
-        } else {
-          sig.score = -99;
-          sig.blocked = `SHORT blocked — double uptrend confirmed (EMA200 bullish + h1 bullish)`;
-          continue;
-        }
-      }
       if (sig.setup === 'BOS_SHORT' || sig.setup === 'RESIST_REJECT') {
-        sig.score -= 3; // additional penalty — EMA200 bullish but h1 neutral/bearish
+        sig.score -= 4; // EMA200 bullish but h1 not confirmed — caution
       } else {
         sig.score = -99;
-        sig.blocked = `SHORT blocked — price above EMA200 (bullish bias per PDF)`;
+        sig.blocked = `SHORT blocked — price above EMA200 (bullish bias)`;
         continue;
       }
     }
@@ -2143,14 +2137,6 @@ async function scanSMC(log, opts = {}) {
   // 24/7 trading — all session windows, avoid-time, and blackout blocks removed.
   // The original PDF rules (Asia/Europe/US sessions only) were too restrictive.
   // Bot now scans continuously and trades whenever a valid signal appears.
-
-  // Asian dead zone: UTC 00:00–07:00 — low liquidity, fake moves, whipsaw.
-  // Skip scanning entirely during this window. Saves API calls too.
-  const utcHour = new Date().getUTCHours();
-  if (utcHour >= 0 && utcHour < 7) {
-    if (log) log(`[scanSMC] Asian session blackout (UTC ${utcHour}:xx) — skipping scan`);
-    return [];
-  }
 
   // Hard 4-token whitelist — no other coins traded under any circumstances.
   const ALLOWED_SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT'];
