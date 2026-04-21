@@ -18,10 +18,14 @@ const cryptoUtils = require('./crypto-utils');
 const INTERVAL_MS = 15 * 1000;
 const db = require('./db');
 
-// Stage thresholds (capital profit %)
-const STAGE1_ACTIVATE_CAP = 0.20; // activate trail at 20% capital profit
-const STAGE1_LOCK_CAP     = 0.08; // lock in 8% capital profit — still profitable after fees
-const STAGE2_ACTIVATE_CAP = 0.35; // switch to candle trail at 35% capital profit
+// Trailing thresholds (capital profit %)
+const TRAIL_ACTIVATE_CAP = 0.20; // don't trail below 20% capital profit — let trade breathe
+const PROFIT_LOCK_PCT    = 0.60; // lock 60% of current profit (slides up as profit grows)
+//   At 20% profit → SL at 12%  (still profitable after fees)
+//   At 30% profit → SL at 18%
+//   At 50% profit → SL at 30%
+//   At 100% profit → SL at 60%
+const CANDLE_TRAIL_CAP   = 0.35; // switch to candle structural trail at 35%+ capital profit
 
 function log(msg) {
   const t = new Date().toLocaleString('en-GB', { timeZone: 'Asia/Jakarta' });
@@ -65,19 +69,22 @@ async function getLivePrice(symbol) {
   }
 }
 
-// Stage 1: when capital profit hits 30%, lock SL at 15% capital profit.
-// Returns null below 30% — no trail movement until then.
+// Sliding profit lock: activates at 20% capital profit, then locks 60% of
+// whatever profit exists at that moment — slides up as profit grows.
+// Below 20%: returns null — trade breathes freely, no SL movement.
 function calcTierSlPrice(entryPrice, curPrice, isLong, leverage) {
   const pricePct   = isLong
     ? (curPrice - entryPrice) / entryPrice
     : (entryPrice - curPrice) / entryPrice;
   const capitalPct = pricePct * leverage;
 
-  // Below 30% capital profit — let the trade breathe, no movement
-  if (capitalPct < STAGE1_ACTIVATE_CAP) return null;
+  // Below 20% capital profit — let trade breathe, no movement
+  if (capitalPct < TRAIL_ACTIVATE_CAP) return null;
 
-  // At 30%+: lock SL at exactly 15% capital profit (fixed floor, not sliding)
-  const slPricePct = STAGE1_LOCK_CAP / leverage;
+  // Lock 60% of current profit — slides up as profit grows
+  const slCapital  = capitalPct * PROFIT_LOCK_PCT;
+  const slPricePct = slCapital / leverage;
+
   return isLong
     ? entryPrice * (1 + slPricePct)
     : entryPrice * (1 - slPricePct);
@@ -210,9 +217,9 @@ async function runTrailCycle() {
         // Stage 1 (30% capital): lock SL at 15% capital profit. Returns null below 30%.
         const tierSl = calcTierSlPrice(entryPrice, curPrice, isLong, leverage);
 
-        // Stage 2 (45% capital): switch to candle structural trail.
-        // Only activates at 45%+ capital profit — gives trade maximum room to run first.
-        const candleSl = capitalPct >= STAGE2_ACTIVATE_CAP
+        // Candle structural trail: activates at 35%+ capital profit.
+        // Follows the last 2 candle lows/highs as price moves in our favour.
+        const candleSl = capitalPct >= CANDLE_TRAIL_CAP
           ? await calcCandleSlPrice(trade.symbol, isLong, currentSl, curPrice)
           : null;
 
@@ -226,8 +233,8 @@ async function runTrailCycle() {
         if (!improved) continue;
 
         const source = [];
-        if (tierSl && (isLong ? tierSl > currentSl : tierSl < currentSl)) source.push(`stage1-lock15%(+${(capitalPct*100).toFixed(1)}%cap)`);
-        if (candleSl && (isLong ? candleSl > currentSl : candleSl < currentSl)) source.push('stage2-candle');
+        if (tierSl && (isLong ? tierSl > currentSl : tierSl < currentSl)) source.push(`60%lock(+${(capitalPct*100).toFixed(1)}%cap)`);
+        if (candleSl && (isLong ? candleSl > currentSl : candleSl < currentSl)) source.push('candle');
 
         log(`${trade.symbol} ${isLong ? 'LONG' : 'SHORT'} [${source.join('+')}] SL: $${currentSl.toFixed(pricePrec)} → $${bestSl.toFixed(pricePrec)} | profit +${(capitalPct*100).toFixed(1)}% capital`);
 
@@ -374,7 +381,7 @@ async function runOrphanGuard() {
   }
 }
 
-log('Trail watchdog started — 15s interval | Stage1: 20%cap→lock8% | Stage2: 35%cap→candle trail');
+log('Trail watchdog started — 15s interval | activates@20%cap | 60%sliding-lock | candle-trail@35%cap');
 log('Orphan guard started — 2min interval | auto-close unmanaged positions > -25% capital');
 runTrailCycle();
 setInterval(runTrailCycle, INTERVAL_MS);
