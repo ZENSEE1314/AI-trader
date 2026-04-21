@@ -19,9 +19,9 @@ const INTERVAL_MS = 15 * 1000;
 const db = require('./db');
 
 // Stage thresholds (capital profit %)
-const STAGE1_ACTIVATE_CAP = 0.30; // activate trail at 30% capital profit
-const STAGE1_LOCK_CAP     = 0.15; // lock in 15% capital profit at stage 1
-const STAGE2_ACTIVATE_CAP = 0.45; // switch to candle trail at 45% capital profit
+const STAGE1_ACTIVATE_CAP = 0.20; // activate trail at 20% capital profit
+const STAGE1_LOCK_CAP     = 0.08; // lock in 8% capital profit — still profitable after fees
+const STAGE2_ACTIVATE_CAP = 0.35; // switch to candle trail at 35% capital profit
 
 function log(msg) {
   const t = new Date().toLocaleString('en-GB', { timeZone: 'Asia/Jakarta' });
@@ -374,7 +374,7 @@ async function runOrphanGuard() {
   }
 }
 
-log('Trail watchdog started — 15s interval | Stage1: 30%cap→lock15% | Stage2: 45%cap→candle trail');
+log('Trail watchdog started — 15s interval | Stage1: 20%cap→lock8% | Stage2: 35%cap→candle trail');
 log('Orphan guard started — 2min interval | auto-close unmanaged positions > -25% capital');
 runTrailCycle();
 setInterval(runTrailCycle, INTERVAL_MS);
