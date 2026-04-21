@@ -1886,45 +1886,80 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     }
   } // end RESIST_REJECT gate
 
+  // ── Strategy: EMA Pullback LONG (trend-following dip buy) ──
+  // In a confirmed uptrend (EMA200 bullish + h1 bullish), buy when price
+  // pulls back to the EMA21 on 15m and shows a bullish reversal candle.
+  // This is the "buy dips in an uptrend" logic the user wants.
+  if (!enabledStrategies || enabledStrategies.EMA_PULLBACK !== false) {
+    if (ema200_bias === 'bullish' && h1Trend === 'bullish' && parsed15.length >= 22 && rsi14 !== null) {
+      const lastC   = parsed15[parsed15.length - 2]; // last completed candle
+      const prevC   = parsed15[parsed15.length - 3];
+      const ema21   = ema21_15m;
+      const ema9    = ema9_15m;
+
+      if (ema21 !== null && ema9 !== null) {
+        // Price pulled back to within 0.5% of EMA21
+        const distToEma = (price - ema21) / ema21;
+        const nearEma   = distToEma >= -0.005 && distToEma <= 0.008;
+
+        // Bullish reversal candle: last candle closed green after touching EMA
+        const lastGreen  = lastC.close > lastC.open;
+        const prevRed    = prevC.close < prevC.open;
+        const touchedEma = lastC.low <= ema21 * 1.003; // wick touched near EMA
+
+        // RSI in buy zone (not overbought)
+        const rsiOk = rsi14 >= 35 && rsi14 <= 65;
+
+        if (nearEma && lastGreen && prevRed && touchedEma && rsiOk) {
+          const atr      = calcATR(parsed15);
+          const slPrice  = Math.min(lastC.low, ema21) * 0.998; // SL below candle low / EMA
+          const slDist   = (price - slPrice) / price;
+          const tpPrice  = price + atr * 2;
+          const rr       = (atr * 2) / (price * slDist);
+
+          if (slDist > 0.001 && slDist < 0.02 && rr >= 1.2) {
+            let score = 6;
+            if (rsi14 >= 40 && rsi14 <= 55) score += 2; // ideal pullback RSI
+            if (touchedEma)                 score += 2; // wick hit EMA = clean bounce
+            if (prevRed && lastGreen)        score += 2; // reversal candle pattern
+            const avg15Vol = parsed15.slice(-20).reduce((s, c) => s + c.volume, 0) / 20;
+            if (lastC.volume > avg15Vol * 1.1) score += 2; // volume on bounce
+
+            signals.push({
+              symbol, direction: 'LONG',
+              price, lastPrice: price,
+              sl: slPrice, tp1: tpPrice,
+              tp2: price + atr * 3,
+              tp3: price + atr * 4,
+              slDist, rr: Math.round(rr * 10) / 10,
+              setup: 'EMA_PULLBACK', setupName: 'EMA Pullback LONG',
+              score,
+            });
+          }
+        }
+      }
+    }
+  } // end EMA_PULLBACK gate
+
   if (!signals.length) return null;
 
   // Apply confluence bonuses + global filters to all signals
   for (const sig of signals) {
     // ── PDF HARD FILTERS ─────────────────────────────────────
 
-    // EMA200 bias (PDF: "above MA200 → look long, below → look short")
-    // Trend-following rule: read the trend and follow it — no counter-trend trades.
-    // Bullish trend (EMA200 + h1 both bullish) → LONG only, buy pullbacks to support.
-    // Bearish trend (EMA200 + h1 both bearish) → SHORT only, sell bounces to resistance.
-    // No exceptions — if the trend is confirmed, only trade WITH it.
-    if (ema200_bias === 'bullish' && h1Trend === 'bullish' && sig.direction === 'SHORT') {
-      sig.score = -99;
-      sig.blocked = `SHORT blocked — confirmed uptrend (EMA200 bullish + h1 bullish). Only LONG from support.`;
-      continue;
-    }
-    if (ema200_bias === 'bearish' && h1Trend === 'bearish' && sig.direction === 'LONG') {
-      sig.score = -99;
-      sig.blocked = `LONG blocked — confirmed downtrend (EMA200 bearish + h1 bearish). Only SHORT from resistance.`;
-      continue;
-    }
-    // Single-confluece bias: EMA200 bullish but h1 neutral/bearish (or vice versa) — allow with penalty.
+    // EMA200 is the macro trend — it overrides everything else.
+    // Above EMA200 = bull market = LONG only, no SHORTs under any condition.
+    // Below EMA200 = bear market = SHORT only, no LONGs under any condition.
+    // h1 pullbacks don't change this — in a bull market you BUY dips, not short them.
     if (ema200_bias === 'bullish' && sig.direction === 'SHORT') {
-      if (sig.setup === 'BOS_SHORT' || sig.setup === 'RESIST_REJECT') {
-        sig.score -= 4; // EMA200 bullish but h1 not confirmed — caution
-      } else {
-        sig.score = -99;
-        sig.blocked = `SHORT blocked — price above EMA200 (bullish bias)`;
-        continue;
-      }
+      sig.score = -99;
+      sig.blocked = `SHORT blocked — price above EMA200 (bull market). Only LONG.`;
+      continue;
     }
     if (ema200_bias === 'bearish' && sig.direction === 'LONG') {
-      if (sig.setup === 'BOS_LONG') {
-        sig.score -= 3; // penalty only — breakouts above resistance can start below EMA200
-      } else {
-        sig.score = -99;
-        sig.blocked = `LONG blocked — price below EMA200 (bearish bias per PDF)`;
-        continue;
-      }
+      sig.score = -99;
+      sig.blocked = `LONG blocked — price below EMA200 (bear market). Only SHORT.`;
+      continue;
     }
 
     // VWAP + OP bias (PDF: "avoid entering in between VWAP and OP if gap is small")
