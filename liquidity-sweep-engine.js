@@ -2061,6 +2061,68 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     }
   } // end EMA200_CROSS_LONG gate
 
+  // ── Strategy: EMA200 Fail SHORT (failed reclaim = short) ──
+  // Mirror of EMA200_CROSS_LONG. Price bounces up above EMA200 (fake-out),
+  // then closes back below it — confirmed failure. Strong SHORT signal.
+  // Example: price dumps, bounces to 85.50 crossing EMA200 at 85.39,
+  // then closes 85.29 (back below EMA200) — bot should short that rejection.
+  if (!enabledStrategies || enabledStrategies.EMA200_FAIL_SHORT !== false) {
+    if (parsed15.length >= 22 && rsi14 !== null && ema200_15m !== null) {
+      const lastC = parsed15[parsed15.length - 2]; // last completed candle
+      const prevC = parsed15[parsed15.length - 3];
+      const c3    = parsed15[parsed15.length - 4];
+
+      // Previous candle(s) closed above EMA200 (price was trying to reclaim)
+      const prevAboveEma = prevC.close > ema200_15m || prevC.high > ema200_15m;
+      // Last candle closes back BELOW EMA200 (failed reclaim)
+      const lastBelowEma = lastC.close < ema200_15m;
+      // Last candle wicked above EMA200 but closed below (the classic fail pattern)
+      const wickedAbove  = lastC.high > ema200_15m;
+
+      // Bearish conviction: red candle, body meaningful
+      const lastRed     = lastC.close < lastC.open;
+      const bodyPct     = (lastC.open - lastC.close) / lastC.open;
+      const strongClose = bodyPct > 0.001;
+
+      // RSI not deeply oversold (we're shorting a failed bounce, not a bottom)
+      const rsiOk = rsi14 >= 30 && rsi14 <= 70;
+
+      // Current price is below EMA200 (failure confirmed, not bouncing back)
+      const priceBelowEma = price < ema200_15m;
+
+      if (prevAboveEma && lastBelowEma && (wickedAbove || lastRed) && strongClose && rsiOk && priceBelowEma) {
+        const atr     = calcATR(parsed15);
+        const slPrice = Math.max(lastC.high, ema200_15m * 1.001); // SL above EMA200 fail zone
+        const slDist  = (slPrice - price) / price;
+        const tpPrice = price - atr * 2;
+        const rr      = (atr * 2) / (price * slDist);
+
+        if (slDist > 0.001 && slDist < 0.025 && rr >= 1.2) {
+          let score = 7; // higher base — EMA200 rejection is a strong signal
+          if (rsi14 >= 45 && rsi14 <= 65) score += 2; // RSI in rejection zone
+          if (wickedAbove && lastRed)      score += 2; // wick above EMA then closed below = textbook fail
+          if (bodyPct > 0.003)             score += 2; // strong red body
+
+          const avg15Vol = parsed15.slice(-20).reduce((s, c) => s + c.volume, 0) / 20;
+          if (lastC.volume > avg15Vol * 1.3)      score += 3; // high volume confirms rejection
+          else if (lastC.volume > avg15Vol * 1.1) score += 2;
+
+          signals.push({
+            symbol, direction: 'SHORT',
+            price, lastPrice: price,
+            sl: slPrice, tp1: tpPrice,
+            tp2: price - atr * 3,
+            tp3: price - atr * 4,
+            slDist, rr: Math.round(rr * 10) / 10,
+            setup: 'EMA200_FAIL_SHORT', setupName: 'EMA200 Fail SHORT',
+            score,
+            bypassEmaBias: true, // this IS the bearish signal at EMA200 resistance
+          });
+        }
+      }
+    }
+  } // end EMA200_FAIL_SHORT gate
+
   if (!signals.length) return null;
 
   // Apply confluence bonuses + global filters to all signals
@@ -2072,9 +2134,13 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     // Below EMA200 = bear market = SHORT only, no LONGs under any condition.
     // h1 pullbacks don't change this — in a bull market you BUY dips, not short them.
     if (ema200_bias === 'bullish' && sig.direction === 'SHORT') {
-      sig.score = -99;
-      sig.blocked = `SHORT blocked — price above EMA200 (bull market). Only LONG.`;
-      continue;
+      // EMA200_FAIL_SHORT is exempt — it IS the EMA200 rejection (price tried to
+      // stay above EMA200 but failed and closed back below it).
+      if (!sig.bypassEmaBias) {
+        sig.score = -99;
+        sig.blocked = `SHORT blocked — price above EMA200 (bull market). Only LONG.`;
+        continue;
+      }
     }
     if (ema200_bias === 'bearish' && sig.direction === 'LONG') {
       // EMA200_CROSS_LONG is exempt — it IS the reversal cross back above EMA200.
