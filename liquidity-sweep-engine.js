@@ -2061,6 +2061,70 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     }
   } // end EMA200_CROSS_LONG gate
 
+  // ── Strategy: EMA200 Approach LONG (bounce heading back to EMA200) ──
+  // Price was below EMA200, dropped hard, then reverses upward with momentum.
+  // Price is within 1% below EMA200 — heading toward reclaim.
+  // This catches the bounce BEFORE the EMA200 cross, so we enter early.
+  // Example: EMA200 at 85.35, price dropped to 85.00, bounced to 85.22 (0.15% below EMA200)
+  // → strong momentum bounce approaching EMA200 = LONG entry.
+  if (!enabledStrategies || enabledStrategies.EMA200_APPROACH_LONG !== false) {
+    if (parsed15.length >= 22 && rsi14 !== null && ema200_15m !== null) {
+      const lastC = parsed15[parsed15.length - 2];
+      const prevC = parsed15[parsed15.length - 3];
+      const c3    = parsed15[parsed15.length - 4];
+
+      // Price is below EMA200 but within 1% of it (approaching from below)
+      const distBelowEma = (ema200_15m - price) / ema200_15m;
+      const nearBelowEma = distBelowEma > 0 && distBelowEma <= 0.010;
+
+      // Prior drop: at least one of the last 3 candles was a big red candle
+      const hadSharpDrop = c3.close < c3.open || prevC.close < prevC.open;
+
+      // Reversal momentum: last 2 candles both green (bounce confirmed)
+      const lastGreen = lastC.close > lastC.open;
+      const prevGreen = prevC.close > prevC.open;
+      const bothGreen = lastGreen && prevGreen;
+
+      // Strong bounce body — not just a tiny green doji
+      const lastBodyPct = (lastC.close - lastC.open) / lastC.open;
+      const strongBody  = lastBodyPct > 0.001;
+
+      // RSI recovering — was oversold, now moving up (not already overbought)
+      const rsiOk = rsi14 >= 28 && rsi14 <= 60;
+
+      if (nearBelowEma && hadSharpDrop && bothGreen && strongBody && rsiOk) {
+        const atr     = calcATR(parsed15);
+        const slPrice = Math.min(prevC.low, lastC.low) * 0.999; // SL below bounce low
+        const slDist  = (price - slPrice) / price;
+        const tpPrice = price + atr * 2; // TP above (ideally at/through EMA200)
+        const rr      = (atr * 2) / (price * slDist);
+
+        if (slDist > 0.001 && slDist < 0.02 && rr >= 1.2) {
+          let score = 6;
+          if (distBelowEma <= 0.003)  score += 2; // very close to EMA200 = high conviction
+          if (rsi14 >= 30 && rsi14 <= 50) score += 2; // RSI recovering from oversold
+          if (hadSharpDrop && bothGreen)   score += 2; // drop then reversal = clean setup
+
+          const avg15Vol = parsed15.slice(-20).reduce((s, c) => s + c.volume, 0) / 20;
+          if (lastC.volume > avg15Vol * 1.3)      score += 3;
+          else if (lastC.volume > avg15Vol * 1.1) score += 2;
+
+          signals.push({
+            symbol, direction: 'LONG',
+            price, lastPrice: price,
+            sl: slPrice, tp1: tpPrice,
+            tp2: price + atr * 3,
+            tp3: price + atr * 4,
+            slDist, rr: Math.round(rr * 10) / 10,
+            setup: 'EMA200_APPROACH_LONG', setupName: 'EMA200 Approach LONG',
+            score,
+            bypassEmaBias: true, // price below EMA200 but heading back — exempt from bearish block
+          });
+        }
+      }
+    }
+  } // end EMA200_APPROACH_LONG gate
+
   // ── Strategy: EMA200 Fail SHORT (failed reclaim = short) ──
   // Mirror of EMA200_CROSS_LONG. Price bounces up above EMA200 (fake-out),
   // then closes back below it — confirmed failure. Strong SHORT signal.
