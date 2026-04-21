@@ -991,7 +991,7 @@ function detectBRR(candles1h, candles15m, candles1m, cfg = {}) {
           const last1m = parsed1[parsed1.length - 1];
           if (last1m.close <= levelPrice) continue;
 
-          const baseScore = 7;
+          const baseScore = 8;
           const fibBonus = fibConfluence ? 4 : 0;
           const momentumBonus = htf.momentum === 'bullish' ? 2 : 0;
           const strongHTFBonus = htf.trend === 'bullish' ? 2 : 0; // full HH+HL trend
@@ -1046,7 +1046,7 @@ function detectBRR(candles1h, candles15m, candles1m, cfg = {}) {
           const last1m = parsed1[parsed1.length - 1];
           if (last1m.close >= levelPrice) continue;
 
-          const baseScore = 7;
+          const baseScore = 8;
           const fibBonus = fibConfluence ? 4 : 0;
           const momentumBonus = htf.momentum === 'bearish' ? 2 : 0;
           const strongHTFBonus = htf.trend === 'bearish' ? 2 : 0;
@@ -1377,10 +1377,8 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
   const atrPct = atr15 / price;
   if (atrPct < 0.002 || atrPct > 0.03) return null; // 0.2% - 3% ATR range
 
-  // RSI filter — thresholds come from active genome (strategyCfg) or defaults
-  const rsi14  = calcRSI(parsed15);
-  const RSI_OB = strategyCfg.RSI_OB || 75; // reject LONG if RSI above this
-  const RSI_OS = strategyCfg.RSI_OS || 25; // reject SHORT if RSI below this
+  // RSI filter
+  const rsi14 = calcRSI(parsed15);
 
   // 1h trend + EMA200 bias (PDF: "above MA200 → look long, below → look short")
   let h1Trend = 'neutral';
@@ -1391,34 +1389,9 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     const h1Closes = parsed1h.map(c => c.close);
     const h1Ema9  = calcEMA(h1Closes, 9);
     h1Ema21 = calcEMA(h1Closes, 21);
-
-    // EMA cross gives the base trend direction
-    let emaTrend = 'neutral';
     if (h1Ema9 !== null && h1Ema21 !== null) {
-      emaTrend = h1Ema9 > h1Ema21 ? 'bullish' : 'bearish';
+      h1Trend = h1Ema9 > h1Ema21 ? 'bullish' : 'bearish';
     }
-
-    // Recent momentum override — EMA9/21 lags 3-6 candles on sharp moves.
-    // If 3 of the last 4 completed 1h candles closed DOWN (bearish momentum),
-    // override a "bullish" EMA reading to neutral so we stop entering LONGs
-    // into a falling market. Same logic inverted for SHORT entries.
-    const recent4 = parsed1h.slice(-5, -1); // last 4 completed candles (exclude forming)
-    const bearishCount = recent4.filter(c => c.close < c.open).length;
-    const bullishCount = recent4.filter(c => c.close > c.open).length;
-
-    if (emaTrend === 'bullish' && bearishCount >= 3) {
-      // EMAs haven't crossed yet but 3/4 recent 1h candles are red — price IS falling.
-      // Override to 'bearish' (not just neutral) so the full -4 counter-trend penalty
-      // applies to LONG signals. Stops buying LONGs into a falling 1h market.
-      h1Trend = 'bearish';
-    } else if (emaTrend === 'bearish' && bullishCount >= 3) {
-      // EMA says bearish but price is recovering — override to 'bullish' so we don't
-      // keep shorting into a bounce.
-      h1Trend = 'bullish';
-    } else {
-      h1Trend = emaTrend;
-    }
-
     // EMA200 needs ≥200 candles — use whatever we have (60 is often the max fetched)
     // Fall back to EMA55 as a medium-term proxy when <200 bars available
     const ema200period = Math.min(200, h1Closes.length - 1);
@@ -1486,6 +1459,30 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
   const recentRange = recentHigh - recentLow;
   const priceInRange = recentRange > 0 ? (price - recentLow) / recentRange : 0.5; // 0=bottom, 1=top
 
+  // ── SWING POINT PROXIMITY (buy HL/LL, sell HH/LH) ────────
+  // Detect 15m pivot swing lows and highs for structural entry quality.
+  // A LONG entry must be near a swing low (HL or LL), a SHORT near a swing high.
+  const structSwingLows  = [];
+  const structSwingHighs = [];
+  for (let i = 2; i < parsed15.length - 1; i++) {
+    if (parsed15[i].low  < parsed15[i-1].low  && parsed15[i].low  < parsed15[i+1].low)  structSwingLows.push(parsed15[i].low);
+    if (parsed15[i].high > parsed15[i-1].high && parsed15[i].high > parsed15[i+1].high) structSwingHighs.push(parsed15[i].high);
+  }
+  // Nearest swing low AT or below current price (support below us)
+  const nearestSwingLow  = [...structSwingLows].filter(l => l <= price * 1.002).sort((a, b) => b - a)[0] || null;
+  // Nearest swing high AT or above current price (resistance above us)
+  const nearestSwingHigh = [...structSwingHighs].filter(h => h >= price * 0.998).sort((a, b) => a - b)[0] || null;
+
+  // ── 1m SPIKE DETECTION ───────────────────────────────────
+  // The 15m RSI lags by up to 3 candles during a short-timeframe spike.
+  // Directly measure 1m momentum: if price moved >1.0% in the last 3×1m candles
+  // it's an active spike — entering in the spike direction means buying the top.
+  let spike3mPct = 0;
+  if (parsed1.length >= 3) {
+    const spBase = parsed1[parsed1.length - 3].open;
+    if (spBase > 0) spike3mPct = (parsed1[parsed1.length - 1].close - spBase) / spBase;
+  }
+
   // Volume on latest candle
   const lastVolOK = parsed15.length >= 22 && hasVolumeConfirm(parsed15, parsed15.length - 1, 1.0);
 
@@ -1517,7 +1514,7 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
         tp3: sweep.direction === 'LONG' ? sweep.entryPrice + (tpDist * price * 2) : sweep.entryPrice - (tpDist * price * 2),
         slDist, setup: 'LIQUIDITY_SWEEP',
         setupName: `${sweep.direction}-LIQ-SWEEP`,
-        score: 4 + (rr > 2 ? 2 : 0),
+        score: 6 + (rr > 2 ? 2 : 0),
         rr: Math.round(rr * 10) / 10,
       });
     }
@@ -1547,7 +1544,7 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
         tp3: hunt.direction === 'LONG' ? hunt.entryPrice + (tpDist * price * 2) : hunt.entryPrice - (tpDist * price * 2),
         slDist, setup: 'STOP_LOSS_HUNT',
         setupName: `${hunt.direction}-SL-HUNT`,
-        score: 5 + Math.min(touchBonus, 3),
+        score: 7 + Math.min(touchBonus, 3),
         rr: Math.round(rr * 10) / 10,
       });
     }
@@ -1576,7 +1573,7 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
         tp3: momentum.direction === 'LONG' ? momentum.entryPrice + (tpDist * price * 2) : momentum.entryPrice - (tpDist * price * 2),
         slDist, setup: 'MOMENTUM_SCALP',
         setupName: `${momentum.direction}-MOM-SCALP`,
-        score: 3,
+        score: 5,
         rr: Math.round(rr * 10) / 10,
       });
     }
@@ -1680,558 +1677,23 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     }
   } // end SMC_HL_STRUCTURE gate
 
-  // ── Strategy 7: Break of Structure SHORT (BOS_SHORT) ──────
-  // Uses Zeiierman Curved SMC on 1m to detect LH LH (Lower Highs) structure.
-  // LH LH on 1m = smart money is printing lower highs = trend shifting down.
-  // This is far more accurate than counting bearish candles — it identifies the
-  // structural shift at the beginning of the move.
-  //
-  // Flow:
-  //   1. 15m: find support_low = lowest low of last 20 closed candles
-  //   2. 15m: price within 0.3% of support (approaching or just breaking)
-  //   3. 1m: Zeiierman detects LH LH bearish structure (isBearish = true)
-  //   4. 1m: at least 1 of last 4 candles closed BELOW support (break started)
-  //   5. 1m: volume above average (institutional selling confirmed)
-  if (!enabledStrategies || enabledStrategies.BOS_SHORT !== false) {
-    if (parsed15.length >= 22 && parsed1.length >= 20 && rsi14 !== null && rsi14 < 65) {
-      const lookback15 = parsed15.slice(-20, -2);
-      const supportLow = Math.min(...lookback15.map(c => c.low));
-      const nearSupport = price <= supportLow * 1.003; // within 0.3% of support or below
-
-      if (nearSupport) {
-        // Zeiierman 1m structure: rmaLen=8, pivotLen=3 — tight enough for 1m noise
-        const struct1m   = detectCurvedStructure(parsed1, 8, 3);
-        const is1mBearish = struct1m && struct1m.isBearish;   // LH LH pattern confirmed
-        const shortProb   = (struct1m && struct1m.shortProbability) || 0;
-
-        // At least 1 of last 4 1m candles closed below support (break has started)
-        const last4m         = parsed1.slice(-4);
-        const anyBelowSupport = last4m.some(c => c.close < supportLow);
-
-        // 1m volume above average
-        const avg1mVol  = parsed1.slice(-20).reduce((s, c) => s + c.volume, 0) / 20;
-        const highVol1m = last4m.some(c => c.volume > avg1mVol * 1.2);
-
-        if (is1mBearish && anyBelowSupport && highVol1m) {
-          const atr        = calcATR(parsed15);
-          const entryPrice = price;
-          const slPrice    = supportLow * 1.003; // SL just above broken support (now resistance)
-          const slDist     = (slPrice - entryPrice) / entryPrice;
-
-          if (slDist > 0) {
-            const tp1 = entryPrice - atr * 2;
-            const rr  = (atr * 2) / (entryPrice * slDist);
-
-            let score = 7;
-            if (shortProb > 60) score += 2;  // high Zeiierman probability
-            if (shortProb > 80) score += 1;  // very high
-            if ((struct1m.lhCount || 0) >= 2) score += 1; // 2+ consecutive LH
-            if (rsi14 < 50)    score += 1;
-            if (h1Trend === 'bearish') score += 2;
-            if (ema9_15m !== null && ema21_15m !== null && ema9_15m < ema21_15m) score += 1;
-
-            signals.push({
-              symbol, direction: 'SHORT',
-              price: entryPrice, lastPrice: price,
-              sl: slPrice, tp1,
-              tp2: entryPrice - atr * 3,
-              tp3: entryPrice - atr * 4,
-              slDist: Math.abs(slDist), rr,
-              setup: 'BOS_SHORT', setupName: 'BOS-SHORT',
-              score,
-              bosSupport: supportLow, zeiierProb: shortProb,
-            });
-          }
-        }
-      }
-    }
-  } // end BOS_SHORT gate
-
-  // ── Strategy 8: Break of Structure LONG (BOS_LONG) ─────────
-  // Mirror of BOS_SHORT — Zeiierman 1m HL HL (Higher Lows) structure on breakout UP.
-  // Fires when price breaks above resistance with HL HL on 1m = momentum starting.
-  // Catches breakouts at the beginning of the move, not after price has already run.
-  if (!enabledStrategies || enabledStrategies.BOS_LONG !== false) {
-    if (parsed15.length >= 22 && parsed1.length >= 20 && rsi14 !== null && rsi14 > 35) {
-      const lookback15    = parsed15.slice(-20, -2);
-      const resistanceHigh = Math.max(...lookback15.map(c => c.high));
-      const nearResistance = price >= resistanceHigh * 0.997; // within 0.3% below resistance or above
-
-      if (nearResistance) {
-        // Zeiierman 1m structure: HL HL = smart money buying higher lows = trend shifting up
-        const struct1m    = detectCurvedStructure(parsed1, 8, 3);
-        const is1mBullish  = struct1m && struct1m.isBullish;  // HL HL pattern confirmed
-        const longProb     = (struct1m && struct1m.longProbability) || 0;
-
-        // At least 1 of last 4 1m candles closed ABOVE resistance (break started)
-        const last4m          = parsed1.slice(-4);
-        const anyAboveResist  = last4m.some(c => c.close > resistanceHigh);
-
-        // 1m volume above average
-        const avg1mVol   = parsed1.slice(-20).reduce((s, c) => s + c.volume, 0) / 20;
-        const highVol1m  = last4m.some(c => c.volume > avg1mVol * 1.2);
-
-        if (is1mBullish && anyAboveResist && highVol1m) {
-          const atr        = calcATR(parsed15);
-          const entryPrice = price;
-          const slPrice    = resistanceHigh * 0.997; // SL just below broken resistance (now support)
-          const slDist     = (entryPrice - slPrice) / entryPrice;
-
-          if (slDist > 0) {
-            const tp1 = entryPrice + atr * 2;
-            const rr  = (atr * 2) / (entryPrice * slDist);
-
-            let score = 7;
-            if (longProb > 60) score += 2;
-            if (longProb > 80) score += 1;
-            if ((struct1m.hlCount || 0) >= 2) score += 1; // 2+ consecutive HL
-            if (rsi14 > 50)    score += 1;
-            if (h1Trend === 'bullish') score += 2;
-            if (ema9_15m !== null && ema21_15m !== null && ema9_15m > ema21_15m) score += 1;
-
-            signals.push({
-              symbol, direction: 'LONG',
-              price: entryPrice, lastPrice: price,
-              sl: slPrice, tp1,
-              tp2: entryPrice + atr * 3,
-              tp3: entryPrice + atr * 4,
-              slDist: Math.abs(slDist), rr,
-              setup: 'BOS_LONG', setupName: 'BOS-LONG',
-              score,
-              bosResistance: resistanceHigh, zeiierProb: longProb,
-            });
-          }
-        }
-      }
-    }
-  } // end BOS_LONG gate
-
-  // ── Strategy 9: Resistance Rejection SHORT (RESIST_REJECT) ────────────────
-  // Catches the SHORT AT THE TOP before price breaks — a reversal strategy.
-  // BOS_SHORT fires at SUPPORT breakdowns. This fires at RESISTANCE rejections.
-  //
-  // Trigger:
-  //   1. 15m: price in top 8% of last 20-candle range (at or near the high)
-  //   2. 1m: bearish rejection — upper wick > 1.8× body AND close < open (shooting star)
-  //       OR last 2 of 3 candles closed bearish with declining highs (LH forming)
-  //   3. RSI > 58 — approaching overbought (not shorting at a floor)
-  //   4. Volume spike on rejection candle — institutional distribution
-  //   5. h1Trend not bullish (avoid shorting strong uptrends) OR 1m structure very bearish
-  if (!enabledStrategies || enabledStrategies.RESIST_REJECT !== false) {
-    if (parsed15.length >= 22 && parsed1.length >= 10 && rsi14 !== null && rsi14 > 55) {
-      const lookback20    = parsed15.slice(-20, -2);
-      const rangeHigh20   = Math.max(...lookback20.map(c => c.high));
-      const rangeLow20    = Math.min(...lookback20.map(c => c.low));
-      const rangeSize     = rangeHigh20 - rangeLow20;
-      const priceInRange  = rangeSize > 0 ? (price - rangeLow20) / rangeSize : 0.5;
-
-      // Must be in the top 8% of the 20-candle range
-      if (priceInRange >= 0.92 && rangeSize > 0) {
-        const last3m   = parsed1.slice(-4, -1); // last 3 completed 1m candles
-        const lastM    = parsed1[parsed1.length - 2]; // most recent completed 1m
-
-        // Bearish rejection candle: upper wick > 1.8× candle body
-        const body     = Math.abs(lastM.close - lastM.open);
-        const upperW   = lastM.high - Math.max(lastM.close, lastM.open);
-        const isRejectionCandle = body > 0 && upperW > body * 1.8 && lastM.close < lastM.open;
-
-        // OR: 2 of last 3 completed 1m candles are bearish + declining highs (LH forming)
-        const bearish1m = last3m.filter(c => c.close < c.open).length;
-        const declHigh  = last3m.length >= 2 && last3m[last3m.length - 1].high < last3m[0].high;
-        const isLHForming = bearish1m >= 2 && declHigh;
-
-        if (isRejectionCandle || isLHForming) {
-          // Volume confirmation on rejection
-          const avg1mVol  = parsed1.slice(-20).reduce((s, c) => s + c.volume, 0) / 20;
-          const highVol   = lastM.volume > avg1mVol * 1.1;
-
-          // Allow RESIST_REJECT even in bullish h1 IF there's a clear rejection candle + high volume.
-          // Resistance rejections happen in uptrends too — price hits a major level and reverses.
-          // BOS_SHORT is blocked in uptrends (speculative), but RESIST_REJECT has its own quality gate.
-          const trendOk   = h1Trend !== 'bullish' || (isRejectionCandle && highVol);
-
-          if (trendOk) {
-            const atr      = calcATR(parsed15);
-            const slPrice  = rangeHigh20 * 1.002; // SL just above the range high
-            const slDist   = (slPrice - price) / price;
-
-            if (slDist > 0 && slDist < 0.015) { // SL within 1.5% — tight risk
-              const tp1 = price - atr * 2;
-              const rr  = (atr * 2) / (price * slDist);
-
-              let score = 6;
-              if (isRejectionCandle)          score += 2; // clean shooting star / pin bar
-              if (isLHForming)                score += 1; // LH structure forming
-              if (rsi14 > 65)                 score += 1; // overbought = more likely to reject
-              if (highVol)                    score += 1; // volume confirms distribution
-              if (h1Trend === 'bearish')      score += 2; // trend aligned
-              if (ema9_15m !== null && ema21_15m !== null && ema9_15m < ema21_15m) score += 1;
-              if (priceInRange >= 0.96)       score += 1; // very near the top
-
-              signals.push({
-                symbol, direction: 'SHORT',
-                price, lastPrice: price,
-                sl: slPrice, tp1,
-                tp2: price - atr * 3,
-                tp3: price - atr * 4,
-                slDist: Math.abs(slDist), rr,
-                setup: 'RESIST_REJECT', setupName: 'Resistance Rejection',
-                score,
-                rangeHigh: rangeHigh20,
-              });
-            }
-          }
-        }
-      }
-    }
-  } // end RESIST_REJECT gate
-
-  // ── Strategy: EMA Pullback LONG (trend-following dip buy) ──
-  // In a confirmed uptrend (EMA200 bullish + h1 bullish), buy when price
-  // pulls back to the EMA21 on 15m and shows a bullish reversal candle.
-  // This is the "buy dips in an uptrend" logic the user wants.
-  if (!enabledStrategies || enabledStrategies.EMA_PULLBACK !== false) {
-    if (ema200_bias === 'bullish' && h1Trend === 'bullish' && parsed15.length >= 22 && rsi14 !== null) {
-      const lastC   = parsed15[parsed15.length - 2]; // last completed candle
-      const prevC   = parsed15[parsed15.length - 3];
-      const ema21   = ema21_15m;
-      const ema9    = ema9_15m;
-
-      if (ema21 !== null && ema9 !== null) {
-        // Price pulled back to within 0.5% of EMA21
-        const distToEma = (price - ema21) / ema21;
-        const nearEma   = distToEma >= -0.005 && distToEma <= 0.008;
-
-        // Bullish reversal candle: last candle closed green after touching EMA
-        const lastGreen  = lastC.close > lastC.open;
-        const prevRed    = prevC.close < prevC.open;
-        const touchedEma = lastC.low <= ema21 * 1.003; // wick touched near EMA
-
-        // RSI in buy zone (not overbought)
-        const rsiOk = rsi14 >= 35 && rsi14 <= 65;
-
-        if (nearEma && lastGreen && prevRed && touchedEma && rsiOk) {
-          const atr      = calcATR(parsed15);
-          const slPrice  = Math.min(lastC.low, ema21) * 0.998; // SL below candle low / EMA
-          const slDist   = (price - slPrice) / price;
-          const tpPrice  = price + atr * 2;
-          const rr       = (atr * 2) / (price * slDist);
-
-          if (slDist > 0.001 && slDist < 0.02 && rr >= 1.2) {
-            let score = 6;
-            if (rsi14 >= 40 && rsi14 <= 55) score += 2; // ideal pullback RSI
-            if (touchedEma)                 score += 2; // wick hit EMA = clean bounce
-            if (prevRed && lastGreen)        score += 2; // reversal candle pattern
-            const avg15Vol = parsed15.slice(-20).reduce((s, c) => s + c.volume, 0) / 20;
-            if (lastC.volume > avg15Vol * 1.1) score += 2; // volume on bounce
-
-            signals.push({
-              symbol, direction: 'LONG',
-              price, lastPrice: price,
-              sl: slPrice, tp1: tpPrice,
-              tp2: price + atr * 3,
-              tp3: price + atr * 4,
-              slDist, rr: Math.round(rr * 10) / 10,
-              setup: 'EMA_PULLBACK', setupName: 'EMA Pullback LONG',
-              score,
-            });
-          }
-        }
-      }
-    }
-  } // end EMA_PULLBACK gate
-
-  // ── Strategy: EMA Breakdown SHORT (trend-following drop sell) ──
-  // Mirror of EMA_PULLBACK but for bear markets.
-  // When EMA200 is bearish + h1 bearish, short when price rallies up to EMA21
-  // and gets rejected (red reversal candle after touching EMA from below).
-  if (!enabledStrategies || enabledStrategies.EMA_BREAKDOWN !== false) {
-    if (ema200_bias === 'bearish' && h1Trend === 'bearish' && parsed15.length >= 22 && rsi14 !== null) {
-      const lastC = parsed15[parsed15.length - 2];
-      const prevC = parsed15[parsed15.length - 3];
-      const ema21 = ema21_15m;
-      const ema9  = ema9_15m;
-
-      if (ema21 !== null && ema9 !== null) {
-        // Price bounced up to near EMA21 but rejected
-        const distToEma = (price - ema21) / ema21;
-        const nearEma   = distToEma >= -0.008 && distToEma <= 0.005;
-
-        // Bearish rejection candle: last candle red after touching EMA from below
-        const lastRed  = lastC.close < lastC.open;
-        const prevGreen = prevC.close > prevC.open;
-        const touchedEma = lastC.high >= ema21 * 0.997; // wick touched near EMA
-
-        // RSI in sell zone (not oversold)
-        const rsiOk = rsi14 >= 35 && rsi14 <= 65;
-
-        // Reversal momentum guard: if the bounce candles are strong and accelerating,
-        // it's a V-reversal, NOT a dead-cat bounce to short.
-        // Strong bounce = prevC body > 0.15% AND prevC volume >= recent average.
-        // Accelerating = lastC volume > prevC volume (momentum still building).
-        const avg15VolGuard = parsed15.slice(-10).reduce((s, c) => s + c.volume, 0) / 10;
-        const prevBodyPct   = (prevC.close - prevC.open) / prevC.open; // positive = green body
-        const strongBounce  = prevBodyPct > 0.0015 && prevC.volume >= avg15VolGuard * 0.9;
-        const accelerating  = lastC.volume > prevC.volume;
-        const isReversal    = strongBounce && accelerating;
-
-        if (nearEma && lastRed && prevGreen && touchedEma && rsiOk && !isReversal) {
-          const atr     = calcATR(parsed15);
-          const slPrice = Math.max(lastC.high, ema21) * 1.002; // SL above candle high / EMA
-          const slDist  = (slPrice - price) / price;
-          const tpPrice = price - atr * 2;
-          const rr      = (atr * 2) / (price * slDist);
-
-          if (slDist > 0.001 && slDist < 0.02 && rr >= 1.2) {
-            let score = 6;
-            if (rsi14 >= 45 && rsi14 <= 60) score += 2; // ideal rejection RSI
-            if (touchedEma)                 score += 2; // wick hit EMA = clean reject
-            if (prevGreen && lastRed)        score += 2; // rejection candle pattern
-            const avg15Vol = parsed15.slice(-20).reduce((s, c) => s + c.volume, 0) / 20;
-            if (lastC.volume > avg15Vol * 1.1) score += 2; // volume on rejection
-
-            signals.push({
-              symbol, direction: 'SHORT',
-              price, lastPrice: price,
-              sl: slPrice, tp1: tpPrice,
-              tp2: price - atr * 3,
-              tp3: price - atr * 4,
-              slDist, rr: Math.round(rr * 10) / 10,
-              setup: 'EMA_BREAKDOWN', setupName: 'EMA Breakdown SHORT',
-              score,
-            });
-          }
-        }
-      }
-    }
-  } // end EMA_BREAKDOWN gate
-
-  // ── Strategy: EMA200 Cross LONG (reversal — price reclaims EMA200) ──
-  // When price was below EMA200 (bearish) but the last completed candle closes
-  // ABOVE EMA200 with momentum and volume — this is the reversal cross.
-  // Exempt from the EMA200 bearish block because it IS the cross itself.
-  // This catches the "V-reversal" where price dumps then rockets back above EMA200.
-  if (!enabledStrategies || enabledStrategies.EMA200_CROSS_LONG !== false) {
-    if (parsed15.length >= 22 && rsi14 !== null && ema200_15m !== null) {
-      const lastC = parsed15[parsed15.length - 2]; // last completed candle
-      const prevC = parsed15[parsed15.length - 3];
-      const c3    = parsed15[parsed15.length - 4];
-
-      // Previous candle(s) were below EMA200, last candle closed above it
-      const prevBelowEma = prevC.close < ema200_15m;
-      const lastAboveEma = lastC.close > ema200_15m;
-
-      // Strong bullish cross candle: closed above EMA200 with conviction
-      const crossBody    = lastC.close - lastC.open;
-      const crossBodyPct = crossBody / lastC.open;
-      const strongCross  = crossBodyPct > 0.001; // body > 0.1% — not a doji
-
-      // Price had been in a downtrend before the cross (at least 2 red candles)
-      const wasDowntrend = prevC.close < prevC.open || c3.close < c3.open;
-
-      // RSI recovering from oversold but not yet overbought
-      const rsiOk = rsi14 >= 30 && rsi14 <= 65;
-
-      // Current price is above EMA200 (confirm cross held)
-      const priceAboveEma = price > ema200_15m;
-
-      if (prevBelowEma && lastAboveEma && strongCross && wasDowntrend && rsiOk && priceAboveEma) {
-        const atr     = calcATR(parsed15);
-        const slPrice = Math.min(lastC.low, ema200_15m * 0.999); // SL below EMA200 cross
-        const slDist  = (price - slPrice) / price;
-        const tpPrice = price + atr * 2;
-        const rr      = (atr * 2) / (price * slDist);
-
-        if (slDist > 0.001 && slDist < 0.025 && rr >= 1.2) {
-          let score = 7; // higher base — EMA200 reclaim is a strong signal
-          if (rsi14 >= 35 && rsi14 <= 55) score += 2; // RSI in recovery zone
-          if (crossBodyPct > 0.003)        score += 2; // big conviction cross candle
-          if (wasDowntrend)                score += 1; // confirmed prior downtrend
-
-          const avg15Vol = parsed15.slice(-20).reduce((s, c) => s + c.volume, 0) / 20;
-          if (lastC.volume > avg15Vol * 1.3) score += 3; // strong volume on cross — most important
-          else if (lastC.volume > avg15Vol * 1.1) score += 2;
-
-          // NOTE: this signal bypasses the EMA200 bearish LONG block below —
-          // it is added directly with setup tag 'EMA200_CROSS_LONG' so the
-          // filter logic can whitelist it.
-          signals.push({
-            symbol, direction: 'LONG',
-            price, lastPrice: price,
-            sl: slPrice, tp1: tpPrice,
-            tp2: price + atr * 3,
-            tp3: price + atr * 4,
-            slDist, rr: Math.round(rr * 10) / 10,
-            setup: 'EMA200_CROSS_LONG', setupName: 'EMA200 Reclaim LONG',
-            score,
-            bypassEmaBias: true, // reversal cross — exempt from EMA200 bearish LONG block
-          });
-        }
-      }
-    }
-  } // end EMA200_CROSS_LONG gate
-
-  // ── Strategy: EMA200 Approach LONG (bounce heading back to EMA200) ──
-  // Price was below EMA200, dropped hard, then reverses upward with momentum.
-  // Price is within 1% below EMA200 — heading toward reclaim.
-  // This catches the bounce BEFORE the EMA200 cross, so we enter early.
-  // Example: EMA200 at 85.35, price dropped to 85.00, bounced to 85.22 (0.15% below EMA200)
-  // → strong momentum bounce approaching EMA200 = LONG entry.
-  if (!enabledStrategies || enabledStrategies.EMA200_APPROACH_LONG !== false) {
-    if (parsed15.length >= 22 && rsi14 !== null && ema200_15m !== null) {
-      const lastC = parsed15[parsed15.length - 2];
-      const prevC = parsed15[parsed15.length - 3];
-      const c3    = parsed15[parsed15.length - 4];
-
-      // Price is below EMA200 but within 1% of it (approaching from below)
-      const distBelowEma = (ema200_15m - price) / ema200_15m;
-      const nearBelowEma = distBelowEma > 0 && distBelowEma <= 0.010;
-
-      // Prior drop: at least one of the last 3 candles was a big red candle
-      const hadSharpDrop = c3.close < c3.open || prevC.close < prevC.open;
-
-      // Reversal momentum: last 2 candles both green (bounce confirmed)
-      const lastGreen = lastC.close > lastC.open;
-      const prevGreen = prevC.close > prevC.open;
-      const bothGreen = lastGreen && prevGreen;
-
-      // Strong bounce body — not just a tiny green doji
-      const lastBodyPct = (lastC.close - lastC.open) / lastC.open;
-      const strongBody  = lastBodyPct > 0.001;
-
-      // RSI recovering — was oversold, now moving up (not already overbought)
-      const rsiOk = rsi14 >= 28 && rsi14 <= 60;
-
-      if (nearBelowEma && hadSharpDrop && bothGreen && strongBody && rsiOk) {
-        const atr     = calcATR(parsed15);
-        const slPrice = Math.min(prevC.low, lastC.low) * 0.999; // SL below bounce low
-        const slDist  = (price - slPrice) / price;
-        const tpPrice = price + atr * 2; // TP above (ideally at/through EMA200)
-        const rr      = (atr * 2) / (price * slDist);
-
-        if (slDist > 0.001 && slDist < 0.02 && rr >= 1.2) {
-          let score = 6;
-          if (distBelowEma <= 0.003)  score += 2; // very close to EMA200 = high conviction
-          if (rsi14 >= 30 && rsi14 <= 50) score += 2; // RSI recovering from oversold
-          if (hadSharpDrop && bothGreen)   score += 2; // drop then reversal = clean setup
-
-          const avg15Vol = parsed15.slice(-20).reduce((s, c) => s + c.volume, 0) / 20;
-          if (lastC.volume > avg15Vol * 1.3)      score += 3;
-          else if (lastC.volume > avg15Vol * 1.1) score += 2;
-
-          signals.push({
-            symbol, direction: 'LONG',
-            price, lastPrice: price,
-            sl: slPrice, tp1: tpPrice,
-            tp2: price + atr * 3,
-            tp3: price + atr * 4,
-            slDist, rr: Math.round(rr * 10) / 10,
-            setup: 'EMA200_APPROACH_LONG', setupName: 'EMA200 Approach LONG',
-            score,
-            bypassEmaBias: true, // price below EMA200 but heading back — exempt from bearish block
-          });
-        }
-      }
-    }
-  } // end EMA200_APPROACH_LONG gate
-
-  // ── Strategy: EMA200 Fail SHORT (failed reclaim = short) ──
-  // Mirror of EMA200_CROSS_LONG. Price bounces up above EMA200 (fake-out),
-  // then closes back below it — confirmed failure. Strong SHORT signal.
-  // Example: price dumps, bounces to 85.50 crossing EMA200 at 85.39,
-  // then closes 85.29 (back below EMA200) — bot should short that rejection.
-  if (!enabledStrategies || enabledStrategies.EMA200_FAIL_SHORT !== false) {
-    if (parsed15.length >= 22 && rsi14 !== null && ema200_15m !== null) {
-      const lastC = parsed15[parsed15.length - 2]; // last completed candle
-      const prevC = parsed15[parsed15.length - 3];
-      const c3    = parsed15[parsed15.length - 4];
-
-      // Previous candle(s) closed above EMA200 (price was trying to reclaim)
-      const prevAboveEma = prevC.close > ema200_15m || prevC.high > ema200_15m;
-      // Last candle closes back BELOW EMA200 (failed reclaim)
-      const lastBelowEma = lastC.close < ema200_15m;
-      // Last candle wicked above EMA200 but closed below (the classic fail pattern)
-      const wickedAbove  = lastC.high > ema200_15m;
-
-      // Bearish conviction: red candle, body meaningful
-      const lastRed     = lastC.close < lastC.open;
-      const bodyPct     = (lastC.open - lastC.close) / lastC.open;
-      const strongClose = bodyPct > 0.001;
-
-      // RSI not deeply oversold (we're shorting a failed bounce, not a bottom)
-      const rsiOk = rsi14 >= 30 && rsi14 <= 70;
-
-      // Current price is below EMA200 (failure confirmed, not bouncing back)
-      const priceBelowEma = price < ema200_15m;
-
-      // Reversal momentum guard: if prevC was a very strong green candle + volume surge,
-      // the move through EMA200 might be a genuine reversal, not a fake-out.
-      // Only short if the bounce looks weak/fading, not if it's accelerating.
-      const avg15VolF   = parsed15.slice(-10).reduce((s, c) => s + c.volume, 0) / 10;
-      const prevBodyF   = (prevC.close - prevC.open) / prevC.open; // positive if green
-      const strongBounceF = prevBodyF > 0.002 && prevC.volume > avg15VolF * 1.2;
-      const acceleratingF = lastC.volume > prevC.volume && lastC.close > lastC.open; // volume+price still up
-      const isReversalF   = strongBounceF && acceleratingF;
-
-      if (prevAboveEma && lastBelowEma && (wickedAbove || lastRed) && strongClose && rsiOk && priceBelowEma && !isReversalF) {
-        const atr     = calcATR(parsed15);
-        const slPrice = Math.max(lastC.high, ema200_15m * 1.001); // SL above EMA200 fail zone
-        const slDist  = (slPrice - price) / price;
-        const tpPrice = price - atr * 2;
-        const rr      = (atr * 2) / (price * slDist);
-
-        if (slDist > 0.001 && slDist < 0.025 && rr >= 1.2) {
-          let score = 7; // higher base — EMA200 rejection is a strong signal
-          if (rsi14 >= 45 && rsi14 <= 65) score += 2; // RSI in rejection zone
-          if (wickedAbove && lastRed)      score += 2; // wick above EMA then closed below = textbook fail
-          if (bodyPct > 0.003)             score += 2; // strong red body
-
-          const avg15Vol = parsed15.slice(-20).reduce((s, c) => s + c.volume, 0) / 20;
-          if (lastC.volume > avg15Vol * 1.3)      score += 3; // high volume confirms rejection
-          else if (lastC.volume > avg15Vol * 1.1) score += 2;
-
-          signals.push({
-            symbol, direction: 'SHORT',
-            price, lastPrice: price,
-            sl: slPrice, tp1: tpPrice,
-            tp2: price - atr * 3,
-            tp3: price - atr * 4,
-            slDist, rr: Math.round(rr * 10) / 10,
-            setup: 'EMA200_FAIL_SHORT', setupName: 'EMA200 Fail SHORT',
-            score,
-            bypassEmaBias: true, // this IS the bearish signal at EMA200 resistance
-          });
-        }
-      }
-    }
-  } // end EMA200_FAIL_SHORT gate
-
   if (!signals.length) return null;
 
   // Apply confluence bonuses + global filters to all signals
   for (const sig of signals) {
     // ── PDF HARD FILTERS ─────────────────────────────────────
 
-    // EMA200 is the macro trend — it overrides everything else.
-    // Above EMA200 = bull market = LONG only, no SHORTs under any condition.
-    // Below EMA200 = bear market = SHORT only, no LONGs under any condition.
-    // h1 pullbacks don't change this — in a bull market you BUY dips, not short them.
+    // EMA200 bias (PDF: "above MA200 → look long, below → look short")
+    // Hard block if direction conflicts with EMA200 trend
     if (ema200_bias === 'bullish' && sig.direction === 'SHORT') {
-      // EMA200_FAIL_SHORT is exempt — it IS the EMA200 rejection (price tried to
-      // stay above EMA200 but failed and closed back below it).
-      if (!sig.bypassEmaBias) {
-        sig.score = -99;
-        sig.blocked = `SHORT blocked — price above EMA200 (bull market). Only LONG.`;
-        continue;
-      }
+      sig.score = -99;
+      sig.blocked = `SHORT blocked — price above EMA200 (bullish bias per PDF)`;
+      continue;
     }
     if (ema200_bias === 'bearish' && sig.direction === 'LONG') {
-      // EMA200_CROSS_LONG is exempt — it IS the reversal cross back above EMA200.
-      if (!sig.bypassEmaBias) {
-        sig.score = -99;
-        sig.blocked = `LONG blocked — price below EMA200 (bear market). Only SHORT.`;
-        continue;
-      }
+      sig.score = -99;
+      sig.blocked = `LONG blocked — price below EMA200 (bearish bias per PDF)`;
+      continue;
     }
 
     // VWAP + OP bias (PDF: "avoid entering in between VWAP and OP if gap is small")
@@ -2269,15 +1731,10 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
       else if (rsi14 < 25) sig.score += 1; // oversold bounce possible
     }
     if (sig.direction === 'SHORT') {
-      // Reversal SHORT setups exempt from oversold RSI block — they SHORT bounces/rejections
-      // at EMA200 which happen when RSI is still recovering (can be 35-45 range).
-      const RSI_SHORT_EXEMPT = new Set(['BOS_SHORT', 'EMA200_FAIL_SHORT', 'EMA_BREAKDOWN']);
-      if (!RSI_SHORT_EXEMPT.has(sig.setup)) {
-        if (rsi14 < 42) { sig.score = -99; sig.blocked = 'SHORT rejected — RSI ' + rsi14.toFixed(0) + ' oversold, drop already done, chasing bottom'; }
-        else if (rsi14 < 50) sig.score -= 2; // slightly extended
-        else if (rsi14 >= 50 && rsi14 <= 70) sig.score += 2; // bounce zone — ideal sell
-        else if (rsi14 > 75) sig.score += 1; // overbought reversal possible
-      }
+      if (rsi14 < 30) { sig.score = -99; sig.blocked = 'SHORT rejected — RSI ' + rsi14.toFixed(0) + ' oversold, chasing'; }
+      else if (rsi14 < 45) sig.score -= 2; // slightly extended
+      else if (rsi14 >= 50 && rsi14 <= 70) sig.score += 2; // bounce zone — ideal sell
+      else if (rsi14 > 75) sig.score += 1; // overbought reversal possible
     }
 
     // EMA position: don't chase extended moves
@@ -2292,50 +1749,62 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
       if (entryQuality === 'extended_up') sig.score += 1; // sell the rally
     }
 
-    // Price position in range: LONG near bottom is good, LONG near top is chasing
+    // ── 1m SPIKE HARD BLOCK ──────────────────────────────────
+    // RSI(14) on 15m candles lags 3×5m candles behind a spike. Measure it
+    // directly: if price moved >1.0% in the last 3×1m candles, entering in
+    // the spike direction = buying the top / selling the bottom.
+    if (sig.direction === 'LONG' && spike3mPct > 0.010) {
+      sig.score = -99;
+      sig.blocked = `LONG blocked — 1m up-spike +${(spike3mPct * 100).toFixed(2)}% in 3 candles (chasing top)`;
+    }
+    if (sig.direction === 'SHORT' && spike3mPct < -0.010) {
+      sig.score = -99;
+      sig.blocked = `SHORT blocked — 1m down-spike ${(spike3mPct * 100).toFixed(2)}% in 3 candles (chasing bottom)`;
+    }
+
+    // Price position in range: LONG must be near the LOW, SHORT near the HIGH.
+    // Hard block if price is at the wrong extreme — never buy tops, never sell bottoms.
     if (sig.direction === 'LONG') {
-      // BOS_LONG fires AT resistance (high in range by definition) — exempt from "buying at top" penalty
-      if (priceInRange > 0.85 && sig.setup !== 'BOS_LONG') sig.score -= 3; // buying at the top — bad
-      if (priceInRange < 0.35) sig.score += 2; // buying near the bottom — good
+      if (priceInRange > 0.80) {
+        sig.score = -99;
+        sig.blocked = `LONG blocked — price at ${(priceInRange * 100).toFixed(0)}% of 5h range (top — should SHORT not LONG)`;
+      } else if (priceInRange < 0.35) sig.score += 2; // near the bottom — ideal HL/LL entry
+      else if (priceInRange > 0.65) sig.score -= 3;   // upper half but not blocked — risky
     }
     if (sig.direction === 'SHORT') {
-      // Reversal SHORT setups fire at EMA200 resistance — they can trigger when price
-      // is anywhere in the range (the rejection IS the signal, not a range-position trade).
-      const RANGE_SHORT_EXEMPT = new Set(['BOS_SHORT', 'EMA200_FAIL_SHORT', 'EMA_BREAKDOWN']);
-      if (!RANGE_SHORT_EXEMPT.has(sig.setup)) {
-        if (priceInRange < 0.20) { sig.score = -99; sig.blocked = 'SHORT blocked — price at bottom 20% of range, shorting at the floor'; }
-        else if (priceInRange < 0.35) sig.score -= 4; // near bottom — heavy penalty
-      }
-      if (priceInRange > 0.65) sig.score += 2; // selling near the top — good
+      if (priceInRange < 0.20) {
+        sig.score = -99;
+        sig.blocked = `SHORT blocked — price at ${(priceInRange * 100).toFixed(0)}% of 5h range (bottom — should LONG not SHORT)`;
+      } else if (priceInRange > 0.75) sig.score += 4; // at the very top — ideal SHORT zone
+      else if (priceInRange > 0.65) sig.score += 2;   // near the top — good SHORT zone
     }
 
-    // 1h trend alignment — bonus for with-trend, penalty for counter-trend.
-    // BOS_SHORT is exempt from the bullish h1 penalty: it is a reversal strategy,
-    // designed to catch breakdowns that start while the 1h trend is still bullish.
+    // Structural proximity: reward entries tight to actual swing structure (HL/LL for LONG, HH/LH for SHORT)
+    if (sig.direction === 'LONG' && nearestSwingLow) {
+      const pctFromLow = (price - nearestSwingLow) / nearestSwingLow;
+      if (pctFromLow <= 0.005)       sig.score += 3; // price at swing low — perfect HL/LL retest
+      else if (pctFromLow <= 0.015)  sig.score += 1; // within 1.5% — acceptable pullback
+    }
+    if (sig.direction === 'SHORT' && nearestSwingHigh) {
+      const pctFromHigh = (nearestSwingHigh - price) / nearestSwingHigh;
+      if (pctFromHigh <= 0.005)      sig.score += 3; // price at swing high — perfect HH/LH test
+      else if (pctFromHigh <= 0.015) sig.score += 1; // within 1.5% — acceptable bounce
+    }
+
+    // 1h trend alignment — bonus for with-trend, penalty for counter-trend
     if (sig.direction === 'LONG' && h1Trend === 'bullish') sig.score += 3;
     if (sig.direction === 'SHORT' && h1Trend === 'bearish') sig.score += 3;
-    // Reversal strategies exempt from counter-trend penalty — they fire against the trend by design
-    const REVERSAL_SETUPS = new Set([
-      'BOS_LONG', 'BOS_SHORT', 'RESIST_REJECT',
-      'EMA200_CROSS_LONG', 'EMA200_APPROACH_LONG',   // LONGs in bear trend — reversal entries
-      'EMA200_FAIL_SHORT', 'EMA_BREAKDOWN',           // SHORTs in bull trend — rejection entries
-    ]);
-    if (sig.direction === 'LONG' && h1Trend === 'bearish' && !REVERSAL_SETUPS.has(sig.setup)) sig.score -= 4;
-    if (sig.direction === 'SHORT' && h1Trend === 'bullish' && !REVERSAL_SETUPS.has(sig.setup)) sig.score -= 4;
+    if (sig.direction === 'LONG' && h1Trend === 'bearish') sig.score -= 4;
+    if (sig.direction === 'SHORT' && h1Trend === 'bullish') sig.score -= 4;
 
-    // BTC market correlation: don't fight BTC's direction on altcoins.
-    // BOS_SHORT/RESIST_REJECT exempt: resistance rejections happen at tops in bull markets.
+    // BTC market correlation: don't fight BTC's direction on altcoins
+    // When BTC is clearly bullish, shorting alts is fighting the market
     if (symbol !== 'BTCUSDT') {
-      // Reversal strategies exempt from BTC correlation penalty
-      // EMA200 reversal setups are exempt from BTC correlation penalty —
-      // they specifically trade reversals at EMA200 regardless of BTC short-term direction.
-      const BTC_EXEMPT_SETUPS = new Set(['BOS_SHORT', 'RESIST_REJECT', 'EMA200_FAIL_SHORT', 'EMA_BREAKDOWN']);
-      const BTC_EXEMPT_LONG   = new Set(['BOS_LONG', 'EMA200_CROSS_LONG', 'EMA200_APPROACH_LONG']);
-      if (btcTrend === 'bullish' && sig.direction === 'SHORT' && !BTC_EXEMPT_SETUPS.has(sig.setup)) {
+      if (btcTrend === 'bullish' && sig.direction === 'SHORT') {
         sig.score -= 5;
         sig.blocked = 'SHORT rejected — BTC is bullish, alts follow BTC';
       }
-      if (btcTrend === 'bearish' && sig.direction === 'LONG' && !BTC_EXEMPT_LONG.has(sig.setup)) {
+      if (btcTrend === 'bearish' && sig.direction === 'LONG') {
         sig.score -= 5;
         sig.blocked = 'LONG rejected — BTC is bearish, alts follow BTC';
       }
@@ -2344,10 +1813,8 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
       if (btcTrend === 'bearish' && sig.direction === 'SHORT') sig.score += 2;
     }
 
-    // Volume confirmation — hard requirement, not just a bonus.
-    // No volume = no signal, regardless of pattern quality.
-    if (!lastVolOK) { sig.score = -99; sig.blocked = 'No volume confirmation on entry candle'; continue; }
-    sig.score += 2; // volume confirmed — reward it
+    // Volume confirmation
+    if (lastVolOK) sig.score += 2;
 
     // Trendline confluence (tightened to 0.2%)
     if (sig.direction === 'LONG' && trendlines.uptrend) {
@@ -2401,17 +1868,8 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     bLog.scan(`${symbol}: ${b.direction} ${b.setup} BLOCKED — ${b.blocked} (1h trend=${h1Trend})`);
   }
 
-  // RSI hard filter: reject LONG if overbought, SHORT if oversold (uses genome thresholds)
-  const rsiFiltered = signals.filter(s => {
-    if (rsi14 === null) return true; // no RSI data — pass through
-    if (s.direction === 'LONG'  && rsi14 > RSI_OB) return false;
-    if (s.direction === 'SHORT' && rsi14 < RSI_OS) return false;
-    return true;
-  });
-
-  // Filter: RR minimum 1.2, SL reasonable, score must be meaningful (>= 8 = earned through real confirmations)
-  const MIN_SIGNAL_SCORE = 8;
-  const validSignals = rsiFiltered.filter(s => s.rr >= 1.2 && s.slDist > 0.001 && s.slDist < 0.03 && s.score >= MIN_SIGNAL_SCORE);
+  // Filter: RR minimum 1.2, SL reasonable, not blocked by trend
+  const validSignals = signals.filter(s => s.rr >= 1.2 && s.slDist > 0.001 && s.slDist < 0.03 && s.score >= 0);
 
   if (!validSignals.length) return null;
 
@@ -2424,10 +1882,9 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
   best.score = Math.round(best.score * aiModifier * 10) / 10;
   best.aiModifier = Math.round(aiModifier * 100) / 100;
 
-  // Add leverage — genome override takes priority, capped at 20 for safety
+  // Add leverage
   const BTC_ETH = new Set(['BTCUSDT', 'ETHUSDT']);
-  const genomeLev = strategyCfg.LEVERAGE ? Math.min(strategyCfg.LEVERAGE, 20) : null;
-  best.leverage = genomeLev || (BTC_ETH.has(symbol) ? Math.min(params.LEV_BTC_ETH || 20, 20) : Math.min(params.LEV_ALT || 20, 20));
+  best.leverage = BTC_ETH.has(symbol) ? Math.min(params.LEV_BTC_ETH || 20, 20) : Math.min(params.LEV_ALT || 20, 20);
 
   // Add structure info for logging
   best.structure = {
@@ -2450,25 +1907,49 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
 // ── Main Scan ──────────────────────────────────────────────
 
 async function scanSMC(log, opts = {}) {
-  // 24/7 trading — all session windows, avoid-time, and blackout blocks removed.
-  // The original PDF rules (Asia/Europe/US sessions only) were too restrictive.
-  // Bot now scans continuously and trades whenever a valid signal appears.
+  const limits = checkDailyLimits();
+  if (!limits.canTrade) {
+    log(`Liquidity Engine: ${limits.reason}. Stopped trading.`);
+    bLog.scan(limits.reason);
+    return [];
+  }
 
-  // Hard 4-token whitelist — no other coins traded under any circumstances.
-  const ALLOWED_SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT'];
+  if (isAvoidTime()) {
+    log('Liquidity Engine: Candle-open avoid time (UTC 8/12/16/20 or minute 0/15/30/45). Skipping entry.');
+    bLog.scan('Avoid candle-open time per PDF rules.');
+    return [];
+  }
+
+  const activeSession = getActiveSession();
+  if (!activeSession) {
+    // NOTE: AI session override removed — trading outside institutional windows causes losses.
+    // Sessions (Asia 23-02, Europe 07-10, US 12-16 UTC) are hard boundaries, not suggestions.
+    log('Liquidity Engine: Outside session windows (Asia 23-02/Europe 07-10/US 12-16 UTC). Waiting.');
+    bLog.scan('Outside institutional session windows. No trades until next opening.');
+    return [];
+  }
+  bLog.scan(`Active session: ${activeSession.name} (${activeSession.startH}:00–${activeSession.endH}:00 UTC)`);
 
   const tickers = await fetchTickers();
   if (!tickers.length) { bLog.error('Failed to fetch tickers'); return []; }
 
-  // Only pass the 4 allowed coins into the scan — ignore everything else.
-  const topCoins = tickers
-    .filter(t => ALLOWED_SYMBOLS.includes(t.symbol))
-    .map(t => ({ ...t }));
+  const BLACKLIST = new Set([
+    'ALPACAUSDT','BNXUSDT','ALPHAUSDT','BANANAS31USDT',
+    'LYNUSDT','PORT3USDT','RVVUSDT','BSWUSDT',
+    'NEIROETHUSDT','COSUSDT','YALAUSDT','TANSSIUSDT','EPTUSDT',
+    'LEVERUSDT','AGLDUSDT','LOOKSUSDT',
+    'XAUUSDT','XAGUSDT','EURUSDT','GBPUSDT','JPYUSDT',
+  ]);
 
-  bLog.scan(`[v2.0] Scanning 4 coins: ${ALLOWED_SYMBOLS.join(', ')} | 24/7 mode`);
+  const topCoins = tickers
+    .filter(t => t.symbol.endsWith('USDT') && !t.symbol.includes('_'))
+    .filter(t => !BLACKLIST.has(t.symbol))
+    .filter(t => parseFloat(t.quoteVolume) >= MIN_24H_VOLUME)
+    .sort((a, b) => parseFloat(b.quoteVolume) - parseFloat(a.quoteVolume))
+    .slice(0, opts.topNCoins || TOP_N_COINS);
 
   const params = await aiLearner.getOptimalParams();
-  const minScore = params.MIN_SCORE || 10;
+  const minScore = params.MIN_SCORE || 8;
 
   // Quantum optimizer: get active strategy combo + best params from backtest
   let activeCombo = 15;
@@ -2484,31 +1965,6 @@ async function scanSMC(log, opts = {}) {
   } catch (err) {
     bLog.error(`Quantum optimizer not available: ${err.message} — using all strategies`);
   }
-
-  // Strategy Version Manager: load active genome from settings and merge into bestParams.
-  // Activated via admin UI → /api/dashboard/strategy-versions/activate/:id
-  try {
-    const { query: dbQuery } = require('./db');
-    const genomeRow = await dbQuery(
-      `SELECT value FROM settings WHERE key = 'active_strategy_genome'`
-    );
-    if (genomeRow && genomeRow[0]) {
-      const genome = JSON.parse(genomeRow[0].value);
-      // Merge genome overrides into bestParams — engine uses these for RSI/ATR/vol thresholds
-      if (genome.rsi_ob)   bestParams.RSI_OB   = genome.rsi_ob;
-      if (genome.rsi_os)   bestParams.RSI_OS   = genome.rsi_os;
-      if (genome.atr_sl)   bestParams.ATR_SL   = genome.atr_sl;
-      if (genome.atr_tp)   bestParams.ATR_TP   = genome.atr_tp;
-      if (genome.vol_min)  bestParams.VOL_MIN  = genome.vol_min;
-      if (genome.leverage) bestParams.LEVERAGE = genome.leverage;
-      bLog.scan(
-        `[VersionMgr] Active genome loaded — ` +
-        `entry=${genome.entry_type} RSI_OB=${genome.rsi_ob} RSI_OS=${genome.rsi_os} ` +
-        `ATR_SL=${genome.atr_sl}×ATR ATR_TP=${genome.atr_tp}×ATR VOL_MIN=${genome.vol_min}× ` +
-        `L=${genome.leverage}x`
-      );
-    }
-  } catch (_) { /* no active genome or DB unavailable — use defaults */ }
 
   // BTC market trend: when BTC is clearly trending, don't fight it on alts
   let btcTrend = 'neutral';

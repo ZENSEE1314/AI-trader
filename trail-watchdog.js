@@ -1,12 +1,15 @@
 // ============================================================
 // Trailing SL Watchdog — runs every 15 seconds
 //
-// Two-stage trailing logic:
-//   Stage 1 (30% capital profit) — move SL to lock 15% capital profit
-//   Stage 2 (45% capital profit) — switch to candle structural trail
+// ⚠ HARDCODED — these rules apply to ALL trades regardless of which
+//   strategy version is active in the admin panel. Do NOT move these
+//   thresholds into strategy_versions or any DB config.
 //
-// Below 30% capital profit: SL stays at original entry SL (no trail).
-// This gives trades room to breathe without premature closure.
+// Trail logic:
+//   Below 20% capital profit → no movement, trade breathes freely
+//   20%+ capital profit      → lock 60% of current profit (slides up)
+//   35%+ capital profit      → also use candle structural trail
+//   Floor = taker fees + funding fees + 1% buffer (always net positive)
 // ============================================================
 
 const fetch = require('node-fetch');
