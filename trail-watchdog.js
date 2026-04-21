@@ -1,9 +1,12 @@
 // ============================================================
 // Trailing SL Watchdog — runs every 15 seconds
-// Two mechanisms combined, takes the better (higher protection):
-//   1. Candle trail  — SL = lowest low of last 2 completed 15m candles,
-//                      with minimum 0.5% breathing room from current price
-//   2. Profit tiers  — milestone locks with generous gaps so trades have room to run
+//
+// Two-stage trailing logic:
+//   Stage 1 (30% capital profit) — move SL to lock 15% capital profit
+//   Stage 2 (45% capital profit) — switch to candle structural trail
+//
+// Below 30% capital profit: SL stays at original entry SL (no trail).
+// This gives trades room to breathe without premature closure.
 // ============================================================
 
 const fetch = require('node-fetch');
@@ -15,14 +18,10 @@ const cryptoUtils = require('./crypto-utils');
 const INTERVAL_MS = 15 * 1000;
 const db = require('./db');
 
-// Taker fee: 0.04% entry + 0.04% exit = 0.08% of notional both legs
-// In margin % = 0.08% × leverage  (e.g. 20x = 1.6%, 100x = 8%)
-const TAKER_FEE_BOTH_LEGS = 0.0008; // 0.08% of notional
-
-// Continuous profit trail: SL always locks 60% of current capital profit.
-// e.g. +10% profit → SL at +6% | +50% profit → SL at +30% | +100% → SL at +60%
-// Kicks in only after profit covers fees + 1% buffer (fee floor).
-const PROFIT_LOCK_PCT = 0.60; // 60% of capital profit locked at all times
+// Stage thresholds (capital profit %)
+const STAGE1_ACTIVATE_CAP = 0.30; // activate trail at 30% capital profit
+const STAGE1_LOCK_CAP     = 0.15; // lock in 15% capital profit at stage 1
+const STAGE2_ACTIVATE_CAP = 0.45; // switch to candle trail at 45% capital profit
 
 function log(msg) {
   const t = new Date().toLocaleString('en-GB', { timeZone: 'Asia/Jakarta' });
@@ -66,26 +65,19 @@ async function getLivePrice(symbol) {
   }
 }
 
-// Continuous trailing SL: locks 60% of current capital profit.
-// Fee floor prevents the SL from going below break-even on tiny early profits.
+// Stage 1: when capital profit hits 30%, lock SL at 15% capital profit.
+// Returns null below 30% — no trail movement until then.
 function calcTierSlPrice(entryPrice, curPrice, isLong, leverage) {
   const pricePct   = isLong
     ? (curPrice - entryPrice) / entryPrice
     : (entryPrice - curPrice) / entryPrice;
   const capitalPct = pricePct * leverage;
 
-  // Fee floor: fees (both legs) + 1% buffer in capital %
-  // e.g. 20x leverage → taker fee both legs = 1.6%, floor = 2.6% capital
-  const feesCapital = TAKER_FEE_BOTH_LEGS * leverage;
-  const feeFloorCap = feesCapital + 0.01;
+  // Below 30% capital profit — let the trade breathe, no movement
+  if (capitalPct < STAGE1_ACTIVATE_CAP) return null;
 
-  // Don't trigger until profit is above the fee floor (avoid premature locks)
-  if (capitalPct < feeFloorCap) return null;
-
-  // Lock 60% of whatever profit we have right now (never below fee floor)
-  const slCapital  = Math.max(capitalPct * PROFIT_LOCK_PCT, feeFloorCap);
-  const slPricePct = slCapital / leverage;
-
+  // At 30%+: lock SL at exactly 15% capital profit (fixed floor, not sliding)
+  const slPricePct = STAGE1_LOCK_CAP / leverage;
   return isLong
     ? entryPrice * (1 + slPricePct)
     : entryPrice * (1 - slPricePct);
@@ -215,13 +207,12 @@ async function runTrailCycle() {
           : (entryPrice - curPrice) / entryPrice;
         const capitalPct = profitPct * leverage;
 
-        // Mechanism 1: Profit tier guarantee (only fires when profitable — has built-in fee floor)
+        // Stage 1 (30% capital): lock SL at 15% capital profit. Returns null below 30%.
         const tierSl = calcTierSlPrice(entryPrice, curPrice, isLong, leverage);
 
-        // Mechanism 2: Candle structural trail — ONLY when trade is in profit.
-        // On a losing trade the candle highs/lows are near current price and would
-        // tighten the SL prematurely, closing the trade early + paying fees on a loss.
-        const candleSl = profitPct > 0
+        // Stage 2 (45% capital): switch to candle structural trail.
+        // Only activates at 45%+ capital profit — gives trade maximum room to run first.
+        const candleSl = capitalPct >= STAGE2_ACTIVATE_CAP
           ? await calcCandleSlPrice(trade.symbol, isLong, currentSl, curPrice)
           : null;
 
@@ -235,8 +226,8 @@ async function runTrailCycle() {
         if (!improved) continue;
 
         const source = [];
-        if (tierSl && (isLong ? tierSl > currentSl : tierSl < currentSl)) source.push(`60%lock(+${(capitalPct*100).toFixed(1)}%cap)`);
-        if (candleSl && (isLong ? candleSl > currentSl : candleSl < currentSl)) source.push('candle');
+        if (tierSl && (isLong ? tierSl > currentSl : tierSl < currentSl)) source.push(`stage1-lock15%(+${(capitalPct*100).toFixed(1)}%cap)`);
+        if (candleSl && (isLong ? candleSl > currentSl : candleSl < currentSl)) source.push('stage2-candle');
 
         log(`${trade.symbol} ${isLong ? 'LONG' : 'SHORT'} [${source.join('+')}] SL: $${currentSl.toFixed(pricePrec)} → $${bestSl.toFixed(pricePrec)} | profit +${(capitalPct*100).toFixed(1)}% capital`);
 
@@ -383,7 +374,7 @@ async function runOrphanGuard() {
   }
 }
 
-log('Trail watchdog started — 15s interval | 60% profit lock + 2-candle structural trail');
+log('Trail watchdog started — 15s interval | Stage1: 30%cap→lock15% | Stage2: 45%cap→candle trail');
 log('Orphan guard started — 2min interval | auto-close unmanaged positions > -25% capital');
 runTrailCycle();
 setInterval(runTrailCycle, INTERVAL_MS);
