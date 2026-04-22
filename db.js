@@ -671,6 +671,17 @@ async function initAllTables() {
     try { await pool.query(sql); } catch (_) {}
   }
 
+  // Set SOL and BNB to 50× leverage (upsert — safe to run on every boot)
+  try {
+    await pool.query(
+      `INSERT INTO token_leverage (symbol, leverage, enabled) VALUES
+         ('SOLUSDT', 50, true),
+         ('BNBUSDT', 50, true)
+       ON CONFLICT (symbol) DO UPDATE SET leverage = EXCLUDED.leverage, enabled = true`
+    );
+    console.log('[DB] Token leverage: SOLUSDT=50×, BNBUSDT=50×');
+  } catch (_) {}
+
   // Clean up wrong symbols (renamed/delisted)
   const badSymbols = ['MATICUSDT', 'PEPEUSDT', 'SHIBUSDT', 'STABLEUSDT', 'NIGHTUSDT'];
   for (const sym of badSymbols) {
