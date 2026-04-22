@@ -2249,10 +2249,13 @@
           </div>
 
           <!-- Active version banner -->
-          <div id="versions-active-banner" style="display:none;background:rgba(212,175,55,0.1);border:1px solid rgba(212,175,55,0.3);border-radius:var(--radius-md);padding:var(--space-2) var(--space-3);margin-bottom:var(--space-3);font-size:0.82rem;">
-            <span style="color:#d4af37;font-weight:700;">🟢 ACTIVE: </span>
-            <span id="active-version-name" style="color:var(--color-text);">—</span>
-            <span id="active-version-stats" style="color:var(--color-text-muted);margin-left:8px;">—</span>
+          <div id="versions-active-banner" style="display:none;background:rgba(212,175,55,0.1);border:1px solid rgba(212,175,55,0.3);border-radius:var(--radius-md);padding:var(--space-3);margin-bottom:var(--space-3);">
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
+              <span style="color:#d4af37;font-weight:700;font-size:0.85rem;">🟢 LIVE VERSION:</span>
+              <span id="active-version-name" style="color:var(--color-text);font-weight:700;font-size:0.9rem;">—</span>
+              <span style="font-size:0.72rem;color:var(--color-text-muted);">— bot is trading with these settings</span>
+            </div>
+            <div id="active-version-params-grid" style="display:flex;flex-wrap:wrap;gap:6px;"></div>
           </div>
 
           <!-- Stats row -->
@@ -2648,16 +2651,48 @@ EMAIL_FROM=MCT &lt;a83c06001@smtp-brevo.com&gt;</pre>
       if ((el = document.getElementById('stat-80plus')))          el.textContent = total80;
       if ((el = document.getElementById('stat-optimizer-count'))) el.textContent = fromOpt;
 
-      // Active banner — show which version is live right now
+      // Active banner — show which version is live right now with full settings
       var banner = document.getElementById('versions-active-banner');
       if (banner) banner.style.display = activeVersion ? 'block' : 'none';
       if (activeVersion) {
-        var nameEl = document.getElementById('active-version-name');
-        var statEl = document.getElementById('active-version-stats');
-        var slP  = activeVersion.slPct    != null ? (parseFloat(activeVersion.slPct)*100).toFixed(1)+'%'    : '?';
-        var trP  = activeVersion.trailStep != null ? (parseFloat(activeVersion.trailStep)*100).toFixed(1)+'%' : '?';
+        var nameEl   = document.getElementById('active-version-name');
+        var paramsEl = document.getElementById('active-version-params-grid');
         if (nameEl) nameEl.textContent = activeVersion.version || activeVersion.name || '?';
-        if (statEl) statEl.textContent = 'SL ' + slP + ' · Trail ' + trP + ' · Lev ' + (activeVersion.leverage||'?') + '×';
+
+        if (paramsEl) {
+          // Human-readable labels + formatting for known keys
+          var PARAM_META = {
+            slPct:         { label:'SL',           fmt: function(v){ return (parseFloat(v)*100).toFixed(2)+'%'; } },
+            sl_pct:        { label:'SL',           fmt: function(v){ return (parseFloat(v)*100).toFixed(2)+'%'; } },
+            trailStep:     { label:'Trail Step',   fmt: function(v){ return (parseFloat(v)*100).toFixed(2)+'%'; } },
+            trailing_step: { label:'Trail Step',   fmt: function(v){ return (parseFloat(v)*100).toFixed(2)+'%'; } },
+            tpPct:         { label:'TP',           fmt: function(v){ return (parseFloat(v)*100).toFixed(2)+'%'; } },
+            tp_pct:        { label:'TP',           fmt: function(v){ return (parseFloat(v)*100).toFixed(2)+'%'; } },
+            leverage:      { label:'Leverage',     fmt: function(v){ return parseFloat(v)+'×'; } },
+            maxPositions:  { label:'Max Positions',fmt: function(v){ return v; } },
+            max_positions: { label:'Max Positions',fmt: function(v){ return v; } },
+            maxDailyLoss:  { label:'Max Daily Loss',fmt: function(v){ return v; } },
+            sizePct:       { label:'Size',         fmt: function(v){ return (parseFloat(v)*100).toFixed(1)+'%'; } },
+            size_pct:      { label:'Size',         fmt: function(v){ return (parseFloat(v)*100).toFixed(1)+'%'; } },
+          };
+          var SKIP = { id:1, version:1, name:1 };
+          var chips = [];
+          Object.entries(activeVersion).forEach(function(kv) {
+            if (SKIP[kv[0]]) return;
+            var meta = PARAM_META[kv[0]];
+            var lbl  = meta ? meta.label : kv[0];
+            var val  = meta ? meta.fmt(kv[1]) : kv[1];
+            chips.push(
+              '<div style="padding:4px 10px;border-radius:20px;background:rgba(212,175,55,0.12);' +
+              'border:1px solid rgba(212,175,55,0.3);display:flex;flex-direction:column;align-items:center;min-width:60px;">' +
+              '<span style="font-size:0.6rem;color:#d4af37;text-transform:uppercase;letter-spacing:.05em;">' + lbl + '</span>' +
+              '<span style="font-size:0.82rem;font-weight:700;color:var(--color-text);font-family:var(--font-mono);">' + val + '</span>' +
+              '</div>'
+            );
+          });
+          paramsEl.innerHTML = chips.length ? chips.join('') :
+            '<span style="font-size:0.75rem;color:var(--color-text-muted);">No params stored</span>';
+        }
       }
 
       var deBtn = document.getElementById('versions-deactivate-btn');
