@@ -2581,7 +2581,7 @@ EMAIL_FROM=MCT &lt;a83c06001@smtp-brevo.com&gt;</pre>
     </div>
   </div>
 
-  <script src="/js/app.js?v=20260429" defer></script>
+  <script src="/js/app.js?v=20260422" defer></script>
   <!-- Email tab patch: inline so it works regardless of JS cache (HTML is never cached) -->
   <script>
     document.addEventListener('DOMContentLoaded', function() {
@@ -2591,7 +2591,7 @@ EMAIL_FROM=MCT &lt;a83c06001@smtp-brevo.com&gt;</pre>
         document.querySelectorAll('.admin-subtab').forEach(function(btn) {
           btn.classList.toggle('active', btn.dataset.admintab === tab);
         });
-        var panels = ['earnings', 'users', 'tokens', 'settings', 'tools', 'versions', 'email'];
+        var panels = ['earnings', 'users', 'tokens', 'settings', 'strategies', 'tools', 'versions', 'email'];
         panels.forEach(function(p) {
           var el = document.getElementById('admin-tab-' + p);
           if (el) el.classList.toggle('hidden', p !== tab);
@@ -2599,6 +2599,10 @@ EMAIL_FROM=MCT &lt;a83c06001@smtp-brevo.com&gt;</pre>
         if (tab === 'earnings' && window.CryptoBot && window.CryptoBot.loadAdmin) window.CryptoBot.loadAdmin();
         if (tab === 'email' && window.CryptoBot && window.CryptoBot.checkEmailSmtp) window.CryptoBot.checkEmailSmtp().catch(function(){});
         if (tab === 'versions' && window.CryptoBot && window.CryptoBot.loadStrategyVersions) window.CryptoBot.loadStrategyVersions();
+        if (tab === 'strategies') {
+          if (window.CryptoBot && window.CryptoBot.loadStrategyConfig) window.CryptoBot.loadStrategyConfig();
+          if (window.CryptoBot && window.CryptoBot.initStratSubTabs) window.CryptoBot.initStratSubTabs();
+        }
       }
       // Wait for CryptoBot to be defined (app.js is deferred)
       var tries = 0;

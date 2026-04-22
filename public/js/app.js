@@ -5248,7 +5248,7 @@
     activateVersionForTrading, deactivateVersion,
     fixBitunixPnl, debugBitunix, runBacktest, loadAiVersions, runAiOptimize, adminResyncFees, adminFixTrades, adminClearTestData,
     mcRefresh, mcCommand, mcChat, mcChatQuick, switchAdminTab, filterAgents, customerChat,
-    loadStrategyConfig, loadStrategyComposer,
+    loadStrategyConfig, loadStrategyComposer, initStratSubTabs,
     checkEmailSmtp, sendTestEmail, sendBroadcastEmail, emailSetMode,
     loadSignalBoard, toggleWatch, watchAll, setUserLeverage,
     adminLoadTokenBoard, adminAddTokenBoard, adminPopulateTop50, adminSetRiskTag, adminSetTokenLev, adminToggleBan, adminRemoveTokenBoard,
