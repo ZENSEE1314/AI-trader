@@ -2051,7 +2051,7 @@
       const updatedAt  = new Date(stratDef.updated_at || stratDef.created_at).toLocaleString();
 
       return `
-        <details class="composer-strat-card" data-strat-id="${stratDef.id}"
+        <details class="composer-strat-card" data-strat-id="${stratDef.id}" open
           style="border:1px solid ${isEnabled ? 'var(--color-border-muted)' : 'rgba(255,255,255,0.05)'};
             border-radius:var(--radius-lg);padding:var(--space-3);
             opacity:${isEnabled ? 1 : 0.65};">
@@ -2307,32 +2307,40 @@
         const card    = grid.querySelector(`details[data-strat-id="${id}"]`);
         if (!card) return;
 
+        // Open the card so results are visible
+        card.open = true;
+
         // Find or create the results panel inside this card
         let resultsEl = card.querySelector('.composer-bt-results');
         if (!resultsEl) {
           resultsEl = document.createElement('div');
           resultsEl.className = 'composer-bt-results';
           resultsEl.style.cssText = 'margin-top:12px;';
-          card.querySelector('div[style*="flex-direction:column"]')?.appendChild(resultsEl);
+          const body = card.querySelector('div[style*="flex-direction:column"]');
+          if (body) body.appendChild(resultsEl);
+          else card.appendChild(resultsEl);
         }
 
         // Prompt for days (optional)
         const daysStr = prompt('Days of history to test (1-14, default 7):', '7');
+        if (daysStr === null) { return; } // user cancelled
         const days    = Math.min(14, Math.max(1, parseInt(daysStr) || 7));
 
         btn.disabled = true;
-        btn.textContent = `⏳ Running ${days}d backtest…`;
+        btn.textContent = `⏳ Running ${days}d…`;
         resultsEl.innerHTML = `
           <div style="padding:12px;border:1px solid rgba(99,102,241,0.3);border-radius:var(--radius-md);
-            background:rgba(99,102,241,0.05);display:flex;align-items:center;gap:10px;">
+            background:rgba(99,102,241,0.05);display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
             <span style="font-size:0.82rem;color:#818cf8;">⏳ Fetching ${days} days of historical data and running indicator chain…</span>
             <span style="font-size:0.72rem;color:var(--color-text-muted);">This may take 20–60 seconds</span>
           </div>`;
+        resultsEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 
         try {
           const result = await api('POST', `/api/admin/strategy-definitions/${id}/backtest`,
             { days });
           renderBacktestResults(resultsEl, result);
+          resultsEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
         } catch (e) {
           resultsEl.innerHTML = `<div style="color:var(--color-danger);font-size:0.82rem;padding:8px 0;">
             ✗ ${escapeHtml(e.message || 'Backtest failed')}</div>`;

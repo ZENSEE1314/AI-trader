@@ -1965,9 +1965,13 @@
 
           <!-- Parameter Tuning panel -->
           <div id="strat-panel-params">
-            <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:var(--space-3);">
+            <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:var(--space-2);">
               <h3 style="margin:0;color:var(--color-text);">Strategy Parameters</h3>
               <span style="font-size:0.75rem;color:var(--color-text-muted);">Changes take effect on next scan cycle (~60 s)</span>
+            </div>
+            <div style="font-size:0.75rem;color:var(--color-text-muted);padding:8px 12px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.06);border-radius:var(--radius-md);margin-bottom:var(--space-3);">
+              ℹ️ <strong style="color:var(--color-text);">Parameter Tuning</strong> adjusts the built-in SMC + legacy strategy settings.
+              Custom strategies you build are managed in the <strong style="color:var(--color-text);">🧩 Strategy Composer</strong> tab — switch there to see and backtest them.
             </div>
             <div id="strategy-config-grid" style="display:flex;flex-direction:column;gap:var(--space-3);"></div>
           </div>
@@ -2581,7 +2585,7 @@ EMAIL_FROM=MCT &lt;a83c06001@smtp-brevo.com&gt;</pre>
     </div>
   </div>
 
-  <script src="/js/app.js?v=20260430" defer></script>
+  <script src="/js/app.js?v=20260431" defer></script>
   <!-- Email tab patch: inline so it works regardless of JS cache (HTML is never cached) -->
   <script>
     document.addEventListener('DOMContentLoaded', function() {
