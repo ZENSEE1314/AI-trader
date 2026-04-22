@@ -2623,6 +2623,7 @@ EMAIL_FROM=MCT &lt;a83c06001@smtp-brevo.com&gt;</pre>
   <script>
   (function() {
     var _activeVersionId = null;
+    var _versionsStore   = []; // indexed store so onclicks only pass a safe integer
 
     function showVersionMsg(msg, isErr) {
       var el = document.getElementById('versions-msg');
@@ -2669,6 +2670,7 @@ EMAIL_FROM=MCT &lt;a83c06001@smtp-brevo.com&gt;</pre>
         return;
       }
 
+      _versionsStore = versions; // save so click handlers can look up by index
       tbody.innerHTML = versions.map(function(v, idx) {
         var wr  = parseFloat(v.win_rate)      || 0;
         var pf  = parseFloat(v.profit_factor) || 0;
@@ -2692,12 +2694,10 @@ EMAIL_FROM=MCT &lt;a83c06001@smtp-brevo.com&gt;</pre>
         var srcLabel = v._source === 'ai_version' ? 'named' : v._source === 'optimizer' ? 'optimizer' : 'manual';
         var srcBadge = '<span style="background:' + srcColor + ';font-size:0.6rem;padding:1px 6px;border-radius:3px;">' + srcLabel + '</span>';
 
-        // Build activate button — use JSON of the version to pass to the handler
-        var vJson = JSON.stringify(JSON.stringify(v));
-        var paramsJson = JSON.stringify(JSON.stringify(v.params || v.genome || {}));
+        // Build activate button — pass safe integer index, look up version in _versionsStore
         var activateBtn = isActive
           ? '<span style="font-size:0.72rem;color:#d4af37;font-weight:700;padding:3px 8px;">✓ Live</span>'
-          : '<button onclick="window.CryptoBot.useVersionFromTab(' + vJson + ')" '
+          : '<button onclick="window.CryptoBot.useVersionByIdx(' + idx + ')" '
             + 'style="background:linear-gradient(135deg,#d4af37,#b8962e);color:#000;border:none;border-radius:4px;font-size:0.72rem;padding:3px 12px;font-weight:700;cursor:pointer;">▶ Use</button>';
 
         // Params preview — show key settings inline
@@ -2721,7 +2721,7 @@ EMAIL_FROM=MCT &lt;a83c06001@smtp-brevo.com&gt;</pre>
           '<td style="padding:8px 12px;text-align:right;color:' + (ret >= 0 ? '#22c55e' : '#ef4444') + ';">' + (v.total_return != null ? (ret >= 0 ? '+' : '') + ret.toFixed(1) + '%' : '—') + '</td>' +
           '<td style="padding:8px 12px;text-align:right;color:#ef4444;">' + (dd > 0 ? dd.toFixed(1) + '%' : '—') + '</td>' +
           '<td style="padding:8px 12px;text-align:center;white-space:nowrap;display:flex;gap:4px;justify-content:center;">' +
-            '<button onclick="window.CryptoBot.viewVersionGenome(' + paramsJson + ')" title="View all parameters" ' +
+            '<button onclick="window.CryptoBot.viewVersionByIdx(' + idx + ')" title="View all parameters" ' +
               'style="background:none;border:1px solid var(--color-border-muted);border-radius:4px;color:var(--color-text-muted);font-size:0.7rem;padding:3px 7px;cursor:pointer;">📋</button>' +
             activateBtn +
           '</td>' +
@@ -2753,10 +2753,25 @@ EMAIL_FROM=MCT &lt;a83c06001@smtp-brevo.com&gt;</pre>
       }
     }
 
+    // Safe index-based wrappers (avoids JSON-in-onclick HTML encoding bugs)
+    function useVersionByIdx(idx) {
+      var v = _versionsStore[idx];
+      if (!v) { showVersionMsg('Version not found (idx ' + idx + ')', true); return; }
+      return useVersionFromTab(v);
+    }
+    function viewVersionByIdx(idx) {
+      var v = _versionsStore[idx];
+      if (!v) return;
+      var params = v.params || v.genome || {};
+      if (window.CryptoBot && window.CryptoBot.viewVersionGenome) {
+        window.CryptoBot.viewVersionGenome(params);
+      }
+    }
+
     // "▶ Use" from the Versions tab — works for all source types
-    async function useVersionFromTab(vJson) {
+    // Accepts a version object directly (not JSON string)
+    async function useVersionFromTab(v) {
       try {
-        var v = JSON.parse(vJson);
         var params = v.params || v.genome || {};
         var name   = v.name || 'Version';
 
@@ -2797,7 +2812,12 @@ EMAIL_FROM=MCT &lt;a83c06001@smtp-brevo.com&gt;</pre>
     (function() {
       var _t = 0;
       var _iv = setInterval(function() {
-        if (window.CryptoBot) { window.CryptoBot.useVersionFromTab = useVersionFromTab; clearInterval(_iv); }
+        if (window.CryptoBot) {
+          window.CryptoBot.useVersionFromTab = useVersionFromTab;
+          window.CryptoBot.useVersionByIdx   = useVersionByIdx;
+          window.CryptoBot.viewVersionByIdx  = viewVersionByIdx;
+          clearInterval(_iv);
+        }
         if (++_t > 60) clearInterval(_iv);
       }, 100);
     })();
