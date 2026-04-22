@@ -21,8 +21,9 @@
 // Only fires during prime time windows (avoids Asian open + EU open noise)
 // ============================================================
 
-const fetch = require('node-fetch');
+const fetch        = require('node-fetch');
 const { log: bLog } = require('./bot-logger');
+const { getCfg }   = require('./strategy-config');
 
 const REQUEST_TIMEOUT = 12000;
 
@@ -33,15 +34,14 @@ const TJUNCTION_SYMBOLS = new Map([
   ['BNBUSDT',  20],
 ]);
 
-// ── Detection Thresholds ──────────────────────────────────────
-const CONVERGE_BAND = 0.0025; // max(MA5,10,20) - min < 0.25% of mid-price
-const CONVERGE_MIN  = 2;      // must be converged ≥ 2 consecutive bars
-const DIVERGE_MIN   = 0.0012; // fan spread ≥ 0.12% = breakout confirmed
-
-// ── Trade Params ─────────────────────────────────────────────
-const TP_PCT   = 0.020; // 2% TP — best balance (PF 2.12)
-const SL_PCT   = 0.010; // 1% SL
-const SIZE_PCT = 0.10;  // 10% of capital per trade
+// Tuning constants loaded from strategy-config.js (DB-backed, admin-editable).
+// Module-level fallbacks kept so the strategy works even before first getCfg() call.
+let CONVERGE_BAND = 0.0025;
+let CONVERGE_MIN  = 2;
+let DIVERGE_MIN   = 0.0012;
+let TP_PCT        = 0.020;
+let SL_PCT        = 0.010;
+let SIZE_PCT      = 0.10;
 
 // ── Prime Time Windows (UTC hours) ───────────────────────────
 // Best WR slots from backtest: 16-18 (75%), 02-04 (72.5%), 20-22 (67.6%), 18-20 (62%)
@@ -106,11 +106,6 @@ function sessionVwap(bars, i) {
   return sumVol > 0 ? sumTpv / sumVol : bars[i].close;
 }
 
-function volSma9(bars, i) {
-  const vols = bars.slice(Math.max(0, i - 8), i + 1).map(b => b.vol);
-  return vols.reduce((a, b) => a + b, 0) / vols.length;
-}
-
 // ─── T-Junction Detector ──────────────────────────────────────
 //
 // Returns { dir, score, convergedBars, spread } or null.
@@ -162,6 +157,17 @@ async function scanTjunction(log) {
     return [];
   }
 
+  // Reload tuning params from DB-backed config (60 s cache)
+  const cfg = await getCfg();
+  CONVERGE_BAND = cfg['strat.tjunction.converge_band'];
+  CONVERGE_MIN  = cfg['strat.tjunction.converge_min'];
+  DIVERGE_MIN   = cfg['strat.tjunction.diverge_min'];
+  TP_PCT        = cfg['strat.tjunction.tp_pct'];
+  SL_PCT        = cfg['strat.tjunction.sl_pct'];
+  SIZE_PCT      = cfg['strat.tjunction.size_pct'];
+  const VOL_SMA_PERIOD  = cfg['strat.tjunction.vol_sma_period']  || 9;
+  const VWAP_TOLERANCE  = cfg['strat.tjunction.vwap_tolerance']  ?? 0.0010;
+
   log('T-Junction: prime session active — scanning for MA convergence breakouts...');
 
   const signals = [];
@@ -202,11 +208,13 @@ async function scanTjunction(log) {
         // ── VWAP filter ──
         const vwap  = sessionVwap(bars, endIdx - 1);
         const price = spikeBar.close;
-        if (sig.dir === 'LONG'  && price < vwap * 0.9990) continue; // price too far below VWAP — skip LONG
-        if (sig.dir === 'SHORT' && price > vwap * 1.0010) continue; // price too far above VWAP — skip SHORT
+        if (sig.dir === 'LONG'  && price < vwap * (1 - VWAP_TOLERANCE)) continue;
+        if (sig.dir === 'SHORT' && price > vwap * (1 + VWAP_TOLERANCE)) continue;
 
         // ── Volume filter ──
-        const avgVol = volSma9(bars, endIdx - 2); // SMA9 of bars before signal
+        const volPeriod = Math.round(VOL_SMA_PERIOD);
+        const avgVol = bars.slice(Math.max(0, endIdx - 1 - volPeriod), endIdx - 1)
+          .reduce((s, b) => s + b.vol, 0) / volPeriod;
         if (spikeBar.vol < avgVol) continue;
 
         // ── Candle body direction must agree ──

@@ -767,6 +767,374 @@ router.put('/settings', async (req, res) => {
   }
 });
 
+// ── Strategy Config ─────────────────────────────────────────
+// Schema: human-readable metadata for every tunable parameter.
+// Drives the admin UI — labels, units, min/max hints, descriptions.
+const STRATEGY_SCHEMA = [
+  {
+    id: 'ma_stack', name: 'MA Stack Trend', status: 'active',
+    enabledKey: 'strat.ma_stack.enabled',
+    description: 'Trend-following on 1m chart. Fires when SMA5/10/20 fan in strict order and price breaks through all MAs.',
+    params: [
+      { key: 'strat.ma_stack.atr_period',        label: 'ATR Period',        unit: 'candles', scale: 1,   min: 5,   max: 50,   step: 1,    hint: 'Lookback candles for ATR calculation. 14 = standard. Higher = smoother but slower.' },
+      { key: 'strat.ma_stack.vol_sma_period',    label: 'Volume SMA Period', unit: 'candles', scale: 1,   min: 3,   max: 20,   step: 1,    hint: 'SMA period for volume conviction filter. Signal candle must exceed this average.' },
+      { key: 'strat.ma_stack.min_stack_spread',  label: 'Min Stack Spread',  unit: '%',       scale: 100, min: 0.01, max: 1,   step: 0.01, hint: 'Hard floor for MA separation. Lower = catches tighter fans.' },
+      { key: 'strat.ma_stack.min_spread_growth', label: 'Min Spread Growth', unit: '×',       scale: 1,   min: 1.0,  max: 3.0, step: 0.05, hint: 'Fan must be this × wider than 3 bars ago. Confirms active divergence.' },
+      { key: 'strat.ma_stack.min_atr_pct',       label: 'Min ATR',           unit: '%',       scale: 100, min: 0.1,  max: 1,   step: 0.05, hint: 'Min ATR % of price. Filters sideways noise.' },
+      { key: 'strat.ma_stack.max_extension_atr', label: 'Max Extension',     unit: '× ATR',   scale: 1,   min: 0.5,  max: 5,   step: 0.1,  hint: "Don't chase more than this × ATR past SMA5." },
+      { key: 'strat.ma_stack.max_signal_age_ms', label: 'Signal Freshness',  unit: 'ms',      scale: 1,   min: 30000, max: 600000, step: 30000, hint: 'Signal expires after this many ms. 180 000 = 3 min.' },
+      { key: 'strat.ma_stack.sl_min_pct',        label: 'SL Minimum',        unit: '%',       scale: 100, min: 0.1,  max: 5,   step: 0.1,  hint: 'Floor for stop-loss distance.' },
+      { key: 'strat.ma_stack.sl_max_pct',        label: 'SL Maximum',        unit: '%',       scale: 100, min: 0.5,  max: 10,  step: 0.1,  hint: 'Cap for stop-loss distance.' },
+      { key: 'strat.ma_stack.tp_multiplier',     label: 'TP Multiplier',     unit: '× SL',    scale: 1,   min: 1,    max: 5,   step: 0.1,  hint: 'Take profit = SL × this value.' },
+    ],
+  },
+  {
+    id: 'tjunction', name: 'T-Junction', status: 'active',
+    enabledKey: 'strat.tjunction.enabled',
+    description: 'Convergence breakout on 5m chart. MAs compress into a T-stem, then fan out = entry.',
+    params: [
+      { key: 'strat.tjunction.vol_sma_period',  label: 'Volume SMA Period',  unit: 'candles', scale: 1,   min: 3,    max: 20,  step: 1,    hint: 'SMA period for volume filter. Signal candle volume must exceed this average.' },
+      { key: 'strat.tjunction.vwap_tolerance',  label: 'VWAP Tolerance',     unit: '%',       scale: 100, min: 0.0,  max: 1,   step: 0.05, hint: 'Max % distance from VWAP. 0 = price must be on the VWAP side. Higher = looser.' },
+      { key: 'strat.tjunction.converge_band',   label: 'Convergence Band',   unit: '%',       scale: 100, min: 0.05, max: 1,   step: 0.05, hint: 'Max MA spread to count as "converged" (T-stem).' },
+      { key: 'strat.tjunction.converge_min',    label: 'Min Converged Bars', unit: 'bars',    scale: 1,   min: 1,    max: 10,  step: 1,    hint: 'Minimum consecutive converged bars (T-stem length).' },
+      { key: 'strat.tjunction.diverge_min',     label: 'Min Divergence',     unit: '%',       scale: 100, min: 0.05, max: 1,   step: 0.05, hint: 'Minimum fan spread to confirm the breakout.' },
+      { key: 'strat.tjunction.tp_pct',          label: 'Take Profit',        unit: '%',       scale: 100, min: 0.5,  max: 5,   step: 0.1,  hint: 'Fixed TP distance from entry.' },
+      { key: 'strat.tjunction.sl_pct',          label: 'Stop Loss',          unit: '%',       scale: 100, min: 0.1,  max: 3,   step: 0.1,  hint: 'Fixed SL distance from entry.' },
+      { key: 'strat.tjunction.size_pct',        label: 'Position Size',      unit: '%',       scale: 100, min: 1,    max: 50,  step: 1,    hint: '% of capital used per trade.' },
+    ],
+  },
+  {
+    id: 'triple_ma', name: 'Triple MA (Sideways)', status: 'disabled',
+    enabledKey: 'strat.triple_ma.enabled',
+    description: 'Mean-reversion on 5m chart. Only active in sideways, low-ATR conditions. Currently disabled.',
+    params: [
+      { key: 'strat.triple_ma.atr_max_pct',          label: 'ATR Max (Sideways Cap)', unit: '%', scale: 100, min: 0.1, max: 2,   step: 0.05, hint: 'ATR must be BELOW this to enter. Keeps it sideways-only.' },
+      { key: 'strat.triple_ma.scenario_a_sl_pct',    label: 'Scenario A SL',          unit: '%', scale: 100, min: 0.1, max: 3,   step: 0.1,  hint: 'Stop loss for Scenario A (MA20-touch TP).' },
+      { key: 'strat.triple_ma.scenario_a_tolerance', label: 'Entry Tolerance',         unit: '%', scale: 100, min: 0.1, max: 2,   step: 0.1,  hint: 'Max % away from MA level to allow entry.' },
+      { key: 'strat.triple_ma.rsi_oversold',         label: 'RSI Oversold (Scen B)',  unit: '',  scale: 1,   min: 10,  max: 50,  step: 1,    hint: 'RSI must be below this for Scenario B dip-buy.' },
+      { key: 'strat.triple_ma.size_pct',             label: 'Position Size',           unit: '%', scale: 100, min: 1,   max: 50,  step: 1,    hint: '% of capital used per trade.' },
+    ],
+  },
+  {
+    id: 'spike_hl', name: 'Spike-HL Liquidity Sweep', status: 'active',
+    enabledKey: 'strat.spike_hl.enabled',
+    description: 'Detects smart-money stop sweeps on 1m chart. Enters at the rejection candle close.',
+    params: [
+      { key: 'strat.spike_hl.ema_period',     label: 'EMA Period',      unit: 'bars', scale: 1,   min: 50,   max: 500, step: 10,   hint: 'EMA period used as the trend-bias filter. 200 = conservative, 100 = faster response.' },
+      { key: 'strat.spike_hl.min_spike_pct',  label: 'Min Spike Size',  unit: '%',    scale: 100, min: 0.05, max: 1,   step: 0.05, hint: 'Spike must pierce at least this % beyond the prior high/low.' },
+      { key: 'strat.spike_hl.max_spike_pct',  label: 'Max Spike Size',  unit: '%',    scale: 100, min: 0.5,  max: 5,   step: 0.1,  hint: 'Beyond this = crash, not sweep. Skip.' },
+      { key: 'strat.spike_hl.min_wick_ratio', label: 'Min Wick Ratio',  unit: '×',    scale: 1,   min: 1.0,  max: 5,   step: 0.1,  hint: 'Wick must be at least this × the candle body.' },
+      { key: 'strat.spike_hl.sl_buffer',      label: 'SL Buffer',       unit: '%',    scale: 100, min: 0.01, max: 0.5, step: 0.01, hint: 'SL placed this % beyond the spike extreme.' },
+      { key: 'strat.spike_hl.size_pct',       label: 'Position Size',   unit: '%',    scale: 100, min: 1,    max: 50,  step: 1,    hint: '% of capital used per trade.' },
+    ],
+  },
+  {
+    id: 'smc', name: 'SMC Engine', status: 'active',
+    enabledKey: 'strat.smc.enabled',
+    description: '2-gate strategy: 3m HL/LH sets direction → 1m HL/LH confirms entry. EMA bias filter. Trailing stop after TP.',
+    params: [
+      { key: 'strat.smc.swing_len_3m',   label: '3m Swing Length',   unit: 'candles', scale: 1,   min: 2,   max: 20,  step: 1,    hint: 'Candles each side of a pivot to confirm as a 3m swing high/low. Higher = slower, fewer signals.' },
+      { key: 'strat.smc.swing_len_1m',   label: '1m Swing Length',   unit: 'candles', scale: 1,   min: 2,   max: 15,  step: 1,    hint: 'Candles each side to confirm a 1m swing. Higher = stronger confirmation, fewer entries.' },
+      { key: 'strat.smc.ema_period',     label: 'EMA Period (1h)',   unit: 'bars',    scale: 1,   min: 50,  max: 500, step: 10,   hint: '1h EMA period for trend-bias filter. 200 = standard, 100 = faster. Contrary direction = score penalty.' },
+      { key: 'strat.smc.max_candle_age', label: 'Max Swing Age',     unit: 'candles', scale: 1,   min: 3,   max: 50,  step: 1,    hint: 'How many 1m candles ago the swing can be. Older = possibly stale entry.' },
+      { key: 'strat.smc.max_chase_pct',  label: 'Max Chase %',       unit: '%',       scale: 100, min: 0.1, max: 5,   step: 0.1,  hint: 'Max price distance from swing point. Beyond this = chasing, skip.' },
+      { key: 'strat.smc.sl_pct',         label: 'Stop Loss',         unit: '%',       scale: 100, min: 0.1, max: 3,   step: 0.05, hint: 'SL as % from entry (used when structure-based SL is out of range).' },
+      { key: 'strat.smc.tp_pct',         label: 'Take Profit',       unit: '%',       scale: 100, min: 0.1, max: 5,   step: 0.05, hint: 'TP as % from entry. Default 1% = 2:1 R:R on 0.5% SL.' },
+      { key: 'strat.smc.trailing_step',  label: 'Trailing Step',     unit: '%',       scale: 100, min: 0.1, max: 5,   step: 0.1,  hint: 'Trail-stop step once TP is hit. Locks in profit as price moves.' },
+      { key: 'strat.smc.size_pct',       label: 'Position Size',     unit: '%',       scale: 100, min: 1,   max: 50,  step: 1,    hint: '% of capital used per trade.' },
+    ],
+  },
+];
+
+router.get('/strategy-config', async (req, res) => {
+  try {
+    const { DEFAULTS } = require('../strategy-config');
+    const rows = await query("SELECT key, value FROM settings WHERE key LIKE 'strat.%'");
+    const overrides = {};
+    for (const r of rows) overrides[r.key] = r.value;
+
+    const result = STRATEGY_SCHEMA.map(strategy => {
+      const enabledDefault = strategy.enabledKey ? (DEFAULTS[strategy.enabledKey] ?? 1) : 1;
+      const enabledCurrent = strategy.enabledKey && overrides[strategy.enabledKey] != null
+        ? Number(overrides[strategy.enabledKey])
+        : enabledDefault;
+
+      return {
+        ...strategy,
+        enabled: enabledCurrent === 1,
+        enabledDefault: enabledDefault === 1,
+        params: strategy.params.map(p => ({
+          ...p,
+          default:    DEFAULTS[p.key] ?? null,
+          current:    overrides[p.key] != null ? Number(overrides[p.key]) : (DEFAULTS[p.key] ?? null),
+          overridden: overrides[p.key] != null,
+        })),
+      };
+    });
+    res.json(result);
+  } catch (err) {
+    console.error('Strategy config GET error:', err.message);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// ── Helper: apply a config object to the settings table ──────
+async function applyStrategyConfig(configObj) {
+  const { DEFAULTS } = require('../strategy-config');
+  const validKeys = new Set(Object.keys(DEFAULTS));
+  for (const [key, val] of Object.entries(configObj)) {
+    if (!validKeys.has(key)) continue;
+    const num = Number(val);
+    if (!Number.isFinite(num)) continue;
+    await query(
+      `INSERT INTO settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = $2`,
+      [key, String(num)]
+    );
+  }
+  try { require('../strategy-config').invalidateCache(); } catch (_) {}
+}
+
+// Save a new version (and apply it as active)
+// Body: { name: string, config: { 'strat.*': number } }
+router.post('/strategy-config/versions', async (req, res) => {
+  try {
+    const { name, config } = req.body;
+    if (!name || !config || typeof config !== 'object') {
+      return res.status(400).json({ error: 'name and config are required' });
+    }
+
+    const { DEFAULTS } = require('../strategy-config');
+    const validKeys = new Set(Object.keys(DEFAULTS));
+    const clean = {};
+    for (const [k, v] of Object.entries(config)) {
+      if (!validKeys.has(k)) continue;
+      const num = Number(v);
+      if (Number.isFinite(num)) clean[k] = num;
+    }
+
+    // Deactivate all existing versions, then insert the new one as active
+    await query(`UPDATE strategy_config_versions SET is_active = false`);
+    const rows = await query(
+      `INSERT INTO strategy_config_versions (name, config, is_active) VALUES ($1, $2, true) RETURNING *`,
+      [name.trim(), JSON.stringify(clean)]
+    );
+
+    // Apply to live settings table
+    await applyStrategyConfig(clean);
+
+    res.json({ ok: true, version: rows[0] });
+  } catch (err) {
+    console.error('Strategy config version create error:', err.message);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// List all versions (newest first)
+router.get('/strategy-config/versions', async (req, res) => {
+  try {
+    const rows = await query(
+      `SELECT id, name, config, is_active, created_at FROM strategy_config_versions ORDER BY created_at DESC`
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error('Strategy config versions list error:', err.message);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Activate (apply) an existing version
+router.post('/strategy-config/versions/:id/activate', async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid id' });
+
+    const rows = await query(`SELECT * FROM strategy_config_versions WHERE id = $1`, [id]);
+    if (!rows.length) return res.status(404).json({ error: 'Version not found' });
+
+    await query(`UPDATE strategy_config_versions SET is_active = false`);
+    await query(`UPDATE strategy_config_versions SET is_active = true WHERE id = $1`, [id]);
+    await applyStrategyConfig(rows[0].config);
+
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Strategy config version activate error:', err.message);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Delete a version (cannot delete the active one)
+router.delete('/strategy-config/versions/:id', async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid id' });
+
+    const rows = await query(`SELECT is_active FROM strategy_config_versions WHERE id = $1`, [id]);
+    if (!rows.length) return res.status(404).json({ error: 'Version not found' });
+    if (rows[0].is_active) return res.status(400).json({ error: 'Cannot delete the active version' });
+
+    await query(`DELETE FROM strategy_config_versions WHERE id = $1`, [id]);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Strategy config version delete error:', err.message);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Reset a single param key back to default (removes DB override)
+router.delete('/strategy-config/param/:key', async (req, res) => {
+  try {
+    const key = req.params.key;
+    const { DEFAULTS } = require('../strategy-config');
+    if (!(key in DEFAULTS)) return res.status(400).json({ error: 'Unknown key' });
+    await query("DELETE FROM settings WHERE key = $1", [key]);
+    try { require('../strategy-config').invalidateCache(); } catch (_) {}
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Strategy config param reset error:', err.message);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════
+// Strategy Composer — DB-backed strategy definitions
+// ═══════════════════════════════════════════════════════════
+
+// Return the full indicator metadata so the UI can render the composer
+router.get('/indicator-library', (req, res) => {
+  const { INDICATOR_LIBRARY } = require('../indicator-library');
+  res.json(INDICATOR_LIBRARY);
+});
+
+// List all strategy definitions
+router.get('/strategy-definitions', async (req, res) => {
+  try {
+    const rows = await query(
+      `SELECT id, name, description, is_builtin, is_enabled, config, created_at, updated_at
+       FROM strategy_definitions ORDER BY is_builtin DESC, id`
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error('strategy-definitions GET error:', err.message);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Create a new strategy definition
+router.post('/strategy-definitions', async (req, res) => {
+  try {
+    const { name, description = '', config = {} } = req.body;
+    if (!name || !name.trim()) return res.status(400).json({ error: 'name is required' });
+    const rows = await query(
+      `INSERT INTO strategy_definitions (name, description, is_builtin, is_enabled, config)
+       VALUES ($1, $2, false, true, $3)
+       RETURNING id, name, description, is_builtin, is_enabled, config, created_at, updated_at`,
+      [name.trim(), description.trim(), JSON.stringify(config)]
+    );
+    try { require('../strategy-runner').invalidateStratCache(); } catch (_) {}
+    res.json(rows[0]);
+  } catch (err) {
+    console.error('strategy-definitions POST error:', err.message);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Update a strategy definition (name, description, config, is_enabled)
+router.put('/strategy-definitions/:id', async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid id' });
+    const { name, description, config, is_enabled } = req.body;
+
+    const existing = await query('SELECT * FROM strategy_definitions WHERE id = $1', [id]);
+    if (!existing.length) return res.status(404).json({ error: 'Not found' });
+
+    const updates = [];
+    const vals    = [];
+    let idx       = 1;
+
+    if (name        != null) { updates.push(`name = $${idx++}`);        vals.push(name.trim()); }
+    if (description != null) { updates.push(`description = $${idx++}`); vals.push(description); }
+    if (config      != null) { updates.push(`config = $${idx++}`);      vals.push(JSON.stringify(config)); }
+    if (is_enabled  != null) { updates.push(`is_enabled = $${idx++}`);  vals.push(!!is_enabled); }
+    updates.push(`updated_at = NOW()`);
+    vals.push(id);
+
+    const rows = await query(
+      `UPDATE strategy_definitions SET ${updates.join(', ')} WHERE id = $${idx}
+       RETURNING id, name, description, is_builtin, is_enabled, config, created_at, updated_at`,
+      vals
+    );
+    try { require('../strategy-runner').invalidateStratCache(); } catch (_) {}
+    res.json(rows[0]);
+  } catch (err) {
+    console.error('strategy-definitions PUT error:', err.message);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Delete a custom (non-builtin) strategy definition
+router.delete('/strategy-definitions/:id', async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid id' });
+    const rows = await query('SELECT is_builtin FROM strategy_definitions WHERE id = $1', [id]);
+    if (!rows.length) return res.status(404).json({ error: 'Not found' });
+    if (rows[0].is_builtin) return res.status(403).json({ error: 'Cannot delete built-in strategy. Disable it instead.' });
+    await query('DELETE FROM strategy_definitions WHERE id = $1', [id]);
+    try { require('../strategy-runner').invalidateStratCache(); } catch (_) {}
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('strategy-definitions DELETE error:', err.message);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Run a live backtest for a strategy definition using the indicator library
+router.post('/strategy-definitions/:id/backtest', async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid id' });
+    const rows = await query('SELECT * FROM strategy_definitions WHERE id = $1', [id]);
+    if (!rows.length) return res.status(404).json({ error: 'Not found' });
+
+    const stratDef = rows[0];
+    const days     = Math.min(parseInt(req.body?.days) || 7, 14);
+    const symbols  = Array.isArray(req.body?.symbols) && req.body.symbols.length
+      ? req.body.symbols : null;
+
+    const { backtestStrategyDefinition } = require('../strategy-backtest');
+    const result = await backtestStrategyDefinition(stratDef, { days, symbols });
+
+    // Persist summary to strategy_backtests for the Backtest tab
+    try {
+      await query(
+        `INSERT INTO strategy_backtests
+           (name, params, total_trades, wins, losses, win_rate, total_pnl, avg_win, avg_loss, max_drawdown, symbols, top_trades)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+        [
+          `${stratDef.name} ${days}d`,
+          JSON.stringify({ strategyDefinitionId: id, days, timeframe: result.timeframe, slPct: result.slPct, tpMult: result.tpMult }),
+          result.total        || 0,
+          result.wins         || 0,
+          result.losses       || 0,
+          result.winRate      || 0,
+          result.totalPnl     || 0,
+          result.avgWin       || 0,
+          result.avgLoss      || 0,
+          result.maxDrawdown  || 0,
+          JSON.stringify(result.symbols),
+          JSON.stringify({ perSymbol: result.perSymbol, recentTrades: result.recentTrades }),
+        ]
+      );
+    } catch (_) {}
+
+    res.json(result);
+  } catch (err) {
+    console.error('strategy-definitions backtest error:', err.message);
+    res.status(500).json({ error: err.message || 'Backtest failed' });
+  }
+});
+
 // ── Risk Level Management ───────────────────────────────────
 
 router.get('/risk-levels', async (req, res) => {

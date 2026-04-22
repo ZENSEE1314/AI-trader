@@ -1672,6 +1672,7 @@
           <button class="admin-subtab" data-admintab="users" onclick="window.CryptoBot.switchAdminTab('users')" data-i18n="admin.users">Users</button>
           <button class="admin-subtab" data-admintab="tokens" onclick="window.CryptoBot.switchAdminTab('tokens')" data-i18n="admin.tokens">Tokens</button>
           <button class="admin-subtab" data-admintab="settings" onclick="window.CryptoBot.switchAdminTab('settings')" data-i18n="admin.settings">Settings</button>
+          <button class="admin-subtab" data-admintab="strategies" onclick="window.CryptoBot.switchAdminTab('strategies')">⚙️ Strategies</button>
           <button class="admin-subtab" data-admintab="tools" onclick="window.CryptoBot.switchAdminTab('tools')" data-i18n="admin.tools">Tools</button>
           <button class="admin-subtab" data-admintab="versions" onclick="window.CryptoBot.switchAdminTab('versions')">⚡ Versions</button>
           <button class="admin-subtab" data-admintab="email" onclick="window.CryptoBot.switchAdminTab('email')" data-i18n="admin.email">✉️ Email</button>
@@ -1949,6 +1950,38 @@
           </div>
         </div>
         </div><!-- /admin-tab-settings -->
+
+        <!-- ═══════════════════════════════════════════
+             TAB: Strategies
+             ═══════════════════════════════════════════ -->
+        <div id="admin-tab-strategies" class="admin-tab-panel hidden">
+          <!-- Sub-tabs: Parameter Tuning | Strategy Composer -->
+          <div style="display:flex;gap:4px;margin-bottom:var(--space-3);border-bottom:1px solid var(--color-border-muted);padding-bottom:var(--space-2);">
+            <button id="strat-subtab-params" class="btn btn-sm strat-subtab-btn strat-subtab-active"
+              data-subtab="params" style="font-size:0.8rem;">⚙️ Parameter Tuning</button>
+            <button id="strat-subtab-composer" class="btn btn-sm strat-subtab-btn"
+              data-subtab="composer" style="font-size:0.8rem;">🧩 Strategy Composer</button>
+          </div>
+
+          <!-- Parameter Tuning panel -->
+          <div id="strat-panel-params">
+            <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:var(--space-3);">
+              <h3 style="margin:0;color:var(--color-text);">Strategy Parameters</h3>
+              <span style="font-size:0.75rem;color:var(--color-text-muted);">Changes take effect on next scan cycle (~60 s)</span>
+            </div>
+            <div id="strategy-config-grid" style="display:flex;flex-direction:column;gap:var(--space-3);"></div>
+          </div>
+
+          <!-- Strategy Composer panel -->
+          <div id="strat-panel-composer" style="display:none;">
+            <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:var(--space-3);">
+              <h3 style="margin:0;color:var(--color-text);">Strategy Composer</h3>
+              <button id="strat-composer-new-btn" class="btn btn-sm"
+                style="background:var(--color-accent);color:#fff;font-size:0.8rem;padding:5px 16px;">+ New Strategy</button>
+            </div>
+            <div id="strategy-composer-grid" style="display:flex;flex-direction:column;gap:var(--space-3);"></div>
+          </div>
+        </div><!-- /admin-tab-strategies -->
 
         <!-- Tokens tab is already above, skip old inline tokens -->
         <!-- ═══════════════════════════════════════════

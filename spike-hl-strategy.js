@@ -26,6 +26,7 @@ const fetch = require('node-fetch');
 const { log: bLog } = require('./bot-logger');
 // isSessionOpenBlackout is shared from liquidity-sweep-engine to stay in sync
 const { isSessionOpenBlackout } = require('./liquidity-sweep-engine');
+const { getCfg } = require('./strategy-config');
 
 const REQUEST_TIMEOUT = 12000;
 
@@ -36,13 +37,14 @@ const SPIKE_HL_SYMBOLS = new Map([
   ['BNBUSDT',  20],
 ]);
 
-// Spike detection thresholds
-const MIN_SPIKE_PCT   = 0.0015; // spike must pierce ≥ 0.15% beyond prevHL/LH
-const MAX_SPIKE_PCT   = 0.015;  // cap at 1.5% — beyond that is a crash, not a sweep
-const MIN_WICK_RATIO  = 1.2;    // lower/upper wick ≥ 1.2× candle body
-const SL_BUFFER       = 0.001;  // SL sits 0.1% beyond spike extreme
-const EMA_PERIOD      = 200;
-const SIZE_PCT        = 0.10;   // 10% of capital per trade
+// Spike detection thresholds — loaded from DB-backed config (admin-editable).
+// Module-level fallbacks ensure the strategy works before first getCfg() call.
+let MIN_SPIKE_PCT  = 0.0015;
+let MAX_SPIKE_PCT  = 0.015;
+let MIN_WICK_RATIO = 1.2;
+let SL_BUFFER      = 0.001;
+let SIZE_PCT       = 0.10;
+let EMA_PERIOD     = 200; // EMA trend-bias filter period — 200 or 100
 
 // ─── Fetch Helpers ────────────────────────────────────────────
 
@@ -232,6 +234,15 @@ async function scanSpikeHL(log) {
   if (!isInSession(Date.now())) {
     return [];
   }
+
+  // Reload tuning params from DB-backed config (60 s cache)
+  const cfg = await getCfg();
+  MIN_SPIKE_PCT  = cfg['strat.spike_hl.min_spike_pct'];
+  MAX_SPIKE_PCT  = cfg['strat.spike_hl.max_spike_pct'];
+  MIN_WICK_RATIO = cfg['strat.spike_hl.min_wick_ratio'];
+  SL_BUFFER      = cfg['strat.spike_hl.sl_buffer'];
+  SIZE_PCT       = cfg['strat.spike_hl.size_pct'];
+  EMA_PERIOD     = cfg['strat.spike_hl.ema_period'] || 200;
 
   log('Spike-HL: session active — scanning for liquidity sweeps...');
 

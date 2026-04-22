@@ -314,6 +314,23 @@ async function initAllTables() {
       key VARCHAR(100) PRIMARY KEY,
       value TEXT
     )`,
+    `CREATE TABLE IF NOT EXISTS strategy_config_versions (
+      id        SERIAL PRIMARY KEY,
+      name      TEXT NOT NULL,
+      config    JSONB NOT NULL,
+      is_active BOOLEAN DEFAULT false,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )`,
+    `CREATE TABLE IF NOT EXISTS strategy_definitions (
+      id          SERIAL PRIMARY KEY,
+      name        TEXT NOT NULL,
+      description TEXT DEFAULT '',
+      is_builtin  BOOLEAN DEFAULT false,
+      is_enabled  BOOLEAN DEFAULT true,
+      config      JSONB NOT NULL DEFAULT '{}',
+      created_at  TIMESTAMPTZ DEFAULT NOW(),
+      updated_at  TIMESTAMPTZ DEFAULT NOW()
+    )`,
     `CREATE TABLE IF NOT EXISTS wallet_transactions (
       id SERIAL PRIMARY KEY,
       user_id INTEGER REFERENCES users(id),
@@ -682,6 +699,111 @@ async function initAllTables() {
       console.log('[DB] Token pool seeded: BTCUSDT, ETHUSDT, SOLUSDT, BNBUSDT');
     }
   } catch (_) {}
+
+  // Seed built-in strategy definitions on first boot
+  try {
+    const sdCount = await pool.query('SELECT COUNT(*) FROM strategy_definitions WHERE is_builtin = true');
+    if (parseInt(sdCount.rows[0].count, 10) === 0) {
+      const builtins = [
+        {
+          name: 'SMC Engine',
+          description: '2-gate SMC: 3m HL/LH sets direction, 1m HL/LH confirms entry near fresh swing. EMA200 bias penalty.',
+          config: {
+            timeframe: '1m', symbols: ['BTCUSDT','ETHUSDT','SOLUSDT','BNBUSDT'],
+            sl_pct: 0.005, tp_multiplier: 2.0, trailing_step: 0.012, size_pct: 0.10,
+            indicators: {
+              hl_structure: { enabled: true,  primary_tf: '3m', confirm_tf: '1m', primary_swing: 5, confirm_swing: 4, max_candle_age: 20, max_chase_pct: 0.015 },
+              ema_filter:   { enabled: true,  period: 200, htf: '1h', strict: false },
+              vol_filter:   { enabled: true,  sma_period: 9, min_ratio: 1.0 },
+              candle_dir:   { enabled: false },
+              session_gate: { enabled: false, asia_start: 23, asia_end: 2, europe_start: 7, europe_end: 10, us_start: 12, us_end: 16, grace_ms: 90000 },
+              prime_session: { enabled: false, grace_ms: 90000 },
+              vwap_filter:  { enabled: false, tolerance: 0.001 },
+              atr_gate:     { enabled: false, period: 14, min_pct: 0, max_pct: 1.0 },
+              ma_stack:     { enabled: false, min_spread: 0.0007, min_spread_growth: 1.2, max_extension_atr: 1.5, atr_period: 14 },
+              tjunction:    { enabled: false, converge_band: 0.0025, converge_min: 2, diverge_min: 0.0012 },
+              spike_hl:     { enabled: false, min_spike_pct: 0.0015, max_spike_pct: 0.015, min_wick_ratio: 1.2, sl_buffer: 0.001 },
+              rsi_filter:   { enabled: false, period: 14, oversold: 40, overbought: 60 },
+            },
+          },
+        },
+        {
+          name: 'T-Junction',
+          description: 'MA5/10/20 converge into a T-stem then fan out. Fires in prime UTC sessions only. VWAP + volume confirmed.',
+          config: {
+            timeframe: '5m', symbols: ['BTCUSDT','ETHUSDT','SOLUSDT','BNBUSDT'],
+            sl_pct: 0.010, tp_multiplier: 2.0, trailing_step: 0, size_pct: 0.10,
+            indicators: {
+              prime_session: { enabled: true,  grace_ms: 90000 },
+              tjunction:     { enabled: true,  converge_band: 0.0025, converge_min: 2, diverge_min: 0.0012 },
+              vwap_filter:   { enabled: true,  tolerance: 0.001 },
+              vol_filter:    { enabled: true,  sma_period: 9, min_ratio: 1.0 },
+              candle_dir:    { enabled: true  },
+              ema_filter:    { enabled: false, period: 200, htf: '1h', strict: false },
+              session_gate:  { enabled: false, asia_start: 23, asia_end: 2, europe_start: 7, europe_end: 10, us_start: 12, us_end: 16, grace_ms: 90000 },
+              atr_gate:      { enabled: false, period: 14, min_pct: 0, max_pct: 1.0 },
+              hl_structure:  { enabled: false, primary_tf: '3m', confirm_tf: '1m', primary_swing: 5, confirm_swing: 4, max_candle_age: 20, max_chase_pct: 0.015 },
+              ma_stack:      { enabled: false, min_spread: 0.0007, min_spread_growth: 1.2, max_extension_atr: 1.5, atr_period: 14 },
+              spike_hl:      { enabled: false, min_spike_pct: 0.0015, max_spike_pct: 0.015, min_wick_ratio: 1.2, sl_buffer: 0.001 },
+              rsi_filter:    { enabled: false, period: 14, oversold: 40, overbought: 60 },
+            },
+          },
+        },
+        {
+          name: 'MA Stack Trend',
+          description: 'SMA5/10/20 strict order + active fan opening. Trending setups only. VWAP + ATR + volume gated.',
+          config: {
+            timeframe: '1m', symbols: ['BTCUSDT','ETHUSDT','SOLUSDT','BNBUSDT'],
+            sl_pct: 0.015, tp_multiplier: 2.0, trailing_step: 0, size_pct: 0.10,
+            indicators: {
+              ma_stack:     { enabled: true,  min_spread: 0.0007, min_spread_growth: 1.2, max_extension_atr: 1.5, atr_period: 14 },
+              atr_gate:     { enabled: true,  period: 14, min_pct: 0.003, max_pct: 1.0 },
+              vwap_filter:  { enabled: true,  tolerance: 0.001 },
+              vol_filter:   { enabled: true,  sma_period: 9, min_ratio: 1.0 },
+              candle_dir:   { enabled: true  },
+              ema_filter:   { enabled: false, period: 200, htf: '1h', strict: false },
+              session_gate: { enabled: false, asia_start: 23, asia_end: 2, europe_start: 7, europe_end: 10, us_start: 12, us_end: 16, grace_ms: 90000 },
+              prime_session:{ enabled: false, grace_ms: 90000 },
+              hl_structure: { enabled: false, primary_tf: '3m', confirm_tf: '1m', primary_swing: 5, confirm_swing: 4, max_candle_age: 20, max_chase_pct: 0.015 },
+              tjunction:    { enabled: false, converge_band: 0.0025, converge_min: 2, diverge_min: 0.0012 },
+              spike_hl:     { enabled: false, min_spike_pct: 0.0015, max_spike_pct: 0.015, min_wick_ratio: 1.2, sl_buffer: 0.001 },
+              rsi_filter:   { enabled: false, period: 14, oversold: 40, overbought: 60 },
+            },
+          },
+        },
+        {
+          name: 'Spike-HL Sweep',
+          description: 'Smart-money pivot rejection. Wick sweeps a stop level then closes back. Session gated + EMA trend bias.',
+          config: {
+            timeframe: '1m', symbols: ['BTCUSDT','ETHUSDT','SOLUSDT','BNBUSDT'],
+            sl_pct: 0.005, tp_multiplier: 3.0, trailing_step: 0, size_pct: 0.10,
+            indicators: {
+              spike_hl:     { enabled: true,  min_spike_pct: 0.0015, max_spike_pct: 0.015, min_wick_ratio: 1.2, sl_buffer: 0.001 },
+              session_gate: { enabled: true,  asia_start: 23, asia_end: 2, europe_start: 7, europe_end: 10, us_start: 12, us_end: 16, grace_ms: 90000 },
+              ema_filter:   { enabled: true,  period: 200, htf: '1h', strict: false },
+              vwap_filter:  { enabled: false, tolerance: 0.001 },
+              vol_filter:   { enabled: false, sma_period: 9, min_ratio: 1.0 },
+              candle_dir:   { enabled: false },
+              prime_session:{ enabled: false, grace_ms: 90000 },
+              atr_gate:     { enabled: false, period: 14, min_pct: 0, max_pct: 1.0 },
+              hl_structure: { enabled: false, primary_tf: '3m', confirm_tf: '1m', primary_swing: 5, confirm_swing: 4, max_candle_age: 20, max_chase_pct: 0.015 },
+              ma_stack:     { enabled: false, min_spread: 0.0007, min_spread_growth: 1.2, max_extension_atr: 1.5, atr_period: 14 },
+              tjunction:    { enabled: false, converge_band: 0.0025, converge_min: 2, diverge_min: 0.0012 },
+              rsi_filter:   { enabled: false, period: 14, oversold: 40, overbought: 60 },
+            },
+          },
+        },
+      ];
+      for (const b of builtins) {
+        await pool.query(
+          `INSERT INTO strategy_definitions (name, description, is_builtin, is_enabled, config)
+           VALUES ($1, $2, true, true, $3)`,
+          [b.name, b.description, JSON.stringify(b.config)]
+        );
+      }
+      console.log('[DB] Built-in strategy definitions seeded (4)');
+    }
+  } catch (err) { console.error('[DB] Strategy seed error:', err.message); }
 
   // Strategy Version Manager — split into separate try blocks so one failure
   // does not suppress the others. No UNIQUE on column; index is created separately.

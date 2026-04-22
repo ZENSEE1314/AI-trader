@@ -8,13 +8,11 @@ const { USDMClient } = require('binance');
 const fetch = require('node-fetch');
 const aiLearner = require('./ai-learner');
 const { recordDailyTrade, detectSwings, SWING_LENGTHS, scanSMC } = require('./liquidity-sweep-engine');
-const { scanAI } = require('./ai-signal-scanner');
-// Triple MA disabled — 24.1% WR in combined backtest (net -24.7%). Real markets
-// outside sessions are noisy enough to hit 1% SL before MA20 converges.
-// Exit logic kept so any trades already open in DB close cleanly.
+// NOTE: Triple MA / Spike-HL / T-Junction / MA Stack / AI Scanner exit logic
+// is still referenced below for open trades that may have been entered under
+// those strategies. Do not remove these imports.
 const { shouldExitScenarioA, calcTripleMABTrailStep } = require('./triple-ma-strategy');
-const { scanSpikeHL, calcSpikeHLTrailSl } = require('./spike-hl-strategy');
-const { scanTjunction } = require('./tjunction-strategy');
+const { calcSpikeHLTrailSl } = require('./spike-hl-strategy');
 const { getSentimentScores } = require('./sentiment-scraper');
 const { log: bLog } = require('./bot-logger');
 const { getBinanceRequestOptions, getFetchOptions } = require('./proxy-agent');
@@ -1176,36 +1174,15 @@ async function main() {
       bLog.error(`Kronos batch scan failed (non-blocking): ${kronosBatchErr.message}`);
     }
 
-    // AI-driven signals — uses best discovered strategies from StrategyAgent
-    // Runs only during institutional sessions (Asia / Europe / US opens)
-    const aiSignals = await scanAI(log, { topNCoins, kronosPredictions });
-
-    // Triple MA disabled — combined backtest WR 24.1%, net -24.7%. Removed.
-    const tripleMASignals = [];
-
-    // Spike-HL Liquidity Sweep — runs DURING session windows (91% WR backtest)
-    // Detects smart-money stop sweeps on 1m chart and enters at the rejection close
-    const spikeHLSignals = await scanSpikeHL(log);
-    if (spikeHLSignals.length > 0) {
-      bLog.scan(`Spike-HL: ${spikeHLSignals.length} sweep signal(s) — ${spikeHLSignals.map(s => `${s.symbol} ${s.direction}`).join(', ')}`);
-    }
-
-    // T-Junction MA convergence — fires during 02-04 & 16-22 UTC prime slots
-    // Pattern: MA5/10/20 converge (T-stem) → fan bearish/bullish → entry at breakout close
-    const tjunctionSignals = await scanTjunction(log);
-    if (tjunctionSignals.length > 0) {
-      bLog.scan(`T-Junction: ${tjunctionSignals.length} convergence signal(s) — ${tjunctionSignals.map(s => `${s.symbol} ${s.direction}`).join(', ')}`);
-    }
-
-    // SMC Strategy Engine — 9 strategies: Liquidity Sweep, SL Hunt, Momentum Scalp,
-    // BRR, SMC Classic, SMC HL Structure, Range Bounce, Consol Rejection, VWAP Rejection
-    // Runs 24/7, score-filtered. strategyWinRate bypasses backtest gate for hand-crafted strategies.
+    // SMC Strategy Engine — sole active strategy.
+    // 9 setups: Liquidity Sweep, SL Hunt, Momentum Scalp, BRR, SMC Classic,
+    // SMC HL Structure, Range Bounce, Consol Rejection, VWAP Rejection.
+    // Runs 24/7, score-filtered. strategyWinRate bypasses backtest gate.
     let smcSignals = [];
     try {
       const rawSmc = await scanSMC(log);
       smcSignals = (rawSmc || []).map(s => ({
         ...s,
-        // Set WR high enough to pass the backtest gate bypass (>55 = trusted signal)
         strategyWinRate: s.score >= 10 ? 70 : 60,
       }));
       if (smcSignals.length > 0) {
@@ -1215,7 +1192,7 @@ async function main() {
       bLog.error(`SMC Engine scan failed (non-blocking): ${smcErr.message}`);
     }
 
-    const signals = [...aiSignals, ...tripleMASignals, ...spikeHLSignals, ...tjunctionSignals, ...smcSignals];
+    const signals = [...smcSignals];
 
     if (!signals.length) {
       log('No AI signals found this cycle — agents still learning.');

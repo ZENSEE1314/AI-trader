@@ -148,10 +148,10 @@ router.get('/trades', async (req, res) => {
 
     const params = [req.userId];
     const dateFilter = period
-      ? `AND t.created_at > NOW() - INTERVAL '${period}'`
+      ? `AND COALESCE(t.closed_at, t.created_at) > NOW() - INTERVAL '${period}'`
       : '';
     const dateFilterCount = period
-      ? `AND created_at > NOW() - INTERVAL '${period}'`
+      ? `AND COALESCE(closed_at, created_at) > NOW() - INTERVAL '${period}'`
       : '';
 
     const rows = await query(
@@ -253,7 +253,7 @@ router.get('/trades/csv', async (req, res) => {
   try {
     const period = PERIOD_INTERVALS[req.query.period];
     const dateFilter = period
-      ? `AND t.created_at > NOW() - INTERVAL '${period}'`
+      ? `AND COALESCE(t.closed_at, t.created_at) > NOW() - INTERVAL '${period}'`
       : '';
 
     const rows = await query(
@@ -306,7 +306,7 @@ router.get('/summary', async (req, res) => {
 
     const period = PERIOD_INTERVALS[req.query.period];
     const dateFilter = period
-      ? `AND created_at > NOW() - INTERVAL '${period}'`
+      ? `AND COALESCE(closed_at, created_at) > NOW() - INTERVAL '${period}'`
       : '';
 
     const rows = await query(
@@ -318,8 +318,8 @@ router.get('/summary', async (req, res) => {
         COALESCE(SUM(pnl_usdt), 0) as total_pnl,
         COALESCE(SUM(pnl_usdt) FILTER (WHERE pnl_usdt > 0), 0) as total_won,
         COALESCE(SUM(pnl_usdt) FILTER (WHERE pnl_usdt < 0), 0) as total_lost,
-        COALESCE(SUM(pnl_usdt) FILTER (WHERE created_at > NOW() - INTERVAL '24 hours'), 0) as pnl_24h,
-        COALESCE(SUM(pnl_usdt) FILTER (WHERE created_at > NOW() - INTERVAL '7 days'), 0) as pnl_7d
+        COALESCE(SUM(pnl_usdt) FILTER (WHERE COALESCE(closed_at, created_at) > NOW() - INTERVAL '24 hours'), 0) as pnl_24h,
+        COALESCE(SUM(pnl_usdt) FILTER (WHERE COALESCE(closed_at, created_at) > NOW() - INTERVAL '7 days'), 0) as pnl_7d
        FROM trades WHERE user_id = $1 ${dateFilter}`,
       [req.userId]
     );

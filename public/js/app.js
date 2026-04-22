@@ -1515,15 +1515,959 @@
       btn.classList.toggle('active', btn.dataset.admintab === tab);
     });
     // Toggle panels — all use the same hidden class system (display: none !important in CSS)
-    const panels = ['earnings', 'users', 'tokens', 'settings', 'tools', 'email'];
+    const panels = ['earnings', 'users', 'tokens', 'settings', 'strategies', 'tools', 'email'];
     panels.forEach(p => {
       const el = document.getElementById(`admin-tab-${p}`);
       if (el) el.classList.toggle('hidden', p !== tab);
     });
     // Refresh admin data when switching tabs
-    if (tab === 'earnings') loadAdmin();
-    if (tab === 'email') checkEmailSmtp().catch(() => {});
-    if (tab === 'tokens') { loadTokenCardPrices(); loadTokenStats(); }
+    if (tab === 'earnings')   loadAdmin();
+    if (tab === 'email')      checkEmailSmtp().catch(() => {});
+    if (tab === 'tokens')     { loadTokenCardPrices(); loadTokenStats(); }
+    if (tab === 'strategies') { loadStrategyConfig(); initStratSubTabs(); }
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // STRATEGY CONFIG PANEL  (with version history)
+  // ═══════════════════════════════════════════════════════════
+
+  // Holds the schema + current live values fetched from the API
+  let _stratSchema    = [];
+  // Config object being previewed (null = showing live values)
+  let _previewConfig  = null;
+  let _previewVersion = null;
+
+  async function loadStrategyConfig() {
+    const grid = document.getElementById('strategy-config-grid');
+    if (!grid) return;
+    grid.innerHTML = '<div style="color:var(--color-text-muted);font-size:0.85rem;">Loading…</div>';
+    try {
+      const [strategies, versions] = await Promise.all([
+        api('GET', '/api/admin/strategy-config'),
+        api('GET', '/api/admin/strategy-config/versions').catch(() => []),
+      ]);
+      _stratSchema = strategies;
+      _previewConfig  = null;
+      _previewVersion = null;
+      renderStrategyConfig(strategies, versions);
+    } catch {
+      grid.innerHTML = '<div style="color:var(--color-danger);font-size:0.85rem;">Failed to load strategy config.</div>';
+    }
+  }
+
+  function fmtParamVal(val, scale, step) {
+    if (val == null) return '';
+    const v = val * scale;
+    const decimals = step < 0.01 ? 3 : step < 0.1 ? 2 : 1;
+    return v.toFixed(decimals);
+  }
+
+  function renderStrategyConfig(strategies, versions) {
+    const grid = document.getElementById('strategy-config-grid');
+    if (!grid) return;
+
+    const STATUS_BADGE = {
+      active:   'background:rgba(16,185,129,0.12);color:#10b981;border:1px solid rgba(16,185,129,0.3);',
+      disabled: 'background:rgba(255,255,255,0.05);color:var(--color-text-muted);border:1px solid var(--color-border-muted);',
+    };
+
+    // ── Version History Bar ──────────────────────────────────
+    const activeVer = versions.find(v => v.is_active);
+    const verBar = versions.length === 0 ? '' : `
+      <div style="margin-bottom:var(--space-3);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-3);">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--space-2);">
+          <span style="font-size:0.82rem;font-weight:700;color:var(--color-text);">📋 Version History</span>
+          <span style="font-size:0.72rem;color:var(--color-text-muted);">Click a version to preview its settings</span>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:6px;">
+          ${versions.map(v => {
+            const isActive  = v.is_active;
+            const isPrev    = _previewVersion && _previewVersion.id === v.id;
+            const dateStr   = new Date(v.created_at).toLocaleString();
+            return `<div style="display:flex;align-items:center;gap:8px;padding:8px 12px;border-radius:var(--radius-md);
+              background:${isPrev ? 'rgba(99,102,241,0.12)' : isActive ? 'rgba(16,185,129,0.07)' : 'rgba(255,255,255,0.03)'};
+              border:1px solid ${isPrev ? 'rgba(99,102,241,0.4)' : isActive ? 'rgba(16,185,129,0.25)' : 'var(--color-border-muted)'};"
+              data-ver-id="${v.id}">
+              <button class="strat-ver-preview-btn" data-ver-id="${v.id}"
+                style="background:none;border:none;cursor:pointer;text-align:left;flex:1;padding:0;color:inherit;">
+                <span style="font-size:0.82rem;font-weight:${isActive||isPrev?700:400};color:var(--color-text);">${escapeHtml(v.name)}</span>
+                <span style="font-size:0.7rem;color:var(--color-text-muted);margin-left:8px;">${dateStr}</span>
+              </button>
+              ${isActive ? '<span style="font-size:0.65rem;padding:2px 8px;border-radius:20px;background:rgba(16,185,129,0.15);color:#10b981;border:1px solid rgba(16,185,129,0.3);white-space:nowrap;">● ACTIVE</span>' : ''}
+              ${isPrev   ? '<span style="font-size:0.65rem;padding:2px 8px;border-radius:20px;background:rgba(99,102,241,0.15);color:#818cf8;border:1px solid rgba(99,102,241,0.3);white-space:nowrap;">👁 Previewing</span>' : ''}
+              ${!isActive ? `<button class="btn btn-sm strat-ver-apply-btn" data-ver-id="${v.id}"
+                style="font-size:0.7rem;padding:2px 10px;white-space:nowrap;">Apply</button>` : ''}
+              ${!isActive ? `<button class="strat-ver-del-btn" data-ver-id="${v.id}"
+                style="background:none;border:none;cursor:pointer;color:var(--color-text-muted);font-size:0.8rem;padding:2px 6px;"
+                title="Delete this version">✕</button>` : ''}
+            </div>`;
+          }).join('')}
+        </div>
+      </div>`;
+
+    // ── Strategy Cards ───────────────────────────────────────
+    // If previewing a version, overlay its values on the inputs
+    const previewCfg = _previewConfig;
+    const isPreviewMode = !!previewCfg;
+
+    const cards = strategies.map(strat => {
+      const badge = STATUS_BADGE[strat.status] || STATUS_BADGE.disabled;
+
+      // ── Enable toggle ──────────────────────────────────────────
+      // Live enabled state vs preview override
+      const liveEnabled    = strat.enabled !== false; // true unless explicitly false
+      const previewEnabled = previewCfg && strat.enabledKey != null
+        ? previewCfg[strat.enabledKey] === 1 || previewCfg[strat.enabledKey] === true
+        : null;
+      const showEnabled    = previewEnabled != null ? previewEnabled : liveEnabled;
+      const enabledDiffFromLive = previewEnabled != null && previewEnabled !== liveEnabled;
+
+      const toggleHtml = strat.enabledKey ? `
+        <label class="strat-toggle-wrap" data-strat-id="${escapeHtml(strat.id)}"
+          style="display:flex;align-items:center;gap:6px;margin-left:auto;cursor:pointer;user-select:none;"
+          title="Enable or disable this strategy. Saved with the version.">
+          <input type="checkbox" class="strat-enabled-toggle" data-key="${escapeHtml(strat.enabledKey)}"
+            ${showEnabled ? 'checked' : ''} style="display:none;">
+          <span class="strat-toggle-track" style="
+            display:inline-flex;align-items:center;width:36px;height:20px;border-radius:10px;
+            padding:2px;transition:background 0.2s;
+            background:${showEnabled ? (enabledDiffFromLive ? '#818cf8' : '#10b981') : 'rgba(255,255,255,0.1)'};
+            border:1px solid ${showEnabled ? (enabledDiffFromLive ? '#818cf8' : '#10b981') : 'var(--color-border-muted)'};
+          ">
+            <span style="
+              width:14px;height:14px;border-radius:50%;background:#fff;transition:transform 0.2s;
+              transform:${showEnabled ? 'translateX(16px)' : 'translateX(0)'};
+              box-shadow:0 1px 3px rgba(0,0,0,0.3);
+            "></span>
+          </span>
+          <span style="font-size:0.75rem;font-weight:600;
+            color:${showEnabled ? (enabledDiffFromLive ? '#818cf8' : '#10b981') : 'var(--color-text-muted)'};">
+            ${showEnabled ? 'ON' : 'OFF'}
+          </span>
+          ${enabledDiffFromLive ? `<span style="font-size:0.65rem;color:#818cf8;">≠ live: ${liveEnabled ? 'ON' : 'OFF'}</span>` : ''}
+        </label>` : '';
+
+      const rows = strat.params.map(p => {
+        // Live value vs previewed value
+        const liveVal    = p.current;
+        const previewVal = previewCfg ? previewCfg[p.key] : null;
+        const showVal    = previewVal != null ? previewVal : liveVal;
+
+        const displayVal     = fmtParamVal(showVal, p.scale, p.step);
+        const defaultDisplay = fmtParamVal(p.default, p.scale, p.step);
+        const liveDisplay    = fmtParamVal(liveVal, p.scale, p.step);
+        const isDiffFromLive = previewVal != null && previewVal !== liveVal;
+
+        return `<div style="display:contents;">
+          <div style="font-size:0.8rem;color:var(--color-text);padding:6px 0;align-self:center;">
+            ${escapeHtml(p.label)}
+            ${p.overridden && !isPreviewMode ? '<span style="font-size:0.65rem;color:#f59e0b;margin-left:4px;">✎ edited</span>' : ''}
+            ${isDiffFromLive ? `<span style="font-size:0.65rem;color:#818cf8;margin-left:4px;">≠ live: ${liveDisplay}</span>` : ''}
+          </div>
+          <div style="display:flex;align-items:center;gap:6px;padding:4px 0;">
+            <input
+              type="number"
+              class="form-input text-mono strat-param-input"
+              data-key="${escapeHtml(p.key)}"
+              data-scale="${p.scale}"
+              data-default="${p.default}"
+              value="${displayVal}"
+              min="${p.min}" max="${p.max}" step="${p.step}"
+              style="width:90px;font-size:0.82rem;padding:4px 8px;${isDiffFromLive?'border-color:#818cf8;':''}"
+              title="${escapeHtml(p.hint || '')}"
+            >
+            <span style="font-size:0.72rem;color:var(--color-text-muted);min-width:30px;">${escapeHtml(p.unit)}</span>
+            ${p.overridden && !isPreviewMode
+              ? `<button class="btn btn-sm strat-reset-btn" data-key="${escapeHtml(p.key)}"
+                  style="font-size:0.65rem;padding:2px 7px;background:none;border:1px solid var(--color-border-muted);color:var(--color-text-muted);"
+                  title="Reset to default (${defaultDisplay} ${escapeHtml(p.unit)})">↺ ${defaultDisplay}</button>`
+              : `<span style="font-size:0.65rem;color:var(--color-text-muted);">default: ${defaultDisplay}</span>`}
+          </div>
+          <div style="font-size:0.72rem;color:var(--color-text-muted);padding:4px 0 4px 4px;align-self:center;">${escapeHtml(p.hint || '')}</div>
+        </div>`;
+      }).join('');
+
+      const noParamsNote = strat.params.length === 0
+        ? `<div style="font-size:0.78rem;color:var(--color-text-muted);padding:var(--space-2) 0;font-style:italic;">No tunable parameters — use the toggle above to enable or disable.</div>`
+        : `<div style="display:grid;grid-template-columns:180px 1fr 1fr;gap:2px 12px;margin-top:var(--space-3);align-items:start;">
+            <div style="font-size:0.7rem;font-weight:600;color:var(--color-text-muted);text-transform:uppercase;letter-spacing:.05em;padding-bottom:4px;border-bottom:1px solid var(--color-border-muted);">Parameter</div>
+            <div style="font-size:0.7rem;font-weight:600;color:var(--color-text-muted);text-transform:uppercase;letter-spacing:.05em;padding-bottom:4px;border-bottom:1px solid var(--color-border-muted);">Value</div>
+            <div style="font-size:0.7rem;font-weight:600;color:var(--color-text-muted);text-transform:uppercase;letter-spacing:.05em;padding-bottom:4px;border-bottom:1px solid var(--color-border-muted);">Description</div>
+            ${rows}
+          </div>`;
+
+      return `
+        <details open style="border:1px solid ${showEnabled ? 'var(--color-border-muted)' : 'rgba(255,255,255,0.05)'};
+          border-radius:var(--radius-lg);padding:var(--space-3);
+          opacity:${showEnabled ? '1' : '0.55'};" data-strat-id="${escapeHtml(strat.id)}">
+          <summary style="cursor:pointer;user-select:none;display:flex;align-items:center;gap:10px;list-style:none;outline:none;">
+            <span style="font-size:0.9rem;font-weight:700;color:var(--color-text);">${escapeHtml(strat.name)}</span>
+            <span style="font-size:0.68rem;padding:2px 8px;border-radius:20px;${badge}">${strat.status.toUpperCase()}</span>
+            <span style="font-size:0.75rem;color:var(--color-text-muted);font-weight:400;margin-left:4px;display:none;" class="hide-sm">${escapeHtml(strat.description)}</span>
+            ${toggleHtml}
+          </summary>
+
+          ${noParamsNote}
+        </details>`;
+    }).join('');
+
+    // ── Save / Apply bar (sticky at bottom of panel) ─────────
+    const previewBanner = isPreviewMode ? (() => {
+      // Which strategies are ON in the current preview?
+      const onList  = strategies.filter(s => {
+        if (!s.enabledKey) return true;
+        const v = previewCfg[s.enabledKey];
+        return v == null ? s.enabled : v === 1;
+      }).map(s => escapeHtml(s.name));
+      const offList = strategies.filter(s => {
+        if (!s.enabledKey) return false;
+        const v = previewCfg[s.enabledKey];
+        return v == null ? !s.enabled : v === 0;
+      }).map(s => `<span style="text-decoration:line-through;opacity:0.5;">${escapeHtml(s.name)}</span>`);
+      const allTags = [...onList.map(n => `<span style="background:rgba(16,185,129,0.12);color:#10b981;padding:1px 7px;border-radius:20px;font-size:0.7rem;">${n}</span>`),
+                       ...offList.map(n => `<span style="background:rgba(255,255,255,0.05);color:var(--color-text-muted);padding:1px 7px;border-radius:20px;font-size:0.7rem;">${n}</span>`)].join(' ');
+      return `
+        <div style="padding:10px 16px;background:rgba(99,102,241,0.1);border:1px solid rgba(99,102,241,0.3);border-radius:var(--radius-md);
+          display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+          <span style="font-size:0.82rem;color:#818cf8;font-weight:600;">👁 ${_previewVersion ? `Previewing: ${escapeHtml(_previewVersion.name)}` : 'Editing (unsaved)'}</span>
+          <span style="display:flex;gap:4px;flex-wrap:wrap;align-items:center;">${allTags}</span>
+          <span style="font-size:0.72rem;color:var(--color-text-muted);">Toggle strategies ON/OFF above, then save as a new version.</span>
+          <button id="strat-cancel-preview" class="btn btn-sm"
+            style="margin-left:auto;font-size:0.75rem;background:none;border:1px solid var(--color-border-muted);">✕ Cancel</button>
+        </div>`;
+    })() : '';
+
+    const saveBar = `
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:var(--space-3);
+        border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);background:rgba(255,255,255,0.02);">
+        <input id="strat-version-name" class="form-input" type="text"
+          placeholder="Version name (e.g. Tighter filters v2)"
+          style="flex:1;min-width:200px;font-size:0.82rem;"
+          value="${isPreviewMode && _previewVersion ? escapeHtml(_previewVersion.name + ' (copy)') : ''}">
+        <button id="strat-save-all-btn" class="btn btn-sm"
+          style="background:var(--color-accent);color:#fff;font-size:0.82rem;padding:6px 20px;white-space:nowrap;">
+          💾 Save as New Version
+        </button>
+        <span id="strat-save-status" style="font-size:0.75rem;color:var(--color-text-muted);"></span>
+      </div>`;
+
+    grid.innerHTML = verBar + cards + previewBanner + saveBar;
+
+    // ── Event: preview a version ─────────────────────────────
+    grid.querySelectorAll('.strat-ver-preview-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const verId = parseInt(btn.dataset.verId);
+        const ver   = versions.find(v => v.id === verId);
+        if (!ver) return;
+        _previewVersion = ver;
+        _previewConfig  = ver.config; // raw config object from DB
+        renderStrategyConfig(strategies, versions);
+      });
+    });
+
+    // ── Event: apply a version ───────────────────────────────
+    grid.querySelectorAll('.strat-ver-apply-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const verId = parseInt(btn.dataset.verId);
+        const ver   = versions.find(v => v.id === verId);
+        if (!ver || !confirm(`Apply version "${ver.name}"? This will update the live strategy settings.`)) return;
+        btn.disabled = true;
+        try {
+          await api('POST', `/api/admin/strategy-config/versions/${verId}/activate`);
+          showToast(`Version "${ver.name}" is now active`, 'success');
+          loadStrategyConfig();
+        } catch {
+          showToast('Failed to apply version', 'error');
+          btn.disabled = false;
+        }
+      });
+    });
+
+    // ── Event: delete a version ──────────────────────────────
+    grid.querySelectorAll('.strat-ver-del-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const verId = parseInt(btn.dataset.verId);
+        const ver   = versions.find(v => v.id === verId);
+        if (!ver || !confirm(`Delete version "${ver.name}"?`)) return;
+        try {
+          await api('DELETE', `/api/admin/strategy-config/versions/${verId}`);
+          loadStrategyConfig();
+        } catch (e) {
+          showToast(e.message || 'Delete failed', 'error');
+        }
+      });
+    });
+
+    // ── Event: reset individual param to default ─────────────
+    grid.querySelectorAll('.strat-reset-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const key = btn.dataset.key;
+        if (!confirm(`Reset "${key.split('.').pop()}" to default?`)) return;
+        try {
+          await api('DELETE', `/api/admin/strategy-config/param/${encodeURIComponent(key)}`);
+          loadStrategyConfig();
+        } catch {
+          showToast('Reset failed', 'error');
+        }
+      });
+    });
+
+    // ── Event: strategy enable/disable toggle ────────────────
+    grid.querySelectorAll('.strat-enabled-toggle').forEach(chk => {
+      // Wrap label click → update checkbox → re-render with toggled enabled state
+      const wrap = chk.closest('.strat-toggle-wrap');
+      if (!wrap) return;
+      wrap.addEventListener('click', (e) => {
+        e.preventDefault(); // prevent default label behaviour
+        const key     = chk.dataset.key;
+        const isOn    = !chk.checked;   // toggling
+        chk.checked   = isOn;
+
+        // Update preview config (or init one from current live values)
+        if (!_previewConfig) {
+          // Seed from current live values so we only differ on this key
+          _previewConfig = {};
+          strategies.forEach(s => {
+            if (s.enabledKey) _previewConfig[s.enabledKey] = s.enabled ? 1 : 0;
+            s.params.forEach(p => { _previewConfig[p.key] = p.current; });
+          });
+          // Keep _previewVersion as null — user is editing without basing on a saved version
+        }
+        _previewConfig[key] = isOn ? 1 : 0;
+        renderStrategyConfig(strategies, versions);
+      });
+    });
+
+    // ── Event: cancel preview ────────────────────────────────
+    const cancelBtn = document.getElementById('strat-cancel-preview');
+    if (cancelBtn) {
+      cancelBtn.addEventListener('click', () => {
+        _previewConfig  = null;
+        _previewVersion = null;
+        renderStrategyConfig(strategies, versions);
+      });
+    }
+
+    // ── Event: save all inputs as a new version ───────────────
+    const saveBtn    = document.getElementById('strat-save-all-btn');
+    const nameInput  = document.getElementById('strat-version-name');
+    const saveStatus = document.getElementById('strat-save-status');
+
+    saveBtn.addEventListener('click', async () => {
+      const vName = nameInput.value.trim();
+      if (!vName) {
+        nameInput.focus();
+        nameInput.style.borderColor = 'var(--color-danger)';
+        saveStatus.textContent = 'Enter a version name';
+        saveStatus.style.color = 'var(--color-danger)';
+        return;
+      }
+      nameInput.style.borderColor = '';
+
+      // Collect ALL inputs from all strategy cards (params + enabled toggles)
+      const config = {};
+      grid.querySelectorAll('.strat-param-input').forEach(inp => {
+        const raw   = parseFloat(inp.value);
+        const scale = parseFloat(inp.dataset.scale);
+        if (!isNaN(raw) && scale > 0) config[inp.dataset.key] = raw / scale;
+      });
+      grid.querySelectorAll('.strat-enabled-toggle').forEach(chk => {
+        if (chk.dataset.key) config[chk.dataset.key] = chk.checked ? 1 : 0;
+      });
+
+      saveBtn.disabled = true;
+      saveBtn.textContent = 'Saving…';
+      try {
+        await api('POST', '/api/admin/strategy-config/versions', { name: vName, config });
+        saveStatus.textContent = '✓ Saved & applied';
+        saveStatus.style.color = 'var(--color-success)';
+        setTimeout(() => loadStrategyConfig(), 600);
+      } catch (e) {
+        saveStatus.textContent = '✗ ' + (e.message || 'Save failed');
+        saveStatus.style.color = 'var(--color-danger)';
+        saveBtn.disabled = false;
+        saveBtn.textContent = '💾 Save as New Version';
+        setTimeout(() => { saveStatus.textContent = ''; }, 5000);
+      }
+    });
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // STRATEGY SUB-TABS
+  // ═══════════════════════════════════════════════════════════
+
+  function initStratSubTabs() {
+    const buttons = document.querySelectorAll('.strat-subtab-btn');
+    if (!buttons.length) return;
+    buttons.forEach(btn => {
+      btn.addEventListener('click', () => {
+        const subtab = btn.dataset.subtab;
+        buttons.forEach(b => b.classList.remove('strat-subtab-active'));
+        btn.classList.add('strat-subtab-active');
+        document.getElementById('strat-panel-params').style.display    = subtab === 'params'    ? '' : 'none';
+        document.getElementById('strat-panel-composer').style.display  = subtab === 'composer'  ? '' : 'none';
+        if (subtab === 'composer') loadStrategyComposer();
+      });
+    });
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // STRATEGY COMPOSER
+  // ═══════════════════════════════════════════════════════════
+
+  let _indicatorLibrary = null; // cached from API
+
+  async function loadStrategyComposer() {
+    const grid = document.getElementById('strategy-composer-grid');
+    if (!grid) return;
+    grid.innerHTML = '<div style="color:var(--color-text-muted);font-size:0.85rem;">Loading…</div>';
+    try {
+      const [defs, lib] = await Promise.all([
+        api('GET', '/api/admin/strategy-definitions'),
+        _indicatorLibrary ? Promise.resolve(_indicatorLibrary) : api('GET', '/api/admin/indicator-library'),
+      ]);
+      _indicatorLibrary = lib;
+      renderStrategyComposer(defs, lib);
+    } catch (err) {
+      grid.innerHTML = `<div style="color:var(--color-danger);font-size:0.85rem;">Failed to load: ${escapeHtml(err.message)}</div>`;
+    }
+  }
+
+  function renderStrategyComposer(defs, lib) {
+    const grid = document.getElementById('strategy-composer-grid');
+    if (!grid) return;
+
+    const ROLE_COLOR = { gate: '#f59e0b', signal: '#6366f1', filter: '#06b6d4' };
+    const ROLE_LABEL = { gate: '⏰ Gate', signal: '📡 Signal', filter: '🔽 Filter' };
+
+    function buildIndicatorRows(stratDef) {
+      const cfg = typeof stratDef.config === 'string' ? JSON.parse(stratDef.config) : (stratDef.config || {});
+      const ic  = cfg.indicators || {};
+      const tf  = cfg.timeframe || '5m';
+      const rows = [];
+
+      // Group by role for visual separation
+      const groups = { gate: [], signal: [], filter: [] };
+      for (const ind of lib) {
+        if (groups[ind.role]) groups[ind.role].push(ind);
+      }
+
+      for (const role of ['gate', 'signal', 'filter']) {
+        const color = ROLE_COLOR[role];
+        const label = ROLE_LABEL[role];
+
+        rows.push(`<div style="font-size:0.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.08em;
+          color:${color};padding:10px 0 4px;border-top:1px solid rgba(255,255,255,0.06);margin-top:4px;">${label}S</div>`);
+
+        for (const ind of groups[role]) {
+          const indCfg    = ic[ind.id] || {};
+          const isEnabled = !!indCfg.enabled;
+
+          const paramInputs = ind.params.length === 0
+            ? `<span style="font-size:0.72rem;color:var(--color-text-muted);font-style:italic;">No parameters</span>`
+            : ind.params.map(p => {
+                const rawVal = indCfg[p.key] != null ? indCfg[p.key] : p.default;
+                if (p.type === 'bool') {
+                  return `<label style="display:flex;align-items:center;gap:6px;font-size:0.78rem;color:var(--color-text);cursor:pointer;">
+                    <input type="checkbox" class="composer-param-bool"
+                      data-strat-id="${stratDef.id}" data-ind="${ind.id}" data-key="${escapeHtml(p.key)}"
+                      ${rawVal ? 'checked' : ''}>
+                    ${escapeHtml(p.label)}
+                    ${p.hint ? `<span style="font-size:0.68rem;color:var(--color-text-muted);">${escapeHtml(p.hint)}</span>` : ''}
+                  </label>`;
+                }
+                if (p.type === 'select') {
+                  const opts = (p.options || []).map(o =>
+                    `<option value="${escapeHtml(o)}" ${o === rawVal ? 'selected' : ''}>${escapeHtml(o)}</option>`
+                  ).join('');
+                  return `<label style="display:flex;align-items:center;gap:6px;font-size:0.78rem;color:var(--color-text);">
+                    ${escapeHtml(p.label)}:
+                    <select class="form-input composer-param-select"
+                      data-strat-id="${stratDef.id}" data-ind="${ind.id}" data-key="${escapeHtml(p.key)}"
+                      style="font-size:0.78rem;padding:3px 8px;width:auto;">${opts}</select>
+                  </label>`;
+                }
+                // number
+                const dispScale = p.scale || 1;
+                const dispVal   = typeof rawVal === 'number' ? (rawVal * dispScale).toFixed(
+                  p.step < 0.01 ? 3 : p.step < 0.1 ? 2 : 1
+                ) : rawVal;
+                return `<label style="display:flex;align-items:center;gap:6px;font-size:0.78rem;color:var(--color-text);">
+                  ${escapeHtml(p.label)}:
+                  <input type="number" class="form-input text-mono composer-param-num"
+                    data-strat-id="${stratDef.id}" data-ind="${ind.id}"
+                    data-key="${escapeHtml(p.key)}" data-scale="${dispScale}"
+                    value="${dispVal}" min="${p.min}" max="${p.max}" step="${p.step}"
+                    style="width:80px;font-size:0.78rem;padding:3px 7px;"
+                    title="${escapeHtml(p.hint || '')}">
+                  <span style="font-size:0.72rem;color:var(--color-text-muted);">${escapeHtml(p.unit || '')}</span>
+                  ${p.hint ? `<span style="font-size:0.68rem;color:var(--color-text-muted);">${escapeHtml(p.hint)}</span>` : ''}
+                </label>`;
+              }).join('');
+
+          rows.push(`
+            <div class="composer-indicator-row" data-strat-id="${stratDef.id}" data-ind-id="${ind.id}"
+              style="border:1px solid ${isEnabled ? `${color}44` : 'rgba(255,255,255,0.06)'};
+                border-radius:var(--radius-md);padding:10px 14px;margin-bottom:6px;
+                background:${isEnabled ? `${color}08` : 'rgba(255,255,255,0.01)'};
+                transition:border-color 0.2s,background 0.2s;">
+              <!-- Indicator header row -->
+              <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+                <label style="display:flex;align-items:center;gap:8px;cursor:pointer;flex:1;min-width:0;">
+                  <input type="checkbox" class="composer-ind-toggle"
+                    data-strat-id="${stratDef.id}" data-ind-id="${ind.id}"
+                    ${isEnabled ? 'checked' : ''}
+                    style="width:16px;height:16px;cursor:pointer;accent-color:${color};">
+                  <span class="composer-ind-name" style="font-size:0.85rem;font-weight:600;color:${isEnabled ? 'var(--color-text)' : 'var(--color-text-muted)'};">
+                    ${escapeHtml(ind.name)}
+                  </span>
+                  <span style="font-size:0.65rem;padding:1px 7px;border-radius:20px;
+                    background:${color}22;color:${color};border:1px solid ${color}44;white-space:nowrap;">
+                    ${label}
+                  </span>
+                </label>
+                <span style="font-size:0.72rem;color:var(--color-text-muted);font-style:italic;">${escapeHtml(ind.description)}</span>
+              </div>
+              <!-- Params (shown only when enabled) -->
+              ${isEnabled && ind.params.length > 0 ? `
+              <div class="composer-ind-params" style="display:flex;flex-wrap:wrap;gap:10px;margin-top:10px;padding-top:8px;border-top:1px solid rgba(255,255,255,0.06);">
+                ${paramInputs}
+              </div>` : ind.params.length > 0 ? `<div class="composer-ind-params" style="display:none;">${paramInputs}</div>` : ''}
+            </div>`);
+        }
+      }
+      return rows.join('');
+    }
+
+    function buildStratCard(stratDef) {
+      const cfg        = typeof stratDef.config === 'string' ? JSON.parse(stratDef.config) : (stratDef.config || {});
+      const tf         = cfg.timeframe || '5m';
+      const symbols    = (cfg.symbols || []).join(', ');
+      const slPct      = ((cfg.sl_pct  || 0.01) * 100).toFixed(2);
+      const tpMult     = cfg.tp_multiplier || 2.0;
+      const sizePct    = ((cfg.size_pct || 0.10) * 100).toFixed(0);
+      const isEnabled  = !!stratDef.is_enabled;
+      const isBuiltin  = !!stratDef.is_builtin;
+      const updatedAt  = new Date(stratDef.updated_at || stratDef.created_at).toLocaleString();
+
+      return `
+        <details class="composer-strat-card" data-strat-id="${stratDef.id}"
+          style="border:1px solid ${isEnabled ? 'var(--color-border-muted)' : 'rgba(255,255,255,0.05)'};
+            border-radius:var(--radius-lg);padding:var(--space-3);
+            opacity:${isEnabled ? 1 : 0.65};">
+          <summary style="cursor:pointer;user-select:none;list-style:none;outline:none;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+            <!-- Enable toggle -->
+            <input type="checkbox" class="composer-strat-toggle" data-strat-id="${stratDef.id}"
+              ${isEnabled ? 'checked' : ''}
+              style="width:18px;height:18px;cursor:pointer;accent-color:#10b981;"
+              title="${isEnabled ? 'Strategy enabled — click to disable' : 'Strategy disabled — click to enable'}">
+            <!-- Name (editable inline) -->
+            <input type="text" class="composer-strat-name form-input" data-strat-id="${stratDef.id}"
+              value="${escapeHtml(stratDef.name)}"
+              style="font-size:0.9rem;font-weight:700;padding:3px 8px;flex:1;min-width:120px;max-width:260px;"
+              placeholder="Strategy name"
+              ${isBuiltin ? 'readonly title="Built-in strategy name is read-only"' : ''}>
+            ${isBuiltin ? '<span style="font-size:0.65rem;padding:1px 7px;border-radius:20px;background:rgba(99,102,241,0.15);color:#818cf8;border:1px solid rgba(99,102,241,0.3);white-space:nowrap;">built-in</span>' : ''}
+            <span style="font-size:0.7rem;color:var(--color-text-muted);margin-left:auto;">Updated: ${updatedAt}</span>
+            <!-- Action buttons in header -->
+            <button class="btn btn-sm composer-backtest-btn" data-strat-id="${stratDef.id}"
+              style="font-size:0.72rem;padding:3px 12px;background:rgba(99,102,241,0.12);border:1px solid rgba(99,102,241,0.3);color:#818cf8;white-space:nowrap;">
+              📊 Backtest
+            </button>
+            ${!isBuiltin ? `<button class="btn btn-sm composer-delete-btn" data-strat-id="${stratDef.id}"
+              style="font-size:0.72rem;padding:3px 10px;background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.25);color:#f87171;white-space:nowrap;">
+              🗑 Delete
+            </button>` : ''}
+          </summary>
+
+          <!-- Body -->
+          <div style="margin-top:var(--space-3);display:flex;flex-direction:column;gap:var(--space-3);">
+
+            <!-- Quick settings row -->
+            <div style="display:flex;flex-wrap:wrap;gap:12px;padding:10px 14px;background:rgba(255,255,255,0.02);border-radius:var(--radius-md);border:1px solid rgba(255,255,255,0.06);">
+              <label style="display:flex;align-items:center;gap:6px;font-size:0.78rem;color:var(--color-text);">
+                Timeframe:
+                <select class="form-input composer-tf" data-strat-id="${stratDef.id}"
+                  style="font-size:0.78rem;padding:3px 8px;width:auto;">
+                  ${['1m','3m','5m','15m','1h'].map(t => `<option value="${t}" ${t === tf ? 'selected' : ''}>${t}</option>`).join('')}
+                </select>
+              </label>
+              <label style="display:flex;align-items:center;gap:6px;font-size:0.78rem;color:var(--color-text);">
+                SL %:
+                <input type="number" class="form-input text-mono composer-sl-pct" data-strat-id="${stratDef.id}"
+                  value="${slPct}" min="0.1" max="5" step="0.1" style="width:70px;font-size:0.78rem;padding:3px 7px;">
+              </label>
+              <label style="display:flex;align-items:center;gap:6px;font-size:0.78rem;color:var(--color-text);">
+                TP mult:
+                <input type="number" class="form-input text-mono composer-tp-mult" data-strat-id="${stratDef.id}"
+                  value="${tpMult}" min="0.5" max="10" step="0.1" style="width:70px;font-size:0.78rem;padding:3px 7px;"
+                  title="TP = entry ± (SL distance × this multiplier)">
+              </label>
+              <label style="display:flex;align-items:center;gap:6px;font-size:0.78rem;color:var(--color-text);">
+                Size %:
+                <input type="number" class="form-input text-mono composer-size-pct" data-strat-id="${stratDef.id}"
+                  value="${sizePct}" min="1" max="100" step="1" style="width:70px;font-size:0.78rem;padding:3px 7px;"
+                  title="Position size as % of wallet balance">
+              </label>
+              <div style="flex:1;min-width:200px;">
+                <label style="font-size:0.78rem;color:var(--color-text);">Tokens (comma-separated, blank = auto top-15):</label>
+                <input type="text" class="form-input text-mono composer-symbols" data-strat-id="${stratDef.id}"
+                  value="${escapeHtml(symbols)}" placeholder="e.g. BTCUSDT, ETHUSDT, SOLUSDT"
+                  style="width:100%;font-size:0.78rem;padding:4px 8px;margin-top:4px;">
+              </div>
+            </div>
+
+            <!-- Description -->
+            <textarea class="form-input composer-desc" data-strat-id="${stratDef.id}"
+              rows="2" placeholder="Strategy description (optional)"
+              style="font-size:0.78rem;resize:vertical;"
+              ${isBuiltin ? 'readonly' : ''}>${escapeHtml(stratDef.description || '')}</textarea>
+
+            <!-- Indicator accordion -->
+            <div style="font-size:0.78rem;font-weight:700;color:var(--color-text);margin-bottom:2px;">
+              Indicators
+              <span style="font-size:0.7rem;font-weight:400;color:var(--color-text-muted);margin-left:8px;">
+                Toggle ON/OFF — enabled indicators run in order: Gates → Signals → Filters
+              </span>
+            </div>
+            <div class="composer-indicators-wrap" data-strat-id="${stratDef.id}">
+              ${buildIndicatorRows(stratDef)}
+            </div>
+
+            <!-- Save button -->
+            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+              <button class="btn btn-sm composer-save-btn" data-strat-id="${stratDef.id}"
+                style="background:var(--color-accent);color:#fff;font-size:0.8rem;padding:6px 20px;">
+                💾 Save Strategy
+              </button>
+              <span class="composer-save-status" data-strat-id="${stratDef.id}"
+                style="font-size:0.75rem;color:var(--color-text-muted);"></span>
+            </div>
+          </div>
+        </details>`;
+    }
+
+    grid.innerHTML = defs.length === 0
+      ? '<div style="color:var(--color-text-muted);font-size:0.85rem;font-style:italic;">No strategies yet. Click "+ New Strategy" to create one.</div>'
+      : defs.map(d => buildStratCard(d)).join('');
+
+    // ── New Strategy button ──────────────────────────────────
+    const newBtn = document.getElementById('strat-composer-new-btn');
+    if (newBtn) {
+      newBtn.onclick = async () => {
+        const name = prompt('Strategy name:');
+        if (!name || !name.trim()) return;
+        newBtn.disabled = true;
+        try {
+          await api('POST', '/api/admin/strategy-definitions', {
+            name: name.trim(),
+            description: '',
+            config: {
+              timeframe: '5m',
+              symbols: [],
+              sl_pct: 0.01,
+              tp_multiplier: 2.0,
+              size_pct: 0.10,
+              indicators: {},
+            },
+          });
+          showToast(`Strategy "${name}" created`, 'success');
+          loadStrategyComposer();
+        } catch (e) {
+          showToast(e.message || 'Create failed', 'error');
+        } finally {
+          newBtn.disabled = false;
+        }
+      };
+    }
+
+    // ── Indicator toggle ─────────────────────────────────────
+    grid.querySelectorAll('.composer-ind-toggle').forEach(chk => {
+      chk.addEventListener('change', () => {
+        const row    = chk.closest('.composer-indicator-row');
+        const params = row.querySelector('.composer-ind-params');
+        const color  = ROLE_COLOR[lib.find(i => i.id === chk.dataset.indId)?.role] || '#6366f1';
+        const isOn   = chk.checked;
+
+        // Update visual state
+        row.style.borderColor  = isOn ? `${color}44` : 'rgba(255,255,255,0.06)';
+        row.style.background   = isOn ? `${color}08` : 'rgba(255,255,255,0.01)';
+        const nameEl = row.querySelector('.composer-ind-name');
+        if (nameEl) nameEl.style.color = isOn ? 'var(--color-text)' : 'var(--color-text-muted)';
+
+        if (params) params.style.display = isOn ? 'flex' : 'none';
+      });
+    });
+
+    // ── Save strategy ────────────────────────────────────────
+    grid.querySelectorAll('.composer-save-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const id      = parseInt(btn.dataset.stratId);
+        const card    = grid.querySelector(`details[data-strat-id="${id}"]`);
+        const status  = grid.querySelector(`.composer-save-status[data-strat-id="${id}"]`);
+        if (!card) return;
+
+        // Collect strategy-level fields
+        const name     = card.querySelector(`.composer-strat-name[data-strat-id="${id}"]`)?.value.trim();
+        const desc     = card.querySelector(`.composer-desc[data-strat-id="${id}"]`)?.value || '';
+        const tf       = card.querySelector(`.composer-tf[data-strat-id="${id}"]`)?.value || '5m';
+        const slPctRaw = parseFloat(card.querySelector(`.composer-sl-pct[data-strat-id="${id}"]`)?.value || '1') / 100;
+        const tpMult   = parseFloat(card.querySelector(`.composer-tp-mult[data-strat-id="${id}"]`)?.value || '2');
+        const sizePct  = parseFloat(card.querySelector(`.composer-size-pct[data-strat-id="${id}"]`)?.value || '10') / 100;
+        const symRaw   = card.querySelector(`.composer-symbols[data-strat-id="${id}"]`)?.value || '';
+        const symbols  = symRaw.split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
+
+        // Collect indicator config
+        const indicators = {};
+        card.querySelectorAll(`.composer-ind-toggle[data-strat-id="${id}"]`).forEach(chk => {
+          const indId  = chk.dataset.indId;
+          const indMeta = lib.find(i => i.id === indId);
+          if (!indMeta) return;
+
+          const indCfg = { enabled: chk.checked };
+
+          // Number params
+          card.querySelectorAll(`.composer-param-num[data-strat-id="${id}"][data-ind="${indId}"]`).forEach(inp => {
+            const raw   = parseFloat(inp.value);
+            const scale = parseFloat(inp.dataset.scale) || 1;
+            if (!isNaN(raw)) indCfg[inp.dataset.key] = raw / scale;
+          });
+          // Select params
+          card.querySelectorAll(`.composer-param-select[data-strat-id="${id}"][data-ind="${indId}"]`).forEach(sel => {
+            indCfg[sel.dataset.key] = sel.value;
+          });
+          // Bool params
+          card.querySelectorAll(`.composer-param-bool[data-strat-id="${id}"][data-ind="${indId}"]`).forEach(chkB => {
+            indCfg[chkB.dataset.key] = chkB.checked;
+          });
+
+          indicators[indId] = indCfg;
+        });
+
+        const config = { timeframe: tf, symbols, sl_pct: slPctRaw, tp_multiplier: tpMult, size_pct: sizePct, indicators };
+
+        btn.disabled = true;
+        btn.textContent = 'Saving…';
+        if (status) { status.textContent = ''; }
+        try {
+          await api('PUT', `/api/admin/strategy-definitions/${id}`, {
+            name: name || undefined,
+            description: desc,
+            config,
+          });
+          if (status) { status.textContent = '✓ Saved'; status.style.color = 'var(--color-success)'; }
+          setTimeout(() => loadStrategyComposer(), 800);
+        } catch (e) {
+          if (status) { status.textContent = '✗ ' + (e.message || 'Save failed'); status.style.color = 'var(--color-danger)'; }
+        } finally {
+          btn.disabled = false;
+          btn.textContent = '💾 Save Strategy';
+        }
+      });
+    });
+
+    // ── Strategy enable toggle ───────────────────────────────
+    grid.querySelectorAll('.composer-strat-toggle').forEach(chk => {
+      chk.addEventListener('change', async () => {
+        const id = parseInt(chk.dataset.stratId);
+        try {
+          await api('PUT', `/api/admin/strategy-definitions/${id}`, { is_enabled: chk.checked });
+          showToast(chk.checked ? 'Strategy enabled' : 'Strategy disabled', 'success');
+          loadStrategyComposer();
+        } catch (e) {
+          showToast(e.message || 'Update failed', 'error');
+          chk.checked = !chk.checked; // revert
+        }
+      });
+    });
+
+    // ── Delete strategy ──────────────────────────────────────
+    grid.querySelectorAll('.composer-delete-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const id   = parseInt(btn.dataset.stratId);
+        const card = grid.querySelector(`details[data-strat-id="${id}"]`);
+        const name = card?.querySelector(`.composer-strat-name[data-strat-id="${id}"]`)?.value || id;
+        if (!confirm(`Delete strategy "${name}"? This cannot be undone.`)) return;
+        btn.disabled = true;
+        try {
+          await api('DELETE', `/api/admin/strategy-definitions/${id}`);
+          showToast('Strategy deleted', 'success');
+          loadStrategyComposer();
+        } catch (e) {
+          showToast(e.message || 'Delete failed', 'error');
+          btn.disabled = false;
+        }
+      });
+    });
+
+    // ── Backtest strategy ─────────────────────────────────────
+    grid.querySelectorAll('.composer-backtest-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const id      = parseInt(btn.dataset.stratId);
+        const card    = grid.querySelector(`details[data-strat-id="${id}"]`);
+        if (!card) return;
+
+        // Find or create the results panel inside this card
+        let resultsEl = card.querySelector('.composer-bt-results');
+        if (!resultsEl) {
+          resultsEl = document.createElement('div');
+          resultsEl.className = 'composer-bt-results';
+          resultsEl.style.cssText = 'margin-top:12px;';
+          card.querySelector('div[style*="flex-direction:column"]')?.appendChild(resultsEl);
+        }
+
+        // Prompt for days (optional)
+        const daysStr = prompt('Days of history to test (1-14, default 7):', '7');
+        const days    = Math.min(14, Math.max(1, parseInt(daysStr) || 7));
+
+        btn.disabled = true;
+        btn.textContent = `⏳ Running ${days}d backtest…`;
+        resultsEl.innerHTML = `
+          <div style="padding:12px;border:1px solid rgba(99,102,241,0.3);border-radius:var(--radius-md);
+            background:rgba(99,102,241,0.05);display:flex;align-items:center;gap:10px;">
+            <span style="font-size:0.82rem;color:#818cf8;">⏳ Fetching ${days} days of historical data and running indicator chain…</span>
+            <span style="font-size:0.72rem;color:var(--color-text-muted);">This may take 20–60 seconds</span>
+          </div>`;
+
+        try {
+          const result = await api('POST', `/api/admin/strategy-definitions/${id}/backtest`,
+            { days });
+          renderBacktestResults(resultsEl, result);
+        } catch (e) {
+          resultsEl.innerHTML = `<div style="color:var(--color-danger);font-size:0.82rem;padding:8px 0;">
+            ✗ ${escapeHtml(e.message || 'Backtest failed')}</div>`;
+        } finally {
+          btn.disabled = false;
+          btn.textContent = '📊 Backtest';
+        }
+      });
+    });
+  }
+
+  // ── Backtest results renderer ────────────────────────────────
+
+  function renderBacktestResults(el, r) {
+    if (!r || r.total === 0) {
+      el.innerHTML = `
+        <div style="padding:12px;border:1px solid rgba(255,255,255,0.08);border-radius:var(--radius-md);
+          background:rgba(255,255,255,0.02);color:var(--color-text-muted);font-size:0.82rem;">
+          ⚠️ No trades fired in the test period. Try loosening filters or increasing days.
+          ${r?.gatesHonoured ? '<br><span style="font-size:0.72rem;">Note: Time gates (session/prime) were honoured — many bars may have been skipped.</span>' : ''}
+        </div>`;
+      return;
+    }
+
+    const pf  = r.profitFactor?.toFixed(2) ?? '—';
+    const wr  = r.winRate?.toFixed(1)      ?? '—';
+    const atr = r.avgPnl?.toFixed(2)       ?? '—';
+    const pnl = r.totalPnl?.toFixed(1)     ?? '—';
+    const dd  = r.maxDrawdown?.toFixed(1)  ?? '—';
+
+    const wrColor  = r.winRate >= 55 ? '#10b981' : r.winRate >= 45 ? '#f59e0b' : '#f87171';
+    const pnlColor = r.totalPnl > 0  ? '#10b981' : '#f87171';
+    const pfColor  = r.profitFactor >= 1.5 ? '#10b981' : r.profitFactor >= 1 ? '#f59e0b' : '#f87171';
+
+    const perSymbolRows = (r.perSymbol || []).map(s => {
+      if (s.error) return `<tr>
+        <td style="padding:4px 8px;font-weight:600;">${escapeHtml(s.symbol)}</td>
+        <td colspan="5" style="padding:4px 8px;color:var(--color-danger);font-size:0.72rem;">${escapeHtml(s.error)}</td></tr>`;
+      const sWr  = s.winRate?.toFixed(1)   ?? '—';
+      const sPnl = s.totalPnl?.toFixed(1)  ?? '—';
+      const sPf  = s.profitFactor?.toFixed(2) ?? '—';
+      const sWrC = s.winRate >= 55 ? '#10b981' : s.winRate >= 45 ? '#f59e0b' : '#f87171';
+      const sPC  = s.totalPnl > 0 ? '#10b981' : '#f87171';
+      return `<tr style="border-top:1px solid rgba(255,255,255,0.04);">
+        <td style="padding:4px 8px;font-weight:600;font-size:0.78rem;">${escapeHtml(s.symbol)}</td>
+        <td style="padding:4px 8px;font-size:0.78rem;">${s.total}</td>
+        <td style="padding:4px 8px;color:${sWrC};font-size:0.78rem;">${sWr}%</td>
+        <td style="padding:4px 8px;color:${sPC};font-size:0.78rem;">${sPnl}%</td>
+        <td style="padding:4px 8px;color:${pfColor};font-size:0.78rem;">${sPf}</td>
+        <td style="padding:4px 8px;font-size:0.72rem;color:var(--color-text-muted);">${s.wins}W / ${s.losses}L</td>
+      </tr>`;
+    }).join('');
+
+    const recentRows = (r.recentTrades || []).map(t => {
+      const c = t.result === 'TP' ? '#10b981' : t.result === 'SL' ? '#f87171' : '#f59e0b';
+      return `<tr style="border-top:1px solid rgba(255,255,255,0.04);">
+        <td style="padding:3px 8px;font-size:0.75rem;">${escapeHtml(t.symbol)}</td>
+        <td style="padding:3px 8px;font-size:0.75rem;color:${t.dir === 'LONG' ? '#10b981' : '#f87171'};">${t.dir}</td>
+        <td style="padding:3px 8px;font-size:0.75rem;font-family:monospace;">${t.entry}</td>
+        <td style="padding:3px 8px;font-size:0.75rem;font-family:monospace;">${t.exit}</td>
+        <td style="padding:3px 8px;font-size:0.75rem;color:${c};font-weight:600;">${t.pnlPct}%</td>
+        <td style="padding:3px 8px;font-size:0.72rem;color:${c};">${t.result}</td>
+        <td style="padding:3px 8px;font-size:0.68rem;color:var(--color-text-muted);">${escapeHtml(t.date)}</td>
+      </tr>`;
+    }).join('');
+
+    el.innerHTML = `
+      <div style="border:1px solid rgba(99,102,241,0.3);border-radius:var(--radius-md);
+        background:rgba(99,102,241,0.04);padding:14px;display:flex;flex-direction:column;gap:12px;">
+
+        <!-- Header -->
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+          <span style="font-size:0.85rem;font-weight:700;color:#818cf8;">📊 Backtest Results — ${r.days}d × ${escapeHtml(r.timeframe)}</span>
+          <span style="font-size:0.72rem;color:var(--color-text-muted);">
+            ${escapeHtml(r.symbols?.join(', '))}
+            · SL ${(r.slPct*100).toFixed(2)}% · TP ${(r.tpPct*100).toFixed(2)}% (${r.tpMult}×)
+            ${r.gatesHonoured ? '· ⏰ time gates applied' : ''}
+          </span>
+        </div>
+
+        <!-- Summary stat chips -->
+        <div style="display:flex;flex-wrap:wrap;gap:8px;">
+          ${[
+            ['Trades', r.total, '#818cf8'],
+            ['Win Rate', wr + '%', wrColor],
+            ['Profit Factor', pf, pfColor],
+            ['Total PnL', pnl + '%', pnlColor],
+            ['Avg/Trade', atr + '%', pnlColor],
+            ['Max DD', dd + '%', r.maxDrawdown > 10 ? '#f87171' : '#f59e0b'],
+            ['LONG', r.longTrades, '#818cf8'],
+            ['SHORT', r.shortTrades, '#818cf8'],
+            ['TP hits', r.tpHits, '#10b981'],
+            ['SL hits', r.slHits, '#f87171'],
+          ].map(([lbl, val, col]) => `
+            <div style="padding:6px 12px;border-radius:var(--radius-md);
+              border:1px solid ${col}44;background:${col}11;
+              display:flex;flex-direction:column;align-items:center;min-width:70px;">
+              <span style="font-size:0.65rem;color:var(--color-text-muted);text-transform:uppercase;letter-spacing:.06em;">${lbl}</span>
+              <span style="font-size:0.9rem;font-weight:700;color:${col};">${val}</span>
+            </div>`
+          ).join('')}
+        </div>
+
+        <!-- Per-symbol table -->
+        ${perSymbolRows ? `
+        <div>
+          <div style="font-size:0.72rem;font-weight:700;color:var(--color-text-muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px;">Per Symbol</div>
+          <table style="width:100%;border-collapse:collapse;">
+            <thead>
+              <tr style="border-bottom:1px solid var(--color-border-muted);">
+                ${['Symbol','Trades','Win Rate','Total PnL','PF','W/L'].map(h =>
+                  `<th style="padding:3px 8px;font-size:0.68rem;font-weight:600;color:var(--color-text-muted);text-align:left;">${h}</th>`
+                ).join('')}
+              </tr>
+            </thead>
+            <tbody>${perSymbolRows}</tbody>
+          </table>
+        </div>` : ''}
+
+        <!-- Recent trades -->
+        ${recentRows ? `
+        <div>
+          <div style="font-size:0.72rem;font-weight:700;color:var(--color-text-muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px;">Last 8 Trades</div>
+          <table style="width:100%;border-collapse:collapse;">
+            <thead>
+              <tr style="border-bottom:1px solid var(--color-border-muted);">
+                ${['Symbol','Dir','Entry','Exit','PnL','Result','Time'].map(h =>
+                  `<th style="padding:2px 8px;font-size:0.68rem;font-weight:600;color:var(--color-text-muted);text-align:left;">${h}</th>`
+                ).join('')}
+              </tr>
+            </thead>
+            <tbody>${recentRows}</tbody>
+          </table>
+        </div>` : ''}
+      </div>`;
   }
 
   async function mcRefresh() {
@@ -4304,6 +5248,7 @@
     activateVersionForTrading, deactivateVersion,
     fixBitunixPnl, debugBitunix, runBacktest, loadAiVersions, runAiOptimize, adminResyncFees, adminFixTrades, adminClearTestData,
     mcRefresh, mcCommand, mcChat, mcChatQuick, switchAdminTab, filterAgents, customerChat,
+    loadStrategyConfig, loadStrategyComposer,
     checkEmailSmtp, sendTestEmail, sendBroadcastEmail, emailSetMode,
     loadSignalBoard, toggleWatch, watchAll, setUserLeverage,
     adminLoadTokenBoard, adminAddTokenBoard, adminPopulateTop50, adminSetRiskTag, adminSetTokenLev, adminToggleBan, adminRemoveTokenBoard,

@@ -8,17 +8,21 @@
 const fetch = require('node-fetch');
 const aiLearner = require('./ai-learner');
 const { log: bLog } = require('./bot-logger');
+const { getCfg } = require('./strategy-config');
 
 const REQUEST_TIMEOUT = 15000;
 const TOP_N_COINS = 10;
 const MIN_24H_VOLUME = 10_000_000;
 
-const SL_PCT = 0.005;          // 0.5% price = 10% capital at 20x
-const TP_PCT = 0.01;           // 1% price = 20% capital at 20x (RR 1:2)
-const TRAILING_STEP = 0.012;   // trail SL by 1.2% after TP reached
+// Module-level defaults — overwritten each scan cycle from DB-backed config.
+// The admin UI (Strategies tab) edits these via strategy-config.js.
+let SL_PCT        = 0.005;  // 0.5% SL
+let TP_PCT        = 0.010;  // 1.0% TP (1:2 R:R)
+let TRAILING_STEP = 0.012;  // 1.2% trail step after TP
 
-// Swing lengths per timeframe (defaults, overridden by strategyConfig)
-// Defaults match Quantum Optimizer v3.46 winning strategy (sw:6/7/14/4)
+// Swing lengths per timeframe.
+// Defaults match Quantum Optimizer v3.46 winning strategy (sw:6/7/14/4).
+// Admin UI overrides strat.smc.swing_len_3m / strat.smc.swing_len_1m.
 let SWING_LENGTHS = { '4h': 6, '1h': 7, '15m': 14, '3m': 5, '1m': 4 };
 
 // Strategy config loaded from DB (ai_versions best params)
@@ -288,8 +292,11 @@ function isGoodTradingSession() {
 
 // ── Analyze Single Coin (Full Checklist — config-driven) ───
 
-async function analyzeLHHL(ticker, params, dailyBiasCache, kronosPredictions = null) {
+async function analyzeLHHL(ticker, params, dailyBiasCache, kronosPredictions = null, smcCfg = {}) {
   const symbol = ticker.symbol;
+  const EMA_PERIOD      = smcCfg['strat.smc.ema_period']     || 200;
+  const MAX_CANDLE_AGE  = smcCfg['strat.smc.max_candle_age'] || 20;
+  const MAX_CHASE_PCT   = smcCfg['strat.smc.max_chase_pct']  || 0.015;
   bLog.scan(`[HEARTBEAT] Analyzing ${symbol}...`);
   const price = parseFloat(ticker.lastPrice);
 
@@ -342,7 +349,7 @@ async function analyzeLHHL(ticker, params, dailyBiasCache, kronosPredictions = n
   let ema200ScorePenalty = 0;
   if (klines1h && klines1h.length >= 50) {
     const closes1h = klines1h.map(k => parseFloat(k[4]));
-    const ema200Period = Math.min(200, closes1h.length - 1);
+    const ema200Period = Math.min(EMA_PERIOD, closes1h.length - 1);
     const k200 = 2 / (ema200Period + 1);
     let ema200 = closes1h[0];
     for (let i = 1; i < closes1h.length; i++) ema200 = closes1h[i] * k200 + ema200 * (1 - k200);
@@ -385,8 +392,8 @@ async function analyzeLHHL(ticker, params, dailyBiasCache, kronosPredictions = n
   const currentIdx = klines1m.length - 1;
   const candleAge = currentIdx - confirmationIdx;
 
-  if (candleAge < 0 || candleAge > 20) {
-    bLog.scan(`${symbol}: ${direction} — swing age ${candleAge} (need 0-20 for valid entry)`);
+  if (candleAge < 0 || candleAge > MAX_CANDLE_AGE) {
+    bLog.scan(`${symbol}: ${direction} — swing age ${candleAge} (need 0-${MAX_CANDLE_AGE} for valid entry)`);
     return null;
   }
 
@@ -394,7 +401,7 @@ async function analyzeLHHL(ticker, params, dailyBiasCache, kronosPredictions = n
   // LONG: buy near the HL (the low), NOT at the HH (the high)
   // SHORT: sell near the LH (the high), NOT at the LL (the low)
   // Max allowed distance: 1.5% — gives room for fast-moving markets
-  const MAX_CHASE_PCT = 0.015; // 1.5% max distance from swing
+  // MAX_CHASE_PCT is set at top of function from smcCfg
   let chaseScorePenalty = 0;
   if (direction === 'LONG') {
     const distFromSwing = (price - swingPrice) / swingPrice;
@@ -560,6 +567,18 @@ async function analyzeLHHL(ticker, params, dailyBiasCache, kronosPredictions = n
 
 async function scanSMC(log, opts = {}) {
   // NOTE: 24/7 mode — no session gates, no daily limits. Signal quality gates only.
+
+  // Reload admin-editable config (60 s cache — changes propagate within one cycle)
+  try {
+    const cfg = await getCfg();
+    SL_PCT        = cfg['strat.smc.sl_pct']        ?? SL_PCT;
+    TP_PCT        = cfg['strat.smc.tp_pct']        ?? TP_PCT;
+    TRAILING_STEP = cfg['strat.smc.trailing_step'] ?? TRAILING_STEP;
+    if (cfg['strat.smc.swing_len_3m']) SWING_LENGTHS['3m'] = cfg['strat.smc.swing_len_3m'];
+    if (cfg['strat.smc.swing_len_1m']) SWING_LENGTHS['1m'] = cfg['strat.smc.swing_len_1m'];
+    opts._smcCfg = cfg; // forward to analyzeLHHL
+  } catch (_) { /* keep module-level defaults */ }
+
   const tickers = await fetchTickers();
   if (!tickers.length) { bLog.error('Failed to fetch tickers'); return []; }
 
@@ -608,7 +627,7 @@ async function scanSMC(log, opts = {}) {
       continue;
     }
 
-    const signal = await analyzeLHHL(ticker, params, dailyBiasCache, opts.kronosPredictions || null);
+    const signal = await analyzeLHHL(ticker, params, dailyBiasCache, opts.kronosPredictions || null, opts._smcCfg || {});
     analyzed++;
 
     if (signal && signal.score >= minScore) {
