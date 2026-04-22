@@ -2154,13 +2154,17 @@ router.post('/ai-versions/activate-manual', async (req, res) => {
     const adminCheck = await query(`SELECT is_admin FROM users WHERE id = $1`, [req.userId]);
     if (!adminCheck[0]?.is_admin) return res.status(403).json({ error: 'Admin only' });
 
-    const { name, params } = req.body;
+    const { name, params, _wr, _tr } = req.body;
     if (!params || typeof params !== 'object') return res.status(400).json({ error: 'params required' });
+
+    const stored = { version: name || 'Manual', ...params };
+    if (_wr != null) stored._wr = _wr;
+    if (_tr != null) stored._tr = _tr;
 
     await query(
       `INSERT INTO settings (key, value) VALUES ('active_ai_version', $1)
        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
-      [JSON.stringify({ version: name || 'Manual', ...params })]
+      [JSON.stringify(stored)]
     );
     res.json({ ok: true, version: name || 'Manual', params });
   } catch (err) {

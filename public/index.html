@@ -2588,7 +2588,7 @@ EMAIL_FROM=MCT &lt;a83c06001@smtp-brevo.com&gt;</pre>
     </div>
   </div>
 
-  <script src="/js/app.js?v=20260432" defer></script>
+  <script src="/js/app.js?v=20260433" defer></script>
   <!-- Email tab patch: inline so it works regardless of JS cache (HTML is never cached) -->
   <script>
     document.addEventListener('DOMContentLoaded', function() {
@@ -2705,17 +2705,31 @@ EMAIL_FROM=MCT &lt;a83c06001@smtp-brevo.com&gt;</pre>
         return;
       }
 
-      _versionsStore = versions; // save so click handlers can look up by index
-      tbody.innerHTML = versions.map(function(v, idx) {
+      // Deduplicate identical versions (same name + win_rate + total_trades + profit_factor)
+      var seen = {};
+      var deduped = [];
+      versions.forEach(function(v) {
+        var key = (v.name||'') + '|' + (v.win_rate||'') + '|' + (v.total_trades||'') + '|' + (v.profit_factor||'');
+        if (!seen[key]) { seen[key] = { v: v, count: 1 }; deduped.push(seen[key]); }
+        else { seen[key].count++; }
+      });
+
+      _versionsStore = deduped.map(function(d){ return d.v; }); // idx → deduplicated version
+      tbody.innerHTML = deduped.map(function(d, idx) {
+        var v = d.v;
+        var dupeNote = d.count > 1 ? ' <span style="font-size:0.6rem;background:rgba(255,255,255,0.08);color:var(--color-text-muted);padding:1px 5px;border-radius:3px;vertical-align:middle;">×' + d.count + ' copies</span>' : '';
         var wr  = parseFloat(v.win_rate)      || 0;
         var pf  = parseFloat(v.profit_factor) || 0;
         var ret = parseFloat(v.total_return)  || 0;
         var dd  = parseFloat(v.max_drawdown)  || 0;
 
         // Determine if this version is currently active
+        // For ai_version: match by DB id. For optimizer/manual: match by name + win_rate + total_trades fingerprint.
         var isActive = activeVersion && (
           (v._source === 'ai_version' && activeVersion.id === v._ai_id) ||
-          (activeVersion.version === v.name)
+          (activeVersion.version === v.name &&
+           (activeVersion._wr  == null || String(activeVersion._wr)  === String(v.win_rate)) &&
+           (activeVersion._tr  == null || String(activeVersion._tr)  === String(v.total_trades)))
         );
 
         var wrColor  = wr >= 80 ? '#d4af37' : wr >= 70 ? '#22c55e' : wr >= 60 ? '#86efac' : '#94a3b8';
@@ -2746,7 +2760,7 @@ EMAIL_FROM=MCT &lt;a83c06001@smtp-brevo.com&gt;</pre>
 
         return '<tr style="background:' + rowBg + ';border-bottom:1px solid var(--color-border-muted);">' +
           '<td style="padding:8px 12px;">' +
-            '<div style="font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:220px;color:' + wrColor + ';">' + escHtml(v.name || '—') + liveBadge + '</div>' +
+            '<div style="font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:220px;color:' + wrColor + ';">' + escHtml(v.name || '—') + liveBadge + dupeNote + '</div>' +
             (paramPreview ? '<div style="font-size:0.68rem;color:var(--color-text-muted);font-family:monospace;margin-top:2px;">' + escHtml(paramPreview.trim()) + '</div>' : '') +
           '</td>' +
           '<td style="padding:8px 12px;text-align:center;">' + srcBadge + '</td>' +
@@ -2827,10 +2841,11 @@ EMAIL_FROM=MCT &lt;a83c06001@smtp-brevo.com&gt;</pre>
         }
 
         // For optimizer/manual results — save as active via manual endpoint
+        // Include fingerprint fields so isActive check is precise on reload
         var r2 = await fetch('/api/admin/ai-versions/activate-manual', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name, params }),
+          body: JSON.stringify({ name, params, _wr: v.win_rate, _tr: v.total_trades }),
         });
         var d2 = await r2.json();
         if (d2.ok) {
