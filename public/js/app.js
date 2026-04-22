@@ -2424,25 +2424,27 @@
         <!-- Summary stat chips -->
         <div style="display:flex;flex-wrap:wrap;gap:8px;">
           ${[
-            ['Trades', r.total, '#818cf8'],
-            ['Win Rate', wr + '%', wrColor],
-            ['Profit Factor', pf, pfColor],
-            ['Total PnL', pnl + '%', pnlColor],
-            ['Avg/Trade', atr + '%', pnlColor],
-            ['Max DD', dd + '%', r.maxDrawdown > 10 ? '#f87171' : '#f59e0b'],
-            ['LONG', r.longTrades, '#818cf8'],
-            ['SHORT', r.shortTrades, '#818cf8'],
-            ['TP hits', r.tpHits, '#10b981'],
-            ['SL hits', r.slHits, '#f87171'],
-          ].map(([lbl, val, col]) => `
-            <div style="padding:6px 12px;border-radius:var(--radius-md);
-              border:1px solid ${col}44;background:${col}11;
+            ['Trades',         r.total,       '#818cf8', 'Total number of simulated trades in the test period'],
+            ['Win Rate',       wr + '%',      wrColor,   'Percentage of trades that hit Take Profit. >55% = good, >65% = excellent'],
+            ['PF (Profit Factor)', pf,        pfColor,   'Total profit ÷ total loss. >1.5 = good, >2 = excellent, <1 = losing strategy'],
+            ['Total PnL',      pnl + '%',     pnlColor,  'Total % return across all trades in the test period (assumes fixed position size)'],
+            ['Avg / Trade',    atr + '%',     pnlColor,  'Average PnL per trade. Positive = each trade makes money on average'],
+            ['Max Drawdown',   dd + '%',      r.maxDrawdown > 10 ? '#f87171' : '#f59e0b',
+                                                         'Biggest peak-to-trough loss streak during the test. E.g. 15% = balance dropped 15% at its worst before recovering. Lower = safer'],
+            ['LONG',           r.longTrades,  '#818cf8', 'Number of long (buy) trades taken'],
+            ['SHORT',          r.shortTrades, '#818cf8', 'Number of short (sell) trades taken'],
+            ['TP Hits',        r.tpHits,      '#10b981', 'Trades that closed at Take Profit (winners)'],
+            ['SL Hits',        r.slHits,      '#f87171', 'Trades that closed at Stop Loss (losers)'],
+          ].map(([lbl, val, col, tip]) => `
+            <div title="${escapeHtml(tip)}" style="padding:6px 12px;border-radius:var(--radius-md);
+              border:1px solid ${col}44;background:${col}11;cursor:help;
               display:flex;flex-direction:column;align-items:center;min-width:70px;">
               <span style="font-size:0.65rem;color:var(--color-text-muted);text-transform:uppercase;letter-spacing:.06em;">${lbl}</span>
               <span style="font-size:0.9rem;font-weight:700;color:${col};">${val}</span>
             </div>`
           ).join('')}
         </div>
+        <div style="font-size:0.68rem;color:var(--color-text-muted);font-style:italic;">💡 Hover any chip for explanation &nbsp;·&nbsp; Test period: ${r.days} day${r.days !== 1 ? 's' : ''}</div>
 
         <!-- Per-symbol table -->
         ${perSymbolRows ? `
