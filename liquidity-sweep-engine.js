@@ -1910,21 +1910,23 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     }
 
     // ── 15m SWING STRUCTURE DIRECTION FILTER (user rule) ────
-    // HH+HL confirmed uptrend   → LONG only  (no short in uptrend)
-    // LL+LH confirmed downtrend → SHORT only (no long in downtrend)
-    if (swingTrend15.trend === 'bullish' && sig.direction === 'SHORT') {
+    // HH+HL (bullish) or HL only (bullish_lean) → LONG only  (no short)
+    // LL+LH (bearish) or LH only (bearish_lean) → SHORT only (no long)
+    const is15mBearish = swingTrend15.trend === 'bearish' || swingTrend15.trend === 'bearish_lean';
+    const is15mBullish = swingTrend15.trend === 'bullish' || swingTrend15.trend === 'bullish_lean';
+    if (is15mBullish && sig.direction === 'SHORT') {
       sig.score = -99;
-      sig.blocked = 'SHORT blocked — 15m swing structure is HH+HL (uptrend): no short in uptrend';
+      sig.blocked = `SHORT blocked — 15m swing structure is ${swingTrend15.trend}: no short while trend is up`;
       continue;
     }
-    if (swingTrend15.trend === 'bearish' && sig.direction === 'LONG') {
+    if (is15mBearish && sig.direction === 'LONG') {
       sig.score = -99;
-      sig.blocked = 'LONG blocked — 15m swing structure is LL+LH (downtrend): no long in downtrend';
+      sig.blocked = `LONG blocked — 15m swing structure is ${swingTrend15.trend}: no long while trend is down`;
       continue;
     }
     // Reward with-trend entries for trending structures
-    if ((swingTrend15.trend === 'bullish' && sig.direction === 'LONG') ||
-        (swingTrend15.trend === 'bearish' && sig.direction === 'SHORT')) {
+    if ((is15mBullish && sig.direction === 'LONG') ||
+        (is15mBearish && sig.direction === 'SHORT')) {
       sig.score += 3;
       sig.swingAligned = true;
     }
@@ -2043,22 +2045,32 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
       else if (pctFromHigh <= 0.015) sig.score += 1; // within 1.5% — acceptable bounce
     }
 
-    // 1h trend alignment — bonus for with-trend, penalty for counter-trend
+    // 1h trend alignment — hard block for counter-trend, bonus for with-trend
+    if (sig.direction === 'LONG' && h1Trend === 'bearish') {
+      sig.score = -99;
+      sig.blocked = 'LONG blocked — 1h EMA9 < EMA21 (1h downtrend): no long against higher-TF trend';
+      continue;
+    }
+    if (sig.direction === 'SHORT' && h1Trend === 'bullish') {
+      sig.score = -99;
+      sig.blocked = 'SHORT blocked — 1h EMA9 > EMA21 (1h uptrend): no short against higher-TF trend';
+      continue;
+    }
     if (sig.direction === 'LONG' && h1Trend === 'bullish') sig.score += 3;
     if (sig.direction === 'SHORT' && h1Trend === 'bearish') sig.score += 3;
-    if (sig.direction === 'LONG' && h1Trend === 'bearish') sig.score -= 4;
-    if (sig.direction === 'SHORT' && h1Trend === 'bullish') sig.score -= 4;
 
     // BTC market correlation: don't fight BTC's direction on altcoins
     // When BTC is clearly bullish, shorting alts is fighting the market
     if (symbol !== 'BTCUSDT') {
       if (btcTrend === 'bullish' && sig.direction === 'SHORT') {
-        sig.score -= 5;
-        sig.blocked = 'SHORT rejected — BTC is bullish, alts follow BTC';
+        sig.score = -99;
+        sig.blocked = 'SHORT blocked — BTC is bullish, alts follow BTC';
+        continue;
       }
       if (btcTrend === 'bearish' && sig.direction === 'LONG') {
-        sig.score -= 5;
-        sig.blocked = 'LONG rejected — BTC is bearish, alts follow BTC';
+        sig.score = -99;
+        sig.blocked = 'LONG blocked — BTC is bearish, alts follow BTC';
+        continue;
       }
       // Bonus for trading WITH BTC direction
       if (btcTrend === 'bullish' && sig.direction === 'LONG') sig.score += 2;
