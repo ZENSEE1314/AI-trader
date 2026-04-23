@@ -1586,9 +1586,12 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
         vwapLower = vwapVal - VWAP_BAND_MULT * stdDev;
 
         // Where is price relative to the bands?
-        if (price > vwapUpper)      vwapBandPos = 'above_upper';
-        else if (price < vwapLower) vwapBandPos = 'below_lower';
-        else                        vwapBandPos = 'between';
+        // Buffer of 0.3%: treat price AT or within 0.3% of a band as already
+        // inside that zone — avoids longs/shorts that fire right at the band edge.
+        const BAND_BUFFER = 0.003;
+        if (price >= vwapUpper * (1 - BAND_BUFFER)) vwapBandPos = 'above_upper';
+        else if (price <= vwapLower * (1 + BAND_BUFFER)) vwapBandPos = 'below_lower';
+        else                                             vwapBandPos = 'between';
       }
 
       // OP + VWAP directional bias (unchanged)
@@ -1933,12 +1936,12 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     //   (only allow LONG after price rises back above lower band)
     if (vwapBandPos === 'above_upper' && sig.direction === 'SHORT') {
       sig.score = -99;
-      sig.blocked = `SHORT blocked — price above VWAP upper band (${vwapUpper?.toFixed(4)}): bullish zone, no shorting until price falls below upper band`;
+      sig.blocked = `SHORT blocked — price at/above VWAP upper band (${vwapUpper?.toFixed(4)}, price=${price.toFixed(4)}): bullish zone, no shorting until price falls below upper band`;
       continue;
     }
     if (vwapBandPos === 'below_lower' && sig.direction === 'LONG') {
       sig.score = -99;
-      sig.blocked = `LONG blocked — price below VWAP lower band (${vwapLower?.toFixed(4)}): bearish zone, no longs until price rises above lower band`;
+      sig.blocked = `LONG blocked — price at/below VWAP lower band (${vwapLower?.toFixed(4)}, price=${price.toFixed(4)}): bearish zone, no longs until price rises above lower band`;
       continue;
     }
     // Reward entries in the correct VWAP zone
