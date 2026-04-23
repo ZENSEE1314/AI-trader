@@ -613,6 +613,9 @@
     </div>
   </div>
 
+  <!-- Error banner — hidden until fetchData sets it -->
+  <div id="fetchErrBanner" style="display:none;background:rgba(239,68,68,.15);border:1px solid rgba(239,68,68,.35);color:#fca5a5;font-size:0.78rem;font-weight:600;text-align:center;padding:6px 16px;margin:0 var(--space-3) var(--space-2);border-radius:6px;letter-spacing:.02em;"></div>
+
   <div class="main-layout">
     <!-- LEFT SIDEBAR — Agent Crew List -->
     <aside class="sidebar">
@@ -1822,17 +1825,44 @@ function formatUptime(s) {
 }
 
 /* ═══ DATA FETCH ═══ */
+function _setFetchError(msg) {
+  document.getElementById('dot').classList.add('off');
+  const banner = document.getElementById('fetchErrBanner');
+  if (banner) {
+    banner.innerHTML = msg +
+      ' &nbsp;<button onclick="window._mcReconnect()" style="background:rgba(239,68,68,.25);border:1px solid rgba(239,68,68,.5);color:#fca5a5;cursor:pointer;border-radius:4px;padding:2px 10px;font-size:0.75rem;margin-left:8px;">↺ Reconnect</button>';
+    banner.style.display = 'block';
+  }
+}
+window._mcReconnect = function() {
+  const banner = document.getElementById('fetchErrBanner');
+  if (banner) banner.style.display = 'none';
+  stopPolling();
+  startPolling();
+};
+function _clearFetchError() {
+  const banner = document.getElementById('fetchErrBanner');
+  if (banner) banner.style.display = 'none';
+  document.getElementById('dot').classList.remove('off');
+}
+
 async function fetchData() {
   try {
     const res = await fetch('/api/admin/agents/health', { credentials: 'same-origin' });
     if (res.status === 401 || res.status === 403) {
+      _setFetchError('🔒 Not logged in — log in on the dashboard first');
       document.getElementById('sidebarScroll').innerHTML = '<div class="placeholder"><div><div class="placeholder-icon">&#x1F512;</div><div>Log in on <a href="/" style="color:var(--accent)">dashboard</a> first</div></div></div>';
-      stopPolling(); return;
+      stopPolling();
+      return;
     }
-    if (!res.ok) throw new Error('HTTP ' + res.status);
+    if (!res.ok) {
+      let errMsg = 'HTTP ' + res.status;
+      try { const j = await res.json(); errMsg = j.error || errMsg; } catch {}
+      throw new Error(errMsg);
+    }
     const data = await res.json();
     cachedHealthData = data;
-    document.getElementById('dot').classList.remove('off');
+    _clearFetchError();
 
     updateHeader(data);
     updateCharacters(data.health || {});
@@ -1843,8 +1873,8 @@ async function fetchData() {
 
     prevData = data;
   } catch (err) {
-    console.error(err);
-    document.getElementById('dot').classList.add('off');
+    console.error('[MCT]', err);
+    _setFetchError('⚠️ Connection error: ' + err.message);
   }
 }
 

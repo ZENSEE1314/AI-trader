@@ -96,22 +96,29 @@ async function recordTokenResult(symbol, pnlUsdt, fee, isWin) {
 async function getDailyResults(date = null) {
   try {
     const { query } = require('./db');
-    const d = date || new Date().toISOString().split('T')[0];
+
+    // When a specific calendar date is requested (e.g. from the leaderboard route),
+    // keep the old UTC-date behaviour.  For the default "today" call from signal-board,
+    // use a rolling 24-hour window so morning trades in UTC+8 (which are "yesterday UTC")
+    // are never silently dropped.
+    const dateFilter = date
+      ? `DATE(COALESCE(closed_at, created_at) AT TIME ZONE 'UTC') = '${date}'`
+      : `COALESCE(closed_at, created_at) > NOW() - INTERVAL '24 hours'`;
+
     const rows = await query(
       `SELECT
          symbol,
-         COUNT(*)                                                    AS total_trades,
-         SUM(CASE WHEN pnl_usdt > 0 THEN 1 ELSE 0 END)             AS wins,
-         SUM(CASE WHEN pnl_usdt IS NULL OR pnl_usdt <= 0 THEN 1 ELSE 0 END) AS losses,
-         COALESCE(SUM(pnl_usdt), 0)                                 AS total_pnl,
-         COALESCE(SUM(trading_fee), 0)                              AS total_fee,
+         COUNT(*)                                                              AS total_trades,
+         SUM(CASE WHEN status IN ('WIN', 'TP') THEN 1 ELSE 0 END)            AS wins,
+         SUM(CASE WHEN status IN ('LOSS', 'SL') THEN 1 ELSE 0 END)           AS losses,
+         COALESCE(SUM(pnl_usdt), 0)                                           AS total_pnl,
+         COALESCE(SUM(trading_fee), 0)                                        AS total_fee,
          CASE WHEN COUNT(*) > 0 THEN COALESCE(SUM(pnl_usdt), 0) / COUNT(*) ELSE 0 END AS avg_pnl
        FROM trades
        WHERE status IN ('WIN', 'LOSS', 'CLOSED', 'SL', 'TP')
-         AND DATE(COALESCE(closed_at, created_at) AT TIME ZONE 'UTC') = $1
+         AND ${dateFilter}
        GROUP BY symbol
-       ORDER BY total_pnl DESC`,
-      [d]
+       ORDER BY total_pnl DESC`
     );
     return rows;
   } catch { return []; }

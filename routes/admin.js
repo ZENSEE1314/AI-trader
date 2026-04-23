@@ -3591,12 +3591,11 @@ router.get('/agents/health', async (req, res) => {
   try {
     const { getCoordinator } = require('../agents');
     const coordinator = getCoordinator();
-    res.json({
-      health: coordinator.getHealth(),
-      activity: coordinator.getAllActivity(100),
-      uptime: process.uptime(),
-    });
+    const health   = coordinator.getHealth();
+    const activity = coordinator.getAllActivity(100);
+    res.json({ health, activity, uptime: process.uptime() });
   } catch (err) {
+    console.error('[/agents/health] Error:', err.message, err.stack);
     res.status(500).json({ error: err.message });
   }
 });
