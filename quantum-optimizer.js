@@ -16,10 +16,11 @@ const STRATEGIES = {
   BRR_FIBO:         3, // bit 3
   SMC_CLASSIC:      4, // bit 4
   SMC_HL_STRUCTURE: 5, // bit 5 — Zeiierman curved HL/LH + EMA55 + 3m/1m cascade
+  TREND_FOLLOW:     6, // bit 6 — HH+HL uptrend → LONG; LL+LH downtrend → SHORT
 };
 
-const STRATEGY_SHORT = ['SWEEP', 'HUNT', 'MOMENTUM', 'BRR', 'SMC', 'HL'];
-const TOTAL_COMBOS = 63; // 1-63 (6 strategies = 2^6 - 1)
+const STRATEGY_SHORT = ['SWEEP', 'HUNT', 'MOMENTUM', 'BRR', 'SMC', 'HL', 'TF'];
+const TOTAL_COMBOS = 127; // 1-127 (7 strategies = 2^7 - 1)
 const MIN_TRADES_PER_COMBO = 20;
 const EXPLORE_EPSILON = 0.15;
 const SWITCH_MARGIN = 0.05; // 5% improvement needed to switch
@@ -52,6 +53,7 @@ function getEnabledStrategies(comboId) {
     BRR_FIBO:         isStrategyEnabled(comboId, 'BRR_FIBO'),
     SMC_CLASSIC:      isStrategyEnabled(comboId, 'SMC_CLASSIC'),
     SMC_HL_STRUCTURE: isStrategyEnabled(comboId, 'SMC_HL_STRUCTURE'),
+    TREND_FOLLOW:     isStrategyEnabled(comboId, 'TREND_FOLLOW'),
   };
 }
 

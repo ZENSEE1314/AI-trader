@@ -1180,6 +1180,115 @@ function detectSMCStructureTrade(candles15m, candles3m, candles1m, h1Trend = 'ne
   return null;
 }
 
+// ── Trend-Follow Entry: HH+HL / LL+LH Structure ──────────
+//
+// Rules (user-defined):
+//   Uptrend  = chart keeps forming HH + HL → LONG ONLY
+//   Downtrend = chart keeps forming LL + LH → SHORT ONLY
+//   Entry timing: next 1m candle AFTER the HL (or LH) has confirmed
+//   No LONG in downtrend. No SHORT in uptrend.
+//
+// Detection:
+//   Swing highs/lows on 15m (2-bar pivot: higher/lower than 2 neighbours)
+//   lastSH > prevSH AND lastSL > prevSL → HH+HL → bull trend
+//   lastSH < prevSH AND lastSL < prevSL → LH+LL → bear trend
+//
+// Entry:
+//   LONG  – price within 1.5% of lastSL (HL level) + next 1m candle green
+//   SHORT – price within 1.5% of lastSH (LH level) + next 1m candle red
+//   HL/LH must have formed within last 12 × 15m candles (≈3 hours)
+// ──────────────────────────────────────────────────────────
+
+function detectTrendFollowEntry(klines15m, klines1m) {
+  if (!klines15m || klines15m.length < 30 || !klines1m || klines1m.length < 3) return null;
+
+  const parsed15 = klines15m.map(parseCandle);
+  const parsed1  = klines1m.map(parseCandle);
+
+  // 2-bar pivot swing detection on 15m
+  const swingHighs = [];
+  const swingLows  = [];
+  for (let i = 2; i < parsed15.length - 2; i++) {
+    if (
+      parsed15[i].high > parsed15[i - 1].high && parsed15[i].high > parsed15[i - 2].high &&
+      parsed15[i].high > parsed15[i + 1].high && parsed15[i].high > parsed15[i + 2].high
+    ) swingHighs.push({ price: parsed15[i].high, index: i });
+    if (
+      parsed15[i].low < parsed15[i - 1].low && parsed15[i].low < parsed15[i - 2].low &&
+      parsed15[i].low < parsed15[i + 1].low && parsed15[i].low < parsed15[i + 2].low
+    ) swingLows.push({ price: parsed15[i].low, index: i });
+  }
+
+  if (swingHighs.length < 2 || swingLows.length < 2) return null;
+
+  const lastSH = swingHighs[swingHighs.length - 1];
+  const prevSH = swingHighs[swingHighs.length - 2];
+  const lastSL = swingLows[swingLows.length - 1];
+  const prevSL = swingLows[swingLows.length - 2];
+
+  const isHH = lastSH.price > prevSH.price;
+  const isHL = lastSL.price > prevSL.price;
+  const isLH = lastSH.price < prevSH.price;
+  const isLL = lastSL.price < prevSL.price;
+
+  const isBullTrend = isHH && isHL;   // HH + HL = confirmed uptrend
+  const isBearTrend = isLH && isLL;   // LH + LL = confirmed downtrend
+
+  if (!isBullTrend && !isBearTrend) return null;
+
+  // Recency check: HL / LH must be within the last 12 × 15m bars (≈3 h)
+  const RECENCY_BARS = 12;
+  const totalBars   = parsed15.length;
+
+  const last1 = parsed1[parsed1.length - 1];
+  const price  = last1.close;
+
+  // ── LONG: uptrend confirmed (HH+HL) ─────────────────────
+  if (isBullTrend && (totalBars - lastSL.index) <= RECENCY_BARS) {
+    const hlLevel = lastSL.price;
+    // Price must be near the HL level — within 0% to +1.5% above it
+    // (pulled back to support, not run away from it)
+    const pctAboveHL = (price - hlLevel) / hlLevel;
+    if (pctAboveHL >= 0 && pctAboveHL <= 0.015 && isGreenCandle(last1)) {
+      return {
+        direction:  'LONG',
+        setup:      'TREND_FOLLOW_HL',
+        entryPrice: price,
+        sl:         hlLevel * 0.997,  // SL just below HL support
+        trend:      'bullish_HH_HL',
+        hlLevel,
+        swingHighCount: swingHighs.length,
+        swingLowCount:  swingLows.length,
+        tf15: `HH(${prevSH.price.toFixed(4)}→${lastSH.price.toFixed(4)})+HL(${prevSL.price.toFixed(4)}→${lastSL.price.toFixed(4)})`,
+        tf1:  'next_1m_green_at_HL',
+      };
+    }
+  }
+
+  // ── SHORT: downtrend confirmed (LL+LH) ──────────────────
+  if (isBearTrend && (totalBars - lastSH.index) <= RECENCY_BARS) {
+    const lhLevel = lastSH.price;
+    // Price must be near the LH level — within 1.5% below it to 0% above it
+    const pctBelowLH = (lhLevel - price) / lhLevel;
+    if (pctBelowLH >= 0 && pctBelowLH <= 0.015 && isRedCandle(last1)) {
+      return {
+        direction:  'SHORT',
+        setup:      'TREND_FOLLOW_LH',
+        entryPrice: price,
+        sl:         lhLevel * 1.003,  // SL just above LH resistance
+        trend:      'bearish_LL_LH',
+        lhLevel,
+        swingHighCount: swingHighs.length,
+        swingLowCount:  swingLows.length,
+        tf15: `LH(${prevSH.price.toFixed(4)}→${lastSH.price.toFixed(4)})+LL(${prevSL.price.toFixed(4)}→${lastSL.price.toFixed(4)})`,
+        tf1:  'next_1m_red_at_LH',
+      };
+    }
+  }
+
+  return null;
+}
+
 // ── MCT Session Windows (from PDF strategy) ────────────────
 // Only trade during the 3 institutional opening windows.
 // Outside these windows: institutions are not active, moves are unreliable.
@@ -1677,7 +1786,49 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     }
   } // end SMC_HL_STRUCTURE gate
 
+  // Strategy 7: Trend-Follow HL/LH — HH+HL uptrend → LONG; LL+LH downtrend → SHORT
+  // Entry: next 1m candle after the swing HL (for longs) or LH (for shorts) has confirmed.
+  if (!enabledStrategies || enabledStrategies.TREND_FOLLOW !== false) {
+    const tfSignal = detectTrendFollowEntry(klines15m, klines1m);
+    if (tfSignal) {
+      const slDist = Math.abs(tfSignal.entryPrice - tfSignal.sl) / tfSignal.entryPrice;
+      const tpPrice = findNearestLevel(tfSignal.entryPrice, allLevels, tfSignal.direction)?.price
+        || (tfSignal.direction === 'LONG'
+          ? tfSignal.entryPrice * (1 + slDist * 2.5)
+          : tfSignal.entryPrice * (1 - slDist * 2.5));
+      const tpDist = Math.abs(tpPrice - tfSignal.entryPrice) / tfSignal.entryPrice;
+      const rr = slDist > 0 ? tpDist / slDist : 1.5;
+      if (rr >= 1.5 && slDist > 0.001 && slDist < 0.05) {
+        signals.push({
+          symbol,
+          direction:  tfSignal.direction,
+          price:      tfSignal.entryPrice,
+          lastPrice:  price,
+          sl:         tfSignal.sl,
+          tp1:        tpPrice,
+          tp2:        tfSignal.direction === 'LONG'
+            ? tfSignal.entryPrice + tpDist * price * 1.5
+            : tfSignal.entryPrice - tpDist * price * 1.5,
+          tp3:        tfSignal.direction === 'LONG'
+            ? tfSignal.entryPrice + tpDist * price * 2.0
+            : tfSignal.entryPrice - tpDist * price * 2.0,
+          slDist,
+          setup:      tfSignal.setup,
+          setupName:  `${tfSignal.direction}-${tfSignal.setup}`,
+          score:      9, // high base score — trend-confirmed entry
+          rr:         Math.round(rr * 10) / 10,
+          tf15:       tfSignal.tf15,
+          tf1:        tfSignal.tf1,
+          trendTag:   tfSignal.trend,
+        });
+      }
+    }
+  } // end TREND_FOLLOW gate
+
   if (!signals.length) return null;
+
+  // Detect 15m swing structure for the hard direction filter below
+  const swingTrend15 = getHTFStructure(klines15m);
 
   // Apply confluence bonuses + global filters to all signals
   for (const sig of signals) {
@@ -1694,6 +1845,26 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
       sig.score = -99;
       sig.blocked = `LONG blocked — price below EMA200 (bearish bias per PDF)`;
       continue;
+    }
+
+    // ── 15m SWING STRUCTURE DIRECTION FILTER (user rule) ────
+    // HH+HL confirmed uptrend   → LONG only  (no short in uptrend)
+    // LL+LH confirmed downtrend → SHORT only (no long in downtrend)
+    if (swingTrend15.trend === 'bullish' && sig.direction === 'SHORT') {
+      sig.score = -99;
+      sig.blocked = 'SHORT blocked — 15m swing structure is HH+HL (uptrend): no short in uptrend';
+      continue;
+    }
+    if (swingTrend15.trend === 'bearish' && sig.direction === 'LONG') {
+      sig.score = -99;
+      sig.blocked = 'LONG blocked — 15m swing structure is LL+LH (downtrend): no long in downtrend';
+      continue;
+    }
+    // Reward with-trend entries for trending structures
+    if ((swingTrend15.trend === 'bullish' && sig.direction === 'LONG') ||
+        (swingTrend15.trend === 'bearish' && sig.direction === 'SHORT')) {
+      sig.score += 3;
+      sig.swingAligned = true;
     }
 
     // VWAP + OP bias (PDF: "avoid entering in between VWAP and OP if gap is small")
@@ -1899,6 +2070,9 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     session: best.session || null,
     ema200bias: ema200_bias,
     opVwapBias: opBias,
+    swingTrend: swingTrend15.trend,
+    swingAligned: best.swingAligned || false,
+    trendTag: best.trendTag || null,
   };
 
   return best;
