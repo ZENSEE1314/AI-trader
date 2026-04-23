@@ -1180,108 +1180,136 @@ function detectSMCStructureTrade(candles15m, candles3m, candles1m, h1Trend = 'ne
   return null;
 }
 
-// ── Trend-Follow Entry: HH+HL / LL+LH Structure ──────────
+// ── Trend-Follow Entry: 3-timeframe cascade ───────────────
 //
-// Rules (user-defined):
-//   Uptrend  = chart keeps forming HH + HL → LONG ONLY
-//   Downtrend = chart keeps forming LL + LH → SHORT ONLY
-//   Entry timing: next 1m candle AFTER the HL (or LH) has confirmed
-//   No LONG in downtrend. No SHORT in uptrend.
+// Full entry rules:
 //
-// Detection:
-//   Swing highs/lows on 15m (2-bar pivot: higher/lower than 2 neighbours)
-//   lastSH > prevSH AND lastSL > prevSL → HH+HL → bull trend
-//   lastSH < prevSH AND lastSL < prevSL → LH+LL → bear trend
+//  LONG:
+//    1. 15m trend = HH + HL (confirmed uptrend)
+//    2. 3m swing  = most recent 3m swing low is an HL (higher low on 3m)
+//    3. 1m entry  = next 1m candle after the 3m HL is green (bullish)
+//       SL = 0.3% below the 3m HL level
 //
-// Entry:
-//   LONG  – price within 1.5% of lastSL (HL level) + next 1m candle green
-//   SHORT – price within 1.5% of lastSH (LH level) + next 1m candle red
-//   HL/LH must have formed within last 12 × 15m candles (≈3 hours)
+//  SHORT:
+//    1. 15m trend = LL + LH (confirmed downtrend)
+//    2. 3m swing  = most recent 3m swing high is a LH (lower high on 3m)
+//    3. 1m entry  = next 1m candle after the 3m LH is red (bearish)
+//       SL = 0.3% above the 3m LH level
+//
+//  No LONG in downtrend. No SHORT in uptrend.
+//  3m HL/LH must be within last 10 × 3m bars (≈30 min) — keeps entries fresh.
 // ──────────────────────────────────────────────────────────
 
-function detectTrendFollowEntry(klines15m, klines1m) {
-  if (!klines15m || klines15m.length < 30 || !klines1m || klines1m.length < 3) return null;
+function detectTrendFollowEntry(klines15m, klines3m, klines1m) {
+  if (!klines15m || klines15m.length < 30) return null;
+  if (!klines3m  || klines3m.length  < 10) return null;
+  if (!klines1m  || klines1m.length  <  3) return null;
 
   const parsed15 = klines15m.map(parseCandle);
+  const parsed3  = klines3m.map(parseCandle);
   const parsed1  = klines1m.map(parseCandle);
 
-  // 2-bar pivot swing detection on 15m
-  const swingHighs = [];
-  const swingLows  = [];
+  // ── Step 1: 15m trend — 2-bar pivot swing detection ─────
+  const sh15 = [];
+  const sl15 = [];
   for (let i = 2; i < parsed15.length - 2; i++) {
     if (
       parsed15[i].high > parsed15[i - 1].high && parsed15[i].high > parsed15[i - 2].high &&
       parsed15[i].high > parsed15[i + 1].high && parsed15[i].high > parsed15[i + 2].high
-    ) swingHighs.push({ price: parsed15[i].high, index: i });
+    ) sh15.push({ price: parsed15[i].high, index: i });
     if (
       parsed15[i].low < parsed15[i - 1].low && parsed15[i].low < parsed15[i - 2].low &&
       parsed15[i].low < parsed15[i + 1].low && parsed15[i].low < parsed15[i + 2].low
-    ) swingLows.push({ price: parsed15[i].low, index: i });
+    ) sl15.push({ price: parsed15[i].low, index: i });
   }
+  if (sh15.length < 2 || sl15.length < 2) return null;
 
-  if (swingHighs.length < 2 || swingLows.length < 2) return null;
+  const lastSH15 = sh15[sh15.length - 1];
+  const prevSH15 = sh15[sh15.length - 2];
+  const lastSL15 = sl15[sl15.length - 1];
+  const prevSL15 = sl15[sl15.length - 2];
 
-  const lastSH = swingHighs[swingHighs.length - 1];
-  const prevSH = swingHighs[swingHighs.length - 2];
-  const lastSL = swingLows[swingLows.length - 1];
-  const prevSL = swingLows[swingLows.length - 2];
-
-  const isHH = lastSH.price > prevSH.price;
-  const isHL = lastSL.price > prevSL.price;
-  const isLH = lastSH.price < prevSH.price;
-  const isLL = lastSL.price < prevSL.price;
-
-  const isBullTrend = isHH && isHL;   // HH + HL = confirmed uptrend
-  const isBearTrend = isLH && isLL;   // LH + LL = confirmed downtrend
+  const isBullTrend = lastSH15.price > prevSH15.price && lastSL15.price > prevSL15.price; // HH+HL
+  const isBearTrend = lastSH15.price < prevSH15.price && lastSL15.price < prevSL15.price; // LH+LL
 
   if (!isBullTrend && !isBearTrend) return null;
 
-  // Recency check: HL / LH must be within the last 12 × 15m bars (≈3 h)
-  const RECENCY_BARS = 12;
-  const totalBars   = parsed15.length;
+  // ── Step 2: 3m swing — 1-bar pivot (responsive for entry timing) ──
+  // Confirmed pivot at index i requires bars i-1 and i+1 to exist.
+  // Most recent confirmed swing is at parsed3.length - 2.
+  const sh3 = [];
+  const sl3 = [];
+  for (let i = 1; i < parsed3.length - 1; i++) {
+    if (parsed3[i].high > parsed3[i - 1].high && parsed3[i].high > parsed3[i + 1].high)
+      sh3.push({ price: parsed3[i].high, index: i });
+    if (parsed3[i].low  < parsed3[i - 1].low  && parsed3[i].low  < parsed3[i + 1].low)
+      sl3.push({ price: parsed3[i].low,  index: i });
+  }
+  if (sl3.length < 2 || sh3.length < 2) return null;
 
-  const last1 = parsed1[parsed1.length - 1];
+  const lastSL3 = sl3[sl3.length - 1];
+  const prevSL3 = sl3[sl3.length - 2];
+  const lastSH3 = sh3[sh3.length - 1];
+  const prevSH3 = sh3[sh3.length - 2];
+
+  const is3mHL = lastSL3.price > prevSL3.price; // 3m Higher Low  → bullish pull-back
+  const is3mLH = lastSH3.price < prevSH3.price; // 3m Lower  High → bearish bounce
+
+  // 3m HL/LH must be fresh — within last 10 × 3m bars (≈30 min)
+  const RECENCY_3M = 10;
+  const total3 = parsed3.length;
+
+  // ── Step 3: 1m entry candle ──────────────────────────────
+  const last1  = parsed1[parsed1.length - 1];
   const price  = last1.close;
 
-  // ── LONG: uptrend confirmed (HH+HL) ─────────────────────
-  if (isBullTrend && (totalBars - lastSL.index) <= RECENCY_BARS) {
-    const hlLevel = lastSL.price;
-    // Price must be near the HL level — within 0% to +1.5% above it
-    // (pulled back to support, not run away from it)
-    const pctAboveHL = (price - hlLevel) / hlLevel;
-    if (pctAboveHL >= 0 && pctAboveHL <= 0.015 && isGreenCandle(last1)) {
+  // ── LONG: 15m HH+HL  +  3m HL  +  next 1m green ────────
+  if (
+    isBullTrend &&
+    is3mHL &&
+    (total3 - lastSL3.index) <= RECENCY_3M &&
+    isGreenCandle(last1)
+  ) {
+    const hlLevel3m = lastSL3.price;
+    // Price should still be near the 3m HL (not already run far above it)
+    const pctAbove = (price - hlLevel3m) / hlLevel3m;
+    if (pctAbove >= 0 && pctAbove <= 0.015) {
       return {
         direction:  'LONG',
         setup:      'TREND_FOLLOW_HL',
         entryPrice: price,
-        sl:         hlLevel * 0.997,  // SL just below HL support
+        sl:         hlLevel3m * 0.997, // SL just below the 3m HL
         trend:      'bullish_HH_HL',
-        hlLevel,
-        swingHighCount: swingHighs.length,
-        swingLowCount:  swingLows.length,
-        tf15: `HH(${prevSH.price.toFixed(4)}→${lastSH.price.toFixed(4)})+HL(${prevSL.price.toFixed(4)}→${lastSL.price.toFixed(4)})`,
-        tf1:  'next_1m_green_at_HL',
+        hlLevel3m,
+        tf15: `HH(${prevSH15.price.toFixed(4)}→${lastSH15.price.toFixed(4)})`
+            + `+HL(${prevSL15.price.toFixed(4)}→${lastSL15.price.toFixed(4)})`,
+        tf3:  `3m_HL(${prevSL3.price.toFixed(4)}→${lastSL3.price.toFixed(4)})`,
+        tf1:  'next_1m_green_entry',
       };
     }
   }
 
-  // ── SHORT: downtrend confirmed (LL+LH) ──────────────────
-  if (isBearTrend && (totalBars - lastSH.index) <= RECENCY_BARS) {
-    const lhLevel = lastSH.price;
-    // Price must be near the LH level — within 1.5% below it to 0% above it
-    const pctBelowLH = (lhLevel - price) / lhLevel;
-    if (pctBelowLH >= 0 && pctBelowLH <= 0.015 && isRedCandle(last1)) {
+  // ── SHORT: 15m LH+LL  +  3m LH  +  next 1m red ─────────
+  if (
+    isBearTrend &&
+    is3mLH &&
+    (total3 - lastSH3.index) <= RECENCY_3M &&
+    isRedCandle(last1)
+  ) {
+    const lhLevel3m = lastSH3.price;
+    const pctBelow = (lhLevel3m - price) / lhLevel3m;
+    if (pctBelow >= 0 && pctBelow <= 0.015) {
       return {
         direction:  'SHORT',
         setup:      'TREND_FOLLOW_LH',
         entryPrice: price,
-        sl:         lhLevel * 1.003,  // SL just above LH resistance
+        sl:         lhLevel3m * 1.003, // SL just above the 3m LH
         trend:      'bearish_LL_LH',
-        lhLevel,
-        swingHighCount: swingHighs.length,
-        swingLowCount:  swingLows.length,
-        tf15: `LH(${prevSH.price.toFixed(4)}→${lastSH.price.toFixed(4)})+LL(${prevSL.price.toFixed(4)}→${lastSL.price.toFixed(4)})`,
-        tf1:  'next_1m_red_at_LH',
+        lhLevel3m,
+        tf15: `LH(${prevSH15.price.toFixed(4)}→${lastSH15.price.toFixed(4)})`
+            + `+LL(${prevSL15.price.toFixed(4)}→${lastSL15.price.toFixed(4)})`,
+        tf3:  `3m_LH(${prevSH3.price.toFixed(4)}→${lastSH3.price.toFixed(4)})`,
+        tf1:  'next_1m_red_entry',
       };
     }
   }
@@ -1820,7 +1848,7 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
   // Strategy 7: Trend-Follow HL/LH — HH+HL uptrend → LONG; LL+LH downtrend → SHORT
   // Entry: next 1m candle after the swing HL (for longs) or LH (for shorts) has confirmed.
   if (!enabledStrategies || enabledStrategies.TREND_FOLLOW !== false) {
-    const tfSignal = detectTrendFollowEntry(klines15m, klines1m);
+    const tfSignal = detectTrendFollowEntry(klines15m, klines3m, klines1m);
     if (tfSignal) {
       const slDist = Math.abs(tfSignal.entryPrice - tfSignal.sl) / tfSignal.entryPrice;
       const tpPrice = findNearestLevel(tfSignal.entryPrice, allLevels, tfSignal.direction)?.price
