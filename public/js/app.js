@@ -328,16 +328,39 @@
 
   // ----- Admin Panel Auto-Refresh -----
 
-  let adminRefreshTimer = null;
-  const ADMIN_REFRESH_MS = 30000; // 30 seconds — keeps trade counts + PnL live
+  let adminRefreshTimer    = null;
+  let adminCountdownTimer  = null;
+  let adminNextRefreshAt   = 0;
+  const ADMIN_REFRESH_MS   = 10000; // 10 seconds on Earnings — commissions are live-critical
 
   function startAdminRefresh() {
     stopAdminRefresh();
-    adminRefreshTimer = setInterval(loadAdmin, ADMIN_REFRESH_MS);
+    adminNextRefreshAt = Date.now() + ADMIN_REFRESH_MS;
+    adminRefreshTimer = setInterval(() => {
+      loadAdmin();
+      adminNextRefreshAt = Date.now() + ADMIN_REFRESH_MS;
+    }, ADMIN_REFRESH_MS);
+    // Countdown bar: tick every 500 ms
+    adminCountdownTimer = setInterval(_tickAdminCountdown, 500);
+    _tickAdminCountdown();
   }
 
   function stopAdminRefresh() {
-    if (adminRefreshTimer) { clearInterval(adminRefreshTimer); adminRefreshTimer = null; }
+    if (adminRefreshTimer)   { clearInterval(adminRefreshTimer);   adminRefreshTimer   = null; }
+    if (adminCountdownTimer) { clearInterval(adminCountdownTimer); adminCountdownTimer = null; }
+    const bar = document.getElementById('earnings-refresh-bar');
+    if (bar) bar.style.width = '0%';
+  }
+
+  function _tickAdminCountdown() {
+    const bar  = document.getElementById('earnings-refresh-bar');
+    const lbl  = document.getElementById('earnings-refresh-lbl');
+    if (!bar && !lbl) return;
+    const remaining = Math.max(0, adminNextRefreshAt - Date.now());
+    const pct       = ((ADMIN_REFRESH_MS - remaining) / ADMIN_REFRESH_MS) * 100;
+    const secs      = Math.ceil(remaining / 1000);
+    if (bar) bar.style.width = pct + '%';
+    if (lbl) lbl.textContent = `Auto-refresh in ${secs}s`;
   }
 
   // ----- Dashboard -----
@@ -5259,6 +5282,7 @@
     fixBitunixPnl, debugBitunix, runBacktest, loadAiVersions, runAiOptimize, adminResyncFees, adminFixTrades, adminClearTestData,
     mcRefresh, mcCommand, mcChat, mcChatQuick, switchAdminTab, filterAgents, customerChat,
     loadStrategyConfig, loadStrategyComposer, initStratSubTabs,
+    startAdminRefresh, stopAdminRefresh,
     checkEmailSmtp, sendTestEmail, sendBroadcastEmail, emailSetMode,
     loadSignalBoard, toggleWatch, watchAll, setUserLeverage,
     adminLoadTokenBoard, adminAddTokenBoard, adminPopulateTop50, adminSetRiskTag, adminSetTokenLev, adminToggleBan, adminRemoveTokenBoard,

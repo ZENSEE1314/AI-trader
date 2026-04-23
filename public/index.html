@@ -1683,6 +1683,15 @@
              TAB: Earnings
              ═══════════════════════════════════════════ -->
         <div id="admin-tab-earnings" class="admin-tab-panel">
+          <!-- Auto-refresh countdown bar -->
+          <div style="margin-bottom:var(--space-3);background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.07);border-radius:var(--radius-md);padding:8px 14px;display:flex;align-items:center;gap:12px;">
+            <span style="font-size:0.72rem;font-weight:600;color:var(--color-text-muted);white-space:nowrap;">🔄 LIVE</span>
+            <div style="flex:1;height:4px;background:rgba(255,255,255,0.06);border-radius:2px;overflow:hidden;">
+              <div id="earnings-refresh-bar" style="height:100%;width:0%;background:linear-gradient(90deg,#10b981,#34d399);border-radius:2px;transition:width 0.4s linear;"></div>
+            </div>
+            <span id="earnings-refresh-lbl" style="font-size:0.7rem;color:var(--color-text-muted);white-space:nowrap;min-width:110px;text-align:right;">Auto-refresh in 10s</span>
+            <button onclick="window.CryptoBot.loadAdmin()" style="background:none;border:1px solid rgba(255,255,255,0.1);border-radius:var(--radius-sm);color:var(--color-text-muted);font-size:0.7rem;padding:2px 10px;cursor:pointer;" title="Refresh now">↺ Now</button>
+          </div>
           <div id="admin-weekly-summary" class="summary-grid" style="margin-bottom:var(--space-4);">
             <div class="summary-card" style="border-left:3px solid var(--color-success);">
               <span class="summary-card-label">Net P&L (All Users)</span>
@@ -2588,7 +2597,7 @@ EMAIL_FROM=MCT &lt;a83c06001@smtp-brevo.com&gt;</pre>
     </div>
   </div>
 
-  <script src="/js/app.js?v=20260433" defer></script>
+  <script src="/js/app.js?v=20260434" defer></script>
   <!-- Email tab patch: inline so it works regardless of JS cache (HTML is never cached) -->
   <script>
     document.addEventListener('DOMContentLoaded', function() {
@@ -2603,12 +2612,18 @@ EMAIL_FROM=MCT &lt;a83c06001@smtp-brevo.com&gt;</pre>
           var el = document.getElementById('admin-tab-' + p);
           if (el) el.classList.toggle('hidden', p !== tab);
         });
-        if (tab === 'earnings' && window.CryptoBot && window.CryptoBot.loadAdmin) window.CryptoBot.loadAdmin();
+        if (tab === 'earnings') {
+          if (window.CryptoBot && window.CryptoBot.loadAdmin)        window.CryptoBot.loadAdmin();
+          if (window.CryptoBot && window.CryptoBot.startAdminRefresh) window.CryptoBot.startAdminRefresh();
+        } else {
+          // Stop the countdown when leaving Earnings
+          if (window.CryptoBot && window.CryptoBot.stopAdminRefresh)  window.CryptoBot.stopAdminRefresh();
+        }
         if (tab === 'email' && window.CryptoBot && window.CryptoBot.checkEmailSmtp) window.CryptoBot.checkEmailSmtp().catch(function(){});
         if (tab === 'versions' && window.CryptoBot && window.CryptoBot.loadStrategyVersions) window.CryptoBot.loadStrategyVersions();
         if (tab === 'strategies') {
           if (window.CryptoBot && window.CryptoBot.loadStrategyConfig) window.CryptoBot.loadStrategyConfig();
-          if (window.CryptoBot && window.CryptoBot.initStratSubTabs) window.CryptoBot.initStratSubTabs();
+          if (window.CryptoBot && window.CryptoBot.initStratSubTabs)   window.CryptoBot.initStratSubTabs();
         }
       }
       // Wait for CryptoBot to be defined (app.js is deferred)
