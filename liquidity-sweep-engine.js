@@ -1510,33 +1510,64 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     }
   }
 
-  // ── VWAP + OP daily bias (PDF rule) ─────────────────────
+  // ── VWAP + OP daily bias (PDF rule) + VWAP band filter ─────
   // "If price > OP AND > VWAP → look LONG only. If < OP AND < VWAP → look SHORT only."
   // Opening Price (OP) = first 15m candle open of the UTC day
-  let opBias = 'neutral';
+  //
+  // VWAP Standard-Deviation Bands (user rule):
+  //   Upper band = VWAP + VWAP_BAND_MULT × σ
+  //   Lower band = VWAP − VWAP_BAND_MULT × σ
+  //   price > upper band → bullish zone → NO SHORT until price falls below upper band
+  //   price < lower band → bearish zone → NO LONG  until price rises above lower band
+  const VWAP_BAND_MULT = 1.0; // 1 standard deviation (matches TradingView default)
+  let opBias      = 'neutral';
+  let vwapUpper   = null;
+  let vwapLower   = null;
+  let vwapMid     = null;
+  let vwapBandPos = 'between'; // 'above_upper' | 'below_lower' | 'between'
   {
     const now = new Date();
     const dayStartMs = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
-    // Find the first 15m candle from today
     const todayCandles = parsed15.filter(c => c.openTime >= dayStartMs);
     const opPrice = todayCandles.length > 0 ? todayCandles[0].open : null;
 
-    // Simple VWAP approximation from today's 15m candles
-    let vwapVal = null;
     if (todayCandles.length > 0) {
+      // Step 1: VWAP
       let cumTV = 0, cumV = 0;
+      const typicals = [];
       for (const c of todayCandles) {
-        const typical = (c.high + c.low + c.close) / 3;
-        cumTV += typical * c.volume;
+        const tp = (c.high + c.low + c.close) / 3;
+        typicals.push(tp);
+        cumTV += tp * c.volume;
         cumV  += c.volume;
       }
-      vwapVal = cumV > 0 ? cumTV / cumV : null;
-    }
+      const vwapVal = cumV > 0 ? cumTV / cumV : null;
 
-    if (opPrice && vwapVal) {
-      if (price > opPrice && price > vwapVal)        opBias = 'bullish'; // above both → prefer LONG
-      else if (price < opPrice && price < vwapVal)   opBias = 'bearish'; // below both → prefer SHORT
-      // else: price between OP and VWAP → gap too small, PDF says avoid entering
+      if (vwapVal) {
+        // Step 2: volume-weighted variance → std dev
+        let cumVarTV = 0;
+        for (let i = 0; i < todayCandles.length; i++) {
+          const diff = typicals[i] - vwapVal;
+          cumVarTV += todayCandles[i].volume * diff * diff;
+        }
+        const variance = cumV > 0 ? cumVarTV / cumV : 0;
+        const stdDev   = Math.sqrt(variance);
+
+        vwapMid   = vwapVal;
+        vwapUpper = vwapVal + VWAP_BAND_MULT * stdDev;
+        vwapLower = vwapVal - VWAP_BAND_MULT * stdDev;
+
+        // Where is price relative to the bands?
+        if (price > vwapUpper)      vwapBandPos = 'above_upper';
+        else if (price < vwapLower) vwapBandPos = 'below_lower';
+        else                        vwapBandPos = 'between';
+      }
+
+      // OP + VWAP directional bias (unchanged)
+      if (opPrice && vwapVal) {
+        if (price > opPrice && price > vwapVal)      opBias = 'bullish';
+        else if (price < opPrice && price < vwapVal) opBias = 'bearish';
+      }
     }
   }
 
@@ -1867,6 +1898,25 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
       sig.swingAligned = true;
     }
 
+    // ── VWAP BAND FILTER (user rule) ─────────────────────────
+    // price > VWAP upper band → bullish zone → SHORT blocked
+    //   (only allow SHORT after price falls back below upper band)
+    // price < VWAP lower band → bearish zone → LONG blocked
+    //   (only allow LONG after price rises back above lower band)
+    if (vwapBandPos === 'above_upper' && sig.direction === 'SHORT') {
+      sig.score = -99;
+      sig.blocked = `SHORT blocked — price above VWAP upper band (${vwapUpper?.toFixed(4)}): bullish zone, no shorting until price falls below upper band`;
+      continue;
+    }
+    if (vwapBandPos === 'below_lower' && sig.direction === 'LONG') {
+      sig.score = -99;
+      sig.blocked = `LONG blocked — price below VWAP lower band (${vwapLower?.toFixed(4)}): bearish zone, no longs until price rises above lower band`;
+      continue;
+    }
+    // Reward entries in the correct VWAP zone
+    if (vwapBandPos === 'above_upper' && sig.direction === 'LONG')  sig.score += 2; // price in bullish zone, going long ✓
+    if (vwapBandPos === 'below_lower' && sig.direction === 'SHORT') sig.score += 2; // price in bearish zone, going short ✓
+
     // VWAP + OP bias (PDF: "avoid entering in between VWAP and OP if gap is small")
     // Hard block if direction conflicts with OP+VWAP combined bias
     if (opBias === 'bullish' && sig.direction === 'SHORT') {
@@ -2073,6 +2123,10 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     swingTrend: swingTrend15.trend,
     swingAligned: best.swingAligned || false,
     trendTag: best.trendTag || null,
+    vwapMid:   vwapMid   ? Math.round(vwapMid   * 10000) / 10000 : null,
+    vwapUpper: vwapUpper ? Math.round(vwapUpper * 10000) / 10000 : null,
+    vwapLower: vwapLower ? Math.round(vwapLower * 10000) / 10000 : null,
+    vwapBandPos,
   };
 
   return best;
