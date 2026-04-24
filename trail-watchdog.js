@@ -22,19 +22,10 @@ const { calcV2TrailSL } = require('./strategy-v2');
 const INTERVAL_MS = 15 * 1000;
 const db = require('./db');
 
-// Trailing thresholds (capital profit %)
-const TRAIL_ACTIVATE_CAP = 0.20; // don't trail below 20% capital profit — let trade breathe
-const PROFIT_LOCK_PCT    = 0.60; // lock 60% of current profit (slides up as profit grows)
-//   At 20% profit → SL at 12%  (still profitable after fees)
-//   At 30% profit → SL at 18%
-//   At 50% profit → SL at 30%
-//   At 100% profit → SL at 60%
-const CANDLE_TRAIL_CAP   = 0.35; // switch to candle structural trail at 35%+ capital profit
-
-// Fees (capital %)
-const TAKER_FEE_BOTH_LEGS = 0.0008; // 0.08% notional × leverage = taker in+out
-const FUNDING_INTERVAL_H  = 8;      // funding charged every 8 hours
-const FUNDING_FALLBACK    = 0.0001; // 0.01% per 8h if API unavailable
+// NOTE: V1 trail constants removed — all trades now use V2 milestone trail.
+// V2 thresholds live in strategy-v2.js (V2_SL_CAPITAL_PCT / TRAIL_START / TRAIL_STEP).
+// Funding rate cache kept for getLivePrice fallback only.
+const FUNDING_FALLBACK = 0.0001;
 
 // Cache funding rates to avoid hammering Binance every 15s
 const fundingRateCache = new Map(); // symbol → { rate, fetchedAt }
@@ -100,65 +91,6 @@ async function getLivePrice(symbol) {
   }
 }
 
-// Sliding profit lock: activates at 20% capital profit, then locks 60% of
-// whatever profit exists — slides up as profit grows.
-// feeFloorCap = total fees (taker + funding) + buffer — SL never locks below this.
-function calcTierSlPrice(entryPrice, curPrice, isLong, leverage, feeFloorCap = 0.03) {
-  const pricePct   = isLong
-    ? (curPrice - entryPrice) / entryPrice
-    : (entryPrice - curPrice) / entryPrice;
-  const capitalPct = pricePct * leverage;
-
-  // Below 20% capital profit — let trade breathe, no movement
-  if (capitalPct < TRAIL_ACTIVATE_CAP) return null;
-
-  // Lock 60% of current profit, but never below total fees (taker + funding + buffer)
-  const slCapital  = Math.max(capitalPct * PROFIT_LOCK_PCT, feeFloorCap);
-  const slPricePct = slCapital / leverage;
-
-  return isLong
-    ? entryPrice * (1 + slPricePct)
-    : entryPrice * (1 - slPricePct);
-}
-
-// Minimum price distance between SL and current price (0.5%)
-// Prevents SL from being placed too close and getting clipped by normal volatility
-const MIN_SL_DISTANCE = 0.005;
-
-// Structural SL based on the lowest low of the last 2 completed 15m candles.
-// Uses 2 candles (not 1) for wider structural support.
-// Enforces MIN_SL_DISTANCE from current price so the trade has breathing room.
-async function calcCandleSlPrice(symbol, isLong, currentSl, curPrice) {
-  try {
-    const url = `https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=15m&limit=5`;
-    const res = await fetch(url, { timeout: 6000, ...getFetchOptions() });
-    const data = await res.json();
-    if (!Array.isArray(data) || data.length < 3) return null;
-
-    // Last 2 completed candles (exclude the forming candle at index -1)
-    const c1 = data[data.length - 2];
-    const c2 = data[data.length - 3];
-
-    // For LONG: use the lowest low of both candles — deeper structural support
-    // For SHORT: use the highest high — deeper structural resistance
-    const structLow  = Math.min(parseFloat(c1[3]), parseFloat(c2[3]));
-    const structHigh = Math.max(parseFloat(c1[2]), parseFloat(c2[2]));
-
-    if (isLong) {
-      // Reject if candle low is too close to current price — no breathing room
-      if (structLow > curPrice * (1 - MIN_SL_DISTANCE)) return null;
-      if (structLow > currentSl) return structLow;
-    } else {
-      // Reject if candle high is too close to current price
-      if (structHigh < curPrice * (1 + MIN_SL_DISTANCE)) return null;
-      if (structHigh < currentSl) return structHigh;
-    }
-    return null;
-  } catch (e) {
-    log(`calcCandleSlPrice ${symbol}: ${e.message}`);
-    return null;
-  }
-}
 
 async function updateSlBitunix(client, symbol, newSlPrice, pricePrec, existingTp) {
   try {
@@ -208,7 +140,6 @@ async function runTrailCycle() {
     const trades = await db.query(`
       SELECT t.id, t.symbol, t.direction, t.entry_price, t.sl_price,
              t.trailing_sl_price, t.tp_price, t.leverage, t.created_at,
-             t.setup,
              ak.platform,
              ak.api_key_enc, ak.iv, ak.auth_tag,
              ak.api_secret_enc, ak.secret_iv, ak.secret_auth_tag
@@ -246,45 +177,21 @@ async function runTrailCycle() {
           : (entryPrice - curPrice) / entryPrice;
         const capitalPct = profitPct * leverage;
 
-        // ── Trail logic: V2 or V1 ─────────────────────────────────
-        const isV2 = (trade.setup || '').startsWith('STRATEGY_V2') || (trade.setup || '').startsWith('V2_');
-        let bestSl = currentSl;
-        const source = [];
+        // ── V2 Milestone Trail ────────────────────────────────────
+        // Activates at +31% capital profit.
+        // Locks in each 10% milestone as the new SL:
+        //   profit 31% → SL +30% | profit 40% → SL +40% | profit 50% → SL +50% …
+        const v2Result = calcV2TrailSL(entryPrice, curPrice, isLong, leverage, currentSl);
+        if (!v2Result) continue; // trail not triggered yet
 
-        if (isV2) {
-          // ── V2: milestone trail — activates at 31%, locks each 10% ──
-          // SL=-30% cap | trail@31% | milestones: 30→40→50→60…
-          const v2Result = calcV2TrailSL(entryPrice, curPrice, isLong, leverage, currentSl);
-          if (v2Result) {
-            bestSl = v2Result.newSl;
-            source.push(`V2-trail(+${(v2Result.capitalPct*100).toFixed(1)}%cap→lock${(v2Result.milestone*100).toFixed(0)}%)`);
-          }
-        } else {
-          // ── V1: 20% activate / 60% sliding lock + candle trail ───────
-          const takerCapital = TAKER_FEE_BOTH_LEGS * leverage;
-          const tradeAgeMs     = Date.now() - new Date(trade.created_at).getTime();
-          const tradeAgeH      = tradeAgeMs / (1000 * 3600);
-          const fundingPeriods = Math.max(1, Math.floor(tradeAgeH / FUNDING_INTERVAL_H));
-          const fundingRate    = await getFundingRate(trade.symbol);
-          const fundingCapital = fundingRate * fundingPeriods * leverage;
-          const totalFeesCapital = takerCapital + fundingCapital + 0.01;
+        const bestSl  = v2Result.newSl;
+        const srcLabel = `trail(+${(v2Result.capitalPct*100).toFixed(1)}%→lock${(v2Result.milestone*100).toFixed(0)}%)`;
 
-          const tierSl = calcTierSlPrice(entryPrice, curPrice, isLong, leverage, totalFeesCapital);
-          const candleSl = capitalPct >= CANDLE_TRAIL_CAP
-            ? await calcCandleSlPrice(trade.symbol, isLong, currentSl, curPrice)
-            : null;
-
-          if (tierSl)   bestSl = isLong ? Math.max(bestSl, tierSl)   : Math.min(bestSl, tierSl);
-          if (candleSl) bestSl = isLong ? Math.max(bestSl, candleSl) : Math.min(bestSl, candleSl);
-          if (tierSl  && (isLong ? tierSl   > currentSl : tierSl   < currentSl)) source.push(`60%lock(+${(capitalPct*100).toFixed(1)}%cap)`);
-          if (candleSl && (isLong ? candleSl > currentSl : candleSl < currentSl)) source.push('candle');
-        }
-
-        // Only update if improved beyond current SL
-        const improved = isLong ? bestSl > currentSl + 0.001 : bestSl < currentSl - 0.001;
+        // Only update if it genuinely improves the stored SL
+        const improved = isLong ? bestSl > currentSl + 0.0001 : bestSl < currentSl - 0.0001;
         if (!improved) continue;
 
-        log(`${trade.symbol} ${isLong ? 'LONG' : 'SHORT'} [${source.join('+')}] SL: $${currentSl.toFixed(pricePrec)} → $${bestSl.toFixed(pricePrec)} | profit +${(capitalPct*100).toFixed(1)}% capital`);
+        log(`${trade.symbol} ${isLong ? 'LONG' : 'SHORT'} [${srcLabel}] SL: $${currentSl.toFixed(pricePrec)} → $${bestSl.toFixed(pricePrec)} | +${(v2Result.capitalPct*100).toFixed(1)}% capital`);
 
         let updated = false;
         if (trade.platform === 'bitunix') {
@@ -308,9 +215,7 @@ async function runTrailCycle() {
             `📈 *Trail SL Moved*\n` +
             `*${trade.symbol}* ${isLong ? 'LONG' : 'SHORT'}\n` +
             `SL: \`$${currentSl.toFixed(pricePrec)}\` → \`$${bestSl.toFixed(pricePrec)}\`\n` +
-            `Source: ${source.join('+')}\n` +
-            `Profit: +${(capitalPct * 100).toFixed(1)}% capital\n` +
-            `Fees: taker ${(takerCapital * 100).toFixed(2)}% + funding ${(fundingCapital * 100).toFixed(2)}% = total ${(totalFeesCapital * 100).toFixed(2)}%`
+            `Profit: +${(v2Result.capitalPct * 100).toFixed(1)}% capital | locked ${(v2Result.milestone * 100).toFixed(0)}%`
           );
         } else {
           log(`✗ ${trade.symbol} SL update FAILED (exchange rejected)`);
@@ -318,7 +223,7 @@ async function runTrailCycle() {
             `🚨 *Trail SL Failed*\n` +
             `*${trade.symbol}* ${isLong ? 'LONG' : 'SHORT'}\n` +
             `Tried SL → \`$${bestSl.toFixed(pricePrec)}\` — exchange rejected\n` +
-            `Profit: +${(capitalPct * 100).toFixed(1)}% capital`
+            `Profit: +${(v2Result.capitalPct * 100).toFixed(1)}% capital`
           );
         }
       } catch (e) {
@@ -430,7 +335,7 @@ async function runOrphanGuard() {
   }
 }
 
-log('Trail watchdog started — 15s interval | activates@20%cap | 60%sliding-lock | candle-trail@35%cap');
+log('Trail watchdog started — 15s interval | V2 milestone trail | activates@31%cap | locks 30→40→50…% every 10% step');
 log('Orphan guard started — 2min interval | auto-close unmanaged positions > -25% capital');
 runTrailCycle();
 setInterval(runTrailCycle, INTERVAL_MS);
