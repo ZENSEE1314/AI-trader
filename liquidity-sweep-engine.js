@@ -1552,18 +1552,21 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
   let vwapUpper   = null;
   let vwapLower   = null;
   let vwapMid     = null;
-  let vwapBandPos = 'between'; // 'above_upper' | 'below_lower' | 'between'
+  // Default: unknown — if VWAP can't be computed, block both directions (no trade)
+  let vwapBandPos = 'unknown';
   {
     const now = new Date();
     const dayStartMs = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
     const todayCandles = parsed15.filter(c => c.openTime >= dayStartMs);
+    // Fall back to all 15m candles when the session has just started (<3 candles today)
+    const vwapCandles = todayCandles.length >= 3 ? todayCandles : parsed15;
     const opPrice = todayCandles.length > 0 ? todayCandles[0].open : null;
 
-    if (todayCandles.length > 0) {
+    if (vwapCandles.length > 0) {
       // Step 1: VWAP
       let cumTV = 0, cumV = 0;
       const typicals = [];
-      for (const c of todayCandles) {
+      for (const c of vwapCandles) {
         const tp = (c.high + c.low + c.close) / 3;
         typicals.push(tp);
         cumTV += tp * c.volume;
@@ -1574,9 +1577,9 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
       if (vwapVal) {
         // Step 2: volume-weighted variance → std dev
         let cumVarTV = 0;
-        for (let i = 0; i < todayCandles.length; i++) {
+        for (let i = 0; i < vwapCandles.length; i++) {
           const diff = typicals[i] - vwapVal;
-          cumVarTV += todayCandles[i].volume * diff * diff;
+          cumVarTV += vwapCandles[i].volume * diff * diff;
         }
         const variance = cumV > 0 ? cumVarTV / cumV : 0;
         const stdDev   = Math.sqrt(variance);
@@ -1935,16 +1938,22 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     // ── VWAP DIRECTION FILTER (user rule) ────────────────────
     // price >= VWAP mid → bullish side → SHORT blocked
     // price <  VWAP mid → bearish side → LONG blocked
+    // unknown           → VWAP not computable → block all trades
+    if (vwapBandPos === 'unknown') {
+      sig.score = -99;
+      sig.blocked = 'blocked — VWAP not available, skipping trade';
+      continue;
+    }
     const isVwapBearish = vwapBandPos === 'below_mid' || vwapBandPos === 'below_lower';
     const isVwapBullish = vwapBandPos === 'above_mid' || vwapBandPos === 'above_upper';
     if (isVwapBearish && sig.direction === 'LONG') {
       sig.score = -99;
-      sig.blocked = `LONG blocked — price below VWAP (mid=${vwapMid?.toFixed(4)}, price=${price.toFixed(4)}): bearish side of VWAP, no longs until price rises above VWAP`;
+      sig.blocked = `LONG blocked — price below VWAP (mid=${vwapMid?.toFixed(4)}, price=${price.toFixed(4)}): bearish side, no longs until price rises above VWAP`;
       continue;
     }
     if (isVwapBullish && sig.direction === 'SHORT') {
       sig.score = -99;
-      sig.blocked = `SHORT blocked — price above VWAP (mid=${vwapMid?.toFixed(4)}, price=${price.toFixed(4)}): bullish side of VWAP, no shorts until price falls below VWAP`;
+      sig.blocked = `SHORT blocked — price above VWAP (mid=${vwapMid?.toFixed(4)}, price=${price.toFixed(4)}): bullish side, no shorts until price falls below VWAP`;
       continue;
     }
     // Reward entries deep in the correct zone (outside bands = strong confirmation)
