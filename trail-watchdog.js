@@ -92,17 +92,24 @@ async function getLivePrice(symbol) {
 }
 
 
-async function updateSlBitunix(client, symbol, newSlPrice, pricePrec, existingTp) {
+async function updateSlBitunix(client, symbol, newSlPrice, pricePrec, existingTp, cachedPos = null) {
   try {
-    const posData = await client.getOpenPositions(symbol);
-    const posList = Array.isArray(posData) ? posData
-      : (posData?.positionList || posData?.list || (posData && typeof posData === 'object' ? [posData] : []));
-    // NOTE: normalize both sides — Bitunix may return symbols in different case/format
-    const symUpper = symbol.toUpperCase();
-    const pos = posList.find(p => (p.symbol || '').toUpperCase() === symUpper);
-    const posId = pos ? (pos.positionId || pos.id) : null;
-    if (!pos || !posId) {
-      log(`Bitunix: no position found for ${symbol} (checked ${posList.length} positions: [${posList.map(p => p.symbol).join(', ')}])`);
+    // Reuse already-fetched position data if available (avoids a second API call)
+    let pos = cachedPos;
+    if (!pos) {
+      const posData = await client.getOpenPositions(symbol);
+      const posList = Array.isArray(posData) ? posData
+        : (posData?.positionList || posData?.list || (posData && typeof posData === 'object' ? [posData] : []));
+      const symUpper = symbol.toUpperCase();
+      pos = posList.find(p => (p.symbol || '').toUpperCase() === symUpper);
+      if (!pos) {
+        log(`Bitunix: no position found for ${symbol} (checked ${posList.length} positions: [${posList.map(p => p.symbol).join(', ')}])`);
+        return false;
+      }
+    }
+    const posId = pos.positionId || pos.id;
+    if (!posId) {
+      log(`Bitunix: position found for ${symbol} but no positionId`);
       return false;
     }
     const payload = { symbol, positionId: posId, slPrice: String(newSlPrice.toFixed(pricePrec)) };
@@ -176,13 +183,39 @@ async function runTrailCycle() {
           inferPricePrec(trade.entry_price)
         );
         const entryPrice = parseFloat(trade.entry_price);
-        const leverage   = parseFloat(trade.leverage) || 20;
+        const dbLeverage = parseFloat(trade.leverage) || 0;
 
-        // Get live price
+        // Get live price + exchange position data (needed for real leverage).
+        // DB leverage can be NULL for trades opened before V2 or synced by accountant.
+        // Always trust the exchange's reported leverage over the DB value.
         const curPrice = await getLivePrice(trade.symbol);
         if (!curPrice) {
           log(`[DIAG] ${trade.symbol}: getLivePrice returned null — Binance API unavailable or invalid symbol`);
           continue;
+        }
+
+        // Fetch live position to get real leverage (one call per trade, cached outcome used below)
+        let leverage = dbLeverage || 20;
+        let livePositionData = null;
+        if (trade.platform === 'bitunix') {
+          try {
+            const client = new BitunixClient({ apiKey, apiSecret });
+            const posData = await client.getOpenPositions(trade.symbol);
+            const posList = Array.isArray(posData) ? posData
+              : (posData?.positionList || posData?.list || (posData && typeof posData === 'object' ? [posData] : []));
+            const symUpper = trade.symbol.toUpperCase();
+            const pos = posList.find(p => (p.symbol || '').toUpperCase() === symUpper);
+            if (pos) {
+              livePositionData = pos;
+              const exchangeLev = parseFloat(pos.leverage || 0);
+              if (exchangeLev > 0 && exchangeLev !== dbLeverage) {
+                log(`[DIAG] ${trade.symbol}: leverage DB=${dbLeverage} vs exchange=${exchangeLev} — using exchange value`);
+              }
+              if (exchangeLev > 0) leverage = exchangeLev;
+            }
+          } catch (_) {
+            // Fall back to DB leverage — non-fatal
+          }
         }
 
         const profitPct = isLong
@@ -195,7 +228,7 @@ async function runTrailCycle() {
         // Locks in each 10% milestone as the new SL:
         //   profit 31% → SL +30% | profit 40% → SL +40% | profit 50% → SL +50% …
         const pctDisplay = `${capitalPct >= 0 ? '+' : ''}${(capitalPct * 100).toFixed(2)}%`;
-        log(`[DIAG] ${trade.symbol} ${isLong ? 'LONG' : 'SHORT'} | entry=$${entryPrice} cur=$${curPrice.toFixed(inferPricePrec(trade.entry_price))} | capital=${pctDisplay} (need +31% to trail) | currentSL=$${currentSl}`);
+        log(`[DIAG] ${trade.symbol} ${isLong ? 'LONG' : 'SHORT'} | entry=$${entryPrice} cur=$${curPrice.toFixed(inferPricePrec(trade.entry_price))} | lev=${leverage}x (DB=${dbLeverage}) | capital=${pctDisplay} (need +31% to trail) | currentSL=$${currentSl}`);
 
         const v2Result = calcV2TrailSL(entryPrice, curPrice, isLong, leverage, currentSl);
         if (!v2Result) {
@@ -218,7 +251,7 @@ async function runTrailCycle() {
         let updated = false;
         if (trade.platform === 'bitunix') {
           const client = new BitunixClient({ apiKey, apiSecret });
-          updated = await updateSlBitunix(client, trade.symbol, bestSl, pricePrec, trade.tp_price);
+          updated = await updateSlBitunix(client, trade.symbol, bestSl, pricePrec, trade.tp_price, livePositionData);
         } else if (trade.platform === 'binance') {
           const client = new USDMClient(
             { api_key: apiKey, api_secret: apiSecret },
