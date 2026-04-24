@@ -17,6 +17,7 @@ const fetch = require('node-fetch');
 const aiLearner = require('./ai-learner');
 const { log: bLog } = require('./bot-logger');
 const { getMarketIntel, applyMarketIntel, heatmapToLevels, logMarketIntel } = require('./coinglass-data');
+const { detectV2Signal } = require('./strategy-v2');
 let smcEngine = null;
 try { smcEngine = require('./smc-engine'); } catch (e) { console.warn('[Engine] SMC engine not available:', e.message); }
 
@@ -1898,6 +1899,30 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
       }
     }
   } // end TREND_FOLLOW gate
+
+  // Strategy 8: Strategy V2 — 15m swing + 1m confirmation + milestone trail
+  if (!enabledStrategies || enabledStrategies.STRATEGY_V2 !== false) {
+    const v2Signal = await detectV2Signal(symbol, params.LEV_ALT || 20);
+    if (v2Signal) {
+      signals.push({
+        symbol,
+        direction: v2Signal.direction,
+        price:     v2Signal.price,
+        lastPrice: price,
+        sl:        v2Signal.sl,
+        tp1:       v2Signal.tp1,
+        tp2:       v2Signal.tp1, // trail manages profit — tp2/3 are placeholders
+        tp3:       v2Signal.tp1,
+        slDist:    v2Signal.slDist,
+        setup:     'STRATEGY_V2',
+        setupName: v2Signal.setupName,
+        score:     v2Signal.score,
+        rr:        v2Signal.rr,
+        tf15:      v2Signal.structure.swing15,
+        tf1:       v2Signal.structure.confirm1m,
+      });
+    }
+  } // end STRATEGY_V2 gate
 
   if (!signals.length) return null;
 

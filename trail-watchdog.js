@@ -17,6 +17,7 @@ const { BitunixClient } = require('./bitunix-client');
 const { USDMClient } = require('binance');
 const { getFetchOptions, getBinanceRequestOptions } = require('./proxy-agent');
 const cryptoUtils = require('./crypto-utils');
+const { calcV2TrailSL } = require('./strategy-v2');
 
 const INTERVAL_MS = 15 * 1000;
 const db = require('./db');
@@ -207,6 +208,7 @@ async function runTrailCycle() {
     const trades = await db.query(`
       SELECT t.id, t.symbol, t.direction, t.entry_price, t.sl_price,
              t.trailing_sl_price, t.tp_price, t.leverage, t.created_at,
+             t.setup,
              ak.platform,
              ak.api_key_enc, ak.iv, ak.auth_tag,
              ak.api_secret_enc, ak.secret_iv, ak.secret_auth_tag
@@ -244,39 +246,43 @@ async function runTrailCycle() {
           : (entryPrice - curPrice) / entryPrice;
         const capitalPct = profitPct * leverage;
 
-        // ── Total fee cost (taker + funding) ─────────────────────
-        // Taker: entry + exit fee in capital %
-        const takerCapital = TAKER_FEE_BOTH_LEGS * leverage;
-        // Funding: how many 8h periods since trade opened × current rate × leverage
-        const tradeAgeMs      = Date.now() - new Date(trade.created_at).getTime();
-        const tradeAgeH       = tradeAgeMs / (1000 * 3600);
-        const fundingPeriods  = Math.max(1, Math.floor(tradeAgeH / FUNDING_INTERVAL_H));
-        const fundingRate     = await getFundingRate(trade.symbol);
-        const fundingCapital  = fundingRate * fundingPeriods * leverage;
-        // Total fees + 1% comfort buffer — SL must always lock above this
-        const totalFeesCapital = takerCapital + fundingCapital + 0.01;
-
-        // Sliding 60% lock — but floor is total fees so we always profit after all costs
-        const tierSl = calcTierSlPrice(entryPrice, curPrice, isLong, leverage, totalFeesCapital);
-
-        // Candle structural trail: activates at 35%+ capital profit.
-        // Follows the last 2 candle lows/highs as price moves in our favour.
-        const candleSl = capitalPct >= CANDLE_TRAIL_CAP
-          ? await calcCandleSlPrice(trade.symbol, isLong, currentSl, curPrice)
-          : null;
-
-        // Take the BETTER of the two (highest SL for LONG, lowest for SHORT)
+        // ── Trail logic: V2 or V1 ─────────────────────────────────
+        const isV2 = (trade.setup || '').startsWith('STRATEGY_V2') || (trade.setup || '').startsWith('V2_');
         let bestSl = currentSl;
-        if (tierSl) bestSl = isLong ? Math.max(bestSl, tierSl) : Math.min(bestSl, tierSl);
-        if (candleSl) bestSl = isLong ? Math.max(bestSl, candleSl) : Math.min(bestSl, candleSl);
+        const source = [];
+
+        if (isV2) {
+          // ── V2: milestone trail — activates at 31%, locks each 10% ──
+          // SL=-30% cap | trail@31% | milestones: 30→40→50→60…
+          const v2Result = calcV2TrailSL(entryPrice, curPrice, isLong, leverage, currentSl);
+          if (v2Result) {
+            bestSl = v2Result.newSl;
+            source.push(`V2-trail(+${(v2Result.capitalPct*100).toFixed(1)}%cap→lock${(v2Result.milestone*100).toFixed(0)}%)`);
+          }
+        } else {
+          // ── V1: 20% activate / 60% sliding lock + candle trail ───────
+          const takerCapital = TAKER_FEE_BOTH_LEGS * leverage;
+          const tradeAgeMs     = Date.now() - new Date(trade.created_at).getTime();
+          const tradeAgeH      = tradeAgeMs / (1000 * 3600);
+          const fundingPeriods = Math.max(1, Math.floor(tradeAgeH / FUNDING_INTERVAL_H));
+          const fundingRate    = await getFundingRate(trade.symbol);
+          const fundingCapital = fundingRate * fundingPeriods * leverage;
+          const totalFeesCapital = takerCapital + fundingCapital + 0.01;
+
+          const tierSl = calcTierSlPrice(entryPrice, curPrice, isLong, leverage, totalFeesCapital);
+          const candleSl = capitalPct >= CANDLE_TRAIL_CAP
+            ? await calcCandleSlPrice(trade.symbol, isLong, currentSl, curPrice)
+            : null;
+
+          if (tierSl)   bestSl = isLong ? Math.max(bestSl, tierSl)   : Math.min(bestSl, tierSl);
+          if (candleSl) bestSl = isLong ? Math.max(bestSl, candleSl) : Math.min(bestSl, candleSl);
+          if (tierSl  && (isLong ? tierSl   > currentSl : tierSl   < currentSl)) source.push(`60%lock(+${(capitalPct*100).toFixed(1)}%cap)`);
+          if (candleSl && (isLong ? candleSl > currentSl : candleSl < currentSl)) source.push('candle');
+        }
 
         // Only update if improved beyond current SL
         const improved = isLong ? bestSl > currentSl + 0.001 : bestSl < currentSl - 0.001;
         if (!improved) continue;
-
-        const source = [];
-        if (tierSl && (isLong ? tierSl > currentSl : tierSl < currentSl)) source.push(`60%lock(+${(capitalPct*100).toFixed(1)}%cap)`);
-        if (candleSl && (isLong ? candleSl > currentSl : candleSl < currentSl)) source.push('candle');
 
         log(`${trade.symbol} ${isLong ? 'LONG' : 'SHORT'} [${source.join('+')}] SL: $${currentSl.toFixed(pricePrec)} → $${bestSl.toFixed(pricePrec)} | profit +${(capitalPct*100).toFixed(1)}% capital`);
 
