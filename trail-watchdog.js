@@ -97,9 +97,14 @@ async function updateSlBitunix(client, symbol, newSlPrice, pricePrec, existingTp
     const posData = await client.getOpenPositions(symbol);
     const posList = Array.isArray(posData) ? posData
       : (posData?.positionList || posData?.list || (posData && typeof posData === 'object' ? [posData] : []));
-    const pos = posList.find(p => p.symbol === symbol);
+    // NOTE: normalize both sides — Bitunix may return symbols in different case/format
+    const symUpper = symbol.toUpperCase();
+    const pos = posList.find(p => (p.symbol || '').toUpperCase() === symUpper);
     const posId = pos ? (pos.positionId || pos.id) : null;
-    if (!pos || !posId) { log(`Bitunix: no position found for ${symbol}`); return false; }
+    if (!pos || !posId) {
+      log(`Bitunix: no position found for ${symbol} (checked ${posList.length} positions: [${posList.map(p => p.symbol).join(', ')}])`);
+      return false;
+    }
     const payload = { symbol, positionId: posId, slPrice: String(newSlPrice.toFixed(pricePrec)) };
     if (existingTp) payload.tpPrice = String(parseFloat(existingTp).toFixed(pricePrec));
     await client.placePositionTpSl(payload);
@@ -164,13 +169,21 @@ async function runTrailCycle() {
 
         const isLong     = trade.direction !== 'SHORT';
         const currentSl  = parseFloat(trade.trailing_sl_price) || parseFloat(trade.sl_price) || 0;
-        const pricePrec  = inferPricePrec(trade.sl_price);
+        // Infer decimal precision from whichever price column has the most decimals.
+        // sl_price may be NULL for some trades — fall back to entry_price precision.
+        const pricePrec  = Math.max(
+          inferPricePrec(trade.sl_price),
+          inferPricePrec(trade.entry_price)
+        );
         const entryPrice = parseFloat(trade.entry_price);
         const leverage   = parseFloat(trade.leverage) || 20;
 
         // Get live price
         const curPrice = await getLivePrice(trade.symbol);
-        if (!curPrice) continue;
+        if (!curPrice) {
+          log(`[DIAG] ${trade.symbol}: getLivePrice returned null — Binance API unavailable or invalid symbol`);
+          continue;
+        }
 
         const profitPct = isLong
           ? (curPrice - entryPrice) / entryPrice
@@ -181,14 +194,23 @@ async function runTrailCycle() {
         // Activates at +31% capital profit.
         // Locks in each 10% milestone as the new SL:
         //   profit 31% → SL +30% | profit 40% → SL +40% | profit 50% → SL +50% …
+        const pctDisplay = `${capitalPct >= 0 ? '+' : ''}${(capitalPct * 100).toFixed(2)}%`;
+        log(`[DIAG] ${trade.symbol} ${isLong ? 'LONG' : 'SHORT'} | entry=$${entryPrice} cur=$${curPrice.toFixed(inferPricePrec(trade.entry_price))} | capital=${pctDisplay} (need +31% to trail) | currentSL=$${currentSl}`);
+
         const v2Result = calcV2TrailSL(entryPrice, curPrice, isLong, leverage, currentSl);
-        if (!v2Result) continue; // trail not triggered yet
+        if (!v2Result) {
+          log(`[DIAG] ${trade.symbol} trail SKIP — capital ${pctDisplay} < +31% threshold or new SL doesn't improve current`);
+          continue;
+        }
 
         const bestSl  = v2Result.newSl;
         const srcLabel = `trail(+${(v2Result.capitalPct*100).toFixed(1)}%→lock${(v2Result.milestone*100).toFixed(0)}%)`;
 
-        // Only update if it genuinely improves the stored SL
-        const improved = isLong ? bestSl > currentSl + 0.0001 : bestSl < currentSl - 0.0001;
+        // Only update if it genuinely improves the stored SL.
+        // currentSl = 0 means not yet set — always allow first write.
+        const improved = currentSl === 0
+          || (isLong  ? bestSl > currentSl + 0.0001
+                      : bestSl < currentSl - 0.0001);
         if (!improved) continue;
 
         log(`${trade.symbol} ${isLong ? 'LONG' : 'SHORT'} [${srcLabel}] SL: $${currentSl.toFixed(pricePrec)} → $${bestSl.toFixed(pricePrec)} | +${(v2Result.capitalPct*100).toFixed(1)}% capital`);

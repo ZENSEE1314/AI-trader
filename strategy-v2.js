@@ -339,9 +339,14 @@ function calcV2TrailSL(entryPrice, curPrice, isLong, leverage, currentSl) {
   //   capitalPct 0.31 → floor(3.1)/10 = 0.30
   //   capitalPct 0.40 → floor(4.0)/10 = 0.40
   //   capitalPct 0.55 → floor(5.5)/10 = 0.50
+  //
+  // NOTE: Use integer arithmetic to avoid floating-point issues.
+  //   Math.floor(0.40 / 0.10) can yield 3.9999... → floor = 3 → wrong milestone.
+  //   Multiplying by 1000 first keeps us in safe integer territory.
+  const stepsRaw = Math.floor(Math.round(capitalPct * 1000) / Math.round(V2_TRAIL_STEP_PCT * 1000));
   const milestone = Math.max(
     V2_SL_CAPITAL_PCT,
-    Math.floor(capitalPct / V2_TRAIL_STEP_PCT) * V2_TRAIL_STEP_PCT
+    stepsRaw * V2_TRAIL_STEP_PCT
   );
 
   // Convert milestone capital % → price
@@ -349,9 +354,14 @@ function calcV2TrailSL(entryPrice, curPrice, isLong, leverage, currentSl) {
     ? entryPrice * (1 + milestone / leverage)
     : entryPrice * (1 - milestone / leverage);
 
-  // Only move if it improves the SL
-  if (isLong  && milestonePrice <= currentSl) return null;
-  if (!isLong && milestonePrice >= currentSl) return null;
+  // Only move if it improves the SL.
+  // NOTE: currentSl = 0 means "no SL set yet" — treat as worst-case for each direction
+  // so the first milestone always gets written (avoids 0 blocking SHORT trades).
+  const effectiveSl = currentSl === 0
+    ? (isLong ? -Infinity : Infinity)
+    : currentSl;
+  if (isLong  && milestonePrice <= effectiveSl) return null;
+  if (!isLong && milestonePrice >= effectiveSl) return null;
 
   return { newSl: milestonePrice, milestone, capitalPct };
 }
