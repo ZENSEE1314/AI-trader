@@ -1585,13 +1585,14 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
         vwapUpper = vwapVal + VWAP_BAND_MULT * stdDev;
         vwapLower = vwapVal - VWAP_BAND_MULT * stdDev;
 
-        // Where is price relative to the bands?
-        // Buffer of 0.3%: treat price AT or within 0.3% of a band as already
-        // inside that zone — avoids longs/shorts that fire right at the band edge.
-        const BAND_BUFFER = 0.003;
-        if (price >= vwapUpper * (1 - BAND_BUFFER)) vwapBandPos = 'above_upper';
-        else if (price <= vwapLower * (1 + BAND_BUFFER)) vwapBandPos = 'below_lower';
-        else                                             vwapBandPos = 'between';
+        // Where is price relative to VWAP?
+        // Rule: price < VWAP mid → bearish zone → NO LONG, only SHORT
+        //       price > VWAP mid → bullish zone → NO SHORT, only LONG
+        // Extreme zones (outside bands) add extra confirmation.
+        if (price >= vwapUpper)      vwapBandPos = 'above_upper';  // strongly bullish
+        else if (price >= vwapVal)   vwapBandPos = 'above_mid';    // mildly bullish
+        else if (price <= vwapLower) vwapBandPos = 'below_lower';  // strongly bearish
+        else                         vwapBandPos = 'below_mid';    // price < VWAP mid → bearish
       }
 
       // OP + VWAP directional bias (unchanged)
@@ -1931,24 +1932,24 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
       sig.swingAligned = true;
     }
 
-    // ── VWAP BAND FILTER (user rule) ─────────────────────────
-    // price > VWAP upper band → bullish zone → SHORT blocked
-    //   (only allow SHORT after price falls back below upper band)
-    // price < VWAP lower band → bearish zone → LONG blocked
-    //   (only allow LONG after price rises back above lower band)
-    if (vwapBandPos === 'above_upper' && sig.direction === 'SHORT') {
+    // ── VWAP DIRECTION FILTER (user rule) ────────────────────
+    // price >= VWAP mid → bullish side → SHORT blocked
+    // price <  VWAP mid → bearish side → LONG blocked
+    const isVwapBearish = vwapBandPos === 'below_mid' || vwapBandPos === 'below_lower';
+    const isVwapBullish = vwapBandPos === 'above_mid' || vwapBandPos === 'above_upper';
+    if (isVwapBearish && sig.direction === 'LONG') {
       sig.score = -99;
-      sig.blocked = `SHORT blocked — price at/above VWAP upper band (${vwapUpper?.toFixed(4)}, price=${price.toFixed(4)}): bullish zone, no shorting until price falls below upper band`;
+      sig.blocked = `LONG blocked — price below VWAP (mid=${vwapMid?.toFixed(4)}, price=${price.toFixed(4)}): bearish side of VWAP, no longs until price rises above VWAP`;
       continue;
     }
-    if (vwapBandPos === 'below_lower' && sig.direction === 'LONG') {
+    if (isVwapBullish && sig.direction === 'SHORT') {
       sig.score = -99;
-      sig.blocked = `LONG blocked — price at/below VWAP lower band (${vwapLower?.toFixed(4)}, price=${price.toFixed(4)}): bearish zone, no longs until price rises above lower band`;
+      sig.blocked = `SHORT blocked — price above VWAP (mid=${vwapMid?.toFixed(4)}, price=${price.toFixed(4)}): bullish side of VWAP, no shorts until price falls below VWAP`;
       continue;
     }
-    // Reward entries in the correct VWAP zone
-    if (vwapBandPos === 'above_upper' && sig.direction === 'LONG')  sig.score += 2; // price in bullish zone, going long ✓
-    if (vwapBandPos === 'below_lower' && sig.direction === 'SHORT') sig.score += 2; // price in bearish zone, going short ✓
+    // Reward entries deep in the correct zone (outside bands = strong confirmation)
+    if (vwapBandPos === 'above_upper' && sig.direction === 'LONG')  sig.score += 2;
+    if (vwapBandPos === 'below_lower' && sig.direction === 'SHORT') sig.score += 2;
 
     // VWAP + OP bias (PDF: "avoid entering in between VWAP and OP if gap is small")
     // Hard block if direction conflicts with OP+VWAP combined bias
