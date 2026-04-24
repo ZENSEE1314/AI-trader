@@ -71,6 +71,7 @@ async function runSwarm(symbol, seeds) {
 
   // Run personas sequentially with delay to avoid overwhelming cloud APIs
   const results = [];
+  let consecutiveFailures = 0;
   for (const key of personaKeys) {
     const persona = PERSONAS[key];
 
@@ -98,10 +99,32 @@ Return ONLY a JSON object: {"direction": "...", "target": 0.0, "confidence": 0-1
         complexity: 'high',
       });
 
-      const jsonMatch = response.match(/\{.*\}/s);
-      if (!jsonMatch) throw new Error(`Invalid JSON from ${persona.name}`);
+      // Detect provider-exhausted error strings before attempting JSON parse.
+      // ai-brain returns plain error strings when all providers fail — they may
+      // contain embedded JSON (e.g. Anthropic error body) that tricks the regex.
+      const isProviderError = !response
+        || response.includes('credit balance')
+        || response.includes('quota')
+        || response.includes('brain-freeze')
+        || response.includes('rate limit');
+      if (isProviderError) {
+        console.warn(`[Swarm] ${persona.name} skipped — AI providers unavailable`);
+        consecutiveFailures++;
+        // If every provider is down, abort remaining personas — don't waste time
+        if (consecutiveFailures >= 2) {
+          console.warn(`[Swarm] All providers exhausted — aborting swarm for ${symbol}`);
+          break;
+        }
+        continue;
+      }
+      consecutiveFailures = 0;
+
+      const jsonMatch = response.match(/\{[^{}]*"direction"[^{}]*\}/s);
+      if (!jsonMatch) throw new Error(`No valid signal JSON from ${persona.name}`);
 
       const result = JSON.parse(jsonMatch[0]);
+      if (!result.direction) throw new Error(`Missing direction field from ${persona.name}`);
+
       results.push({
         persona: persona.name,
         ...result,
