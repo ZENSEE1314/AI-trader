@@ -16,6 +16,7 @@
 const fetch = require('node-fetch');
 const aiLearner = require('./ai-learner');
 const { log: bLog } = require('./bot-logger');
+const { getMarketIntel, applyMarketIntel, heatmapToLevels, logMarketIntel } = require('./coinglass-data');
 let smcEngine = null;
 try { smcEngine = require('./smc-engine'); } catch (e) { console.warn('[Engine] SMC engine not available:', e.message); }
 
@@ -1494,11 +1495,12 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
   const symbol = ticker.symbol;
   const price = parseFloat(ticker.lastPrice);
 
-  const [klines1h, klines15m, klines3m, klines1m] = await Promise.all([
+  const [klines1h, klines15m, klines3m, klines1m, marketIntel] = await Promise.all([
     fetchKlines(symbol, '1h', 60),
     fetchKlines(symbol, '15m', 100),
     fetchKlines(symbol, '3m', 50),
     fetchKlines(symbol, '1m', 50),
+    getMarketIntel(symbol),
   ]);
 
   if (!klines15m || !klines1m) return null;
@@ -1662,6 +1664,12 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
   const lastVolOK = parsed15.length >= 22 && hasVolumeConfirm(parsed15, parsed15.length - 1, 1.0);
 
   const allLevels = findKeyLevels(parsed15, 80);
+  // Merge Coinglass liquidation cluster levels into S/R map
+  // These are real stop-hunt targets — price will be pulled to them
+  const liqLevels = heatmapToLevels(marketIntel?.heatmapLevels, price);
+  if (liqLevels.length) allLevels.push(...liqLevels);
+  logMarketIntel(symbol, marketIntel);
+
   const trendlines = detectTrendlines(parsed15);
 
   // Try enabled strategies — pick highest scoring
@@ -2087,6 +2095,25 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
       if (btcTrend === 'bearish' && sig.direction === 'SHORT') sig.score += 2;
     }
 
+    // ── MARKET INTEL (funding rate, OI, long/short ratio) ───
+    const intelResult = applyMarketIntel(marketIntel, sig.direction);
+    if (intelResult.block) {
+      sig.score = -99;
+      sig.blocked = intelResult.block;
+      continue;
+    }
+    sig.score += intelResult.scoreDelta;
+    if (intelResult.scoreDelta !== 0) sig.intelDelta = intelResult.scoreDelta;
+
+    // Near a liquidation cluster? Bonus — price will be pulled there
+    if (liqLevels.length) {
+      const nearLiq = liqLevels.find(l => Math.abs(l.price - sig.price) / sig.price < 0.005);
+      if (nearLiq) {
+        sig.score += 2;
+        sig.liqCluster = `$${(nearLiq.liqUsd / 1e6).toFixed(1)}M @ ${nearLiq.price}`;
+      }
+    }
+
     // Volume confirmation
     if (lastVolOK) sig.score += 2;
 
@@ -2180,6 +2207,11 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     vwapUpper: vwapUpper ? Math.round(vwapUpper * 10000) / 10000 : null,
     vwapLower: vwapLower ? Math.round(vwapLower * 10000) / 10000 : null,
     vwapBandPos,
+    fundingRate:    marketIntel?.fundingRate  ?? null,
+    oiTrend:        marketIntel?.oiTrend      ?? null,
+    longShortRatio: marketIntel?.longRatio    ? `L${(marketIntel.longRatio*100).toFixed(0)}%/S${(marketIntel.shortRatio*100).toFixed(0)}%` : null,
+    liqCluster:     best.liqCluster || null,
+    intelDelta:     best.intelDelta || 0,
   };
 
   return best;
