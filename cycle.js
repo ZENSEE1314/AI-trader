@@ -2443,33 +2443,37 @@ async function syncTradeStatus() {
             } else if (key.platform === 'bitunix') {
               const bxClient = new BitunixClient({ apiKey, apiSecret });
               let found = false;
+              // foundPnl: position history matched and gave us PnL data but closePrice=0.
+              // We still need to find exit price via Method 2 (order history).
+              let foundPnl = false;
               const tradeOpenTime = trade.created_at ? new Date(trade.created_at).getTime() : 0;
               const tradeEntry = parseFloat(trade.entry_price);
               const tradeSideLong = trade.direction !== 'SHORT';
+              // Hoist positionId so both Method 1 and Method 2 can use it
+              const storedPosId = trade.bitunix_position_id;
 
               // Method 1: Position history
               // Priority: match by positionId (stored at open) → entry price + time fallback
+              // NOTE: Bitunix sometimes returns closePrice=0. We still extract PnL/fee data
+              // from the matched record — exit price will be found in Method 2 if missing.
               try {
                 const positions = await bxClient.getHistoryPositions({ symbol: trade.symbol, pageSize: 50 });
-                // Dump full raw data so we can see every field name from Bitunix
                 if (positions.length > 0) {
                   bLog.system(`[SYNC] Bitunix raw position[0]: ${JSON.stringify(positions[0])}`);
                 }
 
-                const storedPosId = trade.bitunix_position_id;
                 let bestMatch = null;
                 let bestTimeDiff = Infinity;
 
                 for (const p of positions) {
-                  // Try every possible field name Bitunix might use
-                  const cp  = parseFloat(p.closePrice  || p.avgClosePrice  || p.closedPrice || p.close_price || 0);
                   const ep  = parseFloat(p.entryPrice  || p.avgOpenPrice   || p.openPrice   || p.open_price  || 0);
                   const pid = p.positionId || p.id || p.position_id || '';
                   const pSide = (p.side || p.positionSide || p.position_side || '').toUpperCase();
                   const pSideLong = pSide === 'LONG' || pSide === 'BUY';
                   const closeMs = parseInt(p.closeTime || p.mtime || p.ctime || p.updateTime || p.close_time || 0);
 
-                  if (cp <= 0 || p.symbol !== trade.symbol || pSideLong !== tradeSideLong) continue;
+                  // Filter by symbol and side only — don't filter on closePrice (may be 0)
+                  if (p.symbol !== trade.symbol || pSideLong !== tradeSideLong) continue;
 
                   // ID match = definitive, use immediately
                   if (storedPosId && String(pid) === String(storedPosId)) {
@@ -2490,20 +2494,30 @@ async function syncTradeStatus() {
                   const p = bestMatch;
                   const cp  = parseFloat(p.closePrice  || p.avgClosePrice  || p.closedPrice || p.close_price || 0);
                   const ep  = parseFloat(p.entryPrice  || p.avgOpenPrice   || p.openPrice   || p.open_price  || 0);
-                  exitPrice   = cp;
                   tradingFee  = Math.abs(parseFloat(p.fee          || p.tradingFee  || p.commission || 0));
                   fundingFee  = Math.abs(parseFloat(p.funding      || p.fundingFee  || p.fund_fee   || 0));
-                  // Try every possible P&L field name
                   const pnlRaw = p.realizedPNL ?? p.realizedPnl ?? p.pnl ?? p.profit ?? p.realPnl ?? null;
                   realizedPnl = pnlRaw != null ? parseFloat(pnlRaw) : null;
-                  found = true;
-                  bLog.system(`[SYNC] MATCH trade#${trade.id} ${trade.symbol}: entry=${ep} exit=${cp} pnl=${realizedPnl} fee=${tradingFee} funding=${fundingFee}`);
+
+                  if (cp > 0) {
+                    // Have both exit price and PnL — fully resolved
+                    exitPrice = cp;
+                    found = true;
+                    bLog.system(`[SYNC] MATCH trade#${trade.id} ${trade.symbol}: entry=${ep} exit=${cp} pnl=${realizedPnl} fee=${tradingFee} funding=${fundingFee}`);
+                  } else {
+                    // Position matched, PnL extracted, but closePrice=0 from Bitunix.
+                    // Method 2 will supply the exit price from order fill data.
+                    foundPnl = realizedPnl !== null;
+                    bLog.system(`[SYNC] MATCH(no price) trade#${trade.id} ${trade.symbol}: entry=${ep} pnl=${realizedPnl} fee=${tradingFee} — seeking exit from orders`);
+                  }
                 } else {
                   bLog.system(`[SYNC] NO MATCH trade#${trade.id} ${trade.symbol} entry=${tradeEntry} — ${positions.length} positions checked`);
                 }
               } catch (e) { bLog.error(`[SYNC] Bitunix posHistory error: ${e.message}`); }
 
-              // Method 2: Order history — CLOSE orders
+              // Method 2: Order history — CLOSE orders.
+              // Runs when Method 1 gave no exit price (closePrice=0 or no match at all).
+              // Uses positionId for precise matching when available.
               if (!found) {
                 try {
                   const orderList = await bxClient.getHistoryOrders({ symbol: trade.symbol, pageSize: 50 });
@@ -2511,42 +2525,66 @@ async function syncTradeStatus() {
                     const oPrice = parseFloat(o.avgPrice || o.price || 0);
                     const isClose = o.reduceOnly || o.tradeSide === 'CLOSE' || (o.effect || '').toUpperCase() === 'CLOSE';
                     const oMs = parseInt(o.ctime || o.mtime || 0);
+                    const posIdMatch = storedPosId && String(o.positionId || '') === String(storedPosId);
                     const timeMatch = !tradeOpenTime || !oMs || oMs > tradeOpenTime;
 
-                    if (isClose && oPrice > 0 && timeMatch) {
+                    if (isClose && oPrice > 0 && (posIdMatch || timeMatch)) {
                       exitPrice = oPrice;
                       bLog.system(`[SYNC] Bitunix orderHistory: ${trade.symbol} | ${JSON.stringify({
                         avgPrice: o.avgPrice, price: o.price, realizedPNL: o.realizedPNL,
                         profit: o.profit, pnl: o.pnl, fee: o.fee, tradeSide: o.tradeSide,
-                        reduceOnly: o.reduceOnly, qty: o.qty
+                        reduceOnly: o.reduceOnly, positionId: o.positionId, qty: o.qty
                       })}`);
-                      const profit = o.profit != null ? parseFloat(o.profit) : null;
-                      const pnl    = o.pnl    != null ? parseFloat(o.pnl)    : null;
-                      const rpnl   = o.realizedPNL != null ? parseFloat(o.realizedPNL) : null;
-                      const fee = Math.abs(parseFloat(o.fee || 0));
-                      // Priority: profit > pnl > realizedPNL — use first non-null non-zero value
-                      if (profit != null && profit !== 0) {
-                        realizedPnl = profit;
-                      } else if (pnl != null && pnl !== 0) {
-                        realizedPnl = pnl;
-                      } else if (rpnl != null && rpnl !== 0) {
-                        realizedPnl = rpnl;
+                      // Only pull PnL from order if Method 1 didn't already set it
+                      if (!foundPnl) {
+                        const profit = o.profit    != null ? parseFloat(o.profit)       : null;
+                        const pnl    = o.pnl       != null ? parseFloat(o.pnl)          : null;
+                        const rpnl   = o.realizedPNL != null ? parseFloat(o.realizedPNL) : null;
+                        if      (profit != null && profit !== 0) realizedPnl = profit;
+                        else if (pnl    != null && pnl    !== 0) realizedPnl = pnl;
+                        else if (rpnl   != null && rpnl   !== 0) realizedPnl = rpnl;
                       }
                       found = true;
-                      bLog.system(`Bitunix orderHistory RESULT: ${trade.symbol} net=${realizedPnl} (used: ${profit !== 0 ? 'profit' : pnl !== 0 ? 'pnl' : 'rpnl'})`);
+                      bLog.system(`[SYNC] orderHistory RESULT: ${trade.symbol} exit=${exitPrice} net=${realizedPnl}`);
                       break;
                     }
                   }
                 } catch (e) { bLog.error(`Bitunix histOrders error: ${e.message}`); }
               }
 
-              // Method 3: Current market price as last resort
+              // Method 3: Current market price as last resort (only when all history APIs fail)
               if (!found) {
                 try {
-                  const priceData = await bxClient.getMarketPrice(trade.symbol);
-                  const mp = parseFloat(priceData?.lastPrice || priceData?.price || priceData || 0);
+                  const mp = await bxClient.getMarketPrice(trade.symbol);
                   if (mp > 0) exitPrice = mp;
                 } catch (e) { bLog.error(`Bitunix marketPrice error: ${e.message}`); }
+              }
+
+              // Guard: if ALL methods returned nothing meaningful, re-check open positions
+              // before writing a LOSS. A momentary Bitunix API timeout can make an open
+              // position temporarily invisible — falsely closing destroys commission records.
+              if (realizedPnl === null && exitPrice === entryPrice) {
+                try {
+                  const recheckRaw = await bxClient.getOpenPositions();
+                  const recheckList = Array.isArray(recheckRaw)
+                    ? recheckRaw
+                    : (recheckRaw?.positionList || recheckRaw?.list || []);
+                  const stillOpen = recheckList.some(p => {
+                    const ep = parseFloat(p.avgOpenPrice || p.entryPrice || p.openPrice || 0);
+                    return (p.symbol || '').toUpperCase() === trade.symbol.toUpperCase()
+                      && ep > 0
+                      && Math.abs(ep - entryPrice) / entryPrice < 0.005;
+                  });
+                  if (stillOpen) {
+                    bLog.trade(`[SYNC] Re-check: ${trade.symbol} IS still open — aborting false closure`);
+                    continue; // Skip — position is still live, don't write LOSS to DB
+                  }
+                  bLog.trade(`[SYNC] Re-check confirmed ${trade.symbol} is truly closed — proceeding`);
+                } catch (e) {
+                  // Re-check failed — be conservative and defer rather than falsely close
+                  bLog.error(`[SYNC] Re-check failed for ${trade.symbol}: ${e.message} — deferring to next cycle`);
+                  continue;
+                }
               }
             }
 
@@ -2615,7 +2653,7 @@ async function syncTradeStatus() {
               await recordTokenResult(trade.symbol, pnlUsdt, tradingFee, pnlUsdt > 0);
             } catch (_) {}
 
-            // Record profit split for winning trades
+            // Record profit split for any profitable close (WIN or trail-closed with positive net)
             if (pnlUsdt > 0) {
               await recordProfitSplit(db, trade.user_id, trade.api_key_id, pnlUsdt, trade.symbol);
             }
@@ -2768,9 +2806,113 @@ async function checkUsdtTopups() {
   }
 }
 
+// ── RECONCILE ORPHAN POSITIONS ───────────────────────────────
+// On startup: fetch all live Bitunix positions and insert any that are
+// missing from the DB. Prevents silent data loss when Railway restarts
+// mid-INSERT, ensuring commission/PnL tracking always has a record.
+async function reconcileOrphanPositions() {
+  let db, cryptoUtils, BitunixClient;
+  try {
+    db = require('./db');
+    cryptoUtils = require('./crypto-utils');
+    BitunixClient = require('./bitunix-client').BitunixClient;
+  } catch (e) { return; }
+
+  try {
+    const keys = await db.query(
+      `SELECT ak.*, u.email
+       FROM api_keys ak
+       JOIN users u ON u.id = ak.user_id
+       WHERE ak.enabled = true
+         AND ak.platform = 'bitunix'`
+    );
+
+    if (!keys.length) return;
+
+    let recovered = 0;
+
+    for (const key of keys) {
+      let apiKey, apiSecret;
+      try {
+        apiKey    = cryptoUtils.decrypt(key.api_key_enc,    key.iv,         key.auth_tag);
+        apiSecret = cryptoUtils.decrypt(key.api_secret_enc, key.secret_iv,  key.secret_auth_tag);
+      } catch (e) {
+        bLog.error(`[Reconcile] Failed to decrypt key #${key.id}: ${e.message}`);
+        continue;
+      }
+
+      let positions = [];
+      try {
+        const client = new BitunixClient({ apiKey, apiSecret });
+        const raw = await client.getOpenPositions();
+        positions = Array.isArray(raw) ? raw : [];
+      } catch (e) {
+        bLog.error(`[Reconcile] Failed to fetch positions for key #${key.id}: ${e.message}`);
+        continue;
+      }
+
+      for (const pos of positions) {
+        const symbol    = (pos.symbol || '').toUpperCase();
+        const qty       = parseFloat(pos.qty || pos.positionAmt || 0);
+        const leverage  = parseFloat(pos.leverage || 20);
+        const entry     = parseFloat(pos.avgOpenPrice || pos.entryPrice || pos.openPrice || 0);
+        const side      = (pos.side || '').toUpperCase();
+        const direction = (side === 'BUY' || side === 'LONG') ? 'LONG' : 'SHORT';
+        const positionId = pos.positionId || pos.id || null;
+
+        if (!symbol || !entry || !qty) continue;
+
+        // Check if this position already has an OPEN trade record
+        const existing = await db.query(
+          `SELECT id FROM trades
+           WHERE api_key_id = $1 AND symbol = $2 AND status = 'OPEN'
+           LIMIT 1`,
+          [key.id, symbol]
+        );
+
+        if (existing.length > 0) continue; // already tracked
+
+        // Insert a recovery record so the trade is trackable
+        const slGuess = direction === 'LONG'
+          ? entry * (1 - 0.30 / leverage)
+          : entry * (1 + 0.30 / leverage);
+
+        await db.query(
+          `INSERT INTO trades
+             (api_key_id, user_id, symbol, direction, entry_price, sl_price, tp_price,
+              quantity, leverage, status, trailing_sl_price, trailing_sl_last_step,
+              market_structure, bitunix_position_id)
+           VALUES ($1, $2, $3, $4, $5, $6, 0, $7, $8, 'OPEN', $6, 0, 'RECOVERED', $9)`,
+          [key.id, key.user_id, symbol, direction, entry,
+           parseFloat(slGuess.toFixed(8)), qty, leverage, positionId]
+        );
+
+        recovered++;
+        bLog.system(`[Reconcile] RECOVERED orphan: ${symbol} ${direction} ${leverage}x entry=$${entry} qty=${qty} (key #${key.id} ${key.email})`);
+        await notify(
+          `🔄 *Trade Recovered* (restart reconcile)\n` +
+          `${symbol} ${direction} ${leverage}x\n` +
+          `Entry: $${entry} | Qty: ${qty}\n` +
+          `SL estimate: $${slGuess.toFixed(4)}\n` +
+          `_Was missing from DB — added as RECOVERED_`
+        ).catch(() => {});
+      }
+    }
+
+    if (recovered > 0) {
+      bLog.system(`[Reconcile] Inserted ${recovered} orphan position(s) into DB`);
+    } else {
+      bLog.system(`[Reconcile] All live positions accounted for in DB`);
+    }
+  } catch (err) {
+    bLog.error(`[Reconcile] reconcileOrphanPositions error: ${err.message}`);
+  }
+}
+
 async function run() {
   log(`AI Smart Trader v4 | Telegram: ${!!TELEGRAM_TOKEN} | Chats: ${PRIVATE_CHATS.join(', ') || 'NONE'}`);
   await syncTradeStatus();
+  await reconcileOrphanPositions();
   await checkUsdtTopups();
   await main();
 }
@@ -2782,6 +2924,7 @@ module.exports = {
   openTrade,
   checkTrailingStop,
   syncTradeStatus,
+  reconcileOrphanPositions,
   checkUsdtTopups,
   getClient,
   isTokenBanned,
