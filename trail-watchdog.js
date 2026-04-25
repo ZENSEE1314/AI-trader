@@ -149,157 +149,177 @@ async function updateSlBinance(client, symbol, newSlPrice, isLong, pricePrec) {
 
 async function runTrailCycle() {
   try {
-    const trades = await db.query(`
-      SELECT t.id, t.symbol, t.direction, t.entry_price, t.sl_price,
-             t.trailing_sl_price, t.tp_price, t.leverage, t.created_at,
-             ak.platform,
+    // ── Step 1: load all active API keys ─────────────────────
+    const keys = await db.query(`
+      SELECT ak.id, ak.platform,
              ak.api_key_enc, ak.iv, ak.auth_tag,
              ak.api_secret_enc, ak.secret_iv, ak.secret_auth_tag
+      FROM api_keys ak
+      WHERE ak.enabled = true
+    `);
+    if (!keys.length) return;
+
+    // ── Step 2: load DB open trades for currentSl lookup ─────
+    // DB is NOT the source of truth for which positions exist —
+    // the exchange is. DB only tells us the last SL we set.
+    const dbTrades = await db.query(`
+      SELECT t.id, t.symbol, t.direction, t.entry_price, t.sl_price,
+             t.trailing_sl_price, t.tp_price, t.leverage, t.api_key_id
       FROM trades t
-      JOIN api_keys ak ON ak.id = t.api_key_id
       WHERE t.status = 'OPEN'
     `);
-    // NOTE: intentionally does NOT filter by ak.enabled — pausing a key sets enabled=false
-    // but existing open positions must still have their SL protected regardless of pause state.
+    // Index by api_key_id + symbol for O(1) lookup
+    const dbTradeMap = new Map();
+    for (const t of dbTrades) {
+      dbTradeMap.set(`${t.api_key_id}:${t.symbol.toUpperCase()}`, t);
+    }
 
-    if (!trades.length) return;
+    // ── Step 3: for each key, fetch live positions & trail ────
+    for (const key of keys) {
+      if (key.platform !== 'bitunix') continue; // Binance handled separately below
 
-    for (const trade of trades) {
+      const apiKey    = cryptoUtils.decrypt(key.api_key_enc,    key.iv,        key.auth_tag);
+      const apiSecret = cryptoUtils.decrypt(key.api_secret_enc, key.secret_iv, key.secret_auth_tag);
+      if (!apiKey || !apiSecret) continue;
+
+      let positions = [];
       try {
-        // Decrypt credentials — columns are AES-GCM encrypted at rest
-        const apiKey    = cryptoUtils.decrypt(trade.api_key_enc,    trade.iv,         trade.auth_tag);
-        const apiSecret = cryptoUtils.decrypt(trade.api_secret_enc, trade.secret_iv,  trade.secret_auth_tag);
-        if (!apiKey || !apiSecret) {
-          log(`${trade.symbol}: skipping — could not decrypt API credentials`);
-          continue;
+        const client  = new BitunixClient({ apiKey, apiSecret });
+        const posData = await client.getOpenPositions();
+        positions = Array.isArray(posData) ? posData
+          : (posData?.positionList || posData?.list || []);
+      } catch (e) {
+        log(`getOpenPositions failed for key ${key.id}: ${e.message}`);
+        continue;
+      }
+
+      if (!positions.length) continue;
+
+      for (const pos of positions) {
+        try {
+          const qty = parseFloat(pos.qty || pos.size || pos.positionAmt || 0);
+          if (qty === 0) continue;
+
+          const symbol   = (pos.symbol || '').toUpperCase();
+          const isLong   = (pos.side || '').toUpperCase() === 'BUY'
+                        || (pos.side || '').toUpperCase() === 'LONG';
+          const entry    = parseFloat(pos.avgOpenPrice || pos.entryPrice || pos.openPrice || 0);
+          const leverage = parseFloat(pos.leverage || 20);
+          const upnl     = parseFloat(pos.unrealizedPNL || pos.unrealizedPnl || pos.unrealizedProfit || 0);
+          const margin   = parseFloat(pos.margin || pos.positionMargin || pos.initialMargin || pos.im || 0);
+
+          if (entry === 0) continue;
+
+          // Look up DB trade — may not exist (orphan position)
+          const dbTrade   = dbTradeMap.get(`${key.id}:${symbol}`);
+          const currentSl = dbTrade
+            ? (parseFloat(dbTrade.trailing_sl_price) || parseFloat(dbTrade.sl_price) || 0)
+            : 0;
+          const pricePrec = dbTrade
+            ? Math.max(inferPricePrec(dbTrade.sl_price), inferPricePrec(dbTrade.entry_price))
+            : inferPricePrec(entry);
+
+          // Calculate capitalPct — prefer exchange margin data over our own formula
+          let capitalPct;
+          if (margin > 0 && upnl !== 0) {
+            capitalPct = upnl / margin;
+          } else {
+            const curPrice = await getLivePrice(symbol);
+            if (!curPrice) continue;
+            const pricePct = isLong
+              ? (curPrice - entry) / entry
+              : (entry - curPrice) / entry;
+            capitalPct = pricePct * leverage;
+          }
+
+          const pctDisplay = `${capitalPct >= 0 ? '+' : ''}${(capitalPct * 100).toFixed(2)}%`;
+          log(`[DIAG] ${symbol} ${isLong ? 'LONG' : 'SHORT'} | entry=$${entry} | lev=${leverage}x | capital=${pctDisplay} | currentSL=$${currentSl} | DB=${dbTrade ? 'found' : 'ORPHAN'}`);
+
+          const v2Result = calcV2TrailSL(entry, isLong ? entry * (1 + capitalPct / leverage) : entry * (1 - capitalPct / leverage), isLong, leverage, currentSl);
+          if (!v2Result) {
+            log(`[DIAG] ${symbol} trail SKIP — ${pctDisplay} < +31% or SL already locked`);
+            continue;
+          }
+
+          const bestSl   = v2Result.newSl;
+          const srcLabel = `trail(+${(v2Result.capitalPct*100).toFixed(1)}%→lock${(v2Result.milestone*100).toFixed(0)}%)`;
+          const improved = currentSl === 0
+            || (isLong ? bestSl > currentSl + 0.0001 : bestSl < currentSl - 0.0001);
+          if (!improved) continue;
+
+          log(`${symbol} ${isLong ? 'LONG' : 'SHORT'} [${srcLabel}] SL: $${currentSl.toFixed(pricePrec)} → $${bestSl.toFixed(pricePrec)} | ${pctDisplay} capital`);
+
+          const client  = new BitunixClient({ apiKey, apiSecret });
+          const updated = await updateSlBitunix(client, symbol, bestSl, pricePrec, dbTrade?.tp_price, pos);
+
+          if (updated) {
+            if (dbTrade) {
+              await db.query(
+                `UPDATE trades SET trailing_sl_price = $1 WHERE id = $2`,
+                [bestSl, dbTrade.id]
+              );
+            }
+            log(`✓ ${symbol} SL locked → $${bestSl.toFixed(pricePrec)}`);
+            await notify(
+              `📈 *Trail SL Moved*\n` +
+              `*${symbol}* ${isLong ? 'LONG' : 'SHORT'}${dbTrade ? '' : ' ⚠️ orphan'}\n` +
+              `SL: \`$${currentSl.toFixed(pricePrec)}\` → \`$${bestSl.toFixed(pricePrec)}\`\n` +
+              `Profit: +${(v2Result.capitalPct * 100).toFixed(1)}% capital | locked ${(v2Result.milestone * 100).toFixed(0)}%`
+            );
+          } else {
+            log(`✗ ${symbol} SL update FAILED`);
+          }
+        } catch (e) {
+          log(`Error processing position ${pos?.symbol}: ${e.message}`);
         }
+      }
+    }
+
+    // ── Binance trades (still DB-driven, exchange gives order-based SL) ──
+    const binanceTrades = dbTrades.filter(t => {
+      const key = keys.find(k => k.id === t.api_key_id);
+      return key?.platform === 'binance';
+    });
+    for (const trade of binanceTrades) {
+      try {
+        const key       = keys.find(k => k.id === trade.api_key_id);
+        if (!key) continue;
+        const apiKey    = cryptoUtils.decrypt(key.api_key_enc,    key.iv,        key.auth_tag);
+        const apiSecret = cryptoUtils.decrypt(key.api_secret_enc, key.secret_iv, key.secret_auth_tag);
+        if (!apiKey || !apiSecret) continue;
 
         const isLong     = trade.direction !== 'SHORT';
         const currentSl  = parseFloat(trade.trailing_sl_price) || parseFloat(trade.sl_price) || 0;
-        // Infer decimal precision from whichever price column has the most decimals.
-        // sl_price may be NULL for some trades — fall back to entry_price precision.
-        const pricePrec  = Math.max(
-          inferPricePrec(trade.sl_price),
-          inferPricePrec(trade.entry_price)
-        );
+        const pricePrec  = Math.max(inferPricePrec(trade.sl_price), inferPricePrec(trade.entry_price));
         const entryPrice = parseFloat(trade.entry_price);
-        const dbLeverage = parseFloat(trade.leverage) || 0;
+        const leverage   = parseFloat(trade.leverage) || 20;
 
-        // Get live price + exchange position data (needed for real leverage).
-        // DB leverage can be NULL for trades opened before V2 or synced by accountant.
-        // Always trust the exchange's reported leverage over the DB value.
         const curPrice = await getLivePrice(trade.symbol);
-        if (!curPrice) {
-          log(`[DIAG] ${trade.symbol}: getLivePrice returned null — Binance API unavailable or invalid symbol`);
-          continue;
-        }
+        if (!curPrice) continue;
 
-        // Fetch live position from Bitunix — use exchange data directly so we don't
-        // depend on DB entry_price accuracy or leverage being stored correctly.
-        let leverage = dbLeverage || 20;
-        let livePositionData = null;
-        let capitalPct = null; // set below
-
-        if (trade.platform === 'bitunix') {
-          try {
-            const client = new BitunixClient({ apiKey, apiSecret });
-            const posData = await client.getOpenPositions(trade.symbol);
-            const posList = Array.isArray(posData) ? posData
-              : (posData?.positionList || posData?.list || (posData && typeof posData === 'object' ? [posData] : []));
-            const symUpper = trade.symbol.toUpperCase();
-            const pos = posList.find(p => (p.symbol || '').toUpperCase() === symUpper);
-            if (pos) {
-              livePositionData = pos;
-              // Log ALL raw fields on first detection to help debug field name differences
-              log(`[DIAG] ${trade.symbol} raw pos keys: ${Object.keys(pos).join(', ')}`);
-
-              const exchangeLev = parseFloat(pos.leverage || 0);
-              if (exchangeLev > 0) leverage = exchangeLev;
-
-              // Prefer exchange-reported unrealized PnL % over our own calculation.
-              // Bitunix position may carry unrealizedPNL + margin fields directly.
-              const upnl   = parseFloat(pos.unrealizedPNL || pos.unrealizedPnl || pos.unrealizedProfit || 0);
-              const margin = parseFloat(pos.margin || pos.positionMargin || pos.initialMargin || pos.im || 0);
-              if (margin > 0) {
-                // capitalPct: positive = profit, negative = loss (same sign regardless of direction)
-                capitalPct = upnl / margin;
-                log(`[DIAG] ${trade.symbol} capitalPct from exchange: upnl=${upnl} margin=${margin} pct=${(capitalPct*100).toFixed(2)}%`);
-              }
-            }
-          } catch (e) {
-            log(`[DIAG] ${trade.symbol} getOpenPositions failed: ${e.message}`);
-          }
-        }
-
-        // Fall back to price-based calculation if exchange data not available
-        if (capitalPct === null) {
-          const profitPct = isLong
-            ? (curPrice - entryPrice) / entryPrice
-            : (entryPrice - curPrice) / entryPrice;
-          capitalPct = profitPct * leverage;
-          log(`[DIAG] ${trade.symbol} capitalPct from price calc: entry=${entryPrice} cur=${curPrice} lev=${leverage}x pct=${(capitalPct*100).toFixed(2)}%`);
-        }
-
-        // ── V2 Milestone Trail ────────────────────────────────────
-        // Activates at +31% capital profit.
-        // Locks in each 10% milestone as the new SL:
-        //   profit 31% → SL +30% | profit 40% → SL +40% | profit 50% → SL +50% …
-        const pctDisplay = `${capitalPct >= 0 ? '+' : ''}${(capitalPct * 100).toFixed(2)}%`;
-        log(`[DIAG] ${trade.symbol} ${isLong ? 'LONG' : 'SHORT'} | entry=$${entryPrice} cur=$${curPrice.toFixed(inferPricePrec(trade.entry_price))} | lev=${leverage}x (DB=${dbLeverage}) | capital=${pctDisplay} (need +31% to trail) | currentSL=$${currentSl}`);
+        const profitPct  = isLong ? (curPrice - entryPrice) / entryPrice : (entryPrice - curPrice) / entryPrice;
+        const capitalPct = profitPct * leverage;
 
         const v2Result = calcV2TrailSL(entryPrice, curPrice, isLong, leverage, currentSl);
-        if (!v2Result) {
-          log(`[DIAG] ${trade.symbol} trail SKIP — capital ${pctDisplay} < +31% threshold or new SL doesn't improve current`);
-          continue;
-        }
+        if (!v2Result) continue;
 
         const bestSl  = v2Result.newSl;
-        const srcLabel = `trail(+${(v2Result.capitalPct*100).toFixed(1)}%→lock${(v2Result.milestone*100).toFixed(0)}%)`;
-
-        // Only update if it genuinely improves the stored SL.
-        // currentSl = 0 means not yet set — always allow first write.
-        const improved = currentSl === 0
-          || (isLong  ? bestSl > currentSl + 0.0001
-                      : bestSl < currentSl - 0.0001);
+        const improved = currentSl === 0 || (isLong ? bestSl > currentSl + 0.0001 : bestSl < currentSl - 0.0001);
         if (!improved) continue;
 
-        log(`${trade.symbol} ${isLong ? 'LONG' : 'SHORT'} [${srcLabel}] SL: $${currentSl.toFixed(pricePrec)} → $${bestSl.toFixed(pricePrec)} | +${(v2Result.capitalPct*100).toFixed(1)}% capital`);
-
-        let updated = false;
-        if (trade.platform === 'bitunix') {
-          const client = new BitunixClient({ apiKey, apiSecret });
-          updated = await updateSlBitunix(client, trade.symbol, bestSl, pricePrec, trade.tp_price, livePositionData);
-        } else if (trade.platform === 'binance') {
-          const client = new USDMClient(
-            { api_key: apiKey, api_secret: apiSecret },
-            getBinanceRequestOptions()
-          );
-          updated = await updateSlBinance(client, trade.symbol, bestSl, isLong, pricePrec);
-        }
-
+        const client  = new USDMClient({ api_key: apiKey, api_secret: apiSecret }, getBinanceRequestOptions());
+        const updated = await updateSlBinance(client, trade.symbol, bestSl, isLong, pricePrec);
         if (updated) {
-          await db.query(
-            `UPDATE trades SET trailing_sl_price = $1 WHERE id = $2`,
-            [bestSl, trade.id]
-          );
-          log(`✓ ${trade.symbol} SL locked → $${bestSl.toFixed(pricePrec)}`);
+          await db.query(`UPDATE trades SET trailing_sl_price = $1 WHERE id = $2`, [bestSl, trade.id]);
+          log(`✓ ${trade.symbol} (Binance) SL locked → $${bestSl.toFixed(pricePrec)}`);
           await notify(
-            `📈 *Trail SL Moved*\n` +
-            `*${trade.symbol}* ${isLong ? 'LONG' : 'SHORT'}\n` +
+            `📈 *Trail SL Moved*\n*${trade.symbol}* ${isLong ? 'LONG' : 'SHORT'}\n` +
             `SL: \`$${currentSl.toFixed(pricePrec)}\` → \`$${bestSl.toFixed(pricePrec)}\`\n` +
             `Profit: +${(v2Result.capitalPct * 100).toFixed(1)}% capital | locked ${(v2Result.milestone * 100).toFixed(0)}%`
           );
-        } else {
-          log(`✗ ${trade.symbol} SL update FAILED (exchange rejected)`);
-          await notify(
-            `🚨 *Trail SL Failed*\n` +
-            `*${trade.symbol}* ${isLong ? 'LONG' : 'SHORT'}\n` +
-            `Tried SL → \`$${bestSl.toFixed(pricePrec)}\` — exchange rejected\n` +
-            `Profit: +${(v2Result.capitalPct * 100).toFixed(1)}% capital`
-          );
         }
       } catch (e) {
-        log(`Error ${trade.symbol}: ${e.message}`);
+        log(`Binance trail error ${trade.symbol}: ${e.message}`);
       }
     }
   } catch (e) {
