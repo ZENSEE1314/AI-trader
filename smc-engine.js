@@ -1,7 +1,7 @@
 // ============================================================
 // SMC Trading Engine — Simple 2-Gate Strategy
 //
-// Gate 1: 3m HL/LH — determines direction
+// Gate 1: 15m HL/LH — determines direction
 // Gate 2: 1m HL/LH — confirms direction, enter at swing point
 // ============================================================
 
@@ -308,23 +308,23 @@ async function analyzeLHHL(ticker, params, dailyBiasCache, kronosPredictions = n
 
   // Load AI-optimized strategy params from DB (set by Quantum Optimizer)
   // ┌─────────────────────────────────────────────────────────┐
-  // │ Simple 2-Gate Strategy: 3m HL/LH → 1m HL/LH confirm    │
-  // │ Direction from 3m, enter at 1m HL/LH swing point       │
+  // │ Simple 2-Gate Strategy: 15m HL/LH → 1m HL/LH confirm  │
+  // │ Direction from 15m, enter at 1m HL/LH swing point      │
   // └─────────────────────────────────────────────────────────┘
 
-  const [klines3m, klines1m, klines1h] = await Promise.all([
-    fetchKlines(symbol, '3m', 100),
+  const [klines15m, klines1m, klines1h] = await Promise.all([
+    fetchKlines(symbol, '15m', 100),
     fetchKlines(symbol, '1m', 100),
     fetchKlines(symbol, '1h', 210),
   ]);
 
-  if (!klines3m || !klines1m) return null;
-  if (klines3m.length < 30 || klines1m.length < 30) return null;
+  if (!klines15m || !klines1m) return null;
+  if (klines15m.length < 30 || klines1m.length < 30) return null;
 
-  // ── Gate 1: 3m Structure — determines direction ──
+  // ── Gate 1: 15m Structure — determines direction ──
   // REQUIRES full trend alignment: HH+HL for LONG, LH+LL for SHORT
   // Mixed structure (LH+HL or HH+LL) = ranging → skip
-  const struct3m = getStructure(klines3m, SWING_LENGTHS['3m']);
+  const struct15m = getStructure(klines15m, SWING_LENGTHS['15m']);
 
   // Log swing details for chart comparison
   const fmtSwing = (s) => {
@@ -332,12 +332,12 @@ async function analyzeLHHL(ticker, params, dailyBiasCache, kronosPredictions = n
     const t = new Date(parseInt(s.candle[0])).toISOString().slice(11, 16);
     return `${s.label}@${s.price}(${t})`;
   };
-  bLog.scan(`${symbol}: 3m sw=${SWING_LENGTHS['3m']} lastH=${fmtSwing(struct3m.lastHigh)} lastL=${fmtSwing(struct3m.lastLow)} → ${struct3m.label} trend=${struct3m.trend}`);
+  bLog.scan(`${symbol}: 15m sw=${SWING_LENGTHS['15m']} lastH=${fmtSwing(struct15m.lastHigh)} lastL=${fmtSwing(struct15m.lastLow)} → ${struct15m.label} trend=${struct15m.trend}`);
 
   let direction = null;
   // Only trade when BOTH high and low labels agree on direction
-  if (struct3m.hasHL && struct3m.hasHH) direction = 'LONG';     // HH+HL = confirmed uptrend
-  else if (struct3m.hasLH && struct3m.hasLL) direction = 'SHORT'; // LH+LL = confirmed downtrend
+  if (struct15m.hasHL && struct15m.hasHH) direction = 'LONG';     // HH+HL = confirmed uptrend
+  else if (struct15m.hasLH && struct15m.hasLL) direction = 'SHORT'; // LH+LL = confirmed downtrend
   // Mixed (LH+HL or HH+LL) = ranging → no trade
 
   if (!direction) {
@@ -366,6 +366,8 @@ async function analyzeLHHL(ticker, params, dailyBiasCache, kronosPredictions = n
       bLog.scan(`${symbol}: EMA200(1h) aligned with ${direction} — no penalty`);
     }
   }
+
+
 
   // ── Gate 2: 1m Structure — confirms direction ──
   const struct1m = getStructure(klines1m, SWING_LENGTHS['1m']);
@@ -456,7 +458,7 @@ async function analyzeLHHL(ticker, params, dailyBiasCache, kronosPredictions = n
   else leverage = params.LEV_ALT || 20;
 
   // ┌─────────────────────────────────────────────────────────┐
-  // │ Score — simple: 3m + 1m agreement                      │
+  // │ Score — simple: 15m + 1m agreement                     │
   // └─────────────────────────────────────────────────────────┘
   let score = 10; // Base score for passing both gates
 
@@ -466,7 +468,7 @@ async function analyzeLHHL(ticker, params, dailyBiasCache, kronosPredictions = n
 
   // Bonus: strong trend on both TFs
   const expectedTrend = direction === 'LONG' ? 'bullish' : 'bearish';
-  if (struct3m.trend === expectedTrend) score += 3;
+  if (struct15m.trend === expectedTrend) score += 3;
   if (struct1m.trend === expectedTrend) score += 2;
 
   // Swing freshness bonus: fresh = +2, slightly stale = 0, old = -1
@@ -496,9 +498,9 @@ async function analyzeLHHL(ticker, params, dailyBiasCache, kronosPredictions = n
   const aiModifier = await aiLearner.getAIScoreModifier(symbol, setup, direction);
   score = score * aiModifier;
 
-  // Structure-based learning: check if this 3m/1m structure combo historically wins
-  const structLabel = `${struct3m.label}|${struct1m.label}`;
-  const structWR = await aiLearner.getStructureWinRate(struct3m.label, struct1m.label, direction);
+  // Structure-based learning: check if this 15m/1m structure combo historically wins
+  const structLabel = `${struct15m.label}|${struct1m.label}`;
+  const structWR = await aiLearner.getStructureWinRate(struct15m.label, struct1m.label, direction);
   if (structWR && structWR.total >= 5) {
     if (structWR.winRate < 0.25) {
       bLog.scan(`${symbol}: structure ${structLabel} historically loses (${(structWR.winRate*100).toFixed(0)}% WR, ${structWR.total} trades) — BLOCKED`);
@@ -522,7 +524,7 @@ async function analyzeLHHL(ticker, params, dailyBiasCache, kronosPredictions = n
   }
 
   bLog.scan(
-    `SIGNAL: ${symbol} ${direction} | 3m=${struct3m.label} 1m=${struct1m.label} ` +
+    `SIGNAL: ${symbol} ${direction} | 15m=${struct15m.label} 1m=${struct1m.label} ` +
     `| entry@$${price} SL=$${sl.toFixed(4)} TP=$${tp.toFixed(4)} slDist=${(slDist*100).toFixed(2)}% ` +
     `| score=${Math.round(score)} | age=${candleAge}` +
     (structWR ? ` | structWR=${(structWR.winRate*100).toFixed(0)}%/${structWR.total}t` : '')
@@ -543,7 +545,7 @@ async function analyzeLHHL(ticker, params, dailyBiasCache, kronosPredictions = n
     leverage,
     score: Math.round(score * 10) / 10,
     setup,
-    setupName: `${direction}-3m1m`,
+    setupName: `${direction}-15m1m`,
     aiModifier: Math.round(aiModifier * 100) / 100,
     sizeMod: hourCheck.reduceSizeBy || hourCheck.boostSizeBy || 1.0,
     // Pass own WR so backtest-gate bypasses its simulation (sim shows 35-46% due to not
@@ -551,7 +553,7 @@ async function analyzeLHHL(ticker, params, dailyBiasCache, kronosPredictions = n
     strategyWinRate: score >= 15 ? 70 : 60,
     marketStructure: structLabel,
     structure: {
-      tf3m: struct3m.label,
+      tf15m: struct15m.label,
       tf1m: struct1m.label,
     },
     kronos: kronosData ? {
