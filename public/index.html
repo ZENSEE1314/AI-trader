@@ -2377,9 +2377,23 @@
 
           <!-- Versions table — all versions, always visible -->
           <div style="overflow-x:auto;border-radius:var(--radius-lg);border:1px solid var(--color-border-muted);">
+            <!-- Bulk-action toolbar — shown when ≥1 row is checked -->
+            <div id="versions-bulk-bar" style="display:none;align-items:center;gap:8px;padding:8px 12px;background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.3);border-radius:var(--radius-md);margin-bottom:8px;">
+              <span id="versions-bulk-count" style="font-size:0.8rem;font-weight:600;color:#f87171;">0 selected</span>
+              <button onclick="deleteSelectedAiVersions()"
+                title="Delete all selected versions permanently. Active (LIVE) versions are protected and will be skipped."
+                style="background:#ef4444;color:#fff;border:none;border-radius:4px;font-size:0.78rem;padding:4px 14px;font-weight:700;cursor:pointer;">🗑 Delete Selected</button>
+              <button onclick="versionsSelectNone()"
+                title="Clear all checkboxes"
+                style="background:none;border:1px solid var(--color-border-muted);border-radius:4px;font-size:0.78rem;padding:4px 10px;color:var(--color-text-muted);cursor:pointer;">✕ Clear</button>
+            </div>
             <table style="width:100%;border-collapse:collapse;font-size:0.78rem;">
               <thead>
                 <tr style="background:var(--color-bg-raised);border-bottom:1px solid var(--color-border-muted);">
+                  <th style="padding:10px 12px;text-align:center;width:36px;" title="Select all / deselect all">
+                    <input type="checkbox" id="versions-select-all" title="Select all deletable versions"
+                      style="cursor:pointer;width:15px;height:15px;" onchange="versionsToggleAll(this.checked)">
+                  </th>
                   <th style="padding:10px 12px;text-align:left;color:var(--color-text-muted);font-weight:600;min-width:200px;">Version Name</th>
                   <th style="padding:10px 12px;text-align:center;color:var(--color-text-muted);font-weight:600;">Source</th>
                   <th style="padding:10px 12px;text-align:right;color:var(--color-text-muted);font-weight:600;white-space:nowrap;">WR %</th>
@@ -2392,7 +2406,7 @@
                 </tr>
               </thead>
               <tbody id="versions-tbody">
-                <tr><td colspan="9" style="padding:24px;text-align:center;color:var(--color-text-muted);">Loading versions…</td></tr>
+                <tr><td colspan="10" style="padding:24px;text-align:center;color:var(--color-text-muted);">Loading versions…</td></tr>
               </tbody>
             </table>
           </div>
@@ -2714,32 +2728,28 @@ EMAIL_FROM=MCT &lt;a83c06001@smtp-brevo.com&gt;</pre>
       if (deBtn) deBtn.style.display = activeVersion ? 'inline-flex' : 'none';
 
       if (!versions.length) {
-        tbody.innerHTML = '<tr><td colspan="9" style="padding:24px;text-align:center;color:var(--color-text-muted);">' +
+        tbody.innerHTML = '<tr><td colspan="10" style="padding:24px;text-align:center;color:var(--color-text-muted);">' +
           'No versions found. Click <strong>↺ Refresh</strong> or add an AI version via the backtest optimizer.' +
           '</td></tr>';
         return;
       }
 
-      // Deduplicate identical versions (same name + win_rate + total_trades + profit_factor)
-      var seen = {};
-      var deduped = [];
-      versions.forEach(function(v) {
-        var key = (v.name||'') + '|' + (v.win_rate||'') + '|' + (v.total_trades||'') + '|' + (v.profit_factor||'');
-        if (!seen[key]) { seen[key] = { v: v, count: 1 }; deduped.push(seen[key]); }
-        else { seen[key].count++; }
-      });
+      // Show ALL versions individually — no deduplication so each copy can be deleted separately
+      _versionsStore = versions.slice(); // idx → version object (no grouping)
 
-      _versionsStore = deduped.map(function(d){ return d.v; }); // idx → deduplicated version
-      tbody.innerHTML = deduped.map(function(d, idx) {
-        var v = d.v;
-        var dupeNote = d.count > 1 ? ' <span style="font-size:0.6rem;background:rgba(255,255,255,0.08);color:var(--color-text-muted);padding:1px 5px;border-radius:3px;vertical-align:middle;">×' + d.count + ' copies</span>' : '';
+      // Reset bulk-action state
+      var bulkBar = document.getElementById('versions-bulk-bar');
+      var selAll  = document.getElementById('versions-select-all');
+      if (bulkBar) bulkBar.style.display = 'none';
+      if (selAll)  selAll.checked = false;
+
+      tbody.innerHTML = versions.map(function(v, idx) {
         var wr  = parseFloat(v.win_rate)      || 0;
         var pf  = parseFloat(v.profit_factor) || 0;
         var ret = parseFloat(v.total_return)  || 0;
         var dd  = parseFloat(v.max_drawdown)  || 0;
 
         // Determine if this version is currently active
-        // For ai_version: match by DB id. For optimizer/manual: match by name + win_rate + total_trades fingerprint.
         var isActive = activeVersion && (
           (v._source === 'ai_version' && activeVersion.id === v._ai_id) ||
           (activeVersion.version === v.name &&
@@ -2747,8 +2757,10 @@ EMAIL_FROM=MCT &lt;a83c06001@smtp-brevo.com&gt;</pre>
            (activeVersion._tr  == null || String(activeVersion._tr)  === String(v.total_trades)))
         );
 
-        var wrColor  = wr >= 80 ? '#d4af37' : wr >= 70 ? '#22c55e' : wr >= 60 ? '#86efac' : '#94a3b8';
-        var rowBg    = isActive ? 'rgba(212,175,55,0.10)' : (wr >= 80 ? 'rgba(212,175,55,0.04)' : 'transparent');
+        var canDelete = !isActive && !!v._ai_id; // only ai_version rows have a deletable id
+
+        var wrColor   = wr >= 80 ? '#d4af37' : wr >= 70 ? '#22c55e' : wr >= 60 ? '#86efac' : '#94a3b8';
+        var rowBg     = isActive ? 'rgba(212,175,55,0.10)' : (wr >= 80 ? 'rgba(212,175,55,0.04)' : 'transparent');
         var liveBadge = isActive ? ' <span style="background:#d4af37;color:#000;font-size:0.6rem;font-weight:700;padding:1px 5px;border-radius:3px;vertical-align:middle;">LIVE</span>' : '';
 
         // Source badge
@@ -2758,24 +2770,33 @@ EMAIL_FROM=MCT &lt;a83c06001@smtp-brevo.com&gt;</pre>
         var srcLabel = v._source === 'ai_version' ? 'named' : v._source === 'optimizer' ? 'optimizer' : 'manual';
         var srcBadge = '<span style="background:' + srcColor + ';font-size:0.6rem;padding:1px 6px;border-radius:3px;">' + srcLabel + '</span>';
 
-        // Build activate button — pass safe integer index, look up version in _versionsStore
+        // Checkbox — only shown for deletable rows (ai_version with an id)
+        var checkbox = canDelete
+          ? '<input type="checkbox" class="ver-chk" data-id="' + v._ai_id + '" ' +
+            'title="Select this version for bulk delete" style="cursor:pointer;width:15px;height:15px;" ' +
+            'onchange="versionsUpdateBulkBar()">'
+          : (isActive ? '<span title="Active version — cannot be selected for deletion" style="font-size:0.7rem;">🔒</span>' : '');
+
+        // Activate button
         var activateBtn = isActive
           ? '<span style="font-size:0.72rem;color:#d4af37;font-weight:700;padding:3px 8px;">✓ Live</span>'
           : '<button onclick="window.CryptoBot.useVersionByIdx(' + idx + ')" '
+            + 'title="Activate this version — the bot will start trading with these parameters immediately" '
             + 'style="background:linear-gradient(135deg,#d4af37,#b8962e);color:#000;border:none;border-radius:4px;font-size:0.72rem;padding:3px 12px;font-weight:700;cursor:pointer;">▶ Use</button>';
 
-        // Params preview — show key settings inline
+        // Params preview
         var paramsObj = v.params || v.genome || {};
         var paramPreview = '';
-        if (paramsObj.sl_pct   != null) paramPreview += 'SL '   + (parseFloat(paramsObj.sl_pct)*100).toFixed(1)    + '% ';
-        if (paramsObj.slPct    != null) paramPreview += 'SL '   + (parseFloat(paramsObj.slPct)*100).toFixed(1)      + '% ';
-        if (paramsObj.trailing_step != null) paramPreview += 'T ' + (parseFloat(paramsObj.trailing_step)*100).toFixed(1) + '% ';
-        if (paramsObj.trailStep    != null) paramPreview += 'T ' + (parseFloat(paramsObj.trailStep)*100).toFixed(1)  + '% ';
-        if (paramsObj.leverage     != null) paramPreview += paramsObj.leverage + '× ';
+        if (paramsObj.sl_pct        != null) paramPreview += 'SL '   + (parseFloat(paramsObj.sl_pct)*100).toFixed(1)        + '% ';
+        if (paramsObj.slPct         != null) paramPreview += 'SL '   + (parseFloat(paramsObj.slPct)*100).toFixed(1)          + '% ';
+        if (paramsObj.trailing_step != null) paramPreview += 'T '    + (parseFloat(paramsObj.trailing_step)*100).toFixed(1)  + '% ';
+        if (paramsObj.trailStep     != null) paramPreview += 'T '    + (parseFloat(paramsObj.trailStep)*100).toFixed(1)      + '% ';
+        if (paramsObj.leverage      != null) paramPreview += paramsObj.leverage + '× ';
 
         return '<tr style="background:' + rowBg + ';border-bottom:1px solid var(--color-border-muted);">' +
+          '<td style="padding:8px 12px;text-align:center;">' + checkbox + '</td>' +
           '<td style="padding:8px 12px;">' +
-            '<div style="font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:220px;color:' + wrColor + ';">' + escHtml(v.name || '—') + liveBadge + dupeNote + '</div>' +
+            '<div style="font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:220px;color:' + wrColor + ';">' + escHtml(v.name || '—') + liveBadge + '</div>' +
             (paramPreview ? '<div style="font-size:0.68rem;color:var(--color-text-muted);font-family:monospace;margin-top:2px;">' + escHtml(paramPreview.trim()) + '</div>' : '') +
           '</td>' +
           '<td style="padding:8px 12px;text-align:center;">' + srcBadge + '</td>' +
@@ -2785,16 +2806,16 @@ EMAIL_FROM=MCT &lt;a83c06001@smtp-brevo.com&gt;</pre>
           '<td style="padding:8px 12px;text-align:right;color:' + (ret >= 0 ? '#22c55e' : '#ef4444') + ';">' + (v.total_return != null ? (ret >= 0 ? '+' : '') + ret.toFixed(1) + '%' : '—') + '</td>' +
           '<td style="padding:8px 12px;text-align:right;color:#ef4444;">' + (dd > 0 ? dd.toFixed(1) + '%' : '—') + '</td>' +
           '<td style="padding:8px 12px;text-align:center;white-space:nowrap;font-size:0.68rem;color:var(--color-text-muted);">' +
-            (v.created_at ? '<span title="Date and time this backtest was run. More recent = more relevant to current market conditions.">' + new Date(v.created_at).toLocaleString() + '</span>' : '—') +
+            (v.created_at ? '<span title="Date this backtest was run. More recent = more relevant to current market.">' + new Date(v.created_at).toLocaleString() + '</span>' : '—') +
           '</td>' +
           '<td style="padding:8px 12px;text-align:center;white-space:nowrap;">' +
             '<div style="display:flex;gap:4px;justify-content:center;">' +
             '<button onclick="window.CryptoBot.viewVersionByIdx(' + idx + ')" title="View all parameters stored in this version (SL, TP, leverage, trail step, etc.)" ' +
               'style="background:none;border:1px solid var(--color-border-muted);border-radius:4px;color:var(--color-text-muted);font-size:0.7rem;padding:3px 7px;cursor:pointer;">📋</button>' +
             activateBtn +
-            (!isActive && v._ai_id
+            (canDelete
               ? '<button onclick="deleteAiVersion(' + v._ai_id + ')" ' +
-                'title="Delete this version permanently. Cannot delete the active (LIVE) version — deactivate it first." ' +
+                'title="Delete this single version permanently. Active (LIVE) versions are protected." ' +
                 'style="background:none;border:1px solid rgba(239,68,68,0.4);border-radius:4px;color:#ef4444;font-size:0.7rem;padding:3px 7px;cursor:pointer;">🗑</button>'
               : '') +
             '</div>' +
@@ -2809,21 +2830,21 @@ EMAIL_FROM=MCT &lt;a83c06001@smtp-brevo.com&gt;</pre>
 
     async function loadStrategyVersions() {
       var tbody = document.getElementById('versions-tbody');
-      if (tbody) tbody.innerHTML = '<tr><td colspan="9" style="padding:16px;text-align:center;color:var(--color-text-muted);">Loading…</td></tr>';
+      if (tbody) tbody.innerHTML = '<tr><td colspan="10" style="padding:16px;text-align:center;color:var(--color-text-muted);">Loading…</td></tr>';
       try {
         var r = await fetch('/api/dashboard/strategy-versions');
         var d = await r.json();
         if (!r.ok || d.error) {
           var msg = 'Error loading versions: ' + (d.error || ('HTTP ' + r.status));
           showVersionMsg(msg, true);
-          if (tbody) tbody.innerHTML = '<tr><td colspan="9" style="padding:24px;text-align:center;color:#f87171;">' + msg + '</td></tr>';
+          if (tbody) tbody.innerHTML = '<tr><td colspan="10" style="padding:24px;text-align:center;color:#f87171;">' + msg + '</td></tr>';
           return;
         }
         renderVersions(d.versions || [], d.active_version);
       } catch(e) {
         var msg2 = 'Failed to load versions: ' + e.message;
         showVersionMsg(msg2, true);
-        if (tbody) tbody.innerHTML = '<tr><td colspan="9" style="padding:24px;text-align:center;color:#f87171;">' + msg2 + '</td></tr>';
+        if (tbody) tbody.innerHTML = '<tr><td colspan="10" style="padding:24px;text-align:center;color:#f87171;">' + msg2 + '</td></tr>';
       }
     }
 
@@ -2951,9 +2972,9 @@ EMAIL_FROM=MCT &lt;a83c06001@smtp-brevo.com&gt;</pre>
       }
     }
 
-    // Delete a saved optimizer/AI version by its DB id
+    // Delete a single saved optimizer/AI version by its DB id
     async function deleteAiVersion(id) {
-      if (!confirm('Delete this optimizer version permanently? This cannot be undone.\n\nNote: The active (LIVE) version cannot be deleted — deactivate it first.')) return;
+      if (!confirm('Delete this version permanently? This cannot be undone.\n\nTip: Active (LIVE) versions are protected — deactivate first.')) return;
       try {
         var r = await fetch('/api/admin/ai-versions/' + id, { method: 'DELETE' });
         var d = await r.json();
@@ -2965,6 +2986,71 @@ EMAIL_FROM=MCT &lt;a83c06001@smtp-brevo.com&gt;</pre>
       }
     }
     window.deleteAiVersion = deleteAiVersion;
+
+    // ── Multi-select helpers ──────────────────────────────────
+
+    // Update the bulk-action bar count and visibility
+    function versionsUpdateBulkBar() {
+      var checked = document.querySelectorAll('.ver-chk:checked');
+      var bar     = document.getElementById('versions-bulk-bar');
+      var countEl = document.getElementById('versions-bulk-count');
+      var selAll  = document.getElementById('versions-select-all');
+      var total   = document.querySelectorAll('.ver-chk').length;
+      if (bar)     bar.style.display     = checked.length > 0 ? 'flex' : 'none';
+      if (countEl) countEl.textContent   = checked.length + ' selected';
+      if (selAll)  selAll.indeterminate  = checked.length > 0 && checked.length < total;
+      if (selAll && checked.length === total && total > 0) selAll.checked = true;
+    }
+
+    // Select-all / deselect-all from the header checkbox
+    function versionsToggleAll(checked) {
+      document.querySelectorAll('.ver-chk').forEach(function(cb) { cb.checked = checked; });
+      versionsUpdateBulkBar();
+    }
+
+    // Clear all checkboxes
+    function versionsSelectNone() {
+      document.querySelectorAll('.ver-chk').forEach(function(cb) { cb.checked = false; });
+      var selAll = document.getElementById('versions-select-all');
+      if (selAll) { selAll.checked = false; selAll.indeterminate = false; }
+      versionsUpdateBulkBar();
+    }
+
+    // Delete all currently checked versions
+    async function deleteSelectedAiVersions() {
+      var checked = Array.from(document.querySelectorAll('.ver-chk:checked'));
+      if (!checked.length) return;
+      var ids = checked.map(function(cb) { return parseInt(cb.dataset.id); }).filter(Boolean);
+      if (!confirm('Delete ' + ids.length + ' selected version(s) permanently?\n\nThis cannot be undone. Active (LIVE) versions will be skipped automatically.')) return;
+
+      var deleted = 0, skipped = 0, failed = 0;
+      showVersionMsg('Deleting ' + ids.length + ' version(s)…', false);
+
+      for (var i = 0; i < ids.length; i++) {
+        try {
+          var r = await fetch('/api/admin/ai-versions/' + ids[i], { method: 'DELETE' });
+          var d = await r.json();
+          if (!r.ok || d.error) {
+            // Active-version block = skip, not a real error
+            if (d.error && d.error.includes('active')) skipped++;
+            else failed++;
+          } else {
+            deleted++;
+          }
+        } catch(_) { failed++; }
+      }
+
+      var msg = 'Deleted: ' + deleted;
+      if (skipped) msg += ' | Skipped (active): ' + skipped;
+      if (failed)  msg += ' | Failed: ' + failed;
+      showVersionMsg(msg, failed > 0);
+      await loadStrategyVersions();
+    }
+
+    window.versionsToggleAll        = versionsToggleAll;
+    window.versionsSelectNone       = versionsSelectNone;
+    window.versionsUpdateBulkBar    = versionsUpdateBulkBar;
+    window.deleteSelectedAiVersions = deleteSelectedAiVersions;
 
     async function saveCustomVersion() {
       var name = (document.getElementById('cv-name') || {}).value;
