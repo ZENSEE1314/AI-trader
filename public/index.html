@@ -2387,11 +2387,12 @@
                   <th style="padding:10px 12px;text-align:right;color:var(--color-text-muted);font-weight:600;">PF</th>
                   <th style="padding:10px 12px;text-align:right;color:var(--color-text-muted);font-weight:600;white-space:nowrap;">Return %</th>
                   <th style="padding:10px 12px;text-align:right;color:var(--color-text-muted);font-weight:600;white-space:nowrap;">Max DD</th>
+                  <th style="padding:10px 12px;text-align:center;color:var(--color-text-muted);font-weight:600;white-space:nowrap;" title="Date and time this backtest result was generated. Helps you know if the test is recent or outdated.">Tested <span style="cursor:help;font-size:0.65rem;border:1px solid currentColor;border-radius:50%;padding:0 3px;">?</span></th>
                   <th style="padding:10px 12px;text-align:center;color:var(--color-text-muted);font-weight:600;">Action</th>
                 </tr>
               </thead>
               <tbody id="versions-tbody">
-                <tr><td colspan="8" style="padding:24px;text-align:center;color:var(--color-text-muted);">Loading versions…</td></tr>
+                <tr><td colspan="9" style="padding:24px;text-align:center;color:var(--color-text-muted);">Loading versions…</td></tr>
               </tbody>
             </table>
           </div>
@@ -2713,7 +2714,7 @@ EMAIL_FROM=MCT &lt;a83c06001@smtp-brevo.com&gt;</pre>
       if (deBtn) deBtn.style.display = activeVersion ? 'inline-flex' : 'none';
 
       if (!versions.length) {
-        tbody.innerHTML = '<tr><td colspan="8" style="padding:24px;text-align:center;color:var(--color-text-muted);">' +
+        tbody.innerHTML = '<tr><td colspan="9" style="padding:24px;text-align:center;color:var(--color-text-muted);">' +
           'No versions found. Click <strong>↺ Refresh</strong> or add an AI version via the backtest optimizer.' +
           '</td></tr>';
         return;
@@ -2783,10 +2784,20 @@ EMAIL_FROM=MCT &lt;a83c06001@smtp-brevo.com&gt;</pre>
           '<td style="padding:8px 12px;text-align:right;color:var(--color-text-muted);">' + (pf > 0 ? pf.toFixed(2) : '—') + '</td>' +
           '<td style="padding:8px 12px;text-align:right;color:' + (ret >= 0 ? '#22c55e' : '#ef4444') + ';">' + (v.total_return != null ? (ret >= 0 ? '+' : '') + ret.toFixed(1) + '%' : '—') + '</td>' +
           '<td style="padding:8px 12px;text-align:right;color:#ef4444;">' + (dd > 0 ? dd.toFixed(1) + '%' : '—') + '</td>' +
-          '<td style="padding:8px 12px;text-align:center;white-space:nowrap;display:flex;gap:4px;justify-content:center;">' +
-            '<button onclick="window.CryptoBot.viewVersionByIdx(' + idx + ')" title="View all parameters" ' +
+          '<td style="padding:8px 12px;text-align:center;white-space:nowrap;font-size:0.68rem;color:var(--color-text-muted);">' +
+            (v.created_at ? '<span title="Date and time this backtest was run. More recent = more relevant to current market conditions.">' + new Date(v.created_at).toLocaleString() + '</span>' : '—') +
+          '</td>' +
+          '<td style="padding:8px 12px;text-align:center;white-space:nowrap;">' +
+            '<div style="display:flex;gap:4px;justify-content:center;">' +
+            '<button onclick="window.CryptoBot.viewVersionByIdx(' + idx + ')" title="View all parameters stored in this version (SL, TP, leverage, trail step, etc.)" ' +
               'style="background:none;border:1px solid var(--color-border-muted);border-radius:4px;color:var(--color-text-muted);font-size:0.7rem;padding:3px 7px;cursor:pointer;">📋</button>' +
             activateBtn +
+            (!isActive && v._ai_id
+              ? '<button onclick="deleteAiVersion(' + v._ai_id + ')" ' +
+                'title="Delete this version permanently. Cannot delete the active (LIVE) version — deactivate it first." ' +
+                'style="background:none;border:1px solid rgba(239,68,68,0.4);border-radius:4px;color:#ef4444;font-size:0.7rem;padding:3px 7px;cursor:pointer;">🗑</button>'
+              : '') +
+            '</div>' +
           '</td>' +
         '</tr>';
       }).join('');
@@ -2798,21 +2809,21 @@ EMAIL_FROM=MCT &lt;a83c06001@smtp-brevo.com&gt;</pre>
 
     async function loadStrategyVersions() {
       var tbody = document.getElementById('versions-tbody');
-      if (tbody) tbody.innerHTML = '<tr><td colspan="8" style="padding:16px;text-align:center;color:var(--color-text-muted);">Loading…</td></tr>';
+      if (tbody) tbody.innerHTML = '<tr><td colspan="9" style="padding:16px;text-align:center;color:var(--color-text-muted);">Loading…</td></tr>';
       try {
         var r = await fetch('/api/dashboard/strategy-versions');
         var d = await r.json();
         if (!r.ok || d.error) {
           var msg = 'Error loading versions: ' + (d.error || ('HTTP ' + r.status));
           showVersionMsg(msg, true);
-          if (tbody) tbody.innerHTML = '<tr><td colspan="8" style="padding:24px;text-align:center;color:#f87171;">' + msg + '</td></tr>';
+          if (tbody) tbody.innerHTML = '<tr><td colspan="9" style="padding:24px;text-align:center;color:#f87171;">' + msg + '</td></tr>';
           return;
         }
         renderVersions(d.versions || [], d.active_version);
       } catch(e) {
         var msg2 = 'Failed to load versions: ' + e.message;
         showVersionMsg(msg2, true);
-        if (tbody) tbody.innerHTML = '<tr><td colspan="8" style="padding:24px;text-align:center;color:#f87171;">' + msg2 + '</td></tr>';
+        if (tbody) tbody.innerHTML = '<tr><td colspan="9" style="padding:24px;text-align:center;color:#f87171;">' + msg2 + '</td></tr>';
       }
     }
 
@@ -2939,6 +2950,21 @@ EMAIL_FROM=MCT &lt;a83c06001@smtp-brevo.com&gt;</pre>
         showVersionMsg('Delete failed: ' + e.message, true);
       }
     }
+
+    // Delete a saved optimizer/AI version by its DB id
+    async function deleteAiVersion(id) {
+      if (!confirm('Delete this optimizer version permanently? This cannot be undone.\n\nNote: The active (LIVE) version cannot be deleted — deactivate it first.')) return;
+      try {
+        var r = await fetch('/api/admin/ai-versions/' + id, { method: 'DELETE' });
+        var d = await r.json();
+        if (!r.ok || d.error) { showVersionMsg('Delete failed: ' + (d.error || 'HTTP ' + r.status), true); return; }
+        showVersionMsg('Version deleted.', false);
+        await loadStrategyVersions();
+      } catch(e) {
+        showVersionMsg('Delete failed: ' + e.message, true);
+      }
+    }
+    window.deleteAiVersion = deleteAiVersion;
 
     async function saveCustomVersion() {
       var name = (document.getElementById('cv-name') || {}).value;

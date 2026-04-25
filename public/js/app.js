@@ -3993,6 +3993,8 @@
       let output = '═══════════════════════════════════════════════════════════════════════════════════════════════════════\n';
       output += '  ⚛️ QUANTUM AI — BITMASK COMBO BACKTESTER\n';
       if (data.days) output += `  Period: ${data.days} days | Tokens: ${data.tokens || '?'}\n`;
+      if (data.testedAt) output += `  Tested at: ${data.testedAt}\n`;
+      if (data.leverageTested) output += `  Leverage tested: ${data.leverageTested.join('x, ')}x | Best: ${data.bestLeverage || '?'}x\n`;
       output += `  Phase: ${data.phase || 'exploring'} | Explored: ${data.exploration?.explored || 0}/${data.exploration?.total || 15}\n`;
       output += `  Best combo: #${data.activeCombo} (${data.comboName})\n`;
       const strats = data.strategies || {};

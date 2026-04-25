@@ -2172,6 +2172,31 @@ router.post('/ai-versions/activate-manual', async (req, res) => {
   }
 });
 
+// DELETE /api/admin/ai-versions/:id — remove a saved optimizer result (cannot delete active)
+router.delete('/ai-versions/:id', async (req, res) => {
+  try {
+    const vId = parseInt(req.params.id);
+    if (!vId) return res.status(400).json({ error: 'Invalid id' });
+
+    // Check if this version is currently active — refuse to delete it
+    const activeRows = await query(`SELECT value FROM settings WHERE key = 'active_ai_version'`);
+    if (activeRows.length) {
+      try {
+        const active = JSON.parse(activeRows[0].value);
+        const vRows = await query(`SELECT version FROM ai_versions WHERE id = $1`, [vId]);
+        if (vRows.length && active.version === vRows[0].version) {
+          return res.status(400).json({ error: 'Cannot delete the active version — deactivate it first' });
+        }
+      } catch (_) {}
+    }
+
+    await query(`DELETE FROM ai_versions WHERE id = $1`, [vId]);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/admin/ai-versions/active — returns the currently active version params (or null)
 router.get('/ai-versions/active', async (req, res) => {
   try {
@@ -2848,29 +2873,29 @@ router.post('/ai-optimize', async (req, res) => {
     const startTime = endTime - DAYS * 86400000;
     const SIM_WALLET = 1000;
     const RISK_PCT = 0.10;
-    const LEVERAGE = 20;
+    // Test both 50x and 100x leverage — best result across both is selected as winner
+    const LEVERAGE_GRID = [50, 100];
     const MIN_SCORE = 8;
+    const TESTED_AT = new Date().toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
 
-    sendLog(`⚛️ Quantum AI Backtester — ${DAYS} day${DAYS > 1 ? 's' : ''}`);
-    sendLog(`Simulated wallet: $${SIM_WALLET} | Risk: ${RISK_PCT * 100}% | Leverage: ${LEVERAGE}x`);
+    sendLog(`⚛️ Quantum AI Backtester — ${DAYS} day${DAYS > 1 ? 's' : ''} | Tested: ${TESTED_AT}`);
+    sendLog(`Simulated wallet: $${SIM_WALLET} | Risk: ${RISK_PCT * 100}% | Leverage: ${LEVERAGE_GRID.join('x / ')}x (both tested)`);
+    sendLog(`Tokens: BTCUSDT ETHUSDT SOLUSDT BNBUSDT (all 4 core tokens at 100x leverage each)`);
     sendProgress('init', 5);
 
     await quantumOptimizer.initCombos();
 
-    // Get admin tokens
+    // Always use all 4 core tokens — guarantee they are included regardless of DB state
+    const CORE_TOKENS = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT'];
     const tokenRows = await query('SELECT symbol FROM token_leverage WHERE enabled = true');
     let tokens = tokenRows.map(r => r.symbol);
-    if (!tokens.length) {
-      // Fallback: top 20 by volume
-      const tickerRes = await fetch('https://fapi.binance.com/fapi/v1/ticker/24hr', { timeout: 15000 });
-      const tickers = await tickerRes.json();
-      tokens = tickers
-        .filter(t => t.symbol.endsWith('USDT') && !t.symbol.includes('_'))
-        .sort((a, b) => parseFloat(b.quoteVolume) - parseFloat(a.quoteVolume))
-        .slice(0, 20)
-        .map(t => t.symbol);
+    // Ensure every core token is present (prepend any that are missing)
+    for (const ct of [...CORE_TOKENS].reverse()) {
+      if (!tokens.includes(ct)) tokens.unshift(ct);
     }
-    sendLog(`Tokens: ${tokens.length} (${tokens.slice(0, 5).join(', ')}${tokens.length > 5 ? '...' : ''})`);
+    // If DB returned nothing, fall back to core tokens only
+    if (!tokens.length) tokens = [...CORE_TOKENS];
+    sendLog(`Tokens loaded: ${tokens.join(', ')}`);
 
     // Fetch klines for all tokens
     async function fetchK(symbol, interval, limit, et = endTime) {
@@ -2991,8 +3016,9 @@ router.post('/ai-optimize', async (req, res) => {
     sendLog(`Parameter grid: ${paramVariants.length} configs × ${TOTAL_COMBOS} combos = ${paramVariants.length * TOTAL_COMBOS} tests`);
 
     // Backtest function — runs one combo with one param config
+    // leverage: multiplier applied to price-% moves (e.g. 100 → 100x leveraged PnL)
     const yield_ = () => new Promise(r => setImmediate(r));
-    function runBacktest(comboId, params) {
+    function runBacktest(comboId, params, leverage = 100) {
       const enabled = quantumOptimizer.getEnabledStrategies(comboId);
       let trades = 0, wins = 0, losses = 0, totalPnl = 0;
 
@@ -3010,11 +3036,11 @@ router.post('/ai-optimize', async (req, res) => {
               const high = parseFloat(c[2]);
               const low = parseFloat(c[3]);
               if (position.direction === 'LONG') {
-                if (low <= position.sl) { totalPnl += (position.sl - position.entry) / position.entry * 100; losses++; trades++; closed = true; break; }
-                if (high >= position.tp1) { totalPnl += (position.tp1 - position.entry) / position.entry * 100; wins++; trades++; closed = true; break; }
+                if (low <= position.sl) { totalPnl += (position.sl - position.entry) / position.entry * 100 * leverage; losses++; trades++; closed = true; break; }
+                if (high >= position.tp1) { totalPnl += (position.tp1 - position.entry) / position.entry * 100 * leverage; wins++; trades++; closed = true; break; }
               } else {
-                if (high >= position.sl) { totalPnl += (position.entry - position.sl) / position.entry * 100; losses++; trades++; closed = true; break; }
-                if (low <= position.tp1) { totalPnl += (position.entry - position.tp1) / position.entry * 100; wins++; trades++; closed = true; break; }
+                if (high >= position.sl) { totalPnl += (position.entry - position.sl) / position.entry * 100 * leverage; losses++; trades++; closed = true; break; }
+                if (low <= position.tp1) { totalPnl += (position.entry - position.tp1) / position.entry * 100 * leverage; wins++; trades++; closed = true; break; }
               }
             }
             if (closed) position = null;
@@ -3071,48 +3097,52 @@ router.post('/ai-optimize', async (req, res) => {
         }
         if (position) {
           const lastClose = parseFloat(k15m[k15m.length - 1][4]);
-          const pnl = position.direction === 'LONG' ? (lastClose - position.entry) / position.entry * 100 : (position.entry - lastClose) / position.entry * 100;
+          const pnl = (position.direction === 'LONG' ? (lastClose - position.entry) / position.entry * 100 : (position.entry - lastClose) / position.entry * 100) * leverage;
           totalPnl += pnl; if (pnl > 0) wins++; else losses++; trades++;
         }
       }
       return { trades, wins, losses, totalPnl };
     }
 
-    // Run grid search
+    // Run grid search for each leverage config — pick best result per combo across all leverages
     sendLog('');
-    sendLog(`=== GRID SEARCH: ${TOTAL_COMBOS} COMBOS × PARAM VARIANTS ===`);
+    sendLog(`=== GRID SEARCH: ${TOTAL_COMBOS} COMBOS × ${paramVariants.length} PARAM VARIANTS × ${LEVERAGE_GRID.length} LEVERAGE CONFIGS ===`);
     const comboResults = [];
     let testsRun = 0;
-    const totalTests = TOTAL_COMBOS * paramVariants.length;
+    const totalTests = TOTAL_COMBOS * paramVariants.length * LEVERAGE_GRID.length;
 
     for (let comboId = 1; comboId <= TOTAL_COMBOS; comboId++) {
       const name = quantumOptimizer.comboToName(comboId);
       let bestResult = null;
       let bestParams = null;
+      let bestLeverage = LEVERAGE_GRID[LEVERAGE_GRID.length - 1];
       let bestPnl = -Infinity;
 
-      for (const pv of paramVariants) {
-        const result = runBacktest(comboId, pv);
-        testsRun++;
-        if (result.totalPnl > bestPnl || (result.totalPnl === bestPnl && result.trades > (bestResult?.trades || 0))) {
-          bestPnl = result.totalPnl;
-          bestResult = result;
-          bestParams = pv;
-        }
-        if (testsRun % 20 === 0) {
-          sendProgress('backtest', Math.round(50 + (testsRun / totalTests) * 40));
-          await yield_();
+      for (const lev of LEVERAGE_GRID) {
+        for (const pv of paramVariants) {
+          const result = runBacktest(comboId, pv, lev);
+          testsRun++;
+          if (result.totalPnl > bestPnl || (result.totalPnl === bestPnl && result.trades > (bestResult?.trades || 0))) {
+            bestPnl = result.totalPnl;
+            bestResult = result;
+            bestParams = pv;
+            bestLeverage = lev;
+          }
+          if (testsRun % 40 === 0) {
+            sendProgress('backtest', Math.round(50 + (testsRun / totalTests) * 40));
+            await yield_();
+          }
         }
       }
 
       const wr = bestResult.trades > 0 ? (bestResult.wins / bestResult.trades * 100).toFixed(0) : '0';
-      const avgPnl = bestResult.trades > 0 ? (bestResult.totalPnl / bestResult.trades).toFixed(2) : '0.00';
       const pnlSign = bestResult.totalPnl >= 0 ? '+' : '';
-      sendLog(`  #${String(comboId).padEnd(3)} ${name.padEnd(28)} ${String(bestResult.trades).padStart(4)} trades | ${wr}% WR | ${pnlSign}${bestResult.totalPnl.toFixed(2)}% | best: RR=${bestParams.rr} ${bestParams.label}`);
+      sendLog(`  #${String(comboId).padEnd(3)} ${name.padEnd(28)} ${String(bestResult.trades).padStart(4)} trades | ${wr}% WR | ${pnlSign}${bestResult.totalPnl.toFixed(2)}% | best: ${bestLeverage}x RR=${bestParams.rr} ${bestParams.label}`);
 
       comboResults.push({
         comboId, trades: bestResult.trades, wins: bestResult.wins,
         losses: bestResult.losses, totalPnl: bestResult.totalPnl,
+        bestLeverage,
         bestParams: { rr: bestParams.rr, hunt: bestParams.hunt, momentum: bestParams.momentum, brr: bestParams.brr },
       });
       await yield_();
@@ -3129,9 +3159,13 @@ router.post('/ai-optimize', async (req, res) => {
     const bestStrats = quantumOptimizer.getEnabledStrategies(bestCombo);
     const enabledList = Object.entries(bestStrats).filter(([, v]) => v).map(([k]) => k).join(', ');
 
+    const bestLeverage = comboResults.find(c => c.comboId === bestCombo)?.bestLeverage || LEVERAGE_GRID[LEVERAGE_GRID.length - 1];
     sendLog(`\n✅ Best combo: #${bestCombo} (${bestName})`);
     sendLog(`   Strategies: ${enabledList}`);
-    sendLog(`   ${bestResult.trades || 0} trades | ${bestResult.wins || 0}W/${bestResult.losses || 0}L | ${(bestResult.totalPnl || 0).toFixed(2)}% total PnL`);
+    sendLog(`   ${bestResult.trades || 0} trades | ${bestResult.wins || 0}W/${bestResult.losses || 0}L | ${(bestResult.totalPnl || 0).toFixed(2)}% PnL @ ${bestLeverage}x`);
+    sendLog(`   Tokens tested: ${validTokens.join(', ')}`);
+    sendLog(`   Leverage configs tested: ${LEVERAGE_GRID.join('x, ')}x`);
+    sendLog(`   Tested at: ${TESTED_AT}`);
     sendProgress('done', 100);
 
     // Send final result
@@ -3139,6 +3173,9 @@ router.post('/ai-optimize', async (req, res) => {
       type: 'result',
       days: DAYS,
       tokens: validTokens.length,
+      testedAt: TESTED_AT,
+      leverageTested: LEVERAGE_GRID,
+      bestLeverage,
       activeCombo: bestCombo,
       comboName: bestName,
       strategies: bestStrats,
