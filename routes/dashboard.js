@@ -1780,8 +1780,8 @@ router.get('/strategy-versions', async (req, res) => {
         combined.push({
           _source: 'optimizer',
           _genome_hash: r.ghash,
-          name: `Optimizer ${(parseFloat(r.win_rate || 0) * 100).toFixed(0)}% WR`,
-          win_rate: r.win_rate != null ? parseFloat(r.win_rate) * 100 : null,
+          name: `Optimizer ${parseFloat(r.win_rate || 0).toFixed(1)}% WR`,
+          win_rate: r.win_rate != null ? parseFloat(r.win_rate) : null,
           profit_factor: r.profit_factor,
           total_return: r.total_return,
           max_drawdown: r.max_drawdown,
