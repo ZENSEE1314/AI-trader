@@ -3304,7 +3304,7 @@ EMAIL_FROM=MCT &lt;a83c06001@smtp-brevo.com&gt;</pre>
     async function deleteAiVersion(id) {
       if (!confirm('Delete this version permanently? This cannot be undone.\n\nTip: Active (LIVE) versions are protected — deactivate first.')) return;
       try {
-        var r = await fetch('/api/admin/ai-versions/' + id, { method: 'DELETE' });
+        var r = await fetch('/api/admin/ai-versions/' + id, { method: 'DELETE', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' } });
         var d = await r.json();
         if (!r.ok || d.error) { showVersionMsg('Delete failed: ' + (d.error || 'HTTP ' + r.status), true); return; }
         showVersionMsg('Version deleted.', false);
@@ -3356,7 +3356,7 @@ EMAIL_FROM=MCT &lt;a83c06001@smtp-brevo.com&gt;</pre>
 
       for (var i = 0; i < ids.length; i++) {
         try {
-          var r = await fetch('/api/admin/ai-versions/' + ids[i], { method: 'DELETE' });
+          var r = await fetch('/api/admin/ai-versions/' + ids[i], { method: 'DELETE', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' } });
           var d = await r.json();
           if (!r.ok || d.error) {
             // Active-version block = skip, not a real error
