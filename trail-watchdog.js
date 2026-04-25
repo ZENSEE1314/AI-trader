@@ -194,9 +194,12 @@ async function runTrailCycle() {
           continue;
         }
 
-        // Fetch live position to get real leverage (one call per trade, cached outcome used below)
+        // Fetch live position from Bitunix — use exchange data directly so we don't
+        // depend on DB entry_price accuracy or leverage being stored correctly.
         let leverage = dbLeverage || 20;
         let livePositionData = null;
+        let capitalPct = null; // set below
+
         if (trade.platform === 'bitunix') {
           try {
             const client = new BitunixClient({ apiKey, apiSecret });
@@ -207,21 +210,35 @@ async function runTrailCycle() {
             const pos = posList.find(p => (p.symbol || '').toUpperCase() === symUpper);
             if (pos) {
               livePositionData = pos;
+              // Log ALL raw fields on first detection to help debug field name differences
+              log(`[DIAG] ${trade.symbol} raw pos keys: ${Object.keys(pos).join(', ')}`);
+
               const exchangeLev = parseFloat(pos.leverage || 0);
-              if (exchangeLev > 0 && exchangeLev !== dbLeverage) {
-                log(`[DIAG] ${trade.symbol}: leverage DB=${dbLeverage} vs exchange=${exchangeLev} — using exchange value`);
-              }
               if (exchangeLev > 0) leverage = exchangeLev;
+
+              // Prefer exchange-reported unrealized PnL % over our own calculation.
+              // Bitunix position may carry unrealizedPNL + margin fields directly.
+              const upnl   = parseFloat(pos.unrealizedPNL || pos.unrealizedPnl || pos.unrealizedProfit || 0);
+              const margin = parseFloat(pos.margin || pos.positionMargin || pos.initialMargin || pos.im || 0);
+              if (margin > 0) {
+                // capitalPct: positive = profit, negative = loss (same sign regardless of direction)
+                capitalPct = upnl / margin;
+                log(`[DIAG] ${trade.symbol} capitalPct from exchange: upnl=${upnl} margin=${margin} pct=${(capitalPct*100).toFixed(2)}%`);
+              }
             }
-          } catch (_) {
-            // Fall back to DB leverage — non-fatal
+          } catch (e) {
+            log(`[DIAG] ${trade.symbol} getOpenPositions failed: ${e.message}`);
           }
         }
 
-        const profitPct = isLong
-          ? (curPrice - entryPrice) / entryPrice
-          : (entryPrice - curPrice) / entryPrice;
-        const capitalPct = profitPct * leverage;
+        // Fall back to price-based calculation if exchange data not available
+        if (capitalPct === null) {
+          const profitPct = isLong
+            ? (curPrice - entryPrice) / entryPrice
+            : (entryPrice - curPrice) / entryPrice;
+          capitalPct = profitPct * leverage;
+          log(`[DIAG] ${trade.symbol} capitalPct from price calc: entry=${entryPrice} cur=${curPrice} lev=${leverage}x pct=${(capitalPct*100).toFixed(2)}%`);
+        }
 
         // ── V2 Milestone Trail ────────────────────────────────────
         // Activates at +31% capital profit.
