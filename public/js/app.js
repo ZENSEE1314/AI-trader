@@ -4619,49 +4619,60 @@
     }
   }
 
-  async function adminResyncBitunix(btn) {
-    if (!confirm('Re-fetch all closed Bitunix trades from the exchange and correct exit price, P&L, fees and status?\nThis may take 1-2 minutes.')) return;
-    const statusEl = document.getElementById('resync-bitunix-status');
-    statusEl.textContent = 'Resyncing... please wait';
-    statusEl.style.color = 'var(--color-accent)';
-    if (btn) { btn.disabled = true; btn.textContent = 'Resyncing...'; }
-    try {
-      const result = await api('POST', '/api/dashboard/resync-bitunix');
-      let msg = `Fixed ${result.fixed} / ${result.total} trades (${result.skipped} skipped, ${result.failed} failed)`;
-      // Show the actual API error if all failed — helps diagnose auth / endpoint issues
-      if (result.failed > 0 && result.errors && result.errors.length > 0) {
-        msg += ` — Error: ${result.errors[0].error}`;
-      }
-      statusEl.textContent = msg;
-      statusEl.style.color = result.fixed > 0 ? 'var(--color-success)' : (result.failed > 0 ? 'var(--color-danger)' : 'var(--color-text-muted)');
-      showToast(`Resync done: ${result.fixed} trades corrected`, result.fixed > 0 ? 'success' : 'info');
-      if (result.fixed > 0) setTimeout(() => loadTradeHistory?.(), 1000);
-    } catch (err) {
-      statusEl.textContent = `Error: ${err.message}`;
-      statusEl.style.color = 'var(--color-danger)';
-      showToast(err.message, 'error');
-    } finally {
-      if (btn) { btn.disabled = false; btn.textContent = 'Resync Bitunix Trades'; }
-    }
-  }
+  // Kept for backwards compat — individual functions delegate to combined handler
+  async function adminResyncBitunix(btn) { return adminFixAllData(btn); }
+  async function adminPullBitunixHistory(btn) { return adminFixAllData(btn); }
 
-  async function adminPullBitunixHistory(btn) {
+  async function adminFixAllData(btn) {
     const statusEl = document.getElementById('resync-bitunix-status');
-    if (statusEl) { statusEl.textContent = 'Syncing last 100 trades from Bitunix...'; statusEl.style.color = 'var(--color-accent)'; }
-    if (btn) { btn.disabled = true; btn.textContent = '⏳ Syncing...'; }
+    const setStatus = (msg, color = 'var(--color-accent)') => {
+      if (statusEl) { statusEl.textContent = msg; statusEl.style.color = color; }
+    };
+    const setBtn = (label) => { if (btn) { btn.textContent = label; } };
+
+    if (btn) btn.disabled = true;
+    let didChange = false;
+
     try {
-      const result = await api('POST', '/api/dashboard/pull-bitunix-history');
-      if (result.error) throw new Error(result.error);
-      let msg = `Inserted ${result.inserted} new · Updated ${result.updated} · Skipped ${result.skipped}`;
-      if (result.errors && result.errors.length > 0) msg += ` — Errors: ${result.errors.slice(0, 3).join('; ')}`;
-      if (statusEl) { statusEl.textContent = msg; statusEl.style.color = (result.inserted + result.updated) > 0 ? 'var(--color-success)' : (result.errors?.length ? 'var(--color-danger)' : 'var(--color-text-muted)'); }
-      showToast(msg, (result.inserted + result.updated) > 0 ? 'success' : 'info');
-      if ((result.inserted + result.updated) > 0) setTimeout(() => loadTradeHistory?.(), 1000);
-    } catch (err) {
-      if (statusEl) { statusEl.textContent = `Error: ${err.message}`; statusEl.style.color = 'var(--color-danger)'; }
-      showToast(err.message, 'error');
+      // Step 1: Pull all position history from Bitunix and insert/update trade records
+      setBtn('⏳ Step 1/2 — Pulling history…');
+      setStatus('Step 1/2 — Pulling Bitunix position history…');
+      let pullResult = { inserted: 0, updated: 0, skipped: 0, errors: [] };
+      try {
+        const r = await api('POST', '/api/dashboard/pull-bitunix-history');
+        if (r.error) throw new Error(r.error);
+        pullResult = r;
+        if ((r.inserted + r.updated) > 0) didChange = true;
+      } catch (err) {
+        setStatus(`Step 1 error: ${err.message}`, 'var(--color-danger)');
+      }
+
+      // Step 2: Re-fetch exit prices / P&L for any trades still missing them
+      setBtn('⏳ Step 2/2 — Fixing missing data…');
+      setStatus('Step 2/2 — Fixing missing exit prices and P&L…');
+      let resyncResult = { fixed: 0, total: 0, skipped: 0, failed: 0, errors: [] };
+      try {
+        const r = await api('POST', '/api/dashboard/resync-bitunix');
+        resyncResult = r;
+        if (r.fixed > 0) didChange = true;
+      } catch (err) {
+        setStatus(`Step 2 error: ${err.message}`, 'var(--color-danger)');
+      }
+
+      // Summary
+      const pullMsg  = `Pulled: +${pullResult.inserted} new, ~${pullResult.updated} updated`;
+      const fixMsg   = `Fixed: ${resyncResult.fixed}/${resyncResult.total} trades`;
+      const errorMsg = resyncResult.failed > 0 && resyncResult.errors?.length
+        ? ` — ${resyncResult.errors[0].error}` : '';
+      const fullMsg  = `${pullMsg} · ${fixMsg}${errorMsg}`;
+
+      const hasError = resyncResult.failed > 0 || pullResult.errors?.length > 0;
+      setStatus(fullMsg, didChange ? 'var(--color-success)' : hasError ? 'var(--color-danger)' : 'var(--color-text-muted)');
+      showToast(fullMsg, didChange ? 'success' : hasError ? 'error' : 'info');
+
+      if (didChange) setTimeout(() => loadTradeHistory?.(), 1000);
     } finally {
-      if (btn) { btn.disabled = false; btn.textContent = '📥 Pull Bitunix History'; }
+      if (btn) { btn.disabled = false; btn.textContent = '🔄 Fix All Data'; }
     }
   }
 

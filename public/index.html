@@ -1721,8 +1721,7 @@
             <div id="open-positions-list" style="font-size:0.8rem;color:var(--color-text-muted);">Click Refresh to load open positions</div>
           </div>
           <div style="margin-bottom:var(--space-3);display:flex;flex-wrap:wrap;gap:8px;align-items:center;">
-            <button class="btn btn-sm" style="font-size:0.75rem;background:linear-gradient(135deg,#6366f1,#8b5cf6);color:#fff;border:none;" onclick="window.CryptoBot.adminResyncBitunix(this)">Resync Missing Data</button>
-            <button class="btn btn-sm" style="font-size:0.75rem;background:linear-gradient(135deg,#f59e0b,#ef4444);color:#fff;border:none;" onclick="window.CryptoBot.adminPullBitunixHistory(this)">📥 Pull All Bitunix History</button>
+            <button class="btn btn-sm" id="fix-all-data-btn" style="font-size:0.75rem;background:linear-gradient(135deg,#f59e0b,#ef4444);color:#fff;border:none;" onclick="window.CryptoBot.adminFixAllData(this)">🔄 Fix All Data</button>
             <span id="resync-bitunix-status" style="font-size:0.75rem;color:var(--color-text-muted);"></span>
           </div>
           <div id="admin-earnings-per-user" style="margin-bottom:var(--space-4);"></div>
