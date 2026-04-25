@@ -1288,11 +1288,12 @@ async function main() {
       }
 
       // Final EMA200 safety gate — belt-and-suspenders check before any trade fires
-      if (pick.ema200Bias === 'bullish' && pick.direction === 'SHORT') {
+      // isMomentumBreakout bypasses — flash crashes start while EMA200 still shows prior trend
+      if (!pick.isMomentumBreakout && pick.ema200Bias === 'bullish' && pick.direction === 'SHORT') {
         bLog.trade(`FINAL GATE BLOCKED: ${pick.symbol} SHORT rejected — price above EMA200 (bullish bias)`);
         continue;
       }
-      if (pick.ema200Bias === 'bearish' && pick.direction === 'LONG') {
+      if (!pick.isMomentumBreakout && pick.ema200Bias === 'bearish' && pick.direction === 'LONG') {
         bLog.trade(`FINAL GATE BLOCKED: ${pick.symbol} LONG rejected — price below EMA200 (bearish bias)`);
         continue;
       }

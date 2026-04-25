@@ -745,6 +745,69 @@ function detectMomentumScalp(candles15m, candles1m, cfg = {}) {
   return null;
 }
 
+// ── Strategy 9: Momentum Breakout — flash crash / flash pump detector ─────
+// Fires when a 1m candle has a large body (≥0.35%) AND 2× average volume
+// AND breaks a recent 15m support (SHORT) or resistance (LONG) level.
+// This bypasses structure filters so it catches moves that START a new trend.
+function detectMomentumBreakout(candles15m, candles1m) {
+  if (candles15m.length < 20 || candles1m.length < 25) return null;
+
+  const parsed15 = candles15m.map(parseCandle);
+  const parsed1  = candles1m.map(parseCandle);
+
+  // Compute 20-period average volume on 1m candles
+  const vol20 = parsed1.slice(-21, -1).reduce((s, c) => s + c.volume, 0) / 20;
+  if (vol20 <= 0) return null;
+
+  // Find recent 15m swing highs and lows (last 15 candles, exclude last 2 unconfirmed)
+  const swing15 = parsed15.slice(-17, -2);
+  const recent15Highs = swing15.map(c => c.high);
+  const recent15Lows  = swing15.map(c => c.low);
+  const resistance = Math.max(...recent15Highs.slice(-8)); // highest of last 8 swings
+  const support    = Math.min(...recent15Lows.slice(-8));  // lowest  of last 8 swings
+
+  // Check the last 3 completed 1m candles for a breakout candle
+  for (let i = parsed1.length - 4; i < parsed1.length - 1; i++) {
+    const c = parsed1[i];
+    if (!c) continue;
+
+    const body    = Math.abs(c.close - c.open);
+    const bodyPct = body / c.open;          // body as % of price
+    const volRatio = c.volume / vol20;
+
+    // Must be a large body + volume spike
+    if (bodyPct < 0.0035) continue;         // <0.35% body → ignore
+    if (volRatio < 2.0)   continue;         // <2× avg vol → ignore
+
+    // SHORT breakout: red candle closes BELOW recent 15m support
+    if (c.close < c.open && c.close < support) {
+      const sl = c.high * 1.001;            // SL just above the breakout candle high
+      return {
+        direction:      'SHORT',
+        entryPrice:     c.close,
+        sl,
+        breakoutLevel:  support,
+        bodyPct:        (bodyPct * 100).toFixed(2),
+        volRatio:       volRatio.toFixed(1),
+      };
+    }
+
+    // LONG breakout: green candle closes ABOVE recent 15m resistance
+    if (c.close > c.open && c.close > resistance) {
+      const sl = c.low * 0.999;             // SL just below the breakout candle low
+      return {
+        direction:      'LONG',
+        entryPrice:     c.close,
+        sl,
+        breakoutLevel:  resistance,
+        bodyPct:        (bodyPct * 100).toFixed(2),
+        volRatio:       volRatio.toFixed(1),
+      };
+    }
+  }
+  return null;
+}
+
 // ── HTF Market Structure (for BRR alignment) ──────────────
 
 function getHTFStructure(candles) {
@@ -1924,6 +1987,38 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     }
   } // end STRATEGY_V2 gate
 
+  // Strategy 9: Momentum Breakout — flash crash / pump — bypasses structure filters
+  if (!enabledStrategies || enabledStrategies.MOMENTUM_BREAKOUT !== false) {
+    const mb = detectMomentumBreakout(klines15m, klines1m);
+    if (mb) {
+      const slDist = Math.abs(mb.entryPrice - mb.sl) / mb.entryPrice;
+      // TP targets: 2.5×, 3.5×, and 5× risk — momentum moves run far
+      const tp1 = mb.direction === 'LONG' ? mb.entryPrice * (1 + slDist * 2.5) : mb.entryPrice * (1 - slDist * 2.5);
+      const tp2 = mb.direction === 'LONG' ? mb.entryPrice * (1 + slDist * 3.5) : mb.entryPrice * (1 - slDist * 3.5);
+      const tp3 = mb.direction === 'LONG' ? mb.entryPrice * (1 + slDist * 5.0) : mb.entryPrice * (1 - slDist * 5.0);
+      const tpDist = Math.abs(tp1 - mb.entryPrice) / mb.entryPrice;
+      const rr = slDist > 0 ? Math.round(tpDist / slDist * 10) / 10 : 0;
+      if (rr >= 1.2 && slDist > 0.001 && slDist < 0.04) {
+        signals.push({
+          symbol,
+          direction:       mb.direction,
+          price:           mb.entryPrice,
+          lastPrice:       price,
+          sl:              mb.sl,
+          tp1, tp2, tp3,
+          slDist,
+          setup:           'MOMENTUM_BREAKOUT',
+          setupName:       `${mb.direction}-MOM-BRK`,
+          score:           8,
+          rr,
+          isMomentumBreakout: true,
+          tf15:            `body=${mb.bodyPct}% vol=${mb.volRatio}x lvl=${mb.breakoutLevel?.toFixed(4)}`,
+          tf1:             'breakout-candle',
+        });
+      }
+    }
+  } // end MOMENTUM_BREAKOUT gate
+
   if (!signals.length) return null;
 
   // Detect 15m swing structure for the hard direction filter below
@@ -1935,12 +2030,13 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
 
     // EMA200 bias (PDF: "above MA200 → look long, below → look short")
     // Hard block if direction conflicts with EMA200 trend
-    if (ema200_bias === 'bullish' && sig.direction === 'SHORT') {
+    // isMomentumBreakout bypasses this — flash crashes start while EMA200 still shows prior trend
+    if (!sig.isMomentumBreakout && ema200_bias === 'bullish' && sig.direction === 'SHORT') {
       sig.score = -99;
       sig.blocked = `SHORT blocked — price above EMA200 (bullish bias per PDF)`;
       continue;
     }
-    if (ema200_bias === 'bearish' && sig.direction === 'LONG') {
+    if (!sig.isMomentumBreakout && ema200_bias === 'bearish' && sig.direction === 'LONG') {
       sig.score = -99;
       sig.blocked = `LONG blocked — price below EMA200 (bearish bias per PDF)`;
       continue;
@@ -1949,14 +2045,15 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     // ── 15m SWING STRUCTURE DIRECTION FILTER (user rule) ────
     // HH+HL (bullish) or HL only (bullish_lean) → LONG only  (no short)
     // LL+LH (bearish) or LH only (bearish_lean) → SHORT only (no long)
+    // isMomentumBreakout bypasses this — the breakout IS the structure change
     const is15mBearish = swingTrend15.trend === 'bearish' || swingTrend15.trend === 'bearish_lean';
     const is15mBullish = swingTrend15.trend === 'bullish' || swingTrend15.trend === 'bullish_lean';
-    if (is15mBullish && sig.direction === 'SHORT') {
+    if (!sig.isMomentumBreakout && is15mBullish && sig.direction === 'SHORT') {
       sig.score = -99;
       sig.blocked = `SHORT blocked — 15m swing structure is ${swingTrend15.trend}: no short while trend is up`;
       continue;
     }
-    if (is15mBearish && sig.direction === 'LONG') {
+    if (!sig.isMomentumBreakout && is15mBearish && sig.direction === 'LONG') {
       sig.score = -99;
       sig.blocked = `LONG blocked — 15m swing structure is ${swingTrend15.trend}: no long while trend is down`;
       continue;
@@ -2021,17 +2118,20 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
 
     // RSI: LONG should enter on pullback (RSI 25-55), not when overbought
     //       SHORT should enter on bounce (RSI 45-75), not when oversold
-    if (sig.direction === 'LONG') {
-      if (rsi14 > 70) { sig.score = -99; sig.blocked = 'LONG rejected — RSI ' + rsi14.toFixed(0) + ' overbought, chasing'; }
-      else if (rsi14 > 55) sig.score -= 2; // slightly extended
-      else if (rsi14 >= 30 && rsi14 <= 50) sig.score += 2; // pullback zone — ideal buy
-      else if (rsi14 < 25) sig.score += 1; // oversold bounce possible
-    }
-    if (sig.direction === 'SHORT') {
-      if (rsi14 < 30) { sig.score = -99; sig.blocked = 'SHORT rejected — RSI ' + rsi14.toFixed(0) + ' oversold, chasing'; }
-      else if (rsi14 < 45) sig.score -= 2; // slightly extended
-      else if (rsi14 >= 50 && rsi14 <= 70) sig.score += 2; // bounce zone — ideal sell
-      else if (rsi14 > 75) sig.score += 1; // overbought reversal possible
+    // isMomentumBreakout bypasses RSI extremes — flash crashes push RSI into extreme zones
+    if (!sig.isMomentumBreakout) {
+      if (sig.direction === 'LONG') {
+        if (rsi14 > 70) { sig.score = -99; sig.blocked = 'LONG rejected — RSI ' + rsi14.toFixed(0) + ' overbought, chasing'; }
+        else if (rsi14 > 55) sig.score -= 2; // slightly extended
+        else if (rsi14 >= 30 && rsi14 <= 50) sig.score += 2; // pullback zone — ideal buy
+        else if (rsi14 < 25) sig.score += 1; // oversold bounce possible
+      }
+      if (sig.direction === 'SHORT') {
+        if (rsi14 < 30) { sig.score = -99; sig.blocked = 'SHORT rejected — RSI ' + rsi14.toFixed(0) + ' oversold, chasing'; }
+        else if (rsi14 < 45) sig.score -= 2; // slightly extended
+        else if (rsi14 >= 50 && rsi14 <= 70) sig.score += 2; // bounce zone — ideal sell
+        else if (rsi14 > 75) sig.score += 1; // overbought reversal possible
+      }
     }
 
     // EMA position: don't chase extended moves
@@ -2050,26 +2150,28 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     // RSI(14) on 15m candles lags 3×5m candles behind a spike. Measure it
     // directly: if price moved >1.0% in the last 3×1m candles, entering in
     // the spike direction = buying the top / selling the bottom.
-    if (sig.direction === 'LONG' && spike3mPct > 0.010) {
+    // isMomentumBreakout bypasses this — the spike IS the entry signal for breakouts
+    if (!sig.isMomentumBreakout && sig.direction === 'LONG' && spike3mPct > 0.010) {
       sig.score = -99;
       sig.blocked = `LONG blocked — 1m up-spike +${(spike3mPct * 100).toFixed(2)}% in 3 candles (chasing top)`;
     }
-    if (sig.direction === 'SHORT' && spike3mPct < -0.010) {
+    if (!sig.isMomentumBreakout && sig.direction === 'SHORT' && spike3mPct < -0.010) {
       sig.score = -99;
       sig.blocked = `SHORT blocked — 1m down-spike ${(spike3mPct * 100).toFixed(2)}% in 3 candles (chasing bottom)`;
     }
 
     // Price position in range: LONG must be near the LOW, SHORT near the HIGH.
     // Hard block if price is at the wrong extreme — never buy tops, never sell bottoms.
+    // isMomentumBreakout bypasses range extremes — breakouts start FROM extremes by definition
     if (sig.direction === 'LONG') {
-      if (priceInRange > 0.80) {
+      if (!sig.isMomentumBreakout && priceInRange > 0.80) {
         sig.score = -99;
         sig.blocked = `LONG blocked — price at ${(priceInRange * 100).toFixed(0)}% of 5h range (top — should SHORT not LONG)`;
       } else if (priceInRange < 0.35) sig.score += 2; // near the bottom — ideal HL/LL entry
       else if (priceInRange > 0.65) sig.score -= 3;   // upper half but not blocked — risky
     }
     if (sig.direction === 'SHORT') {
-      if (priceInRange < 0.20) {
+      if (!sig.isMomentumBreakout && priceInRange < 0.20) {
         sig.score = -99;
         sig.blocked = `SHORT blocked — price at ${(priceInRange * 100).toFixed(0)}% of 5h range (bottom — should LONG not SHORT)`;
       } else if (priceInRange > 0.75) sig.score += 4; // at the very top — ideal SHORT zone
@@ -2089,12 +2191,13 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     }
 
     // 1h trend alignment — hard block for counter-trend, bonus for with-trend
-    if (sig.direction === 'LONG' && h1Trend === 'bearish') {
+    // isMomentumBreakout bypasses — flash crashes happen before 1h trend flips
+    if (!sig.isMomentumBreakout && sig.direction === 'LONG' && h1Trend === 'bearish') {
       sig.score = -99;
       sig.blocked = 'LONG blocked — 1h EMA9 < EMA21 (1h downtrend): no long against higher-TF trend';
       continue;
     }
-    if (sig.direction === 'SHORT' && h1Trend === 'bullish') {
+    if (!sig.isMomentumBreakout && sig.direction === 'SHORT' && h1Trend === 'bullish') {
       sig.score = -99;
       sig.blocked = 'SHORT blocked — 1h EMA9 > EMA21 (1h uptrend): no short against higher-TF trend';
       continue;
@@ -2104,13 +2207,14 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
 
     // BTC market correlation: don't fight BTC's direction on altcoins
     // When BTC is clearly bullish, shorting alts is fighting the market
+    // isMomentumBreakout bypasses — alt flash crashes can happen even when BTC is bullish
     if (symbol !== 'BTCUSDT') {
-      if (btcTrend === 'bullish' && sig.direction === 'SHORT') {
+      if (!sig.isMomentumBreakout && btcTrend === 'bullish' && sig.direction === 'SHORT') {
         sig.score = -99;
         sig.blocked = 'SHORT blocked — BTC is bullish, alts follow BTC';
         continue;
       }
-      if (btcTrend === 'bearish' && sig.direction === 'LONG') {
+      if (!sig.isMomentumBreakout && btcTrend === 'bearish' && sig.direction === 'LONG') {
         sig.score = -99;
         sig.blocked = 'LONG blocked — BTC is bearish, alts follow BTC';
         continue;
