@@ -29,8 +29,8 @@ const V2_TRAIL_GAP_PCT     = 0.10; // gap on subsequent steps (10%); first step 
 
 // Only accept 15m swing points formed within last N bars
 const SWING15_RECENCY_BARS = 8;
-// Only accept 1m confirmation swing within last N bars
-const SWING1_RECENCY_BARS  = 5;
+// Only accept 1m confirmation swing within last N bars — tight so entry is close to the swing
+const SWING1_RECENCY_BARS  = 2;
 
 // ── Candle parser ─────────────────────────────────────────────
 

@@ -1529,11 +1529,30 @@ async function executeForAllUsers(pick) {
           return;
         }
 
-        // Cooldown: don't re-enter same symbol + same direction within 2 hours after close.
-        // "closed_at IS NULL OR closed_at > NOW() - INTERVAL '2 hours'" handles trades that
-        // were marked CLOSED without a timestamp (treated as just-closed).
-        // Checks across ALL api keys for this user — manual close on any key blocks all keys.
-        const recentClosed = await db.query(
+        // Cooldown rules — both apply per symbol per user across all API keys:
+        //   1. Any direction:  30-min cooldown after any trade closes on this symbol.
+        //      Prevents the bot immediately flipping LONG→SHORT or SHORT→LONG.
+        //   2. Same direction: 2-hour cooldown before re-entering the same direction.
+        //      Prevents chasing the same setup immediately after a loss.
+
+        // Rule 1: 30-min any-direction cooldown
+        const anyRecentClosed = await db.query(
+          `SELECT id, closed_at, direction FROM trades
+           WHERE user_id = $1 AND symbol = $2
+             AND status IN ('WIN','LOSS','TP','SL','CLOSED')
+             AND (closed_at IS NULL OR closed_at > NOW() - INTERVAL '30 minutes')
+           ORDER BY COALESCE(closed_at, NOW()) DESC LIMIT 1`,
+          [key.user_id, symbol]
+        );
+        if (anyRecentClosed.length > 0) {
+          const closedDir = anyRecentClosed[0].direction;
+          const isFlip = closedDir !== pick.direction;
+          userLog.trade(`User ${key.email}: ${symbol} ${pick.direction} blocked — 30-min cooldown after ${closedDir} close (${isFlip ? 'flip' : 'same dir'})`);
+          return;
+        }
+
+        // Rule 2: 2-hour same-direction cooldown
+        const sameRecentClosed = await db.query(
           `SELECT id, closed_at, direction FROM trades
            WHERE user_id = $1 AND symbol = $2 AND direction = $3
              AND status IN ('WIN','LOSS','TP','SL','CLOSED')
@@ -1541,8 +1560,8 @@ async function executeForAllUsers(pick) {
            ORDER BY COALESCE(closed_at, NOW()) DESC LIMIT 1`,
           [key.user_id, symbol, pick.direction]
         );
-        if (recentClosed.length > 0) {
-          userLog.trade(`User ${key.email}: ${symbol} ${pick.direction} recently closed — 2h cooldown active, skipping`);
+        if (sameRecentClosed.length > 0) {
+          userLog.trade(`User ${key.email}: ${symbol} ${pick.direction} recently closed — 2h same-direction cooldown active, skipping`);
           return;
         }
 
