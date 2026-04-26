@@ -30,7 +30,7 @@ const PRIVATE_CHATS  = TELEGRAM_CHATS.filter(id => !id.startsWith('-'));
 
 // ── CONFIG (defaults — AI may override some via getOptimalParams) ─
 const BTC_ETH_SYMBOLS = new Set(['BTCUSDT', 'ETHUSDT']);
-// Tokens priced $1000+ use 100x leverage — everything else 20x
+// All tokens use 100x leverage
 const HIGH_PRICE_SYMBOLS = new Set([
   'BTCUSDT', 'ETHUSDT',
 ]);
@@ -61,8 +61,7 @@ let lastBitunixSync = 0;
 
 // ── SL/TP Config ──────────────────────────────────────────
 // Capital $100 → trade $10 → SL = $3 (30% of the $10 margin).
-// In price terms: SL_PCT / leverage = 0.30 / 20 = 1.5% for BNB/SOL at 20x
-//                                   = 0.30 / 100 = 0.3% for BTC/ETH at 100x
+// In price terms: SL_PCT / leverage = 0.30 / 100 = 0.3% price move at 100x (all tokens)
 const SL_PCT = 0.30;   // 30% of margin = max loss per trade (default; active version may override)
 const TP_PCT = 0.45;   // reference TP — trailing SL handles the actual exit
 
@@ -232,18 +231,9 @@ async function isTokenBanned(symbol) {
   }
 }
 
-// AI-tuned leverage — params come from getOptimalParams()
+// AI-tuned leverage — all tokens use 100x
 function getLeverage(symbol, price, params = {}) {
-  // Tokens priced $100+ use 100x — small % moves need higher leverage to hit TP
-  if (HIGH_PRICE_SYMBOLS.has(symbol) || price >= 100) {
-    return params.LEV_BTC_ETH || 100;
-  }
-  // Mid-price tokens ($10-99) use 50x
-  if (price >= 10) {
-    return params.LEV_MID || 50;
-  }
-  // Low-price tokens use 20x
-  return params.LEV_ALT || 20;
+  return params.LEV_BTC_ETH || 100;
 }
 
 // ── UTILS ─────────────────────────────────────────────────────
