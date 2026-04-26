@@ -2025,6 +2025,28 @@ router.delete('/strategy-versions/:id', async (req, res) => {
   }
 });
 
+// DELETE /api/dashboard/optimizer-versions/:hash — remove optimizer rows by genome hash
+// Deletes ALL strategy_search_results rows that share the same genome (same strategy config)
+router.delete('/optimizer-versions/:hash', async (req, res) => {
+  try {
+    const adminCheck = await query(`SELECT is_admin FROM users WHERE id = $1`, [req.userId]);
+    if (!adminCheck[0]?.is_admin) return res.status(403).json({ error: 'Admin only' });
+
+    const hash = req.params.hash;
+    if (!hash || hash.length < 8) return res.status(400).json({ error: 'Invalid genome hash' });
+
+    // MD5(genome::text) is the same grouping key used when building the versions list
+    const result = await query(
+      `DELETE FROM strategy_search_results WHERE MD5(genome::text) = $1`,
+      [hash]
+    );
+    const deleted = result.rowCount ?? 0;
+    res.json({ ok: true, deleted });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // POST /api/dashboard/strategy-versions/custom
 // Admin creates a named version with hand-tuned parameters — no genome deduplication,
 // each manual save is kept as a distinct entry so the admin can track their experiments.

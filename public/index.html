@@ -3085,7 +3085,7 @@ EMAIL_FROM=MCT &lt;a83c06001@smtp-brevo.com&gt;</pre>
            (activeVersion._tr  == null || String(activeVersion._tr)  === String(v.total_trades)))
         );
 
-        var canDelete = !isActive && !!v._ai_id; // only ai_version rows have a deletable id
+        var canDelete = !isActive && (!!v._ai_id || !!v._genome_hash); // ai_version rows use _ai_id; optimizer rows use _genome_hash
 
         var wrColor   = wr >= 80 ? '#d4af37' : wr >= 70 ? '#22c55e' : wr >= 60 ? '#86efac' : '#94a3b8';
         var rowBg     = isActive ? 'rgba(212,175,55,0.10)' : (wr >= 80 ? 'rgba(212,175,55,0.04)' : 'transparent');
@@ -3100,9 +3100,11 @@ EMAIL_FROM=MCT &lt;a83c06001@smtp-brevo.com&gt;</pre>
 
         // Checkbox — only shown for deletable rows (ai_version with an id)
         var checkbox = canDelete
-          ? '<input type="checkbox" class="ver-chk" data-id="' + v._ai_id + '" ' +
-            'title="Select this version for bulk delete" style="cursor:pointer;width:15px;height:15px;" ' +
-            'onchange="versionsUpdateBulkBar()">'
+          ? '<input type="checkbox" class="ver-chk"' +
+            ' data-id="' + (v._ai_id || '') + '"' +
+            ' data-hash="' + (v._genome_hash || '') + '"' +
+            ' title="Select this version for bulk delete" style="cursor:pointer;width:15px;height:15px;"' +
+            ' onchange="versionsUpdateBulkBar()">'
           : (isActive ? '<span title="Active version — cannot be selected for deletion" style="font-size:0.7rem;">🔒</span>' : '');
 
         // Activate button
@@ -3142,9 +3144,13 @@ EMAIL_FROM=MCT &lt;a83c06001@smtp-brevo.com&gt;</pre>
               'style="background:none;border:1px solid var(--color-border-muted);border-radius:4px;color:var(--color-text-muted);font-size:0.7rem;padding:3px 7px;cursor:pointer;">📋</button>' +
             activateBtn +
             (canDelete
-              ? '<button onclick="deleteAiVersion(' + v._ai_id + ')" ' +
-                'title="Delete this single version permanently. Active (LIVE) versions are protected." ' +
-                'style="background:none;border:1px solid rgba(239,68,68,0.4);border-radius:4px;color:#ef4444;font-size:0.7rem;padding:3px 7px;cursor:pointer;">🗑</button>'
+              ? (v._ai_id
+                  ? '<button onclick="deleteAiVersion(' + v._ai_id + ')" ' +
+                    'title="Delete this version permanently. Active (LIVE) versions are protected." ' +
+                    'style="background:none;border:1px solid rgba(239,68,68,0.4);border-radius:4px;color:#ef4444;font-size:0.7rem;padding:3px 7px;cursor:pointer;">🗑</button>'
+                  : '<button onclick="deleteOptimizerVersion(\'' + v._genome_hash + '\')" ' +
+                    'title="Delete all optimizer backtest rows with this strategy config permanently." ' +
+                    'style="background:none;border:1px solid rgba(239,68,68,0.4);border-radius:4px;color:#ef4444;font-size:0.7rem;padding:3px 7px;cursor:pointer;">🗑</button>')
               : '') +
             '</div>' +
           '</td>' +
@@ -3315,6 +3321,24 @@ EMAIL_FROM=MCT &lt;a83c06001@smtp-brevo.com&gt;</pre>
     }
     window.deleteAiVersion = deleteAiVersion;
 
+    // Delete an optimizer-source version by genome hash (removes ALL rows with that genome)
+    async function deleteOptimizerVersion(hash) {
+      if (!hash) return;
+      if (!confirm('Delete all optimizer rows with this strategy config?\nThis removes every duplicate entry with the same genome.\n\nThis cannot be undone.')) return;
+      try {
+        var r = await fetch('/api/dashboard/optimizer-versions/' + encodeURIComponent(hash), {
+          method: 'DELETE', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }
+        });
+        var d = await r.json();
+        if (!r.ok || d.error) { showVersionMsg('Delete failed: ' + (d.error || 'HTTP ' + r.status), true); return; }
+        showVersionMsg('Deleted ' + (d.deleted || 'all') + ' row(s) for this genome.', false);
+        await loadStrategyVersions();
+      } catch(e) {
+        showVersionMsg('Delete failed: ' + e.message, true);
+      }
+    }
+    window.deleteOptimizerVersion = deleteOptimizerVersion;
+
     // ── Multi-select helpers ──────────────────────────────────
 
     // Update the bulk-action bar count and visibility
@@ -3344,27 +3368,40 @@ EMAIL_FROM=MCT &lt;a83c06001@smtp-brevo.com&gt;</pre>
       versionsUpdateBulkBar();
     }
 
-    // Delete all currently checked versions
+    // Delete all currently checked versions (handles both ai_version and optimizer rows)
     async function deleteSelectedAiVersions() {
       var checked = Array.from(document.querySelectorAll('.ver-chk:checked'));
       if (!checked.length) return;
-      var ids = checked.map(function(cb) { return parseInt(cb.dataset.id); }).filter(Boolean);
-      if (!confirm('Delete ' + ids.length + ' selected version(s) permanently?\n\nThis cannot be undone. Active (LIVE) versions will be skipped automatically.')) return;
+
+      // Split by type
+      var aiIds    = checked.map(function(cb) { return parseInt(cb.dataset.id); }).filter(Boolean);
+      var optHashes = [...new Set(checked.map(function(cb) { return cb.dataset.hash; }).filter(Boolean))];
+      var total = aiIds.length + optHashes.length;
+
+      if (!confirm('Delete ' + total + ' selected version(s) permanently?\n\nThis cannot be undone. Active (LIVE) versions will be skipped automatically.')) return;
 
       var deleted = 0, skipped = 0, failed = 0;
-      showVersionMsg('Deleting ' + ids.length + ' version(s)…', false);
+      showVersionMsg('Deleting ' + total + ' version(s)…', false);
 
-      for (var i = 0; i < ids.length; i++) {
+      // Delete ai_version rows
+      for (var i = 0; i < aiIds.length; i++) {
         try {
-          var r = await fetch('/api/admin/ai-versions/' + ids[i], { method: 'DELETE', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' } });
+          var r = await fetch('/api/admin/ai-versions/' + aiIds[i], { method: 'DELETE', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' } });
           var d = await r.json();
           if (!r.ok || d.error) {
-            // Active-version block = skip, not a real error
             if (d.error && d.error.includes('active')) skipped++;
             else failed++;
-          } else {
-            deleted++;
-          }
+          } else { deleted++; }
+        } catch(_) { failed++; }
+      }
+
+      // Delete optimizer rows by genome hash (each hash deletes all duplicates of that genome)
+      for (var j = 0; j < optHashes.length; j++) {
+        try {
+          var r2 = await fetch('/api/dashboard/optimizer-versions/' + encodeURIComponent(optHashes[j]), { method: 'DELETE', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' } });
+          var d2 = await r2.json();
+          if (!r2.ok || d2.error) { failed++; }
+          else { deleted += (d2.deleted || 1); }
         } catch(_) { failed++; }
       }
 
