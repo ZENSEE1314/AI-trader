@@ -295,7 +295,7 @@ function isGoodTradingSession() {
 async function analyzeLHHL(ticker, params, dailyBiasCache, kronosPredictions = null, smcCfg = {}) {
   const symbol = ticker.symbol;
   const EMA_PERIOD      = smcCfg['strat.smc.ema_period']     || 200;
-  const MAX_CANDLE_AGE  = smcCfg['strat.smc.max_candle_age'] || 20;
+  const MAX_CANDLE_AGE  = smcCfg['strat.smc.max_candle_age'] || 3;
   const MAX_CHASE_PCT   = smcCfg['strat.smc.max_chase_pct']  || 0.015;
   bLog.scan(`[HEARTBEAT] Analyzing ${symbol}...`);
   const price = parseFloat(ticker.lastPrice);

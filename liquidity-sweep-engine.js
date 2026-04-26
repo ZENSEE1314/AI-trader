@@ -1320,8 +1320,8 @@ function detectTrendFollowEntry(klines15m, klines3m, klines1m) {
   const is3mHL = lastSL3.price > prevSL3.price; // 3m Higher Low  → bullish pull-back
   const is3mLH = lastSH3.price < prevSH3.price; // 3m Lower  High → bearish bounce
 
-  // 3m HL/LH must be fresh — within last 10 × 3m bars (≈30 min)
-  const RECENCY_3M = 10;
+  // 3m HL/LH must be fresh — within last 3 × 3m bars (≈9 min)
+  const RECENCY_3M = 3;
   const total3 = parsed3.length;
 
   // ── Step 3: 1m entry candle ──────────────────────────────
