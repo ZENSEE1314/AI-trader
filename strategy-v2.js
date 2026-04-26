@@ -11,8 +11,9 @@
 //   SHORT bias → wait for 1m HH or LH → enter on the NEXT candle
 //
 // Stop Loss:  fixed at -30% of margin capital (leverage-adjusted price)
-// Trail:      activates at +10% capital profit → locks breakeven
-//             then locks in each 10% milestone: 10 → 20 → 30 → 40 → …
+// Trail:      activates at +30% capital profit → locks breakeven (0%)
+//             then every +10% more capital → lock steps up 10%
+//             gap always stays 30% (same as initial SL risk)
 // ============================================================
 
 const fetch = require('node-fetch');
@@ -22,8 +23,9 @@ const { getMarketIntel, applyMarketIntel, heatmapToLevels } = require('./coingla
 // ── Constants ─────────────────────────────────────────────────
 
 const V2_SL_CAPITAL_PCT    = 0.30; // initial SL: -30% of margin
-const V2_TRAIL_START_PCT   = 0.11; // trail activates at +11% capital profit (first step above 10%)
-const V2_TRAIL_STEP_PCT    = 0.10; // trail gap: 10% capital — steps lock every 10%
+const V2_TRAIL_START_PCT   = 0.30; // trail activates at +30% capital profit → lock breakeven
+const V2_TRAIL_STEP_PCT    = 0.10; // trail steps every 10% capital gain after activation
+const V2_TRAIL_GAP_PCT     = 0.30; // gap between current profit tier and locked SL (always 30%)
 
 // Only accept 15m swing points formed within last N bars
 const SWING15_RECENCY_BARS = 8;
@@ -304,7 +306,7 @@ async function detectV2Signal(symbol, leverage = 20) {
       oiTrend:     marketIntel?.oiTrend     ?? null,
       lsRatio:     marketIntel?.longRatio   ? `L${(marketIntel.longRatio*100).toFixed(0)}%/S${(marketIntel.shortRatio*100).toFixed(0)}%` : null,
       liqCluster:  nearLiq ? `$${(nearLiq.liqUsd/1e6).toFixed(1)}M @ ${nearLiq.price}` : null,
-      trailRule:   `SL=-${V2_SL_CAPITAL_PCT*100}%cap | trail@+10%cap | step+${V2_TRAIL_STEP_PCT*100}%cap`,
+      trailRule:   `SL=-${V2_SL_CAPITAL_PCT*100}%cap | trail@+${V2_TRAIL_START_PCT*100}%cap→BE | step+${V2_TRAIL_STEP_PCT*100}%cap | gap=${V2_TRAIL_GAP_PCT*100}%`,
     },
   };
 }
@@ -334,19 +336,18 @@ function calcV2TrailSL(entryPrice, curPrice, isLong, leverage, currentSl) {
   // Trail hasn't activated yet
   if (capitalPct < V2_TRAIL_START_PCT) return null;
 
-  // Highest locked milestone = floor(capitalPct × 10) / 10, min 0.30
-  // Examples:
-  //   capitalPct 0.31 → floor(3.1)/10 = 0.30
-  //   capitalPct 0.40 → floor(4.0)/10 = 0.40
-  //   capitalPct 0.55 → floor(5.5)/10 = 0.50
+  // Milestone = current step floor − 30% gap (always 30% below current tier).
+  // Activates at +30% capital → lock 0% (breakeven). Every +10% more → lock +10%.
   //
-  // NOTE: Use integer arithmetic to avoid floating-point issues.
-  //   Math.floor(0.40 / 0.10) can yield 3.9999... → floor = 3 → wrong milestone.
-  //   Multiplying by 1000 first keeps us in safe integer territory.
+  //   capitalPct 0.30 → step 3 → 3×0.10 − 0.30 = 0.00  (breakeven)
+  //   capitalPct 0.40 → step 4 → 4×0.10 − 0.30 = 0.10
+  //   capitalPct 0.55 → step 5 → 5×0.10 − 0.30 = 0.20
+  //
+  // NOTE: integer arithmetic avoids Math.floor(0.40/0.10) = 3.9999 edge case.
   const stepsRaw = Math.floor(Math.round(capitalPct * 1000) / Math.round(V2_TRAIL_STEP_PCT * 1000));
   const milestone = Math.max(
-    V2_SL_CAPITAL_PCT,
-    stepsRaw * V2_TRAIL_STEP_PCT
+    0,
+    stepsRaw * V2_TRAIL_STEP_PCT - V2_TRAIL_GAP_PCT
   );
 
   // Convert milestone capital % → price
