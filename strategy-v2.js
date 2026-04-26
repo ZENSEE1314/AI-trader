@@ -11,9 +11,9 @@
 //   SHORT bias → wait for 1m HH or LH → enter on the NEXT candle
 //
 // Stop Loss:  fixed at -30% of margin capital (leverage-adjusted price)
-// Trail:      activates at +30% capital profit → locks breakeven (0%)
-//             then every +10% more capital → lock steps up 10%
-//             gap always stays 30% (same as initial SL risk)
+// Trail:      activates at +30% capital profit → locks breakeven (0%)  [30% gap]
+//             then every +10% more capital → lock steps up 10%         [10% gap]
+//             30 → 0% | 40 → 30% | 50 → 40% | 60 → 50% | …
 // ============================================================
 
 const fetch = require('node-fetch');
@@ -25,7 +25,7 @@ const { getMarketIntel, applyMarketIntel, heatmapToLevels } = require('./coingla
 const V2_SL_CAPITAL_PCT    = 0.30; // initial SL: -30% of margin
 const V2_TRAIL_START_PCT   = 0.30; // trail activates at +30% capital profit → lock breakeven
 const V2_TRAIL_STEP_PCT    = 0.10; // trail steps every 10% capital gain after activation
-const V2_TRAIL_GAP_PCT     = 0.30; // gap between current profit tier and locked SL (always 30%)
+const V2_TRAIL_GAP_PCT     = 0.10; // gap on subsequent steps (10%); first step gap is 30%
 
 // Only accept 15m swing points formed within last N bars
 const SWING15_RECENCY_BARS = 8;
@@ -336,19 +336,18 @@ function calcV2TrailSL(entryPrice, curPrice, isLong, leverage, currentSl) {
   // Trail hasn't activated yet
   if (capitalPct < V2_TRAIL_START_PCT) return null;
 
-  // Milestone = current step floor − 30% gap (always 30% below current tier).
-  // Activates at +30% capital → lock 0% (breakeven). Every +10% more → lock +10%.
+  // First step (capitalPct 0.30–0.39): lock breakeven (0%) — 30% gap.
+  // All steps after: lock = step floor − 10% gap.
   //
-  //   capitalPct 0.30 → step 3 → 3×0.10 − 0.30 = 0.00  (breakeven)
-  //   capitalPct 0.40 → step 4 → 4×0.10 − 0.30 = 0.10
-  //   capitalPct 0.55 → step 5 → 5×0.10 − 0.30 = 0.20
+  //   capitalPct 0.30 → step 3 → first tier  → milestone = 0.00  (breakeven, 30% gap)
+  //   capitalPct 0.40 → step 4 → 4×0.10−0.10 → milestone = 0.30  (10% gap)
+  //   capitalPct 0.50 → step 5 → 5×0.10−0.10 → milestone = 0.40  (10% gap)
   //
   // NOTE: integer arithmetic avoids Math.floor(0.40/0.10) = 3.9999 edge case.
   const stepsRaw = Math.floor(Math.round(capitalPct * 1000) / Math.round(V2_TRAIL_STEP_PCT * 1000));
-  const milestone = Math.max(
-    0,
-    stepsRaw * V2_TRAIL_STEP_PCT - V2_TRAIL_GAP_PCT
-  );
+  const milestone = stepsRaw <= 3
+    ? 0                                             // first tier → breakeven
+    : Math.max(0, stepsRaw * V2_TRAIL_STEP_PCT - V2_TRAIL_GAP_PCT); // 10% gap
 
   // Convert milestone capital % → price
   const milestonePrice = isLong
