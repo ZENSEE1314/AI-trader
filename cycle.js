@@ -30,9 +30,9 @@ const PRIVATE_CHATS  = TELEGRAM_CHATS.filter(id => !id.startsWith('-'));
 
 // ── CONFIG (defaults — AI may override some via getOptimalParams) ─
 const BTC_ETH_SYMBOLS = new Set(['BTCUSDT', 'ETHUSDT']);
-// All tokens use 100x leverage
+// These tokens trade at 100x leverage
 const HIGH_PRICE_SYMBOLS = new Set([
-  'BTCUSDT', 'ETHUSDT',
+  'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT',
 ]);
 
 const CONFIG = {
@@ -61,7 +61,9 @@ let lastBitunixSync = 0;
 
 // ── SL/TP Config ──────────────────────────────────────────
 // Capital $100 → trade $10 → SL = $3 (30% of the $10 margin).
-// In price terms: SL_PCT / leverage = 0.30 / 100 = 0.3% price move at 100x (all tokens)
+// In price terms: SL_PCT / leverage
+//   BTC/ETH/SOL/BNB at 100x → 0.30/100 = 0.3% price move
+//   All others       at  20x → 0.30/20  = 1.5% price move
 const SL_PCT = 0.30;   // 30% of margin = max loss per trade (default; active version may override)
 const TP_PCT = 0.45;   // reference TP — trailing SL handles the actual exit
 
@@ -231,9 +233,12 @@ async function isTokenBanned(symbol) {
   }
 }
 
-// AI-tuned leverage — all tokens use 100x
+// Leverage by token: BTC/ETH/SOL/BNB = 100x, all others = 20x
 function getLeverage(symbol, price, params = {}) {
-  return params.LEV_BTC_ETH || 100;
+  if (HIGH_PRICE_SYMBOLS.has(symbol)) {
+    return params.LEV_BTC_ETH || 100;
+  }
+  return params.LEV_ALT || 20;
 }
 
 // ── UTILS ─────────────────────────────────────────────────────
