@@ -1929,7 +1929,6 @@
         btn.classList.add('strat-subtab-active');
         document.getElementById('strat-panel-params').style.display    = subtab === 'params'    ? '' : 'none';
         document.getElementById('strat-panel-composer').style.display  = subtab === 'composer'  ? '' : 'none';
-        document.getElementById('strat-panel-overview').style.display  = subtab === 'overview'  ? '' : 'none';
         if (subtab === 'composer') loadStrategyComposer();
       });
     });
