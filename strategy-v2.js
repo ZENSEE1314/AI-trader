@@ -11,8 +11,8 @@
 //   SHORT bias → wait for 1m HH or LH → enter on the NEXT candle
 //
 // Stop Loss:  fixed at -30% of margin capital (leverage-adjusted price)
-// Trail:      activates at +31% capital profit
-//             locks in current 10% milestone as SL (30 → 40 → 50 …)
+// Trail:      activates at +10% capital profit → locks breakeven
+//             then locks in each 10% milestone: 10 → 20 → 30 → 40 → …
 // ============================================================
 
 const fetch = require('node-fetch');
@@ -22,8 +22,8 @@ const { getMarketIntel, applyMarketIntel, heatmapToLevels } = require('./coingla
 // ── Constants ─────────────────────────────────────────────────
 
 const V2_SL_CAPITAL_PCT    = 0.30; // initial SL: -30% of margin
-const V2_TRAIL_START_PCT   = 0.31; // trail activates at +31% profit
-const V2_TRAIL_STEP_PCT    = 0.30; // trail gap: 30% capital — mirrors the initial SL risk
+const V2_TRAIL_START_PCT   = 0.11; // trail activates at +11% capital profit (first step above 10%)
+const V2_TRAIL_STEP_PCT    = 0.10; // trail gap: 10% capital — steps lock every 10%
 
 // Only accept 15m swing points formed within last N bars
 const SWING15_RECENCY_BARS = 8;
@@ -304,7 +304,7 @@ async function detectV2Signal(symbol, leverage = 20) {
       oiTrend:     marketIntel?.oiTrend     ?? null,
       lsRatio:     marketIntel?.longRatio   ? `L${(marketIntel.longRatio*100).toFixed(0)}%/S${(marketIntel.shortRatio*100).toFixed(0)}%` : null,
       liqCluster:  nearLiq ? `$${(nearLiq.liqUsd/1e6).toFixed(1)}M @ ${nearLiq.price}` : null,
-      trailRule:   `SL=-${V2_SL_CAPITAL_PCT*100}%cap | trail@+${V2_TRAIL_START_PCT*100}%cap | step+${V2_TRAIL_STEP_PCT*100}%`,
+      trailRule:   `SL=-${V2_SL_CAPITAL_PCT*100}%cap | trail@+10%cap | step+${V2_TRAIL_STEP_PCT*100}%cap`,
     },
   };
 }

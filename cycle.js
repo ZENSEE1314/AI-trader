@@ -88,32 +88,40 @@ async function getActiveVersionParams() {
 const TAKER_FEE_BOTH_LEGS = 0.0008;
 
 // Trailing SL tiers — all in CAPITAL % (profit as % of margin, = price% × leverage).
-// Gap = 30% capital (same as initial SL risk) — mirrors the max-loss budget.
-// Rule: first fires when capital gain hits +30% → SL locks at breakeven (0%).
-//       every +30% more capital gain → add +30% to the locked SL.
+// Gap = 10% capital — trail steps up every 10% capital gain.
+// Rule: first fires when capital gain hits +10% → SL locks at breakeven (0%).
+//       every +10% more capital gain → locks in the previous milestone.
 //
-// At 20x leverage: +30% capital = +1.5% price move
-// At 100x leverage: +30% capital = +0.3% price move
+// At 20x leverage: +10% capital = +0.5% price move
+// At 100x leverage: +10% capital = +0.1% price move
 //
 // trigger = capital % gain needed to activate (price % × leverage)
 // lock    = capital % above entry to lock the SL at
 const TRAILING_TIERS = [
-  { trigger: 0.30, lock: 0.00 }, // +30% capital → SL locks at breakeven (0%)   — 30% gap
-  { trigger: 0.60, lock: 0.30 }, // +60% capital → SL locks at +30% capital     — 30% gap
-  { trigger: 0.90, lock: 0.60 }, // +90% capital → SL locks at +60% capital     — 30% gap
-  { trigger: 1.20, lock: 0.90 }, // +120% capital → SL locks at +90% capital    — 30% gap
-  { trigger: 1.50, lock: 1.20 }, // +150% capital → SL locks at +120% capital   — 30% gap
-  { trigger: 1.80, lock: 1.50 }, // +180% capital → SL locks at +150% capital   — 30% gap
-  { trigger: 2.10, lock: 1.80 }, // +210% capital → SL locks at +180% capital   — 30% gap
+  { trigger: 0.10, lock: 0.00 }, // +10% capital → SL locks at breakeven (0%)
+  { trigger: 0.20, lock: 0.10 }, // +20% capital → SL locks at +10%
+  { trigger: 0.30, lock: 0.20 }, // +30% capital → SL locks at +20%
+  { trigger: 0.40, lock: 0.30 }, // +40% capital → SL locks at +30%
+  { trigger: 0.50, lock: 0.40 }, // +50% capital → SL locks at +40%
+  { trigger: 0.60, lock: 0.50 }, // +60% capital → SL locks at +50%
+  { trigger: 0.70, lock: 0.60 }, // +70% capital → SL locks at +60%
+  { trigger: 0.80, lock: 0.70 }, // +80% capital → SL locks at +70%
+  { trigger: 0.90, lock: 0.80 }, // +90% capital → SL locks at +80%
+  { trigger: 1.00, lock: 0.90 }, // +100% capital → SL locks at +90%
+  { trigger: 1.10, lock: 1.00 }, // +110% capital → SL locks at +100%
+  { trigger: 1.20, lock: 1.10 }, // +120% capital → SL locks at +110%
+  { trigger: 1.50, lock: 1.40 }, // +150% capital → SL locks at +140%
+  { trigger: 2.00, lock: 1.90 }, // +200% capital → SL locks at +190%
+  { trigger: 3.00, lock: 2.90 }, // +300% capital → SL locks at +290%
 ];
 
 function getTrailingSLConfig(leverage) {
   return {
     INITIAL_SL_PCT: SL_PCT / leverage,
-    FIRST_TRIGGER: 0.30,  // Trail starts at +30% CAPITAL gain from entry
-    FIRST_SL: 0.00,       // Lock at breakeven (0% capital) — 30% gap from trigger
-    STEP_TRIGGER: 0.30,   // Every +30% more CAPITAL → add +30% to lock
-    STEP_SL: 0.30,
+    FIRST_TRIGGER: 0.10,  // Trail starts at +10% CAPITAL gain from entry
+    FIRST_SL: 0.00,       // Lock at breakeven (0% capital) — 10% gap from trigger
+    STEP_TRIGGER: 0.10,   // Every +10% more CAPITAL → step up the lock
+    STEP_SL: 0.10,
   };
 }
 
