@@ -759,12 +759,14 @@ function detectMomentumBreakout(candles15m, candles1m) {
   const vol20 = parsed1.slice(-21, -1).reduce((s, c) => s + c.volume, 0) / 20;
   if (vol20 <= 0) return null;
 
-  // Find recent 15m swing highs and lows (last 15 candles, exclude last 2 unconfirmed)
-  const swing15 = parsed15.slice(-17, -2);
+  // Use OLDER 15m candles (-30 to -8) for resistance/support — excludes the last 2 hours
+  // so a spike candle itself is not included in the resistance calculation.
+  // This lets the spike CLOSE exceed the pre-spike resistance and trigger the breakout.
+  const swing15 = parsed15.slice(-30, -8);
   const recent15Highs = swing15.map(c => c.high);
   const recent15Lows  = swing15.map(c => c.low);
-  const resistance = Math.max(...recent15Highs.slice(-8)); // highest of last 8 swings
-  const support    = Math.min(...recent15Lows.slice(-8));  // lowest  of last 8 swings
+  const resistance = Math.max(...recent15Highs.slice(-8)); // highest of pre-spike 8 bars
+  const support    = Math.min(...recent15Lows.slice(-8));  // lowest  of pre-spike 8 bars
 
   // Check the last 3 completed 1m candles for a breakout candle
   for (let i = parsed1.length - 4; i < parsed1.length - 1; i++) {
