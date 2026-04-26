@@ -88,31 +88,32 @@ async function getActiveVersionParams() {
 const TAKER_FEE_BOTH_LEGS = 0.0008;
 
 // Trailing SL tiers — all in CAPITAL % (profit as % of margin, = price% × leverage).
-// Rule: first fires when capital gain hits +30% → lock SL at +10% capital above entry.
-//       every +15% more capital gain → add another +15% to the locked SL.
+// Gap = 30% capital (same as initial SL risk) — mirrors the max-loss budget.
+// Rule: first fires when capital gain hits +30% → SL locks at breakeven (0%).
+//       every +30% more capital gain → add +30% to the locked SL.
 //
-// At 20x leverage: +30% capital = +1.5% price move (fires quickly on real moves)
+// At 20x leverage: +30% capital = +1.5% price move
 // At 100x leverage: +30% capital = +0.3% price move
 //
 // trigger = capital % gain needed to activate (price % × leverage)
 // lock    = capital % above entry to lock the SL at
 const TRAILING_TIERS = [
-  { trigger: 0.30, lock: 0.10 }, // +30% capital → SL locks +10% capital above entry
-  { trigger: 0.45, lock: 0.25 }, // +45% capital → SL locks +25% capital above entry
-  { trigger: 0.60, lock: 0.40 }, // +60% capital → SL locks +40% capital above entry
-  { trigger: 0.75, lock: 0.55 }, // +75% capital → SL locks +55% capital above entry
-  { trigger: 0.90, lock: 0.70 }, // +90% capital → SL locks +70% capital above entry
-  { trigger: 1.05, lock: 0.85 }, // +105% capital → SL locks +85% capital above entry
-  { trigger: 1.20, lock: 1.00 }, // +120% capital → SL locks +100% capital (2× margin)
+  { trigger: 0.30, lock: 0.00 }, // +30% capital → SL locks at breakeven (0%)   — 30% gap
+  { trigger: 0.60, lock: 0.30 }, // +60% capital → SL locks at +30% capital     — 30% gap
+  { trigger: 0.90, lock: 0.60 }, // +90% capital → SL locks at +60% capital     — 30% gap
+  { trigger: 1.20, lock: 0.90 }, // +120% capital → SL locks at +90% capital    — 30% gap
+  { trigger: 1.50, lock: 1.20 }, // +150% capital → SL locks at +120% capital   — 30% gap
+  { trigger: 1.80, lock: 1.50 }, // +180% capital → SL locks at +150% capital   — 30% gap
+  { trigger: 2.10, lock: 1.80 }, // +210% capital → SL locks at +180% capital   — 30% gap
 ];
 
 function getTrailingSLConfig(leverage) {
   return {
     INITIAL_SL_PCT: SL_PCT / leverage,
     FIRST_TRIGGER: 0.30,  // Trail starts at +30% CAPITAL gain from entry
-    FIRST_SL: 0.10,       // Lock at +10% CAPITAL above entry
-    STEP_TRIGGER: 0.15,   // Every +15% more CAPITAL → add +15% to lock
-    STEP_SL: 0.15,
+    FIRST_SL: 0.00,       // Lock at breakeven (0% capital) — 30% gap from trigger
+    STEP_TRIGGER: 0.30,   // Every +30% more CAPITAL → add +30% to lock
+    STEP_SL: 0.30,
   };
 }
 
@@ -481,14 +482,14 @@ async function calcCandleTrailSl(symbol, isLong, currentSlPrice) {
 //           Prevents SL from moving backwards.
 //
 // Tier logic (capital % = price % × leverage):
-//   +30% capital → lock SL at +10% capital above entry  (price: 10%/lev)
-//   +45% capital → lock SL at +25% capital above entry  (+15% step)
-//   +60% capital → lock SL at +40% capital above entry  (+15% step)
-//   ... every +15% capital gain adds +15% to the lock
+//   +30% capital → lock SL at breakeven (0% capital above entry)   30% gap
+//   +60% capital → lock SL at +30% capital above entry             30% gap
+//   +90% capital → lock SL at +60% capital above entry             30% gap
+//   ... every +30% capital gain adds +30% to the lock (gap = 30% capital)
 //
 // Example — 20x leverage, BTC entry $90,000:
-//   +1.5% price (+30% capital) → SL moves to entry + 0.5% ($90,450)
-//   +2.25% price (+45% capital) → SL moves to entry + 1.25% ($91,125)
+//   +1.5% price (+30% capital) → SL moves to entry $90,000 (breakeven)
+//   +3.0% price (+60% capital) → SL moves to entry + 1.5% ($91,350)
 function calculateTrailingStep(entryPrice, currentPrice, isLong, lastStep, leverage = 20, userTrailStepPct = 0) {
   const pricePct = isLong
     ? (currentPrice - entryPrice) / entryPrice

@@ -23,7 +23,7 @@ const { getMarketIntel, applyMarketIntel, heatmapToLevels } = require('./coingla
 
 const V2_SL_CAPITAL_PCT    = 0.30; // initial SL: -30% of margin
 const V2_TRAIL_START_PCT   = 0.31; // trail activates at +31% profit
-const V2_TRAIL_STEP_PCT    = 0.10; // lock in each 10% milestone
+const V2_TRAIL_STEP_PCT    = 0.30; // trail gap: 30% capital — mirrors the initial SL risk
 
 // Only accept 15m swing points formed within last N bars
 const SWING15_RECENCY_BARS = 8;
