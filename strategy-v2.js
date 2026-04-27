@@ -250,14 +250,19 @@ async function detectV2Signal(symbol, leverage = 20) {
 
   const price = parseFloat(klines1m[klines1m.length - 1][4]); // last 1m close
 
-  // ── VWAP bias (kept for signal context only — no longer blocks entry) ──
-  // Spikes and flash moves START from the wrong side of VWAP — blocking them
-  // by VWAP direction caused the bot to miss the entry entirely.
+  // ── VWAP gate: above VWAP → LONG only · below VWAP → SHORT only ──
+  // Spikes are caught by detectMomentumBreakout (bypasses all gates) — not V2.
+  // V2 is a structure strategy and must respect VWAP direction.
   const vwapBias = getVwapBias(klines15m, price);
+  if (vwapBias === 'unknown') return null;
 
   // ── Step 1: 15m swing setup ───────────────────────────────────
   const swing15 = detect15mSwing(klines15m);
   if (!swing15) return null;
+
+  // Block direction against VWAP: above VWAP → no SHORT · below VWAP → no LONG
+  if (vwapBias === 'above' && swing15.direction === 'SHORT') return null;
+  if (vwapBias === 'below' && swing15.direction === 'LONG')  return null;
 
   // ── Funding rate / OI hard block ──────────────────────────────
   const intel = applyMarketIntel(marketIntel, swing15.direction);

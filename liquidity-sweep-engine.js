@@ -2078,15 +2078,18 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     }
     const isVwapBearish = vwapBandPos === 'below_mid' || vwapBandPos === 'below_lower';
     const isVwapBullish = vwapBandPos === 'above_mid' || vwapBandPos === 'above_upper';
-    if (isVwapBearish && sig.direction === 'LONG') {
-      sig.score = -99;
-      sig.blocked = `LONG blocked — price below VWAP (mid=${vwapMid?.toFixed(4)}, price=${price.toFixed(4)}): bearish side, no longs until price rises above VWAP`;
-      continue;
-    }
-    if (isVwapBullish && sig.direction === 'SHORT') {
-      sig.score = -99;
-      sig.blocked = `SHORT blocked — price above VWAP (mid=${vwapMid?.toFixed(4)}, price=${price.toFixed(4)}): bullish side, no shorts until price falls below VWAP`;
-      continue;
+    // Momentum Breakout bypasses VWAP gate — spikes start from the wrong VWAP side by definition
+    if (!sig.isMomentumBreakout) {
+      if (isVwapBearish && sig.direction === 'LONG') {
+        sig.score = -99;
+        sig.blocked = `LONG blocked — price below VWAP (mid=${vwapMid?.toFixed(4)}, price=${price.toFixed(4)}): bearish side, no longs until price rises above VWAP`;
+        continue;
+      }
+      if (isVwapBullish && sig.direction === 'SHORT') {
+        sig.score = -99;
+        sig.blocked = `SHORT blocked — price above VWAP (mid=${vwapMid?.toFixed(4)}, price=${price.toFixed(4)}): bullish side, no shorts until price falls below VWAP`;
+        continue;
+      }
     }
     // Reward entries deep in the correct zone (outside bands = strong confirmation)
     if (vwapBandPos === 'above_upper' && sig.direction === 'LONG')  sig.score += 2;
