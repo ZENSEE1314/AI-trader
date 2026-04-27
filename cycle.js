@@ -634,10 +634,10 @@ async function openTrade(client, pick, wallet) {
   const floorQ = (q) => Math.floor(q * Math.pow(10, qtyPrec)) / Math.pow(10, qtyPrec);
   const fmtP = (p) => parseFloat(p.toFixed(pricePrec));
 
-  // SL price distance = (target net loss − fees) / leverage
-  // Fees = taker 0.04% × 2 sides × leverage → must be deducted so NET loss ≤ SL_PCT
-  const feesCapitalPct = TAKER_FEE_BOTH_LEGS * leverage; // e.g. 100x → 8%, 20x → 1.6%
-  let slPricePct = Math.max(0, SL_PCT - feesCapitalPct) / leverage;
+  // SL price distance = SL_PCT / leverage (gross price loss, fees accepted on top)
+  // At 100x: 0.15/100 = 0.15% price move → 15% capital price loss + 8% fees = ~23% total
+  // At  20x: 0.15/20  = 0.75% price move → 15% capital price loss + 1.6% fees = ~17% total
+  let slPricePct = SL_PCT / leverage;
   const tpPricePct = TP_PCT / leverage;
 
   // Liquidation guard: SL must not exceed liquidation distance
@@ -1656,9 +1656,9 @@ async function executeForAllUsers(pick) {
         // key.trailing_sl_step is already stored as capital % (e.g. 1.2 = 1.2% capital per step)
         const userTrailStep = dirTrail ?? parseFloat(key.trailing_sl_step) ?? 1.2;
 
-        // SL price distance: (target net loss − fees) / leverage so NET loss ≤ SL_PCT
-        const userFeesCapPct = TAKER_FEE_BOTH_LEGS * userLev;
-        let slPricePct = dirSl != null ? dirSl : (Math.max(0, SL_PCT - userFeesCapPct) / userLev);
+        // SL price distance = SL_PCT / leverage (gross; fees accepted on top)
+        // 100x: 0.15/100 = 0.15% price → ~23% total loss incl. fees — well under 50%
+        let slPricePct = dirSl != null ? dirSl : (SL_PCT / userLev);
         const tpPricePct = dirTp != null && dirTp > 0 ? dirTp : (TP_PCT / userLev);
 
         // Liquidation guard
