@@ -23,9 +23,9 @@ const { getMarketIntel, applyMarketIntel, heatmapToLevels } = require('./coingla
 // ── Constants ─────────────────────────────────────────────────
 
 const V2_SL_CAPITAL_PCT    = 0.15; // initial SL: -15% of margin
-const V2_TRAIL_START_PCT   = 0.30; // trail activates at +30% capital profit → lock breakeven
+const V2_TRAIL_START_PCT   = 0.20; // trail activates at +20% capital profit → lock breakeven
 const V2_TRAIL_STEP_PCT    = 0.10; // trail steps every 10% capital gain after activation
-const V2_TRAIL_GAP_PCT     = 0.10; // gap on subsequent steps (10%); first step gap is 30%
+const V2_TRAIL_GAP_PCT     = 0.10; // gap on subsequent steps (10%); first step gap is 20%
 
 // Only accept 15m swing points formed within last N bars
 const SWING15_RECENCY_BARS = 8;
@@ -352,8 +352,8 @@ function calcV2TrailSL(entryPrice, curPrice, isLong, leverage, currentSl) {
   //
   // NOTE: integer arithmetic avoids Math.floor(0.40/0.10) = 3.9999 edge case.
   const stepsRaw = Math.floor(Math.round(capitalPct * 1000) / Math.round(V2_TRAIL_STEP_PCT * 1000));
-  const milestone = stepsRaw <= 3
-    ? 0                                             // first tier → breakeven
+  const milestone = stepsRaw <= 2
+    ? 0                                             // first tier (+20%) → breakeven (20% gap)
     : Math.max(0, stepsRaw * V2_TRAIL_STEP_PCT - V2_TRAIL_GAP_PCT); // 10% gap
 
   // Convert milestone capital % → price

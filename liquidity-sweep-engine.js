@@ -1149,8 +1149,10 @@ function detectBRR(candles1h, candles15m, candles1m, cfg = {}) {
 // ONLY fires during institutional session windows (Asia/Europe/US open).
 // Trailing SL handles exit — no fixed TP (per PDF rule).
 
-function detectSMCStructureTrade(candles15m, candles3m, candles1m, h1Trend = 'neutral') {
-  if (candles15m.length < 60 || candles3m.length < 20 || candles1m.length < 10) return null;
+// NOTE: Previously took a candles3m parameter for the EMA alignment step.
+// Now uses 15m EMA9/21 throughout — more reliable, no extra TF needed.
+function detectSMCStructureTrade(candles15m, candles1m, h1Trend = 'neutral') {
+  if (candles15m.length < 60 || candles1m.length < 10) return null;
 
   // ── STEP 1: EMA55 strength on 15m ──────────────────────────
   // 55 × 15min ≈ 13.75h — reliable medium-term trend proxy
@@ -1161,13 +1163,13 @@ function detectSMCStructureTrade(candles15m, candles3m, candles1m, h1Trend = 'ne
   const structure = detectCurvedStructure(candles15m);
   if (!structure) return null;
 
-  // ── STEP 3: 3m EMA alignment ───────────────────────────────
-  const closes3 = candles3m.map(c => c.close);
-  const ema9_3m  = calcEMA(closes3, 9);
-  const ema21_3m = calcEMA(closes3, 21);
-  if (!ema9_3m || !ema21_3m) return null;
-  const trend3Bullish = ema9_3m > ema21_3m;
-  const trend3Bearish = ema9_3m < ema21_3m;
+  // ── STEP 3: 15m EMA9/21 alignment (replaces former 3m EMA check) ─────────
+  const closes15 = candles15m.map(c => c.close);
+  const ema9_15m  = calcEMA(closes15, 9);
+  const ema21_15m = calcEMA(closes15, 21);
+  if (!ema9_15m || !ema21_15m) return null;
+  const trend3Bullish = ema9_15m > ema21_15m; // keep variable name for compatibility
+  const trend3Bearish = ema9_15m < ema21_15m;
 
   // ── STEP 4: 1m trigger ─────────────────────────────────────
   const last1 = candles1m[candles1m.length - 1];
@@ -1267,16 +1269,16 @@ function detectSMCStructureTrade(candles15m, candles3m, candles1m, h1Trend = 'ne
 //  3m HL/LH must be within last 10 × 3m bars (≈30 min) — keeps entries fresh.
 // ──────────────────────────────────────────────────────────
 
-function detectTrendFollowEntry(klines15m, klines3m, klines1m) {
+// NOTE: Previously used 3m candles for the intermediate step. Upgraded to 15m throughout.
+// 15m structure is more reliable: fewer false pivots, matches higher-TF context better.
+function detectTrendFollowEntry(klines15m, klines1m) {
   if (!klines15m || klines15m.length < 30) return null;
-  if (!klines3m  || klines3m.length  < 10) return null;
   if (!klines1m  || klines1m.length  <  3) return null;
 
   const parsed15 = klines15m.map(parseCandle);
-  const parsed3  = klines3m.map(parseCandle);
   const parsed1  = klines1m.map(parseCandle);
 
-  // ── Step 1: 15m trend — 2-bar pivot swing detection ─────
+  // ── Step 1: 15m macro trend — 2-bar pivot swing detection ─────
   const sh15 = [];
   const sl15 = [];
   for (let i = 2; i < parsed15.length - 2; i++) {
@@ -1301,81 +1303,54 @@ function detectTrendFollowEntry(klines15m, klines3m, klines1m) {
 
   if (!isBullTrend && !isBearTrend) return null;
 
-  // ── Step 2: 3m swing — 1-bar pivot (responsive for entry timing) ──
-  // Confirmed pivot at index i requires bars i-1 and i+1 to exist.
-  // Most recent confirmed swing is at parsed3.length - 2.
-  const sh3 = [];
-  const sl3 = [];
-  for (let i = 1; i < parsed3.length - 1; i++) {
-    if (parsed3[i].high > parsed3[i - 1].high && parsed3[i].high > parsed3[i + 1].high)
-      sh3.push({ price: parsed3[i].high, index: i });
-    if (parsed3[i].low  < parsed3[i - 1].low  && parsed3[i].low  < parsed3[i + 1].low)
-      sl3.push({ price: parsed3[i].low,  index: i });
-  }
-  if (sl3.length < 2 || sh3.length < 2) return null;
+  // ── Step 2: 15m entry zone — is price near the last HL / LH? ──────────────
+  // No more 3m intermediate step. Instead: confirm price is still in the entry zone
+  // (within 2% of the 15m HL for longs, within 2% of the 15m LH for shorts).
+  // A 15m HL/LH pivot that is within the last 6 bars (≈90 min) is still fresh.
+  const RECENCY_15M = 6;
+  const total15 = parsed15.length;
+  const hlFresh = (total15 - 1 - lastSL15.index) <= RECENCY_15M;
+  const lhFresh = (total15 - 1 - lastSH15.index) <= RECENCY_15M;
 
-  const lastSL3 = sl3[sl3.length - 1];
-  const prevSL3 = sl3[sl3.length - 2];
-  const lastSH3 = sh3[sh3.length - 1];
-  const prevSH3 = sh3[sh3.length - 2];
-
-  const is3mHL = lastSL3.price > prevSL3.price; // 3m Higher Low  → bullish pull-back
-  const is3mLH = lastSH3.price < prevSH3.price; // 3m Lower  High → bearish bounce
-
-  // 3m HL/LH must be fresh — within last 3 × 3m bars (≈9 min)
-  const RECENCY_3M = 3;
-  const total3 = parsed3.length;
-
-  // ── Step 3: 1m entry candle ──────────────────────────────
+  // ── Step 3: 1m entry candle ─────────────────────────────────
   const last1  = parsed1[parsed1.length - 1];
   const price  = last1.close;
 
-  // ── LONG: 15m HH+HL  +  3m HL  +  next 1m green ────────
-  if (
-    isBullTrend &&
-    is3mHL &&
-    (total3 - lastSL3.index) <= RECENCY_3M &&
-    isGreenCandle(last1)
-  ) {
-    const hlLevel3m = lastSL3.price;
-    // Price should still be near the 3m HL (not already run far above it)
-    const pctAbove = (price - hlLevel3m) / hlLevel3m;
-    if (pctAbove >= 0 && pctAbove <= 0.015) {
+  // ── LONG: 15m HH+HL  +  fresh HL  +  price near HL  +  1m green ────────
+  if (isBullTrend && hlFresh && isGreenCandle(last1)) {
+    const hlLevel = lastSL15.price;
+    const pctAbove = (price - hlLevel) / hlLevel;
+    if (pctAbove >= 0 && pctAbove <= 0.020) { // price within 2% above the 15m HL
       return {
         direction:  'LONG',
         setup:      'TREND_FOLLOW_HL',
         entryPrice: price,
-        sl:         hlLevel3m * 0.997, // SL just below the 3m HL
+        sl:         hlLevel * 0.997,
         trend:      'bullish_HH_HL',
-        hlLevel3m,
+        hlLevel15m: hlLevel,
         tf15: `HH(${prevSH15.price.toFixed(4)}→${lastSH15.price.toFixed(4)})`
             + `+HL(${prevSL15.price.toFixed(4)}→${lastSL15.price.toFixed(4)})`,
-        tf3:  `3m_HL(${prevSL3.price.toFixed(4)}→${lastSL3.price.toFixed(4)})`,
+        tf3:  `15m_HL=${hlLevel.toFixed(4)}`,
         tf1:  'next_1m_green_entry',
       };
     }
   }
 
-  // ── SHORT: 15m LH+LL  +  3m LH  +  next 1m red ─────────
-  if (
-    isBearTrend &&
-    is3mLH &&
-    (total3 - lastSH3.index) <= RECENCY_3M &&
-    isRedCandle(last1)
-  ) {
-    const lhLevel3m = lastSH3.price;
-    const pctBelow = (lhLevel3m - price) / lhLevel3m;
-    if (pctBelow >= 0 && pctBelow <= 0.015) {
+  // ── SHORT: 15m LH+LL  +  fresh LH  +  price near LH  +  1m red ─────────
+  if (isBearTrend && lhFresh && isRedCandle(last1)) {
+    const lhLevel = lastSH15.price;
+    const pctBelow = (lhLevel - price) / lhLevel;
+    if (pctBelow >= 0 && pctBelow <= 0.020) { // price within 2% below the 15m LH
       return {
         direction:  'SHORT',
         setup:      'TREND_FOLLOW_LH',
         entryPrice: price,
-        sl:         lhLevel3m * 1.003, // SL just above the 3m LH
+        sl:         lhLevel * 1.003,
         trend:      'bearish_LL_LH',
-        lhLevel3m,
+        lhLevel15m: lhLevel,
         tf15: `LH(${prevSH15.price.toFixed(4)}→${lastSH15.price.toFixed(4)})`
             + `+LL(${prevSL15.price.toFixed(4)}→${lastSL15.price.toFixed(4)})`,
-        tf3:  `3m_LH(${prevSH3.price.toFixed(4)}→${lastSH3.price.toFixed(4)})`,
+        tf3:  `15m_LH=${lhLevel.toFixed(4)}`,
         tf1:  'next_1m_red_entry',
       };
     }
@@ -1384,122 +1359,18 @@ function detectTrendFollowEntry(klines15m, klines3m, klines1m) {
   return null;
 }
 
-// ── MCT Session Windows (from PDF strategy) ────────────────
-// Only trade during the 3 institutional opening windows.
-// Outside these windows: institutions are not active, moves are unreliable.
-//
-// Asia-Pacific:  23:00–02:00 UTC  (7:00–10:00 AM SGT)
-// European:      07:00–10:00 UTC  (3:00–6:00 PM SGT)
-// U.S.:          12:00–16:00 UTC  (8:00 PM–12:00 AM SGT)
+// ── No session restrictions — trade 24/7 ───────────────────
 
-const SESSION_WINDOWS = [
-  { name: 'Asia',   startH: 23, endH: 2  },  // wraps midnight
-  { name: 'Europe', startH: 7,  endH: 10 },
-  { name: 'US',     startH: 12, endH: 16 },
-];
+// Stub kept so cycle.js import of recordDailyTrade doesn't break
+function recordDailyTrade() {}
+function checkDailyLimits() { return { canTrade: true }; }
+function getDailyTradeLimit() { return Infinity; }
+function isGoodTradingSession() { return true; }
+function getActiveSession() { return null; }
+function isAvoidTime() { return false; }
+function isSessionOpenBlackout() { return false; }
 
-// Hours and minutes to AVOID entering (per PDF):
-// "Avoid entries at 8am, 12pm, 4pm, and 8pm UTC"
-// "Avoid minute timings like 00, 15, 30, 45"
-const AVOID_HOURS_UTC   = new Set([8, 12, 16, 20]);
-const AVOID_MINUTES_UTC = new Set([0, 15, 30, 45]);
-
-// Session open blackout: first 30 minutes of each session = institutional fake-out zone.
-// EU opens at 07:00, Asia at 23:00, US at 12:00 — institutions run fake sweeps to trap
-// retail before the real direction. Don't enter during this window.
-const SESSION_OPEN_BLACKOUT_MIN = 30;
-
-function isSessionOpenBlackout(tsMs = Date.now()) {
-  const d    = new Date(tsMs);
-  const utcH = d.getUTCHours();
-  const utcM = d.getUTCMinutes();
-  for (const win of SESSION_WINDOWS) {
-    if (utcH === win.startH && utcM < SESSION_OPEN_BLACKOUT_MIN) return true;
-  }
-  return false;
-}
-
-function getActiveSession() {
-  const now = new Date();
-  const utcH = now.getUTCHours();
-  for (const win of SESSION_WINDOWS) {
-    if (win.startH > win.endH) {
-      // Wraps midnight (Asia: 23–02)
-      if (utcH >= win.startH || utcH < win.endH) return win;
-    } else {
-      if (utcH >= win.startH && utcH < win.endH) return win;
-    }
-  }
-  return null; // outside all windows
-}
-
-function isAvoidTime() {
-  const now = new Date();
-  const utcH = now.getUTCHours();
-  const utcM = now.getUTCMinutes();
-  if (AVOID_HOURS_UTC.has(utcH) && utcM < 3) return true;   // ±3 min buffer around avoid hours
-  if (AVOID_MINUTES_UTC.has(utcM)) return true;               // avoid 00, 15, 30, 45 min marks
-  if (isSessionOpenBlackout()) return true;                   // first 30 min of each session = fake-out zone
-  return false;
-}
-
-// True only when inside a session window AND not at a candle-open time to avoid
-function isGoodTradingSession() {
-  if (isAvoidTime()) return false;
-  return getActiveSession() !== null;
-}
-
-// ── Daily Stats ────────────────────────────────────────────
-// PDF rule: max 2 trades weekdays, max 1 trade weekends.
-// Stop immediately after 2 consecutive losses.
-
-const dailyStats = { date: '', trades: 0, consecutiveLosses: 0 };
-
-function getTradingDay() {
-  // Trading day resets at 7am UTC (PDF: "resets at 7am")
-  const now = new Date();
-  const utcH = now.getUTCHours();
-  const d = new Date(now);
-  if (utcH < 7) d.setUTCDate(d.getUTCDate() - 1);
-  return d.toISOString().slice(0, 10);
-}
-
-function getDailyTradeLimit() {
-  const dow = new Date().getUTCDay(); // 0=Sun, 6=Sat
-  return (dow === 0 || dow === 6) ? 1 : 2; // 1 on weekends, 2 on weekdays
-}
-
-function recordDailyTrade(isWin) {
-  const tradingDay = getTradingDay();
-  if (dailyStats.date !== tradingDay) {
-    dailyStats.date = tradingDay;
-    dailyStats.trades = 0;
-    dailyStats.consecutiveLosses = 0;
-  }
-  dailyStats.trades++;
-  if (isWin) {
-    dailyStats.consecutiveLosses = 0;
-  } else {
-    dailyStats.consecutiveLosses++;
-  }
-}
-
-function checkDailyLimits() {
-  const tradingDay = getTradingDay();
-  if (dailyStats.date !== tradingDay) {
-    dailyStats.date = tradingDay;
-    dailyStats.trades = 0;
-    dailyStats.consecutiveLosses = 0;
-  }
-  if (dailyStats.consecutiveLosses >= 2) {
-    return { canTrade: false, reason: `${dailyStats.consecutiveLosses} consecutive losses — stopped for today. Resets at 7am UTC.` };
-  }
-  const limit = getDailyTradeLimit();
-  if (dailyStats.trades >= limit) {
-    return { canTrade: false, reason: `Daily trade limit reached (${dailyStats.trades}/${limit}). Resets at 7am UTC.` };
-  }
-  return { canTrade: true };
-}
+const SESSION_WINDOWS = [];
 
 // ── Swing Detection (kept for 15m exit monitoring) ─────────
 
@@ -1561,7 +1432,7 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
   const symbol = ticker.symbol;
   const price = parseFloat(ticker.lastPrice);
 
-  const [klines1h, klines15m, klines3m, klines1m, marketIntel] = await Promise.all([
+  const [klines1h, klines15m, klines1m, marketIntel] = await Promise.all([
     fetchKlines(symbol, '1h', 60),
     fetchKlines(symbol, '15m', 100),
     fetchKlines(symbol, '3m', 50),
@@ -1573,7 +1444,6 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
   if (klines15m.length < 30 || klines1m.length < 10) return null;
 
   const parsed15 = klines15m.map(parseCandle);
-  const parsed3  = klines3m ? klines3m.map(parseCandle) : [];
   const parsed1  = klines1m.map(parseCandle);
   const atr15 = calcATR(parsed15);
 
@@ -1770,36 +1640,6 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
   }
   } // end LIQUIDITY_SWEEP gate
 
-  // Strategy 2: Stop-Loss Hunt
-  if (!enabledStrategies || enabledStrategies.STOP_LOSS_HUNT) {
-  const hunt = detectStopLossHunt(klines15m, klines1m, strategyCfg.hunt || {});
-  if (hunt) {
-    const tp = findNearestLevel(hunt.entryPrice, allLevels, hunt.direction);
-    const slDist = Math.abs(hunt.entryPrice - hunt.sl) / hunt.entryPrice;
-    const tpPrice = tp ? tp.price : hunt.direction === 'LONG'
-      ? hunt.entryPrice * (1 + slDist * 2.5)
-      : hunt.entryPrice * (1 - slDist * 2.5);
-    const tpDist = Math.abs(tpPrice - hunt.entryPrice) / hunt.entryPrice;
-    const rr = tpDist / slDist;
-
-    if (rr >= 1.5 && slDist > 0.001 && slDist < 0.05) {
-      const touchBonus = Math.min(hunt.touches, 4);
-      signals.push({
-        symbol, direction: hunt.direction, price: hunt.entryPrice,
-        lastPrice: price,
-        sl: hunt.sl,
-        tp1: tpPrice,
-        tp2: hunt.direction === 'LONG' ? hunt.entryPrice + (tpDist * price * 1.5) : hunt.entryPrice - (tpDist * price * 1.5),
-        tp3: hunt.direction === 'LONG' ? hunt.entryPrice + (tpDist * price * 2) : hunt.entryPrice - (tpDist * price * 2),
-        slDist, setup: 'STOP_LOSS_HUNT',
-        setupName: `${hunt.direction}-SL-HUNT`,
-        score: 7 + Math.min(touchBonus, 3),
-        rr: Math.round(rr * 10) / 10,
-      });
-    }
-  }
-  } // end STOP_LOSS_HUNT gate
-
   // Strategy 3: Momentum Scalping
   if (!enabledStrategies || enabledStrategies.MOMENTUM_SCALP) {
   const momentum = detectMomentumScalp(klines15m, klines1m, strategyCfg.momentum || {});
@@ -1829,66 +1669,10 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
   }
   } // end MOMENTUM_SCALP gate
 
-  // Strategy 4: BRR (Breakout-Retest-Rejection) + Fibonacci
-  if (!enabledStrategies || enabledStrategies.BRR_FIBO) {
-  const brr = detectBRR(klines1h, klines15m, klines1m, strategyCfg.brr || {});
-  if (brr) {
-    const slDist = Math.abs(brr.entryPrice - brr.sl) / brr.entryPrice;
-    const tp = findNearestLevel(brr.entryPrice, allLevels, brr.direction);
-    const tpPrice = tp ? tp.price : brr.direction === 'LONG'
-      ? brr.entryPrice * (1 + slDist * 2.5)
-      : brr.entryPrice * (1 - slDist * 2.5);
-    const tpDist = Math.abs(tpPrice - brr.entryPrice) / brr.entryPrice;
-    const rr = tpDist / slDist;
-
-    if (rr >= 1.5 && slDist > 0.001 && slDist < 0.05) {
-      signals.push({
-        symbol, direction: brr.direction, price: brr.entryPrice,
-        lastPrice: price,
-        sl: brr.sl,
-        tp1: tpPrice,
-        tp2: brr.direction === 'LONG' ? brr.entryPrice + (tpDist * price * 1.5) : brr.entryPrice - (tpDist * price * 1.5),
-        tp3: brr.direction === 'LONG' ? brr.entryPrice + (tpDist * price * 2) : brr.entryPrice - (tpDist * price * 2),
-        slDist, setup: 'BRR_FIBO',
-        setupName: `${brr.direction}-BRR${brr.fibConfluence ? '+FIB' : ''}`,
-        score: brr.score,
-        rr: Math.round(rr * 10) / 10,
-        fibLevel: brr.fibLevel,
-        htfTrend: brr.htfTrend,
-      });
-    }
-  }
-  } // end BRR_FIBO gate
-
-  // Strategy 5: SMC Classic (Daily Bias → 4H+1H HTF → 15m Setup → 1m Entry)
-  if ((!enabledStrategies || enabledStrategies.SMC_CLASSIC) && smcEngine) {
-    try {
-      const dailyBiasCache = new Map();
-      const smcSignal = await smcEngine.analyzeLHHL(
-        { symbol, lastPrice: price }, await aiLearner.getOptimalParams(), dailyBiasCache
-      );
-      if (smcSignal && smcSignal.score >= 8) {
-        signals.push({
-          symbol, direction: smcSignal.direction, price: smcSignal.price || price,
-          lastPrice: price,
-          sl: smcSignal.sl,
-          tp1: smcSignal.tp1,
-          tp2: smcSignal.tp2,
-          tp3: smcSignal.tp3,
-          slDist: smcSignal.slDist || Math.abs(price - smcSignal.sl) / price,
-          setup: 'SMC_CLASSIC',
-          setupName: `${smcSignal.direction}-SMC`,
-          score: smcSignal.score,
-          rr: smcSignal.slDist > 0 ? Math.abs(smcSignal.tp1 - price) / Math.abs(price - smcSignal.sl) : 1.5,
-        });
-      }
-    } catch { /* SMC engine error — skip */ }
-  } // end SMC_CLASSIC gate
-
-  // Strategy 6: SMC HL Structure (Zeiierman curved + EMA55 + 3m/1m cascade)
+  // Strategy 6: SMC HL Structure (Zeiierman curved + EMA55 + 15m EMA/1m cascade)
   if (!enabledStrategies || enabledStrategies.SMC_HL_STRUCTURE !== false) {
-    if (parsed3.length >= 20) {
-      const hlSignal = detectSMCStructureTrade(parsed15, parsed3, parsed1, h1Trend);
+    if (parsed15.length >= 20) {
+      const hlSignal = detectSMCStructureTrade(parsed15, parsed1, h1Trend);
       if (hlSignal) {
         const slDist  = Math.abs(hlSignal.entryPrice - hlSignal.sl) / hlSignal.entryPrice;
         const atrTp   = calcATR(parsed15) * 2.5;
@@ -1926,48 +1710,9 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     }
   } // end SMC_HL_STRUCTURE gate
 
-  // Strategy 7: Trend-Follow HL/LH — HH+HL uptrend → LONG; LL+LH downtrend → SHORT
-  // Entry: next 1m candle after the swing HL (for longs) or LH (for shorts) has confirmed.
-  if (!enabledStrategies || enabledStrategies.TREND_FOLLOW !== false) {
-    const tfSignal = detectTrendFollowEntry(klines15m, klines3m, klines1m);
-    if (tfSignal) {
-      const slDist = Math.abs(tfSignal.entryPrice - tfSignal.sl) / tfSignal.entryPrice;
-      const tpPrice = findNearestLevel(tfSignal.entryPrice, allLevels, tfSignal.direction)?.price
-        || (tfSignal.direction === 'LONG'
-          ? tfSignal.entryPrice * (1 + slDist * 2.5)
-          : tfSignal.entryPrice * (1 - slDist * 2.5));
-      const tpDist = Math.abs(tpPrice - tfSignal.entryPrice) / tfSignal.entryPrice;
-      const rr = slDist > 0 ? tpDist / slDist : 1.5;
-      if (rr >= 1.5 && slDist > 0.001 && slDist < 0.05) {
-        signals.push({
-          symbol,
-          direction:  tfSignal.direction,
-          price:      tfSignal.entryPrice,
-          lastPrice:  price,
-          sl:         tfSignal.sl,
-          tp1:        tpPrice,
-          tp2:        tfSignal.direction === 'LONG'
-            ? tfSignal.entryPrice + tpDist * price * 1.5
-            : tfSignal.entryPrice - tpDist * price * 1.5,
-          tp3:        tfSignal.direction === 'LONG'
-            ? tfSignal.entryPrice + tpDist * price * 2.0
-            : tfSignal.entryPrice - tpDist * price * 2.0,
-          slDist,
-          setup:      tfSignal.setup,
-          setupName:  `${tfSignal.direction}-${tfSignal.setup}`,
-          score:      9, // high base score — trend-confirmed entry
-          rr:         Math.round(rr * 10) / 10,
-          tf15:       tfSignal.tf15,
-          tf1:        tfSignal.tf1,
-          trendTag:   tfSignal.trend,
-        });
-      }
-    }
-  } // end TREND_FOLLOW gate
-
   // Strategy 8: Strategy V2 — 15m swing + 1m confirmation + milestone trail
   if (!enabledStrategies || enabledStrategies.STRATEGY_V2 !== false) {
-    const v2Signal = await detectV2Signal(symbol, params.LEV_ALT || 20);
+    const v2Signal = await detectV2Signal(symbol, params.LEV_BTC_ETH || 100);
     if (v2Signal) {
       signals.push({
         symbol,
@@ -1989,37 +1734,82 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     }
   } // end STRATEGY_V2 gate
 
-  // Strategy 9: Momentum Breakout — flash crash / pump — bypasses structure filters
-  if (!enabledStrategies || enabledStrategies.MOMENTUM_BREAKOUT !== false) {
-    const mb = detectMomentumBreakout(klines15m, klines1m);
-    if (mb) {
-      const slDist = Math.abs(mb.entryPrice - mb.sl) / mb.entryPrice;
-      // TP targets: 2.5×, 3.5×, and 5× risk — momentum moves run far
-      const tp1 = mb.direction === 'LONG' ? mb.entryPrice * (1 + slDist * 2.5) : mb.entryPrice * (1 - slDist * 2.5);
-      const tp2 = mb.direction === 'LONG' ? mb.entryPrice * (1 + slDist * 3.5) : mb.entryPrice * (1 - slDist * 3.5);
-      const tp3 = mb.direction === 'LONG' ? mb.entryPrice * (1 + slDist * 5.0) : mb.entryPrice * (1 - slDist * 5.0);
-      const tpDist = Math.abs(tp1 - mb.entryPrice) / mb.entryPrice;
-      const rr = slDist > 0 ? Math.round(tpDist / slDist * 10) / 10 : 0;
-      if (rr >= 1.2 && slDist > 0.001 && slDist < 0.04) {
+  // Strategy 11: Structure Follow
+  // LONG:  (15m HL or HH) + (1m HH or HL) → LONG
+  // SHORT: (15m LH or LL) + (1m LL or LH) → SHORT
+  {
+    const PIVOT_B = 2;
+    const sHs15 = [], sLs15 = [];
+    for (let i = PIVOT_B; i < parsed15.length - PIVOT_B; i++) {
+      let isH = true, isL = true;
+      for (let j = 1; j <= PIVOT_B; j++) {
+        if (parsed15[i].high <= parsed15[i-j].high || parsed15[i].high <= parsed15[i+j].high) isH = false;
+        if (parsed15[i].low  >= parsed15[i-j].low  || parsed15[i].low  >= parsed15[i+j].low)  isL = false;
+      }
+      if (isH) sHs15.push(parsed15[i].high);
+      if (isL) sLs15.push(parsed15[i].low);
+    }
+    const has15mHL = sLs15.length >= 2 && sLs15[sLs15.length - 1] > sLs15[sLs15.length - 2];
+    const has15mHH = sHs15.length >= 2 && sHs15[sHs15.length - 1] > sHs15[sHs15.length - 2];
+    const has15mLH = sHs15.length >= 2 && sHs15[sHs15.length - 1] < sHs15[sHs15.length - 2];
+    const has15mLL = sLs15.length >= 2 && sLs15[sLs15.length - 1] < sLs15[sLs15.length - 2];
+
+    const pH1m = [], pL1m = [];
+    for (let i = PIVOT_B; i < parsed1.length - PIVOT_B; i++) {
+      let isH = true, isL = true;
+      for (let j = 1; j <= PIVOT_B; j++) {
+        if (parsed1[i].high <= parsed1[i-j].high || parsed1[i].high <= parsed1[i+j].high) isH = false;
+        if (parsed1[i].low  >= parsed1[i-j].low  || parsed1[i].low  >= parsed1[i+j].low)  isL = false;
+      }
+      if (isH) pH1m.push(parsed1[i].high);
+      if (isL) pL1m.push(parsed1[i].low);
+    }
+    const has1mHH = pH1m.length >= 2 && pH1m[pH1m.length - 1] > pH1m[pH1m.length - 2];
+    const has1mHL = pL1m.length >= 2 && pL1m[pL1m.length - 1] > pL1m[pL1m.length - 2];
+    const has1mLL = pL1m.length >= 2 && pL1m[pL1m.length - 1] < pL1m[pL1m.length - 2];
+    const has1mLH = pH1m.length >= 2 && pH1m[pH1m.length - 1] < pH1m[pH1m.length - 2];
+
+    const longOk  = (has15mHL || has15mHH) && (has1mHH || has1mHL);
+    const shortOk = (has15mLH || has15mLL) && (has1mLL || has1mLH);
+
+    const atr = calcATR(parsed15);
+
+    if (longOk) {
+      const sl     = pL1m.length ? Math.min(...pL1m.slice(-3)) * 0.9995 : price * 0.998;
+      const slDist = Math.abs(price - sl) / price;
+      const tp1    = price + atr * 2.0;
+      const rr     = slDist > 0 ? Math.round((atr * 2.0) / (price * slDist) * 10) / 10 : 0;
+      if (rr >= 1.2 && slDist > 0.001 && slDist < 0.03) {
+        const tag15 = has15mHL ? `HL:${sLs15[sLs15.length-2]?.toFixed(2)}→${sLs15[sLs15.length-1]?.toFixed(2)}` : `HH:${sHs15[sHs15.length-2]?.toFixed(2)}→${sHs15[sHs15.length-1]?.toFixed(2)}`;
+        const tag1  = has1mHH  ? `HH:${pH1m[pH1m.length-2]?.toFixed(2)}→${pH1m[pH1m.length-1]?.toFixed(2)}`  : `HL:${pL1m[pL1m.length-2]?.toFixed(2)}→${pL1m[pL1m.length-1]?.toFixed(2)}`;
         signals.push({
-          symbol,
-          direction:       mb.direction,
-          price:           mb.entryPrice,
-          lastPrice:       price,
-          sl:              mb.sl,
-          tp1, tp2, tp3,
-          slDist,
-          setup:           'MOMENTUM_BREAKOUT',
-          setupName:       `${mb.direction}-MOM-BRK`,
-          score:           8,
-          rr,
-          isMomentumBreakout: true,
-          tf15:            `body=${mb.bodyPct}% vol=${mb.volRatio}x lvl=${mb.breakoutLevel?.toFixed(4)}`,
-          tf1:             'breakout-candle',
+          symbol, direction: 'LONG', price, lastPrice: price,
+          sl, tp1, tp2: price + atr * 3.0, tp3: price + atr * 4.0,
+          slDist, setup: 'STRUCTURE_FOLLOW',
+          setupName: `LONG-${has15mHL ? '15HL' : '15HH'}-${has1mHH ? '1HH' : '1HL'}`,
+          score: 8, rr, tf15: `15m ${tag15}`, tf1: `1m ${tag1}`,
         });
       }
     }
-  } // end MOMENTUM_BREAKOUT gate
+
+    if (shortOk) {
+      const sl     = pH1m.length ? Math.max(...pH1m.slice(-3)) * 1.0005 : price * 1.002;
+      const slDist = Math.abs(sl - price) / price;
+      const tp1    = price - atr * 2.0;
+      const rr     = slDist > 0 ? Math.round((atr * 2.0) / (price * slDist) * 10) / 10 : 0;
+      if (rr >= 1.2 && slDist > 0.001 && slDist < 0.03) {
+        const tag15 = has15mLH ? `LH:${sHs15[sHs15.length-2]?.toFixed(2)}→${sHs15[sHs15.length-1]?.toFixed(2)}` : `LL:${sLs15[sLs15.length-2]?.toFixed(2)}→${sLs15[sLs15.length-1]?.toFixed(2)}`;
+        const tag1  = has1mLL  ? `LL:${pL1m[pL1m.length-2]?.toFixed(2)}→${pL1m[pL1m.length-1]?.toFixed(2)}`  : `LH:${pH1m[pH1m.length-2]?.toFixed(2)}→${pH1m[pH1m.length-1]?.toFixed(2)}`;
+        signals.push({
+          symbol, direction: 'SHORT', price, lastPrice: price,
+          sl, tp1, tp2: price - atr * 3.0, tp3: price - atr * 4.0,
+          slDist, setup: 'STRUCTURE_FOLLOW',
+          setupName: `SHORT-${has15mLH ? '15LH' : '15LL'}-${has1mLL ? '1LL' : '1LH'}`,
+          score: 8, rr, tf15: `15m ${tag15}`, tf1: `1m ${tag1}`,
+        });
+      }
+    }
+  } // end STRUCTURE_FOLLOW
 
   if (!signals.length) return null;
 
@@ -2028,247 +1818,79 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
 
   // Apply confluence bonuses + global filters to all signals
   for (const sig of signals) {
-    // ── PDF HARD FILTERS ─────────────────────────────────────
 
-    // EMA200 bias (PDF: "above MA200 → look long, below → look short")
-    // Hard block if direction conflicts with EMA200 trend
-    // isMomentumBreakout bypasses this — flash crashes start while EMA200 still shows prior trend
-    if (!sig.isMomentumBreakout && ema200_bias === 'bullish' && sig.direction === 'SHORT') {
-      sig.score = -99;
-      sig.blocked = `SHORT blocked — price above EMA200 (bullish bias per PDF)`;
-      continue;
-    }
-    if (!sig.isMomentumBreakout && ema200_bias === 'bearish' && sig.direction === 'LONG') {
-      sig.score = -99;
-      sig.blocked = `LONG blocked — price below EMA200 (bearish bias per PDF)`;
-      continue;
-    }
-
-    // ── 15m SWING STRUCTURE DIRECTION FILTER (user rule) ────
-    // HH+HL (bullish) or HL only (bullish_lean) → LONG only  (no short)
-    // LL+LH (bearish) or LH only (bearish_lean) → SHORT only (no long)
-    // isMomentumBreakout bypasses this — the breakout IS the structure change
-    const is15mBearish = swingTrend15.trend === 'bearish' || swingTrend15.trend === 'bearish_lean';
-    const is15mBullish = swingTrend15.trend === 'bullish' || swingTrend15.trend === 'bullish_lean';
-    if (!sig.isMomentumBreakout && is15mBullish && sig.direction === 'SHORT') {
-      sig.score = -99;
-      sig.blocked = `SHORT blocked — 15m swing structure is ${swingTrend15.trend}: no short while trend is up`;
-      continue;
-    }
-    if (!sig.isMomentumBreakout && is15mBearish && sig.direction === 'LONG') {
-      sig.score = -99;
-      sig.blocked = `LONG blocked — 15m swing structure is ${swingTrend15.trend}: no long while trend is down`;
-      continue;
-    }
-    // Reward with-trend entries for trending structures
-    if ((is15mBullish && sig.direction === 'LONG') ||
-        (is15mBearish && sig.direction === 'SHORT')) {
-      sig.score += 3;
-      sig.swingAligned = true;
-    }
-
-    // ── VWAP DIRECTION FILTER (user rule) ────────────────────
-    // price >= VWAP mid → bullish side → SHORT blocked
-    // price <  VWAP mid → bearish side → LONG blocked
-    // unknown           → VWAP not computable → block all trades
+    // ── VWAP + STRUCTURE RULE ────────────────────────────────────────────────
+    //
+    // Entry condition (all zones):
+    //   LONG  → 15m HL (last swing low > prev swing low) + 1m HH (last pivot high > prev)
+    //   SHORT → 15m LH (last swing high < prev swing high) + 1m LL (last pivot low < prev)
+    //
+    // VWAP zone hard blocks:
+    //   Above upper band → LONG only, NO SHORT (short above upper = sure lose)
+    //   Below lower band → SHORT only, NO LONG (long below lower = sure lose)
+    //   Between bands    → both directions allowed if entry condition met
+    //
+    // VWAP unknown → block all.
     if (vwapBandPos === 'unknown') {
       sig.score = -99;
-      sig.blocked = 'blocked — VWAP not available, skipping trade';
+      sig.blocked = 'blocked — VWAP not available';
       continue;
     }
-    const isVwapBearish = vwapBandPos === 'below_mid' || vwapBandPos === 'below_lower';
-    const isVwapBullish = vwapBandPos === 'above_mid' || vwapBandPos === 'above_upper';
-    // Momentum Breakout bypasses VWAP gate — spikes start from the wrong VWAP side by definition
-    if (!sig.isMomentumBreakout) {
-      if (isVwapBearish && sig.direction === 'LONG') {
-        sig.score = -99;
-        sig.blocked = `LONG blocked — price below VWAP (mid=${vwapMid?.toFixed(4)}, price=${price.toFixed(4)}): bearish side, no longs until price rises above VWAP`;
-        continue;
-      }
-      if (isVwapBullish && sig.direction === 'SHORT') {
-        sig.score = -99;
-        sig.blocked = `SHORT blocked — price above VWAP (mid=${vwapMid?.toFixed(4)}, price=${price.toFixed(4)}): bullish side, no shorts until price falls below VWAP`;
-        continue;
-      }
-    }
-    // Reward entries deep in the correct zone (outside bands = strong confirmation)
-    if (vwapBandPos === 'above_upper' && sig.direction === 'LONG')  sig.score += 2;
-    if (vwapBandPos === 'below_lower' && sig.direction === 'SHORT') sig.score += 2;
 
-    // VWAP + OP bias (PDF: "avoid entering in between VWAP and OP if gap is small")
-    // Hard block if direction conflicts with OP+VWAP combined bias
-    if (opBias === 'bullish' && sig.direction === 'SHORT') {
-      sig.score -= 3; // strong headwind — not a hard block, but very costly
-      sig.opVwapContra = true;
-    }
-    if (opBias === 'bearish' && sig.direction === 'LONG') {
-      sig.score -= 3;
-      sig.opVwapContra = true;
-    }
-    if (opBias === 'neutral') {
-      // Between OP and VWAP — small gap zone, PDF says avoid
-      sig.score -= 2;
-    }
-    // Bonus: direction aligns with both OP and VWAP
-    if ((opBias === 'bullish' && sig.direction === 'LONG') ||
-        (opBias === 'bearish' && sig.direction === 'SHORT')) {
-      sig.score += 3;
-    }
-
-    // Session tag — add active session name to signal
-    const sess = getActiveSession();
-    if (sess) sig.session = sess.name;
-
-    // ── POSITION QUALITY: buy low, sell high — don't chase ──
-
-    // RSI: LONG should enter on pullback (RSI 25-55), not when overbought
-    //       SHORT should enter on bounce (RSI 45-75), not when oversold
-    // isMomentumBreakout bypasses RSI extremes — flash crashes push RSI into extreme zones
-    if (!sig.isMomentumBreakout) {
-      if (sig.direction === 'LONG') {
-        if (rsi14 > 70) { sig.score = -99; sig.blocked = 'LONG rejected — RSI ' + rsi14.toFixed(0) + ' overbought, chasing'; }
-        else if (rsi14 > 55) sig.score -= 2; // slightly extended
-        else if (rsi14 >= 30 && rsi14 <= 50) sig.score += 2; // pullback zone — ideal buy
-        else if (rsi14 < 25) sig.score += 1; // oversold bounce possible
-      }
-      if (sig.direction === 'SHORT') {
-        if (rsi14 < 30) { sig.score = -99; sig.blocked = 'SHORT rejected — RSI ' + rsi14.toFixed(0) + ' oversold, chasing'; }
-        else if (rsi14 < 45) sig.score -= 2; // slightly extended
-        else if (rsi14 >= 50 && rsi14 <= 70) sig.score += 2; // bounce zone — ideal sell
-        else if (rsi14 > 75) sig.score += 1; // overbought reversal possible
-      }
-    }
-
-    // EMA position: don't chase extended moves
-    if (sig.direction === 'LONG') {
-      if (entryQuality === 'extended_up') { sig.score -= 4; sig.chasing = true; } // chasing pump
-      if (entryQuality === 'at_ema' || entryQuality === 'near_ema') sig.score += 2; // pullback to EMA = good
-      if (entryQuality === 'extended_down') sig.score += 1; // dip buy
-    }
-    if (sig.direction === 'SHORT') {
-      if (entryQuality === 'extended_down') { sig.score -= 4; sig.chasing = true; } // chasing dump
-      if (entryQuality === 'at_ema' || entryQuality === 'near_ema') sig.score += 2; // bounce from EMA = good
-      if (entryQuality === 'extended_up') sig.score += 1; // sell the rally
-    }
-
-    // ── 1m SPIKE HARD BLOCK ──────────────────────────────────
-    // RSI(14) on 15m candles lags 3×5m candles behind a spike. Measure it
-    // directly: if price moved >1.0% in the last 3×1m candles, entering in
-    // the spike direction = buying the top / selling the bottom.
-    // isMomentumBreakout bypasses this — the spike IS the entry signal for breakouts
-    if (!sig.isMomentumBreakout && sig.direction === 'LONG' && spike3mPct > 0.010) {
+    // Hard VWAP zone blocks
+    // Above upper band → LONG only (SHORT = sure lose)
+    // Below lower band → SHORT only (LONG = sure lose)
+    if (vwapBandPos === 'above_upper' && sig.direction === 'SHORT') {
       sig.score = -99;
-      sig.blocked = `LONG blocked — 1m up-spike +${(spike3mPct * 100).toFixed(2)}% in 3 candles (chasing top)`;
-    }
-    if (!sig.isMomentumBreakout && sig.direction === 'SHORT' && spike3mPct < -0.010) {
-      sig.score = -99;
-      sig.blocked = `SHORT blocked — 1m down-spike ${(spike3mPct * 100).toFixed(2)}% in 3 candles (chasing bottom)`;
-    }
-
-    // Price position in range: LONG must be near the LOW, SHORT near the HIGH.
-    // Hard block if price is at the wrong extreme — never buy tops, never sell bottoms.
-    // isMomentumBreakout bypasses range extremes — breakouts start FROM extremes by definition
-    if (sig.direction === 'LONG') {
-      if (!sig.isMomentumBreakout && priceInRange > 0.80) {
-        sig.score = -99;
-        sig.blocked = `LONG blocked — price at ${(priceInRange * 100).toFixed(0)}% of 5h range (top — should SHORT not LONG)`;
-      } else if (priceInRange < 0.35) sig.score += 2; // near the bottom — ideal HL/LL entry
-      else if (priceInRange > 0.65) sig.score -= 3;   // upper half but not blocked — risky
-    }
-    if (sig.direction === 'SHORT') {
-      if (!sig.isMomentumBreakout && priceInRange < 0.20) {
-        sig.score = -99;
-        sig.blocked = `SHORT blocked — price at ${(priceInRange * 100).toFixed(0)}% of 5h range (bottom — should LONG not SHORT)`;
-      } else if (priceInRange > 0.75) sig.score += 4; // at the very top — ideal SHORT zone
-      else if (priceInRange > 0.65) sig.score += 2;   // near the top — good SHORT zone
-    }
-
-    // Structural proximity: reward entries tight to actual swing structure (HL/LL for LONG, HH/LH for SHORT)
-    if (sig.direction === 'LONG' && nearestSwingLow) {
-      const pctFromLow = (price - nearestSwingLow) / nearestSwingLow;
-      if (pctFromLow <= 0.005)       sig.score += 3; // price at swing low — perfect HL/LL retest
-      else if (pctFromLow <= 0.015)  sig.score += 1; // within 1.5% — acceptable pullback
-    }
-    if (sig.direction === 'SHORT' && nearestSwingHigh) {
-      const pctFromHigh = (nearestSwingHigh - price) / nearestSwingHigh;
-      if (pctFromHigh <= 0.005)      sig.score += 3; // price at swing high — perfect HH/LH test
-      else if (pctFromHigh <= 0.015) sig.score += 1; // within 1.5% — acceptable bounce
-    }
-
-    // 1h trend alignment — hard block for counter-trend, bonus for with-trend
-    // isMomentumBreakout bypasses — flash crashes happen before 1h trend flips
-    if (!sig.isMomentumBreakout && sig.direction === 'LONG' && h1Trend === 'bearish') {
-      sig.score = -99;
-      sig.blocked = 'LONG blocked — 1h EMA9 < EMA21 (1h downtrend): no long against higher-TF trend';
+      sig.blocked = `SHORT blocked — price above VWAP upper band (${vwapUpper?.toFixed(4)}): LONG only`;
       continue;
     }
-    if (!sig.isMomentumBreakout && sig.direction === 'SHORT' && h1Trend === 'bullish') {
+    if (vwapBandPos === 'below_lower' && sig.direction === 'LONG') {
       sig.score = -99;
-      sig.blocked = 'SHORT blocked — 1h EMA9 > EMA21 (1h uptrend): no short against higher-TF trend';
+      sig.blocked = `LONG blocked — price below VWAP lower band (${vwapLower?.toFixed(4)}): SHORT only`;
       continue;
     }
-    if (sig.direction === 'LONG' && h1Trend === 'bullish') sig.score += 3;
-    if (sig.direction === 'SHORT' && h1Trend === 'bearish') sig.score += 3;
 
-    // BTC market correlation: don't fight BTC's direction on altcoins
-    // When BTC is clearly bullish, shorting alts is fighting the market
-    // isMomentumBreakout bypasses — alt flash crashes can happen even when BTC is bullish
-    if (symbol !== 'BTCUSDT') {
-      if (!sig.isMomentumBreakout && btcTrend === 'bullish' && sig.direction === 'SHORT') {
+    // ── 15m + 1m structure confirmation ─────────────────────────────────────
+    // LONG:  (15m HL or HH) + (1m HH or HL)
+    // SHORT: (15m LH or LL) + (1m LL or LH)
+    {
+      const sHs15 = swingTrend15.swingHighs;
+      const sLs15 = swingTrend15.swingLows;
+      const has15mHL = sLs15.length >= 2 && sLs15[sLs15.length - 1].price > sLs15[sLs15.length - 2].price;
+      const has15mHH = sHs15.length >= 2 && sHs15[sHs15.length - 1].price > sHs15[sHs15.length - 2].price;
+      const has15mLH = sHs15.length >= 2 && sHs15[sHs15.length - 1].price < sHs15[sHs15.length - 2].price;
+      const has15mLL = sLs15.length >= 2 && sLs15[sLs15.length - 1].price < sLs15[sLs15.length - 2].price;
+
+      const P1B = 2;
+      const pH1m = [], pL1m = [];
+      for (let i = P1B; i < parsed1.length - P1B; i++) {
+        let isH = true, isL = true;
+        for (let j = 1; j <= P1B; j++) {
+          if (parsed1[i].high <= parsed1[i - j].high || parsed1[i].high <= parsed1[i + j].high) isH = false;
+          if (parsed1[i].low  >= parsed1[i - j].low  || parsed1[i].low  >= parsed1[i + j].low)  isL = false;
+        }
+        if (isH) pH1m.push(parsed1[i].high);
+        if (isL) pL1m.push(parsed1[i].low);
+      }
+      const has1mHH = pH1m.length >= 2 && pH1m[pH1m.length - 1] > pH1m[pH1m.length - 2];
+      const has1mHL = pL1m.length >= 2 && pL1m[pL1m.length - 1] > pL1m[pL1m.length - 2];
+      const has1mLL = pL1m.length >= 2 && pL1m[pL1m.length - 1] < pL1m[pL1m.length - 2];
+      const has1mLH = pH1m.length >= 2 && pH1m[pH1m.length - 1] < pH1m[pH1m.length - 2];
+
+      const longOk  = (has15mHL || has15mHH) && (has1mHH || has1mHL);
+      const shortOk = (has15mLH || has15mLL) && (has1mLL || has1mLH);
+
+      if (sig.direction === 'LONG' && !longOk) {
         sig.score = -99;
-        sig.blocked = 'SHORT blocked — BTC is bullish, alts follow BTC';
+        sig.blocked = `LONG blocked — need (15m HL(${has15mHL})||HH(${has15mHH})) + (1m HH(${has1mHH})||HL(${has1mHL}))`;
         continue;
       }
-      if (!sig.isMomentumBreakout && btcTrend === 'bearish' && sig.direction === 'LONG') {
+      if (sig.direction === 'SHORT' && !shortOk) {
         sig.score = -99;
-        sig.blocked = 'LONG blocked — BTC is bearish, alts follow BTC';
+        sig.blocked = `SHORT blocked — need (15m LH(${has15mLH})||LL(${has15mLL})) + (1m LL(${has1mLL})||LH(${has1mLH}))`;
         continue;
       }
-      // Bonus for trading WITH BTC direction
-      if (btcTrend === 'bullish' && sig.direction === 'LONG') sig.score += 2;
-      if (btcTrend === 'bearish' && sig.direction === 'SHORT') sig.score += 2;
-    }
-
-    // ── MARKET INTEL (funding rate, OI, long/short ratio) ───
-    const intelResult = applyMarketIntel(marketIntel, sig.direction);
-    if (intelResult.block) {
-      sig.score = -99;
-      sig.blocked = intelResult.block;
-      continue;
-    }
-    sig.score += intelResult.scoreDelta;
-    if (intelResult.scoreDelta !== 0) sig.intelDelta = intelResult.scoreDelta;
-
-    // Near a liquidation cluster? Bonus — price will be pulled there
-    if (liqLevels.length) {
-      const nearLiq = liqLevels.find(l => Math.abs(l.price - sig.price) / sig.price < 0.005);
-      if (nearLiq) {
-        sig.score += 2;
-        sig.liqCluster = `$${(nearLiq.liqUsd / 1e6).toFixed(1)}M @ ${nearLiq.price}`;
-      }
-    }
-
-    // Volume confirmation
-    if (lastVolOK) sig.score += 2;
-
-    // Trendline confluence (tightened to 0.2%)
-    if (sig.direction === 'LONG' && trendlines.uptrend) {
-      const trendDist = Math.abs(sig.price - trendlines.uptrend.currentPrice) / sig.price;
-      if (trendDist < 0.002) { sig.score += 2; sig.trendlineConfluence = 'uptrend_support'; }
-    }
-    if (sig.direction === 'SHORT' && trendlines.downtrend) {
-      const trendDist = Math.abs(sig.price - trendlines.downtrend.currentPrice) / sig.price;
-      if (trendDist < 0.002) { sig.score += 2; sig.trendlineConfluence = 'downtrend_resistance'; }
-    }
-
-    // Candlestick pattern at zone
-    const nearestZone = allLevels.find(z => isInZone(sig.price, z) || Math.abs(sig.price - z.price) / sig.price < 0.003);
-    if (nearestZone) {
-      const candleConf = hasCandleConfirmation(parsed1, nearestZone, sig.direction);
-      if (candleConf.confirmed) { sig.score += 3; sig.candlePattern = candleConf.pattern; }
-      if (nearestZone.strength >= 4) sig.score += 2;
-      else if (nearestZone.strength >= 2) sig.score += 1;
-      sig.zoneStrength = nearestZone.strength;
     }
 
     // Dynamic ATR-based SL: use ATR as MINIMUM distance — give room to breathe
@@ -2319,7 +1941,7 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
 
   // Add leverage
   const BTC_ETH = new Set(['BTCUSDT', 'ETHUSDT']);
-  best.leverage = BTC_ETH.has(symbol) ? Math.min(params.LEV_BTC_ETH || 20, 20) : Math.min(params.LEV_ALT || 20, 20);
+  best.leverage = params.LEV_BTC_ETH || 100;
 
   // Add structure info for logging
   best.structure = {
@@ -2335,6 +1957,15 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     ema200bias: ema200_bias,
     opVwapBias: opBias,
     swingTrend: swingTrend15.trend,
+    choch15: (() => {
+      const sHs = swingTrend15.swingHighs;
+      const sLs = swingTrend15.swingLows;
+      if (sHs.length < 2 || sLs.length < 2) return 'unknown';
+      const isHH = sHs[sHs.length - 1].price > sHs[sHs.length - 2].price;
+      const isLL = sLs[sLs.length - 1].price < sLs[sLs.length - 2].price;
+      if (isHH && isLL) return sHs[sHs.length-1].index > sLs[sLs.length-1].index ? 'bullish' : 'bearish';
+      return isHH ? 'bullish' : isLL ? 'bearish' : 'unknown';
+    })(),
     swingAligned: best.swingAligned || false,
     trendTag: best.trendTag || null,
     vwapMid:   vwapMid   ? Math.round(vwapMid   * 10000) / 10000 : null,
@@ -2354,46 +1985,13 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
 // ── Main Scan ──────────────────────────────────────────────
 
 async function scanSMC(log, opts = {}) {
-  const limits = checkDailyLimits();
-  if (!limits.canTrade) {
-    log(`Liquidity Engine: ${limits.reason}. Stopped trading.`);
-    bLog.scan(limits.reason);
-    return [];
-  }
 
-  if (isAvoidTime()) {
-    log('Liquidity Engine: Candle-open avoid time (UTC 8/12/16/20 or minute 0/15/30/45). Skipping entry.');
-    bLog.scan('Avoid candle-open time per PDF rules.');
-    return [];
-  }
-
-  const activeSession = getActiveSession();
-  if (!activeSession) {
-    // NOTE: AI session override removed — trading outside institutional windows causes losses.
-    // Sessions (Asia 23-02, Europe 07-10, US 12-16 UTC) are hard boundaries, not suggestions.
-    log('Liquidity Engine: Outside session windows (Asia 23-02/Europe 07-10/US 12-16 UTC). Waiting.');
-    bLog.scan('Outside institutional session windows. No trades until next opening.');
-    return [];
-  }
-  bLog.scan(`Active session: ${activeSession.name} (${activeSession.startH}:00–${activeSession.endH}:00 UTC)`);
+  const ALLOWED_SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'SOLUSDT'];
 
   const tickers = await fetchTickers();
   if (!tickers.length) { bLog.error('Failed to fetch tickers'); return []; }
 
-  const BLACKLIST = new Set([
-    'ALPACAUSDT','BNXUSDT','ALPHAUSDT','BANANAS31USDT',
-    'LYNUSDT','PORT3USDT','RVVUSDT','BSWUSDT',
-    'NEIROETHUSDT','COSUSDT','YALAUSDT','TANSSIUSDT','EPTUSDT',
-    'LEVERUSDT','AGLDUSDT','LOOKSUSDT',
-    'XAUUSDT','XAGUSDT','EURUSDT','GBPUSDT','JPYUSDT',
-  ]);
-
-  const topCoins = tickers
-    .filter(t => t.symbol.endsWith('USDT') && !t.symbol.includes('_'))
-    .filter(t => !BLACKLIST.has(t.symbol))
-    .filter(t => parseFloat(t.quoteVolume) >= MIN_24H_VOLUME)
-    .sort((a, b) => parseFloat(b.quoteVolume) - parseFloat(a.quoteVolume))
-    .slice(0, opts.topNCoins || TOP_N_COINS);
+  const topCoins = tickers.filter(t => ALLOWED_SYMBOLS.includes(t.symbol));
 
   const params = await aiLearner.getOptimalParams();
   const minScore = params.MIN_SCORE || 8;
@@ -2431,9 +2029,7 @@ async function scanSMC(log, opts = {}) {
     }
   } catch (_) { /* BTC fetch failed — continue with neutral */ }
 
-  const sessionTag = activeSession ? activeSession.name : 'AI-override';
-  const dailyLimit = getDailyTradeLimit();
-  bLog.scan(`Session=${sessionTag} | BTC trend=${btcTrend} | Quantum combo=${comboName} (${activeCombo}) | ${topCoins.length} coins | daily trades=${dailyStats.trades}/${dailyLimit}`);
+  bLog.scan(`BTC trend=${btcTrend} | Quantum combo=${comboName} (${activeCombo}) | ${topCoins.length} coins`);
 
   const results = [];
   let analyzed = 0;
@@ -2477,18 +2073,10 @@ module.exports = {
   analyzeCoin,
   recordDailyTrade,
   checkDailyLimits,
-  isGoodTradingSession,
-  getActiveSession,
-  isAvoidTime,
-  isSessionOpenBlackout,
-  getDailyTradeLimit,
-  SESSION_WINDOWS,
   detectSwings,
   SWING_LENGTHS,
   detectLiquiditySweep,
-  detectStopLossHunt,
   detectMomentumScalp,
-  detectBRR,
   detectSMCStructureTrade,
   detectCurvedStructure,
   calcEMAStrength,

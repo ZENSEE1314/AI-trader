@@ -7,7 +7,7 @@
 const { USDMClient } = require('binance');
 const fetch = require('node-fetch');
 const aiLearner = require('./ai-learner');
-const { recordDailyTrade, detectSwings, SWING_LENGTHS, scanSMC } = require('./liquidity-sweep-engine');
+const { detectSwings, SWING_LENGTHS, scanSMC } = require('./liquidity-sweep-engine');
 // NOTE: Triple MA / Spike-HL / T-Junction / MA Stack / AI Scanner exit logic
 // is still referenced below for open trades that may have been entered under
 // those strategies. Do not remove these imports.
@@ -48,15 +48,7 @@ const CONFIG = {
   ],
 };
 
-// ── Circuit Breaker Config ────────────────────────────────────
-const CIRCUIT_BREAKER = {
-  MAX_CONSECUTIVE_LOSSES: 3,   // pause after 3 consecutive losses
-  COOLDOWN_MS: 30 * 60 * 1000, // 30-minute cooldown
-};
-
 // ── Global State ──────────────────────────────────────────────
-let consecutiveLosses = 0;
-let circuitBreakerUntil = 0;
 let lastBitunixSync = 0;
 
 // ── SL/TP Config ──────────────────────────────────────────
@@ -107,7 +99,8 @@ const TAKER_FEE_BOTH_LEGS = 0.0008;
 // trigger = capital % gain needed to activate (price % × leverage)
 // lock    = capital % above entry to lock the SL at
 const TRAILING_TIERS = [
-  { trigger: 0.30, lock: 0.00 }, // +30% capital → SL locks at breakeven (0%)  — 30% gap
+  { trigger: 0.20, lock: 0.00 }, // +20% capital → SL locks at breakeven (0%)  — 20% gap
+  { trigger: 0.30, lock: 0.20 }, // +30% capital → SL locks at +20%             — 10% gap
   { trigger: 0.40, lock: 0.30 }, // +40% capital → SL locks at +30%             — 10% gap
   { trigger: 0.50, lock: 0.40 }, // +50% capital → SL locks at +40%             — 10% gap
   { trigger: 0.60, lock: 0.50 }, // +60% capital → SL locks at +50%             — 10% gap
@@ -125,8 +118,8 @@ const TRAILING_TIERS = [
 function getTrailingSLConfig(leverage) {
   return {
     INITIAL_SL_PCT: SL_PCT / leverage,
-    FIRST_TRIGGER: 0.30,  // Trail starts at +30% CAPITAL gain from entry
-    FIRST_SL: 0.00,       // Lock at breakeven — 30% gap on first step
+    FIRST_TRIGGER: 0.20,  // Trail starts at +20% CAPITAL gain from entry
+    FIRST_SL: 0.00,       // Lock at breakeven — 20% gap on first step
     STEP_TRIGGER: 0.10,   // Every +10% more CAPITAL → step up the lock
     STEP_SL: 0.10,        // Lock steps up 10% each time (10% gap)
   };
@@ -177,12 +170,8 @@ async function getTokenLeverage(symbol, apiKeyId = null, price = 0) {
       }
     }
 
-    // Priority 4: No explicit config — hardcoded defaults
-    // BTC, ETH, SOL, BNB: 100x
-    // All others: 20x
-    const HUNDRED_X_TOKENS = new Set(['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT']);
-    if (HUNDRED_X_TOKENS.has(symbol)) return 100;
-    return 20;
+    // Priority 4: No explicit config — all 4 allowed tokens use 100x
+    return 100;
   } catch (err) {
     console.error('Error getting token leverage:', err.message);
     // Return null instead of fallback to ensure safety
@@ -230,12 +219,9 @@ async function isTokenBanned(symbol) {
   }
 }
 
-// Leverage by token: BTC/ETH/SOL/BNB = 100x, all others = 20x
+// All 4 allowed tokens trade at 100x
 function getLeverage(symbol, price, params = {}) {
-  if (HIGH_PRICE_SYMBOLS.has(symbol)) {
-    return params.LEV_BTC_ETH || 100;
-  }
-  return params.LEV_ALT || 20;
+  return params.LEV_BTC_ETH || 100;
 }
 
 // ── UTILS ─────────────────────────────────────────────────────
@@ -814,7 +800,6 @@ async function checkTrailingStop(client) {
             await aiLearner.analyzeWorstPatterns();
           }
 
-          recordDailyTrade(pnlPct > 0, sym);
           log(`AI recorded: ${sym} PnL=${pnlPct.toFixed(2)}% duration=${durationMin}min setup=${state.setup}`);
 
           // Notify agents of trade outcome (for survival HP + capital tracking)
@@ -890,7 +875,6 @@ async function checkTrailingStop(client) {
                 marketStructure: st.marketStructure || 'unknown',
               });
             }
-            recordDailyTrade(gain > 0, sym);
             tradeState.delete(sym);
           }
 
@@ -949,7 +933,6 @@ async function checkTrailingStop(client) {
                 session: aiLearner.getCurrentSession(),
                 marketStructure: st.marketStructure || 'unknown',
               });
-              recordDailyTrade(true, sym);
               tradeState.delete(sym);
 
               await notify(
@@ -1126,16 +1109,6 @@ async function main() {
     }
   }
 
-  // Circuit breaker: pause after consecutive losses
-  if (Date.now() < circuitBreakerUntil) {
-    const remainMin = Math.ceil((circuitBreakerUntil - Date.now()) / 60000);
-    log(`Circuit breaker active — ${consecutiveLosses} consecutive losses. Pausing ${remainMin}min. Only checking trailing SL.`);
-    // Still check trailing SL on existing positions
-    try {
-      if (API_KEY && API_SECRET) await checkTrailingStop(getClient());
-    } catch (e) { bLog.error(`Trailing check during breaker: ${e.message}`); }
-    return;
-  }
 
   log('=== AI Smart Trader v4 Cycle Start ===');
   const hasOwnerKeys = !!(API_KEY && API_SECRET);
@@ -1555,7 +1528,7 @@ async function executeForAllUsers(pick) {
         // Cooldown rules — both apply per symbol per user across all API keys:
         //   1. Any direction:  30-min cooldown after any trade closes on this symbol.
         //      Prevents the bot immediately flipping LONG→SHORT or SHORT→LONG.
-        //   2. Same direction: 2-hour cooldown before re-entering the same direction.
+        //   2. Same direction: 30-min cooldown before re-entering the same direction.
         //      Prevents chasing the same setup immediately after a loss.
 
         // Rule 1: 30-min any-direction cooldown
@@ -1579,7 +1552,7 @@ async function executeForAllUsers(pick) {
           `SELECT id, closed_at, direction FROM trades
            WHERE user_id = $1 AND symbol = $2 AND direction = $3
              AND status IN ('WIN','LOSS','TP','SL','CLOSED')
-             AND (closed_at IS NULL OR closed_at > NOW() - INTERVAL '2 hours')
+             AND (closed_at IS NULL OR closed_at > NOW() - INTERVAL '30 minutes')
            ORDER BY COALESCE(closed_at, NOW()) DESC LIMIT 1`,
           [key.user_id, symbol, pick.direction]
         );
@@ -2679,18 +2652,6 @@ async function syncTradeStatus() {
             // Notify agents of trade outcome (for survival system)
             if (_onTradeOutcome) {
               try { _onTradeOutcome({ symbol: trade.symbol, direction: trade.direction, status, pnlUsdt, structure: trade.market_structure }); } catch (_) {}
-            }
-
-            // Circuit breaker: track consecutive losses
-            if (status === 'LOSS') {
-              consecutiveLosses++;
-              if (consecutiveLosses >= CIRCUIT_BREAKER.MAX_CONSECUTIVE_LOSSES) {
-                circuitBreakerUntil = Date.now() + CIRCUIT_BREAKER.COOLDOWN_MS;
-                bLog.trade(`CIRCUIT BREAKER: ${consecutiveLosses} consecutive losses — pausing ${CIRCUIT_BREAKER.COOLDOWN_MS / 60000}min`);
-                await notify(`*Circuit Breaker Activated*\n${consecutiveLosses} consecutive losses — pausing new trades for 30 minutes.`);
-              }
-            } else {
-              consecutiveLosses = 0; // Reset on any win
             }
 
             // Record token daily result
