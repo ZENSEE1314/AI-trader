@@ -60,11 +60,14 @@ let circuitBreakerUntil = 0;
 let lastBitunixSync = 0;
 
 // ── SL/TP Config ──────────────────────────────────────────
-// Capital $100 → trade $10 → SL = $3 (30% of the $10 margin).
-// In price terms: SL_PCT / leverage
-//   BTC/ETH/SOL/BNB at 100x → 0.30/100 = 0.3% price move
-//   All others       at  20x → 0.30/20  = 1.5% price move
-const SL_PCT = 0.30;   // 30% of margin = max loss per trade (default; active version may override)
+// Capital $100 → trade $10 → target max net loss = 30% of margin ($3).
+// Fees at 100x: 0.04% taker × 2 sides × 100 leverage = 8% of margin.
+// Fees at  20x: 0.04% taker × 2 sides ×  20 leverage = 1.6% of margin.
+// SL_PCT is the GROSS price-loss budget. Net loss = SL_PCT + fees.
+// To keep net loss ≤ 30%, SL price is set to (30% − fees):
+//   100x: price SL = (0.30 − 0.08) / 100 = 0.22% price move → net ~30%
+//    20x: price SL = (0.30 − 0.016) / 20  = 1.42% price move → net ~30%
+const SL_PCT = 0.30;   // 30% NET target — fee deduction applied at trade time
 const TP_PCT = 0.45;   // reference TP — trailing SL handles the actual exit
 
 // ── Active AI Version params — loaded from settings table, refreshed every 60s ──
@@ -637,9 +640,10 @@ async function openTrade(client, pick, wallet) {
   const floorQ = (q) => Math.floor(q * Math.pow(10, qtyPrec)) / Math.pow(10, qtyPrec);
   const fmtP = (p) => parseFloat(p.toFixed(pricePrec));
 
-  // SL = 30% of margin. Capital $100 → trade $10 → SL = $3 if hit.
-  // In price terms: SL_PCT / leverage (e.g. 20x = 1.5%, 100x = 0.3%)
-  let slPricePct = SL_PCT / leverage;
+  // SL price distance = (target net loss − fees) / leverage
+  // Fees = taker 0.04% × 2 sides × leverage → must be deducted so NET loss ≤ SL_PCT
+  const feesCapitalPct = TAKER_FEE_BOTH_LEGS * leverage; // e.g. 100x → 8%, 20x → 1.6%
+  let slPricePct = Math.max(0, SL_PCT - feesCapitalPct) / leverage;
   const tpPricePct = TP_PCT / leverage;
 
   // Liquidation guard: SL must not exceed liquidation distance
@@ -1638,8 +1642,9 @@ async function executeForAllUsers(pick) {
         // key.trailing_sl_step is already stored as capital % (e.g. 1.2 = 1.2% capital per step)
         const userTrailStep = dirTrail ?? parseFloat(key.trailing_sl_step) ?? 1.2;
 
-        // SL price distance: direction-specific override → active version global → hardcoded margin%/leverage
-        let slPricePct = dirSl != null ? dirSl : (SL_PCT / userLev);
+        // SL price distance: (target net loss − fees) / leverage so NET loss ≤ SL_PCT
+        const userFeesCapPct = TAKER_FEE_BOTH_LEGS * userLev;
+        let slPricePct = dirSl != null ? dirSl : (Math.max(0, SL_PCT - userFeesCapPct) / userLev);
         const tpPricePct = dirTp != null && dirTp > 0 ? dirTp : (TP_PCT / userLev);
 
         // Liquidation guard

@@ -179,7 +179,10 @@ function detect1mEntry(klines1m, setupDirection, leverage) {
     if (barsAgo > SWING1_RECENCY_BARS) return null;
 
     const swingType = lastSL.price > prevSL.price ? 'HL' : 'LL';
-    const slPrice   = entryPrice * (1 - V2_SL_CAPITAL_PCT / leverage);
+    // Deduct fees from SL budget so NET loss ≤ V2_SL_CAPITAL_PCT
+    const feesCapPct = 0.0008 * leverage; // 0.04% taker × 2 sides × leverage
+    const netSlPct   = Math.max(0, V2_SL_CAPITAL_PCT - feesCapPct) / leverage;
+    const slPrice    = entryPrice * (1 - netSlPct);
 
     return {
       entryPrice,
@@ -196,7 +199,9 @@ function detect1mEntry(klines1m, setupDirection, leverage) {
     if (barsAgo > SWING1_RECENCY_BARS) return null;
 
     const swingType = lastSH.price > prevSH.price ? 'HH' : 'LH';
-    const slPrice   = entryPrice * (1 + V2_SL_CAPITAL_PCT / leverage);
+    const feesCapPct = 0.0008 * leverage;
+    const netSlPct   = Math.max(0, V2_SL_CAPITAL_PCT - feesCapPct) / leverage;
+    const slPrice    = entryPrice * (1 + netSlPct);
 
     return {
       entryPrice,
