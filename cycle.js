@@ -60,14 +60,14 @@ let circuitBreakerUntil = 0;
 let lastBitunixSync = 0;
 
 // ── SL/TP Config ──────────────────────────────────────────
-// Capital $100 → trade $10 → target max net loss = 30% of margin ($3).
+// Capital $100 → trade $10 → target max net loss = 15% of margin ($1.50).
 // Fees at 100x: 0.04% taker × 2 sides × 100 leverage = 8% of margin.
 // Fees at  20x: 0.04% taker × 2 sides ×  20 leverage = 1.6% of margin.
-// SL_PCT is the GROSS price-loss budget. Net loss = SL_PCT + fees.
-// To keep net loss ≤ 30%, SL price is set to (30% − fees):
-//   100x: price SL = (0.30 − 0.08) / 100 = 0.22% price move → net ~30%
-//    20x: price SL = (0.30 − 0.016) / 20  = 1.42% price move → net ~30%
-const SL_PCT = 0.30;   // 30% NET target — fee deduction applied at trade time
+// SL_PCT is the GROSS price-loss budget. Net loss = SL_PCT + fees + slippage.
+// At 15% SL: 15% price + 8% fees + ~7% slippage = ~30% worst case. Never near 50%.
+//   100x: price SL = (0.15 − 0.08) / 100 = 0.07% price move → net ~15%
+//    20x: price SL = (0.15 − 0.016) / 20  = 0.67% price move → net ~15%
+const SL_PCT = 0.15;   // 15% NET target — fee deduction applied at trade time
 const TP_PCT = 0.45;   // reference TP — trailing SL handles the actual exit
 
 // ── Active AI Version params — loaded from settings table, refreshed every 60s ──

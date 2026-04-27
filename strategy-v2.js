@@ -10,7 +10,7 @@
 //   LONG  bias → wait for 1m HL or LL → enter on the NEXT candle
 //   SHORT bias → wait for 1m HH or LH → enter on the NEXT candle
 //
-// Stop Loss:  fixed at -30% of margin capital (leverage-adjusted price)
+// Stop Loss:  fixed at -15% of margin capital (leverage-adjusted price)
 // Trail:      activates at +30% capital profit → locks breakeven (0%)  [30% gap]
 //             then every +10% more capital → lock steps up 10%         [10% gap]
 //             30 → 0% | 40 → 30% | 50 → 40% | 60 → 50% | …
@@ -22,7 +22,7 @@ const { getMarketIntel, applyMarketIntel, heatmapToLevels } = require('./coingla
 
 // ── Constants ─────────────────────────────────────────────────
 
-const V2_SL_CAPITAL_PCT    = 0.30; // initial SL: -30% of margin
+const V2_SL_CAPITAL_PCT    = 0.15; // initial SL: -15% of margin
 const V2_TRAIL_START_PCT   = 0.30; // trail activates at +30% capital profit → lock breakeven
 const V2_TRAIL_STEP_PCT    = 0.10; // trail steps every 10% capital gain after activation
 const V2_TRAIL_GAP_PCT     = 0.10; // gap on subsequent steps (10%); first step gap is 30%
