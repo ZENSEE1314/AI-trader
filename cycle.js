@@ -177,17 +177,11 @@ async function getTokenLeverage(symbol, apiKeyId = null, price = 0) {
       }
     }
 
-    // Priority 4: No explicit config — use sensible defaults by symbol/price
-    // BTC and ETH: 100x (high liquidity, tight spreads, handles it)
-    // BNB, SOL: 20x — volatile mid-cap, 100x gives 0.3% SL which gets clipped by normal wicks
-    const HUNDRED_X_TOKENS = new Set(['BTCUSDT', 'ETHUSDT']);
-    const TWENTY_X_TOKENS  = new Set(['BNBUSDT', 'SOLUSDT']);
+    // Priority 4: No explicit config — hardcoded defaults
+    // BTC, ETH, SOL, BNB: 100x
+    // All others: 20x
+    const HUNDRED_X_TOKENS = new Set(['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT']);
     if (HUNDRED_X_TOKENS.has(symbol)) return 100;
-    if (TWENTY_X_TOKENS.has(symbol))  return 20;
-    // Price-based fallback for any other token
-    if (price >= 1000) return 100;
-    if (price >= 100)  return 50;
-    if (price >= 10)   return 20;
     return 20;
   } catch (err) {
     console.error('Error getting token leverage:', err.message);
@@ -1149,6 +1143,26 @@ async function main() {
   try {
     const { query: dbQuery, initAllTables } = require('./db');
     await initAllTables();
+
+    // One-time: ensure SOL and BNB are set to 100x in the token_leverage table.
+    // This overrides any old 20x/50x DB records that would otherwise take priority
+    // over the hardcoded defaults in getTokenLeverage().
+    if (!runCycle._leverageFixDone) {
+      runCycle._leverageFixDone = true;
+      try {
+        for (const sym of ['SOLUSDT', 'BNBUSDT']) {
+          await dbQuery(
+            `INSERT INTO token_leverage (symbol, leverage, enabled)
+             VALUES ($1, 100, true)
+             ON CONFLICT (symbol) DO UPDATE SET leverage = 100, enabled = true`,
+            [sym]
+          );
+        }
+        bLog.system('[LEVERAGE-FIX] SOLUSDT + BNBUSDT set to 100x in token_leverage table');
+      } catch (e) {
+        bLog.error(`[LEVERAGE-FIX] Failed to update token_leverage: ${e.message}`);
+      }
+    }
 
     // One-time diagnostic: dump all API keys on first cycle after deploy
     if (!runCycle._keyDiagDone) {
