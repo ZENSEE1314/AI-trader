@@ -1679,39 +1679,64 @@ router.post('/emergency-close', async (req, res) => {
 
         if (key.platform === 'bitunix') {
           const client = new BitunixClient({ apiKey, apiSecret });
-          const positions = await client.getOpenPositions(symbol);
-          const openPos = Array.isArray(positions) ? positions.filter(p => p.symbol === symbol && parseFloat(p.qty) > 0) : [];
 
-          if (openPos.length > 0) {
-            for (const pos of openPos) {
-              try {
-                console.log(`[EMERGENCY] Flash closing ${pos.symbol} positionId=${pos.positionId} side=${pos.side} qty=${pos.qty} for ${key.email}`);
-                const closeResult = await client.flashClose({ positionId: pos.positionId });
-                console.log(`[EMERGENCY] Close result:`, JSON.stringify(closeResult));
-                await query(
-                  `UPDATE trades SET status = 'CLOSED', exit_price = $1, closed_at = NOW()
-                   WHERE api_key_id = $2 AND symbol = $3 AND status = 'OPEN'`,
-                  [parseFloat(pos.avgOpenPrice || 0), key.id, pos.symbol]
-                );
-                totalClosed++;
-                results.push({ user: key.email, symbol: pos.symbol, side: pos.side, qty: pos.qty, status: 'CLOSED' });
-                console.log(`[EMERGENCY] Closed ${pos.symbol} ${pos.side} qty=${pos.qty} for ${key.email}`);
-              } catch (closeErr) {
-                results.push({ user: key.email, symbol: pos.symbol, status: 'FAILED', error: closeErr.message });
-              }
-            }
+          // Only close positions that belong to our bot's open trades in the DB.
+          // Never touch positions the user opened manually — they won't have a DB record.
+          const dbTrades = await query(
+            `SELECT id, bitunix_position_id, entry_price FROM trades
+             WHERE api_key_id = $1 AND symbol = $2 AND status = 'OPEN'`,
+            [key.id, symbol]
+          );
+
+          if (dbTrades.length === 0) {
+            // Nothing tracked for this key+symbol — don't touch the exchange
+            results.push({ user: key.email, symbol, status: 'SKIPPED', reason: 'no bot trade found' });
           } else {
-            // No exchange position found — mark DB trades as closed (phantom cleanup)
-            const phantomRows = await query(
-              `UPDATE trades SET status = 'CLOSED', closed_at = NOW()
-               WHERE api_key_id = $1 AND symbol = $2 AND status = 'OPEN'
-               RETURNING id`,
-              [key.id, symbol]
-            );
-            if (phantomRows.length > 0) {
-              console.log(`[EMERGENCY] Cleaned ${phantomRows.length} phantom DB trade(s) for ${key.email} ${symbol}`);
-              totalClosed += phantomRows.length;
-              results.push({ user: key.email, symbol, status: 'PHANTOM_CLEANED', count: phantomRows.length });
+            const positions = await client.getOpenPositions(symbol);
+            const openPos = Array.isArray(positions) ? positions.filter(p => p.symbol === symbol && parseFloat(p.qty) > 0) : [];
+
+            if (openPos.length > 0) {
+              for (const pos of openPos) {
+                // Match by positionId first; fall back to entry price proximity
+                const posId = String(pos.positionId || pos.id || '');
+                const matched = dbTrades.find(t =>
+                  (t.bitunix_position_id && String(t.bitunix_position_id) === posId) ||
+                  (!t.bitunix_position_id && Math.abs(parseFloat(pos.avgOpenPrice) - parseFloat(t.entry_price)) / parseFloat(t.entry_price) < 0.001)
+                );
+                if (!matched) {
+                  console.log(`[EMERGENCY] SKIP positionId=${posId} — not a bot trade for ${key.email} ${symbol}`);
+                  results.push({ user: key.email, symbol, status: 'SKIPPED', reason: 'manual position — not a bot trade' });
+                  continue;
+                }
+                try {
+                  console.log(`[EMERGENCY] Flash closing ${pos.symbol} positionId=${posId} side=${pos.side} qty=${pos.qty} for ${key.email}`);
+                  const closeResult = await client.flashClose({ positionId: pos.positionId });
+                  console.log(`[EMERGENCY] Close result:`, JSON.stringify(closeResult));
+                  await query(
+                    `UPDATE trades SET status = 'CLOSED', exit_price = $1, closed_at = NOW()
+                     WHERE id = $2`,
+                    [parseFloat(pos.avgOpenPrice || 0), matched.id]
+                  );
+                  totalClosed++;
+                  results.push({ user: key.email, symbol: pos.symbol, side: pos.side, qty: pos.qty, status: 'CLOSED' });
+                  console.log(`[EMERGENCY] Closed ${pos.symbol} ${pos.side} qty=${pos.qty} for ${key.email}`);
+                } catch (closeErr) {
+                  results.push({ user: key.email, symbol: pos.symbol, status: 'FAILED', error: closeErr.message });
+                }
+              }
+            } else {
+              // No exchange position found — mark DB trades as closed (phantom cleanup)
+              const phantomRows = await query(
+                `UPDATE trades SET status = 'CLOSED', closed_at = NOW()
+                 WHERE api_key_id = $1 AND symbol = $2 AND status = 'OPEN'
+                 RETURNING id`,
+                [key.id, symbol]
+              );
+              if (phantomRows.length > 0) {
+                console.log(`[EMERGENCY] Cleaned ${phantomRows.length} phantom DB trade(s) for ${key.email} ${symbol}`);
+                totalClosed += phantomRows.length;
+                results.push({ user: key.email, symbol, status: 'PHANTOM_CLEANED', count: phantomRows.length });
+              }
             }
           }
         } else {
