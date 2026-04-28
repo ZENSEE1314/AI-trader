@@ -4400,6 +4400,7 @@
                 ? `<button class="btn btn-primary btn-sm" style="font-size:0.7rem;padding:2px 10px;min-height:26px;" onclick="window.CryptoBot.adminResumeKey(${k.key_id})">▶ Resume</button>`
                 : `<button class="btn btn-danger btn-sm" style="font-size:0.7rem;padding:2px 10px;min-height:26px;" onclick="window.CryptoBot.adminPauseKey(${k.key_id})">⏸ Pause</button>`
               }
+              <button class="btn btn-sm" style="font-size:0.7rem;padding:2px 10px;min-height:26px;background:rgba(239,68,68,0.12);border:1px solid rgba(239,68,68,0.35);color:#f87171;" onclick="window.CryptoBot.adminDeleteUserKey(${k.key_id},'${escapeHtml(k.label)}')">🗑 Delete Key</button>
             </div>
           </div>
           <div style="font-size:0.7rem;color:var(--color-text-muted);margin-top:4px;">
