@@ -1362,17 +1362,21 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
       continue;
     }
 
-    // Hard 1h trend block — only trade WITH the trend, never against it
-    // 1h EMA9 < EMA21 = downtrend → LONG blocked
-    // 1h EMA9 > EMA21 = uptrend  → SHORT blocked
-    if (h1Trend === 'bearish' && sig.direction === 'LONG') {
+    // Hard 15m swing structure trend block — trade WITH structure, not against it.
+    // Uses actual pivot points (LH/LL = bearish, HH/HL = bullish) — far more
+    // responsive than a 1h EMA cross which lags by 30–60 min.
+    //   bearish/bearish_lean → LONG blocked (LH or LL confirmed on 15m)
+    //   bullish/bullish_lean → SHORT blocked (HH or HL confirmed on 15m)
+    //   neutral              → both directions allowed
+    const st = swingTrend15.trend;
+    if ((st === 'bearish' || st === 'bearish_lean') && sig.direction === 'LONG') {
       sig.score = -99;
-      sig.blocked = `LONG blocked — 1h downtrend (EMA9 < EMA21): SHORT only`;
+      sig.blocked = `LONG blocked — 15m structure bearish (${st}): SHORT only`;
       continue;
     }
-    if (h1Trend === 'bullish' && sig.direction === 'SHORT') {
+    if ((st === 'bullish' || st === 'bullish_lean') && sig.direction === 'SHORT') {
       sig.score = -99;
-      sig.blocked = `SHORT blocked — 1h uptrend (EMA9 > EMA21): LONG only`;
+      sig.blocked = `SHORT blocked — 15m structure bullish (${st}): LONG only`;
       continue;
     }
 
