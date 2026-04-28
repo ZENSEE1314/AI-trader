@@ -3116,24 +3116,43 @@
         const el = document.getElementById('tcard-lev-' + sym);
         if (!el) continue;
         const lev = levMap[sym] ?? levMap[sym.replace('USDT','')] ?? null;
-        if (lev) el.textContent = `×${lev} leverage ✏️`;
+        if (lev) el.textContent = `×${lev} leverage`;
       }
     } catch {}
   }
 
-  async function editTokenCardLev(symbol) {
+  function editTokenCardLev(symbol) {
     const el = document.getElementById('tcard-lev-' + symbol);
-    const curText = el ? el.textContent : '';
-    const curLev  = parseInt(curText.replace(/[^\d]/g, '')) || '';
-    const input = prompt(`Set leverage for ${symbol.replace('USDT','')}\nCurrent: ×${curLev}\n\nEnter new leverage (1–125):`, curLev);
-    if (input === null) return;
-    const lev = parseInt(input);
-    if (isNaN(lev) || lev < 1 || lev > 125) return showToast('Leverage must be 1–125', 'error');
-    try {
-      await api('POST', '/api/admin/token-leverage', { symbol, leverage: lev });
-      if (el) el.textContent = `×${lev} leverage ✏️`;
-      showToast(`${symbol.replace('USDT','')} leverage set to ×${lev}`, 'success');
-    } catch (err) { showToast(err.message, 'error'); }
+    const curLev = parseInt((el ? el.textContent : '').replace(/[^d]/g, '')) || 20;
+    const existing = document.getElementById('lev-edit-modal');
+    if (existing) existing.remove();
+    const overlay = document.createElement('div');
+    overlay.id = 'lev-edit-modal';
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.65);z-index:9999;display:flex;align-items:center;justify-content:center;';
+    overlay.innerHTML = '<div style="background:var(--color-card,#1e2130);border:1px solid var(--color-border,#2d3148);border-radius:12px;padding:24px;width:280px;">'
+      + '<h4 style="margin:0 0 14px;font-size:0.95rem;">Edit ' + symbol.replace('USDT','') + ' Leverage</h4>'
+      + '<input id="lev-edit-input" type="number" min="1" max="125" value="' + curLev + '" style="width:100%;padding:8px 10px;border-radius:6px;border:1px solid var(--color-border,#2d3148);background:var(--color-bg,#111);color:var(--color-text,#fff);font-size:1rem;box-sizing:border-box;margin-bottom:6px;">'
+      + '<div style="font-size:0.72rem;color:var(--color-text-muted,#9ca3af);margin-bottom:14px;">Range: 1-125</div>'
+      + '<div style="display:flex;gap:8px;justify-content:flex-end;">'
+      + '<button onclick="document.getElementById(\'lev-edit-modal\').remove()" style="padding:6px 14px;border-radius:6px;border:1px solid var(--color-border,#2d3148);background:transparent;color:var(--color-text-muted,#9ca3af);cursor:pointer;">Cancel</button>'
+      + '<button id="lev-edit-save" style="padding:6px 16px;border-radius:6px;border:none;background:var(--color-accent,#d4af37);color:#000;font-weight:700;cursor:pointer;">Save</button>'
+      + '</div></div>';
+    overlay.addEventListener('click', function(e) { if (e.target === overlay) overlay.remove(); });
+    document.body.appendChild(overlay);
+    var inp = document.getElementById('lev-edit-input');
+    inp.focus(); inp.select();
+    var save = async function() {
+      var lev = parseInt(inp.value);
+      if (isNaN(lev) || lev < 1 || lev > 125) { showToast('Leverage must be 1-125', 'error'); return; }
+      try {
+        await api('POST', '/api/admin/token-leverage', { symbol: symbol, leverage: lev });
+        if (el) el.textContent = 'x' + lev + ' leverage';
+        overlay.remove();
+        showToast(symbol.replace('USDT','') + ' leverage set to x' + lev, 'success');
+      } catch (err) { showToast(err.message, 'error'); }
+    };
+    document.getElementById('lev-edit-save').addEventListener('click', save);
+    inp.addEventListener('keydown', function(e) { if (e.key === 'Enter') save(); });
   }
 
   // Load win-rate stats from closed trades
