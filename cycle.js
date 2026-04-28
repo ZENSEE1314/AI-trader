@@ -715,6 +715,7 @@ async function openTrade(client, pick, wallet) {
     trailingSlPrice: initialSlPrice,
     trailingSlLastStep: 0,
     leverage,
+    vwapZone: pick.vwapBandPos || null,
   });
 
   return {
@@ -771,6 +772,7 @@ async function checkTrailingStop(client) {
             tf3m: state.tf3m || null,
             tf1m: state.tf1m || null,
             marketStructure: state.marketStructure || null,
+            vwapZone: state.vwapZone || null,
             exitReason: 'position_closed',
             comboId: state.comboId || 15,
           });
@@ -782,6 +784,7 @@ async function checkTrailingStop(client) {
               direction: state.isLong ? 'LONG' : 'SHORT',
               session: aiLearner.getCurrentSession(),
               marketStructure: state.marketStructure || 'unknown',
+              vwapZone: state.vwapZone || null,
             });
           } else {
             await aiLearner.performWinAutopsy({
@@ -790,6 +793,7 @@ async function checkTrailingStop(client) {
               direction: state.isLong ? 'LONG' : 'SHORT',
               session: aiLearner.getCurrentSession(),
               marketStructure: state.marketStructure || 'unknown',
+              vwapZone: state.vwapZone || null,
             });
           }
 
@@ -857,6 +861,7 @@ async function checkTrailingStop(client) {
               tpDistancePct: Math.abs(st.tp1 - entry) / entry * 100,
               tf15m: st.tf15m || null, tf3m: st.tf3m || null, tf1m: st.tf1m || null,
               marketStructure: st.marketStructure || null,
+              vwapZone: st.vwapZone || null,
               exitReason: 'structure_break_15m',
               comboId: st.comboId || 15,
             });
@@ -867,6 +872,7 @@ async function checkTrailingStop(client) {
                 direction: isLong ? 'LONG' : 'SHORT',
                 session: aiLearner.getCurrentSession(),
                 marketStructure: st.marketStructure || 'unknown',
+                vwapZone: st.vwapZone || null,
               });
             } else {
               await aiLearner.performWinAutopsy({
@@ -874,6 +880,7 @@ async function checkTrailingStop(client) {
                 direction: isLong ? 'LONG' : 'SHORT',
                 session: aiLearner.getCurrentSession(),
                 marketStructure: st.marketStructure || 'unknown',
+                vwapZone: st.vwapZone || null,
               });
             }
             tradeState.delete(sym);
@@ -926,6 +933,7 @@ async function checkTrailingStop(client) {
                 tpDistancePct: Math.abs(st.tp1 - entry) / entry * 100,
                 tf15m: st.tf15m || null, tf3m: st.tf3m || null, tf1m: st.tf1m || null,
                 marketStructure: st.marketStructure || null,
+                vwapZone: st.vwapZone || null,
                 exitReason: 'spike_tp',
               });
               await aiLearner.performWinAutopsy({
@@ -933,6 +941,7 @@ async function checkTrailingStop(client) {
                 direction: isLong ? 'LONG' : 'SHORT',
                 session: aiLearner.getCurrentSession(),
                 marketStructure: st.marketStructure || 'unknown',
+                vwapZone: st.vwapZone || null,
               });
               tradeState.delete(sym);
 

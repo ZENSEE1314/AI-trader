@@ -35,8 +35,8 @@ async function recordTrade(data) {
       leverage, duration_min, session, rsi_at_entry, atr_pct, vol_ratio,
       sentiment_score, bb_position, score_at_entry, sl_distance_pct,
       tp_distance_pct, trend_1h, market_structure, closed_at,
-      tf_15m, tf_3m, tf_1m, exit_reason
-    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25)`,
+      tf_15m, tf_3m, tf_1m, exit_reason, vwap_zone
+    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26)`,
     [
       data.symbol, data.direction, data.setup, data.entryPrice,
       data.exitPrice || null, data.pnlPct || 0, isWin,
@@ -49,6 +49,7 @@ async function recordTrade(data) {
       data.marketStructure || null, new Date().toISOString(),
       data.tf15m || null, data.tf3m || null, data.tf1m || null,
       data.exitReason || null,
+      data.vwapZone || null,
     ]
   );
 
@@ -285,6 +286,50 @@ async function getOptimalParams() {
       }
     }
   }
+
+  // ── VWAP zone analysis: if LONG trades below VWAP mid consistently lose,
+  // enforce strict VWAP (requireBothHTF=1) automatically.
+  try {
+    const vwapZoneAnalysis = await query(
+      `SELECT direction, vwap_zone,
+        COUNT(*) as total,
+        SUM(CASE WHEN is_win = 1 THEN 1 ELSE 0 END) as wins
+       FROM ai_trades
+       WHERE pnl_pct IS NOT NULL AND vwap_zone IS NOT NULL
+       GROUP BY direction, vwap_zone
+       HAVING COUNT(*) >= 8`
+    );
+
+    let vwapViolationLosses = 0;
+    let vwapViolationTotal  = 0;
+    for (const row of vwapZoneAnalysis) {
+      const zone = row.vwap_zone;
+      const dir  = row.direction;
+      const total = parseInt(row.total);
+      const wins  = parseInt(row.wins);
+      const wr    = wins / total;
+
+      // VWAP violation = LONG in bearish zone OR SHORT in bullish zone
+      const isViolation = (dir === 'LONG'  && (zone === 'below_mid' || zone === 'below_lower'))
+                       || (dir === 'SHORT' && (zone === 'above_mid' || zone === 'above_upper'));
+      if (isViolation) {
+        vwapViolationLosses += (total - wins);
+        vwapViolationTotal  += total;
+      }
+    }
+
+    if (vwapViolationTotal >= 8) {
+      const violationLossRate = vwapViolationLosses / vwapViolationTotal;
+      if (violationLossRate > 0.55) {
+        // Data confirms: VWAP-violation trades lose >55% of the time → enforce strict filter
+        if (!params.requireBothHTF || Number(params.requireBothHTF) === 0) {
+          await logParamChange('requireBothHTF', params.requireBothHTF, 1,
+            `VWAP violation trades: ${(violationLossRate*100).toFixed(0)}% loss rate over ${vwapViolationTotal} trades — enforcing strict VWAP`, totalTrades);
+          params.requireBothHTF = 1;
+        }
+      }
+    }
+  } catch (_) {}
 
   // ── 8-9. LOCKED: Early exit is managed by trailing SL system — AI cannot change exit logic
   params.EARLY_EXIT_ENABLED = false;  // locked — trailing SL handles all exits
@@ -557,7 +602,8 @@ async function performLossAutopsy(tradeData) {
       tradeData.setup,
       tradeData.direction,
       tradeData.session || getCurrentSession(),
-      tradeData.marketStructure || tradeData.trend1h || 'unknown'
+      tradeData.marketStructure || tradeData.trend1h || 'unknown',
+      tradeData.vwapZone || 'unknown',
     ].join('|').toUpperCase();
 
     // 1. Update pattern stats
@@ -605,7 +651,8 @@ async function performWinAutopsy(tradeData) {
       tradeData.setup,
       tradeData.direction,
       tradeData.session || getCurrentSession(),
-      tradeData.marketStructure || tradeData.trend1h || 'unknown'
+      tradeData.marketStructure || tradeData.trend1h || 'unknown',
+      tradeData.vwapZone || 'unknown',
     ].join('|').toUpperCase();
 
     // 1. Update pattern stats (increment win count)
@@ -644,9 +691,9 @@ async function performWinAutopsy(tradeData) {
   }
 }
 
-async function getPatternModifier(symbol, setup, direction, session, trend1hOrStructure) {
+async function getPatternModifier(symbol, setup, direction, session, trend1hOrStructure, vwapZone) {
   try {
-    const dna = [symbol, setup, direction, session || getCurrentSession(), trend1hOrStructure || 'unknown']
+    const dna = [symbol, setup, direction, session || getCurrentSession(), trend1hOrStructure || 'unknown', vwapZone || 'unknown']
       .join('|').toUpperCase();
     const [row] = await query(
       `SELECT current_penalty, positive_boost FROM pattern_penalties WHERE pattern_dna = $1`,

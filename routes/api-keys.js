@@ -217,12 +217,11 @@ router.put('/:id/settings', async (req, res) => {
 });
 
 // Delete a key — cleans up all related rows first to avoid FK constraint errors.
-// Several tables reference api_key_id; live DB may lack ON DELETE CASCADE
-// if those tables were created before the constraint was added to db.js.
+// Each cleanup is individually try/caught so a missing table or unknown FK
+// on the live DB can't block the final DELETE.
 router.delete('/:id', async (req, res) => {
+  const keyId = req.params.id;
   try {
-    const keyId = req.params.id;
-
     // Verify ownership
     const owned = await query(
       'SELECT id FROM api_keys WHERE id = $1 AND user_id = $2',
@@ -231,13 +230,22 @@ router.delete('/:id', async (req, res) => {
     if (!owned.length) return res.status(404).json({ error: 'Key not found' });
 
     // Disable immediately so the bot stops using it
-    await query('UPDATE api_keys SET enabled = false WHERE id = $1', [keyId]);
+    try { await query('UPDATE api_keys SET enabled = false WHERE id = $1', [keyId]); } catch (_) {}
 
-    // Clean up every table that references api_key_id (order matters for FKs)
-    await query(`UPDATE trades SET status = 'CLOSED', closed_at = NOW() WHERE api_key_id = $1 AND status = 'OPEN'`, [keyId]);
-    await query(`DELETE FROM user_token_leverage    WHERE api_key_id = $1`, [keyId]);
-    await query(`DELETE FROM user_agent_preferences WHERE api_key_id = $1`, [keyId]);
-    await query(`DELETE FROM weekly_earnings        WHERE api_key_id = $1`, [keyId]);
+    // Clean up every table that references api_key_id — each step is isolated
+    // so a missing table or unexpected constraint never blocks the delete.
+    const cleanups = [
+      `UPDATE trades SET status = 'CLOSED', closed_at = NOW() WHERE api_key_id = $1 AND status = 'OPEN'`,
+      `DELETE FROM user_token_leverage    WHERE api_key_id = $1`,
+      `DELETE FROM user_agent_preferences WHERE api_key_id = $1`,
+      `DELETE FROM weekly_earnings        WHERE api_key_id = $1`,
+      `DELETE FROM subscriptions          WHERE api_key_id = $1`,
+    ];
+    for (const sql of cleanups) {
+      try { await query(sql, [keyId]); } catch (e) {
+        console.warn(`Delete key ${keyId} cleanup warning: ${e.message}`);
+      }
+    }
 
     // Now safe to delete the key itself
     await query('DELETE FROM api_keys WHERE id = $1', [keyId]);

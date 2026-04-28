@@ -1345,6 +1345,84 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     }
   } // end STRUCTURE_FOLLOW
 
+  // ── Strategy 12: VWAP Rejection / Bounce ──────────────────────────────────
+  // Catches MA-rejection entries that sweep/structure strategies miss:
+  //   SHORT: price below VWAP mid → bounces ≥2 green 1m candles into resistance
+  //          → last 1m closes red and forms a Lower High → SHORT
+  //   LONG:  price above VWAP mid → dips ≥2 red 1m candles toward VWAP
+  //          → last 1m closes green and forms a Higher Low → LONG
+  if (vwapMid && parsed1m.length >= 10) {
+    const last6_1m = parsed1m.slice(-6);
+    const lastC  = last6_1m[last6_1m.length - 1];
+    const prevC  = last6_1m[last6_1m.length - 2];
+    const prev2C = last6_1m[last6_1m.length - 3];
+
+    // 1m MA5 / MA10 for trend confirmation
+    const closes1m = parsed1m.slice(-10).map(c => c.close);
+    const ma5_1m   = closes1m.slice(-5).reduce((a, b) => a + b, 0) / 5;
+    const ma10_1m  = closes1m.length >= 10 ? closes1m.reduce((a, b) => a + b, 0) / 10 : null;
+    const maBearish = ma10_1m !== null && ma5_1m < ma10_1m * 1.001; // MA5 ≤ MA10 (bearish)
+    const maBullish = ma10_1m !== null && ma5_1m > ma10_1m * 0.999; // MA5 ≥ MA10 (bullish)
+
+    const last5_1m  = last6_1m.slice(-5);
+    const greenCount = last5_1m.filter(c => c.close > c.open).length;
+    const redCount   = last5_1m.filter(c => c.close < c.open).length;
+
+    const atrV12 = calcATR(parsed15);
+
+    // ── SHORT: below VWAP → bounce → reject ──────────────────────────────
+    if (vwapBandPos === 'below_mid' || vwapBandPos === 'below_lower') {
+      const bounced  = greenCount >= 2;              // real bounce, not just a tick
+      const rejected = lastC.close < lastC.open      // last candle is red
+                    && lastC.high  < prevC.high;     // lower high = rejection
+      const nearVwap = (vwapMid - price) / vwapMid < 0.015; // within 1.5% below VWAP
+
+      if (bounced && rejected && maBearish && nearVwap) {
+        const sl     = Math.max(prevC.high, prev2C.high) * 1.001;
+        const slDist = Math.abs(sl - price) / price;
+        const tp1    = price - atrV12 * 2.0;
+        const rr     = slDist > 0 ? Math.round((atrV12 * 2.0) / (price * slDist) * 10) / 10 : 0;
+        if (rr >= 1.2 && slDist > 0.001 && slDist < 0.015) {
+          signals.push({
+            symbol, direction: 'SHORT', price, lastPrice: price,
+            sl, tp1, tp2: price - atrV12 * 3.0, tp3: price - atrV12 * 4.0,
+            slDist, setup: 'VWAP_REJECTION',
+            setupName: 'SHORT-VWAP-REJECT',
+            score: 7, rr,
+            tf15: `vwap_mid=${vwapMid.toFixed(2)} zone=${vwapBandPos}`,
+            tf1:  `ma5=${ma5_1m.toFixed(2)} ma10=${(ma10_1m??0).toFixed(2)} LH-red green=${greenCount}`,
+          });
+        }
+      }
+    }
+
+    // ── LONG: above VWAP → dip → hold ────────────────────────────────────
+    if (vwapBandPos === 'above_mid' || vwapBandPos === 'above_upper') {
+      const dipped  = redCount >= 2;                 // real dip, not just a tick
+      const held    = lastC.close > lastC.open       // last candle is green
+                   && lastC.low  > prevC.low;        // higher low = support holding
+      const nearVwap = (price - vwapMid) / vwapMid < 0.015; // within 1.5% above VWAP
+
+      if (dipped && held && maBullish && nearVwap) {
+        const sl     = Math.min(prevC.low, prev2C.low) * 0.999;
+        const slDist = Math.abs(price - sl) / price;
+        const tp1    = price + atrV12 * 2.0;
+        const rr     = slDist > 0 ? Math.round((atrV12 * 2.0) / (price * slDist) * 10) / 10 : 0;
+        if (rr >= 1.2 && slDist > 0.001 && slDist < 0.015) {
+          signals.push({
+            symbol, direction: 'LONG', price, lastPrice: price,
+            sl, tp1, tp2: price + atrV12 * 3.0, tp3: price + atrV12 * 4.0,
+            slDist, setup: 'VWAP_REJECTION',
+            setupName: 'LONG-VWAP-BOUNCE',
+            score: 7, rr,
+            tf15: `vwap_mid=${vwapMid.toFixed(2)} zone=${vwapBandPos}`,
+            tf1:  `ma5=${ma5_1m.toFixed(2)} ma10=${(ma10_1m??0).toFixed(2)} HL-green red=${redCount}`,
+          });
+        }
+      }
+    }
+  } // end VWAP_REJECTION
+
   if (!signals.length) return null;
 
   // Detect 15m swing structure for the hard direction filter below
@@ -1387,7 +1465,11 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     // requireBothHTF=0 (relaxed): only block extreme bands (above_upper / below_lower)
     // Admin direction override always uses relaxed (extreme-only) mode.
     {
-      const strictVwap = !directionOverride && (params.requireBothHTF === 1 || params.requireBothHTF === true || params.requireBothHTF === undefined);
+      // NOTE: DB JSON may deserialise requireBothHTF as a string ("1"/"0") rather than
+      // a number.  Use Number() coercion so "1", 1, true all mean strict, and
+      // "0", 0, false all mean relaxed.  undefined/null → default to strict.
+      const bhv = params.requireBothHTF;
+      const strictVwap = !directionOverride && (bhv === undefined || bhv === null || Number(bhv) !== 0);
       if (strictVwap) {
         if ((vwapBandPos === 'above_upper' || vwapBandPos === 'above_mid') && sig.direction === 'SHORT') {
           sig.score = -99;
