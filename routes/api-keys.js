@@ -216,33 +216,36 @@ router.put('/:id/settings', async (req, res) => {
   }
 });
 
-// Delete a key — closes open trades first to avoid FK constraint errors
+// Delete a key — cleans up all related rows first to avoid FK constraint errors.
+// Several tables reference api_key_id; live DB may lack ON DELETE CASCADE
+// if those tables were created before the constraint was added to db.js.
 router.delete('/:id', async (req, res) => {
   try {
+    const keyId = req.params.id;
+
     // Verify ownership
     const owned = await query(
       'SELECT id FROM api_keys WHERE id = $1 AND user_id = $2',
-      [req.params.id, req.userId]
+      [keyId, req.userId]
     );
     if (!owned.length) return res.status(404).json({ error: 'Key not found' });
 
-    // Disable first so the bot stops using it immediately
-    await query('UPDATE api_keys SET enabled = false WHERE id = $1', [req.params.id]);
+    // Disable immediately so the bot stops using it
+    await query('UPDATE api_keys SET enabled = false WHERE id = $1', [keyId]);
 
-    // Close any open trades tied to this key (prevents FK constraint error)
-    await query(
-      `UPDATE trades SET status = 'CLOSED', closed_at = NOW()
-       WHERE api_key_id = $1 AND status = 'OPEN'`,
-      [req.params.id]
-    );
+    // Clean up every table that references api_key_id (order matters for FKs)
+    await query(`UPDATE trades SET status = 'CLOSED', closed_at = NOW() WHERE api_key_id = $1 AND status = 'OPEN'`, [keyId]);
+    await query(`DELETE FROM user_token_leverage    WHERE api_key_id = $1`, [keyId]);
+    await query(`DELETE FROM user_agent_preferences WHERE api_key_id = $1`, [keyId]);
+    await query(`DELETE FROM weekly_earnings        WHERE api_key_id = $1`, [keyId]);
 
-    // Now safe to delete
-    await query('DELETE FROM api_keys WHERE id = $1', [req.params.id]);
+    // Now safe to delete the key itself
+    await query('DELETE FROM api_keys WHERE id = $1', [keyId]);
 
     res.json({ ok: true });
   } catch (err) {
     console.error('Delete key error:', err.message);
-    res.status(500).json({ error: 'Server error' });
+    res.status(500).json({ error: err.message });
   }
 });
 

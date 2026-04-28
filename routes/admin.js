@@ -367,29 +367,26 @@ router.put('/keys/:id/resume', async (req, res) => {
   }
 });
 
-// Delete an API key — closes any open trades first, then hard-deletes the row
+// Delete an API key — cleans all FK-referenced rows before deleting
 router.delete('/keys/:id', async (req, res) => {
   try {
     const keyId = parseInt(req.params.id, 10);
     if (!Number.isFinite(keyId)) return res.status(400).json({ error: 'Invalid key id' });
 
-    // Soft-disable first so the bot stops using it immediately
+    const exists = await query(`SELECT id FROM api_keys WHERE id = $1`, [keyId]);
+    if (!exists.length) return res.status(404).json({ error: 'Key not found' });
+
     await query(`UPDATE api_keys SET enabled = false WHERE id = $1`, [keyId]);
-
-    // Close any open trades tied to this key
-    await query(
-      `UPDATE trades SET status = 'CLOSED', closed_at = NOW() WHERE api_key_id = $1 AND status = 'OPEN'`,
-      [keyId]
-    );
-
-    // Remove the key
-    const result = await query(`DELETE FROM api_keys WHERE id = $1 RETURNING id`, [keyId]);
-    if (!result.length) return res.status(404).json({ error: 'Key not found' });
+    await query(`UPDATE trades SET status = 'CLOSED', closed_at = NOW() WHERE api_key_id = $1 AND status = 'OPEN'`, [keyId]);
+    await query(`DELETE FROM user_token_leverage    WHERE api_key_id = $1`, [keyId]);
+    await query(`DELETE FROM user_agent_preferences WHERE api_key_id = $1`, [keyId]);
+    await query(`DELETE FROM weekly_earnings        WHERE api_key_id = $1`, [keyId]);
+    await query(`DELETE FROM api_keys WHERE id = $1`, [keyId]);
 
     res.json({ ok: true, deleted: keyId });
   } catch (err) {
     console.error('Delete key error:', err.message);
-    res.status(500).json({ error: 'Server error' });
+    res.status(500).json({ error: err.message });
   }
 });
 
