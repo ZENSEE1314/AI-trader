@@ -1386,22 +1386,10 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
       sig.blocked = `LONG blocked — admin override: SHORT only`;
       continue;
     }
-    if (!directionOverride) {
-      // Auto mode: block only on CONFIRMED full trend (both HH+HL or both LH+LL).
-      // bearish_lean (LH only) and bullish_lean (HL only) are TRANSITIONAL — a reversal
-      // is forming. Blocking those misses entries like HL+CHoCH setups.
-      const st = swingTrend15.trend;
-      if (st === 'bearish' && sig.direction === 'LONG') {
-        sig.score = -99;
-        sig.blocked = `LONG blocked — 15m confirmed bearish (LH+LL): SHORT only`;
-        continue;
-      }
-      if (st === 'bullish' && sig.direction === 'SHORT') {
-        sig.score = -99;
-        sig.blocked = `SHORT blocked — 15m confirmed bullish (HH+HL): LONG only`;
-        continue;
-      }
-    }
+    // NOTE: No 15m trend hard-block in auto mode.
+    // VWAP bands already handle extremes (above upper = LONG only, below lower = SHORT only).
+    // The 3m structure check below requires HL/HH for LONG or LH/LL for SHORT — that
+    // naturally rejects counter-trend entries without blocking HH rejections or HL reversals.
 
     // ── 3m + 3m structure confirmation ──────────────────────────────────────
     // Uses 3m swing points (parsed1 = klines3m) for BOTH timeframe checks.
