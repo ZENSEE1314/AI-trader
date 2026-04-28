@@ -367,6 +367,32 @@ router.put('/keys/:id/resume', async (req, res) => {
   }
 });
 
+// Delete an API key — closes any open trades first, then hard-deletes the row
+router.delete('/keys/:id', async (req, res) => {
+  try {
+    const keyId = parseInt(req.params.id, 10);
+    if (!Number.isFinite(keyId)) return res.status(400).json({ error: 'Invalid key id' });
+
+    // Soft-disable first so the bot stops using it immediately
+    await query(`UPDATE api_keys SET enabled = false WHERE id = $1`, [keyId]);
+
+    // Close any open trades tied to this key
+    await query(
+      `UPDATE trades SET status = 'CLOSED', closed_at = NOW() WHERE api_key_id = $1 AND status = 'OPEN'`,
+      [keyId]
+    );
+
+    // Remove the key
+    const result = await query(`DELETE FROM api_keys WHERE id = $1 RETURNING id`, [keyId]);
+    if (!result.length) return res.status(404).json({ error: 'Key not found' });
+
+    res.json({ ok: true, deleted: keyId });
+  } catch (err) {
+    console.error('Delete key error:', err.message);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // List all users
 router.get('/users', async (req, res) => {
   try {
