@@ -1382,34 +1382,35 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
       continue;
     }
 
-    // ── FILTER 1: VWAP direction alignment (strict) ─────────────────────────
-    // Trade WITH VWAP momentum — not against it:
-    //   above_mid or above_upper → LONG zone   (no SHORT)
-    //   below_mid or below_lower → SHORT zone  (no LONG)
-    // This is the single highest-impact WR improvement.
-    // Exception: admin direction override bypasses this (handled below).
-    if (!directionOverride) {
-      if ((vwapBandPos === 'above_upper' || vwapBandPos === 'above_mid') && sig.direction === 'SHORT') {
-        sig.score = -99;
-        sig.blocked = `SHORT blocked — price in LONG zone (${vwapBandPos}, mid=${vwapMid?.toFixed(2)}): trade WITH VWAP`;
-        continue;
-      }
-      if ((vwapBandPos === 'below_lower' || vwapBandPos === 'below_mid') && sig.direction === 'LONG') {
-        sig.score = -99;
-        sig.blocked = `LONG blocked — price in SHORT zone (${vwapBandPos}, mid=${vwapMid?.toFixed(2)}): trade WITH VWAP`;
-        continue;
-      }
-    } else {
-      // Admin override: only hard-block extreme bands
-      if (vwapBandPos === 'above_upper' && sig.direction === 'SHORT') {
-        sig.score = -99;
-        sig.blocked = `SHORT blocked — price above VWAP upper (${vwapUpper?.toFixed(2)}): LONG only`;
-        continue;
-      }
-      if (vwapBandPos === 'below_lower' && sig.direction === 'LONG') {
-        sig.score = -99;
-        sig.blocked = `LONG blocked — price below VWAP lower (${vwapLower?.toFixed(2)}): SHORT only`;
-        continue;
+    // ── FILTER 1: VWAP direction alignment ──────────────────────────────────
+    // requireBothHTF=1 (strict): no SHORT above mid, no LONG below mid
+    // requireBothHTF=0 (relaxed): only block extreme bands (above_upper / below_lower)
+    // Admin direction override always uses relaxed (extreme-only) mode.
+    {
+      const strictVwap = !directionOverride && (params.requireBothHTF === 1 || params.requireBothHTF === true || params.requireBothHTF === undefined);
+      if (strictVwap) {
+        if ((vwapBandPos === 'above_upper' || vwapBandPos === 'above_mid') && sig.direction === 'SHORT') {
+          sig.score = -99;
+          sig.blocked = `SHORT blocked — price in LONG zone (${vwapBandPos}, mid=${vwapMid?.toFixed(2)}): trade WITH VWAP`;
+          continue;
+        }
+        if ((vwapBandPos === 'below_lower' || vwapBandPos === 'below_mid') && sig.direction === 'LONG') {
+          sig.score = -99;
+          sig.blocked = `LONG blocked — price in SHORT zone (${vwapBandPos}, mid=${vwapMid?.toFixed(2)}): trade WITH VWAP`;
+          continue;
+        }
+      } else {
+        // Relaxed / override: only hard-block extreme bands
+        if (vwapBandPos === 'above_upper' && sig.direction === 'SHORT') {
+          sig.score = -99;
+          sig.blocked = `SHORT blocked — price above VWAP upper (${vwapUpper?.toFixed(2)}): hard block`;
+          continue;
+        }
+        if (vwapBandPos === 'below_lower' && sig.direction === 'LONG') {
+          sig.score = -99;
+          sig.blocked = `LONG blocked — price below VWAP lower (${vwapLower?.toFixed(2)}): hard block`;
+          continue;
+        }
       }
     }
 
@@ -1449,8 +1450,9 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     // Requires 2 consecutive structure points for higher WR (filter single-bar noise).
     // 1m: fresh pivot confirmation from the last 15 bars only.
     {
-      // Last 5 × 15m candles for 2-bar structure check
-      const c15 = parsed15.slice(-5);
+      // Last N × 15m candles for structure check — window from active version (default 5)
+      const c15Len = params.swingLen15m ? Math.max(params.swingLen15m + 2, 5) : 5;
+      const c15 = parsed15.slice(-c15Len);
       const lastC15 = c15[c15.length - 1];
       const prevC15 = c15[c15.length - 2];
       const pre2C15 = c15[c15.length - 3]; // one more back for 2-HL check
@@ -1472,10 +1474,11 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
       const longConsec  = (hlQual && prevHL) || has15mHH || (has15mLL && last15mBull);
       const shortConsec = (lhQual && prevLH) || has15mLL || (has15mHH && last15mBear);
 
-      // 1m entry: fresh pivot from last 15 bars only (not stale 30-bar-old confirm)
+      // 1m entry: fresh pivot confirmation — window size from active version (default 15)
       const P1B = 2;
       const pH1m = [], pL1m = [];
-      const scan1m = (parsed1m && parsed1m.length >= 10) ? parsed1m.slice(-15) : parsed1.slice(-10);
+      const scan1mLen = params.swingLen1m || 15;
+      const scan1m = (parsed1m && parsed1m.length >= 10) ? parsed1m.slice(-scan1mLen) : parsed1m.slice(-10);
       for (let i = P1B; i < scan1m.length - P1B; i++) {
         let isH = true, isL = true;
         for (let j = 1; j <= P1B; j++) {
@@ -1490,17 +1493,41 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
       const has1mLL = pL1m.length >= 2 && pL1m[pL1m.length - 1] < pL1m[pL1m.length - 2];
       const has1mLH = pH1m.length >= 2 && pH1m[pH1m.length - 1] < pH1m[pH1m.length - 2];
 
-      const longOk  = longConsec  && (has1mHH || has1mHL);
-      const shortOk = shortConsec && (has1mLL || has1mLH);
+      // Active version can disable 15m or 1m confirmation requirements
+      const skip15m = params.require15m === 0 || params.require15m === false;
+      const skip1m  = params.require1m  === 0 || params.require1m  === false;
+
+      const longOk  = (skip15m || longConsec)  && (skip1m || (has1mHH || has1mHL));
+      const shortOk = (skip15m || shortConsec) && (skip1m || (has1mLL || has1mLH));
 
       if (sig.direction === 'LONG' && !longOk) {
         sig.score = -99;
-        sig.blocked = `LONG blocked — need 2xHL(${hlQual&&prevHL}) or HH(${has15mHH}) or LL+bull(${has15mLL&&last15mBull}) + fresh 1m HH/HL(${has1mHH||has1mHL})`;
+        sig.blocked = `LONG blocked — 15m(${skip15m?'skip':hlQual&&prevHL||has15mHH||has15mLL&&last15mBull}) 1m(${skip1m?'skip':has1mHH||has1mHL})`;
         continue;
       }
       if (sig.direction === 'SHORT' && !shortOk) {
         sig.score = -99;
-        sig.blocked = `SHORT blocked — need 2xLH(${lhQual&&prevLH}) or LL(${has15mLL}) or HH+bear(${has15mHH&&last15mBear}) + fresh 1m LL/LH(${has1mLL||has1mLH})`;
+        sig.blocked = `SHORT blocked — 15m(${skip15m?'skip':lhQual&&prevLH||has15mLL||has15mHH&&last15mBear}) 1m(${skip1m?'skip':has1mLL||has1mLH})`;
+        continue;
+      }
+    }
+
+    // ── FILTER 4: Key level proximity (active version requireKeyLevel) ──────
+    if (params.requireKeyLevel) {
+      const nearLevel = allLevels.find(l => l.strength >= 2 && Math.abs(l.price - sig.price) / sig.price < 0.003);
+      if (!nearLevel) {
+        sig.score = -99;
+        sig.blocked = `${sig.direction} blocked — requireKeyLevel: no strong S/R within 0.3% of price`;
+        continue;
+      }
+    }
+
+    // ── FILTER 5: Volume spike confirmation (active version requireVolSpike) ─
+    if (params.requireVolSpike) {
+      const mult = params.volSpikeMultiplier || 1.2;
+      if (!hasVolumeConfirm(parsed15, parsed15.length - 1, mult)) {
+        sig.score = -99;
+        sig.blocked = `${sig.direction} blocked — requireVolSpike: volume too low (need ${mult}x avg)`;
         continue;
       }
     }
@@ -1607,6 +1634,38 @@ async function scanSMC(log, opts = {}) {
 
   const params = await aiLearner.getOptimalParams();
   const minScore = params.MIN_SCORE || 8;
+
+  // ── Active version params from Admin Panel ───────────────────────────────
+  // When admin activates a version (e.g. v3.42 94.7% WR), those params are
+  // stored in settings.active_ai_version. Read them here so signal filters
+  // respect the version's configuration (require1m, require15m, requireBothHTF, etc.)
+  let activeVerParams = null;
+  try {
+    const { query: dbQ } = require('./db');
+    const vRows = await dbQ(`SELECT value FROM settings WHERE key = 'active_ai_version'`);
+    if (vRows.length) {
+      activeVerParams = typeof vRows[0].value === 'string'
+        ? JSON.parse(vRows[0].value) : vRows[0].value;
+      bLog.ai(`Active version: v${activeVerParams.version || '?'} | require1m=${activeVerParams.require1m ?? activeVerParams.REQUIRE1M ?? 'default'} require15m=${activeVerParams.require15m ?? activeVerParams.REQUIRE15M ?? 'default'} requireBothHTF=${activeVerParams.requireBothHTF ?? activeVerParams.REQUIREBOTHHTF ?? 'default'}`);
+    }
+  } catch (e) { bLog.error(`Failed to load active version params: ${e.message}`); }
+
+  // Merge active version params into base params so analyzeCoin can use them
+  if (activeVerParams) {
+    // Normalise key names — DB stores camelCase (require1m) or SCREAMING (REQUIRE1M)
+    const norm = k => activeVerParams[k] ?? activeVerParams[k.toUpperCase()] ?? activeVerParams[k.replace(/([A-Z])/g, '_$1').toUpperCase()];
+    params.require1m        = norm('require1m')        ?? params.require1m;
+    params.require15m       = norm('require15m')       ?? params.require15m;
+    params.requireBothHTF   = norm('requireBothHTF')   ?? params.requireBothHTF;
+    params.requireKeyLevel  = norm('requireKeyLevel')  ?? params.requireKeyLevel;
+    params.requireVolSpike  = norm('requireVolSpike')  ?? params.requireVolSpike;
+    params.maxEntryAge      = norm('maxEntryAge')      ?? params.maxEntryAge;
+    params.swingLen1m       = norm('swingLen1m')       ?? params.swingLen1m;
+    params.swingLen15m      = norm('swingLen15m')      ?? params.swingLen15m;
+    params.swingLen1h       = norm('swingLen1h')       ?? params.swingLen1h;
+    params.swingLen4h       = norm('swingLen4h')       ?? params.swingLen4h;
+    params.volSpikeMultiplier = norm('volSpikeMultiplier') ?? params.volSpikeMultiplier;
+  }
 
   // Quantum optimizer: get active strategy combo + best params from backtest
   let activeCombo = 15;
