@@ -1371,13 +1371,18 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     const atrV12 = calcATR(parsed15);
 
     // ── SHORT: below VWAP → bounce → reject ──────────────────────────────
+    // NOTE: do NOT require maBearish — the bounce (green candles) temporarily
+    // pushes MA5 above MA10, making maBearish=false even on a perfect setup.
+    // The rejection candle (red + lower high) is strong enough confirmation.
     if (vwapBandPos === 'below_mid' || vwapBandPos === 'below_lower') {
       const bounced  = greenCount >= 2;              // real bounce, not just a tick
-      const rejected = lastC.close < lastC.open      // last candle is red
-                    && lastC.high  < prevC.high;     // lower high = rejection
-      const nearVwap = (vwapMid - price) / vwapMid < 0.015; // within 1.5% below VWAP
+      const rejected = lastC.close < lastC.open      // last candle is red (rejection)
+                    && lastC.high  < prevC.high;     // lower high confirms turn
+      // Strong rejection: body is at least 40% of the candle range
+      const strongRej = totalRange(lastC) > 0 && bodySize(lastC) / totalRange(lastC) >= 0.4;
+      const nearVwap  = (vwapMid - price) / vwapMid < 0.02; // within 2% below VWAP
 
-      if (bounced && rejected && maBearish && nearVwap) {
+      if (bounced && rejected && strongRej && nearVwap) {
         const sl     = Math.max(prevC.high, prev2C.high) * 1.001;
         const slDist = Math.abs(sl - price) / price;
         const tp1    = price - atrV12 * 2.0;
@@ -1388,22 +1393,24 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
             sl, tp1, tp2: price - atrV12 * 3.0, tp3: price - atrV12 * 4.0,
             slDist, setup: 'VWAP_REJECTION',
             setupName: 'SHORT-VWAP-REJECT',
-            score: 7, rr,
+            score: 9, rr,
             tf15: `vwap_mid=${vwapMid.toFixed(2)} zone=${vwapBandPos}`,
-            tf1:  `ma5=${ma5_1m.toFixed(2)} ma10=${(ma10_1m??0).toFixed(2)} LH-red green=${greenCount}`,
+            tf1:  `green=${greenCount} strongRej=${strongRej} LH-red`,
           });
         }
       }
     }
 
     // ── LONG: above VWAP → dip → hold ────────────────────────────────────
+    // NOTE: same logic — do NOT require maBullish (red dip candles suppress it).
     if (vwapBandPos === 'above_mid' || vwapBandPos === 'above_upper') {
       const dipped  = redCount >= 2;                 // real dip, not just a tick
       const held    = lastC.close > lastC.open       // last candle is green
                    && lastC.low  > prevC.low;        // higher low = support holding
-      const nearVwap = (price - vwapMid) / vwapMid < 0.015; // within 1.5% above VWAP
+      const strongHold = totalRange(lastC) > 0 && bodySize(lastC) / totalRange(lastC) >= 0.4;
+      const nearVwap = (price - vwapMid) / vwapMid < 0.02; // within 2% above VWAP
 
-      if (dipped && held && maBullish && nearVwap) {
+      if (dipped && held && strongHold && nearVwap) {
         const sl     = Math.min(prevC.low, prev2C.low) * 0.999;
         const slDist = Math.abs(price - sl) / price;
         const tp1    = price + atrV12 * 2.0;
@@ -1416,7 +1423,7 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
             setupName: 'LONG-VWAP-BOUNCE',
             score: 7, rr,
             tf15: `vwap_mid=${vwapMid.toFixed(2)} zone=${vwapBandPos}`,
-            tf1:  `ma5=${ma5_1m.toFixed(2)} ma10=${(ma10_1m??0).toFixed(2)} HL-green red=${redCount}`,
+            tf1:  `red=${redCount} strongHold=${strongHold} HL-green`,
           });
         }
       }
