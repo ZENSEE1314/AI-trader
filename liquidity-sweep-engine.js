@@ -1524,37 +1524,38 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     }
 
     // ── FILTER 1: VWAP direction alignment ─────────────────────────────────
-    // Rules (asymmetric — tuned from live loss history):
-    //   above_upper  → LONG only. Price is in strong bullish zone — no SHORT.
-    //   above_mid    → BOTH allowed. Price is just above VWAP — reversals happen here.
-    //                  SHORTs allowed so we catch failed breakouts above VWAP.
-    //   below_mid    → SHORT only. Price below VWAP mid = bearish. No LONG.
-    //                  (Most losing LONGs came from this zone — keep hard block.)
-    //   below_lower  → SHORT only. Price in strong bearish zone — no LONG.
-    // NOTE: directionOverride does NOT bypass this filter.
+    // Zones:
+    //   above_upper  → no SHORT (strong bull zone)
+    //   above_mid    → both OK
+    //   near_mid     → both OK (within 0.5% of mid either side — transition zone)
+    //   below_mid    → no LONG (bearish, but only if clearly below — not near mid)
+    //   below_lower  → no LONG (strong bear zone)
     {
+      const nearMid = vwapMid && Math.abs(price - vwapMid) / vwapMid < 0.005; // within 0.5% of VWAP mid
+
       if (vwapBandPos === 'above_upper' && sig.direction === 'SHORT') {
         sig.score = -99;
-        sig.blocked = `SHORT blocked — price above VWAP upper band (${vwapBandPos}, upper=${vwapUpper?.toFixed(2)}): too high to short`;
+        sig.blocked = `SHORT blocked — price above VWAP upper (${vwapUpper?.toFixed(2)})`;
         continue;
       }
-      if ((vwapBandPos === 'below_lower' || vwapBandPos === 'below_mid') && sig.direction === 'LONG') {
+      // Only block LONG below mid if price is NOT near VWAP mid (give 0.5% tolerance)
+      if ((vwapBandPos === 'below_lower' || vwapBandPos === 'below_mid') && sig.direction === 'LONG' && !nearMid) {
         sig.score = -99;
-        sig.blocked = `LONG blocked — price below VWAP mid (${vwapBandPos}, mid=${vwapMid?.toFixed(2)}): bearish zone`;
+        sig.blocked = `LONG blocked — price below VWAP mid (${vwapBandPos}, mid=${vwapMid?.toFixed(2)}, dist=${((vwapMid-price)/vwapMid*100).toFixed(2)}%)`;
         continue;
       }
     }
 
-    // ── FILTER 2: Session filter — skip Asia low-liquidity hours ────────────
-    // 00:00–06:30 UTC = Asia session: choppy, spreads wide, fakeouts common.
-    // 06:30–20:00 UTC = London + NY: high volume, clean structure, better WR.
+    // ── FILTER 2: Session filter — skip dead hours only ─────────────────────
+    // Only block the true dead zone: 01:00–06:30 UTC (03:00–14:30 UTC+8)
+    // This keeps London, NY, and Asian late session all open.
     {
       const _utcH = new Date().getUTCHours();
       const _utcM = new Date().getUTCMinutes();
       const _utcMin = _utcH * 60 + _utcM;
-      if (_utcMin < 390 || _utcMin > 1200) { // outside 06:30–20:00 UTC
+      if (_utcMin >= 60 && _utcMin < 390) { // 01:00–06:30 UTC dead zone
         sig.score = -99;
-        sig.blocked = `blocked — Asia/late session (UTC ${_utcH}:${String(_utcM).padStart(2,'0')}): trade window 06:30–20:00 UTC`;
+        sig.blocked = `blocked — dead session (UTC ${_utcH}:${String(_utcM).padStart(2,'0')}): trade window outside 01:00–06:30 UTC`;
         continue;
       }
     }
