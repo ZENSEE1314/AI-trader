@@ -1260,12 +1260,13 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
   } // end STRATEGY_V2 gate
 
   // Strategy 11: Structure Follow
-  // LONG:  (15m HL or HH or LL+bullish close) + (1m HH or HL) → LONG
-  // SHORT: (15m LH or LL or HH+bearish close) + (1m LL or LH) → SHORT
-  // NOTE: HH+bearish = liquidity sweep rejection short (SMC: price sweeps buy stops, rejects)
-  //       LL+bullish = liquidity sweep rejection long  (SMC: price sweeps sell stops, bounces)
+  // LONG:  (15m HL or HH) + (3m HH or HL) OR (1m HH or HL) → LONG
+  // SHORT: (15m LH or LL) + (3m LL or LH) OR (1m LL or LH) → SHORT
+  // Either 3m or 1m confirmation is enough — wider entry window.
   {
     const PIVOT_B = 2;
+
+    // ── 15m pivots ───────────────────────────────────────────
     const sHs15 = [], sLs15 = [];
     for (let i = PIVOT_B; i < parsed15.length - PIVOT_B; i++) {
       let isH = true, isL = true;
@@ -1281,65 +1282,97 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     const has15mLH = sHs15.length >= 2 && sHs15[sHs15.length - 1] < sHs15[sHs15.length - 2];
     const has15mLL = sLs15.length >= 2 && sLs15[sLs15.length - 1] < sLs15[sLs15.length - 2];
 
-    const pH1m = [], pL1m = [];
+    // Last 15m candle direction — used for sweep-rejection setups
+    const lastC15b = parsed15[parsed15.length - 1];
+    const last15mBullish = lastC15b && lastC15b.close > lastC15b.open;
+    const last15mBearish = lastC15b && lastC15b.close < lastC15b.open;
+
+    // ── 3m pivots (parsed1 = klines3m) ──────────────────────
+    const pH3m = [], pL3m = [];
     for (let i = PIVOT_B; i < parsed1.length - PIVOT_B; i++) {
       let isH = true, isL = true;
       for (let j = 1; j <= PIVOT_B; j++) {
         if (parsed1[i].high <= parsed1[i-j].high || parsed1[i].high <= parsed1[i+j].high) isH = false;
         if (parsed1[i].low  >= parsed1[i-j].low  || parsed1[i].low  >= parsed1[i+j].low)  isL = false;
       }
-      if (isH) pH1m.push(parsed1[i].high);
-      if (isL) pL1m.push(parsed1[i].low);
+      if (isH) pH3m.push(parsed1[i].high);
+      if (isL) pL3m.push(parsed1[i].low);
+    }
+    const has3mHH = pH3m.length >= 2 && pH3m[pH3m.length - 1] > pH3m[pH3m.length - 2];
+    const has3mHL = pL3m.length >= 2 && pL3m[pL3m.length - 1] > pL3m[pL3m.length - 2];
+    const has3mLL = pL3m.length >= 2 && pL3m[pL3m.length - 1] < pL3m[pL3m.length - 2];
+    const has3mLH = pH3m.length >= 2 && pH3m[pH3m.length - 1] < pH3m[pH3m.length - 2];
+
+    // ── 1m pivots (parsed1m = klines1m) ──────────────────────
+    const pH1m = [], pL1m = [];
+    if (parsed1m.length > PIVOT_B * 2) {
+      for (let i = PIVOT_B; i < parsed1m.length - PIVOT_B; i++) {
+        let isH = true, isL = true;
+        for (let j = 1; j <= PIVOT_B; j++) {
+          if (parsed1m[i].high <= parsed1m[i-j].high || parsed1m[i].high <= parsed1m[i+j].high) isH = false;
+          if (parsed1m[i].low  >= parsed1m[i-j].low  || parsed1m[i].low  >= parsed1m[i+j].low)  isL = false;
+        }
+        if (isH) pH1m.push(parsed1m[i].high);
+        if (isL) pL1m.push(parsed1m[i].low);
+      }
     }
     const has1mHH = pH1m.length >= 2 && pH1m[pH1m.length - 1] > pH1m[pH1m.length - 2];
     const has1mHL = pL1m.length >= 2 && pL1m[pL1m.length - 1] > pL1m[pL1m.length - 2];
     const has1mLL = pL1m.length >= 2 && pL1m[pL1m.length - 1] < pL1m[pL1m.length - 2];
     const has1mLH = pH1m.length >= 2 && pH1m[pH1m.length - 1] < pH1m[pH1m.length - 2];
 
-    // Last 15m candle direction — used for sweep-rejection setups
-    const lastC15b = parsed15[parsed15.length - 1];
-    const last15mBullish = lastC15b && lastC15b.close > lastC15b.open; // green close = bullish sweep
-    const last15mBearish = lastC15b && lastC15b.close < lastC15b.open; // red close   = bearish sweep
+    // Confirmation: 3m OR 1m — either timeframe agreeing is enough
+    const longConfirm3m  = has3mHH || has3mHL;
+    const longConfirm1m  = has1mHH || has1mHL;
+    const shortConfirm3m = has3mLL || has3mLH;
+    const shortConfirm1m = has1mLL || has1mLH;
 
-    // LONG:  HL (higher low) | HH (breakout continuation) | LL with bullish close (sweep reversal)
-    // SHORT: LH (lower high) | LL (breakdown continuation) | HH with bearish close (sweep rejection)
-    const longOk  = (has15mHL || has15mHH || (has15mLL && last15mBullish)) && (has1mHH || has1mHL);
-    const shortOk = (has15mLH || has15mLL || (has15mHH && last15mBearish)) && (has1mLL || has1mLH);
+    const htfLongOk  = has15mHL || has15mHH || (has15mLL && last15mBullish);
+    const htfShortOk = has15mLH || has15mLL || (has15mHH && last15mBearish);
+
+    const longOk  = htfLongOk  && (longConfirm3m  || longConfirm1m);
+    const shortOk = htfShortOk && (shortConfirm3m || shortConfirm1m);
+
+    // For SL: prefer 1m pivots (tighter), fall back to 3m
+    const slLowRef  = pL1m.length >= 3 ? pL1m : pL3m;
+    const slHighRef = pH1m.length >= 3 ? pH1m : pH3m;
+
+    // Label which TF confirmed
+    const longTfTag  = longConfirm3m  ? `3m-${has3mHH  ? 'HH' : 'HL'}` : `1m-${has1mHH  ? 'HH' : 'HL'}`;
+    const shortTfTag = shortConfirm3m ? `3m-${has3mLL  ? 'LL' : 'LH'}` : `1m-${has1mLL  ? 'LL' : 'LH'}`;
 
     const atr = calcATR(parsed15);
 
     if (longOk) {
-      const sl     = pL1m.length ? Math.min(...pL1m.slice(-3)) * 0.9995 : price * 0.998;
+      const sl     = slLowRef.length ? Math.min(...slLowRef.slice(-3)) * 0.9995 : price * 0.998;
       const slDist = Math.abs(price - sl) / price;
       const tp1    = price + atr * 2.0;
       const rr     = slDist > 0 ? Math.round((atr * 2.0) / (price * slDist) * 10) / 10 : 0;
       if (rr >= 1.2 && slDist > 0.001 && slDist < 0.03) {
         const tag15 = has15mHL ? `HL:${sLs15[sLs15.length-2]?.toFixed(2)}→${sLs15[sLs15.length-1]?.toFixed(2)}` : `HH:${sHs15[sHs15.length-2]?.toFixed(2)}→${sHs15[sHs15.length-1]?.toFixed(2)}`;
-        const tag1  = has1mHH  ? `HH:${pH1m[pH1m.length-2]?.toFixed(2)}→${pH1m[pH1m.length-1]?.toFixed(2)}`  : `HL:${pL1m[pL1m.length-2]?.toFixed(2)}→${pL1m[pL1m.length-1]?.toFixed(2)}`;
         signals.push({
           symbol, direction: 'LONG', price, lastPrice: price,
           sl, tp1, tp2: price + atr * 3.0, tp3: price + atr * 4.0,
           slDist, setup: 'STRUCTURE_FOLLOW',
-          setupName: `LONG-${has15mHL ? '15HL' : '15HH'}-${has1mHH ? '1HH' : '1HL'}`,
-          score: 8, rr, tf15: `15m ${tag15}`, tf1: `1m ${tag1}`,
+          setupName: `LONG-${has15mHL ? '15HL' : '15HH'}-${longTfTag}`,
+          score: 8, rr, tf15: `15m ${tag15}`, tf1: longTfTag,
         });
       }
     }
 
     if (shortOk) {
-      const sl     = pH1m.length ? Math.max(...pH1m.slice(-3)) * 1.0005 : price * 1.002;
+      const sl     = slHighRef.length ? Math.max(...slHighRef.slice(-3)) * 1.0005 : price * 1.002;
       const slDist = Math.abs(sl - price) / price;
       const tp1    = price - atr * 2.0;
       const rr     = slDist > 0 ? Math.round((atr * 2.0) / (price * slDist) * 10) / 10 : 0;
       if (rr >= 1.2 && slDist > 0.001 && slDist < 0.03) {
         const tag15 = has15mLH ? `LH:${sHs15[sHs15.length-2]?.toFixed(2)}→${sHs15[sHs15.length-1]?.toFixed(2)}` : `LL:${sLs15[sLs15.length-2]?.toFixed(2)}→${sLs15[sLs15.length-1]?.toFixed(2)}`;
-        const tag1  = has1mLL  ? `LL:${pL1m[pL1m.length-2]?.toFixed(2)}→${pL1m[pL1m.length-1]?.toFixed(2)}`  : `LH:${pH1m[pH1m.length-2]?.toFixed(2)}→${pH1m[pH1m.length-1]?.toFixed(2)}`;
         signals.push({
           symbol, direction: 'SHORT', price, lastPrice: price,
           sl, tp1, tp2: price - atr * 3.0, tp3: price - atr * 4.0,
           slDist, setup: 'STRUCTURE_FOLLOW',
-          setupName: `SHORT-${has15mLH ? '15LH' : '15LL'}-${has1mLL ? '1LL' : '1LH'}`,
-          score: 8, rr, tf15: `15m ${tag15}`, tf1: `1m ${tag1}`,
+          setupName: `SHORT-${has15mLH ? '15LH' : '15LL'}-${shortTfTag}`,
+          score: 8, rr, tf15: `15m ${tag15}`, tf1: shortTfTag,
         });
       }
     }
