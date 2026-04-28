@@ -10,8 +10,9 @@
 //                            (15m LH/LL) + (1m LL/LH) = SHORT
 //
 // Entry gates (ALL signals must pass):
-//   • Price ≥ VWAP mid → LONG only  (SHORT blocked)
-//   • Price <  VWAP mid → SHORT only (LONG blocked)
+//   • Price > VWAP upper band → LONG only  (SHORT blocked)
+//   • Price < VWAP lower band → SHORT only (LONG blocked)
+//   • Price between bands     → structure decides (both OK)
 //   • Structure: (15m HL||HH) + (1m HH||HL) for LONG
 //               (15m LH||LL) + (1m LL||LH) for SHORT
 //
@@ -936,19 +937,20 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
   const symbol = ticker.symbol;
   const price = parseFloat(ticker.lastPrice);
 
-  const [klines1h, klines15m, klines1m, marketIntel] = await Promise.all([
+  const [klines1h, klines15m, klines3m, klines1m, marketIntel] = await Promise.all([
     fetchKlines(symbol, '1h', 60),
     fetchKlines(symbol, '15m', 100),
     fetchKlines(symbol, '3m', 50),
-    fetchKlines(symbol, '1m', 50),
+    fetchKlines(symbol, '1m', 300), // 300 candles = ~5h of 1m data for accurate VWAP session
     getMarketIntel(symbol),
   ]);
 
-  if (!klines15m || !klines1m) return null;
-  if (klines15m.length < 30 || klines1m.length < 10) return null;
+  if (!klines15m || !klines3m) return null;
+  if (klines15m.length < 30 || klines3m.length < 10) return null;
 
   const parsed15 = klines15m.map(parseCandle);
-  const parsed1  = klines1m.map(parseCandle);
+  const parsed1  = klines3m.map(parseCandle);   // 3m used for swing detection in strategies
+  const parsed1m = klines1m ? klines1m.map(parseCandle) : [];
   const atr15 = calcATR(parsed15);
 
   // ── GLOBAL FILTERS ──────────────────────────────────────
@@ -989,7 +991,7 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
   //   Lower band = VWAP − VWAP_BAND_MULT × σ
   //   price > upper band → bullish zone → NO SHORT until price falls below upper band
   //   price < lower band → bearish zone → NO LONG  until price rises above lower band
-  const VWAP_BAND_MULT = 1.0; // 1 standard deviation (matches TradingView default)
+  const VWAP_BAND_MULT = 1.0; // 1 standard deviation (matches TradingView VWAP Session)
   let opBias      = 'neutral';
   let vwapUpper   = null;
   let vwapLower   = null;
@@ -999,10 +1001,17 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
   {
     const now = new Date();
     const dayStartMs = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
-    const todayCandles = parsed15.filter(c => c.openTime >= dayStartMs);
-    // Fall back to all 15m candles when the session has just started (<3 candles today)
-    const vwapCandles = todayCandles.length >= 3 ? todayCandles : parsed15;
-    const opPrice = todayCandles.length > 0 ? todayCandles[0].open : null;
+
+    // Use 1m candles for VWAP — matches TradingView VWAP Session resolution.
+    // 15m candles produce σ ≈ 4–5× wider bands (coarser typical price swings).
+    // Filter to today's session only; fall back to last 60 1m bars if session is fresh.
+    const today1m = parsed1m.filter(c => c.openTime >= dayStartMs);
+    const vwapCandles = today1m.length >= 10 ? today1m
+                      : parsed1m.length  >= 10 ? parsed1m.slice(-60)
+                      : parsed15.filter(c => c.openTime >= dayStartMs);
+
+    const opCandles15 = parsed15.filter(c => c.openTime >= dayStartMs);
+    const opPrice = opCandles15.length > 0 ? opCandles15[0].open : null;
 
     if (vwapCandles.length > 0) {
       // Step 1: VWAP
@@ -1030,17 +1039,17 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
         vwapUpper = vwapVal + VWAP_BAND_MULT * stdDev;
         vwapLower = vwapVal - VWAP_BAND_MULT * stdDev;
 
-        // Where is price relative to VWAP?
-        // Rule: price < VWAP mid → bearish zone → NO LONG, only SHORT
-        //       price > VWAP mid → bullish zone → NO SHORT, only LONG
-        // Extreme zones (outside bands) add extra confirmation.
-        if (price >= vwapUpper)      vwapBandPos = 'above_upper';  // strongly bullish
-        else if (price >= vwapVal)   vwapBandPos = 'above_mid';    // mildly bullish
-        else if (price <= vwapLower) vwapBandPos = 'below_lower';  // strongly bearish
-        else                         vwapBandPos = 'below_mid';    // price < VWAP mid → bearish
+        // Band position — bands are the hard lines (matches TradingView visual):
+        //   price > upper band → LONG zone   (above upper = bullish extreme)
+        //   price < lower band → SHORT zone  (below lower = bearish extreme)
+        //   between bands      → neutral     (both directions allowed by structure)
+        if (price >= vwapUpper)      vwapBandPos = 'above_upper';
+        else if (price <= vwapLower) vwapBandPos = 'below_lower';
+        else if (price >= vwapVal)   vwapBandPos = 'above_mid';
+        else                         vwapBandPos = 'below_mid';
       }
 
-      // OP + VWAP directional bias (unchanged)
+      // OP + VWAP directional bias
       if (opPrice && vwapVal) {
         if (price > opPrice && price > vwapVal)      opBias = 'bullish';
         else if (price < opPrice && price < vwapVal) opBias = 'bearish';
@@ -1329,9 +1338,10 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     //   LONG  → 15m HL (last swing low > prev swing low) + 1m HH (last pivot high > prev)
     //   SHORT → 15m LH (last swing high < prev swing high) + 1m LL (last pivot low < prev)
     //
-    // VWAP zone hard blocks — VWAP mid is the hard line:
-    //   Price >= VWAP mid → LONG only, NO SHORT
-    //   Price <  VWAP mid → SHORT only, NO LONG
+    // VWAP band hard blocks — 3 VWAP lines (lower / mid / upper):
+    //   price > upper band → LONG only  (no SHORT above upper line)
+    //   price < lower band → SHORT only (no LONG  below lower line)
+    //   between bands      → both directions OK, structure decides
     //
     // VWAP unknown → block all.
     if (vwapBandPos === 'unknown') {
@@ -1340,17 +1350,15 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
       continue;
     }
 
-    // Hard VWAP zone blocks — VWAP mid is the hard line
-    // Price >= VWAP mid → bullish zone → LONG only (no SHORT)
-    // Price <  VWAP mid → bearish zone → SHORT only (no LONG)
-    if ((vwapBandPos === 'above_mid' || vwapBandPos === 'above_upper') && sig.direction === 'SHORT') {
+    // Hard VWAP band blocks
+    if (vwapBandPos === 'above_upper' && sig.direction === 'SHORT') {
       sig.score = -99;
-      sig.blocked = `SHORT blocked — price above VWAP mid (${vwapMid?.toFixed(2)}): LONG only`;
+      sig.blocked = `SHORT blocked — price above VWAP upper (${vwapUpper?.toFixed(2)}): LONG only`;
       continue;
     }
-    if ((vwapBandPos === 'below_mid' || vwapBandPos === 'below_lower') && sig.direction === 'LONG') {
+    if (vwapBandPos === 'below_lower' && sig.direction === 'LONG') {
       sig.score = -99;
-      sig.blocked = `LONG blocked — price below VWAP mid (${vwapMid?.toFixed(2)}): SHORT only`;
+      sig.blocked = `LONG blocked — price below VWAP lower (${vwapLower?.toFixed(2)}): SHORT only`;
       continue;
     }
 
