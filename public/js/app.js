@@ -3123,7 +3123,7 @@
 
   function editTokenCardLev(symbol) {
     const el = document.getElementById('tcard-lev-' + symbol);
-    const curLev = parseInt((el ? el.textContent : '').replace(/[^d]/g, '')) || 20;
+    const curLev = parseInt((el ? el.textContent : '').replace(/[^\d]/g, '')) || 20;
     const existing = document.getElementById('lev-edit-modal');
     if (existing) existing.remove();
     const overlay = document.createElement('div');
@@ -4830,9 +4830,8 @@
 
       const bxLink = u.bitunix_referral_link || '';
       const bxLinkLabel = bxLink ? '🔵 Set' : '🔵 —';
-      const delKeyBtn = u.key_count > 0
-        ? `<button class="btn btn-sm" style="font-size:0.7rem;padding:2px 8px;background:#7f1d1d;border:1px solid #ef4444;color:#fca5a5;font-weight:700;" onclick="window.CryptoBot.adminShowUserKeys(${u.id},'${escapeHtml(u.email)}')">🗑 Del Key</button>`
-        : '';
+      // Always show Del Key — adminShowUserKeys shows "no keys" toast if none exist
+      const delKeyBtn = `<button class="btn btn-sm" style="font-size:0.7rem;padding:2px 8px;background:#7f1d1d;border:1px solid #ef4444;color:#fca5a5;font-weight:700;" onclick="window.CryptoBot.adminShowUserKeys(${u.id},'${escapeHtml(u.email)}')">🗑 Del Key</button>`;
 
       return `<tr style="${isOverdue ? 'background:rgba(239,68,68,0.05);' : ''}">
       <td>${escapeHtml(u.email)}${u.is_admin ? ' <span style="color:var(--color-accent);font-size:0.7rem;font-weight:700;">ADMIN</span>' : ''}</td>
