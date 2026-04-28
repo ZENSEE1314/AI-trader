@@ -1321,25 +1321,29 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     const has1mLL = pL1m.length >= 2 && pL1m[pL1m.length - 1] < pL1m[pL1m.length - 2];
     const has1mLH = pH1m.length >= 2 && pH1m[pH1m.length - 1] < pH1m[pH1m.length - 2];
 
-    // Confirmation: 3m OR 1m — either timeframe agreeing is enough
-    const longConfirm3m  = has3mHH || has3mHL;
-    const longConfirm1m  = has1mHH || has1mHL;
-    const shortConfirm3m = has3mLL || has3mLH;
-    const shortConfirm1m = has1mLL || has1mLH;
-
+    // 1m is always required. Higher TF can be 15m OR 3m.
+    //   Option A: 15m HL/HH + 1m HH/HL  → LONG
+    //   Option B: 3m  HL/HH + 1m HH/HL  → LONG
+    //   (same logic inverted for SHORT)
     const htfLongOk  = has15mHL || has15mHH || (has15mLL && last15mBullish);
     const htfShortOk = has15mLH || has15mLL || (has15mHH && last15mBearish);
+    const mtfLongOk  = has3mHH || has3mHL;
+    const mtfShortOk = has3mLL || has3mLH;
+    const ltfLongOk  = has1mHH || has1mHL;
+    const ltfShortOk = has1mLL || has1mLH;
 
-    const longOk  = htfLongOk  && (longConfirm3m  || longConfirm1m);
-    const shortOk = htfShortOk && (shortConfirm3m || shortConfirm1m);
+    const longOk  = (htfLongOk  || mtfLongOk)  && ltfLongOk;
+    const shortOk = (htfShortOk || mtfShortOk) && ltfShortOk;
 
     // For SL: prefer 1m pivots (tighter), fall back to 3m
     const slLowRef  = pL1m.length >= 3 ? pL1m : pL3m;
     const slHighRef = pH1m.length >= 3 ? pH1m : pH3m;
 
-    // Label which TF confirmed
-    const longTfTag  = longConfirm3m  ? `3m-${has3mHH  ? 'HH' : 'HL'}` : `1m-${has1mHH  ? 'HH' : 'HL'}`;
-    const shortTfTag = shortConfirm3m ? `3m-${has3mLL  ? 'LL' : 'LH'}` : `1m-${has1mLL  ? 'LL' : 'LH'}`;
+    // Label which HTF confirmed
+    const longHtfTag  = htfLongOk  ? (has15mHL ? '15HL' : '15HH') : (has3mHH ? '3HH' : '3HL');
+    const shortHtfTag = htfShortOk ? (has15mLH ? '15LH' : '15LL') : (has3mLL ? '3LL' : '3LH');
+    const longTfTag   = `${longHtfTag}+1m-${has1mHH ? 'HH' : 'HL'}`;
+    const shortTfTag  = `${shortHtfTag}+1m-${has1mLL ? 'LL' : 'LH'}`;
 
     const atr = calcATR(parsed15);
 
@@ -1354,7 +1358,7 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
           symbol, direction: 'LONG', price, lastPrice: price,
           sl, tp1, tp2: price + atr * 3.0, tp3: price + atr * 4.0,
           slDist, setup: 'STRUCTURE_FOLLOW',
-          setupName: `LONG-${has15mHL ? '15HL' : '15HH'}-${longTfTag}`,
+          setupName: `LONG-${longTfTag}`,
           score: 8, rr, tf15: `15m ${tag15}`, tf1: longTfTag,
         });
       }
@@ -1371,7 +1375,7 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
           symbol, direction: 'SHORT', price, lastPrice: price,
           sl, tp1, tp2: price - atr * 3.0, tp3: price - atr * 4.0,
           slDist, setup: 'STRUCTURE_FOLLOW',
-          setupName: `SHORT-${has15mLH ? '15LH' : '15LL'}-${shortTfTag}`,
+          setupName: `SHORT-${shortTfTag}`,
           score: 8, rr, tf15: `15m ${tag15}`, tf1: shortTfTag,
         });
       }
