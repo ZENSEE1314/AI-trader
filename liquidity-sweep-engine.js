@@ -1259,10 +1259,9 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     }
   } // end STRATEGY_V2 gate
 
-  // Strategy 11: Structure Follow
-  // LONG:  (15m HL or HH) + (3m HH or HL) OR (1m HH or HL) → LONG
-  // SHORT: (15m LH or LL) + (3m LL or LH) OR (1m LL or LH) → SHORT
-  // Either 3m or 1m confirmation is enough — wider entry window.
+  // Strategy 11: Structure Follow — (15m OR 3m) + 1m
+  // LONG:  (15m HL/HH  OR  3m HH/HL)  +  1m HH/HL  → LONG
+  // SHORT: (15m LH/LL  OR  3m LL/LH)  +  1m LL/LH  → SHORT
   {
     const PIVOT_B = 2;
 
@@ -1277,15 +1276,10 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
       if (isH) sHs15.push(parsed15[i].high);
       if (isL) sLs15.push(parsed15[i].low);
     }
-    const has15mHL = sLs15.length >= 2 && sLs15[sLs15.length - 1] > sLs15[sLs15.length - 2];
-    const has15mHH = sHs15.length >= 2 && sHs15[sHs15.length - 1] > sHs15[sHs15.length - 2];
-    const has15mLH = sHs15.length >= 2 && sHs15[sHs15.length - 1] < sHs15[sHs15.length - 2];
-    const has15mLL = sLs15.length >= 2 && sLs15[sLs15.length - 1] < sLs15[sLs15.length - 2];
-
-    // Last 15m candle direction — used for sweep-rejection setups
-    const lastC15b = parsed15[parsed15.length - 1];
-    const last15mBullish = lastC15b && lastC15b.close > lastC15b.open;
-    const last15mBearish = lastC15b && lastC15b.close < lastC15b.open;
+    const has15mHH_s11 = sHs15.length >= 2 && sHs15[sHs15.length-1] > sHs15[sHs15.length-2];
+    const has15mHL_s11 = sLs15.length >= 2 && sLs15[sLs15.length-1] > sLs15[sLs15.length-2];
+    const has15mLH_s11 = sHs15.length >= 2 && sHs15[sHs15.length-1] < sHs15[sHs15.length-2];
+    const has15mLL_s11 = sLs15.length >= 2 && sLs15[sLs15.length-1] < sLs15[sLs15.length-2];
 
     // ── 3m pivots (parsed1 = klines3m) ──────────────────────
     const pH3m = [], pL3m = [];
@@ -1321,29 +1315,22 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     const has1mLL = pL1m.length >= 2 && pL1m[pL1m.length - 1] < pL1m[pL1m.length - 2];
     const has1mLH = pH1m.length >= 2 && pH1m[pH1m.length - 1] < pH1m[pH1m.length - 2];
 
-    // 1m is always required. Higher TF can be 15m OR 3m.
-    //   Option A: 15m HL/HH + 1m HH/HL  → LONG
-    //   Option B: 3m  HL/HH + 1m HH/HL  → LONG
-    //   (same logic inverted for SHORT)
-    const htfLongOk  = has15mHL || has15mHH || (has15mLL && last15mBullish);
-    const htfShortOk = has15mLH || has15mLL || (has15mHH && last15mBearish);
-    const mtfLongOk  = has3mHH || has3mHL;
-    const mtfShortOk = has3mLL || has3mLH;
-    const ltfLongOk  = has1mHH || has1mHL;
-    const ltfShortOk = has1mLL || has1mLH;
+    const htfLong  = has15mHH_s11 || has15mHL_s11;
+    const htfShort = has15mLH_s11 || has15mLL_s11;
+    const mtfLong  = has3mHH || has3mHL;
+    const mtfShort = has3mLL || has3mLH;
 
-    const longOk  = (htfLongOk  || mtfLongOk)  && ltfLongOk;
-    const shortOk = (htfShortOk || mtfShortOk) && ltfShortOk;
+    const longOk  = (htfLong || mtfLong)   && (has1mHH || has1mHL);
+    const shortOk = (htfShort || mtfShort) && (has1mLL || has1mLH);
 
-    // For SL: prefer 1m pivots (tighter), fall back to 3m
+    // SL from 1m pivots (tighter), fall back to 3m
     const slLowRef  = pL1m.length >= 3 ? pL1m : pL3m;
     const slHighRef = pH1m.length >= 3 ? pH1m : pH3m;
 
-    // Label which HTF confirmed
-    const longHtfTag  = htfLongOk  ? (has15mHL ? '15HL' : '15HH') : (has3mHH ? '3HH' : '3HL');
-    const shortHtfTag = htfShortOk ? (has15mLH ? '15LH' : '15LL') : (has3mLL ? '3LL' : '3LH');
-    const longTfTag   = `${longHtfTag}+1m-${has1mHH ? 'HH' : 'HL'}`;
-    const shortTfTag  = `${shortHtfTag}+1m-${has1mLL ? 'LL' : 'LH'}`;
+    const longHtf   = htfLong  ? (has15mHH_s11 ? '15HH' : '15HL') : (has3mHH ? '3HH' : '3HL');
+    const shortHtf  = htfShort ? (has15mLH_s11 ? '15LH' : '15LL') : (has3mLL ? '3LL' : '3LH');
+    const longTfTag  = `${longHtf}+1m-${has1mHH ? 'HH' : 'HL'}`;
+    const shortTfTag = `${shortHtf}+1m-${has1mLL ? 'LL' : 'LH'}`;
 
     const atr = calcATR(parsed15);
 
@@ -1353,13 +1340,12 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
       const tp1    = price + atr * 2.0;
       const rr     = slDist > 0 ? Math.round((atr * 2.0) / (price * slDist) * 10) / 10 : 0;
       if (rr >= 1.2 && slDist > 0.001 && slDist < 0.03) {
-        const tag15 = has15mHL ? `HL:${sLs15[sLs15.length-2]?.toFixed(2)}→${sLs15[sLs15.length-1]?.toFixed(2)}` : `HH:${sHs15[sHs15.length-2]?.toFixed(2)}→${sHs15[sHs15.length-1]?.toFixed(2)}`;
         signals.push({
           symbol, direction: 'LONG', price, lastPrice: price,
           sl, tp1, tp2: price + atr * 3.0, tp3: price + atr * 4.0,
           slDist, setup: 'STRUCTURE_FOLLOW',
           setupName: `LONG-${longTfTag}`,
-          score: 8, rr, tf15: `15m ${tag15}`, tf1: longTfTag,
+          score: 8, rr, tf15: `3m ${has3mHH ? 'HH' : 'HL'}`, tf1: `1m ${has1mHH ? 'HH' : 'HL'}`,
         });
       }
     }
@@ -1370,13 +1356,12 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
       const tp1    = price - atr * 2.0;
       const rr     = slDist > 0 ? Math.round((atr * 2.0) / (price * slDist) * 10) / 10 : 0;
       if (rr >= 1.2 && slDist > 0.001 && slDist < 0.03) {
-        const tag15 = has15mLH ? `LH:${sHs15[sHs15.length-2]?.toFixed(2)}→${sHs15[sHs15.length-1]?.toFixed(2)}` : `LL:${sLs15[sLs15.length-2]?.toFixed(2)}→${sLs15[sLs15.length-1]?.toFixed(2)}`;
         signals.push({
           symbol, direction: 'SHORT', price, lastPrice: price,
           sl, tp1, tp2: price - atr * 3.0, tp3: price - atr * 4.0,
           slDist, setup: 'STRUCTURE_FOLLOW',
           setupName: `SHORT-${shortTfTag}`,
-          score: 8, rr, tf15: `15m ${tag15}`, tf1: shortTfTag,
+          score: 8, rr, tf15: `3m ${has3mLL ? 'LL' : 'LH'}`, tf1: `1m ${has1mLL ? 'LL' : 'LH'}`,
         });
       }
     }
@@ -1587,95 +1572,69 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
       continue;
     }
 
-    // ── FILTER 3: 15m structure + 1m entry confirmation ─────────────────────
-    // 15m: immediate candle comparison (no swing wait).
-    //   HL = last low  > prev low  → bullish structure (LONG)
-    //   LH = last high < prev high → bearish structure (SHORT)
-    //   HH + bearish close = liquidity sweep rejection → SHORT
-    //   LL + bullish close = liquidity sweep reversal  → LONG
-    // Requires 2 consecutive structure points for higher WR (filter single-bar noise).
-    // 1m: fresh pivot confirmation from the last 15 bars only.
+    // ── FILTER 3: (15m OR 3m) structure + 1m entry confirmation ────────────
+    // Any of these combos fires:
+    //   15m HL/HH  +  1m HH/HL  → LONG
+    //    3m HL/HH  +  1m HH/HL  → LONG
+    //   15m LH/LL  +  1m LL/LH  → SHORT
+    //    3m LH/LL  +  1m LL/LH  → SHORT
     {
-      // Last N × 15m candles for structure check — window from active version (default 5)
-      const c15Len = params.swingLen15m ? Math.max(params.swingLen15m + 2, 5) : 5;
-      const c15 = parsed15.slice(-c15Len);
-      const lastC15 = c15[c15.length - 1];
-      const prevC15 = c15[c15.length - 2];
-      const pre2C15 = c15[c15.length - 3]; // one more back for 2-HL check
-      const has15mHL = c15.length >= 3 && lastC15.low  > prevC15.low;
-      const has15mHH = c15.length >= 3 && lastC15.high > prevC15.high;
-      const has15mLH = c15.length >= 3 && lastC15.high < prevC15.high;
-      const has15mLL = c15.length >= 3 && lastC15.low  < prevC15.low;
-      const last15mBull = lastC15.close > lastC15.open;
-      const last15mBear = lastC15.close < lastC15.open;
+      const PB = 2;
 
-      // Minimum structure quality — filter micro-noise (< 0.1% moves)
-      const hlQual  = has15mHL && (lastC15.low - prevC15.low) / prevC15.low >= 0.001;
-      const lhQual  = has15mLH && (prevC15.high - lastC15.high) / prevC15.high >= 0.001;
+      // 15m: simple last-candle comparison (fast, no swing array needed)
+      const c15 = parsed15.slice(-5);
+      const lc15 = c15[c15.length - 1], pc15 = c15[c15.length - 2];
+      const f15mLong  = c15.length >= 2 && (lc15.low > pc15.low || lc15.high > pc15.high);
+      const f15mShort = c15.length >= 2 && (lc15.high < pc15.high || lc15.low < pc15.low);
 
-      // 2-bar confirmation: previous bar also showed HL (for LONG) or LH (for SHORT)
-      const prevHL = c15.length >= 4 && prevC15.low > pre2C15.low;  // prev bar was also HL
-      const prevLH = c15.length >= 4 && prevC15.high < pre2C15.high; // prev bar was also LH
-      // HH/LL (breakout/breakdown) or sweep don't need 2-bar confirm — they are self-confirming
-      const longConsec  = (hlQual && prevHL) || has15mHH || (has15mLL && last15mBull);
-      const shortConsec = (lhQual && prevLH) || has15mLL || (has15mHH && last15mBear);
-
-      // 1m entry: fresh pivot confirmation — window size from active version (default 15)
-      const P1B = 2;
-      const pH1m = [], pL1m = [];
-      const scan1mLen = params.swingLen1m || 15;
-      const scan1m = (parsed1m && parsed1m.length >= 10) ? parsed1m.slice(-scan1mLen) : parsed1m.slice(-10);
-      for (let i = P1B; i < scan1m.length - P1B; i++) {
-        let isH = true, isL = true;
-        for (let j = 1; j <= P1B; j++) {
-          if (scan1m[i].high <= scan1m[i - j].high || scan1m[i].high <= scan1m[i + j].high) isH = false;
-          if (scan1m[i].low  >= scan1m[i - j].low  || scan1m[i].low  >= scan1m[i + j].low)  isL = false;
-        }
-        if (isH) pH1m.push(scan1m[i].high);
-        if (isL) pL1m.push(scan1m[i].low);
-      }
-      const has1mHH = pH1m.length >= 2 && pH1m[pH1m.length - 1] > pH1m[pH1m.length - 2];
-      const has1mHL = pL1m.length >= 2 && pL1m[pL1m.length - 1] > pL1m[pL1m.length - 2];
-      const has1mLL = pL1m.length >= 2 && pL1m[pL1m.length - 1] < pL1m[pL1m.length - 2];
-      const has1mLH = pH1m.length >= 2 && pH1m[pH1m.length - 1] < pH1m[pH1m.length - 2];
-
-      // 3m structure — alternative to 15m confirmation (same pivot logic as Strategy 11)
-      const P3B = 2;
+      // 3m pivots
       const pH3mF = [], pL3mF = [];
-      const scan3m = parsed1.slice(-(params.swingLen1m || 15));
-      for (let i = P3B; i < scan3m.length - P3B; i++) {
+      const scan3m = parsed1.slice(-(params.swingLen1m || 20));
+      for (let i = PB; i < scan3m.length - PB; i++) {
         let isH = true, isL = true;
-        for (let j = 1; j <= P3B; j++) {
+        for (let j = 1; j <= PB; j++) {
           if (scan3m[i].high <= scan3m[i-j].high || scan3m[i].high <= scan3m[i+j].high) isH = false;
           if (scan3m[i].low  >= scan3m[i-j].low  || scan3m[i].low  >= scan3m[i+j].low)  isL = false;
         }
         if (isH) pH3mF.push(scan3m[i].high);
         if (isL) pL3mF.push(scan3m[i].low);
       }
-      const has3mHHf = pH3mF.length >= 2 && pH3mF[pH3mF.length-1] > pH3mF[pH3mF.length-2];
-      const has3mHLf = pL3mF.length >= 2 && pL3mF[pL3mF.length-1] > pL3mF[pL3mF.length-2];
-      const has3mLLf = pL3mF.length >= 2 && pL3mF[pL3mF.length-1] < pL3mF[pL3mF.length-2];
-      const has3mLHf = pH3mF.length >= 2 && pH3mF[pH3mF.length-1] < pH3mF[pH3mF.length-2];
+      const f3mLong  = (pL3mF.length >= 2 && pL3mF[pL3mF.length-1] > pL3mF[pL3mF.length-2])
+                    || (pH3mF.length >= 2 && pH3mF[pH3mF.length-1] > pH3mF[pH3mF.length-2]);
+      const f3mShort = (pL3mF.length >= 2 && pL3mF[pL3mF.length-1] < pL3mF[pL3mF.length-2])
+                    || (pH3mF.length >= 2 && pH3mF[pH3mF.length-1] < pH3mF[pH3mF.length-2]);
 
-      // Active version can disable 15m or 1m confirmation requirements
-      const skip15m = params.require15m === 0 || params.require15m === false;
-      const skip1m  = params.require1m  === 0 || params.require1m  === false;
+      // 1m pivots
+      const pH1mF = [], pL1mF = [];
+      const scan1mLen = params.swingLen1m || 15;
+      const scan1m = (parsed1m && parsed1m.length >= 10) ? parsed1m.slice(-scan1mLen) : (parsed1m || []).slice(-10);
+      for (let i = PB; i < scan1m.length - PB; i++) {
+        let isH = true, isL = true;
+        for (let j = 1; j <= PB; j++) {
+          if (scan1m[i].high <= scan1m[i-j].high || scan1m[i].high <= scan1m[i+j].high) isH = false;
+          if (scan1m[i].low  >= scan1m[i-j].low  || scan1m[i].low  >= scan1m[i+j].low)  isL = false;
+        }
+        if (isH) pH1mF.push(scan1m[i].high);
+        if (isL) pL1mF.push(scan1m[i].low);
+      }
+      const f1mLong  = (pL1mF.length >= 2 && pL1mF[pL1mF.length-1] > pL1mF[pL1mF.length-2])
+                    || (pH1mF.length >= 2 && pH1mF[pH1mF.length-1] > pH1mF[pH1mF.length-2]);
+      const f1mShort = (pL1mF.length >= 2 && pL1mF[pL1mF.length-1] < pL1mF[pL1mF.length-2])
+                    || (pH1mF.length >= 2 && pH1mF[pH1mF.length-1] < pH1mF[pH1mF.length-2]);
 
-      // HTF passes if 15m structure is confirmed OR 3m structure agrees
-      const htfLongPass  = longConsec  || has3mHHf || has3mHLf;
-      const htfShortPass = shortConsec || has3mLLf || has3mLHf;
+      const skip1m = params.require1m === 0 || params.require1m === false;
 
-      const longOk  = (skip15m || htfLongPass)  && (skip1m || (has1mHH || has1mHL));
-      const shortOk = (skip15m || htfShortPass) && (skip1m || (has1mLL || has1mLH));
+      const longOk  = (f15mLong  || f3mLong)  && (skip1m || f1mLong);
+      const shortOk = (f15mShort || f3mShort) && (skip1m || f1mShort);
 
       if (sig.direction === 'LONG' && !longOk) {
         sig.score = -99;
-        sig.blocked = `LONG blocked — htf(15m:${longConsec} 3m:${has3mHHf||has3mHLf}) 1m(${skip1m?'skip':has1mHH||has1mHL})`;
+        sig.blocked = `LONG blocked — htf(15m:${f15mLong} 3m:${f3mLong}) 1m:${skip1m?'skip':f1mLong}`;
         continue;
       }
       if (sig.direction === 'SHORT' && !shortOk) {
         sig.score = -99;
-        sig.blocked = `SHORT blocked — htf(15m:${shortConsec} 3m:${has3mLLf||has3mLHf}) 1m(${skip1m?'skip':has1mLL||has1mLH})`;
+        sig.blocked = `SHORT blocked — htf(15m:${f15mShort} 3m:${f3mShort}) 1m:${skip1m?'skip':f1mShort}`;
         continue;
       }
     }
