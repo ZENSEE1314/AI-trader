@@ -22,38 +22,6 @@
 // (that schema drives the admin UI labels / metadata).
 
 const DEFAULTS = {
-  // ── MA Stack Trend ──────────────────────────────────────────
-  'strat.ma_stack.enabled':          1,      // 1 = on, 0 = off
-  'strat.ma_stack.atr_period':        14,     // ATR lookback (candles)
-  'strat.ma_stack.vol_sma_period':    9,      // volume SMA period for conviction filter
-  'strat.ma_stack.min_stack_spread':  0.0007, // 0.07% hard floor for MA separation
-  'strat.ma_stack.min_spread_growth': 1.20,   // fan must grow ≥20% vs 3 bars ago
-  'strat.ma_stack.min_atr_pct':       0.003,  // 0.3% ATR minimum — confirms trending
-  'strat.ma_stack.max_extension_atr': 1.5,    // don't chase > 1.5× ATR past SMA5
-  'strat.ma_stack.max_signal_age_ms': 180000, // 3 min signal freshness (ms)
-  'strat.ma_stack.sl_min_pct':        0.010,  // 1.0% SL floor
-  'strat.ma_stack.sl_max_pct':        0.025,  // 2.5% SL cap
-  'strat.ma_stack.tp_multiplier':     2.0,    // TP = SL × 2 (2:1 R:R)
-
-  // ── T-Junction ──────────────────────────────────────────────
-  'strat.tjunction.enabled':          1,      // 1 = on, 0 = off
-  'strat.tjunction.vol_sma_period':   9,      // volume SMA period for conviction filter
-  'strat.tjunction.vwap_tolerance':   0.0010, // 0.10% max distance from VWAP allowed
-  'strat.tjunction.converge_band':    0.0025, // 0.25% max spread = "converged"
-  'strat.tjunction.converge_min':     2,      // min consecutive converged bars
-  'strat.tjunction.diverge_min':      0.0012, // 0.12% min fan spread = breakout
-  'strat.tjunction.tp_pct':           0.020,  // 2% TP
-  'strat.tjunction.sl_pct':           0.010,  // 1% SL
-  'strat.tjunction.size_pct':         0.10,   // 10% capital per trade
-
-  // ── Triple MA (Sideways / Mean-Reversion) ───────────────────
-  'strat.triple_ma.enabled':          0,      // off by default (poor backtest results)
-  'strat.triple_ma.atr_max_pct':           0.008,  // 0.8% ATR cap — sideways only
-  'strat.triple_ma.scenario_a_sl_pct':     0.010,  // 1% SL for Scenario A
-  'strat.triple_ma.scenario_a_tolerance':  0.005,  // 0.5% entry proximity to MA
-  'strat.triple_ma.rsi_oversold':          45,     // RSI < 45 for Scenario B dip-buy
-  'strat.triple_ma.size_pct':              0.10,   // 10% capital per trade
-
   // ── Spike HL ────────────────────────────────────────────────
   'strat.spike_hl.enabled':          1,      // 1 = on, 0 = off
   'strat.spike_hl.ema_period':      200,    // EMA period for trend bias filter (e.g. 100 or 200)

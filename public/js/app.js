@@ -1581,6 +1581,8 @@
   function fmtParamVal(val, scale, step) {
     if (val == null) return '';
     const v = val * scale;
+    // Capital-% params use step ≥ 1 → show clean integers (50, 120, 100)
+    if (step >= 1) return String(Math.round(v));
     const decimals = step < 0.01 ? 3 : step < 0.1 ? 2 : 1;
     return v.toFixed(decimals);
   }

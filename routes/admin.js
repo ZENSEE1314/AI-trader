@@ -772,33 +772,6 @@ router.put('/settings', async (req, res) => {
 // Drives the admin UI — labels, units, min/max hints, descriptions.
 const STRATEGY_SCHEMA = [
   {
-    id: 'tjunction', name: 'T-Junction', status: 'active',
-    enabledKey: 'strat.tjunction.enabled',
-    description: 'Convergence breakout on 5m chart. MAs compress into a T-stem, then fan out = entry.',
-    params: [
-      { key: 'strat.tjunction.vol_sma_period',  label: 'Volume SMA Period',  unit: 'candles', scale: 1,   min: 3,    max: 20,  step: 1,    hint: 'SMA period for volume filter. Signal candle volume must exceed this average.' },
-      { key: 'strat.tjunction.vwap_tolerance',  label: 'VWAP Tolerance',     unit: '%',       scale: 100, min: 0.0,  max: 1,   step: 0.05, hint: 'Max % distance from VWAP. 0 = price must be on the VWAP side. Higher = looser.' },
-      { key: 'strat.tjunction.converge_band',   label: 'Convergence Band',   unit: '%',       scale: 100, min: 0.05, max: 1,   step: 0.05, hint: 'Max MA spread to count as "converged" (T-stem).' },
-      { key: 'strat.tjunction.converge_min',    label: 'Min Converged Bars', unit: 'bars',    scale: 1,   min: 1,    max: 10,  step: 1,    hint: 'Minimum consecutive converged bars (T-stem length).' },
-      { key: 'strat.tjunction.diverge_min',     label: 'Min Divergence',     unit: '%',       scale: 100, min: 0.05, max: 1,   step: 0.05, hint: 'Minimum fan spread to confirm the breakout.' },
-      { key: 'strat.tjunction.tp_pct',          label: 'Take Profit',        unit: '%',       scale: 100, min: 0.5,  max: 5,   step: 0.1,  hint: 'Fixed TP distance from entry.' },
-      { key: 'strat.tjunction.sl_pct',          label: 'Stop Loss',          unit: '%',       scale: 100, min: 0.1,  max: 3,   step: 0.1,  hint: 'Fixed SL distance from entry.' },
-      { key: 'strat.tjunction.size_pct',        label: 'Position Size',      unit: '%',       scale: 100, min: 1,    max: 50,  step: 1,    hint: '% of capital used per trade.' },
-    ],
-  },
-  {
-    id: 'triple_ma', name: 'Triple MA (Sideways)', status: 'disabled',
-    enabledKey: 'strat.triple_ma.enabled',
-    description: 'Mean-reversion on 5m chart. Only active in sideways, low-ATR conditions. Currently disabled.',
-    params: [
-      { key: 'strat.triple_ma.atr_max_pct',          label: 'ATR Max (Sideways Cap)', unit: '%', scale: 100, min: 0.1, max: 2,   step: 0.05, hint: 'ATR must be BELOW this to enter. Keeps it sideways-only.' },
-      { key: 'strat.triple_ma.scenario_a_sl_pct',    label: 'Scenario A SL',          unit: '%', scale: 100, min: 0.1, max: 3,   step: 0.1,  hint: 'Stop loss for Scenario A (MA20-touch TP).' },
-      { key: 'strat.triple_ma.scenario_a_tolerance', label: 'Entry Tolerance',         unit: '%', scale: 100, min: 0.1, max: 2,   step: 0.1,  hint: 'Max % away from MA level to allow entry.' },
-      { key: 'strat.triple_ma.rsi_oversold',         label: 'RSI Oversold (Scen B)',  unit: '',  scale: 1,   min: 10,  max: 50,  step: 1,    hint: 'RSI must be below this for Scenario B dip-buy.' },
-      { key: 'strat.triple_ma.size_pct',             label: 'Position Size',           unit: '%', scale: 100, min: 1,   max: 50,  step: 1,    hint: '% of capital used per trade.' },
-    ],
-  },
-  {
     id: 'spike_hl', name: 'Spike-HL Liquidity Sweep', status: 'active',
     enabledKey: 'strat.spike_hl.enabled',
     description: 'Detects smart-money stop sweeps on 1m chart. Enters at the rejection candle close.',
@@ -820,11 +793,11 @@ const STRATEGY_SCHEMA = [
       { key: 'strat.smc.swing_len_1m',   label: '1m Swing Length',   unit: 'candles', scale: 1,   min: 2,   max: 15,  step: 1,    hint: 'Candles each side to confirm a 1m swing. Higher = stronger confirmation, fewer entries.' },
       { key: 'strat.smc.ema_period',     label: 'EMA Period (1h)',   unit: 'bars',    scale: 1,   min: 50,  max: 500, step: 10,   hint: '1h EMA period for trend-bias filter. 200 = standard, 100 = faster. Contrary direction = score penalty.' },
       { key: 'strat.smc.max_candle_age', label: 'Max Swing Age',     unit: 'candles', scale: 1,   min: 3,   max: 50,  step: 1,    hint: 'How many 1m candles ago the swing can be. Older = possibly stale entry.' },
-      { key: 'strat.smc.max_chase_pct',  label: 'Max Chase %',       unit: '%',       scale: 100, min: 0.1, max: 5,   step: 0.1,  hint: 'Max price distance from swing point. Beyond this = chasing, skip.' },
-      { key: 'strat.smc.sl_pct',         label: 'Stop Loss',         unit: '%',       scale: 100, min: 0.1, max: 3,   step: 0.05, hint: 'SL as % from entry (used when structure-based SL is out of range).' },
-      { key: 'strat.smc.tp_pct',         label: 'Take Profit',       unit: '%',       scale: 100, min: 0.1, max: 5,   step: 0.05, hint: 'TP as % from entry. Default 1% = 2:1 R:R on 0.5% SL.' },
-      { key: 'strat.smc.trailing_step',  label: 'Trailing Step',     unit: '%',       scale: 100, min: 0.1, max: 5,   step: 0.1,  hint: 'Trail-stop step once TP is hit. Locks in profit as price moves.' },
-      { key: 'strat.smc.size_pct',       label: 'Position Size',     unit: '%',       scale: 100, min: 1,   max: 50,  step: 1,    hint: '% of capital used per trade.' },
+      { key: 'strat.smc.max_chase_pct',  label: 'Max Chase %',       unit: '%',       scale: 100,   min: 0.1, max: 5,   step: 0.1, hint: 'Max price distance from swing point. Beyond this = chasing, skip.' },
+      { key: 'strat.smc.sl_pct',         label: 'Stop Loss',         unit: '% capital', scale: 10000, min: 5,   max: 500, step: 5,   hint: 'SL as % of capital (price% × 100× leverage). 50 = 0.5% price move at 100×.' },
+      { key: 'strat.smc.tp_pct',         label: 'Take Profit',       unit: '% capital', scale: 10000, min: 5,   max: 500, step: 5,   hint: 'TP as % of capital (price% × 100× leverage). 100 = 1% price move at 100×.' },
+      { key: 'strat.smc.trailing_step',  label: 'Trailing Step',     unit: '% capital', scale: 10000, min: 5,   max: 500, step: 10,  hint: 'Trail step as % of capital. 120 = 1.2% price move at 100× — locks profit as price moves.' },
+      { key: 'strat.smc.size_pct',       label: 'Position Size',     unit: '%',         scale: 100,   min: 1,   max: 100, step: 1,   hint: '% of capital used per trade. Max 100%.' },
     ],
   },
 ];
