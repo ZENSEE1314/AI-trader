@@ -1379,7 +1379,7 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
       const rejected = lastC.close < lastC.open      // last candle is red (rejection)
                     && lastC.high  < prevC.high;     // lower high confirms turn
       // Strong rejection: body is at least 40% of the candle range
-      const strongRej = totalRange(lastC) > 0 && bodySize(lastC) / totalRange(lastC) >= 0.4;
+      const strongRej = totalRange(lastC) > 0 && bodySize(lastC) / totalRange(lastC) >= 0.15;
       const nearVwap  = (vwapMid - price) / vwapMid < 0.02; // within 2% below VWAP
 
       if (bounced && rejected && strongRej && nearVwap) {
@@ -1407,7 +1407,7 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
       const dipped  = redCount >= 2;                 // real dip, not just a tick
       const held    = lastC.close > lastC.open       // last candle is green
                    && lastC.low  > prevC.low;        // higher low = support holding
-      const strongHold = totalRange(lastC) > 0 && bodySize(lastC) / totalRange(lastC) >= 0.4;
+      const strongHold = totalRange(lastC) > 0 && bodySize(lastC) / totalRange(lastC) >= 0.15;
       const nearVwap = (price - vwapMid) / vwapMid < 0.02; // within 2% above VWAP
 
       if (dipped && held && strongHold && nearVwap) {
