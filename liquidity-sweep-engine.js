@@ -1463,13 +1463,15 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     // ── FILTER 1: VWAP direction alignment ──────────────────────────────────
     // requireBothHTF=1 (strict): no SHORT above mid, no LONG below mid
     // requireBothHTF=0 (relaxed): only block extreme bands (above_upper / below_lower)
-    // Admin direction override always uses relaxed (extreme-only) mode.
+    // NOTE: directionOverride does NOT bypass this filter — it only controls the
+    // swing structure direction filter below. VWAP zone is a price-based safety
+    // rule that applies regardless of admin override.
     {
       // NOTE: DB JSON may deserialise requireBothHTF as a string ("1"/"0") rather than
       // a number.  Use Number() coercion so "1", 1, true all mean strict, and
       // "0", 0, false all mean relaxed.  undefined/null → default to strict.
       const bhv = params.requireBothHTF;
-      const strictVwap = !directionOverride && (bhv === undefined || bhv === null || Number(bhv) !== 0);
+      const strictVwap = bhv === undefined || bhv === null || Number(bhv) !== 0;
       if (strictVwap) {
         if ((vwapBandPos === 'above_upper' || vwapBandPos === 'above_mid') && sig.direction === 'SHORT') {
           sig.score = -99;
