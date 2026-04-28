@@ -977,6 +977,45 @@ router.delete('/strategy-config/param/:key', async (req, res) => {
   }
 });
 
+// ── Direction Override ────────────────────────────────────────────────────
+// Lets the admin manually lock the bot to LONG-only or SHORT-only mode,
+// overriding the automatic 15m swing structure detection.
+// Stored in settings table under key 'bot.direction_override'.
+// Values: 'bullish' (LONG only) | 'bearish' (SHORT only) | 'auto' (remove override)
+
+router.get('/direction-override', async (req, res) => {
+  try {
+    const rows = await query(`SELECT value FROM settings WHERE key = 'bot.direction_override'`);
+    res.json({ direction: rows.length ? rows[0].value : 'auto' });
+  } catch (err) {
+    console.error('Direction override GET error:', err.message);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+router.post('/direction-override', async (req, res) => {
+  try {
+    const { direction } = req.body;
+    if (!['bullish', 'bearish', 'auto'].includes(direction)) {
+      return res.status(400).json({ error: 'direction must be bullish, bearish, or auto' });
+    }
+    if (direction === 'auto') {
+      await query(`DELETE FROM settings WHERE key = 'bot.direction_override'`);
+    } else {
+      await query(
+        `INSERT INTO settings (key, value) VALUES ('bot.direction_override', $1)
+         ON CONFLICT (key) DO UPDATE SET value = $1`,
+        [direction]
+      );
+    }
+    console.log(`[ADMIN] Direction override set to: ${direction}`);
+    res.json({ ok: true, direction });
+  } catch (err) {
+    console.error('Direction override POST error:', err.message);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // ═══════════════════════════════════════════════════════════
 // Strategy Composer — DB-backed strategy definitions
 // ═══════════════════════════════════════════════════════════

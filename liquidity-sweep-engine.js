@@ -1329,6 +1329,17 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
   // Detect 15m swing structure for the hard direction filter below
   const swingTrend15 = getHTFStructure(klines15m);
 
+  // Admin direction override — if set, replaces automatic swing structure detection.
+  // Values: 'bullish' (LONG only) | 'bearish' (SHORT only) | null (auto)
+  let directionOverride = null;
+  try {
+    const { query: dbQuery } = require('./db');
+    const overrideRows = await dbQuery(`SELECT value FROM settings WHERE key = 'bot.direction_override'`);
+    if (overrideRows.length && (overrideRows[0].value === 'bullish' || overrideRows[0].value === 'bearish')) {
+      directionOverride = overrideRows[0].value;
+    }
+  } catch (_) { /* DB unavailable — ignore, fall through to auto */ }
+
   // Apply confluence bonuses + global filters to all signals
   for (const sig of signals) {
 
@@ -1362,22 +1373,32 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
       continue;
     }
 
-    // Hard 15m swing structure trend block — trade WITH structure, not against it.
-    // Uses actual pivot points (LH/LL = bearish, HH/HL = bullish) — far more
-    // responsive than a 1h EMA cross which lags by 30–60 min.
-    //   bearish/bearish_lean → LONG blocked (LH or LL confirmed on 15m)
-    //   bullish/bullish_lean → SHORT blocked (HH or HL confirmed on 15m)
-    //   neutral              → both directions allowed
-    const st = swingTrend15.trend;
-    if ((st === 'bearish' || st === 'bearish_lean') && sig.direction === 'LONG') {
+    // Direction filter — admin override takes priority over auto swing structure.
+    // Override: 'bullish' = LONG only, 'bearish' = SHORT only.
+    // Auto: 15m pivot structure (bearish_lean/bearish → SHORT only, bullish_lean/bullish → LONG only).
+    if (directionOverride === 'bullish' && sig.direction === 'SHORT') {
       sig.score = -99;
-      sig.blocked = `LONG blocked — 15m structure bearish (${st}): SHORT only`;
+      sig.blocked = `SHORT blocked — admin override: LONG only`;
       continue;
     }
-    if ((st === 'bullish' || st === 'bullish_lean') && sig.direction === 'SHORT') {
+    if (directionOverride === 'bearish' && sig.direction === 'LONG') {
       sig.score = -99;
-      sig.blocked = `SHORT blocked — 15m structure bullish (${st}): LONG only`;
+      sig.blocked = `LONG blocked — admin override: SHORT only`;
       continue;
+    }
+    if (!directionOverride) {
+      // Auto mode: use 15m swing structure
+      const st = swingTrend15.trend;
+      if ((st === 'bearish' || st === 'bearish_lean') && sig.direction === 'LONG') {
+        sig.score = -99;
+        sig.blocked = `LONG blocked — 15m structure bearish (${st}): SHORT only`;
+        continue;
+      }
+      if ((st === 'bullish' || st === 'bullish_lean') && sig.direction === 'SHORT') {
+        sig.score = -99;
+        sig.blocked = `SHORT blocked — 15m structure bullish (${st}): LONG only`;
+        continue;
+      }
     }
 
     // ── 15m + 1m structure confirmation ─────────────────────────────────────

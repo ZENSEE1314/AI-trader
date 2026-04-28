@@ -1544,7 +1544,7 @@
       if (el) el.classList.toggle('hidden', p !== tab);
     });
     // Refresh admin data when switching tabs
-    if (tab === 'earnings')   loadAdmin();
+    if (tab === 'earnings')   { loadAdmin(); loadDirectionOverride(); }
     if (tab === 'email')      checkEmailSmtp().catch(() => {});
     if (tab === 'tokens')     { loadTokenCardPrices(); loadTokenStats(); }
     if (tab === 'strategies') { loadStrategyConfig(); initStratSubTabs(); }
@@ -5299,6 +5299,60 @@
     }
   }
 
+  // ── Direction Override ──────────────────────────────────────────────────────
+  let _currentDirection = 'auto';
+
+  async function loadDirectionOverride() {
+    try {
+      const data = await api('GET', '/api/admin/direction-override');
+      _currentDirection = data.direction || 'auto';
+      updateDirectionUI(_currentDirection);
+    } catch (_) {}
+  }
+
+  function updateDirectionUI(direction) {
+    const status = document.getElementById('dir-override-status');
+    const btnAuto   = document.getElementById('dir-btn-auto');
+    const btnLong   = document.getElementById('dir-btn-long');
+    const btnShort  = document.getElementById('dir-btn-short');
+
+    const labels = { auto: '🤖 Auto', bullish: '📈 LONG only', bearish: '📉 SHORT only' };
+    const colors = { auto: 'var(--color-text-muted)', bullish: '#10b981', bearish: '#ef4444' };
+    const bgs    = { auto: 'var(--color-bg-muted)', bullish: 'rgba(16,185,129,0.15)', bearish: 'rgba(239,68,68,0.15)' };
+
+    if (status) {
+      status.textContent = labels[direction] || '🤖 Auto';
+      status.style.color      = colors[direction] || colors.auto;
+      status.style.background = bgs[direction]    || bgs.auto;
+    }
+    // Highlight active button
+    [btnAuto, btnLong, btnShort].forEach(b => b && b.style.removeProperty('outline'));
+    const activeBtn = direction === 'bullish' ? btnLong : direction === 'bearish' ? btnShort : btnAuto;
+    if (activeBtn) activeBtn.style.outline = '2px solid var(--color-primary)';
+  }
+
+  async function setDirectionOverride(direction) {
+    try {
+      await api('POST', '/api/admin/direction-override', { direction });
+      _currentDirection = direction;
+      updateDirectionUI(direction);
+      showToast(direction === 'auto' ? 'Direction: Auto (swing structure)' : `Direction locked: ${direction === 'bullish' ? 'LONG only 📈' : 'SHORT only 📉'}`, 'success');
+    } catch (err) {
+      showToast('Failed to set direction: ' + err.message, 'error');
+    }
+  }
+
+  async function reverseDirection() {
+    const next = _currentDirection === 'bullish' ? 'bearish'
+               : _currentDirection === 'bearish' ? 'bullish'
+               : null; // auto → don't reverse without knowing current trend
+    if (!next) {
+      showToast('Set to LONG or SHORT first before reversing', 'error');
+      return;
+    }
+    await setDirectionOverride(next);
+  }
+
   window.CryptoBot = {
     toggleSettings, saveSettings, deleteKey, showToast, syncSlider, syncNum, saveProfile, changePassword,
     togglePause,
@@ -5314,6 +5368,7 @@
     addRiskLevel, saveRiskLevel, deleteRiskLevel,
     loadKronosPredictions,
     loadOpenPositions, emergencyCloseToken, emergencyCloseAll,
+    loadDirectionOverride, setDirectionOverride, reverseDirection,
     activateVersionForTrading, deactivateVersion, syncCurrentVersion,
     fixBitunixPnl, debugBitunix, runBacktest, loadAiVersions, runAiOptimize, adminResyncFees, adminFixTrades, adminClearTestData,
     mcRefresh, mcCommand, mcChat, mcChatQuick, switchAdminTab, filterAgents, customerChat,

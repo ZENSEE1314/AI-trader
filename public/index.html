@@ -1707,6 +1707,23 @@
               <span id="awe-user-share" class="summary-card-value text-mono" style="color:#d4af37;font-size:1.2rem;">--</span>
             </div>
           </div>
+          <!-- Direction Override widget -->
+          <div style="margin-bottom:var(--space-3);padding:var(--space-3);border:2px solid var(--color-border);border-radius:var(--radius-lg);background:var(--color-bg-raised);">
+            <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">
+              <div>
+                <strong style="font-size:0.9rem;">🔀 Direction Override</strong>
+                <div style="font-size:0.72rem;color:var(--color-text-muted);margin-top:2px;">Lock bot to one direction. <strong>Auto</strong> = 15m swing structure decides.</div>
+              </div>
+              <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+                <span id="dir-override-status" style="font-size:0.78rem;font-weight:600;padding:3px 10px;border-radius:20px;background:var(--color-bg-muted);color:var(--color-text-muted);">Loading…</span>
+                <button class="btn btn-sm" id="dir-btn-auto"    style="font-size:0.75rem;padding:4px 10px;" onclick="window.CryptoBot.setDirectionOverride('auto')">Auto</button>
+                <button class="btn btn-sm" id="dir-btn-long"    style="font-size:0.75rem;padding:4px 10px;" onclick="window.CryptoBot.setDirectionOverride('bullish')">📈 LONG only</button>
+                <button class="btn btn-sm" id="dir-btn-short"   style="font-size:0.75rem;padding:4px 10px;" onclick="window.CryptoBot.setDirectionOverride('bearish')">📉 SHORT only</button>
+                <button class="btn btn-sm" id="dir-btn-reverse" style="font-size:0.75rem;padding:4px 10px;background:var(--color-primary);color:#fff;border:none;font-weight:700;" onclick="window.CryptoBot.reverseDirection()">🔄 Reverse</button>
+              </div>
+            </div>
+          </div>
+
           <div style="margin-bottom:var(--space-3);padding:var(--space-3);border:2px solid #ef4444;border-radius:var(--radius-lg);background:rgba(239,68,68,0.05);">
             <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:8px;">
               <div>

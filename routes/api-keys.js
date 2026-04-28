@@ -216,11 +216,29 @@ router.put('/:id/settings', async (req, res) => {
   }
 });
 
-// Delete a key
+// Delete a key — closes open trades first to avoid FK constraint errors
 router.delete('/:id', async (req, res) => {
   try {
-    const result = await query('DELETE FROM api_keys WHERE id = $1 AND user_id = $2 RETURNING id', [req.params.id, req.userId]);
-    if (!result.length) return res.status(404).json({ error: 'Key not found' });
+    // Verify ownership
+    const owned = await query(
+      'SELECT id FROM api_keys WHERE id = $1 AND user_id = $2',
+      [req.params.id, req.userId]
+    );
+    if (!owned.length) return res.status(404).json({ error: 'Key not found' });
+
+    // Disable first so the bot stops using it immediately
+    await query('UPDATE api_keys SET enabled = false WHERE id = $1', [req.params.id]);
+
+    // Close any open trades tied to this key (prevents FK constraint error)
+    await query(
+      `UPDATE trades SET status = 'CLOSED', closed_at = NOW()
+       WHERE api_key_id = $1 AND status = 'OPEN'`,
+      [req.params.id]
+    );
+
+    // Now safe to delete
+    await query('DELETE FROM api_keys WHERE id = $1', [req.params.id]);
+
     res.json({ ok: true });
   } catch (err) {
     console.error('Delete key error:', err.message);
