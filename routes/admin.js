@@ -372,7 +372,27 @@ router.put('/keys/:id/resume', async (req, res) => {
   }
 });
 
-// Delete an API key — cleans all FK-referenced rows before deleting
+// List API keys for a specific user (admin only)
+router.get('/users/:userId/api-keys', async (req, res) => {
+  try {
+    const rows = await query(
+      `SELECT id, platform, label, enabled, created_at,
+              substring(api_key_enc, 1, 8) as key_preview
+       FROM api_keys WHERE user_id = $1 ORDER BY created_at`,
+      [req.params.userId]
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error('Admin list user keys error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Delete an API key (admin can delete any user's key).
+// NOTE: trade records are intentionally NOT touched — the key is disabled
+// immediately so the bot stops using it, but open trade records stay in DB.
+// Force-closing trades here would wipe manual/synced positions the user still
+// has on the exchange. The user manages their own exchange positions.
 router.delete('/keys/:id', async (req, res) => {
   try {
     const keyId = parseInt(req.params.id, 10);
@@ -381,11 +401,20 @@ router.delete('/keys/:id', async (req, res) => {
     const exists = await query(`SELECT id FROM api_keys WHERE id = $1`, [keyId]);
     if (!exists.length) return res.status(404).json({ error: 'Key not found' });
 
-    await query(`UPDATE api_keys SET enabled = false WHERE id = $1`, [keyId]);
-    await query(`UPDATE trades SET status = 'CLOSED', closed_at = NOW() WHERE api_key_id = $1 AND status = 'OPEN'`, [keyId]);
-    await query(`DELETE FROM user_token_leverage    WHERE api_key_id = $1`, [keyId]);
-    await query(`DELETE FROM user_agent_preferences WHERE api_key_id = $1`, [keyId]);
-    await query(`DELETE FROM weekly_earnings        WHERE api_key_id = $1`, [keyId]);
+    // Disable immediately so bot stops using it
+    try { await query(`UPDATE api_keys SET enabled = false WHERE id = $1`, [keyId]); } catch (_) {}
+
+    // Clean up FK-referenced tables only — do NOT close trades
+    const cleanups = [
+      `DELETE FROM user_token_leverage    WHERE api_key_id = $1`,
+      `DELETE FROM user_agent_preferences WHERE api_key_id = $1`,
+      `DELETE FROM weekly_earnings        WHERE api_key_id = $1`,
+      `DELETE FROM subscriptions          WHERE api_key_id = $1`,
+    ];
+    for (const sql of cleanups) {
+      try { await query(sql, [keyId]); } catch (_) {}
+    }
+
     await query(`DELETE FROM api_keys WHERE id = $1`, [keyId]);
 
     res.json({ ok: true, deleted: keyId });

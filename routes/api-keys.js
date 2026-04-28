@@ -234,8 +234,11 @@ router.delete('/:id', async (req, res) => {
 
     // Clean up every table that references api_key_id — each step is isolated
     // so a missing table or unexpected constraint never blocks the delete.
+    // NOTE: trade records are intentionally NOT touched — the key is disabled
+    // immediately so the bot stops using it, but open trade records stay in DB.
+    // Force-closing them here would wipe manual/synced positions the user still
+    // has on the exchange.
     const cleanups = [
-      `UPDATE trades SET status = 'CLOSED', closed_at = NOW() WHERE api_key_id = $1 AND status = 'OPEN'`,
       `DELETE FROM user_token_leverage    WHERE api_key_id = $1`,
       `DELETE FROM user_agent_preferences WHERE api_key_id = $1`,
       `DELETE FROM weekly_earnings        WHERE api_key_id = $1`,

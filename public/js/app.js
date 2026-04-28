@@ -1546,7 +1546,7 @@
     // Refresh admin data when switching tabs
     if (tab === 'earnings')   { loadAdmin(); loadDirectionOverride(); }
     if (tab === 'email')      checkEmailSmtp().catch(() => {});
-    if (tab === 'tokens')     { loadTokenCardPrices(); loadTokenStats(); }
+    if (tab === 'tokens')     { loadTokenCardPrices(); loadTokenStats(); loadTokenDirections(); }
     if (tab === 'strategies') { loadStrategyConfig(); initStratSubTabs(); }
   }
 
@@ -4765,9 +4765,68 @@
           : `<button class="btn btn-danger btn-sm" onclick="window.CryptoBot.adminAction('block',${u.id})">Block</button>`}
         ${paidBtn}
         ${roleBtn}
+        <button class="btn btn-sm" style="font-size:0.7rem;padding:2px 8px;background:#0e7490;color:#fff;border:none;" onclick="window.CryptoBot.adminShowUserKeys(${u.id},'${escapeHtml(u.email)}')">🔑 Keys</button>
       </td>
     </tr>`;
     }).join('');
+  }
+
+  async function adminShowUserKeys(userId, email) {
+    let keys;
+    try {
+      keys = await api('GET', `/api/admin/users/${userId}/api-keys`);
+    } catch (err) {
+      showToast(err.message, 'error');
+      return;
+    }
+
+    if (!keys.length) {
+      showToast(`${email} has no API keys`, 'info');
+      return;
+    }
+
+    // Build a small modal-style overlay
+    const existing = document.getElementById('admin-keys-modal');
+    if (existing) existing.remove();
+
+    const modal = document.createElement('div');
+    modal.id = 'admin-keys-modal';
+    modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:9999;display:flex;align-items:center;justify-content:center;';
+
+    const box = document.createElement('div');
+    box.style.cssText = 'background:var(--color-card,#1e2130);border:1px solid var(--color-border,#2d3148);border-radius:12px;padding:24px;min-width:380px;max-width:520px;width:90%;';
+
+    const rows = keys.map(k => {
+      const preview = k.key_preview ? `(${k.key_preview}…)` : '';
+      const label   = escapeHtml(k.label || k.platform);
+      const platTag = `<span style="font-size:0.7rem;background:rgba(99,102,241,0.2);color:#818cf8;border-radius:4px;padding:1px 6px;margin-right:6px;">${escapeHtml(k.platform)}</span>`;
+      return `<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--color-border,#2d3148);">
+        <span style="font-size:0.85rem;">${platTag}${label} <span style="color:var(--color-text-muted,#9ca3af);font-size:0.75rem;font-family:var(--font-mono,monospace);">${preview}</span></span>
+        <button class="btn btn-danger btn-sm" style="font-size:0.7rem;padding:2px 10px;" onclick="window.CryptoBot.adminDeleteUserKey(${k.id},'${label}')">Delete</button>
+      </div>`;
+    }).join('');
+
+    box.innerHTML = `
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+        <h3 style="margin:0;font-size:1rem;">API Keys — <span style="color:var(--color-accent);">${escapeHtml(email)}</span></h3>
+        <button onclick="document.getElementById('admin-keys-modal').remove()" style="background:none;border:none;color:var(--color-text-muted,#9ca3af);font-size:1.2rem;cursor:pointer;line-height:1;">×</button>
+      </div>
+      ${rows}
+    `;
+
+    modal.appendChild(box);
+    modal.addEventListener('click', (e) => { if (e.target === modal) modal.remove(); });
+    document.body.appendChild(modal);
+  }
+
+  async function adminDeleteUserKey(keyId, label) {
+    if (!confirm(`Delete API key "${label}"?\n\nThe key will be disabled immediately. Open trade records are NOT affected.`)) return;
+    try {
+      await api('DELETE', `/api/admin/keys/${keyId}`);
+      showToast('API key deleted', 'success');
+      document.getElementById('admin-keys-modal')?.remove();
+      loadAdmin();
+    } catch (err) { showToast(err.message, 'error'); }
   }
 
   async function adminSetBitunixReferralLink(userId, email, currentLink) {
@@ -5342,6 +5401,56 @@
     }
   }
 
+  async function setTokenDirection(symbol, direction) {
+    try {
+      const r = await fetch('/admin/token-direction/' + symbol, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + (localStorage.getItem('token') || '') },
+        body: JSON.stringify({ direction })
+      });
+      const d = await r.json();
+      if (d.ok || d.ok === undefined) {
+        updateTokenDirStatus(symbol, direction === 'auto' ? null : direction);
+      }
+    } catch (e) { console.error('setTokenDirection error:', e); }
+  }
+
+  function updateTokenDirStatus(symbol, val) {
+    const status = document.getElementById('tdir-status-' + symbol);
+    const btnL = document.getElementById('tdir-L-' + symbol);
+    const btnS = document.getElementById('tdir-S-' + symbol);
+    if (!status) return;
+    if (val === 'LONG') {
+      status.textContent = '📈 LONG';
+      status.style.color = '#00ff88';
+      if (btnL) { btnL.style.background = '#00ff88'; btnL.style.color = '#000'; }
+      if (btnS) { btnS.style.background = 'transparent'; btnS.style.color = '#ff4060'; }
+    } else if (val === 'SHORT') {
+      status.textContent = '📉 SHORT';
+      status.style.color = '#ff4060';
+      if (btnS) { btnS.style.background = '#ff4060'; btnS.style.color = '#fff'; }
+      if (btnL) { btnL.style.background = 'transparent'; btnL.style.color = '#00ff88'; }
+    } else {
+      status.textContent = '—';
+      status.style.color = '#888';
+      if (btnL) { btnL.style.background = 'transparent'; btnL.style.color = '#00ff88'; }
+      if (btnS) { btnS.style.background = 'transparent'; btnS.style.color = '#ff4060'; }
+    }
+  }
+
+  async function loadTokenDirections() {
+    try {
+      const r = await fetch('/admin/token-directions', {
+        headers: { 'Authorization': 'Bearer ' + (localStorage.getItem('token') || '') }
+      });
+      if (!r.ok) return;
+      const map = await r.json();
+      for (const [sym, val] of Object.entries(map)) {
+        updateTokenDirStatus(sym, val);
+      }
+    } catch (_) {}
+  }
+
   async function reverseDirection() {
     const next = _currentDirection === 'bullish' ? 'bearish'
                : _currentDirection === 'bearish' ? 'bullish'
@@ -5358,6 +5467,7 @@
     togglePause,
     submitTopUp, saveUsdtAddress, withdrawFromWallet, payWeekly, saveBitunixReferralLink,
     adminAction, adminChangeRole, adminSub, adminWd, saveAdminSettings, adminEditWallet, adminSetBitunixReferralLink, clearErrors,
+    adminShowUserKeys, adminDeleteUserKey,
     adminEditSplit, adminPauseKey, adminResumeKey, adminMarkPaid, adminResyncBitunix, adminPullBitunixHistory,
     goToAuth, showLoginForm, onPlatformChange,
     searchCoins, addCoin, removeCoin,
@@ -5369,6 +5479,7 @@
     loadKronosPredictions,
     loadOpenPositions, emergencyCloseToken, emergencyCloseAll,
     loadDirectionOverride, setDirectionOverride, reverseDirection,
+    setTokenDirection, updateTokenDirStatus, loadTokenDirections,
     activateVersionForTrading, deactivateVersion, syncCurrentVersion,
     fixBitunixPnl, debugBitunix, runBacktest, loadAiVersions, runAiOptimize, adminResyncFees, adminFixTrades, adminClearTestData,
     mcRefresh, mcCommand, mcChat, mcChatQuick, switchAdminTab, filterAgents, customerChat,
