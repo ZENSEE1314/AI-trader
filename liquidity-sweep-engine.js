@@ -44,8 +44,9 @@ async function fetchWithRetry(url, retries = 3) {
   return null;
 }
 
-async function fetchKlines(symbol, interval, limit = 100) {
-  const url = `https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`;
+async function fetchKlines(symbol, interval, limit = 100, startTime = null) {
+  let url = `https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`;
+  if (startTime) url += `&startTime=${startTime}`;
   const res = await fetchWithRetry(url);
   if (!res) return null;
   return res.json();
@@ -937,11 +938,19 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
   const symbol = ticker.symbol;
   const price = parseFloat(ticker.lastPrice);
 
+  // UTC session start (midnight) — used for VWAP session accuracy.
+  // VWAP must be computed from 00:00 UTC (same as TradingView VWAP Session).
+  // Fetching only the last N bars gives wrong bands if the session started >N minutes ago.
+  const _now = new Date();
+  const dayStartMs = Date.UTC(_now.getUTCFullYear(), _now.getUTCMonth(), _now.getUTCDate());
+
   const [klines1h, klines15m, klines3m, klines1m, marketIntel] = await Promise.all([
     fetchKlines(symbol, '1h', 60),
     fetchKlines(symbol, '15m', 100),
     fetchKlines(symbol, '3m', 50),
-    fetchKlines(symbol, '1m', 300), // 300 candles = ~5h of 1m data for accurate VWAP session
+    // Fetch up to 1000 × 1m candles from UTC midnight — covers up to 16h 40m of session.
+    // startTime ensures we always start from 00:00 UTC, matching TradingView VWAP Session.
+    fetchKlines(symbol, '1m', 1000, dayStartMs),
     getMarketIntel(symbol),
   ]);
 
@@ -999,15 +1008,12 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
   // Default: unknown — if VWAP can't be computed, block both directions (no trade)
   let vwapBandPos = 'unknown';
   {
-    const now = new Date();
-    const dayStartMs = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
-
-    // Use 1m candles for VWAP — matches TradingView VWAP Session resolution.
-    // 15m candles produce σ ≈ 4–5× wider bands (coarser typical price swings).
-    // Filter to today's session only; fall back to last 60 1m bars if session is fresh.
+    // dayStartMs is computed before the fetch (above) so the 1m fetch uses the same anchor.
+    // parsed1m is already filtered to today's session because we fetched with startTime=dayStartMs.
+    // All 1m candles here are from UTC midnight → matches TradingView VWAP Session exactly.
     const today1m = parsed1m.filter(c => c.openTime >= dayStartMs);
-    const vwapCandles = today1m.length >= 10 ? today1m
-                      : parsed1m.length  >= 10 ? parsed1m.slice(-60)
+    // Use today's session candles. Fall back to 15m if session is too fresh (< 5 bars).
+    const vwapCandles = today1m.length >= 5 ? today1m
                       : parsed15.filter(c => c.openTime >= dayStartMs);
 
     const opCandles15 = parsed15.filter(c => c.openTime >= dayStartMs);
