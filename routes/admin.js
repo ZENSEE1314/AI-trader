@@ -772,23 +772,6 @@ router.put('/settings', async (req, res) => {
 // Drives the admin UI — labels, units, min/max hints, descriptions.
 const STRATEGY_SCHEMA = [
   {
-    id: 'ma_stack', name: 'MA Stack Trend', status: 'active',
-    enabledKey: 'strat.ma_stack.enabled',
-    description: 'Trend-following on 1m chart. Fires when SMA5/10/20 fan in strict order and price breaks through all MAs.',
-    params: [
-      { key: 'strat.ma_stack.atr_period',        label: 'ATR Period',        unit: 'candles', scale: 1,   min: 5,   max: 50,   step: 1,    hint: 'Lookback candles for ATR calculation. 14 = standard. Higher = smoother but slower.' },
-      { key: 'strat.ma_stack.vol_sma_period',    label: 'Volume SMA Period', unit: 'candles', scale: 1,   min: 3,   max: 20,   step: 1,    hint: 'SMA period for volume conviction filter. Signal candle must exceed this average.' },
-      { key: 'strat.ma_stack.min_stack_spread',  label: 'Min Stack Spread',  unit: '%',       scale: 100, min: 0.01, max: 1,   step: 0.01, hint: 'Hard floor for MA separation. Lower = catches tighter fans.' },
-      { key: 'strat.ma_stack.min_spread_growth', label: 'Min Spread Growth', unit: '×',       scale: 1,   min: 1.0,  max: 3.0, step: 0.05, hint: 'Fan must be this × wider than 3 bars ago. Confirms active divergence.' },
-      { key: 'strat.ma_stack.min_atr_pct',       label: 'Min ATR',           unit: '%',       scale: 100, min: 0.1,  max: 1,   step: 0.05, hint: 'Min ATR % of price. Filters sideways noise.' },
-      { key: 'strat.ma_stack.max_extension_atr', label: 'Max Extension',     unit: '× ATR',   scale: 1,   min: 0.5,  max: 5,   step: 0.1,  hint: "Don't chase more than this × ATR past SMA5." },
-      { key: 'strat.ma_stack.max_signal_age_ms', label: 'Signal Freshness',  unit: 'ms',      scale: 1,   min: 30000, max: 600000, step: 30000, hint: 'Signal expires after this many ms. 180 000 = 3 min.' },
-      { key: 'strat.ma_stack.sl_min_pct',        label: 'SL Minimum',        unit: '%',       scale: 100, min: 0.1,  max: 5,   step: 0.1,  hint: 'Floor for stop-loss distance.' },
-      { key: 'strat.ma_stack.sl_max_pct',        label: 'SL Maximum',        unit: '%',       scale: 100, min: 0.5,  max: 10,  step: 0.1,  hint: 'Cap for stop-loss distance.' },
-      { key: 'strat.ma_stack.tp_multiplier',     label: 'TP Multiplier',     unit: '× SL',    scale: 1,   min: 1,    max: 5,   step: 0.1,  hint: 'Take profit = SL × this value.' },
-    ],
-  },
-  {
     id: 'tjunction', name: 'T-Junction', status: 'active',
     enabledKey: 'strat.tjunction.enabled',
     description: 'Convergence breakout on 5m chart. MAs compress into a T-stem, then fan out = entry.',
@@ -2198,11 +2181,43 @@ router.delete('/ai-versions/:id', async (req, res) => {
 });
 
 // GET /api/admin/ai-versions/active — returns the currently active version params (or null)
+// Always injects correct current settings (100x leverage, current strategies)
 router.get('/ai-versions/active', async (req, res) => {
   try {
     const rows = await query(`SELECT value FROM settings WHERE key = 'active_ai_version'`);
     if (!rows.length) return res.json(null);
-    res.json(JSON.parse(rows[0].value));
+    const stored = JSON.parse(rows[0].value);
+    // Always override leverage to 100 for current strategy (all 4 tokens use 100x)
+    stored.leverage = 100;
+    res.json(stored);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/admin/ai-versions/sync-current — reset active version to current settings
+router.post('/ai-versions/sync-current', async (req, res) => {
+  try {
+    const current = {
+      version:       'VWAP+Structure 100x',
+      leverage:      100,
+      tpPct:         0,     // trail-only
+      trailStep:     0.002, // 0.2% price = 20% capital @ 100x (first trigger)
+      riskPct:       0.10,  // 10% capital per trade
+      maxPositions:  2,
+      enableLong:    true,
+      enableShort:   true,
+      slPct:         0.0015, // 0.15% price = 15% capital @ 100x
+      symbolList:    ['BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'SOLUSDT'],
+      strategy:      'VWAP_STRUCTURE',
+      updatedAt:     new Date().toISOString(),
+    };
+    await query(
+      `INSERT INTO settings (key, value) VALUES ('active_ai_version', $1)
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+      [JSON.stringify(current)]
+    );
+    res.json({ ok: true, ...current });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

@@ -1658,7 +1658,8 @@
           <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;">
             <span style="font-size:0.78rem;color:#5bffa0;font-weight:700;white-space:nowrap;">🟢 LIVE VERSION</span>
             <span id="admin-active-version-name" style="font-size:0.92rem;color:var(--color-text);font-weight:700;"></span>
-            <button onclick="window.CryptoBot.deactivateVersion()" style="margin-left:auto;background:none;border:1px solid rgba(255,255,255,0.15);border-radius:4px;color:var(--color-text-muted);font-size:0.72rem;padding:2px 10px;cursor:pointer;" title="Revert to default settings">✕ Clear</button>
+            <button onclick="window.CryptoBot.syncCurrentVersion()" style="margin-left:auto;background:rgba(16,185,129,0.15);border:1px solid rgba(16,185,129,0.4);border-radius:4px;color:#5bffa0;font-size:0.72rem;padding:2px 10px;cursor:pointer;" title="Reset version to current settings (100x, VWAP+Structure)">↺ Sync</button>
+            <button onclick="window.CryptoBot.deactivateVersion()" style="background:none;border:1px solid rgba(255,255,255,0.15);border-radius:4px;color:var(--color-text-muted);font-size:0.72rem;padding:2px 10px;cursor:pointer;" title="Revert to default settings">✕ Clear</button>
           </div>
           <div id="admin-active-version-params" style="font-size:0.75rem;color:var(--color-text-muted);font-family:var(--font-mono);"></div>
         </div>

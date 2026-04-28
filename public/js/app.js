@@ -3462,9 +3462,11 @@
         const slPct    = activeRow.slPct    ?? activeRow.sl_pct    ?? null;
         const trailPct = activeRow.trailStep ?? activeRow.trailing_step ?? null;
         const maxPos   = activeRow.maxPositions ?? activeRow.max_positions ?? 3;
+        const activeLev = parseInt(activeRow.leverage) || 100;
+        const fmtCap = (v) => Math.round(parseFloat(v) * 100 * activeLev) + '%';
         btBanner.textContent = `🟢 Live: ${activeRow.version}`
-          + (slPct    != null ? ` — SL ${(parseFloat(slPct)*100).toFixed(1)}%`    : '')
-          + (trailPct != null ? ` · Trail ${(parseFloat(trailPct)*100).toFixed(1)}%` : '')
+          + (slPct    != null ? ` — SL ${fmtCap(slPct)}`    : '')
+          + (trailPct != null ? ` · Trail ${fmtCap(trailPct)}` : '')
           + ` · ${maxPos} pos max`;
         btBanner.style.display = '';
       } else {
@@ -3481,7 +3483,15 @@
 
     if (hasActive) {
       const a = activeRow;
-      const pct = (v) => v != null ? (parseFloat(v) * 100).toFixed(1) + '%' : null;
+      // lev: always 100 for current strategy
+      const lev = parseInt(a.leverage) || 100;
+      // capPct: converts a price-decimal to capital % (× leverage), shown as integer
+      // e.g. 0.0015 × 100 (lev) × 100 = 15%  →  "15%"
+      //      0.002  × 100 × 100 = 20%  →  "20%"
+      //      0.012  × 100 × 100 = 120% →  "120%"
+      const capPct = (v) => v != null ? Math.round(parseFloat(v) * 100 * lev) + '%' : null;
+      // pct: plain percentage (×100, no leverage factor) — for risk%, proximity, etc.
+      const pct = (v) => v != null ? Math.round(parseFloat(v) * 100) + '%' : null;
       const int = (v) => v != null ? parseInt(v) : null;
       const fp  = (v) => v != null ? parseFloat(v) : null;
 
@@ -3492,12 +3502,12 @@
 
       // Risk & position
       const riskLine = [
-        a.slPct    != null ? `SL ${pct(a.slPct)}`               : null,
-        a.tpPct    != null && fp(a.tpPct) > 0 ? `TP ${pct(a.tpPct)}` : `TP trail-only`,
-        a.trailStep != null ? `Trail ${pct(a.trailStep)}`        : null,
-        a.leverage  != null ? `Lev ${a.leverage}×`               : null,
-        a.riskPct   != null ? `Risk ${pct(a.riskPct)}`           : null,
-        a.maxPositions  != null ? `${a.maxPositions} pos max`    : null,
+        a.slPct    != null ? `SL ${capPct(a.slPct)}`               : null,
+        a.tpPct    != null && fp(a.tpPct) > 0 ? `TP ${capPct(a.tpPct)}` : `TP trail-only`,
+        a.trailStep != null ? `Trail ${capPct(a.trailStep)}`        : null,
+        a.leverage  != null ? `Lev ${a.leverage}×`                  : null,
+        a.riskPct   != null ? `Risk ${pct(a.riskPct)}`              : null,
+        a.maxPositions  != null ? `${a.maxPositions} pos max`       : null,
         a.maxConsecLoss != null ? `stop after ${a.maxConsecLoss} losses` : null,
       ].filter(Boolean).join(' · ');
       if (riskLine) lines.push('⚖️  ' + riskLine);
@@ -3543,12 +3553,12 @@
       else                    dirEnabled.push('⚠️ Both disabled');
 
       const dirOverrides = [];
-      if (fp(a.slPctLong)    > 0) dirOverrides.push(`SL▲ ${pct(a.slPctLong)}`);
-      if (fp(a.slPctShort)   > 0) dirOverrides.push(`SL▼ ${pct(a.slPctShort)}`);
-      if (fp(a.tpPctLong)    > 0) dirOverrides.push(`TP▲ ${pct(a.tpPctLong)}`);
-      if (fp(a.tpPctShort)   > 0) dirOverrides.push(`TP▼ ${pct(a.tpPctShort)}`);
-      if (fp(a.trailStepLong)  > 0) dirOverrides.push(`Trail▲ ${pct(a.trailStepLong)}`);
-      if (fp(a.trailStepShort) > 0) dirOverrides.push(`Trail▼ ${pct(a.trailStepShort)}`);
+      if (fp(a.slPctLong)    > 0) dirOverrides.push(`SL▲ ${capPct(a.slPctLong)}`);
+      if (fp(a.slPctShort)   > 0) dirOverrides.push(`SL▼ ${capPct(a.slPctShort)}`);
+      if (fp(a.tpPctLong)    > 0) dirOverrides.push(`TP▲ ${capPct(a.tpPctLong)}`);
+      if (fp(a.tpPctShort)   > 0) dirOverrides.push(`TP▼ ${capPct(a.tpPctShort)}`);
+      if (fp(a.trailStepLong)  > 0) dirOverrides.push(`Trail▲ ${capPct(a.trailStepLong)}`);
+      if (fp(a.trailStepShort) > 0) dirOverrides.push(`Trail▼ ${capPct(a.trailStepShort)}`);
 
       lines.push('🔀 ' + dirEnabled[0] + (dirOverrides.length ? '  |  ' + dirOverrides.join(' · ') : ''));
 
@@ -3611,6 +3621,17 @@
       updateActiveVersionBanner(null);
     } catch (err) {
       showToast('Deactivate failed: ' + err.message, 'error');
+    }
+  }
+
+  // Sync the live version banner to current actual settings (100x, VWAP+Structure, 4 tokens)
+  async function syncCurrentVersion() {
+    try {
+      const result = await api('POST', '/api/admin/ai-versions/sync-current');
+      showToast('✅ Live version synced to current settings', 'success');
+      updateActiveVersionBanner(result);
+    } catch (err) {
+      showToast('Sync failed: ' + err.message, 'error');
     }
   }
 
@@ -5291,7 +5312,7 @@
     addRiskLevel, saveRiskLevel, deleteRiskLevel,
     loadKronosPredictions,
     loadOpenPositions, emergencyCloseToken, emergencyCloseAll,
-    activateVersionForTrading, deactivateVersion,
+    activateVersionForTrading, deactivateVersion, syncCurrentVersion,
     fixBitunixPnl, debugBitunix, runBacktest, loadAiVersions, runAiOptimize, adminResyncFees, adminFixTrades, adminClearTestData,
     mcRefresh, mcCommand, mcChat, mcChatQuick, switchAdminTab, filterAgents, customerChat,
     loadStrategyConfig, loadStrategyComposer, initStratSubTabs,
