@@ -1472,41 +1472,23 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
       continue;
     }
 
-    // ── FILTER 1: VWAP direction alignment ──────────────────────────────────
-    // requireBothHTF=1 (strict): no SHORT above mid, no LONG below mid
-    // requireBothHTF=0 (relaxed): only block extreme bands (above_upper / below_lower)
-    // NOTE: directionOverride does NOT bypass this filter — it only controls the
-    // swing structure direction filter below. VWAP zone is a price-based safety
-    // rule that applies regardless of admin override.
+    // ── FILTER 1: VWAP direction alignment — ALWAYS STRICT ─────────────────
+    // The VWAP mid-line is an absolute price rule. No param, override, or AI
+    // optimisation can relax it. Repeated losses below VWAP confirm this is
+    // the single most important filter in the engine.
+    //   price below VWAP mid → NO LONG  (bearish side of VWAP)
+    //   price above VWAP mid → NO SHORT (bullish side of VWAP)
+    // NOTE: directionOverride does NOT bypass this filter.
     {
-      // NOTE: DB JSON may deserialise requireBothHTF as a string ("1"/"0") rather than
-      // a number.  Use Number() coercion so "1", 1, true all mean strict, and
-      // "0", 0, false all mean relaxed.  undefined/null → default to strict.
-      const bhv = params.requireBothHTF;
-      const strictVwap = bhv === undefined || bhv === null || Number(bhv) !== 0;
-      if (strictVwap) {
-        if ((vwapBandPos === 'above_upper' || vwapBandPos === 'above_mid') && sig.direction === 'SHORT') {
-          sig.score = -99;
-          sig.blocked = `SHORT blocked — price in LONG zone (${vwapBandPos}, mid=${vwapMid?.toFixed(2)}): trade WITH VWAP`;
-          continue;
-        }
-        if ((vwapBandPos === 'below_lower' || vwapBandPos === 'below_mid') && sig.direction === 'LONG') {
-          sig.score = -99;
-          sig.blocked = `LONG blocked — price in SHORT zone (${vwapBandPos}, mid=${vwapMid?.toFixed(2)}): trade WITH VWAP`;
-          continue;
-        }
-      } else {
-        // Relaxed / override: only hard-block extreme bands
-        if (vwapBandPos === 'above_upper' && sig.direction === 'SHORT') {
-          sig.score = -99;
-          sig.blocked = `SHORT blocked — price above VWAP upper (${vwapUpper?.toFixed(2)}): hard block`;
-          continue;
-        }
-        if (vwapBandPos === 'below_lower' && sig.direction === 'LONG') {
-          sig.score = -99;
-          sig.blocked = `LONG blocked — price below VWAP lower (${vwapLower?.toFixed(2)}): hard block`;
-          continue;
-        }
+      if ((vwapBandPos === 'above_upper' || vwapBandPos === 'above_mid') && sig.direction === 'SHORT') {
+        sig.score = -99;
+        sig.blocked = `SHORT blocked — price above VWAP mid (${vwapBandPos}, mid=${vwapMid?.toFixed(2)}): trade WITH VWAP`;
+        continue;
+      }
+      if ((vwapBandPos === 'below_lower' || vwapBandPos === 'below_mid') && sig.direction === 'LONG') {
+        sig.score = -99;
+        sig.blocked = `LONG blocked — price below VWAP mid (${vwapBandPos}, mid=${vwapMid?.toFixed(2)}): trade WITH VWAP`;
+        continue;
       }
     }
 

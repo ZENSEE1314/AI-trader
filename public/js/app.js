@@ -3104,10 +3104,36 @@
         const fmt = price >= 1000 ? '$' + price.toLocaleString('en-US',{maximumFractionDigits:2})
                   : price >= 1   ? '$' + price.toFixed(2)
                                  : '$' + price.toFixed(6);
-        // Update all cards for this symbol (could appear in multiple strategy grids)
         document.querySelectorAll(`[id$="price-${sym}"]`).forEach(el => { el.textContent = fmt; });
       } catch {}
     }
+    // Also load current leverage from DB and update card labels
+    try {
+      const levData = await api('GET', '/api/admin/token-leverage');
+      const levMap = {};
+      for (const row of levData) levMap[row.symbol] = row.leverage;
+      for (const sym of symbols) {
+        const el = document.getElementById('tcard-lev-' + sym);
+        if (!el) continue;
+        const lev = levMap[sym] ?? levMap[sym.replace('USDT','')] ?? null;
+        if (lev) el.textContent = `×${lev} leverage ✏️`;
+      }
+    } catch {}
+  }
+
+  async function editTokenCardLev(symbol) {
+    const el = document.getElementById('tcard-lev-' + symbol);
+    const curText = el ? el.textContent : '';
+    const curLev  = parseInt(curText.replace(/[^\d]/g, '')) || '';
+    const input = prompt(`Set leverage for ${symbol.replace('USDT','')}\nCurrent: ×${curLev}\n\nEnter new leverage (1–125):`, curLev);
+    if (input === null) return;
+    const lev = parseInt(input);
+    if (isNaN(lev) || lev < 1 || lev > 125) return showToast('Leverage must be 1–125', 'error');
+    try {
+      await api('POST', '/api/admin/token-leverage', { symbol, leverage: lev });
+      if (el) el.textContent = `×${lev} leverage ✏️`;
+      showToast(`${symbol.replace('USDT','')} leverage set to ×${lev}`, 'success');
+    } catch (err) { showToast(err.message, 'error'); }
   }
 
   // Load win-rate stats from closed trades
@@ -5527,7 +5553,7 @@
     checkEmailSmtp, sendTestEmail, sendBroadcastEmail, emailSetMode,
     loadSignalBoard, toggleWatch, watchAll, setUserLeverage,
     adminLoadTokenBoard, adminAddTokenBoard, adminPopulateTop50, adminSetRiskTag, adminSetTokenLev, adminToggleBan, adminRemoveTokenBoard,
-    toggleStrategyToken, loadTokenCardPrices, loadTokenStats,
+    toggleStrategyToken, loadTokenCardPrices, loadTokenStats, editTokenCardLev,
     mcToggleSkill, mcUpdateConfig, mcCreateAgent, mcRemoveAgent, mcDownloadTrades,
   };
 
