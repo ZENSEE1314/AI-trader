@@ -1,500 +1,470 @@
 // ============================================================
-// Backtest: SMC 3-Candle Strategy — Last 30 Days
-// Uses exact same logic as smc-engine.js + trailing SL from cycle.js
-// Run: node backtest.js
+// Backtest — VWAP + Structure Strategy
+// Tokens : BTCUSDT, ETHUSDT, BNBUSDT, SOLUSDT
+// Logic  : Mirrors the live engine exactly:
+//            • VWAP band gate  (above upper → LONG only, below lower → SHORT only)
+//            • 15m structure   (HL/HH for LONG, LH/LL for SHORT)
+//            • 1m confirmation (HH/HL for LONG, LL/LH for SHORT)
+//            • ATR SL × 1.2   (price distance)
+//            • slDist 0.05%-5%, RR ≥ 1.2
+// Leverage: 100×
+// Capital : 10% of wallet per trade (max 100%, never over-sized)
+// Trail   : +20% capital → breakeven, then +10% steps (cycle.js tiers)
 // ============================================================
 
 const fetch = require('node-fetch');
 const { getFetchOptions } = require('./proxy-agent');
 
-// ── Strategy Parameters ─────────────────────────────────────
-// Matches live cycle.js trailing SL config + user key settings from Apr 1 trades
-// Trades showed: SL ~1.5%, TP ~2.25% (= 1.5% * 1.5x), RR = 1:1.5
-const SWING_LENGTHS = { '15m': 10, '3m': 10, '1m': 5 };
-const MIN_24H_VOLUME = 10_000_000;
-const DEFAULT_TP_PCT = 0.015;      // 1.5% TP (matches live user key tp_pct)
-const DEFAULT_SL_PCT = 0.015;      // 1.5% SL (matches live user key sl_pct)
-const TRAILING_SL = {
-  INITIAL_SL_PCT: 0.03,            // 3% initial SL (from cycle.js)
-  FIRST_STEP:     0.012,           // First trailing at +1.2% profit (from cycle.js)
-  STEP_INCREMENT: 0.012,           // Each step +1.2% (from cycle.js)
-};
-const VWAP_PROXIMITY = 0.003;      // 0.3% proximity to key level
-const WALLET = 1000;               // Starting wallet USDT
-const RISK_PCT = 0.10;             // 10% of wallet per trade
-const LEVERAGE = 20;
-const MAX_POSITIONS = 3;
-const SCAN_INTERVAL_CANDLES = 1;   // Check every 15m candle
-const TOP_N_COINS = 20;            // Top coins by volume to scan
-const DAYS = 30;
+// ── Config ──────────────────────────────────────────────────
+const SYMBOLS       = ['BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'SOLUSDT'];
+const LEVERAGE      = 100;
+const CAPITAL_PCT   = 0.10;  // 10% of wallet per trade
+const DAYS          = 14;    // back-test window
+const ATR_PERIOD    = 14;
+const ATR_SL_MULT   = 1.2;
+const RR_MIN        = 1.2;
+const SL_DIST_MIN   = 0.0005;
+const SL_DIST_MAX   = 0.05;
+const VWAP_MULT     = 1.0;   // 1σ bands
+const PIVOT_BARS    = 2;     // lookback each side for swing detection
+const WALLET_START  = 1000;  // USDT starting balance
+const MAX_POSITIONS = 2;     // max concurrent open positions per symbol group
 
-// ── Fetch Helpers ───────────────────────────────────────────
+// Trailing tiers (matches cycle.js TRAILING_TIERS, expressed as capital %)
+const TRAIL_TIERS = [
+  { trigger: 0.20, lock: 0.00 },
+  { trigger: 0.30, lock: 0.20 },
+  { trigger: 0.40, lock: 0.30 },
+  { trigger: 0.50, lock: 0.40 },
+  { trigger: 0.60, lock: 0.50 },
+  { trigger: 0.70, lock: 0.60 },
+  { trigger: 0.80, lock: 0.70 },
+  { trigger: 0.90, lock: 0.80 },
+  { trigger: 1.00, lock: 0.90 },
+  { trigger: 1.10, lock: 1.00 },
+  { trigger: 1.20, lock: 1.10 },
+  { trigger: 1.50, lock: 1.40 },
+  { trigger: 2.00, lock: 1.90 },
+  { trigger: 3.00, lock: 2.90 },
+];
+
+// ── Helpers ──────────────────────────────────────────────────
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
 async function fetchKlines(symbol, interval, limit, endTime) {
   const params = `symbol=${symbol}&interval=${interval}&limit=${limit}` +
     (endTime ? `&endTime=${endTime}` : '');
   const url = `https://fapi.binance.com/fapi/v1/klines?${params}`;
-  for (let i = 0; i < 3; i++) {
+  for (let attempt = 0; attempt < 3; attempt++) {
     try {
-      const res = await fetch(url, { timeout: 15000, ...getFetchOptions() });
+      const res = await fetch(url, { timeout: 20000, ...getFetchOptions() });
       if (res.ok) return res.json();
-    } catch {}
-    await sleep(1000);
+    } catch (err) {
+      // Detect ISP DNS block / cert mismatch — must run on server
+      if (err.message && (err.message.includes('altnames') || err.message.includes('certificate'))) {
+        console.error('\n[ERROR] Binance blocked by local ISP/DNS.');
+        console.error('[ERROR] Run this on the server where PROXY_URL is configured:');
+        console.error('[ERROR]   node backtest.js');
+        process.exit(1);
+      }
+    }
+    await sleep(1000 * (attempt + 1));
   }
   return null;
 }
 
-async function fetchAllKlines(symbol, interval, startTime, endTime) {
+// Fetch all 1m klines for a period (paginated, newest-first via endTime)
+async function fetchAllKlines1m(symbol, startMs, endMs) {
   const all = [];
-  let cursor = startTime;
-  const limits = { '1m': 1500, '3m': 1500, '15m': 1500, '1d': 100 };
-  const msPerCandle = { '1m': 60000, '3m': 180000, '15m': 900000, '1d': 86400000 };
-
-  while (cursor < endTime) {
-    const data = await fetchKlines(symbol, interval, limits[interval], endTime);
-    if (!data || !data.length) break;
-
-    // Filter to only candles in our range
-    const filtered = data.filter(k => k[0] >= startTime && k[0] <= endTime);
+  let cursor = endMs;
+  while (cursor > startMs) {
+    const chunk = await fetchKlines(symbol, '1m', 1500, cursor);
+    if (!chunk || !chunk.length) break;
+    // filter to our window
+    const filtered = chunk.filter(k => parseInt(k[0]) >= startMs && parseInt(k[0]) < cursor);
     if (!filtered.length) break;
-
-    // Actually we need to paginate properly
-    break; // Just use single fetch for now
+    all.unshift(...filtered);
+    cursor = parseInt(chunk[0][0]); // oldest candle open time → go further back
+    if (chunk.length < 1500) break; // reached the start
+    await sleep(300);
   }
-
-  // Simpler: fetch max candles ending at endTime
-  const data = await fetchKlines(symbol, interval, limits[interval], endTime);
-  return data || [];
+  return all.sort((a, b) => parseInt(a[0]) - parseInt(b[0]));
 }
 
-function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
-
-// ── Swing Detection (same as smc-engine.js) ─────────────────
-function detectSwings(klines, len) {
-  const highs = klines.map(k => parseFloat(k[2]));
-  const lows = klines.map(k => parseFloat(k[3]));
-  const swings = [];
-  let lastType = null;
-
-  for (let i = len; i < klines.length - len; i++) {
-    let isHigh = true;
-    for (let j = -len; j <= len; j++) {
-      if (j === 0) continue;
-      if (highs[i] <= highs[i + j]) { isHigh = false; break; }
-    }
-    let isLow = true;
-    for (let j = -len; j <= len; j++) {
-      if (j === 0) continue;
-      if (lows[i] >= lows[i + j]) { isLow = false; break; }
-    }
-    if (isHigh && isLow) {
-      const highDist = highs[i] - Math.max(highs[i - 1], highs[i + 1]);
-      const lowDist = Math.min(lows[i - 1], lows[i + 1]) - lows[i];
-      if (highDist > lowDist) isLow = false; else isHigh = false;
-    }
-    if (isHigh) {
-      if (lastType === 'high') {
-        if (highs[i] > swings[swings.length - 1].price)
-          swings[swings.length - 1] = { type: 'high', index: i, price: highs[i] };
-      } else { swings.push({ type: 'high', index: i, price: highs[i] }); lastType = 'high'; }
-    }
-    if (isLow) {
-      if (lastType === 'low') {
-        if (lows[i] < swings[swings.length - 1].price)
-          swings[swings.length - 1] = { type: 'low', index: i, price: lows[i] };
-      } else { swings.push({ type: 'low', index: i, price: lows[i] }); lastType = 'low'; }
-    }
-  }
-  return swings;
-}
-
-function getStructure(klines, len) {
-  const swings = detectSwings(klines, len);
-  const swingHighs = swings.filter(s => s.type === 'high');
-  const swingLows = swings.filter(s => s.type === 'low');
-
-  const highLabels = [];
-  for (let i = 1; i < swingHighs.length; i++) {
-    const label = swingHighs[i].price > swingHighs[i - 1].price ? 'HH' : 'LH';
-    highLabels.push({ ...swingHighs[i], label });
-  }
-  const lowLabels = [];
-  for (let i = 1; i < swingLows.length; i++) {
-    const label = swingLows[i].price > swingLows[i - 1].price ? 'HL' : 'LL';
-    lowLabels.push({ ...swingLows[i], label });
-  }
-
-  const lastHigh = highLabels.length ? highLabels[highLabels.length - 1] : null;
-  const lastLow = lowLabels.length ? lowLabels[lowLabels.length - 1] : null;
-
+function parseCandle(k) {
   return {
-    lastHigh, lastLow,
-    hasLH: lastHigh?.label === 'LH',
-    hasHL: lastLow?.label === 'HL',
-    trend: (() => {
-      if (!lastHigh || !lastLow) return 'neutral';
-      if (lastHigh.label === 'LH' && lastLow.label === 'LL') return 'bearish';
-      if (lastHigh.label === 'HH' && lastLow.label === 'HL') return 'bullish';
-      return 'neutral';
-    })(),
+    t: parseInt(k[0]),
+    o: parseFloat(k[1]),
+    h: parseFloat(k[2]),
+    l: parseFloat(k[3]),
+    c: parseFloat(k[4]),
+    v: parseFloat(k[5]),
   };
 }
 
-// ── VWAP Bands ──────────────────────────────────────────────
-function calcVWAPBands(klines) {
-  let cumVolume = 0, cumTPV = 0, cumTPV2 = 0, currentDay = '';
-  const values = [];
-  for (const k of klines) {
-    const day = new Date(parseInt(k[0])).toISOString().slice(0, 10);
-    const high = parseFloat(k[2]), low = parseFloat(k[3]), close = parseFloat(k[4]), volume = parseFloat(k[5]);
-    if (day !== currentDay) { cumVolume = 0; cumTPV = 0; cumTPV2 = 0; currentDay = day; }
-    const tp = (high + low + close) / 3;
-    cumTPV += tp * volume; cumTPV2 += tp * tp * volume; cumVolume += volume;
-    if (cumVolume > 0) {
-      const vwap = cumTPV / cumVolume;
-      const sd = Math.sqrt(Math.max(0, (cumTPV2 / cumVolume) - vwap * vwap));
-      values.push({ vwap, upper: vwap + sd, lower: vwap - sd });
-    } else values.push({ vwap: close, upper: close, lower: close });
+function calcATR(candles, period = ATR_PERIOD) {
+  if (candles.length < period + 1) return 0;
+  let sum = 0;
+  for (let i = candles.length - period; i < candles.length; i++) {
+    const p = candles[i - 1];
+    const c = candles[i];
+    sum += Math.max(c.h - c.l, Math.abs(c.h - p.c), Math.abs(c.l - p.c));
   }
-  return values;
+  return sum / period;
 }
 
-function isAtKeyLevel(price, pdh, pdl, vwapBands, direction) {
-  const lastBand = vwapBands[vwapBands.length - 1];
-  const nearPDH = Math.abs(price - pdh) / pdh < VWAP_PROXIMITY;
-  const nearPDL = Math.abs(price - pdl) / pdl < VWAP_PROXIMITY;
-  const nearUpper = Math.abs(price - lastBand.upper) / lastBand.upper < VWAP_PROXIMITY;
-  const nearLower = Math.abs(price - lastBand.lower) / lastBand.lower < VWAP_PROXIMITY;
-  const nearVWAP = Math.abs(price - lastBand.vwap) / lastBand.vwap < VWAP_PROXIMITY;
-
-  if (direction === 'LONG') return nearLower || nearPDL || nearVWAP;
-  return nearUpper || nearPDH || nearVWAP;
+// VWAP + 1σ bands from an array of parsed candles (same-day window)
+function calcVWAP(candles) {
+  if (!candles.length) return null;
+  let cumTV = 0, cumV = 0, cumTV2 = 0;
+  for (const c of candles) {
+    const tp = (c.h + c.l + c.c) / 3;
+    cumTV  += tp * c.v;
+    cumTV2 += tp * tp * c.v;
+    cumV   += c.v;
+  }
+  if (cumV === 0) return null;
+  const vwap  = cumTV / cumV;
+  const variance = Math.max(0, cumTV2 / cumV - vwap * vwap);
+  const sd    = Math.sqrt(variance);
+  return { mid: vwap, upper: vwap + VWAP_MULT * sd, lower: vwap - VWAP_MULT * sd };
 }
 
-// ── Daily Bias (for PDH/PDL only) ───────────────────────────
-function getDailyLevels(dailyKlines, idx) {
-  if (idx < 1) return null;
-  const prevDay = dailyKlines[idx - 1];
-  return { pdh: parseFloat(prevDay[2]), pdl: parseFloat(prevDay[3]) };
+// Detect pivot highs/lows with PIVOT_BARS lookback each side
+function getPivots(candles) {
+  const highs = [], lows = [];
+  const P = PIVOT_BARS;
+  for (let i = P; i < candles.length - P; i++) {
+    let isH = true, isL = true;
+    for (let j = 1; j <= P; j++) {
+      if (candles[i].h <= candles[i - j].h || candles[i].h <= candles[i + j].h) isH = false;
+      if (candles[i].l >= candles[i - j].l || candles[i].l >= candles[i + j].l) isL = false;
+    }
+    if (isH) highs.push(candles[i].h);
+    if (isL) lows.push(candles[i].l);
+  }
+  return { highs, lows };
 }
 
-// ── Main Backtest ───────────────────────────────────────────
-async function runBacktest() {
-  console.log('=== SMC 3-Candle Strategy Backtest ===');
-  console.log(`Period: Last ${DAYS} days | Wallet: $${WALLET} | Leverage: ${LEVERAGE}x | Risk: ${RISK_PCT * 100}%`);
-  console.log(`TP: ${DEFAULT_TP_PCT * 100}% | Initial SL: ${TRAILING_SL.INITIAL_SL_PCT * 100}% | Trailing: +${TRAILING_SL.FIRST_STEP * 100}% → +${TRAILING_SL.STEP_INCREMENT * 100}% steps`);
+// ── Signal generation (mirrors analyzeCoin logic) ────────────
+function generateSignal(c15m, c1m, price) {
+  if (c15m.length < 30 || c1m.length < 20) return null;
+
+  // ── VWAP bands ──────────────────────────────────────────────
+  const dayStart = new Date(c15m[c15m.length - 1].t);
+  const dayStartMs = Date.UTC(dayStart.getUTCFullYear(), dayStart.getUTCMonth(), dayStart.getUTCDate());
+  const todayCandles = c15m.filter(c => c.t >= dayStartMs);
+  const vwapSrc = todayCandles.length >= 3 ? todayCandles : c15m;
+  const vwap = calcVWAP(vwapSrc);
+  if (!vwap) return null;
+
+  let bandPos;
+  if      (price >= vwap.upper) bandPos = 'above_upper';
+  else if (price >= vwap.mid)   bandPos = 'above_mid';
+  else if (price <= vwap.lower) bandPos = 'below_lower';
+  else                          bandPos = 'below_mid';
+
+  // ── 15m structure ────────────────────────────────────────────
+  const { highs: sH15, lows: sL15 } = getPivots(c15m);
+  const has15mHL = sL15.length >= 2 && sL15[sL15.length - 1] > sL15[sL15.length - 2];
+  const has15mHH = sH15.length >= 2 && sH15[sH15.length - 1] > sH15[sH15.length - 2];
+  const has15mLH = sH15.length >= 2 && sH15[sH15.length - 1] < sH15[sH15.length - 2];
+  const has15mLL = sL15.length >= 2 && sL15[sL15.length - 1] < sL15[sL15.length - 2];
+
+  // ── 1m structure ─────────────────────────────────────────────
+  const { highs: pH1m, lows: pL1m } = getPivots(c1m);
+  const has1mHH = pH1m.length >= 2 && pH1m[pH1m.length - 1] > pH1m[pH1m.length - 2];
+  const has1mHL = pL1m.length >= 2 && pL1m[pL1m.length - 1] > pL1m[pL1m.length - 2];
+  const has1mLL = pL1m.length >= 2 && pL1m[pL1m.length - 1] < pL1m[pL1m.length - 2];
+  const has1mLH = pH1m.length >= 2 && pH1m[pH1m.length - 1] < pH1m[pH1m.length - 2];
+
+  const longOk  = (has15mHL || has15mHH) && (has1mHH || has1mHL);
+  const shortOk = (has15mLH || has15mLL) && (has1mLL || has1mLH);
+
+  // ── VWAP gate ────────────────────────────────────────────────
+  const longBlocked  = bandPos === 'below_lower'; // LONG below lower = sure lose
+  const shortBlocked = bandPos === 'above_upper'; // SHORT above upper = sure lose
+
+  const canLong  = longOk  && !longBlocked;
+  const canShort = shortOk && !shortBlocked;
+
+  if (!canLong && !canShort) return null;
+
+  // Choose direction (VWAP bias breaks tie)
+  let direction;
+  if      (canLong  && !canShort) direction = 'LONG';
+  else if (canShort && !canLong)  direction = 'SHORT';
+  else {
+    // Both valid — VWAP mid bias decides
+    direction = bandPos === 'above_mid' || bandPos === 'above_upper' ? 'LONG' : 'SHORT';
+  }
+
+  // ── ATR SL ──────────────────────────────────────────────────
+  const atr = calcATR(c15m);
+  if (atr === 0) return null;
+  const slPrice = direction === 'LONG' ? price - atr * ATR_SL_MULT : price + atr * ATR_SL_MULT;
+  const slDist  = Math.abs(price - slPrice) / price;
+
+  if (slDist < SL_DIST_MIN || slDist > SL_DIST_MAX) return null;
+
+  // ── TP = ATR × 2 (RR check) ─────────────────────────────────
+  const tpDist = atr * 2.0 / price;
+  const rr     = tpDist / slDist;
+  if (rr < RR_MIN) return null;
+
+  const tp = direction === 'LONG' ? price + atr * 2.0 : price - atr * 2.0;
+
+  return { direction, entry: price, sl: slPrice, tp, slDist, rr, bandPos };
+}
+
+// ── Position management ───────────────────────────────────────
+function updateTrail(pos, currentPrice) {
+  const capitalGain = pos.direction === 'LONG'
+    ? (currentPrice - pos.entry) / pos.entry * LEVERAGE
+    : (pos.entry - currentPrice) / pos.entry * LEVERAGE;
+
+  // Find highest tier triggered
+  let activeLock = null;
+  for (const tier of TRAIL_TIERS) {
+    if (capitalGain >= tier.trigger) activeLock = tier.lock;
+    else break;
+  }
+  if (activeLock === null) return; // not in profit yet
+
+  // Convert capital% lock to price SL
+  const lockPricePct = activeLock / LEVERAGE;
+  const newSL = pos.direction === 'LONG'
+    ? pos.entry * (1 + lockPricePct)
+    : pos.entry * (1 - lockPricePct);
+
+  // Only move SL in favour
+  if (pos.direction === 'LONG'  && newSL > pos.sl) pos.sl = newSL;
+  if (pos.direction === 'SHORT' && newSL < pos.sl) pos.sl = newSL;
+}
+
+// ── Main backtest ─────────────────────────────────────────────
+async function run() {
+  const endMs   = Date.now();
+  const startMs = endMs - DAYS * 86400000;
+
+  console.log('═══════════════════════════════════════════════════════════');
+  console.log('  BACKTEST — VWAP + 15m/1m Structure | Real Engine Rules');
+  console.log('═══════════════════════════════════════════════════════════');
+  console.log(`Tokens  : ${SYMBOLS.join(', ')}`);
+  console.log(`Period  : ${new Date(startMs).toISOString().slice(0, 10)} → ${new Date(endMs).toISOString().slice(0, 10)} (${DAYS}d)`);
+  console.log(`Leverage: ${LEVERAGE}×  |  Capital/trade: ${(CAPITAL_PCT * 100).toFixed(0)}% (max 100%)`);
+  console.log(`SL      : ATR × ${ATR_SL_MULT}  |  TP: ATR × 2  |  RR min: ${RR_MIN}`);
+  console.log(`slDist  : ${(SL_DIST_MIN * 100).toFixed(2)}% – ${(SL_DIST_MAX * 100).toFixed(0)}%`);
+  console.log(`Trail   : +20% capital → breakeven, then +10% steps`);
   console.log('');
 
-  const endTime = Date.now();
-  const startTime = endTime - DAYS * 86400000;
-
-  // Step 1: Get top coins by volume
-  console.log('Fetching top coins...');
-  const tickerRes = await fetch('https://fapi.binance.com/fapi/v1/ticker/24hr', { timeout: 15000, ...getFetchOptions() });
-  const tickers = await tickerRes.json();
-  const BLACKLIST = new Set(['USDCUSDT', 'ALPACAUSDT', 'BNXUSDT', 'XAUUSDT', 'XAGUSDT', 'EURUSDT', 'GBPUSDT', 'JPYUSDT']);
-  const topCoins = tickers
-    .filter(t => t.symbol.endsWith('USDT') && !t.symbol.includes('_') && !BLACKLIST.has(t.symbol))
-    .filter(t => parseFloat(t.quoteVolume) >= MIN_24H_VOLUME)
-    .sort((a, b) => parseFloat(b.quoteVolume) - parseFloat(a.quoteVolume))
-    .slice(0, TOP_N_COINS)
-    .map(t => t.symbol);
-
-  console.log(`Top ${topCoins.length} coins: ${topCoins.join(', ')}`);
-  console.log('');
-
-  // Step 2: Fetch all historical data
-  console.log('Fetching historical data (this takes a minute)...');
-  const coinData = {};
-  for (const symbol of topCoins) {
-    process.stdout.write(`  ${symbol}...`);
-    const [k15m, k3m, k1m, kDaily] = await Promise.all([
-      fetchKlines(symbol, '15m', 1500, endTime),
-      fetchKlines(symbol, '3m', 1500, endTime),
-      fetchKlines(symbol, '1m', 1500, endTime),
-      fetchKlines(symbol, '1d', 35, endTime),
+  // ── Fetch historical data ────────────────────────────────────
+  const data = {};
+  for (const sym of SYMBOLS) {
+    process.stdout.write(`Fetching ${sym}...`);
+    const [k15m, k1m] = await Promise.all([
+      fetchKlines(sym, '15m', 1500, endMs),
+      fetchAllKlines1m(sym, startMs, endMs),
     ]);
-
-    if (k15m && k3m && k1m && kDaily) {
-      coinData[symbol] = { k15m, k3m, k1m, kDaily };
-      console.log(` ✓ (15m:${k15m.length} 3m:${k3m.length} 1m:${k1m.length} D:${kDaily.length})`);
-    } else {
-      console.log(' ✗ failed');
-    }
-    await sleep(300); // Rate limit
+    if (!k15m || !k1m) { console.log(' ✗ failed'); continue; }
+    data[sym] = {
+      c15m: k15m.map(parseCandle).filter(c => c.t >= startMs - 3600000 * 2), // 2h extra for VWAP
+      c1m:  k1m.map(parseCandle),
+    };
+    console.log(` ✓  15m:${data[sym].c15m.length} bars  1m:${data[sym].c1m.length} bars`);
   }
+  console.log('');
 
-  // Step 3: Walk through time and simulate
-  console.log('\nRunning backtest...');
+  // ── Simulate ─────────────────────────────────────────────────
+  let wallet      = WALLET_START;
+  const trades    = [];
+  const openPos   = {};   // symbol → position
+  let totalSigs   = 0;
+  let cooldown    = {};   // symbol_DIR → ms until allowed again
+  const COOLDOWN  = 30 * 60 * 1000; // 30-min same-direction cooldown (matches cycle.js)
+  const SCAN_INT  = 60 * 1000;       // scan every 1 minute
 
-  let wallet = WALLET;
-  const trades = [];
-  const openPositions = [];
-  let totalSignals = 0;
-  let skippedMaxPos = 0;
-  let skippedDuplicate = 0;
+  // Build unified timeline from first symbol's 1m candles
+  const anchor = Object.values(data)[0]?.c1m || [];
+  const timeline = anchor.filter(c => c.t >= startMs).map(c => c.t);
 
-  // Walk through 15m candles as our scan interval
-  // Use the first coin's 15m timestamps as the time axis
-  const firstCoin = Object.keys(coinData)[0];
-  if (!firstCoin) { console.log('No data fetched!'); return; }
+  console.log(`Simulating ${timeline.length} 1m bars...`);
 
-  const timeSteps = coinData[firstCoin].k15m
-    .map(k => parseInt(k[0]))
-    .filter(t => t >= startTime);
+  for (const now of timeline) {
+    // ── Manage open positions ──────────────────────────────────
+    for (const [sym, pos] of Object.entries(openPos)) {
+      const symData = data[sym];
+      if (!symData) continue;
 
-  console.log(`Simulating ${timeSteps.length} time steps (15m intervals)...\n`);
+      // Current 1m candle at this timestamp
+      const bar = symData.c1m.find(c => c.t === now);
+      if (!bar) continue;
 
-  for (let step = 0; step < timeSteps.length; step++) {
-    const now = timeSteps[step];
+      // Update trailing SL
+      updateTrail(pos, bar.c);
 
-    // First: check open positions for SL/TP hits
-    for (let i = openPositions.length - 1; i >= 0; i--) {
-      const pos = openPositions[i];
-      const data = coinData[pos.symbol];
-      if (!data) continue;
+      // Check SL hit (use bar low/high)
+      const slHit = pos.direction === 'LONG' ? bar.l <= pos.sl : bar.h >= pos.sl;
+      const tpHit = pos.direction === 'LONG' ? bar.h >= pos.tp : bar.l <= pos.tp;
 
-      // Find 1m candles in this 15m window
-      const windowStart = step > 0 ? timeSteps[step - 1] : now - 900000;
-      const candles1m = data.k1m.filter(k => parseInt(k[0]) >= windowStart && parseInt(k[0]) < now);
+      if (tpHit || slHit) {
+        const exitPrice = tpHit ? pos.tp : pos.sl;
+        const reason    = tpHit ? 'TP' : 'SL';
+        const margin    = wallet * Math.min(CAPITAL_PCT, 1.0);
+        const notional  = margin * LEVERAGE;
+        const qty       = notional / pos.entry;
+        const rawPnl    = pos.direction === 'LONG'
+          ? (exitPrice - pos.entry) * qty
+          : (pos.entry  - exitPrice) * qty;
+        const fee    = notional * 0.0008; // 0.04% × 2 legs
+        const pnl    = rawPnl - fee;
 
-      for (const candle of candles1m) {
-        const high = parseFloat(candle[2]);
-        const low = parseFloat(candle[3]);
-        const close = parseFloat(candle[4]);
+        wallet += pnl;
+        // Clamp wallet: can never go below 0
+        if (wallet < 0) wallet = 0;
 
-        // Check SL hit
-        if (pos.direction === 'LONG' && low <= pos.slPrice) {
-          closeTrade(pos, pos.slPrice, 'SL', now);
-          openPositions.splice(i, 1);
-          break;
-        }
-        if (pos.direction === 'SHORT' && high >= pos.slPrice) {
-          closeTrade(pos, pos.slPrice, 'SL', now);
-          openPositions.splice(i, 1);
-          break;
-        }
+        trades.push({
+          sym, dir: pos.direction, entry: pos.entry, exit: exitPrice,
+          reason, entryTime: pos.time, exitTime: now,
+          pnl: Math.round(pnl * 100) / 100,
+          pnlPct: Math.round((pnl / margin) * 1000) / 10, // % of margin used
+        });
 
-        // Check TP hit
-        if (pos.direction === 'LONG' && high >= pos.tpPrice) {
-          closeTrade(pos, pos.tpPrice, 'TP', now);
-          openPositions.splice(i, 1);
-          break;
-        }
-        if (pos.direction === 'SHORT' && low <= pos.tpPrice) {
-          closeTrade(pos, pos.tpPrice, 'TP', now);
-          openPositions.splice(i, 1);
-          break;
-        }
-
-        // Trailing SL update
-        const profitPct = pos.direction === 'LONG'
-          ? (close - pos.entryPrice) / pos.entryPrice
-          : (pos.entryPrice - close) / pos.entryPrice;
-
-        const nextStep = pos.lastStep === 0 ? TRAILING_SL.FIRST_STEP : pos.lastStep + TRAILING_SL.STEP_INCREMENT;
-        if (profitPct >= nextStep) {
-          // Move SL to lock in profit at this step
-          let reached = nextStep;
-          while (profitPct >= reached + TRAILING_SL.STEP_INCREMENT) reached += TRAILING_SL.STEP_INCREMENT;
-          pos.lastStep = reached;
-          pos.slPrice = pos.direction === 'LONG'
-            ? pos.entryPrice * (1 + reached - TRAILING_SL.STEP_INCREMENT)
-            : pos.entryPrice * (1 - reached + TRAILING_SL.STEP_INCREMENT);
-        }
+        // Cooldown on same direction
+        cooldown[`${sym}_${pos.direction}`] = now + COOLDOWN;
+        delete openPos[sym];
       }
     }
 
-    // Then: scan for new entries
-    if (openPositions.length >= MAX_POSITIONS) continue;
+    // ── Scan for new entries ────────────────────────────────────
+    if (Object.keys(openPos).length >= MAX_POSITIONS) continue;
+    if (wallet <= 0) continue;
 
-    for (const symbol of Object.keys(coinData)) {
-      if (openPositions.length >= MAX_POSITIONS) break;
-      if (openPositions.find(p => p.symbol === symbol)) { skippedDuplicate++; continue; }
+    for (const sym of SYMBOLS) {
+      if (openPos[sym]) continue; // already in a position on this symbol
 
-      const data = coinData[symbol];
+      const symData = data[sym];
+      if (!symData) continue;
 
-      // Get candles up to current time
-      const k15m = data.k15m.filter(k => parseInt(k[0]) <= now);
-      const k3m = data.k3m.filter(k => parseInt(k[0]) <= now);
-      const k1m = data.k1m.filter(k => parseInt(k[0]) <= now);
+      // Get candles available at this moment
+      const c15m = symData.c15m.filter(c => c.t <= now);
+      const c1m  = symData.c1m.filter(c => c.t <= now);
+      if (c15m.length < 30 || c1m.length < 20) continue;
 
-      if (k15m.length < 30 || k3m.length < 30 || k1m.length < 15) continue;
+      const price = c1m[c1m.length - 1].c;
 
-      // Step 1: 3-candle trend on 15M
-      const last3 = k15m.slice(-4, -1);
-      if (last3.length < 3) continue;
+      const sig = generateSignal(c15m.slice(-100), c1m.slice(-50), price);
+      if (!sig) continue;
 
-      let greenCount = 0, redCount = 0;
-      for (const c of last3) {
-        if (parseFloat(c[4]) > parseFloat(c[1])) greenCount++;
-        else redCount++;
-      }
+      // Cooldown check
+      const cdKey = `${sym}_${sig.direction}`;
+      if (cooldown[cdKey] && now < cooldown[cdKey]) continue;
 
-      let direction = null;
-      if (greenCount >= 2) direction = 'LONG';
-      else if (redCount >= 2) direction = 'SHORT';
-      if (!direction) continue;
-
-      // Get PDH/PDL
-      const dailyIdx = data.kDaily.findIndex(k => parseInt(k[0]) + 86400000 > now);
-      const levels = dailyIdx > 0 ? getDailyLevels(data.kDaily, dailyIdx) : null;
-      const price = parseFloat(k15m[k15m.length - 1][4]); // current close
-      const pdh = levels?.pdh || price * 1.01;
-      const pdl = levels?.pdl || price * 0.99;
-
-      // Step 2: Key level check
-      const vwapBands = calcVWAPBands(k15m);
-      if (!isAtKeyLevel(price, pdh, pdl, vwapBands, direction)) continue;
-
-      // Step 3: 3M setup
-      const struct3m = getStructure(k3m, SWING_LENGTHS['3m']);
-      const has3mSetup = (direction === 'LONG' && struct3m.hasHL) || (direction === 'SHORT' && struct3m.hasLH);
-      if (!has3mSetup) continue;
-
-      // Step 4: 1M entry
-      const struct1m = getStructure(k1m, SWING_LENGTHS['1m']);
-      const has1mEntry = (direction === 'LONG' && struct1m.hasHL) || (direction === 'SHORT' && struct1m.hasLH);
-      if (!has1mEntry) continue;
-
-      // Recency check
-      const entrySwing = direction === 'LONG' ? struct1m.lastLow : struct1m.lastHigh;
-      if (!entrySwing || (k1m.length - 1 - entrySwing.index) > 25) continue;
-
-      // Volume check
-      const volumes = k1m.slice(-20).map(k => parseFloat(k[5]));
-      const recentVol = volumes.slice(-5).reduce((a, b) => a + b, 0) / 5;
-      const avgVol = volumes.reduce((a, b) => a + b, 0) / volumes.length;
-      if (avgVol > 0 && recentVol / avgVol < 0.8) continue;
-
-      // Signal found!
-      totalSignals++;
-      const tradeUsdt = wallet * RISK_PCT;
-      const notional = tradeUsdt * LEVERAGE;
-      const qty = notional / price;
-      // SL: uses DEFAULT_SL_PCT (user's sl_pct), same as cycle.js
-      const slPrice = direction === 'LONG'
-        ? price * (1 - DEFAULT_SL_PCT)
-        : price * (1 + DEFAULT_SL_PCT);
-      // TP: uses TP_PCT * 1.5 (TP3 level), same as cycle.js userTp3Price
-      const tpPrice = direction === 'LONG'
-        ? price * (1 + DEFAULT_TP_PCT * 1.5)
-        : price * (1 - DEFAULT_TP_PCT * 1.5);
-
-      const trade = {
-        symbol, direction, entryPrice: price, qty, slPrice, tpPrice,
-        lastStep: 0, entryTime: now, exitTime: null, exitPrice: null,
-        exitReason: null, pnl: null,
+      totalSigs++;
+      openPos[sym] = {
+        direction: sig.direction,
+        entry: sig.entry,
+        sl:    sig.sl,
+        tp:    sig.tp,
+        time:  now,
       };
-
-      openPositions.push(trade);
-      trades.push(trade);
     }
   }
 
-  // Close any remaining open positions at last price
-  for (const pos of openPositions) {
-    const data = coinData[pos.symbol];
-    if (data && data.k1m.length > 0) {
-      const lastPrice = parseFloat(data.k1m[data.k1m.length - 1][4]);
-      closeTrade(pos, lastPrice, 'END', endTime);
-    }
-  }
-
-  function closeTrade(pos, exitPrice, reason, time) {
-    pos.exitPrice = exitPrice;
-    pos.exitReason = reason;
-    pos.exitTime = time;
-    const pnl = pos.direction === 'LONG'
-      ? (exitPrice - pos.entryPrice) * pos.qty
-      : (pos.entryPrice - exitPrice) * pos.qty;
-    pos.pnl = pnl;
+  // Close any still-open positions at last available price
+  for (const [sym, pos] of Object.entries(openPos)) {
+    const symData = data[sym];
+    if (!symData || !symData.c1m.length) continue;
+    const exitPrice = symData.c1m[symData.c1m.length - 1].c;
+    const margin  = wallet * Math.min(CAPITAL_PCT, 1.0);
+    const notional = margin * LEVERAGE;
+    const qty      = notional / pos.entry;
+    const rawPnl   = pos.direction === 'LONG'
+      ? (exitPrice - pos.entry) * qty
+      : (pos.entry  - exitPrice) * qty;
+    const fee = notional * 0.0008;
+    const pnl = rawPnl - fee;
     wallet += pnl;
+    trades.push({
+      sym, dir: pos.direction, entry: pos.entry, exit: exitPrice,
+      reason: 'END', entryTime: pos.time, exitTime: timeline[timeline.length - 1] || Date.now(),
+      pnl: Math.round(pnl * 100) / 100,
+      pnlPct: Math.round((pnl / margin) * 1000) / 10,
+    });
   }
 
-  // ── Results ─────────────────────────────────────────────────
-  const closedTrades = trades.filter(t => t.pnl !== null);
-  const wins = closedTrades.filter(t => t.pnl > 0);
-  const losses = closedTrades.filter(t => t.pnl <= 0);
-  const totalPnl = closedTrades.reduce((s, t) => s + t.pnl, 0);
-  const avgWin = wins.length ? wins.reduce((s, t) => s + t.pnl, 0) / wins.length : 0;
-  const avgLoss = losses.length ? losses.reduce((s, t) => s + t.pnl, 0) / losses.length : 0;
-  const maxDrawdown = (() => {
-    let peak = WALLET, maxDD = 0, running = WALLET;
-    for (const t of closedTrades) {
-      running += t.pnl;
-      if (running > peak) peak = running;
-      const dd = (peak - running) / peak;
-      if (dd > maxDD) maxDD = dd;
-    }
-    return maxDD;
-  })();
+  // ── Results ───────────────────────────────────────────────────
+  const closed  = trades.filter(t => t.pnl != null);
+  const wins    = closed.filter(t => t.pnl > 0);
+  const losses  = closed.filter(t => t.pnl <= 0);
+  const totalPnl = closed.reduce((s, t) => s + t.pnl, 0);
+  const winRate  = closed.length ? (wins.length / closed.length) * 100 : 0;
+  const avgWin   = wins.length   ? wins.reduce((s, t) => s + t.pnl, 0)   / wins.length   : 0;
+  const avgLoss  = losses.length ? losses.reduce((s, t) => s + t.pnl, 0) / losses.length : 0;
+  const returnPct = (totalPnl / WALLET_START) * 100;
 
-  console.log('═══════════════════════════════════════════════════');
-  console.log('                   BACKTEST RESULTS                ');
-  console.log('═══════════════════════════════════════════════════');
-  console.log(`Period:          ${new Date(startTime).toISOString().slice(0, 10)} → ${new Date(endTime).toISOString().slice(0, 10)}`);
-  console.log(`Starting Wallet: $${WALLET.toFixed(2)}`);
-  console.log(`Final Wallet:    $${wallet.toFixed(2)}`);
-  console.log(`Total P&L:       ${totalPnl >= 0 ? '+' : ''}$${totalPnl.toFixed(2)} (${((totalPnl / WALLET) * 100).toFixed(1)}%)`);
-  console.log(`Total Signals:   ${totalSignals}`);
-  console.log(`Total Trades:    ${closedTrades.length}`);
-  console.log(`Wins:            ${wins.length} (${closedTrades.length ? ((wins.length / closedTrades.length) * 100).toFixed(1) : 0}%)`);
-  console.log(`Losses:          ${losses.length}`);
-  console.log(`Avg Win:         +$${avgWin.toFixed(2)}`);
-  console.log(`Avg Loss:        $${avgLoss.toFixed(2)}`);
-  console.log(`Max Drawdown:    ${(maxDrawdown * 100).toFixed(1)}%`);
-  console.log(`Skipped (dup):   ${skippedDuplicate}`);
-  console.log('═══════════════════════════════════════════════════');
+  // Max drawdown
+  let peak = WALLET_START, maxDD = 0, running = WALLET_START;
+  for (const t of closed) {
+    running += t.pnl;
+    if (running > peak) peak = running;
+    const dd = peak > 0 ? (peak - running) / peak * 100 : 0;
+    if (dd > maxDD) maxDD = dd;
+  }
 
-  // Show individual trades
-  console.log('\n─── Trade Log ─────────────────────────────────────');
-  console.log('Date       | Symbol        | Dir   | Entry      | Exit       | P&L       | Exit By');
-  console.log('─'.repeat(95));
-  for (const t of closedTrades) {
-    const date = new Date(t.entryTime).toISOString().slice(5, 16).replace('T', ' ');
-    const pnlStr = t.pnl >= 0 ? `+$${t.pnl.toFixed(2)}` : `-$${Math.abs(t.pnl).toFixed(2)}`;
+  // Per-coin stats
+  const coinStats = {};
+  for (const t of closed) {
+    if (!coinStats[t.sym]) coinStats[t.sym] = { w: 0, l: 0, pnl: 0 };
+    if (t.pnl > 0) coinStats[t.sym].w++; else coinStats[t.sym].l++;
+    coinStats[t.sym].pnl += t.pnl;
+  }
+
+  console.log('\n═══════════════════════════════════════════════════════════');
+  console.log('                       RESULTS                             ');
+  console.log('═══════════════════════════════════════════════════════════');
+  console.log(`Starting Wallet : $${WALLET_START.toFixed(2)}`);
+  console.log(`Final Wallet    : $${Math.max(0, wallet).toFixed(2)}`);
+  console.log(`Total P&L       : ${totalPnl >= 0 ? '+' : ''}$${totalPnl.toFixed(2)} (${returnPct >= 0 ? '+' : ''}${Math.min(returnPct, 999.9).toFixed(1)}%)`);
+  console.log(`Signals found   : ${totalSigs}`);
+  console.log(`Trades taken    : ${closed.length}`);
+  console.log(`Win Rate        : ${Math.min(winRate, 100).toFixed(1)}%  (${wins.length}W / ${losses.length}L)`);
+  console.log(`Avg Win         : +$${avgWin.toFixed(2)}`);
+  console.log(`Avg Loss        : $${avgLoss.toFixed(2)}`);
+  console.log(`Max Drawdown    : ${Math.min(maxDD, 100).toFixed(1)}%`);
+  console.log('');
+
+  // Per-coin breakdown
+  console.log('─── Per-Coin ───────────────────────────────────────────────');
+  for (const sym of SYMBOLS) {
+    const s = coinStats[sym];
+    if (!s) { console.log(`${sym.padEnd(10)} : no trades`); continue; }
+    const wr = s.w + s.l > 0 ? ((s.w / (s.w + s.l)) * 100).toFixed(0) : '0';
+    const pStr = s.pnl >= 0 ? `+$${s.pnl.toFixed(2)}` : `-$${Math.abs(s.pnl).toFixed(2)}`;
+    console.log(`${sym.padEnd(10)} : W${s.w} L${s.l}  WR:${wr.padStart(3)}%  P&L: ${pStr}`);
+  }
+
+  // Trade log
+  console.log('\n─── Trade Log ──────────────────────────────────────────────');
+  console.log('Date        Symbol      Dir    Entry        Exit         P&L        Reason');
+  console.log('─'.repeat(85));
+  for (const t of closed) {
+    const dt   = new Date(t.entryTime).toISOString().slice(5, 16).replace('T', ' ');
+    const pStr = t.pnl >= 0 ? `+$${t.pnl.toFixed(2)}` : `-$${Math.abs(t.pnl).toFixed(2)}`;
     console.log(
-      `${date} | ${t.symbol.padEnd(13)} | ${t.direction.padEnd(5)} | $${t.entryPrice.toFixed(4).padStart(9)} | $${t.exitPrice.toFixed(4).padStart(9)} | ${pnlStr.padStart(9)} | ${t.exitReason}`
+      `${dt}  ${t.sym.padEnd(10)}  ${t.dir.padEnd(5)}  ` +
+      `${t.entry.toFixed(4).padStart(11)}  ${t.exit.toFixed(4).padStart(11)}  ` +
+      `${pStr.padStart(9)}  ${t.reason}`
     );
   }
 
-  // Show per-coin stats
-  console.log('\n─── Per-Coin Summary ──────────────────────────────');
-  const coinStats = {};
-  for (const t of closedTrades) {
-    if (!coinStats[t.symbol]) coinStats[t.symbol] = { wins: 0, losses: 0, pnl: 0 };
-    if (t.pnl > 0) coinStats[t.symbol].wins++;
-    else coinStats[t.symbol].losses++;
-    coinStats[t.symbol].pnl += t.pnl;
-  }
-  const sortedCoins = Object.entries(coinStats).sort((a, b) => b[1].pnl - a[1].pnl);
-  for (const [sym, s] of sortedCoins) {
-    const pnlStr = s.pnl >= 0 ? `+$${s.pnl.toFixed(2)}` : `-$${Math.abs(s.pnl).toFixed(2)}`;
-    console.log(`${sym.padEnd(13)} | W:${s.wins} L:${s.losses} | ${pnlStr}`);
-  }
-
-  // Weekly breakdown
-  console.log('\n─── Weekly P&L ────────────────────────────────────');
-  const weeklyPnl = {};
-  for (const t of closedTrades) {
-    const week = getWeekStr(t.entryTime);
-    weeklyPnl[week] = (weeklyPnl[week] || 0) + t.pnl;
-  }
-  for (const [week, pnl] of Object.entries(weeklyPnl)) {
-    const bar = pnl >= 0 ? '█'.repeat(Math.min(Math.round(pnl / 2), 40)) : '▓'.repeat(Math.min(Math.round(Math.abs(pnl) / 2), 40));
-    console.log(`${week} | ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2).padStart(8)} | ${pnl >= 0 ? '🟢' : '🔴'} ${bar}`);
-  }
+  // Version summary line (for pasting into admin as a new version)
+  console.log('\n═══════════════════════════════════════════════════════════');
+  const vLabel = `VWAP+Structure ${DAYS}d WR:${Math.min(winRate, 100).toFixed(0)}% Lev:${LEVERAGE}x`;
+  console.log(`Version label   : ${vLabel}`);
+  console.log(`Win rate (real) : ${Math.min(winRate, 100).toFixed(1)}%  ← max possible is 100%`);
+  console.log(`Return          : ${returnPct >= 0 ? '+' : ''}${Math.min(returnPct, 999.9).toFixed(1)}%`);
+  console.log('═══════════════════════════════════════════════════════════');
 }
 
-function getWeekStr(ts) {
-  const d = new Date(ts);
-  const jan1 = new Date(d.getFullYear(), 0, 1);
-  const week = Math.ceil(((d - jan1) / 86400000 + jan1.getDay() + 1) / 7);
-  return `${d.getFullYear()}-W${String(week).padStart(2, '0')}`;
-}
-
-// Run
-runBacktest().catch(err => {
-  console.error('Backtest error:', err);
-  process.exit(1);
-});
+run().catch(console.error);
