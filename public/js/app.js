@@ -4811,14 +4811,13 @@
 
       const bxLink = u.bitunix_referral_link || '';
       const bxLinkLabel = bxLink ? '🔵 Set' : '🔵 —';
-      // KEYS cell: number is clickable to manage/delete keys
-      const keysCell = u.key_count > 0
-        ? `<button style="background:none;border:none;color:#f87171;font-weight:700;font-size:0.85rem;cursor:pointer;padding:0;text-decoration:underline;" onclick="window.CryptoBot.adminShowUserKeys(${u.id},'${escapeHtml(u.email)}')" title="Click to view / delete API keys">${u.key_count} 🗑</button>`
-        : `<span style="color:var(--color-text-muted);">0</span>`;
+      const delKeyBtn = u.key_count > 0
+        ? `<button class="btn btn-sm" style="font-size:0.7rem;padding:2px 8px;background:#7f1d1d;border:1px solid #ef4444;color:#fca5a5;font-weight:700;" onclick="window.CryptoBot.adminShowUserKeys(${u.id},'${escapeHtml(u.email)}')">🗑 Del Key</button>`
+        : '';
 
       return `<tr style="${isOverdue ? 'background:rgba(239,68,68,0.05);' : ''}">
       <td>${escapeHtml(u.email)}${u.is_admin ? ' <span style="color:var(--color-accent);font-size:0.7rem;font-weight:700;">ADMIN</span>' : ''}</td>
-      <td>${keysCell}</td>
+      <td>${u.key_count}</td>
       <td class="text-mono">$${bal} <button class="btn btn-ghost btn-sm" style="font-size:0.7rem;padding:2px 6px;" onclick="window.CryptoBot.adminEditWallet(${u.id},'${escapeHtml(u.email)}',${bal})">Edit</button></td>
       <td>${escapeHtml(u.referral_code || '-')} <button class="btn btn-ghost btn-sm" style="font-size:0.7rem;padding:2px 6px;" title="${escapeHtml(bxLink) || 'No Bitunix link set'}" onclick="window.CryptoBot.adminSetBitunixReferralLink(${u.id},'${escapeHtml(u.email)}','${escapeHtml(bxLink)}')">${bxLinkLabel}</button></td>
       <td>${formatDate(u.created_at)}</td>
@@ -4829,6 +4828,7 @@
           : `<button class="btn btn-danger btn-sm" onclick="window.CryptoBot.adminAction('block',${u.id})">Block</button>`}
         ${paidBtn}
         ${roleBtn}
+        ${delKeyBtn}
       </td>
     </tr>`;
     }).join('');
