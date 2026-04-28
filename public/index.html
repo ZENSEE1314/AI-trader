@@ -2947,7 +2947,12 @@ EMAIL_FROM=MCT &lt;a83c06001@smtp-brevo.com&gt;</pre>
       if (btn) { btn.textContent = '⏳ Syncing...'; btn.disabled = true; }
       try {
         var r = await fetch('/api/dashboard/strategy-versions/scan', { method: 'POST' });
-        var d = await r.json();
+        var text = await r.text();
+        var d;
+        try { d = JSON.parse(text); } catch(_) {
+          showVersionMsg('Sync error: server returned non-JSON (HTTP ' + r.status + '). Check Railway logs.', true);
+          return;
+        }
         if (d.error) { showVersionMsg('Sync error: ' + d.error, true); }
         else {
           showVersionMsg(d.message, false);
