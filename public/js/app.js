@@ -5415,27 +5415,33 @@
     } catch (e) { console.error('setTokenDirection error:', e); }
   }
 
+  const _tokenDirState = {};
+
   function updateTokenDirStatus(symbol, val) {
+    _tokenDirState[symbol] = val || null;
     const status = document.getElementById('tdir-status-' + symbol);
-    const btnL = document.getElementById('tdir-L-' + symbol);
-    const btnS = document.getElementById('tdir-S-' + symbol);
+    const btnRev = document.getElementById('tdir-rev-' + symbol);
     if (!status) return;
     if (val === 'LONG') {
       status.textContent = '📈 LONG';
       status.style.color = '#00ff88';
-      if (btnL) { btnL.style.background = '#00ff88'; btnL.style.color = '#000'; }
-      if (btnS) { btnS.style.background = 'transparent'; btnS.style.color = '#ff4060'; }
+      if (btnRev) { btnRev.style.borderColor = '#00ff88'; btnRev.style.color = '#00ff88'; }
     } else if (val === 'SHORT') {
       status.textContent = '📉 SHORT';
       status.style.color = '#ff4060';
-      if (btnS) { btnS.style.background = '#ff4060'; btnS.style.color = '#fff'; }
-      if (btnL) { btnL.style.background = 'transparent'; btnL.style.color = '#00ff88'; }
+      if (btnRev) { btnRev.style.borderColor = '#ff4060'; btnRev.style.color = '#ff4060'; }
     } else {
-      status.textContent = '—';
+      status.textContent = 'Auto';
       status.style.color = '#888';
-      if (btnL) { btnL.style.background = 'transparent'; btnL.style.color = '#00ff88'; }
-      if (btnS) { btnS.style.background = 'transparent'; btnS.style.color = '#ff4060'; }
+      if (btnRev) { btnRev.style.borderColor = '#555'; btnRev.style.color = '#aaa'; }
     }
+  }
+
+  async function reverseTokenDirection(symbol) {
+    const cur = _tokenDirState[symbol];
+    // LONG → SHORT, SHORT → LONG, auto/null → LONG (first press locks LONG)
+    const next = cur === 'LONG' ? 'SHORT' : cur === 'SHORT' ? 'LONG' : 'LONG';
+    await setTokenDirection(symbol, next);
   }
 
   async function loadTokenDirections() {
@@ -5479,7 +5485,7 @@
     loadKronosPredictions,
     loadOpenPositions, emergencyCloseToken, emergencyCloseAll,
     loadDirectionOverride, setDirectionOverride, reverseDirection,
-    setTokenDirection, updateTokenDirStatus, loadTokenDirections,
+    setTokenDirection, updateTokenDirStatus, loadTokenDirections, reverseTokenDirection,
     activateVersionForTrading, deactivateVersion, syncCurrentVersion,
     fixBitunixPnl, debugBitunix, runBacktest, loadAiVersions, runAiOptimize, adminResyncFees, adminFixTrades, adminClearTestData,
     mcRefresh, mcCommand, mcChat, mcChatQuick, switchAdminTab, filterAgents, customerChat,

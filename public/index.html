@@ -1719,7 +1719,6 @@
                 <button class="btn btn-sm" id="dir-btn-auto"    style="font-size:0.75rem;padding:4px 10px;" onclick="window.CryptoBot.setDirectionOverride('auto')">Auto</button>
                 <button class="btn btn-sm" id="dir-btn-long"    style="font-size:0.75rem;padding:4px 10px;" onclick="window.CryptoBot.setDirectionOverride('bullish')">📈 LONG only</button>
                 <button class="btn btn-sm" id="dir-btn-short"   style="font-size:0.75rem;padding:4px 10px;" onclick="window.CryptoBot.setDirectionOverride('bearish')">📉 SHORT only</button>
-                <button class="btn btn-sm" id="dir-btn-reverse" style="font-size:0.75rem;padding:4px 10px;background:var(--color-primary);color:#fff;border:none;font-weight:700;" onclick="window.CryptoBot.reverseDirection()">🔄 Reverse</button>
               </div>
             </div>
           </div>
@@ -1795,11 +1794,9 @@
                 </div>
                 <div class="token-card-lev">×100 leverage</div>
                 <div class="token-card-price" id="smc-price-BTCUSDT">--</div>
-                <div class="token-dir-row" style="display:flex;gap:4px;margin-top:6px;align-items:center;">
-                  <button onclick="window.CryptoBot.setTokenDirection('BTCUSDT','LONG')" id="tdir-L-BTCUSDT" style="font-size:0.65rem;padding:2px 7px;border-radius:4px;border:1px solid #00ff88;background:transparent;color:#00ff88;cursor:pointer;font-weight:700;">L</button>
-                  <button onclick="window.CryptoBot.setTokenDirection('BTCUSDT','SHORT')" id="tdir-S-BTCUSDT" style="font-size:0.65rem;padding:2px 7px;border-radius:4px;border:1px solid #ff4060;background:transparent;color:#ff4060;cursor:pointer;font-weight:700;">S</button>
-                  <button onclick="window.CryptoBot.setTokenDirection('BTCUSDT','auto')" id="tdir-A-BTCUSDT" style="font-size:0.65rem;padding:2px 6px;border-radius:4px;border:1px solid #888;background:transparent;color:#888;cursor:pointer;">Auto</button>
-                  <span id="tdir-status-BTCUSDT" style="font-size:0.62rem;margin-left:2px;color:#888;">—</span>
+                <div class="token-dir-row" style="display:flex;gap:5px;margin-top:6px;align-items:center;">
+                  <span id="tdir-status-BTCUSDT" style="font-size:0.65rem;color:#888;font-weight:600;min-width:40px;">Auto</span>
+                  <button onclick="window.CryptoBot.reverseTokenDirection('BTCUSDT')" id="tdir-rev-BTCUSDT" style="font-size:0.65rem;padding:2px 8px;border-radius:4px;border:1px solid #555;background:transparent;color:#aaa;cursor:pointer;">🔄</button>
                 </div>
               </div>
               <!-- ETH -->
@@ -1810,11 +1807,9 @@
                 </div>
                 <div class="token-card-lev">×100 leverage</div>
                 <div class="token-card-price" id="smc-price-ETHUSDT">--</div>
-                <div class="token-dir-row" style="display:flex;gap:4px;margin-top:6px;align-items:center;">
-                  <button onclick="window.CryptoBot.setTokenDirection('ETHUSDT','LONG')" id="tdir-L-ETHUSDT" style="font-size:0.65rem;padding:2px 7px;border-radius:4px;border:1px solid #00ff88;background:transparent;color:#00ff88;cursor:pointer;font-weight:700;">L</button>
-                  <button onclick="window.CryptoBot.setTokenDirection('ETHUSDT','SHORT')" id="tdir-S-ETHUSDT" style="font-size:0.65rem;padding:2px 7px;border-radius:4px;border:1px solid #ff4060;background:transparent;color:#ff4060;cursor:pointer;font-weight:700;">S</button>
-                  <button onclick="window.CryptoBot.setTokenDirection('ETHUSDT','auto')" id="tdir-A-ETHUSDT" style="font-size:0.65rem;padding:2px 6px;border-radius:4px;border:1px solid #888;background:transparent;color:#888;cursor:pointer;">Auto</button>
-                  <span id="tdir-status-ETHUSDT" style="font-size:0.62rem;margin-left:2px;color:#888;">—</span>
+                <div class="token-dir-row" style="display:flex;gap:5px;margin-top:6px;align-items:center;">
+                  <span id="tdir-status-ETHUSDT" style="font-size:0.65rem;color:#888;font-weight:600;min-width:40px;">Auto</span>
+                  <button onclick="window.CryptoBot.reverseTokenDirection('ETHUSDT')" id="tdir-rev-ETHUSDT" style="font-size:0.65rem;padding:2px 8px;border-radius:4px;border:1px solid #555;background:transparent;color:#aaa;cursor:pointer;">🔄</button>
                 </div>
               </div>
               <!-- SOL -->
@@ -1825,11 +1820,9 @@
                 </div>
                 <div class="token-card-lev">×20 leverage</div>
                 <div class="token-card-price" id="smc-price-SOLUSDT">--</div>
-                <div class="token-dir-row" style="display:flex;gap:4px;margin-top:6px;align-items:center;">
-                  <button onclick="window.CryptoBot.setTokenDirection('SOLUSDT','LONG')" id="tdir-L-SOLUSDT" style="font-size:0.65rem;padding:2px 7px;border-radius:4px;border:1px solid #00ff88;background:transparent;color:#00ff88;cursor:pointer;font-weight:700;">L</button>
-                  <button onclick="window.CryptoBot.setTokenDirection('SOLUSDT','SHORT')" id="tdir-S-SOLUSDT" style="font-size:0.65rem;padding:2px 7px;border-radius:4px;border:1px solid #ff4060;background:transparent;color:#ff4060;cursor:pointer;font-weight:700;">S</button>
-                  <button onclick="window.CryptoBot.setTokenDirection('SOLUSDT','auto')" id="tdir-A-SOLUSDT" style="font-size:0.65rem;padding:2px 6px;border-radius:4px;border:1px solid #888;background:transparent;color:#888;cursor:pointer;">Auto</button>
-                  <span id="tdir-status-SOLUSDT" style="font-size:0.62rem;margin-left:2px;color:#888;">—</span>
+                <div class="token-dir-row" style="display:flex;gap:5px;margin-top:6px;align-items:center;">
+                  <span id="tdir-status-SOLUSDT" style="font-size:0.65rem;color:#888;font-weight:600;min-width:40px;">Auto</span>
+                  <button onclick="window.CryptoBot.reverseTokenDirection('SOLUSDT')" id="tdir-rev-SOLUSDT" style="font-size:0.65rem;padding:2px 8px;border-radius:4px;border:1px solid #555;background:transparent;color:#aaa;cursor:pointer;">🔄</button>
                 </div>
               </div>
               <!-- BNB -->
@@ -1840,11 +1833,9 @@
                 </div>
                 <div class="token-card-lev">×20 leverage</div>
                 <div class="token-card-price" id="smc-price-BNBUSDT">--</div>
-                <div class="token-dir-row" style="display:flex;gap:4px;margin-top:6px;align-items:center;">
-                  <button onclick="window.CryptoBot.setTokenDirection('BNBUSDT','LONG')" id="tdir-L-BNBUSDT" style="font-size:0.65rem;padding:2px 7px;border-radius:4px;border:1px solid #00ff88;background:transparent;color:#00ff88;cursor:pointer;font-weight:700;">L</button>
-                  <button onclick="window.CryptoBot.setTokenDirection('BNBUSDT','SHORT')" id="tdir-S-BNBUSDT" style="font-size:0.65rem;padding:2px 7px;border-radius:4px;border:1px solid #ff4060;background:transparent;color:#ff4060;cursor:pointer;font-weight:700;">S</button>
-                  <button onclick="window.CryptoBot.setTokenDirection('BNBUSDT','auto')" id="tdir-A-BNBUSDT" style="font-size:0.65rem;padding:2px 6px;border-radius:4px;border:1px solid #888;background:transparent;color:#888;cursor:pointer;">Auto</button>
-                  <span id="tdir-status-BNBUSDT" style="font-size:0.62rem;margin-left:2px;color:#888;">—</span>
+                <div class="token-dir-row" style="display:flex;gap:5px;margin-top:6px;align-items:center;">
+                  <span id="tdir-status-BNBUSDT" style="font-size:0.65rem;color:#888;font-weight:600;min-width:40px;">Auto</span>
+                  <button onclick="window.CryptoBot.reverseTokenDirection('BNBUSDT')" id="tdir-rev-BNBUSDT" style="font-size:0.65rem;padding:2px 8px;border-radius:4px;border:1px solid #555;background:transparent;color:#aaa;cursor:pointer;">🔄</button>
                 </div>
               </div>
             </div>
