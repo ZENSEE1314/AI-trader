@@ -6,10 +6,11 @@
 //   thresholds into strategy_versions or any DB config.
 //
 // Trail logic:
-//   Below 20% capital profit → no movement, trade breathes freely
-//   20%+ capital profit      → lock 60% of current profit (slides up)
-//   35%+ capital profit      → also use candle structural trail
-//   Floor = taker fees + funding fees + 1% buffer (always net positive)
+//   Below +20% capital profit → no movement, trade breathes freely
+//   +20% capital profit       → SL locked at +20% (profit secured)
+//   +30% capital profit       → SL moves to +30%
+//   +40% capital profit       → SL moves to +40%
+//   ... steps up every +10% capital gain, always locking in the milestone
 // ============================================================
 
 const fetch = require('node-fetch');
@@ -237,7 +238,7 @@ async function runTrailCycle() {
 
           const v2Result = calcV2TrailSL(entry, isLong ? entry * (1 + capitalPct / leverage) : entry * (1 - capitalPct / leverage), isLong, leverage, currentSl);
           if (!v2Result) {
-            log(`[DIAG] ${symbol} trail SKIP — ${pctDisplay} < +31% or SL already locked`);
+            log(`[DIAG] ${symbol} trail SKIP — ${pctDisplay} < +20% or SL already at milestone`);
             continue;
           }
 

@@ -23,9 +23,8 @@ const { getMarketIntel, applyMarketIntel, heatmapToLevels } = require('./coingla
 // ── Constants ─────────────────────────────────────────────────
 
 const V2_SL_CAPITAL_PCT    = 0.15; // initial SL: -15% of margin
-const V2_TRAIL_START_PCT   = 0.20; // trail activates at +20% capital profit → lock breakeven
-const V2_TRAIL_STEP_PCT    = 0.10; // trail steps every 10% capital gain after activation
-const V2_TRAIL_GAP_PCT     = 0.10; // gap on subsequent steps (10%); first step gap is 20%
+const V2_TRAIL_START_PCT   = 0.20; // trail activates at +20% capital profit
+const V2_TRAIL_STEP_PCT    = 0.10; // trail steps every 10% capital gain
 
 // Only accept 15m swing points formed within last N bars
 const SWING15_RECENCY_BARS = 8;
@@ -321,18 +320,16 @@ async function detectV2Signal(symbol, leverage = 20) {
 // ── Trailing SL calculator (used by trail-watchdog) ───────────
 
 /**
- * V2 trailing stop logic:
- *   - Trail activates at +31% capital profit
- *   - SL locked at each 10% milestone: 30 → 40 → 50 → …
+ * Trailing SL logic:
+ *   - Activates at +20% capital profit → SL locked at +20% (profit stays yours)
+ *   - Every +10% capital gain → SL steps up by 10%
  *
- * Returns new SL price if it improves on currentSl, else null.
+ *   +20%–29% capital profit → SL at +20%
+ *   +30%–39%                → SL at +30%
+ *   +40%–49%                → SL at +40%
+ *   ... and so on. No gap — SL always equals the milestone you reached.
  *
- * @param {number} entryPrice
- * @param {number} curPrice
- * @param {boolean} isLong
- * @param {number} leverage
- * @param {number} currentSl  current SL price stored in DB
- * @returns {number|null}
+ * Returns { newSl, milestone, capitalPct } if SL improves, else null.
  */
 function calcV2TrailSL(entryPrice, curPrice, isLong, leverage, currentSl) {
   const pricePct = isLong
@@ -340,30 +337,21 @@ function calcV2TrailSL(entryPrice, curPrice, isLong, leverage, currentSl) {
     : (entryPrice - curPrice) / entryPrice;
   const capitalPct = pricePct * leverage;
 
-  // Trail hasn't activated yet
+  // Trail hasn't activated yet — needs at least +20% capital profit
   if (capitalPct < V2_TRAIL_START_PCT) return null;
 
-  // First step (capitalPct 0.30–0.39): lock breakeven (0%) — 30% gap.
-  // All steps after: lock = step floor − 10% gap.
-  //
-  //   capitalPct 0.30 → step 3 → first tier  → milestone = 0.00  (breakeven, 30% gap)
-  //   capitalPct 0.40 → step 4 → 4×0.10−0.10 → milestone = 0.30  (10% gap)
-  //   capitalPct 0.50 → step 5 → 5×0.10−0.10 → milestone = 0.40  (10% gap)
-  //
+  // Milestone = floor of current profit in 10% steps — no gap.
   // NOTE: integer arithmetic avoids Math.floor(0.40/0.10) = 3.9999 edge case.
-  const stepsRaw = Math.floor(Math.round(capitalPct * 1000) / Math.round(V2_TRAIL_STEP_PCT * 1000));
-  const milestone = stepsRaw <= 2
-    ? 0                                             // first tier (+20%) → breakeven (20% gap)
-    : Math.max(0, stepsRaw * V2_TRAIL_STEP_PCT - V2_TRAIL_GAP_PCT); // 10% gap
+  const stepsRaw  = Math.floor(Math.round(capitalPct * 1000) / Math.round(V2_TRAIL_STEP_PCT * 1000));
+  const milestone = stepsRaw * V2_TRAIL_STEP_PCT; // e.g. +20%→0.20, +30%→0.30
 
-  // Convert milestone capital % → price
+  // Convert capital % milestone → actual price
   const milestonePrice = isLong
     ? entryPrice * (1 + milestone / leverage)
     : entryPrice * (1 - milestone / leverage);
 
-  // Only move if it improves the SL.
-  // NOTE: currentSl = 0 means "no SL set yet" — treat as worst-case for each direction
-  // so the first milestone always gets written (avoids 0 blocking SHORT trades).
+  // Only move SL if it improves on what's already set.
+  // currentSl = 0 → no SL set yet, treat as worst-case so first milestone always writes.
   const effectiveSl = currentSl === 0
     ? (isLong ? -Infinity : Infinity)
     : currentSl;
