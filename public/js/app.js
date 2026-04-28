@@ -4541,10 +4541,13 @@
         const groupPnl = group.totalPnl;
         const groupColor = groupPnl >= 0 ? 'var(--color-success)' : 'var(--color-danger)';
 
+        const oppositeDir = dir === 'LONG' ? 'SHORT' : 'LONG';
+        const oppColor    = dir === 'LONG' ? 'var(--color-danger)' : 'var(--color-success)';
         return `<div style="margin-bottom:var(--space-3);border:1px solid var(--color-border-muted);border-radius:var(--radius-md);overflow:hidden;">
           <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 10px;background:var(--color-bg-raised);">
             <div style="display:flex;align-items:center;gap:8px;">
               <button class="btn btn-sm" style="font-size:0.65rem;background:#ef4444;color:#fff;border:none;padding:2px 8px;" data-close-token="${sym}">Close</button>
+              <button class="btn btn-sm" style="font-size:0.65rem;background:transparent;border:1px solid ${oppColor};color:${oppColor};padding:2px 8px;font-weight:700;" data-reverse-token="${sym}" data-reverse-dir="${dir}">🔄 → ${oppositeDir}</button>
               <strong>${sym.replace('USDT','')}</strong>
               <span style="color:${dirColor};font-weight:700;font-size:0.8rem;">${dir}</span>
               <span style="font-size:0.72rem;color:var(--color-text-muted);">${group.trades.length} user(s)</span>
@@ -4563,6 +4566,9 @@
 
       listEl.querySelectorAll('[data-close-token]').forEach(btn => {
         btn.addEventListener('click', () => emergencyCloseToken(btn.dataset.closeToken));
+      });
+      listEl.querySelectorAll('[data-reverse-token]').forEach(btn => {
+        btn.addEventListener('click', () => reverseOpenPosition(btn.dataset.reverseToken, btn.dataset.reverseDir));
       });
     } catch (err) {
       listEl.innerHTML = '<span style="color:#ef4444;">Failed: ' + (err.message || err) + '</span>';
@@ -4614,6 +4620,32 @@
     showToast(`${totalClosed} positions closed`, 'success');
     loadOpenPositions();
   }
+
+  // Close current position and lock the opposite direction so the bot enters the reverse trade next cycle.
+  async function reverseOpenPosition(symbol, currentDir) {
+    const oppositeDir = currentDir === 'LONG' ? 'SHORT' : 'LONG';
+    if (!confirm(`🔄 Reverse ${symbol}?\n\nThis will:\n1. Close all ${symbol} ${currentDir} positions now\n2. Lock ${symbol} direction to ${oppositeDir} for next entry\n\nConfirm?`)) return;
+
+    const statusEl = document.getElementById('emergency-stop-status');
+    if (statusEl) { statusEl.style.color = '#f59e0b'; statusEl.textContent = `Reversing ${symbol} ${currentDir} → ${oppositeDir}...`; }
+
+    try {
+      // Step 1: close current position
+      const result = await api('POST', '/api/admin/emergency-close', { symbol });
+
+      // Step 2: set per-token direction to opposite so bot enters the other side next cycle
+      await setTokenDirection(symbol, oppositeDir);
+
+      const closed = result.totalClosed || 0;
+      if (statusEl) { statusEl.style.color = 'var(--color-success)'; statusEl.textContent = `${symbol}: ${closed} closed, direction → ${oppositeDir}`; }
+      showToast(`${symbol} reversed: closed ${currentDir}, next entry = ${oppositeDir} 🔄`, 'success');
+      loadOpenPositions();
+    } catch (err) {
+      if (statusEl) { statusEl.style.color = '#ef4444'; statusEl.textContent = `Reverse ${symbol} failed: ${err.message}`; }
+      showToast('Reverse failed: ' + err.message, 'error');
+    }
+  }
+
 
   async function adminFixTrades() {
     if (!confirm('Re-fetch actual PnL from exchanges and fix corrupted trade data?')) return;
@@ -5484,7 +5516,7 @@
     searchAdminToken, pickAdminToken, searchUserBanToken,
     addRiskLevel, saveRiskLevel, deleteRiskLevel,
     loadKronosPredictions,
-    loadOpenPositions, emergencyCloseToken, emergencyCloseAll,
+    loadOpenPositions, emergencyCloseToken, emergencyCloseAll, reverseOpenPosition,
     loadDirectionOverride, setDirectionOverride, reverseDirection,
     setTokenDirection, updateTokenDirStatus, loadTokenDirections, reverseTokenDirection,
     activateVersionForTrading, deactivateVersion, syncCurrentVersion,
