@@ -1543,19 +1543,7 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
       }
     }
 
-    // ── FILTER 2: Session filter — skip dead hours only ─────────────────────
-    // Only block the true dead zone: 01:00–06:30 UTC (03:00–14:30 UTC+8)
-    // This keeps London, NY, and Asian late session all open.
-    {
-      const _utcH = new Date().getUTCHours();
-      const _utcM = new Date().getUTCMinutes();
-      const _utcMin = _utcH * 60 + _utcM;
-      if (_utcMin >= 60 && _utcMin < 390) { // 01:00–06:30 UTC dead zone
-        sig.score = -99;
-        sig.blocked = `blocked — dead session (UTC ${_utcH}:${String(_utcM).padStart(2,'0')}): trade window outside 01:00–06:30 UTC`;
-        continue;
-      }
-    }
+    // ── FILTER 2: Session filter — DISABLED, trading 24/7 ──────────────────
 
     // Direction filter — admin override takes priority over auto swing structure.
     // Override: 'bullish' = LONG only, 'bearish' = SHORT only.
