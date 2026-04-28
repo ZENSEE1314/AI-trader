@@ -855,6 +855,17 @@ async function initAllTables() {
     await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_sv_genome_hash ON strategy_versions (genome_hash) WHERE genome_hash IS NOT NULL`);
   } catch (_) {}
 
+  // Migration: change trades.api_key_id FK to ON DELETE SET NULL so keys can be
+  // deleted without wiping trade history. Also makes the column nullable.
+  try {
+    await pool.query(`ALTER TABLE trades ALTER COLUMN api_key_id DROP NOT NULL`);
+  } catch (_) {}
+  try {
+    await pool.query(`ALTER TABLE trades DROP CONSTRAINT IF EXISTS trades_api_key_id_fkey`);
+    await pool.query(`ALTER TABLE trades ADD CONSTRAINT trades_api_key_id_fkey
+      FOREIGN KEY (api_key_id) REFERENCES api_keys(id) ON DELETE SET NULL`);
+  } catch (e) { console.warn('[DB] trades FK migration warning:', e.message); }
+
   console.log('[DB] All tables verified');
 }
 

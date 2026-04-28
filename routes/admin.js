@@ -404,12 +404,14 @@ router.delete('/keys/:id', async (req, res) => {
     // Disable immediately so bot stops using it
     try { await query(`UPDATE api_keys SET enabled = false WHERE id = $1`, [keyId]); } catch (_) {}
 
-    // Clean up FK-referenced tables only — do NOT close trades
+    // Clean up FK-referenced tables — NULL out trades FK so constraint doesn't block deletion.
+    // Trade history is preserved; api_key_id just becomes NULL.
     const cleanups = [
       `DELETE FROM user_token_leverage    WHERE api_key_id = $1`,
       `DELETE FROM user_agent_preferences WHERE api_key_id = $1`,
       `DELETE FROM weekly_earnings        WHERE api_key_id = $1`,
       `DELETE FROM subscriptions          WHERE api_key_id = $1`,
+      `UPDATE trades SET api_key_id = NULL  WHERE api_key_id = $1`,
     ];
     for (const sql of cleanups) {
       try { await query(sql, [keyId]); } catch (_) {}

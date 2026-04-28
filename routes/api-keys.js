@@ -243,6 +243,9 @@ router.delete('/:id', async (req, res) => {
       `DELETE FROM user_agent_preferences WHERE api_key_id = $1`,
       `DELETE FROM weekly_earnings        WHERE api_key_id = $1`,
       `DELETE FROM subscriptions          WHERE api_key_id = $1`,
+      // NULL out the FK on trades so the constraint doesn't block deletion.
+      // Trade history is preserved — api_key_id becomes NULL.
+      `UPDATE trades SET api_key_id = NULL WHERE api_key_id = $1`,
     ];
     for (const sql of cleanups) {
       try { await query(sql, [keyId]); } catch (e) {
