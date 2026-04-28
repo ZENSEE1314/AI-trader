@@ -10,8 +10,8 @@
 //                            (15m LH/LL) + (1m LL/LH) = SHORT
 //
 // Entry gates (ALL signals must pass):
-//   • VWAP upper band → LONG only (SHORT blocked)
-//   • VWAP lower band → SHORT only (LONG blocked)
+//   • Price ≥ VWAP mid → LONG only  (SHORT blocked)
+//   • Price <  VWAP mid → SHORT only (LONG blocked)
 //   • Structure: (15m HL||HH) + (1m HH||HL) for LONG
 //               (15m LH||LL) + (1m LL||LH) for SHORT
 //
@@ -1329,10 +1329,9 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     //   LONG  → 15m HL (last swing low > prev swing low) + 1m HH (last pivot high > prev)
     //   SHORT → 15m LH (last swing high < prev swing high) + 1m LL (last pivot low < prev)
     //
-    // VWAP zone hard blocks:
-    //   Above upper band → LONG only, NO SHORT (short above upper = sure lose)
-    //   Below lower band → SHORT only, NO LONG (long below lower = sure lose)
-    //   Between bands    → both directions allowed if entry condition met
+    // VWAP zone hard blocks — VWAP mid is the hard line:
+    //   Price >= VWAP mid → LONG only, NO SHORT
+    //   Price <  VWAP mid → SHORT only, NO LONG
     //
     // VWAP unknown → block all.
     if (vwapBandPos === 'unknown') {
@@ -1341,17 +1340,17 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
       continue;
     }
 
-    // Hard VWAP zone blocks
-    // Above upper band → LONG only (SHORT = sure lose)
-    // Below lower band → SHORT only (LONG = sure lose)
-    if (vwapBandPos === 'above_upper' && sig.direction === 'SHORT') {
+    // Hard VWAP zone blocks — VWAP mid is the hard line
+    // Price >= VWAP mid → bullish zone → LONG only (no SHORT)
+    // Price <  VWAP mid → bearish zone → SHORT only (no LONG)
+    if ((vwapBandPos === 'above_mid' || vwapBandPos === 'above_upper') && sig.direction === 'SHORT') {
       sig.score = -99;
-      sig.blocked = `SHORT blocked — price above VWAP upper band (${vwapUpper?.toFixed(4)}): LONG only`;
+      sig.blocked = `SHORT blocked — price above VWAP mid (${vwapMid?.toFixed(2)}): LONG only`;
       continue;
     }
-    if (vwapBandPos === 'below_lower' && sig.direction === 'LONG') {
+    if ((vwapBandPos === 'below_mid' || vwapBandPos === 'below_lower') && sig.direction === 'LONG') {
       sig.score = -99;
-      sig.blocked = `LONG blocked — price below VWAP lower band (${vwapLower?.toFixed(4)}): SHORT only`;
+      sig.blocked = `LONG blocked — price below VWAP mid (${vwapMid?.toFixed(2)}): SHORT only`;
       continue;
     }
 
