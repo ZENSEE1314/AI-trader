@@ -1362,6 +1362,20 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
       continue;
     }
 
+    // Hard 1h trend block — only trade WITH the trend, never against it
+    // 1h EMA9 < EMA21 = downtrend → LONG blocked
+    // 1h EMA9 > EMA21 = uptrend  → SHORT blocked
+    if (h1Trend === 'bearish' && sig.direction === 'LONG') {
+      sig.score = -99;
+      sig.blocked = `LONG blocked — 1h downtrend (EMA9 < EMA21): SHORT only`;
+      continue;
+    }
+    if (h1Trend === 'bullish' && sig.direction === 'SHORT') {
+      sig.score = -99;
+      sig.blocked = `SHORT blocked — 1h uptrend (EMA9 > EMA21): LONG only`;
+      continue;
+    }
+
     // ── 15m + 1m structure confirmation ─────────────────────────────────────
     // LONG:  (15m HL or HH) + (1m HH or HL)
     // SHORT: (15m LH or LL) + (1m LL or LH)
