@@ -1925,8 +1925,8 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     bLog.scan(`${symbol}: ${b.direction} ${b.setup} BLOCKED — ${b.blocked} (1h trend=${h1Trend})`);
   }
 
-  // Filter: RR minimum 1.2, SL reasonable, not blocked by trend
-  const validSignals = signals.filter(s => s.rr >= 1.2 && s.slDist > 0.001 && s.slDist < 0.03 && s.score >= 0);
+  // Filter: RR minimum 1.2, SL reasonable, not blocked
+  const validSignals = signals.filter(s => s.rr >= 1.2 && s.slDist > 0.0005 && s.slDist < 0.05 && s.score >= 0);
 
   if (!validSignals.length) return null;
 
