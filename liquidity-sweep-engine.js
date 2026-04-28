@@ -1382,21 +1382,53 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
       continue;
     }
 
-    // Hard VWAP band blocks
-    if (vwapBandPos === 'above_upper' && sig.direction === 'SHORT') {
-      sig.score = -99;
-      sig.blocked = `SHORT blocked — price above VWAP upper (${vwapUpper?.toFixed(2)}): LONG only`;
-      continue;
+    // ── FILTER 1: VWAP direction alignment (strict) ─────────────────────────
+    // Trade WITH VWAP momentum — not against it:
+    //   above_mid or above_upper → LONG zone   (no SHORT)
+    //   below_mid or below_lower → SHORT zone  (no LONG)
+    // This is the single highest-impact WR improvement.
+    // Exception: admin direction override bypasses this (handled below).
+    if (!directionOverride) {
+      if ((vwapBandPos === 'above_upper' || vwapBandPos === 'above_mid') && sig.direction === 'SHORT') {
+        sig.score = -99;
+        sig.blocked = `SHORT blocked — price in LONG zone (${vwapBandPos}, mid=${vwapMid?.toFixed(2)}): trade WITH VWAP`;
+        continue;
+      }
+      if ((vwapBandPos === 'below_lower' || vwapBandPos === 'below_mid') && sig.direction === 'LONG') {
+        sig.score = -99;
+        sig.blocked = `LONG blocked — price in SHORT zone (${vwapBandPos}, mid=${vwapMid?.toFixed(2)}): trade WITH VWAP`;
+        continue;
+      }
+    } else {
+      // Admin override: only hard-block extreme bands
+      if (vwapBandPos === 'above_upper' && sig.direction === 'SHORT') {
+        sig.score = -99;
+        sig.blocked = `SHORT blocked — price above VWAP upper (${vwapUpper?.toFixed(2)}): LONG only`;
+        continue;
+      }
+      if (vwapBandPos === 'below_lower' && sig.direction === 'LONG') {
+        sig.score = -99;
+        sig.blocked = `LONG blocked — price below VWAP lower (${vwapLower?.toFixed(2)}): SHORT only`;
+        continue;
+      }
     }
-    if (vwapBandPos === 'below_lower' && sig.direction === 'LONG') {
-      sig.score = -99;
-      sig.blocked = `LONG blocked — price below VWAP lower (${vwapLower?.toFixed(2)}): SHORT only`;
-      continue;
+
+    // ── FILTER 2: Session filter — skip Asia low-liquidity hours ────────────
+    // 00:00–06:30 UTC = Asia session: choppy, spreads wide, fakeouts common.
+    // 06:30–20:00 UTC = London + NY: high volume, clean structure, better WR.
+    {
+      const _utcH = new Date().getUTCHours();
+      const _utcM = new Date().getUTCMinutes();
+      const _utcMin = _utcH * 60 + _utcM;
+      if (_utcMin < 390 || _utcMin > 1200) { // outside 06:30–20:00 UTC
+        sig.score = -99;
+        sig.blocked = `blocked — Asia/late session (UTC ${_utcH}:${String(_utcM).padStart(2,'0')}): trade window 06:30–20:00 UTC`;
+        continue;
+      }
     }
 
     // Direction filter — admin override takes priority over auto swing structure.
     // Override: 'bullish' = LONG only, 'bearish' = SHORT only.
-    // Auto: 15m pivot structure (bearish_lean/bearish → SHORT only, bullish_lean/bullish → LONG only).
     if (directionOverride === 'bullish' && sig.direction === 'SHORT') {
       sig.score = -99;
       sig.blocked = `SHORT blocked — admin override: LONG only`;
@@ -1407,35 +1439,43 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
       sig.blocked = `LONG blocked — admin override: SHORT only`;
       continue;
     }
-    // NOTE: No 15m trend hard-block in auto mode.
-    // VWAP bands already handle extremes (above upper = LONG only, below lower = SHORT only).
-    // The 3m structure check below requires HL/HH for LONG or LH/LL for SHORT — that
-    // naturally rejects counter-trend entries without blocking HH rejections or HL reversals.
 
-    // ── 15m structure + 1m entry confirmation ───────────────────────────────
-    // 15m: compare the last 2 candles directly — no swing-confirmation wait.
-    //   HL = last low  > prev low  → bullish structure
-    //   LH = last high < prev high → bearish structure
-    //   HH + bearish close = liquidity sweep rejection → SHORT (SMC: sweeps buy stops, rejects)
-    //   LL + bullish close = liquidity sweep reversal  → LONG  (SMC: sweeps sell stops, bounces)
-    // 1m: scan recent 1m pivots for HH/HL (long) or LL/LH (short).
+    // ── FILTER 3: 15m structure + 1m entry confirmation ─────────────────────
+    // 15m: immediate candle comparison (no swing wait).
+    //   HL = last low  > prev low  → bullish structure (LONG)
+    //   LH = last high < prev high → bearish structure (SHORT)
+    //   HH + bearish close = liquidity sweep rejection → SHORT
+    //   LL + bullish close = liquidity sweep reversal  → LONG
+    // Requires 2 consecutive structure points for higher WR (filter single-bar noise).
+    // 1m: fresh pivot confirmation from the last 15 bars only.
     {
-      // 15m direction — use last 4 candles, compare most recent pair
-      const c15 = parsed15.slice(-4);
+      // Last 5 × 15m candles for 2-bar structure check
+      const c15 = parsed15.slice(-5);
       const lastC15 = c15[c15.length - 1];
       const prevC15 = c15[c15.length - 2];
+      const pre2C15 = c15[c15.length - 3]; // one more back for 2-HL check
       const has15mHL = c15.length >= 3 && lastC15.low  > prevC15.low;
       const has15mHH = c15.length >= 3 && lastC15.high > prevC15.high;
       const has15mLH = c15.length >= 3 && lastC15.high < prevC15.high;
       const has15mLL = c15.length >= 3 && lastC15.low  < prevC15.low;
-      // Candle direction of the last 15m bar — used to identify sweep-rejection candles
-      const last15mBull = lastC15.close > lastC15.open; // green = swept lows then closed up
-      const last15mBear = lastC15.close < lastC15.open; // red   = swept highs then closed down
+      const last15mBull = lastC15.close > lastC15.open;
+      const last15mBear = lastC15.close < lastC15.open;
 
-      // 1m entry confirmation — scan last 30 × 1m candles for pivot HH/HL/LL/LH
+      // Minimum structure quality — filter micro-noise (< 0.1% moves)
+      const hlQual  = has15mHL && (lastC15.low - prevC15.low) / prevC15.low >= 0.001;
+      const lhQual  = has15mLH && (prevC15.high - lastC15.high) / prevC15.high >= 0.001;
+
+      // 2-bar confirmation: previous bar also showed HL (for LONG) or LH (for SHORT)
+      const prevHL = c15.length >= 4 && prevC15.low > pre2C15.low;  // prev bar was also HL
+      const prevLH = c15.length >= 4 && prevC15.high < pre2C15.high; // prev bar was also LH
+      // HH/LL (breakout/breakdown) or sweep don't need 2-bar confirm — they are self-confirming
+      const longConsec  = (hlQual && prevHL) || has15mHH || (has15mLL && last15mBull);
+      const shortConsec = (lhQual && prevLH) || has15mLL || (has15mHH && last15mBear);
+
+      // 1m entry: fresh pivot from last 15 bars only (not stale 30-bar-old confirm)
       const P1B = 2;
       const pH1m = [], pL1m = [];
-      const scan1m = (parsed1m && parsed1m.length >= 10) ? parsed1m.slice(-30) : parsed1.slice(-15);
+      const scan1m = (parsed1m && parsed1m.length >= 10) ? parsed1m.slice(-15) : parsed1.slice(-10);
       for (let i = P1B; i < scan1m.length - P1B; i++) {
         let isH = true, isL = true;
         for (let j = 1; j <= P1B; j++) {
@@ -1450,19 +1490,17 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
       const has1mLL = pL1m.length >= 2 && pL1m[pL1m.length - 1] < pL1m[pL1m.length - 2];
       const has1mLH = pH1m.length >= 2 && pH1m[pH1m.length - 1] < pH1m[pH1m.length - 2];
 
-      // LONG:  HL (higher low) | HH (breakout continuation) | LL+bullish (sweep reversal)
-      // SHORT: LH (lower high) | LL (breakdown continuation) | HH+bearish (sweep rejection)
-      const longOk  = (has15mHL || has15mHH || (has15mLL && last15mBull)) && (has1mHH || has1mHL);
-      const shortOk = (has15mLH || has15mLL || (has15mHH && last15mBear)) && (has1mLL || has1mLH);
+      const longOk  = longConsec  && (has1mHH || has1mHL);
+      const shortOk = shortConsec && (has1mLL || has1mLH);
 
       if (sig.direction === 'LONG' && !longOk) {
         sig.score = -99;
-        sig.blocked = `LONG blocked — need (15m HL(${has15mHL})||HH(${has15mHH})||LL+bull(${has15mLL&&last15mBull})) + (1m HH(${has1mHH})||HL(${has1mHL}))`;
+        sig.blocked = `LONG blocked — need 2xHL(${hlQual&&prevHL}) or HH(${has15mHH}) or LL+bull(${has15mLL&&last15mBull}) + fresh 1m HH/HL(${has1mHH||has1mHL})`;
         continue;
       }
       if (sig.direction === 'SHORT' && !shortOk) {
         sig.score = -99;
-        sig.blocked = `SHORT blocked — need (15m LH(${has15mLH})||LL(${has15mLL})||HH+bear(${has15mHH&&last15mBear})) + (1m LL(${has1mLL})||LH(${has1mLH}))`;
+        sig.blocked = `SHORT blocked — need 2xLH(${lhQual&&prevLH}) or LL(${has15mLL}) or HH+bear(${has15mHH&&last15mBear}) + fresh 1m LL/LH(${has1mLL||has1mLH})`;
         continue;
       }
     }
