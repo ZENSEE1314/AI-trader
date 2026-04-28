@@ -718,6 +718,17 @@ async function openTrade(client, pick, wallet) {
     vwapZone: pick.vwapBandPos || null,
   });
 
+  // Auto-clear per-token direction override — it was one-shot, trade is now open
+  if (pick.tokenDirectionOverride) {
+    try {
+      await require('./db').query(
+        `UPDATE global_token_settings SET direction_override = NULL WHERE symbol = $1`,
+        [sym]
+      );
+      bLog.ai(`${sym}: per-token direction override cleared (one-shot, trade opened)`);
+    } catch (_) {}
+  }
+
   return {
     sym, qty, entry: price, leverage, tp1, tp2, tp3, sl: initialSlPrice,
     slDist, confidence: pick.score, direction,

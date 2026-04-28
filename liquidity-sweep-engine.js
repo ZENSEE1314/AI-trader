@@ -1431,13 +1431,25 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
   // Admin direction override — if set, replaces automatic swing structure detection.
   // Values: 'bullish' (LONG only) | 'bearish' (SHORT only) | null (auto)
   let directionOverride = null;
+  let hasTokenDirectionOverride = false;
   try {
     const { query: dbQuery } = require('./db');
-    const overrideRows = await dbQuery(`SELECT value FROM settings WHERE key = 'bot.direction_override'`);
-    if (overrideRows.length && (overrideRows[0].value === 'bullish' || overrideRows[0].value === 'bearish')) {
-      directionOverride = overrideRows[0].value;
+    // Per-token override takes priority (one-shot, auto-clears after trade)
+    const tokenRows = await dbQuery(
+      `SELECT direction_override FROM global_token_settings WHERE symbol = $1`,
+      [symbol]
+    );
+    if (tokenRows.length && tokenRows[0].direction_override) {
+      directionOverride = tokenRows[0].direction_override === 'LONG' ? 'bullish' : 'bearish';
+      hasTokenDirectionOverride = true;
+    } else {
+      // Fall back to global override
+      const overrideRows = await dbQuery(`SELECT value FROM settings WHERE key = 'bot.direction_override'`);
+      if (overrideRows.length && (overrideRows[0].value === 'bullish' || overrideRows[0].value === 'bearish')) {
+        directionOverride = overrideRows[0].value;
+      }
     }
-  } catch (_) { /* DB unavailable — ignore, fall through to auto */ }
+  } catch (_) { /* DB unavailable — ignore */ }
 
   // Apply confluence bonuses + global filters to all signals
   for (const sig of signals) {
@@ -1695,6 +1707,7 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     vwapUpper: vwapUpper ? Math.round(vwapUpper * 10000) / 10000 : null,
     vwapLower: vwapLower ? Math.round(vwapLower * 10000) / 10000 : null,
     vwapBandPos,
+    tokenDirectionOverride: hasTokenDirectionOverride,
     fundingRate:    marketIntel?.fundingRate  ?? null,
     oiTrend:        marketIntel?.oiTrend      ?? null,
     longShortRatio: marketIntel?.longRatio    ? `L${(marketIntel.longRatio*100).toFixed(0)}%/S${(marketIntel.shortRatio*100).toFixed(0)}%` : null,

@@ -1018,6 +1018,38 @@ router.post('/direction-override', async (req, res) => {
   }
 });
 
+// Per-token direction override — one-shot: auto-clears after a trade fires for that token
+router.get('/token-directions', async (req, res) => {
+  try {
+    const rows = await query(`SELECT symbol, direction_override FROM global_token_settings ORDER BY symbol`);
+    const map = {};
+    for (const r of rows) map[r.symbol] = r.direction_override || null;
+    res.json(map);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/token-direction/:symbol', async (req, res) => {
+  try {
+    const symbol = req.params.symbol.toUpperCase();
+    const { direction } = req.body;
+    if (!['LONG', 'SHORT', 'auto'].includes(direction)) {
+      return res.status(400).json({ error: 'direction must be LONG, SHORT, or auto' });
+    }
+    const val = direction === 'auto' ? null : direction;
+    await query(
+      `UPDATE global_token_settings SET direction_override = $1 WHERE symbol = $2`,
+      [val, symbol]
+    );
+    console.log(`[ADMIN] Token direction override: ${symbol} → ${val ?? 'auto'}`);
+    res.json({ ok: true, symbol, direction: val });
+  } catch (err) {
+    console.error('Token direction override error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ═══════════════════════════════════════════════════════════
 // Strategy Composer — DB-backed strategy definitions
 // ═══════════════════════════════════════════════════════════
