@@ -1248,8 +1248,10 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
   } // end STRATEGY_V2 gate
 
   // Strategy 11: Structure Follow
-  // LONG:  (15m HL or HH) + (1m HH or HL) → LONG
-  // SHORT: (15m LH or LL) + (1m LL or LH) → SHORT
+  // LONG:  (15m HL or HH or LL+bullish close) + (1m HH or HL) → LONG
+  // SHORT: (15m LH or LL or HH+bearish close) + (1m LL or LH) → SHORT
+  // NOTE: HH+bearish = liquidity sweep rejection short (SMC: price sweeps buy stops, rejects)
+  //       LL+bullish = liquidity sweep rejection long  (SMC: price sweeps sell stops, bounces)
   {
     const PIVOT_B = 2;
     const sHs15 = [], sLs15 = [];
@@ -1282,8 +1284,15 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     const has1mLL = pL1m.length >= 2 && pL1m[pL1m.length - 1] < pL1m[pL1m.length - 2];
     const has1mLH = pH1m.length >= 2 && pH1m[pH1m.length - 1] < pH1m[pH1m.length - 2];
 
-    const longOk  = (has15mHL || has15mHH) && (has1mHH || has1mHL);
-    const shortOk = (has15mLH || has15mLL) && (has1mLL || has1mLH);
+    // Last 15m candle direction — used for sweep-rejection setups
+    const lastC15b = parsed15[parsed15.length - 1];
+    const last15mBullish = lastC15b && lastC15b.close > lastC15b.open; // green close = bullish sweep
+    const last15mBearish = lastC15b && lastC15b.close < lastC15b.open; // red close   = bearish sweep
+
+    // LONG:  HL (higher low) | HH (breakout continuation) | LL with bullish close (sweep reversal)
+    // SHORT: LH (lower high) | LL (breakdown continuation) | HH with bearish close (sweep rejection)
+    const longOk  = (has15mHL || has15mHH || (has15mLL && last15mBullish)) && (has1mHH || has1mHL);
+    const shortOk = (has15mLH || has15mLL || (has15mHH && last15mBearish)) && (has1mLL || has1mLH);
 
     const atr = calcATR(parsed15);
 
@@ -1392,17 +1401,24 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     // naturally rejects counter-trend entries without blocking HH rejections or HL reversals.
 
     // ── 15m structure + 1m entry confirmation ───────────────────────────────
-    // 15m: compare the last 3 candles directly — no swing-confirmation wait.
-    //   HL = last low > prev low  (one candle ago, immediate)
-    //   LH = last high < prev high
+    // 15m: compare the last 2 candles directly — no swing-confirmation wait.
+    //   HL = last low  > prev low  → bullish structure
+    //   LH = last high < prev high → bearish structure
+    //   HH + bearish close = liquidity sweep rejection → SHORT (SMC: sweeps buy stops, rejects)
+    //   LL + bullish close = liquidity sweep reversal  → LONG  (SMC: sweeps sell stops, bounces)
     // 1m: scan recent 1m pivots for HH/HL (long) or LL/LH (short).
     {
-      // 15m direction — use last 3 candles, no swing wait
-      const c15 = parsed15.slice(-4); // last 4 × 15m candles
-      const has15mHL = c15.length >= 3 && c15[c15.length - 1].low  > c15[c15.length - 2].low;
-      const has15mHH = c15.length >= 3 && c15[c15.length - 1].high > c15[c15.length - 2].high;
-      const has15mLH = c15.length >= 3 && c15[c15.length - 1].high < c15[c15.length - 2].high;
-      const has15mLL = c15.length >= 3 && c15[c15.length - 1].low  < c15[c15.length - 2].low;
+      // 15m direction — use last 4 candles, compare most recent pair
+      const c15 = parsed15.slice(-4);
+      const lastC15 = c15[c15.length - 1];
+      const prevC15 = c15[c15.length - 2];
+      const has15mHL = c15.length >= 3 && lastC15.low  > prevC15.low;
+      const has15mHH = c15.length >= 3 && lastC15.high > prevC15.high;
+      const has15mLH = c15.length >= 3 && lastC15.high < prevC15.high;
+      const has15mLL = c15.length >= 3 && lastC15.low  < prevC15.low;
+      // Candle direction of the last 15m bar — used to identify sweep-rejection candles
+      const last15mBull = lastC15.close > lastC15.open; // green = swept lows then closed up
+      const last15mBear = lastC15.close < lastC15.open; // red   = swept highs then closed down
 
       // 1m entry confirmation — scan last 30 × 1m candles for pivot HH/HL/LL/LH
       const P1B = 2;
@@ -1422,17 +1438,19 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
       const has1mLL = pL1m.length >= 2 && pL1m[pL1m.length - 1] < pL1m[pL1m.length - 2];
       const has1mLH = pH1m.length >= 2 && pH1m[pH1m.length - 1] < pH1m[pH1m.length - 2];
 
-      const longOk  = (has15mHL || has15mHH) && (has1mHH || has1mHL);
-      const shortOk = (has15mLH || has15mLL) && (has1mLL || has1mLH);
+      // LONG:  HL (higher low) | HH (breakout continuation) | LL+bullish (sweep reversal)
+      // SHORT: LH (lower high) | LL (breakdown continuation) | HH+bearish (sweep rejection)
+      const longOk  = (has15mHL || has15mHH || (has15mLL && last15mBull)) && (has1mHH || has1mHL);
+      const shortOk = (has15mLH || has15mLL || (has15mHH && last15mBear)) && (has1mLL || has1mLH);
 
       if (sig.direction === 'LONG' && !longOk) {
         sig.score = -99;
-        sig.blocked = `LONG blocked — need (15m HL(${has15mHL})||HH(${has15mHH})) + (1m HH(${has1mHH})||HL(${has1mHL}))`;
+        sig.blocked = `LONG blocked — need (15m HL(${has15mHL})||HH(${has15mHH})||LL+bull(${has15mLL&&last15mBull})) + (1m HH(${has1mHH})||HL(${has1mHL}))`;
         continue;
       }
       if (sig.direction === 'SHORT' && !shortOk) {
         sig.score = -99;
-        sig.blocked = `SHORT blocked — need (15m LH(${has15mLH})||LL(${has15mLL})) + (1m LL(${has1mLL})||LH(${has1mLH}))`;
+        sig.blocked = `SHORT blocked — need (15m LH(${has15mLH})||LL(${has15mLL})||HH+bear(${has15mHH&&last15mBear})) + (1m LL(${has1mLL})||LH(${has1mLH}))`;
         continue;
       }
     }
