@@ -1525,23 +1525,20 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
 
     // ── FILTER 1: VWAP direction alignment ─────────────────────────────────
     // Zones:
-    //   above_upper  → no SHORT (strong bull zone)
-    //   above_mid    → both OK
-    //   near_mid     → both OK (within 0.5% of mid either side — transition zone)
-    //   below_mid    → no LONG (bearish, but only if clearly below — not near mid)
-    //   below_lower  → no LONG (strong bear zone)
+    //   above_upper → no SHORT (price in strong bull zone, don't fade it)
+    //   above_mid   → both OK (heading toward upper = LONG bias, but shorts allowed)
+    //   below_mid   → both OK (at mid = valid entry either way, structure decides)
+    //   below_lower → no LONG (price in strong bear zone, confirmed downtrend)
+    // NOTE: mid line itself is a valid LONG entry when price is heading up to upper band.
     {
-      const nearMid = vwapMid && Math.abs(price - vwapMid) / vwapMid < 0.005; // within 0.5% of VWAP mid
-
       if (vwapBandPos === 'above_upper' && sig.direction === 'SHORT') {
         sig.score = -99;
         sig.blocked = `SHORT blocked — price above VWAP upper (${vwapUpper?.toFixed(2)})`;
         continue;
       }
-      // Only block LONG below mid if price is NOT near VWAP mid (give 0.5% tolerance)
-      if ((vwapBandPos === 'below_lower' || vwapBandPos === 'below_mid') && sig.direction === 'LONG' && !nearMid) {
+      if (vwapBandPos === 'below_lower' && sig.direction === 'LONG') {
         sig.score = -99;
-        sig.blocked = `LONG blocked — price below VWAP mid (${vwapBandPos}, mid=${vwapMid?.toFixed(2)}, dist=${((vwapMid-price)/vwapMid*100).toFixed(2)}%)`;
+        sig.blocked = `LONG blocked — price below VWAP lower band (${vwapLower?.toFixed(2)}): strong bear zone`;
         continue;
       }
     }
