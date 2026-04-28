@@ -8,11 +8,14 @@
 //
 // MODE 2: Win-rate optimizer (tests 6 filter configs, finds best WR)
 //   node backtest.js wr [symbol|ALL] [days]
-//   e.g.  node backtest.js wr ALL 7
-//         node backtest.js wr BTCUSDT 7
+//   e.g.  node backtest.js wr ALL 90     ← 90-day backtest
+//         node backtest.js wr BTCUSDT 90
 //
 // Run on Railway (has PROXY_URL set):
-//   node backtest.js wr ALL 7
+//   node backtest.js wr ALL 90
+//
+// 90-day note: fetches ~8,640 × 15m bars + ~129,600 × 1m bars per symbol.
+// 1m data is paginated (1000 bars/page). Expect ~5-8 min per symbol.
 // ============================================================
 
 const fetch = require('node-fetch');
@@ -20,7 +23,7 @@ const fetch = require('node-fetch');
 const PROXY   = process.env.PROXY_URL || '';
 const MODE    = (process.argv[2] || 'wr').toLowerCase(); // 'signal' | 'wr'
 const ARG_SYM = process.argv[3] || 'BTCUSDT';
-const DAYS    = parseInt(process.argv[4] || '3', 10);
+const DAYS    = parseInt(process.argv[4] || '7', 10);
 
 const VWAP_MULT = 1.0;
 const MAX_HOLD  = 96; // 96 × 15m = 24 h timeout
@@ -339,29 +342,43 @@ function simulate(sig, futureC1m) {
   return 'TIMEOUT';
 }
 
-// ── Fetch 1m candles paginated ────────────────────────────────
+// ── Fetch candles paginated (any interval) ────────────────────
+// maxPages safety: 1m×90d = 130 pages, 15m×90d = 9 pages
 
-async function fetchAll1m(symbol, fromMs, toMs) {
+async function fetchAllCandles(symbol, interval, fromMs, toMs) {
+  const intervalMs = interval === '1m' ? 60000 : interval === '15m' ? 900000 : 60000;
+  const maxPages   = Math.ceil((toMs - fromMs) / (intervalMs * 1000)) + 2;
   const all = [];
   let start = fromMs, pages = 0;
-  while (start < toMs && pages < 20) {
-    const raw = await getKlines(symbol, '1m', 1000, start);
+  while (start < toMs && pages < maxPages) {
+    const raw = await getKlines(symbol, interval, 1000, start);
     if (!raw || !raw.length) break;
     const parsed = raw.map(pc);
     all.push(...parsed);
     const last = parsed.at(-1);
     if (last.closeTime >= toMs) break;
-    start = last.openTime + 60000;
+    start = last.openTime + intervalMs;
     pages++;
-    await new Promise(r => setTimeout(r, 180));
+    // Throttle: 1m has many pages, be gentle with the API
+    await new Promise(r => setTimeout(r, interval === '1m' ? 220 : 100));
+    if (pages % 20 === 0) process.stdout.write(` [${pages}p]`);
   }
   return all.filter(c => c.openTime >= fromMs && c.closeTime <= toMs);
 }
 
+// Convenience wrappers
+const fetchAll15m = (sym, from, to) => fetchAllCandles(sym, '15m', from, to);
+const fetchAll1m  = (sym, from, to) => fetchAllCandles(sym, '1m',  from, to);
+
 // ── Stats ─────────────────────────────────────────────────────
+// netR = net R-multiples (1R = risk per trade).
+// netUsd = dollar PnL assuming $100 risk per trade (1R = $100).
+//   WIN  → +$100 × RR
+//   LOSS → -$100
+//   TIMEOUT → -$30 (partial loss, trade timed out)
 
 function calcStats(trades) {
-  if (!trades.length) return { total: 0, wr: 0, avgRR: 0, pf: 0, netR: 0 };
+  if (!trades.length) return { total: 0, wr: 0, avgRR: 0, pf: 0, netR: 0, netUsd: 0 };
   const wins   = trades.filter(t => t.outcome === 'WIN');
   const losses = trades.filter(t => t.outcome === 'LOSS');
   const wr     = Math.round(wins.length / trades.length * 100);
@@ -370,7 +387,8 @@ function calcStats(trades) {
   const gl     = Math.abs(losses.reduce((s, t) => s + t.pnlR, 0));
   const pf     = gl > 0 ? gw / gl : gw > 0 ? 99 : 0;
   const netR   = trades.reduce((s, t) => s + t.pnlR, 0);
-  return { total: trades.length, wins: wins.length, losses: losses.length, wr, avgRR, pf, netR };
+  const netUsd = Math.round(netR * 100); // $100 per 1R
+  return { total: trades.length, wins: wins.length, losses: losses.length, wr, avgRR, pf, netR, netUsd };
 }
 
 // ════════════════════════════════════════════════════════════
@@ -379,23 +397,22 @@ function calcStats(trades) {
 // ════════════════════════════════════════════════════════════
 
 async function runSignalAudit(symbol) {
-  const N15 = Math.min(DAYS * 96 + 20, 999);
-  const N1m = Math.min(DAYS * 1440 + 60, 1000);
+  const nowMs  = Date.now();
+  const fromMs = nowMs - DAYS * 86400000;
 
   console.log(`\n${'═'.repeat(62)}`);
   console.log(` SIGNAL AUDIT  |  ${symbol}  |  ${DAYS} days`);
   console.log(`${'═'.repeat(62)}\n`);
-  console.log(`Fetching ${N15} × 15m + ${N1m} × 1m…`);
 
-  const [raw15, raw1m] = await Promise.all([
-    getKlines(symbol, '15m', N15),
-    getKlines(symbol, '1m',  N1m),
-  ]);
-  if (!raw15 || !raw1m) { console.log('Failed to fetch candles'); return; }
+  process.stdout.write(`Fetching 15m…`);
+  const c15all = await fetchAll15m(symbol, fromMs, nowMs);
+  console.log(` ${c15all.length} bars`);
 
-  const c15all = raw15.map(pc);
-  const c1mall = raw1m.map(pc);
-  console.log(`Got ${c15all.length} × 15m,  ${c1mall.length} × 1m\n`);
+  process.stdout.write(`Fetching 1m… `);
+  const c1mall = await fetchAll1m(symbol, fromMs, nowMs);
+  console.log(` ${c1mall.length} bars\n`);
+
+  if (!c15all.length || !c1mall.length) { console.log('Failed to fetch candles'); return; }
 
   let fired = 0, blockedVwap = 0, blockedStruct = 0, blocked1m = 0;
   const trades = [];
@@ -498,14 +515,14 @@ function runConfig(c15all, c1mall, cfg) {
 }
 
 async function backtestSymbol(symbol, fromMs, nowMs) {
-  process.stdout.write(`  [${symbol}] Fetching 15m… `);
-  const raw15 = await getKlines(symbol, '15m', Math.min(DAYS * 96 + 20, 999));
-  if (!raw15 || raw15.length < 30) { console.log('skip (no data)'); return {}; }
-  const c15all = raw15.map(pc).filter(c => c.openTime >= fromMs);
+  process.stdout.write(`  [${symbol}] Fetching 15m…`);
+  const c15all = await fetchAll15m(symbol, fromMs, nowMs);
+  if (c15all.length < 30) { console.log(' skip (no 15m data)'); return {}; }
+  console.log(` ${c15all.length} bars`);
 
-  process.stdout.write(`${c15all.length} bars | Fetching 1m… `);
+  process.stdout.write(`  [${symbol}] Fetching 1m… `);
   const c1mall = await fetchAll1m(symbol, fromMs, nowMs);
-  console.log(`${c1mall.length} bars`);
+  console.log(` ${c1mall.length} bars`);
 
   if (c1mall.length < 200) { console.log(`  [${symbol}] Not enough 1m data — skip`); return {}; }
 
@@ -541,11 +558,11 @@ async function runWROptimizer() {
   }
 
   // ── Summary table ─────────────────────────────────────────
-  console.log(`\n\n${'═'.repeat(70)}`);
-  console.log(` RESULTS SUMMARY`);
-  console.log('═'.repeat(70));
-  console.log(` ${'Config'.padEnd(20)} ${'Trades'.padEnd(8)} ${'WR%'.padEnd(6)} ${'AvgRR'.padEnd(7)} ${'PF'.padEnd(6)} ${'NetR'.padEnd(8)}`);
-  console.log('─'.repeat(70));
+  console.log(`\n\n${'═'.repeat(80)}`);
+  console.log(` RESULTS SUMMARY  (${DAYS} days · $100 risk per trade)`);
+  console.log('═'.repeat(80));
+  console.log(` ${'Config'.padEnd(20)} ${'Trades'.padEnd(8)} ${'WR%'.padEnd(6)} ${'AvgRR'.padEnd(7)} ${'PF'.padEnd(6)} ${'NetR'.padEnd(8)} ${'$PnL'.padEnd(10)}`);
+  console.log('─'.repeat(80));
 
   let bestCfg = null, bestScore = -99;
   for (const cfg of CONFIGS) {
@@ -553,12 +570,13 @@ async function runWROptimizer() {
     const score = s.wr * 0.5 + s.pf * 20 + s.netR;
     if (score > bestScore && s.total >= 5) { bestScore = score; bestCfg = cfg; }
     const flag = s.wr >= 80 ? ' ✅' : s.wr >= 65 ? ' 🔶' : ' ❌';
+    const dollarStr = (s.netUsd >= 0 ? '+$' : '-$') + Math.abs(s.netUsd);
     console.log(
       ` ${cfg.name.padEnd(20)} ${String(s.total).padEnd(8)} ${String(s.wr + '%').padEnd(6)} ` +
-      `${s.avgRR.toFixed(2).padEnd(7)} ${s.pf.toFixed(2).padEnd(6)} ${s.netR.toFixed(1).padEnd(8)}${flag}`
+      `${s.avgRR.toFixed(2).padEnd(7)} ${s.pf.toFixed(2).padEnd(6)} ${s.netR.toFixed(1).padEnd(8)} ${dollarStr.padEnd(10)}${flag}`
     );
   }
-  console.log('═'.repeat(70));
+  console.log('═'.repeat(80));
   if (bestCfg) {
     console.log(`\n ★ BEST CONFIG: ${bestCfg.name}`);
     console.log(`   ${bestCfg.desc}`);
@@ -607,10 +625,13 @@ async function runWROptimizer() {
   console.log(`  By structure : ${Object.entries(whyL).map(([k,v]) => `${k}=${v}`).join(' | ') || 'none'}`);
   console.log(`  By direction : ${Object.entries(dirL).map(([k,v]) => `${k}=${v}`).join(' | ') || 'none'}`);
 
-  console.log(`\n${'═'.repeat(70)}`);
-  console.log(` BEST WR: ${s.wr}%  |  Profit Factor: ${s.pf.toFixed(2)}  |  Net R: ${s.netR.toFixed(1)}  |  Trades: ${s.total}`);
-  console.log('═'.repeat(70));
-  console.log('\n Share these results to apply the winning config to the live engine.\n');
+  const dollarFinal = (s.netUsd >= 0 ? '+$' : '-$') + Math.abs(s.netUsd);
+  console.log(`\n${'═'.repeat(80)}`);
+  console.log(` BEST CONFIG: ${bestCfg.name}`);
+  console.log(` WR: ${s.wr}%  |  Profit Factor: ${s.pf.toFixed(2)}  |  Trades: ${s.total}  |  Net R: ${s.netR.toFixed(1)}`);
+  console.log(` Dollar PnL (@ $100 risk/trade): ${dollarFinal}`);
+  console.log('═'.repeat(80));
+  console.log('\n Reply with these results to apply the best config to the live engine.\n');
 }
 
 // ── Entry ─────────────────────────────────────────────────────
