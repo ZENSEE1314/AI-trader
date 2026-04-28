@@ -1639,21 +1639,43 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
       const has1mLL = pL1m.length >= 2 && pL1m[pL1m.length - 1] < pL1m[pL1m.length - 2];
       const has1mLH = pH1m.length >= 2 && pH1m[pH1m.length - 1] < pH1m[pH1m.length - 2];
 
+      // 3m structure — alternative to 15m confirmation (same pivot logic as Strategy 11)
+      const P3B = 2;
+      const pH3mF = [], pL3mF = [];
+      const scan3m = parsed1.slice(-(params.swingLen1m || 15));
+      for (let i = P3B; i < scan3m.length - P3B; i++) {
+        let isH = true, isL = true;
+        for (let j = 1; j <= P3B; j++) {
+          if (scan3m[i].high <= scan3m[i-j].high || scan3m[i].high <= scan3m[i+j].high) isH = false;
+          if (scan3m[i].low  >= scan3m[i-j].low  || scan3m[i].low  >= scan3m[i+j].low)  isL = false;
+        }
+        if (isH) pH3mF.push(scan3m[i].high);
+        if (isL) pL3mF.push(scan3m[i].low);
+      }
+      const has3mHHf = pH3mF.length >= 2 && pH3mF[pH3mF.length-1] > pH3mF[pH3mF.length-2];
+      const has3mHLf = pL3mF.length >= 2 && pL3mF[pL3mF.length-1] > pL3mF[pL3mF.length-2];
+      const has3mLLf = pL3mF.length >= 2 && pL3mF[pL3mF.length-1] < pL3mF[pL3mF.length-2];
+      const has3mLHf = pH3mF.length >= 2 && pH3mF[pH3mF.length-1] < pH3mF[pH3mF.length-2];
+
       // Active version can disable 15m or 1m confirmation requirements
       const skip15m = params.require15m === 0 || params.require15m === false;
       const skip1m  = params.require1m  === 0 || params.require1m  === false;
 
-      const longOk  = (skip15m || longConsec)  && (skip1m || (has1mHH || has1mHL));
-      const shortOk = (skip15m || shortConsec) && (skip1m || (has1mLL || has1mLH));
+      // HTF passes if 15m structure is confirmed OR 3m structure agrees
+      const htfLongPass  = longConsec  || has3mHHf || has3mHLf;
+      const htfShortPass = shortConsec || has3mLLf || has3mLHf;
+
+      const longOk  = (skip15m || htfLongPass)  && (skip1m || (has1mHH || has1mHL));
+      const shortOk = (skip15m || htfShortPass) && (skip1m || (has1mLL || has1mLH));
 
       if (sig.direction === 'LONG' && !longOk) {
         sig.score = -99;
-        sig.blocked = `LONG blocked — 15m(${skip15m?'skip':hlQual&&prevHL||has15mHH||has15mLL&&last15mBull}) 1m(${skip1m?'skip':has1mHH||has1mHL})`;
+        sig.blocked = `LONG blocked — htf(15m:${longConsec} 3m:${has3mHHf||has3mHLf}) 1m(${skip1m?'skip':has1mHH||has1mHL})`;
         continue;
       }
       if (sig.direction === 'SHORT' && !shortOk) {
         sig.score = -99;
-        sig.blocked = `SHORT blocked — 15m(${skip15m?'skip':lhQual&&prevLH||has15mLL||has15mHH&&last15mBear}) 1m(${skip1m?'skip':has1mLL||has1mLH})`;
+        sig.blocked = `SHORT blocked — htf(15m:${shortConsec} 3m:${has3mLLf||has3mLHf}) 1m(${skip1m?'skip':has1mLL||has1mLH})`;
         continue;
       }
     }
