@@ -1008,16 +1008,20 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
   // Default: unknown — if VWAP can't be computed, block both directions (no trade)
   let vwapBandPos = 'unknown';
   {
-    // dayStartMs is computed before the fetch (above) so the 1m fetch uses the same anchor.
-    // parsed1m is already filtered to today's session because we fetched with startTime=dayStartMs.
-    // All 1m candles here are from UTC midnight → matches TradingView VWAP Session exactly.
+    // dayStartMs is computed before the fetch so the 1m fetch uses the same anchor.
+    // We fetched 1m with startTime=dayStartMs so parsed1m is today's full session.
+    // CRITICAL: NEVER fall back to 15m candles for VWAP — 15m σ is 4-5× wider than 1m,
+    // placing the lower band far below reality and letting LONG trades through below the band.
+    // If 1m data is unavailable → block all trades (vwapBandPos stays 'unknown').
     const today1m = parsed1m.filter(c => c.openTime >= dayStartMs);
-    // Use today's session candles. Fall back to 15m if session is too fresh (< 5 bars).
-    const vwapCandles = today1m.length >= 5 ? today1m
-                      : parsed15.filter(c => c.openTime >= dayStartMs);
 
     const opCandles15 = parsed15.filter(c => c.openTime >= dayStartMs);
     const opPrice = opCandles15.length > 0 ? opCandles15[0].open : null;
+
+    // Need at least 5 × 1m candles. No fallback to 15m — it gives wrong bands.
+    const vwapCandles = today1m.length >= 5 ? today1m : [];
+
+    bLog.scan(`${symbol} VWAP: 1m bars today=${today1m.length} price=${price}`);
 
     if (vwapCandles.length > 0) {
       // Step 1: VWAP
@@ -1053,6 +1057,8 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
         else if (price <= vwapLower) vwapBandPos = 'below_lower';
         else if (price >= vwapVal)   vwapBandPos = 'above_mid';
         else                         vwapBandPos = 'below_mid';
+
+        bLog.scan(`${symbol} VWAP mid=${vwapVal.toFixed(4)} upper=${vwapUpper.toFixed(4)} lower=${vwapLower.toFixed(4)} σ=${stdDev.toFixed(4)} zone=${vwapBandPos}`);
       }
 
       // OP + VWAP directional bias
@@ -1490,7 +1496,7 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
   // Log blocked signals for debugging
   const blocked = signals.filter(s => s.blocked);
   for (const b of blocked) {
-    bLog.scan(`${symbol}: ${b.direction} ${b.setup} BLOCKED — ${b.blocked} (1h trend=${h1Trend})`);
+    bLog.scan(`${symbol}: ${b.direction} ${b.setup} BLOCKED — ${b.blocked} | vwap=${vwapBandPos} mid=${vwapMid?.toFixed(4)} lower=${vwapLower?.toFixed(4)} upper=${vwapUpper?.toFixed(4)}`);
   }
 
   // Filter: RR minimum 1.2, SL reasonable, not blocked
