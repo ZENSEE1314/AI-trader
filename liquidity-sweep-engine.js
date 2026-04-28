@@ -1391,51 +1391,48 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     // The 3m structure check below requires HL/HH for LONG or LH/LL for SHORT — that
     // naturally rejects counter-trend entries without blocking HH rejections or HL reversals.
 
-    // ── 3m + 3m structure confirmation ──────────────────────────────────────
-    // Uses 3m swing points (parsed1 = klines3m) for BOTH timeframe checks.
-    // 15m swing points need 30 min to confirm — too slow for reversal entries
-    // (HL at 13:45 won't show on 15m until 14:15+). 3m confirms in ~6 min.
-    // LONG:  (3m HL or HH) + (3m HH or HL on recent bars)
-    // SHORT: (3m LH or LL) + (3m LL or LH on recent bars)
+    // ── 15m structure + 1m entry confirmation ───────────────────────────────
+    // 15m: compare the last 3 candles directly — no swing-confirmation wait.
+    //   HL = last low > prev low  (one candle ago, immediate)
+    //   LH = last high < prev high
+    // 1m: scan recent 1m pivots for HH/HL (long) or LL/LH (short).
     {
-      // Full 3m swing structure
-      const swingTrend3m = getHTFStructure(klines3m);
-      const sHs3m = swingTrend3m.swingHighs;
-      const sLs3m = swingTrend3m.swingLows;
-      const has3mHL = sLs3m.length >= 2 && sLs3m[sLs3m.length - 1].price > sLs3m[sLs3m.length - 2].price;
-      const has3mHH = sHs3m.length >= 2 && sHs3m[sHs3m.length - 1].price > sHs3m[sHs3m.length - 2].price;
-      const has3mLH = sHs3m.length >= 2 && sHs3m[sHs3m.length - 1].price < sHs3m[sHs3m.length - 2].price;
-      const has3mLL = sLs3m.length >= 2 && sLs3m[sLs3m.length - 1].price < sLs3m[sLs3m.length - 2].price;
+      // 15m direction — use last 3 candles, no swing wait
+      const c15 = parsed15.slice(-4); // last 4 × 15m candles
+      const has15mHL = c15.length >= 3 && c15[c15.length - 1].low  > c15[c15.length - 2].low;
+      const has15mHH = c15.length >= 3 && c15[c15.length - 1].high > c15[c15.length - 2].high;
+      const has15mLH = c15.length >= 3 && c15[c15.length - 1].high < c15[c15.length - 2].high;
+      const has15mLL = c15.length >= 3 && c15[c15.length - 1].low  < c15[c15.length - 2].low;
 
-      // Recent 3m pivot scan (last 10 bars) for entry-level confirmation
+      // 1m entry confirmation — scan last 30 × 1m candles for pivot HH/HL/LL/LH
       const P1B = 2;
-      const pH3m = [], pL3m = [];
-      const scan = parsed1.slice(-20); // last 20 × 3m = last 60 min
-      for (let i = P1B; i < scan.length - P1B; i++) {
+      const pH1m = [], pL1m = [];
+      const scan1m = (parsed1m && parsed1m.length >= 10) ? parsed1m.slice(-30) : parsed1.slice(-15);
+      for (let i = P1B; i < scan1m.length - P1B; i++) {
         let isH = true, isL = true;
         for (let j = 1; j <= P1B; j++) {
-          if (scan[i].high <= scan[i - j].high || scan[i].high <= scan[i + j].high) isH = false;
-          if (scan[i].low  >= scan[i - j].low  || scan[i].low  >= scan[i + j].low)  isL = false;
+          if (scan1m[i].high <= scan1m[i - j].high || scan1m[i].high <= scan1m[i + j].high) isH = false;
+          if (scan1m[i].low  >= scan1m[i - j].low  || scan1m[i].low  >= scan1m[i + j].low)  isL = false;
         }
-        if (isH) pH3m.push(scan[i].high);
-        if (isL) pL3m.push(scan[i].low);
+        if (isH) pH1m.push(scan1m[i].high);
+        if (isL) pL1m.push(scan1m[i].low);
       }
-      const hasRecHH = pH3m.length >= 2 && pH3m[pH3m.length - 1] > pH3m[pH3m.length - 2];
-      const hasRecHL = pL3m.length >= 2 && pL3m[pL3m.length - 1] > pL3m[pL3m.length - 2];
-      const hasRecLL = pL3m.length >= 2 && pL3m[pL3m.length - 1] < pL3m[pL3m.length - 2];
-      const hasRecLH = pH3m.length >= 2 && pH3m[pH3m.length - 1] < pH3m[pH3m.length - 2];
+      const has1mHH = pH1m.length >= 2 && pH1m[pH1m.length - 1] > pH1m[pH1m.length - 2];
+      const has1mHL = pL1m.length >= 2 && pL1m[pL1m.length - 1] > pL1m[pL1m.length - 2];
+      const has1mLL = pL1m.length >= 2 && pL1m[pL1m.length - 1] < pL1m[pL1m.length - 2];
+      const has1mLH = pH1m.length >= 2 && pH1m[pH1m.length - 1] < pH1m[pH1m.length - 2];
 
-      const longOk  = (has3mHL || has3mHH) && (hasRecHH || hasRecHL);
-      const shortOk = (has3mLH || has3mLL) && (hasRecLL || hasRecLH);
+      const longOk  = (has15mHL || has15mHH) && (has1mHH || has1mHL);
+      const shortOk = (has15mLH || has15mLL) && (has1mLL || has1mLH);
 
       if (sig.direction === 'LONG' && !longOk) {
         sig.score = -99;
-        sig.blocked = `LONG blocked — need (3m HL(${has3mHL})||HH(${has3mHH})) + recent (HH(${hasRecHH})||HL(${hasRecHL}))`;
+        sig.blocked = `LONG blocked — need (15m HL(${has15mHL})||HH(${has15mHH})) + (1m HH(${has1mHH})||HL(${has1mHL}))`;
         continue;
       }
       if (sig.direction === 'SHORT' && !shortOk) {
         sig.score = -99;
-        sig.blocked = `SHORT blocked — need (3m LH(${has3mLH})||LL(${has3mLL})) + recent (LL(${hasRecLL})||LH(${hasRecLH}))`;
+        sig.blocked = `SHORT blocked — need (15m LH(${has15mLH})||LL(${has15mLL})) + (1m LL(${has1mLL})||LH(${has1mLH}))`;
         continue;
       }
     }
