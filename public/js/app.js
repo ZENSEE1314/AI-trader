@@ -1192,7 +1192,7 @@
 
   // Delete key
   async function deleteKey(keyId) {
-    if (!confirm('Delete this API key? This cannot be undone.')) return;
+    if (!confirm('Delete this API key?\n\nThe key will be removed immediately. Your open trades on the exchange are NOT affected.')) return;
     try {
       await api('DELETE', `/api/keys/${keyId}`);
       showToast('API key deleted.', 'success');
