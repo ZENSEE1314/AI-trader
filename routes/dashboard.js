@@ -1716,7 +1716,12 @@ async function ensureVersionsTable() {
     `);
   } catch (_) {}
   try { await query(`ALTER TABLE strategy_versions ADD COLUMN IF NOT EXISTS genome_hash VARCHAR(64)`); } catch (_) {}
-  try { await query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_sv_genome_hash ON strategy_versions (genome_hash) WHERE genome_hash IS NOT NULL`); } catch (_) {}
+  // Full unique constraint (no WHERE) so ON CONFLICT (genome_hash) works correctly.
+  // Drop the old partial index first if it exists, then add a proper constraint.
+  try { await query(`DROP INDEX IF EXISTS idx_sv_genome_hash`); } catch (_) {}
+  try {
+    await query(`ALTER TABLE strategy_versions ADD CONSTRAINT uq_sv_genome_hash UNIQUE (genome_hash)`);
+  } catch (_) {}
 }
 
 // GET /api/dashboard/strategy-versions
@@ -1901,26 +1906,12 @@ router.post('/strategy-versions/scan', async (req, res) => {
       // only for metrics, not name — so the user's picks stay recognisable).
       const name = `${medal} v${i + 1} — WR ${wr.toFixed(1)}% | ${g.entry_type} L${g.leverage}x | PF ${pf.toFixed(2)}`;
 
-      const result = await query(`
-        INSERT INTO strategy_versions
-          (name, genome, genome_hash, win_rate, profit_factor, total_return, max_drawdown,
-           expectancy, sharpe, total_trades, wins, losses, fitness, source, symbols)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'optimizer',$14)
-        ON CONFLICT (genome_hash) DO UPDATE SET
-          win_rate      = EXCLUDED.win_rate,
-          profit_factor = EXCLUDED.profit_factor,
-          total_return  = EXCLUDED.total_return,
-          max_drawdown  = EXCLUDED.max_drawdown,
-          expectancy    = EXCLUDED.expectancy,
-          sharpe        = EXCLUDED.sharpe,
-          total_trades  = EXCLUDED.total_trades,
-          wins          = EXCLUDED.wins,
-          losses        = EXCLUDED.losses,
-          fitness       = EXCLUDED.fitness,
-          symbols       = EXCLUDED.symbols
-        RETURNING (xmax = 0) AS inserted
-      `, [
-        name, JSON.stringify(g), hash,
+      // Manual upsert: check if genome_hash exists first, then insert or update.
+      // This avoids ON CONFLICT constraint issues on newly-created tables.
+      const existing = await query(
+        `SELECT id FROM strategy_versions WHERE genome_hash = $1`, [hash]
+      );
+      const vals = [
         wr, pf,
         parseFloat(r.avg_return) || 0,
         parseFloat(r.avg_dd)     || 0,
@@ -1931,9 +1922,27 @@ router.post('/strategy-versions/scan', async (req, res) => {
         parseInt(r.avg_losses)   || 0,
         fit,
         r.symbols || 'BTC/ETH/SOL/BNB',
-      ]);
-
-      if (result[0]?.inserted) saved++; else updated++;
+      ];
+      if (existing.length) {
+        await query(
+          `UPDATE strategy_versions SET
+             win_rate=$1, profit_factor=$2, total_return=$3, max_drawdown=$4,
+             expectancy=$5, sharpe=$6, total_trades=$7, wins=$8, losses=$9,
+             fitness=$10, symbols=$11
+           WHERE genome_hash=$12`,
+          [...vals, hash]
+        );
+        updated++;
+      } else {
+        await query(
+          `INSERT INTO strategy_versions
+             (name, genome, genome_hash, win_rate, profit_factor, total_return, max_drawdown,
+              expectancy, sharpe, total_trades, wins, losses, fitness, source, symbols)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'optimizer',$14)`,
+          [name, JSON.stringify(g), hash, ...vals]
+        );
+        saved++;
+      }
     }
 
     const best = await query(
