@@ -1395,6 +1395,36 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     }
 
     // ── LONG: above VWAP → dip → hold ────────────────────────────────────
+    // ── SHORT: above VWAP mid → failed breakout → rejection ─────────────────
+    // Price pushed above VWAP mid but couldn't hold → failed breakout SHORT.
+    // This catches big drops that START from just above VWAP.
+    if (vwapBandPos === 'above_mid') {
+      const pushedUp = greenCount >= 3;              // ≥3 green = real push above VWAP
+      const rejected = lastC.close < lastC.open      // now rejecting (red candle)
+                    && lastC.high  < prevC.high;     // lower high = failed breakout
+      const strongRej = totalRange(lastC) > 0 && bodySize(lastC) / totalRange(lastC) >= 0.15;
+      const nearVwap  = (price - vwapMid) / vwapMid < 0.025; // within 2.5% above VWAP
+
+      if (pushedUp && rejected && strongRej && nearVwap) {
+        const sl     = Math.max(prevC.high, prev2C.high) * 1.001;
+        const slDist = Math.abs(sl - price) / price;
+        const tp1    = price - atrV12 * 2.0;
+        const rr     = slDist > 0 ? Math.round((atrV12 * 2.0) / (price * slDist) * 10) / 10 : 0;
+        if (rr >= 1.2 && slDist > 0.001 && slDist < 0.015) {
+          signals.push({
+            symbol, direction: 'SHORT', price, lastPrice: price,
+            sl, tp1, tp2: price - atrV12 * 3.0, tp3: price - atrV12 * 4.0,
+            slDist, setup: 'VWAP_REJECTION',
+            setupName: 'SHORT-VWAP-FAIL',
+            score: 9, rr,
+            tf15: `vwap_mid=${vwapMid.toFixed(2)} zone=${vwapBandPos}`,
+            tf1:  `green10=${greenCount} strongRej failed-breakout`,
+          });
+        }
+      }
+    }
+
+    // ── LONG: above VWAP → dip → hold ────────────────────────────────────
     if (vwapBandPos === 'above_mid' || vwapBandPos === 'above_upper') {
       const dipped  = redCount >= 3;                 // ≥3 red in last 10 = real dip
       const held    = lastC.close > lastC.open       // last candle is green
@@ -1471,22 +1501,24 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
       continue;
     }
 
-    // ── FILTER 1: VWAP direction alignment — ALWAYS STRICT ─────────────────
-    // The VWAP mid-line is an absolute price rule. No param, override, or AI
-    // optimisation can relax it. Repeated losses below VWAP confirm this is
-    // the single most important filter in the engine.
-    //   price below VWAP mid → NO LONG  (bearish side of VWAP)
-    //   price above VWAP mid → NO SHORT (bullish side of VWAP)
+    // ── FILTER 1: VWAP direction alignment ─────────────────────────────────
+    // Rules (asymmetric — tuned from live loss history):
+    //   above_upper  → LONG only. Price is in strong bullish zone — no SHORT.
+    //   above_mid    → BOTH allowed. Price is just above VWAP — reversals happen here.
+    //                  SHORTs allowed so we catch failed breakouts above VWAP.
+    //   below_mid    → SHORT only. Price below VWAP mid = bearish. No LONG.
+    //                  (Most losing LONGs came from this zone — keep hard block.)
+    //   below_lower  → SHORT only. Price in strong bearish zone — no LONG.
     // NOTE: directionOverride does NOT bypass this filter.
     {
-      if ((vwapBandPos === 'above_upper' || vwapBandPos === 'above_mid') && sig.direction === 'SHORT') {
+      if (vwapBandPos === 'above_upper' && sig.direction === 'SHORT') {
         sig.score = -99;
-        sig.blocked = `SHORT blocked — price above VWAP mid (${vwapBandPos}, mid=${vwapMid?.toFixed(2)}): trade WITH VWAP`;
+        sig.blocked = `SHORT blocked — price above VWAP upper band (${vwapBandPos}, upper=${vwapUpper?.toFixed(2)}): too high to short`;
         continue;
       }
       if ((vwapBandPos === 'below_lower' || vwapBandPos === 'below_mid') && sig.direction === 'LONG') {
         sig.score = -99;
-        sig.blocked = `LONG blocked — price below VWAP mid (${vwapBandPos}, mid=${vwapMid?.toFixed(2)}): trade WITH VWAP`;
+        sig.blocked = `LONG blocked — price below VWAP mid (${vwapBandPos}, mid=${vwapMid?.toFixed(2)}): bearish zone`;
         continue;
       }
     }
