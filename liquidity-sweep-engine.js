@@ -1357,30 +1357,23 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     const prevC  = last6_1m[last6_1m.length - 2];
     const prev2C = last6_1m[last6_1m.length - 3];
 
-    // 1m MA5 / MA10 for trend confirmation
-    const closes1m = parsed1m.slice(-10).map(c => c.close);
-    const ma5_1m   = closes1m.slice(-5).reduce((a, b) => a + b, 0) / 5;
-    const ma10_1m  = closes1m.length >= 10 ? closes1m.reduce((a, b) => a + b, 0) / 10 : null;
-    const maBearish = ma10_1m !== null && ma5_1m < ma10_1m * 1.001; // MA5 ≤ MA10 (bearish)
-    const maBullish = ma10_1m !== null && ma5_1m > ma10_1m * 0.999; // MA5 ≥ MA10 (bullish)
-
-    const last5_1m  = last6_1m.slice(-5);
-    const greenCount = last5_1m.filter(c => c.close > c.open).length;
-    const redCount   = last5_1m.filter(c => c.close < c.open).length;
+    // Look back 10 candles for bounce/dip so we catch the setup even if a few
+    // red follow-through candles have already printed after the rejection.
+    const last10_1m  = parsed1m.slice(-10);
+    const greenCount = last10_1m.filter(c => c.close > c.open).length;
+    const redCount   = last10_1m.filter(c => c.close < c.open).length;
 
     const atrV12 = calcATR(parsed15);
 
     // ── SHORT: below VWAP → bounce → reject ──────────────────────────────
-    // NOTE: do NOT require maBearish — the bounce (green candles) temporarily
-    // pushes MA5 above MA10, making maBearish=false even on a perfect setup.
-    // The rejection candle (red + lower high) is strong enough confirmation.
+    // Use last-10 green count so we still see the bounce even after 2-3 red
+    // follow-through candles have printed — the scan window is wider.
     if (vwapBandPos === 'below_mid' || vwapBandPos === 'below_lower') {
-      const bounced  = greenCount >= 2;              // real bounce, not just a tick
+      const bounced  = greenCount >= 3;              // ≥3 green in last 10 = real bounce
       const rejected = lastC.close < lastC.open      // last candle is red (rejection)
                     && lastC.high  < prevC.high;     // lower high confirms turn
-      // Strong rejection: body is at least 40% of the candle range
       const strongRej = totalRange(lastC) > 0 && bodySize(lastC) / totalRange(lastC) >= 0.15;
-      const nearVwap  = (vwapMid - price) / vwapMid < 0.02; // within 2% below VWAP
+      const nearVwap  = (vwapMid - price) / vwapMid < 0.025; // within 2.5% below VWAP
 
       if (bounced && rejected && strongRej && nearVwap) {
         const sl     = Math.max(prevC.high, prev2C.high) * 1.001;
@@ -1395,20 +1388,19 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
             setupName: 'SHORT-VWAP-REJECT',
             score: 9, rr,
             tf15: `vwap_mid=${vwapMid.toFixed(2)} zone=${vwapBandPos}`,
-            tf1:  `green=${greenCount} strongRej=${strongRej} LH-red`,
+            tf1:  `green10=${greenCount} strongRej LH-red`,
           });
         }
       }
     }
 
     // ── LONG: above VWAP → dip → hold ────────────────────────────────────
-    // NOTE: same logic — do NOT require maBullish (red dip candles suppress it).
     if (vwapBandPos === 'above_mid' || vwapBandPos === 'above_upper') {
-      const dipped  = redCount >= 2;                 // real dip, not just a tick
+      const dipped  = redCount >= 3;                 // ≥3 red in last 10 = real dip
       const held    = lastC.close > lastC.open       // last candle is green
                    && lastC.low  > prevC.low;        // higher low = support holding
       const strongHold = totalRange(lastC) > 0 && bodySize(lastC) / totalRange(lastC) >= 0.15;
-      const nearVwap = (price - vwapMid) / vwapMid < 0.02; // within 2% above VWAP
+      const nearVwap = (price - vwapMid) / vwapMid < 0.025; // within 2.5% above VWAP
 
       if (dipped && held && strongHold && nearVwap) {
         const sl     = Math.min(prevC.low, prev2C.low) * 0.999;
@@ -1423,7 +1415,7 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
             setupName: 'LONG-VWAP-BOUNCE',
             score: 7, rr,
             tf15: `vwap_mid=${vwapMid.toFixed(2)} zone=${vwapBandPos}`,
-            tf1:  `red=${redCount} strongHold=${strongHold} HL-green`,
+            tf1:  `red10=${redCount} strongHold HL-green`,
           });
         }
       }
