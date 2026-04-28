@@ -8,9 +8,14 @@ router.use(authMiddleware);
 
 // Admin check middleware
 async function adminOnly(req, res, next) {
-  const rows = await query('SELECT is_admin FROM users WHERE id = $1', [req.userId]);
-  if (!rows.length || !rows[0].is_admin) return res.status(403).json({ error: 'Admin only' });
-  next();
+  try {
+    const rows = await query('SELECT is_admin FROM users WHERE id = $1', [req.userId]);
+    if (!rows.length || !rows[0].is_admin) return res.status(403).json({ error: 'Admin only' });
+    next();
+  } catch (err) {
+    console.error('adminOnly check error:', err.message);
+    res.status(500).json({ error: 'Server error' });
+  }
 }
 router.use(adminOnly);
 
@@ -320,7 +325,7 @@ router.put('/keys/:id/profit-share', async (req, res) => {
     }
     const up = parseFloat(user_pct);
     const ap = parseFloat(admin_pct);
-    if (isNaN(up) || isNaN(ap) || up < 0 || ap < 0 || up + ap !== 100) {
+    if (isNaN(up) || isNaN(ap) || up < 0 || ap < 0 || Math.abs(up + ap - 100) > 0.01) {
       return res.status(400).json({ error: 'Percentages must be >= 0 and sum to 100' });
     }
     await query(

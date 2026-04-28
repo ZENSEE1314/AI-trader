@@ -71,7 +71,8 @@ const ACTIVE_VERSION_TTL = 60_000;
 async function getActiveVersionParams() {
   if (Date.now() - _activeVersionCache.ts < ACTIVE_VERSION_TTL) return _activeVersionCache.params;
   try {
-    const rows = await db.query(`SELECT value FROM settings WHERE key = 'active_ai_version'`);
+    const { query: dbQ } = require('./db');
+    const rows = await dbQ(`SELECT value FROM settings WHERE key = 'active_ai_version'`);
     _activeVersionCache.params = rows.length ? JSON.parse(rows[0].value) : null;
   } catch {
     _activeVersionCache.params = null;
@@ -1552,7 +1553,7 @@ async function executeForAllUsers(pick) {
           `SELECT id, closed_at, direction FROM trades
            WHERE user_id = $1 AND symbol = $2 AND direction = $3
              AND status IN ('WIN','LOSS','TP','SL','CLOSED')
-             AND (closed_at IS NULL OR closed_at > NOW() - INTERVAL '30 minutes')
+             AND (closed_at IS NULL OR closed_at > NOW() - INTERVAL '2 hours')
            ORDER BY COALESCE(closed_at, NOW()) DESC LIMIT 1`,
           [key.user_id, symbol, pick.direction]
         );
