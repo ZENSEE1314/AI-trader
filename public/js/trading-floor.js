@@ -766,6 +766,78 @@
       if (clearBtn) clearBtn.addEventListener('click', () => {
         if (this.logEl) this.logEl.innerHTML = '';
       });
+
+      const cmdForm = document.getElementById('trading-floor-cmd-form');
+      const cmdInput = document.getElementById('trading-floor-cmd');
+      if (cmdForm && cmdInput) {
+        cmdForm.addEventListener('submit', (e) => {
+          e.preventDefault();
+          const text = cmdInput.value.trim();
+          if (!text) return;
+          this._handleCommand(text);
+          cmdInput.value = '';
+        });
+      }
+    }
+
+    // ── User commands ──────────────────────────────────────────
+    _handleCommand(text) {
+      this._log('user', 'YOU', text);
+
+      // Parse: first token is target agent (BTC/ETH/SOL/BNB/COORD/CODER/ALL)
+      const parts = text.split(/\s+/);
+      const head = parts[0].toUpperCase();
+      const rest = parts.slice(1).join(' ').trim();
+
+      // Aliases → agent label
+      const aliasMap = {
+        BTC: 'BTC', BTCUSDT: 'BTC',
+        ETH: 'ETH', ETHUSDT: 'ETH',
+        SOL: 'SOL', SOLUSDT: 'SOL',
+        BNB: 'BNB', BNBUSDT: 'BNB',
+        COORD: 'COORD', COORDINATOR: 'COORD',
+        CODER: 'CODER', DEV: 'CODER',
+        ALL: 'ALL', TEAM: 'ALL', EVERYONE: 'ALL',
+      };
+
+      const target = aliasMap[head];
+      const directive = target ? rest : text;
+
+      if (!target) {
+        // No prefix: COORD broadcasts to traders
+        this._dispatchTo('COORD', `relayed: "${directive}"`);
+        for (const t of ['BTC', 'ETH', 'SOL', 'BNB']) {
+          setTimeout(() => this._dispatchTo(t, `acknowledged — ${this._shortAck(directive)}`), 400 + Math.random() * 800);
+        }
+        return;
+      }
+
+      if (target === 'ALL') {
+        for (const t of ['BTC', 'ETH', 'SOL', 'BNB', 'COORD', 'CODER']) {
+          setTimeout(() => this._dispatchTo(t, `roger — ${this._shortAck(directive || text)}`), 200 + Math.random() * 1000);
+        }
+        return;
+      }
+
+      const ack = directive
+        ? `${this._shortAck(directive)}`
+        : 'standing by';
+      setTimeout(() => this._dispatchTo(target, ack), 250 + Math.random() * 600);
+    }
+
+    _shortAck(s) {
+      if (!s) return 'standing by';
+      const trimmed = s.length > 80 ? s.slice(0, 77) + '…' : s;
+      return trimmed;
+    }
+
+    _dispatchTo(label, msg) {
+      const def = AGENTS.find(a => a.label === label);
+      if (!def) return;
+      const kind = def.role === 'coordinator' ? 'coord'
+        : def.role === 'coder' ? 'coder'
+        : 'trade';
+      this._log(kind, label, msg);
     }
 
     async init() {
@@ -964,6 +1036,7 @@
         coord: '#fbbf24',
         coder: '#a78bfa',
         trade: '#4ade80',
+        user:  '#38bdf8',
       };
       const c = colorByKind[kind] || 'var(--color-text)';
       const t = new Date();
@@ -981,6 +1054,7 @@
       while (this.logEl.children.length > this.logLimit) {
         this.logEl.removeChild(this.logEl.lastChild);
       }
+      this.logEl.scrollTop = 0;
     }
 
     _draw() {
