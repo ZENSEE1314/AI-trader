@@ -153,31 +153,6 @@
     coder:       { title: 'Coder',        color: '#a78bfa' },
   };
 
-  // Lines emitted into the Activity Log on a slow timer
-  const COORDINATOR_LINES = [
-    'BTC, watch for liquidity sweep below the 4H low.',
-    'ETH — hold position until breakout confirms on volume.',
-    'SOL: tighten stop, exit on structure break.',
-    'Reviewing risk exposure across all pairs.',
-    'BNB, scale in 25% on retest of OB.',
-    'Pause new entries — funding flipped negative.',
-    'CODER: optimise the SMC engine for SOL.',
-    'Approving v2 strategy rollout — all traders sync.',
-    'Reduce leverage to 5x until volatility cools.',
-    'Daily plan posted on the whiteboard.',
-  ];
-  const CODER_LINES = [
-    'pushed v2.4.1 → scalper-ai.js',
-    'fixed slippage bug in trade-engine.js',
-    'optimised BFS pathfinder — 2× faster',
-    'refactored signal-scanner.js (-180 LOC)',
-    'added unit tests for indicator-library',
-    'merged PR #142: liquidity-sweep-engine v3',
-    'tuned MA-stack thresholds, backtest +3.2%',
-    'patched API retry on 429 from Bitunix',
-    'shipped Kronos integration to staging',
-    'cleaned up cycle.js memory leak',
-  ];
 
   // PC positions mapped to character IDs (for ON/OFF animation)
   const PC_ITEMS = [
@@ -750,8 +725,7 @@
       this.apiTimer      = 0;
       this.pcAnimTimer   = 0;
       this.pcFrame       = 0;       // 0–2 → PC_FRONT_ON_1/2/3
-      this.coordTimer    = rndRange(6, 12);
-      this.coderTimer    = rndRange(8, 16);
+      this.coordTimer    = 8;   // first scan ~8s after init
       this.listTimer     = 0;
       this.tileMap       = buildTileMap();
       this.blocked       = new Set(STATIC_BLOCKED);
@@ -840,6 +814,92 @@
       this._log(kind, label, msg);
     }
 
+    // ── COORD: real SMC scan via /api/admin/coord/scan ──────────
+    async _runCoordScan() {
+      try {
+        const res = await fetch('/api/admin/coord/scan', { credentials: 'include' });
+        if (!res.ok) {
+          this._log('coord', 'COORD', `scan failed (HTTP ${res.status}) — retrying soon.`);
+          return;
+        }
+        const data = await res.json();
+        if (!data || !Array.isArray(data.results)) return;
+
+        // Track consecutive misses for the CODER tune trigger
+        this._missStreak = this._missStreak || {};
+
+        let missedSym = null;
+        for (const r of data.results) {
+          const sym = r.symbol.replace('USDT', '');
+          if (r.error) {
+            this._log('coord', 'COORD', `${sym}: scan error (${r.error}).`);
+            continue;
+          }
+          const tag = r.signal
+            ? `${r.signal.direction} signal (score ${r.signal.score}, slDist ${(r.signal.slDist * 100).toFixed(2)}%)`
+            : 'no setup';
+          const tradeNote = r.inOpenTrade ? ' — in open trade'
+            : r.trades > 0 ? ' — closed in last hour'
+            : '';
+          if (r.missed) {
+            this._log('coord', 'COORD', `MISSED ${sym}: ${tag} but no trade taken${tradeNote}.`);
+            this._missStreak[sym] = (this._missStreak[sym] || 0) + 1;
+            missedSym = missedSym || sym;
+          } else {
+            this._log('coord', 'COORD', `${sym}: ${tag}${tradeNote}.`);
+            this._missStreak[sym] = 0;
+          }
+        }
+
+        // CODER: if any symbol missed >=2 scans in a row, propose a tune
+        const culprit = Object.entries(this._missStreak).find(([_, n]) => n >= 2);
+        if (culprit && data.tunables) {
+          this._missStreak[culprit[0]] = 0; // arm once per streak
+          await this._coderTune(culprit[0], data.tunables);
+        }
+      } catch (e) {
+        this._log('coord', 'COORD', `scan exception: ${e.message}`);
+      }
+    }
+
+    // ── CODER: heuristic auto-tune in response to missed signals ─
+    async _coderTune(symLabel, tunables) {
+      // Heuristic: missed signals most often = chase filter too tight.
+      // Nudge max_chase_pct up by 20% (capped server-side at 0.030).
+      const currentChase = Number(tunables['strat.smc.max_chase_pct']);
+      if (!Number.isFinite(currentChase)) return;
+      const proposed = Math.min(0.030, +(currentChase * 1.20).toFixed(4));
+      if (proposed <= currentChase) {
+        this._log('coder', 'CODER', `chase filter already at ceiling — nothing to tune for ${symLabel}.`);
+        return;
+      }
+      this._log('coder', 'CODER',
+        `tuning max_chase_pct: ${(currentChase * 100).toFixed(2)}% → ${(proposed * 100).toFixed(2)}% (${symLabel} missed twice)`);
+      try {
+        const res = await fetch('/api/admin/coder/tune', {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            key: 'strat.smc.max_chase_pct',
+            value: proposed,
+            reason: `${symLabel} missed twice`,
+          }),
+        });
+        const out = await res.json().catch(() => ({}));
+        if (res.ok && out.ok) {
+          this._log('coder', 'CODER',
+            `applied: max_chase_pct = ${(out.value * 100).toFixed(2)}% (was ${out.prevValue != null ? (out.prevValue * 100).toFixed(2) + '%' : 'default'}).`);
+        } else if (out.error === 'cooldown') {
+          this._log('coder', 'CODER', `holding off — tune cooldown ${out.wait_seconds}s remaining.`);
+        } else {
+          this._log('coder', 'CODER', `tune rejected: ${out.error || res.status}`);
+        }
+      } catch (e) {
+        this._log('coder', 'CODER', `tune failed: ${e.message}`);
+      }
+    }
+
     async init() {
       // Create canvas
       this.canvas = document.createElement('canvas');
@@ -870,8 +930,9 @@
 
       // Seed sidebar
       this._renderAgentList();
-      this._log('coord', 'COORD', 'Trading floor online — all agents reporting in.');
-      this._log('coder', 'CODER', 'syncing latest strategies from main…');
+      this._log('coord', 'COORD', 'Trading floor online — running first SMC scan…');
+      this._log('coder', 'CODER', 'standing by for tune requests (cooldown 10m).');
+      this._runCoordScan();
 
       return this;
     }
@@ -962,16 +1023,11 @@
         this.pcFrame = (this.pcFrame + 1) % 3;
       }
 
-      // Coordinator + Coder periodic chatter into the log
+      // COORD: real SMC scan every ~30s (CODER reacts inside the scan handler)
       this.coordTimer -= dt;
       if (this.coordTimer <= 0) {
-        this.coordTimer = rndRange(8, 18);
-        this._log('coord', 'COORD', COORDINATOR_LINES[Math.floor(Math.random() * COORDINATOR_LINES.length)]);
-      }
-      this.coderTimer -= dt;
-      if (this.coderTimer <= 0) {
-        this.coderTimer = rndRange(10, 22);
-        this._log('coder', 'CODER', CODER_LINES[Math.floor(Math.random() * CODER_LINES.length)]);
+        this.coordTimer = 30;
+        this._runCoordScan();
       }
 
       // Refresh sidebar status ~2 Hz

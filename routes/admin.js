@@ -4156,4 +4156,135 @@ router.post('/email/test', adminOnly, async (req, res) => {
   }
 });
 
+// ────────────────────────────────────────────────────────────────
+// COORD agent — real SMC scan + missed-trade audit on the 4 traders
+// GET /api/admin/coord/scan
+// ────────────────────────────────────────────────────────────────
+router.get('/coord/scan', async (req, res) => {
+  try {
+    const smcEngine = require('../smc-engine');
+    const { getCfg } = require('../strategy-config');
+    const { CORE_SYMBOLS } = require('../trade-engine');
+
+    const cfg = await getCfg();
+    const params = { LEV_BTC_ETH: 100, LEV_MID: 50, LEV_ALT: 20, MIN_SCORE: 2 };
+
+    const tickerRes = await fetch('https://fapi.binance.com/fapi/v1/ticker/24hr');
+    const tickerArr = tickerRes.ok ? await tickerRes.json() : [];
+    const tickerMap = Object.fromEntries(tickerArr.map(t => [t.symbol, t]));
+
+    const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+    const tradesRows = await query(
+      `SELECT symbol, direction, status, created_at, closed_at
+         FROM trades
+        WHERE symbol = ANY($1::text[])
+          AND created_at >= $2
+        ORDER BY created_at DESC`,
+      [CORE_SYMBOLS, oneHourAgo]
+    );
+    const tradesBySymbol = {};
+    for (const r of tradesRows) {
+      (tradesBySymbol[r.symbol] = tradesBySymbol[r.symbol] || []).push(r);
+    }
+
+    const results = [];
+    for (const symbol of CORE_SYMBOLS) {
+      const ticker = tickerMap[symbol];
+      if (!ticker) {
+        results.push({ symbol, error: 'no_ticker' });
+        continue;
+      }
+      let signal = null;
+      try {
+        signal = await smcEngine.analyzeLHHL(ticker, params, new Map(), null, cfg);
+      } catch (e) {
+        results.push({ symbol, error: 'analyze_failed: ' + e.message });
+        continue;
+      }
+      const trades = tradesBySymbol[symbol] || [];
+      const inOpenTrade = trades.some(t => t.status === 'OPEN');
+      const tradedRecently = trades.length > 0;
+      const hasSignal = !!signal;
+      const missed = hasSignal && !inOpenTrade && !tradedRecently;
+      results.push({
+        symbol,
+        price: parseFloat(ticker.lastPrice),
+        signal: signal ? {
+          direction: signal.direction,
+          score:     signal.score,
+          slDist:    signal.slDist,
+          sl:        signal.sl,
+          tp:        signal.tp1 || signal.tp,
+          leverage:  signal.leverage,
+        } : null,
+        trades: trades.length,
+        inOpenTrade,
+        missed,
+      });
+    }
+
+    const tunables = {
+      'strat.smc.max_chase_pct':   cfg['strat.smc.max_chase_pct'],
+      'strat.smc.max_candle_age':  cfg['strat.smc.max_candle_age'],
+      'strat.smc.sl_pct':          cfg['strat.smc.sl_pct'],
+      'strat.smc.tp_pct':          cfg['strat.smc.tp_pct'],
+    };
+
+    res.json({ ok: true, scannedAt: new Date().toISOString(), results, tunables });
+  } catch (err) {
+    console.error('[coord/scan] error:', err.message);
+    res.status(500).json({ error: 'Server error: ' + err.message });
+  }
+});
+
+// ────────────────────────────────────────────────────────────────
+// CODER agent — auto-tune a single SMC strategy parameter
+// POST /api/admin/coder/tune  body: { key, value, reason? }
+// ────────────────────────────────────────────────────────────────
+const CODER_TUNE_BOUNDS = {
+  'strat.smc.max_chase_pct':  { min: 0.005, max: 0.030 },
+  'strat.smc.max_candle_age': { min: 3,     max: 30   },
+  'strat.smc.sl_pct':         { min: 0.003, max: 0.020 },
+  'strat.smc.tp_pct':         { min: 0.005, max: 0.040 },
+};
+let LAST_CODER_TUNE_AT = 0;
+const CODER_TUNE_COOLDOWN_MS = 10 * 60 * 1000;
+
+router.post('/coder/tune', async (req, res) => {
+  try {
+    const { key, value, reason } = req.body || {};
+    const bounds = CODER_TUNE_BOUNDS[key];
+    if (!bounds) return res.status(400).json({ error: 'key_not_tunable', allowed: Object.keys(CODER_TUNE_BOUNDS) });
+
+    const num = Number(value);
+    if (!Number.isFinite(num)) return res.status(400).json({ error: 'value_must_be_number' });
+
+    const clamped = Math.min(bounds.max, Math.max(bounds.min, num));
+
+    const now = Date.now();
+    if (now - LAST_CODER_TUNE_AT < CODER_TUNE_COOLDOWN_MS) {
+      const waitSec = Math.ceil((CODER_TUNE_COOLDOWN_MS - (now - LAST_CODER_TUNE_AT)) / 1000);
+      return res.status(429).json({ error: 'cooldown', wait_seconds: waitSec });
+    }
+
+    const prevRows = await query('SELECT value FROM settings WHERE key = $1', [key]);
+    const prevValue = prevRows.length ? Number(prevRows[0].value) : null;
+
+    await query(
+      `INSERT INTO settings (key, value) VALUES ($1, $2)
+       ON CONFLICT (key) DO UPDATE SET value = $2`,
+      [key, String(clamped)]
+    );
+    try { require('../strategy-config').invalidateCache(); } catch (_) {}
+
+    LAST_CODER_TUNE_AT = now;
+    console.log(`[coder/tune] ${key}: ${prevValue} → ${clamped} (reason: ${reason || 'n/a'})`);
+
+    res.json({ ok: true, key, prevValue, value: clamped, clampedFrom: num !== clamped ? num : null });
+  } catch (err) {
+    console.error('[coder/tune] error:', err.message);
+    res.status(500).json({ error: 'Server error: ' + err.message });
+  }
+});
+
 module.exports = router;
