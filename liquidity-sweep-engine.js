@@ -1465,7 +1465,7 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
             sl, tp1, tp2: price + atrV12 * 3.0, tp3: price + atrV12 * 4.0,
             slDist, setup: 'VWAP_REJECTION',
             setupName: 'LONG-VWAP-BOUNCE',
-            score: 7, rr,
+            score: 9, rr,
             tf15: `vwap_mid=${vwapMid.toFixed(2)} zone=${vwapBandPos}`,
             tf1:  `red10=${redCount} strongHold HL-green`,
           });
@@ -1747,7 +1747,7 @@ async function scanSMC(log, opts = {}) {
   const topCoins = tickers.filter(t => ALLOWED_SYMBOLS.includes(t.symbol));
 
   const params = await aiLearner.getOptimalParams();
-  const minScore = params.MIN_SCORE || 8;
+  const minScore = params.MIN_SCORE || 7;
 
   // ── Active version params from Admin Panel ───────────────────────────────
   // When admin activates a version (e.g. v3.42 94.7% WR), those params are
