@@ -8,8 +8,10 @@ const { USDMClient } = require('binance');
 const fetch = require('node-fetch');
 const aiLearner = require('./ai-learner');
 const { detectSwings, SWING_LENGTHS, scanSMC } = require('./liquidity-sweep-engine');
-// Strategy v2: swing-point + VWAP-band + 30% trailing SL (replaces scanSMC as active scanner)
+// Strategy v2: swing-point + VWAP-band + 30% trailing SL (kept, not active)
 const { scanV2, calcTrailingSL: calcV2TrailingSL } = require('./strategy-v2');
+// Strategy v3: MCT PDF — Break&Retest / LiqGrab / VWAP Trend + 20% trailing SL (ACTIVE)
+const { scanV3, calcTrailingSLV3 } = require('./strategy-v3');
 // NOTE: Triple MA / Spike-HL / T-Junction / MA Stack / AI Scanner exit logic
 // is still referenced below for open trades that may have been entered under
 // those strategies. Do not remove these imports.
@@ -974,18 +976,18 @@ async function checkTrailingStop(client) {
       }
 
       // ── Trailing SL step check ──
-      // v2 trades use swing-point 30%/31% trailing; all others use capital-tier logic.
+      // v3: MCT PDF 20%/21% trailing | v2: swing-point 30%/31% | others: capital-tier
       let trailResult;
-      if (state.strategyVersion === 'v2') {
-        const side       = state.isLong ? 'LONG' : 'SHORT';
-        const lev        = state.leverage || 20;
-        const newSlPrice = calcV2TrailingSL(state.entry, cur, side, lev);
-        // Only update SL if it improves (ratchet — never move against trade)
+      if (state.strategyVersion === 'v3' || state.strategyVersion === 'v2') {
+        const trailFn  = state.strategyVersion === 'v3' ? calcTrailingSLV3 : calcV2TrailingSL;
+        const side     = state.isLong ? 'LONG' : 'SHORT';
+        const lev      = state.leverage || 20;
+        const newSlPrice = trailFn(state.entry, cur, side, lev);
+        // Ratchet: only update SL if it improves (never moves against trade)
         const betterSl = state.isLong
           ? newSlPrice > (state.trailingSlPrice || 0)
           : newSlPrice < (state.trailingSlPrice || Infinity);
         if (betterSl && newSlPrice !== state.trailingSlPrice) {
-          // Map SL price back to capital-lock % for logging/DB compatibility
           const pricePct = state.isLong
             ? (newSlPrice - state.entry) / state.entry
             : (state.entry - newSlPrice) / state.entry;
@@ -1219,22 +1221,22 @@ async function main() {
       bLog.error(`Kronos batch scan failed (non-blocking): ${kronosBatchErr.message}`);
     }
 
-    // ── Strategy v2 — Swing-Point + VWAP-Band + 30% Trailing SL ──
-    // Step 1: 15m/3m swing point bias. Step 2: 1m entry confirmation.
-    // No fixed TP — trailing SL starts at +31%, locks every +10%.
-    // (Old scanSMC is preserved in liquidity-sweep-engine.js but NOT called here)
+    // ── Strategy v3 — MCT PDF: Break&Retest / LiqGrab / VWAP Trend ──
+    // Bias filter: price > OP + VWAP → LONG | price < OP + VWAP → SHORT.
+    // No session filter, no fixed TP — 20% initial SL, trails at +21%.
+    // (v2 is preserved in strategy-v2.js but NOT called here)
     let smcSignals = [];
     try {
-      const rawV2 = await scanV2(msg => bLog.scan(msg));
-      smcSignals = (rawV2 || []).map(s => ({
+      const rawV3 = await scanV3(msg => bLog.scan(msg));
+      smcSignals = (rawV3 || []).map(s => ({
         ...s,
         strategyWinRate: s.score >= 12 ? 70 : 60,
       }));
       if (smcSignals.length > 0) {
-        bLog.scan(`v2 Engine: ${smcSignals.length} signal(s) — ${smcSignals.map(s => `${s.symbol} ${s.direction} [${s.setupName}] score=${s.score}`).join(', ')}`);
+        bLog.scan(`v3 Engine: ${smcSignals.length} signal(s) — ${smcSignals.map(s => `${s.symbol} ${s.direction} [${s.setupName}] score=${s.score}`).join(', ')}`);
       }
-    } catch (v2Err) {
-      bLog.error(`v2 Engine scan failed (non-blocking): ${v2Err.message}`);
+    } catch (v3Err) {
+      bLog.error(`v3 Engine scan failed (non-blocking): ${v3Err.message}`);
     }
 
     const signals = [...smcSignals];
