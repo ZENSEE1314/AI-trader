@@ -1573,9 +1573,11 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
       const f15mLong  = c15.length >= 2 && (lc15.low > pc15.low || lc15.high > pc15.high);
       const f15mShort = c15.length >= 2 && (lc15.high < pc15.high || lc15.low < pc15.low);
 
-      // 3m pivots
+      // 3m pivots — use 30-candle window (90 min) for reliable trend direction.
+      // NOTE: swingLen1m is a freshness param (entry recency), not a trend window —
+      // using it here caused too-small windows that produced <2 pivots and always failed.
       const pH3mF = [], pL3mF = [];
-      const scan3m = parsed1.slice(-(params.swingLen1m || 20));
+      const scan3m = parsed1.slice(-30);
       for (let i = PB; i < scan3m.length - PB; i++) {
         let isH = true, isL = true;
         for (let j = 1; j <= PB; j++) {
@@ -1590,9 +1592,9 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
       const f3mShort = (pL3mF.length >= 2 && pL3mF[pL3mF.length-1] < pL3mF[pL3mF.length-2])
                     || (pH3mF.length >= 2 && pH3mF[pH3mF.length-1] < pH3mF[pH3mF.length-2]);
 
-      // 1m pivots
+      // 1m pivots — use 30-candle window (30 min) for trend confirmation
       const pH1mF = [], pL1mF = [];
-      const scan1mLen = params.swingLen1m || 15;
+      const scan1mLen = 30;
       const scan1m = (parsed1m && parsed1m.length >= 10) ? parsed1m.slice(-scan1mLen) : (parsed1m || []).slice(-10);
       for (let i = PB; i < scan1m.length - PB; i++) {
         let isH = true, isL = true;
