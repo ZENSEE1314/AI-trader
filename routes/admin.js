@@ -4296,4 +4296,92 @@ router.post('/coder/tune', async (req, res) => {
   }
 });
 
+// ────────────────────────────────────────────────────────────────
+// COORD strategy board — read-only insights for the WR / profit loop
+//
+// GET /api/admin/coord/strategy-board
+//   Returns: { activeCombo, combos[], topByLiveWR, topByComposite,
+//              optimizerLastRun, isOptimizerRunning }
+// POST /api/admin/coord/run-sweep
+//   Kicks off OptimizerAgent.execute() once. No auto-activation —
+//   the winner is surfaced; admin must apply it via /quantum/activate.
+// ────────────────────────────────────────────────────────────────
+router.get('/coord/strategy-board', async (req, res) => {
+  try {
+    const quantum = require('../quantum-optimizer');
+    const stats = await quantum.getComboStats();
+    const combos = Array.isArray(stats.combos) ? stats.combos : [];
+    const active = combos.find(c => c.is_active) || null;
+
+    const tradedOnly = combos.filter(c => c.total_trades > 0);
+    const topByLiveWR = [...tradedOnly]
+      .sort((a, b) => (b.ema_win_rate || b.win_rate) - (a.ema_win_rate || a.win_rate))
+      .slice(0, 3)
+      .map(c => ({ id: c.combo_id, name: c.combo_name, wr: c.ema_win_rate || c.win_rate, trades: c.total_trades, avgPnl: c.avg_pnl }));
+    const topByComposite = [...tradedOnly]
+      .sort((a, b) => b.composite_score - a.composite_score)
+      .slice(0, 3)
+      .map(c => ({ id: c.combo_id, name: c.combo_name, score: c.composite_score, wr: c.win_rate, trades: c.total_trades }));
+
+    let optimizerStatus = null;
+    try {
+      const { getCoordinator } = require('../agents/agent-coordinator');
+      const coord = getCoordinator();
+      const opt = coord && coord.optimizerAgent;
+      if (opt) {
+        optimizerStatus = {
+          isRunning: !!opt._isRunning,
+          runIdx:    opt._runIdx || 0,
+          totalBacktests: opt._totalBacktests || 0,
+          lastTask:  opt.currentTask || null,
+        };
+      }
+    } catch (_) { /* coordinator may not be initialized */ }
+
+    res.json({
+      ok: true,
+      generatedAt: new Date().toISOString(),
+      active: active ? {
+        id: active.combo_id, name: active.combo_name,
+        trades: active.total_trades, wr: active.win_rate,
+        emaWr: active.ema_win_rate, avgPnl: active.avg_pnl,
+        composite: active.composite_score,
+      } : null,
+      explorationProgress: stats.exploration_progress || null,
+      currentPhase: stats.current_phase || 'unknown',
+      topByLiveWR,
+      topByComposite,
+      optimizer: optimizerStatus,
+    });
+  } catch (err) {
+    console.error('[coord/strategy-board] error:', err.message);
+    res.status(500).json({ error: 'Server error: ' + err.message });
+  }
+});
+
+router.post('/coord/run-sweep', async (req, res) => {
+  try {
+    const { getCoordinator } = require('../agents/agent-coordinator');
+    const coord = getCoordinator();
+    if (!coord || !coord.optimizerAgent) {
+      return res.status(503).json({ error: 'optimizer_unavailable' });
+    }
+    const opt = coord.optimizerAgent;
+    if (opt._isRunning) {
+      return res.status(409).json({ error: 'already_running', task: opt.currentTask });
+    }
+    // Kick off async — return immediately so the HTTP request doesn't hang
+    // for the multi-minute backtest.
+    opt.execute({ coordinator: coord }).then(result => {
+      console.log('[coord/run-sweep] complete:', result && result.status);
+    }).catch(err => {
+      console.error('[coord/run-sweep] failed:', err.message);
+    });
+    res.json({ ok: true, started: true, runIdx: (opt._runIdx || 0) + 1 });
+  } catch (err) {
+    console.error('[coord/run-sweep] error:', err.message);
+    res.status(500).json({ error: 'Server error: ' + err.message });
+  }
+});
+
 module.exports = router;
