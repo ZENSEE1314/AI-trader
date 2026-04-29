@@ -1686,9 +1686,8 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
   validSignals.sort((a, b) => b.score - a.score);
   const best = validSignals[0];
 
-  // Add AI modifier
+  // AI modifier kept for logging only — does not affect signal execution
   const aiModifier = await aiLearner.getAIScoreModifier(symbol, best.setup, best.direction);
-  best.score = Math.round(best.score * aiModifier * 10) / 10;
   best.aiModifier = Math.round(aiModifier * 100) / 100;
 
   // Add leverage
@@ -1747,7 +1746,7 @@ async function scanSMC(log, opts = {}) {
   const topCoins = tickers.filter(t => ALLOWED_SYMBOLS.includes(t.symbol));
 
   const params = await aiLearner.getOptimalParams();
-  const minScore = params.MIN_SCORE || 7;
+  const minScore = 0; // no score gate — trade on structure only
 
   // ── Active version params from Admin Panel ───────────────────────────────
   // When admin activates a version (e.g. v3.42 94.7% WR), those params are
