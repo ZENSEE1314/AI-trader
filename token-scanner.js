@@ -6,7 +6,8 @@
 // Users pick tokens from the signal board to auto-trade.
 // ============================================================
 
-const { scanAI } = require('./ai-signal-scanner');
+// Strategy v2 is the active scanner. ai-signal-scanner (old rules) is kept but not called.
+const { scanV2 } = require('./strategy-v2');
 const { log: bLog } = require('./bot-logger');
 
 // In-memory signal board — refreshed every cycle
@@ -18,7 +19,7 @@ let lastScanAt = 0;
  * Returns { BTCUSDT: { direction, score, ... }, ... }
  */
 async function scanAllTokens(log, opts = {}) {
-  const signals = await scanAI(log, opts);
+  const signals = await scanV2(log instanceof Function ? log : msg => bLog.scan(msg));
 
   // Update signal board with fresh signals
   const now = Date.now();
@@ -31,18 +32,21 @@ async function scanAllTokens(log, opts = {}) {
     }
   }
 
-  // Add fresh signals
+  // Add fresh signals (v2 uses trailing SL, no fixed tp1)
   for (const s of signals) {
     signalBoard[s.symbol] = {
-      symbol: s.symbol,
-      direction: s.direction,
-      score: s.score,
-      setup: s.setupName,
-      sl: s.sl,
-      tp: s.tp1,
-      structure: s.structure,
-      status: 'signal',
-      ts: now,
+      symbol:    s.symbol,
+      direction: s.direction,     // 'LONG' | 'SHORT'
+      score:     s.score,
+      setup:     s.setupName,
+      sl:        s.sl,
+      tp:        null,            // no fixed TP — trailing SL manages exits
+      zone:      s.zone,
+      swing15:   s.swing15?.type,
+      confirm1m: s.confirm1m?.type,
+      version:   s.version,
+      status:    'signal',
+      ts:        now,
     };
   }
 

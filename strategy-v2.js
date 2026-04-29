@@ -1,372 +1,429 @@
-// ============================================================
-// Strategy V2 — Two-Step Swing Confirmation Entry
+// ═══════════════════════════════════════════════════════════════
+//  STRATEGY v2  —  Clean-sheet. Old rules (mct-strategy.js) are
+//  UNTOUCHED and still live.  This file is completely independent.
+// ═══════════════════════════════════════════════════════════════
 //
-// Step 1 — 15m chart: wait for a swing point to FORM.
-//   Swing HIGH formed (HH or LH) → bias = SHORT
-//   Swing LOW  formed (HL or LL) → bias = LONG
-//   Do NOT enter yet.
+//  STEP 1  ─  15m or 3m chart: swing point detection
+//    Swing HIGH forms (HH or LH)  →  SHORT bias
+//    Swing LOW  forms (HL or LL)  →  LONG  bias
+//    Do NOT enter yet — wait for Step 2.
 //
-// Step 2 — 1m chart: wait for a matching swing to confirm.
-//   LONG  bias → wait for 1m HL or LL → enter on the NEXT candle
-//   SHORT bias → wait for 1m HH or LH → enter on the NEXT candle
+//  STEP 2  ─  Drop to 1m chart for entry confirmation
+//    LONG  : HL or LL forms on 1m  →  enter on NEXT candle
+//    SHORT : HH or LH forms on 1m  →  enter on NEXT candle
 //
-// Stop Loss:  fixed at -15% of margin capital (leverage-adjusted price)
-// Trail:      activates at +30% capital profit → locks breakeven (0%)  [30% gap]
-//             then every +10% more capital → lock steps up 10%         [10% gap]
-//             30 → 0% | 40 → 30% | 50 → 40% | 60 → 50% | …
-// ============================================================
+//  VWAP BAND FILTER
+//    Price ≥ upper band (VWAP + 1σ)  →  LONG only
+//      (only HL or LL on 15m/3m accepted; HH/LH rejected)
+//    Price ≤ lower band (VWAP − 1σ)  →  SHORT only
+//      (only HH or LH on 15m/3m accepted; HL/LL rejected)
+//
+//  STOP LOSS & TRAILING
+//    Initial SL  = 30 % of position value
+//    Trailing activates at first +31 % profit
+//    After activation: SL = floor(profit% ÷ 10%) × 10%  (ratchets, never moves back)
+//
+//    Example — $100 position:
+//      Profit $31  →  SL locked at $30  (30 %)
+//      Profit $40  →  SL locked at $40  (40 %)
+//      Profit $50  →  SL locked at $50  (50 %)
+//      …every +$10 thereafter
+//
+// ═══════════════════════════════════════════════════════════════
+
+'use strict';
 
 const fetch = require('node-fetch');
-const { log: bLog } = require('./bot-logger');
-const { getMarketIntel, applyMarketIntel, heatmapToLevels } = require('./coinglass-data');
 
-// ── Constants ─────────────────────────────────────────────────
+const REQUEST_TIMEOUT = 15_000;
 
-const V2_SL_CAPITAL_PCT    = 0.15; // initial SL: -15% of margin
-const V2_TRAIL_START_PCT   = 0.20; // trail activates at +20% capital profit
-const V2_TRAIL_STEP_PCT    = 0.10; // trail steps every 10% capital gain
+// ── Fetch helpers ─────────────────────────────────────────────
 
-// Only accept 15m swing points formed within last N bars
-const SWING15_RECENCY_BARS = 8;
-// Only accept 1m confirmation swing within last N bars — tight so entry is close to the swing
-const SWING1_RECENCY_BARS  = 2;
-
-// ── Candle parser ─────────────────────────────────────────────
-
-function parseCandle(k) {
-  return {
-    open:      parseFloat(k[1]),
-    high:      parseFloat(k[2]),
-    low:       parseFloat(k[3]),
-    close:     parseFloat(k[4]),
-    volume:    parseFloat(k[5]),
-    openTime:  parseInt(k[0]),
-    closeTime: parseInt(k[6]),
-  };
-}
-
-// ── Fetch klines ──────────────────────────────────────────────
-
-async function fetchKlines(symbol, interval, limit = 100) {
-  try {
-    const url = `https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`;
-    const res = await fetch(url, { timeout: 8000 });
-    if (!res.ok) return null;
-    return res.json();
-  } catch (_) { return null; }
-}
-
-// ── Swing point detection ─────────────────────────────────────
-
-/**
- * Find all pivot highs and lows in a parsed candle array.
- * pivot = candle strictly higher/lower than N bars on each side.
- */
-function findPivots(parsed, bars = 2) {
-  const highs = [];
-  const lows  = [];
-  for (let i = bars; i < parsed.length - bars; i++) {
-    let isHigh = true;
-    let isLow  = true;
-    for (let j = 1; j <= bars; j++) {
-      if (parsed[i].high <= parsed[i - j].high || parsed[i].high <= parsed[i + j].high) isHigh = false;
-      if (parsed[i].low  >= parsed[i - j].low  || parsed[i].low  >= parsed[i + j].low)  isLow  = false;
-    }
-    if (isHigh) highs.push({ price: parsed[i].high, index: i });
-    if (isLow)  lows.push({ price: parsed[i].low,  index: i });
+async function fetchWithRetry(url, retries = 3) {
+  for (let i = 0; i < retries; i++) {
+    try {
+      const res = await fetch(url, { timeout: REQUEST_TIMEOUT });
+      if (res.ok) return res;
+    } catch (_) {}
+    if (i < retries - 1) await new Promise(r => setTimeout(r, 1000 * (i + 1)));
   }
-  return { highs, lows };
-}
-
-/**
- * Classify the most recent swing type relative to the previous one.
- * Returns 'HH' | 'LH' for highs, 'HL' | 'LL' for lows.
- */
-function classifySwing(pivots) {
-  if (pivots.length < 2) return null;
-  const last = pivots[pivots.length - 1];
-  const prev = pivots[pivots.length - 2];
-  return last.price > prev.price
-    ? (pivots === pivots ? 'HH_or_HL' : null)  // placeholder — caller differentiates
-    : 'LH_or_LL';
-}
-
-// ── Step 1: 15m swing bias ────────────────────────────────────
-
-/**
- * Scans 15m chart for the most recently formed swing point.
- * Returns { direction, swingType, swingPrice, barsAgo } or null.
- *
- * Swing HIGH (HH or LH) → direction = SHORT
- * Swing LOW  (HL or LL) → direction = LONG
- */
-function detect15mSwing(klines15m) {
-  if (!klines15m || klines15m.length < 20) return null;
-  const parsed = klines15m.map(parseCandle);
-  const total  = parsed.length;
-
-  const { highs, lows } = findPivots(parsed, 2);
-  if (!highs.length || !lows.length) return null;
-
-  const lastSH = highs[highs.length - 1];
-  const prevSH = highs.length >= 2 ? highs[highs.length - 2] : null;
-  const lastSL = lows[lows.length - 1];
-  const prevSL = lows.length >= 2  ? lows[lows.length - 2]  : null;
-
-  // Bars since each last swing formed (higher = older)
-  const shAge = total - 1 - lastSH.index;
-  const slAge = total - 1 - lastSL.index;
-
-  // Classify swing types
-  const shType = prevSH ? (lastSH.price > prevSH.price ? 'HH' : 'LH') : null;
-  const slType = prevSL ? (lastSL.price > prevSL.price ? 'HL' : 'LL') : null;
-
-  // Pick the more recently formed swing
-  const useHigh = shAge <= slAge && shType !== null;
-  const useLow  = slAge <  shAge && slType !== null;
-
-  if (useHigh) {
-    if (shAge > SWING15_RECENCY_BARS) return null; // too old
-    return {
-      direction:  'SHORT',
-      swingType:  shType,          // 'HH' or 'LH'
-      swingPrice: lastSH.price,
-      barsAgo:    shAge,
-    };
-  } else if (useLow) {
-    if (slAge > SWING15_RECENCY_BARS) return null;
-    return {
-      direction:  'LONG',
-      swingType:  slType,          // 'HL' or 'LL'
-      swingPrice: lastSL.price,
-      barsAgo:    slAge,
-    };
-  }
-
   return null;
 }
 
-// ── Step 2: 1m entry confirmation ────────────────────────────
-
-/**
- * Confirms the entry signal on the 1m chart.
- *
- * LONG  bias → look for 1m HL or LL → enter on NEXT (current) candle
- * SHORT bias → look for 1m HH or LH → enter on NEXT (current) candle
- *
- * Returns { entryPrice, sl, confirm1m } or null.
- */
-function detect1mEntry(klines1m, setupDirection, leverage) {
-  if (!klines1m || klines1m.length < 5) return null;
-  const parsed = klines1m.map(parseCandle);
-  const total  = parsed.length;
-
-  // The last candle is the ENTRY candle (the "next candle" after confirmation)
-  const entryCandleIdx = total - 1;
-  // Scan the candles BEFORE the entry candle for the confirmation swing
-  // We use a 1-bar pivot over the candles excluding the current forming candle
-  const { highs, lows } = findPivots(parsed.slice(0, entryCandleIdx), 1);
-
-  const entryPrice = parsed[entryCandleIdx].close;
-
-  if (setupDirection === 'LONG') {
-    // Need HL or LL on 1m
-    if (lows.length < 2) return null;
-    const lastSL = lows[lows.length - 1];
-    const prevSL = lows[lows.length - 2];
-    const barsAgo = (entryCandleIdx - 1) - lastSL.index; // relative to pre-entry slice
-    if (barsAgo > SWING1_RECENCY_BARS) return null;
-
-    const swingType = lastSL.price > prevSL.price ? 'HL' : 'LL';
-    // Deduct fees from SL budget so NET loss ≤ V2_SL_CAPITAL_PCT
-    const feesCapPct = 0.0008 * leverage; // 0.04% taker × 2 sides × leverage
-    const netSlPct   = Math.max(0, V2_SL_CAPITAL_PCT - feesCapPct) / leverage;
-    const slPrice    = entryPrice * (1 - netSlPct);
-
-    return {
-      entryPrice,
-      sl:       slPrice,
-      confirm1m: `1m_${swingType}`,
-      slStructure: lastSL.price, // actual 1m swing low (for reference)
-    };
-  } else {
-    // SHORT: need HH or LH on 1m
-    if (highs.length < 2) return null;
-    const lastSH = highs[highs.length - 1];
-    const prevSH = highs[highs.length - 2];
-    const barsAgo = (entryCandleIdx - 1) - lastSH.index;
-    if (barsAgo > SWING1_RECENCY_BARS) return null;
-
-    const swingType = lastSH.price > prevSH.price ? 'HH' : 'LH';
-    const feesCapPct = 0.0008 * leverage;
-    const netSlPct   = Math.max(0, V2_SL_CAPITAL_PCT - feesCapPct) / leverage;
-    const slPrice    = entryPrice * (1 + netSlPct);
-
-    return {
-      entryPrice,
-      sl:       slPrice,
-      confirm1m: `1m_${swingType}`,
-      slStructure: lastSH.price,
-    };
-  }
+async function fetchKlines(symbol, interval, limit = 100) {
+  const url =
+    `https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`;
+  const res = await fetchWithRetry(url);
+  if (!res) return null;
+  return res.json();
 }
 
-// ── VWAP midline direction gate ───────────────────────────────
-
-function getVwapBias(klines15m, price) {
-  if (!klines15m || klines15m.length < 3) return 'unknown';
-  const parsed = klines15m.map(parseCandle);
-  const now = new Date();
-  const dayStart = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
-  const today = parsed.filter(c => c.openTime >= dayStart);
-  const candles = today.length >= 3 ? today : parsed;
-
-  let cumTV = 0, cumV = 0;
-  for (const c of candles) {
-    const tp = (c.high + c.low + c.close) / 3;
-    cumTV += tp * c.volume;
-    cumV  += c.volume;
-  }
-  if (cumV === 0) return 'unknown';
-  const vwap = cumTV / cumV;
-  return price >= vwap ? 'above' : 'below';
+async function fetchTickers() {
+  const res = await fetchWithRetry('https://fapi.binance.com/fapi/v1/ticker/24hr');
+  if (!res) return [];
+  return res.json();
 }
 
-// ── Main signal detector ──────────────────────────────────────
+// ── VWAP + standard-deviation bands ──────────────────────────
+//   Computed from the supplied klines (use intraday 15m slice for session VWAP).
+//   Returns { vwap, upper1, lower1, upper2, lower2, stdDev } or null.
 
-/**
- * Full V2 signal pipeline for one symbol.
- * Returns signal object or null.
- */
-async function detectV2Signal(symbol, leverage = 20) {
-  const [klines15m, klines1m, marketIntel] = await Promise.all([
-    fetchKlines(symbol, '15m', 120),
-    fetchKlines(symbol, '1m',  30),
-    getMarketIntel(symbol),
-  ]);
+function calcVWAPBands(klines) {
+  let cumTPV  = 0;
+  let cumTPV2 = 0;
+  let cumVol  = 0;
 
-  if (!klines15m || !klines1m) return null;
-
-  const price = parseFloat(klines1m[klines1m.length - 1][4]); // last 1m close
-
-  // ── VWAP gate: above VWAP → LONG only · below VWAP → SHORT only ──
-  // Spikes are caught by detectMomentumBreakout (bypasses all gates) — not V2.
-  // V2 is a structure strategy and must respect VWAP direction.
-  const vwapBias = getVwapBias(klines15m, price);
-  if (vwapBias === 'unknown') return null;
-
-  // ── Step 1: 15m swing setup ───────────────────────────────────
-  const swing15 = detect15mSwing(klines15m);
-  if (!swing15) return null;
-
-  // Block direction against VWAP: above VWAP → no SHORT · below VWAP → no LONG
-  if (vwapBias === 'above' && swing15.direction === 'SHORT') return null;
-  if (vwapBias === 'below' && swing15.direction === 'LONG')  return null;
-
-  // ── Funding rate / OI hard block ──────────────────────────────
-  const intel = applyMarketIntel(marketIntel, swing15.direction);
-  if (intel.block) {
-    bLog.scan(`[V2] ${symbol} blocked: ${intel.block}`);
-    return null;
+  for (const k of klines) {
+    const hi  = parseFloat(k[2]);
+    const lo  = parseFloat(k[3]);
+    const cl  = parseFloat(k[4]);
+    const vol = parseFloat(k[5]);
+    const tp  = (hi + lo + cl) / 3;
+    cumTPV  += tp * vol;
+    cumTPV2 += tp * tp * vol;
+    cumVol  += vol;
   }
 
-  // ── Step 2: 1m entry confirmation ────────────────────────────
-  const entry = detect1mEntry(klines1m, swing15.direction, leverage);
-  if (!entry) return null;
+  if (cumVol === 0) return null;
 
-  // Reasonable SL distance check: 0.05% – 5% of price
-  const slDist = Math.abs(entry.entryPrice - entry.sl) / entry.entryPrice;
-  if (slDist < 0.0005 || slDist > 0.05) return null;
-
-  // Build signal
-  const setupName = `V2_${swing15.direction}_${swing15.swingType}_${entry.confirm1m}`;
-  const intelBonus = intel.scoreDelta;
-
-  // TP is not fixed — trail takes over. Use 2× SL as initial TP reference only.
-  const tp1 = swing15.direction === 'LONG'
-    ? entry.entryPrice * (1 + (slDist * 2))
-    : entry.entryPrice * (1 - (slDist * 2));
-
-  // Add liquidation cluster levels near entry as context
-  const liqLevels = heatmapToLevels(marketIntel?.heatmapLevels, price);
-  const nearLiq = liqLevels.find(l => Math.abs(l.price - entry.entryPrice) / entry.entryPrice < 0.005);
+  const vwap   = cumTPV / cumVol;
+  const stdDev = Math.sqrt(Math.max(0, cumTPV2 / cumVol - vwap * vwap));
 
   return {
-    symbol,
-    direction:   swing15.direction,
-    price:       entry.entryPrice,
-    sl:          entry.sl,
-    tp1,
-    slDist,
-    rr:          2.0, // trail takes over — 2:1 is the floor reference
-    score:       7 + intelBonus + (nearLiq ? 2 : 0),
-    setup:       'STRATEGY_V2',
-    setupName,
-    leverage,
-    structure: {
-      swing15:    `${swing15.swingType} @ ${swing15.swingPrice.toFixed(4)} (${swing15.barsAgo}bars ago)`,
-      confirm1m:  entry.confirm1m,
-      slStructure: entry.slStructure?.toFixed(4),
-      vwapBias,
-      fundingRate: marketIntel?.fundingRate ?? null,
-      oiTrend:     marketIntel?.oiTrend     ?? null,
-      lsRatio:     marketIntel?.longRatio   ? `L${(marketIntel.longRatio*100).toFixed(0)}%/S${(marketIntel.shortRatio*100).toFixed(0)}%` : null,
-      liqCluster:  nearLiq ? `$${(nearLiq.liqUsd/1e6).toFixed(1)}M @ ${nearLiq.price}` : null,
-      trailRule:   `SL=-${V2_SL_CAPITAL_PCT*100}%cap | trail@+${V2_TRAIL_START_PCT*100}%cap→BE | step+${V2_TRAIL_STEP_PCT*100}%cap | gap=${V2_TRAIL_GAP_PCT*100}%`,
-    },
+    vwap,
+    upper1: vwap + stdDev,
+    lower1: vwap - stdDev,
+    upper2: vwap + 2 * stdDev,
+    lower2: vwap - 2 * stdDev,
+    stdDev,
   };
 }
 
-// ── Trailing SL calculator (used by trail-watchdog) ───────────
+// ── Swing-point detection ─────────────────────────────────────
+//   A pivot HIGH at index i requires:
+//     highs[i] > highs[i±j] for j = 1..lookback
+//   Same rule inverted for pivot LOWs.
+//   Last `lookback` bars are excluded — they are not yet confirmed.
 
-/**
- * Trailing SL logic:
- *   - Activates at +20% capital profit → SL locked at +20% (profit stays yours)
- *   - Every +10% capital gain → SL steps up by 10%
- *
- *   +20%–29% capital profit → SL at +20%
- *   +30%–39%                → SL at +30%
- *   +40%–49%                → SL at +40%
- *   ... and so on. No gap — SL always equals the milestone you reached.
- *
- * Returns { newSl, milestone, capitalPct } if SL improves, else null.
- */
-function calcV2TrailSL(entryPrice, curPrice, isLong, leverage, currentSl) {
-  const pricePct = isLong
-    ? (curPrice - entryPrice) / entryPrice
-    : (entryPrice - curPrice) / entryPrice;
+function findSwings(klines, lookback = 2) {
+  const highs = klines.map(k => parseFloat(k[2]));
+  const lows  = klines.map(k => parseFloat(k[3]));
+  const n     = klines.length;
+
+  const swingHighs = [];
+  const swingLows  = [];
+
+  for (let i = lookback; i < n - lookback; i++) {
+    let isH = true;
+    let isL = true;
+    for (let j = 1; j <= lookback; j++) {
+      if (highs[i] <= highs[i - j] || highs[i] <= highs[i + j]) isH = false;
+      if (lows[i]  >= lows[i - j]  || lows[i]  >= lows[i + j])  isL = false;
+    }
+    if (isH) swingHighs.push({ idx: i, val: highs[i] });
+    if (isL) swingLows.push({ idx: i, val: lows[i] });
+  }
+
+  return { swingHighs, swingLows };
+}
+
+// ── Classify the most-recent confirmed swing ──────────────────
+//   Returns:
+//   {
+//     type:    'HH' | 'LH' | 'HL' | 'LL',
+//     val:      number,
+//     idx:      number,
+//     bias:    'long' | 'short',
+//     barsAgo:  number  (bars since pivot was CONFIRMED)
+//   }
+//   or null if not enough history.
+
+function classifyLastSwing(klines, lookback = 2) {
+  const n = klines.length;
+  const { swingHighs, swingLows } = findSwings(klines, lookback);
+
+  if (swingHighs.length === 0 && swingLows.length === 0) return null;
+
+  const lastH = swingHighs[swingHighs.length - 1] || null;
+  const lastL = swingLows[swingLows.length  - 1] || null;
+
+  let last;
+  let isHigh;
+
+  if      (!lastH)             { last = lastL; isHigh = false; }
+  else if (!lastL)             { last = lastH; isHigh = true;  }
+  else if (lastH.idx >= lastL.idx) { last = lastH; isHigh = true;  }
+  else                         { last = lastL; isHigh = false; }
+
+  let type;
+  if (isHigh) {
+    const prev = swingHighs[swingHighs.length - 2] || null;
+    type = (prev && last.val > prev.val) ? 'HH' : 'LH';
+  } else {
+    const prev = swingLows[swingLows.length - 2] || null;
+    type = (prev && last.val > prev.val) ? 'HL' : 'LL';
+  }
+
+  return {
+    type,
+    val:     last.val,
+    idx:     last.idx,
+    bias:    isHigh ? 'short' : 'long',
+    barsAgo: (n - 1) - last.idx,
+  };
+}
+
+// ── VWAP zone classifier ──────────────────────────────────────
+//   'upper' = at or above VWAP upper band  →  long zone
+//   'lower' = at or below VWAP lower band  →  short zone
+//   'middle' = between the bands
+
+function vwapZone(price, bands) {
+  if (!bands)                    return 'middle';
+  if (price >= bands.upper1)     return 'upper';
+  if (price <= bands.lower1)     return 'lower';
+  return 'middle';
+}
+
+// ── Trailing stop-loss price ──────────────────────────────────
+//   All percentages are CAPITAL % (P&L as % of margin = price% × leverage).
+//   This matches the user's example: "$100 margin, make $31 → SL to $30".
+//
+//   Initial SL:    30% capital loss  = 30%/leverage price move against entry
+//   Trail starts:  +31% capital gain = 31%/leverage price move in favor
+//   Lock step:     floor(capitalGain / 10%) × 10%  (ratchets, never moves back)
+//
+//   With leverage=10, entry=$2000, price at $2062 (+3.1% = +31% capital):
+//     → lockCapPct = 0.30 → SL at entry + 3.0% = $2060
+//   With price at $2080 (+4.0% = +40% capital):
+//     → lockCapPct = 0.40 → SL at entry + 4.0% = $2080
+//
+//   leverage defaults to 1 (treat pct as direct position % — matches user examples).
+
+function calcTrailingSL(entryPrice, currentPrice, side, leverage = 1) {
+  const pricePct =
+    side === 'LONG'
+      ? (currentPrice - entryPrice) / entryPrice
+      : (entryPrice - currentPrice) / entryPrice;
+
+  // Convert to capital % relative to margin
   const capitalPct = pricePct * leverage;
 
-  // Trail hasn't activated yet — needs at least +20% capital profit
-  if (capitalPct < V2_TRAIL_START_PCT) return null;
+  const INITIAL_SL_CAP = 0.30; // 30% capital = initial stop
+  const TRAIL_ON_CAP   = 0.31; // trailing kicks in at +31% capital
 
-  // Milestone = floor of current profit in 10% steps — no gap.
-  // NOTE: integer arithmetic avoids Math.floor(0.40/0.10) = 3.9999 edge case.
-  const stepsRaw  = Math.floor(Math.round(capitalPct * 1000) / Math.round(V2_TRAIL_STEP_PCT * 1000));
-  const milestone = stepsRaw * V2_TRAIL_STEP_PCT; // e.g. +20%→0.20, +30%→0.30
+  if (capitalPct < TRAIL_ON_CAP) {
+    // Initial SL: 30% capital loss → convert back to price
+    const slPricePct = INITIAL_SL_CAP / leverage;
+    return side === 'LONG'
+      ? entryPrice * (1 - slPricePct)
+      : entryPrice * (1 + slPricePct);
+  }
 
-  // Convert capital % milestone → actual price
-  const milestonePrice = isLong
-    ? entryPrice * (1 + milestone / leverage)
-    : entryPrice * (1 - milestone / leverage);
+  // Lock: floor(capitalPct / 0.10) × 0.10
+  //   0.31 → 0.30 | 0.40 → 0.40 | 0.41 → 0.40 | 0.50 → 0.50 …
+  const lockCapPct   = Math.floor(capitalPct * 10) / 10;
+  const lockPricePct = lockCapPct / leverage;
 
-  // Only move SL if it improves on what's already set.
-  // currentSl = 0 → no SL set yet, treat as worst-case so first milestone always writes.
-  const effectiveSl = currentSl === 0
-    ? (isLong ? -Infinity : Infinity)
-    : currentSl;
-  if (isLong  && milestonePrice <= effectiveSl) return null;
-  if (!isLong && milestonePrice >= effectiveSl) return null;
+  return side === 'LONG'
+    ? entryPrice * (1 + lockPricePct)
+    : entryPrice * (1 - lockPricePct);
+}
 
-  return { newSl: milestonePrice, milestone, capitalPct };
+// ── Signal scoring (0 – 20) ───────────────────────────────────
+
+function scoreSignal({ swing15, swing3, confirm1m, zone, biasMatchesZone }) {
+  let s = 0;
+
+  // Step 1: 15m swing
+  if (swing15) {
+    s += 5;
+    if (swing15.barsAgo <= 3)      s += 3; // ≤ 45 min ago
+    else if (swing15.barsAgo <= 7) s += 1;
+  }
+
+  // Step 1 (optional): 3m swing alignment
+  if (swing3 && swing3.bias === swing15?.bias) {
+    s += 3;
+    if (swing3.barsAgo <= 4) s += 1; // ≤ 12 min ago
+  }
+
+  // Step 2: 1m confirmation
+  if (confirm1m) {
+    s += 5;
+    if (confirm1m.barsAgo <= 2)      s += 2; // entered fresh
+    else if (confirm1m.barsAgo <= 4) s += 1;
+  }
+
+  // VWAP zone bonus
+  if (biasMatchesZone && zone !== 'middle') s += 1;
+
+  return Math.min(s, 20);
+}
+
+// ── Analyze one symbol ────────────────────────────────────────
+
+async function analyzeV2(ticker) {
+  try {
+    const symbol = ticker.symbol;
+    const price  = parseFloat(ticker.lastPrice);
+
+    // Fetch all needed timeframes in parallel
+    const [klines15m, klines3m, klines1m] = await Promise.all([
+      fetchKlines(symbol, '15m', 100),
+      fetchKlines(symbol, '3m',  100),
+      fetchKlines(symbol, '1m',   30),
+    ]);
+
+    if (!klines15m || klines15m.length < 20) return null;
+    if (!klines3m  || klines3m.length  < 20) return null;
+    if (!klines1m  || klines1m.length  < 10) return null;
+
+    // ── VWAP bands from last 96 × 15m bars (≈ 24 h of session data) ──
+    const bands = calcVWAPBands(klines15m.slice(-96));
+    if (!bands) return null;
+
+    const zone = vwapZone(price, bands);
+
+    // ── STEP 1: 15m swing ──────────────────────────────────────
+    const swing15 = classifyLastSwing(klines15m, 2);
+    if (!swing15) return null;
+
+    // Must be fresh (≤ 12 bars = 3 hours on 15m)
+    if (swing15.barsAgo > 12) return null;
+
+    const bias = swing15.bias; // 'long' | 'short'
+
+    // VWAP band hard filter
+    //   upper band → only accept swing LOWs (HL/LL) on 15m for LONG
+    //   lower band → only accept swing HIGHs (HH/LH) on 15m for SHORT
+    if (zone === 'upper' && bias !== 'long')  return null;
+    if (zone === 'lower' && bias !== 'short') return null;
+
+    // ── STEP 1 (optional): 3m alignment ───────────────────────
+    const swing3 = classifyLastSwing(klines3m, 2);
+    // 3m is optional — used only for scoring
+
+    const biasMatchesZone =
+      (zone === 'upper' && bias === 'long') ||
+      (zone === 'lower' && bias === 'short') ||
+      zone === 'middle';
+
+    // ── STEP 2: 1m confirmation ────────────────────────────────
+    //   LONG  → need swing LOW  (HL or LL) on 1m
+    //   SHORT → need swing HIGH (HH or LH) on 1m
+    const confirm1m = classifyLastSwing(klines1m, 2);
+    if (!confirm1m) return null;
+
+    // 1m swing must agree with bias
+    if (confirm1m.bias !== bias) return null;
+
+    // 1m confirmation must be very fresh (≤ 5 bars = 5 minutes)
+    if (confirm1m.barsAgo > 5) return null;
+
+    // ── Entry: current price (= "next candle" after confirmation) ──
+    const side  = bias === 'long' ? 'LONG' : 'SHORT';
+    const entry = price;
+
+    const INITIAL_SL_PCT = 0.30;
+    const sl = side === 'LONG'
+      ? entry * (1 - INITIAL_SL_PCT)
+      : entry * (1 + INITIAL_SL_PCT);
+
+    // ── Score ──────────────────────────────────────────────────
+    const score = scoreSignal({ swing15, swing3, confirm1m, zone, biasMatchesZone });
+    if (score < 8) return null; // minimum confluence required
+
+    // ── Build setup label ──────────────────────────────────────
+    const parts = [`${swing15.type}@15m`];
+    if (swing3 && swing3.bias === bias) parts.push(`${swing3.type}@3m`);
+    parts.push(`${confirm1m.type}@1m`);
+    if (zone !== 'middle') parts.push(`VWAP-${zone}`);
+    const setupName = parts.join(' + ');
+
+    return {
+      symbol,
+      lastPrice:  price,
+      signal:     side === 'LONG' ? 'BUY' : 'SELL',
+      side,
+      entry,
+      sl,
+      slPct:      (INITIAL_SL_PCT * 100).toFixed(1),
+
+      // Trailing SL config — consumed by the position manager in bot.js
+      trailConfig: {
+        startPct:     0.31,  // start trailing at +31 % profit
+        stepPct:      0.10,  // lock step every +10 %
+        initialSLPct: 0.30,  // initial SL distance
+      },
+
+      setupName,
+      score,
+
+      // cycle.js compatibility aliases
+      direction: side,        // 'LONG' | 'SHORT'
+      tp1:       null,        // no fixed TP — position runs on trailing SL
+      tp2:       null,
+      tp3:       null,
+
+      // Diagnostic fields
+      swing15:   { type: swing15.type,   val: swing15.val,   barsAgo: swing15.barsAgo   },
+      swing3:    swing3 ? { type: swing3.type, val: swing3.val, barsAgo: swing3.barsAgo } : null,
+      confirm1m: { type: confirm1m.type, val: confirm1m.val, barsAgo: confirm1m.barsAgo },
+
+      vwap:   bands.vwap,
+      vwapU1: bands.upper1,
+      vwapL1: bands.lower1,
+      zone,
+
+      chg24h:    parseFloat(ticker.priceChangePercent),
+      timeframe: '15m/3m+1m',
+      version:   'v2',
+    };
+
+  } catch (_) {
+    return null;
+  }
+}
+
+// ── Main scan ─────────────────────────────────────────────────
+
+async function scanV2(log = console.log) {
+  const tickers = await fetchTickers();
+  if (!tickers.length) {
+    log('v2: failed to fetch tickers');
+    return [];
+  }
+
+  // Top 30 futures by 24h quote volume, min $100M
+  const top30 = tickers
+    .filter(t => t.symbol.endsWith('USDT') && !t.symbol.includes('_'))
+    .filter(t => parseFloat(t.quoteVolume) > 100e6)
+    .sort((a, b) => parseFloat(b.quoteVolume) - parseFloat(a.quoteVolume))
+    .slice(0, 30);
+
+  log(`v2: scanning ${top30.length} symbols…`);
+
+  const results = [];
+  for (const ticker of top30) {
+    const sig = await analyzeV2(ticker);
+    if (sig) {
+      results.push(sig);
+      log(`  ✓ ${sig.symbol} ${sig.side} score=${sig.score} — ${sig.setupName}`);
+    }
+    await new Promise(r => setTimeout(r, 200)); // rate-limit buffer
+  }
+
+  results.sort((a, b) => b.score - a.score);
+  log(`v2: ${results.length} signal(s) found`);
+  return results.slice(0, 3); // max 3 per scan cycle
 }
 
 module.exports = {
-  detectV2Signal,
-  detect15mSwing,
-  detect1mEntry,
-  calcV2TrailSL,
-  V2_SL_CAPITAL_PCT,
-  V2_TRAIL_START_PCT,
-  V2_TRAIL_STEP_PCT,
+  scanV2,
+  analyzeV2,
+  calcTrailingSL,
+  calcVWAPBands,
+  classifyLastSwing,
+  findSwings,
 };

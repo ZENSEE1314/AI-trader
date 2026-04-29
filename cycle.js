@@ -8,6 +8,8 @@ const { USDMClient } = require('binance');
 const fetch = require('node-fetch');
 const aiLearner = require('./ai-learner');
 const { detectSwings, SWING_LENGTHS, scanSMC } = require('./liquidity-sweep-engine');
+// Strategy v2: swing-point + VWAP-band + 30% trailing SL (replaces scanSMC as active scanner)
+const { scanV2, calcTrailingSL: calcV2TrailingSL } = require('./strategy-v2');
 // NOTE: Triple MA / Spike-HL / T-Junction / MA Stack / AI Scanner exit logic
 // is still referenced below for open trades that may have been entered under
 // those strategies. Do not remove these imports.
@@ -716,6 +718,8 @@ async function openTrade(client, pick, wallet) {
     trailingSlLastStep: 0,
     leverage,
     vwapZone: pick.vwapBandPos || null,
+    // v2 flag: use swing-point 30%/31% trailing logic instead of capital-tier logic
+    strategyVersion: pick.version || null,
   });
 
   // Auto-clear per-token direction override — it was one-shot, trade is now open
@@ -970,11 +974,33 @@ async function checkTrailingStop(client) {
       }
 
       // ── Trailing SL step check ──
-      const trailResult = calculateTrailingStep(
-        state.entry, cur, state.isLong,
-        state.trailingSlLastStep || 0,
-        state.leverage || 20
-      );
+      // v2 trades use swing-point 30%/31% trailing; all others use capital-tier logic.
+      let trailResult;
+      if (state.strategyVersion === 'v2') {
+        const side       = state.isLong ? 'LONG' : 'SHORT';
+        const lev        = state.leverage || 20;
+        const newSlPrice = calcV2TrailingSL(state.entry, cur, side, lev);
+        // Only update SL if it improves (ratchet — never move against trade)
+        const betterSl = state.isLong
+          ? newSlPrice > (state.trailingSlPrice || 0)
+          : newSlPrice < (state.trailingSlPrice || Infinity);
+        if (betterSl && newSlPrice !== state.trailingSlPrice) {
+          // Map SL price back to capital-lock % for logging/DB compatibility
+          const pricePct = state.isLong
+            ? (newSlPrice - state.entry) / state.entry
+            : (state.entry - newSlPrice) / state.entry;
+          const capPct = pricePct * lev;
+          trailResult = { newSlPrice, newLastStep: Math.max(0, capPct) };
+        } else {
+          trailResult = null;
+        }
+      } else {
+        trailResult = calculateTrailingStep(
+          state.entry, cur, state.isLong,
+          state.trailingSlLastStep || 0,
+          state.leverage || 20
+        );
+      }
 
       if (trailResult) {
         const { newSlPrice, newLastStep } = trailResult;
@@ -1193,22 +1219,22 @@ async function main() {
       bLog.error(`Kronos batch scan failed (non-blocking): ${kronosBatchErr.message}`);
     }
 
-    // SMC Strategy Engine — sole active strategy.
-    // 9 setups: Liquidity Sweep, SL Hunt, Momentum Scalp, BRR, SMC Classic,
-    // SMC HL Structure, Range Bounce, Consol Rejection, VWAP Rejection.
-    // Runs 24/7, score-filtered. strategyWinRate bypasses backtest gate.
+    // ── Strategy v2 — Swing-Point + VWAP-Band + 30% Trailing SL ──
+    // Step 1: 15m/3m swing point bias. Step 2: 1m entry confirmation.
+    // No fixed TP — trailing SL starts at +31%, locks every +10%.
+    // (Old scanSMC is preserved in liquidity-sweep-engine.js but NOT called here)
     let smcSignals = [];
     try {
-      const rawSmc = await scanSMC(log);
-      smcSignals = (rawSmc || []).map(s => ({
+      const rawV2 = await scanV2(msg => bLog.scan(msg));
+      smcSignals = (rawV2 || []).map(s => ({
         ...s,
-        strategyWinRate: s.score >= 10 ? 70 : 60,
+        strategyWinRate: s.score >= 12 ? 70 : 60,
       }));
       if (smcSignals.length > 0) {
-        bLog.scan(`SMC Engine: ${smcSignals.length} signal(s) — ${smcSignals.map(s => `${s.symbol} ${s.direction} [${s.setupName}] score=${s.score}`).join(', ')}`);
+        bLog.scan(`v2 Engine: ${smcSignals.length} signal(s) — ${smcSignals.map(s => `${s.symbol} ${s.direction} [${s.setupName}] score=${s.score}`).join(', ')}`);
       }
-    } catch (smcErr) {
-      bLog.error(`SMC Engine scan failed (non-blocking): ${smcErr.message}`);
+    } catch (v2Err) {
+      bLog.error(`v2 Engine scan failed (non-blocking): ${v2Err.message}`);
     }
 
     const signals = [...smcSignals];
@@ -1243,7 +1269,7 @@ async function main() {
     let executed = false;
     for (const pick of dedupedSignals) {
       log(`Signal: ${pick.symbol} ${pick.direction} score=${pick.score} setup=${pick.setupName} AI=${pick.aiModifier ?? 'n/a'}`);
-      bLog.trade(`TRYING: ${pick.symbol} ${pick.direction} | setup=${pick.setupName} score=${pick.score} | TP=$${fmtPrice(pick.tp1)} SL=$${fmtPrice(pick.sl)} | RR=1:1.5`);
+      bLog.trade(`TRYING: ${pick.symbol} ${pick.direction} | setup=${pick.setupName} score=${pick.score} | TP=${pick.tp1 ? `$${fmtPrice(pick.tp1)}` : 'trailing'} SL=$${fmtPrice(pick.sl)} | RR=1:1.5`);
 
       // Check global token ban
       if (await isTokenBanned(pick.symbol || pick.sym)) {

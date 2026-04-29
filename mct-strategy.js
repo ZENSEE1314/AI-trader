@@ -129,6 +129,117 @@ function findSwingPoints(klines, lookback = 5) {
   return { swingHighs, swingLows };
 }
 
+// ── SMC Market Structure: CHoCH + HL/LH Setup ───────────────
+// Detects: downtrend (LH+LL) → CHoCH break → HL pullback → LONG entry
+//          uptrend  (HH+HL) → CHoCH break → LH rally  → SHORT entry
+
+function detectStructureSetup(klines) {
+  const n = klines.length;
+  if (n < 20) return null;
+
+  const highs  = klines.map(k => parseFloat(k[2]));
+  const lows   = klines.map(k => parseFloat(k[3]));
+  const closes = klines.map(k => parseFloat(k[4]));
+
+  // Look at the last 60 bars for structure
+  const windowStart = Math.max(0, n - 60);
+  const LB = 2; // relaxed lookback — allows detecting LH even when breakout bar is higher
+
+  // Pivot highs and lows within the window (scan up to n-LB so we don't look past end)
+  const localHighs = [];
+  const localLows  = [];
+  for (let i = windowStart + LB; i < n - LB; i++) {
+    let isH = true, isL = true;
+    for (let j = 1; j <= LB; j++) {
+      if (highs[i] <= highs[i - j] || highs[i] <= highs[i + j]) isH = false;
+      if (lows[i]  >= lows[i - j]  || lows[i]  >= lows[i + j])  isL = false;
+    }
+    if (isH) localHighs.push({ idx: i, val: highs[i] });
+    if (isL) localLows.push({ idx: i, val: lows[i] });
+  }
+
+  const curClose = closes[n - 1];
+
+  // ── Bullish CHoCH + HL ────────────────────────────────────
+  // Find: a local high (LH) that price later closed above (CHoCH break),
+  // followed by a pullback that stays ABOVE the prior structural low.
+  for (let hi = localHighs.length - 1; hi >= 0; hi--) {
+    const lhPivot = localHighs[hi];
+
+    // Need a structural low BEFORE this LH (the LL that preceded it)
+    const priorLows = localLows.filter(l => l.idx < lhPivot.idx);
+    if (priorLows.length === 0) continue;
+    const structLow = priorLows[priorLows.length - 1]; // most recent low before the LH
+
+    // CHoCH break: first close ABOVE lhPivot.val after it formed
+    let chochBreakIdx = -1;
+    for (let k = lhPivot.idx + 1; k < n; k++) {
+      if (closes[k] > lhPivot.val) { chochBreakIdx = k; break; }
+    }
+    if (chochBreakIdx < 0) continue; // price never broke above → not a CHoCH yet
+
+    // Post-CHoCH pullback: lowest low from the break bar onward
+    let pullbackLow = Infinity;
+    let pullbackLowIdx = chochBreakIdx;
+    for (let k = chochBreakIdx; k < n; k++) {
+      if (lows[k] < pullbackLow) { pullbackLow = lows[k]; pullbackLowIdx = k; }
+    }
+
+    // HL validation: pullback must stay ABOVE structural low (not break structure)
+    if (pullbackLow <= structLow.val) continue;
+
+    // Are we currently at or near the HL zone?
+    const atHL  = curClose >= pullbackLow * 0.994 && curClose <= pullbackLow * 1.025;
+    const hlNew = (n - 1 - pullbackLowIdx) <= 8 && curClose > pullbackLow;
+
+    if (atHL || hlNew) {
+      return {
+        type:        'bullish_hl',
+        chochLevel:  lhPivot.val,
+        hlLevel:     pullbackLow,
+        structureLow: structLow.val,
+      };
+    }
+  }
+
+  // ── Bearish CHoCH + LH ────────────────────────────────────
+  for (let li = localLows.length - 1; li >= 0; li--) {
+    const hlPivot = localLows[li];
+
+    const priorHighs = localHighs.filter(h => h.idx < hlPivot.idx);
+    if (priorHighs.length === 0) continue;
+    const structHigh = priorHighs[priorHighs.length - 1];
+
+    let chochBreakIdx = -1;
+    for (let k = hlPivot.idx + 1; k < n; k++) {
+      if (closes[k] < hlPivot.val) { chochBreakIdx = k; break; }
+    }
+    if (chochBreakIdx < 0) continue;
+
+    let rallyHigh = -Infinity;
+    let rallyHighIdx = chochBreakIdx;
+    for (let k = chochBreakIdx; k < n; k++) {
+      if (highs[k] > rallyHigh) { rallyHigh = highs[k]; rallyHighIdx = k; }
+    }
+
+    if (rallyHigh >= structHigh.val) continue; // invalidated
+
+    const atLH  = curClose <= rallyHigh * 1.006 && curClose >= rallyHigh * 0.975;
+    const lhNew = (n - 1 - rallyHighIdx) <= 8 && curClose < rallyHigh;
+
+    if (atLH || lhNew) {
+      return {
+        type:          'bearish_lh',
+        chochLevel:    hlPivot.val,
+        lhLevel:       rallyHigh,
+        structureHigh: structHigh.val,
+      };
+    }
+  }
+
+  return null;
+}
+
 // ── Engulfing / Rejection Candle Detection ───────────────────
 
 function hasRejection(klines, idx) {
@@ -227,7 +338,10 @@ async function analyzeMCT(ticker) {
     const aboveOP = price > levels.op;
     const aboveVWAP = price > vwap;
     const bias = (aboveOP && aboveVWAP) ? 'long' : (!aboveOP && !aboveVWAP) ? 'short' : 'neutral';
-    if (bias === 'neutral') return null; // MCT rule: don't trade between VWAP and OP
+
+    // ── SMC structure setup (runs before classic bias filter) ──
+    // CHoCH + HL/LH doesn't need price to be above VWAP/OP — the HL IS a pullback
+    const smcSetup = detectStructureSetup(klines15m);
 
     // ── EMA 200 trend guide ──
     const closes15m = klines15m.map(k => parseFloat(k[4]));
@@ -237,22 +351,22 @@ async function analyzeMCT(ticker) {
     // ── RSI ──
     const rsi = calcRSI(closes15m);
 
-    // RSI divergence check (bearish div = price making HH but RSI making LH)
-    // Simplified: if RSI > 70 and bias is long, be cautious
-    if (bias === 'long' && rsi > 75) return null;
-    if (bias === 'short' && rsi < 25) return null;
-
     // ── ATR for SL sizing ──
     const atr = calcATR(klines15m, 14) || price * 0.01;
 
     // ── Swing Points on 15m for SL placement ──
     const swings = findSwingPoints(klines15m, 3);
 
+    // ── Check 1m candles for confirmation ──
+    const lastIdx = klines1m.length - 1;
+    const rejection1m = hasRejection(klines1m, lastIdx);
+    const volSpike1m = hasVolumeSpike(klines1m, lastIdx);
+
     // ── Check which setup applies ──
     let setup = null;
     let entry = price;
     let sl = null;
-    let direction = bias === 'long' ? 'LONG' : 'SHORT';
+    let direction = bias === 'long' ? 'LONG' : bias === 'short' ? 'SHORT' : null;
     let setupName = '';
     let score = 0;
 
@@ -266,28 +380,63 @@ async function analyzeMCT(ticker) {
 
     const proximity = atr * 1.5; // how close price needs to be to a key level
 
-    // Find nearest key level
-    let nearestLevel = null;
-    let nearestDist = Infinity;
-    for (const lv of keyLevelArr) {
-      const dist = Math.abs(price - lv.val);
-      if (dist < nearestDist) {
-        nearestDist = dist;
-        nearestLevel = lv;
+    // ── Setup 4: CHoCH + HL / LH (SMC Structure) ─────────────
+    // Runs FIRST — bypasses VWAP/OP bias filter (HL is a pullback, price may be neutral)
+    // Also bypasses key-level proximity (the HL itself is the entry zone)
+    if (smcSetup) {
+      if (smcSetup.type === 'bullish_hl' && (rejection1m === 'bullish' || volSpike1m)) {
+        // Don't enter if price has already invalidated the HL (below structure low)
+        if (price > smcSetup.structureLow) {
+          direction = 'LONG';
+          setup = 'choch_hl';
+          setupName = `CHoCH+HL (SMC) — HL $${smcSetup.hlLevel.toFixed(2)}, CHoCH $${smcSetup.chochLevel.toFixed(2)}`;
+          entry = price;
+          sl = smcSetup.hlLevel - atr * 0.5; // SL below the HL
+          score = 10;
+          if (volSpike1m) score += 2;
+          if (rejection1m === 'bullish') score += 2;
+          if (aboveVWAP) score += 1;  // bonus: HL held and bouncing above VWAP
+          if (rsi < 65) score += 1;   // bonus: RSI not overbought at entry
+        }
+      }
+      if (!setup && smcSetup.type === 'bearish_lh' && (rejection1m === 'bearish' || volSpike1m)) {
+        if (price < smcSetup.structureHigh) {
+          direction = 'SHORT';
+          setup = 'choch_lh';
+          setupName = `CHoCH+LH (SMC) — LH $${smcSetup.lhLevel.toFixed(2)}, CHoCH $${smcSetup.chochLevel.toFixed(2)}`;
+          entry = price;
+          sl = smcSetup.lhLevel + atr * 0.5; // SL above the LH
+          score = 10;
+          if (volSpike1m) score += 2;
+          if (rejection1m === 'bearish') score += 2;
+          if (!aboveVWAP) score += 1;
+          if (rsi > 35) score += 1;
+        }
       }
     }
 
-    // MCT rule: don't enter if not near key levels
-    if (!nearestLevel || nearestDist > proximity * 2) return null;
+    // Classic MCT bias + proximity filters (only for setups 1–3)
+    if (!setup) {
+      // Neutral bias = price between VWAP and OP → skip classic setups
+      if (bias === 'neutral') return null;
 
-    // ── Check 1m candles for confirmation ──
-    const lastIdx = klines1m.length - 1;
-    const rejection1m = hasRejection(klines1m, lastIdx);
-    const volSpike1m = hasVolumeSpike(klines1m, lastIdx);
+      // RSI extreme check (only for classic setups)
+      if (bias === 'long' && rsi > 75) return null;
+      if (bias === 'short' && rsi < 25) return null;
+
+      // Must be near a key level for classic setups
+      let nearestLevel = null;
+      let nearestDist = Infinity;
+      for (const lv of keyLevelArr) {
+        const dist = Math.abs(price - lv.val);
+        if (dist < nearestDist) { nearestDist = dist; nearestLevel = lv; }
+      }
+      if (!nearestLevel || nearestDist > proximity * 2) return null;
+    }
 
     // ── Setup 1: Break and Retest ──
     // Price broke a key level and is retesting it
-    for (const lv of keyLevelArr) {
+    for (const lv of (!setup ? keyLevelArr : [])) {
       const dist = Math.abs(price - lv.val);
       if (dist > proximity) continue;
 

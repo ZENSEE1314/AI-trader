@@ -1,688 +1,874 @@
-// ── MCT Trading Floor — Multi-Room Pixel Art ─────────────────────────────
-// Characters walk between three rooms: Trading Desk, Meeting Room, Break Room.
-// Behavior is driven by live open-position state from the bot.
-// Canvas-only, no external assets.
-
-(function (global) {
+/**
+ * Trading Floor — pixel-agents engine adapted for vanilla browser JS
+ * Based on: https://github.com/pablodelucca/pixel-agents
+ *
+ * Characters: BTC / ETH / SOL / BNB agents with full walking/typing/idle
+ * state machine, BFS pathfinding, and z-sorted rendering.
+ * Active = open position (isActive=true → sit at desk typing).
+ * Inactive = no position (isActive=false → wander the office).
+ */
+(function () {
   'use strict';
 
-  // ── Config ────────────────────────────────────────────────────────────────
-  const SCALE  = 4;    // sprite pixel → canvas pixel
-  const SPEED  = 1.8;  // canvas px per frame when walking
-  const FPS_ANIM = 8;  // walk-frame changes per second (at 60fps = every 7-8 ticks)
+  // ════════════════════════════════════════════════════════════
+  // Constants  (pixel-agents/src/constants.ts)
+  // ════════════════════════════════════════════════════════════
+  const TILE_SIZE              = 16;
+  const WALK_SPEED             = 48;    // px / sec
+  const WALK_FRAME_DUR         = 0.15;  // sec per walk frame
+  const TYPE_FRAME_DUR         = 0.30;  // sec per typing frame
+  const WANDER_PAUSE_MIN       = 2.0;
+  const WANDER_PAUSE_MAX       = 20.0;
+  const WANDER_MOVES_MIN       = 3;
+  const WANDER_MOVES_MAX       = 6;
+  const SEAT_REST_MIN          = 25.0;
+  const SEAT_REST_MAX          = 70.0;
+  const CHAR_SIT_OFFSET        = 6;     // px down when seated
+  const CHAR_Z_OFFSET          = 0.5;
+  const MAX_DT                 = 0.10;
 
-  const TOKENS = [
-    { symbol: 'BTCUSDT', label: 'BTC', shirt: '#f7931a', shirtD: '#c87817', hair: '#3d2b1f', hairD: '#291a10' },
-    { symbol: 'ETHUSDT', label: 'ETH', shirt: '#627eea', shirtD: '#4a60c4', hair: '#111',    hairD: '#000'    },
-    { symbol: 'SOLUSDT', label: 'SOL', shirt: '#14f195', shirtD: '#0db87a', hair: '#1a1a2e', hairD: '#0d0d1f' },
-    { symbol: 'BNBUSDT', label: 'BNB', shirt: '#f3ba2f', shirtD: '#d9a520', hair: '#5c3d00', hairD: '#3d2900' },
+  // Character state enum  (pixel-agents types.ts)
+  const CS  = { IDLE: 'idle', WALK: 'walk', TYPE: 'type' };
+  // Direction enum — matches pixel-agents exactly
+  const Dir = { DOWN: 0, LEFT: 1, RIGHT: 2, UP: 3 };
+
+  // PNG sprite-sheet layout for each char_N.png  (112 × 96 px)
+  // Frame row by direction:  down=0 (y=0), up=1 (y=32), right=2 (y=64)
+  // Frames per row (7 × 16 px wide):
+  //   0,1,2 = walk   3,4 = typing   5,6 = reading
+  // LEFT direction = horizontal flip of RIGHT frames
+  const WALK_FRAME_IDX = [0, 1, 2, 1]; // 4-step walk cycle
+
+  // ════════════════════════════════════════════════════════════
+  // Office tile map  (20 cols × 11 rows)
+  // ════════════════════════════════════════════════════════════
+  const COLS = 20, ROWS = 11;
+  const W = 0, F = 1; // TileType: WALL=0, FLOOR=1
+
+  /*
+    Layout diagram (. = floor, # = wall, | = internal wall, D = doorway)
+    Col:  0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17 18 19
+    r 0:  #  #  #  #  #  #  #  #  #  #  #  #  #  #  #  #  #  #  #  #
+    r 1:  #  .  .  .  .  .  .  .  .  |  .  .  .  .  .  .  .  .  .  #
+    r 2:  #  .  .  .  .  .  .  .  .  |  .  .  .  .  .  .  .  .  .  #
+    r 3:  #  .  .  .  .  .  .  .  .  |  .  .  .  .  .  .  .  .  .  #
+    r 4:  #  .  .  .  .  .  .  .  .  D  .  .  .  .  .  .  .  .  .  #   doorway
+    r 5:  #  .  .  .  .  .  .  .  .  D  .  .  .  .  .  .  .  .  .  #   doorway
+    r 6:  #  .  .  .  .  .  .  .  .  |  .  .  .  .  .  .  .  .  .  #
+    r 7:  #  .  .  .  .  .  .  .  .  |  .  .  .  .  .  .  .  .  .  #
+    r 8:  #  .  .  .  .  .  .  .  .  |  .  .  .  .  .  .  .  .  .  #
+    r 9:  #  .  .  .  .  .  .  .  .  |  .  .  .  .  .  .  .  .  .  #
+    r10:  #  #  #  #  #  #  #  #  #  #  #  #  #  #  #  #  #  #  #  #
+  */
+  // prettier-ignore
+  const TILE_FLAT = [
+    W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,  // row 0
+    W,F,F,F,F,F,F,F,F,W,F,F,F,F,F,F,F,F,F,W,  // row 1
+    W,F,F,F,F,F,F,F,F,W,F,F,F,F,F,F,F,F,F,W,  // row 2
+    W,F,F,F,F,F,F,F,F,W,F,F,F,F,F,F,F,F,F,W,  // row 3
+    W,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,W,  // row 4  doorway
+    W,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,W,  // row 5  doorway
+    W,F,F,F,F,F,F,F,F,W,F,F,F,F,F,F,F,F,F,W,  // row 6
+    W,F,F,F,F,F,F,F,F,W,F,F,F,F,F,F,F,F,F,W,  // row 7
+    W,F,F,F,F,F,F,F,F,W,F,F,F,F,F,F,F,F,F,W,  // row 8
+    W,F,F,F,F,F,F,F,F,W,F,F,F,F,F,F,F,F,F,W,  // row 9
+    W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,  // row 10
   ];
 
-  // ── Palette ───────────────────────────────────────────────────────────────
-  const C = {
-    skin: '#f5cba7', skinD: '#e8b48a',
-    eye: '#222', eyeShine: '#fff',
-    mouth: '#a04030', mouthSmile: '#c0392b',
-    pant: '#1e3a5f', pantL: '#2a4f7c',
-    shoe: '#111', shoeL: '#333',
+  function buildTileMap() {
+    const m = [];
+    for (let r = 0; r < ROWS; r++) m.push(TILE_FLAT.slice(r * COLS, (r + 1) * COLS));
+    return m;
+  }
 
-    // Room floors
-    floorTradingA: '#c28b54', floorTradingB: '#a8733d',
-    floorMeetingA: '#ddd0b8', floorMeetingB: '#cbbfa5',
-    floorBreakA:   '#b8d4c8', floorBreakB:   '#a0c0b2',
-    floorLine: '#8b7a5a',
+  // ════════════════════════════════════════════════════════════
+  // Seats  (col/row/facingDir for each agent's chair)
+  // ════════════════════════════════════════════════════════════
+  const SEATS = new Map([
+    ['seat-btc', { seatCol: 2, seatRow: 3, facingDir: Dir.UP, assigned: false }],
+    ['seat-eth', { seatCol: 6, seatRow: 3, facingDir: Dir.UP, assigned: false }],
+    ['seat-sol', { seatCol: 2, seatRow: 8, facingDir: Dir.UP, assigned: false }],
+    ['seat-bnb', { seatCol: 6, seatRow: 8, facingDir: Dir.UP, assigned: false }],
+  ]);
 
-    // Walls
-    wall: '#2a1f3d', wallTop: '#150d24', wallBase: '#4a3560',
-    wallDiv: '#1e1530', doorWay: '#0d0918',
-    winFrame: '#3a2d50', winGlass0: '#0d1b3e', winGlass1: '#1a3566',
-    winRefl: 'rgba(255,255,255,0.07)',
+  // ════════════════════════════════════════════════════════════
+  // Static blocked tiles from furniture
+  // (Background rows are walkable; only solid footprint rows are blocked)
+  // ════════════════════════════════════════════════════════════
+  const STATIC_BLOCKED = [
+    // DESK_FRONT (48×32, bg=1): front row blocked (row+1 of placement)
+    // BTC desk at (1,1): solid at row 2
+    '1,2','2,2','3,2',
+    // ETH desk at (5,1): solid at row 2
+    '5,2','6,2','7,2',
+    // SOL desk at (1,6): solid at row 7
+    '1,7','2,7','3,7',
+    // BNB desk at (5,6): solid at row 7
+    '5,7','6,7','7,7',
+
+    // CUSHIONED_CHAIR_BACK (16×16, bg=0, 1×1 footprint):
+    // These are the seat tiles — unblocked per-character during pathfinding
+    '2,3','6,3',   // top row chairs
+    '2,8','6,8',   // bottom row chairs
+
+    // PLANT (16×32, bg=1, 1×2): bottom half blocked
+    '8,2', '8,7',
+
+    // Right room ─────────────────────────────────────
+    // DOUBLE_BOOKSHELF (32×32, bg=0, 2×2): full footprint
+    '10,1','11,1','10,2','11,2',
+    // WHITEBOARD (32×32, bg=0, 2×2) at (15,1)
+    '15,1','16,1','15,2','16,2',
+    // SOFA_BACK (32×16, bg=0, 2×1) at (13,2)
+    '13,2','14,2',
+    // COFFEE_TABLE (32×32, bg=0, 2×2) at (13,3)
+    '13,3','14,3','13,4','14,4',
+    // SOFA_FRONT (32×16, bg=0, 2×1) at (13,6)
+    '13,6','14,6',
+    // LARGE_PLANT (32×48, bg=2, 2×3) at (17,7): bottom 1 row blocked
+    '17,9','18,9',
+    // PLANT right side at (18,1)
+    '18,2',
+  ];
+
+  // ════════════════════════════════════════════════════════════
+  // Agent definitions
+  // ════════════════════════════════════════════════════════════
+  const AGENTS = [
+    { id: 0, symbol: 'BTCUSDT', label: 'BTC', palette: 0, seatId: 'seat-btc' },
+    { id: 1, symbol: 'ETHUSDT', label: 'ETH', palette: 1, seatId: 'seat-eth' },
+    { id: 2, symbol: 'SOLUSDT', label: 'SOL', palette: 2, seatId: 'seat-sol' },
+    { id: 3, symbol: 'BNBUSDT', label: 'BNB', palette: 3, seatId: 'seat-bnb' },
+  ];
+
+  // PC positions mapped to character IDs (for ON/OFF animation)
+  const PC_ITEMS = [
+    { charId: 0, col: 2, row: 1 },
+    { charId: 1, col: 6, row: 1 },
+    { charId: 2, col: 2, row: 6 },
+    { charId: 3, col: 6, row: 6 },
+  ];
+
+  // ════════════════════════════════════════════════════════════
+  // BFS Pathfinding  (pixel-agents/src/office/layout/tileMap.ts)
+  // ════════════════════════════════════════════════════════════
+
+  function isWalkable(col, row, tileMap, blocked) {
+    if (row < 0 || row >= ROWS || col < 0 || col >= COLS) return false;
+    if (tileMap[row][col] === W) return false;
+    if (blocked.has(`${col},${row}`)) return false;
+    return true;
+  }
+
+  function getWalkableTiles(tileMap, blocked) {
+    const tiles = [];
+    for (let r = 0; r < ROWS; r++)
+      for (let c = 0; c < COLS; c++)
+        if (isWalkable(c, r, tileMap, blocked)) tiles.push({ col: c, row: r });
+    return tiles;
+  }
+
+  function findPath(sc, sr, ec, er, tileMap, blocked) {
+    if (sc === ec && sr === er) return [];
+    const key = (c, r) => `${c},${r}`;
+    const sk = key(sc, sr), ek = key(ec, er);
+    if (!isWalkable(ec, er, tileMap, blocked)) return [];
+    const visited = new Set([sk]);
+    const parent = new Map();
+    const queue = [{ col: sc, row: sr }];
+    const dirs = [{ dc: 0, dr: -1 }, { dc: 0, dr: 1 }, { dc: -1, dr: 0 }, { dc: 1, dr: 0 }];
+    while (queue.length) {
+      const cur = queue.shift();
+      const ck = key(cur.col, cur.row);
+      if (ck === ek) {
+        const path = [];
+        let k = ek;
+        while (k !== sk) {
+          const [c, r] = k.split(',').map(Number);
+          path.unshift({ col: c, row: r });
+          k = parent.get(k);
+        }
+        return path;
+      }
+      for (const d of dirs) {
+        const nc = cur.col + d.dc, nr = cur.row + d.dr, nk = key(nc, nr);
+        if (visited.has(nk) || !isWalkable(nc, nr, tileMap, blocked)) continue;
+        visited.add(nk);
+        parent.set(nk, ck);
+        queue.push({ col: nc, row: nr });
+      }
+    }
+    return [];
+  }
+
+  // ════════════════════════════════════════════════════════════
+  // Character factory + FSM  (pixel-agents/src/office/engine/characters.ts)
+  // ════════════════════════════════════════════════════════════
+
+  function tileCenter(col, row) {
+    return { x: col * TILE_SIZE + TILE_SIZE / 2, y: row * TILE_SIZE + TILE_SIZE / 2 };
+  }
+
+  function dirBetween(fc, fr, tc, tr) {
+    const dc = tc - fc, dr = tr - fr;
+    if (dc > 0) return Dir.RIGHT;
+    if (dc < 0) return Dir.LEFT;
+    if (dr > 0) return Dir.DOWN;
+    return Dir.UP;
+  }
+
+  function rndRange(min, max) { return min + Math.random() * (max - min); }
+  function rndInt(min, max)   { return min + Math.floor(Math.random() * (max - min + 1)); }
+
+  function createCharacter(id, palette, seatId, seat) {
+    const col = seat ? seat.seatCol : 1;
+    const row = seat ? seat.seatRow : 1;
+    const c = tileCenter(col, row);
+    return {
+      id, state: CS.TYPE,
+      dir: seat ? seat.facingDir : Dir.DOWN,
+      x: c.x, y: c.y,
+      tileCol: col, tileRow: row,
+      path: [], moveProgress: 0,
+      palette,
+      frame: 0, frameTimer: 0,
+      wanderTimer: 0, wanderCount: 0,
+      wanderLimit: rndInt(WANDER_MOVES_MIN, WANDER_MOVES_MAX),
+      isActive: true,
+      seatId,
+      seatTimer: 0,
+      currentSide: null,
+    };
+  }
+
+  /**
+   * Update one character for `dt` seconds.
+   * The caller must temporarily unblock the character's own seat before calling.
+   * Ported directly from pixel-agents characters.ts updateCharacter().
+   */
+  function updateCharacter(ch, dt, walkableTiles, tileMap, blocked) {
+    ch.frameTimer += dt;
+
+    switch (ch.state) {
+      // ── TYPE ──────────────────────────────────────────────
+      case CS.TYPE: {
+        if (ch.frameTimer >= TYPE_FRAME_DUR) {
+          ch.frameTimer -= TYPE_FRAME_DUR;
+          ch.frame = (ch.frame + 1) % 2;
+        }
+        if (!ch.isActive) {
+          if (ch.seatTimer > 0) { ch.seatTimer -= dt; break; }
+          ch.seatTimer = 0;
+          ch.state = CS.IDLE;
+          ch.frame = 0; ch.frameTimer = 0;
+          ch.wanderTimer = rndRange(WANDER_PAUSE_MIN, WANDER_PAUSE_MAX);
+          ch.wanderCount = 0;
+          ch.wanderLimit = rndInt(WANDER_MOVES_MIN, WANDER_MOVES_MAX);
+        }
+        break;
+      }
+
+      // ── IDLE ──────────────────────────────────────────────
+      case CS.IDLE: {
+        ch.frame = 0;
+        if (ch.seatTimer < 0) ch.seatTimer = 0;
+
+        if (ch.isActive) {
+          if (!ch.seatId) {
+            ch.state = CS.TYPE; ch.frame = 0; ch.frameTimer = 0;
+            break;
+          }
+          const seat = SEATS.get(ch.seatId);
+          if (seat) {
+            const path = findPath(ch.tileCol, ch.tileRow, seat.seatCol, seat.seatRow, tileMap, blocked);
+            if (path.length > 0) {
+              ch.path = path; ch.moveProgress = 0;
+              ch.state = CS.WALK; ch.frame = 0; ch.frameTimer = 0;
+            } else {
+              ch.state = CS.TYPE; ch.dir = seat.facingDir;
+              ch.frame = 0; ch.frameTimer = 0;
+            }
+          }
+          break;
+        }
+
+        ch.wanderTimer -= dt;
+        if (ch.wanderTimer <= 0) {
+          if (ch.wanderCount >= ch.wanderLimit && ch.seatId) {
+            const seat = SEATS.get(ch.seatId);
+            if (seat) {
+              const path = findPath(ch.tileCol, ch.tileRow, seat.seatCol, seat.seatRow, tileMap, blocked);
+              if (path.length > 0) {
+                ch.path = path; ch.moveProgress = 0;
+                ch.state = CS.WALK; ch.frame = 0; ch.frameTimer = 0;
+                break;
+              }
+            }
+          }
+          if (walkableTiles.length > 0) {
+            const target = walkableTiles[Math.floor(Math.random() * walkableTiles.length)];
+            const path = findPath(ch.tileCol, ch.tileRow, target.col, target.row, tileMap, blocked);
+            if (path.length > 0) {
+              ch.path = path; ch.moveProgress = 0;
+              ch.state = CS.WALK; ch.frame = 0; ch.frameTimer = 0;
+              ch.wanderCount++;
+            }
+          }
+          ch.wanderTimer = rndRange(WANDER_PAUSE_MIN, WANDER_PAUSE_MAX);
+        }
+        break;
+      }
+
+      // ── WALK ──────────────────────────────────────────────
+      case CS.WALK: {
+        if (ch.frameTimer >= WALK_FRAME_DUR) {
+          ch.frameTimer -= WALK_FRAME_DUR;
+          ch.frame = (ch.frame + 1) % 4;
+        }
+
+        if (ch.path.length === 0) {
+          const c = tileCenter(ch.tileCol, ch.tileRow);
+          ch.x = c.x; ch.y = c.y;
+
+          if (ch.isActive) {
+            const seat = SEATS.get(ch.seatId);
+            if (!ch.seatId) {
+              ch.state = CS.TYPE;
+            } else if (seat && ch.tileCol === seat.seatCol && ch.tileRow === seat.seatRow) {
+              ch.state = CS.TYPE; ch.dir = seat.facingDir;
+            } else {
+              ch.state = CS.IDLE;
+            }
+          } else {
+            const seat = SEATS.get(ch.seatId);
+            if (seat && ch.tileCol === seat.seatCol && ch.tileRow === seat.seatRow) {
+              ch.state = CS.TYPE; ch.dir = seat.facingDir;
+              ch.seatTimer = ch.seatTimer < 0 ? 0 : rndRange(SEAT_REST_MIN, SEAT_REST_MAX);
+              ch.wanderCount = 0;
+              ch.wanderLimit = rndInt(WANDER_MOVES_MIN, WANDER_MOVES_MAX);
+              ch.frame = 0; ch.frameTimer = 0;
+              break;
+            }
+            ch.state = CS.IDLE;
+            ch.wanderTimer = rndRange(WANDER_PAUSE_MIN, WANDER_PAUSE_MAX);
+          }
+          ch.frame = 0; ch.frameTimer = 0;
+          break;
+        }
+
+        const next = ch.path[0];
+        ch.dir = dirBetween(ch.tileCol, ch.tileRow, next.col, next.row);
+        ch.moveProgress += (WALK_SPEED / TILE_SIZE) * dt;
+
+        const from = tileCenter(ch.tileCol, ch.tileRow);
+        const to   = tileCenter(next.col, next.row);
+        const t = Math.min(ch.moveProgress, 1);
+        ch.x = from.x + (to.x - from.x) * t;
+        ch.y = from.y + (to.y - from.y) * t;
+
+        if (ch.moveProgress >= 1) {
+          ch.tileCol = next.col; ch.tileRow = next.row;
+          ch.x = to.x; ch.y = to.y;
+          ch.path.shift(); ch.moveProgress = 0;
+        }
+
+        // Re-path to seat if character became active mid-wander
+        if (ch.isActive && ch.seatId) {
+          const seat = SEATS.get(ch.seatId);
+          if (seat) {
+            const last = ch.path[ch.path.length - 1];
+            if (!last || last.col !== seat.seatCol || last.row !== seat.seatRow) {
+              const np = findPath(ch.tileCol, ch.tileRow, seat.seatCol, seat.seatRow, tileMap, blocked);
+              if (np.length > 0) { ch.path = np; ch.moveProgress = 0; }
+            }
+          }
+        }
+        break;
+      }
+    }
+  }
+
+  /**
+   * Temporarily unblock a character's own seat tile, run the FSM, then re-block.
+   * Mirrors OfficeState.withOwnSeatUnblocked() in pixel-agents.
+   */
+  function updateWithSeatUnblocked(ch, dt, walkable, tileMap, blocked) {
+    const seat = ch.seatId ? SEATS.get(ch.seatId) : null;
+    const sk = seat ? `${seat.seatCol},${seat.seatRow}` : null;
+    if (sk) blocked.delete(sk);
+    updateCharacter(ch, dt, walkable, tileMap, blocked);
+    if (sk) blocked.add(sk);
+  }
+
+  // ════════════════════════════════════════════════════════════
+  // Asset loading
+  // ════════════════════════════════════════════════════════════
+
+  function loadImg(src) {
+    return new Promise(resolve => {
+      const img = new Image();
+      img.onload  = () => resolve(img);
+      img.onerror = () => resolve(null);
+      img.src = src;
+    });
+  }
+
+  async function loadAllAssets() {
+    const base = '/img/pixel-agents';
+
+    const [charImgs, ...furnList] = await Promise.all([
+      // 6 character sprite sheets
+      Promise.all(Array.from({ length: 6 }, (_, i) => loadImg(`${base}/characters/char_${i}.png`))),
+      // Furniture PNGs
+      loadImg(`${base}/furniture/DESK_FRONT.png`),
+      loadImg(`${base}/furniture/PC_FRONT_OFF.png`),
+      loadImg(`${base}/furniture/PC_FRONT_ON_1.png`),
+      loadImg(`${base}/furniture/PC_FRONT_ON_2.png`),
+      loadImg(`${base}/furniture/PC_FRONT_ON_3.png`),
+      loadImg(`${base}/furniture/CUSHIONED_CHAIR_BACK.png`),
+      loadImg(`${base}/furniture/PLANT.png`),
+      loadImg(`${base}/furniture/DOUBLE_BOOKSHELF.png`),
+      loadImg(`${base}/furniture/SOFA_BACK.png`),
+      loadImg(`${base}/furniture/COFFEE_TABLE.png`),
+      loadImg(`${base}/furniture/SOFA_FRONT.png`),
+      loadImg(`${base}/furniture/LARGE_PLANT.png`),
+      loadImg(`${base}/furniture/WHITEBOARD.png`),
+      loadImg(`${base}/furniture/CLOCK.png`),
+    ]);
+
+    const furnImgs = {
+      DESK_FRONT:           furnList[0],
+      PC_FRONT_OFF:         furnList[1],
+      PC_FRONT_ON_1:        furnList[2],
+      PC_FRONT_ON_2:        furnList[3],
+      PC_FRONT_ON_3:        furnList[4],
+      CUSHIONED_CHAIR_BACK: furnList[5],
+      PLANT:                furnList[6],
+      DOUBLE_BOOKSHELF:     furnList[7],
+      SOFA_BACK:            furnList[8],
+      COFFEE_TABLE:         furnList[9],
+      SOFA_FRONT:           furnList[10],
+      LARGE_PLANT:          furnList[11],
+      WHITEBOARD:           furnList[12],
+      CLOCK:                furnList[13],
+    };
+
+    return { charImgs, furnImgs };
+  }
+
+  // ════════════════════════════════════════════════════════════
+  // Build static furniture list (z-sorted, pixel-agents layout)
+  // Each entry: { name, col, row, zYoverride, mirror }
+  //   zYoverride — world-px depth for special sorting; null = auto (row*16 + imgH)
+  // ════════════════════════════════════════════════════════════
+  function buildFurnitureList() {
+    const items = [];
+    const add = (name, col, row, zYoverride, mirror) =>
+      items.push({ name, col, row, zYoverride: zYoverride !== undefined ? zYoverride : null, mirror: !!mirror });
+
+    // ── Trading floor (left room, cols 1–8) ──────────────────
+    // BTC workstation — desk at (1,1): 3×2 tiles (48×32 px), bg=1
+    add('DESK_FRONT', 1, 1);
+    add('PC_FRONT_OFF', 2, 1, 1 * TILE_SIZE + 32 + 0.5); // on desktop, in front of desk
+    add('CUSHIONED_CHAIR_BACK', 2, 3, (3 + 1) * TILE_SIZE + 1); // back chair in FRONT of character
+
+    // ETH workstation — desk at (5,1)
+    add('DESK_FRONT', 5, 1);
+    add('PC_FRONT_OFF', 6, 1, 1 * TILE_SIZE + 32 + 0.5);
+    add('CUSHIONED_CHAIR_BACK', 6, 3, (3 + 1) * TILE_SIZE + 1);
+
+    // SOL workstation — desk at (1,6)
+    add('DESK_FRONT', 1, 6);
+    add('PC_FRONT_OFF', 2, 6, 6 * TILE_SIZE + 32 + 0.5);
+    add('CUSHIONED_CHAIR_BACK', 2, 8, (8 + 1) * TILE_SIZE + 1);
+
+    // BNB workstation — desk at (5,6)
+    add('DESK_FRONT', 5, 6);
+    add('PC_FRONT_OFF', 6, 6, 6 * TILE_SIZE + 32 + 0.5);
+    add('CUSHIONED_CHAIR_BACK', 6, 8, (8 + 1) * TILE_SIZE + 1);
+
+    // Decorative plants near the divider wall
+    add('PLANT', 8, 1);
+    add('PLANT', 8, 6);
+
+    // ── Lounge (right room, cols 10–18) ──────────────────────
+    add('DOUBLE_BOOKSHELF', 10, 1);
+    add('WHITEBOARD',       15, 1);
+    add('CLOCK',            17, 1, 1 * TILE_SIZE + 16);
+    add('SOFA_BACK',        13, 2);
+    add('COFFEE_TABLE',     13, 3);
+    add('SOFA_FRONT',       13, 6);
+    add('LARGE_PLANT',      17, 7);
+    add('PLANT',            18, 1);
+
+    return items;
+  }
+
+  // ════════════════════════════════════════════════════════════
+  // Rendering  (pixel-agents/src/office/engine/renderer.ts)
+  // ════════════════════════════════════════════════════════════
+
+  const WALL_COLOR          = '#3A3A5C';
+  const FLOOR_TRADING_COLOR = '#3a2e1e'; // warm wood — left room
+  const FLOOR_LOUNGE_COLOR  = '#242f30'; // cool slate — right room
+
+  function isLounge(col) { return col >= 10; }
+
+  /**
+   * Full frame render with z-sorting.
+   * Ported from renderFrame() + renderScene() + renderTileGrid() in renderer.ts.
+   */
+  function renderFrame(ctx, cW, cH, tileMap, furnitureList, characters, assets, zoom, pcOnName, activeIds) {
+    const s  = TILE_SIZE * zoom;
+    const mW = COLS * s;
+    const mH = ROWS * s;
+    const ox = Math.floor((cW - mW) / 2);
+    const oy = Math.floor((cH - mH) / 2);
+
+    // Clear
+    ctx.fillStyle = '#111827';
+    ctx.fillRect(0, 0, cW, cH);
+
+    // Floor + wall tiles
+    ctx.imageSmoothingEnabled = false;
+    for (let r = 0; r < ROWS; r++) {
+      for (let c = 0; c < COLS; c++) {
+        const t = tileMap[r][c];
+        ctx.fillStyle = t === W ? WALL_COLOR
+          : (isLounge(c) ? FLOOR_LOUNGE_COLOR : FLOOR_TRADING_COLOR);
+        ctx.fillRect(ox + c * s, oy + r * s, s, s);
+      }
+    }
+
+    // ── Build z-sorted drawable list ─────────────────────────
+    const drawables = [];
 
     // Furniture
-    deskTop: '#a0522d', deskHi: '#bf6a38', deskFront: '#6b3515',
-    deskDark: '#3d1f08', deskLeg: '#2d1508',
-    keyboard: '#334155', kbKey: '#475569',
-    monFrame: '#1a1a2e', monScrDef: '#0a192f',
+    for (const item of furnitureList) {
+      // PCs: swap to ON frame when the owner agent is active
+      let imgName = item.name;
+      if (item.name === 'PC_FRONT_OFF') {
+        const pc = PC_ITEMS.find(p => p.col === item.col && p.row === item.row);
+        if (pc && activeIds.has(pc.charId)) imgName = pcOnName;
+      }
 
-    tableTop: '#8b6914', tableLeg: '#6b4f0a',
-    chair: '#4a3560', chairD: '#2d1f40',
-    sofaA: '#5b3a8c', sofaD: '#3d2060', sofaArm: '#7a50b0',
-    coffeeBody: '#444', coffeeSteam: 'rgba(255,255,255,0.4)',
+      const img = assets.furnImgs[imgName];
+      if (!img) continue;
 
-    potBody: '#cd7f32', potRim: '#b86e28', potSoil: '#3d2510',
-    stem: '#4a7a18', leafA: '#3cb44b', leafB: '#2ea43c', leafC: '#56c96b',
+      const fw = img.naturalWidth  * zoom;
+      const fh = img.naturalHeight * zoom;
+      const fx = ox + item.col * s;
+      const fy = oy + item.row * s;
 
-    nameTag: 'rgba(0,0,0,0.7)',
-    accent: '#d4af37',
-    hud: 'rgba(10,6,20,0.75)',
-  };
+      // zY: override wins; default = bottom of sprite in world px
+      const zY = item.zYoverride !== null
+        ? item.zYoverride
+        : item.row * TILE_SIZE + img.naturalHeight;
 
-  // ── Pixel helper ──────────────────────────────────────────────────────────
-  function r(ctx, gx, gy, w, h, color, ox, oy) {
-    if (!color || w <= 0 || h <= 0) return;
-    ctx.fillStyle = color;
-    ctx.fillRect(ox + gx * SCALE, oy + gy * SCALE, w * SCALE, h * SCALE);
-  }
-
-  // ── Character sprite 12×26 grid ───────────────────────────────────────────
-  // walkFrame 0=stand, 1=left-fwd, 2=stand, 3=right-fwd
-  // facing: 1=right, -1=left
-  function drawChar(ctx, ox, oy, tok, tradeState, walkFrame, facing) {
-    const { shirt, shirtD, hair, hairD } = tok;
-
-    // Mirror for facing direction
-    const W = 12 * SCALE;
-    if (facing < 0) {
-      ctx.save();
-      ctx.translate(ox + W, oy);
-      ctx.scale(-1, 1);
-      ox = 0; oy = 0;
-    }
-
-    // Shadow
-    ctx.fillStyle = 'rgba(0,0,0,0.2)';
-    ctx.fillRect((facing < 0 ? 0 : ox) + 1 * SCALE, (facing < 0 ? 0 : oy) + 25 * SCALE, 10 * SCALE, 2 * SCALE);
-
-    // Hair
-    r(ctx,  3,  0,  6, 1, hairD, ox, oy);
-    r(ctx,  2,  1,  8, 1, hair,  ox, oy);
-    r(ctx,  1,  2, 10, 3, hair,  ox, oy);
-    r(ctx,  2,  3,  8, 1, hairD, ox, oy);
-
-    // Face
-    r(ctx,  2,  3,  8, 6, C.skin,  ox, oy);
-    r(ctx,  1,  4,  1, 4, C.skin,  ox, oy);
-    r(ctx, 10,  4,  1, 4, C.skin,  ox, oy);
-
-    // Eyes
-    r(ctx,  3,  4,  2, 2, C.eye,      ox, oy);
-    r(ctx,  7,  4,  2, 2, C.eye,      ox, oy);
-    r(ctx,  4,  4,  1, 1, C.eyeShine, ox, oy);
-    r(ctx,  8,  4,  1, 1, C.eyeShine, ox, oy);
-
-    // Mouth
-    if (tradeState === 'bull') {
-      r(ctx, 3, 7, 6, 1, C.mouthSmile, ox, oy);
-      r(ctx, 4, 8, 4, 1, C.mouthSmile, ox, oy);
-    } else if (tradeState === 'bear') {
-      r(ctx, 4, 8, 4, 1, C.eye,   ox, oy);
-    } else {
-      r(ctx, 4, 7, 4, 1, C.mouth, ox, oy);
-    }
-
-    // Neck
-    r(ctx, 4, 9, 4, 2, C.skinD, ox, oy);
-
-    // Torso
-    r(ctx, 2, 11, 8, 6, shirt, ox, oy);
-
-    // Arms
-    if (tradeState === 'bull') {
-      r(ctx,  0,  7, 2, 6, shirtD, ox, oy);
-      r(ctx, 10,  7, 2, 6, shirtD, ox, oy);
-      r(ctx,  0,  6, 2, 2, C.skin, ox, oy);
-      r(ctx, 10,  6, 2, 2, C.skin, ox, oy);
-    } else if (tradeState === 'bear') {
-      r(ctx,  0, 14, 3, 3, shirtD, ox, oy);
-      r(ctx,  9, 14, 3, 3, shirtD, ox, oy);
-      r(ctx,  0, 16, 2, 2, C.skin, ox, oy);
-      r(ctx, 10, 16, 2, 2, C.skin, ox, oy);
-    } else {
-      // Walking — arms swing with walk frame
-      const armSwing = (walkFrame === 1) ? -1 : (walkFrame === 3) ? 1 : 0;
-      r(ctx,  0, 11 + armSwing, 2, 6, shirtD, ox, oy);
-      r(ctx, 10, 11 - armSwing, 2, 6, shirtD, ox, oy);
-      r(ctx,  0, 16 + armSwing, 2, 2, C.skin, ox, oy);
-      r(ctx, 10, 16 - armSwing, 2, 2, C.skin, ox, oy);
-    }
-
-    // Legs — animate walk cycle
-    if (walkFrame === 1) {
-      // Left leg forward, right leg back
-      r(ctx, 2, 17, 8, 4, C.pant, ox, oy);
-      r(ctx, 2, 21, 3, 2, C.pantL, ox, oy); // left fwd
-      r(ctx, 6, 19, 3, 2, C.pant,  ox, oy); // right back
-      r(ctx, 2, 23, 4, 2, C.shoe,  ox, oy);
-      r(ctx, 5, 21, 4, 2, C.shoe,  ox, oy);
-    } else if (walkFrame === 3) {
-      // Right leg forward, left leg back
-      r(ctx, 2, 17, 8, 4, C.pant, ox, oy);
-      r(ctx, 2, 19, 3, 2, C.pantL, ox, oy); // left back
-      r(ctx, 6, 21, 3, 2, C.pant,  ox, oy); // right fwd
-      r(ctx, 2, 21, 4, 2, C.shoe,  ox, oy);
-      r(ctx, 5, 23, 4, 2, C.shoe,  ox, oy);
-    } else {
-      // Standing
-      r(ctx, 2, 17, 8, 5, C.pant,  ox, oy);
-      r(ctx, 3, 22, 3, 2, C.pantL, ox, oy);
-      r(ctx, 6, 22, 3, 2, C.pant,  ox, oy);
-      r(ctx, 2, 24, 4, 2, C.shoe,  ox, oy);
-      r(ctx, 2, 24, 4, 1, C.shoeL, ox, oy);
-      r(ctx, 6, 24, 4, 2, C.shoe,  ox, oy);
-      r(ctx, 6, 24, 4, 1, C.shoeL, ox, oy);
-    }
-
-    if (facing < 0) ctx.restore();
-  }
-
-  // ── Desk ──────────────────────────────────────────────────────────────────
-  function drawDesk(ctx, x, y, deskW) {
-    const S = SCALE;
-    ctx.fillStyle = C.deskHi;   ctx.fillRect(x, y, deskW, S);
-    ctx.fillStyle = C.deskTop;  ctx.fillRect(x, y + S, deskW, 4 * S);
-    ctx.fillStyle = C.keyboard; ctx.fillRect(x + 10, y + 2 * S, deskW - 20, 2 * S);
-    ctx.fillStyle = C.kbKey;
-    for (let kx = x + 14; kx < x + deskW - 14; kx += 7)
-      ctx.fillRect(kx, y + 2 * S + 2, 5, S - 2);
-    ctx.fillStyle = C.deskFront; ctx.fillRect(x, y + 5 * S, deskW, 7 * S);
-    ctx.fillStyle = C.deskDark;
-    ctx.fillRect(x + Math.round(deskW * 0.3), y + 7 * S, Math.round(deskW * 0.4), S);
-    ctx.fillRect(x, y + 12 * S, deskW, S);
-    ctx.fillStyle = C.deskLeg;
-    ctx.fillRect(x + 4,             y + 13 * S, 3 * S, 7 * S);
-    ctx.fillRect(x + deskW - 4 - 3 * S, y + 13 * S, 3 * S, 7 * S);
-  }
-
-  // ── Monitor ───────────────────────────────────────────────────────────────
-  function drawMonitor(ctx, cx, deskTopY, screenColor, line1, line2) {
-    const S = SCALE;
-    const mW = 14 * S, mH = 11 * S;
-    const mx = cx - mW / 2, my = deskTopY - mH - 6 * S;
-    ctx.fillStyle = '#444'; ctx.fillRect(cx - 3*S, deskTopY, 6*S, S);
-    ctx.fillStyle = '#333'; ctx.fillRect(cx - S, deskTopY - 6*S, 2*S, 6*S);
-    ctx.fillStyle = C.monFrame; ctx.fillRect(mx - S, my - S, mW + 2*S, mH + 2*S);
-    ctx.fillStyle = screenColor || C.monScrDef; ctx.fillRect(mx, my, mW, mH);
-    ctx.fillStyle = 'rgba(0,0,0,0.1)';
-    for (let sy = my; sy < my + mH; sy += 3) ctx.fillRect(mx, sy, mW, 1);
-    ctx.save(); ctx.textAlign = 'center';
-    if (line1) {
-      ctx.fillStyle = '#7dd3fc';
-      ctx.font = `bold ${S * 2.1}px "JetBrains Mono",monospace`;
-      ctx.fillText(line1, cx, my + Math.round(mH * 0.44));
-    }
-    if (line2) {
-      ctx.fillStyle = '#94a3b8';
-      ctx.font = `${S * 1.7}px "JetBrains Mono",monospace`;
-      ctx.fillText(line2, cx, my + Math.round(mH * 0.78));
-    }
-    ctx.fillStyle = 'rgba(255,255,255,0.05)';
-    ctx.fillRect(mx + S, my + S, Math.round(mW * 0.35), Math.round(mH * 0.25));
-    ctx.restore();
-  }
-
-  // ── Meeting table ─────────────────────────────────────────────────────────
-  function drawMeetingRoom(ctx, room) {
-    const { x, y, w, h } = room;
-    const cx = x + w / 2, cy = y + h * 0.45;
-    const tw = Math.round(w * 0.65), th = Math.round(h * 0.18);
-    // Table top
-    ctx.fillStyle = '#c4901f'; ctx.fillRect(cx - tw/2, cy, tw, th);
-    ctx.fillStyle = C.tableTop; ctx.fillRect(cx - tw/2, cy, tw, th - 4);
-    ctx.fillStyle = '#e8b030'; ctx.fillRect(cx - tw/2, cy, tw, 3); // highlight
-    // Legs
-    ctx.fillStyle = C.tableLeg;
-    ctx.fillRect(cx - tw/2 + 6, cy + th, 6, 14);
-    ctx.fillRect(cx + tw/2 - 12, cy + th, 6, 14);
-    // Chairs around table
-    const chairW = 16, chairH = 10;
-    [[cx - tw/2 - chairW - 4, cy + th/2 - chairH/2],
-     [cx + tw/2 + 4,          cy + th/2 - chairH/2],
-     [cx - 20, cy - chairH - 6],
-     [cx + 4,  cy - chairH - 6]].forEach(([cx2, cy2]) => {
-      ctx.fillStyle = C.chairD; ctx.fillRect(cx2, cy2, chairW, chairH);
-      ctx.fillStyle = C.chair;  ctx.fillRect(cx2, cy2, chairW, chairH - 3);
-      ctx.fillStyle = C.chairD; ctx.fillRect(cx2 + 2, cy2 - 8, 3, 8);
-      ctx.fillRect(cx2 + chairW - 5, cy2 - 8, 3, 8);
-    });
-    // Label
-    ctx.fillStyle = C.accent; ctx.font = 'bold 10px monospace'; ctx.textAlign = 'center';
-    ctx.fillText('MEETING', cx, y + h * 0.12);
-  }
-
-  // ── Break room ────────────────────────────────────────────────────────────
-  function drawBreakRoom(ctx, room) {
-    const { x, y, w, h } = room;
-    const cx = x + w / 2;
-
-    // Label
-    ctx.fillStyle = C.accent; ctx.font = 'bold 10px monospace'; ctx.textAlign = 'center';
-    ctx.fillText('BREAK', cx, y + h * 0.12);
-
-    // Sofa
-    const sx = x + Math.round(w * 0.1), sy = y + Math.round(h * 0.35);
-    const sw = Math.round(w * 0.8), sh = 20;
-    ctx.fillStyle = C.sofaD;  ctx.fillRect(sx, sy, sw, sh + 10);
-    ctx.fillStyle = C.sofaA;  ctx.fillRect(sx, sy, sw, sh);
-    ctx.fillStyle = C.sofaArm;
-    ctx.fillRect(sx, sy - 8, 10, sh + 8);
-    ctx.fillRect(sx + sw - 10, sy - 8, 10, sh + 8);
-    // Cushions
-    ctx.fillStyle = '#7a50b0';
-    ctx.fillRect(sx + 12, sy + 3, Math.round((sw - 24) / 2) - 2, sh - 6);
-    ctx.fillRect(sx + Math.round((sw - 24) / 2) + 14, sy + 3, Math.round((sw - 24) / 2) - 2, sh - 6);
-
-    // Coffee machine
-    const kx = x + Math.round(w * 0.2), ky = y + Math.round(h * 0.65);
-    ctx.fillStyle = C.coffeeBody; ctx.fillRect(kx, ky, 18, 22);
-    ctx.fillStyle = '#333'; ctx.fillRect(kx + 2, ky + 2, 14, 10);
-    ctx.fillStyle = '#e00'; ctx.fillRect(kx + 5, ky + 14, 4, 4); // red button
-    ctx.fillStyle = '#888'; ctx.fillRect(kx + 6, ky + 20, 6, 6); // cup area
-    // Steam
-    ctx.fillStyle = C.coffeeSteam;
-    ctx.beginPath();
-    ctx.arc(kx + 9, ky - 4, 3, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Plant
-    drawPlant(ctx, x + Math.round(w * 0.75), y + Math.round(h * 0.7), 0.7);
-  }
-
-  // ── Potted plant ──────────────────────────────────────────────────────────
-  function drawPlant(ctx, cx, baseY, size) {
-    const S = SCALE * (size || 1);
-    ctx.fillStyle = C.potRim;  ctx.fillRect(cx - 4*S, baseY - 5*S, 8*S, 2*S);
-    ctx.fillStyle = C.potBody; ctx.fillRect(cx - 3*S, baseY - 3*S, 6*S, 4*S);
-    ctx.fillStyle = C.potSoil; ctx.fillRect(cx - 3*S + 1, baseY - 5*S + 2, 6*S - 2, 2);
-    ctx.fillStyle = C.stem;
-    ctx.fillRect(cx - S, baseY - 12*S, 2*S, 7*S);
-    ctx.fillRect(cx - 4*S, baseY - 10*S, 4*S, S);
-    ctx.fillRect(cx + 2*S, baseY -  9*S, 4*S, S);
-    ctx.fillStyle = C.leafA;
-    ctx.fillRect(cx - 7*S, baseY - 15*S, 5*S, 6*S);
-    ctx.fillRect(cx + 2*S, baseY - 14*S, 5*S, 6*S);
-    ctx.fillRect(cx - 3*S, baseY - 18*S, 6*S, 7*S);
-    ctx.fillStyle = C.leafC;
-    ctx.fillRect(cx - 6*S, baseY - 14*S, 2*S, 3*S);
-    ctx.fillRect(cx + 3*S, baseY - 13*S, 2*S, 3*S);
-  }
-
-  // ── Floor tiles ───────────────────────────────────────────────────────────
-  function drawFloor(ctx, x, y, w, h, colorA, colorB) {
-    const tW = Math.max(20, Math.round(w / 7));
-    const tH = Math.max(16, Math.round(tW * 0.5));
-    ctx.save();
-    ctx.rect(x, y, w, h);
-    ctx.clip();
-    for (let ty = y; ty < y + h + tH; ty += tH) {
-      for (let tx = x; tx < x + w + tW; tx += tW) {
-        const even = (Math.floor((tx - x) / tW) + Math.floor((ty - y) / tH)) % 2 === 0;
-        ctx.fillStyle = even ? colorA : colorB;
-        ctx.fillRect(tx, ty, tW, tH);
-        ctx.fillStyle = C.floorLine;
-        ctx.fillRect(tx, ty, tW, 1);
-        ctx.fillRect(tx, ty, 1, tH);
+      const im = img, x = fx, y = fy, w = fw, h = fh;
+      if (item.mirror) {
+        drawables.push({ zY, draw(c) {
+          c.save(); c.translate(x + w, y); c.scale(-1, 1);
+          c.drawImage(im, 0, 0, w, h); c.restore();
+        }});
+      } else {
+        drawables.push({ zY, draw(c) { c.drawImage(im, x, y, w, h); } });
       }
     }
-    ctx.restore();
-  }
 
-  // ── Back wall ─────────────────────────────────────────────────────────────
-  function drawWall(ctx, W, floorY) {
-    const grad = ctx.createLinearGradient(0, 0, 0, floorY);
-    grad.addColorStop(0, C.wallTop);
-    grad.addColorStop(1, C.wall);
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, W, floorY);
-    ctx.fillStyle = C.wallBase;
-    ctx.fillRect(0, floorY - 5, W, 5);
+    // Characters  (pixel-agents getCharacterSprite + character anchor logic)
+    for (const ch of characters) {
+      const img = assets.charImgs[ch.palette];
+      if (!img) continue;
 
-    const winW = Math.round(W * 0.11), winH = Math.round(floorY * 0.55);
-    const winY = Math.round(floorY * 0.1);
-    [0.18, 0.42, 0.65, 0.88].forEach(fx => {
-      const wx = Math.round(W * fx - winW / 2);
-      ctx.fillStyle = C.winFrame;
-      ctx.fillRect(wx - 3, winY - 3, winW + 6, winH + 6);
-      const wg = ctx.createLinearGradient(wx, winY, wx, winY + winH);
-      wg.addColorStop(0, C.winGlass0); wg.addColorStop(1, C.winGlass1);
-      ctx.fillStyle = wg; ctx.fillRect(wx, winY, winW, winH);
-      ctx.fillStyle = C.winFrame;
-      ctx.fillRect(wx + winW/2 - 1, winY, 2, winH);
-      ctx.fillRect(wx, winY + winH/2 - 1, winW, 2);
-      ctx.fillStyle = C.winRefl;
-      ctx.fillRect(wx + 2, winY + 2, Math.round(winW * 0.38), Math.round(winH * 0.42));
-      ctx.fillStyle = 'rgba(255,255,255,0.7)';
-      [[0.1,0.1],[0.6,0.08],[0.3,0.4],[0.8,0.55]].forEach(([fx2,fy2]) => {
-        ctx.fillRect(wx + fx2*winW, winY + fy2*winH, 2, 2);
-      });
-    });
+      // Sprite frame index in sheet  (0–6)
+      let spriteFrame;
+      if (ch.state === CS.TYPE) {
+        spriteFrame = 3 + (ch.frame % 2);      // typing: 3 or 4
+      } else if (ch.state === CS.WALK) {
+        spriteFrame = WALK_FRAME_IDX[ch.frame % 4]; // walk: 0,1,2,1
+      } else {
+        spriteFrame = 1;                         // idle: walk frame 1
+      }
 
-    // MCT banner
-    const bW = Math.round(W * 0.24);
-    ctx.fillStyle = 'rgba(212,175,55,0.1)';
-    ctx.strokeStyle = 'rgba(212,175,55,0.3)';
-    ctx.lineWidth = 1;
-    ctx.fillRect(W/2 - bW/2, 3, bW, 20);
-    ctx.strokeRect(W/2 - bW/2, 3, bW, 20);
-    ctx.fillStyle = C.accent;
-    ctx.font = 'bold 11px "Space Grotesk",monospace';
+      // Direction row in sprite sheet + horizontal flip flag
+      const flipH = ch.dir === Dir.LEFT;
+      const dirRow = ch.dir === Dir.DOWN ? 0 : ch.dir === Dir.UP ? 1 : 2;
+
+      const srcX = spriteFrame * 16;
+      const srcY = dirRow * 32;
+
+      // Bottom-center anchor; shift down by sit offset when seated
+      const sitOff = ch.state === CS.TYPE ? CHAR_SIT_OFFSET : 0;
+      const drawX  = Math.round(ox + ch.x * zoom - 8 * zoom);
+      const drawY  = Math.round(oy + (ch.y + sitOff) * zoom - 32 * zoom);
+
+      // Z depth key  (matches pixel-agents charZY)
+      const charZY = ch.y + TILE_SIZE / 2 + CHAR_Z_OFFSET;
+
+      const im = img, sx = srcX, sy = srcY, dx = drawX, dy = drawY, z = zoom;
+      if (flipH) {
+        drawables.push({ zY: charZY, draw(c) {
+          c.save(); c.translate(dx + 16 * z, dy); c.scale(-1, 1);
+          c.drawImage(im, sx, sy, 16, 32, 0, 0, 16 * z, 32 * z); c.restore();
+        }});
+      } else {
+        drawables.push({ zY: charZY, draw(c) {
+          c.drawImage(im, sx, sy, 16, 32, dx, dy, 16 * z, 32 * z);
+        }});
+      }
+    }
+
+    // Sort by depth (lower zY = drawn first = further back)
+    drawables.sort((a, b) => a.zY - b.zY);
+    ctx.imageSmoothingEnabled = false;
+    for (const d of drawables) d.draw(ctx);
+
+    // ── Labels + status badges (always on top) ───────────────
+    ctx.imageSmoothingEnabled = true;
+    const fontSize = Math.max(9, zoom * 4);
+    ctx.font = `bold ${fontSize}px "Courier New", monospace`;
     ctx.textAlign = 'center';
-    ctx.fillText('🏢  MCT TRADING FLOOR', W / 2, 17);
-  }
 
-  // ── Room divider wall with doorway ────────────────────────────────────────
-  function drawDivider(ctx, x, y, h, doorY, doorH) {
-    ctx.fillStyle = C.wallDiv;
-    ctx.fillRect(x - 4, y, 8, doorY - y);
-    ctx.fillStyle = C.doorWay;
-    ctx.fillRect(x - 3, doorY, 6, doorH); // doorway opening (dark)
-    ctx.fillStyle = C.wallDiv;
-    ctx.fillRect(x - 4, doorY + doorH, 8, (y + h) - (doorY + doorH));
-    // Door frame highlight
-    ctx.fillStyle = C.wallBase;
-    ctx.fillRect(x - 5, doorY - 2, 10, 2);
-    ctx.fillRect(x - 5, doorY + doorH, 10, 2);
-  }
+    for (const ch of characters) {
+      const def = AGENTS.find(a => a.id === ch.id);
+      if (!def) continue;
 
-  // ── Character behavior & movement ─────────────────────────────────────────
-  function Character(tok, deskX, deskY) {
-    this.tok      = tok;
-    this.x        = deskX;
-    this.y        = deskY;
-    this.tx       = deskX;
-    this.ty       = deskY;
-    this.deskX    = deskX;
-    this.deskY    = deskY;
-    this.walkFrame  = 0;
-    this.walkTick   = 0;
-    this.facing     = 1;
-    this.room       = 'trading';
-    this.behavior   = 'at_desk';
-    this.idleTimer  = Math.round(180 + Math.random() * 360);
-    this.tradeState = { state: 'idle', pnl: null, price: '--', screenColor: C.monScrDef };
-  }
+      const sitOff = ch.state === CS.TYPE ? CHAR_SIT_OFFSET : 0;
+      const lx = Math.round(ox + ch.x * zoom);
+      const ly = Math.round(oy + (ch.y + sitOff) * zoom - 32 * zoom - zoom);
 
-  Character.prototype.setTarget = function (tx, ty, newBehavior) {
-    this.tx = tx; this.ty = ty;
-    this.behavior = newBehavior;
-  };
+      const label = def.label;
+      const tw    = ctx.measureText(label).width + zoom * 4;
+      const th    = fontSize + zoom * 2;
 
-  Character.prototype.wander = function (rooms) {
-    const roll = Math.random();
-    const br = rooms.breakroom, mr = rooms.meeting;
-    if (this.tradeState.state !== 'idle') {
-      // Always go back to desk when trading
-      this.setTarget(this.deskX, this.deskY, 'walking_to_desk');
-      return;
+      let bgColor, textColor;
+      if (ch.isActive) {
+        bgColor   = ch.currentSide === 'SHORT' ? 'rgba(220,60,60,0.88)' : 'rgba(34,160,70,0.88)';
+        textColor = '#fff';
+      } else {
+        bgColor   = 'rgba(30,30,50,0.75)';
+        textColor = '#999';
+      }
+
+      // Badge
+      ctx.fillStyle = bgColor;
+      const bx = lx - tw / 2, by = ly - th;
+      fillRoundRect(ctx, bx, by, tw, th, Math.max(2, zoom));
+
+      ctx.fillStyle = textColor;
+      ctx.fillText(label, lx, by + th - zoom);
+
+      // LONG / SHORT indicator above badge
+      if (ch.isActive && ch.currentSide) {
+        ctx.font = `bold ${Math.max(7, zoom * 3)}px "Courier New", monospace`;
+        ctx.fillStyle = ch.currentSide === 'SHORT' ? '#ff9999' : '#88ffaa';
+        ctx.fillText(ch.currentSide, lx, by - zoom);
+        ctx.font = `bold ${fontSize}px "Courier New", monospace`;
+      }
     }
-    if (roll < 0.45) {
-      this.setTarget(this.deskX, this.deskY, 'walking_to_desk');
-    } else if (roll < 0.75) {
-      const tx = br.x + Math.round(br.w * (0.25 + Math.random() * 0.5));
-      const ty = br.y + Math.round(br.h * (0.5  + Math.random() * 0.2));
-      this.setTarget(tx, ty, 'walking_to_break');
+  }
+
+  /** Cross-browser rounded rectangle fill helper */
+  function fillRoundRect(ctx, x, y, w, h, r) {
+    ctx.beginPath();
+    if (typeof ctx.roundRect === 'function') {
+      ctx.roundRect(x, y, w, h, r);
     } else {
-      const tx = mr.x + Math.round(mr.w * (0.2 + Math.random() * 0.6));
-      const ty = mr.y + Math.round(mr.h * (0.4 + Math.random() * 0.2));
-      this.setTarget(tx, ty, 'walking_to_meeting');
+      ctx.moveTo(x + r, y);
+      ctx.lineTo(x + w - r, y);
+      ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+      ctx.lineTo(x + w, y + h - r);
+      ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+      ctx.lineTo(x + r, y + h);
+      ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+      ctx.lineTo(x, y + r);
+      ctx.quadraticCurveTo(x, y, x + r, y);
+      ctx.closePath();
     }
-  };
-
-  Character.prototype.update = function (rooms) {
-    const dx = this.tx - this.x;
-    const dy = this.ty - this.y;
-    const dist = Math.sqrt(dx * dx + dy * dy);
-
-    if (dist > SPEED + 0.5) {
-      // Walking
-      this.x += (dx / dist) * SPEED;
-      this.y += (dy / dist) * SPEED;
-      if (Math.abs(dx) > 1) this.facing = dx > 0 ? 1 : -1;
-
-      this.walkTick++;
-      if (this.walkTick % Math.round(60 / FPS_ANIM / 2) === 0) {
-        this.walkFrame = (this.walkFrame + 1) % 4;
-      }
-    } else {
-      // Arrived
-      this.x = this.tx; this.y = this.ty;
-      this.walkFrame = 0;
-
-      const prev = this.behavior;
-      if (prev === 'walking_to_desk')    { this.behavior = 'at_desk';    this.idleTimer = 300 + Math.round(Math.random() * 400); }
-      else if (prev === 'walking_to_break')   { this.behavior = 'at_break';   this.idleTimer = 180 + Math.round(Math.random() * 240); }
-      else if (prev === 'walking_to_meeting') { this.behavior = 'at_meeting'; this.idleTimer = 150 + Math.round(Math.random() * 180); }
-    }
-
-    // Active trade: keep at desk
-    if (this.tradeState.state !== 'idle' &&
-        this.behavior !== 'at_desk' && this.behavior !== 'walking_to_desk') {
-      this.setTarget(this.deskX, this.deskY, 'walking_to_desk');
-    }
-
-    // Idle timer
-    if (this.tradeState.state === 'idle') {
-      if (this.behavior === 'at_desk' || this.behavior === 'at_break' || this.behavior === 'at_meeting') {
-        this.idleTimer--;
-        if (this.idleTimer <= 0) this.wander(rooms);
-      }
-    }
-  };
-
-  // ── TradingFloor class ────────────────────────────────────────────────────
-  function TradingFloor(canvas) {
-    this.canvas     = canvas;
-    this.ctx        = canvas.getContext('2d');
-    this.running    = false;
-    this.rafId      = null;
-    this._pollTimer = null;
-    this.tick       = 0;
-    this.chars      = [];
-    this._initChars();
+    ctx.fill();
   }
 
-  TradingFloor.prototype._initChars = function () {
-    const W = this.canvas.width, H = this.canvas.height;
-    const rooms = this._rooms(W, H);
-    const room  = rooms.trading;
-    this.chars  = TOKENS.map((tok, i) => {
-      const cx = room.x + Math.round(room.w * (i + 0.5) / TOKENS.length);
-      const cy = room.y + Math.round(room.h * 0.42);
-      const ch = new Character(tok, cx, cy);
-      ch.idleTimer += i * 80; // stagger departures
-      return ch;
-    });
-  };
+  // ════════════════════════════════════════════════════════════
+  // TradingFloor controller
+  // ════════════════════════════════════════════════════════════
 
-  TradingFloor.prototype._rooms = function (W, H) {
-    const wallH = Math.round(H * 0.29);
-    const fy    = wallH; // floor starts here
-    const fh    = H - fy;
-    return {
-      trading:   { x: 0,               y: fy, w: Math.round(W * 0.54), h: fh },
-      meeting:   { x: Math.round(W * 0.54), y: fy, w: Math.round(W * 0.22), h: fh },
-      breakroom: { x: Math.round(W * 0.76), y: fy, w: Math.round(W * 0.24), h: fh },
-      wallH,
-    };
-  };
+  class TradingFloor {
+    constructor(container) {
+      this.container     = container;
+      this.canvas        = null;
+      this.running       = false;
+      this.rafId         = null;
+      this.lastTime      = 0;
+      this.apiTimer      = 0;
+      this.pcAnimTimer   = 0;
+      this.pcFrame       = 0;       // 0–2 → PC_FRONT_ON_1/2/3
+      this.tileMap       = buildTileMap();
+      this.blocked       = new Set(STATIC_BLOCKED);
+      this.walkable      = [];
+      this.characters    = [];
+      this.furnitureList = buildFurnitureList();
+      this.assets        = null;
+      this.zoom          = 3;
+    }
 
-  TradingFloor.prototype.start = function () {
-    if (this.running) return;
-    this.running    = true;
-    this._fetchState();
-    this._pollTimer = setInterval(() => this._fetchState(), 8000);
-    this._loop();
-  };
+    async init() {
+      // Create canvas
+      this.canvas = document.createElement('canvas');
+      this.canvas.style.cssText =
+        'display:block;image-rendering:pixelated;image-rendering:crisp-edges;';
+      this.container.innerHTML = '';
+      this.container.appendChild(this.canvas);
 
-  TradingFloor.prototype.stop = function () {
-    this.running = false;
-    if (this.rafId)      cancelAnimationFrame(this.rafId);
-    if (this._pollTimer) clearInterval(this._pollTimer);
-  };
+      // Load all PNG assets
+      this.assets = await loadAllAssets();
 
-  TradingFloor.prototype._fetchState = async function () {
-    try {
-      const priceIds = {
-        BTCUSDT: 'smc-price-BTCUSDT', ETHUSDT: 'smc-price-ETHUSDT',
-        SOLUSDT: 'smc-price-SOLUSDT', BNBUSDT: 'smc-price-BNBUSDT',
-      };
-      TOKENS.forEach((t, i) => {
-        const el = document.getElementById(priceIds[t.symbol]);
-        if (el && el.textContent && el.textContent !== '--')
-          this.chars[i].tradeState.price = el.textContent;
-      });
+      // Fit zoom to container
+      this._calcZoom();
 
-      const resp = await fetch('/api/admin/open-positions', {
-        headers: { Authorization: 'Bearer ' + (localStorage.getItem('token') || '') },
-      });
-      if (!resp.ok) return;
-      const positions = await resp.json();
+      // Compute walkable tiles (after furniture blocks applied)
+      this.walkable = getWalkableTiles(this.tileMap, this.blocked);
 
-      // Reset all to idle
-      this.chars.forEach(ch => {
-        ch.tradeState.state       = 'idle';
-        ch.tradeState.pnl         = null;
-        ch.tradeState.screenColor = C.monScrDef;
-      });
-
-      (Array.isArray(positions) ? positions : []).forEach(pos => {
-        const idx = TOKENS.findIndex(t => t.symbol === pos.symbol);
-        if (idx < 0) return;
-        const ch     = this.chars[idx];
-        const isLong = pos.direction === 'LONG';
-        const pnl    = parseFloat(pos.unrealized_pnl || pos.pnl || 0);
-        ch.tradeState.state       = isLong ? 'bull' : 'bear';
-        ch.tradeState.pnl         = pnl;
-        ch.tradeState.screenColor = pnl >= 0 ? 'rgba(20,83,45,0.88)' : (isLong ? 'rgba(120,53,15,0.88)' : 'rgba(100,20,20,0.88)');
-      });
-    } catch (_) {}
-  };
-
-  TradingFloor.prototype._loop = function () {
-    if (!this.running) return;
-    this.tick++;
-    const W     = this.canvas.width, H = this.canvas.height;
-    const rooms = this._rooms(W, H);
-    this.chars.forEach(ch => ch.update(rooms));
-    this._draw(rooms, W, H);
-    this.rafId = requestAnimationFrame(() => this._loop());
-  };
-
-  TradingFloor.prototype._draw = function (rooms, W, H) {
-    const ctx = this.ctx;
-    ctx.clearRect(0, 0, W, H);
-
-    const { trading, meeting, breakroom, wallH } = rooms;
-
-    // ── Scene ──
-    drawWall(ctx, W, wallH);
-
-    // Room floors
-    drawFloor(ctx, trading.x,   trading.y,   trading.w,   trading.h,   C.floorTradingA, C.floorTradingB);
-    drawFloor(ctx, meeting.x,   meeting.y,   meeting.w,   meeting.h,   C.floorMeetingA, C.floorMeetingB);
-    drawFloor(ctx, breakroom.x, breakroom.y, breakroom.w, breakroom.h, C.floorBreakA,   C.floorBreakB);
-
-    // Room dividers with doorways
-    const doorH = Math.round(trading.h * 0.38);
-    const doorY = trading.y + Math.round(trading.h * 0.35);
-    drawDivider(ctx, trading.x + trading.w,   trading.y, trading.h, doorY, doorH);
-    drawDivider(ctx, meeting.x + meeting.w,   meeting.y, meeting.h, doorY, doorH);
-
-    // Corner plants in trading room
-    const plantBase = trading.y + Math.round(trading.h * 0.72);
-    drawPlant(ctx, trading.x + 36, plantBase, 0.8);
-    drawPlant(ctx, trading.x + trading.w - 36, plantBase, 0.8);
-
-    // Trading desks + monitors
-    const deskW = Math.min(Math.round(trading.w * 0.17), 170);
-    const deskY = trading.y + Math.round(trading.h * 0.52);
-
-    TOKENS.forEach((tok, i) => {
-      const cx = trading.x + Math.round(trading.w * (i + 0.5) / TOKENS.length);
-      const ch = this.chars[i];
-      const st = ch.tradeState;
-
-      drawDesk(ctx, cx - Math.round(deskW / 2), deskY, deskW);
-
-      // Only draw monitor when character is at/near desk
-      const atDesk = ch.behavior === 'at_desk' || ch.behavior === 'walking_to_desk';
-      const dirLine   = st.state === 'bull' ? '▲ LONG' : st.state === 'bear' ? '▼ SHORT' : 'SCANNING…';
-      const priceLine = st.pnl !== null ? (st.pnl >= 0 ? '+' : '') + st.pnl.toFixed(2) + 'U' : st.price;
-      drawMonitor(ctx, cx, deskY, atDesk ? st.screenColor : C.monScrDef, `${tok.label}  ${dirLine}`, priceLine);
-    });
-
-    // Meeting & Break room furniture
-    drawMeetingRoom(ctx, meeting);
-    drawBreakRoom(ctx, breakroom);
-
-    // ── Characters (drawn sorted by Y so "depth" looks right) ──
-    const sorted = [...this.chars].sort((a, b) => a.y - b.y);
-    sorted.forEach(ch => {
-      const cx = Math.round(ch.x) - 6 * SCALE;
-      const cy = Math.round(ch.y) - 26 * SCALE;
-
-      // Active glow
-      if (ch.tradeState.state !== 'idle' && ch.behavior === 'at_desk') {
-        const winning = (ch.tradeState.pnl ?? 0) >= 0;
-        const grd = ctx.createRadialGradient(ch.x, ch.y, 0, ch.x, ch.y, 55);
-        grd.addColorStop(0, winning ? 'rgba(34,197,94,0.13)' : 'rgba(239,68,68,0.13)');
-        grd.addColorStop(1, 'transparent');
-        ctx.fillStyle = grd;
-        ctx.fillRect(ch.x - 60, ch.y - 60, 120, 120);
+      // Spawn one character per agent
+      for (const def of AGENTS) {
+        const seat = SEATS.get(def.seatId);
+        if (seat) seat.assigned = true;
+        const ch = createCharacter(def.id, def.palette, def.seatId, seat || null);
+        this.characters.push(ch);
       }
 
-      drawChar(ctx, cx, cy, ch.tok, ch.tradeState.state, ch.walkFrame, ch.facing);
+      // Initial position fetch (fire-and-forget — rendering starts immediately)
+      this._fetchPositions();
 
-      // Name tag above head
-      const label = ch.tok.label;
-      const tagW = 32, tagH = 12;
-      ctx.fillStyle = C.nameTag;
-      ctx.fillRect(Math.round(ch.x) - tagW/2, cy - tagH - 2, tagW, tagH);
-      ctx.fillStyle = ch.tok.shirt;
-      ctx.font = 'bold 9px "JetBrains Mono",monospace';
-      ctx.textAlign = 'center';
-      ctx.fillText(label, Math.round(ch.x), cy + tagH - 14);
+      return this;
+    }
 
-      // State dot
-      const dotCol = ch.tradeState.state === 'bull' ? '#22c55e'
-                   : ch.tradeState.state === 'bear' ? '#ef4444'
-                   : '#475569';
-      ctx.fillStyle = dotCol;
-      ctx.beginPath();
-      ctx.arc(Math.round(ch.x) + 14, cy - 5, 4, 0, Math.PI * 2);
-      ctx.fill();
-    });
+    _calcZoom() {
+      const cw = this.container.clientWidth  || 800;
+      const ch = this.container.clientHeight || 480;
+      const maxW = Math.floor(cw / (COLS * TILE_SIZE));
+      const maxH = Math.floor(ch / (ROWS * TILE_SIZE));
+      this.zoom = Math.max(2, Math.min(4, Math.min(maxW, maxH)));
+      this.canvas.width  = Math.max(COLS * TILE_SIZE * this.zoom, cw);
+      this.canvas.height = Math.max(ROWS * TILE_SIZE * this.zoom, ch);
+    }
 
-    // ── HUD ──
-    ctx.fillStyle = C.hud;
-    ctx.fillRect(6, 5, 168, 20);
-    ctx.fillStyle = C.accent;
-    ctx.font = 'bold 11px "JetBrains Mono",monospace';
-    ctx.textAlign = 'left';
-    ctx.fillText('🏢 TRADING FLOOR', 12, 19);
+    async _fetchPositions() {
+      try {
+        const res = await fetch('/api/admin/open-positions', { credentials: 'include' });
+        if (!res.ok) return;
+        const data = await res.json();
 
-    ctx.fillStyle = 'rgba(34,197,94,0.2)';
-    ctx.beginPath(); ctx.arc(W - 14, 15, 9, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = '#22c55e';
-    ctx.beginPath(); ctx.arc(W - 14, 15, 5, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = '#d1fae5';
-    ctx.font = '10px monospace'; ctx.textAlign = 'right';
-    ctx.fillText('LIVE', W - 26, 19);
-  };
+        const posMap = {};
+        if (Array.isArray(data)) {
+          for (const p of data) posMap[p.symbol] = p;
+        }
 
-  // ── Init ──────────────────────────────────────────────────────────────────
-  function init() {
-    const container = document.getElementById('trading-floor-container');
-    if (!container) return null;
+        for (const ch of this.characters) {
+          const def = AGENTS.find(a => a.id === ch.id);
+          const pos = def ? posMap[def.symbol] : null;
+          const wasActive = ch.isActive;
+          ch.isActive    = !!pos;
+          ch.currentSide = pos ? (pos.side || pos.positionSide || null) : null;
 
-    const canvas = document.createElement('canvas');
-    canvas.style.cssText = 'width:100%;display:block;';
+          // Sentinel -1: "just became inactive" — skip the long seat rest
+          if (wasActive && !ch.isActive) {
+            ch.seatTimer    = -1;
+            ch.path         = [];
+            ch.moveProgress = 0;
+          }
+        }
+      } catch (_) { /* keep current state on network error */ }
+    }
 
-    const resize = () => {
-      const W = container.clientWidth || 960;
-      const H = Math.max(480, Math.round(W * 0.52));
-      canvas.width  = W;
-      canvas.height = H;
-    };
-    resize();
-    container.innerHTML = '';
-    container.appendChild(canvas);
+    start() {
+      if (this.running) return this;
+      this.running  = true;
+      this.lastTime = 0;
+      this._tick();
+      return this;
+    }
 
-    const floor = new TradingFloor(canvas);
-    window._tradingFloor = floor;
-    window.addEventListener('resize', () => { resize(); floor._initChars(); });
-    return floor;
+    stop() {
+      this.running = false;
+      if (this.rafId) cancelAnimationFrame(this.rafId);
+      this.rafId = null;
+    }
+
+    _tick() {
+      if (!this.running) return;
+      this.rafId = requestAnimationFrame(ts => {
+        const dt = this.lastTime === 0 ? 0
+          : Math.min((ts - this.lastTime) / 1000, MAX_DT);
+        this.lastTime = ts;
+        this._update(dt);
+        this._draw();
+        this._tick();
+      });
+    }
+
+    _update(dt) {
+      // API poll every 5 s
+      this.apiTimer -= dt;
+      if (this.apiTimer <= 0) {
+        this.apiTimer = 5;
+        this._fetchPositions();
+      }
+
+      // PC animation: cycle 3 ON frames at ~5 fps
+      this.pcAnimTimer += dt;
+      if (this.pcAnimTimer >= 0.2) {
+        this.pcAnimTimer -= 0.2;
+        this.pcFrame = (this.pcFrame + 1) % 3;
+      }
+
+      // Character FSM updates
+      for (const ch of this.characters) {
+        updateWithSeatUnblocked(ch, dt, this.walkable, this.tileMap, this.blocked);
+      }
+    }
+
+    _draw() {
+      if (!this.assets) return;
+      const ctx      = this.canvas.getContext('2d');
+      const pcNames  = ['PC_FRONT_ON_1', 'PC_FRONT_ON_2', 'PC_FRONT_ON_3'];
+      const pcOnName = pcNames[this.pcFrame];
+      const activeIds = new Set(this.characters.filter(c => c.isActive).map(c => c.id));
+
+      renderFrame(
+        ctx,
+        this.canvas.width, this.canvas.height,
+        this.tileMap,
+        this.furnitureList,
+        this.characters,
+        this.assets,
+        this.zoom,
+        pcOnName,
+        activeIds,
+      );
+    }
   }
 
-  global.TradingFloor = { init };
+  // ════════════════════════════════════════════════════════════
+  // Public API  (called from app.js switchTab handler)
+  // ════════════════════════════════════════════════════════════
 
-})(window);
+  window.TradingFloor = {
+    init() {
+      const container = document.getElementById('trading-floor-container');
+      if (!container) return null;
+      // Reuse existing instance if already created
+      if (window._tradingFloor) {
+        window._tradingFloor.start();
+        return window._tradingFloor;
+      }
+      const floor = new TradingFloor(container);
+      floor.init().then(() => {
+        floor.start();
+        window._tradingFloor = floor;
+      });
+      return floor;
+    },
+  };
+
+})();
