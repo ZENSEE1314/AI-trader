@@ -248,11 +248,12 @@ function scoreSignal({ swing15, swing3, confirm1m, zone, biasMatchesZone }) {
     if (swing3.barsAgo <= 4) s += 1; // ≤ 12 min ago
   }
 
-  // Step 2: 1m confirmation
+  // Step 2: 1m confirmation (window now 10 bars; bonus for recency)
   if (confirm1m) {
     s += 5;
-    if (confirm1m.barsAgo <= 2)      s += 2; // entered fresh
-    else if (confirm1m.barsAgo <= 4) s += 1;
+    if (confirm1m.barsAgo <= 2)       s += 2; // ≤ 2 min — very fresh
+    else if (confirm1m.barsAgo <= 5)  s += 1; // ≤ 5 min — fresh
+    // 6–10 min: still valid, no bonus
   }
 
   // VWAP zone bonus
@@ -272,12 +273,12 @@ async function analyzeV2(ticker) {
     const [klines15m, klines3m, klines1m] = await Promise.all([
       fetchKlines(symbol, '15m', 100),
       fetchKlines(symbol, '3m',  100),
-      fetchKlines(symbol, '1m',   30),
+      fetchKlines(symbol, '1m',   50),
     ]);
 
     if (!klines15m || klines15m.length < 20) return null;
     if (!klines3m  || klines3m.length  < 20) return null;
-    if (!klines1m  || klines1m.length  < 10) return null;
+    if (!klines1m  || klines1m.length  < 15) return null;
 
     // ── VWAP bands from last 96 × 15m bars (≈ 24 h of session data) ──
     const bands = calcVWAPBands(klines15m.slice(-96));
@@ -318,17 +319,19 @@ async function analyzeV2(ticker) {
     // 1m swing must agree with bias
     if (confirm1m.bias !== bias) return null;
 
-    // 1m confirmation must be very fresh (≤ 5 bars = 5 minutes)
-    if (confirm1m.barsAgo > 5) return null;
+    // 1m confirmation must be fresh (≤ 10 bars = 10 minutes)
+    if (confirm1m.barsAgo > 10) return null;
 
     // ── Entry: current price (= "next candle" after confirmation) ──
     const side  = bias === 'long' ? 'LONG' : 'SHORT';
     const entry = price;
 
-    const INITIAL_SL_PCT = 0.30;
+    // SL display: 30% capital at default 20x = 1.5% price move.
+    // openTrade() recalculates SL precisely using actual leverage — this is reference only.
+    const INITIAL_SL_PRICE_PCT = 0.30 / 20; // 30% capital ÷ 20x default leverage
     const sl = side === 'LONG'
-      ? entry * (1 - INITIAL_SL_PCT)
-      : entry * (1 + INITIAL_SL_PCT);
+      ? entry * (1 - INITIAL_SL_PRICE_PCT)
+      : entry * (1 + INITIAL_SL_PRICE_PCT);
 
     // ── Score ──────────────────────────────────────────────────
     const score = scoreSignal({ swing15, swing3, confirm1m, zone, biasMatchesZone });
@@ -348,7 +351,7 @@ async function analyzeV2(ticker) {
       side,
       entry,
       sl,
-      slPct:      (INITIAL_SL_PCT * 100).toFixed(1),
+      slPct:      (INITIAL_SL_PRICE_PCT * 100).toFixed(2), // price % (30% capital at 20x)
 
       // Trailing SL config — consumed by the position manager in bot.js
       trailConfig: {
