@@ -758,6 +758,17 @@
     _handleCommand(text) {
       this._log('user', 'YOU', text);
 
+      // Slash-commands run an action instead of dispatching to agents
+      const trimmed = text.trim();
+      if (/^\/sweep\b/i.test(trimmed)) { this._runSweep(); return; }
+      if (/^\/board\b/i.test(trimmed)) { this._reportStrategyBoard(); return; }
+      if (/^\/scan\b/i.test(trimmed))  { this._runCoordScan();        return; }
+      if (/^\/help\b/i.test(trimmed)) {
+        this._log('coord', 'COORD',
+          'commands: /scan (audit live bot), /board (strategy WR), /sweep (run backtest). Or address an agent: BTC … / COORD … / ALL …');
+        return;
+      }
+
       // Parse: first token is target agent (BTC/ETH/SOL/BNB/COORD/CODER/ALL)
       const parts = text.split(/\s+/);
       const head = parts[0].toUpperCase();
@@ -852,8 +863,61 @@
             this._log('coord', 'COORD', `${sym}: bot has not logged in 15m${tradeNote}.`);
           }
         }
+
+        // Every 4th scan (~2 min), surface a strategy board snapshot
+        this._scanCount = (this._scanCount || 0) + 1;
+        if (this._scanCount % 4 === 1) {
+          await this._reportStrategyBoard();
+        }
       } catch (e) {
         this._log('coord', 'COORD', `scan exception: ${e.message}`);
+      }
+    }
+
+    // ── COORD: live WR per combo + optimizer status ─────────────
+    async _reportStrategyBoard() {
+      try {
+        const res = await fetch('/api/admin/coord/strategy-board', { credentials: 'include' });
+        if (!res.ok) return;
+        const d = await res.json();
+        if (!d.ok) return;
+        if (d.active) {
+          const wr = (d.active.emaWr || d.active.wr || 0) * 100;
+          this._log('coord', 'COORD',
+            `active strategy: ${d.active.name} — ${wr.toFixed(1)}% WR over ${d.active.trades} trades, avg ${(d.active.avgPnl * 100).toFixed(2)}%/trade.`);
+        } else {
+          this._log('coord', 'COORD', 'no active strategy combo recorded yet.');
+        }
+        const top = d.topByLiveWR && d.topByLiveWR[0];
+        if (top && d.active && top.id !== d.active.id && top.trades >= 10) {
+          this._log('coord', 'COORD',
+            `contender: ${top.name} — ${(top.wr * 100).toFixed(1)}% WR over ${top.trades} trades. Run /sweep to backtest fresh params.`);
+        }
+        if (d.explorationProgress) {
+          const ep = d.explorationProgress;
+          this._log('coord', 'COORD', `phase=${d.currentPhase} | ${ep.explored}/${ep.total} combos explored.`);
+        }
+        if (d.optimizer && d.optimizer.isRunning) {
+          this._log('coder', 'CODER', `backtest running — ${d.optimizer.lastTask?.description || 'in progress'}.`);
+        }
+      } catch (_) { /* silent */ }
+    }
+
+    // ── CODER: run a backtest sweep on demand ───────────────────
+    async _runSweep() {
+      this._log('coder', 'CODER', 'launching backtest sweep…');
+      try {
+        const res = await fetch('/api/admin/coord/run-sweep', { method: 'POST', credentials: 'include' });
+        const out = await res.json().catch(() => ({}));
+        if (res.ok && out.started) {
+          this._log('coder', 'CODER', `sweep #${out.runIdx} started — results will appear in 1-3 min.`);
+        } else if (out.error === 'already_running') {
+          this._log('coder', 'CODER', `sweep already running — ${out.task?.description || 'standby'}.`);
+        } else {
+          this._log('coder', 'CODER', `sweep failed: ${out.error || res.status}`);
+        }
+      } catch (e) {
+        this._log('coder', 'CODER', `sweep exception: ${e.message}`);
       }
     }
 
