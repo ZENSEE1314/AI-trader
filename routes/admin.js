@@ -4164,7 +4164,7 @@ router.get('/coord/scan', async (req, res) => {
   try {
     const smcEngine = require('../smc-engine');
     const { getCfg } = require('../strategy-config');
-    const { CORE_SYMBOLS } = require('../trade-engine');
+    const CORE_SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT'];
 
     const cfg = await getCfg();
     const params = { LEV_BTC_ETH: 100, LEV_MID: 50, LEV_ALT: 20, MIN_SCORE: 2 };

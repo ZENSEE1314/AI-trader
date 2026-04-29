@@ -819,7 +819,9 @@
       try {
         const res = await fetch('/api/admin/coord/scan', { credentials: 'include' });
         if (!res.ok) {
-          this._log('coord', 'COORD', `scan failed (HTTP ${res.status}) — retrying soon.`);
+          let detail = '';
+          try { const body = await res.json(); detail = body.error ? ` — ${body.error}` : ''; } catch (_) {}
+          this._log('coord', 'COORD', `scan failed (HTTP ${res.status})${detail}`);
           return;
         }
         const data = await res.json();
