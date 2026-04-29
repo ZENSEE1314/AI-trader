@@ -27,6 +27,8 @@ const EXPLORE_EPSILON = 0.15;
 const SWITCH_MARGIN = 0.05; // 5% improvement needed to switch
 const EMA_ALPHA = 0.3;
 const EVAL_INTERVAL = 10; // evaluate every N trades
+const FAST_TRACK_WR = 0.80;        // EMA WR threshold for instant activation
+const FAST_TRACK_MARGIN = 0.05;    // contender must beat active EMA WR by ≥5pp
 
 let _initialized = false;
 let _tradesSinceEval = 0;
@@ -224,6 +226,36 @@ async function evaluateAndSwitch() {
     // Exploitation: find best combo with enough data
     const eligible = combos.filter(c => c.total_trades >= MIN_TRADES_PER_COMBO);
     if (!eligible.length) return;
+
+    // ── Fast-track: any combo with EMA WR ≥ FAST_TRACK_WR that beats
+    // the active combo by ≥ FAST_TRACK_MARGIN gets activated immediately,
+    // bypassing the composite-score gate. Picks the highest WR among ties.
+    const activeEmaWr = parseFloat(active.ema_win_rate) || 0;
+    const fastTrack = eligible
+      .filter(c => c.combo_id !== active.combo_id)
+      .filter(c => (parseFloat(c.ema_win_rate) || 0) >= FAST_TRACK_WR)
+      .filter(c => (parseFloat(c.ema_win_rate) || 0) - activeEmaWr >= FAST_TRACK_MARGIN)
+      .sort((a, b) => (parseFloat(b.ema_win_rate) || 0) - (parseFloat(a.ema_win_rate) || 0))[0];
+
+    if (fastTrack) {
+      const ftWr = parseFloat(fastTrack.ema_win_rate) || 0;
+      await db.query('UPDATE quantum_strategy_combos SET is_active = false, is_exploring = false WHERE is_active = true');
+      await db.query('UPDATE quantum_strategy_combos SET is_active = true, is_exploring = false WHERE combo_id = $1', [fastTrack.combo_id]);
+      bLog.ai(
+        `Quantum FAST-TRACK: ${active.combo_name} (${(activeEmaWr * 100).toFixed(0)}% WR) → ${fastTrack.combo_name} ` +
+        `(${(ftWr * 100).toFixed(0)}% WR over ${fastTrack.total_trades} trades) — auto-activated above ${FAST_TRACK_WR * 100}% threshold`
+      );
+      try {
+        await db.query(
+          `INSERT INTO ai_parameter_history (param_name, old_value, new_value, reason, trade_count, win_rate)
+           VALUES ('quantum_combo', $1, $2, $3, $4, $5)`,
+          [active.combo_id, fastTrack.combo_id,
+           `Fast-track: WR ${(ftWr * 100).toFixed(0)}% ≥ ${FAST_TRACK_WR * 100}% threshold (active was ${(activeEmaWr * 100).toFixed(0)}%)`,
+           fastTrack.total_trades, fastTrack.win_rate]
+        );
+      } catch (e) { console.error('[Quantum] param history log error:', e.message); }
+      return;
+    }
 
     const scored = eligible.map(c => ({ ...c, composite: calcComposite(c) }));
     scored.sort((a, b) => b.composite - a.composite);

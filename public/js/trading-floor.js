@@ -890,8 +890,14 @@
         }
         const top = d.topByLiveWR && d.topByLiveWR[0];
         if (top && d.active && top.id !== d.active.id && top.trades >= 10) {
-          this._log('coord', 'COORD',
-            `contender: ${top.name} — ${(top.wr * 100).toFixed(1)}% WR over ${top.trades} trades. Run /sweep to backtest fresh params.`);
+          const wrPct = (top.wr * 100).toFixed(1);
+          const fastTrackHit = top.wr >= 0.80 && top.trades >= 20 && (top.wr - (d.active.emaWr || d.active.wr || 0)) >= 0.05;
+          const note = fastTrackHit
+            ? ' — FAST-TRACK eligible, will auto-activate on next eval cycle.'
+            : top.wr >= 0.75
+              ? ' — closing in on the 80% auto-activate threshold.'
+              : ' Run /sweep to backtest fresh params.';
+          this._log('coord', 'COORD', `contender: ${top.name} — ${wrPct}% WR over ${top.trades} trades.${note}`);
         }
         if (d.explorationProgress) {
           const ep = d.explorationProgress;
