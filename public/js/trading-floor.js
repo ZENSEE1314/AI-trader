@@ -85,10 +85,13 @@
   // Seats  (col/row/facingDir for each agent's chair)
   // ════════════════════════════════════════════════════════════
   const SEATS = new Map([
-    ['seat-btc', { seatCol: 2, seatRow: 3, facingDir: Dir.UP, assigned: false }],
-    ['seat-eth', { seatCol: 6, seatRow: 3, facingDir: Dir.UP, assigned: false }],
-    ['seat-sol', { seatCol: 2, seatRow: 8, facingDir: Dir.UP, assigned: false }],
-    ['seat-bnb', { seatCol: 6, seatRow: 8, facingDir: Dir.UP, assigned: false }],
+    ['seat-btc',   { seatCol: 2,  seatRow: 3, facingDir: Dir.UP, assigned: false }],
+    ['seat-eth',   { seatCol: 6,  seatRow: 3, facingDir: Dir.UP, assigned: false }],
+    ['seat-sol',   { seatCol: 2,  seatRow: 8, facingDir: Dir.UP, assigned: false }],
+    ['seat-bnb',   { seatCol: 6,  seatRow: 8, facingDir: Dir.UP, assigned: false }],
+    // Lounge — non-trader agents
+    ['seat-coord', { seatCol: 16, seatRow: 3, facingDir: Dir.UP, assigned: false }], // at whiteboard
+    ['seat-coder', { seatCol: 11, seatRow: 5, facingDir: Dir.UP, assigned: false }], // by bookshelf/coffee
   ]);
 
   // ════════════════════════════════════════════════════════════
@@ -135,10 +138,45 @@
   // Agent definitions
   // ════════════════════════════════════════════════════════════
   const AGENTS = [
-    { id: 0, symbol: 'BTCUSDT', label: 'BTC', palette: 0, seatId: 'seat-btc' },
-    { id: 1, symbol: 'ETHUSDT', label: 'ETH', palette: 1, seatId: 'seat-eth' },
-    { id: 2, symbol: 'SOLUSDT', label: 'SOL', palette: 2, seatId: 'seat-sol' },
-    { id: 3, symbol: 'BNBUSDT', label: 'BNB', palette: 3, seatId: 'seat-bnb' },
+    { id: 0, symbol: 'BTCUSDT', label: 'BTC',   palette: 0, seatId: 'seat-btc',   role: 'trader' },
+    { id: 1, symbol: 'ETHUSDT', label: 'ETH',   palette: 1, seatId: 'seat-eth',   role: 'trader' },
+    { id: 2, symbol: 'SOLUSDT', label: 'SOL',   palette: 2, seatId: 'seat-sol',   role: 'trader' },
+    { id: 3, symbol: 'BNBUSDT', label: 'BNB',   palette: 3, seatId: 'seat-bnb',   role: 'trader' },
+    { id: 4, symbol: null,      label: 'COORD', palette: 4, seatId: 'seat-coord', role: 'coordinator' },
+    { id: 5, symbol: null,      label: 'CODER', palette: 5, seatId: 'seat-coder', role: 'coder' },
+  ];
+
+  // Friendly display titles + role colours for the sidebar agent list
+  const ROLE_META = {
+    trader:      { title: 'Trader',       color: '#7dd3fc' },
+    coordinator: { title: 'Coordinator',  color: '#fbbf24' },
+    coder:       { title: 'Coder',        color: '#a78bfa' },
+  };
+
+  // Lines emitted into the Activity Log on a slow timer
+  const COORDINATOR_LINES = [
+    'BTC, watch for liquidity sweep below the 4H low.',
+    'ETH — hold position until breakout confirms on volume.',
+    'SOL: tighten stop, exit on structure break.',
+    'Reviewing risk exposure across all pairs.',
+    'BNB, scale in 25% on retest of OB.',
+    'Pause new entries — funding flipped negative.',
+    'CODER: optimise the SMC engine for SOL.',
+    'Approving v2 strategy rollout — all traders sync.',
+    'Reduce leverage to 5x until volatility cools.',
+    'Daily plan posted on the whiteboard.',
+  ];
+  const CODER_LINES = [
+    'pushed v2.4.1 → scalper-ai.js',
+    'fixed slippage bug in trade-engine.js',
+    'optimised BFS pathfinder — 2× faster',
+    'refactored signal-scanner.js (-180 LOC)',
+    'added unit tests for indicator-library',
+    'merged PR #142: liquidity-sweep-engine v3',
+    'tuned MA-stack thresholds, backtest +3.2%',
+    'patched API retry on 429 from Bitunix',
+    'shipped Kronos integration to staging',
+    'cleaned up cycle.js memory leak',
   ];
 
   // PC positions mapped to character IDs (for ON/OFF animation)
@@ -219,6 +257,11 @@
 
   function rndRange(min, max) { return min + Math.random() * (max - min); }
   function rndInt(min, max)   { return min + Math.floor(Math.random() * (max - min + 1)); }
+  function escapeHtml(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
 
   function createCharacter(id, palette, seatId, seat) {
     const col = seat ? seat.seatCol : 1;
@@ -696,6 +739,10 @@
   class TradingFloor {
     constructor(container) {
       this.container     = container;
+      // Canvas mounts inside #trading-floor-canvas-wrap if present, else container
+      this.canvasMount   = container.querySelector('#trading-floor-canvas-wrap') || container;
+      this.listEl        = document.getElementById('trading-floor-agent-list');
+      this.logEl         = document.getElementById('trading-floor-log');
       this.canvas        = null;
       this.running       = false;
       this.rafId         = null;
@@ -703,6 +750,9 @@
       this.apiTimer      = 0;
       this.pcAnimTimer   = 0;
       this.pcFrame       = 0;       // 0–2 → PC_FRONT_ON_1/2/3
+      this.coordTimer    = rndRange(6, 12);
+      this.coderTimer    = rndRange(8, 16);
+      this.listTimer     = 0;
       this.tileMap       = buildTileMap();
       this.blocked       = new Set(STATIC_BLOCKED);
       this.walkable      = [];
@@ -710,6 +760,12 @@
       this.furnitureList = buildFurnitureList();
       this.assets        = null;
       this.zoom          = 3;
+      this.logLimit      = 80;
+
+      const clearBtn = document.getElementById('trading-floor-log-clear');
+      if (clearBtn) clearBtn.addEventListener('click', () => {
+        if (this.logEl) this.logEl.innerHTML = '';
+      });
     }
 
     async init() {
@@ -717,8 +773,8 @@
       this.canvas = document.createElement('canvas');
       this.canvas.style.cssText =
         'display:block;image-rendering:pixelated;image-rendering:crisp-edges;';
-      this.container.innerHTML = '';
-      this.container.appendChild(this.canvas);
+      this.canvasMount.innerHTML = '';
+      this.canvasMount.appendChild(this.canvas);
 
       // Load all PNG assets
       this.assets = await loadAllAssets();
@@ -740,12 +796,17 @@
       // Initial position fetch (fire-and-forget — rendering starts immediately)
       this._fetchPositions();
 
+      // Seed sidebar
+      this._renderAgentList();
+      this._log('coord', 'COORD', 'Trading floor online — all agents reporting in.');
+      this._log('coder', 'CODER', 'syncing latest strategies from main…');
+
       return this;
     }
 
     _calcZoom() {
-      const cw = this.container.clientWidth  || 800;
-      const ch = this.container.clientHeight || 480;
+      const cw = this.canvasMount.clientWidth  || 800;
+      const ch = this.canvasMount.clientHeight || 480;
       const maxW = Math.floor(cw / (COLS * TILE_SIZE));
       const maxH = Math.floor(ch / (ROWS * TILE_SIZE));
       this.zoom = Math.max(2, Math.min(4, Math.min(maxW, maxH)));
@@ -766,8 +827,10 @@
 
         for (const ch of this.characters) {
           const def = AGENTS.find(a => a.id === ch.id);
-          const pos = def ? posMap[def.symbol] : null;
+          if (!def || def.role !== 'trader') continue; // coord/coder are always active
+          const pos = def.symbol ? posMap[def.symbol] : null;
           const wasActive = ch.isActive;
+          const wasSide   = ch.currentSide;
           ch.isActive    = !!pos;
           ch.currentSide = pos ? (pos.side || pos.positionSide || null) : null;
 
@@ -776,6 +839,11 @@
             ch.seatTimer    = -1;
             ch.path         = [];
             ch.moveProgress = 0;
+            this._log('trade', def.label, `closed ${wasSide || 'position'}`);
+          } else if (!wasActive && ch.isActive) {
+            this._log('trade', def.label, `opened ${ch.currentSide || 'position'}`);
+          } else if (wasActive && ch.isActive && wasSide !== ch.currentSide && ch.currentSide) {
+            this._log('trade', def.label, `flipped to ${ch.currentSide}`);
           }
         }
       } catch (_) { /* keep current state on network error */ }
@@ -822,9 +890,96 @@
         this.pcFrame = (this.pcFrame + 1) % 3;
       }
 
+      // Coordinator + Coder periodic chatter into the log
+      this.coordTimer -= dt;
+      if (this.coordTimer <= 0) {
+        this.coordTimer = rndRange(8, 18);
+        this._log('coord', 'COORD', COORDINATOR_LINES[Math.floor(Math.random() * COORDINATOR_LINES.length)]);
+      }
+      this.coderTimer -= dt;
+      if (this.coderTimer <= 0) {
+        this.coderTimer = rndRange(10, 22);
+        this._log('coder', 'CODER', CODER_LINES[Math.floor(Math.random() * CODER_LINES.length)]);
+      }
+
+      // Refresh sidebar status ~2 Hz
+      this.listTimer -= dt;
+      if (this.listTimer <= 0) {
+        this.listTimer = 0.5;
+        this._renderAgentList();
+      }
+
       // Character FSM updates
       for (const ch of this.characters) {
         updateWithSeatUnblocked(ch, dt, this.walkable, this.tileMap, this.blocked);
+      }
+    }
+
+    // ── Sidebar: agent list ─────────────────────────────────────
+    _renderAgentList() {
+      if (!this.listEl) return;
+      // Build only once; afterwards just patch status nodes
+      if (this.listEl.children.length !== AGENTS.length) {
+        this.listEl.innerHTML = '';
+        for (const def of AGENTS) {
+          const meta = ROLE_META[def.role] || ROLE_META.trader;
+          const li = document.createElement('li');
+          li.dataset.aid = def.id;
+          li.style.cssText = 'display:flex;align-items:center;gap:8px;padding:6px 8px;border:1px solid var(--color-border-muted);border-radius:6px;background:var(--color-bg);';
+          li.innerHTML =
+            '<span class="tf-dot" style="width:8px;height:8px;border-radius:50%;background:#555;flex-shrink:0;"></span>' +
+            '<span style="font-weight:700;color:' + meta.color + ';min-width:54px;">' + def.label + '</span>' +
+            '<span style="color:var(--color-text-muted);font-size:0.7rem;flex:1;">' + meta.title + '</span>' +
+            '<span class="tf-state" style="font-size:0.65rem;color:var(--color-text-muted);text-transform:uppercase;letter-spacing:0.05em;">--</span>';
+          this.listEl.appendChild(li);
+        }
+      }
+      for (const ch of this.characters) {
+        const def = AGENTS.find(a => a.id === ch.id);
+        if (!def) continue;
+        const li = this.listEl.querySelector('li[data-aid="' + def.id + '"]');
+        if (!li) continue;
+        const dot = li.querySelector('.tf-dot');
+        const stateEl = li.querySelector('.tf-state');
+        let label, color;
+        if (def.role !== 'trader') {
+          label = def.role === 'coordinator' ? 'planning' : 'coding';
+          color = ROLE_META[def.role].color;
+        } else if (ch.isActive) {
+          label = ch.currentSide || 'active';
+          color = ch.currentSide === 'SHORT' ? '#f87171' : '#4ade80';
+        } else {
+          label = ch.state === CS.WALK ? 'walking' : (ch.state === CS.TYPE ? 'idle' : 'idle');
+          color = '#6b7280';
+        }
+        if (dot) dot.style.background = color;
+        if (stateEl) stateEl.textContent = label;
+      }
+    }
+
+    // ── Sidebar: activity log ───────────────────────────────────
+    _log(kind, who, msg) {
+      if (!this.logEl) return;
+      const colorByKind = {
+        coord: '#fbbf24',
+        coder: '#a78bfa',
+        trade: '#4ade80',
+      };
+      const c = colorByKind[kind] || 'var(--color-text)';
+      const t = new Date();
+      const hh = String(t.getHours()).padStart(2, '0');
+      const mm = String(t.getMinutes()).padStart(2, '0');
+      const ss = String(t.getSeconds()).padStart(2, '0');
+      const row = document.createElement('div');
+      row.style.cssText = 'padding:2px 0;border-bottom:1px dashed rgba(255,255,255,0.04);';
+      row.innerHTML =
+        '<span style="color:var(--color-text-muted);">[' + hh + ':' + mm + ':' + ss + ']</span> ' +
+        '<span style="color:' + c + ';font-weight:700;">' + escapeHtml(who) + '</span> ' +
+        '<span>' + escapeHtml(msg) + '</span>';
+      // Most recent at top
+      this.logEl.insertBefore(row, this.logEl.firstChild);
+      while (this.logEl.children.length > this.logLimit) {
+        this.logEl.removeChild(this.logEl.lastChild);
       }
     }
 
