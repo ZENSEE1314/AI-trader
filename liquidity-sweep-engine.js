@@ -1335,11 +1335,16 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     const atr = calcATR(parsed15);
 
     if (longOk) {
-      const sl     = slLowRef.length ? Math.min(...slLowRef.slice(-3)) * 0.9995 : price * 0.998;
+      // SL = most recent pivot low (the HL that confirmed the structure), not the deepest.
+      // Using min of last-3 caused the SL to anchor to session lows from hours ago,
+      // making slDist huge and killing RR on every entry.
+      const sl     = slLowRef.length ? slLowRef[slLowRef.length - 1] * 0.9995 : price * 0.998;
       const slDist = Math.abs(price - sl) / price;
       const tp1    = price + atr * 2.0;
       const rr     = slDist > 0 ? Math.round((atr * 2.0) / (price * slDist) * 10) / 10 : 0;
-      if (rr >= 1.2 && slDist > 0.001 && slDist < 0.03) {
+      // RR gate removed — user trades on structure, not on RR ratio.
+      // slDist bounds still guard against runaway SL (> 3%) or ghost SL (< 0.1%).
+      if (slDist > 0.001 && slDist < 0.03) {
         signals.push({
           symbol, direction: 'LONG', price, lastPrice: price,
           sl, tp1, tp2: price + atr * 3.0, tp3: price + atr * 4.0,
@@ -1351,11 +1356,12 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     }
 
     if (shortOk) {
-      const sl     = slHighRef.length ? Math.max(...slHighRef.slice(-3)) * 1.0005 : price * 1.002;
+      // SL = most recent pivot high (the LH that confirmed the structure)
+      const sl     = slHighRef.length ? slHighRef[slHighRef.length - 1] * 1.0005 : price * 1.002;
       const slDist = Math.abs(sl - price) / price;
       const tp1    = price - atr * 2.0;
       const rr     = slDist > 0 ? Math.round((atr * 2.0) / (price * slDist) * 10) / 10 : 0;
-      if (rr >= 1.2 && slDist > 0.001 && slDist < 0.03) {
+      if (slDist > 0.001 && slDist < 0.03) {
         signals.push({
           symbol, direction: 'SHORT', price, lastPrice: price,
           sl, tp1, tp2: price - atr * 3.0, tp3: price - atr * 4.0,
@@ -1402,7 +1408,7 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
         const slDist = Math.abs(sl - price) / price;
         const tp1    = price - atrV12 * 2.0;
         const rr     = slDist > 0 ? Math.round((atrV12 * 2.0) / (price * slDist) * 10) / 10 : 0;
-        if (rr >= 1.2 && slDist > 0.001 && slDist < 0.015) {
+        if (slDist > 0.001 && slDist < 0.015) {
           signals.push({
             symbol, direction: 'SHORT', price, lastPrice: price,
             sl, tp1, tp2: price - atrV12 * 3.0, tp3: price - atrV12 * 4.0,
@@ -1432,7 +1438,7 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
         const slDist = Math.abs(sl - price) / price;
         const tp1    = price - atrV12 * 2.0;
         const rr     = slDist > 0 ? Math.round((atrV12 * 2.0) / (price * slDist) * 10) / 10 : 0;
-        if (rr >= 1.2 && slDist > 0.001 && slDist < 0.015) {
+        if (slDist > 0.001 && slDist < 0.015) {
           signals.push({
             symbol, direction: 'SHORT', price, lastPrice: price,
             sl, tp1, tp2: price - atrV12 * 3.0, tp3: price - atrV12 * 4.0,
@@ -1459,7 +1465,7 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
         const slDist = Math.abs(price - sl) / price;
         const tp1    = price + atrV12 * 2.0;
         const rr     = slDist > 0 ? Math.round((atrV12 * 2.0) / (price * slDist) * 10) / 10 : 0;
-        if (rr >= 1.2 && slDist > 0.001 && slDist < 0.015) {
+        if (slDist > 0.001 && slDist < 0.015) {
           signals.push({
             symbol, direction: 'LONG', price, lastPrice: price,
             sl, tp1, tp2: price + atrV12 * 3.0, tp3: price + atrV12 * 4.0,
