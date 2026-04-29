@@ -4157,21 +4157,46 @@ router.post('/email/test', adminOnly, async (req, res) => {
 });
 
 // ────────────────────────────────────────────────────────────────
-// COORD agent — real SMC scan + missed-trade audit on the 4 traders
+// COORD agent — audit the live bot's recent decisions for the 4 traders
+//
+// Source of truth: `bot_logs` (what the live agent-coordinator + scanSMC
+// actually wrote) joined with `trades` (what got placed).  Avoids running
+// a parallel scanner which would diverge from the live engine.
+//
 // GET /api/admin/coord/scan
 // ────────────────────────────────────────────────────────────────
 router.get('/coord/scan', async (req, res) => {
   try {
-    const smcEngine = require('../smc-engine');
-    const { getCfg } = require('../strategy-config');
     const CORE_SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT'];
+    const since = new Date(Date.now() - 15 * 60 * 1000); // 15 min window
 
-    const cfg = await getCfg();
-    const params = { LEV_BTC_ETH: 100, LEV_MID: 50, LEV_ALT: 20, MIN_SCORE: 2 };
+    // Most recent scan-related log line per symbol
+    const logRows = await query(
+      `SELECT DISTINCT ON (symbol) symbol, ts, category, message, direction, score, result
+         FROM bot_logs
+        WHERE symbol = ANY($1::text[])
+          AND ts >= $2
+          AND category IN ('scan','ai','trade','error')
+        ORDER BY symbol, ts DESC`,
+      [CORE_SYMBOLS, since]
+    );
+    const logBySymbol = Object.fromEntries(logRows.map(r => [r.symbol, r]));
 
-    const tickerRes = await fetch('https://fapi.binance.com/fapi/v1/ticker/24hr');
-    const tickerArr = tickerRes.ok ? await tickerRes.json() : [];
-    const tickerMap = Object.fromEntries(tickerArr.map(t => [t.symbol, t]));
+    // Any signal-bearing log line in the window (so we can detect "engine
+    // emitted a signal but no trade was placed")
+    const signalRows = await query(
+      `SELECT symbol, ts, message, direction, score
+         FROM bot_logs
+        WHERE symbol = ANY($1::text[])
+          AND ts >= $2
+          AND (message ILIKE 'SIGNAL%' OR result = 'signal')
+        ORDER BY ts DESC`,
+      [CORE_SYMBOLS, since]
+    );
+    const signalsBySymbol = {};
+    for (const r of signalRows) {
+      (signalsBySymbol[r.symbol] = signalsBySymbol[r.symbol] || []).push(r);
+    }
 
     const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
     const tradesRows = await query(
@@ -4187,50 +4212,34 @@ router.get('/coord/scan', async (req, res) => {
       (tradesBySymbol[r.symbol] = tradesBySymbol[r.symbol] || []).push(r);
     }
 
-    const results = [];
-    for (const symbol of CORE_SYMBOLS) {
-      const ticker = tickerMap[symbol];
-      if (!ticker) {
-        results.push({ symbol, error: 'no_ticker' });
-        continue;
-      }
-      let signal = null;
-      try {
-        signal = await smcEngine.analyzeLHHL(ticker, params, new Map(), null, cfg);
-      } catch (e) {
-        results.push({ symbol, error: 'analyze_failed: ' + e.message });
-        continue;
-      }
+    const results = CORE_SYMBOLS.map(symbol => {
+      const lastLog = logBySymbol[symbol] || null;
+      const signals = signalsBySymbol[symbol] || [];
       const trades = tradesBySymbol[symbol] || [];
       const inOpenTrade = trades.some(t => t.status === 'OPEN');
-      const tradedRecently = trades.length > 0;
-      const hasSignal = !!signal;
-      const missed = hasSignal && !inOpenTrade && !tradedRecently;
-      results.push({
+      // "Missed" = engine emitted a signal in the window AND no trade exists
+      const missed = signals.length > 0 && trades.length === 0 && !inOpenTrade;
+      return {
         symbol,
-        price: parseFloat(ticker.lastPrice),
-        signal: signal ? {
-          direction: signal.direction,
-          score:     signal.score,
-          slDist:    signal.slDist,
-          sl:        signal.sl,
-          tp:        signal.tp1 || signal.tp,
-          leverage:  signal.leverage,
+        lastLog: lastLog ? {
+          ts: lastLog.ts,
+          category: lastLog.category,
+          message: (lastLog.message || '').slice(0, 200),
+          direction: lastLog.direction,
         } : null,
+        recentSignals: signals.length,
+        recentSignalSample: signals[0] ? (signals[0].message || '').slice(0, 200) : null,
         trades: trades.length,
         inOpenTrade,
         missed,
-      });
-    }
+      };
+    });
 
-    const tunables = {
-      'strat.smc.max_chase_pct':   cfg['strat.smc.max_chase_pct'],
-      'strat.smc.max_candle_age':  cfg['strat.smc.max_candle_age'],
-      'strat.smc.sl_pct':          cfg['strat.smc.sl_pct'],
-      'strat.smc.tp_pct':          cfg['strat.smc.tp_pct'],
-    };
+    // How fresh is the bot? If no bot_logs at all in window, the bot is dead.
+    const botAlive = logRows.length > 0;
+    const lastBotActivity = logRows[0] ? logRows[0].ts : null;
 
-    res.json({ ok: true, scannedAt: new Date().toISOString(), results, tunables });
+    res.json({ ok: true, scannedAt: new Date().toISOString(), botAlive, lastBotActivity, results });
   } catch (err) {
     console.error('[coord/scan] error:', err.message);
     res.status(500).json({ error: 'Server error: ' + err.message });
