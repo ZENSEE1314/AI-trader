@@ -1173,6 +1173,7 @@
         <button class="nav-tab" role="tab" aria-selected="false" data-tab="chart" data-i18n="nav.chart">Chart</button>
         <button class="nav-tab" role="tab" aria-selected="false" data-tab="profile" data-i18n="nav.profile">Profile</button>
         <button class="nav-tab hidden" role="tab" aria-selected="false" data-tab="admin" id="admin-tab" data-i18n="nav.admin">Admin</button>
+        <button class="nav-tab hidden" role="tab" aria-selected="false" data-tab="floor" id="floor-tab">🏢 Floor</button>
       </nav>
 
       <!-- ====================================================
@@ -2505,6 +2506,25 @@ EMAIL_FROM=MCT &lt;a83c06001@smtp-brevo.com&gt;</pre>
         </div><!-- /admin-tab-email -->
 
       </section>
+
+      <!-- ====================================================
+           Trading Floor Tab
+           ==================================================== -->
+      <section id="tab-floor" class="hidden" role="tabpanel" aria-label="Trading Floor">
+        <div class="panel" style="padding:0;overflow:hidden;border-radius:var(--radius-lg);">
+          <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 20px;border-bottom:1px solid var(--color-border-muted);background:var(--color-bg-raised);">
+            <div>
+              <h3 style="margin:0;font-size:1rem;font-weight:700;color:var(--color-text);">🏢 Trading Floor</h3>
+              <p style="margin:4px 0 0;font-size:0.75rem;color:var(--color-text-muted);">Live pixel art view of bot activity — updates every 8s</p>
+            </div>
+            <div id="floor-status" style="font-size:0.72rem;color:var(--color-text-muted);display:flex;align-items:center;gap:6px;">
+              <span class="cn-mini-dot" style="animation:pulse 2s infinite;"></span><span>Live</span>
+            </div>
+          </div>
+          <div id="trading-floor-container" style="background:#0d1117;min-height:420px;"></div>
+        </div>
+      </section>
+
     </main>
   </div>
 
@@ -2625,7 +2645,8 @@ EMAIL_FROM=MCT &lt;a83c06001@smtp-brevo.com&gt;</pre>
     </div>
   </div>
 
-  <script src="/js/app.js?v=20260428" defer></script>
+  <script src="/js/trading-floor.js?v=20260429" defer></script>
+  <script src="/js/app.js?v=20260429" defer></script>
   <!-- Email tab patch: inline so it works regardless of JS cache (HTML is never cached) -->
   <script>
     document.addEventListener('DOMContentLoaded', function() {
