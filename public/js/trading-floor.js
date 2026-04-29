@@ -827,78 +827,33 @@
         const data = await res.json();
         if (!data || !Array.isArray(data.results)) return;
 
-        // Track consecutive misses for the CODER tune trigger
-        this._missStreak = this._missStreak || {};
-
-        let missedSym = null;
-        for (const r of data.results) {
-          const sym = r.symbol.replace('USDT', '');
-          if (r.error) {
-            this._log('coord', 'COORD', `${sym}: scan error (${r.error}).`);
-            continue;
-          }
-          const tag = r.signal
-            ? `${r.signal.direction} signal (score ${r.signal.score}, slDist ${(r.signal.slDist * 100).toFixed(2)}%)`
-            : 'no setup';
-          const tradeNote = r.inOpenTrade ? ' — in open trade'
-            : r.trades > 0 ? ' — closed in last hour'
-            : '';
-          if (r.missed) {
-            this._log('coord', 'COORD', `MISSED ${sym}: ${tag} but no trade taken${tradeNote}.`);
-            this._missStreak[sym] = (this._missStreak[sym] || 0) + 1;
-            missedSym = missedSym || sym;
-          } else {
-            this._log('coord', 'COORD', `${sym}: ${tag}${tradeNote}.`);
-            this._missStreak[sym] = 0;
-          }
+        if (data.botAlive === false) {
+          this._log('coord', 'COORD', 'live bot is silent — no scan logs in the last 15m. Cycle may be paused.');
+          return;
         }
 
-        // CODER: if any symbol missed >=2 scans in a row, propose a tune
-        const culprit = Object.entries(this._missStreak).find(([_, n]) => n >= 2);
-        if (culprit && data.tunables) {
-          this._missStreak[culprit[0]] = 0; // arm once per streak
-          await this._coderTune(culprit[0], data.tunables);
+        for (const r of data.results) {
+          const sym = r.symbol.replace('USDT', '');
+          const tradeNote = r.inOpenTrade ? ' — in open trade'
+            : r.trades > 0 ? ' — closed earlier this hour'
+            : '';
+          if (r.missed) {
+            const sample = r.recentSignalSample ? ` ("${r.recentSignalSample}")` : '';
+            this._log('coord', 'COORD',
+              `MISSED ${sym}: ${r.recentSignals} signal(s) in last 15m, no trade${tradeNote}.${sample}`);
+            continue;
+          }
+          if (r.lastLog) {
+            const t = new Date(r.lastLog.ts);
+            const ago = Math.max(0, Math.round((Date.now() - t.getTime()) / 1000));
+            this._log('coord', 'COORD',
+              `${sym}: [${r.lastLog.category}] ${r.lastLog.message} (${ago}s ago)${tradeNote}.`);
+          } else {
+            this._log('coord', 'COORD', `${sym}: bot has not logged in 15m${tradeNote}.`);
+          }
         }
       } catch (e) {
         this._log('coord', 'COORD', `scan exception: ${e.message}`);
-      }
-    }
-
-    // ── CODER: heuristic auto-tune in response to missed signals ─
-    async _coderTune(symLabel, tunables) {
-      // Heuristic: missed signals most often = chase filter too tight.
-      // Nudge max_chase_pct up by 20% (capped server-side at 0.030).
-      const currentChase = Number(tunables['strat.smc.max_chase_pct']);
-      if (!Number.isFinite(currentChase)) return;
-      const proposed = Math.min(0.030, +(currentChase * 1.20).toFixed(4));
-      if (proposed <= currentChase) {
-        this._log('coder', 'CODER', `chase filter already at ceiling — nothing to tune for ${symLabel}.`);
-        return;
-      }
-      this._log('coder', 'CODER',
-        `tuning max_chase_pct: ${(currentChase * 100).toFixed(2)}% → ${(proposed * 100).toFixed(2)}% (${symLabel} missed twice)`);
-      try {
-        const res = await fetch('/api/admin/coder/tune', {
-          method: 'POST',
-          credentials: 'include',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            key: 'strat.smc.max_chase_pct',
-            value: proposed,
-            reason: `${symLabel} missed twice`,
-          }),
-        });
-        const out = await res.json().catch(() => ({}));
-        if (res.ok && out.ok) {
-          this._log('coder', 'CODER',
-            `applied: max_chase_pct = ${(out.value * 100).toFixed(2)}% (was ${out.prevValue != null ? (out.prevValue * 100).toFixed(2) + '%' : 'default'}).`);
-        } else if (out.error === 'cooldown') {
-          this._log('coder', 'CODER', `holding off — tune cooldown ${out.wait_seconds}s remaining.`);
-        } else {
-          this._log('coder', 'CODER', `tune rejected: ${out.error || res.status}`);
-        }
-      } catch (e) {
-        this._log('coder', 'CODER', `tune failed: ${e.message}`);
       }
     }
 
@@ -932,8 +887,8 @@
 
       // Seed sidebar
       this._renderAgentList();
-      this._log('coord', 'COORD', 'Trading floor online — running first SMC scan…');
-      this._log('coder', 'CODER', 'standing by for tune requests (cooldown 10m).');
+      this._log('coord', 'COORD', 'Trading floor online — auditing live bot decisions…');
+      this._log('coder', 'CODER', 'standing by — manual tunes only, no auto-adjustment.');
       this._runCoordScan();
 
       return this;
