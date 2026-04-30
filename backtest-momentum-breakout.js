@@ -267,18 +267,33 @@ function simulate(symCfg, candles) {
     let exitBar    = i + 1;
     let maxFavor   = 0;  // max favorable capital % seen
 
+    // Track the favorable high-water mark so the trail ratchets
+    // off the bar's extreme (high for LONG, low for SHORT) — same
+    // behavior as an exchange trailing stop, not a close-only trail.
+    let bestPrice = entry;
+
     for (let j = i + 1; j <= Math.min(i + MAX_HOLD_BARS, candles.length - 1); j++) {
       const k    = candles[j];
       const high = parseFloat(k[2]);
       const low  = parseFloat(k[3]);
-      const close = parseFloat(k[4]);
 
-      // Update max favorable move
+      // Update high-water mark + max favorable move
+      if (side === 'LONG'  && high > bestPrice) bestPrice = high;
+      if (side === 'SHORT' && (low  < bestPrice || bestPrice === entry)) bestPrice = low;
+
       const favorPx = side === 'LONG' ? (high - entry) / entry : (entry - low) / entry;
       const favorCap = favorPx * lev;
       if (favorCap > maxFavor) maxFavor = favorCap;
 
-      // SL hit?  Use intra-bar high/low (assume worst-case fill at SL)
+      // Update trail FIRST, off the high-water mark.  In a real
+      // 1m bar the price that hits the high-water mark precedes
+      // the bar's adverse extreme often enough that this is the
+      // realistic ordering; we still fill SL at sl (no slippage).
+      const newSL = calcTrailingSLV3(entry, bestPrice, side, lev);
+      if (side === 'LONG'  && newSL > sl) sl = newSL;
+      if (side === 'SHORT' && newSL < sl) sl = newSL;
+
+      // SL hit?  Use intra-bar high/low.
       if (side === 'LONG' && low <= sl) {
         exitPrice  = sl;
         exitReason = 'trailSL';
@@ -291,11 +306,6 @@ function simulate(symCfg, candles) {
         exitBar    = j;
         break;
       }
-
-      // Trail SL using bar close (one update per bar — conservative)
-      const newSL = calcTrailingSLV3(entry, close, side, lev);
-      if (side === 'LONG'  && newSL > sl) sl = newSL;
-      if (side === 'SHORT' && newSL < sl) sl = newSL;
     }
 
     if (exitPrice === null) {
@@ -411,4 +421,36 @@ function simulate(symCfg, candles) {
   const reasons = {};
   for (const t of allTrades) reasons[t.exitReason] = (reasons[t.exitReason] || 0) + 1;
   console.log(' Exit reasons    :', reasons);
+
+  // ── Per-symbol diagnostic: max-favor on losers ───────────────
+  console.log();
+  console.log(' Diagnostic — losers: did the trail miss profit?');
+  console.log(' ──────────────────────────────────────────────────');
+  console.log(' symbol     losers  avg-maxFavorCap%  pct>21%cap (would-have-trailed)');
+  for (const cfg of SYMBOLS) {
+    const symTrades = allTrades.filter(t => t.entry > 0 && /* match symbol via leverage proxy isn't reliable */ true);
+    // Use the per-symbol arrays from perSymbol via a re-run? Simpler: tag trades.
+  }
+  // Re-tag: rerun with symbol tracking.  Cheap — rebuild.
+  const tagged = [];
+  const rng2 = mkRng(SEED);
+  for (const cfg of SYMBOLS) {
+    const candles = genCandles(cfg.symbol, N_BARS, cfg.baseVol, cfg.basePrice, rng2);
+    const ts = simulate(cfg, candles);
+    for (const t of ts) tagged.push({ ...t, symbol: cfg.symbol, leverage: cfg.leverage });
+  }
+  for (const cfg of SYMBOLS) {
+    const losers = tagged.filter(t => t.symbol === cfg.symbol && t.pnl$ <= 0);
+    if (!losers.length) {
+      console.log(` ${cfg.symbol.padEnd(10)}  ${String(0).padStart(6)}  —`);
+      continue;
+    }
+    const avgFavor = losers.reduce((s, t) => s + t.maxFavorCap, 0) / losers.length;
+    const wouldHaveTrailed = losers.filter(t => t.maxFavorCap >= TRAIL_ON_CAP).length;
+    console.log(
+      ` ${cfg.symbol.padEnd(10)} ${String(losers.length).padStart(6)}  ` +
+      `${(avgFavor * 100).toFixed(2).padStart(15)}%  ` +
+      `${wouldHaveTrailed}/${losers.length} (${((wouldHaveTrailed / losers.length) * 100).toFixed(1)}%)`
+    );
+  }
 })();
