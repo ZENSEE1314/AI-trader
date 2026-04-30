@@ -961,15 +961,11 @@ async function analyzeSymbol(symbol, price, kronosPredictions = null) {
   const MID_LEV  = new Set(['SOLUSDT', 'BNBUSDT', 'XRPUSDT']);
   const leverage = HIGH_LEV.has(symbol) ? 100 : MID_LEV.has(symbol) ? 50 : price >= 100 ? 50 : 20;
 
-  // ── Force SL to exactly 15% capital ────────────────────────
-  // Every trade across every engine has identical 15%-capital initial
-  // risk.  15% (down from 20%) keeps SL tight enough that TP is reachable
-  // without a runaway adverse move stopping the trade out at full risk.
-  // Matches v3 calcTrailingSLV3 INITIAL_SL_CAP and the trail-watchdog
-  // retro-widener.
-  //   100x lev → 0.15 / 100 = 0.15% price move
-  //    50x lev → 0.15 /  50 = 0.30% price move
-  const INITIAL_SL_CAP = 0.15;
+  // ── Force SL to exactly 20% capital ────────────────────────
+  // Every trade across every engine has identical 20%-capital initial risk.
+  //   100x lev → 0.20 / 100 = 0.20% price move
+  //    50x lev → 0.20 /  50 = 0.40% price move
+  const INITIAL_SL_CAP = 0.20;
   const slPricePct = INITIAL_SL_CAP / leverage;
   const adjustedSL = isLong
     ? price * (1 - slPricePct)
@@ -978,7 +974,7 @@ async function analyzeSymbol(symbol, price, kronosPredictions = null) {
   bLog.scan(
     `ENGINE: ${symbol} ${best.direction} [${best.setupName}] ` +
     `score=${best.score} RSI=${rsi.toFixed(0)} h1=${h1Trend} opBias=${opBias} ` +
-    `SL=${adjustedSL.toFixed(4)} (15% cap, raw strategy SL=${best.sl?.toFixed(4)}) TP=${tp.toFixed(4)}`
+    `SL=${adjustedSL.toFixed(4)} (20% cap, raw strategy SL=${best.sl?.toFixed(4)}) TP=${tp.toFixed(4)}`
   );
 
   return {
@@ -987,9 +983,12 @@ async function analyzeSymbol(symbol, price, kronosPredictions = null) {
     price,
     lastPrice: price,
     sl:          adjustedSL,
-    tp1:         tp,
-    tp2:         tp,
-    tp3:         tp,
+    // No fixed TP — trailing SL manages exits.  At +21% capital the trail
+    // locks +20%, then steps every +10%.  Setting tp* to null prevents the
+    // executor from placing a TP order on the exchange.
+    tp1:         null,
+    tp2:         null,
+    tp3:         null,
     leverage,
     score:       best.score,
     setupName:   best.setupName,
