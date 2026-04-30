@@ -716,15 +716,40 @@ async function analyzeV3(ticker) {
     if (volSpike) parts.push('VolSpike');
     const setupName = parts.join('+');
 
-    // ── Universal 1m structure-pause gate ──────────────────────
-    // Block ANY entry while the 1m is still extending. Require the
-    // last TWO closed 1m candles (klines[len-2] and klines[len-3];
-    // len-1 is in-progress) to BOTH be non-extending in the signal's
-    // direction. Catches mid-thrust chases that a one-candle pause
-    // would let through. Applied to all setups (VWAPTrend, LiqGrab,
-    // BreakRetest, MSTF, MomentumBreakout, ...).
+    // ── Range-position + pause gates (combined) ────────────────
+    // 1. Range pos in last 20×1m (0 = HL, 1 = HH).
+    //      LONG  blocked if pos > 0.40 (chase up)
+    //      SHORT blocked if pos < 0.60 (chase down)
+    // 2. Pause: last 2 closed 1m candles must not extend.
+    //      SKIPPED at extreme range (LONG pos < 0.20, SHORT pos > 0.80)
+    //      so the bot enters on the first bullish/bearish candle off
+    //      the HL/HH instead of waiting for 2 paused candles —
+    //      range gate already protects against chase.
     const k1m = klines1m || [];
-    if (k1m.length >= 4) {
+    let rPos = null;
+    if (k1m.length >= 21) {
+      const w20 = k1m.slice(-21, -1);
+      let hi = -Infinity, lo = Infinity;
+      for (const k of w20) {
+        const h = parseFloat(k[2]);
+        const l = parseFloat(k[3]);
+        if (h > hi) hi = h;
+        if (l < lo) lo = l;
+      }
+      const sz = hi - lo;
+      if (sz > 0) {
+        rPos = (price - lo) / sz;
+        if (side === 'LONG'  && rPos > 0.40) return null;
+        if (side === 'SHORT' && rPos < 0.60) return null;
+      }
+    }
+
+    const atExtreme = rPos !== null && (
+      (side === 'LONG'  && rPos < 0.20) ||
+      (side === 'SHORT' && rPos > 0.80)
+    );
+
+    if (!atExtreme && k1m.length >= 4) {
       const lastH = parseFloat(k1m[k1m.length - 2][2]);
       const lastL = parseFloat(k1m[k1m.length - 2][3]);
       const midH  = parseFloat(k1m[k1m.length - 3][2]);
@@ -739,28 +764,6 @@ async function analyzeV3(ticker) {
         const pausedA = lastL >= midL && lastH >= midH;
         const pausedB = midL  >= oldL && midH  >= oldH;
         if (!(pausedA && pausedB)) return null;
-      }
-    }
-
-    // ── Near-extreme gate — enter at the HL/HH, not mid-range ──
-    // LONG only if price is in the bottom 40 % of the recent 20×1m
-    // range (closer to HL than HH); SHORT only if in the top 40 %.
-    // Pairs with the pause gate above so a mid-rally chase that
-    // pauses for 2 candles still gets blocked when price is too high.
-    if (k1m.length >= 21) {
-      const w20 = k1m.slice(-21, -1); // 20 closed 1m candles
-      let hi = -Infinity, lo = Infinity;
-      for (const k of w20) {
-        const h = parseFloat(k[2]);
-        const l = parseFloat(k[3]);
-        if (h > hi) hi = h;
-        if (l < lo) lo = l;
-      }
-      const sz = hi - lo;
-      if (sz > 0) {
-        const pos = (price - lo) / sz; // 0 = at HL, 1 = at HH
-        if (side === 'LONG'  && pos > 0.40) return null;
-        if (side === 'SHORT' && pos < 0.60) return null;
       }
     }
 

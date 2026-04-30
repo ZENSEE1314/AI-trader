@@ -1780,20 +1780,44 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     intelDelta:     best.intelDelta || 0,
   };
 
-  // ── Universal 1m structure-pause gate ──────────────────────
-  // Don't fire ANY entry while the 1m is still extending. Require the
-  // last TWO closed 1m candles (klines[len-2] and klines[len-3]; len-1
-  // is in-progress) to BOTH be non-extending in the signal's direction.
-  //
-  //   LONG paused : c.high <= prev.high && c.low <= prev.low   (no new HH/HL)
-  //   SHORT paused: c.low  >= prev.low  && c.high >= prev.high (no new LL/LH)
-  //
-  // Catches the chase case where price has already rallied/dumped and a
-  // single doji satisfies a 1-candle pause but the move is still alive.
-  // Applied to every setup uniformly (VWAPTrend, LiqGrab, LiqSweep,
-  // STRUCTURE_FOLLOW, MomScalp, BRR-Fib, ...).
+  // ── Range-position + pause gates (combined) ────────────────
+  // 1. Range pos in last 20×1m (0 = at HL, 1 = at HH).
+  //      LONG  blocked if pos > 0.40 (too far from HL — chase up)
+  //      SHORT blocked if pos < 0.60 (too far from HH — chase down)
+  // 2. Pause: last TWO closed 1m candles must not extend further.
+  //      LONG  paused: c.high ≤ prev.high && c.low ≤ prev.low
+  //      SHORT paused: c.low  ≥ prev.low  && c.high ≥ prev.high
+  //      SKIPPED at the EXTREME zone (LONG pos < 0.20, SHORT pos > 0.80)
+  //      so the bot enters on the first bullish/bearish candle off
+  //      the HL/HH instead of waiting for 2 paused candles. The range
+  //      gate already protects against chase entries; pause is only
+  //      needed in the middle of the range.
+  let _rangePos = null;
+  if (parsed1m.length >= 21) {
+    const w20 = parsed1m.slice(-21, -1);
+    const rangeHi = Math.max(...w20.map(c => c.high));
+    const rangeLo = Math.min(...w20.map(c => c.low));
+    const rangeSz = rangeHi - rangeLo;
+    if (rangeSz > 0) {
+      _rangePos = (price - rangeLo) / rangeSz;
+      if (best.direction === 'LONG' && _rangePos > 0.40) {
+        bLog.scan(`${symbol}: LONG ${best.setup} BLOCKED — price ${(_rangePos*100).toFixed(0)}% into 20×1m range (need ≤40% — too far from HL)`);
+        return null;
+      }
+      if (best.direction === 'SHORT' && _rangePos < 0.60) {
+        bLog.scan(`${symbol}: SHORT ${best.setup} BLOCKED — price ${(_rangePos*100).toFixed(0)}% into 20×1m range (need ≥60% — too far from HH)`);
+        return null;
+      }
+    }
+  }
+
+  const _atExtreme = _rangePos !== null && (
+    (best.direction === 'LONG'  && _rangePos < 0.20) ||
+    (best.direction === 'SHORT' && _rangePos > 0.80)
+  );
+
   const _paLen = parsed1m.length;
-  if (_paLen >= 4) {
+  if (!_atExtreme && _paLen >= 4) {
     const c1 = parsed1m[_paLen - 2];
     const c2 = parsed1m[_paLen - 3];
     const p1 = parsed1m[_paLen - 3];
@@ -1802,37 +1826,14 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
       const paused1 = c1.high <= p1.high && c1.low <= p1.low;
       const paused2 = c2.high <= p2.high && c2.low <= p2.low;
       if (!(paused1 && paused2)) {
-        bLog.scan(`${symbol}: ${best.direction} ${best.setup} BLOCKED — 1m structure still extending (need 2 paused candles)`);
+        bLog.scan(`${symbol}: ${best.direction} ${best.setup} BLOCKED — 1m structure still extending (need 2 paused candles, range pos ${_rangePos !== null ? (_rangePos*100).toFixed(0)+'%' : 'n/a'})`);
         return null;
       }
     } else if (best.direction === 'SHORT') {
       const paused1 = c1.low >= p1.low && c1.high >= p1.high;
       const paused2 = c2.low >= p2.low && c2.high >= p2.high;
       if (!(paused1 && paused2)) {
-        bLog.scan(`${symbol}: ${best.direction} ${best.setup} BLOCKED — 1m structure still extending (need 2 paused candles)`);
-        return null;
-      }
-    }
-  }
-
-  // ── Near-extreme gate — enter at the HL/HH, not mid-range ──
-  // Don't fire LONG unless price sits in the BOTTOM 40 % of the
-  // recent 20×1m range (i.e. close to the HL).  Don't fire SHORT
-  // unless price sits in the TOP 40 %.  Stops the bot from chasing
-  // mid-thrust entries where pause-gate alone wasn't enough.
-  if (parsed1m.length >= 21) {
-    const w20 = parsed1m.slice(-21, -1); // last 20 closed 1m candles
-    const rangeHi = Math.max(...w20.map(c => c.high));
-    const rangeLo = Math.min(...w20.map(c => c.low));
-    const rangeSz = rangeHi - rangeLo;
-    if (rangeSz > 0) {
-      const pos = (price - rangeLo) / rangeSz; // 0 = at HL, 1 = at HH
-      if (best.direction === 'LONG' && pos > 0.40) {
-        bLog.scan(`${symbol}: LONG ${best.setup} BLOCKED — price ${(pos*100).toFixed(0)}% into 20×1m range (need ≤40% — too far from HL)`);
-        return null;
-      }
-      if (best.direction === 'SHORT' && pos < 0.60) {
-        bLog.scan(`${symbol}: SHORT ${best.setup} BLOCKED — price ${(pos*100).toFixed(0)}% into 20×1m range (need ≥60% — too far from HH)`);
+        bLog.scan(`${symbol}: ${best.direction} ${best.setup} BLOCKED — 1m structure still extending (need 2 paused candles, range pos ${_rangePos !== null ? (_rangePos*100).toFixed(0)+'%' : 'n/a'})`);
         return null;
       }
     }
