@@ -4715,21 +4715,24 @@
   // Close current position and lock the opposite direction so the bot enters the reverse trade next cycle.
   async function reverseOpenPosition(symbol, currentDir) {
     const oppositeDir = currentDir === 'LONG' ? 'SHORT' : 'LONG';
-    if (!confirm(`🔄 Reverse ${symbol}?\n\nThis will:\n1. Close all ${symbol} ${currentDir} positions now\n2. Lock ${symbol} direction to ${oppositeDir} for next entry\n\nConfirm?`)) return;
+    if (!confirm(`🔄 REVERSE ${symbol}?\n\nThis closes ALL ${symbol} ${currentDir} positions for every user, then IMMEDIATELY opens an ${oppositeDir} position with the SAME qty/leverage on the same accounts. Initial SL set at 20% capital from the new entry.\n\nConfirm?`)) return;
 
     const statusEl = document.getElementById('emergency-stop-status');
     if (statusEl) { statusEl.style.color = '#f59e0b'; statusEl.textContent = `Reversing ${symbol} ${currentDir} → ${oppositeDir}...`; }
 
     try {
-      // Step 1: close current position
-      const result = await api('POST', '/api/admin/emergency-close', { symbol });
-
-      // Step 2: set per-token direction to opposite so bot enters the other side next cycle
-      await setTokenDirection(symbol, oppositeDir);
-
-      const closed = result.totalClosed || 0;
-      if (statusEl) { statusEl.style.color = 'var(--color-success)'; statusEl.textContent = `${symbol}: ${closed} closed, direction → ${oppositeDir}`; }
-      showToast(`${symbol} reversed: closed ${currentDir}, next entry = ${oppositeDir} 🔄`, 'success');
+      const result = await api('POST', '/api/admin/reverse-position', { symbol, currentDir });
+      const closed = result.closedCount || 0;
+      const opened = result.openedCount || 0;
+      const detail = (result.results || []).map(r => `${r.user}: ${r.status}${r.error ? ' — ' + r.error : ''}${r.newEntry ? ' @ $' + r.newEntry : ''}`).join('\n');
+      if (detail) console.log('[REVERSE RESULTS]\n' + detail);
+      if (statusEl) {
+        statusEl.style.color = opened > 0 ? 'var(--color-success)' : '#ef4444';
+        statusEl.textContent = `${symbol}: closed=${closed}, opened=${opened} ${oppositeDir}`;
+      }
+      showToast(opened > 0
+        ? `${symbol} reversed: closed ${closed} ${currentDir}, opened ${opened} ${oppositeDir} 🔄`
+        : `${symbol} closed ${closed} but opened 0 — check console`, opened > 0 ? 'success' : 'error');
       loadOpenPositions();
     } catch (err) {
       if (statusEl) { statusEl.style.color = '#ef4444'; statusEl.textContent = `Reverse ${symbol} failed: ${err.message}`; }

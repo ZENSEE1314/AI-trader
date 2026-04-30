@@ -1980,6 +1980,175 @@ router.post('/emergency-close', async (req, res) => {
   }
 });
 
+// ── Reverse Position: close current side, OPEN opposite at same qty ─
+// Body: { symbol, currentDir }  ('LONG' | 'SHORT')
+// For each user with an open position on `symbol`:
+//   1. Flash-close the current position (Bitunix) / market-close (Binance)
+//   2. Place a market order in the OPPOSITE direction with the same qty
+//      and the same leverage the position was using
+//   3. Set initial SL at 20 % capital from the new entry
+//   4. Insert new trade row in DB
+// Bypasses the scan/risk pipeline — admin override only.
+router.post('/reverse-position', async (req, res) => {
+  const symbol = String(req.body.symbol || '').toUpperCase();
+  const currentDir = String(req.body.currentDir || '').toUpperCase();
+  if (!symbol || !['LONG', 'SHORT'].includes(currentDir)) {
+    return res.status(400).json({ error: 'symbol + currentDir (LONG|SHORT) required' });
+  }
+  const newDir = currentDir === 'LONG' ? 'SHORT' : 'LONG';
+  console.log(`[ADMIN] ⚠️ REVERSE ${symbol} ${currentDir} → ${newDir} for all users`);
+
+  try {
+    const cryptoUtils = require('../crypto-utils');
+    const { BitunixClient } = require('../bitunix-client');
+
+    const keys = await query(
+      `SELECT ak.id, ak.user_id, ak.api_key_enc, ak.iv, ak.auth_tag,
+              ak.api_secret_enc, ak.secret_iv, ak.secret_auth_tag,
+              ak.platform, ak.leverage, u.email
+       FROM api_keys ak
+       JOIN users u ON u.id = ak.user_id
+       WHERE ak.enabled = true`
+    );
+
+    const results = [];
+    let closedCount = 0;
+    let openedCount = 0;
+    const SLEEP = ms => new Promise(r => setTimeout(r, ms));
+
+    for (const key of keys) {
+      try {
+        const apiKey    = cryptoUtils.decrypt(key.api_key_enc, key.iv, key.auth_tag);
+        const apiSecret = cryptoUtils.decrypt(key.api_secret_enc, key.secret_iv, key.secret_auth_tag);
+
+        if (key.platform !== 'bitunix') {
+          // Binance reverse not implemented yet — TODO when needed
+          results.push({ user: key.email, status: 'SKIPPED', reason: 'binance reverse not yet supported' });
+          continue;
+        }
+
+        const client = new BitunixClient({ apiKey, apiSecret });
+
+        // Find this user's open trade for this symbol+direction
+        const dbTrades = await query(
+          `SELECT id, bitunix_position_id, entry_price, quantity, leverage, sl_price
+             FROM trades
+            WHERE api_key_id = $1 AND symbol = $2 AND status = 'OPEN' AND direction = $3`,
+          [key.id, symbol, currentDir]
+        );
+        if (dbTrades.length === 0) {
+          results.push({ user: key.email, status: 'SKIPPED', reason: `no open ${currentDir} trade in DB` });
+          continue;
+        }
+
+        // Look up the live position to get the actual qty + positionId
+        const positions = await client.getOpenPositions(symbol);
+        const wantedSide = currentDir === 'LONG' ? 'BUY' : 'SELL';
+        const livePos = (Array.isArray(positions) ? positions : []).find(p =>
+          p.symbol === symbol && (p.side || '').toUpperCase() === wantedSide && parseFloat(p.qty || 0) > 0
+        );
+        if (!livePos) {
+          // No live position — just clean up DB
+          await query(`UPDATE trades SET status='CLOSED', closed_at=NOW() WHERE id=$1`, [dbTrades[0].id]);
+          results.push({ user: key.email, status: 'PHANTOM_CLEANED', reason: 'no live position to reverse' });
+          continue;
+        }
+
+        const qty       = livePos.qty;
+        const lev       = parseInt(livePos.leverage || dbTrades[0].leverage || key.leverage || 20);
+        const closeSide = currentDir === 'LONG' ? 'SELL' : 'BUY';
+        const openSide  = newDir === 'LONG' ? 'BUY' : 'SELL';
+
+        // 1. CLOSE current side
+        try {
+          await client.flashClose({ positionId: livePos.positionId });
+          await query(`UPDATE trades SET status='CLOSED', exit_price=$1, closed_at=NOW(), exit_reason='admin_reverse' WHERE id=$2`,
+                      [parseFloat(livePos.avgOpenPrice || 0), dbTrades[0].id]);
+          closedCount++;
+        } catch (cErr) {
+          results.push({ user: key.email, status: 'CLOSE_FAILED', error: cErr.message });
+          continue;
+        }
+
+        // Wait briefly for the close to settle on the exchange
+        await SLEEP(1000);
+
+        // 2. OPEN opposite side with same qty
+        try {
+          await client.placeOrder({
+            symbol,
+            side: openSide,
+            qty: String(qty),
+            orderType: 'MARKET',
+            tradeSide: 'OPEN',
+          });
+        } catch (oErr) {
+          results.push({ user: key.email, status: 'OPEN_FAILED', error: oErr.message, closed: true });
+          continue;
+        }
+
+        // Wait for the new position to be visible
+        await SLEEP(1500);
+
+        // 3. Look up the new position to get entry + positionId for SL
+        const newPositions = await client.getOpenPositions(symbol);
+        const newPosSide = newDir === 'LONG' ? 'BUY' : 'SELL';
+        const newPos = (Array.isArray(newPositions) ? newPositions : []).find(p =>
+          p.symbol === symbol && (p.side || '').toUpperCase() === newPosSide && parseFloat(p.qty || 0) > 0
+        );
+        if (!newPos) {
+          results.push({ user: key.email, status: 'OPENED_NO_VERIFY', reason: 'placed order but new position not visible yet' });
+          openedCount++;
+          continue;
+        }
+
+        const newEntry    = parseFloat(newPos.avgOpenPrice || 0);
+        const isLong      = newDir === 'LONG';
+        const slPricePct  = 0.20 / lev;            // 20 % capital
+        const slPrice     = isLong ? newEntry * (1 - slPricePct) : newEntry * (1 + slPricePct);
+        const slFmt       = parseFloat(slPrice.toFixed(8));
+
+        // 4. Place SL with 3-attempt retry
+        let slOk = false;
+        let slLastErr = '';
+        for (let a = 1; a <= 3; a++) {
+          try {
+            await client.placePositionTpSl({ symbol, positionId: newPos.positionId, slPrice: slFmt });
+            slOk = true;
+            break;
+          } catch (slErr) {
+            slLastErr = slErr.message;
+            if (a < 3) await SLEEP(a * 1000);
+          }
+        }
+
+        // 5. Insert new trade row
+        await query(
+          `INSERT INTO trades (api_key_id, user_id, symbol, direction, entry_price, sl_price, quantity, leverage, status,
+                               trailing_sl_price, trailing_sl_last_step, bitunix_position_id, market_structure)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'OPEN', $9, 0, $10, $11)`,
+          [key.id, key.user_id, symbol, newDir, newEntry, slOk ? slFmt : 0, qty, lev,
+           slOk ? slFmt : 0, newPos.positionId, 'admin_reverse']
+        );
+        openedCount++;
+        results.push({
+          user: key.email, status: slOk ? 'REVERSED' : 'REVERSED_NO_SL',
+          newDir, newEntry, qty, sl: slOk ? slFmt : null, slError: slOk ? null : slLastErr,
+        });
+
+      } catch (keyErr) {
+        results.push({ user: key.email, status: 'KEY_ERROR', error: keyErr.message });
+      }
+    }
+
+    console.log(`[ADMIN] Reverse ${symbol} ${currentDir}→${newDir}: closed=${closedCount} opened=${openedCount} of ${keys.length} users`);
+    res.json({ ok: true, symbol, currentDir, newDir, closedCount, openedCount, totalUsers: keys.length, results });
+  } catch (err) {
+    console.error('Reverse-position error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Force re-sync all trades with exchange data ────
 router.post('/fix-bitunix-pnl', async (req, res) => {
   try {
