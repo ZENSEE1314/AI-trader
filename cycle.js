@@ -2235,6 +2235,34 @@ async function syncTradeStatus() {
             });
           }
 
+          // ── Unmanaged-position detector (hedge-mode safety) ──────
+          // Warn when a Bitunix position has no matching OPEN DB trade by
+          // (symbol, direction). Triggered by manual trades on the same key
+          // or by another tool/script. Deduped per (symbol+side+entry) per
+          // process so we don't spam alerts each sync tick.
+          syncTradeStatus._alertedUnmanaged = syncTradeStatus._alertedUnmanaged || new Set();
+          for (const p of (account.positions || [])) {
+            const amt = parseFloat(p.positionAmt || 0);
+            if (!amt) continue;
+            const dir = amt > 0 ? 'LONG' : 'SHORT';
+            const matched = trades.some(t =>
+              t.symbol === p.symbol && (t.direction || 'LONG') === dir
+            );
+            if (matched) continue;
+            const entry = parseFloat(p.entryPrice || 0);
+            const dedupKey = `${key.id}:${p.symbol}:${dir}:${entry}`;
+            if (syncTradeStatus._alertedUnmanaged.has(dedupKey)) continue;
+            syncTradeStatus._alertedUnmanaged.add(dedupKey);
+            bLog.system(`UNMANAGED POSITION: Bitunix ${p.symbol} ${dir} qty=${Math.abs(amt)} entry=$${entry} — not opened by bot`);
+            await notify(
+              `⚠️ *Unmanaged Position*\n` +
+              `${p.symbol} *${dir}* (Bitunix)\n` +
+              `Entry: \`$${entry}\`  Qty: ${Math.abs(amt)}\n` +
+              `Not opened by the bot — manual or external.\n` +
+              `The bot will not trail/manage this position.`
+            );
+          }
+
           // Check trailing SL for Bitunix positions (self-healing)
           bLog.system(`Bitunix trailing SL: checking ${trades.length} trade(s), ${openSymbols.size} live position(s): [${[...openSymbols.keys()].join(',')}]`);
           for (const trade of trades) {
