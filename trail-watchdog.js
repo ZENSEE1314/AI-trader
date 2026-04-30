@@ -5,12 +5,12 @@
 //   strategy version is active in the admin panel. Do NOT move these
 //   thresholds into strategy_versions or any DB config.
 //
-// Initial SL: 15% capital
+// Initial SL: 15% capital  (tight — keeps TP reachable on noisy 1m moves)
 // Trail logic:
-//   Below +16% capital profit → no movement, trade breathes freely
-//   +16% capital profit       → SL locked at +10% (profit secured)
-//   +20% capital profit       → SL moves to +20%
+//   Below +21% capital profit → no movement, trade breathes freely
+//   +21% capital profit       → SL locked at +20% (profit secured)
 //   +30% capital profit       → SL moves to +30%
+//   +40% capital profit       → SL moves to +40%
 //   ... steps up every +10% capital gain, always locking in the milestone
 // ============================================================
 
@@ -23,15 +23,15 @@ const { calcTrailingSLV3 } = require('./strategy-v3');
 
 // Adapter: returns { newSl, capitalPct, milestone } expected by the
 // log/notify code below, or null when there's no improvement to lock in.
-// Wraps calcTrailingSLV3 (15% capital initial SL, trailing at +16%, lock
-// floor(cap×10)/10).
+// Wraps calcTrailingSLV3 — 15% capital initial SL (tight), trailing at
+// +21% → lock +20%, then +30/+40/... by floor(cap×10)/10.
 function calcV2TrailSL(entryPrice, currentPrice, isLong, leverage, currentSl) {
   const side = isLong ? 'LONG' : 'SHORT';
   const pricePct = isLong
     ? (currentPrice - entryPrice) / entryPrice
     : (entryPrice - currentPrice) / entryPrice;
   const capitalPct = pricePct * leverage;
-  const TRAIL_ON_CAP = 0.16;
+  const TRAIL_ON_CAP = 0.21;
   if (capitalPct < TRAIL_ON_CAP) return null;
   const newSl = calcTrailingSLV3(entryPrice, currentPrice, side, leverage);
   const milestone = Math.floor(capitalPct * 10) / 10;
