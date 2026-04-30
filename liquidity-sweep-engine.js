@@ -1780,6 +1780,41 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     intelDelta:     best.intelDelta || 0,
   };
 
+  // ── Universal 1m structure-pause gate ──────────────────────
+  // Don't fire ANY entry while the 1m is still extending. Require the
+  // last TWO closed 1m candles (klines[len-2] and klines[len-3]; len-1
+  // is in-progress) to BOTH be non-extending in the signal's direction.
+  //
+  //   LONG paused : c.high <= prev.high && c.low <= prev.low   (no new HH/HL)
+  //   SHORT paused: c.low  >= prev.low  && c.high >= prev.high (no new LL/LH)
+  //
+  // Catches the chase case where price has already rallied/dumped and a
+  // single doji satisfies a 1-candle pause but the move is still alive.
+  // Applied to every setup uniformly (VWAPTrend, LiqGrab, LiqSweep,
+  // STRUCTURE_FOLLOW, MomScalp, BRR-Fib, ...).
+  const _paLen = parsed1m.length;
+  if (_paLen >= 4) {
+    const c1 = parsed1m[_paLen - 2];
+    const c2 = parsed1m[_paLen - 3];
+    const p1 = parsed1m[_paLen - 3];
+    const p2 = parsed1m[_paLen - 4];
+    if (best.direction === 'LONG') {
+      const paused1 = c1.high <= p1.high && c1.low <= p1.low;
+      const paused2 = c2.high <= p2.high && c2.low <= p2.low;
+      if (!(paused1 && paused2)) {
+        bLog.scan(`${symbol}: ${best.direction} ${best.setup} BLOCKED — 1m structure still extending (need 2 paused candles)`);
+        return null;
+      }
+    } else if (best.direction === 'SHORT') {
+      const paused1 = c1.low >= p1.low && c1.high >= p1.high;
+      const paused2 = c2.low >= p2.low && c2.high >= p2.high;
+      if (!(paused1 && paused2)) {
+        bLog.scan(`${symbol}: ${best.direction} ${best.setup} BLOCKED — 1m structure still extending (need 2 paused candles)`);
+        return null;
+      }
+    }
+  }
+
   return best;
 }
 

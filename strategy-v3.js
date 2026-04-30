@@ -716,6 +716,32 @@ async function analyzeV3(ticker) {
     if (volSpike) parts.push('VolSpike');
     const setupName = parts.join('+');
 
+    // ── Universal 1m structure-pause gate ──────────────────────
+    // Block ANY entry while the 1m is still extending. Require the
+    // last TWO closed 1m candles (klines[len-2] and klines[len-3];
+    // len-1 is in-progress) to BOTH be non-extending in the signal's
+    // direction. Catches mid-thrust chases that a one-candle pause
+    // would let through. Applied to all setups (VWAPTrend, LiqGrab,
+    // BreakRetest, MSTF, MomentumBreakout, ...).
+    const k1m = klines1m || [];
+    if (k1m.length >= 4) {
+      const lastH = parseFloat(k1m[k1m.length - 2][2]);
+      const lastL = parseFloat(k1m[k1m.length - 2][3]);
+      const midH  = parseFloat(k1m[k1m.length - 3][2]);
+      const midL  = parseFloat(k1m[k1m.length - 3][3]);
+      const oldH  = parseFloat(k1m[k1m.length - 4][2]);
+      const oldL  = parseFloat(k1m[k1m.length - 4][3]);
+      if (side === 'LONG') {
+        const pausedA = lastH <= midH && lastL <= midL;
+        const pausedB = midH  <= oldH && midL  <= oldL;
+        if (!(pausedA && pausedB)) return null;
+      } else {
+        const pausedA = lastL >= midL && lastH >= midH;
+        const pausedB = midL  >= oldL && midH  >= oldH;
+        if (!(pausedA && pausedB)) return null;
+      }
+    }
+
     return {
       symbol,
       lastPrice:  price,
