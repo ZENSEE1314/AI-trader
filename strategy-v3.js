@@ -367,6 +367,94 @@ function detectStructure(klines, swingLen = 3) {
   return { hh, hl, lh, ll };
 }
 
+// ── Setup 5: Momentum Breakout (waterfall / vertical impulse) ─────
+//
+//   PURPOSE: catch the moves the structure-based setups miss — a
+//   vertical impulse candle that breaks out of a recent range with
+//   no pullback and no LH/HL retest.
+//
+//   TRIGGERS (all must hold on the just-closed 1m candle):
+//     1. Body magnitude  ≥ IMPULSE_BODY_ATR × ATR(14) on 1m
+//     2. Volume          ≥ IMPULSE_VOL_MUL  × avg-volume(20) on 1m
+//     3. Range expansion: candle range ≥ MAX(last 5 ranges) × 1.2
+//     4. Range break:   close pierces max-high/min-low of last
+//                       CONSOLIDATION_LB bars (excluding the candle)
+//
+//   Direction is taken from the candle body sign — this is the
+//   point: we follow the impulse, we do NOT wait for a retest.
+//
+//   No swing-age check, no chase check.
+//   Optional 1h-EMA200 alignment is a SCORE bonus, not a veto.
+
+function atr(klines, period = 14) {
+  if (!klines || klines.length < period + 1) return null;
+  const trs = [];
+  for (let i = 1; i < klines.length; i++) {
+    const h  = parseFloat(klines[i][2]);
+    const l  = parseFloat(klines[i][3]);
+    const pc = parseFloat(klines[i - 1][4]);
+    trs.push(Math.max(h - l, Math.abs(h - pc), Math.abs(l - pc)));
+  }
+  // Wilder-style: SMA of first `period` TRs, then RMA
+  let a = trs.slice(0, period).reduce((x, y) => x + y, 0) / period;
+  for (let i = period; i < trs.length; i++) a = (a * (period - 1) + trs[i]) / period;
+  return a;
+}
+
+function detectMomentumBreakout(klines1m, opts = {}) {
+  const {
+    bodyAtrMul       = 1.6,   // body must be ≥ 1.6 × ATR
+    volMul           = 1.8,   // volume must be ≥ 1.8 × avg-20
+    rangeMul         = 1.2,   // candle range ≥ 1.2 × max(last 5 ranges)
+    consolidationLB  = 20,    // bars used to define the range break
+  } = opts;
+
+  if (!klines1m || klines1m.length < Math.max(consolidationLB + 2, 30)) return null;
+
+  const last = klines1m[klines1m.length - 1];
+  const o = parseFloat(last[1]);
+  const h = parseFloat(last[2]);
+  const l = parseFloat(last[3]);
+  const c = parseFloat(last[4]);
+  const v = parseFloat(last[5]);
+
+  const body  = Math.abs(c - o);
+  const range = h - l;
+  if (range <= 0) return null;
+
+  const a = atr(klines1m.slice(-30), 14);
+  if (!a) return null;
+  if (body < a * bodyAtrMul) return null;
+
+  const volAvg = avgVolume(klines1m, 20);
+  if (volAvg <= 0 || v < volAvg * volMul) return null;
+
+  // Range expansion vs last 5 candles (excluding current)
+  const prior5 = klines1m.slice(-6, -1);
+  const maxPriorRange = Math.max(...prior5.map(k => parseFloat(k[2]) - parseFloat(k[3])));
+  if (range < maxPriorRange * rangeMul) return null;
+
+  // Consolidation break: close beyond max-high / min-low of prior LB bars
+  const lb = klines1m.slice(-consolidationLB - 1, -1);
+  const consHigh = Math.max(...lb.map(k => parseFloat(k[2])));
+  const consLow  = Math.min(...lb.map(k => parseFloat(k[3])));
+
+  const isUp   = c > o && c > consHigh;
+  const isDown = c < o && c < consLow;
+  if (!isUp && !isDown) return null;
+
+  return {
+    setupName: 'MomentumBreakout',
+    level:     isUp ? consHigh : consLow,
+    levelType: isUp ? 'RangeHigh' : 'RangeLow',
+    direction: isUp ? 'long' : 'short',
+    impulseHigh: h,
+    impulseLow:  l,
+    bodyAtr:     body / a,
+    volMul:      v / volAvg,
+  };
+}
+
 // ── Setup 4: Multi-Timeframe Structure (HTF + 1m confirmation) ──
 //
 //   LONG:  (15m or 3m) shows HH or HL  AND  1m shows HH or HL
@@ -436,10 +524,11 @@ function scoreSignal({ setup, bias, vwapBias, volSpike, rejCandle, ema9, ema21 }
   let s = 0;
 
   // Base per setup
-  if (setup === 'BreakRetest') s += 8;
-  if (setup === 'LiqGrab')     s += 9;  // SMC setups slightly higher value
-  if (setup === 'VWAPTrend')   s += 7;
-  if (setup === 'MSTF')        s += 9;  // multi-TF structure: strong confluence
+  if (setup === 'BreakRetest')      s += 8;
+  if (setup === 'LiqGrab')          s += 9;  // SMC setups slightly higher value
+  if (setup === 'VWAPTrend')        s += 7;
+  if (setup === 'MSTF')             s += 9;  // multi-TF structure: strong confluence
+  if (setup === 'MomentumBreakout') s += 8;  // impulse: strong base, needs vol+ATR confirm
 
   // VWAP bias alignment bonus
   if (vwapBias) s += 2;
@@ -533,14 +622,29 @@ async function analyzeV3(ticker) {
     let bias;
     if (aboveOP && vwapDiff >= -0.015)      bias = 'long';
     else if (!aboveOP && vwapDiff <= 0.015) bias = 'short';
-    else return null;
+    else bias = null;
 
-    // ── Run all four setups ───────────────────────────────────
-    const setup =
-      detectBreakRetest(klines15m, levels, bias, price)        ||
-      detectLiqGrab(klines15m, levels, bias, price)            ||
-      detectVWAPTrend(klines15m, vwap, bias, price)            ||
-      detectMSTF(klines15m, klines3m, klines1m, bias);
+    // ── Setup 5 (MomentumBreakout) bypasses the OP/VWAP bias gate ─
+    //   Impulse breakouts pick their own direction from candle body —
+    //   the whole point is to catch waterfall moves the structure
+    //   setups miss. Bias is set from the impulse direction.
+    const breakoutSig = detectMomentumBreakout(klines1m);
+
+    if (!bias && !breakoutSig) return null;
+
+    // ── Run all setups ────────────────────────────────────────
+    let setup = null;
+    if (bias) {
+      setup =
+        detectBreakRetest(klines15m, levels, bias, price)        ||
+        detectLiqGrab(klines15m, levels, bias, price)            ||
+        detectVWAPTrend(klines15m, vwap, bias, price)            ||
+        detectMSTF(klines15m, klines3m, klines1m, bias);
+    }
+    if (!setup && breakoutSig) {
+      setup = breakoutSig;
+      bias  = breakoutSig.direction;
+    }
 
     if (!setup) return null;
 
@@ -662,4 +766,6 @@ module.exports = {
   calcTrailingSLV3,
   extractKeyLevels,
   calcVWAP,
+  detectMomentumBreakout,
+  atr,
 };
