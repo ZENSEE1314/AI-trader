@@ -479,7 +479,24 @@ function detectMSTF(klines15m, klines3m, klines1m, bias) {
   const ltfBull = s1.hh || s1.hl;
   const ltfBear = s1.ll || s1.lh;
 
-  if (bias === 'long' && htfBull && ltfBull) {
+  // ── 1m structure-pause gate ────────────────────────────────
+  // Wait for the latest closed 1m candle to STOP extending the structure
+  // before firing. LONG fires only when the latest 1m candle does not
+  // make a new HH and not a new HL; SHORT only when no new LL and no
+  // new LH. klines arr is OHLCV (idx 2=high, 3=low). Last index is the
+  // in-progress candle, so use len-2 vs len-3 for the last two closed.
+  const len1 = klines1m.length;
+  let longPaused = false, shortPaused = false;
+  if (len1 >= 3) {
+    const lastH = parseFloat(klines1m[len1 - 2][2]);
+    const lastL = parseFloat(klines1m[len1 - 2][3]);
+    const prevH = parseFloat(klines1m[len1 - 3][2]);
+    const prevL = parseFloat(klines1m[len1 - 3][3]);
+    longPaused  = lastH <= prevH && lastL <= prevL;
+    shortPaused = lastL >= prevL && lastH >= prevH;
+  }
+
+  if (bias === 'long' && htfBull && ltfBull && longPaused) {
     // Build label: which HTF fired, what structure
     const htfSrc  = (s15 && (s15.hh || s15.hl)) ? s15  : s3;
     const htfTag  = (s15 && (s15.hh || s15.hl)) ? '15m' : '3m';
@@ -494,7 +511,7 @@ function detectMSTF(klines15m, klines3m, klines1m, bias) {
     };
   }
 
-  if (bias === 'short' && htfBear && ltfBear) {
+  if (bias === 'short' && htfBear && ltfBear && shortPaused) {
     const htfSrc  = (s15 && (s15.ll || s15.lh)) ? s15  : s3;
     const htfTag  = (s15 && (s15.ll || s15.lh)) ? '15m' : '3m';
     const htfType = htfSrc.ll ? 'LL' : 'LH';
@@ -580,8 +597,14 @@ function calcTrailingSLV3(entryPrice, currentPrice, side, leverage = 1) {
       : entryPrice * (1 + slPricePct);
   }
 
-  // Lock: floor(0.21 → 0.20, 0.31 → 0.30, 0.41 → 0.40 …)
-  const lockCapPct   = Math.floor(capitalPct * 10) / 10;
+  // Lock follows the user "1% gap" rule:
+  //   +21% capital → +20%   |   +30% capital → still +20%
+  //   +31% capital → +30%   |   +40% capital → still +30%
+  //   +41% capital → +40%   |   ...
+  // Subtract 0.01 before flooring so the lock advances only when capitalPct
+  // exceeds the next 0.10 boundary by at least 1%.  The 1e-9 absorbs the
+  // floating-point error introduced by the subtraction (e.g. 0.21-0.01).
+  const lockCapPct   = Math.floor((capitalPct - 0.01 + 1e-9) * 10) / 10;
   const lockPricePct = lockCapPct / leverage;
 
   return side === 'LONG'

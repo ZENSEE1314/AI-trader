@@ -1322,8 +1322,27 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     const mtfLong  = has3mHH || has3mHL;
     const mtfShort = has3mLL || has3mLH;
 
-    const longOk  = (htfLong || mtfLong)   && (has1mHH || has1mHL);
-    const shortOk = (htfShort || mtfShort) && (has1mLL || has1mLH);
+    // ── 1m structure-pause gate ──────────────────────────────
+    // Don't fire while the structure is still extending on the latest 1m
+    // candle. Wait for a candle that does NOT make a new HH/HL (LONG) or
+    // a new LL/LH (SHORT) — i.e. structure stopped pushing further.
+    // Uses the last two CLOSED 1m candles (len-2 vs len-3); len-1 is the
+    // in-progress candle.
+    const _len1m = parsed1m.length;
+    let _longPaused = false, _shortPaused = false;
+    if (_len1m >= 3) {
+      const lastC = parsed1m[_len1m - 2];
+      const prevC = parsed1m[_len1m - 3];
+      // LONG paused: latest closed candle did NOT make a new higher-high
+      // AND did NOT make a new higher-low (no continuation up).
+      _longPaused  = lastC.high <= prevC.high && lastC.low <= prevC.low;
+      // SHORT paused: latest closed candle did NOT make a new lower-low
+      // AND did NOT make a new lower-high (no continuation down).
+      _shortPaused = lastC.low  >= prevC.low  && lastC.high >= prevC.high;
+    }
+
+    const longOk  = (htfLong || mtfLong)   && (has1mHH || has1mHL) && _longPaused;
+    const shortOk = (htfShort || mtfShort) && (has1mLL || has1mLH) && _shortPaused;
 
     // SL from 1m pivots (tighter), fall back to 3m
     const slLowRef  = pL1m.length >= 3 ? pL1m : pL3m;
@@ -1864,7 +1883,7 @@ async function scanSMC(log, opts = {}) {
       bLog.scan(
         `SIGNAL: ${signal.symbol} ${signal.direction} | score=${signal.score} ` +
         `setup=${signal.setupName} RR=1:${signal.rr} | ` +
-        `SL=$${signal.sl.toFixed(4)} TP=$${signal.tp1.toFixed(4)} lev=${signal.leverage}x`
+        `SL=$${signal.sl.toFixed(4)} TP=${signal.tp1 != null ? `$${signal.tp1.toFixed(4)}` : 'trailing'} lev=${signal.leverage}x`
       );
     }
 

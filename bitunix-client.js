@@ -243,12 +243,14 @@ class BitunixClient {
   // ── Market Data ────────────────────────────────────────────
 
   async getMarketPrice(symbol) {
-    const data = await this._get('/api/v1/futures/market/get_latest_price', { symbol });
-    // API returns array or single object — extract the price field as a number
-    const obj = Array.isArray(data) ? (data[0] || {}) : (data || {});
-    // Try common field names Bitunix uses for price
-    const price = parseFloat(obj.price || obj.lastPrice || obj.markPrice || obj.indexPrice || obj.close || 0);
-    if (!price || isNaN(price)) throw new Error(`Bitunix getMarketPrice: no price in response for ${symbol} — keys: ${JSON.stringify(Object.keys(obj))}`);
+    // /futures/market/get_latest_price returns "Parameter error (code 2)" on
+    // current Bitunix API. Use /futures/market/tickers with the plural
+    // `symbols` query (comma-separated list — single symbol is fine).
+    const data = await this._get('/api/v1/futures/market/tickers', { symbols: symbol });
+    const arr = Array.isArray(data) ? data : (data ? [data] : []);
+    const row = arr.find(t => (t.symbol || '').toUpperCase() === symbol.toUpperCase()) || arr[0] || {};
+    const price = parseFloat(row.lastPrice || row.last || row.price || row.markPrice || row.indexPrice || row.close || 0);
+    if (!price || isNaN(price)) throw new Error(`Bitunix getMarketPrice: no price in response for ${symbol} — keys: ${JSON.stringify(Object.keys(row))}`);
     return price;
   }
 
