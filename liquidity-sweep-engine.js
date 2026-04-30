@@ -1705,17 +1705,17 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
                  : MID_LEV.has(best.symbol) ? 50
                  : (params.LEV_BTC_ETH || 100);
 
-  // Force SL to exactly 20% capital (matches v3 + trade-engine).  Per-strategy
-  // SLs above (sweep low, pin high, ATR×1.2) gave inconsistent capital risk —
-  // 100x lev → 0.20% price, 50x lev → 0.40% price.
+  // Force SL to exactly 15% capital (matches v3 + trade-engine).  15% (down
+  // from 20%) keeps SL tight enough that TP is reachable.
+  // 100x lev → 0.15% price, 50x lev → 0.30% price.
   const _isLong = best.direction === 'LONG';
-  const _slPricePct = 0.20 / best.leverage;
+  const _slPricePct = 0.15 / best.leverage;
   const _rawSl = best.sl;
   best.sl = _isLong
     ? best.price * (1 - _slPricePct)
     : best.price * (1 + _slPricePct);
   best.slDist = _slPricePct;
-  bLog.scan(`${symbol}: SL normalised to 20% capital — was $${_rawSl?.toFixed(4)}, now $${best.sl.toFixed(4)} (lev=${best.leverage}x)`);
+  bLog.scan(`${symbol}: SL normalised to 15% capital — was $${_rawSl?.toFixed(4)}, now $${best.sl.toFixed(4)} (lev=${best.leverage}x)`);
 
   // Add structure info for logging
   best.structure = {
