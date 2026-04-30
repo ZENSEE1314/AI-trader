@@ -1839,6 +1839,41 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     }
   }
 
+  // ── Counter-trend filter (1m structure) ────────────────────
+  // 1m  hh+hl  → confirmed bullish    → block SHORT
+  // 1m  ll+lh  → confirmed bearish    → block LONG
+  // Single-side structure (HL only, LH only, ...) is allowed — those
+  // are reversal entries (HL bounce / LH rejection). Filter is on top
+  // of the existing pause + range gates so LiqGrab / VWAP / etc.
+  // can no longer fade a confirmed 1m trend.
+  if (parsed1m.length > 6) {
+    const PB = 2;
+    const ph = [], pl = [];
+    for (let i = PB; i < parsed1m.length - PB; i++) {
+      let isH = true, isL = true;
+      for (let j = 1; j <= PB; j++) {
+        if (parsed1m[i].high <= parsed1m[i-j].high || parsed1m[i].high <= parsed1m[i+j].high) isH = false;
+        if (parsed1m[i].low  >= parsed1m[i-j].low  || parsed1m[i].low  >= parsed1m[i+j].low ) isL = false;
+      }
+      if (isH) ph.push(parsed1m[i].high);
+      if (isL) pl.push(parsed1m[i].low);
+    }
+    const hh = ph.length >= 2 && ph[ph.length-1] > ph[ph.length-2];
+    const lh = ph.length >= 2 && ph[ph.length-1] < ph[ph.length-2];
+    const hl = pl.length >= 2 && pl[pl.length-1] > pl[pl.length-2];
+    const ll = pl.length >= 2 && pl[pl.length-1] < pl[pl.length-2];
+    const confirmedBull = hh && hl;
+    const confirmedBear = ll && lh;
+    if (best.direction === 'LONG' && confirmedBear) {
+      bLog.scan(`${symbol}: LONG ${best.setup} BLOCKED — 1m structure confirmed bearish (LL+LH)`);
+      return null;
+    }
+    if (best.direction === 'SHORT' && confirmedBull) {
+      bLog.scan(`${symbol}: SHORT ${best.setup} BLOCKED — 1m structure confirmed bullish (HH+HL)`);
+      return null;
+    }
+  }
+
   return best;
 }
 

@@ -699,6 +699,23 @@ async function analyzeV3(ticker) {
     });
     if (score < 9) return null;  // minimum confluence
 
+    // ── Counter-trend filter — block setups that fight the 1m trend ──
+    // 1m structure: hh+hl  → confirmed bullish    → no SHORT
+    //               ll+lh  → confirmed bearish    → no LONG
+    // mixed or single-side (HL only, LH only, etc.) is ALLOWED — those
+    // are reversal points (HL bounce / LH rejection).
+    // Catches LiqGrab / VWAPTrend / BreakRetest / MomentumBreakout
+    // entries that try to fade a clear trend and usually lose.
+    {
+      const s1 = detectStructure(klines1m, 2);
+      if (s1) {
+        const confirmedBull = s1.hh && s1.hl;
+        const confirmedBear = s1.ll && s1.lh;
+        if (bias === 'short' && confirmedBull) return null;
+        if (bias === 'long'  && confirmedBear) return null;
+      }
+    }
+
     // ── Entry & SL ────────────────────────────────────────────
     const side = bias === 'long' ? 'LONG' : 'SHORT';
     const entry = price;
