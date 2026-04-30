@@ -1,32 +1,28 @@
 // ============================================================
-// AI Brain — Multi-provider AI for agent intelligence
+// AI Brain — Ollama-only AI for agent intelligence
 //
-// Supports:
-//   1. Ollama (Local) — set OLLAMA_URL
-//      - OLLAMA_MODEL for normal tasks (default: gemma3:4b)
-//      - OLLAMA_MODEL_HIGH for complex tasks (default: gemma4:31b-cloud)
-//   2. Google Gemini (fallback) — set GOOGLE_AI_KEY
-//   3. Anthropic Claude (premium) — set ANTHROPIC_API_KEY
+// Single provider:
+//   Ollama (Local/Tunnel) — set OLLAMA_URL
+//     - OLLAMA_MODEL      (default: gemma4:31b-cloud)
+//     - OLLAMA_MODEL_HIGH (default: gemma4:31b-cloud)
 //
-// Priority: Ollama (Local) -> Google Gemini (Free) -> Anthropic Claude (Premium)
-// All agents run on Ollama by default. Complex tasks use the high model.
-// No API keys required — Ollama handles everything locally.
+// Anthropic and Google providers were removed — Anthropic credits
+// were exhausted and Google free-tier quota was permanently capped,
+// both spamming the logs without producing usable signals.  If
+// Ollama is unreachable, AI Brain returns null and callers (which
+// treat AI as optional) skip cleanly.
 // ============================================================
 
 const hermes = require('../hermes-bridge');
 
-let googleClient = null;
-let anthropicClient = null;
-
-// Startup diagnostics — log which AI provider is configured
+// Startup diagnostics — only Ollama is supported
 console.log(`[AI Brain] OLLAMA_URL=${process.env.OLLAMA_URL || 'NOT SET'}`);
-console.log(`[AI Brain] OLLAMA_MODEL=${process.env.OLLAMA_MODEL || 'NOT SET'}`);
-console.log(`[AI Brain] GOOGLE_AI_KEY=${process.env.GOOGLE_AI_KEY ? 'SET' : 'NOT SET'}`);
-console.log(`[AI Brain] Provider priority: ${process.env.OLLAMA_URL ? 'Ollama → ' : ''}${process.env.GOOGLE_AI_KEY ? 'Google → ' : ''}${process.env.ANTHROPIC_API_KEY ? 'Anthropic' : ''}`);
+console.log(`[AI Brain] OLLAMA_MODEL=${process.env.OLLAMA_MODEL || 'gemma4:31b-cloud (default)'}`);
+console.log(`[AI Brain] Provider: Ollama only (Anthropic/Google removed)`);
 
-// Rate limiting — Ollama (local) virtually unlimited; cloud APIs get generous limit
+// Rate limiting — Ollama (local) virtually unlimited
 const requestLog = [];
-const MAX_REQUESTS_PER_MIN = process.env.OLLAMA_URL ? 999 : 120;
+const MAX_REQUESTS_PER_MIN = 999;
 
 // Response cache — avoid duplicate API calls
 const responseCache = new Map();
@@ -52,39 +48,15 @@ let ollamaHealthy = true;
 let ollamaLastCheck = 0;
 const OLLAMA_HEALTH_RECHECK_MS = 60000; // Re-check every 60s after failure
 
-function getProvider(complexity = 'low') {
-  // Priority 1: Ollama (Local/Tunnel) — only if URL is configured
-  if (process.env.OLLAMA_URL) {
-    if (ollamaHealthy) {
-      return 'ollama';
-    }
-  }
+function getProvider(/* complexity unused — Ollama-only */) {
+  if (!process.env.OLLAMA_URL) return null;
+  if (ollamaHealthy) return 'ollama';
 
-  // Re-check Ollama health periodically (maybe PC came back online)
-  if (process.env.OLLAMA_URL && !ollamaHealthy && Date.now() - ollamaLastCheck > OLLAMA_HEALTH_RECHECK_MS) {
-    ollamaHealthy = true; // Optimistic — will be set false again on next failure
+  // Re-check Ollama health periodically — maybe the tunnel came back
+  if (Date.now() - ollamaLastCheck > OLLAMA_HEALTH_RECHECK_MS) {
+    ollamaHealthy = true; // Optimistic — will be set false on next failure
     return 'ollama';
   }
-
-  // Priority 2: Google Gemini (Free fallback)
-  if (process.env.GOOGLE_AI_KEY) {
-    if (!googleClient) {
-      const { GoogleGenerativeAI } = require('@google/generative-ai');
-      googleClient = new GoogleGenerativeAI(process.env.GOOGLE_AI_KEY);
-    }
-    return 'google';
-  }
-
-  // Priority 3: Anthropic Claude (Premium)
-  if (process.env.ANTHROPIC_API_KEY) {
-    if (!anthropicClient) {
-      const Anthropic = require('@anthropic-ai/sdk');
-      // Trim key — Railway env vars can have trailing newlines that cause 400 errors
-      anthropicClient = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY.trim() });
-    }
-    return 'anthropic';
-  }
-
   return null;
 }
 
@@ -102,19 +74,14 @@ function markOllamaUp() {
 }
 
 function isAvailable() {
-  return !!(process.env.OLLAMA_URL || process.env.GOOGLE_AI_KEY || process.env.ANTHROPIC_API_KEY);
+  return !!process.env.OLLAMA_URL && ollamaHealthy;
 }
 
 function getProviderName() {
-  if (process.env.OLLAMA_URL) {
-    const model = process.env.OLLAMA_MODEL || 'gemma3:4b';
-    const modelHigh = process.env.OLLAMA_MODEL_HIGH || 'gemma4:31b-cloud';
-    const status = ollamaHealthy ? 'UP' : 'DOWN→fallback';
-    return `Ollama [${status}] (${model} / ${modelHigh})`;
-  }
-  if (process.env.GOOGLE_AI_KEY) return 'Google Gemini';
-  if (process.env.ANTHROPIC_API_KEY) return 'Anthropic Claude';
-  return 'none';
+  if (!process.env.OLLAMA_URL) return 'none';
+  const model = process.env.OLLAMA_MODEL || 'gemma4:31b-cloud';
+  const status = ollamaHealthy ? 'UP' : 'DOWN';
+  return `Ollama [${status}] (${model})`;
 }
 
 /**
@@ -123,7 +90,7 @@ function getProviderName() {
 async function think(opts) {
   const { agentName, systemPrompt, userMessage, context = {}, complexity = 'low', priority = 'normal' } = opts;
   const provider = getProvider(complexity);
-  if (!provider) return `[Critical Error] No AI provider configured. Please check OLLAMA_URL, GOOGLE_AI_KEY, or ANTHROPIC_API_KEY.`;
+  if (!provider) return null; // Caller treats AI as optional — null = skip cleanly
 
   // Cache key includes systemPrompt snippet to prevent different prompts sharing cached replies
   const cacheKey = `${agentName}:${systemPrompt.substring(0, 40)}:${userMessage.substring(0, 100)}`;
@@ -189,143 +156,42 @@ async function think(opts) {
   try {
     requestLog.push(Date.now());
     let text;
-    let currentProvider = provider;
-
-    // Retry mechanism with automatic fallback (Ollama → Google → Anthropic)
     let attempts = 0;
-    const maxAttempts = 3;
+    const maxAttempts = 2; // Ollama-only — one retry for transient hiccups
 
     while (attempts < maxAttempts) {
       try {
-        if (currentProvider === 'google') {
-          text = await thinkGoogle(agentName, fullSystem, userMessage);
-        } else if (currentProvider === 'ollama') {
-          text = await thinkOllama(agentName, fullSystem, userMessage, complexity);
-          markOllamaUp(); // Success — Ollama is healthy
-        } else {
-          text = await thinkAnthropic(agentName, fullSystem, userMessage);
-        }
+        text = await thinkOllama(agentName, fullSystem, userMessage, complexity);
+        markOllamaUp();
         if (text) break;
         throw new Error('AI returned empty response');
       } catch (err) {
         attempts++;
-
-        // If Ollama failed, mark it down and try cloud fallback immediately
-        if (currentProvider === 'ollama') {
-          markOllamaDown();
-          const fallback = getProvider(complexity);
-          if (fallback && fallback !== 'ollama') {
-            console.log(`[AI Brain] Ollama failed — falling back to ${fallback}`);
-            currentProvider = fallback;
-            attempts--; // Don't count the fallback switch as an attempt
-            continue;
-          }
-        }
-
-        // Google 429 quota — cascade to Anthropic immediately, don't retry Google
-        if ((err.message?.includes('429') || err.message?.includes('quota')) && currentProvider === 'google') {
-          if (process.env.ANTHROPIC_API_KEY) {
-            console.log(`[AI Brain] Google quota exhausted — switching to Anthropic`);
-            if (!anthropicClient) {
-              const Anthropic = require('@anthropic-ai/sdk');
-              anthropicClient = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-            }
-            currentProvider = 'anthropic';
-            attempts--;
-            continue;
-          }
-        }
-
-        // 400 Bad Request from Google/Anthropic = oversized prompt or bad model name.
-        // Fall through to the next provider rather than crashing the request.
-        if (err.message?.includes('400') && currentProvider !== 'ollama') {
-          console.warn(`[AI Brain] ${currentProvider} returned 400 (likely oversized prompt) — trying next provider`);
-          if (currentProvider === 'google' && process.env.ANTHROPIC_API_KEY) {
-            if (!anthropicClient) {
-              const Anthropic = require('@anthropic-ai/sdk');
-              anthropicClient = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-            }
-            currentProvider = 'anthropic';
-            attempts--;
-            continue;
-          }
-        }
-
-        const isTransient = err.message?.includes('424') || err.message?.includes('500') || err.message?.includes('503') || err.message?.includes('Could not serve request') || err.message?.includes('Error fetching') || err.message?.includes('fetch failed') || err.message?.includes('ECONNRESET') || err.message?.includes('ETIMEDOUT') || err.message === 'AI returned empty response';
-
+        const msg = err.message || '';
+        const isTransient = /(424|500|503|fetch failed|ECONNRESET|ETIMEDOUT|empty response|Could not serve)/i.test(msg);
         if (isTransient && attempts < maxAttempts) {
-          console.log(`[AI Brain] Transient error ${err.message} — retrying (${attempts}/${maxAttempts})...`);
-          await new Promise(resolve => setTimeout(resolve, 1500 * attempts));
+          console.log(`[AI Brain] Transient Ollama error (${msg.substring(0, 80)}) — retrying ${attempts}/${maxAttempts}`);
+          await new Promise(r => setTimeout(r, 1500));
           continue;
         }
+        markOllamaDown();
         throw err;
       }
     }
 
-    // Cache the response
     if (text) responseCache.set(cacheKey, { text, ts: Date.now() });
     return text;
   } catch (err) {
-    console.error(`[AI Brain] ${agentName} FAILED (${provider}): ${err.message}`);
-    if (err.message?.includes('400')) {
-      console.error(`[AI Brain] Malformed Request (400) detected. Payload preview: ${JSON.stringify(opts).substring(0, 500)}...`);
-    }
-    if (err.message?.includes('429') || err.message?.includes('quota')) {
-      return `I'm being rate limited by ${provider === 'google' ? 'Google' : 'Anthropic'}. Please wait 30 seconds and try again.`;
-    }
-    return `I'm having a momentary brain-freeze (AI Error: ${err.message.substring(0, 200)}). Please try asking me again in a few seconds!`;
+    console.error(`[AI Brain] ${agentName} FAILED (ollama): ${err.message}`);
+    return null; // Caller treats AI as optional — null = skip cleanly
   }
 }
 
-async function thinkGoogle(agentName, systemPrompt, userMessage) {
-  let model = process.env.AGENT_AI_MODEL || 'gemini-2.0-flash';
-  // Guard: if env var contains an Ollama model name, fall back to Gemini default
-  if (model.includes(':') || model.startsWith('gemma') || model.startsWith('llama') || model.startsWith('mistral')) {
-    model = 'gemini-2.0-flash';
-  }
-  console.log(`[AI Brain] ${agentName} thinking with Google ${model}...`);
-
-  const genModel = googleClient.getGenerativeModel({
-    model,
-    systemInstruction: systemPrompt,
-  });
-
-  const result = await genModel.generateContent(userMessage);
-  const text = result.response.text();
-  console.log(`[AI Brain] ${agentName} responded: ${text ? text.substring(0, 80) + '...' : 'EMPTY'}`);
-  return text || null;
-}
-
-async function thinkAnthropic(agentName, systemPrompt, userMessage) {
-  // Always use a known-good model — ignore env var if it looks like an Ollama model name
-  const envModel = (process.env.AGENT_AI_MODEL || '').trim();
-  const ANTHROPIC_PREFIXES = ['claude-3', 'claude-2', 'claude-'];
-  const model = ANTHROPIC_PREFIXES.some(p => envModel.startsWith(p))
-    ? envModel
-    : 'claude-3-haiku-20240307'; // cheapest + fastest Anthropic model — reliable fallback
-
-  // Guard: Anthropic 400s on empty/whitespace content
-  // Strip all non-printable control characters except \n and \t that could cause 400
-  const clean = (s) => (s || '').replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '').trim();
-  const safeSystem  = clean(systemPrompt)  || 'You are a helpful assistant.';
-  const safeMessage = clean(userMessage)   || 'Hello';
-
-  console.log(`[AI Brain] ${agentName} thinking with Anthropic ${model} (sys=${safeSystem.length}chars)...`);
-
-  const response = await anthropicClient.messages.create({
-    model,
-    max_tokens: 800,
-    system: safeSystem,
-    messages: [{ role: 'user', content: safeMessage }],
-  });
-  const text = response.content[0]?.text || null;
-  console.log(`[AI Brain] ${agentName} responded: ${text ? text.substring(0, 80) + '...' : 'EMPTY'}`);
-  return text;
-}
 
 async function thinkOllama(agentName, systemPrompt, userMessage, complexity = 'low') {
-  // Dual-model: use high model for complex tasks, normal model for everything else
-  const modelNormal = process.env.OLLAMA_MODEL || 'gemma3:4b';
+  // gemma4:31b-cloud everywhere — same model for all complexity levels
+  // (set OLLAMA_MODEL_HIGH separately if you want a heavier model for complex tasks)
+  const modelNormal = process.env.OLLAMA_MODEL || 'gemma4:31b-cloud';
   const modelHigh = process.env.OLLAMA_MODEL_HIGH || 'gemma4:31b-cloud';
   const model = complexity === 'high' ? modelHigh : modelNormal;
 
