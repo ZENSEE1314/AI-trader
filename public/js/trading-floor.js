@@ -42,63 +42,59 @@
   // ════════════════════════════════════════════════════════════
   // Office tile map  (20 cols × 11 rows)
   // ════════════════════════════════════════════════════════════
-  const COLS = 20, ROWS = 22;
+  const COLS = 25, ROWS = 25;
   const W = 0, F = 1; // TileType: WALL=0, FLOOR=1
 
   /*
-    Layout diagram (. = floor, # = wall, | = internal wall, D = doorway)
-    Two floors connected by a doorway in the dividing wall (row 10, cols 9-10).
-    Upper: existing trading wing (cols 1-8) + lounge (cols 10-18)
-    Lower: AI Lab — single open room (cols 1-18) with 14 desks for backend agents
+    9-room building (3 × 3 grid). Each room is 7×7 interior. Walls at
+    rows 0/8/16/24 and cols 0/8/16/24. Doorways (2 tiles wide) connect
+    every adjacent pair.
 
-    Col:  0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17 18 19
-    r 0:  #  #  #  #  #  #  #  #  #  #  #  #  #  #  #  #  #  #  #  #
-    r 1:  #  .  .  .  .  .  .  .  .  |  .  .  .  .  .  .  .  .  .  #
-    r 2:  #  .  .  .  .  .  .  .  .  |  .  .  .  .  .  .  .  .  .  #
-    r 3:  #  .  .  .  .  .  .  .  .  |  .  .  .  .  .  .  .  .  .  #
-    r 4:  #  .  .  .  .  .  .  .  .  D  .  .  .  .  .  .  .  .  .  #   doorway L↔R
-    r 5:  #  .  .  .  .  .  .  .  .  D  .  .  .  .  .  .  .  .  .  #   doorway L↔R
-    r 6:  #  .  .  .  .  .  .  .  .  |  .  .  .  .  .  .  .  .  .  #
-    r 7:  #  .  .  .  .  .  .  .  .  |  .  .  .  .  .  .  .  .  .  #
-    r 8:  #  .  .  .  .  .  .  .  .  |  .  .  .  .  .  .  .  .  .  #
-    r 9:  #  .  .  .  .  .  .  .  .  |  .  .  .  .  .  .  .  .  .  #
-    r10:  #  #  #  #  #  #  #  #  #  D  D  #  #  #  #  #  #  #  #  #   stair/door upper↔lower
-    r11:  #  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  #
-    r12:  #  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  #   chair row (front)
-    r13:  #  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  #
-    r14:  #  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  #
-    r15:  #  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  #
-    r16:  #  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  #   chair row (back)
-    r17:  #  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  #
-    r18:  #  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  #
-    r19:  #  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  #
-    r20:  #  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  #
-    r21:  #  #  #  #  #  #  #  #  #  #  #  #  #  #  #  #  #  #  #  #
+    Rooms:
+      1 Trader Hall (top-left)    cols 1-7,  rows 1-7   — BTC ETH SOL BNB XRP
+      2 Coord Office (top-mid)    cols 9-15, rows 1-7   — COORD
+      3 Coder Lab   (top-right)   cols 17-23,rows 1-7   — CODER
+      4 Chart Room  (mid-left)    cols 1-7,  rows 9-15  — CHART
+      5 Risk Office (mid-mid)     cols 9-15, rows 9-15  — RISK
+      6 Trade Exec  (mid-right)   cols 17-23,rows 9-15  — TRADER
+      7 AI Brain    (bot-left)    cols 1-7,  rows 17-23 — KRONOS BRAIN SWARM
+      8 Strategy    (bot-mid)     cols 9-15, rows 17-23 — STRAT OPT LAB
+      9 Watch Tower (bot-right)   cols 17-23,rows 17-23 — ACCT WATCH SENT GOV POLICE
   */
   // prettier-ignore
   const TILE_FLAT = [
-    W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,  // row 0
-    W,F,F,F,F,F,F,F,F,W,F,F,F,F,F,F,F,F,F,W,  // row 1
-    W,F,F,F,F,F,F,F,F,W,F,F,F,F,F,F,F,F,F,W,  // row 2
-    W,F,F,F,F,F,F,F,F,W,F,F,F,F,F,F,F,F,F,W,  // row 3
-    W,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,W,  // row 4  doorway L↔R
-    W,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,W,  // row 5  doorway L↔R
-    W,F,F,F,F,F,F,F,F,W,F,F,F,F,F,F,F,F,F,W,  // row 6
-    W,F,F,F,F,F,F,F,F,W,F,F,F,F,F,F,F,F,F,W,  // row 7
-    W,F,F,F,F,F,F,F,F,W,F,F,F,F,F,F,F,F,F,W,  // row 8
-    W,F,F,F,F,F,F,F,F,W,F,F,F,F,F,F,F,F,F,W,  // row 9
-    W,W,W,W,W,W,W,W,W,F,F,W,W,W,W,W,W,W,W,W,  // row 10  stair/door upper↔lower
-    W,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,W,  // row 11
-    W,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,W,  // row 12  chair row (front)
-    W,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,W,  // row 13
-    W,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,W,  // row 14
-    W,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,W,  // row 15
-    W,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,W,  // row 16  chair row (back)
-    W,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,W,  // row 17
-    W,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,W,  // row 18
-    W,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,W,  // row 19
-    W,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,W,  // row 20
-    W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,  // row 21
+    // r0  outer top wall
+    W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,
+    // r1-r7  Room 1 | Room 2 | Room 3   (vertical walls at col 8, 16; doorways at rows 4,5)
+    W,F,F,F,F,F,F,F,W,F,F,F,F,F,F,F,W,F,F,F,F,F,F,F,W, // r1
+    W,F,F,F,F,F,F,F,W,F,F,F,F,F,F,F,W,F,F,F,F,F,F,F,W, // r2
+    W,F,F,F,F,F,F,F,W,F,F,F,F,F,F,F,W,F,F,F,F,F,F,F,W, // r3
+    W,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,W, // r4 doorways open
+    W,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,W, // r5 doorways open
+    W,F,F,F,F,F,F,F,W,F,F,F,F,F,F,F,W,F,F,F,F,F,F,F,W, // r6
+    W,F,F,F,F,F,F,F,W,F,F,F,F,F,F,F,W,F,F,F,F,F,F,F,W, // r7
+    // r8  horizontal wall between top and mid (doorways at cols 4,5 / 12,13 / 20,21)
+    W,W,W,W,F,F,W,W,W,W,W,W,F,F,W,W,W,W,W,W,F,F,W,W,W,
+    // r9-r15  Room 4 | Room 5 | Room 6
+    W,F,F,F,F,F,F,F,W,F,F,F,F,F,F,F,W,F,F,F,F,F,F,F,W, // r9
+    W,F,F,F,F,F,F,F,W,F,F,F,F,F,F,F,W,F,F,F,F,F,F,F,W, // r10
+    W,F,F,F,F,F,F,F,W,F,F,F,F,F,F,F,W,F,F,F,F,F,F,F,W, // r11
+    W,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,W, // r12 doorways open
+    W,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,W, // r13 doorways open
+    W,F,F,F,F,F,F,F,W,F,F,F,F,F,F,F,W,F,F,F,F,F,F,F,W, // r14
+    W,F,F,F,F,F,F,F,W,F,F,F,F,F,F,F,W,F,F,F,F,F,F,F,W, // r15
+    // r16  horizontal wall between mid and bottom
+    W,W,W,W,F,F,W,W,W,W,W,W,F,F,W,W,W,W,W,W,F,F,W,W,W,
+    // r17-r23  Room 7 | Room 8 | Room 9
+    W,F,F,F,F,F,F,F,W,F,F,F,F,F,F,F,W,F,F,F,F,F,F,F,W, // r17
+    W,F,F,F,F,F,F,F,W,F,F,F,F,F,F,F,W,F,F,F,F,F,F,F,W, // r18
+    W,F,F,F,F,F,F,F,W,F,F,F,F,F,F,F,W,F,F,F,F,F,F,F,W, // r19
+    W,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,W, // r20 doorways open
+    W,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,W, // r21 doorways open
+    W,F,F,F,F,F,F,F,W,F,F,F,F,F,F,F,W,F,F,F,F,F,F,F,W, // r22
+    W,F,F,F,F,F,F,F,W,F,F,F,F,F,F,F,W,F,F,F,F,F,F,F,W, // r23
+    // r24  outer bottom wall
+    W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,
   ];
 
   function buildTileMap() {
@@ -111,31 +107,36 @@
   // Seats  (col/row/facingDir for each agent's chair)
   // ════════════════════════════════════════════════════════════
   const SEATS = new Map([
-    ['seat-btc',   { seatCol: 2,  seatRow: 3, facingDir: Dir.UP, assigned: false }],
-    ['seat-eth',   { seatCol: 6,  seatRow: 3, facingDir: Dir.UP, assigned: false }],
-    ['seat-sol',   { seatCol: 2,  seatRow: 8, facingDir: Dir.UP, assigned: false }],
-    ['seat-bnb',   { seatCol: 6,  seatRow: 8, facingDir: Dir.UP, assigned: false }],
-    ['seat-xrp',   { seatCol: 10, seatRow: 3, facingDir: Dir.UP, assigned: false }],
-    // Lounge — non-trader agents
-    ['seat-coord', { seatCol: 16, seatRow: 3, facingDir: Dir.UP, assigned: false }], // at whiteboard
-    ['seat-coder', { seatCol: 11, seatRow: 5, facingDir: Dir.UP, assigned: false }], // by bookshelf/coffee
-    // ── AI Lab (lower floor) — backend agents ──────────────────
-    // Front row — control agents
-    ['seat-chart',   { seatCol: 2,  seatRow: 12, facingDir: Dir.UP, assigned: false }],
-    ['seat-risk',    { seatCol: 4,  seatRow: 12, facingDir: Dir.UP, assigned: false }],
-    ['seat-trader',  { seatCol: 6,  seatRow: 12, facingDir: Dir.UP, assigned: false }],
-    ['seat-police',  { seatCol: 8,  seatRow: 12, facingDir: Dir.UP, assigned: false }],
-    ['seat-kronos',  { seatCol: 10, seatRow: 12, facingDir: Dir.UP, assigned: false }],
-    ['seat-acct',    { seatCol: 12, seatRow: 12, facingDir: Dir.UP, assigned: false }],
-    ['seat-watch',   { seatCol: 14, seatRow: 12, facingDir: Dir.UP, assigned: false }],
-    // Back row — strategy / AI agents
-    ['seat-strat',   { seatCol: 2,  seatRow: 16, facingDir: Dir.UP, assigned: false }],
-    ['seat-sent',    { seatCol: 4,  seatRow: 16, facingDir: Dir.UP, assigned: false }],
-    ['seat-opt',     { seatCol: 6,  seatRow: 16, facingDir: Dir.UP, assigned: false }],
-    ['seat-brain',   { seatCol: 8,  seatRow: 16, facingDir: Dir.UP, assigned: false }],
-    ['seat-swarm',   { seatCol: 10, seatRow: 16, facingDir: Dir.UP, assigned: false }],
-    ['seat-gov',     { seatCol: 12, seatRow: 16, facingDir: Dir.UP, assigned: false }],
-    ['seat-lab',     { seatCol: 14, seatRow: 16, facingDir: Dir.UP, assigned: false }],
+    // ── Room 1: Trader Hall (cols 1-7, rows 1-7) ──────────────
+    ['seat-btc',     { seatCol: 2,  seatRow: 3,  facingDir: Dir.UP, assigned: false }],
+    ['seat-eth',     { seatCol: 4,  seatRow: 3,  facingDir: Dir.UP, assigned: false }],
+    ['seat-sol',     { seatCol: 6,  seatRow: 3,  facingDir: Dir.UP, assigned: false }],
+    ['seat-bnb',     { seatCol: 2,  seatRow: 6,  facingDir: Dir.UP, assigned: false }],
+    ['seat-xrp',     { seatCol: 6,  seatRow: 6,  facingDir: Dir.UP, assigned: false }],
+    // ── Room 2: Coord Office (cols 9-15, rows 1-7) ────────────
+    ['seat-coord',   { seatCol: 12, seatRow: 3,  facingDir: Dir.UP, assigned: false }],
+    // ── Room 3: Coder Lab (cols 17-23, rows 1-7) ──────────────
+    ['seat-coder',   { seatCol: 20, seatRow: 3,  facingDir: Dir.UP, assigned: false }],
+    // ── Room 4: Chart Room (cols 1-7, rows 9-15) ──────────────
+    ['seat-chart',   { seatCol: 4,  seatRow: 11, facingDir: Dir.UP, assigned: false }],
+    // ── Room 5: Risk Office (cols 9-15, rows 9-15) ────────────
+    ['seat-risk',    { seatCol: 12, seatRow: 11, facingDir: Dir.UP, assigned: false }],
+    // ── Room 6: Trade Exec (cols 17-23, rows 9-15) ────────────
+    ['seat-trader',  { seatCol: 20, seatRow: 11, facingDir: Dir.UP, assigned: false }],
+    // ── Room 7: AI Brain Lab (cols 1-7, rows 17-23) ───────────
+    ['seat-kronos',  { seatCol: 2,  seatRow: 19, facingDir: Dir.UP, assigned: false }],
+    ['seat-brain',   { seatCol: 4,  seatRow: 19, facingDir: Dir.UP, assigned: false }],
+    ['seat-swarm',   { seatCol: 6,  seatRow: 19, facingDir: Dir.UP, assigned: false }],
+    // ── Room 8: Strategy Lab (cols 9-15, rows 17-23) ──────────
+    ['seat-strat',   { seatCol: 10, seatRow: 19, facingDir: Dir.UP, assigned: false }],
+    ['seat-opt',     { seatCol: 12, seatRow: 19, facingDir: Dir.UP, assigned: false }],
+    ['seat-lab',     { seatCol: 14, seatRow: 19, facingDir: Dir.UP, assigned: false }],
+    // ── Room 9: Watch Tower (cols 17-23, rows 17-23) ──────────
+    ['seat-acct',    { seatCol: 18, seatRow: 18, facingDir: Dir.UP, assigned: false }],
+    ['seat-watch',   { seatCol: 20, seatRow: 18, facingDir: Dir.UP, assigned: false }],
+    ['seat-sent',    { seatCol: 22, seatRow: 18, facingDir: Dir.UP, assigned: false }],
+    ['seat-gov',     { seatCol: 19, seatRow: 22, facingDir: Dir.UP, assigned: false }],
+    ['seat-police',  { seatCol: 21, seatRow: 22, facingDir: Dir.UP, assigned: false }],
   ]);
 
   // ════════════════════════════════════════════════════════════
@@ -143,44 +144,26 @@
   // (Background rows are walkable; only solid footprint rows are blocked)
   // ════════════════════════════════════════════════════════════
   const STATIC_BLOCKED = [
-    // DESK_FRONT (48×32, bg=1): front row blocked (row+1 of placement)
-    // BTC desk at (1,1): solid at row 2
-    '1,2','2,2','3,2',
-    // ETH desk at (5,1): solid at row 2
-    '5,2','6,2','7,2',
-    // SOL desk at (1,6): solid at row 7
-    '1,7','2,7','3,7',
-    // BNB desk at (5,6): solid at row 7
-    '5,7','6,7','7,7',
-
-    // CUSHIONED_CHAIR_BACK (16×16, bg=0, 1×1 footprint):
-    // These are the seat tiles — unblocked per-character during pathfinding
-    '2,3','6,3',   // top row chairs
-    '2,8','6,8',   // bottom row chairs
-
-    // PLANT (16×32, bg=1, 1×2): bottom half blocked
-    '8,2', '8,7',
-
-    // Right room ─────────────────────────────────────
-    // DOUBLE_BOOKSHELF (32×32, bg=0, 2×2): full footprint
-    '10,1','11,1','10,2','11,2',
-    // WHITEBOARD (32×32, bg=0, 2×2) at (15,1)
-    '15,1','16,1','15,2','16,2',
-    // SOFA_BACK (32×16, bg=0, 2×1) at (13,2)
-    '13,2','14,2',
-    // COFFEE_TABLE (32×32, bg=0, 2×2) at (13,3)
-    '13,3','14,3','13,4','14,4',
-    // SOFA_FRONT (32×16, bg=0, 2×1) at (13,6)
-    '13,6','14,6',
-    // LARGE_PLANT (32×48, bg=2, 2×3) at (17,7): bottom 1 row blocked
-    '17,9','18,9',
-    // PLANT right side at (18,1)
-    '18,2',
-
-    // ── AI Lab (lower floor) chair tiles — front row (row 12) ──
-    '2,12','4,12','6,12','8,12','10,12','12,12','14,12',
-    // ── AI Lab back row (row 16) ──
-    '2,16','4,16','6,16','8,16','10,16','12,16','14,16',
+    // Each chair is one tile. Pathfinding unblocks the seat per-character
+    // when the character is on it (see isWalkable usage).
+    // Room 1 — Trader Hall (5 chairs)
+    '2,3','4,3','6,3', '2,6','6,6',
+    // Room 2 — Coord Office
+    '12,3',
+    // Room 3 — Coder Lab
+    '20,3',
+    // Room 4 — Chart Room
+    '4,11',
+    // Room 5 — Risk Office
+    '12,11',
+    // Room 6 — Trade Exec
+    '20,11',
+    // Room 7 — AI Brain Lab (3 chairs)
+    '2,19','4,19','6,19',
+    // Room 8 — Strategy Lab (3 chairs)
+    '10,19','12,19','14,19',
+    // Room 9 — Watch Tower (5 chairs)
+    '18,18','20,18','22,18', '19,22','21,22',
   ];
 
   // ════════════════════════════════════════════════════════════
@@ -604,47 +587,11 @@
     const add = (name, col, row, zYoverride, mirror) =>
       items.push({ name, col, row, zYoverride: zYoverride !== undefined ? zYoverride : null, mirror: !!mirror });
 
-    // ── Trading floor (left room, cols 1–8) ──────────────────
-    // BTC workstation — desk at (1,1): 3×2 tiles (48×32 px), bg=1
-    add('DESK_FRONT', 1, 1);
-    add('PC_FRONT_OFF', 2, 1, 1 * TILE_SIZE + 32 + 0.5); // on desktop, in front of desk
-    add('CUSHIONED_CHAIR_BACK', 2, 3, (3 + 1) * TILE_SIZE + 1); // back chair in FRONT of character
-
-    // ETH workstation — desk at (5,1)
-    add('DESK_FRONT', 5, 1);
-    add('PC_FRONT_OFF', 6, 1, 1 * TILE_SIZE + 32 + 0.5);
-    add('CUSHIONED_CHAIR_BACK', 6, 3, (3 + 1) * TILE_SIZE + 1);
-
-    // SOL workstation — desk at (1,6)
-    add('DESK_FRONT', 1, 6);
-    add('PC_FRONT_OFF', 2, 6, 6 * TILE_SIZE + 32 + 0.5);
-    add('CUSHIONED_CHAIR_BACK', 2, 8, (8 + 1) * TILE_SIZE + 1);
-
-    // BNB workstation — desk at (5,6)
-    add('DESK_FRONT', 5, 6);
-    add('PC_FRONT_OFF', 6, 6, 6 * TILE_SIZE + 32 + 0.5);
-    add('CUSHIONED_CHAIR_BACK', 6, 8, (8 + 1) * TILE_SIZE + 1);
-
-    // Decorative plants near the divider wall
-    add('PLANT', 8, 1);
-    add('PLANT', 8, 6);
-
-    // ── Lounge (right room, cols 10–18) ──────────────────────
-    add('DOUBLE_BOOKSHELF', 10, 1);
-    add('WHITEBOARD',       15, 1);
-    add('CLOCK',            17, 1, 1 * TILE_SIZE + 16);
-    add('SOFA_BACK',        13, 2);
-    add('COFFEE_TABLE',     13, 3);
-    add('SOFA_FRONT',       13, 6);
-    add('LARGE_PLANT',      17, 7);
-    add('PLANT',            18, 1);
-
-    // ── AI Lab (lower floor) — chairs only, no desks ─────────
-    // Front row at row 12, back row at row 16, chairs at even cols 2–14
-    const labChairCols = [2, 4, 6, 8, 10, 12, 14];
-    for (const c of labChairCols) {
-      add('CUSHIONED_CHAIR_BACK', c, 12, (12 + 1) * TILE_SIZE + 1);
-      add('CUSHIONED_CHAIR_BACK', c, 16, (16 + 1) * TILE_SIZE + 1);
+    // One chair per agent — derived directly from SEATS so layout
+    // changes here don't drift from the seat positions.
+    for (const [, seat] of SEATS) {
+      add('CUSHIONED_CHAIR_BACK', seat.seatCol, seat.seatRow,
+          (seat.seatRow + 1) * TILE_SIZE + 1);
     }
 
     return items;
@@ -655,12 +602,21 @@
   // ════════════════════════════════════════════════════════════
 
   const WALL_COLOR          = '#3A3A5C';
-  const FLOOR_TRADING_COLOR = '#3a2e1e'; // warm wood — upper-left room
-  const FLOOR_LOUNGE_COLOR  = '#242f30'; // cool slate — upper-right room
-  const FLOOR_LAB_COLOR     = '#1e293a'; // deep navy  — AI Lab (lower)
+  // 9 distinct floor colours — one per room of the 3×3 grid. Helps the
+  // user tell rooms apart at a glance without explicit dividers/labels.
+  // Indexed by [rowBand][colBand] where bands are 0/1/2 (top/mid/bot,
+  // left/mid/right). Row 0/8/16/24 and col 0/8/16/24 are walls.
+  const ROOM_COLORS = [
+    ['#3a2e1e', '#2a2a40', '#1f2a40'], // top:    Trader, Coord, Coder
+    ['#202d22', '#3a2828', '#23262e'], // mid:    Chart,  Risk,  TradeExec
+    ['#1e293a', '#2a2236', '#2c2418'], // bot:    AIBrain, Strategy, Watch
+  ];
 
-  function isLounge(col) { return col >= 10; }
-  function isLab(row) { return row >= 11; }
+  function roomColor(col, row) {
+    const colBand = col < 8 ? 0 : col < 16 ? 1 : 2;
+    const rowBand = row < 8 ? 0 : row < 16 ? 1 : 2;
+    return ROOM_COLORS[rowBand][colBand];
+  }
 
   /**
    * Full frame render with z-sorting.
@@ -682,9 +638,7 @@
     for (let r = 0; r < ROWS; r++) {
       for (let c = 0; c < COLS; c++) {
         const t = tileMap[r][c];
-        ctx.fillStyle = t === W ? WALL_COLOR
-          : (isLab(r) ? FLOOR_LAB_COLOR
-            : (isLounge(c) ? FLOOR_LOUNGE_COLOR : FLOOR_TRADING_COLOR));
+        ctx.fillStyle = t === W ? WALL_COLOR : roomColor(c, r);
         ctx.fillRect(ox + c * s, oy + r * s, s, s);
       }
     }
