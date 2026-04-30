@@ -18,7 +18,24 @@ const { BitunixClient } = require('./bitunix-client');
 const { USDMClient } = require('binance');
 const { getFetchOptions, getBinanceRequestOptions } = require('./proxy-agent');
 const cryptoUtils = require('./crypto-utils');
-const { calcV2TrailSL } = require('./strategy-v2');
+const { calcTrailingSLV3 } = require('./strategy-v3');
+
+// Adapter: returns { newSl, capitalPct, milestone } expected by the
+// log/notify code below, or null when there's no improvement to lock in.
+// Wraps calcTrailingSLV3 (which is the live strategy's trail function:
+// +20% capital initial SL, trailing at +21%, lock floor(cap×10)/10).
+function calcV2TrailSL(entryPrice, currentPrice, isLong, leverage, currentSl) {
+  const side = isLong ? 'LONG' : 'SHORT';
+  const pricePct = isLong
+    ? (currentPrice - entryPrice) / entryPrice
+    : (entryPrice - currentPrice) / entryPrice;
+  const capitalPct = pricePct * leverage;
+  const TRAIL_ON_CAP = 0.21;
+  if (capitalPct < TRAIL_ON_CAP) return null;
+  const newSl = calcTrailingSLV3(entryPrice, currentPrice, side, leverage);
+  const milestone = Math.floor(capitalPct * 10) / 10;
+  return { newSl, capitalPct, milestone };
+}
 
 const INTERVAL_MS = 15 * 1000;
 const db = require('./db');
