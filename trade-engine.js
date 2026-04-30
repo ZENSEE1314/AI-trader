@@ -961,10 +961,24 @@ async function analyzeSymbol(symbol, price, kronosPredictions = null) {
   const MID_LEV  = new Set(['SOLUSDT', 'BNBUSDT', 'XRPUSDT']);
   const leverage = HIGH_LEV.has(symbol) ? 100 : MID_LEV.has(symbol) ? 50 : price >= 100 ? 50 : 20;
 
+  // ── Force SL to exactly 20% capital ────────────────────────
+  // Every trade across every engine must have identical 20%-capital initial
+  // risk, so per-strategy SLs (ATR×0.5 for VWAP/CONSOL, swing for LIQ_SWEEP,
+  // pin for MOMENTUM) are overridden here.  Matches v3 (calcTrailingSLV3
+  // INITIAL_SL_CAP = 0.20) so the trail watchdog ratchets correctly from
+  // the same baseline.
+  //   100x lev → 0.20 / 100 = 0.20% price move
+  //    50x lev → 0.20 /  50 = 0.40% price move
+  const INITIAL_SL_CAP = 0.20;
+  const slPricePct = INITIAL_SL_CAP / leverage;
+  const adjustedSL = isLong
+    ? price * (1 - slPricePct)
+    : price * (1 + slPricePct);
+
   bLog.scan(
     `ENGINE: ${symbol} ${best.direction} [${best.setupName}] ` +
     `score=${best.score} RSI=${rsi.toFixed(0)} h1=${h1Trend} opBias=${opBias} ` +
-    `SL=${best.sl?.toFixed(4)} TP=${tp.toFixed(4)}`
+    `SL=${adjustedSL.toFixed(4)} (20% cap, raw strategy SL=${best.sl?.toFixed(4)}) TP=${tp.toFixed(4)}`
   );
 
   return {
@@ -972,7 +986,7 @@ async function analyzeSymbol(symbol, price, kronosPredictions = null) {
     direction: best.direction,
     price,
     lastPrice: price,
-    sl:          best.sl,
+    sl:          adjustedSL,
     tp1:         tp,
     tp2:         tp,
     tp3:         tp,
