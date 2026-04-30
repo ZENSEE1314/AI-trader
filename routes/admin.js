@@ -6,6 +6,42 @@ const emailService = require('../email-service');
 const router = express.Router();
 router.use(authMiddleware);
 
+// ── Shared 24hr ticker cache ────────────────────────────────
+// Binance /fapi/v1/ticker/24hr returns ~1 MB JSON for 500+ symbols.
+// Multiple admin polls hammered it on every 10 s tick — easily >150 ms
+// per request and a non-trivial chunk of bandwidth. Cache the parsed
+// price map for 5 s; covers concurrent tabs / users with one upstream
+// fetch. Returns null on fetch failure (caller handles empty map).
+const _tickerCache = { at: 0, map: null, inflight: null };
+async function getTickerMap() {
+  const now = Date.now();
+  if (_tickerCache.map && (now - _tickerCache.at) < 5000) return _tickerCache.map;
+  if (_tickerCache.inflight) return _tickerCache.inflight; // single-flight
+  _tickerCache.inflight = (async () => {
+    try {
+      const fetch = require('node-fetch');
+      const r = await fetch('https://fapi.binance.com/fapi/v1/ticker/24hr', { timeout: 10000 });
+      const tickers = await r.json();
+      const map = {};
+      for (const t of tickers) {
+        map[t.symbol] = {
+          price: parseFloat(t.lastPrice),
+          change24h: parseFloat(t.priceChangePercent),
+          volume: parseFloat(t.quoteVolume),
+        };
+      }
+      _tickerCache.map = map;
+      _tickerCache.at  = Date.now();
+      return map;
+    } catch {
+      return _tickerCache.map || {};   // serve stale on failure
+    } finally {
+      _tickerCache.inflight = null;
+    }
+  })();
+  return _tickerCache.inflight;
+}
+
 // Admin check middleware
 async function adminOnly(req, res, next) {
   try {
@@ -3637,19 +3673,10 @@ router.get('/token-board', async (req, res) => {
       }
     } catch {}
 
-    // Fetch live prices + volume from Binance
+    // Fetch live prices + volume from Binance (5 s shared cache)
     let priceMap = {};
     try {
-      const fetch = require('node-fetch');
-      const r = await fetch('https://fapi.binance.com/fapi/v1/ticker/24hr', { timeout: 10000 });
-      const tickers = await r.json();
-      for (const t of tickers) {
-        priceMap[t.symbol] = {
-          price: parseFloat(t.lastPrice),
-          change24h: parseFloat(t.priceChangePercent),
-          volume: parseFloat(t.quoteVolume),
-        };
-      }
+      priceMap = await getTickerMap();
     } catch {}
 
     const result = tokens.map(t => ({
