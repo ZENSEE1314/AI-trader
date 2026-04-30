@@ -188,48 +188,95 @@ async function think(opts) {
 }
 
 
-async function thinkOllama(agentName, systemPrompt, userMessage, complexity = 'low') {
-  // gemma4:31b-cloud everywhere — same model for all complexity levels
-  // (set OLLAMA_MODEL_HIGH separately if you want a heavier model for complex tasks)
-  const modelNormal = process.env.OLLAMA_MODEL || 'gemma4:31b-cloud';
-  const modelHigh = process.env.OLLAMA_MODEL_HIGH || 'gemma4:31b-cloud';
-  const model = complexity === 'high' ? modelHigh : modelNormal;
+// One-time fetch of /api/tags so the next 404 lists which models are
+// actually loaded.  Cached so we don't spam the discovery call.
+let _availableModels = null;
+async function fetchOllamaTags(baseUrl) {
+  if (_availableModels) return _availableModels;
+  try {
+    const r = await fetch(`${baseUrl}/api/tags`, {
+      headers: { 'ngrok-skip-browser-warning': 'true' },
+    });
+    if (!r.ok) return null;
+    const j = await r.json();
+    _availableModels = (j.models || []).map(m => m.name || m.model).filter(Boolean);
+    return _availableModels;
+  } catch (_) { return null; }
+}
 
-  // Use /api/chat endpoint for proper system/user message separation
+// Default chain when OLLAMA_MODEL 404s — tries known-good Ollama Cloud
+// model names in order.  `gemma4:31b-cloud` doesn't exist; `gemma3:27b-cloud`
+// is the latest official Gemma cloud model.
+const FALLBACK_MODELS = [
+  'gemma3:27b-cloud',
+  'gpt-oss:20b-cloud',
+  'qwen3-coder:480b-cloud',
+];
+let _resolvedModel = null;  // sticky once we find one that works
+
+async function thinkOllama(agentName, systemPrompt, userMessage, complexity = 'low') {
+  const modelNormal = process.env.OLLAMA_MODEL || 'gemma3:27b-cloud';
+  const modelHigh = process.env.OLLAMA_MODEL_HIGH || modelNormal;
   const baseUrl = (process.env.OLLAMA_URL || 'http://localhost:11434').replace(/\/api\/(generate|chat)\/?$/, '');
   const url = `${baseUrl}/api/chat`;
-  console.log(`[AI Brain] ${agentName} thinking with Ollama ${model} (${complexity})...`);
 
-  try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 60000); // 60s timeout for cloud-routed models via tunnel
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true' },
-      body: JSON.stringify({
-        model,
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userMessage },
-        ],
-        stream: false,
-      }),
-      signal: controller.signal,
-    });
-    clearTimeout(timeout);
+  // If a previous call discovered the configured model is missing and
+  // a fallback worked, stick with that fallback for subsequent calls.
+  const configured = complexity === 'high' ? modelHigh : modelNormal;
+  const tryOrder = _resolvedModel
+    ? [_resolvedModel]
+    : [configured, ...FALLBACK_MODELS.filter(m => m !== configured)];
 
-    if (!response.ok) {
-      throw new Error(`Ollama API error: ${response.status} ${response.statusText}`);
+  let lastErr = null;
+  for (const model of tryOrder) {
+    console.log(`[AI Brain] ${agentName} thinking with Ollama ${model} (${complexity})...`);
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 60000);
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true' },
+        body: JSON.stringify({
+          model,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userMessage },
+          ],
+          stream: false,
+        }),
+        signal: controller.signal,
+      });
+      clearTimeout(timeout);
+
+      if (response.status === 404) {
+        // Model not loaded.  Discover what IS loaded (once) and log it.
+        const tags = await fetchOllamaTags(baseUrl);
+        console.warn(`[AI Brain] Ollama 404 for model "${model}". Available models: ${tags ? tags.join(', ') || '(none)' : '(tags fetch failed)'}`);
+        lastErr = new Error(`Ollama 404: model ${model} not loaded`);
+        continue;  // try next fallback
+      }
+      if (!response.ok) {
+        throw new Error(`Ollama API error: ${response.status} ${response.statusText}`);
+      }
+
+      const data = await response.json();
+      const text = data.message?.content || null;
+      console.log(`[AI Brain] ${agentName} responded: ${text ? text.substring(0, 80) + '...' : 'EMPTY'}`);
+      // Stickiness: remember the model that actually worked
+      if (text && model !== configured && !_resolvedModel) {
+        _resolvedModel = model;
+        console.log(`[AI Brain] Sticky model resolved → ${model} (configured "${configured}" was 404)`);
+      }
+      return text;
+    } catch (err) {
+      lastErr = err;
+      console.error(`[AI Brain] Ollama Error (${model}): ${err.message}`);
+      // For non-404 transport errors, don't churn through every fallback —
+      // the network is the same for all of them.
+      if (!String(err.message).includes('404')) break;
     }
-
-    const data = await response.json();
-    const text = data.message?.content || null;
-    console.log(`[AI Brain] ${agentName} responded: ${text ? text.substring(0, 80) + '...' : 'EMPTY'}`);
-    return text;
-  } catch (err) {
-    console.error(`[AI Brain] Ollama Error: ${err.message}`);
-    throw err;
   }
+  throw lastErr || new Error('Ollama: no working model');
 }
 
 // ── System prompts per agent role ───────────────────────────
