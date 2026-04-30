@@ -89,6 +89,7 @@
     ['seat-eth',   { seatCol: 6,  seatRow: 3, facingDir: Dir.UP, assigned: false }],
     ['seat-sol',   { seatCol: 2,  seatRow: 8, facingDir: Dir.UP, assigned: false }],
     ['seat-bnb',   { seatCol: 6,  seatRow: 8, facingDir: Dir.UP, assigned: false }],
+    ['seat-xrp',   { seatCol: 10, seatRow: 3, facingDir: Dir.UP, assigned: false }],
     // Lounge — non-trader agents
     ['seat-coord', { seatCol: 16, seatRow: 3, facingDir: Dir.UP, assigned: false }], // at whiteboard
     ['seat-coder', { seatCol: 11, seatRow: 5, facingDir: Dir.UP, assigned: false }], // by bookshelf/coffee
@@ -142,6 +143,7 @@
     { id: 1, symbol: 'ETHUSDT', label: 'ETH',   palette: 1, seatId: 'seat-eth',   role: 'trader' },
     { id: 2, symbol: 'SOLUSDT', label: 'SOL',   palette: 2, seatId: 'seat-sol',   role: 'trader' },
     { id: 3, symbol: 'BNBUSDT', label: 'BNB',   palette: 3, seatId: 'seat-bnb',   role: 'trader' },
+    { id: 6, symbol: 'XRPUSDT', label: 'XRP',   palette: 0, seatId: 'seat-xrp',   role: 'trader' },
     { id: 4, symbol: null,      label: 'COORD', palette: 4, seatId: 'seat-coord', role: 'coordinator' },
     { id: 5, symbol: null,      label: 'CODER', palette: 5, seatId: 'seat-coder', role: 'coder' },
   ];
@@ -723,6 +725,8 @@
       this.rafId         = null;
       this.lastTime      = 0;
       this.apiTimer      = 0;
+      this.agentStatsTimer = 0;
+      this._agentStats   = {};
       this.pcAnimTimer   = 0;
       this.pcFrame       = 0;       // 0–2 → PC_FRONT_ON_1/2/3
       this.coordTimer    = 8;   // first scan ~8s after init
@@ -974,6 +978,55 @@
       this.canvas.height = Math.max(ROWS * TILE_SIZE * this.zoom, ch);
     }
 
+    async _fetchAgentStats() {
+      // Pull RPG (level, totalEarned) + Survival (totalLosses-pnl) for each agent.
+      // /api/admin/agents/health returns { agents: [{ key, name, health: {rpg:{...}, survival:{...}} }] }
+      try {
+        const res = await fetch('/api/admin/agents/health', { credentials: 'include' });
+        if (!res.ok) return;
+        const data = await res.json();
+        const agentsArr = Array.isArray(data?.agents) ? data.agents : (data?.health?.agents || []);
+        if (!agentsArr.length) return;
+
+        // Index by both lower-case key (system agents) and symbol (token agents)
+        this._agentStats = {};
+        for (const a of agentsArr) {
+          const rpg  = a.health?.rpg  || a.rpg  || {};
+          const surv = a.health?.survival || a.survival || {};
+          const stats = {
+            level:    rpg.level    || 1,
+            earned:   Number(rpg.totalEarned || 0),
+            // "lost" = absolute USD lost on losing trades (sum of negative PnL)
+            // Survival doesn't break this out, so use grossLossesPnl from agent_trade_history
+            // when available, falling back to a derived |totalRevenue - totalEarned| only if both
+            // are present.  For the floor, show the simple totalLossesPnl from the per-agent
+            // trade-history endpoint (fetched separately below).
+            totalTrades: surv.totalTrades || 0,
+            wins:     surv.totalWins   || 0,
+            losses:   surv.totalLosses || 0,
+            capital:  surv.capital     || 0,
+          };
+          if (a.key)  this._agentStats[a.key] = stats;
+          if (a.name) this._agentStats[a.name] = stats;
+        }
+
+        // Fetch per-agent revenue summary for accurate "lost" $ figure
+        try {
+          const rev = await fetch('/api/admin/agents/revenue-summary', { credentials: 'include' });
+          if (rev.ok) {
+            const rdata = await rev.json();
+            const rrows = Array.isArray(rdata?.agents) ? rdata.agents : [];
+            for (const r of rrows) {
+              const key = r.agent;
+              if (!this._agentStats[key]) this._agentStats[key] = { level: 1, earned: 0, totalTrades: 0, wins: 0, losses: 0, capital: 0 };
+              this._agentStats[key].lossDollars = Math.abs(Number(r.total_losses_pnl || 0));
+              this._agentStats[key].winDollars  = Number(r.total_wins_pnl || 0);
+            }
+          }
+        } catch (_) { /* revenue summary is optional */ }
+      } catch (_) { /* keep last-known stats on error */ }
+    }
+
     async _fetchPositions() {
       try {
         const res = await fetch('/api/admin/open-positions', { credentials: 'include' });
@@ -1043,6 +1096,13 @@
         this._fetchPositions();
       }
 
+      // Agent stats poll every 15 s (level / earned / lost)
+      this.agentStatsTimer -= dt;
+      if (this.agentStatsTimer <= 0) {
+        this.agentStatsTimer = 15;
+        this._fetchAgentStats();
+      }
+
       // PC animation: cycle 3 ON frames at ~5 fps
       this.pcAnimTimer += dt;
       if (this.pcAnimTimer >= 0.2) {
@@ -1073,19 +1133,25 @@
     // ── Sidebar: agent list ─────────────────────────────────────
     _renderAgentList() {
       if (!this.listEl) return;
-      // Build only once; afterwards just patch status nodes
+      // Build only once; afterwards just patch dynamic nodes
       if (this.listEl.children.length !== AGENTS.length) {
         this.listEl.innerHTML = '';
         for (const def of AGENTS) {
           const meta = ROLE_META[def.role] || ROLE_META.trader;
           const li = document.createElement('li');
           li.dataset.aid = def.id;
-          li.style.cssText = 'display:flex;align-items:center;gap:8px;padding:6px 8px;border:1px solid var(--color-border-muted);border-radius:6px;background:var(--color-bg);';
+          li.style.cssText = 'display:grid;grid-template-columns:auto auto 1fr auto;align-items:center;gap:6px 8px;padding:6px 8px;border:1px solid var(--color-border-muted);border-radius:6px;background:var(--color-bg);';
           li.innerHTML =
             '<span class="tf-dot" style="width:8px;height:8px;border-radius:50%;background:#555;flex-shrink:0;"></span>' +
             '<span style="font-weight:700;color:' + meta.color + ';min-width:54px;">' + def.label + '</span>' +
-            '<span style="color:var(--color-text-muted);font-size:0.7rem;flex:1;">' + meta.title + '</span>' +
-            '<span class="tf-state" style="font-size:0.65rem;color:var(--color-text-muted);text-transform:uppercase;letter-spacing:0.05em;">--</span>';
+            '<span style="color:var(--color-text-muted);font-size:0.7rem;">' + meta.title + '</span>' +
+            '<span class="tf-state" style="font-size:0.65rem;color:var(--color-text-muted);text-transform:uppercase;letter-spacing:0.05em;justify-self:end;">--</span>' +
+            '<span class="tf-stats" style="grid-column:1 / -1;display:flex;gap:10px;font-size:0.65rem;color:var(--color-text-muted);padding-left:14px;">' +
+              '<span class="tf-lvl">Lv.--</span>' +
+              '<span class="tf-earned" style="color:#4ade80;">+$0</span>' +
+              '<span class="tf-lost" style="color:#f87171;">-$0</span>' +
+              '<span class="tf-wl">0W/0L</span>' +
+            '</span>';
           this.listEl.appendChild(li);
         }
       }
@@ -1109,6 +1175,26 @@
         }
         if (dot) dot.style.background = color;
         if (stateEl) stateEl.textContent = label;
+
+        // Patch stats line — agent stats keyed by name (BTCAgent / ChartAgent / etc)
+        // Token agents name-format from coordinator: '<sym lower no usdt>' e.g. 'btc'
+        // The /api/admin/agents/health response uses both `key` (lowercased sym) and `name`.
+        const statsKey = def.symbol
+          ? def.label.toLowerCase()                 // e.g. 'btc'
+          : (def.role === 'coordinator' ? 'Coordinator' : 'CoderAgent');
+        const stats = this._agentStats[statsKey]
+                   || this._agentStats[def.label + 'Agent']
+                   || this._agentStats[def.label];
+        const lvlEl    = li.querySelector('.tf-lvl');
+        const earnedEl = li.querySelector('.tf-earned');
+        const lostEl   = li.querySelector('.tf-lost');
+        const wlEl     = li.querySelector('.tf-wl');
+        if (stats) {
+          if (lvlEl)    lvlEl.textContent    = 'Lv.' + stats.level;
+          if (earnedEl) earnedEl.textContent = '+$' + (stats.winDollars ?? stats.earned ?? 0).toFixed(2);
+          if (lostEl)   lostEl.textContent   = '-$' + (stats.lossDollars ?? 0).toFixed(2);
+          if (wlEl)     wlEl.textContent     = (stats.wins || 0) + 'W/' + (stats.losses || 0) + 'L';
+        }
       }
     }
 

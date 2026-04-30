@@ -32,11 +32,11 @@ const SELF_IMPROVE_LESSONS = {
   repeated_failures: 'I will diagnose root causes instead of repeating failed patterns.',
 };
 
-// Only the 4 tokens we actively trade get dedicated agents.
-// Removed: XRPUSDT, DOGEUSDT, ADAUSDT, AVAXUSDT, SUIUSDT, LINKUSDT
-// — none of them are in the SMC/Spike-HL/T-Junction/Triple-MA whitelists.
+// Token agents:
+//   BTC/ETH/SOL/BNB — core whitelist
+//   XRPUSDT         — added when leverage map was retuned to 50x
 const DEFAULT_TOKEN_AGENTS = [
-  'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT',
+  'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT',
 ];
 
 class AgentCoordinator extends BaseAgent {
@@ -247,9 +247,8 @@ class AgentCoordinator extends BaseAgent {
   }
 
   async _fetchTopTokens() {
-    // Hard-coded to 4 allowed coins only — no dynamic top-N fetching.
-    // Previously this fetched top 10 by volume from Binance which included DOGE, XRP, PEPE etc.
-    const ALLOWED = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT'];
+    // Hard-coded whitelist — 5 tokens with configured leverage (BTC/ETH 100x, SOL/BNB/XRP 50x).
+    const ALLOWED = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT'];
     for (const sym of ALLOWED) {
       if (!this.tokenAgents.has(sym)) this.addTokenAgent(sym);
     }
