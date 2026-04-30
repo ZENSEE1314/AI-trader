@@ -466,18 +466,18 @@ function detectMomentumBreakout(klines1m, opts = {}) {
 //   HTF sets the direction; 1m is the entry trigger.
 
 function detectMSTF(klines15m, klines3m, klines1m, bias) {
-  if (!klines3m || !klines1m) return null;
+  if (!klines1m) return null;
 
+  // Per user direction: trade only on 15m + 1m HL/LH. 3m is ignored.
   const s15 = detectStructure(klines15m, 3); // 15m structure
-  const s3  = detectStructure(klines3m,  3); // 3m structure
   const s1  = detectStructure(klines1m,  2); // 1m structure (tighter swing)
 
-  if (!s1) return null;
+  if (!s1 || !s15) return null;
 
-  const htfBull = (s15 && (s15.hh || s15.hl)) || (s3 && (s3.hh || s3.hl));
-  const htfBear = (s15 && (s15.ll || s15.lh)) || (s3 && (s3.ll || s3.lh));
-  const ltfBull = s1.hh || s1.hl;
-  const ltfBear = s1.ll || s1.lh;
+  const htfBull = s15.hh || s15.hl;
+  const htfBear = s15.ll || s15.lh;
+  const ltfBull = s1.hh  || s1.hl;
+  const ltfBear = s1.ll  || s1.lh;
 
   // ── 1m structure-pause gate ────────────────────────────────
   // Wait for the latest closed 1m candle to STOP extending the structure
@@ -497,30 +497,25 @@ function detectMSTF(klines15m, klines3m, klines1m, bias) {
   }
 
   if (bias === 'long' && htfBull && ltfBull && longPaused) {
-    // Build label: which HTF fired, what structure
-    const htfSrc  = (s15 && (s15.hh || s15.hl)) ? s15  : s3;
-    const htfTag  = (s15 && (s15.hh || s15.hl)) ? '15m' : '3m';
-    const htfType = htfSrc.hh ? 'HH' : 'HL';
-    const ltfType = s1.hh     ? 'HH' : 'HL';
+    const htfType = s15.hh ? 'HH' : 'HL';
+    const ltfType = s1.hh  ? 'HH' : 'HL';
     return {
       setupName: 'MSTF',
       level:     null,
-      levelType: `${htfTag}${htfType}+1m${ltfType}`,
-      htfStruct: { s15, s3 },
+      levelType: `15m${htfType}+1m${ltfType}`,
+      htfStruct: { s15 },
       ltfStruct: s1,
     };
   }
 
   if (bias === 'short' && htfBear && ltfBear && shortPaused) {
-    const htfSrc  = (s15 && (s15.ll || s15.lh)) ? s15  : s3;
-    const htfTag  = (s15 && (s15.ll || s15.lh)) ? '15m' : '3m';
-    const htfType = htfSrc.ll ? 'LL' : 'LH';
-    const ltfType = s1.ll     ? 'LL' : 'LH';
+    const htfType = s15.ll ? 'LL' : 'LH';
+    const ltfType = s1.ll  ? 'LL' : 'LH';
     return {
       setupName: 'MSTF',
       level:     null,
-      levelType: `${htfTag}${htfType}+1m${ltfType}`,
-      htfStruct: { s15, s3 },
+      levelType: `15m${htfType}+1m${ltfType}`,
+      htfStruct: { s15 },
       ltfStruct: s1,
     };
   }

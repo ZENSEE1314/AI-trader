@@ -1262,8 +1262,9 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
   } // end STRATEGY_V2 gate
 
   // Strategy 11: Structure Follow — (15m OR 3m) + 1m
-  // LONG:  (15m HL/HH  OR  3m HH/HL)  +  1m HH/HL  → LONG
-  // SHORT: (15m LH/LL  OR  3m LL/LH)  +  1m LL/LH  → SHORT
+  // Per user direction: trade only on 15m + 1m HL/LH. 3m fully removed.
+  // LONG : 15m HL/HH  +  1m HH/HL  → LONG
+  // SHORT: 15m LH/LL  +  1m LL/LH  → SHORT
   {
     const PIVOT_B = 2;
 
@@ -1282,22 +1283,6 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     const has15mHL_s11 = sLs15.length >= 2 && sLs15[sLs15.length-1] > sLs15[sLs15.length-2];
     const has15mLH_s11 = sHs15.length >= 2 && sHs15[sHs15.length-1] < sHs15[sHs15.length-2];
     const has15mLL_s11 = sLs15.length >= 2 && sLs15[sLs15.length-1] < sLs15[sLs15.length-2];
-
-    // ── 3m pivots (parsed1 = klines3m) ──────────────────────
-    const pH3m = [], pL3m = [];
-    for (let i = PIVOT_B; i < parsed1.length - PIVOT_B; i++) {
-      let isH = true, isL = true;
-      for (let j = 1; j <= PIVOT_B; j++) {
-        if (parsed1[i].high <= parsed1[i-j].high || parsed1[i].high <= parsed1[i+j].high) isH = false;
-        if (parsed1[i].low  >= parsed1[i-j].low  || parsed1[i].low  >= parsed1[i+j].low)  isL = false;
-      }
-      if (isH) pH3m.push(parsed1[i].high);
-      if (isL) pL3m.push(parsed1[i].low);
-    }
-    const has3mHH = pH3m.length >= 2 && pH3m[pH3m.length - 1] > pH3m[pH3m.length - 2];
-    const has3mHL = pL3m.length >= 2 && pL3m[pL3m.length - 1] > pL3m[pL3m.length - 2];
-    const has3mLL = pL3m.length >= 2 && pL3m[pL3m.length - 1] < pL3m[pL3m.length - 2];
-    const has3mLH = pH3m.length >= 2 && pH3m[pH3m.length - 1] < pH3m[pH3m.length - 2];
 
     // ── 1m pivots (parsed1m = klines1m) ──────────────────────
     const pH1m = [], pL1m = [];
@@ -1319,8 +1304,6 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
 
     const htfLong  = has15mHH_s11 || has15mHL_s11;
     const htfShort = has15mLH_s11 || has15mLL_s11;
-    const mtfLong  = has3mHH || has3mHL;
-    const mtfShort = has3mLL || has3mLH;
 
     // ── 1m structure-pause gate ──────────────────────────────
     // Don't fire while the structure is still extending on the latest 1m
@@ -1333,23 +1316,19 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     if (_len1m >= 3) {
       const lastC = parsed1m[_len1m - 2];
       const prevC = parsed1m[_len1m - 3];
-      // LONG paused: latest closed candle did NOT make a new higher-high
-      // AND did NOT make a new higher-low (no continuation up).
       _longPaused  = lastC.high <= prevC.high && lastC.low <= prevC.low;
-      // SHORT paused: latest closed candle did NOT make a new lower-low
-      // AND did NOT make a new lower-high (no continuation down).
       _shortPaused = lastC.low  >= prevC.low  && lastC.high >= prevC.high;
     }
 
-    const longOk  = (htfLong || mtfLong)   && (has1mHH || has1mHL) && _longPaused;
-    const shortOk = (htfShort || mtfShort) && (has1mLL || has1mLH) && _shortPaused;
+    const longOk  = htfLong  && (has1mHH || has1mHL) && _longPaused;
+    const shortOk = htfShort && (has1mLL || has1mLH) && _shortPaused;
 
-    // SL from 1m pivots (tighter), fall back to 3m
-    const slLowRef  = pL1m.length >= 3 ? pL1m : pL3m;
-    const slHighRef = pH1m.length >= 3 ? pH1m : pH3m;
+    // SL anchored on the most recent 1m pivot (no 3m fallback).
+    const slLowRef  = pL1m;
+    const slHighRef = pH1m;
 
-    const longHtf   = htfLong  ? (has15mHH_s11 ? '15HH' : '15HL') : (has3mHH ? '3HH' : '3HL');
-    const shortHtf  = htfShort ? (has15mLH_s11 ? '15LH' : '15LL') : (has3mLL ? '3LL' : '3LH');
+    const longHtf  = has15mHH_s11 ? '15HH' : '15HL';
+    const shortHtf = has15mLH_s11 ? '15LH' : '15LL';
     const longTfTag  = `${longHtf}+1m-${has1mHH ? 'HH' : 'HL'}`;
     const shortTfTag = `${shortHtf}+1m-${has1mLL ? 'LL' : 'LH'}`;
 
@@ -1371,7 +1350,7 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
           sl, tp1, tp2: price + atr * 3.0, tp3: price + atr * 4.0,
           slDist, setup: 'STRUCTURE_FOLLOW',
           setupName: `LONG-${longTfTag}`,
-          score: 8, rr, tf15: `3m ${has3mHH ? 'HH' : 'HL'}`, tf1: `1m ${has1mHH ? 'HH' : 'HL'}`,
+          score: 8, rr, tf15: `15m ${has15mHH_s11 ? 'HH' : 'HL'}`, tf1: `1m ${has1mHH ? 'HH' : 'HL'}`,
         });
       }
     }
@@ -1388,7 +1367,7 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
           sl, tp1, tp2: price - atr * 3.0, tp3: price - atr * 4.0,
           slDist, setup: 'STRUCTURE_FOLLOW',
           setupName: `SHORT-${shortTfTag}`,
-          score: 8, rr, tf15: `3m ${has3mLL ? 'LL' : 'LH'}`, tf1: `1m ${has1mLL ? 'LL' : 'LH'}`,
+          score: 8, rr, tf15: `15m ${has15mLL_s11 ? 'LL' : 'LH'}`, tf1: `1m ${has1mLL ? 'LL' : 'LH'}`,
         });
       }
     }
