@@ -1414,8 +1414,8 @@ class AgentCoordinator extends BaseAgent {
         complexity: 'high',
       });
 
-      // Attempt to parse JSON from response
-      const match = aiResponse.match(/\{.*\}/s);
+      // Attempt to parse JSON from response (think() may return null when Ollama is down)
+      const match = aiResponse ? aiResponse.match(/\{.*\}/s) : null;
       if (match) {
         const result = JSON.parse(match[0]);
         return {
