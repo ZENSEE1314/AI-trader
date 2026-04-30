@@ -63,7 +63,7 @@ function getProvider(/* complexity unused — Ollama-only */) {
 function markOllamaDown() {
   ollamaHealthy = false;
   ollamaLastCheck = Date.now();
-  console.log('[AI Brain] Ollama marked DOWN — falling back to cloud provider');
+  console.log('[AI Brain] Ollama marked DOWN — AI optional, callers will skip');
 }
 
 function markOllamaUp() {

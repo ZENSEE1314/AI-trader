@@ -896,9 +896,9 @@ async function analyzeSymbol(symbol, price, kronosPredictions = null) {
     if (dir === 'LONG'  && rsi > 75) score -= 3;             // overbought — risky long
     if (dir === 'SHORT' && rsi < 25) score -= 3;             // oversold — risky short
 
-    // SWING_REVERSAL RSI extreme bonus (it IS the reversal point — RSI extreme is a signal)
-    if (isSwingRev && dir === 'LONG'  && rsi < 35) score += 3;
-    if (isSwingRev && dir === 'SHORT' && rsi > 65) score += 3;
+    // SWING_REVERSAL / TEN_CANDLE_EXTREME RSI extreme bonus (it IS the reversal point — RSI extreme is a signal)
+    if (isReversal && dir === 'LONG'  && rsi < 35) score += 3;
+    if (isReversal && dir === 'SHORT' && rsi > 65) score += 3;
 
     // ── EMA200(1h) directional alignment ─────────────────────
     if (typeof ema200Penalty === 'object' && ema200Penalty.bias) {
