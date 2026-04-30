@@ -20,8 +20,8 @@
 const SYMBOLS = [
   { symbol: 'BTCUSDT', leverage: 100, basePrice: 75000, baseVol: 0.0006 },
   { symbol: 'ETHUSDT', leverage: 100, basePrice: 3500,  baseVol: 0.0008 },
-  { symbol: 'SOLUSDT', leverage: 20,  basePrice: 180,   baseVol: 0.0011 },
-  { symbol: 'XRPUSDT', leverage: 20,  basePrice: 1.35,  baseVol: 0.0012 },
+  { symbol: 'SOLUSDT', leverage: 100, basePrice: 180,   baseVol: 0.0011 },
+  { symbol: 'BNBUSDT', leverage: 100, basePrice: 720,   baseVol: 0.0009 },
 ];
 
 const DAYS                 = 30;
