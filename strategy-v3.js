@@ -24,9 +24,10 @@
 //     below as resistance → SHORT.
 //
 //  BIAS FILTER (required for all setups):
-//     Price > OP  AND  Price > VWAP  →  LONG only
-//     Price < OP  AND  Price < VWAP  →  SHORT only
-//     Price between OP and VWAP      →  no trade (ambiguous)
+//     Price > OP  AND within 1.5% of VWAP  →  LONG only
+//     Price < OP  AND within 1.5% of VWAP  →  SHORT only
+//     (1.5% tolerance allows pullback entries near VWAP, which is
+//      where HL/LH setups naturally form)
 //
 //  NO SESSION FILTER — 24/7 scanning.
 //
@@ -191,7 +192,7 @@ function near(price, level, pct = 0.003) {
 
 function detectBreakRetest(klines15m, levels, bias, price) {
   const WINDOW  = 30;
-  const NEAR    = 0.003; // within 0.3 % of level
+  const NEAR    = 0.005; // within 0.5 % of level
   const VOL_MUL = 1.3;   // volume spike threshold
 
   const slice = klines15m.slice(-WINDOW);
@@ -231,11 +232,19 @@ function detectBreakRetest(klines15m, levels, bias, price) {
   return null;
 }
 
+// ── findLastIdx — Node <18 compatible replacement for findLastIndex ──
+
+function findLastIdx(arr, predicate) {
+  for (let i = arr.length - 1; i >= 0; i--) {
+    if (predicate(arr[i])) return i;
+  }
+  return -1;
+}
+
 // ── Setup 2: Liquidity Grab & Reversal ───────────────────────
 
 function detectLiqGrab(klines15m, levels, bias, price) {
   const WINDOW = 15;
-  const NEAR   = 0.005; // spike must reach within 0.5 % of level
 
   const slice      = klines15m.slice(-WINDOW);
   const lastCandle = klines15m[klines15m.length - 1];
@@ -244,7 +253,7 @@ function detectLiqGrab(klines15m, levels, bias, price) {
   for (const lv of keyLevs) {
     if (bias === 'long') {
       // Spike: a recent candle's LOW dipped below lv but CLOSED above it (false break down)
-      const grabIdx = slice.findLastIndex(k =>
+      const grabIdx = findLastIdx(slice, k =>
         parseFloat(k[3]) < lv * 0.999 && parseFloat(k[4]) > lv
       );
       if (grabIdx < 0) continue;
@@ -256,7 +265,7 @@ function detectLiqGrab(klines15m, levels, bias, price) {
       return { setupName: 'LiqGrab', level: lv, levelType: labelLevel(lv, levels) };
     } else {
       // Spike above lv, close back below
-      const grabIdx = slice.findLastIndex(k =>
+      const grabIdx = findLastIdx(slice, k =>
         parseFloat(k[2]) > lv * 1.001 && parseFloat(k[4]) < lv
       );
       if (grabIdx < 0) continue;
@@ -279,7 +288,7 @@ function detectVWAPTrend(klines15m, vwap, bias, price) {
   const e21 = ema(closes, 21);
   if (!e9 || !e21) return null;
 
-  const NEAR = 0.004; // within 0.4 % of VWAP
+  const NEAR = 0.008; // within 0.8 % of VWAP (pullbacks land in this zone)
 
   if (bias === 'long') {
     // Uptrend: EMA9 > EMA21
@@ -407,15 +416,18 @@ async function analyzeV3(ticker) {
     const vwap = calcVWAP(klines15m);
     if (!vwap) return null;
 
-    // ── Bias filter (PDF rule) ────────────────────────────────
-    //   Long  : price above BOTH OP and VWAP
-    //   Short : price below BOTH OP and VWAP
+    // ── Bias filter ───────────────────────────────────────────
+    //   PDF: above OP + VWAP = long, below both = short.
+    //   Pullback entries land slightly below VWAP by definition,
+    //   so allow 1.5% tolerance below VWAP for longs (and above for shorts).
+    //   OP is the primary gate; VWAP position is a scoring bonus.
     const aboveOP   = price > levels.op;
     const aboveVWAP = price > vwap;
+    const vwapDiff  = (price - vwap) / vwap; // +ve = above VWAP
     let bias;
-    if (aboveOP && aboveVWAP)      bias = 'long';
-    else if (!aboveOP && !aboveVWAP) bias = 'short';
-    else return null;  // price between OP and VWAP — ambiguous, no trade
+    if (aboveOP && vwapDiff >= -0.015)      bias = 'long';
+    else if (!aboveOP && vwapDiff <= 0.015) bias = 'short';
+    else return null;
 
     // ── Run all three setups ──────────────────────────────────
     const setup =
