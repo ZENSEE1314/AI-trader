@@ -403,9 +403,12 @@ function atr(klines, period = 14) {
 
 function detectMomentumBreakout(klines1m, opts = {}) {
   const {
-    bodyAtrMul       = 1.6,   // body must be ≥ 1.6 × ATR
-    volMul           = 1.8,   // volume must be ≥ 1.8 × avg-20
-    rangeMul         = 1.2,   // candle range ≥ 1.2 × max(last 5 ranges)
+    // Loosened from initial 1.6/1.8/1.2 — synthetic backtest had cleaner
+    // impulse signals than real BTC tape; relaxing slightly so realistic
+    // trend-bar breakouts (e.g. BTC 75.3k→76k in 80m) can fire.
+    bodyAtrMul       = 1.3,   // body must be ≥ 1.3 × ATR
+    volMul           = 1.5,   // volume must be ≥ 1.5 × avg-20
+    rangeMul         = 1.1,   // candle range ≥ 1.1 × max(last 5 ranges)
     consolidationLB  = 20,    // bars used to define the range break
   } = opts;
 

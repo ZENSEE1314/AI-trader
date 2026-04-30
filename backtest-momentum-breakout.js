@@ -35,9 +35,9 @@ const RISK_CAPITAL         = 100;           // $100 margin per trade
 const SEED                 = 42;
 
 // ── Detector knobs (same as strategy-v3.detectMomentumBreakout) ─
-const BODY_ATR_MUL         = 1.6;
-const VOL_MUL              = 1.8;
-const RANGE_MUL            = 1.2;
+const BODY_ATR_MUL         = 1.3;
+const VOL_MUL              = 1.5;
+const RANGE_MUL            = 1.1;
 const CONSOLIDATION_LB     = 20;
 const ATR_PERIOD           = 14;
 
