@@ -40,6 +40,10 @@ function calcV2TrailSL(entryPrice, currentPrice, isLong, leverage, currentSl) {
 const INTERVAL_MS = 15 * 1000;
 const db = require('./db');
 
+// Tracks symbols whose SL we've already retro-widened to 20% capital this
+// process lifetime.  Prevents re-applying the widen on every 15-second tick.
+const _widened = new Set();
+
 // NOTE: V1 trail constants removed — all trades now use V2 milestone trail.
 // V2 thresholds live in strategy-v2.js (V2_SL_CAPITAL_PCT / TRAIL_START / TRAIL_STEP).
 // Funding rate cache kept for getLivePrice fallback only.
@@ -230,7 +234,7 @@ async function runTrailCycle() {
 
           // Look up DB trade — may not exist (orphan position)
           const dbTrade   = dbTradeMap.get(`${key.id}:${symbol}`);
-          const currentSl = dbTrade
+          let currentSl = dbTrade
             ? (parseFloat(dbTrade.trailing_sl_price) || parseFloat(dbTrade.sl_price) || 0)
             : 0;
           const pricePrec = dbTrade
@@ -252,6 +256,36 @@ async function runTrailCycle() {
 
           const pctDisplay = `${capitalPct >= 0 ? '+' : ''}${(capitalPct * 100).toFixed(2)}%`;
           log(`[DIAG] ${symbol} ${isLong ? 'LONG' : 'SHORT'} | entry=$${entry} | lev=${leverage}x | capital=${pctDisplay} | currentSL=$${currentSl} | DB=${dbTrade ? 'found' : 'ORPHAN'}`);
+
+          // ── Retro-widen narrow SLs to 20% capital ────────────────
+          // If a trade was opened with an under-sized SL (e.g. ATR-based at
+          // ~14% capital before #42 normalised this), widen it to 20%
+          // capital on the first tick.  Only acts on losing trades — winners
+          // hand off to the trail-up logic below.  Runs once per position
+          // per watchdog process via _widened set.
+          if (capitalPct < 0 && currentSl > 0) {
+            const targetSlPricePct = 0.20 / leverage;
+            const targetSl = isLong
+              ? entry * (1 - targetSlPricePct)
+              : entry * (1 + targetSlPricePct);
+            // For LONG: lower SL = wider (more room).  Need targetSl < currentSl.
+            // For SHORT: higher SL = wider.  Need targetSl > currentSl.
+            const isNarrower = isLong
+              ? currentSl > targetSl + 0.0001
+              : currentSl < targetSl - 0.0001;
+            if (isNarrower && !_widened.has(symbol)) {
+              _widened.add(symbol);
+              log(`[20%-FIX] ${symbol} ${isLong ? 'LONG' : 'SHORT'}: SL $${currentSl.toFixed(pricePrec)} → $${targetSl.toFixed(pricePrec)} (widening to 20% capital)`);
+              const ok = await updateSlBitunix(client, symbol, targetSl, pricePrec, dbTrade?.tp_price, pos);
+              if (ok && dbTrade) {
+                await db.query(
+                  `UPDATE trades SET trailing_sl_price = $1, sl_price = $1 WHERE id = $2`,
+                  [targetSl, dbTrade.id]
+                );
+              }
+              currentSl = targetSl;  // continue the cycle with the new SL
+            }
+          }
 
           const v2Result = calcV2TrailSL(entry, isLong ? entry * (1 + capitalPct / leverage) : entry * (1 - capitalPct / leverage), isLong, leverage, currentSl);
           if (!v2Result) {
