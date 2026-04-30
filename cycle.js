@@ -1166,21 +1166,30 @@ async function main() {
     const { query: dbQuery, initAllTables } = require('./db');
     await initAllTables();
 
-    // One-time: ensure SOL and BNB are set to 100x in the token_leverage table.
-    // This overrides any old 20x/50x DB records that would otherwise take priority
-    // over the hardcoded defaults in getTokenLeverage().
+    // One-time: enforce backtest-tuned leverage in token_leverage table.
+    //   BTC/ETH      → 100x  (proven WR ≥ 55% on the momentum backtest)
+    //   SOL/BNB/XRP  →  50x  (100x makes the v3 initial SL 0.2 % price,
+    //                          which is inside 1m noise; 50x widens to
+    //                          0.4 % and materially improves WR/PF)
     if (!runCycle._leverageFixDone) {
       runCycle._leverageFixDone = true;
       try {
-        for (const sym of ['SOLUSDT', 'BNBUSDT']) {
+        const leverageMap = [
+          ['BTCUSDT', 100],
+          ['ETHUSDT', 100],
+          ['SOLUSDT',  50],
+          ['BNBUSDT',  50],
+          ['XRPUSDT',  50],
+        ];
+        for (const [sym, lev] of leverageMap) {
           await dbQuery(
             `INSERT INTO token_leverage (symbol, leverage, enabled)
-             VALUES ($1, 100, true)
-             ON CONFLICT (symbol) DO UPDATE SET leverage = 100, enabled = true`,
-            [sym]
+             VALUES ($1, $2, true)
+             ON CONFLICT (symbol) DO UPDATE SET leverage = $2, enabled = true`,
+            [sym, lev]
           );
         }
-        bLog.system('[LEVERAGE-FIX] SOLUSDT + BNBUSDT set to 100x in token_leverage table');
+        bLog.system('[LEVERAGE-FIX] BTC/ETH=100x, SOL/BNB/XRP=50x written to token_leverage');
       } catch (e) {
         bLog.error(`[LEVERAGE-FIX] Failed to update token_leverage: ${e.message}`);
       }

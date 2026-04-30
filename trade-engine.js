@@ -954,10 +954,12 @@ async function analyzeSymbol(symbol, price, kronosPredictions = null) {
   const isLong = best.direction === 'LONG';
   const tp     = isLong ? price + atr * 2 : price - atr * 2;
 
-  // Leverage: BTC/ETH → 100x, BNB/SOL → 20x, others by price
+  // Leverage: BTC/ETH → 100x, SOL/BNB/XRP → 50x (backtest-tuned),
+  // others by price.  50x on alts widens v3 initial SL from 0.2%→0.4%
+  // price, which materially improves WR (see backtest-momentum-breakout).
   const HIGH_LEV = new Set(['BTCUSDT', 'ETHUSDT']);
-  const MID_LEV  = new Set(['BNBUSDT', 'SOLUSDT']);
-  const leverage = HIGH_LEV.has(symbol) ? 100 : MID_LEV.has(symbol) ? 20 : price >= 100 ? 50 : 20;
+  const MID_LEV  = new Set(['SOLUSDT', 'BNBUSDT', 'XRPUSDT']);
+  const leverage = HIGH_LEV.has(symbol) ? 100 : MID_LEV.has(symbol) ? 50 : price >= 100 ? 50 : 20;
 
   bLog.scan(
     `ENGINE: ${symbol} ${best.direction} [${best.setupName}] ` +
