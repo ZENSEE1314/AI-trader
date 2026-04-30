@@ -571,7 +571,7 @@ function calcTrailingSLV3(entryPrice, currentPrice, side, leverage = 1) {
   const capitalPct = pricePct * leverage;
 
   const INITIAL_SL_CAP = 0.15;  // 15 % capital initial stop (tight — TP reachable)
-  const TRAIL_ON_CAP   = 0.16;  // trailing kicks in at +16 % capital
+  const TRAIL_ON_CAP   = 0.21;  // trailing kicks in at +21 % capital → lock +20 %
 
   if (capitalPct < TRAIL_ON_CAP) {
     const slPricePct = INITIAL_SL_CAP / leverage;
@@ -704,9 +704,9 @@ async function analyzeV3(ticker) {
       slPct:      (INITIAL_SL_PRICE_PCT * 100).toFixed(2),
 
       trailConfig: {
-        startPct:     0.16,  // trail starts at +16 % capital profit
+        startPct:     0.21,  // trail starts at +21 % capital profit → locks +20 %
         stepPct:      0.10,  // lock step every +10 % capital
-        initialSLPct: 0.15,  // initial SL: 15 % capital
+        initialSLPct: 0.15,  // initial SL: 15 % capital (tight)
       },
 
       setupName,
