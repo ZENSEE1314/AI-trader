@@ -23,6 +23,11 @@
 //     In a downtrend (EMA9 < EMA21 on 15m), price retests VWAP from
 //     below as resistance → SHORT.
 //
+//   Setup 4 — Multi-Timeframe Structure (MSTF)
+//     LONG:  (15m or 3m) shows HH or HL  AND  1m shows HH or HL
+//     SHORT: (15m or 3m) shows LL or LH  AND  1m shows LL or LH
+//     HTF (15m/3m) sets the directional bias; 1m is the entry trigger.
+//
 //  BIAS FILTER (required for all setups):
 //     Price > OP  AND within 1.5% of VWAP  →  LONG only
 //     Price < OP  AND within 1.5% of VWAP  →  SHORT only
@@ -317,6 +322,104 @@ function detectVWAPTrend(klines15m, vwap, bias, price) {
   }
 }
 
+// ── Market structure detection (HH / HL / LH / LL) ──────────
+//
+//   Scans klines for confirmed swing highs and lows.
+//   A swing high: candle[i].high > all candles within ±swingLen.
+//   A swing low : candle[i].low  < all candles within ±swingLen.
+//   Returns the last two of each, then classifies structure.
+//
+//   Returns: { hh, hl, lh, ll } booleans, or null if not enough data.
+
+function detectStructure(klines, swingLen = 3) {
+  const len = klines.length;
+  if (len < swingLen * 6) return null;
+
+  const swingHighs = []; // { idx, price }
+  const swingLows  = [];
+
+  for (let i = swingLen; i < len - swingLen; i++) {
+    const h = parseFloat(klines[i][2]);
+    const l = parseFloat(klines[i][3]);
+
+    let isHigh = true;
+    let isLow  = true;
+    for (let j = i - swingLen; j <= i + swingLen; j++) {
+      if (j === i) continue;
+      if (parseFloat(klines[j][2]) >= h) isHigh = false;
+      if (parseFloat(klines[j][3]) <= l) isLow  = false;
+    }
+    if (isHigh) swingHighs.push(h);
+    if (isLow)  swingLows.push(l);
+  }
+
+  if (swingHighs.length < 2 && swingLows.length < 2) return null;
+
+  const hLen = swingHighs.length;
+  const lLen = swingLows.length;
+
+  // Compare last two swing highs and lows
+  const hh = hLen >= 2 && swingHighs[hLen - 1] > swingHighs[hLen - 2];
+  const lh = hLen >= 2 && swingHighs[hLen - 1] < swingHighs[hLen - 2];
+  const hl = lLen >= 2 && swingLows[lLen - 1]  > swingLows[lLen - 2];
+  const ll = lLen >= 2 && swingLows[lLen - 1]  < swingLows[lLen - 2];
+
+  return { hh, hl, lh, ll };
+}
+
+// ── Setup 4: Multi-Timeframe Structure (HTF + 1m confirmation) ──
+//
+//   LONG:  (15m or 3m) shows HH or HL  AND  1m shows HH or HL
+//   SHORT: (15m or 3m) shows LL or LH  AND  1m shows LL or LH
+//
+//   HTF sets the direction; 1m is the entry trigger.
+
+function detectMSTF(klines15m, klines3m, klines1m, bias) {
+  if (!klines3m || !klines1m) return null;
+
+  const s15 = detectStructure(klines15m, 3); // 15m structure
+  const s3  = detectStructure(klines3m,  3); // 3m structure
+  const s1  = detectStructure(klines1m,  2); // 1m structure (tighter swing)
+
+  if (!s1) return null;
+
+  const htfBull = (s15 && (s15.hh || s15.hl)) || (s3 && (s3.hh || s3.hl));
+  const htfBear = (s15 && (s15.ll || s15.lh)) || (s3 && (s3.ll || s3.lh));
+  const ltfBull = s1.hh || s1.hl;
+  const ltfBear = s1.ll || s1.lh;
+
+  if (bias === 'long' && htfBull && ltfBull) {
+    // Build label: which HTF fired, what structure
+    const htfSrc  = (s15 && (s15.hh || s15.hl)) ? s15  : s3;
+    const htfTag  = (s15 && (s15.hh || s15.hl)) ? '15m' : '3m';
+    const htfType = htfSrc.hh ? 'HH' : 'HL';
+    const ltfType = s1.hh     ? 'HH' : 'HL';
+    return {
+      setupName: 'MSTF',
+      level:     null,
+      levelType: `${htfTag}${htfType}+1m${ltfType}`,
+      htfStruct: { s15, s3 },
+      ltfStruct: s1,
+    };
+  }
+
+  if (bias === 'short' && htfBear && ltfBear) {
+    const htfSrc  = (s15 && (s15.ll || s15.lh)) ? s15  : s3;
+    const htfTag  = (s15 && (s15.ll || s15.lh)) ? '15m' : '3m';
+    const htfType = htfSrc.ll ? 'LL' : 'LH';
+    const ltfType = s1.ll     ? 'LL' : 'LH';
+    return {
+      setupName: 'MSTF',
+      level:     null,
+      levelType: `${htfTag}${htfType}+1m${ltfType}`,
+      htfStruct: { s15, s3 },
+      ltfStruct: s1,
+    };
+  }
+
+  return null;
+}
+
 // ── Label a level value ───────────────────────────────────────
 
 function labelLevel(val, levels) {
@@ -336,6 +439,7 @@ function scoreSignal({ setup, bias, vwapBias, volSpike, rejCandle, ema9, ema21 }
   if (setup === 'BreakRetest') s += 8;
   if (setup === 'LiqGrab')     s += 9;  // SMC setups slightly higher value
   if (setup === 'VWAPTrend')   s += 7;
+  if (setup === 'MSTF')        s += 9;  // multi-TF structure: strong confluence
 
   // VWAP bias alignment bonus
   if (vwapBias) s += 2;
@@ -399,10 +503,12 @@ async function analyzeV3(ticker) {
     const symbol = ticker.symbol;
     const price  = parseFloat(ticker.lastPrice);
 
-    // Fetch 15m (for VWAP, price action, OP), 1h (for PDH/PDL)
-    const [klines15m, klines1h] = await Promise.all([
+    // Fetch all timeframes in parallel
+    const [klines15m, klines1h, klines3m, klines1m] = await Promise.all([
       fetchKlines(symbol, '15m', 100),
-      fetchKlines(symbol, '1h',  72),   // last 3 days of 1h bars
+      fetchKlines(symbol, '1h',  72),  // 3 days of 1h bars for PDH/PDL
+      fetchKlines(symbol, '3m',  100), // structure detection on 3m
+      fetchKlines(symbol, '1m',  60),  // 1m entry confirmation
     ]);
 
     if (!klines15m || klines15m.length < 30) return null;
@@ -429,11 +535,12 @@ async function analyzeV3(ticker) {
     else if (!aboveOP && vwapDiff <= 0.015) bias = 'short';
     else return null;
 
-    // ── Run all three setups ──────────────────────────────────
+    // ── Run all four setups ───────────────────────────────────
     const setup =
-      detectBreakRetest(klines15m, levels, bias, price) ||
-      detectLiqGrab(klines15m, levels, bias, price)     ||
-      detectVWAPTrend(klines15m, vwap, bias, price);
+      detectBreakRetest(klines15m, levels, bias, price)        ||
+      detectLiqGrab(klines15m, levels, bias, price)            ||
+      detectVWAPTrend(klines15m, vwap, bias, price)            ||
+      detectMSTF(klines15m, klines3m, klines1m, bias);
 
     if (!setup) return null;
 
@@ -504,9 +611,10 @@ async function analyzeV3(ticker) {
       rejCandle,
       setupLevel:     setup.level,
       setupLevelType: setup.levelType,
+      mstfStruct:     setup.setupName === 'MSTF' ? setup.htfStruct : null,
 
       chg24h:   parseFloat(ticker.priceChangePercent),
-      timeframe: '15m+1h',
+      timeframe: '1m+3m+15m+1h',
       version:  'v3',
     };
 
