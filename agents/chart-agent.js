@@ -48,12 +48,12 @@ class ChartAgent extends BaseAgent {
       this.addActivity('info', `Strategy intel: "${strat.name}" won with ${strat.winRate?.toFixed(1)}% WR — noted for scanning`);
     }
 
-    this.logScan('Starting market scan (trade-engine — BTC/ETH/SOL/BNB only)...');
+    this.logScan('Starting market scan (trade-engine — BTC/ETH/SOL/BNB/XRP)...');
 
     const session = aiLearner.getCurrentSession();
     this.logScan(`Session: ${session}`);
 
-    // Scan using unified trade-engine — only 4 allowed coins (BTC/ETH/SOL/BNB)
+    // Scan using unified trade-engine — 5 allowed coins (BTC/ETH/SOL/BNB/XRP)
     const signals = await scanAll(
       (msg) => this.logScan(msg),
       { kronosPredictions }

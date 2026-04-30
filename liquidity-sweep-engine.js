@@ -1746,7 +1746,7 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
 
 async function scanSMC(log, opts = {}) {
 
-  const ALLOWED_SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'SOLUSDT'];
+  const ALLOWED_SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'SOLUSDT', 'XRPUSDT'];
 
   const tickers = await fetchTickers();
   if (!tickers.length) { bLog.error('Failed to fetch tickers'); return []; }
