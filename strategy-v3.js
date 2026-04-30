@@ -742,6 +742,28 @@ async function analyzeV3(ticker) {
       }
     }
 
+    // ── Near-extreme gate — enter at the HL/HH, not mid-range ──
+    // LONG only if price is in the bottom 40 % of the recent 20×1m
+    // range (closer to HL than HH); SHORT only if in the top 40 %.
+    // Pairs with the pause gate above so a mid-rally chase that
+    // pauses for 2 candles still gets blocked when price is too high.
+    if (k1m.length >= 21) {
+      const w20 = k1m.slice(-21, -1); // 20 closed 1m candles
+      let hi = -Infinity, lo = Infinity;
+      for (const k of w20) {
+        const h = parseFloat(k[2]);
+        const l = parseFloat(k[3]);
+        if (h > hi) hi = h;
+        if (l < lo) lo = l;
+      }
+      const sz = hi - lo;
+      if (sz > 0) {
+        const pos = (price - lo) / sz; // 0 = at HL, 1 = at HH
+        if (side === 'LONG'  && pos > 0.40) return null;
+        if (side === 'SHORT' && pos < 0.60) return null;
+      }
+    }
+
     return {
       symbol,
       lastPrice:  price,

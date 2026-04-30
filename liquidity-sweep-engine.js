@@ -1815,6 +1815,29 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     }
   }
 
+  // ── Near-extreme gate — enter at the HL/HH, not mid-range ──
+  // Don't fire LONG unless price sits in the BOTTOM 40 % of the
+  // recent 20×1m range (i.e. close to the HL).  Don't fire SHORT
+  // unless price sits in the TOP 40 %.  Stops the bot from chasing
+  // mid-thrust entries where pause-gate alone wasn't enough.
+  if (parsed1m.length >= 21) {
+    const w20 = parsed1m.slice(-21, -1); // last 20 closed 1m candles
+    const rangeHi = Math.max(...w20.map(c => c.high));
+    const rangeLo = Math.min(...w20.map(c => c.low));
+    const rangeSz = rangeHi - rangeLo;
+    if (rangeSz > 0) {
+      const pos = (price - rangeLo) / rangeSz; // 0 = at HL, 1 = at HH
+      if (best.direction === 'LONG' && pos > 0.40) {
+        bLog.scan(`${symbol}: LONG ${best.setup} BLOCKED — price ${(pos*100).toFixed(0)}% into 20×1m range (need ≤40% — too far from HL)`);
+        return null;
+      }
+      if (best.direction === 'SHORT' && pos < 0.60) {
+        bLog.scan(`${symbol}: SHORT ${best.setup} BLOCKED — price ${(pos*100).toFixed(0)}% into 20×1m range (need ≥60% — too far from HH)`);
+        return null;
+      }
+    }
+  }
+
   return best;
 }
 
