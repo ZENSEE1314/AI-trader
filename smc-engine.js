@@ -411,14 +411,14 @@ async function analyzeLHHL(ticker, params, dailyBiasCache, kronosPredictions = n
       bLog.scan(`${symbol}: LONG rejected — price $${price} is ${(distFromSwing*100).toFixed(2)}% above HL@$${swingPrice} (chasing the high, max ${MAX_CHASE_PCT*100}%)`);
       return null;
     }
-    if (distFromSwing > 0.006) chaseScorePenalty = -2; // 0.6%-1.5% from swing = -2 penalty
+    if (distFromSwing > 0.0015) chaseScorePenalty = -2; // 0.15%-0.30% from swing = -2 penalty
   } else {
     const distFromSwing = (swingPrice - price) / swingPrice;
     if (distFromSwing > MAX_CHASE_PCT) {
       bLog.scan(`${symbol}: SHORT rejected — price $${price} is ${(distFromSwing*100).toFixed(2)}% below LH@$${swingPrice} (chasing the low, max ${MAX_CHASE_PCT*100}%)`);
       return null;
     }
-    if (distFromSwing > 0.006) chaseScorePenalty = -2; // 0.6%-1.5% from swing = -2 penalty
+    if (distFromSwing > 0.0015) chaseScorePenalty = -2; // 0.15%-0.30% from swing = -2 penalty
   }
 
   // ── SL below the previous swing low (LONG) / above previous swing high (SHORT) ──

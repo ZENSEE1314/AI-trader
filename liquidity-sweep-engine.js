@@ -809,6 +809,7 @@ function detectSMCStructureTrade(candles15m, candles1m, h1Trend = 'neutral') {
     trend3Bullish &&
     lastHL &&
     last1.low  <= lastHL * 1.005 &&                                     // wick tested the HL zone
+    last1.close <= lastHL * 1.003 &&                                    // entry close within 0.3% of HL (near the tip)
     isGreenCandle(last1) &&                                             // closed bullish (rejection)
     last1.close >= last1.low + (last1.high - last1.low) * 0.6 &&       // closed in upper 60%
     vol1m
@@ -841,6 +842,7 @@ function detectSMCStructureTrade(candles15m, candles1m, h1Trend = 'neutral') {
     trend3Bearish &&
     lastLH &&
     last1.high >= lastLH * 0.995 &&                                     // wick tested the LH zone
+    last1.close >= lastLH * 0.997 &&                                    // entry close within 0.3% of LH (near the tip)
     isRedCandle(last1) &&                                               // closed bearish (rejection)
     last1.close <= last1.high - (last1.high - last1.low) * 0.6 &&      // closed in lower 60%
     vol1m
@@ -1705,17 +1707,22 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
                  : MID_LEV.has(best.symbol) ? 50
                  : (params.LEV_BTC_ETH || 100);
 
-  // Force SL to exactly 15% capital (matches v3 + trade-engine).  15% (down
-  // from 20%) keeps SL tight enough that TP is reachable.
-  // 100x lev → 0.15% price, 50x lev → 0.30% price.
+  // Force SL to exactly 20% capital (matches v3 + trade-engine).
+  // 100x lev → 0.20% price, 50x lev → 0.40% price.
   const _isLong = best.direction === 'LONG';
-  const _slPricePct = 0.15 / best.leverage;
+  const _slPricePct = 0.20 / best.leverage;
   const _rawSl = best.sl;
   best.sl = _isLong
     ? best.price * (1 - _slPricePct)
     : best.price * (1 + _slPricePct);
   best.slDist = _slPricePct;
-  bLog.scan(`${symbol}: SL normalised to 15% capital — was $${_rawSl?.toFixed(4)}, now $${best.sl.toFixed(4)} (lev=${best.leverage}x)`);
+  bLog.scan(`${symbol}: SL normalised to 20% capital — was $${_rawSl?.toFixed(4)}, now $${best.sl.toFixed(4)} (lev=${best.leverage}x)`);
+
+  // No fixed TP — trailing SL is the only exit.  Strip any tp* the
+  // per-strategy detectors set so the executor doesn't place a TP order.
+  best.tp1 = null;
+  best.tp2 = null;
+  best.tp3 = null;
 
   // Add structure info for logging
   best.structure = {

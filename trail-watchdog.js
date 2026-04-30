@@ -5,7 +5,7 @@
 //   strategy version is active in the admin panel. Do NOT move these
 //   thresholds into strategy_versions or any DB config.
 //
-// Initial SL: 15% capital  (tight — keeps TP reachable on noisy 1m moves)
+// Initial SL: 20% capital
 // Trail logic:
 //   Below +21% capital profit → no movement, trade breathes freely
 //   +21% capital profit       → SL locked at +20% (profit secured)
@@ -258,24 +258,21 @@ async function runTrailCycle() {
           const pctDisplay = `${capitalPct >= 0 ? '+' : ''}${(capitalPct * 100).toFixed(2)}%`;
           log(`[DIAG] ${symbol} ${isLong ? 'LONG' : 'SHORT'} | entry=$${entry} | lev=${leverage}x | capital=${pctDisplay} | currentSL=$${currentSl} | DB=${dbTrade ? 'found' : 'ORPHAN'}`);
 
-          // ── Retro-adjust SL to 15% capital ────────────────
-          // Standardise every open position's SL to 15% capital on the first
+          // ── Retro-adjust SL to 20% capital ────────────────
+          // Standardise every open position's SL to 20% capital on the first
           // tick after deploy.  Only acts on losing trades; winners pass to
           // the trail-up logic below.  Runs once per position per watchdog
-          // process via _widened set.  Adjusts in EITHER direction — narrow
-          // (e.g. 8% cap) gets widened to 15%, wide (e.g. 20% cap) gets
-          // tightened to 15% so TP is reachable.
+          // process via _widened set.  Adjusts in EITHER direction.
           if (capitalPct < 0 && currentSl > 0) {
-            const targetSlPricePct = 0.15 / leverage;
+            const targetSlPricePct = 0.20 / leverage;
             const targetSl = isLong
               ? entry * (1 - targetSlPricePct)
               : entry * (1 + targetSlPricePct);
-            // Tolerance: 0.05% capital ≈ 0.0005 / leverage in price terms
             const tol = (0.0005 / leverage) * entry;
             const needsAdjust = Math.abs(currentSl - targetSl) > tol;
             if (needsAdjust && !_widened.has(symbol)) {
               _widened.add(symbol);
-              log(`[15%-FIX] ${symbol} ${isLong ? 'LONG' : 'SHORT'}: SL $${currentSl.toFixed(pricePrec)} → $${targetSl.toFixed(pricePrec)} (normalising to 15% capital)`);
+              log(`[20%-FIX] ${symbol} ${isLong ? 'LONG' : 'SHORT'}: SL $${currentSl.toFixed(pricePrec)} → $${targetSl.toFixed(pricePrec)} (normalising to 20% capital)`);
               const ok = await updateSlBitunix(client, symbol, targetSl, pricePrec, dbTrade?.tp_price, pos);
               if (ok && dbTrade) {
                 await db.query(
@@ -283,7 +280,7 @@ async function runTrailCycle() {
                   [targetSl, dbTrade.id]
                 );
               }
-              currentSl = targetSl;  // continue the cycle with the new SL
+              currentSl = targetSl;
             }
           }
 
