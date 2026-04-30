@@ -171,11 +171,20 @@
     else if (tab === 'logs') startLogPolling();
     else if (tab === 'profile') loadProfile();
     else if (tab === 'admin') { loadAdmin(); startAdminRefresh(); }
+    else if (tab === 'floor') {
+      if (!window._tradingFloor && window.TradingFloor) {
+        const floor = window.TradingFloor.init();
+        if (floor) floor.start();
+      } else if (window._tradingFloor) {
+        window._tradingFloor.start();
+      }
+    }
 
     // Stop polling when leaving tabs
     if (tab !== 'logs') stopLogPolling();
     if (tab !== 'dashboard') stopDashboardRefresh();
     if (tab !== 'admin') stopAdminRefresh();
+    if (tab !== 'floor' && window._tradingFloor) window._tradingFloor.stop();
   }
 
   // ----- Auth -----
@@ -200,6 +209,8 @@
       els.userEmail.textContent = data.username || data.email;
       const adminTab = $('#admin-tab');
       if (adminTab) adminTab.classList.toggle('hidden', !data.is_admin);
+      const floorTab = $('#floor-tab');
+      if (floorTab) floorTab.classList.remove('hidden');
       sessionStorage.setItem(SESSION_KEY, '1');
       showSection('app');
       switchTab('dashboard');
