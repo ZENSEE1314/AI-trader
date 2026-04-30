@@ -223,9 +223,21 @@ async function thinkOllama(agentName, systemPrompt, userMessage, complexity = 'l
   // If a previous call discovered the configured model is missing and
   // a fallback worked, stick with that fallback for subsequent calls.
   const configured = complexity === 'high' ? modelHigh : modelNormal;
-  const tryOrder = _resolvedModel
-    ? [_resolvedModel]
-    : [configured, ...FALLBACK_MODELS.filter(m => m !== configured)];
+  let tryOrder;
+  if (_resolvedModel) {
+    tryOrder = [_resolvedModel];
+  } else {
+    tryOrder = [configured, ...FALLBACK_MODELS.filter(m => m !== configured)];
+    // After hardcoded fallbacks, append any models currently loaded on the
+    // server (from /api/tags). This rescues the bot when none of our known
+    // names exist on the host (e.g. the user pulled a different model).
+    const tags = await fetchOllamaTags(baseUrl);
+    if (tags && tags.length) {
+      for (const t of tags) {
+        if (!tryOrder.includes(t)) tryOrder.push(t);
+      }
+    }
+  }
 
   let lastErr = null;
   for (const model of tryOrder) {

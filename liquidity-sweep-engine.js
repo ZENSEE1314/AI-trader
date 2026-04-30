@@ -1864,7 +1864,7 @@ async function scanSMC(log, opts = {}) {
       bLog.scan(
         `SIGNAL: ${signal.symbol} ${signal.direction} | score=${signal.score} ` +
         `setup=${signal.setupName} RR=1:${signal.rr} | ` +
-        `SL=$${signal.sl.toFixed(4)} TP=$${signal.tp1.toFixed(4)} lev=${signal.leverage}x`
+        `SL=$${signal.sl.toFixed(4)} TP=${signal.tp1 != null ? `$${signal.tp1.toFixed(4)}` : 'trailing'} lev=${signal.leverage}x`
       );
     }
 

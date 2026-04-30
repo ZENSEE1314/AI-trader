@@ -2096,25 +2096,29 @@ async function syncTradeStatus() {
         const apiKey = cryptoUtils.decrypt(key.api_key_enc, key.iv, key.auth_tag);
         const apiSecret = cryptoUtils.decrypt(key.api_secret_enc, key.secret_iv, key.secret_auth_tag);
 
+        // Hedge-mode safe: key positions by symbol+side so a LONG and a
+        // SHORT (or duplicate fills) on the same symbol don't collapse.
+        const posKey = (sym, dir) => `${sym}:${dir}`;
         let openSymbols = new Map();
 
         if (key.platform === 'binance') {
           const userClient = new USDMClient({ api_key: apiKey, api_secret: apiSecret }, getBinanceRequestOptions());
           const account = await userClient.getAccountInformation({ omitZeroBalances: false });
           for (const p of account.positions) {
-            if (parseFloat(p.positionAmt) !== 0) {
-              openSymbols.set(p.symbol, {
-                amt: parseFloat(p.positionAmt),
-                pnl: parseFloat(p.unrealizedProfit || 0),
-                entryPrice: parseFloat(p.entryPrice || 0),
-              });
-            }
+            const amt = parseFloat(p.positionAmt);
+            if (amt === 0) continue;
+            const dir = amt > 0 ? 'LONG' : 'SHORT';
+            openSymbols.set(posKey(p.symbol, dir), {
+              amt,
+              pnl: parseFloat(p.unrealizedProfit || 0),
+              entryPrice: parseFloat(p.entryPrice || 0),
+            });
           }
 
           // ── Swarm-based Dynamic Exit ─────────────────────────────────────
           // Check if the swarm consensus has shifted against our positions
           for (const trade of trades) {
-            const exchangePos = openSymbols.get(trade.symbol);
+            const exchangePos = openSymbols.get(posKey(trade.symbol, trade.direction || 'LONG'));
             if (exchangePos) {
               try {
                 const { runSwarm } = require('./agents/swarm-engine');
@@ -2160,7 +2164,7 @@ async function syncTradeStatus() {
 
           // Check trailing SL for open positions
           for (const trade of trades) {
-            const exchangePos = openSymbols.get(trade.symbol);
+            const exchangePos = openSymbols.get(posKey(trade.symbol, trade.direction || 'LONG'));
             if (exchangePos && trade.trailing_sl_last_step !== undefined) {
               const entryPrice = parseFloat(trade.entry_price);
               const isLong = trade.direction !== 'SHORT';
@@ -2228,8 +2232,11 @@ async function syncTradeStatus() {
           const userClient = new BitunixClient({ apiKey, apiSecret });
           const account = await userClient.getAccountInformation();
           for (const p of (account.positions || [])) {
-            openSymbols.set(p.symbol, {
-              amt: parseFloat(p.positionAmt || 0),
+            const amt = parseFloat(p.positionAmt || 0);
+            if (!amt) continue;
+            const dir = amt > 0 ? 'LONG' : 'SHORT';
+            openSymbols.set(posKey(p.symbol, dir), {
+              amt,
               pnl: parseFloat(p.unrealizedProfit || 0),
               markPrice: p.markPrice ? parseFloat(p.markPrice) : null,
             });
@@ -2266,9 +2273,10 @@ async function syncTradeStatus() {
           // Check trailing SL for Bitunix positions (self-healing)
           bLog.system(`Bitunix trailing SL: checking ${trades.length} trade(s), ${openSymbols.size} live position(s): [${[...openSymbols.keys()].join(',')}]`);
           for (const trade of trades) {
-            const exchangePos = openSymbols.get(trade.symbol);
+            const tradeDir = trade.direction || 'LONG';
+            const exchangePos = openSymbols.get(posKey(trade.symbol, tradeDir));
             if (!exchangePos) {
-              bLog.system(`Bitunix trailing SL: ${trade.symbol} not in openSymbols — skipping trail (position may be closed)`);
+              bLog.system(`Bitunix trailing SL: ${trade.symbol} ${tradeDir} not in openSymbols — skipping trail (position may be closed)`);
             }
             if (exchangePos && trade.trailing_sl_last_step !== undefined) {
               const entryPrice = parseFloat(trade.entry_price);
@@ -2538,7 +2546,7 @@ async function syncTradeStatus() {
         bLog.system(`Sync: exchange has ${openSymbols.size} open positions, DB has ${trades.length} OPEN trades`);
 
         for (const trade of trades) {
-          const exchangePos = openSymbols.get(trade.symbol);
+          const exchangePos = openSymbols.get(posKey(trade.symbol, trade.direction || 'LONG'));
 
           if (!exchangePos) {
             // Position closed on exchange — find the exit price
