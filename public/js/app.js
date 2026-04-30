@@ -330,12 +330,27 @@
 
   function startDashboardRefresh() {
     stopDashboardRefresh();
-    dashboardTimer = setInterval(loadDashboard, DASHBOARD_REFRESH_MS);
+    dashboardTimer = setInterval(() => {
+      if (document.hidden) return;          // skip when browser tab hidden
+      loadDashboard();
+    }, DASHBOARD_REFRESH_MS);
   }
 
   function stopDashboardRefresh() {
     if (dashboardTimer) { clearInterval(dashboardTimer); dashboardTimer = null; }
   }
+
+  // ── Page Visibility API: when the browser tab is hidden, also pause
+  // anything heavy that ignores document.hidden. When it comes back,
+  // refresh once immediately so the user sees fresh data without waiting
+  // for the next interval tick.
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) return;
+    const active = document.querySelector('.nav-tab[aria-selected="true"]');
+    const tab = active && active.dataset && active.dataset.tab;
+    if (tab === 'dashboard') loadDashboard();
+    else if (tab === 'admin') loadAdminLive();
+  });
 
   // ----- Admin Panel Auto-Refresh -----
 
@@ -348,12 +363,32 @@
     stopAdminRefresh();
     adminNextRefreshAt = Date.now() + ADMIN_REFRESH_MS;
     adminRefreshTimer = setInterval(() => {
-      loadAdmin();
+      // Only refresh the LIVE-critical data on the timer (3 requests).
+      // The full loadAdmin (10+ requests, mostly static config) only runs
+      // once on tab open. Cuts admin tab traffic ~70 %.
+      loadAdminLive();
       adminNextRefreshAt = Date.now() + ADMIN_REFRESH_MS;
     }, ADMIN_REFRESH_MS);
     // Countdown bar: tick every 500 ms
     adminCountdownTimer = setInterval(_tickAdminCountdown, 500);
     _tickAdminCountdown();
+  }
+
+  // Live-critical admin refresh: only commissions, active version, token board.
+  // Settings / users / withdrawals / risk levels / token leverage / global
+  // tokens / AI versions list are static — load once on tab open via loadAdmin().
+  async function loadAdminLive() {
+    if (!state.user?.is_admin) return;
+    if (document.hidden) return;             // skip when browser tab hidden
+    try {
+      const [active, weekly] = await Promise.all([
+        api('GET', '/api/admin/ai-versions/active').catch(() => null),
+        api('GET', '/api/admin/weekly-earnings').catch(() => null),
+      ]);
+      updateActiveVersionBanner(active);
+      if (weekly) renderAdminWeeklyEarnings(weekly);
+      adminLoadTokenBoard().catch(() => {});  // P&L per token — fire-and-forget
+    } catch (_) { /* swallow — countdown will fire again */ }
   }
 
   function stopAdminRefresh() {
