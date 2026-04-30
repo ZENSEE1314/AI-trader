@@ -528,7 +528,8 @@ function scoreSignal({ setup, bias, vwapBias, volSpike, rejCandle, ema9, ema21 }
   if (setup === 'LiqGrab')          s += 9;  // SMC setups slightly higher value
   if (setup === 'VWAPTrend')        s += 7;
   if (setup === 'MSTF')             s += 9;  // multi-TF structure: strong confluence
-  if (setup === 'MomentumBreakout') s += 8;  // impulse: strong base, needs vol+ATR confirm
+  if (setup === 'MomentumBreakout') s += 9;  // impulse: base passes the score floor without
+                                             // 15m confluence (which is unreliable mid-bar)
 
   // VWAP bias alignment bonus
   if (vwapBias) s += 2;
@@ -628,7 +629,11 @@ async function analyzeV3(ticker) {
     //   Impulse breakouts pick their own direction from candle body —
     //   the whole point is to catch waterfall moves the structure
     //   setups miss. Bias is set from the impulse direction.
-    const breakoutSig = detectMomentumBreakout(klines1m);
+    //   IMPORTANT: Binance returns the IN-PROGRESS 1m bar as the last
+    //   entry; we slice it off so the detector evaluates the just-
+    //   closed candle (which is what the backtest validated against).
+    const klines1mClosed = klines1m.slice(0, -1);
+    const breakoutSig = detectMomentumBreakout(klines1mClosed);
 
     if (!bias && !breakoutSig) return null;
 
@@ -703,6 +708,10 @@ async function analyzeV3(ticker) {
 
       setupName,
       score,
+
+      // Setup 5 marker — cycle.js uses this to bypass the EMA200 gate
+      // (waterfall impulses start while EMA200 still shows prior trend)
+      isMomentumBreakout: setup.setupName === 'MomentumBreakout',
 
       // no fixed TP — trailing SL manages exits
       tp1: null, tp2: null, tp3: null,
