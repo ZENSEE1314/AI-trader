@@ -2450,8 +2450,36 @@ async function syncTradeStatus() {
 
               let newSlPrice = null;
               let slSource = '';
+              let tierLastStep = null;
 
-              if (bxProfitPct >= 0.005) { // only trail once price is 0.5% in profit
+              // ── Tier-based trail (TRAILING_TIERS, capital %) ──────
+              // +21%→+20%, +31%→+30%, +41%→+40%, ... regardless of leverage.
+              // The previous price-based gate (0.5% price = 50% capital at
+              // 100x) never fired at the user's requested +21% capital
+              // milestone on high-leverage trades. This path uses capital%
+              // so 100x ETH at +21% locks +20% the same as 20x BTC at +21%.
+              const lastStepCap  = parseFloat(trade.trailing_sl_last_step) || 0;
+              const tierResult   = calculateTrailingStep(entryPrice, curPrice, isLong, lastStepCap, tradeLev, 0);
+              if (tierResult) {
+                const tierSl = tierResult.newSlPrice;
+                // Reject if SL would be on the wrong side of current price
+                // (immediate trigger). Real-world: at 100x +21% peak, +20%
+                // lock is 0.01% price below current — fine. Edge case:
+                // price retraced below the lock level → skip and let the
+                // fallback handle it.
+                const validSide = isLong ? tierSl < curPrice : tierSl > curPrice;
+                const wouldImprove = isLong ? tierSl > currentSl : tierSl < currentSl;
+                if (validSide && wouldImprove) {
+                  newSlPrice    = tierSl;
+                  slSource      = `tier+${Math.round(tierResult.newLastStep * 100)}%`;
+                  tierLastStep  = tierResult.newLastStep;
+                }
+              }
+
+              // ── Fallback: 0.8% behind current price ─────────────
+              // Only runs if tier trail didn't produce an improvement
+              // (e.g. capital < +21% so calculateTrailingStep returned null).
+              if (!newSlPrice && bxProfitPct >= 0.005) {
                 const rawTrailSl = isLong
                   ? curPrice * (1 - TRAIL_LOCK_PCT)
                   : curPrice * (1 + TRAIL_LOCK_PCT);
@@ -2519,8 +2547,11 @@ async function syncTradeStatus() {
               }
 
               if (slUpdated) {
-                // Store current profit % as lastStep so we can track progress
-                const newLastStep = bxProfitPct * tradeLev;
+                // Store the tier's lock level when tier-trail fired (so the
+                // tier table doesn't re-trigger the same step); otherwise
+                // store the raw capital % so future tier comparisons still
+                // know how far we've already trailed.
+                const newLastStep = tierLastStep != null ? tierLastStep : (bxProfitPct * tradeLev);
                 await db.query(
                   `UPDATE trades SET trailing_sl_price = $1, trailing_sl_last_step = $2 WHERE id = $3`,
                   [newSlPrice, newLastStep, trade.id]
