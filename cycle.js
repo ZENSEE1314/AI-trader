@@ -1195,6 +1195,23 @@ async function main() {
       }
     }
 
+    // One-time: enforce new max_consec_loss = 2 for every api_key.
+    // Old default was 10 — too lenient for the new fast-fail rule.
+    // Now: 2 consecutive losses pauses trading until the next 6 AM SG
+    // reset (see "Stop After Losses" block below).
+    if (!runCycle._consecLossFixDone) {
+      runCycle._consecLossFixDone = true;
+      try {
+        const r = await dbQuery(
+          `UPDATE api_keys SET max_consec_loss = 2
+           WHERE max_consec_loss IS DISTINCT FROM 2`
+        );
+        bLog.system(`[CONSEC-LOSS-FIX] api_keys.max_consec_loss = 2 (rows touched: ${r.rowCount ?? '?'})`);
+      } catch (e) {
+        bLog.error(`[CONSEC-LOSS-FIX] Failed to update api_keys: ${e.message}`);
+      }
+    }
+
     // One-time diagnostic: dump all API keys on first cycle after deploy
     if (!runCycle._keyDiagDone) {
       runCycle._keyDiagDone = true;
@@ -1633,19 +1650,40 @@ async function executeForAllUsers(pick) {
           return;
         }
 
-        // Stop After Losses: check consecutive losses for this API key
-        const maxConsecLoss = parseInt(key.max_consec_loss) || 10;
+        // Stop After Losses: pause this api_key after N consecutive losses
+        // within the current trading day, where day boundary = 6 AM SG time
+        // (= 22:00 UTC).  Streak resets automatically at the next 6 AM SG.
+        //
+        // Default is 2 — the boot seeder above sets max_consec_loss = 2
+        // for every api_key on each deploy.
+        const maxConsecLoss = parseInt(key.max_consec_loss) || 2;
         if (maxConsecLoss > 0) {
+          // Most recent 22:00 UTC (= 6 AM SG today) cutoff.
+          const _now = new Date();
+          const _cutoff = new Date(Date.UTC(
+            _now.getUTCFullYear(), _now.getUTCMonth(), _now.getUTCDate(), 22, 0, 0, 0
+          ));
+          if (_now < _cutoff) _cutoff.setUTCDate(_cutoff.getUTCDate() - 1);
+
           const recentTrades = await db.query(
-            `SELECT status FROM trades WHERE api_key_id = $1 AND status IN ('WIN','LOSS','TP','SL') ORDER BY closed_at DESC LIMIT $2`,
-            [key.id, maxConsecLoss]
+            `SELECT status FROM trades
+             WHERE api_key_id = $1
+               AND status IN ('WIN','LOSS','TP','SL')
+               AND closed_at >= $2
+             ORDER BY closed_at DESC LIMIT $3`,
+            [key.id, _cutoff, maxConsecLoss]
           );
-          const consecLosses = recentTrades.length > 0
-            ? recentTrades.findIndex(t => t.status === 'WIN' || t.status === 'TP')
-            : 0;
-          const actualConsec = consecLosses === -1 ? recentTrades.length : consecLosses;
-          if (actualConsec >= maxConsecLoss) {
-            userLog.trade(`User ${key.email}: ${actualConsec} consecutive losses (max ${maxConsecLoss}) — paused`);
+          // Count consecutive losses from the most recent trade backwards
+          const isLoss = (s) => s === 'LOSS' || s === 'SL';
+          let consec = 0;
+          for (const t of recentTrades) {
+            if (isLoss(t.status)) consec++;
+            else break;
+          }
+          if (consec >= maxConsecLoss) {
+            const _next = new Date(_cutoff);
+            _next.setUTCDate(_next.getUTCDate() + 1);
+            userLog.trade(`User ${key.email}: ${consec} consecutive losses today (max ${maxConsecLoss}) — paused until next 6 AM SG (${_next.toISOString()})`);
             return;
           }
         }
