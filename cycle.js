@@ -1987,14 +1987,30 @@ async function executeForAllUsers(pick) {
             if (slFmtActual) {
               const tpNote = bxTpPrice ? ` TP=$${bxTpPrice} (hard close)` : '';
               userLog.trade(`Bitunix position confirmed: ${posId} entry=$${actualEntry} — setting SL=$${slFmtActual}${tpNote}...`);
-              try {
-                const tpSLPayload = { symbol, positionId: posId, slPrice: slFmtActual };
-                if (bxTpPrice && (isScenarioA || isRangeBounce)) tpSLPayload.tpPrice = String(bxTpPrice);
-                await userClient.placePositionTpSl(tpSLPayload);
-                userLog.trade(`Bitunix SL set on ${posId}: SL=$${slFmtActual}${bxTpPrice ? ` TP=$${bxTpPrice}` : ''}`);
-              } catch (e) {
-                userLog.error(`Bitunix SL FAILED: ${e.message} — SET MANUALLY`);
-                await notify(`*Bitunix ${symbol} ${pick.direction}*\nSL failed! Set manually on Bitunix NOW.`);
+              const tpSLPayload = { symbol, positionId: posId, slPrice: slFmtActual };
+              if (bxTpPrice && (isScenarioA || isRangeBounce)) tpSLPayload.tpPrice = String(bxTpPrice);
+              // Retry SL placement up to 3 times. Silent first-attempt
+              // failures (rate limit, position not yet visible on exchange,
+              // transient API hiccups) caused some users to end up with a
+              // position that had NO SL order on Bitunix even though the
+              // DB recorded one. Backoff 1s, 2s.
+              let slPlaced = false;
+              let slLastErr = '';
+              for (let attempt = 1; attempt <= 3; attempt++) {
+                try {
+                  await userClient.placePositionTpSl(tpSLPayload);
+                  slPlaced = true;
+                  userLog.trade(`Bitunix SL set on ${posId} (attempt ${attempt}): SL=$${slFmtActual}${bxTpPrice ? ` TP=$${bxTpPrice}` : ''}`);
+                  break;
+                } catch (e) {
+                  slLastErr = e.message;
+                  userLog.error(`Bitunix SL attempt ${attempt}/3 FAILED: ${e.message}`);
+                  if (attempt < 3) await sleep(attempt * 1000); // 1s, 2s backoff
+                }
+              }
+              if (!slPlaced) {
+                userLog.error(`Bitunix SL FAILED after 3 attempts: ${slLastErr} — SET MANUALLY`);
+                await notify(`🚨 *Bitunix ${symbol} ${pick.direction}*\nSL FAILED 3× — *no SL on exchange*\nUser: ${key.email}\nEntry: $${actualEntry}\nIntended SL: $${slFmtActual}\n\`${slLastErr.substring(0,150)}\`\nSet SL on Bitunix NOW.`);
               }
             } else if ((isScenarioA || isRangeBounce) && bxTpPrice) {
               userLog.trade(`Bitunix: no SL — setting TP=$${bxTpPrice} only...`);
@@ -2271,6 +2287,40 @@ async function syncTradeStatus() {
               `Not opened by the bot — manual or external.\n` +
               `The bot will not trail/manage this position.`
             );
+          }
+
+          // ── SL re-confirm sweep (self-heal missing initial SL) ──
+          // Some users had positions opened where the original SL placement
+          // failed silently — DB had the SL price but no order on Bitunix.
+          // For each trade still on initial SL (trailing_sl_last_step == 0),
+          // re-call updateStopLoss once per process. Bitunix treats this
+          // idempotently: it updates an existing SL or creates one if
+          // missing. Cached in _slConfirmed so we only retry once per
+          // trade.id per process — once trailing kicks in (lastStep > 0)
+          // the trail logic re-sets the SL on every improvement anyway.
+          syncTradeStatus._slConfirmed = syncTradeStatus._slConfirmed || new Set();
+          for (const trade of trades) {
+            const tradeDir = trade.direction || 'LONG';
+            const exchangePos = openSymbols.get(posKey(trade.symbol, tradeDir));
+            if (!exchangePos) continue;
+            const lastStep = parseFloat(trade.trailing_sl_last_step) || 0;
+            if (lastStep > 0) continue;
+            const sealKey = `${trade.id}`;
+            if (syncTradeStatus._slConfirmed.has(sealKey)) continue;
+            const slPrice = parseFloat(trade.sl_price);
+            if (!slPrice) continue;
+            const slPrec = inferPricePrec(trade.sl_price);
+            try {
+              const ok = await updateStopLoss(userClient, trade.symbol, slPrice, null, 'bitunix', slPrec, parseFloat(trade.tp_price) || undefined);
+              if (ok) {
+                syncTradeStatus._slConfirmed.add(sealKey);
+                bLog.system(`✓ Bitunix SL re-confirmed for ${trade.symbol} ${tradeDir} (key=${key.email}): $${slPrice}`);
+              } else {
+                bLog.error(`Bitunix SL re-confirm returned false for ${trade.symbol} ${tradeDir} (key=${key.email})`);
+              }
+            } catch (e) {
+              bLog.error(`Bitunix SL re-confirm threw for ${trade.symbol} ${tradeDir}: ${e.message}`);
+            }
           }
 
           // Check trailing SL for Bitunix positions (self-healing)
