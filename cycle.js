@@ -109,6 +109,7 @@ const TAKER_FEE_BOTH_LEGS = 0.0008;
 // lock    = capital % above entry to lock the SL at
 // Per-user rule: trigger is exactly 1% above the lock at every tier
 // (e.g. +21% profit locks +20%, +31% locks +30%, +41% locks +40%, ...).
+// This table is used for HIGH-leverage trades (>= 100x — BTC, ETH).
 const TRAILING_TIERS = [
   { trigger: 0.21, lock: 0.20 }, // +21% capital → SL locks at +20%   — 1% gap
   { trigger: 0.31, lock: 0.30 }, // +31% capital → SL locks at +30%   — 1% gap
@@ -126,13 +127,41 @@ const TRAILING_TIERS = [
   { trigger: 3.01, lock: 3.00 }, // +301% capital → SL locks at +300% — 1% gap
 ];
 
+// Per user direction for 50x tokens (SOL/BNB/XRP):
+// First tier at +16% → +15% (1% gap), then every +11% profit advances
+// the lock by +10%. The gap therefore widens by 1% each step
+// (16/15→1%, 27/25→2%, 38/35→3%, ...).
+const TRAILING_TIERS_50X = [
+  { trigger: 0.16, lock: 0.15 }, // +16% → +15%
+  { trigger: 0.27, lock: 0.25 }, // +27% → +25%
+  { trigger: 0.38, lock: 0.35 }, // +38% → +35%
+  { trigger: 0.49, lock: 0.45 }, // +49% → +45%
+  { trigger: 0.60, lock: 0.55 }, // +60% → +55%
+  { trigger: 0.71, lock: 0.65 }, // +71% → +65%
+  { trigger: 0.82, lock: 0.75 }, // +82% → +75%
+  { trigger: 0.93, lock: 0.85 }, // +93% → +85%
+  { trigger: 1.04, lock: 0.95 }, // +104% → +95%
+  { trigger: 1.15, lock: 1.05 }, // +115% → +105%
+  { trigger: 1.26, lock: 1.15 }, // +126% → +115%
+  { trigger: 1.50, lock: 1.40 }, // +150% → +140%
+  { trigger: 2.00, lock: 1.90 }, // +200% → +190%
+  { trigger: 3.00, lock: 2.90 }, // +300% → +290%
+];
+
+function tierTableForLev(leverage) {
+  // 50x and below use the gentler 50x table (starts at +16%/+15%);
+  // 100x and above use the tight 1% gap table (starts at +21%/+20%).
+  return leverage <= 50 ? TRAILING_TIERS_50X : TRAILING_TIERS;
+}
+
 function getTrailingSLConfig(leverage) {
+  const t = tierTableForLev(leverage);
   return {
     INITIAL_SL_PCT: SL_PCT / leverage,
-    FIRST_TRIGGER: 0.21,  // Trail starts at +21% CAPITAL gain from entry
-    FIRST_SL: 0.20,       // Lock at +20% capital — 1% gap
-    STEP_TRIGGER: 0.10,   // Every +10% more CAPITAL → step up the lock
-    STEP_SL: 0.10,        // Lock steps up 10% each time (1% gap maintained)
+    FIRST_TRIGGER: t[0].trigger,
+    FIRST_SL:      t[0].lock,
+    STEP_TRIGGER:  leverage <= 50 ? 0.11 : 0.10,
+    STEP_SL:       0.10,
   };
 }
 
@@ -508,15 +537,21 @@ function calculateTrailingStep(entryPrice, currentPrice, isLong, lastStep, lever
       bestLockCapitalPct = (stepsAbove - 1) * stepPct;
     }
   } else {
-    // Fixed tiers — all thresholds in CAPITAL %
-    for (const tier of TRAILING_TIERS) {
+    // Fixed tiers — all thresholds in CAPITAL %. The table is leverage-
+    // aware: 50x tokens (SOL/BNB/XRP) use a gentler ladder than 100x
+    // tokens (BTC/ETH).
+    const tiers = tierTableForLev(leverage);
+    for (const tier of tiers) {
       if (capitalPct >= tier.trigger) bestLockCapitalPct = tier.lock;
     }
-    // Beyond last tier: every +10% more capital → add +10% to lock (1% gap kept)
-    const lastTier = TRAILING_TIERS[TRAILING_TIERS.length - 1];
+    // Beyond last tier: extend with the same step-per-tier pattern.
+    // 100x table uses +10% trigger / +10% lock; 50x table uses +11% / +10%.
+    const lastTier = tiers[tiers.length - 1];
     if (capitalPct > lastTier.trigger) {
-      const stepsAbove = Math.floor((capitalPct - lastTier.trigger) / 0.10);
-      const extraLock = lastTier.lock + stepsAbove * 0.10;
+      const triggerStep = leverage <= 50 ? 0.11 : 0.10;
+      const lockStep    = 0.10;
+      const stepsAbove  = Math.floor((capitalPct - lastTier.trigger) / triggerStep);
+      const extraLock   = lastTier.lock + stepsAbove * lockStep;
       if (extraLock > (bestLockCapitalPct || 0)) bestLockCapitalPct = extraLock;
     }
   }
@@ -703,7 +738,14 @@ async function openTrade(client, pick, wallet) {
       closePosition: 'true', workingType: 'MARK_PRICE',
     });
     slOk = true;
-    bLog.trade(`SL set at $${fmtPrice(initialSlPrice)} (${(slPricePct*100).toFixed(2)}% from entry = 20% capital) | Trailing: +21%→+20%, +31%→+30%, +41%→+40%, ... (1% gap)`);
+    {
+      const _tcfg = getTrailingSLConfig(userLev);
+      const _trail50 = userLev <= 50;
+      const _trailLine = _trail50
+        ? `+16%→+15%, +27%→+25%, +38%→+35%, ... (+11% step)`
+        : `+21%→+20%, +31%→+30%, +41%→+40%, ... (+10% step)`;
+      bLog.trade(`SL set at $${fmtPrice(initialSlPrice)} (${(slPricePct*100).toFixed(2)}% from entry = 20% capital) | Trailing (lev=${userLev}x): ${_trailLine}`);
+    }
   } catch (e) { bLog.error(`Owner SL algo failed: ${e.message}`); }
 
   if (!slOk) {
