@@ -209,20 +209,22 @@ function calcTrailingSL(entryPrice, currentPrice, side, leverage = 1) {
   // Convert to capital % relative to margin
   const capitalPct = pricePct * leverage;
 
-  const INITIAL_SL_CAP = 0.30; // 30% capital = initial stop
-  const TRAIL_ON_CAP   = 0.31; // trailing kicks in at +31% capital
+  const INITIAL_SL_CAP = 0.20; // 20% capital = initial stop (system-wide)
+  const TRAIL_ON_CAP   = 0.21; // trailing kicks in at +21% capital → lock +20%
 
   if (capitalPct < TRAIL_ON_CAP) {
-    // Initial SL: 30% capital loss → convert back to price
+    // Initial SL: 20% capital loss → convert back to price
     const slPricePct = INITIAL_SL_CAP / leverage;
     return side === 'LONG'
       ? entryPrice * (1 - slPricePct)
       : entryPrice * (1 + slPricePct);
   }
 
-  // Lock: floor(capitalPct / 0.10) × 0.10
-  //   0.31 → 0.30 | 0.40 → 0.40 | 0.41 → 0.40 | 0.50 → 0.50 …
-  const lockCapPct   = Math.floor(capitalPct * 10) / 10;
+  // 1% gap rule: trigger sits 1% above lock at every step.
+  //   0.21 → 0.20 | 0.30 → 0.20 | 0.31 → 0.30 | 0.40 → 0.30 | 0.41 → 0.40 …
+  // Subtract 0.01 before flooring so the lock only advances 1% past each step.
+  // 1e-9 epsilon guards against JS float subtraction artefacts (0.21-0.01).
+  const lockCapPct   = Math.floor((capitalPct - 0.01 + 1e-9) * 10) / 10;
   const lockPricePct = lockCapPct / leverage;
 
   return side === 'LONG'

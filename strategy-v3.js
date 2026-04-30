@@ -597,8 +597,14 @@ function calcTrailingSLV3(entryPrice, currentPrice, side, leverage = 1) {
       : entryPrice * (1 + slPricePct);
   }
 
-  // Lock: floor(0.21 → 0.20, 0.31 → 0.30, 0.41 → 0.40 …)
-  const lockCapPct   = Math.floor(capitalPct * 10) / 10;
+  // Lock follows the user "1% gap" rule:
+  //   +21% capital → +20%   |   +30% capital → still +20%
+  //   +31% capital → +30%   |   +40% capital → still +30%
+  //   +41% capital → +40%   |   ...
+  // Subtract 0.01 before flooring so the lock advances only when capitalPct
+  // exceeds the next 0.10 boundary by at least 1%.  The 1e-9 absorbs the
+  // floating-point error introduced by the subtraction (e.g. 0.21-0.01).
+  const lockCapPct   = Math.floor((capitalPct - 0.01 + 1e-9) * 10) / 10;
   const lockPricePct = lockCapPct / leverage;
 
   return side === 'LONG'
