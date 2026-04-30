@@ -25,7 +25,7 @@ const SYMBOLS = [
   { symbol: 'XRPUSDT', leverage: 50,  basePrice: 1.35,  baseVol: 0.0012 },
 ];
 
-const DAYS                 = 30;
+const DAYS                 = 90;
 const BARS_PER_DAY         = 1440;          // 1m bars
 const N_BARS               = DAYS * BARS_PER_DAY;
 const FEE_ROUND_TRIP_PCT   = 0.0006;        // 0.06% taker round-trip
@@ -345,7 +345,7 @@ function simulate(symCfg, candles) {
 // ════════════════════════════════════════════════════════════════
 (function main() {
   console.log('═══════════════════════════════════════════════════════');
-  console.log(' MomentumBreakout (Setup 5) — 30-day backtest');
+  console.log(` MomentumBreakout (Setup 5) — ${DAYS}-day backtest`);
   console.log('═══════════════════════════════════════════════════════');
   console.log(` symbols   : ${SYMBOLS.map(s => s.symbol).join(', ')}`);
   console.log(` bars      : ${N_BARS} (1m × ${DAYS} days each)`);
@@ -405,7 +405,7 @@ function simulate(symCfg, candles) {
 
   console.log();
   console.log('═══════════════════════════════════════════════════════');
-  console.log(' AGGREGATE — 30 days × 4 symbols');
+  console.log(` AGGREGATE — ${DAYS} days × ${SYMBOLS.length} symbols`);
   console.log('═══════════════════════════════════════════════════════');
   console.log(` Trades          : ${totalTrades}`);
   console.log(` Wins / Losses   : ${totalWins} / ${totalTrades - totalWins}`);
