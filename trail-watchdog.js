@@ -31,10 +31,15 @@ function calcV2TrailSL(entryPrice, currentPrice, isLong, leverage, currentSl) {
     ? (currentPrice - entryPrice) / entryPrice
     : (entryPrice - currentPrice) / entryPrice;
   const capitalPct = pricePct * leverage;
-  const TRAIL_ON_CAP = 0.21;
+  // Leverage-aware trigger: 50x trades (SOL/BNB/XRP) start trailing at
+  // +16% capital (lock +15%); 100x trades (BTC/ETH) start at +21% (lock
+  // +20%). Matches calcTrailingSLV3 and cycle.js TRAILING_TIERS_50X.
+  const TRAIL_ON_CAP = leverage <= 50 ? 0.16 : 0.21;
   if (capitalPct < TRAIL_ON_CAP) return null;
   const newSl = calcTrailingSLV3(entryPrice, currentPrice, side, leverage);
-  const milestone = Math.floor(capitalPct * 10) / 10;
+  const milestone = leverage <= 50
+    ? 0.15 + Math.floor((capitalPct - 0.16 + 1e-9) / 0.11) * 0.10
+    : Math.floor((capitalPct - 0.01 + 1e-9) * 10) / 10;
   return { newSl, capitalPct, milestone };
 }
 

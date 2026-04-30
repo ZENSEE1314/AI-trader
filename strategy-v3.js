@@ -583,7 +583,11 @@ function calcTrailingSLV3(entryPrice, currentPrice, side, leverage = 1) {
   const capitalPct = pricePct * leverage;
 
   const INITIAL_SL_CAP = 0.20;  // 20 % capital initial stop
-  const TRAIL_ON_CAP   = 0.21;  // trailing kicks in at +21 % capital → lock +20 %
+  // Leverage-aware trail trigger:
+  //   100x (BTC, ETH)             — kicks in at +21 % → lock +20 %
+  //   50x  (SOL, BNB, XRP, ...)   — kicks in at +16 % → lock +15 %
+  const is50x         = leverage <= 50;
+  const TRAIL_ON_CAP  = is50x ? 0.16 : 0.21;
 
   if (capitalPct < TRAIL_ON_CAP) {
     const slPricePct = INITIAL_SL_CAP / leverage;
@@ -592,14 +596,20 @@ function calcTrailingSLV3(entryPrice, currentPrice, side, leverage = 1) {
       : entryPrice * (1 + slPricePct);
   }
 
-  // Lock follows the user "1% gap" rule:
-  //   +21% capital → +20%   |   +30% capital → still +20%
-  //   +31% capital → +30%   |   +40% capital → still +30%
-  //   +41% capital → +40%   |   ...
-  // Subtract 0.01 before flooring so the lock advances only when capitalPct
-  // exceeds the next 0.10 boundary by at least 1%.  The 1e-9 absorbs the
-  // floating-point error introduced by the subtraction (e.g. 0.21-0.01).
-  const lockCapPct   = Math.floor((capitalPct - 0.01 + 1e-9) * 10) / 10;
+  // Tier ladders:
+  //   100x: +21→+20, +31→+30, +41→+40, ... (+10 trigger / +10 lock, 1% gap constant)
+  //         lock = floor((cap - 0.01) * 10) / 10
+  //   50x : +16→+15, +27→+25, +38→+35, +49→+45, ... (+11 trigger / +10 lock, gap grows)
+  //         n    = floor((cap - 0.16) / 0.11)
+  //         lock = 0.15 + n * 0.10
+  // The 1e-9 epsilon absorbs floating-point error from the subtraction.
+  let lockCapPct;
+  if (is50x) {
+    const n  = Math.floor((capitalPct - 0.16 + 1e-9) / 0.11);
+    lockCapPct = 0.15 + n * 0.10;
+  } else {
+    lockCapPct = Math.floor((capitalPct - 0.01 + 1e-9) * 10) / 10;
+  }
   const lockPricePct = lockCapPct / leverage;
 
   return side === 'LONG'
