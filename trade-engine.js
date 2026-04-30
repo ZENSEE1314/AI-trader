@@ -35,8 +35,8 @@ const TOP_N_COINS      = 20;           // how many coins to scan per cycle
 const ATR_PERIOD       = 14;
 const STRATEGY_WIN_RATE = 65;          // passed to backtest-gate bypass
 
-// ONLY these 4 coins are traded — no exceptions
-const CORE_SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT'];
+// 5 tradeable coins — leverage map: BTC/ETH 100x, SOL/BNB/XRP 50x
+const CORE_SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT'];
 const ALLOWED_SYMBOLS = new Set(CORE_SYMBOLS);
 
 // ── Fetch Helpers ────────────────────────────────────────────
