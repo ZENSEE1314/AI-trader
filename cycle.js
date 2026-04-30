@@ -56,15 +56,18 @@ const CONFIG = {
 let lastBitunixSync = 0;
 
 // ── SL/TP Config ──────────────────────────────────────────
-// Capital $100 → trade $10 → target max net loss = 15% of margin ($1.50).
+// Initial SL: 20% of margin (capital).  Trailing SL takes over from there
+// using TRAILING_TIERS below (first tier: +20% profit → SL locks at breakeven,
+// then +30% → +20%, +40% → +30%, ... +10% steps).  No fixed TP — the trail
+// is the only exit.
+//
 // Fees at 100x: 0.04% taker × 2 sides × 100 leverage = 8% of margin.
 // Fees at  20x: 0.04% taker × 2 sides ×  20 leverage = 1.6% of margin.
 // SL_PCT is the GROSS price-loss budget. Net loss = SL_PCT + fees + slippage.
-// At 15% SL: 15% price + 8% fees + ~7% slippage = ~30% worst case. Never near 50%.
-//   100x: price SL = (0.15 − 0.08) / 100 = 0.07% price move → net ~15%
-//    20x: price SL = (0.15 − 0.016) / 20  = 0.67% price move → net ~15%
-const SL_PCT = 0.15;   // 15% NET target — fee deduction applied at trade time
-const TP_PCT = 0.45;   // reference TP — trailing SL handles the actual exit
+//   100x: price SL = 0.20 / 100 = 0.20% price move → 20% capital + 8% fees ≈ 28% gross
+//    20x: price SL = 0.20 /  20 = 1.00% price move → 20% capital + 1.6% fees ≈ 22% gross
+const SL_PCT = 0.20;   // 20% capital initial stop (was 0.15)
+const TP_PCT = 0.45;   // reference TP — trailing SL handles the actual exit (no order placed)
 
 // ── Active AI Version params — loaded from settings table, refreshed every 60s ──
 // Admin activates a backtest version via the UI → params saved to settings.
@@ -626,8 +629,8 @@ async function openTrade(client, pick, wallet) {
   const fmtP = (p) => parseFloat(p.toFixed(pricePrec));
 
   // SL price distance = SL_PCT / leverage (gross price loss, fees accepted on top)
-  // At 100x: 0.15/100 = 0.15% price move → 15% capital price loss + 8% fees = ~23% total
-  // At  20x: 0.15/20  = 0.75% price move → 15% capital price loss + 1.6% fees = ~17% total
+  // At 100x: 0.20/100 = 0.20% price move → 20% capital price loss + 8% fees ≈ 28% gross
+  // At  20x: 0.20/20  = 1.00% price move → 20% capital price loss + 1.6% fees ≈ 22% gross
   let slPricePct = SL_PCT / leverage;
   const tpPricePct = TP_PCT / leverage;
 
@@ -697,7 +700,7 @@ async function openTrade(client, pick, wallet) {
       closePosition: 'true', workingType: 'MARK_PRICE',
     });
     slOk = true;
-    bLog.trade(`SL set at $${fmtPrice(initialSlPrice)} (${(slPricePct*100).toFixed(2)}% from entry) | Trailing: starts at +30% capital gain, locks +10% capital, +15% capital per step`);
+    bLog.trade(`SL set at $${fmtPrice(initialSlPrice)} (${(slPricePct*100).toFixed(2)}% from entry = 20% capital) | Trailing: +20%→0% (BE), +30%→+20%, +40%→+30%, ... (10% steps)`);
   } catch (e) { bLog.error(`Owner SL algo failed: ${e.message}`); }
 
   if (!slOk) {
