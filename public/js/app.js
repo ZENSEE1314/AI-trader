@@ -4602,8 +4602,8 @@
         return `<div style="margin-bottom:var(--space-3);border:1px solid var(--color-border-muted);border-radius:var(--radius-md);overflow:hidden;">
           <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 10px;background:var(--color-bg-raised);">
             <div style="display:flex;align-items:center;gap:8px;">
-              <button class="btn btn-sm" style="font-size:0.65rem;background:#ef4444;color:#fff;border:none;padding:2px 8px;" data-close-token="${sym}">Close</button>
-              <button class="btn btn-sm" style="font-size:0.65rem;background:transparent;border:1px solid ${oppColor};color:${oppColor};padding:2px 8px;font-weight:700;" data-reverse-token="${sym}" data-reverse-dir="${dir}">🔄 → ${oppositeDir}</button>
+              <button class="btn btn-sm" style="font-size:0.7rem;background:#ef4444;color:#fff;border:none;padding:4px 10px;font-weight:700;" data-close-token="${sym}">Close</button>
+              <button class="btn btn-sm" style="font-size:0.7rem;background:#f59e0b;color:#0d1117;border:none;padding:4px 10px;font-weight:700;box-shadow:0 0 0 1px ${oppColor} inset;" title="Close ${dir} now and lock next entry to ${oppositeDir}" data-reverse-token="${sym}" data-reverse-dir="${dir}">🔄 Reverse → ${oppositeDir}</button>
               <strong>${sym.replace('USDT','')}</strong>
               <span style="color:${dirColor};font-weight:700;font-size:0.8rem;">${dir}</span>
               <span style="font-size:0.72rem;color:var(--color-text-muted);">${group.trades.length} user(s)</span>
