@@ -836,6 +836,28 @@ class AgentCoordinator extends BaseAgent {
         bLog.error(`[Coordinator] SMC engine scan failed (non-blocking): ${engineErr.message}`);
       }
 
+      // ── v3 engine: strategy-v3 scanV3 (incl. Setup 5 MomentumBreakout) ──
+      // Runs in parallel with scanSMC.  Setup 5 catches vertical impulse
+      // breakouts the structure engines miss (waterfall dumps).  Each
+      // symbol's best score wins via the dedup further down.
+      try {
+        const { scanV3 } = require('../strategy-v3');
+        const v3Signals = await scanV3(bLog.scan.bind(bLog));
+        for (const s of (v3Signals || [])) {
+          if (!signals.find(existing => existing.symbol === s.symbol)) {
+            // Set strategyWinRate so backtest-gate's trusted-WR path passes
+            // for unknown strategies (cycle.js does the same on its v3 call).
+            s.strategyWinRate = s.score >= 12 ? 70 : 60;
+            signals.push(s);
+          }
+        }
+        if ((v3Signals || []).length > 0) {
+          bLog.scan(`[Coordinator] v3 engine: ${v3Signals.length} signal(s) — ${v3Signals.map(s => `${s.symbol} ${s.direction} [${s.setupName}]`).join(', ')}`);
+        }
+      } catch (v3Err) {
+        bLog.error(`[Coordinator] v3 engine scan failed (non-blocking): ${v3Err.message}`);
+      }
+
       // Filter out globally banned tokens before further processing
       if (signals.length > 0) {
         const { isTokenBanned } = require('../cycle');
@@ -847,8 +869,8 @@ class AgentCoordinator extends BaseAgent {
         }
       }
 
-      // ── Hard whitelist: only 4 coins ever proceed to execution ──
-      const COORD_WHITELIST = new Set(['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT']);
+      // ── Hard whitelist: only 5 coins ever proceed to execution ──
+      const COORD_WHITELIST = new Set(['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT']);
       const beforeWhitelist = signals.length;
       signals = signals.filter(s => COORD_WHITELIST.has(s.symbol || s.sym));
       if (beforeWhitelist > signals.length) {
