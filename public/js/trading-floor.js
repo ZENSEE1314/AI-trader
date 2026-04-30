@@ -42,23 +42,38 @@
   // ════════════════════════════════════════════════════════════
   // Office tile map  (20 cols × 11 rows)
   // ════════════════════════════════════════════════════════════
-  const COLS = 20, ROWS = 11;
+  const COLS = 20, ROWS = 22;
   const W = 0, F = 1; // TileType: WALL=0, FLOOR=1
 
   /*
     Layout diagram (. = floor, # = wall, | = internal wall, D = doorway)
+    Two floors connected by a doorway in the dividing wall (row 10, cols 9-10).
+    Upper: existing trading wing (cols 1-8) + lounge (cols 10-18)
+    Lower: AI Lab — single open room (cols 1-18) with 14 desks for backend agents
+
     Col:  0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17 18 19
     r 0:  #  #  #  #  #  #  #  #  #  #  #  #  #  #  #  #  #  #  #  #
     r 1:  #  .  .  .  .  .  .  .  .  |  .  .  .  .  .  .  .  .  .  #
     r 2:  #  .  .  .  .  .  .  .  .  |  .  .  .  .  .  .  .  .  .  #
     r 3:  #  .  .  .  .  .  .  .  .  |  .  .  .  .  .  .  .  .  .  #
-    r 4:  #  .  .  .  .  .  .  .  .  D  .  .  .  .  .  .  .  .  .  #   doorway
-    r 5:  #  .  .  .  .  .  .  .  .  D  .  .  .  .  .  .  .  .  .  #   doorway
+    r 4:  #  .  .  .  .  .  .  .  .  D  .  .  .  .  .  .  .  .  .  #   doorway L↔R
+    r 5:  #  .  .  .  .  .  .  .  .  D  .  .  .  .  .  .  .  .  .  #   doorway L↔R
     r 6:  #  .  .  .  .  .  .  .  .  |  .  .  .  .  .  .  .  .  .  #
     r 7:  #  .  .  .  .  .  .  .  .  |  .  .  .  .  .  .  .  .  .  #
     r 8:  #  .  .  .  .  .  .  .  .  |  .  .  .  .  .  .  .  .  .  #
     r 9:  #  .  .  .  .  .  .  .  .  |  .  .  .  .  .  .  .  .  .  #
-    r10:  #  #  #  #  #  #  #  #  #  #  #  #  #  #  #  #  #  #  #  #
+    r10:  #  #  #  #  #  #  #  #  #  D  D  #  #  #  #  #  #  #  #  #   stair/door upper↔lower
+    r11:  #  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  #
+    r12:  #  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  #   chair row (front)
+    r13:  #  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  #
+    r14:  #  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  #
+    r15:  #  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  #
+    r16:  #  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  #   chair row (back)
+    r17:  #  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  #
+    r18:  #  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  #
+    r19:  #  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  #
+    r20:  #  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  #
+    r21:  #  #  #  #  #  #  #  #  #  #  #  #  #  #  #  #  #  #  #  #
   */
   // prettier-ignore
   const TILE_FLAT = [
@@ -66,13 +81,24 @@
     W,F,F,F,F,F,F,F,F,W,F,F,F,F,F,F,F,F,F,W,  // row 1
     W,F,F,F,F,F,F,F,F,W,F,F,F,F,F,F,F,F,F,W,  // row 2
     W,F,F,F,F,F,F,F,F,W,F,F,F,F,F,F,F,F,F,W,  // row 3
-    W,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,W,  // row 4  doorway
-    W,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,W,  // row 5  doorway
+    W,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,W,  // row 4  doorway L↔R
+    W,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,W,  // row 5  doorway L↔R
     W,F,F,F,F,F,F,F,F,W,F,F,F,F,F,F,F,F,F,W,  // row 6
     W,F,F,F,F,F,F,F,F,W,F,F,F,F,F,F,F,F,F,W,  // row 7
     W,F,F,F,F,F,F,F,F,W,F,F,F,F,F,F,F,F,F,W,  // row 8
     W,F,F,F,F,F,F,F,F,W,F,F,F,F,F,F,F,F,F,W,  // row 9
-    W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,  // row 10
+    W,W,W,W,W,W,W,W,W,F,F,W,W,W,W,W,W,W,W,W,  // row 10  stair/door upper↔lower
+    W,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,W,  // row 11
+    W,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,W,  // row 12  chair row (front)
+    W,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,W,  // row 13
+    W,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,W,  // row 14
+    W,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,W,  // row 15
+    W,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,W,  // row 16  chair row (back)
+    W,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,W,  // row 17
+    W,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,W,  // row 18
+    W,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,W,  // row 19
+    W,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,F,W,  // row 20
+    W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,  // row 21
   ];
 
   function buildTileMap() {
@@ -93,6 +119,23 @@
     // Lounge — non-trader agents
     ['seat-coord', { seatCol: 16, seatRow: 3, facingDir: Dir.UP, assigned: false }], // at whiteboard
     ['seat-coder', { seatCol: 11, seatRow: 5, facingDir: Dir.UP, assigned: false }], // by bookshelf/coffee
+    // ── AI Lab (lower floor) — backend agents ──────────────────
+    // Front row — control agents
+    ['seat-chart',   { seatCol: 2,  seatRow: 12, facingDir: Dir.UP, assigned: false }],
+    ['seat-risk',    { seatCol: 4,  seatRow: 12, facingDir: Dir.UP, assigned: false }],
+    ['seat-trader',  { seatCol: 6,  seatRow: 12, facingDir: Dir.UP, assigned: false }],
+    ['seat-police',  { seatCol: 8,  seatRow: 12, facingDir: Dir.UP, assigned: false }],
+    ['seat-kronos',  { seatCol: 10, seatRow: 12, facingDir: Dir.UP, assigned: false }],
+    ['seat-acct',    { seatCol: 12, seatRow: 12, facingDir: Dir.UP, assigned: false }],
+    ['seat-watch',   { seatCol: 14, seatRow: 12, facingDir: Dir.UP, assigned: false }],
+    // Back row — strategy / AI agents
+    ['seat-strat',   { seatCol: 2,  seatRow: 16, facingDir: Dir.UP, assigned: false }],
+    ['seat-sent',    { seatCol: 4,  seatRow: 16, facingDir: Dir.UP, assigned: false }],
+    ['seat-opt',     { seatCol: 6,  seatRow: 16, facingDir: Dir.UP, assigned: false }],
+    ['seat-brain',   { seatCol: 8,  seatRow: 16, facingDir: Dir.UP, assigned: false }],
+    ['seat-swarm',   { seatCol: 10, seatRow: 16, facingDir: Dir.UP, assigned: false }],
+    ['seat-gov',     { seatCol: 12, seatRow: 16, facingDir: Dir.UP, assigned: false }],
+    ['seat-lab',     { seatCol: 14, seatRow: 16, facingDir: Dir.UP, assigned: false }],
   ]);
 
   // ════════════════════════════════════════════════════════════
@@ -133,26 +176,101 @@
     '17,9','18,9',
     // PLANT right side at (18,1)
     '18,2',
+
+    // ── AI Lab (lower floor) chair tiles — front row (row 12) ──
+    '2,12','4,12','6,12','8,12','10,12','12,12','14,12',
+    // ── AI Lab back row (row 16) ──
+    '2,16','4,16','6,16','8,16','10,16','12,16','14,16',
   ];
 
   // ════════════════════════════════════════════════════════════
   // Agent definitions
   // ════════════════════════════════════════════════════════════
   const AGENTS = [
-    { id: 0, symbol: 'BTCUSDT', label: 'BTC',   palette: 0, seatId: 'seat-btc',   role: 'trader' },
-    { id: 1, symbol: 'ETHUSDT', label: 'ETH',   palette: 1, seatId: 'seat-eth',   role: 'trader' },
-    { id: 2, symbol: 'SOLUSDT', label: 'SOL',   palette: 2, seatId: 'seat-sol',   role: 'trader' },
-    { id: 3, symbol: 'BNBUSDT', label: 'BNB',   palette: 3, seatId: 'seat-bnb',   role: 'trader' },
-    { id: 6, symbol: 'XRPUSDT', label: 'XRP',   palette: 0, seatId: 'seat-xrp',   role: 'trader' },
-    { id: 4, symbol: null,      label: 'COORD', palette: 4, seatId: 'seat-coord', role: 'coordinator' },
-    { id: 5, symbol: null,      label: 'CODER', palette: 5, seatId: 'seat-coder', role: 'coder' },
+    { id: 0,  symbol: 'BTCUSDT', label: 'BTC',    palette: 0, seatId: 'seat-btc',    role: 'trader' },
+    { id: 1,  symbol: 'ETHUSDT', label: 'ETH',    palette: 1, seatId: 'seat-eth',    role: 'trader' },
+    { id: 2,  symbol: 'SOLUSDT', label: 'SOL',    palette: 2, seatId: 'seat-sol',    role: 'trader' },
+    { id: 3,  symbol: 'BNBUSDT', label: 'BNB',    palette: 3, seatId: 'seat-bnb',    role: 'trader' },
+    { id: 6,  symbol: 'XRPUSDT', label: 'XRP',    palette: 0, seatId: 'seat-xrp',    role: 'trader' },
+    { id: 4,  symbol: null,      label: 'COORD',  palette: 4, seatId: 'seat-coord',  role: 'coordinator' },
+    { id: 5,  symbol: null,      label: 'CODER',  palette: 5, seatId: 'seat-coder',  role: 'coder' },
+    // ── AI Lab — backend agents ──────────────────────────────
+    { id: 7,  symbol: null,      label: 'CHART',  palette: 0, seatId: 'seat-chart',  role: 'chart' },
+    { id: 8,  symbol: null,      label: 'RISK',   palette: 1, seatId: 'seat-risk',   role: 'risk' },
+    { id: 9,  symbol: null,      label: 'TRADER', palette: 2, seatId: 'seat-trader', role: 'executor' },
+    { id: 10, symbol: null,      label: 'POLICE', palette: 3, seatId: 'seat-police', role: 'police' },
+    { id: 11, symbol: null,      label: 'KRONOS', palette: 4, seatId: 'seat-kronos', role: 'kronos' },
+    { id: 12, symbol: null,      label: 'ACCT',   palette: 5, seatId: 'seat-acct',   role: 'accountant' },
+    { id: 13, symbol: null,      label: 'WATCH',  palette: 0, seatId: 'seat-watch',  role: 'watcher' },
+    { id: 14, symbol: null,      label: 'STRAT',  palette: 1, seatId: 'seat-strat',  role: 'strategy' },
+    { id: 15, symbol: null,      label: 'SENT',   palette: 2, seatId: 'seat-sent',   role: 'sentiment' },
+    { id: 16, symbol: null,      label: 'OPT',    palette: 3, seatId: 'seat-opt',    role: 'optimizer' },
+    { id: 17, symbol: null,      label: 'BRAIN',  palette: 4, seatId: 'seat-brain',  role: 'ai_brain' },
+    { id: 18, symbol: null,      label: 'SWARM',  palette: 5, seatId: 'seat-swarm',  role: 'swarm' },
+    { id: 19, symbol: null,      label: 'GOV',    palette: 0, seatId: 'seat-gov',    role: 'governance' },
+    { id: 20, symbol: null,      label: 'LAB',    palette: 1, seatId: 'seat-lab',    role: 'strategy_lab' },
   ];
 
   // Friendly display titles + role colours for the sidebar agent list
   const ROLE_META = {
-    trader:      { title: 'Trader',       color: '#7dd3fc' },
-    coordinator: { title: 'Coordinator',  color: '#fbbf24' },
-    coder:       { title: 'Coder',        color: '#a78bfa' },
+    trader:        { title: 'Trader',       color: '#7dd3fc' },
+    coordinator:   { title: 'Coordinator',  color: '#fbbf24' },
+    coder:         { title: 'Coder',        color: '#a78bfa' },
+    // AI Lab roles
+    chart:         { title: 'Chart',        color: '#60a5fa' },
+    risk:          { title: 'Risk',         color: '#f87171' },
+    executor:      { title: 'Trade Exec',   color: '#34d399' },
+    police:        { title: 'Police',       color: '#94a3b8' },
+    kronos:        { title: 'Kronos',       color: '#c084fc' },
+    accountant:    { title: 'Accountant',   color: '#facc15' },
+    watcher:       { title: 'Watcher',      color: '#22d3ee' },
+    strategy:      { title: 'Strategy',     color: '#fb923c' },
+    sentiment:     { title: 'Sentiment',    color: '#f472b6' },
+    optimizer:     { title: 'Optimizer',    color: '#a3e635' },
+    ai_brain:      { title: 'AI Brain',     color: '#e879f9' },
+    swarm:         { title: 'Swarm',        color: '#f59e0b' },
+    governance:    { title: 'Governance',   color: '#cbd5e1' },
+    strategy_lab:  { title: 'Strategy Lab', color: '#67e8f9' },
+  };
+
+  // Sidebar status label per non-trader role
+  const ROLE_LABEL = {
+    coordinator:  'planning',
+    coder:        'coding',
+    chart:        'scanning',
+    risk:         'gating',
+    executor:     'executing',
+    police:       'patrolling',
+    kronos:       'predicting',
+    accountant:   'tallying',
+    watcher:      'watching',
+    strategy:     'strategising',
+    sentiment:    'reading',
+    optimizer:    'tuning',
+    ai_brain:     'thinking',
+    swarm:        'voting',
+    governance:   'enforcing',
+    strategy_lab: 'experimenting',
+  };
+
+  // Map role → backend agent class name for /api/admin/agents/health lookup
+  const ROLE_TO_NAME = {
+    coordinator:  'Coordinator',
+    coder:        'CoderAgent',
+    chart:        'ChartAgent',
+    risk:         'RiskAgent',
+    executor:     'TraderAgent',
+    police:       'PoliceAgent',
+    kronos:       'KronosAgent',
+    accountant:   'AccountantAgent',
+    watcher:      'WatcherAgent',
+    strategy:     'StrategyAgent',
+    sentiment:    'SentimentAgent',
+    optimizer:    'OptimizerAgent',
+    ai_brain:     'AIBrain',
+    swarm:        'SwarmEngine',
+    governance:   'GovernanceEngine',
+    strategy_lab: 'StrategyLab',
   };
 
 
@@ -521,6 +639,14 @@
     add('LARGE_PLANT',      17, 7);
     add('PLANT',            18, 1);
 
+    // ── AI Lab (lower floor) — chairs only, no desks ─────────
+    // Front row at row 12, back row at row 16, chairs at even cols 2–14
+    const labChairCols = [2, 4, 6, 8, 10, 12, 14];
+    for (const c of labChairCols) {
+      add('CUSHIONED_CHAIR_BACK', c, 12, (12 + 1) * TILE_SIZE + 1);
+      add('CUSHIONED_CHAIR_BACK', c, 16, (16 + 1) * TILE_SIZE + 1);
+    }
+
     return items;
   }
 
@@ -529,10 +655,12 @@
   // ════════════════════════════════════════════════════════════
 
   const WALL_COLOR          = '#3A3A5C';
-  const FLOOR_TRADING_COLOR = '#3a2e1e'; // warm wood — left room
-  const FLOOR_LOUNGE_COLOR  = '#242f30'; // cool slate — right room
+  const FLOOR_TRADING_COLOR = '#3a2e1e'; // warm wood — upper-left room
+  const FLOOR_LOUNGE_COLOR  = '#242f30'; // cool slate — upper-right room
+  const FLOOR_LAB_COLOR     = '#1e293a'; // deep navy  — AI Lab (lower)
 
   function isLounge(col) { return col >= 10; }
+  function isLab(row) { return row >= 11; }
 
   /**
    * Full frame render with z-sorting.
@@ -555,7 +683,8 @@
       for (let c = 0; c < COLS; c++) {
         const t = tileMap[r][c];
         ctx.fillStyle = t === W ? WALL_COLOR
-          : (isLounge(c) ? FLOOR_LOUNGE_COLOR : FLOOR_TRADING_COLOR);
+          : (isLab(r) ? FLOOR_LAB_COLOR
+            : (isLounge(c) ? FLOOR_LOUNGE_COLOR : FLOOR_TRADING_COLOR));
         ctx.fillRect(ox + c * s, oy + r * s, s, s);
       }
     }
@@ -1164,7 +1293,7 @@
         const stateEl = li.querySelector('.tf-state');
         let label, color;
         if (def.role !== 'trader') {
-          label = def.role === 'coordinator' ? 'planning' : 'coding';
+          label = ROLE_LABEL[def.role] || 'idle';
           color = ROLE_META[def.role].color;
         } else if (ch.isActive) {
           label = ch.currentSide || 'active';
@@ -1181,7 +1310,7 @@
         // The /api/admin/agents/health response uses both `key` (lowercased sym) and `name`.
         const statsKey = def.symbol
           ? def.label.toLowerCase()                 // e.g. 'btc'
-          : (def.role === 'coordinator' ? 'Coordinator' : 'CoderAgent');
+          : (ROLE_TO_NAME[def.role] || def.label);
         const stats = this._agentStats[statsKey]
                    || this._agentStats[def.label + 'Agent']
                    || this._agentStats[def.label];
