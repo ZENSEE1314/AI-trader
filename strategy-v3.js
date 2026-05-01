@@ -670,17 +670,23 @@ async function analyzeV3(ticker) {
     const vwap = calcVWAP(klines15m);
     if (!vwap) { dlog('null — no VWAP'); return null; }
 
-    // ── Bias filter ───────────────────────────────────────────
-    const aboveOP   = price > levels.op;
-    const aboveVWAP = price > vwap;
-    const vwapDiff  = (price - vwap) / vwap; // +ve = above VWAP
-    let bias;
-    if (aboveOP && vwapDiff >= -0.015)      bias = 'long';
-    else if (!aboveOP && vwapDiff <= 0.015) bias = 'short';
-    else bias = null;
-    dlog(`bias=${bias} aboveOP=${aboveOP} vwapDiff=${(vwapDiff*100).toFixed(2)}% (OP=${levels.op} VWAP=${vwap.toFixed(4)})`);
+    // ── Direction from 1m structure (sole rule) ───────────────
+    // User direction: "short will only fire on LH or LL, long only on
+    // HH or HL — follow this rule." OP/VWAP bias filter REMOVED — we
+    // were overriding the 1m structure (e.g. ETH had visible HL but
+    // VWAP-position forced bias=short). Now direction is pure SMC:
+    //   1m HH or (HL && !LH)  → LONG
+    //   1m LL or (LH && !HL)  → SHORT
+    //   neither               → null (squeeze / topping convergence)
+    const s1bias = detectStructure(klines1m, 2);
+    let bias = null;
+    if (s1bias) {
+      if      (s1bias.hh || (s1bias.hl && !s1bias.lh)) bias = 'long';
+      else if (s1bias.ll || (s1bias.lh && !s1bias.hl)) bias = 'short';
+    }
+    dlog(`bias=${bias} from 1m structure (hh=${s1bias?.hh} hl=${s1bias?.hl} lh=${s1bias?.lh} ll=${s1bias?.ll})`);
 
-    // ── Setup 5 (MomentumBreakout) bypasses the OP/VWAP bias gate ─
+    // ── Setup 5 (MomentumBreakout) bypasses 1m structure bias ─
     //   Impulse breakouts pick their own direction from candle body —
     //   the whole point is to catch waterfall moves the structure
     //   setups miss. Bias is set from the impulse direction.
@@ -690,7 +696,7 @@ async function analyzeV3(ticker) {
     const klines1mClosed = klines1m.slice(0, -1);
     const breakoutSig = detectMomentumBreakout(klines1mClosed);
 
-    if (!bias && !breakoutSig) { dlog('null — no bias and no momentum breakout'); return null; }
+    if (!bias && !breakoutSig) { dlog('null — no 1m structure bias and no momentum breakout'); return null; }
 
     // ── Run all setups ────────────────────────────────────────
     let setup = null;
