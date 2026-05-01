@@ -478,8 +478,15 @@ function detectMSTF(klines15m, klines3m, klines1m, bias) {
 
   if (!s1) return null;
 
-  const ltfBull = s1.hh  || s1.hl;
-  const ltfBear = s1.ll  || s1.lh;
+  // Reject topping/bottoming convergence: HL+LH together (or HH+LL) means
+  // both swing highs are dropping AND swing lows are rising — a squeeze, NOT
+  // a directional trend. User flagged "ETH long near top of LH" — that
+  // setup had s1.hl=true but also s1.lh=true (latest swing high is lower
+  // than the previous one), which is a bearish topping pattern. Require:
+  //   LONG  → s1.hh, OR (s1.hl AND no coexisting s1.lh)
+  //   SHORT → s1.ll, OR (s1.lh AND no coexisting s1.hl)
+  const ltfBull = s1.hh || (s1.hl && !s1.lh);
+  const ltfBear = s1.ll || (s1.lh && !s1.hl);
 
   // Either HTF can supply bullish or bearish confirmation.
   const htfBull = (s15 && (s15.hh || s15.hl)) || (s3 && (s3.hh || s3.hl));
