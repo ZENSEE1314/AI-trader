@@ -670,21 +670,34 @@ async function analyzeV3(ticker) {
     const vwap = calcVWAP(klines15m);
     if (!vwap) { dlog('null — no VWAP'); return null; }
 
-    // ── Direction from 1m structure (sole rule) ───────────────
-    // User direction: "short will only fire on LH or LL, long only on
-    // HH or HL — follow this rule." OP/VWAP bias filter REMOVED — we
-    // were overriding the 1m structure (e.g. ETH had visible HL but
-    // VWAP-position forced bias=short). Now direction is pure SMC:
-    //   1m HH or (HL && !LH)  → LONG
-    //   1m LL or (LH && !HL)  → SHORT
-    //   neither               → null (squeeze / topping convergence)
+    // ── Direction = 1m structure AND OP/VWAP must AGREE ──────
+    // User direction: "OP/VWAP is a must but follow the LH/HL/HH/LL"
+    //   1m structure is the primary signal:
+    //     HH or (HL && !LH)  → wants LONG
+    //     LL or (LH && !HL)  → wants SHORT
+    //     squeeze            → no trade
+    //   OP/VWAP must confirm:
+    //     above OP & vwapDiff >= -1.5%  → ok for LONG
+    //     below OP & vwapDiff <=  1.5%  → ok for SHORT
+    //   Trade fires ONLY when both point the same direction.
     const s1bias = detectStructure(klines1m, 2);
-    let bias = null;
+    let structBias = null;
     if (s1bias) {
-      if      (s1bias.hh || (s1bias.hl && !s1bias.lh)) bias = 'long';
-      else if (s1bias.ll || (s1bias.lh && !s1bias.hl)) bias = 'short';
+      if      (s1bias.hh || (s1bias.hl && !s1bias.lh)) structBias = 'long';
+      else if (s1bias.ll || (s1bias.lh && !s1bias.hl)) structBias = 'short';
     }
-    dlog(`bias=${bias} from 1m structure (hh=${s1bias?.hh} hl=${s1bias?.hl} lh=${s1bias?.lh} ll=${s1bias?.ll})`);
+
+    const aboveOP   = price > levels.op;
+    const vwapDiff  = (price - vwap) / vwap;
+    let opVwapBias = null;
+    if      (aboveOP  && vwapDiff >= -0.015) opVwapBias = 'long';
+    else if (!aboveOP && vwapDiff <=  0.015) opVwapBias = 'short';
+
+    let bias = null;
+    if (structBias && opVwapBias && structBias === opVwapBias) {
+      bias = structBias;
+    }
+    dlog(`bias=${bias} struct=${structBias} (hh=${s1bias?.hh} hl=${s1bias?.hl} lh=${s1bias?.lh} ll=${s1bias?.ll}) opVwap=${opVwapBias} (aboveOP=${aboveOP} vwapDiff=${(vwapDiff*100).toFixed(2)}%)`);
 
     // ── Setup 5 (MomentumBreakout) bypasses 1m structure bias ─
     //   Impulse breakouts pick their own direction from candle body —
