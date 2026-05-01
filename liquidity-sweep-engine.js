@@ -1773,9 +1773,14 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
   //      the HL/HH instead of waiting for 2 paused candles. The range
   //      gate already protects against chase entries; pause is only
   //      needed in the middle of the range.
+  // Momentum-side band exception: when LONG and price is already above
+  // VWAP upper band, OR SHORT and price below the lower band, we ride
+  // the momentum and SKIP the range-pos chase filter. The band breach
+  // (price beyond ±2σ of session VWAP) IS the momentum confirmation.
+  const _longMomentum  = vwapUpper && best.direction === 'LONG'  && price >= vwapUpper;
+  const _shortMomentum = vwapLower && best.direction === 'SHORT' && price <= vwapLower;
+
   let _rangePos = null;
-  // Use a 10-bar window so a single big-move spike (e.g. an HH) doesn't
-  // lock SHORT entries out of the LH that forms 5-10 minutes later.
   if (parsed1m.length >= 11) {
     const w20 = parsed1m.slice(-11, -1);
     const rangeHi = Math.max(...w20.map(c => c.high));
@@ -1783,12 +1788,12 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     const rangeSz = rangeHi - rangeLo;
     if (rangeSz > 0) {
       _rangePos = (price - rangeLo) / rangeSz;
-      if (best.direction === 'LONG' && _rangePos > 0.40) {
-        bLog.scan(`${symbol}: LONG ${best.setup} BLOCKED — price ${(_rangePos*100).toFixed(0)}% into 20×1m range (need ≤40% — too far from HL)`);
+      if (!_longMomentum && best.direction === 'LONG' && _rangePos > 0.40) {
+        bLog.scan(`${symbol}: LONG ${best.setup} BLOCKED — price ${(_rangePos*100).toFixed(0)}% into 10×1m range (need ≤40% — too far from HL)`);
         return null;
       }
-      if (best.direction === 'SHORT' && _rangePos < 0.60) {
-        bLog.scan(`${symbol}: SHORT ${best.setup} BLOCKED — price ${(_rangePos*100).toFixed(0)}% into 20×1m range (need ≥60% — too far from HH)`);
+      if (!_shortMomentum && best.direction === 'SHORT' && _rangePos < 0.60) {
+        bLog.scan(`${symbol}: SHORT ${best.setup} BLOCKED — price ${(_rangePos*100).toFixed(0)}% into 10×1m range (need ≥60% — too far from HH)`);
         return null;
       }
     }
@@ -1799,8 +1804,10 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     (best.direction === 'SHORT' && _rangePos > 0.80)
   );
 
+  // Pause gate also skipped on momentum-side band entries — the band
+  // breach itself confirms momentum, no need for 2 paused 1m candles.
   const _paLen = parsed1m.length;
-  if (!_atExtreme && _paLen >= 4) {
+  if (!_atExtreme && !_longMomentum && !_shortMomentum && _paLen >= 4) {
     const c1 = parsed1m[_paLen - 2];
     const c2 = parsed1m[_paLen - 3];
     const p1 = parsed1m[_paLen - 3];

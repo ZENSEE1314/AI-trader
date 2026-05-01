@@ -746,21 +746,52 @@ async function analyzeV3(ticker) {
     if (volSpike) parts.push('VolSpike');
     const setupName = parts.join('+');
 
-    // ── Range-position + pause gates (combined) ────────────────
-    // 1. Range pos in last 20×1m (0 = HL, 1 = HH).
-    //      LONG  blocked if pos > 0.40 (chase up)
-    //      SHORT blocked if pos < 0.60 (chase down)
-    // 2. Pause: last 2 closed 1m candles must not extend.
-    //      SKIPPED at extreme range (LONG pos < 0.20, SHORT pos > 0.80)
-    //      so the bot enters on the first bullish/bearish candle off
-    //      the HL/HH instead of waiting for 2 paused candles —
-    //      range gate already protects against chase.
+    // ── VWAP bands (1m bars, matches Bitunix chart) — computed FIRST
+    // because the range-pos gate now uses them for the momentum-side
+    // exception (LONG above upper band / SHORT below lower band ride
+    // momentum and skip range-pos).
     const k1m = klines1m || [];
+    let vwapUpper = null, vwapLower = null;
+    if (k1m.length > 30) {
+      const dayStartMs = Date.UTC(new Date().getUTCFullYear(),
+                                  new Date().getUTCMonth(),
+                                  new Date().getUTCDate());
+      const today1m = k1m.filter(k => parseInt(k[0]) >= dayStartMs);
+      const used = today1m.length > 30 ? today1m : k1m.slice(-Math.min(k1m.length, 240));
+      let cumTPV = 0, cumVol = 0;
+      const tps = [];
+      for (const k of used) {
+        const tp = (parseFloat(k[2]) + parseFloat(k[3]) + parseFloat(k[4])) / 3;
+        const v  = parseFloat(k[5]) || 1;
+        tps.push(tp);
+        cumTPV += tp * v; cumVol += v;
+      }
+      if (cumVol > 0 && tps.length > 30) {
+        const mid = cumTPV / cumVol;
+        let varSum = 0;
+        for (const t of tps) varSum += (t - mid) * (t - mid);
+        const sd = Math.sqrt(varSum / tps.length);
+        vwapUpper = mid + 2 * sd;
+        vwapLower = mid - 2 * sd;
+      }
+    }
+
+    // No-contrarian-at-extremes: blocks SHORT above upper, LONG below lower.
+    if (vwapUpper && side === 'SHORT' && price >= vwapUpper) return null;
+    if (vwapLower && side === 'LONG'  && price <= vwapLower) return null;
+
+    // Momentum-side at the band: when price is at/above upper for LONG,
+    // or at/below lower for SHORT, we ride the momentum and SKIP the
+    // range-pos chase filter (the band itself proves it's not noise —
+    // price has decisively pushed through ±2σ of session VWAP).
+    const longMomentum  = vwapUpper && side === 'LONG'  && price >= vwapUpper;
+    const shortMomentum = vwapLower && side === 'SHORT' && price <= vwapLower;
+
+    // ── Range-position + pause gates ────────────────────────────────
+    // Range pos in last 10×1m (0 = HL, 1 = HH).
+    //   LONG  blocked if pos > 0.40 (chase up)   — UNLESS longMomentum
+    //   SHORT blocked if pos < 0.60 (chase down) — UNLESS shortMomentum
     let rPos = null;
-    // Use a 10-bar window so a single big-move candle (e.g. an HH spike)
-    // doesn't pin the range high for 20 minutes and lock SHORT entries
-    // out of the LH that forms 5-10 minutes later. 10 bars = "recent
-    // context", which is what we want for entry-zone selection.
     if (k1m.length >= 11) {
       const w20 = k1m.slice(-11, -1);
       let hi = -Infinity, lo = Infinity;
@@ -773,8 +804,8 @@ async function analyzeV3(ticker) {
       const sz = hi - lo;
       if (sz > 0) {
         rPos = (price - lo) / sz;
-        if (side === 'LONG'  && rPos > 0.40) return null;
-        if (side === 'SHORT' && rPos < 0.60) return null;
+        if (!longMomentum  && side === 'LONG'  && rPos > 0.40) return null;
+        if (!shortMomentum && side === 'SHORT' && rPos < 0.60) return null;
       }
     }
 
@@ -783,7 +814,9 @@ async function analyzeV3(ticker) {
       (side === 'SHORT' && rPos > 0.80)
     );
 
-    if (!atExtreme && k1m.length >= 4) {
+    // Pause gate also skipped on momentum-side band entries — the band
+    // breach is the momentum confirmation, no need for a 2-candle pause.
+    if (!atExtreme && !longMomentum && !shortMomentum && k1m.length >= 4) {
       const lastH = parseFloat(k1m[k1m.length - 2][2]);
       const lastL = parseFloat(k1m[k1m.length - 2][3]);
       const midH  = parseFloat(k1m[k1m.length - 3][2]);
@@ -798,38 +831,6 @@ async function analyzeV3(ticker) {
         const pausedA = lastL >= midL && lastH >= midH;
         const pausedB = midL  >= oldL && midH  >= oldH;
         if (!(pausedA && pausedB)) return null;
-      }
-    }
-
-    // ── VWAP-band guard (1m bars to match Bitunix chart display) ──
-    // SHORT hard-blocked above the upper band, LONG below the lower
-    // band. Bands are session VWAP ± 2σ computed from the 1m bars
-    // since UTC midnight (same shape as liquidity-sweep-engine line
-    // ~1010-1052), so what the user sees on Bitunix matches what
-    // this gate sees.
-    if (klines1m && klines1m.length > 30) {
-      const dayStartMs = Date.UTC(new Date().getUTCFullYear(),
-                                  new Date().getUTCMonth(),
-                                  new Date().getUTCDate());
-      const today1m = klines1m.filter(k => parseInt(k[0]) >= dayStartMs);
-      const used = today1m.length > 30 ? today1m : klines1m.slice(-Math.min(klines1m.length, 240));
-      let cumTPV = 0, cumVol = 0;
-      const tps = [];
-      for (const k of used) {
-        const tp = (parseFloat(k[2]) + parseFloat(k[3]) + parseFloat(k[4])) / 3;
-        const v  = parseFloat(k[5]) || 1;
-        tps.push(tp);
-        cumTPV += tp * v; cumVol += v;
-      }
-      if (cumVol > 0 && tps.length > 30) {
-        const mid = cumTPV / cumVol;
-        let varSum = 0;
-        for (const t of tps) varSum += (t - mid) * (t - mid);
-        const sd    = Math.sqrt(varSum / tps.length);
-        const upper = mid + 2 * sd;
-        const lower = mid - 2 * sd;
-        if (side === 'SHORT' && price >= upper) return null;
-        if (side === 'LONG'  && price <= lower) return null;
       }
     }
 
