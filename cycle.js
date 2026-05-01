@@ -1909,12 +1909,13 @@ async function executeForAllUsers(pick) {
           const bnTpRef = bnTpPrice ?? fmtP(userTpPrice);
           await db.query(
             `INSERT INTO trades (api_key_id, user_id, symbol, direction, entry_price, sl_price, tp_price, quantity, leverage, status,
-             trailing_sl_price, trailing_sl_last_step, tf_15m, tf_3m, tf_1m, market_structure, key_trailing_sl_step)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'OPEN', $10, 0, $11, $12, $13, $14, $15)`,
+             trailing_sl_price, trailing_sl_last_step, tf_15m, tf_3m, tf_1m, market_structure, key_trailing_sl_step, setup)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'OPEN', $10, 0, $11, $12, $13, $14, $15, $16)`,
             [key.id, key.user_id, symbol, pick.direction, price, fmtP(slPrice), bnTpRef, qty, userLev,
              fmtP(slPrice),
              null, pick.structure?.tf3m || null, pick.structure?.tf1m || null,
-             pick.marketStructure || null, userTrailStep]
+             pick.marketStructure || null, userTrailStep,
+             pick.setupName || pick.setup || null]
           );
           userLog.trade(`Binance OK: ${key.email} ${symbol} ${pick.direction} x${userLev} qty=${qty} entry=$${fmtPrice(price)} SL=$${fmtPrice(slPrice)} ${bnTpPrice ? `TP=$${fmtPrice(bnTpPrice)}` : `TP(ref)=$${fmtPrice(userTpPrice)}`}`);
           log(`Binance OK: ${key.email} ${symbol} ${pick.direction} x${userLev}`);
@@ -2076,13 +2077,14 @@ async function executeForAllUsers(pick) {
 
             await db.query(
               `INSERT INTO trades (api_key_id, user_id, symbol, direction, entry_price, sl_price, tp_price, quantity, leverage, status,
-               trailing_sl_price, trailing_sl_last_step, tf_15m, tf_3m, tf_1m, market_structure, key_trailing_sl_step, bitunix_position_id)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'OPEN', $10, 0, $11, $12, $13, $14, $15, $16)`,
+               trailing_sl_price, trailing_sl_last_step, tf_15m, tf_3m, tf_1m, market_structure, key_trailing_sl_step, bitunix_position_id, setup)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'OPEN', $10, 0, $11, $12, $13, $14, $15, $16, $17)`,
               [key.id, key.user_id, symbol, pick.direction, actualEntry,
                slFmtActual || 0, parseFloat(tpRef.toFixed(8)), qty, userLev,
                slFmtActual || 0,
                null, pick.structure?.tf3m || null, pick.structure?.tf1m || null,
-               pick.marketStructure || null, userTrailStep, posId || null]
+               pick.marketStructure || null, userTrailStep, posId || null,
+               pick.setupName || pick.setup || null]
             );
           } else {
             userLog.error(`Bitunix position not found after order — verify on exchange`);
@@ -2090,12 +2092,13 @@ async function executeForAllUsers(pick) {
 
             await db.query(
               `INSERT INTO trades (api_key_id, user_id, symbol, direction, entry_price, sl_price, tp_price, quantity, leverage, status,
-               trailing_sl_price, trailing_sl_last_step, tf_15m, tf_3m, tf_1m, market_structure, key_trailing_sl_step)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'OPEN', $10, 0, $11, $12, $13, $14, $15)`,
+               trailing_sl_price, trailing_sl_last_step, tf_15m, tf_3m, tf_1m, market_structure, key_trailing_sl_step, setup)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'OPEN', $10, 0, $11, $12, $13, $14, $15, $16)`,
               [key.id, key.user_id, symbol, pick.direction, price,
                parseFloat(slPrice.toFixed(8)), 0, qty, userLev, parseFloat(slPrice.toFixed(8)),
                null, pick.structure?.tf3m || null, pick.structure?.tf1m || null,
-               pick.marketStructure || null, userTrailStep]
+               pick.marketStructure || null, userTrailStep,
+               pick.setupName || pick.setup || null]
             );
           }
           userLog.trade(`Bitunix OK: ${key.email} ${symbol} ${pick.direction} x${userLev} qty=${qty}`);
