@@ -4035,127 +4035,6 @@
     }
   }
 
-  async function runAiOptimize() {
-    const days = parseInt($('#backtest-days')?.value) || 7;
-    const resultEl = $('#fix-bitunix-result');
-    if (resultEl) resultEl.textContent = '⚛️ Starting Quantum AI Optimizer...\n';
-
-    try {
-      // Stream NDJSON — read lines as they arrive, 10 min timeout
-      const abortCtrl = new AbortController();
-      const abortTimer = setTimeout(() => abortCtrl.abort(), 600000);
-      const resp = await fetch('/api/admin/ai-optimize', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'same-origin',
-        body: JSON.stringify({ days, maxTokens: parseInt($('#bt-max-tokens')?.value) || 50 }),
-        signal: abortCtrl.signal,
-      });
-      if (!resp.ok) {
-        const errText = await resp.text();
-        throw new Error(errText || `HTTP ${resp.status}`);
-      }
-
-      let logs = '⚛️ QUANTUM AI OPTIMIZER — LIVE LOG\n';
-      let finalData = null;
-
-      function processLine(line) {
-        if (!line.trim()) return;
-        try {
-          const msg = JSON.parse(line);
-          if (msg.type === 'ping') return;
-          if (msg.type === 'log') {
-            logs += msg.message + '\n';
-            if (resultEl) { resultEl.textContent = logs; resultEl.scrollTop = resultEl.scrollHeight; }
-          } else if (msg.type === 'progress') {
-            logs += `  [${msg.phase}] ${msg.pct}%\n`;
-            if (resultEl) { resultEl.textContent = logs; resultEl.scrollTop = resultEl.scrollHeight; }
-          } else if (msg.type === 'result') {
-            finalData = msg;
-          } else if (msg.type === 'error') {
-            logs += '\nERROR: ' + msg.error + '\n';
-            if (resultEl) resultEl.textContent = logs;
-          }
-        } catch {}
-      }
-
-      // Try streaming with ReadableStream, fall back to full-text read
-      if (resp.body && resp.body.getReader) {
-        const reader = resp.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = '';
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split('\n');
-          buffer = lines.pop();
-          for (const line of lines) processLine(line);
-        }
-        if (buffer.trim()) processLine(buffer);
-      } else {
-        // Fallback: read entire response then parse lines
-        const text = await resp.text();
-        for (const line of text.split('\n')) processLine(line);
-      }
-
-      if (!finalData) { if (resultEl) resultEl.textContent = logs + '\nNo results received.'; return; }
-
-      // Build final output from bitmask combo result
-      const data = finalData;
-      const combos = data.allCombos || [];
-      let output = '═══════════════════════════════════════════════════════════════════════════════════════════════════════\n';
-      output += '  ⚛️ QUANTUM AI — BITMASK COMBO BACKTESTER\n';
-      if (data.days) output += `  Period: ${data.days} days | Tokens: ${data.tokens || '?'}\n`;
-      if (data.testedAt) output += `  Tested at: ${data.testedAt}\n`;
-      if (data.leverageTested) output += `  Leverage tested: ${data.leverageTested.join('x, ')}x | Best: ${data.bestLeverage || '?'}x\n`;
-      output += `  Phase: ${data.phase || 'exploring'} | Explored: ${data.exploration?.explored || 0}/${data.exploration?.total || 15}\n`;
-      output += `  Best combo: #${data.activeCombo} (${data.comboName})\n`;
-      const strats = data.strategies || {};
-      const enabledList = Object.entries(strats).filter(([,v]) => v).map(([k]) => k).join(', ');
-      output += `  Enabled: ${enabledList}\n`;
-      output += '═══════════════════════════════════════════════════════════════════════════════════════════════════════\n\n';
-
-      // ── Combo Leaderboard ──
-      output += '── STRATEGY COMBO LEADERBOARD ─────────────────────────────────────────────────────\n';
-      output += '#    | Combo                          | Trades |  WR%   | Avg PnL  | Score  | Status\n';
-      output += '─'.repeat(95) + '\n';
-      for (let i = 0; i < combos.length; i++) {
-        const c = combos[i];
-        const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `#${i+1}`;
-        const wr = (c.winRate * 100).toFixed(0);
-        const pnl = c.avgPnl >= 0 ? `+${c.avgPnl.toFixed(2)}%` : `${c.avgPnl.toFixed(2)}%`;
-        let status = '';
-        if (c.active) status = '← ACTIVE';
-        if (c.locked) status += ' [LOCKED]';
-        output += `${String(medal).padEnd(5)}| ${c.name.padEnd(31)}| ${String(c.trades).padStart(6)} | ${String(wr + '%').padStart(6)} | ${pnl.padStart(8)} | ${c.score.toFixed(3).padStart(6)} | ${status}\n`;
-      }
-
-      output += '\n';
-      if (combos.every(c => c.trades === 0)) {
-        output += '  ⏳ No trades yet — the bot will collect data as it trades.\n';
-        output += '  The optimizer will auto-switch to the best combo after 20+ trades per combo.\n';
-        output += '  Currently running ALL strategies (#15) as default.\n';
-      } else {
-        const explored = combos.filter(c => c.trades >= 20).length;
-        const remaining = 15 - explored;
-        if (remaining > 0) {
-          output += `  📊 ${explored}/15 combos have enough data (20+ trades). ${remaining} still exploring.\n`;
-        } else {
-          output += '  ✅ All combos explored! Optimizer is now auto-selecting the best performer.\n';
-        }
-      }
-
-      // Show live log + final results
-      clearTimeout(abortTimer);
-      if (resultEl) resultEl.textContent = logs + '\n' + output;
-      loadAiVersions().catch(() => {});
-    } catch (err) {
-      if (typeof abortTimer !== 'undefined') clearTimeout(abortTimer);
-      if (resultEl) resultEl.textContent += '\nError: ' + err.message;
-    }
-  }
-
   async function debugBitunix() {
     const resultEl = $('#fix-bitunix-result');
     if (resultEl) resultEl.textContent = 'Testing Bitunix API...';
@@ -5617,7 +5496,7 @@
     loadDirectionOverride, setDirectionOverride, reverseDirection,
     setTokenDirection, updateTokenDirStatus, loadTokenDirections, reverseTokenDirection,
     activateVersionForTrading, deactivateVersion, syncCurrentVersion,
-    fixBitunixPnl, debugBitunix, runBacktest, loadAiVersions, runAiOptimize, adminResyncFees, adminFixTrades, adminClearTestData,
+    fixBitunixPnl, debugBitunix, runBacktest, loadAiVersions, adminResyncFees, adminFixTrades, adminClearTestData,
     mcRefresh, mcCommand, mcChat, mcChatQuick, switchAdminTab, filterAgents, customerChat,
     loadStrategyConfig, loadStrategyComposer, initStratSubTabs,
     startAdminRefresh, stopAdminRefresh,
