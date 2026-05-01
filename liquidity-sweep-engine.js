@@ -1838,26 +1838,23 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     (best.direction === 'SHORT' && _rangePos > 0.80)
   );
 
-  // Pause gate also skipped on momentum-side band entries — the band
-  // breach itself confirms momentum, no need for 2 paused 1m candles.
+  // Pause gate (single candle) — last closed 1m must not extend the
+  // trade direction. Skipped on momentum-side band entries and at the
+  // extreme range zone (already covered upstream).
   const _paLen = parsed1m.length;
-  if (!_atExtreme && !_longMomentum && !_shortMomentum && _paLen >= 4) {
+  if (!_atExtreme && !_longMomentum && !_shortMomentum && _paLen >= 3) {
     const c1 = parsed1m[_paLen - 2];
-    const c2 = parsed1m[_paLen - 3];
     const p1 = parsed1m[_paLen - 3];
-    const p2 = parsed1m[_paLen - 4];
     if (best.direction === 'LONG') {
-      const paused1 = c1.high <= p1.high && c1.low <= p1.low;
-      const paused2 = c2.high <= p2.high && c2.low <= p2.low;
-      if (!(paused1 && paused2)) {
-        bLog.scan(`${symbol}: ${best.direction} ${best.setup} BLOCKED — 1m structure still extending (need 2 paused candles, range pos ${_rangePos !== null ? (_rangePos*100).toFixed(0)+'%' : 'n/a'})`);
+      const paused = c1.high <= p1.high && c1.low <= p1.low;
+      if (!paused) {
+        bLog.scan(`${symbol}: ${best.direction} ${best.setup} BLOCKED — last 1m extending up (no pause, range pos ${_rangePos !== null ? (_rangePos*100).toFixed(0)+'%' : 'n/a'})`);
         return null;
       }
     } else if (best.direction === 'SHORT') {
-      const paused1 = c1.low >= p1.low && c1.high >= p1.high;
-      const paused2 = c2.low >= p2.low && c2.high >= p2.high;
-      if (!(paused1 && paused2)) {
-        bLog.scan(`${symbol}: ${best.direction} ${best.setup} BLOCKED — 1m structure still extending (need 2 paused candles, range pos ${_rangePos !== null ? (_rangePos*100).toFixed(0)+'%' : 'n/a'})`);
+      const paused = c1.low >= p1.low && c1.high >= p1.high;
+      if (!paused) {
+        bLog.scan(`${symbol}: ${best.direction} ${best.setup} BLOCKED — last 1m extending down (no pause, range pos ${_rangePos !== null ? (_rangePos*100).toFixed(0)+'%' : 'n/a'})`);
         return null;
       }
     }
@@ -1866,11 +1863,12 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
   // ── Counter-trend filter (1m structure) ────────────────────
   // 1m  hh+hl  → confirmed bullish    → block SHORT
   // 1m  ll+lh  → confirmed bearish    → block LONG
-  // Single-side structure (HL only, LH only, ...) is allowed — those
-  // are reversal entries (HL bounce / LH rejection). Filter is on top
-  // of the existing pause + range gates so LiqGrab / VWAP / etc.
-  // can no longer fade a confirmed 1m trend.
-  if (parsed1m.length > 6) {
+  // SKIPPED at the extreme range zone (LONG pos < 0.20, SHORT pos > 0.80)
+  // and on momentum-side band entries — those are the explicit reversal
+  // / breakout zones the user wants to fire, even against the recent
+  // 1m trend. In mid-range the filter still protects against fading
+  // confirmed structure.
+  if (parsed1m.length > 6 && !_atExtreme && !_longMomentum && !_shortMomentum) {
     const PB = 2;
     const ph = [], pl = [];
     for (let i = PB; i < parsed1m.length - PB; i++) {
