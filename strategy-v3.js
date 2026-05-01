@@ -817,17 +817,70 @@ async function analyzeV3(ticker) {
     // the last closed 1m candle alone must not extend in the trade
     // direction. The prior 2-candle requirement (PR #49) was making the
     // bot miss reversal entries that paused for one candle and continued.
+    // Token leverage — 50x for SOL/BNB/XRP, 100x for BTC/ETH.
+    // Used by the tight-range filter (50x only) and to inform the
+    // diagnostics log.
+    const HIGH_LEV_SYMS = new Set(['BTCUSDT', 'ETHUSDT']);
+    const tokenLev      = HIGH_LEV_SYMS.has(symbol) ? 100 : 50;
+
+    // ── Tight-range skip (50x tokens only) ──────────────────────
+    // At 50x, +21% capital = +0.42 % price. If the recent 20×1m range
+    // is < 0.5 % of price, the TP target sits right at the historical
+    // upper extreme of recent action — hard to hit, low EV. Skip the
+    // trade. 100x tokens (BTC/ETH) have a +0.21 % TP target which
+    // remains reachable in tighter ranges, so the filter doesn't apply.
+    if (tokenLev === 50 && k1m.length >= 21) {
+      const w20full = k1m.slice(-21, -1);
+      let hi20 = -Infinity, lo20 = Infinity;
+      for (const k of w20full) {
+        const h = parseFloat(k[2]); if (h > hi20) hi20 = h;
+        const l = parseFloat(k[3]); if (l < lo20) lo20 = l;
+      }
+      const rangePct = (hi20 - lo20) / price;
+      if (rangePct < 0.005) {
+        dlog(`null — 20×1m range ${(rangePct*100).toFixed(2)}% < 0.50% (TP unreachable on 50x)`);
+        return null;
+      }
+    }
+
+    // ── Volume-aware pause gate ─────────────────────────────────
+    // Last closed 1m candle high-volume (≥ 20-bar average): 1-candle
+    // pause is enough — the bar has commitment behind it. Low-volume:
+    // require 2 paused candles since the structure forming on thin
+    // tape is more likely a noise pivot. Skipped at extreme-zone /
+    // momentum band (already covered upstream).
     if (!atExtreme && !longMomentum && !shortMomentum && k1m.length >= 3) {
       const lastH = parseFloat(k1m[k1m.length - 2][2]);
       const lastL = parseFloat(k1m[k1m.length - 2][3]);
       const midH  = parseFloat(k1m[k1m.length - 3][2]);
       const midL  = parseFloat(k1m[k1m.length - 3][3]);
+
+      // Average volume over the last 20 closed 1m bars
+      const volSlice = k1m.slice(-21, -1);
+      const volAvgN = volSlice.length
+        ? volSlice.reduce((s, k) => s + parseFloat(k[5] || 0), 0) / volSlice.length
+        : 0;
+      const lastVol = parseFloat(k1m[k1m.length - 2][5] || 0);
+      const lowVolume = volAvgN > 0 && lastVol < volAvgN;
+
       if (side === 'LONG') {
-        const paused = lastH <= midH && lastL <= midL;
-        if (!paused) return null;
+        const paused1 = lastH <= midH && lastL <= midL;
+        if (!paused1) { dlog('null — last 1m extending up (no pause)'); return null; }
+        if (lowVolume && k1m.length >= 4) {
+          const oldH = parseFloat(k1m[k1m.length - 4][2]);
+          const oldL = parseFloat(k1m[k1m.length - 4][3]);
+          const paused2 = midH <= oldH && midL <= oldL;
+          if (!paused2) { dlog(`null — low-volume HL (vol ${lastVol.toFixed(0)} < avg ${volAvgN.toFixed(0)}) needs 2 paused candles`); return null; }
+        }
       } else {
-        const paused = lastL >= midL && lastH >= midH;
-        if (!paused) return null;
+        const paused1 = lastL >= midL && lastH >= midH;
+        if (!paused1) { dlog('null — last 1m extending down (no pause)'); return null; }
+        if (lowVolume && k1m.length >= 4) {
+          const oldH = parseFloat(k1m[k1m.length - 4][2]);
+          const oldL = parseFloat(k1m[k1m.length - 4][3]);
+          const paused2 = midL >= oldL && midH >= oldH;
+          if (!paused2) { dlog(`null — low-volume LH (vol ${lastVol.toFixed(0)} < avg ${volAvgN.toFixed(0)}) needs 2 paused candles`); return null; }
+        }
       }
     }
 
