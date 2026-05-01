@@ -1262,9 +1262,9 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
   } // end STRATEGY_V2 gate
 
   // Strategy 11: Structure Follow — (15m OR 3m) + 1m
-  // Per user direction: trade only on 15m + 1m HL/LH. 3m fully removed.
-  // LONG : 15m HL/HH  +  1m HH/HL  → LONG
-  // SHORT: 15m LH/LL  +  1m LL/LH  → SHORT
+  // Per user direction: fire when EITHER 15m OR 3m HTF shows structure
+  // in the trade direction AND 1m confirms. Block only when BOTH HTFs
+  // are confirmed-counter (or the only-available HTF is).
   {
     const PIVOT_B = 2;
 
@@ -1284,6 +1284,24 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     const has15mLH_s11 = sHs15.length >= 2 && sHs15[sHs15.length-1] < sHs15[sHs15.length-2];
     const has15mLL_s11 = sLs15.length >= 2 && sLs15[sLs15.length-1] < sLs15[sLs15.length-2];
 
+    // ── 3m pivots (parsed1 = klines3m) — used as alternative HTF ──
+    const sHs3 = [], sLs3 = [];
+    if (parsed1 && parsed1.length > PIVOT_B * 2) {
+      for (let i = PIVOT_B; i < parsed1.length - PIVOT_B; i++) {
+        let isH = true, isL = true;
+        for (let j = 1; j <= PIVOT_B; j++) {
+          if (parsed1[i].high <= parsed1[i-j].high || parsed1[i].high <= parsed1[i+j].high) isH = false;
+          if (parsed1[i].low  >= parsed1[i-j].low  || parsed1[i].low  >= parsed1[i+j].low)  isL = false;
+        }
+        if (isH) sHs3.push(parsed1[i].high);
+        if (isL) sLs3.push(parsed1[i].low);
+      }
+    }
+    const has3mHH = sHs3.length >= 2 && sHs3[sHs3.length-1] > sHs3[sHs3.length-2];
+    const has3mHL = sLs3.length >= 2 && sLs3[sLs3.length-1] > sLs3[sLs3.length-2];
+    const has3mLH = sHs3.length >= 2 && sHs3[sHs3.length-1] < sHs3[sHs3.length-2];
+    const has3mLL = sLs3.length >= 2 && sLs3[sLs3.length-1] < sLs3[sLs3.length-2];
+
     // ── 1m pivots (parsed1m = klines1m) ──────────────────────
     const pH1m = [], pL1m = [];
     if (parsed1m.length > PIVOT_B * 2) {
@@ -1302,10 +1320,17 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     const has1mLL = pL1m.length >= 2 && pL1m[pL1m.length - 1] < pL1m[pL1m.length - 2];
     const has1mLH = pH1m.length >= 2 && pH1m[pH1m.length - 1] < pH1m[pH1m.length - 2];
 
-    // 15m only BLOCKS when CONFIRMED against the 1m direction.
-    // A still-forming 15m no longer prevents a clean 1m HL/LH entry.
-    const htf15CounterLong  = has15mLL_s11 && has15mLH_s11; // confirmed bearish 15m
-    const htf15CounterShort = has15mHH_s11 && has15mHL_s11; // confirmed bullish 15m
+    // EITHER HTF can supply confirmation.
+    const htfBull = has15mHH_s11 || has15mHL_s11 || has3mHH || has3mHL;
+    const htfBear = has15mLL_s11 || has15mLH_s11 || has3mLL || has3mLH;
+
+    // Block only when BOTH HTFs are confirmed-counter.
+    const has15ConfirmedBear = has15mLL_s11 && has15mLH_s11;
+    const has15ConfirmedBull = has15mHH_s11 && has15mHL_s11;
+    const has3ConfirmedBear  = has3mLL && has3mLH;
+    const has3ConfirmedBull  = has3mHH && has3mHL;
+    const htf15CounterLong  = has15ConfirmedBear && has3ConfirmedBear;
+    const htf15CounterShort = has15ConfirmedBull && has3ConfirmedBull;
 
     // ── 1m structure-pause gate ──────────────────────────────
     // Don't fire while the structure is still extending on the latest 1m
@@ -1322,15 +1347,24 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
       _shortPaused = lastC.low  >= prevC.low  && lastC.high >= prevC.high;
     }
 
-    const longOk  = (has1mHH || has1mHL) && !htf15CounterLong  && _longPaused;
-    const shortOk = (has1mLL || has1mLH) && !htf15CounterShort && _shortPaused;
+    const longOk  = (has1mHH || has1mHL) && htfBull && !htf15CounterLong  && _longPaused;
+    const shortOk = (has1mLL || has1mLH) && htfBear && !htf15CounterShort && _shortPaused;
 
-    // SL anchored on the most recent 1m pivot (no 3m fallback).
-    const slLowRef  = pL1m;
-    const slHighRef = pH1m;
+    // SL anchored on 1m pivots first; fall back to 3m if 1m is too thin.
+    const slLowRef  = pL1m.length >= 2 ? pL1m : sLs3;
+    const slHighRef = pH1m.length >= 2 ? pH1m : sHs3;
 
-    const longHtf  = has15mHH_s11 ? '15HH' : has15mHL_s11 ? '15HL' : 's15-mixed';
-    const shortHtf = has15mLH_s11 ? '15LH' : has15mLL_s11 ? '15LL' : 's15-mixed';
+    // HTF tag: prefer 15m when available, else 3m; fall back to 's15-mixed'.
+    const longHtf =
+      has15mHH_s11 ? '15HH' :
+      has15mHL_s11 ? '15HL' :
+      has3mHH      ? '3HH'  :
+      has3mHL      ? '3HL'  : 'mixed';
+    const shortHtf =
+      has15mLH_s11 ? '15LH' :
+      has15mLL_s11 ? '15LL' :
+      has3mLH      ? '3LH'  :
+      has3mLL      ? '3LL'  : 'mixed';
     const longTfTag  = `${longHtf}+1m-${has1mHH ? 'HH' : 'HL'}`;
     const shortTfTag = `${shortHtf}+1m-${has1mLL ? 'LL' : 'LH'}`;
 

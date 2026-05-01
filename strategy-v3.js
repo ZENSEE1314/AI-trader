@@ -468,31 +468,29 @@ function detectMomentumBreakout(klines1m, opts = {}) {
 function detectMSTF(klines15m, klines3m, klines1m, bias) {
   if (!klines1m) return null;
 
-  // Per user direction: trade only on 15m + 1m HL/LH. 3m is ignored.
-  const s15 = detectStructure(klines15m, 3); // 15m structure
-  const s1  = detectStructure(klines1m,  2); // 1m structure (tighter swing)
+  // Per user direction: trade on (15m OR 3m) HTF + 1m. Either HTF can
+  // confirm structure; both being mid-formation simultaneously is the
+  // only case we can't resolve. The COUNTER-block still requires the
+  // ACTING HTF to not be confirmed-against-direction.
+  const s15 = detectStructure(klines15m, 3);
+  const s3  = klines3m ? detectStructure(klines3m, 3) : null;
+  const s1  = detectStructure(klines1m,  2);
 
-  if (!s1 || !s15) return null;
+  if (!s1) return null;
 
-  // 1m must show its own bull/bear bias (one-side or both).
   const ltfBull = s1.hh  || s1.hl;
   const ltfBear = s1.ll  || s1.lh;
 
-  // 15m only BLOCKS the trade when it's CONFIRMED against the 1m
-  // direction (both ll && lh for bear, both hh && hl for bull).
-  // A 15m chart that is still mid-formation (single-side or none) no
-  // longer prevents a clean 1m HL/LH bounce from firing — that was the
-  // dominant blocker on BNB / ETH / SOL where 1m had a textbook
-  // reversal before 15m had time to register a swing.
-  const htf15CounterLong  = s15.ll && s15.lh; // confirmed bearish 15m
-  const htf15CounterShort = s15.hh && s15.hl; // confirmed bullish 15m
+  // Either HTF can supply bullish or bearish confirmation.
+  const htfBull = (s15 && (s15.hh || s15.hl)) || (s3 && (s3.hh || s3.hl));
+  const htfBear = (s15 && (s15.ll || s15.lh)) || (s3 && (s3.ll || s3.lh));
+
+  // Block only when BOTH HTFs are confirmed-counter (or the only-one-
+  // available HTF is confirmed-counter) — otherwise the trade can fire.
+  const htfCounterLong  = (s15 && s15.ll && s15.lh) && (!s3 || (s3.ll && s3.lh));
+  const htfCounterShort = (s15 && s15.hh && s15.hl) && (!s3 || (s3.hh && s3.hl));
 
   // ── 1m structure-pause gate ────────────────────────────────
-  // Wait for the latest closed 1m candle to STOP extending the structure
-  // before firing. LONG fires only when the latest 1m candle does not
-  // make a new HH and not a new HL; SHORT only when no new LL and no
-  // new LH. klines arr is OHLCV (idx 2=high, 3=low). Last index is the
-  // in-progress candle, so use len-2 vs len-3 for the last two closed.
   const len1 = klines1m.length;
   let longPaused = false, shortPaused = false;
   if (len1 >= 3) {
@@ -504,26 +502,31 @@ function detectMSTF(klines15m, klines3m, klines1m, bias) {
     shortPaused = lastL >= prevL && lastH >= prevH;
   }
 
-  if (bias === 'long' && ltfBull && !htf15CounterLong && longPaused) {
-    const htfTag  = s15.hh ? '15HH' : s15.hl ? '15HL' : 's15-mixed';
-    const ltfType = s1.hh  ? 'HH' : 'HL';
+  if (bias === 'long' && ltfBull && htfBull && !htfCounterLong && longPaused) {
+    // Pick whichever HTF is bullish for the label
+    const htfTag = (s15 && (s15.hh || s15.hl))
+      ? `15${s15.hh ? 'HH' : 'HL'}`
+      : `3${s3.hh ? 'HH' : 'HL'}`;
+    const ltfType = s1.hh ? 'HH' : 'HL';
     return {
       setupName: 'MSTF',
       level:     null,
       levelType: `${htfTag}+1m${ltfType}`,
-      htfStruct: { s15 },
+      htfStruct: { s15, s3 },
       ltfStruct: s1,
     };
   }
 
-  if (bias === 'short' && ltfBear && !htf15CounterShort && shortPaused) {
-    const htfTag  = s15.ll ? '15LL' : s15.lh ? '15LH' : 's15-mixed';
-    const ltfType = s1.ll  ? 'LL' : 'LH';
+  if (bias === 'short' && ltfBear && htfBear && !htfCounterShort && shortPaused) {
+    const htfTag = (s15 && (s15.ll || s15.lh))
+      ? `15${s15.ll ? 'LL' : 'LH'}`
+      : `3${s3.ll ? 'LL' : 'LH'}`;
+    const ltfType = s1.ll ? 'LL' : 'LH';
     return {
       setupName: 'MSTF',
       level:     null,
       levelType: `${htfTag}+1m${ltfType}`,
-      htfStruct: { s15 },
+      htfStruct: { s15, s3 },
       ltfStruct: s1,
     };
   }
