@@ -453,6 +453,37 @@ async function runGeneration(population) {
         `emaF=${genome.ema_fast}/S=${genome.ema_slow} RSI=${genome.rsi_period} ` +
         `sl=${genome.atr_sl}×ATR tp=${genome.atr_tp}×ATR lev=${genome.leverage}x`
       );
+
+      // ── Auto-activate when discovery clears the live trade gate ──
+      // Per user direction: optimizer keeps searching until it finds a
+      // strategy with WR >= 50 % AND positive return, then push it to
+      // settings.active_ai_version so the live engines start using it
+      // immediately. Backtest gate (MIN_WIN_RATE = 50 %) lines up with
+      // this threshold so trades start firing the moment we activate.
+      const AUTO_ACTIVATE_WR  = 50;
+      const AUTO_ACTIVATE_RET = 0;
+      if (avgWR >= AUTO_ACTIVATE_WR && avgRet > AUTO_ACTIVATE_RET) {
+        try {
+          const versionName = `auto-v${_generation}-WR${avgWR.toFixed(0)}`;
+          const stored = {
+            version: versionName,
+            ...genome,
+            _wr: Math.round(avgWR * 10) / 10,
+            _tr: Math.round(avgRet * 10) / 10,
+            _activatedAt: new Date().toISOString(),
+            _activatedBy: 'optimizer-auto',
+          };
+          const db = require('./db');
+          await db.query(
+            `INSERT INTO settings (key, value) VALUES ('active_ai_version', $1)
+             ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+            [JSON.stringify(stored)]
+          );
+          bLog.scan(`[Optimizer] ✅ AUTO-ACTIVATED ${versionName} — WR=${avgWR.toFixed(1)}% Ret=${avgRet.toFixed(1)}% — live engines will pick it up next cycle.`);
+        } catch (actErr) {
+          bLog.error(`[Optimizer] auto-activate failed: ${actErr.message}`);
+        }
+      }
     }
 
     await new Promise(r => setTimeout(r, SLEEP_BETWEEN));
