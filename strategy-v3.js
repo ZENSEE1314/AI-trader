@@ -801,6 +801,53 @@ async function analyzeV3(ticker) {
       }
     }
 
+    // ── VWAP-band + most-recent-pivot guard ───────────────────────
+    // User rule: SHORT at VWAP upper band with a recent HL = chasing
+    // against bullish structure. LONG at VWAP lower band with a recent
+    // LH = chasing against bearish structure. Block both.
+    {
+      const todayK = klines15m.filter(k => parseInt(k[0]) >= Date.UTC(
+        new Date().getUTCFullYear(), new Date().getUTCMonth(), new Date().getUTCDate()));
+      const used = todayK.length ? todayK : klines15m.slice(-32);
+      let cumTPV = 0, cumVol = 0;
+      const tps = [];
+      for (const k of used) {
+        const tp = (parseFloat(k[2]) + parseFloat(k[3]) + parseFloat(k[4])) / 3;
+        const v  = parseFloat(k[5]);
+        tps.push(tp);
+        cumTPV += tp * v; cumVol += v;
+      }
+      if (cumVol > 0 && tps.length > 4) {
+        const mid = cumTPV / cumVol;
+        let varSum = 0;
+        for (const t of tps) varSum += (t - mid) * (t - mid);
+        const sd = Math.sqrt(varSum / tps.length);
+        const upper = mid + 2 * sd;
+        const lower = mid - 2 * sd;
+
+        // Find latest 1m swing pivots
+        const PB = 2;
+        let lastHighIdx = -1, lastHigh = null, prevHigh = null;
+        let lastLowIdx  = -1, lastLow  = null, prevLow  = null;
+        for (let i = PB; i < klines1m.length - PB; i++) {
+          let isH = true, isL = true;
+          for (let j = 1; j <= PB; j++) {
+            if (parseFloat(klines1m[i][2]) <= parseFloat(klines1m[i-j][2]) ||
+                parseFloat(klines1m[i][2]) <= parseFloat(klines1m[i+j][2])) isH = false;
+            if (parseFloat(klines1m[i][3]) >= parseFloat(klines1m[i-j][3]) ||
+                parseFloat(klines1m[i][3]) >= parseFloat(klines1m[i+j][3])) isL = false;
+          }
+          if (isH) { prevHigh = lastHigh; lastHigh = parseFloat(klines1m[i][2]); lastHighIdx = i; }
+          if (isL) { prevLow  = lastLow;  lastLow  = parseFloat(klines1m[i][3]); lastLowIdx  = i; }
+        }
+        const latestIsHL = lastLowIdx  > lastHighIdx && prevLow  !== null && lastLow  > prevLow;
+        const latestIsLH = lastHighIdx > lastLowIdx  && prevHigh !== null && lastHigh < prevHigh;
+
+        if (side === 'SHORT' && price >= upper && latestIsHL) return null;
+        if (side === 'LONG'  && price <= lower && latestIsLH) return null;
+      }
+    }
+
     return {
       symbol,
       lastPrice:  price,

@@ -1857,6 +1857,40 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     }
   }
 
+  // ── VWAP-band + most-recent-pivot guard ───────────────────────
+  // User rule: when the latest 1m swing pivot is an HL (last low > prior
+  // low) — meaning bullish reversal context — AND price is sitting at
+  // or above the VWAP upper band, shorting is fighting both structure
+  // and trend. Mirror for LONG: latest pivot is LH (rejection top) AND
+  // price at/below VWAP lower band, longing is dangerous.
+  if (vwapUpper && vwapLower && parsed1m.length > 6) {
+    const PB = 2;
+    let lastHighIdx = -1, lastHighPrice = null, prevHighPrice = null;
+    let lastLowIdx  = -1, lastLowPrice  = null, prevLowPrice  = null;
+    for (let i = PB; i < parsed1m.length - PB; i++) {
+      let isH = true, isL = true;
+      for (let j = 1; j <= PB; j++) {
+        if (parsed1m[i].high <= parsed1m[i-j].high || parsed1m[i].high <= parsed1m[i+j].high) isH = false;
+        if (parsed1m[i].low  >= parsed1m[i-j].low  || parsed1m[i].low  >= parsed1m[i+j].low ) isL = false;
+      }
+      if (isH) { prevHighPrice = lastHighPrice; lastHighPrice = parsed1m[i].high; lastHighIdx = i; }
+      if (isL) { prevLowPrice  = lastLowPrice;  lastLowPrice  = parsed1m[i].low;  lastLowIdx  = i; }
+    }
+    const latestIsLow  = lastLowIdx  > lastHighIdx;
+    const latestIsHigh = lastHighIdx > lastLowIdx;
+    const latestIsHL = latestIsLow  && prevLowPrice  !== null && lastLowPrice  > prevLowPrice;  // recent HL
+    const latestIsLH = latestIsHigh && prevHighPrice !== null && lastHighPrice < prevHighPrice; // recent LH
+
+    if (best.direction === 'SHORT' && price >= vwapUpper && latestIsHL) {
+      bLog.scan(`${symbol}: SHORT ${best.setup} BLOCKED — price at VWAP upper (${vwapUpper.toFixed(4)}) + latest pivot is HL (bullish reversal context)`);
+      return null;
+    }
+    if (best.direction === 'LONG' && price <= vwapLower && latestIsLH) {
+      bLog.scan(`${symbol}: LONG ${best.setup} BLOCKED — price at VWAP lower (${vwapLower.toFixed(4)}) + latest pivot is LH (bearish reversal context)`);
+      return null;
+    }
+  }
+
   return best;
 }
 
