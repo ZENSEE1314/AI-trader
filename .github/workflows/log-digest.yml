@@ -22,19 +22,33 @@ jobs:
       - name: Install Railway CLI
         run: npm i -g @railway/cli@latest
 
+      - name: Show environment (no secrets)
+        run: |
+          railway --version
+          echo "PROJECT_ID set? ${RAILWAY_PROJECT_ID:+yes}"
+          echo "SERVICE_ID set? ${RAILWAY_SERVICE_ID:+yes}"
+          echo "TOKEN set? ${RAILWAY_TOKEN:+yes}"
+          echo "TRACKING_ISSUE=$TRACKING_ISSUE"
+
       - name: Pull last 15 min of logs
         id: logs
         run: |
-          set -e
-          # Pull logs as JSON, last 1500 lines (≈ 15 min on a busy bot)
-          railway logs \
-            --project "$RAILWAY_PROJECT_ID" \
-            --service "$RAILWAY_SERVICE_ID" \
-            --json \
-            > /tmp/raw.jsonl 2>/tmp/err.txt || {
-              echo "::warning::Railway logs fetch failed:"; cat /tmp/err.txt;
-              echo "FAILED=1" >> "$GITHUB_OUTPUT"; exit 0;
-            }
+          set +e
+          # Railway CLI v4 with a project token reads RAILWAY_TOKEN from env.
+          # Project ID is not a flag — pass it via env, and pass service via --service.
+          railway logs --service "$RAILWAY_SERVICE_ID" --json \
+            > /tmp/raw.jsonl 2> /tmp/err.txt
+          rc=$?
+          if [ $rc -ne 0 ]; then
+            echo "::warning::Railway logs fetch failed (rc=$rc):"
+            echo "----- stderr -----"
+            cat /tmp/err.txt | head -40
+            echo "----- last 20 lines of stdout (if any) -----"
+            tail -n 20 /tmp/raw.jsonl 2>/dev/null
+            echo "FAILED=1" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          wc -l /tmp/raw.jsonl
           tail -n 1500 /tmp/raw.jsonl > /tmp/recent.jsonl
 
       - name: Build digest
@@ -107,7 +121,7 @@ jobs:
 
       - name: Post digest to tracking issue
         if: steps.digest.outputs.POST == '1'
-        uses: peter-evans/create-or-update-comment@v4
+        uses: peter-evans/create-or-update-comment@v5
         with:
           issue-number: ${{ env.TRACKING_ISSUE }}
           body: ${{ steps.digest.outputs.BODY }}
