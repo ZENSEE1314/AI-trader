@@ -1295,25 +1295,21 @@ async function main() {
       bLog.error(`Kronos batch scan failed (non-blocking): ${kronosBatchErr.message}`);
     }
 
-    // ── Strategy v3 — MCT PDF: Break&Retest / LiqGrab / VWAP Trend ──
-    // Bias filter: price > OP + VWAP → LONG | price < OP + VWAP → SHORT.
-    // No session filter, no fixed TP — 20% initial SL, trails at +21%.
-    // (v2 is preserved in strategy-v2.js but NOT called here)
-    let smcSignals = [];
+    // ── Strategy v3 — ADVISORY only ──
+    // Per user direction: only TokenAgents fire trades. cycle.js's main()
+    // scanV3 trading path is suppressed — we still RUN scanV3 for
+    // logging/learning so the AI brain and metrics see its output, but
+    // its signals are NOT pushed into the execution path.
     try {
       const rawV3 = await scanV3(msg => bLog.scan(msg));
-      smcSignals = (rawV3 || []).map(s => ({
-        ...s,
-        strategyWinRate: s.score >= 12 ? 70 : 60,
-      }));
-      if (smcSignals.length > 0) {
-        bLog.scan(`v3 Engine: ${smcSignals.length} signal(s) — ${smcSignals.map(s => `${s.symbol} ${s.direction} [${s.setupName}] score=${s.score}`).join(', ')}`);
+      if ((rawV3 || []).length > 0) {
+        bLog.scan(`v3 Engine (advisory): ${rawV3.length} signal(s) SUPPRESSED — token agents only — ${rawV3.map(s => `${s.symbol} ${s.direction} [${s.setupName}]`).join(', ')}`);
       }
     } catch (v3Err) {
-      bLog.error(`v3 Engine scan failed (non-blocking): ${v3Err.message}`);
+      bLog.error(`v3 Engine advisory scan failed: ${v3Err.message}`);
     }
 
-    const signals = [...smcSignals];
+    const signals = []; // gated to TokenAgents in agent-coordinator.js
 
     if (!signals.length) {
       log('No AI signals found this cycle — agents still learning.');

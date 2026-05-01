@@ -785,28 +785,26 @@ class AgentCoordinator extends BaseAgent {
         if (i + BATCH_SIZE < tokenEntries.length) await new Promise(r => setTimeout(r, 200));
       }
 
-      // Also run ChartAgent for any tokens that don't have dedicated agents
+      // ── Signal sources are GATED to TokenAgents only ─────────────
+      // Per user direction: only the 5 token agents fire trades. The
+      // older scanners (ChartAgent / scanSMC / scanV3) still RUN below
+      // for diagnostics, learning, and to feed the AI brain — but their
+      // output is no longer pushed into the execution `signals` array.
+
+      // Run ChartAgent for telemetry only — its signals are NOT executed
       if (!this.chartAgent.paused) {
-        this.currentTask = { description: 'Step 3/7: ChartAgent checking remaining tokens', startedAt: Date.now() };
+        this.currentTask = { description: 'Step 3/7: ChartAgent (advisory only)', startedAt: Date.now() };
         try {
           const monitoredSymbols = [...this.tokenAgents.keys()];
-          // Ensure ChartAgent is alive before scanning
           if (!this.chartAgent._survival.isAlive) {
             this.chartAgent._survival.isAlive = true;
             this.chartAgent._survival.health = 10;
-            bLog.trade('ChartAgent was dead — revived for scanning');
+            bLog.trade('ChartAgent was dead — revived for advisory scanning');
           }
           const chartOutput = await this.chartAgent.run({ topNCoins, kronosPredictions, monitoredSymbols });
-          bLog.scan(`ChartAgent returned: ${chartOutput ? `${chartOutput.signals?.length || 0} signals` : 'null (dead or error)'}`);
-          if (chartOutput?.signals) {
-            for (const s of chartOutput.signals) {
-              if (!signals.find(existing => existing.symbol === s.symbol)) {
-                signals.push(s);
-              }
-            }
-          }
+          bLog.scan(`ChartAgent (advisory): ${chartOutput ? `${chartOutput.signals?.length || 0} signals SUPPRESSED — token agents only` : 'null'}`);
         } catch (chartErr) {
-          bLog.error(`ChartAgent scan failed: ${chartErr.message}`);
+          bLog.error(`ChartAgent advisory scan failed: ${chartErr.message}`);
         }
       }
 
@@ -817,44 +815,26 @@ class AgentCoordinator extends BaseAgent {
         ta.currentTask = { description: `Watching ${ta.symbol}`, startedAt: Date.now() };
       }
 
-      // ── v2.0 strategy engine: liquidity-sweep-engine scanSMC ──
-      // Restored to v2.0-stable strategies (LiqSweep, SLHunt, MomScalp, BRR-Fib).
-      // 24/7 mode — session windows removed. Hard 4-token whitelist applied inside scanSMC.
+      // ── v2.0 SMC engine — advisory only ──
       try {
         const { scanSMC } = require('../liquidity-sweep-engine');
         const smcSignals = await scanSMC(bLog.scan.bind(bLog), { kronosPredictions });
-        for (const s of (smcSignals || [])) {
-          if (!signals.find(existing => existing.symbol === s.symbol)) {
-            signals.push(s);
-          }
-        }
         if ((smcSignals || []).length > 0) {
-          bLog.scan(`[Coordinator] v2.0 SMC engine: ${smcSignals.length} signal(s)`);
+          bLog.scan(`[Coordinator] v2.0 SMC engine (advisory): ${smcSignals.length} signal(s) SUPPRESSED — token agents only`);
         }
       } catch (engineErr) {
-        bLog.error(`[Coordinator] SMC engine scan failed (non-blocking): ${engineErr.message}`);
+        bLog.error(`[Coordinator] SMC advisory scan failed: ${engineErr.message}`);
       }
 
-      // ── v3 engine: strategy-v3 scanV3 (incl. Setup 5 MomentumBreakout) ──
-      // Runs in parallel with scanSMC.  Setup 5 catches vertical impulse
-      // breakouts the structure engines miss (waterfall dumps).  Each
-      // symbol's best score wins via the dedup further down.
+      // ── v3 engine — advisory only ──
       try {
         const { scanV3 } = require('../strategy-v3');
         const v3Signals = await scanV3(bLog.scan.bind(bLog));
-        for (const s of (v3Signals || [])) {
-          if (!signals.find(existing => existing.symbol === s.symbol)) {
-            // Set strategyWinRate so backtest-gate's trusted-WR path passes
-            // for unknown strategies (cycle.js does the same on its v3 call).
-            s.strategyWinRate = s.score >= 12 ? 70 : 60;
-            signals.push(s);
-          }
-        }
         if ((v3Signals || []).length > 0) {
-          bLog.scan(`[Coordinator] v3 engine: ${v3Signals.length} signal(s) — ${v3Signals.map(s => `${s.symbol} ${s.direction} [${s.setupName}]`).join(', ')}`);
+          bLog.scan(`[Coordinator] v3 engine (advisory): ${v3Signals.length} signal(s) SUPPRESSED — token agents only — ${v3Signals.map(s => `${s.symbol} ${s.direction} [${s.setupName}]`).join(', ')}`);
         }
       } catch (v3Err) {
-        bLog.error(`[Coordinator] v3 engine scan failed (non-blocking): ${v3Err.message}`);
+        bLog.error(`[Coordinator] v3 advisory scan failed: ${v3Err.message}`);
       }
 
       // Filter out globally banned tokens before further processing
