@@ -821,9 +821,9 @@ async function analyzeV3(ticker) {
     const shortMomentum = vwapLower && side === 'SHORT' && price <= vwapLower;
 
     // ── Range-position + pause gates ────────────────────────────────
-    // Range pos in last 10×1m (0 = HL, 1 = HH).
-    //   LONG  blocked if pos > 0.40 (chase up)   — UNLESS longMomentum
-    //   SHORT blocked if pos < 0.60 (chase down) — UNLESS shortMomentum
+    // Range pos in last 10×1m (0 = swing low, 1 = swing high).
+    //   LONG  blocked if pos > 0.25 (must be near the bottom)  — UNLESS longMomentum
+    //   SHORT blocked if pos < 0.75 (must be near the top)     — UNLESS shortMomentum
     let rPos = null;
     if (k1m.length >= 11) {
       const w20 = k1m.slice(-11, -1);
@@ -837,8 +837,8 @@ async function analyzeV3(ticker) {
       const sz = hi - lo;
       if (sz > 0) {
         rPos = (price - lo) / sz;
-        if (!longMomentum  && side === 'LONG'  && rPos > 0.40) return null;
-        if (!shortMomentum && side === 'SHORT' && rPos < 0.60) return null;
+        if (!longMomentum  && side === 'LONG'  && rPos > 0.25) { dlog(`null — LONG rPos ${(rPos*100).toFixed(0)}% > 25% (not near bottom)`); return null; }
+        if (!shortMomentum && side === 'SHORT' && rPos < 0.75) { dlog(`null — SHORT rPos ${(rPos*100).toFixed(0)}% < 75% (not near top)`); return null; }
       }
     }
 
