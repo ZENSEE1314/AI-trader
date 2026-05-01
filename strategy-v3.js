@@ -715,22 +715,12 @@ async function analyzeV3(ticker) {
     });
     if (score < 9) return null;  // minimum confluence
 
-    // ── Counter-trend filter — block setups that fight the 1m trend ──
-    // 1m structure: hh+hl  → confirmed bullish    → no SHORT
-    //               ll+lh  → confirmed bearish    → no LONG
-    // mixed or single-side (HL only, LH only, etc.) is ALLOWED — those
-    // are reversal points (HL bounce / LH rejection).
-    // Catches LiqGrab / VWAPTrend / BreakRetest / MomentumBreakout
-    // entries that try to fade a clear trend and usually lose.
-    {
-      const s1 = detectStructure(klines1m, 2);
-      if (s1) {
-        const confirmedBull = s1.hh && s1.hl;
-        const confirmedBear = s1.ll && s1.lh;
-        if (bias === 'short' && confirmedBull) return null;
-        if (bias === 'long'  && confirmedBear) return null;
-      }
-    }
+    // Counter-trend filter REMOVED per user direction: buy on the LL
+    // candle / sell on the HH candle — those are reversal entries.
+    // Earlier the filter blocked LONG on 1m ll+lh (confirmed bearish);
+    // now allowed because user wants to catch the bottom. The HTF
+    // (15m OR 3m) directional check + VWAP-band block + range-pos
+    // with momentum exception still protect against truly bad setups.
 
     // ── Entry & SL ────────────────────────────────────────────
     const side = bias === 'long' ? 'LONG' : 'SHORT';
@@ -819,21 +809,21 @@ async function analyzeV3(ticker) {
 
     // Pause gate also skipped on momentum-side band entries — the band
     // breach is the momentum confirmation, no need for a 2-candle pause.
-    if (!atExtreme && !longMomentum && !shortMomentum && k1m.length >= 4) {
+    // Per latest user direction, this is now a SINGLE-candle pause:
+    // the last closed 1m candle alone must not extend in the trade
+    // direction. The prior 2-candle requirement (PR #49) was making the
+    // bot miss reversal entries that paused for one candle and continued.
+    if (!atExtreme && !longMomentum && !shortMomentum && k1m.length >= 3) {
       const lastH = parseFloat(k1m[k1m.length - 2][2]);
       const lastL = parseFloat(k1m[k1m.length - 2][3]);
       const midH  = parseFloat(k1m[k1m.length - 3][2]);
       const midL  = parseFloat(k1m[k1m.length - 3][3]);
-      const oldH  = parseFloat(k1m[k1m.length - 4][2]);
-      const oldL  = parseFloat(k1m[k1m.length - 4][3]);
       if (side === 'LONG') {
-        const pausedA = lastH <= midH && lastL <= midL;
-        const pausedB = midH  <= oldH && midL  <= oldL;
-        if (!(pausedA && pausedB)) return null;
+        const paused = lastH <= midH && lastL <= midL;
+        if (!paused) return null;
       } else {
-        const pausedA = lastL >= midL && lastH >= midH;
-        const pausedB = midL  >= oldL && midH  >= oldH;
-        if (!(pausedA && pausedB)) return null;
+        const paused = lastL >= midL && lastH >= midH;
+        if (!paused) return null;
       }
     }
 
