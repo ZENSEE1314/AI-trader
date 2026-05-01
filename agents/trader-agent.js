@@ -124,26 +124,34 @@ class TraderAgent extends BaseAgent {
           continue;
         }
 
-        // Backtest gate — block strategies with low WR on this token
-        try {
-          const backtestGate = require('../backtest-gate');
-          const gateSym = pick.symbol || pick.sym;
-          const gateStrategy = pick.setupName || pick.setup || 'ALL';
-          // Pass the AI signal's own backtested WR so the gate can trust it directly
-          const signalWr = pick.strategyWinRate || 0;
-          const gatePasses = await backtestGate.passesGate(gateSym, gateStrategy, undefined, signalWr);
-          if (!gatePasses) {
-            this.logTrade(`BACKTEST GATE BLOCKED: ${gateSym} ${gateStrategy} — WR below ${backtestGate.MIN_WIN_RATE}%`);
-            this.tradesSkipped++;
-            this.addActivity('skip', `${gateSym} backtest WR too low — skipped`);
-            continue;
-          }
-          this.logTrade(`BACKTEST GATE PASSED: ${gateSym} ${gateStrategy}`);
-        } catch (gateErr) {
-          this.logTrade(`Backtest gate error: ${gateErr.message} — blocking for safety`);
-          this.tradesSkipped++;
-          continue;
-        }
+        // Backtest gate DISABLED per user direction (PR #78 disabled it in
+        // cycle.js but TraderAgent had its own copy that PR missed). The
+        // gate was blocking every TokenAgent signal because no current
+        // strategy has ≥50% historical WR. User trades on live structure
+        // rules instead. Auto-activate (PR #77) still uses the gate's
+        // 50% threshold to swap in better strategies as the optimizer
+        // finds them.
+        //
+        // To re-enable, uncomment the block below.
+        //
+        // try {
+        //   const backtestGate = require('../backtest-gate');
+        //   const gateSym = pick.symbol || pick.sym;
+        //   const gateStrategy = pick.setupName || pick.setup || 'ALL';
+        //   const signalWr = pick.strategyWinRate || 0;
+        //   const gatePasses = await backtestGate.passesGate(gateSym, gateStrategy, undefined, signalWr);
+        //   if (!gatePasses) {
+        //     this.logTrade(`BACKTEST GATE BLOCKED: ${gateSym} ${gateStrategy} — WR below ${backtestGate.MIN_WIN_RATE}%`);
+        //     this.tradesSkipped++;
+        //     this.addActivity('skip', `${gateSym} backtest WR too low — skipped`);
+        //     continue;
+        //   }
+        //   this.logTrade(`BACKTEST GATE PASSED: ${gateSym} ${gateStrategy}`);
+        // } catch (gateErr) {
+        //   this.logTrade(`Backtest gate error: ${gateErr.message} — blocking for safety`);
+        //   this.tradesSkipped++;
+        //   continue;
+        // }
 
         // Execute for all registered users
         this.currentTask = { description: `Trading ${pick.symbol} ${pick.direction}`, startedAt: Date.now() };
