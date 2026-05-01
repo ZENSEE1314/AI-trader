@@ -364,7 +364,12 @@ function detectStructure(klines, swingLen = 3) {
   const hl = lLen >= 2 && swingLows[lLen - 1]  > swingLows[lLen - 2];
   const ll = lLen >= 2 && swingLows[lLen - 1]  < swingLows[lLen - 2];
 
-  return { hh, hl, lh, ll };
+  // Expose the latest swing prices so callers can apply distance checks
+  // (e.g. "don't chase LONG more than 0.3% above the latest HL pivot").
+  const lastSwingHigh = hLen >= 1 ? swingHighs[hLen - 1] : null;
+  const lastSwingLow  = lLen >= 1 ? swingLows[lLen - 1]  : null;
+
+  return { hh, hl, lh, ll, lastSwingHigh, lastSwingLow };
 }
 
 // ── Setup 5: Momentum Breakout (waterfall / vertical impulse) ─────
@@ -839,6 +844,36 @@ async function analyzeV3(ticker) {
         rPos = (price - lo) / sz;
         if (!longMomentum  && side === 'LONG'  && rPos > 0.25) { dlog(`null — LONG rPos ${(rPos*100).toFixed(0)}% > 25% (not near bottom)`); return null; }
         if (!shortMomentum && side === 'SHORT' && rPos < 0.75) { dlog(`null — SHORT rPos ${(rPos*100).toFixed(0)}% < 75% (not near top)`); return null; }
+      }
+    }
+
+    // ── Chase distance gate ─────────────────────────────────────
+    // User direction: "HL on 1m is a sure-win — why buy 6 candles away?"
+    // The pivot-confirmation lag (swingLen=2) plus pause/volume gates can
+    // accumulate 4-5 candles between the actual swing-low pivot and entry.
+    // By that time price is "far away" from the HL and the trade is
+    // chasing. Cap the distance from the latest 1m swing pivot:
+    //   LONG  → price must be within +0.3% of the latest 1m swing low
+    //   SHORT → price must be within -0.3% of the latest 1m swing high
+    // Skipped on momentum-side band entries (already validated by band).
+    {
+      const s1ent = klines1m && klines1m.length ? detectStructure(klines1m, 2) : null;
+      const MAX_CHASE_PCT = 0.003; // 0.3 %
+      if (s1ent) {
+        if (!longMomentum && side === 'LONG' && s1ent.lastSwingLow) {
+          const dist = (price - s1ent.lastSwingLow) / s1ent.lastSwingLow;
+          if (dist > MAX_CHASE_PCT) {
+            dlog(`null — LONG chasing ${(dist*100).toFixed(2)}% above 1m HL pivot $${s1ent.lastSwingLow.toFixed(4)} (max 0.30%)`);
+            return null;
+          }
+        }
+        if (!shortMomentum && side === 'SHORT' && s1ent.lastSwingHigh) {
+          const dist = (s1ent.lastSwingHigh - price) / s1ent.lastSwingHigh;
+          if (dist > MAX_CHASE_PCT) {
+            dlog(`null — SHORT chasing ${(dist*100).toFixed(2)}% below 1m LH pivot $${s1ent.lastSwingHigh.toFixed(4)} (max 0.30%)`);
+            return null;
+          }
+        }
       }
     }
 
