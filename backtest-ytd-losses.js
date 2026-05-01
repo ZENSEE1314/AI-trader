@@ -20,12 +20,46 @@ const fetch = require('node-fetch');
 const REQUEST_TIMEOUT = 15_000;
 
 async function fetchKlines(symbol, interval, startMs, endMs, limit = 100) {
-  const url = `https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=${interval}&startTime=${startMs}&endTime=${endMs}&limit=${limit}`;
-  try {
-    const r = await fetch(url, { timeout: REQUEST_TIMEOUT });
-    if (!r.ok) return null;
-    return r.json();
-  } catch (_) { return null; }
+  // Try Binance first (most data); fall back to Bybit which isn't IP-blocked
+  // from GH Actions runners. Both return klines with the same shape:
+  //   [openTime, open, high, low, close, volume, ...]
+  const tries = [
+    {
+      name: 'binance',
+      url:  `https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=${interval}&startTime=${startMs}&endTime=${endMs}&limit=${limit}`,
+      parse: j => Array.isArray(j) ? j : null,
+    },
+    {
+      // Bybit v5 — interval string differs slightly: '1', '15' instead of '1m', '15m'.
+      name: 'bybit',
+      url:  `https://api.bybit.com/v5/market/kline?category=linear&symbol=${symbol}&interval=${interval.replace('m','')}&start=${startMs}&end=${endMs}&limit=${limit}`,
+      parse: j => {
+        if (!j || j.retCode !== 0 || !j.result?.list) return null;
+        // Bybit returns NEWEST first; reverse to match Binance ordering.
+        return j.result.list.slice().reverse().map(k => [
+          parseInt(k[0]),    // openTime
+          k[1], k[2], k[3], k[4], k[5],   // o h l c v
+        ]);
+      },
+    },
+  ];
+  let lastErr = '';
+  for (const t of tries) {
+    try {
+      const r = await fetch(t.url, { timeout: REQUEST_TIMEOUT });
+      if (!r.ok) { lastErr = `${t.name} HTTP ${r.status}`; continue; }
+      const j = await r.json();
+      const arr = t.parse(j);
+      if (arr && arr.length) return arr;
+      lastErr = `${t.name} empty`;
+    } catch (e) {
+      lastErr = `${t.name} ${e.message}`;
+    }
+  }
+  if (process.env.BACKTEST_VERBOSE) {
+    console.error(`fetchKlines ${symbol} ${interval} (${startMs}→${endMs}): ${lastErr}`);
+  }
+  return null;
 }
 
 // ─── Pivot detection (matches liquidity-sweep-engine inline path) ───

@@ -45,6 +45,7 @@ jobs:
           # into the local process. backtest-ytd-losses.js reads them
           # via require('./db') -> process.env.DATABASE_URL.
           railway run --service "$RAILWAY_SERVICE_ID" \
+            -- env BACKTEST_VERBOSE=1 \
             node backtest-ytd-losses.js > /tmp/out.txt 2> /tmp/err.txt
           rc=$?
           {
@@ -60,6 +61,15 @@ jobs:
             echo '```'
             tail -n 400 /tmp/out.txt
             echo '```'
+            if [ -s /tmp/err.txt ]; then
+              echo "<details><summary>stderr (debug)</summary>"
+              echo ""
+              echo '```'
+              tail -n 80 /tmp/err.txt
+              echo '```'
+              echo ""
+              echo "</details>"
+            fi
           } > /tmp/comment.md
           {
             echo "BODY<<EOF"
