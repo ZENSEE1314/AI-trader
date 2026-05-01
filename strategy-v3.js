@@ -846,31 +846,33 @@ async function analyzeV3(ticker) {
     }
 
     // ── Chase distance gate ─────────────────────────────────────
-    // User direction: "HL on 1m is a sure-win — why buy 6 candles away?"
-    // The pivot-confirmation lag (swingLen=2) plus pause/volume gates can
-    // accumulate 4-5 candles between the actual swing-low pivot and entry.
-    // By that time price is "far away" from the HL and the trade is
-    // chasing. Cap the distance from the latest 1m swing pivot:
-    //   LONG  → price must be within +0.3% of the latest 1m swing low
-    //   SHORT → price must be within -0.3% of the latest 1m swing high
+    // User direction: "BTC long at 5:30 so far from LL why?" — the
+    // detectStructure.lastSwingLow can be a shallow micro-HL above the
+    // actual reversal pivot, letting LONG fire 0.4% above the real LL.
+    // Reference the LOWEST 1m low in the last 30 closed bars instead —
+    // that pins entries to the actual bottom, not the latest squiggle.
+    //   LONG  → price must be within +0.3% of lowest low in last 30×1m
+    //   SHORT → price must be within -0.3% of highest high in last 30×1m
     // Skipped on momentum-side band entries (already validated by band).
-    {
-      const s1ent = klines1m && klines1m.length ? detectStructure(klines1m, 2) : null;
+    if (k1m.length >= 31 && !longMomentum && !shortMomentum) {
+      const w30 = k1m.slice(-31, -1);
+      let lo30 = Infinity, hi30 = -Infinity;
+      for (const k of w30) {
+        const h = parseFloat(k[2]); if (h > hi30) hi30 = h;
+        const l = parseFloat(k[3]); if (l < lo30) lo30 = l;
+      }
       const MAX_CHASE_PCT = 0.003; // 0.3 %
-      if (s1ent) {
-        if (!longMomentum && side === 'LONG' && s1ent.lastSwingLow) {
-          const dist = (price - s1ent.lastSwingLow) / s1ent.lastSwingLow;
-          if (dist > MAX_CHASE_PCT) {
-            dlog(`null — LONG chasing ${(dist*100).toFixed(2)}% above 1m HL pivot $${s1ent.lastSwingLow.toFixed(4)} (max 0.30%)`);
-            return null;
-          }
+      if (side === 'LONG') {
+        const dist = (price - lo30) / lo30;
+        if (dist > MAX_CHASE_PCT) {
+          dlog(`null — LONG chasing ${(dist*100).toFixed(2)}% above 30m low $${lo30.toFixed(4)} (max 0.30%)`);
+          return null;
         }
-        if (!shortMomentum && side === 'SHORT' && s1ent.lastSwingHigh) {
-          const dist = (s1ent.lastSwingHigh - price) / s1ent.lastSwingHigh;
-          if (dist > MAX_CHASE_PCT) {
-            dlog(`null — SHORT chasing ${(dist*100).toFixed(2)}% below 1m LH pivot $${s1ent.lastSwingHigh.toFixed(4)} (max 0.30%)`);
-            return null;
-          }
+      } else {
+        const dist = (hi30 - price) / hi30;
+        if (dist > MAX_CHASE_PCT) {
+          dlog(`null — SHORT chasing ${(dist*100).toFixed(2)}% below 30m high $${hi30.toFixed(4)} (max 0.30%)`);
+          return null;
         }
       }
     }
