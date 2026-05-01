@@ -110,7 +110,7 @@ function replayGates(direction, price, klines1m, klines15m) {
   else verdict.passed.push('counter-trend-ok');
 
   // 3. Range position (PR #51)
-  const w20 = klines1m.slice(-21, -1);
+  const w20 = klines1m.slice(-11, -1); // 10-bar window — recent context
   let hi = -Infinity, lo = Infinity;
   for (const k of w20) {
     const h = parseFloat(k[2]);
