@@ -7,16 +7,8 @@
 const { USDMClient } = require('binance');
 const fetch = require('node-fetch');
 const aiLearner = require('./ai-learner');
-const { detectSwings, SWING_LENGTHS, scanSMC } = require('./liquidity-sweep-engine');
-// Strategy v2: swing-point + VWAP-band + 30% trailing SL (kept, not active)
-const { scanV2, calcTrailingSL: calcV2TrailingSL } = require('./strategy-v2');
-// Strategy v3: MCT PDF — Break&Retest / LiqGrab / VWAP Trend + 20% trailing SL (ACTIVE)
+// Strategy v3: MCT PDF — Break&Retest / LiqGrab / VWAP Trend + 20% trailing SL (sole strategy)
 const { scanV3, calcTrailingSLV3 } = require('./strategy-v3');
-// NOTE: Triple MA / Spike-HL / T-Junction / MA Stack / AI Scanner exit logic
-// is still referenced below for open trades that may have been entered under
-// those strategies. Do not remove these imports.
-const { shouldExitScenarioA, calcTripleMABTrailStep } = require('./triple-ma-strategy');
-const { calcSpikeHLTrailSl } = require('./spike-hl-strategy');
 const { getSentimentScores } = require('./sentiment-scraper');
 const { log: bLog } = require('./bot-logger');
 const { getBinanceRequestOptions, getFetchOptions } = require('./proxy-agent');
@@ -326,6 +318,51 @@ function calcEMA(prices, period) {
 
 // ── TRADE STATE ──────────────────────────────────────────────
 const tradeState = new Map();
+
+// ── Swing detection (Zeiierman-style pivots) ──
+const SWING_LENGTHS = { '15m': 10, '3m': 10, '1m': 5 };
+function detectSwings(klines, len) {
+  const highs = klines.map(k => parseFloat(k[2]));
+  const lows  = klines.map(k => parseFloat(k[3]));
+  const swings = [];
+  let lastType = null;
+  for (let i = len; i < klines.length - len; i++) {
+    let isHigh = true;
+    for (let j = -len; j <= len; j++) {
+      if (j === 0) continue;
+      if (highs[i] <= highs[i + j]) { isHigh = false; break; }
+    }
+    let isLow = true;
+    for (let j = -len; j <= len; j++) {
+      if (j === 0) continue;
+      if (lows[i] >= lows[i + j]) { isLow = false; break; }
+    }
+    if (isHigh && isLow) {
+      const highDist = highs[i] - Math.max(highs[i - 1], highs[i + 1]);
+      const lowDist  = Math.min(lows[i - 1], lows[i + 1]) - lows[i];
+      if (highDist > lowDist) isLow = false; else isHigh = false;
+    }
+    if (isHigh) {
+      if (lastType === 'high') {
+        const prev = swings[swings.length - 1];
+        if (highs[i] > prev.price) swings[swings.length - 1] = { type: 'high', index: i, price: highs[i], candle: klines[i] };
+      } else {
+        swings.push({ type: 'high', index: i, price: highs[i], candle: klines[i] });
+        lastType = 'high';
+      }
+    }
+    if (isLow) {
+      if (lastType === 'low') {
+        const prev = swings[swings.length - 1];
+        if (lows[i] < prev.price) swings[swings.length - 1] = { type: 'low', index: i, price: lows[i], candle: klines[i] };
+      } else {
+        swings.push({ type: 'low', index: i, price: lows[i], candle: klines[i] });
+        lastType = 'low';
+      }
+    }
+  }
+  return swings;
+}
 
 // ── 15m EXIT CHECK (structure break using Zeiierman swings) ──
 function shouldExit15m(klines15, entryPrice, direction) {
@@ -1023,15 +1060,12 @@ async function checkTrailingStop(client) {
         } catch (e) { bLog.error(`Spike TP check failed for ${sym}: ${e.message}`); }
       }
 
-      // ── Trailing SL step check ──
-      // v3: MCT PDF 20%/21% trailing | v2: swing-point 30%/31% | others: capital-tier
+      // ── Trailing SL step check (v3 ladder — sole strategy) ──
       let trailResult;
-      if (state.strategyVersion === 'v3' || state.strategyVersion === 'v2') {
-        const trailFn  = state.strategyVersion === 'v3' ? calcTrailingSLV3 : calcV2TrailingSL;
+      {
         const side     = state.isLong ? 'LONG' : 'SHORT';
         const lev      = state.leverage || 20;
-        const newSlPrice = trailFn(state.entry, cur, side, lev);
-        // Ratchet: only update SL if it improves (never moves against trade)
+        const newSlPrice = calcTrailingSLV3(state.entry, cur, side, lev);
         const betterSl = state.isLong
           ? newSlPrice > (state.trailingSlPrice || 0)
           : newSlPrice < (state.trailingSlPrice || Infinity);
@@ -1044,12 +1078,6 @@ async function checkTrailingStop(client) {
         } else {
           trailResult = null;
         }
-      } else {
-        trailResult = calculateTrailingStep(
-          state.entry, cur, state.isLong,
-          state.trailingSlLastStep || 0,
-          state.leverage || 20
-        );
       }
 
       if (trailResult) {
@@ -2450,87 +2478,10 @@ async function syncTradeStatus() {
 
               bLog.trade(`Bitunix trailing: ${trade.symbol} entry=$${entryPrice} cur=$${curPrice} pricePct=${(profitPct*100).toFixed(3)}% capitalPct=${(capitalPct*100).toFixed(2)}% lev=${tradeLev}x lastStep=${(lastStep*100).toFixed(1)}%`);
 
-              // ── Triple MA Scenario A: exit when MA20 converges to entry ──
-              // LONG: MA20 drops to entry. SHORT: MA20 rises to entry.
-              const mktStructure = trade.market_structure || '';
-              if (mktStructure.startsWith('TRIPLE_MA_A')) {
-                try {
-                  const ma20Exit = await shouldExitScenarioA(trade.symbol, entryPrice, trade.direction);
-                  if (ma20Exit) {
-                    const dirLabel = trade.direction || 'LONG';
-                    bLog.trade(`Triple MA Scenario A EXIT: ${trade.symbol} ${dirLabel} MA20 touched entry $${entryPrice}`);
-                    const closeSide = trade.direction === 'SHORT' ? 'BUY' : 'SELL';
-                    await userClient.closePosition({ symbol: trade.symbol, positionId: pos?.positionId });
-                    await db.query(
-                      `UPDATE trades SET status = 'CLOSED', exit_reason = 'triple_ma_a_ma20_touch', closed_at = NOW(), exit_price = $1 WHERE id = $2`,
-                      [curPrice, trade.id]
-                    );
-                    const verb = trade.direction === 'SHORT' ? 'rose' : 'dropped';
-                    await notify(`📊 *Triple MA A Exit*\n${trade.symbol} ${dirLabel} closed — MA20 ${verb} to entry $${entryPrice.toFixed(4)}\nExit $${curPrice.toFixed(4)}`);
-                    continue;
-                  }
-                } catch (ma20Err) {
-                  bLog.error(`Triple MA A exit check failed for ${trade.symbol}: ${ma20Err.message}`);
-                }
-              }
-
-              // ── Triple MA Scenario B: custom every-5%-gain trailing SL ──
-              if (mktStructure.startsWith('TRIPLE_MA_B')) {
-                const bTrail = calcTripleMABTrailStep(entryPrice, curPrice, lastStep);
-                if (bTrail) {
-                  const bPrec = inferPricePrec(trade.sl_price);
-                  bLog.trade(`Triple MA Scenario B: ${trade.symbol} +${(profitPct*100).toFixed(1)}% gain — moving SL to $${bTrail.newSlPrice.toFixed(bPrec)} (+${(bTrail.newLastStep*100).toFixed(1)}%)`);
-                  let slUpdatedB = false;
-                  try {
-                    slUpdatedB = await updateStopLoss(userClient, trade.symbol, bTrail.newSlPrice, null, 'bitunix', bPrec, undefined);
-                  } catch (e) {
-                    bLog.error(`Triple MA B trailing SL failed: ${e.message}`);
-                  }
-                  if (slUpdatedB) {
-                    await db.query(
-                      `UPDATE trades SET trailing_sl_price = $1, trailing_sl_last_step = $2 WHERE id = $3`,
-                      [bTrail.newSlPrice, bTrail.newLastStep, trade.id]
-                    );
-                    bLog.trade(`✓ Triple MA B trailing SL: ${trade.symbol} SL=$${bTrail.newSlPrice.toFixed(4)} (trigger was +${(bTrail.trigger*100).toFixed(0)}%)`);
-                    await notify(`📈 *Triple MA B Trailing SL*\n${trade.symbol} LONG\nPrice gained +${(profitPct*100).toFixed(1)}%\nSL locked at +${(bTrail.newLastStep*100).toFixed(1)}% ($${bTrail.newSlPrice.toFixed(4)})`);
-                  }
-                }
-                continue; // skip normal trailing SL for Scenario B
-              }
-
-              // ── Spike-HL: trail SL to each rising/falling 1m candle low/high ──
-              // SL starts just below the spike wick. After each closed candle:
-              //   LONG: if new candle is bullish and its low > entry & > current SL → move SL up
-              //   SHORT: if new candle is bearish and its high < entry & < current SL → move SL down
-              if (mktStructure.startsWith('SPIKE_HL')) {
-                try {
-                  const spikeTrail = await calcSpikeHLTrailSl(trade.symbol, trade.direction, entryPrice, parseFloat(trade.trailing_sl_price) || parseFloat(trade.sl_price));
-                  if (spikeTrail.updated && spikeTrail.newSl) {
-                    const spikePrec = inferPricePrec(trade.sl_price);
-                    let slMovedSpike = false;
-                    try {
-                      slMovedSpike = await updateStopLoss(userClient, trade.symbol, spikeTrail.newSl, null, 'bitunix', spikePrec, undefined);
-                    } catch (e) {
-                      bLog.error(`Spike-HL trail SL update failed: ${e.message}`);
-                    }
-                    if (slMovedSpike) {
-                      await db.query(
-                        `UPDATE trades SET trailing_sl_price = $1 WHERE id = $2`,
-                        [spikeTrail.newSl, trade.id]
-                      );
-                      const pctLocked = trade.direction === 'LONG'
-                        ? ((spikeTrail.newSl - entryPrice) / entryPrice * 100).toFixed(3)
-                        : ((entryPrice - spikeTrail.newSl) / entryPrice * 100).toFixed(3);
-                      bLog.trade(`✓ Spike-HL trail: ${trade.symbol} ${trade.direction} SL→$${spikeTrail.newSl.toFixed(4)} (locked +${pctLocked}% from entry)`);
-                      await notify(`🎯 *Spike-HL Trail*\n${trade.symbol} ${trade.direction}\nSL moved → $${spikeTrail.newSl.toFixed(4)} (+${pctLocked}% locked)`);
-                    }
-                  }
-                } catch (spikeErr) {
-                  bLog.error(`Spike-HL trail check failed for ${trade.symbol}: ${spikeErr.message}`);
-                }
-                continue; // skip normal trailing SL for Spike-HL
-              }
-
+              // Legacy TRIPLE_MA / SPIKE_HL trail/exit blocks removed — those
+              // strategies are no longer used as signal sources, and any
+              // remaining open trades with those market_structure tags will
+              // fall through to the standard v3 trailing logic below.
               const bxSlPrec = inferPricePrec(trade.sl_price);
               const currentSl = parseFloat(trade.trailing_sl_price) || parseFloat(trade.sl_price) || 0;
               const bxProfitPct = isLong
