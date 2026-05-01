@@ -643,22 +643,24 @@ async function analyzeV3(ticker) {
       fetchKlines(symbol, '1m',  60),  // 1m entry confirmation
     ]);
 
-    if (!klines15m || klines15m.length < 30) return null;
-    if (!klines1h  || klines1h.length  < 24) return null;
+    // Diagnostic: tell why we're returning null. Enable per-call by
+    // setting opts.verbose=true (TokenAgent passes it). Helps diagnose
+    // "no signal" silence from the chat side.
+    const verbose = !!(ticker && ticker.verbose);
+    const dlog    = m => verbose && console.log(`[v3-diag] ${ticker.symbol}: ${m}`);
+
+    if (!klines15m || klines15m.length < 30) { dlog('null — klines15m too short'); return null; }
+    if (!klines1h  || klines1h.length  < 24) { dlog('null — klines1h too short');  return null; }
 
     // ── Key levels ────────────────────────────────────────────
     const levels = extractKeyLevels(klines1h, klines15m);
-    if (!levels) return null;
+    if (!levels) { dlog('null — no key levels'); return null; }
 
     // ── Session VWAP ─────────────────────────────────────────
     const vwap = calcVWAP(klines15m);
-    if (!vwap) return null;
+    if (!vwap) { dlog('null — no VWAP'); return null; }
 
     // ── Bias filter ───────────────────────────────────────────
-    //   PDF: above OP + VWAP = long, below both = short.
-    //   Pullback entries land slightly below VWAP by definition,
-    //   so allow 1.5% tolerance below VWAP for longs (and above for shorts).
-    //   OP is the primary gate; VWAP position is a scoring bonus.
     const aboveOP   = price > levels.op;
     const aboveVWAP = price > vwap;
     const vwapDiff  = (price - vwap) / vwap; // +ve = above VWAP
@@ -666,6 +668,7 @@ async function analyzeV3(ticker) {
     if (aboveOP && vwapDiff >= -0.015)      bias = 'long';
     else if (!aboveOP && vwapDiff <= 0.015) bias = 'short';
     else bias = null;
+    dlog(`bias=${bias} aboveOP=${aboveOP} vwapDiff=${(vwapDiff*100).toFixed(2)}% (OP=${levels.op} VWAP=${vwap.toFixed(4)})`);
 
     // ── Setup 5 (MomentumBreakout) bypasses the OP/VWAP bias gate ─
     //   Impulse breakouts pick their own direction from candle body —
@@ -677,7 +680,7 @@ async function analyzeV3(ticker) {
     const klines1mClosed = klines1m.slice(0, -1);
     const breakoutSig = detectMomentumBreakout(klines1mClosed);
 
-    if (!bias && !breakoutSig) return null;
+    if (!bias && !breakoutSig) { dlog('null — no bias and no momentum breakout'); return null; }
 
     // ── Run all setups ────────────────────────────────────────
     let setup = null;
@@ -693,7 +696,8 @@ async function analyzeV3(ticker) {
       bias  = breakoutSig.direction;
     }
 
-    if (!setup) return null;
+    if (!setup) { dlog(`null — no setup detected for bias=${bias} (BreakRetest/LiqGrab/VWAPTrend/MSTF/MomentumBreakout all returned null)`); return null; }
+    dlog(`setup=${setup.setupName} @ ${setup.levelType}`);
 
     // ── Extra confirmation flags ──────────────────────────────
     const lastCandle  = klines15m[klines15m.length - 1];
@@ -713,7 +717,7 @@ async function analyzeV3(ticker) {
       bias, vwapBias, volSpike, rejCandle,
       ema9, ema21,
     });
-    if (score < 9) return null;  // minimum confluence
+    if (score < 9) { dlog(`null — score ${score} < 9`); return null; }
 
     // Counter-trend filter REMOVED per user direction: buy on the LL
     // candle / sell on the HH candle — those are reversal entries.
