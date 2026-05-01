@@ -1772,8 +1772,10 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
   //      gate already protects against chase entries; pause is only
   //      needed in the middle of the range.
   let _rangePos = null;
-  if (parsed1m.length >= 21) {
-    const w20 = parsed1m.slice(-21, -1);
+  // Use a 10-bar window so a single big-move spike (e.g. an HH) doesn't
+  // lock SHORT entries out of the LH that forms 5-10 minutes later.
+  if (parsed1m.length >= 11) {
+    const w20 = parsed1m.slice(-11, -1);
     const rangeHi = Math.max(...w20.map(c => c.high));
     const rangeLo = Math.min(...w20.map(c => c.low));
     const rangeSz = rangeHi - rangeLo;

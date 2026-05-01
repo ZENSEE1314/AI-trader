@@ -749,8 +749,12 @@ async function analyzeV3(ticker) {
     //      range gate already protects against chase.
     const k1m = klines1m || [];
     let rPos = null;
-    if (k1m.length >= 21) {
-      const w20 = k1m.slice(-21, -1);
+    // Use a 10-bar window so a single big-move candle (e.g. an HH spike)
+    // doesn't pin the range high for 20 minutes and lock SHORT entries
+    // out of the LH that forms 5-10 minutes later. 10 bars = "recent
+    // context", which is what we want for entry-zone selection.
+    if (k1m.length >= 11) {
+      const w20 = k1m.slice(-11, -1);
       let hi = -Infinity, lo = Infinity;
       for (const k of w20) {
         const h = parseFloat(k[2]);
