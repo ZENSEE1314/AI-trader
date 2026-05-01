@@ -1,0 +1,74 @@
+name: Loss backtest
+
+on:
+  schedule:
+    - cron: '5 0 * * *'   # 00:05 UTC daily — after midnight rollover
+  workflow_dispatch:
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      contents: read
+
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      RAILWAY_PROJECT_ID: ${{ vars.RAILWAY_PROJECT_ID }}
+      RAILWAY_SERVICE_ID: ${{ vars.RAILWAY_SERVICE_ID }}
+      TRACKING_ISSUE: ${{ vars.LOSS_BACKTEST_ISSUE || '70' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+
+      - name: Install backtest deps only
+        run: npm install pg node-fetch@2 --no-save
+
+      - name: Install Railway CLI
+        run: npm i -g @railway/cli@latest
+
+      - name: Show environment (no secrets)
+        run: |
+          railway --version
+          echo "PROJECT_ID set? ${RAILWAY_PROJECT_ID:+yes}"
+          echo "SERVICE_ID set? ${RAILWAY_SERVICE_ID:+yes}"
+          echo "TOKEN set? ${RAILWAY_TOKEN:+yes}"
+
+      - name: Run backtest with Railway env injected
+        id: backtest
+        run: |
+          set +e
+          # railway run injects DATABASE_URL and other Railway env vars
+          # into the local process. backtest-ytd-losses.js reads them
+          # via require('./db') -> process.env.DATABASE_URL.
+          railway run --service "$RAILWAY_SERVICE_ID" \
+            node backtest-ytd-losses.js > /tmp/out.txt 2> /tmp/err.txt
+          rc=$?
+          {
+            echo "## 🔬 Loss backtest — $(date -u +'%Y-%m-%d %H:%M UTC')"
+            echo ""
+            if [ $rc -ne 0 ]; then
+              echo "### ⚠️ Run failed (rc=$rc)"
+              echo '```'
+              tail -n 60 /tmp/err.txt
+              echo '```'
+            fi
+            echo "### Output"
+            echo '```'
+            tail -n 400 /tmp/out.txt
+            echo '```'
+          } > /tmp/comment.md
+          {
+            echo "BODY<<EOF"
+            cat /tmp/comment.md
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Post backtest report to tracking issue
+        uses: peter-evans/create-or-update-comment@v5
+        with:
+          issue-number: ${{ env.TRACKING_ISSUE }}
+          body: ${{ steps.backtest.outputs.BODY }}
