@@ -748,28 +748,57 @@ async function analyzeV3(ticker) {
     // exception (LONG above upper band / SHORT below lower band ride
     // momentum and skip range-pos).
     const k1m = klines1m || [];
-    let vwapUpper = null, vwapLower = null;
+    let vwapUpper = null, vwapLower = null, vwapUpperPrev = null, vwapLowerPrev = null;
     if (k1m.length > 30) {
       const dayStartMs = Date.UTC(new Date().getUTCFullYear(),
                                   new Date().getUTCMonth(),
                                   new Date().getUTCDate());
       const today1m = k1m.filter(k => parseInt(k[0]) >= dayStartMs);
       const used = today1m.length > 30 ? today1m : k1m.slice(-Math.min(k1m.length, 240));
-      let cumTPV = 0, cumVol = 0;
-      const tps = [];
-      for (const k of used) {
-        const tp = (parseFloat(k[2]) + parseFloat(k[3]) + parseFloat(k[4])) / 3;
-        const v  = parseFloat(k[5]) || 1;
-        tps.push(tp);
-        cumTPV += tp * v; cumVol += v;
+
+      // Helper: compute mid + 2σ bands on an array of bars.
+      const calcBands = (bars) => {
+        let cTPV = 0, cVol = 0;
+        const ts = [];
+        for (const k of bars) {
+          const tp = (parseFloat(k[2]) + parseFloat(k[3]) + parseFloat(k[4])) / 3;
+          const v  = parseFloat(k[5]) || 1;
+          ts.push(tp);
+          cTPV += tp * v; cVol += v;
+        }
+        if (cVol === 0 || ts.length < 30) return null;
+        const m = cTPV / cVol;
+        let vs = 0;
+        for (const t of ts) vs += (t - m) * (t - m);
+        const s = Math.sqrt(vs / ts.length);
+        return { mid: m, upper: m + 2 * s, lower: m - 2 * s };
+      };
+
+      const cur = calcBands(used);
+      if (cur) { vwapUpper = cur.upper; vwapLower = cur.lower; }
+
+      // Bands as they would have been ~30 bars ago — used to detect slope.
+      // If today's range is short, fall back to last-30-removed slice.
+      if (used.length > 60) {
+        const prev = calcBands(used.slice(0, -30));
+        if (prev) { vwapUpperPrev = prev.upper; vwapLowerPrev = prev.lower; }
       }
-      if (cumVol > 0 && tps.length > 30) {
-        const mid = cumTPV / cumVol;
-        let varSum = 0;
-        for (const t of tps) varSum += (t - mid) * (t - mid);
-        const sd = Math.sqrt(varSum / tps.length);
-        vwapUpper = mid + 2 * sd;
-        vwapLower = mid - 2 * sd;
+    }
+
+    // ── Band slope filter ───────────────────────────────────────
+    // User rule: when VWAP upper band is sloping DOWN, the session
+    // mean is falling — no LONG, only SHORT. Mirror: VWAP lower band
+    // sloping UP → no SHORT, only LONG.
+    if (vwapUpper && vwapUpperPrev) {
+      const upperFalling = vwapUpper < vwapUpperPrev;
+      const lowerRising  = vwapLower > vwapLowerPrev;
+      if (side === 'LONG'  && upperFalling) {
+        dlog(`null — VWAP upper band sloping down (${vwapUpperPrev.toFixed(4)} → ${vwapUpper.toFixed(4)}) — no LONG`);
+        return null;
+      }
+      if (side === 'SHORT' && lowerRising) {
+        dlog(`null — VWAP lower band sloping up (${vwapLowerPrev.toFixed(4)} → ${vwapLower.toFixed(4)}) — no SHORT`);
+        return null;
       }
     }
 
