@@ -502,19 +502,17 @@ function detectMSTF(klines15m, klines3m, klines1m, bias) {
   const htfCounterLong  = (s15 && s15.ll && s15.lh) && (!s3 || (s3.ll && s3.lh));
   const htfCounterShort = (s15 && s15.hh && s15.hl) && (!s3 || (s3.hh && s3.hl));
 
-  // ── 1m structure-pause gate ────────────────────────────────
-  const len1 = klines1m.length;
-  let longPaused = false, shortPaused = false;
-  if (len1 >= 3) {
-    const lastH = parseFloat(klines1m[len1 - 2][2]);
-    const lastL = parseFloat(klines1m[len1 - 2][3]);
-    const prevH = parseFloat(klines1m[len1 - 3][2]);
-    const prevL = parseFloat(klines1m[len1 - 3][3]);
-    longPaused  = lastH <= prevH && lastL <= prevL;
-    shortPaused = lastL >= prevL && lastH >= prevH;
-  }
+  // ── 1m structure-pause gate REMOVED ──
+  // Per user direction: "buy at HL or LL next candle why will lag till
+  // 5 or 6 candle". Pivot confirmation (swingLen=2) already adds 2 bars
+  // of lag; layering a single-candle pause + low-volume 2-candle pause
+  // on top stacks 3-5 bars total and the trade ends up firing far away
+  // from the HL/LH pivot. The chase-distance gate in analyzeV3 (0.3%
+  // from latest 1m swing pivot) is the safety net instead — fire the
+  // very next candle after pivot is confirmed, OR refuse because price
+  // has already chased.
 
-  if (bias === 'long' && ltfBull && htfBull && !htfCounterLong && longPaused) {
+  if (bias === 'long' && ltfBull && htfBull && !htfCounterLong) {
     // Pick whichever HTF is bullish for the label
     const htfTag = (s15 && (s15.hh || s15.hl))
       ? `15${s15.hh ? 'HH' : 'HL'}`
@@ -529,7 +527,7 @@ function detectMSTF(klines15m, klines3m, klines1m, bias) {
     };
   }
 
-  if (bias === 'short' && ltfBear && htfBear && !htfCounterShort && shortPaused) {
+  if (bias === 'short' && ltfBear && htfBear && !htfCounterShort) {
     const htfTag = (s15 && (s15.ll || s15.lh))
       ? `15${s15.ll ? 'LL' : 'LH'}`
       : `3${s3.ll ? 'LL' : 'LH'}`;
@@ -914,46 +912,11 @@ async function analyzeV3(ticker) {
       }
     }
 
-    // ── Volume-aware pause gate ─────────────────────────────────
-    // Last closed 1m candle high-volume (≥ 20-bar average): 1-candle
-    // pause is enough — the bar has commitment behind it. Low-volume:
-    // require 2 paused candles since the structure forming on thin
-    // tape is more likely a noise pivot. Skipped at extreme-zone /
-    // momentum band (already covered upstream).
-    if (!atExtreme && !longMomentum && !shortMomentum && k1m.length >= 3) {
-      const lastH = parseFloat(k1m[k1m.length - 2][2]);
-      const lastL = parseFloat(k1m[k1m.length - 2][3]);
-      const midH  = parseFloat(k1m[k1m.length - 3][2]);
-      const midL  = parseFloat(k1m[k1m.length - 3][3]);
-
-      // Average volume over the last 20 closed 1m bars
-      const volSlice = k1m.slice(-21, -1);
-      const volAvgN = volSlice.length
-        ? volSlice.reduce((s, k) => s + parseFloat(k[5] || 0), 0) / volSlice.length
-        : 0;
-      const lastVol = parseFloat(k1m[k1m.length - 2][5] || 0);
-      const lowVolume = volAvgN > 0 && lastVol < volAvgN;
-
-      if (side === 'LONG') {
-        const paused1 = lastH <= midH && lastL <= midL;
-        if (!paused1) { dlog('null — last 1m extending up (no pause)'); return null; }
-        if (lowVolume && k1m.length >= 4) {
-          const oldH = parseFloat(k1m[k1m.length - 4][2]);
-          const oldL = parseFloat(k1m[k1m.length - 4][3]);
-          const paused2 = midH <= oldH && midL <= oldL;
-          if (!paused2) { dlog(`null — low-volume HL (vol ${lastVol.toFixed(0)} < avg ${volAvgN.toFixed(0)}) needs 2 paused candles`); return null; }
-        }
-      } else {
-        const paused1 = lastL >= midL && lastH >= midH;
-        if (!paused1) { dlog('null — last 1m extending down (no pause)'); return null; }
-        if (lowVolume && k1m.length >= 4) {
-          const oldH = parseFloat(k1m[k1m.length - 4][2]);
-          const oldL = parseFloat(k1m[k1m.length - 4][3]);
-          const paused2 = midL >= oldL && midH >= oldH;
-          if (!paused2) { dlog(`null — low-volume LH (vol ${lastVol.toFixed(0)} < avg ${volAvgN.toFixed(0)}) needs 2 paused candles`); return null; }
-        }
-      }
-    }
+    // Volume-aware pause gate REMOVED per user direction: fire the very
+    // next candle after the HL/LH pivot is confirmed. Pause/volume
+    // requirements stacked extra candles of lag and the trade ended up
+    // firing 5-6 bars from the pivot. The chase-distance gate above
+    // (0.3% from the swing) is the only chase protection now.
 
     return {
       symbol,
