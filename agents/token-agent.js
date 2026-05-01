@@ -67,7 +67,7 @@ class TokenAgent extends BaseAgent {
     // analyzeV3 correctly refused them.
     let signal = null;
     try {
-      signal = await analyzeV3({ symbol: this.symbol, lastPrice: String(price) });
+      signal = await analyzeV3({ symbol: this.symbol, lastPrice: String(price), verbose: true });
     } catch (e) {
       bLog.error(`[${this.name}] analyzeV3 failed: ${e.message}`);
     }
