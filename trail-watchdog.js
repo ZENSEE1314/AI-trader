@@ -291,7 +291,8 @@ async function runTrailCycle() {
 
           const v2Result = calcV2TrailSL(entry, isLong ? entry * (1 + capitalPct / leverage) : entry * (1 - capitalPct / leverage), isLong, leverage, currentSl);
           if (!v2Result) {
-            log(`[DIAG] ${symbol} trail SKIP — ${pctDisplay} < +20% or SL already at milestone`);
+            const trailOnPct = leverage <= 50 ? 16 : 21;
+            log(`[DIAG] ${symbol} trail SKIP — ${pctDisplay} < +${trailOnPct}% (${leverage}x) or SL already at milestone`);
             continue;
           }
 
