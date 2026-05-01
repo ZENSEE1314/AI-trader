@@ -11,6 +11,7 @@
 
 const { BaseAgent } = require('./base-agent');
 const { analyzeSymbol } = require('../trade-engine');
+const { analyzeV3 } = require('../strategy-v3');
 const { log: bLog } = require('../bot-logger');
 
 class TokenAgent extends BaseAgent {
@@ -56,8 +57,26 @@ class TokenAgent extends BaseAgent {
 
     this.lastPrice = price;
 
-    // Run unified trade-engine (all 5 strategies, all filters in one place)
-    const signal = await analyzeSymbol(this.symbol, price, context.kronosPredictions || null);
+    // ── Scan with strategy-v3 (analyzeV3) ─────────────────────────
+    // analyzeV3 runs MSTF / VWAPTrend / LiqGrab / BreakRetest /
+    // MomentumBreakout and applies the full gate stack we've been
+    // tuning per-PR (counter-trend filter, 10-bar range pos, pause
+    // gate with extreme-zone skip, 15m-only-blocks-when-confirmed).
+    // The older trade-engine analyzeSymbol path only ran the rare
+    // TEN_CANDLE_EXTREME setup which almost never fired — that's
+    // why TokenAgents missed every recent reversal.
+    let signal = null;
+    try {
+      signal = await analyzeV3({ symbol: this.symbol, lastPrice: String(price) });
+    } catch (e) {
+      bLog.error(`[${this.name}] analyzeV3 failed: ${e.message} — falling back to analyzeSymbol`);
+    }
+
+    // Fallback: if v3 produced nothing, try the legacy trade-engine
+    // (TEN_CANDLE_EXTREME) so we don't lose what little signal it gives.
+    if (!signal || !signal.direction) {
+      signal = await analyzeSymbol(this.symbol, price, context.kronosPredictions || null);
+    }
 
     if (!signal || !signal.direction) {
       this.currentTask = null;
