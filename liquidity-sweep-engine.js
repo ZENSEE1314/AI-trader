@@ -1882,11 +1882,13 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     const latestIsLH = latestIsHigh && prevHighPrice !== null && lastHighPrice < prevHighPrice; // recent LH
 
     if (best.direction === 'SHORT' && price >= vwapUpper) {
-      bLog.scan(`${symbol}: SHORT ${best.setup} BLOCKED — price at/above VWAP upper (${vwapUpper.toFixed(4)}) — no SHORT in upper band${latestIsHL ? ' (recent HL ⇒ extra-dangerous)' : ''}`);
+      bLog.scan(`${symbol}: SHORT ${best.setup} BLOCKED — price at/above VWAP upper (${vwapUpper.toFixed(4)}) — no SHORT in upper band (don't fade the pump)`);
       return null;
     }
-    // LONG at lower band is ALLOWED — user explicitly wants reversal
-    // entries at the LL even when price is in/below the lower band.
+    if (best.direction === 'LONG' && price <= vwapLower) {
+      bLog.scan(`${symbol}: LONG ${best.setup} BLOCKED — price at/below VWAP lower (${vwapLower.toFixed(4)}) — no LONG in lower band (don't catch falling knife)`);
+      return null;
+    }
   }
 
   return best;
