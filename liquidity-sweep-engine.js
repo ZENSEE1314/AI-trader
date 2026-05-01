@@ -1302,8 +1302,10 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     const has1mLL = pL1m.length >= 2 && pL1m[pL1m.length - 1] < pL1m[pL1m.length - 2];
     const has1mLH = pH1m.length >= 2 && pH1m[pH1m.length - 1] < pH1m[pH1m.length - 2];
 
-    const htfLong  = has15mHH_s11 || has15mHL_s11;
-    const htfShort = has15mLH_s11 || has15mLL_s11;
+    // 15m only BLOCKS when CONFIRMED against the 1m direction.
+    // A still-forming 15m no longer prevents a clean 1m HL/LH entry.
+    const htf15CounterLong  = has15mLL_s11 && has15mLH_s11; // confirmed bearish 15m
+    const htf15CounterShort = has15mHH_s11 && has15mHL_s11; // confirmed bullish 15m
 
     // ── 1m structure-pause gate ──────────────────────────────
     // Don't fire while the structure is still extending on the latest 1m
@@ -1320,15 +1322,15 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
       _shortPaused = lastC.low  >= prevC.low  && lastC.high >= prevC.high;
     }
 
-    const longOk  = htfLong  && (has1mHH || has1mHL) && _longPaused;
-    const shortOk = htfShort && (has1mLL || has1mLH) && _shortPaused;
+    const longOk  = (has1mHH || has1mHL) && !htf15CounterLong  && _longPaused;
+    const shortOk = (has1mLL || has1mLH) && !htf15CounterShort && _shortPaused;
 
     // SL anchored on the most recent 1m pivot (no 3m fallback).
     const slLowRef  = pL1m;
     const slHighRef = pH1m;
 
-    const longHtf  = has15mHH_s11 ? '15HH' : '15HL';
-    const shortHtf = has15mLH_s11 ? '15LH' : '15LL';
+    const longHtf  = has15mHH_s11 ? '15HH' : has15mHL_s11 ? '15HL' : 's15-mixed';
+    const shortHtf = has15mLH_s11 ? '15LH' : has15mLL_s11 ? '15LL' : 's15-mixed';
     const longTfTag  = `${longHtf}+1m-${has1mHH ? 'HH' : 'HL'}`;
     const shortTfTag = `${shortHtf}+1m-${has1mLL ? 'LL' : 'LH'}`;
 

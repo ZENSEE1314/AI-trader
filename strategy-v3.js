@@ -474,10 +474,18 @@ function detectMSTF(klines15m, klines3m, klines1m, bias) {
 
   if (!s1 || !s15) return null;
 
-  const htfBull = s15.hh || s15.hl;
-  const htfBear = s15.ll || s15.lh;
+  // 1m must show its own bull/bear bias (one-side or both).
   const ltfBull = s1.hh  || s1.hl;
   const ltfBear = s1.ll  || s1.lh;
+
+  // 15m only BLOCKS the trade when it's CONFIRMED against the 1m
+  // direction (both ll && lh for bear, both hh && hl for bull).
+  // A 15m chart that is still mid-formation (single-side or none) no
+  // longer prevents a clean 1m HL/LH bounce from firing — that was the
+  // dominant blocker on BNB / ETH / SOL where 1m had a textbook
+  // reversal before 15m had time to register a swing.
+  const htf15CounterLong  = s15.ll && s15.lh; // confirmed bearish 15m
+  const htf15CounterShort = s15.hh && s15.hl; // confirmed bullish 15m
 
   // ── 1m structure-pause gate ────────────────────────────────
   // Wait for the latest closed 1m candle to STOP extending the structure
@@ -496,25 +504,25 @@ function detectMSTF(klines15m, klines3m, klines1m, bias) {
     shortPaused = lastL >= prevL && lastH >= prevH;
   }
 
-  if (bias === 'long' && htfBull && ltfBull && longPaused) {
-    const htfType = s15.hh ? 'HH' : 'HL';
+  if (bias === 'long' && ltfBull && !htf15CounterLong && longPaused) {
+    const htfTag  = s15.hh ? '15HH' : s15.hl ? '15HL' : 's15-mixed';
     const ltfType = s1.hh  ? 'HH' : 'HL';
     return {
       setupName: 'MSTF',
       level:     null,
-      levelType: `15m${htfType}+1m${ltfType}`,
+      levelType: `${htfTag}+1m${ltfType}`,
       htfStruct: { s15 },
       ltfStruct: s1,
     };
   }
 
-  if (bias === 'short' && htfBear && ltfBear && shortPaused) {
-    const htfType = s15.ll ? 'LL' : 'LH';
+  if (bias === 'short' && ltfBear && !htf15CounterShort && shortPaused) {
+    const htfTag  = s15.ll ? '15LL' : s15.lh ? '15LH' : 's15-mixed';
     const ltfType = s1.ll  ? 'LL' : 'LH';
     return {
       setupName: 'MSTF',
       level:     null,
-      levelType: `15m${htfType}+1m${ltfType}`,
+      levelType: `${htfTag}+1m${ltfType}`,
       htfStruct: { s15 },
       ltfStruct: s1,
     };

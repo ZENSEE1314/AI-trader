@@ -94,13 +94,16 @@ function replayGates(direction, price, klines1m, klines15m) {
   // 1. 15m + 1m structure (PR #61)
   const s15 = pivots(klines15m, 2);
   const s1  = pivots(klines1m,  2);
-  const htfBull = s15.hh || s15.hl;
-  const htfBear = s15.ll || s15.lh;
   const ltfBull = s1.hh || s1.hl;
   const ltfBear = s1.ll || s1.lh;
-  if (direction === 'LONG'  && (!htfBull || !ltfBull)) verdict.blockedBy.push('no-15m+1m-bull-structure');
-  else                                                  verdict.passed.push('15m+1m-structure');
-  if (direction === 'SHORT' && (!htfBear || !ltfBear)) verdict.blockedBy.push('no-15m+1m-bear-structure');
+  // 15m only blocks when CONFIRMED against the 1m direction (matches
+  // strategy-v3.detectMSTF and liquidity-sweep-engine STRUCTURE_FOLLOW
+  // post-PR #74).
+  const htf15CounterLong  = s15.ll && s15.lh;
+  const htf15CounterShort = s15.hh && s15.hl;
+  if (direction === 'LONG' && (!ltfBull || htf15CounterLong)) verdict.blockedBy.push('no-1m-bull-or-15m-confirmed-bear');
+  else if (direction === 'SHORT' && (!ltfBear || htf15CounterShort)) verdict.blockedBy.push('no-1m-bear-or-15m-confirmed-bull');
+  else verdict.passed.push('1m-structure-ok');
 
   // 2. Counter-trend filter (PR #60)
   const confirmedBull = s1.hh && s1.hl;
