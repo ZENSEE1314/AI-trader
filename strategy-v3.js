@@ -829,7 +829,7 @@ async function analyzeV3(ticker) {
         const upper = mid + 2 * sd;
         const lower = mid - 2 * sd;
         if (side === 'SHORT' && price >= upper) return null;
-        if (side === 'LONG'  && price <= lower) return null;
+        // LONG at lower band is ALLOWED — user buys reversals at the LL.
       }
     }
 
