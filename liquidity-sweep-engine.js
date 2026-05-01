@@ -1885,10 +1885,8 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
       bLog.scan(`${symbol}: SHORT ${best.setup} BLOCKED — price at/above VWAP upper (${vwapUpper.toFixed(4)}) — no SHORT in upper band${latestIsHL ? ' (recent HL ⇒ extra-dangerous)' : ''}`);
       return null;
     }
-    if (best.direction === 'LONG' && price <= vwapLower) {
-      bLog.scan(`${symbol}: LONG ${best.setup} BLOCKED — price at/below VWAP lower (${vwapLower.toFixed(4)}) — no LONG in lower band${latestIsLH ? ' (recent LH ⇒ extra-dangerous)' : ''}`);
-      return null;
-    }
+    // LONG at lower band is ALLOWED — user explicitly wants reversal
+    // entries at the LL even when price is in/below the lower band.
   }
 
   return best;
