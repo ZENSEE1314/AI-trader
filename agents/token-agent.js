@@ -57,25 +57,19 @@ class TokenAgent extends BaseAgent {
 
     this.lastPrice = price;
 
-    // ── Scan with strategy-v3 (analyzeV3) ─────────────────────────
+    // ── Scan with strategy-v3 (analyzeV3) — ONLY signal source ─────
     // analyzeV3 runs MSTF / VWAPTrend / LiqGrab / BreakRetest /
-    // MomentumBreakout and applies the full gate stack we've been
-    // tuning per-PR (counter-trend filter, 10-bar range pos, pause
-    // gate with extreme-zone skip, 15m-only-blocks-when-confirmed).
-    // The older trade-engine analyzeSymbol path only ran the rare
-    // TEN_CANDLE_EXTREME setup which almost never fired — that's
-    // why TokenAgents missed every recent reversal.
+    // MomentumBreakout under the full gate stack (counter-trend,
+    // range-pos, pause, 15m-confirmed-only, VWAP-band hard block).
+    // The legacy trade-engine.analyzeSymbol fallback was REMOVED
+    // because TEN_CANDLE_EXTREME has none of those gates and was
+    // letting SHORT trades fire above the VWAP upper band when
+    // analyzeV3 correctly refused them.
     let signal = null;
     try {
       signal = await analyzeV3({ symbol: this.symbol, lastPrice: String(price) });
     } catch (e) {
-      bLog.error(`[${this.name}] analyzeV3 failed: ${e.message} — falling back to analyzeSymbol`);
-    }
-
-    // Fallback: if v3 produced nothing, try the legacy trade-engine
-    // (TEN_CANDLE_EXTREME) so we don't lose what little signal it gives.
-    if (!signal || !signal.direction) {
-      signal = await analyzeSymbol(this.symbol, price, context.kronosPredictions || null);
+      bLog.error(`[${this.name}] analyzeV3 failed: ${e.message}`);
     }
 
     if (!signal || !signal.direction) {
