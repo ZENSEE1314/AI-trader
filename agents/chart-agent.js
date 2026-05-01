@@ -9,7 +9,6 @@
 // ============================================================
 
 const { BaseAgent } = require('./base-agent');
-const { scanAll } = require('../trade-engine');
 const aiLearner = require('../ai-learner');
 
 class ChartAgent extends BaseAgent {
@@ -39,63 +38,15 @@ class ChartAgent extends BaseAgent {
   }
 
   async execute(context = {}) {
-    const { topNCoins = 50, forceScan = false, kronosPredictions = null, monitoredSymbols = null } = context;
-
-    // Consume winning strategy intel from StrategyAgent
-    const stratMsgs = this.consumeMessages('winning-strategy');
-    if (stratMsgs.length > 0) {
-      const strat = stratMsgs[stratMsgs.length - 1].payload;
-      this.addActivity('info', `Strategy intel: "${strat.name}" won with ${strat.winRate?.toFixed(1)}% WR — noted for scanning`);
-    }
-
-    this.logScan('Starting market scan (trade-engine — BTC/ETH/SOL/BNB/XRP)...');
-
+    // Signal generation moved entirely to per-coin TokenAgents (analyzeV3).
+    // ChartAgent stays as a system agent for the Floor / AI chat / activity
+    // log, but no longer scans the market itself.
     const session = aiLearner.getCurrentSession();
-    this.logScan(`Session: ${session}`);
-
-    // Scan using unified trade-engine — 5 allowed coins (BTC/ETH/SOL/BNB/XRP)
-    const signals = await scanAll(
-      (msg) => this.logScan(msg),
-      { kronosPredictions }
-    );
-
-    // 4. Record scan result
-    const scanResult = {
-      ts: Date.now(),
-      session,
-      signalCount: signals.length,
-      topSignal: signals[0] || null,
-    };
+    const scanResult = { ts: Date.now(), session, signalCount: 0, topSignal: null };
     this.scanHistory.push(scanResult);
     if (this.scanHistory.length > this.maxHistory) this.scanHistory.shift();
-
-    this.lastSignals = signals;
-
-    if (signals.length === 0) {
-      this.logScan('No signals found this scan.');
-    } else {
-      for (const s of signals) {
-        this.logScan(`Signal: ${s.symbol} ${s.direction} score=${s.score} setup=${s.setupName}`);
-      }
-      // NOTE: XP awarded only when signal leads to a winning trade (see cycle.js)
-    }
-
-    // 5. Memory: remember best coins and signal patterns
-    if (this.isSkillEnabled('memory') && signals.length > 0) {
-      const topSignal = signals[0];
-      await this.remember(`last_signal_${topSignal.symbol}`, {
-        direction: topSignal.direction, score: topSignal.score,
-        setup: topSignal.setupName, session, ts: Date.now(),
-      }, 'signals');
-      // Track signal frequency per coin
-      const freq = (await this.recall(`signal_freq_${topSignal.symbol}`)) || 0;
-      await this.remember(`signal_freq_${topSignal.symbol}`, freq + 1, 'frequency');
-    }
-
-    // 6. Emit signals event
-    this.emit('signals', { signals, scanResult });
-
-    return { signals, scanResult };
+    this.lastSignals = [];
+    return { signals: [], scanResult };
   }
 
   async _getAIContext() {

@@ -10,7 +10,6 @@
 // ============================================================
 
 const { BaseAgent } = require('./base-agent');
-const { analyzeSymbol } = require('../trade-engine');
 const { analyzeV3 } = require('../strategy-v3');
 const { log: bLog } = require('../bot-logger');
 
