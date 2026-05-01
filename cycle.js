@@ -1349,23 +1349,34 @@ async function main() {
         continue;
       }
 
-      // Backtest gate — each agent backtests its own token inline
-      // Runs 30-day backtest on the spot, cached for 2 hours
-      try {
-        const backtestGate = require('./backtest-gate');
-        const gateSym = pick.symbol || pick.sym;
-        const gateStrategy = pick.setupName || pick.setup || 'ALL';
-        const signalWr = pick.strategyWinRate || 0;
-        const gatePasses = await backtestGate.passesGate(gateSym, gateStrategy, undefined, signalWr);
-        if (!gatePasses) {
-          bLog.trade(`BACKTEST GATE BLOCKED: ${gateSym} ${gateStrategy} — WR below ${backtestGate.MIN_WIN_RATE}%`);
-          continue;
-        }
-        bLog.trade(`BACKTEST GATE PASSED: ${gateSym} ${gateStrategy}`);
-      } catch (gateErr) {
-        bLog.error(`Backtest gate error: ${gateErr.message} — blocking trade for safety`);
-        continue;
-      }
+      // Backtest gate DISABLED per user direction.
+      // Reasoning: the gate blocks any strategy whose 30-day historical
+      // WR is below 50 %, which silenced the bot entirely while no
+      // active strategy crossed 50 %. The user prefers to trade on the
+      // live structure rules (15m+1m HL/LH, counter-trend filter,
+      // 10-bar range pos, pause gate, leverage-aware trail) and accept
+      // losing windows while the optimizer keeps tuning. The auto-
+      // activate path (PR #77) still kicks in when the optimizer finds
+      // a >= 50% strategy — at which point the live gates simply align
+      // with that historical edge.
+      //
+      // To re-enable, uncomment the block below.
+      //
+      // try {
+      //   const backtestGate = require('./backtest-gate');
+      //   const gateSym = pick.symbol || pick.sym;
+      //   const gateStrategy = pick.setupName || pick.setup || 'ALL';
+      //   const signalWr = pick.strategyWinRate || 0;
+      //   const gatePasses = await backtestGate.passesGate(gateSym, gateStrategy, undefined, signalWr);
+      //   if (!gatePasses) {
+      //     bLog.trade(`BACKTEST GATE BLOCKED: ${gateSym} ${gateStrategy} — WR below ${backtestGate.MIN_WIN_RATE}%`);
+      //     continue;
+      //   }
+      //   bLog.trade(`BACKTEST GATE PASSED: ${gateSym} ${gateStrategy}`);
+      // } catch (gateErr) {
+      //   bLog.error(`Backtest gate error: ${gateErr.message} — blocking trade for safety`);
+      //   continue;
+      // }
 
       // AI Brain (Ollama/Gemma 4) — analyze signal before trading
       try {
