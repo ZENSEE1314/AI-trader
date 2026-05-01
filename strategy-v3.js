@@ -843,8 +843,8 @@ async function analyzeV3(ticker) {
         const latestIsHL = lastLowIdx  > lastHighIdx && prevLow  !== null && lastLow  > prevLow;
         const latestIsLH = lastHighIdx > lastLowIdx  && prevHigh !== null && lastHigh < prevHigh;
 
-        if (side === 'SHORT' && price >= upper && latestIsHL) return null;
-        if (side === 'LONG'  && price <= lower && latestIsLH) return null;
+        if (side === 'SHORT' && price >= upper) return null;
+        if (side === 'LONG'  && price <= lower) return null;
       }
     }
 
