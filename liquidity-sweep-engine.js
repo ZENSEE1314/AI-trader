@@ -1881,12 +1881,12 @@ async function analyzeCoin(ticker, params, enabledStrategies = null, strategyCfg
     const latestIsHL = latestIsLow  && prevLowPrice  !== null && lastLowPrice  > prevLowPrice;  // recent HL
     const latestIsLH = latestIsHigh && prevHighPrice !== null && lastHighPrice < prevHighPrice; // recent LH
 
-    if (best.direction === 'SHORT' && price >= vwapUpper && latestIsHL) {
-      bLog.scan(`${symbol}: SHORT ${best.setup} BLOCKED — price at VWAP upper (${vwapUpper.toFixed(4)}) + latest pivot is HL (bullish reversal context)`);
+    if (best.direction === 'SHORT' && price >= vwapUpper) {
+      bLog.scan(`${symbol}: SHORT ${best.setup} BLOCKED — price at/above VWAP upper (${vwapUpper.toFixed(4)}) — no SHORT in upper band${latestIsHL ? ' (recent HL ⇒ extra-dangerous)' : ''}`);
       return null;
     }
-    if (best.direction === 'LONG' && price <= vwapLower && latestIsLH) {
-      bLog.scan(`${symbol}: LONG ${best.setup} BLOCKED — price at VWAP lower (${vwapLower.toFixed(4)}) + latest pivot is LH (bearish reversal context)`);
+    if (best.direction === 'LONG' && price <= vwapLower) {
+      bLog.scan(`${symbol}: LONG ${best.setup} BLOCKED — price at/below VWAP lower (${vwapLower.toFixed(4)}) — no LONG in lower band${latestIsLH ? ' (recent LH ⇒ extra-dangerous)' : ''}`);
       return null;
     }
   }
