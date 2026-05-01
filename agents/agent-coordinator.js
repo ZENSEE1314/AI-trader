@@ -437,7 +437,7 @@ class AgentCoordinator extends BaseAgent {
 
     // 7. Agent self-reflection — every 60 micro-cycles (~30 min) one agent reflects
     if (this._microCycleCount % 60 === 0) {
-      const agentList = [...this._agents.values()].filter(a => a !== this && a._survival?.isAlive !== false);
+      const agentList = [...this._agents.values()].filter(a => a !== this);
       const reflectAgent = agentList[this._microCycleCount % agentList.length];
       if (reflectAgent) {
         reflectAgent.selfReflect().catch(() => {});

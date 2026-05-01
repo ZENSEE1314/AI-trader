@@ -1273,10 +1273,10 @@
         const lostEl   = li.querySelector('.tf-lost');
         const wlEl     = li.querySelector('.tf-wl');
         if (stats) {
-          if (lvlEl)    lvlEl.textContent    = 'Lv.' + stats.level;
-          if (earnedEl) earnedEl.textContent = '+$' + (stats.winDollars ?? stats.earned ?? 0).toFixed(2);
-          if (lostEl)   lostEl.textContent   = '-$' + (stats.lossDollars ?? 0).toFixed(2);
-          if (wlEl)     wlEl.textContent     = (stats.wins || 0) + 'W/' + (stats.losses || 0) + 'L';
+          if (lvlEl)    lvlEl.textContent    = 'Lv.' + (stats.level ?? '--');
+          if (earnedEl) earnedEl.textContent = '+$' + (stats.totalEarned ?? stats.winDollars ?? stats.earned ?? 0).toFixed(2);
+          if (lostEl)   lostEl.textContent   = '-$' + (stats.totalLost ?? stats.lossDollars ?? 0).toFixed(2);
+          if (wlEl)     wlEl.textContent     = (stats.totalWins ?? stats.wins ?? 0) + 'W/' + (stats.totalLosses ?? stats.losses ?? 0) + 'L';
         }
       }
     }

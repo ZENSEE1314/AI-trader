@@ -139,10 +139,10 @@ class BaseAgent {
   }
 
   async run(context = {}) {
-    // Dead agents cannot run
-    if (!this._survival.isAlive) {
-      return null;
-    }
+    // Per user direction: agents always run regardless of HP / "dead" state.
+    // The previous `if (!this._survival.isAlive) return null;` gate made
+    // a single bad streak knock an agent out for the rest of the day.
+    // We keep _survival fields for stats display but they no longer gate.
     // When managedByCoordinator is true, skip the "already running" guard
     // because the coordinator pre-sets state to 'running' for the full pipeline
     if (this.state === AGENT_STATES.RUNNING && !this.managedByCoordinator) {
@@ -739,45 +739,43 @@ What specific changes would make you perform better? Be concrete — suggest par
 
   // ── Survival System Methods ───────────────────────────────
 
-  /** Record a trade win — +10 HP, capital increases */
+  /** Record a trade win — accumulate totals for display only */
   recordSurvivalWin(pnlUsdt, tradeDetails = {}) {
-    if (!this._survival.isAlive) return;
     this._checkMonthReset();
-    this._survival.health = Math.min(100, this._survival.health + 10);
-    this._survival.capital += Math.abs(pnlUsdt);
-    this._survival.monthlyPnl += Math.abs(pnlUsdt);
+    const amt = Math.abs(pnlUsdt);
+    // HP no longer gates anything — fixed at 100 for cosmetic display.
+    this._survival.health         = 100;
+    this._survival.capital        += amt;
+    this._survival.monthlyPnl     += amt;
     this._survival.totalTrades++;
     this._survival.totalWins++;
-    this._survival.totalRevenue = (this._survival.totalRevenue || 0) + Math.abs(pnlUsdt);
-    this._survival.lastTradeAt = Date.now();
-    this.addActivity('win', `HP ${this._survival.health}/100 | +$${Math.abs(pnlUsdt).toFixed(2)} | Capital: $${this._survival.capital.toFixed(2)}`);
+    this._survival.totalRevenue   = (this._survival.totalRevenue || 0) + amt;
+    this._survival.totalEarned    = (this._survival.totalEarned   || 0) + amt;
+    this._survival.lastTradeAt    = Date.now();
+    this.addActivity('win', `+$${amt.toFixed(2)} | total earned $${this._survival.totalEarned.toFixed(2)} | W/L ${this._survival.totalWins}/${this._survival.totalLosses}`);
     this._saveSurvival();
-    this._saveTradeHistory({ ...tradeDetails, pnlUsdt: Math.abs(pnlUsdt), isWin: true });
+    this._saveTradeHistory({ ...tradeDetails, pnlUsdt: amt, isWin: true });
     // Feed positive reward to Q-Learning
     this.feedQLReward(1.0, tradeDetails.indicators || {});
   }
 
-  /** Record a trade loss — -10 HP, capital decreases. May kill agent. */
+  /** Record a trade loss — accumulate totals for display only */
   recordSurvivalLoss(pnlUsdt, tradeDetails = {}) {
-    if (!this._survival.isAlive) return;
     this._checkMonthReset();
-    this._survival.health = Math.max(0, this._survival.health - 10);
-    this._survival.capital -= Math.abs(pnlUsdt);
-    this._survival.monthlyPnl -= Math.abs(pnlUsdt);
+    const amt = Math.abs(pnlUsdt);
+    // HP no longer gates anything — fixed at 100 for cosmetic display.
+    // Agents are never killed; capital can go negative without consequence.
+    this._survival.health         = 100;
+    this._survival.capital        -= amt;
+    this._survival.monthlyPnl     -= amt;
     this._survival.totalTrades++;
     this._survival.totalLosses++;
-    this._survival.totalRevenue = (this._survival.totalRevenue || 0) - Math.abs(pnlUsdt);
-    this._survival.lastTradeAt = Date.now();
-
-    if (this._survival.capital <= 0) {
-      this._killAgent('Capital depleted — $0 remaining');
-    } else if (this._survival.health <= 0) {
-      this._killAgent('Health reached 0 HP — too many losses');
-    } else {
-      this.addActivity('loss', `HP ${this._survival.health}/100 | -$${Math.abs(pnlUsdt).toFixed(2)} | Capital: $${this._survival.capital.toFixed(2)}`);
-    }
+    this._survival.totalRevenue   = (this._survival.totalRevenue || 0) - amt;
+    this._survival.totalLost      = (this._survival.totalLost     || 0) + amt;
+    this._survival.lastTradeAt    = Date.now();
+    this.addActivity('loss', `-$${amt.toFixed(2)} | total lost $${this._survival.totalLost.toFixed(2)} | W/L ${this._survival.totalWins}/${this._survival.totalLosses}`);
     this._saveSurvival();
-    this._saveTradeHistory({ ...tradeDetails, pnlUsdt: -Math.abs(pnlUsdt), isWin: false });
+    this._saveTradeHistory({ ...tradeDetails, pnlUsdt: -amt, isWin: false });
     // Feed negative reward to Q-Learning
     this.feedQLReward(-1.0, tradeDetails.indicators || {});
   }
@@ -820,16 +818,11 @@ What specific changes would make you perform better? Be concrete — suggest par
     }
   }
 
-  /** Kill this agent permanently */
+  /** Kill mechanism is disabled — kept for API compatibility but
+      never marks the agent dead. Per user direction, agents trade
+      regardless of HP / capital state. */
   _killAgent(reason) {
-    this._survival.isAlive = false;
-    this._survival.killReason = reason;
-    this.state = AGENT_STATES.STOPPED;
-    this.paused = true;
-    this._personality.mood = 'dead';
-    this.addActivity('death', `☠️ KILLED: ${reason} | Final capital: $${this._survival.capital.toFixed(2)} | W/L: ${this._survival.totalWins}/${this._survival.totalLosses}`);
-    this.log(`AGENT KILLED: ${reason}`);
-    bLog.error(`${this.name} KILLED: ${reason}`);
+    this.log(`(_killAgent suppressed — agent stays alive) reason: ${reason}`);
   }
 
   /** Check if month rolled over — reset monthly PnL tracking */
@@ -870,6 +863,8 @@ What specific changes would make you perform better? Be concrete — suggest par
       totalWins: this._survival.totalWins,
       totalLosses: this._survival.totalLosses,
       totalRevenue: Math.round((this._survival.totalRevenue || 0) * 100) / 100,
+      totalEarned: Math.round((this._survival.totalEarned || 0) * 100) / 100,
+      totalLost:   Math.round((this._survival.totalLost   || 0) * 100) / 100,
       winRate: this._survival.totalTrades > 0
         ? Math.round(this._survival.totalWins / this._survival.totalTrades * 100) : 0,
       killReason: this._survival.killReason,
