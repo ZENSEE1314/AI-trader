@@ -638,12 +638,25 @@ function calcTrailingSLV3(entryPrice, currentPrice, side, leverage = 1) {
     : entryPrice * (1 - lockPricePct);
 }
 
+// ── Gate toggle helpers ──────────────────────────────────────
+// V3_DISABLE env var (or ticker.disabled) is a comma-separated set
+// of gate names to disable for ablation studies. Default: none.
+// Available gates: htf, regime, zone, band, chase, rpos, slope,
+// tightrange, strongtrend, fastpivot, squeeze1m
+function _disabledSet(ticker) {
+  const s = (ticker?.disabled || process.env.V3_DISABLE || '').toString().toLowerCase();
+  return new Set(s.split(',').map(x => x.trim()).filter(Boolean));
+}
+function _gateOn(disabled, name) { return !disabled.has(name); }
+
 // ── Analyze one symbol ────────────────────────────────────────
 
 async function analyzeV3(ticker) {
   try {
     const symbol = ticker.symbol;
     const price  = parseFloat(ticker.lastPrice);
+    const disabled = _disabledSet(ticker);
+    const gate = (name) => _gateOn(disabled, name);
 
     // Fetch all timeframes in parallel — OR use pre-fetched klines if
     // provided via ticker.klines (used by backtest-v3-gates.js to avoid
@@ -753,13 +766,15 @@ async function analyzeV3(ticker) {
 
     let bias = null;
     if (structBias && opVwapBias && structBias === opVwapBias) {
-      // 1m structure agrees with OP/VWAP — but HTF (15m or 3m) must
-      // also agree, otherwise 1m alone is not enough.
-      if      (structBias === 'long'  && htfBullEither) bias = 'long';
-      else if (structBias === 'short' && htfBearEither) bias = 'short';
+      // 1m + OP/VWAP agree. HTF gate (if enabled) must also agree.
+      if (gate('htf')) {
+        if      (structBias === 'long'  && htfBullEither) bias = 'long';
+        else if (structBias === 'short' && htfBearEither) bias = 'short';
+      } else {
+        bias = structBias;
+      }
     } else if (!structBias && opVwapBias && (htfBull || htfBear)) {
-      // 1m ambiguous but 15m AND 3m both strongly agree — HTF wins
-      // if OP/VWAP confirms.
+      // 1m ambiguous but HTF strongly agrees — HTF override.
       if      (htfBull && opVwapBias === 'long')  bias = 'long';
       else if (htfBear && opVwapBias === 'short') bias = 'short';
     }
@@ -775,12 +790,14 @@ async function analyzeV3(ticker) {
     const s1hRegime = klines1h ? detectStructure(klines1h, 3) : null;
     const bullRegime = s1hRegime && (s1hRegime.hh || s1hRegime.hl) && !s1hRegime.ll;
     const bearRegime = s1hRegime && (s1hRegime.ll || s1hRegime.lh) && !s1hRegime.hh;
-    if (bias === 'long'  && !bullRegime) {
-      dlog(`null — LONG blocked: 1h regime not bullish (hh=${s1hRegime?.hh} hl=${s1hRegime?.hl} lh=${s1hRegime?.lh} ll=${s1hRegime?.ll})`);
-      bias = null;
-    } else if (bias === 'short' && !bearRegime) {
-      dlog(`null — SHORT blocked: 1h regime not bearish (hh=${s1hRegime?.hh} hl=${s1hRegime?.hl} lh=${s1hRegime?.lh} ll=${s1hRegime?.ll})`);
-      bias = null;
+    if (gate('regime')) {
+      if (bias === 'long'  && !bullRegime) {
+        dlog(`null — LONG blocked: 1h regime not bullish`);
+        bias = null;
+      } else if (bias === 'short' && !bearRegime) {
+        dlog(`null — SHORT blocked: 1h regime not bearish`);
+        bias = null;
+      }
     }
     dlog(`bias=${bias} struct=${structBias} confirmed(hh=${s1bias?.hh} hl=${s1bias?.hl} lh=${s1bias?.lh} ll=${s1bias?.ll}) fast(hh=${s1fast?.hh} hl=${s1fast?.hl} lh=${s1fast?.lh} ll=${s1fast?.ll}) opVwap=${opVwapBias} htf(bullEither=${!!htfBullEither} bearEither=${!!htfBearEither} bullBoth=${!!htfBull} bearBoth=${!!htfBear}) regime(bull=${!!bullRegime} bear=${!!bearRegime})`);
 
@@ -790,8 +807,10 @@ async function analyzeV3(ticker) {
     // market mid-move, not just at the top).
     const allBear  = htfBear && s1bias && (s1bias.ll || (s1bias.lh && !s1bias.hl));
     const allBull  = htfBull && s1bias && (s1bias.hh || (s1bias.hl && !s1bias.lh));
-    const strongTrend = (bias === 'long' && allBull) || (bias === 'short' && allBear)
-                     || (bias === 'long' && htfBull) || (bias === 'short' && htfBear);
+    const strongTrend = gate('strongtrend') && (
+      (bias === 'long' && allBull) || (bias === 'short' && allBear) ||
+      (bias === 'long' && htfBull) || (bias === 'short' && htfBear)
+    );
     if (strongTrend) dlog(`strong trend ${bias} (htf-aligned) — bypassing chase/rPos gates`);
 
     // ── Setup 5 (MomentumBreakout) bypasses 1m structure bias ─
@@ -914,63 +933,47 @@ async function analyzeV3(ticker) {
     // User rule: when VWAP upper band is sloping DOWN, the session
     // mean is falling — no LONG, only SHORT. Mirror: VWAP lower band
     // sloping UP → no SHORT, only LONG.
-    if (vwapUpper && vwapUpperPrev) {
+    if (gate('slope') && vwapUpper && vwapUpperPrev) {
       const upperFalling = vwapUpper < vwapUpperPrev;
       const lowerRising  = vwapLower > vwapLowerPrev;
       if (side === 'LONG'  && upperFalling) {
-        dlog(`null — VWAP upper band sloping down (${vwapUpperPrev.toFixed(4)} → ${vwapUpper.toFixed(4)}) — no LONG`);
+        dlog(`null — VWAP upper band sloping down — no LONG`);
         return null;
       }
       if (side === 'SHORT' && lowerRising) {
-        dlog(`null — VWAP lower band sloping up (${vwapLowerPrev.toFixed(4)} → ${vwapLower.toFixed(4)}) — no SHORT`);
+        dlog(`null — VWAP lower band sloping up — no SHORT`);
         return null;
       }
     }
 
-    // Block CHASE at the bands. Mean-reversion at the bands is allowed:
-    //   Above upper band  → no LONG (chasing up).   SHORT (rejection) ALLOWED.
-    //   Below lower band  → no SHORT (chasing down). LONG (bounce)    ALLOWED.
-    // User direction: "LH short on upper VWAP why not trigger" — shorting
-    // an LH at the upper band is the textbook mean-reversion entry; we
-    // were blocking it as if it were a chase.
-    if (vwapUpper && side === 'LONG' && price >= vwapUpper) {
-      dlog(`null — LONG chasing above upper band $${vwapUpper.toFixed(4)}`);
-      return null;
-    }
-    if (vwapLower && side === 'SHORT' && price <= vwapLower) {
-      dlog(`null — SHORT chasing below lower band $${vwapLower.toFixed(4)}`);
-      return null;
+    if (gate('band')) {
+      if (vwapUpper && side === 'LONG' && price >= vwapUpper) {
+        dlog(`null — LONG chasing above upper band $${vwapUpper.toFixed(4)}`);
+        return null;
+      }
+      if (vwapLower && side === 'SHORT' && price <= vwapLower) {
+        dlog(`null — SHORT chasing below lower band $${vwapLower.toFixed(4)}`);
+        return null;
+      }
     }
 
-    // ── VWAP zone direction gate ────────────────────────────────
-    // User rule: "upper band only find HL or HH to long, lower band
-    // find LH or LL to short, only in mid of VWAP can find any way."
-    //   Upper zone (mid < price < upper band) → LONG only
-    //   Lower zone (lower band < price < mid) → SHORT only
-    //   At/very near mid                      → either
-    //   At the band itself                    → mean reversion already
-    //                                           handled by the asymmetric
-    //                                           chase block above.
-    if (vwap && vwapUpper && vwapLower) {
-      const NEAR_MID = 0.001; // 0.1% of price counts as "at mid"
+    if (gate('zone') && vwap && vwapUpper && vwapLower) {
+      const NEAR_MID = 0.001;
       const distFromMid = (price - vwap) / vwap;
       const inUpperZone = distFromMid >  NEAR_MID && price < vwapUpper;
       const inLowerZone = distFromMid < -NEAR_MID && price > vwapLower;
       if (inUpperZone && side === 'SHORT') {
-        dlog(`null — SHORT in upper VWAP zone (price $${price} above mid $${vwap.toFixed(4)}) — only LONG allowed`);
+        dlog(`null — SHORT in upper VWAP zone — only LONG allowed`);
         return null;
       }
       if (inLowerZone && side === 'LONG') {
-        dlog(`null — LONG in lower VWAP zone (price $${price} below mid $${vwap.toFixed(4)}) — only SHORT allowed`);
+        dlog(`null — LONG in lower VWAP zone — only SHORT allowed`);
         return null;
       }
     }
 
-    // ── Range-position gate ────────────────────────────────────
-    // LONG  blocked if pos > 0.25 (must be near the bottom)  — bypassed on strongTrend
-    // SHORT blocked if pos < 0.75 (must be near the top)     — bypassed on strongTrend
     let rPos = null;
-    if (k1m.length >= 11) {
+    if (gate('rpos') && k1m.length >= 11) {
       const w20 = k1m.slice(-11, -1);
       let hi = -Infinity, lo = Infinity;
       for (const k of w20) {
@@ -982,17 +985,12 @@ async function analyzeV3(ticker) {
       const sz = hi - lo;
       if (sz > 0) {
         rPos = (price - lo) / sz;
-        if (!strongTrend && side === 'LONG'  && rPos > 0.25) { dlog(`null — LONG rPos ${(rPos*100).toFixed(0)}% > 25% (not near bottom)`); return null; }
-        if (!strongTrend && side === 'SHORT' && rPos < 0.75) { dlog(`null — SHORT rPos ${(rPos*100).toFixed(0)}% < 75% (not near top)`); return null; }
+        if (!strongTrend && side === 'LONG'  && rPos > 0.25) { dlog(`null — LONG rPos ${(rPos*100).toFixed(0)}% > 25%`); return null; }
+        if (!strongTrend && side === 'SHORT' && rPos < 0.75) { dlog(`null — SHORT rPos ${(rPos*100).toFixed(0)}% < 75%`); return null; }
       }
     }
 
-    // ── Chase distance gate ─────────────────────────────────────
-    //   LONG  → price must be within +0.3% of lowest low in last 30×1m
-    //   SHORT → price must be within -0.3% of highest high in last 30×1m
-    // Bypassed on strongTrend (15m+3m+1m all aligned) — trend continuation
-    // entries are allowed mid-move, not only at the pivot.
-    if (k1m.length >= 31 && !strongTrend) {
+    if (gate('chase') && k1m.length >= 31 && !strongTrend) {
       const w30 = k1m.slice(-31, -1);
       let lo30 = Infinity, hi30 = -Infinity;
       for (const k of w30) {
@@ -1033,7 +1031,7 @@ async function analyzeV3(ticker) {
     // upper extreme of recent action — hard to hit, low EV. Skip the
     // trade. 100x tokens (BTC/ETH) have a +0.21 % TP target which
     // remains reachable in tighter ranges, so the filter doesn't apply.
-    if (tokenLev === 50 && k1m.length >= 21) {
+    if (gate('tightrange') && tokenLev === 50 && k1m.length >= 21) {
       const w20full = k1m.slice(-21, -1);
       let hi20 = -Infinity, lo20 = Infinity;
       for (const k of w20full) {
