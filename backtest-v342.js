@@ -38,6 +38,12 @@ const TRAIL_STEP_PCT  = 0.10;
 
 const REQUEST_TIMEOUT = 20_000;
 
+// ── Remix toggles (env-controlled) ─────────────────────────────
+// Each filter can be enabled to see which combination produces the
+// highest WR while keeping decent trade frequency.
+const FILTERS = (process.env.FILTERS || '').split(',').map(s => s.trim()).filter(Boolean);
+function f(name) { return FILTERS.includes(name); }
+
 async function fetchAll(symbol, interval, totalNeeded) {
   const out = [];
   const intervalMs = ({ '1m': 60e3, '1h': 3600e3, '4h': 14400e3 })[interval];
@@ -196,6 +202,62 @@ async function runSymbol(symbol) {
     if      (bothBull) side = 'LONG';
     else if (bothBear) side = 'SHORT';
     if (!side) continue;
+
+    // ── Quality remix filters ─────────────────────────────────
+    if (f('1m_align')) {
+      // 1m must agree with side: HH/HL alone for LONG, LL/LH alone for SHORT
+      const k1mWin = k1m.slice(Math.max(0, i - 30), i + 1);
+      const s1m = detectStructure(k1mWin, 2);
+      if (!s1m) continue;
+      if (side === 'LONG'  && !((s1m.hh && !s1m.ll) || (s1m.hl && !s1m.lh && !s1m.ll))) continue;
+      if (side === 'SHORT' && !((s1m.ll && !s1m.hh) || (s1m.lh && !s1m.hl && !s1m.hh))) continue;
+    }
+
+    if (f('chase')) {
+      // Within 0.3% of 30m absolute pivot
+      const w30 = k1m.slice(Math.max(0, i - 30), i + 1);
+      let lo30 = Infinity, hi30 = -Infinity;
+      for (const k of w30) {
+        const h = parseFloat(k[2]); if (h > hi30) hi30 = h;
+        const l = parseFloat(k[3]); if (l < lo30) lo30 = l;
+      }
+      if (side === 'LONG'  && (close - lo30) / lo30 > 0.003) continue;
+      if (side === 'SHORT' && (hi30 - close) / hi30 > 0.003) continue;
+    }
+
+    if (f('rpos')) {
+      // Lower 25% (LONG) or upper 75% (SHORT) of last 10×1m range
+      const w10 = k1m.slice(Math.max(0, i - 10), i + 1);
+      let hi = -Infinity, lo = Infinity;
+      for (const k of w10) {
+        const h = parseFloat(k[2]); if (h > hi) hi = h;
+        const l = parseFloat(k[3]); if (l < lo) lo = l;
+      }
+      const sz = hi - lo;
+      if (sz > 0) {
+        const rPos = (close - lo) / sz;
+        if (side === 'LONG'  && rPos > 0.25) continue;
+        if (side === 'SHORT' && rPos < 0.75) continue;
+      }
+    }
+
+    if (f('volspike')) {
+      // Last 1m vol ≥ 1.5× the 20-bar avg
+      const volSlice = k1m.slice(Math.max(0, i - 21), i);
+      const avg = volSlice.length
+        ? volSlice.reduce((s, k) => s + parseFloat(k[5] || 0), 0) / volSlice.length
+        : 0;
+      if (avg <= 0) continue;
+      const lastVol = parseFloat(bar[5] || 0);
+      if (lastVol < avg * 1.5) continue;
+    }
+
+    if (f('strict_htf')) {
+      // Pure-direction HTF: no opposite swings
+      const cleanBull = side === 'LONG'  && s1h.hh && s4h.hh && !s1h.ll && !s4h.ll && !s1h.lh && !s4h.lh;
+      const cleanBear = side === 'SHORT' && s1h.ll && s4h.ll && !s1h.hh && !s4h.hh && !s1h.hl && !s4h.hl;
+      if (!cleanBull && !cleanBear) continue;
+    }
 
     const slPricePct = INITIAL_SL_PCT / lev;
     const slPrice = side === 'LONG' ? close * (1 - slPricePct) : close * (1 + slPricePct);
