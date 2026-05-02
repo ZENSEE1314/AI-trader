@@ -991,23 +991,26 @@ async function analyzeV3(ticker) {
       const sz = hi - lo;
       if (sz > 0) {
         rPos = (price - lo) / sz;
-        if (!strongTrend && side === 'LONG'  && rPos > 0.15) { dlog(`null — LONG rPos ${(rPos*100).toFixed(0)}% > 15% (was 25%)`); return null; }
-        if (!strongTrend && side === 'SHORT' && rPos < 0.85) { dlog(`null — SHORT rPos ${(rPos*100).toFixed(0)}% < 85% (was 75%)`); return null; }
+        // strongTrend bypass also REMOVED — user direction: enter at the
+        // pivot or skip. No more "trend continuation" mid-move entries.
+        if (side === 'LONG'  && rPos > 0.05) { dlog(`null — LONG rPos ${(rPos*100).toFixed(1)}% > 5%`); return null; }
+        if (side === 'SHORT' && rPos < 0.95) { dlog(`null — SHORT rPos ${(rPos*100).toFixed(1)}% < 95%`); return null; }
       }
     }
 
-    if (gate('chase') && k1m.length >= 31 && !strongTrend) {
+    // strongTrend bypass removed — chase distance ALWAYS applies.
+    if (gate('chase') && k1m.length >= 31) {
       const w30 = k1m.slice(-31, -1);
       let lo30 = Infinity, hi30 = -Infinity;
       for (const k of w30) {
         const h = parseFloat(k[2]); if (h > hi30) hi30 = h;
         const l = parseFloat(k[3]); if (l < lo30) lo30 = l;
       }
-      const MAX_CHASE_PCT = 0.0015; // 0.15 % — was 0.30 %, tightened
-      // per user feedback: BTC long fired 0.19% above HL pivot mid-rally,
-      // user flagged as "wrong trade — middle of HH". Half the threshold
-      // forces entries close to the actual swing-low pivot, not after a
-      // visible rally.
+      const MAX_CHASE_PCT = 0.0005; // 0.05 % — was 0.15 %, halved 3x.
+      // User direction: "make it 0.05% no more far. long or short if
+      // miss it miss." Entry must be within 5 bps of the actual swing
+      // pivot. If we missed the pivot, skip the trade — no chase ever.
+      // Also bypass-removed (was previously skipped on strongTrend).
       if (side === 'LONG') {
         const dist = (price - lo30) / lo30;
         if (dist > MAX_CHASE_PCT) {
