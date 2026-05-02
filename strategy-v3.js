@@ -991,8 +991,8 @@ async function analyzeV3(ticker) {
       const sz = hi - lo;
       if (sz > 0) {
         rPos = (price - lo) / sz;
-        if (!strongTrend && side === 'LONG'  && rPos > 0.25) { dlog(`null — LONG rPos ${(rPos*100).toFixed(0)}% > 25%`); return null; }
-        if (!strongTrend && side === 'SHORT' && rPos < 0.75) { dlog(`null — SHORT rPos ${(rPos*100).toFixed(0)}% < 75%`); return null; }
+        if (!strongTrend && side === 'LONG'  && rPos > 0.15) { dlog(`null — LONG rPos ${(rPos*100).toFixed(0)}% > 15% (was 25%)`); return null; }
+        if (!strongTrend && side === 'SHORT' && rPos < 0.85) { dlog(`null — SHORT rPos ${(rPos*100).toFixed(0)}% < 85% (was 75%)`); return null; }
       }
     }
 
@@ -1003,7 +1003,11 @@ async function analyzeV3(ticker) {
         const h = parseFloat(k[2]); if (h > hi30) hi30 = h;
         const l = parseFloat(k[3]); if (l < lo30) lo30 = l;
       }
-      const MAX_CHASE_PCT = 0.003; // 0.3 %
+      const MAX_CHASE_PCT = 0.0015; // 0.15 % — was 0.30 %, tightened
+      // per user feedback: BTC long fired 0.19% above HL pivot mid-rally,
+      // user flagged as "wrong trade — middle of HH". Half the threshold
+      // forces entries close to the actual swing-low pivot, not after a
+      // visible rally.
       if (side === 'LONG') {
         const dist = (price - lo30) / lo30;
         if (dist > MAX_CHASE_PCT) {
