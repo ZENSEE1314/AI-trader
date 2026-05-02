@@ -763,7 +763,25 @@ async function analyzeV3(ticker) {
       if      (htfBull && opVwapBias === 'long')  bias = 'long';
       else if (htfBear && opVwapBias === 'short') bias = 'short';
     }
-    dlog(`bias=${bias} struct=${structBias} confirmed(hh=${s1bias?.hh} hl=${s1bias?.hl} lh=${s1bias?.lh} ll=${s1bias?.ll}) fast(hh=${s1fast?.hh} hl=${s1fast?.hl} lh=${s1fast?.lh} ll=${s1fast?.ll}) opVwap=${opVwapBias} htf(bullEither=${!!htfBullEither} bearEither=${!!htfBearEither} bullBoth=${!!htfBull} bearBoth=${!!htfBear})`);
+
+    // ── 1h regime gate ─────────────────────────────────────────
+    // User rule: "bull no short and bear no long". 1h structure
+    // determines market regime — only LONG in a bull regime, only
+    // SHORT in a bear regime. 30-day backtest showed SHORT setups
+    // in a bullish month had 16-33% WR while LONG setups hit
+    // 55-75% WR. The 1h trend is the market filter that prevents
+    // counter-regime trades.
+    const s1hRegime = klines1h ? detectStructure(klines1h, 3) : null;
+    const bullRegime = s1hRegime && (s1hRegime.hh || s1hRegime.hl) && !s1hRegime.ll;
+    const bearRegime = s1hRegime && (s1hRegime.ll || s1hRegime.lh) && !s1hRegime.hh;
+    if (bias === 'long'  && !bullRegime) {
+      dlog(`null — LONG blocked: 1h regime not bullish (hh=${s1hRegime?.hh} hl=${s1hRegime?.hl} lh=${s1hRegime?.lh} ll=${s1hRegime?.ll})`);
+      bias = null;
+    } else if (bias === 'short' && !bearRegime) {
+      dlog(`null — SHORT blocked: 1h regime not bearish (hh=${s1hRegime?.hh} hl=${s1hRegime?.hl} lh=${s1hRegime?.lh} ll=${s1hRegime?.ll})`);
+      bias = null;
+    }
+    dlog(`bias=${bias} struct=${structBias} confirmed(hh=${s1bias?.hh} hl=${s1bias?.hl} lh=${s1bias?.lh} ll=${s1bias?.ll}) fast(hh=${s1fast?.hh} hl=${s1fast?.hl} lh=${s1fast?.lh} ll=${s1fast?.ll}) opVwap=${opVwapBias} htf(bullEither=${!!htfBullEither} bearEither=${!!htfBearEither} bullBoth=${!!htfBull} bearBoth=${!!htfBear}) regime(bull=${!!bullRegime} bear=${!!bearRegime})`);
 
     // ── Strong-trend continuation flag ─────────────────────────
     // When 15m AND 3m AND 1m all confirm same direction, bypass the
