@@ -4,11 +4,15 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version name (e.g. v3.42)'
+        description: 'Exact version name (e.g. v3.42)'
+        required: false
+        default: ''
+      query:
+        description: 'OR fuzzy match (e.g. 3.42)'
         required: false
         default: 'v3.42'
-      top_n:
-        description: 'Or: top N by total_pnl (overrides version)'
+      list:
+        description: 'OR set to 1 to list all latest versions'
         required: false
         default: ''
 
@@ -25,7 +29,8 @@ jobs:
       RAILWAY_SERVICE_ID: ${{ vars.RAILWAY_SERVICE_ID }}
       TRACKING_ISSUE: ${{ vars.LOSS_BACKTEST_ISSUE || '70' }}
       VERSION: ${{ github.event.inputs.version }}
-      TOP_N: ${{ github.event.inputs.top_n }}
+      QUERY: ${{ github.event.inputs.query }}
+      LIST: ${{ github.event.inputs.list }}
 
     steps:
       - uses: actions/checkout@v4
@@ -40,7 +45,8 @@ jobs:
           set +e
           ENV_ARGS="env"
           if [ -n "$VERSION" ]; then ENV_ARGS="$ENV_ARGS VERSION=\"$VERSION\""; fi
-          if [ -n "$TOP_N" ];   then ENV_ARGS="$ENV_ARGS TOP_N=\"$TOP_N\""; fi
+          if [ -n "$QUERY" ];   then ENV_ARGS="$ENV_ARGS QUERY=\"$QUERY\""; fi
+          if [ -n "$LIST" ];    then ENV_ARGS="$ENV_ARGS LIST=\"$LIST\""; fi
           railway run --service "$RAILWAY_SERVICE_ID" \
             -- $ENV_ARGS \
             node dump-ai-version.js > /tmp/out.txt 2> /tmp/err.txt
