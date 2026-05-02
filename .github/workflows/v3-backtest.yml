@@ -1,0 +1,74 @@
+name: Strategy v3 backtest
+
+on:
+  workflow_dispatch:
+    inputs:
+      days:
+        description: 'Days of history to backtest'
+        required: false
+        default: '7'
+      capital:
+        description: 'Starting capital ($)'
+        required: false
+        default: '1000'
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      contents: read
+
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      RAILWAY_PROJECT_ID: ${{ vars.RAILWAY_PROJECT_ID }}
+      RAILWAY_SERVICE_ID: ${{ vars.RAILWAY_SERVICE_ID }}
+      TRACKING_ISSUE: ${{ vars.LOSS_BACKTEST_ISSUE || '70' }}
+      DAYS: ${{ github.event.inputs.days || '7' }}
+      CAPITAL: ${{ github.event.inputs.capital || '1000' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+
+      - name: Install deps
+        run: npm install node-fetch@2 --no-save
+
+      - name: Install Railway CLI
+        run: npm i -g @railway/cli@latest
+
+      - name: Run v3 backtest
+        id: backtest
+        run: |
+          set +e
+          railway run --service "$RAILWAY_SERVICE_ID" \
+            -- env DAYS="$DAYS" CAPITAL="$CAPITAL" \
+            node backtest-v3-gates.js > /tmp/out.txt 2> /tmp/err.txt
+          rc=$?
+          {
+            echo "## Strategy v3 backtest — $DAYS days, \$$CAPITAL — $(date -u +'%Y-%m-%d %H:%M UTC')"
+            echo ""
+            if [ $rc -ne 0 ]; then
+              echo "### Failed (rc=$rc)"
+              echo '```'
+              tail -n 60 /tmp/err.txt
+              echo '```'
+            fi
+            echo "### Output"
+            echo '```'
+            tail -n 400 /tmp/out.txt
+            echo '```'
+          } > /tmp/comment.md
+          {
+            echo "BODY<<EOF"
+            cat /tmp/comment.md
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Post to tracking issue
+        uses: peter-evans/create-or-update-comment@v5
+        with:
+          issue-number: ${{ env.TRACKING_ISSUE }}
+          body: ${{ steps.backtest.outputs.BODY }}

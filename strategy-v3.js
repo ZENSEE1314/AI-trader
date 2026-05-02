@@ -645,13 +645,23 @@ async function analyzeV3(ticker) {
     const symbol = ticker.symbol;
     const price  = parseFloat(ticker.lastPrice);
 
-    // Fetch all timeframes in parallel
-    const [klines15m, klines1h, klines3m, klines1m] = await Promise.all([
-      fetchKlines(symbol, '15m', 100),
-      fetchKlines(symbol, '1h',  72),  // 3 days of 1h bars for PDH/PDL
-      fetchKlines(symbol, '3m',  100), // structure detection on 3m
-      fetchKlines(symbol, '1m',  60),  // 1m entry confirmation
-    ]);
+    // Fetch all timeframes in parallel — OR use pre-fetched klines if
+    // provided via ticker.klines (used by backtest-v3-gates.js to avoid
+    // 4× HTTP calls per simulated minute).
+    let klines15m, klines1h, klines3m, klines1m;
+    if (ticker.klines) {
+      klines15m = ticker.klines.k15m;
+      klines1h  = ticker.klines.k1h;
+      klines3m  = ticker.klines.k3m;
+      klines1m  = ticker.klines.k1m;
+    } else {
+      [klines15m, klines1h, klines3m, klines1m] = await Promise.all([
+        fetchKlines(symbol, '15m', 100),
+        fetchKlines(symbol, '1h',  72),  // 3 days of 1h bars for PDH/PDL
+        fetchKlines(symbol, '3m',  100), // structure detection on 3m
+        fetchKlines(symbol, '1m',  60),  // 1m entry confirmation
+      ]);
+    }
 
     // Diagnostic: tell why we're returning null. Enable per-call by
     // setting opts.verbose=true (TokenAgent passes it). Helps diagnose
