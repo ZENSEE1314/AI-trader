@@ -33,13 +33,16 @@ const TRAIL_STEP_PCT  = 0.10;
 const REQUEST_TIMEOUT = 20_000;
 
 async function fetchAll(symbol, interval, totalNeeded) {
-  // Binance limit per request = 1500. Bybit = 1000. OKX = 300.
+  // Binance limit per request = 1500. Bybit = 1000. OKX = 300. CC = 2000.
   const out = [];
   const intervalMs = ({ '1m': 60e3, '3m': 180e3, '15m': 900e3, '1h': 3600e3 })[interval];
-  // OKX uses BTC-USDT-SWAP format
   const okxSym = symbol.replace('USDT', '-USDT-SWAP');
-  // OKX bar formats: 1m, 3m, 15m, 1H
   const okxBar = interval === '1h' ? '1H' : interval;
+  // CryptoCompare fsym/tsym
+  const ccBase = symbol.replace('USDT', '');
+  const ccQuote = 'USDT';
+  // CC supports 1m and 1h directly. 3m/15m we aggregate from 1m later.
+  const ccEndpoint = interval === '1h' ? 'histohour' : interval === '1m' ? 'histominute' : null;
   let endTime = Date.now();
   let firstAttempt = true;
   while (out.length < totalNeeded) {
@@ -65,13 +68,23 @@ async function fetchAll(symbol, interval, totalNeeded) {
       },
       {
         name: 'okx',
-        url: `https://www.okx.com/api/v5/market/history-candles?instId=${okxSym}&bar=${okxBar}&before=${endTime}&after=${startTime}&limit=${Math.min(300, limit)}`,
+        url: `https://www.okx.com/api/v5/market/history-candles?instId=${okxSym}&bar=${okxBar}&after=${endTime}&limit=${Math.min(300, limit)}`,
         parse: j => (j.code === '0' && j.data?.length)
           ? j.data.slice().reverse().map(k => [parseInt(k[0]), k[1], k[2], k[3], k[4], k[5]])
           : null,
       },
     ];
+    if (ccEndpoint) {
+      tries.push({
+        name: 'cryptocompare',
+        url: `https://min-api.cryptocompare.com/data/v2/${ccEndpoint}?fsym=${ccBase}&tsym=${ccQuote}&limit=${Math.min(2000, limit)}&toTs=${Math.floor(endTime / 1000)}`,
+        parse: j => (j.Response === 'Success' && j.Data?.Data?.length)
+          ? j.Data.Data.map(d => [d.time * 1000, String(d.open), String(d.high), String(d.low), String(d.close), String(d.volumefrom)])
+          : null,
+      });
+    }
     let batch = null;
+    let usedSrc = null;
     let lastErr = '';
     for (const t of tries) {
       try {
@@ -79,14 +92,14 @@ async function fetchAll(symbol, interval, totalNeeded) {
         if (!r.ok) { lastErr = `${t.name} HTTP ${r.status}`; continue; }
         const j = await r.json();
         const arr = t.parse(j);
-        if (arr && arr.length) { batch = arr; break; }
+        if (arr && arr.length) { batch = arr; usedSrc = t.name; break; }
         lastErr = `${t.name} empty`;
       } catch (e) {
         lastErr = `${t.name} ${e.message}`;
       }
     }
     if (firstAttempt) {
-      console.log(`  [fetchAll ${symbol} ${interval}] first batch: ${batch ? `${batch.length} bars from ${tries.find(t => batch && batch[0])?.name || '?'}` : `FAILED — last err: ${lastErr}`}`);
+      console.log(`  [fetchAll ${symbol} ${interval}] first batch: ${batch ? `${batch.length} bars from ${usedSrc}` : `FAILED — last err: ${lastErr}`}`);
       firstAttempt = false;
     }
     if (!batch || !batch.length) break;
@@ -95,6 +108,29 @@ async function fetchAll(symbol, interval, totalNeeded) {
     if (out.length >= totalNeeded) break;
   }
   return out.slice(-totalNeeded);
+}
+
+// Aggregate 1m bars into n-minute bars (used when CC fallback is the
+// only source — CC has 1m and 1h but not 3m/15m).
+function aggregate(klines1m, nMin) {
+  const out = [];
+  let i = 0;
+  while (i + nMin <= klines1m.length) {
+    const slice = klines1m.slice(i, i + nMin);
+    const o = slice[0][1];
+    const c = slice[slice.length - 1][4];
+    let h = -Infinity, l = Infinity, v = 0;
+    for (const k of slice) {
+      const hh = parseFloat(k[2]);
+      const ll = parseFloat(k[3]);
+      if (hh > h) h = hh;
+      if (ll < l) l = ll;
+      v += parseFloat(k[5] || 0);
+    }
+    out.push([parseInt(slice[0][0]), String(o), String(h), String(l), String(c), String(v)]);
+    i += nMin;
+  }
+  return out;
 }
 
 function fmtUsd(n)  { return Number.isFinite(n) ? `$${n.toFixed(2)}` : '—'; }
@@ -109,12 +145,18 @@ async function runSymbol(symbol) {
   const N15m = DAYS * 96;
   const N1h  = DAYS * 24 + 72;
 
-  const [k1m, k3m, k15m, k1h] = await Promise.all([
+  const [k1m, k3mFetched, k15mFetched, k1h] = await Promise.all([
     fetchAll(symbol, '1m',  N1m),
     fetchAll(symbol, '3m',  N3m),
     fetchAll(symbol, '15m', N15m),
     fetchAll(symbol, '1h',  N1h),
   ]);
+
+  // Fall back to aggregating from 1m when 3m/15m fetch failed.
+  const k3m  = k3mFetched.length  ? k3mFetched  : aggregate(k1m, 3);
+  const k15m = k15mFetched.length ? k15mFetched : aggregate(k1m, 15);
+  if (!k3mFetched.length  && k1m.length) console.log(`  ↳ 3m  aggregated from ${k1m.length} 1m bars → ${k3m.length} bars`);
+  if (!k15mFetched.length && k1m.length) console.log(`  ↳ 15m aggregated from ${k1m.length} 1m bars → ${k15m.length} bars`);
 
   console.log(`  fetched: 1m=${k1m.length} 3m=${k3m.length} 15m=${k15m.length} 1h=${k1h.length}`);
   if (k1m.length < 100 || k15m.length < 30) {
