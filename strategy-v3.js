@@ -686,16 +686,21 @@ async function analyzeV3(ticker) {
 
     let structBias = null;
     if (s1bias) {
-      if      (s1bias.hh || (s1bias.hl && !s1bias.lh)) structBias = 'long';
-      else if (s1bias.ll || (s1bias.lh && !s1bias.hl)) structBias = 'short';
+      // HH+LL coexist = expansion / wide-range break (mirror of HL+LH
+      // squeeze rejection). Neither direction wins on 1m alone — let
+      // HTF override below decide.
+      const hhAlone = s1bias.hh && !s1bias.ll;
+      const llAlone = s1bias.ll && !s1bias.hh;
+      if      (hhAlone || (s1bias.hl && !s1bias.lh)) structBias = 'long';
+      else if (llAlone || (s1bias.lh && !s1bias.hl)) structBias = 'short';
     }
 
     // Fast path: if confirmed swing didn't give a bias but a 1-bar pivot
     // did AND the bounce/drop magnitude is ≥0.15%, accept it. User
     // direction: "if price is high enough no need to wait 2 candle".
     if (!structBias && s1fast) {
-      const wantsLong  = s1fast.hh || (s1fast.hl && !s1fast.lh);
-      const wantsShort = s1fast.ll || (s1fast.lh && !s1fast.hl);
+      const wantsLong  = (s1fast.hh && !s1fast.ll) || (s1fast.hl && !s1fast.lh);
+      const wantsShort = (s1fast.ll && !s1fast.hh) || (s1fast.lh && !s1fast.hl);
       if (wantsLong && s1fast.lastSwingLow) {
         const bounce = (price - s1fast.lastSwingLow) / s1fast.lastSwingLow;
         if (bounce >= FAST_MIN_BOUNCE) structBias = 'long';
@@ -712,27 +717,37 @@ async function analyzeV3(ticker) {
     if      (aboveOP  && vwapDiff >= -0.015) opVwapBias = 'long';
     else if (!aboveOP && vwapDiff <=  0.015) opVwapBias = 'short';
 
+    // ── HTF override ─────────────────────────────────────────────
+    // When 15m AND 3m both strongly agree on direction, HTF wins —
+    // even if 1m has a momentary HH+LL conflict (rebound bar inside
+    // a downtrend). OP/VWAP must still confirm. Computed BEFORE final
+    // bias resolution so HTF can rescue 1m ambiguity.
+    const s15trend = detectStructure(klines15m, 3);
+    const s3trend  = klines3m ? detectStructure(klines3m, 3) : null;
+    const htfBear  = s15trend && (s15trend.ll || s15trend.lh)
+                  && s3trend  && (s3trend.ll  || s3trend.lh);
+    const htfBull  = s15trend && (s15trend.hh || s15trend.hl)
+                  && s3trend  && (s3trend.hh  || s3trend.hl);
+
     let bias = null;
     if (structBias && opVwapBias && structBias === opVwapBias) {
       bias = structBias;
+    } else if (!structBias && opVwapBias && (htfBull || htfBear)) {
+      // 1m ambiguous but 15m+3m strongly agree — HTF wins if OP/VWAP confirms
+      if      (htfBull && opVwapBias === 'long')  bias = 'long';
+      else if (htfBear && opVwapBias === 'short') bias = 'short';
     }
-    dlog(`bias=${bias} struct=${structBias} confirmed(hh=${s1bias?.hh} hl=${s1bias?.hl} lh=${s1bias?.lh} ll=${s1bias?.ll}) fast(hh=${s1fast?.hh} hl=${s1fast?.hl} lh=${s1fast?.lh} ll=${s1fast?.ll}) opVwap=${opVwapBias} (aboveOP=${aboveOP} vwapDiff=${(vwapDiff*100).toFixed(2)}%)`);
+    dlog(`bias=${bias} struct=${structBias} confirmed(hh=${s1bias?.hh} hl=${s1bias?.hl} lh=${s1bias?.lh} ll=${s1bias?.ll}) fast(hh=${s1fast?.hh} hl=${s1fast?.hl} lh=${s1fast?.lh} ll=${s1fast?.ll}) opVwap=${opVwapBias} htf(bull=${!!htfBull} bear=${!!htfBear}) (aboveOP=${aboveOP} vwapDiff=${(vwapDiff*100).toFixed(2)}%)`);
 
     // ── Strong-trend continuation flag ─────────────────────────
-    // User direction: when 15m AND 3m AND 1m all confirm same direction,
-    // allow trend-continuation entries that bypass the chase-distance
-    // and rPos gates (so the bot can SHORT a falling market mid-move,
-    // not just at the top).
-    const s15trend = detectStructure(klines15m, 3);
-    const s3trend  = klines3m ? detectStructure(klines3m, 3) : null;
-    const allBear  = s15trend && (s15trend.ll || s15trend.lh)
-                  && s3trend  && (s3trend.ll  || s3trend.lh)
-                  && s1bias   && (s1bias.ll   || (s1bias.lh && !s1bias.hl));
-    const allBull  = s15trend && (s15trend.hh || s15trend.hl)
-                  && s3trend  && (s3trend.hh  || s3trend.hl)
-                  && s1bias   && (s1bias.hh   || (s1bias.hl && !s1bias.lh));
-    const strongTrend = (bias === 'long' && allBull) || (bias === 'short' && allBear);
-    if (strongTrend) dlog(`strong trend ${bias} on 15m+3m+1m — bypassing chase/rPos gates`);
+    // When 15m AND 3m AND 1m all confirm same direction, bypass the
+    // chase-distance and rPos gates (so the bot can SHORT a falling
+    // market mid-move, not just at the top).
+    const allBear  = htfBear && s1bias && (s1bias.ll || (s1bias.lh && !s1bias.hl));
+    const allBull  = htfBull && s1bias && (s1bias.hh || (s1bias.hl && !s1bias.lh));
+    const strongTrend = (bias === 'long' && allBull) || (bias === 'short' && allBear)
+                     || (bias === 'long' && htfBull) || (bias === 'short' && htfBear);
+    if (strongTrend) dlog(`strong trend ${bias} (htf-aligned) — bypassing chase/rPos gates`);
 
     // ── Setup 5 (MomentumBreakout) bypasses 1m structure bias ─
     //   Impulse breakouts pick their own direction from candle body —
