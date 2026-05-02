@@ -43,13 +43,12 @@ jobs:
         id: dump
         run: |
           set +e
-          ENV_ARGS="env"
-          if [ -n "$VERSION" ]; then ENV_ARGS="$ENV_ARGS VERSION=\"$VERSION\""; fi
-          if [ -n "$QUERY" ];   then ENV_ARGS="$ENV_ARGS QUERY=\"$QUERY\""; fi
-          if [ -n "$LIST" ];    then ENV_ARGS="$ENV_ARGS LIST=\"$LIST\""; fi
+          # Pass env vars directly to railway run via the shell environment
+          # (railway run inherits parent env). Avoid shell quoting issues
+          # that previously embedded literal quote chars in the values.
+          export VERSION QUERY LIST
           railway run --service "$RAILWAY_SERVICE_ID" \
-            -- $ENV_ARGS \
-            node dump-ai-version.js > /tmp/out.txt 2> /tmp/err.txt
+            -- node dump-ai-version.js > /tmp/out.txt 2> /tmp/err.txt
           rc=$?
           {
             echo "## AI version dump — $(date -u +'%Y-%m-%d %H:%M UTC')"
