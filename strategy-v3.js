@@ -949,13 +949,16 @@ async function analyzeV3(ticker) {
       }
     }
 
+    // User rule: "at VWAP upper band only find HL or HH to long, no
+    // short on HH or LH; at lower band only find LL/LH to short, no
+    // long." Trend-continuation only at the bands — no mean reversion.
     if (gate('band')) {
-      if (vwapUpper && side === 'LONG' && price >= vwapUpper) {
-        dlog(`null — LONG chasing above upper band $${vwapUpper.toFixed(4)}`);
+      if (vwapUpper && side === 'SHORT' && price >= vwapUpper) {
+        dlog(`null — SHORT blocked at/above upper band $${vwapUpper.toFixed(4)} (LONG only at upper band)`);
         return null;
       }
-      if (vwapLower && side === 'SHORT' && price <= vwapLower) {
-        dlog(`null — SHORT chasing below lower band $${vwapLower.toFixed(4)}`);
+      if (vwapLower && side === 'LONG' && price <= vwapLower) {
+        dlog(`null — LONG blocked at/below lower band $${vwapLower.toFixed(4)} (SHORT only at lower band)`);
         return null;
       }
     }
@@ -1053,6 +1056,39 @@ async function analyzeV3(ticker) {
     // requirements stacked extra candles of lag and the trade ended up
     // firing 5-6 bars from the pivot. The chase-distance gate above
     // (0.3% from the swing) is the only chase protection now.
+
+    // ── HARD DIRECTION GUARD (non-bypassable) ──────────────────
+    // User direction (paraphrased): "I told you 100 times — only do
+    // HL/HH for LONG, LL/LH for SHORT. Hard fix it." This is the
+    // FINAL check before any signal returns. NO gate toggle, NO env
+    // flag, NO setup override can bypass this. If the 1m structure
+    // isn't purely bullish for LONG (or purely bearish for SHORT),
+    // return null.
+    //
+    // 1m must have HH or HL — and NOT have LH or LL (no topping squeeze).
+    // SHORT mirror: must have LL or LH — and NOT have HH or HL.
+    {
+      const finalCheck1m = detectStructure(klines1m, 2);
+      if (side === 'LONG') {
+        const cleanBull = finalCheck1m && (
+          (finalCheck1m.hh && !finalCheck1m.lh && !finalCheck1m.ll) ||
+          (finalCheck1m.hl && !finalCheck1m.lh && !finalCheck1m.ll)
+        );
+        if (!cleanBull) {
+          dlog(`null — HARD GUARD: LONG requires clean 1m HH/HL with no LH/LL (hh=${finalCheck1m?.hh} hl=${finalCheck1m?.hl} lh=${finalCheck1m?.lh} ll=${finalCheck1m?.ll})`);
+          return null;
+        }
+      } else {
+        const cleanBear = finalCheck1m && (
+          (finalCheck1m.ll && !finalCheck1m.hl && !finalCheck1m.hh) ||
+          (finalCheck1m.lh && !finalCheck1m.hl && !finalCheck1m.hh)
+        );
+        if (!cleanBear) {
+          dlog(`null — HARD GUARD: SHORT requires clean 1m LL/LH with no HL/HH (hh=${finalCheck1m?.hh} hl=${finalCheck1m?.hl} lh=${finalCheck1m?.lh} ll=${finalCheck1m?.ll})`);
+          return null;
+        }
+      }
+    }
 
     return {
       symbol,
