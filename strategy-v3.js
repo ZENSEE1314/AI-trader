@@ -890,6 +890,37 @@ async function analyzeV3(ticker) {
     if (volSpike) parts.push('VolSpike');
     const setupName = parts.join('+');
 
+    // ── Setup-aware blacklist (from 30-day backtest) ──────────
+    // These exact combinations had 0% WR or net negative across all
+    // trades. Block them outright regardless of any other gate.
+    const KNOWN_LOSERS = new Set([
+      'MSTF+@15HH+1mHH+EMAUp+VolSpike',
+      'MSTF+@15HH+1mHH+EMAUp',
+      'MSTF+@15LH+1mLL',
+      'MSTF+@15LL+1mLL',
+      'LiqGrab+@OP+EMAUp', // 0% WR in latest run
+    ]);
+    if (KNOWN_LOSERS.has(setupName)) {
+      dlog(`null — KNOWN LOSER setup blocked: ${setupName} (0% WR backtest)`);
+      return null;
+    }
+
+    // ── Setup quality tier — premium setups get looser gates ──
+    // VWAPTrend+EMAUp had 66.7% WR / +$144 — the star. Premium
+    // setups can fire at chase ≤0.15% and rPos ≤15% instead of
+    // the ultra-tight 0.05% / 5%.
+    const PREMIUM_SETUPS = new Set([
+      'VWAPTrend+@VWAP+EMAUp',
+      'VWAPTrend+@VWAP+EMAUp+VolSpike',
+      'MSTF+@15HH+1mHH',
+      'MSTF+@3HH+1mHH',
+      'MSTF+@3LL+1mLL',
+      'LiqGrab+@PDH+EMAUp',
+      'LiqGrab+@PDH+EMAUp+VolSpike',
+    ]);
+    const isPremium = PREMIUM_SETUPS.has(setupName);
+    if (isPremium) dlog(`PREMIUM setup ${setupName} — looser gates apply`);
+
     // ── VWAP bands (1m bars, matches Bitunix chart) — computed FIRST
     // because the range-pos gate now uses them for the momentum-side
     // exception (LONG above upper band / SHORT below lower band ride
@@ -991,10 +1022,8 @@ async function analyzeV3(ticker) {
       const sz = hi - lo;
       if (sz > 0) {
         rPos = (price - lo) / sz;
-        // strongTrend bypass also REMOVED — user direction: enter at the
-        // pivot or skip. No more "trend continuation" mid-move entries.
-        if (side === 'LONG'  && rPos > 0.05) { dlog(`null — LONG rPos ${(rPos*100).toFixed(1)}% > 5%`); return null; }
-        if (side === 'SHORT' && rPos < 0.95) { dlog(`null — SHORT rPos ${(rPos*100).toFixed(1)}% < 95%`); return null; }
+        if (side === 'LONG'  && rPos > (isPremium ? 0.15 : 0.05)) { dlog(`null — LONG rPos ${(rPos*100).toFixed(1)}% > ${isPremium ? '15' : '5'}%`); return null; }
+        if (side === 'SHORT' && rPos < (isPremium ? 0.85 : 0.95)) { dlog(`null — SHORT rPos ${(rPos*100).toFixed(1)}% < ${isPremium ? '85' : '95'}%`); return null; }
       }
     }
 
@@ -1006,11 +1035,10 @@ async function analyzeV3(ticker) {
         const h = parseFloat(k[2]); if (h > hi30) hi30 = h;
         const l = parseFloat(k[3]); if (l < lo30) lo30 = l;
       }
-      const MAX_CHASE_PCT = 0.0005; // 0.05 % — was 0.15 %, halved 3x.
-      // User direction: "make it 0.05% no more far. long or short if
-      // miss it miss." Entry must be within 5 bps of the actual swing
-      // pivot. If we missed the pivot, skip the trade — no chase ever.
-      // Also bypass-removed (was previously skipped on strongTrend).
+      // Setup-aware chase: 0.05% (5 bps) for normal setups; premium
+      // setups (proven winners in backtest, 60-100% WR) get 0.15%
+      // — letting more profitable trades through.
+      const MAX_CHASE_PCT = isPremium ? 0.0015 : 0.0005;
       if (side === 'LONG') {
         const dist = (price - lo30) / lo30;
         if (dist > MAX_CHASE_PCT) {
