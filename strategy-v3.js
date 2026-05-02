@@ -680,11 +680,30 @@ async function analyzeV3(ticker) {
     //     above OP & vwapDiff >= -1.5%  → ok for LONG
     //     below OP & vwapDiff <=  1.5%  → ok for SHORT
     //   Trade fires ONLY when both point the same direction.
-    const s1bias = detectStructure(klines1m, 2);
+    const s1bias    = detectStructure(klines1m, 2);   // confirmed 2-bar pivots
+    const s1fast    = detectStructure(klines1m, 1);   // 1-bar pivot fast path
+    const FAST_MIN_BOUNCE = 0.0015;                   // 0.15 %
+
     let structBias = null;
     if (s1bias) {
       if      (s1bias.hh || (s1bias.hl && !s1bias.lh)) structBias = 'long';
       else if (s1bias.ll || (s1bias.lh && !s1bias.hl)) structBias = 'short';
+    }
+
+    // Fast path: if confirmed swing didn't give a bias but a 1-bar pivot
+    // did AND the bounce/drop magnitude is ≥0.15%, accept it. User
+    // direction: "if price is high enough no need to wait 2 candle".
+    if (!structBias && s1fast) {
+      const wantsLong  = s1fast.hh || (s1fast.hl && !s1fast.lh);
+      const wantsShort = s1fast.ll || (s1fast.lh && !s1fast.hl);
+      if (wantsLong && s1fast.lastSwingLow) {
+        const bounce = (price - s1fast.lastSwingLow) / s1fast.lastSwingLow;
+        if (bounce >= FAST_MIN_BOUNCE) structBias = 'long';
+      }
+      if (!structBias && wantsShort && s1fast.lastSwingHigh) {
+        const drop = (s1fast.lastSwingHigh - price) / s1fast.lastSwingHigh;
+        if (drop >= FAST_MIN_BOUNCE) structBias = 'short';
+      }
     }
 
     const aboveOP   = price > levels.op;
@@ -697,7 +716,7 @@ async function analyzeV3(ticker) {
     if (structBias && opVwapBias && structBias === opVwapBias) {
       bias = structBias;
     }
-    dlog(`bias=${bias} struct=${structBias} (hh=${s1bias?.hh} hl=${s1bias?.hl} lh=${s1bias?.lh} ll=${s1bias?.ll}) opVwap=${opVwapBias} (aboveOP=${aboveOP} vwapDiff=${(vwapDiff*100).toFixed(2)}%)`);
+    dlog(`bias=${bias} struct=${structBias} confirmed(hh=${s1bias?.hh} hl=${s1bias?.hl} lh=${s1bias?.lh} ll=${s1bias?.ll}) fast(hh=${s1fast?.hh} hl=${s1fast?.hl} lh=${s1fast?.lh} ll=${s1fast?.ll}) opVwap=${opVwapBias} (aboveOP=${aboveOP} vwapDiff=${(vwapDiff*100).toFixed(2)}%)`);
 
     // ── Setup 5 (MomentumBreakout) bypasses 1m structure bias ─
     //   Impulse breakouts pick their own direction from candle body —
