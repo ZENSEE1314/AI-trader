@@ -3105,7 +3105,7 @@
 
   // Load live prices for token cards
   async function loadTokenCardPrices() {
-    const symbols = ['BTCUSDT','ETHUSDT','SOLUSDT','BNBUSDT'];
+    const symbols = ['BTCUSDT','ETHUSDT','SOLUSDT','BNBUSDT','XRPUSDT'];
     for (const sym of symbols) {
       try {
         const res = await fetch(`https://fapi.binance.com/fapi/v1/ticker/price?symbol=${sym}`);

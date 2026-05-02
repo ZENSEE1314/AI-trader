@@ -160,8 +160,8 @@ async function shouldAvoidCoin(symbol) {
 
 const DEFAULT_PARAMS = {
   // ── LOCKED by safety agent — AI CANNOT modify these ──
-  SL_MARGIN_PCT: 0.30,     // -30% margin loss (hardcoded in cycle.js)
-  TP_MARGIN_PCT: 0.45,     // +45% margin target (hardcoded in cycle.js)
+  SL_MARGIN_PCT: 0.10,     // System 5: -10% margin initial SL (hardcoded in cycle.js)
+  TP_MARGIN_PCT: 0.45,     // reference only — trailing SL handles exit (hardcoded in cycle.js)
   WALLET_SIZE_PCT: 0.10,   // 10% of wallet per trade (locked)
   LEV_BTC_ETH: 20,         // BTC/ETH leverage (admin-only via dashboard)
   LEV_ALT: 20,             // altcoin leverage (admin-only via dashboard)
@@ -221,10 +221,10 @@ async function getOptimalParams() {
     }
   } catch (_) {}
 
-  // ── 1-3. LOCKED: SL/TP are fixed constants in cycle.js (30%/45% margin)
+  // ── 1-3. LOCKED: SL/TP are fixed constants in cycle.js (System 5: 10%/45% margin)
   // AI cannot modify SL_MARGIN_PCT or TP_MARGIN_PCT — risk management is human-controlled
-  params.SL_MARGIN_PCT = 0.30;  // locked
-  params.TP_MARGIN_PCT = 0.45;  // locked
+  params.SL_MARGIN_PCT = 0.10;  // locked — System 5 initial SL
+  params.TP_MARGIN_PCT = 0.45;  // locked — reference only, trailing SL handles exit
 
   // ── 4. Min Score threshold: find cutoff that filters losers ──
   const scoreAnalysis = await query(

@@ -32,12 +32,13 @@ const MAX_SIGNALS = 3;
 const SMC_MAX_TP_PCT = 0.020;
 const SMC_SL_PCT     = 0.010;
 
-// SMC trades only these 4 symbols — no random altcoins
+// SMC trades only these 5 symbols — no random altcoins
 const SMC_WHITELIST = new Map([
   ['BTCUSDT', 100],
   ['ETHUSDT', 100],
   ['SOLUSDT',  20],
   ['BNBUSDT',  20],
+  ['XRPUSDT',  50],
 ]);
 
 // Cache compiled strategies — reload from DB every 5 min
@@ -232,7 +233,7 @@ async function scanAI(log, opts = {}) {
   bLog.scan(`AI Scanner: ${strategies.length} strategies loaded (best: ${strategies[0]?.name} ${strategies[0]?.winRate?.toFixed(1)}% WR)`);
 
   // Always scan only the 4 watchlist coins — fetch prices individually (fast, no bulk ticker)
-  const watchSymbols = Array.from(SMC_WHITELIST.keys()); // ['BTCUSDT','ETHUSDT','SOLUSDT','BNBUSDT']
+  const watchSymbols = Array.from(SMC_WHITELIST.keys()); // ['BTCUSDT','ETHUSDT','SOLUSDT','BNBUSDT','XRPUSDT']
   const topCoins = [];
   for (const sym of watchSymbols) {
     try {

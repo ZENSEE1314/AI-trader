@@ -56,15 +56,15 @@ const CONFIG = {
 let lastBitunixSync = 0;
 
 // ── SL/TP Config ──────────────────────────────────────────
-// Capital $100 → trade $10 → target max net loss = 15% of margin ($1.50).
+// System 5 — initial SL = 10% capital (margin).
 // Fees at 100x: 0.04% taker × 2 sides × 100 leverage = 8% of margin.
 // Fees at  20x: 0.04% taker × 2 sides ×  20 leverage = 1.6% of margin.
-// SL_PCT is the GROSS price-loss budget. Net loss = SL_PCT + fees + slippage.
-// At 15% SL: 15% price + 8% fees + ~7% slippage = ~30% worst case. Never near 50%.
-//   100x: price SL = (0.15 − 0.08) / 100 = 0.07% price move → net ~15%
-//    20x: price SL = (0.15 − 0.016) / 20  = 0.67% price move → net ~15%
-const SL_PCT = 0.15;   // 15% NET target — fee deduction applied at trade time
-const TP_PCT = 0.45;   // reference TP — trailing SL handles the actual exit
+// SL_PCT is price-loss fraction; capital loss = SL_PCT × leverage.
+//   100x: price SL = 0.10/100 = 0.10% price move → 10% capital loss
+//    50x: price SL = 0.10/50  = 0.20% price move → 10% capital loss
+//    20x: price SL = 0.10/20  = 0.50% price move → 10% capital loss
+const SL_PCT = 0.10;   // System 5: 10% capital initial SL
+const TP_PCT = 0.45;   // reference only — trailing SL handles the actual exit
 
 // ── Active AI Version params — loaded from settings table, refreshed every 60s ──
 // Admin activates a backtest version via the UI → params saved to settings.
@@ -88,15 +88,14 @@ async function getActiveVersionParams() {
 // Taker fee: 0.04% entry + 0.04% exit = 0.08% notional both legs
 const TAKER_FEE_BOTH_LEGS = 0.0008;
 
-// Trailing SL tiers — all in CAPITAL % (profit as % of margin, = price% × leverage).
-// First step: +30% capital → lock breakeven (0%)  — 30% gap (same as initial SL risk)
-// All steps after: gap tightens to 10% — trail follows closely once in profit.
+// Trailing SL tiers — System 5 (used by non-v2/v3 strategies via calculateTrailingStep)
+// v3 active strategy uses calcTrailingSLV3 in strategy-v3.js instead.
 //
-//   +30% capital → lock  0%  (breakeven)  gap = 30%
-//   +40% capital → lock +30%              gap = 10%
-//   +50% capital → lock +40%              gap = 10%
-//   +60% capital → lock +50%              gap = 10%
-//   … and so on
+// System 5: initial SL = 10% capital, trail triggers at +46%, first lock = +45%
+//   +46% capital → lock +45%   gap = 1%
+//   +57% capital → lock +55%   gap = 10%
+//   +68% capital → lock +65%   gap = 10%
+//   … +10% SL every +11% capital gain
 //
 // At 20x leverage:  +10% capital = +0.5% price move
 // At 100x leverage: +10% capital = +0.1% price move
@@ -697,7 +696,7 @@ async function openTrade(client, pick, wallet) {
       closePosition: 'true', workingType: 'MARK_PRICE',
     });
     slOk = true;
-    bLog.trade(`SL set at $${fmtPrice(initialSlPrice)} (${(slPricePct*100).toFixed(2)}% from entry) | Trailing: starts at +30% capital gain, locks +10% capital, +15% capital per step`);
+    bLog.trade(`SL set at $${fmtPrice(initialSlPrice)} (${(slPricePct*100).toFixed(2)}% from entry) | System 5 trailing: triggers at +46% capital → locks +45%, then +10% SL every +11% gain`);
   } catch (e) { bLog.error(`Owner SL algo failed: ${e.message}`); }
 
   if (!slOk) {
@@ -1205,8 +1204,8 @@ async function main() {
     try {
       const kronos = require('./kronos');
 
-      // Only scan the 4 coins we actually trade — no top-volume sweep
-      const topSymbols = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT'];
+      // Only scan the 5 coins we actually trade — no top-volume sweep
+      const topSymbols = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT'];
 
       bLog.ai(`Kronos batch scan starting: ${topSymbols.join(', ')}`);
       kronosPredictions = await kronos.scanAllTokens(topSymbols, '15m', 20, 3);
@@ -1494,10 +1493,10 @@ async function executeForAllUsers(pick) {
     const keys = allKeys;
     const sym = pick.symbol || pick.sym;
 
-    // ── HARD WHITELIST: Only 4 coins ever reach the exchange ──────────────────
-    const TRADE_WHITELIST = new Set(['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT']);
+    // ── HARD WHITELIST: Only 5 coins ever reach the exchange ──────────────────
+    const TRADE_WHITELIST = new Set(['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT']);
     if (!TRADE_WHITELIST.has(sym)) {
-      bLog.trade(`BLOCKED: ${sym} is not in the 4-coin whitelist — trade cancelled`);
+      bLog.trade(`BLOCKED: ${sym} is not in the 5-coin whitelist — trade cancelled`);
       return;
     }
 

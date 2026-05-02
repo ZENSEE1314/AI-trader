@@ -36,18 +36,17 @@
 //
 //  NO SESSION FILTER — 24/7 scanning.
 //
-//  TRAILING SL (capital % based, leveraged):
-//     Initial SL:    20 % of capital (margin)
-//     Trail starts:  +21 % profit  →  SL locked at +20 %
-//     Steps:         +31 %  → SL +30 %
-//                    +41 %  → SL +40 %
-//                    … every +10 % thereafter
-//     Formula:       lockCapPct = floor(capitalPct × 10) / 10
+//  TRAILING SL — System 5 (capital % based, leveraged):
+//     Initial SL:    10 % of capital (margin)
+//     Trail starts:  +46 % profit  →  SL locked at +45 %
+//     Steps:         +57 %  → SL +55 %
+//                    +68 %  → SL +65 %
+//                    … +10 % SL every +11 % profit thereafter
 //
 //     Example — $100 margin, 20x leverage:
-//       Profit $21 → SL at $20  (20 %)
-//       Profit $31 → SL at $30  (30 %)
-//       Profit $41 → SL at $40  (40 %)
+//       Profit $46 → SL at $45  (45 %)
+//       Profit $57 → SL at $55  (55 %)
+//       Profit $68 → SL at $65  (65 %)
 //
 // ═══════════════════════════════════════════════════════════════
 
@@ -460,14 +459,15 @@ function scoreSignal({ setup, bias, vwapBias, volSpike, rejCandle, ema9, ema21 }
   return Math.min(s, 20);
 }
 
-// ── Trailing SL (capital % — v3 rules) ───────────────────────
-//   Initial SL:   20 % capital  =  20%/leverage price move
-//   Trail starts: +21 % capital profit
-//   Lock formula: floor(capitalPct × 10) / 10  (same maths as v2, lower threshold)
+// ── Trailing SL — System 5 (capital % — v3 rules) ────────────
+//   Initial SL:   10% capital = 10%/leverage price move
+//   Trail starts: +46% capital profit → first lock at +45%
+//   Steps:        +10% SL every +11% capital gain thereafter
 //
-//   With leverage=20, entry=$2000:
-//     +21 % capital (+1.05 % price) → SL at entry − 1.0 % (20 % capital locked)
-//     +31 % capital (+1.55 % price) → SL at entry + 0.5 % (30 % capital locked)
+//   With leverage=20, entry=$1000:
+//     +46% capital (+2.30% price) → SL at entry +2.25% (+45% capital locked)
+//     +57% capital (+2.85% price) → SL at entry +2.75% (+55% capital locked)
+//     +68% capital (+3.40% price) → SL at entry +3.25% (+65% capital locked)
 
 function calcTrailingSLV3(entryPrice, currentPrice, side, leverage = 1) {
   const pricePct =
@@ -477,18 +477,22 @@ function calcTrailingSLV3(entryPrice, currentPrice, side, leverage = 1) {
 
   const capitalPct = pricePct * leverage;
 
-  const INITIAL_SL_CAP = 0.20;  // 20 % capital initial stop
-  const TRAIL_ON_CAP   = 0.21;  // trailing kicks in at +21 % capital
+  // System 5: 10% initial SL, trail triggers at +46%, first lock +45%
+  const INITIAL_SL_CAP = 0.10;  // 10% capital initial stop
+  const TRAIL_ON_CAP   = 0.46;  // trailing kicks in at +46% capital
 
-  if (capitalPct < TRAIL_ON_CAP) {
+  if (capitalPct < TRAIL_ON_CAP - 0.0001) {
     const slPricePct = INITIAL_SL_CAP / leverage;
     return side === 'LONG'
       ? entryPrice * (1 - slPricePct)
       : entryPrice * (1 + slPricePct);
   }
 
-  // Lock: floor(0.21 → 0.20, 0.31 → 0.30, 0.41 → 0.40 …)
-  const lockCapPct   = Math.floor(capitalPct * 10) / 10;
+  // Lock: +45% at trigger, then +10% every +11% capital gain
+  // Round offset to avoid floating-point drift (0.57 - 0.46 = 0.10999...)
+  const offsetPct    = Math.round((capitalPct - TRAIL_ON_CAP) * 10000) / 10000;
+  const stepsAbove   = Math.floor(offsetPct / 0.11);
+  const lockCapPct   = 0.45 + stepsAbove * 0.10;
   const lockPricePct = lockCapPct / leverage;
 
   return side === 'LONG'

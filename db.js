@@ -673,15 +673,16 @@ async function initAllTables() {
     try { await pool.query(sql); } catch (_) {}
   }
 
-  // Set SOL and BNB to 50× leverage (upsert — safe to run on every boot)
+  // Set SOL, BNB, and XRP leverage (upsert — safe to run on every boot)
   try {
     await pool.query(
       `INSERT INTO token_leverage (symbol, leverage, enabled) VALUES
          ('SOLUSDT', 50, true),
-         ('BNBUSDT', 50, true)
+         ('BNBUSDT', 50, true),
+         ('XRPUSDT', 50, true)
        ON CONFLICT (symbol) DO UPDATE SET leverage = EXCLUDED.leverage, enabled = true`
     );
-    console.log('[DB] Token leverage: SOLUSDT=50×, BNBUSDT=50×');
+    console.log('[DB] Token leverage: SOLUSDT=50×, BNBUSDT=50×, XRPUSDT=50×');
   } catch (_) {}
 
   // Clean up wrong symbols (renamed/delisted)
@@ -700,6 +701,7 @@ async function initAllTables() {
         { symbol: 'ETHUSDT',  rank: 2 },
         { symbol: 'SOLUSDT',  rank: 3 },
         { symbol: 'BNBUSDT',  rank: 4 },
+        { symbol: 'XRPUSDT',  rank: 5 },
       ];
       for (const d of defaults) {
         await pool.query(
@@ -709,7 +711,7 @@ async function initAllTables() {
           [d.symbol, d.rank]
         );
       }
-      console.log('[DB] Token pool seeded: BTCUSDT, ETHUSDT, SOLUSDT, BNBUSDT');
+      console.log('[DB] Token pool seeded: BTCUSDT, ETHUSDT, SOLUSDT, BNBUSDT, XRPUSDT');
     }
   } catch (_) {}
 
@@ -722,7 +724,7 @@ async function initAllTables() {
           name: 'SMC Engine',
           description: '2-gate SMC: 3m HL/LH sets direction, 1m HL/LH confirms entry near fresh swing. EMA200 bias penalty.',
           config: {
-            timeframe: '1m', symbols: ['BTCUSDT','ETHUSDT','SOLUSDT','BNBUSDT'],
+            timeframe: '1m', symbols: ['BTCUSDT','ETHUSDT','SOLUSDT','BNBUSDT','XRPUSDT'],
             sl_pct: 0.005, tp_multiplier: 2.0, trailing_step: 0.012, size_pct: 0.10,
             indicators: {
               hl_structure: { enabled: true,  primary_tf: '3m', confirm_tf: '1m', primary_swing: 5, confirm_swing: 4, max_candle_age: 20, max_chase_pct: 0.015 },
@@ -744,7 +746,7 @@ async function initAllTables() {
           name: 'T-Junction',
           description: 'MA5/10/20 converge into a T-stem then fan out. Fires in prime UTC sessions only. VWAP + volume confirmed.',
           config: {
-            timeframe: '5m', symbols: ['BTCUSDT','ETHUSDT','SOLUSDT','BNBUSDT'],
+            timeframe: '5m', symbols: ['BTCUSDT','ETHUSDT','SOLUSDT','BNBUSDT','XRPUSDT'],
             sl_pct: 0.010, tp_multiplier: 2.0, trailing_step: 0, size_pct: 0.10,
             indicators: {
               prime_session: { enabled: true,  grace_ms: 90000 },
@@ -766,7 +768,7 @@ async function initAllTables() {
           name: 'MA Stack Trend',
           description: 'SMA5/10/20 strict order + active fan opening. Trending setups only. VWAP + ATR + volume gated.',
           config: {
-            timeframe: '1m', symbols: ['BTCUSDT','ETHUSDT','SOLUSDT','BNBUSDT'],
+            timeframe: '1m', symbols: ['BTCUSDT','ETHUSDT','SOLUSDT','BNBUSDT','XRPUSDT'],
             sl_pct: 0.015, tp_multiplier: 2.0, trailing_step: 0, size_pct: 0.10,
             indicators: {
               ma_stack:     { enabled: true,  min_spread: 0.0007, min_spread_growth: 1.2, max_extension_atr: 1.5, atr_period: 14 },
@@ -788,7 +790,7 @@ async function initAllTables() {
           name: 'Spike-HL Sweep',
           description: 'Smart-money pivot rejection. Wick sweeps a stop level then closes back. Session gated + EMA trend bias.',
           config: {
-            timeframe: '1m', symbols: ['BTCUSDT','ETHUSDT','SOLUSDT','BNBUSDT'],
+            timeframe: '1m', symbols: ['BTCUSDT','ETHUSDT','SOLUSDT','BNBUSDT','XRPUSDT'],
             sl_pct: 0.005, tp_multiplier: 3.0, trailing_step: 0, size_pct: 0.10,
             indicators: {
               spike_hl:     { enabled: true,  min_spike_pct: 0.0015, max_spike_pct: 0.015, min_wick_ratio: 1.2, sl_buffer: 0.001 },

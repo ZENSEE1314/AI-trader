@@ -32,11 +32,11 @@ const SELF_IMPROVE_LESSONS = {
   repeated_failures: 'I will diagnose root causes instead of repeating failed patterns.',
 };
 
-// Only the 4 tokens we actively trade get dedicated agents.
-// Removed: XRPUSDT, DOGEUSDT, ADAUSDT, AVAXUSDT, SUIUSDT, LINKUSDT
+// Only the 5 tokens we actively trade get dedicated agents.
+// Removed: DOGEUSDT, ADAUSDT, AVAXUSDT, SUIUSDT, LINKUSDT
 // — none of them are in the SMC/Spike-HL/T-Junction/Triple-MA whitelists.
 const DEFAULT_TOKEN_AGENTS = [
-  'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT',
+  'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT',
 ];
 
 class AgentCoordinator extends BaseAgent {
@@ -247,9 +247,9 @@ class AgentCoordinator extends BaseAgent {
   }
 
   async _fetchTopTokens() {
-    // Hard-coded to 4 allowed coins only — no dynamic top-N fetching.
-    // Previously this fetched top 10 by volume from Binance which included DOGE, XRP, PEPE etc.
-    const ALLOWED = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT'];
+    // Hard-coded to 5 allowed coins only — no dynamic top-N fetching.
+    // Previously this fetched top 10 by volume from Binance which included DOGE, PEPE etc.
+    const ALLOWED = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT'];
     for (const sym of ALLOWED) {
       if (!this.tokenAgents.has(sym)) this.addTokenAgent(sym);
     }
@@ -847,8 +847,8 @@ class AgentCoordinator extends BaseAgent {
         }
       }
 
-      // ── Hard whitelist: only 4 coins ever proceed to execution ──
-      const COORD_WHITELIST = new Set(['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT']);
+      // ── Hard whitelist: only 5 coins ever proceed to execution ──
+      const COORD_WHITELIST = new Set(['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT']);
       const beforeWhitelist = signals.length;
       signals = signals.filter(s => COORD_WHITELIST.has(s.symbol || s.sym));
       if (beforeWhitelist > signals.length) {
@@ -1193,7 +1193,7 @@ class AgentCoordinator extends BaseAgent {
         '   Catches the SHORT AT THE TOP before the break. RSI > 55 required.',
         '',
         'All strategies require MIN_SCORE ≥ 8 and pass RSI + volume + trend filters.',
-        'Tokens scanned: BTCUSDT, ETHUSDT, SOLUSDT, BNBUSDT (24/7)',
+        'Tokens scanned: BTCUSDT, ETHUSDT, SOLUSDT, BNBUSDT, XRPUSDT (24/7)',
       ].join('\n') };
     }
 
