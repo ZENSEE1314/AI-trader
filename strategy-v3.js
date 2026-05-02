@@ -751,18 +751,21 @@ async function analyzeV3(ticker) {
     // User rule: "1min hh alone don't fire keep follow 15min or 3min
     // + 1min". Either 15m OR 3m must agree with the trade direction —
     // 1m alone is never enough.
+    //
+    // HTF squeeze rejection (same as 1m): if HTF has BOTH HL and LH
+    // (or HH and LL), neither direction wins. User showed ETH chart
+    // with HH→HL→LH topping pattern — old `(hh || hl)` accepted the
+    // HL alone and let LONG fire into the LH (resistance).
     const s15trend = detectStructure(klines15m, 3);
     const s3trend  = klines3m ? detectStructure(klines3m, 3) : null;
-    const htfBullEither = (s15trend && (s15trend.hh || s15trend.hl))
-                       || (s3trend  && (s3trend.hh  || s3trend.hl));
-    const htfBearEither = (s15trend && (s15trend.ll || s15trend.lh))
-                       || (s3trend  && (s3trend.ll  || s3trend.lh));
+    const isHtfBull = (s) => s && ((s.hh && !s.ll) || (s.hl && !s.lh && !s.ll));
+    const isHtfBear = (s) => s && ((s.ll && !s.hh) || (s.lh && !s.hl && !s.hh));
+    const htfBullEither = isHtfBull(s15trend) || isHtfBull(s3trend);
+    const htfBearEither = isHtfBear(s15trend) || isHtfBear(s3trend);
     // Strict (BOTH 15m AND 3m agree) — only used for HTF-override and
     // strongTrend bypass.
-    const htfBear  = s15trend && (s15trend.ll || s15trend.lh)
-                  && s3trend  && (s3trend.ll  || s3trend.lh);
-    const htfBull  = s15trend && (s15trend.hh || s15trend.hl)
-                  && s3trend  && (s3trend.hh  || s3trend.hl);
+    const htfBear = isHtfBear(s15trend) && isHtfBear(s3trend);
+    const htfBull = isHtfBull(s15trend) && isHtfBull(s3trend);
 
     let bias = null;
     if (structBias && opVwapBias && structBias === opVwapBias) {
