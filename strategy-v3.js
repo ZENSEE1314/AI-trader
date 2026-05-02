@@ -1023,8 +1023,8 @@ async function analyzeV3(ticker) {
       const sz = hi - lo;
       if (sz > 0) {
         rPos = (price - lo) / sz;
-        if (side === 'LONG'  && rPos > (isPremium ? 0.15 : 0.05)) { dlog(`null — LONG rPos ${(rPos*100).toFixed(1)}% > ${isPremium ? '15' : '5'}%`); return null; }
-        if (side === 'SHORT' && rPos < (isPremium ? 0.85 : 0.95)) { dlog(`null — SHORT rPos ${(rPos*100).toFixed(1)}% < ${isPremium ? '85' : '95'}%`); return null; }
+        if (side === 'LONG'  && rPos > 0.05) { dlog(`null — LONG rPos ${(rPos*100).toFixed(1)}% > 5%`); return null; }
+        if (side === 'SHORT' && rPos < 0.95) { dlog(`null — SHORT rPos ${(rPos*100).toFixed(1)}% < 95%`); return null; }
       }
     }
 
@@ -1039,7 +1039,10 @@ async function analyzeV3(ticker) {
       // Setup-aware chase: 0.05% (5 bps) for normal setups; premium
       // setups (proven winners in backtest, 60-100% WR) get 0.15%
       // — letting more profitable trades through.
-      const MAX_CHASE_PCT = isPremium ? 0.0015 : 0.0005;
+      // Strict 0.05% (5 bps) for ALL setups — no premium loosening.
+      // User flagged ETH/BTC trades firing far from HL pivot; the
+      // premium 0.15% bonus was the cause.
+      const MAX_CHASE_PCT = 0.0005;
       if (side === 'LONG') {
         const dist = (price - lo30) / lo30;
         if (dist > MAX_CHASE_PCT) {
