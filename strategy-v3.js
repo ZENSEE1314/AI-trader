@@ -766,14 +766,23 @@ async function analyzeV3(ticker) {
 
     // ── 1h regime gate ─────────────────────────────────────────
     // User rule: "bull no short and bear no long". 1h structure
-    // determines market regime — only LONG in a bull regime, only
-    // SHORT in a bear regime. 30-day backtest showed SHORT setups
-    // in a bullish month had 16-33% WR while LONG setups hit
-    // 55-75% WR. The 1h trend is the market filter that prevents
-    // counter-regime trades.
+    // determines market regime. STRICT: no trades when 1h is in a
+    // squeeze (both bullish AND bearish swings present) — that's
+    // when MSTF EMADn -10% WR / -$161 fires in our backtests.
+    //   bullRegime: 1h has HH alone, OR (HL && no opposite-direction
+    //               LH/LL). Latest swing high made HH (uptrend).
+    //   bearRegime: 1h has LL alone, OR (LH && no HL/HH). Latest
+    //               swing low made LL (downtrend).
+    //   Squeeze    → neither regime → no trade.
     const s1hRegime = klines1h ? detectStructure(klines1h, 3) : null;
-    const bullRegime = s1hRegime && (s1hRegime.hh || s1hRegime.hl) && !s1hRegime.ll;
-    const bearRegime = s1hRegime && (s1hRegime.ll || s1hRegime.lh) && !s1hRegime.hh;
+    const bullRegime = s1hRegime && (
+      (s1hRegime.hh && !s1hRegime.ll) ||
+      (s1hRegime.hl && !s1hRegime.lh && !s1hRegime.ll)
+    );
+    const bearRegime = s1hRegime && (
+      (s1hRegime.ll && !s1hRegime.hh) ||
+      (s1hRegime.lh && !s1hRegime.hl && !s1hRegime.hh)
+    );
     if (bias === 'long'  && !bullRegime) {
       dlog(`null — LONG blocked: 1h regime not bullish (hh=${s1hRegime?.hh} hl=${s1hRegime?.hl} lh=${s1hRegime?.lh} ll=${s1hRegime?.ll})`);
       bias = null;
