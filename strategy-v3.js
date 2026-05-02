@@ -814,6 +814,7 @@ async function analyzeV3(ticker) {
     const closes = klines15m.map(k => parseFloat(k[4]));
     const ema9   = ema(closes, 9);
     const ema21  = ema(closes, 21);
+    const aboveVWAP = price > vwap;
     const vwapBias = (bias === 'long' && aboveVWAP) || (bias === 'short' && !aboveVWAP);
 
     // ── Score ─────────────────────────────────────────────────
@@ -1050,7 +1051,8 @@ async function analyzeV3(ticker) {
       version:  'v3',
     };
 
-  } catch (_) {
+  } catch (e) {
+    if (ticker && ticker.verbose) console.log(`[v3-diag] ${ticker.symbol || '?'}: THROWN ${e.message}`);
     return null;
   }
 }
