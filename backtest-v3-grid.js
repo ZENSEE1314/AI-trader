@@ -25,13 +25,28 @@ const CAPITAL = process.env.CAPITAL || '1000';
 
 const ALL_GATES = ['htf', 'regime', 'zone', 'band', 'chase', 'rpos', 'slope', 'tightrange', 'strongtrend'];
 
+// Based on prior single-ablation grid:
+//   Helpful to disable (increased P&L): band, slope, tightrange, htf, strongtrend
+//   Critical to keep ON (disabling killed P&L): chase, rpos, zone, regime
+const HELPFUL = ['band', 'slope', 'tightrange', 'htf', 'strongtrend'];
+
+function combinations(arr, n) {
+  if (n === 0) return [[]];
+  if (arr.length === 0) return [];
+  const [first, ...rest] = arr;
+  const withFirst  = combinations(rest, n - 1).map(c => [first, ...c]);
+  const without    = combinations(rest, n);
+  return [...withFirst, ...without];
+}
+
 const VARIANTS = [
-  { label: 'baseline (all gates ON)',     disable: '' },
-  ...ALL_GATES.map(g => ({ label: `disable ${g}`, disable: g })),
-  // A few combos
-  { label: 'disable rpos + chase',        disable: 'rpos,chase' },
-  { label: 'disable zone + regime',       disable: 'zone,regime' },
-  { label: 'minimal (only htf + band)',   disable: 'regime,zone,chase,rpos,slope,tightrange,strongtrend' },
+  { label: 'baseline (all gates ON)', disable: '' },
+  // Singles already known from prior run — skip to save time.
+  // Test combos of helpful disables: pairs, triples, quads, all-5.
+  ...combinations(HELPFUL, 2).map(c => ({ label: `disable ${c.join('+')}`, disable: c.join(',') })),
+  ...combinations(HELPFUL, 3).map(c => ({ label: `disable ${c.join('+')}`, disable: c.join(',') })),
+  ...combinations(HELPFUL, 4).map(c => ({ label: `disable ${c.join('+')}`, disable: c.join(',') })),
+  { label: `disable all helpful (${HELPFUL.join('+')})`, disable: HELPFUL.join(',') },
 ];
 
 function runOne(disable) {
