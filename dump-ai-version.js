@@ -1,11 +1,15 @@
 // ════════════════════════════════════════════════════════════════
 //  dump-ai-version.js
-//  Print the full config of a saved AI version.
+//  Print the full config of a saved version, searching ALL three
+//  tables the dashboard pulls from:
+//    1. ai_versions          (named, e.g. v3.52)
+//    2. strategy_versions    (manually saved/activated)
+//    3. strategy_search_results (optimizer scans, grouped by genome)
 //
 //  Usage:
-//    VERSION=v3.42 node dump-ai-version.js
-//    VERSION_LIKE=3.42 node dump-ai-version.js
-//    TOP_N=5 node dump-ai-version.js   # top 5 by total_pnl
+//    VERSION=v3.42 node dump-ai-version.js   # exact match across tables
+//    QUERY=3.42    node dump-ai-version.js   # fuzzy ILIKE search
+//    LIST=1        node dump-ai-version.js   # list latest 30
 // ════════════════════════════════════════════════════════════════
 
 'use strict';
@@ -15,64 +19,78 @@ const { query } = require('./db');
 (async () => {
   try {
     const exact = process.env.VERSION;
-    const like  = process.env.VERSION_LIKE;
-    const topN  = parseInt(process.env.TOP_N || '0', 10);
+    const fuzzy = process.env.QUERY;
+    const list  = process.env.LIST;
 
-    let rows;
-    if (exact) {
-      rows = await query(
-        `SELECT * FROM ai_versions WHERE version = $1 ORDER BY id DESC LIMIT 5`,
-        [exact],
-      );
-    } else if (like) {
-      rows = await query(
-        `SELECT * FROM ai_versions WHERE version ILIKE $1 ORDER BY id DESC LIMIT 5`,
-        [`%${like}%`],
-      );
-    } else if (topN > 0) {
-      rows = await query(
-        `SELECT * FROM ai_versions
-         WHERE win_rate IS NOT NULL AND total_pnl IS NOT NULL
-         ORDER BY total_pnl DESC
-         LIMIT $1`,
-        [topN],
-      );
-    } else {
-      rows = await query(
+    if (list) {
+      console.log('═══ ai_versions (latest 20) ═══');
+      const r = await query(
         `SELECT id, version, trade_count, win_rate, total_pnl, created_at
-         FROM ai_versions ORDER BY id DESC LIMIT 30`,
-      );
-      console.log('Latest 30 saved versions (set VERSION=… to inspect one):');
-      console.table(rows.map(r => ({
-        id: r.id, version: r.version, trades: r.trade_count,
-        wr: r.win_rate, pnl: r.total_pnl, created: r.created_at,
-      })));
+         FROM ai_versions ORDER BY id DESC LIMIT 20`,
+      ).catch(() => []);
+      console.table(r.map(x => ({ id: x.id, version: x.version, tr: x.trade_count, wr: x.win_rate, pnl: x.total_pnl })));
+
+      console.log('\n═══ strategy_versions (top 20 by WR) ═══');
+      const sv = await query(
+        `SELECT id, name, win_rate, total_trades, total_return, source, is_active, created_at
+         FROM strategy_versions ORDER BY win_rate DESC NULLS LAST LIMIT 20`,
+      ).catch(() => []);
+      console.table(sv.map(x => ({ id: x.id, name: x.name, wr: x.win_rate, tr: x.total_trades, ret: x.total_return, src: x.source, active: x.is_active })));
+
       process.exit(0);
     }
 
-    if (!rows.length) {
-      console.log('No matching version found.');
+    const found = [];
+
+    // 1. ai_versions
+    if (exact || fuzzy) {
+      const sql = exact
+        ? `SELECT * FROM ai_versions WHERE version = $1 LIMIT 5`
+        : `SELECT * FROM ai_versions WHERE version ILIKE $1 LIMIT 5`;
+      const args = exact ? [exact] : [`%${fuzzy}%`];
+      const rows = await query(sql, args).catch(() => []);
+      for (const r of rows) found.push({ table: 'ai_versions', row: r });
+    }
+
+    // 2. strategy_versions
+    if (exact || fuzzy) {
+      const sql = exact
+        ? `SELECT * FROM strategy_versions WHERE name = $1 LIMIT 5`
+        : `SELECT * FROM strategy_versions WHERE name ILIKE $1 LIMIT 5`;
+      const args = exact ? [exact] : [`%${fuzzy}%`];
+      const rows = await query(sql, args).catch(() => []);
+      for (const r of rows) found.push({ table: 'strategy_versions', row: r });
+    }
+
+    if (!found.length) {
+      console.log(`No version matching "${exact || fuzzy}" in ai_versions or strategy_versions.`);
+      console.log('Try LIST=1 to see all versions, or QUERY=<part> for fuzzy match.');
       process.exit(0);
     }
 
-    for (const r of rows) {
+    for (const f of found) {
       console.log('═'.repeat(70));
-      console.log(`#${r.id}  ${r.version}`);
+      console.log(`SOURCE: ${f.table}`);
+      const r = f.row;
+      console.log(`id=${r.id}  ${r.version || r.name}`);
       console.log(`created_at: ${r.created_at}`);
-      console.log(`trades=${r.trade_count}  WR=${r.win_rate}%  total_pnl=${r.total_pnl}  avg_pnl=${r.avg_pnl}`);
+      console.log(`trades=${r.trade_count || r.total_trades}  WR=${r.win_rate}  total=${r.total_pnl ?? r.total_return}`);
       console.log('');
-      console.log('--- PARAMS (active config) ---');
-      console.log(JSON.stringify(r.params, null, 2));
+      console.log('--- PARAMS / GENOME ---');
+      console.log(JSON.stringify(r.params || r.genome, null, 2));
       console.log('');
-      console.log('--- SETUP_WEIGHTS (per-setup performance) ---');
-      console.log(JSON.stringify(r.setup_weights, null, 2));
-      console.log('');
-      console.log('--- AVOIDED_COINS ---');
-      console.log(JSON.stringify(r.avoided_coins, null, 2));
-      console.log('');
-      console.log('--- CHANGES (notes) ---');
-      console.log(r.changes || '(none)');
-      console.log('');
+      if (r.setup_weights) {
+        console.log('--- SETUP_WEIGHTS ---');
+        console.log(JSON.stringify(r.setup_weights, null, 2));
+      }
+      if (r.avoided_coins) {
+        console.log('--- AVOIDED_COINS ---');
+        console.log(JSON.stringify(r.avoided_coins, null, 2));
+      }
+      if (r.changes) {
+        console.log('--- CHANGES ---');
+        console.log(r.changes);
+      }
     }
     process.exit(0);
   } catch (e) {
