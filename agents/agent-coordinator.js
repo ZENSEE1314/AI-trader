@@ -785,56 +785,18 @@ class AgentCoordinator extends BaseAgent {
         if (i + BATCH_SIZE < tokenEntries.length) await new Promise(r => setTimeout(r, 200));
       }
 
-      // ── Signal sources are GATED to TokenAgents only ─────────────
-      // Per user direction: only the 5 token agents fire trades. The
-      // older scanners (ChartAgent / scanSMC / scanV3) still RUN below
-      // for diagnostics, learning, and to feed the AI brain — but their
-      // output is no longer pushed into the execution `signals` array.
-
-      // Run ChartAgent for telemetry only — its signals are NOT executed
-      if (!this.chartAgent.paused) {
-        this.currentTask = { description: 'Step 3/7: ChartAgent (advisory only)', startedAt: Date.now() };
-        try {
-          const monitoredSymbols = [...this.tokenAgents.keys()];
-          if (!this.chartAgent._survival.isAlive) {
-            this.chartAgent._survival.isAlive = true;
-            this.chartAgent._survival.health = 10;
-            bLog.trade('ChartAgent was dead — revived for advisory scanning');
-          }
-          const chartOutput = await this.chartAgent.run({ topNCoins, kronosPredictions, monitoredSymbols });
-          bLog.scan(`ChartAgent (advisory): ${chartOutput ? `${chartOutput.signals?.length || 0} signals SUPPRESSED — token agents only` : 'null'}`);
-        } catch (chartErr) {
-          bLog.error(`ChartAgent advisory scan failed: ${chartErr.message}`);
-        }
-      }
+      // ── Signal sources: TokenAgents ONLY ──────────────────────
+      // Each TokenAgent calls analyzeV3 directly and emits a signal via
+      // its execute() result above. The legacy ChartAgent / SMC / v3
+      // advisory scans were removed — they ran every cycle, produced
+      // suppressed signals, and added CPU + log noise without affecting
+      // execution.
 
       // Token agents stay active — background scan loop keeps them watching
       for (const [, ta] of tokenEntries) {
         ta.managedByCoordinator = true;
         ta.state = 'running';
         ta.currentTask = { description: `Watching ${ta.symbol}`, startedAt: Date.now() };
-      }
-
-      // ── v2.0 SMC engine — advisory only ──
-      try {
-        const { scanSMC } = require('../liquidity-sweep-engine');
-        const smcSignals = await scanSMC(bLog.scan.bind(bLog), { kronosPredictions });
-        if ((smcSignals || []).length > 0) {
-          bLog.scan(`[Coordinator] v2.0 SMC engine (advisory): ${smcSignals.length} signal(s) SUPPRESSED — token agents only`);
-        }
-      } catch (engineErr) {
-        bLog.error(`[Coordinator] SMC advisory scan failed: ${engineErr.message}`);
-      }
-
-      // ── v3 engine — advisory only ──
-      try {
-        const { scanV3 } = require('../strategy-v3');
-        const v3Signals = await scanV3(bLog.scan.bind(bLog));
-        if ((v3Signals || []).length > 0) {
-          bLog.scan(`[Coordinator] v3 engine (advisory): ${v3Signals.length} signal(s) SUPPRESSED — token agents only — ${v3Signals.map(s => `${s.symbol} ${s.direction} [${s.setupName}]`).join(', ')}`);
-        }
-      } catch (v3Err) {
-        bLog.error(`[Coordinator] v3 advisory scan failed: ${v3Err.message}`);
       }
 
       // Filter out globally banned tokens before further processing

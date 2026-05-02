@@ -364,7 +364,12 @@ function detectStructure(klines, swingLen = 3) {
   const hl = lLen >= 2 && swingLows[lLen - 1]  > swingLows[lLen - 2];
   const ll = lLen >= 2 && swingLows[lLen - 1]  < swingLows[lLen - 2];
 
-  return { hh, hl, lh, ll };
+  // Expose the latest swing prices so callers can apply distance checks
+  // (e.g. "don't chase LONG more than 0.3% above the latest HL pivot").
+  const lastSwingHigh = hLen >= 1 ? swingHighs[hLen - 1] : null;
+  const lastSwingLow  = lLen >= 1 ? swingLows[lLen - 1]  : null;
+
+  return { hh, hl, lh, ll, lastSwingHigh, lastSwingLow };
 }
 
 // ── Setup 5: Momentum Breakout (waterfall / vertical impulse) ─────
@@ -478,8 +483,15 @@ function detectMSTF(klines15m, klines3m, klines1m, bias) {
 
   if (!s1) return null;
 
-  const ltfBull = s1.hh  || s1.hl;
-  const ltfBear = s1.ll  || s1.lh;
+  // Reject topping/bottoming convergence: HL+LH together (or HH+LL) means
+  // both swing highs are dropping AND swing lows are rising — a squeeze, NOT
+  // a directional trend. User flagged "ETH long near top of LH" — that
+  // setup had s1.hl=true but also s1.lh=true (latest swing high is lower
+  // than the previous one), which is a bearish topping pattern. Require:
+  //   LONG  → s1.hh, OR (s1.hl AND no coexisting s1.lh)
+  //   SHORT → s1.ll, OR (s1.lh AND no coexisting s1.hl)
+  const ltfBull = s1.hh || (s1.hl && !s1.lh);
+  const ltfBear = s1.ll || (s1.lh && !s1.hl);
 
   // Either HTF can supply bullish or bearish confirmation.
   const htfBull = (s15 && (s15.hh || s15.hl)) || (s3 && (s3.hh || s3.hl));
@@ -490,19 +502,17 @@ function detectMSTF(klines15m, klines3m, klines1m, bias) {
   const htfCounterLong  = (s15 && s15.ll && s15.lh) && (!s3 || (s3.ll && s3.lh));
   const htfCounterShort = (s15 && s15.hh && s15.hl) && (!s3 || (s3.hh && s3.hl));
 
-  // ── 1m structure-pause gate ────────────────────────────────
-  const len1 = klines1m.length;
-  let longPaused = false, shortPaused = false;
-  if (len1 >= 3) {
-    const lastH = parseFloat(klines1m[len1 - 2][2]);
-    const lastL = parseFloat(klines1m[len1 - 2][3]);
-    const prevH = parseFloat(klines1m[len1 - 3][2]);
-    const prevL = parseFloat(klines1m[len1 - 3][3]);
-    longPaused  = lastH <= prevH && lastL <= prevL;
-    shortPaused = lastL >= prevL && lastH >= prevH;
-  }
+  // ── 1m structure-pause gate REMOVED ──
+  // Per user direction: "buy at HL or LL next candle why will lag till
+  // 5 or 6 candle". Pivot confirmation (swingLen=2) already adds 2 bars
+  // of lag; layering a single-candle pause + low-volume 2-candle pause
+  // on top stacks 3-5 bars total and the trade ends up firing far away
+  // from the HL/LH pivot. The chase-distance gate in analyzeV3 (0.3%
+  // from latest 1m swing pivot) is the safety net instead — fire the
+  // very next candle after pivot is confirmed, OR refuse because price
+  // has already chased.
 
-  if (bias === 'long' && ltfBull && htfBull && !htfCounterLong && longPaused) {
+  if (bias === 'long' && ltfBull && htfBull && !htfCounterLong) {
     // Pick whichever HTF is bullish for the label
     const htfTag = (s15 && (s15.hh || s15.hl))
       ? `15${s15.hh ? 'HH' : 'HL'}`
@@ -517,7 +527,7 @@ function detectMSTF(klines15m, klines3m, klines1m, bias) {
     };
   }
 
-  if (bias === 'short' && ltfBear && htfBear && !htfCounterShort && shortPaused) {
+  if (bias === 'short' && ltfBear && htfBear && !htfCounterShort) {
     const htfTag = (s15 && (s15.ll || s15.lh))
       ? `15${s15.ll ? 'LL' : 'LH'}`
       : `3${s3.ll ? 'LL' : 'LH'}`;
@@ -660,17 +670,55 @@ async function analyzeV3(ticker) {
     const vwap = calcVWAP(klines15m);
     if (!vwap) { dlog('null — no VWAP'); return null; }
 
-    // ── Bias filter ───────────────────────────────────────────
-    const aboveOP   = price > levels.op;
-    const aboveVWAP = price > vwap;
-    const vwapDiff  = (price - vwap) / vwap; // +ve = above VWAP
-    let bias;
-    if (aboveOP && vwapDiff >= -0.015)      bias = 'long';
-    else if (!aboveOP && vwapDiff <= 0.015) bias = 'short';
-    else bias = null;
-    dlog(`bias=${bias} aboveOP=${aboveOP} vwapDiff=${(vwapDiff*100).toFixed(2)}% (OP=${levels.op} VWAP=${vwap.toFixed(4)})`);
+    // ── Direction = 1m structure AND OP/VWAP must AGREE ──────
+    // User direction: "OP/VWAP is a must but follow the LH/HL/HH/LL"
+    //   1m structure is the primary signal:
+    //     HH or (HL && !LH)  → wants LONG
+    //     LL or (LH && !HL)  → wants SHORT
+    //     squeeze            → no trade
+    //   OP/VWAP must confirm:
+    //     above OP & vwapDiff >= -1.5%  → ok for LONG
+    //     below OP & vwapDiff <=  1.5%  → ok for SHORT
+    //   Trade fires ONLY when both point the same direction.
+    const s1bias    = detectStructure(klines1m, 2);   // confirmed 2-bar pivots
+    const s1fast    = detectStructure(klines1m, 1);   // 1-bar pivot fast path
+    const FAST_MIN_BOUNCE = 0.0015;                   // 0.15 %
 
-    // ── Setup 5 (MomentumBreakout) bypasses the OP/VWAP bias gate ─
+    let structBias = null;
+    if (s1bias) {
+      if      (s1bias.hh || (s1bias.hl && !s1bias.lh)) structBias = 'long';
+      else if (s1bias.ll || (s1bias.lh && !s1bias.hl)) structBias = 'short';
+    }
+
+    // Fast path: if confirmed swing didn't give a bias but a 1-bar pivot
+    // did AND the bounce/drop magnitude is ≥0.15%, accept it. User
+    // direction: "if price is high enough no need to wait 2 candle".
+    if (!structBias && s1fast) {
+      const wantsLong  = s1fast.hh || (s1fast.hl && !s1fast.lh);
+      const wantsShort = s1fast.ll || (s1fast.lh && !s1fast.hl);
+      if (wantsLong && s1fast.lastSwingLow) {
+        const bounce = (price - s1fast.lastSwingLow) / s1fast.lastSwingLow;
+        if (bounce >= FAST_MIN_BOUNCE) structBias = 'long';
+      }
+      if (!structBias && wantsShort && s1fast.lastSwingHigh) {
+        const drop = (s1fast.lastSwingHigh - price) / s1fast.lastSwingHigh;
+        if (drop >= FAST_MIN_BOUNCE) structBias = 'short';
+      }
+    }
+
+    const aboveOP   = price > levels.op;
+    const vwapDiff  = (price - vwap) / vwap;
+    let opVwapBias = null;
+    if      (aboveOP  && vwapDiff >= -0.015) opVwapBias = 'long';
+    else if (!aboveOP && vwapDiff <=  0.015) opVwapBias = 'short';
+
+    let bias = null;
+    if (structBias && opVwapBias && structBias === opVwapBias) {
+      bias = structBias;
+    }
+    dlog(`bias=${bias} struct=${structBias} confirmed(hh=${s1bias?.hh} hl=${s1bias?.hl} lh=${s1bias?.lh} ll=${s1bias?.ll}) fast(hh=${s1fast?.hh} hl=${s1fast?.hl} lh=${s1fast?.lh} ll=${s1fast?.ll}) opVwap=${opVwapBias} (aboveOP=${aboveOP} vwapDiff=${(vwapDiff*100).toFixed(2)}%)`);
+
+    // ── Setup 5 (MomentumBreakout) bypasses 1m structure bias ─
     //   Impulse breakouts pick their own direction from candle body —
     //   the whole point is to catch waterfall moves the structure
     //   setups miss. Bias is set from the impulse direction.
@@ -680,7 +728,7 @@ async function analyzeV3(ticker) {
     const klines1mClosed = klines1m.slice(0, -1);
     const breakoutSig = detectMomentumBreakout(klines1mClosed);
 
-    if (!bias && !breakoutSig) { dlog('null — no bias and no momentum breakout'); return null; }
+    if (!bias && !breakoutSig) { dlog('null — no 1m structure bias and no momentum breakout'); return null; }
 
     // ── Run all setups ────────────────────────────────────────
     let setup = null;
@@ -802,21 +850,26 @@ async function analyzeV3(ticker) {
       }
     }
 
-    // No-contrarian-at-extremes: blocks SHORT above upper, LONG below lower.
-    if (vwapUpper && side === 'SHORT' && price >= vwapUpper) return null;
-    if (vwapLower && side === 'LONG'  && price <= vwapLower) return null;
+    // Block contrarian at extremes AND chase past the band.
+    // User direction: "now long sol in the top again" — the previous
+    // longMomentum/shortMomentum exception was bypassing range-pos and
+    // chase-distance gates whenever price reached the VWAP band, letting
+    // LONG fire near the top. The exception is REMOVED. Above the upper
+    // band → no LONG (chase) and no SHORT (contrarian). Below the lower
+    // band → no SHORT (chase) and no LONG (contrarian). Either way,
+    // entry is forbidden when price is past the ±2σ envelope.
+    if (vwapUpper && price >= vwapUpper) {
+      dlog(`null — price $${price} at/above upper band $${vwapUpper.toFixed(4)} (no entry past +2σ)`);
+      return null;
+    }
+    if (vwapLower && price <= vwapLower) {
+      dlog(`null — price $${price} at/below lower band $${vwapLower.toFixed(4)} (no entry past -2σ)`);
+      return null;
+    }
 
-    // Momentum-side at the band: when price is at/above upper for LONG,
-    // or at/below lower for SHORT, we ride the momentum and SKIP the
-    // range-pos chase filter (the band itself proves it's not noise —
-    // price has decisively pushed through ±2σ of session VWAP).
-    const longMomentum  = vwapUpper && side === 'LONG'  && price >= vwapUpper;
-    const shortMomentum = vwapLower && side === 'SHORT' && price <= vwapLower;
-
-    // ── Range-position + pause gates ────────────────────────────────
-    // Range pos in last 10×1m (0 = HL, 1 = HH).
-    //   LONG  blocked if pos > 0.40 (chase up)   — UNLESS longMomentum
-    //   SHORT blocked if pos < 0.60 (chase down) — UNLESS shortMomentum
+    // ── Range-position gate ────────────────────────────────────
+    // LONG  blocked if pos > 0.25 (must be near the bottom)
+    // SHORT blocked if pos < 0.75 (must be near the top)
     let rPos = null;
     if (k1m.length >= 11) {
       const w20 = k1m.slice(-11, -1);
@@ -830,15 +883,36 @@ async function analyzeV3(ticker) {
       const sz = hi - lo;
       if (sz > 0) {
         rPos = (price - lo) / sz;
-        if (!longMomentum  && side === 'LONG'  && rPos > 0.40) return null;
-        if (!shortMomentum && side === 'SHORT' && rPos < 0.60) return null;
+        if (side === 'LONG'  && rPos > 0.25) { dlog(`null — LONG rPos ${(rPos*100).toFixed(0)}% > 25% (not near bottom)`); return null; }
+        if (side === 'SHORT' && rPos < 0.75) { dlog(`null — SHORT rPos ${(rPos*100).toFixed(0)}% < 75% (not near top)`); return null; }
       }
     }
 
-    const atExtreme = rPos !== null && (
-      (side === 'LONG'  && rPos < 0.20) ||
-      (side === 'SHORT' && rPos > 0.80)
-    );
+    // ── Chase distance gate ─────────────────────────────────────
+    //   LONG  → price must be within +0.3% of lowest low in last 30×1m
+    //   SHORT → price must be within -0.3% of highest high in last 30×1m
+    if (k1m.length >= 31) {
+      const w30 = k1m.slice(-31, -1);
+      let lo30 = Infinity, hi30 = -Infinity;
+      for (const k of w30) {
+        const h = parseFloat(k[2]); if (h > hi30) hi30 = h;
+        const l = parseFloat(k[3]); if (l < lo30) lo30 = l;
+      }
+      const MAX_CHASE_PCT = 0.003; // 0.3 %
+      if (side === 'LONG') {
+        const dist = (price - lo30) / lo30;
+        if (dist > MAX_CHASE_PCT) {
+          dlog(`null — LONG chasing ${(dist*100).toFixed(2)}% above 30m low $${lo30.toFixed(4)} (max 0.30%)`);
+          return null;
+        }
+      } else {
+        const dist = (hi30 - price) / hi30;
+        if (dist > MAX_CHASE_PCT) {
+          dlog(`null — SHORT chasing ${(dist*100).toFixed(2)}% below 30m high $${hi30.toFixed(4)} (max 0.30%)`);
+          return null;
+        }
+      }
+    }
 
     // Pause gate also skipped on momentum-side band entries — the band
     // breach is the momentum confirmation, no need for a 2-candle pause.
@@ -872,46 +946,11 @@ async function analyzeV3(ticker) {
       }
     }
 
-    // ── Volume-aware pause gate ─────────────────────────────────
-    // Last closed 1m candle high-volume (≥ 20-bar average): 1-candle
-    // pause is enough — the bar has commitment behind it. Low-volume:
-    // require 2 paused candles since the structure forming on thin
-    // tape is more likely a noise pivot. Skipped at extreme-zone /
-    // momentum band (already covered upstream).
-    if (!atExtreme && !longMomentum && !shortMomentum && k1m.length >= 3) {
-      const lastH = parseFloat(k1m[k1m.length - 2][2]);
-      const lastL = parseFloat(k1m[k1m.length - 2][3]);
-      const midH  = parseFloat(k1m[k1m.length - 3][2]);
-      const midL  = parseFloat(k1m[k1m.length - 3][3]);
-
-      // Average volume over the last 20 closed 1m bars
-      const volSlice = k1m.slice(-21, -1);
-      const volAvgN = volSlice.length
-        ? volSlice.reduce((s, k) => s + parseFloat(k[5] || 0), 0) / volSlice.length
-        : 0;
-      const lastVol = parseFloat(k1m[k1m.length - 2][5] || 0);
-      const lowVolume = volAvgN > 0 && lastVol < volAvgN;
-
-      if (side === 'LONG') {
-        const paused1 = lastH <= midH && lastL <= midL;
-        if (!paused1) { dlog('null — last 1m extending up (no pause)'); return null; }
-        if (lowVolume && k1m.length >= 4) {
-          const oldH = parseFloat(k1m[k1m.length - 4][2]);
-          const oldL = parseFloat(k1m[k1m.length - 4][3]);
-          const paused2 = midH <= oldH && midL <= oldL;
-          if (!paused2) { dlog(`null — low-volume HL (vol ${lastVol.toFixed(0)} < avg ${volAvgN.toFixed(0)}) needs 2 paused candles`); return null; }
-        }
-      } else {
-        const paused1 = lastL >= midL && lastH >= midH;
-        if (!paused1) { dlog('null — last 1m extending down (no pause)'); return null; }
-        if (lowVolume && k1m.length >= 4) {
-          const oldH = parseFloat(k1m[k1m.length - 4][2]);
-          const oldL = parseFloat(k1m[k1m.length - 4][3]);
-          const paused2 = midL >= oldL && midH >= oldH;
-          if (!paused2) { dlog(`null — low-volume LH (vol ${lastVol.toFixed(0)} < avg ${volAvgN.toFixed(0)}) needs 2 paused candles`); return null; }
-        }
-      }
-    }
+    // Volume-aware pause gate REMOVED per user direction: fire the very
+    // next candle after the HL/LH pivot is confirmed. Pause/volume
+    // requirements stacked extra candles of lag and the trade ended up
+    // firing 5-6 bars from the pivot. The chase-distance gate above
+    // (0.3% from the swing) is the only chase protection now.
 
     return {
       symbol,

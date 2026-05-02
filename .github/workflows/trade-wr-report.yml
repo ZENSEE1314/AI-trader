@@ -1,0 +1,88 @@
+name: Trade WR report
+
+on:
+  schedule:
+    - cron: '15 0 * * *'   # 00:15 UTC daily
+  workflow_dispatch:
+    inputs:
+      days:
+        description: 'Days of history to analyze'
+        required: false
+        default: '30'
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      contents: read
+
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      RAILWAY_PROJECT_ID: ${{ vars.RAILWAY_PROJECT_ID }}
+      RAILWAY_SERVICE_ID: ${{ vars.RAILWAY_SERVICE_ID }}
+      TRACKING_ISSUE: ${{ vars.WR_REPORT_ISSUE || '70' }}
+      DAYS: ${{ github.event.inputs.days || '30' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+
+      - name: Install pg
+        run: npm install pg --no-save
+
+      - name: Install Railway CLI
+        run: npm i -g @railway/cli@latest
+
+      - name: Show environment (no secrets)
+        run: |
+          railway --version
+          echo "PROJECT_ID set? ${RAILWAY_PROJECT_ID:+yes}"
+          echo "SERVICE_ID set? ${RAILWAY_SERVICE_ID:+yes}"
+          echo "TOKEN set? ${RAILWAY_TOKEN:+yes}"
+          echo "DAYS=$DAYS"
+
+      - name: Run WR report with Railway env
+        id: report
+        run: |
+          set +e
+          railway run --service "$RAILWAY_SERVICE_ID" \
+            -- env DAYS="$DAYS" \
+            node analyze-trade-wr.js > /tmp/out.txt 2> /tmp/err.txt
+          rc=$?
+          {
+            echo "## Trade WR report — last $DAYS days — $(date -u +'%Y-%m-%d %H:%M UTC')"
+            echo ""
+            if [ $rc -ne 0 ]; then
+              echo "### Run failed (rc=$rc)"
+              echo '```'
+              tail -n 60 /tmp/err.txt
+              echo '```'
+            fi
+            echo "### Output"
+            echo '```'
+            tail -n 400 /tmp/out.txt
+            echo '```'
+            if [ -s /tmp/err.txt ]; then
+              echo "<details><summary>stderr (debug)</summary>"
+              echo ""
+              echo '```'
+              tail -n 60 /tmp/err.txt
+              echo '```'
+              echo ""
+              echo "</details>"
+            fi
+          } > /tmp/comment.md
+          {
+            echo "BODY<<EOF"
+            cat /tmp/comment.md
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Post WR report to tracking issue
+        uses: peter-evans/create-or-update-comment@v5
+        with:
+          issue-number: ${{ env.TRACKING_ISSUE }}
+          body: ${{ steps.report.outputs.BODY }}
