@@ -5,9 +5,10 @@
 //   strategy version is active in the admin panel. Do NOT move these
 //   thresholds into strategy_versions or any DB config.
 //
+// Initial SL: 20% capital
 // Trail logic:
-//   Below +20% capital profit → no movement, trade breathes freely
-//   +20% capital profit       → SL locked at +20% (profit secured)
+//   Below +21% capital profit → no movement, trade breathes freely
+//   +21% capital profit       → SL locked at +20% (profit secured)
 //   +30% capital profit       → SL moves to +30%
 //   +40% capital profit       → SL moves to +40%
 //   ... steps up every +10% capital gain, always locking in the milestone
@@ -18,10 +19,36 @@ const { BitunixClient } = require('./bitunix-client');
 const { USDMClient } = require('binance');
 const { getFetchOptions, getBinanceRequestOptions } = require('./proxy-agent');
 const cryptoUtils = require('./crypto-utils');
-const { calcV2TrailSL } = require('./strategy-v2');
+const { calcTrailingSLV3 } = require('./strategy-v3');
+
+// Adapter: returns { newSl, capitalPct, milestone } expected by the
+// log/notify code below, or null when there's no improvement to lock in.
+// Wraps calcTrailingSLV3 — 15% capital initial SL (tight), trailing at
+// +21% → lock +20%, then +30/+40/... by floor(cap×10)/10.
+function calcV2TrailSL(entryPrice, currentPrice, isLong, leverage, currentSl) {
+  const side = isLong ? 'LONG' : 'SHORT';
+  const pricePct = isLong
+    ? (currentPrice - entryPrice) / entryPrice
+    : (entryPrice - currentPrice) / entryPrice;
+  const capitalPct = pricePct * leverage;
+  // Leverage-aware trigger: 50x trades (SOL/BNB/XRP) start trailing at
+  // +16% capital (lock +15%); 100x trades (BTC/ETH) start at +21% (lock
+  // +20%). Matches calcTrailingSLV3 and cycle.js TRAILING_TIERS_50X.
+  const TRAIL_ON_CAP = leverage <= 50 ? 0.16 : 0.21;
+  if (capitalPct < TRAIL_ON_CAP) return null;
+  const newSl = calcTrailingSLV3(entryPrice, currentPrice, side, leverage);
+  const milestone = leverage <= 50
+    ? 0.15 + Math.floor((capitalPct - 0.16 + 1e-9) / 0.11) * 0.10
+    : Math.floor((capitalPct - 0.01 + 1e-9) * 10) / 10;
+  return { newSl, capitalPct, milestone };
+}
 
 const INTERVAL_MS = 15 * 1000;
 const db = require('./db');
+
+// Tracks symbols whose SL we've already retro-adjusted to 15% capital this
+// process lifetime.  Prevents re-applying on every 15-second tick.
+const _widened = new Set();
 
 // NOTE: V1 trail constants removed — all trades now use V2 milestone trail.
 // V2 thresholds live in strategy-v2.js (V2_SL_CAPITAL_PCT / TRAIL_START / TRAIL_STEP).
@@ -213,7 +240,7 @@ async function runTrailCycle() {
 
           // Look up DB trade — may not exist (orphan position)
           const dbTrade   = dbTradeMap.get(`${key.id}:${symbol}`);
-          const currentSl = dbTrade
+          let currentSl = dbTrade
             ? (parseFloat(dbTrade.trailing_sl_price) || parseFloat(dbTrade.sl_price) || 0)
             : 0;
           const pricePrec = dbTrade
@@ -236,9 +263,36 @@ async function runTrailCycle() {
           const pctDisplay = `${capitalPct >= 0 ? '+' : ''}${(capitalPct * 100).toFixed(2)}%`;
           log(`[DIAG] ${symbol} ${isLong ? 'LONG' : 'SHORT'} | entry=$${entry} | lev=${leverage}x | capital=${pctDisplay} | currentSL=$${currentSl} | DB=${dbTrade ? 'found' : 'ORPHAN'}`);
 
+          // ── Retro-adjust SL to 20% capital ────────────────
+          // Standardise every open position's SL to 20% capital on the first
+          // tick after deploy.  Only acts on losing trades; winners pass to
+          // the trail-up logic below.  Runs once per position per watchdog
+          // process via _widened set.  Adjusts in EITHER direction.
+          if (capitalPct < 0 && currentSl > 0) {
+            const targetSlPricePct = 0.20 / leverage;
+            const targetSl = isLong
+              ? entry * (1 - targetSlPricePct)
+              : entry * (1 + targetSlPricePct);
+            const tol = (0.0005 / leverage) * entry;
+            const needsAdjust = Math.abs(currentSl - targetSl) > tol;
+            if (needsAdjust && !_widened.has(symbol)) {
+              _widened.add(symbol);
+              log(`[20%-FIX] ${symbol} ${isLong ? 'LONG' : 'SHORT'}: SL $${currentSl.toFixed(pricePrec)} → $${targetSl.toFixed(pricePrec)} (normalising to 20% capital)`);
+              const ok = await updateSlBitunix(client, symbol, targetSl, pricePrec, dbTrade?.tp_price, pos);
+              if (ok && dbTrade) {
+                await db.query(
+                  `UPDATE trades SET trailing_sl_price = $1, sl_price = $1 WHERE id = $2`,
+                  [targetSl, dbTrade.id]
+                );
+              }
+              currentSl = targetSl;
+            }
+          }
+
           const v2Result = calcV2TrailSL(entry, isLong ? entry * (1 + capitalPct / leverage) : entry * (1 - capitalPct / leverage), isLong, leverage, currentSl);
           if (!v2Result) {
-            log(`[DIAG] ${symbol} trail SKIP — ${pctDisplay} < +20% or SL already at milestone`);
+            const trailOnPct = leverage <= 50 ? 16 : 21;
+            log(`[DIAG] ${symbol} trail SKIP — ${pctDisplay} < +${trailOnPct}% (${leverage}x) or SL already at milestone`);
             continue;
           }
 

@@ -1,0 +1,71 @@
+name: Dump AI version
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Exact version name (e.g. v3.42)'
+        required: false
+        default: ''
+      query:
+        description: 'OR fuzzy match (e.g. 3.42)'
+        required: false
+        default: 'v3.42'
+      list:
+        description: 'OR set to 1 to list all latest versions'
+        required: false
+        default: ''
+
+jobs:
+  dump:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      contents: read
+
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      RAILWAY_PROJECT_ID: ${{ vars.RAILWAY_PROJECT_ID }}
+      RAILWAY_SERVICE_ID: ${{ vars.RAILWAY_SERVICE_ID }}
+      TRACKING_ISSUE: ${{ vars.LOSS_BACKTEST_ISSUE || '70' }}
+      VERSION: ${{ github.event.inputs.version }}
+      QUERY: ${{ github.event.inputs.query }}
+      LIST: ${{ github.event.inputs.list }}
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+      - run: npm install pg --no-save
+      - run: npm i -g @railway/cli@latest
+
+      - name: Dump version
+        id: dump
+        run: |
+          set +e
+          # Pass env vars directly to railway run via the shell environment
+          # (railway run inherits parent env). Avoid shell quoting issues
+          # that previously embedded literal quote chars in the values.
+          export VERSION QUERY LIST
+          railway run --service "$RAILWAY_SERVICE_ID" \
+            -- node dump-ai-version.js > /tmp/out.txt 2> /tmp/err.txt
+          rc=$?
+          {
+            echo "## AI version dump — $(date -u +'%Y-%m-%d %H:%M UTC')"
+            echo ""
+            if [ $rc -ne 0 ]; then
+              echo '### Failed'
+              echo '```'; tail -n 60 /tmp/err.txt; echo '```'
+            fi
+            echo "### Output"
+            echo '```json'
+            tail -n 400 /tmp/out.txt
+            echo '```'
+          } > /tmp/comment.md
+          { echo "BODY<<EOF"; cat /tmp/comment.md; echo "EOF"; } >> "$GITHUB_OUTPUT"
+
+      - name: Post to issue
+        uses: peter-evans/create-or-update-comment@v5
+        with:
+          issue-number: ${{ env.TRACKING_ISSUE }}
+          body: ${{ steps.dump.outputs.BODY }}

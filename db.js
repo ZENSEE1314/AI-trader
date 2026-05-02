@@ -385,6 +385,9 @@ async function initAllTables() {
     // Market structure and user trailing config
     `ALTER TABLE trades ADD COLUMN IF NOT EXISTS market_structure VARCHAR(50)`,
     `ALTER TABLE trades ADD COLUMN IF NOT EXISTS key_trailing_sl_step NUMERIC DEFAULT 0`,
+    // Setup/strategy tag — required for per-setup WR analysis
+    `ALTER TABLE trades ADD COLUMN IF NOT EXISTS setup VARCHAR(50)`,
+    `CREATE INDEX IF NOT EXISTS idx_trades_setup ON trades (setup)`,
     // Agent survival system — $1000 capital, HP health, kill on 0
     `CREATE TABLE IF NOT EXISTS agent_survival (
       agent VARCHAR(50) PRIMARY KEY,

@@ -7,16 +7,8 @@
 const { USDMClient } = require('binance');
 const fetch = require('node-fetch');
 const aiLearner = require('./ai-learner');
-const { detectSwings, SWING_LENGTHS, scanSMC } = require('./liquidity-sweep-engine');
-// Strategy v2: swing-point + VWAP-band + 30% trailing SL (kept, not active)
-const { scanV2, calcTrailingSL: calcV2TrailingSL } = require('./strategy-v2');
-// Strategy v3: MCT PDF — Break&Retest / LiqGrab / VWAP Trend + 20% trailing SL (ACTIVE)
+// Strategy v3: MCT PDF — Break&Retest / LiqGrab / VWAP Trend + 20% trailing SL (sole strategy)
 const { scanV3, calcTrailingSLV3 } = require('./strategy-v3');
-// NOTE: Triple MA / Spike-HL / T-Junction / MA Stack / AI Scanner exit logic
-// is still referenced below for open trades that may have been entered under
-// those strategies. Do not remove these imports.
-const { shouldExitScenarioA, calcTripleMABTrailStep } = require('./triple-ma-strategy');
-const { calcSpikeHLTrailSl } = require('./spike-hl-strategy');
 const { getSentimentScores } = require('./sentiment-scraper');
 const { log: bLog } = require('./bot-logger');
 const { getBinanceRequestOptions, getFetchOptions } = require('./proxy-agent');
@@ -102,30 +94,61 @@ const TAKER_FEE_BOTH_LEGS = 0.0008;
 //
 // trigger = capital % gain needed to activate (price % × leverage)
 // lock    = capital % above entry to lock the SL at
+// Per-user rule: trigger is exactly 1% above the lock at every tier
+// (e.g. +21% profit locks +20%, +31% locks +30%, +41% locks +40%, ...).
+// This table is used for HIGH-leverage trades (>= 100x — BTC, ETH).
 const TRAILING_TIERS = [
-  { trigger: 0.20, lock: 0.00 }, // +20% capital → SL locks at breakeven (0%)  — 20% gap
-  { trigger: 0.30, lock: 0.20 }, // +30% capital → SL locks at +20%             — 10% gap
-  { trigger: 0.40, lock: 0.30 }, // +40% capital → SL locks at +30%             — 10% gap
-  { trigger: 0.50, lock: 0.40 }, // +50% capital → SL locks at +40%             — 10% gap
-  { trigger: 0.60, lock: 0.50 }, // +60% capital → SL locks at +50%             — 10% gap
-  { trigger: 0.70, lock: 0.60 }, // +70% capital → SL locks at +60%             — 10% gap
-  { trigger: 0.80, lock: 0.70 }, // +80% capital → SL locks at +70%             — 10% gap
-  { trigger: 0.90, lock: 0.80 }, // +90% capital → SL locks at +80%             — 10% gap
-  { trigger: 1.00, lock: 0.90 }, // +100% capital → SL locks at +90%            — 10% gap
-  { trigger: 1.10, lock: 1.00 }, // +110% capital → SL locks at +100%           — 10% gap
-  { trigger: 1.20, lock: 1.10 }, // +120% capital → SL locks at +110%           — 10% gap
-  { trigger: 1.50, lock: 1.40 }, // +150% capital → SL locks at +140%           — 10% gap
-  { trigger: 2.00, lock: 1.90 }, // +200% capital → SL locks at +190%           — 10% gap
-  { trigger: 3.00, lock: 2.90 }, // +300% capital → SL locks at +290%           — 10% gap
+  { trigger: 0.21, lock: 0.20 }, // +21% capital → SL locks at +20%   — 1% gap
+  { trigger: 0.31, lock: 0.30 }, // +31% capital → SL locks at +30%   — 1% gap
+  { trigger: 0.41, lock: 0.40 }, // +41% capital → SL locks at +40%   — 1% gap
+  { trigger: 0.51, lock: 0.50 }, // +51% capital → SL locks at +50%   — 1% gap
+  { trigger: 0.61, lock: 0.60 }, // +61% capital → SL locks at +60%   — 1% gap
+  { trigger: 0.71, lock: 0.70 }, // +71% capital → SL locks at +70%   — 1% gap
+  { trigger: 0.81, lock: 0.80 }, // +81% capital → SL locks at +80%   — 1% gap
+  { trigger: 0.91, lock: 0.90 }, // +91% capital → SL locks at +90%   — 1% gap
+  { trigger: 1.01, lock: 1.00 }, // +101% capital → SL locks at +100% — 1% gap
+  { trigger: 1.11, lock: 1.10 }, // +111% capital → SL locks at +110% — 1% gap
+  { trigger: 1.21, lock: 1.20 }, // +121% capital → SL locks at +120% — 1% gap
+  { trigger: 1.51, lock: 1.50 }, // +151% capital → SL locks at +150% — 1% gap
+  { trigger: 2.01, lock: 2.00 }, // +201% capital → SL locks at +200% — 1% gap
+  { trigger: 3.01, lock: 3.00 }, // +301% capital → SL locks at +300% — 1% gap
 ];
 
+// Per user direction for 50x tokens (SOL/BNB/XRP):
+// First tier at +16% → +15% (1% gap), then every +11% profit advances
+// the lock by +10%. The gap therefore widens by 1% each step
+// (16/15→1%, 27/25→2%, 38/35→3%, ...).
+const TRAILING_TIERS_50X = [
+  { trigger: 0.16, lock: 0.15 }, // +16% → +15%
+  { trigger: 0.27, lock: 0.25 }, // +27% → +25%
+  { trigger: 0.38, lock: 0.35 }, // +38% → +35%
+  { trigger: 0.49, lock: 0.45 }, // +49% → +45%
+  { trigger: 0.60, lock: 0.55 }, // +60% → +55%
+  { trigger: 0.71, lock: 0.65 }, // +71% → +65%
+  { trigger: 0.82, lock: 0.75 }, // +82% → +75%
+  { trigger: 0.93, lock: 0.85 }, // +93% → +85%
+  { trigger: 1.04, lock: 0.95 }, // +104% → +95%
+  { trigger: 1.15, lock: 1.05 }, // +115% → +105%
+  { trigger: 1.26, lock: 1.15 }, // +126% → +115%
+  { trigger: 1.50, lock: 1.40 }, // +150% → +140%
+  { trigger: 2.00, lock: 1.90 }, // +200% → +190%
+  { trigger: 3.00, lock: 2.90 }, // +300% → +290%
+];
+
+function tierTableForLev(leverage) {
+  // 50x and below use the gentler 50x table (starts at +16%/+15%);
+  // 100x and above use the tight 1% gap table (starts at +21%/+20%).
+  return leverage <= 50 ? TRAILING_TIERS_50X : TRAILING_TIERS;
+}
+
 function getTrailingSLConfig(leverage) {
+  const t = tierTableForLev(leverage);
   return {
     INITIAL_SL_PCT: SL_PCT / leverage,
-    FIRST_TRIGGER: 0.20,  // Trail starts at +20% CAPITAL gain from entry
-    FIRST_SL: 0.00,       // Lock at breakeven — 20% gap on first step
-    STEP_TRIGGER: 0.10,   // Every +10% more CAPITAL → step up the lock
-    STEP_SL: 0.10,        // Lock steps up 10% each time (10% gap)
+    FIRST_TRIGGER: t[0].trigger,
+    FIRST_SL:      t[0].lock,
+    STEP_TRIGGER:  leverage <= 50 ? 0.11 : 0.10,
+    STEP_SL:       0.10,
   };
 }
 
@@ -290,6 +313,51 @@ function calcEMA(prices, period) {
 
 // ── TRADE STATE ──────────────────────────────────────────────
 const tradeState = new Map();
+
+// ── Swing detection (Zeiierman-style pivots) ──
+const SWING_LENGTHS = { '15m': 10, '3m': 10, '1m': 5 };
+function detectSwings(klines, len) {
+  const highs = klines.map(k => parseFloat(k[2]));
+  const lows  = klines.map(k => parseFloat(k[3]));
+  const swings = [];
+  let lastType = null;
+  for (let i = len; i < klines.length - len; i++) {
+    let isHigh = true;
+    for (let j = -len; j <= len; j++) {
+      if (j === 0) continue;
+      if (highs[i] <= highs[i + j]) { isHigh = false; break; }
+    }
+    let isLow = true;
+    for (let j = -len; j <= len; j++) {
+      if (j === 0) continue;
+      if (lows[i] >= lows[i + j]) { isLow = false; break; }
+    }
+    if (isHigh && isLow) {
+      const highDist = highs[i] - Math.max(highs[i - 1], highs[i + 1]);
+      const lowDist  = Math.min(lows[i - 1], lows[i + 1]) - lows[i];
+      if (highDist > lowDist) isLow = false; else isHigh = false;
+    }
+    if (isHigh) {
+      if (lastType === 'high') {
+        const prev = swings[swings.length - 1];
+        if (highs[i] > prev.price) swings[swings.length - 1] = { type: 'high', index: i, price: highs[i], candle: klines[i] };
+      } else {
+        swings.push({ type: 'high', index: i, price: highs[i], candle: klines[i] });
+        lastType = 'high';
+      }
+    }
+    if (isLow) {
+      if (lastType === 'low') {
+        const prev = swings[swings.length - 1];
+        if (lows[i] < prev.price) swings[swings.length - 1] = { type: 'low', index: i, price: lows[i], candle: klines[i] };
+      } else {
+        swings.push({ type: 'low', index: i, price: lows[i], candle: klines[i] });
+        lastType = 'low';
+      }
+    }
+  }
+  return swings;
+}
 
 // ── 15m EXIT CHECK (structure break using Zeiierman swings) ──
 function shouldExit15m(klines15, entryPrice, direction) {
@@ -475,13 +543,13 @@ async function calcCandleTrailSl(symbol, isLong, currentSlPrice) {
 //           Prevents SL from moving backwards.
 //
 // Tier logic (capital % = price % × leverage):
-//   +30% capital → lock SL at breakeven (0% capital above entry)   30% gap
-//   +60% capital → lock SL at +30% capital above entry             30% gap
-//   +90% capital → lock SL at +60% capital above entry             30% gap
-//   ... every +30% capital gain adds +30% to the lock (gap = 30% capital)
+//   +21% capital → lock SL at +20% capital above entry             1% gap
+//   +31% capital → lock SL at +30% capital above entry             1% gap
+//   +41% capital → lock SL at +40% capital above entry             1% gap
+//   ... every +10% capital gain advances the lock by +10% (gap stays 1%)
 //
 // Example — 20x leverage, BTC entry $90,000:
-//   +1.5% price (+30% capital) → SL moves to entry $90,000 (breakeven)
+//   +1.05% price (+21% capital) → SL moves to entry +1.0% (+20% capital)
 //   +3.0% price (+60% capital) → SL moves to entry + 1.5% ($91,350)
 function calculateTrailingStep(entryPrice, currentPrice, isLong, lastStep, leverage = 20, userTrailStepPct = 0) {
   const pricePct = isLong
@@ -501,15 +569,21 @@ function calculateTrailingStep(entryPrice, currentPrice, isLong, lastStep, lever
       bestLockCapitalPct = (stepsAbove - 1) * stepPct;
     }
   } else {
-    // Fixed tiers — all thresholds in CAPITAL %
-    for (const tier of TRAILING_TIERS) {
+    // Fixed tiers — all thresholds in CAPITAL %. The table is leverage-
+    // aware: 50x tokens (SOL/BNB/XRP) use a gentler ladder than 100x
+    // tokens (BTC/ETH).
+    const tiers = tierTableForLev(leverage);
+    for (const tier of tiers) {
       if (capitalPct >= tier.trigger) bestLockCapitalPct = tier.lock;
     }
-    // Beyond last tier: every +15% more capital → add +15% to lock
-    const lastTier = TRAILING_TIERS[TRAILING_TIERS.length - 1];
+    // Beyond last tier: extend with the same step-per-tier pattern.
+    // 100x table uses +10% trigger / +10% lock; 50x table uses +11% / +10%.
+    const lastTier = tiers[tiers.length - 1];
     if (capitalPct > lastTier.trigger) {
-      const stepsAbove = Math.floor((capitalPct - lastTier.trigger) / 0.15);
-      const extraLock = lastTier.lock + stepsAbove * 0.15;
+      const triggerStep = leverage <= 50 ? 0.11 : 0.10;
+      const lockStep    = 0.10;
+      const stepsAbove  = Math.floor((capitalPct - lastTier.trigger) / triggerStep);
+      const extraLock   = lastTier.lock + stepsAbove * lockStep;
       if (extraLock > (bestLockCapitalPct || 0)) bestLockCapitalPct = extraLock;
     }
   }
@@ -625,8 +699,8 @@ async function openTrade(client, pick, wallet) {
   const fmtP = (p) => parseFloat(p.toFixed(pricePrec));
 
   // SL price distance = SL_PCT / leverage (gross price loss, fees accepted on top)
-  // At 100x: 0.15/100 = 0.15% price move → 15% capital price loss + 8% fees = ~23% total
-  // At  20x: 0.15/20  = 0.75% price move → 15% capital price loss + 1.6% fees = ~17% total
+  // At 100x: 0.20/100 = 0.20% price move → 20% capital price loss + 8% fees ≈ 28% gross
+  // At  20x: 0.20/20  = 1.00% price move → 20% capital price loss + 1.6% fees ≈ 22% gross
   let slPricePct = SL_PCT / leverage;
   const tpPricePct = TP_PCT / leverage;
 
@@ -974,15 +1048,12 @@ async function checkTrailingStop(client) {
         } catch (e) { bLog.error(`Spike TP check failed for ${sym}: ${e.message}`); }
       }
 
-      // ── Trailing SL step check ──
-      // v3: MCT PDF 20%/21% trailing | v2: swing-point 30%/31% | others: capital-tier
+      // ── Trailing SL step check (v3 ladder — sole strategy) ──
       let trailResult;
-      if (state.strategyVersion === 'v3' || state.strategyVersion === 'v2') {
-        const trailFn  = state.strategyVersion === 'v3' ? calcTrailingSLV3 : calcV2TrailingSL;
+      {
         const side     = state.isLong ? 'LONG' : 'SHORT';
         const lev      = state.leverage || 20;
-        const newSlPrice = trailFn(state.entry, cur, side, lev);
-        // Ratchet: only update SL if it improves (never moves against trade)
+        const newSlPrice = calcTrailingSLV3(state.entry, cur, side, lev);
         const betterSl = state.isLong
           ? newSlPrice > (state.trailingSlPrice || 0)
           : newSlPrice < (state.trailingSlPrice || Infinity);
@@ -995,12 +1066,6 @@ async function checkTrailingStop(client) {
         } else {
           trailResult = null;
         }
-      } else {
-        trailResult = calculateTrailingStep(
-          state.entry, cur, state.isLong,
-          state.trailingSlLastStep || 0,
-          state.leverage || 20
-        );
       }
 
       if (trailResult) {
@@ -1165,23 +1230,49 @@ async function main() {
     const { query: dbQuery, initAllTables } = require('./db');
     await initAllTables();
 
-    // One-time: ensure SOL and BNB are set to 100x in the token_leverage table.
-    // This overrides any old 20x/50x DB records that would otherwise take priority
-    // over the hardcoded defaults in getTokenLeverage().
+    // One-time: enforce backtest-tuned leverage in token_leverage table.
+    //   BTC/ETH      → 100x  (proven WR ≥ 55% on the momentum backtest)
+    //   SOL/BNB/XRP  →  50x  (100x makes the v3 initial SL 0.2 % price,
+    //                          which is inside 1m noise; 50x widens to
+    //                          0.4 % and materially improves WR/PF)
     if (!runCycle._leverageFixDone) {
       runCycle._leverageFixDone = true;
       try {
-        for (const sym of ['SOLUSDT', 'BNBUSDT']) {
+        const leverageMap = [
+          ['BTCUSDT', 100],
+          ['ETHUSDT', 100],
+          ['SOLUSDT',  50],
+          ['BNBUSDT',  50],
+          ['XRPUSDT',  50],
+        ];
+        for (const [sym, lev] of leverageMap) {
           await dbQuery(
             `INSERT INTO token_leverage (symbol, leverage, enabled)
-             VALUES ($1, 100, true)
-             ON CONFLICT (symbol) DO UPDATE SET leverage = 100, enabled = true`,
-            [sym]
+             VALUES ($1, $2, true)
+             ON CONFLICT (symbol) DO UPDATE SET leverage = $2, enabled = true`,
+            [sym, lev]
           );
         }
-        bLog.system('[LEVERAGE-FIX] SOLUSDT + BNBUSDT set to 100x in token_leverage table');
+        bLog.system('[LEVERAGE-FIX] BTC/ETH=100x, SOL/BNB/XRP=50x written to token_leverage');
       } catch (e) {
         bLog.error(`[LEVERAGE-FIX] Failed to update token_leverage: ${e.message}`);
+      }
+    }
+
+    // One-time: enforce new max_consec_loss = 2 for every api_key.
+    // Old default was 10 — too lenient for the new fast-fail rule.
+    // Now: 2 consecutive losses pauses trading until the next 6 AM SG
+    // reset (see "Stop After Losses" block below).
+    if (!runCycle._consecLossFixDone) {
+      runCycle._consecLossFixDone = true;
+      try {
+        const r = await dbQuery(
+          `UPDATE api_keys SET max_consec_loss = 2
+           WHERE max_consec_loss IS DISTINCT FROM 2`
+        );
+        bLog.system(`[CONSEC-LOSS-FIX] api_keys.max_consec_loss = 2 (rows touched: ${r.rowCount ?? '?'})`);
+      } catch (e) {
+        bLog.error(`[CONSEC-LOSS-FIX] Failed to update api_keys: ${e.message}`);
       }
     }
 
@@ -1220,25 +1311,21 @@ async function main() {
       bLog.error(`Kronos batch scan failed (non-blocking): ${kronosBatchErr.message}`);
     }
 
-    // ── Strategy v3 — MCT PDF: Break&Retest / LiqGrab / VWAP Trend ──
-    // Bias filter: price > OP + VWAP → LONG | price < OP + VWAP → SHORT.
-    // No session filter, no fixed TP — 20% initial SL, trails at +21%.
-    // (v2 is preserved in strategy-v2.js but NOT called here)
-    let smcSignals = [];
+    // ── Strategy v3 — ADVISORY only ──
+    // Per user direction: only TokenAgents fire trades. cycle.js's main()
+    // scanV3 trading path is suppressed — we still RUN scanV3 for
+    // logging/learning so the AI brain and metrics see its output, but
+    // its signals are NOT pushed into the execution path.
     try {
       const rawV3 = await scanV3(msg => bLog.scan(msg));
-      smcSignals = (rawV3 || []).map(s => ({
-        ...s,
-        strategyWinRate: s.score >= 12 ? 70 : 60,
-      }));
-      if (smcSignals.length > 0) {
-        bLog.scan(`v3 Engine: ${smcSignals.length} signal(s) — ${smcSignals.map(s => `${s.symbol} ${s.direction} [${s.setupName}] score=${s.score}`).join(', ')}`);
+      if ((rawV3 || []).length > 0) {
+        bLog.scan(`v3 Engine (advisory): ${rawV3.length} signal(s) SUPPRESSED — token agents only — ${rawV3.map(s => `${s.symbol} ${s.direction} [${s.setupName}]`).join(', ')}`);
       }
     } catch (v3Err) {
-      bLog.error(`v3 Engine scan failed (non-blocking): ${v3Err.message}`);
+      bLog.error(`v3 Engine advisory scan failed: ${v3Err.message}`);
     }
 
-    const signals = [...smcSignals];
+    const signals = []; // gated to TokenAgents in agent-coordinator.js
 
     if (!signals.length) {
       log('No AI signals found this cycle — agents still learning.');
@@ -1278,23 +1365,34 @@ async function main() {
         continue;
       }
 
-      // Backtest gate — each agent backtests its own token inline
-      // Runs 30-day backtest on the spot, cached for 2 hours
-      try {
-        const backtestGate = require('./backtest-gate');
-        const gateSym = pick.symbol || pick.sym;
-        const gateStrategy = pick.setupName || pick.setup || 'ALL';
-        const signalWr = pick.strategyWinRate || 0;
-        const gatePasses = await backtestGate.passesGate(gateSym, gateStrategy, undefined, signalWr);
-        if (!gatePasses) {
-          bLog.trade(`BACKTEST GATE BLOCKED: ${gateSym} ${gateStrategy} — WR below ${backtestGate.MIN_WIN_RATE}%`);
-          continue;
-        }
-        bLog.trade(`BACKTEST GATE PASSED: ${gateSym} ${gateStrategy}`);
-      } catch (gateErr) {
-        bLog.error(`Backtest gate error: ${gateErr.message} — blocking trade for safety`);
-        continue;
-      }
+      // Backtest gate DISABLED per user direction.
+      // Reasoning: the gate blocks any strategy whose 30-day historical
+      // WR is below 50 %, which silenced the bot entirely while no
+      // active strategy crossed 50 %. The user prefers to trade on the
+      // live structure rules (15m+1m HL/LH, counter-trend filter,
+      // 10-bar range pos, pause gate, leverage-aware trail) and accept
+      // losing windows while the optimizer keeps tuning. The auto-
+      // activate path (PR #77) still kicks in when the optimizer finds
+      // a >= 50% strategy — at which point the live gates simply align
+      // with that historical edge.
+      //
+      // To re-enable, uncomment the block below.
+      //
+      // try {
+      //   const backtestGate = require('./backtest-gate');
+      //   const gateSym = pick.symbol || pick.sym;
+      //   const gateStrategy = pick.setupName || pick.setup || 'ALL';
+      //   const signalWr = pick.strategyWinRate || 0;
+      //   const gatePasses = await backtestGate.passesGate(gateSym, gateStrategy, undefined, signalWr);
+      //   if (!gatePasses) {
+      //     bLog.trade(`BACKTEST GATE BLOCKED: ${gateSym} ${gateStrategy} — WR below ${backtestGate.MIN_WIN_RATE}%`);
+      //     continue;
+      //   }
+      //   bLog.trade(`BACKTEST GATE PASSED: ${gateSym} ${gateStrategy}`);
+      // } catch (gateErr) {
+      //   bLog.error(`Backtest gate error: ${gateErr.message} — blocking trade for safety`);
+      //   continue;
+      // }
 
       // AI Brain (Ollama/Gemma 4) — analyze signal before trading
       try {
@@ -1623,19 +1721,40 @@ async function executeForAllUsers(pick) {
           return;
         }
 
-        // Stop After Losses: check consecutive losses for this API key
-        const maxConsecLoss = parseInt(key.max_consec_loss) || 10;
+        // Stop After Losses: pause this api_key after N consecutive losses
+        // within the current trading day, where day boundary = 6 AM SG time
+        // (= 22:00 UTC).  Streak resets automatically at the next 6 AM SG.
+        //
+        // Default is 2 — the boot seeder above sets max_consec_loss = 2
+        // for every api_key on each deploy.
+        const maxConsecLoss = parseInt(key.max_consec_loss) || 2;
         if (maxConsecLoss > 0) {
+          // Most recent 22:00 UTC (= 6 AM SG today) cutoff.
+          const _now = new Date();
+          const _cutoff = new Date(Date.UTC(
+            _now.getUTCFullYear(), _now.getUTCMonth(), _now.getUTCDate(), 22, 0, 0, 0
+          ));
+          if (_now < _cutoff) _cutoff.setUTCDate(_cutoff.getUTCDate() - 1);
+
           const recentTrades = await db.query(
-            `SELECT status FROM trades WHERE api_key_id = $1 AND status IN ('WIN','LOSS','TP','SL') ORDER BY closed_at DESC LIMIT $2`,
-            [key.id, maxConsecLoss]
+            `SELECT status FROM trades
+             WHERE api_key_id = $1
+               AND status IN ('WIN','LOSS','TP','SL')
+               AND closed_at >= $2
+             ORDER BY closed_at DESC LIMIT $3`,
+            [key.id, _cutoff, maxConsecLoss]
           );
-          const consecLosses = recentTrades.length > 0
-            ? recentTrades.findIndex(t => t.status === 'WIN' || t.status === 'TP')
-            : 0;
-          const actualConsec = consecLosses === -1 ? recentTrades.length : consecLosses;
-          if (actualConsec >= maxConsecLoss) {
-            userLog.trade(`User ${key.email}: ${actualConsec} consecutive losses (max ${maxConsecLoss}) — paused`);
+          // Count consecutive losses from the most recent trade backwards
+          const isLoss = (s) => s === 'LOSS' || s === 'SL';
+          let consec = 0;
+          for (const t of recentTrades) {
+            if (isLoss(t.status)) consec++;
+            else break;
+          }
+          if (consec >= maxConsecLoss) {
+            const _next = new Date(_cutoff);
+            _next.setUTCDate(_next.getUTCDate() + 1);
+            userLog.trade(`User ${key.email}: ${consec} consecutive losses today (max ${maxConsecLoss}) — paused until next 6 AM SG (${_next.toISOString()})`);
             return;
           }
         }
@@ -1806,12 +1925,13 @@ async function executeForAllUsers(pick) {
           const bnTpRef = bnTpPrice ?? fmtP(userTpPrice);
           await db.query(
             `INSERT INTO trades (api_key_id, user_id, symbol, direction, entry_price, sl_price, tp_price, quantity, leverage, status,
-             trailing_sl_price, trailing_sl_last_step, tf_15m, tf_3m, tf_1m, market_structure, key_trailing_sl_step)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'OPEN', $10, 0, $11, $12, $13, $14, $15)`,
+             trailing_sl_price, trailing_sl_last_step, tf_15m, tf_3m, tf_1m, market_structure, key_trailing_sl_step, setup)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'OPEN', $10, 0, $11, $12, $13, $14, $15, $16)`,
             [key.id, key.user_id, symbol, pick.direction, price, fmtP(slPrice), bnTpRef, qty, userLev,
              fmtP(slPrice),
              null, pick.structure?.tf3m || null, pick.structure?.tf1m || null,
-             pick.marketStructure || null, userTrailStep]
+             pick.marketStructure || null, userTrailStep,
+             pick.setupName || pick.setup || null]
           );
           userLog.trade(`Binance OK: ${key.email} ${symbol} ${pick.direction} x${userLev} qty=${qty} entry=$${fmtPrice(price)} SL=$${fmtPrice(slPrice)} ${bnTpPrice ? `TP=$${fmtPrice(bnTpPrice)}` : `TP(ref)=$${fmtPrice(userTpPrice)}`}`);
           log(`Binance OK: ${key.email} ${symbol} ${pick.direction} x${userLev}`);
@@ -1933,14 +2053,30 @@ async function executeForAllUsers(pick) {
             if (slFmtActual) {
               const tpNote = bxTpPrice ? ` TP=$${bxTpPrice} (hard close)` : '';
               userLog.trade(`Bitunix position confirmed: ${posId} entry=$${actualEntry} — setting SL=$${slFmtActual}${tpNote}...`);
-              try {
-                const tpSLPayload = { symbol, positionId: posId, slPrice: slFmtActual };
-                if (bxTpPrice && (isScenarioA || isRangeBounce)) tpSLPayload.tpPrice = String(bxTpPrice);
-                await userClient.placePositionTpSl(tpSLPayload);
-                userLog.trade(`Bitunix SL set on ${posId}: SL=$${slFmtActual}${bxTpPrice ? ` TP=$${bxTpPrice}` : ''}`);
-              } catch (e) {
-                userLog.error(`Bitunix SL FAILED: ${e.message} — SET MANUALLY`);
-                await notify(`*Bitunix ${symbol} ${pick.direction}*\nSL failed! Set manually on Bitunix NOW.`);
+              const tpSLPayload = { symbol, positionId: posId, slPrice: slFmtActual };
+              if (bxTpPrice && (isScenarioA || isRangeBounce)) tpSLPayload.tpPrice = String(bxTpPrice);
+              // Retry SL placement up to 3 times. Silent first-attempt
+              // failures (rate limit, position not yet visible on exchange,
+              // transient API hiccups) caused some users to end up with a
+              // position that had NO SL order on Bitunix even though the
+              // DB recorded one. Backoff 1s, 2s.
+              let slPlaced = false;
+              let slLastErr = '';
+              for (let attempt = 1; attempt <= 3; attempt++) {
+                try {
+                  await userClient.placePositionTpSl(tpSLPayload);
+                  slPlaced = true;
+                  userLog.trade(`Bitunix SL set on ${posId} (attempt ${attempt}): SL=$${slFmtActual}${bxTpPrice ? ` TP=$${bxTpPrice}` : ''}`);
+                  break;
+                } catch (e) {
+                  slLastErr = e.message;
+                  userLog.error(`Bitunix SL attempt ${attempt}/3 FAILED: ${e.message}`);
+                  if (attempt < 3) await sleep(attempt * 1000); // 1s, 2s backoff
+                }
+              }
+              if (!slPlaced) {
+                userLog.error(`Bitunix SL FAILED after 3 attempts: ${slLastErr} — SET MANUALLY`);
+                await notify(`🚨 *Bitunix ${symbol} ${pick.direction}*\nSL FAILED 3× — *no SL on exchange*\nUser: ${key.email}\nEntry: $${actualEntry}\nIntended SL: $${slFmtActual}\n\`${slLastErr.substring(0,150)}\`\nSet SL on Bitunix NOW.`);
               }
             } else if ((isScenarioA || isRangeBounce) && bxTpPrice) {
               userLog.trade(`Bitunix: no SL — setting TP=$${bxTpPrice} only...`);
@@ -1957,13 +2093,14 @@ async function executeForAllUsers(pick) {
 
             await db.query(
               `INSERT INTO trades (api_key_id, user_id, symbol, direction, entry_price, sl_price, tp_price, quantity, leverage, status,
-               trailing_sl_price, trailing_sl_last_step, tf_15m, tf_3m, tf_1m, market_structure, key_trailing_sl_step, bitunix_position_id)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'OPEN', $10, 0, $11, $12, $13, $14, $15, $16)`,
+               trailing_sl_price, trailing_sl_last_step, tf_15m, tf_3m, tf_1m, market_structure, key_trailing_sl_step, bitunix_position_id, setup)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'OPEN', $10, 0, $11, $12, $13, $14, $15, $16, $17)`,
               [key.id, key.user_id, symbol, pick.direction, actualEntry,
                slFmtActual || 0, parseFloat(tpRef.toFixed(8)), qty, userLev,
                slFmtActual || 0,
                null, pick.structure?.tf3m || null, pick.structure?.tf1m || null,
-               pick.marketStructure || null, userTrailStep, posId || null]
+               pick.marketStructure || null, userTrailStep, posId || null,
+               pick.setupName || pick.setup || null]
             );
           } else {
             userLog.error(`Bitunix position not found after order — verify on exchange`);
@@ -1971,12 +2108,13 @@ async function executeForAllUsers(pick) {
 
             await db.query(
               `INSERT INTO trades (api_key_id, user_id, symbol, direction, entry_price, sl_price, tp_price, quantity, leverage, status,
-               trailing_sl_price, trailing_sl_last_step, tf_15m, tf_3m, tf_1m, market_structure, key_trailing_sl_step)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'OPEN', $10, 0, $11, $12, $13, $14, $15)`,
+               trailing_sl_price, trailing_sl_last_step, tf_15m, tf_3m, tf_1m, market_structure, key_trailing_sl_step, setup)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'OPEN', $10, 0, $11, $12, $13, $14, $15, $16)`,
               [key.id, key.user_id, symbol, pick.direction, price,
                parseFloat(slPrice.toFixed(8)), 0, qty, userLev, parseFloat(slPrice.toFixed(8)),
                null, pick.structure?.tf3m || null, pick.structure?.tf1m || null,
-               pick.marketStructure || null, userTrailStep]
+               pick.marketStructure || null, userTrailStep,
+               pick.setupName || pick.setup || null]
             );
           }
           userLog.trade(`Bitunix OK: ${key.email} ${symbol} ${pick.direction} x${userLev} qty=${qty}`);
@@ -2045,25 +2183,29 @@ async function syncTradeStatus() {
         const apiKey = cryptoUtils.decrypt(key.api_key_enc, key.iv, key.auth_tag);
         const apiSecret = cryptoUtils.decrypt(key.api_secret_enc, key.secret_iv, key.secret_auth_tag);
 
+        // Hedge-mode safe: key positions by symbol+side so a LONG and a
+        // SHORT (or duplicate fills) on the same symbol don't collapse.
+        const posKey = (sym, dir) => `${sym}:${dir}`;
         let openSymbols = new Map();
 
         if (key.platform === 'binance') {
           const userClient = new USDMClient({ api_key: apiKey, api_secret: apiSecret }, getBinanceRequestOptions());
           const account = await userClient.getAccountInformation({ omitZeroBalances: false });
           for (const p of account.positions) {
-            if (parseFloat(p.positionAmt) !== 0) {
-              openSymbols.set(p.symbol, {
-                amt: parseFloat(p.positionAmt),
-                pnl: parseFloat(p.unrealizedProfit || 0),
-                entryPrice: parseFloat(p.entryPrice || 0),
-              });
-            }
+            const amt = parseFloat(p.positionAmt);
+            if (amt === 0) continue;
+            const dir = amt > 0 ? 'LONG' : 'SHORT';
+            openSymbols.set(posKey(p.symbol, dir), {
+              amt,
+              pnl: parseFloat(p.unrealizedProfit || 0),
+              entryPrice: parseFloat(p.entryPrice || 0),
+            });
           }
 
           // ── Swarm-based Dynamic Exit ─────────────────────────────────────
           // Check if the swarm consensus has shifted against our positions
           for (const trade of trades) {
-            const exchangePos = openSymbols.get(trade.symbol);
+            const exchangePos = openSymbols.get(posKey(trade.symbol, trade.direction || 'LONG'));
             if (exchangePos) {
               try {
                 const { runSwarm } = require('./agents/swarm-engine');
@@ -2109,7 +2251,7 @@ async function syncTradeStatus() {
 
           // Check trailing SL for open positions
           for (const trade of trades) {
-            const exchangePos = openSymbols.get(trade.symbol);
+            const exchangePos = openSymbols.get(posKey(trade.symbol, trade.direction || 'LONG'));
             if (exchangePos && trade.trailing_sl_last_step !== undefined) {
               const entryPrice = parseFloat(trade.entry_price);
               const isLong = trade.direction !== 'SHORT';
@@ -2177,19 +2319,85 @@ async function syncTradeStatus() {
           const userClient = new BitunixClient({ apiKey, apiSecret });
           const account = await userClient.getAccountInformation();
           for (const p of (account.positions || [])) {
-            openSymbols.set(p.symbol, {
-              amt: parseFloat(p.positionAmt || 0),
+            const amt = parseFloat(p.positionAmt || 0);
+            if (!amt) continue;
+            const dir = amt > 0 ? 'LONG' : 'SHORT';
+            openSymbols.set(posKey(p.symbol, dir), {
+              amt,
               pnl: parseFloat(p.unrealizedProfit || 0),
               markPrice: p.markPrice ? parseFloat(p.markPrice) : null,
             });
           }
 
+          // ── Unmanaged-position detector (hedge-mode safety) ──────
+          // Warn when a Bitunix position has no matching OPEN DB trade by
+          // (symbol, direction). Triggered by manual trades on the same key
+          // or by another tool/script. Deduped per (symbol+side+entry) per
+          // process so we don't spam alerts each sync tick.
+          syncTradeStatus._alertedUnmanaged = syncTradeStatus._alertedUnmanaged || new Set();
+          for (const p of (account.positions || [])) {
+            const amt = parseFloat(p.positionAmt || 0);
+            if (!amt) continue;
+            const dir = amt > 0 ? 'LONG' : 'SHORT';
+            const matched = trades.some(t =>
+              t.symbol === p.symbol && (t.direction || 'LONG') === dir
+            );
+            if (matched) continue;
+            const entry = parseFloat(p.entryPrice || 0);
+            const dedupKey = `${key.id}:${p.symbol}:${dir}:${entry}`;
+            if (syncTradeStatus._alertedUnmanaged.has(dedupKey)) continue;
+            syncTradeStatus._alertedUnmanaged.add(dedupKey);
+            bLog.system(`UNMANAGED POSITION: Bitunix ${p.symbol} ${dir} qty=${Math.abs(amt)} entry=$${entry} — not opened by bot`);
+            await notify(
+              `⚠️ *Unmanaged Position*\n` +
+              `${p.symbol} *${dir}* (Bitunix)\n` +
+              `Entry: \`$${entry}\`  Qty: ${Math.abs(amt)}\n` +
+              `Not opened by the bot — manual or external.\n` +
+              `The bot will not trail/manage this position.`
+            );
+          }
+
+          // ── SL re-confirm sweep (self-heal missing initial SL) ──
+          // Some users had positions opened where the original SL placement
+          // failed silently — DB had the SL price but no order on Bitunix.
+          // For each trade still on initial SL (trailing_sl_last_step == 0),
+          // re-call updateStopLoss once per process. Bitunix treats this
+          // idempotently: it updates an existing SL or creates one if
+          // missing. Cached in _slConfirmed so we only retry once per
+          // trade.id per process — once trailing kicks in (lastStep > 0)
+          // the trail logic re-sets the SL on every improvement anyway.
+          syncTradeStatus._slConfirmed = syncTradeStatus._slConfirmed || new Set();
+          for (const trade of trades) {
+            const tradeDir = trade.direction || 'LONG';
+            const exchangePos = openSymbols.get(posKey(trade.symbol, tradeDir));
+            if (!exchangePos) continue;
+            const lastStep = parseFloat(trade.trailing_sl_last_step) || 0;
+            if (lastStep > 0) continue;
+            const sealKey = `${trade.id}`;
+            if (syncTradeStatus._slConfirmed.has(sealKey)) continue;
+            const slPrice = parseFloat(trade.sl_price);
+            if (!slPrice) continue;
+            const slPrec = inferPricePrec(trade.sl_price);
+            try {
+              const ok = await updateStopLoss(userClient, trade.symbol, slPrice, null, 'bitunix', slPrec, parseFloat(trade.tp_price) || undefined);
+              if (ok) {
+                syncTradeStatus._slConfirmed.add(sealKey);
+                bLog.system(`✓ Bitunix SL re-confirmed for ${trade.symbol} ${tradeDir} (key=${key.email}): $${slPrice}`);
+              } else {
+                bLog.error(`Bitunix SL re-confirm returned false for ${trade.symbol} ${tradeDir} (key=${key.email})`);
+              }
+            } catch (e) {
+              bLog.error(`Bitunix SL re-confirm threw for ${trade.symbol} ${tradeDir}: ${e.message}`);
+            }
+          }
+
           // Check trailing SL for Bitunix positions (self-healing)
           bLog.system(`Bitunix trailing SL: checking ${trades.length} trade(s), ${openSymbols.size} live position(s): [${[...openSymbols.keys()].join(',')}]`);
           for (const trade of trades) {
-            const exchangePos = openSymbols.get(trade.symbol);
+            const tradeDir = trade.direction || 'LONG';
+            const exchangePos = openSymbols.get(posKey(trade.symbol, tradeDir));
             if (!exchangePos) {
-              bLog.system(`Bitunix trailing SL: ${trade.symbol} not in openSymbols — skipping trail (position may be closed)`);
+              bLog.system(`Bitunix trailing SL: ${trade.symbol} ${tradeDir} not in openSymbols — skipping trail (position may be closed)`);
             }
             if (exchangePos && trade.trailing_sl_last_step !== undefined) {
               const entryPrice = parseFloat(trade.entry_price);
@@ -2258,87 +2466,10 @@ async function syncTradeStatus() {
 
               bLog.trade(`Bitunix trailing: ${trade.symbol} entry=$${entryPrice} cur=$${curPrice} pricePct=${(profitPct*100).toFixed(3)}% capitalPct=${(capitalPct*100).toFixed(2)}% lev=${tradeLev}x lastStep=${(lastStep*100).toFixed(1)}%`);
 
-              // ── Triple MA Scenario A: exit when MA20 converges to entry ──
-              // LONG: MA20 drops to entry. SHORT: MA20 rises to entry.
-              const mktStructure = trade.market_structure || '';
-              if (mktStructure.startsWith('TRIPLE_MA_A')) {
-                try {
-                  const ma20Exit = await shouldExitScenarioA(trade.symbol, entryPrice, trade.direction);
-                  if (ma20Exit) {
-                    const dirLabel = trade.direction || 'LONG';
-                    bLog.trade(`Triple MA Scenario A EXIT: ${trade.symbol} ${dirLabel} MA20 touched entry $${entryPrice}`);
-                    const closeSide = trade.direction === 'SHORT' ? 'BUY' : 'SELL';
-                    await userClient.closePosition({ symbol: trade.symbol, positionId: pos?.positionId });
-                    await db.query(
-                      `UPDATE trades SET status = 'CLOSED', exit_reason = 'triple_ma_a_ma20_touch', closed_at = NOW(), exit_price = $1 WHERE id = $2`,
-                      [curPrice, trade.id]
-                    );
-                    const verb = trade.direction === 'SHORT' ? 'rose' : 'dropped';
-                    await notify(`📊 *Triple MA A Exit*\n${trade.symbol} ${dirLabel} closed — MA20 ${verb} to entry $${entryPrice.toFixed(4)}\nExit $${curPrice.toFixed(4)}`);
-                    continue;
-                  }
-                } catch (ma20Err) {
-                  bLog.error(`Triple MA A exit check failed for ${trade.symbol}: ${ma20Err.message}`);
-                }
-              }
-
-              // ── Triple MA Scenario B: custom every-5%-gain trailing SL ──
-              if (mktStructure.startsWith('TRIPLE_MA_B')) {
-                const bTrail = calcTripleMABTrailStep(entryPrice, curPrice, lastStep);
-                if (bTrail) {
-                  const bPrec = inferPricePrec(trade.sl_price);
-                  bLog.trade(`Triple MA Scenario B: ${trade.symbol} +${(profitPct*100).toFixed(1)}% gain — moving SL to $${bTrail.newSlPrice.toFixed(bPrec)} (+${(bTrail.newLastStep*100).toFixed(1)}%)`);
-                  let slUpdatedB = false;
-                  try {
-                    slUpdatedB = await updateStopLoss(userClient, trade.symbol, bTrail.newSlPrice, null, 'bitunix', bPrec, undefined);
-                  } catch (e) {
-                    bLog.error(`Triple MA B trailing SL failed: ${e.message}`);
-                  }
-                  if (slUpdatedB) {
-                    await db.query(
-                      `UPDATE trades SET trailing_sl_price = $1, trailing_sl_last_step = $2 WHERE id = $3`,
-                      [bTrail.newSlPrice, bTrail.newLastStep, trade.id]
-                    );
-                    bLog.trade(`✓ Triple MA B trailing SL: ${trade.symbol} SL=$${bTrail.newSlPrice.toFixed(4)} (trigger was +${(bTrail.trigger*100).toFixed(0)}%)`);
-                    await notify(`📈 *Triple MA B Trailing SL*\n${trade.symbol} LONG\nPrice gained +${(profitPct*100).toFixed(1)}%\nSL locked at +${(bTrail.newLastStep*100).toFixed(1)}% ($${bTrail.newSlPrice.toFixed(4)})`);
-                  }
-                }
-                continue; // skip normal trailing SL for Scenario B
-              }
-
-              // ── Spike-HL: trail SL to each rising/falling 1m candle low/high ──
-              // SL starts just below the spike wick. After each closed candle:
-              //   LONG: if new candle is bullish and its low > entry & > current SL → move SL up
-              //   SHORT: if new candle is bearish and its high < entry & < current SL → move SL down
-              if (mktStructure.startsWith('SPIKE_HL')) {
-                try {
-                  const spikeTrail = await calcSpikeHLTrailSl(trade.symbol, trade.direction, entryPrice, parseFloat(trade.trailing_sl_price) || parseFloat(trade.sl_price));
-                  if (spikeTrail.updated && spikeTrail.newSl) {
-                    const spikePrec = inferPricePrec(trade.sl_price);
-                    let slMovedSpike = false;
-                    try {
-                      slMovedSpike = await updateStopLoss(userClient, trade.symbol, spikeTrail.newSl, null, 'bitunix', spikePrec, undefined);
-                    } catch (e) {
-                      bLog.error(`Spike-HL trail SL update failed: ${e.message}`);
-                    }
-                    if (slMovedSpike) {
-                      await db.query(
-                        `UPDATE trades SET trailing_sl_price = $1 WHERE id = $2`,
-                        [spikeTrail.newSl, trade.id]
-                      );
-                      const pctLocked = trade.direction === 'LONG'
-                        ? ((spikeTrail.newSl - entryPrice) / entryPrice * 100).toFixed(3)
-                        : ((entryPrice - spikeTrail.newSl) / entryPrice * 100).toFixed(3);
-                      bLog.trade(`✓ Spike-HL trail: ${trade.symbol} ${trade.direction} SL→$${spikeTrail.newSl.toFixed(4)} (locked +${pctLocked}% from entry)`);
-                      await notify(`🎯 *Spike-HL Trail*\n${trade.symbol} ${trade.direction}\nSL moved → $${spikeTrail.newSl.toFixed(4)} (+${pctLocked}% locked)`);
-                    }
-                  }
-                } catch (spikeErr) {
-                  bLog.error(`Spike-HL trail check failed for ${trade.symbol}: ${spikeErr.message}`);
-                }
-                continue; // skip normal trailing SL for Spike-HL
-              }
-
+              // Legacy TRIPLE_MA / SPIKE_HL trail/exit blocks removed — those
+              // strategies are no longer used as signal sources, and any
+              // remaining open trades with those market_structure tags will
+              // fall through to the standard v3 trailing logic below.
               const bxSlPrec = inferPricePrec(trade.sl_price);
               const currentSl = parseFloat(trade.trailing_sl_price) || parseFloat(trade.sl_price) || 0;
               const bxProfitPct = isLong
@@ -2360,8 +2491,36 @@ async function syncTradeStatus() {
 
               let newSlPrice = null;
               let slSource = '';
+              let tierLastStep = null;
 
-              if (bxProfitPct >= 0.005) { // only trail once price is 0.5% in profit
+              // ── Tier-based trail (TRAILING_TIERS, capital %) ──────
+              // +21%→+20%, +31%→+30%, +41%→+40%, ... regardless of leverage.
+              // The previous price-based gate (0.5% price = 50% capital at
+              // 100x) never fired at the user's requested +21% capital
+              // milestone on high-leverage trades. This path uses capital%
+              // so 100x ETH at +21% locks +20% the same as 20x BTC at +21%.
+              const lastStepCap  = parseFloat(trade.trailing_sl_last_step) || 0;
+              const tierResult   = calculateTrailingStep(entryPrice, curPrice, isLong, lastStepCap, tradeLev, 0);
+              if (tierResult) {
+                const tierSl = tierResult.newSlPrice;
+                // Reject if SL would be on the wrong side of current price
+                // (immediate trigger). Real-world: at 100x +21% peak, +20%
+                // lock is 0.01% price below current — fine. Edge case:
+                // price retraced below the lock level → skip and let the
+                // fallback handle it.
+                const validSide = isLong ? tierSl < curPrice : tierSl > curPrice;
+                const wouldImprove = isLong ? tierSl > currentSl : tierSl < currentSl;
+                if (validSide && wouldImprove) {
+                  newSlPrice    = tierSl;
+                  slSource      = `tier+${Math.round(tierResult.newLastStep * 100)}%`;
+                  tierLastStep  = tierResult.newLastStep;
+                }
+              }
+
+              // ── Fallback: 0.8% behind current price ─────────────
+              // Only runs if tier trail didn't produce an improvement
+              // (e.g. capital < +21% so calculateTrailingStep returned null).
+              if (!newSlPrice && bxProfitPct >= 0.005) {
                 const rawTrailSl = isLong
                   ? curPrice * (1 - TRAIL_LOCK_PCT)
                   : curPrice * (1 + TRAIL_LOCK_PCT);
@@ -2429,8 +2588,11 @@ async function syncTradeStatus() {
               }
 
               if (slUpdated) {
-                // Store current profit % as lastStep so we can track progress
-                const newLastStep = bxProfitPct * tradeLev;
+                // Store the tier's lock level when tier-trail fired (so the
+                // tier table doesn't re-trigger the same step); otherwise
+                // store the raw capital % so future tier comparisons still
+                // know how far we've already trailed.
+                const newLastStep = tierLastStep != null ? tierLastStep : (bxProfitPct * tradeLev);
                 await db.query(
                   `UPDATE trades SET trailing_sl_price = $1, trailing_sl_last_step = $2 WHERE id = $3`,
                   [newSlPrice, newLastStep, trade.id]
@@ -2459,7 +2621,7 @@ async function syncTradeStatus() {
         bLog.system(`Sync: exchange has ${openSymbols.size} open positions, DB has ${trades.length} OPEN trades`);
 
         for (const trade of trades) {
-          const exchangePos = openSymbols.get(trade.symbol);
+          const exchangePos = openSymbols.get(posKey(trade.symbol, trade.direction || 'LONG'));
 
           if (!exchangePos) {
             // Position closed on exchange — find the exit price

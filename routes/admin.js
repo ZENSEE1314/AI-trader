@@ -6,6 +6,42 @@ const emailService = require('../email-service');
 const router = express.Router();
 router.use(authMiddleware);
 
+// ── Shared 24hr ticker cache ────────────────────────────────
+// Binance /fapi/v1/ticker/24hr returns ~1 MB JSON for 500+ symbols.
+// Multiple admin polls hammered it on every 10 s tick — easily >150 ms
+// per request and a non-trivial chunk of bandwidth. Cache the parsed
+// price map for 5 s; covers concurrent tabs / users with one upstream
+// fetch. Returns null on fetch failure (caller handles empty map).
+const _tickerCache = { at: 0, map: null, inflight: null };
+async function getTickerMap() {
+  const now = Date.now();
+  if (_tickerCache.map && (now - _tickerCache.at) < 5000) return _tickerCache.map;
+  if (_tickerCache.inflight) return _tickerCache.inflight; // single-flight
+  _tickerCache.inflight = (async () => {
+    try {
+      const fetch = require('node-fetch');
+      const r = await fetch('https://fapi.binance.com/fapi/v1/ticker/24hr', { timeout: 10000 });
+      const tickers = await r.json();
+      const map = {};
+      for (const t of tickers) {
+        map[t.symbol] = {
+          price: parseFloat(t.lastPrice),
+          change24h: parseFloat(t.priceChangePercent),
+          volume: parseFloat(t.quoteVolume),
+        };
+      }
+      _tickerCache.map = map;
+      _tickerCache.at  = Date.now();
+      return map;
+    } catch {
+      return _tickerCache.map || {};   // serve stale on failure
+    } finally {
+      _tickerCache.inflight = null;
+    }
+  })();
+  return _tickerCache.inflight;
+}
+
 // Admin check middleware
 async function adminOnly(req, res, next) {
   try {
@@ -1944,6 +1980,175 @@ router.post('/emergency-close', async (req, res) => {
   }
 });
 
+// ── Reverse Position: close current side, OPEN opposite at same qty ─
+// Body: { symbol, currentDir }  ('LONG' | 'SHORT')
+// For each user with an open position on `symbol`:
+//   1. Flash-close the current position (Bitunix) / market-close (Binance)
+//   2. Place a market order in the OPPOSITE direction with the same qty
+//      and the same leverage the position was using
+//   3. Set initial SL at 20 % capital from the new entry
+//   4. Insert new trade row in DB
+// Bypasses the scan/risk pipeline — admin override only.
+router.post('/reverse-position', async (req, res) => {
+  const symbol = String(req.body.symbol || '').toUpperCase();
+  const currentDir = String(req.body.currentDir || '').toUpperCase();
+  if (!symbol || !['LONG', 'SHORT'].includes(currentDir)) {
+    return res.status(400).json({ error: 'symbol + currentDir (LONG|SHORT) required' });
+  }
+  const newDir = currentDir === 'LONG' ? 'SHORT' : 'LONG';
+  console.log(`[ADMIN] ⚠️ REVERSE ${symbol} ${currentDir} → ${newDir} for all users`);
+
+  try {
+    const cryptoUtils = require('../crypto-utils');
+    const { BitunixClient } = require('../bitunix-client');
+
+    const keys = await query(
+      `SELECT ak.id, ak.user_id, ak.api_key_enc, ak.iv, ak.auth_tag,
+              ak.api_secret_enc, ak.secret_iv, ak.secret_auth_tag,
+              ak.platform, ak.leverage, u.email
+       FROM api_keys ak
+       JOIN users u ON u.id = ak.user_id
+       WHERE ak.enabled = true`
+    );
+
+    const results = [];
+    let closedCount = 0;
+    let openedCount = 0;
+    const SLEEP = ms => new Promise(r => setTimeout(r, ms));
+
+    for (const key of keys) {
+      try {
+        const apiKey    = cryptoUtils.decrypt(key.api_key_enc, key.iv, key.auth_tag);
+        const apiSecret = cryptoUtils.decrypt(key.api_secret_enc, key.secret_iv, key.secret_auth_tag);
+
+        if (key.platform !== 'bitunix') {
+          // Binance reverse not implemented yet — TODO when needed
+          results.push({ user: key.email, status: 'SKIPPED', reason: 'binance reverse not yet supported' });
+          continue;
+        }
+
+        const client = new BitunixClient({ apiKey, apiSecret });
+
+        // Find this user's open trade for this symbol+direction
+        const dbTrades = await query(
+          `SELECT id, bitunix_position_id, entry_price, quantity, leverage, sl_price
+             FROM trades
+            WHERE api_key_id = $1 AND symbol = $2 AND status = 'OPEN' AND direction = $3`,
+          [key.id, symbol, currentDir]
+        );
+        if (dbTrades.length === 0) {
+          results.push({ user: key.email, status: 'SKIPPED', reason: `no open ${currentDir} trade in DB` });
+          continue;
+        }
+
+        // Look up the live position to get the actual qty + positionId
+        const positions = await client.getOpenPositions(symbol);
+        const wantedSide = currentDir === 'LONG' ? 'BUY' : 'SELL';
+        const livePos = (Array.isArray(positions) ? positions : []).find(p =>
+          p.symbol === symbol && (p.side || '').toUpperCase() === wantedSide && parseFloat(p.qty || 0) > 0
+        );
+        if (!livePos) {
+          // No live position — just clean up DB
+          await query(`UPDATE trades SET status='CLOSED', closed_at=NOW() WHERE id=$1`, [dbTrades[0].id]);
+          results.push({ user: key.email, status: 'PHANTOM_CLEANED', reason: 'no live position to reverse' });
+          continue;
+        }
+
+        const qty       = livePos.qty;
+        const lev       = parseInt(livePos.leverage || dbTrades[0].leverage || key.leverage || 20);
+        const closeSide = currentDir === 'LONG' ? 'SELL' : 'BUY';
+        const openSide  = newDir === 'LONG' ? 'BUY' : 'SELL';
+
+        // 1. CLOSE current side
+        try {
+          await client.flashClose({ positionId: livePos.positionId });
+          await query(`UPDATE trades SET status='CLOSED', exit_price=$1, closed_at=NOW(), exit_reason='admin_reverse' WHERE id=$2`,
+                      [parseFloat(livePos.avgOpenPrice || 0), dbTrades[0].id]);
+          closedCount++;
+        } catch (cErr) {
+          results.push({ user: key.email, status: 'CLOSE_FAILED', error: cErr.message });
+          continue;
+        }
+
+        // Wait briefly for the close to settle on the exchange
+        await SLEEP(1000);
+
+        // 2. OPEN opposite side with same qty
+        try {
+          await client.placeOrder({
+            symbol,
+            side: openSide,
+            qty: String(qty),
+            orderType: 'MARKET',
+            tradeSide: 'OPEN',
+          });
+        } catch (oErr) {
+          results.push({ user: key.email, status: 'OPEN_FAILED', error: oErr.message, closed: true });
+          continue;
+        }
+
+        // Wait for the new position to be visible
+        await SLEEP(1500);
+
+        // 3. Look up the new position to get entry + positionId for SL
+        const newPositions = await client.getOpenPositions(symbol);
+        const newPosSide = newDir === 'LONG' ? 'BUY' : 'SELL';
+        const newPos = (Array.isArray(newPositions) ? newPositions : []).find(p =>
+          p.symbol === symbol && (p.side || '').toUpperCase() === newPosSide && parseFloat(p.qty || 0) > 0
+        );
+        if (!newPos) {
+          results.push({ user: key.email, status: 'OPENED_NO_VERIFY', reason: 'placed order but new position not visible yet' });
+          openedCount++;
+          continue;
+        }
+
+        const newEntry    = parseFloat(newPos.avgOpenPrice || 0);
+        const isLong      = newDir === 'LONG';
+        const slPricePct  = 0.20 / lev;            // 20 % capital
+        const slPrice     = isLong ? newEntry * (1 - slPricePct) : newEntry * (1 + slPricePct);
+        const slFmt       = parseFloat(slPrice.toFixed(8));
+
+        // 4. Place SL with 3-attempt retry
+        let slOk = false;
+        let slLastErr = '';
+        for (let a = 1; a <= 3; a++) {
+          try {
+            await client.placePositionTpSl({ symbol, positionId: newPos.positionId, slPrice: slFmt });
+            slOk = true;
+            break;
+          } catch (slErr) {
+            slLastErr = slErr.message;
+            if (a < 3) await SLEEP(a * 1000);
+          }
+        }
+
+        // 5. Insert new trade row
+        await query(
+          `INSERT INTO trades (api_key_id, user_id, symbol, direction, entry_price, sl_price, quantity, leverage, status,
+                               trailing_sl_price, trailing_sl_last_step, bitunix_position_id, market_structure)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'OPEN', $9, 0, $10, $11)`,
+          [key.id, key.user_id, symbol, newDir, newEntry, slOk ? slFmt : 0, qty, lev,
+           slOk ? slFmt : 0, newPos.positionId, 'admin_reverse']
+        );
+        openedCount++;
+        results.push({
+          user: key.email, status: slOk ? 'REVERSED' : 'REVERSED_NO_SL',
+          newDir, newEntry, qty, sl: slOk ? slFmt : null, slError: slOk ? null : slLastErr,
+        });
+
+      } catch (keyErr) {
+        results.push({ user: key.email, status: 'KEY_ERROR', error: keyErr.message });
+      }
+    }
+
+    console.log(`[ADMIN] Reverse ${symbol} ${currentDir}→${newDir}: closed=${closedCount} opened=${openedCount} of ${keys.length} users`);
+    res.json({ ok: true, symbol, currentDir, newDir, closedCount, openedCount, totalUsers: keys.length, results });
+  } catch (err) {
+    console.error('Reverse-position error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Force re-sync all trades with exchange data ────
 router.post('/fix-bitunix-pnl', async (req, res) => {
   try {
@@ -2989,363 +3194,6 @@ router.post('/backtest', async (req, res) => {
   }
 });
 
-// ── AI Optimize: streaming NDJSON with candle cache ────
-// Quantum AI Optimizer — uses bitmask combo system (15 strategy combinations)
-router.post('/ai-optimize', async (req, res) => {
-  req.setTimeout(600000);
-  res.setTimeout(600000);
-  res.setHeader('Content-Type', 'application/x-ndjson');
-  res.setHeader('Cache-Control', 'no-cache');
-  res.setHeader('X-Accel-Buffering', 'no');
-  res.flushHeaders();
-
-  function sendLog(msg) { try { res.write(JSON.stringify({ type: 'log', message: msg }) + '\n'); } catch {} }
-  function sendProgress(phase, pct) { try { res.write(JSON.stringify({ type: 'progress', phase, pct }) + '\n'); } catch {} }
-
-  const keepalive = setInterval(() => {
-    try { res.write(JSON.stringify({ type: 'ping' }) + '\n'); } catch {}
-  }, 2000);
-  res.on('close', () => clearInterval(keepalive));
-
-  try {
-    const fetch = require('node-fetch');
-    const quantumOptimizer = require('../quantum-optimizer');
-    const engine = require('../liquidity-sweep-engine');
-    const DAYS = Math.min(parseInt(req.body.days) || 7, 365);
-    const endTime = Date.now();
-    const startTime = endTime - DAYS * 86400000;
-    const SIM_WALLET = 1000;
-    const RISK_PCT = 0.10;
-    // Test both 50x and 100x leverage — best result across both is selected as winner
-    const LEVERAGE_GRID = [50, 100];
-    const MIN_SCORE = 8;
-    const TESTED_AT = new Date().toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
-
-    sendLog(`⚛️ Quantum AI Backtester — ${DAYS} day${DAYS > 1 ? 's' : ''} | Tested: ${TESTED_AT}`);
-    sendLog(`Simulated wallet: $${SIM_WALLET} | Risk: ${RISK_PCT * 100}% | Leverage: ${LEVERAGE_GRID.join('x / ')}x (both tested)`);
-    sendLog(`Tokens: BTCUSDT ETHUSDT SOLUSDT BNBUSDT (all 4 core tokens at 100x leverage each)`);
-    sendProgress('init', 5);
-
-    await quantumOptimizer.initCombos();
-
-    // Always use all 4 core tokens — guarantee they are included regardless of DB state
-    const CORE_TOKENS = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT'];
-    const tokenRows = await query('SELECT symbol FROM token_leverage WHERE enabled = true');
-    let tokens = tokenRows.map(r => r.symbol);
-    // Ensure every core token is present (prepend any that are missing)
-    for (const ct of [...CORE_TOKENS].reverse()) {
-      if (!tokens.includes(ct)) tokens.unshift(ct);
-    }
-    // If DB returned nothing, fall back to core tokens only
-    if (!tokens.length) tokens = [...CORE_TOKENS];
-    sendLog(`Tokens loaded: ${tokens.join(', ')}`);
-
-    // Fetch klines for all tokens
-    async function fetchK(symbol, interval, limit, et = endTime) {
-      const PAGE = 1500;
-      let all = [];
-      let curEnd = et;
-      let remaining = limit;
-      while (remaining > 0) {
-        const batch = Math.min(remaining, PAGE);
-        const url = `https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=${interval}&limit=${batch}&endTime=${curEnd}`;
-        try {
-          const r = await fetch(url, { timeout: 15000 });
-          if (!r.ok) break;
-          const data = await r.json();
-          if (!data.length) break;
-          all = data.concat(all);
-          curEnd = parseInt(data[0][0]) - 1;
-          remaining -= data.length;
-          if (data.length < batch) break;
-        } catch { break; }
-      }
-      return all;
-    }
-
-    sendLog('Fetching historical data...');
-    const klineCache = {};
-    let fetchDone = 0;
-    const k1mLimit = Math.min(DAYS * 1440, 10000);
-    const k15mLimit = Math.min(DAYS * 96, 5000);
-    const k1hLimit = Math.min(DAYS * 24, 2000);
-
-    for (const sym of tokens) {
-      try {
-        const [k1h, k15m, k1m] = await Promise.all([
-          fetchK(sym, '1h', k1hLimit),
-          fetchK(sym, '15m', k15mLimit),
-          fetchK(sym, '1m', k1mLimit),
-        ]);
-        if (k15m.length >= 30 && k1m.length >= 50) {
-          klineCache[sym] = { k1h, k15m, k1m };
-          sendLog(`  ✅ ${sym} (1h:${k1h.length} 15m:${k15m.length} 1m:${k1m.length})`);
-        } else {
-          sendLog(`  ❌ ${sym} — insufficient data`);
-        }
-      } catch (e) {
-        sendLog(`  ❌ ${sym} — ${e.message}`);
-      }
-      fetchDone++;
-      sendProgress('fetch', Math.round(fetchDone / tokens.length * 40) + 10);
-      await new Promise(r => setTimeout(r, 200));
-    }
-
-    const validTokens = Object.keys(klineCache);
-    sendLog(`Data ready: ${validTokens.length} tokens`);
-    if (!validTokens.length) throw new Error('No valid token data fetched');
-
-    // Pre-index 1m candles by 15m bucket for fast lookup
-    sendLog('Indexing 1m candles...');
-    const m1Index = {}; // sym → Map<15m_close_time, [1m candles]>
-    for (const sym of validTokens) {
-      const { k15m, k1m } = klineCache[sym];
-      const idx = new Map();
-      let m1ptr = 0;
-      for (let i = 0; i < k15m.length; i++) {
-        const prevEnd = i > 0 ? parseInt(k15m[i - 1][6]) : 0;
-        const curEnd = parseInt(k15m[i][6]);
-        const bucket = [];
-        while (m1ptr < k1m.length && parseInt(k1m[m1ptr][0]) <= curEnd) {
-          if (parseInt(k1m[m1ptr][0]) > prevEnd) bucket.push(k1m[m1ptr]);
-          m1ptr++;
-        }
-        idx.set(i, bucket);
-      }
-      m1Index[sym] = idx;
-    }
-
-    // Pre-index 1h candles by time
-    const h1Index = {};
-    for (const sym of validTokens) {
-      const { k1h } = klineCache[sym];
-      h1Index[sym] = k1h.map(k => parseInt(k[6])); // close times
-    }
-
-    // Parameter grid — key tunables per strategy
-    const PARAM_GRID = {
-      rrRatio: [1.5, 2.0, 2.5, 3.0],
-      hunt: { minTouches: [2, 3, 4], proximityPct: [0.005, 0.01, 0.015] },
-      momentum: { trendStrength: [6, 7, 8], pinBarWickRatio: [1.5, 2.0, 2.5] },
-      brr: { breakoutBodyRatio: [0.5, 0.7, 0.9], retestBodyRatio: [0.5, 0.7, 0.9] },
-    };
-
-    // Build param variants for grid search (keep it manageable ~48 configs)
-    const paramVariants = [];
-    for (const rr of PARAM_GRID.rrRatio) {
-      // Default params
-      paramVariants.push({ rr, hunt: {}, momentum: {}, brr: {}, label: `RR${rr}` });
-      // HUNT variants
-      for (const mt of PARAM_GRID.hunt.minTouches) {
-        for (const pp of PARAM_GRID.hunt.proximityPct) {
-          if (mt === 2 && pp === 0.01 && rr !== 2.0) continue; // skip defaults except with RR2
-          paramVariants.push({ rr, hunt: { minTouches: mt, proximityPct: pp }, momentum: {}, brr: {}, label: `RR${rr}_HT${mt}_HP${pp}` });
-        }
-      }
-      // MOMENTUM variants
-      for (const ts of PARAM_GRID.momentum.trendStrength) {
-        if (ts === 7 && rr !== 2.0) continue; // skip default
-        paramVariants.push({ rr, hunt: {}, momentum: { trendStrength: ts }, brr: {}, label: `RR${rr}_MT${ts}` });
-      }
-      // BRR variants (fewer since BRR performs worst)
-      if (rr === 2.0 || rr === 2.5) {
-        for (const bb of PARAM_GRID.brr.breakoutBodyRatio) {
-          paramVariants.push({ rr, hunt: {}, momentum: {}, brr: { breakoutBodyRatio: bb }, label: `RR${rr}_BB${bb}` });
-        }
-      }
-    }
-    const TOTAL = quantumOptimizer.STRATEGIES ? Object.keys(quantumOptimizer.STRATEGIES).length : 5;
-    const TOTAL_COMBOS = (1 << TOTAL) - 1; // 31 for 5 strategies
-    sendLog(`Parameter grid: ${paramVariants.length} configs × ${TOTAL_COMBOS} combos = ${paramVariants.length * TOTAL_COMBOS} tests`);
-
-    // Backtest function — runs one combo with one param config
-    // leverage: multiplier applied to price-% moves (e.g. 100 → 100x leveraged PnL)
-    const yield_ = () => new Promise(r => setImmediate(r));
-    function runBacktest(comboId, params, leverage = 100) {
-      const enabled = quantumOptimizer.getEnabledStrategies(comboId);
-      let trades = 0, wins = 0, losses = 0, totalPnl = 0;
-
-      for (const sym of validTokens) {
-        const { k1h, k15m } = klineCache[sym];
-        const symM1 = m1Index[sym];
-        const symH1Times = h1Index[sym];
-        let position = null;
-
-        for (let i = 100; i < k15m.length - 1; i++) {
-          if (position) {
-            const m1Bucket = symM1.get(i) || [];
-            let closed = false;
-            for (const c of m1Bucket) {
-              const high = parseFloat(c[2]);
-              const low = parseFloat(c[3]);
-              if (position.direction === 'LONG') {
-                if (low <= position.sl) { totalPnl += (position.sl - position.entry) / position.entry * 100 * leverage; losses++; trades++; closed = true; break; }
-                if (high >= position.tp1) { totalPnl += (position.tp1 - position.entry) / position.entry * 100 * leverage; wins++; trades++; closed = true; break; }
-              } else {
-                if (high >= position.sl) { totalPnl += (position.entry - position.sl) / position.entry * 100 * leverage; losses++; trades++; closed = true; break; }
-                if (low <= position.tp1) { totalPnl += (position.entry - position.tp1) / position.entry * 100 * leverage; wins++; trades++; closed = true; break; }
-              }
-            }
-            if (closed) position = null;
-          }
-
-          if (!position && i % 4 === 0) {
-            const w15m = k15m.slice(Math.max(0, i - 99), i + 1);
-            const w1m = [];
-            for (let b = Math.max(0, i - 3); b <= i; b++) { const bucket = symM1.get(b) || []; w1m.push(...bucket); }
-            const w1mSlice = w1m.slice(-50);
-            if (w15m.length < 30 || w1mSlice.length < 10) continue;
-
-            const stepTime = parseInt(k15m[i][6]);
-            let h1End = 0;
-            for (let h = symH1Times.length - 1; h >= 0; h--) { if (symH1Times[h] <= stepTime) { h1End = h + 1; break; } }
-            const w1h = k1h.slice(Math.max(0, h1End - 60), h1End);
-
-            let signal = null;
-            try {
-              if (enabled.LIQUIDITY_SWEEP) { const s = engine.detectLiquiditySweep(w15m, w1mSlice); if (s) signal = s; }
-              if (enabled.STOP_LOSS_HUNT) { const s = engine.detectStopLossHunt(w15m, w1mSlice, params.hunt); if (s && (!signal || s.touches > 2)) signal = s; }
-              if (enabled.MOMENTUM_SCALP) { const s = engine.detectMomentumScalp(w15m, w1mSlice, params.momentum); if (s && !signal) signal = s; }
-              if (enabled.BRR_FIBO && w1h.length >= 30) { const s = engine.detectBRR(w1h, w15m, w1mSlice, params.brr); if (s && (!signal || s.score > 14)) signal = s; }
-              // SMC Classic: strong S/R zone + 1m reversal candle pattern
-              if (enabled.SMC_CLASSIC && w1h.length >= 20) {
-                const pc = k => ({ open: parseFloat(k[1]), high: parseFloat(k[2]), low: parseFloat(k[3]), close: parseFloat(k[4]), volume: parseFloat(k[5]) });
-                const levels = engine.findKeyLevels(w15m.map(pc), 50);
-                const lp = parseFloat(w15m[w15m.length - 1][4]);
-                const near = levels.find(l => Math.abs(l.price - lp) / lp < 0.003 && l.strength >= 3);
-                if (near && w1mSlice.length >= 2) {
-                  const c1 = parseFloat(w1mSlice[w1mSlice.length - 1][4]), o1 = parseFloat(w1mSlice[w1mSlice.length - 1][1]);
-                  const c2 = parseFloat(w1mSlice[w1mSlice.length - 2][4]), o2 = parseFloat(w1mSlice[w1mSlice.length - 2][1]);
-                  if (near.type === 'support' && c1 > o1 && c2 < o2 && !signal) {
-                    signal = { direction: 'LONG', setup: 'SMC_CLASSIC', entryPrice: c1, sl: near.zoneLow || near.price * 0.997 };
-                  }
-                  if (near.type === 'resistance' && c1 < o1 && c2 > o2 && !signal) {
-                    signal = { direction: 'SHORT', setup: 'SMC_CLASSIC', entryPrice: c1, sl: near.zoneHigh || near.price * 1.003 };
-                  }
-                }
-              }
-            } catch {}
-
-            if (signal) {
-              const slDist = Math.abs(signal.entryPrice - signal.sl) / signal.entryPrice;
-              if (slDist > 0.001 && slDist < 0.05) {
-                const tpDist = slDist * params.rr;
-                position = {
-                  entry: signal.entryPrice, sl: signal.sl, direction: signal.direction,
-                  tp1: signal.direction === 'LONG' ? signal.entryPrice * (1 + tpDist) : signal.entryPrice * (1 - tpDist),
-                };
-              }
-            }
-          }
-        }
-        if (position) {
-          const lastClose = parseFloat(k15m[k15m.length - 1][4]);
-          const pnl = (position.direction === 'LONG' ? (lastClose - position.entry) / position.entry * 100 : (position.entry - lastClose) / position.entry * 100) * leverage;
-          totalPnl += pnl; if (pnl > 0) wins++; else losses++; trades++;
-        }
-      }
-      return { trades, wins, losses, totalPnl };
-    }
-
-    // Run grid search for each leverage config — pick best result per combo across all leverages
-    sendLog('');
-    sendLog(`=== GRID SEARCH: ${TOTAL_COMBOS} COMBOS × ${paramVariants.length} PARAM VARIANTS × ${LEVERAGE_GRID.length} LEVERAGE CONFIGS ===`);
-    const comboResults = [];
-    let testsRun = 0;
-    const totalTests = TOTAL_COMBOS * paramVariants.length * LEVERAGE_GRID.length;
-
-    for (let comboId = 1; comboId <= TOTAL_COMBOS; comboId++) {
-      const name = quantumOptimizer.comboToName(comboId);
-      let bestResult = null;
-      let bestParams = null;
-      let bestLeverage = LEVERAGE_GRID[LEVERAGE_GRID.length - 1];
-      let bestPnl = -Infinity;
-
-      for (const lev of LEVERAGE_GRID) {
-        for (const pv of paramVariants) {
-          const result = runBacktest(comboId, pv, lev);
-          testsRun++;
-          if (result.totalPnl > bestPnl || (result.totalPnl === bestPnl && result.trades > (bestResult?.trades || 0))) {
-            bestPnl = result.totalPnl;
-            bestResult = result;
-            bestParams = pv;
-            bestLeverage = lev;
-          }
-          if (testsRun % 40 === 0) {
-            sendProgress('backtest', Math.round(50 + (testsRun / totalTests) * 40));
-            await yield_();
-          }
-        }
-      }
-
-      const wr = bestResult.trades > 0 ? (bestResult.wins / bestResult.trades * 100).toFixed(0) : '0';
-      const pnlSign = bestResult.totalPnl >= 0 ? '+' : '';
-      sendLog(`  #${String(comboId).padEnd(3)} ${name.padEnd(28)} ${String(bestResult.trades).padStart(4)} trades | ${wr}% WR | ${pnlSign}${bestResult.totalPnl.toFixed(2)}% | best: ${bestLeverage}x RR=${bestParams.rr} ${bestParams.label}`);
-
-      comboResults.push({
-        comboId, trades: bestResult.trades, wins: bestResult.wins,
-        losses: bestResult.losses, totalPnl: bestResult.totalPnl,
-        bestLeverage,
-        bestParams: { rr: bestParams.rr, hunt: bestParams.hunt, momentum: bestParams.momentum, brr: bestParams.brr },
-      });
-      await yield_();
-    }
-
-    // Seed results into DB
-    sendLog('');
-    sendLog('Saving results to database...');
-    const bestCombo = await quantumOptimizer.resetAndSeedFromBacktest(comboResults);
-    sendProgress('save', 95);
-
-    const bestResult = comboResults.find(c => c.comboId === bestCombo) || {};
-    const bestName = quantumOptimizer.comboToName(bestCombo);
-    const bestStrats = quantumOptimizer.getEnabledStrategies(bestCombo);
-    const enabledList = Object.entries(bestStrats).filter(([, v]) => v).map(([k]) => k).join(', ');
-
-    const bestLeverage = comboResults.find(c => c.comboId === bestCombo)?.bestLeverage || LEVERAGE_GRID[LEVERAGE_GRID.length - 1];
-    sendLog(`\n✅ Best combo: #${bestCombo} (${bestName})`);
-    sendLog(`   Strategies: ${enabledList}`);
-    sendLog(`   ${bestResult.trades || 0} trades | ${bestResult.wins || 0}W/${bestResult.losses || 0}L | ${(bestResult.totalPnl || 0).toFixed(2)}% PnL @ ${bestLeverage}x`);
-    sendLog(`   Tokens tested: ${validTokens.join(', ')}`);
-    sendLog(`   Leverage configs tested: ${LEVERAGE_GRID.join('x, ')}x`);
-    sendLog(`   Tested at: ${TESTED_AT}`);
-    sendProgress('done', 100);
-
-    // Send final result
-    res.write(JSON.stringify({
-      type: 'result',
-      days: DAYS,
-      tokens: validTokens.length,
-      testedAt: TESTED_AT,
-      leverageTested: LEVERAGE_GRID,
-      bestLeverage,
-      activeCombo: bestCombo,
-      comboName: bestName,
-      strategies: bestStrats,
-      phase: 'backtest_complete',
-      exploration: { explored: 15, total: 15, min_trades: 0 },
-      allCombos: comboResults
-        .map(c => ({
-          id: c.comboId, name: quantumOptimizer.comboToName(c.comboId),
-          trades: c.trades, winRate: c.trades > 0 ? c.wins / c.trades : 0,
-          avgPnl: c.trades > 0 ? c.totalPnl / c.trades : 0,
-          score: c.trades > 0 ? (c.wins / c.trades * 0.4 + Math.max(0, Math.min(1, (c.totalPnl / c.trades + 5) / 10)) * 0.6) : 0,
-          active: c.comboId === bestCombo, locked: false,
-        }))
-        .sort((a, b) => b.score - a.score),
-    }) + '\n');
-
-    clearInterval(keepalive);
-    res.end();
-  } catch (err) {
-    console.error('AI optimize error:', err);
-    clearInterval(keepalive);
-    try {
-      res.write(JSON.stringify({ type: 'error', error: err.message }) + '\n');
-      res.end();
-    } catch {}
-  }
-});
 
 // Fix corrupted trades — recalculate PnL from exchange fills per user
 router.post('/fix-trades', async (req, res) => {
@@ -3637,19 +3485,10 @@ router.get('/token-board', async (req, res) => {
       }
     } catch {}
 
-    // Fetch live prices + volume from Binance
+    // Fetch live prices + volume from Binance (5 s shared cache)
     let priceMap = {};
     try {
-      const fetch = require('node-fetch');
-      const r = await fetch('https://fapi.binance.com/fapi/v1/ticker/24hr', { timeout: 10000 });
-      const tickers = await r.json();
-      for (const t of tickers) {
-        priceMap[t.symbol] = {
-          price: parseFloat(t.lastPrice),
-          change24h: parseFloat(t.priceChangePercent),
-          volume: parseFloat(t.quoteVolume),
-        };
-      }
+      priceMap = await getTickerMap();
     } catch {}
 
     const result = tokens.map(t => ({

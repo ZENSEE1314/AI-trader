@@ -32,9 +32,9 @@ const SELF_IMPROVE_LESSONS = {
   repeated_failures: 'I will diagnose root causes instead of repeating failed patterns.',
 };
 
-// Only the 5 tokens we actively trade get dedicated agents.
-// Removed: DOGEUSDT, ADAUSDT, AVAXUSDT, SUIUSDT, LINKUSDT
-// — none of them are in the SMC/Spike-HL/T-Junction/Triple-MA whitelists.
+// Token agents:
+//   BTC/ETH/SOL/BNB — core whitelist
+//   XRPUSDT         — added (50x leverage, System 5 trailing SL)
 const DEFAULT_TOKEN_AGENTS = [
   'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT',
 ];
@@ -247,8 +247,7 @@ class AgentCoordinator extends BaseAgent {
   }
 
   async _fetchTopTokens() {
-    // Hard-coded to 5 allowed coins only — no dynamic top-N fetching.
-    // Previously this fetched top 10 by volume from Binance which included DOGE, PEPE etc.
+    // Hard-coded whitelist — 5 tokens with configured leverage (BTC/ETH 100x, SOL/BNB/XRP 50x).
     const ALLOWED = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT'];
     for (const sym of ALLOWED) {
       if (!this.tokenAgents.has(sym)) this.addTokenAgent(sym);
@@ -438,7 +437,7 @@ class AgentCoordinator extends BaseAgent {
 
     // 7. Agent self-reflection — every 60 micro-cycles (~30 min) one agent reflects
     if (this._microCycleCount % 60 === 0) {
-      const agentList = [...this._agents.values()].filter(a => a !== this && a._survival?.isAlive !== false);
+      const agentList = [...this._agents.values()].filter(a => a !== this);
       const reflectAgent = agentList[this._microCycleCount % agentList.length];
       if (reflectAgent) {
         reflectAgent.selfReflect().catch(() => {});
@@ -786,54 +785,18 @@ class AgentCoordinator extends BaseAgent {
         if (i + BATCH_SIZE < tokenEntries.length) await new Promise(r => setTimeout(r, 200));
       }
 
-      // Also run ChartAgent for any tokens that don't have dedicated agents
-      if (!this.chartAgent.paused) {
-        this.currentTask = { description: 'Step 3/7: ChartAgent checking remaining tokens', startedAt: Date.now() };
-        try {
-          const monitoredSymbols = [...this.tokenAgents.keys()];
-          // Ensure ChartAgent is alive before scanning
-          if (!this.chartAgent._survival.isAlive) {
-            this.chartAgent._survival.isAlive = true;
-            this.chartAgent._survival.health = 10;
-            bLog.trade('ChartAgent was dead — revived for scanning');
-          }
-          const chartOutput = await this.chartAgent.run({ topNCoins, kronosPredictions, monitoredSymbols });
-          bLog.scan(`ChartAgent returned: ${chartOutput ? `${chartOutput.signals?.length || 0} signals` : 'null (dead or error)'}`);
-          if (chartOutput?.signals) {
-            for (const s of chartOutput.signals) {
-              if (!signals.find(existing => existing.symbol === s.symbol)) {
-                signals.push(s);
-              }
-            }
-          }
-        } catch (chartErr) {
-          bLog.error(`ChartAgent scan failed: ${chartErr.message}`);
-        }
-      }
+      // ── Signal sources: TokenAgents ONLY ──────────────────────
+      // Each TokenAgent calls analyzeV3 directly and emits a signal via
+      // its execute() result above. The legacy ChartAgent / SMC / v3
+      // advisory scans were removed — they ran every cycle, produced
+      // suppressed signals, and added CPU + log noise without affecting
+      // execution.
 
       // Token agents stay active — background scan loop keeps them watching
       for (const [, ta] of tokenEntries) {
         ta.managedByCoordinator = true;
         ta.state = 'running';
         ta.currentTask = { description: `Watching ${ta.symbol}`, startedAt: Date.now() };
-      }
-
-      // ── v2.0 strategy engine: liquidity-sweep-engine scanSMC ──
-      // Restored to v2.0-stable strategies (LiqSweep, SLHunt, MomScalp, BRR-Fib).
-      // 24/7 mode — session windows removed. Hard 4-token whitelist applied inside scanSMC.
-      try {
-        const { scanSMC } = require('../liquidity-sweep-engine');
-        const smcSignals = await scanSMC(bLog.scan.bind(bLog), { kronosPredictions });
-        for (const s of (smcSignals || [])) {
-          if (!signals.find(existing => existing.symbol === s.symbol)) {
-            signals.push(s);
-          }
-        }
-        if ((smcSignals || []).length > 0) {
-          bLog.scan(`[Coordinator] v2.0 SMC engine: ${smcSignals.length} signal(s)`);
-        }
-      } catch (engineErr) {
-        bLog.error(`[Coordinator] SMC engine scan failed (non-blocking): ${engineErr.message}`);
       }
 
       // Filter out globally banned tokens before further processing
@@ -1414,8 +1377,8 @@ class AgentCoordinator extends BaseAgent {
         complexity: 'high',
       });
 
-      // Attempt to parse JSON from response
-      const match = aiResponse.match(/\{.*\}/s);
+      // Attempt to parse JSON from response (think() may return null when Ollama is down)
+      const match = aiResponse ? aiResponse.match(/\{.*\}/s) : null;
       if (match) {
         const result = JSON.parse(match[0]);
         return {

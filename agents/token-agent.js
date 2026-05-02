@@ -10,7 +10,7 @@
 // ============================================================
 
 const { BaseAgent } = require('./base-agent');
-const { analyzeSymbol } = require('../trade-engine');
+const { analyzeV3 } = require('../strategy-v3');
 const { log: bLog } = require('../bot-logger');
 
 class TokenAgent extends BaseAgent {
@@ -56,8 +56,20 @@ class TokenAgent extends BaseAgent {
 
     this.lastPrice = price;
 
-    // Run unified trade-engine (all 5 strategies, all filters in one place)
-    const signal = await analyzeSymbol(this.symbol, price, context.kronosPredictions || null);
+    // ── Scan with strategy-v3 (analyzeV3) — ONLY signal source ─────
+    // analyzeV3 runs MSTF / VWAPTrend / LiqGrab / BreakRetest /
+    // MomentumBreakout under the full gate stack (counter-trend,
+    // range-pos, pause, 15m-confirmed-only, VWAP-band hard block).
+    // The legacy trade-engine.analyzeSymbol fallback was REMOVED
+    // because TEN_CANDLE_EXTREME has none of those gates and was
+    // letting SHORT trades fire above the VWAP upper band when
+    // analyzeV3 correctly refused them.
+    let signal = null;
+    try {
+      signal = await analyzeV3({ symbol: this.symbol, lastPrice: String(price), verbose: true });
+    } catch (e) {
+      bLog.error(`[${this.name}] analyzeV3 failed: ${e.message}`);
+    }
 
     if (!signal || !signal.direction) {
       this.currentTask = null;

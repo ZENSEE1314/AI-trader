@@ -1,0 +1,127 @@
+name: Railway log digest
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'   # every 15 min
+  workflow_dispatch:
+
+jobs:
+  digest:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      contents: read
+
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      RAILWAY_PROJECT_ID: ${{ vars.RAILWAY_PROJECT_ID }}
+      RAILWAY_SERVICE_ID: ${{ vars.RAILWAY_SERVICE_ID }}
+      TRACKING_ISSUE: ${{ vars.LOG_TRACKING_ISSUE || '67' }}
+
+    steps:
+      - name: Install Railway CLI
+        run: npm i -g @railway/cli@latest
+
+      - name: Show environment (no secrets)
+        run: |
+          railway --version
+          echo "PROJECT_ID set? ${RAILWAY_PROJECT_ID:+yes}"
+          echo "SERVICE_ID set? ${RAILWAY_SERVICE_ID:+yes}"
+          echo "TOKEN set? ${RAILWAY_TOKEN:+yes}"
+          echo "TRACKING_ISSUE=$TRACKING_ISSUE"
+
+      - name: Pull last 15 min of logs
+        id: logs
+        run: |
+          set +e
+          # Railway CLI v4 with a project token reads RAILWAY_TOKEN from env.
+          # Project ID is not a flag — pass it via env, and pass service via --service.
+          railway logs --service "$RAILWAY_SERVICE_ID" --json \
+            > /tmp/raw.jsonl 2> /tmp/err.txt
+          rc=$?
+          if [ $rc -ne 0 ]; then
+            echo "::warning::Railway logs fetch failed (rc=$rc):"
+            echo "----- stderr -----"
+            cat /tmp/err.txt | head -40
+            echo "----- last 20 lines of stdout (if any) -----"
+            tail -n 20 /tmp/raw.jsonl 2>/dev/null
+            echo "FAILED=1" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          wc -l /tmp/raw.jsonl
+          tail -n 1500 /tmp/raw.jsonl > /tmp/recent.jsonl
+
+      - name: Build digest
+        id: digest
+        run: |
+          set -e
+          if [ "${{ steps.logs.outputs.FAILED }}" = "1" ]; then
+            echo "BODY<<EOF" >> "$GITHUB_OUTPUT"
+            echo "## ⚠️ Log fetch failed at $(date -u +%H:%M)" >> "$GITHUB_OUTPUT"
+            echo '```' >> "$GITHUB_OUTPUT"
+            cat /tmp/err.txt | head -20 >> "$GITHUB_OUTPUT"
+            echo '```' >> "$GITHUB_OUTPUT"
+            echo "EOF" >> "$GITHUB_OUTPUT"
+            echo "POST=1" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+
+          # Extract message field; fall back to whole line
+          jq -r '.message // .' /tmp/recent.jsonl 2>/dev/null > /tmp/msgs.txt || cp /tmp/recent.jsonl /tmp/msgs.txt
+
+          # Counters
+          TRADES_OPENED=$(grep -cE 'placing Bitunix|placing MARKET' /tmp/msgs.txt || true)
+          TRADES_CLOSED=$(grep -cE 'CLOSED|exit_reason|FlashClose' /tmp/msgs.txt || true)
+          ERRORS=$(grep -cE '\[ERROR\]|FAILED|threw|exception' /tmp/msgs.txt || true)
+          BLOCKED_RANGE=$(grep -c 'BLOCKED — price.*range' /tmp/msgs.txt || true)
+          BLOCKED_PAUSE=$(grep -c 'BLOCKED — 1m structure still extending' /tmp/msgs.txt || true)
+          BLOCKED_TREND=$(grep -c 'BLOCKED — 1m structure confirmed' /tmp/msgs.txt || true)
+          BACKTEST_BLOCK=$(grep -c 'BACKTEST GATE BLOCKED' /tmp/msgs.txt || true)
+          SL_FAILED=$(grep -cE 'SL FAILED|TRAILING SL FAILED' /tmp/msgs.txt || true)
+          UNMANAGED=$(grep -c 'UNMANAGED POSITION' /tmp/msgs.txt || true)
+          OLLAMA_DOWN=$(grep -c 'Ollama marked DOWN' /tmp/msgs.txt || true)
+
+          # Last 5 ERROR lines verbatim for context
+          ERR_TAIL=$(grep -E '\[ERROR\]|FAILED|threw' /tmp/msgs.txt | tail -5 | sed 's/`/\\`/g' || true)
+
+          # Skip the post entirely on a quiet window
+          TOTAL=$((TRADES_OPENED + TRADES_CLOSED + ERRORS + SL_FAILED + UNMANAGED))
+          if [ "$TOTAL" = "0" ] && [ "$BLOCKED_RANGE" = "0" ] && [ "$BLOCKED_PAUSE" = "0" ]; then
+            echo "Quiet window — no digest posted."; echo "POST=0" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+
+          {
+            echo "BODY<<EOF"
+            echo "## 📊 Log digest — $(date -u +'%Y-%m-%d %H:%M UTC')"
+            echo ""
+            echo "| Metric | Count |"
+            echo "|---|---|"
+            echo "| Trades opened | $TRADES_OPENED |"
+            echo "| Trades closed | $TRADES_CLOSED |"
+            echo "| Errors | $ERRORS |"
+            echo "| SL placement failed | $SL_FAILED |"
+            echo "| Unmanaged positions | $UNMANAGED |"
+            echo "| Backtest-gate blocks | $BACKTEST_BLOCK |"
+            echo "| Range-pos blocks | $BLOCKED_RANGE |"
+            echo "| Pause-gate blocks | $BLOCKED_PAUSE |"
+            echo "| Counter-trend blocks | $BLOCKED_TREND |"
+            echo "| Ollama down events | $OLLAMA_DOWN |"
+            if [ -n "$ERR_TAIL" ]; then
+              echo ""
+              echo "<details><summary>Last 5 error lines</summary>"
+              echo ""
+              echo '```'
+              echo "$ERR_TAIL"
+              echo '```'
+              echo ""
+              echo "</details>"
+            fi
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          echo "POST=1" >> "$GITHUB_OUTPUT"
+
+      - name: Post digest to tracking issue
+        if: steps.digest.outputs.POST == '1'
+        uses: peter-evans/create-or-update-comment@v5
+        with:
+          issue-number: ${{ env.TRACKING_ISSUE }}
+          body: ${{ steps.digest.outputs.BODY }}

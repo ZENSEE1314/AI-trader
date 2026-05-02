@@ -37,7 +37,7 @@ const DEFAULTS = {
   'strat.smc.swing_len_1m':         4,      // candles each side to confirm a 1m swing point
   'strat.smc.ema_period':           200,    // 1h EMA bias period (200 or 100)
   'strat.smc.max_candle_age':       20,     // max candles since swing before entry expires
-  'strat.smc.max_chase_pct':        0.015,  // 1.5% max price distance from swing (no chasing)
+  'strat.smc.max_chase_pct':        0.003,  // 0.3% max distance from swing — entry must be near the tip
   'strat.smc.sl_pct':               0.005,  // 0.5% SL distance from entry
   'strat.smc.tp_pct':               0.010,  // 1.0% TP distance (1:2 R:R)
   'strat.smc.trailing_step':        0.012,  // 1.2% trail-stop step once TP hit
