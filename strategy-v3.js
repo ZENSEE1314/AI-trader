@@ -717,13 +717,18 @@ async function analyzeV3(ticker) {
     if      (aboveOP  && vwapDiff >= -0.015) opVwapBias = 'long';
     else if (!aboveOP && vwapDiff <=  0.015) opVwapBias = 'short';
 
-    // ── HTF override ─────────────────────────────────────────────
-    // When 15m AND 3m both strongly agree on direction, HTF wins —
-    // even if 1m has a momentary HH+LL conflict (rebound bar inside
-    // a downtrend). OP/VWAP must still confirm. Computed BEFORE final
-    // bias resolution so HTF can rescue 1m ambiguity.
+    // ── HTF requirement (15m OR 3m) ─────────────────────────────
+    // User rule: "1min hh alone don't fire keep follow 15min or 3min
+    // + 1min". Either 15m OR 3m must agree with the trade direction —
+    // 1m alone is never enough.
     const s15trend = detectStructure(klines15m, 3);
     const s3trend  = klines3m ? detectStructure(klines3m, 3) : null;
+    const htfBullEither = (s15trend && (s15trend.hh || s15trend.hl))
+                       || (s3trend  && (s3trend.hh  || s3trend.hl));
+    const htfBearEither = (s15trend && (s15trend.ll || s15trend.lh))
+                       || (s3trend  && (s3trend.ll  || s3trend.lh));
+    // Strict (BOTH 15m AND 3m agree) — only used for HTF-override and
+    // strongTrend bypass.
     const htfBear  = s15trend && (s15trend.ll || s15trend.lh)
                   && s3trend  && (s3trend.ll  || s3trend.lh);
     const htfBull  = s15trend && (s15trend.hh || s15trend.hl)
@@ -731,13 +736,17 @@ async function analyzeV3(ticker) {
 
     let bias = null;
     if (structBias && opVwapBias && structBias === opVwapBias) {
-      bias = structBias;
+      // 1m structure agrees with OP/VWAP — but HTF (15m or 3m) must
+      // also agree, otherwise 1m alone is not enough.
+      if      (structBias === 'long'  && htfBullEither) bias = 'long';
+      else if (structBias === 'short' && htfBearEither) bias = 'short';
     } else if (!structBias && opVwapBias && (htfBull || htfBear)) {
-      // 1m ambiguous but 15m+3m strongly agree — HTF wins if OP/VWAP confirms
+      // 1m ambiguous but 15m AND 3m both strongly agree — HTF wins
+      // if OP/VWAP confirms.
       if      (htfBull && opVwapBias === 'long')  bias = 'long';
       else if (htfBear && opVwapBias === 'short') bias = 'short';
     }
-    dlog(`bias=${bias} struct=${structBias} confirmed(hh=${s1bias?.hh} hl=${s1bias?.hl} lh=${s1bias?.lh} ll=${s1bias?.ll}) fast(hh=${s1fast?.hh} hl=${s1fast?.hl} lh=${s1fast?.lh} ll=${s1fast?.ll}) opVwap=${opVwapBias} htf(bull=${!!htfBull} bear=${!!htfBear}) (aboveOP=${aboveOP} vwapDiff=${(vwapDiff*100).toFixed(2)}%)`);
+    dlog(`bias=${bias} struct=${structBias} confirmed(hh=${s1bias?.hh} hl=${s1bias?.hl} lh=${s1bias?.lh} ll=${s1bias?.ll}) fast(hh=${s1fast?.hh} hl=${s1fast?.hl} lh=${s1fast?.lh} ll=${s1fast?.ll}) opVwap=${opVwapBias} htf(bullEither=${!!htfBullEither} bearEither=${!!htfBearEither} bullBoth=${!!htfBull} bearBoth=${!!htfBear})`);
 
     // ── Strong-trend continuation flag ─────────────────────────
     // When 15m AND 3m AND 1m all confirm same direction, bypass the
