@@ -941,6 +941,30 @@ async function analyzeV3(ticker) {
       return null;
     }
 
+    // ── VWAP zone direction gate ────────────────────────────────
+    // User rule: "upper band only find HL or HH to long, lower band
+    // find LH or LL to short, only in mid of VWAP can find any way."
+    //   Upper zone (mid < price < upper band) → LONG only
+    //   Lower zone (lower band < price < mid) → SHORT only
+    //   At/very near mid                      → either
+    //   At the band itself                    → mean reversion already
+    //                                           handled by the asymmetric
+    //                                           chase block above.
+    if (vwap && vwapUpper && vwapLower) {
+      const NEAR_MID = 0.001; // 0.1% of price counts as "at mid"
+      const distFromMid = (price - vwap) / vwap;
+      const inUpperZone = distFromMid >  NEAR_MID && price < vwapUpper;
+      const inLowerZone = distFromMid < -NEAR_MID && price > vwapLower;
+      if (inUpperZone && side === 'SHORT') {
+        dlog(`null — SHORT in upper VWAP zone (price $${price} above mid $${vwap.toFixed(4)}) — only LONG allowed`);
+        return null;
+      }
+      if (inLowerZone && side === 'LONG') {
+        dlog(`null — LONG in lower VWAP zone (price $${price} below mid $${vwap.toFixed(4)}) — only SHORT allowed`);
+        return null;
+      }
+    }
+
     // ── Range-position gate ────────────────────────────────────
     // LONG  blocked if pos > 0.25 (must be near the bottom)  — bypassed on strongTrend
     // SHORT blocked if pos < 0.75 (must be near the top)     — bypassed on strongTrend
