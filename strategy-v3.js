@@ -87,11 +87,11 @@ async function fetchTickers() {
 //   PDH/PDL: previous UTC-day high/low (from 1h klines)
 //   OP:      first 15m candle open of current UTC day
 
-function extractKeyLevels(klines1h, klines15m) {
+function extractKeyLevels(klines1h, klines15m, nowMs) {
   if (!klines1h || klines1h.length < 2) return null;
   if (!klines15m || klines15m.length < 2) return null;
 
-  const now = Date.now();
+  const now = nowMs || Date.now();
   const startOfToday = new Date(now);
   startOfToday.setUTCHours(0, 0, 0, 0);
   const todayMs = startOfToday.getTime();
@@ -118,8 +118,8 @@ function extractKeyLevels(klines1h, klines15m) {
 
 // ── Intraday VWAP (from today's 15m candles) ──────────────────
 
-function calcVWAP(klines15m) {
-  const now = Date.now();
+function calcVWAP(klines15m, nowMs) {
+  const now = nowMs || Date.now();
   const startOfToday = new Date(now);
   startOfToday.setUTCHours(0, 0, 0, 0);
   const todayMs = startOfToday.getTime();
@@ -673,11 +673,18 @@ async function analyzeV3(ticker) {
     if (!klines1h  || klines1h.length  < 24) { dlog('null — klines1h too short');  return null; }
 
     // ── Key levels ────────────────────────────────────────────
-    const levels = extractKeyLevels(klines1h, klines15m);
+    // Backtest mode: derive simulated "now" from the last 1m bar so
+    // OP/VWAP/PDH/PDL line up with the historical window. Live mode
+    // (no klines passed) keeps Date.now().
+    const nowMs = ticker.klines && klines1m && klines1m.length
+      ? parseInt(klines1m[klines1m.length - 1][0]) + 60_000
+      : Date.now();
+
+    const levels = extractKeyLevels(klines1h, klines15m, nowMs);
     if (!levels) { dlog('null — no key levels'); return null; }
 
     // ── Session VWAP ─────────────────────────────────────────
-    const vwap = calcVWAP(klines15m);
+    const vwap = calcVWAP(klines15m, nowMs);
     if (!vwap) { dlog('null — no VWAP'); return null; }
 
     // ── Direction = 1m structure AND OP/VWAP must AGREE ──────
