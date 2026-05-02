@@ -831,21 +831,26 @@ async function analyzeV3(ticker) {
       }
     }
 
-    // No-contrarian-at-extremes: blocks SHORT above upper, LONG below lower.
-    if (vwapUpper && side === 'SHORT' && price >= vwapUpper) return null;
-    if (vwapLower && side === 'LONG'  && price <= vwapLower) return null;
+    // Block contrarian at extremes AND chase past the band.
+    // User direction: "now long sol in the top again" — the previous
+    // longMomentum/shortMomentum exception was bypassing range-pos and
+    // chase-distance gates whenever price reached the VWAP band, letting
+    // LONG fire near the top. The exception is REMOVED. Above the upper
+    // band → no LONG (chase) and no SHORT (contrarian). Below the lower
+    // band → no SHORT (chase) and no LONG (contrarian). Either way,
+    // entry is forbidden when price is past the ±2σ envelope.
+    if (vwapUpper && price >= vwapUpper) {
+      dlog(`null — price $${price} at/above upper band $${vwapUpper.toFixed(4)} (no entry past +2σ)`);
+      return null;
+    }
+    if (vwapLower && price <= vwapLower) {
+      dlog(`null — price $${price} at/below lower band $${vwapLower.toFixed(4)} (no entry past -2σ)`);
+      return null;
+    }
 
-    // Momentum-side at the band: when price is at/above upper for LONG,
-    // or at/below lower for SHORT, we ride the momentum and SKIP the
-    // range-pos chase filter (the band itself proves it's not noise —
-    // price has decisively pushed through ±2σ of session VWAP).
-    const longMomentum  = vwapUpper && side === 'LONG'  && price >= vwapUpper;
-    const shortMomentum = vwapLower && side === 'SHORT' && price <= vwapLower;
-
-    // ── Range-position + pause gates ────────────────────────────────
-    // Range pos in last 10×1m (0 = swing low, 1 = swing high).
-    //   LONG  blocked if pos > 0.25 (must be near the bottom)  — UNLESS longMomentum
-    //   SHORT blocked if pos < 0.75 (must be near the top)     — UNLESS shortMomentum
+    // ── Range-position gate ────────────────────────────────────
+    // LONG  blocked if pos > 0.25 (must be near the bottom)
+    // SHORT blocked if pos < 0.75 (must be near the top)
     let rPos = null;
     if (k1m.length >= 11) {
       const w20 = k1m.slice(-11, -1);
@@ -859,21 +864,15 @@ async function analyzeV3(ticker) {
       const sz = hi - lo;
       if (sz > 0) {
         rPos = (price - lo) / sz;
-        if (!longMomentum  && side === 'LONG'  && rPos > 0.25) { dlog(`null — LONG rPos ${(rPos*100).toFixed(0)}% > 25% (not near bottom)`); return null; }
-        if (!shortMomentum && side === 'SHORT' && rPos < 0.75) { dlog(`null — SHORT rPos ${(rPos*100).toFixed(0)}% < 75% (not near top)`); return null; }
+        if (side === 'LONG'  && rPos > 0.25) { dlog(`null — LONG rPos ${(rPos*100).toFixed(0)}% > 25% (not near bottom)`); return null; }
+        if (side === 'SHORT' && rPos < 0.75) { dlog(`null — SHORT rPos ${(rPos*100).toFixed(0)}% < 75% (not near top)`); return null; }
       }
     }
 
     // ── Chase distance gate ─────────────────────────────────────
-    // User direction: "BTC long at 5:30 so far from LL why?" — the
-    // detectStructure.lastSwingLow can be a shallow micro-HL above the
-    // actual reversal pivot, letting LONG fire 0.4% above the real LL.
-    // Reference the LOWEST 1m low in the last 30 closed bars instead —
-    // that pins entries to the actual bottom, not the latest squiggle.
     //   LONG  → price must be within +0.3% of lowest low in last 30×1m
     //   SHORT → price must be within -0.3% of highest high in last 30×1m
-    // Skipped on momentum-side band entries (already validated by band).
-    if (k1m.length >= 31 && !longMomentum && !shortMomentum) {
+    if (k1m.length >= 31) {
       const w30 = k1m.slice(-31, -1);
       let lo30 = Infinity, hi30 = -Infinity;
       for (const k of w30) {
@@ -895,11 +894,6 @@ async function analyzeV3(ticker) {
         }
       }
     }
-
-    const atExtreme = rPos !== null && (
-      (side === 'LONG'  && rPos < 0.20) ||
-      (side === 'SHORT' && rPos > 0.80)
-    );
 
     // Pause gate also skipped on momentum-side band entries — the band
     // breach is the momentum confirmation, no need for a 2-candle pause.
