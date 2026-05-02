@@ -761,12 +761,15 @@ async function analyzeV3(ticker) {
     const s3trend  = klines3m ? detectStructure(klines3m, 3) : null;
     const isHtfBull = (s) => s && ((s.hh && !s.ll) || (s.hl && !s.lh && !s.ll));
     const isHtfBear = (s) => s && ((s.ll && !s.hh) || (s.lh && !s.hl && !s.hh));
-    const htfBullEither = isHtfBull(s15trend) || isHtfBull(s3trend);
-    const htfBearEither = isHtfBear(s15trend) || isHtfBear(s3trend);
-    // Strict (BOTH 15m AND 3m agree) — only used for HTF-override and
-    // strongTrend bypass.
-    const htfBear = isHtfBear(s15trend) && isHtfBear(s3trend);
-    const htfBull = isHtfBull(s15trend) && isHtfBull(s3trend);
+    // User direction: "is a must to 15 min then wait for 1 min next
+    // candle to fire the trade." 15m is MANDATORY — the 3m fallback
+    // is removed. 15m alone determines HTF agreement.
+    const htfBullEither = isHtfBull(s15trend);
+    const htfBearEither = isHtfBear(s15trend);
+    // For HTF override (1m ambiguous → HTF wins) require 15m to agree —
+    // 3m alone is no longer enough.
+    const htfBear = isHtfBear(s15trend);
+    const htfBull = isHtfBull(s15trend);
 
     let bias = null;
     if (structBias && opVwapBias && structBias === opVwapBias) {
