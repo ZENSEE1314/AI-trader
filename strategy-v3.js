@@ -718,6 +718,22 @@ async function analyzeV3(ticker) {
     }
     dlog(`bias=${bias} struct=${structBias} confirmed(hh=${s1bias?.hh} hl=${s1bias?.hl} lh=${s1bias?.lh} ll=${s1bias?.ll}) fast(hh=${s1fast?.hh} hl=${s1fast?.hl} lh=${s1fast?.lh} ll=${s1fast?.ll}) opVwap=${opVwapBias} (aboveOP=${aboveOP} vwapDiff=${(vwapDiff*100).toFixed(2)}%)`);
 
+    // ── Strong-trend continuation flag ─────────────────────────
+    // User direction: when 15m AND 3m AND 1m all confirm same direction,
+    // allow trend-continuation entries that bypass the chase-distance
+    // and rPos gates (so the bot can SHORT a falling market mid-move,
+    // not just at the top).
+    const s15trend = detectStructure(klines15m, 3);
+    const s3trend  = klines3m ? detectStructure(klines3m, 3) : null;
+    const allBear  = s15trend && (s15trend.ll || s15trend.lh)
+                  && s3trend  && (s3trend.ll  || s3trend.lh)
+                  && s1bias   && (s1bias.ll   || (s1bias.lh && !s1bias.hl));
+    const allBull  = s15trend && (s15trend.hh || s15trend.hl)
+                  && s3trend  && (s3trend.hh  || s3trend.hl)
+                  && s1bias   && (s1bias.hh   || (s1bias.hl && !s1bias.lh));
+    const strongTrend = (bias === 'long' && allBull) || (bias === 'short' && allBear);
+    if (strongTrend) dlog(`strong trend ${bias} on 15m+3m+1m — bypassing chase/rPos gates`);
+
     // ── Setup 5 (MomentumBreakout) bypasses 1m structure bias ─
     //   Impulse breakouts pick their own direction from candle body —
     //   the whole point is to catch waterfall moves the structure
@@ -868,8 +884,8 @@ async function analyzeV3(ticker) {
     }
 
     // ── Range-position gate ────────────────────────────────────
-    // LONG  blocked if pos > 0.25 (must be near the bottom)
-    // SHORT blocked if pos < 0.75 (must be near the top)
+    // LONG  blocked if pos > 0.25 (must be near the bottom)  — bypassed on strongTrend
+    // SHORT blocked if pos < 0.75 (must be near the top)     — bypassed on strongTrend
     let rPos = null;
     if (k1m.length >= 11) {
       const w20 = k1m.slice(-11, -1);
@@ -883,15 +899,17 @@ async function analyzeV3(ticker) {
       const sz = hi - lo;
       if (sz > 0) {
         rPos = (price - lo) / sz;
-        if (side === 'LONG'  && rPos > 0.25) { dlog(`null — LONG rPos ${(rPos*100).toFixed(0)}% > 25% (not near bottom)`); return null; }
-        if (side === 'SHORT' && rPos < 0.75) { dlog(`null — SHORT rPos ${(rPos*100).toFixed(0)}% < 75% (not near top)`); return null; }
+        if (!strongTrend && side === 'LONG'  && rPos > 0.25) { dlog(`null — LONG rPos ${(rPos*100).toFixed(0)}% > 25% (not near bottom)`); return null; }
+        if (!strongTrend && side === 'SHORT' && rPos < 0.75) { dlog(`null — SHORT rPos ${(rPos*100).toFixed(0)}% < 75% (not near top)`); return null; }
       }
     }
 
     // ── Chase distance gate ─────────────────────────────────────
     //   LONG  → price must be within +0.3% of lowest low in last 30×1m
     //   SHORT → price must be within -0.3% of highest high in last 30×1m
-    if (k1m.length >= 31) {
+    // Bypassed on strongTrend (15m+3m+1m all aligned) — trend continuation
+    // entries are allowed mid-move, not only at the pivot.
+    if (k1m.length >= 31 && !strongTrend) {
       const w30 = k1m.slice(-31, -1);
       let lo30 = Infinity, hi30 = -Infinity;
       for (const k of w30) {
