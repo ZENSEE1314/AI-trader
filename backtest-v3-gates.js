@@ -33,31 +33,61 @@ const TRAIL_STEP_PCT  = 0.10;
 const REQUEST_TIMEOUT = 20_000;
 
 async function fetchAll(symbol, interval, totalNeeded) {
-  // Binance limit per request = 1500. Bybit limit = 1000.
+  // Binance limit per request = 1500. Bybit = 1000. OKX = 300.
   const out = [];
   const intervalMs = ({ '1m': 60e3, '3m': 180e3, '15m': 900e3, '1h': 3600e3 })[interval];
+  // OKX uses BTC-USDT-SWAP format
+  const okxSym = symbol.replace('USDT', '-USDT-SWAP');
+  // OKX bar formats: 1m, 3m, 15m, 1H
+  const okxBar = interval === '1h' ? '1H' : interval;
   let endTime = Date.now();
+  let firstAttempt = true;
   while (out.length < totalNeeded) {
     const limit = Math.min(1000, totalNeeded - out.length);
     const startTime = endTime - limit * intervalMs;
     const tries = [
-      `https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=${interval}&startTime=${startTime}&endTime=${endTime}&limit=${limit}`,
-      `https://api.bybit.com/v5/market/kline?category=linear&symbol=${symbol}&interval=${interval.replace('m','')}&start=${startTime}&end=${endTime}&limit=${limit}`,
+      {
+        name: 'binance-fapi',
+        url: `https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=${interval}&startTime=${startTime}&endTime=${endTime}&limit=${limit}`,
+        parse: j => Array.isArray(j) ? j : null,
+      },
+      {
+        name: 'binance-spot',
+        url: `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${interval}&startTime=${startTime}&endTime=${endTime}&limit=${limit}`,
+        parse: j => Array.isArray(j) ? j : null,
+      },
+      {
+        name: 'bybit',
+        url: `https://api.bybit.com/v5/market/kline?category=linear&symbol=${symbol}&interval=${interval.replace('m','').replace('h','60')}&start=${startTime}&end=${endTime}&limit=${Math.min(1000,limit)}`,
+        parse: j => j.result?.list?.length
+          ? j.result.list.slice().reverse().map(k => [parseInt(k[0]), k[1], k[2], k[3], k[4], k[5]])
+          : null,
+      },
+      {
+        name: 'okx',
+        url: `https://www.okx.com/api/v5/market/history-candles?instId=${okxSym}&bar=${okxBar}&before=${endTime}&after=${startTime}&limit=${Math.min(300, limit)}`,
+        parse: j => (j.code === '0' && j.data?.length)
+          ? j.data.slice().reverse().map(k => [parseInt(k[0]), k[1], k[2], k[3], k[4], k[5]])
+          : null,
+      },
     ];
     let batch = null;
-    for (const url of tries) {
+    let lastErr = '';
+    for (const t of tries) {
       try {
-        const r = await fetch(url, { timeout: REQUEST_TIMEOUT });
-        if (!r.ok) continue;
+        const r = await fetch(t.url, { timeout: REQUEST_TIMEOUT });
+        if (!r.ok) { lastErr = `${t.name} HTTP ${r.status}`; continue; }
         const j = await r.json();
-        if (Array.isArray(j) && j.length) { batch = j; break; }
-        if (j.result?.list?.length) {
-          batch = j.result.list.slice().reverse().map(k => [
-            parseInt(k[0]), k[1], k[2], k[3], k[4], k[5],
-          ]);
-          break;
-        }
-      } catch (_) {}
+        const arr = t.parse(j);
+        if (arr && arr.length) { batch = arr; break; }
+        lastErr = `${t.name} empty`;
+      } catch (e) {
+        lastErr = `${t.name} ${e.message}`;
+      }
+    }
+    if (firstAttempt) {
+      console.log(`  [fetchAll ${symbol} ${interval}] first batch: ${batch ? `${batch.length} bars from ${tries.find(t => batch && batch[0])?.name || '?'}` : `FAILED — last err: ${lastErr}`}`);
+      firstAttempt = false;
     }
     if (!batch || !batch.length) break;
     out.unshift(...batch);
