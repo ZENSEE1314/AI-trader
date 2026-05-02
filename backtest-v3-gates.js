@@ -166,6 +166,9 @@ async function runSymbol(symbol) {
 
   const trades = [];
   let openPos = null;
+  let analyzeCalls = 0;
+  let analyzeErrs  = 0;
+  let firstNullReasons = [];
 
   // Pre-build timestamp -> idx maps for fast lookups
   const byTs = {
@@ -242,13 +245,36 @@ async function runSymbol(symbol) {
     const k1hWin  = k1h.slice(Math.max(0, i1h - 71),  i1h + 1);
 
     let sig = null;
-    try {
-      sig = await analyzeV3({
-        symbol,
-        lastPrice: String(close),
-        klines: { k1m: k1mWin, k3m: k3mWin, k15m: k15mWin, k1h: k1hWin },
-      });
-    } catch (e) { /* skip */ }
+    const verbose = analyzeCalls < 5;
+    let captured = '';
+    if (verbose) {
+      // Capture dlog output by overriding console.log temporarily
+      const orig = console.log;
+      console.log = (...args) => { captured += args.join(' ') + '\n'; };
+      try {
+        sig = await analyzeV3({
+          symbol,
+          lastPrice: String(close),
+          klines: { k1m: k1mWin, k3m: k3mWin, k15m: k15mWin, k1h: k1hWin },
+          verbose: true,
+        });
+      } catch (e) {
+        analyzeErrs++;
+        captured += `THROWN: ${e.message}\n`;
+      } finally {
+        console.log = orig;
+      }
+      orig(`  [diag #${analyzeCalls + 1} @ ts=${new Date(ts).toISOString()}]\n${captured.replace(/\n/g, '\n    ')}`);
+    } else {
+      try {
+        sig = await analyzeV3({
+          symbol,
+          lastPrice: String(close),
+          klines: { k1m: k1mWin, k3m: k3mWin, k15m: k15mWin, k1h: k1hWin },
+        });
+      } catch (e) { analyzeErrs++; }
+    }
+    analyzeCalls++;
 
     if (!sig || !sig.direction) continue;
 
@@ -282,6 +308,7 @@ async function runSymbol(symbol) {
     trades.push({ ...openPos, exitTs: parseInt(last[0]), exitPrice, pnlPct, pnlUsd, exitReason: 'EOD' });
   }
 
+  console.log(`  analyzeV3 calls=${analyzeCalls} errs=${analyzeErrs} trades=${trades.length}`);
   return { symbol, lev, trades };
 }
 
