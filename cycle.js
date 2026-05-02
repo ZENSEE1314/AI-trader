@@ -7,8 +7,8 @@
 const { USDMClient } = require('binance');
 const fetch = require('node-fetch');
 const aiLearner = require('./ai-learner');
-// Strategy v3: MCT PDF — Break&Retest / LiqGrab / VWAP Trend + 20% trailing SL (sole strategy)
-const { scanV3, calcTrailingSLV3 } = require('./strategy-v3');
+// Strategy v3: MCT PDF — Break&Retest / LiqGrab / VWAP Trend + System 5 trailing SL (sole strategy)
+const { scanV3, calcTrailingSLV3, ACTIVE_SYMBOLS, SYMBOL_LEVERAGE } = require('./strategy-v3');
 const { getSentimentScores } = require('./sentiment-scraper');
 const { log: bLog } = require('./bot-logger');
 const { getBinanceRequestOptions, getFetchOptions } = require('./proxy-agent');
@@ -246,9 +246,9 @@ async function isTokenBanned(symbol) {
   }
 }
 
-// All 4 allowed tokens trade at 100x
+// Leverage from the single source of truth in strategy-v3.js
 function getLeverage(symbol, price, params = {}) {
-  return params.LEV_BTC_ETH || 100;
+  return SYMBOL_LEVERAGE[symbol] || params.LEV_BTC_ETH || 100;
 }
 
 // ── UTILS ─────────────────────────────────────────────────────
@@ -1238,14 +1238,7 @@ async function main() {
     if (!runCycle._leverageFixDone) {
       runCycle._leverageFixDone = true;
       try {
-        const leverageMap = [
-          ['BTCUSDT', 100],
-          ['ETHUSDT', 100],
-          ['SOLUSDT',  50],
-          ['BNBUSDT',  50],
-          ['XRPUSDT',  50],
-        ];
-        for (const [sym, lev] of leverageMap) {
+        for (const [sym, lev] of Object.entries(SYMBOL_LEVERAGE)) {
           await dbQuery(
             `INSERT INTO token_leverage (symbol, leverage, enabled)
              VALUES ($1, $2, true)
@@ -1296,7 +1289,7 @@ async function main() {
       const kronos = require('./kronos');
 
       // Only scan the 5 coins we actually trade — no top-volume sweep
-      const topSymbols = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT'];
+      const topSymbols = ACTIVE_SYMBOLS;
 
       bLog.ai(`Kronos batch scan starting: ${topSymbols.join(', ')}`);
       kronosPredictions = await kronos.scanAllTokens(topSymbols, '15m', 20, 3);
@@ -1592,7 +1585,7 @@ async function executeForAllUsers(pick) {
     const sym = pick.symbol || pick.sym;
 
     // ── HARD WHITELIST: Only 5 coins ever reach the exchange ──────────────────
-    const TRADE_WHITELIST = new Set(['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT']);
+    const TRADE_WHITELIST = new Set(ACTIVE_SYMBOLS);
     if (!TRADE_WHITELIST.has(sym)) {
       bLog.trade(`BLOCKED: ${sym} is not in the 5-coin whitelist — trade cancelled`);
       return;

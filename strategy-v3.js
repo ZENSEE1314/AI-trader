@@ -56,6 +56,19 @@ const fetch = require('node-fetch');
 
 const REQUEST_TIMEOUT = 15_000;
 
+// ── Active symbol + leverage config ───────────────────────────
+// Single source of truth — cycle.js and agent-coordinator.js import from here.
+const ACTIVE_SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT'];
+
+// Capital leverage per token. BTC/ETH at 100x, SOL/BNB/XRP at 50x.
+const SYMBOL_LEVERAGE = {
+  BTCUSDT: 100,
+  ETHUSDT: 100,
+  SOLUSDT:  50,
+  BNBUSDT:  50,
+  XRPUSDT:  50,
+};
+
 // ── Fetch helpers ──────────────────────────────────────────────
 
 async function fetchWithRetry(url, retries = 3) {
@@ -1194,6 +1207,8 @@ async function scanV3(log = console.log) {
 }
 
 module.exports = {
+  ACTIVE_SYMBOLS,
+  SYMBOL_LEVERAGE,
   scanV3,
   analyzeV3,
   calcTrailingSLV3,

@@ -18,6 +18,7 @@
 // ============================================================
 
 const { BaseAgent } = require('./base-agent');
+const { ACTIVE_SYMBOLS } = require('../strategy-v3');
 const {
   generateStrategy,
   evolveStrategy,
@@ -345,7 +346,7 @@ class StrategyAgent extends BaseAgent {
         .slice(0, 8)
         .map(t => t.symbol);
     } catch {
-      symbols = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT'];
+      symbols = ACTIVE_SYMBOLS;
     }
 
     const allTrades = [];

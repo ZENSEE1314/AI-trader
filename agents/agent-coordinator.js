@@ -11,6 +11,7 @@
 
 const { BaseAgent, AGENT_STATES } = require('./base-agent');
 const { log: bLog } = require('../bot-logger');
+const { ACTIVE_SYMBOLS } = require('../strategy-v3');
 const { ChartAgent } = require('./chart-agent');
 const { TraderAgent } = require('./trader-agent');
 const { RiskAgent } = require('./risk-agent');
@@ -32,12 +33,8 @@ const SELF_IMPROVE_LESSONS = {
   repeated_failures: 'I will diagnose root causes instead of repeating failed patterns.',
 };
 
-// Token agents:
-//   BTC/ETH/SOL/BNB — core whitelist
-//   XRPUSDT         — added (50x leverage, System 5 trailing SL)
-const DEFAULT_TOKEN_AGENTS = [
-  'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT',
-];
+// Token agents — sourced from strategy-v3.js (single source of truth).
+const DEFAULT_TOKEN_AGENTS = ACTIVE_SYMBOLS;
 
 class AgentCoordinator extends BaseAgent {
 
@@ -247,8 +244,8 @@ class AgentCoordinator extends BaseAgent {
   }
 
   async _fetchTopTokens() {
-    // Hard-coded whitelist — 5 tokens with configured leverage (BTC/ETH 100x, SOL/BNB/XRP 50x).
-    const ALLOWED = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT'];
+    // Sourced from strategy-v3.js — one place to add/remove tokens.
+    const ALLOWED = ACTIVE_SYMBOLS;
     for (const sym of ALLOWED) {
       if (!this.tokenAgents.has(sym)) this.addTokenAgent(sym);
     }
@@ -811,7 +808,7 @@ class AgentCoordinator extends BaseAgent {
       }
 
       // ── Hard whitelist: only 5 coins ever proceed to execution ──
-      const COORD_WHITELIST = new Set(['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT']);
+      const COORD_WHITELIST = new Set(ACTIVE_SYMBOLS);
       const beforeWhitelist = signals.length;
       signals = signals.filter(s => COORD_WHITELIST.has(s.symbol || s.sym));
       if (beforeWhitelist > signals.length) {

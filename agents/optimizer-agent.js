@@ -13,6 +13,7 @@
 // ============================================================
 
 const { BaseAgent } = require('./base-agent');
+const { ACTIVE_SYMBOLS } = require('../strategy-v3');
 
 const OPTIMIZE_INTERVAL_MS = 10 * 60 * 1000; // run every 10 min
 const BACKTEST_DAYS = 60;
@@ -102,7 +103,7 @@ class OptimizerAgent extends BaseAgent {
         symbols = [...coordinator.tokenAgents.keys()];
       }
       if (!symbols.length) {
-        symbols = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT'];
+        symbols = ACTIVE_SYMBOLS;
       }
 
       // Pick a batch of tokens to test this round (rotate through all)
