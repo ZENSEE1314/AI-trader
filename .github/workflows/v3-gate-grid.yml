@@ -1,0 +1,70 @@
+name: Gate ablation grid
+
+on:
+  workflow_dispatch:
+    inputs:
+      days:
+        description: 'Days of history per variant'
+        required: false
+        default: '30'
+
+jobs:
+  grid:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      contents: read
+
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      RAILWAY_PROJECT_ID: ${{ vars.RAILWAY_PROJECT_ID }}
+      RAILWAY_SERVICE_ID: ${{ vars.RAILWAY_SERVICE_ID }}
+      TRACKING_ISSUE: ${{ vars.LOSS_BACKTEST_ISSUE || '70' }}
+      DAYS: ${{ github.event.inputs.days || '30' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+
+      - name: Install deps
+        run: npm install node-fetch@2 --no-save
+
+      - name: Install Railway CLI
+        run: npm i -g @railway/cli@latest
+
+      - name: Run grid (each variant ~2-3 min)
+        id: grid
+        timeout-minutes: 60
+        run: |
+          set +e
+          railway run --service "$RAILWAY_SERVICE_ID" \
+            -- env DAYS="$DAYS" \
+            node backtest-v3-grid.js > /tmp/out.txt 2> /tmp/err.txt
+          rc=$?
+          {
+            echo "## Gate ablation grid — $DAYS days — $(date -u +'%Y-%m-%d %H:%M UTC')"
+            echo ""
+            if [ $rc -ne 0 ]; then
+              echo "### Failed (rc=$rc)"
+              echo '```'
+              tail -n 60 /tmp/err.txt
+              echo '```'
+            fi
+            echo "### Output"
+            echo '```'
+            tail -n 400 /tmp/out.txt
+            echo '```'
+          } > /tmp/comment.md
+          {
+            echo "BODY<<EOF"
+            cat /tmp/comment.md
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Post results
+        uses: peter-evans/create-or-update-comment@v5
+        with:
+          issue-number: ${{ env.TRACKING_ISSUE }}
+          body: ${{ steps.grid.outputs.BODY }}
