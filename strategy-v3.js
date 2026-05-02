@@ -890,20 +890,18 @@ async function analyzeV3(ticker) {
       }
     }
 
-    // Block contrarian at extremes AND chase past the band.
-    // User direction: "now long sol in the top again" — the previous
-    // longMomentum/shortMomentum exception was bypassing range-pos and
-    // chase-distance gates whenever price reached the VWAP band, letting
-    // LONG fire near the top. The exception is REMOVED. Above the upper
-    // band → no LONG (chase) and no SHORT (contrarian). Below the lower
-    // band → no SHORT (chase) and no LONG (contrarian). Either way,
-    // entry is forbidden when price is past the ±2σ envelope.
-    if (vwapUpper && price >= vwapUpper) {
-      dlog(`null — price $${price} at/above upper band $${vwapUpper.toFixed(4)} (no entry past +2σ)`);
+    // Block CHASE at the bands. Mean-reversion at the bands is allowed:
+    //   Above upper band  → no LONG (chasing up).   SHORT (rejection) ALLOWED.
+    //   Below lower band  → no SHORT (chasing down). LONG (bounce)    ALLOWED.
+    // User direction: "LH short on upper VWAP why not trigger" — shorting
+    // an LH at the upper band is the textbook mean-reversion entry; we
+    // were blocking it as if it were a chase.
+    if (vwapUpper && side === 'LONG' && price >= vwapUpper) {
+      dlog(`null — LONG chasing above upper band $${vwapUpper.toFixed(4)}`);
       return null;
     }
-    if (vwapLower && price <= vwapLower) {
-      dlog(`null — price $${price} at/below lower band $${vwapLower.toFixed(4)} (no entry past -2σ)`);
+    if (vwapLower && side === 'SHORT' && price <= vwapLower) {
+      dlog(`null — SHORT chasing below lower band $${vwapLower.toFixed(4)}`);
       return null;
     }
 
