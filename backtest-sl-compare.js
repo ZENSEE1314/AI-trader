@@ -403,12 +403,22 @@ async function runSymbol(symbol) {
     results[sys.name] = simulateSystem(signals, lev, sys);
   }
 
-  // Reversal system simulation
+  // Reversal system simulation (known-loser setups flipped)
   const reversalTrades = reversalSignals.length
     ? simulateSystem(reversalSignals, lev, SYSTEMS[0])
     : [];
 
-  return { symbol, lev, signals, results, reversalTrades };
+  // FULL flip: take every normal signal and reverse its direction
+  const allFlippedSignals = signals.map(s => ({
+    ...s,
+    side:  s.side === 'LONG' ? 'SHORT' : 'LONG',
+    setup: `FLIP:${s.setup}`,
+  }));
+  const fullFlipTrades = allFlippedSignals.length
+    ? simulateSystem(allFlippedSignals, lev, SYSTEMS[0])
+    : [];
+
+  return { symbol, lev, signals, results, reversalTrades, fullFlipTrades };
 }
 
 // ── Stats helper ─────────────────────────────────────────────
@@ -524,6 +534,26 @@ function stats(trades) {
         console.log(`    ${ts}  ${t.symbol} ${t.side}  entry=$${t.entry.toFixed(2)}  pnl=${fmtUsd(t.pnlUsd)}`);
       }
     }
+  }
+
+  // ── FULL FLIP test — flip EVERY signal direction ─────────
+  // User question: if WR is 20%, does flipping everything give 80%?
+  const allFlipTrades = allSymResults.flatMap(r =>
+    (r.fullFlipTrades || []).map(t => ({ ...t, symbol: r.symbol, lev: r.lev }))
+  );
+  if (allFlipTrades.length) {
+    console.log('\n══════════ FULL FLIP — ALL LONG↔SHORT REVERSED ════════════════════');
+    console.log('  Every signal from the normal strategy, direction flipped.');
+    const fs = stats(allFlipTrades);
+    console.log(`\n  Flipped trades  : ${fs.total}`);
+    console.log(`  Win Rate        : ${fs.wr.toFixed(1)}%  (W=${fs.wins}  L=${fs.losses})`);
+    console.log(`  Avg Win / Loss  : ${fmtUsd(fs.avgWin)} / ${fmtUsd(fs.avgLoss)}`);
+    console.log(`  Net P&L         : ${fmtUsd(fs.net)}`);
+    console.log(`  Profit Factor   : ${Number.isFinite(fs.profitFactor) ? fs.profitFactor.toFixed(2) : '∞'}`);
+    console.log(`\n  Normal  WR: ${totWR.toFixed(1)}%  net: ${fmtUsd(totNet)}`);
+    console.log(`  Flipped WR: ${fs.wr.toFixed(1)}%  net: ${fmtUsd(fs.net)}`);
+    const better = fs.net > totNet ? '  ← FLIPPED IS BETTER' : '  ← ORIGINAL IS BETTER';
+    console.log(`  Winner: ${fs.net > totNet ? 'FLIPPED' : 'ORIGINAL'}${better}`);
   }
 
   // ── Reversal test ─────────────────────────────────────────
