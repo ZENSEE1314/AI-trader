@@ -384,6 +384,156 @@ function detectStructure(klines, swingLen = 3) {
   return { hh, hl, lh, ll, lastSwingHigh, lastSwingLow };
 }
 
+// ── Equal Highs / Equal Lows (liquidity pool detection) ──────
+//
+//   EQH: two swing highs within TOLERANCE of each other.
+//        Buy stops (stop-loss of shorts) cluster just above.
+//        Smart money sweeps above, then reverses down → SHORT.
+//
+//   EQL: two swing lows within TOLERANCE of each other.
+//        Sell stops cluster just below.
+//        Smart money sweeps below, then reverses up → LONG.
+//
+//   Returns { eqh: [price,...], eql: [price,...] }
+//   Prices represent the average of the matching swing pair.
+
+function detectEqualLevels(klines, swingLen = 3, tolerance = 0.0012) {
+  const len = klines.length;
+  if (len < swingLen * 6) return { eqh: [], eql: [] };
+
+  const swingHighs = [], swingLows = [];
+  for (let i = swingLen; i < len - swingLen; i++) {
+    const h = parseFloat(klines[i][2]);
+    const l = parseFloat(klines[i][3]);
+    let isH = true, isL = true;
+    for (let j = i - swingLen; j <= i + swingLen; j++) {
+      if (j === i) continue;
+      if (parseFloat(klines[j][2]) >= h) isH = false;
+      if (parseFloat(klines[j][3]) <= l) isL = false;
+    }
+    if (isH) swingHighs.push({ idx: i, price: h });
+    if (isL)  swingLows.push({ idx: i, price: l });
+  }
+
+  const eqh = [];
+  for (let i = 0; i < swingHighs.length - 1; i++) {
+    for (let j = i + 1; j < swingHighs.length; j++) {
+      const a = swingHighs[i].price, b = swingHighs[j].price;
+      if (Math.abs(a - b) / Math.max(a, b) <= tolerance) {
+        eqh.push((a + b) / 2);
+      }
+    }
+  }
+
+  const eql = [];
+  for (let i = 0; i < swingLows.length - 1; i++) {
+    for (let j = i + 1; j < swingLows.length; j++) {
+      const a = swingLows[i].price, b = swingLows[j].price;
+      if (Math.abs(a - b) / Math.max(a, b) <= tolerance) {
+        eql.push((a + b) / 2);
+      }
+    }
+  }
+
+  return { eqh, eql };
+}
+
+// ── Order Block detection ─────────────────────────────────────
+//
+//   Bearish OB: the last bullish (green) candle immediately before a
+//     strong bearish impulse (body ≥ 2× avg body). Price returning
+//     to this zone from below = premium zone = SHORT.
+//
+//   Bullish OB: the last bearish (red) candle immediately before a
+//     strong bullish impulse. Price returning from above = discount
+//     zone = LONG.
+//
+//   Returns { bullishOBs: [{high,low}], bearishOBs: [{high,low}] }
+//   Only the two most recent of each type are returned.
+
+function detectOrderBlocks(klines, lookback = 60) {
+  const slice = klines.slice(-lookback);
+  const n = slice.length;
+  if (n < 10) return { bullishOBs: [], bearishOBs: [] };
+
+  // Average candle body size for impulse threshold
+  let sumBody = 0;
+  for (const k of slice) sumBody += Math.abs(parseFloat(k[4]) - parseFloat(k[1]));
+  const avgBody = sumBody / n;
+  const IMPULSE_BODY = avgBody * 2.0;
+
+  const bullishOBs  = [];  // bearish candle before big bullish move
+  const bearishOBs  = [];  // bullish candle before big bearish move
+
+  for (let i = 1; i < n - 1; i++) {
+    const cur  = slice[i];
+    const next = slice[i + 1];
+    const cOpen  = parseFloat(cur[1]),  cClose = parseFloat(cur[4]);
+    const cHigh  = parseFloat(cur[2]),  cLow   = parseFloat(cur[3]);
+    const nOpen  = parseFloat(next[1]), nClose = parseFloat(next[4]);
+    const nextBody = Math.abs(nClose - nOpen);
+
+    // Bullish OB: cur is bearish, next is a strong bullish impulse
+    if (cClose < cOpen && nClose > nOpen && nextBody >= IMPULSE_BODY) {
+      bullishOBs.push({ high: cHigh, low: cLow });
+    }
+    // Bearish OB: cur is bullish, next is a strong bearish impulse
+    if (cClose > cOpen && nClose < nOpen && nextBody >= IMPULSE_BODY) {
+      bearishOBs.push({ high: cHigh, low: cLow });
+    }
+  }
+
+  return {
+    bullishOBs:  bullishOBs.slice(-2),   // two most recent
+    bearishOBs:  bearishOBs.slice(-2),
+  };
+}
+
+// ── Setup 6: EQH/EQL Liquidity Sweep & Reversal ──────────────
+//
+//   Detects when price has just swept through an EQH or EQL level
+//   (grabbing the stop orders stacked there) and closed back inside.
+//   This is the highest-probability SMC entry:
+//     - EQH swept (wick above, close below EQH) → SHORT
+//     - EQL swept (wick below, close above EQL) → LONG
+//
+//   Uses the last 3 1m candles to detect the sweep + close-back.
+
+function detectEQLiqSweep(klines1m, eqh, eql, bias, price) {
+  if (!klines1m || klines1m.length < 5) return null;
+
+  const PROXIMITY = 0.002;   // within 0.2% of level to count as a sweep
+  const recent    = klines1m.slice(-4, -1);  // last 3 closed 1m candles
+
+  if (bias === 'short' && eqh.length > 0) {
+    for (const lv of eqh) {
+      // Any recent candle wicked above EQH but closed back below it
+      const swept = recent.some(k =>
+        parseFloat(k[2]) > lv * (1 + PROXIMITY) &&   // wick above
+        parseFloat(k[4]) < lv                          // closed below
+      );
+      if (swept && price < lv) {
+        return { setupName: 'EQLiqSweep', level: lv, levelType: 'EQH', direction: 'SHORT' };
+      }
+    }
+  }
+
+  if (bias === 'long' && eql.length > 0) {
+    for (const lv of eql) {
+      // Any recent candle wicked below EQL but closed back above it
+      const swept = recent.some(k =>
+        parseFloat(k[3]) < lv * (1 - PROXIMITY) &&   // wick below
+        parseFloat(k[4]) > lv                          // closed above
+      );
+      if (swept && price > lv) {
+        return { setupName: 'EQLiqSweep', level: lv, levelType: 'EQL', direction: 'LONG' };
+      }
+    }
+  }
+
+  return null;
+}
+
 // ── Setup 5: Momentum Breakout (waterfall / vertical impulse) ─────
 //
 //   PURPOSE: catch the moves the structure-based setups miss — a
@@ -578,6 +728,7 @@ function scoreSignal({ setup, bias, vwapBias, volSpike, rejCandle, ema9, ema21 }
   if (setup === 'MSTF')             s += 9;  // multi-TF structure: strong confluence
   if (setup === 'MomentumBreakout') s += 9;  // impulse: base passes the score floor without
                                              // 15m confluence (which is unreliable mid-bar)
+  if (setup === 'EQLiqSweep')      s += 12; // post-liquidity-sweep reversal: highest conviction
 
   // VWAP bias alignment bonus
   if (vwapBias) s += 2;
@@ -828,15 +979,60 @@ async function analyzeV3(ticker) {
     const klines1mClosed = klines1m.slice(0, -1);
     const breakoutSig = detectMomentumBreakout(klines1mClosed);
 
+    // ── Liquidity map (1m bars) ───────────────────────────────
+    // Detect Equal Highs/Lows and Order Blocks on recent 1m action.
+    // These inform two things:
+    //   1. BLOCK entries approaching a liquidity pool (don't buy INTO EQH
+    //      or short INTO EQL — price will sweep those stops first).
+    //   2. EQLiqSweep setup fires AFTER the sweep, in the reversal direction.
+    const { eqh, eql } = detectEqualLevels(klines1mClosed);
+    const { bullishOBs, bearishOBs } = detectOrderBlocks(klines1mClosed);
+
+    // Block LONG when price is walking toward EQH within 0.25%
+    // — stops are stacked just above, smart money will sweep them first.
+    // Block SHORT when price is walking toward EQL within 0.25%.
+    const EQ_APPROACH = 0.0025;
+    const nearEQH = eqh.find(lv => price < lv && (lv - price) / price <= EQ_APPROACH);
+    const nearEQL = eql.find(lv => price > lv && (price - lv) / price <= EQ_APPROACH);
+
+    if (bias === 'long' && nearEQH) {
+      dlog(`null — LONG blocked: approaching EQH liquidity pool at $${nearEQH.toFixed(4)} (${((nearEQH - price)/price*100).toFixed(2)}% away) — wait for sweep`);
+      return null;
+    }
+    if (bias === 'short' && nearEQL) {
+      dlog(`null — SHORT blocked: approaching EQL liquidity pool at $${nearEQL.toFixed(4)} (${((price - nearEQL)/price*100).toFixed(2)}% away) — wait for sweep`);
+      return null;
+    }
+
+    // Log order block context for diagnostics
+    if (bullishOBs.length)  dlog(`bullish OB zones: ${bullishOBs.map(ob => `$${ob.low.toFixed(2)}-$${ob.high.toFixed(2)}`).join(', ')}`);
+    if (bearishOBs.length)  dlog(`bearish OB zones: ${bearishOBs.map(ob => `$${ob.low.toFixed(2)}-$${ob.high.toFixed(2)}`).join(', ')}`);
+
+    // Block LONG when price is inside a bearish Order Block (premium zone)
+    // Block SHORT when price is inside a bullish Order Block (discount zone)
+    const inBearishOB = bearishOBs.some(ob => price >= ob.low && price <= ob.high);
+    const inBullishOB = bullishOBs.some(ob => price >= ob.low && price <= ob.high);
+    if (bias === 'long' && inBearishOB) {
+      dlog(`null — LONG blocked: price inside bearish Order Block (supply zone)`);
+      return null;
+    }
+    if (bias === 'short' && inBullishOB) {
+      dlog(`null — SHORT blocked: price inside bullish Order Block (demand zone)`);
+      return null;
+    }
+
     if (!bias && !breakoutSig) { dlog('null — no 1m structure bias and no momentum breakout'); return null; }
 
     // ── Run all setups ────────────────────────────────────────
+    // EQLiqSweep runs first — highest conviction entry (post-sweep reversal)
     let setup = null;
     if (bias) {
+      const sweepSig = detectEQLiqSweep(klines1mClosed, eqh, eql, bias, price);
       setup =
-        detectBreakRetest(klines15m, levels, bias, price)        ||
-        detectLiqGrab(klines15m, levels, bias, price)            ||
-        detectVWAPTrend(klines15m, vwap, bias, price)            ||
+        sweepSig                                                   ||
+        detectBreakRetest(klines15m, levels, bias, price)         ||
+        detectLiqGrab(klines15m, levels, bias, price)             ||
+        detectVWAPTrend(klines15m, vwap, bias, price)             ||
         detectMSTF(klines15m, klines3m, klines1m, bias);
     }
     if (!setup && breakoutSig) {
@@ -844,7 +1040,7 @@ async function analyzeV3(ticker) {
       bias  = breakoutSig.direction;
     }
 
-    if (!setup) { dlog(`null — no setup detected for bias=${bias} (BreakRetest/LiqGrab/VWAPTrend/MSTF/MomentumBreakout all returned null)`); return null; }
+    if (!setup) { dlog(`null — no setup detected for bias=${bias} (EQLiqSweep/BreakRetest/LiqGrab/VWAPTrend/MSTF/MomentumBreakout all returned null)`); return null; }
     dlog(`setup=${setup.setupName} @ ${setup.levelType}`);
 
     // ── Extra confirmation flags ──────────────────────────────
@@ -941,6 +1137,9 @@ async function analyzeV3(ticker) {
       'MSTF+@3HL+1mHL+EMAUp',
       'LiqGrab+@PDH+EMAUp',
       'LiqGrab+@PDH+EMAUp+VolSpike',
+      // EQLiqSweep: post-sweep reversal is the highest-conviction SMC entry.
+      // Price hunts stops, closes back inside — now trade the reversal.
+      'EQLiqSweep',
     ]);
     const isPremium = PREMIUM_SETUPS.has(setupName);
     if (isPremium) dlog(`PREMIUM setup ${setupName} — looser gates apply`);
