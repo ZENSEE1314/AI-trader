@@ -8,7 +8,7 @@ const { USDMClient } = require('binance');
 const fetch = require('node-fetch');
 const aiLearner = require('./ai-learner');
 // Strategy v3: MCT PDF — Break&Retest / LiqGrab / VWAP Trend + System 5 trailing SL (sole strategy)
-const { scanV3, calcTrailingSLV3, ACTIVE_SYMBOLS, SYMBOL_LEVERAGE } = require('./strategy-v3');
+const { scanV3, calcTrailingSLV3, ACTIVE_SYMBOLS, SYMBOL_LEVERAGE, getSessionMode } = require('./strategy-v3');
 const { getSentimentScores } = require('./sentiment-scraper');
 const { log: bLog } = require('./bot-logger');
 const { getBinanceRequestOptions, getFetchOptions } = require('./proxy-agent');
@@ -551,13 +551,46 @@ async function calcCandleTrailSl(symbol, isLong, currentSlPrice) {
 // Example — 20x leverage, BTC entry $90,000:
 //   +1.05% price (+21% capital) → SL moves to entry +1.0% (+20% capital)
 //   +3.0% price (+60% capital) → SL moves to entry + 1.5% ($91,350)
-function calculateTrailingStep(entryPrice, currentPrice, isLong, lastStep, leverage = 20, userTrailStepPct = 0) {
+// Trailing SL rules:
+//
+// Safety tier (+30%→+10%): at +30% capital profit, lock in +10% profit before
+//   the main trail activates. If the trade reverses after +30% you still exit
+//   with +10% capital gain instead of -25% loss. Always fires regardless of
+//   smcMode — both session types benefit from this early profit lock.
+//   Ratchet-safe: +0.10 > 0 (initial lastStep) so it flows through the normal
+//   ratchet check without any special sentinel handling.
+//
+// smcMode (+61%→+60%): during Asia/London/NY session opens, first lock jumps
+//   straight to +60% capital, skipping the 20–50% early tiers. Off-session uses
+//   the default table (first lock +20%).
+const SAFETY_TRAIL_TRIGGER = 0.30; // +30% capital → lock in profit
+const SAFETY_TRAIL_LOCK    = 0.10; // SL moves to +10% capital profit
+
+function calculateTrailingStep(entryPrice, currentPrice, isLong, lastStep, leverage = 20, userTrailStepPct = 0, smcMode = false) {
   const pricePct = isLong
     ? (currentPrice - entryPrice) / entryPrice
     : (entryPrice - currentPrice) / entryPrice;
 
   // Convert price move to capital % (profit relative to margin)
   const capitalPct = pricePct * leverage;
+
+  // ── Safety tier: +30% capital → lock +10% profit ────────────
+  // Fires before the main trail activates. Always applies (SMC and off-session).
+  // The ratchet (+0.10 > 0 initial lastStep) handles it naturally — no special logic.
+  if (userTrailStepPct === 0 && capitalPct >= SAFETY_TRAIL_TRIGGER && lastStep < SAFETY_TRAIL_LOCK) {
+    const tiers = tierTableForLev(leverage);
+    const firstMainTrigger = smcMode
+      ? (tiers.find(t => t.lock >= 0.60)?.trigger ?? 0.61)
+      : tiers[0].trigger;
+    if (capitalPct < firstMainTrigger) {
+      // Pre-trail zone: lock in +10% profit
+      const lockPricePct = SAFETY_TRAIL_LOCK / leverage;
+      const newSlPrice = isLong
+        ? entryPrice * (1 + lockPricePct)
+        : entryPrice * (1 - lockPricePct);
+      return { stepped: true, newSlPrice, newLastStep: SAFETY_TRAIL_LOCK };
+    }
+  }
 
   let bestLockCapitalPct = null;
 
@@ -574,6 +607,10 @@ function calculateTrailingStep(entryPrice, currentPrice, isLong, lastStep, lever
     // tokens (BTC/ETH).
     const tiers = tierTableForLev(leverage);
     for (const tier of tiers) {
+      // SMC session mode: skip all tiers that lock below 60% capital.
+      // Session opens (Asia/London/NY) tend to run hard past 60%; locking
+      // at 20/30/40/50% exits these trades too early.
+      if (smcMode && tier.lock < 0.60) continue;
       if (capitalPct >= tier.trigger) bestLockCapitalPct = tier.lock;
     }
     // Beyond last tier: extend with the same step-per-tier pattern.
@@ -589,7 +626,8 @@ function calculateTrailingStep(entryPrice, currentPrice, isLong, lastStep, lever
   }
 
   if (bestLockCapitalPct === null) return null;
-  // lastStep is stored in capital % — never move SL backwards
+  // Ratchet: SL only moves in profitable direction.
+  // lastStep may be negative (-0.10 safety sentinel) — any positive lock clears it.
   if (bestLockCapitalPct <= lastStep) return null;
 
   // ── Minimum first-lock: must clear fees + small profit ──────
@@ -770,7 +808,7 @@ async function openTrade(client, pick, wallet) {
       closePosition: 'true', workingType: 'MARK_PRICE',
     });
     slOk = true;
-    bLog.trade(`SL set at $${fmtPrice(initialSlPrice)} (${(slPricePct*100).toFixed(2)}% from entry) | System 5 trailing: triggers at +46% capital → locks +45%, then +10% SL every +11% gain`);
+    bLog.trade(`SL set at $${fmtPrice(initialSlPrice)} (${(slPricePct*100).toFixed(2)}% from entry) | System 5 trailing: SMC session → first lock +60% capital; off-session → +20%, then +10% SL every +10% gain`);
   } catch (e) { bLog.error(`Owner SL algo failed: ${e.message}`); }
 
   if (!slOk) {
@@ -2274,7 +2312,8 @@ async function syncTradeStatus() {
 
               // ── Fallback: tier-based if candle trail didn't fire ──
               if (!binNewSl) {
-                const trailResult = calculateTrailingStep(entryPrice, curPrice, isLong, lastStep, tradeLev, userTrailPct);
+                const smcNow = getSessionMode(Date.now()) === 'smc';
+                const trailResult = calculateTrailingStep(entryPrice, curPrice, isLong, lastStep, tradeLev, userTrailPct, smcNow);
                 if (trailResult) { binNewSl = trailResult.newSlPrice; binSlSource = 'tier'; }
               }
 
@@ -2294,7 +2333,7 @@ async function syncTradeStatus() {
                 }
                 if (slUpdated) {
                   const tierRes = binSlSource === 'tier'
-                    ? calculateTrailingStep(entryPrice, curPrice, isLong, lastStep, tradeLev, 0)
+                    ? calculateTrailingStep(entryPrice, curPrice, isLong, lastStep, tradeLev, 0, smcNow)
                     : null;
                   await db.query(
                     `UPDATE trades SET trailing_sl_price = $1, trailing_sl_last_step = $2 WHERE id = $3`,
@@ -2493,7 +2532,8 @@ async function syncTradeStatus() {
               // milestone on high-leverage trades. This path uses capital%
               // so 100x ETH at +21% locks +20% the same as 20x BTC at +21%.
               const lastStepCap  = parseFloat(trade.trailing_sl_last_step) || 0;
-              const tierResult   = calculateTrailingStep(entryPrice, curPrice, isLong, lastStepCap, tradeLev, 0);
+              const smcNow       = getSessionMode(Date.now()) === 'smc';
+              const tierResult   = calculateTrailingStep(entryPrice, curPrice, isLong, lastStepCap, tradeLev, 0, smcNow);
               if (tierResult) {
                 const tierSl = tierResult.newSlPrice;
                 // Reject if SL would be on the wrong side of current price

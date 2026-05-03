@@ -58,17 +58,39 @@ const REQUEST_TIMEOUT = 15_000;
 
 // ── Active symbol + leverage config ───────────────────────────
 // Single source of truth — cycle.js and agent-coordinator.js import from here.
-const ACTIVE_SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT'];
+const ACTIVE_SYMBOLS = [
+  // ── 100x tier: deep liquidity, tight spread, low VWAP noise ──
+  'BTCUSDT', 'ETHUSDT',
+  // ── 75x tier: stable mid-caps — VWAPTrend allowed ────────────
+  'BNBUSDT', 'ADAUSDT', 'LTCUSDT', 'DOTUSDT', 'TRXUSDT',
+  // ── 50x tier: higher volatility — VWAPTrend blocked ──────────
+  'SOLUSDT', 'XRPUSDT', 'LINKUSDT', 'AVAXUSDT',
+  'MATICUSDT',  // DOGEUSDT + NEARUSDT removed — consistent counter-trend losses
+];
 
-// Capital leverage per token. BTC/ETH at 100x, SOL/BNB/XRP at 50x.
-// NOTE: higher leverage tightens the price SL distance — SOL/XRP are too volatile
-// for 100x; 50x gives 0.5% price breathing room vs 0.25% at 100x.
+// Capital leverage per token.
+//   100x → 0.25% price SL distance (BTC/ETH — low volatility per $ move)
+//   75x  → 0.33% price SL distance (stable mid-caps — VWAPTrend allowed)
+//   50x  → 0.50% price SL distance (volatile coins — VWAPTrend noise kills this)
 const SYMBOL_LEVERAGE = {
-  BTCUSDT: 100,
-  ETHUSDT: 100,
-  SOLUSDT:  50,
-  BNBUSDT:  50,
-  XRPUSDT:  50,
+  // 100x — deep liquidity, VWAP noise well within 0.25% SL
+  BTCUSDT:  100,
+  ETHUSDT:  100,
+  // 75x — moderate volatility, 0.33% SL comfortable for VWAP entries
+  BNBUSDT:   75,
+  ADAUSDT:   75,
+  LTCUSDT:   75,
+  DOTUSDT:   75,
+  TRXUSDT:   75,
+  // 50x — high volatility, VWAPTrend noise ≥ 0.5% SL → blocked
+  SOLUSDT:   50,
+  XRPUSDT:   50,
+  DOGEUSDT:  50,
+  LINKUSDT:  50,
+  AVAXUSDT:  50,
+  ATOMUSDT:  50,
+  NEARUSDT:  50,
+  MATICUSDT: 50,
 };
 
 // ── Fetch helpers ──────────────────────────────────────────────
@@ -307,13 +329,18 @@ function detectVWAPTrend(klines15m, vwap, bias, price) {
   const e21 = ema(closes, 21);
   if (!e9 || !e21) return null;
 
-  const NEAR = 0.008; // within 0.8 % of VWAP (pullbacks land in this zone)
+  // Asymmetric zone for LONG: allow deep pullbacks (-0.8%) but cap entry at
+  // +0.5% above VWAP. Beyond +0.5% = chasing a bounce that already started
+  // (all VWAPTrend LONG losses in backtests happen at +0.5-0.8% above VWAP).
+  // SHORT mirrors: allow up to -0.5% below VWAP, no further chasing down.
+  const NEAR_DOWN = 0.008; // 0.8% below VWAP = deep pullback into support
+  const NEAR_UP   = 0.005; // 0.5% above VWAP max (beyond = chasing the bounce)
 
   if (bias === 'long') {
     // Uptrend: EMA9 > EMA21
     if (e9 <= e21) return null;
-    // Price near VWAP (pullback to VWAP)
-    if (!near(price, vwap, NEAR)) return null;
+    // Price must be pulling back to VWAP — not already bouncing far above it
+    if (price < vwap * (1 - NEAR_DOWN) || price > vwap * (1 + NEAR_UP)) return null;
     // Bullish rejection at VWAP
     const lastCandle = klines15m[klines15m.length - 1];
     const prevCandle = klines15m[klines15m.length - 2];
@@ -325,7 +352,8 @@ function detectVWAPTrend(klines15m, vwap, bias, price) {
   } else {
     // Downtrend: EMA9 < EMA21
     if (e9 >= e21) return null;
-    if (!near(price, vwap, NEAR)) return null;
+    // Price must be pulling back up to VWAP — not already well below it (bounce risk)
+    if (price > vwap * (1 + NEAR_DOWN) || price < vwap * (1 - NEAR_UP)) return null;
     const lastCandle = klines15m[klines15m.length - 1];
     const prevCandle = klines15m[klines15m.length - 2];
     const rej = rejectionType(lastCandle) === 'bearish' ||
@@ -334,6 +362,170 @@ function detectVWAPTrend(klines15m, vwap, bias, price) {
     if (!rej) return null;
     return { setupName: 'VWAPTrend', level: vwap, levelType: 'VWAP', ema9: e9, ema21: e21 };
   }
+}
+
+// ── Session mode classifier ────────────────────────────────────
+// Splits the 24h clock into three SMC windows (the session opens,
+// where institutional flow is highest) and off-session gaps between
+// them (where ranging / mean-reversion setups work better).
+//
+//   SMC windows (institutional flow, key-level setups):
+//     00:00 – 02:30 UTC   Asia open
+//     07:30 – 11:00 UTC   London open
+//     13:00 – 16:30 UTC   New York open
+//
+//   Off-session gaps (range / VWAP-fade setups):
+//     02:30 – 07:30 UTC   Post-Asia dead zone
+//     11:00 – 13:00 UTC   Mid-session lull
+//     16:30 – 00:00 UTC   Post-NY / pre-Asia
+function getSessionMode(tsMs) {
+  const d   = new Date(tsMs);
+  const t   = d.getUTCHours() + d.getUTCMinutes() / 60; // fractional UTC hour
+  if (t < 2.5)               return 'smc'; // Asia open 00:00–02:30
+  if (t >= 7.5 && t < 11.0)  return 'smc'; // London open 07:30–11:00
+  if (t >= 13.0 && t < 16.5) return 'smc'; // NY open 13:00–16:30
+  return 'off';
+}
+
+// ── Setup 6: VWAPFade (off-session mean-reversion) ────────────
+// Fires when price reaches the VWAP ±2σ bands during off-session
+// hours. Works in ranging/low-liquidity conditions where price
+// tends to oscillate between the bands rather than trend.
+//
+// Entry:   price touches lower band (LONG) or upper band (SHORT)
+//          AND last 1m candle confirms the bounce direction.
+// Ranging: bands must be narrow (<3% width) — wide bands = trend.
+// Target:  VWAP middle (trailing SL handles the exit naturally as
+//          the trade captures the 1σ–2σ fade back to the mean).
+function detectVWAPFade(klines1m, vwapLower, vwapUpper, vwap, bias, price) {
+  if (!vwapLower || !vwapUpper || !vwap) return null;
+  const bandWidth = vwapUpper - vwapLower;
+  if (bandWidth <= 0) return null;
+
+  // Only trade mean-reversion in narrow (ranging) bands.
+  // Wide bands > 3% of VWAP = actively trending market → skip.
+  const bandPct = bandWidth / vwap;
+  if (bandPct > 0.03) return null;
+
+  const last      = klines1m[klines1m.length - 1];
+  const lOpen     = parseFloat(last[1]);
+  const lClose    = parseFloat(last[4]);
+  const isBullish = lClose > lOpen;
+
+  if (bias === 'long') {
+    // Price at or just above lower band → LONG fade back to VWAP
+    const aboveLower = (price - vwapLower) / vwap;
+    if (aboveLower < -0.001 || aboveLower > 0.003) return null; // within 0.3% of band
+    if (!isBullish) return null; // bullish 1m candle required
+    return { setupName: 'VWAPFade', level: vwapLower, levelType: 'LowerBand' };
+  }
+  if (bias === 'short') {
+    // Price at or just below upper band → SHORT fade back to VWAP
+    const belowUpper = (vwapUpper - price) / vwap;
+    if (belowUpper < -0.001 || belowUpper > 0.003) return null; // within 0.3% of band
+    if (isBullish) return null; // bearish 1m candle required
+    return { setupName: 'VWAPFade', level: vwapUpper, levelType: 'UpperBand' };
+  }
+  return null;
+}
+
+// ── Setup 7: StructureShift (CHoCH retest) ──────────────────
+// Detects a Change of Character (CHoCH) on 1m — the point where
+// market structure flips — and enters on the retest of the broken level.
+//
+// Bullish CHoCH: price was making LH/LL (downtrend), then breaks ABOVE
+//   the last LH → structure flip confirmed → enter LONG on the retest
+//   of that broken LH (it now acts as support).
+//
+// Bearish CHoCH: price was making HH/HL (uptrend), then breaks BELOW
+//   the last HL → structure flip confirmed → enter SHORT on the retest
+//   of that broken HL (it now acts as resistance).
+//
+// Why it works: after a CHoCH, smart money sweeps liquidity above/below
+// the structural level, then retests it before continuing. The retest
+// is the low-risk entry — tight SL just beyond the CHoCH level,
+// and the whole prior trend range is the reward target.
+//
+// 24/7 — CHoCH retests fire in both SMC sessions and off-hours.
+function detectStructureShift(klines1m, bias, price) {
+  const swingLen = 3;
+  const len = klines1m.length;
+  if (len < swingLen * 10) return null;
+
+  // Build chronological swing high/low list (confirmed = has right side).
+  // Each swing is tagged with its bar index so we can check recency.
+  const highs = []; // { idx, price }
+  const lows  = [];
+  for (let i = swingLen; i < len - swingLen; i++) {
+    const h = parseFloat(klines1m[i][2]);
+    const l = parseFloat(klines1m[i][3]);
+    let isHigh = true, isLow = true;
+    for (let j = i - swingLen; j <= i + swingLen; j++) {
+      if (j === i) continue;
+      if (parseFloat(klines1m[j][2]) >= h) isHigh = false;
+      if (parseFloat(klines1m[j][3]) <= l) isLow  = false;
+    }
+    if (isHigh) highs.push({ idx: i, price: h });
+    if (isLow)  lows.push({ idx: i, price: l });
+  }
+
+  if (highs.length < 2 || lows.length < 2) return null;
+
+  const last1m   = klines1m[klines1m.length - 1];
+  const isBull1m = parseFloat(last1m[4]) > parseFloat(last1m[1]);
+
+  if (bias === 'long') {
+    if (!isBull1m) return null;
+    // Walk backwards through swing highs to find the most recent one where:
+    // 1) price has broken above it (CHoCH confirmed on that bar)
+    // 2) price is now within 0.6% above (retesting the broken level as support)
+    // 3) there is at least one higher swing high before it (= it was an LH in context)
+    for (let i = highs.length - 1; i >= 0; i--) {
+      const swingH = highs[i];
+
+      // Swing must be in the lookback window
+      if (len - 1 - swingH.idx > 60) break;
+
+      // CHoCH confirmed: current price has broken above this swing high
+      if (price <= swingH.price) continue;
+
+      // Retest zone: within 0.6% above the broken level
+      const distPct = (price - swingH.price) / swingH.price;
+      if (distPct > 0.006) continue;
+
+      // Context: at least one prior high was higher → this swing was an LH
+      // (ensures we're catching a structural flip, not just any micro-breakout)
+      const hasHigherPrior = highs.slice(0, i).some(h => h.price > swingH.price);
+      if (!hasHigherPrior) continue;
+
+      return { setupName: 'StructureShift', level: swingH.price, levelType: 'CHoCH+BullFlip' };
+    }
+  }
+
+  if (bias === 'short') {
+    if (isBull1m) return null;
+    // Walk backwards through swing lows to find a HL broken below (bearish CHoCH)
+    for (let i = lows.length - 1; i >= 0; i--) {
+      const swingL = lows[i];
+
+      if (len - 1 - swingL.idx > 60) break;
+
+      // CHoCH confirmed: current price has broken below this swing low
+      if (price >= swingL.price) continue;
+
+      // Retest zone: within 0.6% below the broken level
+      const distPct = (swingL.price - price) / swingL.price;
+      if (distPct > 0.006) continue;
+
+      // Context: at least one prior low was lower → this swing was an HL
+      const hasLowerPrior = lows.slice(0, i).some(l => l.price < swingL.price);
+      if (!hasLowerPrior) continue;
+
+      return { setupName: 'StructureShift', level: swingL.price, levelType: 'CHoCH+BearFlip' };
+    }
+  }
+
+  return null;
 }
 
 // ── Market structure detection (HH / HL / LH / LL) ──────────
@@ -855,6 +1047,46 @@ async function analyzeV3(ticker, opts = {}) {
     const vwap = calcVWAP(klines15m, nowMs);
     if (!vwap) { dlog('null — no VWAP'); return null; }
 
+    // ── VWAP ±2σ bands (1m bars) ─────────────────────────────
+    // Computed here (early) so VWAPFade can join the setup chain below.
+    // Uses the current session's 1m bars (today's or last 240 bars as fallback).
+    const k1m = klines1m || [];
+    let vwapUpper = null, vwapLower = null, vwapUpperPrev = null, vwapLowerPrev = null;
+    if (k1m.length > 30) {
+      const dayStartMs = Date.UTC(
+        new Date(nowMs).getUTCFullYear(),
+        new Date(nowMs).getUTCMonth(),
+        new Date(nowMs).getUTCDate(),
+      );
+      const today1m = k1m.filter(k => parseInt(k[0]) >= dayStartMs);
+      const used    = today1m.length > 30 ? today1m : k1m.slice(-Math.min(k1m.length, 240));
+
+      const calcBands = (bars) => {
+        let cTPV = 0, cVol = 0;
+        const ts = [];
+        for (const k of bars) {
+          const tp = (parseFloat(k[2]) + parseFloat(k[3]) + parseFloat(k[4])) / 3;
+          const v  = parseFloat(k[5]) || 1;
+          ts.push(tp);
+          cTPV += tp * v; cVol += v;
+        }
+        if (cVol === 0 || ts.length < 30) return null;
+        const m = cTPV / cVol;
+        let vs = 0;
+        for (const t of ts) vs += (t - m) * (t - m);
+        const s = Math.sqrt(vs / ts.length);
+        return { mid: m, upper: m + 2 * s, lower: m - 2 * s };
+      };
+
+      const cur = calcBands(used);
+      if (cur) { vwapUpper = cur.upper; vwapLower = cur.lower; }
+
+      if (used.length > 60) {
+        const prev = calcBands(used.slice(0, -30));
+        if (prev) { vwapUpperPrev = prev.upper; vwapLowerPrev = prev.lower; }
+      }
+    }
+
     // ── Direction = 1m structure AND OP/VWAP must AGREE ──────
     // User direction: "OP/VWAP is a must but follow the LH/HL/HH/LL"
     //   1m structure is the primary signal:
@@ -1026,25 +1258,56 @@ async function analyzeV3(ticker, opts = {}) {
 
     if (!bias && !breakoutSig) { dlog('null — no 1m structure bias and no momentum breakout'); return null; }
 
+    // ── Session mode ──────────────────────────────────────────
+    // Determines which setup family is appropriate right now.
+    //   'smc'  → institutional session open: use full LiqGrab/MSTF/VWAPTrend/BreakRetest
+    //   'off'  → between sessions: SMC setups still run, but also try VWAPFade as fallback
+    const sessionMode = getSessionMode(nowMs);
+
+    // ── Session-open aggressive mode ──────────────────────────
+    // First 45 min of each session open is the highest-momentum window.
+    // Price moves fast, setups form before ranging-market filters can
+    // react. During this window we relax rPos, chase, direction guard,
+    // and score so session-open institutional setups actually fire.
+    //
+    //   Asia   open: 00:00–00:45 UTC
+    //   London open: 07:30–08:15 UTC
+    //   NY     open: 13:00–13:45 UTC
+    const nowT = new Date(nowMs).getUTCHours() + new Date(nowMs).getUTCMinutes() / 60;
+    const isSessionOpenAggressive = (
+      (nowT < 0.75)                   ||  // Asia:   00:00–00:45
+      (nowT >= 7.5  && nowT < 8.25)  ||  // London: 07:30–08:15
+      (nowT >= 13.0 && nowT < 13.75)     // NY:     13:00–13:45
+    );
+
     // ── Run all setups ────────────────────────────────────────
     // EQLiqSweep runs first — highest conviction entry (post-sweep reversal)
     let setup = null;
     if (bias) {
       const sweepSig = detectEQLiqSweep(klines1mClosed, eqh, eql, bias, price);
       setup =
-        sweepSig                                                   ||
-        detectBreakRetest(klines15m, levels, bias, price)         ||
-        detectLiqGrab(klines15m, levels, bias, price)             ||
-        detectVWAPTrend(klines15m, vwap, bias, price)             ||
-        detectMSTF(klines15m, klines3m, klines1m, bias);
+        sweepSig                                                         ||
+        detectBreakRetest(klines15m, levels, bias, price)               ||
+        detectLiqGrab(klines15m, levels, bias, price)                   ||
+        detectVWAPTrend(klines15m, vwap, bias, price)                   ||
+        detectMSTF(klines15m, klines3m, klines1m, bias)                 ||
+        // Off-session fallback: mean-reversion at VWAP ±2σ bands.
+        // Only fires in ranging windows (between session opens).
+        (sessionMode === 'off' && vwapLower && vwapUpper
+          ? detectVWAPFade(k1m, vwapLower, vwapUpper, vwap, bias, price)
+          : null);
     }
     if (!setup && breakoutSig) {
       setup = breakoutSig;
       bias  = breakoutSig.direction;
     }
 
-    if (!setup) { dlog(`null — no setup detected for bias=${bias} (EQLiqSweep/BreakRetest/LiqGrab/VWAPTrend/MSTF/MomentumBreakout all returned null)`); return null; }
+    if (!setup) { dlog(`null — no setup detected for bias=${bias} (EQLiqSweep/BreakRetest/LiqGrab/VWAPTrend/MSTF/VWAPFade all returned null)`); return null; }
     dlog(`setup=${setup.setupName} @ ${setup.levelType}`);
+
+    // Computed here so the score gate and all downstream filters can use them.
+    const isVWAPFade       = setup.setupName === 'VWAPFade';
+    const isStructureShift = setup.setupName === 'StructureShift';
 
     // ── Extra confirmation flags ──────────────────────────────
     const lastCandle  = klines15m[klines15m.length - 1];
@@ -1090,12 +1353,20 @@ async function analyzeV3(ticker, opts = {}) {
     }
 
     // ── Score ─────────────────────────────────────────────────
+    // VWAPFade bypasses the SMC score gate — it's a range setup with different
+    // quality criteria (flat EMA + band touch + candle confirmation), already
+    // enforced in detectVWAPFade and the EMA filter above.
     const score = scoreSignal({
       setup: setup.setupName,
       bias, vwapBias, volSpike, rejCandle,
       ema9, ema21,
     });
-    if (score < 9) { dlog(`null — score ${score} < 9`); return null; }
+    // VWAPFade and StructureShift have their own quality gates (band-width check,
+    // CHoCH confirmation, candle direction) — the SMC score doesn't apply.
+    // Session-open aggressive mode lowers the gate to 8: the opening 45 min
+    // are high-momentum and setups form fast before all confirmation candles land.
+    const minScore = isSessionOpenAggressive ? 8 : 9;
+    if (!isVWAPFade && !isStructureShift && score < minScore) { dlog(`null — score ${score} < ${minScore} (sessionOpen=${isSessionOpenAggressive})`); return null; }
 
     // Counter-trend filter REMOVED per user direction: buy on the LL
     // candle / sell on the HH candle — those are reversal entries.
@@ -1136,6 +1407,23 @@ async function analyzeV3(ticker, opts = {}) {
       // = buying the extension, not the pullback. 0% WR across all variants.
       // (3m HH entries work fine — only 15m HH is overextended)
       'MSTF+@15HH+1mHH',
+      // 15m HH + 1m HL: same overextension problem as 15m HH + 1m HH.
+      // New high on 15m = price extended; HL on 1m = still in momentum, not pullback.
+      // 0% WR across DOT/DOGE/NEAR/ADA in backtest (3 losses, 0 wins).
+      'MSTF+@15HH+1mHL',
+      // 3m HH + 1m HL: same overextension on the faster timeframe.
+      // 0% WR across DOT/ATOM in 30-day backtest (3 losses, 0 wins all variants).
+      'MSTF+@3HH+1mHL',
+      // MSTF 3m LL + 1m LH divergence — 3m made new low but 1m already bouncing
+      // = conflicting signals; 0% WR all variants (ATOM/NEAR/DOT)
+      'MSTF+@3LL+1mLH',
+      // MSTF 3m LH + 1m LL — lower high on 3m, lower low on 1m = disconfirmed; 0% WR
+      'MSTF+@3LH+1mLL',
+      // MSTF 3m HL + 1m HH — higher low 3m but 1m already at new high = overextension; 0% WR
+      'MSTF+@3HL+1mHH',
+      // MSTF 15m HL + 1m HL + VolSpike LONG — VolSpike at 15m HL often = selling
+      // exhaustion spike, not a clean continuation; 0% WR (SOL, ATOM)
+      'MSTF+@15HL+1mHL+EMAUp+VolSpike',
       // LiqGrab at OP — all variants net negative regardless of suffix
       'LiqGrab+@OP',
       // LH confirmed on 15m but 1m shows LL — divergence, not pullback
@@ -1153,16 +1441,108 @@ async function analyzeV3(ticker, opts = {}) {
       'LiqGrab+@PDH+EMAUp+VolSpike',
       // BreakRetest at PDL in downtrend with vol spike — 0% WR
       'BreakRetest+@PDL+EMADn+VolSpike',
-      // BreakRetest at OP going LONG — OP is an arbitrary level, fails in Asia session
-      'BreakRetest+@OP+EMAUp',
-      // BreakRetest at OP with only VolSpike (no EMA direction) — 0% WR
-      'BreakRetest+@OP+VolSpike',
+      // BreakRetest at OP — all OP-based BreakRetests are unreliable.
+      // OP is an arbitrary intraday level; 0-33% WR across all OP variants.
+      'BreakRetest+@OP',
       // MSTF 3m HH + 1m HH with EMAUp — buying extended 3m high, 0% WR all variants
       'MSTF+@3HH+1mHH+EMAUp',
     ];
     // skipBlocklist: true allows the backtest to collect these signals for
     // reversal testing (to see if flipping direction produces profit).
+
     if (!opts.skipBlocklist) {
+      // VWAPTrend at 50x leverage: SL is only 0.5% price distance — VWAP noise
+      // alone hits it. 100x (BTC/ETH, 0.25% SL) and 75x (BNB/ADA/LTC, 0.33% SL)
+      // have enough buffer to survive VWAP oscillation. 50x does not.
+      // Backtest: all 50x VWAPTrend = 0% WR across runs, zero wins.
+      const tokenLeverage = SYMBOL_LEVERAGE[symbol] || 50;
+      if (setupName.startsWith('VWAPTrend') && tokenLeverage <= 50) {
+        dlog(`null — VWAPTrend blocked on ${tokenLeverage}x coin ${symbol}: SL too tight for VWAP noise`);
+        return null;
+      }
+
+      // Flat EMA filter for SMC setups: when EMA9 ≈ EMA21, market is choppy.
+      // VWAPFade is INVERTED: it REQUIRES flat EMA (ranging = good for mean-reversion).
+      // VWAPFade uses a separate EMA check below.
+      if (!isVWAPFade && ema9 && ema21) {
+        const emaSpreadAbs = Math.abs(ema9 - ema21) / ema21;
+        if (emaSpreadAbs < 0.0005) { // |spread| < 0.05% = flat/ranging EMA
+          dlog(`null — EMA spread too flat (${(emaSpreadAbs * 100).toFixed(4)}%): choppy market, skip SMC`);
+          return null;
+        }
+      }
+
+      // VWAPFade EMA requirement: EMA spread MUST be flat or moderate.
+      // If spread > 0.4% the market is strongly trending → band-fade will fail.
+      if (isVWAPFade && ema9 && ema21) {
+        const emaSpreadAbs = Math.abs(ema9 - ema21) / ema21;
+        if (emaSpreadAbs > 0.004) { // >0.4% spread = trending, not range-bound
+          dlog(`null — VWAPFade blocked: EMA spread ${(emaSpreadAbs*100).toFixed(3)}% too wide (market trending)`);
+          return null;
+        }
+      }
+
+      // VWAPFade h1 regime filter: don't fade against the 1h structural trend.
+      // If 1h is bearish (bearRegime), a LONG at the lower band will likely fail —
+      // price keeps dropping through. Mirror: SHORT at upper band in bullish 1h.
+      // Backtest: both VWAPFade LONG losses had h1=DN (bearRegime). 0 false positives.
+      if (isVWAPFade && bearRegime && side === 'LONG') {
+        dlog(`null — VWAPFade LONG blocked: 1h bearish regime (lower band won't hold)`);
+        return null;
+      }
+      if (isVWAPFade && bullRegime && side === 'SHORT') {
+        dlog(`null — VWAPFade SHORT blocked: 1h bullish regime (upper band won't hold)`);
+        return null;
+      }
+
+      // VWAPFade 50x leverage block: VWAP-band fades need at least 0.5% SL room.
+      // At 50x leverage the SL is only 0.5% price — band-fade trades on volatile
+      // 50x coins (ATOM, AVAX, etc.) get stopped out on normal band noise before
+      // the mean-reversion plays out. Backtest: ATOMUSDT 0/2 WR (both 50x).
+      // 75x (LTC, BNB) are already handled by h1-regime filter above.
+      if (isVWAPFade && (SYMBOL_LEVERAGE[symbol] || 50) <= 50) {
+        dlog(`null — VWAPFade blocked on ${SYMBOL_LEVERAGE[symbol] || 50}x coin: SL too tight for band-fade`);
+        return null;
+      }
+
+      // MomentumBreakout SHORT oversold filter: when price is already >1% below VWAP,
+      // it is near the lower VWAP band — a fresh breakdown is actually a bounce zone.
+      // Backtests: MomentumBreakout SHORT losses at -1.4% and -1.9% below VWAP
+      // (0 wins when that far below VWAP in tested period).
+      if (setupName.startsWith('MomentumBreakout') && side === 'SHORT' && vwap) {
+        const belowVwapPct = (vwap - price) / vwap;
+        if (belowVwapPct > 0.010) { // >1% below VWAP = oversold/near lower band
+          dlog(`null — MomentumBreakout SHORT blocked: ${(belowVwapPct * 100).toFixed(2)}% below VWAP (bounce risk near lower band)`);
+          return null;
+        }
+      }
+
+      // VWAPTrend LONG dead zone: 02:00–05:59 UTC (Asia close → Europe open).
+      // This is the lowest-liquidity window of the day. VWAP bounces here are
+      // often fake — price wicks into VWAP then immediately reverses on thin order books.
+      // Backtest: 4/4 VWAPTrend LONG losses across BTC+ETH fall in this exact window
+      // (all at 03:xx UTC). Zero VWAPTrend LONG wins in the 02-06 UTC band.
+      if (setupName.startsWith('VWAPTrend') && side === 'LONG') {
+        const utcHour = new Date(nowMs).getUTCHours();
+        if (utcHour >= 2 && utcHour < 6) {
+          dlog(`null — VWAPTrend LONG blocked in dead zone (${utcHour}:xx UTC, Asia→EU gap)`);
+          return null;
+        }
+      }
+
+      // LiqGrab LONG extended filter: when price is already >0.8% above VWAP,
+      // the move has extended past fair value — a liquidity grab at PDH in this zone
+      // is not a "reversal from resistance back to value" but a chase into extended price.
+      // Backtest: both LiqGrab+@PDH+EMAUp losses occur at +0.806% and +1.138% above VWAP
+      // (zero wins when that far above VWAP in tested period).
+      if (setupName.startsWith('LiqGrab') && side === 'LONG' && vwap) {
+        const aboveVwapPct = (price - vwap) / vwap;
+        if (aboveVwapPct > 0.008) { // >0.8% above VWAP = extended, not at value
+          dlog(`null — LiqGrab LONG blocked: ${(aboveVwapPct * 100).toFixed(2)}% above VWAP (extended)`);
+          return null;
+        }
+      }
+
       const isKnownLoser = KNOWN_LOSER_PREFIXES.some(pfx => setupName.startsWith(pfx));
       if (isKnownLoser) {
         dlog(`null — KNOWN LOSER setup blocked: ${setupName} (0% WR backtest)`);
@@ -1180,8 +1560,25 @@ async function analyzeV3(ticker, opts = {}) {
         'VWAPTrend+@VWAP+EMAUp',
         // VolSpike alone without EMADn+VolSpike quality — 0% WR persistent across all runs
         'MomentumBreakout+@RangeLow+VolSpike',
-        // LiqGrab shorts at PDL in downtrend with VolSpike — 20% WR, net loser
+        // LiqGrab shorts at PDL in downtrend — all PDL short variants lose:
+        // +EMADn: 16.7% WR (6 trades, -$80) | +EMADn+VolSpike: 20% WR | bare: 0% WR
+        // Shorting the previous day's low = fighting real daily support. Block all.
         'LiqGrab+@PDL+EMADn+VolSpike',
+        'LiqGrab+@PDL+EMADn',
+        'LiqGrab+@PDL',
+        // (MSTF 3m divergence patterns moved to KNOWN_LOSER_PREFIXES — they fire
+        //  with suffix variants like +EMADn+VolSpike, so prefix blocking is required)
+        // VWAPFade at upper band = shorting into potential breakout; 0% WR (2 trades)
+        // Note: already blocked on 50x coins; this covers 75x+ too
+        'VWAPFade+@UpperBand+EMADn',
+        'VWAPFade+@UpperBand',
+        // BreakRetest at PDH bare (no VolSpike) — entering too early, 0% WR
+        // The +VolSpike variant (100% WR) is allowed; bare/EMAUp-only is noise
+        'BreakRetest+@PDH+EMAUp',
+        // LiqGrab at PDH (prev day high) LONG — buying into resistance; 0% WR 3/3 trades
+        // The sweep of PDH hunts stops but then reverses — continuation fails every time.
+        // +VolSpike variant also blocked via KNOWN_LOSER_PREFIXES above.
+        'LiqGrab+@PDH+EMAUp',
       ]);
       if (KNOWN_LOSERS_EXACT.has(setupName)) {
         dlog(`null — KNOWN LOSER exact match blocked: ${setupName}`);
@@ -1211,8 +1608,8 @@ async function analyzeV3(ticker, opts = {}) {
       'MSTF+@3HL+1mHL',
       'MSTF+@15HL+1mHL+EMAUp',
       'MSTF+@3HL+1mHL+EMAUp',
-      'LiqGrab+@PDH+EMAUp',
-      'LiqGrab+@PDH+EMAUp+VolSpike',
+      // NOTE: LiqGrab+@PDH+EMAUp (and +VolSpike) removed from premium —
+      // PDH sweep LONGs show 0% WR; both variants now in blocklists.
       // EQLiqSweep: post-sweep reversal is the highest-conviction SMC entry.
       // Price hunts stops, closes back inside — now trade the reversal.
       'EQLiqSweep',
@@ -1224,53 +1621,14 @@ async function analyzeV3(ticker, opts = {}) {
     const isPremium = PREMIUM_SETUPS.has(setupName);
     if (isPremium) dlog(`PREMIUM setup ${setupName} — looser gates apply`);
 
-    // ── VWAP bands (1m bars, matches Bitunix chart) — computed FIRST
-    // because the range-pos gate now uses them for the momentum-side
-    // exception (LONG above upper band / SHORT below lower band ride
-    // momentum and skip range-pos).
-    const k1m = klines1m || [];
-    let vwapUpper = null, vwapLower = null, vwapUpperPrev = null, vwapLowerPrev = null;
-    if (k1m.length > 30) {
-      const dayStartMs = Date.UTC(new Date().getUTCFullYear(),
-                                  new Date().getUTCMonth(),
-                                  new Date().getUTCDate());
-      const today1m = k1m.filter(k => parseInt(k[0]) >= dayStartMs);
-      const used = today1m.length > 30 ? today1m : k1m.slice(-Math.min(k1m.length, 240));
-
-      // Helper: compute mid + 2σ bands on an array of bars.
-      const calcBands = (bars) => {
-        let cTPV = 0, cVol = 0;
-        const ts = [];
-        for (const k of bars) {
-          const tp = (parseFloat(k[2]) + parseFloat(k[3]) + parseFloat(k[4])) / 3;
-          const v  = parseFloat(k[5]) || 1;
-          ts.push(tp);
-          cTPV += tp * v; cVol += v;
-        }
-        if (cVol === 0 || ts.length < 30) return null;
-        const m = cTPV / cVol;
-        let vs = 0;
-        for (const t of ts) vs += (t - m) * (t - m);
-        const s = Math.sqrt(vs / ts.length);
-        return { mid: m, upper: m + 2 * s, lower: m - 2 * s };
-      };
-
-      const cur = calcBands(used);
-      if (cur) { vwapUpper = cur.upper; vwapLower = cur.lower; }
-
-      // Bands as they would have been ~30 bars ago — used to detect slope.
-      // If today's range is short, fall back to last-30-removed slice.
-      if (used.length > 60) {
-        const prev = calcBands(used.slice(0, -30));
-        if (prev) { vwapUpperPrev = prev.upper; vwapLowerPrev = prev.lower; }
-      }
-    }
+    // NOTE: vwapUpper, vwapLower, vwapUpperPrev, vwapLowerPrev and k1m are
+    // all computed early (right after vwap, before setup detection).
 
     // ── Band slope filter ───────────────────────────────────────
     // User rule: when VWAP upper band is sloping DOWN, the session
     // mean is falling — no LONG, only SHORT. Mirror: VWAP lower band
     // sloping UP → no SHORT, only LONG.
-    if (gate('slope') && vwapUpper && vwapUpperPrev) {
+    if (gate('slope') && !isVWAPFade && vwapUpper && vwapUpperPrev) {
       const upperFalling = vwapUpper < vwapUpperPrev;
       const lowerRising  = vwapLower > vwapLowerPrev;
       if (side === 'LONG'  && upperFalling) {
@@ -1286,7 +1644,9 @@ async function analyzeV3(ticker, opts = {}) {
     // User rule: "at VWAP upper band only find HL or HH to long, no
     // short on HH or LH; at lower band only find LL/LH to short, no
     // long." Trend-continuation only at the bands — no mean reversion.
-    if (gate('band')) {
+    // VWAPFade is the exception: it ENTERS at the band (mean-reversion),
+    // so it bypasses both the band-entry block and the zone block.
+    if (gate('band') && !isVWAPFade) {
       if (vwapUpper && side === 'SHORT' && price >= vwapUpper) {
         dlog(`null — SHORT blocked at/above upper band $${vwapUpper.toFixed(4)} (LONG only at upper band)`);
         return null;
@@ -1297,7 +1657,7 @@ async function analyzeV3(ticker, opts = {}) {
       }
     }
 
-    if (gate('zone') && vwap && vwapUpper && vwapLower) {
+    if (gate('zone') && !isVWAPFade && vwap && vwapUpper && vwapLower) {
       const NEAR_MID = 0.001;
       const distFromMid = (price - vwap) / vwap;
       const inUpperZone = distFromMid >  NEAR_MID && price < vwapUpper;
@@ -1331,7 +1691,9 @@ async function analyzeV3(ticker, opts = {}) {
     const isExhaustReverse = setup.setupName === 'ExhaustReverse';
 
     let rPos = null;
-    if (gate('rpos') && !isTrendPullback && !isExhaustReverse && k1m.length >= 11) {
+    // VWAPFade enters AT the band extreme — that IS the range-position signal.
+    // Applying rPos/chase gates on top would double-filter and block all VWAPFade entries.
+    if (!isVWAPFade && gate('rpos') && !isTrendPullback && !isExhaustReverse && k1m.length >= 11) {
       const w20 = k1m.slice(-11, -1);
       let hi = -Infinity, lo = Infinity;
       for (const k of w20) {
@@ -1343,25 +1705,27 @@ async function analyzeV3(ticker, opts = {}) {
       const sz = hi - lo;
       if (sz > 0) {
         rPos = (price - lo) / sz;
-        if (side === 'LONG'  && rPos > 0.05) { dlog(`null — LONG rPos ${(rPos*100).toFixed(1)}% > 5%`); return null; }
-        if (side === 'SHORT' && rPos < 0.95) { dlog(`null — SHORT rPos ${(rPos*100).toFixed(1)}% < 95%`); return null; }
+        // Session-open aggressive: allow entries further into the range.
+        // Session opens push price fast — waiting for the bottom 5% of range
+        // means you miss the entire opening move.
+        const rPosLong  = isSessionOpenAggressive ? 0.25 : 0.05;
+        const rPosShort = isSessionOpenAggressive ? 0.75 : 0.95;
+        if (side === 'LONG'  && rPos > rPosLong)  { dlog(`null — LONG rPos ${(rPos*100).toFixed(1)}% > ${(rPosLong*100).toFixed(0)}%`); return null; }
+        if (side === 'SHORT' && rPos < rPosShort) { dlog(`null — SHORT rPos ${(rPos*100).toFixed(1)}% < ${(rPosShort*100).toFixed(0)}%`); return null; }
       }
     }
 
-    if (gate('chase') && !isTrendPullback && !isExhaustReverse && k1m.length >= 31) {
+    if (!isVWAPFade && gate('chase') && !isTrendPullback && !isExhaustReverse && k1m.length >= 31) {
       const w30 = k1m.slice(-31, -1);
       let lo30 = Infinity, hi30 = -Infinity;
       for (const k of w30) {
         const h = parseFloat(k[2]); if (h > hi30) hi30 = h;
         const l = parseFloat(k[3]); if (l < lo30) lo30 = l;
       }
-      // Setup-aware chase: 0.05% (5 bps) for normal setups; premium
-      // setups (proven winners in backtest, 60-100% WR) get 0.15%
-      // — letting more profitable trades through.
-      // Strict 0.05% (5 bps) for ALL setups — no premium loosening.
-      // User flagged ETH/BTC trades firing far from HL pivot; the
-      // premium 0.15% bonus was the cause.
-      const MAX_CHASE_PCT = 0.0005;
+      // Chase gate: max distance from 30m high/low before entry is rejected.
+      // Session-open aggressive: 0.25% — session opens create momentum moves
+      // that often gap 0.1-0.2% before a retest forms. Regular: 0.10%.
+      const MAX_CHASE_PCT = isSessionOpenAggressive ? 0.0025 : 0.0010;
       if (side === 'LONG') {
         const dist = (price - lo30) / lo30;
         if (dist > MAX_CHASE_PCT) {
@@ -1415,17 +1779,18 @@ async function analyzeV3(ticker, opts = {}) {
     // firing 5-6 bars from the pivot. The chase-distance gate above
     // (0.3% from the swing) is the only chase protection now.
 
-    // ── HARD DIRECTION GUARD (non-bypassable) ──────────────────
-    // User direction (paraphrased): "I told you 100 times — only do
-    // HL/HH for LONG, LL/LH for SHORT. Hard fix it." This is the
-    // FINAL check before any signal returns. NO gate toggle, NO env
-    // flag, NO setup override can bypass this. If the 1m structure
-    // isn't purely bullish for LONG (or purely bearish for SHORT),
-    // return null.
-    //
-    // 1m must have HH or HL — and NOT have LH or LL (no topping squeeze).
-    // SHORT mirror: must have LL or LH — and NOT have HH or HL.
-    {
+    // ── HARD DIRECTION GUARD (non-bypassable for SMC) ──────────
+    // User direction: "only do HL/HH for LONG, LL/LH for SHORT."
+    // VWAPFade, StructureShift, and session-open aggressive mode bypass the guard.
+    // VWAPFade: enters at band extreme — prior 1m move INTO the band is always
+    //   counter to direction (bearish at lower band, bullish at upper band).
+    // StructureShift: a bullish CHoCH retest means the PRIOR 1m structure was
+    //   bearish (LH/LL downtrend) — the CHoCH confirmation is the guard.
+    // Session-open: price sweeps both directions in the first 45 min, creating
+    //   mixed 1m structure even on high-conviction setups. The HTF bias + setup
+    //   detection provide sufficient directionality; the 1m clean-structure check
+    //   blocks too many legitimate session-open entries.
+    if (!isVWAPFade && !isStructureShift && !isSessionOpenAggressive) {
       const finalCheck1m = detectStructure(klines1m, 2);
       if (side === 'LONG') {
         const cleanBull = finalCheck1m && (
@@ -1487,6 +1852,12 @@ async function analyzeV3(ticker, opts = {}) {
       chg24h:   parseFloat(ticker.priceChangePercent),
       timeframe: '1m+3m+15m+1h',
       version:  'v3',
+
+      // Session classification: 'smc' = session open window, 'off' = between sessions
+      sessionMode,
+      isVWAPFade,
+      isStructureShift,
+      isSessionOpenAggressive,
     };
 
   } catch (e) {
@@ -1551,4 +1922,5 @@ module.exports = {
   calcVWAP,
   detectMomentumBreakout,
   atr,
+  getSessionMode,
 };
