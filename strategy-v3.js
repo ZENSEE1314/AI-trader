@@ -1432,6 +1432,11 @@ async function analyzeV3(ticker) {
 
 // ── Main scan ─────────────────────────────────────────────────
 
+// Per-symbol cooldown: key = `${symbol}:${side}`, value = timestamp of last signal.
+// Prevents the same setup firing 3× in a row during a consolidation range.
+const _lastSignalAt = new Map();
+const SIGNAL_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
+
 async function scanV3(log = console.log) {
   const tickers = await fetchTickers();
   if (!tickers.length) {
@@ -1448,12 +1453,20 @@ async function scanV3(log = console.log) {
 
   log(`v3: scanning ${top30.length} symbols…`);
 
+  const now = Date.now();
   const results = [];
   for (const ticker of top30) {
     const sig = await analyzeV3(ticker);
     if (sig) {
-      results.push(sig);
-      log(`  ✓ ${sig.symbol} ${sig.side} score=${sig.score} — ${sig.setupName}`);
+      const cooldownKey = `${sig.symbol}:${sig.side}`;
+      const lastAt = _lastSignalAt.get(cooldownKey) || 0;
+      if (now - lastAt < SIGNAL_COOLDOWN_MS) {
+        log(`  ⏸ ${sig.symbol} ${sig.side} — cooldown (${Math.round((SIGNAL_COOLDOWN_MS - (now - lastAt)) / 1000)}s left)`);
+      } else {
+        _lastSignalAt.set(cooldownKey, now);
+        results.push(sig);
+        log(`  ✓ ${sig.symbol} ${sig.side} score=${sig.score} — ${sig.setupName}`);
+      }
     }
     await new Promise(r => setTimeout(r, 200));
   }
