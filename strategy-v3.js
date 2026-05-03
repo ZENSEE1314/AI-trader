@@ -1100,11 +1100,19 @@ async function analyzeV3(ticker) {
       'MSTF+@15HL+1mHH',
       // High-leverage continuation after confirmed HH — overextended entry
       'MSTF+@15HH+1mHH+EMAUp',
-      // LiqGrab at OP going against intraday trend — 0% WR both directions
-      'LiqGrab+@OP+EMAUp',
-      'LiqGrab+@OP+EMADn',
+      // LiqGrab at OP — all variants net negative regardless of suffix
+      'LiqGrab+@OP',
       // LH confirmed on 15m but 1m shows LL — divergence, not pullback
       'MSTF+@15LH+1mLL',
+      // MomentumBreakout at RangeHigh = classic bull trap — 5-12% WR all variants
+      // RangeLow breakdowns work; RangeHigh breakouts are stop hunts
+      'MomentumBreakout+@RangeHigh',
+      // VWAPTrend shorts in downtrend — 0% WR; only VWAP longs (EMAUp) profitable
+      'VWAPTrend+@VWAP+EMADn',
+      // LiqGrab at PDH with vol spike — 8.3% WR, biggest $ loser (12 trades)
+      'LiqGrab+@PDH+EMAUp+VolSpike',
+      // BreakRetest at PDL in downtrend with vol spike — 0% WR
+      'BreakRetest+@PDL+EMADn+VolSpike',
     ];
     const isKnownLoser = KNOWN_LOSER_PREFIXES.some(pfx => setupName.startsWith(pfx));
     if (isKnownLoser) {
