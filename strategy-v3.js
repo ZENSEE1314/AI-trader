@@ -893,16 +893,25 @@ async function analyzeV3(ticker) {
     const setupName = parts.join('+');
 
     // ── Setup-aware blacklist (from 30-day backtest) ──────────
-    // These exact combinations had 0% WR or net negative across all
-    // trades. Block them outright regardless of any other gate.
-    const KNOWN_LOSERS = new Set([
-      'MSTF+@15HH+1mHH+EMAUp+VolSpike',
-      'MSTF+@15HH+1mHH+EMAUp',
-      'MSTF+@15LH+1mLL',
+    // Prefix-matched: any setup whose name STARTS WITH a known loser
+    // prefix is blocked, regardless of EMAUp/EMADn/VolSpike suffix.
+    // This prevents suffix variants from slipping through exact-match.
+    const KNOWN_LOSER_PREFIXES = [
+      // Double-LL confirmation (15m LL + 1m LL) — 0% WR across all variants
       'MSTF+@15LL+1mLL',
-      'LiqGrab+@OP+EMAUp', // 0% WR in latest run
-    ]);
-    if (KNOWN_LOSERS.has(setupName)) {
+      'MSTF+@3LL+1mLL+EMADn',
+      // Contradictory HTF signal: 15m HL but 1m HH — mixed structure
+      'MSTF+@15HL+1mHH',
+      // High-leverage continuation after confirmed HH — overextended entry
+      'MSTF+@15HH+1mHH+EMAUp',
+      // LiqGrab at OP going against intraday trend — 0% WR both directions
+      'LiqGrab+@OP+EMAUp',
+      'LiqGrab+@OP+EMADn',
+      // LH confirmed on 15m but 1m shows LL — divergence, not pullback
+      'MSTF+@15LH+1mLL',
+    ];
+    const isKnownLoser = KNOWN_LOSER_PREFIXES.some(pfx => setupName.startsWith(pfx));
+    if (isKnownLoser) {
       dlog(`null — KNOWN LOSER setup blocked: ${setupName} (0% WR backtest)`);
       return null;
     }
