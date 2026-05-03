@@ -62,10 +62,10 @@ const ACTIVE_SYMBOLS = [
   // ── 100x tier: deep liquidity, tight spread, low VWAP noise ──
   'BTCUSDT', 'ETHUSDT',
   // ── 75x tier: stable mid-caps — VWAPTrend allowed ────────────
-  'BNBUSDT', 'ADAUSDT', 'LTCUSDT', 'DOTUSDT', 'TRXUSDT',
+  'BNBUSDT', 'ADAUSDT',
   // ── 50x tier: higher volatility — VWAPTrend blocked ──────────
-  'SOLUSDT', 'XRPUSDT', 'LINKUSDT', 'AVAXUSDT',
-  'MATICUSDT',  // DOGEUSDT + NEARUSDT removed — consistent counter-trend losses
+  'SOLUSDT', 'XRPUSDT', 'AVAXUSDT', 'MATICUSDT',
+  // Removed: DOGEUSDT, NEARUSDT (counter-trend losses), LTCUSDT, DOTUSDT, TRXUSDT, LINKUSDT
 ];
 
 // Capital leverage per token.
