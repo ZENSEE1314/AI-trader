@@ -688,35 +688,31 @@ async function initAllTables() {
     console.log('[DB] Token leverage: SOLUSDT=50×, BNBUSDT=50×, XRPUSDT=50×');
   } catch (_) {}
 
-  // Clean up wrong symbols (renamed/delisted)
-  const badSymbols = ['MATICUSDT', 'PEPEUSDT', 'SHIBUSDT', 'STABLEUSDT', 'NIGHTUSDT'];
+  // Clean up truly delisted/invalid symbols only — do NOT remove active strategy tokens
+  const badSymbols = ['PEPEUSDT', 'SHIBUSDT', 'STABLEUSDT', 'NIGHTUSDT'];
   for (const sym of badSymbols) {
     try { await pool.query('DELETE FROM global_token_settings WHERE symbol = $1', [sym]); } catch (_) {}
   }
 
-  // Seed 4 core coins on first boot only — preserve any admin-added tokens on restarts
+  // Sync global_token_settings with ACTIVE_SYMBOLS — always upsert all 12 active tokens.
+  // This runs every boot so adding/removing coins from strategy-v3.js auto-syncs the DB.
   try {
-    const countRes = await pool.query('SELECT COUNT(*) FROM global_token_settings');
-    const tokenCount = parseInt(countRes.rows[0].count, 10);
-    if (tokenCount === 0) {
-      const defaults = [
-        { symbol: 'BTCUSDT',  rank: 1 },
-        { symbol: 'ETHUSDT',  rank: 2 },
-        { symbol: 'SOLUSDT',  rank: 3 },
-        { symbol: 'BNBUSDT',  rank: 4 },
-        { symbol: 'XRPUSDT',  rank: 5 },
-      ];
-      for (const d of defaults) {
-        await pool.query(
-          `INSERT INTO global_token_settings (symbol, enabled, banned, "rank")
-           VALUES ($1, true, false, $2)
-           ON CONFLICT (symbol) DO NOTHING`,
-          [d.symbol, d.rank]
-        );
-      }
-      console.log('[DB] Token pool seeded: BTCUSDT, ETHUSDT, SOLUSDT, BNBUSDT, XRPUSDT');
+    const { ACTIVE_SYMBOLS } = require('./strategy-v3');
+    const rankMap = {};
+    ACTIVE_SYMBOLS.forEach((sym, i) => { rankMap[sym] = i + 1; });
+    for (const sym of ACTIVE_SYMBOLS) {
+      await pool.query(
+        `INSERT INTO global_token_settings (symbol, enabled, banned, "rank")
+         VALUES ($1, true, false, $2)
+         ON CONFLICT (symbol) DO UPDATE
+           SET enabled = true, banned = false, "rank" = EXCLUDED."rank"`,
+        [sym, rankMap[sym]]
+      );
     }
-  } catch (_) {}
+    console.log(`[DB] Token pool synced: ${ACTIVE_SYMBOLS.join(', ')}`);
+  } catch (e) {
+    console.error('[DB] Token pool sync failed:', e.message);
+  }
 
   // Seed built-in strategy definitions on first boot
   try {
