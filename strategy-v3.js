@@ -729,6 +729,7 @@ function scoreSignal({ setup, bias, vwapBias, volSpike, rejCandle, ema9, ema21 }
   if (setup === 'MomentumBreakout') s += 9;  // impulse: base passes the score floor without
                                              // 15m confluence (which is unreliable mid-bar)
   if (setup === 'EQLiqSweep')      s += 12; // post-liquidity-sweep reversal: highest conviction
+  if (setup === 'ExhaustReverse')  s += 11; // double-TF exhaustion flip: blow-off top / capitulation
 
   // VWAP bias alignment bonus
   if (vwapBias) s += 2;
@@ -803,7 +804,7 @@ function _gateOn(disabled, name) { return !disabled.has(name); }
 
 // ── Analyze one symbol ────────────────────────────────────────
 
-async function analyzeV3(ticker) {
+async function analyzeV3(ticker, opts = {}) {
   try {
     const symbol = ticker.symbol;
     const price  = parseFloat(ticker.lastPrice);
@@ -1056,6 +1057,36 @@ async function analyzeV3(ticker) {
     const aboveVWAP = price > vwap;
     const vwapBias = (bias === 'long' && aboveVWAP) || (bias === 'short' && !aboveVWAP);
 
+    // ── Exhaustion Reversal: MSTF double-extreme flip ─────────
+    // When BOTH 15m and 1m are at the SAME structural extreme (both HH or
+    // both LL), the market is overextended — not a continuation entry but an
+    // exhaustion blow-off. Reverse the direction instead of following it.
+    //
+    // Evidence from 30-day backtest reversal test:
+    //   @15HH+1mHH+EMAUp → SHORT : 35% WR, +$245 (20 trades)
+    //   @15LL+1mLL+EMADn → LONG  : 40-50% WR, +$305 (15 trades)
+    //
+    // Condition: only flip when EMA confirms the overextension
+    //   15HH flip → SHORT only when ema9 > ema21 (uptrend = blow-off top)
+    //   15LL flip → LONG  only when ema9 < ema21 (downtrend = capitulation)
+    if (setup.setupName === 'MSTF') {
+      const lt = setup.levelType || '';
+      const is15HH = lt.startsWith('15HH') && lt.includes('1mHH');
+      const is15LL = lt.startsWith('15LL') && lt.includes('1mLL');
+
+      if (is15HH && bias === 'long' && ema9 && ema21 && ema9 > ema21) {
+        // Blow-off top: both TFs at highs in confirmed uptrend → SHORT
+        dlog(`ExhaustReverse SHORT — ${lt} with EMAUp: overextended top, flipping`);
+        setup = { ...setup, setupName: 'ExhaustReverse' };
+        bias  = 'short';
+      } else if (is15LL && bias === 'short' && ema9 && ema21 && ema9 < ema21) {
+        // Capitulation bottom: both TFs at lows in confirmed downtrend → LONG
+        dlog(`ExhaustReverse LONG — ${lt} with EMADn: capitulation bottom, flipping`);
+        setup = { ...setup, setupName: 'ExhaustReverse' };
+        bias  = 'long';
+      }
+    }
+
     // ── Score ─────────────────────────────────────────────────
     const score = scoreSignal({
       setup: setup.setupName,
@@ -1095,17 +1126,20 @@ async function analyzeV3(ticker) {
     const KNOWN_LOSER_PREFIXES = [
       // Double-LL confirmation (15m LL + 1m LL) — 0% WR across all variants
       'MSTF+@15LL+1mLL',
-      'MSTF+@3LL+1mLL+EMADn',
+      // 3m LL + 1m LL — same structural problem as 15m LL
+      'MSTF+@3LL+1mLL',
       // Contradictory HTF signal: 15m HL but 1m HH — mixed structure
       'MSTF+@15HL+1mHH',
-      // High-leverage continuation after confirmed HH — overextended entry
-      'MSTF+@15HH+1mHH+EMAUp',
+      // 15m HH + 1m HH: entering LONG after price already made a new 15m high
+      // = buying the extension, not the pullback. 0% WR across all variants.
+      // (3m HH entries work fine — only 15m HH is overextended)
+      'MSTF+@15HH+1mHH',
       // LiqGrab at OP — all variants net negative regardless of suffix
       'LiqGrab+@OP',
       // LH confirmed on 15m but 1m shows LL — divergence, not pullback
       'MSTF+@15LH+1mLL',
       // MomentumBreakout at RangeHigh = classic bull trap — 5-12% WR all variants
-      // RangeLow breakdowns work; RangeHigh breakouts are stop hunts
+      // NOTE: these are candidates for REVERSAL (BullTrap short) — see analyzeV3
       'MomentumBreakout+@RangeHigh',
       // VWAPTrend shorts in downtrend — 0% WR; only VWAP longs (EMAUp) profitable
       'VWAPTrend+@VWAP+EMADn',
@@ -1113,24 +1147,32 @@ async function analyzeV3(ticker) {
       'LiqGrab+@PDH+EMAUp+VolSpike',
       // BreakRetest at PDL in downtrend with vol spike — 0% WR
       'BreakRetest+@PDL+EMADn+VolSpike',
+      // BreakRetest at OP going LONG — OP is an arbitrary level, fails in Asia session
+      'BreakRetest+@OP+EMAUp',
+      // BreakRetest at OP with only VolSpike (no EMA direction) — 0% WR
+      'BreakRetest+@OP+VolSpike',
     ];
-    const isKnownLoser = KNOWN_LOSER_PREFIXES.some(pfx => setupName.startsWith(pfx));
-    if (isKnownLoser) {
-      dlog(`null — KNOWN LOSER setup blocked: ${setupName} (0% WR backtest)`);
-      return null;
-    }
+    // skipBlocklist: true allows the backtest to collect these signals for
+    // reversal testing (to see if flipping direction produces profit).
+    if (!opts.skipBlocklist) {
+      const isKnownLoser = KNOWN_LOSER_PREFIXES.some(pfx => setupName.startsWith(pfx));
+      if (isKnownLoser) {
+        dlog(`null — KNOWN LOSER setup blocked: ${setupName} (0% WR backtest)`);
+        return null;
+      }
 
-    // Exact-match blocklist: setups where only specific confirmed variants work.
-    // MomentumBreakout shorts at RangeLow need BOTH EMADn AND VolSpike —
-    // bare (0% WR) and EMADn-only (14% WR) are net losers; the +EMADn+VolSpike
-    // variant (28.6% WR) is kept by NOT using prefix blocking above.
-    const KNOWN_LOSERS_EXACT = new Set([
-      'MomentumBreakout+@RangeLow',
-      'MomentumBreakout+@RangeLow+EMADn',
-    ]);
-    if (KNOWN_LOSERS_EXACT.has(setupName)) {
-      dlog(`null — KNOWN LOSER exact match blocked: ${setupName}`);
-      return null;
+      // Exact-match blocklist: setups where only specific confirmed variants work.
+      // MomentumBreakout shorts at RangeLow need BOTH EMADn AND VolSpike —
+      // bare (0% WR) and EMADn-only (14% WR) are net losers; the +EMADn+VolSpike
+      // variant (28.6% WR) is kept by NOT using prefix blocking above.
+      const KNOWN_LOSERS_EXACT = new Set([
+        'MomentumBreakout+@RangeLow',
+        'MomentumBreakout+@RangeLow+EMADn',
+      ]);
+      if (KNOWN_LOSERS_EXACT.has(setupName)) {
+        dlog(`null — KNOWN LOSER exact match blocked: ${setupName}`);
+        return null;
+      }
     }
 
     // ── Setup quality tier — premium setups get looser gates ──
@@ -1140,7 +1182,6 @@ async function analyzeV3(ticker) {
     const PREMIUM_SETUPS = new Set([
       'VWAPTrend+@VWAP+EMAUp',
       'VWAPTrend+@VWAP+EMAUp+VolSpike',
-      'MSTF+@15HH+1mHH',
       'MSTF+@3HH+1mHH',
       'MSTF+@3LL+1mLL',
       // Trend-pullback setups: LH short in downtrend / HL long in uptrend
@@ -1161,6 +1202,10 @@ async function analyzeV3(ticker) {
       // EQLiqSweep: post-sweep reversal is the highest-conviction SMC entry.
       // Price hunts stops, closes back inside — now trade the reversal.
       'EQLiqSweep',
+      // ExhaustReverse: both 15m and 1m at the same extreme (HH/LL) — blow-off
+      // top (SHORT) or capitulation bottom (LONG). Looser gates justified because
+      // price is at the turning point, not mid-range.
+      'ExhaustReverse',
     ]);
     const isPremium = PREMIUM_SETUPS.has(setupName);
     if (isPremium) dlog(`PREMIUM setup ${setupName} — looser gates apply`);
@@ -1265,8 +1310,14 @@ async function analyzeV3(ticker) {
     );
     if (isTrendPullback) dlog(`trend-pullback ${side} (HTF+1m aligned ${side === 'SHORT' ? 'LH' : 'HL'}) — rPos/chase bypassed`);
 
+    // ExhaustReverse entries are counter-bias by design (going SHORT at the top
+    // of an uptrend, LONG at the bottom of a downtrend). The rPos gate would
+    // block them because price is AT the extreme end of the range (that's the
+    // point). Chase gate would block them for the same reason. Bypass both.
+    const isExhaustReverse = setup.setupName === 'ExhaustReverse';
+
     let rPos = null;
-    if (gate('rpos') && !isTrendPullback && k1m.length >= 11) {
+    if (gate('rpos') && !isTrendPullback && !isExhaustReverse && k1m.length >= 11) {
       const w20 = k1m.slice(-11, -1);
       let hi = -Infinity, lo = Infinity;
       for (const k of w20) {
@@ -1283,7 +1334,7 @@ async function analyzeV3(ticker) {
       }
     }
 
-    if (gate('chase') && !isTrendPullback && k1m.length >= 31) {
+    if (gate('chase') && !isTrendPullback && !isExhaustReverse && k1m.length >= 31) {
       const w30 = k1m.slice(-31, -1);
       let lo30 = Infinity, hi30 = -Infinity;
       for (const k of w30) {
