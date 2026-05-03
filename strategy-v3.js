@@ -917,6 +917,19 @@ async function analyzeV3(ticker) {
       'MSTF+@15HH+1mHH',
       'MSTF+@3HH+1mHH',
       'MSTF+@3LL+1mLL',
+      // Trend-pullback setups: LH short in downtrend / HL long in uptrend
+      // These are the highest-confidence SMC entries — entering at the
+      // retracement pivot, not chasing. rPos/chase already bypassed via
+      // isTrendPullback; premium tier gives them the signal score boost.
+      'MSTF+@15LH+1mLH',
+      'MSTF+@3LH+1mLH',
+      'MSTF+@15LH+1mLH+EMADn',
+      'MSTF+@3LH+1mLH+EMADn',
+      'MSTF+@15LH+1mLH+EMADn+VolSpike',
+      'MSTF+@15HL+1mHL',
+      'MSTF+@3HL+1mHL',
+      'MSTF+@15HL+1mHL+EMAUp',
+      'MSTF+@3HL+1mHL+EMAUp',
       'LiqGrab+@PDH+EMAUp',
       'LiqGrab+@PDH+EMAUp+VolSpike',
     ]);
@@ -1011,8 +1024,20 @@ async function analyzeV3(ticker) {
       }
     }
 
+    // Trend-pullback entry: LH in a downtrend, or HL in an uptrend.
+    // The retracement pivot IS the correct SMC short/long entry — it is
+    // by definition not at an extreme of the recent range (it sits mid-range
+    // between the last LL and the new LH). The rPos gate would block it for
+    // being "too low" and the chase gate would block it for being "below the
+    // 30m high". Both are wrong for this entry type — bypass both.
+    const isTrendPullback = (
+      (side === 'SHORT' && htfBearEither && s1bias?.lh && !s1bias?.hl) ||
+      (side === 'LONG'  && htfBullEither && s1bias?.hl && !s1bias?.lh)
+    );
+    if (isTrendPullback) dlog(`trend-pullback ${side} (HTF+1m aligned ${side === 'SHORT' ? 'LH' : 'HL'}) — rPos/chase bypassed`);
+
     let rPos = null;
-    if (gate('rpos') && k1m.length >= 11) {
+    if (gate('rpos') && !isTrendPullback && k1m.length >= 11) {
       const w20 = k1m.slice(-11, -1);
       let hi = -Infinity, lo = Infinity;
       for (const k of w20) {
@@ -1029,8 +1054,7 @@ async function analyzeV3(ticker) {
       }
     }
 
-    // strongTrend bypass removed — chase distance ALWAYS applies.
-    if (gate('chase') && k1m.length >= 31) {
+    if (gate('chase') && !isTrendPullback && k1m.length >= 31) {
       const w30 = k1m.slice(-31, -1);
       let lo30 = Infinity, hi30 = -Infinity;
       for (const k of w30) {
