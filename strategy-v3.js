@@ -61,6 +61,8 @@ const REQUEST_TIMEOUT = 15_000;
 const ACTIVE_SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT'];
 
 // Capital leverage per token. BTC/ETH at 100x, SOL/BNB/XRP at 50x.
+// NOTE: higher leverage tightens the price SL distance — SOL/XRP are too volatile
+// for 100x; 50x gives 0.5% price breathing room vs 0.25% at 100x.
 const SYMBOL_LEVERAGE = {
   BTCUSDT: 100,
   ETHUSDT: 100,
@@ -1138,6 +1140,10 @@ async function analyzeV3(ticker, opts = {}) {
       'LiqGrab+@OP',
       // LH confirmed on 15m but 1m shows LL — divergence, not pullback
       'MSTF+@15LH+1mLL',
+      // 15m LH + 1m LH — lower high on both TFs = conflicting bias, 0% WR on XRP/SOL
+      'MSTF+@15LH+1mLH',
+      // 15m LL + 1m LH — lower low HTF but 1m already bouncing = counter-signal, 0% WR
+      'MSTF+@15LL+1mLH',
       // MomentumBreakout at RangeHigh = classic bull trap — 5-12% WR all variants
       // NOTE: these are candidates for REVERSAL (BullTrap short) — see analyzeV3
       'MomentumBreakout+@RangeHigh',
@@ -1151,6 +1157,8 @@ async function analyzeV3(ticker, opts = {}) {
       'BreakRetest+@OP+EMAUp',
       // BreakRetest at OP with only VolSpike (no EMA direction) — 0% WR
       'BreakRetest+@OP+VolSpike',
+      // MSTF 3m HH + 1m HH with EMAUp — buying extended 3m high, 0% WR all variants
+      'MSTF+@3HH+1mHH+EMAUp',
     ];
     // skipBlocklist: true allows the backtest to collect these signals for
     // reversal testing (to see if flipping direction produces profit).
@@ -1168,6 +1176,12 @@ async function analyzeV3(ticker, opts = {}) {
       const KNOWN_LOSERS_EXACT = new Set([
         'MomentumBreakout+@RangeLow',
         'MomentumBreakout+@RangeLow+EMADn',
+        // VWAPTrend bare LONG — 10% WR; only the +VolSpike variant (83% WR) is valid
+        'VWAPTrend+@VWAP+EMAUp',
+        // VolSpike alone without EMADn+VolSpike quality — 0% WR persistent across all runs
+        'MomentumBreakout+@RangeLow+VolSpike',
+        // LiqGrab shorts at PDL in downtrend with VolSpike — 20% WR, net loser
+        'LiqGrab+@PDL+EMADn+VolSpike',
       ]);
       if (KNOWN_LOSERS_EXACT.has(setupName)) {
         dlog(`null — KNOWN LOSER exact match blocked: ${setupName}`);

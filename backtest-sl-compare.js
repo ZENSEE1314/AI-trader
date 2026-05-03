@@ -37,7 +37,7 @@ const SYSTEMS = [
   { name: 'System 80 (80%)', trailOn: 0.81, firstLock: 0.80 },
 ];
 
-const INITIAL_SL_CAP = 0.10;  // 10% capital initial SL (same for both)
+const INITIAL_SL_CAP = 0.25;  // 25% capital initial SL (same for both)
 
 // ── Helpers ──────────────────────────────────────────────────
 function fmtUsd(n)  { return Number.isFinite(n) ? `$${n.toFixed(2)}` : '—'; }
@@ -162,11 +162,18 @@ function aggregate(klines1m, nMin) {
 }
 
 // ── Simulate one system on a pre-collected signal list ───────
-// signals: [{ entryTs, entry, side, setup, k1m (remaining bars after entry) }]
+// signals: [{ entryTs, entry, side, setup, k1mAfter, ... }]
+// Enforces sequential trades: if a signal fires while a previous trade
+// is still open (based on actual exit timestamp), it is skipped.
+// This makes the result independent of the signal collection logic.
 function simulateSystem(signals, leverage, sys) {
   const trades = [];
+  let lastExitTs = 0; // timestamp when the last trade closed
 
   for (const sig of signals) {
+    // Skip if this signal arrived while a prior trade was still open
+    if (sig.entryTs < lastExitTs) continue;
+
     const { entry, side, setup, k1mAfter, entryTs } = sig;
     const isLong = side === 'LONG';
     let sl = isLong
@@ -203,6 +210,8 @@ function simulateSystem(signals, leverage, sys) {
       exitReason = 'EOD';
     }
 
+    lastExitTs = exitTs; // gate: next signal must start after this trade closed
+
     const pnlPct = isLong
       ? (exitPrice - entry) / entry
       : (entry - exitPrice) / entry;
@@ -213,6 +222,16 @@ function simulateSystem(signals, leverage, sys) {
 
   return trades;
 }
+
+// ── Entry confirmation buffer per symbol ────────────────────
+// For volatile coins, don't enter at the exact signal bar close.
+// Wait until price moves this % in the signal direction first.
+// If price immediately reverses and never confirms, skip the entry → zero loss.
+// At 50x: 0.15% price = 7.5% capital move before entry (filters noise reversals).
+const CONFIRM_PCT = {
+  SOLUSDT: 0.0008,  // 0.08% price confirmation — filters immediate reversals, keeps more trades
+  XRPUSDT: 0.0005,  // 0.05% price confirmation — light filter for XRP
+};
 
 // ── Known-loser reversal candidates ─────────────────────────
 // These are setups that were 0-12% WR as-is but may be profitable
@@ -265,31 +284,17 @@ async function runSymbol(symbol) {
   }
 
   // ── Signal collection pass (run analyzeV3 once per bar) ──
+  // Collects ALL candidate signals with NO inTrade gating — the simulation
+  // enforces "one trade at a time" via lastExitTs, making trade counts
+  // independent of SL size. Different SL configs see the same signal set.
   const signals = [];
-  let inTrade = false;
   let analyzeCalls = 0, analyzeErrs = 0;
+  const confirmPct = CONFIRM_PCT[symbol] || 0;
 
   for (let i = 100; i < k1m.length - 1; i++) {
     const bar   = k1m[i];
     const ts    = parseInt(bar[0]);
     const close = parseFloat(bar[4]);
-
-    // Simple "one trade at a time" gate — skip if in trade
-    // (use System 5 SL as the gating trade so we don't double-count signals)
-    if (inTrade) {
-      // Check if the last open trade would have exited by now
-      const lastSig = signals[signals.length - 1];
-      if (lastSig) {
-        const isLong = lastSig.side === 'LONG';
-        const slSys5 = calcSL(lastSig.entry, close, lastSig.side, lev, 0.46, 0.45);
-        const high = parseFloat(bar[2]);
-        const low  = parseFloat(bar[3]);
-        if (isLong ? low <= slSys5 : high >= slSys5) inTrade = false;
-        // Also exit if we've been in trade > 7 days (10080 min) — prevents lock-up
-        if (ts - lastSig.entryTs > 7 * 24 * 60 * 60 * 1000) inTrade = false;
-      }
-      if (inTrade) continue;
-    }
 
     const i3m  = lastIdxAtOrBefore(byTs['3m'],  ts);
     const i15m = lastIdxAtOrBefore(byTs['15m'], ts);
@@ -313,19 +318,39 @@ async function runSymbol(symbol) {
 
     if (!sig || !sig.direction) continue;
 
-    // Capture the remaining 1m bars after entry (up to 7 days) for simulation
-    const k1mAfter = k1m.slice(i + 1, Math.min(k1m.length, i + 1 + 7 * 1440));
+    // ── Confirmation buffer (volatile symbols) ──────────────
+    // For SOL/XRP: don't enter at exact signal close. Scan the next
+    // few bars until price has moved confirmPct% in the signal direction.
+    // If price immediately reverses and never confirms → skip (zero loss).
+    let entryBarIdx = i;
+    let entryPrice  = close;
+    if (confirmPct > 0) {
+      const isLong = sig.direction === 'LONG';
+      let confirmed = false;
+      for (let j = i + 1; j < Math.min(k1m.length, i + 6); j++) {
+        const c    = parseFloat(k1m[j][4]);
+        const moved = isLong ? (c - close) / close : (close - c) / close;
+        if (moved >= confirmPct) {
+          entryBarIdx = j;
+          entryPrice  = c;
+          confirmed   = true;
+          break;
+        }
+      }
+      if (!confirmed) continue; // reversed before confirming → skip
+    }
+
+    const k1mAfter = k1m.slice(entryBarIdx + 1, Math.min(k1m.length, entryBarIdx + 1 + 7 * 1440));
     if (!k1mAfter.length) continue;
 
     signals.push({
-      entryTs: ts,
-      entry:   close,
+      entryTs: parseInt(k1m[entryBarIdx][0]),
+      entry:   entryPrice,
       side:    sig.direction,
       setup:   sig.setupName || 'unknown',
       score:   sig.score || 0,
       k1mAfter,
     });
-    inTrade = true;
   }
 
   console.log(`  signals found: ${signals.length}  (analyzeV3 calls=${analyzeCalls} errs=${analyzeErrs})`);
@@ -515,6 +540,27 @@ function stats(trades) {
     if (!dt.length) continue;
     const s = stats(dt);
     console.log(`  ${dir.padEnd(6)}  ${s.total} trades   W=${s.wins}  L=${s.losses}   WR=${s.wr.toFixed(1)}%   avg win=${fmtUsd(s.avgWin)}   avg loss=${fmtUsd(s.avgLoss)}   net=${fmtUsd(s.net)}`);
+  }
+
+  // ── Per-symbol setup breakdown ───────────────────────────
+  console.log('\n══════════ PER-SYMBOL SETUP BREAKDOWN ═════════════════════════════');
+  for (const r of allSymResults) {
+    const trades = r.results[SYS5.name].map(t => ({ ...t, symbol: r.symbol, lev: r.lev }));
+    if (!trades.length) continue;
+    const symSetups = {};
+    for (const t of trades) {
+      if (!symSetups[t.setup]) symSetups[t.setup] = { wins: 0, losses: 0, net: 0 };
+      symSetups[t.setup].net += t.pnlUsd;
+      if (t.pnlUsd > 0) symSetups[t.setup].wins++; else symSetups[t.setup].losses++;
+    }
+    const ss = stats(trades);
+    console.log(`\n  ${r.symbol} (${r.lev}x)  ${ss.total} trades  ${ss.wr.toFixed(1)}% WR  net ${fmtUsd(ss.net)}`);
+    for (const [name, v] of Object.entries(symSetups).sort((a, b) => a[1].net - b[1].net)) {
+      const n = v.wins + v.losses;
+      const wr = (v.wins / n * 100).toFixed(0);
+      const marker = v.net < 0 ? ' ◄' : '';
+      console.log(`    ${pad(name, 42)} ${rpad(n, 2)}t  ${rpad(wr + '%', 5)} WR  ${rpad(fmtUsd(v.net), 9)}${marker}`);
+    }
   }
 
   // ── Losing setups detail ─────────────────────────────────
