@@ -1120,6 +1120,19 @@ async function analyzeV3(ticker) {
       return null;
     }
 
+    // Exact-match blocklist: setups where only specific confirmed variants work.
+    // MomentumBreakout shorts at RangeLow need BOTH EMADn AND VolSpike —
+    // bare (0% WR) and EMADn-only (14% WR) are net losers; the +EMADn+VolSpike
+    // variant (28.6% WR) is kept by NOT using prefix blocking above.
+    const KNOWN_LOSERS_EXACT = new Set([
+      'MomentumBreakout+@RangeLow',
+      'MomentumBreakout+@RangeLow+EMADn',
+    ]);
+    if (KNOWN_LOSERS_EXACT.has(setupName)) {
+      dlog(`null — KNOWN LOSER exact match blocked: ${setupName}`);
+      return null;
+    }
+
     // ── Setup quality tier — premium setups get looser gates ──
     // VWAPTrend+EMAUp had 66.7% WR / +$144 — the star. Premium
     // setups can fire at chase ≤0.15% and rPos ≤15% instead of
