@@ -3009,7 +3009,7 @@
               <span style="font-size:0.7rem;color:${chgColor};">${chg >= 0 ? '+' : ''}${chg.toFixed(1)}%</span>
               ${signalDot}
             </div>
-            ${on ? `<input type="number" class="form-input text-mono" value="${t.userLeverage || 20}" min="1" max="125" style="width:100%;font-size:0.68rem;padding:2px 4px;margin-top:3px;text-align:center;" onchange="window.CryptoBot.setUserLeverage('${t.symbol}',this.value)" title="Your leverage">` : ''}
+            ${on ? `<div style="margin-top:4px;text-align:center;font-size:0.72rem;font-weight:700;color:var(--color-accent);letter-spacing:0.03em;">×${t.stratLeverage || 20}</div>` : ''}
           </div>`;
         }).join('');
       }

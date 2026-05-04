@@ -758,15 +758,9 @@ router.get('/signal-board', async (req, res) => {
     // One call for all symbols beats N parallel per-symbol calls on every page load
     const priceMap = await getSignalBoardPrices(symbols);
 
-    // Get user's per-token leverage
-    let userLevMap = {};
-    try {
-      const keys = await query('SELECT id FROM api_keys WHERE user_id = $1 LIMIT 1', [req.userId]);
-      if (keys.length) {
-        const levs = await query('SELECT symbol, leverage FROM user_token_leverage WHERE api_key_id = $1', [keys[0].id]);
-        for (const l of levs) userLevMap[l.symbol] = parseInt(l.leverage);
-      }
-    } catch {}
+    // Strategy leverage — fixed per symbol, not user-configurable
+    const { SYMBOL_LEVERAGE } = require('../strategy-v3');
+    const stratLevMap = SYMBOL_LEVERAGE || {};
 
     // Get admin risk tags
     let riskTags = {};
@@ -786,7 +780,7 @@ router.get('/signal-board', async (req, res) => {
         watching: watchMap[sym] === true,
         riskTag: riskTags[sym]?.risk || null,
         featured: riskTags[sym]?.featured || false,
-        userLeverage: userLevMap[sym] || 20,
+        stratLeverage: stratLevMap[sym] || 20,
       };
     });
 
