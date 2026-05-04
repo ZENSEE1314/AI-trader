@@ -883,7 +883,6 @@ router.put('/watchlist/:symbol/toggle', async (req, res) => {
 });
 
 // Kronos AI predictions — read from DB (persisted across processes)
-const KRONOS_SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT'];
 const kronosCache = new Map(); // key → { data, ts }
 const KRONOS_CACHE_TTL = 60_000; // predictions update every few minutes, cache 60s
 
@@ -892,7 +891,8 @@ router.get('/kronos-predictions', async (req, res) => {
     const cached = kronosCache.get('global');
     if (cached && Date.now() - cached.ts < KRONOS_CACHE_TTL) return res.json(cached.data);
 
-    // Read from DB — only the 4 trading tokens, predictions fresher than 15 min
+    // Read from DB — all active trading tokens, predictions fresher than 15 min
+    const { ACTIVE_SYMBOLS } = require('../strategy-v3');
     const rows = await query(
       `SELECT symbol, direction, current_price, predicted_price, change_pct,
               confidence, trend, pred_high, pred_low, scanned_at
@@ -900,7 +900,7 @@ router.get('/kronos-predictions', async (req, res) => {
        WHERE scanned_at > NOW() - INTERVAL '15 minutes'
          AND symbol = ANY($1)
        ORDER BY ABS(change_pct) DESC`,
-      [KRONOS_SYMBOLS]
+      [ACTIVE_SYMBOLS]
     );
 
     const predictions = rows.map(r => ({
