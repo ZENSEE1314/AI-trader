@@ -115,7 +115,6 @@
     ['seat-ada',     { seatCol: 4,  seatRow: 5,  facingDir: Dir.UP, assigned: false }],
     ['seat-xrp',     { seatCol: 6,  seatRow: 5,  facingDir: Dir.UP, assigned: false }],
     ['seat-avax',    { seatCol: 2,  seatRow: 7,  facingDir: Dir.UP, assigned: false }],
-    ['seat-matic',   { seatCol: 4,  seatRow: 7,  facingDir: Dir.UP, assigned: false }],
     // ── Room 2: Coord Office (cols 9-15, rows 1-7) ────────────
     ['seat-coord',   { seatCol: 12, seatRow: 3,  facingDir: Dir.UP, assigned: false }],
     // ── Room 3: Coder Lab (cols 17-23, rows 1-7) ──────────────
@@ -149,8 +148,8 @@
   const STATIC_BLOCKED = [
     // Each chair is one tile. Pathfinding unblocks the seat per-character
     // when the character is on it (see isWalkable usage).
-    // Room 1 — Trader Hall (8 chairs: 3 rows × cols 2,4,6)
-    '2,3','4,3','6,3', '2,5','4,5','6,5', '2,7','4,7',
+    // Room 1 — Trader Hall (7 chairs: rows 3/5 full, row 7 left only)
+    '2,3','4,3','6,3', '2,5','4,5','6,5', '2,7',
     // Room 2 — Coord Office
     '12,3',
     // Room 3 — Coder Lab
@@ -180,7 +179,6 @@
     { id: 6,  symbol: 'XRPUSDT',  label: 'XRP',   palette: 0, seatId: 'seat-xrp',   role: 'trader' },
     { id: 21, symbol: 'ADAUSDT',  label: 'ADA',   palette: 1, seatId: 'seat-ada',   role: 'trader' },
     { id: 22, symbol: 'AVAXUSDT', label: 'AVAX',  palette: 2, seatId: 'seat-avax',  role: 'trader' },
-    { id: 23, symbol: 'MATICUSDT',label: 'MATIC', palette: 3, seatId: 'seat-matic', role: 'trader' },
     { id: 4,  symbol: null,      label: 'COORD',  palette: 4, seatId: 'seat-coord',  role: 'coordinator' },
     { id: 5,  symbol: null,      label: 'CODER',  palette: 5, seatId: 'seat-coder',  role: 'coder' },
     // ── AI Lab — backend agents ──────────────────────────────
@@ -876,7 +874,6 @@
         XRP: 'XRP',   XRPUSDT: 'XRP',
         ADA: 'ADA',   ADAUSDT: 'ADA',
         AVAX: 'AVAX', AVAXUSDT: 'AVAX',
-        MATIC: 'MATIC', MATICUSDT: 'MATIC',
         COORD: 'COORD', COORDINATOR: 'COORD',
         CODER: 'CODER', DEV: 'CODER',
         ALL: 'ALL', TEAM: 'ALL', EVERYONE: 'ALL',
