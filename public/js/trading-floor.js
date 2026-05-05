@@ -1223,10 +1223,12 @@
     // ── Sidebar: agent list ─────────────────────────────────────
     _renderAgentList() {
       if (!this.listEl) return;
+      // Only show token trader agents in the sidebar (those with a symbol)
+      const traderAgents = AGENTS.filter(a => a.symbol !== null && a.role === 'trader');
       // Build only once; afterwards just patch dynamic nodes
-      if (this.listEl.children.length !== AGENTS.length) {
+      if (this.listEl.children.length !== traderAgents.length) {
         this.listEl.innerHTML = '';
-        for (const def of AGENTS) {
+        for (const def of traderAgents) {
           const meta = ROLE_META[def.role] || ROLE_META.trader;
           const li = document.createElement('li');
           li.dataset.aid = def.id;
@@ -1246,7 +1248,7 @@
         }
       }
       for (const ch of this.characters) {
-        const def = AGENTS.find(a => a.id === ch.id);
+        const def = traderAgents.find(a => a.id === ch.id);
         if (!def) continue;
         const li = this.listEl.querySelector('li[data-aid="' + def.id + '"]');
         if (!li) continue;

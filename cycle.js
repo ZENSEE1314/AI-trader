@@ -98,9 +98,9 @@ const TAKER_FEE_BOTH_LEGS = 0.0008;
 // Per-user rule: trigger is exactly 1% above the lock at every tier
 // (e.g. +21% profit locks +20%, +31% locks +30%, +41% locks +40%, ...).
 // This table is used for HIGH-leverage trades (>= 100x — BTC, ETH).
+// First tier starts at +31% capital (user request — gives trade more room before locking).
 const TRAILING_TIERS = [
-  { trigger: 0.21, lock: 0.20 }, // +21% capital → SL locks at +20%   — 1% gap
-  { trigger: 0.31, lock: 0.30 }, // +31% capital → SL locks at +30%   — 1% gap
+  { trigger: 0.31, lock: 0.30 }, // +31% capital → SL locks at +30%   — 1% gap (first tier)
   { trigger: 0.41, lock: 0.40 }, // +41% capital → SL locks at +40%   — 1% gap
   { trigger: 0.51, lock: 0.50 }, // +51% capital → SL locks at +50%   — 1% gap
   { trigger: 0.61, lock: 0.60 }, // +61% capital → SL locks at +60%   — 1% gap
@@ -120,8 +120,7 @@ const TRAILING_TIERS = [
 // the lock by +10%. The gap therefore widens by 1% each step
 // (16/15→1%, 27/25→2%, 38/35→3%, ...).
 const TRAILING_TIERS_50X = [
-  { trigger: 0.16, lock: 0.15 }, // +16% → +15%
-  { trigger: 0.27, lock: 0.25 }, // +27% → +25%
+  { trigger: 0.31, lock: 0.30 }, // +31% → +30% (first tier)
   { trigger: 0.38, lock: 0.35 }, // +38% → +35%
   { trigger: 0.49, lock: 0.45 }, // +49% → +45%
   { trigger: 0.60, lock: 0.55 }, // +60% → +55%

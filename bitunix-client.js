@@ -240,6 +240,44 @@ class BitunixClient {
     return res.json();
   }
 
+  // ── Asset / Deposit (uses api.bitunix.com, not fapi) ───────
+  // NOTE: Bitunix has one deposit address per coin/network.  All users
+  // send to the same address.  Match is done by txHash that the user provides.
+
+  async getDepositHistory({ coin = 'USDT', pageNum = 1, pageSize = 20 } = {}) {
+    // Bitunix asset API lives on api.bitunix.com (not fapi)
+    const ASSET_BASE = 'https://api.bitunix.com';
+    const params = { coin, pageNum, pageSize };
+    const queryParamStr = this._buildQueryParamStr(params);
+    const queryString   = this._buildQueryString(params);
+    const { headers }   = this._sign(queryParamStr, '');
+
+    const url = `${ASSET_BASE}/api/v1/account/asset/getDepositList${queryString}`;
+    const res = await fetch(url, { method: 'GET', headers, timeout: REQUEST_TIMEOUT, ...getFetchOptions() });
+    const rawBody = await res.text();
+    let json;
+    try { json = JSON.parse(rawBody); } catch {
+      throw new Error(`Bitunix deposit API returned non-JSON: ${rawBody.substring(0, 200)}`);
+    }
+    // Tolerate code 0 (success) or missing code (some endpoints omit it)
+    if (json.code !== undefined && json.code !== 0) {
+      throw new Error(`Bitunix deposit API error: ${json.msg} (code ${json.code})`);
+    }
+    const data = json.data || {};
+    return Array.isArray(data) ? data : (data.list || data.depositList || data.records || []);
+  }
+
+  // Verify a specific txHash — returns deposit record or null
+  async verifyDepositByTxHash(txHash, { coin = 'USDT' } = {}) {
+    // Fetch recent 100 deposits and find by txHash
+    const list = await this.getDepositHistory({ coin, pageSize: 100 });
+    const match = list.find(d => {
+      const tx = (d.txId || d.txHash || d.hash || d.transactionId || '').toLowerCase();
+      return tx === txHash.toLowerCase();
+    });
+    return match || null;
+  }
+
   // ── Market Data ────────────────────────────────────────────
 
   async getMarketPrice(symbol) {

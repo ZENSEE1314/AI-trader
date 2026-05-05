@@ -846,12 +846,16 @@ function detectMSTF(klines15m, klines3m, klines1m, bias) {
   // than the previous one), which is a bearish topping pattern. Require:
   //   LONG  → s1.hh, OR (s1.hl AND no coexisting s1.lh)
   //   SHORT → s1.ll, OR (s1.lh AND no coexisting s1.hl)
-  const ltfBull = s1.hh || (s1.hl && !s1.lh);
-  const ltfBear = s1.ll || (s1.lh && !s1.hl);
-
   // Either HTF can supply bullish or bearish confirmation.
   const htfBull = (s15 && (s15.hh || s15.hl)) || (s3 && (s3.hh || s3.hl));
   const htfBear = (s15 && (s15.ll || s15.lh)) || (s3 && (s3.ll || s3.lh));
+
+  // ltfBull / ltfBear — what the 1m structure says:
+  //   HH alone = clean bullish breakout
+  //   HL without LH = clean higher low (pullback buy)
+  //   LH present = compression / topping — no trade
+  const ltfBull = s1.hh || (s1.hl && !s1.lh);
+  const ltfBear = s1.ll || (s1.lh && !s1.hl);
 
   // Block only when BOTH HTFs are confirmed-counter (or the only-one-
   // available HTF is confirmed-counter) — otherwise the trade can fire.
@@ -945,14 +949,14 @@ function scoreSignal({ setup, bias, vwapBias, volSpike, rejCandle, ema9, ema21 }
 }
 
 // ── Trailing SL — System 5 (capital % — v3 rules) ────────────
-//   Initial SL:   10% capital = 10%/leverage price move
+//   Initial SL:   25% capital = 25%/leverage price move
 //   Trail starts: +46% capital profit → first lock at +45%
 //   Steps:        +10% SL every +11% capital gain thereafter
 //
-//   With leverage=20, entry=$1000:
-//     +46% capital (+2.30% price) → SL at entry +2.25% (+45% capital locked)
-//     +57% capital (+2.85% price) → SL at entry +2.75% (+55% capital locked)
-//     +68% capital (+3.40% price) → SL at entry +3.25% (+65% capital locked)
+//   With leverage=50, entry=84.03 (SOL):
+//     Initial SL: 25%/50 = 0.5% price move → SL at 83.61
+//     +46% capital (+0.92% price) → SL at entry +0.90% (+45% capital locked)
+//     +57% capital (+1.14% price) → SL at entry +1.10% (+55% capital locked)
 
 function calcTrailingSLV3(entryPrice, currentPrice, side, leverage = 1) {
   const pricePct =
@@ -962,8 +966,8 @@ function calcTrailingSLV3(entryPrice, currentPrice, side, leverage = 1) {
 
   const capitalPct = pricePct * leverage;
 
-  // System 5: 10% initial SL, trail triggers at +46%, first lock +45%
-  const INITIAL_SL_CAP = 0.10;  // 10% capital initial stop
+  // System 5: 25% initial SL, trail triggers at +46%, first lock +45%
+  const INITIAL_SL_CAP = 0.25;  // 25% capital initial stop
   const TRAIL_ON_CAP   = 0.46;  // trailing kicks in at +46% capital
 
   if (capitalPct < TRAIL_ON_CAP - 0.0001) {
@@ -1128,7 +1132,11 @@ async function analyzeV3(ticker, opts = {}) {
       }
     }
 
-    const aboveOP   = price > levels.op;
+    // OP near-neutral zone ±0.5%: when price is within 0.5% of the session
+    // open, treat it as "at OP" (neither above nor below). This prevents
+    // HL entries that form just below OP from getting SHORT opVwapBias
+    // when the 1m structure is clearly bullish (recovery scenario).
+    const aboveOP = price > levels.op;
     const vwapDiff  = (price - vwap) / vwap;
     let opVwapBias = null;
     if      (aboveOP  && vwapDiff >= -0.015) opVwapBias = 'long';
@@ -1145,8 +1153,9 @@ async function analyzeV3(ticker, opts = {}) {
     // HL alone and let LONG fire into the LH (resistance).
     const s15trend = detectStructure(klines15m, 3);
     const s3trend  = klines3m ? detectStructure(klines3m, 3) : null;
-    const isHtfBull = (s) => s && ((s.hh && !s.ll) || (s.hl && !s.lh && !s.ll));
-    const isHtfBear = (s) => s && ((s.ll && !s.hh) || (s.lh && !s.hl && !s.hh));
+    // HTF bull/bear: require directional pivot without opposite interference.
+    const isHtfBull = (s) => s && ((s.hh && !s.ll && !s.lh) || (s.hl && !s.ll && !s.lh));
+    const isHtfBear = (s) => s && ((s.ll && !s.hh && !s.hl) || (s.lh && !s.hh && !s.hl));
     // User: "yes 3min also ok" — restore (15m OR 3m) HTF acceptance.
     const htfBullEither = isHtfBull(s15trend) || isHtfBull(s3trend);
     const htfBearEither = isHtfBear(s15trend) || isHtfBear(s3trend);
@@ -1159,6 +1168,7 @@ async function analyzeV3(ticker, opts = {}) {
     if (structBias && opVwapBias && structBias === opVwapBias) {
       // 1m + OP/VWAP agree. HTF gate (if enabled) must also agree.
       if (gate('htf')) {
+        // Either 15m or 3m must confirm the direction
         if      (structBias === 'long'  && htfBullEither) bias = 'long';
         else if (structBias === 'short' && htfBearEither) bias = 'short';
       } else {
@@ -1172,15 +1182,12 @@ async function analyzeV3(ticker, opts = {}) {
 
     // ── 1h regime gate ─────────────────────────────────────────
     // User rule: "bull no short and bear no long". 1h structure
-    // determines market regime. LOOSE definition (backtest showed
-    // +$140 / 14% on $1000 / 30 days vs +$51 with strict version):
-    //   bullRegime: 1h has (HH or HL) AND no LL
-    //   bearRegime: 1h has (LL or LH) AND no HH
-    // Allowing both flags true (squeeze) keeps trade frequency up;
-    // the per-trade gates (zone, chase, range-pos) handle quality.
+    // determines market regime.
+    //   bullRegime: 1h has HH (no LL) — clear uptrend
+    //   bearRegime: 1h has LL (no HH) — clear downtrend
     const s1hRegime = klines1h ? detectStructure(klines1h, 3) : null;
-    const bullRegime = s1hRegime && (s1hRegime.hh || s1hRegime.hl) && !s1hRegime.ll;
-    const bearRegime = s1hRegime && (s1hRegime.ll || s1hRegime.lh) && !s1hRegime.hh;
+    const bullRegime = s1hRegime && s1hRegime.hh && !s1hRegime.ll;
+    const bearRegime = s1hRegime && s1hRegime.ll && !s1hRegime.hh;
     if (gate('regime')) {
       if (bias === 'long'  && !bullRegime) {
         dlog(`null — LONG blocked: 1h regime not bullish`);
@@ -1379,8 +1386,8 @@ async function analyzeV3(ticker, opts = {}) {
     const side = bias === 'long' ? 'LONG' : 'SHORT';
     const entry = price;
 
-    // SL display: 20% capital at 20x default = 1.0% price move
-    const INITIAL_SL_PRICE_PCT = 0.20 / 20;
+    // SL display: 25% capital at actual token leverage
+    const INITIAL_SL_PRICE_PCT = 0.25 / (SYMBOL_LEVERAGE[symbol] || 50);
     const sl = side === 'LONG'
       ? entry * (1 - INITIAL_SL_PRICE_PCT)
       : entry * (1 + INITIAL_SL_PRICE_PCT);
@@ -1657,19 +1664,17 @@ async function analyzeV3(ticker, opts = {}) {
       }
     }
 
-    // Zone gate falls back to VWAP mid alone — Bitunix shows
-    // "Lower Range: Forming" early in session and previously the gate
-    // skipped entirely (vwapLower null), letting LONG fire below VWAP.
-    // Below mid → SHORT only; above mid → LONG only, regardless of bands.
-    if (gate('zone') && !isVWAPFade && vwap) {
+    if (gate('zone') && !isVWAPFade && vwap && vwapUpper && vwapLower) {
       const NEAR_MID = 0.001;
       const distFromMid = (price - vwap) / vwap;
-      if (distFromMid < -NEAR_MID && side === 'LONG') {
-        dlog(`null — LONG below VWAP mid $${vwap.toFixed(4)} (price $${price.toFixed(4)}) — only SHORT allowed`);
+      const inUpperZone = distFromMid >  NEAR_MID && price < vwapUpper;
+      const inLowerZone = distFromMid < -NEAR_MID && price > vwapLower;
+      if (inUpperZone && side === 'SHORT') {
+        dlog(`null — SHORT in upper VWAP zone — only LONG allowed here`);
         return null;
       }
-      if (distFromMid >  NEAR_MID && side === 'SHORT') {
-        dlog(`null — SHORT above VWAP mid $${vwap.toFixed(4)} (price $${price.toFixed(4)}) — only LONG allowed`);
+      if (inLowerZone && side === 'LONG') {
+        dlog(`null — LONG in lower VWAP zone — only SHORT allowed here`);
         return null;
       }
     }
@@ -1707,11 +1712,8 @@ async function analyzeV3(ticker, opts = {}) {
       const sz = hi - lo;
       if (sz > 0) {
         rPos = (price - lo) / sz;
-        // Session-open aggressive: allow entries further into the range.
-        // Session opens push price fast — waiting for the bottom 5% of range
-        // means you miss the entire opening move.
-        const rPosLong  = isSessionOpenAggressive ? 0.25 : 0.05;
-        const rPosShort = isSessionOpenAggressive ? 0.75 : 0.95;
+        const rPosLong  = isSessionOpenAggressive ? 0.15 : 0.05;
+        const rPosShort = isSessionOpenAggressive ? 0.85 : 0.95;
         if (side === 'LONG'  && rPos > rPosLong)  { dlog(`null — LONG rPos ${(rPos*100).toFixed(1)}% > ${(rPosLong*100).toFixed(0)}%`); return null; }
         if (side === 'SHORT' && rPos < rPosShort) { dlog(`null — SHORT rPos ${(rPos*100).toFixed(1)}% < ${(rPosShort*100).toFixed(0)}%`); return null; }
       }
@@ -1725,19 +1727,17 @@ async function analyzeV3(ticker, opts = {}) {
         const l = parseFloat(k[3]); if (l < lo30) lo30 = l;
       }
       // Chase gate: max distance from 30m high/low before entry is rejected.
-      // Session-open aggressive: 0.25% — session opens create momentum moves
-      // that often gap 0.1-0.2% before a retest forms. Regular: 0.10%.
-      const MAX_CHASE_PCT = isSessionOpenAggressive ? 0.0025 : 0.0010;
+      const MAX_CHASE_PCT = isSessionOpenAggressive ? 0.0020 : 0.0010;
       if (side === 'LONG') {
         const dist = (price - lo30) / lo30;
         if (dist > MAX_CHASE_PCT) {
-          dlog(`null — LONG chasing ${(dist*100).toFixed(2)}% above 30m low $${lo30.toFixed(4)} (max 0.30%)`);
+          dlog(`null — LONG chasing ${(dist*100).toFixed(2)}% above 30m low $${lo30.toFixed(4)} (max ${(MAX_CHASE_PCT*100).toFixed(2)}%)`);
           return null;
         }
       } else {
         const dist = (hi30 - price) / hi30;
         if (dist > MAX_CHASE_PCT) {
-          dlog(`null — SHORT chasing ${(dist*100).toFixed(2)}% below 30m high $${hi30.toFixed(4)} (max 0.30%)`);
+          dlog(`null — SHORT chasing ${(dist*100).toFixed(2)}% below 30m high $${hi30.toFixed(4)} (max ${(MAX_CHASE_PCT*100).toFixed(2)}%)`);
           return null;
         }
       }

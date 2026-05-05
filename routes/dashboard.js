@@ -3,6 +3,7 @@ const { query } = require('../db');
 const { authMiddleware } = require('../middleware/auth');
 const { USDMClient } = require('binance');
 const cryptoUtils = require('../crypto-utils');
+const { ACTIVE_SYMBOLS, SYMBOL_LEVERAGE } = require('../strategy-v3');
 
 const router = express.Router();
 router.use(authMiddleware);
@@ -465,14 +466,15 @@ router.get('/weekly-earnings', async (req, res) => {
     );
 
     // Get trades closed since last payment (rolling window)
+    // COALESCE handles trades where closed_at was never set
     const weeklyTrades = await query(
       `SELECT t.api_key_id, t.pnl_usdt, t.status, t.symbol, t.direction,
               t.entry_price, t.exit_price, t.created_at, t.closed_at
        FROM trades t
        WHERE t.user_id = $1
          AND t.status IN ('WIN', 'LOSS', 'TP', 'SL', 'CLOSED')
-         AND t.closed_at >= $2
-       ORDER BY t.closed_at DESC`,
+         AND COALESCE(t.closed_at, t.created_at) >= $2
+       ORDER BY COALESCE(t.closed_at, t.created_at) DESC`,
       [req.userId, periodStart]
     );
 
@@ -759,7 +761,6 @@ router.get('/signal-board', async (req, res) => {
     const priceMap = await getSignalBoardPrices(symbols);
 
     // Strategy leverage — fixed per symbol, not user-configurable
-    const { SYMBOL_LEVERAGE } = require('../strategy-v3');
     const stratLevMap = SYMBOL_LEVERAGE || {};
 
     // Get admin risk tags
@@ -892,7 +893,6 @@ router.get('/kronos-predictions', async (req, res) => {
     if (cached && Date.now() - cached.ts < KRONOS_CACHE_TTL) return res.json(cached.data);
 
     // Read from DB — all active trading tokens, predictions fresher than 15 min
-    const { ACTIVE_SYMBOLS } = require('../strategy-v3');
     const rows = await query(
       `SELECT symbol, direction, current_price, predicted_price, change_pct,
               confidence, trend, pred_high, pred_low, scanned_at

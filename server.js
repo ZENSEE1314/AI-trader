@@ -99,7 +99,10 @@ app.use('/api/keys', require('./routes/api-keys'));
 app.use('/api/dashboard', require('./routes/dashboard'));
 app.use('/api/admin', require('./routes/admin'));
 app.use('/api/subscription', require('./routes/subscription'));
-app.use('/api/wallet', require('./routes/wallet'));
+const walletRouter = require('./routes/wallet');
+app.use('/api/wallet', walletRouter);
+// Start background deposit poller — checks Bitunix API every 30s for pending deposits
+walletRouter.startDepositPoller();
 app.use('/api/chart', require('./routes/chart'));
 app.use('/api/token-leverage', require('./routes/token-leverage'));
 app.use('/api/risk-levels', require('./routes/risk-levels'));

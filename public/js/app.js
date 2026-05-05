@@ -162,7 +162,7 @@
 
     if (tab === 'dashboard') { loadDashboard(); startDashboardRefresh(); }
     else if (tab === 'keys') loadKeys();
-    else if (tab === 'cashwallet') loadCashWallet();
+    else if (tab === 'cashwallet') { loadCashWallet(); loadDepositAddress(); }
     else if (tab === 'chart') {
       window.open('/chart.html', '_blank');
       // Switch back to dashboard since chart opens in new tab
@@ -1356,16 +1356,6 @@
         `;
       }
 
-      // Platform USDT address for top-ups
-      if (status.platform_usdt_address) {
-        const addrBox = $('#cw-platform-addr');
-        if (addrBox) addrBox.classList.remove('hidden');
-        const addrVal = $('#cw-platform-addr-val');
-        if (addrVal) addrVal.value = status.platform_usdt_address;
-        const netEl = $('#cw-platform-net');
-        if (netEl) netEl.textContent = `Network: ${status.platform_usdt_network || 'BEP20'}`;
-      }
-
       // Referral link
       const appUrl = window.location.origin;
       $('#referral-link').value = `${appUrl}/?ref=${status.referral_code}`;
@@ -1492,18 +1482,103 @@
     }
   }
 
+  // ── Deposit polling state ──────────────────────────────────────────────
+  let _depositPollTimer = null;
+  let _depositPollId    = null;
+
+  function _stopDepositPoll() {
+    if (_depositPollTimer) { clearInterval(_depositPollTimer); _depositPollTimer = null; }
+    _depositPollId = null;
+  }
+
+  function _setDepositStatus(text, sub, done = false, success = false) {
+    const panel   = $('#cw-deposit-status');
+    const spinner = $('#cw-deposit-spinner');
+    const textEl  = $('#cw-deposit-status-text');
+    const subEl   = $('#cw-deposit-status-sub');
+    if (!panel) return;
+    panel.classList.remove('hidden');
+    if (textEl) textEl.textContent = text;
+    if (subEl)  subEl.textContent  = sub;
+    if (spinner) {
+      spinner.style.display = done ? 'none' : 'block';
+      if (done && success) spinner.textContent = '✅';
+      if (done && !success) spinner.textContent = '❌';
+      if (done) spinner.style.border = 'none';
+    }
+    if (success) panel.style.borderColor = 'var(--color-success)';
+    else if (done) panel.style.borderColor = 'var(--color-danger)';
+  }
+
+  async function _pollDepositStatus(depositId) {
+    try {
+      const dep = await api('GET', `/api/wallet/deposit/status/${depositId}`);
+      if (dep.status === 'verified') {
+        _stopDepositPoll();
+        _setDepositStatus('✅ Deposit confirmed!', `$${parseFloat(dep.amount).toFixed(2)} USDT has been credited to your wallet.`, true, true);
+        const btn = $('#cw-topup-btn');
+        if (btn) { btn.disabled = false; btn.textContent = '✅ I\'ve Sent'; }
+        showToast(`$${parseFloat(dep.amount).toFixed(2)} USDT deposited!`, 'success');
+        loadCashWallet();
+      } else if (dep.status === 'expired' || dep.status === 'failed') {
+        _stopDepositPoll();
+        _setDepositStatus('❌ Not detected', dep.note || 'Deposit not found. Contact admin with your TX hash.', true, false);
+        const btn = $('#cw-topup-btn');
+        if (btn) { btn.disabled = false; btn.textContent = '✅ I\'ve Sent'; }
+      }
+      // still pending — keep polling
+    } catch (_) {}
+  }
+
   async function submitTopUp() {
     const amount = parseFloat($('#cw-topup-amount').value);
-    const txHash = $('#cw-topup-txhash').value.trim();
     if (!amount || amount <= 0) return showToast('Enter a valid amount', 'error');
-    if (!txHash) return showToast('Enter TX hash or proof URL', 'error');
+
+    const btn = $('#cw-topup-btn');
+    if (btn) { btn.disabled = true; btn.textContent = 'Submitting…'; }
+
     try {
-      const data = await api('POST', '/api/subscription/topup', { amount, tx_hash: txHash });
-      showToast(data.message, 'success');
-      $('#cw-topup-amount').value = '';
-      $('#cw-topup-txhash').value = '';
-      loadCashWallet();
-    } catch (err) { showToast(err.message, 'error'); }
+      const data = await api('POST', '/api/wallet/deposit/submit', { amount });
+
+      // Handle "already pending" case — resume polling existing request
+      const depositId = data.deposit_id || (data.error?.deposit_id);
+      if (!depositId) throw new Error(data.error?.message || data.message || 'Unexpected error');
+
+      showToast('Watching for your deposit…', 'success');
+      _stopDepositPoll();
+      _depositPollId = depositId;
+
+      _setDepositStatus(
+        'Watching for your deposit…',
+        `Checking Bitunix every 30 seconds for a $${amount.toFixed(2)} USDT transfer. Do not close this page.`
+      );
+
+      // Poll every 10s (server checks Bitunix every 30s, but quick UI feedback feels better)
+      _depositPollTimer = setInterval(() => _pollDepositStatus(depositId), 10_000);
+      // Also check immediately
+      _pollDepositStatus(depositId);
+
+      if (btn) { btn.textContent = 'Waiting…'; } // keep disabled while watching
+    } catch (err) {
+      if (btn) { btn.disabled = false; btn.textContent = '✅ I\'ve Sent'; }
+      // Resume polling if there's already a pending deposit
+      if (err.message?.includes('pending deposit')) {
+        showToast('You already have a pending deposit being verified.', 'warning');
+      } else {
+        showToast(err.message || 'Failed to submit deposit', 'error');
+      }
+    }
+  }
+
+  // Load deposit address from server when wallet tab opens
+  async function loadDepositAddress() {
+    try {
+      const info = await api('GET', '/api/wallet/deposit/address');
+      const addrEl = $('#cw-platform-addr-val');
+      const netEl  = $('#cw-platform-net');
+      if (addrEl) addrEl.value = info.address || '';
+      if (netEl)  netEl.textContent = `Network: ${info.network || 'BEP20'} (${info.coin || 'USDT'})`;
+    } catch (_) {} // Not configured yet — input stays empty
   }
 
   async function saveUsdtAddress() {
@@ -5480,7 +5555,7 @@
   window.CryptoBot = {
     toggleSettings, saveSettings, deleteKey, showToast, syncSlider, syncNum, saveProfile, changePassword,
     togglePause,
-    submitTopUp, saveUsdtAddress, withdrawFromWallet, payWeekly, saveBitunixReferralLink,
+    submitTopUp, loadDepositAddress, saveUsdtAddress, withdrawFromWallet, payWeekly, saveBitunixReferralLink,
     adminAction, adminChangeRole, adminSub, adminWd, saveAdminSettings, adminEditWallet, adminSetBitunixReferralLink, clearErrors,
     adminShowUserKeys, adminDeleteUserKey,
     adminEditSplit, adminPauseKey, adminResumeKey, adminMarkPaid, adminResyncBitunix, adminPullBitunixHistory,

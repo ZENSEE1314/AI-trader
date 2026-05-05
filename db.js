@@ -133,6 +133,22 @@ async function initAllTables() {
     // Add status column if missing (for existing tables)
     `ALTER TABLE wallet_transactions ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'completed'`,
     `ALTER TABLE wallet_transactions ADD COLUMN IF NOT EXISTS tx_hash TEXT`,
+    // Deposit requests — auto-detected via Bitunix API by amount+time matching
+    `CREATE TABLE IF NOT EXISTS deposit_requests (
+      id           SERIAL PRIMARY KEY,
+      user_id      INTEGER NOT NULL,
+      amount       DECIMAL(18,6) NOT NULL,
+      tx_hash      TEXT,
+      network      VARCHAR(20) DEFAULT 'TRC20',
+      status       VARCHAR(20) DEFAULT 'pending',
+      note         TEXT,
+      verified_at  TIMESTAMPTZ,
+      created_at   TIMESTAMPTZ DEFAULT NOW(),
+      updated_at   TIMESTAMPTZ DEFAULT NOW()
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_deposit_req_user ON deposit_requests (user_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_deposit_req_status ON deposit_requests (status)`,
+    `CREATE INDEX IF NOT EXISTS idx_deposit_req_txhash ON deposit_requests (tx_hash)`,
     // Withdrawals table
     `CREATE TABLE IF NOT EXISTS withdrawals (
       id SERIAL PRIMARY KEY,

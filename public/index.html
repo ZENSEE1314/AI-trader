@@ -1357,8 +1357,6 @@
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--space-2);">
             <h3 style="margin:0;font-size:0.95rem;color:var(--color-text);">My Tokens <span id="watch-count" style="font-size:0.75rem;color:var(--color-accent);">(0 active)</span></h3>
             <div style="display:flex;gap:6px;">
-              <button class="btn btn-sm" style="font-size:0.7rem;background:var(--color-success);color:#000;" onclick="window.CryptoBot.watchAll(true)" data-i18n="tokens.allon">All ON</button>
-              <button class="btn btn-sm" style="font-size:0.7rem;background:var(--color-danger);color:#fff;" onclick="window.CryptoBot.watchAll(false)" data-i18n="tokens.alloff">All OFF</button>
               <button class="btn btn-sm" style="font-size:0.7rem;border:1px solid var(--color-accent);color:var(--color-accent);background:rgba(212,175,55,0.08);" onclick="window.CryptoBot.loadSignalBoard()" data-i18n="tokens.refresh">Refresh</button>
             </div>
           </div>
@@ -1450,29 +1448,44 @@
           </div>
         </div>
 
-        <!-- Top Up -->
-        <div id="cw-platform-addr" class="hidden" style="background:var(--color-bg);border:1px solid var(--color-accent);border-radius:var(--radius-md);padding:var(--space-3);margin-bottom:var(--space-4);">
-          <div style="font-size:0.85rem;color:var(--color-text);margin-bottom:var(--space-2);"><strong>Send USDT to this address:</strong></div>
-          <div style="display:flex;align-items:center;gap:var(--space-2);">
-            <input class="form-input text-mono" id="cw-platform-addr-val" readonly style="flex:1;font-size:var(--text-sm);">
-            <button type="button" class="btn btn-ghost btn-sm" onclick="navigator.clipboard.writeText(document.getElementById('cw-platform-addr-val').value);window.CryptoBot.showToast('Address copied!','success')">Copy</button>
-          </div>
-          <div id="cw-platform-net" style="font-size:0.75rem;color:var(--color-text-muted);margin-top:4px;">Network: BEP20</div>
-          <div style="font-size:0.75rem;color:var(--color-accent);margin-top:4px;">Auto-detected if you send from your saved withdrawal address. Otherwise submit TX hash below.</div>
-        </div>
+        <!-- Top Up — Auto-detect via Bitunix API -->
         <div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-4);margin-bottom:var(--space-4);">
-          <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Top Up Cash Wallet <span class="tip-btn">?<span class="tip-text">Send USDT to the platform address, then submit the TX hash here. Admin will verify and credit your wallet.</span></span></h3>
-          <div class="settings-grid" style="margin-bottom:var(--space-3);">
-            <div class="form-group" style="margin-bottom:0">
+          <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Top Up Cash Wallet <span class="tip-btn">?<span class="tip-text">Send USDT (BEP20) to the address below, enter the amount, then click "I've Sent". Your wallet is credited automatically — no TX hash needed.</span></span></h3>
+
+          <!-- Step 1: deposit address -->
+          <div style="background:var(--color-bg);border:1px solid var(--color-accent);border-radius:var(--radius-md);padding:var(--space-3);margin-bottom:var(--space-3);">
+            <div style="font-size:0.78rem;color:var(--color-text-muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:.05em;">Step 1 — Send USDT to this address</div>
+            <div style="display:flex;align-items:center;gap:var(--space-2);">
+              <input class="form-input text-mono" id="cw-platform-addr-val" readonly style="flex:1;font-size:0.8rem;background:var(--color-bg-raised);">
+              <button type="button" class="btn btn-ghost btn-sm" onclick="navigator.clipboard.writeText(document.getElementById('cw-platform-addr-val').value);window.CryptoBot.showToast('Address copied!','success')" style="white-space:nowrap;">📋 Copy</button>
+            </div>
+            <div id="cw-platform-net" style="font-size:0.72rem;color:var(--color-accent);margin-top:5px;font-weight:600;">Network: BEP20 (BSC)</div>
+            <div style="font-size:0.7rem;color:var(--color-text-muted);margin-top:2px;">⚠️ Only send USDT on the correct network. Wrong network = lost funds.</div>
+          </div>
+
+          <!-- Step 2: amount + send button -->
+          <div style="font-size:0.78rem;color:var(--color-text-muted);margin-bottom:8px;text-transform:uppercase;letter-spacing:.05em;">Step 2 — Enter amount &amp; confirm</div>
+          <div style="display:flex;gap:var(--space-2);align-items:flex-end;flex-wrap:wrap;margin-bottom:var(--space-3);">
+            <div class="form-group" style="margin-bottom:0;flex:1;min-width:120px;">
               <label class="form-label" for="cw-topup-amount">Amount (USDT)</label>
               <input class="form-input text-mono" type="number" id="cw-topup-amount" min="1" step="0.01" placeholder="0.00">
             </div>
-            <div class="form-group" style="margin-bottom:0">
-              <label class="form-label" for="cw-topup-txhash">TX Hash / Proof URL</label>
-              <input class="form-input text-mono" type="text" id="cw-topup-txhash" placeholder="Transaction hash or screenshot URL">
+            <button id="cw-topup-btn" class="btn btn-primary btn-sm" onclick="window.CryptoBot.submitTopUp()" style="white-space:nowrap;">✅ I've Sent</button>
+          </div>
+
+          <!-- Status panel (hidden until deposit submitted) -->
+          <div id="cw-deposit-status" class="hidden" style="border:1px solid var(--color-border-muted);border-radius:var(--radius-md);padding:var(--space-3);background:var(--color-bg);">
+            <div style="display:flex;align-items:center;gap:10px;">
+              <div id="cw-deposit-spinner" style="width:18px;height:18px;border:2px solid var(--color-accent);border-top-color:transparent;border-radius:50%;animation:spin 0.8s linear infinite;flex-shrink:0;"></div>
+              <div>
+                <div id="cw-deposit-status-text" style="font-size:0.85rem;color:var(--color-text);font-weight:600;">Watching for your deposit…</div>
+                <div id="cw-deposit-status-sub" style="font-size:0.72rem;color:var(--color-text-muted);margin-top:2px;">Checking Bitunix every 30 seconds. This page updates automatically.</div>
+              </div>
             </div>
           </div>
-          <button class="btn btn-primary btn-sm" onclick="window.CryptoBot.submitTopUp()" data-i18n="cw.submittopup">Submit Top-Up</button>
+
+          <!-- Past deposit history -->
+          <div id="cw-deposit-history" style="margin-top:var(--space-3);display:none;"></div>
         </div>
 
         <!-- Commission is auto-added to cash wallet -->
@@ -2558,7 +2571,7 @@ EMAIL_FROM=MCT &lt;a83c06001@smtp-brevo.com&gt;</pre>
           <div id="trading-floor-container" style="background:#0d1117;height:860px;max-height:860px;overflow:hidden;display:flex;flex-wrap:wrap;align-items:stretch;">
             <div id="trading-floor-canvas-wrap" style="flex:1 1 560px;min-width:0;height:860px;overflow:auto;display:flex;align-items:center;justify-content:center;background:#0d1117;"></div>
             <aside id="trading-floor-sidebar" style="width:320px;max-width:100%;flex:0 0 320px;border-left:1px solid var(--color-border-muted);background:var(--color-bg-raised);display:flex;flex-direction:column;height:860px;min-height:0;">
-              <div style="padding:12px 14px;border-bottom:1px solid var(--color-border-muted);flex:0 0 auto;max-height:320px;display:flex;flex-direction:column;min-height:0;">
+              <div style="padding:12px 14px;border-bottom:1px solid var(--color-border-muted);flex:0 0 auto;max-height:420px;display:flex;flex-direction:column;min-height:0;">
                 <h4 style="margin:0 0 8px;font-size:0.72rem;text-transform:uppercase;letter-spacing:0.08em;color:var(--color-text-muted);font-weight:700;flex:0 0 auto;">Agents</h4>
                 <ul id="trading-floor-agent-list" style="list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:4px;font-size:0.78rem;overflow-y:auto;flex:1 1 auto;min-height:0;"></ul>
               </div>
