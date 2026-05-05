@@ -45,7 +45,7 @@ const PIVOT_RIGHT = 2;
 const H4_STRUCT   = 30;  // H4 bars for macro bias window
 const H1_CURR     = 48;  // H1 bars for intermediate bias
 const H1_MICRO    = 16;  // H1 bars for micro bias
-const COOLDOWN_H1 = 48;  // hours between signals per symbol
+const COOLDOWN_H1 = 4;   // hours between signals per symbol
 
 // ── Per-symbol cooldown ───────────────────────────────────────
 const _lastSignalAt = new Map(); // symbol → timestamp ms
