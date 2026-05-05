@@ -120,7 +120,8 @@ const TRAILING_TIERS = [
 // the lock by +10%. The gap therefore widens by 1% each step
 // (16/15→1%, 27/25→2%, 38/35→3%, ...).
 const TRAILING_TIERS_50X = [
-  { trigger: 0.31, lock: 0.30 }, // +31% → +30% (first tier)
+  { trigger: 0.21, lock: 0.20 }, // +21% → +20% (first tier, 50x)
+  { trigger: 0.31, lock: 0.30 }, // +31% → +30%
   { trigger: 0.38, lock: 0.35 }, // +38% → +35%
   { trigger: 0.49, lock: 0.45 }, // +49% → +45%
   { trigger: 0.60, lock: 0.55 }, // +60% → +55%
@@ -563,7 +564,7 @@ async function calcCandleTrailSl(symbol, isLong, currentSlPrice) {
 // smcMode (+61%→+60%): during Asia/London/NY session opens, first lock jumps
 //   straight to +60% capital, skipping the 20–50% early tiers. Off-session uses
 //   the default table (first lock +20%).
-const SAFETY_TRAIL_TRIGGER = 0.30; // +30% capital → lock in profit
+const SAFETY_TRAIL_TRIGGER = 0.20; // +20% capital → lock in profit
 const SAFETY_TRAIL_LOCK    = 0.10; // SL moves to +10% capital profit
 
 function calculateTrailingStep(entryPrice, currentPrice, isLong, lastStep, leverage = 20, userTrailStepPct = 0, smcMode = false) {
