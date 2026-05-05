@@ -1297,20 +1297,18 @@ async function main() {
       }
     }
 
-    // One-time: enforce new max_consec_loss = 2 for every api_key.
-    // Old default was 10 — too lenient for the new fast-fail rule.
-    // Now: 2 consecutive losses pauses trading until the next 6 AM SG
-    // reset (see "Stop After Losses" block below).
+    // Disable the consecutive-loss pause — the strategy's SL trail IS the risk manager.
+    // Reset max_consec_loss to 0 (disabled) so no key gets stuck paused after 2 losses.
     if (!runCycle._consecLossFixDone) {
       runCycle._consecLossFixDone = true;
       try {
         const r = await dbQuery(
-          `UPDATE api_keys SET max_consec_loss = 2
-           WHERE max_consec_loss IS DISTINCT FROM 2`
+          `UPDATE api_keys SET max_consec_loss = 0
+           WHERE max_consec_loss IS DISTINCT FROM 0`
         );
-        bLog.system(`[CONSEC-LOSS-FIX] api_keys.max_consec_loss = 2 (rows touched: ${r.rowCount ?? '?'})`);
+        bLog.system(`[CONSEC-LOSS-FIX] max_consec_loss = 0 (disabled) on ${r.rowCount ?? '?'} keys — SL trail handles risk`);
       } catch (e) {
-        bLog.error(`[CONSEC-LOSS-FIX] Failed to update api_keys: ${e.message}`);
+        bLog.error(`[CONSEC-LOSS-FIX] Failed: ${e.message}`);
       }
     }
 
@@ -1441,41 +1439,13 @@ async function main() {
       //   continue;
       // }
 
-      // AI Brain (Ollama/Gemma 4) — analyze signal before trading
+      // AI Brain veto removed — ChartAgent already IS the AI analysis layer.
+      // Double-checking ChartAgent with another AI just blocks good signals.
       try {
-        const { think, isAvailable } = require('./agents/ai-brain');
-        if (isAvailable()) {
-          const sym = pick.symbol || pick.sym;
-          const aiResponse = await think({
-            agentName: 'TradeGate',
-            systemPrompt: 'You are a crypto futures trade validator. Analyze the signal and respond ONLY with JSON: {"action":"LONG"|"SHORT"|"SKIP","confidence":"high"|"medium"|"low","reason":"one line"}. You CANNOT change SL/TP/leverage. Only validate direction.',
-            userMessage: `Signal: ${sym} ${pick.direction} | Strategy: ${pick.setupName || pick.setup} | Score: ${pick.score} | Price: ${pick.price || pick.entry}`,
-            complexity: 'low',
-            priority: 'normal',
-          });
-
-          if (aiResponse && !aiResponse.includes('[Critical Error]')) {
-            try {
-              const jsonMatch = aiResponse.match(/\{[\s\S]*\}/);
-              if (jsonMatch) {
-                const parsed = JSON.parse(jsonMatch[0]);
-                bLog.ai(`AI Brain ${sym}: ${parsed.action} (${parsed.confidence}) — ${parsed.reason || ''}`);
-
-                if (parsed.action === 'SKIP' && parsed.confidence !== 'low') {
-                  bLog.trade(`AI BRAIN BLOCKED: ${sym} ${pick.direction} — ${parsed.reason}`);
-                  continue;
-                }
-                if (parsed.action && parsed.action !== 'SKIP' && parsed.action !== pick.direction && parsed.confidence === 'high') {
-                  bLog.trade(`AI BRAIN DISAGREES: ${sym} signal=${pick.direction} but AI=${parsed.action} (high confidence) — skipping`);
-                  continue;
-                }
-              }
-            } catch { /* JSON parse failed — let trade through */ }
-          }
-        }
+        const { isAvailable } = require('./agents/ai-brain');
+        if (isAvailable()) bLog.ai(`AI Brain available (not used — ChartAgent handles analysis)`);
       } catch (aiErr) {
-        // AI is optional — if unavailable, let the trade through (backtest gate already passed)
-        bLog.error(`AI Brain error (non-blocking): ${aiErr.message}`);
+        // optional — ignore
       }
 
       // Final EMA200 safety gate — belt-and-suspenders check before any trade fires
@@ -1718,41 +1688,9 @@ async function executeForAllUsers(pick) {
           return;
         }
 
-        // Cooldown rules — both apply per symbol per user across all API keys:
-        //   1. Any direction:  30-min cooldown after any trade closes on this symbol.
-        //      Prevents the bot immediately flipping LONG→SHORT or SHORT→LONG.
-        //   2. Same direction: 30-min cooldown before re-entering the same direction.
-        //      Prevents chasing the same setup immediately after a loss.
-
-        // Rule 1: 30-min any-direction cooldown
-        const anyRecentClosed = await db.query(
-          `SELECT id, closed_at, direction FROM trades
-           WHERE user_id = $1 AND symbol = $2
-             AND status IN ('WIN','LOSS','TP','SL','CLOSED')
-             AND (closed_at IS NULL OR closed_at > NOW() - INTERVAL '30 minutes')
-           ORDER BY COALESCE(closed_at, NOW()) DESC LIMIT 1`,
-          [key.user_id, symbol]
-        );
-        if (anyRecentClosed.length > 0) {
-          const closedDir = anyRecentClosed[0].direction;
-          const isFlip = closedDir !== pick.direction;
-          userLog.trade(`User ${key.email}: ${symbol} ${pick.direction} blocked — 30-min cooldown after ${closedDir} close (${isFlip ? 'flip' : 'same dir'})`);
-          return;
-        }
-
-        // Rule 2: 2-hour same-direction cooldown
-        const sameRecentClosed = await db.query(
-          `SELECT id, closed_at, direction FROM trades
-           WHERE user_id = $1 AND symbol = $2 AND direction = $3
-             AND status IN ('WIN','LOSS','TP','SL','CLOSED')
-             AND (closed_at IS NULL OR closed_at > NOW() - INTERVAL '2 hours')
-           ORDER BY COALESCE(closed_at, NOW()) DESC LIMIT 1`,
-          [key.user_id, symbol, pick.direction]
-        );
-        if (sameRecentClosed.length > 0) {
-          userLog.trade(`User ${key.email}: ${symbol} ${pick.direction} recently closed — 2h same-direction cooldown active, skipping`);
-          return;
-        }
+        // No cooldown — the 3-tier confluence (VWAP + H1 + H1-micro) and ChartAgent
+        // AI analysis are the quality filter. Blocking re-entry after a loss means
+        // missing the recovery move. The trailing SL handles risk on each trade.
 
         const apiKey = cryptoUtils.decrypt(key.api_key_enc, key.iv, key.auth_tag);
         const apiSecret = cryptoUtils.decrypt(key.api_secret_enc, key.secret_iv, key.secret_auth_tag);
@@ -1768,43 +1706,9 @@ async function executeForAllUsers(pick) {
           return;
         }
 
-        // Stop After Losses: pause this api_key after N consecutive losses
-        // within the current trading day, where day boundary = 6 AM SG time
-        // (= 22:00 UTC).  Streak resets automatically at the next 6 AM SG.
-        //
-        // Default is 2 — the boot seeder above sets max_consec_loss = 2
-        // for every api_key on each deploy.
-        const maxConsecLoss = parseInt(key.max_consec_loss) || 2;
-        if (maxConsecLoss > 0) {
-          // Most recent 22:00 UTC (= 6 AM SG today) cutoff.
-          const _now = new Date();
-          const _cutoff = new Date(Date.UTC(
-            _now.getUTCFullYear(), _now.getUTCMonth(), _now.getUTCDate(), 22, 0, 0, 0
-          ));
-          if (_now < _cutoff) _cutoff.setUTCDate(_cutoff.getUTCDate() - 1);
-
-          const recentTrades = await db.query(
-            `SELECT status FROM trades
-             WHERE api_key_id = $1
-               AND status IN ('WIN','LOSS','TP','SL')
-               AND closed_at >= $2
-             ORDER BY closed_at DESC LIMIT $3`,
-            [key.id, _cutoff, maxConsecLoss]
-          );
-          // Count consecutive losses from the most recent trade backwards
-          const isLoss = (s) => s === 'LOSS' || s === 'SL';
-          let consec = 0;
-          for (const t of recentTrades) {
-            if (isLoss(t.status)) consec++;
-            else break;
-          }
-          if (consec >= maxConsecLoss) {
-            const _next = new Date(_cutoff);
-            _next.setUTCDate(_next.getUTCDate() + 1);
-            userLog.trade(`User ${key.email}: ${consec} consecutive losses today (max ${maxConsecLoss}) — paused until next 6 AM SG (${_next.toISOString()})`);
-            return;
-          }
-        }
+        // Consecutive-loss pause is disabled — max_consec_loss = 0.
+        // The trailing SL system manages per-trade risk. Blocking after losses
+        // means missing the recovery move. Strategy confluence is the quality gate.
 
         // User's risk settings — active AI version can override SL/trail if admin activated one
         const walletSizePct = (await getCapitalPercentage(key.id)) / 100;
