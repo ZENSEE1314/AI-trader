@@ -20,10 +20,11 @@ const fetch = require('node-fetch');
 const REQUEST_TIMEOUT = 15_000;
 
 // ── Symbol config (backtest-validated 5-coin set) ─────────────
-const ACTIVE_SYMBOLS = ['BTCUSDT', 'BNBUSDT', 'ADAUSDT', 'SOLUSDT', 'AVAXUSDT'];
+const ACTIVE_SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'ADAUSDT', 'SOLUSDT', 'AVAXUSDT'];
 
 const SYMBOL_LEVERAGE = {
   BTCUSDT: 100,
+  ETHUSDT: 100,
   BNBUSDT:  75,
   ADAUSDT:  75,
   SOLUSDT:  50,
