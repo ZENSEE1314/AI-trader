@@ -1,13 +1,14 @@
 'use strict';
 // ════════════════════════════════════════════════════════════════
-//  strategy-3timing.js  —  Live 3-Timing H4 + H1 + H1-micro
+//  strategy-3timing.js  —  VWAP + H1 + H1-micro
 //
-//  Ported from backtest-3timing-v3.js (51% WR, +$14,950 / 90 days).
+//  Direction filter: Daily VWAP
+//    Price above VWAP → uptrend  → LONG only
+//    Price below VWAP → downtrend → SHORT only
 //
-//  Logic:
-//    Tier 1 — H4 macro bias  : HH+HL → bullish | LL+LH → bearish
-//    Tier 2 — H1 48-bar bias : must agree with H4
-//    Tier 3 — H1 micro 16-bar: must still agree
+//  Entry confirmation (2 tiers):
+//    Tier 1 — H1 48-bar range bias agrees with VWAP direction
+//    Tier 2 — H1 micro 16-bar (HL for long / LH for short)
 //
 //  SL / Trail (user's exact spec):
 //    Initial SL : -25% cap from entry
@@ -19,7 +20,7 @@ const fetch = require('node-fetch');
 
 const REQUEST_TIMEOUT = 15_000;
 
-// ── Symbol config (backtest-validated 5-coin set) ─────────────
+// ── Symbol config ─────────────────────────────────────────────
 const ACTIVE_SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'ADAUSDT', 'SOLUSDT', 'AVAXUSDT'];
 
 const SYMBOL_LEVERAGE = {
@@ -32,18 +33,18 @@ const SYMBOL_LEVERAGE = {
 };
 
 // ── SL / trail constants ──────────────────────────────────────
-const INITIAL_SL_CAP   = 0.25;   // 25% cap initial SL
-const LOCK_TRIGGER_CAP = 0.30;   // move SL to profit lock when cap gain ≥ 30%
-const LOCK_PROFIT_CAP  = 0.10;   // lock SL at +10% cap profit
-const TRAIL_ON_CAP     = 0.46;   // main trail activates at +46% cap
-const TRAIL_FIRST_LOCK = 0.45;   // first trail lock at +45% cap
-const TRAIL_STEP_GAIN  = 0.11;   // trail steps every +11% cap
-const TRAIL_STEP_LOCK  = 0.10;   // each step locks +10% more
+const INITIAL_SL_CAP   = 0.25;
+const LOCK_TRIGGER_CAP = 0.30;
+const LOCK_PROFIT_CAP  = 0.10;
+const TRAIL_ON_CAP     = 0.46;
+const TRAIL_FIRST_LOCK = 0.45;
+const TRAIL_STEP_GAIN  = 0.11;
+const TRAIL_STEP_LOCK  = 0.10;
 
 // ── Structure window sizes ────────────────────────────────────
-const H4_STRUCT   = 8;   // H4 bars for macro bias (recent 4 vs earlier 4)
-const H1_CURR     = 48;  // H1 bars for intermediate bias (recent 24 vs earlier 24)
-const H1_MICRO    = 16;  // H1 bars for micro bias (recent 8 vs earlier 8)
+const H1_CURR  = 48;  // H1 bars for intermediate bias
+const H1_MICRO = 16;  // H1 bars for micro bias (HL / LH entry)
+
 // ── Binance futures klines ────────────────────────────────────
 async function fetchKlines(symbol, interval, limit) {
   const url = `https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`;
@@ -57,37 +58,30 @@ async function fetchKlines(symbol, interval, limit) {
   return null;
 }
 
-// ── H4 aggregation from H1 klines (UTC-aligned: 0/4/8/12/16/20) ─
-function aggregateH4(h1Klines) {
-  const bars  = [];
-  let   group = [];
+// ── Daily VWAP from today's H1 bars ──────────────────────────
+// Price above VWAP = uptrend. Price below = downtrend.
+function calcDailyVWAP(h1Klines) {
+  const todayStart = new Date();
+  todayStart.setUTCHours(0, 0, 0, 0);
+  const todayMs = todayStart.getTime();
 
-  for (const k of h1Klines) {
-    const hourUtc = new Date(parseInt(k[0])).getUTCHours();
-    if (hourUtc % 4 === 0 && group.length > 0) {
-      bars.push({
-        high:  Math.max(...group.map(b => parseFloat(b[2]))),
-        low:   Math.min(...group.map(b => parseFloat(b[3]))),
-        close: parseFloat(group[group.length - 1][4]),
-      });
-      group = [];
-    }
-    group.push(k);
+  const todayBars = h1Klines.filter(k => parseInt(k[0]) >= todayMs);
+  // Fallback: use last 8 bars if today hasn't enough data yet (e.g. early UTC)
+  const bars = todayBars.length >= 2 ? todayBars : h1Klines.slice(-8);
+
+  let cumTPV = 0, cumVol = 0;
+  for (const k of bars) {
+    const tp  = (parseFloat(k[2]) + parseFloat(k[3]) + parseFloat(k[4])) / 3;
+    const vol = parseFloat(k[5]) || 1;
+    cumTPV += tp * vol;
+    cumVol += vol;
   }
-  if (group.length > 0) {
-    bars.push({
-      high:  Math.max(...group.map(b => parseFloat(b[2]))),
-      low:   Math.min(...group.map(b => parseFloat(b[3]))),
-      close: parseFloat(group[group.length - 1][4]),
-    });
-  }
-  return bars;
+  return cumVol > 0 ? cumTPV / cumVol : null;
 }
 
-// ── Range-comparison bias (works in trends AND ranges) ────────
+// ── Range-comparison bias ─────────────────────────────────────
 // Splits bars into recent half vs earlier half, compares high/low ranges.
-// Unlike pivot detection, never returns 'neutral' just because only 1 pivot
-// formed — strong trends with no pullbacks are correctly classified.
+// Works in strong trends where pivot detection would return 'neutral'.
 function getRangeBias(bars) {
   if (!bars || bars.length < 4) return 'neutral';
   const half    = Math.floor(bars.length / 2);
@@ -100,87 +94,66 @@ function getRangeBias(bars) {
   if (rH > eH && rL > eL) return 'bullish';
   if (rH < eH && rL < eL) return 'bearish';
   // Tiebreak: close direction
-  const lastClose  = recent.at(-1).close;
-  const midClose   = earlier.at(-1).close;
-  if (lastClose > midClose) return 'bullish';
-  if (lastClose < midClose) return 'bearish';
+  if (recent.at(-1).close > earlier.at(-1).close) return 'bullish';
+  if (recent.at(-1).close < earlier.at(-1).close) return 'bearish';
   return 'neutral';
 }
 
-// ── Trail SL (user's exact spec) ─────────────────────────────
-// Returns the absolute SL price at the current market price.
-// Caller ensures SL only moves in the favourable direction.
+// ── Trail SL ─────────────────────────────────────────────────
 function calcTrail3Timing(entryPrice, currentPrice, side, leverage) {
   const pricePct = side === 'LONG'
     ? (currentPrice - entryPrice) / entryPrice
     : (entryPrice - currentPrice) / entryPrice;
   const capPct = pricePct * leverage;
 
-  // Zone 2: main trail (≥ +46% cap)
   if (capPct >= TRAIL_ON_CAP - 0.0001) {
     const steps   = Math.floor((capPct - TRAIL_ON_CAP) / TRAIL_STEP_GAIN);
     const lockCap = TRAIL_FIRST_LOCK + steps * TRAIL_STEP_LOCK;
     const slPct   = lockCap / leverage;
-    return side === 'LONG'
-      ? entryPrice * (1 + slPct)
-      : entryPrice * (1 - slPct);
+    return side === 'LONG' ? entryPrice * (1 + slPct) : entryPrice * (1 - slPct);
   }
-
-  // Zone 1: profit lock (+30–45% cap → lock +10%)
   if (capPct >= LOCK_TRIGGER_CAP) {
     const slPct = LOCK_PROFIT_CAP / leverage;
-    return side === 'LONG'
-      ? entryPrice * (1 + slPct)
-      : entryPrice * (1 - slPct);
+    return side === 'LONG' ? entryPrice * (1 + slPct) : entryPrice * (1 - slPct);
   }
-
-  // Zone 0: fixed initial SL (-25% cap)
   const slPct = INITIAL_SL_CAP / leverage;
-  return side === 'LONG'
-    ? entryPrice * (1 - slPct)
-    : entryPrice * (1 + slPct);
+  return side === 'LONG' ? entryPrice * (1 - slPct) : entryPrice * (1 + slPct);
 }
 
 // ── Analyze one symbol ────────────────────────────────────────
 async function analyzeSymbol(symbol, log) {
   const lev = SYMBOL_LEVERAGE[symbol] || 50;
 
-  // Fetch enough H1 bars for H4_STRUCT*4 warmup + H1 windows + buffer
-  const need = Math.min(H4_STRUCT * 4 + H1_CURR + 30, 500);
-  const h1Klines = await fetchKlines(symbol, '1h', need);
-  if (!h1Klines || h1Klines.length < H1_CURR + 10) {
-    log(`3-timing: ${symbol} — insufficient H1 data (${h1Klines?.length ?? 0} bars)`);
+  const h1Klines = await fetchKlines(symbol, '1h', H1_CURR + 30);
+  if (!h1Klines || h1Klines.length < H1_CURR + 4) {
+    log(`3-timing: ${symbol} — insufficient data (${h1Klines?.length ?? 0} bars)`);
     return null;
   }
 
-  // Convert Binance kline arrays to OHLC objects
+  // ── Direction: VWAP ──────────────────────────────────────────
+  const vwap  = calcDailyVWAP(h1Klines);
+  if (!vwap) return null;
+
+  const price = parseFloat(h1Klines.at(-1)[4]); // last H1 close
+  const vwapDir = price > vwap ? 'bullish' : price < vwap ? 'bearish' : null;
+  if (!vwapDir) return null;
+
   const h1Bars = h1Klines.map(k => ({
     high:  parseFloat(k[2]),
     low:   parseFloat(k[3]),
     close: parseFloat(k[4]),
   }));
 
-  const h4Bars = aggregateH4(h1Klines);
-  if (h4Bars.length < H4_STRUCT + 2) {
-    log(`3-timing: ${symbol} — insufficient H4 data (${h4Bars.length} bars)`);
-    return null;
-  }
-
-  // Tier 1: H4 macro bias — exclude the forming H4 bar (last one)
-  const h4Bias = getRangeBias(h4Bars.slice(-H4_STRUCT - 1, -1));
-  if (h4Bias === 'neutral') return null;
-
-  // Tier 2: H1 intermediate bias — last H1_CURR confirmed bars
+  // ── Tier 1: H1 48-bar range bias must agree with VWAP ────────
   const h1Bias = getRangeBias(h1Bars.slice(-H1_CURR - 1, -1));
-  if (h1Bias !== h4Bias) return null;
+  if (h1Bias !== vwapDir) return null;
 
-  // Tier 3: H1 micro bias — last H1_MICRO confirmed bars
+  // ── Tier 2: H1 micro 16-bar (HL for long / LH for short) ────
   const micBias = getRangeBias(h1Bars.slice(-H1_MICRO - 1, -1));
-  if (micBias !== h4Bias) return null;
+  if (micBias !== vwapDir) return null;
 
-  // All 3 tiers aligned — generate signal
-  const side  = h4Bias === 'bullish' ? 'LONG' : 'SHORT';
-  const price = h1Bars.at(-1).close;
+  // ── All aligned → signal ──────────────────────────────────────
+  const side  = vwapDir === 'bullish' ? 'LONG' : 'SHORT';
   const slPct = INITIAL_SL_CAP / lev;
   const sl    = side === 'LONG' ? price * (1 - slPct) : price * (1 + slPct);
 
@@ -193,17 +166,17 @@ async function analyzeSymbol(symbol, log) {
     entry:      price,
     sl,
     slPct:      (INITIAL_SL_CAP * 100).toFixed(2),
-    setupName:  '3-Timing(H4+H1+H1m)',
+    setupName:  'VWAP+H1+H1m',
     score:      3,
     tp1: null, tp2: null, tp3: null,
-    // diagnostics
-    h4Bias, h1Bias, micBias,
-    timeframe: '4h+1h+1h-micro',
-    version:   '3timing-v3',
+    vwap:    vwap.toFixed(4),
+    vwapDir, h1Bias, micBias,
+    timeframe: 'vwap+1h+1h-micro',
+    version:   '3timing-vwap',
   };
 }
 
-// ── Main scan (called each cycle from cycle.js) ───────────────
+// ── Main scan ─────────────────────────────────────────────────
 async function scan3Timing(log = console.log) {
   const results = [];
 
@@ -212,9 +185,8 @@ async function scan3Timing(log = console.log) {
       const sig = await analyzeSymbol(symbol, log);
       if (sig) {
         results.push(sig);
-        log(`3-timing: ✓ ${symbol} ${sig.side} | H4=${sig.h4Bias} H1=${sig.h1Bias} micro=${sig.micBias} price=$${sig.entry.toFixed(4)}`);
+        log(`3-timing: ✓ ${symbol} ${sig.side} | VWAP=${sig.vwapDir} price=$${sig.entry.toFixed(2)} vwap=$${sig.vwap}`);
       }
-
       await new Promise(r => setTimeout(r, 300));
     } catch (e) {
       log(`3-timing: ${symbol} — error: ${e.message}`);
