@@ -40,12 +40,10 @@ const TRAIL_FIRST_LOCK = 0.45;   // first trail lock at +45% cap
 const TRAIL_STEP_GAIN  = 0.11;   // trail steps every +11% cap
 const TRAIL_STEP_LOCK  = 0.10;   // each step locks +10% more
 
-// ── Structure detection constants ─────────────────────────────
-const PIVOT_LEFT  = 2;
-const PIVOT_RIGHT = 2;
-const H4_STRUCT   = 30;  // H4 bars for macro bias window
-const H1_CURR     = 48;  // H1 bars for intermediate bias
-const H1_MICRO    = 16;  // H1 bars for micro bias
+// ── Structure window sizes ────────────────────────────────────
+const H4_STRUCT   = 8;   // H4 bars for macro bias (recent 4 vs earlier 4)
+const H1_CURR     = 48;  // H1 bars for intermediate bias (recent 24 vs earlier 24)
+const H1_MICRO    = 16;  // H1 bars for micro bias (recent 8 vs earlier 8)
 // ── Binance futures klines ────────────────────────────────────
 async function fetchKlines(symbol, interval, limit) {
   const url = `https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`;
@@ -86,45 +84,26 @@ function aggregateH4(h1Klines) {
   return bars;
 }
 
-// ── Pivot swing detection ─────────────────────────────────────
-function swingHighs(bars) {
-  const out = [];
-  for (let i = PIVOT_LEFT; i < bars.length - PIVOT_RIGHT; i++) {
-    let ok = true;
-    for (let j = i - PIVOT_LEFT; j <= i + PIVOT_RIGHT; j++) {
-      if (j !== i && bars[j].high >= bars[i].high) { ok = false; break; }
-    }
-    if (ok) out.push(bars[i].high);
-  }
-  return out;
-}
-
-function swingLows(bars) {
-  const out = [];
-  for (let i = PIVOT_LEFT; i < bars.length - PIVOT_RIGHT; i++) {
-    let ok = true;
-    for (let j = i - PIVOT_LEFT; j <= i + PIVOT_RIGHT; j++) {
-      if (j !== i && bars[j].low <= bars[i].low) { ok = false; break; }
-    }
-    if (ok) out.push(bars[i].low);
-  }
-  return out;
-}
-
-// Returns 'bullish' | 'bearish' | 'neutral'
-function getBias(bars) {
-  if (!bars || bars.length < PIVOT_LEFT + PIVOT_RIGHT + 2) return 'neutral';
-  const highs = swingHighs(bars);
-  const lows  = swingLows(bars);
-  if (highs.length < 2 || lows.length < 2) return 'neutral';
-  const hh = highs.at(-1) > highs.at(-2);
-  const lh = highs.at(-1) < highs.at(-2);
-  const hl = lows.at(-1)  > lows.at(-2);
-  const ll = lows.at(-1)  < lows.at(-2);
-  if (hh && hl)  return 'bullish';
-  if (ll && lh)  return 'bearish';
-  if (hh && !ll) return 'bullish';
-  if (ll && !hh) return 'bearish';
+// ── Range-comparison bias (works in trends AND ranges) ────────
+// Splits bars into recent half vs earlier half, compares high/low ranges.
+// Unlike pivot detection, never returns 'neutral' just because only 1 pivot
+// formed — strong trends with no pullbacks are correctly classified.
+function getRangeBias(bars) {
+  if (!bars || bars.length < 4) return 'neutral';
+  const half    = Math.floor(bars.length / 2);
+  const earlier = bars.slice(0, half);
+  const recent  = bars.slice(half);
+  const eH = Math.max(...earlier.map(b => b.high));
+  const eL = Math.min(...earlier.map(b => b.low));
+  const rH = Math.max(...recent.map(b => b.high));
+  const rL = Math.min(...recent.map(b => b.low));
+  if (rH > eH && rL > eL) return 'bullish';
+  if (rH < eH && rL < eL) return 'bearish';
+  // Tiebreak: close direction
+  const lastClose  = recent.at(-1).close;
+  const midClose   = earlier.at(-1).close;
+  if (lastClose > midClose) return 'bullish';
+  if (lastClose < midClose) return 'bearish';
   return 'neutral';
 }
 
@@ -188,15 +167,15 @@ async function analyzeSymbol(symbol, log) {
   }
 
   // Tier 1: H4 macro bias — exclude the forming H4 bar (last one)
-  const h4Bias = getBias(h4Bars.slice(-H4_STRUCT - 1, -1));
+  const h4Bias = getRangeBias(h4Bars.slice(-H4_STRUCT - 1, -1));
   if (h4Bias === 'neutral') return null;
 
   // Tier 2: H1 intermediate bias — last H1_CURR confirmed bars
-  const h1Bias = getBias(h1Bars.slice(-H1_CURR - 1, -1));
+  const h1Bias = getRangeBias(h1Bars.slice(-H1_CURR - 1, -1));
   if (h1Bias !== h4Bias) return null;
 
   // Tier 3: H1 micro bias — last H1_MICRO confirmed bars
-  const micBias = getBias(h1Bars.slice(-H1_MICRO - 1, -1));
+  const micBias = getRangeBias(h1Bars.slice(-H1_MICRO - 1, -1));
   if (micBias !== h4Bias) return null;
 
   // All 3 tiers aligned — generate signal
