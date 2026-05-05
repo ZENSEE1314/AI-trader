@@ -2,25 +2,31 @@
 // ════════════════════════════════════════════════════════════════
 //  chart-agent.js  —  AI "human trader" market analyst
 //
-//  Instead of rigid indicator rules, this agent reads the market
-//  the way a human trader would:
-//    - VWAP direction and slope (is it rising or falling today?)
+//  Reads the market like a professional SMC/ICT trader:
+//    - VWAP direction and slope (rising / falling / flat today)
 //    - Price vs VWAP (above = uptrend bias, below = downtrend bias)
 //    - Equal Highs / Equal Lows (liquidity pools)
 //    - Recent H1 structure (HH+HL = uptrend, LL+LH = downtrend)
-//    - Key swing levels and how price is behaving at them
 //
-//  Uses Claude API to reason about the combined picture and decide:
-//    LONG | SHORT | WAIT
+//  Uses Ollama (local LLM, zero API cost) to reason about the
+//  combined picture and decide: LONG | SHORT | WAIT
+//
+//  Falls back to Claude API if ANTHROPIC_API_KEY is set and
+//  Ollama is unreachable.
+//
+//  Self-learning: past signal outcomes are loaded from DB before
+//  each analysis so the model improves from its own trade history.
 // ════════════════════════════════════════════════════════════════
 
-const Anthropic  = require('@anthropic-ai/sdk');
 const fetch      = require('node-fetch');
 const { SYMBOL_LEVERAGE } = require('./strategy-3timing');
+const memory     = require('./chart-agent-memory');
 
-const client     = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-const MODEL      = 'claude-haiku-4-5-20251001';
-const TIMEOUT    = 15_000;
+// ── LLM Config ────────────────────────────────────────────────
+const OLLAMA_URL   = process.env.OLLAMA_URL   || 'http://localhost:11434';
+const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'qwen2.5:7b';
+const TIMEOUT      = 30_000;
+
 const INITIAL_SL_CAP = 0.25;
 
 // ── Fetch H1 klines ───────────────────────────────────────────
@@ -60,18 +66,17 @@ function calcVWAP(h1Klines) {
   }
 
   if (!vwapSeries.length) return null;
-  const last    = vwapSeries.at(-1);
-  const prev    = vwapSeries.length > 3 ? vwapSeries[vwapSeries.length - 4] : vwapSeries[0];
-  const slope   = last.vwap > prev.vwap ? 'rising' : last.vwap < prev.vwap ? 'falling' : 'flat';
+  const last  = vwapSeries.at(-1);
+  const prev  = vwapSeries.length > 3 ? vwapSeries[vwapSeries.length - 4] : vwapSeries[0];
+  const slope = last.vwap > prev.vwap ? 'rising' : last.vwap < prev.vwap ? 'falling' : 'flat';
   return { ...last, slope, bars: useBars.length };
 }
 
 // ── Equal Highs / Equal Lows detector ────────────────────────
-// Finds swing highs/lows within 0.15% of each other → liquidity pools
 function findEQLevels(h1Klines, window = 48) {
   const slice = h1Klines.slice(-window);
   const swLen = 3;
-  const TOL   = 0.0015; // 0.15%
+  const TOL   = 0.0015;
 
   const swingHighs = [], swingLows = [];
   for (let i = swLen; i < slice.length - swLen; i++) {
@@ -87,9 +92,7 @@ function findEQLevels(h1Klines, window = 48) {
     if (isL)  swingLows.push(l);
   }
 
-  const eqH = groupLevels(swingHighs, TOL);
-  const eqL = groupLevels(swingLows,  TOL);
-  return { eqH, eqL };
+  return { eqH: groupLevels(swingHighs, TOL), eqL: groupLevels(swingLows, TOL) };
 }
 
 function groupLevels(levels, tol) {
@@ -124,12 +127,12 @@ function describeStructure(h1Klines, window = 16) {
     const hl = lows.at(-1)  > lows.at(-2);
     const ll = lows.at(-1)  < lows.at(-2);
     const lh = highs.at(-1) < highs.at(-2);
-    if (hh && hl)  structLabel = 'HH+HL (strong uptrend)';
-    else if (ll && lh) structLabel = 'LL+LH (strong downtrend)';
-    else if (hh)   structLabel = 'HH forming (bullish momentum)';
-    else if (hl)   structLabel = 'HL holding (bullish structure)';
-    else if (ll)   structLabel = 'LL forming (bearish momentum)';
-    else if (lh)   structLabel = 'LH forming (bearish structure)';
+    if (hh && hl)       structLabel = 'HH+HL (strong uptrend)';
+    else if (ll && lh)  structLabel = 'LL+LH (strong downtrend)';
+    else if (hh)        structLabel = 'HH forming (bullish momentum)';
+    else if (hl)        structLabel = 'HL holding (bullish structure)';
+    else if (ll)        structLabel = 'LL forming (bearish momentum)';
+    else if (lh)        structLabel = 'LH forming (bearish structure)';
   } else if (highs.length >= 2) {
     structLabel = highs.at(-1) > highs.at(-2) ? 'HH forming (bullish)' : 'LH forming (bearish)';
   } else if (lows.length >= 2) {
@@ -143,7 +146,7 @@ function describeStructure(h1Klines, window = 16) {
   return { structLabel, changePct, lastClose, highs, lows };
 }
 
-// ── Build market profile text for Claude ──────────────────────
+// ── Build market profile text for LLM ────────────────────────
 function buildMarketProfile(symbol, price, vwap, eq, struct) {
   const pVwapPct = ((price - vwap.vwap) / vwap.vwap * 100).toFixed(2);
   const pAbove   = price > vwap.vwap;
@@ -176,9 +179,70 @@ function buildMarketProfile(symbol, price, vwap, eq, struct) {
   return lines.join('\n');
 }
 
-// ── Ask Claude to analyze the market ─────────────────────────
-async function askClaude(symbol, profile) {
-  const systemPrompt = `You are an expert crypto futures trader with 10 years experience.
+// ── Ask Ollama ────────────────────────────────────────────────
+async function askOllama(systemPrompt, userMsg) {
+  const url = `${OLLAMA_URL}/api/chat`;
+  const body = JSON.stringify({
+    model: OLLAMA_MODEL,
+    stream: false,
+    messages: [
+      { role: 'system', content: systemPrompt },
+      { role: 'user',   content: userMsg },
+    ],
+    options: { temperature: 0.1, num_predict: 150 },
+  });
+
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body,
+    timeout: TIMEOUT,
+  });
+  if (!res.ok) throw new Error(`Ollama ${res.status}`);
+  const data = await res.json();
+  return data.message?.content || '';
+}
+
+// ── Ask Claude API (fallback) ─────────────────────────────────
+async function askClaude(systemPrompt, userMsg) {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) throw new Error('No ANTHROPIC_API_KEY');
+
+  const res = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 150,
+      system: systemPrompt,
+      messages: [{ role: 'user', content: userMsg }],
+    }),
+    timeout: TIMEOUT,
+  });
+  if (!res.ok) throw new Error(`Claude API ${res.status}`);
+  const data = await res.json();
+  return data.content?.[0]?.text || '';
+}
+
+// ── Ask LLM (Ollama first, Claude fallback) ───────────────────
+async function askLLM(systemPrompt, userMsg) {
+  try {
+    return await askOllama(systemPrompt, userMsg);
+  } catch (ollamaErr) {
+    if (process.env.ANTHROPIC_API_KEY) {
+      return await askClaude(systemPrompt, userMsg);
+    }
+    throw ollamaErr;
+  }
+}
+
+// ── Build system prompt with injected memory ─────────────────
+function buildSystemPrompt(lessons) {
+  const base = `You are an expert crypto futures trader with 10 years experience.
 You analyze market structure, VWAP, and liquidity the same way a professional SMC/ICT trader would.
 
 Rules:
@@ -193,23 +257,8 @@ Rules:
 Respond ONLY with valid JSON, no explanation outside it:
 {"action":"LONG","confidence":"high","reason":"one sentence max"}`;
 
-  const userMsg = `Analyze this market and tell me what a skilled trader would do right now:\n\n${profile}`;
-
-  try {
-    const msg = await client.messages.create({
-      model:      MODEL,
-      max_tokens: 120,
-      messages:   [{ role: 'user', content: userMsg }],
-      system:     systemPrompt,
-    });
-
-    const text = msg.content[0]?.text || '';
-    const m    = text.match(/\{[\s\S]*?\}/);
-    if (!m) return null;
-    return JSON.parse(m[0]);
-  } catch (e) {
-    return null;
-  }
+  if (!lessons) return base;
+  return `${base}\n${lessons}`;
 }
 
 // ── Analyze one symbol ────────────────────────────────────────
@@ -224,27 +273,55 @@ async function analyzeSymbol(symbol, log) {
   const vwap   = calcVWAP(h1Klines);
   if (!vwap) return null;
 
-  const eq     = findEQLevels(h1Klines, 48);
-  const struct = describeStructure(h1Klines, 16);
+  const eq      = findEQLevels(h1Klines, 48);
+  const struct  = describeStructure(h1Klines, 16);
   const profile = buildMarketProfile(symbol, price, vwap, eq, struct);
 
-  log(`chart-agent: ${symbol} — asking Claude... (price=$${price.toFixed(2)} vwap=$${vwap.vwap.toFixed(2)} slope=${vwap.slope} struct="${struct.structLabel}")`);
+  // Load past performance lessons for this symbol
+  const lessons     = await memory.getLessons(symbol);
+  const systemPrompt = buildSystemPrompt(lessons);
+  const userMsg     = `Analyze this market and tell me what a skilled trader would do right now:\n\n${profile}`;
 
-  const decision = await askClaude(symbol, profile);
-  if (!decision) {
-    log(`chart-agent: ${symbol} — no decision from Claude`);
+  log(`chart-agent: ${symbol} — asking LLM... (price=$${price.toFixed(2)} vwap=$${vwap.vwap.toFixed(2)} slope=${vwap.slope} struct="${struct.structLabel}")`);
+
+  let text = '';
+  try {
+    text = await askLLM(systemPrompt, userMsg);
+  } catch (e) {
+    log(`chart-agent: ${symbol} — LLM error: ${e.message}`);
     return null;
   }
+
+  const m = text.match(/\{[\s\S]*?\}/);
+  if (!m) {
+    log(`chart-agent: ${symbol} — no JSON in response`);
+    return null;
+  }
+
+  let decision;
+  try { decision = JSON.parse(m[0]); } catch { return null; }
 
   log(`chart-agent: ${symbol} → ${decision.action} [${decision.confidence}] — ${decision.reason}`);
 
   if (decision.action === 'WAIT' || !['LONG', 'SHORT'].includes(decision.action)) return null;
   if (decision.confidence === 'low') return null;
 
-  const side = decision.action;
-  const lev  = SYMBOL_LEVERAGE[symbol] || 50;
-  const slPct = INITIAL_SL_CAP / lev;
-  const sl    = side === 'LONG' ? price * (1 - slPct) : price * (1 + slPct);
+  const side   = decision.action;
+  const lev    = SYMBOL_LEVERAGE[symbol] || 50;
+  const slPct  = INITIAL_SL_CAP / lev;
+  const sl     = side === 'LONG' ? price * (1 - slPct) : price * (1 + slPct);
+
+  // Persist signal for self-learning
+  const signalId = await memory.saveSignal({
+    symbol,
+    side,
+    confidence:   decision.confidence,
+    reason:       decision.reason,
+    marketProfile: profile,
+    vwapSlope:    vwap.slope,
+    structure:    struct.structLabel,
+    entryPrice:   price,
+  });
 
   return {
     symbol,
@@ -261,19 +338,26 @@ async function analyzeSymbol(symbol, log) {
     vwap:       vwap.vwap,
     vwapSlope:  vwap.slope,
     structure:  struct.structLabel,
+    signalId,
     tp1: null, tp2: null, tp3: null,
-    version: 'chart-agent-v1',
+    version: 'chart-agent-v2',
   };
 }
 
 // ── Main scan ─────────────────────────────────────────────────
 async function scanChartAgent(symbols, log = console.log) {
+  // Run daily review once per day (no-op if already ran today)
+  memory.runDailyReview(
+    prompt => askLLM('You are a trading analyst. Return only valid JSON.', prompt),
+    log
+  ).catch(() => {});
+
   const results = [];
   for (const symbol of symbols) {
     try {
       const sig = await analyzeSymbol(symbol, log);
       if (sig) results.push(sig);
-      await new Promise(r => setTimeout(r, 500)); // rate limit between symbols
+      await new Promise(r => setTimeout(r, 500));
     } catch (e) {
       log(`chart-agent: ${symbol} — error: ${e.message}`);
     }

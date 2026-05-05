@@ -936,6 +936,12 @@ async function checkTrailingStop(client) {
 
           log(`AI recorded: ${sym} PnL=${pnlPct.toFixed(2)}% duration=${durationMin}min setup=${state.setup}`);
 
+          // Record ChartAgent outcome for self-learning
+          if (state.setup && state.setup.startsWith('ChartAI')) {
+            const { recordOutcome } = require('./chart-agent-memory');
+            recordOutcome(sym, state.isLong ? 'LONG' : 'SHORT', state.entry, exitPrice, pnlPct).catch(() => {});
+          }
+
           // Notify agents of trade outcome (for survival HP + capital tracking)
           if (_onTradeOutcome) {
             const tradeQty = Math.abs(parseFloat(state.qty || 0));
