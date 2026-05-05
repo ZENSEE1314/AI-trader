@@ -45,11 +45,6 @@ const PIVOT_RIGHT = 2;
 const H4_STRUCT   = 30;  // H4 bars for macro bias window
 const H1_CURR     = 48;  // H1 bars for intermediate bias
 const H1_MICRO    = 16;  // H1 bars for micro bias
-const COOLDOWN_H1 = 4;   // hours between signals per symbol
-
-// ── Per-symbol cooldown ───────────────────────────────────────
-const _lastSignalAt = new Map(); // symbol → timestamp ms
-
 // ── Binance futures klines ────────────────────────────────────
 async function fetchKlines(symbol, interval, limit) {
   const url = `https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`;
@@ -230,22 +225,12 @@ async function analyzeSymbol(symbol, log) {
 
 // ── Main scan (called each cycle from cycle.js) ───────────────
 async function scan3Timing(log = console.log) {
-  const now     = Date.now();
   const results = [];
 
   for (const symbol of ACTIVE_SYMBOLS) {
     try {
-      // Per-symbol cooldown: skip if signal fired < COOLDOWN_H1 hours ago
-      const lastAt    = _lastSignalAt.get(symbol) || 0;
-      const hoursAgo  = (now - lastAt) / 3_600_000;
-      if (hoursAgo < COOLDOWN_H1) {
-        log(`3-timing: ${symbol} — cooldown (${(COOLDOWN_H1 - hoursAgo).toFixed(1)}h left)`);
-        continue;
-      }
-
       const sig = await analyzeSymbol(symbol, log);
       if (sig) {
-        _lastSignalAt.set(symbol, now);
         results.push(sig);
         log(`3-timing: ✓ ${symbol} ${sig.side} | H4=${sig.h4Bias} H1=${sig.h1Bias} micro=${sig.micBias} price=$${sig.entry.toFixed(4)}`);
       }
