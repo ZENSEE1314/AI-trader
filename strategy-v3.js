@@ -1657,17 +1657,19 @@ async function analyzeV3(ticker, opts = {}) {
       }
     }
 
-    if (gate('zone') && !isVWAPFade && vwap && vwapUpper && vwapLower) {
+    // Zone gate falls back to VWAP mid alone — Bitunix shows
+    // "Lower Range: Forming" early in session and previously the gate
+    // skipped entirely (vwapLower null), letting LONG fire below VWAP.
+    // Below mid → SHORT only; above mid → LONG only, regardless of bands.
+    if (gate('zone') && !isVWAPFade && vwap) {
       const NEAR_MID = 0.001;
       const distFromMid = (price - vwap) / vwap;
-      const inUpperZone = distFromMid >  NEAR_MID && price < vwapUpper;
-      const inLowerZone = distFromMid < -NEAR_MID && price > vwapLower;
-      if (inUpperZone && side === 'SHORT') {
-        dlog(`null — SHORT in upper VWAP zone — only LONG allowed`);
+      if (distFromMid < -NEAR_MID && side === 'LONG') {
+        dlog(`null — LONG below VWAP mid $${vwap.toFixed(4)} (price $${price.toFixed(4)}) — only SHORT allowed`);
         return null;
       }
-      if (inLowerZone && side === 'LONG') {
-        dlog(`null — LONG in lower VWAP zone — only SHORT allowed`);
+      if (distFromMid >  NEAR_MID && side === 'SHORT') {
+        dlog(`null — SHORT above VWAP mid $${vwap.toFixed(4)} (price $${price.toFixed(4)}) — only LONG allowed`);
         return null;
       }
     }
