@@ -249,33 +249,33 @@ async function askLLM(systemPrompt, userMsg) {
 // ── Rule-based fallback decision (no LLM required) ──────────
 // Covers both trend-following AND reversal (CHoCH) entries.
 function decideWithRules(price, vwap, struct, vwapExtPct = 0) {
-  const aboveVwap = price > vwap.vwap;
-  const label     = struct.structLabel.toLowerCase();
-  const extAbs    = Math.abs(vwapExtPct);
+  const aboveVwap    = price > vwap.vwap;
+  const aboveLoBand  = price >= vwap.lower;   // below this = free-fall, no LONG
+  const belowHiBand  = price <= vwap.upper;   // above this = extreme overextension, no SHORT
+  const label        = struct.structLabel.toLowerCase();
+  const extAbs       = Math.abs(vwapExtPct);
 
   const isBullishStruct = label.includes('hh') || label.includes('hl');
   const isBearishStruct = label.includes('ll') || (label.includes('lh') && !label.includes('hl'));
 
-  // ── 1. CHoCH entry (reversal at the HL/LH — best entries happen here) ────
-  // Price is still on the wrong side of VWAP but structure has already turned.
-  // This catches the HL entry before price crosses VWAP.
-  // Guard: not too far from VWAP (< 1.5%) — avoids buying deep below into free-fall.
-  if (!aboveVwap && isBullishStruct && vwap.slope !== 'falling' && extAbs < 1.5) {
+  // ── 1. CHoCH entry (reversal at HL/LH — best entries, before VWAP cross) ──
+  // LONG CHoCH: price below VWAP midline but ABOVE lower band (not free-falling)
+  // SHORT CHoCH: price above VWAP midline but BELOW upper band (not parabolic)
+  if (!aboveVwap && aboveLoBand && isBullishStruct && vwap.slope !== 'falling' && extAbs < 1.5) {
     return {
       action: 'LONG', confidence: 'medium',
-      reason: `CHoCH — structure turned bullish (${struct.structLabel}), price approaching VWAP from below`,
+      reason: `CHoCH — structure turned bullish (${struct.structLabel}), price above lower VWAP band approaching midline`,
     };
   }
-  if (aboveVwap && isBearishStruct && vwap.slope !== 'rising' && extAbs < 1.5) {
+  if (aboveVwap && belowHiBand && isBearishStruct && vwap.slope !== 'rising' && extAbs < 1.5) {
     return {
       action: 'SHORT', confidence: 'medium',
-      reason: `CHoCH — structure turned bearish (${struct.structLabel}), price approaching VWAP from above`,
+      reason: `CHoCH — structure turned bearish (${struct.structLabel}), price below upper VWAP band approaching midline`,
     };
   }
 
-  // ── 2. Trend-following (price already crossed VWAP, structure aligned) ────
+  // ── 2. Trend-following (price crossed VWAP, structure aligned) ─────────────
   if (aboveVwap && isBullishStruct && vwap.slope !== 'falling') {
-    // Overextended from VWAP — lower confidence, wait for pullback
     if (extAbs > 0.8) {
       return { action: 'LONG', confidence: 'low', reason: `Extended ${extAbs.toFixed(1)}% above VWAP — late entry, structure bullish` };
     }
@@ -300,10 +300,11 @@ You analyze market structure, VWAP, and liquidity the same way a professional SM
 
 Entry rules (priority order):
 1. CHoCH (Change of Character) entry — BEST entries, catch reversals early:
-   - Structure was bearish (LL+LH) then shows first HL forming → LONG even if price still below VWAP
-   - Structure was bullish (HH+HL) then shows first LH forming → SHORT even if price still above VWAP
-   - These catch the move at the bottom/top, before price crosses VWAP
-   - Only valid if price is within 1.5% of VWAP (not in free-fall)
+   - Structure was bearish (LL+LH) then shows first HL forming → LONG even if price still below VWAP midline
+     BUT ONLY if price is ABOVE the VWAP lower band — below the lower band = free-fall, do NOT buy
+   - Structure was bullish (HH+HL) then shows first LH forming → SHORT even if price still above VWAP midline
+     BUT ONLY if price is BELOW the VWAP upper band — above the upper band = parabolic, do NOT short
+   - Only valid if price is within 1.5% of VWAP midline (not in free-fall/parabolic)
 2. Trend-following entry — price already above/below VWAP with aligned structure:
    - Price ABOVE VWAP + HH+HL or HL → LONG (but if >0.8% above VWAP, it's a late/extended entry)
    - Price BELOW VWAP + LL+LH or LH → SHORT (but if >0.8% below VWAP, it's a late/extended entry)
