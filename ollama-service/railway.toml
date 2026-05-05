@@ -9,5 +9,5 @@ restartPolicyType = "ALWAYS"
 restartPolicyMaxRetries = 5
 
 [variables]
-OLLAMA_MODEL = "gemma3:4b"
+OLLAMA_MODEL = "kimi-k2.6:cloud"
 PORT = "11434"
