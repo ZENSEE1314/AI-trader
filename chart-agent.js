@@ -25,7 +25,7 @@ const memory     = require('./chart-agent-memory');
 // ── LLM Config ────────────────────────────────────────────────
 const OLLAMA_URL   = process.env.OLLAMA_URL   || 'http://localhost:11434';
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'kimi-k2.6:cloud';
-const TIMEOUT      = 30_000;
+const TIMEOUT      = 8_000;  // Fast fallback to rule-based if LLM is slow
 
 const INITIAL_SL_CAP = 0.25;
 
@@ -427,17 +427,23 @@ async function scanChartAgent(symbols, log = console.log) {
     log
   ).catch(() => {});
 
+  // Parallel scan — all symbols at once so the full scan takes as long as ONE symbol.
+  // Sequential was starving BTC/BNB/SOL/ADA/AVAX when LLM was slow (only ETH fired).
+  const settled = await Promise.allSettled(
+    symbols.map(symbol => analyzeSymbol(symbol, log))
+  );
+
   const results = [];
-  for (const symbol of symbols) {
-    try {
-      const sig = await analyzeSymbol(symbol, log);
-      if (sig) results.push(sig);
-      await new Promise(r => setTimeout(r, 500));
-    } catch (e) {
-      log(`chart-agent: ${symbol} — error: ${e.message}`);
+  for (let i = 0; i < settled.length; i++) {
+    const r = settled[i];
+    if (r.status === 'fulfilled' && r.value) {
+      results.push(r.value);
+    } else if (r.status === 'rejected') {
+      log(`chart-agent: ${symbols[i]} — error: ${r.reason?.message || r.reason}`);
     }
   }
-  log(`chart-agent: done — ${results.length} signal(s)`);
+
+  log(`chart-agent: done — ${results.length}/${symbols.length} signal(s): ${results.map(s => `${s.symbol}(${s.direction})`).join(', ') || 'none'}`);
   return results;
 }
 
