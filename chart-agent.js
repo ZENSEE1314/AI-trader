@@ -29,9 +29,9 @@ const TIMEOUT      = 30_000;
 
 const INITIAL_SL_CAP = 0.25;
 
-// ── Fetch H1 klines ───────────────────────────────────────────
-async function fetchH1(symbol, limit = 100) {
-  const url = `https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=1h&limit=${limit}`;
+// ── Fetch klines (15m for structure — 4x faster CHoCH detection than H1) ────
+async function fetchKlines(symbol, interval = '15m', limit = 200) {
+  const url = `https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`;
   for (let i = 0; i < 3; i++) {
     try {
       const res = await fetch(url, { timeout: TIMEOUT });
@@ -147,9 +147,14 @@ function describeStructure(h1Klines, window = 16) {
 }
 
 // ── Build market profile text for LLM ────────────────────────
-function buildMarketProfile(symbol, price, vwap, eq, struct) {
-  const pVwapPct = ((price - vwap.vwap) / vwap.vwap * 100).toFixed(2);
+function buildMarketProfile(symbol, price, vwap, eq, struct, vwapExtPct = 0) {
+  const pVwapPct = Math.abs(vwapExtPct).toFixed(2);
   const pAbove   = price > vwap.vwap;
+
+  // Warn if price is extended far from VWAP — chasing is bad entry
+  const extWarning = Math.abs(vwapExtPct) > 0.8
+    ? `⚠️ Price is ${pAbove ? 'EXTENDED ABOVE' : 'EXTENDED BELOW'} VWAP by ${pVwapPct}% — prefer waiting for pullback to VWAP`
+    : `Price is near VWAP (${pVwapPct}% away) — good entry zone`;
 
   const lines = [
     `Symbol: ${symbol}`,
@@ -157,13 +162,14 @@ function buildMarketProfile(symbol, price, vwap, eq, struct) {
     ``,
     `── VWAP ──`,
     `Daily VWAP: $${vwap.vwap.toFixed(4)} (slope: ${vwap.slope})`,
-    `Price is ${pAbove ? 'ABOVE' : 'BELOW'} VWAP by ${Math.abs(pVwapPct)}% → ${pAbove ? 'BULLISH' : 'BEARISH'} bias`,
+    `Price is ${pAbove ? 'ABOVE' : 'BELOW'} VWAP by ${pVwapPct}% → ${pAbove ? 'BULLISH' : 'BEARISH'} bias`,
+    extWarning,
     `VWAP upper band: $${vwap.upper.toFixed(4)}`,
     `VWAP lower band: $${vwap.lower.toFixed(4)}`,
     ``,
-    `── Market Structure (last 16 H1 bars) ──`,
+    `── Market Structure (last 8h, 15m bars) ──`,
     `Structure: ${struct.structLabel}`,
-    `16h price change: ${struct.changePct}%`,
+    `8h price change: ${struct.changePct}%`,
     struct.highs.length ? `Recent swing highs: ${struct.highs.slice(-3).map(h => '$' + h.toFixed(4)).join(', ')}` : 'No clear swing highs yet',
     struct.lows.length  ? `Recent swing lows:  ${struct.lows.slice(-3).map(l => '$' + l.toFixed(4)).join(', ')}` : 'No clear swing lows yet',
     ``,
@@ -241,20 +247,45 @@ async function askLLM(systemPrompt, userMsg) {
 }
 
 // ── Rule-based fallback decision (no LLM required) ──────────
-// Same logic as the LLM prompt rules — runs when Ollama/Claude unreachable.
-function decideWithRules(price, vwap, struct) {
+// Covers both trend-following AND reversal (CHoCH) entries.
+function decideWithRules(price, vwap, struct, vwapExtPct = 0) {
   const aboveVwap = price > vwap.vwap;
   const label     = struct.structLabel.toLowerCase();
+  const extAbs    = Math.abs(vwapExtPct);
 
   const isBullishStruct = label.includes('hh') || label.includes('hl');
-  const isBearishStruct = label.includes('ll') || label.includes('lh') && !label.includes('hl');
+  const isBearishStruct = label.includes('ll') || (label.includes('lh') && !label.includes('hl'));
 
-  // Strong confluence: VWAP side + structure align
+  // ── 1. CHoCH entry (reversal at the HL/LH — best entries happen here) ────
+  // Price is still on the wrong side of VWAP but structure has already turned.
+  // This catches the HL entry before price crosses VWAP.
+  // Guard: not too far from VWAP (< 1.5%) — avoids buying deep below into free-fall.
+  if (!aboveVwap && isBullishStruct && vwap.slope !== 'falling' && extAbs < 1.5) {
+    return {
+      action: 'LONG', confidence: 'medium',
+      reason: `CHoCH — structure turned bullish (${struct.structLabel}), price approaching VWAP from below`,
+    };
+  }
+  if (aboveVwap && isBearishStruct && vwap.slope !== 'rising' && extAbs < 1.5) {
+    return {
+      action: 'SHORT', confidence: 'medium',
+      reason: `CHoCH — structure turned bearish (${struct.structLabel}), price approaching VWAP from above`,
+    };
+  }
+
+  // ── 2. Trend-following (price already crossed VWAP, structure aligned) ────
   if (aboveVwap && isBullishStruct && vwap.slope !== 'falling') {
+    // Overextended from VWAP — lower confidence, wait for pullback
+    if (extAbs > 0.8) {
+      return { action: 'LONG', confidence: 'low', reason: `Extended ${extAbs.toFixed(1)}% above VWAP — late entry, structure bullish` };
+    }
     const conf = (vwap.slope === 'rising' && label.includes('hh') && label.includes('hl')) ? 'high' : 'medium';
     return { action: 'LONG', confidence: conf, reason: `Price above VWAP (${vwap.slope}), structure: ${struct.structLabel}` };
   }
   if (!aboveVwap && isBearishStruct && vwap.slope !== 'rising') {
+    if (extAbs > 0.8) {
+      return { action: 'SHORT', confidence: 'low', reason: `Extended ${extAbs.toFixed(1)}% below VWAP — late entry, structure bearish` };
+    }
     const conf = (vwap.slope === 'falling' && label.includes('ll') && label.includes('lh')) ? 'high' : 'medium';
     return { action: 'SHORT', confidence: conf, reason: `Price below VWAP (${vwap.slope}), structure: ${struct.structLabel}` };
   }
@@ -267,14 +298,21 @@ function buildSystemPrompt(lessons) {
   const base = `You are an expert crypto futures trader with 10 years experience.
 You analyze market structure, VWAP, and liquidity the same way a professional SMC/ICT trader would.
 
-Rules:
-- Price ABOVE VWAP with rising slope = uptrend = prefer LONG
-- Price BELOW VWAP with falling slope = downtrend = prefer SHORT
-- Equal Highs (EQH) = liquidity above — price likely sweeps them before reversing or continuing
-- Equal Lows (EQL) = liquidity below — price likely sweeps them before reversing or continuing
-- HH+HL structure = strong uptrend, buy pullbacks (HL entries)
-- LL+LH structure = strong downtrend, sell rallies (LH entries)
-- WAIT when structure is unclear, VWAP is flat, or price is between EQ levels with no clear bias
+Entry rules (priority order):
+1. CHoCH (Change of Character) entry — BEST entries, catch reversals early:
+   - Structure was bearish (LL+LH) then shows first HL forming → LONG even if price still below VWAP
+   - Structure was bullish (HH+HL) then shows first LH forming → SHORT even if price still above VWAP
+   - These catch the move at the bottom/top, before price crosses VWAP
+   - Only valid if price is within 1.5% of VWAP (not in free-fall)
+2. Trend-following entry — price already above/below VWAP with aligned structure:
+   - Price ABOVE VWAP + HH+HL or HL → LONG (but if >0.8% above VWAP, it's a late/extended entry)
+   - Price BELOW VWAP + LL+LH or LH → SHORT (but if >0.8% below VWAP, it's a late/extended entry)
+3. Liquidity context:
+   - EQH above = buy stops — price sweeps them then may reverse or continue up
+   - EQL below = sell stops — price sweeps them then may reverse or continue down
+
+When the market profile says price is EXTENDED from VWAP (>0.8%), prefer WAIT or low confidence.
+WAIT when structure is completely unclear (sideways) or price is mid-range with no bias.
 
 Respond ONLY with valid JSON, no explanation outside it:
 {"action":"LONG","confidence":"high","reason":"one sentence max"}`;
@@ -285,19 +323,24 @@ Respond ONLY with valid JSON, no explanation outside it:
 
 // ── Analyze one symbol ────────────────────────────────────────
 async function analyzeSymbol(symbol, log) {
-  const h1Klines = await fetchH1(symbol, 100);
-  if (!h1Klines || h1Klines.length < 20) {
+  // 15m klines: 200 bars = ~50h of data. Structure detects CHoCH 4× faster than H1.
+  const klines = await fetchKlines(symbol, '15m', 200);
+  if (!klines || klines.length < 20) {
     log(`chart-agent: ${symbol} — fetch failed`);
     return null;
   }
 
-  const price  = parseFloat(h1Klines.at(-1)[4]);
-  const vwap   = calcVWAP(h1Klines);
+  const price  = parseFloat(klines.at(-1)[4]);
+  const vwap   = calcVWAP(klines);
   if (!vwap) return null;
 
-  const eq      = findEQLevels(h1Klines, 48);
-  const struct  = describeStructure(h1Klines, 16);
-  const profile = buildMarketProfile(symbol, price, vwap, eq, struct);
+  // 15m windows: EQ = 96 bars (24h), structure = 32 bars (8h)
+  const eq      = findEQLevels(klines, 96);
+  const struct  = describeStructure(klines, 32);
+
+  // How far price has extended from VWAP — used to prefer near-VWAP entries
+  const vwapExtPct = ((price - vwap.vwap) / vwap.vwap) * 100; // positive = above
+  const profile = buildMarketProfile(symbol, price, vwap, eq, struct, vwapExtPct);
 
   // Load past performance lessons for this symbol
   const lessons     = await memory.getLessons(symbol);
@@ -328,7 +371,7 @@ async function analyzeSymbol(symbol, log) {
   }
 
   if (usedRules) {
-    decision = decideWithRules(price, vwap, struct);
+    decision = decideWithRules(price, vwap, struct, vwapExtPct);
     log(`chart-agent: ${symbol} — rules → ${decision.action} [${decision.confidence}] — ${decision.reason}`);
   } else {
     log(`chart-agent: ${symbol} — LLM → ${decision.action} [${decision.confidence}] — ${decision.reason}`);
