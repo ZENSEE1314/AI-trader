@@ -9,6 +9,7 @@ const fetch = require('node-fetch');
 const aiLearner = require('./ai-learner');
 // 3-Timing strategy: H4+H1+H1-micro bias stack, 25% cap SL → 30% lock +10% → 46% trail
 const { scan3Timing, calcTrail3Timing, ACTIVE_SYMBOLS, SYMBOL_LEVERAGE, getSessionMode } = require('./strategy-3timing');
+const { scanChartAgent } = require('./chart-agent');
 const { getSentimentScores } = require('./sentiment-scraper');
 const { log: bLog } = require('./bot-logger');
 const { getBinanceRequestOptions, getFetchOptions } = require('./proxy-agent');
@@ -1342,9 +1343,10 @@ async function main() {
       bLog.error(`Kronos batch scan failed (non-blocking): ${kronosBatchErr.message}`);
     }
 
-    // ── 3-Timing Strategy — ACTIVE execution ──
-    // H4+H1+H1-micro bias confluence. Fires when all 3 tiers agree.
-    // SL: 25% cap → lock +10% at +30% cap → main trail at +46% cap.
+    // ── Strategy Scans — ACTIVE execution ──
+    // 1) 3-Timing: VWAP+H1+H1-micro range bias confluence (fast, no API cost)
+    // 2) ChartAgent: Claude reads VWAP slope, EQ levels, structure like a human trader
+    // Both feed the same signal pipeline. Dedup by symbol keeps only the highest score.
     const signals = [];
     try {
       const raw3T = await scan3Timing(msg => bLog.scan(msg));
@@ -1354,6 +1356,16 @@ async function main() {
       }
     } catch (tErr) {
       bLog.error(`3-Timing scan failed: ${tErr.message}`);
+    }
+
+    try {
+      const rawCA = await scanChartAgent(ACTIVE_SYMBOLS, msg => bLog.scan(msg));
+      if ((rawCA || []).length > 0) {
+        signals.push(...rawCA);
+        bLog.scan(`ChartAgent: ${rawCA.length} signal(s) → ${rawCA.map(s => `${s.symbol} ${s.side}`).join(', ')}`);
+      }
+    } catch (caErr) {
+      bLog.error(`ChartAgent scan failed: ${caErr.message}`);
     }
 
     if (!signals.length) {
