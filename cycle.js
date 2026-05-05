@@ -1,14 +1,14 @@
 // ============================================================
 // Smart Crypto Trader v4 — AI Self-Learning Edition
 // Binance USDT-M Futures + Bitunix Futures
-// Strategy: SMC (LiqSweep+SLHunt+MomScalp) + BRR-Fib + Quantum AI
+// Strategy: 3-Timing H4+H1+H1-micro (backtest-validated 51% WR)
 // ============================================================
 
 const { USDMClient } = require('binance');
 const fetch = require('node-fetch');
 const aiLearner = require('./ai-learner');
-// Strategy v3: MCT PDF — Break&Retest / LiqGrab / VWAP Trend + System 5 trailing SL (sole strategy)
-const { scanV3, calcTrailingSLV3, ACTIVE_SYMBOLS, SYMBOL_LEVERAGE, getSessionMode } = require('./strategy-v3');
+// 3-Timing strategy: H4+H1+H1-micro bias stack, 25% cap SL → 30% lock +10% → 46% trail
+const { scan3Timing, calcTrail3Timing, ACTIVE_SYMBOLS, SYMBOL_LEVERAGE, getSessionMode } = require('./strategy-3timing');
 const { getSentimentScores } = require('./sentiment-scraper');
 const { log: bLog } = require('./bot-logger');
 const { getBinanceRequestOptions, getFetchOptions } = require('./proxy-agent');
@@ -48,14 +48,14 @@ const CONFIG = {
 let lastBitunixSync = 0;
 
 // ── SL/TP Config ──────────────────────────────────────────
-// System 5 — initial SL = 10% capital (margin).
+// System 5 — initial SL = 25% capital (margin).
 // Fees at 100x: 0.04% taker × 2 sides × 100 leverage = 8% of margin.
-// Fees at  20x: 0.04% taker × 2 sides ×  20 leverage = 1.6% of margin.
+// Fees at  50x: 0.04% taker × 2 sides ×  50 leverage = 4% of margin.
 // SL_PCT is price-loss fraction; capital loss = SL_PCT × leverage.
-//   100x: price SL = 0.10/100 = 0.10% price move → 10% capital loss
-//    50x: price SL = 0.10/50  = 0.20% price move → 10% capital loss
-//    20x: price SL = 0.10/20  = 0.50% price move → 10% capital loss
-const SL_PCT = 0.10;   // System 5: 10% capital initial SL
+//   100x: price SL = 0.25/100 = 0.25% price move → 25% capital loss
+//    50x: price SL = 0.25/50  = 0.50% price move → 25% capital loss
+//    20x: price SL = 0.25/20  = 1.25% price move → 25% capital loss
+const SL_PCT = 0.25;   // System 5: 25% capital initial SL
 const TP_PCT = 0.45;   // reference only — trailing SL handles the actual exit
 
 // ── Active AI Version params — loaded from settings table, refreshed every 60s ──
@@ -81,7 +81,7 @@ async function getActiveVersionParams() {
 const TAKER_FEE_BOTH_LEGS = 0.0008;
 
 // Trailing SL tiers — System 5 (used by non-v2/v3 strategies via calculateTrailingStep)
-// v3 active strategy uses calcTrailingSLV3 in strategy-v3.js instead.
+// 3-Timing active strategy uses calcTrail3Timing in strategy-3timing.js instead.
 //
 // System 5: initial SL = 10% capital, trail triggers at +46%, first lock = +45%
 //   +46% capital → lock +45%   gap = 1%
@@ -246,7 +246,7 @@ async function isTokenBanned(symbol) {
   }
 }
 
-// Leverage from the single source of truth in strategy-v3.js
+// Leverage from the single source of truth in strategy-3timing.js
 function getLeverage(symbol, price, params = {}) {
   return SYMBOL_LEVERAGE[symbol] || params.LEV_BTC_ETH || 100;
 }
@@ -737,8 +737,8 @@ async function openTrade(client, pick, wallet) {
   const fmtP = (p) => parseFloat(p.toFixed(pricePrec));
 
   // SL price distance = SL_PCT / leverage (gross price loss, fees accepted on top)
-  // At 100x: 0.20/100 = 0.20% price move → 20% capital price loss + 8% fees ≈ 28% gross
-  // At  20x: 0.20/20  = 1.00% price move → 20% capital price loss + 1.6% fees ≈ 22% gross
+  // At 100x: 0.25/100 = 0.25% price move → 25% capital price loss + 8% fees ≈ 33% gross
+  // At  50x: 0.25/50  = 0.50% price move → 25% capital price loss + 4% fees ≈ 29% gross
   let slPricePct = SL_PCT / leverage;
   const tpPricePct = TP_PCT / leverage;
 
@@ -1091,7 +1091,7 @@ async function checkTrailingStop(client) {
       {
         const side     = state.isLong ? 'LONG' : 'SHORT';
         const lev      = state.leverage || 20;
-        const newSlPrice = calcTrailingSLV3(state.entry, cur, side, lev);
+        const newSlPrice = calcTrail3Timing(state.entry, cur, side, lev);
         const betterSl = state.isLong
           ? newSlPrice > (state.trailingSlPrice || 0)
           : newSlPrice < (state.trailingSlPrice || Infinity);
@@ -1342,21 +1342,19 @@ async function main() {
       bLog.error(`Kronos batch scan failed (non-blocking): ${kronosBatchErr.message}`);
     }
 
-    // ── Strategy v3 — ADVISORY only ──
-    // Per user direction: only TokenAgents fire trades. cycle.js's main()
-    // scanV3 trading path is suppressed — we still RUN scanV3 for
-    // logging/learning so the AI brain and metrics see its output, but
-    // its signals are NOT pushed into the execution path.
+    // ── 3-Timing Strategy — ACTIVE execution ──
+    // H4+H1+H1-micro bias confluence. Fires when all 3 tiers agree.
+    // SL: 25% cap → lock +10% at +30% cap → main trail at +46% cap.
+    const signals = [];
     try {
-      const rawV3 = await scanV3(msg => bLog.scan(msg));
-      if ((rawV3 || []).length > 0) {
-        bLog.scan(`v3 Engine (advisory): ${rawV3.length} signal(s) SUPPRESSED — token agents only — ${rawV3.map(s => `${s.symbol} ${s.direction} [${s.setupName}]`).join(', ')}`);
+      const raw3T = await scan3Timing(msg => bLog.scan(msg));
+      if ((raw3T || []).length > 0) {
+        signals.push(...raw3T);
+        bLog.scan(`3-Timing: ${raw3T.length} signal(s) → ${raw3T.map(s => `${s.symbol} ${s.side}`).join(', ')}`);
       }
-    } catch (v3Err) {
-      bLog.error(`v3 Engine advisory scan failed: ${v3Err.message}`);
+    } catch (tErr) {
+      bLog.error(`3-Timing scan failed: ${tErr.message}`);
     }
-
-    const signals = []; // gated to TokenAgents in agent-coordinator.js
 
     if (!signals.length) {
       log('No AI signals found this cycle — agents still learning.');
