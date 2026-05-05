@@ -24,7 +24,7 @@ const memory     = require('./chart-agent-memory');
 
 // ── LLM Config ────────────────────────────────────────────────
 const OLLAMA_URL   = process.env.OLLAMA_URL   || 'http://localhost:11434';
-const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'qwen2.5:7b';
+const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'gemma3:4b';
 const TIMEOUT      = 30_000;
 
 const INITIAL_SL_CAP = 0.25;
@@ -240,6 +240,28 @@ async function askLLM(systemPrompt, userMsg) {
   }
 }
 
+// ── Rule-based fallback decision (no LLM required) ──────────
+// Same logic as the LLM prompt rules — runs when Ollama/Claude unreachable.
+function decideWithRules(price, vwap, struct) {
+  const aboveVwap = price > vwap.vwap;
+  const label     = struct.structLabel.toLowerCase();
+
+  const isBullishStruct = label.includes('hh') || label.includes('hl');
+  const isBearishStruct = label.includes('ll') || label.includes('lh') && !label.includes('hl');
+
+  // Strong confluence: VWAP side + structure align
+  if (aboveVwap && isBullishStruct && vwap.slope !== 'falling') {
+    const conf = (vwap.slope === 'rising' && label.includes('hh') && label.includes('hl')) ? 'high' : 'medium';
+    return { action: 'LONG', confidence: conf, reason: `Price above VWAP (${vwap.slope}), structure: ${struct.structLabel}` };
+  }
+  if (!aboveVwap && isBearishStruct && vwap.slope !== 'rising') {
+    const conf = (vwap.slope === 'falling' && label.includes('ll') && label.includes('lh')) ? 'high' : 'medium';
+    return { action: 'SHORT', confidence: conf, reason: `Price below VWAP (${vwap.slope}), structure: ${struct.structLabel}` };
+  }
+
+  return { action: 'WAIT', confidence: 'low', reason: 'No strong confluence' };
+}
+
 // ── Build system prompt with injected memory ─────────────────
 function buildSystemPrompt(lessons) {
   const base = `You are an expert crypto futures trader with 10 years experience.
@@ -284,27 +306,37 @@ async function analyzeSymbol(symbol, log) {
 
   log(`chart-agent: ${symbol} — asking LLM... (price=$${price.toFixed(2)} vwap=$${vwap.vwap.toFixed(2)} slope=${vwap.slope} struct="${struct.structLabel}")`);
 
+  let decision;
+  let usedRules = false;
+
   let text = '';
   try {
     text = await askLLM(systemPrompt, userMsg);
   } catch (e) {
-    log(`chart-agent: ${symbol} — LLM error: ${e.message}`);
-    return null;
+    log(`chart-agent: ${symbol} — LLM unavailable (${e.message}), using rule-based decision`);
+    usedRules = true;
   }
 
-  const m = text.match(/\{[\s\S]*?\}/);
-  if (!m) {
-    log(`chart-agent: ${symbol} — no JSON in response`);
-    return null;
+  if (!usedRules) {
+    const m = text.match(/\{[\s\S]*?\}/);
+    if (!m) {
+      log(`chart-agent: ${symbol} — no JSON in LLM response, using rule-based fallback`);
+      usedRules = true;
+    } else {
+      try { decision = JSON.parse(m[0]); } catch { usedRules = true; }
+    }
   }
 
-  let decision;
-  try { decision = JSON.parse(m[0]); } catch { return null; }
-
-  log(`chart-agent: ${symbol} → ${decision.action} [${decision.confidence}] — ${decision.reason}`);
+  if (usedRules) {
+    decision = decideWithRules(price, vwap, struct);
+    log(`chart-agent: ${symbol} — rules → ${decision.action} [${decision.confidence}] — ${decision.reason}`);
+  } else {
+    log(`chart-agent: ${symbol} — LLM → ${decision.action} [${decision.confidence}] — ${decision.reason}`);
+  }
 
   if (decision.action === 'WAIT' || !['LONG', 'SHORT'].includes(decision.action)) return null;
-  if (decision.confidence === 'low') return null;
+  // NOTE: 'low' confidence still trades — score is lower so it loses dedup vs a high/medium signal
+  // on the same symbol, but we don't block it entirely (missing trades is worse than a weak signal).
 
   const side   = decision.action;
   const lev    = SYMBOL_LEVERAGE[symbol] || 50;
@@ -332,8 +364,8 @@ async function analyzeSymbol(symbol, log) {
     entry:      price,
     sl,
     slPct:      (INITIAL_SL_CAP * 100).toFixed(2),
-    setupName:  `ChartAI(${decision.confidence})`,
-    score:      decision.confidence === 'high' ? 3 : 2,
+    setupName:  usedRules ? `ChartRules(${decision.confidence})` : `ChartAI(${decision.confidence})`,
+    score:      decision.confidence === 'high' ? 3 : decision.confidence === 'medium' ? 2 : 1,
     reason:     decision.reason,
     vwap:       vwap.vwap,
     vwapSlope:  vwap.slope,
