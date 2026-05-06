@@ -413,4 +413,9 @@ async function scanV4SMC(logFn = console.log) {
   return results;
 }
 
-module.exports = { scanV4SMC, ACTIVE_SYMBOLS, SYMBOL_LEVERAGE };
+// Single-symbol entry point — drop-in for analyzeV3 in token-agent.js
+async function analyzeV4SMC(symbol) {
+  return analyzeSymbol(symbol, msg => require('./bot-logger').log.scan(msg));
+}
+
+module.exports = { scanV4SMC, analyzeV4SMC, ACTIVE_SYMBOLS, SYMBOL_LEVERAGE };

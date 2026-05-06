@@ -10,7 +10,7 @@
 // ============================================================
 
 const { BaseAgent } = require('./base-agent');
-const { analyzeV3 } = require('../strategy-v3');
+const { analyzeV4SMC, ACTIVE_SYMBOLS } = require('../strategy-v4-smc');
 const { log: bLog } = require('../bot-logger');
 
 class TokenAgent extends BaseAgent {
@@ -56,19 +56,19 @@ class TokenAgent extends BaseAgent {
 
     this.lastPrice = price;
 
-    // ── Scan with strategy-v3 (analyzeV3) — ONLY signal source ─────
-    // analyzeV3 runs MSTF / VWAPTrend / LiqGrab / BreakRetest /
-    // MomentumBreakout under the full gate stack (counter-trend,
-    // range-pos, pause, 15m-confirmed-only, VWAP-band hard block).
-    // The legacy trade-engine.analyzeSymbol fallback was REMOVED
-    // because TEN_CANDLE_EXTREME has none of those gates and was
-    // letting SHORT trades fire above the VWAP upper band when
-    // analyzeV3 correctly refused them.
+    // ── Scan with strategy-v4-smc (analyzeV4SMC) — ONLY signal source ─
+    // V4 SMC: VWAP 2σ zones + LuxAlgo CHoCH/BOS (15m+1m confluence)
+    // Directional gates: swTrend15m +1=LONG only, -1=SHORT only, 0=nothing
+    // 89.6% WR in 7-day backtest (25% SL, 100x BTC/ETH/BNB, 75x ADA/SOL/AVAX)
+    if (!ACTIVE_SYMBOLS.includes(this.symbol)) {
+      this.currentTask = null;
+      return { symbol: this.symbol, direction: null, status: 'no_signal' };
+    }
     let signal = null;
     try {
-      signal = await analyzeV3({ symbol: this.symbol, lastPrice: String(price), verbose: true });
+      signal = await analyzeV4SMC(this.symbol);
     } catch (e) {
-      bLog.error(`[${this.name}] analyzeV3 failed: ${e.message}`);
+      bLog.error(`[${this.name}] analyzeV4SMC failed: ${e.message}`);
     }
 
     if (!signal || !signal.direction) {

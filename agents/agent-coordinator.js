@@ -11,7 +11,7 @@
 
 const { BaseAgent, AGENT_STATES } = require('./base-agent');
 const { log: bLog } = require('../bot-logger');
-const { ACTIVE_SYMBOLS } = require('../strategy-v3');
+const { ACTIVE_SYMBOLS } = require('../strategy-v4-smc');
 const { ChartAgent } = require('./chart-agent');
 const { TraderAgent } = require('./trader-agent');
 const { RiskAgent } = require('./risk-agent');
@@ -33,7 +33,7 @@ const SELF_IMPROVE_LESSONS = {
   repeated_failures: 'I will diagnose root causes instead of repeating failed patterns.',
 };
 
-// Token agents — sourced from strategy-v3.js (single source of truth).
+// Token agents — sourced from strategy-v4-smc.js (single source of truth).
 const DEFAULT_TOKEN_AGENTS = ACTIVE_SYMBOLS;
 
 class AgentCoordinator extends BaseAgent {
@@ -244,7 +244,7 @@ class AgentCoordinator extends BaseAgent {
   }
 
   async _fetchTopTokens() {
-    // Sourced from strategy-v3.js — one place to add/remove tokens.
+    // Sourced from strategy-v4-smc.js — one place to add/remove tokens.
     const ALLOWED = ACTIVE_SYMBOLS;
     for (const sym of ALLOWED) {
       if (!this.tokenAgents.has(sym)) this.addTokenAgent(sym);
@@ -783,7 +783,7 @@ class AgentCoordinator extends BaseAgent {
       }
 
       // ── Signal sources: TokenAgents ONLY ──────────────────────
-      // Each TokenAgent calls analyzeV3 directly and emits a signal via
+      // Each TokenAgent calls analyzeV4SMC directly and emits a signal via
       // its execute() result above. The legacy ChartAgent / SMC / v3
       // advisory scans were removed — they ran every cycle, produced
       // suppressed signals, and added CPU + log noise without affecting
