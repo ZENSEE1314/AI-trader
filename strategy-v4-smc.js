@@ -9,12 +9,13 @@
 //    BELOW_LOWER (below lower 2σ)       : 15m LL + 1m LL → LONG (reversal)
 //    ABOVE_UPPER (above upper 2σ)       : NO TRADE — strong trend, never fade
 //
-//  Pivot detection — matches TradingView SMC Expo "10" parameter:
-//    SWING_BARS_1M  = 10: bar[i] is pivot high when it is the highest of
-//                    the 10 bars before AND 10 closed bars after it.
-//    SWING_BARS_15M =  3: same rule but 3 bars each side on the 15m chart.
-//    The live/forming candle is ALWAYS excluded (live bar sliced off every
-//    fetch). Matches TradingView lookahead_off behaviour exactly.
+//  Pivot detection:
+//    SWING_BARS_1M  = 100: bar[i] is a swing high when it is the highest
+//                    of the 100 bars before AND 100 closed bars after it.
+//                    Detects only major 1m swings (~100 min each side).
+//    SWING_BARS_15M = 100: same rule on 15m data — major 15m structure only.
+//    The live/forming candle is ALWAYS excluded (sliced off every fetch).
+//    Matches TradingView lookahead_off behaviour.
 //
 //  Entry  : close of the 1m bar where the confirmed pivot fires
 //  SL     : 25% capital risk → price % = 0.25 / leverage
@@ -28,13 +29,13 @@ const fetch = require('node-fetch');
 const BYBIT_KLINE_URL  = 'https://api.bybit.com/v5/market/kline';
 const FETCH_TIMEOUT_MS = 10_000;
 
-// Pivot confirmation lengths — match TradingView SMC Expo "10" setting
-const SWING_BARS_1M  = 10;  // 1m: 10 closed bars each side — same as TV indicator
-const SWING_BARS_15M =  3;  // 15m: 3 bars each side (45 min per side — clean structure)
+// Pivot confirmation lengths — major swings only, no micro noise
+const SWING_BARS_1M  = 100;  // 1m: 100 closed bars each side (~100 min per side)
+const SWING_BARS_15M = 100;  // 15m: 100 closed bars each side — major structure
 
-const WARMUP_1M  = 150;  // bars loaded on first call (need ≥ 2×10+1 = 21 min)
-const WARMUP_15M = 100;  // bars loaded on first call (need ≥ 2×3+1  = 7 bars)
-const DELTA_1M   =  15;  // bars fetched each subsequent 1m cycle
+const WARMUP_1M  = 300;  // bars loaded on first call (need ≥ 2×100+1 = 201)
+const WARMUP_15M = 300;  // bars loaded on first call (need ≥ 2×100+1 = 201)
+const DELTA_1M   =  20;  // bars fetched each subsequent 1m cycle
 const DELTA_15M  =   5;  // bars fetched each subsequent 15m cycle
 const CAPITAL_RISK = 0.25; // 25% capital risk per trade
 
@@ -233,7 +234,7 @@ async function analyze(symbol, log) {
   const new15m  = fresh15m.filter(c => c.openTime > last15t).slice(0, -1);
   if (new15m.length) {
     st.candles15m.push(...new15m);
-    if (st.candles15m.length > WARMUP_15M + 30) st.candles15m.splice(0, new15m.length);
+    if (st.candles15m.length > WARMUP_15M + 50) st.candles15m.splice(0, new15m.length);
     update15m(st);
   }
 
@@ -245,7 +246,7 @@ async function analyze(symbol, log) {
 
   for (const bar of new1m) {
     st.candles1m.push(bar);
-    if (st.candles1m.length > WARMUP_1M + 30) st.candles1m.shift();
+    if (st.candles1m.length > WARMUP_1M + 50) st.candles1m.shift();
 
     const pivotTime = update1m(st);
 
