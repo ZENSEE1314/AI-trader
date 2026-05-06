@@ -1549,16 +1549,18 @@ async function executeForAllUsers(pick) {
         bLog.error(`[CONSEC-LOSS] Column migration failed: ${e.message}`);
       }
       try {
-        // Clear stale paused_by_admin flags — but KEEP valid cooldown pauses
+        // On every restart: clear ALL paused_by_admin flags (including cooldown pauses).
+        // The in-memory _consecLosses streak resets on restart, so the DB pause must too.
+        // A clean restart = clean slate; if 2 more losses happen, it pauses again.
         const unpaused = await db.query(
-          `UPDATE api_keys SET paused_by_admin = false
+          `UPDATE api_keys
+           SET paused_by_admin = false, loss_cooldown_until = NULL
            WHERE paused_by_admin = true
              AND paused_by_user = false
-             AND (loss_cooldown_until IS NULL OR loss_cooldown_until <= NOW())
            RETURNING id, user_id`
         );
         if (unpaused.length > 0) {
-          bLog.trade(`[UNBLOCK] Cleared stale admin-pause on ${unpaused.length} key(s): ${unpaused.map(k => `#${k.id}`).join(', ')}`);
+          bLog.trade(`[UNBLOCK] Restart cleared admin-pause on ${unpaused.length} key(s): ${unpaused.map(k => `#${k.id}`).join(', ')}`);
         }
         // Keep admin accounts' last_paid_at current so they're always clear
         await db.query(`UPDATE users SET last_paid_at = NOW() WHERE is_admin = true`);
