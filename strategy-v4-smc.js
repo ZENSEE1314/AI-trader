@@ -4,19 +4,21 @@
 //  strategy-v4-smc.js  —  VWAP Zone + 15m/1m Swing Structure
 //
 //  Signal rules:
-//    UPPER_MID   (VWAP mid → upper 2σ) : 15m LH + 1m LH → SHORT
+//    UPPER_MID   (VWAP mid → upper 2σ) : NO TRADE — price above VWAP, never short
 //    LOWER_MID   (VWAP lower 2σ → mid) : 15m HL + 1m HL → LONG
 //    BELOW_LOWER (below lower 2σ)       : 15m LL + 1m LL → LONG (reversal)
-//    ABOVE_UPPER (above upper 2σ)       : NO TRADE — never fade a strong trend
+//    ABOVE_UPPER (above upper 2σ)       : NO TRADE — strong trend, never fade
 //
-//  Pivot detection:
-//    SWING_BARS = 1: bar[i] is a swing high when bar[i].high > bar[i-1].high
-//    AND bar[i].high > bar[i+1].high. bar[i+1] must be a CLOSED bar.
-//    The live/forming candle is always excluded — matches TradingView lookahead_off.
+//  Pivot detection — matches TradingView SMC Expo "10" parameter:
+//    SWING_BARS_1M  = 10: bar[i] is pivot high when it is the highest of
+//                    the 10 bars before AND 10 closed bars after it.
+//    SWING_BARS_15M =  3: same rule but 3 bars each side on the 15m chart.
+//    The live/forming candle is ALWAYS excluded (live bar sliced off every
+//    fetch). Matches TradingView lookahead_off behaviour exactly.
 //
-//  Entry  : current close of the candle where the 1m pivot fires
+//  Entry  : close of the 1m bar where the confirmed pivot fires
 //  SL     : 25% capital risk → price % = 0.25 / leverage
-//  Data   : Bybit v5 linear klines (ISP-friendly, Binance blocked in some regions)
+//  Data   : Bybit v5 linear klines (ISP-friendly, no Binance dependency)
 //  State  : module-level per symbol — seeded on first call, incremental after
 // ═══════════════════════════════════════════════════════════════
 
@@ -25,12 +27,16 @@ const fetch = require('node-fetch');
 // ── Constants ──────────────────────────────────────────────────
 const BYBIT_KLINE_URL  = 'https://api.bybit.com/v5/market/kline';
 const FETCH_TIMEOUT_MS = 10_000;
-const SWING_BARS       = 1;    // pivot needs 1 bar each side confirmed + closed
-const WARMUP_1M        = 100;  // bars loaded on first call to seed swing trackers
-const WARMUP_15M       = 100;
-const DELTA_1M         = 10;   // bars fetched each subsequent cycle
-const DELTA_15M        =  5;
-const CAPITAL_RISK     = 0.25; // 25% capital risk per trade
+
+// Pivot confirmation lengths — match TradingView SMC Expo "10" setting
+const SWING_BARS_1M  = 10;  // 1m: 10 closed bars each side — same as TV indicator
+const SWING_BARS_15M =  3;  // 15m: 3 bars each side (45 min per side — clean structure)
+
+const WARMUP_1M  = 150;  // bars loaded on first call (need ≥ 2×10+1 = 21 min)
+const WARMUP_15M = 100;  // bars loaded on first call (need ≥ 2×3+1  = 7 bars)
+const DELTA_1M   =  15;  // bars fetched each subsequent 1m cycle
+const DELTA_15M  =   5;  // bars fetched each subsequent 15m cycle
+const CAPITAL_RISK = 0.25; // 25% capital risk per trade
 
 // ── Traded symbols and leverage ────────────────────────────────
 const ACTIVE_SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'ADAUSDT', 'SOLUSDT', 'AVAXUSDT'];
@@ -54,17 +60,17 @@ function getState(symbol) {
       candles15m: [],
 
       // Two most-recent confirmed 15m swing highs/lows
-      sh15_1: null, sh15_2: null,   // sh = swing high, _1 = latest, _2 = previous
+      sh15_1: null, sh15_2: null,
       sl15_1: null, sl15_2: null,
 
       // Two most-recent confirmed 1m swing highs/lows
       sh1m_1: null, sh1m_2: null,
       sl1m_1: null, sl1m_2: null,
 
-      last15mPivotTime:  0,  // openTime of last confirmed 15m pivot bar
-      last1mPivotTime:   0,  // openTime of last confirmed 1m pivot bar
-      lastSignalTime:    0,  // dedup: one signal per confirmed 1m pivot
-      lastProcessed1m:   0,  // openTime of last CLOSED 1m bar we processed
+      last15mPivotTime: 0,
+      last1mPivotTime:  0,
+      lastSignalTime:   0,
+      lastProcessed1m:  0,
 
       ready: false,
     };
@@ -74,7 +80,9 @@ function getState(symbol) {
 
 // ── Bybit kline fetch ──────────────────────────────────────────
 async function fetchKlines(symbol, interval, limit) {
-  const qs = new URLSearchParams({ category: 'linear', symbol, interval: String(interval), limit: String(limit) });
+  const qs = new URLSearchParams({
+    category: 'linear', symbol, interval: String(interval), limit: String(limit),
+  });
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
   try {
@@ -119,17 +127,19 @@ function getZone(price, { vwap, upper, lower }) {
 }
 
 // ── Swing pivot detection ──────────────────────────────────────
-// Checks bar at candles[len-1-SWING_BARS]. The bar after it (candles[len-1])
-// MUST be a fully closed candle — the caller ensures the live bar is excluded.
-function checkPivot(candles) {
+// bar at candles[len-1-swingBars] is a pivot high when it is strictly
+// greater than ALL swingBars bars before it AND ALL swingBars bars after.
+// The LAST bar in the array must be a confirmed CLOSED bar — callers
+// always slice off the live bar before passing the array.
+function checkPivot(candles, swingBars) {
   const len = candles.length;
-  if (len < 2 * SWING_BARS + 1) return null;
+  if (len < 2 * swingBars + 1) return null;
 
-  const i = len - 1 - SWING_BARS;
+  const i = len - 1 - swingBars;
   const bar = candles[i];
   let isHigh = true, isLow = true;
 
-  for (let j = 1; j <= SWING_BARS; j++) {
+  for (let j = 1; j <= swingBars; j++) {
     if (bar.high <= candles[i - j].high || bar.high <= candles[i + j].high) isHigh = false;
     if (bar.low  >= candles[i - j].low  || bar.low  >= candles[i + j].low)  isLow  = false;
   }
@@ -139,7 +149,7 @@ function checkPivot(candles) {
 
 // ── Swing tracker updates ──────────────────────────────────────
 function update15m(state) {
-  const p = checkPivot(state.candles15m);
+  const p = checkPivot(state.candles15m, SWING_BARS_15M);
   if (!p || p.bar.openTime === state.last15mPivotTime) return;
   state.last15mPivotTime = p.bar.openTime;
   if (p.isHigh) { state.sh15_2 = state.sh15_1; state.sh15_1 = p.bar.high; }
@@ -148,7 +158,7 @@ function update15m(state) {
 
 // Returns confirmed pivot openTime, or 0 if nothing new.
 function update1m(state) {
-  const p = checkPivot(state.candles1m);
+  const p = checkPivot(state.candles1m, SWING_BARS_1M);
   if (!p || p.bar.openTime === state.last1mPivotTime) return 0;
   state.last1mPivotTime = p.bar.openTime;
   if (p.isHigh) { state.sh1m_2 = state.sh1m_1; state.sh1m_1 = p.bar.high; }
@@ -157,21 +167,18 @@ function update1m(state) {
 }
 
 // ── Signal logic ───────────────────────────────────────────────
-// Called only when a fresh 1m pivot just fired (deduped by openTime).
-// Both 15m and 1m structure come from CLOSED bars only.
+// Only fires when a fresh 1m pivot confirms (deduped by openTime).
+// All structure comes from CLOSED bars only — no live bar leakage.
 function resolveSignal(state, zone) {
-  const lh15 = state.sh15_1 !== null && state.sh15_2 !== null && state.sh15_1 < state.sh15_2;
   const hl15 = state.sl15_1 !== null && state.sl15_2 !== null && state.sl15_1 > state.sl15_2;
   const ll15 = state.sl15_1 !== null && state.sl15_2 !== null && state.sl15_1 < state.sl15_2;
 
-  const lh1m = state.sh1m_1 !== null && state.sh1m_2 !== null && state.sh1m_1 < state.sh1m_2;
   const hl1m = state.sl1m_1 !== null && state.sl1m_2 !== null && state.sl1m_1 > state.sl1m_2;
   const ll1m = state.sl1m_1 !== null && state.sl1m_2 !== null && state.sl1m_1 < state.sl1m_2;
 
-  if (zone === 'UPPER_MID'   && lh15 && lh1m) return { direction: 'SHORT', type: 'LH+LH' };
-  if (zone === 'LOWER_MID'   && hl15 && hl1m) return { direction: 'LONG',  type: 'HL+HL' };
-  if (zone === 'BELOW_LOWER' && ll15 && ll1m) return { direction: 'LONG',  type: 'LL+LL' };
-  // ABOVE_UPPER → no trade (price above 2σ = strong trend, never fade)
+  // Price above VWAP (UPPER_MID or ABOVE_UPPER) → no trade, ever
+  if (zone === 'LOWER_MID'   && hl15 && hl1m) return { direction: 'LONG', type: 'HL+HL' };
+  if (zone === 'BELOW_LOWER' && ll15 && ll1m) return { direction: 'LONG', type: 'LL+LL' };
   return null;
 }
 
@@ -179,17 +186,17 @@ function resolveSignal(state, zone) {
 async function analyze(symbol, log) {
   const st = getState(symbol);
 
-  // ── First call: warm up swing trackers from history ──────────
+  // ── First call: seed swing trackers from history ─────────────
   if (!st.ready) {
     log(`[V4] ${symbol} warming up…`);
     const c1m  = await fetchKlines(symbol, 1,  WARMUP_1M);
     const c15m = await fetchKlines(symbol, 15, WARMUP_15M);
 
-    // Seed 15m swings: replay all CLOSED bars (exclude the last = live)
+    // 15m: replay all CLOSED bars (exclude last = live)
     st.candles15m = c15m.slice(0, -1);
-    for (let i = SWING_BARS; i < st.candles15m.length - SWING_BARS; i++) {
-      const slice = st.candles15m.slice(0, i + SWING_BARS + 1);
-      const p = checkPivot(slice);
+    for (let i = SWING_BARS_15M; i < st.candles15m.length - SWING_BARS_15M; i++) {
+      const slice = st.candles15m.slice(0, i + SWING_BARS_15M + 1);
+      const p = checkPivot(slice, SWING_BARS_15M);
       if (p && p.bar.openTime !== st.last15mPivotTime) {
         st.last15mPivotTime = p.bar.openTime;
         if (p.isHigh) { st.sh15_2 = st.sh15_1; st.sh15_1 = p.bar.high; }
@@ -197,11 +204,11 @@ async function analyze(symbol, log) {
       }
     }
 
-    // Seed 1m swings: replay all CLOSED bars (exclude the last = live)
+    // 1m: replay all CLOSED bars (exclude last = live)
     st.candles1m = c1m.slice(0, -1);
-    for (let i = SWING_BARS; i < st.candles1m.length - SWING_BARS; i++) {
-      const slice = st.candles1m.slice(0, i + SWING_BARS + 1);
-      const p = checkPivot(slice);
+    for (let i = SWING_BARS_1M; i < st.candles1m.length - SWING_BARS_1M; i++) {
+      const slice = st.candles1m.slice(0, i + SWING_BARS_1M + 1);
+      const p = checkPivot(slice, SWING_BARS_1M);
       if (p && p.bar.openTime !== st.last1mPivotTime) {
         st.last1mPivotTime = p.bar.openTime;
         if (p.isHigh) { st.sh1m_2 = st.sh1m_1; st.sh1m_1 = p.bar.high; }
@@ -211,34 +218,34 @@ async function analyze(symbol, log) {
 
     st.lastProcessed1m = st.candles1m.length ? st.candles1m[st.candles1m.length - 1].openTime : 0;
     st.ready = true;
-    log(`[V4] ${symbol} ready | sh15=${st.sh15_1?.toFixed(4)}/${st.sh15_2?.toFixed(4)} sl15=${st.sl15_1?.toFixed(4)}/${st.sl15_2?.toFixed(4)}`);
+    log(`[V4] ${symbol} ready | sh15=${st.sh15_1?.toFixed(4)}/${st.sh15_2?.toFixed(4)} sl15=${st.sl15_1?.toFixed(4)}/${st.sl15_2?.toFixed(4)} | 1m swing_bars=${SWING_BARS_1M} 15m swing_bars=${SWING_BARS_15M}`);
     return null;
   }
 
-  // ── Incremental: process only new bars ───────────────────────
+  // ── Incremental: process only new CLOSED bars ────────────────
   const [fresh1m, fresh15m] = await Promise.all([
     fetchKlines(symbol, 1,  DELTA_1M),
     fetchKlines(symbol, 15, DELTA_15M),
   ]);
 
-  // 15m: add newly CLOSED bars only (skip the last = live)
+  // 15m: add newly CLOSED bars only (drop live = last)
   const last15t = st.candles15m.length ? st.candles15m[st.candles15m.length - 1].openTime : 0;
-  const new15m  = fresh15m.filter(c => c.openTime > last15t).slice(0, -1); // drop live
+  const new15m  = fresh15m.filter(c => c.openTime > last15t).slice(0, -1);
   if (new15m.length) {
     st.candles15m.push(...new15m);
-    if (st.candles15m.length > WARMUP_15M + 20) st.candles15m.splice(0, new15m.length);
+    if (st.candles15m.length > WARMUP_15M + 30) st.candles15m.splice(0, new15m.length);
     update15m(st);
   }
 
-  // 1m: process CLOSED bars only (skip the last = live)
-  const new1m = fresh1m.filter(c => c.openTime > st.lastProcessed1m).slice(0, -1); // drop live
+  // 1m: process CLOSED bars only (drop live = last)
+  const new1m = fresh1m.filter(c => c.openTime > st.lastProcessed1m).slice(0, -1);
   if (!new1m.length) return null;
 
   let signal = null;
 
   for (const bar of new1m) {
     st.candles1m.push(bar);
-    if (st.candles1m.length > WARMUP_1M + 20) st.candles1m.shift();
+    if (st.candles1m.length > WARMUP_1M + 30) st.candles1m.shift();
 
     const pivotTime = update1m(st);
 
@@ -250,7 +257,7 @@ async function analyze(symbol, log) {
         if (sig) {
           st.lastSignalTime = pivotTime;
           signal = { ...sig, price: bar.close, zone };
-          log(`[V4] ✓ ${symbol} ${sig.direction} zone=${zone} type=${sig.type} sh15=${st.sh15_1?.toFixed(4)}/${st.sh15_2?.toFixed(4)} sh1m=${st.sh1m_1?.toFixed(4)}/${st.sh1m_2?.toFixed(4)}`);
+          log(`[V4] ✓ ${symbol} ${sig.direction} zone=${zone} type=${sig.type} sl15=${st.sl15_1?.toFixed(4)}/${st.sl15_2?.toFixed(4)} sl1m=${st.sl1m_1?.toFixed(4)}/${st.sl1m_2?.toFixed(4)}`);
         }
       }
     }
@@ -262,15 +269,13 @@ async function analyze(symbol, log) {
 
   const leverage = SYMBOL_LEVERAGE[symbol] ?? 100;
   const slPct    = CAPITAL_RISK / leverage;
-  const sl       = signal.direction === 'LONG'
-    ? signal.price * (1 - slPct)
-    : signal.price * (1 + slPct);
+  const sl       = signal.price * (1 - slPct); // LONG only now
 
   return {
     symbol,
     direction:  signal.direction,
     side:       signal.direction,
-    signal:     signal.direction === 'LONG' ? 'BUY' : 'SELL',
+    signal:     'BUY',
     lastPrice:  signal.price,
     entry:      signal.price,
     sl,
@@ -294,7 +299,7 @@ async function scanV4SMC(log = console.log) {
     try {
       const sig = await analyze(sym, log);
       if (sig) results.push(sig);
-      await new Promise(r => setTimeout(r, 200)); // small gap between symbols
+      await new Promise(r => setTimeout(r, 200));
     } catch (e) {
       log(`[V4] ${sym} error: ${e.message}`);
     }

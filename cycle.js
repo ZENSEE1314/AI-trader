@@ -1714,7 +1714,7 @@ async function executeForAllUsers(pick) {
 
         const apiKey = cryptoUtils.decrypt(key.api_key_enc, key.iv, key.auth_tag);
         const apiSecret = cryptoUtils.decrypt(key.api_secret_enc, key.secret_iv, key.secret_auth_tag);
-        const maxPos = parseInt(key.max_positions) || 3;
+        const maxPos = parseInt(key.max_positions) || 5;
 
         const price = pick.lastPrice || pick.price || pick.entry;
         const isLong = pick.direction !== 'SHORT';
