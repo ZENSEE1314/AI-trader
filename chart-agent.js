@@ -114,11 +114,13 @@ function describeStructure(h1Klines, window = 16) {
     close: parseFloat(k[4]),
   }));
 
+  // 1-bar confirmation each side (was 2-bar = 30min delay on 15m).
+  // 1-bar = swing confirmed 1 candle (15min) after the actual high/low — catches HL entries faster.
   const highs = [], lows = [];
-  for (let i = 2; i < slice.length - 2; i++) {
+  for (let i = 1; i < slice.length - 1; i++) {
     const h = slice[i].high, l = slice[i].low;
-    if (h > slice[i-1].high && h > slice[i-2].high && h > slice[i+1].high && h > slice[i+2].high) highs.push(h);
-    if (l < slice[i-1].low  && l < slice[i-2].low  && l < slice[i+1].low  && l < slice[i+2].low)  lows.push(l);
+    if (h > slice[i-1].high && h > slice[i+1].high) highs.push(h);
+    if (l < slice[i-1].low  && l < slice[i+1].low)  lows.push(l);
   }
 
   let structLabel = 'sideways/unclear';
@@ -428,20 +430,17 @@ async function scanChartAgent(symbols, log = console.log) {
     log
   ).catch(() => {});
 
-  // Parallel scan — all symbols at once so the full scan takes as long as ONE symbol.
-  // Sequential was starving BTC/BNB/SOL/ADA/AVAX when LLM was slow (only ETH fired).
-  const settled = await Promise.allSettled(
-    symbols.map(symbol => analyzeSymbol(symbol, log))
-  );
-
+  // Sequential with 3s gap — avoids Binance klines rate-limit errors that
+  // were silently dropping symbols when parallel requests fired together.
   const results = [];
-  for (let i = 0; i < settled.length; i++) {
-    const r = settled[i];
-    if (r.status === 'fulfilled' && r.value) {
-      results.push(r.value);
-    } else if (r.status === 'rejected') {
-      log(`chart-agent: ${symbols[i]} — error: ${r.reason?.message || r.reason}`);
+  for (const symbol of symbols) {
+    try {
+      const sig = await analyzeSymbol(symbol, log);
+      if (sig) results.push(sig);
+    } catch (e) {
+      log(`chart-agent: ${symbol} — error: ${e.message}`);
     }
+    await new Promise(r => setTimeout(r, 3000));
   }
 
   log(`chart-agent: done — ${results.length}/${symbols.length} signal(s): ${results.map(s => `${s.symbol}(${s.direction})`).join(', ') || 'none'}`);
