@@ -3203,27 +3203,41 @@ async function backfillFeesFromBitunix() {
 
     bLog.system(`[FEE-BACKFILL] Done — updated ${updated}/${trades.length} trades with real Bitunix fees`);
 
-    // ── Corrective pass: fix any row where pnl_usdt doesn't match gross - fee ──
-    // Catches breakeven/CLOSED trades where the Bitunix match failed but we
-    // already have gross_pnl and trading_fee stored from when the trade closed.
-    // Formula: net = gross - fee - funding  (always true for Bitunix)
-    const corrected = await db.query(`
+    // ── Corrective pass A: WIN/LOSS trades where pnl_usdt ≠ gross - fee ──
+    // gross_pnl IS NOT NULL guaranteed for real wins/losses.
+    const correctedWL = await db.query(`
       UPDATE trades
       SET pnl_usdt = ROUND((gross_pnl - trading_fee - COALESCE(funding_fee, 0))::numeric, 4),
           status   = CASE
                        WHEN (gross_pnl - trading_fee - COALESCE(funding_fee, 0)) > 0 THEN 'WIN'
                        ELSE 'LOSS'
                      END
-      WHERE status IN ('WIN', 'LOSS', 'CLOSED')
-        AND gross_pnl  IS NOT NULL
+      WHERE status IN ('WIN', 'LOSS')
+        AND gross_pnl   IS NOT NULL
         AND trading_fee IS NOT NULL
         AND ABS(pnl_usdt - (gross_pnl - trading_fee - COALESCE(funding_fee, 0))) > 0.005
       RETURNING id
     `);
-    const fixedCount = Array.isArray(corrected) ? corrected.length : (corrected.rowCount ?? 0);
-    if (fixedCount > 0) {
-      bLog.system(`[FEE-BACKFILL] Corrected pnl_usdt mismatch on ${fixedCount} trade(s) — gross-fee recalculation applied`);
-    }
+    const fixedWL = Array.isArray(correctedWL) ? correctedWL.length : (correctedWL.rowCount ?? 0);
+    if (fixedWL > 0) bLog.system(`[FEE-BACKFILL] Corrected WIN/LOSS pnl_usdt on ${fixedWL} trade(s)`);
+
+    // ── Corrective pass B: CLOSED (breakeven) trades ──
+    // These trailing-SL-to-entry trades have gross_pnl = NULL or 0 in the DB
+    // (entry_price = exit_price, so realized gross = 0). pnl_usdt must equal
+    // 0 - trading_fee - funding_fee. Keep status as CLOSED.
+    const correctedClosed = await db.query(`
+      UPDATE trades
+      SET gross_pnl = COALESCE(gross_pnl, 0),
+          pnl_usdt  = ROUND((COALESCE(gross_pnl, 0) - trading_fee - COALESCE(funding_fee, 0))::numeric, 4)
+      WHERE status = 'CLOSED'
+        AND trading_fee IS NOT NULL
+        AND trading_fee > 0
+        AND ABS(COALESCE(pnl_usdt, 0)
+              - (COALESCE(gross_pnl, 0) - trading_fee - COALESCE(funding_fee, 0))) > 0.005
+      RETURNING id
+    `);
+    const fixedClosed = Array.isArray(correctedClosed) ? correctedClosed.length : (correctedClosed.rowCount ?? 0);
+    if (fixedClosed > 0) bLog.system(`[FEE-BACKFILL] Corrected CLOSED pnl_usdt on ${fixedClosed} trade(s) — net = 0 - fee`);
   } catch (err) {
     bLog.error(`[FEE-BACKFILL] error: ${err.message}`);
   }
