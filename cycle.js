@@ -1,14 +1,17 @@
 // ============================================================
 // Smart Crypto Trader v4 — AI Self-Learning Edition
 // Binance USDT-M Futures + Bitunix Futures
-// Strategy: 3-Timing H4+H1+H1-micro (backtest-validated 51% WR)
+// Strategy: V4 SMC — VWAP Zone + LuxAlgo BOS/CHoCH (89.6% WR, 7-day backtest)
 // ============================================================
 
 const { USDMClient } = require('binance');
 const fetch = require('node-fetch');
 const aiLearner = require('./ai-learner');
-// 3-Timing strategy: H4+H1+H1-micro bias stack, 25% cap SL → 30% lock +10% → 46% trail
-const { scan3Timing, calcTrail3Timing, ACTIVE_SYMBOLS, SYMBOL_LEVERAGE, getSessionMode } = require('./strategy-3timing');
+// V4 SMC strategy: VWAP 2σ zones + 15m/1m BOS+CHoCH confluence
+// Rules: bull days → LONG only | bear days → SHORT only | ranging → nothing
+const { scanV4SMC, ACTIVE_SYMBOLS, SYMBOL_LEVERAGE } = require('./strategy-v4-smc');
+// Keep 3-timing import for calcTrail3Timing + getSessionMode (still used elsewhere)
+const { calcTrail3Timing, getSessionMode } = require('./strategy-3timing');
 const { scanChartAgent } = require('./chart-agent');
 const { getSentimentScores } = require('./sentiment-scraper');
 const { log: bLog } = require('./bot-logger');
@@ -135,10 +138,31 @@ const TRAILING_TIERS_50X = [
   { trigger: 3.00, lock: 2.90 }, // +300% → +290%
 ];
 
+// 75x tier table for V4 SMC alt coins (ADA/SOL/AVAX at 75x leverage):
+// Starts at +31% capital (vs 21% for 100x) — more room before first lock.
+// Each step: trigger +1% above lock, advancing every +10% capital gain.
+const TRAILING_TIERS_75X = [
+  { trigger: 0.31, lock: 0.30 }, // +31% → +30% (first tier, 75x)
+  { trigger: 0.41, lock: 0.40 }, // +41% → +40%
+  { trigger: 0.51, lock: 0.50 }, // +51% → +50%
+  { trigger: 0.61, lock: 0.60 }, // +61% → +60%
+  { trigger: 0.71, lock: 0.70 }, // +71% → +70%
+  { trigger: 0.81, lock: 0.80 }, // +81% → +80%
+  { trigger: 0.91, lock: 0.90 }, // +91% → +90%
+  { trigger: 1.01, lock: 1.00 }, // +101% → +100%
+  { trigger: 1.21, lock: 1.20 }, // +121% → +120%
+  { trigger: 1.51, lock: 1.50 }, // +151% → +150%
+  { trigger: 2.01, lock: 2.00 }, // +201% → +200%
+];
+
 function tierTableForLev(leverage) {
-  // 50x and below use the gentler 50x table (starts at +16%/+15%);
-  // 100x and above use the tight 1% gap table (starts at +21%/+20%).
-  return leverage <= 50 ? TRAILING_TIERS_50X : TRAILING_TIERS;
+  // V4 SMC leverage tiers:
+  //   100x → tight 1% gap table (BTC/ETH/BNB)
+  //    75x → 75x table (ADA/SOL/AVAX)
+  //    ≤50x → gentler 50x table
+  if (leverage >= 100) return TRAILING_TIERS;
+  if (leverage >= 75)  return TRAILING_TIERS_75X;
+  return TRAILING_TIERS_50X;
 }
 
 function getTrailingSLConfig(leverage) {
@@ -1347,18 +1371,19 @@ async function main() {
     }
 
     // ── Strategy Scans — ACTIVE execution ──
-    // 1) 3-Timing: VWAP+H1+H1-micro range bias confluence (fast, no API cost)
+    // 1) V4 SMC: VWAP 2σ zones + 15m/1m BOS/CHoCH confluence (89.6% WR, 7-day backtest)
+    //    Rules: bull swTrend=+1 → LONG only | bear swTrend=-1 → SHORT only | ranging=0 → nothing
     // 2) ChartAgent: Claude reads VWAP slope, EQ levels, structure like a human trader
     // Both feed the same signal pipeline. Dedup by symbol keeps only the highest score.
     const signals = [];
     try {
-      const raw3T = await scan3Timing(msg => bLog.scan(msg));
-      if ((raw3T || []).length > 0) {
-        signals.push(...raw3T);
-        bLog.scan(`3-Timing: ${raw3T.length} signal(s) → ${raw3T.map(s => `${s.symbol} ${s.side}`).join(', ')}`);
+      const rawV4 = await scanV4SMC(msg => bLog.scan(msg));
+      if ((rawV4 || []).length > 0) {
+        signals.push(...rawV4);
+        bLog.scan(`V4-SMC: ${rawV4.length} signal(s) → ${rawV4.map(s => `${s.symbol} ${s.side} (${s.signalType})`).join(', ')}`);
       }
     } catch (tErr) {
-      bLog.error(`3-Timing scan failed: ${tErr.message}`);
+      bLog.error(`V4-SMC scan failed: ${tErr.message}`);
     }
 
     try {

@@ -692,16 +692,20 @@ async function initAllTables() {
     try { await pool.query(sql); } catch (_) {}
   }
 
-  // Set SOL, BNB, and XRP leverage (upsert — safe to run on every boot)
+  // V4 SMC token leverage — upsert on every boot (safe to re-run)
+  // Config: BTC/ETH/BNB=100x, ADA/SOL/AVAX=75x (backtest-validated 89.6% WR)
   try {
     await pool.query(
       `INSERT INTO token_leverage (symbol, leverage, enabled) VALUES
-         ('SOLUSDT', 50, true),
-         ('BNBUSDT', 50, true),
-         ('XRPUSDT', 50, true)
+         ('BTCUSDT',  100, true),
+         ('ETHUSDT',  100, true),
+         ('BNBUSDT',  100, true),
+         ('ADAUSDT',   75, true),
+         ('SOLUSDT',   75, true),
+         ('AVAXUSDT',  75, true)
        ON CONFLICT (symbol) DO UPDATE SET leverage = EXCLUDED.leverage, enabled = true`
     );
-    console.log('[DB] Token leverage: SOLUSDT=50×, BNBUSDT=50×, XRPUSDT=50×');
+    console.log('[DB] V4 SMC leverage: BTC/ETH/BNB=100×, ADA/SOL/AVAX=75×');
   } catch (_) {}
 
   // Clean up truly delisted/invalid symbols only — do NOT remove active strategy tokens
@@ -710,10 +714,10 @@ async function initAllTables() {
     try { await pool.query('DELETE FROM global_token_settings WHERE symbol = $1', [sym]); } catch (_) {}
   }
 
-  // Sync global_token_settings with ACTIVE_SYMBOLS — always upsert all 12 active tokens.
-  // This runs every boot so adding/removing coins from strategy-v3.js auto-syncs the DB.
+  // Sync global_token_settings with ACTIVE_SYMBOLS — always upsert all active tokens.
+  // This runs every boot so adding/removing coins from strategy-v4-smc.js auto-syncs the DB.
   try {
-    const { ACTIVE_SYMBOLS } = require('./strategy-v3');
+    const { ACTIVE_SYMBOLS } = require('./strategy-v4-smc');
     const rankMap = {};
     ACTIVE_SYMBOLS.forEach((sym, i) => { rankMap[sym] = i + 1; });
     for (const sym of ACTIVE_SYMBOLS) {

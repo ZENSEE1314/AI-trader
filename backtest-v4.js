@@ -22,10 +22,10 @@ const fetch = require('node-fetch');
 // Bybit v5 public API — OHLCV identical to Binance for backtesting purposes
 const BYBIT_BASE       = 'https://api.bybit.com/v5/market/kline';
 const FETCH_TIMEOUT_MS = 10_000;
-const BACKTEST_DAYS    = 3;
+const BACKTEST_DAYS    = 7;
 const STARTING_CAPITAL     = 1_000;
 const TRADE_CAPITAL_FRAC   = 0.10;   // 10% of wallet per trade
-const CAPITAL_RISK_FRAC    = 0.25;   // 25% of margin as initial SL distance
+const CAPITAL_RISK_FRAC    = 0.20;   // 20% of margin as initial SL distance
 
 const SMC_WARMUP_BARS = 150; // bars to skip before trading (SMC needs history)
 
@@ -41,10 +41,10 @@ const ACTIVE_SYMBOLS = [
 const SYMBOL_LEVERAGE = {
   BTCUSDT:  100,
   ETHUSDT:  100,
-  BNBUSDT:   50,
-  ADAUSDT:   50,
-  SOLUSDT:   50,
-  AVAXUSDT:  50,
+  BNBUSDT:  100,
+  ADAUSDT:   75,
+  SOLUSDT:   75,
+  AVAXUSDT:  75,
 };
 
 // ── Trailing SL tier definitions ───────────────────────────────
@@ -57,6 +57,12 @@ const TRAILING_TIERS_100X = [
   [46, 45], [51, 50], [61, 60], [71, 70],
   [81, 80], [91, 90], [101, 100], [111, 110],
   [121, 120], [151, 150], [201, 200], [301, 300],
+];
+
+const TRAILING_TIERS_75X = [
+  [31, 30], [41, 40], [51, 50], [61, 60],
+  [71, 70], [81, 80], [91, 90], [101, 100],
+  [121, 120], [151, 150], [201, 200],
 ];
 
 const TRAILING_TIERS_50X = [
@@ -333,7 +339,7 @@ function calcInitialSL(entry, direction, leverage) {
 // currentProfitPct = profit as % of margin (e.g. 46 = 46%).
 
 function applyTrailingTiers(entry, direction, leverage, slPrice, margin, currentProfitPct) {
-  const tiers = leverage >= 100 ? TRAILING_TIERS_100X : TRAILING_TIERS_50X;
+  const tiers = leverage >= 100 ? TRAILING_TIERS_100X : leverage >= 75 ? TRAILING_TIERS_75X : TRAILING_TIERS_50X;
 
   // Safety tier first
   if (currentProfitPct >= SAFETY_TIER[0]) {
@@ -423,7 +429,9 @@ function backtestSymbol(symbol, candles1m, candles15m) {
 
         trades.push({
           symbol,
-          direction: position.direction,
+          direction:  position.direction,
+          signalType: position.signalType,
+          zone:       position.zone,
           entry,
           closePrice,
           pnlPct,
@@ -449,30 +457,56 @@ function backtestSymbol(symbol, candles1m, candles15m) {
     const price = currentCandle.close;
     const zone  = classifyZone(price, vwapData);
 
-    // ── Combine 15m + 1m signals with VWAP zone filter ─────────
-    // Priority 1: 15m internal CHoCH + 1m internal CHoCH/BOS same direction
-    // Priority 2: 1m internal CHoCH alone (with 15m trend agreement)
-    // Priority 3: 15m swing BOS (trend continuation)
-    const intTrend15m = smc15m.intTrend; // +1 bullish, -1 bearish, 0 neutral
+    // ── Entry rules ───────────────────────────────────────────
+    // Rule 1: 15m internal CHoCH + 1m CHoCH/BOS same direction
+    //         (= 15m HL confirmed → 1m HL → entry next candle)
+    // Rule 2: 15m swing BOS continuation
+    // Shorts: ONLY when 15m swing trend is bearish (swTrend === -1)
+    // Removed: standalone 1m_CHOCH (needed 15m to agree — WR only 54%)
+    const swTrend15m = smc15m.swTrend; // +1 bullish, -1 bearish, 0 neutral
 
-    let direction = null;
+    let direction  = null;
+    let signalType = null;
 
-    // 15m CHoCH + 1m confirm (highest conviction)
+    // 15m internal CHoCH + 1m confirm (HL+HL entry)
+    // Fully mirrored zone + trend gates:
+    //   LONG  — needs swTrend +1, blocked in ABOVE_UPPER and BELOW_LOWER
+    //   SHORT — needs swTrend -1, blocked in BELOW_LOWER and ABOVE_UPPER
+    // ── Zone rules (fully mirrored) ──────────────────────────
+    // MID zones  : trade WITH 15m swing trend (CHoCH/BOS)
+    //   UPPER_MID + swTrend +1 → LONG
+    //   LOWER_MID + swTrend -1 → SHORT
+    // EXTREME zones : trade on exhaustion signal only (no trend gate)
+    //   ABOVE_UPPER + HH (BOS_LONG)  → SHORT  (overbought exhaustion)
+    //   BELOW_LOWER + LL (BOS_SHORT) → SHORT  (free-fall momentum)
+    //   No LONG entries in either extreme zone
+    const inMidZone = zone === 'UPPER_MID' || zone === 'LOWER_MID';
+
+    // Mid zone: 15m CHoCH + 1m confirm
     if (last15mIntSignal === 'CHOCH_LONG' && (int1m === 'CHOCH_LONG' || int1m === 'BOS_LONG')) {
-      if (zone !== 'ABOVE_UPPER') direction = 'LONG';
+      if (swTrend15m === 1  && inMidZone) { direction = 'LONG';  signalType = '15m+1m_CHOCH'; }
     } else if (last15mIntSignal === 'CHOCH_SHORT' && (int1m === 'CHOCH_SHORT' || int1m === 'BOS_SHORT')) {
-      if (zone !== 'BELOW_LOWER') direction = 'SHORT';
+      if (swTrend15m === -1 && inMidZone) { direction = 'SHORT'; signalType = '15m+1m_CHOCH'; }
     }
 
-    // 1m CHoCH alone — needs 15m trend agreement
+    // Mid zone: 15m swing BOS continuation
     if (!direction) {
-      if (int1m === 'CHOCH_LONG' && intTrend15m >= 0 && zone !== 'ABOVE_UPPER')  direction = 'LONG';
-      if (int1m === 'CHOCH_SHORT' && intTrend15m <= 0 && zone !== 'BELOW_LOWER') direction = 'SHORT';
+      const raw = resolveSignal(last15mIntSignal, last15mSwSignal, zone);
+      if (raw === 'LONG'  && swTrend15m === 1  && inMidZone) { direction = 'LONG';  signalType = '15m_BOS'; }
+      if (raw === 'SHORT' && swTrend15m === -1 && inMidZone) { direction = 'SHORT'; signalType = '15m_BOS'; }
     }
 
-    // 15m swing BOS — trend continuation, strong confirmation
+    // Extreme zones: HH at ABOVE_UPPER → SHORT, LL at BELOW_LOWER → SHORT
+    // BOS_LONG  in SMC = swing high broken upward  = HH
+    // BOS_SHORT in SMC = swing low  broken downward = LL
     if (!direction) {
-      direction = resolveSignal(last15mIntSignal, last15mSwSignal, zone);
+      const hh = last15mSwSignal === 'BOS_LONG'  || last15mIntSignal === 'BOS_LONG';
+      const ll = last15mSwSignal === 'BOS_SHORT' || last15mIntSignal === 'BOS_SHORT';
+      // Only fire extreme entries when trend has turned neutral/opposite
+      // If 15m swing still bullish → skip ABOVE_UPPER short (bull is still running)
+      // If 15m swing still bearish → skip BELOW_LOWER long (bear is still running)
+      if (zone === 'ABOVE_UPPER' && hh && swTrend15m !== 1)  { direction = 'SHORT'; signalType = 'EXTREME_HH'; }
+      if (zone === 'BELOW_LOWER' && ll && swTrend15m !== -1) { direction = 'LONG';  signalType = 'EXTREME_LL'; }
     }
 
     // Clear consumed 15m signals so they don't repeat each 1m candle
@@ -493,6 +527,8 @@ function backtestSymbol(symbol, candles1m, candles15m) {
       sl,
       margin,
       entryIndex: i + 1,
+      signalType,
+      zone,
     };
   }
 
@@ -506,8 +542,10 @@ function backtestSymbol(symbol, candles1m, candles15m) {
 
     trades.push({
       symbol,
-      direction: position.direction,
-      entry: position.entry,
+      direction:  position.direction,
+      signalType: position.signalType,
+      zone:       position.zone,
+      entry:      position.entry,
       closePrice,
       pnlPct,
       pnlDollar,
@@ -522,50 +560,108 @@ function backtestSymbol(symbol, candles1m, candles15m) {
 // ── Report helpers ─────────────────────────────────────────────
 
 function printSymbolReport(symbol, trades) {
-  if (trades.length === 0) {
-    console.log(`  ${symbol}: no trades`);
+  const leverage  = SYMBOL_LEVERAGE[symbol] ?? 50;
+  const slPricePct = (CAPITAL_RISK_FRAC / leverage * 100).toFixed(3); // SL as % of price
+  const maxLoss   = STARTING_CAPITAL * TRADE_CAPITAL_FRAC * CAPITAL_RISK_FRAC;
+
+  if (!trades || trades.length === 0) {
+    console.log(`  ${symbol.padEnd(9)} ${leverage}x  SL=${slPricePct}% price | no trades`);
     return;
   }
-  const wins   = trades.filter(t => t.win).length;
+
+  const wins     = trades.filter(t => t.win);
+  const losses   = trades.filter(t => !t.win);
   const totalPnl = trades.reduce((sum, t) => sum + t.pnlDollar, 0);
-  const winRate  = ((wins / trades.length) * 100).toFixed(1);
-  console.log(`  ${symbol}: ${trades.length} trades | ${wins}W/${trades.length - wins}L | WR ${winRate}% | PnL $${totalPnl.toFixed(2)}`);
+  const winRate  = ((wins.length / trades.length) * 100).toFixed(1);
+  const avgWin   = wins.length   ? (wins.reduce((s, t) => s + t.pnlDollar, 0)   / wins.length).toFixed(2)   : '0';
+  const avgLoss  = losses.length ? (losses.reduce((s, t) => s + t.pnlDollar, 0) / losses.length).toFixed(2) : '0';
+
+  const longs  = trades.filter(t => t.direction === 'LONG');
+  const shorts = trades.filter(t => t.direction === 'SHORT');
+  const longWR  = longs.length  ? ((longs.filter(t => t.win).length  / longs.length)  * 100).toFixed(0) : '-';
+  const shortWR = shorts.length ? ((shorts.filter(t => t.win).length / shorts.length) * 100).toFixed(0) : '-';
+
+  console.log(
+    `  ${symbol.padEnd(9)} ${String(leverage).padStart(3)}x | ` +
+    `SL=${slPricePct}% (~$${maxLoss.toFixed(0)} max loss) | ` +
+    `${trades.length} trades ${wins.length}W/${losses.length}L WR ${winRate}% | ` +
+    `avg win $${avgWin} avg loss $${avgLoss} | ` +
+    `L:${longs.length}(${longWR}%) S:${shorts.length}(${shortWR}%) | ` +
+    `PnL $${totalPnl.toFixed(2)}`
+  );
+}
+
+function wrStat(trades) {
+  if (!trades.length) return 'n/a';
+  const w = trades.filter(t => t.win).length;
+  return `${w}W/${trades.length - w}L  WR ${((w / trades.length) * 100).toFixed(1)}%`;
 }
 
 function printFullReport(allTrades) {
-  const wins      = allTrades.filter(t => t.win);
-  const losses    = allTrades.filter(t => !t.win);
-  const totalPnl  = allTrades.reduce((sum, t) => sum + t.pnlDollar, 0);
-  const pnlPct    = (totalPnl / STARTING_CAPITAL * 100).toFixed(2);
-  const winRate   = allTrades.length > 0 ? ((wins.length / allTrades.length) * 100).toFixed(1) : '0';
-  const avgDur    = allTrades.length > 0
-    ? (allTrades.reduce((sum, t) => sum + t.durationMin, 0) / allTrades.length).toFixed(1)
-    : '0';
+  const wins     = allTrades.filter(t => t.win);
+  const losses   = allTrades.filter(t => !t.win);
+  const totalPnl = allTrades.reduce((sum, t) => sum + t.pnlDollar, 0);
+  const pnlPct   = (totalPnl / STARTING_CAPITAL * 100).toFixed(2);
+  const winRate  = allTrades.length > 0 ? ((wins.length / allTrades.length) * 100).toFixed(1) : '0';
+  const avgDur   = allTrades.length > 0
+    ? (allTrades.reduce((sum, t) => sum + t.durationMin, 0) / allTrades.length).toFixed(1) : '0';
+  const avgWinDur  = wins.length   ? (wins.reduce((s, t) => s + t.durationMin, 0) / wins.length).toFixed(1)   : '0';
+  const avgLossDur = losses.length ? (losses.reduce((s, t) => s + t.durationMin, 0) / losses.length).toFixed(1) : '0';
 
-  const bestTrade  = allTrades.reduce((best, t) => (!best || t.pnlDollar > best.pnlDollar) ? t : best, null);
-  const worstTrade = allTrades.reduce((worst, t) => (!worst || t.pnlDollar < worst.pnlDollar) ? t : worst, null);
+  const bestTrade  = allTrades.reduce((b, t) => (!b || t.pnlDollar > b.pnlDollar) ? t : b, null);
+  const worstTrade = allTrades.reduce((w, t) => (!w || t.pnlDollar < w.pnlDollar) ? t : w, null);
 
   console.log('\n══════════════════════════════════════════════════');
   console.log('  BACKTEST v4 — RESULTS SUMMARY');
   console.log('══════════════════════════════════════════════════');
   console.log(`  Period  : ${BACKTEST_DAYS} days`);
-  console.log(`  Capital : $${STARTING_CAPITAL} | 10% per trade | trailing SL`);
+  console.log(`  Capital : $${STARTING_CAPITAL} | 10% per trade | initial SL ${CAPITAL_RISK_FRAC * 100}% of margin | trailing SL`);
   console.log('──────────────────────────────────────────────────');
   console.log(`  Total trades : ${allTrades.length}`);
-  console.log(`  Wins         : ${wins.length}`);
-  console.log(`  Losses       : ${losses.length}`);
-  console.log(`  Win rate     : ${winRate}%`);
-  console.log(`  Net P&L      : $${totalPnl.toFixed(2)} (${pnlPct}% of $${STARTING_CAPITAL})`);
-  console.log(`  Avg duration : ${avgDur} minutes`);
+  console.log(`  Win rate     : ${winRate}%  (${wins.length}W / ${losses.length}L)`);
+  console.log(`  Net P&L      : $${totalPnl.toFixed(2)} (${pnlPct}% on $${STARTING_CAPITAL})`);
+  console.log(`  Avg duration : ${avgDur} min  (wins: ${avgWinDur}m | losses: ${avgLossDur}m)`);
+  if (bestTrade)  console.log(`  Best trade   : ${bestTrade.symbol} ${bestTrade.direction} +$${bestTrade.pnlDollar.toFixed(2)}`);
+  if (worstTrade) console.log(`  Worst trade  : ${worstTrade.symbol} ${worstTrade.direction} $${worstTrade.pnlDollar.toFixed(2)}`);
 
-  if (bestTrade) {
-    console.log(`  Best trade   : ${bestTrade.symbol} ${bestTrade.direction} +$${bestTrade.pnlDollar.toFixed(2)} (${bestTrade.pnlPct.toFixed(1)}%)`);
-  }
-  if (worstTrade) {
-    console.log(`  Worst trade  : ${worstTrade.symbol} ${worstTrade.direction} $${worstTrade.pnlDollar.toFixed(2)} (${worstTrade.pnlPct.toFixed(1)}%)`);
+  // ── Loss breakdown by signal type ──────────────────────────
+  console.log('\n  ── Loss breakdown by signal type ──');
+  const sigTypes = ['15m+1m_CHOCH', '15m_BOS', 'EXTREME_HH', 'EXTREME_LL'];
+  for (const sig of sigTypes) {
+    const group = allTrades.filter(t => t.signalType === sig);
+    if (!group.length) continue;
+    const pnl = group.reduce((s, t) => s + t.pnlDollar, 0);
+    console.log(`  ${sig.padEnd(14)} : ${wrStat(group).padEnd(22)} PnL $${pnl.toFixed(2)}`);
   }
 
-  console.log('\n  Per-symbol breakdown:');
+  // ── Loss breakdown by VWAP zone ────────────────────────────
+  console.log('\n  ── Loss breakdown by VWAP zone ────');
+  const zones = ['ABOVE_UPPER', 'UPPER_MID', 'LOWER_MID', 'BELOW_LOWER'];
+  for (const z of zones) {
+    const group = allTrades.filter(t => t.zone === z);
+    if (!group.length) continue;
+    const pnl = group.reduce((s, t) => s + t.pnlDollar, 0);
+    console.log(`  ${z.padEnd(14)} : ${wrStat(group).padEnd(22)} PnL $${pnl.toFixed(2)}`);
+  }
+
+  // ── Loss breakdown by direction ────────────────────────────
+  console.log('\n  ── Loss breakdown by direction ────');
+  for (const dir of ['LONG', 'SHORT']) {
+    const group = allTrades.filter(t => t.direction === dir);
+    if (!group.length) continue;
+    const pnl = group.reduce((s, t) => s + t.pnlDollar, 0);
+    console.log(`  ${dir.padEnd(14)} : ${wrStat(group).padEnd(22)} PnL $${pnl.toFixed(2)}`);
+  }
+
+  // ── Quick loss analysis (SL hit within 10 min) ─────────────
+  const quickLosses = losses.filter(t => t.durationMin <= 10);
+  const slowLosses  = losses.filter(t => t.durationMin >  10);
+  console.log('\n  ── Loss speed ─────────────────────');
+  console.log(`  Quick losses (≤10 min) : ${quickLosses.length} trades  ($${quickLosses.reduce((s,t)=>s+t.pnlDollar,0).toFixed(2)})`);
+  console.log(`  Slow  losses (>10 min) : ${slowLosses.length} trades  ($${slowLosses.reduce((s,t)=>s+t.pnlDollar,0).toFixed(2)})`);
+
+  // ── Per-symbol breakdown ───────────────────────────────────
+  console.log('\n  ── Per-symbol breakdown ───────────');
   const bySymbol = {};
   for (const t of allTrades) {
     if (!bySymbol[t.symbol]) bySymbol[t.symbol] = [];
