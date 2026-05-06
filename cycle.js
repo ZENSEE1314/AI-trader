@@ -51,6 +51,10 @@ const CONFIG = {
 // ── Global State ──────────────────────────────────────────────
 let lastBitunixSync = 0;
 
+// Consecutive-loss pause: tracks losses per api_key_id in-memory.
+// Resets to 0 on WIN. On 2nd consecutive LOSS, key is paused 4 hours.
+const _consecLosses = new Map(); // api_key_id → count
+
 // ── SL/TP Config ──────────────────────────────────────────
 // System 5 — initial SL = 25% capital (margin).
 // Fees at 100x: 0.04% taker × 2 sides × 100 leverage = 8% of margin.
@@ -1316,21 +1320,6 @@ async function main() {
       }
     }
 
-    // Disable the consecutive-loss pause — the strategy's SL trail IS the risk manager.
-    // Reset max_consec_loss to 0 (disabled) so no key gets stuck paused after 2 losses.
-    if (!runCycle._consecLossFixDone) {
-      runCycle._consecLossFixDone = true;
-      try {
-        const r = await dbQuery(
-          `UPDATE api_keys SET max_consec_loss = 0
-           WHERE max_consec_loss IS DISTINCT FROM 0`
-        );
-        bLog.system(`[CONSEC-LOSS-FIX] max_consec_loss = 0 (disabled) on ${r.rowCount ?? '?'} keys — SL trail handles risk`);
-      } catch (e) {
-        bLog.error(`[CONSEC-LOSS-FIX] Failed: ${e.message}`);
-      }
-    }
-
     // One-time diagnostic: dump all API keys on first cycle after deploy
     if (!runCycle._keyDiagDone) {
       runCycle._keyDiagDone = true;
@@ -1545,18 +1534,31 @@ async function executeForAllUsers(pick) {
     // NOTE: Auto-pause for payment overdue was removed — it silently blocked users who registered
     // more than 7 days ago. Payment enforcement is handled explicitly via the admin panel.
 
-    // One-time: clear any paused_by_admin flags set by the old auto-pause logic,
-    // and reset last_paid_at for admin accounts so they're never caught by any payment check.
+    // One-time: add loss_cooldown_until column (safe no-op if already exists),
+    // clear any stale paused_by_admin flags (not cooldown pauses), and refresh admin accounts.
     if (!executeForAllUsers._unpauseDone) {
       executeForAllUsers._unpauseDone = true;
       try {
+        // Ensure the cooldown column exists (idempotent)
+        await db.query(`
+          ALTER TABLE api_keys
+          ADD COLUMN IF NOT EXISTS loss_cooldown_until TIMESTAMPTZ DEFAULT NULL
+        `);
+        bLog.trade('[CONSEC-LOSS] loss_cooldown_until column ready');
+      } catch (e) {
+        bLog.error(`[CONSEC-LOSS] Column migration failed: ${e.message}`);
+      }
+      try {
+        // Clear stale paused_by_admin flags — but KEEP valid cooldown pauses
         const unpaused = await db.query(
           `UPDATE api_keys SET paused_by_admin = false
-           WHERE paused_by_admin = true AND paused_by_user = false
+           WHERE paused_by_admin = true
+             AND paused_by_user = false
+             AND (loss_cooldown_until IS NULL OR loss_cooldown_until <= NOW())
            RETURNING id, user_id`
         );
         if (unpaused.length > 0) {
-          bLog.trade(`[UNBLOCK] Cleared auto-pause on ${unpaused.length} key(s) — were blocked by payment-overdue logic. Keys: ${unpaused.map(k => `#${k.id}`).join(', ')}`);
+          bLog.trade(`[UNBLOCK] Cleared stale admin-pause on ${unpaused.length} key(s): ${unpaused.map(k => `#${k.id}`).join(', ')}`);
         }
         // Keep admin accounts' last_paid_at current so they're always clear
         await db.query(`UPDATE users SET last_paid_at = NOW() WHERE is_admin = true`);
@@ -1578,6 +1580,25 @@ async function executeForAllUsers(pick) {
       } catch (diagErr) {
         bLog.error(`[DIAG] Failed: ${diagErr.message}`);
       }
+    }
+
+    // Auto-resume keys whose 4-hour consecutive-loss cooldown has expired
+    try {
+      const resumed = await db.query(
+        `UPDATE api_keys
+         SET paused_by_admin = false, loss_cooldown_until = NULL
+         WHERE paused_by_admin = true
+           AND loss_cooldown_until IS NOT NULL
+           AND loss_cooldown_until <= NOW()
+         RETURNING id, user_id`
+      );
+      for (const r of resumed) {
+        _consecLosses.set(r.id, 0);
+        bLog.trade(`[CONSEC-LOSS] Key #${r.id} auto-resumed — 4h cooldown expired`);
+        await notify(`▶️ *Trading Resumed*\nKey #${r.id} — 4-hour cooldown complete. Ready to trade.`);
+      }
+    } catch (e) {
+      bLog.error(`[CONSEC-LOSS] Auto-resume check failed: ${e.message}`);
     }
 
     const allKeys = await db.query(
@@ -1725,10 +1746,6 @@ async function executeForAllUsers(pick) {
           userLog.trade(`User ${key.email}: ${symbol} has no token configuration — skipped`);
           return;
         }
-
-        // Consecutive-loss pause is disabled — max_consec_loss = 0.
-        // The trailing SL system manages per-trade risk. Blocking after losses
-        // means missing the recovery move. Strategy confluence is the quality gate.
 
         // User's risk settings — active AI version can override SL/trail if admin activated one
         const walletSizePct = (await getCapitalPercentage(key.id)) / 100;
@@ -2839,6 +2856,37 @@ async function syncTradeStatus() {
               [status, pnlUsdt, exitPrice, trade.id, tradingFee, grossPnl, fundingFee]
             );
             bLog.trade(`DB synced: ${trade.symbol} -> ${status} gross=$${grossPnl} fee=$${tradingFee} funding=$${fundingFee} net=$${pnlUsdt} exit=$${fmtPrice(exitPrice)}`);
+
+            // ── Consecutive-loss pause: 2 losses in a row → 4-hour cooldown ──
+            try {
+              const keyId = trade.api_key_id;
+              if (status === 'WIN') {
+                _consecLosses.set(keyId, 0);
+              } else {
+                const streak = (_consecLosses.get(keyId) || 0) + 1;
+                _consecLosses.set(keyId, streak);
+                bLog.trade(`[CONSEC-LOSS] Key #${keyId} streak=${streak} after LOSS on ${trade.symbol}`);
+                if (streak >= 2) {
+                  const cooldownUntil = new Date(Date.now() + 4 * 3600 * 1000);
+                  await db.query(
+                    `UPDATE api_keys SET paused_by_admin = true, loss_cooldown_until = $2 WHERE id = $1`,
+                    [keyId, cooldownUntil]
+                  );
+                  _consecLosses.set(keyId, 0); // reset after triggering pause
+                  const untilStr = cooldownUntil.toISOString().replace('T', ' ').slice(0, 16) + ' UTC';
+                  bLog.trade(`[CONSEC-LOSS] Key #${keyId} PAUSED 4h — 2 consecutive losses. Resumes: ${untilStr}`);
+                  await notify(
+                    `⏸️ *Trading Paused — 2 Consecutive Losses*\n` +
+                    `Key #${keyId}\n` +
+                    `Last loss: *${trade.symbol}* net=$${pnlUsdt.toFixed(2)}\n` +
+                    `Cooldown until: \`${untilStr}\`\n` +
+                    `Trading resumes automatically after 4 hours.`
+                  );
+                }
+              }
+            } catch (e) {
+              bLog.error(`[CONSEC-LOSS] Tracking error: ${e.message}`);
+            }
 
             // Notify agents of trade outcome (for survival system)
             if (_onTradeOutcome) {
