@@ -2997,9 +2997,8 @@ async function checkUsdtTopups() {
 }
 
 // ── BACKFILL FEES FROM BITUNIX API ───────────────────────────
-// On startup: for any closed trade missing trading_fee, fetch real
-// fee + PnL from Bitunix position history and update the DB row.
-// Covers the case where quantity is NULL (ADA trades with "--" fee).
+// On startup: re-fetch real fee + PnL from Bitunix for ALL recent closed
+// trades across ALL users. Fixes wrong/estimated values for every account.
 async function backfillFeesFromBitunix() {
   let db, cryptoUtils, BitunixClient;
   try {
@@ -3009,26 +3008,30 @@ async function backfillFeesFromBitunix() {
   } catch (e) { return; }
 
   try {
-    // Find all closed Bitunix trades missing real fees
+    // Fetch ALL recent closed Bitunix trades across all users — no fee filter.
+    // Re-syncing a correctly-synced trade is harmless (same value written back).
+    // This catches: NULL fee, estimated fee, wrong pnl_usdt from price×qty estimate.
     const trades = await db.query(
       `SELECT t.id, t.symbol, t.direction, t.entry_price, t.exit_price,
-              t.quantity, t.gross_pnl, t.pnl_usdt, t.created_at,
+              t.quantity, t.gross_pnl, t.pnl_usdt, t.trading_fee, t.created_at,
               t.api_key_id, t.bitunix_position_id,
-              ak.api_key, ak.api_secret, ak.platform
+              ak.api_key, ak.api_secret, ak.platform,
+              u.email
        FROM trades t
        JOIN api_keys ak ON ak.id = t.api_key_id
+       JOIN users    u  ON u.id  = t.user_id
        WHERE t.status IN ('WIN','LOSS','CLOSED')
-         AND (t.trading_fee IS NULL OR t.trading_fee = 0)
          AND ak.platform = 'bitunix'
-       ORDER BY t.created_at DESC
-       LIMIT 200`
+         AND t.closed_at > NOW() - INTERVAL '60 days'
+       ORDER BY t.closed_at DESC
+       LIMIT 500`
     );
 
     if (!trades.length) {
-      bLog.system('[FEE-BACKFILL] No trades missing fees — nothing to do');
+      bLog.system('[FEE-BACKFILL] No recent closed Bitunix trades — nothing to do');
       return;
     }
-    bLog.system(`[FEE-BACKFILL] Found ${trades.length} trade(s) missing fees — fetching from Bitunix`);
+    bLog.system(`[FEE-BACKFILL] Re-syncing ${trades.length} recent closed Bitunix trade(s) across all users`);
 
     // Group by api_key_id to minimise API calls
     const byKey = {};
@@ -3136,7 +3139,7 @@ async function backfillFeesFromBitunix() {
           ]
         );
         updated++;
-        bLog.system(`[FEE-BACKFILL] trade#${trade.id} ${trade.symbol}: fee=$${tradingFee.toFixed(4)} net=$${pnlUsdt ?? '?'} gross=$${grossPnl ?? '?'} status=${status ?? 'unchanged'}`);
+        bLog.system(`[FEE-BACKFILL] trade#${trade.id} ${trade.email} ${trade.symbol}: fee=$${tradingFee.toFixed(4)} net=$${pnlUsdt ?? '?'} gross=$${grossPnl ?? '?'} status=${status ?? 'unchanged'}`);
       }
     }
 
