@@ -3,14 +3,13 @@
 // ═══════════════════════════════════════════════════════════════
 //  strategy-v4-smc.js  —  VWAP Zone + 15m/1m Swing HL/LH
 //
-//  Rules (exact match to strategy-v4-tradingview.pine):
-//    ABOVE_UPPER zone: 15m HH  + 1m HH  → SHORT (reversal from extreme)
+//  Rules:
 //    UPPER_MID  zone : 15m LH  + 1m LH  → SHORT
 //    LOWER_MID  zone : 15m HL  + 1m HL  → LONG
 //    BELOW_LOWER zone: 15m LL  + 1m LL  → LONG  (reversal from extreme)
 //
+//  ABOVE_UPPER → NO TRADE. Price above 2σ band = strong trend, do not fade.
 //  NO trend gate — zone + confirmed swing structure is the only filter.
-//  (Pine Script V4 has no swTrend gate; adding one blocked valid setups.)
 //
 //  Entry : next 1m candle after 15m + 1m both confirm
 //  SL    : 25% capital / leverage
@@ -216,14 +215,13 @@ function resolveSignal(state, price, zone) {
   const m1_HH = state.sh1m_1 !== null && state.sh1m_2 !== null && state.sh1m_1 > state.sh1m_2;
   const m1_LL = state.sl1m_1 !== null && state.sl1m_2 !== null && state.sl1m_1 < state.sl1m_2;
 
-  // Zone × confirmed swing structure (exact Pine Script V4 rules, no trend gate):
-  //   ABOVE_UPPER: price rejected above 2σ band  → SHORT on HH (reversal)
-  //   UPPER_MID  : price in upper half of range   → SHORT on LH
-  //   LOWER_MID  : price in lower half of range   → LONG  on HL
-  //   BELOW_LOWER: price rejected below 2σ band  → LONG  on LL (reversal)
-  if (zone === 'ABOVE_UPPER' && h15_HH && m1_HH) {
-    return { direction: 'SHORT', signalType: 'HH+HH_reversal' };
-  }
+  // Zone × confirmed swing structure:
+  //   ABOVE_UPPER → skip entirely — price above 2σ = trending, never fade
+  //   UPPER_MID   → SHORT only when 15m LH + 1m LH both confirmed
+  //   LOWER_MID   → LONG  only when 15m HL + 1m HL both confirmed
+  //   BELOW_LOWER → LONG  on LL reversal (15m LL + 1m LL)
+  if (zone === 'ABOVE_UPPER') return null; // never short a strong uptrend
+
   if (zone === 'UPPER_MID' && h15_LH && m1_LH) {
     return { direction: 'SHORT', signalType: 'LH+LH' };
   }
@@ -283,22 +281,29 @@ async function analyzeSymbol(symbol, logFn) {
   const fresh1m  = await fetchBybitKlines(symbol, '1',  DELTA_BARS_1M);
   const fresh15m = await fetchBybitKlines(symbol, '15', DELTA_BARS_15M);
 
-  // Append new 15m bars and update swing trackers
+  // Append new 15m bars and update swing trackers.
+  // NOTE: Skip the last fetched 15m bar — it is the live/forming candle.
+  // Pivot detection needs the "right side" bar to be fully CLOSED, or we get
+  // false LH/HL signals from a half-formed bar that TradingView hasn't confirmed.
   const last15mTime = state.candles15m.length ? state.candles15m[state.candles15m.length - 1].openTime : 0;
   const new15m = fresh15m.filter(c => c.openTime > last15mTime);
-  if (new15m.length) {
-    state.candles15m.push(...new15m);
-    if (state.candles15m.length > WARMUP_BARS_15M + 20) state.candles15m.splice(0, new15m.length);
+  if (new15m.length > 1) {                          // >1 means at least one closed bar arrived
+    state.candles15m.push(...new15m.slice(0, -1));  // exclude the live bar
+    if (state.candles15m.length > WARMUP_BARS_15M + 20) state.candles15m.splice(0, new15m.length - 1);
     update15mSwings(state);
   }
 
-  // Process new 1m bars
+  // Process new 1m bars — skip the last one (live/forming candle).
+  // A 1m pivot at bar[i] requires bar[i+1] (the right side) to be CLOSED.
+  // If bar[i+1] is still forming, its high might be below bar[i] now but
+  // exceed it before the minute closes — causing a false pivot confirmation.
   const new1m = fresh1m.filter(c => c.openTime > state.lastProcessed1m);
-  if (!new1m.length) return null;
+  if (new1m.length < 2) return null;                // need at least 1 closed + 1 confirming
 
+  const closedBars = new1m.slice(0, -1);            // exclude the live bar
   let signal = null;
 
-  for (const bar of new1m) {
+  for (const bar of closedBars) {
     state.candles1m.push(bar);
     if (state.candles1m.length > WARMUP_BARS_1M + 20) state.candles1m.shift();
 
@@ -319,7 +324,7 @@ async function analyzeSymbol(symbol, logFn) {
       }
     }
 
-    state.lastProcessed1m = bar.openTime;
+    state.lastProcessed1m = bar.openTime; // tracks last CLOSED bar (live bar excluded)
   }
 
   if (!signal) return null;
