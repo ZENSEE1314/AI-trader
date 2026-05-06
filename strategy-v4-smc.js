@@ -40,7 +40,7 @@ const DELTA_15M  =   5;  // bars fetched each subsequent 15m cycle
 const CAPITAL_RISK = 0.25; // 25% capital risk per trade
 
 // ── Traded symbols and leverage ────────────────────────────────
-const ACTIVE_SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'ADAUSDT', 'SOLUSDT', 'AVAXUSDT'];
+const ACTIVE_SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'ADAUSDT', 'SOLUSDT'];
 
 const SYMBOL_LEVERAGE = {
   BTCUSDT: 100,
@@ -48,7 +48,6 @@ const SYMBOL_LEVERAGE = {
   BNBUSDT: 100,
   ADAUSDT:  75,
   SOLUSDT:  75,
-  AVAXUSDT: 75,
 };
 
 // ── Per-symbol persistent state ────────────────────────────────
@@ -117,7 +116,7 @@ function calcVwap(candles15m, asOfMs) {
 
   const vwap   = cumTPV / cumVol;
   const stddev = Math.sqrt(Math.max(0, cumTPV2 / cumVol - vwap * vwap));
-  return { vwap, upper: vwap + 2 * stddev, lower: vwap - 2 * stddev };
+  return { vwap, upper: vwap + 2 * stddev, lower: vwap - 2 * stddev, stddev };
 }
 
 function getZone(price, { vwap, upper, lower }) {
@@ -167,6 +166,24 @@ function update1m(state) {
   return p.bar.openTime;
 }
 
+// ── Signal filters ─────────────────────────────────────────────
+// VWAP distance: reject entries < 0.5σ above the lower band.
+// Too close = price barely clipping the zone, no confirmed support.
+// Sweet spot 0.5–1σ produces 71–83% WR vs 0–20% WR near the band.
+function isGoodVwapDistance(price, { lower, stddev }) {
+  const distFromLower = (price - lower) / stddev;
+  return distFromLower >= 0.5;
+}
+
+// 1m gap: reject if HL/LL gap > 0.5% — means chasing a move already done.
+const MAX_1M_GAP_PCT = 0.5;
+
+function is1mGapOk(sl1m_1, sl1m_2) {
+  if (sl1m_1 === null || sl1m_2 === null) return false;
+  const gap = Math.abs(sl1m_1 - sl1m_2) / sl1m_2 * 100;
+  return gap <= MAX_1M_GAP_PCT;
+}
+
 // ── Signal logic ───────────────────────────────────────────────
 // Only fires when a fresh 1m pivot confirms (deduped by openTime).
 // All structure comes from CLOSED bars only — no live bar leakage.
@@ -176,6 +193,9 @@ function resolveSignal(state, zone) {
 
   const hl1m = state.sl1m_1 !== null && state.sl1m_2 !== null && state.sl1m_1 > state.sl1m_2;
   const ll1m = state.sl1m_1 !== null && state.sl1m_2 !== null && state.sl1m_1 < state.sl1m_2;
+
+  // Filter: 1m gap must be ≤ 0.5% (no chasing)
+  if (!is1mGapOk(state.sl1m_1, state.sl1m_2)) return null;
 
   // Price above VWAP (UPPER_MID or ABOVE_UPPER) → no trade, ever
   if (zone === 'LOWER_MID'   && hl15 && hl1m) return { direction: 'LONG', type: 'HL+HL' };
@@ -254,11 +274,18 @@ async function analyze(symbol, log) {
       const vwap = calcVwap(st.candles15m, bar.openTime);
       if (vwap) {
         const zone = getZone(bar.close, vwap);
-        const sig  = resolveSignal(st, zone);
-        if (sig) {
-          st.lastSignalTime = pivotTime;
-          signal = { ...sig, price: bar.close, zone };
-          log(`[V4] ✓ ${symbol} ${sig.direction} zone=${zone} type=${sig.type} sl15=${st.sl15_1?.toFixed(4)}/${st.sl15_2?.toFixed(4)} sl1m=${st.sl1m_1?.toFixed(4)}/${st.sl1m_2?.toFixed(4)}`);
+        // VWAP dist filter: only for LOWER_MID (HL+HL).
+        // BELOW_LOWER (LL+LL) price is below the band by design — dist is always negative, skip check.
+        const distBlocked = zone === 'LOWER_MID' && !isGoodVwapDistance(bar.close, vwap);
+        if (distBlocked) {
+          log(`[V4] skip ${symbol} — price too close to lower band (< 0.5σ)`);
+        } else {
+          const sig = resolveSignal(st, zone);
+          if (sig) {
+            st.lastSignalTime = pivotTime;
+            signal = { ...sig, price: bar.close, zone };
+            log(`[V4] ✓ ${symbol} ${sig.direction} zone=${zone} type=${sig.type} sl15=${st.sl15_1?.toFixed(4)}/${st.sl15_2?.toFixed(4)} sl1m=${st.sl1m_1?.toFixed(4)}/${st.sl1m_2?.toFixed(4)}`);
+          }
         }
       }
     }
