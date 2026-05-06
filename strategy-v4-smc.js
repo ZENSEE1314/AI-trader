@@ -4,16 +4,16 @@
 //  strategy-v4-smc.js  —  VWAP Zone + 15m/1m Swing HL/LH
 //
 //  Rules (exact match to strategy-v4-tradingview.pine):
-//    LOWER_MID zone  : 15m HL  + 1m HL  → LONG  (swTrend=+1 only)
-//    UPPER_MID zone  : 15m LH  + 1m LH  → SHORT (swTrend=-1 only)
-//    ABOVE_UPPER zone: 15m HL  + 1m HL  → LONG  (bull continuation)
-//                      15m HH  + 1m HH  → SHORT (reversal, swTrend=-1)
-//    BELOW_LOWER zone: 15m LH  + 1m LH  → SHORT (bear continuation)
-//                      15m LL  + 1m LL  → LONG  (reversal, swTrend=+1)
+//    ABOVE_UPPER zone: 15m HH  + 1m HH  → SHORT (reversal from extreme)
+//    UPPER_MID  zone : 15m LH  + 1m LH  → SHORT
+//    LOWER_MID  zone : 15m HL  + 1m HL  → LONG
+//    BELOW_LOWER zone: 15m LL  + 1m LL  → LONG  (reversal from extreme)
+//
+//  NO trend gate — zone + confirmed swing structure is the only filter.
+//  (Pine Script V4 has no swTrend gate; adding one blocked valid setups.)
 //
 //  Entry : next 1m candle after 15m + 1m both confirm
 //  SL    : 25% capital / leverage
-//  Gates : swTrend15m +1=LONG only | -1=SHORT only | 0=nothing
 //
 //  Data  : Bybit v5 public API (klines). Trading via Binance.
 //  State : persistent per-symbol (module-level). First call warms
@@ -199,13 +199,11 @@ function swTrend15m(state) {
 }
 
 // ── Signal resolver ────────────────────────────────────────────
-// Called only when a fresh 1m pivot is confirmed AND trend gates allow.
+// Called only when a fresh 1m pivot is confirmed.
 // Returns { direction, signalType } or null.
+// Zone + confirmed swing structure are the only filters — no trend gate.
 
 function resolveSignal(state, price, zone) {
-  const trend = swTrend15m(state);
-  if (trend === 0) return null; // ranging — no trades
-
   // 15m structure flags
   const h15_HL = state.sl15_1 !== null && state.sl15_2 !== null && state.sl15_1 > state.sl15_2;
   const h15_LH = state.sh15_1 !== null && state.sh15_2 !== null && state.sh15_1 < state.sh15_2;
@@ -218,16 +216,22 @@ function resolveSignal(state, price, zone) {
   const m1_HH = state.sh1m_1 !== null && state.sh1m_2 !== null && state.sh1m_1 > state.sh1m_2;
   const m1_LL = state.sl1m_1 !== null && state.sl1m_2 !== null && state.sl1m_1 < state.sl1m_2;
 
-  // Zone × structure × trend gate
-  // LONG only fires in LOWER_MID (price pulled back below VWAP mid)
-  // SHORT only fires in UPPER_MID (price pushed up above VWAP mid)
-  // No extreme-zone trades — ABOVE_UPPER/BELOW_LOWER are excluded to
-  // prevent misfires when VWAP bands are still narrow/forming.
-  if (zone === 'LOWER_MID' && h15_HL && m1_HL && trend === 1) {
+  // Zone × confirmed swing structure (exact Pine Script V4 rules, no trend gate):
+  //   ABOVE_UPPER: price rejected above 2σ band  → SHORT on HH (reversal)
+  //   UPPER_MID  : price in upper half of range   → SHORT on LH
+  //   LOWER_MID  : price in lower half of range   → LONG  on HL
+  //   BELOW_LOWER: price rejected below 2σ band  → LONG  on LL (reversal)
+  if (zone === 'ABOVE_UPPER' && h15_HH && m1_HH) {
+    return { direction: 'SHORT', signalType: 'HH+HH_reversal' };
+  }
+  if (zone === 'UPPER_MID' && h15_LH && m1_LH) {
+    return { direction: 'SHORT', signalType: 'LH+LH' };
+  }
+  if (zone === 'LOWER_MID' && h15_HL && m1_HL) {
     return { direction: 'LONG', signalType: 'HL+HL' };
   }
-  if (zone === 'UPPER_MID' && h15_LH && m1_LH && trend === -1) {
-    return { direction: 'SHORT', signalType: 'LH+LH' };
+  if (zone === 'BELOW_LOWER' && h15_LL && m1_LL) {
+    return { direction: 'LONG', signalType: 'LL+LL_reversal' };
   }
   return null;
 }
