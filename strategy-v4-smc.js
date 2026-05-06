@@ -219,19 +219,15 @@ function resolveSignal(state, price, zone) {
   const m1_LL = state.sl1m_1 !== null && state.sl1m_2 !== null && state.sl1m_1 < state.sl1m_2;
 
   // Zone × structure × trend gate
-  if (zone === 'LOWER_MID') {
-    if (h15_HL && m1_HL && trend === 1) return { direction: 'LONG',  signalType: 'HL+HL' };
+  // LONG only fires in LOWER_MID (price pulled back below VWAP mid)
+  // SHORT only fires in UPPER_MID (price pushed up above VWAP mid)
+  // No extreme-zone trades — ABOVE_UPPER/BELOW_LOWER are excluded to
+  // prevent misfires when VWAP bands are still narrow/forming.
+  if (zone === 'LOWER_MID' && h15_HL && m1_HL && trend === 1) {
+    return { direction: 'LONG', signalType: 'HL+HL' };
   }
-  if (zone === 'UPPER_MID') {
-    if (h15_LH && m1_LH && trend === -1) return { direction: 'SHORT', signalType: 'LH+LH' };
-  }
-  if (zone === 'ABOVE_UPPER') {
-    if (h15_HL && m1_HL && trend === 1)  return { direction: 'LONG',  signalType: 'HL+HL_above' };
-    if (h15_HH && m1_HH && trend === -1) return { direction: 'SHORT', signalType: 'HH_reversal' };
-  }
-  if (zone === 'BELOW_LOWER') {
-    if (h15_LH && m1_LH && trend === -1) return { direction: 'SHORT', signalType: 'LH+LH_below' };
-    if (h15_LL && m1_LL && trend === 1)  return { direction: 'LONG',  signalType: 'LL_reversal' };
+  if (zone === 'UPPER_MID' && h15_LH && m1_LH && trend === -1) {
+    return { direction: 'SHORT', signalType: 'LH+LH' };
   }
   return null;
 }
