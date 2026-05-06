@@ -1,0 +1,212 @@
+//@version=5
+// ═══════════════════════════════════════════════════════════
+//  MCT Strategy V4 — VWAP Zone + 15m/1m Structure
+//  Run this on a 1-minute chart in TradingView.
+//  Backtest: Strategy Tester tab → shows WR, profit from $1000
+//
+//  Rules:
+//  ┌ Above upper VWAP band  → find HL → LONG
+//  │                        → find HH → SHORT (reversal)
+//  │ Upper mid zone         → find LH → SHORT only
+//  │ Lower mid zone         → find HL → LONG only
+//  │ Below lower VWAP band  → find LH → SHORT
+//  └                        → find LL → LONG (reversal)
+//
+//  Entry: next 1m candle after 15m + 1m both confirm
+//  SL: 25% of margin (0.25 / leverage)
+//  Trailing SL: same tiers as live bot
+// ═══════════════════════════════════════════════════════════
+
+strategy(
+  title            = "MCT V4 — VWAP Zone + Structure",
+  overlay          = true,
+  initial_capital  = 1000,
+  default_qty_type = strategy.percent_of_equity,
+  default_qty_value = 10,
+  commission_type  = strategy.commission.percent,
+  commission_value = 0.05,
+  slippage         = 1,
+  pyramiding       = 0
+)
+
+// ── Inputs ─────────────────────────────────────────────────
+leverage      = input.int(100, "Leverage", options=[50, 100])
+swing_bars    = input.int(1,   "Swing confirmation bars each side", minval=1, maxval=3)
+
+// ── Daily VWAP + 2σ bands ──────────────────────────────────
+// TradingView built-in VWAP resets daily automatically
+vwap_mid   = ta.vwap(hlc3)
+
+// Manual 2σ bands (ta.vwap doesn't expose bands directly)
+var float cumTPV  = 0.0
+var float cumVol  = 0.0
+var float cumTPV2 = 0.0
+var int   lastDay = -1
+
+currDay = dayofyear
+if currDay != lastDay
+    cumTPV  := 0.0
+    cumVol  := 0.0
+    cumTPV2 := 0.0
+    lastDay := currDay
+
+tp  = hlc3
+vol = volume
+cumTPV  += tp * vol
+cumVol  += vol
+cumTPV2 += tp * tp * vol
+
+vwap_calc = cumVol > 0 ? cumTPV / cumVol : close
+variance  = cumVol > 0 ? math.max(0.0, cumTPV2 / cumVol - vwap_calc * vwap_calc) : 0.0
+vwap_sd   = math.sqrt(variance)
+
+vwap_upper = vwap_calc + 2 * vwap_sd
+vwap_lower = vwap_calc - 2 * vwap_sd
+
+// Plot VWAP bands
+plot(vwap_calc,  "VWAP Mid",   color=color.white,  linewidth=1)
+plot(vwap_upper, "VWAP Upper", color=color.new(color.green, 50), linewidth=1)
+plot(vwap_lower, "VWAP Lower", color=color.new(color.red, 50),   linewidth=1)
+
+// ── Zone classification ────────────────────────────────────
+// 1 = above upper  2 = upper mid  3 = lower mid  4 = below lower
+zone = close > vwap_upper ? 1 :
+       close > vwap_calc  ? 2 :
+       close >= vwap_lower ? 3 : 4
+
+// ── 15m structure via request.security ────────────────────
+// Get 15m swing highs and lows (confirmed, no repainting — use barmerge.lookahead_off)
+htf = "15"
+
+h15_high = request.security(syminfo.tickerid, htf, high[swing_bars],   lookahead=barmerge.lookahead_off)
+h15_low  = request.security(syminfo.tickerid, htf, low[swing_bars],    lookahead=barmerge.lookahead_off)
+
+// Simple 15m swing detection using the confirmed bar one swing_bars back
+h15_prevH1 = request.security(syminfo.tickerid, htf, high[swing_bars+1], lookahead=barmerge.lookahead_off)
+h15_nextH1 = request.security(syminfo.tickerid, htf, high[swing_bars-1], lookahead=barmerge.lookahead_off)
+h15_prevL1 = request.security(syminfo.tickerid, htf, low[swing_bars+1],  lookahead=barmerge.lookahead_off)
+h15_nextL1 = request.security(syminfo.tickerid, htf, low[swing_bars-1],  lookahead=barmerge.lookahead_off)
+
+is15SwingHigh = h15_high > h15_prevH1 and h15_high > h15_nextH1
+is15SwingLow  = h15_low  < h15_prevL1 and h15_low  < h15_nextL1
+
+// Track last 2 confirmed 15m swing highs and lows
+var float sh1 = na, sh2 = na  // sh1 = most recent, sh2 = previous
+var float sl1 = na, sl2 = na
+
+if is15SwingHigh
+    sh2 := sh1
+    sh1 := h15_high
+if is15SwingLow
+    sl2 := sl1
+    sl1 := h15_low
+
+// 15m structure
+h15_HH = not na(sh1) and not na(sh2) and sh1 > sh2
+h15_LH = not na(sh1) and not na(sh2) and sh1 < sh2
+h15_HL = not na(sl1) and not na(sl2) and sl1 > sl2
+h15_LL = not na(sl1) and not na(sl2) and sl1 < sl2
+
+// ── 1m structure (same logic, current timeframe) ───────────
+is1mSwingHigh = high[swing_bars] > high[swing_bars+1] and high[swing_bars] > high[swing_bars-1]
+is1mSwingLow  = low[swing_bars]  < low[swing_bars+1]  and low[swing_bars]  < low[swing_bars-1]
+
+var float m1_sh1 = na, m1_sh2 = na
+var float m1_sl1 = na, m1_sl2 = na
+
+if is1mSwingHigh
+    m1_sh2 := m1_sh1
+    m1_sh1 := high[swing_bars]
+if is1mSwingLow
+    m1_sl2 := m1_sl1
+    m1_sl1 := low[swing_bars]
+
+m1_HL = not na(m1_sl1) and not na(m1_sl2) and m1_sl1 > m1_sl2
+m1_LH = not na(m1_sh1) and not na(m1_sh2) and m1_sh1 < m1_sh2
+m1_HH = not na(m1_sh1) and not na(m1_sh2) and m1_sh1 > m1_sh2
+m1_LL = not na(m1_sl1) and not na(m1_sl2) and m1_sl1 < m1_sl2
+
+// ── Signal conditions (zone × structure × 1m confirm) ──────
+longSignal  = false
+shortSignal = false
+
+if zone == 1  // Above upper band
+    longSignal  := h15_HL and m1_HL
+    shortSignal := h15_HH and m1_HH  // reversal from extreme
+else if zone == 2  // Upper mid
+    shortSignal := h15_LH and m1_LH
+else if zone == 3  // Lower mid
+    longSignal  := h15_HL and m1_HL
+else if zone == 4  // Below lower band
+    shortSignal := h15_LH and m1_LH
+    longSignal  := h15_LL and m1_LL  // reversal from extreme
+
+// ── SL calculation ─────────────────────────────────────────
+sl_pct = 0.25 / leverage  // 25% capital risk → price %
+
+long_sl  = close * (1 - sl_pct)
+short_sl = close * (1 + sl_pct)
+
+// ── Entries ────────────────────────────────────────────────
+if longSignal and strategy.position_size == 0
+    strategy.entry("LONG", strategy.long)
+    strategy.exit("LONG_SL", "LONG", stop=long_sl)
+
+if shortSignal and strategy.position_size == 0
+    strategy.entry("SHORT", strategy.short)
+    strategy.exit("SHORT_SL", "SHORT", stop=short_sl)
+
+// ── Trailing SL (tier-based, updates every bar) ────────────
+// Capital % profit = (price change % × leverage)
+if strategy.position_size > 0  // LONG
+    entry_p   = strategy.opentrades.entry_price(0)
+    cap_pct   = (close - entry_p) / entry_p * leverage
+
+    // Safety: +20% → lock +10%
+    if cap_pct >= 0.20
+        lock_price = entry_p * (1 + 0.10 / leverage)
+        if lock_price > strategy.opentrades.entry_price(0)
+            strategy.exit("LONG_TRAIL", "LONG", stop=lock_price)
+
+    // Tiers (100x): 46/45, 51/50, 61/60 ...
+    lock_cap = leverage == 100 ?
+       (cap_pct >= 3.01 ? 3.00 : cap_pct >= 2.01 ? 2.00 : cap_pct >= 1.51 ? 1.50 :
+        cap_pct >= 1.21 ? 1.20 : cap_pct >= 1.11 ? 1.10 : cap_pct >= 1.01 ? 1.00 :
+        cap_pct >= 0.91 ? 0.90 : cap_pct >= 0.81 ? 0.80 : cap_pct >= 0.71 ? 0.70 :
+        cap_pct >= 0.61 ? 0.60 : cap_pct >= 0.51 ? 0.50 : cap_pct >= 0.46 ? 0.45 : na) :
+       // 50x tiers: 21/20, 31/30, 38/35 ...
+       (cap_pct >= 1.04 ? 0.95 : cap_pct >= 0.93 ? 0.85 : cap_pct >= 0.82 ? 0.75 :
+        cap_pct >= 0.71 ? 0.65 : cap_pct >= 0.60 ? 0.55 : cap_pct >= 0.49 ? 0.45 :
+        cap_pct >= 0.38 ? 0.35 : cap_pct >= 0.31 ? 0.30 : cap_pct >= 0.21 ? 0.20 : na)
+
+    if not na(lock_cap)
+        trail_sl = entry_p * (1 + lock_cap / leverage)
+        strategy.exit("LONG_TRAIL", "LONG", stop=trail_sl)
+
+if strategy.position_size < 0  // SHORT
+    entry_p   = strategy.opentrades.entry_price(0)
+    cap_pct   = (entry_p - close) / entry_p * leverage
+
+    lock_cap = leverage == 100 ?
+       (cap_pct >= 3.01 ? 3.00 : cap_pct >= 2.01 ? 2.00 : cap_pct >= 1.51 ? 1.50 :
+        cap_pct >= 1.21 ? 1.20 : cap_pct >= 1.11 ? 1.10 : cap_pct >= 1.01 ? 1.00 :
+        cap_pct >= 0.91 ? 0.90 : cap_pct >= 0.81 ? 0.80 : cap_pct >= 0.71 ? 0.70 :
+        cap_pct >= 0.61 ? 0.60 : cap_pct >= 0.51 ? 0.50 : cap_pct >= 0.46 ? 0.45 : na) :
+       (cap_pct >= 1.04 ? 0.95 : cap_pct >= 0.93 ? 0.85 : cap_pct >= 0.82 ? 0.75 :
+        cap_pct >= 0.71 ? 0.65 : cap_pct >= 0.60 ? 0.55 : cap_pct >= 0.49 ? 0.45 :
+        cap_pct >= 0.38 ? 0.35 : cap_pct >= 0.31 ? 0.30 : cap_pct >= 0.21 ? 0.20 : na)
+
+    if not na(lock_cap)
+        trail_sl = entry_p * (1 - lock_cap / leverage)
+        strategy.exit("SHORT_TRAIL", "SHORT", stop=trail_sl)
+
+    if cap_pct >= 0.20
+        lock_price = entry_p * (1 - 0.10 / leverage)
+        strategy.exit("SHORT_SAFE", "SHORT", stop=lock_price)
+
+// ── Signals on chart ───────────────────────────────────────
+plotshape(longSignal,  title="LONG",  location=location.belowbar, style=shape.triangleup,   color=color.lime,  size=size.small)
+plotshape(shortSignal, title="SHORT", location=location.abovebar, style=shape.triangledown, color=color.red,   size=size.small)
+
+// Zone background
+bgcolor(zone == 1 ? color.new(color.green, 92) : zone == 4 ? color.new(color.red, 92) : na, title="Extreme Zone")
