@@ -2263,7 +2263,9 @@ async function syncTradeStatus() {
                 let slUpdated = false;
                 for (let attempt = 1; attempt <= 3; attempt++) {
                   try {
-                    const userTp = parseFloat(trade.tp_price) || 0;
+                    // Only hard TP for RANGE_BOUNCE / SCENARIO_A — V4/SMC trails freely
+                    const bnHasHardTp = trade.setup === 'RANGE_BOUNCE' || trade.setup === 'SCENARIO_A';
+                    const userTp = bnHasHardTp ? (parseFloat(trade.tp_price) || 0) : 0;
                     slUpdated = await updateStopLoss(userClient, trade.symbol, binNewSl, closeSide, 'binance', binSlPrec, userTp || undefined);
                     if (slUpdated) break;
                   } catch (e) {
@@ -2351,7 +2353,10 @@ async function syncTradeStatus() {
             if (!slPrice) continue;
             const slPrec = inferPricePrec(trade.sl_price);
             try {
-              const ok = await updateStopLoss(userClient, trade.symbol, slPrice, null, 'bitunix', slPrec, parseFloat(trade.tp_price) || undefined);
+              // Only carry TP for hard-TP setups — SMC/V4 trails freely, no ceiling
+              const reconfirmHardTp = trade.setup === 'RANGE_BOUNCE' || trade.setup === 'SCENARIO_A';
+              const reconfirmTp = reconfirmHardTp ? (parseFloat(trade.tp_price) || undefined) : undefined;
+              const ok = await updateStopLoss(userClient, trade.symbol, slPrice, null, 'bitunix', slPrec, reconfirmTp);
               if (ok) {
                 syncTradeStatus._slConfirmed.add(sealKey);
                 bLog.system(`✓ Bitunix SL re-confirmed for ${trade.symbol} ${tradeDir} (key=${key.email}): $${slPrice}`);
@@ -2548,7 +2553,10 @@ async function syncTradeStatus() {
               let slLastError = '';
               for (let attempt = 1; attempt <= 3; attempt++) {
                 try {
-                  const existingTp = parseFloat(trade.tp_price) || 0;
+                  // Only pass TP for hard-TP setups (RANGE_BOUNCE / SCENARIO_A).
+                  // SMC/V4 trailing SL has NO ceiling — let winners run freely.
+                  const hasHardTp = trade.setup === 'RANGE_BOUNCE' || trade.setup === 'SCENARIO_A';
+                  const existingTp = hasHardTp ? (parseFloat(trade.tp_price) || 0) : 0;
                   slUpdated = await updateStopLoss(userClient, trade.symbol, newSlPrice, null, 'bitunix', bxSlPrec, existingTp || undefined);
                   if (slUpdated) break;
                   slLastError = 'updateStopLoss returned false';
@@ -3144,6 +3152,28 @@ async function backfillFeesFromBitunix() {
     }
 
     bLog.system(`[FEE-BACKFILL] Done — updated ${updated}/${trades.length} trades with real Bitunix fees`);
+
+    // ── Corrective pass: fix any row where pnl_usdt doesn't match gross - fee ──
+    // Catches breakeven/CLOSED trades where the Bitunix match failed but we
+    // already have gross_pnl and trading_fee stored from when the trade closed.
+    // Formula: net = gross - fee - funding  (always true for Bitunix)
+    const corrected = await db.query(`
+      UPDATE trades
+      SET pnl_usdt = ROUND((gross_pnl - trading_fee - COALESCE(funding_fee, 0))::numeric, 4),
+          status   = CASE
+                       WHEN (gross_pnl - trading_fee - COALESCE(funding_fee, 0)) > 0 THEN 'WIN'
+                       ELSE 'LOSS'
+                     END
+      WHERE status IN ('WIN', 'LOSS', 'CLOSED')
+        AND gross_pnl  IS NOT NULL
+        AND trading_fee IS NOT NULL
+        AND ABS(pnl_usdt - (gross_pnl - trading_fee - COALESCE(funding_fee, 0))) > 0.005
+      RETURNING id
+    `);
+    const fixedCount = Array.isArray(corrected) ? corrected.length : (corrected.rowCount ?? 0);
+    if (fixedCount > 0) {
+      bLog.system(`[FEE-BACKFILL] Corrected pnl_usdt mismatch on ${fixedCount} trade(s) — gross-fee recalculation applied`);
+    }
   } catch (err) {
     bLog.error(`[FEE-BACKFILL] error: ${err.message}`);
   }
