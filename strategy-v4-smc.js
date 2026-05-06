@@ -3,24 +3,29 @@
 // ═══════════════════════════════════════════════════════════════
 //  strategy-v4-smc.js  —  VWAP Zone + 15m/1m Swing Structure
 //
-//  Signal rules:
-//    UPPER_MID   (VWAP mid → upper 2σ) : NO TRADE — price above VWAP, never short
-//    LOWER_MID   (VWAP lower 2σ → mid) : 15m HL + 1m HL → LONG
-//    BELOW_LOWER (below lower 2σ)       : 15m LL + 1m LL → LONG (reversal)
-//    ABOVE_UPPER (above upper 2σ)       : NO TRADE — strong trend, never fade
+//  Signal rules (15m is the KEY — 15m structure fires, 1m confirms):
+//
+//    SHORT (mean-reversion fade at VWAP extremes):
+//      ABOVE_UPPER (price > upper 2σ band)
+//        15m HH  +  (1m HH  OR  1m LH)  →  SHORT
+//
+//    LONG (reversal from VWAP lower extreme):
+//      LOWER_MID  (lower 2σ → VWAP mid)
+//        15m HL  +  1m HL               →  LONG  (HL+HL)
+//      BELOW_LOWER (below lower 2σ band)
+//        (15m HL OR LL)  +  (1m HL OR LL)  →  LONG
+//
+//  SL  : LONG  → entry × (1 − CAPITAL_RISK/lev)   (below entry)
+//        SHORT → entry × (1 + CAPITAL_RISK/lev)   (above entry)
+//  Trailing SL: no hard TP — let winners run
 //
 //  Pivot detection:
-//    SWING_BARS_1M  = 100: bar[i] is a swing high when it is the highest
-//                    of the 100 bars before AND 100 closed bars after it.
-//                    Detects only major 1m swings (~100 min each side).
-//    SWING_BARS_15M = 100: same rule on 15m data — major 15m structure only.
-//    The live/forming candle is ALWAYS excluded (sliced off every fetch).
-//    Matches TradingView lookahead_off behaviour.
+//    SWING_BARS_1M  = 100 bars each side  (~100 min per side on 1m)
+//    SWING_BARS_15M = 100 bars each side  (major 15m structure)
+//    Live/forming candle always excluded — matches TV lookahead_off.
 //
-//  Entry  : close of the 1m bar where the confirmed pivot fires
-//  SL     : 25% capital risk → price % = 0.25 / leverage
-//  Data   : Bybit v5 linear klines (ISP-friendly, no Binance dependency)
-//  State  : module-level per symbol — seeded on first call, incremental after
+//  Data  : Bybit v5 linear klines (ISP-friendly fallback list)
+//  State : module-level per symbol — seeded on first call, incremental
 // ═══════════════════════════════════════════════════════════════
 
 const fetch = require('node-fetch');
@@ -187,19 +192,46 @@ function is1mGapOk(sl1m_1, sl1m_2) {
 // ── Signal logic ───────────────────────────────────────────────
 // Only fires when a fresh 1m pivot confirms (deduped by openTime).
 // All structure comes from CLOSED bars only — no live bar leakage.
+// 15m is the PRIMARY signal — 1m is the confirmation trigger.
 function resolveSignal(state, zone) {
+  // ── 15m structure ────────────────────────────────────────────
+  const hh15 = state.sh15_1 !== null && state.sh15_2 !== null && state.sh15_1 > state.sh15_2;
   const hl15 = state.sl15_1 !== null && state.sl15_2 !== null && state.sl15_1 > state.sl15_2;
   const ll15 = state.sl15_1 !== null && state.sl15_2 !== null && state.sl15_1 < state.sl15_2;
 
+  // ── 1m structure ─────────────────────────────────────────────
+  const hh1m = state.sh1m_1 !== null && state.sh1m_2 !== null && state.sh1m_1 > state.sh1m_2;
+  const lh1m = state.sh1m_1 !== null && state.sh1m_2 !== null && state.sh1m_1 < state.sh1m_2;
   const hl1m = state.sl1m_1 !== null && state.sl1m_2 !== null && state.sl1m_1 > state.sl1m_2;
   const ll1m = state.sl1m_1 !== null && state.sl1m_2 !== null && state.sl1m_1 < state.sl1m_2;
 
-  // Filter: 1m gap must be ≤ 0.5% (no chasing)
+  // ── SHORT: ABOVE_UPPER + 15m HH + (1m HH or 1m LH) ─────────
+  // Price above VWAP upper 2σ band — exhaustion at extremes.
+  // 15m HH = higher high printed at resistance.
+  // 1m HH or LH = local swing high confirms the fade entry.
+  if (zone === 'ABOVE_UPPER' && hh15 && (hh1m || lh1m)) {
+    return { direction: 'SHORT', type: 'HH+SHORT' };
+  }
+
+  // ── LONG signals — apply 1m swing-low gap filter ─────────────
+  // Reject if the two most-recent 1m swing lows are > 0.5% apart
+  // (means we'd be chasing a move already underway).
   if (!is1mGapOk(state.sl1m_1, state.sl1m_2)) return null;
 
-  // Price above VWAP (UPPER_MID or ABOVE_UPPER) → no trade, ever
-  if (zone === 'LOWER_MID'   && hl15 && hl1m) return { direction: 'LONG', type: 'HL+HL' };
-  if (zone === 'BELOW_LOWER' && ll15 && ll1m) return { direction: 'LONG', type: 'LL+LL' };
+  // LOWER_MID: price between VWAP lower band and VWAP mid.
+  // 15m HL + 1m HL = bullish structure on both timeframes.
+  if (zone === 'LOWER_MID' && hl15 && hl1m) {
+    return { direction: 'LONG', type: 'HL+HL' };
+  }
+
+  // BELOW_LOWER: price below VWAP lower 2σ band — extreme oversold.
+  // Any HL or LL on BOTH timeframes is valid — price is already at
+  // the edge, structure on either tf is enough to confirm reversal.
+  if (zone === 'BELOW_LOWER' && (hl15 || ll15) && (hl1m || ll1m)) {
+    const type = `${hl15 ? 'HL' : 'LL'}+${hl1m ? 'HL' : 'LL'}`;
+    return { direction: 'LONG', type };
+  }
+
   return null;
 }
 
@@ -274,8 +306,9 @@ async function analyze(symbol, log) {
       const vwap = calcVwap(st.candles15m, bar.openTime);
       if (vwap) {
         const zone = getZone(bar.close, vwap);
-        // VWAP dist filter: only for LOWER_MID (HL+HL).
-        // BELOW_LOWER (LL+LL) price is below the band by design — dist is always negative, skip check.
+        // VWAP dist filter: only for LOWER_MID LONG.
+        // BELOW_LOWER: price below band by design — skip dist check.
+        // ABOVE_UPPER SHORT: no dist filter (price above the band).
         const distBlocked = zone === 'LOWER_MID' && !isGoodVwapDistance(bar.close, vwap);
         if (distBlocked) {
           log(`[V4] skip ${symbol} — price too close to lower band (< 0.5σ)`);
@@ -284,7 +317,11 @@ async function analyze(symbol, log) {
           if (sig) {
             st.lastSignalTime = pivotTime;
             signal = { ...sig, price: bar.close, zone };
-            log(`[V4] ✓ ${symbol} ${sig.direction} zone=${zone} type=${sig.type} sl15=${st.sl15_1?.toFixed(4)}/${st.sl15_2?.toFixed(4)} sl1m=${st.sl1m_1?.toFixed(4)}/${st.sl1m_2?.toFixed(4)}`);
+            if (sig.direction === 'SHORT') {
+              log(`[V4] ✓ ${symbol} SHORT zone=${zone} type=${sig.type} sh15=${st.sh15_1?.toFixed(4)}/${st.sh15_2?.toFixed(4)} sh1m=${st.sh1m_1?.toFixed(4)}/${st.sh1m_2?.toFixed(4)}`);
+            } else {
+              log(`[V4] ✓ ${symbol} LONG  zone=${zone} type=${sig.type} sl15=${st.sl15_1?.toFixed(4)}/${st.sl15_2?.toFixed(4)} sl1m=${st.sl1m_1?.toFixed(4)}/${st.sl1m_2?.toFixed(4)}`);
+            }
           }
         }
       }
@@ -297,13 +334,16 @@ async function analyze(symbol, log) {
 
   const leverage = SYMBOL_LEVERAGE[symbol] ?? 100;
   const slPct    = CAPITAL_RISK / leverage;
-  const sl       = signal.price * (1 - slPct); // LONG only now
+  // SL above entry for SHORT, below entry for LONG
+  const sl = signal.direction === 'SHORT'
+    ? signal.price * (1 + slPct)
+    : signal.price * (1 - slPct);
 
   return {
     symbol,
     direction:  signal.direction,
     side:       signal.direction,
-    signal:     'BUY',
+    signal:     signal.direction === 'SHORT' ? 'SELL' : 'BUY',
     lastPrice:  signal.price,
     entry:      signal.price,
     sl,
