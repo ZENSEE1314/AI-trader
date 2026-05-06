@@ -3073,7 +3073,9 @@ async function backfillFeesFromBitunix() {
       `SELECT t.id, t.symbol, t.direction, t.entry_price, t.exit_price,
               t.quantity, t.gross_pnl, t.pnl_usdt, t.trading_fee, t.created_at,
               t.api_key_id, t.bitunix_position_id,
-              ak.api_key, ak.api_secret, ak.platform,
+              ak.api_key_enc, ak.iv, ak.auth_tag,
+              ak.api_secret_enc, ak.secret_iv, ak.secret_auth_tag,
+              ak.platform,
               u.email
        FROM trades t
        JOIN api_keys ak ON ak.id = t.api_key_id
@@ -3094,17 +3096,26 @@ async function backfillFeesFromBitunix() {
     // Group by api_key_id to minimise API calls
     const byKey = {};
     for (const t of trades) {
-      if (!byKey[t.api_key_id]) byKey[t.api_key_id] = { apiKey: t.api_key, apiSecret: t.api_secret, trades: [] };
+      if (!byKey[t.api_key_id]) {
+        byKey[t.api_key_id] = {
+          apiKeyEnc: t.api_key_enc, iv: t.iv, authTag: t.auth_tag,
+          apiSecretEnc: t.api_secret_enc, secretIv: t.secret_iv, secretAuthTag: t.secret_auth_tag,
+          trades: [],
+        };
+      }
       byKey[t.api_key_id].trades.push(t);
     }
 
     let updated = 0;
-    for (const [keyId, { apiKey, apiSecret, trades: keyTrades }] of Object.entries(byKey)) {
+    for (const [keyId, { apiKeyEnc, iv, authTag, apiSecretEnc, secretIv, secretAuthTag, trades: keyTrades }] of Object.entries(byKey)) {
       let decryptedKey, decryptedSecret;
       try {
-        decryptedKey    = cryptoUtils.decrypt(apiKey);
-        decryptedSecret = cryptoUtils.decrypt(apiSecret);
-      } catch { continue; }
+        decryptedKey    = cryptoUtils.decrypt(apiKeyEnc, iv, authTag);
+        decryptedSecret = cryptoUtils.decrypt(apiSecretEnc, secretIv, secretAuthTag);
+      } catch (e) {
+        bLog.error(`[FEE-BACKFILL] key#${keyId} decrypt failed: ${e.message}`);
+        continue;
+      }
 
       const bxClient = new BitunixClient({ apiKey: decryptedKey, apiSecret: decryptedSecret });
 
@@ -3170,34 +3181,46 @@ async function backfillFeesFromBitunix() {
           continue;
         }
 
-        // Bitunix: netPnl is already after fees. grossPnl = net + fee + funding.
+        // Bitunix: netPnl in API is NET (already after fees).
+        // grossPnl = net + fee + funding.
         const grossPnl = netPnl != null
           ? parseFloat((netPnl + tradingFee + fundingFee).toFixed(4))
-          : (trade.gross_pnl ? parseFloat(trade.gross_pnl) : null);
+          : (trade.gross_pnl != null ? parseFloat(trade.gross_pnl) : null);
         const pnlUsdt = netPnl != null
           ? parseFloat(netPnl.toFixed(4))
           : (grossPnl != null ? parseFloat((grossPnl - tradingFee - fundingFee).toFixed(4)) : null);
         const status = pnlUsdt != null ? (pnlUsdt > 0 ? 'WIN' : 'LOSS') : null;
 
+        // Extract close price from Bitunix history position so exit_price is correct
+        const closePrice = parseFloat(
+          bestMatch.closePrice || bestMatch.avgClosePrice || bestMatch.close_price ||
+          bestMatch.exitPrice  || bestMatch.avg_close_price || 0
+        ) || null;
+
+        // Force-overwrite all fee/pnl fields — do NOT use COALESCE.
+        // Previous syncTradeStatus may have stored wrong values (e.g. live P&L
+        // snapshot instead of realized, or entry_price as exit_price on API timeout).
         await db.query(
           `UPDATE trades SET
              trading_fee = $1,
              funding_fee = $2,
-             gross_pnl   = COALESCE($3, gross_pnl),
-             pnl_usdt    = COALESCE($4, pnl_usdt),
-             status      = COALESCE($5, status)
-           WHERE id = $6`,
+             gross_pnl   = $3,
+             pnl_usdt    = $4,
+             status      = COALESCE($5, status),
+             exit_price  = COALESCE($6, exit_price)
+           WHERE id = $7`,
           [
             parseFloat(tradingFee.toFixed(4)),
             parseFloat(fundingFee.toFixed(4)),
             grossPnl,
             pnlUsdt,
             status,
+            closePrice,
             trade.id,
           ]
         );
         updated++;
-        bLog.system(`[FEE-BACKFILL] trade#${trade.id} ${trade.email} ${trade.symbol}: fee=$${tradingFee.toFixed(4)} net=$${pnlUsdt ?? '?'} gross=$${grossPnl ?? '?'} status=${status ?? 'unchanged'}`);
+        bLog.system(`[FEE-BACKFILL] trade#${trade.id} ${trade.email} ${trade.symbol}: gross=$${grossPnl ?? '?'} fee=$${tradingFee.toFixed(4)} net=$${pnlUsdt ?? '?'} exit=$${closePrice ?? '?'} status=${status ?? 'unchanged'}`);
       }
     }
 
@@ -3221,23 +3244,6 @@ async function backfillFeesFromBitunix() {
     const fixedWL = Array.isArray(correctedWL) ? correctedWL.length : (correctedWL.rowCount ?? 0);
     if (fixedWL > 0) bLog.system(`[FEE-BACKFILL] Corrected WIN/LOSS pnl_usdt on ${fixedWL} trade(s)`);
 
-    // ── Corrective pass B: CLOSED (breakeven) trades ──
-    // These trailing-SL-to-entry trades have gross_pnl = NULL or 0 in the DB
-    // (entry_price = exit_price, so realized gross = 0). pnl_usdt must equal
-    // 0 - trading_fee - funding_fee. Keep status as CLOSED.
-    const correctedClosed = await db.query(`
-      UPDATE trades
-      SET gross_pnl = COALESCE(gross_pnl, 0),
-          pnl_usdt  = ROUND((COALESCE(gross_pnl, 0) - trading_fee - COALESCE(funding_fee, 0))::numeric, 4)
-      WHERE status = 'CLOSED'
-        AND trading_fee IS NOT NULL
-        AND trading_fee > 0
-        AND ABS(COALESCE(pnl_usdt, 0)
-              - (COALESCE(gross_pnl, 0) - trading_fee - COALESCE(funding_fee, 0))) > 0.005
-      RETURNING id
-    `);
-    const fixedClosed = Array.isArray(correctedClosed) ? correctedClosed.length : (correctedClosed.rowCount ?? 0);
-    if (fixedClosed > 0) bLog.system(`[FEE-BACKFILL] Corrected CLOSED pnl_usdt on ${fixedClosed} trade(s) — net = 0 - fee`);
   } catch (err) {
     bLog.error(`[FEE-BACKFILL] error: ${err.message}`);
   }
