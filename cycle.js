@@ -2996,6 +2996,156 @@ async function checkUsdtTopups() {
   }
 }
 
+// ── BACKFILL FEES FROM BITUNIX API ───────────────────────────
+// On startup: for any closed trade missing trading_fee, fetch real
+// fee + PnL from Bitunix position history and update the DB row.
+// Covers the case where quantity is NULL (ADA trades with "--" fee).
+async function backfillFeesFromBitunix() {
+  let db, cryptoUtils, BitunixClient;
+  try {
+    db = require('./db');
+    cryptoUtils = require('./crypto-utils');
+    BitunixClient = require('./bitunix-client').BitunixClient;
+  } catch (e) { return; }
+
+  try {
+    // Find all closed Bitunix trades missing real fees
+    const trades = await db.query(
+      `SELECT t.id, t.symbol, t.direction, t.entry_price, t.exit_price,
+              t.quantity, t.gross_pnl, t.pnl_usdt, t.created_at,
+              t.api_key_id, t.bitunix_position_id,
+              ak.api_key, ak.api_secret, ak.platform
+       FROM trades t
+       JOIN api_keys ak ON ak.id = t.api_key_id
+       WHERE t.status IN ('WIN','LOSS','CLOSED')
+         AND (t.trading_fee IS NULL OR t.trading_fee = 0)
+         AND ak.platform = 'bitunix'
+       ORDER BY t.created_at DESC
+       LIMIT 200`
+    );
+
+    if (!trades.length) {
+      bLog.system('[FEE-BACKFILL] No trades missing fees — nothing to do');
+      return;
+    }
+    bLog.system(`[FEE-BACKFILL] Found ${trades.length} trade(s) missing fees — fetching from Bitunix`);
+
+    // Group by api_key_id to minimise API calls
+    const byKey = {};
+    for (const t of trades) {
+      if (!byKey[t.api_key_id]) byKey[t.api_key_id] = { apiKey: t.api_key, apiSecret: t.api_secret, trades: [] };
+      byKey[t.api_key_id].trades.push(t);
+    }
+
+    let updated = 0;
+    for (const [keyId, { apiKey, apiSecret, trades: keyTrades }] of Object.entries(byKey)) {
+      let decryptedKey, decryptedSecret;
+      try {
+        decryptedKey    = cryptoUtils.decrypt(apiKey);
+        decryptedSecret = cryptoUtils.decrypt(apiSecret);
+      } catch { continue; }
+
+      const bxClient = new BitunixClient({ apiKey: decryptedKey, apiSecret: decryptedSecret });
+
+      // Fetch up to 200 history positions per unique symbol for this key
+      const symbolsDone = new Set();
+      const posCache = {};  // symbol → positions[]
+
+      for (const trade of keyTrades) {
+        if (!posCache[trade.symbol] && !symbolsDone.has(trade.symbol)) {
+          try {
+            posCache[trade.symbol] = await bxClient.getHistoryPositions({ symbol: trade.symbol, pageSize: 100 });
+            bLog.system(`[FEE-BACKFILL] key#${keyId} ${trade.symbol}: ${posCache[trade.symbol].length} history positions`);
+          } catch (e) {
+            bLog.error(`[FEE-BACKFILL] key#${keyId} ${trade.symbol} fetch error: ${e.message}`);
+            posCache[trade.symbol] = [];
+          }
+          symbolsDone.add(trade.symbol);
+        }
+
+        const positions = posCache[trade.symbol] || [];
+        const tradeEntry = parseFloat(trade.entry_price);
+        const tradeOpenMs = trade.created_at ? new Date(trade.created_at).getTime() : 0;
+        const tradeSideLong = trade.direction !== 'SHORT';
+        const storedPosId = trade.bitunix_position_id;
+
+        // Find best matching position
+        let bestMatch = null;
+        let bestTimeDiff = Infinity;
+
+        for (const p of positions) {
+          const ep   = parseFloat(p.entryPrice || p.avgOpenPrice || p.openPrice || p.open_price || 0);
+          const pid  = p.positionId || p.id || p.position_id || '';
+          const pSide = (p.side || p.positionSide || p.position_side || '').toUpperCase();
+          const pSideLong = pSide === 'LONG' || pSide === 'BUY';
+          const closeMs = parseInt(p.closeTime || p.mtime || p.ctime || p.updateTime || p.close_time || 0);
+
+          if ((p.symbol || '') !== trade.symbol || pSideLong !== tradeSideLong) continue;
+
+          // positionId match = definitive
+          if (storedPosId && String(pid) === String(storedPosId)) { bestMatch = p; break; }
+
+          // Entry price within 0.5% AND closed after trade opened
+          const entryMatch = ep > 0 && Math.abs(ep - tradeEntry) / tradeEntry < 0.005;
+          const closedAfterOpen = !tradeOpenMs || !closeMs || closeMs >= tradeOpenMs;
+          if (entryMatch && closedAfterOpen) {
+            const diff = closeMs && tradeOpenMs ? Math.abs(closeMs - tradeOpenMs) : 9e12;
+            if (diff < bestTimeDiff) { bestTimeDiff = diff; bestMatch = p; }
+          }
+        }
+
+        if (!bestMatch) {
+          bLog.system(`[FEE-BACKFILL] trade#${trade.id} ${trade.symbol}: no Bitunix match found`);
+          continue;
+        }
+
+        const tradingFee = Math.abs(parseFloat(bestMatch.fee || bestMatch.tradingFee || bestMatch.commission || 0));
+        const fundingFee = Math.abs(parseFloat(bestMatch.funding || bestMatch.fundingFee || bestMatch.fund_fee || 0));
+        const pnlRaw = bestMatch.realizedPNL ?? bestMatch.realizedPnl ?? bestMatch.pnl ?? bestMatch.profit ?? bestMatch.realPnl ?? null;
+        const netPnl = pnlRaw != null ? parseFloat(pnlRaw) : null;
+
+        if (tradingFee === 0 && netPnl === null) {
+          bLog.system(`[FEE-BACKFILL] trade#${trade.id} ${trade.symbol}: match found but fee=0 and no PnL — skipping`);
+          continue;
+        }
+
+        // Bitunix: netPnl is already after fees. grossPnl = net + fee + funding.
+        const grossPnl = netPnl != null
+          ? parseFloat((netPnl + tradingFee + fundingFee).toFixed(4))
+          : (trade.gross_pnl ? parseFloat(trade.gross_pnl) : null);
+        const pnlUsdt = netPnl != null
+          ? parseFloat(netPnl.toFixed(4))
+          : (grossPnl != null ? parseFloat((grossPnl - tradingFee - fundingFee).toFixed(4)) : null);
+        const status = pnlUsdt != null ? (pnlUsdt > 0 ? 'WIN' : 'LOSS') : null;
+
+        await db.query(
+          `UPDATE trades SET
+             trading_fee = $1,
+             funding_fee = $2,
+             gross_pnl   = COALESCE($3, gross_pnl),
+             pnl_usdt    = COALESCE($4, pnl_usdt),
+             status      = COALESCE($5, status)
+           WHERE id = $6`,
+          [
+            parseFloat(tradingFee.toFixed(4)),
+            parseFloat(fundingFee.toFixed(4)),
+            grossPnl,
+            pnlUsdt,
+            status,
+            trade.id,
+          ]
+        );
+        updated++;
+        bLog.system(`[FEE-BACKFILL] trade#${trade.id} ${trade.symbol}: fee=$${tradingFee.toFixed(4)} net=$${pnlUsdt ?? '?'} gross=$${grossPnl ?? '?'} status=${status ?? 'unchanged'}`);
+      }
+    }
+
+    bLog.system(`[FEE-BACKFILL] Done — updated ${updated}/${trades.length} trades with real Bitunix fees`);
+  } catch (err) {
+    bLog.error(`[FEE-BACKFILL] error: ${err.message}`);
+  }
+}
+
 // ── RECONCILE ORPHAN POSITIONS ───────────────────────────────
 // On startup: fetch all live Bitunix positions and insert any that are
 // missing from the DB. Prevents silent data loss when Railway restarts
@@ -3103,6 +3253,7 @@ async function run() {
   log(`AI Smart Trader v4 | Telegram: ${!!TELEGRAM_TOKEN} | Chats: ${PRIVATE_CHATS.join(', ') || 'NONE'}`);
   await syncTradeStatus();
   await reconcileOrphanPositions();
+  await backfillFeesFromBitunix();
   await checkUsdtTopups();
   await main();
 }
