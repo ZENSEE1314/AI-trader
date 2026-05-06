@@ -13,7 +13,7 @@
 // ============================================================
 
 const { BaseAgent } = require('./base-agent');
-const { ACTIVE_SYMBOLS } = require('../strategy-v3');
+const { ACTIVE_SYMBOLS } = require('../strategy-v4-smc');
 
 const OPTIMIZE_INTERVAL_MS = 10 * 60 * 1000; // run every 10 min
 const BACKTEST_DAYS = 60;

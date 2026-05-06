@@ -11,7 +11,7 @@ const aiLearner = require('./ai-learner');
 // Rules: bull days → LONG only | bear days → SHORT only | ranging → nothing
 const { scanV4SMC, ACTIVE_SYMBOLS, SYMBOL_LEVERAGE } = require('./strategy-v4-smc');
 // Keep 3-timing import for calcTrail3Timing + getSessionMode (still used elsewhere)
-const { calcTrail3Timing, getSessionMode } = require('./strategy-3timing');
+const { getSessionMode } = require('./strategy-3timing'); // v4: trailing SL uses calculateTrailingStep (cycle.js) instead of calcTrail3Timing
 const { scanChartAgent } = require('./chart-agent');
 const { getSentimentScores } = require('./sentiment-scraper');
 const { log: bLog } = require('./bot-logger');
@@ -1116,21 +1116,17 @@ async function checkTrailingStop(client) {
         } catch (e) { bLog.error(`Spike TP check failed for ${sym}: ${e.message}`); }
       }
 
-      // ── Trailing SL step check (v3 ladder — sole strategy) ──
+      // ── Trailing SL step check (v4 tier ladder) ─────────────
       let trailResult;
       {
-        const side     = state.isLong ? 'LONG' : 'SHORT';
         const lev      = state.leverage || 20;
-        const newSlPrice = calcTrail3Timing(state.entry, cur, side, lev);
-        const betterSl = state.isLong
-          ? newSlPrice > (state.trailingSlPrice || 0)
-          : newSlPrice < (state.trailingSlPrice || Infinity);
-        if (betterSl && newSlPrice !== state.trailingSlPrice) {
-          const pricePct = state.isLong
-            ? (newSlPrice - state.entry) / state.entry
-            : (state.entry - newSlPrice) / state.entry;
-          const capPct = pricePct * lev;
-          trailResult = { newSlPrice, newLastStep: Math.max(0, capPct) };
+        const lastStep = state.lastStep || 0;
+        const step = calculateTrailingStep(state.entry, cur, state.isLong, lastStep, lev);
+        if (step && step.newSlPrice) {
+          const betterSl = state.isLong
+            ? step.newSlPrice > (state.trailingSlPrice || 0)
+            : step.newSlPrice < (state.trailingSlPrice || Infinity);
+          trailResult = betterSl ? { newSlPrice: step.newSlPrice, newLastStep: step.newLastStep } : null;
         } else {
           trailResult = null;
         }

@@ -3,7 +3,7 @@ const { query } = require('../db');
 const { authMiddleware } = require('../middleware/auth');
 const { USDMClient } = require('binance');
 const cryptoUtils = require('../crypto-utils');
-const { ACTIVE_SYMBOLS, SYMBOL_LEVERAGE } = require('../strategy-v3');
+const { ACTIVE_SYMBOLS, SYMBOL_LEVERAGE } = require('../strategy-v4-smc');
 
 const router = express.Router();
 router.use(authMiddleware);

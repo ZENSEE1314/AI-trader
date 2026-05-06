@@ -19,7 +19,7 @@
 // ════════════════════════════════════════════════════════════════
 
 const fetch      = require('node-fetch');
-const { SYMBOL_LEVERAGE } = require('./strategy-3timing');
+const { SYMBOL_LEVERAGE } = require('./strategy-v4-smc');
 const memory     = require('./chart-agent-memory');
 
 // ── LLM Config ────────────────────────────────────────────────

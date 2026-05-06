@@ -887,6 +887,31 @@ async function initAllTables() {
       FOREIGN KEY (api_key_id) REFERENCES api_keys(id) ON DELETE SET NULL`);
   } catch (e) { console.warn('[DB] trades FK migration warning:', e.message); }
 
+
+  // ── Fee backfill: deduct 0.12% round-trip fee for old trades missing it ─
+  // Applies to CLOSED trades where trading_fee is NULL/0 but gross_pnl is set.
+  // 0.12% = 0.06% maker each leg (Bitunix default). Safe to run on every boot.
+  try {
+    const backfillResult = await pool.query(`
+      UPDATE trades
+      SET
+        trading_fee = ROUND(exit_price * quantity * 0.0012, 4),
+        pnl_usdt    = ROUND(gross_pnl  - (exit_price * quantity * 0.0012), 4),
+        status      = CASE
+                        WHEN gross_pnl - (exit_price * quantity * 0.0012) > 0 THEN 'WIN'
+                        ELSE 'LOSS'
+                      END
+      WHERE status IN ('WIN','LOSS','CLOSED')
+        AND (trading_fee IS NULL OR trading_fee = 0)
+        AND gross_pnl    IS NOT NULL
+        AND exit_price   IS NOT NULL
+        AND quantity     IS NOT NULL AND quantity > 0
+    `);
+    if (backfillResult.rowCount > 0) {
+      console.log(`[DB] Fee backfill: updated ${backfillResult.rowCount} trade(s) with estimated 0.12% round-trip fee`);
+    }
+  } catch (e) { console.warn('[DB] Fee backfill warning:', e.message); }
+
   console.log('[DB] All tables verified');
 }
 

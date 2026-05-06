@@ -18,7 +18,7 @@
 // ============================================================
 
 const { BaseAgent } = require('./base-agent');
-const { ACTIVE_SYMBOLS } = require('../strategy-v3');
+const { ACTIVE_SYMBOLS } = require('../strategy-v4-smc');
 const {
   generateStrategy,
   evolveStrategy,
