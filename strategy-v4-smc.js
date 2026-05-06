@@ -7,25 +7,32 @@
 //    • Internal CHoCH (size=5) + 1m confirmation → entry
 //    • Swing BOS (size=50) → continuation entry
 //    • VWAP 2σ bands for zone classification
-//    • 15m swing trend gates: longs need swTrend +1, shorts need swTrend -1
-//    • Ranging days (swTrend === 0): shorts suppressed entirely
+//    • 15m swing trend gates: bull=LONG only | bear=SHORT only | ranging=nothing
 //
-//  Data: Bybit v5 public API (klines only — trading still via Binance).
-//  Leverage: BTC/ETH/BNB=100x, ADA/SOL/AVAX=75x (backtest-validated).
-//  SL: 25% of margin = CAPITAL_RISK_FRAC / leverage price distance.
+//  State is PERSISTENT between cycles (module-level).
+//  First call: warm up with 250 1m + 200 15m bars.
+//  Every subsequent call: process only new bars since last run.
+//  This mirrors the backtest exactly — no staleness / window issues.
+//
+//  Data: Bybit v5 public API (klines). Trading still via Binance.
 // ═══════════════════════════════════════════════════════════════
 
 const fetch = require('node-fetch');
 
-const BYBIT_KLINE_URL   = 'https://api.bybit.com/v5/market/kline';
-const FETCH_TIMEOUT_MS  = 10_000;
-const BARS_1M           = 250; // enough for SWING_SIZE=50 warmup + recent signals
-const BARS_15M          = 200; // covers today's VWAP + SMC history (200×15min = 50h)
-const SIGNAL_MAX_AGE_MS = 2 * 60_000; // only return signals from last 2 completed bars
+const BYBIT_KLINE_URL  = 'https://api.bybit.com/v5/market/kline';
+const FETCH_TIMEOUT_MS = 10_000;
 
-const CAPITAL_RISK_FRAC = 0.25; // 25% margin as initial SL distance
+// Warm-up: enough bars for SWING_SIZE=50 + SMC history
+const WARMUP_BARS_1M  = 300;
+const WARMUP_BARS_15M = 200;
 
-// ── Symbol config (mirrors backtest-v4.js best config) ────────
+// Per-cycle delta: fetch enough to cover cycle lag + small buffer
+const DELTA_BARS_1M  = 10;
+const DELTA_BARS_15M = 5;
+
+const CAPITAL_RISK_FRAC = 0.25; // 25% margin → initial SL distance
+
+// ── Symbol config (backtest-validated best config) ─────────────
 const ACTIVE_SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'ADAUSDT', 'SOLUSDT', 'AVAXUSDT'];
 
 const SYMBOL_LEVERAGE = {
@@ -37,17 +44,39 @@ const SYMBOL_LEVERAGE = {
   AVAXUSDT: 75,
 };
 
-// ── SMC engine constants (LuxAlgo port) ───────────────────────
+// ── SMC engine constants ───────────────────────────────────────
 const INTERNAL_SIZE = 5;
 const SWING_SIZE    = 50;
 
-// ── Bybit kline fetch (single page — no paging needed for live scan) ──
+// ── Persistent per-symbol state ───────────────────────────────
+// Survives across scanV4SMC() calls for the lifetime of the process.
+const _sym = {}; // symbol → SymbolState
+
+function getState(symbol) {
+  if (!_sym[symbol]) {
+    _sym[symbol] = {
+      smc1m:           createSMCState(),
+      smc15m:          createSMCState(),
+      candles1m:       [], // sliding window of recent 1m candles
+      candles15m:      [], // sliding window of recent 15m candles
+      smc15mIdx:       0,  // how far into candles15m the 15m engine has advanced
+      last15mInt:      null,
+      last15mSw:       null,
+      lastProcessed1m: 0,  // openTime of last 1m bar stepped through SMC
+      ready:           false,
+      freshSignal:     null, // set when a signal fires on a new bar; consumed by scanner
+    };
+  }
+  return _sym[symbol];
+}
+
+// ── Bybit kline helpers ────────────────────────────────────────
 
 async function fetchBybitKlines(symbol, intervalStr, limit) {
   const params = new URLSearchParams({
     category: 'linear',
     symbol,
-    interval: intervalStr, // '1' or '15'
+    interval: intervalStr,
     limit:    String(limit),
   });
   const controller = new AbortController();
@@ -57,17 +86,15 @@ async function fetchBybitKlines(symbol, intervalStr, limit) {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const json = await res.json();
     if (json.retCode !== 0) throw new Error(`Bybit ${json.retCode}: ${json.retMsg}`);
-    // Bybit returns newest-first — sort oldest-first before returning
     const rows = json.result.list;
-    rows.sort((a, b) => parseInt(a[0]) - parseInt(b[0]));
-    return rows;
+    rows.sort((a, b) => parseInt(a[0]) - parseInt(b[0])); // oldest-first
+    return rows.map(parseKline);
   } finally {
     clearTimeout(timer);
   }
 }
 
 function parseKline(raw) {
-  // Bybit row: [startTime, open, high, low, close, volume, turnover]
   return {
     openTime: parseInt(raw[0]),
     open:     parseFloat(raw[1]),
@@ -78,7 +105,7 @@ function parseKline(raw) {
   };
 }
 
-// ── Daily VWAP with 2σ bands (from midnight UTC) ───────────────
+// ── VWAP 2σ (daily, resets at midnight UTC) ───────────────────
 
 function calcDailyVwap(candles15m, asOfMs) {
   const midnight = new Date(asOfMs);
@@ -97,21 +124,10 @@ function calcDailyVwap(candles15m, asOfMs) {
   }
   if (cumVol === 0) return null;
 
-  const vwap    = cumTPV / cumVol;
-  const stddev  = Math.sqrt(Math.max(0, cumTPV2 / cumVol - vwap * vwap));
-  const upper   = vwap + 2 * stddev;
-  const lower   = vwap - 2 * stddev;
+  const vwap   = cumTPV / cumVol;
+  const stddev = Math.sqrt(Math.max(0, cumTPV2 / cumVol - vwap * vwap));
 
-  // Slope: compare second-half VWAP vs first-half VWAP of today's bars
-  const mid   = Math.floor(todayBars.length / 2);
-  const vwapH = (bars) => {
-    let tv = 0, v = 0;
-    for (const c of bars) { const tp = (c.high + c.low + c.close) / 3; tv += tp * c.volume; v += c.volume; }
-    return v > 0 ? tv / v : 0;
-  };
-  const slope = vwapH(todayBars.slice(mid)) - vwapH(todayBars.slice(0, mid));
-
-  return { vwap, upper, lower, slope };
+  return { vwap, upper: vwap + 2 * stddev, lower: vwap - 2 * stddev };
 }
 
 function classifyZone(price, { vwap, upper, lower }) {
@@ -121,18 +137,12 @@ function classifyZone(price, { vwap, upper, lower }) {
   return 'BELOW_LOWER';
 }
 
-// ── SMC state machine (LuxAlgo Smart Money Concepts port) ────
+// ── SMC state machine ─────────────────────────────────────────
 
 function createSMCState() {
   return {
-    intLeg:     null,
-    intPivHigh: null,
-    intPivLow:  null,
-    intTrend:   0,
-    swLeg:      null,
-    swPivHigh:  null,
-    swPivLow:   null,
-    swTrend:    0,
+    intLeg: null, intPivHigh: null, intPivLow: null, intTrend: 0,
+    swLeg:  null, swPivHigh:  null, swPivLow:  null, swTrend:  0,
   };
 }
 
@@ -156,7 +166,6 @@ function detectLegChange(candles, i, size) {
 function stepSMC(state, candles, i) {
   const close = candles[i].close;
 
-  // Internal structure (size=5)
   const intLeg = detectLegChange(candles, i, INTERNAL_SIZE);
   let intSignal = null;
   if (intLeg) {
@@ -179,7 +188,6 @@ function stepSMC(state, candles, i) {
     state.intTrend = -1;
   }
 
-  // Swing structure (size=50)
   const swLeg = detectLegChange(candles, i, SWING_SIZE);
   let swSignal = null;
   if (swLeg) {
@@ -205,132 +213,182 @@ function stepSMC(state, candles, i) {
   return { intSignal, swSignal };
 }
 
-// ── BOS signal resolver (continuation entries) ────────────────
-
-function resolveSignal(intSignal, swSignal, zone) {
-  if (intSignal === 'CHOCH_LONG' && zone !== 'ABOVE_UPPER')  return 'LONG';
-  if (intSignal === 'CHOCH_SHORT' && zone !== 'BELOW_LOWER') return 'SHORT';
-  if (swSignal  === 'CHOCH_LONG' && zone !== 'ABOVE_UPPER')  return 'LONG';
-  if (swSignal  === 'CHOCH_SHORT' && zone !== 'BELOW_LOWER') return 'SHORT';
-  if (intSignal === 'BOS_LONG'   && zone !== 'BELOW_LOWER')  return 'LONG';
-  if (intSignal === 'BOS_SHORT'  && zone !== 'ABOVE_UPPER')  return 'SHORT';
+function resolveSignal(intSig, swSig, zone) {
+  if (intSig === 'CHOCH_LONG'  && zone !== 'ABOVE_UPPER')  return 'LONG';
+  if (intSig === 'CHOCH_SHORT' && zone !== 'BELOW_LOWER')  return 'SHORT';
+  if (swSig  === 'CHOCH_LONG'  && zone !== 'ABOVE_UPPER')  return 'LONG';
+  if (swSig  === 'CHOCH_SHORT' && zone !== 'BELOW_LOWER')  return 'SHORT';
+  if (intSig === 'BOS_LONG'    && zone !== 'BELOW_LOWER')  return 'LONG';
+  if (intSig === 'BOS_SHORT'   && zone !== 'ABOVE_UPPER')  return 'SHORT';
   return null;
 }
 
-// ── Per-symbol live signal scan ────────────────────────────────
-// Replays bars to build up SMC state, then checks if the LAST bar
-// produced a valid signal. Returns null if no fresh signal.
+// ── Step one 1m bar through the full signal pipeline ──────────
+// Mutates state. Returns a signal object if a trade should be entered, else null.
 
-async function analyzeSymbol(symbol, logFn) {
-  const raw1m  = await fetchBybitKlines(symbol, '1',  BARS_1M);
-  const raw15m = await fetchBybitKlines(symbol, '15', BARS_15M);
+function stepBar(state, bar1m, allCandles1m, barIdx) {
+  const nowMs = bar1m.openTime;
 
-  const candles1m  = raw1m.map(parseKline);
-  const candles15m = raw15m.map(parseKline);
-
-  const smc1m  = createSMCState();
-  const smc15m = createSMCState();
-
-  let smc15mIdx        = 0;
-  let last15mIntSignal = null;
-  let last15mSwSignal  = null;
-  let latestSignal     = null;
-
-  for (let i = SWING_SIZE; i < candles1m.length; i++) {
-    const current = candles1m[i];
-    const nowMs   = current.openTime;
-
-    // Advance 15m state to just before this 1m bar
-    while (smc15mIdx < candles15m.length && candles15m[smc15mIdx].openTime < nowMs) {
-      const { intSignal, swSignal } = stepSMC(smc15m, candles15m, smc15mIdx);
-      if (intSignal) last15mIntSignal = intSignal;
-      if (swSignal)  last15mSwSignal  = swSignal;
-      smc15mIdx++;
-    }
-
-    // Step 1m SMC
-    const { intSignal: int1m } = stepSMC(smc1m, candles1m, i);
-
-    // VWAP zone
-    const bars15mSoFar = candles15m.slice(0, smc15mIdx);
-    const vwapData = bars15mSoFar.length >= 10 ? calcDailyVwap(bars15mSoFar, nowMs) : null;
-
-    if (vwapData) {
-      const price      = current.close;
-      const zone       = classifyZone(price, vwapData);
-      const swTrend15m = smc15m.swTrend;
-      const inMidZone  = zone === 'UPPER_MID' || zone === 'LOWER_MID';
-
-      let direction = null, signalType = null;
-
-      // Rule 1: 15m internal CHoCH + 1m confirm (HL/LH flip — highest conviction)
-      if (last15mIntSignal === 'CHOCH_LONG' && (int1m === 'CHOCH_LONG' || int1m === 'BOS_LONG')) {
-        if (swTrend15m === 1 && inMidZone) { direction = 'LONG'; signalType = '15m+1m_CHOCH'; }
-      } else if (last15mIntSignal === 'CHOCH_SHORT' && (int1m === 'CHOCH_SHORT' || int1m === 'BOS_SHORT')) {
-        // Ranging day filter: suppress shorts when no swing trend established
-        if (swTrend15m === -1 && inMidZone) { direction = 'SHORT'; signalType = '15m+1m_CHOCH'; }
-      }
-
-      // Rule 2: 15m BOS continuation (most trades in backtest)
-      if (!direction) {
-        const raw = resolveSignal(last15mIntSignal, last15mSwSignal, zone);
-        if (raw === 'LONG'  && swTrend15m === 1  && inMidZone) { direction = 'LONG';  signalType = '15m_BOS'; }
-        // Ranging day filter: swTrend must be -1 (clear bear trend) for shorts — 0 = ranging = skip
-        if (raw === 'SHORT' && swTrend15m === -1 && inMidZone) { direction = 'SHORT'; signalType = '15m_BOS'; }
-      }
-
-      // Rule 3: extreme zone exhaustion (overbought/oversold reversal)
-      // Bear days only: SHORT at ABOVE_UPPER (swTrend must be -1 — no shorts on bull/ranging)
-      // Bull days only: LONG  at BELOW_LOWER (swTrend must be +1 — no longs on bear/ranging)
-      if (!direction) {
-        const hh = last15mSwSignal === 'BOS_LONG'  || last15mIntSignal === 'BOS_LONG';
-        const ll = last15mSwSignal === 'BOS_SHORT' || last15mIntSignal === 'BOS_SHORT';
-        if (zone === 'ABOVE_UPPER' && hh && swTrend15m === -1) { direction = 'SHORT'; signalType = 'EXTREME_HH'; }
-        if (zone === 'BELOW_LOWER' && ll && swTrend15m === 1)  { direction = 'LONG';  signalType = 'EXTREME_LL'; }
-      }
-
-      if (direction) {
-        latestSignal = { direction, signalType, price, zone, swTrend15m, barMs: nowMs };
-      }
-    }
-
-    // Consume 15m signals (same as backtest — signals are valid for ONE 1m bar only)
-    last15mIntSignal = null;
-    last15mSwSignal  = null;
+  // Advance 15m engine up to this 1m bar's open time
+  while (
+    state.smc15mIdx < state.candles15m.length &&
+    state.candles15m[state.smc15mIdx].openTime < nowMs
+  ) {
+    const { intSignal, swSignal } = stepSMC(state.smc15m, state.candles15m, state.smc15mIdx);
+    if (intSignal) state.last15mInt = intSignal;
+    if (swSignal)  state.last15mSw  = swSignal;
+    state.smc15mIdx++;
   }
 
-  if (!latestSignal) return null;
+  // Step 1m engine
+  const { intSignal: int1m } = stepSMC(state.smc1m, allCandles1m, barIdx);
 
-  // Only return signal if it fired within the last SIGNAL_MAX_AGE_MS
-  const lastBarMs = candles1m[candles1m.length - 1].openTime;
-  const ageMs = lastBarMs - latestSignal.barMs;
-  if (ageMs > SIGNAL_MAX_AGE_MS) {
-    logFn(`v4-smc: ${symbol} — signal stale (${Math.round(ageMs / 60_000)}m ago), skipping`);
+  // Need enough 15m bars for VWAP
+  const bars15mSoFar = state.candles15m.slice(0, state.smc15mIdx);
+  if (bars15mSoFar.length < 10) {
+    state.last15mInt = null;
+    state.last15mSw  = null;
     return null;
   }
 
-  const { direction, signalType, price, zone } = latestSignal;
+  const vwapData = calcDailyVwap(bars15mSoFar, nowMs);
+  if (!vwapData) {
+    state.last15mInt = null;
+    state.last15mSw  = null;
+    return null;
+  }
+
+  const price      = bar1m.close;
+  const zone       = classifyZone(price, vwapData);
+  const swTrend15m = state.smc15m.swTrend;
+  const inMidZone  = zone === 'UPPER_MID' || zone === 'LOWER_MID';
+
+  let direction = null, signalType = null;
+
+  // Rule 1: 15m CHoCH + 1m confirm
+  if (state.last15mInt === 'CHOCH_LONG' && (int1m === 'CHOCH_LONG' || int1m === 'BOS_LONG')) {
+    if (swTrend15m === 1 && inMidZone) { direction = 'LONG'; signalType = '15m+1m_CHOCH'; }
+  } else if (state.last15mInt === 'CHOCH_SHORT' && (int1m === 'CHOCH_SHORT' || int1m === 'BOS_SHORT')) {
+    if (swTrend15m === -1 && inMidZone) { direction = 'SHORT'; signalType = '15m+1m_CHOCH'; }
+  }
+
+  // Rule 2: 15m BOS continuation
+  if (!direction) {
+    const raw = resolveSignal(state.last15mInt, state.last15mSw, zone);
+    if (raw === 'LONG'  && swTrend15m === 1  && inMidZone) { direction = 'LONG';  signalType = '15m_BOS'; }
+    if (raw === 'SHORT' && swTrend15m === -1 && inMidZone) { direction = 'SHORT'; signalType = '15m_BOS'; }
+  }
+
+  // Rule 3: extreme zone exhaustion
+  // Bull days only: LONG at BELOW_LOWER | Bear days only: SHORT at ABOVE_UPPER
+  if (!direction) {
+    const hh = state.last15mSw === 'BOS_LONG'  || state.last15mInt === 'BOS_LONG';
+    const ll = state.last15mSw === 'BOS_SHORT' || state.last15mInt === 'BOS_SHORT';
+    if (zone === 'ABOVE_UPPER' && hh && swTrend15m === -1) { direction = 'SHORT'; signalType = 'EXTREME_HH'; }
+    if (zone === 'BELOW_LOWER' && ll && swTrend15m === 1)  { direction = 'LONG';  signalType = 'EXTREME_LL'; }
+  }
+
+  // Consume 15m signal (valid for ONE 1m bar only — same as backtest)
+  state.last15mInt = null;
+  state.last15mSw  = null;
+
+  if (!direction) return null;
+
+  return { direction, signalType, price, zone, swTrend15m };
+}
+
+// ── Per-symbol scan ────────────────────────────────────────────
+
+async function analyzeSymbol(symbol, logFn) {
+  const state = getState(symbol);
+
+  if (!state.ready) {
+    // ── First run: warm up with full history ─────────────────
+    logFn(`v4-smc: ${symbol} — warming up (first run)`);
+    const c1m  = await fetchBybitKlines(symbol, '1',  WARMUP_BARS_1M);
+    const c15m = await fetchBybitKlines(symbol, '15', WARMUP_BARS_15M);
+
+    state.candles1m  = c1m;
+    state.candles15m = c15m;
+    state.smc15mIdx  = 0;
+
+    // Replay all bars to build SMC state — don't emit signals during warmup
+    for (let i = SWING_SIZE; i < state.candles1m.length; i++) {
+      stepBar(state, state.candles1m[i], state.candles1m, i);
+    }
+
+    state.lastProcessed1m = state.candles1m[state.candles1m.length - 1].openTime;
+    state.ready = true;
+    logFn(`v4-smc: ${symbol} — ready (warmed up ${state.candles1m.length} bars, swTrend=${state.smc15m.swTrend})`);
+    return null; // no signal on first run (warmup only)
+  }
+
+  // ── Subsequent runs: fetch and process only new bars ────────
+  const fresh1m  = await fetchBybitKlines(symbol, '1',  DELTA_BARS_1M);
+  const fresh15m = await fetchBybitKlines(symbol, '15', DELTA_BARS_15M);
+
+  // Append new 15m bars that haven't been seen yet
+  const last15mTime = state.candles15m.length
+    ? state.candles15m[state.candles15m.length - 1].openTime
+    : 0;
+  const new15m = fresh15m.filter(c => c.openTime > last15mTime);
+  if (new15m.length) {
+    state.candles15m.push(...new15m);
+    // Keep a sliding window (don't let it grow forever)
+    if (state.candles15m.length > WARMUP_BARS_15M + 50) {
+      const trim = state.candles15m.length - WARMUP_BARS_15M;
+      state.candles15m.splice(0, trim);
+      state.smc15mIdx = Math.max(0, state.smc15mIdx - trim);
+    }
+  }
+
+  // Process new 1m bars only
+  const new1m = fresh1m.filter(c => c.openTime > state.lastProcessed1m);
+  if (!new1m.length) return null; // nothing new
+
+  let signal = null;
+  for (const bar of new1m) {
+    // Append to sliding window
+    state.candles1m.push(bar);
+    if (state.candles1m.length > WARMUP_BARS_1M + 50) {
+      state.candles1m.shift();
+    }
+
+    const idx = state.candles1m.length - 1;
+    if (idx < SWING_SIZE) continue; // not enough history yet
+
+    const result = stepBar(state, bar, state.candles1m, idx);
+    if (result) {
+      signal = result; // keep the last signal from new bars
+      logFn(`v4-smc: ✓ ${symbol} ${result.direction} | zone=${result.zone} setup=${result.signalType} swTrend=${result.swTrend15m}`);
+    }
+
+    state.lastProcessed1m = bar.openTime;
+  }
+
+  if (!signal) return null;
+
   const leverage = SYMBOL_LEVERAGE[symbol] ?? 100;
   const slPct    = CAPITAL_RISK_FRAC / leverage;
-  const sl       = direction === 'LONG'
-    ? price * (1 - slPct)
-    : price * (1 + slPct);
+  const sl       = signal.direction === 'LONG'
+    ? signal.price * (1 - slPct)
+    : signal.price * (1 + slPct);
 
   return {
     symbol,
-    lastPrice:  price,
-    signal:     direction === 'LONG' ? 'BUY' : 'SELL',
-    side:       direction,
-    direction,
-    entry:      price,
+    lastPrice:  signal.price,
+    signal:     signal.direction === 'LONG' ? 'BUY' : 'SELL',
+    side:       signal.direction,
+    direction:  signal.direction,
+    entry:      signal.price,
     sl,
     slPct:      (CAPITAL_RISK_FRAC * 100).toFixed(2),
-    setupName:  `V4-SMC-${signalType}`,
-    score:      signalType === '15m+1m_CHOCH' ? 5 : 4,
+    setupName:  `V4-SMC-${signal.signalType}`,
+    score:      signal.signalType === '15m+1m_CHOCH' ? 5 : 4,
     tp1: null, tp2: null, tp3: null,
-    zone,
-    swTrend15m: latestSignal.swTrend15m,
-    signalType,
+    zone:       signal.zone,
+    swTrend15m: signal.swTrend15m,
+    signalType: signal.signalType,
     timeframe:  '15m+1m-smc',
     version:    'v4-smc',
   };
@@ -344,18 +402,14 @@ async function scanV4SMC(logFn = console.log) {
   for (const symbol of ACTIVE_SYMBOLS) {
     try {
       const sig = await analyzeSymbol(symbol, logFn);
-      if (sig) {
-        results.push(sig);
-        logFn(`v4-smc: ✓ ${symbol} ${sig.direction} | zone=${sig.zone} setup=${sig.signalType} swTrend=${sig.swTrend15m}`);
-      }
-      // Polite delay between symbols (Bybit: 2 requests per symbol)
-      await new Promise(r => setTimeout(r, 300));
+      if (sig) results.push(sig);
+      await new Promise(r => setTimeout(r, 200)); // polite Bybit rate limit
     } catch (err) {
       logFn(`v4-smc: ${symbol} — error: ${err.message}`);
     }
   }
 
-  logFn(`v4-smc: scan complete — ${results.length} signal(s)`);
+  logFn(`v4-smc: scan done — ${results.length} signal(s) (swTrends: ${ACTIVE_SYMBOLS.map(s => `${s.replace('USDT','')}=${_sym[s]?.smc15m?.swTrend ?? '?'}`).join(' ')})`);
   return results;
 }
 
