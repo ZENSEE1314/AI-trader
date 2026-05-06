@@ -272,11 +272,13 @@ function stepBar(state, bar1m, allCandles1m, barIdx) {
     if (swTrend15m === -1 && inMidZone) { direction = 'SHORT'; signalType = '15m+1m_CHOCH'; }
   }
 
-  // Rule 2: 15m BOS continuation
+  // Rule 2: 15m BOS continuation — requires 1m CHoCH (pullback + reversal = HL/LH confirmed)
+  // BOS alone (no pullback) enters at breakout level = bad R:R. CHoCH means price pulled
+  // back first then reversed, which IS the HL on 1m — exactly the right entry point.
   if (!direction) {
     const raw = resolveSignal(state.last15mInt, state.last15mSw, zone);
-    if (raw === 'LONG'  && swTrend15m === 1  && inMidZone) { direction = 'LONG';  signalType = '15m_BOS'; }
-    if (raw === 'SHORT' && swTrend15m === -1 && inMidZone) { direction = 'SHORT'; signalType = '15m_BOS'; }
+    if (raw === 'LONG'  && swTrend15m === 1  && inMidZone && int1m === 'CHOCH_LONG')  { direction = 'LONG';  signalType = '15m_BOS'; }
+    if (raw === 'SHORT' && swTrend15m === -1 && inMidZone && int1m === 'CHOCH_SHORT') { direction = 'SHORT'; signalType = '15m_BOS'; }
   }
 
   // Rule 3: extreme zone exhaustion
