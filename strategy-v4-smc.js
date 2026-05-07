@@ -196,11 +196,24 @@ function is1mGapOk(sl1m_1, sl1m_2) {
   return gap <= MAX_1M_GAP_PCT;
 }
 
+// Chase filter: reject LONG if price has already moved > MAX_CHASE_PCT
+// above the confirmed 1m HL pivot.
+// With SWING_BARS=3, the pivot confirms 3 min after the actual swing low.
+// On BTC at 100x, price can rally 0.3% in 3 min — that's 30% capital gain
+// already done before entry. Beyond 0.3% we're entering near resistance.
+const MAX_CHASE_PCT = 0.30; // 0.30% price move above the HL low = skip
+
+function isChasing(price, sl1m_1) {
+  if (sl1m_1 === null) return false;
+  const chasePct = (price - sl1m_1) / sl1m_1 * 100;
+  return chasePct > MAX_CHASE_PCT;
+}
+
 // ── Signal logic ───────────────────────────────────────────────
 // Only fires when a fresh 1m pivot confirms (deduped by openTime).
 // All structure comes from CLOSED bars only — no live bar leakage.
 // 15m is the PRIMARY signal — 1m is the confirmation trigger.
-function resolveSignal(state, zone) {
+function resolveSignal(state, zone, price) {
   // ── 15m structure ────────────────────────────────────────────
   const hh15 = state.sh15_1 !== null && state.sh15_2 !== null && state.sh15_1 > state.sh15_2;
   const hl15 = state.sl15_1 !== null && state.sl15_2 !== null && state.sl15_1 > state.sl15_2;
@@ -221,9 +234,15 @@ function resolveSignal(state, zone) {
   }
 
   // ── LONG signals — apply 1m swing-low gap filter ─────────────
-  // Reject if the two most-recent 1m swing lows are > 0.5% apart
-  // (means we'd be chasing a move already underway).
+  // Reject if the two most-recent 1m swing lows are > MAX_1M_GAP_PCT apart
+  // (means the HL structure is too loose to be a clean entry).
   if (!is1mGapOk(state.sl1m_1, state.sl1m_2)) return null;
+
+  // Chase filter: reject if price has already moved > MAX_CHASE_PCT above
+  // the most-recent confirmed 1m swing low. With SWING_BARS=3, the pivot
+  // confirms 3 min after the actual low — on fast moves (BTC near HH) the
+  // entry would be at resistance, not support.
+  if (isChasing(price, state.sl1m_1)) return null;
 
   // LOWER_MID: price between VWAP lower band and VWAP mid.
   // 15m HL + 1m HL = bullish structure on both timeframes.
@@ -343,7 +362,7 @@ async function analyze(symbol, log) {
         if (distBlocked) {
           log(`[V4] skip ${symbol} — price too close to lower band (< 0.5σ) dist=${((bar.close - vwap.lower) / vwap.stddev).toFixed(2)}σ`);
         } else {
-          const sig = resolveSignal(st, zone);
+          const sig = resolveSignal(st, zone, bar.close);
           if (sig) {
             st.lastSignalTime = pivotTime;
             signal = { ...sig, price: bar.close, zone };
@@ -353,12 +372,14 @@ async function analyze(symbol, log) {
               log(`[V4] ✓ ${symbol} LONG  zone=${zone} type=${sig.type} sl15=${st.sl15_1?.toFixed(4)}/${st.sl15_2?.toFixed(4)} sl1m=${st.sl1m_1?.toFixed(4)}/${st.sl1m_2?.toFixed(4)}`);
             }
           } else {
-            // Log why the signal was rejected (zone mismatch, gap, etc.)
-            const gapOk = is1mGapOk(st.sl1m_1, st.sl1m_2);
+            // Log why the signal was rejected (zone mismatch, gap, chase, etc.)
+            const gapOk   = is1mGapOk(st.sl1m_1, st.sl1m_2);
+            const chasing = isChasing(bar.close, st.sl1m_1);
+            const chasePct = st.sl1m_1 ? ((bar.close - st.sl1m_1) / st.sl1m_1 * 100).toFixed(3) : 'n/a';
             const hl15 = st.sl15_1 !== null && st.sl15_2 !== null && st.sl15_1 > st.sl15_2;
             const ll15 = st.sl15_1 !== null && st.sl15_2 !== null && st.sl15_1 < st.sl15_2;
             const hh15 = st.sh15_1 !== null && st.sh15_2 !== null && st.sh15_1 > st.sh15_2;
-            log(`[V4] pivot confirmed but no signal: ${symbol} zone=${zone} 15m:hh=${hh15} hl=${hl15} ll=${ll15} gap1m=${gapOk?'ok':'blocked'}`);
+            log(`[V4] pivot confirmed but no signal: ${symbol} zone=${zone} 15m:hh=${hh15} hl=${hl15} ll=${ll15} gap1m=${gapOk?'ok':'blocked'} chase=${chasing?`SKIP(${chasePct}%)`:`ok(${chasePct}%)`}`);
           }
         }
       }
