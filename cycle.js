@@ -1599,7 +1599,7 @@ async function executeForAllUsers(pick) {
          RETURNING id, user_id`
       );
       for (const r of resumed) {
-        _consecLosses.set(r.id, 0);
+        _consecLosses.set(r.id, { count: 0, lastLossAt: 0 });
         bLog.trade(`[CONSEC-LOSS] Key #${r.id} auto-resumed — 4h cooldown expired`);
         await notify(`▶️ *Trading Resumed*\nKey #${r.id} — 4-hour cooldown complete. Ready to trade.`);
       }
@@ -3221,6 +3221,12 @@ async function backfillFeesFromBitunix() {
           bestMatch.closePrice || bestMatch.avgClosePrice || bestMatch.close_price ||
           bestMatch.exitPrice  || bestMatch.avg_close_price || 0
         ) || null;
+
+        // Guard: if the API gave us nothing useful, skip rather than overwrite good data with NULL.
+        if (grossPnl === null && pnlUsdt === null) {
+          bLog.system(`[FEE-BACKFILL] trade#${trade.id} ${trade.symbol}: match found but no PnL data — skipping to preserve existing values`);
+          continue;
+        }
 
         // Force-overwrite all fee/pnl fields — do NOT use COALESCE.
         // Previous syncTradeStatus may have stored wrong values (e.g. live P&L
