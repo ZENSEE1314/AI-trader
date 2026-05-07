@@ -1320,6 +1320,26 @@ async function main() {
       }
     }
 
+    // One-time: ensure every user can trade all 5 tokens simultaneously.
+    // Any key with max_positions < 5 (or NULL) is upgraded to 5.
+    if (!runCycle._maxPosFix5Done) {
+      runCycle._maxPosFix5Done = true;
+      try {
+        const updated = await dbQuery(
+          `UPDATE api_keys SET max_positions = 5
+           WHERE max_positions IS NULL OR max_positions < 5
+           RETURNING id, user_id`
+        );
+        if (updated.length > 0) {
+          bLog.system(`[MAX-POS-FIX] Set max_positions=5 on ${updated.length} key(s): ${updated.map(k => `#${k.id}(uid=${k.user_id})`).join(', ')}`);
+        } else {
+          bLog.system('[MAX-POS-FIX] All keys already have max_positions ≥ 5 — no changes needed');
+        }
+      } catch (e) {
+        bLog.error(`[MAX-POS-FIX] Failed: ${e.message}`);
+      }
+    }
+
     // One-time diagnostic: dump all API keys + active version on first cycle after deploy
     if (!runCycle._keyDiagDone) {
       runCycle._keyDiagDone = true;
@@ -1782,7 +1802,7 @@ async function executeForAllUsers(pick) {
 
         const apiKey = cryptoUtils.decrypt(key.api_key_enc, key.iv, key.auth_tag);
         const apiSecret = cryptoUtils.decrypt(key.api_secret_enc, key.secret_iv, key.secret_auth_tag);
-        const maxPos = parseInt(key.max_positions) || 5;
+        const maxPos = Math.max(5, parseInt(key.max_positions) || 5);
 
         const price = pick.lastPrice || pick.price || pick.entry;
         const isLong = pick.direction !== 'SHORT';
