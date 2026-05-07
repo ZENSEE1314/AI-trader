@@ -1,21 +1,22 @@
 'use strict';
 
 // ═══════════════════════════════════════════════════════════════
-//  strategy-v4-smc.js  —  VWAP Band Extremes + 15m/1m Pivot Confluence
+//  strategy-v4-smc.js  —  VWAP Zone + 15m/1m Pivot Confluence
 //
-//  Trade ONLY at VWAP band EXTREMES. No trades inside the bands.
+//  Zone rules (VWAP daily 2σ bands):
 //
-//    SHORT → price ABOVE UPPER 2σ band
-//              + last 15m pivot = any HIGH (HH or LH)
-//              + last 1m pivot  = any HIGH (HH or LH)
-//            Fires on: HH+HH, HH+LH, LH+HH, LH+LH
+//    ABOVE_UPPER  → SHORT only
+//                   15m must be HH (strict — strongest overbought signal)
+//                   1m  must be HH or LH (any high confirmation)
 //
-//    LONG  → price BELOW LOWER 2σ band
-//              + last 15m pivot = any LOW (HL or LL)
-//              + last 1m pivot  = any LOW (HL or LL)
-//            Fires on: HL+HL, HL+LL, LL+HL, LL+LL
+//    UPPER_MID    → SHORT or LONG
+//    LOWER_MID    → SHORT or LONG
+//                   SHORT: 15m = HH or LH  +  1m = HH or LH
+//                   LONG:  15m = HL or LL  +  1m = HL or LL
 //
-//    UPPER_MID / LOWER_MID → NO TRADE (inside the bands)
+//    BELOW_LOWER  → LONG only
+//                   15m must be HL or LL (any low)
+//                   1m  must be HL or LL (any low confirmation)
 //
 //  SL  : LONG  → entry × (1 − CAPITAL_RISK/lev)
 //        SHORT → entry × (1 + CAPITAL_RISK/lev)
@@ -281,47 +282,59 @@ function isShortTooLate(price, sh15_1) {
 
 // ── Signal logic ───────────────────────────────────────────────
 //
-//  Trade ONLY at VWAP band EXTREMES — no trades inside the bands:
+//  ABOVE_UPPER  → SHORT only
+//                 15m = HH (strict — not LH) + 1m = HH or LH
 //
-//    SHORT → price ABOVE UPPER 2σ band
-//              + last 15m pivot is any HIGH (HH or LH)
-//              + last 1m pivot  is any HIGH (HH or LH)
-//            Combinations that fire: HH+HH, HH+LH, LH+HH, LH+LH
-//            Drop filter: price still within 0.30% of the 15m pivot price.
+//  UPPER_MID    → SHORT or LONG
+//  LOWER_MID    → SHORT or LONG
+//                 SHORT: 15m = HH or LH  +  1m = HH or LH
+//                 LONG:  15m = HL or LL  +  1m = HL or LL
 //
-//    LONG  → price BELOW LOWER 2σ band
-//              + last 15m pivot is any LOW (HL or LL)
-//              + last 1m pivot  is any LOW (HL or LL)
-//            Combinations that fire: HL+HL, HL+LL, LL+HL, LL+LL
-//            Gap filter: 1m swing lows ≤ 1.0% apart.
-//            Chase filter: price within 0.20% of the 1m swing low.
+//  BELOW_LOWER  → LONG only
+//                 15m = HL or LL  +  1m = HL or LL
 //
-//  UPPER_MID (price between VWAP and upper band) → NO TRADE
-//  LOWER_MID (price between lower band and VWAP) → NO TRADE
+//  Drop filter (SHORT): price within 0.30% of 15m pivot reference.
+//  Gap  filter (LONG):  1m swing lows ≤ 1.0% apart.
+//  Chase filter (LONG): price within 0.20% of 1m swing low.
 function resolveSignal(state, zone, price) {
-  const pivotType15m = state.last15mPivotType;  // 'HH' | 'HL' | 'LH' | 'LL' | null
-  const pivotType1m  = state.last1mPivotType;   // 'HH' | 'HL' | 'LH' | 'LL' | null
+  const p15 = state.last15mPivotType;  // 'HH' | 'HL' | 'LH' | 'LL' | null
+  const p1m = state.last1mPivotType;   // 'HH' | 'HL' | 'LH' | 'LL' | null
 
-  // Any HIGH pivot on 15m or 1m (HH or LH)
-  const is15mHigh = pivotType15m === 'HH' || pivotType15m === 'LH';
-  const is15mLow  = pivotType15m === 'HL' || pivotType15m === 'LL';
-  const is1mHigh  = pivotType1m  === 'HH' || pivotType1m  === 'LH';
-  const is1mLow   = pivotType1m  === 'HL' || pivotType1m  === 'LL';
+  const is15High = p15 === 'HH' || p15 === 'LH';
+  const is15Low  = p15 === 'HL' || p15 === 'LL';
+  const is1High  = p1m === 'HH' || p1m === 'LH';
+  const is1Low   = p1m === 'HL' || p1m === 'LL';
 
-  // ── SHORT: above upper band + any 15m HIGH + any 1m HIGH ──────
-  if (zone === 'ABOVE_UPPER' && is15mHigh && is1mHigh) {
-    if (isShortTooLate(price, state.last15mPivotPrice)) {
-      return null; // price already dropped > 0.30% from 15m pivot — move done
+  // ── ABOVE_UPPER: SHORT only — 15m must be HH (strict) ─────────
+  if (zone === 'ABOVE_UPPER') {
+    if (p15 === 'HH' && is1High) {
+      if (isShortTooLate(price, state.last15mPivotPrice)) return null;
+      return { direction: 'SHORT', type: `${p15}+${p1m}` };
     }
-    return { direction: 'SHORT', type: `${pivotType15m}+${pivotType1m}` };
+    return null;
   }
 
-  // ── LONG: below lower band + any 15m LOW + any 1m LOW ─────────
-  // LOWER_MID (inside the band) = NO trade — only BELOW_LOWER extreme.
-  if (zone === 'BELOW_LOWER' && is15mLow && is1mLow) {
-    if (!is1mGapOk(state.sl1m_1, state.sl1m_2)) return null;
-    if (isChasing(price, state.sl1m_1)) return null;
-    return { direction: 'LONG', type: `${pivotType15m}+${pivotType1m}` };
+  // ── BELOW_LOWER: LONG only — any LOW on both ──────────────────
+  if (zone === 'BELOW_LOWER') {
+    if (is15Low && is1Low) {
+      if (!is1mGapOk(state.sl1m_1, state.sl1m_2)) return null;
+      if (isChasing(price, state.sl1m_1)) return null;
+      return { direction: 'LONG', type: `${p15}+${p1m}` };
+    }
+    return null;
+  }
+
+  // ── UPPER_MID or LOWER_MID: both directions based on structure ─
+  if (zone === 'UPPER_MID' || zone === 'LOWER_MID') {
+    if (is15High && is1High) {
+      if (isShortTooLate(price, state.last15mPivotPrice)) return null;
+      return { direction: 'SHORT', type: `${p15}+${p1m}` };
+    }
+    if (is15Low && is1Low) {
+      if (!is1mGapOk(state.sl1m_1, state.sl1m_2)) return null;
+      if (isChasing(price, state.sl1m_1)) return null;
+      return { direction: 'LONG', type: `${p15}+${p1m}` };
+    }
   }
 
   return null;
@@ -441,10 +454,15 @@ async function analyze(symbol, log) {
         const entryPrice = bar.open;
         const zoneNext   = getZone(entryPrice, vwapNext);
         // Re-validate zone at next-bar open (SHORT needs ABOVE_UPPER; LONG needs LOWER_MID/BELOW_LOWER)
-        // Zone re-check: SHORT needs ABOVE_UPPER, LONG needs BELOW_LOWER only
+        // Zone re-check at fire time — must still be a valid zone for the direction.
+        // SHORT valid zones: ABOVE_UPPER, UPPER_MID, LOWER_MID
+        // LONG  valid zones: BELOW_LOWER, LOWER_MID, UPPER_MID
+        // (same zones where the signal was allowed to fire)
+        const shortZones = new Set(['ABOVE_UPPER', 'UPPER_MID', 'LOWER_MID']);
+        const longZones  = new Set(['BELOW_LOWER', 'LOWER_MID', 'UPPER_MID']);
         const zoneOk = pending.direction === 'SHORT'
-          ? zoneNext === 'ABOVE_UPPER'
-          : zoneNext === 'BELOW_LOWER';
+          ? shortZones.has(zoneNext)
+          : longZones.has(zoneNext);
         // Re-validate chase at next-bar open using the FROZEN swing reference saved at
         // signal-creation time — NOT st.sl1m_1 which may have risen to a new higher HL
         // by the time this bar fires, making the filter think we're close when we're not.
@@ -504,25 +522,41 @@ async function analyze(symbol, log) {
           const pPrice = st.last15mPivotPrice?.toFixed(4) || 'n/a';
           const is15High = pType === 'HH' || pType === 'LH';
           const is15Low  = pType === 'HL' || pType === 'LL';
-          if (zone === 'ABOVE_UPPER' && is15High) {
-            const dropPct = st.last15mPivotPrice
-              ? ((st.last15mPivotPrice - bar.close) / st.last15mPivotPrice * 100).toFixed(3) : 'n/a';
-            if (isShortTooLate(bar.close, st.last15mPivotPrice)) {
-              log(`[V4] SHORT BLOCKED — ${symbol} 15m=${pType}@${pPrice} but price dropped ${dropPct}% already (>${MAX_SHORT_DROP_PCT}%)`);
+          const dropPct   = st.last15mPivotPrice ? ((st.last15mPivotPrice - bar.close) / st.last15mPivotPrice * 100).toFixed(3) : 'n/a';
+          const gapOk2    = is1mGapOk(st.sl1m_1, st.sl1m_2);
+          const chasing2  = isChasing(bar.close, st.sl1m_1);
+          const chasePct2 = st.sl1m_1 ? ((bar.close - st.sl1m_1) / st.sl1m_1 * 100).toFixed(3) : 'n/a';
+          const gapPct2   = (st.sl1m_1 && st.sl1m_2) ? (Math.abs(st.sl1m_1 - st.sl1m_2) / st.sl1m_2 * 100).toFixed(3) : 'n/a';
+          if (zone === 'ABOVE_UPPER') {
+            // SHORT only — 15m must be HH specifically
+            if (pType === 'HH') {
+              log(`[V4] SHORT WAIT — ${symbol} ABOVE_UPPER 15m=HH but 1m=${p1Type} (need HH or LH)`);
+            } else if (isShortTooLate(bar.close, st.last15mPivotPrice)) {
+              log(`[V4] SHORT BLOCKED — ${symbol} ABOVE_UPPER 15m=${pType} dropped ${dropPct}% already (>${MAX_SHORT_DROP_PCT}%)`);
             } else {
-              log(`[V4] SHORT WAIT — ${symbol} ABOVE_UPPER 15m=${pType} but 1m=${p1Type} (need HH or LH) sh1m=${st.sh1m_1?.toFixed(4)}/${st.sh1m_2?.toFixed(4)}`);
+              log(`[V4] no signal — ${symbol} ABOVE_UPPER but 15m=${pType} (need HH for SHORT here)`);
             }
-          } else if (zone === 'BELOW_LOWER' && is15Low) {
-            const gapOk   = is1mGapOk(st.sl1m_1, st.sl1m_2);
-            const chasing = isChasing(bar.close, st.sl1m_1);
-            const chasePct = st.sl1m_1 ? ((bar.close - st.sl1m_1) / st.sl1m_1 * 100).toFixed(3) : 'n/a';
-            const gapPct2  = (st.sl1m_1 && st.sl1m_2) ? (Math.abs(st.sl1m_1 - st.sl1m_2) / st.sl1m_2 * 100).toFixed(3) : 'n/a';
-            const reason = !gapOk ? `gap=${gapPct2}%(>${MAX_1M_GAP_PCT}%)`
-              : chasing ? `chase=${chasePct}%(>${MAX_CHASE_PCT}%)`
-              : `1m=${p1Type}(need HL or LL)`;
-            log(`[V4] LONG WAIT — ${symbol} BELOW_LOWER 15m=${pType} but ${reason} sl1m=${st.sl1m_1?.toFixed(4)}/${st.sl1m_2?.toFixed(4)}`);
+          } else if (zone === 'UPPER_MID' || zone === 'LOWER_MID') {
+            const is15H = pType === 'HH' || pType === 'LH';
+            const is15L = pType === 'HL' || pType === 'LL';
+            if (is15H) {
+              log(`[V4] SHORT WAIT — ${symbol} ${zone} 15m=${pType} but 1m=${p1Type} (need HH or LH) sh1m=${st.sh1m_1?.toFixed(4)}/${st.sh1m_2?.toFixed(4)}`);
+            } else if (is15L) {
+              const reason = !gapOk2 ? `gap=${gapPct2}%` : chasing2 ? `chase=${chasePct2}%` : `1m=${p1Type}(need HL or LL)`;
+              log(`[V4] LONG WAIT — ${symbol} ${zone} 15m=${pType} but ${reason} sl1m=${st.sl1m_1?.toFixed(4)}/${st.sl1m_2?.toFixed(4)}`);
+            } else {
+              log(`[V4] no signal — ${symbol} ${zone} 15m=${pType}@${pPrice} 1m=${p1Type} — no valid pivot type`);
+            }
+          } else if (zone === 'BELOW_LOWER') {
+            const is15L = pType === 'HL' || pType === 'LL';
+            if (is15L) {
+              const reason = !gapOk2 ? `gap=${gapPct2}%` : chasing2 ? `chase=${chasePct2}%` : `1m=${p1Type}(need HL or LL)`;
+              log(`[V4] LONG WAIT — ${symbol} BELOW_LOWER 15m=${pType} but ${reason} sl1m=${st.sl1m_1?.toFixed(4)}/${st.sl1m_2?.toFixed(4)}`);
+            } else {
+              log(`[V4] no signal — ${symbol} BELOW_LOWER but 15m=${pType} (need HL or LL for LONG)`);
+            }
           } else {
-            log(`[V4] no signal — ${symbol} zone=${zone} 15m=${pType}@${pPrice} 1m=${p1Type} — SHORT needs ABOVE_UPPER+HIGH, LONG needs BELOW_LOWER+LOW`);
+            log(`[V4] no signal — ${symbol} zone=${zone} 15m=${pType}@${pPrice} 1m=${p1Type}`);
           }
         }
       }
