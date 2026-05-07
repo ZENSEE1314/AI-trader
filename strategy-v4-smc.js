@@ -296,6 +296,29 @@ async function analyze(symbol, log) {
 
   let signal = null;
 
+  // Per-cycle diagnostic: show zone + pivot state even when no pivot fires.
+  // Logged once per scan (based on the most-recent closed 1m bar) so the
+  // admin can see exactly WHY the strategy is silent.
+  const diagBar = new1m[new1m.length - 1] || st.candles1m[st.candles1m.length - 1];
+  if (diagBar) {
+    const diagVwap = calcVwap(st.candles15m, diagBar.openTime);
+    if (diagVwap) {
+      const diagZone = getZone(diagBar.close, diagVwap);
+      const gapOk    = is1mGapOk(st.sl1m_1, st.sl1m_2);
+      const gapPct   = (st.sl1m_1 && st.sl1m_2)
+        ? (Math.abs(st.sl1m_1 - st.sl1m_2) / st.sl1m_2 * 100).toFixed(3)
+        : 'null';
+      const distSigma = (diagVwap.stddev > 0 && st.sl1m_1)
+        ? ((diagBar.close - diagVwap.lower) / diagVwap.stddev).toFixed(2)
+        : 'n/a';
+      const hh15 = st.sh15_1 !== null && st.sh15_2 !== null && st.sh15_1 > st.sh15_2;
+      const hl15 = st.sl15_1 !== null && st.sl15_2 !== null && st.sl15_1 > st.sl15_2;
+      const ll15 = st.sl15_1 !== null && st.sl15_2 !== null && st.sl15_1 < st.sl15_2;
+      const struct15 = hh15 ? 'HH' : hl15 ? 'HL' : ll15 ? 'LL' : '??';
+      log(`[V4-DIAG] ${symbol} zone=${diagZone} price=${diagBar.close.toFixed(4)} | 15m:${struct15}(sh=${st.sh15_1?.toFixed(4)}/${st.sh15_2?.toFixed(4)} sl=${st.sl15_1?.toFixed(4)}/${st.sl15_2?.toFixed(4)}) | 1m:sl=${st.sl1m_1?.toFixed(4)}/${st.sl1m_2?.toFixed(4)} gap=${gapPct}%(${gapOk?'OK':'BLOCKED'}) dist=${distSigma}σ`);
+    }
+  }
+
   for (const bar of new1m) {
     st.candles1m.push(bar);
     if (st.candles1m.length > WARMUP_1M + 50) st.candles1m.shift();
@@ -311,7 +334,7 @@ async function analyze(symbol, log) {
         // ABOVE_UPPER SHORT: no dist filter (price above the band).
         const distBlocked = zone === 'LOWER_MID' && !isGoodVwapDistance(bar.close, vwap);
         if (distBlocked) {
-          log(`[V4] skip ${symbol} — price too close to lower band (< 0.5σ)`);
+          log(`[V4] skip ${symbol} — price too close to lower band (< 0.5σ) dist=${((bar.close - vwap.lower) / vwap.stddev).toFixed(2)}σ`);
         } else {
           const sig = resolveSignal(st, zone);
           if (sig) {
@@ -322,6 +345,13 @@ async function analyze(symbol, log) {
             } else {
               log(`[V4] ✓ ${symbol} LONG  zone=${zone} type=${sig.type} sl15=${st.sl15_1?.toFixed(4)}/${st.sl15_2?.toFixed(4)} sl1m=${st.sl1m_1?.toFixed(4)}/${st.sl1m_2?.toFixed(4)}`);
             }
+          } else {
+            // Log why the signal was rejected (zone mismatch, gap, etc.)
+            const gapOk = is1mGapOk(st.sl1m_1, st.sl1m_2);
+            const hl15 = st.sl15_1 !== null && st.sl15_2 !== null && st.sl15_1 > st.sl15_2;
+            const ll15 = st.sl15_1 !== null && st.sl15_2 !== null && st.sl15_1 < st.sl15_2;
+            const hh15 = st.sh15_1 !== null && st.sh15_2 !== null && st.sh15_1 > st.sh15_2;
+            log(`[V4] pivot confirmed but no signal: ${symbol} zone=${zone} 15m:hh=${hh15} hl=${hl15} ll=${ll15} gap1m=${gapOk?'ok':'blocked'}`);
           }
         }
       }

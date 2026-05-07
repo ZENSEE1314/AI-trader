@@ -1320,15 +1320,35 @@ async function main() {
       }
     }
 
-    // One-time diagnostic: dump all API keys on first cycle after deploy
+    // One-time diagnostic: dump all API keys + active version on first cycle after deploy
     if (!runCycle._keyDiagDone) {
       runCycle._keyDiagDone = true;
       try {
         const allDbKeys = await dbQuery(
-          `SELECT ak.id, ak.user_id, ak.enabled, ak.paused_by_admin, ak.paused_by_user, ak.exchange, u.email
+          `SELECT ak.id, ak.user_id, ak.enabled, ak.paused_by_admin, ak.paused_by_user, ak.platform, u.email
            FROM api_keys ak LEFT JOIN users u ON u.id = ak.user_id ORDER BY ak.id`
         );
-        bLog.system(`[KEY-DIAG] ALL ${allDbKeys.length} api_keys: ${allDbKeys.map(k => `#${k.id} ${k.email || 'NO-USER(uid='+k.user_id+')'} ex=${k.exchange||'?'} en=${k.enabled} ap=${k.paused_by_admin} up=${k.paused_by_user}`).join(' | ')}`);
+        bLog.system(`[KEY-DIAG] ALL ${allDbKeys.length} api_keys: ${allDbKeys.map(k => `#${k.id} ${k.email || 'NO-USER(uid='+k.user_id+')'} platform=${k.platform||'NULL'} en=${k.enabled} ap=${k.paused_by_admin} up=${k.paused_by_user}`).join(' | ')}`);
+      } catch (_) {}
+      // Log active AI version — if enableLong/enableShort=false, trades are silently blocked
+      try {
+        const avRows = await dbQuery(`SELECT value FROM settings WHERE key = 'active_ai_version'`);
+        if (avRows.length) {
+          const av = JSON.parse(avRows[0].value);
+          const enableL = av.enableLong  !== false && av.enableLong  !== 'false';
+          const enableS = av.enableShort !== false && av.enableShort !== 'false';
+          bLog.system(`[ACTIVE-VER] version="${av.version}" enableLong=${enableL} enableShort=${enableS} slPct=${av.slPct||'default'} trailStep=${av.trailStep||'default'}`);
+          if (!enableL && !enableS) {
+            bLog.error('[ACTIVE-VER] WARNING: BOTH directions disabled — no trades will fire until version is deactivated!');
+            await notify(`⚠️ *AI Version Warning*\nActive version "${av.version}" has BOTH Long and Short DISABLED.\nGo to Admin > AI Versions and click Deactivate, or trading will remain paused.`);
+          } else if (!enableL) {
+            bLog.error('[ACTIVE-VER] WARNING: LONG disabled by active version');
+          } else if (!enableS) {
+            bLog.error('[ACTIVE-VER] WARNING: SHORT disabled by active version');
+          }
+        } else {
+          bLog.system('[ACTIVE-VER] No active AI version — using hardcoded defaults (all directions enabled)');
+        }
       } catch (_) {}
     }
     const topNRows = await dbQuery('SELECT MAX(top_n_coins) as max_n FROM api_keys WHERE enabled = true');
@@ -1475,12 +1495,28 @@ async function main() {
         bLog.trade(`${pick.symbol} too expensive for all users — trying next signal...`);
         continue;
       }
+      if (result === 'NO_KEYS') {
+        bLog.trade(`${pick.symbol}: no active keys to trade — check api_keys table`);
+        continue;
+      }
       executed = true;
       // Continue processing remaining signals so ALL users get a trade opportunity.
       // Users who already traded are protected by: max_positions, dedup guard, open trade check.
     }
     // Owner account handled via executeForAllUsers (DB keys with pause/enabled checks)
     // No separate owner path — all accounts go through the same pipeline
+
+    // If signals arrived but zero executed, diagnose the blockage once per hour
+    if (dedupedSignals.length > 0 && !executed) {
+      runCycle._sigBlockCount = (runCycle._sigBlockCount || 0) + 1;
+      if (runCycle._sigBlockCount === 1 || runCycle._sigBlockCount % 12 === 0) {
+        const symList = dedupedSignals.map(s => `${s.symbol} ${s.direction}`).join(', ');
+        bLog.error(`[BLOCKED] ${dedupedSignals.length} signal(s) generated but 0 trades executed: ${symList}`);
+        await notify(`⚠️ *Trade Signals Blocked*\n${dedupedSignals.length} signal(s) generated but 0 trades executed.\nSignals: ${symList}\nCheck: active AI version (enableLong/Short), api_key pauses, open positions, wallet balance.`);
+      }
+    } else {
+      runCycle._sigBlockCount = 0;
+    }
 
   } catch (err) {
     if (checkBanError(err)) return;
@@ -1652,7 +1688,7 @@ async function executeForAllUsers(pick) {
           bLog.trade('No API keys in database at all');
         }
       } catch (_) {}
-      return;
+      return 'NO_KEYS';
     }
 
     // Also check for orphan keys (api_keys without matching users row)

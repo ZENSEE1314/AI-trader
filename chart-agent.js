@@ -29,15 +29,43 @@ const TIMEOUT      = 8_000;  // Fast fallback to rule-based if LLM is slow
 
 const INITIAL_SL_CAP = 0.25;
 
-// ── Fetch klines (15m for structure — 4x faster CHoCH detection than H1) ────
+// ── Fetch klines — Bybit primary, Binance Futures fallback ────────────────
+// Bybit works from any Railway region and doesn't require IP whitelisting.
+// Binance Futures public klines are the fallback in case Bybit is slow.
+// Output is always Binance-format arrays: [timestamp, open, high, low, close, volume]
 async function fetchKlines(symbol, interval = '15m', limit = 200) {
+  // Map Binance interval notation to Bybit notation (they're the same for minute/hour)
+  const bybitInterval = interval.replace('m', '').replace('h', '60').replace('d', 'D');
+  const BYBIT_ENDPOINTS = [
+    'https://api.bytick.com/v5/market/kline',
+    'https://api.bybit.com/v5/market/kline',
+    'https://api.bybit.nl/v5/market/kline',
+  ];
+
+  for (const ep of BYBIT_ENDPOINTS) {
+    try {
+      const qs  = new URLSearchParams({ category: 'linear', symbol, interval: bybitInterval, limit: String(limit) });
+      const res = await fetch(`${ep}?${qs}`, { timeout: TIMEOUT });
+      if (!res.ok) continue;
+      const json = await res.json();
+      if (json.retCode !== 0) continue;
+      // Bybit returns newest-first; convert to oldest-first Binance-format arrays
+      const rows = (json.result?.list || [])
+        .slice()
+        .reverse()
+        .map(r => [r[0], r[1], r[2], r[3], r[4], r[5]]);  // [ts, o, h, l, c, vol]
+      if (rows.length >= 20) return rows;
+    } catch (_) {}
+  }
+
+  // Fallback: Binance Futures public klines
   const url = `https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`;
-  for (let i = 0; i < 3; i++) {
+  for (let i = 0; i < 2; i++) {
     try {
       const res = await fetch(url, { timeout: TIMEOUT });
       if (res.ok) return res.json();
     } catch (_) {}
-    if (i < 2) await new Promise(r => setTimeout(r, 1000 * (i + 1)));
+    if (i < 1) await new Promise(r => setTimeout(r, 1000));
   }
   return null;
 }
