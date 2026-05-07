@@ -1781,9 +1781,22 @@ async function executeForAllUsers(pick) {
           return;
         }
 
-        // No cooldown — the 3-tier confluence (VWAP + H1 + H1-micro) and ChartAgent
-        // AI analysis are the quality filter. Blocking re-entry after a loss means
-        // missing the recovery move. The trailing SL handles risk on each trade.
+        // Per-symbol loss cooldown: if this user lost on this symbol in the last 4 hours, skip.
+        // Prevents re-entering a losing token immediately — wait for structure to reset.
+        const recentLoss = await db.query(
+          `SELECT id, closed_at FROM trades
+           WHERE user_id = $1 AND symbol = $2 AND status = 'LOSS'
+             AND closed_at > NOW() - INTERVAL '4 hours'
+           ORDER BY closed_at DESC LIMIT 1`,
+          [key.user_id, symbol]
+        );
+        if (recentLoss.length > 0) {
+          _openTradeInProgress.delete(openLockKey);
+          const resumeAt = new Date(new Date(recentLoss[0].closed_at).getTime() + 4 * 3600 * 1000);
+          const resumeStr = resumeAt.toISOString().replace('T', ' ').slice(0, 16) + ' UTC';
+          userLog.trade(`User ${key.email}: ${symbol} on 4h loss cooldown — resumes ${resumeStr}`);
+          return;
+        }
 
         const apiKey = cryptoUtils.decrypt(key.api_key_enc, key.iv, key.auth_tag);
         const apiSecret = cryptoUtils.decrypt(key.api_secret_enc, key.secret_iv, key.secret_auth_tag);
