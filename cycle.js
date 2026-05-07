@@ -2062,14 +2062,23 @@ async function executeForAllUsers(pick) {
           // Prevents a second key from opening the same trade if INSERT later fails.
           executedUserSymbols.add(dedupKey);
 
-          await sleep(2000);
-          const posRaw = await userClient.getOpenPositions(symbol);
-          // Handle bare array OR wrapped response (positionList / list)
-          const posArr = Array.isArray(posRaw) ? posRaw
-            : (posRaw?.positionList || posRaw?.list || (posRaw && typeof posRaw === 'object' ? [posRaw] : []));
-          const pos = posArr.find(p => p.symbol === symbol);
-          // Bitunix uses 'positionId' or 'id' depending on API version
-          const posId = pos ? (pos.positionId || pos.id) : null;
+          // Wrap position lookup in its own try/catch.
+          // If getOpenPositions throws after a successful placeOrder, pos/posId stay null
+          // and we fall into the else-branch below which still INSERTs a DB record.
+          // Without this, a lookup failure would jump to the outer catch and skip the INSERT,
+          // leaving the position on Bitunix with no DB record (EXCHANGE ONLY).
+          let pos = null, posId = null;
+          try {
+            await sleep(2000);
+            const posRaw = await userClient.getOpenPositions(symbol);
+            // Handle bare array OR wrapped response (positionList / list)
+            const posArr = Array.isArray(posRaw) ? posRaw
+              : (posRaw?.positionList || posRaw?.list || (posRaw && typeof posRaw === 'object' ? [posRaw] : []));
+            pos   = posArr.find(p => p.symbol === symbol) || null;
+            posId = pos ? (pos.positionId || pos.id) : null;
+          } catch (posLookupErr) {
+            userLog.error(`Bitunix getOpenPositions failed after order — will INSERT DB record with estimated entry: ${posLookupErr.message}`);
+          }
           userLog.trade(`Bitunix position lookup: ${JSON.stringify(pos ? { id: posId, symbol: pos.symbol, side: pos.side, qty: pos.qty } : null)}`);
 
           if (pos && posId) {
