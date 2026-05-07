@@ -1,13 +1,12 @@
 [build]
-builder = "DOCKERFILE"
-dockerfilePath = "Dockerfile"
+builder = "NIXPACKS"
 
 [deploy]
 startCommand = "npm start"
 healthcheckPath = "/health"
 healthcheckTimeout = 10
 restartPolicyType = "ALWAYS"
-restartPolicyMaxRetries = 3
+restartPolicyMaxRetries = 10
 
 [variables]
 NODE_ENV = "production"
