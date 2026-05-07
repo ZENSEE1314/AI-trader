@@ -72,7 +72,7 @@ router.get('/weekly-earnings', async (req, res) => {
       `SELECT u.id, u.email, u.created_at, u.last_paid_at,
               ak.id as key_id, ak.label as key_label, ak.platform,
               ak.profit_share_user_pct, ak.profit_share_admin_pct,
-              ak.paused_by_admin, ak.enabled
+              ak.paused_by_admin, ak.enabled, ak.loss_cooldown_until
        FROM users u
        LEFT JOIN api_keys ak ON ak.user_id = u.id
        WHERE u.is_admin = false
@@ -147,6 +147,7 @@ router.get('/weekly-earnings', async (req, res) => {
           label: u.key_label || u.platform,
           platform: u.platform,
           paused: u.paused_by_admin || false,
+          loss_cooldown_until: u.loss_cooldown_until || null,
           enabled: u.enabled !== false,
           total_trades: keyTrades.length,
           win_count: wins.length,
@@ -397,8 +398,9 @@ router.put('/keys/:id/pause', async (req, res) => {
 // Resume an API key (re-enable)
 router.put('/keys/:id/resume', async (req, res) => {
   try {
+    // Also clear loss_cooldown_until so consecutive-loss timer is reset alongside the pause flag.
     await query(
-      `UPDATE api_keys SET paused_by_admin = false, enabled = true WHERE id = $1`,
+      `UPDATE api_keys SET paused_by_admin = false, loss_cooldown_until = NULL, enabled = true WHERE id = $1`,
       [req.params.id]
     );
     res.json({ ok: true, paused: false });
@@ -1085,6 +1087,36 @@ router.post('/direction-override', async (req, res) => {
   }
 });
 
+// ── Single-User Mode: restrict trading to admin only (debug/test) ──────────
+// GET  → returns { enabled: bool }
+// POST → { enabled: bool } toggles the mode
+router.get('/single-user-mode', async (req, res) => {
+  try {
+    const rows = await query(`SELECT value FROM settings WHERE key = 'bot.single_user_mode'`);
+    res.json({ enabled: rows.length > 0 && rows[0].value === 'true' });
+  } catch (err) {
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+router.post('/single-user-mode', async (req, res) => {
+  try {
+    const enabled = req.body.enabled === true || req.body.enabled === 'true';
+    if (enabled) {
+      await query(
+        `INSERT INTO settings (key, value) VALUES ('bot.single_user_mode', 'true')
+         ON CONFLICT (key) DO UPDATE SET value = 'true'`
+      );
+    } else {
+      await query(`DELETE FROM settings WHERE key = 'bot.single_user_mode'`);
+    }
+    console.log(`[ADMIN] Single-user mode: ${enabled ? 'ON (admin only)' : 'OFF (all users)'}`);
+    res.json({ ok: true, enabled });
+  } catch (err) {
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // Per-token direction override — one-shot: auto-clears after a trade fires for that token
 router.get('/token-directions', async (req, res) => {
   try {
@@ -1714,6 +1746,126 @@ router.get('/open-positions', async (req, res) => {
     }
 
     res.json({ positions: Object.values(grouped), all: positions, total: positions.length });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── User trading-status diagnostic — why is a user not getting trades? ────
+// GET /api/admin/user-trading-status?email=jackylee53
+router.get('/user-trading-status', async (req, res) => {
+  const emailSearch = (req.query.email || '').trim();
+  if (!emailSearch) return res.status(400).json({ error: 'email query param required' });
+  try {
+    const cryptoUtils = require('../crypto-utils');
+    const { BitunixClient } = require('../bitunix-client');
+
+    // 1. Key + pause status (include encrypted creds for live Bitunix query)
+    const keys = await query(
+      `SELECT ak.id, ak.enabled, ak.paused_by_admin, ak.paused_by_user,
+              ak.loss_cooldown_until, ak.max_positions, ak.platform,
+              ak.api_key_enc, ak.iv, ak.auth_tag,
+              ak.api_secret_enc, ak.secret_iv, ak.secret_auth_tag,
+              u.email, u.id as user_id
+       FROM api_keys ak JOIN users u ON u.id = ak.user_id
+       WHERE u.email ILIKE $1`,
+      [`%${emailSearch}%`]
+    );
+    if (!keys.length) return res.status(404).json({ error: 'No keys found for that email' });
+
+    const result = { keys: [], openExchangePositions: {}, recentLosses4h: [], openDbTrades: [] };
+
+    // 2. DB open trades
+    const userId = keys[0].user_id;
+    result.openDbTrades = await query(
+      `SELECT symbol, direction, status, created_at FROM trades
+       WHERE user_id = $1 AND status = 'OPEN' ORDER BY created_at DESC`,
+      [userId]
+    );
+
+    // 3. Recent losses last 4h per symbol
+    result.recentLosses4h = await query(
+      `SELECT symbol, status, pnl_usdt, closed_at FROM trades
+       WHERE user_id = $1 AND status = 'LOSS'
+         AND closed_at > NOW() - INTERVAL '4 hours'
+       ORDER BY closed_at DESC`,
+      [userId]
+    );
+
+    // 4. Per-key status + live Bitunix positions
+    for (const key of keys) {
+      const keyInfo = {
+        id: key.id,
+        platform: key.platform,
+        enabled: key.enabled,
+        paused_by_admin: key.paused_by_admin,
+        paused_by_user: key.paused_by_user,
+        loss_cooldown_until: key.loss_cooldown_until,
+        max_positions: key.max_positions,
+        blockers: [],
+      };
+
+      if (!key.enabled) keyInfo.blockers.push('disabled');
+      if (key.paused_by_admin) {
+        keyInfo.blockers.push(
+          key.loss_cooldown_until
+            ? `paused_by_admin (cooldown until ${new Date(key.loss_cooldown_until).toISOString()})`
+            : 'paused_by_admin (no cooldown — manual or legacy)'
+        );
+      }
+      if (key.paused_by_user) keyInfo.blockers.push('paused_by_user');
+
+      if (key.platform === 'bitunix') {
+        try {
+          const apiKey    = cryptoUtils.decrypt(key.api_key_enc, key.iv, key.auth_tag);
+          const apiSecret = cryptoUtils.decrypt(key.api_secret_enc, key.secret_iv, key.secret_auth_tag);
+          const client    = new BitunixClient({ apiKey, apiSecret });
+          const account   = await client.getAccountInformation();
+          keyInfo.walletBalance   = account.totalWalletBalance;
+          keyInfo.availableBalance = account.availableBalance;
+          keyInfo.exchangePositions = account.positions.map(p => ({
+            symbol: p.symbol, side: p.side || p.direction, qty: p.qty || p.positionAmt,
+            inDb: result.openDbTrades.some(t => t.symbol === p.symbol),
+            isExchangeOnly: !result.openDbTrades.some(t => t.symbol === p.symbol),
+          }));
+          if (parseFloat(account.totalWalletBalance) < 5) keyInfo.blockers.push('wallet_too_low');
+          if ((account.positions || []).length >= Math.max(5, parseInt(key.max_positions) || 5)) {
+            keyInfo.blockers.push(`at_max_positions (${account.positions.length}/${Math.max(5, parseInt(key.max_positions) || 5)})`);
+          }
+          for (const p of account.positions) {
+            const inDb = result.openDbTrades.some(t => t.symbol === p.symbol);
+            if (!inDb) keyInfo.blockers.push(`EXCHANGE_ONLY_${p.symbol} — blocks new entry on this symbol`);
+          }
+        } catch (bxErr) {
+          keyInfo.bitunixError = bxErr.message;
+        }
+      }
+
+      result.keys.push(keyInfo);
+    }
+
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Unblock a user's key — clear paused_by_admin + loss cooldown ────
+// POST /api/admin/keys/:id/unblock
+router.post('/keys/:id/unblock', async (req, res) => {
+  const keyId = parseInt(req.params.id);
+  if (!keyId) return res.status(400).json({ error: 'Invalid key id' });
+  try {
+    const rows = await query(
+      `UPDATE api_keys
+       SET paused_by_admin = false, loss_cooldown_until = NULL
+       WHERE id = $1
+       RETURNING id, user_id, paused_by_admin, loss_cooldown_until`,
+      [keyId]
+    );
+    if (!rows.length) return res.status(404).json({ error: 'Key not found' });
+    console.log(`[ADMIN] Key #${keyId} manually unblocked by admin`);
+    res.json({ ok: true, key: rows[0], message: 'paused_by_admin cleared, cooldown removed. Bot will trade on next signal.' });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

@@ -1665,7 +1665,7 @@
       if (el) el.classList.toggle('hidden', p !== tab);
     });
     // Refresh admin data when switching tabs
-    if (tab === 'earnings')   { loadAdmin(); loadDirectionOverride(); }
+    if (tab === 'earnings')   { loadAdmin(); loadDirectionOverride(); loadSingleUserMode(); }
     if (tab === 'email')      checkEmailSmtp().catch(() => {});
     if (tab === 'tokens')     { loadTokenCardPrices(); loadTokenStats(); loadTokenDirections(); }
     if (tab === 'strategies') { loadStrategyConfig(); initStratSubTabs(); }
@@ -4417,14 +4417,20 @@
 
       const keysHtml = u.keys.map(k => {
         const isPaused = k.paused || !k.enabled;
+        const hasCooldown = isPaused && k.loss_cooldown_until && new Date(k.loss_cooldown_until) > new Date();
+        const cooldownStr = hasCooldown
+          ? `until ${new Date(k.loss_cooldown_until).toISOString().slice(11,16)} UTC`
+          : '';
         const kNet = parseFloat(k.net_pnl) || 0;
         const kNetColor = kNet >= 0 ? 'var(--color-success)' : 'var(--color-danger)';
-        return `<div style="background:var(--color-bg);border:1px solid var(--color-border-muted);border-radius:var(--radius-md);padding:var(--space-3);margin-top:8px;">
+        return `<div style="background:var(--color-bg);border:1px solid ${isPaused ? 'rgba(239,68,68,0.35)' : 'var(--color-border-muted)'};border-radius:var(--radius-md);padding:var(--space-3);margin-top:8px;">
           <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
             <div>
               <strong style="font-size:0.8rem;">${escapeHtml(k.label)}</strong>
               <span style="font-size:0.7rem;color:var(--color-text-muted);margin-left:4px;">${k.platform?.toUpperCase()}</span>
-              ${isPaused ? '<span style="color:var(--color-danger);font-size:0.7rem;margin-left:4px;">⏸ PAUSED</span>' : ''}
+              ${hasCooldown
+                ? `<span style="color:var(--color-danger);font-size:0.7rem;margin-left:4px;">⏸ LOSS COOLDOWN ${cooldownStr}</span>`
+                : isPaused ? '<span style="color:var(--color-danger);font-size:0.7rem;margin-left:4px;">⏸ PAUSED</span>' : ''}
             </div>
             <div style="display:flex;align-items:center;gap:6px;">
               <span class="text-mono" style="font-size:0.85rem;color:${kNetColor};">${kNet >= 0 ? '+' : ''}$${kNet.toFixed(2)}</span>
@@ -5552,6 +5558,48 @@
     await setDirectionOverride(next);
   }
 
+  // ── Single-User Mode toggle ─────────────────────────────────────────────────
+  let _singleUserMode = false;
+
+  async function loadSingleUserMode() {
+    try {
+      const data = await api('GET', '/api/admin/single-user-mode');
+      _singleUserMode = data.enabled === true;
+      updateSingleUserModeUI();
+    } catch (_) {}
+  }
+
+  function updateSingleUserModeUI() {
+    const btn = document.getElementById('btn-single-user-mode');
+    if (!btn) return;
+    if (_singleUserMode) {
+      btn.textContent = '🔬 Single-User: ON (admin only)';
+      btn.style.background = 'rgba(239,68,68,0.20)';
+      btn.style.borderColor = '#ef4444';
+      btn.style.color = '#ef4444';
+    } else {
+      btn.textContent = '👥 Single-User: OFF (all users)';
+      btn.style.background = 'rgba(16,185,129,0.10)';
+      btn.style.borderColor = '#10b981';
+      btn.style.color = '#10b981';
+    }
+  }
+
+  async function toggleSingleUserMode() {
+    try {
+      const newState = !_singleUserMode;
+      await api('POST', '/api/admin/single-user-mode', { enabled: newState });
+      _singleUserMode = newState;
+      updateSingleUserModeUI();
+      showToast(newState
+        ? '🔬 Single-user mode ON — only admin trades (debug mode)'
+        : '👥 Single-user mode OFF — all users follow admin',
+        newState ? 'error' : 'success');
+    } catch (err) {
+      showToast('Failed: ' + err.message, 'error');
+    }
+  }
+
   window.CryptoBot = {
     toggleSettings, saveSettings, deleteKey, showToast, syncSlider, syncNum, saveProfile, changePassword,
     togglePause,
@@ -5569,6 +5617,7 @@
     loadKronosPredictions,
     loadOpenPositions, emergencyCloseToken, emergencyCloseAll, reverseOpenPosition,
     loadDirectionOverride, setDirectionOverride, reverseDirection,
+    loadSingleUserMode, toggleSingleUserMode,
     setTokenDirection, updateTokenDirStatus, loadTokenDirections, reverseTokenDirection,
     activateVersionForTrading, deactivateVersion, syncCurrentVersion,
     fixBitunixPnl, debugBitunix, runBacktest, loadAiVersions, adminResyncFees, adminFixTrades, adminClearTestData,

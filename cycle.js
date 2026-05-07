@@ -1345,10 +1345,14 @@ async function main() {
       runCycle._keyDiagDone = true;
       try {
         const allDbKeys = await dbQuery(
-          `SELECT ak.id, ak.user_id, ak.enabled, ak.paused_by_admin, ak.paused_by_user, ak.platform, u.email
+          `SELECT ak.id, ak.user_id, ak.enabled, ak.paused_by_admin, ak.paused_by_user,
+                  ak.loss_cooldown_until, ak.platform, u.email
            FROM api_keys ak LEFT JOIN users u ON u.id = ak.user_id ORDER BY ak.id`
         );
-        bLog.system(`[KEY-DIAG] ALL ${allDbKeys.length} api_keys: ${allDbKeys.map(k => `#${k.id} ${k.email || 'NO-USER(uid='+k.user_id+')'} platform=${k.platform||'NULL'} en=${k.enabled} ap=${k.paused_by_admin} up=${k.paused_by_user}`).join(' | ')}`);
+        bLog.system(`[KEY-DIAG] ALL ${allDbKeys.length} api_keys: ${allDbKeys.map(k => {
+          const cd = k.loss_cooldown_until ? ` cd=${new Date(k.loss_cooldown_until).toISOString().slice(0,16)}` : '';
+          return `#${k.id} ${k.email || 'NO-USER(uid='+k.user_id+')'} platform=${k.platform||'NULL'} en=${k.enabled} ap=${k.paused_by_admin} up=${k.paused_by_user}${cd}`;
+        }).join(' | ')}`);
       } catch (_) {}
       // Log active AI version — if enableLong/enableShort=false, trades are silently blocked
       try {
@@ -1446,6 +1450,24 @@ async function main() {
       // Check global token ban
       if (await isTokenBanned(pick.symbol || pick.sym)) {
         bLog.trade(`${pick.symbol} is globally banned — skipping`);
+        continue;
+      }
+
+      // ── HARD-BLOCK losers identified from 30d live WR report ──
+      // 1. VWAPTrend setups: 0% WR, -$0.56
+      // 2. BreakRetest+OP+VolSpike: 0% WR, -$0.51
+      // 3. SOLUSDT LONG: 67% WR but -$4.91 net (worst $ loss of all combos)
+      const setupName = pick.setupName || pick.setup || '';
+      if (setupName.includes('VWAPTrend')) {
+        bLog.trade(`BLOCKED: ${pick.symbol} ${pick.direction} setup=${setupName} — historical 0% WR loser`);
+        continue;
+      }
+      if (setupName.includes('BreakRetest')) {
+        bLog.trade(`BLOCKED: ${pick.symbol} ${pick.direction} setup=${setupName} — historical 0% WR loser`);
+        continue;
+      }
+      if (pick.symbol === 'SOLUSDT' && pick.direction === 'LONG') {
+        bLog.trade(`BLOCKED: SOLUSDT LONG — historical -$4.91 net (worst combo by $ over 30d)`);
         continue;
       }
 
@@ -1625,10 +1647,14 @@ async function executeForAllUsers(pick) {
     if (executeForAllUsers._diagCount === 1 || executeForAllUsers._diagCount % 10 === 0) {
       try {
         const allDbKeys = await db.query(
-          `SELECT ak.id, ak.user_id, ak.enabled, ak.paused_by_admin, ak.paused_by_user, ak.platform, u.email
+          `SELECT ak.id, ak.user_id, ak.enabled, ak.paused_by_admin, ak.paused_by_user,
+                  ak.loss_cooldown_until, ak.platform, u.email
            FROM api_keys ak LEFT JOIN users u ON u.id = ak.user_id ORDER BY ak.id`
         );
-        bLog.trade(`[DIAG] ALL api_keys (${allDbKeys.length}): ${allDbKeys.map(k => `#${k.id} ${k.email || 'NO-USER(uid='+k.user_id+')'} platform=${k.platform||'NULL'} en=${k.enabled} ap=${k.paused_by_admin} up=${k.paused_by_user}`).join(' | ')}`);
+        bLog.trade(`[DIAG] ALL api_keys (${allDbKeys.length}): ${allDbKeys.map(k => {
+          const cooldown = k.loss_cooldown_until ? ` cooldown_until=${new Date(k.loss_cooldown_until).toISOString().slice(0,16)}` : '';
+          return `#${k.id} ${k.email || 'NO-USER(uid='+k.user_id+')'} platform=${k.platform||'NULL'} en=${k.enabled} ap=${k.paused_by_admin} up=${k.paused_by_user}${cooldown}`;
+        }).join(' | ')}`);
       } catch (diagErr) {
         bLog.error(`[DIAG] Failed: ${diagErr.message}`);
       }
@@ -1654,11 +1680,15 @@ async function executeForAllUsers(pick) {
     }
 
     const allKeys = await db.query(
-      `SELECT ak.*, u.email
+      // NOTE: paused_by_admin filter removed intentionally.
+      // When admin fires a trade, ALL users follow — even those paused by loss cooldown.
+      // The paused_by_admin check is now enforced inside the loop, but bypassed when
+      // adminOverride is active (i.e., an admin key is present in the list).
+      // paused_by_user is still respected — user manually paused themselves.
+      `SELECT ak.*, u.email, u.is_admin
        FROM api_keys ak
        JOIN users u ON u.id = ak.user_id
        WHERE ak.enabled = true
-         AND (ak.paused_by_admin = false OR ak.paused_by_admin IS NULL)
          AND (ak.paused_by_user = false OR ak.paused_by_user IS NULL)`
     );
 
@@ -1713,7 +1743,7 @@ async function executeForAllUsers(pick) {
       }
     } catch (_) {}
 
-    const keys = allKeys;
+    let keys = allKeys;
     const sym = pick.symbol || pick.sym;
 
     // ── HARD WHITELIST: Only 5 coins ever reach the exchange ──────────────────
@@ -1721,6 +1751,30 @@ async function executeForAllUsers(pick) {
     if (!TRADE_WHITELIST.has(sym)) {
       bLog.trade(`BLOCKED: ${sym} is not in the 5-coin whitelist — trade cancelled`);
       return;
+    }
+
+    // ── SINGLE-USER MODE: restrict trading to admin only (debug/test mode) ────
+    // Enabled via settings key 'bot.single_user_mode' = 'true'.
+    // When on, non-admin keys are filtered out so only admin trades.
+    // Toggle from admin panel — survives restarts.
+    try {
+      const suRows = await db.query(`SELECT value FROM settings WHERE key = 'bot.single_user_mode'`);
+      if (suRows.length > 0 && suRows[0].value === 'true') {
+        const before = keys.length;
+        keys = keys.filter(k => k.is_admin === true);
+        bLog.trade(`[SINGLE-USER-MODE] Active — trading restricted to admin only (${keys.length}/${before} keys)`);
+      }
+    } catch (_) {}
+
+    // ── ADMIN OVERRIDE: if admin's key is active, ALL users follow ────────────
+    // When admin fires a trade: paused_by_admin and per-symbol loss cooldown are
+    // bypassed for every user. paused_by_user is still respected (user's own choice).
+    // Admin's own key is always exempt from pause/cooldown regardless.
+    const adminOverride = keys.some(k => k.is_admin === true);
+    if (adminOverride) {
+      const pausedCount = keys.filter(k => !k.is_admin && k.paused_by_admin).length;
+      bLog.trade(`[ADMIN-OVERRIDE] Admin key active — all users follow ${sym} ${pick.direction}` +
+        (pausedCount > 0 ? ` (bypassing loss-cooldown pause for ${pausedCount} user(s))` : ''));
     }
 
     const userEmails = [...new Set(keys.map(k => k.email))].join(', ');
@@ -1755,6 +1809,20 @@ async function executeForAllUsers(pick) {
         // NOTE: per-user banned_coins and watchlist filters removed.
         // All users trade all 5 active symbols (BTC/ETH/BNB/ADA/SOL).
 
+        const isAdminKey = !!key.is_admin;
+
+        // ── paused_by_admin gate ──────────────────────────────────────────────
+        // Admin keys: always exempt — never blocked by loss cooldown.
+        // Non-admin keys: normally skip if paused. BUT if adminOverride is active
+        // (admin has an active key in this cycle), everyone follows regardless.
+        if (!isAdminKey && key.paused_by_admin) {
+          if (!adminOverride) {
+            userLog.trade(`User ${key.email}: paused by admin (loss cooldown) — skipping`);
+            return;
+          }
+          userLog.trade(`User ${key.email}: paused by admin BUT admin override active — following admin trade`);
+        }
+
         // Check global token ban
         if (await isTokenBanned(symbol)) {
           userLog.trade(`User ${key.email}: ${symbol} is globally banned — skipped`);
@@ -1782,20 +1850,23 @@ async function executeForAllUsers(pick) {
         }
 
         // Per-symbol loss cooldown: if this user lost on this symbol in the last 4 hours, skip.
-        // Prevents re-entering a losing token immediately — wait for structure to reset.
-        const recentLoss = await db.query(
-          `SELECT id, closed_at FROM trades
-           WHERE user_id = $1 AND symbol = $2 AND status = 'LOSS'
-             AND closed_at > NOW() - INTERVAL '4 hours'
-           ORDER BY closed_at DESC LIMIT 1`,
-          [key.user_id, symbol]
-        );
-        if (recentLoss.length > 0) {
-          _openTradeInProgress.delete(openLockKey);
-          const resumeAt = new Date(new Date(recentLoss[0].closed_at).getTime() + 4 * 3600 * 1000);
-          const resumeStr = resumeAt.toISOString().replace('T', ' ').slice(0, 16) + ' UTC';
-          userLog.trade(`User ${key.email}: ${symbol} on 4h loss cooldown — resumes ${resumeStr}`);
-          return;
+        // Bypassed when adminOverride is active — admin fires, everyone follows.
+        // Admin keys themselves are also always exempt.
+        if (!isAdminKey && !adminOverride) {
+          const recentLoss = await db.query(
+            `SELECT id, closed_at FROM trades
+             WHERE user_id = $1 AND symbol = $2 AND status = 'LOSS'
+               AND closed_at > NOW() - INTERVAL '4 hours'
+             ORDER BY closed_at DESC LIMIT 1`,
+            [key.user_id, symbol]
+          );
+          if (recentLoss.length > 0) {
+            _openTradeInProgress.delete(openLockKey);
+            const resumeAt = new Date(new Date(recentLoss[0].closed_at).getTime() + 4 * 3600 * 1000);
+            const resumeStr = resumeAt.toISOString().replace('T', ' ').slice(0, 16) + ' UTC';
+            userLog.trade(`User ${key.email}: ${symbol} on 4h loss cooldown — resumes ${resumeStr}`);
+            return;
+          }
         }
 
         const apiKey = cryptoUtils.decrypt(key.api_key_enc, key.iv, key.auth_tag);
@@ -2002,7 +2073,18 @@ async function executeForAllUsers(pick) {
 
           const existingPosBx = bxPositions.find(p => p.symbol === symbol);
           if (existingPosBx) {
-            userLog.trade(`User ${key.email}: already in ${symbol} position — skipping duplicate`);
+            // Check if it's EXCHANGE ONLY (position on exchange but no matching DB open trade)
+            const dbMatchPromise = db.query(
+              `SELECT id FROM trades WHERE user_id = $1 AND symbol = $2 AND status = 'OPEN' LIMIT 1`,
+              [key.user_id, symbol]
+            ).catch(() => []);
+            const dbMatch = await dbMatchPromise;
+            const isExchangeOnly = dbMatch.length === 0;
+            if (isExchangeOnly) {
+              userLog.trade(`User ${key.email}: EXCHANGE ONLY ${symbol} position (on exchange, no DB record) — cannot open new trade. Use Emergency Close to clear it first.`);
+            } else {
+              userLog.trade(`User ${key.email}: already in ${symbol} position — skipping duplicate`);
+            }
             return;
           }
 
@@ -2581,8 +2663,23 @@ async function syncTradeStatus() {
                 const validSide = isLong ? tierSl < curPrice : tierSl > curPrice;
                 const wouldImprove = isLong ? tierSl > currentSl : tierSl < currentSl;
                 if (validSide && wouldImprove) {
-                  newSlPrice    = tierSl;
-                  slSource      = `tier+${Math.round(tierResult.newLastStep * 100)}%`;
+                  // Enforce Bitunix MIN_TRAIL_DIST (0.5% from current price).
+                  // Short positions with high capital gain have tier SL very
+                  // close to current price (e.g. SHORT 75x +31%: only 0.1%
+                  // away). Bitunix rejects SL updates that are too close.
+                  // Clamp outward to exactly MIN_TRAIL_DIST so the update lands.
+                  const minDistSl = isLong
+                    ? curPrice * (1 - MIN_TRAIL_DIST)  // LONG: SL must be ≤ this
+                    : curPrice * (1 + MIN_TRAIL_DIST);  // SHORT: SL must be ≥ this
+                  const tooClose = isLong
+                    ? tierSl > minDistSl   // LONG: tier SL above the floor → too close
+                    : tierSl < minDistSl;  // SHORT: tier SL below the ceiling → too close
+                  const clampedTierSl = tooClose ? minDistSl : tierSl;
+                  if (tooClose) {
+                    bLog.trade(`Bitunix trail: ${trade.symbol} tier SL ${tierSl.toFixed(bxSlPrec)} too close to current ${curPrice.toFixed(bxSlPrec)} (<${MIN_TRAIL_DIST * 100}%), clamped to ${clampedTierSl.toFixed(bxSlPrec)}`);
+                  }
+                  newSlPrice    = clampedTierSl;
+                  slSource      = `tier+${Math.round(tierResult.newLastStep * 100)}%${tooClose ? '+minDist' : ''}`;
                   tierLastStep  = tierResult.newLastStep;
                 }
               }
