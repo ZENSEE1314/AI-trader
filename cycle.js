@@ -1549,19 +1549,23 @@ async function executeForAllUsers(pick) {
         bLog.error(`[CONSEC-LOSS] Column migration failed: ${e.message}`);
       }
       try {
-        // On every restart: clear ALL paused_by_admin flags (including cooldown pauses).
-        // The in-memory _consecLosses streak resets on restart, so the DB pause must too.
-        // A clean restart = clean slate; if 2 more losses happen, it pauses again.
+        // On every restart: clear ALL paused_by_admin flags.
+        // The in-memory _consecLosses streak resets on restart, so DB pause must too.
+        // Use two separate statements so paused_by_admin is cleared even if the
+        // loss_cooldown_until column doesn't exist yet (avoids "column not found" on SET).
         const unpaused = await db.query(
           `UPDATE api_keys
-           SET paused_by_admin = false, loss_cooldown_until = NULL
-           WHERE paused_by_admin = true
-             AND paused_by_user = false
+           SET paused_by_admin = false
+           WHERE paused_by_admin = true AND paused_by_user = false
            RETURNING id, user_id`
         );
         if (unpaused.length > 0) {
           bLog.trade(`[UNBLOCK] Restart cleared admin-pause on ${unpaused.length} key(s): ${unpaused.map(k => `#${k.id}`).join(', ')}`);
         }
+        // Reset cooldown column separately (safe — column was just created above)
+        try {
+          await db.query(`UPDATE api_keys SET loss_cooldown_until = NULL WHERE loss_cooldown_until IS NOT NULL`);
+        } catch (_) {}
         // Keep admin accounts' last_paid_at current so they're always clear
         await db.query(`UPDATE users SET last_paid_at = NOW() WHERE is_admin = true`);
         bLog.trade('[UNBLOCK] Admin accounts: last_paid_at refreshed — no subscription required');
@@ -1628,6 +1632,21 @@ async function executeForAllUsers(pick) {
           if (allDisabled) {
             await db.query(`UPDATE api_keys SET enabled = true`);
             bLog.trade(`AUTO-FIX: Re-enabled all ${debugKeys.length} API keys (all were disabled without pause flags)`);
+          }
+          // Auto-fix: if ALL keys are paused_by_admin with no valid cooldown, clear the pause.
+          // This handles the case where consecutive-loss logic paused on startup and restart
+          // didn't fully clear it (e.g. loss_cooldown_until column didn't exist yet).
+          const allAdminPaused = debugKeys.every(k => k.paused_by_admin === true && !k.paused_by_user);
+          if (allAdminPaused) {
+            try {
+              await db.query(
+                `UPDATE api_keys SET paused_by_admin = false
+                 WHERE paused_by_admin = true AND paused_by_user = false`
+              );
+              bLog.trade(`AUTO-FIX: Cleared paused_by_admin on all ${debugKeys.length} keys — no valid cooldown active`);
+            } catch (fixErr) {
+              bLog.error(`AUTO-FIX pause clear failed: ${fixErr.message}`);
+            }
           }
         } else {
           bLog.trade('No API keys in database at all');
@@ -2860,21 +2879,27 @@ async function syncTradeStatus() {
             bLog.trade(`DB synced: ${trade.symbol} -> ${status} gross=$${grossPnl} fee=$${tradingFee} funding=$${fundingFee} net=$${pnlUsdt} exit=$${fmtPrice(exitPrice)}`);
 
             // ── Consecutive-loss pause: 2 losses in a row → 4-hour cooldown ──
+            // Guard: two losses in the SAME sync cycle (e.g. two old trades closing
+            // together on restart) must not stack. We track the timestamp of the
+            // last loss and only increment streak if the previous loss was > 60s ago.
             try {
               const keyId = trade.api_key_id;
               if (status === 'WIN') {
-                _consecLosses.set(keyId, 0);
+                _consecLosses.set(keyId, { count: 0, lastLossAt: 0 });
               } else {
-                const streak = (_consecLosses.get(keyId) || 0) + 1;
-                _consecLosses.set(keyId, streak);
-                bLog.trade(`[CONSEC-LOSS] Key #${keyId} streak=${streak} after LOSS on ${trade.symbol}`);
+                const prev = _consecLosses.get(keyId) || { count: 0, lastLossAt: 0 };
+                const now = Date.now();
+                const sameSync = (now - prev.lastLossAt) < 60_000; // within 60s = same cycle
+                const streak = sameSync ? prev.count : prev.count + 1;
+                _consecLosses.set(keyId, { count: streak, lastLossAt: now });
+                bLog.trade(`[CONSEC-LOSS] Key #${keyId} streak=${streak}${sameSync ? ' (same-cycle, not stacked)' : ''} after LOSS on ${trade.symbol}`);
                 if (streak >= 2) {
-                  const cooldownUntil = new Date(Date.now() + 4 * 3600 * 1000);
+                  const cooldownUntil = new Date(now + 4 * 3600 * 1000);
                   await db.query(
                     `UPDATE api_keys SET paused_by_admin = true, loss_cooldown_until = $2 WHERE id = $1`,
                     [keyId, cooldownUntil]
                   );
-                  _consecLosses.set(keyId, 0); // reset after triggering pause
+                  _consecLosses.set(keyId, { count: 0, lastLossAt: 0 });
                   const untilStr = cooldownUntil.toISOString().replace('T', ' ').slice(0, 16) + ' UTC';
                   bLog.trade(`[CONSEC-LOSS] Key #${keyId} PAUSED 4h — 2 consecutive losses. Resumes: ${untilStr}`);
                   await notify(
