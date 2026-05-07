@@ -1870,11 +1870,16 @@ async function analyzeV3(ticker, opts = {}) {
 
 // ── Main scan ─────────────────────────────────────────────────
 
-// Per-symbol cooldown: key = symbol, value = timestamp of last signal.
-// User rule: "same token don't fire again in 4 hours" — applies to
-// EITHER side. If BTC LONG just fired, no BTC SHORT for 4h either.
-const _lastSignalAt = new Map();
-const SIGNAL_COOLDOWN_MS = 4 * 60 * 60 * 1000; // 4 hours
+// Per-symbol loss cooldown: key = symbol, value = timestamp of last LOSS.
+// User rule: "lose 1 time will not fire 2nd time will lock 4 hour" —
+// only LOSING trades trigger the cooldown; winners can re-fire freely.
+// recordLoss() is called from cycle.js when a position closes negative.
+const _lastLossAt = new Map();
+const LOSS_COOLDOWN_MS = 4 * 60 * 60 * 1000; // 4 hours
+
+function recordLoss(symbol, ts = Date.now()) {
+  _lastLossAt.set(symbol, ts);
+}
 
 async function scanV3(log = console.log) {
   const tickers = await fetchTickers();
@@ -1897,13 +1902,11 @@ async function scanV3(log = console.log) {
   for (const ticker of top30) {
     const sig = await analyzeV3(ticker);
     if (sig) {
-      const cooldownKey = sig.symbol;
-      const lastAt = _lastSignalAt.get(cooldownKey) || 0;
-      if (now - lastAt < SIGNAL_COOLDOWN_MS) {
-        const minsLeft = Math.round((SIGNAL_COOLDOWN_MS - (now - lastAt)) / 60000);
-        log(`  ⏸ ${sig.symbol} ${sig.side} — 4h cooldown (${minsLeft}m left)`);
+      const lastLossAt = _lastLossAt.get(sig.symbol) || 0;
+      if (now - lastLossAt < LOSS_COOLDOWN_MS) {
+        const minsLeft = Math.round((LOSS_COOLDOWN_MS - (now - lastLossAt)) / 60000);
+        log(`  ⏸ ${sig.symbol} ${sig.side} — 4h loss cooldown (${minsLeft}m left)`);
       } else {
-        _lastSignalAt.set(cooldownKey, now);
         results.push(sig);
         log(`  ✓ ${sig.symbol} ${sig.side} score=${sig.score} — ${sig.setupName}`);
       }
@@ -1921,6 +1924,7 @@ module.exports = {
   SYMBOL_LEVERAGE,
   scanV3,
   analyzeV3,
+  recordLoss,
   calcTrailingSLV3,
   extractKeyLevels,
   calcVWAP,

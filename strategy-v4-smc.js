@@ -455,10 +455,31 @@ async function analyze(symbol, log) {
 // ── Exports ────────────────────────────────────────────────────
 
 // Multi-symbol scan (called by runCycle / coordinator)
+// Per-symbol loss cooldown — user rule: "lose 1 time will not fire 2nd
+// time will lock 4 hour". Only LOSING trades trigger cooldown. cycle.js
+// calls recordLoss(symbol) when a position closes negative.
+const _lastLossAt = new Map();
+const LOSS_COOLDOWN_MS = 4 * 60 * 60 * 1000; // 4 hours
+
+function recordLoss(symbol, ts = Date.now()) {
+  _lastLossAt.set(symbol, ts);
+}
+
+function isInLossCooldown(symbol, now = Date.now()) {
+  const lastAt = _lastLossAt.get(symbol) || 0;
+  return now - lastAt < LOSS_COOLDOWN_MS;
+}
+
 async function scanV4SMC(log = console.log) {
   const results = [];
+  const now = Date.now();
   for (const sym of ACTIVE_SYMBOLS) {
     try {
+      if (isInLossCooldown(sym, now)) {
+        const minsLeft = Math.round((LOSS_COOLDOWN_MS - (now - _lastLossAt.get(sym))) / 60000);
+        log(`[V4] ${sym} — 4h loss cooldown (${minsLeft}m left)`);
+        continue;
+      }
       const sig = await analyze(sym, log);
       if (sig) results.push(sig);
       await new Promise(r => setTimeout(r, 200));
@@ -473,7 +494,8 @@ async function scanV4SMC(log = console.log) {
 // Single-symbol entry point (called by token-agent.js)
 async function analyzeV4SMC(symbol) {
   const { log: bLog } = require('./bot-logger');
+  if (isInLossCooldown(symbol)) return null;
   return analyze(symbol, msg => bLog.scan(msg));
 }
 
-module.exports = { scanV4SMC, analyzeV4SMC, ACTIVE_SYMBOLS, SYMBOL_LEVERAGE };
+module.exports = { scanV4SMC, analyzeV4SMC, recordLoss, ACTIVE_SYMBOLS, SYMBOL_LEVERAGE };
