@@ -1752,23 +1752,8 @@ async function executeForAllUsers(pick) {
           return;
         }
 
-        const bannedCoins = (key.banned_coins || '').split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
-        if (bannedCoins.includes(symbol)) {
-          userLog.trade(`User ${key.email}: ${symbol} is banned — skipped`);
-          return;
-        }
-
-        // Check user's watchlist — if they have one, only trade their picks
-        try {
-          const watchlist = await db.query(
-            'SELECT symbol FROM user_watchlist WHERE user_id = $1 AND enabled = true',
-            [key.user_id]
-          );
-          if (watchlist.length > 0 && !watchlist.some(w => w.symbol === symbol)) {
-            userLog.trade(`User ${key.email}: ${symbol} not in watchlist — skipped`);
-            return;
-          }
-        } catch (_) {}
+        // NOTE: per-user banned_coins and watchlist filters removed.
+        // All users trade all 5 active symbols (BTC/ETH/BNB/ADA/SOL).
 
         // Check global token ban
         if (await isTokenBanned(symbol)) {
