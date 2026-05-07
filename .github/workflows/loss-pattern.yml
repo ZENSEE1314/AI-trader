@@ -1,0 +1,63 @@
+name: Loss pattern analysis
+
+on:
+  workflow_dispatch:
+    inputs:
+      days:
+        description: 'Lookback days'
+        required: false
+        default: '14'
+      min_losses:
+        description: 'Min losses per bucket to include'
+        required: false
+        default: '3'
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      contents: read
+
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      RAILWAY_PROJECT_ID: ${{ vars.RAILWAY_PROJECT_ID }}
+      RAILWAY_SERVICE_ID: ${{ vars.RAILWAY_SERVICE_ID }}
+      TRACKING_ISSUE: ${{ vars.LOSS_BACKTEST_ISSUE || '70' }}
+      DAYS: ${{ github.event.inputs.days }}
+      MIN_LOSSES: ${{ github.event.inputs.min_losses }}
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+      - run: npm install pg --no-save
+      - run: npm i -g @railway/cli@latest
+
+      - name: Analyze
+        id: run
+        run: |
+          set +e
+          export DAYS MIN_LOSSES
+          railway run --service "$RAILWAY_SERVICE_ID" \
+            -- node loss-pattern-analysis.js > /tmp/out.txt 2> /tmp/err.txt
+          rc=$?
+          {
+            echo "## Loss pattern analysis — $(date -u +'%Y-%m-%d %H:%M UTC') (last ${DAYS}d)"
+            echo ""
+            if [ $rc -ne 0 ]; then
+              echo '### Failed'
+              echo '```'; tail -n 60 /tmp/err.txt; echo '```'
+            fi
+            echo "### Output"
+            echo '```'
+            tail -n 400 /tmp/out.txt
+            echo '```'
+          } > /tmp/comment.md
+          { echo "BODY<<EOF"; cat /tmp/comment.md; echo "EOF"; } >> "$GITHUB_OUTPUT"
+
+      - name: Post to issue
+        uses: peter-evans/create-or-update-comment@v5
+        with:
+          issue-number: ${{ env.TRACKING_ISSUE }}
+          body: ${{ steps.run.outputs.BODY }}
