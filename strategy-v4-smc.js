@@ -229,40 +229,30 @@ function resolveSignal(state, zone, price) {
   const hl1m = state.sl1m_1 !== null && state.sl1m_2 !== null && state.sl1m_1 > state.sl1m_2;
   const ll1m = state.sl1m_1 !== null && state.sl1m_2 !== null && state.sl1m_1 < state.sl1m_2;
 
-  // ── SHORT: ABOVE_UPPER + 15m HH + (1m HH or 1m LH) ─────────
-  // Price above VWAP upper 2σ band — exhaustion at extremes.
-  // 15m HH = higher high printed at resistance.
-  // 1m HH or LH = local swing high confirms the fade entry.
-  if (zone === 'ABOVE_UPPER' && hh15 && (hh1m || lh1m)) {
-    return { direction: 'SHORT', type: 'HH+SHORT' };
+  // ── HARD direction guard — user rule: "LH is only short, only HL is long".
+  // LONG  requires CLEAN bull on BOTH TFs: (HH or HL) AND no LH AND no LL
+  // SHORT requires CLEAN bear on BOTH TFs: (LL or LH) AND no HH AND no HL
+  const cleanBull15 = (hh15 || hl15) && !lh15 && !ll15;
+  const cleanBear15 = (ll15 || lh15) && !hh15 && !hl15;
+  const cleanBull1m = (hh1m || hl1m) && !lh1m && !ll1m;
+  const cleanBear1m = (ll1m || lh1m) && !hh1m && !hl1m;
+
+  // ── SHORT — above VWAP mid AND clean-bear on BOTH TFs ───────
+  // Was: HH on 15m + (HH or LH) on 1m (mean-reversion). Now strict:
+  // never SHORT if 1m or 15m has any HH/HL print.
+  if ((zone === 'ABOVE_UPPER' || zone === 'UPPER_MID') && cleanBear15 && cleanBear1m) {
+    return { direction: 'SHORT', type: 'cleanBear' };
   }
 
-  // ── LONG signals — apply 1m swing-low gap filter ─────────────
-  // Reject if the two most-recent 1m swing lows are > MAX_1M_GAP_PCT apart
-  // (means the HL structure is too loose to be a clean entry).
+  // ── LONG signal filters: gap + chase ────────────────────────
   if (!is1mGapOk(state.sl1m_1, state.sl1m_2)) return null;
-
-  // Chase filter: reject if price has already moved > MAX_CHASE_PCT above
-  // the most-recent confirmed 1m swing low. With SWING_BARS=3, the pivot
-  // confirms 3 min after the actual low — on fast moves (BTC near HH) the
-  // entry would be at resistance, not support.
   if (isChasing(price, state.sl1m_1)) return null;
 
-  // LOWER_MID: price between VWAP lower band and VWAP mid.
-  // 15m HL + 1m HL = bullish structure on both timeframes.
-  // ALSO require 15m highs are NOT making lower highs (lh15=false).
-  // If 15m is LH (lower highs = downtrend), LOWER_MID is mid-range in a
-  // falling market — DO NOT buy. Wait for BELOW_LOWER or a structural shift.
-  if (zone === 'LOWER_MID' && hl15 && !lh15 && hl1m) {
-    return { direction: 'LONG', type: 'HL+HL' };
-  }
-
-  // BELOW_LOWER: price below VWAP lower 2σ band — extreme oversold.
-  // Lh15 filter relaxed here: at extreme levels even a downtrend can reverse.
-  // Still need hl15 or ll15 on 15m lows (some structure) + confirmation on 1m.
-  if (zone === 'BELOW_LOWER' && (hl15 || ll15) && (hl1m || ll1m)) {
-    const type = `${hl15 ? 'HL' : 'LL'}+${hl1m ? 'HL' : 'LL'}`;
-    return { direction: 'LONG', type };
+  // ── LONG — below VWAP mid AND clean-bull on BOTH TFs ────────
+  // BELOW_LOWER mean-reversion (LL+LL → LONG bounce) is GONE:
+  // LONG now requires HH/HL on both — never LL or LH.
+  if ((zone === 'LOWER_MID' || zone === 'BELOW_LOWER') && cleanBull15 && cleanBull1m) {
+    return { direction: 'LONG', type: 'cleanBull' };
   }
 
   return null;
