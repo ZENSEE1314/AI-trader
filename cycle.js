@@ -1447,6 +1447,24 @@ async function main() {
       log(`Signal: ${pick.symbol} ${pick.direction} score=${pick.score} setup=${pick.setupName} AI=${pick.aiModifier ?? 'n/a'}`);
       bLog.trade(`TRYING: ${pick.symbol} ${pick.direction} | setup=${pick.setupName} score=${pick.score} | TP=${pick.tp1 ? `$${fmtPrice(pick.tp1)}` : 'trailing'} SL=$${fmtPrice(pick.sl)} | RR=1:1.5`);
 
+      // ── HARD-BLOCK losers identified from 30d live WR report ──
+      // 1. VWAPTrend setups: 0% WR, -$0.56
+      // 2. BreakRetest+OP+VolSpike: 0% WR, -$0.51
+      // 3. SOLUSDT LONG: 67% WR but -$4.91 net (worst $ loss of all combos)
+      const setupName = pick.setupName || pick.setup || '';
+      if (setupName.includes('VWAPTrend')) {
+        bLog.trade(`BLOCKED: ${pick.symbol} ${pick.direction} setup=${setupName} — historical 0% WR loser`);
+        continue;
+      }
+      if (setupName.includes('BreakRetest')) {
+        bLog.trade(`BLOCKED: ${pick.symbol} ${pick.direction} setup=${setupName} — historical 0% WR loser`);
+        continue;
+      }
+      if (pick.symbol === 'SOLUSDT' && pick.direction === 'LONG') {
+        bLog.trade(`BLOCKED: SOLUSDT LONG — historical -$4.91 net (worst combo by $ over 30d)`);
+        continue;
+      }
+
       // Check global token ban
       if (await isTokenBanned(pick.symbol || pick.sym)) {
         bLog.trade(`${pick.symbol} is globally banned — skipping`);
