@@ -2335,9 +2335,10 @@ async function syncTradeStatus() {
               }
 
               // ── Fallback: tier-based if candle trail didn't fire ──
+              // smcMode disabled: V4 SMC uses the full tier table at every step.
+              // smcMode was for the old 3-timing strategy (no longer active).
               if (!binNewSl) {
-                const smcNow = getSessionMode(Date.now()) === 'smc';
-                const trailResult = calculateTrailingStep(entryPrice, curPrice, isLong, lastStep, tradeLev, userTrailPct, smcNow);
+                const trailResult = calculateTrailingStep(entryPrice, curPrice, isLong, lastStep, tradeLev, userTrailPct, false);
                 if (trailResult) { binNewSl = trailResult.newSlPrice; binSlSource = 'tier'; }
               }
 
@@ -2359,7 +2360,7 @@ async function syncTradeStatus() {
                 }
                 if (slUpdated) {
                   const tierRes = binSlSource === 'tier'
-                    ? calculateTrailingStep(entryPrice, curPrice, isLong, lastStep, tradeLev, 0, smcNow)
+                    ? calculateTrailingStep(entryPrice, curPrice, isLong, lastStep, tradeLev, 0, false)
                     : null;
                   await db.query(
                     `UPDATE trades SET trailing_sl_price = $1, trailing_sl_last_step = $2 WHERE id = $3`,
@@ -2561,8 +2562,8 @@ async function syncTradeStatus() {
               // milestone on high-leverage trades. This path uses capital%
               // so 100x ETH at +21% locks +20% the same as 20x BTC at +21%.
               const lastStepCap  = parseFloat(trade.trailing_sl_last_step) || 0;
-              const smcNow       = getSessionMode(Date.now()) === 'smc';
-              const tierResult   = calculateTrailingStep(entryPrice, curPrice, isLong, lastStepCap, tradeLev, 0, smcNow);
+              // smcMode disabled: V4 SMC fires all tiers every step (smcMode was for 3-timing only).
+              const tierResult   = calculateTrailingStep(entryPrice, curPrice, isLong, lastStepCap, tradeLev, 0, false);
               if (tierResult) {
                 const tierSl = tierResult.newSlPrice;
                 // Reject if SL would be on the wrong side of current price
