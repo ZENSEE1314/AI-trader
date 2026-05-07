@@ -12,7 +12,7 @@ const aiLearner = require('./ai-learner');
 const { scanV4SMC, ACTIVE_SYMBOLS, SYMBOL_LEVERAGE } = require('./strategy-v4-smc');
 // Keep 3-timing import for calcTrail3Timing + getSessionMode (still used elsewhere)
 const { getSessionMode } = require('./strategy-3timing'); // v4: trailing SL uses calculateTrailingStep (cycle.js) instead of calcTrail3Timing
-const { scanChartAgent } = require('./chart-agent');
+
 const { getSentimentScores } = require('./sentiment-scraper');
 const { log: bLog } = require('./bot-logger');
 const { getBinanceRequestOptions, getFetchOptions } = require('./proxy-agent');
@@ -1375,11 +1375,11 @@ async function main() {
       bLog.error(`Kronos batch scan failed (non-blocking): ${kronosBatchErr.message}`);
     }
 
-    // ── Strategy Scans — ACTIVE execution ──
-    // 1) V4 SMC: VWAP 2σ zones + 15m/1m BOS/CHoCH confluence (89.6% WR, 7-day backtest)
-    //    Rules: bull swTrend=+1 → LONG only | bear swTrend=-1 → SHORT only | ranging=0 → nothing
-    // 2) ChartAgent: Claude reads VWAP slope, EQ levels, structure like a human trader
-    // Both feed the same signal pipeline. Dedup by symbol keeps only the highest score.
+    // ── Strategy Scan — V4 SMC via TokenAgent ──
+    // VWAP 2σ zones + 15m/1m swing-pivot confluence.
+    // Rules: ABOVE_UPPER + 15m HH + (1m HH|LH) → SHORT
+    //        LOWER_MID   + 15m HL + 1m HL       → LONG (HL+HL)
+    //        BELOW_LOWER + any HL/LL on both TFs → LONG
     const signals = [];
     try {
       const rawV4 = await scanV4SMC(msg => bLog.scan(msg));
@@ -1389,16 +1389,6 @@ async function main() {
       }
     } catch (tErr) {
       bLog.error(`V4-SMC scan failed: ${tErr.message}`);
-    }
-
-    try {
-      const rawCA = await scanChartAgent(ACTIVE_SYMBOLS, msg => bLog.scan(msg));
-      if ((rawCA || []).length > 0) {
-        signals.push(...rawCA);
-        bLog.scan(`ChartAgent: ${rawCA.length} signal(s) → ${rawCA.map(s => `${s.symbol} ${s.side}`).join(', ')}`);
-      }
-    } catch (caErr) {
-      bLog.error(`ChartAgent scan failed: ${caErr.message}`);
     }
 
     if (!signals.length) {
