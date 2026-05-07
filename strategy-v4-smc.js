@@ -54,9 +54,9 @@ const ACTIVE_SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'ADAUSDT', 'SOLUSDT'];
 const SYMBOL_LEVERAGE = {
   BTCUSDT: 100,
   ETHUSDT: 100,
-  BNBUSDT: 100,
-  ADAUSDT:  75,
-  SOLUSDT:  75,
+  BNBUSDT:  50,
+  ADAUSDT:  50,
+  SOLUSDT:  50,
 };
 
 // ── Per-symbol persistent state ────────────────────────────────
