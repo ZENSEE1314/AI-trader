@@ -81,6 +81,9 @@ function getState(symbol) {
       lastSignalTime:   0,
       lastProcessed1m:  0,
 
+      // Deferred entry: pivot confirmed on bar N → signal fires on bar N+1 open.
+      pendingSignal: null,
+
       ready: false,
     };
   }
@@ -349,6 +352,36 @@ async function analyze(symbol, log) {
     st.candles1m.push(bar);
     if (st.candles1m.length > WARMUP_1M + 50) st.candles1m.shift();
 
+    // ── Step 1: Fire deferred signal on this bar's OPEN ──────────
+    // Pivot confirmed on the previous bar → enter at the open of the
+    // next candle, not mid-close of the confirmation candle itself.
+    if (st.pendingSignal) {
+      const pending = st.pendingSignal;
+      st.pendingSignal = null;
+      const vwapNext = calcVwap(st.candles15m, bar.openTime);
+      if (vwapNext) {
+        const entryPrice = bar.open;
+        const zoneNext   = getZone(entryPrice, vwapNext);
+        // Re-validate zone at next-bar open (SHORT needs ABOVE_UPPER; LONG needs LOWER_MID/BELOW_LOWER)
+        const zoneOk = pending.direction === 'SHORT'
+          ? zoneNext === 'ABOVE_UPPER'
+          : (zoneNext === 'LOWER_MID' || zoneNext === 'BELOW_LOWER');
+        // Re-validate chase at next-bar open (LONG only)
+        const chaseOk = pending.direction === 'SHORT' || !isChasing(entryPrice, st.sl1m_1);
+        if (zoneOk && chaseOk) {
+          signal = { ...pending, price: entryPrice, zone: zoneNext };
+          if (pending.direction === 'SHORT') {
+            log(`[V4] ✓ ${symbol} SHORT next-bar entry=$${entryPrice.toFixed(4)} zone=${zoneNext} type=${pending.type}`);
+          } else {
+            log(`[V4] ✓ ${symbol} LONG  next-bar entry=$${entryPrice.toFixed(4)} zone=${zoneNext} type=${pending.type}`);
+          }
+        } else {
+          log(`[V4] pending ${symbol} ${pending.direction} cancelled on next bar — zoneOk=${zoneOk}(${pending.zone}→${zoneNext}) chaseOk=${chaseOk}`);
+        }
+      }
+    }
+
+    // ── Step 2: Check for a new pivot confirmation on this bar ────
     const pivotTime = update1m(st);
 
     if (pivotTime && pivotTime !== st.lastSignalTime) {
@@ -356,23 +389,21 @@ async function analyze(symbol, log) {
       if (vwap) {
         const zone = getZone(bar.close, vwap);
         // VWAP dist filter: only for LOWER_MID LONG.
-        // BELOW_LOWER: price below band by design — skip dist check.
-        // ABOVE_UPPER SHORT: no dist filter (price above the band).
         const distBlocked = zone === 'LOWER_MID' && !isGoodVwapDistance(bar.close, vwap);
         if (distBlocked) {
-          log(`[V4] skip ${symbol} — price too close to lower band (< 0.5σ) dist=${((bar.close - vwap.lower) / vwap.stddev).toFixed(2)}σ`);
+          log(`[V4] skip ${symbol} — price too close to lower band dist=${((bar.close - vwap.lower) / vwap.stddev).toFixed(2)}σ`);
         } else {
           const sig = resolveSignal(st, zone, bar.close);
           if (sig) {
             st.lastSignalTime = pivotTime;
-            signal = { ...sig, price: bar.close, zone };
+            // Defer entry to the NEXT bar's open — don't enter on the confirmation candle
+            st.pendingSignal = { ...sig, zone };
             if (sig.direction === 'SHORT') {
-              log(`[V4] ✓ ${symbol} SHORT zone=${zone} type=${sig.type} sh15=${st.sh15_1?.toFixed(4)}/${st.sh15_2?.toFixed(4)} sh1m=${st.sh1m_1?.toFixed(4)}/${st.sh1m_2?.toFixed(4)}`);
+              log(`[V4] pivot → pending SHORT ${symbol} zone=${zone} type=${sig.type} — will enter next candle open`);
             } else {
-              log(`[V4] ✓ ${symbol} LONG  zone=${zone} type=${sig.type} sl15=${st.sl15_1?.toFixed(4)}/${st.sl15_2?.toFixed(4)} sl1m=${st.sl1m_1?.toFixed(4)}/${st.sl1m_2?.toFixed(4)}`);
+              log(`[V4] pivot → pending LONG  ${symbol} zone=${zone} type=${sig.type} sl1m=${st.sl1m_1?.toFixed(4)} — will enter next candle open`);
             }
           } else {
-            // Log why the signal was rejected (zone mismatch, gap, chase, etc.)
             const gapOk   = is1mGapOk(st.sl1m_1, st.sl1m_2);
             const chasing = isChasing(bar.close, st.sl1m_1);
             const chasePct = st.sl1m_1 ? ((bar.close - st.sl1m_1) / st.sl1m_1 * 100).toFixed(3) : 'n/a';
