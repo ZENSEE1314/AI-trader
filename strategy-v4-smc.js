@@ -199,16 +199,25 @@ function is1mGapOk(sl1m_1, sl1m_2) {
   return gap <= MAX_1M_GAP_PCT;
 }
 
-// Chase filter: reject LONG if price has already moved > MAX_CHASE_PCT
-// above the confirmed 1m HL pivot.
-// With SWING_BARS=3, the pivot confirms 3 min after the actual swing low.
-// On BTC at 100x, price can rally 0.3% in 3 min — that's 30% capital gain
-// already done before entry. Beyond 0.3% we're entering near resistance.
-const MAX_CHASE_PCT = 0.30; // 0.30% price move above the HL low = skip
+// Chase filter — user rule: "if miss it miss". Entry must be within
+// MAX_CHASE_PCT of the actual pivot, otherwise we're firing in the
+// middle of the move (between LL and LH) instead of at the structural
+// turn. Was 0.30% (too loose — fired mid-range), now 0.10%.
+const MAX_CHASE_PCT = 0.10; // 0.10% from pivot = skip
 
+// LONG chase: distance ABOVE the most-recent 1m swing LOW (HL pivot).
 function isChasing(price, sl1m_1) {
   if (sl1m_1 === null) return false;
   const chasePct = (price - sl1m_1) / sl1m_1 * 100;
+  return chasePct > MAX_CHASE_PCT;
+}
+
+// SHORT chase: distance BELOW the most-recent 1m swing HIGH (LH pivot).
+// Without this, SHORT fires anywhere below the LH — even mid-range
+// where price is far from any structural sell level.
+function isChasingShort(price, sh1m_1) {
+  if (sh1m_1 === null) return false;
+  const chasePct = (sh1m_1 - price) / sh1m_1 * 100;
   return chasePct > MAX_CHASE_PCT;
 }
 
@@ -237,21 +246,24 @@ function resolveSignal(state, zone, price) {
   const cleanBull1m = (hh1m || hl1m) && !lh1m && !ll1m;
   const cleanBear1m = (ll1m || lh1m) && !hh1m && !hl1m;
 
-  // ── SHORT — above VWAP mid AND clean-bear on BOTH TFs ───────
-  // Was: HH on 15m + (HH or LH) on 1m (mean-reversion). Now strict:
-  // never SHORT if 1m or 15m has any HH/HL print.
-  if ((zone === 'ABOVE_UPPER' || zone === 'UPPER_MID') && cleanBear15 && cleanBear1m) {
+  // ── SHORT — BELOW VWAP mid (trend continuation) + clean-bear ──
+  // User rule: "below VWAP band only find LL/LH to short, no long".
+  // Was: ABOVE_UPPER mean-reversion. Flipped to bear-trend continuation:
+  // bot now fires SHORT in bear trend below VWAP mid (the SOL/LL setup).
+  // Chase filter: must be within MAX_CHASE_PCT below the 1m LH pivot —
+  // otherwise we're firing mid-range, not at the structural sell level.
+  if ((zone === 'LOWER_MID' || zone === 'BELOW_LOWER') && cleanBear15 && cleanBear1m) {
+    if (isChasingShort(price, state.sh1m_1)) return null;
     return { direction: 'SHORT', type: 'cleanBear' };
   }
 
-  // ── LONG signal filters: gap + chase ────────────────────────
-  if (!is1mGapOk(state.sl1m_1, state.sl1m_2)) return null;
-  if (isChasing(price, state.sl1m_1)) return null;
-
-  // ── LONG — below VWAP mid AND clean-bull on BOTH TFs ────────
-  // BELOW_LOWER mean-reversion (LL+LL → LONG bounce) is GONE:
-  // LONG now requires HH/HL on both — never LL or LH.
-  if ((zone === 'LOWER_MID' || zone === 'BELOW_LOWER') && cleanBull15 && cleanBull1m) {
+  // ── LONG — ABOVE VWAP mid (trend continuation) + clean-bull ──
+  // User rule: "above VWAP only HL/HH to long, no short".
+  // Was: LOWER_MID/BELOW_LOWER mean-reversion. Flipped to bull-trend
+  // continuation: LONG fires above VWAP mid in bullish structure.
+  if ((zone === 'ABOVE_UPPER' || zone === 'UPPER_MID') && cleanBull15 && cleanBull1m) {
+    if (!is1mGapOk(state.sl1m_1, state.sl1m_2)) return null;
+    if (isChasing(price, state.sl1m_1)) return null;
     return { direction: 'LONG', type: 'cleanBull' };
   }
 
@@ -356,12 +368,16 @@ async function analyze(symbol, log) {
       if (vwapNext) {
         const entryPrice = bar.open;
         const zoneNext   = getZone(entryPrice, vwapNext);
-        // Re-validate zone at next-bar open (SHORT needs ABOVE_UPPER; LONG needs LOWER_MID/BELOW_LOWER)
+        // Re-validate zone at next-bar open — flipped to trend-continuation.
+        // SHORT needs LOWER_MID/BELOW_LOWER (price below VWAP).
+        // LONG  needs UPPER_MID/ABOVE_UPPER (price above VWAP).
         const zoneOk = pending.direction === 'SHORT'
-          ? zoneNext === 'ABOVE_UPPER'
-          : (zoneNext === 'LOWER_MID' || zoneNext === 'BELOW_LOWER');
-        // Re-validate chase at next-bar open (LONG only)
-        const chaseOk = pending.direction === 'SHORT' || !isChasing(entryPrice, st.sl1m_1);
+          ? (zoneNext === 'LOWER_MID' || zoneNext === 'BELOW_LOWER')
+          : (zoneNext === 'UPPER_MID' || zoneNext === 'ABOVE_UPPER');
+        // Re-validate chase at next-bar open: SHORT against 1m LH, LONG against 1m HL.
+        const chaseOk = pending.direction === 'SHORT'
+          ? !isChasingShort(entryPrice, st.sh1m_1)
+          : !isChasing(entryPrice, st.sl1m_1);
         if (zoneOk && chaseOk) {
           signal = { ...pending, price: entryPrice, zone: zoneNext };
           if (pending.direction === 'SHORT') {
@@ -382,11 +398,7 @@ async function analyze(symbol, log) {
       const vwap = calcVwap(st.candles15m, bar.openTime);
       if (vwap) {
         const zone = getZone(bar.close, vwap);
-        // VWAP dist filter: only for LOWER_MID LONG.
-        const distBlocked = zone === 'LOWER_MID' && !isGoodVwapDistance(bar.close, vwap);
-        if (distBlocked) {
-          log(`[V4] skip ${symbol} — price too close to lower band dist=${((bar.close - vwap.lower) / vwap.stddev).toFixed(2)}σ`);
-        } else {
+        {
           const sig = resolveSignal(st, zone, bar.close);
           if (sig) {
             st.lastSignalTime = pivotTime;
