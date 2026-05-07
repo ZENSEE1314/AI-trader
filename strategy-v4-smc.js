@@ -34,13 +34,17 @@ const fetch = require('node-fetch');
 const BYBIT_KLINE_URL  = 'https://api.bybit.com/v5/market/kline';
 const FETCH_TIMEOUT_MS = 10_000;
 
-// Pivot confirmation lengths — major swings only, no micro noise
-const SWING_BARS_1M  = 100;  // 1m: 100 closed bars each side (~100 min per side)
-const SWING_BARS_15M = 100;  // 15m: 100 closed bars each side — major structure
+// Pivot confirmation lengths — match what a human trader sees on the chart.
+// SWING_BARS=100 caused 100-min lag on 1m and 25-HOUR lag on 15m —
+// the bot saw a "15m HL" that was 25 hours old while the user saw a
+// fresh one on the chart. Zero trades fired as a result.
+// Now 3 bars each side: 1m pivot confirms in ~3 min, 15m in ~45 min.
+const SWING_BARS_1M  =  3;  // 1m: 3 closed bars each side (~3 min confirmation)
+const SWING_BARS_15M =  3;  // 15m: 3 closed bars each side (~45 min confirmation)
 
-const WARMUP_1M  = 300;  // bars loaded on first call (need ≥ 2×100+1 = 201)
-const WARMUP_15M = 300;  // bars loaded on first call (need ≥ 2×100+1 = 201)
-const DELTA_1M   =  20;  // bars fetched each subsequent 1m cycle
+const WARMUP_1M  =  50;  // bars loaded on first call (need ≥ 2×3+1 = 7, 50 is plenty)
+const WARMUP_15M =  50;  // bars loaded on first call
+const DELTA_1M   =  10;  // bars fetched each subsequent 1m cycle
 const DELTA_15M  =   5;  // bars fetched each subsequent 15m cycle
 const CAPITAL_RISK = 0.25; // 25% capital risk per trade
 
@@ -172,16 +176,19 @@ function update1m(state) {
 }
 
 // ── Signal filters ─────────────────────────────────────────────
-// VWAP distance: reject entries < 0.5σ above the lower band.
-// Too close = price barely clipping the zone, no confirmed support.
-// Sweet spot 0.5–1σ produces 71–83% WR vs 0–20% WR near the band.
+// VWAP distance: accept entries anywhere above the lower band.
+// Was 0.5σ minimum which blocked the best entries right AT the band.
+// With 3-bar swings, pivots confirm quickly and we want to catch the
+// bounce as soon as it forms, not 0.5σ later (too late for BTC/SOL).
 function isGoodVwapDistance(price, { lower, stddev }) {
   const distFromLower = (price - lower) / stddev;
-  return distFromLower >= 0.5;
+  return distFromLower >= 0;  // accept anywhere above lower band
 }
 
-// 1m gap: reject if HL/LL gap > 0.5% — means chasing a move already done.
-const MAX_1M_GAP_PCT = 0.5;
+// 1m gap: reject if HL/LL gap > 1.5% — means chasing a move already done.
+// Was 0.5% which blocked virtually all BTC/ETH signals (their consecutive
+// swing lows are typically 0.5-1.5% apart even on short swings).
+const MAX_1M_GAP_PCT = 1.5;
 
 function is1mGapOk(sl1m_1, sl1m_2) {
   if (sl1m_1 === null || sl1m_2 === null) return false;
