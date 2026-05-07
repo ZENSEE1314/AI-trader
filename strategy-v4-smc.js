@@ -219,6 +219,7 @@ function isChasing(price, sl1m_1) {
 function resolveSignal(state, zone, price) {
   // ── 15m structure ────────────────────────────────────────────
   const hh15 = state.sh15_1 !== null && state.sh15_2 !== null && state.sh15_1 > state.sh15_2;
+  const lh15 = state.sh15_1 !== null && state.sh15_2 !== null && state.sh15_1 < state.sh15_2; // lower high = bearish bias
   const hl15 = state.sl15_1 !== null && state.sl15_2 !== null && state.sl15_1 > state.sl15_2;
   const ll15 = state.sl15_1 !== null && state.sl15_2 !== null && state.sl15_1 < state.sl15_2;
 
@@ -249,13 +250,16 @@ function resolveSignal(state, zone, price) {
 
   // LOWER_MID: price between VWAP lower band and VWAP mid.
   // 15m HL + 1m HL = bullish structure on both timeframes.
-  if (zone === 'LOWER_MID' && hl15 && hl1m) {
+  // ALSO require 15m highs are NOT making lower highs (lh15=false).
+  // If 15m is LH (lower highs = downtrend), LOWER_MID is mid-range in a
+  // falling market — DO NOT buy. Wait for BELOW_LOWER or a structural shift.
+  if (zone === 'LOWER_MID' && hl15 && !lh15 && hl1m) {
     return { direction: 'LONG', type: 'HL+HL' };
   }
 
   // BELOW_LOWER: price below VWAP lower 2σ band — extreme oversold.
-  // Any HL or LL on BOTH timeframes is valid — price is already at
-  // the edge, structure on either tf is enough to confirm reversal.
+  // Lh15 filter relaxed here: at extreme levels even a downtrend can reverse.
+  // Still need hl15 or ll15 on 15m lows (some structure) + confirmation on 1m.
   if (zone === 'BELOW_LOWER' && (hl15 || ll15) && (hl1m || ll1m)) {
     const type = `${hl15 ? 'HL' : 'LL'}+${hl1m ? 'HL' : 'LL'}`;
     return { direction: 'LONG', type };
@@ -410,7 +414,8 @@ async function analyze(symbol, log) {
             const hl15 = st.sl15_1 !== null && st.sl15_2 !== null && st.sl15_1 > st.sl15_2;
             const ll15 = st.sl15_1 !== null && st.sl15_2 !== null && st.sl15_1 < st.sl15_2;
             const hh15 = st.sh15_1 !== null && st.sh15_2 !== null && st.sh15_1 > st.sh15_2;
-            log(`[V4] pivot confirmed but no signal: ${symbol} zone=${zone} 15m:hh=${hh15} hl=${hl15} ll=${ll15} gap1m=${gapOk?'ok':'blocked'} chase=${chasing?`SKIP(${chasePct}%)`:`ok(${chasePct}%)`}`);
+            const lh15d = st.sh15_1 !== null && st.sh15_2 !== null && st.sh15_1 < st.sh15_2;
+            log(`[V4] pivot confirmed but no signal: ${symbol} zone=${zone} 15m:hh=${hh15} lh=${lh15d}(${lh15d?'BLOCKS-LONG':''}) hl=${hl15} ll=${ll15} gap1m=${gapOk?'ok':'blocked'} chase=${chasing?`SKIP(${chasePct}%)`:`ok(${chasePct}%)`}`);
           }
         }
       }
