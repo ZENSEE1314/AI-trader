@@ -9,7 +9,7 @@ const fetch = require('node-fetch');
 const aiLearner = require('./ai-learner');
 // V4 SMC strategy: VWAP 2σ zones + 15m/1m BOS+CHoCH confluence
 // Rules: bull days → LONG only | bear days → SHORT only | ranging → nothing
-const { scanV4SMC, ACTIVE_SYMBOLS, SYMBOL_LEVERAGE } = require('./strategy-v4-smc');
+const { scanV4SMC, ACTIVE_SYMBOLS, SYMBOL_LEVERAGE, recordLoss: recordV4Loss } = require('./strategy-v4-smc');
 // Keep 3-timing import for calcTrail3Timing + getSessionMode (still used elsewhere)
 const { getSessionMode } = require('./strategy-3timing'); // v4: trailing SL uses calculateTrailingStep (cycle.js) instead of calcTrail3Timing
 
@@ -934,6 +934,10 @@ async function checkTrailingStop(client) {
           });
 
           if (pnlPct < 0) {
+            // User rule: lose 1× → lock symbol 4h. recordV4Loss is a no-op
+            // if v4-smc isn't loaded (e.g. older deploy).
+            try { recordV4Loss && recordV4Loss(sym); } catch {}
+            bLog.trade(`Loss cooldown set: ${sym} blocked 4h`);
             await aiLearner.performLossAutopsy({
               symbol: sym,
               setup: state.setup || 'unknown',
