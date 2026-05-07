@@ -4552,7 +4552,7 @@
         const dir = group.direction;
         const dirColor = dir === 'LONG' ? 'var(--color-success)' : 'var(--color-danger)';
 
-        const tradesHtml = group.trades.map(t => {
+        const tradesHtml = group.trades.filter(t => !t.liveOnly).map(t => {
           totalPnl += t.pnlUsdt;
           const dangerBg = t.danger === 'critical' ? 'rgba(239,68,68,0.15)' : t.danger === 'danger' ? 'rgba(239,68,68,0.08)' : t.danger === 'warning' ? 'rgba(255,176,32,0.06)' : '';
           const pnlColor = t.pnlUsdt >= 0 ? 'var(--color-success)' : 'var(--color-danger)';
@@ -4561,14 +4561,10 @@
           const hrs = Math.floor(t.durationMin / 60);
           const mins = t.durationMin % 60;
           const dur = hrs > 0 ? `${hrs}h${mins}m` : `${mins}m`;
-          // liveOnly = on exchange but not tracked in DB — highlight in orange
-          const liveOnlyBadge = t.liveOnly
-            ? `<span style="font-size:0.65rem;background:#f59e0b;color:#000;border-radius:3px;padding:0 4px;margin-left:4px;font-weight:700;">EXCHANGE ONLY</span>`
-            : '';
 
-          return `<div style="display:grid;grid-template-columns:1fr auto;gap:4px;padding:6px 8px;background:${dangerBg};border-radius:4px;margin-bottom:2px;${t.liveOnly ? 'border-left:2px solid #f59e0b;' : ''}">
+          return `<div style="display:grid;grid-template-columns:1fr auto;gap:4px;padding:6px 8px;background:${dangerBg};border-radius:4px;margin-bottom:2px;">
             <div>
-              <span style="font-size:0.75rem;color:var(--color-text-muted);">${escapeHtml(t.email)} • ${t.platform} • x${t.leverage} • ${dur}${liveOnlyBadge}</span>
+              <span style="font-size:0.75rem;color:var(--color-text-muted);">${escapeHtml(t.email)} • ${t.platform} • x${t.leverage} • ${dur}</span>
             </div>
             <div style="text-align:right;">
               <span style="font-weight:700;color:${pnlColor};font-size:0.85rem;">${t.pnlUsdt >= 0 ? '+' : ''}$${t.pnlUsdt.toFixed(2)}</span>
@@ -4583,7 +4579,11 @@
           </div>`;
         }).join('');
 
-        const groupPnl = group.totalPnl;
+        // Skip entire group if all trades are EXCHANGE ONLY (nothing bot-tracked to show)
+        if (!tradesHtml) return '';
+
+        const botTradeCount = group.trades.filter(t => !t.liveOnly).length;
+        const groupPnl = group.trades.filter(t => !t.liveOnly).reduce((s, t) => s + t.pnlUsdt, 0);
         const groupColor = groupPnl >= 0 ? 'var(--color-success)' : 'var(--color-danger)';
 
         const oppositeDir = dir === 'LONG' ? 'SHORT' : 'LONG';
@@ -4595,7 +4595,7 @@
               <button class="btn btn-sm" style="font-size:0.7rem;background:#f59e0b;color:#0d1117;border:none;padding:4px 10px;font-weight:700;box-shadow:0 0 0 1px ${oppColor} inset;" title="Close ${dir} now and lock next entry to ${oppositeDir}" data-reverse-token="${sym}" data-reverse-dir="${dir}">🔄 Reverse → ${oppositeDir}</button>
               <strong>${sym.replace('USDT','')}</strong>
               <span style="color:${dirColor};font-weight:700;font-size:0.8rem;">${dir}</span>
-              <span style="font-size:0.72rem;color:var(--color-text-muted);">${group.trades.length} user(s)</span>
+              <span style="font-size:0.72rem;color:var(--color-text-muted);">${botTradeCount} user(s)</span>
             </div>
             <span style="font-weight:700;color:${groupColor};">${groupPnl >= 0 ? '+' : ''}$${groupPnl.toFixed(2)}</span>
           </div>
