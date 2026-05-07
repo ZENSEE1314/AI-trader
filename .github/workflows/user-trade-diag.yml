@@ -1,0 +1,51 @@
+name: User trade diagnostic
+
+on:
+  workflow_dispatch:
+
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      contents: read
+
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      RAILWAY_PROJECT_ID: ${{ vars.RAILWAY_PROJECT_ID }}
+      RAILWAY_SERVICE_ID: ${{ vars.RAILWAY_SERVICE_ID }}
+      TRACKING_ISSUE: ${{ vars.LOSS_BACKTEST_ISSUE || '70' }}
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+      - run: npm install pg --no-save
+      - run: npm i -g @railway/cli@latest
+
+      - name: Run diag
+        id: run
+        run: |
+          set +e
+          railway run --service "$RAILWAY_SERVICE_ID" \
+            -- node user-trade-diag.js > /tmp/out.txt 2> /tmp/err.txt
+          rc=$?
+          {
+            echo "## User trade diagnostic — $(date -u +'%Y-%m-%d %H:%M UTC')"
+            echo ""
+            if [ $rc -ne 0 ]; then
+              echo '### Failed'
+              echo '```'; tail -n 60 /tmp/err.txt; echo '```'
+            fi
+            echo "### Output"
+            echo '```'
+            tail -n 400 /tmp/out.txt
+            echo '```'
+          } > /tmp/comment.md
+          { echo "BODY<<EOF"; cat /tmp/comment.md; echo "EOF"; } >> "$GITHUB_OUTPUT"
+
+      - name: Post to issue
+        uses: peter-evans/create-or-update-comment@v5
+        with:
+          issue-number: ${{ env.TRACKING_ISSUE }}
+          body: ${{ steps.run.outputs.BODY }}
