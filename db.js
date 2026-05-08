@@ -912,6 +912,19 @@ async function initAllTables() {
     }
   } catch (e) { console.warn('[DB] Fee backfill warning:', e.message); }
 
+  // Fix: capital_percentage > 20 is unsafe. If someone entered 100 thinking
+  // it means "100x leverage" it actually means "use 100% of wallet as margin".
+  // Clamp any value > 20 down to 10 (safe default) on every boot.
+  try {
+    const capFix = await pool.query(`
+      UPDATE api_keys SET capital_percentage = 10.0
+      WHERE capital_percentage > 20
+    `);
+    if (capFix.rowCount > 0) {
+      console.log(`[DB] capital_percentage safety fix: reset ${capFix.rowCount} key(s) from >20% → 10% (use admin panel to adjust)`);
+    }
+  } catch (e) { console.warn('[DB] capital_percentage fix warning:', e.message); }
+
   console.log('[DB] All tables verified');
 }
 

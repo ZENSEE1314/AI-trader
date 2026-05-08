@@ -1884,7 +1884,14 @@ async function executeForAllUsers(pick) {
         }
 
         // User's risk settings — active AI version can override SL/trail if admin activated one
-        const walletSizePct = (await getCapitalPercentage(key.id)) / 100;
+        // capital_percentage from DB is e.g. 10 = 10% of wallet used as margin per trade.
+        // Hard cap at 20% — if DB has 100 (wrong entry), this prevents blowing the account.
+        const rawCapPct = await getCapitalPercentage(key.id);
+        const cappedCapPct = Math.min(rawCapPct, 20);
+        if (rawCapPct > 20) {
+          userLog.trade(`User ${key.email}: capital_pct=${rawCapPct}% capped to 20% (DB value > 20 is unsafe — set it to 10 in admin settings)`);
+        }
+        const walletSizePct = cappedCapPct / 100;
         const activeVer = await getActiveVersionParams();
 
         // Direction enable/disable — if active version disables a direction, skip this trade
