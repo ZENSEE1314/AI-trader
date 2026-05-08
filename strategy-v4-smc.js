@@ -3,20 +3,18 @@
 // ═══════════════════════════════════════════════════════════════
 //  strategy-v4-smc.js  —  VWAP Zone + Zone-Specific Pivot Gate
 //
-//  Direction — VWAP zone:
-//    ABOVE_UPPER / UPPER_MID  → SHORT  (price at premium = mean-revert)
-//    LOWER_MID  / BELOW_LOWER → LONG   (price at discount = mean-revert)
+//  Direction — VWAP zone (momentum: trade with the trend):
+//    ABOVE_UPPER / UPPER_MID  → LONG   (above VWAP = bullish bias)
+//    LOWER_MID  / BELOW_LOWER → SHORT  (below VWAP = bearish bias)
 //
-//  4H gate (zone-sensitive):
-//    ABOVE_UPPER + 4H=BULLISH → no SHORT (bull breakout — not a reversal)
-//    Any LONG zone + 4H=BEARISH → no LONG (bear trend — price not basing yet)
-//    UPPER_MID SHORT: always open — mean reversion works in all 4H structures
+//  4H gate:
+//    LONG  blocked if 4H=BEARISH (don't long against downtrend)
+//    SHORT blocked if 4H=BULLISH (don't short against uptrend)
+//    EXP-O: LONG blocked if 4H+15m both BULLISH (overbought — chasing)
 //
-//  Pivot gate — zone-specific (extreme zones relax the gate):
-//    LOWER_MID  LONG:  15m HL or LL  +  1m HL or LL  (reversal pivots only)
-//    BELOW_LOWER LONG: 15m LL or LH  +  1m LL or LH  (any down-struct at extreme)
-//    UPPER_MID  SHORT: 15m LH or HH  +  1m LH or HH  (reversal pivots only)
-//    ABOVE_UPPER SHORT:15m HH or HL  +  1m HH or HL  (any up-struct at extreme)
+//  Pivot gate:
+//    LONG  (upper zones): 15m HH or HL + 1m HH or HL  (bullish structure)
+//    SHORT (lower zones): 15m LL or LH + 1m LL or LH  (bearish structure)
 //
 //  15m structure: diagnostic log only — not used for gating.
 //
@@ -492,91 +490,80 @@ function get15mStructure(state, currentPrice) {
 
 // ── Signal logic ───────────────────────────────────────────────
 //
-//  Zone = direction (momentum/breakout approach):
+//  Zone = direction (momentum — trade WITH the VWAP trend):
 //    ABOVE_UPPER  → LONG only   (price broke above upper band = bullish strength)
-//    UPPER_MID    → LONG only   (price above VWAP mid = bullish bias)
-//    LOWER_MID    → SHORT only  (price below VWAP mid = bearish bias)
+//    UPPER_MID    → LONG only   (price above VWAP = bullish bias)
+//    LOWER_MID    → SHORT only  (price below VWAP = bearish bias)
 //    BELOW_LOWER  → SHORT only  (price broke below lower band = bearish strength)
 //
-//  Drop filter (SHORT): price must not have moved >0.12% past the pivot reference.
-//  Gap  filter (LONG):  consecutive 1m swing lows ≤ 0.50% apart.
-//  Chase filter (LONG): price within 0.08% of 1m swing low.
-// vwap: { vwap, upper, lower, stddev } — optional; when provided the
-//        VWAP σ-distance filter is applied to both LONG and SHORT.
+//  4H gate: LONG blocked if 4H=BEARISH; SHORT blocked if 4H=BULLISH.
+//  EXP-O:  LONG blocked if 4H=BULLISH && 15m=BULLISH (already overbought).
+//          SHORT blocked if 4H=BEARISH && 15m=BEARISH (already oversold).
+//
+//  Pivot gate:
+//    LONG:  15m HH or HL + 1m HH or HL  (bullish structure — confirmed up-pivots)
+//    SHORT: 15m LL or LH + 1m LL or LH  (bearish structure — confirmed down-pivots)
+//
+//  Chase filter (LONG):  price within MAX_CHASE_PCT of last 1m swing HIGH.
+//  Chase filter (SHORT): price within MAX_SHORT_DROP_PCT of last 1m swing LOW.
 function resolveSignal(state, zone, price, vwap) {
   const p15 = state.last15mPivotType;
   const p1m = state.last1mPivotType;
 
-  // ── LONG: zone-specific low pivot gate ─────────────────────────
-  // LOWER_MID:  15m HL or LL + 1m HL or LL  (reversal pivots only)
-  // BELOW_LOWER: 15m LL or LH + 1m LL or LH (extreme gate — any down-struct)
-  //   At BELOW_LOWER price is already past the lower band.  Even LH (lower
-  //   high = price pulled back but held below the band = still oversold) at
-  //   that extreme signals exhausted selling.  HL/HH excluded (price already
-  //   recovering, may be late).
-  //
-  // 4H bearish LONG block applies to both zones: if 4H is BEARISH, wait for
-  // 4H to base before longing even at extreme discount.
+  // ── LONG: price above VWAP (UPPER_MID or ABOVE_UPPER) ─────────
+  // Momentum entry — price is holding above VWAP with confirmed bullish pivots.
+  // Block if 4H=BEARISH (don't long against the higher-TF downtrend).
+  // EXP-O dual-bullish block: if BOTH 4H and 15m are BULLISH, the move is
+  //   already extended — entering here means chasing the top, not a setup.
   function tryLong() {
     const s4h = get4hStructure(state, price);
-    if (s4h === 'BEARISH') return null;  // no long into confirmed 4H downtrend
-    let isLow15, isLow1m;
-    {
-      // Same pivot gate for both LOWER_MID and BELOW_LOWER:
-      // any confirmed low (HL = bounce started, LL = deepest entry).
-      isLow15 = p15 === 'HL' || p15 === 'LL';
-      isLow1m = p1m === 'HL' || p1m === 'LL';
-    }
-    if (!isLow15 || !isLow1m)                   return null;
-    if (!is1mGapOk(state.sl1m_1, state.sl1m_2)) return null;
-    if (isChasing(price, state.sl1m_1))          return null;
-    // VWAP proximity — at BELOW_LOWER price is already past the band so
-    // distFromLower is negative; check always passes there naturally.
+    if (s4h === 'BEARISH') return null;  // no long against 4H downtrend
+    const s15chk = get15mStructure(state, price);
+    if (s4h === 'BULLISH' && s15chk === 'BULLISH') return null;  // EXP-O: already overbought
+    // Bullish pivot confirmation: both timeframes must show HH or HL
+    const isBull15 = p15 === 'HH' || p15 === 'HL';
+    const isBull1m = p1m === 'HH' || p1m === 'HL';
+    if (!isBull15 || !isBull1m) return null;
+    // Chase filter: don't enter if price already moved > MAX_CHASE_PCT above the 1m swing high
+    if (isChasing(price, state.sh1m_1)) return null;
+    // VWAP proximity — at ABOVE_UPPER, price > upper band so distFromUpper < 0 (always passes).
+    // At UPPER_MID, block if price is > 2σ above the upper band (too extended).
     if (vwap && vwap.stddev > 0) {
-      const distFromLower = (price - vwap.lower) / vwap.stddev;
-      if (distFromLower > MIN_DIST_SIGMA * 2) return null;
+      const distAboveUpper = (price - vwap.upper) / vwap.stddev;
+      if (distAboveUpper > MIN_DIST_SIGMA * 2) return null;
     }
     return { direction: 'LONG', type: `${p15}+${p1m}` };
   }
 
-  // ── SHORT: zone-specific high pivot gate ────────────────────────
-  // ABOVE_UPPER + 4H=BULLISH → blocked: price is in a confirmed bull breakout,
-  //   not a reversal. Shorting the extreme in a bull trend loses consistently.
-  //   UPPER_MID SHORTs are still allowed — mean-reversion at the upper band
-  //   works even in bull markets (price is extended, not in breakout).
-  // UPPER_MID:   15m LH or HH + 1m LH or HH  (reversal pivots only)
-  // ABOVE_UPPER: 15m HH or HL + 1m HH or HL  (extreme gate — any up-struct,
-  //              but only when 4H ≠ BULLISH)
+  // ── SHORT: price below VWAP (LOWER_MID or BELOW_LOWER) ────────
+  // Momentum entry — price is holding below VWAP with confirmed bearish pivots.
+  // Block if 4H=BULLISH (don't short against the higher-TF uptrend).
+  // EXP-O dual-bearish block: if BOTH 4H and 15m are BEARISH, the move is
+  //   already extended — entering here means chasing the bottom, not a setup.
   function tryShort() {
     const s4h = get4hStructure(state, price);
-    if (s4h === 'BULLISH' && zone === 'ABOVE_UPPER') return null;  // bull breakout — no short at extreme
-    // EXP-O: dual-bearish SHORT block — both 4H AND 15m bearish = chasing a trend, not fading it
+    if (s4h === 'BULLISH') return null;  // no short against 4H uptrend
     const s15chk = get15mStructure(state, price);
-    if (s4h === 'BEARISH' && s15chk === 'BEARISH') return null;
-    let isHigh15, isHigh1m;
-    {
-      // Same pivot gate for both UPPER_MID and ABOVE_UPPER:
-      // any confirmed high (LH = rejection started, HH = new extreme entry).
-      // ABOVE_UPPER+4H=BULLISH is blocked above — no HL issue.
-      isHigh15 = p15 === 'LH' || p15 === 'HH';
-      isHigh1m = p1m === 'LH' || p1m === 'HH';
-    }
-    if (!isHigh15 || !isHigh1m)                         return null;
+    if (s4h === 'BEARISH' && s15chk === 'BEARISH') return null;  // EXP-O: already oversold
+    // Bearish pivot confirmation: both timeframes must show LL or LH
+    const isBear15 = p15 === 'LL' || p15 === 'LH';
+    const isBear1m = p1m === 'LL' || p1m === 'LH';
+    if (!isBear15 || !isBear1m) return null;
+    // Chase filter: don't enter if price already dropped > MAX_SHORT_DROP_PCT below the 1m swing low
     if (isShortTooLate(price, state.last15mPivotPrice)) return null;
-    if (isShort1mTooLate(price, state.sh1m_1))          return null;
-    // VWAP proximity — at ABOVE_UPPER price is past the band so distFromUpper
-    // is negative; check always passes there naturally.
+    if (isShort1mTooLate(price, state.sl1m_1)) return null;
+    // VWAP proximity — at BELOW_LOWER, price < lower band so distBelowLower < 0 (always passes).
+    // At LOWER_MID, block if price is > 2σ below the lower band (too extended).
     if (vwap && vwap.stddev > 0) {
-      const distFromUpper = (vwap.upper - price) / vwap.stddev;
-      if (distFromUpper > MIN_DIST_SIGMA * 2) return null;
+      const distBelowLower = (vwap.lower - price) / vwap.stddev;
+      if (distBelowLower > MIN_DIST_SIGMA * 2) return null;
     }
     return { direction: 'SHORT', type: `${p15}+${p1m}` };
   }
 
-  // ── Zone decides direction ───────────────────────────────────
-  if (zone === 'ABOVE_UPPER' || zone === 'UPPER_MID') return tryShort();
-  if (zone === 'LOWER_MID')                            return tryLong();
-  // BELOW_LOWER → no long (knife-catch), wait for LOWER_MID recovery
+  // ── Zone decides direction (momentum: with-VWAP-trend) ────────
+  if (zone === 'ABOVE_UPPER' || zone === 'UPPER_MID')  return tryLong();
+  if (zone === 'LOWER_MID'   || zone === 'BELOW_LOWER') return tryShort();
   return null;
 }
 
