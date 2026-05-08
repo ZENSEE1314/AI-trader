@@ -71,7 +71,15 @@ function getState(symbol) {
       candles1m:  [],
       candles15m: [],
 
-      // Two most-recent confirmed 15m swing highs/lows (price levels)
+      // Full labeled 15m pivot sequence — up to 50 entries.
+      // Each entry: { type:'H'|'L', price, time, label:'HH'|'LH'|'HL'|'LL' }
+      // Labeled by comparing each new pivot to the PREVIOUS pivot of the same type.
+      // Structure is derived from the most-recent labeled H and L in this array,
+      // giving proper sequence-aware HH/LH/HL/LL detection over 50 candles of history.
+      pivots15m: [],
+
+      // Two most-recent confirmed 15m swing highs/lows (price levels — kept for
+      // entry reference, chase filter, DIAG log)
       sh15_1: null, sh15_2: null,
       sl15_1: null, sl15_2: null,
 
@@ -177,31 +185,52 @@ function checkPivot(candles, swingBars) {
 
 // ── Swing tracker updates ──────────────────────────────────────
 // Tracks the TYPE of each 15m pivot — HH / HL / LH / LL — exactly as
-// TradingView's SMC indicator labels them. last15mPivotType is the key
-// signal gate: SHORT only when last pivot = 'LH', LONG only when = 'HL'.
-// This is more accurate than comparing sh15_1 vs sh15_2 separately because
-// it respects the TIME ORDER of pivots (a HL low printed after a LH high
-// means the market is now bullish regardless of what old highs say).
+// TradingView's SMC indicator labels them.
+//
+// Each new confirmed pivot is labeled by comparing it to the PREVIOUS pivot
+// of the SAME TYPE (high vs high, low vs low) in the sequence:
+//   new high > last high → HH   new high < last high → LH
+//   new low  > last low  → HL   new low  < last low  → LL
+//
+// Entries are pushed to state.pivots15m (capped at 50) so that
+// get15mStructure() can read the full recent sequence rather than
+// just comparing sh15_1 vs sh15_2 in isolation.
 function update15m(state) {
   const p = checkPivot(state.candles15m, SWING_BARS_15M);
   if (!p || p.bar.openTime === state.last15mPivotTime) return;
   state.last15mPivotTime = p.bar.openTime;
+
   if (p.isHigh) {
-    // HH if this high is above the previous swing high, else LH
-    const pivotType = (state.sh15_1 === null || p.bar.high > state.sh15_1) ? 'HH' : 'LH';
+    // Find the last HIGH in the pivot sequence to label correctly
+    const lastH = findLastPivot(state.pivots15m, 'H');
+    const label = (!lastH || p.bar.high > lastH.price) ? 'HH' : 'LH';
     state.sh15_2 = state.sh15_1;
     state.sh15_1 = p.bar.high;
-    state.last15mPivotType  = pivotType;
+    state.pivots15m.push({ type: 'H', price: p.bar.high, time: p.bar.openTime, label });
+    state.last15mPivotType  = label;
     state.last15mPivotPrice = p.bar.high;
   }
   if (p.isLow) {
-    // HL if this low is above the previous swing low, else LL
-    const pivotType = (state.sl15_1 === null || p.bar.low > state.sl15_1) ? 'HL' : 'LL';
+    // Find the last LOW in the pivot sequence to label correctly
+    const lastL = findLastPivot(state.pivots15m, 'L');
+    const label = (!lastL || p.bar.low > lastL.price) ? 'HL' : 'LL';
     state.sl15_2 = state.sl15_1;
     state.sl15_1 = p.bar.low;
-    state.last15mPivotType  = pivotType;
+    state.pivots15m.push({ type: 'L', price: p.bar.low, time: p.bar.openTime, label });
+    state.last15mPivotType  = label;
     state.last15mPivotPrice = p.bar.low;
   }
+
+  // Keep at most 50 pivot entries — covers ~50×15m = 12.5 hours of history
+  if (state.pivots15m.length > 50) state.pivots15m = state.pivots15m.slice(-50);
+}
+
+// Returns the most-recent pivot entry of the given type ('H' or 'L'), or null.
+function findLastPivot(pivots, type) {
+  for (let i = pivots.length - 1; i >= 0; i--) {
+    if (pivots[i].type === type) return pivots[i];
+  }
+  return null;
 }
 
 // Returns confirmed pivot openTime, or 0 if nothing new.
@@ -303,33 +332,47 @@ function isShort1mTooLate(price, sh1m_1) {
 // A single 15m HL can pass last15mPivotType='HL' even when highs are
 // making LH (bearish). The structure check catches this by requiring
 // BOTH highs AND lows to align.
-// currentPrice: live bar close — used to detect a LL/HH forming in real-time
-// before the 75-min confirmation window closes. Without this, the bot saw
-// LH (confirmed) + HL (confirmed old low) = MIXED → LONG allowed during a
-// visible breakdown, because the new LL hadn't collected 5 confirmation bars.
+// ── 15m Structure from full pivot sequence ─────────────────────
+// Reads state.pivots15m — the labeled history of all confirmed 15m swing
+// highs and lows over the last 50 pivot entries (~50 candles of history).
 //
-// Fix: if price has already broken BELOW the most-recent confirmed swing low
-// (sl15_1), a LL is forming NOW. Pair that with confirmed LH → BEARISH early.
-// Same logic inverted for BULLISH (price breaking above sh15_1 → HH forming).
+// Structure is determined by the MOST-RECENT labeled H and L:
+//   Most-recent H = LH + most-recent L = LL → BEARISH  (lower highs AND lower lows)
+//   Most-recent H = HH + most-recent L = HL → BULLISH  (higher highs AND higher lows)
+//   Any other combination             → MIXED   (ranging/transitioning)
+//
+// This replaces the old 2-point comparison (sh15_1 vs sh15_2) which was wrong
+// when the 2nd-last pivot was stale or from a different market phase.
+//
+// currentPrice: live bar close for real-time breakout detection.
+// If price already broke BELOW the last confirmed swing low (LL forming live),
+// or already broke ABOVE the last confirmed swing high (HH forming live),
+// treat structure as BEARISH/BULLISH immediately — no need to wait 75 min
+// for the new pivot to collect its 5 confirmation bars.
 function get15mStructure(state, currentPrice) {
-  const { sh15_1, sh15_2, sl15_1, sl15_2 } = state;
-  if (sh15_1 === null || sh15_2 === null || sl15_1 === null || sl15_2 === null) {
-    return 'UNKNOWN'; // not enough data — allow both directions
-  }
-  const higherHigh = sh15_1 > sh15_2; // HH
-  const higherLow  = sl15_1 > sl15_2; // HL
-  const lowerHigh  = sh15_1 < sh15_2; // LH
-  const lowerLow   = sl15_1 < sl15_2; // LL
+  const pivots = state.pivots15m;
+  if (pivots.length < 4) return 'UNKNOWN'; // need at least 2H + 2L to determine structure
 
-  // Real-time breakout detection — no need to wait for 5-bar confirmation
-  const breakingLow  = currentPrice !== undefined && sl15_1 !== null && currentPrice < sl15_1;
-  const breakingHigh = currentPrice !== undefined && sh15_1 !== null && currentPrice > sh15_1;
+  // Walk back from the end — find the most-recently labeled HIGH and LOW
+  const lastH = findLastPivot(pivots, 'H');
+  const lastL = findLastPivot(pivots, 'L');
 
-  // BEARISH: confirmed LH + (confirmed LL OR price actively breaking below last swing low)
-  if (lowerHigh && (lowerLow || breakingLow))  return 'BEARISH';
-  // BULLISH: confirmed HH + (confirmed HL OR price actively breaking above last swing high)
-  if (higherHigh && (higherLow || breakingHigh)) return 'BULLISH';
-  return 'MIXED'; // transitioning — allow both, zone decides
+  if (!lastH || !lastL) return 'UNKNOWN';
+
+  const lastHighLabel = lastH.label; // 'HH' or 'LH'
+  const lastLowLabel  = lastL.label; // 'HL' or 'LL'
+
+  // Real-time breakout detection:
+  // If price already crossed the last confirmed swing level, the new pivot
+  // is FORMING even though not yet confirmed by 5 bars.
+  const breakingLow  = currentPrice !== undefined && currentPrice < lastL.price;
+  const breakingHigh = currentPrice !== undefined && currentPrice > lastH.price;
+
+  // BEARISH: most-recent high = LH AND (most-recent low = LL OR price breaking below it)
+  if (lastHighLabel === 'LH' && (lastLowLabel === 'LL' || breakingLow))  return 'BEARISH';
+  // BULLISH: most-recent high = HH AND (most-recent low = HL OR price breaking above it)
+  if (lastHighLabel === 'HH' && (lastLowLabel === 'HL' || breakingHigh)) return 'BULLISH';
+  return 'MIXED'; // diverging labels — zone decides direction
 }
 
 // ── Signal logic ───────────────────────────────────────────────
@@ -510,8 +553,10 @@ async function analyze(symbol, log) {
       const dropFromHigh = (st.last15mPivotPrice && (st.last15mPivotType === 'HH' || st.last15mPivotType === 'LH'))
         ? ` drop=${((st.last15mPivotPrice - diagBar.close) / st.last15mPivotPrice * 100).toFixed(3)}%`
         : '';
-      const struct15 = get15mStructure(st, diagBar.close);
-      log(`[V4-DIAG] ${symbol} zone=${diagZone} struct=${struct15} price=${diagBar.close.toFixed(4)} | 15m=${st.last15mPivotType||'none'}@${st.last15mPivotPrice?.toFixed(4)||'n/a'} sh=${st.sh15_1?.toFixed(4)}/${st.sh15_2?.toFixed(4)} sl=${st.sl15_1?.toFixed(4)}/${st.sl15_2?.toFixed(4)}${dropFromHigh} | 1m=${st.last1mPivotType||'none'}@${st.last1mPivotPrice?.toFixed(4)||'n/a'} | sl1m=${st.sl1m_1?.toFixed(4)}/${st.sl1m_2?.toFixed(4)} gap=${gapPct}%(${gapOk?'OK':'BLOCKED'}) | LONG=${struct15==='BEARISH'?'BLOCKED':'ok'} SHORT=${struct15==='BULLISH'?'BLOCKED':'ok'}`);
+      const struct15  = get15mStructure(st, diagBar.close);
+      // Last 6 pivot labels from the sequence — shows exactly what TV SMC shows
+      const pivotSeq  = st.pivots15m.slice(-6).map(x => `${x.label}@${x.price.toFixed(2)}`).join(' → ');
+      log(`[V4-DIAG] ${symbol} zone=${diagZone} struct=${struct15} price=${diagBar.close.toFixed(4)} | seq=[${pivotSeq}] | 15m=${st.last15mPivotType||'none'}@${st.last15mPivotPrice?.toFixed(4)||'n/a'} sh=${st.sh15_1?.toFixed(4)}/${st.sh15_2?.toFixed(4)} sl=${st.sl15_1?.toFixed(4)}/${st.sl15_2?.toFixed(4)}${dropFromHigh} | 1m=${st.last1mPivotType||'none'}@${st.last1mPivotPrice?.toFixed(4)||'n/a'} | sl1m=${st.sl1m_1?.toFixed(4)}/${st.sl1m_2?.toFixed(4)} gap=${gapPct}%(${gapOk?'OK':'BLOCKED'}) | LONG=${struct15==='BEARISH'?'BLOCKED':'ok'} SHORT=${struct15==='BULLISH'?'BLOCKED':'ok'}`);
     }
   }
 
