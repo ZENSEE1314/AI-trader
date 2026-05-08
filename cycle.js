@@ -2411,7 +2411,7 @@ async function syncTradeStatus() {
                           : entryPrice - (exchangePos.pnl / (Math.abs(exchangePos.amt) || 1)))
                 : entryPrice;
               const lastStep = parseFloat(trade.trailing_sl_last_step) || 0;
-              const tradeLev = parseFloat(trade.leverage) || 20;
+              const tradeLev = parseFloat(trade.leverage) || SYMBOL_LEVERAGE[trade.symbol] || 100;
               const userTrailPct = parseFloat(trade.key_trailing_sl_step) || 0;
               const pricePctDebug = isLong
                 ? (curPrice - entryPrice) / entryPrice
@@ -2560,7 +2560,10 @@ async function syncTradeStatus() {
             if (exchangePos && trade.trailing_sl_last_step !== undefined) {
               const entryPrice = parseFloat(trade.entry_price);
               const isLong = trade.direction !== 'SHORT';
-              const tradeLev = parseFloat(trade.leverage) || 20;
+              // Use stored leverage; fall back to strategy config, then 100 (not 20).
+              // Defaulting to 20 when DB value is missing causes 100x positions to
+              // calculate capitalPct at 1/5 the real value — tiers never fire.
+              const tradeLev = parseFloat(trade.leverage) || SYMBOL_LEVERAGE[trade.symbol] || 100;
 
               // ── Step 1: Get current price (3 methods, must succeed) ──
               let curPrice = null;
@@ -2692,9 +2695,11 @@ async function syncTradeStatus() {
               }
 
               // ── Fallback: 0.8% behind current price ─────────────
-              // Only runs if tier trail didn't produce an improvement
-              // (e.g. capital < +21% so calculateTrailingStep returned null).
-              if (!newSlPrice && bxProfitPct >= 0.005) {
+              // Only runs if tier trail didn't produce an improvement.
+              // Threshold: +10% capital gain minimum (not fixed 0.5% price,
+              // which at 100x = 50% capital — far too late for a fallback).
+              const fallbackCapThreshold = 0.10; // +10% capital minimum
+              if (!newSlPrice && (bxProfitPct * tradeLev) >= fallbackCapThreshold) {
                 const rawTrailSl = isLong
                   ? curPrice * (1 - TRAIL_LOCK_PCT)
                   : curPrice * (1 + TRAIL_LOCK_PCT);
