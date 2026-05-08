@@ -3,15 +3,12 @@
 // ═══════════════════════════════════════════════════════════════
 //  strategy-v4-smc.js  —  VWAP Zone + 15m/1m Pivot Confluence
 //
-//  Zone rules (VWAP daily 2σ bands) — zone = direction:
+//  Zone rules (VWAP daily 2σ bands):
 //
-//    ABOVE_UPPER  → LONG only   (price above upper band = bullish strength)
-//    UPPER_MID    → LONG only   (price above VWAP mid = bullish bias)
-//                   15m = HL or LL  +  1m = HL or LL  (micro-pullback entry)
-//
-//    LOWER_MID    → SHORT only  (price below VWAP mid = bearish bias)
-//    BELOW_LOWER  → SHORT only  (price below lower band = bearish strength)
-//                   15m = HH or LH  +  1m = HH or LH  (micro-bounce rejected)
+//    ABOVE_UPPER  → LONG only   price broke above upper band = bullish breakout
+//    UPPER_MID    → SHORT only  price fell back from upper band = rejection/reversion
+//    LOWER_MID    → LONG only   price bounced back from lower band = recovery/reversion
+//    BELOW_LOWER  → SHORT only  price broke below lower band = bearish breakdown
 //
 //  SL  : LONG  → entry × (1 − CAPITAL_RISK/lev)
 //        SHORT → entry × (1 + CAPITAL_RISK/lev)
@@ -496,11 +493,15 @@ function resolveSignal(state, zone, price) {
   }
 
   // ── Zone = direction ───────────────────────────────────────────
-  // Above VWAP mid (uptrend) → LONG only on 15m HL + 1m HL.
-  // Below VWAP mid (downtrend) → SHORT only on 15m LH + 1m LH.
+  // ABOVE_UPPER: price above upper band → LONG (breakout momentum)
+  // UPPER_MID:   price fell from upper band into mid zone → SHORT (rejection back to VWAP)
+  // LOWER_MID:   price rose from lower band into mid zone → LONG (bounce back to VWAP)
+  // BELOW_LOWER: price below lower band → SHORT (breakdown momentum)
   // 4H structure is tracked and logged but does not gate entries here.
-  if (zone === 'ABOVE_UPPER' || zone === 'UPPER_MID') return tryLong();
-  if (zone === 'BELOW_LOWER' || zone === 'LOWER_MID') return tryShort();
+  if (zone === 'ABOVE_UPPER') return tryLong();
+  if (zone === 'UPPER_MID')   return tryShort();
+  if (zone === 'LOWER_MID')   return tryLong();
+  if (zone === 'BELOW_LOWER') return tryShort();
 
   return null;
 }
@@ -645,9 +646,9 @@ async function analyze(symbol, log) {
       // Last 6 pivot labels from the sequence — shows exactly what TV SMC shows
       const pivotSeq  = st.pivots15m.slice(-6).map(x => `${x.label}@${x.price.toFixed(2)}`).join(' → ');
       const seq4hDiag = st.pivots4h.slice(-4).map(x => `${x.label}@${x.price.toFixed(2)}`).join('→');
-      const isUpperZone = diagZone === 'ABOVE_UPPER' || diagZone === 'UPPER_MID';
-      const isLowerZone = diagZone === 'BELOW_LOWER' || diagZone === 'LOWER_MID';
-      log(`[V4-DIAG] ${symbol} zone=${diagZone} 4H=${struct4h}[${seq4hDiag}] 15m=${struct15} price=${diagBar.close.toFixed(4)} | seq=[${pivotSeq}] | 15m=${st.last15mPivotType||'none'}@${st.last15mPivotPrice?.toFixed(4)||'n/a'} sh=${st.sh15_1?.toFixed(4)}/${st.sh15_2?.toFixed(4)} sl=${st.sl15_1?.toFixed(4)}/${st.sl15_2?.toFixed(4)}${dropFromHigh} | 1m=${st.last1mPivotType||'none'}@${st.last1mPivotPrice?.toFixed(4)||'n/a'} | sl1m=${st.sl1m_1?.toFixed(4)}/${st.sl1m_2?.toFixed(4)} gap=${gapPct}%(${gapOk?'OK':'BLOCKED'}) | LONG=${isLowerZone?'BLOCKED(lower-zone)':'ok'} SHORT=${isUpperZone?'BLOCKED(upper-zone)':'ok'}`);
+      // ABOVE_UPPER=LONG, UPPER_MID=SHORT, LOWER_MID=LONG, BELOW_LOWER=SHORT
+      const zoneSide = (diagZone === 'ABOVE_UPPER' || diagZone === 'LOWER_MID') ? 'LONG' : 'SHORT';
+      log(`[V4-DIAG] ${symbol} zone=${diagZone}(${zoneSide}) 4H=${struct4h}[${seq4hDiag}] 15m=${struct15} price=${diagBar.close.toFixed(4)} | seq=[${pivotSeq}] | 15m=${st.last15mPivotType||'none'}@${st.last15mPivotPrice?.toFixed(4)||'n/a'} sh=${st.sh15_1?.toFixed(4)}/${st.sh15_2?.toFixed(4)} sl=${st.sl15_1?.toFixed(4)}/${st.sl15_2?.toFixed(4)}${dropFromHigh} | 1m=${st.last1mPivotType||'none'}@${st.last1mPivotPrice?.toFixed(4)||'n/a'} | sl1m=${st.sl1m_1?.toFixed(4)}/${st.sl1m_2?.toFixed(4)} gap=${gapPct}%(${gapOk?'OK':'BLOCKED'})`);
     }
   }
 
@@ -665,13 +666,11 @@ async function analyze(symbol, log) {
       if (vwapNext) {
         const entryPrice = bar.open;
         const zoneNext   = getZone(entryPrice, vwapNext);
-        // Re-validate zone at next-bar open (SHORT needs ABOVE_UPPER; LONG needs LOWER_MID/BELOW_LOWER)
-        // Zone re-check at fire time — must still be a valid zone for the direction.
-        // SHORT valid zones: ABOVE_UPPER, UPPER_MID, LOWER_MID
-        // LONG  valid zones: BELOW_LOWER, LOWER_MID, UPPER_MID
-        // (same zones where the signal was allowed to fire)
-        const shortZones = new Set(['ABOVE_UPPER', 'UPPER_MID', 'LOWER_MID']);
-        const longZones  = new Set(['BELOW_LOWER', 'LOWER_MID', 'UPPER_MID']);
+        // Re-validate zone at next-bar open — must still be a valid zone for the direction.
+        // LONG  valid zones: ABOVE_UPPER (breakout), LOWER_MID (bounce)
+        // SHORT valid zones: UPPER_MID (rejection), BELOW_LOWER (breakdown)
+        const longZones  = new Set(['ABOVE_UPPER', 'LOWER_MID']);
+        const shortZones = new Set(['UPPER_MID',   'BELOW_LOWER']);
         const zoneOk = pending.direction === 'SHORT'
           ? shortZones.has(zoneNext)
           : longZones.has(zoneNext);
@@ -747,16 +746,16 @@ async function analyze(symbol, log) {
           const chasing2  = isChasing(bar.close, st.sl1m_1);
           const chasePct2 = st.sl1m_1 ? ((bar.close - st.sl1m_1) / st.sl1m_1 * 100).toFixed(3) : 'n/a';
           const gapPct2   = (st.sl1m_1 && st.sl1m_2) ? (Math.abs(st.sl1m_1 - st.sl1m_2) / st.sl1m_2 * 100).toFixed(3) : 'n/a';
-          // LONG zones: ABOVE_UPPER, UPPER_MID — need 15m HL + 1m HL
-          if (zone === 'ABOVE_UPPER' || zone === 'UPPER_MID') {
+          // LONG zones: ABOVE_UPPER (breakout), LOWER_MID (bounce) — need 15m HL + 1m HL
+          if (zone === 'ABOVE_UPPER' || zone === 'LOWER_MID') {
             if (pType === 'HL') {
               const reason = !gapOk2 ? `gap=${gapPct2}%` : chasing2 ? `chase=${chasePct2}%` : `1m=${p1Type}(need HL)`;
               log(`[V4] LONG WAIT — ${symbol} ${zone} 15m=HL but ${reason} sl1m=${st.sl1m_1?.toFixed(4)}/${st.sl1m_2?.toFixed(4)}`);
             } else {
               log(`[V4] no signal — ${symbol} ${zone} 15m=${pType} (need 15m HL for LONG)`);
             }
-          // SHORT zones: BELOW_LOWER, LOWER_MID — need 15m LH + 1m LH
-          } else if (zone === 'BELOW_LOWER' || zone === 'LOWER_MID') {
+          // SHORT zones: UPPER_MID (rejection), BELOW_LOWER (breakdown) — need 15m LH + 1m LH
+          } else if (zone === 'UPPER_MID' || zone === 'BELOW_LOWER') {
             if (pType === 'LH') {
               log(`[V4] SHORT WAIT — ${symbol} ${zone} 15m=LH but 1m=${p1Type} (need 1m LH) drop=${dropPct}% sh1m=${st.sh1m_1?.toFixed(4)}/${st.sh1m_2?.toFixed(4)}`);
             } else if (isShortTooLate(bar.close, st.last15mPivotPrice)) {
