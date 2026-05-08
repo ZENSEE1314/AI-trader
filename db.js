@@ -921,12 +921,26 @@ async function initAllTables() {
   // it means "100x leverage" it actually means "use 100% of wallet as margin".
   // Clamp any value > 20 down to 10 (safe default) on every boot.
   try {
+    // Fix api_keys.capital_percentage > 10 → 10
+    // Hard max per trade is 10% (5 symbols × 10% = 50% max wallet exposure).
+    // Anything above 10% risks deploying whole capital across open positions.
     const capFix = await pool.query(`
       UPDATE api_keys SET capital_percentage = 10.0
-      WHERE capital_percentage > 20
+      WHERE capital_percentage > 10 OR capital_percentage IS NULL
     `);
     if (capFix.rowCount > 0) {
-      console.log(`[DB] capital_percentage safety fix: reset ${capFix.rowCount} key(s) from >20% → 10% (use admin panel to adjust)`);
+      console.log(`[DB] api_keys capital_percentage safety fix: reset ${capFix.rowCount} key(s) to 10% (hard max per trade)`);
+    }
+
+    // Fix risk_levels.capital_percentage > 10 → 10
+    // risk_levels is the fallback when api_keys.capital_percentage is NULL —
+    // if risk_level had 100%, the COALESCE returned 100% and whole wallet per trade.
+    const rlFix = await pool.query(`
+      UPDATE risk_levels SET capital_percentage = 10.0
+      WHERE capital_percentage > 10 OR capital_percentage IS NULL
+    `);
+    if (rlFix.rowCount > 0) {
+      console.log(`[DB] risk_levels capital_percentage safety fix: reset ${rlFix.rowCount} risk level(s) to 10%`);
     }
   } catch (e) { console.warn('[DB] capital_percentage fix warning:', e.message); }
 
