@@ -2414,7 +2414,7 @@ async function hardSyncExchangeDB() {
                  quantity    = EXCLUDED.quantity,
                  entry_price = EXCLUDED.entry_price
                WHERE trades.status = 'OPEN'
-               RETURNING id, xmax`,
+               RETURNING id, xmax, leverage AS prev_lev`,
               [key.id, key.user_id, symbol, dir, entry, recoverySl,
                qty, exchangeLev, recoverySl, posId]
             );
@@ -2437,7 +2437,7 @@ async function hardSyncExchangeDB() {
                 }
               } else {
                 // xmax > 0 means UPDATE — leverage may have been corrected
-                const prevLev = parseInt(row.leverage) || exchangeLev;
+                const prevLev = parseInt(row.prev_lev) || exchangeLev;
                 if (prevLev !== exchangeLev) {
                   log(`📊 SYNC: leverage corrected ${prevLev}→${exchangeLev} for ${symbol} ${dir} (key #${key.id})`);
                 }
