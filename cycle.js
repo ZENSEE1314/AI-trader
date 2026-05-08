@@ -35,6 +35,12 @@ const HIGH_PRICE_SYMBOLS = new Set([
   'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT',
 ]);
 
+// Hard-coded position sizing — 10% of total wallet per trade, all tokens, all users.
+// DB values (capital_percentage, risk_levels) are IGNORED for sizing.
+// With 5 active symbols the worst-case total exposure is 5 × 10% = 50% of wallet.
+// This constant is the ONLY place sizing is controlled — change it here to affect all paths.
+const CAPITAL_PER_TRADE = 0.10;
+
 const CONFIG = {
   MIN_BALANCE:     5,
   TAKER_FEE:       0.0004,
@@ -753,7 +759,7 @@ async function openTrade(client, pick, wallet) {
   // Get AI-tuned params for leverage and sizing
   const aiParams = await aiLearner.getOptimalParams();
   const leverage = getLeverage(sym, price, aiParams);
-  const walletSizePct = 0.10; // locked — 10% of wallet per trade (safety agent)
+  const walletSizePct = CAPITAL_PER_TRADE; // 10% of wallet — single source of truth
 
   await client.setLeverage({ symbol: sym, leverage });
   try {
@@ -1891,19 +1897,10 @@ async function executeForAllUsers(pick) {
           return;
         }
 
-        // User's risk settings — active AI version can override SL/trail if admin activated one
-        // capital_percentage from DB is e.g. 10 = 10% of wallet used as margin per trade.
-        // Hard cap at 10%: with 5 active symbols, 5 × 10% = 50% max wallet exposure.
-        // Previously capped at 20% → 5 × 20% = 100% whole account in trades — that is
-        // the "whole capital" bug. Hard max is now 10% regardless of DB value.
-        const MAX_CAPITAL_PCT = 10;
-        const rawCapPct = await getCapitalPercentage(key.id);
-        const cappedCapPct = Math.min(rawCapPct, MAX_CAPITAL_PCT);
-        if (rawCapPct > MAX_CAPITAL_PCT) {
-          userLog.trade(`User ${key.email}: capital_pct=${rawCapPct}% hard-capped to ${MAX_CAPITAL_PCT}% (${MAX_CAPITAL_PCT}% × 5 symbols = 50% max exposure — fix in admin settings)`);
-        }
-        const walletSizePct = cappedCapPct / 100;
-        userLog.trade(`User ${key.email}: capital_pct=${cappedCapPct}% (raw DB=${rawCapPct}%) walletSizePct=${walletSizePct.toFixed(3)}`);
+        // Position sizing: always 10% of total wallet per trade — hardcoded, no DB override.
+        // CAPITAL_PER_TRADE = 0.10 is the single source of truth defined at the top of this file.
+        const walletSizePct = CAPITAL_PER_TRADE;
+        userLog.trade(`User ${key.email}: sizing = ${(walletSizePct * 100).toFixed(0)}% of wallet (hardcoded CAPITAL_PER_TRADE)`);
         const activeVer = await getActiveVersionParams();
 
         // Direction enable/disable — if active version disables a direction, skip this trade
