@@ -287,7 +287,42 @@ function isShort1mTooLate(price, sh1m_1) {
   return dropPct > MAX_SHORT_DROP_PCT;
 }
 
+// ── 15m Market Structure ───────────────────────────────────────
+// Compares the two most recent confirmed 15m swing highs AND swing lows.
+// BULLISH  : sh15_1 > sh15_2 (HH) AND sl15_1 > sl15_2 (HL) → uptrend
+// BEARISH  : sh15_1 < sh15_2 (LH) AND sl15_1 < sl15_2 (LL) → downtrend
+// MIXED    : one side bullish, one bearish → ranging/transitioning
+// UNKNOWN  : fewer than 2 confirmed pivots on each side
+//
+// Rule: only trade WITH the structure.
+//   BEARISH structure → LONG is BLOCKED regardless of zone or 1m type
+//   BULLISH structure → SHORT is BLOCKED regardless of zone or 1m type
+//   MIXED/UNKNOWN → allow both (zone determines direction)
+//
+// This is the fix for "fire long at top of nowhere in a downtrend".
+// A single 15m HL can pass last15mPivotType='HL' even when highs are
+// making LH (bearish). The structure check catches this by requiring
+// BOTH highs AND lows to align.
+function get15mStructure(state) {
+  const { sh15_1, sh15_2, sl15_1, sl15_2 } = state;
+  if (sh15_1 === null || sh15_2 === null || sl15_1 === null || sl15_2 === null) {
+    return 'UNKNOWN'; // not enough data — allow both directions
+  }
+  const higherHigh = sh15_1 > sh15_2; // HH
+  const higherLow  = sl15_1 > sl15_2; // HL
+  const lowerHigh  = sh15_1 < sh15_2; // LH
+  const lowerLow   = sl15_1 < sl15_2; // LL
+  if (higherHigh && higherLow) return 'BULLISH';
+  if (lowerHigh  && lowerLow)  return 'BEARISH';
+  return 'MIXED'; // transitioning — allow both, zone decides
+}
+
 // ── Signal logic ───────────────────────────────────────────────
+//
+//  Structure gate (new — applied before zone/pivot checks):
+//    BEARISH 15m structure → LONG blocked in ALL zones
+//    BULLISH 15m structure → SHORT blocked in ALL zones
+//    MIXED/UNKNOWN → both allowed (existing zone rules apply)
 //
 //  ABOVE_UPPER  → SHORT only
 //                 15m = HH (strict — not LH) + 1m = HH or LH
@@ -300,9 +335,9 @@ function isShort1mTooLate(price, sh1m_1) {
 //  BELOW_LOWER  → LONG only
 //                 15m = HL or LL  +  1m = HL or LL
 //
-//  Drop filter (SHORT): price within 0.30% of 15m pivot reference.
-//  Gap  filter (LONG):  1m swing lows ≤ 1.0% apart.
-//  Chase filter (LONG): price within 0.20% of 1m swing low.
+//  Drop filter (SHORT): price within 0.12% of 15m+1m pivot reference.
+//  Gap  filter (LONG):  consecutive 1m swing lows ≤ 0.50% apart.
+//  Chase filter (LONG): price within 0.08% of 1m swing low.
 function resolveSignal(state, zone, price) {
   const p15 = state.last15mPivotType;  // 'HH' | 'HL' | 'LH' | 'LL' | null
   const p1m = state.last1mPivotType;   // 'HH' | 'HL' | 'LH' | 'LL' | null
@@ -311,6 +346,22 @@ function resolveSignal(state, zone, price) {
   const is15Low  = p15 === 'HL' || p15 === 'LL';
   const is1High  = p1m === 'HH' || p1m === 'LH';
   const is1Low   = p1m === 'HL' || p1m === 'LL';
+
+  // ── STRUCTURE GATE — must pass before any zone/pivot check ────
+  // Compares both swing-high levels AND both swing-low levels on 15m.
+  // BEARISH (LH+LL): every 15m high is lower AND every low is lower → downtrend.
+  //   Firing LONG here is exactly the "buy in no where during downtrend" problem.
+  //   ALL LONG signals blocked until structure turns BULLISH or MIXED.
+  // BULLISH (HH+HL): uptrend → block SHORT.
+  // MIXED/UNKNOWN: both allowed — zone rules decide direction.
+  const structure15m = get15mStructure(state);
+  if (structure15m === 'BEARISH') {
+    if (is15Low || is1Low) return null; // block LONG — downtrend, no buys
+  }
+  if (structure15m === 'BULLISH') {
+    if (is15High || is1High) return null; // block SHORT — uptrend, no sells
+  }
+  // structure15m === 'MIXED' or 'UNKNOWN' → fall through to zone logic
 
   // ── ABOVE_UPPER: SHORT only — 15m must be HH (strict) ─────────
   if (zone === 'ABOVE_UPPER') {
@@ -444,7 +495,8 @@ async function analyze(symbol, log) {
       const dropFromHigh = (st.last15mPivotPrice && (st.last15mPivotType === 'HH' || st.last15mPivotType === 'LH'))
         ? ` drop=${((st.last15mPivotPrice - diagBar.close) / st.last15mPivotPrice * 100).toFixed(3)}%`
         : '';
-      log(`[V4-DIAG] ${symbol} zone=${diagZone} price=${diagBar.close.toFixed(4)} | 15m=${st.last15mPivotType||'none'}@${st.last15mPivotPrice?.toFixed(4)||'n/a'}${dropFromHigh} | 1m=${st.last1mPivotType||'none'}@${st.last1mPivotPrice?.toFixed(4)||'n/a'} | sl1m=${st.sl1m_1?.toFixed(4)}/${st.sl1m_2?.toFixed(4)} gap=${gapPct}%(${gapOk?'OK':'BLOCKED'}) | need: SHORT=ABOVE_UPPER+HIGH+HIGH, LONG=BELOW_LOWER+LOW+LOW`);
+      const struct15 = get15mStructure(st);
+      log(`[V4-DIAG] ${symbol} zone=${diagZone} struct=${struct15} price=${diagBar.close.toFixed(4)} | 15m=${st.last15mPivotType||'none'}@${st.last15mPivotPrice?.toFixed(4)||'n/a'} sh=${st.sh15_1?.toFixed(4)}/${st.sh15_2?.toFixed(4)} sl=${st.sl15_1?.toFixed(4)}/${st.sl15_2?.toFixed(4)}${dropFromHigh} | 1m=${st.last1mPivotType||'none'}@${st.last1mPivotPrice?.toFixed(4)||'n/a'} | sl1m=${st.sl1m_1?.toFixed(4)}/${st.sl1m_2?.toFixed(4)} gap=${gapPct}%(${gapOk?'OK':'BLOCKED'}) | LONG=${struct15==='BEARISH'?'BLOCKED':'ok'} SHORT=${struct15==='BULLISH'?'BLOCKED':'ok'}`);
     }
   }
 
