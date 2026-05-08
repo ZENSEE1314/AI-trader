@@ -121,6 +121,12 @@ function getState(symbol) {
       // Deferred entry: pivot confirmed on bar N → signal fires on bar N+1 open.
       pendingSignal: null,
 
+      // Zone entry cooldown — one trade per zone entry.
+      // Prevents 5-6 consecutive signals in the same zone within minutes.
+      // Resets when price moves to a different zone.
+      prevZone:   null,
+      zoneTraded: false,
+
       ready: false,
     };
   }
@@ -725,10 +731,14 @@ async function analyze(symbol, log) {
       if (vwap) {
         const zone = getZone(bar.close, vwap);
 
+        // Zone entry cooldown — one trade per zone entry
+        if (zone !== st.prevZone) { st.prevZone = zone; st.zoneTraded = false; }
+
         const sig = resolveSignal(st, zone, bar.close);
-        log(`[V4-SIG] ${symbol} zone=${zone} 4H=${get4hStructure(st, bar.close)} 15m=${get15mStructure(st, bar.close)} piv15=${st.last15mPivotType||'none'} piv1m=${st.last1mPivotType||'none'} price=${bar.close.toFixed(4)} → ${sig ? sig.direction+'+'+sig.type : 'NO_SIGNAL'}`);
-        if (sig) {
+        log(`[V4-SIG] ${symbol} zone=${zone} 4H=${get4hStructure(st, bar.close)} 15m=${get15mStructure(st, bar.close)} piv15=${st.last15mPivotType||'none'} piv1m=${st.last1mPivotType||'none'} price=${bar.close.toFixed(4)} traded=${st.zoneTraded} → ${sig && !st.zoneTraded ? sig.direction+'+'+sig.type : (sig ? 'ZONE_TRADED' : 'NO_SIGNAL')}`);
+        if (sig && !st.zoneTraded) {
           st.lastSignalTime = pivotTime;
+          st.zoneTraded = true;
           // Freeze the pivot references at signal-creation time.
           // The chase filter on next-bar open must compare against the ORIGINAL
           // swing low (LONG) or swing high (SHORT) that triggered this signal.
