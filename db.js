@@ -1009,7 +1009,28 @@ async function initAllTables() {
         ('sl_trail_pct',   '1.2'),
         ('pivot_lb_l',     '5'),
         ('pivot_lb_r',     '1'),
-        ('pivot_history',  '50')
+        ('pivot_history',  '50'),
+        ('tsl_100x_t1_trig', '46'),
+        ('tsl_100x_t1_lock', '45'),
+        ('tsl_100x_t2_trig', '51'),
+        ('tsl_100x_t2_lock', '50'),
+        ('tsl_100x_t3_trig', '61'),
+        ('tsl_100x_t3_lock', '60'),
+        ('tsl_100x_step',    '10'),
+        ('tsl_75x_t1_trig',  '31'),
+        ('tsl_75x_t1_lock',  '30'),
+        ('tsl_75x_t2_trig',  '41'),
+        ('tsl_75x_t2_lock',  '40'),
+        ('tsl_75x_t3_trig',  '51'),
+        ('tsl_75x_t3_lock',  '50'),
+        ('tsl_75x_step',     '10'),
+        ('tsl_50x_t1_trig',  '21'),
+        ('tsl_50x_t1_lock',  '20'),
+        ('tsl_50x_t2_trig',  '31'),
+        ('tsl_50x_t2_lock',  '30'),
+        ('tsl_50x_t3_trig',  '38'),
+        ('tsl_50x_t3_lock',  '35'),
+        ('tsl_50x_step',     '11')
       ON CONFLICT (key) DO NOTHING
     `);
     console.log('[DB] v4_config table ready');

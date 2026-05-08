@@ -36,6 +36,11 @@ const HIGH_PRICE_SYMBOLS = new Set(['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT'])
 // V4 strategy constants — loaded from v4_config DB table on startup (admin-editable).
 // Falls back to these safe defaults when the DB row is missing.
 let CAPITAL_PER_TRADE = 0.10;
+
+// Dynamic trailing SL tier tables loaded from v4_config (null = use hardcoded defaults).
+// Shape: { '100': [{trigger, lock},...], '75': [...], '50': [...] }
+let _dynamicTslTiers = null;
+
 let TOKEN_LEVERAGE = {
   BTCUSDT: 100,
   ETHUSDT: 100,
@@ -57,7 +62,37 @@ async function loadV4Config() {
     if (cfg.lev_SOLUSDT) TOKEN_LEVERAGE.SOLUSDT = parseInt(cfg.lev_SOLUSDT);
     if (cfg.lev_ADAUSDT) TOKEN_LEVERAGE.ADAUSDT = parseInt(cfg.lev_ADAUSDT);
 
+    // Build dynamic trailing SL tier tables from admin config.
+    // Falls back to null (hardcoded tables) if any key is missing.
+    const g = (k, def) => cfg[k] ? parseFloat(cfg[k]) : def;
+    _dynamicTslTiers = {
+      '100': buildTierTable(
+        g('tsl_100x_t1_trig', 46), g('tsl_100x_t1_lock', 45),
+        g('tsl_100x_t2_trig', 51), g('tsl_100x_t2_lock', 50),
+        g('tsl_100x_t3_trig', 61), g('tsl_100x_t3_lock', 60),
+        g('tsl_100x_step', 10)
+      ),
+      '75': buildTierTable(
+        g('tsl_75x_t1_trig', 31), g('tsl_75x_t1_lock', 30),
+        g('tsl_75x_t2_trig', 41), g('tsl_75x_t2_lock', 40),
+        g('tsl_75x_t3_trig', 51), g('tsl_75x_t3_lock', 50),
+        g('tsl_75x_step', 10)
+      ),
+      '50': buildTierTable(
+        g('tsl_50x_t1_trig', 21), g('tsl_50x_t1_lock', 20),
+        g('tsl_50x_t2_trig', 31), g('tsl_50x_t2_lock', 30),
+        g('tsl_50x_t3_trig', 38), g('tsl_50x_t3_lock', 35),
+        g('tsl_50x_step', 11)
+      ),
+    };
+
+    const t100 = _dynamicTslTiers['100'];
+    const t75  = _dynamicTslTiers['75'];
+    const t50  = _dynamicTslTiers['50'];
     console.log(`[V4 Config] Loaded — capital: ${(CAPITAL_PER_TRADE * 100).toFixed(0)}% | leverage: BTC/ETH/BNB=${TOKEN_LEVERAGE.BTCUSDT}x SOL/ADA=${TOKEN_LEVERAGE.SOLUSDT}x`);
+    console.log(`[V4 Config] TSL tiers — 100x: T1=${t100[0].trigger*100}%→${t100[0].lock*100}% T2=${t100[1].trigger*100}%→${t100[1].lock*100}% T3=${t100[2].trigger*100}%→${t100[2].lock*100}% step=${g('tsl_100x_step',10)}%`);
+    console.log(`[V4 Config] TSL tiers —  75x: T1=${t75[0].trigger*100}%→${t75[0].lock*100}%  T2=${t75[1].trigger*100}%→${t75[1].lock*100}%  T3=${t75[2].trigger*100}%→${t75[2].lock*100}%  step=${g('tsl_75x_step',10)}%`);
+    console.log(`[V4 Config] TSL tiers —  50x: T1=${t50[0].trigger*100}%→${t50[0].lock*100}%  T2=${t50[1].trigger*100}%→${t50[1].lock*100}%  T3=${t50[2].trigger*100}%→${t50[2].lock*100}%  step=${g('tsl_50x_step',11)}%`);
   } catch (e) {
     console.warn('[V4 Config] Could not load from DB, using hardcoded defaults:', e.message);
   }
@@ -187,11 +222,35 @@ const TRAILING_TIERS_75X = [
   { trigger: 2.01, lock: 2.00 }, // +201% → +200%
 ];
 
+// Build a full tier table from 3 admin-configured base tiers + a step size.
+// After tier 3 the table auto-extends up to 500% capital gain using the step.
+// All inputs are in capital % (integers, e.g. 46 means 46%).
+function buildTierTable(t1Trig, t1Lock, t2Trig, t2Lock, t3Trig, t3Lock, stepPct) {
+  const step = stepPct / 100;
+  const tiers = [
+    { trigger: t1Trig / 100, lock: t1Lock / 100 },
+    { trigger: t2Trig / 100, lock: t2Lock / 100 },
+    { trigger: t3Trig / 100, lock: t3Lock / 100 },
+  ];
+  // Auto-extend beyond tier 3 using the step size until 500% capital
+  let trig = t3Trig / 100;
+  let lock = t3Lock / 100;
+  while (trig < 5.0) {
+    trig = parseFloat((trig + step).toFixed(4));
+    lock = parseFloat((lock + step).toFixed(4));
+    tiers.push({ trigger: trig, lock });
+  }
+  return tiers;
+}
+
 function tierTableForLev(leverage) {
-  // V4 SMC leverage tiers:
-  //   100x → tight 1% gap table (BTC/ETH/BNB)
-  //    75x → 75x table (ADA/SOL/AVAX)
-  //    ≤50x → gentler 50x table
+  // Use admin-configured dynamic tiers when available (loaded from v4_config on startup).
+  if (_dynamicTslTiers) {
+    if (leverage >= 100) return _dynamicTslTiers['100'];
+    if (leverage >= 75)  return _dynamicTslTiers['75'];
+    return _dynamicTslTiers['50'];
+  }
+  // Fallback to hardcoded defaults
   if (leverage >= 100) return TRAILING_TIERS;
   if (leverage >= 75)  return TRAILING_TIERS_75X;
   return TRAILING_TIERS_50X;

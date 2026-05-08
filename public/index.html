@@ -2162,26 +2162,137 @@
                 <div style="font-size:0.65rem;color:var(--color-text-muted);margin-top:3px;">Max HH/LH/HL/LL entries kept</div>
               </div>
 
-              <!-- Trailing SL step -->
-              <div>
-                <label style="font-size:0.72rem;color:var(--color-text-muted);display:block;margin-bottom:5px;">Trailing SL Step — % price</label>
-                <input id="v4-sl-trail" type="number" min="0.1" max="5" step="0.1" value="1.2" class="form-input text-mono"
-                  style="font-size:1.1rem;font-weight:700;max-width:120px;">
-                <div style="font-size:0.65rem;color:var(--color-text-muted);margin-top:3px;">SL moves up by this % as price rises</div>
-              </div>
 
             </div>
 
-            <!-- Gate info (read-only) -->
+            <!-- ── Trailing SL Tier Config ── -->
+            <div style="margin-top:var(--space-4);">
+              <div style="font-size:0.72rem;font-weight:700;color:var(--color-text-muted);letter-spacing:.06em;text-transform:uppercase;margin-bottom:6px;">🎯 Trailing SL Tiers — Capital % (3 locks + continuous trail)</div>
+              <div style="font-size:0.7rem;color:var(--color-text-muted);margin-bottom:var(--space-3);line-height:1.5;">
+                3 price-hit locks per leverage group. After tier 3 the SL trails every <em>Trail Step %</em> of capital gain continuously.
+                <strong style="color:var(--color-text);">Capital % = price move % × leverage.</strong>
+                E.g. 46% trigger at 100× = price rose +0.46%.
+              </div>
+              <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:var(--space-3);">
+
+                <!-- 100× card -->
+                <div style="background:rgba(212,175,55,0.06);border:1px solid rgba(212,175,55,0.25);border-radius:10px;padding:var(--space-3);">
+                  <div style="font-size:0.78rem;font-weight:700;color:#d4af37;margin-bottom:var(--space-2);">100× — BTC / ETH / BNB</div>
+                  <table style="width:100%;border-collapse:collapse;font-size:0.72rem;margin-bottom:var(--space-2);">
+                    <thead><tr>
+                      <th style="text-align:left;padding:4px 6px;color:var(--color-text-muted);font-weight:600;">Tier</th>
+                      <th style="text-align:center;padding:4px 6px;color:var(--color-text-muted);font-weight:600;">Trigger %</th>
+                      <th style="text-align:center;padding:4px 6px;color:var(--color-text-muted);font-weight:600;">Lock SL %</th>
+                    </tr></thead>
+                    <tbody>
+                      <tr>
+                        <td style="padding:5px 6px;color:var(--color-text);">1st hit</td>
+                        <td style="padding:3px 2px;text-align:center;"><input id="tsl-100x-t1-trig" type="number" min="1" max="500" step="1" value="46" class="form-input text-mono" style="width:64px;font-size:0.82rem;padding:3px 6px;"></td>
+                        <td style="padding:3px 2px;text-align:center;"><input id="tsl-100x-t1-lock" type="number" min="1" max="500" step="1" value="45" class="form-input text-mono" style="width:64px;font-size:0.82rem;padding:3px 6px;"></td>
+                      </tr>
+                      <tr>
+                        <td style="padding:5px 6px;color:var(--color-text);">2nd hit</td>
+                        <td style="padding:3px 2px;text-align:center;"><input id="tsl-100x-t2-trig" type="number" min="1" max="500" step="1" value="51" class="form-input text-mono" style="width:64px;font-size:0.82rem;padding:3px 6px;"></td>
+                        <td style="padding:3px 2px;text-align:center;"><input id="tsl-100x-t2-lock" type="number" min="1" max="500" step="1" value="50" class="form-input text-mono" style="width:64px;font-size:0.82rem;padding:3px 6px;"></td>
+                      </tr>
+                      <tr>
+                        <td style="padding:5px 6px;color:var(--color-text);">3rd hit</td>
+                        <td style="padding:3px 2px;text-align:center;"><input id="tsl-100x-t3-trig" type="number" min="1" max="500" step="1" value="61" class="form-input text-mono" style="width:64px;font-size:0.82rem;padding:3px 6px;"></td>
+                        <td style="padding:3px 2px;text-align:center;"><input id="tsl-100x-t3-lock" type="number" min="1" max="500" step="1" value="60" class="form-input text-mono" style="width:64px;font-size:0.82rem;padding:3px 6px;"></td>
+                      </tr>
+                    </tbody>
+                  </table>
+                  <div style="display:flex;align-items:center;gap:8px;margin-top:4px;">
+                    <label style="font-size:0.7rem;color:var(--color-text-muted);white-space:nowrap;">Trail step after 3rd:</label>
+                    <input id="tsl-100x-step" type="number" min="1" max="100" step="1" value="10" class="form-input text-mono" style="width:64px;font-size:0.82rem;padding:3px 6px;">
+                    <span style="font-size:0.7rem;color:var(--color-text-muted);">% capital</span>
+                  </div>
+                </div>
+
+                <!-- 75× card -->
+                <div style="background:rgba(139,92,246,0.06);border:1px solid rgba(139,92,246,0.25);border-radius:10px;padding:var(--space-3);">
+                  <div style="font-size:0.78rem;font-weight:700;color:#a78bfa;margin-bottom:var(--space-2);">75× — SOL / ADA / AVAX</div>
+                  <table style="width:100%;border-collapse:collapse;font-size:0.72rem;margin-bottom:var(--space-2);">
+                    <thead><tr>
+                      <th style="text-align:left;padding:4px 6px;color:var(--color-text-muted);font-weight:600;">Tier</th>
+                      <th style="text-align:center;padding:4px 6px;color:var(--color-text-muted);font-weight:600;">Trigger %</th>
+                      <th style="text-align:center;padding:4px 6px;color:var(--color-text-muted);font-weight:600;">Lock SL %</th>
+                    </tr></thead>
+                    <tbody>
+                      <tr>
+                        <td style="padding:5px 6px;color:var(--color-text);">1st hit</td>
+                        <td style="padding:3px 2px;text-align:center;"><input id="tsl-75x-t1-trig" type="number" min="1" max="500" step="1" value="31" class="form-input text-mono" style="width:64px;font-size:0.82rem;padding:3px 6px;"></td>
+                        <td style="padding:3px 2px;text-align:center;"><input id="tsl-75x-t1-lock" type="number" min="1" max="500" step="1" value="30" class="form-input text-mono" style="width:64px;font-size:0.82rem;padding:3px 6px;"></td>
+                      </tr>
+                      <tr>
+                        <td style="padding:5px 6px;color:var(--color-text);">2nd hit</td>
+                        <td style="padding:3px 2px;text-align:center;"><input id="tsl-75x-t2-trig" type="number" min="1" max="500" step="1" value="41" class="form-input text-mono" style="width:64px;font-size:0.82rem;padding:3px 6px;"></td>
+                        <td style="padding:3px 2px;text-align:center;"><input id="tsl-75x-t2-lock" type="number" min="1" max="500" step="1" value="40" class="form-input text-mono" style="width:64px;font-size:0.82rem;padding:3px 6px;"></td>
+                      </tr>
+                      <tr>
+                        <td style="padding:5px 6px;color:var(--color-text);">3rd hit</td>
+                        <td style="padding:3px 2px;text-align:center;"><input id="tsl-75x-t3-trig" type="number" min="1" max="500" step="1" value="51" class="form-input text-mono" style="width:64px;font-size:0.82rem;padding:3px 6px;"></td>
+                        <td style="padding:3px 2px;text-align:center;"><input id="tsl-75x-t3-lock" type="number" min="1" max="500" step="1" value="50" class="form-input text-mono" style="width:64px;font-size:0.82rem;padding:3px 6px;"></td>
+                      </tr>
+                    </tbody>
+                  </table>
+                  <div style="display:flex;align-items:center;gap:8px;margin-top:4px;">
+                    <label style="font-size:0.7rem;color:var(--color-text-muted);white-space:nowrap;">Trail step after 3rd:</label>
+                    <input id="tsl-75x-step" type="number" min="1" max="100" step="1" value="10" class="form-input text-mono" style="width:64px;font-size:0.82rem;padding:3px 6px;">
+                    <span style="font-size:0.7rem;color:var(--color-text-muted);">% capital</span>
+                  </div>
+                </div>
+
+                <!-- 50× card -->
+                <div style="background:rgba(56,189,248,0.06);border:1px solid rgba(56,189,248,0.25);border-radius:10px;padding:var(--space-3);">
+                  <div style="font-size:0.78rem;font-weight:700;color:#38bdf8;margin-bottom:var(--space-2);">50× — Other tokens</div>
+                  <table style="width:100%;border-collapse:collapse;font-size:0.72rem;margin-bottom:var(--space-2);">
+                    <thead><tr>
+                      <th style="text-align:left;padding:4px 6px;color:var(--color-text-muted);font-weight:600;">Tier</th>
+                      <th style="text-align:center;padding:4px 6px;color:var(--color-text-muted);font-weight:600;">Trigger %</th>
+                      <th style="text-align:center;padding:4px 6px;color:var(--color-text-muted);font-weight:600;">Lock SL %</th>
+                    </tr></thead>
+                    <tbody>
+                      <tr>
+                        <td style="padding:5px 6px;color:var(--color-text);">1st hit</td>
+                        <td style="padding:3px 2px;text-align:center;"><input id="tsl-50x-t1-trig" type="number" min="1" max="500" step="1" value="21" class="form-input text-mono" style="width:64px;font-size:0.82rem;padding:3px 6px;"></td>
+                        <td style="padding:3px 2px;text-align:center;"><input id="tsl-50x-t1-lock" type="number" min="1" max="500" step="1" value="20" class="form-input text-mono" style="width:64px;font-size:0.82rem;padding:3px 6px;"></td>
+                      </tr>
+                      <tr>
+                        <td style="padding:5px 6px;color:var(--color-text);">2nd hit</td>
+                        <td style="padding:3px 2px;text-align:center;"><input id="tsl-50x-t2-trig" type="number" min="1" max="500" step="1" value="31" class="form-input text-mono" style="width:64px;font-size:0.82rem;padding:3px 6px;"></td>
+                        <td style="padding:3px 2px;text-align:center;"><input id="tsl-50x-t2-lock" type="number" min="1" max="500" step="1" value="30" class="form-input text-mono" style="width:64px;font-size:0.82rem;padding:3px 6px;"></td>
+                      </tr>
+                      <tr>
+                        <td style="padding:5px 6px;color:var(--color-text);">3rd hit</td>
+                        <td style="padding:3px 2px;text-align:center;"><input id="tsl-50x-t3-trig" type="number" min="1" max="500" step="1" value="38" class="form-input text-mono" style="width:64px;font-size:0.82rem;padding:3px 6px;"></td>
+                        <td style="padding:3px 2px;text-align:center;"><input id="tsl-50x-t3-lock" type="number" min="1" max="500" step="1" value="35" class="form-input text-mono" style="width:64px;font-size:0.82rem;padding:3px 6px;"></td>
+                      </tr>
+                    </tbody>
+                  </table>
+                  <div style="display:flex;align-items:center;gap:8px;margin-top:4px;">
+                    <label style="font-size:0.7rem;color:var(--color-text-muted);white-space:nowrap;">Trail step after 3rd:</label>
+                    <input id="tsl-50x-step" type="number" min="1" max="100" step="1" value="11" class="form-input text-mono" style="width:64px;font-size:0.82rem;padding:3px 6px;">
+                    <span style="font-size:0.7rem;color:var(--color-text-muted);">% capital</span>
+                  </div>
+                </div>
+
+              </div>
+            </div>
+
+            <!-- Zone logic (read-only reference) -->
             <div style="margin-top:var(--space-3);display:flex;gap:var(--space-2);flex-wrap:wrap;">
               <div style="flex:1;min-width:160px;padding:8px 12px;background:rgba(0,255,136,0.05);border:1px solid rgba(0,255,136,0.15);border-radius:6px;font-size:0.78rem;">
-                <span style="color:#00ff88;font-weight:700;">BULLISH</span><span style="color:var(--color-text-muted);"> — blocks ALL SHORT</span>
+                <span style="color:#00ff88;font-weight:700;">ABOVE UPPER</span><span style="color:var(--color-text-muted);"> → LONG (breakout)</span>
               </div>
               <div style="flex:1;min-width:160px;padding:8px 12px;background:rgba(255,56,96,0.05);border:1px solid rgba(255,56,96,0.15);border-radius:6px;font-size:0.78rem;">
-                <span style="color:#ff4060;font-weight:700;">BEARISH</span><span style="color:var(--color-text-muted);"> — blocks ALL LONG</span>
+                <span style="color:#ff4060;font-weight:700;">UPPER MID</span><span style="color:var(--color-text-muted);"> → SHORT (from upper only)</span>
+              </div>
+              <div style="flex:1;min-width:160px;padding:8px 12px;background:rgba(0,255,136,0.05);border:1px solid rgba(0,255,136,0.15);border-radius:6px;font-size:0.78rem;">
+                <span style="color:#00ff88;font-weight:700;">LOWER MID</span><span style="color:var(--color-text-muted);"> → LONG (from lower only)</span>
               </div>
               <div style="flex:1;min-width:160px;padding:8px 12px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:6px;font-size:0.78rem;">
-                <span style="color:#94a3b8;font-weight:700;">MIXED / UNKNOWN</span><span style="color:var(--color-text-muted);"> — no trades</span>
+                <span style="color:#94a3b8;font-weight:700;">BELOW LOWER</span><span style="color:var(--color-text-muted);"> — no trade (11% WR)</span>
               </div>
             </div>
           </div>
@@ -2191,18 +2302,20 @@
             <div style="background:var(--color-bg-raised);border:1px solid rgba(0,255,136,0.12);border-radius:var(--radius-lg);padding:var(--space-3);">
               <div style="font-size:0.72rem;font-weight:700;color:#00ff88;margin-bottom:var(--space-2);">▲ LONG Entry (1m)</div>
               <ul style="margin:0;padding-left:14px;font-size:0.75rem;color:var(--color-text-muted);line-height:1.9;">
-                <li>15m structure = <strong style="color:var(--color-text);">BULLISH</strong></li>
-                <li>1m pivot = <strong style="color:var(--color-text);">HL</strong> (Higher Low)</li>
-                <li>VWAP: price above lower 2σ</li>
+                <li>15m pivot = <strong style="color:var(--color-text);">HL</strong> (Higher Low only)</li>
+                <li>1m pivot = <strong style="color:var(--color-text);">HL</strong> (Higher Low only)</li>
+                <li>Zone = <strong style="color:#00ff88;">ABOVE UPPER</strong> (breakout) <em>or</em></li>
+                <li>Zone = <strong style="color:#00ff88;">LOWER MID</strong> (came from BELOW LOWER)</li>
                 <li>No open LONG on this token</li>
               </ul>
             </div>
             <div style="background:var(--color-bg-raised);border:1px solid rgba(255,56,96,0.12);border-radius:var(--radius-lg);padding:var(--space-3);">
               <div style="font-size:0.72rem;font-weight:700;color:#ff4060;margin-bottom:var(--space-2);">▼ SHORT Entry (1m)</div>
               <ul style="margin:0;padding-left:14px;font-size:0.75rem;color:var(--color-text-muted);line-height:1.9;">
-                <li>15m structure = <strong style="color:var(--color-text);">BEARISH</strong></li>
-                <li>1m pivot = <strong style="color:var(--color-text);">LH</strong> (Lower High)</li>
-                <li>VWAP: price below upper 2σ</li>
+                <li>15m pivot = <strong style="color:var(--color-text);">LH</strong> (Lower High only)</li>
+                <li>1m pivot = <strong style="color:var(--color-text);">LH</strong> (Lower High only)</li>
+                <li>Zone = <strong style="color:#ff4060;">UPPER MID</strong> (came from ABOVE UPPER)</li>
+                <li>One trade per zone entry (no re-entry)</li>
                 <li>No open SHORT on this token</li>
               </ul>
             </div>
@@ -2236,7 +2349,30 @@
               if (cfg.pivot_lb_l)    document.getElementById('v4-lb-l').value = cfg.pivot_lb_l;
               if (cfg.pivot_lb_r)    document.getElementById('v4-lb-r').value = cfg.pivot_lb_r;
               if (cfg.pivot_history) document.getElementById('v4-pivot-history').value = cfg.pivot_history;
-              if (cfg.sl_trail_pct)  document.getElementById('v4-sl-trail').value = cfg.sl_trail_pct;
+              // TSL tier fields — 100x
+              if (cfg.tsl_100x_t1_trig) document.getElementById('tsl-100x-t1-trig').value = cfg.tsl_100x_t1_trig;
+              if (cfg.tsl_100x_t1_lock) document.getElementById('tsl-100x-t1-lock').value = cfg.tsl_100x_t1_lock;
+              if (cfg.tsl_100x_t2_trig) document.getElementById('tsl-100x-t2-trig').value = cfg.tsl_100x_t2_trig;
+              if (cfg.tsl_100x_t2_lock) document.getElementById('tsl-100x-t2-lock').value = cfg.tsl_100x_t2_lock;
+              if (cfg.tsl_100x_t3_trig) document.getElementById('tsl-100x-t3-trig').value = cfg.tsl_100x_t3_trig;
+              if (cfg.tsl_100x_t3_lock) document.getElementById('tsl-100x-t3-lock').value = cfg.tsl_100x_t3_lock;
+              if (cfg.tsl_100x_step)    document.getElementById('tsl-100x-step').value    = cfg.tsl_100x_step;
+              // TSL tier fields — 75x
+              if (cfg.tsl_75x_t1_trig) document.getElementById('tsl-75x-t1-trig').value = cfg.tsl_75x_t1_trig;
+              if (cfg.tsl_75x_t1_lock) document.getElementById('tsl-75x-t1-lock').value = cfg.tsl_75x_t1_lock;
+              if (cfg.tsl_75x_t2_trig) document.getElementById('tsl-75x-t2-trig').value = cfg.tsl_75x_t2_trig;
+              if (cfg.tsl_75x_t2_lock) document.getElementById('tsl-75x-t2-lock').value = cfg.tsl_75x_t2_lock;
+              if (cfg.tsl_75x_t3_trig) document.getElementById('tsl-75x-t3-trig').value = cfg.tsl_75x_t3_trig;
+              if (cfg.tsl_75x_t3_lock) document.getElementById('tsl-75x-t3-lock').value = cfg.tsl_75x_t3_lock;
+              if (cfg.tsl_75x_step)    document.getElementById('tsl-75x-step').value    = cfg.tsl_75x_step;
+              // TSL tier fields — 50x
+              if (cfg.tsl_50x_t1_trig) document.getElementById('tsl-50x-t1-trig').value = cfg.tsl_50x_t1_trig;
+              if (cfg.tsl_50x_t1_lock) document.getElementById('tsl-50x-t1-lock').value = cfg.tsl_50x_t1_lock;
+              if (cfg.tsl_50x_t2_trig) document.getElementById('tsl-50x-t2-trig').value = cfg.tsl_50x_t2_trig;
+              if (cfg.tsl_50x_t2_lock) document.getElementById('tsl-50x-t2-lock').value = cfg.tsl_50x_t2_lock;
+              if (cfg.tsl_50x_t3_trig) document.getElementById('tsl-50x-t3-trig').value = cfg.tsl_50x_t3_trig;
+              if (cfg.tsl_50x_t3_lock) document.getElementById('tsl-50x-t3-lock').value = cfg.tsl_50x_t3_lock;
+              if (cfg.tsl_50x_step)    document.getElementById('tsl-50x-step').value    = cfg.tsl_50x_step;
             } catch (e) { console.warn('loadV4Config error', e); }
           }
 
@@ -2258,7 +2394,30 @@
                 pivot_lb_l:    document.getElementById('v4-lb-l').value,
                 pivot_lb_r:    document.getElementById('v4-lb-r').value,
                 pivot_history: document.getElementById('v4-pivot-history').value,
-                sl_trail_pct:  document.getElementById('v4-sl-trail').value,
+                // TSL tiers — 100x
+                tsl_100x_t1_trig: document.getElementById('tsl-100x-t1-trig').value,
+                tsl_100x_t1_lock: document.getElementById('tsl-100x-t1-lock').value,
+                tsl_100x_t2_trig: document.getElementById('tsl-100x-t2-trig').value,
+                tsl_100x_t2_lock: document.getElementById('tsl-100x-t2-lock').value,
+                tsl_100x_t3_trig: document.getElementById('tsl-100x-t3-trig').value,
+                tsl_100x_t3_lock: document.getElementById('tsl-100x-t3-lock').value,
+                tsl_100x_step:    document.getElementById('tsl-100x-step').value,
+                // TSL tiers — 75x
+                tsl_75x_t1_trig: document.getElementById('tsl-75x-t1-trig').value,
+                tsl_75x_t1_lock: document.getElementById('tsl-75x-t1-lock').value,
+                tsl_75x_t2_trig: document.getElementById('tsl-75x-t2-trig').value,
+                tsl_75x_t2_lock: document.getElementById('tsl-75x-t2-lock').value,
+                tsl_75x_t3_trig: document.getElementById('tsl-75x-t3-trig').value,
+                tsl_75x_t3_lock: document.getElementById('tsl-75x-t3-lock').value,
+                tsl_75x_step:    document.getElementById('tsl-75x-step').value,
+                // TSL tiers — 50x
+                tsl_50x_t1_trig: document.getElementById('tsl-50x-t1-trig').value,
+                tsl_50x_t1_lock: document.getElementById('tsl-50x-t1-lock').value,
+                tsl_50x_t2_trig: document.getElementById('tsl-50x-t2-trig').value,
+                tsl_50x_t2_lock: document.getElementById('tsl-50x-t2-lock').value,
+                tsl_50x_t3_trig: document.getElementById('tsl-50x-t3-trig').value,
+                tsl_50x_t3_lock: document.getElementById('tsl-50x-t3-lock').value,
+                tsl_50x_step:    document.getElementById('tsl-50x-step').value,
               };
               const res = await fetch('/api/admin/v4-config', {
                 method: 'POST',

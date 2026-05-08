@@ -4393,6 +4393,21 @@ router.post('/v4-config', async (req, res) => {
       'capital_pct',
       'lev_BTCUSDT', 'lev_ETHUSDT', 'lev_BNBUSDT', 'lev_SOLUSDT', 'lev_ADAUSDT',
       'sl_trail_pct', 'pivot_lb_l', 'pivot_lb_r', 'pivot_history',
+      // Trailing SL tier config — 100x (BTC/ETH/BNB)
+      'tsl_100x_t1_trig', 'tsl_100x_t1_lock',
+      'tsl_100x_t2_trig', 'tsl_100x_t2_lock',
+      'tsl_100x_t3_trig', 'tsl_100x_t3_lock',
+      'tsl_100x_step',
+      // Trailing SL tier config — 75x (SOL/ADA/AVAX)
+      'tsl_75x_t1_trig', 'tsl_75x_t1_lock',
+      'tsl_75x_t2_trig', 'tsl_75x_t2_lock',
+      'tsl_75x_t3_trig', 'tsl_75x_t3_lock',
+      'tsl_75x_step',
+      // Trailing SL tier config — 50x (other tokens)
+      'tsl_50x_t1_trig', 'tsl_50x_t1_lock',
+      'tsl_50x_t2_trig', 'tsl_50x_t2_lock',
+      'tsl_50x_t3_trig', 'tsl_50x_t3_lock',
+      'tsl_50x_step',
     ]);
 
     const updates = Object.entries(req.body).filter(([k]) => ALLOWED.has(k));
