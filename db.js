@@ -950,6 +950,30 @@ async function initAllTables() {
     console.log('[DB] token_leverage leverage fix applied: BTC/ETH/BNB=100x ADA/SOL=75x');
   } catch (e) { console.warn('[DB] token_leverage fix warning:', e.message); }
 
+  // Fix: user_token_leverage (Priority 1) overrides token_leverage.
+  // If a per-key entry has the wrong leverage (e.g. BNB=20x set by mistake in
+  // admin UI), it silently beats the token_leverage fix above and all trades
+  // still open at 20x. Sync ALL user_token_leverage rows for SMC symbols to
+  // match the authoritative token_leverage values on every boot.
+  try {
+    const utlFix = await pool.query(`
+      UPDATE user_token_leverage utl
+      SET leverage = tl.leverage
+      FROM token_leverage tl
+      WHERE utl.symbol = tl.symbol
+        AND tl.symbol IN ('BTCUSDT','ETHUSDT','BNBUSDT','ADAUSDT','SOLUSDT')
+        AND utl.leverage IS DISTINCT FROM tl.leverage
+      RETURNING utl.symbol, utl.leverage AS old_lev, tl.leverage AS new_lev
+    `);
+    if (utlFix.rows && utlFix.rows.length > 0) {
+      for (const r of utlFix.rows) {
+        console.log(`[DB] user_token_leverage corrected: ${r.symbol} ${r.old_lev}x → ${r.new_lev}x`);
+      }
+    } else {
+      console.log('[DB] user_token_leverage: all SMC symbols already correct');
+    }
+  } catch (e) { console.warn('[DB] user_token_leverage fix warning:', e.message); }
+
   console.log('[DB] All tables verified');
 }
 

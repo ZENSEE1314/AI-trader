@@ -198,7 +198,9 @@ async function getTokenLeverage(symbol, apiKeyId = null, price = 0) {
         [apiKeyId, symbol]
       );
       if (userTokenRows.length > 0) {
-        return Math.min(parseInt(userTokenRows[0].leverage), MAX_LEVERAGE);
+        const lev = Math.min(parseInt(userTokenRows[0].leverage), MAX_LEVERAGE);
+        console.log(`[LEV] ${symbol} key=${apiKeyId} → ${lev}x (source: user_token_leverage)`);
+        return lev;
       }
     }
 
@@ -208,7 +210,9 @@ async function getTokenLeverage(symbol, apiKeyId = null, price = 0) {
       [symbol]
     );
     if (tokenRows.length > 0) {
-      return Math.min(parseInt(tokenRows[0].leverage), MAX_LEVERAGE);
+      const lev = Math.min(parseInt(tokenRows[0].leverage), MAX_LEVERAGE);
+      console.log(`[LEV] ${symbol} key=${apiKeyId} → ${lev}x (source: token_leverage)`);
+      return lev;
     }
 
     // Priority 3: Risk level max_leverage from API key
@@ -2142,7 +2146,18 @@ async function executeForAllUsers(pick) {
             : initialSlPrice;
 
           try { await userClient.changeMarginMode(symbol, 'ISOLATION'); } catch (_) {}
-          try { await userClient.changeLeverage(symbol, userLev); } catch (_) {}
+
+          // Set leverage — MUST succeed before placing order.
+          // Silent catch was hiding failures causing trades to open at wrong leverage.
+          // Now: log the error and ABORT the trade if leverage cannot be confirmed.
+          try {
+            await userClient.changeLeverage(symbol, userLev);
+            userLog.trade(`User ${key.email}: leverage set ${symbol} → ${userLev}x`);
+          } catch (levErr) {
+            userLog.trade(`User ${key.email}: ABORT — changeLeverage(${symbol}, ${userLev}x) failed: ${levErr.message}. Trade not placed.`);
+            log(`changeLeverage FAILED for ${key.email} ${symbol} ${userLev}x: ${levErr.message}`);
+            return;
+          }
 
           // Scenario B is now MARKET on RSI<30 + BB lower touch (no longer 50% crash-buy)
           const bxOrderType  = 'MARKET';
