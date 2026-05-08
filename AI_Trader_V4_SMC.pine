@@ -1,0 +1,304 @@
+//@version=5
+indicator("AI Trader V4 SMC", overlay=true, max_labels_count=500, max_lines_count=500, max_boxes_count=100)
+
+// ═══════════════════════════════════════════════════════════════════
+//  AI Trader V4 SMC — TradingView Pine Script
+//  Mirrors strategy-v4-smc.js exactly:
+//    • Daily VWAP + 2σ bands (UTC midnight reset)
+//    • 15m pivots: lbL=10, lbR=1  (matches TV SMC Expo)
+//    • 1m pivots: lbL=3, lbR=1
+//    • LONG  when price ABOVE VWAP + HH/HL structure (momentum)
+//    • SHORT when price BELOW VWAP + LL/LH structure (momentum)
+//    • 4H structure gate + EXP-O dual-structure block
+//    • Webhook alerts with JSON payload
+//  Set chart to 15m for best match with the bot.
+// ═══════════════════════════════════════════════════════════════════
+
+// ── Inputs ───────────────────────────────────────────────────────
+lbL15       = input.int(10,   "15m Left Bars  (lbL)",            minval=1, group="Pivots")
+lbR15       = input.int(1,    "15m Right Bars (lbR)",            minval=1, group="Pivots")
+lbL1m       = input.int(3,    "1m  Left Bars  (lbL)",            minval=1, group="Pivots")
+lbR1m       = input.int(1,    "1m  Right Bars (lbR)",            minval=1, group="Pivots")
+showPiv15   = input.bool(true, "Show 15m Pivot Labels",                    group="Pivots")
+showPiv1m   = input.bool(true, "Show 1m  Pivot Labels",                    group="Pivots")
+
+showZones   = input.bool(true, "Show VWAP Zone Fill",    group="VWAP")
+showVwap    = input.bool(true, "Show VWAP Lines",        group="VWAP")
+
+showSignals = input.bool(true, "Show BUY / SELL Signals",  group="Signals")
+showDash    = input.bool(true, "Show Dashboard Table",     group="Signals")
+
+maxChasePct = input.float(0.08, "LONG  Max Chase % (from 1m high)", step=0.01, group="Filters") / 100
+maxDropPct  = input.float(0.12, "SHORT Max Drop  % (from 1m low)",  step=0.01, group="Filters") / 100
+
+webhookSecret = input.string("MCT_TV_SECRET", "Webhook Secret", group="Webhook",
+                 tooltip="Must match TV_WEBHOOK_SECRET env var in Railway")
+
+// ── Daily VWAP + 2σ (resets at UTC midnight — matches bot) ───────
+var float _cumTPV  = 0.0
+var float _cumTPV2 = 0.0
+var float _cumVol  = 0.0
+
+isNewDay = ta.change(time("D")) != 0
+if isNewDay
+    _cumTPV  := 0.0
+    _cumTPV2 := 0.0
+    _cumVol  := 0.0
+
+_tp      = (high + low + close) / 3
+_cumTPV  += _tp * volume
+_cumTPV2 += _tp * _tp * volume
+_cumVol  += volume
+
+vwapVal  = _cumVol > 0 ? _cumTPV  / _cumVol : na
+_var     = _cumVol > 0 ? math.max(0.0, _cumTPV2 / _cumVol - vwapVal * vwapVal) : 0.0
+_std     = math.sqrt(_var)
+upper2   = vwapVal + 2 * _std
+lower2   = vwapVal - 2 * _std
+
+pVwap   = plot(showVwap ? vwapVal : na, "VWAP",    color=color.new(color.white,  20), linewidth=1)
+pUpper  = plot(showVwap ? upper2  : na, "VWAP+2σ", color=color.new(color.red,    20), linewidth=1)
+pLower  = plot(showVwap ? lower2  : na, "VWAP-2σ", color=color.new(color.green,  20), linewidth=1)
+
+fill(pUpper, pVwap, color=showZones ? color.new(color.green, 92) : na, title="Upper zone (LONG bias)")
+fill(pVwap, pLower, color=showZones ? color.new(color.red,   92) : na, title="Lower zone (SHORT bias)")
+
+// Zone classification (matches getZone() in strategy)
+zone = not na(vwapVal) ?
+       (close > upper2  ? "ABOVE_UPPER" :
+        close > vwapVal ? "UPPER_MID"   :
+        close >= lower2 ? "LOWER_MID"   : "BELOW_LOWER") : "UNKNOWN"
+
+bgCol = zone == "ABOVE_UPPER" ? color.new(color.green, 93) :
+        zone == "BELOW_LOWER" ? color.new(color.red,   93) : na
+bgcolor(showZones ? bgCol : na, title="Extreme zone background")
+
+upperZone = zone == "UPPER_MID" or zone == "ABOVE_UPPER"
+lowerZone = zone == "LOWER_MID" or zone == "BELOW_LOWER"
+
+// ── 15m Pivot Detection — asymmetric lbL=10, lbR=1 ───────────────
+ph15 = ta.pivothigh(high, lbL15, lbR15)
+pl15 = ta.pivotlow (low,  lbL15, lbR15)
+
+var float sh15_1      = na
+var float sl15_1      = na
+var string lastH15Label = na
+var string lastL15Label = na
+var float  lastH15Price = na
+var float  lastL15Price = na
+
+if not na(ph15)
+    lbl = na(sh15_1) or ph15 > sh15_1 ? "HH" : "LH"
+    sh15_1       := ph15
+    lastH15Label := lbl
+    lastH15Price := ph15
+    if showPiv15
+        label.new(bar_index[lbR15], ph15, lbl,
+                  yloc      = yloc.abovebar,
+                  style     = label.style_label_down,
+                  color     = lbl == "HH" ? color.new(color.red, 15) : color.new(color.orange, 15),
+                  textcolor = color.white, size = size.small)
+
+if not na(pl15)
+    lbl = na(sl15_1) or pl15 > sl15_1 ? "HL" : "LL"
+    sl15_1       := pl15
+    lastL15Label := lbl
+    lastL15Price := pl15
+    if showPiv15
+        label.new(bar_index[lbR15], pl15, lbl,
+                  yloc      = yloc.belowbar,
+                  style     = label.style_label_up,
+                  color     = lbl == "HL" ? color.new(color.lime, 15) : color.new(color.blue, 15),
+                  textcolor = color.white, size = size.small)
+
+// ── 15m Market Structure ──────────────────────────────────────────
+_breakLow  = not na(lastL15Price) and close < lastL15Price
+_breakHigh = not na(lastH15Price) and close > lastH15Price
+
+structure15 = na(lastH15Label) or na(lastL15Label) ? "UNKNOWN" :
+              lastH15Label == "LH" and (lastL15Label == "LL" or _breakLow)  ? "BEARISH" :
+              lastH15Label == "HH" and (lastL15Label == "HL" or _breakHigh) ? "BULLISH" : "MIXED"
+
+structCol = structure15 == "BEARISH" ? color.red  :
+            structure15 == "BULLISH" ? color.lime : color.gray
+
+var line structLine = na
+if barstate.islast and not na(lastL15Price) and not na(lastH15Price)
+    line.delete(structLine)
+    structLine := line.new(bar_index - 20, lastL15Price, bar_index, lastL15Price,
+                           color=color.new(structCol, 50), width=1, style=line.style_dashed)
+
+// ── 4H Structure (gate — matches get4hStructure() in bot) ────────
+[h4_ph, h4_pl] = request.security(syminfo.tickerid, "240",
+     [ta.pivothigh(high, 5, 5), ta.pivotlow(low, 5, 5)],
+     lookahead=barmerge.lookahead_off)
+
+var float  h4_sh1 = na
+var float  h4_sl1 = na
+var string h4_lastH = na
+var string h4_lastL = na
+
+if not na(h4_ph)
+    h4_lastH := na(h4_sh1) or h4_ph > h4_sh1 ? "HH" : "LH"
+    h4_sh1   := h4_ph
+if not na(h4_pl)
+    h4_lastL := na(h4_sl1) or h4_pl > h4_sl1 ? "HL" : "LL"
+    h4_sl1   := h4_pl
+
+h4_bullish = h4_lastH == "HH" or h4_lastH == "HL" or h4_lastL == "HL"
+h4_bearish = h4_lastH == "LH" or h4_lastL == "LL"
+
+// ── 1m Pivots via request.security — lbL=3, lbR=1 ───────────────
+[_ph1m, _pl1m] = request.security(
+    syminfo.tickerid, "1",
+    [ta.pivothigh(high, lbL1m, lbR1m),
+     ta.pivotlow (low,  lbL1m, lbR1m)],
+    lookahead=barmerge.lookahead_off)
+
+var float  sh1m_1     = na
+var float  sl1m_1     = na
+var string last1mHLabel = na
+var string last1mLLabel = na
+
+if not na(_ph1m)
+    l1mH = na(sh1m_1) or _ph1m > sh1m_1 ? "HH" : "LH"
+    sh1m_1      := _ph1m
+    last1mHLabel := l1mH
+    if showPiv1m
+        label.new(bar_index, _ph1m, l1mH + "¹",
+                  style=label.style_label_down,
+                  color=color.new(color.red, 60), textcolor=color.white, size=size.tiny)
+
+if not na(_pl1m)
+    l1mL = na(sl1m_1) or _pl1m > sl1m_1 ? "HL" : "LL"
+    sl1m_1      := _pl1m
+    last1mLLabel := l1mL
+    if showPiv1m
+        label.new(bar_index, _pl1m, l1mL + "¹",
+                  style=label.style_label_up,
+                  color=color.new(color.lime, 60), textcolor=color.white, size=size.tiny)
+
+// ── Signal Logic (matches resolveSignal() in bot) ─────────────────
+//  LONG:  upper zone + 15m HH/HL + 1m HH/HL + 4H not BEARISH
+//  SHORT: lower zone + 15m LL/LH + 1m LL/LH + 4H not BULLISH
+//  EXP-O: LONG blocked if 4H+15m both BULLISH (overbought — chasing)
+//         SHORT blocked if 4H+15m both BEARISH (oversold — chasing)
+
+bull15 = lastH15Label == "HH" or lastL15Label == "HL"   // bullish 15m structure
+bear15 = lastH15Label == "LH" or lastL15Label == "LL"   // bearish 15m structure
+bull1m = last1mHLabel == "HH" or last1mHLabel == "HL" or last1mLLabel == "HL"
+bear1m = last1mLLabel == "LL" or last1mLLabel == "LH" or last1mHLabel == "LH"
+
+// 4H gate
+longBlocked4h  = h4_bearish                          // no LONG against 4H downtrend
+shortBlocked4h = h4_bullish                          // no SHORT against 4H uptrend
+
+// EXP-O dual-structure block
+longBlockedExpO  = h4_bullish and structure15 == "BULLISH"   // both overbought = chasing
+shortBlockedExpO = h4_bearish and structure15 == "BEARISH"   // both oversold  = chasing
+
+// Chase filter: LONG entry within maxChasePct of 1m swing HIGH
+chaseOkLong  = not na(sh1m_1) and (close - sh1m_1) / sh1m_1 <= maxChasePct
+
+// Drop filter: SHORT entry within maxDropPct of 1m swing LOW
+dropOkShort  = not na(sl1m_1) and (sl1m_1 - close) / sl1m_1 <= maxDropPct
+
+// Final signals
+longSig  = upperZone and bull15 and bull1m and
+           not longBlocked4h and not longBlockedExpO and chaseOkLong
+
+shortSig = lowerZone and bear15 and bear1m and
+           not shortBlocked4h and not shortBlockedExpO and dropOkShort
+
+// Plot BUY / SELL signals
+plotshape(showSignals and longSig,  "BUY",  shape.labelup,   location.belowbar,
+          color.new(color.green, 0), text="B", textcolor=color.white, size=size.normal)
+plotshape(showSignals and shortSig, "SELL", shape.labeldown, location.abovebar,
+          color.new(color.red, 0),   text="S", textcolor=color.white, size=size.normal)
+
+// ── Alert Conditions ──────────────────────────────────────────────
+// When creating the alert in TradingView:
+//   Webhook URL : https://YOUR-APP.railway.app/api/tv-webhook
+//   Alert Message (LONG):
+//     {"secret":"MCT_TV_SECRET","symbol":"{{ticker}}","direction":"LONG","price":{{close}},"zone":"UPPER"}
+//   Alert Message (SHORT):
+//     {"secret":"MCT_TV_SECRET","symbol":"{{ticker}}","direction":"SHORT","price":{{close}},"zone":"LOWER"}
+
+alertcondition(longSig,  "AI V4 LONG",  '{"secret":"MCT_TV_SECRET","symbol":"{{ticker}}","direction":"LONG","price":{{close}},"zone":"UPPER"}')
+alertcondition(shortSig, "AI V4 SHORT", '{"secret":"MCT_TV_SECRET","symbol":"{{ticker}}","direction":"SHORT","price":{{close}},"zone":"LOWER"}')
+
+// ── Dashboard Table ───────────────────────────────────────────────
+var table dash = table.new(position.top_right, 2, 11,
+    bgcolor      = color.new(color.black, 70),
+    border_color = color.new(color.gray,  40),
+    border_width = 1,
+    frame_color  = color.new(color.gray,  20),
+    frame_width  = 1)
+
+_hdrBg  = color.new(color.navy, 30)
+_cellBg = color.new(color.black, 60)
+_gray   = color.new(color.gray, 0)
+_white  = color.white
+
+if barstate.islast and showDash
+    // Header
+    table.cell(dash, 0, 0, "AI Trader V4 SMC", bgcolor=_hdrBg, text_color=_white,
+               text_size=size.small, merge_columns=true)
+    table.cell(dash, 1, 0, syminfo.ticker,      bgcolor=_hdrBg, text_color=color.yellow, text_size=size.small)
+
+    // Zone
+    zoneCol = upperZone ? color.lime : lowerZone ? color.red : _white
+    table.cell(dash, 0, 1, "Zone",    bgcolor=_cellBg, text_color=_gray,    text_size=size.small)
+    table.cell(dash, 1, 1, zone,      bgcolor=_cellBg, text_color=zoneCol,  text_size=size.small)
+
+    // 15m Structure
+    table.cell(dash, 0, 2, "15m Struct",  bgcolor=_cellBg, text_color=_gray,      text_size=size.small)
+    table.cell(dash, 1, 2, structure15,   bgcolor=_cellBg, text_color=structCol,  text_size=size.small)
+
+    // 4H Structure
+    h4structStr = h4_bullish ? "BULLISH" : h4_bearish ? "BEARISH" : "MIXED"
+    h4structCol = h4_bullish ? color.lime : h4_bearish ? color.red : _gray
+    table.cell(dash, 0, 3, "4H Struct",  bgcolor=_cellBg, text_color=_gray,       text_size=size.small)
+    table.cell(dash, 1, 3, h4structStr,  bgcolor=_cellBg, text_color=h4structCol, text_size=size.small)
+
+    // 15m High
+    h15Str = na(lastH15Label) ? "—" : lastH15Label + " @ " + str.tostring(math.round(lastH15Price, 2))
+    h15Col = lastH15Label == "HH" ? color.lime : color.orange
+    table.cell(dash, 0, 4, "15m High", bgcolor=_cellBg, text_color=_gray,  text_size=size.small)
+    table.cell(dash, 1, 4, h15Str,     bgcolor=_cellBg, text_color=h15Col, text_size=size.small)
+
+    // 15m Low
+    l15Str = na(lastL15Label) ? "—" : lastL15Label + " @ " + str.tostring(math.round(lastL15Price, 2))
+    l15Col = lastL15Label == "HL" ? color.lime : color.red
+    table.cell(dash, 0, 5, "15m Low", bgcolor=_cellBg, text_color=_gray,  text_size=size.small)
+    table.cell(dash, 1, 5, l15Str,    bgcolor=_cellBg, text_color=l15Col, text_size=size.small)
+
+    // 1m High
+    h1Str = na(last1mHLabel) ? "—" : last1mHLabel + " @ " + str.tostring(math.round(sh1m_1, 2))
+    table.cell(dash, 0, 6, "1m High", bgcolor=_cellBg, text_color=_gray,        text_size=size.small)
+    table.cell(dash, 1, 6, h1Str,     bgcolor=_cellBg, text_color=color.orange, text_size=size.small)
+
+    // 1m Low
+    l1Str = na(last1mLLabel) ? "—" : last1mLLabel + " @ " + str.tostring(math.round(sl1m_1, 2))
+    table.cell(dash, 0, 7, "1m Low", bgcolor=_cellBg, text_color=_gray,      text_size=size.small)
+    table.cell(dash, 1, 7, l1Str,    bgcolor=_cellBg, text_color=color.lime, text_size=size.small)
+
+    // Gates
+    gateStr = (longBlocked4h or longBlockedExpO ? "LONG ✗  " : "LONG ✓  ") +
+              (shortBlocked4h or shortBlockedExpO ? "SHORT ✗" : "SHORT ✓")
+    gateCol = (longBlocked4h or longBlockedExpO or shortBlocked4h or shortBlockedExpO) ? color.orange : color.lime
+    table.cell(dash, 0, 8, "Gates",  bgcolor=_cellBg, text_color=_gray,    text_size=size.small)
+    table.cell(dash, 1, 8, gateStr,  bgcolor=_cellBg, text_color=gateCol,  text_size=size.small)
+
+    // Filters
+    filStr = (chaseOkLong ? "Chase ✓" : "Chase ✗") + "  " + (dropOkShort ? "Drop ✓" : "Drop ✗")
+    filCol = (chaseOkLong and dropOkShort) ? color.lime : color.orange
+    table.cell(dash, 0, 9, "Filters", bgcolor=_cellBg, text_color=_gray,  text_size=size.small)
+    table.cell(dash, 1, 9, filStr,    bgcolor=_cellBg, text_color=filCol, text_size=size.small)
+
+    // Signal
+    sigStr = longSig ? "▲  LONG" : shortSig ? "▼  SHORT" : "–  WAIT"
+    sigCol = longSig ? color.lime : shortSig ? color.red  : _gray
+    sigBg  = longSig ? color.new(color.green, 70) : shortSig ? color.new(color.red, 70) : _cellBg
+    table.cell(dash, 0, 10, "Signal", bgcolor=_cellBg, text_color=_gray,  text_size=size.small)
+    table.cell(dash, 1, 10, sigStr,   bgcolor=sigBg,   text_color=sigCol, text_size=size.normal)
