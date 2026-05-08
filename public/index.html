@@ -1687,8 +1687,7 @@
           <button class="admin-subtab" data-admintab="users" onclick="window.CryptoBot.switchAdminTab('users')" data-i18n="admin.users">Users</button>
           <button class="admin-subtab" data-admintab="tokens" onclick="window.CryptoBot.switchAdminTab('tokens')" data-i18n="admin.tokens">Tokens</button>
           <button class="admin-subtab" data-admintab="settings" onclick="window.CryptoBot.switchAdminTab('settings')" data-i18n="admin.settings">Settings</button>
-          <button class="admin-subtab" data-admintab="strategies" onclick="window.CryptoBot.switchAdminTab('strategies')">⚙️ Strategies</button>
-          <button class="admin-subtab" data-admintab="tools" onclick="window.CryptoBot.switchAdminTab('tools')" data-i18n="admin.tools">Tools</button>
+          <button class="admin-subtab" data-admintab="tools" onclick="window.CryptoBot.switchAdminTab('tools')">🛠 Tools</button>
           <button class="admin-subtab" data-admintab="versions" onclick="window.CryptoBot.switchAdminTab('versions')">⚡ Versions</button>
           <button class="admin-subtab" data-admintab="email" onclick="window.CryptoBot.switchAdminTab('email')" data-i18n="admin.email">✉️ Email</button>
         </nav>
@@ -2036,463 +2035,353 @@
         <!-- ═══════════════════════════════════════════
              TAB: Strategies
              ═══════════════════════════════════════════ -->
-        <div id="admin-tab-strategies" class="admin-tab-panel hidden">
-          <!-- Sub-tabs: Parameter Tuning | Strategy Composer -->
-          <div style="display:flex;gap:4px;margin-bottom:var(--space-3);border-bottom:1px solid var(--color-border-muted);padding-bottom:var(--space-2);">
-            <button id="strat-subtab-params" class="btn btn-sm strat-subtab-btn strat-subtab-active"
-              data-subtab="params" style="font-size:0.8rem;" title="Adjust threshold values like RSI levels, ATR multipliers, leverage">⚙️ Parameter Tuning</button>
-            <button id="strat-subtab-composer" class="btn btn-sm strat-subtab-btn"
-              data-subtab="composer" style="font-size:0.8rem;" title="Build and backtest custom strategy rules">🧩 Strategy Composer</button>
-          </div>
-
-          <!-- Parameter Tuning panel -->
-          <div id="strat-panel-params">
-            <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:var(--space-2);">
-              <h3 style="margin:0;color:var(--color-text);">Strategy Parameters</h3>
-              <span style="font-size:0.75rem;color:var(--color-text-muted);">Changes take effect on next scan cycle (~60 s)</span>
-            </div>
-            <div style="font-size:0.75rem;color:var(--color-text-muted);padding:8px 12px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.06);border-radius:var(--radius-md);margin-bottom:var(--space-3);">
-              ℹ️ <strong style="color:var(--color-text);">Parameter Tuning</strong> adjusts the built-in SMC + legacy strategy settings.
-              Custom strategies you build are managed in the <strong style="color:var(--color-text);">🧩 Strategy Composer</strong> tab — switch there to see and backtest them.
-            </div>
-            <div id="strategy-config-grid" style="display:flex;flex-direction:column;gap:var(--space-3);"></div>
-          </div>
-
-          <!-- Strategy Composer panel -->
-          <div id="strat-panel-composer" style="display:none;">
-            <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:var(--space-3);">
-              <h3 style="margin:0;color:var(--color-text);">Strategy Composer</h3>
-              <button id="strat-composer-new-btn" class="btn btn-sm"
-                style="background:var(--color-accent);color:#fff;font-size:0.8rem;padding:5px 16px;">+ New Strategy</button>
-            </div>
-            <div id="strategy-composer-grid" style="display:flex;flex-direction:column;gap:var(--space-3);"></div>
-          </div>
-        </div><!-- /admin-tab-strategies -->
-
-        <!-- Tokens tab is already above, skip old inline tokens -->
         <!-- ═══════════════════════════════════════════
-             TAB: Tools
+             TAB: 🛠 Tools — V4 SMC Settings Overview
              ═══════════════════════════════════════════ -->
         <div id="admin-tab-tools" class="admin-tab-panel hidden">
-          <div style="margin-bottom:var(--space-3);display:flex;gap:var(--space-2);flex-wrap:wrap;">
-            <button class="btn btn-sm" style="background:var(--color-accent);color:#fff;padding:6px 16px;" onclick="window.location.href='/api/admin/trades/csv'">Download All Trades CSV</button>
-            <button class="btn btn-primary btn-sm" onclick="window.CryptoBot.fixBitunixPnl()">Sync All Trades</button>
-            <button class="btn btn-ghost btn-sm" onclick="window.CryptoBot.debugBitunix()">Debug Bitunix API</button>
-          </div>
-        <!-- old duplicate sections removed -->
 
-          <!-- Backtest Settings -->
-          <div style="margin-top:var(--space-4);background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-4);">
-            <strong style="font-size:0.9rem;color:var(--color-text);">Backtest Settings</strong>
-            <div style="margin-top:var(--space-2);margin-bottom:var(--space-3);">
-              <label class="form-label" style="font-size:0.8rem;">AI Version</label>
-              <!-- Shows which version the live bot is currently trading with -->
-              <div id="active-version-banner" style="display:none;margin-bottom:var(--space-2);padding:6px 10px;background:rgba(0,200,100,0.08);border:1px solid rgba(0,200,100,0.2);border-radius:6px;font-size:0.78rem;color:var(--color-text-muted);"></div>
-              <div style="display:flex;gap:var(--space-2);align-items:center;flex-wrap:wrap;">
-                <select id="bt-ai-version" class="form-input" style="max-width:400px;font-size:0.8rem;">
-                  <option value="">Manual Settings</option>
-                </select>
-                <button class="btn btn-ghost btn-sm" onclick="window.CryptoBot.loadAiVersions()" style="font-size:0.75rem;">Refresh</button>
-                <button id="btn-activate-version" class="btn btn-sm" onclick="window.CryptoBot.activateVersionForTrading()" style="background:var(--color-accent);color:#fff;font-size:0.75rem;padding:4px 12px;" title="Make the bot trade live with this version's SL/TP/trail settings">🚀 Trade with This</button>
-                <button class="btn btn-ghost btn-sm" onclick="window.CryptoBot.deactivateVersion()" style="font-size:0.75rem;color:var(--color-text-muted);" title="Revert bot to default hardcoded settings">✕ Clear</button>
-              </div>
+          <!-- Header -->
+          <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:var(--space-4);">
+            <div>
+              <h3 style="margin:0;font-size:1rem;color:var(--color-text);">🛠 V4 SMC Strategy — Live Settings</h3>
+              <p style="margin:3px 0 0;font-size:0.75rem;color:var(--color-text-muted);">All values are hardcoded in <code style="font-size:0.72rem;background:rgba(255,255,255,0.06);padding:1px 5px;border-radius:3px;">cycle.js</code> + <code style="font-size:0.72rem;background:rgba(255,255,255,0.06);padding:1px 5px;border-radius:3px;">strategy-v4-smc.js</code>. Changes require a redeploy.</p>
             </div>
-            <!-- ── Risk & Position Management ── -->
-            <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:var(--space-2);margin-bottom:var(--space-3);">
-              <div class="form-group" style="margin-bottom:0;">
-                <label class="form-label" style="font-size:0.75rem;">Days</label>
-                <select id="backtest-days" class="form-input" style="font-size:0.8rem;">
-                  <option value="7" selected>7 days</option>
-                  <option value="14">14 days</option>
-                  <option value="30">30 days</option>
-                  <option value="180">6 months</option>
-                  <option value="365">12 months</option>
-                </select>
-              </div>
-              <div class="form-group" style="margin-bottom:0;">
-                <label class="form-label" style="font-size:0.75rem;">Leverage</label>
-                <input class="form-input text-mono" type="number" id="bt-leverage" min="1" max="125" step="1" value="20" style="font-size:0.8rem;">
-              </div>
-              <div class="form-group" style="margin-bottom:0;">
-                <label class="form-label" style="font-size:0.75rem;">Risk %</label>
-                <input class="form-input text-mono" type="number" id="bt-risk" min="1" max="50" step="1" value="10" style="font-size:0.8rem;">
-              </div>
-              <div class="form-group" style="margin-bottom:0;">
-                <label class="form-label" style="font-size:0.75rem;">Max Positions</label>
-                <input class="form-input text-mono" type="number" id="bt-maxpos" min="1" max="20" step="1" value="3" style="font-size:0.8rem;">
-              </div>
-              <div class="form-group" style="margin-bottom:0;">
-                <label class="form-label" style="font-size:0.75rem;">Stop After Losses</label>
-                <input class="form-input text-mono" type="number" id="bt-consec" min="0" max="20" step="1" value="2" style="font-size:0.8rem;">
-              </div>
-              <div class="form-group" style="margin-bottom:0;">
-                <label class="form-label" style="font-size:0.75rem;">Wallet $</label>
-                <input class="form-input text-mono" type="number" id="bt-wallet" min="100" max="100000" step="100" value="1000" style="font-size:0.8rem;">
-              </div>
-            </div>
-
-            <!-- ── Token List (tag input with autocomplete) ── -->
-            <div style="margin-bottom:var(--space-3);">
-              <label class="form-label" style="font-size:0.75rem;margin-bottom:6px;display:flex;align-items:center;justify-content:space-between;">
-                <span>🪙 Token List</span>
-                <span style="font-weight:400;color:var(--color-text-muted);font-size:0.7rem;">Leave empty = use enabled tokens from Tokens tab</span>
-              </label>
-              <!-- Tag input container -->
-              <div id="bt-token-tag-wrap" style="
-                display:flex;flex-wrap:wrap;gap:5px;align-items:center;
-                min-height:40px;padding:5px 8px;
-                background:var(--color-bg-input,#0f0f14);border:1px solid var(--color-border-muted);
-                border-radius:var(--radius-md);cursor:text;position:relative;">
-                <!-- tags rendered by JS -->
-                <input type="text" id="bt-token-input" autocomplete="off" spellcheck="false"
-                  placeholder="Type to search…"
-                  style="background:none;border:none;outline:none;color:inherit;font-family:monospace;
-                         font-size:0.82rem;min-width:120px;flex:1;padding:2px 0;">
-                <!-- dropdown -->
-                <div id="bt-token-dropdown" style="
-                  display:none;position:absolute;top:calc(100% + 4px);left:0;right:0;
-                  background:#1a1a2a;border:1px solid var(--color-border-muted);border-radius:var(--radius-md);
-                  max-height:200px;overflow-y:auto;z-index:999;box-shadow:0 8px 24px rgba(0,0,0,.5);">
-                </div>
-              </div>
-              <!-- Hidden value field read by collectBacktestParams -->
-              <input type="hidden" id="bt-symbol-list">
-            </div>
-
-            <!-- ── Structure Analysis (collapsible) ── -->
-            <details style="margin-bottom:var(--space-2);border:1px solid var(--color-border-muted);border-radius:var(--radius-md);padding:var(--space-2) var(--space-3);">
-              <summary style="cursor:pointer;font-size:0.82rem;font-weight:600;color:var(--color-text);user-select:none;">📐 Structure Analysis <span style="font-size:0.72rem;color:var(--color-text-muted);font-weight:400;">(swing lookback, key level proximity, entry freshness)</span></summary>
-              <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:var(--space-2);margin-top:var(--space-2);">
-                <div class="form-group" style="margin-bottom:0;">
-                  <label class="form-label" style="font-size:0.72rem;">Swing 4H candles</label>
-                  <input class="form-input text-mono" type="number" id="bt-swing4h" min="3" max="30" step="1" value="10" style="font-size:0.8rem;" title="How many candles left+right define a 4H swing high/low">
-                </div>
-                <div class="form-group" style="margin-bottom:0;">
-                  <label class="form-label" style="font-size:0.72rem;">Swing 1H candles</label>
-                  <input class="form-input text-mono" type="number" id="bt-swing1h" min="3" max="30" step="1" value="10" style="font-size:0.8rem;">
-                </div>
-                <div class="form-group" style="margin-bottom:0;">
-                  <label class="form-label" style="font-size:0.72rem;">Swing 15M candles</label>
-                  <input class="form-input text-mono" type="number" id="bt-swing15m" min="3" max="30" step="1" value="10" style="font-size:0.8rem;">
-                </div>
-                <div class="form-group" style="margin-bottom:0;">
-                  <label class="form-label" style="font-size:0.72rem;">Swing 1M candles</label>
-                  <input class="form-input text-mono" type="number" id="bt-swing1m" min="2" max="20" step="1" value="5" style="font-size:0.8rem;">
-                </div>
-                <div class="form-group" style="margin-bottom:0;">
-                  <label class="form-label" style="font-size:0.72rem;">Key Level Prox %</label>
-                  <input class="form-input text-mono" type="number" id="bt-proximity" min="0.1" max="2" step="0.05" value="0.3" style="font-size:0.8rem;" title="How close price must be to PDH/PDL/VWAP to count as 'at key level'">
-                </div>
-                <div class="form-group" style="margin-bottom:0;">
-                  <label class="form-label" style="font-size:0.72rem;">Entry Freshness (1M)</label>
-                  <input class="form-input text-mono" type="number" id="bt-entry-fresh" min="5" max="60" step="1" value="25" style="font-size:0.8rem;" title="Max candles ago the 1M swing extreme can be — lower = fresher entries only">
-                </div>
-                <div class="form-group" style="margin-bottom:0;">
-                  <label class="form-label" style="font-size:0.72rem;">Daily Body Ratio</label>
-                  <input class="form-input text-mono" type="number" id="bt-daily-body" min="0.05" max="0.8" step="0.05" value="0.30" style="font-size:0.8rem;" title="Min candle body/range ratio — below this is a doji, day is skipped">
-                </div>
-              </div>
-            </details>
-
-            <!-- ── RSI Filter (collapsible) ── -->
-            <details style="margin-bottom:var(--space-2);border:1px solid var(--color-border-muted);border-radius:var(--radius-md);padding:var(--space-2) var(--space-3);">
-              <summary style="cursor:pointer;font-size:0.82rem;font-weight:600;color:var(--color-text);user-select:none;">📊 RSI Filter <span style="font-size:0.72rem;color:var(--color-text-muted);font-weight:400;">(period 0 = disabled)</span></summary>
-              <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:var(--space-2);margin-top:var(--space-2);">
-                <div class="form-group" style="margin-bottom:0;">
-                  <label class="form-label" style="font-size:0.72rem;">RSI Period (0=off)</label>
-                  <input class="form-input text-mono" type="number" id="bt-rsi-period" min="0" max="50" step="1" value="14" style="font-size:0.8rem;" title="RSI lookback period. Set to 0 to disable RSI filtering.">
-                </div>
-                <div class="form-group" style="margin-bottom:0;">
-                  <label class="form-label" style="font-size:0.72rem;">Overbought (skip LONG)</label>
-                  <input class="form-input text-mono" type="number" id="bt-rsi-ob" min="50" max="95" step="1" value="75" style="font-size:0.8rem;">
-                </div>
-                <div class="form-group" style="margin-bottom:0;">
-                  <label class="form-label" style="font-size:0.72rem;">Oversold (skip SHORT)</label>
-                  <input class="form-input text-mono" type="number" id="bt-rsi-os" min="5" max="50" step="1" value="25" style="font-size:0.8rem;">
-                </div>
-              </div>
-            </details>
-
-            <!-- ── EMA Filter (collapsible) ── -->
-            <details style="margin-bottom:var(--space-2);border:1px solid var(--color-border-muted);border-radius:var(--radius-md);padding:var(--space-2) var(--space-3);">
-              <summary style="cursor:pointer;font-size:0.82rem;font-weight:600;color:var(--color-text);user-select:none;">📈 EMA Filter <span style="font-size:0.72rem;color:var(--color-text-muted);font-weight:400;">(EMA Fast 0 = disabled)</span></summary>
-              <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:var(--space-2);margin-top:var(--space-2);">
-                <div class="form-group" style="margin-bottom:0;">
-                  <label class="form-label" style="font-size:0.72rem;">EMA Fast (0=off)</label>
-                  <input class="form-input text-mono" type="number" id="bt-ema-fast" min="0" max="50" step="1" value="0" style="font-size:0.8rem;" title="Fast EMA period. Set to 0 to disable EMA trend filter.">
-                </div>
-                <div class="form-group" style="margin-bottom:0;">
-                  <label class="form-label" style="font-size:0.72rem;">EMA Slow</label>
-                  <input class="form-input text-mono" type="number" id="bt-ema-slow" min="2" max="200" step="1" value="21" style="font-size:0.8rem;" title="Slow EMA — LONG needs fast > slow, SHORT needs fast < slow">
-                </div>
-                <div class="form-group" style="margin-bottom:0;">
-                  <label class="form-label" style="font-size:0.72rem;">EMA Trend (0=off)</label>
-                  <input class="form-input text-mono" type="number" id="bt-ema-trend" min="0" max="500" step="1" value="50" style="font-size:0.8rem;" title="Trend EMA — price must be above for LONG, below for SHORT. 0 = skip.">
-                </div>
-              </div>
-            </details>
-
-            <!-- ── Volume Filter (collapsible) ── -->
-            <details style="margin-bottom:var(--space-2);border:1px solid var(--color-border-muted);border-radius:var(--radius-md);padding:var(--space-2) var(--space-3);">
-              <summary style="cursor:pointer;font-size:0.82rem;font-weight:600;color:var(--color-text);user-select:none;">📦 Volume Filter <span style="font-size:0.72rem;color:var(--color-text-muted);font-weight:400;">(0 = disabled)</span></summary>
-              <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:var(--space-2);margin-top:var(--space-2);">
-                <div class="form-group" style="margin-bottom:0;">
-                  <label class="form-label" style="font-size:0.72rem;">Vol Multiplier (0=off)</label>
-                  <input class="form-input text-mono" type="number" id="bt-vol-mult" min="0" max="5" step="0.1" value="0" style="font-size:0.8rem;" title="Entry candle volume must be this × 20-bar average. 0 = disabled. 1.5 = 50% above average.">
-                </div>
-              </div>
-            </details>
-
-            <!-- ── Direction Settings (collapsible) ── -->
-            <details style="margin-bottom:var(--space-3);border:1px solid rgba(99,102,241,0.3);border-radius:var(--radius-md);padding:var(--space-2) var(--space-3);background:rgba(99,102,241,0.04);">
-              <summary style="cursor:pointer;font-size:0.82rem;font-weight:600;color:var(--color-text);user-select:none;">🔀 Direction Settings <span style="font-size:0.72rem;color:var(--color-text-muted);font-weight:400;">(per-direction SL / TP / Trail — overrides main settings for each side)</span></summary>
-              <div style="margin-top:var(--space-3);">
-                <!-- Enable toggles -->
-                <div style="display:flex;gap:var(--space-4);margin-bottom:var(--space-3);">
-                  <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:0.82rem;color:var(--color-text);">
-                    <input type="checkbox" id="bt-enable-long" checked style="width:16px;height:16px;accent-color:#00ff88;">
-                    <span style="color:#00ff88;font-weight:600;">▲ Allow LONG trades</span>
-                  </label>
-                  <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:0.82rem;color:var(--color-text);">
-                    <input type="checkbox" id="bt-enable-short" checked style="width:16px;height:16px;accent-color:#ff4060;">
-                    <span style="color:#ff4060;font-weight:600;">▼ Allow SHORT trades</span>
-                  </label>
-                </div>
-                <!-- Per-direction param grid -->
-                <div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--space-3);">
-                  <!-- LONG column -->
-                  <div style="border:1px solid rgba(0,255,136,0.15);border-radius:6px;padding:var(--space-2) var(--space-3);background:rgba(0,255,136,0.03);">
-                    <div style="font-size:0.78rem;font-weight:700;color:#00ff88;margin-bottom:var(--space-2);">▲ LONG override <span style="font-weight:400;color:var(--color-text-muted)">(0 = use main)</span></div>
-                    <div style="display:grid;gap:var(--space-2);">
-                      <div class="form-group" style="margin-bottom:0;">
-                        <label class="form-label" style="font-size:0.72rem;">SL % Long</label>
-                        <input class="form-input text-mono" type="number" id="bt-sl-long" min="0.1" max="20" step="0.1" value="3.0" style="font-size:0.8rem;">
-                      </div>
-                      <div class="form-group" style="margin-bottom:0;">
-                        <label class="form-label" style="font-size:0.72rem;">TP % Long (0=trail)</label>
-                        <input class="form-input text-mono" type="number" id="bt-tp-long" min="0" max="50" step="0.1" value="0" style="font-size:0.8rem;">
-                      </div>
-                      <div class="form-group" style="margin-bottom:0;">
-                        <label class="form-label" style="font-size:0.72rem;">Trail Step % Long</label>
-                        <input class="form-input text-mono" type="number" id="bt-trail-long" min="0.1" max="10" step="0.1" value="1.2" style="font-size:0.8rem;">
-                      </div>
-                    </div>
-                  </div>
-                  <!-- SHORT column -->
-                  <div style="border:1px solid rgba(255,56,96,0.15);border-radius:6px;padding:var(--space-2) var(--space-3);background:rgba(255,56,96,0.03);">
-                    <div style="font-size:0.78rem;font-weight:700;color:#ff4060;margin-bottom:var(--space-2);">▼ SHORT override <span style="font-weight:400;color:var(--color-text-muted)">(0 = use main)</span></div>
-                    <div style="display:grid;gap:var(--space-2);">
-                      <div class="form-group" style="margin-bottom:0;">
-                        <label class="form-label" style="font-size:0.72rem;">SL % Short</label>
-                        <input class="form-input text-mono" type="number" id="bt-sl-short" min="0.1" max="20" step="0.1" value="3.0" style="font-size:0.8rem;">
-                      </div>
-                      <div class="form-group" style="margin-bottom:0;">
-                        <label class="form-label" style="font-size:0.72rem;">TP % Short (0=trail)</label>
-                        <input class="form-input text-mono" type="number" id="bt-tp-short" min="0" max="50" step="0.1" value="0" style="font-size:0.8rem;">
-                      </div>
-                      <div class="form-group" style="margin-bottom:0;">
-                        <label class="form-label" style="font-size:0.72rem;">Trail Step % Short</label>
-                        <input class="form-input text-mono" type="number" id="bt-trail-short" min="0.1" max="10" step="0.1" value="1.2" style="font-size:0.8rem;">
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </details>
-
-            <div style="display:flex;gap:var(--space-2);flex-wrap:wrap;align-items:center;">
-              <button class="btn btn-primary btn-sm" onclick="window.CryptoBot.runBacktest('strict', false)">Run Backtest</button>
-              <button class="btn btn-ghost btn-sm" onclick="window.CryptoBot.runBacktest('strict', true)">Reverse</button>
+            <div style="display:flex;gap:var(--space-2);flex-wrap:wrap;">
+              <button class="btn btn-sm" style="background:var(--color-accent);color:#fff;padding:5px 14px;font-size:0.8rem;" onclick="window.location.href='/api/admin/trades/csv'">⬇ Export CSV</button>
+              <button class="btn btn-ghost btn-sm" style="font-size:0.8rem;" onclick="window.CryptoBot.fixBitunixPnl()">↺ Sync Trades</button>
+              <button class="btn btn-ghost btn-sm" style="font-size:0.8rem;" onclick="window.CryptoBot.debugBitunix()">🔍 Debug API</button>
             </div>
           </div>
-          <pre id="fix-bitunix-result" style="margin-top:var(--space-2);font-size:0.75rem;color:var(--color-text-muted);max-height:70vh;overflow:auto;white-space:pre-wrap;word-break:break-all;border:1px solid var(--color-border-muted);border-radius:var(--radius-md);padding:var(--space-3);background:var(--color-bg-base);"></pre>
+
+          <!-- ── Capital & Leverage ── -->
+          <div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-4);margin-bottom:var(--space-3);">
+            <div style="font-size:0.78rem;font-weight:700;color:var(--color-text-muted);letter-spacing:.06em;text-transform:uppercase;margin-bottom:var(--space-3);">💰 Capital &amp; Leverage</div>
+            <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:var(--space-3);">
+              <div style="text-align:center;background:rgba(99,102,241,0.08);border:1px solid rgba(99,102,241,0.2);border-radius:var(--radius-md);padding:var(--space-3);">
+                <div style="font-size:1.8rem;font-weight:800;color:#a78bfa;line-height:1;">10%</div>
+                <div style="font-size:0.7rem;color:var(--color-text-muted);margin-top:4px;">Capital per Trade</div>
+                <div style="font-size:0.65rem;color:rgba(167,139,250,0.6);margin-top:2px;">CAPITAL_PER_TRADE</div>
+              </div>
+              <div style="text-align:center;background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.2);border-radius:var(--radius-md);padding:var(--space-3);">
+                <div style="font-size:1.8rem;font-weight:800;color:#f59e0b;line-height:1;">100×</div>
+                <div style="font-size:0.7rem;color:var(--color-text-muted);margin-top:4px;">BTC / ETH / BNB</div>
+                <div style="font-size:0.65rem;color:rgba(245,158,11,0.6);margin-top:2px;">TOKEN_LEVERAGE</div>
+              </div>
+              <div style="text-align:center;background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.2);border-radius:var(--radius-md);padding:var(--space-3);">
+                <div style="font-size:1.8rem;font-weight:800;color:#f59e0b;line-height:1;">75×</div>
+                <div style="font-size:0.7rem;color:var(--color-text-muted);margin-top:4px;">ADA / SOL</div>
+                <div style="font-size:0.65rem;color:rgba(245,158,11,0.6);margin-top:2px;">TOKEN_LEVERAGE</div>
+              </div>
+              <div style="text-align:center;background:rgba(34,197,94,0.08);border:1px solid rgba(34,197,94,0.2);border-radius:var(--radius-md);padding:var(--space-3);">
+                <div style="font-size:1.8rem;font-weight:800;color:#22c55e;line-height:1;">5</div>
+                <div style="font-size:0.7rem;color:var(--color-text-muted);margin-top:4px;">Max Concurrent Trades</div>
+                <div style="font-size:0.65rem;color:rgba(34,197,94,0.6);margin-top:2px;">1 per token</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- ── Structure Detection ── -->
+          <div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-4);margin-bottom:var(--space-3);">
+            <div style="font-size:0.78rem;font-weight:700;color:var(--color-text-muted);letter-spacing:.06em;text-transform:uppercase;margin-bottom:var(--space-3);">📐 Structure Detection (15m)</div>
+            <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:var(--space-2);">
+              <div style="display:flex;flex-direction:column;gap:2px;">
+                <span style="font-size:0.7rem;color:var(--color-text-muted);">Left Lookback (lbL)</span>
+                <span style="font-size:1.05rem;font-weight:700;color:var(--color-text);font-family:monospace;">5 bars</span>
+              </div>
+              <div style="display:flex;flex-direction:column;gap:2px;">
+                <span style="font-size:0.7rem;color:var(--color-text-muted);">Right Lookback (lbR)</span>
+                <span style="font-size:1.05rem;font-weight:700;color:var(--color-text);font-family:monospace;">1 bar</span>
+              </div>
+              <div style="display:flex;flex-direction:column;gap:2px;">
+                <span style="font-size:0.7rem;color:var(--color-text-muted);">Pivot History</span>
+                <span style="font-size:1.05rem;font-weight:700;color:var(--color-text);font-family:monospace;">50 pivots</span>
+              </div>
+              <div style="display:flex;flex-direction:column;gap:2px;">
+                <span style="font-size:0.7rem;color:var(--color-text-muted);">Structure Gate</span>
+                <span style="font-size:0.9rem;font-weight:700;color:#f87171;font-family:monospace;">STRICT</span>
+              </div>
+              <div style="display:flex;flex-direction:column;gap:2px;">
+                <span style="font-size:0.7rem;color:var(--color-text-muted);">Labels Tracked</span>
+                <span style="font-size:0.9rem;font-weight:700;color:var(--color-text);font-family:monospace;">HH · LH · HL · LL</span>
+              </div>
+              <div style="display:flex;flex-direction:column;gap:2px;">
+                <span style="font-size:0.7rem;color:var(--color-text-muted);">Structure Bias</span>
+                <span style="font-size:0.9rem;font-weight:700;color:var(--color-text);font-family:monospace;">BULLISH / BEARISH / MIXED</span>
+              </div>
+            </div>
+            <!-- Gate rules -->
+            <div style="margin-top:var(--space-3);display:flex;gap:var(--space-2);flex-wrap:wrap;">
+              <div style="flex:1;min-width:160px;padding:var(--space-2) var(--space-3);background:rgba(0,255,136,0.05);border:1px solid rgba(0,255,136,0.15);border-radius:6px;font-size:0.78rem;">
+                <span style="color:#00ff88;font-weight:700;">BULLISH</span>
+                <span style="color:var(--color-text-muted);"> — blocks ALL SHORT signals</span>
+              </div>
+              <div style="flex:1;min-width:160px;padding:var(--space-2) var(--space-3);background:rgba(255,56,96,0.05);border:1px solid rgba(255,56,96,0.15);border-radius:6px;font-size:0.78rem;">
+                <span style="color:#ff4060;font-weight:700;">BEARISH</span>
+                <span style="color:var(--color-text-muted);"> — blocks ALL LONG signals</span>
+              </div>
+              <div style="flex:1;min-width:160px;padding:var(--space-2) var(--space-3);background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:6px;font-size:0.78rem;">
+                <span style="color:#94a3b8;font-weight:700;">MIXED / UNKNOWN</span>
+                <span style="color:var(--color-text-muted);"> — no trades</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- ── Signal Rules ── -->
+          <div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-4);margin-bottom:var(--space-3);">
+            <div style="font-size:0.78rem;font-weight:700;color:var(--color-text-muted);letter-spacing:.06em;text-transform:uppercase;margin-bottom:var(--space-3);">🎯 Signal Rules (1m Entry)</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--space-3);">
+              <div style="border:1px solid rgba(0,255,136,0.12);border-radius:6px;padding:var(--space-3);background:rgba(0,255,136,0.02);">
+                <div style="font-size:0.78rem;font-weight:700;color:#00ff88;margin-bottom:var(--space-2);">▲ LONG Entry</div>
+                <ul style="margin:0;padding-left:16px;font-size:0.78rem;color:var(--color-text-muted);line-height:1.9;">
+                  <li>15m structure = <strong style="color:var(--color-text);">BULLISH</strong></li>
+                  <li>1m pivot = <strong style="color:var(--color-text);">HL</strong> (Higher Low)</li>
+                  <li>Price at / bouncing from HL level</li>
+                  <li>VWAP filter: price above lower 2σ</li>
+                  <li>No existing LONG open on this token</li>
+                </ul>
+              </div>
+              <div style="border:1px solid rgba(255,56,96,0.12);border-radius:6px;padding:var(--space-3);background:rgba(255,56,96,0.02);">
+                <div style="font-size:0.78rem;font-weight:700;color:#ff4060;margin-bottom:var(--space-2);">▼ SHORT Entry</div>
+                <ul style="margin:0;padding-left:16px;font-size:0.78rem;color:var(--color-text-muted);line-height:1.9;">
+                  <li>15m structure = <strong style="color:var(--color-text);">BEARISH</strong></li>
+                  <li>1m pivot = <strong style="color:var(--color-text);">LH</strong> (Lower High)</li>
+                  <li>Price at / rejecting from LH level</li>
+                  <li>VWAP filter: price below upper 2σ</li>
+                  <li>No existing SHORT open on this token</li>
+                </ul>
+              </div>
+            </div>
+          </div>
+
+          <!-- ── Exit Rules ── -->
+          <div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-4);margin-bottom:var(--space-3);">
+            <div style="font-size:0.78rem;font-weight:700;color:var(--color-text-muted);letter-spacing:.06em;text-transform:uppercase;margin-bottom:var(--space-3);">🚪 Exit Rules</div>
+            <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:var(--space-2);">
+              <div style="display:flex;flex-direction:column;gap:2px;">
+                <span style="font-size:0.7rem;color:var(--color-text-muted);">Stop Loss</span>
+                <span style="font-size:0.9rem;font-weight:700;color:var(--color-text);">Trailing SL from pivot level</span>
+              </div>
+              <div style="display:flex;flex-direction:column;gap:2px;">
+                <span style="font-size:0.7rem;color:var(--color-text-muted);">Take Profit</span>
+                <span style="font-size:0.9rem;font-weight:700;color:var(--color-text);">Trail only — no fixed TP</span>
+              </div>
+              <div style="display:flex;flex-direction:column;gap:2px;">
+                <span style="font-size:0.7rem;color:var(--color-text-muted);">Structure Exit</span>
+                <span style="font-size:0.9rem;font-weight:700;color:var(--color-text);">Close if structure flips against trade</span>
+              </div>
+              <div style="display:flex;flex-direction:column;gap:2px;">
+                <span style="font-size:0.7rem;color:var(--color-text-muted);">Sync Mode</span>
+                <span style="font-size:0.9rem;font-weight:700;color:var(--color-text);">hardSyncExchangeDB() every cycle</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- ── Tokens Active ── -->
+          <div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-4);margin-bottom:var(--space-3);">
+            <div style="font-size:0.78rem;font-weight:700;color:var(--color-text-muted);letter-spacing:.06em;text-transform:uppercase;margin-bottom:var(--space-3);">🪙 Active Tokens (V4)</div>
+            <div style="display:flex;flex-wrap:wrap;gap:var(--space-2);">
+              <div style="display:flex;align-items:center;gap:8px;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.1);border-radius:8px;padding:8px 14px;">
+                <span style="font-weight:700;color:var(--color-text);font-size:0.9rem;">BTCUSDT</span>
+                <span style="color:#f59e0b;font-weight:700;font-size:0.8rem;font-family:monospace;">100×</span>
+              </div>
+              <div style="display:flex;align-items:center;gap:8px;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.1);border-radius:8px;padding:8px 14px;">
+                <span style="font-weight:700;color:var(--color-text);font-size:0.9rem;">ETHUSDT</span>
+                <span style="color:#f59e0b;font-weight:700;font-size:0.8rem;font-family:monospace;">100×</span>
+              </div>
+              <div style="display:flex;align-items:center;gap:8px;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.1);border-radius:8px;padding:8px 14px;">
+                <span style="font-weight:700;color:var(--color-text);font-size:0.9rem;">BNBUSDT</span>
+                <span style="color:#f59e0b;font-weight:700;font-size:0.8rem;font-family:monospace;">100×</span>
+              </div>
+              <div style="display:flex;align-items:center;gap:8px;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.1);border-radius:8px;padding:8px 14px;">
+                <span style="font-weight:700;color:var(--color-text);font-size:0.9rem;">SOLUSDT</span>
+                <span style="color:#a78bfa;font-weight:700;font-size:0.8rem;font-family:monospace;">75×</span>
+              </div>
+              <div style="display:flex;align-items:center;gap:8px;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.1);border-radius:8px;padding:8px 14px;">
+                <span style="font-weight:700;color:var(--color-text);font-size:0.9rem;">ADAUSDT</span>
+                <span style="color:#a78bfa;font-weight:700;font-size:0.8rem;font-family:monospace;">75×</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- ── Debug output ── -->
+          <pre id="fix-bitunix-result" style="margin-top:var(--space-2);font-size:0.75rem;color:var(--color-text-muted);max-height:60vh;overflow:auto;white-space:pre-wrap;word-break:break-all;border:1px solid var(--color-border-muted);border-radius:var(--radius-md);padding:var(--space-3);background:var(--color-bg-base);display:none;"></pre>
         </div><!-- /admin-tab-tools -->
 
         <!-- ═══════════════════════════════════════════
-             TAB: ⚡ Versions — Strategy Version Manager
+             TAB: ⚡ Versions
              ═══════════════════════════════════════════ -->
         <div id="admin-tab-versions" class="admin-tab-panel hidden">
 
           <!-- Header -->
-          <div style="display:flex;align-items:flex-start;gap:var(--space-3);flex-wrap:wrap;margin-bottom:var(--space-3);">
-            <div style="flex:1;min-width:200px;">
-              <h3 style="margin:0;font-size:1rem;color:var(--color-text);">⚡ Strategy Version Manager</h3>
-              <p style="margin:2px 0 0;font-size:0.78rem;color:var(--color-text-muted);">All optimizer results are saved here automatically. Pick any version and activate it — the bot will trade with those parameters immediately.</p>
-            </div>
-            <div style="display:flex;gap:var(--space-2);flex-wrap:wrap;align-items:center;flex-shrink:0;">
-              <button class="btn btn-sm" id="versions-scan-btn"
-                style="background:linear-gradient(135deg,#d4af37,#b8962e);color:#000;font-weight:700;font-size:0.8rem;"
-                onclick="window.CryptoBot.scanStrategyVersions()">🔍 Sync from Optimizer</button>
-              <button class="btn btn-ghost btn-sm" style="font-size:0.8rem;" onclick="window.CryptoBot.loadStrategyVersions()">↺ Refresh</button>
-              <button class="btn btn-ghost btn-sm" id="versions-deactivate-btn" style="font-size:0.8rem;color:#ef4444;display:none;"
-                onclick="window.CryptoBot.deactivateStrategyVersion()">✕ Deactivate</button>
-            </div>
+          <div style="margin-bottom:var(--space-4);">
+            <h3 style="margin:0;font-size:1rem;color:var(--color-text);">⚡ Bot Strategy Versions</h3>
+            <p style="margin:3px 0 0;font-size:0.75rem;color:var(--color-text-muted);">History of all strategy versions built for MCT AI Trader. V4 is the current live version.</p>
           </div>
 
-          <!-- Active version banner -->
-          <div id="versions-active-banner" style="display:none;background:rgba(212,175,55,0.1);border:1px solid rgba(212,175,55,0.3);border-radius:var(--radius-md);padding:var(--space-3);margin-bottom:var(--space-3);">
-            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
-              <span style="color:#d4af37;font-weight:700;font-size:0.85rem;">🟢 LIVE VERSION:</span>
-              <span id="active-version-name" style="color:var(--color-text);font-weight:700;font-size:0.9rem;">—</span>
-              <span style="font-size:0.72rem;color:var(--color-text-muted);">— bot is trading with these settings</span>
-            </div>
-            <div id="active-version-params-grid" style="display:flex;flex-wrap:wrap;gap:6px;"></div>
-          </div>
+          <!-- Version cards -->
+          <div style="display:flex;flex-direction:column;gap:var(--space-3);">
 
-          <!-- Stats row -->
-          <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:var(--space-2);margin-bottom:var(--space-3);">
-            <div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-md);padding:var(--space-2) var(--space-3);text-align:center;">
-              <div style="font-size:1.3rem;font-weight:700;color:var(--color-accent);" id="stat-total-versions">—</div>
-              <div style="font-size:0.7rem;color:var(--color-text-muted);">Total Versions</div>
-            </div>
-            <div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-md);padding:var(--space-2) var(--space-3);text-align:center;">
-              <div style="font-size:1.3rem;font-weight:700;color:#22c55e;" id="stat-best-wr">—</div>
-              <div style="font-size:0.7rem;color:var(--color-text-muted);">Best WR</div>
-            </div>
-            <div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-md);padding:var(--space-2) var(--space-3);text-align:center;">
-              <div style="font-size:1.3rem;font-weight:700;color:#f59e0b;" id="stat-80plus">—</div>
-              <div style="font-size:0.7rem;color:var(--color-text-muted);">80%+ WR</div>
-            </div>
-            <div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-md);padding:var(--space-2) var(--space-3);text-align:center;">
-              <div style="font-size:1.3rem;font-weight:700;color:#a78bfa;" id="stat-optimizer-count">—</div>
-              <div style="font-size:0.7rem;color:var(--color-text-muted);">From Optimizer</div>
-            </div>
-          </div>
-
-          <!-- Status message -->
-          <div id="versions-msg" style="display:none;padding:var(--space-2) var(--space-3);border-radius:var(--radius-md);font-size:0.82rem;margin-bottom:var(--space-3);"></div>
-
-          <!-- ── Manual Version Creator (admin sets own params) ── -->
-          <details id="versions-manual-creator" style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-3);margin-bottom:var(--space-3);">
-            <summary style="cursor:pointer;font-size:0.85rem;font-weight:600;color:var(--color-text);list-style:none;display:flex;align-items:center;gap:8px;">
-              ➕ Create Custom Version <span style="font-size:0.72rem;color:var(--color-text-muted);font-weight:400;">— set your own parameters</span>
-            </summary>
-            <div style="margin-top:var(--space-3);">
-              <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:var(--space-2);margin-bottom:var(--space-3);">
-                <div>
-                  <label style="font-size:0.72rem;color:var(--color-text-muted);display:block;margin-bottom:3px;">Version Name</label>
-                  <input id="cv-name" class="form-input" type="text" placeholder="e.g. My Best Setup" style="font-size:0.8rem;">
+            <!-- V4 — LIVE -->
+            <div style="background:var(--color-bg-raised);border:1px solid rgba(212,175,55,0.4);border-radius:var(--radius-lg);padding:var(--space-4);position:relative;overflow:hidden;">
+              <div style="position:absolute;top:0;left:0;right:0;height:2px;background:linear-gradient(90deg,#d4af37,#f59e0b,#d4af37);"></div>
+              <div style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:var(--space-2);margin-bottom:var(--space-3);">
+                <div style="display:flex;align-items:center;gap:10px;">
+                  <div style="background:linear-gradient(135deg,#d4af37,#b8962e);color:#000;font-weight:900;font-size:1rem;padding:6px 14px;border-radius:6px;letter-spacing:.03em;">V4</div>
+                  <div>
+                    <div style="font-weight:700;font-size:0.95rem;color:var(--color-text);">SMC Pro — Smart Money Concepts</div>
+                    <div style="font-size:0.72rem;color:var(--color-text-muted);margin-top:1px;">15m structure gate · 1m pivot entry · VWAP 2σ · Trailing SL</div>
+                  </div>
                 </div>
-                <div>
-                  <label style="font-size:0.72rem;color:var(--color-text-muted);display:block;margin-bottom:3px;">Entry Type</label>
-                  <select id="cv-entry" class="form-input" style="font-size:0.8rem;">
-                    <option value="ema_cross">EMA Cross</option>
-                    <option value="rsi_bounce">RSI Bounce</option>
-                    <option value="macd_cross">MACD Cross</option>
-                    <option value="engulfing">Engulfing</option>
-                    <option value="bb_bounce">BB Bounce</option>
-                    <option value="structure_break">Structure Break</option>
-                  </select>
+                <span style="background:rgba(34,197,94,0.12);color:#22c55e;border:1px solid rgba(34,197,94,0.3);font-size:0.72rem;font-weight:700;padding:3px 10px;border-radius:20px;white-space:nowrap;">🟢 LIVE NOW</span>
+              </div>
+              <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:var(--space-2);">
+                <div style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.07);border-radius:6px;padding:8px 12px;">
+                  <div style="font-size:0.65rem;color:var(--color-text-muted);margin-bottom:2px;">Entry Logic</div>
+                  <div style="font-size:0.82rem;font-weight:600;color:var(--color-text);">HH·LH·HL·LL pivots (50 history)</div>
                 </div>
-                <div>
-                  <label style="font-size:0.72rem;color:var(--color-text-muted);display:block;margin-bottom:3px;">EMA Fast</label>
-                  <input id="cv-ema-fast" class="form-input" type="number" value="9" min="3" max="50" style="font-size:0.8rem;">
+                <div style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.07);border-radius:6px;padding:8px 12px;">
+                  <div style="font-size:0.65rem;color:var(--color-text-muted);margin-bottom:2px;">Timeframes</div>
+                  <div style="font-size:0.82rem;font-weight:600;color:var(--color-text);">15m structure + 1m trigger</div>
                 </div>
-                <div>
-                  <label style="font-size:0.72rem;color:var(--color-text-muted);display:block;margin-bottom:3px;">EMA Slow</label>
-                  <input id="cv-ema-slow" class="form-input" type="number" value="21" min="10" max="200" style="font-size:0.8rem;">
+                <div style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.07);border-radius:6px;padding:8px 12px;">
+                  <div style="font-size:0.65rem;color:var(--color-text-muted);margin-bottom:2px;">Capital per Trade</div>
+                  <div style="font-size:0.82rem;font-weight:600;color:var(--color-text);">10% of wallet</div>
                 </div>
-                <div>
-                  <label style="font-size:0.72rem;color:var(--color-text-muted);display:block;margin-bottom:3px;">EMA Trend</label>
-                  <input id="cv-ema-trend" class="form-input" type="number" value="200" min="50" max="500" style="font-size:0.8rem;">
+                <div style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.07);border-radius:6px;padding:8px 12px;">
+                  <div style="font-size:0.65rem;color:var(--color-text-muted);margin-bottom:2px;">Leverage</div>
+                  <div style="font-size:0.82rem;font-weight:600;color:var(--color-text);">BTC/ETH/BNB 100× · SOL/ADA 75×</div>
                 </div>
-                <div>
-                  <label style="font-size:0.72rem;color:var(--color-text-muted);display:block;margin-bottom:3px;">RSI Period</label>
-                  <input id="cv-rsi-period" class="form-input" type="number" value="14" min="5" max="30" style="font-size:0.8rem;">
+                <div style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.07);border-radius:6px;padding:8px 12px;">
+                  <div style="font-size:0.65rem;color:var(--color-text-muted);margin-bottom:2px;">Stop Loss</div>
+                  <div style="font-size:0.82rem;font-weight:600;color:var(--color-text);">Trailing from pivot level</div>
                 </div>
-                <div>
-                  <label style="font-size:0.72rem;color:var(--color-text-muted);display:block;margin-bottom:3px;">RSI Overbought</label>
-                  <input id="cv-rsi-ob" class="form-input" type="number" value="70" min="55" max="90" style="font-size:0.8rem;">
-                </div>
-                <div>
-                  <label style="font-size:0.72rem;color:var(--color-text-muted);display:block;margin-bottom:3px;">RSI Oversold</label>
-                  <input id="cv-rsi-os" class="form-input" type="number" value="30" min="10" max="45" style="font-size:0.8rem;">
-                </div>
-                <div>
-                  <label style="font-size:0.72rem;color:var(--color-text-muted);display:block;margin-bottom:3px;">ATR SL ×</label>
-                  <input id="cv-atr-sl" class="form-input" type="number" value="1.0" min="0.5" max="3" step="0.1" style="font-size:0.8rem;">
-                </div>
-                <div>
-                  <label style="font-size:0.72rem;color:var(--color-text-muted);display:block;margin-bottom:3px;">ATR TP ×</label>
-                  <input id="cv-atr-tp" class="form-input" type="number" value="2.0" min="1" max="6" step="0.1" style="font-size:0.8rem;">
-                </div>
-                <div>
-                  <label style="font-size:0.72rem;color:var(--color-text-muted);display:block;margin-bottom:3px;">Vol Min ×</label>
-                  <input id="cv-vol-min" class="form-input" type="number" value="1.2" min="0.5" max="3" step="0.1" style="font-size:0.8rem;">
-                </div>
-                <div>
-                  <label style="font-size:0.72rem;color:var(--color-text-muted);display:block;margin-bottom:3px;">Leverage</label>
-                  <input id="cv-leverage" class="form-input" type="number" value="20" min="1" max="20" style="font-size:0.8rem;">
-                </div>
-                <div>
-                  <label style="font-size:0.72rem;color:var(--color-text-muted);display:block;margin-bottom:3px;">Session</label>
-                  <select id="cv-session" class="form-input" style="font-size:0.8rem;">
-                    <option value="all">All 24/7</option>
-                    <option value="europe">Europe</option>
-                    <option value="us">US</option>
-                    <option value="asia">Asia</option>
-                  </select>
-                </div>
-                <div>
-                  <label style="font-size:0.72rem;color:var(--color-text-muted);display:block;margin-bottom:3px;">Trend Align</label>
-                  <select id="cv-trend-align" class="form-input" style="font-size:0.8rem;">
-                    <option value="1h">1h</option>
-                    <option value="4h">4h</option>
-                    <option value="none">None</option>
-                  </select>
+                <div style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.07);border-radius:6px;padding:8px 12px;">
+                  <div style="font-size:0.65rem;color:var(--color-text-muted);margin-bottom:2px;">Filters</div>
+                  <div style="font-size:0.82rem;font-weight:600;color:var(--color-text);">VWAP 2σ · Structure gate</div>
                 </div>
               </div>
-              <button class="btn btn-primary btn-sm" style="font-size:0.8rem;" onclick="window.CryptoBot.saveCustomVersion()">
-                💾 Save as Version
-              </button>
             </div>
-          </details>
 
-          <!-- Versions table — all versions, always visible -->
-          <div style="overflow-x:auto;border-radius:var(--radius-lg);border:1px solid var(--color-border-muted);">
-            <!-- Bulk-action toolbar — shown when ≥1 row is checked -->
-            <div id="versions-bulk-bar" style="display:none;align-items:center;gap:8px;padding:8px 12px;background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.3);border-radius:var(--radius-md);margin-bottom:8px;">
-              <span id="versions-bulk-count" style="font-size:0.8rem;font-weight:600;color:#f87171;">0 selected</span>
-              <button onclick="deleteSelectedAiVersions()"
-                title="Delete all selected versions permanently. Active (LIVE) versions are protected and will be skipped."
-                style="background:#ef4444;color:#fff;border:none;border-radius:4px;font-size:0.78rem;padding:4px 14px;font-weight:700;cursor:pointer;">🗑 Delete Selected</button>
-              <button onclick="versionsSelectNone()"
-                title="Clear all checkboxes"
-                style="background:none;border:1px solid var(--color-border-muted);border-radius:4px;font-size:0.78rem;padding:4px 10px;color:var(--color-text-muted);cursor:pointer;">✕ Clear</button>
+            <!-- V3 -->
+            <div style="background:var(--color-bg-raised);border:1px solid rgba(99,102,241,0.3);border-radius:var(--radius-lg);padding:var(--space-4);position:relative;overflow:hidden;">
+              <div style="position:absolute;top:0;left:0;right:0;height:2px;background:linear-gradient(90deg,#6366f1,#a78bfa);"></div>
+              <div style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:var(--space-2);margin-bottom:var(--space-3);">
+                <div style="display:flex;align-items:center;gap:10px;">
+                  <div style="background:rgba(99,102,241,0.2);color:#a78bfa;border:1px solid rgba(99,102,241,0.4);font-weight:900;font-size:1rem;padding:6px 14px;border-radius:6px;letter-spacing:.03em;">V3</div>
+                  <div>
+                    <div style="font-weight:700;font-size:0.95rem;color:var(--color-text);">SMC Basic — Structure Break</div>
+                    <div style="font-size:0.72rem;color:var(--color-text-muted);margin-top:1px;">BOS/CHoCH detection · 4H trend alignment · ATR-based SL/TP</div>
+                  </div>
+                </div>
+                <span style="background:rgba(255,255,255,0.05);color:var(--color-text-muted);border:1px solid rgba(255,255,255,0.1);font-size:0.72rem;font-weight:600;padding:3px 10px;border-radius:20px;">Retired</span>
+              </div>
+              <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:var(--space-2);">
+                <div style="background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.06);border-radius:6px;padding:8px 12px;">
+                  <div style="font-size:0.65rem;color:var(--color-text-muted);margin-bottom:2px;">Entry Logic</div>
+                  <div style="font-size:0.82rem;font-weight:600;color:var(--color-text);">BOS + CHoCH on 1H chart</div>
+                </div>
+                <div style="background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.06);border-radius:6px;padding:8px 12px;">
+                  <div style="font-size:0.65rem;color:var(--color-text-muted);margin-bottom:2px;">Timeframes</div>
+                  <div style="font-size:0.82rem;font-weight:600;color:var(--color-text);">4H trend · 1H trigger</div>
+                </div>
+                <div style="background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.06);border-radius:6px;padding:8px 12px;">
+                  <div style="font-size:0.65rem;color:var(--color-text-muted);margin-bottom:2px;">Stop Loss</div>
+                  <div style="font-size:0.82rem;font-weight:600;color:var(--color-text);">ATR × 1.5</div>
+                </div>
+                <div style="background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.06);border-radius:6px;padding:8px 12px;">
+                  <div style="font-size:0.65rem;color:var(--color-text-muted);margin-bottom:2px;">Take Profit</div>
+                  <div style="font-size:0.82rem;font-weight:600;color:var(--color-text);">ATR × 3.0 (fixed)</div>
+                </div>
+                <div style="background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.06);border-radius:6px;padding:8px 12px;">
+                  <div style="font-size:0.65rem;color:var(--color-text-muted);margin-bottom:2px;">Leverage</div>
+                  <div style="font-size:0.82rem;font-weight:600;color:var(--color-text);">20× uniform</div>
+                </div>
+                <div style="background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.06);border-radius:6px;padding:8px 12px;">
+                  <div style="font-size:0.65rem;color:var(--color-text-muted);margin-bottom:2px;">Issue</div>
+                  <div style="font-size:0.82rem;font-weight:600;color:#f87171;">No pivot label tracking</div>
+                </div>
+              </div>
             </div>
-            <table style="width:100%;border-collapse:collapse;font-size:0.78rem;">
-              <thead>
-                <tr style="background:var(--color-bg-raised);border-bottom:1px solid var(--color-border-muted);">
-                  <th style="padding:10px 12px;text-align:center;width:36px;" title="Select all / deselect all">
-                    <input type="checkbox" id="versions-select-all" title="Select all deletable versions"
-                      style="cursor:pointer;width:15px;height:15px;" onchange="versionsToggleAll(this.checked)">
-                  </th>
-                  <th style="padding:10px 12px;text-align:left;color:var(--color-text-muted);font-weight:600;min-width:200px;">Version Name</th>
-                  <th style="padding:10px 12px;text-align:center;color:var(--color-text-muted);font-weight:600;">Source</th>
-                  <th style="padding:10px 12px;text-align:right;color:var(--color-text-muted);font-weight:600;white-space:nowrap;">WR %</th>
-                  <th style="padding:10px 12px;text-align:right;color:var(--color-text-muted);font-weight:600;">Trades</th>
-                  <th style="padding:10px 12px;text-align:right;color:var(--color-text-muted);font-weight:600;">PF</th>
-                  <th style="padding:10px 12px;text-align:right;color:var(--color-text-muted);font-weight:600;white-space:nowrap;">Return %</th>
-                  <th style="padding:10px 12px;text-align:right;color:var(--color-text-muted);font-weight:600;white-space:nowrap;">Max DD</th>
-                  <th style="padding:10px 12px;text-align:center;color:var(--color-text-muted);font-weight:600;white-space:nowrap;" title="Date and time this backtest result was generated. Helps you know if the test is recent or outdated.">Tested <span style="cursor:help;font-size:0.65rem;border:1px solid currentColor;border-radius:50%;padding:0 3px;">?</span></th>
-                  <th style="padding:10px 12px;text-align:center;color:var(--color-text-muted);font-weight:600;">Action</th>
-                </tr>
-              </thead>
-              <tbody id="versions-tbody">
-                <tr><td colspan="10" style="padding:24px;text-align:center;color:var(--color-text-muted);">Loading versions…</td></tr>
-              </tbody>
-            </table>
-          </div>
 
-          <!-- Genome inspector -->
-          <div id="versions-genome-panel" style="display:none;margin-top:var(--space-3);background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-3);">
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--space-2);">
-              <strong style="font-size:0.85rem;color:var(--color-text);">📋 Genome Parameters</strong>
-              <button onclick="document.getElementById('versions-genome-panel').style.display='none'"
-                style="background:none;border:none;color:var(--color-text-muted);cursor:pointer;font-size:1rem;">✕</button>
+            <!-- V2 -->
+            <div style="background:var(--color-bg-raised);border:1px solid rgba(34,197,94,0.2);border-radius:var(--radius-lg);padding:var(--space-4);position:relative;overflow:hidden;">
+              <div style="position:absolute;top:0;left:0;right:0;height:2px;background:linear-gradient(90deg,#22c55e,#4ade80);"></div>
+              <div style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:var(--space-2);margin-bottom:var(--space-3);">
+                <div style="display:flex;align-items:center;gap:10px;">
+                  <div style="background:rgba(34,197,94,0.12);color:#4ade80;border:1px solid rgba(34,197,94,0.3);font-weight:900;font-size:1rem;padding:6px 14px;border-radius:6px;letter-spacing:.03em;">V2</div>
+                  <div>
+                    <div style="font-weight:700;font-size:0.95rem;color:var(--color-text);">Multi-Indicator — EMA + RSI + Volume</div>
+                    <div style="font-size:0.72rem;color:var(--color-text-muted);margin-top:1px;">EMA cross trend · RSI overbought/oversold · Volume confirmation</div>
+                  </div>
+                </div>
+                <span style="background:rgba(255,255,255,0.05);color:var(--color-text-muted);border:1px solid rgba(255,255,255,0.1);font-size:0.72rem;font-weight:600;padding:3px 10px;border-radius:20px;">Retired</span>
+              </div>
+              <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:var(--space-2);">
+                <div style="background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.06);border-radius:6px;padding:8px 12px;">
+                  <div style="font-size:0.65rem;color:var(--color-text-muted);margin-bottom:2px;">Entry Logic</div>
+                  <div style="font-size:0.82rem;font-weight:600;color:var(--color-text);">EMA 9/21 cross + RSI confirm</div>
+                </div>
+                <div style="background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.06);border-radius:6px;padding:8px 12px;">
+                  <div style="font-size:0.65rem;color:var(--color-text-muted);margin-bottom:2px;">RSI Filter</div>
+                  <div style="font-size:0.82rem;font-weight:600;color:var(--color-text);">OB 75 · OS 25 · Period 14</div>
+                </div>
+                <div style="background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.06);border-radius:6px;padding:8px 12px;">
+                  <div style="font-size:0.65rem;color:var(--color-text-muted);margin-bottom:2px;">Volume</div>
+                  <div style="font-size:0.82rem;font-weight:600;color:var(--color-text);">1.5× 20-bar average</div>
+                </div>
+                <div style="background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.06);border-radius:6px;padding:8px 12px;">
+                  <div style="font-size:0.65rem;color:var(--color-text-muted);margin-bottom:2px;">Stop Loss</div>
+                  <div style="font-size:0.82rem;font-weight:600;color:var(--color-text);">3% fixed</div>
+                </div>
+                <div style="background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.06);border-radius:6px;padding:8px 12px;">
+                  <div style="font-size:0.65rem;color:var(--color-text-muted);margin-bottom:2px;">Take Profit</div>
+                  <div style="font-size:0.82rem;font-weight:600;color:var(--color-text);">6% fixed</div>
+                </div>
+                <div style="background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.06);border-radius:6px;padding:8px 12px;">
+                  <div style="font-size:0.65rem;color:var(--color-text-muted);margin-bottom:2px;">Issue</div>
+                  <div style="font-size:0.82rem;font-weight:600;color:#f87171;">Too many false signals in chop</div>
+                </div>
+              </div>
             </div>
-            <div id="versions-genome-content" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:var(--space-2);"></div>
-          </div>
+
+            <!-- V1 -->
+            <div style="background:var(--color-bg-raised);border:1px solid rgba(255,255,255,0.08);border-radius:var(--radius-lg);padding:var(--space-4);position:relative;overflow:hidden;">
+              <div style="position:absolute;top:0;left:0;right:0;height:2px;background:rgba(255,255,255,0.15);"></div>
+              <div style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:var(--space-2);margin-bottom:var(--space-3);">
+                <div style="display:flex;align-items:center;gap:10px;">
+                  <div style="background:rgba(255,255,255,0.06);color:var(--color-text-muted);border:1px solid rgba(255,255,255,0.12);font-weight:900;font-size:1rem;padding:6px 14px;border-radius:6px;letter-spacing:.03em;">V1</div>
+                  <div>
+                    <div style="font-weight:700;font-size:0.95rem;color:var(--color-text);">Basic Bot — EMA Cross Only</div>
+                    <div style="font-size:0.72rem;color:var(--color-text-muted);margin-top:1px;">First version · Simple EMA crossover · No structure filter</div>
+                  </div>
+                </div>
+                <span style="background:rgba(255,255,255,0.05);color:var(--color-text-muted);border:1px solid rgba(255,255,255,0.1);font-size:0.72rem;font-weight:600;padding:3px 10px;border-radius:20px;">Retired</span>
+              </div>
+              <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:var(--space-2);">
+                <div style="background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.06);border-radius:6px;padding:8px 12px;">
+                  <div style="font-size:0.65rem;color:var(--color-text-muted);margin-bottom:2px;">Entry Logic</div>
+                  <div style="font-size:0.82rem;font-weight:600;color:var(--color-text);">EMA 9 crosses EMA 21</div>
+                </div>
+                <div style="background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.06);border-radius:6px;padding:8px 12px;">
+                  <div style="font-size:0.65rem;color:var(--color-text-muted);margin-bottom:2px;">Stop Loss</div>
+                  <div style="font-size:0.82rem;font-weight:600;color:var(--color-text);">5% fixed</div>
+                </div>
+                <div style="background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.06);border-radius:6px;padding:8px 12px;">
+                  <div style="font-size:0.65rem;color:var(--color-text-muted);margin-bottom:2px;">Take Profit</div>
+                  <div style="font-size:0.82rem;font-weight:600;color:var(--color-text);">10% fixed</div>
+                </div>
+                <div style="background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.06);border-radius:6px;padding:8px 12px;">
+                  <div style="font-size:0.65rem;color:var(--color-text-muted);margin-bottom:2px;">Leverage</div>
+                  <div style="font-size:0.82rem;font-weight:600;color:var(--color-text);">10× uniform</div>
+                </div>
+                <div style="background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.06);border-radius:6px;padding:8px 12px;">
+                  <div style="font-size:0.65rem;color:var(--color-text-muted);margin-bottom:2px;">Issue</div>
+                  <div style="font-size:0.82rem;font-weight:600;color:#f87171;">No filters — trades in all conditions</div>
+                </div>
+              </div>
+            </div>
+
+          </div><!-- /version cards -->
         </div><!-- /admin-tab-versions -->
 
         <!-- ═══════════════════════════════════════════
