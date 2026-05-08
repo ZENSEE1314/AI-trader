@@ -925,6 +925,26 @@ async function initAllTables() {
     }
   } catch (e) { console.warn('[DB] capital_percentage fix warning:', e.message); }
 
+  // Fix: enforce correct leverage in token_leverage table on every boot.
+  // BNBUSDT, BTCUSDT, ETHUSDT = 100x | ADAUSDT, SOLUSDT = 75x
+  // Any wrong value here (e.g. 20x set by mistake) overrides SYMBOL_LEVERAGE constant.
+  // ON CONFLICT(symbol) DO UPDATE ensures we correct existing wrong values.
+  try {
+    await pool.query(`
+      INSERT INTO token_leverage (symbol, leverage, enabled)
+      VALUES
+        ('BTCUSDT', 100, true),
+        ('ETHUSDT', 100, true),
+        ('BNBUSDT', 100, true),
+        ('ADAUSDT',  75, true),
+        ('SOLUSDT',  75, true)
+      ON CONFLICT (symbol) DO UPDATE
+        SET leverage = EXCLUDED.leverage,
+            enabled  = true
+    `);
+    console.log('[DB] token_leverage leverage fix applied: BTC/ETH/BNB=100x ADA/SOL=75x');
+  } catch (e) { console.warn('[DB] token_leverage fix warning:', e.message); }
+
   console.log('[DB] All tables verified');
 }
 

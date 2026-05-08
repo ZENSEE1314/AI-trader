@@ -239,10 +239,10 @@ function isGoodVwapDistance(price, { lower, stddev }) {
   return stddev > 0 && distFromLower >= MIN_DIST_SIGMA;
 }
 
-// 1m gap: reject if HL/LL gap > 1.0% — means the swing lows are too far apart
-// (chasing a move already done). 1.0% balances quality vs frequency at SW1=3:
-// with 3-bar pivots, consecutive swing lows are typically 0.1-0.8% apart.
-const MAX_1M_GAP_PCT = 1.0;
+// 1m gap: reject if HL/LL gap > 0.50% — consecutive swing lows too far apart
+// means the bounce already started well before entry. Tightened from 1.0%:
+// with 3-bar 1m pivots, genuine bounces see swing-low spacing of 0.05–0.35%.
+const MAX_1M_GAP_PCT = 0.50;
 
 function is1mGapOk(sl1m_1, sl1m_2) {
   if (sl1m_1 === null || sl1m_2 === null) return false;
@@ -250,14 +250,13 @@ function is1mGapOk(sl1m_1, sl1m_2) {
   return gap <= MAX_1M_GAP_PCT;
 }
 
-// Chase filter: reject LONG if price has already moved > MAX_CHASE_PCT
-// above the confirmed 1m HL pivot.
-// With SWING_BARS=3, the pivot confirms 3 min after the actual swing low.
-// On BTC at 100x, price can rally 0.3% in 3 min — that's 30% capital gain
-// already done before entry. Beyond 0.3% we're entering near resistance.
-// 0.20% = max tolerable chase at 100x (0.20% price = 20% capital already moved).
-// Using frozen sl1m_1 from signal creation — not the live (possibly risen) swing low.
-const MAX_CHASE_PCT = 0.20;
+// Chase filter: reject LONG if price has already moved > MAX_CHASE_PCT above
+// the confirmed 1m HL/LL pivot.
+// At 100x: 0.08% price move = 8% capital already consumed before entry.
+// Tightened from 0.20% (was 20% capital burned before even opening — too far
+// from the pivot, entering "in no where" as user described).
+// Entry MUST be within 0.08% of the actual swing low — if it moved more, skip.
+const MAX_CHASE_PCT = 0.08;
 
 function isChasing(price, sl1m_1) {
   if (sl1m_1 === null) return false;
@@ -265,18 +264,26 @@ function isChasing(price, sl1m_1) {
   return chasePct > MAX_CHASE_PCT;
 }
 
-// SHORT drop filter: mirror of isChasing for the downside.
-// After the 15m HH or LH prints, price must still be within MAX_SHORT_DROP_PCT
-// of that swing high. If price has already dropped > 0.30% below sh15_1, the
-// HH/LH rejection already played out — entering now is chasing the move down,
-// not fading at the top.
-// Example: SOL HH at 90.20, price now 88.50 → drop = 1.88% → REJECT.
-// 0.30% = safe zone at the top. At 75x that is 22.5% capital already moved.
-const MAX_SHORT_DROP_PCT = 0.30;
+// SHORT proximity filter: reject SHORT if price has already dropped > MAX_SHORT_DROP_PCT
+// below the 15m HH/LH reference. The rejection already played out — we'd be
+// entering mid-fall, not at the top where the setup was valid.
+// Tightened from 0.30% to 0.12%: at 100x, 0.12% = 12% capital already moved.
+// Entry must be within 0.12% of the swing high — if it dropped more, skip.
+const MAX_SHORT_DROP_PCT = 0.12;
 
 function isShortTooLate(price, sh15_1) {
   if (sh15_1 === null) return false;  // no swing high reference — don't block
   const dropPct = (sh15_1 - price) / sh15_1 * 100;
+  return dropPct > MAX_SHORT_DROP_PCT;
+}
+
+// SHORT 1m proximity filter: price must also be within MAX_SHORT_DROP_PCT of
+// the 1m swing HIGH (sh1m_1) — not just the 15m reference.
+// This catches cases where 15m HH/LH is fresh but price already fell sharply
+// on the 1m in the confirmation window (3 bars = 3 min).
+function isShort1mTooLate(price, sh1m_1) {
+  if (sh1m_1 === null) return false;
+  const dropPct = (sh1m_1 - price) / sh1m_1 * 100;
   return dropPct > MAX_SHORT_DROP_PCT;
 }
 
@@ -309,6 +316,7 @@ function resolveSignal(state, zone, price) {
   if (zone === 'ABOVE_UPPER') {
     if (p15 === 'HH' && is1High) {
       if (isShortTooLate(price, state.last15mPivotPrice)) return null;
+      if (isShort1mTooLate(price, state.sh1m_1))         return null;
       return { direction: 'SHORT', type: `${p15}+${p1m}` };
     }
     return null;
@@ -318,7 +326,7 @@ function resolveSignal(state, zone, price) {
   if (zone === 'BELOW_LOWER') {
     if (is15Low && is1Low) {
       if (!is1mGapOk(state.sl1m_1, state.sl1m_2)) return null;
-      if (isChasing(price, state.sl1m_1)) return null;
+      if (isChasing(price, state.sl1m_1))          return null;
       return { direction: 'LONG', type: `${p15}+${p1m}` };
     }
     return null;
@@ -328,11 +336,12 @@ function resolveSignal(state, zone, price) {
   if (zone === 'UPPER_MID' || zone === 'LOWER_MID') {
     if (is15High && is1High) {
       if (isShortTooLate(price, state.last15mPivotPrice)) return null;
+      if (isShort1mTooLate(price, state.sh1m_1))         return null;
       return { direction: 'SHORT', type: `${p15}+${p1m}` };
     }
     if (is15Low && is1Low) {
       if (!is1mGapOk(state.sl1m_1, state.sl1m_2)) return null;
-      if (isChasing(price, state.sl1m_1)) return null;
+      if (isChasing(price, state.sl1m_1))          return null;
       return { direction: 'LONG', type: `${p15}+${p1m}` };
     }
   }
@@ -467,16 +476,22 @@ async function analyze(symbol, log) {
         // signal-creation time — NOT st.sl1m_1 which may have risen to a new higher HL
         // by the time this bar fires, making the filter think we're close when we're not.
         const frozenRef = pending.direction === 'SHORT' ? pending.sh1m_1 : pending.sl1m_1;
+        // LONG chase: entry must be within MAX_CHASE_PCT (0.08%) of frozen HL/LL pivot
+        // SHORT drop: entry must be within MAX_SHORT_DROP_PCT (0.12%) of frozen HH/LH pivot
         const chaseOk = pending.direction === 'SHORT'
-          ? true   // no chase filter on SHORT (entering at top, short stays short)
+          ? !isShort1mTooLate(entryPrice, frozenRef)
           : !isChasing(entryPrice, frozenRef);
         // Re-validate 1m pivot type at fire time: must still be a LOW pivot for LONG
         const is1mLowAtFire = pending.direction !== 'LONG'
           || st.last1mPivotType === 'HL' || st.last1mPivotType === 'LL';
-        if (zoneOk && chaseOk && is1mLowAtFire) {
+        // Re-validate 1m pivot type for SHORT: must still be a HIGH pivot
+        const is1mHighAtFire = pending.direction !== 'SHORT'
+          || st.last1mPivotType === 'HH' || st.last1mPivotType === 'LH';
+        if (zoneOk && chaseOk && is1mLowAtFire && is1mHighAtFire) {
           signal = { ...pending, price: entryPrice, zone: zoneNext };
           if (pending.direction === 'SHORT') {
-            log(`[V4] ✓ ${symbol} SHORT next-bar entry=$${entryPrice.toFixed(4)} zone=${zoneNext} type=${pending.type}`);
+            const dropPct = frozenRef ? ((frozenRef - entryPrice) / frozenRef * 100).toFixed(3) : 'n/a';
+            log(`[V4] ✓ ${symbol} SHORT next-bar entry=$${entryPrice.toFixed(4)} zone=${zoneNext} type=${pending.type} drop=${dropPct}% vs sh1m=${frozenRef?.toFixed(4)}`);
           } else {
             const chasePct = frozenRef ? ((entryPrice - frozenRef) / frozenRef * 100).toFixed(3) : 'n/a';
             log(`[V4] ✓ ${symbol} LONG  next-bar entry=$${entryPrice.toFixed(4)} zone=${zoneNext} type=${pending.type} chase=${chasePct}% vs sl1m=${frozenRef?.toFixed(4)}`);
@@ -485,8 +500,12 @@ async function analyze(symbol, log) {
           const chasePct = frozenRef && pending.direction === 'LONG'
             ? ` chase=${((entryPrice - frozenRef) / frozenRef * 100).toFixed(3)}% (limit=${MAX_CHASE_PCT}%) ref=${frozenRef?.toFixed(4)}`
             : '';
-          const structReason = !is1mLowAtFire ? ` 1m_pivot=${st.last1mPivotType}(need LOW)` : '';
-          log(`[V4] pending ${symbol} ${pending.direction} cancelled on next bar — zoneOk=${zoneOk}(${pending.zone}→${zoneNext}) chaseOk=${chaseOk}${chasePct}${structReason}`);
+          const dropPct = frozenRef && pending.direction === 'SHORT'
+            ? ` drop=${((frozenRef - entryPrice) / frozenRef * 100).toFixed(3)}% (limit=${MAX_SHORT_DROP_PCT}%) ref=${frozenRef?.toFixed(4)}`
+            : '';
+          const structReason = !is1mLowAtFire ? ` 1m_pivot=${st.last1mPivotType}(need LOW for LONG)`
+            : !is1mHighAtFire ? ` 1m_pivot=${st.last1mPivotType}(need HIGH for SHORT)` : '';
+          log(`[V4] pending ${symbol} ${pending.direction} cancelled — zoneOk=${zoneOk}(${pending.zone}→${zoneNext}) chaseOk=${chaseOk}${chasePct}${dropPct}${structReason}`);
         }
       }
     }
