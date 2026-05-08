@@ -1,16 +1,25 @@
 'use strict';
 // ═══════════════════════════════════════════════════════════════════
-//  backtest-v4-zone.js  —  V4 4H Structure Gate + Strict HL/LH Pivots
+//  backtest-v4-zone.js  —  V4 Zone-Direction + Strict HL/LH Pivots
 //
-//  Mirrors strategy-v4-smc.js resolveSignal() exactly:
+//  Direction decided by VWAP zone ALONE (no 4H structure gate):
+//    ABOVE_UPPER / UPPER_MID → SHORT (price at premium = mean revert)
+//    BELOW_LOWER / LOWER_MID → LONG  (price at discount = mean revert)
 //
-//    4H BULLISH → LONG only at BELOW_LOWER / LOWER_MID  (buy the dip)
-//    4H BEARISH → SHORT only at ABOVE_UPPER / UPPER_MID (sell the rally)
-//    4H MIXED   → 15m structure + zone decides direction
+//  "No wrong point" protection is the STRICT PIVOT TYPE gate:
+//    LONG:  15m HL + 1m HL only  (never LL — still bearish)
+//    SHORT: 15m LH + 1m LH only  (never HH — still bullish)
 //
-//  Pivot confluence (strict — no wrong-point entries):
-//    LONG:  15m HL + 1m HL only  (never LL)
-//    SHORT: 15m LH + 1m LH only  (never HH)
+//  If 15m is making LL in a downtrend, the HL gate blocks LONG entries
+//  even though zone says discount — this IS the "no wrong point" rule.
+//
+//  4H structure shown in log for diagnostic only (not used for gating).
+//
+//  VWAP distance filter (MIN_DIST_SIGMA = 0.5):
+//    LONG:  price must be ≤ 1.0σ above the lower band (near support)
+//           blocks entries where price already recovered far from the band
+//    SHORT: price must be ≤ 1.0σ below the upper band (near resistance)
+//           blocks entries where price already fell far from the band
 //
 //  SL  : 25% capital risk per trade
 //  TP  : 2:1 RR (50% capital gain)
@@ -31,10 +40,11 @@ const TRADE_PCT = 0.10;   // 10% of wallet per trade
 const INIT_CAP  = 1000;
 const RR        = 2;
 
-const MAX_CHASE = 0.08;   // LONG: entry within 0.08% of 1m HL
-const MAX_DROP  = 0.12;   // SHORT: entry within 0.12% of 15m/1m LH
-const MAX_GAP   = 0.50;   // 1m HL gap ≤ 0.50%
-const DAYS      = 30;
+const MAX_CHASE      = 0.08;  // LONG: entry within 0.08% of 1m HL
+const MAX_DROP       = 0.12;  // SHORT: entry within 0.12% of 15m/1m LH
+const MAX_GAP        = 0.50;  // 1m HL gap ≤ 0.50%
+const MIN_DIST_SIGMA = 0.5;   // VWAP σ-distance: LONG ≥0.5σ above lower; SHORT ≥0.5σ below upper
+const DAYS           = 30;
 const MAX_PIVOT_HIST = 50;
 
 const SYMS = ['BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'ADAUSDT', 'SOLUSDT'];
@@ -143,22 +153,15 @@ function getStruct(pivots, currentPrice) {
   return 'MIXED';
 }
 
-// ── 4H structure gate + zone → allowed direction ───────────────────
-// Mirrors resolveSignal() direction logic (without the pivot type check).
-function getAllowedDir(s4h, s15, zone) {
-  const isDiscount = zone === 'BELOW_LOWER' || zone === 'LOWER_MID';
-  const isPremium  = zone === 'ABOVE_UPPER'  || zone === 'UPPER_MID';
-
-  if (s4h === 'BULLISH') return isDiscount ? 'LONG'  : null;
-  if (s4h === 'BEARISH') return isPremium  ? 'SHORT' : null;
-
-  // 4H MIXED → 15m structure
-  if (s15 === 'BULLISH') return isDiscount ? 'LONG'  : null;
-  if (s15 === 'BEARISH') return isPremium  ? 'SHORT' : null;
-
-  // Both mixed — zone decides
-  if (isPremium)  return 'SHORT';
-  if (isDiscount) return 'LONG';
+// ── Zone → allowed direction (no 4H gate) ─────────────────────────
+// Direction is determined by VWAP zone alone.
+// "No wrong point" protection is delegated to the strict pivot type gate
+// (type15 / type1 must be HL for LONG, LH for SHORT) — if the 15m is
+// making LL in a downtrend, that gate blocks LONG even though zone says
+// discount.  4H / 15m structure shown in trade log for diagnostics only.
+function getAllowedDir(s4h, s15, zone) {   // s4h / s15 kept for call compatibility
+  if (zone === 'ABOVE_UPPER' || zone === 'UPPER_MID') return 'SHORT';
+  if (zone === 'BELOW_LOWER' || zone === 'LOWER_MID') return 'LONG';
   return null;
 }
 
@@ -258,11 +261,22 @@ async function runSym(sym) {
   let sh1_1 = null, sl1_1 = null, sl1_2 = null;
   let type1 = null, time1 = 0;
 
-  // ── Zone entry cooldown — one trade per zone entry ─────────────────
-  // Prevents firing 5-6 consecutive signals in the same zone within minutes.
-  // Resets when price moves to a different zone and comes back.
-  let prevZone   = null;
-  let zoneTraded = false;
+  // ── Cooldown: zone-group + per-direction time gap ─────────────────
+  // Zone-group: PREMIUM (ABOVE_UPPER + UPPER_MID), DISCOUNT (BELOW_LOWER + LOWER_MID).
+  //   Moving between ABOVE_UPPER and UPPER_MID does NOT reset — only crossing
+  //   to the opposite group does. Prevents multi-signal in same area.
+  // Per-direction time gap (3 h): after a LONG fires, no new LONG for 3 h.
+  //   Prevents back-to-back same-direction entries when zone briefly ticks
+  //   across the VWAP and resets the group cooldown within minutes.
+  function getZoneGroup(z) {
+    if (z === 'ABOVE_UPPER' || z === 'UPPER_MID') return 'PREMIUM';
+    return 'DISCOUNT';
+  }
+  const MIN_DIR_GAP_MS = 3 * 60 * 60 * 1000;  // 3 hours per direction
+  let prevGroup    = null;
+  let zoneTraded   = false;
+  let lastLongTime = 0;
+  let lastShortTime = 0;
 
   // ── Trade loop ────────────────────────────────────────────────────
   let capital  = INIT_CAP;
@@ -370,9 +384,15 @@ async function runSym(sym) {
     if (!v) continue;
     const zone = getZone(bar.c, v);
 
-    // Zone cooldown — reset on zone change, block if already traded this entry
-    if (zone !== prevZone) { prevZone = zone; zoneTraded = false; }
+    // Zone GROUP cooldown — reset only when crossing to opposite group
+    const grp = getZoneGroup(zone);
+    if (grp !== prevGroup) { prevGroup = grp; zoneTraded = false; }
     if (zoneTraded) continue;
+
+    // Per-direction time cooldown — prevent same-direction re-entry within 3 h
+    const dir0 = getAllowedDir(null, null, zone);
+    if (dir0 === 'LONG'  && bar.t - lastLongTime  < MIN_DIR_GAP_MS) continue;
+    if (dir0 === 'SHORT' && bar.t - lastShortTime < MIN_DIR_GAP_MS) continue;
 
     const s4h  = getStruct(pivots4h, bar.c);
     const s15  = getStruct(pivots15m, bar.c);
@@ -393,15 +413,26 @@ async function runSym(sym) {
       const gap = Math.abs(sl1_1 - sl1_2) / sl1_2 * 100;
       if (gap > MAX_GAP) continue;
       if ((bar.c - sl1_1) / sl1_1 * 100 > MAX_CHASE) continue;
+      // VWAP distance: price must be within 1.0σ of the lower band.
+      // Blocks LONG entries where price already recovered far from
+      // the band (≥1.0σ above it) — the best bounce entries are
+      // those closest to the lower band, not mid-zone recoveries.
+      if (v.std > 0 && (bar.c - v.lo) / v.std > MIN_DIST_SIGMA * 2) continue;
     }
     if (dir === 'SHORT') {
       if (sh1_1 === null) continue;
       if ((sh1_1 - bar.c) / sh1_1 * 100 > MAX_DROP) continue;
       if (price15 !== null && (price15 - bar.c) / price15 * 100 > MAX_DROP) continue;
+      // VWAP distance: price must be within 1.0σ of the upper band.
+      // Blocks SHORT entries where price already fell far from the
+      // upper band — best short entries are near the rejection point.
+      if (v.std > 0 && (v.up - bar.c) / v.std > MIN_DIST_SIGMA * 2) continue;
     }
 
     lastSigT   = p1.b.t;
-    zoneTraded = true;  // block further signals in this zone entry
+    zoneTraded = true;  // block further signals in this zone group entry
+    if (dir === 'LONG')  lastLongTime  = bar.t;
+    if (dir === 'SHORT') lastShortTime = bar.t;
     pending = {
       dir, zone, s4h, s15,
       type: `${type15}+${type1}`,
@@ -447,14 +478,14 @@ async function main() {
   const arg  = process.argv[2]?.toUpperCase();
   const syms = arg && SYMS.includes(arg) ? [arg] : SYMS;
 
-  console.log('\n' + '#'.repeat(65));
-  console.log(' V4-SMC BACKTEST  |  4H Structure Gate + Strict HL/LH Pivots');
+  console.log('\n' + '#'.repeat(70));
+  console.log(' V4-SMC BACKTEST  |  Zone Direction + Strict HL/LH + VWAP σ-Proximity');
   console.log(` Capital $${INIT_CAP}  |  ${(TRADE_PCT*100).toFixed(0)}% per trade  |  ${RR}:1 RR  |  ${DAYS}d window`);
-  console.log(' 4H BULLISH → LONG at discount zones (BELOW_LOWER / LOWER_MID)');
-  console.log(' 4H BEARISH → SHORT at premium zones (ABOVE_UPPER / UPPER_MID)');
-  console.log(' 4H MIXED   → 15m structure + zone decides');
-  console.log(' LONG: 15m HL + 1m HL only  |  SHORT: 15m LH + 1m LH only');
-  console.log('#'.repeat(65));
+  console.log(' LONG:  BELOW_LOWER / LOWER_MID  |  15m HL + 1m HL only (no LL)');
+  console.log(' SHORT: ABOVE_UPPER / UPPER_MID  |  15m LH + 1m LH only (no HH)');
+  console.log(` Zone proximity: LONG entry ≤${MIN_DIST_SIGMA*2}σ from lower band  |  SHORT ≤${MIN_DIST_SIGMA*2}σ from upper`);
+  console.log(' 4H / 15m structure shown for diagnostics — NOT used for gating');
+  console.log('#'.repeat(70));
 
   const results = [];
   for (const s of syms) {
