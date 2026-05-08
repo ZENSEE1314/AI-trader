@@ -1,0 +1,134 @@
+//@version=5
+indicator("MCT V4 SMC Webhook", overlay=true, max_labels_count=500)
+
+// ═══════════════════════════════════════════════════════════════
+//  MCT V4 SMC Webhook Signal
+//  Matches the bot's strategy-v4-smc.js exactly:
+//    - VWAP session with 2σ bands
+//    - Pivot detection: lbL=10, lbR=1  (matches TV SMC Expo defaults)
+//    - UPPER zone (above VWAP) → LONG when HH or HL pivot
+//    - LOWER zone (below VWAP) → SHORT when LL or LH pivot
+//    - 4H structure gate: no LONG if 4H bearish, no SHORT if 4H bullish
+//
+//  Setup:
+//    1. Add this indicator to your BTCUSDT/ETHUSDT/BNBUSDT/SOLUSDT 15m chart
+//    2. Create a TradingView alert → set Webhook URL to your bot URL
+//    3. Set alert message to the template shown in the alert condition names
+// ═══════════════════════════════════════════════════════════════
+
+// ── Inputs ────────────────────────────────────────────────────
+lbL       = input.int(10, "Pivot Left Bars",  minval=1)
+lbR       = input.int(1,  "Pivot Right Bars", minval=1)
+showZones = input.bool(true, "Show VWAP Zones")
+showPivots= input.bool(true, "Show Pivot Labels")
+
+// ── VWAP Session (resets daily at midnight UTC) ───────────────
+vwapSrc = hlc3
+cumTPV  = ta.cum(vwapSrc * volume)
+cumVol  = ta.cum(volume)
+cumTPV2 = ta.cum(vwapSrc * vwapSrc * volume)
+vwap_   = cumTPV  / cumVol
+variance= math.max(0, cumTPV2 / cumVol - vwap_ * vwap_)
+stddev_ = math.sqrt(variance)
+upper_  = vwap_ + 2 * stddev_
+lower_  = vwap_ - 2 * stddev_
+
+// Zone classification
+zone = close > upper_ ? "ABOVE_UPPER" :
+       close > vwap_  ? "UPPER_MID"   :
+       close >= lower_? "LOWER_MID"   : "BELOW_LOWER"
+
+upperZone = zone == "UPPER_MID" or zone == "ABOVE_UPPER"
+lowerZone = zone == "LOWER_MID" or zone == "BELOW_LOWER"
+
+// ── VWAP zone fill ────────────────────────────────────────────
+upperColor = color.new(color.green, 90)
+lowerColor = color.new(color.red,   90)
+midColor   = color.new(color.gray,  95)
+
+p_vwap  = plot(vwap_,  "VWAP",        color=color.yellow, linewidth=1)
+p_upper = plot(upper_, "Upper 2σ",    color=color.new(color.green, 50), linewidth=1)
+p_lower = plot(lower_, "Lower 2σ",    color=color.new(color.red,   50), linewidth=1)
+
+fill(p_upper, p_vwap,  color=showZones ? upperColor : na)
+fill(p_vwap,  p_lower, color=showZones ? lowerColor : na)
+
+// ── Pivot detection (lbL=10, lbR=1 — matches bot + TV SMC Expo) ──
+ph = ta.pivothigh(high, lbL, lbR)
+pl = ta.pivotlow (low,  lbL, lbR)
+
+// ── Label pivots HH / LH / HL / LL ───────────────────────────
+var float lastH = na
+var float lastL = na
+var string pivotLabel = na
+
+pivotIsHigh = not na(ph)
+pivotIsLow  = not na(pl)
+
+if pivotIsHigh
+    pivotLabel := na(lastH) or ph > lastH ? "HH" : "LH"
+    lastH      := ph
+
+if pivotIsLow
+    pivotLabel := na(lastL) or pl > lastL ? "HL" : "LL"
+    lastL      := pl
+
+// ── 4H structure via request.security ────────────────────────
+// Returns true if the 4H timeframe shows bullish structure (last pivot was HH or HL).
+[h4_ph, h4_pl] = request.security(syminfo.tickerid, "240",
+     [ta.pivothigh(high, 5, 5), ta.pivotlow(low, 5, 5)],
+     gaps=barmerge.gaps_on)
+
+var float h4_lastH = na
+var float h4_lastL = na
+var string h4_pivot = na
+
+if not na(h4_ph)
+    h4_pivot := na(h4_lastH) or h4_ph > h4_lastH ? "HH" : "LH"
+    h4_lastH := h4_ph
+if not na(h4_pl)
+    h4_pivot := na(h4_lastL) or h4_pl > h4_lastL ? "HL" : "LL"
+    h4_lastL := h4_pl
+
+h4_bullish = h4_pivot == "HH" or h4_pivot == "HL"
+h4_bearish = h4_pivot == "LH" or h4_pivot == "LL"
+
+// ── Signal conditions ─────────────────────────────────────────
+// LONG: upper zone + bullish pivot + 4H not bearish
+bullPivot = pivotLabel == "HH" or pivotLabel == "HL"
+bearPivot = pivotLabel == "LL" or pivotLabel == "LH"
+
+longSignal  = upperZone and bullPivot and not h4_bearish and pivotIsHigh
+shortSignal = lowerZone and bearPivot and not h4_bullish and pivotIsLow
+
+// ── Plot pivot labels ─────────────────────────────────────────
+if showPivots and pivotIsHigh
+    lcolor = bullPivot ? color.green : color.orange
+    label.new(bar_index[lbR], ph, pivotLabel,
+              style=label.style_label_down, color=lcolor,
+              textcolor=color.white, size=size.small)
+
+if showPivots and pivotIsLow
+    lcolor = not bearPivot ? color.green : color.red
+    label.new(bar_index[lbR], pl, pivotLabel,
+              style=label.style_label_up, color=lcolor,
+              textcolor=color.white, size=size.small)
+
+// ── Signal markers ────────────────────────────────────────────
+plotshape(longSignal,  "LONG",  shape.triangleup,   location.belowbar, color.lime,  size=size.normal)
+plotshape(shortSignal, "SHORT", shape.triangledown,  location.abovebar, color.red,   size=size.normal)
+
+// ── Alerts ────────────────────────────────────────────────────
+// When creating the alert in TradingView:
+//   Condition : MCT V4 SMC Webhook → [LONG Signal] or [SHORT Signal]
+//   Webhook URL: https://YOUR-APP.railway.app/api/tv-webhook
+//   Message    : (copy the JSON below — replace MCT_TV_SECRET with your secret)
+//
+//  LONG alert message:
+//  {"secret":"MCT_TV_SECRET","symbol":"{{ticker}}","direction":"LONG","price":{{close}},"zone":"UPPER","pivot":"{{plot_0}}"}
+//
+//  SHORT alert message:
+//  {"secret":"MCT_TV_SECRET","symbol":"{{ticker}}","direction":"SHORT","price":{{close}},"zone":"LOWER","pivot":"{{plot_0}}"}
+
+alertcondition(longSignal,  title="LONG Signal  — use webhook message: {secret,symbol,direction:LONG,price,zone,pivot}",  message='LONG')
+alertcondition(shortSignal, title="SHORT Signal — use webhook message: {secret,symbol,direction:SHORT,price,zone,pivot}", message='SHORT')

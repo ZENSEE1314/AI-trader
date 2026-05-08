@@ -41,6 +41,17 @@ let CAPITAL_PER_TRADE = 0.10;
 // Shape: { '100': [{trigger, lock},...], '75': [...], '50': [...] }
 let _dynamicTslTiers = null;
 
+// ── TradingView webhook signal queue ──────────────────────────
+// Signals injected via /api/tv-webhook are stored here (keyed by symbol).
+// The next cycle picks them up and processes them exactly like internal signals.
+// Only one pending signal per symbol — last one wins (prevents backlog).
+const _tvSignalQueue = new Map();
+
+function injectTVSignal(signal) {
+  _tvSignalQueue.set(signal.symbol, signal);
+  console.log(`[TV-Queue] Queued ${signal.symbol} ${signal.direction} — will fire next cycle`);
+}
+
 let TOKEN_LEVERAGE = {
   BTCUSDT: 125,  // 0.25% SL → 31.3% risk/trade
   ETHUSDT:  75,  // 0.40% SL → 30.0% risk/trade
@@ -1481,11 +1492,24 @@ async function main() {
     //        LOWER_MID   + 15m HL + 1m HL       → LONG (HL+HL)
     //        BELOW_LOWER + any HL/LL on both TFs → LONG
     const signals = [];
+
+    // ── TradingView webhook signals (highest priority — drain queue) ──
+    if (_tvSignalQueue.size > 0) {
+      for (const [sym, sig] of _tvSignalQueue) {
+        signals.push(sig);
+        bLog.scan(`TV-Webhook: ${sym} ${sig.direction} @ ${sig.price} (zone=${sig.zone} pivot=${sig.pivot})`);
+      }
+      _tvSignalQueue.clear();
+    }
+
+    // ── Internal V4-SMC scan (runs when no TV signal for a symbol) ──
+    const tvSymbols = new Set(signals.map(s => s.symbol));
     try {
       const rawV4 = await scanV4SMC(msg => bLog.scan(msg));
       if ((rawV4 || []).length > 0) {
-        signals.push(...rawV4);
-        bLog.scan(`V4-SMC: ${rawV4.length} signal(s) → ${rawV4.map(s => `${s.symbol} ${s.side} (${s.signalType})`).join(', ')}`);
+        const filtered = rawV4.filter(s => !tvSymbols.has(s.symbol));
+        signals.push(...filtered);
+        bLog.scan(`V4-SMC: ${rawV4.length} signal(s), ${filtered.length} used (${rawV4.length - filtered.length} overridden by TV webhook)`);
       }
     } catch (tErr) {
       bLog.error(`V4-SMC scan failed: ${tErr.message}`);
@@ -3929,4 +3953,5 @@ module.exports = {
   tradeState,
   onTradeOutcome,
   fireTradeOutcome,
+  injectTVSignal,
 };

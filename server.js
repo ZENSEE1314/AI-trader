@@ -107,6 +107,8 @@ app.use('/api/chart', require('./routes/chart'));
 app.use('/api/token-leverage', require('./routes/token-leverage'));
 app.use('/api/risk-levels', require('./routes/risk-levels'));
 app.use('/api/quantum', require('./routes/quantum'));
+// TradingView webhook — public endpoint secured by TV_WEBHOOK_SECRET env var
+app.use('/api/tv-webhook', require('./routes/tv-webhook'));
 // Version info — public, no auth required
 const VERSION_INFO = require('./version.json');
 app.get('/api/version', (req, res) => {
