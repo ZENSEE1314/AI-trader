@@ -1,17 +1,18 @@
 'use strict';
 
 // ═══════════════════════════════════════════════════════════════
-//  strategy-v4-smc.js  —  VWAP Zone + Strict 15m/1m Pivot Confluence
+//  strategy-v4-smc.js  —  VWAP Zone + Any-Low / Any-High Pivot Gate
 //
 //  Direction — VWAP zone alone (no 4H gate):
 //    ABOVE_UPPER / UPPER_MID → SHORT  (price at premium = mean-revert)
-//    BELOW_LOWER / LOWER_MID → LONG   (price at discount = mean-revert)
+//    LOWER_MID               → LONG   (price at discount = mean-revert)
+//    BELOW_LOWER             → blocked (knife-catch; wait for LOWER_MID)
 //
-//  "No wrong point" — STRICT PIVOT TYPE gate:
-//    LONG:  15m HL + 1m HL  (Higher Low = pullback not breakdown)
-//           Blocks LONG when 15m is making LL (still bearish)
-//    SHORT: 15m LH + 1m LH  (Lower High = bounce not breakout)
-//           Blocks SHORT when 15m is making HH (still bullish)
+//  Pivot gate — any low for LONG, any high for SHORT:
+//    LONG:  15m HL or LL  +  1m HL or LL
+//           LL at LOWER_MID = exhausted selling at support = best entry
+//    SHORT: 15m LH or HH  +  1m LH or HH
+//           HH at UPPER_MID/ABOVE_UPPER = exhausted buying = best entry
 //
 //  4H and 15m structure logged for diagnostics only — not used for gating.
 //
@@ -480,39 +481,40 @@ function resolveSignal(state, zone, price, vwap) {
   const p15 = state.last15mPivotType;
   const p1m = state.last1mPivotType;
 
-  // ── LONG: 15m HL + 1m HL (strict — never long at LL) ─────────
+  // ── LONG: any swing LOW on 15m (HL or LL) + 1m (HL or LL) ───
+  // Zone (LOWER_MID) determines direction; any confirmed low is valid.
+  // LL at LOWER_MID = exhausted selling near the support band = best
+  // reversal entry; HL = bounce already started.
+  // The old HL-only rule blocked the best "catch the exact bottom" setups.
   function tryLong() {
-    if (p15 !== 'HL' || p1m !== 'HL')           return null;
+    const isLow15 = p15 === 'HL' || p15 === 'LL';
+    const isLow1m = p1m === 'HL' || p1m === 'LL';
+    if (!isLow15 || !isLow1m)                   return null;
     if (!is1mGapOk(state.sl1m_1, state.sl1m_2)) return null;
     if (isChasing(price, state.sl1m_1))          return null;
-    // VWAP σ-distance: price must be ≥ 0.5σ above the lower band.
-    // Proven to raise WR by ~10-20pp — blocks entries where price is
-    // still falling right at / below the lower band edge.
-    if (vwap && !isGoodVwapDistance(price, vwap)) return null;
     return { direction: 'LONG', type: `${p15}+${p1m}` };
   }
 
-  // ── SHORT: 15m LH + 1m LH (strict — never short at HH) ───────
+  // ── SHORT: any swing HIGH on 15m (LH or HH) + 1m (LH or HH) ─
+  // Zone (UPPER_MID / ABOVE_UPPER) determines direction; any confirmed
+  // high is valid.  HH at premium zone = exhausted buying near the upper
+  // band = best short entry; LH = rejection already started.
   function tryShort() {
-    if (p15 !== 'LH' || p1m !== 'LH')                  return null;
+    const isHigh15 = p15 === 'LH' || p15 === 'HH';
+    const isHigh1m = p1m === 'LH' || p1m === 'HH';
+    if (!isHigh15 || !isHigh1m)                         return null;
     if (isShortTooLate(price, state.last15mPivotPrice)) return null;
     if (isShort1mTooLate(price, state.sh1m_1))          return null;
-    // VWAP σ-distance: price must be ≥ 0.5σ below the upper band.
-    // Blocks entries still mid-rally right at the upper band edge.
-    if (vwap && !isGoodUpperDistance(price, vwap)) return null;
     return { direction: 'SHORT', type: `${p15}+${p1m}` };
   }
 
-  // ── Zone decides direction (no 4H gate) ──────────────────────
-  // "No wrong point" protection is the STRICT PIVOT TYPE gate:
-  //   LONG requires 15m HL + 1m HL — if 15m is making LL in a downtrend
-  //   the HL check blocks the LONG even though zone says discount.
-  //   SHORT requires 15m LH + 1m LH — HH blocks SHORT in an uptrend.
-  // 4H and 15m structure are still computed for logging diagnostics.
-  // NOTE: get4hStructure / get15mStructure are called in the DIAG log
-  //       below — no need to call them again here.
+  // ── Zone decides direction ───────────────────────────────────
+  // BELOW_LOWER LONG is blocked — price broke through the lower 2σ band
+  // into momentum selling; wait for recovery to LOWER_MID first.
+  // ABOVE_UPPER SHORT is allowed — selling an extreme overbought spike works.
   if (zone === 'ABOVE_UPPER' || zone === 'UPPER_MID') return tryShort();
-  if (zone === 'BELOW_LOWER' || zone === 'LOWER_MID') return tryLong();
+  if (zone === 'LOWER_MID')                            return tryLong();
+  // BELOW_LOWER → no long (knife-catch), no short either (wrong direction)
   return null;
 }
 
@@ -745,7 +747,11 @@ async function analyze(symbol, log) {
         if (zoneGroup === 'PREMIUM'  && nowMs - (st.lastShortTime || 0) < MIN_DIR_GAP) continue;
 
         const sig = resolveSignal(st, zone, bar.close, vwap);
-        log(`[V4-SIG] ${symbol} zone=${zone} 4H=${get4hStructure(st, bar.close)} 15m=${get15mStructure(st, bar.close)} piv15=${st.last15mPivotType||'none'} piv1m=${st.last1mPivotType||'none'} price=${bar.close.toFixed(4)} traded=${st.zoneTraded} → ${sig && !st.zoneTraded ? sig.direction+'+'+sig.type : (sig ? 'ZONE_TRADED' : 'NO_SIGNAL')}`);
+        const piv15t = st.last15mPivotType || 'none';
+        const piv1mt  = st.last1mPivotType  || 'none';
+        const longOk  = (piv15t==='HL'||piv15t==='LL') && (piv1mt==='HL'||piv1mt==='LL');
+        const shortOk = (piv15t==='LH'||piv15t==='HH') && (piv1mt==='LH'||piv1mt==='HH');
+        log(`[V4-SIG] ${symbol} zone=${zone} 4H=${get4hStructure(st, bar.close)} 15m=${get15mStructure(st, bar.close)} piv15=${piv15t} piv1m=${piv1mt} longOk=${longOk} shortOk=${shortOk} price=${bar.close.toFixed(4)} traded=${st.zoneTraded} → ${sig && !st.zoneTraded ? sig.direction+'+'+sig.type : (sig ? 'ZONE_TRADED' : 'NO_SIGNAL')}`);
         if (sig && !st.zoneTraded) {
           st.lastSignalTime = pivotTime;
           st.zoneTraded = true;

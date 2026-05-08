@@ -153,15 +153,23 @@ function getStruct(pivots, currentPrice) {
   return 'MIXED';
 }
 
-// ── Zone → allowed direction (no 4H gate) ─────────────────────────
-// Direction is determined by VWAP zone alone.
-// "No wrong point" protection is delegated to the strict pivot type gate
-// (type15 / type1 must be HL for LONG, LH for SHORT) — if the 15m is
-// making LL in a downtrend, that gate blocks LONG even though zone says
-// discount.  4H / 15m structure shown in trade log for diagnostics only.
-function getAllowedDir(s4h, s15, zone) {   // s4h / s15 kept for call compatibility
+// ── Zone → allowed direction ───────────────────────────────────────
+// BELOW_LOWER LONG is blocked — price broke through the lower 2σ band
+// into selling momentum territory.  Entering LONG there is "catching a
+// falling knife": the band was broken with force, price needs to recover
+// back into LOWER_MID before a bounce entry is meaningful.
+//
+// ABOVE_UPPER SHORT is kept — selling an overbought spike into the upper
+// band works well as a mean-reversion setup even in bull markets.
+//
+// NOTE: 15m structure is NOT used as a gate here.  Testing showed that
+// the best reversal LONG setups (buying at the exact bottom of a bearish
+// 15m sequence) fire precisely when 15m = BEARISH.  Blocking those
+// removes winning entries without eliminating losing ones.
+function getAllowedDir(s4h, s15, zone) {   // s4h / s15 kept for log compatibility
+  if (zone === 'BELOW_LOWER') return null;  // catching knife — wait for recovery
   if (zone === 'ABOVE_UPPER' || zone === 'UPPER_MID') return 'SHORT';
-  if (zone === 'BELOW_LOWER' || zone === 'LOWER_MID') return 'LONG';
+  if (zone === 'LOWER_MID')                            return 'LONG';
   return null;
 }
 
@@ -399,13 +407,20 @@ async function runSym(sym) {
     const dir  = getAllowedDir(s4h, s15, zone);
     if (!dir) continue;
 
-    // ── Strict pivot type gate ──────────────────────────────────────
-    // LONG: 15m HL + 1m HL (never LL — still bearish)
-    // SHORT: 15m LH + 1m LH (never HH — still bullish)
-    if (dir === 'LONG'  && type15 !== 'HL') continue;
-    if (dir === 'LONG'  && type1  !== 'HL') continue;
-    if (dir === 'SHORT' && type15 !== 'LH') continue;
-    if (dir === 'SHORT' && type1  !== 'LH') continue;
+    // ── Pivot type gate — any low for LONG, any high for SHORT ─────
+    // LONG:  15m pivot must be a LOW (HL or LL) + 1m pivot also a LOW.
+    //        Zone (LOWER_MID) determines direction; any confirmed low in
+    //        that zone is valid — LL at support = exhausted selling = best
+    //        reversal entry; HL = bounce already started.
+    // SHORT: 15m pivot must be a HIGH (LH or HH) + 1m pivot also a HIGH.
+    //        HH at premium zone = exhausted buying = best short entry;
+    //        LH = rejection already started.
+    const isLow15  = type15 === 'HL' || type15 === 'LL';
+    const isLow1m  = type1  === 'HL' || type1  === 'LL';
+    const isHigh15 = type15 === 'LH' || type15 === 'HH';
+    const isHigh1m = type1  === 'LH' || type1  === 'HH';
+    if (dir === 'LONG'  && (!isLow15  || !isLow1m))  continue;
+    if (dir === 'SHORT' && (!isHigh15 || !isHigh1m)) continue;
 
     // ── Filters ─────────────────────────────────────────────────────
     if (dir === 'LONG') {
@@ -481,10 +496,11 @@ async function main() {
   console.log('\n' + '#'.repeat(70));
   console.log(' V4-SMC BACKTEST  |  Zone Direction + Strict HL/LH + VWAP σ-Proximity');
   console.log(` Capital $${INIT_CAP}  |  ${(TRADE_PCT*100).toFixed(0)}% per trade  |  ${RR}:1 RR  |  ${DAYS}d window`);
-  console.log(' LONG:  BELOW_LOWER / LOWER_MID  |  15m HL + 1m HL only (no LL)');
-  console.log(' SHORT: ABOVE_UPPER / UPPER_MID  |  15m LH + 1m LH only (no HH)');
-  console.log(` Zone proximity: LONG entry ≤${MIN_DIST_SIGMA*2}σ from lower band  |  SHORT ≤${MIN_DIST_SIGMA*2}σ from upper`);
-  console.log(' 4H / 15m structure shown for diagnostics — NOT used for gating');
+  console.log(' LONG:  LOWER_MID only  (BELOW_LOWER blocked = no knife-catch)');
+  console.log(' SHORT: ABOVE_UPPER / UPPER_MID');
+  console.log(' Pivot LONG:  15m HL or LL  +  1m HL or LL  (any low in discount zone)');
+  console.log(' Pivot SHORT: 15m LH or HH  +  1m LH or HH  (any high in premium zone)');
+  console.log(' 4H / 15m structure: diagnostic log only, NOT used as gate');
   console.log('#'.repeat(70));
 
   const results = [];
