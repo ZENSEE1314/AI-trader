@@ -25,8 +25,8 @@
 //  Trailing SL: no hard TP — let winners run
 //
 //  Pivot detection:
-//    SWING_BARS_1M  = 3 bars each side  (~3 min confirm on 1m)
-//    SWING_BARS_15M = 5 bars each side  (~75 min confirm on 15m)
+//    1m:  lbL=3, lbR=1  (~1 min confirm)
+//    15m: lbL=10, lbR=1 (~15 min confirm — matches TV "SMC Expo" lbL=10 lbR=1)
 //    Live/forming candle always excluded — matches TV lookahead_off.
 //
 //  Data  : Bybit v5 linear klines
@@ -39,14 +39,16 @@ const fetch = require('node-fetch');
 const BYBIT_KLINE_URL  = 'https://api.bybit.com/v5/market/kline';
 const FETCH_TIMEOUT_MS = 10_000;
 
-// Pivot confirmation lengths — match what a human trader sees on the chart.
-// SWING_BARS=100 caused 100-min lag on 1m and 25-HOUR lag on 15m —
-// the bot saw a "15m HL" that was 25 hours old while the user saw a
-// fresh one on the chart. Zero trades fired as a result.
-// Now 3 bars each side: 1m pivot confirms in ~3 min, 15m in ~45 min.
-const SWING_BARS_1M  =  3;  // 1m: 3 closed bars each side (~3 min)
-const SWING_BARS_15M =  5;  // 15m: 5 closed bars each side (~75 min) — matches TradingView SMC default
-const SWING_BARS_4H  =  5;  // 4H: 5 closed bars each side (~20 h) — robust higher-TF structure
+// Pivot confirmation lengths — asymmetric to match TradingView "SMC Expo" indicator.
+// TV settings visible on chart: lbL=10, lbR=1
+// lbR=1 means pivot confirms on the very next closed bar — same as what the user sees live.
+// lbL=10 means the pivot must be the highest/lowest of the 10 bars before it.
+const LBL_1M  =  3;  // 1m left lookback  — fast confirmation
+const LBR_1M  =  1;  // 1m right lookback — 1 bar = ~1 min lag
+const LBL_15M = 10;  // 15m left lookback — matches TV "SMC Expo" lbL=10
+const LBR_15M =  1;  // 15m right lookback — matches TV "SMC Expo" lbR=1 (1 bar = 15 min lag)
+const LBL_4H  =  5;  // 4H left lookback  — symmetric, robust higher-TF structure
+const LBR_4H  =  5;  // 4H right lookback — 5 bars = ~20 h (intentionally slow)
 
 const WARMUP_1M  =  50;  // bars loaded on first call (need ≥ 2×3+1 = 7, 50 is plenty)
 const WARMUP_15M =  50;  // bars loaded on first call
@@ -201,21 +203,27 @@ function getZone(price, { vwap, upper, lower }) {
 }
 
 // ── Swing pivot detection ──────────────────────────────────────
-// bar at candles[len-1-swingBars] is a pivot high when it is strictly
-// greater than ALL swingBars bars before it AND ALL swingBars bars after.
+// Asymmetric lookback: bar at candles[len-1-lbR] is a pivot high when it is
+// strictly greater than ALL lbL bars before it AND ALL lbR bars after it.
+// lbL=10, lbR=1 matches TradingView "SMC Expo" — confirms after just 1 closed bar.
 // The LAST bar in the array must be a confirmed CLOSED bar — callers
 // always slice off the live bar before passing the array.
-function checkPivot(candles, swingBars) {
+function checkPivot(candles, lbL, lbR) {
   const len = candles.length;
-  if (len < 2 * swingBars + 1) return null;
+  if (len < lbL + lbR + 1) return null;
 
-  const i = len - 1 - swingBars;
+  const i = len - 1 - lbR;
+  if (i < lbL) return null;
   const bar = candles[i];
   let isHigh = true, isLow = true;
 
-  for (let j = 1; j <= swingBars; j++) {
-    if (bar.high <= candles[i - j].high || bar.high <= candles[i + j].high) isHigh = false;
-    if (bar.low  >= candles[i - j].low  || bar.low  >= candles[i + j].low)  isLow  = false;
+  for (let j = 1; j <= lbL; j++) {
+    if (bar.high <= candles[i - j].high) isHigh = false;
+    if (bar.low  >= candles[i - j].low)  isLow  = false;
+  }
+  for (let j = 1; j <= lbR; j++) {
+    if (bar.high <= candles[i + j].high) isHigh = false;
+    if (bar.low  >= candles[i + j].low)  isLow  = false;
   }
 
   return { isHigh, isLow, bar };
@@ -234,7 +242,7 @@ function checkPivot(candles, swingBars) {
 // get15mStructure() can read the full recent sequence rather than
 // just comparing sh15_1 vs sh15_2 in isolation.
 function update15m(state) {
-  const p = checkPivot(state.candles15m, SWING_BARS_15M);
+  const p = checkPivot(state.candles15m, LBL_15M, LBR_15M);
   if (!p || p.bar.openTime === state.last15mPivotTime) return;
   state.last15mPivotTime = p.bar.openTime;
 
@@ -275,7 +283,7 @@ function findLastPivot(pivots, type) {
 // Mirrors update15m() exactly, but operates on 4H candles and pivots4h[].
 // Called whenever new closed 4H bars arrive.
 function update4h(state) {
-  const p = checkPivot(state.candles4h, SWING_BARS_4H);
+  const p = checkPivot(state.candles4h, LBL_4H, LBR_4H);
   if (!p || p.bar.openTime === state.last4hPivotTime) return;
   state.last4hPivotTime = p.bar.openTime;
 
@@ -337,7 +345,7 @@ function get4hStructure(state, currentPrice) {
 // The positional comparison (sl1m_1 > sl1m_2) can remain TRUE from OLD data
 // even after a new LH high fires, causing false LONG signals on stale structure.
 function update1m(state) {
-  const p = checkPivot(state.candles1m, SWING_BARS_1M);
+  const p = checkPivot(state.candles1m, LBL_1M, LBR_1M);
   if (!p || p.bar.openTime === state.last1mPivotTime) return 0;
   state.last1mPivotTime = p.bar.openTime;
   if (p.isHigh) {
@@ -589,9 +597,9 @@ async function analyze(symbol, log) {
     // Compute last15mPivotType during replay so it matches what TradingView
     // would show: each new pivot compared against the previous one of its kind.
     st.candles15m = c15m.slice(0, -1);
-    for (let i = SWING_BARS_15M; i < st.candles15m.length - SWING_BARS_15M; i++) {
-      const slice = st.candles15m.slice(0, i + SWING_BARS_15M + 1);
-      const p = checkPivot(slice, SWING_BARS_15M);
+    for (let i = LBL_15M; i < st.candles15m.length - LBR_15M; i++) {
+      const slice = st.candles15m.slice(0, i + LBR_15M + 1);
+      const p = checkPivot(slice, LBL_15M, LBR_15M);
       if (p && p.bar.openTime !== st.last15mPivotTime) {
         st.last15mPivotTime = p.bar.openTime;
         if (p.isHigh) {
@@ -610,9 +618,9 @@ async function analyze(symbol, log) {
     // 1m: replay all CLOSED bars (exclude last = live)
     // Compute last1mPivotType in time order — same as 15m warmup above.
     st.candles1m = c1m.slice(0, -1);
-    for (let i = SWING_BARS_1M; i < st.candles1m.length - SWING_BARS_1M; i++) {
-      const slice = st.candles1m.slice(0, i + SWING_BARS_1M + 1);
-      const p = checkPivot(slice, SWING_BARS_1M);
+    for (let i = LBL_1M; i < st.candles1m.length - LBR_1M; i++) {
+      const slice = st.candles1m.slice(0, i + LBR_1M + 1);
+      const p = checkPivot(slice, LBL_1M, LBR_1M);
       if (p && p.bar.openTime !== st.last1mPivotTime) {
         st.last1mPivotTime = p.bar.openTime;
         if (p.isHigh) {
@@ -630,9 +638,9 @@ async function analyze(symbol, log) {
 
     // 4H: replay all CLOSED bars (exclude last = live), build pivots4h[]
     st.candles4h = c4h.slice(0, -1);
-    for (let i = SWING_BARS_4H; i < st.candles4h.length - SWING_BARS_4H; i++) {
-      const slice = st.candles4h.slice(0, i + SWING_BARS_4H + 1);
-      const p = checkPivot(slice, SWING_BARS_4H);
+    for (let i = LBL_4H; i < st.candles4h.length - LBR_4H; i++) {
+      const slice = st.candles4h.slice(0, i + LBR_4H + 1);
+      const p = checkPivot(slice, LBL_4H, LBR_4H);
       if (p && p.bar.openTime !== st.last4hPivotTime) {
         st.last4hPivotTime = p.bar.openTime;
         if (p.isHigh) {
@@ -657,7 +665,7 @@ async function analyze(symbol, log) {
     st.ready = true;
     const struct4hReady = get4hStructure(st, null);
     const seq4h = st.pivots4h.slice(-4).map(x => `${x.label}@${x.price.toFixed(2)}`).join('→');
-    log(`[V4] ${symbol} ready | 4H=${struct4hReady} [${seq4h}] | last_15m_pivot=${st.last15mPivotType||'none'}@${st.last15mPivotPrice?.toFixed(4)||'n/a'} | bars: 1m=${SWING_BARS_1M} 15m=${SWING_BARS_15M} 4H=${SWING_BARS_4H}`);
+    log(`[V4] ${symbol} ready | 4H=${struct4hReady} [${seq4h}] | last_15m_pivot=${st.last15mPivotType||'none'}@${st.last15mPivotPrice?.toFixed(4)||'n/a'} | pivot lbL/lbR: 1m=${LBL_1M}/${LBR_1M} 15m=${LBL_15M}/${LBR_15M} 4H=${LBL_4H}/${LBR_4H}`);
     return null;
   }
 
