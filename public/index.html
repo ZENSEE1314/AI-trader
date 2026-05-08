@@ -2280,19 +2280,16 @@
               </div>
             </div>
 
-            <!-- Zone logic (read-only reference) -->
+            <!-- Zone + 4H gate reference (read-only) -->
             <div style="margin-top:var(--space-3);display:flex;gap:var(--space-2);flex-wrap:wrap;">
-              <div style="flex:1;min-width:160px;padding:8px 12px;background:rgba(0,255,136,0.05);border:1px solid rgba(0,255,136,0.15);border-radius:6px;font-size:0.78rem;">
-                <span style="color:#00ff88;font-weight:700;">ABOVE UPPER</span><span style="color:var(--color-text-muted);"> → LONG (breakout)</span>
+              <div style="flex:1;min-width:200px;padding:8px 12px;background:rgba(0,255,136,0.05);border:1px solid rgba(0,255,136,0.15);border-radius:6px;font-size:0.78rem;">
+                <span style="color:#00ff88;font-weight:700;">4H BULLISH</span><span style="color:var(--color-text-muted);"> → LONG at BELOW_LOWER / LOWER_MID</span>
               </div>
-              <div style="flex:1;min-width:160px;padding:8px 12px;background:rgba(255,56,96,0.05);border:1px solid rgba(255,56,96,0.15);border-radius:6px;font-size:0.78rem;">
-                <span style="color:#ff4060;font-weight:700;">UPPER MID</span><span style="color:var(--color-text-muted);"> → SHORT (from upper only)</span>
+              <div style="flex:1;min-width:200px;padding:8px 12px;background:rgba(255,56,96,0.05);border:1px solid rgba(255,56,96,0.15);border-radius:6px;font-size:0.78rem;">
+                <span style="color:#ff4060;font-weight:700;">4H BEARISH</span><span style="color:var(--color-text-muted);"> → SHORT at ABOVE_UPPER / UPPER_MID</span>
               </div>
-              <div style="flex:1;min-width:160px;padding:8px 12px;background:rgba(0,255,136,0.05);border:1px solid rgba(0,255,136,0.15);border-radius:6px;font-size:0.78rem;">
-                <span style="color:#00ff88;font-weight:700;">LOWER MID</span><span style="color:var(--color-text-muted);"> → LONG (from lower only)</span>
-              </div>
-              <div style="flex:1;min-width:160px;padding:8px 12px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:6px;font-size:0.78rem;">
-                <span style="color:#94a3b8;font-weight:700;">BELOW LOWER</span><span style="color:var(--color-text-muted);"> — no trade (11% WR)</span>
+              <div style="flex:1;min-width:200px;padding:8px 12px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:6px;font-size:0.78rem;">
+                <span style="color:#94a3b8;font-weight:700;">4H MIXED</span><span style="color:var(--color-text-muted);"> → 15m structure + zone decides</span>
               </div>
             </div>
           </div>
@@ -2302,20 +2299,20 @@
             <div style="background:var(--color-bg-raised);border:1px solid rgba(0,255,136,0.12);border-radius:var(--radius-lg);padding:var(--space-3);">
               <div style="font-size:0.72rem;font-weight:700;color:#00ff88;margin-bottom:var(--space-2);">▲ LONG Entry (1m)</div>
               <ul style="margin:0;padding-left:14px;font-size:0.75rem;color:var(--color-text-muted);line-height:1.9;">
-                <li>15m pivot = <strong style="color:var(--color-text);">HL</strong> (Higher Low only)</li>
-                <li>1m pivot = <strong style="color:var(--color-text);">HL</strong> (Higher Low only)</li>
-                <li>Zone = <strong style="color:#00ff88;">ABOVE UPPER</strong> (breakout) <em>or</em></li>
-                <li>Zone = <strong style="color:#00ff88;">LOWER MID</strong> (came from BELOW LOWER)</li>
+                <li>4H structure = <strong style="color:#00ff88;">BULLISH</strong> (or 15m BULLISH if 4H mixed)</li>
+                <li>Zone = <strong style="color:var(--color-text);">BELOW LOWER</strong> or <strong style="color:var(--color-text);">LOWER MID</strong></li>
+                <li>15m pivot = <strong style="color:var(--color-text);">HL</strong> — not LL (still bearish)</li>
+                <li>1m pivot = <strong style="color:var(--color-text);">HL</strong> — not LL (strict)</li>
                 <li>No open LONG on this token</li>
               </ul>
             </div>
             <div style="background:var(--color-bg-raised);border:1px solid rgba(255,56,96,0.12);border-radius:var(--radius-lg);padding:var(--space-3);">
               <div style="font-size:0.72rem;font-weight:700;color:#ff4060;margin-bottom:var(--space-2);">▼ SHORT Entry (1m)</div>
               <ul style="margin:0;padding-left:14px;font-size:0.75rem;color:var(--color-text-muted);line-height:1.9;">
-                <li>15m pivot = <strong style="color:var(--color-text);">LH</strong> (Lower High only)</li>
-                <li>1m pivot = <strong style="color:var(--color-text);">LH</strong> (Lower High only)</li>
-                <li>Zone = <strong style="color:#ff4060;">UPPER MID</strong> (came from ABOVE UPPER)</li>
-                <li>One trade per zone entry (no re-entry)</li>
+                <li>4H structure = <strong style="color:#ff4060;">BEARISH</strong> (or 15m BEARISH if 4H mixed)</li>
+                <li>Zone = <strong style="color:var(--color-text);">ABOVE UPPER</strong> or <strong style="color:var(--color-text);">UPPER MID</strong></li>
+                <li>15m pivot = <strong style="color:var(--color-text);">LH</strong> — not HH (still bullish)</li>
+                <li>1m pivot = <strong style="color:var(--color-text);">LH</strong> — not HH (strict)</li>
                 <li>No open SHORT on this token</li>
               </ul>
             </div>
