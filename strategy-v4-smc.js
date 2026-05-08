@@ -303,7 +303,15 @@ function isShort1mTooLate(price, sh1m_1) {
 // A single 15m HL can pass last15mPivotType='HL' even when highs are
 // making LH (bearish). The structure check catches this by requiring
 // BOTH highs AND lows to align.
-function get15mStructure(state) {
+// currentPrice: live bar close — used to detect a LL/HH forming in real-time
+// before the 75-min confirmation window closes. Without this, the bot saw
+// LH (confirmed) + HL (confirmed old low) = MIXED → LONG allowed during a
+// visible breakdown, because the new LL hadn't collected 5 confirmation bars.
+//
+// Fix: if price has already broken BELOW the most-recent confirmed swing low
+// (sl15_1), a LL is forming NOW. Pair that with confirmed LH → BEARISH early.
+// Same logic inverted for BULLISH (price breaking above sh15_1 → HH forming).
+function get15mStructure(state, currentPrice) {
   const { sh15_1, sh15_2, sl15_1, sl15_2 } = state;
   if (sh15_1 === null || sh15_2 === null || sl15_1 === null || sl15_2 === null) {
     return 'UNKNOWN'; // not enough data — allow both directions
@@ -312,8 +320,15 @@ function get15mStructure(state) {
   const higherLow  = sl15_1 > sl15_2; // HL
   const lowerHigh  = sh15_1 < sh15_2; // LH
   const lowerLow   = sl15_1 < sl15_2; // LL
-  if (higherHigh && higherLow) return 'BULLISH';
-  if (lowerHigh  && lowerLow)  return 'BEARISH';
+
+  // Real-time breakout detection — no need to wait for 5-bar confirmation
+  const breakingLow  = currentPrice !== undefined && sl15_1 !== null && currentPrice < sl15_1;
+  const breakingHigh = currentPrice !== undefined && sh15_1 !== null && currentPrice > sh15_1;
+
+  // BEARISH: confirmed LH + (confirmed LL OR price actively breaking below last swing low)
+  if (lowerHigh && (lowerLow || breakingLow))  return 'BEARISH';
+  // BULLISH: confirmed HH + (confirmed HL OR price actively breaking above last swing high)
+  if (higherHigh && (higherLow || breakingHigh)) return 'BULLISH';
   return 'MIXED'; // transitioning — allow both, zone decides
 }
 
@@ -354,7 +369,7 @@ function resolveSignal(state, zone, price) {
   //   ALL LONG signals blocked until structure turns BULLISH or MIXED.
   // BULLISH (HH+HL): uptrend → block SHORT.
   // MIXED/UNKNOWN: both allowed — zone rules decide direction.
-  const structure15m = get15mStructure(state);
+  const structure15m = get15mStructure(state, price);
   if (structure15m === 'BEARISH') {
     if (is15Low || is1Low) return null; // block LONG — downtrend, no buys
   }
@@ -495,7 +510,7 @@ async function analyze(symbol, log) {
       const dropFromHigh = (st.last15mPivotPrice && (st.last15mPivotType === 'HH' || st.last15mPivotType === 'LH'))
         ? ` drop=${((st.last15mPivotPrice - diagBar.close) / st.last15mPivotPrice * 100).toFixed(3)}%`
         : '';
-      const struct15 = get15mStructure(st);
+      const struct15 = get15mStructure(st, diagBar.close);
       log(`[V4-DIAG] ${symbol} zone=${diagZone} struct=${struct15} price=${diagBar.close.toFixed(4)} | 15m=${st.last15mPivotType||'none'}@${st.last15mPivotPrice?.toFixed(4)||'n/a'} sh=${st.sh15_1?.toFixed(4)}/${st.sh15_2?.toFixed(4)} sl=${st.sl15_1?.toFixed(4)}/${st.sl15_2?.toFixed(4)}${dropFromHigh} | 1m=${st.last1mPivotType||'none'}@${st.last1mPivotPrice?.toFixed(4)||'n/a'} | sl1m=${st.sl1m_1?.toFixed(4)}/${st.sl1m_2?.toFixed(4)} gap=${gapPct}%(${gapOk?'OK':'BLOCKED'}) | LONG=${struct15==='BEARISH'?'BLOCKED':'ok'} SHORT=${struct15==='BULLISH'?'BLOCKED':'ok'}`);
     }
   }
@@ -570,7 +585,7 @@ async function analyze(symbol, log) {
       if (vwap) {
         const zone = getZone(bar.close, vwap);
         const sig = resolveSignal(st, zone, bar.close);
-        log(`[V4-SIG] ${symbol} zone=${zone} struct=${get15mStructure(st)} 15m=${st.last15mPivotType||'none'} 1m=${st.last1mPivotType||'none'} price=${bar.close.toFixed(4)} sl1m=${st.sl1m_1?.toFixed(4)||'n/a'} sh15=${st.sh15_1?.toFixed(4)||'n/a'} sh1m=${st.sh1m_1?.toFixed(4)||'n/a'} → ${sig ? sig.direction+'+'+sig.type : 'NO_SIGNAL'}`);
+        log(`[V4-SIG] ${symbol} zone=${zone} struct=${get15mStructure(st, bar.close)} 15m=${st.last15mPivotType||'none'} 1m=${st.last1mPivotType||'none'} price=${bar.close.toFixed(4)} sl1m=${st.sl1m_1?.toFixed(4)||'n/a'} sh15=${st.sh15_1?.toFixed(4)||'n/a'} sh1m=${st.sh1m_1?.toFixed(4)||'n/a'} → ${sig ? sig.direction+'+'+sig.type : 'NO_SIGNAL'}`);
         if (sig) {
           st.lastSignalTime = pivotTime;
           // Freeze the pivot references at signal-creation time.
