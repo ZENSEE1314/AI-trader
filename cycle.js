@@ -1944,6 +1944,11 @@ async function executeForAllUsers(pick) {
         const userTp3Price = isLong ? price * (1 + tpPricePct * 2.0) : price * (1 - tpPricePct * 2.0);
 
         let account, wallet, openPosCount;
+        // Hoisted so the outer catch can detect EXCHANGE ONLY (order on exchange, no DB record).
+        // qty and slPrice also hoisted so the emergency INSERT in the catch can use them.
+        let orderOnExchange = false;
+        let tradeDbInserted = false;
+        let qty, slPrice;
 
         if (key.platform === 'binance') {
           const userClient = new USDMClient({ api_key: apiKey, api_secret: apiSecret }, getBinanceRequestOptions());
@@ -2107,7 +2112,7 @@ async function executeForAllUsers(pick) {
             }
           }
           const notionalUsdtBx = tradeUsdtBx * userLev;
-          let qty = notionalUsdtBx / price;
+          qty = notionalUsdtBx / price;
           if (qty * price < 5.5) qty = 5.5 / price;
           qty = parseFloat(qty.toFixed(6));
           if (qty <= 0) qty = parseFloat((5.5 / price).toFixed(6));
@@ -2127,7 +2132,7 @@ async function executeForAllUsers(pick) {
           // Triple MA Scenario A: SL from signal, TP at +3.5%
           // Triple MA Scenario B: no hard SL, trailing only
           // All other strategies: fixed 30% margin SL, trailing handles exit
-          const slPrice = isScenarioB ? null
+          slPrice = isScenarioB ? null
             : (isRangeBounce && pick.sl) ? pick.sl
             : (isScenarioA   && pick.sl) ? pick.sl
             : initialSlPrice;
@@ -2159,6 +2164,11 @@ async function executeForAllUsers(pick) {
 
           const order = await userClient.placeOrder(orderPayload);
           userLog.trade(`Bitunix order placed: ${JSON.stringify(order)}`);
+
+          // ── CRITICAL FLAG: order is on exchange — INSERT must happen ──────
+          // Hoisted to outer try scope — outer catch reads these to do emergency INSERT
+          // if placeOrder succeeded but anything below threw (EXCHANGE ONLY prevention).
+          orderOnExchange = true;
 
           // Mark dedup immediately after order — before DB INSERT.
           // Prevents a second key from opening the same trade if INSERT later fails.
@@ -2253,6 +2263,7 @@ async function executeForAllUsers(pick) {
                pick.marketStructure || null, userTrailStep, posId || null,
                pick.setupName || pick.setup || null]
             );
+            tradeDbInserted = true;
           } else {
             userLog.error(`Bitunix position not found after order — verify on exchange`);
             await notify(`*Bitunix ${symbol}*\nOrder placed but position not found. Check Bitunix manually.`);
@@ -2267,6 +2278,7 @@ async function executeForAllUsers(pick) {
                pick.marketStructure || null, userTrailStep,
                pick.setupName || pick.setup || null]
             );
+            tradeDbInserted = true;
           }
           userLog.trade(`Bitunix OK: ${key.email} ${symbol} ${pick.direction} x${userLev} qty=${qty}`);
           log(`Bitunix OK: ${key.email} ${symbol} ${pick.direction} x${userLev}`);
@@ -2276,8 +2288,25 @@ async function executeForAllUsers(pick) {
       } catch (err) {
         userLog.error(`User ${key.email} trade error: ${err.message}`);
         log(`User ${key.email} trade error: ${err.message}`);
-        // NOTE: not saving ERROR trades to DB — they pollute trade history with no useful data.
-        // Errors are visible in bot logs already.
+        // Emergency INSERT: order landed on exchange but something after placeOrder threw
+        // (position lookup failure, SL submission error, DB connection timeout, etc.).
+        // Without this, the position stays on exchange with no DB record → EXCHANGE ONLY.
+        if (orderOnExchange && !tradeDbInserted) {
+          try {
+            const emergencySl = slPrice ? parseFloat(slPrice.toFixed(8)) : 0;
+            await db.query(
+              `INSERT INTO trades (api_key_id, user_id, symbol, direction, entry_price, sl_price, quantity, leverage, status, setup)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'OPEN', $9)`,
+              [key.id, key.user_id, symbol, pick.direction, price,
+               emergencySl, qty, userLev,
+               pick.setupName || pick.setup || 'V4-SMC']
+            );
+            userLog.trade(`EMERGENCY DB INSERT OK: ${symbol} ${pick.direction} — order was on exchange but regular INSERT failed (${err.message})`);
+          } catch (e2) {
+            userLog.error(`EMERGENCY INSERT FAILED for ${symbol}: ${e2.message} — EXCHANGE ONLY POSITION!`);
+            await notify(`🚨 EXCHANGE ONLY: ${symbol} ${pick.direction} is on exchange but has NO DB record!\nOriginal error: ${err.message}\nEmergency insert error: ${e2.message}\nFix manually in DB.`);
+          }
+        }
       } finally {
         // Always release the process-level lock so the next cycle can re-enter.
         _openTradeInProgress.delete(`${key.user_id}:${sym}`);
