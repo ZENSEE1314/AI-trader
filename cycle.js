@@ -1563,6 +1563,14 @@ async function main() {
     await notify(`*Bot Error — ${now()}*\n\`${msg.substring(0, 200)}\``);
   }
 
+  // Repair EXCHANGE ONLY positions every 5 cycles (~5 min) —
+  // syncTradeStatus also does inline repair, but repairExchangeOnlyTrades
+  // covers keys that have ZERO open DB trades (so syncTradeStatus early-returns).
+  main._repairCycle = (main._repairCycle || 0) + 1;
+  if (main._repairCycle % 5 === 1) {
+    await repairExchangeOnlyTrades();
+  }
+
   // Sync trades + trailing SL for all users (including owner via DB) every cycle
   await syncTradeStatus();
   await checkUsdtTopups();
@@ -2330,6 +2338,110 @@ async function executeForAllUsers(pick) {
   }
 }
 
+// ── HARD FIX: REPAIR EXCHANGE-ONLY POSITIONS ────────────────
+// Runs at startup and every ~5 min in the cycle.
+// For every active Bitunix key: fetch live positions from exchange,
+// compare against OPEN DB trades, and INSERT any that are missing.
+// This catches EXCHANGE ONLY positions caused by DB errors, restarts,
+// or any race condition — guaranteeing every exchange position has a DB record.
+async function repairExchangeOnlyTrades() {
+  let db, cryptoUtils, BitunixClient;
+  try {
+    db = require('./db');
+    cryptoUtils = require('./crypto-utils');
+    BitunixClient = require('./bitunix-client').BitunixClient;
+  } catch (e) { return; }
+
+  try {
+    // All enabled, non-user-paused Bitunix keys
+    const keys = await db.query(
+      `SELECT ak.*, u.email, u.is_admin
+       FROM api_keys ak
+       JOIN users u ON u.id = ak.user_id
+       WHERE ak.enabled = true
+         AND ak.platform = 'bitunix'
+         AND (ak.paused_by_user = false OR ak.paused_by_user IS NULL)`
+    );
+    if (!keys.length) return;
+
+    for (const key of keys) {
+      try {
+        const apiKey    = cryptoUtils.decrypt(key.api_key_enc, key.iv, key.auth_tag);
+        const apiSecret = cryptoUtils.decrypt(key.api_secret_enc, key.secret_iv, key.secret_auth_tag);
+        const client    = new BitunixClient({ apiKey, apiSecret });
+
+        const account  = await client.getAccountInformation();
+        const positions = account.positions || [];
+
+        for (const p of positions) {
+          const rawAmt = parseFloat(p.positionAmt || p.qty || 0);
+          if (!rawAmt) continue;
+
+          const symbol = p.symbol;
+          const dir    = rawAmt > 0 ? 'LONG' : 'SHORT';
+          const qty    = Math.abs(rawAmt);
+          const entry  = parseFloat(p.avgOpenPrice || p.entryPrice || p.avgPrice || 0);
+          const posId  = p.positionId || p.id || null;
+          if (!entry) continue;
+
+          // Check if we already have an OPEN DB record for this position
+          const existing = await db.query(
+            `SELECT id FROM trades
+             WHERE api_key_id = $1 AND symbol = $2 AND direction = $3 AND status = 'OPEN'
+             LIMIT 1`,
+            [key.id, symbol, dir]
+          );
+          if (existing.length > 0) continue; // DB record exists — nothing to fix
+
+          // ── Missing DB record — INSERT recovery entry ──────────────────
+          const lev      = SYMBOL_LEVERAGE[symbol] || parseInt(p.leverage) || 100;
+          const isLong   = dir === 'LONG';
+          const slPct    = SL_PCT / lev;                                          // price % from entry
+          const recoverySl = parseFloat((isLong
+            ? entry * (1 - slPct)
+            : entry * (1 + slPct)
+          ).toFixed(8));
+
+          try {
+            await db.query(
+              `INSERT INTO trades
+                 (api_key_id, user_id, symbol, direction, entry_price, sl_price, tp_price,
+                  quantity, leverage, status, trailing_sl_price, trailing_sl_last_step,
+                  bitunix_position_id, setup)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'OPEN', $10, 0, $11, 'V4-SMC-RECOVERY')`,
+              [key.id, key.user_id, symbol, dir, entry, recoverySl, 0,
+               qty, lev, recoverySl, posId || null]
+            );
+
+            const msg = `🔧 EXCHANGE-ONLY REPAIRED: ${symbol} ${dir} x${lev} entry=$${entry} qty=${qty} — DB record created`;
+            log(msg);
+            bLog.trade(msg);
+            await notify(
+              `🔧 *Exchange-Only Repaired*\n` +
+              `${symbol} *${dir}* x${lev} (${key.email})\n` +
+              `Entry: \`$${entry}\`  Qty: ${qty}\n` +
+              `Recovery SL: \`$${recoverySl}\`\n` +
+              `Position was on exchange with no DB record — now tracked & managed.`
+            );
+
+            // Clear any stale "unmanaged" dedup so syncTradeStatus won't re-alert
+            const dedupKey = `${key.id}:${symbol}:${dir}:${entry}`;
+            if (syncTradeStatus._alertedUnmanaged) {
+              syncTradeStatus._alertedUnmanaged.delete(dedupKey);
+            }
+          } catch (insertErr) {
+            bLog.error(`REPAIR INSERT FAILED ${symbol} ${dir}: ${insertErr.message}`);
+          }
+        }
+      } catch (keyErr) {
+        bLog.error(`repairExchangeOnly key #${key.id} ${key.email}: ${keyErr.message}`);
+      }
+    }
+  } catch (outerErr) {
+    bLog.error(`repairExchangeOnlyTrades: ${outerErr.message}`);
+  }
+}
+
 // ── SYNC DB TRADE STATUS WITH EXCHANGE ──────────────────────
 async function syncTradeStatus() {
   let db, cryptoUtils, BitunixClient;
@@ -2513,32 +2625,69 @@ async function syncTradeStatus() {
             });
           }
 
-          // ── Unmanaged-position detector (hedge-mode safety) ──────
-          // Warn when a Bitunix position has no matching OPEN DB trade by
-          // (symbol, direction). Triggered by manual trades on the same key
-          // or by another tool/script. Deduped per (symbol+side+entry) per
-          // process so we don't spam alerts each sync tick.
+          // ── Exchange-Only auto-repair (runs every sync tick) ────────
+          // Every position on exchange MUST have a DB record so the bot
+          // can trail-stop it. If it's missing (EXCHANGE ONLY), INSERT now.
+          // This runs on every syncTradeStatus call — repairExchangeOnlyTrades
+          // runs at startup, but this catches anything that slipped through mid-session.
           syncTradeStatus._alertedUnmanaged = syncTradeStatus._alertedUnmanaged || new Set();
           for (const p of (account.positions || [])) {
-            const amt = parseFloat(p.positionAmt || 0);
-            if (!amt) continue;
-            const dir = amt > 0 ? 'LONG' : 'SHORT';
+            const rawAmt = parseFloat(p.positionAmt || p.qty || 0);
+            if (!rawAmt) continue;
+            const dir = rawAmt > 0 ? 'LONG' : 'SHORT';
+            // Refresh: check DB directly (trades list may be stale if INSERT happened above)
             const matched = trades.some(t =>
               t.symbol === p.symbol && (t.direction || 'LONG') === dir
             );
             if (matched) continue;
-            const entry = parseFloat(p.entryPrice || 0);
-            const dedupKey = `${key.id}:${p.symbol}:${dir}:${entry}`;
+
+            const sym   = p.symbol;
+            const qty   = Math.abs(rawAmt);
+            const entry = parseFloat(p.avgOpenPrice || p.entryPrice || p.avgPrice || 0);
+            const posId = p.positionId || p.id || null;
+            if (!entry) continue;
+
+            const dedupKey = `${key.id}:${sym}:${dir}:${entry}`;
             if (syncTradeStatus._alertedUnmanaged.has(dedupKey)) continue;
             syncTradeStatus._alertedUnmanaged.add(dedupKey);
-            bLog.system(`UNMANAGED POSITION: Bitunix ${p.symbol} ${dir} qty=${Math.abs(amt)} entry=$${entry} — not opened by bot`);
-            await notify(
-              `⚠️ *Unmanaged Position*\n` +
-              `${p.symbol} *${dir}* (Bitunix)\n` +
-              `Entry: \`$${entry}\`  Qty: ${Math.abs(amt)}\n` +
-              `Not opened by the bot — manual or external.\n` +
-              `The bot will not trail/manage this position.`
-            );
+
+            // AUTO-INSERT: every position must be in DB — no exceptions
+            const lev       = SYMBOL_LEVERAGE[sym] || parseInt(p.leverage) || 100;
+            const isLong    = dir === 'LONG';
+            const slPct     = SL_PCT / lev;
+            const recoverySl = parseFloat((isLong
+              ? entry * (1 - slPct)
+              : entry * (1 + slPct)
+            ).toFixed(8));
+
+            try {
+              // Double-check DB before inserting (repairExchangeOnly may have just run)
+              const alreadyInserted = await db.query(
+                `SELECT id FROM trades WHERE api_key_id = $1 AND symbol = $2 AND direction = $3 AND status = 'OPEN' LIMIT 1`,
+                [key.id, sym, dir]
+              );
+              if (alreadyInserted.length > 0) continue;
+
+              await db.query(
+                `INSERT INTO trades
+                   (api_key_id, user_id, symbol, direction, entry_price, sl_price, tp_price,
+                    quantity, leverage, status, trailing_sl_price, trailing_sl_last_step,
+                    bitunix_position_id, setup)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'OPEN', $10, 0, $11, 'V4-SMC-RECOVERY')`,
+                [key.id, key.user_id, sym, dir, entry, recoverySl, 0,
+                 qty, lev, recoverySl, posId || null]
+              );
+              bLog.trade(`SYNC-REPAIR: Inserted missing DB record for ${sym} ${dir} x${lev} entry=$${entry}`);
+              await notify(
+                `🔧 *Sync Repair: DB Record Created*\n` +
+                `${sym} *${dir}* x${lev} (${key.email})\n` +
+                `Entry: \`$${entry}\`  Qty: ${qty}\n` +
+                `Recovery SL: \`$${recoverySl}\`\n` +
+                `Position found on exchange with no DB record — now tracked.`
+              );
+            } catch (repairErr) {
+              bLog.error(`SYNC-REPAIR INSERT FAILED ${sym} ${dir}: ${repairErr.message}`);
+            }
           }
 
           // ── SL re-confirm sweep (self-heal missing initial SL) ──
@@ -3577,6 +3726,9 @@ async function reconcileOrphanPositions() {
 
 async function run() {
   log(`AI Smart Trader v4 | Telegram: ${!!TELEGRAM_TOKEN} | Chats: ${PRIVATE_CHATS.join(', ') || 'NONE'}`);
+  // Hard fix on startup: scan all Bitunix keys and repair any positions that
+  // are on the exchange but missing from DB (EXCHANGE ONLY positions).
+  await repairExchangeOnlyTrades();
   await syncTradeStatus();
   await reconcileOrphanPositions();
   await backfillFeesFromBitunix();
@@ -3591,6 +3743,7 @@ module.exports = {
   openTrade,
   checkTrailingStop,
   syncTradeStatus,
+  repairExchangeOnlyTrades,
   reconcileOrphanPositions,
   checkUsdtTopups,
   getClient,
