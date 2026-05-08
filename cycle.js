@@ -9,7 +9,7 @@ const fetch = require('node-fetch');
 const aiLearner = require('./ai-learner');
 // V4 SMC strategy: VWAP 2σ zones + 15m/1m BOS+CHoCH confluence
 // Rules: bull days → LONG only | bear days → SHORT only | ranging → nothing
-const { scanV4SMC, ACTIVE_SYMBOLS, SYMBOL_LEVERAGE } = require('./strategy-v4-smc');
+const { scanV4SMC, ACTIVE_SYMBOLS, SYMBOL_LEVERAGE, SYMBOL_SL_PCT } = require('./strategy-v4-smc');
 // Keep 3-timing import for calcTrail3Timing + getSessionMode (still used elsewhere)
 const { getSessionMode } = require('./strategy-3timing'); // v4: trailing SL uses calculateTrailingStep (cycle.js) instead of calcTrail3Timing
 
@@ -42,11 +42,10 @@ let CAPITAL_PER_TRADE = 0.10;
 let _dynamicTslTiers = null;
 
 let TOKEN_LEVERAGE = {
-  BTCUSDT: 100,
-  ETHUSDT: 100,
-  BNBUSDT: 100,
-  ADAUSDT:  75,
-  SOLUSDT:  75,
+  BTCUSDT: 125,  // 0.25% SL → 31.3% risk/trade
+  ETHUSDT:  75,  // 0.40% SL → 30.0% risk/trade
+  BNBUSDT: 200,  // 0.25% SL → 50.0% risk/trade
+  SOLUSDT: 150,  // 0.20% SL → 30.0% risk/trade
 };
 
 async function loadV4Config() {
@@ -60,7 +59,6 @@ async function loadV4Config() {
     if (cfg.lev_ETHUSDT) TOKEN_LEVERAGE.ETHUSDT = parseInt(cfg.lev_ETHUSDT);
     if (cfg.lev_BNBUSDT) TOKEN_LEVERAGE.BNBUSDT = parseInt(cfg.lev_BNBUSDT);
     if (cfg.lev_SOLUSDT) TOKEN_LEVERAGE.SOLUSDT = parseInt(cfg.lev_SOLUSDT);
-    if (cfg.lev_ADAUSDT) TOKEN_LEVERAGE.ADAUSDT = parseInt(cfg.lev_ADAUSDT);
 
     // Build dynamic trailing SL tier tables from admin config.
     // Falls back to null (hardcoded tables) if any key is missing.
@@ -89,7 +87,7 @@ async function loadV4Config() {
     const t100 = _dynamicTslTiers['100'];
     const t75  = _dynamicTslTiers['75'];
     const t50  = _dynamicTslTiers['50'];
-    console.log(`[V4 Config] Loaded — capital: ${(CAPITAL_PER_TRADE * 100).toFixed(0)}% | leverage: BTC/ETH/BNB=${TOKEN_LEVERAGE.BTCUSDT}x SOL/ADA=${TOKEN_LEVERAGE.SOLUSDT}x`);
+    console.log(`[V4 Config] Loaded — capital: ${(CAPITAL_PER_TRADE * 100).toFixed(0)}% | leverage: BTC=${TOKEN_LEVERAGE.BTCUSDT}x ETH=${TOKEN_LEVERAGE.ETHUSDT}x BNB=${TOKEN_LEVERAGE.BNBUSDT}x SOL=${TOKEN_LEVERAGE.SOLUSDT}x`);
     console.log(`[V4 Config] TSL tiers — 100x: T1=${t100[0].trigger*100}%→${t100[0].lock*100}% T2=${t100[1].trigger*100}%→${t100[1].lock*100}% T3=${t100[2].trigger*100}%→${t100[2].lock*100}% step=${g('tsl_100x_step',10)}%`);
     console.log(`[V4 Config] TSL tiers —  75x: T1=${t75[0].trigger*100}%→${t75[0].lock*100}%  T2=${t75[1].trigger*100}%→${t75[1].lock*100}%  T3=${t75[2].trigger*100}%→${t75[2].lock*100}%  step=${g('tsl_75x_step',10)}%`);
     console.log(`[V4 Config] TSL tiers —  50x: T1=${t50[0].trigger*100}%→${t50[0].lock*100}%  T2=${t50[1].trigger*100}%→${t50[1].lock*100}%  T3=${t50[2].trigger*100}%→${t50[2].lock*100}%  step=${g('tsl_50x_step',11)}%`);
@@ -2004,9 +2002,9 @@ async function executeForAllUsers(pick) {
         // key.trailing_sl_step is already stored as capital % (e.g. 1.2 = 1.2% capital per step)
         const userTrailStep = dirTrail ?? parseFloat(key.trailing_sl_step) ?? 1.2;
 
-        // SL price distance = SL_PCT / leverage (gross; fees accepted on top)
-        // 100x: 0.15/100 = 0.15% price → ~23% total loss incl. fees — well under 50%
-        let slPricePct = dirSl != null ? dirSl : (SL_PCT / userLev);
+        // SL price distance: per-symbol from SYMBOL_SL_PCT (e.g. BTC=0.25%, ETH=0.40%)
+        // Falls back to SL_PCT / leverage for non-V4 symbols.
+        let slPricePct = dirSl != null ? dirSl : (SYMBOL_SL_PCT[symbol] ?? (SL_PCT / userLev));
         const tpPricePct = dirTp != null && dirTp > 0 ? dirTp : (TP_PCT / userLev);
 
         // Liquidation guard

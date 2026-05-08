@@ -59,8 +59,8 @@ router.post('/:symbol', async (req, res) => {
     const { symbol } = req.params;
     const { leverage, enabled } = req.body;
     
-    if (!leverage || leverage < 1 || leverage > 100) {
-      return res.status(400).json({ error: 'Leverage must be between 1 and 100' });
+    if (!leverage || leverage < 1 || leverage > 500) {
+      return res.status(400).json({ error: 'Leverage must be between 1 and 500' });
     }
 
     const rows = await query(
