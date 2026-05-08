@@ -5,10 +5,10 @@
 //
 //  Zone rules (VWAP daily 2σ bands):
 //
-//    ABOVE_UPPER  → LONG only   price broke above upper band = bullish breakout
-//    UPPER_MID    → SHORT only  price fell back from upper band = rejection/reversion
-//    LOWER_MID    → LONG only   price bounced back from lower band = recovery/reversion
-//    BELOW_LOWER  → SHORT only  price broke below lower band = bearish breakdown
+//    ABOVE_UPPER → LONG   price above upper band = bullish breakout/momentum
+//    UPPER_MID   → SHORT  ONLY when price came FROM ABOVE_UPPER (rejection back to VWAP)
+//    LOWER_MID   → LONG   ONLY when price came FROM BELOW_LOWER (bounce back to VWAP)
+//    BELOW_LOWER → no trade — backtest showed 11.4% WR (mean reversion kills SHORT here)
 //
 //  SL  : LONG  → entry × (1 − CAPITAL_RISK/lev)
 //        SHORT → entry × (1 + CAPITAL_RISK/lev)
@@ -114,6 +114,14 @@ function getState(symbol) {
 
       // Deferred entry: pivot confirmed on bar N → signal fires on bar N+1 open.
       pendingSignal: null,
+
+      // Zone transition tracking — prevents over-trading in mid zones.
+      // UPPER_MID SHORT only valid when price came from ABOVE_UPPER.
+      // LOWER_MID LONG  only valid when price came from BELOW_LOWER.
+      // One trade allowed per zone entry (reset on zone change).
+      prevZone:     null,  // zone of the previous 1m bar
+      lastDiffZone: null,  // zone before entering the current zone
+      zoneTraded:   false, // already took a trade in this zone entry
 
       ready: false,
     };
@@ -492,17 +500,34 @@ function resolveSignal(state, zone, price) {
     return { direction: 'LONG', type: `${p15}+${p1m}` };
   }
 
-  // ── Zone = direction ───────────────────────────────────────────
-  // ABOVE_UPPER: price above upper band → LONG (breakout momentum)
-  // UPPER_MID:   price fell from upper band into mid zone → SHORT (rejection back to VWAP)
-  // LOWER_MID:   price rose from lower band into mid zone → LONG (bounce back to VWAP)
-  // BELOW_LOWER: price below lower band → SHORT (breakdown momentum)
-  // 4H structure is tracked and logged but does not gate entries here.
+  // ── Zone = direction with transition gate ─────────────────────
+  // Zone tracking is maintained per-symbol in state (prevZone, lastDiffZone, zoneTraded).
+  // Callers (analyze()) must update these fields BEFORE calling resolveSignal.
+  //
+  // ABOVE_UPPER → LONG (breakout)
+  // UPPER_MID   → SHORT only if price came FROM ABOVE_UPPER (rejection)
+  //               Backtest: 41.9% WR ✓
+  // LOWER_MID   → LONG only if price came FROM BELOW_LOWER (bounce)
+  //               Backtest: 30.8% WR (marginal — kept for now)
+  // BELOW_LOWER → NO TRADE
+  //               Backtest showed 11.4% WR — price almost always bounces back up
   if (zone === 'ABOVE_UPPER') return tryLong();
-  if (zone === 'UPPER_MID')   return tryShort();
-  if (zone === 'LOWER_MID')   return tryLong();
-  if (zone === 'BELOW_LOWER') return tryShort();
 
+  if (zone === 'UPPER_MID') {
+    // Only SHORT when price came from ABOVE_UPPER (crossed back down through band)
+    if (state.lastDiffZone !== 'ABOVE_UPPER') return null;
+    if (state.zoneTraded) return null;  // one trade per zone entry
+    return tryShort();
+  }
+
+  if (zone === 'LOWER_MID') {
+    // Only LONG when price came from BELOW_LOWER (crossed back up through band)
+    if (state.lastDiffZone !== 'BELOW_LOWER') return null;
+    if (state.zoneTraded) return null;  // one trade per zone entry
+    return tryLong();
+  }
+
+  // BELOW_LOWER → no trade (11.4% WR in backtest — mean reversion kills short)
   return null;
 }
 
@@ -718,10 +743,20 @@ async function analyze(symbol, log) {
       const vwap = calcVwap(st.candles15m, bar.openTime);
       if (vwap) {
         const zone = getZone(bar.close, vwap);
+
+        // ── Zone transition tracking ──────────────────────────────
+        // Must run before resolveSignal() — it reads st.lastDiffZone / st.zoneTraded.
+        if (zone !== st.prevZone) {
+          st.lastDiffZone = st.prevZone;  // remember where price came from
+          st.prevZone     = zone;
+          st.zoneTraded   = false;        // new zone entry — reset trade flag
+        }
+
         const sig = resolveSignal(st, zone, bar.close);
-        log(`[V4-SIG] ${symbol} zone=${zone} 4H=${get4hStructure(st, bar.close)} 15m=${get15mStructure(st, bar.close)} piv15=${st.last15mPivotType||'none'} piv1m=${st.last1mPivotType||'none'} price=${bar.close.toFixed(4)} sl1m=${st.sl1m_1?.toFixed(4)||'n/a'} sh15=${st.sh15_1?.toFixed(4)||'n/a'} sh1m=${st.sh1m_1?.toFixed(4)||'n/a'} → ${sig ? sig.direction+'+'+sig.type : 'NO_SIGNAL'}`);
+        log(`[V4-SIG] ${symbol} zone=${zone}(from=${st.lastDiffZone||'?'}) 4H=${get4hStructure(st, bar.close)} 15m=${get15mStructure(st, bar.close)} piv15=${st.last15mPivotType||'none'} piv1m=${st.last1mPivotType||'none'} price=${bar.close.toFixed(4)} traded=${st.zoneTraded} → ${sig ? sig.direction+'+'+sig.type : 'NO_SIGNAL'}`);
         if (sig) {
           st.lastSignalTime = pivotTime;
+          st.zoneTraded     = true;  // block further trades in this zone entry
           // Freeze the pivot references at signal-creation time.
           // The chase filter on next-bar open must compare against the ORIGINAL
           // swing low (LONG) or swing high (SHORT) that triggered this signal.
@@ -746,23 +781,40 @@ async function analyze(symbol, log) {
           const chasing2  = isChasing(bar.close, st.sl1m_1);
           const chasePct2 = st.sl1m_1 ? ((bar.close - st.sl1m_1) / st.sl1m_1 * 100).toFixed(3) : 'n/a';
           const gapPct2   = (st.sl1m_1 && st.sl1m_2) ? (Math.abs(st.sl1m_1 - st.sl1m_2) / st.sl1m_2 * 100).toFixed(3) : 'n/a';
-          // LONG zones: ABOVE_UPPER (breakout), LOWER_MID (bounce) — need 15m HL + 1m HL
-          if (zone === 'ABOVE_UPPER' || zone === 'LOWER_MID') {
+          if (zone === 'ABOVE_UPPER') {
             if (pType === 'HL') {
               const reason = !gapOk2 ? `gap=${gapPct2}%` : chasing2 ? `chase=${chasePct2}%` : `1m=${p1Type}(need HL)`;
-              log(`[V4] LONG WAIT — ${symbol} ${zone} 15m=HL but ${reason} sl1m=${st.sl1m_1?.toFixed(4)}/${st.sl1m_2?.toFixed(4)}`);
+              log(`[V4] LONG WAIT — ${symbol} ABOVE_UPPER 15m=HL but ${reason}`);
             } else {
-              log(`[V4] no signal — ${symbol} ${zone} 15m=${pType} (need 15m HL for LONG)`);
+              log(`[V4] no signal — ${symbol} ABOVE_UPPER 15m=${pType} (need HL for LONG)`);
             }
-          // SHORT zones: UPPER_MID (rejection), BELOW_LOWER (breakdown) — need 15m LH + 1m LH
-          } else if (zone === 'UPPER_MID' || zone === 'BELOW_LOWER') {
-            if (pType === 'LH') {
-              log(`[V4] SHORT WAIT — ${symbol} ${zone} 15m=LH but 1m=${p1Type} (need 1m LH) drop=${dropPct}% sh1m=${st.sh1m_1?.toFixed(4)}/${st.sh1m_2?.toFixed(4)}`);
+          } else if (zone === 'UPPER_MID') {
+            const fromOk = st.lastDiffZone === 'ABOVE_UPPER';
+            if (!fromOk) {
+              log(`[V4] no signal — ${symbol} UPPER_MID came from ${st.lastDiffZone||'?'} not ABOVE_UPPER (no SHORT)`);
+            } else if (st.zoneTraded) {
+              log(`[V4] no signal — ${symbol} UPPER_MID already traded this zone entry`);
+            } else if (pType === 'LH') {
+              log(`[V4] SHORT WAIT — ${symbol} UPPER_MID(from=ABOVE_UPPER) 15m=LH but 1m=${p1Type}(need LH) drop=${dropPct}%`);
             } else if (isShortTooLate(bar.close, st.last15mPivotPrice)) {
-              log(`[V4] SHORT BLOCKED — ${symbol} ${zone} 15m=${pType} dropped ${dropPct}% already (>${MAX_SHORT_DROP_PCT}%)`);
+              log(`[V4] SHORT BLOCKED — ${symbol} UPPER_MID 15m=${pType} dropped ${dropPct}% (>${MAX_SHORT_DROP_PCT}%)`);
             } else {
-              log(`[V4] no signal — ${symbol} ${zone} 15m=${pType} (need 15m LH for SHORT)`);
+              log(`[V4] no signal — ${symbol} UPPER_MID 15m=${pType} (need LH for SHORT)`);
             }
+          } else if (zone === 'LOWER_MID') {
+            const fromOk = st.lastDiffZone === 'BELOW_LOWER';
+            if (!fromOk) {
+              log(`[V4] no signal — ${symbol} LOWER_MID came from ${st.lastDiffZone||'?'} not BELOW_LOWER (no LONG)`);
+            } else if (st.zoneTraded) {
+              log(`[V4] no signal — ${symbol} LOWER_MID already traded this zone entry`);
+            } else if (pType === 'HL') {
+              const reason = !gapOk2 ? `gap=${gapPct2}%` : chasing2 ? `chase=${chasePct2}%` : `1m=${p1Type}(need HL)`;
+              log(`[V4] LONG WAIT — ${symbol} LOWER_MID(from=BELOW_LOWER) 15m=HL but ${reason}`);
+            } else {
+              log(`[V4] no signal — ${symbol} LOWER_MID 15m=${pType} (need HL for LONG)`);
+            }
+          } else if (zone === 'BELOW_LOWER') {
+            log(`[V4] no trade — ${symbol} BELOW_LOWER (SHORT disabled — 11.4% WR in backtest)`);
           } else {
             log(`[V4] no signal — ${symbol} zone=${zone} 15m=${pType}@${pPrice} 1m=${p1Type}`);
           }
