@@ -44,11 +44,14 @@ const FETCH_TIMEOUT_MS = 10_000;
 // Now 3 bars each side: 1m pivot confirms in ~3 min, 15m in ~45 min.
 const SWING_BARS_1M  =  3;  // 1m: 3 closed bars each side (~3 min)
 const SWING_BARS_15M =  5;  // 15m: 5 closed bars each side (~75 min) — matches TradingView SMC default
+const SWING_BARS_4H  =  5;  // 4H: 5 closed bars each side (~20 h) — robust higher-TF structure
 
 const WARMUP_1M  =  50;  // bars loaded on first call (need ≥ 2×3+1 = 7, 50 is plenty)
 const WARMUP_15M =  50;  // bars loaded on first call
+const WARMUP_4H  = 100;  // 4H warmup: covers ~17 days of structure history
 const DELTA_1M   =  10;  // bars fetched each subsequent 1m cycle
 const DELTA_15M  =   5;  // bars fetched each subsequent 15m cycle
+const DELTA_4H   =   3;  // bars fetched each subsequent 4H cycle (slow-moving TF)
 const CAPITAL_RISK = 0.25; // 25% capital risk per trade
 
 // ── Traded symbols and leverage ────────────────────────────────
@@ -70,6 +73,18 @@ function getState(symbol) {
     _state[symbol] = {
       candles1m:  [],
       candles15m: [],
+
+      // ── 4H structure state — PRIMARY direction gate ──────────────
+      // 4H BULLISH → LONG only (at VWAP lower band or mid)
+      // 4H BEARISH → SHORT only (at VWAP upper band or mid)
+      // 4H MIXED   → fall back to 15m structure gate
+      candles4h:       [],
+      pivots4h:        [],   // labeled sequence: { type:'H'|'L', price, time, label }
+      sh4h_1: null, sh4h_2: null,
+      sl4h_1: null, sl4h_2: null,
+      last4hPivotType:  null,
+      last4hPivotPrice: null,
+      last4hPivotTime:  0,
 
       // Full labeled 15m pivot sequence — up to 50 entries.
       // Each entry: { type:'H'|'L', price, time, label:'HH'|'LH'|'HL'|'LL' }
@@ -231,6 +246,66 @@ function findLastPivot(pivots, type) {
     if (pivots[i].type === type) return pivots[i];
   }
   return null;
+}
+
+// ── 4H swing tracker ──────────────────────────────────────────
+// Mirrors update15m() exactly, but operates on 4H candles and pivots4h[].
+// Called whenever new closed 4H bars arrive.
+function update4h(state) {
+  const p = checkPivot(state.candles4h, SWING_BARS_4H);
+  if (!p || p.bar.openTime === state.last4hPivotTime) return;
+  state.last4hPivotTime = p.bar.openTime;
+
+  if (p.isHigh) {
+    const lastH = findLastPivot(state.pivots4h, 'H');
+    const label = (!lastH || p.bar.high > lastH.price) ? 'HH' : 'LH';
+    state.sh4h_2 = state.sh4h_1;
+    state.sh4h_1 = p.bar.high;
+    state.pivots4h.push({ type: 'H', price: p.bar.high, time: p.bar.openTime, label });
+    state.last4hPivotType  = label;
+    state.last4hPivotPrice = p.bar.high;
+  }
+  if (p.isLow) {
+    const lastL = findLastPivot(state.pivots4h, 'L');
+    const label = (!lastL || p.bar.low > lastL.price) ? 'HL' : 'LL';
+    state.sl4h_2 = state.sl4h_1;
+    state.sl4h_1 = p.bar.low;
+    state.pivots4h.push({ type: 'L', price: p.bar.low, time: p.bar.openTime, label });
+    state.last4hPivotType  = label;
+    state.last4hPivotPrice = p.bar.low;
+  }
+
+  // Keep up to 50 4H pivot entries (~200 candles of structure context = ~33 days)
+  if (state.pivots4h.length > 50) state.pivots4h = state.pivots4h.slice(-50);
+}
+
+// ── 4H Market Structure — PRIMARY direction gate ───────────────
+// Same logic as get15mStructure() but reads pivots4h[].
+// Returns: 'BULLISH' | 'BEARISH' | 'MIXED' | 'UNKNOWN'
+//
+// BULLISH = last 4H high is HH AND last 4H low is HL  → only LONG allowed
+// BEARISH = last 4H high is LH AND last 4H low is LL  → only SHORT allowed
+// MIXED   = diverging labels                           → fall back to 15m gate
+// UNKNOWN = not enough 4H pivots yet (<4 entries)     → fall back to 15m gate
+//
+// Entry zones per structure:
+//   4H BULLISH → LONG at VWAP lower 2σ band (price is a discount) OR VWAP mid
+//   4H BEARISH → SHORT at VWAP upper 2σ band (price is a premium) OR VWAP mid
+function get4hStructure(state, currentPrice) {
+  const pivots = state.pivots4h;
+  if (pivots.length < 4) return 'UNKNOWN';
+
+  const lastH = findLastPivot(pivots, 'H');
+  const lastL = findLastPivot(pivots, 'L');
+  if (!lastH || !lastL) return 'UNKNOWN';
+
+  // Real-time breakout: live price already crossed confirmed 4H level
+  const breakingLow  = currentPrice !== undefined && currentPrice < lastL.price;
+  const breakingHigh = currentPrice !== undefined && currentPrice > lastH.price;
+
+  if (lastH.label === 'LH' && (lastL.label === 'LL' || breakingLow))  return 'BEARISH';
+  if (lastH.label === 'HH' && (lastL.label === 'HL' || breakingHigh)) return 'BULLISH';
+  return 'MIXED';
 }
 
 // Returns confirmed pivot openTime, or 0 if nothing new.
@@ -405,23 +480,60 @@ function resolveSignal(state, zone, price) {
   const is1High  = p1m === 'HH' || p1m === 'LH';
   const is1Low   = p1m === 'HL' || p1m === 'LL';
 
-  // ── STRUCTURE GATE — must pass before any zone/pivot check ────
-  // Compares both swing-high levels AND both swing-low levels on 15m.
-  // BEARISH (LH+LL): every 15m high is lower AND every low is lower → downtrend.
-  //   Firing LONG here is exactly the "buy in no where during downtrend" problem.
-  //   ALL LONG signals blocked until structure turns BULLISH or MIXED.
-  // BULLISH (HH+HL): uptrend → block SHORT.
-  // MIXED/UNKNOWN: both allowed — zone rules decide direction.
-  const structure15m = get15mStructure(state, price);
-  if (structure15m === 'BEARISH') {
-    if (is15Low || is1Low) return null; // block LONG — downtrend, no buys
+  // ── SHORT entry helper ─────────────────────────────────────────
+  function tryShort() {
+    if (!is15High || !is1High)                            return null;
+    if (isShortTooLate(price, state.last15mPivotPrice))   return null;
+    if (isShort1mTooLate(price, state.sh1m_1))            return null;
+    return { direction: 'SHORT', type: `${p15}+${p1m}` };
   }
-  if (structure15m === 'BULLISH') {
-    if (is15High || is1High) return null; // block SHORT — uptrend, no sells
-  }
-  // structure15m === 'MIXED' or 'UNKNOWN' → fall through to zone logic
 
-  // ── ABOVE_UPPER: SHORT only — 15m must be HH (strict) ─────────
+  // ── LONG entry helper ──────────────────────────────────────────
+  function tryLong() {
+    if (!is15Low || !is1Low)                              return null;
+    if (!is1mGapOk(state.sl1m_1, state.sl1m_2))          return null;
+    if (isChasing(price, state.sl1m_1))                   return null;
+    return { direction: 'LONG', type: `${p15}+${p1m}` };
+  }
+
+  // ── 4H STRUCTURE — PRIMARY direction + zone gate ──────────────
+  //
+  // 4H BULLISH:
+  //   Direction → LONG only (SHORT blocked entirely)
+  //   Zone      → only enter at discount zones: BELOW_LOWER (at lower band)
+  //               or LOWER_MID (price between lower band and VWAP mid)
+  //   Rationale → in a bull trend, buy when price dips back to value or oversold.
+  //               Entering at UPPER_MID / ABOVE_UPPER chases an extended move.
+  //
+  // 4H BEARISH:
+  //   Direction → SHORT only (LONG blocked entirely)
+  //   Zone      → only enter at premium zones: ABOVE_UPPER (at upper band)
+  //               or UPPER_MID (price between VWAP mid and upper band)
+  //   Rationale → in a bear trend, sell when price rallies back to value or overbought.
+  //               Entering at LOWER_MID / BELOW_LOWER fades an oversold reversal.
+  //
+  // 4H MIXED / UNKNOWN:
+  //   Fall back to 15m structure gate (original logic).
+  const struct4h  = get4hStructure(state, price);
+  const struct15m = get15mStructure(state, price);
+
+  if (struct4h === 'BULLISH') {
+    // Only LONG, only at discount VWAP zones
+    if (zone === 'BELOW_LOWER' || zone === 'LOWER_MID') return tryLong();
+    return null; // UPPER_MID / ABOVE_UPPER → no LONG entry in bull (chasing)
+  }
+
+  if (struct4h === 'BEARISH') {
+    // Only SHORT, only at premium VWAP zones
+    if (zone === 'ABOVE_UPPER' || zone === 'UPPER_MID') return tryShort();
+    return null; // LOWER_MID / BELOW_LOWER → no SHORT entry in bear (chasing)
+  }
+
+  // ── 4H MIXED / UNKNOWN → use 15m structure gate (original) ────
+  if (struct15m === 'BEARISH' && (is15Low || is1Low))   return null; // block LONG
+  if (struct15m === 'BULLISH' && (is15High || is1High)) return null; // block SHORT
+
+  // Both directions allowed — zone decides
   if (zone === 'ABOVE_UPPER') {
     if (p15 === 'HH' && is1High) {
       if (isShortTooLate(price, state.last15mPivotPrice)) return null;
@@ -430,29 +542,10 @@ function resolveSignal(state, zone, price) {
     }
     return null;
   }
-
-  // ── BELOW_LOWER: LONG only — any LOW on both ──────────────────
-  if (zone === 'BELOW_LOWER') {
-    if (is15Low && is1Low) {
-      if (!is1mGapOk(state.sl1m_1, state.sl1m_2)) return null;
-      if (isChasing(price, state.sl1m_1))          return null;
-      return { direction: 'LONG', type: `${p15}+${p1m}` };
-    }
-    return null;
-  }
-
-  // ── UPPER_MID or LOWER_MID: both directions based on structure ─
+  if (zone === 'BELOW_LOWER') return tryLong();
   if (zone === 'UPPER_MID' || zone === 'LOWER_MID') {
-    if (is15High && is1High) {
-      if (isShortTooLate(price, state.last15mPivotPrice)) return null;
-      if (isShort1mTooLate(price, state.sh1m_1))         return null;
-      return { direction: 'SHORT', type: `${p15}+${p1m}` };
-    }
-    if (is15Low && is1Low) {
-      if (!is1mGapOk(state.sl1m_1, state.sl1m_2)) return null;
-      if (isChasing(price, state.sl1m_1))          return null;
-      return { direction: 'LONG', type: `${p15}+${p1m}` };
-    }
+    const s = tryShort(); if (s) return s;
+    return tryLong();
   }
 
   return null;
@@ -465,8 +558,11 @@ async function analyze(symbol, log) {
   // ── First call: seed swing trackers from history ─────────────
   if (!st.ready) {
     log(`[V4] ${symbol} warming up…`);
-    const c1m  = await fetchKlines(symbol, 1,  WARMUP_1M);
-    const c15m = await fetchKlines(symbol, 15, WARMUP_15M);
+    const [c1m, c15m, c4h] = await Promise.all([
+      fetchKlines(symbol, 1,   WARMUP_1M),
+      fetchKlines(symbol, 15,  WARMUP_15M),
+      fetchKlines(symbol, 240, WARMUP_4H),   // 240 min = 4H
+    ]);
 
     // 15m: replay all CLOSED bars (exclude last = live)
     // Compute last15mPivotType during replay so it matches what TradingView
@@ -511,17 +607,54 @@ async function analyze(symbol, log) {
       }
     }
 
+    // 4H: replay all CLOSED bars (exclude last = live), build pivots4h[]
+    st.candles4h = c4h.slice(0, -1);
+    for (let i = SWING_BARS_4H; i < st.candles4h.length - SWING_BARS_4H; i++) {
+      const slice = st.candles4h.slice(0, i + SWING_BARS_4H + 1);
+      const p = checkPivot(slice, SWING_BARS_4H);
+      if (p && p.bar.openTime !== st.last4hPivotTime) {
+        st.last4hPivotTime = p.bar.openTime;
+        if (p.isHigh) {
+          const lastH = findLastPivot(st.pivots4h, 'H');
+          const label = (!lastH || p.bar.high > lastH.price) ? 'HH' : 'LH';
+          st.sh4h_2 = st.sh4h_1; st.sh4h_1 = p.bar.high;
+          st.pivots4h.push({ type: 'H', price: p.bar.high, time: p.bar.openTime, label });
+          st.last4hPivotType = label; st.last4hPivotPrice = p.bar.high;
+        }
+        if (p.isLow) {
+          const lastL = findLastPivot(st.pivots4h, 'L');
+          const label = (!lastL || p.bar.low > lastL.price) ? 'HL' : 'LL';
+          st.sl4h_2 = st.sl4h_1; st.sl4h_1 = p.bar.low;
+          st.pivots4h.push({ type: 'L', price: p.bar.low, time: p.bar.openTime, label });
+          st.last4hPivotType = label; st.last4hPivotPrice = p.bar.low;
+        }
+      }
+    }
+    if (st.pivots4h.length > 50) st.pivots4h = st.pivots4h.slice(-50);
+
     st.lastProcessed1m = st.candles1m.length ? st.candles1m[st.candles1m.length - 1].openTime : 0;
     st.ready = true;
-    log(`[V4] ${symbol} ready | last_15m_pivot=${st.last15mPivotType||'none'}@${st.last15mPivotPrice?.toFixed(4)||'n/a'} | sh15=${st.sh15_1?.toFixed(4)} sl15=${st.sl15_1?.toFixed(4)} | bars: 1m=${SWING_BARS_1M} 15m=${SWING_BARS_15M}`);
+    const struct4hReady = get4hStructure(st, null);
+    const seq4h = st.pivots4h.slice(-4).map(x => `${x.label}@${x.price.toFixed(2)}`).join('→');
+    log(`[V4] ${symbol} ready | 4H=${struct4hReady} [${seq4h}] | last_15m_pivot=${st.last15mPivotType||'none'}@${st.last15mPivotPrice?.toFixed(4)||'n/a'} | bars: 1m=${SWING_BARS_1M} 15m=${SWING_BARS_15M} 4H=${SWING_BARS_4H}`);
     return null;
   }
 
   // ── Incremental: process only new CLOSED bars ────────────────
-  const [fresh1m, fresh15m] = await Promise.all([
-    fetchKlines(symbol, 1,  DELTA_1M),
-    fetchKlines(symbol, 15, DELTA_15M),
+  const [fresh1m, fresh15m, fresh4h] = await Promise.all([
+    fetchKlines(symbol, 1,   DELTA_1M),
+    fetchKlines(symbol, 15,  DELTA_15M),
+    fetchKlines(symbol, 240, DELTA_4H),
   ]);
+
+  // 4H: add newly CLOSED bars (drop live = last), update 4H structure
+  const last4ht = st.candles4h.length ? st.candles4h[st.candles4h.length - 1].openTime : 0;
+  const new4h   = fresh4h.filter(c => c.openTime > last4ht).slice(0, -1);
+  if (new4h.length) {
+    st.candles4h.push(...new4h);
+    if (st.candles4h.length > WARMUP_4H + 20) st.candles4h.splice(0, new4h.length);
+    update4h(st);
+  }
 
   // 15m: add newly CLOSED bars only (drop live = last)
   const last15t = st.candles15m.length ? st.candles15m[st.candles15m.length - 1].openTime : 0;
@@ -553,10 +686,12 @@ async function analyze(symbol, log) {
       const dropFromHigh = (st.last15mPivotPrice && (st.last15mPivotType === 'HH' || st.last15mPivotType === 'LH'))
         ? ` drop=${((st.last15mPivotPrice - diagBar.close) / st.last15mPivotPrice * 100).toFixed(3)}%`
         : '';
+      const struct4h  = get4hStructure(st, diagBar.close);
       const struct15  = get15mStructure(st, diagBar.close);
       // Last 6 pivot labels from the sequence — shows exactly what TV SMC shows
       const pivotSeq  = st.pivots15m.slice(-6).map(x => `${x.label}@${x.price.toFixed(2)}`).join(' → ');
-      log(`[V4-DIAG] ${symbol} zone=${diagZone} struct=${struct15} price=${diagBar.close.toFixed(4)} | seq=[${pivotSeq}] | 15m=${st.last15mPivotType||'none'}@${st.last15mPivotPrice?.toFixed(4)||'n/a'} sh=${st.sh15_1?.toFixed(4)}/${st.sh15_2?.toFixed(4)} sl=${st.sl15_1?.toFixed(4)}/${st.sl15_2?.toFixed(4)}${dropFromHigh} | 1m=${st.last1mPivotType||'none'}@${st.last1mPivotPrice?.toFixed(4)||'n/a'} | sl1m=${st.sl1m_1?.toFixed(4)}/${st.sl1m_2?.toFixed(4)} gap=${gapPct}%(${gapOk?'OK':'BLOCKED'}) | LONG=${struct15==='BEARISH'?'BLOCKED':'ok'} SHORT=${struct15==='BULLISH'?'BLOCKED':'ok'}`);
+      const seq4hDiag = st.pivots4h.slice(-4).map(x => `${x.label}@${x.price.toFixed(2)}`).join('→');
+      log(`[V4-DIAG] ${symbol} zone=${diagZone} 4H=${struct4h}[${seq4hDiag}] 15m=${struct15} price=${diagBar.close.toFixed(4)} | seq=[${pivotSeq}] | 15m=${st.last15mPivotType||'none'}@${st.last15mPivotPrice?.toFixed(4)||'n/a'} sh=${st.sh15_1?.toFixed(4)}/${st.sh15_2?.toFixed(4)} sl=${st.sl15_1?.toFixed(4)}/${st.sl15_2?.toFixed(4)}${dropFromHigh} | 1m=${st.last1mPivotType||'none'}@${st.last1mPivotPrice?.toFixed(4)||'n/a'} | sl1m=${st.sl1m_1?.toFixed(4)}/${st.sl1m_2?.toFixed(4)} gap=${gapPct}%(${gapOk?'OK':'BLOCKED'}) | LONG=${struct4h==='BEARISH'||struct15==='BEARISH'?'BLOCKED':'ok'} SHORT=${struct4h==='BULLISH'||struct15==='BULLISH'?'BLOCKED':'ok'}`);
     }
   }
 
@@ -630,7 +765,7 @@ async function analyze(symbol, log) {
       if (vwap) {
         const zone = getZone(bar.close, vwap);
         const sig = resolveSignal(st, zone, bar.close);
-        log(`[V4-SIG] ${symbol} zone=${zone} struct=${get15mStructure(st, bar.close)} 15m=${st.last15mPivotType||'none'} 1m=${st.last1mPivotType||'none'} price=${bar.close.toFixed(4)} sl1m=${st.sl1m_1?.toFixed(4)||'n/a'} sh15=${st.sh15_1?.toFixed(4)||'n/a'} sh1m=${st.sh1m_1?.toFixed(4)||'n/a'} → ${sig ? sig.direction+'+'+sig.type : 'NO_SIGNAL'}`);
+        log(`[V4-SIG] ${symbol} zone=${zone} 4H=${get4hStructure(st, bar.close)} 15m=${get15mStructure(st, bar.close)} piv15=${st.last15mPivotType||'none'} piv1m=${st.last1mPivotType||'none'} price=${bar.close.toFixed(4)} sl1m=${st.sl1m_1?.toFixed(4)||'n/a'} sh15=${st.sh15_1?.toFixed(4)||'n/a'} sh1m=${st.sh1m_1?.toFixed(4)||'n/a'} → ${sig ? sig.direction+'+'+sig.type : 'NO_SIGNAL'}`);
         if (sig) {
           st.lastSignalTime = pivotTime;
           // Freeze the pivot references at signal-creation time.
@@ -719,7 +854,7 @@ async function analyze(symbol, log) {
     score:      5,
     zone:       signal.zone,
     signalType: signal.type,
-    timeframe:  '15m+1m',
+    timeframe:  '4H+15m+1m',
     version:    'v4',
     tp1: null, tp2: null, tp3: null,
   };
