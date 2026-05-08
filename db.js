@@ -988,6 +988,33 @@ async function initAllTables() {
     }
   } catch (e) { console.warn('[DB] user_token_leverage fix warning:', e.message); }
 
+  // Create v4_config table — editable V4 strategy settings (admin UI writes, bot reads)
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS v4_config (
+        key   VARCHAR(60) PRIMARY KEY,
+        value TEXT NOT NULL,
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+    // Seed defaults only when the row doesn't exist yet
+    await pool.query(`
+      INSERT INTO v4_config (key, value) VALUES
+        ('capital_pct',    '10'),
+        ('lev_BTCUSDT',    '100'),
+        ('lev_ETHUSDT',    '100'),
+        ('lev_BNBUSDT',    '100'),
+        ('lev_SOLUSDT',    '75'),
+        ('lev_ADAUSDT',    '75'),
+        ('sl_trail_pct',   '1.2'),
+        ('pivot_lb_l',     '5'),
+        ('pivot_lb_r',     '1'),
+        ('pivot_history',  '50')
+      ON CONFLICT (key) DO NOTHING
+    `);
+    console.log('[DB] v4_config table ready');
+  } catch (e) { console.warn('[DB] v4_config init warning:', e.message); }
+
   console.log('[DB] All tables verified');
 }
 

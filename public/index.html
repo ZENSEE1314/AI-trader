@@ -2036,7 +2036,7 @@
              TAB: Strategies
              ═══════════════════════════════════════════ -->
         <!-- ═══════════════════════════════════════════
-             TAB: 🛠 Tools — V4 SMC Settings Overview
+             TAB: 🛠 Tools — V4 SMC Settings (Editable)
              ═══════════════════════════════════════════ -->
         <div id="admin-tab-tools" class="admin-tab-panel hidden">
 
@@ -2044,7 +2044,7 @@
           <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:var(--space-4);">
             <div>
               <h3 style="margin:0;font-size:1rem;color:var(--color-text);">🛠 V4 SMC Strategy — Live Settings</h3>
-              <p style="margin:3px 0 0;font-size:0.75rem;color:var(--color-text-muted);">All values are hardcoded in <code style="font-size:0.72rem;background:rgba(255,255,255,0.06);padding:1px 5px;border-radius:3px;">cycle.js</code> + <code style="font-size:0.72rem;background:rgba(255,255,255,0.06);padding:1px 5px;border-radius:3px;">strategy-v4-smc.js</code>. Changes require a redeploy.</p>
+              <p style="margin:3px 0 0;font-size:0.75rem;color:var(--color-text-muted);">Edit values and click <strong style="color:var(--color-text);">Save Settings</strong>. Changes take effect on the bot's next cycle (~60 s).</p>
             </div>
             <div style="display:flex;gap:var(--space-2);flex-wrap:wrap;">
               <button class="btn btn-sm" style="background:var(--color-accent);color:#fff;padding:5px 14px;font-size:0.8rem;" onclick="window.location.href='/api/admin/trades/csv'">⬇ Export CSV</button>
@@ -2053,158 +2053,249 @@
             </div>
           </div>
 
-          <!-- ── Capital & Leverage ── -->
+          <!-- Status message -->
+          <div id="v4-save-msg" style="display:none;padding:10px 14px;border-radius:8px;font-size:0.82rem;margin-bottom:var(--space-3);"></div>
+
+          <!-- ── Capital & Leverage (Editable) ── -->
           <div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-4);margin-bottom:var(--space-3);">
-            <div style="font-size:0.78rem;font-weight:700;color:var(--color-text-muted);letter-spacing:.06em;text-transform:uppercase;margin-bottom:var(--space-3);">💰 Capital &amp; Leverage</div>
-            <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:var(--space-3);">
-              <div style="text-align:center;background:rgba(99,102,241,0.08);border:1px solid rgba(99,102,241,0.2);border-radius:var(--radius-md);padding:var(--space-3);">
-                <div style="font-size:1.8rem;font-weight:800;color:#a78bfa;line-height:1;">10%</div>
-                <div style="font-size:0.7rem;color:var(--color-text-muted);margin-top:4px;">Capital per Trade</div>
-                <div style="font-size:0.65rem;color:rgba(167,139,250,0.6);margin-top:2px;">CAPITAL_PER_TRADE</div>
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--space-3);">
+              <div style="font-size:0.78rem;font-weight:700;color:var(--color-text-muted);letter-spacing:.06em;text-transform:uppercase;">💰 Capital &amp; Leverage</div>
+              <span style="font-size:0.68rem;color:var(--color-text-muted);">Takes effect next cycle (~60 s)</span>
+            </div>
+            <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:var(--space-3);">
+
+              <!-- Capital per trade -->
+              <div style="background:rgba(99,102,241,0.06);border:1px solid rgba(99,102,241,0.2);border-radius:var(--radius-md);padding:var(--space-3);">
+                <label style="font-size:0.68rem;color:#a78bfa;font-weight:700;display:block;margin-bottom:6px;text-transform:uppercase;letter-spacing:.04em;">Capital per Trade %</label>
+                <div style="display:flex;align-items:center;gap:6px;">
+                  <input id="v4-capital-pct" type="number" min="1" max="50" step="1" value="10"
+                    style="width:70px;background:#0f0f18;border:1px solid rgba(99,102,241,0.3);border-radius:6px;color:#a78bfa;font-size:1.4rem;font-weight:800;font-family:monospace;padding:4px 8px;text-align:center;">
+                  <span style="color:#a78bfa;font-size:1rem;font-weight:700;">%</span>
+                </div>
+                <div style="font-size:0.65rem;color:var(--color-text-muted);margin-top:6px;">CAPITAL_PER_TRADE</div>
               </div>
-              <div style="text-align:center;background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.2);border-radius:var(--radius-md);padding:var(--space-3);">
-                <div style="font-size:1.8rem;font-weight:800;color:#f59e0b;line-height:1;">100×</div>
-                <div style="font-size:0.7rem;color:var(--color-text-muted);margin-top:4px;">BTC / ETH / BNB</div>
-                <div style="font-size:0.65rem;color:rgba(245,158,11,0.6);margin-top:2px;">TOKEN_LEVERAGE</div>
+
+              <!-- BTC leverage -->
+              <div style="background:rgba(245,158,11,0.06);border:1px solid rgba(245,158,11,0.2);border-radius:var(--radius-md);padding:var(--space-3);">
+                <label style="font-size:0.68rem;color:#f59e0b;font-weight:700;display:block;margin-bottom:6px;text-transform:uppercase;letter-spacing:.04em;">BTCUSDT Leverage</label>
+                <div style="display:flex;align-items:center;gap:6px;">
+                  <input id="v4-lev-btc" type="number" min="1" max="125" step="1" value="100"
+                    style="width:70px;background:#0f0f18;border:1px solid rgba(245,158,11,0.3);border-radius:6px;color:#f59e0b;font-size:1.4rem;font-weight:800;font-family:monospace;padding:4px 8px;text-align:center;">
+                  <span style="color:#f59e0b;font-size:1rem;font-weight:700;">×</span>
+                </div>
+                <div style="font-size:0.65rem;color:var(--color-text-muted);margin-top:6px;">TOKEN_LEVERAGE</div>
               </div>
-              <div style="text-align:center;background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.2);border-radius:var(--radius-md);padding:var(--space-3);">
-                <div style="font-size:1.8rem;font-weight:800;color:#f59e0b;line-height:1;">75×</div>
-                <div style="font-size:0.7rem;color:var(--color-text-muted);margin-top:4px;">ADA / SOL</div>
-                <div style="font-size:0.65rem;color:rgba(245,158,11,0.6);margin-top:2px;">TOKEN_LEVERAGE</div>
+
+              <!-- ETH leverage -->
+              <div style="background:rgba(245,158,11,0.06);border:1px solid rgba(245,158,11,0.2);border-radius:var(--radius-md);padding:var(--space-3);">
+                <label style="font-size:0.68rem;color:#f59e0b;font-weight:700;display:block;margin-bottom:6px;text-transform:uppercase;letter-spacing:.04em;">ETHUSDT Leverage</label>
+                <div style="display:flex;align-items:center;gap:6px;">
+                  <input id="v4-lev-eth" type="number" min="1" max="125" step="1" value="100"
+                    style="width:70px;background:#0f0f18;border:1px solid rgba(245,158,11,0.3);border-radius:6px;color:#f59e0b;font-size:1.4rem;font-weight:800;font-family:monospace;padding:4px 8px;text-align:center;">
+                  <span style="color:#f59e0b;font-size:1rem;font-weight:700;">×</span>
+                </div>
+                <div style="font-size:0.65rem;color:var(--color-text-muted);margin-top:6px;">TOKEN_LEVERAGE</div>
               </div>
-              <div style="text-align:center;background:rgba(34,197,94,0.08);border:1px solid rgba(34,197,94,0.2);border-radius:var(--radius-md);padding:var(--space-3);">
-                <div style="font-size:1.8rem;font-weight:800;color:#22c55e;line-height:1;">5</div>
-                <div style="font-size:0.7rem;color:var(--color-text-muted);margin-top:4px;">Max Concurrent Trades</div>
-                <div style="font-size:0.65rem;color:rgba(34,197,94,0.6);margin-top:2px;">1 per token</div>
+
+              <!-- BNB leverage -->
+              <div style="background:rgba(245,158,11,0.06);border:1px solid rgba(245,158,11,0.2);border-radius:var(--radius-md);padding:var(--space-3);">
+                <label style="font-size:0.68rem;color:#f59e0b;font-weight:700;display:block;margin-bottom:6px;text-transform:uppercase;letter-spacing:.04em;">BNBUSDT Leverage</label>
+                <div style="display:flex;align-items:center;gap:6px;">
+                  <input id="v4-lev-bnb" type="number" min="1" max="125" step="1" value="100"
+                    style="width:70px;background:#0f0f18;border:1px solid rgba(245,158,11,0.3);border-radius:6px;color:#f59e0b;font-size:1.4rem;font-weight:800;font-family:monospace;padding:4px 8px;text-align:center;">
+                  <span style="color:#f59e0b;font-size:1rem;font-weight:700;">×</span>
+                </div>
+                <div style="font-size:0.65rem;color:var(--color-text-muted);margin-top:6px;">TOKEN_LEVERAGE</div>
               </div>
+
+              <!-- SOL leverage -->
+              <div style="background:rgba(167,139,250,0.06);border:1px solid rgba(167,139,250,0.2);border-radius:var(--radius-md);padding:var(--space-3);">
+                <label style="font-size:0.68rem;color:#a78bfa;font-weight:700;display:block;margin-bottom:6px;text-transform:uppercase;letter-spacing:.04em;">SOLUSDT Leverage</label>
+                <div style="display:flex;align-items:center;gap:6px;">
+                  <input id="v4-lev-sol" type="number" min="1" max="125" step="1" value="75"
+                    style="width:70px;background:#0f0f18;border:1px solid rgba(167,139,250,0.3);border-radius:6px;color:#a78bfa;font-size:1.4rem;font-weight:800;font-family:monospace;padding:4px 8px;text-align:center;">
+                  <span style="color:#a78bfa;font-size:1rem;font-weight:700;">×</span>
+                </div>
+                <div style="font-size:0.65rem;color:var(--color-text-muted);margin-top:6px;">TOKEN_LEVERAGE</div>
+              </div>
+
+              <!-- ADA leverage -->
+              <div style="background:rgba(167,139,250,0.06);border:1px solid rgba(167,139,250,0.2);border-radius:var(--radius-md);padding:var(--space-3);">
+                <label style="font-size:0.68rem;color:#a78bfa;font-weight:700;display:block;margin-bottom:6px;text-transform:uppercase;letter-spacing:.04em;">ADAUSDT Leverage</label>
+                <div style="display:flex;align-items:center;gap:6px;">
+                  <input id="v4-lev-ada" type="number" min="1" max="125" step="1" value="75"
+                    style="width:70px;background:#0f0f18;border:1px solid rgba(167,139,250,0.3);border-radius:6px;color:#a78bfa;font-size:1.4rem;font-weight:800;font-family:monospace;padding:4px 8px;text-align:center;">
+                  <span style="color:#a78bfa;font-size:1rem;font-weight:700;">×</span>
+                </div>
+                <div style="font-size:0.65rem;color:var(--color-text-muted);margin-top:6px;">TOKEN_LEVERAGE</div>
+              </div>
+
             </div>
           </div>
 
-          <!-- ── Structure Detection ── -->
+          <!-- ── Structure Detection (Editable) ── -->
           <div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-4);margin-bottom:var(--space-3);">
-            <div style="font-size:0.78rem;font-weight:700;color:var(--color-text-muted);letter-spacing:.06em;text-transform:uppercase;margin-bottom:var(--space-3);">📐 Structure Detection (15m)</div>
-            <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:var(--space-2);">
-              <div style="display:flex;flex-direction:column;gap:2px;">
-                <span style="font-size:0.7rem;color:var(--color-text-muted);">Left Lookback (lbL)</span>
-                <span style="font-size:1.05rem;font-weight:700;color:var(--color-text);font-family:monospace;">5 bars</span>
+            <div style="font-size:0.78rem;font-weight:700;color:var(--color-text-muted);letter-spacing:.06em;text-transform:uppercase;margin-bottom:var(--space-3);">📐 Structure Detection (15m Pivots)</div>
+            <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:var(--space-3);">
+
+              <!-- lbL -->
+              <div>
+                <label style="font-size:0.72rem;color:var(--color-text-muted);display:block;margin-bottom:5px;">Left Lookback (lbL) — bars</label>
+                <input id="v4-lb-l" type="number" min="2" max="20" step="1" value="5" class="form-input text-mono"
+                  style="font-size:1.1rem;font-weight:700;max-width:120px;">
+                <div style="font-size:0.65rem;color:var(--color-text-muted);margin-top:3px;">Bars to left of pivot to confirm</div>
               </div>
-              <div style="display:flex;flex-direction:column;gap:2px;">
-                <span style="font-size:0.7rem;color:var(--color-text-muted);">Right Lookback (lbR)</span>
-                <span style="font-size:1.05rem;font-weight:700;color:var(--color-text);font-family:monospace;">1 bar</span>
+
+              <!-- lbR -->
+              <div>
+                <label style="font-size:0.72rem;color:var(--color-text-muted);display:block;margin-bottom:5px;">Right Lookback (lbR) — bars</label>
+                <input id="v4-lb-r" type="number" min="1" max="10" step="1" value="1" class="form-input text-mono"
+                  style="font-size:1.1rem;font-weight:700;max-width:120px;">
+                <div style="font-size:0.65rem;color:var(--color-text-muted);margin-top:3px;">1 = label on next bar (lowest lag)</div>
               </div>
-              <div style="display:flex;flex-direction:column;gap:2px;">
-                <span style="font-size:0.7rem;color:var(--color-text-muted);">Pivot History</span>
-                <span style="font-size:1.05rem;font-weight:700;color:var(--color-text);font-family:monospace;">50 pivots</span>
+
+              <!-- Pivot history -->
+              <div>
+                <label style="font-size:0.72rem;color:var(--color-text-muted);display:block;margin-bottom:5px;">Pivot History — count</label>
+                <input id="v4-pivot-history" type="number" min="10" max="200" step="10" value="50" class="form-input text-mono"
+                  style="font-size:1.1rem;font-weight:700;max-width:120px;">
+                <div style="font-size:0.65rem;color:var(--color-text-muted);margin-top:3px;">Max HH/LH/HL/LL entries kept</div>
               </div>
-              <div style="display:flex;flex-direction:column;gap:2px;">
-                <span style="font-size:0.7rem;color:var(--color-text-muted);">Structure Gate</span>
-                <span style="font-size:0.9rem;font-weight:700;color:#f87171;font-family:monospace;">STRICT</span>
+
+              <!-- Trailing SL step -->
+              <div>
+                <label style="font-size:0.72rem;color:var(--color-text-muted);display:block;margin-bottom:5px;">Trailing SL Step — % price</label>
+                <input id="v4-sl-trail" type="number" min="0.1" max="5" step="0.1" value="1.2" class="form-input text-mono"
+                  style="font-size:1.1rem;font-weight:700;max-width:120px;">
+                <div style="font-size:0.65rem;color:var(--color-text-muted);margin-top:3px;">SL moves up by this % as price rises</div>
               </div>
-              <div style="display:flex;flex-direction:column;gap:2px;">
-                <span style="font-size:0.7rem;color:var(--color-text-muted);">Labels Tracked</span>
-                <span style="font-size:0.9rem;font-weight:700;color:var(--color-text);font-family:monospace;">HH · LH · HL · LL</span>
-              </div>
-              <div style="display:flex;flex-direction:column;gap:2px;">
-                <span style="font-size:0.7rem;color:var(--color-text-muted);">Structure Bias</span>
-                <span style="font-size:0.9rem;font-weight:700;color:var(--color-text);font-family:monospace;">BULLISH / BEARISH / MIXED</span>
-              </div>
+
             </div>
-            <!-- Gate rules -->
+
+            <!-- Gate info (read-only) -->
             <div style="margin-top:var(--space-3);display:flex;gap:var(--space-2);flex-wrap:wrap;">
-              <div style="flex:1;min-width:160px;padding:var(--space-2) var(--space-3);background:rgba(0,255,136,0.05);border:1px solid rgba(0,255,136,0.15);border-radius:6px;font-size:0.78rem;">
-                <span style="color:#00ff88;font-weight:700;">BULLISH</span>
-                <span style="color:var(--color-text-muted);"> — blocks ALL SHORT signals</span>
+              <div style="flex:1;min-width:160px;padding:8px 12px;background:rgba(0,255,136,0.05);border:1px solid rgba(0,255,136,0.15);border-radius:6px;font-size:0.78rem;">
+                <span style="color:#00ff88;font-weight:700;">BULLISH</span><span style="color:var(--color-text-muted);"> — blocks ALL SHORT</span>
               </div>
-              <div style="flex:1;min-width:160px;padding:var(--space-2) var(--space-3);background:rgba(255,56,96,0.05);border:1px solid rgba(255,56,96,0.15);border-radius:6px;font-size:0.78rem;">
-                <span style="color:#ff4060;font-weight:700;">BEARISH</span>
-                <span style="color:var(--color-text-muted);"> — blocks ALL LONG signals</span>
+              <div style="flex:1;min-width:160px;padding:8px 12px;background:rgba(255,56,96,0.05);border:1px solid rgba(255,56,96,0.15);border-radius:6px;font-size:0.78rem;">
+                <span style="color:#ff4060;font-weight:700;">BEARISH</span><span style="color:var(--color-text-muted);"> — blocks ALL LONG</span>
               </div>
-              <div style="flex:1;min-width:160px;padding:var(--space-2) var(--space-3);background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:6px;font-size:0.78rem;">
-                <span style="color:#94a3b8;font-weight:700;">MIXED / UNKNOWN</span>
-                <span style="color:var(--color-text-muted);"> — no trades</span>
+              <div style="flex:1;min-width:160px;padding:8px 12px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:6px;font-size:0.78rem;">
+                <span style="color:#94a3b8;font-weight:700;">MIXED / UNKNOWN</span><span style="color:var(--color-text-muted);"> — no trades</span>
               </div>
             </div>
           </div>
 
-          <!-- ── Signal Rules ── -->
-          <div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-4);margin-bottom:var(--space-3);">
-            <div style="font-size:0.78rem;font-weight:700;color:var(--color-text-muted);letter-spacing:.06em;text-transform:uppercase;margin-bottom:var(--space-3);">🎯 Signal Rules (1m Entry)</div>
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--space-3);">
-              <div style="border:1px solid rgba(0,255,136,0.12);border-radius:6px;padding:var(--space-3);background:rgba(0,255,136,0.02);">
-                <div style="font-size:0.78rem;font-weight:700;color:#00ff88;margin-bottom:var(--space-2);">▲ LONG Entry</div>
-                <ul style="margin:0;padding-left:16px;font-size:0.78rem;color:var(--color-text-muted);line-height:1.9;">
-                  <li>15m structure = <strong style="color:var(--color-text);">BULLISH</strong></li>
-                  <li>1m pivot = <strong style="color:var(--color-text);">HL</strong> (Higher Low)</li>
-                  <li>Price at / bouncing from HL level</li>
-                  <li>VWAP filter: price above lower 2σ</li>
-                  <li>No existing LONG open on this token</li>
-                </ul>
-              </div>
-              <div style="border:1px solid rgba(255,56,96,0.12);border-radius:6px;padding:var(--space-3);background:rgba(255,56,96,0.02);">
-                <div style="font-size:0.78rem;font-weight:700;color:#ff4060;margin-bottom:var(--space-2);">▼ SHORT Entry</div>
-                <ul style="margin:0;padding-left:16px;font-size:0.78rem;color:var(--color-text-muted);line-height:1.9;">
-                  <li>15m structure = <strong style="color:var(--color-text);">BEARISH</strong></li>
-                  <li>1m pivot = <strong style="color:var(--color-text);">LH</strong> (Lower High)</li>
-                  <li>Price at / rejecting from LH level</li>
-                  <li>VWAP filter: price below upper 2σ</li>
-                  <li>No existing SHORT open on this token</li>
-                </ul>
-              </div>
+          <!-- ── Signal + Exit (read-only summary) ── -->
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--space-3);margin-bottom:var(--space-3);">
+            <div style="background:var(--color-bg-raised);border:1px solid rgba(0,255,136,0.12);border-radius:var(--radius-lg);padding:var(--space-3);">
+              <div style="font-size:0.72rem;font-weight:700;color:#00ff88;margin-bottom:var(--space-2);">▲ LONG Entry (1m)</div>
+              <ul style="margin:0;padding-left:14px;font-size:0.75rem;color:var(--color-text-muted);line-height:1.9;">
+                <li>15m structure = <strong style="color:var(--color-text);">BULLISH</strong></li>
+                <li>1m pivot = <strong style="color:var(--color-text);">HL</strong> (Higher Low)</li>
+                <li>VWAP: price above lower 2σ</li>
+                <li>No open LONG on this token</li>
+              </ul>
+            </div>
+            <div style="background:var(--color-bg-raised);border:1px solid rgba(255,56,96,0.12);border-radius:var(--radius-lg);padding:var(--space-3);">
+              <div style="font-size:0.72rem;font-weight:700;color:#ff4060;margin-bottom:var(--space-2);">▼ SHORT Entry (1m)</div>
+              <ul style="margin:0;padding-left:14px;font-size:0.75rem;color:var(--color-text-muted);line-height:1.9;">
+                <li>15m structure = <strong style="color:var(--color-text);">BEARISH</strong></li>
+                <li>1m pivot = <strong style="color:var(--color-text);">LH</strong> (Lower High)</li>
+                <li>VWAP: price below upper 2σ</li>
+                <li>No open SHORT on this token</li>
+              </ul>
             </div>
           </div>
 
-          <!-- ── Exit Rules ── -->
-          <div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-4);margin-bottom:var(--space-3);">
-            <div style="font-size:0.78rem;font-weight:700;color:var(--color-text-muted);letter-spacing:.06em;text-transform:uppercase;margin-bottom:var(--space-3);">🚪 Exit Rules</div>
-            <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:var(--space-2);">
-              <div style="display:flex;flex-direction:column;gap:2px;">
-                <span style="font-size:0.7rem;color:var(--color-text-muted);">Stop Loss</span>
-                <span style="font-size:0.9rem;font-weight:700;color:var(--color-text);">Trailing SL from pivot level</span>
-              </div>
-              <div style="display:flex;flex-direction:column;gap:2px;">
-                <span style="font-size:0.7rem;color:var(--color-text-muted);">Take Profit</span>
-                <span style="font-size:0.9rem;font-weight:700;color:var(--color-text);">Trail only — no fixed TP</span>
-              </div>
-              <div style="display:flex;flex-direction:column;gap:2px;">
-                <span style="font-size:0.7rem;color:var(--color-text-muted);">Structure Exit</span>
-                <span style="font-size:0.9rem;font-weight:700;color:var(--color-text);">Close if structure flips against trade</span>
-              </div>
-              <div style="display:flex;flex-direction:column;gap:2px;">
-                <span style="font-size:0.7rem;color:var(--color-text-muted);">Sync Mode</span>
-                <span style="font-size:0.9rem;font-weight:700;color:var(--color-text);">hardSyncExchangeDB() every cycle</span>
-              </div>
-            </div>
-          </div>
-
-          <!-- ── Tokens Active ── -->
-          <div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-4);margin-bottom:var(--space-3);">
-            <div style="font-size:0.78rem;font-weight:700;color:var(--color-text-muted);letter-spacing:.06em;text-transform:uppercase;margin-bottom:var(--space-3);">🪙 Active Tokens (V4)</div>
-            <div style="display:flex;flex-wrap:wrap;gap:var(--space-2);">
-              <div style="display:flex;align-items:center;gap:8px;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.1);border-radius:8px;padding:8px 14px;">
-                <span style="font-weight:700;color:var(--color-text);font-size:0.9rem;">BTCUSDT</span>
-                <span style="color:#f59e0b;font-weight:700;font-size:0.8rem;font-family:monospace;">100×</span>
-              </div>
-              <div style="display:flex;align-items:center;gap:8px;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.1);border-radius:8px;padding:8px 14px;">
-                <span style="font-weight:700;color:var(--color-text);font-size:0.9rem;">ETHUSDT</span>
-                <span style="color:#f59e0b;font-weight:700;font-size:0.8rem;font-family:monospace;">100×</span>
-              </div>
-              <div style="display:flex;align-items:center;gap:8px;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.1);border-radius:8px;padding:8px 14px;">
-                <span style="font-weight:700;color:var(--color-text);font-size:0.9rem;">BNBUSDT</span>
-                <span style="color:#f59e0b;font-weight:700;font-size:0.8rem;font-family:monospace;">100×</span>
-              </div>
-              <div style="display:flex;align-items:center;gap:8px;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.1);border-radius:8px;padding:8px 14px;">
-                <span style="font-weight:700;color:var(--color-text);font-size:0.9rem;">SOLUSDT</span>
-                <span style="color:#a78bfa;font-weight:700;font-size:0.8rem;font-family:monospace;">75×</span>
-              </div>
-              <div style="display:flex;align-items:center;gap:8px;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.1);border-radius:8px;padding:8px 14px;">
-                <span style="font-weight:700;color:var(--color-text);font-size:0.9rem;">ADAUSDT</span>
-                <span style="color:#a78bfa;font-weight:700;font-size:0.8rem;font-family:monospace;">75×</span>
-              </div>
-            </div>
+          <!-- ── Save button ── -->
+          <div style="display:flex;align-items:center;gap:var(--space-3);padding:var(--space-3) 0;">
+            <button id="v4-save-btn" class="btn btn-primary" style="padding:10px 28px;font-size:0.88rem;font-weight:700;" onclick="saveV4Config()">
+              💾 Save Settings
+            </button>
+            <button class="btn btn-ghost btn-sm" style="font-size:0.8rem;" onclick="loadV4Config()">↺ Reload from DB</button>
+            <span id="v4-save-spinner" style="display:none;font-size:0.8rem;color:var(--color-text-muted);">Saving…</span>
           </div>
 
           <!-- ── Debug output ── -->
           <pre id="fix-bitunix-result" style="margin-top:var(--space-2);font-size:0.75rem;color:var(--color-text-muted);max-height:60vh;overflow:auto;white-space:pre-wrap;word-break:break-all;border:1px solid var(--color-border-muted);border-radius:var(--radius-md);padding:var(--space-3);background:var(--color-bg-base);display:none;"></pre>
+
+          <!-- V4 Config JS -->
+          <script>
+          async function loadV4Config() {
+            try {
+              const res = await fetch('/api/admin/v4-config', { credentials: 'include' });
+              if (!res.ok) return;
+              const cfg = await res.json();
+              if (cfg.capital_pct)   document.getElementById('v4-capital-pct').value = cfg.capital_pct;
+              if (cfg.lev_BTCUSDT)   document.getElementById('v4-lev-btc').value = cfg.lev_BTCUSDT;
+              if (cfg.lev_ETHUSDT)   document.getElementById('v4-lev-eth').value = cfg.lev_ETHUSDT;
+              if (cfg.lev_BNBUSDT)   document.getElementById('v4-lev-bnb').value = cfg.lev_BNBUSDT;
+              if (cfg.lev_SOLUSDT)   document.getElementById('v4-lev-sol').value = cfg.lev_SOLUSDT;
+              if (cfg.lev_ADAUSDT)   document.getElementById('v4-lev-ada').value = cfg.lev_ADAUSDT;
+              if (cfg.pivot_lb_l)    document.getElementById('v4-lb-l').value = cfg.pivot_lb_l;
+              if (cfg.pivot_lb_r)    document.getElementById('v4-lb-r').value = cfg.pivot_lb_r;
+              if (cfg.pivot_history) document.getElementById('v4-pivot-history').value = cfg.pivot_history;
+              if (cfg.sl_trail_pct)  document.getElementById('v4-sl-trail').value = cfg.sl_trail_pct;
+            } catch (e) { console.warn('loadV4Config error', e); }
+          }
+
+          async function saveV4Config() {
+            const btn = document.getElementById('v4-save-btn');
+            const spinner = document.getElementById('v4-save-spinner');
+            const msg = document.getElementById('v4-save-msg');
+            btn.disabled = true;
+            spinner.style.display = 'inline';
+            msg.style.display = 'none';
+            try {
+              const payload = {
+                capital_pct:   document.getElementById('v4-capital-pct').value,
+                lev_BTCUSDT:   document.getElementById('v4-lev-btc').value,
+                lev_ETHUSDT:   document.getElementById('v4-lev-eth').value,
+                lev_BNBUSDT:   document.getElementById('v4-lev-bnb').value,
+                lev_SOLUSDT:   document.getElementById('v4-lev-sol').value,
+                lev_ADAUSDT:   document.getElementById('v4-lev-ada').value,
+                pivot_lb_l:    document.getElementById('v4-lb-l').value,
+                pivot_lb_r:    document.getElementById('v4-lb-r').value,
+                pivot_history: document.getElementById('v4-pivot-history').value,
+                sl_trail_pct:  document.getElementById('v4-sl-trail').value,
+              };
+              const res = await fetch('/api/admin/v4-config', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'include',
+                body: JSON.stringify(payload),
+              });
+              const data = await res.json();
+              if (res.ok) {
+                msg.style.cssText = 'display:block;padding:10px 14px;border-radius:8px;font-size:0.82rem;margin-bottom:16px;background:rgba(34,197,94,0.1);border:1px solid rgba(34,197,94,0.3);color:#22c55e;';
+                msg.textContent = '✅ Saved ' + data.saved + ' settings. Bot will apply on next cycle (~60 s).';
+              } else {
+                throw new Error(data.error || 'Save failed');
+              }
+            } catch (e) {
+              msg.style.cssText = 'display:block;padding:10px 14px;border-radius:8px;font-size:0.82rem;margin-bottom:16px;background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);color:#f87171;';
+              msg.textContent = '❌ ' + e.message;
+            } finally {
+              btn.disabled = false;
+              spinner.style.display = 'none';
+            }
+          }
+
+          // Auto-load when tab is opened
+          document.addEventListener('DOMContentLoaded', function() {
+            var orig = window.CryptoBot && window.CryptoBot.switchAdminTab;
+            var _v4Loaded = false;
+            if (window.CryptoBot) {
+              var _origSwitch = window.CryptoBot.switchAdminTab;
+              window.CryptoBot.switchAdminTab = function(tab) {
+                if (_origSwitch) _origSwitch(tab);
+                if (tab === 'tools' && !_v4Loaded) { _v4Loaded = true; loadV4Config(); }
+              };
+            }
+          });
+          </script>
+
         </div><!-- /admin-tab-tools -->
 
         <!-- ═══════════════════════════════════════════

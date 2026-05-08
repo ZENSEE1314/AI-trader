@@ -16,6 +16,7 @@ const { getSessionMode } = require('./strategy-3timing'); // v4: trailing SL use
 const { getSentimentScores } = require('./sentiment-scraper');
 const { log: bLog } = require('./bot-logger');
 const { getBinanceRequestOptions, getFetchOptions } = require('./proxy-agent');
+const { query: dbQuery } = require('./db');
 
 // ── Trade outcome callback — agents hook in to track survival ──
 let _onTradeOutcome = null;
@@ -30,27 +31,37 @@ const PRIVATE_CHATS  = TELEGRAM_CHATS.filter(id => !id.startsWith('-'));
 
 // ── CONFIG (defaults — AI may override some via getOptimalParams) ─
 const BTC_ETH_SYMBOLS = new Set(['BTCUSDT', 'ETHUSDT']);
-// These tokens trade at 100x leverage
-const HIGH_PRICE_SYMBOLS = new Set([
-  'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT',
-]);
+const HIGH_PRICE_SYMBOLS = new Set(['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT']);
 
-// Hard-coded position sizing — 10% of total wallet per trade, all tokens, all users.
-// DB values (capital_percentage, risk_levels) are IGNORED for sizing.
-// With 5 active symbols the worst-case total exposure is 5 × 10% = 50% of wallet.
-// This constant is the ONLY place sizing is controlled — change it here to affect all paths.
-const CAPITAL_PER_TRADE = 0.10;
-
-// Hard-coded leverage per token — single source of truth, no DB override possible.
-// user_token_leverage / token_leverage / risk_levels tables are ALL bypassed.
-// Change here to affect all users, all platforms simultaneously.
-const TOKEN_LEVERAGE = {
+// V4 strategy constants — loaded from v4_config DB table on startup (admin-editable).
+// Falls back to these safe defaults when the DB row is missing.
+let CAPITAL_PER_TRADE = 0.10;
+let TOKEN_LEVERAGE = {
   BTCUSDT: 100,
   ETHUSDT: 100,
   BNBUSDT: 100,
   ADAUSDT:  75,
   SOLUSDT:  75,
 };
+
+async function loadV4Config() {
+  try {
+    const rows = await dbQuery('SELECT key, value FROM v4_config');
+    const cfg = {};
+    for (const r of rows) cfg[r.key] = r.value;
+
+    if (cfg.capital_pct) CAPITAL_PER_TRADE = parseFloat(cfg.capital_pct) / 100;
+    if (cfg.lev_BTCUSDT) TOKEN_LEVERAGE.BTCUSDT = parseInt(cfg.lev_BTCUSDT);
+    if (cfg.lev_ETHUSDT) TOKEN_LEVERAGE.ETHUSDT = parseInt(cfg.lev_ETHUSDT);
+    if (cfg.lev_BNBUSDT) TOKEN_LEVERAGE.BNBUSDT = parseInt(cfg.lev_BNBUSDT);
+    if (cfg.lev_SOLUSDT) TOKEN_LEVERAGE.SOLUSDT = parseInt(cfg.lev_SOLUSDT);
+    if (cfg.lev_ADAUSDT) TOKEN_LEVERAGE.ADAUSDT = parseInt(cfg.lev_ADAUSDT);
+
+    console.log(`[V4 Config] Loaded — capital: ${(CAPITAL_PER_TRADE * 100).toFixed(0)}% | leverage: BTC/ETH/BNB=${TOKEN_LEVERAGE.BTCUSDT}x SOL/ADA=${TOKEN_LEVERAGE.SOLUSDT}x`);
+  } catch (e) {
+    console.warn('[V4 Config] Could not load from DB, using hardcoded defaults:', e.message);
+  }
+}
 
 const CONFIG = {
   MIN_BALANCE:     5,
@@ -1299,6 +1310,12 @@ async function main() {
   try {
     const { query: dbQuery, initAllTables } = require('./db');
     await initAllTables();
+
+    // Load admin-editable V4 config on first cycle only
+    if (!runCycle._v4ConfigLoaded) {
+      runCycle._v4ConfigLoaded = true;
+      await loadV4Config();
+    }
 
     // One-time: enforce backtest-tuned leverage in token_leverage table.
     //   BTC/ETH      → 100x  (proven WR ≥ 55% on the momentum backtest)

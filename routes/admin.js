@@ -4366,4 +4366,64 @@ router.post('/coord/run-sweep', async (req, res) => {
   }
 });
 
+// ── V4 Config — read/write editable strategy settings ───────────────────────
+
+// GET /api/admin/v4-config — return all v4 settings as a flat object
+router.get('/v4-config', async (req, res) => {
+  try {
+    const rows = await query('SELECT key, value FROM v4_config ORDER BY key');
+    const config = {};
+    for (const r of rows) config[r.key] = r.value;
+    res.json(config);
+  } catch (err) {
+    console.error('[v4-config] GET error:', err.message);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// POST /api/admin/v4-config — upsert one or many settings { key: value, ... }
+router.post('/v4-config', async (req, res) => {
+  try {
+    const admin = await query('SELECT is_admin FROM users WHERE id = $1', [req.userId]);
+    if (!admin.length || !admin[0].is_admin) {
+      return res.status(403).json({ error: 'Admin only' });
+    }
+
+    const ALLOWED = new Set([
+      'capital_pct',
+      'lev_BTCUSDT', 'lev_ETHUSDT', 'lev_BNBUSDT', 'lev_SOLUSDT', 'lev_ADAUSDT',
+      'sl_trail_pct', 'pivot_lb_l', 'pivot_lb_r', 'pivot_history',
+    ]);
+
+    const updates = Object.entries(req.body).filter(([k]) => ALLOWED.has(k));
+    if (updates.length === 0) return res.status(400).json({ error: 'No valid keys provided' });
+
+    for (const [key, value] of updates) {
+      await query(
+        `INSERT INTO v4_config (key, value, updated_at)
+         VALUES ($1, $2, NOW())
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`,
+        [key, String(value)]
+      );
+    }
+
+    // Also sync token_leverage table so bot picks it up on next restart
+    const levKeys = updates.filter(([k]) => k.startsWith('lev_'));
+    for (const [key, value] of levKeys) {
+      const symbol = key.replace('lev_', '');
+      await query(
+        `INSERT INTO token_leverage (symbol, leverage, enabled)
+         VALUES ($1, $2, true)
+         ON CONFLICT (symbol) DO UPDATE SET leverage = $2`,
+        [symbol, parseInt(value)]
+      ).catch(() => {});
+    }
+
+    res.json({ ok: true, saved: updates.length });
+  } catch (err) {
+    console.error('[v4-config] POST error:', err.message);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 module.exports = router;
