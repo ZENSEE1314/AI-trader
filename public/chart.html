@@ -1087,23 +1087,8 @@
         <div class="indicator-dropdown" id="indicator-dropdown">
           <div class="ind-dropdown-header">Indicators</div>
           <div class="ind-section-label">Built-in</div>
-          <label class="ind-toggle"><input type="checkbox" data-ind="vwap" checked><span class="ind-name">VWAP</span><span class="ind-slider"></span></label>
-          <label class="ind-toggle"><input type="checkbox" data-ind="ema200" checked><span class="ind-name">200 EMA</span><span class="ind-slider"></span></label>
-          <label class="ind-toggle"><input type="checkbox" data-ind="ema7" checked><span class="ind-name">7 EMA</span><span class="ind-slider"></span></label>
-          <label class="ind-toggle"><input type="checkbox" data-ind="ema22" checked><span class="ind-name">22 EMA</span><span class="ind-slider"></span></label>
-          <label class="ind-toggle"><input type="checkbox" data-ind="bb" checked><span class="ind-name">Bollinger Bands</span><span class="ind-slider"></span></label>
-          <label class="ind-toggle"><input type="checkbox" data-ind="supertrend" checked><span class="ind-name">Supertrend</span><span class="ind-slider"></span></label>
-          <label class="ind-toggle"><input type="checkbox" data-ind="trendstructure" checked><span class="ind-name">Trend Structure</span><span class="ind-slider"></span></label>
-          <label class="ind-toggle"><input type="checkbox" data-ind="dtfxzones" checked><span class="ind-name">DTFX Zones</span><span class="ind-slider"></span></label>
-          <label class="ind-toggle"><input type="checkbox" data-ind="vsa" checked><span class="ind-name">VSA</span><span class="ind-slider"></span></label>
-          <label class="ind-toggle"><input type="checkbox" data-ind="psar"><span class="ind-name">Parabolic SAR</span><span class="ind-slider"></span></label>
+          <label class="ind-toggle"><input type="checkbox" data-ind="vwap" checked><span class="ind-name">VWAP + 2σ</span><span class="ind-slider"></span></label>
           <label class="ind-toggle"><input type="checkbox" data-ind="smcpro" checked><span class="ind-name">SMC Pro</span><span class="ind-slider"></span></label>
-          <label class="ind-toggle"><input type="checkbox" data-ind="ichimoku"><span class="ind-name">Ichimoku</span><span class="ind-slider"></span></label>
-          <label class="ind-toggle"><input type="checkbox" data-ind="rsi" checked><span class="ind-name">RSI</span><span class="ind-slider"></span></label>
-          <label class="ind-toggle"><input type="checkbox" data-ind="macd" checked><span class="ind-name">MACD</span><span class="ind-slider"></span></label>
-          <label class="ind-toggle"><input type="checkbox" data-ind="stoch"><span class="ind-name">Stochastic</span><span class="ind-slider"></span></label>
-          <label class="ind-toggle"><input type="checkbox" data-ind="atr"><span class="ind-name">ATR</span><span class="ind-slider"></span></label>
-          <label class="ind-toggle"><input type="checkbox" data-ind="vsahistogram"><span class="ind-name">VSA Histogram</span><span class="ind-slider"></span></label>
           <label class="ind-toggle"><input type="checkbox" data-ind="volume" checked><span class="ind-name">Volume</span><span class="ind-slider"></span></label>
           <div class="ind-dropdown-footer">
             <button class="ind-btn-all" id="ind-all-on">All On</button>
@@ -1461,21 +1446,29 @@
         return { upper: upper, middle: sma, lower: lower };
       },
 
+      // VWAP with daily 2σ bands — matches strategy-v4-smc.js exactly.
+      // Returns { vwap, upper2, lower2 } arrays for chart rendering.
       vwap: function(candles) {
-        var result = [];
-        var cumVol = 0, cumTP = 0;
+        var vwapArr = [], upper2Arr = [], lower2Arr = [];
+        var cumVol = 0, cumTP = 0, cumTP2 = 0;
         var dayStart = null;
         for (var i = 0; i < candles.length; i++) {
           var c = candles[i];
           var d = new Date(c.time * 1000);
           var day = d.getUTCFullYear() * 10000 + d.getUTCMonth() * 100 + d.getUTCDate();
-          if (day !== dayStart) { cumVol = 0; cumTP = 0; dayStart = day; }
+          if (day !== dayStart) { cumVol = 0; cumTP = 0; cumTP2 = 0; dayStart = day; }
           var tp = (c.high + c.low + c.close) / 3;
           cumVol += c.volume;
-          cumTP += tp * c.volume;
-          result.push(cumVol > 0 ? cumTP / cumVol : c.close);
+          cumTP  += tp * c.volume;
+          cumTP2 += tp * tp * c.volume;
+          var vwapVal = cumVol > 0 ? cumTP / cumVol : c.close;
+          var variance = cumVol > 0 ? Math.max(0, cumTP2 / cumVol - vwapVal * vwapVal) : 0;
+          var std = Math.sqrt(variance);
+          vwapArr.push(vwapVal);
+          upper2Arr.push(vwapVal + 2 * std);
+          lower2Arr.push(vwapVal - 2 * std);
         }
-        return result;
+        return { vwap: vwapArr, upper2: upper2Arr, lower2: lower2Arr };
       },
 
       atr: function(candles, period) {
@@ -2355,7 +2348,14 @@
           case 'ema': return { type: 'overlay', label: 'EMA(' + (a[1] || 20) + ')', data: Calc.ema(getSrc(a[0] || 'close'), a[1] || 20), color: '#fbbf24' };
           case 'wma': return { type: 'overlay', label: 'WMA(' + (a[1] || 20) + ')', data: Calc.wma(getSrc(a[0] || 'close'), a[1] || 20), color: '#34d399' };
           case 'hma': return { type: 'overlay', label: 'HMA(' + (a[1] || 9) + ')', data: Calc.hma(getSrc(a[0] || 'close'), a[1] || 9), color: '#e879f9' };
-          case 'vwap': return { type: 'overlay', label: 'VWAP', data: Calc.vwap(candles), color: '#a78bfa' };
+          case 'vwap': {
+            var vd = Calc.vwap(candles);
+            return { type: 'overlay', label: 'VWAP+2σ', multi: [
+              { data: vd.upper2, color: 'rgba(244,63,94,0.85)',   label: 'VWAP+2σ', lineWidth: 1 },
+              { data: vd.vwap,   color: 'rgba(167,139,250,0.95)', label: 'VWAP',    lineWidth: 2 },
+              { data: vd.lower2, color: 'rgba(52,211,153,0.85)',  label: 'VWAP-2σ', lineWidth: 1 },
+            ]};
+          }
           case 'volume': return { type: 'volume', label: 'Volume', data: candles };
 
           case 'bb': {
@@ -2462,15 +2462,16 @@
     };
 
     function loadIndicatorPrefs() {
-      var defaults = { vwap: false, ema200: true, ema7: false, ema22: false, rsi: false, macd: false, volume: true, bb: false, supertrend: false, trendstructure: false, dtfxzones: false, vsa: false, vsahistogram: false, stoch: false, atr: false, ichimoku: false, psar: false, smcpro: true };
-      var saved = localStorage.getItem('mct_indicator_prefs');
-      if (!saved) return defaults;
-      var prefs = JSON.parse(saved);
-      // Merge: add any new indicator defaults that aren't in saved prefs
-      Object.keys(defaults).forEach(function(k) {
-        if (!(k in prefs)) prefs[k] = defaults[k];
-      });
-      return prefs;
+      // Only VWAP+2σ, SMC Pro, and Volume — all old indicators removed.
+      var defaults = { vwap: true, smcpro: true, volume: true,
+                       ema200: false, ema7: false, ema22: false, rsi: false, macd: false,
+                       bb: false, supertrend: false, trendstructure: false, dtfxzones: false,
+                       vsa: false, vsahistogram: false, stoch: false, atr: false,
+                       ichimoku: false, psar: false };
+      // Always reset to clean defaults — clears any stale localStorage settings
+      // that may have had old indicators (EMA200, RSI, MACD, etc.) turned on.
+      localStorage.setItem('mct_indicator_prefs', JSON.stringify(defaults));
+      return defaults;
     }
 
     function saveIndicatorPrefs(prefs) {
