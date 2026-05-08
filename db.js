@@ -653,6 +653,11 @@ async function initAllTables() {
       tested_at TIMESTAMPTZ DEFAULT NOW(),
       UNIQUE(symbol, strategy)
     )`,
+    // Unique index on bitunix_position_id for OPEN trades — enables ON CONFLICT upsert
+    // in hardSyncExchangeDB without duplicate active positions leaking through.
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_trades_bitunix_pos_id
+     ON trades (bitunix_position_id)
+     WHERE bitunix_position_id IS NOT NULL AND status = 'OPEN'`,
   ];
 
   for (const sql of statements) {

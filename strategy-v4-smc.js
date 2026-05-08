@@ -570,6 +570,7 @@ async function analyze(symbol, log) {
       if (vwap) {
         const zone = getZone(bar.close, vwap);
         const sig = resolveSignal(st, zone, bar.close);
+        log(`[V4-SIG] ${symbol} zone=${zone} struct=${get15mStructure(st)} 15m=${st.last15mPivotType||'none'} 1m=${st.last1mPivotType||'none'} price=${bar.close.toFixed(4)} sl1m=${st.sl1m_1?.toFixed(4)||'n/a'} sh15=${st.sh15_1?.toFixed(4)||'n/a'} sh1m=${st.sh1m_1?.toFixed(4)||'n/a'} → ${sig ? sig.direction+'+'+sig.type : 'NO_SIGNAL'}`);
         if (sig) {
           st.lastSignalTime = pivotTime;
           // Freeze the pivot references at signal-creation time.
