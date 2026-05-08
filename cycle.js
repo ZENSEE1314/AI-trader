@@ -41,6 +41,17 @@ const HIGH_PRICE_SYMBOLS = new Set([
 // This constant is the ONLY place sizing is controlled — change it here to affect all paths.
 const CAPITAL_PER_TRADE = 0.10;
 
+// Hard-coded leverage per token — single source of truth, no DB override possible.
+// user_token_leverage / token_leverage / risk_levels tables are ALL bypassed.
+// Change here to affect all users, all platforms simultaneously.
+const TOKEN_LEVERAGE = {
+  BTCUSDT: 100,
+  ETHUSDT: 100,
+  BNBUSDT: 100,
+  ADAUSDT:  75,
+  SOLUSDT:  75,
+};
+
 const CONFIG = {
   MIN_BALANCE:     5,
   TAKER_FEE:       0.0004,
@@ -191,57 +202,38 @@ function getDailyCapital(key, currentBalance) {
   return currentBalance;
 }
 
-// Get token-specific leverage: user per-key → admin global → risk level → price-based default
+// Get token leverage — reads directly from TOKEN_LEVERAGE constant.
+// All DB tables (user_token_leverage, token_leverage, risk_levels) are bypassed.
+// TOKEN_LEVERAGE at the top of this file is the single source of truth.
 async function getTokenLeverage(symbol, apiKeyId = null, price = 0) {
-  const MAX_LEVERAGE = 125; // Exchange max — user/admin settings decide actual value
-  try {
+  const lev = TOKEN_LEVERAGE[symbol] || 100;
+  console.log(`[LEV] ${symbol} → ${lev}x (source: TOKEN_LEVERAGE hardcoded)`);
+  return lev;
+
+  // NOTE: DB-based priority lookup removed — was causing BNB to stay at 20x
+  // because user_token_leverage (Priority 1) had stale 20x value that overrode everything.
+  // To change leverage: edit TOKEN_LEVERAGE constant above and redeploy.
+
+  // Dead code below kept for reference only — never reached:
+  // Priority 1 (old): user_token_leverage
+  // Priority 2 (old): token_leverage table
+  // Priority 3 (old): risk_levels.max_leverage
+  // Priority 4 (old): default 100x
+  if (false) { // eslint-disable-line no-constant-condition
+    const MAX_LEVERAGE = 125;
     const { query } = require('./db');
 
-    // Priority 1: User per-key per-token leverage override (user explicitly set this)
     if (apiKeyId) {
       const userTokenRows = await query(
         'SELECT leverage FROM user_token_leverage WHERE api_key_id = $1 AND symbol = $2',
         [apiKeyId, symbol]
       );
-      if (userTokenRows.length > 0) {
-        const lev = Math.min(parseInt(userTokenRows[0].leverage), MAX_LEVERAGE);
-        console.log(`[LEV] ${symbol} key=${apiKeyId} → ${lev}x (source: user_token_leverage)`);
-        return lev;
-      }
+      if (userTokenRows.length > 0) return Math.min(parseInt(userTokenRows[0].leverage), MAX_LEVERAGE);
     }
-
-    // Priority 2: Admin global token leverage
-    const tokenRows = await query(
-      'SELECT leverage FROM token_leverage WHERE symbol = $1 AND enabled = true',
-      [symbol]
-    );
-    if (tokenRows.length > 0) {
-      const lev = Math.min(parseInt(tokenRows[0].leverage), MAX_LEVERAGE);
-      console.log(`[LEV] ${symbol} key=${apiKeyId} → ${lev}x (source: token_leverage)`);
-      return lev;
-    }
-
-    // Priority 3: Risk level max_leverage from API key
-    if (apiKeyId) {
-      const keyRows = await query(
-        `SELECT rl.max_leverage
-         FROM api_keys ak
-         LEFT JOIN risk_levels rl ON ak.risk_level_id = rl.id
-         WHERE ak.id = $1 AND rl.enabled = true`,
-        [apiKeyId]
-      );
-      if (keyRows.length > 0 && keyRows[0].max_leverage) {
-        return Math.min(parseInt(keyRows[0].max_leverage), MAX_LEVERAGE);
-      }
-    }
-
-    // Priority 4: No explicit config — all 4 allowed tokens use 100x
+    const tokenRows = await query('SELECT leverage FROM token_leverage WHERE symbol = $1 AND enabled = true', [symbol]);
+    if (tokenRows.length > 0) return Math.min(parseInt(tokenRows[0].leverage), MAX_LEVERAGE);
     return 100;
-  } catch (err) {
-    console.error('Error getting token leverage:', err.message);
-    // Return null instead of fallback to ensure safety
-    return null;
-  }
+  } // end if(false)
 }
 
 // Get capital percentage for trading (default 10%)
