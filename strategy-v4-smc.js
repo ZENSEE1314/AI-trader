@@ -3,20 +3,15 @@
 // ═══════════════════════════════════════════════════════════════
 //  strategy-v4-smc.js  —  VWAP Zone + 15m/1m Pivot Confluence
 //
-//  Zone rules (VWAP daily 2σ bands):
+//  Zone rules (VWAP daily 2σ bands) — zone = direction:
 //
-//    ABOVE_UPPER  → SHORT only
-//                   15m must be HH (strict — strongest overbought signal)
-//                   1m  must be HH or LH (any high confirmation)
+//    ABOVE_UPPER  → LONG only   (price above upper band = bullish strength)
+//    UPPER_MID    → LONG only   (price above VWAP mid = bullish bias)
+//                   15m = HL or LL  +  1m = HL or LL  (micro-pullback entry)
 //
-//    UPPER_MID    → SHORT or LONG
-//    LOWER_MID    → SHORT or LONG
-//                   SHORT: 15m = HH or LH  +  1m = HH or LH
-//                   LONG:  15m = HL or LL  +  1m = HL or LL
-//
-//    BELOW_LOWER  → LONG only
-//                   15m must be HL or LL (any low)
-//                   1m  must be HL or LL (any low confirmation)
+//    LOWER_MID    → SHORT only  (price below VWAP mid = bearish bias)
+//    BELOW_LOWER  → SHORT only  (price below lower band = bearish strength)
+//                   15m = HH or LH  +  1m = HH or LH  (micro-bounce rejected)
 //
 //  SL  : LONG  → entry × (1 − CAPITAL_RISK/lev)
 //        SHORT → entry × (1 + CAPITAL_RISK/lev)
@@ -452,21 +447,18 @@ function get15mStructure(state, currentPrice) {
 
 // ── Signal logic ───────────────────────────────────────────────
 //
-//  Structure gate (new — applied before zone/pivot checks):
-//    BEARISH 15m structure → LONG blocked in ALL zones
-//    BULLISH 15m structure → SHORT blocked in ALL zones
-//    MIXED/UNKNOWN → both allowed (existing zone rules apply)
+//  Zone = direction (momentum/breakout approach):
+//    ABOVE_UPPER  → LONG only   (price broke above upper band = bullish strength)
+//    UPPER_MID    → LONG only   (price above VWAP mid = bullish bias)
+//    LOWER_MID    → SHORT only  (price below VWAP mid = bearish bias)
+//    BELOW_LOWER  → SHORT only  (price broke below lower band = bearish strength)
 //
-//  ABOVE_UPPER  → SHORT only
-//                 15m = HH (strict — not LH) + 1m = HH or LH
+//  15m + 1m pivot confluence still required:
+//    LONG:  15m = HL or LL  +  1m = HL or LL  (micro-pullback entry within momentum)
+//    SHORT: 15m = HH or LH  +  1m = HH or LH  (micro-bounce rejected within momentum)
 //
-//  UPPER_MID    → SHORT or LONG
-//  LOWER_MID    → SHORT or LONG
-//                 SHORT: 15m = HH or LH  +  1m = HH or LH
-//                 LONG:  15m = HL or LL  +  1m = HL or LL
-//
-//  BELOW_LOWER  → LONG only
-//                 15m = HL or LL  +  1m = HL or LL
+//  4H structure shown in logs for context but does not block entries —
+//  zone alone determines allowed direction.
 //
 //  Drop filter (SHORT): price within 0.12% of 15m+1m pivot reference.
 //  Gap  filter (LONG):  consecutive 1m swing lows ≤ 0.50% apart.
@@ -496,57 +488,11 @@ function resolveSignal(state, zone, price) {
     return { direction: 'LONG', type: `${p15}+${p1m}` };
   }
 
-  // ── 4H STRUCTURE — PRIMARY direction + zone gate ──────────────
-  //
-  // 4H BULLISH:
-  //   Direction → LONG only (SHORT blocked entirely)
-  //   Zone      → only enter at discount zones: BELOW_LOWER (at lower band)
-  //               or LOWER_MID (price between lower band and VWAP mid)
-  //   Rationale → in a bull trend, buy when price dips back to value or oversold.
-  //               Entering at UPPER_MID / ABOVE_UPPER chases an extended move.
-  //
-  // 4H BEARISH:
-  //   Direction → SHORT only (LONG blocked entirely)
-  //   Zone      → only enter at premium zones: ABOVE_UPPER (at upper band)
-  //               or UPPER_MID (price between VWAP mid and upper band)
-  //   Rationale → in a bear trend, sell when price rallies back to value or overbought.
-  //               Entering at LOWER_MID / BELOW_LOWER fades an oversold reversal.
-  //
-  // 4H MIXED / UNKNOWN:
-  //   Fall back to 15m structure gate (original logic).
-  const struct4h  = get4hStructure(state, price);
-  const struct15m = get15mStructure(state, price);
-
-  if (struct4h === 'BULLISH') {
-    // Only LONG, only at discount VWAP zones
-    if (zone === 'BELOW_LOWER' || zone === 'LOWER_MID') return tryLong();
-    return null; // UPPER_MID / ABOVE_UPPER → no LONG entry in bull (chasing)
-  }
-
-  if (struct4h === 'BEARISH') {
-    // Only SHORT, only at premium VWAP zones
-    if (zone === 'ABOVE_UPPER' || zone === 'UPPER_MID') return tryShort();
-    return null; // LOWER_MID / BELOW_LOWER → no SHORT entry in bear (chasing)
-  }
-
-  // ── 4H MIXED / UNKNOWN → use 15m structure gate (original) ────
-  if (struct15m === 'BEARISH' && (is15Low || is1Low))   return null; // block LONG
-  if (struct15m === 'BULLISH' && (is15High || is1High)) return null; // block SHORT
-
-  // Both directions allowed — zone decides
-  if (zone === 'ABOVE_UPPER') {
-    if (p15 === 'HH' && is1High) {
-      if (isShortTooLate(price, state.last15mPivotPrice)) return null;
-      if (isShort1mTooLate(price, state.sh1m_1))         return null;
-      return { direction: 'SHORT', type: `${p15}+${p1m}` };
-    }
-    return null;
-  }
-  if (zone === 'BELOW_LOWER') return tryLong();
-  if (zone === 'UPPER_MID' || zone === 'LOWER_MID') {
-    const s = tryShort(); if (s) return s;
-    return tryLong();
-  }
+  // ── Zone = direction ───────────────────────────────────────────
+  // Upper band → LONG only.  Lower band → SHORT only.
+  // 4H structure is tracked and logged but does not gate entries here.
+  if (zone === 'ABOVE_UPPER' || zone === 'UPPER_MID') return tryLong();
+  if (zone === 'BELOW_LOWER' || zone === 'LOWER_MID') return tryShort();
 
   return null;
 }
@@ -691,7 +637,9 @@ async function analyze(symbol, log) {
       // Last 6 pivot labels from the sequence — shows exactly what TV SMC shows
       const pivotSeq  = st.pivots15m.slice(-6).map(x => `${x.label}@${x.price.toFixed(2)}`).join(' → ');
       const seq4hDiag = st.pivots4h.slice(-4).map(x => `${x.label}@${x.price.toFixed(2)}`).join('→');
-      log(`[V4-DIAG] ${symbol} zone=${diagZone} 4H=${struct4h}[${seq4hDiag}] 15m=${struct15} price=${diagBar.close.toFixed(4)} | seq=[${pivotSeq}] | 15m=${st.last15mPivotType||'none'}@${st.last15mPivotPrice?.toFixed(4)||'n/a'} sh=${st.sh15_1?.toFixed(4)}/${st.sh15_2?.toFixed(4)} sl=${st.sl15_1?.toFixed(4)}/${st.sl15_2?.toFixed(4)}${dropFromHigh} | 1m=${st.last1mPivotType||'none'}@${st.last1mPivotPrice?.toFixed(4)||'n/a'} | sl1m=${st.sl1m_1?.toFixed(4)}/${st.sl1m_2?.toFixed(4)} gap=${gapPct}%(${gapOk?'OK':'BLOCKED'}) | LONG=${struct4h==='BEARISH'||struct15==='BEARISH'?'BLOCKED':'ok'} SHORT=${struct4h==='BULLISH'||struct15==='BULLISH'?'BLOCKED':'ok'}`);
+      const isUpperZone = diagZone === 'ABOVE_UPPER' || diagZone === 'UPPER_MID';
+      const isLowerZone = diagZone === 'BELOW_LOWER' || diagZone === 'LOWER_MID';
+      log(`[V4-DIAG] ${symbol} zone=${diagZone} 4H=${struct4h}[${seq4hDiag}] 15m=${struct15} price=${diagBar.close.toFixed(4)} | seq=[${pivotSeq}] | 15m=${st.last15mPivotType||'none'}@${st.last15mPivotPrice?.toFixed(4)||'n/a'} sh=${st.sh15_1?.toFixed(4)}/${st.sh15_2?.toFixed(4)} sl=${st.sl15_1?.toFixed(4)}/${st.sl15_2?.toFixed(4)}${dropFromHigh} | 1m=${st.last1mPivotType||'none'}@${st.last1mPivotPrice?.toFixed(4)||'n/a'} | sl1m=${st.sl1m_1?.toFixed(4)}/${st.sl1m_2?.toFixed(4)} gap=${gapPct}%(${gapOk?'OK':'BLOCKED'}) | LONG=${isLowerZone?'BLOCKED(lower-zone)':'ok'} SHORT=${isUpperZone?'BLOCKED(upper-zone)':'ok'}`);
     }
   }
 
