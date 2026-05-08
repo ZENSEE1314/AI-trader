@@ -1743,7 +1743,7 @@
 
       // SMC Pro — Zeiierman-style full SMC indicator (clean, selective)
       smcPro: function(candles, lbL, lbR) {
-        lbL = lbL || 5; lbR = lbR || 2; // fast right lookback for near-real-time labels
+        lbL = lbL || 5; lbR = lbR || 1; // lbR=1 — label appears on the bar right after the pivot
         var EQL_THRESHOLD = 0.0004; // 0.04% tolerance — very strict equal highs/lows
         var pivotHighs = [], pivotLows = [];
         for (var i = lbL; i < candles.length - lbR; i++) {
@@ -2286,14 +2286,14 @@
         'algo zones': 'dtfxzones(10)',
         'dtfx algo': 'dtfxzones(10)',
         'zones': 'dtfxzones(10)',
-        'smc pro': 'smcpro(5, 2)',
-        'smc': 'smcpro(5, 2)',
-        'zeiierman': 'smcpro(5, 2)',
-        'bos': 'smcpro(5, 2)',
-        'choch': 'smcpro(5, 2)',
-        'order block': 'smcpro(5, 2)',
-        'ob': 'smcpro(5, 2)',
-        'pdh pdl': 'smcpro(5, 2)',
+        'smc pro': 'smcpro(5, 1)',
+        'smc': 'smcpro(5, 1)',
+        'zeiierman': 'smcpro(5, 1)',
+        'bos': 'smcpro(5, 1)',
+        'choch': 'smcpro(5, 1)',
+        'order block': 'smcpro(5, 1)',
+        'ob': 'smcpro(5, 1)',
+        'pdh pdl': 'smcpro(5, 1)',
         'vsa': 'vsa(5, 20)',
         'volume spread': 'vsa(5, 20)',
         'volume spread analysis': 'vsa(5, 20)',
@@ -2408,7 +2408,7 @@
             return { type: 'vsahistogram', label: 'VSA Histogram', vsaHistData: vh };
           }
           case 'smcpro': {
-            var sp = Calc.smcPro(candles, a[0] || 5, a[1] || 2);
+            var sp = Calc.smcPro(candles, a[0] || 5, a[1] || 1);
             return { type: 'overlay', label: 'SMC Pro', smcProData: sp };
           }
 
@@ -2454,7 +2454,7 @@
       atr:            { name: 'ATR',               formula: 'atr(14)' },
       ichimoku:       { name: 'Ichimoku',          formula: 'ichimoku(9, 26, 52, 26)' },
       psar:           { name: 'Parabolic SAR',     formula: 'psar(0.02, 0.2)' },
-      smcpro:         { name: 'SMC Pro',            formula: 'smcpro(5, 2)' },
+      smcpro:         { name: 'SMC Pro',            formula: 'smcpro(5, 1)' },
     };
 
     var INDICATOR_COLORS = {
