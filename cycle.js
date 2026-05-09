@@ -2157,53 +2157,85 @@ async function executeForAllUsers(pick) {
           // Prevents a second key from opening the same trade if INSERT later fails.
           executedUserSymbols.add(dedupKey);
 
-          // Wrap position lookup in its own try/catch.
-          // If getOpenPositions throws after a successful placeOrder, pos/posId stay null
-          // and we fall into the else-branch below which still INSERTs a DB record.
-          // Without this, a lookup failure would jump to the outer catch and skip the INSERT,
-          // leaving the position on Bitunix with no DB record (EXCHANGE ONLY).
+          // ── INSERT preliminary trade row IMMEDIATELY after placeOrder ──
+          // Order is now on Bitunix. The DB row MUST exist or the position
+          // becomes EXCHANGE ONLY (orphan). Done with intended values; the
+          // actual entry price + bitunix_position_id are filled in by the
+          // UPDATE below once the lookup succeeds. If lookup fails, the row
+          // still exists and trail-watchdog will reconcile.
+          const intendedSl = isTripleMA ? 0 : (slFmtBx || 0);
+          const intendedTpRef = bxTpPrice
+            ? bxTpPrice
+            : (isLong ? price * (1 + tpPricePct) : price * (1 - tpPricePct));
+          let insertedTradeId = null;
+          try {
+            const insertRes = await db.query(
+              `INSERT INTO trades (api_key_id, user_id, symbol, direction, entry_price, sl_price, tp_price, quantity, leverage, status,
+               trailing_sl_price, trailing_sl_last_step, tf_15m, tf_3m, tf_1m, market_structure, key_trailing_sl_step, bitunix_position_id, setup)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'OPEN', $10, 0, $11, $12, $13, $14, $15, $16, $17)
+               RETURNING id`,
+              [key.id, key.user_id, symbol, pick.direction, price,
+               intendedSl, parseFloat(intendedTpRef.toFixed(8)), qty, userLev, intendedSl,
+               null, pick.structure?.tf3m || null, pick.structure?.tf1m || null,
+               pick.marketStructure || null, userTrailStep, null,
+               pick.setupName || pick.setup || null]
+            );
+            insertedTradeId = insertRes[0]?.id || null;
+            userLog.trade(`Bitunix DB row inserted: id=${insertedTradeId} (intended entry=$${fmtPrice(price)} SL=$${intendedSl})`);
+          } catch (insertErr) {
+            userLog.error(`CRITICAL: Bitunix order placed but DB INSERT failed — orphan position created: ${insertErr.message}`);
+            await notify(`🚨 *ORPHAN ${symbol}*\nOrder on Bitunix but DB INSERT failed.\nUser: ${key.email}\n\`${insertErr.message.substring(0,200)}\``);
+          }
+
+          // ── Best-effort: lookup actual position to get fill price + positionId ──
           let pos = null, posId = null;
           try {
             await sleep(2000);
             const posRaw = await userClient.getOpenPositions(symbol);
-            // Handle bare array OR wrapped response (positionList / list)
             const posArr = Array.isArray(posRaw) ? posRaw
               : (posRaw?.positionList || posRaw?.list || (posRaw && typeof posRaw === 'object' ? [posRaw] : []));
             pos   = posArr.find(p => p.symbol === symbol) || null;
             posId = pos ? (pos.positionId || pos.id) : null;
           } catch (posLookupErr) {
-            userLog.error(`Bitunix getOpenPositions failed after order — will INSERT DB record with estimated entry: ${posLookupErr.message}`);
+            userLog.error(`Bitunix getOpenPositions failed after order — DB row already saved (id=${insertedTradeId}); trail-watchdog will reconcile: ${posLookupErr.message}`);
           }
           userLog.trade(`Bitunix position lookup: ${JSON.stringify(pos ? { id: posId, symbol: pos.symbol, side: pos.side, qty: pos.qty } : null)}`);
 
-          if (pos && posId) {
+          if (pos && posId && insertedTradeId) {
             // Recalculate SL from actual entry price to avoid stale-price rejection
             const actualEntry = parseFloat(pos.avgOpenPrice || pos.entryPrice || pos.avgPrice) || price;
 
             let slFmtActual = null;
             if (!isTripleMA) {
               if (isRangeBounce && pick.sl) {
-                // Range Bounce: SL is at the range wall — not relative to actual entry
                 slFmtActual = parseFloat(parseFloat(pick.sl).toFixed(8));
               } else {
-                // Normal SMC trades: recalculate SL from actual fill price
                 const actualSlPrice = isLong
                   ? actualEntry * (1 - slPricePct)
                   : actualEntry * (1 + slPricePct);
                 slFmtActual = parseFloat(actualSlPrice.toFixed(8));
               }
             }
+            const tpRef = (isScenarioA || isRangeBounce) && bxTpPrice
+              ? bxTpPrice
+              : isLong ? actualEntry * (1 + tpPricePct) : actualEntry * (1 - tpPricePct);
 
+            // Update DB row with actual entry / positionId / recalculated SL
+            try {
+              await db.query(
+                `UPDATE trades SET entry_price=$1, sl_price=$2, trailing_sl_price=$2, tp_price=$3, bitunix_position_id=$4 WHERE id=$5`,
+                [actualEntry, slFmtActual || 0, parseFloat(tpRef.toFixed(8)), posId, insertedTradeId]
+              );
+            } catch (updErr) {
+              userLog.error(`Bitunix UPDATE trade row failed (id=${insertedTradeId}): ${updErr.message}`);
+            }
+
+            // Place SL on exchange (best-effort, 3 retries)
             if (slFmtActual) {
               const tpNote = bxTpPrice ? ` TP=$${bxTpPrice} (hard close)` : '';
               userLog.trade(`Bitunix position confirmed: ${posId} entry=$${actualEntry} — setting SL=$${slFmtActual}${tpNote}...`);
               const tpSLPayload = { symbol, positionId: posId, slPrice: slFmtActual };
               if (bxTpPrice && (isScenarioA || isRangeBounce)) tpSLPayload.tpPrice = String(bxTpPrice);
-              // Retry SL placement up to 3 times. Silent first-attempt
-              // failures (rate limit, position not yet visible on exchange,
-              // transient API hiccups) caused some users to end up with a
-              // position that had NO SL order on Bitunix even though the
-              // DB recorded one. Backoff 1s, 2s.
               let slPlaced = false;
               let slLastErr = '';
               for (let attempt = 1; attempt <= 3; attempt++) {
@@ -2215,7 +2247,7 @@ async function executeForAllUsers(pick) {
                 } catch (e) {
                   slLastErr = e.message;
                   userLog.error(`Bitunix SL attempt ${attempt}/3 FAILED: ${e.message}`);
-                  if (attempt < 3) await sleep(attempt * 1000); // 1s, 2s backoff
+                  if (attempt < 3) await sleep(attempt * 1000);
                 }
               }
               if (!slPlaced) {
@@ -2230,36 +2262,9 @@ async function executeForAllUsers(pick) {
                 userLog.error(`Bitunix TP FAILED: ${e.message}`);
               }
             }
-
-            const tpRef = (isScenarioA || isRangeBounce) && bxTpPrice
-              ? bxTpPrice
-              : isLong ? actualEntry * (1 + tpPricePct) : actualEntry * (1 - tpPricePct);
-
-            await db.query(
-              `INSERT INTO trades (api_key_id, user_id, symbol, direction, entry_price, sl_price, tp_price, quantity, leverage, status,
-               trailing_sl_price, trailing_sl_last_step, tf_15m, tf_3m, tf_1m, market_structure, key_trailing_sl_step, bitunix_position_id, setup)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'OPEN', $10, 0, $11, $12, $13, $14, $15, $16, $17)`,
-              [key.id, key.user_id, symbol, pick.direction, actualEntry,
-               slFmtActual || 0, parseFloat(tpRef.toFixed(8)), qty, userLev,
-               slFmtActual || 0,
-               null, pick.structure?.tf3m || null, pick.structure?.tf1m || null,
-               pick.marketStructure || null, userTrailStep, posId || null,
-               pick.setupName || pick.setup || null]
-            );
           } else {
-            userLog.error(`Bitunix position not found after order — verify on exchange`);
-            await notify(`*Bitunix ${symbol}*\nOrder placed but position not found. Check Bitunix manually.`);
-
-            await db.query(
-              `INSERT INTO trades (api_key_id, user_id, symbol, direction, entry_price, sl_price, tp_price, quantity, leverage, status,
-               trailing_sl_price, trailing_sl_last_step, tf_15m, tf_3m, tf_1m, market_structure, key_trailing_sl_step, setup)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'OPEN', $10, 0, $11, $12, $13, $14, $15, $16)`,
-              [key.id, key.user_id, symbol, pick.direction, price,
-               parseFloat(slPrice.toFixed(8)), 0, qty, userLev, parseFloat(slPrice.toFixed(8)),
-               null, pick.structure?.tf3m || null, pick.structure?.tf1m || null,
-               pick.marketStructure || null, userTrailStep,
-               pick.setupName || pick.setup || null]
-            );
+            userLog.error(`Bitunix position not found after order (db_id=${insertedTradeId || 'no-row'}) — trail-watchdog will reconcile when position becomes visible`);
+            await notify(`*Bitunix ${symbol}*\nOrder placed; position lookup failed.\nDB row: ${insertedTradeId ? `id=${insertedTradeId}` : '*NOT SAVED — manual check required*'}\nUser: ${key.email}`);
           }
           userLog.trade(`Bitunix OK: ${key.email} ${symbol} ${pick.direction} x${userLev} qty=${qty}`);
           log(`Bitunix OK: ${key.email} ${symbol} ${pick.direction} x${userLev}`);
@@ -2269,8 +2274,11 @@ async function executeForAllUsers(pick) {
       } catch (err) {
         userLog.error(`User ${key.email} trade error: ${err.message}`);
         log(`User ${key.email} trade error: ${err.message}`);
-        // NOTE: not saving ERROR trades to DB — they pollute trade history with no useful data.
-        // Errors are visible in bot logs already.
+        // Errors that throw BEFORE placeOrder are correctly skipped (no exchange
+        // side-effect). Errors AFTER placeOrder are now caught locally inside the
+        // Bitunix branch (preliminary INSERT + best-effort lookup/SL), so the
+        // catch here only fires on pre-order failures. The DB row, when an order
+        // was placed, is guaranteed to exist.
       } finally {
         // Always release the process-level lock so the next cycle can re-enter.
         _openTradeInProgress.delete(`${key.user_id}:${sym}`);

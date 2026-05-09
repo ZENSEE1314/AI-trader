@@ -6,17 +6,25 @@
 //  Zone rules (VWAP daily 2σ bands):
 //
 //    ABOVE_UPPER  → SHORT only
-//                   15m must be HH (strict — strongest overbought signal)
-//                   1m  must be HH or LH (any high confirmation)
+//                   15m must be HH or LH (overbought / rejection at LH)
+//                   1m  must be LH (strict — sellers stepping in at lower high)
 //
 //    UPPER_MID    → SHORT or LONG
 //    LOWER_MID    → SHORT or LONG
-//                   SHORT: 15m = HH or LH  +  1m = HH or LH
-//                   LONG:  15m = HL or LL  +  1m = HL or LL
+//                   SHORT: 15m = LH (strict)  +  1m = LH (strict)
+//                   LONG:  15m = HL (strict)  +  1m = HL (strict)
 //
 //    BELOW_LOWER  → LONG only
-//                   15m must be HL or LL (any low)
-//                   1m  must be HL or LL (any low confirmation)
+//                   15m must be HL or LL (oversold / bounce at HL)
+//                   1m  must be HL (strict — buyers stepping in at higher low)
+//
+//  Strict pivot gate: LONG requires 1m HL, SHORT requires 1m LH.
+//  Continuation pivots (1m LL on LONG = falling knife, 1m HH on SHORT =
+//  shorting strength) are REJECTED — only reversal pivots fire entries.
+//
+//  Freshness gate: the last 1m pivot must be within MAX_PIVOT_AGE_MS of
+//  signal time. A stale pivot (e.g. 30 minutes old) is no longer a valid
+//  entry trigger — price has moved on.
 //
 //  SL  : LONG  → entry × (1 − CAPITAL_RISK/lev)
 //        SHORT → entry × (1 + CAPITAL_RISK/lev)
@@ -239,6 +247,13 @@ function isGoodVwapDistance(price, { lower, stddev }) {
   return stddev > 0 && distFromLower >= MIN_DIST_SIGMA;
 }
 
+// Freshness gate: the last confirmed 1m pivot must be within this window.
+// A pivot older than 20 minutes is stale — price has moved on and the
+// HL/LH no longer reflects current order flow. Per user direction:
+// "1min must find HL or LH" — fresh, not stale.
+const MAX_1M_PIVOT_AGE_MS  = 20 * 60 * 1000;  // 20 1m bars
+const MAX_15M_PIVOT_AGE_MS = 4 * 60 * 60 * 1000;  // 16 15m bars (~4h)
+
 // 1m gap: reject if HL/LL gap > 1.0% — means the swing lows are too far apart
 // (chasing a move already done). 1.0% balances quality vs frequency at SW1=3:
 // with 3-bar pivots, consecutive swing lows are typically 0.1-0.8% apart.
@@ -300,23 +315,40 @@ function resolveSignal(state, zone, price) {
   const p15 = state.last15mPivotType;  // 'HH' | 'HL' | 'LH' | 'LL' | null
   const p1m = state.last1mPivotType;   // 'HH' | 'HL' | 'LH' | 'LL' | null
 
+  // ── Strict 1m gate ────────────────────────────────────────────
+  // Per user direction: LONG requires 1m HL, SHORT requires 1m LH.
+  // Continuation pivots (LL on LONG, HH on SHORT) are rejected —
+  // those are momentum pivots, not reversal confirmations.
+  const long1m  = p1m === 'HL';
+  const short1m = p1m === 'LH';
+
+  // ── 15m direction context ─────────────────────────────────────
+  // Allow HH or LH for SHORT context (overbought / rejection),
+  // and HL or LL for LONG context (oversold / bounce). The strict
+  // pivot type comes from the 1m gate above.
   const is15High = p15 === 'HH' || p15 === 'LH';
   const is15Low  = p15 === 'HL' || p15 === 'LL';
-  const is1High  = p1m === 'HH' || p1m === 'LH';
-  const is1Low   = p1m === 'HL' || p1m === 'LL';
 
-  // ── ABOVE_UPPER: SHORT only — 15m must be HH (strict) ─────────
+  // ── Freshness gate ────────────────────────────────────────────
+  // Stale pivots (1m > 20 min, 15m > 4 h) no longer reflect current
+  // order flow — reject regardless of pivot type match.
+  const now = Date.now();
+  const fresh1m  = state.last1mPivotTime  > 0 && (now - state.last1mPivotTime)  <= MAX_1M_PIVOT_AGE_MS;
+  const fresh15m = state.last15mPivotTime > 0 && (now - state.last15mPivotTime) <= MAX_15M_PIVOT_AGE_MS;
+  if (!fresh1m || !fresh15m) return null;
+
+  // ── ABOVE_UPPER: SHORT only — 15m HH or LH + strict 1m LH ─────
   if (zone === 'ABOVE_UPPER') {
-    if (p15 === 'HH' && is1High) {
+    if (is15High && short1m) {
       if (isShortTooLate(price, state.last15mPivotPrice)) return null;
       return { direction: 'SHORT', type: `${p15}+${p1m}` };
     }
     return null;
   }
 
-  // ── BELOW_LOWER: LONG only — any LOW on both ──────────────────
+  // ── BELOW_LOWER: LONG only — 15m HL or LL + strict 1m HL ──────
   if (zone === 'BELOW_LOWER') {
-    if (is15Low && is1Low) {
+    if (is15Low && long1m) {
       if (!is1mGapOk(state.sl1m_1, state.sl1m_2)) return null;
       if (isChasing(price, state.sl1m_1)) return null;
       return { direction: 'LONG', type: `${p15}+${p1m}` };
@@ -324,13 +356,13 @@ function resolveSignal(state, zone, price) {
     return null;
   }
 
-  // ── UPPER_MID or LOWER_MID: both directions based on structure ─
+  // ── UPPER_MID or LOWER_MID: both directions, strict 1m gate ───
   if (zone === 'UPPER_MID' || zone === 'LOWER_MID') {
-    if (is15High && is1High) {
+    if (is15High && short1m) {
       if (isShortTooLate(price, state.last15mPivotPrice)) return null;
       return { direction: 'SHORT', type: `${p15}+${p1m}` };
     }
-    if (is15Low && is1Low) {
+    if (is15Low && long1m) {
       if (!is1mGapOk(state.sl1m_1, state.sl1m_2)) return null;
       if (isChasing(price, state.sl1m_1)) return null;
       return { direction: 'LONG', type: `${p15}+${p1m}` };
