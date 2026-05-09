@@ -964,6 +964,15 @@ async function analyze(symbol, log) {
     ? signal.price * (1 - slPct * 2)
     : signal.price * (1 + slPct * 2);
 
+  // ── TV-parity diagnostic log ──
+  // Prints every signal in a format the user can paste next to their
+  // TradingView SMC Pro chart to verify the bot saw the same pivots.
+  // Format: SYMBOL DIR zone=ZONE 15m=TYPE@$PRICE 1m=TYPE@$PRICE entry=$X sl=$X tp=$X
+  log(`[V4-SIGNAL-TV] ${symbol} ${signal.direction} zone=${signal.zone} ` +
+      `15m=${st.last15mPivotType}@$${st.last15mPivotPrice} ` +
+      `1m=${st.last1mPivotType}@$${st.last1mPivotPrice} ` +
+      `entry=$${signal.price} sl=$${sl.toFixed(8)} tp=$${tp.toFixed(8)}`);
+
   return {
     symbol,
     direction:  signal.direction,
