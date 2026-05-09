@@ -94,12 +94,20 @@ h4_bullish = h4_pivot == "HH" or h4_pivot == "HL"
 h4_bearish = h4_pivot == "LH" or h4_pivot == "LL"
 
 // ── Signal conditions ─────────────────────────────────────────
-// LONG: upper zone + bullish pivot + 4H not bearish
-bullPivot = pivotLabel == "HH" or pivotLabel == "HL"
-bearPivot = pivotLabel == "LL" or pivotLabel == "LH"
+// Pivot type decides direction — zone only blocks extremes.
+// HL forms BELOW VWAP (price dips to demand, then bounces) → LONG.
+// LH forms ABOVE VWAP (price rallies to supply, then rejects) → SHORT.
+// Old "upper zone only → long" logic missed every HL-in-lower-zone entry.
 
-longSignal  = upperZone and bullPivot and not h4_bearish and pivotIsHigh
-shortSignal = lowerZone and bearPivot and not h4_bullish and pivotIsLow
+// pivotLabel persists between bars — guard with pivotIsHigh / pivotIsLow
+// so the signal fires ONLY on the bar where the pivot is actually confirmed.
+longSignal  = not h4_bearish and zone != "BELOW_LOWER" and
+     ((pivotIsHigh and pivotLabel == "HH") or
+      (pivotIsLow  and pivotLabel == "HL"))
+
+shortSignal = not h4_bullish and zone != "ABOVE_UPPER" and
+     ((pivotIsLow  and pivotLabel == "LL") or
+      (pivotIsHigh and pivotLabel == "LH"))
 
 // ── Plot pivot labels ─────────────────────────────────────────
 if showPivots and pivotIsHigh

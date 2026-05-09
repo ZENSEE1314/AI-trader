@@ -179,8 +179,12 @@ if not na(_pl1m)
                   color=color.new(color.lime, 60), textcolor=color.white, size=size.tiny)
 
 // ── Signal Logic (matches resolveSignal() in bot) ─────────────────
-//  LONG:  upper zone + 15m HH/HL + 1m HH/HL + 4H not BEARISH
-//  SHORT: lower zone + 15m LL/LH + 1m LL/LH + 4H not BULLISH
+//  Pivot type decides direction — zone blocks only extremes:
+//  LONG:  15m HH/HL + 1m HH/HL + 4H not BEARISH + zone != BELOW_LOWER
+//  SHORT: 15m LL/LH + 1m LL/LH + 4H not BULLISH + zone != ABOVE_UPPER
+//
+//  WHY: HL forms BELOW VWAP (price dips to demand zone then bounces).
+//  Old code required upperZone for LONG — missed every HL-in-lower-zone entry.
 //  EXP-O: LONG blocked if 4H+15m both BULLISH (overbought — chasing)
 //         SHORT blocked if 4H+15m both BEARISH (oversold — chasing)
 
@@ -203,11 +207,11 @@ chaseOkLong  = not na(sh1m_1) and (close - sh1m_1) / sh1m_1 <= maxChasePct
 // Drop filter: SHORT entry within maxDropPct of 1m swing LOW
 dropOkShort  = not na(sl1m_1) and (sl1m_1 - close) / sl1m_1 <= maxDropPct
 
-// Final signals
-longSig  = upperZone and bull15 and bull1m and
+// Final signals — pivot type decides direction, zone only blocks extremes
+longSig  = zone != "BELOW_LOWER" and bull15 and bull1m and
            not longBlocked4h and not longBlockedExpO and chaseOkLong
 
-shortSig = lowerZone and bear15 and bear1m and
+shortSig = zone != "ABOVE_UPPER" and bear15 and bear1m and
            not shortBlocked4h and not shortBlockedExpO and dropOkShort
 
 // Plot BUY / SELL signals

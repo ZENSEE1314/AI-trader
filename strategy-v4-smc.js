@@ -490,11 +490,12 @@ function get15mStructure(state, currentPrice) {
 
 // ── Signal logic ───────────────────────────────────────────────
 //
-//  Zone = direction (momentum — trade WITH the VWAP trend):
-//    ABOVE_UPPER  → LONG only   (price broke above upper band = bullish strength)
-//    UPPER_MID    → LONG only   (price above VWAP = bullish bias)
-//    LOWER_MID    → SHORT only  (price below VWAP = bearish bias)
-//    BELOW_LOWER  → SHORT only  (price broke below lower band = bearish strength)
+//  Pivot type decides direction — zone gates extremes only:
+//    HH or HL pivot → tryLong()   (blocked only when zone = BELOW_LOWER)
+//    LL or LH pivot → tryShort()  (blocked only when zone = ABOVE_UPPER)
+//
+//  Why: HL often forms just BELOW VWAP (price dips to demand, then bounces).
+//  Old code routed LOWER_MID → tryShort(), which missed every HL-in-lower-zone LONG.
 //
 //  4H gate: LONG blocked if 4H=BEARISH; SHORT blocked if 4H=BULLISH.
 //  EXP-O:  LONG blocked if 4H=BULLISH && 15m=BULLISH (already overbought).
@@ -510,8 +511,9 @@ function resolveSignal(state, zone, price, vwap) {
   const p15 = state.last15mPivotType;
   const p1m = state.last1mPivotType;
 
-  // ── LONG: price above VWAP (UPPER_MID or ABOVE_UPPER) ─────────
-  // Momentum entry — price is holding above VWAP with confirmed bullish pivots.
+  // ── LONG: bullish pivot (HH or HL) anywhere except BELOW_LOWER ─
+  // HL forms when price dips to demand (often below VWAP) then bounces — that
+  // IS the entry point. Old zone=LOWER_MID→tryShort() routing missed all of them.
   // Block if 4H=BEARISH (don't long against the higher-TF downtrend).
   // EXP-O dual-bullish block: if BOTH 4H and 15m are BULLISH, the move is
   //   already extended — entering here means chasing the top, not a setup.
@@ -535,9 +537,9 @@ function resolveSignal(state, zone, price, vwap) {
     return { direction: 'LONG', type: `${p15}+${p1m}` };
   }
 
-  // ── SHORT: price below VWAP (LOWER_MID or BELOW_LOWER) ────────
-  // Momentum entry — price is holding below VWAP with confirmed bearish pivots.
-  // Block if 4H=BULLISH (don't short against the higher-TF uptrend).
+  // ── SHORT: bearish pivot (LL or LH) anywhere except ABOVE_UPPER ─
+  // LH forms when price rallies to supply (often above VWAP) then rejects — that
+  // IS the entry. Block if 4H=BULLISH (don't short against the higher-TF uptrend).
   // EXP-O dual-bearish block: if BOTH 4H and 15m are BEARISH, the move is
   //   already extended — entering here means chasing the bottom, not a setup.
   function tryShort() {
@@ -561,9 +563,14 @@ function resolveSignal(state, zone, price, vwap) {
     return { direction: 'SHORT', type: `${p15}+${p1m}` };
   }
 
-  // ── Zone decides direction (momentum: with-VWAP-trend) ────────
-  if (zone === 'ABOVE_UPPER' || zone === 'UPPER_MID')  return tryLong();
-  if (zone === 'LOWER_MID'   || zone === 'BELOW_LOWER') return tryShort();
+  // ── Pivot type decides direction; zone only blocks extremes ───
+  // NOTE: HL forms BELOW VWAP (price dips to demand then bounces) — must allow longs
+  //       in LOWER_MID. Only block when price is deeply extended: BELOW_LOWER for longs,
+  //       ABOVE_UPPER for shorts.
+  const isBullPivot = p15 === 'HH' || p15 === 'HL';
+  const isBearPivot = p15 === 'LL' || p15 === 'LH';
+  if (isBullPivot && zone !== 'BELOW_LOWER') return tryLong();
+  if (isBearPivot && zone !== 'ABOVE_UPPER') return tryShort();
   return null;
 }
 
