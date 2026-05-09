@@ -1742,22 +1742,22 @@ async function executeForAllUsers(pick) {
           return;
         }
 
-        // Per-symbol loss cooldown: if this user lost on this symbol in the last 4 hours, skip.
+        // Per-symbol cooldown: 2 hours after ANY close (WIN or LOSS) on this symbol.
         // Bypassed when adminOverride is active — admin fires, everyone follows.
         // Admin keys themselves are also always exempt.
         if (!isAdminKey && !adminOverride) {
-          const recentLoss = await db.query(
-            `SELECT id, closed_at FROM trades
-             WHERE user_id = $1 AND symbol = $2 AND status = 'LOSS'
-               AND closed_at > NOW() - INTERVAL '4 hours'
+          const recentClose = await db.query(
+            `SELECT id, status, closed_at FROM trades
+             WHERE user_id = $1 AND symbol = $2 AND status IN ('WIN', 'LOSS')
+               AND closed_at > NOW() - INTERVAL '2 hours'
              ORDER BY closed_at DESC LIMIT 1`,
             [key.user_id, symbol]
           );
-          if (recentLoss.length > 0) {
+          if (recentClose.length > 0) {
             _openTradeInProgress.delete(openLockKey);
-            const resumeAt = new Date(new Date(recentLoss[0].closed_at).getTime() + 4 * 3600 * 1000);
+            const resumeAt = new Date(new Date(recentClose[0].closed_at).getTime() + 2 * 3600 * 1000);
             const resumeStr = resumeAt.toISOString().replace('T', ' ').slice(0, 16) + ' UTC';
-            userLog.trade(`User ${key.email}: ${symbol} on 4h loss cooldown — resumes ${resumeStr}`);
+            userLog.trade(`User ${key.email}: ${symbol} on 2h post-${recentClose[0].status} cooldown — resumes ${resumeStr}`);
             return;
           }
         }
