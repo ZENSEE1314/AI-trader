@@ -235,6 +235,9 @@ async function runTrailCycle() {
 
       if (!positions.length) continue;
 
+      // Create client once per key — reused for all positions in this key's loop
+      const posClient = new BitunixClient({ apiKey, apiSecret });
+
       for (const pos of positions) {
         try {
           const qty = parseFloat(pos.qty || pos.size || pos.positionAmt || 0);
@@ -245,10 +248,19 @@ async function runTrailCycle() {
                         || (pos.side || '').toUpperCase() === 'LONG';
           const entry    = parseFloat(pos.avgOpenPrice || pos.entryPrice || pos.openPrice || 0);
           const leverage = parseFloat(pos.leverage || 20);
-          const upnl     = parseFloat(pos.unrealizedPNL || pos.unrealizedPnl || pos.unrealizedProfit || 0);
-          const margin   = parseFloat(pos.margin || pos.positionMargin || pos.initialMargin || pos.im || 0);
 
           if (entry === 0) continue;
+
+          // ── capitalPct via Binance live price (most reliable) ──
+          // Bitunix's `margin` field is often the NOTIONAL (qty × price), not
+          // the initial margin collateral. upnl/notional gives ~0.003% not 46%.
+          // Always compute from: price move × leverage via Binance mark price.
+          const livePrice = await getLivePrice(symbol);
+          if (!livePrice) continue;
+          const pricePct = isLong
+            ? (livePrice - entry) / entry
+            : (entry - livePrice) / entry;
+          const capitalPct = pricePct * leverage;
 
           // Look up DB trade — may not exist (orphan position)
           const dbTrade   = dbTradeMap.get(`${key.id}:${symbol}`);
@@ -259,21 +271,8 @@ async function runTrailCycle() {
             ? Math.max(inferPricePrec(dbTrade.sl_price), inferPricePrec(dbTrade.entry_price))
             : inferPricePrec(entry);
 
-          // Calculate capitalPct — prefer exchange margin data over our own formula
-          let capitalPct;
-          if (margin > 0 && upnl !== 0) {
-            capitalPct = upnl / margin;
-          } else {
-            const curPrice = await getLivePrice(symbol);
-            if (!curPrice) continue;
-            const pricePct = isLong
-              ? (curPrice - entry) / entry
-              : (entry - curPrice) / entry;
-            capitalPct = pricePct * leverage;
-          }
-
           const pctDisplay = `${capitalPct >= 0 ? '+' : ''}${(capitalPct * 100).toFixed(2)}%`;
-          log(`[DIAG] ${symbol} ${isLong ? 'LONG' : 'SHORT'} | entry=$${entry} | lev=${leverage}x | capital=${pctDisplay} | currentSL=$${currentSl} | DB=${dbTrade ? 'found' : 'ORPHAN'}`);
+          log(`[DIAG] ${symbol} ${isLong ? 'LONG' : 'SHORT'} | entry=$${entry} livePrice=$${livePrice} | lev=${leverage}x | capital=${pctDisplay} | currentSL=$${currentSl} | DB=${dbTrade ? 'found' : 'ORPHAN'}`);
 
           // ── Retro-adjust SL to 20% capital ────────────────
           // Standardise every open position's SL to 20% capital on the first
@@ -290,7 +289,7 @@ async function runTrailCycle() {
             if (needsAdjust && !_widened.has(symbol)) {
               _widened.add(symbol);
               log(`[20%-FIX] ${symbol} ${isLong ? 'LONG' : 'SHORT'}: SL $${currentSl.toFixed(pricePrec)} → $${targetSl.toFixed(pricePrec)} (normalising to 20% capital)`);
-              const ok = await updateSlBitunix(client, symbol, targetSl, pricePrec, dbTrade?.tp_price, pos);
+              const ok = await updateSlBitunix(posClient, symbol, targetSl, pricePrec, dbTrade?.tp_price, pos);
               if (ok && dbTrade) {
                 await db.query(
                   `UPDATE trades SET trailing_sl_price = $1, sl_price = $1 WHERE id = $2`,
@@ -306,27 +305,25 @@ async function runTrailCycle() {
             : isLong  ? Math.max(0, (currentSl / entry - 1) * leverage)
                       : Math.max(0, (1 - currentSl / entry) * leverage);
 
-          // Reconstruct current price from exchange margin data
-          const curPrice = isLong
-            ? entry * (1 + capitalPct / leverage)
-            : entry * (1 - capitalPct / leverage);
-
-          const trailResult = calculateTrailingStep(entry, curPrice, isLong, lastStep, leverage);
+          const trailResult = calculateTrailingStep(entry, livePrice, isLong, lastStep, leverage);
           if (!trailResult) {
-            log(`[DIAG] ${symbol} trail SKIP — ${pctDisplay} not yet at T1 (${leverage}x) or SL already ratcheted`);
+            log(`[DIAG] ${symbol} trail SKIP — ${pctDisplay} not yet at T1 (${leverage}x lv${(lastStep*100).toFixed(0)}% already locked)`);
             continue;
           }
+          log(`[DIAG] ${symbol} trail HIT — ${pctDisplay} → lock ${(trailResult.newLastStep*100).toFixed(0)}% | SL $${trailResult.newSlPrice.toFixed(pricePrec)}`);
 
           const bestSl   = trailResult.newSlPrice;
           const srcLabel = `trail(${pctDisplay}→lock${(trailResult.newLastStep * 100).toFixed(0)}%)`;
           const improved = currentSl === 0
             || (isLong ? bestSl > currentSl + 0.0001 : bestSl < currentSl - 0.0001);
-          if (!improved) continue;
+          if (!improved) {
+            log(`[DIAG] ${symbol} trail ALREADY RATCHETED — bestSL=$${bestSl.toFixed(pricePrec)} currentSL=$${currentSl.toFixed(pricePrec)}`);
+            continue;
+          }
 
           log(`${symbol} ${isLong ? 'LONG' : 'SHORT'} [${srcLabel}] SL: $${currentSl.toFixed(pricePrec)} → $${bestSl.toFixed(pricePrec)} | ${pctDisplay} capital`);
 
-          const client  = new BitunixClient({ apiKey, apiSecret });
-          const updated = await updateSlBitunix(client, symbol, bestSl, pricePrec, dbTrade?.tp_price, pos);
+          const updated = await updateSlBitunix(posClient, symbol, bestSl, pricePrec, dbTrade?.tp_price, pos);
 
           if (updated) {
             if (dbTrade) {
