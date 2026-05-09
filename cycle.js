@@ -18,6 +18,14 @@ const { log: bLog } = require('./bot-logger');
 const { getBinanceRequestOptions, getFetchOptions } = require('./proxy-agent');
 const { query: dbQuery } = require('./db');
 
+// ── Trail tier tables — single source of truth shared with trail-watchdog.js ──
+const {
+  TRAILING_TIERS_100X: TRAILING_TIERS,
+  TRAILING_TIERS_75X, TRAILING_TIERS_50X,
+  SAFETY_TRAIL_TRIGGER, SAFETY_TRAIL_LOCK,
+  setDynamicTiers, buildTierTable, tierTableForLev, calculateTrailingStep,
+} = require('./trail-tiers');
+
 // ── Trade outcome callback — agents hook in to track survival ──
 let _onTradeOutcome = null;
 function onTradeOutcome(fn) { _onTradeOutcome = fn; }
@@ -36,10 +44,6 @@ const HIGH_PRICE_SYMBOLS = new Set(['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT'])
 // V4 strategy constants — loaded from v4_config DB table on startup (admin-editable).
 // Falls back to these safe defaults when the DB row is missing.
 let CAPITAL_PER_TRADE = 0.10;
-
-// Dynamic trailing SL tier tables loaded from v4_config (null = use hardcoded defaults).
-// Shape: { '100': [{trigger, lock},...], '75': [...], '50': [...] }
-let _dynamicTslTiers = null;
 
 // ── TradingView webhook signal queue ──────────────────────────
 // Signals injected via /api/tv-webhook are stored here (keyed by symbol).
@@ -72,9 +76,10 @@ async function loadV4Config() {
     if (cfg.lev_SOLUSDT) TOKEN_LEVERAGE.SOLUSDT = parseInt(cfg.lev_SOLUSDT);
 
     // Build dynamic trailing SL tier tables from admin config.
-    // Falls back to null (hardcoded tables) if any key is missing.
+    // Pushed into trail-tiers.js via setDynamicTiers so both cycle.js
+    // and trail-watchdog.js use the exact same tables.
     const g = (k, def) => cfg[k] ? parseFloat(cfg[k]) : def;
-    _dynamicTslTiers = {
+    const dynamicTiers = {
       '100': buildTierTable(
         g('tsl_100x_t1_trig', 46), g('tsl_100x_t1_lock', 45),
         g('tsl_100x_t2_trig', 51), g('tsl_100x_t2_lock', 50),
@@ -94,10 +99,11 @@ async function loadV4Config() {
         g('tsl_50x_step', 11)
       ),
     };
+    setDynamicTiers(dynamicTiers);
 
-    const t100 = _dynamicTslTiers['100'];
-    const t75  = _dynamicTslTiers['75'];
-    const t50  = _dynamicTslTiers['50'];
+    const t100 = dynamicTiers['100'];
+    const t75  = dynamicTiers['75'];
+    const t50  = dynamicTiers['50'];
     console.log(`[V4 Config] Loaded — capital: ${(CAPITAL_PER_TRADE * 100).toFixed(0)}% | leverage: BTC=${TOKEN_LEVERAGE.BTCUSDT}x ETH=${TOKEN_LEVERAGE.ETHUSDT}x BNB=${TOKEN_LEVERAGE.BNBUSDT}x SOL=${TOKEN_LEVERAGE.SOLUSDT}x`);
     console.log(`[V4 Config] TSL tiers — 100x: T1=${t100[0].trigger*100}%→${t100[0].lock*100}% T2=${t100[1].trigger*100}%→${t100[1].lock*100}% T3=${t100[2].trigger*100}%→${t100[2].lock*100}% step=${g('tsl_100x_step',10)}%`);
     console.log(`[V4 Config] TSL tiers —  75x: T1=${t75[0].trigger*100}%→${t75[0].lock*100}%  T2=${t75[1].trigger*100}%→${t75[1].lock*100}%  T3=${t75[2].trigger*100}%→${t75[2].lock*100}%  step=${g('tsl_75x_step',10)}%`);
@@ -160,110 +166,9 @@ async function getActiveVersionParams() {
 // Taker fee: 0.04% entry + 0.04% exit = 0.08% notional both legs
 const TAKER_FEE_BOTH_LEGS = 0.0008;
 
-// Trailing SL tiers — System 5 (used by non-v2/v3 strategies via calculateTrailingStep)
-// 3-Timing active strategy uses calcTrail3Timing in strategy-3timing.js instead.
-//
-// System 5: initial SL = 10% capital, trail triggers at +46%, first lock = +45%
-//   +46% capital → lock +45%   gap = 1%
-//   +57% capital → lock +55%   gap = 10%
-//   +68% capital → lock +65%   gap = 10%
-//   … +10% SL every +11% capital gain
-//
-// At 20x leverage:  +10% capital = +0.5% price move
-// At 100x leverage: +10% capital = +0.1% price move
-//
-// trigger = capital % gain needed to activate (price % × leverage)
-// lock    = capital % above entry to lock the SL at
-// Per-user rule: trigger is exactly 1% above the lock at every tier
-// (e.g. +21% profit locks +20%, +31% locks +30%, +41% locks +40%, ...).
-// This table is used for HIGH-leverage trades (>= 100x — BTC, ETH).
-// First tier starts at +31% capital (user request — gives trade more room before locking).
-const TRAILING_TIERS = [
-  { trigger: 0.46, lock: 0.45 }, // +46% capital → SL locks at +45%   — 1% gap (first tier, 100x)
-  { trigger: 0.51, lock: 0.50 }, // +51% capital → SL locks at +50%   — 1% gap
-  { trigger: 0.61, lock: 0.60 }, // +61% capital → SL locks at +60%   — 1% gap
-  { trigger: 0.71, lock: 0.70 }, // +71% capital → SL locks at +70%   — 1% gap
-  { trigger: 0.81, lock: 0.80 }, // +81% capital → SL locks at +80%   — 1% gap
-  { trigger: 0.91, lock: 0.90 }, // +91% capital → SL locks at +90%   — 1% gap
-  { trigger: 1.01, lock: 1.00 }, // +101% capital → SL locks at +100% — 1% gap
-  { trigger: 1.11, lock: 1.10 }, // +111% capital → SL locks at +110% — 1% gap
-  { trigger: 1.21, lock: 1.20 }, // +121% capital → SL locks at +120% — 1% gap
-  { trigger: 1.51, lock: 1.50 }, // +151% capital → SL locks at +150% — 1% gap
-  { trigger: 2.01, lock: 2.00 }, // +201% capital → SL locks at +200% — 1% gap
-  { trigger: 3.01, lock: 3.00 }, // +301% capital → SL locks at +300% — 1% gap
-];
-
-// Per user direction for 50x tokens (SOL/BNB/XRP):
-// First tier at +16% → +15% (1% gap), then every +11% profit advances
-// the lock by +10%. The gap therefore widens by 1% each step
-// (16/15→1%, 27/25→2%, 38/35→3%, ...).
-const TRAILING_TIERS_50X = [
-  { trigger: 0.21, lock: 0.20 }, // +21% → +20% (first tier, 50x)
-  { trigger: 0.31, lock: 0.30 }, // +31% → +30%
-  { trigger: 0.38, lock: 0.35 }, // +38% → +35%
-  { trigger: 0.49, lock: 0.45 }, // +49% → +45%
-  { trigger: 0.60, lock: 0.55 }, // +60% → +55%
-  { trigger: 0.71, lock: 0.65 }, // +71% → +65%
-  { trigger: 0.82, lock: 0.75 }, // +82% → +75%
-  { trigger: 0.93, lock: 0.85 }, // +93% → +85%
-  { trigger: 1.04, lock: 0.95 }, // +104% → +95%
-  { trigger: 1.15, lock: 1.05 }, // +115% → +105%
-  { trigger: 1.26, lock: 1.15 }, // +126% → +115%
-  { trigger: 1.50, lock: 1.40 }, // +150% → +140%
-  { trigger: 2.00, lock: 1.90 }, // +200% → +190%
-  { trigger: 3.00, lock: 2.90 }, // +300% → +290%
-];
-
-// 75x tier table for V4 SMC alt coins (ADA/SOL/AVAX at 75x leverage):
-// Starts at +31% capital (vs 21% for 100x) — more room before first lock.
-// Each step: trigger +1% above lock, advancing every +10% capital gain.
-const TRAILING_TIERS_75X = [
-  { trigger: 0.31, lock: 0.30 }, // +31% → +30% (first tier, 75x)
-  { trigger: 0.41, lock: 0.40 }, // +41% → +40%
-  { trigger: 0.51, lock: 0.50 }, // +51% → +50%
-  { trigger: 0.61, lock: 0.60 }, // +61% → +60%
-  { trigger: 0.71, lock: 0.70 }, // +71% → +70%
-  { trigger: 0.81, lock: 0.80 }, // +81% → +80%
-  { trigger: 0.91, lock: 0.90 }, // +91% → +90%
-  { trigger: 1.01, lock: 1.00 }, // +101% → +100%
-  { trigger: 1.21, lock: 1.20 }, // +121% → +120%
-  { trigger: 1.51, lock: 1.50 }, // +151% → +150%
-  { trigger: 2.01, lock: 2.00 }, // +201% → +200%
-];
-
-// Build a full tier table from 3 admin-configured base tiers + a step size.
-// After tier 3 the table auto-extends up to 500% capital gain using the step.
-// All inputs are in capital % (integers, e.g. 46 means 46%).
-function buildTierTable(t1Trig, t1Lock, t2Trig, t2Lock, t3Trig, t3Lock, stepPct) {
-  const step = stepPct / 100;
-  const tiers = [
-    { trigger: t1Trig / 100, lock: t1Lock / 100 },
-    { trigger: t2Trig / 100, lock: t2Lock / 100 },
-    { trigger: t3Trig / 100, lock: t3Lock / 100 },
-  ];
-  // Auto-extend beyond tier 3 using the step size until 500% capital
-  let trig = t3Trig / 100;
-  let lock = t3Lock / 100;
-  while (trig < 5.0) {
-    trig = parseFloat((trig + step).toFixed(4));
-    lock = parseFloat((lock + step).toFixed(4));
-    tiers.push({ trigger: trig, lock });
-  }
-  return tiers;
-}
-
-function tierTableForLev(leverage) {
-  // Use admin-configured dynamic tiers when available (loaded from v4_config on startup).
-  if (_dynamicTslTiers) {
-    if (leverage >= 100) return _dynamicTslTiers['100'];
-    if (leverage >= 75)  return _dynamicTslTiers['75'];
-    return _dynamicTslTiers['50'];
-  }
-  // Fallback to hardcoded defaults
-  if (leverage >= 100) return TRAILING_TIERS;
-  if (leverage >= 75)  return TRAILING_TIERS_75X;
-  return TRAILING_TIERS_50X;
-}
+// Tier tables and trailing logic live in trail-tiers.js (imported above).
+// TRAILING_TIERS / TRAILING_TIERS_75X / TRAILING_TIERS_50X are imported as aliases.
+// buildTierTable / tierTableForLev / calculateTrailingStep come from the same module.
 
 function getTrailingSLConfig(leverage) {
   const t = tierTableForLev(leverage);
@@ -644,124 +549,8 @@ async function calcCandleTrailSl(symbol, isLong, currentSlPrice) {
   }
 }
 
-// calculateTrailingStep — capital%-based trailing SL.
-// Uses CAPITAL % (profit as % of margin = pricePct × leverage) for tier triggers.
-// Converts capital lock % back to price % when computing the new SL price.
-//
-// lastStep: last capital % lock applied — stored in DB as trailing_sl_last_step.
-//           Prevents SL from moving backwards.
-//
-// Tier logic (capital % = price % × leverage):
-//   +21% capital → lock SL at +20% capital above entry             1% gap
-//   +31% capital → lock SL at +30% capital above entry             1% gap
-//   +41% capital → lock SL at +40% capital above entry             1% gap
-//   ... every +10% capital gain advances the lock by +10% (gap stays 1%)
-//
-// Example — 20x leverage, BTC entry $90,000:
-//   +1.05% price (+21% capital) → SL moves to entry +1.0% (+20% capital)
-//   +3.0% price (+60% capital) → SL moves to entry + 1.5% ($91,350)
-// Trailing SL rules:
-//
-// Safety tier (+30%→+10%): at +30% capital profit, lock in +10% profit before
-//   the main trail activates. If the trade reverses after +30% you still exit
-//   with +10% capital gain instead of -25% loss. Always fires regardless of
-//   smcMode — both session types benefit from this early profit lock.
-//   Ratchet-safe: +0.10 > 0 (initial lastStep) so it flows through the normal
-//   ratchet check without any special sentinel handling.
-//
-// smcMode (+61%→+60%): during Asia/London/NY session opens, first lock jumps
-//   straight to +60% capital, skipping the 20–50% early tiers. Off-session uses
-//   the default table (first lock +20%).
-const SAFETY_TRAIL_TRIGGER = 0.20; // +20% capital → lock in profit
-const SAFETY_TRAIL_LOCK    = 0.10; // SL moves to +10% capital profit
-
-function calculateTrailingStep(entryPrice, currentPrice, isLong, lastStep, leverage = 20, userTrailStepPct = 0, smcMode = false) {
-  const pricePct = isLong
-    ? (currentPrice - entryPrice) / entryPrice
-    : (entryPrice - currentPrice) / entryPrice;
-
-  // Convert price move to capital % (profit relative to margin)
-  const capitalPct = pricePct * leverage;
-
-  // ── Safety tier: +30% capital → lock +10% profit ────────────
-  // Fires before the main trail activates. Always applies (SMC and off-session).
-  // The ratchet (+0.10 > 0 initial lastStep) handles it naturally — no special logic.
-  if (userTrailStepPct === 0 && capitalPct >= SAFETY_TRAIL_TRIGGER && lastStep < SAFETY_TRAIL_LOCK) {
-    const tiers = tierTableForLev(leverage);
-    const firstMainTrigger = smcMode
-      ? (tiers.find(t => t.lock >= 0.60)?.trigger ?? 0.61)
-      : tiers[0].trigger;
-    if (capitalPct < firstMainTrigger) {
-      // Pre-trail zone: lock in +10% profit
-      const lockPricePct = SAFETY_TRAIL_LOCK / leverage;
-      const newSlPrice = isLong
-        ? entryPrice * (1 + lockPricePct)
-        : entryPrice * (1 - lockPricePct);
-      return { stepped: true, newSlPrice, newLastStep: SAFETY_TRAIL_LOCK };
-    }
-  }
-
-  let bestLockCapitalPct = null;
-
-  if (userTrailStepPct > 0) {
-    // User custom trailing (step in capital %): fire at stepPct, lock one step behind
-    const stepPct = userTrailStepPct / 100;
-    if (capitalPct >= stepPct) {
-      const stepsAbove = Math.floor((capitalPct + 1e-10) / stepPct);
-      bestLockCapitalPct = (stepsAbove - 1) * stepPct;
-    }
-  } else {
-    // Fixed tiers — all thresholds in CAPITAL %. The table is leverage-
-    // aware: 50x tokens (SOL/BNB/XRP) use a gentler ladder than 100x
-    // tokens (BTC/ETH).
-    const tiers = tierTableForLev(leverage);
-    for (const tier of tiers) {
-      // SMC session mode: skip all tiers that lock below 60% capital.
-      // Session opens (Asia/London/NY) tend to run hard past 60%; locking
-      // at 20/30/40/50% exits these trades too early.
-      if (smcMode && tier.lock < 0.60) continue;
-      if (capitalPct >= tier.trigger) bestLockCapitalPct = tier.lock;
-    }
-    // Beyond last tier: extend with the same step-per-tier pattern.
-    // 100x table uses +10% trigger / +10% lock; 50x table uses +11% / +10%.
-    const lastTier = tiers[tiers.length - 1];
-    if (capitalPct > lastTier.trigger) {
-      const triggerStep = leverage <= 50 ? 0.11 : 0.10;
-      const lockStep    = 0.10;
-      const stepsAbove  = Math.floor((capitalPct - lastTier.trigger) / triggerStep);
-      const extraLock   = lastTier.lock + stepsAbove * lockStep;
-      if (extraLock > (bestLockCapitalPct || 0)) bestLockCapitalPct = extraLock;
-    }
-  }
-
-  if (bestLockCapitalPct === null) return null;
-  // Ratchet: SL only moves in profitable direction.
-  // lastStep may be negative (-0.10 safety sentinel) — any positive lock clears it.
-  if (bestLockCapitalPct <= lastStep) return null;
-
-  // ── Minimum first-lock: must clear fees + small profit ──────
-  // On the FIRST trailing step (lastStep === 0), ensure the locked SL is high enough
-  // that if hit it covers: entry taker + exit taker + estimated funding + a small profit.
-  // Fee cost in capital % = (taker_both_legs + funding_estimate) × leverage
-  //   20x:  (0.08% + 0.03%) × 20  =  2.2% capital in fees
-  //   100x: (0.08% + 0.03%) × 100 = 11.0% capital in fees
-  // Add MIN_PROFIT_BUFFER (5% capital) so there's always real profit left after fees.
-  if (lastStep === 0) {
-    const FEE_RATE  = TAKER_FEE_BOTH_LEGS + 0.0003; // entry+exit taker + one funding period
-    const feeCapitalPct    = FEE_RATE * leverage;
-    const MIN_PROFIT_BUFFER = 0.05;                  // 5% capital profit minimum
-    const minFirstLock = feeCapitalPct + MIN_PROFIT_BUFFER;
-    if (bestLockCapitalPct < minFirstLock) bestLockCapitalPct = minFirstLock;
-  }
-
-  // Convert capital lock % → price % for actual SL price
-  const lockPricePct = bestLockCapitalPct / leverage;
-  const newSlPrice = isLong
-    ? entryPrice * (1 + lockPricePct)
-    : entryPrice * (1 - lockPricePct);
-
-  return { stepped: true, newSlPrice, newLastStep: bestLockCapitalPct };
-}
+// calculateTrailingStep / SAFETY_TRAIL_TRIGGER / SAFETY_TRAIL_LOCK
+// imported from trail-tiers.js above — single source of truth.
 
 // ── PROFIT SPLIT: Credit 60% user, 40% platform fee ─────────
 // Admin accounts are fully exempt — no platform fee, 100% profit recorded as theirs.

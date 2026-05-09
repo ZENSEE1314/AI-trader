@@ -19,28 +19,40 @@ const { BitunixClient } = require('./bitunix-client');
 const { USDMClient } = require('binance');
 const { getFetchOptions, getBinanceRequestOptions } = require('./proxy-agent');
 const cryptoUtils = require('./crypto-utils');
-const { calcTrailingSLV3 } = require('./strategy-v3');
+const { calculateTrailingStep, setDynamicTiers, buildTierTable } = require('./trail-tiers');
 
-// Adapter: returns { newSl, capitalPct, milestone } expected by the
-// log/notify code below, or null when there's no improvement to lock in.
-// Wraps calcTrailingSLV3 — 15% capital initial SL (tight), trailing at
-// +21% → lock +20%, then +30/+40/... by floor(cap×10)/10.
-function calcV2TrailSL(entryPrice, currentPrice, isLong, leverage, currentSl) {
-  const side = isLong ? 'LONG' : 'SHORT';
-  const pricePct = isLong
-    ? (currentPrice - entryPrice) / entryPrice
-    : (entryPrice - currentPrice) / entryPrice;
-  const capitalPct = pricePct * leverage;
-  // Leverage-aware trigger: 50x trades (SOL/BNB/XRP) start trailing at
-  // +16% capital (lock +15%); 100x trades (BTC/ETH) start at +21% (lock
-  // +20%). Matches calcTrailingSLV3 and cycle.js TRAILING_TIERS_50X.
-  const TRAIL_ON_CAP = leverage <= 50 ? 0.16 : 0.21;
-  if (capitalPct < TRAIL_ON_CAP) return null;
-  const newSl = calcTrailingSLV3(entryPrice, currentPrice, side, leverage);
-  const milestone = leverage <= 50
-    ? 0.15 + Math.floor((capitalPct - 0.16 + 1e-9) / 0.11) * 0.10
-    : Math.floor((capitalPct - 0.01 + 1e-9) * 10) / 10;
-  return { newSl, capitalPct, milestone };
+// Load TSL tier config from v4_config DB table — same tables cycle.js uses.
+// Falls back to trail-tiers.js hardcoded defaults when DB is unavailable.
+async function loadTierConfig() {
+  try {
+    const rows = await db.query('SELECT key, value FROM v4_config');
+    const cfg = {};
+    for (const r of rows) cfg[r.key] = r.value;
+    const g = (k, def) => cfg[k] ? parseFloat(cfg[k]) : def;
+    setDynamicTiers({
+      '100': buildTierTable(
+        g('tsl_100x_t1_trig', 46), g('tsl_100x_t1_lock', 45),
+        g('tsl_100x_t2_trig', 51), g('tsl_100x_t2_lock', 50),
+        g('tsl_100x_t3_trig', 61), g('tsl_100x_t3_lock', 60),
+        g('tsl_100x_step', 10)
+      ),
+      '75': buildTierTable(
+        g('tsl_75x_t1_trig', 31), g('tsl_75x_t1_lock', 30),
+        g('tsl_75x_t2_trig', 41), g('tsl_75x_t2_lock', 40),
+        g('tsl_75x_t3_trig', 51), g('tsl_75x_t3_lock', 50),
+        g('tsl_75x_step', 10)
+      ),
+      '50': buildTierTable(
+        g('tsl_50x_t1_trig', 21), g('tsl_50x_t1_lock', 20),
+        g('tsl_50x_t2_trig', 31), g('tsl_50x_t2_lock', 30),
+        g('tsl_50x_t3_trig', 38), g('tsl_50x_t3_lock', 35),
+        g('tsl_50x_step', 11)
+      ),
+    });
+    log('Tier config loaded from v4_config DB');
+  } catch (e) {
+    log(`Tier config load failed — using hardcoded defaults: ${e.message}`);
+  }
 }
 
 const INTERVAL_MS = 15 * 1000;
@@ -289,15 +301,24 @@ async function runTrailCycle() {
             }
           }
 
-          const v2Result = calcV2TrailSL(entry, isLong ? entry * (1 + capitalPct / leverage) : entry * (1 - capitalPct / leverage), isLong, leverage, currentSl);
-          if (!v2Result) {
-            const trailOnPct = leverage <= 50 ? 16 : 21;
-            log(`[DIAG] ${symbol} trail SKIP — ${pctDisplay} < +${trailOnPct}% (${leverage}x) or SL already at milestone`);
+          // Derive lastStep (capital %) from the stored SL price so the ratchet works correctly.
+          const lastStep = currentSl === 0 ? 0
+            : isLong  ? Math.max(0, (currentSl / entry - 1) * leverage)
+                      : Math.max(0, (1 - currentSl / entry) * leverage);
+
+          // Reconstruct current price from exchange margin data
+          const curPrice = isLong
+            ? entry * (1 + capitalPct / leverage)
+            : entry * (1 - capitalPct / leverage);
+
+          const trailResult = calculateTrailingStep(entry, curPrice, isLong, lastStep, leverage);
+          if (!trailResult) {
+            log(`[DIAG] ${symbol} trail SKIP — ${pctDisplay} not yet at T1 (${leverage}x) or SL already ratcheted`);
             continue;
           }
 
-          const bestSl   = v2Result.newSl;
-          const srcLabel = `trail(+${(v2Result.capitalPct*100).toFixed(1)}%→lock${(v2Result.milestone*100).toFixed(0)}%)`;
+          const bestSl   = trailResult.newSlPrice;
+          const srcLabel = `trail(${pctDisplay}→lock${(trailResult.newLastStep * 100).toFixed(0)}%)`;
           const improved = currentSl === 0
             || (isLong ? bestSl > currentSl + 0.0001 : bestSl < currentSl - 0.0001);
           if (!improved) continue;
@@ -319,7 +340,7 @@ async function runTrailCycle() {
               `📈 *Trail SL Moved*\n` +
               `*${symbol}* ${isLong ? 'LONG' : 'SHORT'}${dbTrade ? '' : ' ⚠️ orphan'}\n` +
               `SL: \`$${currentSl.toFixed(pricePrec)}\` → \`$${bestSl.toFixed(pricePrec)}\`\n` +
-              `Profit: +${(v2Result.capitalPct * 100).toFixed(1)}% capital | locked ${(v2Result.milestone * 100).toFixed(0)}%`
+              `Profit: ${pctDisplay} capital | locked ${(trailResult.newLastStep * 100).toFixed(0)}%`
             );
           } else {
             log(`✗ ${symbol} SL update FAILED`);
@@ -355,10 +376,15 @@ async function runTrailCycle() {
         const profitPct  = isLong ? (curPrice - entryPrice) / entryPrice : (entryPrice - curPrice) / entryPrice;
         const capitalPct = profitPct * leverage;
 
-        const v2Result = calcV2TrailSL(entryPrice, curPrice, isLong, leverage, currentSl);
-        if (!v2Result) continue;
+        const lastStep = currentSl === 0 ? 0
+          : isLong  ? Math.max(0, (currentSl / entryPrice - 1) * leverage)
+                    : Math.max(0, (1 - currentSl / entryPrice) * leverage);
 
-        const bestSl  = v2Result.newSl;
+        const trailResult = calculateTrailingStep(entryPrice, curPrice, isLong, lastStep, leverage);
+        if (!trailResult) continue;
+
+        const bestSl   = trailResult.newSlPrice;
+        const capPctDisplay = `${capitalPct >= 0 ? '+' : ''}${(capitalPct * 100).toFixed(2)}%`;
         const improved = currentSl === 0 || (isLong ? bestSl > currentSl + 0.0001 : bestSl < currentSl - 0.0001);
         if (!improved) continue;
 
@@ -370,7 +396,7 @@ async function runTrailCycle() {
           await notify(
             `📈 *Trail SL Moved*\n*${trade.symbol}* ${isLong ? 'LONG' : 'SHORT'}\n` +
             `SL: \`$${currentSl.toFixed(pricePrec)}\` → \`$${bestSl.toFixed(pricePrec)}\`\n` +
-            `Profit: +${(v2Result.capitalPct * 100).toFixed(1)}% capital | locked ${(v2Result.milestone * 100).toFixed(0)}%`
+            `Profit: ${capPctDisplay} capital | locked ${(trailResult.newLastStep * 100).toFixed(0)}%`
           );
         }
       } catch (e) {
@@ -482,10 +508,19 @@ async function runOrphanGuard() {
   }
 }
 
-log('Trail watchdog started — 15s interval | V2 milestone trail | activates@31%cap | locks 30→40→50…% every 10% step');
+log('Trail watchdog started — 15s interval | tier trail (100x:46%→45% / 75x:31%→30% / 50x:21%→20%) + safety@20%→10%');
 log('Orphan guard started — 2min interval | auto-close unmanaged positions > -25% capital');
-runTrailCycle();
-setInterval(runTrailCycle, INTERVAL_MS);
+// Load tier config before first cycle so dynamic tables are ready
+loadTierConfig().then(() => {
+  runTrailCycle();
+  setInterval(runTrailCycle, INTERVAL_MS);
+});
+
+// Stagger orphan guard by 30s so it doesn't overlap with first trail cycle
+setTimeout(() => {
+  runOrphanGuard();
+  setInterval(runOrphanGuard, ORPHAN_CHECK_INTERVAL);
+}, 30000);
 
 // Stagger orphan guard by 30s so it doesn't overlap with first trail cycle
 setTimeout(() => {
