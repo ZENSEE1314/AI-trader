@@ -131,7 +131,16 @@ let lastBitunixSync = 0;
 
 // Consecutive-loss pause: tracks losses per api_key_id in-memory.
 // Resets to 0 on WIN. On 2nd consecutive LOSS, key is paused 4 hours.
-const _consecLosses = new Map(); // api_key_id → count
+const _consecLosses = new Map(); // api_key_id → { count, lastLossAt }
+
+// Per-symbol loss cooldown: symbol loses → blocked 4h for that symbol specifically.
+// Key: `${userId}:${symbol}` → timestamp (ms) when block expires.
+const _symbolLossCooldown = new Map();
+
+// Signal-type loss tracker: if same signal type loses twice on same symbol,
+// block it for 24h so the bot doesn't repeat the same losing pattern.
+// Key: `${symbol}:${direction}:${pivotType}` → { count, blockUntil }
+const _signalLossTracker = new Map();
 
 // ── SL/TP Config ──────────────────────────────────────────
 // System 5 — initial SL = 25% capital (margin).
@@ -1360,6 +1369,18 @@ async function main() {
         continue;
       }
 
+      // ── Signal-type loss blocker ───────────────────────────────
+      // If the same pivot+direction combo has lost ≥ 2 times, block it for 24h.
+      // Prevents the bot from repeating the exact same losing pattern.
+      const sigPivot  = pick.type || pick.pivot || pick.setup || 'unknown';
+      const sigKey    = `${pick.symbol}:${pick.direction}:${sigPivot}`;
+      const sigRecord = _signalLossTracker.get(sigKey);
+      if (sigRecord && sigRecord.blockUntil > Date.now()) {
+        const resumeStr = new Date(sigRecord.blockUntil).toISOString().replace('T', ' ').slice(0, 16) + ' UTC';
+        bLog.trade(`BLOCKED: ${pick.symbol} ${pick.direction} [${sigPivot}] — lost ${sigRecord.count}x, blocked until ${resumeStr}`);
+        continue;
+      }
+
       // Backtest gate DISABLED per user direction.
       // Reasoning: the gate blocks any strategy whose 30-day historical
       // WR is below 50 %, which silenced the bot entirely while no
@@ -1742,22 +1763,33 @@ async function executeForAllUsers(pick) {
           return;
         }
 
-        // Per-symbol cooldown: 2 hours after ANY close (WIN or LOSS) on this symbol.
+        // Per-symbol LOSS cooldown: 4 hours after a LOSS on this symbol.
         // Bypassed when adminOverride is active — admin fires, everyone follows.
         // Admin keys themselves are also always exempt.
         if (!isAdminKey && !adminOverride) {
-          const recentClose = await db.query(
-            `SELECT id, status, closed_at FROM trades
-             WHERE user_id = $1 AND symbol = $2 AND status IN ('WIN', 'LOSS')
-               AND closed_at > NOW() - INTERVAL '2 hours'
+          // In-memory fast check first (avoids DB query each cycle)
+          const cooldownKey = `${key.user_id}:${symbol}`;
+          const memBlock = _symbolLossCooldown.get(cooldownKey);
+          if (memBlock && Date.now() < memBlock) {
+            _openTradeInProgress.delete(openLockKey);
+            const resumeStr = new Date(memBlock).toISOString().replace('T', ' ').slice(0, 16) + ' UTC';
+            userLog.trade(`User ${key.email}: ${symbol} on 4h loss cooldown (in-memory) — resumes ${resumeStr}`);
+            return;
+          }
+          // DB check for LOSS within last 4 hours (covers bot restarts)
+          const recentLoss = await db.query(
+            `SELECT id, closed_at FROM trades
+             WHERE user_id = $1 AND symbol = $2 AND status = 'LOSS'
+               AND closed_at > NOW() - INTERVAL '4 hours'
              ORDER BY closed_at DESC LIMIT 1`,
             [key.user_id, symbol]
           );
-          if (recentClose.length > 0) {
+          if (recentLoss.length > 0) {
             _openTradeInProgress.delete(openLockKey);
-            const resumeAt = new Date(new Date(recentClose[0].closed_at).getTime() + 2 * 3600 * 1000);
+            const resumeAt = new Date(new Date(recentLoss[0].closed_at).getTime() + 4 * 3600 * 1000);
+            _symbolLossCooldown.set(cooldownKey, resumeAt.getTime()); // cache in memory
             const resumeStr = resumeAt.toISOString().replace('T', ' ').slice(0, 16) + ' UTC';
-            userLog.trade(`User ${key.email}: ${symbol} on 2h post-${recentClose[0].status} cooldown — resumes ${resumeStr}`);
+            userLog.trade(`User ${key.email}: ${symbol} on 4h loss cooldown — resumes ${resumeStr}`);
             return;
           }
         }
@@ -3200,21 +3232,57 @@ async function syncTradeStatus() {
             );
             bLog.trade(`DB synced: ${trade.symbol} -> ${status} gross=$${grossPnl} fee=$${tradingFee} funding=$${fundingFee} net=$${pnlUsdt} exit=$${fmtPrice(exitPrice)}`);
 
-            // ── Consecutive-loss pause: 2 losses in a row → 4-hour cooldown ──
-            // Guard: two losses in the SAME sync cycle (e.g. two old trades closing
-            // together on restart) must not stack. We track the timestamp of the
-            // last loss and only increment streak if the previous loss was > 60s ago.
+            // ── On LOSS: per-symbol 4h cooldown + signal-type block ──────
             try {
-              const keyId = trade.api_key_id;
+              const keyId  = trade.api_key_id;
+              const sym    = trade.symbol;
+              const dir    = trade.direction;
+              const pivot  = trade.setup || 'unknown'; // e.g. "HL+HL" or "LH+LH"
+              const now    = Date.now();
+
               if (status === 'WIN') {
+                // Reset consecutive-loss streak on win
                 _consecLosses.set(keyId, { count: 0, lastLossAt: 0 });
               } else {
-                const prev = _consecLosses.get(keyId) || { count: 0, lastLossAt: 0 };
-                const now = Date.now();
-                const sameSync = (now - prev.lastLossAt) < 60_000; // within 60s = same cycle
-                const streak = sameSync ? prev.count : prev.count + 1;
+                // ── 1. Per-symbol 4h cooldown (new — was 2h any-close) ──
+                // Block this symbol from trading for 4 hours after a LOSS.
+                const cdKey     = `${trade.user_id}:${sym}`;
+                const cdExpires = now + 4 * 3600 * 1000;
+                _symbolLossCooldown.set(cdKey, cdExpires);
+                const cdStr = new Date(cdExpires).toISOString().replace('T', ' ').slice(0, 16) + ' UTC';
+                bLog.trade(`[LOSS-CD] ${sym} blocked 4h for user ${trade.user_id} — resumes ${cdStr}`);
+                await notify(
+                  `🔴 *${sym} Loss — 4h Cooldown*\n` +
+                  `Direction: ${dir} | PnL: \`$${pnlUsdt.toFixed(2)}\`\n` +
+                  `${sym} will NOT trade again until ${cdStr}`
+                );
+
+                // ── 2. Signal-type tracker: block after 2 losses of same type ──
+                const sigKey = `${sym}:${dir}:${pivot}`;
+                const prev   = _signalLossTracker.get(sigKey) || { count: 0, blockUntil: 0 };
+                const sameSync = (now - (prev.lastLossAt || 0)) < 60_000;
+                const newCount = sameSync ? prev.count : prev.count + 1;
+                if (newCount >= 2) {
+                  const blockUntil = now + 24 * 3600 * 1000;
+                  _signalLossTracker.set(sigKey, { count: 0, blockUntil, lastLossAt: now });
+                  const blkStr = new Date(blockUntil).toISOString().replace('T', ' ').slice(0, 16) + ' UTC';
+                  bLog.trade(`[SIG-BLOCK] ${sym} ${dir} [${pivot}] lost ${newCount}x — blocked 24h until ${blkStr}`);
+                  await notify(
+                    `🚫 *Signal Blocked — 2 Losses Same Type*\n` +
+                    `${sym} ${dir} pivot type: \`${pivot}\`\n` +
+                    `Blocked for 24h until ${blkStr}`
+                  );
+                } else {
+                  _signalLossTracker.set(sigKey, { count: newCount, blockUntil: prev.blockUntil, lastLossAt: now });
+                  bLog.trade(`[SIG-TRACK] ${sym} ${dir} [${pivot}] loss count=${newCount}/2`);
+                }
+
+                // ── 3. Consecutive-loss pause (whole key after 2 across any symbol) ──
+                const prevCons  = _consecLosses.get(keyId) || { count: 0, lastLossAt: 0 };
+                const sameSyncC = (now - prevCons.lastLossAt) < 60_000;
+                const streak    = sameSyncC ? prevCons.count : prevCons.count + 1;
                 _consecLosses.set(keyId, { count: streak, lastLossAt: now });
-                bLog.trade(`[CONSEC-LOSS] Key #${keyId} streak=${streak}${sameSync ? ' (same-cycle, not stacked)' : ''} after LOSS on ${trade.symbol}`);
+                bLog.trade(`[CONSEC-LOSS] Key #${keyId} streak=${streak}${sameSyncC ? ' (same-cycle)' : ''} after LOSS on ${sym}`);
                 if (streak >= 2) {
                   const cooldownUntil = new Date(now + 4 * 3600 * 1000);
                   await db.query(
@@ -3227,14 +3295,14 @@ async function syncTradeStatus() {
                   await notify(
                     `⏸️ *Trading Paused — 2 Consecutive Losses*\n` +
                     `Key #${keyId}\n` +
-                    `Last loss: *${trade.symbol}* net=$${pnlUsdt.toFixed(2)}\n` +
+                    `Last loss: *${sym}* net=$${pnlUsdt.toFixed(2)}\n` +
                     `Cooldown until: \`${untilStr}\`\n` +
                     `Trading resumes automatically after 4 hours.`
                   );
                 }
               }
             } catch (e) {
-              bLog.error(`[CONSEC-LOSS] Tracking error: ${e.message}`);
+              bLog.error(`[LOSS-TRACK] Tracking error: ${e.message}`);
             }
 
             // Notify agents of trade outcome (for survival system)
