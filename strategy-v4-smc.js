@@ -540,23 +540,23 @@ function resolveSignal(state, zone, price, vwap) {
     return { direction: 'LONG', type: `${p15}+${p1m}` };
   }
 
-  // ── SHORT: bearish pivot (LL or LH) anywhere except ABOVE_UPPER ─
-  // LH forms when price rallies to supply (often above VWAP) then rejects — that
-  // IS the entry. Block if 4H=BULLISH (don't short against the higher-TF uptrend).
-  // 15m BULLISH recovery block: if 15m structure is making HLs (bullish), do NOT
-  //   short into the bounce — that's the "short in no place" mistake the chart shows.
-  // EXP-O dual-bearish block: if BOTH 4H and 15m are BEARISH, move is already
-  //   extended — entering here means chasing the bottom, not a setup.
+  // ── SHORT: any swing HIGH (HH or LH) — both are supply zone entries ──
+  // HH = new swing high = price touched supply and may reverse → SHORT
+  // LH = lower swing high = price failed to reach previous high → SHORT
+  // Both are valid: price is AT A HIGH, sell into that.
+  // Skip if 4H=BULLISH (strong uptrend — highs tend to break out, not reverse).
+  // Skip if 15m structure is BULLISH (HLs forming = recovery bounce — don't short the bounce).
+  // EXP-O dual-bearish block: if BOTH 4H and 15m BEARISH, already oversold = chasing.
   function tryShort() {
     const s4h   = get4hStructure(state, price);
     const s15chk = get15mStructure(state, price);
     if (s4h === 'BULLISH') return null;          // no short against 4H uptrend
     if (s15chk === 'BULLISH') return null;       // 15m recovering (HLs) — don't short the bounce
     if (s4h === 'BEARISH' && s15chk === 'BEARISH') return null;  // EXP-O: already oversold
-    // LH-only entry: sell only at the rejection (lower high), not at the breakdown (LL).
-    // LL = price at swing bottom = chasing. LH = price bounced to supply then rejected = entry.
-    const isBear15 = p15 === 'LH';
-    const isBear1m = p1m === 'LH';
+    // SHORT on any swing HIGH (HH or LH) — price is at supply zone.
+    // LL = price at swing low = too late to short.
+    const isBear15 = p15 === 'LH' || p15 === 'HH';
+    const isBear1m = p1m === 'LH' || p1m === 'HH';
     if (!isBear15 || !isBear1m) return null;
     // Chase filter: don't enter if price already dropped > MAX_SHORT_DROP_PCT below the 1m swing low
     if (isShortTooLate(price, state.last15mPivotPrice)) return null;
@@ -574,9 +574,11 @@ function resolveSignal(state, zone, price, vwap) {
   // NOTE: HL forms BELOW VWAP (price dips to demand then bounces) — must allow longs
   //       in LOWER_MID. Only block when price is deeply extended: BELOW_LOWER for longs,
   //       ABOVE_UPPER for shorts.
-  // Only dispatch on HL (long) or LH (short) — pullback entries only.
+  // HL = price at demand zone → LONG
+  // HH or LH = price at supply zone (swing high) → SHORT
+  // LL = price already at the bottom = skip (no entry)
   const isBullPivot = p15 === 'HL';
-  const isBearPivot = p15 === 'LH';
+  const isBearPivot = p15 === 'HH' || p15 === 'LH';
   if (isBullPivot && zone !== 'BELOW_LOWER') return tryLong();
   if (isBearPivot && zone !== 'ABOVE_UPPER') return tryShort();
   return null;
@@ -803,12 +805,12 @@ async function analyze(symbol, log) {
               }
             } else {
               // SHORT
-              const isHigh15 = p15 === 'LH';
-              const isHigh1m = p1m === 'LH';
+              const isHigh15 = p15 === 'LH' || p15 === 'HH';
+              const isHigh1m = p1m === 'LH' || p1m === 'HH';
               if (!isHigh15) {
-                cancelReason = `15m pivot flipped to ${p15} — need LH for SHORT (sell rejection, not breakdown)`;
+                cancelReason = `15m pivot flipped to ${p15} — need HH or LH for SHORT (sell at swing high)`;
               } else if (!isHigh1m) {
-                cancelReason = `1m pivot flipped to ${p1m} — need LH for SHORT (sell rejection, not breakdown)`;
+                cancelReason = `1m pivot flipped to ${p1m} — need HH or LH for SHORT (sell at swing high)`;
               } else if (isShortTooLate(entryPrice, st.last15mPivotPrice)) {
                 const d = st.last15mPivotPrice ? ((st.last15mPivotPrice - entryPrice) / st.last15mPivotPrice * 100).toFixed(3) : 'n/a';
                 cancelReason = `15m drop=${d}% already past pivot (limit=${MAX_SHORT_DROP_PCT}%)`;
