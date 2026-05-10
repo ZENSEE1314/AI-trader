@@ -524,9 +524,10 @@ function resolveSignal(state, zone, price, vwap) {
     // 4H bearish BUT 15m bullish → allow: price is bouncing from demand, HL is valid entry.
     if (s4h === 'BEARISH' && s15chk !== 'BULLISH') return null;
     if (s4h === 'BULLISH' && s15chk === 'BULLISH') return null;  // EXP-O: already overbought
-    // Bullish pivot confirmation: both timeframes must show HH or HL
-    const isBull15 = p15 === 'HH' || p15 === 'HL';
-    const isBull1m = p1m === 'HH' || p1m === 'HL';
+    // HL-only entry: buy only at the pullback (higher low), not at the breakout (HH).
+    // HH = price at swing peak = chasing. HL = price dipped to demand then bounced = entry.
+    const isBull15 = p15 === 'HL';
+    const isBull1m = p1m === 'HL';
     if (!isBull15 || !isBull1m) return null;
     // Chase filter: don't enter if price already moved > MAX_CHASE_PCT above the 1m swing high
     if (isChasing(price, state.sh1m_1)) return null;
@@ -552,9 +553,10 @@ function resolveSignal(state, zone, price, vwap) {
     if (s4h === 'BULLISH') return null;          // no short against 4H uptrend
     if (s15chk === 'BULLISH') return null;       // 15m recovering (HLs) — don't short the bounce
     if (s4h === 'BEARISH' && s15chk === 'BEARISH') return null;  // EXP-O: already oversold
-    // Bearish pivot confirmation: both timeframes must show LL or LH
-    const isBear15 = p15 === 'LL' || p15 === 'LH';
-    const isBear1m = p1m === 'LL' || p1m === 'LH';
+    // LH-only entry: sell only at the rejection (lower high), not at the breakdown (LL).
+    // LL = price at swing bottom = chasing. LH = price bounced to supply then rejected = entry.
+    const isBear15 = p15 === 'LH';
+    const isBear1m = p1m === 'LH';
     if (!isBear15 || !isBear1m) return null;
     // Chase filter: don't enter if price already dropped > MAX_SHORT_DROP_PCT below the 1m swing low
     if (isShortTooLate(price, state.last15mPivotPrice)) return null;
@@ -572,8 +574,9 @@ function resolveSignal(state, zone, price, vwap) {
   // NOTE: HL forms BELOW VWAP (price dips to demand then bounces) — must allow longs
   //       in LOWER_MID. Only block when price is deeply extended: BELOW_LOWER for longs,
   //       ABOVE_UPPER for shorts.
-  const isBullPivot = p15 === 'HH' || p15 === 'HL';
-  const isBearPivot = p15 === 'LL' || p15 === 'LH';
+  // Only dispatch on HL (long) or LH (short) — pullback entries only.
+  const isBullPivot = p15 === 'HL';
+  const isBearPivot = p15 === 'LH';
   if (isBullPivot && zone !== 'BELOW_LOWER') return tryLong();
   if (isBearPivot && zone !== 'ABOVE_UPPER') return tryShort();
   return null;
@@ -782,12 +785,12 @@ async function analyze(symbol, log) {
             } else if (pending.direction === 'LONG' && s4h === 'BEARISH') {
               cancelReason = `4H=BEARISH — LONG blocked, waiting for 4H to base`;
             } else if (pending.direction === 'LONG') {
-              const isLow15 = p15 === 'HL' || p15 === 'LL';
-              const isLow1m = p1m === 'HL' || p1m === 'LL';
+              const isLow15 = p15 === 'HL';
+              const isLow1m = p1m === 'HL';
               if (!isLow15) {
-                cancelReason = `15m pivot flipped to ${p15} — need HL or LL for LONG`;
+                cancelReason = `15m pivot flipped to ${p15} — need HL for LONG (buy pullback, not breakout)`;
               } else if (!isLow1m) {
-                cancelReason = `1m pivot flipped to ${p1m} — need HL or LL for LONG`;
+                cancelReason = `1m pivot flipped to ${p1m} — need HL for LONG (buy pullback, not breakout)`;
               } else if (!is1mGapOk(st.sl1m_1, st.sl1m_2)) {
                 const g = (st.sl1m_1 && st.sl1m_2) ? (Math.abs(st.sl1m_1 - st.sl1m_2) / st.sl1m_2 * 100).toFixed(3) : 'n/a';
                 cancelReason = `1m gap=${g}% too wide (limit=${MAX_1M_GAP_PCT}%)`;
@@ -800,12 +803,12 @@ async function analyze(symbol, log) {
               }
             } else {
               // SHORT
-              const isHigh15 = p15 === 'LH' || p15 === 'HH';
-              const isHigh1m = p1m === 'LH' || p1m === 'HH';
+              const isHigh15 = p15 === 'LH';
+              const isHigh1m = p1m === 'LH';
               if (!isHigh15) {
-                cancelReason = `15m pivot flipped to ${p15} — need LH or HH for SHORT`;
+                cancelReason = `15m pivot flipped to ${p15} — need LH for SHORT (sell rejection, not breakdown)`;
               } else if (!isHigh1m) {
-                cancelReason = `1m pivot flipped to ${p1m} — need LH or HH for SHORT (HL=support, not resistance)`;
+                cancelReason = `1m pivot flipped to ${p1m} — need LH for SHORT (sell rejection, not breakdown)`;
               } else if (isShortTooLate(entryPrice, st.last15mPivotPrice)) {
                 const d = st.last15mPivotPrice ? ((st.last15mPivotPrice - entryPrice) / st.last15mPivotPrice * 100).toFixed(3) : 'n/a';
                 cancelReason = `15m drop=${d}% already past pivot (limit=${MAX_SHORT_DROP_PCT}%)`;
