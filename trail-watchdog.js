@@ -275,17 +275,19 @@ async function runTrailCycle() {
           log(`[DIAG] ${symbol} ${isLong ? 'LONG' : 'SHORT'} | entry=$${entry} livePrice=$${livePrice} | lev=${leverage}x | capital=${pctDisplay} | currentSL=$${currentSl} | DB=${dbTrade ? 'found' : 'ORPHAN'}`);
 
           // ── Retro-adjust SL to 20% capital ────────────────
-          // Standardise every open position's SL to 20% capital on the first
-          // tick after deploy.  Only acts on losing trades; winners pass to
-          // the trail-up logic below.  Runs once per position per watchdog
-          // process via _widened set.  Adjusts in EITHER direction.
+          // If a losing position's SL is tighter than 20% capital loss,
+          // widen it to give the trade room to recover.
+          // Only widens (never tightens). Runs once per position per
+          // watchdog process via _widened set.
           if (capitalPct < 0 && currentSl > 0) {
             const targetSlPricePct = 0.20 / leverage;
             const targetSl = isLong
               ? entry * (1 - targetSlPricePct)
               : entry * (1 + targetSlPricePct);
             const tol = (0.0005 / leverage) * entry;
-            const needsAdjust = Math.abs(currentSl - targetSl) > tol;
+            // Only act if targetSl gives MORE room than currentSl
+            const wouldWiden = isLong ? targetSl < currentSl - tol : targetSl > currentSl + tol;
+            const needsAdjust = wouldWiden;
             if (needsAdjust && !_widened.has(symbol)) {
               _widened.add(symbol);
               log(`[20%-FIX] ${symbol} ${isLong ? 'LONG' : 'SHORT'}: SL $${currentSl.toFixed(pricePrec)} → $${targetSl.toFixed(pricePrec)} (normalising to 20% capital)`);
@@ -512,12 +514,6 @@ loadTierConfig().then(() => {
   runTrailCycle();
   setInterval(runTrailCycle, INTERVAL_MS);
 });
-
-// Stagger orphan guard by 30s so it doesn't overlap with first trail cycle
-setTimeout(() => {
-  runOrphanGuard();
-  setInterval(runOrphanGuard, ORPHAN_CHECK_INTERVAL);
-}, 30000);
 
 // Stagger orphan guard by 30s so it doesn't overlap with first trail cycle
 setTimeout(() => {
