@@ -518,9 +518,11 @@ function resolveSignal(state, zone, price, vwap) {
   // EXP-O dual-bullish block: if BOTH 4H and 15m are BULLISH, the move is
   //   already extended — entering here means chasing the top, not a setup.
   function tryLong() {
-    const s4h = get4hStructure(state, price);
-    if (s4h === 'BEARISH') return null;  // no long against 4H downtrend
+    const s4h   = get4hStructure(state, price);
     const s15chk = get15mStructure(state, price);
+    // 4H bearish AND 15m not recovering → no long (strict trend filter).
+    // 4H bearish BUT 15m bullish → allow: price is bouncing from demand, HL is valid entry.
+    if (s4h === 'BEARISH' && s15chk !== 'BULLISH') return null;
     if (s4h === 'BULLISH' && s15chk === 'BULLISH') return null;  // EXP-O: already overbought
     // Bullish pivot confirmation: both timeframes must show HH or HL
     const isBull15 = p15 === 'HH' || p15 === 'HL';
@@ -540,12 +542,15 @@ function resolveSignal(state, zone, price, vwap) {
   // ── SHORT: bearish pivot (LL or LH) anywhere except ABOVE_UPPER ─
   // LH forms when price rallies to supply (often above VWAP) then rejects — that
   // IS the entry. Block if 4H=BULLISH (don't short against the higher-TF uptrend).
-  // EXP-O dual-bearish block: if BOTH 4H and 15m are BEARISH, the move is
-  //   already extended — entering here means chasing the bottom, not a setup.
+  // 15m BULLISH recovery block: if 15m structure is making HLs (bullish), do NOT
+  //   short into the bounce — that's the "short in no place" mistake the chart shows.
+  // EXP-O dual-bearish block: if BOTH 4H and 15m are BEARISH, move is already
+  //   extended — entering here means chasing the bottom, not a setup.
   function tryShort() {
-    const s4h = get4hStructure(state, price);
-    if (s4h === 'BULLISH') return null;  // no short against 4H uptrend
+    const s4h   = get4hStructure(state, price);
     const s15chk = get15mStructure(state, price);
+    if (s4h === 'BULLISH') return null;          // no short against 4H uptrend
+    if (s15chk === 'BULLISH') return null;       // 15m recovering (HLs) — don't short the bounce
     if (s4h === 'BEARISH' && s15chk === 'BEARISH') return null;  // EXP-O: already oversold
     // Bearish pivot confirmation: both timeframes must show LL or LH
     const isBear15 = p15 === 'LL' || p15 === 'LH';

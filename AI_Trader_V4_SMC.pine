@@ -193,9 +193,14 @@ bear15 = lastH15Label == "LH" or lastL15Label == "LL"   // bearish 15m structure
 bull1m = last1mHLabel == "HH" or last1mHLabel == "HL" or last1mLLabel == "HL"
 bear1m = last1mLLabel == "LL" or last1mLLabel == "LH" or last1mHLabel == "LH"
 
-// 4H gate
-longBlocked4h  = h4_bearish                          // no LONG against 4H downtrend
-shortBlocked4h = h4_bullish                          // no SHORT against 4H uptrend
+// 4H gate — loosened: allow LONG when 4H bearish if 15m is recovering (BULLISH structure)
+// Prevents: bot only shorts ETH because 4H is bearish, even when 1m/15m show HHs+HLs
+longBlocked4h  = h4_bearish and structure15 != "BULLISH"  // blocked unless 15m is recovering
+shortBlocked4h = h4_bullish                               // no SHORT against 4H uptrend
+
+// 15m recovery block on SHORT: if 15m is making HLs (BULLISH structure), do NOT short the bounce
+// Prevents: "short in no place" — bot was shorting CHoCH dips within bullish 1m recovery moves
+shortBlocked15mRecovery = structure15 == "BULLISH"
 
 // EXP-O dual-structure block
 longBlockedExpO  = h4_bullish and structure15 == "BULLISH"   // both overbought = chasing
@@ -212,7 +217,7 @@ longSig  = zone != "BELOW_LOWER" and bull15 and bull1m and
            not longBlocked4h and not longBlockedExpO and chaseOkLong
 
 shortSig = zone != "ABOVE_UPPER" and bear15 and bear1m and
-           not shortBlocked4h and not shortBlockedExpO and dropOkShort
+           not shortBlocked4h and not shortBlockedExpO and not shortBlocked15mRecovery and dropOkShort
 
 // Plot BUY / SELL signals
 plotshape(showSignals and longSig,  "BUY",  shape.labelup,   location.belowbar,
@@ -289,8 +294,8 @@ if barstate.islast and showDash
 
     // Gates
     gateStr = (longBlocked4h or longBlockedExpO ? "LONG ✗  " : "LONG ✓  ") +
-              (shortBlocked4h or shortBlockedExpO ? "SHORT ✗" : "SHORT ✓")
-    gateCol = (longBlocked4h or longBlockedExpO or shortBlocked4h or shortBlockedExpO) ? color.orange : color.lime
+              (shortBlocked4h or shortBlockedExpO or shortBlocked15mRecovery ? "SHORT ✗" : "SHORT ✓")
+    gateCol = (longBlocked4h or longBlockedExpO or shortBlocked4h or shortBlockedExpO or shortBlocked15mRecovery) ? color.orange : color.lime
     table.cell(dash, 0, 8, "Gates",  bgcolor=_cellBg, text_color=_gray,    text_size=size.small)
     table.cell(dash, 1, 8, gateStr,  bgcolor=_cellBg, text_color=gateCol,  text_size=size.small)
 
