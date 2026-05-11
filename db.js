@@ -658,6 +658,26 @@ async function initAllTables() {
     `CREATE UNIQUE INDEX IF NOT EXISTS idx_trades_bitunix_pos_id
      ON trades (bitunix_position_id)
      WHERE bitunix_position_id IS NOT NULL AND status = 'OPEN'`,
+
+    // Copy trade feature — trader profiles, subscriptions, and trade columns
+    `CREATE TABLE IF NOT EXISTS trader_profiles (
+      user_id      INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+      display_name VARCHAR(60) NOT NULL DEFAULT 'Trader',
+      is_public    BOOLEAN NOT NULL DEFAULT false,
+      bio          TEXT,
+      created_at   TIMESTAMPTZ DEFAULT NOW()
+    )`,
+    `CREATE TABLE IF NOT EXISTS copy_trade_subscriptions (
+      id              SERIAL PRIMARY KEY,
+      follower_key_id INTEGER NOT NULL REFERENCES api_keys(id) ON DELETE CASCADE,
+      leader_type     VARCHAR(10) NOT NULL CHECK (leader_type IN ('ai', 'user')),
+      leader_user_id  INTEGER REFERENCES users(id) ON DELETE CASCADE,
+      is_active       BOOLEAN NOT NULL DEFAULT true,
+      created_at      TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE(follower_key_id)
+    )`,
+    `ALTER TABLE trades ADD COLUMN IF NOT EXISTS is_copy_trade BOOLEAN DEFAULT false`,
+    `ALTER TABLE trades ADD COLUMN IF NOT EXISTS copied_from_trade_id INTEGER REFERENCES trades(id)`,
   ];
 
   for (const sql of statements) {

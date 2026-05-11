@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Copy Trading — MCT AI Trader</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #0d0d0d;
+      color: #e0e0e0;
+      font-family: 'Segoe UI', sans-serif;
+      min-height: 100vh;
+      padding: 0 0 60px;
+    }
+
+    /* ── Nav ──────────────────────────────────────────── */
+    nav {
+      background: #0a0a1a;
+      border-bottom: 1px solid #1a1a2e;
+      padding: 14px 24px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    nav .logo { color: #00d4ff; font-weight: 700; font-size: 1.1rem; }
+    nav a {
+      color: #aaa;
+      text-decoration: none;
+      font-size: 0.85rem;
+      margin-left: auto;
+    }
+    nav a:hover { color: #00d4ff; }
+
+    /* ── Hero ─────────────────────────────────────────── */
+    .hero {
+      text-align: center;
+      padding: 48px 24px 32px;
+    }
+    .hero h1 { font-size: 2rem; color: #fff; }
+    .hero p  { color: #aaa; margin-top: 10px; font-size: 0.95rem; }
+
+    /* ── Subscription banner ──────────────────────────── */
+    #subscription-banner {
+      max-width: 760px;
+      margin: 0 auto 32px;
+      padding: 0 20px;
+      display: none;
+    }
+    .subscription-card {
+      background: #111124;
+      border: 1px solid #00d4ff44;
+      border-radius: 12px;
+      padding: 18px 22px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      flex-wrap: wrap;
+    }
+    .subscription-card .label { color: #aaa; font-size: 0.82rem; margin-bottom: 4px; }
+    .subscription-card .name  { color: #00d4ff; font-size: 1.05rem; font-weight: 600; }
+    .btn-unfollow {
+      background: #c0392b;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      padding: 8px 18px;
+      cursor: pointer;
+      font-size: 0.85rem;
+      transition: background 0.2s;
+    }
+    .btn-unfollow:hover { background: #e74c3c; }
+
+    /* ── Sections ─────────────────────────────────────── */
+    .section {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 0 20px;
+    }
+    .section-title {
+      font-size: 1.1rem;
+      color: #aaa;
+      margin-bottom: 18px;
+      border-bottom: 1px solid #1a1a2e;
+      padding-bottom: 8px;
+    }
+
+    /* ── Cards grid ───────────────────────────────────── */
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      gap: 20px;
+      margin-bottom: 48px;
+    }
+
+    .card {
+      background: #111124;
+      border: 1px solid #1a1a2e;
+      border-radius: 14px;
+      padding: 22px;
+      transition: border-color 0.2s, transform 0.15s;
+    }
+    .card:hover {
+      border-color: #00d4ff55;
+      transform: translateY(-2px);
+    }
+    .card.ai-card { border-color: #00d4ff33; }
+
+    .card-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 18px;
+    }
+    .avatar {
+      width: 44px; height: 44px;
+      border-radius: 50%;
+      background: #1a1a2e;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 1.3rem;
+      border: 2px solid #00d4ff44;
+      flex-shrink: 0;
+    }
+    .card-name { font-size: 1rem; font-weight: 600; color: #fff; }
+    .card-type { font-size: 0.75rem; color: #00d4ff; margin-top: 2px; }
+
+    .stats {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin-bottom: 20px;
+    }
+    .stat { }
+    .stat-label { font-size: 0.72rem; color: #777; margin-bottom: 2px; }
+    .stat-value { font-size: 0.95rem; font-weight: 600; color: #e0e0e0; }
+    .stat-value.positive { color: #2ecc71; }
+    .stat-value.negative { color: #e74c3c; }
+
+    .btn-follow {
+      width: 100%;
+      background: #00d4ff;
+      color: #000;
+      border: none;
+      border-radius: 8px;
+      padding: 10px;
+      font-size: 0.9rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    .btn-follow:hover   { background: #00b8d9; }
+    .btn-follow.active  { background: #c0392b; color: #fff; }
+    .btn-follow.active:hover { background: #e74c3c; }
+    .btn-follow:disabled { background: #333; color: #888; cursor: not-allowed; }
+
+    /* ── Loading / empty ──────────────────────────────── */
+    .loading, .empty-msg {
+      text-align: center;
+      color: #555;
+      padding: 40px 0;
+      font-size: 0.9rem;
+    }
+
+    /* ── Toast ────────────────────────────────────────── */
+    #toast {
+      position: fixed;
+      bottom: 24px; right: 24px;
+      background: #1a1a2e;
+      border: 1px solid #00d4ff44;
+      color: #e0e0e0;
+      padding: 12px 20px;
+      border-radius: 10px;
+      font-size: 0.85rem;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.3s;
+      z-index: 9999;
+    }
+    #toast.show { opacity: 1; }
+  </style>
+</head>
+<body>
+
+<nav>
+  <span class="logo">MCT AI Trader</span>
+  <a href="/dashboard">Dashboard</a>
+</nav>
+
+<div class="hero">
+  <h1>Copy Trading</h1>
+  <p>Follow the best traders and automatically mirror their positions on your account.</p>
+</div>
+
+<!-- Current subscription -->
+<div id="subscription-banner">
+  <div class="subscription-card">
+    <div>
+      <div class="label">Currently following</div>
+      <div class="name" id="sub-leader-name">—</div>
+    </div>
+    <button class="btn-unfollow" id="btn-global-unfollow">Unfollow</button>
+  </div>
+</div>
+
+<!-- AI trader -->
+<div class="section" style="margin-bottom: 32px;">
+  <div class="section-title">AI Trader</div>
+  <div class="cards" id="ai-cards">
+    <div class="loading">Loading…</div>
+  </div>
+</div>
+
+<!-- Community traders -->
+<div class="section">
+  <div class="section-title">Community Traders</div>
+  <div class="cards" id="user-cards">
+    <div class="loading">Loading…</div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+  let myApiKeyId = null;
+  let mySubscription = null; // current active sub row
+
+  async function init() {
+    // Require auth — check by trying to load subscription
+    let subRows;
+    try {
+      const r = await fetch('/api/copy-trade/my-subscription');
+      if (r.status === 401) { window.location.href = '/login'; return; }
+      subRows = await r.json();
+    } catch (_) { subRows = []; }
+
+    mySubscription = subRows[0] || null;
+
+    // Load user's first API key
+    try {
+      const kr = await fetch('/api/keys');
+      if (kr.ok) {
+        const keys = await kr.json();
+        if (keys.length) myApiKeyId = keys[0].id;
+      }
+    } catch (_) {}
+
+    // Load traders
+    const tradersRes = await fetch('/api/copy-trade/traders');
+    const traders = tradersRes.ok ? await tradersRes.json() : [];
+
+    renderSubscriptionBanner();
+    renderAiCard(traders.find(t => t.isAi));
+    renderUserCards(traders.filter(t => !t.isAi));
+  }
+
+  function renderSubscriptionBanner() {
+    const banner = document.getElementById('subscription-banner');
+    if (!mySubscription) { banner.style.display = 'none'; return; }
+
+    const name = mySubscription.leader_type === 'ai'
+      ? '🤖 AI Trader (MCT)'
+      : (mySubscription.leader_display_name || `Trader #${mySubscription.leader_user_id}`);
+
+    document.getElementById('sub-leader-name').textContent = name;
+    banner.style.display = 'block';
+
+    document.getElementById('btn-global-unfollow').onclick = () => unsubscribe(mySubscription.follower_key_id);
+  }
+
+  function renderAiCard(trader) {
+    const container = document.getElementById('ai-cards');
+    if (!trader) { container.innerHTML = '<div class="empty-msg">No AI data available.</div>'; return; }
+    container.innerHTML = buildCard(trader);
+    attachFollowBtn(container.querySelector('[data-follow]'), trader);
+  }
+
+  function renderUserCards(traders) {
+    const container = document.getElementById('user-cards');
+    if (!traders.length) { container.innerHTML = '<div class="empty-msg">No community traders yet.</div>'; return; }
+    container.innerHTML = traders.map(buildCard).join('');
+    container.querySelectorAll('[data-follow]').forEach(btn => {
+      const trader = traders.find(t => String(t.userId) === btn.dataset.userId);
+      if (trader) attachFollowBtn(btn, trader);
+    });
+  }
+
+  function buildCard(t) {
+    const pnl30dClass = t.pnl30d >= 0 ? 'positive' : 'negative';
+    const pnlClass    = t.totalPnl >= 0 ? 'positive' : 'negative';
+    const leaderId    = t.isAi ? 'ai' : t.userId;
+    const isFollowing = mySubscription && (
+      (t.isAi && mySubscription.leader_type === 'ai') ||
+      (!t.isAi && String(mySubscription.leader_user_id) === String(t.userId))
+    );
+
+    return `
+      <div class="card${t.isAi ? ' ai-card' : ''}">
+        <div class="card-header">
+          <div class="avatar">${t.isAi ? '🤖' : '👤'}</div>
+          <div>
+            <div class="card-name">${esc(t.displayName)}</div>
+            <div class="card-type">${t.isAi ? 'AI Trader' : 'Community Trader'}</div>
+          </div>
+        </div>
+        <div class="stats">
+          <div class="stat">
+            <div class="stat-label">Win Rate</div>
+            <div class="stat-value">${t.winRate.toFixed(1)}%</div>
+          </div>
+          <div class="stat">
+            <div class="stat-label">Total Trades</div>
+            <div class="stat-value">${t.totalTrades}</div>
+          </div>
+          <div class="stat">
+            <div class="stat-label">30d PnL</div>
+            <div class="stat-value ${pnl30dClass}">${fmtUsd(t.pnl30d)}</div>
+          </div>
+          <div class="stat">
+            <div class="stat-label">Followers</div>
+            <div class="stat-value">${t.followers}</div>
+          </div>
+          <div class="stat" style="grid-column: span 2;">
+            <div class="stat-label">Total PnL</div>
+            <div class="stat-value ${pnlClass}">${fmtUsd(t.totalPnl)}</div>
+          </div>
+        </div>
+        <button class="btn-follow${isFollowing ? ' active' : ''}"
+                data-follow
+                data-leader-type="${t.isAi ? 'ai' : 'user'}"
+                data-leader-id="${leaderId}"
+                data-user-id="${t.userId ?? ''}">
+          ${isFollowing ? 'Unfollow' : 'Follow'}
+        </button>
+      </div>`;
+  }
+
+  function attachFollowBtn(btn, trader) {
+    if (!btn) return;
+    btn.addEventListener('click', async () => {
+      if (!myApiKeyId) { toast('No API key found — add one in your dashboard first.'); return; }
+
+      const isFollowing = btn.classList.contains('active');
+      if (isFollowing) {
+        await unsubscribe(myApiKeyId);
+      } else {
+        await subscribe(trader);
+      }
+    });
+  }
+
+  async function subscribe(trader) {
+    if (!myApiKeyId) { toast('No API key found.'); return; }
+    try {
+      const body = {
+        apiKeyId: myApiKeyId,
+        leaderType: trader.isAi ? 'ai' : 'user',
+        leaderUserId: trader.isAi ? undefined : trader.userId,
+      };
+      const r = await fetch('/api/copy-trade/subscribe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await r.json();
+      if (!r.ok) { toast(data.error || 'Subscribe failed'); return; }
+      toast(`Now following ${trader.displayName}!`);
+      await init(); // refresh
+    } catch (err) {
+      toast('Network error — please try again.');
+    }
+  }
+
+  async function unsubscribe(apiKeyId) {
+    try {
+      const r = await fetch(`/api/copy-trade/unsubscribe/${apiKeyId}`, { method: 'DELETE' });
+      const data = await r.json();
+      if (!r.ok) { toast(data.error || 'Unsubscribe failed'); return; }
+      toast('Unfollowed successfully.');
+      await init();
+    } catch (err) {
+      toast('Network error — please try again.');
+    }
+  }
+
+  function fmtUsd(v) {
+    const n = parseFloat(v) || 0;
+    return (n >= 0 ? '+' : '') + n.toFixed(2) + ' USDT';
+  }
+
+  function esc(s) {
+    return String(s).replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+  }
+
+  let _toastTimer;
+  function toast(msg) {
+    const el = document.getElementById('toast');
+    el.textContent = msg;
+    el.classList.add('show');
+    clearTimeout(_toastTimer);
+    _toastTimer = setTimeout(() => el.classList.remove('show'), 3500);
+  }
+
+  init();
+</script>
+</body>
+</html>

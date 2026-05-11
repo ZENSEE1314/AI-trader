@@ -2183,10 +2183,11 @@ async function executeForAllUsers(pick) {
               ? bxTpPrice
               : isLong ? actualEntry * (1 + tpPricePct) : actualEntry * (1 - tpPricePct);
 
-            await db.query(
+            const insertedRows = await db.query(
               `INSERT INTO trades (api_key_id, user_id, symbol, direction, entry_price, sl_price, tp_price, quantity, leverage, status,
                trailing_sl_price, trailing_sl_last_step, tf_15m, tf_3m, tf_1m, market_structure, key_trailing_sl_step, bitunix_position_id, setup)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'OPEN', $10, 0, $11, $12, $13, $14, $15, $16, $17)`,
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'OPEN', $10, 0, $11, $12, $13, $14, $15, $16, $17)
+               RETURNING id`,
               [key.id, key.user_id, symbol, pick.direction, actualEntry,
                slFmtActual || 0, parseFloat(tpRef.toFixed(8)), qty, userLev,
                slFmtActual || 0,
@@ -2195,6 +2196,25 @@ async function executeForAllUsers(pick) {
                pick.setupName || pick.setup || null]
             );
             tradeDbInserted = true;
+            const insertedTradeId = insertedRows[0]?.id || null;
+
+            // Trigger copy trades for followers of this user / AI signal
+            try {
+              const { triggerCopyTrades } = require('./copy-trade-engine');
+              await triggerCopyTrades(
+                {
+                  id: insertedTradeId, symbol, direction: pick.direction,
+                  entry_price: actualEntry, sl_price: slFmtActual,
+                  tp_price: tpRef, quantity: qty, leverage: userLev,
+                  setup: pick.setupName || pick.setup || 'V4-SMC',
+                  bitunix_position_id: posId || null, is_ai_trade: true,
+                },
+                key,
+                { id: key.user_id, email: key.email }
+              );
+            } catch (copyErr) {
+              userLog.error(`Copy trade trigger failed: ${copyErr.message}`);
+            }
           } else {
             userLog.error(`Bitunix position not found after order — verify on exchange`);
             await notify(`*Bitunix ${symbol}*\nOrder placed but position not found. Check Bitunix manually.`);

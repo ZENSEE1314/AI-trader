@@ -109,6 +109,9 @@ app.use('/api/risk-levels', require('./routes/risk-levels'));
 app.use('/api/quantum', require('./routes/quantum'));
 // TradingView webhook — public endpoint secured by TV_WEBHOOK_SECRET env var
 app.use('/api/tv-webhook', require('./routes/tv-webhook'));
+// Copy trading — follow AI or other users
+app.use('/api/copy-trade', require('./routes/copy-trade'));
+app.get('/copy-trade', (req, res) => res.sendFile(path.join(__dirname, 'public', 'copy-trade.html')));
 // Version info — public, no auth required
 const VERSION_INFO = require('./version.json');
 app.get('/api/version', (req, res) => {
