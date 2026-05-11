@@ -524,10 +524,10 @@ function resolveSignal(state, zone, price, vwap) {
     // 4H bearish BUT 15m bullish → allow: price is bouncing from demand, HL is valid entry.
     if (s4h === 'BEARISH' && s15chk !== 'BULLISH') return null;
     if (s4h === 'BULLISH' && s15chk === 'BULLISH') return null;  // EXP-O: already overbought
-    // Any swing LOW = demand zone entry: HL (higher low) or LL (new low sweep).
-    // Both mean price just printed a confirmed low → LONG on the next candle.
-    const isBull15 = p15 === 'HL' || p15 === 'LL';
-    const isBull1m = p1m === 'HL' || p1m === 'LL';
+    // Bullish structure entry: HH (breakout) or HL (higher low = trend continuing).
+    // Both confirm price is in a bullish sequence → LONG with the trend.
+    const isBull15 = p15 === 'HH' || p15 === 'HL';
+    const isBull1m = p1m === 'HH' || p1m === 'HL';
     if (!isBull15 || !isBull1m) return null;
     // Chase filter: don't enter if price already moved > MAX_CHASE_PCT above the 1m swing high
     if (isChasing(price, state.sh1m_1)) return null;
@@ -553,10 +553,10 @@ function resolveSignal(state, zone, price, vwap) {
     if (s4h === 'BULLISH') return null;          // no short against 4H uptrend
     if (s15chk === 'BULLISH') return null;       // 15m recovering (HLs) — don't short the bounce
     if (s4h === 'BEARISH' && s15chk === 'BEARISH') return null;  // EXP-O: already oversold
-    // SHORT on any swing HIGH (HH or LH) — price is at supply zone.
-    // LL = price at swing low = too late to short.
-    const isBear15 = p15 === 'LH' || p15 === 'HH';
-    const isBear1m = p1m === 'LH' || p1m === 'HH';
+    // Bearish structure entry: LL (breakdown) or LH (lower high = trend continuing).
+    // Both confirm price is in a bearish sequence → SHORT with the trend.
+    const isBear15 = p15 === 'LL' || p15 === 'LH';
+    const isBear1m = p1m === 'LL' || p1m === 'LH';
     if (!isBear15 || !isBear1m) return null;
     // Chase filter: don't enter if price already dropped > MAX_SHORT_DROP_PCT below the 1m swing low
     if (isShortTooLate(price, state.last15mPivotPrice)) return null;
@@ -571,13 +571,12 @@ function resolveSignal(state, zone, price, vwap) {
   }
 
   // ── Pivot type decides direction; zone only blocks extremes ───
-  // NOTE: HL forms BELOW VWAP (price dips to demand then bounces) — must allow longs
-  //       in LOWER_MID. Only block when price is deeply extended: BELOW_LOWER for longs,
-  //       ABOVE_UPPER for shorts.
-  // Swing LOW  (HL or LL) = demand zone → LONG on next candle
-  // Swing HIGH (HH or LH) = supply zone → SHORT on next candle
-  const isBullPivot = p15 === 'HL' || p15 === 'LL';
-  const isBearPivot = p15 === 'HH' || p15 === 'LH';
+  // NOTE: HH/HL = bullish pivots → LONG with the trend. LL/LH = bearish pivots → SHORT with the trend.
+  //       Zone blocks only the very extremes: BELOW_LOWER blocks LONG, ABOVE_UPPER blocks SHORT.
+  // Bullish pivot (HH or HL) = uptrend structure → LONG with the trend
+  // Bearish pivot (LL or LH) = downtrend structure → SHORT with the trend
+  const isBullPivot = p15 === 'HH' || p15 === 'HL';
+  const isBearPivot = p15 === 'LL' || p15 === 'LH';
   if (isBullPivot && zone !== 'BELOW_LOWER') return tryLong();
   if (isBearPivot && zone !== 'ABOVE_UPPER') return tryShort();
   return null;
@@ -786,12 +785,12 @@ async function analyze(symbol, log) {
             } else if (pending.direction === 'LONG' && s4h === 'BEARISH') {
               cancelReason = `4H=BEARISH — LONG blocked, waiting for 4H to base`;
             } else if (pending.direction === 'LONG') {
-              const isLow15 = p15 === 'HL' || p15 === 'LL';
-              const isLow1m = p1m === 'HL' || p1m === 'LL';
-              if (!isLow15) {
-                cancelReason = `15m pivot flipped to ${p15} — need HL or LL for LONG (swing low = demand)`;
-              } else if (!isLow1m) {
-                cancelReason = `1m pivot flipped to ${p1m} — need HL or LL for LONG (swing low = demand)`;
+              const isBull15 = p15 === 'HH' || p15 === 'HL';
+              const isBull1m = p1m === 'HH' || p1m === 'HL';
+              if (!isBull15) {
+                cancelReason = `15m pivot flipped to ${p15} — need HH or HL for LONG (bullish structure)`;
+              } else if (!isBull1m) {
+                cancelReason = `1m pivot flipped to ${p1m} — need HH or HL for LONG (bullish structure)`;
               } else if (!is1mGapOk(st.sl1m_1, st.sl1m_2)) {
                 const g = (st.sl1m_1 && st.sl1m_2) ? (Math.abs(st.sl1m_1 - st.sl1m_2) / st.sl1m_2 * 100).toFixed(3) : 'n/a';
                 cancelReason = `1m gap=${g}% too wide (limit=${MAX_1M_GAP_PCT}%)`;
@@ -804,12 +803,12 @@ async function analyze(symbol, log) {
               }
             } else {
               // SHORT
-              const isHigh15 = p15 === 'LH' || p15 === 'HH';
-              const isHigh1m = p1m === 'LH' || p1m === 'HH';
-              if (!isHigh15) {
-                cancelReason = `15m pivot flipped to ${p15} — need HH or LH for SHORT (sell at swing high)`;
-              } else if (!isHigh1m) {
-                cancelReason = `1m pivot flipped to ${p1m} — need HH or LH for SHORT (sell at swing high)`;
+              const isBear15 = p15 === 'LL' || p15 === 'LH';
+              const isBear1m = p1m === 'LL' || p1m === 'LH';
+              if (!isBear15) {
+                cancelReason = `15m pivot flipped to ${p15} — need LL or LH for SHORT (bearish structure)`;
+              } else if (!isBear1m) {
+                cancelReason = `1m pivot flipped to ${p1m} — need LL or LH for SHORT (bearish structure)`;
               } else if (isShortTooLate(entryPrice, st.last15mPivotPrice)) {
                 const d = st.last15mPivotPrice ? ((st.last15mPivotPrice - entryPrice) / st.last15mPivotPrice * 100).toFixed(3) : 'n/a';
                 cancelReason = `15m drop=${d}% already past pivot (limit=${MAX_SHORT_DROP_PCT}%)`;
@@ -882,8 +881,8 @@ async function analyze(symbol, log) {
         if (sig && sig.direction === 'SHORT' && nowMs - st.lastShortTime < MIN_DIR_GAP) continue;
         const piv15t = st.last15mPivotType || 'none';
         const piv1mt  = st.last1mPivotType  || 'none';
-        const longOk  = (piv15t==='HL'||piv15t==='LL') && (piv1mt==='HL'||piv1mt==='LL');
-        const shortOk = (piv15t==='LH'||piv15t==='HH') && (piv1mt==='LH'||piv1mt==='HH');
+        const longOk  = (piv15t==='HH'||piv15t==='HL') && (piv1mt==='HH'||piv1mt==='HL');
+        const shortOk = (piv15t==='LL'||piv15t==='LH') && (piv1mt==='LL'||piv1mt==='LH');
         log(`[V4-SIG] ${symbol} zone=${zone} 4H=${get4hStructure(st, bar.close)} 15m=${get15mStructure(st, bar.close)} piv15=${piv15t} piv1m=${piv1mt} longOk=${longOk} shortOk=${shortOk} price=${bar.close.toFixed(4)} traded=${st.zoneTraded} → ${sig && !st.zoneTraded ? sig.direction+'+'+sig.type : (sig ? 'ZONE_TRADED' : 'NO_SIGNAL')}`);
         if (sig && !st.zoneTraded) {
           st.lastSignalTime = pivotTime;
@@ -932,23 +931,23 @@ async function analyze(symbol, log) {
             log(`[V4] no signal — ${symbol} 4H=MIXED 15m=BEARISH zone=${zone} (need premium zone for SHORT)`);
           } else if (isDiscount) {
             // Right zone for LONG — diagnose pivot issue
-            if (pType !== 'HL' && pType !== 'LL') {
-              log(`[V4] no signal — ${symbol} zone=${zone} 4H=${s4h} 15m=${pType} (need 15m HL or LL for LONG)`);
+            if (pType !== 'HH' && pType !== 'HL') {
+              log(`[V4] no signal — ${symbol} zone=${zone} 4H=${s4h} 15m=${pType} (need 15m HH or HL for LONG)`);
             } else if (!gapOk2) {
               log(`[V4] LONG WAIT — ${symbol} zone=${zone} 4H=${s4h} 15m=${pType} gap=${gapPct2}% too wide (need ≤${MAX_1M_GAP_PCT}%)`);
             } else if (chasing2) {
               log(`[V4] LONG WAIT — ${symbol} zone=${zone} 4H=${s4h} 15m=${pType} 1m=${p1Type} chase=${chasePct2}% above sl1m`);
             } else {
-              log(`[V4] no signal — ${symbol} zone=${zone} 4H=${s4h} 15m=${pType} 1m=${p1Type} (need 1m HL or LL)`);
+              log(`[V4] no signal — ${symbol} zone=${zone} 4H=${s4h} 15m=${pType} 1m=${p1Type} (need 1m HH or HL)`);
             }
           } else if (isPremium) {
             // Right zone for SHORT — diagnose pivot issue
-            if (pType !== 'LH' && pType !== 'HH') {
-              log(`[V4] no signal — ${symbol} zone=${zone} 4H=${s4h} 15m=${pType} (need 15m LH or HH for SHORT)`);
+            if (pType !== 'LL' && pType !== 'LH') {
+              log(`[V4] no signal — ${symbol} zone=${zone} 4H=${s4h} 15m=${pType} (need 15m LL or LH for SHORT)`);
             } else if (isShortTooLate(bar.close, st.last15mPivotPrice)) {
               log(`[V4] SHORT BLOCKED — ${symbol} zone=${zone} 4H=${s4h} 15m=${pType} dropped ${dropPct}% (>${MAX_SHORT_DROP_PCT}% from pivot)`);
             } else {
-              log(`[V4] no signal — ${symbol} zone=${zone} 4H=${s4h} 15m=${pType} 1m=${p1Type} (need 1m LH or HH)`);
+              log(`[V4] no signal — ${symbol} zone=${zone} 4H=${s4h} 15m=${pType} 1m=${p1Type} (need 1m LL or LH)`);
             }
           } else {
             log(`[V4] no signal — ${symbol} zone=${zone} 4H=${s4h} 15m=${s15} piv=${pType}/${p1Type}@${pPrice}`);

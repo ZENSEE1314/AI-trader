@@ -7,8 +7,8 @@ indicator("AI Trader V4 SMC", overlay=true, max_labels_count=500, max_lines_coun
 //    • Daily VWAP + 2σ bands (UTC midnight reset)
 //    • 15m pivots: lbL=10, lbR=1  (matches TV SMC Expo)
 //    • 1m pivots: lbL=3, lbR=1
-//    • LONG  when 15m HL/LL + 1m HL/LL   (any swing low = demand — buy next candle)
-//    • SHORT when 15m HH/LH + 1m HH/LH   (any swing high = supply — sell next candle)
+//    • LONG  when 15m HH/HL + 1m HH/HL   (bullish structure — trend-following LONG)
+//    • SHORT when 15m LL/LH + 1m LL/LH   (bearish structure — trend-following SHORT)
 //    • 4H structure gate + EXP-O dual-structure block
 //    • Webhook alerts with JSON payload
 //  Set chart to 15m for best match with the bot.
@@ -180,22 +180,21 @@ if not na(_pl1m)
 
 // ── Signal Logic (matches resolveSignal() in bot) ─────────────────
 //  Pivot type decides direction — zone blocks only extremes:
-//  LONG:  15m HL/LL + 1m HL/LL  — any confirmed swing low = demand = buy next candle
-//  SHORT: 15m HH/LH + 1m HH/LH  — any confirmed swing high = supply = sell next candle
-//  SKIP:  LL — price already broke down, too late to short
+//  LONG:  15m HH/HL + 1m HH/HL  — bullish structure (higher highs + higher lows) = trend LONG
+//  SHORT: 15m LL/LH + 1m LL/LH  — bearish structure (lower lows + lower highs) = trend SHORT
 //
-//  WHY:
-//    HL  = price dipped to demand then bounced → tight SL below the low, good R:R
-//    HH  = price made new swing high → touching supply, potential reversal → SHORT
-//    LH  = price bounced to supply but lower than previous → rejection → SHORT
-//    LL  = price already at new swing low → too extended, skip
+//  WHY (trend-following):
+//    HH  = price made new higher high → uptrend continuing → LONG with trend
+//    HL  = price bounced from higher low → demand holding → LONG with trend
+//    LL  = price made new lower low → downtrend continuing → SHORT with trend
+//    LH  = lower high = failed to reach prior high → supply holding → SHORT with trend
 //  EXP-O: LONG blocked if 4H+15m both BULLISH (overbought — chasing)
 //         SHORT blocked if 4H+15m both BEARISH (oversold — chasing)
 
-bull15 = lastL15Label == "HL" or lastL15Label == "LL"                 // 15m any swing low = demand
-bear15 = lastH15Label == "HH" or lastH15Label == "LH"                 // 15m any swing high = supply
-bull1m = last1mLLabel == "HL" or last1mLLabel == "LL"                 // 1m any swing low = demand
-bear1m = last1mHLabel == "HH" or last1mHLabel == "LH"                 // 1m any swing high = supply
+bull15 = lastH15Label == "HH" or lastL15Label == "HL"                 // 15m bullish structure (HH or HL)
+bear15 = lastL15Label == "LL" or lastH15Label == "LH"                 // 15m bearish structure (LL or LH)
+bull1m = last1mHLabel == "HH" or last1mLLabel == "HL"                 // 1m bullish structure (HH or HL)
+bear1m = last1mLLabel == "LL" or last1mHLabel == "LH"                 // 1m bearish structure (LL or LH)
 
 // 4H gate — loosened: allow LONG when 4H bearish if 15m is recovering (BULLISH structure)
 // Prevents: bot only shorts ETH because 4H is bearish, even when 1m/15m show HHs+HLs
