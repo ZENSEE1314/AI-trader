@@ -511,33 +511,21 @@ function resolveSignal(state, zone, price, vwap) {
   const p15 = state.last15mPivotType;
   const p1m = state.last1mPivotType;
 
-  // ── LONG: bullish pivot (HH or HL) anywhere except BELOW_LOWER ─
-  // HL forms when price dips to demand (often below VWAP) then bounces — that
-  // IS the entry point. Old zone=LOWER_MID→tryShort() routing missed all of them.
-  // Block if 4H=BEARISH (don't long against the higher-TF downtrend).
-  // EXP-O dual-bullish block: if BOTH 4H and 15m are BULLISH, the move is
-  //   already extended — entering here means chasing the top, not a setup.
+  // ── LONG: price at a LOW pivot (LL or HL) — demand zone entry ──────────────
+  // HL = higher low  → price dipped to demand, buyers stepped in → LONG continuation
+  // LL = new low     → price hit demand zone, potential bounce    → LONG reversal
+  // Both place entry AT THE LOW — the point where buyers should be strongest.
+  // 4H gate: if macro trend is BEARISH, demand zones tend to fail (lows break lower).
   function tryLong() {
-    const s4h   = get4hStructure(state, price);
-    const s15chk = get15mStructure(state, price);
-    // CHoCH protection: 15m fully BEARISH (LH+LL confirmed) → price in breakdown, dead-cat territory.
-    // MIXED = transitioning (LH+HL) → recovery is forming, allow entry.
-    if (s15chk === 'BEARISH') return null;
-    // 4H bearish + 15m also fully bearish → no long at all.
-    // 4H bearish + 15m MIXED (recovery HL forming) → allow: transition entry is valid.
-    if (s4h === 'BEARISH' && s15chk === 'BEARISH') return null;
-    // EXP-O: only block top-chasing HH breakout when both TFs are already overbought.
-    // HL pullback in a strong bull trend IS a valid entry — don't block it.
-    if (s4h === 'BULLISH' && s15chk === 'BULLISH' && p15 === 'HH') return null;
-    // Bullish structure entry: HH (breakout) or HL (higher low = trend continuing).
-    // Both confirm price is in a bullish sequence → LONG with the trend.
-    const isBull15 = p15 === 'HH' || p15 === 'HL';
-    const isBull1m = p1m === 'HH' || p1m === 'HL';
-    if (!isBull15 || !isBull1m) return null;
-    // Chase filter: don't enter if price already moved > MAX_CHASE_PCT above the 1m swing high
+    const s4h = get4hStructure(state, price);
+    if (s4h === 'BEARISH') return null;   // macro downtrend — demand zones fail, skip
+    // Demand zone entry: both 15m and 1m must confirm price is AT A LOW
+    const isDemand15 = p15 === 'LL' || p15 === 'HL';
+    const isDemand1m = p1m === 'LL' || p1m === 'HL';
+    if (!isDemand15 || !isDemand1m) return null;
+    // Chase filter: don't enter if price already bounced far above the 1m swing low
     if (isChasing(price, state.sh1m_1)) return null;
-    // VWAP proximity — at ABOVE_UPPER, price > upper band so distFromUpper < 0 (always passes).
-    // At UPPER_MID, block if price is > 2σ above the upper band (too extended).
+    // VWAP: block if price is already well above the upper band (too extended for a low entry)
     if (vwap && vwap.stddev > 0) {
       const distAboveUpper = (price - vwap.upper) / vwap.stddev;
       if (distAboveUpper > MIN_DIST_SIGMA * 2) return null;
@@ -545,31 +533,22 @@ function resolveSignal(state, zone, price, vwap) {
     return { direction: 'LONG', type: `${p15}+${p1m}` };
   }
 
-  // ── SHORT: any swing HIGH (HH or LH) — both are supply zone entries ──
-  // HH = new swing high = price touched supply and may reverse → SHORT
-  // LH = lower swing high = price failed to reach previous high → SHORT
-  // Both are valid: price is AT A HIGH, sell into that.
-  // Skip if 4H=BULLISH (strong uptrend — highs tend to break out, not reverse).
-  // Skip if 15m structure is BULLISH (HLs forming = recovery bounce — don't short the bounce).
-  // EXP-O dual-bearish block: if BOTH 4H and 15m BEARISH, already oversold = chasing.
+  // ── SHORT: price at a HIGH pivot (HH or LH) — supply zone entry ─────────────
+  // LH = lower high  → price bounced to supply, sellers rejected it → SHORT continuation
+  // HH = new high    → price hit supply zone, potential reversal    → SHORT reversal
+  // Both place entry AT THE HIGH — the point where sellers should be strongest.
+  // 4H gate: if macro trend is BULLISH, supply zones tend to break (highs keep printing).
   function tryShort() {
-    const s4h   = get4hStructure(state, price);
-    const s15chk = get15mStructure(state, price);
-    if (s4h === 'BULLISH') return null;          // no short against 4H uptrend
-    if (s15chk === 'BULLISH') return null;       // 15m recovering (HLs) — don't short the bounce
-    // EXP-O: block shorting a fresh LL breakdown when both TFs already fully oversold.
-    // LH (bounce rejection) is always valid — only LL bottom-chasing is the danger.
-    if (s4h === 'BEARISH' && s15chk === 'BEARISH' && p15 === 'LL') return null;
-    // Bearish structure entry: LL (breakdown) or LH (lower high = trend continuing).
-    // Both confirm price is in a bearish sequence → SHORT with the trend.
-    const isBear15 = p15 === 'LL' || p15 === 'LH';
-    const isBear1m = p1m === 'LL' || p1m === 'LH';
-    if (!isBear15 || !isBear1m) return null;
-    // Chase filter: don't enter if price already dropped > MAX_SHORT_DROP_PCT below the 1m swing low
+    const s4h = get4hStructure(state, price);
+    if (s4h === 'BULLISH') return null;   // macro uptrend — supply zones break, skip
+    // Supply zone entry: both 15m and 1m must confirm price is AT A HIGH
+    const isSupply15 = p15 === 'HH' || p15 === 'LH';
+    const isSupply1m = p1m === 'HH' || p1m === 'LH';
+    if (!isSupply15 || !isSupply1m) return null;
+    // Chase filter: don't enter if price already dropped far below the 1m swing high
     if (isShortTooLate(price, state.last15mPivotPrice)) return null;
     if (isShort1mTooLate(price, state.sl1m_1)) return null;
-    // VWAP proximity — at BELOW_LOWER, price < lower band so distBelowLower < 0 (always passes).
-    // At LOWER_MID, block if price is > 2σ below the lower band (too extended).
+    // VWAP: block if price is already well below the lower band (too extended for a high entry)
     if (vwap && vwap.stddev > 0) {
       const distBelowLower = (vwap.lower - price) / vwap.stddev;
       if (distBelowLower > MIN_DIST_SIGMA * 2) return null;
@@ -577,15 +556,15 @@ function resolveSignal(state, zone, price, vwap) {
     return { direction: 'SHORT', type: `${p15}+${p1m}` };
   }
 
-  // ── Pivot type decides direction; zone only blocks extremes ───
-  // NOTE: HH/HL = bullish pivots → LONG with the trend. LL/LH = bearish pivots → SHORT with the trend.
-  //       Zone blocks only the very extremes: BELOW_LOWER blocks LONG, ABOVE_UPPER blocks SHORT.
-  // Bullish pivot (HH or HL) = uptrend structure → LONG with the trend
-  // Bearish pivot (LL or LH) = downtrend structure → SHORT with the trend
-  const isBullPivot = p15 === 'HH' || p15 === 'HL';
-  const isBearPivot = p15 === 'LL' || p15 === 'LH';
-  if (isBullPivot && zone !== 'BELOW_LOWER') return tryLong();
-  if (isBearPivot && zone !== 'ABOVE_UPPER') return tryShort();
+  // ── Dispatcher: pivot type → direction ────────────────────────────────────
+  // LOW pivot  (LL or HL) = price at demand zone → LONG  (buy the low)
+  // HIGH pivot (HH or LH) = price at supply zone → SHORT (sell the high)
+  // Zone guard: don't LONG if price is already above upper band (ABOVE_UPPER)
+  //             don't SHORT if price is already below lower band (BELOW_LOWER)
+  const isLowPivot  = p15 === 'LL' || p15 === 'HL';
+  const isHighPivot = p15 === 'HH' || p15 === 'LH';
+  if (isLowPivot  && zone !== 'ABOVE_UPPER') return tryLong();
+  if (isHighPivot && zone !== 'BELOW_LOWER') return tryShort();
   return null;
 }
 
@@ -790,14 +769,14 @@ async function analyze(symbol, log) {
             } else if (zoneDir !== pending.direction) {
               cancelReason = `zone changed: ${pending.zone}→${zoneNext} now wants ${zoneDir}, had ${pending.direction}`;
             } else if (pending.direction === 'LONG' && s4h === 'BEARISH') {
-              cancelReason = `4H=BEARISH — LONG blocked, waiting for 4H to base`;
+              cancelReason = `4H=BEARISH — LONG blocked (macro downtrend, demand zones fail)`;
             } else if (pending.direction === 'LONG') {
-              const isBull15 = p15 === 'HH' || p15 === 'HL';
-              const isBull1m = p1m === 'HH' || p1m === 'HL';
-              if (!isBull15) {
-                cancelReason = `15m pivot flipped to ${p15} — need HH or HL for LONG (bullish structure)`;
-              } else if (!isBull1m) {
-                cancelReason = `1m pivot flipped to ${p1m} — need HH or HL for LONG (bullish structure)`;
+              const isDemand15 = p15 === 'LL' || p15 === 'HL';
+              const isDemand1m = p1m === 'LL' || p1m === 'HL';
+              if (!isDemand15) {
+                cancelReason = `15m pivot flipped to ${p15} — need LL or HL for LONG (demand zone)`;
+              } else if (!isDemand1m) {
+                cancelReason = `1m pivot flipped to ${p1m} — need LL or HL for LONG (demand zone)`;
               } else if (!is1mGapOk(st.sl1m_1, st.sl1m_2)) {
                 const g = (st.sl1m_1 && st.sl1m_2) ? (Math.abs(st.sl1m_1 - st.sl1m_2) / st.sl1m_2 * 100).toFixed(3) : 'n/a';
                 cancelReason = `1m gap=${g}% too wide (limit=${MAX_1M_GAP_PCT}%)`;
@@ -806,16 +785,16 @@ async function analyze(symbol, log) {
                 cancelReason = `live chase=${c}% above sl1m (limit=${MAX_CHASE_PCT}%)`;
               } else {
                 const dist = (entryPrice - vwapNext.lower) / vwapNext.stddev;
-                cancelReason = `VWAP proximity ${dist.toFixed(2)}σ above lower band (limit=${MIN_DIST_SIGMA * 2}σ) — entry too far from band, in the middle`;
+                cancelReason = `VWAP proximity ${dist.toFixed(2)}σ above lower band (limit=${MIN_DIST_SIGMA * 2}σ)`;
               }
             } else {
               // SHORT
-              const isBear15 = p15 === 'LL' || p15 === 'LH';
-              const isBear1m = p1m === 'LL' || p1m === 'LH';
-              if (!isBear15) {
-                cancelReason = `15m pivot flipped to ${p15} — need LL or LH for SHORT (bearish structure)`;
-              } else if (!isBear1m) {
-                cancelReason = `1m pivot flipped to ${p1m} — need LL or LH for SHORT (bearish structure)`;
+              const isSupply15 = p15 === 'HH' || p15 === 'LH';
+              const isSupply1m = p1m === 'HH' || p1m === 'LH';
+              if (!isSupply15) {
+                cancelReason = `15m pivot flipped to ${p15} — need HH or LH for SHORT (supply zone)`;
+              } else if (!isSupply1m) {
+                cancelReason = `1m pivot flipped to ${p1m} — need HH or LH for SHORT (supply zone)`;
               } else if (isShortTooLate(entryPrice, st.last15mPivotPrice)) {
                 const d = st.last15mPivotPrice ? ((st.last15mPivotPrice - entryPrice) / st.last15mPivotPrice * 100).toFixed(3) : 'n/a';
                 cancelReason = `15m drop=${d}% already past pivot (limit=${MAX_SHORT_DROP_PCT}%)`;
