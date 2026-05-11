@@ -520,13 +520,15 @@ function resolveSignal(state, zone, price, vwap) {
   function tryLong() {
     const s4h   = get4hStructure(state, price);
     const s15chk = get15mStructure(state, price);
-    // 15m BEARISH = CHoCH happened (HH→LL confirmed) — HL here is just a dead-cat bounce, not an entry.
-    // Mirror of SHORT rule: same as "don't short a 15m BULLISH recovery", don't long a 15m BEARISH breakdown.
+    // CHoCH protection: 15m fully BEARISH (LH+LL confirmed) → price in breakdown, dead-cat territory.
+    // MIXED = transitioning (LH+HL) → recovery is forming, allow entry.
     if (s15chk === 'BEARISH') return null;
-    // 4H bearish AND 15m not recovering → no long (strict trend filter).
-    // 4H bearish BUT 15m bullish → allow: price is bouncing from demand, HL is valid entry.
-    if (s4h === 'BEARISH' && s15chk !== 'BULLISH') return null;
-    if (s4h === 'BULLISH' && s15chk === 'BULLISH') return null;  // EXP-O: already overbought
+    // 4H bearish + 15m also fully bearish → no long at all.
+    // 4H bearish + 15m MIXED (recovery HL forming) → allow: transition entry is valid.
+    if (s4h === 'BEARISH' && s15chk === 'BEARISH') return null;
+    // EXP-O: only block top-chasing HH breakout when both TFs are already overbought.
+    // HL pullback in a strong bull trend IS a valid entry — don't block it.
+    if (s4h === 'BULLISH' && s15chk === 'BULLISH' && p15 === 'HH') return null;
     // Bullish structure entry: HH (breakout) or HL (higher low = trend continuing).
     // Both confirm price is in a bullish sequence → LONG with the trend.
     const isBull15 = p15 === 'HH' || p15 === 'HL';
@@ -555,7 +557,9 @@ function resolveSignal(state, zone, price, vwap) {
     const s15chk = get15mStructure(state, price);
     if (s4h === 'BULLISH') return null;          // no short against 4H uptrend
     if (s15chk === 'BULLISH') return null;       // 15m recovering (HLs) — don't short the bounce
-    if (s4h === 'BEARISH' && s15chk === 'BEARISH') return null;  // EXP-O: already oversold
+    // EXP-O: block shorting a fresh LL breakdown when both TFs already fully oversold.
+    // LH (bounce rejection) is always valid — only LL bottom-chasing is the danger.
+    if (s4h === 'BEARISH' && s15chk === 'BEARISH' && p15 === 'LL') return null;
     // Bearish structure entry: LL (breakdown) or LH (lower high = trend continuing).
     // Both confirm price is in a bearish sequence → SHORT with the trend.
     const isBear15 = p15 === 'LL' || p15 === 'LH';
