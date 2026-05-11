@@ -15,9 +15,20 @@
 
 'use strict';
 
-const TAKER_FEE_BOTH_LEGS  = 0.0008; // 0.04% entry + 0.04% exit taker
-const SAFETY_TRAIL_TRIGGER = 0.20;   // +20% capital → lock in profit early
-const SAFETY_TRAIL_LOCK    = 0.10;   // locks SL at +10% capital profit
+const TAKER_FEE_BOTH_LEGS    = 0.0008; // 0.04% entry + 0.04% exit taker
+const NET_PROFIT_TARGET      = 0.10;   // +10% capital NET profit the user keeps after ALL fees
+const FUNDING_RATE_EST       = 0.0001; // ~0.01% per 8h funding rate (conservative estimate)
+const FUNDING_BUFFER_PERIODS = 1;      // buffer for 1 funding period (8 hours)
+const SAFETY_TRAIL_LOCK      = 0.10;   // legacy floor — actual lock is computed dynamically below
+const SAFETY_TRAIL_TRIGGER   = 0.20;   // legacy — actual trigger is lock + SAFETY_GAP below
+const SAFETY_GAP             = 0.10;   // gap between safety trigger and safety lock (10% capital)
+//
+// WHY dynamic safety lock:
+//   At 125x (BTC), taker fees = 0.0008 × 125 = 10% capital.
+//   Old lock at +10% → net = 0% after fees (before funding).
+//   Add 1 funding period (0.01% × 125 = 1.25% capital) → net = -1.25% LOSS.
+//   New lock = NET_PROFIT_TARGET + takerFees + fundingBuffer — guarantees user
+//   keeps +10% capital after all fees, regardless of leverage.
 
 // ── Hardcoded defaults — match the dashboard screenshot exactly ──
 
@@ -133,19 +144,35 @@ function calculateTrailingStep(
     : (entryPrice - currentPrice) / entryPrice;
   const capitalPct = pricePct * leverage;
 
-  // ── Safety tier: +20% capital → lock +10% profit ───────────────
-  // Fires BEFORE the main trail activates. Protects early gains.
-  if (userTrailStepPct === 0 && capitalPct >= SAFETY_TRAIL_TRIGGER && lastStep < SAFETY_TRAIL_LOCK) {
-    const tiers = tierTableForLev(leverage);
-    const firstMainTrigger = smcMode
-      ? (tiers.find(t => t.lock >= 0.60)?.trigger ?? 0.61)
-      : tiers[0].trigger;
-    if (capitalPct < firstMainTrigger) {
-      const lockPricePct = SAFETY_TRAIL_LOCK / leverage;
-      const newSlPrice   = isLong
-        ? entryPrice * (1 + lockPricePct)
-        : entryPrice * (1 - lockPricePct);
-      return { stepped: true, newSlPrice, newLastStep: SAFETY_TRAIL_LOCK };
+  // ── Safety tier: fee-aware lock guarantees +10% net capital after all fees ──
+  // safetyLock  = NET_PROFIT_TARGET + taker fees (both legs) + 1 funding period
+  // safetyTrigger = safetyLock + SAFETY_GAP  (always 10% above lock)
+  //
+  // Example at 125x (BTC):
+  //   takerFeesCap = 0.0008 × 125 = 10%   fundingCap = 0.0001 × 125 = 1.25%
+  //   safetyLock   = 10% + 10% + 1.25%   = 21.25%   (user nets ≈ +10% after fees)
+  //   safetyTrigger = 21.25% + 10%        = 31.25%   (fires well before T1 at 46%)
+  //
+  // Example at 75x (ETH):
+  //   safetyLock = 10% + 6% + 0.75% = 16.75%   trigger = 26.75%  (T1 at 31% ✓)
+  if (userTrailStepPct === 0) {
+    const takerFeesCap  = TAKER_FEE_BOTH_LEGS * leverage;
+    const fundingCap    = FUNDING_RATE_EST * FUNDING_BUFFER_PERIODS * leverage;
+    const safetyLock    = Math.max(SAFETY_TRAIL_LOCK, NET_PROFIT_TARGET + takerFeesCap + fundingCap);
+    const safetyTrigger = safetyLock + SAFETY_GAP;
+
+    if (capitalPct >= safetyTrigger && lastStep < safetyLock) {
+      const tiers = tierTableForLev(leverage);
+      const firstMainTrigger = smcMode
+        ? (tiers.find(t => t.lock >= 0.60)?.trigger ?? 0.61)
+        : tiers[0].trigger;
+      if (capitalPct < firstMainTrigger) {
+        const lockPricePct = safetyLock / leverage;
+        const newSlPrice   = isLong
+          ? entryPrice * (1 + lockPricePct)
+          : entryPrice * (1 - lockPricePct);
+        return { stepped: true, newSlPrice, newLastStep: safetyLock };
+      }
     }
   }
 

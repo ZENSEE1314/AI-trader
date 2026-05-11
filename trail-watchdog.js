@@ -507,7 +507,8 @@ async function runOrphanGuard() {
   }
 }
 
-log('Trail watchdog started — 15s interval | tier trail (100x:46%→45% / 75x:31%→30% / 50x:21%→20%) + safety@20%→10%');
+log('Trail watchdog started — 15s interval | tier trail (100x:46%→45% / 75x:31%→30% / 50x:21%→20%)');
+log('Safety trail (fee-aware): 125x→lock≈21% / 75x→lock≈17% / 150x→lock≈24% / 200x→lock≈28% | nets +10% after fees');
 log('Orphan guard started — 2min interval | auto-close unmanaged positions > -25% capital');
 // Load tier config before first cycle so dynamic tables are ready
 loadTierConfig().then(() => {
