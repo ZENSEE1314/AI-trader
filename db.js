@@ -673,9 +673,11 @@ async function initAllTables() {
       leader_type     VARCHAR(10) NOT NULL CHECK (leader_type IN ('ai', 'user')),
       leader_user_id  INTEGER REFERENCES users(id) ON DELETE CASCADE,
       is_active       BOOLEAN NOT NULL DEFAULT true,
+      copy_size_pct   NUMERIC(5,2) NOT NULL DEFAULT 10.0,
       created_at      TIMESTAMPTZ DEFAULT NOW(),
       UNIQUE(follower_key_id)
     )`,
+    `ALTER TABLE copy_trade_subscriptions ADD COLUMN IF NOT EXISTS copy_size_pct NUMERIC(5,2) NOT NULL DEFAULT 10.0`,
     `ALTER TABLE trades ADD COLUMN IF NOT EXISTS is_copy_trade BOOLEAN DEFAULT false`,
     `ALTER TABLE trades ADD COLUMN IF NOT EXISTS copied_from_trade_id INTEGER REFERENCES trades(id)`,
   ];

@@ -31,7 +31,7 @@ router.get('/my-subscription', authMiddleware, async (req, res) => {
   try {
     const rows = await query(
       `SELECT cts.id, cts.leader_type, cts.leader_user_id, cts.is_active,
-              cts.follower_key_id, cts.created_at,
+              cts.follower_key_id, cts.copy_size_pct, cts.created_at,
               tp.display_name AS leader_display_name
          FROM copy_trade_subscriptions cts
          LEFT JOIN trader_profiles tp ON tp.user_id = cts.leader_user_id
@@ -50,7 +50,7 @@ router.get('/my-subscription', authMiddleware, async (req, res) => {
 
 // ── POST /api/copy-trade/subscribe ───────────────────────────────────────────
 router.post('/subscribe', authMiddleware, async (req, res) => {
-  const { apiKeyId, leaderType, leaderUserId } = req.body;
+  const { apiKeyId, leaderType, leaderUserId, copySizePct } = req.body;
 
   if (!apiKeyId) return res.status(400).json({ error: 'apiKeyId required' });
   if (!['ai', 'user'].includes(leaderType)) {
@@ -58,6 +58,12 @@ router.post('/subscribe', authMiddleware, async (req, res) => {
   }
   if (leaderType === 'user' && !leaderUserId) {
     return res.status(400).json({ error: 'leaderUserId required for user leader' });
+  }
+
+  // Validate risk % — must be 1–100
+  const riskPct = parseFloat(copySizePct);
+  if (isNaN(riskPct) || riskPct < 1 || riskPct > 100) {
+    return res.status(400).json({ error: 'copySizePct must be between 1 and 100' });
   }
 
   try {
@@ -83,17 +89,54 @@ router.post('/subscribe', authMiddleware, async (req, res) => {
     }
 
     await query(
-      `INSERT INTO copy_trade_subscriptions (follower_key_id, leader_type, leader_user_id, is_active)
-       VALUES ($1, $2, $3, true)
+      `INSERT INTO copy_trade_subscriptions
+         (follower_key_id, leader_type, leader_user_id, is_active, copy_size_pct)
+       VALUES ($1, $2, $3, true, $4)
        ON CONFLICT (follower_key_id)
-       DO UPDATE SET leader_type = $2, leader_user_id = $3, is_active = true`,
-      [apiKeyId, leaderType, leaderType === 'ai' ? null : leaderUserId]
+       DO UPDATE SET leader_type    = $2,
+                     leader_user_id = $3,
+                     is_active      = true,
+                     copy_size_pct  = $4`,
+      [apiKeyId, leaderType, leaderType === 'ai' ? null : leaderUserId, riskPct]
     );
 
-    res.json({ ok: true });
+    res.json({ ok: true, copySizePct: riskPct });
   } catch (err) {
     console.error('[copy-trade] POST /subscribe error:', err.message);
     res.status(500).json({ error: 'Failed to subscribe' });
+  }
+});
+
+// ── PATCH /api/copy-trade/risk/:apiKeyId — update risk % without re-subscribing
+router.patch('/risk/:apiKeyId', authMiddleware, async (req, res) => {
+  const { apiKeyId } = req.params;
+  const { copySizePct } = req.body;
+
+  const riskPct = parseFloat(copySizePct);
+  if (isNaN(riskPct) || riskPct < 1 || riskPct > 100) {
+    return res.status(400).json({ error: 'copySizePct must be between 1 and 100' });
+  }
+
+  try {
+    const owned = await query(
+      'SELECT id FROM api_keys WHERE id = $1 AND user_id = $2',
+      [apiKeyId, req.userId]
+    );
+    if (!owned.length) return res.status(403).json({ error: 'API key not found' });
+
+    const result = await query(
+      `UPDATE copy_trade_subscriptions SET copy_size_pct = $1
+       WHERE follower_key_id = $2 AND is_active = true
+       RETURNING id`,
+      [riskPct, apiKeyId]
+    );
+
+    if (!result.length) return res.status(404).json({ error: 'No active subscription for this key' });
+
+    res.json({ ok: true, copySizePct: riskPct });
+  } catch (err) {
+    console.error('[copy-trade] PATCH /risk error:', err.message);
+    res.status(500).json({ error: 'Failed to update risk' });
   }
 });
 

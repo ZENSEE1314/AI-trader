@@ -200,7 +200,19 @@
       <div class="label">Currently following</div>
       <div class="name" id="sub-leader-name">—</div>
     </div>
-    <button class="btn-unfollow" id="btn-global-unfollow">Unfollow</button>
+    <div style="text-align:center;">
+      <div class="label">Risk per trade</div>
+      <div style="color:#f39c12;font-size:1.3rem;font-weight:700;" id="sub-risk-pct">—</div>
+      <div style="color:#666;font-size:.75rem;">of your wallet</div>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:8px;">
+      <button class="btn-unfollow" id="btn-global-unfollow">Unfollow</button>
+      <button id="btn-change-risk" style="background:#1a3a2a;color:#00d4ff;border:1px solid #00d4ff44;
+        border-radius:8px;padding:8px 14px;cursor:pointer;font-size:.82rem;transition:background .2s;"
+        onmouseover="this.style.background='#0d2a1e'" onmouseout="this.style.background='#1a3a2a'">
+        Change Risk %
+      </button>
+    </div>
   </div>
 </div>
 
@@ -263,10 +275,14 @@
       ? '🤖 AI Trader (MCT)'
       : (mySubscription.leader_display_name || `Trader #${mySubscription.leader_user_id}`);
 
+    const riskPct = parseFloat(mySubscription.copy_size_pct) || 10;
+
     document.getElementById('sub-leader-name').textContent = name;
+    document.getElementById('sub-risk-pct').textContent = riskPct + '%';
     banner.style.display = 'block';
 
-    document.getElementById('btn-global-unfollow').onclick = () => unsubscribe(mySubscription.follower_key_id);
+    document.getElementById('btn-global-unfollow').onclick   = () => unsubscribe(mySubscription.follower_key_id);
+    document.getElementById('btn-change-risk').onclick = () => updateRisk(mySubscription.follower_key_id);
   }
 
   function renderAiCard(trader) {
@@ -345,18 +361,94 @@
       if (isFollowing) {
         await unsubscribe(myApiKeyId);
       } else {
-        await subscribe(trader);
+        showRiskModal(trader);
       }
     });
   }
 
-  async function subscribe(trader) {
+  // ── Risk modal — shown before subscribing ─────────────────────────────────
+  function showRiskModal(trader) {
+    // Remove any existing modal
+    document.getElementById('risk-modal')?.remove();
+
+    const modal = document.createElement('div');
+    modal.id = 'risk-modal';
+    modal.style.cssText = `
+      position:fixed;inset:0;background:rgba(0,0,0,.75);display:flex;
+      align-items:center;justify-content:center;z-index:1000;padding:20px;
+    `;
+    modal.innerHTML = `
+      <div style="background:#111124;border:1px solid #00d4ff44;border-radius:16px;
+                  padding:32px 28px;width:100%;max-width:420px;position:relative;">
+        <button id="modal-close" style="position:absolute;top:12px;right:16px;
+          background:none;border:none;color:#aaa;font-size:1.4rem;cursor:pointer;">✕</button>
+
+        <h3 style="color:#fff;margin-bottom:6px;">Follow ${esc(trader.displayName)}</h3>
+        <p style="color:#aaa;font-size:.85rem;margin-bottom:24px;">
+          Choose how much of your wallet capital to use per copy trade.
+          Lower % = less risk, higher % = mirrors the leader more closely.
+        </p>
+
+        <label style="color:#ccc;font-size:.85rem;display:block;margin-bottom:8px;">
+          Risk per trade: <strong id="risk-display" style="color:#00d4ff;">10%</strong>
+          of your wallet
+        </label>
+        <input id="risk-slider" type="range" min="1" max="100" value="10" step="1"
+          style="width:100%;accent-color:#00d4ff;cursor:pointer;margin-bottom:6px;" />
+
+        <div style="display:flex;justify-content:space-between;font-size:.75rem;color:#666;margin-bottom:20px;">
+          <span>1% — Very safe</span><span>50% — Aggressive</span><span>100% — Full mirror</span>
+        </div>
+
+        <div id="risk-info" style="background:#0d0d1a;border-radius:8px;padding:12px;
+             font-size:.82rem;color:#aaa;margin-bottom:20px;">
+          Loading wallet info…
+        </div>
+
+        <button id="modal-confirm" style="width:100%;background:#00d4ff;color:#0a0a1a;
+          border:none;border-radius:10px;padding:12px;font-weight:700;font-size:1rem;
+          cursor:pointer;transition:background .2s;">
+          Confirm & Follow
+        </button>
+      </div>
+    `;
+    document.body.appendChild(modal);
+
+    const slider   = modal.querySelector('#risk-slider');
+    const display  = modal.querySelector('#risk-display');
+    const infoBox  = modal.querySelector('#risk-info');
+
+    function updateInfo() {
+      const pct = parseInt(slider.value);
+      display.textContent = pct + '%';
+      infoBox.innerHTML = `
+        <span style="color:#00d4ff;">≈${pct}%</span> of your wallet balance will be
+        allocated as margin per copy trade.<br>
+        <span style="color:#f39c12;">⚠ Higher % = larger position, higher profit AND higher risk.</span>
+        <br><br>You can change this anytime without unfollowing.
+      `;
+    }
+    slider.addEventListener('input', updateInfo);
+    updateInfo();
+
+    modal.querySelector('#modal-close').onclick = () => modal.remove();
+    modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
+
+    modal.querySelector('#modal-confirm').onclick = async () => {
+      const pct = parseInt(slider.value);
+      await subscribe(trader, pct);
+      modal.remove();
+    };
+  }
+
+  async function subscribe(trader, copySizePct = 10) {
     if (!myApiKeyId) { toast('No API key found.'); return; }
     try {
       const body = {
-        apiKeyId: myApiKeyId,
-        leaderType: trader.isAi ? 'ai' : 'user',
+        apiKeyId:     myApiKeyId,
+        leaderType:   trader.isAi ? 'ai' : 'user',
         leaderUserId: trader.isAi ? undefined : trader.userId,
+        copySizePct,
       };
       const r = await fetch('/api/copy-trade/subscribe', {
         method: 'POST',
@@ -365,8 +457,28 @@
       });
       const data = await r.json();
       if (!r.ok) { toast(data.error || 'Subscribe failed'); return; }
-      toast(`Now following ${trader.displayName}!`);
-      await init(); // refresh
+      toast(`Now following ${trader.displayName} with ${copySizePct}% risk!`);
+      await init();
+    } catch (err) {
+      toast('Network error — please try again.');
+    }
+  }
+
+  // ── Update risk % on existing subscription ────────────────────────────────
+  async function updateRisk(apiKeyId) {
+    const pctStr = prompt('Enter new risk % (1–100):');
+    const pct = parseFloat(pctStr);
+    if (!pctStr || isNaN(pct) || pct < 1 || pct > 100) { toast('Invalid value — enter 1 to 100'); return; }
+    try {
+      const r = await fetch(`/api/copy-trade/risk/${apiKeyId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ copySizePct: pct }),
+      });
+      const data = await r.json();
+      if (!r.ok) { toast(data.error || 'Update failed'); return; }
+      toast(`Risk updated to ${pct}%`);
+      await init();
     } catch (err) {
       toast('Network error — please try again.');
     }
