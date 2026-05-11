@@ -491,8 +491,8 @@ function get15mStructure(state, currentPrice) {
 // ── Signal logic ───────────────────────────────────────────────
 //
 //  Pivot type decides direction — zone gates extremes only:
-//    HH or HL pivot → tryLong()   (blocked only when zone = BELOW_LOWER)
-//    LL or LH pivot → tryShort()  (blocked only when zone = ABOVE_UPPER)
+//    LL or HL pivot → tryLong()   (demand zone — buy the low)
+//    HH or LH pivot → tryShort()  (supply zone — sell the high)
 //
 //  Why: HL often forms just BELOW VWAP (price dips to demand, then bounces).
 //  Old code routed LOWER_MID → tryShort(), which missed every HL-in-lower-zone LONG.
