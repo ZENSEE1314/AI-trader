@@ -136,8 +136,8 @@ router.put('/:id/settings', async (req, res) => {
     if (leverage !== undefined && (leverage < 1 || leverage > 125)) {
       return res.status(400).json({ error: 'Leverage must be 1-125' });
     }
-    if (risk_pct !== undefined && (risk_pct < 0.01 || risk_pct > 0.20)) {
-      return res.status(400).json({ error: 'Risk % must be 1-20%' });
+    if (risk_pct !== undefined && (risk_pct < 0.01 || risk_pct > 1.0)) {
+      return res.status(400).json({ error: 'Capital % must be 1-100%' });
     }
     if (max_positions !== undefined && (max_positions < 1 || max_positions > 10)) {
       return res.status(400).json({ error: 'Max positions must be 1-10' });

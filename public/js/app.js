@@ -1031,16 +1031,7 @@
     els.keysList.innerHTML = keys.map((k) => {
       const platformAbbr = getPlatformAbbr(k.platform);
       const isEnabled = k.enabled !== false;
-      const leverage = k.leverage || 10;
-      const riskPct = k.risk_pct != null ? (parseFloat(k.risk_pct) * 100).toFixed(0) : '5';
-      const maxLoss = k.max_loss_usdt || 30;
-      const maxPos = k.max_positions || 1;
-
-      const bannedCoins = k.banned_coins || '';
-      const tpPct = k.tp_pct != null ? (parseFloat(k.tp_pct) * 100).toFixed(2) : '1.00';
-      const slPct = k.sl_pct != null ? (parseFloat(k.sl_pct) * 100).toFixed(2) : '1.00';
-      const trailingStep = k.trailing_sl_step != null ? parseFloat(k.trailing_sl_step).toFixed(1) : '1.2';
-      const maxConsecLoss = k.max_consec_loss != null ? k.max_consec_loss : 2;
+      const riskPct = k.risk_pct != null ? (parseFloat(k.risk_pct) * 100).toFixed(0) : '10';
 
       return `<div class="key-card" data-key-id="${k.id}">
         <div class="key-card-main">
@@ -1061,123 +1052,58 @@
           </div>
         </div>
         <div class="key-settings" id="settings-${k.id}">
-          <!-- Risk Level Visual Selector -->
+          <!-- Capital % per trade -->
+          <div class="slider-group" style="margin-bottom:var(--space-4);">
+            <div class="slider-header">
+              <label class="form-label" for="risk-${k.id}">Capital per Trade (%) <span class="tip-btn">?<span class="tip-text">Percentage of your wallet used as margin for each trade. E.g. 10% of a $1,000 wallet = $100 margin per trade.</span></span></label>
+              <input type="number" class="slider-num" id="risk-num-${k.id}" min="1" max="100" step="1" value="${riskPct}"
+                oninput="window.CryptoBot.syncSlider('risk-${k.id}',this.value)">
+            </div>
+            <input type="range" id="risk-${k.id}" min="1" max="100" value="${riskPct}"
+              oninput="window.CryptoBot.syncNum('risk-num-${k.id}',this.value)"
+              aria-label="Capital per trade percentage">
+          </div>
+
+          <!-- Copy Trade -->
           <div style="margin-bottom:var(--space-4);">
-            <label class="form-label" style="margin-bottom:var(--space-2);">Risk Level <span class="tip-btn">?<span class="tip-text">Choose a preset risk profile. This auto-fills leverage, SL, TP, and trailing settings. You can still adjust individually after.</span></span></label>
-            <input type="hidden" id="risk-level-${k.id}" value="${k.risk_level_id || ''}">
-            <div id="risk-boxes-${k.id}" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;"></div>
+            <label class="form-label" style="margin-bottom:var(--space-2);">Copy Trade <span class="tip-btn">?<span class="tip-text">Follow a trader and automatically mirror their trades using your capital %. Choose AI to follow the bot, or pick a community trader.</span></span></label>
+            <div id="copy-trade-section-${k.id}" style="display:flex;flex-direction:column;gap:10px;">
+              <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                <button class="btn btn-sm" id="ct-btn-none-${k.id}"
+                  onclick="window.CryptoBot.setCopyMode(${k.id},'none')"
+                  style="border:2px solid var(--color-border-muted);background:transparent;color:var(--color-text-muted);">
+                  Off
+                </button>
+                <button class="btn btn-sm" id="ct-btn-ai-${k.id}"
+                  onclick="window.CryptoBot.setCopyMode(${k.id},'ai')"
+                  style="border:2px solid var(--color-border-muted);background:transparent;color:var(--color-text-muted);">
+                  🤖 Copy AI
+                </button>
+                <button class="btn btn-sm" id="ct-btn-user-${k.id}"
+                  onclick="window.CryptoBot.setCopyMode(${k.id},'user')"
+                  style="border:2px solid var(--color-border-muted);background:transparent;color:var(--color-text-muted);">
+                  👤 Copy Trader
+                </button>
+              </div>
+              <div id="ct-user-select-${k.id}" style="display:none;">
+                <select class="form-input" id="ct-user-id-${k.id}" style="font-size:0.85rem;">
+                  <option value="">Loading traders...</option>
+                </select>
+              </div>
+              <div id="ct-status-${k.id}" style="font-size:0.75rem;color:var(--color-text-muted);"></div>
+            </div>
+            <input type="hidden" id="ct-mode-${k.id}" value="none">
           </div>
-          <div class="settings-grid">
-            <div class="slider-group">
-              <div class="slider-header">
-                <label class="form-label" for="leverage-${k.id}">Leverage <span class="tip-btn">?<span class="tip-text">Multiplier for your trade size. Higher leverage = bigger gains but also bigger losses. E.g. 20x means $100 controls $2000.</span></span></label>
-                <input type="number" class="slider-num" id="leverage-num-${k.id}" min="1" max="125" step="1" value="${leverage}"
-                  oninput="window.CryptoBot.syncSlider('leverage-${k.id}',this.value)">
-              </div>
-              <input type="range" id="leverage-${k.id}" min="1" max="125" value="${leverage}"
-                oninput="window.CryptoBot.syncNum('leverage-num-${k.id}',this.value)"
-                aria-label="Leverage">
-            </div>
-            <div class="slider-group">
-              <div class="slider-header">
-                <label class="form-label" for="risk-${k.id}">Risk per Trade (%) <span class="tip-btn">?<span class="tip-text">Percentage of your wallet used as margin for each trade. E.g. 10% of a $1000 wallet = $100 margin per trade.</span></span></label>
-                <input type="number" class="slider-num" id="risk-num-${k.id}" min="1" max="20" step="1" value="${riskPct}"
-                  oninput="window.CryptoBot.syncSlider('risk-${k.id}',this.value)">
-              </div>
-              <input type="range" id="risk-${k.id}" min="1" max="20" value="${riskPct}"
-                oninput="window.CryptoBot.syncNum('risk-num-${k.id}',this.value)"
-                aria-label="Risk percentage">
-            </div>
-            <div class="slider-group">
-              <div class="slider-header">
-                <label class="form-label" for="maxloss-${k.id}">Max Loss per Trade (%) <span class="tip-btn">?<span class="tip-text">Maximum loss allowed on a single trade as % of margin. If a trade hits this loss, it auto-closes.</span></span></label>
-                <input type="number" class="slider-num" id="maxloss-num-${k.id}" min="1" max="100" step="1" value="${maxLoss}"
-                  oninput="window.CryptoBot.syncSlider('maxloss-${k.id}',this.value)">
-              </div>
-              <input type="range" id="maxloss-${k.id}" min="1" max="100" value="${maxLoss}"
-                oninput="window.CryptoBot.syncNum('maxloss-num-${k.id}',this.value)"
-                aria-label="Max loss percentage">
-            </div>
-            <div class="slider-group">
-              <div class="slider-header">
-                <label class="form-label" for="maxpos-${k.id}">Max Open Trades <span class="tip-btn">?<span class="tip-text">Maximum number of trades the bot can have open at the same time. More trades = more risk but more opportunity.</span></span></label>
-                <input type="number" class="slider-num" id="maxpos-num-${k.id}" min="1" max="10" step="1" value="${maxPos}"
-                  oninput="window.CryptoBot.syncSlider('maxpos-${k.id}',this.value)">
-              </div>
-              <input type="range" id="maxpos-${k.id}" min="1" max="10" value="${maxPos}"
-                oninput="window.CryptoBot.syncNum('maxpos-num-${k.id}',this.value)"
-                aria-label="Max concurrent positions">
-            </div>
-            <div class="slider-group">
-              <div class="slider-header">
-                <label class="form-label" for="tp-${k.id}">Take Profit % <span class="tip-btn">?<span class="tip-text">Target profit % to close the trade. E.g. 1.5% means when price moves 1.5% in your favor, position starts closing. TP3 = 1.5x this value.</span></span></label>
-                <input type="number" class="slider-num" id="tp-num-${k.id}" min="0.5" max="20" step="0.1" value="${tpPct}"
-                  oninput="window.CryptoBot.syncSlider('tp-${k.id}',Math.round(this.value*10))">
-              </div>
-              <input type="range" id="tp-${k.id}" min="5" max="200" value="${Math.round(tpPct * 10)}"
-                oninput="window.CryptoBot.syncNum('tp-num-${k.id}',(this.value/10).toFixed(1))"
-                aria-label="Take profit percentage">
-            </div>
-            <div class="slider-group">
-              <div class="slider-header">
-                <label class="form-label" for="sl-${k.id}">Initial SL % <span class="tip-btn">?<span class="tip-text">Stop loss placed at this % from entry. E.g. 1.5% means if price drops 1.5% your position closes.</span></span></label>
-                <input type="number" class="slider-num" id="sl-num-${k.id}" min="0.5" max="10" step="0.1" value="${slPct}"
-                  oninput="window.CryptoBot.syncSlider('sl-${k.id}',Math.round(this.value*10))">
-              </div>
-              <input type="range" id="sl-${k.id}" min="5" max="100" value="${Math.round(slPct * 10)}"
-                oninput="window.CryptoBot.syncNum('sl-num-${k.id}',(this.value/10).toFixed(1))"
-                aria-label="Stop loss percentage">
-            </div>
-            <div class="slider-group">
-              <div class="slider-header">
-                <label class="form-label" for="trailing-step-${k.id}">Trailing SL Step % <span class="tip-btn">?<span class="tip-text">As price moves in your favor, SL moves up in steps of this %. E.g. 1% means every 1% profit gained, SL locks in the previous level.</span></span></label>
-                <input type="number" class="slider-num" id="trailing-step-num-${k.id}" min="0.5" max="5" step="0.1" value="${trailingStep}"
-                  oninput="window.CryptoBot.syncSlider('trailing-step-${k.id}',Math.round(this.value*10))">
-              </div>
-              <input type="range" id="trailing-step-${k.id}" min="5" max="50" value="${Math.round(trailingStep * 10)}"
-                oninput="window.CryptoBot.syncNum('trailing-step-num-${k.id}',(this.value/10).toFixed(1))"
-                aria-label="Trailing stop loss step percentage">
-            </div>
-            <div class="slider-group">
-              <div class="slider-header">
-                <label class="form-label" for="maxloss-streak-${k.id}">Stop After Losses <span class="tip-btn">?<span class="tip-text">Bot stops trading after this many consecutive losses in one day. Resets at 7am daily. Set 0 for unlimited (never stop).</span></span></label>
-                <input type="number" class="slider-num" id="maxloss-streak-num-${k.id}" min="1" max="10" step="1" value="${maxConsecLoss}"
-                  oninput="window.CryptoBot.syncSlider('maxloss-streak-${k.id}',this.value)">
-              </div>
-              <input type="range" id="maxloss-streak-${k.id}" min="1" max="10" value="${maxConsecLoss}"
-                oninput="window.CryptoBot.syncNum('maxloss-streak-num-${k.id}',this.value)"
-                aria-label="Max consecutive losses before stopping">
-            </div>
-            <div class="form-group" style="margin-bottom:0;grid-column:1/-1;">
-              <label class="form-label">Ban These Coins <span class="tip-btn">?<span class="tip-text">Block specific coins from trading. The bot will never open positions on banned coins.</span></span></label>
-              <div class="coin-chips" id="banned-chips-${k.id}">${buildChips(bannedCoins, k.id, 'banned')}</div>
-              <div style="position:relative;">
-                <input class="form-input text-mono" type="text" id="banned-search-${k.id}" placeholder="Type to search available tokens..." autocomplete="off" style="font-size:0.8rem;" oninput="window.CryptoBot.searchUserBanToken(this,${k.id})" onfocus="window.CryptoBot.searchUserBanToken(this,${k.id})">
-                <div class="coin-dropdown hidden" id="banned-dropdown-${k.id}"></div>
-              </div>
-            </div>
-            <!-- Per-Token Leverage -->
-            <div class="form-group" style="margin-bottom:0;grid-column:1/-1;">
-              <label class="form-label">Per-Token Leverage <span class="tip-btn">?<span class="tip-text">Set different leverage for specific coins. E.g. BTC 10x, DOGE 50x. Overrides the default leverage above for these tokens.</span></span></label>
-              <div id="token-lev-${k.id}" style="margin-bottom:8px;"></div>
-              <div style="display:flex;gap:8px;align-items:end;flex-wrap:wrap;position:relative;">
-                <div style="position:relative;">
-                  <input class="form-input text-mono" type="text" id="token-lev-symbol-${k.id}" placeholder="Type token..." autocomplete="off" style="width:140px;font-size:0.8rem;text-transform:uppercase;" oninput="window.CryptoBot.searchTokenLev(this,${k.id})" onfocus="window.CryptoBot.searchTokenLev(this,${k.id})">
-                  <div class="coin-dropdown hidden" id="token-lev-dropdown-${k.id}"></div>
-                </div>
-                <input class="form-input text-mono" type="number" id="token-lev-value-${k.id}" placeholder="20" min="1" max="125" style="width:80px;font-size:0.8rem;">
-                <button class="btn btn-ghost btn-sm" style="font-size:0.7rem;" onclick="window.CryptoBot.addTokenLeverage(${k.id})">Add</button>
-              </div>
-              <span style="font-size:0.7rem;color:var(--color-text-muted);">Set custom leverage per token (e.g. BTC 10x, DOGE 50x)</span>
-            </div>
-            <div style="display:flex;align-items:flex-end;">
-              <label class="toggle">
-                <input type="checkbox" id="enabled-${k.id}" ${isEnabled ? 'checked' : ''}>
-                <span class="toggle-track"></span>
-                <span class="toggle-label">Enabled</span>
-              </label>
-            </div>
+
+          <!-- Enabled toggle -->
+          <div style="display:flex;align-items:center;margin-bottom:var(--space-4);">
+            <label class="toggle">
+              <input type="checkbox" id="enabled-${k.id}" ${isEnabled ? 'checked' : ''}>
+              <span class="toggle-track"></span>
+              <span class="toggle-label">Enabled</span>
+            </label>
           </div>
+
           <div class="settings-actions">
             <button class="btn btn-primary btn-sm" onclick="window.CryptoBot.saveSettings(${k.id})">Save Settings</button>
             <button class="btn btn-ghost btn-sm" onclick="window.CryptoBot.toggleSettings(${k.id})">Cancel</button>
@@ -1195,39 +1121,102 @@
   // Toggle settings panel
   function toggleSettings(keyId) {
     const panel = $(`#settings-${keyId}`);
-    if (panel) panel.classList.toggle('open');
+    if (!panel) return;
+    const isOpening = !panel.classList.contains('open');
+    panel.classList.toggle('open');
+    if (isOpening) _initCopyTradeSection(keyId);
+  }
+
+  async function _initCopyTradeSection(keyId) {
+    try {
+      const [sub, traders] = await Promise.all([
+        api('GET', '/api/copy-trade/my-subscription').catch(() => []),
+        api('GET', '/api/copy-trade/traders').catch(() => []),
+      ]);
+
+      // Populate trader dropdown
+      const sel = $(`#ct-user-id-${keyId}`);
+      if (sel) {
+        const userTraders = traders.filter(t => !t.isAi);
+        sel.innerHTML = userTraders.length
+          ? userTraders.map(t => `<option value="${t.userId}">${escapeHtml(t.displayName)} (Win: ${t.winRate}%)</option>`).join('')
+          : '<option value="">No public traders yet</option>';
+      }
+
+      // Find active subscription for this key
+      const activeSub = Array.isArray(sub) ? sub.find(s => s.follower_key_id == keyId) : null;
+      if (activeSub) {
+        const mode = activeSub.leader_type;
+        $(`#ct-mode-${keyId}`).value = mode;
+        _highlightCopyBtn(keyId, mode);
+        if (mode === 'user' && activeSub.leader_user_id && sel) {
+          sel.value = activeSub.leader_user_id;
+          $(`#ct-user-select-${keyId}`).style.display = 'block';
+        }
+        $(`#ct-status-${keyId}`).textContent =
+          mode === 'ai' ? '✅ Following AI Trader (MCT)' :
+          mode === 'user' ? `✅ Following ${escapeHtml(activeSub.leader_display_name || 'a trader')}` : '';
+      } else {
+        _highlightCopyBtn(keyId, 'none');
+      }
+    } catch (e) {
+      // non-fatal — section stays blank
+    }
+  }
+
+  function _highlightCopyBtn(keyId, mode) {
+    ['none', 'ai', 'user'].forEach(m => {
+      const btn = $(`#ct-btn-${m}-${keyId}`);
+      if (!btn) return;
+      const active = m === mode;
+      btn.style.borderColor    = active ? 'var(--color-primary)' : 'var(--color-border-muted)';
+      btn.style.background     = active ? 'rgba(var(--color-primary-rgb),0.15)' : 'transparent';
+      btn.style.color          = active ? 'var(--color-primary)' : 'var(--color-text-muted)';
+    });
+  }
+
+  function setCopyMode(keyId, mode) {
+    $(`#ct-mode-${keyId}`).value = mode;
+    _highlightCopyBtn(keyId, mode);
+    $(`#ct-user-select-${keyId}`).style.display = mode === 'user' ? 'block' : 'none';
+    if (mode !== 'user') $(`#ct-status-${keyId}`).textContent = '';
   }
 
   // Save settings
   async function saveSettings(keyId) {
-    const leverage = parseInt($(`#leverage-${keyId}`).value);
     const riskPct = parseInt($(`#risk-${keyId}`).value) / 100;
-    const maxLossUsdt = parseInt($(`#maxloss-${keyId}`).value);
-    const maxPositions = parseInt($(`#maxpos-${keyId}`).value);
-    const enabled = $(`#enabled-${keyId}`).checked;
-    const bannedCoins = getChipValues(`banned-chips-${keyId}`);
-    const tpPct = parseInt($(`#tp-${keyId}`).value) / 1000;
-    const slPct = parseInt($(`#sl-${keyId}`).value) / 1000;
-    const trailingSlStep = parseInt($(`#trailing-step-${keyId}`).value) / 10;
-    const maxConsecLoss = parseInt($(`#maxloss-streak-${keyId}`).value);
-    const riskLevelId = $(`#risk-level-${keyId}`).value || null;
-    const tokenLeverages = getTokenLeverages(keyId);
+    const enabled  = $(`#enabled-${keyId}`).checked;
+    const copyMode = $(`#ct-mode-${keyId}`)?.value || 'none';
 
     try {
+      // Save capital % and enabled state
       await api('PUT', `/api/keys/${keyId}/settings`, {
-        leverage,
         risk_pct: riskPct,
-        max_loss_usdt: maxLossUsdt,
-        max_positions: maxPositions,
         enabled,
-        banned_coins: bannedCoins,
-        tp_pct: tpPct,
-        sl_pct: slPct,
-        trailing_sl_step: trailingSlStep,
-        max_consec_loss: maxConsecLoss,
-        risk_level_id: riskLevelId ? parseInt(riskLevelId) : null,
-        token_leverages: tokenLeverages,
       });
+
+      // Handle copy trade subscription
+      if (copyMode === 'none') {
+        // Unsubscribe if there was an active subscription
+        await api('DELETE', `/api/copy-trade/unsubscribe/${keyId}`).catch(() => {});
+      } else if (copyMode === 'ai') {
+        await api('POST', '/api/copy-trade/subscribe', {
+          apiKeyId: keyId,
+          leaderType: 'ai',
+          leaderUserId: null,
+          copySizePct: Math.round(riskPct * 100),
+        });
+      } else if (copyMode === 'user') {
+        const leaderUserId = $(`#ct-user-id-${keyId}`)?.value;
+        if (!leaderUserId) return showToast('Please select a trader to copy', 'error');
+        await api('POST', '/api/copy-trade/subscribe', {
+          apiKeyId: keyId,
+          leaderType: 'user',
+          leaderUserId: parseInt(leaderUserId),
+          copySizePct: Math.round(riskPct * 100),
+        });
+      }
+
       showToast('Settings saved.', 'success');
       toggleSettings(keyId);
       loadKeys();
@@ -5602,6 +5591,7 @@
 
   window.CryptoBot = {
     toggleSettings, saveSettings, deleteKey, showToast, syncSlider, syncNum, saveProfile, changePassword,
+    setCopyMode,
     togglePause,
     submitTopUp, loadDepositAddress, saveUsdtAddress, withdrawFromWallet, payWeekly, saveBitunixReferralLink,
     adminAction, adminChangeRole, adminSub, adminWd, saveAdminSettings, adminEditWallet, adminSetBitunixReferralLink, clearErrors,
