@@ -520,6 +520,9 @@ function resolveSignal(state, zone, price, vwap) {
   function tryLong() {
     const s4h   = get4hStructure(state, price);
     const s15chk = get15mStructure(state, price);
+    // 15m BEARISH = CHoCH happened (HH→LL confirmed) — HL here is just a dead-cat bounce, not an entry.
+    // Mirror of SHORT rule: same as "don't short a 15m BULLISH recovery", don't long a 15m BEARISH breakdown.
+    if (s15chk === 'BEARISH') return null;
     // 4H bearish AND 15m not recovering → no long (strict trend filter).
     // 4H bearish BUT 15m bullish → allow: price is bouncing from demand, HL is valid entry.
     if (s4h === 'BEARISH' && s15chk !== 'BULLISH') return null;

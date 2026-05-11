@@ -201,6 +201,10 @@ bear1m = last1mLLabel == "LL" or last1mHLabel == "LH"                 // 1m bear
 longBlocked4h  = h4_bearish and structure15 != "BULLISH"  // blocked unless 15m is recovering
 shortBlocked4h = h4_bullish                               // no SHORT against 4H uptrend
 
+// 15m breakdown block on LONG: if 15m CHoCH happened (BEARISH structure), HL is dead-cat bounce — no LONG
+// Mirror of shortBlocked15mRecovery: symmetric rule for both directions
+longBlocked15mBreakdown = structure15 == "BEARISH"
+
 // 15m recovery block on SHORT: if 15m is making HLs (BULLISH structure), do NOT short the bounce
 // Prevents: "short in no place" — bot was shorting CHoCH dips within bullish 1m recovery moves
 shortBlocked15mRecovery = structure15 == "BULLISH"
@@ -217,7 +221,7 @@ dropOkShort  = not na(sl1m_1) and (sl1m_1 - close) / sl1m_1 <= maxDropPct
 
 // Final signals — pivot type decides direction, zone only blocks extremes
 longSig  = zone != "BELOW_LOWER" and bull15 and bull1m and
-           not longBlocked4h and not longBlockedExpO and chaseOkLong
+           not longBlocked4h and not longBlockedExpO and not longBlocked15mBreakdown and chaseOkLong
 
 shortSig = zone != "ABOVE_UPPER" and bear15 and bear1m and
            not shortBlocked4h and not shortBlockedExpO and not shortBlocked15mRecovery and dropOkShort
@@ -296,9 +300,9 @@ if barstate.islast and showDash
     table.cell(dash, 1, 7, l1Str,    bgcolor=_cellBg, text_color=color.lime, text_size=size.small)
 
     // Gates
-    gateStr = (longBlocked4h or longBlockedExpO ? "LONG ✗  " : "LONG ✓  ") +
+    gateStr = (longBlocked4h or longBlockedExpO or longBlocked15mBreakdown ? "LONG ✗  " : "LONG ✓  ") +
               (shortBlocked4h or shortBlockedExpO or shortBlocked15mRecovery ? "SHORT ✗" : "SHORT ✓")
-    gateCol = (longBlocked4h or longBlockedExpO or shortBlocked4h or shortBlockedExpO or shortBlocked15mRecovery) ? color.orange : color.lime
+    gateCol = (longBlocked4h or longBlockedExpO or longBlocked15mBreakdown or shortBlocked4h or shortBlockedExpO or shortBlocked15mRecovery) ? color.orange : color.lime
     table.cell(dash, 0, 8, "Gates",  bgcolor=_cellBg, text_color=_gray,    text_size=size.small)
     table.cell(dash, 1, 8, gateStr,  bgcolor=_cellBg, text_color=gateCol,  text_size=size.small)
 
