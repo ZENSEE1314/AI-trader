@@ -3129,11 +3129,21 @@ async function syncTradeStatus() {
                     exitPrice = cp;
                     found = true;
                     bLog.system(`[SYNC] MATCH trade#${trade.id} ${trade.symbol}: entry=${ep} exit=${cp} pnl=${realizedPnl} fee=${tradingFee} funding=${fundingFee}`);
+                  } else if (realizedPnl !== null && qty > 0) {
+                    // Bitunix closePrice=0 bug — derive exact exit price from realizedPnl math.
+                    // grossPnl = realizedPnl(net) + fees. exitPrice back-calculated from gross.
+                    // This avoids Method 2 picking up the wrong close order entirely.
+                    const grossApprox = realizedPnl + tradingFee + fundingFee;
+                    exitPrice = tradeSideLong
+                      ? parseFloat((tradeEntry + grossApprox / qty).toFixed(8))
+                      : parseFloat((tradeEntry - grossApprox / qty).toFixed(8));
+                    found = true;
+                    foundPnl = true;
+                    bLog.system(`[SYNC] MATCH(cp=0 derived) trade#${trade.id} ${trade.symbol}: entry=${ep} exit=${exitPrice}(derived) pnl=${realizedPnl} fee=${tradingFee} funding=${fundingFee}`);
                   } else {
-                    // Position matched, PnL extracted, but closePrice=0 from Bitunix.
-                    // Method 2 will supply the exit price from order fill data.
-                    foundPnl = realizedPnl !== null;
-                    bLog.system(`[SYNC] MATCH(no price) trade#${trade.id} ${trade.symbol}: entry=${ep} pnl=${realizedPnl} fee=${tradingFee} — seeking exit from orders`);
+                    // Position matched but no PnL data either — Method 2 must find both
+                    foundPnl = false;
+                    bLog.system(`[SYNC] MATCH(no price/pnl) trade#${trade.id} ${trade.symbol}: entry=${ep} — seeking exit from orders`);
                   }
                 } else {
                   bLog.system(`[SYNC] NO MATCH trade#${trade.id} ${trade.symbol} entry=${tradeEntry} — ${positions.length} positions checked`);
@@ -3151,9 +3161,13 @@ async function syncTradeStatus() {
                     const isClose = o.reduceOnly || o.tradeSide === 'CLOSE' || (o.effect || '').toUpperCase() === 'CLOSE';
                     const oMs = parseInt(o.ctime || o.mtime || 0);
                     const posIdMatch = storedPosId && String(o.positionId || '') === String(storedPosId);
-                    const timeMatch = !tradeOpenTime || !oMs || oMs > tradeOpenTime;
+                    // NOTE: If positionId is stored, ONLY accept orders with exact posId match.
+                    // Never fall back to timeMatch when posId is known — timeMatch is too loose
+                    // and picks up close orders from OTHER positions on the same symbol/day.
+                    const timeMatch = !storedPosId && (!tradeOpenTime || !oMs || oMs > tradeOpenTime);
+                    const shouldAccept = storedPosId ? posIdMatch : timeMatch;
 
-                    if (isClose && oPrice > 0 && (posIdMatch || timeMatch)) {
+                    if (isClose && oPrice > 0 && shouldAccept) {
                       exitPrice = oPrice;
                       bLog.system(`[SYNC] Bitunix orderHistory: ${trade.symbol} | ${JSON.stringify({
                         avgPrice: o.avgPrice, price: o.price, realizedPNL: o.realizedPNL,
