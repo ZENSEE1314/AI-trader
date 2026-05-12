@@ -1425,6 +1425,38 @@
           <div class="empty-state-text" data-i18n="keys.empty">No API keys configured</div>
           <div class="empty-state-sub" data-i18n="keys.emptysub">Add your exchange API key to start automated trading.</div>
         </div>
+
+        <!-- Trader Profile -->
+        <div style="margin-top:2rem;border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:1.5rem;background:var(--color-bg-raised);">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem;flex-wrap:wrap;gap:8px;">
+            <div>
+              <h3 style="margin:0;font-size:1rem;font-weight:700;">👤 Trader Profile</h3>
+              <p style="margin:4px 0 0;font-size:0.78rem;color:var(--color-text-muted);">Let others copy your trades. Enable your public profile to appear in the Copy Trader list.</p>
+            </div>
+            <div id="trader-profile-followers" style="font-size:0.85rem;color:var(--color-text-muted);"></div>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:12px;">
+            <div>
+              <label class="form-label" for="tp-display-name">Display Name</label>
+              <input class="form-input" type="text" id="tp-display-name" maxlength="60" placeholder="e.g. CryptoKing" style="max-width:320px;">
+            </div>
+            <div>
+              <label class="form-label" for="tp-bio">Bio <span style="font-size:0.75rem;color:var(--color-text-muted);">(optional, max 300 chars)</span></label>
+              <textarea class="form-input" id="tp-bio" rows="2" maxlength="300" placeholder="Tell traders about your strategy..." style="max-width:480px;resize:vertical;"></textarea>
+            </div>
+            <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+              <label class="toggle">
+                <input type="checkbox" id="tp-is-public">
+                <span class="toggle-track"></span>
+                <span class="toggle-label">Make my trades public (allow others to copy me)</span>
+              </label>
+            </div>
+            <div>
+              <button class="btn btn-primary btn-sm" onclick="window.CryptoBot.saveTraderProfile()">Save Profile</button>
+              <span id="tp-status" style="margin-left:10px;font-size:0.8rem;color:var(--color-text-muted);"></span>
+            </div>
+          </div>
+        </div>
       </section>
 
       <!-- ====================================================
@@ -2859,7 +2891,7 @@ EMAIL_FROM=MCT &lt;a83c06001@smtp-brevo.com&gt;</pre>
   </div>
 
   <script src="/js/trading-floor.js?v=20260501-no-hp" defer></script>
-  <script src="/js/app.js?v=20260512b-copy-ai-default" defer></script>
+  <script src="/js/app.js?v=20260512c-trader-profile" defer></script>
   <!-- Email tab patch: inline so it works regardless of JS cache (HTML is never cached) -->
   <script>
     document.addEventListener('DOMContentLoaded', function() {

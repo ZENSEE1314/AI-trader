@@ -11,6 +11,54 @@ const AI_PROFILE = {
   isAi: true,
 };
 
+// ── GET /api/copy-trade/my-profile — get own trader profile ──────────────────
+router.get('/my-profile', authMiddleware, async (req, res) => {
+  try {
+    const rows = await query(
+      `SELECT tp.display_name, tp.bio, tp.is_public, tp.created_at,
+              COUNT(cts.id) AS followers
+         FROM trader_profiles tp
+         LEFT JOIN copy_trade_subscriptions cts
+           ON cts.leader_type = 'user' AND cts.leader_user_id = tp.user_id AND cts.is_active = true
+        WHERE tp.user_id = $1
+        GROUP BY tp.display_name, tp.bio, tp.is_public, tp.created_at`,
+      [req.userId]
+    );
+    if (!rows.length) return res.json(null);
+    const r = rows[0];
+    res.json({ ...r, followers: parseInt(r.followers) || 0 });
+  } catch (err) {
+    console.error('[copy-trade] GET /my-profile error:', err.message);
+    res.status(500).json({ error: 'Failed to load profile' });
+  }
+});
+
+// ── PUT /api/copy-trade/my-profile — create or update own trader profile ─────
+router.put('/my-profile', authMiddleware, async (req, res) => {
+  const { displayName, bio, isPublic } = req.body;
+  if (!displayName || !displayName.trim()) {
+    return res.status(400).json({ error: 'Display name is required' });
+  }
+  if (displayName.trim().length > 60) {
+    return res.status(400).json({ error: 'Display name max 60 characters' });
+  }
+  try {
+    await query(
+      `INSERT INTO trader_profiles (user_id, display_name, bio, is_public)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (user_id) DO UPDATE
+         SET display_name = $2,
+             bio          = $3,
+             is_public    = $4`,
+      [req.userId, displayName.trim(), (bio || '').trim().slice(0, 300), !!isPublic]
+    );
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('[copy-trade] PUT /my-profile error:', err.message);
+    res.status(500).json({ error: 'Failed to save profile' });
+  }
+});
+
 // ── GET /api/copy-trade/traders — public list of all opt-in traders + AI ─────
 router.get('/traders', async (req, res) => {
   try {
