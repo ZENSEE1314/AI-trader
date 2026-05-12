@@ -517,8 +517,12 @@ function resolveSignal(state, zone, price, vwap) {
   // Both place entry AT THE LOW — the point where buyers should be strongest.
   // 4H gate: if macro trend is BEARISH, demand zones tend to fail (lows break lower).
   function tryLong() {
-    const s4h = get4hStructure(state, price);
-    if (s4h === 'BEARISH') return null;   // macro downtrend — demand zones fail, skip
+    const s4h   = get4hStructure(state, price);
+    const s15chk = get15mStructure(state, price);
+    if (s4h === 'BEARISH') return null;   // macro downtrend — demand zones fail
+    // When 4H is uncertain (MIXED/UNKNOWN), require 15m to also confirm bullish/recovering.
+    // 15m fully BEARISH (LH+LL) in a MIXED 4H = demand zone likely to fail — skip.
+    if ((s4h === 'MIXED' || s4h === 'UNKNOWN') && s15chk === 'BEARISH') return null;
     // Demand zone entry: both 15m and 1m must confirm price is AT A LOW
     const isDemand15 = p15 === 'LL' || p15 === 'HL';
     const isDemand1m = p1m === 'LL' || p1m === 'HL';
@@ -539,8 +543,11 @@ function resolveSignal(state, zone, price, vwap) {
   // Both place entry AT THE HIGH — the point where sellers should be strongest.
   // 4H gate: if macro trend is BULLISH, supply zones tend to break (highs keep printing).
   function tryShort() {
-    const s4h = get4hStructure(state, price);
-    if (s4h === 'BULLISH') return null;   // macro uptrend — supply zones break, skip
+    const s4h    = get4hStructure(state, price);
+    const s15chk = get15mStructure(state, price);
+    if (s4h === 'BULLISH') return null;   // macro uptrend — supply zones break
+    // When 4H is uncertain, require 15m to confirm bearish/rejecting.
+    if ((s4h === 'MIXED' || s4h === 'UNKNOWN') && s15chk === 'BULLISH') return null;
     // Supply zone entry: both 15m and 1m must confirm price is AT A HIGH
     const isSupply15 = p15 === 'HH' || p15 === 'LH';
     const isSupply1m = p1m === 'HH' || p1m === 'LH';
