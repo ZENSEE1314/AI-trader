@@ -878,39 +878,6 @@
     } catch (err) {
       showToast('Failed to load API keys.', 'error');
     }
-    loadTraderProfile();
-  }
-
-  async function loadTraderProfile() {
-    try {
-      const profile = await api('GET', '/api/copy-trade/my-profile').catch(() => null);
-      if (profile) {
-        $('#tp-display-name').value = profile.display_name || '';
-        $('#tp-bio').value          = profile.bio || '';
-        $('#tp-is-public').checked  = !!profile.is_public;
-        const followersEl = $('#trader-profile-followers');
-        if (followersEl) {
-          followersEl.textContent = profile.is_public
-            ? `👥 ${profile.followers} follower${profile.followers !== 1 ? 's' : ''}`
-            : '';
-        }
-      }
-    } catch (_) {}
-  }
-
-  async function saveTraderProfile() {
-    const displayName = $('#tp-display-name').value.trim();
-    const bio         = $('#tp-bio').value.trim();
-    const isPublic    = $('#tp-is-public').checked;
-    if (!displayName) return showToast('Display name is required', 'error');
-    try {
-      await api('PUT', '/api/copy-trade/my-profile', { displayName, bio, isPublic });
-      $('#tp-status').textContent = '✅ Saved';
-      setTimeout(() => { $('#tp-status').textContent = ''; }, 3000);
-      showToast(isPublic ? 'Profile live — you\'re now a public trader!' : 'Profile saved (hidden from copy list)', 'success');
-    } catch (err) {
-      showToast(err.message, 'error');
-    }
   }
 
   function populateRiskLevelDropdown(keyId, selectedId) {
@@ -5627,7 +5594,7 @@
 
   window.CryptoBot = {
     toggleSettings, saveSettings, deleteKey, showToast, syncSlider, syncNum, saveProfile, changePassword,
-    setCopyMode, saveTraderProfile,
+    setCopyMode,
     togglePause,
     submitTopUp, loadDepositAddress, saveUsdtAddress, withdrawFromWallet, payWeekly, saveBitunixReferralLink,
     adminAction, adminChangeRole, adminSub, adminWd, saveAdminSettings, adminEditWallet, adminSetBitunixReferralLink, clearErrors,

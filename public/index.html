@@ -1425,38 +1425,6 @@
           <div class="empty-state-text" data-i18n="keys.empty">No API keys configured</div>
           <div class="empty-state-sub" data-i18n="keys.emptysub">Add your exchange API key to start automated trading.</div>
         </div>
-
-        <!-- Trader Profile -->
-        <div style="margin-top:2rem;border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:1.5rem;background:var(--color-bg-raised);">
-          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem;flex-wrap:wrap;gap:8px;">
-            <div>
-              <h3 style="margin:0;font-size:1rem;font-weight:700;">👤 Trader Profile</h3>
-              <p style="margin:4px 0 0;font-size:0.78rem;color:var(--color-text-muted);">Let others copy your trades. Enable your public profile to appear in the Copy Trader list.</p>
-            </div>
-            <div id="trader-profile-followers" style="font-size:0.85rem;color:var(--color-text-muted);"></div>
-          </div>
-          <div style="display:flex;flex-direction:column;gap:12px;">
-            <div>
-              <label class="form-label" for="tp-display-name">Display Name</label>
-              <input class="form-input" type="text" id="tp-display-name" maxlength="60" placeholder="e.g. CryptoKing" style="max-width:320px;">
-            </div>
-            <div>
-              <label class="form-label" for="tp-bio">Bio <span style="font-size:0.75rem;color:var(--color-text-muted);">(optional, max 300 chars)</span></label>
-              <textarea class="form-input" id="tp-bio" rows="2" maxlength="300" placeholder="Tell traders about your strategy..." style="max-width:480px;resize:vertical;"></textarea>
-            </div>
-            <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
-              <label class="toggle">
-                <input type="checkbox" id="tp-is-public">
-                <span class="toggle-track"></span>
-                <span class="toggle-label">Make my trades public (allow others to copy me)</span>
-              </label>
-            </div>
-            <div>
-              <button class="btn btn-primary btn-sm" onclick="window.CryptoBot.saveTraderProfile()">Save Profile</button>
-              <span id="tp-status" style="margin-left:10px;font-size:0.8rem;color:var(--color-text-muted);"></span>
-            </div>
-          </div>
-        </div>
       </section>
 
       <!-- ====================================================
@@ -1988,80 +1956,6 @@
           <button class="btn btn-primary btn-sm" style="margin-top:var(--space-3);" onclick="window.CryptoBot.saveAdminSettings()">Save Settings</button>
         </div>
 
-          <h3 style="margin-bottom:var(--space-3);color:var(--color-text);">Risk Level Settings</h3>
-        <div style="background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-4);margin-bottom:var(--space-5);">
-          <div id="admin-risk-levels"></div>
-          <div style="margin-top:var(--space-3);border-top:1px solid var(--color-border-muted);padding-top:var(--space-3);">
-            <strong style="font-size:0.85rem;">Add Risk Level</strong>
-            <div style="margin-top:var(--space-2);">
-              <div class="form-group" style="margin-bottom:var(--space-3);">
-                <label class="form-label">Name</label>
-                <input class="form-input" type="text" id="rl-name" placeholder="e.g. Low, Medium, High" style="max-width:250px;">
-              </div>
-              <div class="form-group" style="margin-bottom:var(--space-3);">
-                <label class="form-label">Description</label>
-                <input class="form-input" type="text" id="rl-desc" placeholder="Short description" style="max-width:400px;">
-              </div>
-              <div class="settings-grid">
-                <div class="slider-group">
-                  <div class="slider-header">
-                    <label class="form-label">Take Profit % <span class="tip-btn">?<span class="tip-text">Target profit % to close winning trades at this risk level.</span></span></label>
-                    <input type="number" class="slider-num" id="rl-tp-num" min="0.1" max="20" step="0.1" value="1.0"
-                      oninput="window.CryptoBot.syncSlider('rl-tp-range',Math.round(this.value*10))">
-                  </div>
-                  <input type="range" id="rl-tp-range" min="1" max="200" value="10"
-                    oninput="window.CryptoBot.syncNum('rl-tp-num',(this.value/10).toFixed(1))">
-                </div>
-                <div class="slider-group">
-                  <div class="slider-header">
-                    <label class="form-label">Stop Loss % <span class="tip-btn">?<span class="tip-text">Initial stop-loss distance from entry price at this risk level.</span></span></label>
-                    <input type="number" class="slider-num" id="rl-sl-num" min="0.1" max="10" step="0.1" value="1.0"
-                      oninput="window.CryptoBot.syncSlider('rl-sl-range',Math.round(this.value*10))">
-                  </div>
-                  <input type="range" id="rl-sl-range" min="1" max="100" value="10"
-                    oninput="window.CryptoBot.syncNum('rl-sl-num',(this.value/10).toFixed(1))">
-                </div>
-                <div class="slider-group">
-                  <div class="slider-header">
-                    <label class="form-label">Capital % <span class="tip-btn">?<span class="tip-text">Percentage of futures wallet used per trade at this risk level.</span></span></label>
-                    <input type="number" class="slider-num" id="rl-capital-num" min="1" max="50" step="1" value="10"
-                      oninput="window.CryptoBot.syncSlider('rl-capital-range',this.value)">
-                  </div>
-                  <input type="range" id="rl-capital-range" min="1" max="50" value="10"
-                    oninput="window.CryptoBot.syncNum('rl-capital-num',this.value)">
-                </div>
-                <div class="slider-group">
-                  <div class="slider-header">
-                    <label class="form-label">Max Leverage <span class="tip-btn">?<span class="tip-text">Maximum leverage allowed for trades at this risk level.</span></span></label>
-                    <input type="number" class="slider-num" id="rl-leverage-num" min="1" max="125" step="1" value="20"
-                      oninput="window.CryptoBot.syncSlider('rl-leverage-range',this.value)">
-                  </div>
-                  <input type="range" id="rl-leverage-range" min="1" max="125" value="20"
-                    oninput="window.CryptoBot.syncNum('rl-leverage-num',this.value)">
-                </div>
-                <div class="slider-group">
-                  <div class="slider-header">
-                    <label class="form-label">Max Consec Losses <span class="tip-btn">?<span class="tip-text">Bot stops trading after this many consecutive losses. Resets when a trade wins.</span></span></label>
-                    <input type="number" class="slider-num" id="rl-consec-num" min="0" max="10" step="1" value="2"
-                      oninput="window.CryptoBot.syncSlider('rl-consec-range',this.value)">
-                  </div>
-                  <input type="range" id="rl-consec-range" min="0" max="10" value="2"
-                    oninput="window.CryptoBot.syncNum('rl-consec-num',this.value)">
-                </div>
-                <div class="slider-group">
-                  <div class="slider-header">
-                    <label class="form-label">Top Coins <span class="tip-btn">?<span class="tip-text">Number of top coins by 24h volume the bot scans for trade setups at this risk level.</span></span></label>
-                    <input type="number" class="slider-num" id="rl-topcoins-num" min="5" max="200" step="5" value="50"
-                      oninput="window.CryptoBot.syncSlider('rl-topcoins-range',this.value)">
-                  </div>
-                  <input type="range" id="rl-topcoins-range" min="5" max="200" step="5" value="50"
-                    oninput="window.CryptoBot.syncNum('rl-topcoins-num',this.value)">
-                </div>
-              </div>
-            </div>
-            <button class="btn btn-primary btn-sm" style="margin-top:var(--space-3);" onclick="window.CryptoBot.addRiskLevel()">Add Risk Level</button>
-          </div>
-        </div>
         </div><!-- /admin-tab-settings -->
 
         <!-- ═══════════════════════════════════════════
@@ -2891,7 +2785,7 @@ EMAIL_FROM=MCT &lt;a83c06001@smtp-brevo.com&gt;</pre>
   </div>
 
   <script src="/js/trading-floor.js?v=20260501-no-hp" defer></script>
-  <script src="/js/app.js?v=20260512c-trader-profile" defer></script>
+  <script src="/js/app.js?v=20260512d-cleanup" defer></script>
   <!-- Email tab patch: inline so it works regardless of JS cache (HTML is never cached) -->
   <script>
     document.addEventListener('DOMContentLoaded', function() {
