@@ -875,6 +875,8 @@
         populateRiskLevelDropdown(k.id, k.risk_level_id);
         renderTokenLeverages(k.id, k.token_leverages || []);
       }
+      // Load trader profile whenever keys tab is refreshed
+      loadTraderProfile();
     } catch (err) {
       showToast('Failed to load API keys.', 'error');
     }
@@ -1253,6 +1255,49 @@
       showToast('Settings saved.', 'success');
       toggleSettings(keyId);
       loadKeys();
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+  }
+
+  // ── Trader Profile ──────────────────────────────────────────
+  async function loadTraderProfile() {
+    try {
+      const profile = await api('GET', '/api/copy-trade/my-profile').catch(() => null);
+      if (profile) {
+        const nameEl = $('#tp-display-name');
+        const bioEl  = $('#tp-bio');
+        const pubEl  = $('#tp-is-public');
+        if (nameEl) nameEl.value = profile.display_name || '';
+        if (bioEl)  bioEl.value  = profile.bio || '';
+        if (pubEl)  pubEl.checked = !!profile.is_public;
+        const status = $('#tp-status');
+        if (status) {
+          const followers = profile.followers || 0;
+          status.textContent = profile.is_public
+            ? `✅ Public — ${followers} follower${followers !== 1 ? 's' : ''}`
+            : '🔒 Private — only you can see your profile';
+        }
+      }
+    } catch (_) {}
+  }
+
+  async function saveTraderProfile() {
+    const displayName = $('#tp-display-name')?.value?.trim();
+    const bio         = $('#tp-bio')?.value?.trim();
+    const isPublic    = $('#tp-is-public')?.checked || false;
+
+    if (!displayName) return showToast('Display name is required', 'error');
+
+    try {
+      await api('PUT', '/api/copy-trade/my-profile', { displayName, bio, isPublic });
+      showToast('Trader profile saved.', 'success');
+      const status = $('#tp-status');
+      if (status) {
+        status.textContent = isPublic
+          ? '✅ Public — followers can now copy your trades'
+          : '🔒 Private — profile hidden from other users';
+      }
     } catch (err) {
       showToast(err.message, 'error');
     }
@@ -5624,7 +5669,7 @@
 
   window.CryptoBot = {
     toggleSettings, saveSettings, deleteKey, showToast, syncSlider, syncNum, saveProfile, changePassword,
-    setCopyMode, onTraderModeChange,
+    setCopyMode, onTraderModeChange, saveTraderProfile,
     togglePause,
     submitTopUp, loadDepositAddress, saveUsdtAddress, withdrawFromWallet, payWeekly, saveBitunixReferralLink,
     adminAction, adminChangeRole, adminSub, adminWd, saveAdminSettings, adminEditWallet, adminSetBitunixReferralLink, clearErrors,

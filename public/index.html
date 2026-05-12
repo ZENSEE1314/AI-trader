@@ -1352,25 +1352,6 @@
           <button class="btn btn-sm period-btn" data-period="1y" data-i18n="period.1y">1 Year</button>
           <button class="btn btn-sm" id="btn-export-csv" style="margin-left:auto;background:var(--color-accent);color:#fff;padding:4px 12px;" title="Download trade history as CSV" data-i18n="trade.downloadcsv">Download CSV</button>
         </div>
-        <!-- Token Selector — Top 50 by volume with on/off switches -->
-        <div style="margin-bottom:var(--space-4);">
-          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--space-2);">
-            <h3 style="margin:0;font-size:0.95rem;color:var(--color-text);">My Tokens <span id="watch-count" style="font-size:0.75rem;color:var(--color-accent);">(0 active)</span></h3>
-            <div style="display:flex;gap:6px;">
-              <button class="btn btn-sm" style="font-size:0.7rem;border:1px solid var(--color-accent);color:var(--color-accent);background:rgba(212,175,55,0.08);" onclick="window.CryptoBot.loadSignalBoard()" data-i18n="tokens.refresh">Refresh</button>
-            </div>
-          </div>
-          <div id="signal-board" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(105px,1fr));gap:4px;margin-bottom:var(--space-3);">
-            <div style="color:var(--color-text-muted);font-size:0.8rem;grid-column:1/-1;text-align:center;padding:var(--space-2);" data-i18n="tokens.loading">Loading tokens...</div>
-          </div>
-          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--space-2);">
-            <h3 style="margin:0;font-size:0.95rem;color:var(--color-text);">Last 24h Results</h3>
-          </div>
-          <div id="daily-results" style="margin-bottom:var(--space-3);">
-            <div style="color:var(--color-text-muted);font-size:0.8rem;text-align:center;padding:var(--space-2);" data-i18n="tokens.noresults">No results yet today</div>
-          </div>
-        </div>
-
         <div id="trades-wrapper">
           <div class="table-wrapper">
             <table class="data-table">
@@ -1424,6 +1405,33 @@
           <div class="empty-state-icon" aria-hidden="true">🔑</div>
           <div class="empty-state-text" data-i18n="keys.empty">No API keys configured</div>
           <div class="empty-state-sub" data-i18n="keys.emptysub">Add your exchange API key to start automated trading.</div>
+        </div>
+
+        <!-- Trader Profile Card -->
+        <div style="margin-top:var(--space-5);background:var(--color-bg-raised);border:1px solid var(--color-border-muted);border-radius:var(--radius-lg);padding:var(--space-4);">
+          <h3 style="margin:0 0 var(--space-3);font-size:0.95rem;color:var(--color-text);">
+            👤 Trader Profile
+            <span class="tip-btn">?<span class="tip-text">Make your profile public so other users can follow and copy your trades. Leave it private if you only want AI trading.</span></span>
+          </h3>
+          <div id="trader-profile-form">
+            <div class="form-group" style="margin-bottom:var(--space-3);">
+              <label class="form-label" for="tp-display-name">Display Name</label>
+              <input class="form-input" type="text" id="tp-display-name" maxlength="60" placeholder="e.g. CryptoKing99">
+            </div>
+            <div class="form-group" style="margin-bottom:var(--space-3);">
+              <label class="form-label" for="tp-bio">Bio <span style="color:var(--color-text-muted);font-weight:400;">(optional)</span></label>
+              <textarea class="form-input" id="tp-bio" maxlength="300" rows="2" placeholder="Short description of your trading style..."></textarea>
+            </div>
+            <div style="display:flex;align-items:center;gap:var(--space-3);margin-bottom:var(--space-3);">
+              <label class="toggle">
+                <input type="checkbox" id="tp-is-public">
+                <span class="toggle-track"></span>
+                <span class="toggle-label">Public — let others follow me</span>
+              </label>
+            </div>
+            <div id="tp-status" style="font-size:0.78rem;color:var(--color-text-muted);margin-bottom:var(--space-3);min-height:1.2em;"></div>
+            <button class="btn btn-primary btn-sm" onclick="window.CryptoBot.saveTraderProfile()">Save Profile</button>
+          </div>
         </div>
       </section>
 
@@ -2785,7 +2793,7 @@ EMAIL_FROM=MCT &lt;a83c06001@smtp-brevo.com&gt;</pre>
   </div>
 
   <script src="/js/trading-floor.js?v=20260501-no-hp" defer></script>
-  <script src="/js/app.js?v=20260512e-trader-mode" defer></script>
+  <script src="/js/app.js?v=20260512f-trader-profile" defer></script>
   <!-- Email tab patch: inline so it works regardless of JS cache (HTML is never cached) -->
   <script>
     document.addEventListener('DOMContentLoaded', function() {
