@@ -1157,7 +1157,10 @@
           mode === 'ai' ? '✅ Following AI Trader (MCT)' :
           mode === 'user' ? `✅ Following ${escapeHtml(activeSub.leader_display_name || 'a trader')}` : '';
       } else {
-        _highlightCopyBtn(keyId, 'none');
+        // No active subscription — default to Copy AI
+        $(`#ct-mode-${keyId}`).value = 'ai';
+        _highlightCopyBtn(keyId, 'ai');
+        $(`#ct-status-${keyId}`).textContent = '🤖 Default: will follow AI Trader when saved';
       }
     } catch (e) {
       // non-fatal — section stays blank
