@@ -680,6 +680,8 @@ async function initAllTables() {
     `ALTER TABLE copy_trade_subscriptions ADD COLUMN IF NOT EXISTS copy_size_pct NUMERIC(5,2) NOT NULL DEFAULT 10.0`,
     `ALTER TABLE trades ADD COLUMN IF NOT EXISTS is_copy_trade BOOLEAN DEFAULT false`,
     `ALTER TABLE trades ADD COLUMN IF NOT EXISTS copied_from_trade_id INTEGER REFERENCES trades(id)`,
+    // Trader Mode — user trades manually on exchange; bot mirrors to followers
+    `ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS trader_mode BOOLEAN DEFAULT false`,
   ];
 
   for (const sql of statements) {

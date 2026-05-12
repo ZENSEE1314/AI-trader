@@ -1032,6 +1032,7 @@
       const platformAbbr = getPlatformAbbr(k.platform);
       const isEnabled = k.enabled !== false;
       const riskPct = k.risk_pct != null ? (parseFloat(k.risk_pct) * 100).toFixed(0) : '10';
+      const isTraderMode = !!k.trader_mode;
 
       return `<div class="key-card" data-key-id="${k.id}">
         <div class="key-card-main">
@@ -1064,8 +1065,23 @@
               aria-label="Capital per trade percentage">
           </div>
 
-          <!-- Copy Trade -->
-          <div style="margin-bottom:var(--space-4);">
+          <!-- Trader Mode -->
+          <div style="margin-bottom:var(--space-4);padding:12px;background:var(--color-bg-raised);border-radius:8px;border:1px solid var(--color-border-muted);">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+              <label class="form-label" style="margin:0;">Trader Mode <span class="tip-btn">?<span class="tip-text">Enable this if YOU trade manually on the exchange. The bot will detect your positions and auto-mirror them to all your followers. Copy AI is disabled while Trader Mode is on.</span></span></label>
+              <label class="toggle">
+                <input type="checkbox" id="trader-mode-${k.id}" ${isTraderMode ? 'checked' : ''}
+                  onchange="window.CryptoBot.onTraderModeChange(${k.id},this.checked)">
+                <span class="toggle-track"></span>
+              </label>
+            </div>
+            <div id="trader-mode-status-${k.id}" style="font-size:0.75rem;color:var(--color-text-muted);">
+              ${isTraderMode ? '🟢 Your manual trades will be mirrored to followers. Copy AI is paused.' : 'Off — bot trades AI signals for you.'}
+            </div>
+          </div>
+
+          <!-- Copy Trade (hidden when Trader Mode is on) -->
+          <div id="copy-trade-wrapper-${k.id}" style="margin-bottom:var(--space-4);${isTraderMode ? 'display:none;' : ''}">
             <label class="form-label" style="margin-bottom:var(--space-2);">Copy Trade <span class="tip-btn">?<span class="tip-text">Follow a trader and automatically mirror their trades using your capital %. Choose AI to follow the bot, or pick a community trader.</span></span></label>
             <div id="copy-trade-section-${k.id}" style="display:flex;flex-direction:column;gap:10px;">
               <div style="display:flex;gap:8px;flex-wrap:wrap;">
@@ -1094,6 +1110,7 @@
             </div>
             <input type="hidden" id="ct-mode-${k.id}" value="none">
           </div>
+          </div><!-- /copy-trade-wrapper -->
 
           <!-- Enabled toggle -->
           <div style="display:flex;align-items:center;margin-bottom:var(--space-4);">
@@ -1185,21 +1202,34 @@
     if (mode !== 'user') $(`#ct-status-${keyId}`).textContent = '';
   }
 
+  function onTraderModeChange(keyId, enabled) {
+    const wrapper = $(`#copy-trade-wrapper-${keyId}`);
+    const statusEl = $(`#trader-mode-status-${keyId}`);
+    if (wrapper) wrapper.style.display = enabled ? 'none' : '';
+    if (statusEl) {
+      statusEl.textContent = enabled
+        ? '🟢 Your manual trades will be mirrored to followers. Copy AI is paused.'
+        : 'Off — bot trades AI signals for you.';
+    }
+  }
+
   // Save settings
   async function saveSettings(keyId) {
-    const riskPct = parseInt($(`#risk-${keyId}`).value) / 100;
-    const enabled  = $(`#enabled-${keyId}`).checked;
-    const copyMode = $(`#ct-mode-${keyId}`)?.value || 'none';
+    const riskPct    = parseInt($(`#risk-${keyId}`).value) / 100;
+    const enabled    = $(`#enabled-${keyId}`).checked;
+    const traderMode = $(`#trader-mode-${keyId}`)?.checked || false;
+    const copyMode   = traderMode ? 'none' : ($(`#ct-mode-${keyId}`)?.value || 'none');
 
     try {
-      // Save capital % and enabled state
+      // Save capital %, enabled state, and trader_mode
       await api('PUT', `/api/keys/${keyId}/settings`, {
         risk_pct: riskPct,
         enabled,
+        trader_mode: traderMode,
       });
 
       // Handle copy trade subscription
-      if (copyMode === 'none') {
+      if (copyMode === 'none' || traderMode) {
         // Unsubscribe if there was an active subscription
         await api('DELETE', `/api/copy-trade/unsubscribe/${keyId}`).catch(() => {});
       } else if (copyMode === 'ai') {
@@ -5594,7 +5624,7 @@
 
   window.CryptoBot = {
     toggleSettings, saveSettings, deleteKey, showToast, syncSlider, syncNum, saveProfile, changePassword,
-    setCopyMode,
+    setCopyMode, onTraderModeChange,
     togglePause,
     submitTopUp, loadDepositAddress, saveUsdtAddress, withdrawFromWallet, payWeekly, saveBitunixReferralLink,
     adminAction, adminChangeRole, adminSub, adminWd, saveAdminSettings, adminEditWallet, adminSetBitunixReferralLink, clearErrors,

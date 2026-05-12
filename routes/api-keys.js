@@ -20,6 +20,7 @@ router.get('/', async (req, res) => {
                 COALESCE(ak.trailing_sl_step, 1.2) as trailing_sl_step,
                 COALESCE(rl.name, 'Medium Risk') as risk_level_name,
                 COALESCE(rl.description, 'Balanced risk profile') as risk_level_description,
+                COALESCE(ak.trader_mode, false) as trader_mode,
                 substring(ak.api_key_enc, 1, 8) as key_preview, ak.created_at
          FROM api_keys ak
          LEFT JOIN risk_levels rl ON ak.risk_level_id = rl.id
@@ -37,6 +38,7 @@ router.get('/', async (req, res) => {
                 COALESCE(ak.trailing_sl_step, 1.2) as trailing_sl_step,
                 'Medium Risk' as risk_level_name,
                 'Balanced risk profile' as risk_level_description,
+                COALESCE(ak.trader_mode, false) as trader_mode,
                 substring(ak.api_key_enc, 1, 8) as key_preview, ak.created_at
          FROM api_keys ak
          WHERE ak.user_id = $1 ORDER BY ak.created_at`,
@@ -131,7 +133,8 @@ router.post('/', async (req, res) => {
 router.put('/:id/settings', async (req, res) => {
   try {
     const { leverage, risk_pct, max_loss_usdt, max_positions, enabled, allowed_coins, banned_coins,
-            tp_pct, sl_pct, max_consec_loss, top_n_coins, risk_level_id, capital_percentage, trailing_sl_step, token_leverages } = req.body;
+            tp_pct, sl_pct, max_consec_loss, top_n_coins, risk_level_id, capital_percentage,
+            trailing_sl_step, token_leverages, trader_mode } = req.body;
 
     if (leverage !== undefined && (leverage < 1 || leverage > 125)) {
       return res.status(400).json({ error: 'Leverage must be 1-125' });
@@ -188,11 +191,29 @@ router.put('/:id/settings', async (req, res) => {
         top_n_coins = COALESCE($11, top_n_coins),
         risk_level_id = COALESCE($12, risk_level_id),
         capital_percentage = COALESCE($13, capital_percentage),
-        trailing_sl_step = COALESCE($14, trailing_sl_step)
-       WHERE id = $15 AND user_id = $16`,
+        trailing_sl_step = COALESCE($14, trailing_sl_step),
+        trader_mode = COALESCE($15, trader_mode)
+       WHERE id = $16 AND user_id = $17`,
       [leverage, risk_pct, max_loss_usdt, max_positions, enabled, allowed_coins, banned_coins,
-       tp_pct, sl_pct, max_consec_loss, top_n_coins, risk_level_id, capital_percentage, trailing_sl_step, req.params.id, req.userId]
+       tp_pct, sl_pct, max_consec_loss, top_n_coins, risk_level_id, capital_percentage, trailing_sl_step,
+       trader_mode != null ? !!trader_mode : null, req.params.id, req.userId]
     );
+
+    // Auto-publish trader profile when trader_mode is enabled
+    if (trader_mode === true) {
+      try {
+        const userRow = await query('SELECT email FROM users WHERE id = $1', [req.userId]);
+        const defaultName = userRow[0]?.email?.split('@')[0] || 'Trader';
+        await query(
+          `INSERT INTO trader_profiles (user_id, display_name, is_public)
+           VALUES ($1, $2, true)
+           ON CONFLICT (user_id) DO UPDATE SET is_public = true`,
+          [req.userId, defaultName]
+        );
+      } catch (tpErr) {
+        console.warn('[api-keys] trader_profile upsert warning:', tpErr.message);
+      }
+    }
 
     // Handle per-token leverage overrides
     if (Array.isArray(token_leverages)) {

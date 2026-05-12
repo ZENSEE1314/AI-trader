@@ -1473,6 +1473,9 @@ async function main() {
     await notify(`*Bot Error — ${now()}*\n\`${msg.substring(0, 200)}\``);
   }
 
+  // Trader Mode: detect manually opened positions and mirror to followers
+  await processTraderModeKeys().catch(e => bLog.error(`[TraderMode] cycle error: ${e.message}`));
+
   // Hard-sync exchange positions with DB every cycle — fast and idempotent.
   // Covers keys with zero DB trades (syncTradeStatus early-returns for those).
   await hardSyncExchangeDB();
@@ -3793,6 +3796,156 @@ async function reconcileOrphanPositions() {
   }
 }
 
+// ── TRADER MODE — detect manually opened positions and mirror to followers ────
+// key: keyId (integer) → value: Map<positionId, { symbol, direction, tradeDbId }>
+const _traderModePositions = new Map();
+
+async function processTraderModeKeys() {
+  let db, cryptoUtils, BitunixClient;
+  try {
+    db = require('./db');
+    cryptoUtils = require('./crypto-utils');
+    BitunixClient = require('./bitunix-client').BitunixClient;
+  } catch (e) {
+    bLog.error(`[TraderMode] deps not available: ${e.message}`);
+    return;
+  }
+
+  let traderKeys;
+  try {
+    traderKeys = await db.query(
+      `SELECT ak.*, u.email, u.id AS user_id_val
+         FROM api_keys ak
+         JOIN users u ON u.id = ak.user_id
+        WHERE ak.enabled = true
+          AND ak.trader_mode = true
+          AND ak.platform = 'bitunix'`
+    );
+  } catch (e) {
+    bLog.error(`[TraderMode] Failed to fetch trader-mode keys: ${e.message}`);
+    return;
+  }
+
+  if (!traderKeys.length) return;
+
+  for (const key of traderKeys) {
+    let apiKey, apiSecret;
+    try {
+      apiKey    = cryptoUtils.decrypt(key.api_key_enc,    key.iv,        key.auth_tag);
+      apiSecret = cryptoUtils.decrypt(key.api_secret_enc, key.secret_iv, key.secret_auth_tag);
+    } catch (e) {
+      bLog.error(`[TraderMode] Decrypt failed for key #${key.id}: ${e.message}`);
+      continue;
+    }
+
+    let livePositions = [];
+    try {
+      const client = new BitunixClient({ apiKey, apiSecret });
+      const raw = await client.getOpenPositions();
+      livePositions = Array.isArray(raw) ? raw : [];
+    } catch (e) {
+      bLog.error(`[TraderMode] getOpenPositions failed for key #${key.id}: ${e.message}`);
+      continue;
+    }
+
+    // Build set of currently live position IDs for stale-entry cleanup
+    const livePosIds = new Set(livePositions.map(p => String(p.positionId || p.id || '')).filter(Boolean));
+
+    // Get or create per-key tracking map
+    if (!_traderModePositions.has(key.id)) {
+      _traderModePositions.set(key.id, new Map());
+    }
+    const knownPositions = _traderModePositions.get(key.id);
+
+    // Prune positions that no longer exist on the exchange
+    for (const [posId] of knownPositions) {
+      if (!livePosIds.has(posId)) {
+        knownPositions.delete(posId);
+      }
+    }
+
+    // Detect new positions and trigger copy trades
+    for (const pos of livePositions) {
+      const posId     = String(pos.positionId || pos.id || '');
+      const symbol    = (pos.symbol || '').toUpperCase();
+      const qty       = parseFloat(pos.qty || pos.positionAmt || 0);
+      const leverage  = parseFloat(pos.leverage || 20);
+      const entry     = parseFloat(pos.avgOpenPrice || pos.entryPrice || pos.openPrice || 0);
+      const side      = (pos.side || '').toUpperCase();
+      const direction = (side === 'BUY' || side === 'LONG') ? 'LONG' : 'SHORT';
+
+      if (!symbol || !entry || !qty || !posId) continue;
+      if (knownPositions.has(posId)) continue; // already tracked this cycle
+
+      // Check if this position already has an OPEN trade in DB (may have been inserted by reconcile)
+      const existing = await db.query(
+        `SELECT id FROM trades WHERE api_key_id = $1 AND symbol = $2 AND status = 'OPEN' LIMIT 1`,
+        [key.id, symbol]
+      ).catch(() => []);
+
+      let tradeDbId = existing[0]?.id || null;
+
+      if (!tradeDbId) {
+        // Insert new trade record for this manual position
+        const slGuess = direction === 'LONG'
+          ? entry * (1 - 0.30 / leverage)
+          : entry * (1 + 0.30 / leverage);
+
+        try {
+          const inserted = await db.query(
+            `INSERT INTO trades
+               (api_key_id, user_id, symbol, direction, entry_price, sl_price, tp_price,
+                quantity, leverage, status, trailing_sl_price, trailing_sl_last_step,
+                market_structure, setup, bitunix_position_id)
+             VALUES ($1, $2, $3, $4, $5, $6, 0, $7, $8, 'OPEN', $6, 0, 'TRADER_MODE', 'MANUAL', $9)
+             RETURNING id`,
+            [key.id, key.user_id, symbol, direction, entry,
+             parseFloat(slGuess.toFixed(8)), qty, leverage, posId]
+          );
+          tradeDbId = inserted[0]?.id || null;
+          bLog.trade(`[TraderMode] Detected new manual position: ${symbol} ${direction} ${leverage}x @${entry} (key #${key.id} ${key.email})`);
+          await notify(
+            `👤 *Trader Mode — Position Detected*\n` +
+            `${symbol} ${direction} ${leverage}x\n` +
+            `Entry: $${entry} | Qty: ${qty}\n` +
+            `_Mirroring to followers..._`
+          ).catch(() => {});
+        } catch (e) {
+          bLog.error(`[TraderMode] DB insert failed for ${symbol}: ${e.message}`);
+          continue;
+        }
+      }
+
+      // Track so we don't double-fire
+      knownPositions.set(posId, { symbol, direction, tradeDbId });
+
+      // Trigger copy trades for all followers of this user
+      try {
+        const { triggerCopyTrades } = require('./copy-trade-engine');
+        await triggerCopyTrades(
+          {
+            id: tradeDbId,
+            symbol,
+            direction,
+            entry_price: entry,
+            sl_price: direction === 'LONG' ? entry * (1 - 0.30 / leverage) : entry * (1 + 0.30 / leverage),
+            tp_price: 0,
+            quantity: qty,
+            leverage,
+            setup: 'MANUAL',
+            is_ai_trade: false,
+          },
+          key,
+          { id: key.user_id, email: key.email }
+        );
+        bLog.trade(`[TraderMode] triggerCopyTrades fired for ${symbol} ${direction} (trader: ${key.email})`);
+      } catch (e) {
+        bLog.error(`[TraderMode] triggerCopyTrades failed for ${symbol}: ${e.message}`);
+      }
+    }
+  }
+}
+
 async function run() {
   log(`AI Smart Trader v4 | Telegram: ${!!TELEGRAM_TOKEN} | Chats: ${PRIVATE_CHATS.join(', ') || 'NONE'}`);
   // Hard sync on startup: reconcile all Bitunix positions with DB,
@@ -3831,4 +3984,5 @@ module.exports = {
   onTradeOutcome,
   fireTradeOutcome,
   injectTVSignal,
+  processTraderModeKeys,
 };
