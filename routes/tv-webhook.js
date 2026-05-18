@@ -3,8 +3,7 @@ const { injectTVSignal } = require('../cycle');
 
 const router = express.Router();
 
-// Secret must match TV_WEBHOOK_SECRET env var — prevents spoofed signals.
-const WEBHOOK_SECRET = process.env.TV_WEBHOOK_SECRET || 'MCT_TV_SECRET';
+// Secret check removed per user request — no auth required
 
 // Allowed symbols — only accept signals for active trading pairs.
 const ALLOWED_SYMBOLS = new Set(['BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'SOLUSDT']);
@@ -29,15 +28,10 @@ const ALLOWED_SYMBOLS = new Set(['BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'SOLUSDT']);
 //
 router.post('/', (req, res) => {
   const {
-    secret, symbol, direction, price,
+    symbol, direction, price,
     override, zone, pivot_15m, pivot_1m,
     ema200Bias, reason, hommaPatterns, volumeOk
   } = req.body || {};
-
-  if (secret !== WEBHOOK_SECRET) {
-    console.warn(`[TV-Webhook] Rejected — bad secret from ${req.ip}`);
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
 
   const sym = (symbol || '').toUpperCase().replace(/[^A-Z]/g, '');
   if (!ALLOWED_SYMBOLS.has(sym)) {
@@ -96,14 +90,10 @@ router.post('/', (req, res) => {
 // Use this to test your TradingView alert message format safely.
 router.post('/dry-run', (req, res) => {
   const {
-    secret, symbol, direction, price,
+    symbol, direction, price,
     override, zone, pivot_15m, pivot_1m,
     ema200Bias, reason, hommaPatterns, volumeOk
   } = req.body || {};
-
-  if (secret !== WEBHOOK_SECRET) {
-    return res.status(401).json({ ok: false, error: 'Unauthorized — check TV_WEBHOOK_SECRET' });
-  }
 
   const sym = (symbol || '').toUpperCase().replace(/[^A-Z]/g, '');
   if (!ALLOWED_SYMBOLS.has(sym)) {
@@ -158,7 +148,6 @@ router.get('/help', (req, res) => {
     url: '/api/tv-webhook',
     headers: { 'Content-Type': 'application/json' },
     payload: {
-      secret: 'MCT_TV_SECRET',
       symbol: 'BTCUSDT',
       direction: 'LONG',
       price: '{{close}}',
@@ -172,7 +161,7 @@ router.get('/help', (req, res) => {
       reason: 'LH at upper band + shooting star on 1m'
     },
     notes: [
-      'Set TV_WEBHOOK_SECRET env var to your own secret',
+      'No secret required — webhook is open',
       'override=true bypasses ADX, EMA200, and structure gates — use sparingly',
       'TV signals always win dedup against internal AI signals',
       'zone: UPPER_MID / ABOVE_UPPER / LOWER_MID / BELOW_LOWER',
