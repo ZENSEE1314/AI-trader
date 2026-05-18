@@ -17,6 +17,7 @@ const { getSentimentScores } = require('./sentiment-scraper');
 const { log: bLog } = require('./bot-logger');
 const { getBinanceRequestOptions, getFetchOptions } = require('./proxy-agent');
 const { query: dbQuery } = require('./db');
+const { fetchKlines } = require('./indicator-library');
 
 // ── Trail tier tables — single source of truth shared with trail-watchdog.js ──
 const {
@@ -30,6 +31,46 @@ const {
 let _onTradeOutcome = null;
 function onTradeOutcome(fn) { _onTradeOutcome = fn; }
 function fireTradeOutcome(data) { if (_onTradeOutcome) { try { _onTradeOutcome(data); } catch (_) {} } }
+
+// ── ADX helper ─────────────────────────────────────────────
+function calcADX(highs, lows, closes, period = 14) {
+  if (highs.length < period + 1) return { adx: 0, diPlus: 0, diMinus: 0 };
+
+  let tr = 0, dmPlus = 0, dmMinus = 0;
+  for (let i = 1; i <= period; i++) {
+    const h = highs[i], l = lows[i], c = closes[i];
+    const ph = highs[i - 1], pl = lows[i - 1];
+    const tr0 = Math.max(h - l, Math.abs(h - closes[i - 1]), Math.abs(l - closes[i - 1]));
+    const dmP = (h - ph) > (pl - l) && (h - ph) > 0 ? (h - ph) : 0;
+    const dmM = (pl - l) > (h - ph) && (pl - l) > 0 ? (pl - l) : 0;
+    tr += tr0; dmPlus += dmP; dmMinus += dmM;
+  }
+
+  let trSmooth = tr, dmPlusSmooth = dmPlus, dmMinusSmooth = dmMinus;
+  let diPlus = 100 * dmPlusSmooth / trSmooth;
+  let diMinus = 100 * dmMinusSmooth / trSmooth;
+  let dx = 100 * Math.abs(diPlus - diMinus) / (diPlus + diMinus || 1);
+  let adx = dx;
+
+  for (let i = period + 1; i < highs.length; i++) {
+    const h = highs[i], l = lows[i];
+    const ph = highs[i - 1], pl = lows[i - 1];
+    const tr0 = Math.max(h - l, Math.abs(h - closes[i - 1]), Math.abs(l - closes[i - 1]));
+    const dmP = (h - ph) > (pl - l) && (h - ph) > 0 ? (h - ph) : 0;
+    const dmM = (pl - l) > (h - ph) && (pl - l) > 0 ? (pl - l) : 0;
+
+    trSmooth = trSmooth - (trSmooth / period) + tr0;
+    dmPlusSmooth = dmPlusSmooth - (dmPlusSmooth / period) + dmP;
+    dmMinusSmooth = dmMinusSmooth - (dmMinusSmooth / period) + dmM;
+
+    diPlus = 100 * dmPlusSmooth / trSmooth;
+    diMinus = 100 * dmMinusSmooth / trSmooth;
+    dx = 100 * Math.abs(diPlus - diMinus) / (diPlus + diMinus || 1);
+    adx = ((adx * (period - 1)) + dx) / period;
+  }
+  return { adx, diPlus, diMinus };
+}
+// ──────────────────────────────────────────────────────────
 
 const API_KEY        = process.env.BINANCE_API_KEY    || '';
 const API_SECRET     = process.env.BINANCE_API_SECRET || '';
@@ -1429,6 +1470,39 @@ async function main() {
         bLog.trade(`FINAL GATE BLOCKED: ${pick.symbol} LONG rejected — price below EMA200 (bearish bias)`);
         continue;
       }
+
+      // ── Trend-strength gate ──
+      // Don't fade VWAP when the trend is strong (ADX > 28).
+      // Momentum breakouts are allowed through.
+      const MEAN_REVERSION_SETUPS = new Set(['RANGE_BOUNCE', 'VWAP_SMC', 'SMC_ZONE']);
+      if (!pick.isMomentumBreakout && MEAN_REVERSION_SETUPS.has(pick.setup)) {
+        try {
+          const klines = await fetchKlines(pick.symbol, '15m', 20); // 20 bars ≈ 5h
+          if (klines && klines.length >= 15) {
+            const highs = klines.map(k => k.high);
+            const lows  = klines.map(k => k.low);
+            const closes = klines.map(k => k.close);
+            const { adx, diPlus, diMinus } = calcADX(highs, lows, closes, 14);
+
+            const isUptrend = diPlus > diMinus;
+            const isDowntrend = diMinus > diPlus;
+
+            if (adx > 28) {
+              if (pick.direction === 'SHORT' && isUptrend) {
+                bLog.trade(`TREND GATE BLOCKED: ${pick.symbol} SHORT rejected — ADX ${adx.toFixed(1)} uptrend too strong to fade`);
+                continue;
+              }
+              if (pick.direction === 'LONG' && isDowntrend) {
+                bLog.trade(`TREND GATE BLOCKED: ${pick.symbol} LONG rejected — ADX ${adx.toFixed(1)} downtrend too strong to fade`);
+                continue;
+              }
+            }
+          }
+        } catch (adxErr) {
+          bLog.warn(`ADX gate error for ${pick.symbol}: ${adxErr.message} — allowing trade`);
+        }
+      }
+      // ──────────────────────────────────────────────────────────
 
       bLog.trade(`Executing trade: ${pick.symbol} ${pick.direction} for registered users...`);
       const result = await executeForAllUsers(pick);
