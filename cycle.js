@@ -1430,7 +1430,7 @@ async function main() {
       // ── HARD-BLOCK losers identified from 30d live WR report ──
       // 1. VWAPTrend setups: 0% WR, -$0.56
       // 2. BreakRetest+OP+VolSpike: 0% WR, -$0.51
-      // 3. SOLUSDT LONG: 67% WR but -$4.91 net (worst $ loss of all combos)
+      // Hard-block historical 0% WR setups — these are strategy names, not symbols
       const setupName = pick.setupName || pick.setup || '';
       if (setupName.includes('VWAPTrend')) {
         bLog.trade(`BLOCKED: ${pick.symbol} ${pick.direction} setup=${setupName} — historical 0% WR loser`);
@@ -1438,10 +1438,6 @@ async function main() {
       }
       if (setupName.includes('BreakRetest')) {
         bLog.trade(`BLOCKED: ${pick.symbol} ${pick.direction} setup=${setupName} — historical 0% WR loser`);
-        continue;
-      }
-      if (pick.symbol === 'SOLUSDT' && pick.direction === 'LONG') {
-        bLog.trade(`BLOCKED: SOLUSDT LONG — historical -$4.91 net (worst combo by $ over 30d)`);
         continue;
       }
 

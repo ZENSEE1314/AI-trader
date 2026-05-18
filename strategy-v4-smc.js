@@ -385,13 +385,16 @@ function is1mGapOk(sl1m_1, sl1m_2) {
   return gap <= MAX_1M_GAP_PCT;
 }
 
-// Symbol-specific chase filters — BTC/ETH move slower, need wider tolerance
+// Symbol-specific chase filters — alts (SOL/BNB) are MORE volatile than BTC/ETH,
+// so they need WIDER tolerance, not tighter. 1m deferred entry needs enough room.
 function getMaxChasePct(symbol) {
   if (symbol === 'BTCUSDT' || symbol === 'ETHUSDT') return 0.15;
+  if (symbol === 'BNBUSDT' || symbol === 'SOLUSDT') return 0.25;
   return 0.10;
 }
 function getMaxShortDropPct(symbol) {
   if (symbol === 'BTCUSDT' || symbol === 'ETHUSDT') return 0.20;
+  if (symbol === 'BNBUSDT' || symbol === 'SOLUSDT') return 0.30;
   return 0.15;
 }
 
@@ -547,7 +550,7 @@ function resolveSignal(state, zone, price, vwap) {
     // Volume spike: rejections need above-average volume to be real
     if (!checkVolumeSpike(state.candles1m, 1.3)) return null;
     // Chase filter: don't enter if price already bounced far above the 1m swing low
-    if (isChasing(price, state.sh1m_1, state.symbol)) return null;
+    if (isChasing(price, state.sl1m_1, state.symbol)) return null;
     // VWAP: block if price is already well above the upper band (too extended for a low entry)
     if (vwap && vwap.stddev > 0) {
       const distAboveUpper = (price - vwap.upper) / vwap.stddev;
@@ -578,7 +581,7 @@ function resolveSignal(state, zone, price, vwap) {
     if (!checkVolumeSpike(state.candles1m, 1.3)) return null;
     // Chase filter: don't enter if price already dropped far below the 1m swing high
     if (isShortTooLate(price, state.last15mPivotPrice, state.symbol)) return null;
-    if (isShort1mTooLate(price, state.sl1m_1, state.symbol)) return null;
+    if (isShort1mTooLate(price, state.sh1m_1, state.symbol)) return null;
     // VWAP: block if price is already well below the lower band (too extended for a high entry)
     if (vwap && vwap.stddev > 0) {
       const distBelowLower = (vwap.lower - price) / vwap.stddev;
