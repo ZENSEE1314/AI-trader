@@ -10,7 +10,7 @@ const aiLearner = require('./ai-learner');
 // V4 SMC strategy: VWAP 2σ zones + 15m/1m BOS+CHoCH confluence
 // Rules: bull days → LONG only | bear days → SHORT only | ranging → nothing
 const { scanV4SMC, ACTIVE_SYMBOLS, SYMBOL_LEVERAGE, SYMBOL_SL_PCT } = require('./strategy-v4-smc');
-const { scanRevSMC } = require('./strategy-rev-smc');
+const { scanHommaSMC } = require('./strategy-homma-smc');
 // Keep 3-timing import for calcTrail3Timing + getSessionMode (still used elsewhere)
 const { getSessionMode } = require('./strategy-3timing'); // v4: trailing SL uses calculateTrailingStep (cycle.js) instead of calcTrail3Timing
 
@@ -1508,10 +1508,10 @@ async function main() {
     const tvSymbols = new Set(signals.map(s => s.symbol));
     try {
       const rawV4 = await scanV4SMC(msg => bLog.scan(msg));
-      const rawRev = await scanRevSMC(msg => bLog.scan(msg));
+      const rawHomma = await scanHommaSMC(msg => bLog.scan(msg));
       const v4Filtered = (rawV4 || []).filter(s => !tvSymbols.has(s.symbol) && (s.symbol === 'BTCUSDT' || s.symbol === 'ETHUSDT'));
-      const revFiltered = (rawRev || []).filter(s => !tvSymbols.has(s.symbol) && (s.symbol === 'BNBUSDT' || s.symbol === 'SOLUSDT'));
-      signals.push(...v4Filtered, ...revFiltered);
+      const hommaFiltered = (rawHomma || []).filter(s => !tvSymbols.has(s.symbol) && (s.symbol === 'BNBUSDT' || s.symbol === 'SOLUSDT'));
+      signals.push(...v4Filtered, ...hommaFiltered);
       bLog.scan(`V4-SMC: ${v4Filtered.length} signal(s) | Rev-SMC: ${revFiltered.length} signal(s)`);
     } catch (tErr) {
       bLog.error(`Strategy scan failed: ${tErr.message}`);
