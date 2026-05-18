@@ -18,7 +18,11 @@ const { log: bLog } = require('./bot-logger');
 const { getBinanceRequestOptions, getFetchOptions } = require('./proxy-agent');
 const { query: dbQuery } = require('./db');
 const { fetchKlines } = require('./indicator-library');
-const { analyzeRecentTrades } = require('./pattern-analyzer');
+const { analyzeRecentTrades, checkPerformanceAlert } = require('./pattern-analyzer');
+
+// ── Performance alert throttling ─────────────────────────────
+let _lastPerfAlertTime = 0;
+const PERF_ALERT_COOLDOWN_MS = 60 * 60 * 1000; // 1 hour between alerts
 
 // ── Trail tier tables — single source of truth shared with trail-watchdog.js ──
 const {
@@ -1317,6 +1321,22 @@ async function main() {
       }
     } catch (paErr) {
       bLog.error(`[PatternAnalyzer] error: ${paErr.message}`);
+    }
+
+    // ── Performance Alert — last 5 trades since this deploy ─────
+    try {
+      const perf = await checkPerformanceAlert(40, 5);
+      if (perf.alert) {
+        const nowMs = Date.now();
+        if (nowMs - _lastPerfAlertTime > PERF_ALERT_COOLDOWN_MS) {
+          _lastPerfAlertTime = nowMs;
+          await notify(perf.message);
+        }
+      } else if (perf.winRate !== undefined) {
+        bLog.ai(`[Performance] ${perf.message}`);
+      }
+    } catch (perfErr) {
+      bLog.error(`[PerformanceAlert] error: ${perfErr.message}`);
     }
 
     // ── Kronos AI Batch Scan: only the 4 watchlist tokens ──────

@@ -171,5 +171,51 @@ function topPivotCombo(trades) {
   return entries[0][0];
 }
 
+// ── Performance Alert — check last 5 trades post-deploy ──────
+// If win rate of last 5 trades drops below 40%, returns an alert message.
+// Call after every trade or every cycle to monitor strategy health.
+async function checkPerformanceAlert(minWinRate = 40, lookbackCount = 5) {
+  try {
+    const trades = await query(`
+      SELECT is_win, pnl_pct, symbol, direction, setup, closed_at
+      FROM ai_trades
+      WHERE pnl_pct IS NOT NULL
+      ORDER BY closed_at DESC
+      LIMIT $1
+    `, [lookbackCount]);
+
+    if (trades.length < lookbackCount) {
+      return { alert: false, reason: `Only ${trades.length} closed trades (need ${lookbackCount})` };
+    }
+
+    const wins = trades.filter(t => t.is_win).length;
+    const wr = (wins / trades.length) * 100;
+
+    const pnlSum = trades.reduce((s, t) => s + (parseFloat(t.pnl_pct) || 0), 0);
+    const avgPnl = pnlSum / trades.length;
+
+    if (wr < minWinRate) {
+      const details = trades.map(t => `${t.symbol} ${t.direction} ${t.is_win ? 'WIN' : 'LOSS'} ${parseFloat(t.pnl_pct).toFixed(2)}%`).join(' | ');
+      return {
+        alert: true,
+        message: `⚠️ *Strategy Alert*\nLast ${trades.length} trades: ${wins}W/${trades.length - wins}L (${wr.toFixed(1)}% WR)\nAvg PnL: ${avgPnl > 0 ? '+' : ''}${avgPnl.toFixed(2)}%\n\n${details}\n\n_Action: review logs, consider pausing new entries._`,
+        winRate: wr,
+        avgPnl,
+        trades,
+      };
+    }
+
+    return {
+      alert: false,
+      message: `✅ Last ${trades.length} trades: ${wins}W/${trades.length - wins}L (${wr.toFixed(1)}% WR) | Avg PnL ${avgPnl > 0 ? '+' : ''}${avgPnl.toFixed(2)}%`,
+      winRate: wr,
+      avgPnl,
+      trades,
+    };
+  } catch (e) {
+    return { alert: false, reason: e.message };
+  }
+}
+
 // ── Export ───────────────────────────────────────────────────
-module.exports = { analyzeRecentTrades };
+module.exports = { analyzeRecentTrades, checkPerformanceAlert };
