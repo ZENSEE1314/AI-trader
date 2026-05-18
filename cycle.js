@@ -10,6 +10,7 @@ const aiLearner = require('./ai-learner');
 // V4 SMC strategy: VWAP 2σ zones + 15m/1m BOS+CHoCH confluence
 // Rules: bull days → LONG only | bear days → SHORT only | ranging → nothing
 const { scanV4SMC, ACTIVE_SYMBOLS, SYMBOL_LEVERAGE, SYMBOL_SL_PCT } = require('./strategy-v4-smc');
+const { scanRevSMC } = require('./strategy-rev-smc');
 // Keep 3-timing import for calcTrail3Timing + getSessionMode (still used elsewhere)
 const { getSessionMode } = require('./strategy-3timing'); // v4: trailing SL uses calculateTrailingStep (cycle.js) instead of calcTrail3Timing
 
@@ -103,10 +104,10 @@ function injectTVSignal(signal) {
 }
 
 let TOKEN_LEVERAGE = {
-  BTCUSDT: 125,  // 0.25% SL → 31.3% risk/trade
-  ETHUSDT:  75,  // 0.40% SL → 30.0% risk/trade
-  BNBUSDT: 200,  // 0.25% SL → 50.0% risk/trade
-  SOLUSDT: 150,  // 0.20% SL → 30.0% risk/trade
+  BTCUSDT: 125,  // 0.25% SL × 125 = 31.3% risk/trade
+  ETHUSDT: 125,  // 0.40% SL × 125 = 50.0% risk/trade
+  BNBUSDT:  75,  // 0.25% SL × 75  = 18.8% risk/trade
+  SOLUSDT:  75,  // 0.20% SL × 75  = 15.0% risk/trade
 };
 
 async function loadV4Config() {
@@ -428,6 +429,26 @@ function detectSwings(klines, len) {
   return swings;
 }
 
+// ── 5m REVERSAL EXIT CHECK (structure-reversal exit for Rev-SMC trades) ──
+// LONG exits when a 5m LH pivot forms (lower high = momentum shift down)
+// SHORT exits when a 5m HL pivot forms (higher low = momentum shift up)
+function shouldExitRev(klines5m, direction) {
+  const swings = detectSwings(klines5m, 5);
+  const swingHighs = swings.filter(s => s.type === 'high');
+  const swingLows  = swings.filter(s => s.type === 'low');
+  if (direction === 'LONG' && swingHighs.length >= 2) {
+    const recent = swingHighs[swingHighs.length - 1];
+    const prev   = swingHighs[swingHighs.length - 2];
+    return recent.price < prev.price; // LH = lower high
+  }
+  if (direction === 'SHORT' && swingLows.length >= 2) {
+    const recent = swingLows[swingLows.length - 1];
+    const prev   = swingLows[swingLows.length - 2];
+    return recent.price > prev.price; // HL = higher low
+  }
+  return false;
+}
+
 // ── 15m EXIT CHECK (structure break using Zeiierman swings) ──
 function shouldExit15m(klines15, entryPrice, direction) {
   const swings = detectSwings(klines15, SWING_LENGTHS['15m']);
@@ -673,7 +694,7 @@ async function openTrade(client, pick, wallet) {
 
   // Get AI-tuned params for leverage and sizing
   const aiParams = await aiLearner.getOptimalParams();
-  const leverage = getLeverage(sym, price, aiParams);
+  const leverage = pick.leverage || getLeverage(sym, price, aiParams);
   const walletSizePct = CAPITAL_PER_TRADE; // 10% of wallet — single source of truth
 
   await client.setLeverage({ symbol: sym, leverage });
@@ -784,6 +805,7 @@ async function openTrade(client, pick, wallet) {
     trailingSlLastStep: 0,
     leverage,
     vwapZone: pick.vwapBandPos || null,
+    exitMode: pick.exitMode || 'TRAIL',
     // v2 flag: use swing-point 30%/31% trailing logic instead of capital-tier logic
     strategyVersion: pick.version || null,
   });
@@ -983,7 +1005,61 @@ async function checkTrailingStop(client) {
         }
       } catch (_) {}
 
+      // ── 5m Structure-Reversal EXIT (Rev-SMC trades only) ──
       const state = tradeState.get(sym);
+      if (state && state.exitMode === 'REV') {
+        try {
+          const klines5 = await client.getKlines({ symbol: sym, interval: '5m', limit: 50 });
+          if (shouldExitRev(klines5, isLong ? 'LONG' : 'SHORT')) {
+            log(`Exit [${isLong ? 'LONG' : 'SHORT'}] ${sym}: 5m structure reversal (Rev)`);
+            try { await client.cancelAllOpenOrders({ symbol: sym }); } catch (_) {}
+            try { await client.cancelAllAlgoOpenOrders({ symbol: sym }); } catch (_) {}
+            await client.submitNewOrder({ symbol: sym, side: closeSide, type: 'MARKET', quantity: Math.abs(amt), reduceOnly: 'true' });
+
+            await aiLearner.recordTrade({
+              symbol: sym, direction: isLong ? 'LONG' : 'SHORT',
+              setup: state.setup || 'unknown', entryPrice: entry, exitPrice: cur,
+              pnlPct: gain * 100, leverage: state.leverage || getLeverage(sym, entry, await aiLearner.getOptimalParams()),
+              durationMin: Math.round((Date.now() - state.openedAt) / 60000),
+              session: aiLearner.getCurrentSession(),
+              slDistancePct: Math.abs(entry - state.sl) / entry * 100,
+              tpDistancePct: Math.abs(state.tp1 - entry) / entry * 100,
+              tf15m: state.tf15m || null, tf3m: state.tf3m || null, tf1m: state.tf1m || null,
+              marketStructure: state.marketStructure || null,
+              vwapZone: state.vwapZone || null,
+              exitReason: 'structure_reversal_5m',
+              comboId: state.comboId || 15,
+            });
+            if (gain < 0) {
+              await aiLearner.performLossAutopsy({
+                symbol: sym, setup: state.setup || 'unknown',
+                direction: isLong ? 'LONG' : 'SHORT',
+                session: aiLearner.getCurrentSession(),
+                marketStructure: state.marketStructure || 'unknown',
+                vwapZone: state.vwapZone || null,
+              });
+            } else {
+              await aiLearner.performWinAutopsy({
+                symbol: sym, setup: state.setup || 'unknown',
+                direction: isLong ? 'LONG' : 'SHORT',
+                session: aiLearner.getCurrentSession(),
+                marketStructure: state.marketStructure || 'unknown',
+                vwapZone: state.vwapZone || null,
+              });
+            }
+            tradeState.delete(sym);
+            await notify(
+              `*Exit: 5m Rev*
+` +
+              `*${sym}* ${isLong ? 'LONG' : 'SHORT'}\n` +
+              `Entry: \`$${fmtPrice(entry)}\` Exit: \`$${fmtPrice(cur)}\`\n` +
+              `PnL: *${gain >= 0 ? '+' : ''}${(gain * 100).toFixed(2)}%*`
+            );
+            continue;
+          }
+        } catch (_) {}
+      }
+
       if (!state) continue;
 
       // ── Spike TP: close at 0.5% profit if token spiked ──
@@ -1046,8 +1122,11 @@ async function checkTrailingStop(client) {
       }
 
       // ── Trailing SL step check (v4 tier ladder) ─────────────
+      // Skip for Rev-SMC trades — they exit on 5m structure reversal
       let trailResult;
-      {
+      if (state.exitMode === 'REV') {
+        trailResult = null;
+      } else {
         const lev      = state.leverage || 20;
         const lastStep = state.trailingSlLastStep || 0;
         const step = calculateTrailingStep(state.entry, cur, state.isLong, lastStep, lev);
@@ -1116,8 +1195,8 @@ async function checkTrailingStop(client) {
 
       if (state.scaleOutStage === undefined) state.scaleOutStage = 0;
 
-      // Stage 0 → 1: +30% capital — close 50%, SL to +30%
-      if (state.scaleOutStage < 1 && capitalPct >= 30) {
+      // Scale-out ladder — skipped for Rev-SMC trades (they ride to Rev exit)
+      if (state.exitMode !== 'REV' && state.scaleOutStage < 1 && capitalPct >= 30) {
         state.scaleOutStage = 1;
         const closeQty = floorQ(curQty * 0.50);
         const slPricePct = 0.30 / lev;
@@ -1161,8 +1240,7 @@ async function checkTrailingStop(client) {
         continue;
       }
 
-      // Stage 1 → 2: +40% capital — close 50% of remaining, SL to +40%
-      if (state.scaleOutStage < 2 && capitalPct >= 40) {
+      if (state.exitMode !== 'REV' && state.scaleOutStage < 2 && capitalPct >= 40) {
         state.scaleOutStage = 2;
         const closeQty = floorQ(curQty * 0.50);
         const slPricePct = 0.40 / lev;
@@ -1205,8 +1283,7 @@ async function checkTrailingStop(client) {
         continue;
       }
 
-      // Stage 2 → 3: +50% capital — close rest
-      if (state.scaleOutStage < 3 && capitalPct >= 50) {
+      if (state.exitMode !== 'REV' && state.scaleOutStage < 3 && capitalPct >= 50) {
         state.scaleOutStage = 3;
         const closeQty = floorQ(curQty);
         log(`Scale-out 3 ${sym} @ +${capitalPct.toFixed(1)}% capital: closing rest (${closeQty})`);
@@ -1425,17 +1502,19 @@ async function main() {
       _tvSignalQueue.clear();
     }
 
-    // ── Internal V4-SMC scan (runs when no TV signal for a symbol) ──
+    // ── Internal strategy scans ──
+    // BTC/ETH → V4 SMC (1m trigger + trailing SL tiers)
+    // BNB/SOL → Rev SMC (5m trigger + structure-reversal exit)
     const tvSymbols = new Set(signals.map(s => s.symbol));
     try {
       const rawV4 = await scanV4SMC(msg => bLog.scan(msg));
-      if ((rawV4 || []).length > 0) {
-        const filtered = rawV4.filter(s => !tvSymbols.has(s.symbol));
-        signals.push(...filtered);
-        bLog.scan(`V4-SMC: ${rawV4.length} signal(s), ${filtered.length} used (${rawV4.length - filtered.length} overridden by TV webhook)`);
-      }
+      const rawRev = await scanRevSMC(msg => bLog.scan(msg));
+      const v4Filtered = (rawV4 || []).filter(s => !tvSymbols.has(s.symbol) && (s.symbol === 'BTCUSDT' || s.symbol === 'ETHUSDT'));
+      const revFiltered = (rawRev || []).filter(s => !tvSymbols.has(s.symbol) && (s.symbol === 'BNBUSDT' || s.symbol === 'SOLUSDT'));
+      signals.push(...v4Filtered, ...revFiltered);
+      bLog.scan(`V4-SMC: ${v4Filtered.length} signal(s) | Rev-SMC: ${revFiltered.length} signal(s)`);
     } catch (tErr) {
-      bLog.error(`V4-SMC scan failed: ${tErr.message}`);
+      bLog.error(`Strategy scan failed: ${tErr.message}`);
     }
 
     if (!signals.length) {
