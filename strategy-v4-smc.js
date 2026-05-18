@@ -619,101 +619,73 @@ function resolveSignal(state, zone, price, vwap) {
   const getMacroStructure = sideways ? get3mStructure : get15mStructure;
 
   // ── LONG: price at a LOW pivot (LL or HL) — demand zone entry ──────────────
-  // HL = higher low  → price dipped to demand, buyers stepped in → LONG continuation
-  // LL = new low     → price hit demand zone, potential bounce    → LONG reversal
-  // Both place entry AT THE LOW — the point where buyers should be strongest.
-  // 4H gate: if macro trend is BEARISH, demand zones tend to fail (lows break lower).
   function tryLong() {
+    const reasons = [];
     const s4h   = get4hStructure(state, price);
     const sMacrochk = getMacroStructure(state, price);
-    if (s4h === 'BEARISH') return null;   // macro downtrend — demand zones fail
-    // When 4H is uncertain (MIXED/UNKNOWN), require macro TF to also confirm bullish/recovering.
-    if ((s4h === 'MIXED' || s4h === 'UNKNOWN') && sMacrochk === 'BEARISH') return null;
+    if (s4h === 'BEARISH') { reasons.push('4H=BEARISH'); return _rej('LONG', reasons); }
+    if ((s4h === 'MIXED' || s4h === 'UNKNOWN') && sMacrochk === 'BEARISH') { reasons.push('macro=BEARISH'); return _rej('LONG', reasons); }
 
-    // Demand zone entry: both macro and 1m must confirm price is AT A LOW
-    const isDemandMacro = sideways
-      ? pMacro === 'HL'                          // sideways: only HL (higher low = demand bounce)
-      : pMacro === 'LL' || pMacro === 'HL';     // trending: any low pivot
+    const isDemandMacro = sideways ? pMacro === 'HL' : pMacro === 'LL' || pMacro === 'HL';
     const isDemand1m = p1m === 'LL' || p1m === 'HL';
-    if (!isDemandMacro || !isDemand1m) return null;
+    if (!isDemandMacro) reasons.push(`macro=${pMacro} (need demand)`);
+    if (!isDemand1m)    reasons.push(`1m=${p1m} (need demand)`);
+    if (!isDemandMacro || !isDemand1m) return _rej('LONG', reasons);
 
-    // Trend continuation vs reversal logic:
-    //   4H BULLISH + HL pivot = uptrend continuation → buyers stepping in at higher low
-    //     → do NOT require volume spike or Homma reversal pattern
-    //   LL pivot or 4H MIXED/UNKNOWN = potential reversal → demand confirmation
     const isTrendContinuation = !sideways && s4h === 'BULLISH' && pMacro === 'HL' && p1m === 'HL';
-
     if (!isTrendContinuation) {
-      // Reversal setup: need candlestick confirmation + volume spike
       const homma = getHommaSignal(state.candles1m.slice(-5));
-      if (homma.bias === 'BEARISH' && homma.score >= 2) return null; // strong bearish candle = skip
-      if (!checkVolumeSpike(state.candles1m, 1.3)) return null;
+      if (homma.bias === 'BEARISH' && homma.score >= 2) { reasons.push(`Homma=${homma.patterns.join(',')} (strong bearish)`); return _rej('LONG', reasons); }
+      if (!checkVolumeSpike(state.candles1m, 1.3)) { reasons.push('volume<1.3x'); return _rej('LONG', reasons); }
     }
-
-    // Chase filter: don't enter if price already bounced far above the 1m swing low
-    if (isChasing(price, state.sl1m_1, state.symbol)) return null;
-    // VWAP: block if price is already well above the upper band (too extended for a low entry)
+    if (isChasing(price, state.sl1m_1, state.symbol)) { reasons.push('chasing'); return _rej('LONG', reasons); }
     if (vwap && vwap.stddev > 0) {
       const distAboveUpper = (price - vwap.upper) / vwap.stddev;
-      if (distAboveUpper > MIN_DIST_SIGMA * 2) return null;
+      if (distAboveUpper > MIN_DIST_SIGMA * 2) { reasons.push(`>${MIN_DIST_SIGMA*2}σ above upper`); return _rej('LONG', reasons); }
     }
     return { direction: 'LONG', type: `${pMacro}+${p1m}`, regime };
   }
 
   // ── SHORT: price at a HIGH pivot (HH or LH) — supply zone entry ─────────────
-  // LH = lower high  → price bounced to supply, sellers rejected it → SHORT continuation
-  // HH = new high    → price hit supply zone, potential reversal    → SHORT reversal
-  // Both place entry AT THE HIGH — the point where sellers should be strongest.
-  // 4H gate: if macro trend is BULLISH, supply zones tend to break (highs keep printing).
   function tryShort() {
+    const reasons = [];
     const s4h    = get4hStructure(state, price);
     const sMacrochk = getMacroStructure(state, price);
-    if (s4h === 'BULLISH') return null;   // macro uptrend — supply zones break
-    // When 4H is uncertain, require macro TF to confirm bearish/rejecting.
-    if ((s4h === 'MIXED' || s4h === 'UNKNOWN') && sMacrochk === 'BULLISH') return null;
+    if (s4h === 'BULLISH') { reasons.push('4H=BULLISH'); return _rej('SHORT', reasons); }
+    if ((s4h === 'MIXED' || s4h === 'UNKNOWN') && sMacrochk === 'BULLISH') { reasons.push('macro=BULLISH'); return _rej('SHORT', reasons); }
 
-    // Supply zone entry: both macro and 1m must confirm price is AT A HIGH
-    const isSupplyMacro = sideways
-      ? pMacro === 'LH'                          // sideways: only LH (lower high = supply rejection)
-      : pMacro === 'HH' || pMacro === 'LH';     // trending: any high pivot
+    const isSupplyMacro = sideways ? pMacro === 'LH' : pMacro === 'HH' || pMacro === 'LH';
     const isSupply1m = p1m === 'HH' || p1m === 'LH';
-    if (!isSupplyMacro || !isSupply1m) return null;
+    if (!isSupplyMacro) reasons.push(`macro=${pMacro} (need supply)`);
+    if (!isSupply1m)    reasons.push(`1m=${p1m} (need supply)`);
+    if (!isSupplyMacro || !isSupply1m) return _rej('SHORT', reasons);
 
-    // Trend continuation vs reversal logic:
-    //   4H BEARISH + LH pivot = downtrend continuation → sellers at lower high
-    //     → do NOT require volume spike or Homma reversal pattern
-    //   HH pivot or 4H MIXED/UNKNOWN = potential reversal → supply confirmation
     const isTrendContinuation = !sideways && s4h === 'BEARISH' && pMacro === 'LH' && p1m === 'LH';
-
     if (!isTrendContinuation) {
-      // Reversal setup: need candlestick confirmation + volume spike
       const homma = getHommaSignal(state.candles1m.slice(-5));
-      if (homma.bias === 'BULLISH' && homma.score >= 2) return null; // strong bullish candle = skip
-      if (!checkVolumeSpike(state.candles1m, 1.3)) return null;
+      if (homma.bias === 'BULLISH' && homma.score >= 2) { reasons.push(`Homma=${homma.patterns.join(',')} (strong bullish)`); return _rej('SHORT', reasons); }
+      if (!checkVolumeSpike(state.candles1m, 1.3)) { reasons.push('volume<1.3x'); return _rej('SHORT', reasons); }
     }
-
-    // Chase filter: don't enter if price already dropped far below the 1m swing high
-    if (isShortTooLate(price, state.last15mPivotPrice, state.symbol)) return null;
-    if (isShort1mTooLate(price, state.sh1m_1, state.symbol)) return null;
-    // VWAP: block if price is already well below the lower band (too extended for a high entry)
+    if (isShortTooLate(price, state.last15mPivotPrice, state.symbol)) { reasons.push('15m drop too deep'); return _rej('SHORT', reasons); }
+    if (isShort1mTooLate(price, state.sh1m_1, state.symbol)) { reasons.push('1m drop too deep'); return _rej('SHORT', reasons); }
     if (vwap && vwap.stddev > 0) {
       const distBelowLower = (vwap.lower - price) / vwap.stddev;
-      if (distBelowLower > MIN_DIST_SIGMA * 2) return null;
+      if (distBelowLower > MIN_DIST_SIGMA * 2) { reasons.push(`>${MIN_DIST_SIGMA*2}σ below lower`); return _rej('SHORT', reasons); }
     }
     return { direction: 'SHORT', type: `${pMacro}+${p1m}`, regime };
   }
 
+  // Helper: log exactly which gate blocked the signal
+  function _rej(dir, reasons) {
+    if (reasons.length > 0) {
+      log(`[V4] ${dir} REJECTED — ${state.symbol} ${regime} macro=${pMacro} 1m=${p1m} zone=${zone} price=${price.toFixed(4)} | ${reasons.join(' | ')}`);
+    }
+    return null;
+  }
+
   // ── Dispatcher: pivot type → direction ────────────────────────────────────
-  // LOW pivot  (LL or HL) = price at demand zone → LONG  (buy the low)
-  // HIGH pivot (HH or LH) = price at supply zone → SHORT (sell the high)
-  // Zone guard: don't LONG if price is already above upper band (ABOVE_UPPER)
-  //             don't SHORT if price is already below lower band (BELOW_LOWER)
-  const isLowPivot  = sideways
-    ? pMacro === 'HL'
-    : pMacro === 'LL' || pMacro === 'HL';
-  const isHighPivot = sideways
-    ? pMacro === 'LH'
-    : pMacro === 'HH' || pMacro === 'LH';
+  const isLowPivot  = sideways ? pMacro === 'HL' : pMacro === 'LL' || pMacro === 'HL';
+  const isHighPivot = sideways ? pMacro === 'LH' : pMacro === 'HH' || pMacro === 'LH';
   if (isLowPivot  && zone !== 'ABOVE_UPPER') return tryLong();
   if (isHighPivot && zone !== 'BELOW_LOWER') return tryShort();
   return null;
