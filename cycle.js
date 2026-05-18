@@ -18,6 +18,7 @@ const { log: bLog } = require('./bot-logger');
 const { getBinanceRequestOptions, getFetchOptions } = require('./proxy-agent');
 const { query: dbQuery } = require('./db');
 const { fetchKlines } = require('./indicator-library');
+const { analyzeRecentTrades } = require('./pattern-analyzer');
 
 // ── Trail tier tables — single source of truth shared with trail-watchdog.js ──
 const {
@@ -1303,6 +1304,20 @@ async function main() {
     }
     const topNRows = await dbQuery('SELECT MAX(top_n_coins) as max_n FROM api_keys WHERE enabled = true');
     const topNCoins = parseInt(topNRows[0]?.max_n) || 50;
+
+    // ── Pattern Analyzer — learn from recent trades ────────────
+    let patternRecs = null;
+    try {
+      patternRecs = await analyzeRecentTrades(null, 15);
+      if (patternRecs.ready) {
+        bLog.ai(`[PatternAnalyzer] Last ${patternRecs.totalTrades} trades: ${patternRecs.winRate}% WR`);
+        for (const rec of patternRecs.recommendations.slice(0, 3)) {
+          bLog.ai(`[PatternAnalyzer] ${rec}`);
+        }
+      }
+    } catch (paErr) {
+      bLog.error(`[PatternAnalyzer] error: ${paErr.message}`);
+    }
 
     // ── Kronos AI Batch Scan: only the 4 watchlist tokens ──────
     let kronosPredictions = null;

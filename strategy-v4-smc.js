@@ -84,6 +84,7 @@ const _state = {};
 function getState(symbol) {
   if (!_state[symbol]) {
     _state[symbol] = {
+      symbol,
       candles1m:  [],
       candles15m: [],
 
@@ -383,41 +384,39 @@ function is1mGapOk(sl1m_1, sl1m_2) {
   return gap <= MAX_1M_GAP_PCT;
 }
 
-// Chase filter: reject LONG if price has already moved > MAX_CHASE_PCT above
-// the confirmed 1m HL/LL pivot.
-// At 100x: 0.08% price move = 8% capital already consumed before entry.
-// Tightened from 0.20% (was 20% capital burned before even opening — too far
-// from the pivot, entering "in no where" as user described).
-// Entry MUST be within 0.08% of the actual swing low — if it moved more, skip.
-const MAX_CHASE_PCT = 0.08;
+// Symbol-specific chase filters — BTC/ETH move slower, need wider tolerance
+function getMaxChasePct(symbol) {
+  if (symbol === 'BTCUSDT' || symbol === 'ETHUSDT') return 0.15;
+  return 0.10;
+}
+function getMaxShortDropPct(symbol) {
+  if (symbol === 'BTCUSDT' || symbol === 'ETHUSDT') return 0.20;
+  return 0.15;
+}
 
-function isChasing(price, sl1m_1) {
+// Chase filter: reject LONG if price has already moved too far above
+// the confirmed 1m HL/LL pivot.
+// At 100x: 0.15% price move = 15% capital already consumed before entry.
+function isChasing(price, sl1m_1, symbol) {
   if (sl1m_1 === null) return false;
   const chasePct = (price - sl1m_1) / sl1m_1 * 100;
-  return chasePct > MAX_CHASE_PCT;
+  return chasePct > getMaxChasePct(symbol);
 }
 
-// SHORT proximity filter: reject SHORT if price has already dropped > MAX_SHORT_DROP_PCT
-// below the 15m HH/LH reference. The rejection already played out — we'd be
-// entering mid-fall, not at the top where the setup was valid.
-// Tightened from 0.30% to 0.12%: at 100x, 0.12% = 12% capital already moved.
-// Entry must be within 0.12% of the swing high — if it dropped more, skip.
-const MAX_SHORT_DROP_PCT = 0.12;
-
-function isShortTooLate(price, sh15_1) {
-  if (sh15_1 === null) return false;  // no swing high reference — don't block
+// SHORT proximity filter: reject SHORT if price has already dropped too far
+// below the 15m HH/LH reference.
+function isShortTooLate(price, sh15_1, symbol) {
+  if (sh15_1 === null) return false;
   const dropPct = (sh15_1 - price) / sh15_1 * 100;
-  return dropPct > MAX_SHORT_DROP_PCT;
+  return dropPct > getMaxShortDropPct(symbol);
 }
 
-// SHORT 1m proximity filter: price must also be within MAX_SHORT_DROP_PCT of
-// the 1m swing HIGH (sh1m_1) — not just the 15m reference.
-// This catches cases where 15m HH/LH is fresh but price already fell sharply
-// on the 1m in the confirmation window (3 bars = 3 min).
-function isShort1mTooLate(price, sh1m_1) {
+// SHORT 1m proximity filter: price must also be within tolerance of
+// the 1m swing HIGH (sh1m_1).
+function isShort1mTooLate(price, sh1m_1, symbol) {
   if (sh1m_1 === null) return false;
   const dropPct = (sh1m_1 - price) / sh1m_1 * 100;
-  return dropPct > MAX_SHORT_DROP_PCT;
+  return dropPct > getMaxShortDropPct(symbol);
 }
 
 // VWAP σ-distance filter for SHORT entries.
@@ -427,6 +426,20 @@ function isShort1mTooLate(price, sh1m_1) {
 function isGoodUpperDistance(price, { upper, stddev }) {
   const distFromUpper = (upper - price) / stddev;
   return stddev > 0 && distFromUpper >= MIN_DIST_SIGMA;
+}
+
+// Volume spike filter — a valid reversal needs above-average volume.
+// Compares current candle volume vs average of last 10 candles.
+// Requires 1.5× average for a strong rejection signal.
+function checkVolumeSpike(candles, minRatio = 1.5) {
+  if (!candles || candles.length < 5) return true; // not enough data — allow
+  const current = candles[candles.length - 1];
+  const prev = candles.slice(-11, -1); // last 10 excluding current
+  if (!prev.length) return true;
+  const avgVol = prev.reduce((s, c) => s + (c.volume || 0), 0) / prev.length;
+  if (avgVol <= 0) return true;
+  const ratio = (current.volume || 0) / avgVol;
+  return ratio >= minRatio;
 }
 
 // ── 15m Market Structure ───────────────────────────────────────
@@ -527,8 +540,10 @@ function resolveSignal(state, zone, price, vwap) {
     const isDemand15 = p15 === 'LL' || p15 === 'HL';
     const isDemand1m = p1m === 'LL' || p1m === 'HL';
     if (!isDemand15 || !isDemand1m) return null;
+    // Volume spike: rejections need above-average volume to be real
+    if (!checkVolumeSpike(state.candles1m, 1.3)) return null;
     // Chase filter: don't enter if price already bounced far above the 1m swing low
-    if (isChasing(price, state.sh1m_1)) return null;
+    if (isChasing(price, state.sh1m_1, state.symbol)) return null;
     // VWAP: block if price is already well above the upper band (too extended for a low entry)
     if (vwap && vwap.stddev > 0) {
       const distAboveUpper = (price - vwap.upper) / vwap.stddev;
@@ -552,9 +567,11 @@ function resolveSignal(state, zone, price, vwap) {
     const isSupply15 = p15 === 'HH' || p15 === 'LH';
     const isSupply1m = p1m === 'HH' || p1m === 'LH';
     if (!isSupply15 || !isSupply1m) return null;
+    // Volume spike: rejections need above-average volume to be real
+    if (!checkVolumeSpike(state.candles1m, 1.3)) return null;
     // Chase filter: don't enter if price already dropped far below the 1m swing high
-    if (isShortTooLate(price, state.last15mPivotPrice)) return null;
-    if (isShort1mTooLate(price, state.sl1m_1)) return null;
+    if (isShortTooLate(price, state.last15mPivotPrice, state.symbol)) return null;
+    if (isShort1mTooLate(price, state.sl1m_1, state.symbol)) return null;
     // VWAP: block if price is already well below the lower band (too extended for a high entry)
     if (vwap && vwap.stddev > 0) {
       const distBelowLower = (vwap.lower - price) / vwap.stddev;
@@ -750,8 +767,8 @@ async function analyze(symbol, log) {
         // Frozen-ref chase/drop using pivot refs frozen at queue time.
         const frozenRef = pending.direction === 'SHORT' ? pending.sh1m_1 : pending.sl1m_1;
         const frozenOk  = pending.direction === 'SHORT'
-          ? !isShort1mTooLate(entryPrice, frozenRef)
-          : !isChasing(entryPrice, frozenRef);
+          ? !isShort1mTooLate(entryPrice, frozenRef, symbol)
+          : !isChasing(entryPrice, frozenRef, symbol);
 
         if (resolved && resolved.direction === pending.direction && frozenOk) {
           signal = { ...pending, price: entryPrice, zone: zoneNext };
@@ -787,9 +804,9 @@ async function analyze(symbol, log) {
               } else if (!is1mGapOk(st.sl1m_1, st.sl1m_2)) {
                 const g = (st.sl1m_1 && st.sl1m_2) ? (Math.abs(st.sl1m_1 - st.sl1m_2) / st.sl1m_2 * 100).toFixed(3) : 'n/a';
                 cancelReason = `1m gap=${g}% too wide (limit=${MAX_1M_GAP_PCT}%)`;
-              } else if (isChasing(entryPrice, st.sl1m_1)) {
+              } else if (isChasing(entryPrice, st.sl1m_1, symbol)) {
                 const c = st.sl1m_1 ? ((entryPrice - st.sl1m_1) / st.sl1m_1 * 100).toFixed(3) : 'n/a';
-                cancelReason = `live chase=${c}% above sl1m (limit=${MAX_CHASE_PCT}%)`;
+                cancelReason = `live chase=${c}% above sl1m (limit=${getMaxChasePct(symbol)}%)`;
               } else {
                 const dist = (entryPrice - vwapNext.lower) / vwapNext.stddev;
                 cancelReason = `VWAP proximity ${dist.toFixed(2)}σ above lower band (limit=${MIN_DIST_SIGMA * 2}σ)`;
@@ -802,12 +819,12 @@ async function analyze(symbol, log) {
                 cancelReason = `15m pivot flipped to ${p15} — need HH or LH for SHORT (supply zone)`;
               } else if (!isSupply1m) {
                 cancelReason = `1m pivot flipped to ${p1m} — need HH or LH for SHORT (supply zone)`;
-              } else if (isShortTooLate(entryPrice, st.last15mPivotPrice)) {
+              } else if (isShortTooLate(entryPrice, st.last15mPivotPrice, symbol)) {
                 const d = st.last15mPivotPrice ? ((st.last15mPivotPrice - entryPrice) / st.last15mPivotPrice * 100).toFixed(3) : 'n/a';
-                cancelReason = `15m drop=${d}% already past pivot (limit=${MAX_SHORT_DROP_PCT}%)`;
-              } else if (isShort1mTooLate(entryPrice, st.sh1m_1)) {
+                cancelReason = `15m drop=${d}% already past pivot (limit=${getMaxShortDropPct(symbol)}%)`;
+              } else if (isShort1mTooLate(entryPrice, st.sh1m_1, symbol)) {
                 const d = st.sh1m_1 ? ((st.sh1m_1 - entryPrice) / st.sh1m_1 * 100).toFixed(3) : 'n/a';
-                cancelReason = `1m drop=${d}% already past sh1m_live=${st.sh1m_1?.toFixed(4)} (limit=${MAX_SHORT_DROP_PCT}%)`;
+                cancelReason = `1m drop=${d}% already past sh1m_live=${st.sh1m_1?.toFixed(4)} (limit=${getMaxShortDropPct(symbol)}%)`;
               } else {
                 const dist = (vwapNext.upper - entryPrice) / vwapNext.stddev;
                 cancelReason = `VWAP proximity ${dist.toFixed(2)}σ below upper band (limit=${MIN_DIST_SIGMA * 2}σ) — entry in the middle, not near resistance`;
@@ -874,8 +891,8 @@ async function analyze(symbol, log) {
         if (sig && sig.direction === 'SHORT' && nowMs - st.lastShortTime < MIN_DIR_GAP) continue;
         const piv15t = st.last15mPivotType || 'none';
         const piv1mt  = st.last1mPivotType  || 'none';
-        const longOk  = (piv15t==='HH'||piv15t==='HL') && (piv1mt==='HH'||piv1mt==='HL');
-        const shortOk = (piv15t==='LL'||piv15t==='LH') && (piv1mt==='LL'||piv1mt==='LH');
+        const longOk  = (piv15t==='LL'||piv15t==='HL') && (piv1mt==='LL'||piv1mt==='HL');
+        const shortOk = (piv15t==='HH'||piv15t==='LH') && (piv1mt==='HH'||piv1mt==='LH');
         log(`[V4-SIG] ${symbol} zone=${zone} 4H=${get4hStructure(st, bar.close)} 15m=${get15mStructure(st, bar.close)} piv15=${piv15t} piv1m=${piv1mt} longOk=${longOk} shortOk=${shortOk} price=${bar.close.toFixed(4)} traded=${st.zoneTraded} → ${sig && !st.zoneTraded ? sig.direction+'+'+sig.type : (sig ? 'ZONE_TRADED' : 'NO_SIGNAL')}`);
         if (sig && !st.zoneTraded) {
           st.lastSignalTime = pivotTime;
@@ -903,7 +920,7 @@ async function analyze(symbol, log) {
           const pPrice   = st.last15mPivotPrice?.toFixed(4) || 'n/a';
           const dropPct  = st.last15mPivotPrice ? ((st.last15mPivotPrice - bar.close) / st.last15mPivotPrice * 100).toFixed(3) : 'n/a';
           const gapOk2   = is1mGapOk(st.sl1m_1, st.sl1m_2);
-          const chasing2 = isChasing(bar.close, st.sl1m_1);
+          const chasing2 = isChasing(bar.close, st.sl1m_1, symbol);
           const chasePct2 = st.sl1m_1 ? ((bar.close - st.sl1m_1) / st.sl1m_1 * 100).toFixed(3) : 'n/a';
           const gapPct2   = (st.sl1m_1 && st.sl1m_2) ? (Math.abs(st.sl1m_1 - st.sl1m_2) / st.sl1m_2 * 100).toFixed(3) : 'n/a';
           const s4h = get4hStructure(st, bar.close);
@@ -937,8 +954,8 @@ async function analyze(symbol, log) {
             // Right zone for SHORT — diagnose pivot issue
             if (pType !== 'LL' && pType !== 'LH') {
               log(`[V4] no signal — ${symbol} zone=${zone} 4H=${s4h} 15m=${pType} (need 15m LL or LH for SHORT)`);
-            } else if (isShortTooLate(bar.close, st.last15mPivotPrice)) {
-              log(`[V4] SHORT BLOCKED — ${symbol} zone=${zone} 4H=${s4h} 15m=${pType} dropped ${dropPct}% (>${MAX_SHORT_DROP_PCT}% from pivot)`);
+            } else if (isShortTooLate(bar.close, st.last15mPivotPrice, symbol)) {
+              log(`[V4] SHORT BLOCKED — ${symbol} zone=${zone} 4H=${s4h} 15m=${pType} dropped ${dropPct}% (>${getMaxShortDropPct(symbol)}% from pivot)`);
             } else {
               log(`[V4] no signal — ${symbol} zone=${zone} 4H=${s4h} 15m=${pType} 1m=${p1Type} (need 1m LL or LH)`);
             }
