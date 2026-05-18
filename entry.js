@@ -11,19 +11,32 @@ process.on('unhandledRejection', (reason) => {
   console.error('[UNHANDLED REJECTION] (not exiting):', reason?.message || reason);
 });
 
+const express = require('express');
 const PORT = process.env.PORT || 3000;
 
-// Load the full Express app immediately — no swapping, no bare stub
-const app = require('./server');
+// ── Immediate healthcheck stub ──
+// Railway needs /health to pass before it routes traffic.
+const stub = express();
+stub.get('/health', (req, res) => res.json({ status: 'ok' }));
 
-const server = app.listen(PORT, () => {
-  console.log(`Server ready on :${PORT}`);
+const server = stub.listen(PORT, () => {
+  console.log(`Healthcheck ready on :${PORT}`);
 });
 
-// Start the trading bot after server is listening
-process.env.SKIP_SERVER = '1';
-try {
-  require('./bot');
-} catch (err) {
-  console.error('Failed to load bot:', err.message);
-}
+// ── Load full app + bot in background ──
+setImmediate(() => {
+  try {
+    const fullApp = require('./server');
+    stub.use(fullApp);   // mount full Express app as middleware
+    console.log('Full server mounted');
+  } catch (err) {
+    console.error('Failed to mount server:', err.message);
+  }
+
+  process.env.SKIP_SERVER = '1';
+  try {
+    require('./bot');
+  } catch (err) {
+    console.error('Failed to load bot:', err.message);
+  }
+});
