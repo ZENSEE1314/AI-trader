@@ -6,6 +6,7 @@
 
 const fetch = require('node-fetch');
 const { log: bLog } = require('./bot-logger');
+const { getHommaSignal } = require('./homma-patterns');
 
 const BINANCE_KLINES_URL = 'https://fapi.binance.com/fapi/v1/klines';
 const CANDLE_LIMIT = 200;
@@ -238,7 +239,13 @@ function scoreIndicators(closes, highs, lows, volumes) {
 
   const volumeScore = calculateVolumeScore(volumes);
 
-  const rawScore = emaScore + rsiScore + macdScore + bbScore + volumeScore;
+  // Homma candlestick pattern score
+  const hommaSignal = getHommaSignal(candles.slice(-10));
+  const hommaScore = hommaSignal.bias === 'BULLISH' ? hommaSignal.score * 0.5
+                   : hommaSignal.bias === 'BEARISH' ? -hommaSignal.score * 0.5
+                   : 0;
+
+  const rawScore = emaScore + rsiScore + macdScore + bbScore + volumeScore + hommaScore;
   const totalScore = rawScore * adxMultiplier;
 
   return {
@@ -250,6 +257,8 @@ function scoreIndicators(closes, highs, lows, volumes) {
     adx: Math.round(adx * 100) / 100,
     adx_multiplier: adxMultiplier,
     volume_score: volumeScore,
+    homma_score: Math.round(hommaScore * 100) / 100,
+    homma_patterns: hommaSignal.patterns,
     total_score: Math.round(totalScore * 100) / 100,
     bb_upper: lastUpper,
     bb_lower: lastLower,
@@ -345,6 +354,75 @@ async function getMarketSeeds(symbol, interval = '15m', predLen = 20) {
 // Legacy wrapper for backward compatibility
 async function getKronosPrediction(symbol, interval = '15m', predLen = 20) {
   return await getMarketSeeds(symbol, interval, predLen);
+}
+
+// ── 30-Candle Prediction (trend projection + pattern confidence) ──
+async function predict30Candles(symbol, interval = '15m') {
+  const candles = await fetchKlines(symbol, interval);
+  if (candles.length < 60) throw new Error(`Insufficient data for ${symbol}`);
+
+  const closes = candles.map(c => c.close);
+  const highs = candles.map(c => c.high);
+  const lows = candles.map(c => c.low);
+  const volumes = candles.map(c => c.volume);
+
+  // Current state
+  const currentPrice = closes[closes.length - 1];
+  const indicators = scoreIndicators(closes, highs, lows, volumes);
+  const hommaSignal = getHommaSignal(candles.slice(-10));
+
+  // Trend projection: linear regression on last 30 closes
+  const lookback = Math.min(30, closes.length);
+  const recent = closes.slice(-lookback);
+  let sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0;
+  for (let i = 0; i < recent.length; i++) {
+    sumX += i;
+    sumY += recent[i];
+    sumXY += i * recent[i];
+    sumX2 += i * i;
+  }
+  const n = recent.length;
+  const slope = (n * sumXY - sumX * sumY) / (n * sumX2 - sumX * sumX);
+  const intercept = (sumY - slope * sumX) / n;
+
+  // Project 30 candles ahead
+  const projectedPrice = intercept + slope * (n + 30);
+  const projectedChangePct = ((projectedPrice - currentPrice) / currentPrice) * 100;
+
+  // Confidence based on trend strength + pattern confirmation
+  let confidence = 0;
+  if (indicators.adx > 25) confidence += 1;
+  if (Math.abs(hommaScore) >= 1) confidence += 1;
+  if (indicators.volume_score !== 0) confidence += 1;
+  if (Math.abs(projectedChangePct) > 2) confidence += 1;
+
+  // Direction from slope + indicators
+  let direction = 'NEUTRAL';
+  const netBias = slope > 0 ? 1 : slope < 0 ? -1 : 0;
+  const indBias = indicators.total_score > 0 ? 1 : indicators.total_score < 0 ? -1 : 0;
+  const hommaBias = hommaSignal.bias === 'BULLISH' ? 1 : hommaSignal.bias === 'BEARISH' ? -1 : 0;
+
+  const totalBias = netBias + indBias + hommaBias;
+  if (totalBias >= 2) direction = 'LONG';
+  else if (totalBias <= -2) direction = 'SHORT';
+
+  return {
+    symbol,
+    interval,
+    horizon: 30,
+    current: currentPrice,
+    projected: Math.round(projectedPrice * 100) / 100,
+    projected_change_pct: Math.round(projectedChangePct * 100) / 100,
+    direction,
+    confidence: Math.min(confidence, 4),
+    slope: Math.round(slope * 100000) / 100000,
+    homma_patterns: hommaSignal.patterns,
+    indicators: {
+      adx: indicators.adx,
+      total_score: indicators.total_score,
+      volume_score: indicators.volume_score,
+    }
+  };
 }
 
 // ── Batch scan ──────────────────────────────────────────────
@@ -534,6 +612,7 @@ async function formatPredictionSummary(coordinator) {
 
 module.exports = {
   getKronosPrediction,
+  predict30Candles,
   scanAllTokens,
   getCachedPrediction,
   getAllPredictions,

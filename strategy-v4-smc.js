@@ -32,6 +32,7 @@
 // ═══════════════════════════════════════════════════════════════
 
 const fetch = require('node-fetch');
+const { getHommaSignal, checkVolumeConfirmation } = require('./homma-patterns');
 
 // ── Constants ──────────────────────────────────────────────────
 const BYBIT_KLINE_URL  = 'https://api.bybit.com/v5/market/kline';
@@ -540,6 +541,9 @@ function resolveSignal(state, zone, price, vwap) {
     const isDemand15 = p15 === 'LL' || p15 === 'HL';
     const isDemand1m = p1m === 'LL' || p1m === 'HL';
     if (!isDemand15 || !isDemand1m) return null;
+    // Homma candlestick confirmation: need bullish pattern (hammer, engulfing, morning star)
+    const homma = getHommaSignal(state.candles1m.slice(-5));
+    if (homma.bias === 'BEARISH' && homma.score >= 2) return null; // strong bearish candle = skip
     // Volume spike: rejections need above-average volume to be real
     if (!checkVolumeSpike(state.candles1m, 1.3)) return null;
     // Chase filter: don't enter if price already bounced far above the 1m swing low
@@ -549,7 +553,7 @@ function resolveSignal(state, zone, price, vwap) {
       const distAboveUpper = (price - vwap.upper) / vwap.stddev;
       if (distAboveUpper > MIN_DIST_SIGMA * 2) return null;
     }
-    return { direction: 'LONG', type: `${p15}+${p1m}` };
+    return { direction: 'LONG', type: `${p15}+${p1m}`, homma: homma.patterns.join(',') };
   }
 
   // ── SHORT: price at a HIGH pivot (HH or LH) — supply zone entry ─────────────
@@ -567,6 +571,9 @@ function resolveSignal(state, zone, price, vwap) {
     const isSupply15 = p15 === 'HH' || p15 === 'LH';
     const isSupply1m = p1m === 'HH' || p1m === 'LH';
     if (!isSupply15 || !isSupply1m) return null;
+    // Homma candlestick confirmation: need bearish pattern (shooting star, engulfing, evening star)
+    const homma = getHommaSignal(state.candles1m.slice(-5));
+    if (homma.bias === 'BULLISH' && homma.score >= 2) return null; // strong bullish candle = skip
     // Volume spike: rejections need above-average volume to be real
     if (!checkVolumeSpike(state.candles1m, 1.3)) return null;
     // Chase filter: don't enter if price already dropped far below the 1m swing high
@@ -577,7 +584,7 @@ function resolveSignal(state, zone, price, vwap) {
       const distBelowLower = (vwap.lower - price) / vwap.stddev;
       if (distBelowLower > MIN_DIST_SIGMA * 2) return null;
     }
-    return { direction: 'SHORT', type: `${p15}+${p1m}` };
+    return { direction: 'SHORT', type: `${p15}+${p1m}`, homma: homma.patterns.join(',') };
   }
 
   // ── Dispatcher: pivot type → direction ────────────────────────────────────
