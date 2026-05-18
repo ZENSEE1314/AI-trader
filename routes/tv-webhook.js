@@ -11,9 +11,28 @@ const ALLOWED_SYMBOLS = new Set(['BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'SOLUSDT']);
 
 // POST /api/tv-webhook
 // Called by TradingView alert webhook.
-// Body: { secret, symbol, direction, price, zone, pivot }
+//
+// Required fields:
+//   secret, symbol, direction, price
+//
+// Optional fields:
+//   override       — true = bypass ALL gates (user is 100% confident)
+//   zone           — VWAP zone from TV (UPPER_MID, ABOVE_UPPER, LOWER_MID, BELOW_LOWER)
+//   pivot_15m      — 15m pivot type (HH, HL, LH, LL)
+//   pivot_1m       — 1m pivot type  (HH, HL, LH, LL)
+//   ema200Bias     — 'bullish' | 'bearish' | null
+//   reason         — user's note (e.g. "LH at supply + shooting star")
+//   hommaPatterns  — comma-separated pattern names from TV
+//   volumeOk       — true if TV shows volume spike
+//
+// Response: { ok, mode, message, signal }
+//
 router.post('/', (req, res) => {
-  const { secret, symbol, direction, price, zone, pivot } = req.body || {};
+  const {
+    secret, symbol, direction, price,
+    override, zone, pivot_15m, pivot_1m,
+    ema200Bias, reason, hommaPatterns, volumeOk
+  } = req.body || {};
 
   if (secret !== WEBHOOK_SECRET) {
     console.warn(`[TV-Webhook] Rejected — bad secret from ${req.ip}`);
@@ -34,21 +53,132 @@ router.post('/', (req, res) => {
     return res.status(400).json({ error: 'Invalid price' });
   }
 
+  const isOverride = override === true || override === 'true';
+
   const signal = {
     symbol: sym,
     side: direction === 'LONG' ? 'BUY' : 'SELL',
     direction,
     price: entryPrice,
-    zone:  zone   || 'TV',
-    pivot: pivot  || 'TV',
+    zone: zone || 'TV',
+    pivot: `${pivot_15m || '?'}+${pivot_1m || '?'}`,
+    setup: isOverride ? 'TV_MANUAL_OVERRIDE' : 'TV_WEBHOOK',
+    setupName: isOverride ? 'TV_MANUAL_OVERRIDE' : 'TV_WEBHOOK',
+    score: 999, // TV signals always win dedup against internal signals
     signalType: `TV-${direction}`,
     source: 'tradingview',
+    isMomentumBreakout: isOverride, // override = bypass EMA200 gate
+    ema200Bias: ema200Bias || null,
+    pivot_15m: pivot_15m || null,
+    pivot_1m: pivot_1m || null,
+    hommaPatterns: hommaPatterns || null,
+    volumeOk: volumeOk === true || volumeOk === 'true',
+    reason: reason || '',
+    override: isOverride,
     receivedAt: Date.now(),
   };
 
   injectTVSignal(signal);
-  console.log(`[TV-Webhook] ✅ ${sym} ${direction} @ ${entryPrice} (zone=${zone} pivot=${pivot})`);
-  res.json({ ok: true, signal: `${sym} ${direction}` });
+
+  const mode = isOverride ? 'OVERRIDE (bypasses all gates)' : 'VALIDATED (runs through SMC+Homma gates)';
+  console.log(`[TV-Webhook] ✅ ${sym} ${direction} @ ${entryPrice} | mode=${mode} | zone=${zone} | 15m=${pivot_15m} | 1m=${pivot_1m} | reason=${reason || 'n/a'}`);
+
+  res.json({
+    ok: true,
+    mode,
+    message: `${sym} ${direction} queued — ${mode}`,
+    signal: `${sym} ${direction} @ ${entryPrice}`
+  });
+});
+
+// POST /api/tv-webhook/dry-run
+// Same validation as real webhook, but does NOT queue the signal.
+// Use this to test your TradingView alert message format safely.
+router.post('/dry-run', (req, res) => {
+  const {
+    secret, symbol, direction, price,
+    override, zone, pivot_15m, pivot_1m,
+    ema200Bias, reason, hommaPatterns, volumeOk
+  } = req.body || {};
+
+  if (secret !== WEBHOOK_SECRET) {
+    return res.status(401).json({ ok: false, error: 'Unauthorized — check TV_WEBHOOK_SECRET' });
+  }
+
+  const sym = (symbol || '').toUpperCase().replace(/[^A-Z]/g, '');
+  if (!ALLOWED_SYMBOLS.has(sym)) {
+    return res.status(400).json({ ok: false, error: `Symbol ${sym} not allowed` });
+  }
+
+  if (direction !== 'LONG' && direction !== 'SHORT') {
+    return res.status(400).json({ ok: false, error: 'direction must be LONG or SHORT' });
+  }
+
+  const entryPrice = parseFloat(price);
+  if (!entryPrice || entryPrice <= 0) {
+    return res.status(400).json({ ok: false, error: 'Invalid price' });
+  }
+
+  const isOverride = override === true || override === 'true';
+  const mode = isOverride ? 'OVERRIDE' : 'VALIDATED';
+
+  return res.json({
+    ok: true,
+    mode,
+    dryRun: true,
+    wouldQueue: true,
+    signal: {
+      symbol: sym,
+      direction,
+      price: entryPrice,
+      zone: zone || 'TV',
+      pivot: `${pivot_15m || '?'}+${pivot_1m || '?'}`,
+      override: isOverride,
+      ema200Bias: ema200Bias || null,
+      hommaPatterns: hommaPatterns || null,
+      volumeOk: volumeOk === true || volumeOk === 'true',
+      reason: reason || '',
+    },
+    gates: {
+      ema200: isOverride ? 'BYPASSED' : ema200Bias ? `CHECK: ${ema200Bias}` : 'CHECK: live',
+      adx: isOverride ? 'BYPASSED' : 'CHECK: live',
+      structure: isOverride ? 'BYPASSED' : 'CHECK: live',
+      volume: isOverride ? 'BYPASSED' : volumeOk ? 'PASSED (TV confirmed)' : 'CHECK: live',
+    },
+    message: `Dry-run OK — ${sym} ${direction} would be queued as ${mode}`
+  });
+});
+
+// GET /api/tv-webhook/help
+// Returns the expected payload format for TradingView alert messages.
+router.get('/help', (req, res) => {
+  res.json({
+    description: 'TradingView webhook endpoint for manual trade signals',
+    method: 'POST',
+    url: '/api/tv-webhook',
+    headers: { 'Content-Type': 'application/json' },
+    payload: {
+      secret: 'MCT_TV_SECRET',
+      symbol: 'BTCUSDT',
+      direction: 'LONG',
+      price: '{{close}}',
+      override: false,
+      zone: '{{plot_0}}',
+      pivot_15m: '{{plot_1}}',
+      pivot_1m: '{{plot_2}}',
+      ema200Bias: '{{plot_3}}',
+      hommaPatterns: '{{plot_4}}',
+      volumeOk: true,
+      reason: 'LH at upper band + shooting star on 1m'
+    },
+    notes: [
+      'Set TV_WEBHOOK_SECRET env var to your own secret',
+      'override=true bypasses ADX, EMA200, and structure gates — use sparingly',
+      'TV signals always win dedup against internal AI signals',
+      'zone: UPPER_MID / ABOVE_UPPER / LOWER_MID / BELOW_LOWER',
+      'pivot_15m / pivot_1m: HH, HL, LH, LL'
+    ]
+  });
 });
 
 module.exports = router;

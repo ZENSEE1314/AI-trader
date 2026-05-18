@@ -1445,6 +1445,29 @@ async function main() {
         continue;
       }
 
+      // ── TradingView MANUAL OVERRIDE ────────────────────────────
+      // If user sends override=true from TV webhook, bypass ALL gates
+      // and execute immediately. Log it loud for audit trail.
+      if (pick.source === 'tradingview' && pick.override === true) {
+        const overrideMsg = `🎚️ *MANUAL OVERRIDE*\n${pick.symbol} ${pick.direction} @ $${fmtPrice(pick.price)}\nReason: ${pick.reason || 'none'}\nBy-passing: EMA200, ADX, structure, loss-tracker`;
+        bLog.trade(`TV-OVERRIDE: ${pick.symbol} ${pick.direction} @ ${pick.price} — BYPASSING ALL GATES`);
+        await notify(overrideMsg);
+        // Skip directly to execution
+        const result = await executeForAllUsers(pick);
+        if (result === 'ALL_TOO_EXPENSIVE' || result === 'NO_KEYS') {
+          bLog.trade(`TV-OVERRIDE FAILED: ${pick.symbol} — ${result}`);
+          continue;
+        }
+        executed = true;
+        continue; // next signal
+      }
+
+      // ── TradingView WEBHOOK (non-override) ─────────────────────
+      // Runs through same gates as internal signals, but with TV-specific logging
+      if (pick.source === 'tradingview' && !pick.override) {
+        bLog.trade(`TV-VALIDATED: ${pick.symbol} ${pick.direction} — running through SMC+Homma gates`);
+      }
+
       // ── Signal-type loss blocker ───────────────────────────────
       // If the same pivot+direction combo has lost ≥ 2 times, block it for 24h.
       // Prevents the bot from repeating the exact same losing pattern.
