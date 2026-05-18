@@ -180,9 +180,58 @@ function calculateVolumeScore(volumes) {
   return 0;
 }
 
+// ── SMC pivot detection ─────────────────────────────────────
+// Scans candle history for swing highs/lows and labels them HH/HL/LH/LL.
+// lbL = bars to look back, lbR = bars to confirm after (same as strategy-v4-smc).
+function detectPivots(candles, lbL, lbR) {
+  const pivots = [];
+  for (let i = lbL; i < candles.length - lbR; i++) {
+    const bar = candles[i];
+    let isHigh = true, isLow = true;
+    for (let j = 1; j <= lbL; j++) {
+      if (bar.high <= candles[i - j].high) isHigh = false;
+      if (bar.low >= candles[i - j].low) isLow = false;
+    }
+    for (let j = 1; j <= lbR; j++) {
+      if (bar.high <= candles[i + j].high) isHigh = false;
+      if (bar.low >= candles[i + j].low) isLow = false;
+    }
+    if (isHigh) {
+      const lastH = pivots.filter(p => p.type === 'H').pop();
+      const label = (!lastH || bar.high > lastH.price) ? 'HH' : 'LH';
+      pivots.push({ type: 'H', price: bar.high, label });
+    }
+    if (isLow) {
+      const lastL = pivots.filter(p => p.type === 'L').pop();
+      const label = (!lastL || bar.low > lastL.price) ? 'HL' : 'LL';
+      pivots.push({ type: 'L', price: bar.low, label });
+    }
+  }
+  return pivots;
+}
+
+// Returns a structure score bonus/penalty based on recent pivot labels.
+// +2 = clean uptrend (HH + HL)
+// -2 = clean downtrend (LH + LL)
+function calculateStructureScore(pivots) {
+  if (pivots.length < 4) return 0;
+  const lastH = pivots.filter(p => p.type === 'H').pop();
+  const lastL = pivots.filter(p => p.type === 'L').pop();
+  if (!lastH || !lastL) return 0;
+  if (lastH.label === 'HH' && lastL.label === 'HL') return 2;
+  if (lastH.label === 'LH' && lastL.label === 'LL') return -2;
+  if (lastH.label === 'HH') return 1;
+  if (lastH.label === 'LH') return -1;
+  return 0;
+}
+
 // ── Scoring ─────────────────────────────────────────────────
 
-function scoreIndicators(closes, highs, lows, volumes) {
+function scoreIndicators(candles) {
+  const closes = candles.map(c => c.close);
+  const highs = candles.map(c => c.high);
+  const lows = candles.map(c => c.low);
+  const volumes = candles.map(c => c.volume);
   const currentPrice = closes[closes.length - 1];
 
   const ema9 = calculateEma(closes, 9);
@@ -245,7 +294,11 @@ function scoreIndicators(closes, highs, lows, volumes) {
                    : hommaSignal.bias === 'BEARISH' ? -hommaSignal.score * 0.5
                    : 0;
 
-  const rawScore = emaScore + rsiScore + macdScore + bbScore + volumeScore + hommaScore;
+  // SMC structure score: detect HH/HL/LH/LL sequence from last 50 candles
+  const pivots = detectPivots(candles.slice(-50), 5, 1);
+  const structureScore = calculateStructureScore(pivots);
+
+  const rawScore = emaScore + rsiScore + macdScore + bbScore + volumeScore + hommaScore + structureScore;
   const totalScore = rawScore * adxMultiplier;
 
   return {
@@ -259,6 +312,8 @@ function scoreIndicators(closes, highs, lows, volumes) {
     volume_score: volumeScore,
     homma_score: Math.round(hommaScore * 100) / 100,
     homma_patterns: hommaSignal.patterns,
+    structure_score: structureScore,
+    pivots: pivots.slice(-6),
     total_score: Math.round(totalScore * 100) / 100,
     bb_upper: lastUpper,
     bb_lower: lastLower,
@@ -300,7 +355,7 @@ async function getMarketSeeds(symbol, interval = '15m', predLen = 20) {
   const volumes = candles.map(c => c.volume);
 
   const currentPrice = closes[closes.length - 1];
-  const indicators = scoreIndicators(closes, highs, lows, volumes);
+  const indicators = scoreIndicators(candles);
 
   let direction = 'NEUTRAL';
   if (indicators.total_score >= DIRECTION_THRESHOLD) direction = 'LONG';
@@ -368,7 +423,7 @@ async function predict30Candles(symbol, interval = '15m') {
 
   // Current state
   const currentPrice = closes[closes.length - 1];
-  const indicators = scoreIndicators(closes, highs, lows, volumes);
+  const indicators = scoreIndicators(candles);
   const hommaSignal = getHommaSignal(candles.slice(-10));
 
   // Trend projection: linear regression on last 30 closes
@@ -392,7 +447,7 @@ async function predict30Candles(symbol, interval = '15m') {
   // Confidence based on trend strength + pattern confirmation
   let confidence = 0;
   if (indicators.adx > 25) confidence += 1;
-  if (Math.abs(hommaScore) >= 1) confidence += 1;
+  if (Math.abs(hommaSignal.score) >= 1) confidence += 1;
   if (indicators.volume_score !== 0) confidence += 1;
   if (Math.abs(projectedChangePct) > 2) confidence += 1;
 
@@ -569,7 +624,9 @@ async function formatPredictionSummary(coordinator) {
     msg += `\n📈 *BULLISH (${longs.length})*\n`;
     for (const p of longs.slice(0, 10)) {
       const conf = p.confidence === 'high' ? '🔥' : p.confidence === 'medium' ? '⚡' : '·';
-      msg += `${conf} \`${p.symbol.replace('USDT', '')}\` +${p.change_pct}% (${p.trend})\n`;
+      const pivots = p.indicators?.pivots || [];
+      const pivotStr = pivots.length > 0 ? pivots.slice(-3).map(x => x.label).join('→') : '';
+      msg += `${conf} \`${p.symbol.replace('USDT', '')}\` +${p.change_pct}% (${p.trend})${pivotStr ? ' [' + pivotStr + ']' : ''}\n`;
     }
     if (longs.length > 10) msg += `  _...+${longs.length - 10} more_\n`;
   }
@@ -578,7 +635,9 @@ async function formatPredictionSummary(coordinator) {
     msg += `\n📉 *BEARISH (${shorts.length})*\n`;
     for (const p of shorts.slice(0, 10)) {
       const conf = p.confidence === 'high' ? '🔥' : p.confidence === 'medium' ? '⚡' : '·';
-      msg += `${conf} \`${p.symbol.replace('USDT', '')}\` ${p.change_pct}% (${p.trend})\n`;
+      const pivots = p.indicators?.pivots || [];
+      const pivotStr = pivots.length > 0 ? pivots.slice(-3).map(x => x.label).join('→') : '';
+      msg += `${conf} \`${p.symbol.replace('USDT', '')}\` ${p.change_pct}% (${p.trend})${pivotStr ? ' [' + pivotStr + ']' : ''}\n`;
     }
     if (shorts.length > 10) msg += `  _...+${shorts.length - 10} more_\n`;
   }

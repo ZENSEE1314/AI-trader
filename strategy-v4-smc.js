@@ -544,11 +544,20 @@ function resolveSignal(state, zone, price, vwap) {
     const isDemand15 = p15 === 'LL' || p15 === 'HL';
     const isDemand1m = p1m === 'LL' || p1m === 'HL';
     if (!isDemand15 || !isDemand1m) return null;
-    // Homma candlestick confirmation: need bullish pattern (hammer, engulfing, morning star)
-    const homma = getHommaSignal(state.candles1m.slice(-5));
-    if (homma.bias === 'BEARISH' && homma.score >= 2) return null; // strong bearish candle = skip
-    // Volume spike: rejections need above-average volume to be real
-    if (!checkVolumeSpike(state.candles1m, 1.3)) return null;
+
+    // Trend continuation vs reversal logic:
+    //   4H BULLISH + HL pivot = uptrend continuation → buyers stepping in at higher low
+    //     → do NOT require volume spike or Homma reversal pattern
+    //   LL pivot or 4H MIXED/UNKNOWN = potential reversal → demand confirmation
+    const isTrendContinuation = s4h === 'BULLISH' && p15 === 'HL' && p1m === 'HL';
+
+    if (!isTrendContinuation) {
+      // Reversal setup: need candlestick confirmation + volume spike
+      const homma = getHommaSignal(state.candles1m.slice(-5));
+      if (homma.bias === 'BEARISH' && homma.score >= 2) return null; // strong bearish candle = skip
+      if (!checkVolumeSpike(state.candles1m, 1.3)) return null;
+    }
+
     // Chase filter: don't enter if price already bounced far above the 1m swing low
     if (isChasing(price, state.sl1m_1, state.symbol)) return null;
     // VWAP: block if price is already well above the upper band (too extended for a low entry)
@@ -556,7 +565,7 @@ function resolveSignal(state, zone, price, vwap) {
       const distAboveUpper = (price - vwap.upper) / vwap.stddev;
       if (distAboveUpper > MIN_DIST_SIGMA * 2) return null;
     }
-    return { direction: 'LONG', type: `${p15}+${p1m}`, homma: homma.patterns.join(',') };
+    return { direction: 'LONG', type: `${p15}+${p1m}` };
   }
 
   // ── SHORT: price at a HIGH pivot (HH or LH) — supply zone entry ─────────────
@@ -574,11 +583,20 @@ function resolveSignal(state, zone, price, vwap) {
     const isSupply15 = p15 === 'HH' || p15 === 'LH';
     const isSupply1m = p1m === 'HH' || p1m === 'LH';
     if (!isSupply15 || !isSupply1m) return null;
-    // Homma candlestick confirmation: need bearish pattern (shooting star, engulfing, evening star)
-    const homma = getHommaSignal(state.candles1m.slice(-5));
-    if (homma.bias === 'BULLISH' && homma.score >= 2) return null; // strong bullish candle = skip
-    // Volume spike: rejections need above-average volume to be real
-    if (!checkVolumeSpike(state.candles1m, 1.3)) return null;
+
+    // Trend continuation vs reversal logic:
+    //   4H BEARISH + LH pivot = downtrend continuation → sellers at lower high
+    //     → do NOT require volume spike or Homma reversal pattern
+    //   HH pivot or 4H MIXED/UNKNOWN = potential reversal → supply confirmation
+    const isTrendContinuation = s4h === 'BEARISH' && p15 === 'LH' && p1m === 'LH';
+
+    if (!isTrendContinuation) {
+      // Reversal setup: need candlestick confirmation + volume spike
+      const homma = getHommaSignal(state.candles1m.slice(-5));
+      if (homma.bias === 'BULLISH' && homma.score >= 2) return null; // strong bullish candle = skip
+      if (!checkVolumeSpike(state.candles1m, 1.3)) return null;
+    }
+
     // Chase filter: don't enter if price already dropped far below the 1m swing high
     if (isShortTooLate(price, state.last15mPivotPrice, state.symbol)) return null;
     if (isShort1mTooLate(price, state.sh1m_1, state.symbol)) return null;
@@ -587,7 +605,7 @@ function resolveSignal(state, zone, price, vwap) {
       const distBelowLower = (vwap.lower - price) / vwap.stddev;
       if (distBelowLower > MIN_DIST_SIGMA * 2) return null;
     }
-    return { direction: 'SHORT', type: `${p15}+${p1m}`, homma: homma.patterns.join(',') };
+    return { direction: 'SHORT', type: `${p15}+${p1m}` };
   }
 
   // ── Dispatcher: pivot type → direction ────────────────────────────────────
