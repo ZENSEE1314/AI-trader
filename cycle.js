@@ -840,11 +840,32 @@ async function checkTrailingStop(client) {
         const state = tradeState.get(sym);
         if (state) {
           let exitPrice = state.entry;
+          let realizedPnl = null;
+          let tradingFee = 0;
           try {
-            const trades = await client.getAccountTrades({ symbol: sym, limit: 5 });
-            if (trades && trades.length > 0) {
-              const lastTrade = trades[trades.length - 1];
-              exitPrice = parseFloat(lastTrade.price);
+            // Fetch fills since position opened — avoid limit=5 missing close fill
+            const fills = await client.getAccountTrades({ symbol: sym, startTime: state.openedAt, limit: 50 });
+            if (fills && fills.length > 0) {
+              // Sum fees from all fills
+              for (const f of fills) {
+                tradingFee += Math.abs(parseFloat(f.commission || 0));
+              }
+              // Find close fills (opposite side of entry)
+              const closeSide = state.isLong ? 'SELL' : 'BUY';
+              const closeFills = fills.filter(f => f.side === closeSide);
+              if (closeFills.length > 0) {
+                let totalQty = 0, totalValue = 0, totalPnl = 0;
+                for (const f of closeFills) {
+                  const fQty = parseFloat(f.qty);
+                  totalQty += fQty;
+                  totalValue += fQty * parseFloat(f.price);
+                  totalPnl += parseFloat(f.realizedPnl || 0);
+                }
+                if (totalQty > 0) exitPrice = totalValue / totalQty;
+                if (totalPnl !== 0) realizedPnl = totalPnl;
+              } else {
+                exitPrice = parseFloat(fills[fills.length - 1].price);
+              }
             }
           } catch {
             const ticker = await client.getSymbolPriceTicker({ symbol: sym }).catch(() => null);
@@ -3338,7 +3359,7 @@ async function syncTradeStatus() {
               // NOTE: Bitunix sometimes returns closePrice=0. We still extract PnL/fee data
               // from the matched record — exit price will be found in Method 2 if missing.
               try {
-                const positions = await bxClient.getHistoryPositions({ symbol: trade.symbol, pageSize: 50 });
+                const positions = await bxClient.getHistoryPositions({ symbol: trade.symbol, pageSize: 50, all: true });
                 if (positions.length > 0) {
                   bLog.system(`[SYNC] Bitunix raw position[0]: ${JSON.stringify(positions[0])}`);
                 }
@@ -3411,7 +3432,7 @@ async function syncTradeStatus() {
               // Uses positionId for precise matching when available.
               if (!found) {
                 try {
-                  const orderList = await bxClient.getHistoryOrders({ symbol: trade.symbol, pageSize: 50 });
+                  const orderList = await bxClient.getHistoryOrders({ symbol: trade.symbol, pageSize: 50, all: true });
                   for (const o of orderList) {
                     const oPrice = parseFloat(o.avgPrice || o.price || 0);
                     const isClose = o.reduceOnly || o.tradeSide === 'CLOSE' || (o.effect || '').toUpperCase() === 'CLOSE';
@@ -3834,7 +3855,7 @@ async function backfillFeesFromBitunix() {
       for (const trade of keyTrades) {
         if (!posCache[trade.symbol] && !symbolsDone.has(trade.symbol)) {
           try {
-            posCache[trade.symbol] = await bxClient.getHistoryPositions({ symbol: trade.symbol, pageSize: 100 });
+            posCache[trade.symbol] = await bxClient.getHistoryPositions({ symbol: trade.symbol, pageSize: 100, all: true });
             bLog.system(`[FEE-BACKFILL] key#${keyId} ${trade.symbol}: ${posCache[trade.symbol].length} history positions`);
           } catch (e) {
             bLog.error(`[FEE-BACKFILL] key#${keyId} ${trade.symbol} fetch error: ${e.message}`);
