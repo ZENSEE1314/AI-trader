@@ -44,15 +44,19 @@ const FETCH_TIMEOUT_MS = 10_000;
 // lbL=10 means the pivot must be the highest/lowest of the 10 bars before it.
 const LBL_1M  =  3;  // 1m left lookback  — fast confirmation
 const LBR_1M  =  1;  // 1m right lookback — 1 bar = ~1 min lag
+const LBL_3M  =  5;  // 3m left lookback — responsive for sideways ranges
+const LBR_3M  =  1;  // 3m right lookback — 1 bar = ~3 min lag
 const LBL_15M = 10;  // 15m left lookback — matches TV "SMC Expo" lbL=10
 const LBR_15M =  1;  // 15m right lookback — matches TV "SMC Expo" lbR=1 (1 bar = 15 min lag)
 const LBL_4H  =  5;  // 4H left lookback  — symmetric, robust higher-TF structure
 const LBR_4H  =  5;  // 4H right lookback — 5 bars = ~20 h (intentionally slow)
 
 const WARMUP_1M  =  50;  // bars loaded on first call (need ≥ 2×3+1 = 7, 50 is plenty)
+const WARMUP_3M  =  50;  // bars loaded on first call
 const WARMUP_15M =  50;  // bars loaded on first call
 const WARMUP_4H  = 100;  // 4H warmup: covers ~17 days of structure history
 const DELTA_1M   =  10;  // bars fetched each subsequent 1m cycle
+const DELTA_3M   =  10;  // bars fetched each subsequent 3m cycle
 const DELTA_15M  =   5;  // bars fetched each subsequent 15m cycle
 const DELTA_4H   =   3;  // bars fetched each subsequent 4H cycle (slow-moving TF)
 // NOTE: dollar risk per trade = tradeCap × SYMBOL_SL_PCT[sym] × SYMBOL_LEVERAGE[sym]
@@ -87,12 +91,13 @@ function getState(symbol) {
     _state[symbol] = {
       symbol,
       candles1m:  [],
+      candles3m:  [],
       candles15m: [],
 
       // ── 4H structure state — PRIMARY direction gate ──────────────
       // 4H BULLISH → LONG only (at VWAP lower band or mid)
       // 4H BEARISH → SHORT only (at VWAP upper band or mid)
-      // 4H MIXED   → fall back to 15m structure gate
+      // 4H MIXED   → fall back to 15m/3m structure gate
       candles4h:       [],
       pivots4h:        [],   // labeled sequence: { type:'H'|'L', price, time, label }
       sh4h_1: null, sh4h_2: null,
@@ -100,6 +105,15 @@ function getState(symbol) {
       last4hPivotType:  null,
       last4hPivotPrice: null,
       last4hPivotTime:  0,
+
+      // Full labeled 3m pivot sequence — up to 50 entries. Used in sideways markets
+      // instead of 15m for faster, more responsive entries.
+      pivots3m: [],
+      sh3m_1: null, sh3m_2: null,
+      sl3m_1: null, sl3m_2: null,
+      last3mPivotType:  null,
+      last3mPivotPrice: null,
+      last3mPivotTime:  0,
 
       // Full labeled 15m pivot sequence — up to 50 entries.
       // Each entry: { type:'H'|'L', price, time, label:'HH'|'LH'|'HL'|'LL' }
@@ -269,6 +283,53 @@ function update15m(state) {
 
   // Keep at most 50 pivot entries — covers ~50×15m = 12.5 hours of history
   if (state.pivots15m.length > 50) state.pivots15m = state.pivots15m.slice(-50);
+}
+
+// ── 3m swing tracker ──────────────────────────────────────────
+// Mirrors update15m() exactly, but operates on 3m candles and pivots3m[].
+// Called whenever new closed 3m bars arrive.
+// Used in sideways/ranging markets for faster, more responsive entries.
+function update3m(state) {
+  const p = checkPivot(state.candles3m, LBL_3M, LBR_3M);
+  if (!p || p.bar.openTime === state.last3mPivotTime) return;
+  state.last3mPivotTime = p.bar.openTime;
+
+  if (p.isHigh) {
+    const lastH = findLastPivot(state.pivots3m, 'H');
+    const label = (!lastH || p.bar.high > lastH.price) ? 'HH' : 'LH';
+    state.sh3m_2 = state.sh3m_1;
+    state.sh3m_1 = p.bar.high;
+    state.pivots3m.push({ type: 'H', price: p.bar.high, time: p.bar.openTime, label });
+    state.last3mPivotType  = label;
+    state.last3mPivotPrice = p.bar.high;
+  }
+  if (p.isLow) {
+    const lastL = findLastPivot(state.pivots3m, 'L');
+    const label = (!lastL || p.bar.low > lastL.price) ? 'HL' : 'LL';
+    state.sl3m_2 = state.sl3m_1;
+    state.sl3m_1 = p.bar.low;
+    state.pivots3m.push({ type: 'L', price: p.bar.low, time: p.bar.openTime, label });
+    state.last3mPivotType  = label;
+    state.last3mPivotPrice = p.bar.low;
+  }
+
+  // Keep at most 50 pivot entries — covers ~50×3m = 2.5 hours of history
+  if (state.pivots3m.length > 50) state.pivots3m = state.pivots3m.slice(-50);
+}
+
+// ── Market Regime Detection ─────────────────────────────────
+// Sideways market = last 4 pivots contain ONLY HL and LH (no HH, no LL).
+// This means price is oscillating between two levels — a classic range.
+// Any HH or LL indicates a breakout / trend.
+function isSidewaysMarket(state) {
+  const pivots = state.pivots15m;
+  if (pivots.length < 4) return false;
+  // Check last 4 pivot labels
+  const recent = pivots.slice(-4);
+  for (const p of recent) {
+    if (p.label === 'HH' || p.label === 'LL') return false;
+  }
+  return true;
 }
 
 // Returns the most-recent pivot entry of the given type ('H' or 'L'), or null.
@@ -505,6 +566,25 @@ function get15mStructure(state, currentPrice) {
   return 'MIXED'; // diverging labels — zone decides direction
 }
 
+// ── 3m Market Structure ───────────────────────────────────────
+// Same logic as get15mStructure() but reads pivots3m[].
+// Used in sideways markets for faster, more responsive structure detection.
+function get3mStructure(state, currentPrice) {
+  const pivots = state.pivots3m;
+  if (pivots.length < 4) return 'UNKNOWN';
+
+  const lastH = findLastPivot(pivots, 'H');
+  const lastL = findLastPivot(pivots, 'L');
+  if (!lastH || !lastL) return 'UNKNOWN';
+
+  const breakingLow  = currentPrice !== undefined && currentPrice < lastL.price;
+  const breakingHigh = currentPrice !== undefined && currentPrice > lastH.price;
+
+  if (lastH.label === 'LH' && (lastL.label === 'LL' || breakingLow))  return 'BEARISH';
+  if (lastH.label === 'HH' && (lastL.label === 'HL' || breakingHigh)) return 'BULLISH';
+  return 'MIXED';
+}
+
 // ── Signal logic ───────────────────────────────────────────────
 //
 //  Pivot type decides direction — zone gates extremes only:
@@ -525,8 +605,18 @@ function get15mStructure(state, currentPrice) {
 //  Chase filter (LONG):  price within MAX_CHASE_PCT of last 1m swing HIGH.
 //  Chase filter (SHORT): price within MAX_SHORT_DROP_PCT of last 1m swing LOW.
 function resolveSignal(state, zone, price, vwap) {
-  const p15 = state.last15mPivotType;
   const p1m = state.last1mPivotType;
+
+  // ── Market Regime Detection ─────────────────────────────────
+  // Sideways = last 4 fifteen-minute pivots are ONLY HL and LH (oscillating range).
+  // Trending = any HH or LL present (breakout / directional move).
+  const sideways = isSidewaysMarket(state);
+  const regime = sideways ? 'SIDEWAYS' : 'TRENDING';
+
+  // In sideways markets we use 3m pivots instead of 15m for faster response.
+  // In trending markets we keep using 15m pivots as the macro confirmation.
+  const pMacro = sideways ? state.last3mPivotType : state.last15mPivotType;
+  const getMacroStructure = sideways ? get3mStructure : get15mStructure;
 
   // ── LONG: price at a LOW pivot (LL or HL) — demand zone entry ──────────────
   // HL = higher low  → price dipped to demand, buyers stepped in → LONG continuation
@@ -535,21 +625,23 @@ function resolveSignal(state, zone, price, vwap) {
   // 4H gate: if macro trend is BEARISH, demand zones tend to fail (lows break lower).
   function tryLong() {
     const s4h   = get4hStructure(state, price);
-    const s15chk = get15mStructure(state, price);
+    const sMacrochk = getMacroStructure(state, price);
     if (s4h === 'BEARISH') return null;   // macro downtrend — demand zones fail
-    // When 4H is uncertain (MIXED/UNKNOWN), require 15m to also confirm bullish/recovering.
-    // 15m fully BEARISH (LH+LL) in a MIXED 4H = demand zone likely to fail — skip.
-    if ((s4h === 'MIXED' || s4h === 'UNKNOWN') && s15chk === 'BEARISH') return null;
-    // Demand zone entry: both 15m and 1m must confirm price is AT A LOW
-    const isDemand15 = p15 === 'LL' || p15 === 'HL';
+    // When 4H is uncertain (MIXED/UNKNOWN), require macro TF to also confirm bullish/recovering.
+    if ((s4h === 'MIXED' || s4h === 'UNKNOWN') && sMacrochk === 'BEARISH') return null;
+
+    // Demand zone entry: both macro and 1m must confirm price is AT A LOW
+    const isDemandMacro = sideways
+      ? pMacro === 'HL'                          // sideways: only HL (higher low = demand bounce)
+      : pMacro === 'LL' || pMacro === 'HL';     // trending: any low pivot
     const isDemand1m = p1m === 'LL' || p1m === 'HL';
-    if (!isDemand15 || !isDemand1m) return null;
+    if (!isDemandMacro || !isDemand1m) return null;
 
     // Trend continuation vs reversal logic:
     //   4H BULLISH + HL pivot = uptrend continuation → buyers stepping in at higher low
     //     → do NOT require volume spike or Homma reversal pattern
     //   LL pivot or 4H MIXED/UNKNOWN = potential reversal → demand confirmation
-    const isTrendContinuation = s4h === 'BULLISH' && p15 === 'HL' && p1m === 'HL';
+    const isTrendContinuation = !sideways && s4h === 'BULLISH' && pMacro === 'HL' && p1m === 'HL';
 
     if (!isTrendContinuation) {
       // Reversal setup: need candlestick confirmation + volume spike
@@ -565,7 +657,7 @@ function resolveSignal(state, zone, price, vwap) {
       const distAboveUpper = (price - vwap.upper) / vwap.stddev;
       if (distAboveUpper > MIN_DIST_SIGMA * 2) return null;
     }
-    return { direction: 'LONG', type: `${p15}+${p1m}` };
+    return { direction: 'LONG', type: `${pMacro}+${p1m}`, regime };
   }
 
   // ── SHORT: price at a HIGH pivot (HH or LH) — supply zone entry ─────────────
@@ -575,20 +667,23 @@ function resolveSignal(state, zone, price, vwap) {
   // 4H gate: if macro trend is BULLISH, supply zones tend to break (highs keep printing).
   function tryShort() {
     const s4h    = get4hStructure(state, price);
-    const s15chk = get15mStructure(state, price);
+    const sMacrochk = getMacroStructure(state, price);
     if (s4h === 'BULLISH') return null;   // macro uptrend — supply zones break
-    // When 4H is uncertain, require 15m to confirm bearish/rejecting.
-    if ((s4h === 'MIXED' || s4h === 'UNKNOWN') && s15chk === 'BULLISH') return null;
-    // Supply zone entry: both 15m and 1m must confirm price is AT A HIGH
-    const isSupply15 = p15 === 'HH' || p15 === 'LH';
+    // When 4H is uncertain, require macro TF to confirm bearish/rejecting.
+    if ((s4h === 'MIXED' || s4h === 'UNKNOWN') && sMacrochk === 'BULLISH') return null;
+
+    // Supply zone entry: both macro and 1m must confirm price is AT A HIGH
+    const isSupplyMacro = sideways
+      ? pMacro === 'LH'                          // sideways: only LH (lower high = supply rejection)
+      : pMacro === 'HH' || pMacro === 'LH';     // trending: any high pivot
     const isSupply1m = p1m === 'HH' || p1m === 'LH';
-    if (!isSupply15 || !isSupply1m) return null;
+    if (!isSupplyMacro || !isSupply1m) return null;
 
     // Trend continuation vs reversal logic:
     //   4H BEARISH + LH pivot = downtrend continuation → sellers at lower high
     //     → do NOT require volume spike or Homma reversal pattern
     //   HH pivot or 4H MIXED/UNKNOWN = potential reversal → supply confirmation
-    const isTrendContinuation = s4h === 'BEARISH' && p15 === 'LH' && p1m === 'LH';
+    const isTrendContinuation = !sideways && s4h === 'BEARISH' && pMacro === 'LH' && p1m === 'LH';
 
     if (!isTrendContinuation) {
       // Reversal setup: need candlestick confirmation + volume spike
@@ -605,7 +700,7 @@ function resolveSignal(state, zone, price, vwap) {
       const distBelowLower = (vwap.lower - price) / vwap.stddev;
       if (distBelowLower > MIN_DIST_SIGMA * 2) return null;
     }
-    return { direction: 'SHORT', type: `${p15}+${p1m}` };
+    return { direction: 'SHORT', type: `${pMacro}+${p1m}`, regime };
   }
 
   // ── Dispatcher: pivot type → direction ────────────────────────────────────
@@ -613,8 +708,12 @@ function resolveSignal(state, zone, price, vwap) {
   // HIGH pivot (HH or LH) = price at supply zone → SHORT (sell the high)
   // Zone guard: don't LONG if price is already above upper band (ABOVE_UPPER)
   //             don't SHORT if price is already below lower band (BELOW_LOWER)
-  const isLowPivot  = p15 === 'LL' || p15 === 'HL';
-  const isHighPivot = p15 === 'HH' || p15 === 'LH';
+  const isLowPivot  = sideways
+    ? pMacro === 'HL'
+    : pMacro === 'LL' || pMacro === 'HL';
+  const isHighPivot = sideways
+    ? pMacro === 'LH'
+    : pMacro === 'HH' || pMacro === 'LH';
   if (isLowPivot  && zone !== 'ABOVE_UPPER') return tryLong();
   if (isHighPivot && zone !== 'BELOW_LOWER') return tryShort();
   return null;
@@ -627,8 +726,9 @@ async function analyze(symbol, log) {
   // ── First call: seed swing trackers from history ─────────────
   if (!st.ready) {
     log(`[V4] ${symbol} warming up…`);
-    const [c1m, c15m, c4h] = await Promise.all([
+    const [c1m, c3m, c15m, c4h] = await Promise.all([
       fetchKlines(symbol, 1,   WARMUP_1M),
+      fetchKlines(symbol, 3,   WARMUP_3M),
       fetchKlines(symbol, 15,  WARMUP_15M),
       fetchKlines(symbol, 240, WARMUP_4H),   // 240 min = 4H
     ]);
@@ -654,6 +754,31 @@ async function analyze(symbol, log) {
         }
       }
     }
+
+    // 3m: replay all CLOSED bars (exclude last = live), build pivots3m[]
+    st.candles3m = c3m.slice(0, -1);
+    for (let i = LBL_3M; i < st.candles3m.length - LBR_3M; i++) {
+      const slice = st.candles3m.slice(0, i + LBR_3M + 1);
+      const p = checkPivot(slice, LBL_3M, LBR_3M);
+      if (p && p.bar.openTime !== st.last3mPivotTime) {
+        st.last3mPivotTime = p.bar.openTime;
+        if (p.isHigh) {
+          const lastH = findLastPivot(st.pivots3m, 'H');
+          const label = (!lastH || p.bar.high > lastH.price) ? 'HH' : 'LH';
+          st.sh3m_2 = st.sh3m_1; st.sh3m_1 = p.bar.high;
+          st.pivots3m.push({ type: 'H', price: p.bar.high, time: p.bar.openTime, label });
+          st.last3mPivotType = label; st.last3mPivotPrice = p.bar.high;
+        }
+        if (p.isLow) {
+          const lastL = findLastPivot(st.pivots3m, 'L');
+          const label = (!lastL || p.bar.low > lastL.price) ? 'HL' : 'LL';
+          st.sl3m_2 = st.sl3m_1; st.sl3m_1 = p.bar.low;
+          st.pivots3m.push({ type: 'L', price: p.bar.low, time: p.bar.openTime, label });
+          st.last3mPivotType = label; st.last3mPivotPrice = p.bar.low;
+        }
+      }
+    }
+    if (st.pivots3m.length > 50) st.pivots3m = st.pivots3m.slice(-50);
 
     // 1m: replay all CLOSED bars (exclude last = live)
     // Compute last1mPivotType in time order — same as 15m warmup above.
@@ -705,13 +830,15 @@ async function analyze(symbol, log) {
     st.ready = true;
     const struct4hReady = get4hStructure(st, null);
     const seq4h = st.pivots4h.slice(-4).map(x => `${x.label}@${x.price.toFixed(2)}`).join('→');
-    log(`[V4] ${symbol} ready | 4H=${struct4hReady} [${seq4h}] | last_15m_pivot=${st.last15mPivotType||'none'}@${st.last15mPivotPrice?.toFixed(4)||'n/a'} | pivot lbL/lbR: 1m=${LBL_1M}/${LBR_1M} 15m=${LBL_15M}/${LBR_15M} 4H=${LBL_4H}/${LBR_4H}`);
+    const seq3m = st.pivots3m.slice(-4).map(x => `${x.label}@${x.price.toFixed(2)}`).join('→');
+    log(`[V4] ${symbol} ready | 4H=${struct4hReady} [${seq4h}] | 3m=[${seq3m}] | last_15m_pivot=${st.last15mPivotType||'none'}@${st.last15mPivotPrice?.toFixed(4)||'n/a'} | pivot lbL/lbR: 1m=${LBL_1M}/${LBR_1M} 3m=${LBL_3M}/${LBR_3M} 15m=${LBL_15M}/${LBR_15M} 4H=${LBL_4H}/${LBR_4H}`);
     return null;
   }
 
   // ── Incremental: process only new CLOSED bars ────────────────
-  const [fresh1m, fresh15m, fresh4h] = await Promise.all([
+  const [fresh1m, fresh3m, fresh15m, fresh4h] = await Promise.all([
     fetchKlines(symbol, 1,   DELTA_1M),
+    fetchKlines(symbol, 3,   DELTA_3M),
     fetchKlines(symbol, 15,  DELTA_15M),
     fetchKlines(symbol, 240, DELTA_4H),
   ]);
@@ -734,6 +861,15 @@ async function analyze(symbol, log) {
     update15m(st);
   }
 
+  // 3m: add newly CLOSED bars only (drop live = last)
+  const last3t = st.candles3m.length ? st.candles3m[st.candles3m.length - 1].openTime : 0;
+  const new3m  = fresh3m.filter(c => c.openTime > last3t).slice(0, -1);
+  if (new3m.length) {
+    st.candles3m.push(...new3m);
+    if (st.candles3m.length > WARMUP_3M + 50) st.candles3m.splice(0, new3m.length);
+    update3m(st);
+  }
+
   // 1m: process CLOSED bars only (drop live = last)
   const new1m = fresh1m.filter(c => c.openTime > st.lastProcessed1m).slice(0, -1);
   if (!new1m.length) return null;
@@ -752,17 +888,20 @@ async function analyze(symbol, log) {
       const gapPct = (st.sl1m_1 && st.sl1m_2)
         ? (Math.abs(st.sl1m_1 - st.sl1m_2) / st.sl1m_2 * 100).toFixed(3)
         : 'null';
-      const dropFromHigh = (st.last15mPivotPrice && (st.last15mPivotType === 'HH' || st.last15mPivotType === 'LH'))
-        ? ` drop=${((st.last15mPivotPrice - diagBar.close) / st.last15mPivotPrice * 100).toFixed(3)}%`
+      const regimeDiag = isSidewaysMarket(st) ? 'SIDEWAYS' : 'TRENDING';
+      const macroPivotType = regimeDiag === 'SIDEWAYS' ? st.last3mPivotType : st.last15mPivotType;
+      const macroPivotPrice = regimeDiag === 'SIDEWAYS' ? st.last3mPivotPrice : st.last15mPivotPrice;
+      const dropFromHigh = (macroPivotPrice && (macroPivotType === 'HH' || macroPivotType === 'LH'))
+        ? ` drop=${((macroPivotPrice - diagBar.close) / macroPivotPrice * 100).toFixed(3)}%`
         : '';
       const struct4h  = get4hStructure(st, diagBar.close);
-      const struct15  = get15mStructure(st, diagBar.close);
+      const structMacro = regimeDiag === 'SIDEWAYS' ? get3mStructure(st, diagBar.close) : get15mStructure(st, diagBar.close);
       // Last 6 pivot labels from the sequence — shows exactly what TV SMC shows
       const pivotSeq  = st.pivots15m.slice(-6).map(x => `${x.label}@${x.price.toFixed(2)}`).join(' → ');
       const seq4hDiag = st.pivots4h.slice(-4).map(x => `${x.label}@${x.price.toFixed(2)}`).join('→');
       // ABOVE_UPPER=LONG, UPPER_MID=SHORT, LOWER_MID=LONG, BELOW_LOWER=SHORT
       const zoneSide = (diagZone === 'ABOVE_UPPER' || diagZone === 'LOWER_MID') ? 'LONG' : 'SHORT';
-      log(`[V4-DIAG] ${symbol} zone=${diagZone}(${zoneSide}) 4H=${struct4h}[${seq4hDiag}] 15m=${struct15} price=${diagBar.close.toFixed(4)} | seq=[${pivotSeq}] | 15m=${st.last15mPivotType||'none'}@${st.last15mPivotPrice?.toFixed(4)||'n/a'} sh=${st.sh15_1?.toFixed(4)}/${st.sh15_2?.toFixed(4)} sl=${st.sl15_1?.toFixed(4)}/${st.sl15_2?.toFixed(4)}${dropFromHigh} | 1m=${st.last1mPivotType||'none'}@${st.last1mPivotPrice?.toFixed(4)||'n/a'} | sl1m=${st.sl1m_1?.toFixed(4)}/${st.sl1m_2?.toFixed(4)} gap=${gapPct}%(${gapOk?'OK':'BLOCKED'})`);
+      log(`[V4-DIAG] ${symbol} zone=${diagZone}(${zoneSide}) 4H=${struct4h}[${seq4hDiag}] regime=${regimeDiag} macro=${structMacro} price=${diagBar.close.toFixed(4)} | seq=[${pivotSeq}] | macro=${macroPivotType||'none'}@${macroPivotPrice?.toFixed(4)||'n/a'} sh=${st.sh15_1?.toFixed(4)}/${st.sh15_2?.toFixed(4)} sl=${st.sl15_1?.toFixed(4)}/${st.sl15_2?.toFixed(4)}${dropFromHigh} | 1m=${st.last1mPivotType||'none'}@${st.last1mPivotPrice?.toFixed(4)||'n/a'} | sl1m=${st.sl1m_1?.toFixed(4)}/${st.sl1m_2?.toFixed(4)} gap=${gapPct}%(${gapOk?'OK':'BLOCKED'})`);
     }
   }
 
@@ -812,7 +951,7 @@ async function analyze(symbol, log) {
           let cancelReason;
           if (!resolved) {
             const s4h  = get4hStructure(st, entryPrice);
-            const p15  = st.last15mPivotType;
+            const pMacroPending = isSidewaysMarket(st) ? st.last3mPivotType : st.last15mPivotType;
             const p1m  = st.last1mPivotType;
             const zoneDir = (zoneNext === 'UPPER_MID' || zoneNext === 'ABOVE_UPPER') ? 'SHORT' : 'LONG';  // BELOW_LOWER is now LONG
 
@@ -823,10 +962,12 @@ async function analyze(symbol, log) {
             } else if (pending.direction === 'LONG' && s4h === 'BEARISH') {
               cancelReason = `4H=BEARISH — LONG blocked (macro downtrend, demand zones fail)`;
             } else if (pending.direction === 'LONG') {
-              const isDemand15 = p15 === 'LL' || p15 === 'HL';
+              const isDemandMacro = isSidewaysMarket(st)
+                ? pMacroPending === 'HL'
+                : pMacroPending === 'LL' || pMacroPending === 'HL';
               const isDemand1m = p1m === 'LL' || p1m === 'HL';
-              if (!isDemand15) {
-                cancelReason = `15m pivot flipped to ${p15} — need LL or HL for LONG (demand zone)`;
+              if (!isDemandMacro) {
+                cancelReason = `macro pivot flipped to ${pMacroPending} — need ${isSidewaysMarket(st)?'HL':'LL or HL'} for LONG (demand zone)`;
               } else if (!isDemand1m) {
                 cancelReason = `1m pivot flipped to ${p1m} — need LL or HL for LONG (demand zone)`;
               } else if (!is1mGapOk(st.sl1m_1, st.sl1m_2)) {
@@ -841,10 +982,12 @@ async function analyze(symbol, log) {
               }
             } else {
               // SHORT
-              const isSupply15 = p15 === 'HH' || p15 === 'LH';
+              const isSupplyMacro = isSidewaysMarket(st)
+                ? pMacroPending === 'LH'
+                : pMacroPending === 'HH' || pMacroPending === 'LH';
               const isSupply1m = p1m === 'HH' || p1m === 'LH';
-              if (!isSupply15) {
-                cancelReason = `15m pivot flipped to ${p15} — need HH or LH for SHORT (supply zone)`;
+              if (!isSupplyMacro) {
+                cancelReason = `macro pivot flipped to ${pMacroPending} — need ${isSidewaysMarket(st)?'LH':'HH or LH'} for SHORT (supply zone)`;
               } else if (!isSupply1m) {
                 cancelReason = `1m pivot flipped to ${p1m} — need HH or LH for SHORT (supply zone)`;
               } else if (isShortTooLate(entryPrice, st.last15mPivotPrice, symbol)) {
@@ -870,7 +1013,8 @@ async function analyze(symbol, log) {
               cancelReason = `frozen chase=${c}% above sl1m_frozen=${frozenRef?.toFixed(4)} (limit=${MAX_CHASE_PCT}%)`;
             }
           }
-          log(`[V4] pending ${symbol} ${pending.direction} CANCELLED — ${cancelReason} | zone=${pending.zone}→${zoneNext} 4H=${get4hStructure(st, entryPrice)} 15m=${st.last15mPivotType||'none'} 1m=${st.last1mPivotType||'none'}`);
+          const macroType = isSidewaysMarket(st) ? st.last3mPivotType : st.last15mPivotType;
+          log(`[V4] pending ${symbol} ${pending.direction} CANCELLED — ${cancelReason} | zone=${pending.zone}→${zoneNext} 4H=${get4hStructure(st, entryPrice)} macro=${macroType||'none'} 1m=${st.last1mPivotType||'none'}`);
         }
       }
     }
@@ -917,11 +1061,16 @@ async function analyze(symbol, log) {
         // Per-direction cooldown — allows opposite direction to fire independently
         if (sig && sig.direction === 'LONG'  && nowMs - st.lastLongTime  < MIN_DIR_GAP) continue;
         if (sig && sig.direction === 'SHORT' && nowMs - st.lastShortTime < MIN_DIR_GAP) continue;
-        const piv15t = st.last15mPivotType || 'none';
+        const regimeNow = isSidewaysMarket(st) ? 'SIDEWAYS' : 'TRENDING';
+        const pivMacrot = regimeNow === 'SIDEWAYS' ? (st.last3mPivotType || 'none') : (st.last15mPivotType || 'none');
         const piv1mt  = st.last1mPivotType  || 'none';
-        const longOk  = (piv15t==='LL'||piv15t==='HL') && (piv1mt==='LL'||piv1mt==='HL');
-        const shortOk = (piv15t==='HH'||piv15t==='LH') && (piv1mt==='HH'||piv1mt==='LH');
-        log(`[V4-SIG] ${symbol} zone=${zone} 4H=${get4hStructure(st, bar.close)} 15m=${get15mStructure(st, bar.close)} piv15=${piv15t} piv1m=${piv1mt} longOk=${longOk} shortOk=${shortOk} price=${bar.close.toFixed(4)} traded=${st.zoneTraded} → ${sig && !st.zoneTraded ? sig.direction+'+'+sig.type : (sig ? 'ZONE_TRADED' : 'NO_SIGNAL')}`);
+        const longOk  = regimeNow === 'SIDEWAYS'
+          ? (pivMacrot==='HL') && (piv1mt==='LL'||piv1mt==='HL')
+          : (pivMacrot==='LL'||pivMacrot==='HL') && (piv1mt==='LL'||piv1mt==='HL');
+        const shortOk = regimeNow === 'SIDEWAYS'
+          ? (pivMacrot==='LH') && (piv1mt==='HH'||piv1mt==='LH')
+          : (pivMacrot==='HH'||pivMacrot==='LH') && (piv1mt==='HH'||piv1mt==='LH');
+        log(`[V4-SIG] ${symbol} zone=${zone} 4H=${get4hStructure(st, bar.close)} regime=${regimeNow} macro=${regimeNow==='SIDEWAYS'?get3mStructure(st,bar.close):get15mStructure(st,bar.close)} pivMacro=${pivMacrot} piv1m=${piv1mt} longOk=${longOk} shortOk=${shortOk} price=${bar.close.toFixed(4)} traded=${st.zoneTraded} → ${sig && !st.zoneTraded ? sig.direction+'+'+sig.type : (sig ? 'ZONE_TRADED' : 'NO_SIGNAL')}`);
         if (sig && !st.zoneTraded) {
           st.lastSignalTime = pivotTime;
           st.zoneTraded     = true;
@@ -943,16 +1092,17 @@ async function analyze(symbol, log) {
           }
         } else {
           // Diagnose why no signal — 4H gate + zone + pivot check
-          const pType    = st.last15mPivotType || 'none';
+          const regimeNow = isSidewaysMarket(st) ? 'SIDEWAYS' : 'TRENDING';
+          const pType    = regimeNow === 'SIDEWAYS' ? (st.last3mPivotType || 'none') : (st.last15mPivotType || 'none');
           const p1Type   = st.last1mPivotType  || 'none';
-          const pPrice   = st.last15mPivotPrice?.toFixed(4) || 'n/a';
+          const pPrice   = regimeNow === 'SIDEWAYS' ? st.last3mPivotPrice?.toFixed(4) : st.last15mPivotPrice?.toFixed(4) || 'n/a';
           const dropPct  = st.last15mPivotPrice ? ((st.last15mPivotPrice - bar.close) / st.last15mPivotPrice * 100).toFixed(3) : 'n/a';
           const gapOk2   = is1mGapOk(st.sl1m_1, st.sl1m_2);
           const chasing2 = isChasing(bar.close, st.sl1m_1, symbol);
           const chasePct2 = st.sl1m_1 ? ((bar.close - st.sl1m_1) / st.sl1m_1 * 100).toFixed(3) : 'n/a';
           const gapPct2   = (st.sl1m_1 && st.sl1m_2) ? (Math.abs(st.sl1m_1 - st.sl1m_2) / st.sl1m_2 * 100).toFixed(3) : 'n/a';
           const s4h = get4hStructure(st, bar.close);
-          const s15 = get15mStructure(st, bar.close);
+          const sMacro = regimeNow === 'SIDEWAYS' ? get3mStructure(st, bar.close) : get15mStructure(st, bar.close);
           const isDiscount = zone === 'BELOW_LOWER' || zone === 'LOWER_MID';
           const isPremium  = zone === 'ABOVE_UPPER'  || zone === 'UPPER_MID';
 
@@ -963,32 +1113,34 @@ async function analyze(symbol, log) {
             log(`[V4] no signal — ${symbol} 4H=BULLISH zone=${zone} (need LOWER_MID for LONG)`);
           } else if (s4h === 'BEARISH' && !isPremium) {
             log(`[V4] no signal — ${symbol} 4H=BEARISH zone=${zone} (need ABOVE_UPPER/UPPER_MID for SHORT)`);
-          } else if (s4h !== 'BULLISH' && s4h !== 'BEARISH' && s15 === 'BULLISH' && !isDiscount) {
-            log(`[V4] no signal — ${symbol} 4H=MIXED 15m=BULLISH zone=${zone} (need discount zone for LONG)`);
-          } else if (s4h !== 'BULLISH' && s4h !== 'BEARISH' && s15 === 'BEARISH' && !isPremium) {
-            log(`[V4] no signal — ${symbol} 4H=MIXED 15m=BEARISH zone=${zone} (need premium zone for SHORT)`);
+          } else if (s4h !== 'BULLISH' && s4h !== 'BEARISH' && sMacro === 'BULLISH' && !isDiscount) {
+            log(`[V4] no signal — ${symbol} 4H=MIXED ${regimeNow==='SIDEWAYS'?'3m':'15m'}=BULLISH zone=${zone} (need discount zone for LONG)`);
+          } else if (s4h !== 'BULLISH' && s4h !== 'BEARISH' && sMacro === 'BEARISH' && !isPremium) {
+            log(`[V4] no signal — ${symbol} 4H=MIXED ${regimeNow==='SIDEWAYS'?'3m':'15m'}=BEARISH zone=${zone} (need premium zone for SHORT)`);
           } else if (isDiscount) {
             // Right zone for LONG — diagnose pivot issue
-            if (pType !== 'HH' && pType !== 'HL') {
-              log(`[V4] no signal — ${symbol} zone=${zone} 4H=${s4h} 15m=${pType} (need 15m HH or HL for LONG)`);
+            const needLongMacro = regimeNow === 'SIDEWAYS' ? 'HL' : 'HH or HL';
+            if (regimeNow === 'SIDEWAYS' ? pType !== 'HL' : (pType !== 'HH' && pType !== 'HL')) {
+              log(`[V4] no signal — ${symbol} zone=${zone} 4H=${s4h} ${regimeNow==='SIDEWAYS'?'3m':'15m'}=${pType} (need ${needLongMacro} for LONG)`);
             } else if (!gapOk2) {
-              log(`[V4] LONG WAIT — ${symbol} zone=${zone} 4H=${s4h} 15m=${pType} gap=${gapPct2}% too wide (need ≤${MAX_1M_GAP_PCT}%)`);
+              log(`[V4] LONG WAIT — ${symbol} zone=${zone} 4H=${s4h} ${regimeNow==='SIDEWAYS'?'3m':'15m'}=${pType} gap=${gapPct2}% too wide (need ≤${MAX_1M_GAP_PCT}%)`);
             } else if (chasing2) {
-              log(`[V4] LONG WAIT — ${symbol} zone=${zone} 4H=${s4h} 15m=${pType} 1m=${p1Type} chase=${chasePct2}% above sl1m`);
+              log(`[V4] LONG WAIT — ${symbol} zone=${zone} 4H=${s4h} ${regimeNow==='SIDEWAYS'?'3m':'15m'}=${pType} 1m=${p1Type} chase=${chasePct2}% above sl1m`);
             } else {
-              log(`[V4] no signal — ${symbol} zone=${zone} 4H=${s4h} 15m=${pType} 1m=${p1Type} (need 1m HH or HL)`);
+              log(`[V4] no signal — ${symbol} zone=${zone} 4H=${s4h} ${regimeNow==='SIDEWAYS'?'3m':'15m'}=${pType} 1m=${p1Type} (need 1m HH or HL)`);
             }
           } else if (isPremium) {
             // Right zone for SHORT — diagnose pivot issue
-            if (pType !== 'LL' && pType !== 'LH') {
-              log(`[V4] no signal — ${symbol} zone=${zone} 4H=${s4h} 15m=${pType} (need 15m LL or LH for SHORT)`);
+            const needShortMacro = regimeNow === 'SIDEWAYS' ? 'LH' : 'LL or LH';
+            if (regimeNow === 'SIDEWAYS' ? pType !== 'LH' : (pType !== 'LL' && pType !== 'LH')) {
+              log(`[V4] no signal — ${symbol} zone=${zone} 4H=${s4h} ${regimeNow==='SIDEWAYS'?'3m':'15m'}=${pType} (need ${needShortMacro} for SHORT)`);
             } else if (isShortTooLate(bar.close, st.last15mPivotPrice, symbol)) {
-              log(`[V4] SHORT BLOCKED — ${symbol} zone=${zone} 4H=${s4h} 15m=${pType} dropped ${dropPct}% (>${getMaxShortDropPct(symbol)}% from pivot)`);
+              log(`[V4] SHORT BLOCKED — ${symbol} zone=${zone} 4H=${s4h} ${regimeNow==='SIDEWAYS'?'3m':'15m'}=${pType} dropped ${dropPct}% (>${getMaxShortDropPct(symbol)}% from pivot)`);
             } else {
-              log(`[V4] no signal — ${symbol} zone=${zone} 4H=${s4h} 15m=${pType} 1m=${p1Type} (need 1m LL or LH)`);
+              log(`[V4] no signal — ${symbol} zone=${zone} 4H=${s4h} ${regimeNow==='SIDEWAYS'?'3m':'15m'}=${pType} 1m=${p1Type} (need 1m LL or LH)`);
             }
           } else {
-            log(`[V4] no signal — ${symbol} zone=${zone} 4H=${s4h} 15m=${s15} piv=${pType}/${p1Type}@${pPrice}`);
+            log(`[V4] no signal — ${symbol} zone=${zone} 4H=${s4h} ${regimeNow==='SIDEWAYS'?'3m':'15m'}=${sMacro} piv=${pType}/${p1Type}@${pPrice}`);
           }
         }
       }
@@ -1013,9 +1165,11 @@ async function analyze(symbol, log) {
   // ── TV-parity diagnostic log ──
   // Prints every signal in a format the user can paste next to their
   // TradingView SMC Pro chart to verify the bot saw the same pivots.
-  // Format: SYMBOL DIR zone=ZONE 15m=TYPE@$PRICE 1m=TYPE@$PRICE entry=$X sl=$X tp=$X
-  log(`[V4-SIGNAL-TV] ${symbol} ${signal.direction} zone=${signal.zone} ` +
-      `15m=${st.last15mPivotType}@$${st.last15mPivotPrice} ` +
+  const regimeTv = signal.regime || (isSidewaysMarket(st) ? 'SIDEWAYS' : 'TRENDING');
+  const macroTypeTv = regimeTv === 'SIDEWAYS' ? st.last3mPivotType : st.last15mPivotType;
+  const macroPriceTv = regimeTv === 'SIDEWAYS' ? st.last3mPivotPrice : st.last15mPivotPrice;
+  log(`[V4-SIGNAL-TV] ${symbol} ${signal.direction} zone=${signal.zone} regime=${regimeTv} ` +
+      `${regimeTv==='SIDEWAYS'?'3m':'15m'}=${macroTypeTv}@$${macroPriceTv} ` +
       `1m=${st.last1mPivotType}@$${st.last1mPivotPrice} ` +
       `entry=$${signal.price} sl=$${sl.toFixed(8)} tp=$${tp.toFixed(8)}`);
 
