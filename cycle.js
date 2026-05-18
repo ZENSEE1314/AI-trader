@@ -705,10 +705,10 @@ async function openTrade(client, pick, wallet) {
   const slDist = slPricePct;
   const initialSlPrice = fmtP(isLong ? price * (1 - slPricePct) : price * (1 + slPricePct));
 
-  // TP targets (no hard close — trailing SL handles exit, TP is just reference)
-  const tp1 = fmtP(isLong ? price * (1 + tpPricePct) : price * (1 - tpPricePct));
-  const tp2 = fmtP(isLong ? price * (1 + tpPricePct * 1.5) : price * (1 - tpPricePct * 1.5));
-  const tp3 = fmtP(isLong ? price * (1 + tpPricePct * 2.0) : price * (1 - tpPricePct * 2.0));
+  // TP targets — capital %-based scale-out ladder (30% / 40% / 50% capital)
+  const tp1 = fmtP(isLong ? price * (1 + 0.30 / leverage) : price * (1 - 0.30 / leverage));
+  const tp2 = fmtP(isLong ? price * (1 + 0.40 / leverage) : price * (1 - 0.40 / leverage));
+  const tp3 = fmtP(isLong ? price * (1 + 0.50 / leverage) : price * (1 - 0.50 / leverage));
 
   // Position size: 10% of wallet = margin, notional = margin * leverage
   const MIN_NOTIONAL = 5.5;
@@ -771,7 +771,7 @@ async function openTrade(client, pick, wallet) {
 
   tradeState.set(sym, {
     entry: price, tp1, tp2, tp3, sl: initialSlPrice, qty, isLong,
-    tpHit1: false, tpHit2: false,
+    scaleOutStage: 0,
     pricePrec, qtyPrec,
     setup: pick.setup,
     comboId: pick.comboId || 15,
@@ -1049,7 +1049,7 @@ async function checkTrailingStop(client) {
       let trailResult;
       {
         const lev      = state.leverage || 20;
-        const lastStep = state.lastStep || 0;
+        const lastStep = state.trailingSlLastStep || 0;
         const step = calculateTrailingStep(state.entry, cur, state.isLong, lastStep, lev);
         if (step && step.newSlPrice) {
           const betterSl = state.isLong
@@ -1104,77 +1104,126 @@ async function checkTrailingStop(client) {
       const fmtP = (p) => parseFloat(p.toFixed(state.pricePrec));
       const floorQ = (q) => Math.floor(q * Math.pow(10, state.qtyPrec)) / Math.pow(10, state.qtyPrec);
       const origQty = Math.abs(state.qty);
+      const curQty  = Math.abs(amt);
 
-      // TP1 hit: close 30% (not 50% — let winners run), SL -> break even
-      if (!state.tpHit1) {
-        const tp1Hit = isLong ? cur >= state.tp1 : cur <= state.tp1;
-        if (tp1Hit) {
-          state.tpHit1 = true;
-          const closeQty = floorQ(origQty * 0.30); // 30% not 50%
-          // SL moves to entry + small profit buffer (not exact BE — gives room)
-          const bePad = isLong ? state.entry * 1.001 : state.entry * 0.999; // 0.1% above/below entry
-          const newSl = fmtP(bePad);
-          log(`TP1 hit ${sym} @ $${fmtPrice(cur)}: closing 30%, SL -> BE+0.1%`);
-          try {
-            try { await client.cancelAllOpenOrders({ symbol: sym }); } catch (_) {}
-            try { await client.cancelAllAlgoOpenOrders({ symbol: sym }); } catch (_) {}
-            if (closeQty > 0) {
-              await client.submitNewOrder({ symbol: sym, side: closeSide, type: 'MARKET', quantity: closeQty, reduceOnly: 'true' });
-            }
-            await client.submitNewAlgoOrder({
-              algoType: 'CONDITIONAL', symbol: sym, side: closeSide,
-              type: 'STOP_MARKET', triggerPrice: newSl,
-              closePosition: 'true', workingType: 'MARK_PRICE',
-            });
-            await client.submitNewAlgoOrder({
-              algoType: 'CONDITIONAL', symbol: sym, side: closeSide,
-              type: 'TAKE_PROFIT_MARKET', triggerPrice: state.tp3,
-              closePosition: 'true', workingType: 'MARK_PRICE',
-            });
-          } catch (e) { log(`TP1 exec warn: ${e.message}`); state.tpHit1 = false; }
-          await notify(
-            `*TP1 Hit!* — *${sym}* ${isLong ? 'LONG' : 'SHORT'}\n` +
-            `30% secured @ \`$${fmtPrice(cur)}\`\n` +
-            `SL -> BE+buffer | 70% riding → TP2: \`$${fmtPrice(state.tp2)}\``
+      // ── Capital %-based scale-out ladder ─────────────────────────
+      //   +20% capital → early SL lock +15%  (handled by trail-tiers.js)
+      //   +30% capital → close 50%,     SL to +30%
+      //   +40% capital → close 50% of remaining, SL to +40%
+      //   +50% capital → close rest
+      const lev = state.leverage || 20;
+      const capitalPct = gain * 100 * lev; // gain = price fraction, capital% = price% * leverage
+
+      if (state.scaleOutStage === undefined) state.scaleOutStage = 0;
+
+      // Stage 0 → 1: +30% capital — close 50%, SL to +30%
+      if (state.scaleOutStage < 1 && capitalPct >= 30) {
+        state.scaleOutStage = 1;
+        const closeQty = floorQ(curQty * 0.50);
+        const slPricePct = 0.30 / lev;
+        const newSl = fmtP(isLong ? state.entry * (1 + slPricePct) : state.entry * (1 - slPricePct));
+        log(`Scale-out 1 ${sym} @ +${capitalPct.toFixed(1)}% capital: closing 50% (${closeQty}), SL -> +30%`);
+        try {
+          try { await client.cancelAllOpenOrders({ symbol: sym }); } catch (_) {}
+          try { await client.cancelAllAlgoOpenOrders({ symbol: sym }); } catch (_) {}
+          if (closeQty > 0) {
+            await client.submitNewOrder({ symbol: sym, side: closeSide, type: 'MARKET', quantity: closeQty, reduceOnly: 'true' });
+          }
+          await client.submitNewAlgoOrder({
+            algoType: 'CONDITIONAL', symbol: sym, side: closeSide,
+            type: 'STOP_MARKET', triggerPrice: newSl,
+            closePosition: 'true', workingType: 'MARK_PRICE',
+          });
+          await client.submitNewAlgoOrder({
+            algoType: 'CONDITIONAL', symbol: sym, side: closeSide,
+            type: 'TAKE_PROFIT_MARKET', triggerPrice: state.tp3,
+            closePosition: 'true', workingType: 'MARK_PRICE',
+          });
+        } catch (e) { log(`Scale-out 1 exec warn: ${e.message}`); state.scaleOutStage = 0; }
+
+        // Sync in-memory SL state so trailing SL ratchet respects the new lock
+        state.trailingSlPrice = newSl;
+        state.trailingSlLastStep = 0.30;
+        state.sl = newSl;
+        try {
+          const db = require('./db');
+          await db.query(
+            `UPDATE trades SET trailing_sl_price = $1, trailing_sl_last_step = $2 WHERE symbol = $3 AND status = 'OPEN'`,
+            [newSl, 0.30, sym]
           );
-          continue;
-        }
+        } catch (_) {}
+
+        await notify(
+          `*TP1 Hit!* — *${sym}* ${isLong ? 'LONG' : 'SHORT'}\n` +
+          `50% secured @ +30% capital | SL locked +30%\n` +
+          `Riding 50% → TP2 (+40%) / TP3 (+50%)`
+        );
+        continue;
       }
 
-      // TP2 hit: close 40% more (total 70% taken), SL -> halfway between entry and TP1
-      if (state.tpHit1 && !state.tpHit2) {
-        const tp2Hit = isLong ? cur >= state.tp2 : cur <= state.tp2;
-        if (tp2Hit) {
-          state.tpHit2 = true;
-          const closeQty = floorQ(origQty * 0.40); // 40% not 25%
-          // SL moves to midpoint between entry and TP1 (locks meaningful profit)
-          const midSl = (state.entry + state.tp1) / 2;
-          const newSl = fmtP(midSl);
-          log(`TP2 hit ${sym} @ $${fmtPrice(cur)}: closing 40%, SL -> mid(entry,TP1)`);
-          try {
-            try { await client.cancelAllOpenOrders({ symbol: sym }); } catch (_) {}
-            try { await client.cancelAllAlgoOpenOrders({ symbol: sym }); } catch (_) {}
-            if (closeQty > 0) {
-              await client.submitNewOrder({ symbol: sym, side: closeSide, type: 'MARKET', quantity: closeQty, reduceOnly: 'true' });
-            }
-            await client.submitNewAlgoOrder({
-              algoType: 'CONDITIONAL', symbol: sym, side: closeSide,
-              type: 'STOP_MARKET', triggerPrice: newSl,
-              closePosition: 'true', workingType: 'MARK_PRICE',
-            });
-            await client.submitNewAlgoOrder({
-              algoType: 'CONDITIONAL', symbol: sym, side: closeSide,
-              type: 'TAKE_PROFIT_MARKET', triggerPrice: state.tp3,
-              closePosition: 'true', workingType: 'MARK_PRICE',
-            });
-          } catch (e) { log(`TP2 exec warn: ${e.message}`); state.tpHit2 = false; }
-          await notify(
-            `*TP2 Hit!* — *${sym}* ${isLong ? 'LONG' : 'SHORT'}\n` +
-            `40% secured @ \`$${fmtPrice(cur)}\` (70% total taken)\n` +
-            `SL locked at profit | Riding 30% → TP3: \`$${fmtPrice(state.tp3)}\``
+      // Stage 1 → 2: +40% capital — close 50% of remaining, SL to +40%
+      if (state.scaleOutStage < 2 && capitalPct >= 40) {
+        state.scaleOutStage = 2;
+        const closeQty = floorQ(curQty * 0.50);
+        const slPricePct = 0.40 / lev;
+        const newSl = fmtP(isLong ? state.entry * (1 + slPricePct) : state.entry * (1 - slPricePct));
+        log(`Scale-out 2 ${sym} @ +${capitalPct.toFixed(1)}% capital: closing 50% of remaining (${closeQty}), SL -> +40%`);
+        try {
+          try { await client.cancelAllOpenOrders({ symbol: sym }); } catch (_) {}
+          try { await client.cancelAllAlgoOpenOrders({ symbol: sym }); } catch (_) {}
+          if (closeQty > 0) {
+            await client.submitNewOrder({ symbol: sym, side: closeSide, type: 'MARKET', quantity: closeQty, reduceOnly: 'true' });
+          }
+          await client.submitNewAlgoOrder({
+            algoType: 'CONDITIONAL', symbol: sym, side: closeSide,
+            type: 'STOP_MARKET', triggerPrice: newSl,
+            closePosition: 'true', workingType: 'MARK_PRICE',
+          });
+          await client.submitNewAlgoOrder({
+            algoType: 'CONDITIONAL', symbol: sym, side: closeSide,
+            type: 'TAKE_PROFIT_MARKET', triggerPrice: state.tp3,
+            closePosition: 'true', workingType: 'MARK_PRICE',
+          });
+        } catch (e) { log(`Scale-out 2 exec warn: ${e.message}`); state.scaleOutStage = 1; }
+
+        state.trailingSlPrice = newSl;
+        state.trailingSlLastStep = 0.40;
+        state.sl = newSl;
+        try {
+          const db = require('./db');
+          await db.query(
+            `UPDATE trades SET trailing_sl_price = $1, trailing_sl_last_step = $2 WHERE symbol = $3 AND status = 'OPEN'`,
+            [newSl, 0.40, sym]
           );
-          continue;
-        }
+        } catch (_) {}
+
+        await notify(
+          `*TP2 Hit!* — *${sym}* ${isLong ? 'LONG' : 'SHORT'}\n` +
+          `25% secured @ +40% capital (75% total taken)\n` +
+          `SL locked +40% | Riding 25% → TP3 (+50%)`
+        );
+        continue;
+      }
+
+      // Stage 2 → 3: +50% capital — close rest
+      if (state.scaleOutStage < 3 && capitalPct >= 50) {
+        state.scaleOutStage = 3;
+        const closeQty = floorQ(curQty);
+        log(`Scale-out 3 ${sym} @ +${capitalPct.toFixed(1)}% capital: closing rest (${closeQty})`);
+        try {
+          try { await client.cancelAllOpenOrders({ symbol: sym }); } catch (_) {}
+          try { await client.cancelAllAlgoOpenOrders({ symbol: sym }); } catch (_) {}
+          if (closeQty > 0) {
+            await client.submitNewOrder({ symbol: sym, side: closeSide, type: 'MARKET', quantity: closeQty, reduceOnly: 'true' });
+          }
+        } catch (e) { log(`Scale-out 3 exec warn: ${e.message}`); state.scaleOutStage = 2; }
+
+        await notify(
+          `*TP3 Hit!* — *${sym}* ${isLong ? 'LONG' : 'SHORT'}\n` +
+          `25% secured @ +50% capital (100% closed)\n` +
+          `Full position exited`
+        );
+        continue;
       }
     }
   } catch (e) { log(`checkTrailingStop err: ${e.message}`); }

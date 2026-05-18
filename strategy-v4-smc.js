@@ -51,6 +51,10 @@ const LBR_15M =  1;  // 15m right lookback — matches TV "SMC Expo" lbR=1 (1 ba
 const LBL_4H  =  5;  // 4H left lookback  — symmetric, robust higher-TF structure
 const LBR_4H  =  5;  // 4H right lookback — 5 bars = ~20 h (intentionally slow)
 
+// VWAP band multiplier — align with TradingView "VWAP Session" indicator.
+// TV default is 1.0 (1 standard deviation).  Set to 2.0 for wider 2σ bands.
+const VWAP_BAND_MULT = parseFloat(process.env.VWAP_BAND_MULT || '1.0');
+
 const WARMUP_1M  =  50;  // bars loaded on first call (need ≥ 2×3+1 = 7, 50 is plenty)
 const WARMUP_3M  =  50;  // bars loaded on first call
 const WARMUP_15M =  50;  // bars loaded on first call
@@ -206,7 +210,7 @@ function calcVwap(candles15m, asOfMs) {
 
   const vwap   = cumTPV / cumVol;
   const stddev = Math.sqrt(Math.max(0, cumTPV2 / cumVol - vwap * vwap));
-  return { vwap, upper: vwap + 2 * stddev, lower: vwap - 2 * stddev, stddev };
+  return { vwap, upper: vwap + VWAP_BAND_MULT * stddev, lower: vwap - VWAP_BAND_MULT * stddev, stddev };
 }
 
 function getZone(price, { vwap, upper, lower }) {
