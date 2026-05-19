@@ -43,12 +43,47 @@ async function getSignalBoardPrices(symbols) {
 }
 
 const PERIOD_INTERVALS = {
-  '1d':  '1 day',
-  '7d':  '7 days',
-  '30d': '30 days',
-  '6m':  '6 months',
-  '1y':  '1 year',
+  // '1d' and 'yesterday' are special cases handled as calendar days in GMT+7.
+  // See buildDateFilter() below.
+  '1d':        null,
+  'yesterday': null,
+  '7d':        '7 days',
+  '30d':       '30 days',
+  '6m':        '6 months',
+  '1y':        '1 year',
 };
+
+// Returns a SQL date filter fragment for the given period key.
+// '1d'        = today from midnight in GMT+7 (full calendar day, not rolling 24h)
+// 'yesterday' = yesterday's full calendar day in GMT+7
+// All other periods = rolling window from NOW().
+function buildDateFilter(periodKey, col = "COALESCE(t.closed_at, t.created_at)") {
+  if (!periodKey || !PERIOD_INTERVALS.hasOwnProperty(periodKey)) return '';
+  if (periodKey === '1d') {
+    return `AND ${col} >= (DATE_TRUNC('day', NOW() AT TIME ZONE 'Asia/Kuala_Lumpur') AT TIME ZONE 'Asia/Kuala_Lumpur')`;
+  }
+  if (periodKey === 'yesterday') {
+    return `AND ${col} >= (DATE_TRUNC('day', NOW() AT TIME ZONE 'Asia/Kuala_Lumpur') AT TIME ZONE 'Asia/Kuala_Lumpur') - INTERVAL '1 day'`
+         + `AND ${col} <  (DATE_TRUNC('day', NOW() AT TIME ZONE 'Asia/Kuala_Lumpur') AT TIME ZONE 'Asia/Kuala_Lumpur')`;
+  }
+  const interval = PERIOD_INTERVALS[periodKey];
+  if (!interval) return '';
+  return `AND ${col} > NOW() - INTERVAL '${interval}'`;
+}
+
+function buildDateFilterSimple(periodKey, col = "COALESCE(closed_at, created_at)") {
+  if (!periodKey || !PERIOD_INTERVALS.hasOwnProperty(periodKey)) return '';
+  if (periodKey === '1d') {
+    return `AND ${col} >= (DATE_TRUNC('day', NOW() AT TIME ZONE 'Asia/Kuala_Lumpur') AT TIME ZONE 'Asia/Kuala_Lumpur')`;
+  }
+  if (periodKey === 'yesterday') {
+    return `AND ${col} >= (DATE_TRUNC('day', NOW() AT TIME ZONE 'Asia/Kuala_Lumpur') AT TIME ZONE 'Asia/Kuala_Lumpur') - INTERVAL '1 day'`
+         + `AND ${col} <  (DATE_TRUNC('day', NOW() AT TIME ZONE 'Asia/Kuala_Lumpur') AT TIME ZONE 'Asia/Kuala_Lumpur')`;
+  }
+  const interval = PERIOD_INTERVALS[periodKey];
+  if (!interval) return '';
+  return `AND ${col} > NOW() - INTERVAL '${interval}'`;
+}
 
 // Cash wallet info for dashboard
 router.get('/cash-wallet', async (req, res) => {
@@ -145,15 +180,9 @@ router.get('/trades', async (req, res) => {
     const page = Math.max(1, parseInt(req.query.page) || 1);
     const limit = 50;
     const offset = (page - 1) * limit;
-    const period = PERIOD_INTERVALS[req.query.period];
-
     const params = [req.userId];
-    const dateFilter = period
-      ? `AND COALESCE(t.closed_at, t.created_at) > NOW() - INTERVAL '${period}'`
-      : '';
-    const dateFilterCount = period
-      ? `AND COALESCE(closed_at, created_at) > NOW() - INTERVAL '${period}'`
-      : '';
+    const dateFilter      = buildDateFilter(req.query.period);
+    const dateFilterCount = buildDateFilterSimple(req.query.period);
 
     const rows = await query(
       `SELECT t.*, ak.label as key_label, ak.platform
@@ -252,10 +281,7 @@ router.get('/pause-status', async (req, res) => {
 // CSV export of all trades
 router.get('/trades/csv', async (req, res) => {
   try {
-    const period = PERIOD_INTERVALS[req.query.period];
-    const dateFilter = period
-      ? `AND COALESCE(t.closed_at, t.created_at) > NOW() - INTERVAL '${period}'`
-      : '';
+    const dateFilter = buildDateFilter(req.query.period);
 
     const rows = await query(
       `SELECT t.created_at, t.symbol, t.direction, t.entry_price, t.exit_price,
@@ -305,10 +331,7 @@ router.get('/summary', async (req, res) => {
       return res.json(cached.data);
     }
 
-    const period = PERIOD_INTERVALS[req.query.period];
-    const dateFilter = period
-      ? `AND COALESCE(closed_at, created_at) > NOW() - INTERVAL '${period}'`
-      : '';
+    const dateFilter = buildDateFilterSimple(req.query.period);
 
     const rows = await query(
       `SELECT
@@ -372,10 +395,56 @@ router.get('/futures-wallet', async (req, res) => {
 
     // Fetch all exchange wallets in parallel
     const results = await Promise.allSettled(keys.map(async (key) => {
-      const apiKey = cryptoUtils.decrypt(key.api_key_enc, key.iv, key.auth_tag);
-      const apiSecret = cryptoUtils.decrypt(key.api_secret_enc, key.secret_iv, key.secret_auth_tag);
-
       let balance = 0, available = 0, unrealizedPnl = 0, positions = 0;
+
+      if (key.platform === 'polymarket') {
+        // Fetch USDC balance on Polygon for this wallet key
+        try {
+          const { ethers } = require('ethers');
+          const privateKey = cryptoUtils.decrypt(key.api_key_enc, key.iv, key.auth_tag);
+          const wallet = new ethers.Wallet(privateKey.startsWith('0x') ? privateKey : `0x${privateKey}`);
+          const address = wallet.address;
+
+          // Check both native USDC and bridged USDC.e on Polygon
+          const POLYGON_RPC = 'https://polygon-rpc.com';
+          const USDC_NATIVE  = '0x3c499c542cef5e3811e1192ce70d8cc03d5c3359';
+          const USDC_BRIDGED = '0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174';
+
+          const balanceOf = async (tokenAddr) => {
+            const data = '0x70a08231' + address.toLowerCase().replace('0x', '').padStart(64, '0');
+            const resp  = await fetch(POLYGON_RPC, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_call',
+                params: [{ to: tokenAddr, data }, 'latest'] }),
+            });
+            const json = await resp.json();
+            return json.result && json.result !== '0x'
+              ? parseFloat(ethers.formatUnits(BigInt(json.result), 6))
+              : 0;
+          };
+
+          const [nat, bridged] = await Promise.all([balanceOf(USDC_NATIVE), balanceOf(USDC_BRIDGED)]);
+          balance   = nat + bridged;
+          available = balance;
+
+          // Count open Polymarket positions from DB
+          const { query: dbQuery } = require('../db');
+          const posRows = await dbQuery(
+            `SELECT COUNT(*) as cnt FROM polymarket_trades
+             WHERE api_key_id = $1 AND status NOT IN ('resolved','cancelled')`,
+            [key.id]
+          ).catch(() => [{ cnt: 0 }]);
+          positions = parseInt(posRows[0]?.cnt || 0);
+        } catch { /* leave zeros if RPC fails */ }
+
+        return { id: key.id, platform: key.platform, label: key.label || 'Polymarket Wallet', balance, available, unrealizedPnl, positions };
+      }
+
+      const apiKey    = cryptoUtils.decrypt(key.api_key_enc, key.iv, key.auth_tag);
+      const apiSecret = key.api_secret_enc && key.secret_iv
+        ? cryptoUtils.decrypt(key.api_secret_enc, key.secret_iv, key.secret_auth_tag)
+        : '';
 
       if (key.platform === 'binance') {
         const { getBinanceRequestOptions } = require('../proxy-agent');
