@@ -2796,21 +2796,71 @@ EMAIL_FROM=MCT &lt;a83c06001@smtp-brevo.com&gt;</pre>
 
         <!-- Polymarket fields -->
         <div id="polymarket-key-fields" class="hidden">
-          <div class="form-group">
-            <label class="form-label" for="key-pm-label">Wallet Label</label>
-            <input class="form-input" type="text" id="key-pm-label" placeholder="e.g. Polymarket Wallet" maxlength="40" value="Polymarket Wallet">
-          </div>
-          <div class="form-group">
-            <label class="form-label" for="key-pm-private-key">
-              Polygon Private Key
-              <span class="tip-btn">?<span class="tip-text">Your Polygon (Ethereum-compatible) wallet private key. Encrypted with AES-256 — never stored in plain text. Use a dedicated wallet with only your trading USDC.</span></span>
-            </label>
-            <div class="pw-wrap">
-              <input class="form-input text-mono" type="password" id="key-pm-private-key" placeholder="0x... or 64-char hex key" autocomplete="off">
-              <button type="button" class="pw-toggle" tabindex="-1" aria-label="Show key"></button>
+
+          <!-- Step 1: Connect Wallet -->
+          <div id="pm-step-connect" style="text-align:center;padding:var(--space-4) 0;">
+            <div style="font-size:0.8rem;color:var(--color-text-muted);margin-bottom:var(--space-3);">
+              Connect your MetaMask or any Polygon wallet to get started.
+            </div>
+            <button type="button" id="btn-connect-wallet"
+              onclick="window.CryptoBot.connectPolymarketWallet()"
+              style="display:inline-flex;align-items:center;gap:10px;padding:12px 24px;
+                     background:linear-gradient(135deg,#f6851b,#e2761b);
+                     border:none;border-radius:10px;color:#fff;font-weight:700;
+                     font-size:0.95rem;cursor:pointer;width:100%;justify-content:center;">
+              <svg width="22" height="22" viewBox="0 0 35 33" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M32.958 1L19.268 10.89l2.459-5.814L32.958 1z" fill="#E2761B" stroke="#E2761B" stroke-linecap="round" stroke-linejoin="round"/>
+                <path d="M2.029 1l13.573 9.983-2.341-5.907L2.029 1zM28.07 23.533l-3.645 5.58 7.796 2.146 2.239-7.608-6.39-.118zM.558 23.651l2.225 7.608 7.782-2.146-3.63-5.58-6.377.118z" fill="#E4761B" stroke="#E4761B" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+              Connect MetaMask
+            </button>
+            <div style="margin-top:var(--space-2);font-size:0.72rem;color:var(--color-text-muted);">
+              No MetaMask? <a href="https://metamask.io/download/" target="_blank" rel="noopener" style="color:#f6851b;">Download here</a>
             </div>
           </div>
-          <div id="pm-wallet-preview" style="display:none;font-size:var(--text-xs);color:var(--color-success);margin-top:calc(var(--space-1)*-1);margin-bottom:var(--space-2);font-family:var(--font-mono);word-break:break-all;"></div>
+
+          <!-- Step 2: Wallet connected — show address + ask for private key -->
+          <div id="pm-step-key" class="hidden">
+            <!-- Connected address display -->
+            <div id="pm-connected-address" style="display:flex;align-items:center;gap:10px;padding:10px 14px;
+                 background:rgba(124,58,237,0.12);border:1px solid #7c3aed;border-radius:8px;
+                 margin-bottom:var(--space-3);">
+              <span style="font-size:1.2rem;">✅</span>
+              <div>
+                <div style="font-size:0.72rem;color:#a78bfa;font-weight:600;margin-bottom:2px;">WALLET CONNECTED</div>
+                <div id="pm-address-text" style="font-family:var(--font-mono);font-size:0.78rem;color:var(--color-text);word-break:break-all;"></div>
+              </div>
+            </div>
+
+            <!-- Label -->
+            <div class="form-group">
+              <label class="form-label" for="key-pm-label">Wallet Label</label>
+              <input class="form-input" type="text" id="key-pm-label" placeholder="e.g. Polymarket Wallet" maxlength="40">
+            </div>
+
+            <!-- Why we need the private key -->
+            <div style="background:rgba(245,158,11,0.1);border:1px solid rgba(245,158,11,0.4);
+                        border-radius:8px;padding:12px;margin-bottom:var(--space-3);font-size:0.78rem;
+                        color:var(--color-text-muted);line-height:1.6;">
+              <strong style="color:#fbbf24;">⚡ Why private key?</strong><br>
+              MetaMask can verify your address but can't sign trades for the bot automatically.
+              The bot runs 24/7 on a server — it needs your private key to sign Polymarket orders
+              while you're offline. Use a <strong style="color:var(--color-text);">dedicated wallet</strong> with only your trading USDC — not your main wallet.
+            </div>
+
+            <!-- Private key input -->
+            <div class="form-group">
+              <label class="form-label" for="key-pm-private-key">Private Key
+                <span style="font-size:0.7rem;font-weight:400;color:var(--color-text-muted);"> — from MetaMask: Account → Details → Show Private Key</span>
+              </label>
+              <div class="pw-wrap">
+                <input class="form-input text-mono" type="password" id="key-pm-private-key"
+                  placeholder="0x..." autocomplete="off">
+                <button type="button" class="pw-toggle" tabindex="-1" aria-label="Show key"></button>
+              </div>
+            </div>
+          </div>
+
         </div>
 
         <div id="add-key-error" class="form-error" role="alert"></div>

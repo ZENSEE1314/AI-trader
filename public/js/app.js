@@ -5314,6 +5314,60 @@
 
   // ----- Platform change (show static IP info) -----
 
+  // ----- MetaMask wallet connect for Polymarket -----
+
+  async function connectPolymarketWallet() {
+    const btn = $('#btn-connect-wallet');
+    if (!window.ethereum) {
+      showToast('MetaMask not detected. Please install MetaMask and try again.', 'error');
+      window.open('https://metamask.io/download/', '_blank', 'noopener');
+      return;
+    }
+    try {
+      if (btn) { btn.disabled = true; btn.textContent = 'Connecting…'; }
+
+      // Request accounts — MetaMask popup fires here
+      const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
+      const address = accounts[0];
+      if (!address) throw new Error('No account returned');
+
+      // Optional: verify ownership by signing a human-readable message
+      // (no private key exposed — just proves they control the wallet)
+      const msg = `Connect to MCT Polymarket Copy Trader\n\nWallet: ${address}\nTimestamp: ${Date.now()}`;
+      try {
+        await window.ethereum.request({
+          method: 'personal_sign',
+          params: [msg, address],
+        });
+      } catch (signErr) {
+        // User rejected signature — still show step 2, just skip verification
+      }
+
+      // Show step 2 — address confirmed, now ask for private key
+      const stepConnect = $('#pm-step-connect');
+      const stepKey     = $('#pm-step-key');
+      const addrEl      = $('#pm-address-text');
+      const labelEl     = $('#key-pm-label');
+      const submitBtn   = $('#btn-submit-key');
+
+      if (addrEl)  addrEl.textContent  = address;
+      if (labelEl && (!labelEl.value || labelEl.value === 'Polymarket Wallet')) {
+        labelEl.value = `Polymarket ${address.slice(0, 6)}…${address.slice(-4)}`;
+      }
+      if (stepConnect) stepConnect.classList.add('hidden');
+      if (stepKey)     stepKey.classList.remove('hidden');
+      if (submitBtn)   submitBtn.classList.remove('hidden');
+
+      // Focus the private key field
+      $('#key-pm-private-key')?.focus();
+
+    } catch (err) {
+      if (btn) { btn.disabled = false; btn.innerHTML = '<svg width="22" height="22" viewBox="0 0 35 33" fill="none"><path d="M32.958 1L19.268 10.89l2.459-5.814L32.958 1z" fill="#E2761B" stroke="#E2761B" stroke-linecap="round" stroke-linejoin="round"/><path d="M2.029 1l13.573 9.983-2.341-5.907L2.029 1zM28.07 23.533l-3.645 5.58 7.796 2.146 2.239-7.608-6.39-.118zM.558 23.651l2.225 7.608 7.782-2.146-3.63-5.58-6.377.118z" fill="#E4761B" stroke="#E4761B" stroke-linecap="round" stroke-linejoin="round"/></svg> Connect MetaMask'; }
+      const msg = err.code === 4001 ? 'Connection rejected — please approve MetaMask.' : err.message;
+      showError($('#add-key-error'), msg);
+    }
+  }
+
   function onPlatformChange(val) {
     const isPoly = val === 'polymarket';
 
