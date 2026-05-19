@@ -146,6 +146,17 @@ function calculateTrailingStep(
     : (entryPrice - currentPrice) / entryPrice;
   const capitalPct = pricePct * leverage;
 
+  // ── Early lock tier (user request): +20% capital trigger → +15% lock ──
+  // Fires before safety tier so the trade gets its first SL move early.
+  if (userTrailStepPct === 0 && lastStep === 0 && capitalPct >= 0.20) {
+    const earlyLock = 0.15;
+    const lockPricePct = earlyLock / leverage;
+    const newSlPrice = isLong
+      ? entryPrice * (1 + lockPricePct)
+      : entryPrice * (1 - lockPricePct);
+    return { stepped: true, newSlPrice, newLastStep: earlyLock };
+  }
+
   // ── Safety tier: fee-aware lock guarantees +10% net capital after all fees ──
   // safetyLock  = NET_PROFIT_TARGET + taker fees (both legs) + 1 funding period
   // safetyTrigger = safetyLock + SAFETY_GAP  (always 10% above lock)

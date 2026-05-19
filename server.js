@@ -54,6 +54,7 @@ setInterval(cleanBotLogs, 6 * 60 * 60 * 1000); // every 6 hours
 app.use(compression({ threshold: 1024 }));
 
 // Skip JSON parsing for Stripe webhook — needs raw body for signature verification
+app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 app.get('/login', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 app.get('/signup', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 app.use((req, res, next) => {

@@ -10,6 +10,7 @@ const aiLearner = require('./ai-learner');
 // V4 SMC strategy: VWAP 2σ zones + 15m/1m BOS+CHoCH confluence
 // Rules: bull days → LONG only | bear days → SHORT only | ranging → nothing
 const { scanV4SMC, ACTIVE_SYMBOLS, SYMBOL_LEVERAGE, SYMBOL_SL_PCT } = require('./strategy-v4-smc');
+const { scanHommaSMC } = require('./strategy-homma-smc');
 // Keep 3-timing import for calcTrail3Timing + getSessionMode (still used elsewhere)
 const { getSessionMode } = require('./strategy-3timing'); // v4: trailing SL uses calculateTrailingStep (cycle.js) instead of calcTrail3Timing
 
@@ -17,6 +18,12 @@ const { getSentimentScores } = require('./sentiment-scraper');
 const { log: bLog } = require('./bot-logger');
 const { getBinanceRequestOptions, getFetchOptions } = require('./proxy-agent');
 const { query: dbQuery } = require('./db');
+const { fetchKlines } = require('./indicator-library');
+const { analyzeRecentTrades, checkPerformanceAlert } = require('./pattern-analyzer');
+
+// ── Performance alert throttling ─────────────────────────────
+let _lastPerfAlertTime = 0;
+const PERF_ALERT_COOLDOWN_MS = 60 * 60 * 1000; // 1 hour between alerts
 
 // ── Trail tier tables — single source of truth shared with trail-watchdog.js ──
 const {
@@ -30,6 +37,46 @@ const {
 let _onTradeOutcome = null;
 function onTradeOutcome(fn) { _onTradeOutcome = fn; }
 function fireTradeOutcome(data) { if (_onTradeOutcome) { try { _onTradeOutcome(data); } catch (_) {} } }
+
+// ── ADX helper ─────────────────────────────────────────────
+function calcADX(highs, lows, closes, period = 14) {
+  if (highs.length < period + 1) return { adx: 0, diPlus: 0, diMinus: 0 };
+
+  let tr = 0, dmPlus = 0, dmMinus = 0;
+  for (let i = 1; i <= period; i++) {
+    const h = highs[i], l = lows[i], c = closes[i];
+    const ph = highs[i - 1], pl = lows[i - 1];
+    const tr0 = Math.max(h - l, Math.abs(h - closes[i - 1]), Math.abs(l - closes[i - 1]));
+    const dmP = (h - ph) > (pl - l) && (h - ph) > 0 ? (h - ph) : 0;
+    const dmM = (pl - l) > (h - ph) && (pl - l) > 0 ? (pl - l) : 0;
+    tr += tr0; dmPlus += dmP; dmMinus += dmM;
+  }
+
+  let trSmooth = tr, dmPlusSmooth = dmPlus, dmMinusSmooth = dmMinus;
+  let diPlus = 100 * dmPlusSmooth / trSmooth;
+  let diMinus = 100 * dmMinusSmooth / trSmooth;
+  let dx = 100 * Math.abs(diPlus - diMinus) / (diPlus + diMinus || 1);
+  let adx = dx;
+
+  for (let i = period + 1; i < highs.length; i++) {
+    const h = highs[i], l = lows[i];
+    const ph = highs[i - 1], pl = lows[i - 1];
+    const tr0 = Math.max(h - l, Math.abs(h - closes[i - 1]), Math.abs(l - closes[i - 1]));
+    const dmP = (h - ph) > (pl - l) && (h - ph) > 0 ? (h - ph) : 0;
+    const dmM = (pl - l) > (h - ph) && (pl - l) > 0 ? (pl - l) : 0;
+
+    trSmooth = trSmooth - (trSmooth / period) + tr0;
+    dmPlusSmooth = dmPlusSmooth - (dmPlusSmooth / period) + dmP;
+    dmMinusSmooth = dmMinusSmooth - (dmMinusSmooth / period) + dmM;
+
+    diPlus = 100 * dmPlusSmooth / trSmooth;
+    diMinus = 100 * dmMinusSmooth / trSmooth;
+    dx = 100 * Math.abs(diPlus - diMinus) / (diPlus + diMinus || 1);
+    adx = ((adx * (period - 1)) + dx) / period;
+  }
+  return { adx, diPlus, diMinus };
+}
+// ──────────────────────────────────────────────────────────
 
 const API_KEY        = process.env.BINANCE_API_KEY    || '';
 const API_SECRET     = process.env.BINANCE_API_SECRET || '';
@@ -60,10 +107,9 @@ function injectTVSignal(signal) {
 }
 
 let TOKEN_LEVERAGE = {
-  BTCUSDT: 125,  // 0.25% SL → 31.3% risk/trade
-  ETHUSDT: 125,  // 0.25% SL → 31.3% risk/trade
-  BNBUSDT: 200,  // 0.25% SL → 50.0% risk/trade
-  SOLUSDT: 150,  // 0.20% SL → 30.0% risk/trade
+  BTCUSDT: 75,  // 0.40% SL × 75 = 30% risk/trade (uniform 75x — backtest-proven)
+  ETHUSDT: 75,  // 0.40% SL × 75 = 30% risk/trade
+  SOLUSDT: 75,  // 0.40% SL × 75 = 30% risk/trade
 };
 
 async function loadV4Config() {
@@ -394,6 +440,26 @@ function detectSwings(klines, len) {
   return swings;
 }
 
+// ── 5m REVERSAL EXIT CHECK (structure-reversal exit for Rev-SMC trades) ──
+// LONG exits when a 5m LH pivot forms (lower high = momentum shift down)
+// SHORT exits when a 5m HL pivot forms (higher low = momentum shift up)
+function shouldExitRev(klines5m, direction) {
+  const swings = detectSwings(klines5m, 5);
+  const swingHighs = swings.filter(s => s.type === 'high');
+  const swingLows  = swings.filter(s => s.type === 'low');
+  if (direction === 'LONG' && swingHighs.length >= 2) {
+    const recent = swingHighs[swingHighs.length - 1];
+    const prev   = swingHighs[swingHighs.length - 2];
+    return recent.price < prev.price; // LH = lower high
+  }
+  if (direction === 'SHORT' && swingLows.length >= 2) {
+    const recent = swingLows[swingLows.length - 1];
+    const prev   = swingLows[swingLows.length - 2];
+    return recent.price > prev.price; // HL = higher low
+  }
+  return false;
+}
+
 // ── 15m EXIT CHECK (structure break using Zeiierman swings) ──
 function shouldExit15m(klines15, entryPrice, direction) {
   const swings = detectSwings(klines15, SWING_LENGTHS['15m']);
@@ -639,7 +705,7 @@ async function openTrade(client, pick, wallet) {
 
   // Get AI-tuned params for leverage and sizing
   const aiParams = await aiLearner.getOptimalParams();
-  const leverage = getLeverage(sym, price, aiParams);
+  const leverage = pick.leverage || getLeverage(sym, price, aiParams);
   const walletSizePct = CAPITAL_PER_TRADE; // 10% of wallet — single source of truth
 
   await client.setLeverage({ symbol: sym, leverage });
@@ -671,10 +737,10 @@ async function openTrade(client, pick, wallet) {
   const slDist = slPricePct;
   const initialSlPrice = fmtP(isLong ? price * (1 - slPricePct) : price * (1 + slPricePct));
 
-  // TP targets (no hard close — trailing SL handles exit, TP is just reference)
-  const tp1 = fmtP(isLong ? price * (1 + tpPricePct) : price * (1 - tpPricePct));
-  const tp2 = fmtP(isLong ? price * (1 + tpPricePct * 1.5) : price * (1 - tpPricePct * 1.5));
-  const tp3 = fmtP(isLong ? price * (1 + tpPricePct * 2.0) : price * (1 - tpPricePct * 2.0));
+  // TP targets — capital %-based scale-out ladder (30% / 40% / 50% capital)
+  const tp1 = fmtP(isLong ? price * (1 + 0.30 / leverage) : price * (1 - 0.30 / leverage));
+  const tp2 = fmtP(isLong ? price * (1 + 0.40 / leverage) : price * (1 - 0.40 / leverage));
+  const tp3 = fmtP(isLong ? price * (1 + 0.50 / leverage) : price * (1 - 0.50 / leverage));
 
   // Position size: 10% of wallet = margin, notional = margin * leverage
   const MIN_NOTIONAL = 5.5;
@@ -737,7 +803,7 @@ async function openTrade(client, pick, wallet) {
 
   tradeState.set(sym, {
     entry: price, tp1, tp2, tp3, sl: initialSlPrice, qty, isLong,
-    tpHit1: false, tpHit2: false,
+    scaleOutStage: 0,
     pricePrec, qtyPrec,
     setup: pick.setup,
     comboId: pick.comboId || 15,
@@ -750,6 +816,7 @@ async function openTrade(client, pick, wallet) {
     trailingSlLastStep: 0,
     leverage,
     vwapZone: pick.vwapBandPos || null,
+    exitMode: pick.exitMode || 'TRAIL',
     // v2 flag: use swing-point 30%/31% trailing logic instead of capital-tier logic
     strategyVersion: pick.version || null,
   });
@@ -784,11 +851,32 @@ async function checkTrailingStop(client) {
         const state = tradeState.get(sym);
         if (state) {
           let exitPrice = state.entry;
+          let realizedPnl = null;
+          let tradingFee = 0;
           try {
-            const trades = await client.getAccountTrades({ symbol: sym, limit: 5 });
-            if (trades && trades.length > 0) {
-              const lastTrade = trades[trades.length - 1];
-              exitPrice = parseFloat(lastTrade.price);
+            // Fetch fills since position opened — avoid limit=5 missing close fill
+            const fills = await client.getAccountTrades({ symbol: sym, startTime: state.openedAt, limit: 50 });
+            if (fills && fills.length > 0) {
+              // Sum fees from all fills
+              for (const f of fills) {
+                tradingFee += Math.abs(parseFloat(f.commission || 0));
+              }
+              // Find close fills (opposite side of entry)
+              const closeSide = state.isLong ? 'SELL' : 'BUY';
+              const closeFills = fills.filter(f => f.side === closeSide);
+              if (closeFills.length > 0) {
+                let totalQty = 0, totalValue = 0, totalPnl = 0;
+                for (const f of closeFills) {
+                  const fQty = parseFloat(f.qty);
+                  totalQty += fQty;
+                  totalValue += fQty * parseFloat(f.price);
+                  totalPnl += parseFloat(f.realizedPnl || 0);
+                }
+                if (totalQty > 0) exitPrice = totalValue / totalQty;
+                if (totalPnl !== 0) realizedPnl = totalPnl;
+              } else {
+                exitPrice = parseFloat(fills[fills.length - 1].price);
+              }
             }
           } catch {
             const ticker = await client.getSymbolPriceTicker({ symbol: sym }).catch(() => null);
@@ -949,7 +1037,61 @@ async function checkTrailingStop(client) {
         }
       } catch (_) {}
 
+      // ── 5m Structure-Reversal EXIT (Rev-SMC trades only) ──
       const state = tradeState.get(sym);
+      if (state && state.exitMode === 'REV') {
+        try {
+          const klines5 = await client.getKlines({ symbol: sym, interval: '5m', limit: 50 });
+          if (shouldExitRev(klines5, isLong ? 'LONG' : 'SHORT')) {
+            log(`Exit [${isLong ? 'LONG' : 'SHORT'}] ${sym}: 5m structure reversal (Rev)`);
+            try { await client.cancelAllOpenOrders({ symbol: sym }); } catch (_) {}
+            try { await client.cancelAllAlgoOpenOrders({ symbol: sym }); } catch (_) {}
+            await client.submitNewOrder({ symbol: sym, side: closeSide, type: 'MARKET', quantity: Math.abs(amt), reduceOnly: 'true' });
+
+            await aiLearner.recordTrade({
+              symbol: sym, direction: isLong ? 'LONG' : 'SHORT',
+              setup: state.setup || 'unknown', entryPrice: entry, exitPrice: cur,
+              pnlPct: gain * 100, leverage: state.leverage || getLeverage(sym, entry, await aiLearner.getOptimalParams()),
+              durationMin: Math.round((Date.now() - state.openedAt) / 60000),
+              session: aiLearner.getCurrentSession(),
+              slDistancePct: Math.abs(entry - state.sl) / entry * 100,
+              tpDistancePct: Math.abs(state.tp1 - entry) / entry * 100,
+              tf15m: state.tf15m || null, tf3m: state.tf3m || null, tf1m: state.tf1m || null,
+              marketStructure: state.marketStructure || null,
+              vwapZone: state.vwapZone || null,
+              exitReason: 'structure_reversal_5m',
+              comboId: state.comboId || 15,
+            });
+            if (gain < 0) {
+              await aiLearner.performLossAutopsy({
+                symbol: sym, setup: state.setup || 'unknown',
+                direction: isLong ? 'LONG' : 'SHORT',
+                session: aiLearner.getCurrentSession(),
+                marketStructure: state.marketStructure || 'unknown',
+                vwapZone: state.vwapZone || null,
+              });
+            } else {
+              await aiLearner.performWinAutopsy({
+                symbol: sym, setup: state.setup || 'unknown',
+                direction: isLong ? 'LONG' : 'SHORT',
+                session: aiLearner.getCurrentSession(),
+                marketStructure: state.marketStructure || 'unknown',
+                vwapZone: state.vwapZone || null,
+              });
+            }
+            tradeState.delete(sym);
+            await notify(
+              `*Exit: 5m Rev*
+` +
+              `*${sym}* ${isLong ? 'LONG' : 'SHORT'}\n` +
+              `Entry: \`$${fmtPrice(entry)}\` Exit: \`$${fmtPrice(cur)}\`\n` +
+              `PnL: *${gain >= 0 ? '+' : ''}${(gain * 100).toFixed(2)}%*`
+            );
+            continue;
+          }
+        } catch (_) {}
+      }
+
       if (!state) continue;
 
       // ── Spike TP: close at 0.5% profit if token spiked ──
@@ -1012,10 +1154,13 @@ async function checkTrailingStop(client) {
       }
 
       // ── Trailing SL step check (v4 tier ladder) ─────────────
+      // Skip for Rev-SMC trades — they exit on 5m structure reversal
       let trailResult;
-      {
+      if (state.exitMode === 'REV') {
+        trailResult = null;
+      } else {
         const lev      = state.leverage || 20;
-        const lastStep = state.lastStep || 0;
+        const lastStep = state.trailingSlLastStep || 0;
         const step = calculateTrailingStep(state.entry, cur, state.isLong, lastStep, lev);
         if (step && step.newSlPrice) {
           const betterSl = state.isLong
@@ -1070,77 +1215,124 @@ async function checkTrailingStop(client) {
       const fmtP = (p) => parseFloat(p.toFixed(state.pricePrec));
       const floorQ = (q) => Math.floor(q * Math.pow(10, state.qtyPrec)) / Math.pow(10, state.qtyPrec);
       const origQty = Math.abs(state.qty);
+      const curQty  = Math.abs(amt);
 
-      // TP1 hit: close 30% (not 50% — let winners run), SL -> break even
-      if (!state.tpHit1) {
-        const tp1Hit = isLong ? cur >= state.tp1 : cur <= state.tp1;
-        if (tp1Hit) {
-          state.tpHit1 = true;
-          const closeQty = floorQ(origQty * 0.30); // 30% not 50%
-          // SL moves to entry + small profit buffer (not exact BE — gives room)
-          const bePad = isLong ? state.entry * 1.001 : state.entry * 0.999; // 0.1% above/below entry
-          const newSl = fmtP(bePad);
-          log(`TP1 hit ${sym} @ $${fmtPrice(cur)}: closing 30%, SL -> BE+0.1%`);
-          try {
-            try { await client.cancelAllOpenOrders({ symbol: sym }); } catch (_) {}
-            try { await client.cancelAllAlgoOpenOrders({ symbol: sym }); } catch (_) {}
-            if (closeQty > 0) {
-              await client.submitNewOrder({ symbol: sym, side: closeSide, type: 'MARKET', quantity: closeQty, reduceOnly: 'true' });
-            }
-            await client.submitNewAlgoOrder({
-              algoType: 'CONDITIONAL', symbol: sym, side: closeSide,
-              type: 'STOP_MARKET', triggerPrice: newSl,
-              closePosition: 'true', workingType: 'MARK_PRICE',
-            });
-            await client.submitNewAlgoOrder({
-              algoType: 'CONDITIONAL', symbol: sym, side: closeSide,
-              type: 'TAKE_PROFIT_MARKET', triggerPrice: state.tp3,
-              closePosition: 'true', workingType: 'MARK_PRICE',
-            });
-          } catch (e) { log(`TP1 exec warn: ${e.message}`); state.tpHit1 = false; }
-          await notify(
-            `*TP1 Hit!* — *${sym}* ${isLong ? 'LONG' : 'SHORT'}\n` +
-            `30% secured @ \`$${fmtPrice(cur)}\`\n` +
-            `SL -> BE+buffer | 70% riding → TP2: \`$${fmtPrice(state.tp2)}\``
+      // ── Capital %-based scale-out ladder ─────────────────────────
+      //   +20% capital → early SL lock +15%  (handled by trail-tiers.js)
+      //   +30% capital → close 50%,     SL to +30%
+      //   +40% capital → close 50% of remaining, SL to +40%
+      //   +50% capital → close rest
+      const lev = state.leverage || 20;
+      const capitalPct = gain * 100 * lev; // gain = price fraction, capital% = price% * leverage
+
+      if (state.scaleOutStage === undefined) state.scaleOutStage = 0;
+
+      // Scale-out ladder — skipped for Rev-SMC trades (they ride to Rev exit)
+      if (state.exitMode !== 'REV' && state.scaleOutStage < 1 && capitalPct >= 30) {
+        state.scaleOutStage = 1;
+        const closeQty = floorQ(curQty * 0.50);
+        const slPricePct = 0.30 / lev;
+        const newSl = fmtP(isLong ? state.entry * (1 + slPricePct) : state.entry * (1 - slPricePct));
+        log(`Scale-out 1 ${sym} @ +${capitalPct.toFixed(1)}% capital: closing 50% (${closeQty}), SL -> +30%`);
+        try {
+          try { await client.cancelAllOpenOrders({ symbol: sym }); } catch (_) {}
+          try { await client.cancelAllAlgoOpenOrders({ symbol: sym }); } catch (_) {}
+          if (closeQty > 0) {
+            await client.submitNewOrder({ symbol: sym, side: closeSide, type: 'MARKET', quantity: closeQty, reduceOnly: 'true' });
+          }
+          await client.submitNewAlgoOrder({
+            algoType: 'CONDITIONAL', symbol: sym, side: closeSide,
+            type: 'STOP_MARKET', triggerPrice: newSl,
+            closePosition: 'true', workingType: 'MARK_PRICE',
+          });
+          await client.submitNewAlgoOrder({
+            algoType: 'CONDITIONAL', symbol: sym, side: closeSide,
+            type: 'TAKE_PROFIT_MARKET', triggerPrice: state.tp3,
+            closePosition: 'true', workingType: 'MARK_PRICE',
+          });
+        } catch (e) { log(`Scale-out 1 exec warn: ${e.message}`); state.scaleOutStage = 0; }
+
+        // Sync in-memory SL state so trailing SL ratchet respects the new lock
+        state.trailingSlPrice = newSl;
+        state.trailingSlLastStep = 0.30;
+        state.sl = newSl;
+        try {
+          const db = require('./db');
+          await db.query(
+            `UPDATE trades SET trailing_sl_price = $1, trailing_sl_last_step = $2 WHERE symbol = $3 AND status = 'OPEN'`,
+            [newSl, 0.30, sym]
           );
-          continue;
-        }
+        } catch (_) {}
+
+        await notify(
+          `*TP1 Hit!* — *${sym}* ${isLong ? 'LONG' : 'SHORT'}\n` +
+          `50% secured @ +30% capital | SL locked +30%\n` +
+          `Riding 50% → TP2 (+40%) / TP3 (+50%)`
+        );
+        continue;
       }
 
-      // TP2 hit: close 40% more (total 70% taken), SL -> halfway between entry and TP1
-      if (state.tpHit1 && !state.tpHit2) {
-        const tp2Hit = isLong ? cur >= state.tp2 : cur <= state.tp2;
-        if (tp2Hit) {
-          state.tpHit2 = true;
-          const closeQty = floorQ(origQty * 0.40); // 40% not 25%
-          // SL moves to midpoint between entry and TP1 (locks meaningful profit)
-          const midSl = (state.entry + state.tp1) / 2;
-          const newSl = fmtP(midSl);
-          log(`TP2 hit ${sym} @ $${fmtPrice(cur)}: closing 40%, SL -> mid(entry,TP1)`);
-          try {
-            try { await client.cancelAllOpenOrders({ symbol: sym }); } catch (_) {}
-            try { await client.cancelAllAlgoOpenOrders({ symbol: sym }); } catch (_) {}
-            if (closeQty > 0) {
-              await client.submitNewOrder({ symbol: sym, side: closeSide, type: 'MARKET', quantity: closeQty, reduceOnly: 'true' });
-            }
-            await client.submitNewAlgoOrder({
-              algoType: 'CONDITIONAL', symbol: sym, side: closeSide,
-              type: 'STOP_MARKET', triggerPrice: newSl,
-              closePosition: 'true', workingType: 'MARK_PRICE',
-            });
-            await client.submitNewAlgoOrder({
-              algoType: 'CONDITIONAL', symbol: sym, side: closeSide,
-              type: 'TAKE_PROFIT_MARKET', triggerPrice: state.tp3,
-              closePosition: 'true', workingType: 'MARK_PRICE',
-            });
-          } catch (e) { log(`TP2 exec warn: ${e.message}`); state.tpHit2 = false; }
-          await notify(
-            `*TP2 Hit!* — *${sym}* ${isLong ? 'LONG' : 'SHORT'}\n` +
-            `40% secured @ \`$${fmtPrice(cur)}\` (70% total taken)\n` +
-            `SL locked at profit | Riding 30% → TP3: \`$${fmtPrice(state.tp3)}\``
+      if (state.exitMode !== 'REV' && state.scaleOutStage < 2 && capitalPct >= 40) {
+        state.scaleOutStage = 2;
+        const closeQty = floorQ(curQty * 0.50);
+        const slPricePct = 0.40 / lev;
+        const newSl = fmtP(isLong ? state.entry * (1 + slPricePct) : state.entry * (1 - slPricePct));
+        log(`Scale-out 2 ${sym} @ +${capitalPct.toFixed(1)}% capital: closing 50% of remaining (${closeQty}), SL -> +40%`);
+        try {
+          try { await client.cancelAllOpenOrders({ symbol: sym }); } catch (_) {}
+          try { await client.cancelAllAlgoOpenOrders({ symbol: sym }); } catch (_) {}
+          if (closeQty > 0) {
+            await client.submitNewOrder({ symbol: sym, side: closeSide, type: 'MARKET', quantity: closeQty, reduceOnly: 'true' });
+          }
+          await client.submitNewAlgoOrder({
+            algoType: 'CONDITIONAL', symbol: sym, side: closeSide,
+            type: 'STOP_MARKET', triggerPrice: newSl,
+            closePosition: 'true', workingType: 'MARK_PRICE',
+          });
+          await client.submitNewAlgoOrder({
+            algoType: 'CONDITIONAL', symbol: sym, side: closeSide,
+            type: 'TAKE_PROFIT_MARKET', triggerPrice: state.tp3,
+            closePosition: 'true', workingType: 'MARK_PRICE',
+          });
+        } catch (e) { log(`Scale-out 2 exec warn: ${e.message}`); state.scaleOutStage = 1; }
+
+        state.trailingSlPrice = newSl;
+        state.trailingSlLastStep = 0.40;
+        state.sl = newSl;
+        try {
+          const db = require('./db');
+          await db.query(
+            `UPDATE trades SET trailing_sl_price = $1, trailing_sl_last_step = $2 WHERE symbol = $3 AND status = 'OPEN'`,
+            [newSl, 0.40, sym]
           );
-          continue;
-        }
+        } catch (_) {}
+
+        await notify(
+          `*TP2 Hit!* — *${sym}* ${isLong ? 'LONG' : 'SHORT'}\n` +
+          `25% secured @ +40% capital (75% total taken)\n` +
+          `SL locked +40% | Riding 25% → TP3 (+50%)`
+        );
+        continue;
+      }
+
+      if (state.exitMode !== 'REV' && state.scaleOutStage < 3 && capitalPct >= 50) {
+        state.scaleOutStage = 3;
+        const closeQty = floorQ(curQty);
+        log(`Scale-out 3 ${sym} @ +${capitalPct.toFixed(1)}% capital: closing rest (${closeQty})`);
+        try {
+          try { await client.cancelAllOpenOrders({ symbol: sym }); } catch (_) {}
+          try { await client.cancelAllAlgoOpenOrders({ symbol: sym }); } catch (_) {}
+          if (closeQty > 0) {
+            await client.submitNewOrder({ symbol: sym, side: closeSide, type: 'MARKET', quantity: closeQty, reduceOnly: 'true' });
+          }
+        } catch (e) { log(`Scale-out 3 exec warn: ${e.message}`); state.scaleOutStage = 2; }
+
+        await notify(
+          `*TP3 Hit!* — *${sym}* ${isLong ? 'LONG' : 'SHORT'}\n` +
+          `25% secured @ +50% capital (100% closed)\n` +
+          `Full position exited`
+        );
+        continue;
       }
     }
   } catch (e) { log(`checkTrailingStop err: ${e.message}`); }
@@ -1275,6 +1467,36 @@ async function main() {
     const topNRows = await dbQuery('SELECT MAX(top_n_coins) as max_n FROM api_keys WHERE enabled = true');
     const topNCoins = parseInt(topNRows[0]?.max_n) || 50;
 
+    // ── Pattern Analyzer — learn from recent trades ────────────
+    let patternRecs = null;
+    try {
+      patternRecs = await analyzeRecentTrades(null, 15);
+      if (patternRecs.ready) {
+        bLog.ai(`[PatternAnalyzer] Last ${patternRecs.totalTrades} trades: ${patternRecs.winRate}% WR`);
+        for (const rec of patternRecs.recommendations.slice(0, 3)) {
+          bLog.ai(`[PatternAnalyzer] ${rec}`);
+        }
+      }
+    } catch (paErr) {
+      bLog.error(`[PatternAnalyzer] error: ${paErr.message}`);
+    }
+
+    // ── Performance Alert — last 5 trades since this deploy ─────
+    try {
+      const perf = await checkPerformanceAlert(40, 5);
+      if (perf.alert) {
+        const nowMs = Date.now();
+        if (nowMs - _lastPerfAlertTime > PERF_ALERT_COOLDOWN_MS) {
+          _lastPerfAlertTime = nowMs;
+          await notify(perf.message);
+        }
+      } else if (perf.winRate !== undefined) {
+        bLog.ai(`[Performance] ${perf.message}`);
+      }
+    } catch (perfErr) {
+      bLog.error(`[PerformanceAlert] error: ${perfErr.message}`);
+    }
+
     // ── Kronos AI Batch Scan: only the 4 watchlist tokens ──────
     let kronosPredictions = null;
     try {
@@ -1312,17 +1534,19 @@ async function main() {
       _tvSignalQueue.clear();
     }
 
-    // ── Internal V4-SMC scan (runs when no TV signal for a symbol) ──
+    // ── Internal strategy scans ──
+    // BTC/ETH → V4 SMC (1m trigger + trailing SL tiers)
+    // BNB/SOL → Rev SMC (5m trigger + structure-reversal exit)
     const tvSymbols = new Set(signals.map(s => s.symbol));
     try {
       const rawV4 = await scanV4SMC(msg => bLog.scan(msg));
-      if ((rawV4 || []).length > 0) {
-        const filtered = rawV4.filter(s => !tvSymbols.has(s.symbol));
-        signals.push(...filtered);
-        bLog.scan(`V4-SMC: ${rawV4.length} signal(s), ${filtered.length} used (${rawV4.length - filtered.length} overridden by TV webhook)`);
-      }
+      const rawHomma = await scanHommaSMC(msg => bLog.scan(msg));
+      const v4Filtered = (rawV4 || []).filter(s => !tvSymbols.has(s.symbol) && (s.symbol === 'BTCUSDT' || s.symbol === 'ETHUSDT'));
+      const hommaFiltered = (rawHomma || []).filter(s => !tvSymbols.has(s.symbol) && (s.symbol === 'BNBUSDT' || s.symbol === 'SOLUSDT'));
+      signals.push(...v4Filtered, ...hommaFiltered);
+      bLog.scan(`V4-SMC: ${v4Filtered.length} signal(s) | Rev-SMC: ${revFiltered.length} signal(s)`);
     } catch (tErr) {
-      bLog.error(`V4-SMC scan failed: ${tErr.message}`);
+      bLog.error(`Strategy scan failed: ${tErr.message}`);
     }
 
     if (!signals.length) {
@@ -1366,7 +1590,7 @@ async function main() {
       // ── HARD-BLOCK losers identified from 30d live WR report ──
       // 1. VWAPTrend setups: 0% WR, -$0.56
       // 2. BreakRetest+OP+VolSpike: 0% WR, -$0.51
-      // 3. SOLUSDT LONG: 67% WR but -$4.91 net (worst $ loss of all combos)
+      // Hard-block historical 0% WR setups — these are strategy names, not symbols
       const setupName = pick.setupName || pick.setup || '';
       if (setupName.includes('VWAPTrend')) {
         bLog.trade(`BLOCKED: ${pick.symbol} ${pick.direction} setup=${setupName} — historical 0% WR loser`);
@@ -1376,9 +1600,28 @@ async function main() {
         bLog.trade(`BLOCKED: ${pick.symbol} ${pick.direction} setup=${setupName} — historical 0% WR loser`);
         continue;
       }
-      if (pick.symbol === 'SOLUSDT' && pick.direction === 'LONG') {
-        bLog.trade(`BLOCKED: SOLUSDT LONG — historical -$4.91 net (worst combo by $ over 30d)`);
-        continue;
+
+      // ── TradingView MANUAL OVERRIDE ────────────────────────────
+      // If user sends override=true from TV webhook, bypass ALL gates
+      // and execute immediately. Log it loud for audit trail.
+      if (pick.source === 'tradingview' && pick.override === true) {
+        const overrideMsg = `🎚️ *MANUAL OVERRIDE*\n${pick.symbol} ${pick.direction} @ $${fmtPrice(pick.price)}\nReason: ${pick.reason || 'none'}\nBy-passing: EMA200, ADX, structure, loss-tracker`;
+        bLog.trade(`TV-OVERRIDE: ${pick.symbol} ${pick.direction} @ ${pick.price} — BYPASSING ALL GATES`);
+        await notify(overrideMsg);
+        // Skip directly to execution
+        const result = await executeForAllUsers(pick);
+        if (result === 'ALL_TOO_EXPENSIVE' || result === 'NO_KEYS') {
+          bLog.trade(`TV-OVERRIDE FAILED: ${pick.symbol} — ${result}`);
+          continue;
+        }
+        executed = true;
+        continue; // next signal
+      }
+
+      // ── TradingView WEBHOOK (non-override) ─────────────────────
+      // Runs through same gates as internal signals, but with TV-specific logging
+      if (pick.source === 'tradingview' && !pick.override) {
+        bLog.trade(`TV-VALIDATED: ${pick.symbol} ${pick.direction} — running through SMC+Homma gates`);
       }
 
       // ── Signal-type loss blocker ───────────────────────────────
@@ -1441,6 +1684,39 @@ async function main() {
         bLog.trade(`FINAL GATE BLOCKED: ${pick.symbol} LONG rejected — price below EMA200 (bearish bias)`);
         continue;
       }
+
+      // ── Trend-strength gate ──
+      // Don't fade VWAP when the trend is strong (ADX > 28).
+      // Momentum breakouts are allowed through.
+      const MEAN_REVERSION_SETUPS = new Set(['RANGE_BOUNCE', 'VWAP_SMC', 'SMC_ZONE']);
+      if (!pick.isMomentumBreakout && MEAN_REVERSION_SETUPS.has(pick.setup)) {
+        try {
+          const klines = await fetchKlines(pick.symbol, '15m', 20); // 20 bars ≈ 5h
+          if (klines && klines.length >= 15) {
+            const highs = klines.map(k => k.high);
+            const lows  = klines.map(k => k.low);
+            const closes = klines.map(k => k.close);
+            const { adx, diPlus, diMinus } = calcADX(highs, lows, closes, 14);
+
+            const isUptrend = diPlus > diMinus;
+            const isDowntrend = diMinus > diPlus;
+
+            if (adx > 28) {
+              if (pick.direction === 'SHORT' && isUptrend) {
+                bLog.trade(`TREND GATE BLOCKED: ${pick.symbol} SHORT rejected — ADX ${adx.toFixed(1)} uptrend too strong to fade`);
+                continue;
+              }
+              if (pick.direction === 'LONG' && isDowntrend) {
+                bLog.trade(`TREND GATE BLOCKED: ${pick.symbol} LONG rejected — ADX ${adx.toFixed(1)} downtrend too strong to fade`);
+                continue;
+              }
+            }
+          }
+        } catch (adxErr) {
+          bLog.warn(`ADX gate error for ${pick.symbol}: ${adxErr.message} — allowing trade`);
+        }
+      }
+      // ──────────────────────────────────────────────────────────
 
       bLog.trade(`Executing trade: ${pick.symbol} ${pick.direction} for registered users...`);
       const result = await executeForAllUsers(pick);
@@ -3095,7 +3371,7 @@ async function syncTradeStatus() {
               // NOTE: Bitunix sometimes returns closePrice=0. We still extract PnL/fee data
               // from the matched record — exit price will be found in Method 2 if missing.
               try {
-                const positions = await bxClient.getHistoryPositions({ symbol: trade.symbol, pageSize: 50 });
+                const positions = await bxClient.getHistoryPositions({ symbol: trade.symbol, pageSize: 50, all: true });
                 if (positions.length > 0) {
                   bLog.system(`[SYNC] Bitunix raw position[0]: ${JSON.stringify(positions[0])}`);
                 }
@@ -3176,7 +3452,7 @@ async function syncTradeStatus() {
               const needsOrderCheck = !found || (storedPosId && found);
               if (needsOrderCheck) {
                 try {
-                  const orderList = await bxClient.getHistoryOrders({ symbol: trade.symbol, pageSize: 50 });
+                  const orderList = await bxClient.getHistoryOrders({ symbol: trade.symbol, pageSize: 50, all: true });
                   for (const o of orderList) {
                     const oPrice = parseFloat(o.avgPrice || o.price || 0);
                     const isClose = o.reduceOnly || o.tradeSide === 'CLOSE' || (o.effect || '').toUpperCase() === 'CLOSE';
