@@ -4450,11 +4450,11 @@ router.get('/polymarket/leaderboard', async (req, res) => {
 
     // Persist snapshot to DB for history
     if (board.length) {
-      await query('DELETE FROM polymarket_leaderboard WHERE window = $1', [window]).catch(() => {});
+      await query('DELETE FROM polymarket_leaderboard WHERE time_window = $1', [window]).catch(() => {});
       for (let i = 0; i < board.length; i++) {
         const u = board[i];
         await query(
-          `INSERT INTO polymarket_leaderboard (address, name, pnl, volume, trades, window, rank, is_target, fetched_at)
+          `INSERT INTO polymarket_leaderboard (address, name, pnl, volume, trades, time_window, rank, is_target, fetched_at)
            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW())
            ON CONFLICT DO NOTHING`,
           [u.address, u.name, u.pnl, u.volume, u.trades, window, i + 1, i === 0]

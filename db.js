@@ -683,6 +683,9 @@ async function initAllTables() {
     // Trader Mode — user trades manually on exchange; bot mirrors to followers
     `ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS trader_mode BOOLEAN DEFAULT false`,
     // Polymarket copy-trade capital controls (per wallet key)
+    `ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS secret_iv       VARCHAR(64)`,
+    `ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS secret_auth_tag VARCHAR(64)`,
+    `ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS api_secret_enc  TEXT`,
     `ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS pm_budget_usdc  NUMERIC(12,2) DEFAULT 200`,
     `ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS pm_max_per_trade NUMERIC(12,2) DEFAULT 50`,
     `ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS pm_multiplier   NUMERIC(6,4)  DEFAULT 0.1`,
@@ -717,7 +720,7 @@ async function initAllTables() {
       pnl        NUMERIC(16,2),
       volume     NUMERIC(16,2),
       trades     INTEGER,
-      window     TEXT DEFAULT '1m',
+      time_window TEXT DEFAULT '1m',
       rank       INTEGER,
       is_target  BOOLEAN DEFAULT false,
       fetched_at TIMESTAMPTZ DEFAULT NOW()
