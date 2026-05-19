@@ -17,6 +17,7 @@ const { CoderAgent } = require('./coder-agent');
 const { OptimizerAgent } = require('./optimizer-agent');
 const { AgentCoordinator, getCoordinator } = require('./agent-coordinator');
 const { PolymarketAgent } = require('./polymarket-agent');
+const { SMCProAgent } = require('./smc-pro-agent');
 const hermesBridge = require('../hermes-bridge');
 
 module.exports = {
@@ -37,5 +38,6 @@ module.exports = {
   AgentCoordinator,
   getCoordinator,
   PolymarketAgent,
+  SMCProAgent,
   hermesBridge,
 };

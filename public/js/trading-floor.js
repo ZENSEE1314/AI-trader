@@ -133,6 +133,7 @@
     ['seat-strat',   { seatCol: 10, seatRow: 19, facingDir: Dir.UP, assigned: false }],
     ['seat-opt',     { seatCol: 12, seatRow: 19, facingDir: Dir.UP, assigned: false }],
     ['seat-lab',     { seatCol: 14, seatRow: 19, facingDir: Dir.UP, assigned: false }],
+    ['seat-smcpro',  { seatCol: 12, seatRow: 21, facingDir: Dir.UP, assigned: false }],
     // ── Room 9: Watch Tower (cols 17-23, rows 17-23) ──────────
     ['seat-acct',    { seatCol: 18, seatRow: 18, facingDir: Dir.UP, assigned: false }],
     ['seat-watch',   { seatCol: 20, seatRow: 18, facingDir: Dir.UP, assigned: false }],
@@ -192,6 +193,7 @@
     { id: 18, symbol: null,      label: 'SWARM',  palette: 5, seatId: 'seat-swarm',  role: 'swarm' },
     { id: 19, symbol: null,      label: 'GOV',    palette: 0, seatId: 'seat-gov',    role: 'governance' },
     { id: 20, symbol: null,      label: 'LAB',    palette: 1, seatId: 'seat-lab',    role: 'strategy_lab' },
+    { id: 21, symbol: null,      label: 'SMC',    palette: 2, seatId: 'seat-smcpro', role: 'smc_pro' },
   ];
 
   // Friendly display titles + role colours for the sidebar agent list
@@ -214,6 +216,7 @@
     swarm:         { title: 'Swarm',        color: '#f59e0b' },
     governance:    { title: 'Governance',   color: '#cbd5e1' },
     strategy_lab:  { title: 'Strategy Lab', color: '#67e8f9' },
+    smc_pro:       { title: 'SMC Pro',      color: '#f0abfc' },
   };
 
   // Sidebar status label per non-trader role
@@ -234,6 +237,7 @@
     swarm:        'voting',
     governance:   'enforcing',
     strategy_lab: 'experimenting',
+    smc_pro:      'hunting',
   };
 
   // Map role → backend agent class name for /api/admin/agents/health lookup
@@ -254,6 +258,7 @@
     swarm:        'SwarmEngine',
     governance:   'GovernanceEngine',
     strategy_lab: 'StrategyLab',
+    smc_pro:      'SMCProAgent',
   };
 
 
@@ -1219,7 +1224,8 @@
       const sidebarAgents = AGENTS.filter(a =>
         (a.symbol !== null && a.role === 'trader') ||
         a.role === 'executor' ||
-        a.role === 'watcher'
+        a.role === 'watcher'  ||
+        a.role === 'smc_pro'
       );
       // Build only once; afterwards just patch dynamic nodes
       if (this.listEl.children.length !== sidebarAgents.length) {

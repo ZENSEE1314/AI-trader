@@ -24,6 +24,7 @@ const { PoliceAgent } = require('./police-agent');
 const { CoderAgent } = require('./coder-agent');
 const { OptimizerAgent } = require('./optimizer-agent');
 const { PolymarketAgent } = require('./polymarket-agent');
+const { SMCProAgent }     = require('./smc-pro-agent');
 const { TradeConsensus, PatternLearner, encodeMarketState, extractIndicatorsFromKlines } = require('../ruflo-bridge');
 
 const SELF_IMPROVE_LESSONS = {
@@ -56,22 +57,24 @@ class AgentCoordinator extends BaseAgent {
     this.strategyAgent = new StrategyAgent(options);
     this.policeAgent = new PoliceAgent(options);
     this.coderAgent = new CoderAgent(options);
-    this.optimizerAgent = new OptimizerAgent(options);
+    this.optimizerAgent  = new OptimizerAgent(options);
     this.polymarketAgent = new PolymarketAgent(options);
+    this.smcProAgent     = new SMCProAgent(options);
 
     // Agent registry — order matters for display
     this._agents = new Map();
-    this._agents.set('sentiment', this.sentimentAgent);
-    this._agents.set('chart', this.chartAgent);
-    this._agents.set('risk', this.riskAgent);
-    this._agents.set('trader', this.traderAgent);
+    this._agents.set('sentiment',  this.sentimentAgent);
+    this._agents.set('chart',      this.chartAgent);
+    this._agents.set('risk',       this.riskAgent);
+    this._agents.set('trader',     this.traderAgent);
     this._agents.set('accountant', this.accountantAgent);
-    this._agents.set('kronos', this.kronosAgent);
-    this._agents.set('strategy', this.strategyAgent);
-    this._agents.set('police', this.policeAgent);
-    this._agents.set('coder', this.coderAgent);
-    this._agents.set('optimizer', this.optimizerAgent);
+    this._agents.set('kronos',     this.kronosAgent);
+    this._agents.set('strategy',   this.strategyAgent);
+    this._agents.set('police',     this.policeAgent);
+    this._agents.set('coder',      this.coderAgent);
+    this._agents.set('optimizer',  this.optimizerAgent);
     this._agents.set('polymarket', this.polymarketAgent);
+    this._agents.set('smc-pro',    this.smcProAgent);
 
     // Wire up inter-agent events
     this.chartAgent.on('signals', (data) => {
@@ -433,6 +436,13 @@ class AgentCoordinator extends BaseAgent {
     // 6. Run police patrol (pass coordinator context)
     if (this._microCycleCount % 2 === 0 && !this.policeAgent.paused) {
       this.policeAgent.run({ coordinator: this }).catch(() => {});
+    }
+
+    // 6b. SMC Pro Agent — runs every micro-cycle (has its own 45s internal throttle)
+    if (!this.smcProAgent.paused) {
+      this.smcProAgent.execute({ coordinator: this }).catch(err => {
+        this.addActivity('error', `SMC Pro scan error: ${err.message}`);
+      });
     }
 
     // 7. Agent self-reflection — every 60 micro-cycles (~30 min) one agent reflects
