@@ -5314,29 +5314,41 @@
   // ----- Platform change (show static IP info) -----
 
   function onPlatformChange(val) {
-    const bitunixGuide   = $('#bitunix-setup-guide');
-    const polyGuide      = $('#polymarket-setup-guide');
+    const isPoly = val === 'polymarket';
+
+    // Modal title + warnings
+    const title   = $('#modal-add-key-title');
+    const warnEx  = $('#modal-warning-exchange');
+    const warnPoly= $('#modal-warning-polymarket');
+    if (title)    title.textContent = isPoly ? '🔮 Add Polymarket Wallet' : 'Add API Key';
+    if (warnEx)   warnEx.classList.toggle('hidden',  isPoly);
+    if (warnPoly) warnPoly.classList.toggle('hidden', !isPoly);
+
+    // Platform guides
+    const bitunixGuide = $('#bitunix-setup-guide');
+    const polyGuide    = $('#polymarket-setup-guide');
+    if (bitunixGuide) bitunixGuide.classList.toggle('hidden', val !== 'bitunix');
+    if (polyGuide)    polyGuide.classList.toggle('hidden', !isPoly);
+
+    // Field sections — Polymarket shows private key only, exchanges show API key + secret
     const exchangeFields = $('#exchange-key-fields');
     const polyFields     = $('#polymarket-key-fields');
-    const btnSubmit      = $('#btn-submit-key');
+    if (exchangeFields) exchangeFields.classList.toggle('hidden', isPoly);
+    if (polyFields)     polyFields.classList.toggle('hidden', !isPoly);
 
-    // Bitunix guide
-    if (bitunixGuide) bitunixGuide.classList.toggle('hidden', val !== 'bitunix');
+    // Exchange fields are required only for exchange platforms
+    const apiKeyEl    = $('#key-api-key');
+    const apiSecretEl = $('#key-api-secret');
+    if (apiKeyEl)    apiKeyEl.required    = !isPoly;
+    if (apiSecretEl) apiSecretEl.required = !isPoly;
 
-    // Polymarket guide + field swap
-    if (polyGuide)      polyGuide.classList.toggle('hidden', val !== 'polymarket');
-    if (exchangeFields) exchangeFields.classList.toggle('hidden', val === 'polymarket');
-    if (polyFields)     polyFields.classList.toggle('hidden', val !== 'polymarket');
+    // Polymarket private key required only for polymarket
+    const pmKeyEl = $('#key-pm-private-key');
+    if (pmKeyEl) pmKeyEl.required = isPoly;
 
-    // Mark exchange fields required/not-required based on platform
-    const apiKeyInput    = $('#key-api-key');
-    const apiSecretInput = $('#key-api-secret');
-    if (apiKeyInput)    apiKeyInput.required    = val !== 'polymarket';
-    if (apiSecretInput) apiSecretInput.required = val !== 'polymarket';
-
-    if (btnSubmit) {
-      btnSubmit.textContent = val === 'polymarket' ? 'Save Wallet Key' : 'Add Key';
-    }
+    // Submit button label
+    const btnSubmit = $('#btn-submit-key');
+    if (btnSubmit) btnSubmit.textContent = isPoly ? 'Save Wallet Key' : 'Add Key';
   }
 
   // ----- Live Logs -----

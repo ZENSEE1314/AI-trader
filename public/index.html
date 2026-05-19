@@ -2704,14 +2704,20 @@ EMAIL_FROM=MCT &lt;a83c06001@smtp-brevo.com&gt;</pre>
         <button class="modal-close" aria-label="Close" data-close-modal>&times;</button>
       </div>
 
-      <div class="modal-warning">
+      <!-- Exchange warning (hidden for Polymarket) -->
+      <div id="modal-warning-exchange" class="modal-warning">
         <span aria-hidden="true">⚠️</span>
-        <span>Only use API keys with trading permissions. Never enable withdrawal permissions. Your keys are encrypted at rest.</span>
+        <span>Only use API keys with <strong>Trade</strong> permission only. Never enable withdrawal. Keys are AES-256 encrypted.</span>
+      </div>
+      <!-- Polymarket note (shown only for Polymarket) -->
+      <div id="modal-warning-polymarket" class="modal-warning hidden" style="border-color:#7c3aed;background:rgba(124,58,237,0.1);color:#a78bfa;">
+        <span aria-hidden="true">🔮</span>
+        <span>Polymarket uses your <strong>Polygon wallet private key</strong> — no API key or secret needed. Only the private key is required.</span>
       </div>
 
       <form id="form-add-key">
         <div class="form-group">
-          <label class="form-label" for="key-platform">Platform <span class="tip-btn">?<span class="tip-text">Select which exchange this API key belongs to. Currently supports Binance and Bitunix futures.</span></span></label>
+          <label class="form-label" for="key-platform">Platform</label>
           <select class="form-input" id="key-platform" required onchange="window.CryptoBot.onPlatformChange(this.value)">
             <option value="">Select platform...</option>
             <option value="binance">Binance</option>
