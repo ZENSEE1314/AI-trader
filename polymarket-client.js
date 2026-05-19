@@ -171,8 +171,19 @@ async function buildClobClient(privateKey) {
   const pk = privateKey.startsWith('0x') ? privateKey : `0x${privateKey}`;
   const wallet = new ethers.Wallet(pk);
 
-  // ethers v6 Wallet satisfies the SignatureLike signer interface
-  const client = new ClobClient(CLOB_HOST, CHAIN_ID, wallet);
+  // The @polymarket/clob-client SDK (>=5.x) checks for _signTypedData (ethers v5)
+  // OR signTypedData (viem). Ethers v6 has signTypedData but no account.address,
+  // so the SDK falls into the viem path and fails.
+  // Fix: expose a viem-compatible wrapper so the SDK finds account.address.
+  const signer = {
+    account:         { address: wallet.address },
+    signTypedData:   ({ domain, types, primaryType, message }) =>
+      wallet.signTypedData(domain, types, message),
+    requestAddresses: async () => [wallet.address],
+    getAddresses:     async () => [wallet.address],
+  };
+
+  const client = new ClobClient(CLOB_HOST, CHAIN_ID, signer);
 
   // Derive / create L2 credentials (cached by the SDK after first call)
   const creds = await client.createOrDeriveApiKey();
