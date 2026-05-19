@@ -43,6 +43,7 @@ class PolymarketAgent extends BaseAgent {
     this._seenTradeIds    = new Set();
     this._lastPollMs      = 0;
     this._leaderboardAge  = 0;      // when we last refreshed the leaderboard
+    this._firstPollDone   = false;  // seed-then-skip guard for first poll
     this._tradesExecuted  = 0;
     this._totalPnlUsdc    = 0;
     this._clobClients     = new Map(); // api_key_id → { client, address }
@@ -91,10 +92,23 @@ class PolymarketAgent extends BaseAgent {
     }
     this._lastPollMs = nowMs;
 
-    // Get new trades from the target wallet
-    const sinceMs = this._seenTradeIds.size === 0
-      ? nowMs - LOOKBACK_MS
-      : this._lastPollMs - POLL_INTERVAL_MS - 5000;
+    // First poll: seed seen-set from LOOKBACK_MS without copying anything.
+    // Prevents copying stale trades that happened before the agent started.
+    if (!this._firstPollDone) {
+      this._firstPollDone = true;
+      try {
+        const seed = await getUserActivity(this._targetAddress, 50, nowMs - LOOKBACK_MS);
+        for (const t of seed) this._seenTradeIds.add(t.id);
+        this.addActivity('info', `Seeded ${this._seenTradeIds.size} existing trade(s) — watching for NEW trades only`);
+        bLog.trade(`[POLY] First poll: seeded ${this._seenTradeIds.size} trade IDs, not copying`);
+      } catch (e) {
+        bLog.trade(`[POLY] Seed poll failed (non-fatal): ${e.message}`);
+      }
+      return { ok: true, newTrades: 0, seeded: true };
+    }
+
+    // Get new trades from the target wallet since last poll
+    const sinceMs = this._lastPollMs - POLL_INTERVAL_MS - 5000;
 
     let newTrades;
     try {
@@ -181,7 +195,8 @@ class PolymarketAgent extends BaseAgent {
       if (top.address !== this._targetAddress) {
         this.addActivity('success', `New #1 target: ${top.name || top.address.slice(0, 10)} +$${top.pnl.toLocaleString()}`);
         bLog.trade(`[POLY] Target changed → ${top.address} (${top.name}) PnL=$${top.pnl}`);
-        this._seenTradeIds.clear(); // reset seen so we pick up recent trades for the new target
+        this._seenTradeIds.clear();
+        this._firstPollDone = false; // re-seed on next poll to avoid copying old trades
       }
       this._targetAddress  = top.address;
       this._targetName     = top.name || top.address.slice(0, 10);

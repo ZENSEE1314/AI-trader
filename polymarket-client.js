@@ -219,9 +219,27 @@ async function placeCopyOrder({ client, tokenId, side, price, usdcAmount, tickSi
     OrderType.FOK
   );
 
+  // Log raw response so we can identify the correct orderId field
+  console.log('[POLY-CLOB] Raw createAndPostOrder response:', JSON.stringify(resp));
+
+  // v5 SDK wraps the result differently depending on order outcome:
+  //   { orderID, status, ... }  (direct)
+  //   { order: { id, ... }, status }  (nested)
+  //   { transactionHash, ... }  (on-chain tx)
+  const orderId =
+    resp?.orderID      ||
+    resp?.orderId      ||
+    resp?.order_id     ||
+    resp?.order?.id    ||
+    resp?.order?.orderID ||
+    resp?.transactionHash ||
+    resp?.hash         ||
+    resp?.id           ||
+    '';
+
   return {
-    orderId:     resp?.orderID || resp?.id || '',
-    status:      resp?.status || 'submitted',
+    orderId,
+    status:  resp?.status || resp?.order?.status || 'submitted',
     tokenId,
     side,
     price,
