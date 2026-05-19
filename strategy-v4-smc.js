@@ -713,10 +713,7 @@ function resolveSignal(state, zone, price, vwap, nowMs, symbol) {
     const s4h   = get4hStructure(state, price);
     const s15chk = get15mStructure(state, price);
     if (s4h === 'BEARISH') return null;   // macro downtrend — demand zones fail
-    // When 4H is uncertain (MIXED/UNKNOWN), require 15m to EXPLICITLY confirm bullish.
-    // MIXED 4H + MIXED/BEARISH 15m = no clear trend → skip entirely. Too many losers
-    // come from trading in no-man's land when both timeframes are uncertain.
-    if ((s4h === 'MIXED' || s4h === 'UNKNOWN') && s15chk !== 'BULLISH') return null;
+    if (s4h === 'MIXED' || s4h === 'UNKNOWN') return null;  // no clear trend — skip
     // Demand zone entry: both 15m and 1m must confirm price is AT A LOW (demand).
     // HH/LH on 1m = price is at a high → wrong zone for long, skip.
     const isDemand15 = p15 === 'LL' || p15 === 'HL';
@@ -752,10 +749,7 @@ function resolveSignal(state, zone, price, vwap, nowMs, symbol) {
     const s4h    = get4hStructure(state, price);
     const s15chk = get15mStructure(state, price);
     if (s4h === 'BULLISH') return null;   // macro uptrend — supply zones break
-    // When 4H is uncertain (MIXED/UNKNOWN), require 15m to EXPLICITLY confirm bearish.
-    // MIXED 4H + MIXED/BULLISH 15m = no clear trend → skip entirely. Don't short
-    // into uncertainty — supply zones break when trend is ambiguous.
-    if ((s4h === 'MIXED' || s4h === 'UNKNOWN') && s15chk !== 'BEARISH') return null;
+    if (s4h === 'MIXED' || s4h === 'UNKNOWN') return null;  // no clear trend — skip
     // Supply zone entry: both 15m and 1m must confirm price is AT A HIGH (supply).
     // LL/HL on 1m = price is at a low → wrong zone for short, skip.
     const isSupply15 = p15 === 'HH' || p15 === 'LH';

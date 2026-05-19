@@ -40,15 +40,16 @@ const TRADE_PCT = 0.10;   // 10% of wallet per trade
 const INIT_CAP  = 1000;
 const RR        = 2;
 
-const MAX_CHASE      = 0.08;  // LONG: entry within 0.08% of 1m HL
-const MAX_DROP       = 0.12;  // SHORT: entry within 0.12% of 15m/1m LH
+const MAX_CHASE      = 0.25;  // LONG: entry within 0.25% of 1m HL  (raised from 0.08 — confirmation lag fix)
+const MAX_DROP       = 0.45;  // SHORT: entry within 0.45% of 15m/1m LH (raised from 0.12 — confirmation lag fix)
 const MAX_GAP        = 0.50;  // 1m HL gap ≤ 0.50%
 const MIN_DIST_SIGMA = 0.5;   // VWAP σ-distance: LONG ≥0.5σ above lower; SHORT ≥0.5σ below upper
-const DAYS           = 30;
+const DAYS           = 60;    // 60-day window for more representative results
 const MAX_PIVOT_HIST = 50;
+const MAX_PIVOT_AGE  = 75 * 60 * 1000;  // 75-min entry window after 15m pivot confirms
 
-const SYMS = ['BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'ADAUSDT', 'SOLUSDT'];
-const LEV  = { BTCUSDT: 100, ETHUSDT: 100, BNBUSDT: 100, ADAUSDT: 75, SOLUSDT: 75 };
+const SYMS = ['BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'SOLUSDT'];
+const LEV  = { BTCUSDT: 100, ETHUSDT: 100, BNBUSDT: 75, SOLUSDT: 50 };
 
 const ENDPOINTS = [
   'https://api.bytick.com/v5/market/kline',
@@ -154,23 +155,27 @@ function getStruct(pivots, currentPrice) {
 }
 
 // ── Zone → allowed direction ───────────────────────────────────────
-// BELOW_LOWER LONG is blocked — price broke through the lower 2σ band
-// into selling momentum territory.  Entering LONG there is "catching a
-// falling knife": the band was broken with force, price needs to recover
-// back into LOWER_MID before a bounce entry is meaningful.
+// Extreme zones (ABOVE_UPPER / BELOW_LOWER) use a relaxed pivot gate:
+//   ABOVE_UPPER SHORT: 15m HH or HL + 1m HH or HL
+//     Price is already above the upper band — ANY up-structure pivot
+//     (both highs and higher-lows) at that extreme level signals overbought
+//     exhaustion. LH/LL excluded (price already rolling, may be chasing).
+//   BELOW_LOWER LONG: 15m LL or LH + 1m LL or LH (mirror of above)
+//     Price is below the lower band — ANY down-structure pivot signals
+//     oversold exhaustion. HL/HH excluded (price already recovering).
 //
-// ABOVE_UPPER SHORT is kept — selling an overbought spike into the upper
-// band works well as a mean-reversion setup even in bull markets.
+// Mid zones (UPPER_MID / LOWER_MID) use the strict reversal-only gate:
+//   UPPER_MID SHORT: 15m LH or HH + 1m LH or HH
+//   LOWER_MID LONG:  15m HL or LL + 1m HL or LL
 //
 // NOTE: 15m structure is NOT used as a gate here.  Testing showed that
 // the best reversal LONG setups (buying at the exact bottom of a bearish
 // 15m sequence) fire precisely when 15m = BEARISH.  Blocking those
 // removes winning entries without eliminating losing ones.
 function getAllowedDir(s4h, s15, zone) {   // s4h / s15 kept for log compatibility
-  if (zone === 'BELOW_LOWER') return null;  // catching knife — wait for recovery
   if (zone === 'ABOVE_UPPER' || zone === 'UPPER_MID') return 'SHORT';
   if (zone === 'LOWER_MID')                            return 'LONG';
-  return null;
+  return null;  // BELOW_LOWER: catching a falling knife — wait for LOWER_MID
 }
 
 // ── Per-symbol backtest ────────────────────────────────────────────
@@ -280,11 +285,11 @@ async function runSym(sym) {
     if (z === 'ABOVE_UPPER' || z === 'UPPER_MID') return 'PREMIUM';
     return 'DISCOUNT';
   }
-  const MIN_DIR_GAP_MS = 3 * 60 * 60 * 1000;  // 3 hours per direction
-  let prevGroup    = null;
-  let zoneTraded   = false;
-  let lastLongTime = 0;
-  let lastShortTime = 0;
+  const MIN_TOKEN_GAP_MS = 3 * 60 * 60 * 1000;  // 3-hour blackout per token after any trade
+  let prevGroup     = null;
+  let prevZoneExact = null;  // exact zone within group — detects escalation
+  let zoneTraded    = false;
+  let lastTradeTime = 0;     // timestamp of last fired trade (any direction) on this symbol
 
   // ── Trade loop ────────────────────────────────────────────────────
   let capital  = INIT_CAP;
@@ -312,9 +317,16 @@ async function runSym(sym) {
         const s15F = getStruct(pivots15m, entry);
         const dirZ = getAllowedDir(s4hF, s15F, zf);
 
-        // Pivot still valid at entry?
-        const pivotOk = (p.dir === 'LONG' && type1 === 'HL') ||
-                        (p.dir === 'SHORT' && type1 === 'LH');
+        // 4H gate at fire time — re-check in case 4H structure changed
+        // between queue time and next-bar open.
+        const s4hGateOk = !(s4hF === 'BULLISH' && p.dir === 'SHORT' && p.zone === 'ABOVE_UPPER')
+                        && !(s4hF === 'BEARISH' && p.dir === 'LONG');
+
+        // Pivot still valid at fire bar? Check 1m type is still a valid entry.
+        // Same gate for all zones: LONG needs HL/LL on 1m, SHORT needs LH/HH.
+        const pivotOk = p.dir === 'LONG'
+          ? (type1 === 'HL' || type1 === 'LL')
+          : (type1 === 'LH' || type1 === 'HH');
 
         // Chase / drop filter at entry
         let filterOk = true;
@@ -325,7 +337,13 @@ async function runSym(sym) {
           if ((p.sh1 - entry) / p.sh1 * 100 > MAX_DROP) filterOk = false;
         }
 
-        if (dirZ === p.dir && pivotOk && filterOk) {
+        const fireOk = dirZ === p.dir && s4hGateOk && pivotOk && filterOk;
+        if (!fireOk) {
+          // Signal cancelled at fire time — zone is still available for a
+          // fresh pivot. Reset so the next qualifying pivot can queue.
+          zoneTraded = false;
+        }
+        if (fireOk) {
           const tradeCap = capital * TRADE_PCT;
           const sl = p.dir === 'LONG'
             ? entry * (1 - slPricePct)
@@ -352,6 +370,7 @@ async function runSym(sym) {
                     : 0;
           if (result !== 'OPEN') capital = Math.max(0, capital + pnl);
 
+          lastTradeTime = bar.t;  // token blackout starts from fire bar
           trades.push({
             ts:      new Date(bar.t).toISOString().slice(0, 16).replace('T', ' '),
             dir:     p.dir,
@@ -392,29 +411,53 @@ async function runSym(sym) {
     if (!v) continue;
     const zone = getZone(bar.c, v);
 
-    // Zone GROUP cooldown — reset only when crossing to opposite group
+    // Zone GROUP cooldown — reset when crossing to the opposite group OR
+    // when price ESCALATES within the same group (UPPER_MID→ABOVE_UPPER or
+    // LOWER_MID→BELOW_LOWER). Escalation = price pushed further into extreme
+    // territory = fresh pivot opportunity at a better mean-reversion level.
     const grp = getZoneGroup(zone);
-    if (grp !== prevGroup) { prevGroup = grp; zoneTraded = false; }
+    if (grp !== prevGroup) {
+      prevGroup     = grp;
+      prevZoneExact = zone;
+      zoneTraded    = false;
+    } else if (zone !== prevZoneExact) {
+      const escalated = (zone === 'ABOVE_UPPER' && prevZoneExact === 'UPPER_MID')
+                     || (zone === 'BELOW_LOWER' && prevZoneExact === 'LOWER_MID');
+      if (escalated) zoneTraded = false;
+      prevZoneExact = zone;
+    }
     if (zoneTraded) continue;
 
-    // Per-direction time cooldown — prevent same-direction re-entry within 3 h
-    const dir0 = getAllowedDir(null, null, zone);
-    if (dir0 === 'LONG'  && bar.t - lastLongTime  < MIN_DIR_GAP_MS) continue;
-    if (dir0 === 'SHORT' && bar.t - lastShortTime < MIN_DIR_GAP_MS) continue;
+    // Token-level 3-hour blackout — no trades on this symbol for 3 h after
+    // any trade fires (either direction). Prevents consecutive losses when
+    // the zone is wrong (e.g. shorting a sustained bull breakout every 3 h).
+    if (bar.t - lastTradeTime < MIN_TOKEN_GAP_MS) continue;
 
     const s4h  = getStruct(pivots4h, bar.c);
     const s15  = getStruct(pivots15m, bar.c);
     const dir  = getAllowedDir(s4h, s15, zone);
     if (!dir) continue;
 
-    // ── Pivot type gate — any low for LONG, any high for SHORT ─────
-    // LONG:  15m pivot must be a LOW (HL or LL) + 1m pivot also a LOW.
-    //        Zone (LOWER_MID) determines direction; any confirmed low in
-    //        that zone is valid — LL at support = exhausted selling = best
-    //        reversal entry; HL = bounce already started.
-    // SHORT: 15m pivot must be a HIGH (LH or HH) + 1m pivot also a HIGH.
-    //        HH at premium zone = exhausted buying = best short entry;
-    //        LH = rejection already started.
+    // ── 4H structure gate (zone-specific for extremes) ─────────────
+    // ABOVE_UPPER + 4H=BULLISH → bull breakout, not a reversal. Shorting the
+    //   extreme level in a bull trend loses — the band was broken with momentum.
+    //   UPPER_MID SHORTs remain allowed even in bull markets (mean reversion
+    //   at resistance works because the move is extended, not a breakout).
+    // LOWER_MID / BELOW_LOWER + 4H=BEARISH → confirmed downtrend; no LONG.
+    //   Price at discount is just a pause in selling, not a reversal base.
+    // Trade WITH the 4H trend only — symmetric gate:
+    if (s4h === 'BULLISH' && dir === 'SHORT') continue;  // never short a bull 4H
+    if (s4h === 'BEARISH' && dir === 'LONG')  continue;  // never long a bear 4H
+    if (s4h === 'MIXED' || s4h === 'UNKNOWN') continue;  // no trade in ranging 4H
+
+    // ── Pivot type gate ─────────────────────────────────────────────
+    // LONG  (LOWER_MID + BELOW_LOWER): 15m HL or LL + 1m HL or LL
+    //   Any confirmed low at discount zone = exhausted selling.
+    //   LL at support = deepest entry; HL = bounce already started.
+    // SHORT (UPPER_MID + ABOVE_UPPER): 15m LH or HH + 1m LH or HH
+    //   Any confirmed high at premium zone = exhausted buying.
+    //   HH at resistance = deepest entry; LH = rejection already started.
+    //   (ABOVE_UPPER+4H=BULLISH is blocked above — gate already handles HL issue.)
     const isLow15  = type15 === 'HL' || type15 === 'LL';
     const isLow1m  = type1  === 'HL' || type1  === 'LL';
     const isHigh15 = type15 === 'LH' || type15 === 'HH';
@@ -444,10 +487,9 @@ async function runSym(sym) {
       if (v.std > 0 && (v.up - bar.c) / v.std > MIN_DIST_SIGMA * 2) continue;
     }
 
-    lastSigT   = p1.b.t;
-    zoneTraded = true;  // block further signals in this zone group entry
-    if (dir === 'LONG')  lastLongTime  = bar.t;
-    if (dir === 'SHORT') lastShortTime = bar.t;
+    lastSigT      = p1.b.t;
+    zoneTraded    = true;   // block further signals in this zone group entry
+    lastTradeTime = bar.t;  // 3-hour token blackout from this point
     pending = {
       dir, zone, s4h, s15,
       type: `${type15}+${type1}`,
@@ -496,11 +538,13 @@ async function main() {
   console.log('\n' + '#'.repeat(70));
   console.log(' V4-SMC BACKTEST  |  Zone Direction + Strict HL/LH + VWAP σ-Proximity');
   console.log(` Capital $${INIT_CAP}  |  ${(TRADE_PCT*100).toFixed(0)}% per trade  |  ${RR}:1 RR  |  ${DAYS}d window`);
-  console.log(' LONG:  LOWER_MID only  (BELOW_LOWER blocked = no knife-catch)');
-  console.log(' SHORT: ABOVE_UPPER / UPPER_MID');
-  console.log(' Pivot LONG:  15m HL or LL  +  1m HL or LL  (any low in discount zone)');
-  console.log(' Pivot SHORT: 15m LH or HH  +  1m LH or HH  (any high in premium zone)');
-  console.log(' 4H / 15m structure: diagnostic log only, NOT used as gate');
+  console.log(' LONG:  LOWER_MID + BELOW_LOWER  (extreme discount now allowed)');
+  console.log(' SHORT: UPPER_MID + ABOVE_UPPER');
+  console.log(' Pivot LOWER_MID  LONG:  15m HL|LL  + 1m HL|LL');
+  console.log(' Pivot BELOW_LOWER LONG: 15m LL|LH  + 1m LL|LH  (extreme gate)');
+  console.log(' Pivot UPPER_MID  SHORT: 15m LH|HH  + 1m LH|HH');
+  console.log(' Pivot ABOVE_UPPER SHORT:15m HH|HL  + 1m HH|HL  (extreme gate)');
+  console.log(' 4H gate: LONG blocked when 4H=BEARISH (no longing into confirmed selling pressure)');
   console.log('#'.repeat(70));
 
   const results = [];
