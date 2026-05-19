@@ -1,29 +1,69 @@
 // ============================================================
-// smc-engine.js — Pure SMC analysis library
+// smc-engine.js — Comprehensive Smart Money Concepts Library
 //
-// Implements the full Smart Money Concepts framework:
-//   Step 1  — Market structure on higher timeframe (4H bias)
-//   Step 2  — External highs/lows (swing pivots)
-//   Step 3  — Change of Character (CHoCH) confirmation
-//   Step 4  — Premium / Discount + Fibonacci OTE (61.8–78.6%)
-//   Step 5  — Fair Value Gaps (FVGs) as areas of interest
-//   Step 6  — Pre-planned targets (liquidity pools)
-//   Step 7  — Lower-timeframe (15m / 5m) CHoCH for execution
-//   Step 8  — Entry + SL at invalidation + 3:1 RR check
+// Sources integrated:
+//  · Justin Bennett / DailyPriceAction — CHoCH, FVG, OTE, 8-step model
+//  · ICT (Michael Huddleston) — Killzones, PO3, Silver Bullet, OB, FVG,
+//    Breaker Blocks, Displacement, Inducement, Draw on Liquidity,
+//    SIBI/BISI, MSS, Unicorn, PDH/PDL, SMT Divergence, ORG
+//  · Rayner Teo / TradingWithRayner — Breaker Blocks, Mitigation Blocks,
+//    IFVG, strong/weak highs, correlated pair SMT
+//  · BabyPips SMC — PO3/AMD, equal highs/lows (EQH/EQL), Asian session range
+//  · FXOpen Blog — Displacement rules, liquidity sweep confirmation,
+//    stacked FVGs, CE (Consequent Encroachment)
+//  · Investopedia SMC — Wyckoff-SMC mapping, R:R rules, session filters
 //
-// Reference: https://dailypriceaction.com/blog/smc-trading-strategy/
-// Data source: Bybit v5 linear klines (same as strategy-v4-smc.js)
+// Full 12-step analysis pipeline per symbol:
+//  1.  Fetch Weekly/Daily/4H/1H/15m/5m data in parallel
+//  2.  HTF Bias (Weekly + Daily + 4H market structure)
+//  3.  Draw on Liquidity (where is price going?)
+//  4.  Session / Killzone filter (London 2-5 AM, NY 7-10 AM EST)
+//  5.  Premium / Discount + OTE Fibonacci (61.8–79%)
+//  6.  Point of Interest: OB, Breaker Block, FVG, IFVG
+//  7.  Price at POI? (confluence check)
+//  8.  SMT Divergence (BTC↔ETH correlated pair)
+//  9.  Displacement confirmation (real impulse, not drift)
+//  10. Inducement detection (small liquidity grab before real move)
+//  11. LTF entry: 15m + 5m CHoCH → first FVG after CHoCH
+//  12. SL at sweep wick, TP at draw on liquidity, 2:1 RR minimum
+//
+// Returns a scored signal object or null.
 // ============================================================
 
 'use strict';
 
 const fetch = require('node-fetch');
 
-const BYBIT_KLINE    = 'https://api.bybit.com/v5/market/kline';
-const FETCH_TIMEOUT  = 10_000;
-const MIN_RR         = 3.0;    // minimum risk-to-reward ratio (guide: 3:1)
-const FVG_LOOKBACK   = 60;     // bars to scan for FVGs
-const OB_LOOKBACK    = 40;     // bars to scan for Order Blocks
+// ── Constants ────────────────────────────────────────────────
+const BYBIT_KLINE      = 'https://api.bybit.com/v5/market/kline';
+const FETCH_TIMEOUT    = 12_000;
+const MIN_RR           = 2.0;      // guide consensus: 2:1 minimum, aim 3:1
+const FVG_LOOKBACK     = 80;       // bars to scan for FVGs
+const OB_LOOKBACK      = 50;       // bars to scan for Order Blocks
+
+// ICT Killzones — all in UTC (EST+5 winter / EDT+4 summer; we use UTC)
+// London Open KZ:  02:00–05:00 EST  →  07:00–10:00 UTC
+// NY AM KZ:        07:00–10:00 EST  →  12:00–15:00 UTC
+// NY Silver Bullet 10:00–11:00 EST  →  15:00–16:00 UTC
+// NY PM KZ:        13:30–16:00 EST  →  18:30–21:00 UTC
+// Asian KZ:        20:00–23:00 EST  →  01:00–04:00 UTC
+const KILLZONES_UTC = [
+  { name: 'Asian',          start:  1, end:  4 },   // 01:00–04:00 UTC
+  { name: 'London',         start:  7, end: 10 },   // 07:00–10:00 UTC (peak)
+  { name: 'London-Silver',  start:  8, end:  9 },   // 08:00–09:00 UTC (Silver Bullet)
+  { name: 'NY-AM',          start: 12, end: 15 },   // 12:00–15:00 UTC
+  { name: 'NY-Silver',      start: 15, end: 16 },   // 15:00–16:00 UTC
+  { name: 'NY-PM',          start: 18.5, end: 21 }, // 18:30–21:00 UTC
+];
+// High-value killzones (London + NY-AM) get priority signal boosts
+const HIGH_VALUE_KZ = new Set(['London', 'London-Silver', 'NY-AM', 'NY-Silver']);
+
+// SMT Correlated pairs for each symbol (positively correlated crypto pairs)
+const SMT_PAIRS = {
+  BTCUSDT: 'ETHUSDT',
+  ETHUSDT: 'BTCUSDT',
+  SOLUSDT: 'BTCUSDT',
+};
 
 // ── Candle fetching ──────────────────────────────────────────
 
@@ -33,7 +73,7 @@ async function fetchCandles(symbol, interval, limit) {
   if (!res.ok) throw new Error(`Bybit kline ${res.status} for ${symbol} ${interval}`);
   const data = await res.json();
   const raw  = data?.result?.list || [];
-  // Bybit returns newest-first — reverse so index 0 = oldest
+  // Bybit returns newest-first → reverse to oldest-first
   return raw.reverse().map(r => ({
     t:       parseInt(r[0]),
     o:       parseFloat(r[1]),
@@ -41,81 +81,102 @@ async function fetchCandles(symbol, interval, limit) {
     l:       parseFloat(r[3]),
     c:       parseFloat(r[4]),
     v:       parseFloat(r[5]),
+    body:    Math.abs(parseFloat(r[4]) - parseFloat(r[1])),
+    range:   parseFloat(r[2]) - parseFloat(r[3]),
     bullish: parseFloat(r[4]) >= parseFloat(r[1]),
   }));
 }
 
 // ── Pivot detection ──────────────────────────────────────────
-// Returns array of { idx, type:'HIGH'|'LOW', price, ts }
-// sorted oldest→newest, excluding the live (unconfirmed) bar.
+// Returns { idx, type:'HIGH'|'LOW', price, ts, strong:bool }
+// strong = this pivot caused a BOS on the opposite side.
 
 function detectPivots(candles, lbL, lbR) {
   const pivots = [];
-  const end    = candles.length - lbR - 1;  // exclude live bar + confirmation bars
+  const end    = candles.length - lbR - 1;
   for (let i = lbL; i <= end; i++) {
-    const c = candles[i];
-    const leftSlice  = candles.slice(i - lbL, i);
-    const rightSlice = candles.slice(i + 1, i + lbR + 1);
-
-    if (leftSlice.every(x => x.h <= c.h) && rightSlice.every(x => x.h <= c.h)) {
-      pivots.push({ idx: i, type: 'HIGH', price: c.h, ts: c.t });
+    const c    = candles[i];
+    const left = candles.slice(i - lbL, i);
+    const right= candles.slice(i + 1, i + lbR + 1);
+    if (left.every(x => x.h <= c.h) && right.every(x => x.h <= c.h)) {
+      pivots.push({ idx: i, type: 'HIGH', price: c.h, ts: c.t, strong: false });
     }
-    if (leftSlice.every(x => x.l >= c.l) && rightSlice.every(x => x.l >= c.l)) {
-      pivots.push({ idx: i, type: 'LOW',  price: c.l, ts: c.t });
+    if (left.every(x => x.l >= c.l) && right.every(x => x.l >= c.l)) {
+      pivots.push({ idx: i, type: 'LOW',  price: c.l, ts: c.t, strong: false });
     }
   }
-  return pivots.sort((a, b) => a.idx - b.idx);
+  const sorted = pivots.sort((a, b) => a.idx - b.idx);
+
+  // Classify strong vs weak: a HIGH is strong if any subsequent candle
+  // closed BELOW the most recent LOW before it (i.e. it caused a BOS downward).
+  // Vice versa for LOWs.
+  const highs = sorted.filter(p => p.type === 'HIGH');
+  const lows  = sorted.filter(p => p.type === 'LOW');
+  for (let i = 0; i < highs.length; i++) {
+    const prevLow = lows.filter(l => l.idx < highs[i].idx).slice(-1)[0];
+    if (prevLow) {
+      const candlesAfter = candles.slice(highs[i].idx + 1);
+      if (candlesAfter.some(c => c.c < prevLow.price)) highs[i].strong = true;
+    }
+  }
+  for (let i = 0; i < lows.length; i++) {
+    const prevHigh = highs.filter(h => h.idx < lows[i].idx).slice(-1)[0];
+    if (prevHigh) {
+      const candlesAfter = candles.slice(lows[i].idx + 1);
+      if (candlesAfter.some(c => c.c > prevHigh.price)) lows[i].strong = true;
+    }
+  }
+
+  return sorted;
 }
 
-// ── Step 1 + 2: Market structure + directional bias ──────────
-// Returns { bias:'BULLISH'|'BEARISH'|'RANGING', swingHigh, swingLow,
-//           lastHighs, lastLows, pivots }
+// ── Market structure + HTF bias ───────────────────────────────
+// Returns { bias, pivots, lastHighs, lastLows, swingHigh, swingLow,
+//           weakHigh, weakLow }
 
 function analyzeStructure(candles, lbL = 10, lbR = 3) {
   const pivots   = detectPivots(candles, lbL, lbR);
   const highs    = pivots.filter(p => p.type === 'HIGH');
   const lows     = pivots.filter(p => p.type === 'LOW');
-
   const lastHighs = highs.slice(-4);
   const lastLows  = lows.slice(-4);
   const swingHigh = highs[highs.length - 1] || null;
   const swingLow  = lows[lows.length - 1]   || null;
 
+  // Weak high/low = most recent pivot that did NOT cause a BOS (prime sweep candidate)
+  const weakHigh = highs.slice().reverse().find(h => !h.strong) || swingHigh;
+  const weakLow  = lows.slice().reverse().find(l => !l.strong)  || swingLow;
+
   let bias = 'RANGING';
   if (lastHighs.length >= 2 && lastLows.length >= 2) {
     const hh = lastHighs[lastHighs.length - 1].price > lastHighs[lastHighs.length - 2].price;
-    const hl = lastLows[lastLows.length   - 1].price > lastLows[lastLows.length   - 2].price;
+    const hl = lastLows [lastLows.length  - 1].price > lastLows [lastLows.length  - 2].price;
     const lh = lastHighs[lastHighs.length - 1].price < lastHighs[lastHighs.length - 2].price;
-    const ll = lastLows[lastLows.length   - 1].price < lastLows[lastLows.length   - 2].price;
+    const ll = lastLows [lastLows.length  - 1].price < lastLows [lastLows.length  - 2].price;
     if (hh && hl) bias = 'BULLISH';
     if (lh && ll) bias = 'BEARISH';
   }
 
-  return { bias, pivots, lastHighs, lastLows, swingHigh, swingLow };
+  return { bias, pivots, lastHighs, lastLows, swingHigh, swingLow, weakHigh, weakLow };
 }
 
-// ── Step 3: Change of Character (CHoCH) ──────────────────────
-// CHoCH: a real candle close breaks the most recent swing in the
-//        opposite direction — strongest SMC confirmation signal.
-// Returns { direction:'BULLISH'|'BEARISH', level, candleTs, type:'CHoCH' } or null.
+// ── CHoCH / BOS detection ────────────────────────────────────
+// CHoCH = first close beyond a swing in the OPPOSITE direction (reversal).
+// BOS   = close beyond a swing in the SAME direction (continuation).
 
-function detectCHoCH(candles, pivots, lookbackBars = 30) {
+function detectCHoCH(candles, pivots, lookbackBars = 40) {
   if (!pivots || pivots.length < 2) return null;
-
   const highs   = pivots.filter(p => p.type === 'HIGH');
   const lows    = pivots.filter(p => p.type === 'LOW');
   const lastHigh = highs[highs.length - 1];
   const lastLow  = lows[lows.length  - 1];
+  const recent   = candles.slice(-lookbackBars);
 
-  const recent = candles.slice(-lookbackBars);
-  // Scan newest→oldest so we return the MOST RECENT CHoCH
   for (let i = recent.length - 1; i >= 0; i--) {
     const c = recent[i];
-    // Bearish CHoCH: close BELOW the last swing low (momentum flip downward)
-    if (lastLow && c.c < lastLow.price && c.t >= lastLow.ts) {
-      return { direction: 'BEARISH', level: lastLow.price, candleTs: c.t, type: 'CHoCH' };
+    if (lastLow  && c.c < lastLow.price  && c.t >= lastLow.ts)  {
+      return { direction: 'BEARISH', level: lastLow.price,  candleTs: c.t, type: 'CHoCH' };
     }
-    // Bullish CHoCH: close ABOVE the last swing high (momentum flip upward)
     if (lastHigh && c.c > lastHigh.price && c.t >= lastHigh.ts) {
       return { direction: 'BULLISH', level: lastHigh.price, candleTs: c.t, type: 'CHoCH' };
     }
@@ -123,30 +184,275 @@ function detectCHoCH(candles, pivots, lookbackBars = 30) {
   return null;
 }
 
-// Also detects Break of Structure (BOS) — same direction continuation
-function detectBOS(candles, pivots, direction, lookbackBars = 20) {
-  if (!pivots || !direction) return null;
+// ── Displacement detection ────────────────────────────────────
+// Displacement = 3+ consecutive strong candles in the same direction,
+// large bodies, small wicks, creating FVGs. This validates an OB/FVG.
 
-  const recent = candles.slice(-lookbackBars);
-  if (direction === 'LONG') {
-    const highs  = pivots.filter(p => p.type === 'HIGH');
-    const target = highs[highs.length - 2]; // second-to-last high (first = just broke)
-    if (!target) return null;
-    const broke = recent.some(c => c.c > target.price);
-    return broke ? { direction: 'BULLISH', level: target.price, type: 'BOS' } : null;
-  } else {
-    const lows   = pivots.filter(p => p.type === 'LOW');
-    const target = lows[lows.length - 2];
-    if (!target) return null;
-    const broke = recent.some(c => c.c < target.price);
-    return broke ? { direction: 'BEARISH', level: target.price, type: 'BOS' } : null;
+function detectDisplacement(candles, lookback = 20) {
+  const recent = candles.slice(-lookback);
+  const avgBody = recent.reduce((s, c) => s + c.body, 0) / recent.length;
+  const results = [];
+
+  for (let i = 2; i < recent.length; i++) {
+    const c0 = recent[i - 2], c1 = recent[i - 1], c2 = recent[i];
+
+    // Bullish displacement: 3 bullish candles, each body > 1.5× average
+    if (c0.bullish && c1.bullish && c2.bullish &&
+        c0.body > avgBody * 1.5 && c1.body > avgBody * 1.5 && c2.body > avgBody * 1.5 &&
+        c1.o >= c0.c * 0.999 && c2.o >= c1.c * 0.999) { // consecutive closes
+      results.push({ type: 'BULLISH', startIdx: i - 2, endIdx: i, ts: c2.t });
+    }
+    // Bearish displacement: 3 bearish candles
+    if (!c0.bullish && !c1.bullish && !c2.bullish &&
+        c0.body > avgBody * 1.5 && c1.body > avgBody * 1.5 && c2.body > avgBody * 1.5 &&
+        c1.o <= c0.c * 1.001 && c2.o <= c1.c * 1.001) {
+      results.push({ type: 'BEARISH', startIdx: i - 2, endIdx: i, ts: c2.t });
+    }
   }
+  return results;
 }
 
-// ── Step 4: Fibonacci Premium / Discount + OTE ───────────────
-// OTE = Optimal Trade Entry = 61.8% – 78.6% retracement
-// Premium zone (>50%) = short entry area in downtrend
-// Discount zone (<50%) = long entry area in uptrend
+// ── Fair Value Gaps (FVG / SIBI / BISI) ─────────────────────
+// 3-candle imbalance pattern. Also detects Inversion FVGs (IFVG).
+
+function detectFVGs(candles, lookback = FVG_LOOKBACK) {
+  const fvgs  = [];
+  const start = Math.max(1, candles.length - lookback);
+  const lastC = candles[candles.length - 1];
+  if (!lastC) return fvgs;
+
+  for (let i = start; i < candles.length - 1; i++) {
+    const prev = candles[i - 1];
+    const curr = candles[i];
+    const next = candles[i + 1];
+
+    // Bullish FVG (SIBI): prev.high < next.low
+    if (next.l > prev.h) {
+      const top    = next.l;
+      const bottom = prev.h;
+      const mid    = (top + bottom) / 2;
+      const ce     = mid; // Consequent Encroachment = 50% of FVG
+      const pctFilled = lastC.l <= top ? Math.min(1, (top - lastC.l) / (top - bottom)) : 0;
+      const filled    = pctFilled >= 0.5; // filled past CE
+      const inverted  = lastC.l < bottom; // fully filled → inversion
+      fvgs.push({
+        type: inverted ? 'BULLISH_IFVG' : 'BULLISH',
+        top, bottom, mid, ce,
+        ts: curr.t, idx: i,
+        size: top - bottom,
+        filled, inverted, pctFilled,
+      });
+    }
+
+    // Bearish FVG (BISI): next.high < prev.low
+    if (next.h < prev.l) {
+      const top    = prev.l;
+      const bottom = next.h;
+      const mid    = (top + bottom) / 2;
+      const ce     = mid;
+      const pctFilled = lastC.h >= bottom ? Math.min(1, (lastC.h - bottom) / (top - bottom)) : 0;
+      const filled    = pctFilled >= 0.5;
+      const inverted  = lastC.h > top;
+      fvgs.push({
+        type: inverted ? 'BEARISH_IFVG' : 'BEARISH',
+        top, bottom, mid, ce,
+        ts: curr.t, idx: i,
+        size: top - bottom,
+        filled, inverted, pctFilled,
+      });
+    }
+  }
+
+  return fvgs.sort((a, b) => b.idx - a.idx); // newest first
+}
+
+// ── Order Blocks (OB) + Breaker Blocks (BB) ──────────────────
+// OB = last opposing candle before displacement.
+// BB = failed OB (price closed through it) — now acts from opposite side.
+
+function detectOrderBlocks(candles, pivots, lookback = OB_LOOKBACK) {
+  const obs   = [];
+  const disps = detectDisplacement(candles, lookback + 10);
+  const highs = (pivots || []).filter(p => p.type === 'HIGH').slice(-5);
+  const lows  = (pivots || []).filter(p => p.type === 'LOW').slice(-5);
+  const lastC = candles[candles.length - 1];
+
+  // --- Order Blocks from pivots ---
+  for (const pivot of highs.slice(-3)) {
+    for (let j = Math.max(0, pivot.idx - 12); j < pivot.idx; j++) {
+      const c = candles[j];
+      if (!c) continue;
+      // Look for last bearish candle before a bullish displacement toward this high
+      if (!c.bullish && c.body > 0) {
+        const wasMitigated = lastC && lastC.h >= c.h; // price returned to OB high
+        const wasBroken    = lastC && lastC.c > c.h;  // price closed above OB → Breaker
+        obs.push({
+          type:        wasBroken ? 'BEARISH_BB' : 'BEARISH_OB',
+          top:         c.h, bottom: c.l, mid: (c.h + c.l) / 2, ce: (c.h + c.l) / 2,
+          ts:          c.t, idx: j,
+          mitigated:   wasMitigated,
+          pivot,
+          // For Breaker Block: the broken OB now acts as SUPPORT (becomes bullish)
+          bbDirection: wasBroken ? 'BULLISH' : 'BEARISH',
+        });
+        break;
+      }
+    }
+  }
+
+  for (const pivot of lows.slice(-3)) {
+    for (let j = Math.max(0, pivot.idx - 12); j < pivot.idx; j++) {
+      const c = candles[j];
+      if (!c) continue;
+      if (c.bullish && c.body > 0) {
+        const wasMitigated = lastC && lastC.l <= c.l;
+        const wasBroken    = lastC && lastC.c < c.l;
+        obs.push({
+          type:        wasBroken ? 'BULLISH_BB' : 'BULLISH_OB',
+          top:         c.h, bottom: c.l, mid: (c.h + c.l) / 2, ce: (c.h + c.l) / 2,
+          ts:          c.t, idx: j,
+          mitigated:   wasMitigated,
+          pivot,
+          bbDirection: wasBroken ? 'BEARISH' : 'BULLISH',
+        });
+        break;
+      }
+    }
+  }
+
+  // --- Order Blocks from displacement moves ---
+  for (const disp of disps.slice(-4)) {
+    const startIdx = Math.max(0, disp.startIdx - 3);
+    const segment  = candles.slice(startIdx, disp.startIdx + 1);
+    if (disp.type === 'BEARISH') {
+      const lastBull = segment.slice().reverse().find(c => c.bullish && c.body > 0);
+      if (lastBull) {
+        obs.push({
+          type: 'BEARISH_OB', top: lastBull.h, bottom: lastBull.l,
+          mid: (lastBull.h + lastBull.l) / 2, ce: (lastBull.h + lastBull.l) / 2,
+          ts: lastBull.t, idx: disp.startIdx, mitigated: false, fromDisplacement: true,
+        });
+      }
+    } else {
+      const lastBear = segment.slice().reverse().find(c => !c.bullish && c.body > 0);
+      if (lastBear) {
+        obs.push({
+          type: 'BULLISH_OB', top: lastBear.h, bottom: lastBear.l,
+          mid: (lastBear.h + lastBear.l) / 2, ce: (lastBear.h + lastBear.l) / 2,
+          ts: lastBear.t, idx: disp.startIdx, mitigated: false, fromDisplacement: true,
+        });
+      }
+    }
+  }
+
+  // Deduplicate by midpoint proximity
+  const out = [];
+  for (const ob of obs) {
+    if (!out.some(x => Math.abs(x.mid - ob.mid) / (ob.mid || 1) < 0.001)) out.push(ob);
+  }
+  return out;
+}
+
+// ── Inducement (IDM) detection ────────────────────────────────
+// IDM = small liquidity grab that precedes the real reversal.
+// In bearish context: price makes a minor HL that retail buys, then sweeps SSL.
+
+function detectInducement(candles, pivots, direction, lookback = 30) {
+  const recent = candles.slice(-lookback);
+  const lows   = (pivots || []).filter(p => p.type === 'LOW').slice(-5);
+  const highs  = (pivots || []).filter(p => p.type === 'HIGH').slice(-5);
+
+  if (direction === 'SHORT') {
+    // IDM for shorts: price sweeps a minor high (HL) before the real move down
+    for (let i = recent.length - 3; i >= 1; i--) {
+      const c = recent[i];
+      const isLocalHigh = c.h > recent[i - 1]?.h && c.h > recent[i + 1]?.h;
+      if (!isLocalHigh) continue;
+      // Was this high swept by price before reversing?
+      const afterC = recent.slice(i + 1);
+      const swept  = afterC.some(x => x.h > c.h && x.c < c.h);
+      if (swept) {
+        return { detected: true, direction: 'SHORT', level: c.h, ts: c.t, type: 'IDM' };
+      }
+    }
+  }
+
+  if (direction === 'LONG') {
+    for (let i = recent.length - 3; i >= 1; i--) {
+      const c = recent[i];
+      const isLocalLow = c.l < recent[i - 1]?.l && c.l < recent[i + 1]?.l;
+      if (!isLocalLow) continue;
+      const afterC = recent.slice(i + 1);
+      const swept  = afterC.some(x => x.l < c.l && x.c > c.l);
+      if (swept) {
+        return { detected: true, direction: 'LONG', level: c.l, ts: c.t, type: 'IDM' };
+      }
+    }
+  }
+
+  return { detected: false };
+}
+
+// ── Liquidity pools (equal highs / equal lows) ────────────────
+// EQH / EQL = stacked stops — price is drawn to these.
+
+function detectLiquidityPools(candles, pivots, tolerance = 0.002) {
+  const pools = [];
+  const highs = (pivots || []).filter(p => p.type === 'HIGH').slice(-10);
+  const lows  = (pivots || []).filter(p => p.type === 'LOW').slice(-10);
+
+  const cluster = (arr, type) => {
+    const used = new Set();
+    for (let i = 0; i < arr.length; i++) {
+      if (used.has(i)) continue;
+      const grp = [arr[i]];
+      for (let j = i + 1; j < arr.length; j++) {
+        if (!used.has(j) && Math.abs(arr[i].price - arr[j].price) / arr[i].price < tolerance) {
+          grp.push(arr[j]); used.add(j);
+        }
+      }
+      if (grp.length >= 2) {
+        pools.push({
+          type:  type === 'HIGH' ? 'BSL' : 'SSL',  // Buy-side / Sell-side liquidity
+          label: type === 'HIGH' ? 'EQH' : 'EQL',
+          level: grp.reduce((s, x) => s + x.price, 0) / grp.length,
+          count: grp.length,
+        });
+      }
+    }
+  };
+
+  cluster(highs, 'HIGH');
+  cluster(lows,  'LOW');
+  return pools;
+}
+
+// ── Previous Day / Week levels (PDH/PDL, PWH/PWL) ────────────
+// Key ICT liquidity levels — price frequently targets these.
+
+function getPDLevels(dailyCandles, weeklyCandles) {
+  const pd = dailyCandles[dailyCandles.length - 2] || null; // previous complete day
+  const pw = weeklyCandles?.[weeklyCandles.length - 2]      || null;
+  return {
+    pdh: pd?.h || null, pdl: pd?.l || null,
+    pwh: pw?.h || null, pwl: pw?.l || null,
+    pdm: pd ? (pd.h + pd.l) / 2 : null,  // Previous Day Midpoint
+  };
+}
+
+// ── ICT Killzone filter ───────────────────────────────────────
+// Returns the active killzone or null. Uses current UTC hour.
+
+function getActiveKillzone(nowMs = Date.now()) {
+  const hourUTC = (new Date(nowMs)).getUTCHours() +
+                  (new Date(nowMs)).getUTCMinutes() / 60;
+  for (const kz of KILLZONES_UTC) {
+    if (hourUTC >= kz.start && hourUTC < kz.end) return kz;
+  }
+  return null;
+}
+
+// ── Fibonacci Premium / Discount / OTE ───────────────────────
 
 function calcFibZones(swingHigh, swingLow) {
   if (!swingHigh || !swingLow) return null;
@@ -157,507 +463,590 @@ function calcFibZones(swingHigh, swingLow) {
 
   return {
     p100:  high,
-    p786:  high - range * 0.214,  // 78.6% retrace (OTE ceiling)
-    p705:  high - range * 0.295,  // 70.5% retrace
-    p618:  high - range * 0.382,  // 61.8% retrace (OTE floor)
-    p500:  high - range * 0.500,  // 50% — premium/discount boundary
+    p886:  low + range * 0.114,          // 88.6%
+    p786:  high - range * 0.214,          // 78.6% (OTE top)
+    p705:  high - range * 0.295,          // 70.5% (OTE middle)
+    p618:  high - range * 0.382,          // 61.8% (OTE bottom)
+    p500:  high - range * 0.500,          // 50%   (premium/discount line)
     p382:  high - range * 0.618,
     p236:  high - range * 0.764,
     p0:    low,
 
-    // Zone checks (pass current price)
-    isPremium:     (price) => price >  high - range * 0.500,
-    isDiscount:    (price) => price <  high - range * 0.500,
-    isOTEShort:    (price) => price >= high - range * 0.382 && price <= high,        // 61.8–100% = premium + OTE
-    isOTELong:     (price) => price >= low  && price <= high - range * 0.382,        // 0–61.8% = discount + OTE
-    isSweetSpot:   (price) => price >= high - range * 0.214 && price <= high - range * 0.382, // 61.8–78.6% OTE sweet spot
+    // Zone predicates
+    isPremium:   (p) => p > high - range * 0.500,
+    isDiscount:  (p) => p < high - range * 0.500,
+    isOTE:       (p) => p >= high - range * 0.382 && p <= high - range * 0.214, // 61.8–78.6%
+    isDeepOTE:   (p) => p >= high - range * 0.214 && p <= high,                  // 78.6–100% (premium deep OTE for shorts)
+    isOTEShort:  (p) => p >= high - range * 0.382,                               // above 61.8% = premium
+    isOTELong:   (p) => p <= high - range * 0.382,                               // below 61.8% = discount
+    isCE:        (p) => Math.abs(p - (high - range * 0.500)) / range < 0.02,    // ±2% of 50%
   };
 }
 
-// ── Step 5: Fair Value Gaps (FVGs) ───────────────────────────
-// FVG = 3-candle imbalance where middle candle's move leaves a
-// gap between candle[i-1] and candle[i+1].
-//
-// Bearish FVG: candle[i+1].high < candle[i-1].low  (price dropped fast)
-// Bullish FVG: candle[i+1].low  > candle[i-1].high (price rose fast)
+// ── SMT Divergence ────────────────────────────────────────────
+// Compare correlated pair. If BTC makes new high but ETH does not → bearish SMT.
+// Returns { detected, direction, description } or { detected:false }
 
-function detectFVGs(candles, lookback = FVG_LOOKBACK) {
-  const fvgs   = [];
-  const start  = Math.max(1, candles.length - lookback);
-  const lastC  = candles[candles.length - 1];
-  if (!lastC) return fvgs;
+async function detectSMTDivergence(symbol, direction, candles15m, lookback = 40) {
+  const corrSymbol = SMT_PAIRS[symbol];
+  if (!corrSymbol) return { detected: false };
 
-  for (let i = start; i < candles.length - 1; i++) {
-    const prev = candles[i - 1];
-    const curr = candles[i];
-    const next = candles[i + 1];
+  try {
+    const corrC = await fetchCandles(corrSymbol, '15', lookback + 10);
+    const mainRecent = candles15m.slice(-lookback);
+    const corrRecent = corrC.slice(-lookback);
 
-    // Bullish FVG: gap between prev.high and next.low
-    if (next.l > prev.h) {
-      const top    = next.l;
-      const bottom = prev.h;
-      const mid    = (top + bottom) / 2;
-      // FVG is "filled" if price has returned to its midpoint
-      const filled = lastC.l <= mid;
-      if (!filled) {
-        fvgs.push({ type: 'BULLISH', top, bottom, mid, ts: curr.t, idx: i, size: top - bottom });
+    const mainHigh  = Math.max(...mainRecent.map(c => c.h));
+    const corrHigh  = Math.max(...corrRecent.map(c => c.h));
+    const mainLow   = Math.min(...mainRecent.map(c => c.l));
+    const corrLow   = Math.min(...corrRecent.map(c => c.l));
+
+    const mainHighIdx = mainRecent.findIndex(c => c.h === mainHigh);
+    const corrHighIdx = corrRecent.findIndex(c => c.h === corrHigh);
+
+    if (direction === 'SHORT') {
+      // Bearish SMT: main makes new high in the window, corr pair does NOT reach the same level
+      const mainHighPrev = mainRecent.slice(0, Math.max(0, mainHighIdx)).reduce((m, c) => Math.max(m, c.h), 0);
+      const corrHighPrev = corrRecent.slice(0, Math.max(0, corrHighIdx)).reduce((m, c) => Math.max(m, c.h), 0);
+      const mainMadeHH  = mainHigh > mainHighPrev * 1.001;
+      const corrFailedHH= corrHigh  <= corrHighPrev * 1.001;
+      if (mainMadeHH && corrFailedHH) {
+        return { detected: true, direction: 'BEARISH', description: `${symbol} HH but ${corrSymbol} failed HH — bearish SMT` };
       }
     }
 
-    // Bearish FVG: gap between next.high and prev.low
-    if (next.h < prev.l) {
-      const top    = prev.l;
-      const bottom = next.h;
-      const mid    = (top + bottom) / 2;
-      const filled = lastC.h >= mid;
-      if (!filled) {
-        fvgs.push({ type: 'BEARISH', top, bottom, mid, ts: curr.t, idx: i, size: top - bottom });
+    if (direction === 'LONG') {
+      const mainLowPrev = mainRecent.slice(0, lookback - 5).reduce((m, c) => Math.min(m, c.l), Infinity);
+      const corrLowPrev = corrRecent.slice(0, lookback - 5).reduce((m, c) => Math.min(m, c.l), Infinity);
+      const mainMadeLL  = mainLow < mainLowPrev * 0.999;
+      const corrFailedLL= corrLow  >= corrLowPrev * 0.999;
+      if (mainMadeLL && corrFailedLL) {
+        return { detected: true, direction: 'BULLISH', description: `${symbol} LL but ${corrSymbol} failed LL — bullish SMT` };
       }
     }
-  }
+  } catch (_) {}
 
-  // Return most recent first
-  return fvgs.sort((a, b) => b.idx - a.idx);
+  return { detected: false };
 }
 
-// ── Order Blocks (OBs) ────────────────────────────────────────
-// OB = the last opposing candle just before a strong impulse that
-// broke market structure. Price often returns to the OB zone.
-//
-// Bearish OB: last bullish candle before a strong bearish BOS move
-// Bullish OB: last bearish candle before a strong bullish BOS move
+// ── Power of 3 / Daily Bias ───────────────────────────────────
+// ICT: bias = price relative to midnight open.
+// Also detects today's AMD phase (accumulation / manipulation / distribution).
 
-function detectOrderBlocks(candles, pivots, lookback = OB_LOOKBACK) {
-  const obs   = [];
-  const start = Math.max(5, candles.length - lookback);
-  const highs = (pivots || []).filter(p => p.type === 'HIGH');
-  const lows  = (pivots || []).filter(p => p.type === 'LOW');
+function getDailyBias(hourlyCandles, nowMs = Date.now()) {
+  if (!hourlyCandles || hourlyCandles.length < 4) return { bias: 'UNKNOWN', phase: 'UNKNOWN' };
 
-  // For each confirmed swing high — the bearish OB is the last bullish
-  // candle before the move that created that high
-  for (const pivot of highs.slice(-3)) {
-    // Find the impulse move that CREATED this swing high (look back 10 bars before pivot)
-    const beforeIdx = Math.max(0, pivot.idx - 10);
-    const segment   = candles.slice(beforeIdx, pivot.idx + 1);
-    // Walk backward to find the last bearish candle in the segment
-    for (let j = segment.length - 1; j >= 0; j--) {
-      if (!segment[j].bullish) {
-        obs.push({
-          type:   'BEARISH_OB',
-          top:    segment[j].h,
-          bottom: segment[j].l,
-          mid:    (segment[j].h + segment[j].l) / 2,
-          ts:     segment[j].t,
-          pivot,
-        });
-        break;
-      }
-    }
-  }
+  // Find the midnight UTC candle (approximate)
+  const midnightTs = new Date(nowMs);
+  midnightTs.setUTCHours(0, 0, 0, 0);
+  const midnightC = hourlyCandles.find(c => Math.abs(c.t - midnightTs.getTime()) < 3600_000);
+  const midnightOpen = midnightC?.o || hourlyCandles[hourlyCandles.length - 6]?.o || 0;
 
-  // For each confirmed swing low — the bullish OB is the last bearish
-  // candle before the move that created that low
-  for (const pivot of lows.slice(-3)) {
-    const beforeIdx = Math.max(0, pivot.idx - 10);
-    const segment   = candles.slice(beforeIdx, pivot.idx + 1);
-    for (let j = segment.length - 1; j >= 0; j--) {
-      if (segment[j].bullish) {
-        obs.push({
-          type:   'BULLISH_OB',
-          top:    segment[j].h,
-          bottom: segment[j].l,
-          mid:    (segment[j].h + segment[j].l) / 2,
-          ts:     segment[j].t,
-          pivot,
-        });
-        break;
-      }
-    }
-  }
+  const price     = hourlyCandles[hourlyCandles.length - 1]?.c || 0;
+  const hourUTC   = (new Date(nowMs)).getUTCHours();
+  const bias      = price > midnightOpen ? 'BULLISH' : 'BEARISH';
 
-  // Deduplicate OBs that are within 0.05% of each other
-  const deduped = [];
-  for (const ob of obs) {
-    const dup = deduped.some(x => Math.abs(x.mid - ob.mid) / ob.mid < 0.0005);
-    if (!dup) deduped.push(ob);
-  }
-  return deduped;
+  // Phase detection (simplified AMD):
+  let phase = 'UNKNOWN';
+  if (hourUTC >= 0  && hourUTC < 7)  phase = 'ACCUMULATION';  // Asian range
+  if (hourUTC >= 7  && hourUTC < 10) phase = 'MANIPULATION';  // London open (Judas swing)
+  if (hourUTC >= 10 && hourUTC < 15) phase = 'DISTRIBUTION';  // NY session (real move)
+  if (hourUTC >= 15 && hourUTC < 18) phase = 'CONSOLIDATION'; // NY midday
+  if (hourUTC >= 18 && hourUTC < 21) phase = 'LATE_DIST';     // NY close push
+
+  return { bias, midnightOpen, phase, price };
 }
 
-// ── Liquidity pools ───────────────────────────────────────────
-// Equal highs/lows = stacked orders → price targets these.
-// Returns { type:'EQUAL_HIGHS'|'EQUAL_LOWS', level, count }
+// ── LTF Entry: 5m CHoCH → first FVG after MSS ────────────────
+// ICT 2022 model: after the 5m CHoCH, look for the FIRST FVG that forms
+// in the direction of the trade — that is the precise entry zone.
 
-function detectLiquidityPools(candles, pivots, tolerance = 0.0015) {
-  const pools = [];
-  const highs = (pivots || []).filter(p => p.type === 'HIGH').slice(-8);
-  const lows  = (pivots || []).filter(p => p.type === 'LOW').slice(-8);
-
-  // Group highs within tolerance
-  const grouped = (arr, type) => {
-    const used = new Set();
-    for (let i = 0; i < arr.length; i++) {
-      if (used.has(i)) continue;
-      const cluster = [arr[i]];
-      for (let j = i + 1; j < arr.length; j++) {
-        if (Math.abs(arr[i].price - arr[j].price) / arr[i].price < tolerance) {
-          cluster.push(arr[j]);
-          used.add(j);
-        }
-      }
-      if (cluster.length >= 2) {
-        pools.push({
-          type:  type === 'HIGH' ? 'EQUAL_HIGHS' : 'EQUAL_LOWS',
-          level: cluster.reduce((s, x) => s + x.price, 0) / cluster.length,
-          count: cluster.length,
-        });
-      }
-    }
-  };
-
-  grouped(highs, 'HIGH');
-  grouped(lows,  'LOW');
-  return pools;
-}
-
-// ── Step 7: Lower-TF CHoCH for execution ─────────────────────
-// Specifically checks for:
-//   SHORT: a Lower High on the LTF followed by a close below the most recent low
-//   LONG:  a Higher Low on the LTF followed by a close above the most recent high
-
-function detectLTFEntry(candles5m, direction, lookback = 40) {
-  if (!candles5m || candles5m.length < 10) return null;
+function detectLTFEntry(candles5m, direction, lookback = 60) {
+  if (!candles5m || candles5m.length < 15) return null;
   const recent = candles5m.slice(-lookback);
 
   if (direction === 'SHORT') {
-    // Find: pivot high → pivot low → higher pivot (LH) → close below the pivot low (CHoCH short)
-    let foundLH = null;
-    let foundPivotLow = null;
+    // Find a Lower High on 5m followed by a close below the recent pivot low
+    for (let i = 6; i < recent.length - 1; i++) {
+      const c    = recent[i];
+      const prev2= recent[i - 2], prev1 = recent[i - 1], next1 = recent[i + 1];
+      const isLH = c.h < (recent.slice(0, i).map(x => x.h).reduce((m, v) => Math.max(m, v), 0)) &&
+                   c.h > prev1?.h && c.h > next1?.h;
+      if (!isLH) continue;
 
-    for (let i = 5; i < recent.length - 1; i++) {
-      const c = recent[i];
-      // Detect a local high (simple 3-bar check)
-      const isLocalHigh = c.h > recent[i - 1].h && c.h > recent[i - 2].h &&
-                          c.h > recent[i + 1]?.h;
-      if (isLocalHigh) {
-        // Check if this is a Lower High vs the prior local high
-        const priorHighs = recent.slice(0, i).filter((x, xi, arr) =>
-          xi > 0 && x.h > arr[xi - 1].h && x.h > (arr[xi + 1]?.h || 0)
-        );
-        const priorHigh = priorHighs[priorHighs.length - 1];
-        if (priorHigh && c.h < priorHigh.h) {
-          foundLH = { price: c.h, idx: i };
-          // Now find the most recent pivot low before this LH
-          const lows = recent.slice(0, i).filter((x, xi, arr) =>
-            xi > 0 && x.l < arr[xi - 1].l && x.l < (arr[xi + 1]?.l || Infinity)
-          );
-          foundPivotLow = lows[lows.length - 1];
-        }
-      }
-    }
+      // Find pivot low before this LH
+      const beforeLH = recent.slice(0, i);
+      const pivotLow = beforeLH.reduce((best, x, xi) => {
+        if (xi < 2 || xi > beforeLH.length - 2) return best;
+        const isLoc = x.l < beforeLH[xi - 1].l && x.l < (beforeLH[xi + 1]?.l || Infinity);
+        return (isLoc && (!best || x.l < best.l)) ? x : best;
+      }, null);
+      if (!pivotLow) continue;
 
-    if (foundLH && foundPivotLow) {
-      // Check if a recent candle closed below the pivot low (CHoCH)
-      const afterLH = recent.slice(foundLH.idx + 1);
-      const bos     = afterLH.find(c => c.c < foundPivotLow.l);
-      if (bos) {
-        return {
-          confirmed:   true,
-          direction:   'SHORT',
-          lhPrice:     foundLH.price,
-          bosLevel:    foundPivotLow.l,
-          entryCandle: bos,
-          type:        '5m-CHoCH-SHORT',
-        };
-      }
+      // Look for a close below the pivot low (CHoCH / MSS)
+      const afterLH = recent.slice(i + 1);
+      const mss     = afterLH.findIndex(c => c.c < pivotLow.l);
+      if (mss < 0) continue;
+
+      // Find the first FVG that formed AFTER the MSS (entry zone)
+      const afterMSS = afterLH.slice(mss);
+      const entryFVG = detectFVGs(afterMSS.length >= 3 ? afterMSS : recent.slice(i + mss + 1), 20)
+        .find(f => f.type === 'BEARISH' && !f.filled);
+
+      return {
+        confirmed:   true,
+        direction:   'SHORT',
+        lhPrice:     c.h,
+        mssLevel:    pivotLow.l,
+        entryFVG:    entryFVG || null,
+        entryZone:   entryFVG ? { top: entryFVG.top, bottom: entryFVG.bottom } : null,
+        type:        '5m-MSS-SHORT',
+      };
     }
   }
 
   if (direction === 'LONG') {
-    let foundHL = null;
-    let foundPivotHigh = null;
+    for (let i = 6; i < recent.length - 1; i++) {
+      const c    = recent[i];
+      const next1= recent[i + 1];
+      const isHL = c.l > (recent.slice(0, i).map(x => x.l).reduce((m, v) => Math.min(m, v), Infinity)) &&
+                   c.l < recent[i - 1]?.l && c.l < next1?.l;
+      if (!isHL) continue;
 
-    for (let i = 5; i < recent.length - 1; i++) {
-      const c = recent[i];
-      const isLocalLow = c.l < recent[i - 1].l && c.l < recent[i - 2].l &&
-                         c.l < recent[i + 1]?.l;
-      if (isLocalLow) {
-        const priorLows = recent.slice(0, i).filter((x, xi, arr) =>
-          xi > 0 && x.l < arr[xi - 1].l && x.l < (arr[xi + 1]?.l || Infinity)
-        );
-        const priorLow = priorLows[priorLows.length - 1];
-        if (priorLow && c.l > priorLow.l) {
-          foundHL = { price: c.l, idx: i };
-          const highs = recent.slice(0, i).filter((x, xi, arr) =>
-            xi > 0 && x.h > arr[xi - 1].h && x.h > (arr[xi + 1]?.h || 0)
-          );
-          foundPivotHigh = highs[highs.length - 1];
-        }
-      }
-    }
+      const beforeHL = recent.slice(0, i);
+      const pivotHigh = beforeHL.reduce((best, x, xi) => {
+        if (xi < 2 || xi > beforeHL.length - 2) return best;
+        const isLoc = x.h > beforeHL[xi - 1].h && x.h > (beforeHL[xi + 1]?.h || 0);
+        return (isLoc && (!best || x.h > best.h)) ? x : best;
+      }, null);
+      if (!pivotHigh) continue;
 
-    if (foundHL && foundPivotHigh) {
-      const afterHL = recent.slice(foundHL.idx + 1);
-      const bos     = afterHL.find(c => c.c > foundPivotHigh.h);
-      if (bos) {
-        return {
-          confirmed:   true,
-          direction:   'LONG',
-          hlPrice:     foundHL.price,
-          bosLevel:    foundPivotHigh.h,
-          entryCandle: bos,
-          type:        '5m-CHoCH-LONG',
-        };
-      }
+      const afterHL = recent.slice(i + 1);
+      const mss     = afterHL.findIndex(c => c.c > pivotHigh.h);
+      if (mss < 0) continue;
+
+      const afterMSS = afterHL.slice(mss);
+      const entryFVG = detectFVGs(afterMSS.length >= 3 ? afterMSS : recent.slice(i + mss + 1), 20)
+        .find(f => f.type === 'BULLISH' && !f.filled);
+
+      return {
+        confirmed:   true,
+        direction:   'LONG',
+        hlPrice:     c.l,
+        mssLevel:    pivotHigh.h,
+        entryFVG:    entryFVG || null,
+        entryZone:   entryFVG ? { top: entryFVG.top, bottom: entryFVG.bottom } : null,
+        type:        '5m-MSS-LONG',
+      };
     }
   }
 
   return null;
 }
 
-// ── Step 8: RR validation ─────────────────────────────────────
+// ── Unicorn setup detection ───────────────────────────────────
+// Unicorn = BOS + OB + FVG all overlapping in the same zone.
+// Highest-probability ICT entry.
+
+function detectUnicorn(candles, pivots, direction) {
+  const obs  = detectOrderBlocks(candles, pivots, OB_LOOKBACK);
+  const fvgs = detectFVGs(candles, FVG_LOOKBACK);
+  const obType  = direction === 'SHORT' ? 'BEARISH_OB' : 'BULLISH_OB';
+  const fvgType = direction === 'SHORT' ? 'BEARISH'    : 'BULLISH';
+
+  for (const ob of obs.filter(o => o.type === obType)) {
+    const overlap = fvgs.find(f =>
+      f.type === fvgType && !f.filled &&
+      f.bottom <= ob.top && f.top >= ob.bottom // zones overlap
+    );
+    if (overlap) {
+      // Confirm BOS exists (a prior swing was broken)
+      const choch = detectCHoCH(candles, pivots, 50);
+      const bosConfirmed = choch &&
+        ((direction === 'SHORT' && choch.direction === 'BEARISH') ||
+         (direction === 'LONG'  && choch.direction === 'BULLISH'));
+      if (bosConfirmed) {
+        return {
+          detected:   true,
+          ob, fvg:    overlap,
+          overlapTop: Math.min(ob.top, overlap.top),
+          overlapBot: Math.max(ob.bottom, overlap.bottom),
+          type:       'UNICORN',
+        };
+      }
+    }
+  }
+  return { detected: false };
+}
+
+// ── RR helpers ────────────────────────────────────────────────
 
 function calcRR(entry, sl, tp) {
   const risk   = Math.abs(entry - sl);
   const reward = Math.abs(tp - entry);
-  if (risk === 0) return 0;
-  return reward / risk;
+  return risk > 0 ? reward / risk : 0;
 }
 
-function meetsMinRR(entry, sl, tp) {
-  return calcRR(entry, sl, tp) >= MIN_RR;
+function meetsMinRR(entry, sl, tp, minRR = MIN_RR) {
+  return calcRR(entry, sl, tp) >= minRR;
 }
 
-// ── Full SMC analysis for one symbol ─────────────────────────
-// Returns a trade signal object or null.
+// ── Score calculator ──────────────────────────────────────────
+
+function calcScore({
+  fvg, ob, bbFound, unicorn, ote, deepOTE,
+  killzone, highValueKZ, dailyBias, dailyPhase,
+  ltfEntry, displacement, idm, smtDivergence,
+  rr, choch1h, choch15m,
+}) {
+  let score = 20; // base — 4H bias confirmed
+
+  // Confirmation layers
+  if (choch1h)         score += 10; // 1H CHoCH confirmed
+  if (choch15m)        score += 8;  // 15m CHoCH confirmed
+  if (ltfEntry)        score += 12; // 5m MSS + FVG entry confirmed
+
+  // Confluence (POI quality)
+  if (fvg)             score += 10; // FVG present
+  if (ob)              score += 10; // Order Block present
+  if (bbFound)         score += 8;  // Breaker Block (stronger)
+  if (unicorn)         score += 15; // Unicorn: BOS+OB+FVG = max confluence
+
+  // Zone quality
+  if (ote)             score += 8;  // In OTE 61.8–78.6%
+  if (deepOTE)         score += 5;  // Deep OTE 78.6–100% (very precise)
+
+  // Session timing
+  if (killzone)        score += 6;  // Any killzone active
+  if (highValueKZ)     score += 6;  // London or NY AM (high value)
+
+  // Daily context
+  if (dailyBias)       score += 5;  // Daily bias aligns
+  if (dailyPhase === 'DISTRIBUTION' || dailyPhase === 'MANIPULATION') score += 5;
+
+  // Extra confirmation
+  if (displacement)    score += 6;  // Displacement confirmed the move
+  if (idm)             score += 5;  // Inducement grabbed first
+  if (smtDivergence)   score += 8;  // SMT divergence on correlated pair
+
+  // RR bonus
+  if (rr >= 5)         score += 8;
+  else if (rr >= 3)    score += 4;
+
+  return Math.min(Math.round(score), 100);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// MAIN ANALYSIS — full 12-step SMC pipeline
+// ═══════════════════════════════════════════════════════════════
 
 async function analyzeSMC(symbol, log = console.log) {
   try {
-    // ── Fetch all timeframes in parallel ──────────────────────
-    const [c4h, c1h, c15m, c5m] = await Promise.all([
-      fetchCandles(symbol, '240', 120),   // 4H  — 120 bars ≈ 20 days
-      fetchCandles(symbol, '60',  120),   // 1H  — 120 bars ≈ 5 days
-      fetchCandles(symbol, '15',  120),   // 15m — 120 bars ≈ 30 hours
-      fetchCandles(symbol, '5',   80),    // 5m  — 80 bars  ≈ 7 hours
+    // ── Step 1: Fetch all timeframes in parallel ──────────────
+    const [cWeekly, cDaily, c4h, c1h, c15m, c5m] = await Promise.all([
+      fetchCandles(symbol, 'W',   24),    // Weekly — 24 bars ≈ 6 months
+      fetchCandles(symbol, 'D',   90),    // Daily  — 90 bars ≈ 3 months
+      fetchCandles(symbol, '240', 120),   // 4H     — 120 bars ≈ 20 days
+      fetchCandles(symbol, '60',  120),   // 1H     — 120 bars ≈ 5 days
+      fetchCandles(symbol, '15',  120),   // 15m    — 120 bars ≈ 30 hours
+      fetchCandles(symbol, '5',   100),   // 5m     — 100 bars ≈ 8 hours
     ]);
 
-    const price = c5m[c5m.length - 1]?.c;
+    const price  = c5m[c5m.length - 1]?.c;
+    const nowMs  = Date.now();
     if (!price) return null;
 
-    // ── Step 1+2: 4H structure — establish directional bias ───
-    const s4h = analyzeStructure(c4h, 5, 3);
-    log(`[SMC] ${symbol} 4H bias=${s4h.bias} swingH=${s4h.swingHigh?.price?.toFixed(2)} swingL=${s4h.swingLow?.price?.toFixed(2)}`);
+    log(`[SMC-PRO] ── Analysing ${symbol} price=${price.toFixed(2)} ──`);
 
-    if (s4h.bias === 'RANGING') {
-      log(`[SMC] ${symbol} → skip (4H=RANGING, no clear bias)`);
+    // ── Step 2: HTF Bias ──────────────────────────────────────
+    const sWeekly = analyzeStructure(cWeekly, 3, 1);
+    const sDaily  = analyzeStructure(cDaily,  5, 2);
+    const s4h     = analyzeStructure(c4h,     5, 3);
+    const s1h     = analyzeStructure(c1h,     8, 2);
+    const s15m    = analyzeStructure(c15m,    6, 2);
+
+    // Primary bias: 4H (intermediate term) aligned with Daily
+    const bias4h    = s4h.bias;
+    const biasDaily = sDaily.bias;
+
+    // Skip if 4H is RANGING or 4H/Daily conflict strongly
+    if (bias4h === 'RANGING') {
+      log(`[SMC-PRO] ${symbol} → skip (4H=RANGING, no clear institutional bias)`);
       return null;
     }
 
-    const direction = s4h.bias === 'BULLISH' ? 'LONG' : 'SHORT';
+    const direction = bias4h === 'BULLISH' ? 'LONG' : 'SHORT';
+    const dailyAligned = biasDaily === bias4h || biasDaily === 'RANGING';
 
-    // ── Step 3: 1H CHoCH — confirm direction shift ────────────
-    const s1h   = analyzeStructure(c1h, 8, 2);
-    const choch = detectCHoCH(c1h, s1h.pivots, 40);
+    log(`[SMC-PRO] ${symbol} bias 4H=${bias4h} Daily=${biasDaily} Weekly=${sWeekly.bias} → ${direction}`);
 
-    // Require 1H CHoCH in our favour
-    const chochOk = choch &&
-      ((direction === 'LONG'  && choch.direction === 'BULLISH') ||
-       (direction === 'SHORT' && choch.direction === 'BEARISH'));
+    // ── Step 3: Draw on Liquidity ─────────────────────────────
+    const pdLevels  = getPDLevels(cDaily, cWeekly);
+    const liqPools  = detectLiquidityPools(c4h, s4h.pivots);
+    const liqPools1h= detectLiquidityPools(c1h, s1h.pivots);
 
-    if (!chochOk) {
-      log(`[SMC] ${symbol} → skip (no 1H CHoCH in ${direction} direction, got ${choch?.direction || 'none'})`);
-      return null;
+    // Identify the nearest draw on liquidity in direction of bias
+    let drawOnLiq = null;
+    if (direction === 'SHORT') {
+      const targets = [
+        ...liqPools.filter(p => p.type === 'SSL' && p.level < price),
+        ...liqPools1h.filter(p => p.type === 'SSL' && p.level < price),
+        ...(pdLevels.pdl ? [{ type:'SSL', label:'PDL', level: pdLevels.pdl }] : []),
+      ].sort((a, b) => b.level - a.level); // nearest first
+      drawOnLiq = targets[0] || null;
+    } else {
+      const targets = [
+        ...liqPools.filter(p => p.type === 'BSL' && p.level > price),
+        ...liqPools1h.filter(p => p.type === 'BSL' && p.level > price),
+        ...(pdLevels.pdh ? [{ type:'BSL', label:'PDH', level: pdLevels.pdh }] : []),
+      ].sort((a, b) => a.level - b.level);
+      drawOnLiq = targets[0] || null;
     }
-    log(`[SMC] ${symbol} 1H CHoCH ${choch.direction} confirmed @ ${choch.level?.toFixed(2)}`);
 
-    // ── Step 4: Fibonacci Premium / Discount + OTE ────────────
-    // Use 4H swing high and swing low for the Fibonacci
+    log(`[SMC-PRO] ${symbol} draw on liquidity: ${drawOnLiq ? `${drawOnLiq.label || drawOnLiq.type} @ ${drawOnLiq.level?.toFixed(2)}` : 'none found'}`);
+
+    // ── Step 4: ICT Killzone filter ───────────────────────────
+    const activeKZ    = getActiveKillzone(nowMs);
+    const isHighValueKZ = activeKZ ? HIGH_VALUE_KZ.has(activeKZ.name) : false;
+    if (activeKZ) log(`[SMC-PRO] ${symbol} Killzone active: ${activeKZ.name}`);
+
+    // ── Step 5: Daily Bias + Power of 3 ──────────────────────
+    const dailyCtx = getDailyBias(c1h, nowMs);
+    const dailyBiasAligns = dailyCtx.bias === bias4h || bias4h === 'RANGING';
+    log(`[SMC-PRO] ${symbol} daily bias=${dailyCtx.bias} phase=${dailyCtx.phase}`);
+
+    // ── Step 6: Premium / Discount + OTE ─────────────────────
     const fib = calcFibZones(s4h.swingHigh, s4h.swingLow);
     if (!fib) {
-      log(`[SMC] ${symbol} → skip (cannot compute Fibonacci — missing swing)`);
+      log(`[SMC-PRO] ${symbol} → skip (cannot compute Fibonacci — missing 4H swing)`);
       return null;
     }
 
     const inPremium  = fib.isPremium(price);
     const inDiscount = fib.isDiscount(price);
-    const inOTEShort = fib.isOTEShort(price);
-    const inOTELong  = fib.isOTELong(price);
+    const inOTE      = fib.isOTE(price);
+    const inDeepOTE  = fib.isDeepOTE(price);
 
     if (direction === 'SHORT' && !inPremium) {
-      log(`[SMC] ${symbol} SHORT → skip (price=${price.toFixed(2)} not in PREMIUM zone, 50%=${fib.p500.toFixed(2)})`);
+      log(`[SMC-PRO] ${symbol} SHORT → skip (price=${price.toFixed(2)} NOT in PREMIUM, 50%=${fib.p500.toFixed(2)})`);
       return null;
     }
     if (direction === 'LONG' && !inDiscount) {
-      log(`[SMC] ${symbol} LONG → skip (price=${price.toFixed(2)} not in DISCOUNT zone, 50%=${fib.p500.toFixed(2)})`);
+      log(`[SMC-PRO] ${symbol} LONG → skip (price=${price.toFixed(2)} NOT in DISCOUNT, 50%=${fib.p500.toFixed(2)})`);
       return null;
     }
+    log(`[SMC-PRO] ${symbol} zone=${direction === 'SHORT' ? 'PREMIUM' : 'DISCOUNT'} OTE=${inOTE} DeepOTE=${inDeepOTE}`);
 
-    log(`[SMC] ${symbol} ${direction} price=${price.toFixed(2)} zone=${direction === 'SHORT' ? 'PREMIUM' : 'DISCOUNT'} OTE_ok=${direction === 'SHORT' ? inOTEShort : inOTELong}`);
+    // ── Step 7: Point of Interest (POI) detection ─────────────
+    const obs1h      = detectOrderBlocks(c1h, s1h.pivots, OB_LOOKBACK);
+    const fvgs1h     = detectFVGs(c1h, FVG_LOOKBACK);
+    const fvgs15m    = detectFVGs(c15m, FVG_LOOKBACK / 2);
+    const disps1h    = detectDisplacement(c1h, 30);
 
-    // ── Step 5: FVGs — area of interest ──────────────────────
-    // Look for an unfilled FVG on 1H that price is currently trading inside
-    const fvgs1h  = detectFVGs(c1h, FVG_LOOKBACK);
-    const fvgs15m = detectFVGs(c15m, FVG_LOOKBACK);
+    const obType  = direction === 'SHORT' ? 'BEARISH_OB'  : 'BULLISH_OB';
+    const bbType  = direction === 'SHORT' ? 'BEARISH_BB'  : 'BULLISH_BB';
+    const fvgType = direction === 'SHORT' ? 'BEARISH'     : 'BULLISH';
+    const ifvgType= direction === 'SHORT' ? 'BEARISH_IFVG': 'BULLISH_IFVG';
 
-    const relevantFVG = (direction === 'SHORT')
-      ? [...fvgs1h, ...fvgs15m].find(f => f.type === 'BEARISH' && price <= f.top && price >= f.bottom - f.size * 0.5)
-      : [...fvgs1h, ...fvgs15m].find(f => f.type === 'BULLISH' && price >= f.bottom && price <= f.top + f.size * 0.5);
+    // Price must be AT or INSIDE the POI (within 0.5× POI size buffer)
+    const priceInZone = (zone, buf = 0.5) =>
+      price <= zone.top + (zone.size || zone.top - zone.bottom) * buf &&
+      price >= zone.bottom - (zone.size || zone.top - zone.bottom) * buf;
 
-    // Also check for Order Blocks
-    const obs     = detectOrderBlocks(c1h, s1h.pivots, OB_LOOKBACK);
-    const obType  = direction === 'SHORT' ? 'BEARISH_OB' : 'BULLISH_OB';
-    const relevantOB = obs.find(ob =>
-      ob.type === obType && price <= ob.top + ob.size * 0.2 && price >= ob.bottom - ob.size * 0.2
+    const relevantFVG  = [...fvgs1h, ...fvgs15m].find(f =>
+      (f.type === fvgType || f.type === ifvgType) && !f.filled && priceInZone(f));
+    const relevantOB   = obs1h.find(ob => ob.type === obType && priceInZone(ob));
+    const relevantBB   = obs1h.find(ob => ob.type === bbType  && priceInZone(ob));
+
+    const hasDisplacement = disps1h.some(d =>
+      d.type === (direction === 'SHORT' ? 'BEARISH' : 'BULLISH') &&
+      Date.now() - d.ts < 4 * 3600_000 // recent displacement (within 4 hours)
     );
 
-    const hasConfluence = !!(relevantFVG || relevantOB);
-    log(`[SMC] ${symbol} FVG=${relevantFVG ? `${relevantFVG.type}[${relevantFVG.bottom.toFixed(2)}-${relevantFVG.top.toFixed(2)}]` : 'none'} OB=${relevantOB ? `${relevantOB.type}[${relevantOB.bottom.toFixed(2)}-${relevantOB.top.toFixed(2)}]` : 'none'}`);
+    // Unicorn check (BOS + OB + FVG overlap)
+    const unicorn = detectUnicorn(c1h, s1h.pivots, direction);
 
-    // Require at least FVG or OB for confluence (can trade without if OTE is sweet spot)
-    const inSweetSpot = fib.isSweetSpot(price);
-    if (!hasConfluence && !inSweetSpot) {
-      log(`[SMC] ${symbol} → skip (no FVG/OB confluence and not in OTE sweet spot 61.8–78.6%)`);
+    log(`[SMC-PRO] ${symbol} POI: FVG=${relevantFVG ? fvgType : 'none'} OB=${relevantOB ? 'YES' : 'none'} BB=${relevantBB ? 'YES' : 'none'} Unicorn=${unicorn.detected} Disp=${hasDisplacement}`);
+
+    // Must have at least one POI confluence (or be in deep OTE sweet spot)
+    const hasConfluence = !!(relevantFVG || relevantOB || relevantBB || unicorn.detected);
+    if (!hasConfluence && !inDeepOTE) {
+      log(`[SMC-PRO] ${symbol} → skip (no POI confluence + not in deep OTE 78.6–100%)`);
       return null;
     }
 
-    // ── Step 6: Pre-plan targets ──────────────────────────────
-    // TP1 = next structural level (swing high for shorts, swing low for longs)
-    // TP2 = equal highs/lows (liquidity pool)
-    const liqPools = detectLiquidityPools(c1h, s1h.pivots);
-    let tp1, tp2, slPrice, invalidationLevel;
+    // ── Step 8: SMT Divergence (BTC↔ETH) ─────────────────────
+    const smt = await detectSMTDivergence(symbol, direction, c15m, 40);
+    if (smt.detected) log(`[SMC-PRO] ${symbol} SMT divergence: ${smt.description}`);
+
+    // ── Step 9: Inducement check ──────────────────────────────
+    const idm = detectInducement(c15m, s15m.pivots, direction, 40);
+    if (idm.detected) log(`[SMC-PRO] ${symbol} IDM detected @ ${idm.level?.toFixed(2)}`);
+
+    // ── Step 10: 1H CHoCH confirmation ────────────────────────
+    const choch1h = detectCHoCH(c1h, s1h.pivots, 40);
+    const choch1hOk = choch1h &&
+      ((direction === 'LONG'  && choch1h.direction === 'BULLISH') ||
+       (direction === 'SHORT' && choch1h.direction === 'BEARISH'));
+
+    if (!choch1hOk) {
+      log(`[SMC-PRO] ${symbol} → skip (no 1H CHoCH in ${direction} direction)`);
+      return null;
+    }
+    log(`[SMC-PRO] ${symbol} 1H CHoCH ${choch1h.direction} @ ${choch1h.level?.toFixed(2)}`);
+
+    // ── Step 11: LTF entry — 15m CHoCH + 5m MSS + first FVG ──
+    const choch15mRaw = detectCHoCH(c15m, s15m.pivots, 20);
+    const choch15mOk  = choch15mRaw &&
+      ((direction === 'SHORT' && choch15mRaw.direction === 'BEARISH') ||
+       (direction === 'LONG'  && choch15mRaw.direction === 'BULLISH'));
+
+    const ltfEntry = detectLTFEntry(c5m, direction, 80);
+
+    if (!ltfEntry?.confirmed && !choch15mOk) {
+      log(`[SMC-PRO] ${symbol} → skip (no 15m/5m entry confirmation)`);
+      return null;
+    }
+
+    const entryLabel = ltfEntry?.confirmed ? `5m-MSS+FVG` : `15m-CHoCH`;
+    log(`[SMC-PRO] ${symbol} LTF entry: ${entryLabel}`);
+
+    // ── Step 12: SL and TP calculation ────────────────────────
+    let slPrice, tp1, tp2;
 
     if (direction === 'SHORT') {
-      // SL above the most recent swing high (invalidation level)
-      const recentHigh = s4h.lastHighs[s4h.lastHighs.length - 1];
-      invalidationLevel = recentHigh?.price || s4h.swingHigh?.price;
-      slPrice = invalidationLevel ? invalidationLevel * 1.002 : price * 1.004; // 0.2% above invalidation
+      // SL: above the liquidity sweep wick (last swing high + 0.15% buffer)
+      const sweepHigh = s4h.swingHigh || s1h.swingHigh;
+      slPrice = sweepHigh ? sweepHigh.price * 1.0015 : price * 1.004;
 
-      // TP1 = most recent swing low
-      const recentLow = s4h.lastLows[s4h.lastLows.length - 1];
-      tp1 = recentLow?.price || fib.p0;
+      // TP1: most recent swing low on 4H
+      const recLow = s4h.lastLows[s4h.lastLows.length - 1];
+      tp1 = recLow?.price || pdLevels.pdl || fib.p0;
 
-      // TP2 = nearest equal-lows liquidity pool below price
-      const liqBelow = liqPools
-        .filter(p => p.type === 'EQUAL_LOWS' && p.level < price)
-        .sort((a, b) => b.level - a.level)[0];
-      tp2 = liqBelow?.level || (tp1 - Math.abs(price - tp1) * 0.5);
+      // TP2: draw on liquidity (equal lows / SSL)
+      tp2 = drawOnLiq?.level || (tp1 - Math.abs(price - tp1) * 0.5);
     } else {
-      // SL below the most recent swing low (invalidation)
-      const recentLow = s4h.lastLows[s4h.lastLows.length - 1];
-      invalidationLevel = recentLow?.price || s4h.swingLow?.price;
-      slPrice = invalidationLevel ? invalidationLevel * 0.998 : price * 0.996;
+      const sweepLow = s4h.swingLow || s1h.swingLow;
+      slPrice = sweepLow ? sweepLow.price * 0.9985 : price * 0.996;
 
-      // TP1 = most recent swing high
-      const recentHigh = s4h.lastHighs[s4h.lastHighs.length - 1];
-      tp1 = recentHigh?.price || fib.p100;
-
-      // TP2 = nearest equal-highs liquidity pool above price
-      const liqAbove = liqPools
-        .filter(p => p.type === 'EQUAL_HIGHS' && p.level > price)
-        .sort((a, b) => a.level - b.level)[0];
-      tp2 = liqAbove?.level || (tp1 + Math.abs(tp1 - price) * 0.5);
+      const recHigh = s4h.lastHighs[s4h.lastHighs.length - 1];
+      tp1 = recHigh?.price || pdLevels.pdh || fib.p100;
+      tp2 = drawOnLiq?.level || (tp1 + Math.abs(tp1 - price) * 0.5);
     }
 
-    log(`[SMC] ${symbol} ${direction} entry~${price.toFixed(2)} sl=${slPrice.toFixed(2)} tp1=${tp1?.toFixed(2)} tp2=${tp2?.toFixed(2)}`);
+    // Use 5m entry FVG if available for tighter entry
+    const entryZone = ltfEntry?.entryZone;
+    const entryPrice = entryZone
+      ? (direction === 'SHORT' ? entryZone.top : entryZone.bottom)
+      : price;
 
-    // ── Step 7: 15m/5m CHoCH — execution confirmation ─────────
-    const s15m = analyzeStructure(c15m, 6, 2);
-    const ltfEntry = detectLTFEntry(c5m, direction, 60);
+    log(`[SMC-PRO] ${symbol} entry=${entryPrice.toFixed(2)} sl=${slPrice.toFixed(2)} tp1=${tp1?.toFixed(2)} tp2=${tp2?.toFixed(2)}`);
 
-    if (!ltfEntry?.confirmed) {
-      // Fallback: accept 15m CHoCH if 5m data is not yet confirmed
-      const choch15m = detectCHoCH(c15m, s15m.pivots, 20);
-      const choch15mOk = choch15m &&
-        ((direction === 'SHORT' && choch15m.direction === 'BEARISH') ||
-         (direction === 'LONG'  && choch15m.direction === 'BULLISH'));
-      if (!choch15mOk) {
-        log(`[SMC] ${symbol} → skip (no 15m/5m CHoCH entry confirmation for ${direction})`);
-        return null;
-      }
-      log(`[SMC] ${symbol} 15m CHoCH ${choch15m.direction} confirmed (5m pending)`);
-    } else {
-      log(`[SMC] ${symbol} 5m CHoCH ${ltfEntry.direction} confirmed — LH/HL → BOS`);
-    }
-
-    // ── Step 8: RR check — minimum 3:1 ───────────────────────
-    if (!tp1 || !meetsMinRR(price, slPrice, tp1)) {
-      const rr = tp1 ? calcRR(price, slPrice, tp1).toFixed(2) : 'N/A';
-      log(`[SMC] ${symbol} → skip (RR=${rr} < 3:1 minimum)`);
+    // ── RR check (minimum 2:1) ────────────────────────────────
+    if (!tp1 || !meetsMinRR(entryPrice, slPrice, tp1)) {
+      const rr = tp1 ? calcRR(entryPrice, slPrice, tp1).toFixed(2) : 'N/A';
+      log(`[SMC-PRO] ${symbol} → skip (RR=${rr} < ${MIN_RR}:1 minimum)`);
       return null;
     }
 
-    const rr = calcRR(price, slPrice, tp1);
-    log(`[SMC] ${symbol} ✅ SIGNAL ${direction} entry=${price.toFixed(2)} sl=${slPrice.toFixed(2)} tp1=${tp1.toFixed(2)} RR=${rr.toFixed(2)} — FVG=${!!relevantFVG} OB=${!!relevantOB} CHoCH=OK`);
+    const rr = parseFloat(calcRR(entryPrice, slPrice, tp1).toFixed(2));
 
-    // ── Build signal object (matches strategy-v4-smc.js format) ─
+    // ── Score ─────────────────────────────────────────────────
+    const score = calcScore({
+      fvg:          !!relevantFVG,
+      ob:           !!relevantOB,
+      bbFound:      !!relevantBB,
+      unicorn:      unicorn.detected,
+      ote:          inOTE,
+      deepOTE:      inDeepOTE,
+      killzone:     !!activeKZ,
+      highValueKZ:  isHighValueKZ,
+      dailyBias:    dailyBiasAligns,
+      dailyPhase:   dailyCtx.phase,
+      ltfEntry:     ltfEntry?.confirmed,
+      displacement: hasDisplacement,
+      idm:          idm.detected,
+      smtDivergence:smt.detected,
+      rr,
+      choch1h:      choch1hOk,
+      choch15m:     choch15mOk,
+    });
+
+    log(`[SMC-PRO] ${symbol} ✅ SIGNAL ${direction} score=${score} RR=${rr} killzone=${activeKZ?.name || 'off-session'}`);
+
+    // ── Build signal ──────────────────────────────────────────
+    // Profit-lock: slide SL to entry + 0.5× risk when price moves 0.5× risk in favour
+    const risk = Math.abs(entryPrice - slPrice);
+    const lockTrigger = direction === 'SHORT' ? entryPrice - risk * 0.5 : entryPrice + risk * 0.5;
+    const lockSl      = direction === 'SHORT' ? entryPrice - risk       : entryPrice + risk;
+
     return {
       symbol,
       direction,
-      side:      direction,
-      signal:    direction === 'SHORT' ? 'SELL' : 'BUY',
-      lastPrice: price,
-      entry:     price,
-      sl:        slPrice,
-      tp:        tp1,
+      side:          direction,
+      signal:        direction === 'SHORT' ? 'SELL' : 'BUY',
+      lastPrice:     price,
+      entry:         entryPrice,
+      sl:            slPrice,
+      tp:            tp1,
       tp1,
-      tp2:       tp2 || null,
-      rr:        parseFloat(rr.toFixed(2)),
-
-      // Profit-lock params (compatible with trail-tiers.js)
-      lockTrigger: direction === 'SHORT' ? price - (price - slPrice) * 0.5 : price + (slPrice - price) * 0.5,
-      lockSl:      direction === 'SHORT' ? price - (price - slPrice) * 1.0 : price + (slPrice - price) * 1.0,
-
-      // Context
-      setupName:   `SMC-PRO-${direction}`,
-      score:       _calcScore({ hasConfluence, inSweetSpot, inOTEShort, inOTELong, direction, rr, ltfEntry }),
-      timeframe:   '4H+1H+15m+5m',
-      version:     'smc-pro-v1',
-      zone:        direction === 'SHORT' ? 'PREMIUM' : 'DISCOUNT',
-
-      // SMC-specific metadata
+      tp2:           tp2 || null,
+      rr,
+      lockTrigger,
+      lockSl,
+      setupName:     unicorn.detected ? 'SMC-UNICORN' : (relevantBB ? 'SMC-BREAKER' : relevantOB ? 'SMC-OB' : 'SMC-FVG'),
+      score,
+      timeframe:     '4H+1H+15m+5m',
+      version:       'smc-pro-v2',
+      zone:          direction === 'SHORT' ? 'PREMIUM' : 'DISCOUNT',
       smcContext: {
-        bias4h:    s4h.bias,
-        choch1h:   choch,
-        fvg:       relevantFVG || null,
-        ob:        relevantOB  || null,
-        fib:       { p50: fib.p500, p618: fib.p618, p786: fib.p786 },
-        liqPools,
-        ltfEntry:  ltfEntry || null,
-        invalidation: invalidationLevel,
+        bias4h, biasDaily,
+        killzone:       activeKZ?.name || null,
+        dailyPhase:     dailyCtx.phase,
+        choch1h,
+        choch15m:       choch15mRaw || null,
+        ltfEntry:       ltfEntry    || null,
+        fvg:            relevantFVG || null,
+        ob:             relevantOB  || relevantBB || null,
+        unicorn:        unicorn.detected ? unicorn : null,
+        displacement:   hasDisplacement,
+        idm:            idm.detected ? idm : null,
+        smt:            smt.detected ? smt : null,
+        drawOnLiq:      drawOnLiq   || null,
+        pdLevels,
+        fib:            { p50: fib.p500, p618: fib.p618, p786: fib.p786 },
+        invalidation:   slPrice,
       },
     };
+
   } catch (err) {
-    log(`[SMC] ${symbol} analysis error: ${err.message}`);
+    log(`[SMC-PRO] ${symbol} analysis error: ${err.message}`);
     return null;
   }
 }
 
-// Score 0–100 based on confluence quality
-function _calcScore({ hasConfluence, inSweetSpot, inOTEShort, inOTELong, direction, rr, ltfEntry }) {
-  let score = 40; // base: 4H bias + 1H CHoCH + 15m CHoCH all confirmed
-  if (hasConfluence)                                  score += 20; // FVG or OB present
-  if (inSweetSpot)                                    score += 10; // OTE sweet spot (61.8–78.6%)
-  if ((direction === 'SHORT' && inOTEShort) ||
-      (direction === 'LONG'  && inOTELong))           score += 5;
-  if (ltfEntry?.confirmed)                            score += 15; // 5m CHoCH confirmed
-  if (rr >= 5)                                        score += 10; // exceptional RR
-  else if (rr >= 3)                                   score += 5;  // meets minimum
-  return Math.min(score, 100);
-}
+// ── Exports ──────────────────────────────────────────────────
 
 module.exports = {
   fetchCandles,
   detectPivots,
   analyzeStructure,
   detectCHoCH,
-  detectBOS,
-  calcFibZones,
+  detectDisplacement,
   detectFVGs,
   detectOrderBlocks,
+  detectInducement,
   detectLiquidityPools,
+  getPDLevels,
+  getActiveKillzone,
+  calcFibZones,
+  detectSMTDivergence,
+  getDailyBias,
   detectLTFEntry,
+  detectUnicorn,
   calcRR,
   meetsMinRR,
   analyzeSMC,
   MIN_RR,
+  KILLZONES_UTC,
 };
