@@ -717,11 +717,10 @@ function resolveSignal(state, zone, price, vwap, nowMs, symbol) {
     // MIXED 4H + MIXED/BEARISH 15m = no clear trend → skip entirely. Too many losers
     // come from trading in no-man's land when both timeframes are uncertain.
     if ((s4h === 'MIXED' || s4h === 'UNKNOWN') && s15chk !== 'BULLISH') return null;
-    // Demand zone entry: 15m must be at a low; 1m can be LL/HL (at the low, classic)
-    // OR HH (price already bouncing from demand — confirms support, entry still valid).
-    // LH on 1m = price pulling back down toward demand still → skip (wait for bounce).
+    // Demand zone entry: both 15m and 1m must confirm price is AT A LOW (demand).
+    // HH/LH on 1m = price is at a high → wrong zone for long, skip.
     const isDemand15 = p15 === 'LL' || p15 === 'HL';
-    const isDemand1m = p1m === 'LL' || p1m === 'HL' || p1m === 'HH';
+    const isDemand1m = p1m === 'LL' || p1m === 'HL';
     if (!isDemand15 || !isDemand1m) return null;
     // Freshness: 1m entry must be within 10 candles (10 min) after 15m pivot confirms.
     // 15m pivot bar opens at last15mPivotTime → lbR=1 bar confirms ~30min later.
@@ -757,11 +756,10 @@ function resolveSignal(state, zone, price, vwap, nowMs, symbol) {
     // MIXED 4H + MIXED/BULLISH 15m = no clear trend → skip entirely. Don't short
     // into uncertainty — supply zones break when trend is ambiguous.
     if ((s4h === 'MIXED' || s4h === 'UNKNOWN') && s15chk !== 'BEARISH') return null;
-    // Supply zone entry: 15m must be at a high; 1m can be HH/LH (at the high, classic)
-    // OR LL (price already falling from supply — confirms rejection, entry still valid).
-    // HL on 1m = price bouncing up toward supply still → skip (wait for rejection).
+    // Supply zone entry: both 15m and 1m must confirm price is AT A HIGH (supply).
+    // LL/HL on 1m = price is at a low → wrong zone for short, skip.
     const isSupply15 = p15 === 'HH' || p15 === 'LH';
-    const isSupply1m = p1m === 'HH' || p1m === 'LH' || p1m === 'LL';
+    const isSupply1m = p1m === 'HH' || p1m === 'LH';
     if (!isSupply15 || !isSupply1m) return null;
     // Freshness: same 10-candle (10 min) window after 15m pivot confirms — see tryLong.
     if (nowMs && state.last15mPivotTime && nowMs - state.last15mPivotTime > MAX_15M_PIVOT_AGE_MS) return null;
