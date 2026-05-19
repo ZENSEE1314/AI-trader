@@ -2816,13 +2816,15 @@ EMAIL_FROM=MCT &lt;a83c06001@smtp-brevo.com&gt;</pre>
             </button>
             <div style="margin-top:var(--space-2);font-size:0.72rem;color:var(--color-text-muted);">
               No MetaMask? <a href="https://metamask.io/download/" target="_blank" rel="noopener" style="color:#f6851b;">Download here</a>
+              &nbsp;·&nbsp;
+              <a href="#" onclick="event.preventDefault();window.CryptoBot.skipMetaMask()" style="color:#a78bfa;">Enter key manually</a>
             </div>
           </div>
 
           <!-- Step 2: Wallet connected — show address + ask for private key -->
           <div id="pm-step-key" class="hidden">
             <!-- Connected address display -->
-            <div id="pm-connected-address" style="display:flex;align-items:center;gap:10px;padding:10px 14px;
+            <div id="pm-address-box" style="display:flex;align-items:center;gap:10px;padding:10px 14px;
                  background:rgba(124,58,237,0.12);border:1px solid #7c3aed;border-radius:8px;
                  margin-bottom:var(--space-3);">
               <span style="font-size:1.2rem;">✅</span>
@@ -2917,7 +2919,7 @@ EMAIL_FROM=MCT &lt;a83c06001@smtp-brevo.com&gt;</pre>
   </div>
 
   <script src="/js/trading-floor.js?v=20260501-no-hp" defer></script>
-  <script src="/js/app.js?v=20260519-polymarket" defer></script>
+  <script src="/js/app.js?v=20260519-poly2" defer></script>
   <!-- Email tab patch: inline so it works regardless of JS cache (HTML is never cached) -->
   <script>
     document.addEventListener('DOMContentLoaded', function() {

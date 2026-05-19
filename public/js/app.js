@@ -5316,11 +5316,39 @@
 
   // ----- MetaMask wallet connect for Polymarket -----
 
+  // Show private key step without MetaMask (manual entry fallback)
+  function skipMetaMask() {
+    _showPolyStep2('');
+  }
+
+  function _showPolyStep2(address) {
+    const stepConnect = $('#pm-step-connect');
+    const stepKey     = $('#pm-step-key');
+    const addrBox     = $('#pm-address-box');
+    const addrEl      = $('#pm-address-text');
+    const labelEl     = $('#key-pm-label');
+    const submitBtn   = $('#btn-submit-key');
+
+    if (address) {
+      if (addrEl) addrEl.textContent = address;
+      if (addrBox) addrBox.style.display = '';
+      if (labelEl && (!labelEl.value || labelEl.value === 'Polymarket Wallet')) {
+        labelEl.value = `Polymarket ${address.slice(0, 6)}…${address.slice(-4)}`;
+      }
+    } else {
+      if (addrBox) addrBox.style.display = 'none';
+    }
+    if (stepConnect) stepConnect.classList.add('hidden');
+    if (stepKey)     stepKey.classList.remove('hidden');
+    if (submitBtn)   submitBtn.classList.remove('hidden');
+    $('#key-pm-private-key')?.focus();
+  }
+
   async function connectPolymarketWallet() {
     const btn = $('#btn-connect-wallet');
     if (!window.ethereum) {
-      showToast('MetaMask not detected. Please install MetaMask and try again.', 'error');
-      window.open('https://metamask.io/download/', '_blank', 'noopener');
+      // No MetaMask — skip straight to key entry
+      _showPolyStep2('');
       return;
     }
     try {
@@ -5344,22 +5372,7 @@
       }
 
       // Show step 2 — address confirmed, now ask for private key
-      const stepConnect = $('#pm-step-connect');
-      const stepKey     = $('#pm-step-key');
-      const addrEl      = $('#pm-address-text');
-      const labelEl     = $('#key-pm-label');
-      const submitBtn   = $('#btn-submit-key');
-
-      if (addrEl)  addrEl.textContent  = address;
-      if (labelEl && (!labelEl.value || labelEl.value === 'Polymarket Wallet')) {
-        labelEl.value = `Polymarket ${address.slice(0, 6)}…${address.slice(-4)}`;
-      }
-      if (stepConnect) stepConnect.classList.add('hidden');
-      if (stepKey)     stepKey.classList.remove('hidden');
-      if (submitBtn)   submitBtn.classList.remove('hidden');
-
-      // Focus the private key field
-      $('#key-pm-private-key')?.focus();
+      _showPolyStep2(address);
 
     } catch (err) {
       if (btn) { btn.disabled = false; btn.innerHTML = '<svg width="22" height="22" viewBox="0 0 35 33" fill="none"><path d="M32.958 1L19.268 10.89l2.459-5.814L32.958 1z" fill="#E2761B" stroke="#E2761B" stroke-linecap="round" stroke-linejoin="round"/><path d="M2.029 1l13.573 9.983-2.341-5.907L2.029 1zM28.07 23.533l-3.645 5.58 7.796 2.146 2.239-7.608-6.39-.118zM.558 23.651l2.225 7.608 7.782-2.146-3.63-5.58-6.377.118z" fill="#E4761B" stroke="#E4761B" stroke-linecap="round" stroke-linejoin="round"/></svg> Connect MetaMask'; }
@@ -5873,6 +5886,7 @@
     adminLoadTokenBoard, adminAddTokenBoard, adminPopulateTop50, adminSetRiskTag, adminSetTokenLev, adminToggleBan, adminRemoveTokenBoard,
     toggleStrategyToken, loadTokenCardPrices, loadTokenStats, editTokenCardLev,
     mcToggleSkill, mcUpdateConfig, mcCreateAgent, mcRemoveAgent, mcDownloadTrades,
+    connectPolymarketWallet, skipMetaMask,
   };
 
   // ----- Init -----
