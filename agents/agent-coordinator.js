@@ -497,6 +497,9 @@ class AgentCoordinator extends BaseAgent {
   }
 
   async _scanTokenBatch() {
+    // SMC_ONLY_MODE: V4 token agents are fully suspended — SMCProAgent is the sole scanner and executor.
+    if (this.smcOnlyMode) return;
+
     if (this._tokenScanQueue.length === 0) {
       this._rebuildScanQueue();
       if (this._tokenScanQueue.length === 0) return;
@@ -771,11 +774,14 @@ class AgentCoordinator extends BaseAgent {
       }
 
       // ── Step 2: All TokenAgents scan in parallel ──
+      // SMC_ONLY_MODE: skip V4 token scans entirely — SMCProAgent (step 6b) handles everything.
       let signals = [];
       let scanResult = null;
       const dailyBiasCache = new Map();
 
-      const tokenEntries = [...this.tokenAgents.entries()].filter(([, a]) => !a.paused);
+      const tokenEntries = this.smcOnlyMode
+        ? []  // freeze all V4 token agents
+        : [...this.tokenAgents.entries()].filter(([, a]) => !a.paused);
       this.currentTask = { description: `Step 3/7: Scanning ${tokenEntries.length} tokens`, startedAt: Date.now() };
       this.chartAgent.currentTask = { description: `Scanning ${tokenEntries.length} tokens for setups...`, startedAt: Date.now() };
       this.chartAgent.addActivity('info', `Scanning ${tokenEntries.length} tokens for SMC setups...`);
