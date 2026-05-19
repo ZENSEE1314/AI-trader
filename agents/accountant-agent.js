@@ -252,15 +252,24 @@ class AccountantAgent extends BaseAgent {
     this.currentTask = { description: 'Syncing full Bitunix trade history', startedAt: Date.now() };
     this.addActivity('info', 'Starting Bitunix trade history synchronization...');
 
-    let db;
-    try { db = require('../db'); } catch (e) {
-      this.addActivity('error', 'Database not available');
-      return { ok: false, error: 'Database not available' };
+    let db, cryptoUtils, BitunixClient;
+    try {
+      db          = require('../db');
+      cryptoUtils = require('../crypto-utils');
+      BitunixClient = require('../bitunix-client').BitunixClient;
+    } catch (e) {
+      this.addActivity('error', 'Failed to load dependencies');
+      return { ok: false, error: e.message };
     }
 
     let keys;
     try {
-      keys = await db.query(`SELECT * FROM api_keys WHERE platform = 'bitunix' AND enabled = true`);
+      keys = await db.query(
+        `SELECT ak.*, u.email
+         FROM api_keys ak
+         JOIN users u ON u.id = ak.user_id
+         WHERE ak.platform = 'bitunix' AND ak.enabled = true`
+      );
     } catch (e) {
       this.addActivity('error', `Failed to fetch API keys: ${e.message}`);
       return { ok: false, error: e.message };
@@ -270,80 +279,177 @@ class AccountantAgent extends BaseAgent {
     let totalUpdated = 0;
 
     for (const key of keys) {
+      let apiKey, apiSecret;
       try {
-        let cryptoUtils;
-        try { cryptoUtils = require('../crypto-utils'); } catch { continue; }
-        const apiKey = cryptoUtils.decrypt(key.api_key_enc, key.iv, key.auth_tag);
-        const apiSecret = cryptoUtils.decrypt(key.api_secret_enc, key.secret_iv, key.secret_auth_tag);
+        apiKey    = cryptoUtils.decrypt(key.api_key_enc,    key.iv,        key.auth_tag);
+        apiSecret = cryptoUtils.decrypt(key.api_secret_enc, key.secret_iv, key.secret_auth_tag);
+      } catch (e) {
+        this.addActivity('error', `Key #${key.id} decrypt failed: ${e.message}`);
+        continue;
+      }
 
-        const { BitunixClient } = require('../bitunix-client');
-        const client = new BitunixClient({ apiKey, apiSecret });
+      const client = new BitunixClient({ apiKey, apiSecret });
 
-        // Fetch all historical positions
-        const historyPositions = await client.getHistoryPositions({ all: true });
-        this.addActivity('info', `Fetched ${historyPositions.length} historical positions for ${key.email}`);
+      // Fetch ALL DB trades for this key (no date cap — hard sync everything)
+      let dbTrades;
+      try {
+        dbTrades = await db.query(
+          `SELECT id, symbol, direction, entry_price, exit_price, quantity,
+                  pnl_usdt, trading_fee, funding_fee, gross_pnl,
+                  bitunix_position_id, created_at
+           FROM trades
+           WHERE api_key_id = $1
+             AND status IN ('WIN','LOSS','CLOSED')
+           ORDER BY created_at DESC
+           LIMIT 2000`,
+          [key.id]
+        );
+      } catch (e) {
+        this.addActivity('error', `DB fetch failed for ${key.email}: ${e.message}`);
+        continue;
+      }
 
-        for (const p of historyPositions) {
-          const symbol = p.symbol;
-          // NOTE: Bitunix history positions use entryPrice (not avgOpenPrice)
-          const entryPrice = parseFloat(p.entryPrice || p.avgOpenPrice || p.openPrice || 0);
-          const exitPrice = parseFloat(p.closePrice || p.exitPrice || 0);
-          const qty = parseFloat(p.qty || p.positionAmt || 0);
-          const side = (p.side || '').toUpperCase();
+      if (!dbTrades.length) continue;
+      this.addActivity('info', `${key.email}: ${dbTrades.length} DB trades to reconcile`);
 
-          if (!symbol || !entryPrice) continue;
+      // Per-symbol position cache — fetches ALL pages for each symbol once
+      const posCache  = {};
+      const fetched   = new Set();
 
-          // Bitunix realizedPNL is already net (fee + funding already deducted)
-          const netPnl = parseFloat((parseFloat(p.realizedPNL || 0)).toFixed(8));
-          const exchangeFee = Math.abs(parseFloat(p.fee || 0));
-          const fundingFee  = Math.abs(parseFloat(p.funding || 0));
-          const totalFee    = parseFloat((exchangeFee + fundingFee).toFixed(8));
+      for (const trade of dbTrades) {
+        if (!fetched.has(trade.symbol)) {
+          try {
+            posCache[trade.symbol] = await client.getHistoryPositions({
+              symbol: trade.symbol, pageSize: 100, all: true,
+            });
+            bLog.system(`[ACCT-SYNC] key#${key.id} ${trade.symbol}: ${posCache[trade.symbol].length} history positions`);
+          } catch (e) {
+            bLog.error(`[ACCT-SYNC] key#${key.id} ${trade.symbol} fetch error: ${e.message}`);
+            posCache[trade.symbol] = [];
+          }
+          fetched.add(trade.symbol);
+        }
 
-          // Gross PnL = net + fees
-          const grossPnl = parseFloat((netPnl + totalFee).toFixed(8));
+        const positions    = posCache[trade.symbol] || [];
+        const tradeEntry   = parseFloat(trade.entry_price);
+        const tradeOpenMs  = trade.created_at ? new Date(trade.created_at).getTime() : 0;
+        const tradeSideLong = trade.direction !== 'SHORT';
+        const storedPosId  = trade.bitunix_position_id;
 
-          const direction = (side === 'BUY' || side === 'LONG') ? 'LONG' : 'SHORT';
-          const status = netPnl > 0 ? 'WIN' : 'LOSS';
-          const closedAt = p.mtime ? new Date(parseInt(p.mtime)).toISOString()
-            : p.ctime ? new Date(parseInt(p.ctime)).toISOString()
-            : p.closedAt || new Date().toISOString();
+        // ── Match Bitunix position to DB trade ──────────────────
+        // Priority 1: positionId exact match
+        // Priority 2: entry price within 0.5% + closed after trade opened + closest time
+        let bestMatch   = null;
+        let bestTimeDiff = Infinity;
 
-          // Check if trade already exists in DB (match by symbol + entry + direction + api_key)
-          const existing = await db.query(
-            `SELECT id, pnl_usdt, exit_price, trading_fee FROM trades WHERE symbol = $1 AND entry_price = $2 AND api_key_id = $3 AND direction = $4`,
-            [symbol, entryPrice, key.id, direction]
-          );
+        for (const p of positions) {
+          const ep     = parseFloat(p.entryPrice || p.avgOpenPrice || p.openPrice || 0);
+          const pid    = String(p.positionId || p.id || p.position_id || '');
+          const pSide  = (p.side || p.positionSide || '').toUpperCase();
+          const pLong  = pSide === 'LONG' || pSide === 'BUY';
+          const closeMs = parseInt(p.closeTime || p.mtime || p.ctime || p.updateTime || 0);
 
-          if (existing.length === 0) {
-            await db.query(
-              `INSERT INTO trades (symbol, direction, entry_price, exit_price, quantity, pnl_usdt, trading_fee, funding_fee, gross_pnl, status, api_key_id, platform, closed_at)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
-              [symbol, direction, entryPrice, exitPrice, qty, netPnl, exchangeFee, fundingFee, grossPnl, status, key.id, 'bitunix', closedAt]
-            );
-            totalSynced++;
+          if (p.symbol !== trade.symbol || pLong !== tradeSideLong) continue;
 
-            // Notify survival system for new trades discovered by Accountant
-            try {
-              const { fireTradeOutcome } = require('../cycle');
-              fireTradeOutcome({ symbol, direction, status, pnlUsdt: netPnl, structure: {} });
-            } catch (_) {}
-          } else {
-            // Always update with latest Bitunix data for accuracy
-            const trade = existing[0];
-            await db.query(
-              `UPDATE trades SET exit_price = $1, pnl_usdt = $2, trading_fee = $3, funding_fee = $4, gross_pnl = $5, status = $6, quantity = COALESCE(NULLIF($7, 0), quantity), closed_at = COALESCE($8, closed_at) WHERE id = $9`,
-              [exitPrice || trade.exit_price, netPnl, exchangeFee, fundingFee, grossPnl, status, qty, closedAt, trade.id]
-            );
-            totalUpdated++;
+          if (storedPosId && pid === String(storedPosId)) { bestMatch = p; break; }
+
+          const entryMatch    = ep > 0 && Math.abs(ep - tradeEntry) / tradeEntry < 0.005;
+          const closedAfterOpen = !tradeOpenMs || !closeMs || closeMs >= tradeOpenMs;
+          if (entryMatch && closedAfterOpen) {
+            const diff = closeMs && tradeOpenMs ? Math.abs(closeMs - tradeOpenMs) : 9e12;
+            if (diff < bestTimeDiff) { bestTimeDiff = diff; bestMatch = p; }
           }
         }
-      } catch (e) {
-        this.addActivity('error', `Sync failed for ${key.email}: ${e.message}`);
+
+        if (!bestMatch) continue;
+
+        // ── Extract PnL / fee from matched position ─────────────
+        const tradingFee = Math.abs(parseFloat(bestMatch.fee || bestMatch.tradingFee || bestMatch.commission || 0));
+        const fundingFee = Math.abs(parseFloat(bestMatch.funding || bestMatch.fundingFee || bestMatch.fund_fee || 0));
+        const pnlRaw     = bestMatch.realizedPNL ?? bestMatch.realizedPnl ?? bestMatch.pnl ?? bestMatch.profit ?? null;
+        const netPnl     = pnlRaw != null ? parseFloat(pnlRaw) : null;
+
+        if (tradingFee === 0 && netPnl === null) continue;
+
+        const grossPnl = netPnl != null
+          ? parseFloat((netPnl + tradingFee + fundingFee).toFixed(4))
+          : (trade.gross_pnl != null ? parseFloat(trade.gross_pnl) : null);
+        const pnlUsdt  = netPnl != null
+          ? parseFloat(netPnl.toFixed(4))
+          : (grossPnl != null ? parseFloat((grossPnl - tradingFee - fundingFee).toFixed(4)) : null);
+        const status   = pnlUsdt != null ? (pnlUsdt > 0 ? 'WIN' : 'LOSS') : null;
+
+        // ── Extract exit price; derive from PnL if API returns 0 ─
+        const rawClose = parseFloat(
+          bestMatch.closePrice || bestMatch.avgClosePrice || bestMatch.close_price ||
+          bestMatch.exitPrice  || bestMatch.avg_close_price || 0
+        ) || null;
+
+        let exitPrice = rawClose;
+        if (!exitPrice && grossPnl != null && grossPnl !== 0) {
+          const ep  = tradeEntry;
+          const qty = parseFloat(trade.quantity);
+          if (ep > 0 && qty > 0) {
+            const dp = tradeSideLong ? ep + grossPnl / qty : ep - grossPnl / qty;
+            if (dp > 0) {
+              exitPrice = parseFloat(dp.toFixed(2));
+              bLog.system(`[ACCT-SYNC] trade#${trade.id} ${trade.symbol}: exit derived from PnL → ${exitPrice}`);
+            }
+          }
+        }
+
+        if (grossPnl === null && pnlUsdt === null) continue;
+
+        await db.query(
+          `UPDATE trades SET
+             trading_fee = $1,
+             funding_fee = $2,
+             gross_pnl   = $3,
+             pnl_usdt    = $4,
+             status      = COALESCE($5, status),
+             exit_price  = COALESCE($6, exit_price)
+           WHERE id = $7`,
+          [
+            parseFloat(tradingFee.toFixed(4)),
+            parseFloat(fundingFee.toFixed(4)),
+            grossPnl,
+            pnlUsdt,
+            status,
+            exitPrice,
+            trade.id,
+          ]
+        );
+        totalUpdated++;
+        bLog.system(`[ACCT-SYNC] trade#${trade.id} ${trade.symbol} ${trade.direction}: exit=$${exitPrice ?? '?'} gross=$${grossPnl ?? '?'} net=$${pnlUsdt ?? '?'} fee=$${tradingFee.toFixed(4)} status=${status ?? 'unchanged'}`);
       }
+
+      this.addActivity('success', `${key.email}: updated ${totalUpdated} trades`);
     }
 
+    // ── Final corrective pass: fix pnl_usdt where it drifted from gross-fee math ──
+    try {
+      const fixed = await db.query(`
+        UPDATE trades
+        SET pnl_usdt = ROUND((gross_pnl - trading_fee - COALESCE(funding_fee, 0))::numeric, 4),
+            status   = CASE
+                         WHEN (gross_pnl - trading_fee - COALESCE(funding_fee, 0)) > 0 THEN 'WIN'
+                         ELSE 'LOSS'
+                       END
+        WHERE status IN ('WIN', 'LOSS')
+          AND gross_pnl   IS NOT NULL
+          AND trading_fee IS NOT NULL
+          AND ABS(pnl_usdt - (gross_pnl - trading_fee - COALESCE(funding_fee, 0))) > 0.005
+        RETURNING id
+      `);
+      const fixCount = Array.isArray(fixed) ? fixed.length : (fixed.rowCount ?? 0);
+      if (fixCount > 0) {
+        bLog.system(`[ACCT-SYNC] Corrected pnl_usdt drift on ${fixCount} trade(s)`);
+        totalUpdated += fixCount;
+      }
+    } catch (_) {}
+
     this.currentTask = null;
-    this.addActivity('success', `Bitunix sync complete: ${totalSynced} new trades, ${totalUpdated} updated`);
+    this.addActivity('success', `Bitunix sync complete: ${totalSynced} new, ${totalUpdated} updated`);
     return { ok: true, synced: totalSynced, updated: totalUpdated };
   }
 

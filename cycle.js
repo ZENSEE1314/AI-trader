@@ -44,6 +44,9 @@ const HIGH_PRICE_SYMBOLS = new Set(['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT'])
 // V4 strategy constants — loaded from v4_config DB table on startup (admin-editable).
 // Falls back to these safe defaults when the DB row is missing.
 let CAPITAL_PER_TRADE = 0.10;
+// Per-symbol capital overrides — populated from v4_config (cap_ETHUSDT etc.)
+// Falls back to CAPITAL_PER_TRADE when no symbol-specific value is set.
+const SYMBOL_CAPITAL = {};
 
 // ── TradingView webhook signal queue ──────────────────────────
 // Signals injected via /api/tv-webhook are stored here (keyed by symbol).
@@ -58,7 +61,7 @@ function injectTVSignal(signal) {
 
 let TOKEN_LEVERAGE = {
   BTCUSDT: 125,  // 0.25% SL → 31.3% risk/trade
-  ETHUSDT:  75,  // 0.40% SL → 30.0% risk/trade
+  ETHUSDT: 125,  // 0.25% SL → 31.3% risk/trade
   BNBUSDT: 200,  // 0.25% SL → 50.0% risk/trade
   SOLUSDT: 150,  // 0.20% SL → 30.0% risk/trade
 };
@@ -69,11 +72,18 @@ async function loadV4Config() {
     const cfg = {};
     for (const r of rows) cfg[r.key] = r.value;
 
-    if (cfg.capital_pct) CAPITAL_PER_TRADE = parseFloat(cfg.capital_pct) / 100;
+    // NOTE: capital_pct intentionally NOT loaded from DB — hardcoded at 10% in all scenarios.
+    // if (cfg.capital_pct) CAPITAL_PER_TRADE = parseFloat(cfg.capital_pct) / 100;
     if (cfg.lev_BTCUSDT) TOKEN_LEVERAGE.BTCUSDT = parseInt(cfg.lev_BTCUSDT);
     if (cfg.lev_ETHUSDT) TOKEN_LEVERAGE.ETHUSDT = parseInt(cfg.lev_ETHUSDT);
     if (cfg.lev_BNBUSDT) TOKEN_LEVERAGE.BNBUSDT = parseInt(cfg.lev_BNBUSDT);
     if (cfg.lev_SOLUSDT) TOKEN_LEVERAGE.SOLUSDT = parseInt(cfg.lev_SOLUSDT);
+
+    // NOTE: per-symbol capital overrides intentionally disabled — all tokens use hardcoded 10%.
+    // for (const sym of ['BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'SOLUSDT', 'ADAUSDT']) {
+    //   const capKey = `cap_${sym}`;
+    //   if (cfg[capKey]) SYMBOL_CAPITAL[sym] = parseFloat(cfg[capKey]) / 100;
+    // }
 
     // Build dynamic trailing SL tier tables from admin config.
     // Pushed into trail-tiers.js via setDynamicTiers so both cycle.js
@@ -104,7 +114,9 @@ async function loadV4Config() {
     const t100 = dynamicTiers['100'];
     const t75  = dynamicTiers['75'];
     const t50  = dynamicTiers['50'];
-    console.log(`[V4 Config] Loaded — capital: ${(CAPITAL_PER_TRADE * 100).toFixed(0)}% | leverage: BTC=${TOKEN_LEVERAGE.BTCUSDT}x ETH=${TOKEN_LEVERAGE.ETHUSDT}x BNB=${TOKEN_LEVERAGE.BNBUSDT}x SOL=${TOKEN_LEVERAGE.SOLUSDT}x`);
+    const capEth = SYMBOL_CAPITAL['ETHUSDT'] ? `ETH=${(SYMBOL_CAPITAL['ETHUSDT']*100).toFixed(0)}%` : '';
+    const capOverrides = Object.keys(SYMBOL_CAPITAL).map(s => `${s.replace('USDT','')}=${(SYMBOL_CAPITAL[s]*100).toFixed(0)}%`).join(' ');
+    console.log(`[V4 Config] Loaded — capital: ${(CAPITAL_PER_TRADE * 100).toFixed(0)}%${capOverrides ? ` (overrides: ${capOverrides})` : ''} | leverage: BTC=${TOKEN_LEVERAGE.BTCUSDT}x ETH=${TOKEN_LEVERAGE.ETHUSDT}x BNB=${TOKEN_LEVERAGE.BNBUSDT}x SOL=${TOKEN_LEVERAGE.SOLUSDT}x`);
     console.log(`[V4 Config] TSL tiers — 100x: T1=${t100[0].trigger*100}%→${t100[0].lock*100}% T2=${t100[1].trigger*100}%→${t100[1].lock*100}% T3=${t100[2].trigger*100}%→${t100[2].lock*100}% step=${g('tsl_100x_step',10)}%`);
     console.log(`[V4 Config] TSL tiers —  75x: T1=${t75[0].trigger*100}%→${t75[0].lock*100}%  T2=${t75[1].trigger*100}%→${t75[1].lock*100}%  T3=${t75[2].trigger*100}%→${t75[2].lock*100}%  step=${g('tsl_75x_step',10)}%`);
     console.log(`[V4 Config] TSL tiers —  50x: T1=${t50[0].trigger*100}%→${t50[0].lock*100}%  T2=${t50[1].trigger*100}%→${t50[1].lock*100}%  T3=${t50[2].trigger*100}%→${t50[2].lock*100}%  step=${g('tsl_50x_step',11)}%`);
@@ -1811,10 +1823,10 @@ async function executeForAllUsers(pick) {
           return;
         }
 
-        // Position sizing: always 10% of total wallet per trade — hardcoded, no DB override.
-        // CAPITAL_PER_TRADE = 0.10 is the single source of truth defined at the top of this file.
-        const walletSizePct = CAPITAL_PER_TRADE;
-        userLog.trade(`User ${key.email}: sizing = ${(walletSizePct * 100).toFixed(0)}% of wallet (hardcoded CAPITAL_PER_TRADE)`);
+        // Position sizing: per-symbol override from SYMBOL_CAPITAL, else global CAPITAL_PER_TRADE.
+        // Set via v4_config: cap_ETHUSDT=20 → 20% for ETH, others stay at capital_pct default.
+        const walletSizePct = SYMBOL_CAPITAL[symbol] ?? CAPITAL_PER_TRADE;
+        userLog.trade(`User ${key.email}: sizing = ${(walletSizePct * 100).toFixed(0)}% of wallet for ${symbol}${SYMBOL_CAPITAL[symbol] ? ' (symbol override)' : ''}`);
         const activeVer = await getActiveVersionParams();
 
         // Direction enable/disable — if active version disables a direction, skip this trade
@@ -2182,9 +2194,10 @@ async function executeForAllUsers(pick) {
               }
             }
 
-            const tpRef = (isScenarioA || isRangeBounce) && bxTpPrice
-              ? bxTpPrice
-              : isLong ? actualEntry * (1 + tpPricePct) : actualEntry * (1 - tpPricePct);
+            // Hard TP: only RANGE_BOUNCE and SCENARIO_A have a ceiling — store the actual TP price.
+            // All other setups (V4-SMC, etc.) trail freely — store 0 so the trail watchdog
+            // never accidentally re-sets a TP on the exchange when updating the SL.
+            const tpRef = (isScenarioA || isRangeBounce) && bxTpPrice ? bxTpPrice : 0;
 
             const insertedRows = await db.query(
               `INSERT INTO trades (api_key_id, user_id, symbol, direction, entry_price, sl_price, tp_price, quantity, leverage, status,
@@ -3125,21 +3138,25 @@ async function syncTradeStatus() {
                   realizedPnl = pnlRaw != null ? parseFloat(pnlRaw) : null;
 
                   if (cp > 0) {
-                    // Have both exit price and PnL — fully resolved
+                    // Position history gave a non-zero closePrice — store it as a candidate.
+                    // We still run Method 2 (order history) below when positionId is stored,
+                    // because Bitunix sometimes returns a wrong non-zero closePrice here.
+                    // Order fill avgPrice is ground truth; positionId match overrides this value.
                     exitPrice = cp;
                     found = true;
+                    foundPnl = (realizedPnl !== null);
                     bLog.system(`[SYNC] MATCH trade#${trade.id} ${trade.symbol}: entry=${ep} exit=${cp} pnl=${realizedPnl} fee=${tradingFee} funding=${fundingFee}`);
                   } else if (realizedPnl !== null && qty > 0) {
-                    // Bitunix closePrice=0 bug — derive exact exit price from realizedPnl math.
-                    // grossPnl = realizedPnl(net) + fees. exitPrice back-calculated from gross.
-                    // This avoids Method 2 picking up the wrong close order entirely.
-                    const grossApprox = realizedPnl + tradingFee + fundingFee;
-                    exitPrice = tradeSideLong
-                      ? parseFloat((tradeEntry + grossApprox / qty).toFixed(8))
-                      : parseFloat((tradeEntry - grossApprox / qty).toFixed(8));
-                    found = true;
-                    foundPnl = true;
-                    bLog.system(`[SYNC] MATCH(cp=0 derived) trade#${trade.id} ${trade.symbol}: entry=${ep} exit=${exitPrice}(derived) pnl=${realizedPnl} fee=${tradingFee} funding=${fundingFee}`);
+                    // Bitunix closePrice=0 — position history realizedPnl can be unreliable
+                    // (Bitunix API bug: returns wrong PnL sign/magnitude for some positions).
+                    // Deriving exitPrice from wrong Pnl produces wrong WIN/LOSS status.
+                    // Reset and fall through to Method 2 (order history + positionId match),
+                    // which returns the actual fill avgPrice and order-level PnL.
+                    bLog.system(`[SYNC] MATCH(cp=0) trade#${trade.id} ${trade.symbol}: entry=${ep} pnl=${realizedPnl} fee=${tradingFee} — deferring to order history (posId=${storedPosId})`);
+                    realizedPnl = null;
+                    tradingFee  = 0;
+                    fundingFee  = 0;
+                    // found/foundPnl intentionally left false → Method 2 will run
                   } else {
                     // Position matched but no PnL data either — Method 2 must find both
                     foundPnl = false;
@@ -3150,15 +3167,24 @@ async function syncTradeStatus() {
                 }
               } catch (e) { bLog.error(`[SYNC] Bitunix posHistory error: ${e.message}`); }
 
-              // Method 2: Order history — CLOSE orders.
-              // Runs when Method 1 gave no exit price (closePrice=0 or no match at all).
-              // Uses positionId for precise matching when available.
-              if (!found) {
+              // Method 2: Order history — definitive exit price via positionId.
+              // Runs when: (a) Method 1 found nothing (need any exit data), OR
+              //            (b) positionId stored + Method 1 found a price (posId exact match
+              //                overrides wrong closePrice from position history).
+              // Without positionId + Method 1 already found a price: skip — timeMatch is too
+              // loose and picks up close orders from OTHER positions on the same symbol/day.
+              const needsOrderCheck = !found || (storedPosId && found);
+              if (needsOrderCheck) {
                 try {
                   const orderList = await bxClient.getHistoryOrders({ symbol: trade.symbol, pageSize: 50 });
                   for (const o of orderList) {
                     const oPrice = parseFloat(o.avgPrice || o.price || 0);
                     const isClose = o.reduceOnly || o.tradeSide === 'CLOSE' || (o.effect || '').toUpperCase() === 'CLOSE';
+                    // Only accept FILLED orders — cancelled/rejected SL orders appear in history
+                    // with a trigger price but were never executed. Accepting them causes false closures.
+                    const oStatus = (o.status || o.orderStatus || o.state || '').toUpperCase();
+                    const isFilled = !oStatus || oStatus === 'FILLED' || oStatus === 'FULL_FILLED'
+                      || oStatus === 'PARTIALLY_FILLED' || oStatus === '2' || oStatus === 'COMPLETE';
                     const oMs = parseInt(o.ctime || o.mtime || 0);
                     const posIdMatch = storedPosId && String(o.positionId || '') === String(storedPosId);
                     // NOTE: If positionId is stored, ONLY accept orders with exact posId match.
@@ -3167,14 +3193,24 @@ async function syncTradeStatus() {
                     const timeMatch = !storedPosId && (!tradeOpenTime || !oMs || oMs > tradeOpenTime);
                     const shouldAccept = storedPosId ? posIdMatch : timeMatch;
 
-                    if (isClose && oPrice > 0 && shouldAccept) {
+                    if (isClose && isFilled && oPrice > 0 && shouldAccept) {
+                      // Order fill avgPrice is authoritative — override position history closePrice.
+                      if (found && exitPrice !== oPrice) {
+                        bLog.system(`[SYNC] posId override trade#${trade.id} ${trade.symbol}: exit ${exitPrice}→${oPrice} (order history wins over posHistory)`);
+                        // Reset PnL/fee so Method 2 values take precedence
+                        realizedPnl = null;
+                        tradingFee  = 0;
+                        fundingFee  = 0;
+                        foundPnl    = false;
+                      }
                       exitPrice = oPrice;
                       bLog.system(`[SYNC] Bitunix orderHistory: ${trade.symbol} | ${JSON.stringify({
                         avgPrice: o.avgPrice, price: o.price, realizedPNL: o.realizedPNL,
                         profit: o.profit, pnl: o.pnl, fee: o.fee, tradeSide: o.tradeSide,
-                        reduceOnly: o.reduceOnly, positionId: o.positionId, qty: o.qty
+                        reduceOnly: o.reduceOnly, positionId: o.positionId, qty: o.qty,
+                        status: o.status || o.orderStatus || o.state
                       })}`);
-                      // Only pull PnL from order if Method 1 didn't already set it
+                      // Only pull PnL and fee from order if Method 1 didn't already set them
                       if (!foundPnl) {
                         const profit = o.profit    != null ? parseFloat(o.profit)       : null;
                         const pnl    = o.pnl       != null ? parseFloat(o.pnl)          : null;
@@ -3182,9 +3218,14 @@ async function syncTradeStatus() {
                         if      (profit != null && profit !== 0) realizedPnl = profit;
                         else if (pnl    != null && pnl    !== 0) realizedPnl = pnl;
                         else if (rpnl   != null && rpnl   !== 0) realizedPnl = rpnl;
+                        // Also pick up the close-side fee from the order when available.
+                        // This is the exit-side fee only; the total round-trip fee will be
+                        // approximated in the fallback calc below if realizedPnl is still null.
+                        const oFee = Math.abs(parseFloat(o.fee || 0));
+                        if (oFee > 0) tradingFee = oFee;
                       }
                       found = true;
-                      bLog.system(`[SYNC] orderHistory RESULT: ${trade.symbol} exit=${exitPrice} net=${realizedPnl}`);
+                      bLog.system(`[SYNC] orderHistory RESULT: ${trade.symbol} exit=${exitPrice} net=${realizedPnl} fee=${tradingFee}`);
                       break;
                     }
                   }
@@ -3240,6 +3281,17 @@ async function syncTradeStatus() {
               // Use Bitunix data as-is — no math
               pnlUsdt   = parseFloat(realizedPnl.toFixed(4));
               grossPnl  = parseFloat((realizedPnl + tradingFee + fundingFee).toFixed(4));
+              // Derive exit price from PnL when Bitunix API returned closePrice=0.
+              // Formula: grossPnl = (entry - exit) × qty for SHORT, (exit - entry) × qty for LONG
+              if (exitPrice === entryPrice && grossPnl !== 0 && qty > 0) {
+                const derivedExit = isLong
+                  ? entryPrice + grossPnl / qty
+                  : entryPrice - grossPnl / qty;
+                if (derivedExit > 0) {
+                  bLog.trade(`[SYNC] Derived exit price from PnL: ${trade.symbol} ${isLong ? 'LONG' : 'SHORT'} entry=${entryPrice} gross=${grossPnl} qty=${qty} → exit=${derivedExit.toFixed(2)}`);
+                  exitPrice = derivedExit;
+                }
+              }
             } else if (realizedPnl !== null) {
               // Binance: realizedPnl is GROSS
               grossPnl = parseFloat(realizedPnl.toFixed(4));
@@ -3534,9 +3586,8 @@ async function backfillFeesFromBitunix() {
        JOIN users    u  ON u.id  = t.user_id
        WHERE t.status IN ('WIN','LOSS','CLOSED')
          AND ak.platform = 'bitunix'
-         AND t.closed_at > NOW() - INTERVAL '60 days'
        ORDER BY t.closed_at DESC
-       LIMIT 500`
+       LIMIT 2000`
     );
 
     if (!trades.length) {
@@ -3578,7 +3629,7 @@ async function backfillFeesFromBitunix() {
       for (const trade of keyTrades) {
         if (!posCache[trade.symbol] && !symbolsDone.has(trade.symbol)) {
           try {
-            posCache[trade.symbol] = await bxClient.getHistoryPositions({ symbol: trade.symbol, pageSize: 100 });
+            posCache[trade.symbol] = await bxClient.getHistoryPositions({ symbol: trade.symbol, pageSize: 100, all: true });
             bLog.system(`[FEE-BACKFILL] key#${keyId} ${trade.symbol}: ${posCache[trade.symbol].length} history positions`);
           } catch (e) {
             bLog.error(`[FEE-BACKFILL] key#${keyId} ${trade.symbol} fetch error: ${e.message}`);
@@ -3655,6 +3706,22 @@ async function backfillFeesFromBitunix() {
           continue;
         }
 
+        // Derive exit price from grossPnl when Bitunix closePrice field is absent.
+        // Formula reversal: grossPnl = (entry−exit)×qty (SHORT) → exit = entry − grossPnl/qty
+        let derivedClosePrice = closePrice;
+        if (!derivedClosePrice && grossPnl != null && grossPnl !== 0) {
+          const ep  = parseFloat(trade.entry_price);
+          const qty = parseFloat(trade.quantity);
+          const isL = trade.direction !== 'SHORT';
+          if (ep > 0 && qty > 0) {
+            const dp = isL ? ep + grossPnl / qty : ep - grossPnl / qty;
+            if (dp > 0) {
+              derivedClosePrice = parseFloat(dp.toFixed(2));
+              bLog.system(`[FEE-BACKFILL] trade#${trade.id} ${trade.symbol}: exit price derived from PnL → ${derivedClosePrice}`);
+            }
+          }
+        }
+
         // Force-overwrite all fee/pnl fields — do NOT use COALESCE.
         // Previous syncTradeStatus may have stored wrong values (e.g. live P&L
         // snapshot instead of realized, or entry_price as exit_price on API timeout).
@@ -3673,7 +3740,7 @@ async function backfillFeesFromBitunix() {
             grossPnl,
             pnlUsdt,
             status,
-            closePrice,
+            derivedClosePrice,
             trade.id,
           ]
         );
@@ -3999,4 +4066,5 @@ module.exports = {
   fireTradeOutcome,
   injectTVSignal,
   processTraderModeKeys,
+  backfillFeesFromBitunix,
 };

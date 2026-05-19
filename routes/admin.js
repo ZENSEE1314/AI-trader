@@ -4441,4 +4441,25 @@ router.post('/v4-config', async (req, res) => {
   }
 });
 
+// ── Manual: full Bitunix trade history hard-sync ─────────────
+// Triggers backfillFeesFromBitunix (all pages, all time) for every
+// Bitunix api_key in the DB. Updates exit_price, gross_pnl, pnl_usdt,
+// trading_fee, funding_fee, and status for every closed trade that
+// has a matching entry in the Bitunix position history API.
+router.post('/sync-bitunix-all', async (req, res) => {
+  try {
+    // Run in background so the HTTP response returns immediately.
+    // The cycle module export guards against double-load via require cache.
+    const { backfillFeesFromBitunix } = require('../cycle');
+    backfillFeesFromBitunix()
+      .then(()  => console.log('[ADMIN] /sync-bitunix-all completed'))
+      .catch(e  => console.error('[ADMIN] /sync-bitunix-all error:', e.message));
+
+    res.json({ ok: true, message: 'Bitunix history sync started — check bot logs for progress' });
+  } catch (e) {
+    console.error('[ADMIN] /sync-bitunix-all failed to start:', e.message);
+    res.status(500).json({ error: 'Failed to start sync' });
+  }
+});
+
 module.exports = router;
