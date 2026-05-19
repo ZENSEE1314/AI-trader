@@ -2840,24 +2840,27 @@ EMAIL_FROM=MCT &lt;a83c06001@smtp-brevo.com&gt;</pre>
               <input class="form-input" type="text" id="key-pm-label" placeholder="e.g. Polymarket Wallet" maxlength="40">
             </div>
 
-            <!-- Why we need the private key -->
-            <div style="background:rgba(245,158,11,0.1);border:1px solid rgba(245,158,11,0.4);
+            <!-- How to find private key in MetaMask -->
+            <div style="background:rgba(124,58,237,0.08);border:1px solid rgba(124,58,237,0.3);
                         border-radius:8px;padding:12px;margin-bottom:var(--space-3);font-size:0.78rem;
-                        color:var(--color-text-muted);line-height:1.6;">
-              <strong style="color:#fbbf24;">⚡ Why private key?</strong><br>
-              MetaMask can verify your address but can't sign trades for the bot automatically.
-              The bot runs 24/7 on a server — it needs your private key to sign Polymarket orders
-              while you're offline. Use a <strong style="color:var(--color-text);">dedicated wallet</strong> with only your trading USDC — not your main wallet.
+                        color:var(--color-text-muted);line-height:1.8;">
+              <strong style="color:#a78bfa;">🦊 How to get your Private Key from MetaMask:</strong><br>
+              <span style="color:var(--color-text);">1.</span> Open MetaMask extension<br>
+              <span style="color:var(--color-text);">2.</span> Click the <strong style="color:var(--color-text);">3-dot menu ⋮</strong> next to your account name<br>
+              <span style="color:var(--color-text);">3.</span> Click <strong style="color:var(--color-text);">"Account details"</strong><br>
+              <span style="color:var(--color-text);">4.</span> Click <strong style="color:var(--color-text);">"Show private key"</strong> (NOT Secret Recovery Phrase)<br>
+              <span style="color:var(--color-text);">5.</span> Enter your MetaMask password → copy the key starting with <code style="color:#fbbf24;">0x...</code>
+              <div style="margin-top:8px;padding-top:8px;border-top:1px solid rgba(124,58,237,0.2);color:#f87171;font-size:0.72rem;">
+                ⚠️ Use a <strong>dedicated trading wallet</strong> — not your main MetaMask. Only put USDC you want to trade in it.
+              </div>
             </div>
 
             <!-- Private key input -->
             <div class="form-group">
-              <label class="form-label" for="key-pm-private-key">Private Key
-                <span style="font-size:0.7rem;font-weight:400;color:var(--color-text-muted);"> — from MetaMask: Account → Details → Show Private Key</span>
-              </label>
+              <label class="form-label" for="key-pm-private-key">Private Key <span style="font-size:0.7rem;font-weight:400;color:var(--color-text-muted);">(starts with 0x...)</span></label>
               <div class="pw-wrap">
                 <input class="form-input text-mono" type="password" id="key-pm-private-key"
-                  placeholder="0x..." autocomplete="off">
+                  placeholder="0x4f3c..." autocomplete="off">
                 <button type="button" class="pw-toggle" tabindex="-1" aria-label="Show key"></button>
               </div>
             </div>
@@ -2919,7 +2922,7 @@ EMAIL_FROM=MCT &lt;a83c06001@smtp-brevo.com&gt;</pre>
   </div>
 
   <script src="/js/trading-floor.js?v=20260501-no-hp" defer></script>
-  <script src="/js/app.js?v=20260519-poly2" defer></script>
+  <script src="/js/app.js?v=20260519-poly3" defer></script>
   <!-- Email tab patch: inline so it works regardless of JS cache (HTML is never cached) -->
   <script>
     document.addEventListener('DOMContentLoaded', function() {
