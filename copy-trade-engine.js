@@ -34,18 +34,17 @@ function roundQty(symbol, qty) {
 }
 
 // ── Fetch follower's available USDT balance from Bitunix ─────────────────────
+// Uses client.getAccount() (correct BitunixClient method — getAccountBalance() doesn't exist).
 async function getFollowerBalance(client) {
   try {
-    const data = await client.getAccountBalance();
-    // Bitunix balance response varies — try common field paths
-    const assets = data?.data?.list || data?.data?.assets || data?.list || data?.assets || [];
-    const usdt = assets.find(a =>
-      (a.currency || a.asset || a.coin || '').toUpperCase() === 'USDT'
-    );
-    const balance = parseFloat(usdt?.available || usdt?.availableBalance || usdt?.walletBalance || 0);
+    const data = await client.getAccount('USDT');
+    const acc = Array.isArray(data) ? data[0] : data;
+    if (!acc) return null;
+    // Bitunix returns: { available, margin, frozen, ... }
+    const balance = parseFloat(acc.available || acc.availableBalance || acc.walletBalance || 0);
     return balance > 0 ? balance : null;
   } catch (err) {
-    console.warn(`[CopyTrade] getAccountBalance failed: ${err.message}`);
+    console.warn(`[CopyTrade] getFollowerBalance failed: ${err.message}`);
     return null;
   }
 }
@@ -127,7 +126,8 @@ async function _placeCopyTrade(sub, sourceTrade) {
   // ── Risk-based quantity sizing ──────────────────────────────────────────────
   // Use follower's OWN balance × their chosen risk %, not the leader's quantity.
   // This ensures a $100 wallet following a $10,000 wallet doesn't blow up.
-  const copyPct  = parseFloat(sub.copy_size_pct) || 10.0;   // e.g. 10 = 10%
+  // copy_size_pct is set by the user via the "Capital per Trade (%)" slider in Settings.
+  const copyPct  = parseFloat(sub.copy_size_pct) || 10.0;
   const useLev   = parseFloat(leverage) || parseFloat(sub.key_leverage) || 20;
 
   let copyQty;
@@ -162,14 +162,21 @@ async function _placeCopyTrade(sub, sourceTrade) {
   let posId       = null;
   let actualEntry = entry_price;
 
+  // Set leverage and margin mode before opening — silently ignore if already set.
+  try { await client.changeMarginMode(symbol, 'ISOLATION'); } catch (_) {}
+  try {
+    await client.changeLeverage(symbol, useLev);
+  } catch (levErr) {
+    console.warn(`[CopyTrade] key#${sub.follower_key_id} changeLeverage(${symbol}, ${useLev}x) warn: ${levErr.message}`);
+  }
+
   try {
     const orderResult = await client.placeOrder({
       symbol,
       side:      direction === 'LONG' ? 'BUY' : 'SELL',
       orderType: 'MARKET',
+      tradeSide: 'OPEN',
       qty:       copyQty,
-      leverage:  useLev,
-      reduceOnly: false,
     });
 
     posId = orderResult?.data?.positionId || orderResult?.positionId || null;

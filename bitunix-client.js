@@ -299,11 +299,13 @@ class BitunixClient {
     const acc = Array.isArray(data) ? data[0] : data;
     if (!acc) throw new Error('Bitunix: no account data returned');
 
-    let positions = [];
-    try {
-      const posData = await this.getOpenPositions();
-      positions = Array.isArray(posData) ? posData : [];
-    } catch (_) {}
+    // NOTE: Do NOT catch errors here. If getOpenPositions() fails, the error must
+    // propagate so callers (syncTradeStatus, hardSyncExchangeDB) skip this key entirely.
+    // A silent empty-positions fallback causes syncTradeStatus to treat ALL open trades
+    // as closed and write wrong exit data to the DB.
+    const posData = await this.getOpenPositions();
+    const positions = Array.isArray(posData) ? posData
+      : (posData?.positionList || posData?.list || []);
 
     return {
       totalWalletBalance: String(parseFloat(acc.available || 0) + parseFloat(acc.margin || 0) + parseFloat(acc.frozen || 0)),
