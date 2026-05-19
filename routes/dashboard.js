@@ -407,12 +407,14 @@ router.get('/futures-wallet', async (req, res) => {
           const address = wallet.address;
 
           // Check both native USDC and bridged USDC.e on Polygon
-          // Multiple RPCs as fallbacks — polygon-rpc.com can be slow/blocked on some hosts
+          // Reliable public Polygon RPCs — ordered by stability on Railway
           const POLYGON_RPCS = [
-            'https://polygon-rpc.com',
+            'https://polygon-bor-rpc.publicnode.com',
             'https://rpc.ankr.com/polygon',
-            'https://polygon.llamarpc.com',
+            'https://polygon.drpc.org',
+            'https://1rpc.io/matic',
           ];
+          // Native USDC (Circle, Sep 2023) + bridged USDC.e (Polygon PoS bridge)
           const USDC_NATIVE  = '0x3c499c542cef5e3811e1192ce70d8cc03d5c3359';
           const USDC_BRIDGED = '0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174';
 
@@ -428,6 +430,7 @@ router.get('/futures-wallet', async (req, res) => {
                   timeout: 8000,
                 });
                 const json = await resp.json();
+                console.log(`[dashboard] RPC ${rpc.split('/')[2]} token=${tokenAddr.slice(-6)} raw=${json.result}`);
                 if (json.result !== undefined) {
                   // Valid RPC response — result present (even if 0x = zero balance)
                   if (json.result && json.result !== '0x') {
