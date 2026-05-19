@@ -1036,13 +1036,18 @@
       const riskPct = k.risk_pct != null ? (parseFloat(k.risk_pct) * 100).toFixed(0) : '10';
       const isTraderMode = !!k.trader_mode;
 
-      return `<div class="key-card" data-key-id="${k.id}">
+      const isPolymarket   = k.platform === 'polymarket';
+      const pmBudget       = parseFloat(k.pm_budget_usdc    || 200);
+      const pmMaxPerTrade  = parseFloat(k.pm_max_per_trade  || 50);
+      const pmMultiplierPct= Math.round(parseFloat(k.pm_multiplier || 0.1) * 100);
+
+      return `<div class="key-card" data-key-id="${k.id}" data-platform="${escapeHtml(k.platform)}">
         <div class="key-card-main">
           <div class="key-card-info">
             <div class="key-card-platform ${escapeHtml(k.platform)}">${platformAbbr}</div>
             <div class="key-card-details">
               <div class="key-card-label">${escapeHtml(k.label || k.platform)}</div>
-              <div class="key-card-preview">${escapeHtml(k.key_preview || '********')}...</div>
+              <div class="key-card-preview">${isPolymarket ? '🔮 Prediction Markets' : escapeHtml(k.key_preview || '********') + '...'}</div>
             </div>
           </div>
           <div class="key-card-status">
@@ -1055,7 +1060,66 @@
           </div>
         </div>
         <div class="key-settings" id="settings-${k.id}">
-          <!-- Capital % per trade -->
+
+        ${isPolymarket ? `
+          <!-- ── Polymarket capital controls ── -->
+          <div style="background:rgba(124,58,237,0.08);border:1px solid #7c3aed;border-radius:8px;padding:var(--space-3);margin-bottom:var(--space-4);">
+            <div style="font-size:0.75rem;font-weight:600;color:#a78bfa;margin-bottom:var(--space-3);">🔮 Polymarket Copy Capital</div>
+
+            <!-- Total budget -->
+            <div class="slider-group" style="margin-bottom:var(--space-3);">
+              <div class="slider-header">
+                <label class="form-label" for="pm-budget-${k.id}" style="margin:0;">
+                  Total Copy Budget (USDC)
+                  <span class="tip-btn">?<span class="tip-text">Maximum total USDC deployed across all your Polymarket copy positions. Once this budget is reached the bot stops opening new copied trades until existing ones resolve.</span></span>
+                </label>
+                <input type="number" class="slider-num" id="pm-budget-num-${k.id}" min="10" max="10000" step="10" value="${pmBudget}"
+                  oninput="window.CryptoBot.syncSlider('pm-budget-${k.id}',this.value)"
+                  style="width:80px;">
+              </div>
+              <input type="range" id="pm-budget-${k.id}" min="10" max="10000" step="10" value="${pmBudget}"
+                oninput="window.CryptoBot.syncNum('pm-budget-num-${k.id}',this.value)"
+                aria-label="Polymarket copy budget USDC">
+            </div>
+
+            <!-- Max per single trade -->
+            <div class="slider-group" style="margin-bottom:var(--space-3);">
+              <div class="slider-header">
+                <label class="form-label" for="pm-max-${k.id}" style="margin:0;">
+                  Max USDC per Trade
+                  <span class="tip-btn">?<span class="tip-text">Hard cap on any single copied trade. Even if the target bets $10,000, your bot will never risk more than this per trade.</span></span>
+                </label>
+                <input type="number" class="slider-num" id="pm-max-num-${k.id}" min="1" max="1000" step="1" value="${pmMaxPerTrade}"
+                  oninput="window.CryptoBot.syncSlider('pm-max-${k.id}',this.value)"
+                  style="width:70px;">
+              </div>
+              <input type="range" id="pm-max-${k.id}" min="1" max="1000" value="${pmMaxPerTrade}"
+                oninput="window.CryptoBot.syncNum('pm-max-num-${k.id}',this.value)"
+                aria-label="Max USDC per copied trade">
+            </div>
+
+            <!-- Size multiplier -->
+            <div class="slider-group" style="margin-bottom:var(--space-2);">
+              <div class="slider-header">
+                <label class="form-label" for="pm-mult-${k.id}" style="margin:0;">
+                  Size Multiplier (%)
+                  <span class="tip-btn">?<span class="tip-text">What percentage of the target trader's trade size to copy. 10% = if they bet $500, you bet $50 (subject to Max per Trade cap).</span></span>
+                </label>
+                <input type="number" class="slider-num" id="pm-mult-num-${k.id}" min="1" max="200" step="1" value="${pmMultiplierPct}"
+                  oninput="window.CryptoBot.syncSlider('pm-mult-${k.id}',this.value)"
+                  style="width:65px;">
+              </div>
+              <input type="range" id="pm-mult-${k.id}" min="1" max="200" value="${pmMultiplierPct}"
+                oninput="window.CryptoBot.syncNum('pm-mult-num-${k.id}',this.value)"
+                aria-label="Copy size multiplier percentage">
+            </div>
+            <div style="font-size:0.7rem;color:var(--color-text-muted);margin-top:var(--space-1);">
+              Example: target bets $300 → your copy = $<span id="pm-example-${k.id}">${Math.min(300 * pmMultiplierPct / 100, pmMaxPerTrade).toFixed(0)}</span>
+              (${pmMultiplierPct}% × $300, capped at $${pmMaxPerTrade})
+            </div>
+          </div>
+        ` : `
+          <!-- Capital % per trade (exchange keys only) -->
           <div class="slider-group" style="margin-bottom:var(--space-4);">
             <div class="slider-header">
               <label class="form-label" for="risk-${k.id}">Capital per Trade (%) <span class="tip-btn">?<span class="tip-text">Percentage of your wallet used as margin for each trade. E.g. 10% of a $1,000 wallet = $100 margin per trade.</span></span></label>
@@ -1066,7 +1130,9 @@
               oninput="window.CryptoBot.syncNum('risk-num-${k.id}',this.value)"
               aria-label="Capital per trade percentage">
           </div>
+        `}
 
+          ${!isPolymarket ? `
           <!-- Trader Mode -->
           <div style="margin-bottom:var(--space-4);padding:12px;background:var(--color-bg-raised);border-radius:8px;border:1px solid var(--color-border-muted);">
             <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
@@ -1112,6 +1178,7 @@
             </div>
             <input type="hidden" id="ct-mode-${k.id}" value="none">
           </div>
+          ` : ''}
           </div><!-- /copy-trade-wrapper -->
 
           <!-- Enabled toggle -->
@@ -1133,7 +1200,7 @@
   }
 
   function getPlatformAbbr(platform) {
-    const abbrs = { binance: 'BIN', bitunix: 'BTX', okx: 'OKX' };
+    const abbrs = { binance: 'BIN', bitunix: 'BTX', okx: 'OKX', polymarket: '🔮' };
     return abbrs[(platform || '').toLowerCase()] || platform?.substring(0, 3).toUpperCase() || '???';
   }
 
@@ -1217,18 +1284,29 @@
 
   // Save settings
   async function saveSettings(keyId) {
-    const riskPct    = parseInt($(`#risk-${keyId}`).value) / 100;
+    const card       = document.querySelector(`[data-key-id="${keyId}"]`);
+    const isPolymarket = card?.dataset?.platform === 'polymarket'
+      || !!$(`#pm-budget-${keyId}`);   // fallback: check if Polymarket fields exist
+
     const enabled    = $(`#enabled-${keyId}`).checked;
     const traderMode = $(`#trader-mode-${keyId}`)?.checked || false;
     const copyMode   = traderMode ? 'none' : ($(`#ct-mode-${keyId}`)?.value || 'none');
 
+    // Build payload — Polymarket keys send capital controls, exchange keys send risk_pct
+    const payload = { enabled, trader_mode: traderMode };
+    if (isPolymarket) {
+      const budget      = parseFloat($(`#pm-budget-num-${keyId}`)?.value  || 200);
+      const maxPerTrade = parseFloat($(`#pm-max-num-${keyId}`)?.value     || 50);
+      const multPct     = parseFloat($(`#pm-mult-num-${keyId}`)?.value    || 10);
+      payload.pm_budget_usdc   = budget;
+      payload.pm_max_per_trade = maxPerTrade;
+      payload.pm_multiplier    = parseFloat((multPct / 100).toFixed(4));
+    } else {
+      payload.risk_pct = parseInt($(`#risk-${keyId}`)?.value || 10) / 100;
+    }
+
     try {
-      // Save capital %, enabled state, and trader_mode
-      await api('PUT', `/api/keys/${keyId}/settings`, {
-        risk_pct: riskPct,
-        enabled,
-        trader_mode: traderMode,
-      });
+      await api('PUT', `/api/keys/${keyId}/settings`, payload);
 
       // Handle copy trade subscription
       if (copyMode === 'none' || traderMode) {

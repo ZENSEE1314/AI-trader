@@ -21,6 +21,9 @@ router.get('/', async (req, res) => {
                 COALESCE(rl.name, 'Medium Risk') as risk_level_name,
                 COALESCE(rl.description, 'Balanced risk profile') as risk_level_description,
                 COALESCE(ak.trader_mode, false) as trader_mode,
+                COALESCE(ak.pm_budget_usdc,   200) as pm_budget_usdc,
+                COALESCE(ak.pm_max_per_trade,  50) as pm_max_per_trade,
+                COALESCE(ak.pm_multiplier,    0.1) as pm_multiplier,
                 substring(ak.api_key_enc, 1, 8) as key_preview, ak.created_at
          FROM api_keys ak
          LEFT JOIN risk_levels rl ON ak.risk_level_id = rl.id
@@ -39,6 +42,9 @@ router.get('/', async (req, res) => {
                 'Medium Risk' as risk_level_name,
                 'Balanced risk profile' as risk_level_description,
                 COALESCE(ak.trader_mode, false) as trader_mode,
+                COALESCE(ak.pm_budget_usdc,   200) as pm_budget_usdc,
+                COALESCE(ak.pm_max_per_trade,  50) as pm_max_per_trade,
+                COALESCE(ak.pm_multiplier,    0.1) as pm_multiplier,
                 substring(ak.api_key_enc, 1, 8) as key_preview, ak.created_at
          FROM api_keys ak
          WHERE ak.user_id = $1 ORDER BY ak.created_at`,
@@ -134,7 +140,8 @@ router.put('/:id/settings', async (req, res) => {
   try {
     const { leverage, risk_pct, max_loss_usdt, max_positions, enabled, allowed_coins, banned_coins,
             tp_pct, sl_pct, max_consec_loss, top_n_coins, risk_level_id, capital_percentage,
-            trailing_sl_step, token_leverages, trader_mode } = req.body;
+            trailing_sl_step, token_leverages, trader_mode,
+            pm_budget_usdc, pm_max_per_trade, pm_multiplier } = req.body;
 
     if (leverage !== undefined && (leverage < 1 || leverage > 125)) {
       return res.status(400).json({ error: 'Leverage must be 1-125' });
@@ -178,25 +185,32 @@ router.put('/:id/settings', async (req, res) => {
 
     await query(
       `UPDATE api_keys SET
-        leverage = COALESCE($1, leverage),
-        risk_pct = COALESCE($2, risk_pct),
-        max_loss_usdt = COALESCE($3, max_loss_usdt),
-        max_positions = COALESCE($4, max_positions),
-        enabled = COALESCE($5, enabled),
-        allowed_coins = COALESCE($6, allowed_coins),
-        banned_coins = COALESCE($7, banned_coins),
-        tp_pct = COALESCE($8, tp_pct),
-        sl_pct = COALESCE($9, sl_pct),
-        max_consec_loss = COALESCE($10, max_consec_loss),
-        top_n_coins = COALESCE($11, top_n_coins),
-        risk_level_id = COALESCE($12, risk_level_id),
-        capital_percentage = COALESCE($13, capital_percentage),
-        trailing_sl_step = COALESCE($14, trailing_sl_step),
-        trader_mode = COALESCE($15, trader_mode)
-       WHERE id = $16 AND user_id = $17`,
+        leverage          = COALESCE($1,  leverage),
+        risk_pct          = COALESCE($2,  risk_pct),
+        max_loss_usdt     = COALESCE($3,  max_loss_usdt),
+        max_positions     = COALESCE($4,  max_positions),
+        enabled           = COALESCE($5,  enabled),
+        allowed_coins     = COALESCE($6,  allowed_coins),
+        banned_coins      = COALESCE($7,  banned_coins),
+        tp_pct            = COALESCE($8,  tp_pct),
+        sl_pct            = COALESCE($9,  sl_pct),
+        max_consec_loss   = COALESCE($10, max_consec_loss),
+        top_n_coins       = COALESCE($11, top_n_coins),
+        risk_level_id     = COALESCE($12, risk_level_id),
+        capital_percentage= COALESCE($13, capital_percentage),
+        trailing_sl_step  = COALESCE($14, trailing_sl_step),
+        trader_mode       = COALESCE($15, trader_mode),
+        pm_budget_usdc    = COALESCE($16, pm_budget_usdc),
+        pm_max_per_trade  = COALESCE($17, pm_max_per_trade),
+        pm_multiplier     = COALESCE($18, pm_multiplier)
+       WHERE id = $19 AND user_id = $20`,
       [leverage, risk_pct, max_loss_usdt, max_positions, enabled, allowed_coins, banned_coins,
        tp_pct, sl_pct, max_consec_loss, top_n_coins, risk_level_id, capital_percentage, trailing_sl_step,
-       trader_mode != null ? !!trader_mode : null, req.params.id, req.userId]
+       trader_mode != null ? !!trader_mode : null,
+       pm_budget_usdc  != null ? parseFloat(pm_budget_usdc)  : null,
+       pm_max_per_trade!= null ? parseFloat(pm_max_per_trade): null,
+       pm_multiplier   != null ? parseFloat(pm_multiplier)   : null,
+       req.params.id, req.userId]
     );
 
     // Auto-publish trader profile when trader_mode is enabled

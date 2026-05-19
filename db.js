@@ -682,6 +682,10 @@ async function initAllTables() {
     `ALTER TABLE trades ADD COLUMN IF NOT EXISTS copied_from_trade_id INTEGER REFERENCES trades(id)`,
     // Trader Mode — user trades manually on exchange; bot mirrors to followers
     `ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS trader_mode BOOLEAN DEFAULT false`,
+    // Polymarket copy-trade capital controls (per wallet key)
+    `ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS pm_budget_usdc  NUMERIC(12,2) DEFAULT 200`,
+    `ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS pm_max_per_trade NUMERIC(12,2) DEFAULT 50`,
+    `ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS pm_multiplier   NUMERIC(6,4)  DEFAULT 0.1`,
 
     // ── Polymarket copy trade ─────────────────────────────────
     `CREATE TABLE IF NOT EXISTS polymarket_trades (
