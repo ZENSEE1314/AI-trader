@@ -160,6 +160,10 @@ async function getMidPrice(tokenId) {
   }
 }
 
+// ── CLOB client cache (keyed by wallet address, TTL 8 hours) ─
+const _clobClientCache = new Map();
+const CLOB_CLIENT_TTL  = 8 * 3600_000;
+
 // ── Authenticated: CLOB client ────────────────────────────────
 
 /**
@@ -170,17 +174,23 @@ async function getMidPrice(tokenId) {
 async function buildClobClient(privateKey) {
   const pk = privateKey.startsWith('0x') ? privateKey : `0x${privateKey}`;
   const wallet = new ethers.Wallet(pk);
+  const address = wallet.address;
+
+  const cached = _clobClientCache.get(address);
+  if (cached && Date.now() - cached.ts < CLOB_CLIENT_TTL) {
+    return { client: cached.client, address };
+  }
 
   // The @polymarket/clob-client SDK (>=5.x) checks for _signTypedData (ethers v5)
   // OR signTypedData (viem). Ethers v6 has signTypedData but no account.address,
   // so the SDK falls into the viem path and fails.
   // Fix: expose a viem-compatible wrapper so the SDK finds account.address.
   const signer = {
-    account:         { address: wallet.address },
+    account:         { address },
     signTypedData:   ({ domain, types, primaryType, message }) =>
       wallet.signTypedData(domain, types, message),
-    requestAddresses: async () => [wallet.address],
-    getAddresses:     async () => [wallet.address],
+    requestAddresses: async () => [address],
+    getAddresses:     async () => [address],
   };
 
   // Derive L2 creds first, then pass into constructor (v5 API — no setApiCreds)
@@ -190,7 +200,8 @@ async function buildClobClient(privateKey) {
   // Re-construct with creds as 4th arg so all authenticated calls work
   const client = new ClobClient(CLOB_HOST, CHAIN_ID, signer, creds);
 
-  return { client, address: wallet.address };
+  _clobClientCache.set(address, { client, ts: Date.now() });
+  return { client, address };
 }
 
 /**
@@ -248,6 +259,58 @@ async function placeCopyOrder({ client, tokenId, side, price, usdcAmount, tickSi
   };
 }
 
+/**
+ * Fetch the full Polymarket wallet snapshot for the dashboard:
+ *   - USDC balance available in the CLOB (funds inside Polymarket)
+ *   - Open positions with current market value
+ *   - Unrealized PnL across open positions
+ *
+ * @param {string} privateKey  Raw hex private key
+ * @returns {Promise<{balance, available, unrealizedPnl, positions, positionList}>}
+ */
+async function getPolymarketWalletData(privateKey) {
+  const { client, address } = await buildClobClient(privateKey);
+
+  // ── CLOB balance (USDC inside Polymarket, ready to trade) ──
+  let balance = 0;
+  try {
+    const ba = await client.getBalanceAllowance({ asset_type: 'USDC', signature_type: 'EOA' });
+    // returns { balance: "12.34", allowance: "..." }
+    balance = parseFloat(ba?.balance || ba?.data?.balance || 0);
+  } catch (e) {
+    console.warn(`[polymarket] getBalanceAllowance failed: ${e.message}`);
+  }
+
+  // ── Open positions from Data API ───────────────────────────
+  let unrealizedPnl = 0;
+  let positionList  = [];
+  try {
+    const positions = await getUserPositions(address);
+    positionList = positions;
+
+    for (const pos of positions) {
+      if (!pos.tokenId || pos.size <= 0) continue;
+      const mid = await getMidPrice(pos.tokenId).catch(() => 0);
+      if (mid > 0 && pos.avgPrice > 0) {
+        const currentVal = pos.size * mid;
+        const costBasis  = pos.size * pos.avgPrice;
+        unrealizedPnl += currentVal - costBasis;
+      }
+    }
+  } catch (e) {
+    console.warn(`[polymarket] positions fetch failed: ${e.message}`);
+  }
+
+  return {
+    balance,
+    available:     balance,
+    unrealizedPnl: parseFloat(unrealizedPnl.toFixed(4)),
+    positions:     positionList.length,
+    positionList,
+    address,
+  };
+}
+
 module.exports = {
   getLeaderboard,
   getUserActivity,
@@ -255,4 +318,5 @@ module.exports = {
   getMidPrice,
   buildClobClient,
   placeCopyOrder,
+  getPolymarketWalletData,
 };

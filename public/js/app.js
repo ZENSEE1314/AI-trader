@@ -587,8 +587,14 @@
       const pnlColor = pnl >= 0 ? 'var(--color-success)' : 'var(--color-danger)';
       const pnlSign = pnl >= 0 ? '+' : '';
 
+      const isPoly = w.platform === 'polymarket';
+      const tipText = isPoly
+        ? 'Polymarket prediction market wallet. Avail = USDC inside Polymarket ready to trade, uPnL = unrealized profit/loss on open prediction positions, Pos = number of open bets.'
+        : `Futures wallet on ${w.platform.toUpperCase()}. Avail = available margin, uPnL = unrealized profit/loss from open positions, Pos = number of open positions.`;
+      const labelText = isPoly ? 'POLYMARKET' : w.platform.toUpperCase();
+
       html += `<div class="summary-card" style="padding:var(--space-3)">
-        <span class="summary-card-label">${platformIcon(w.platform)} ${w.platform.toUpperCase()} <span class="tip-btn">?<span class="tip-text">Futures wallet on ${w.platform.toUpperCase()}. Avail = available margin, uPnL = unrealized profit/loss from open positions, Pos = number of open positions.</span></span></span>
+        <span class="summary-card-label">${platformIcon(w.platform)} ${labelText} <span class="tip-btn">?<span class="tip-text">${tipText}</span></span></span>
         <span class="summary-card-value text-mono" style="color:var(--color-accent)">$${bal.toFixed(2)}</span>
         <div style="font-size:0.75rem;color:var(--color-text-muted);margin-top:4px">
           <span>Avail: $${avail.toFixed(2)}</span> ·
