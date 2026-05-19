@@ -33,6 +33,15 @@
   <link rel="stylesheet" href="/css/style.css?v=20260421">
 
   <link rel="icon" href="/img/logo.jpeg" type="image/jpeg">
+
+  <!-- PWA -->
+  <link rel="manifest" href="/manifest.json">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="MCT">
+  <link rel="apple-touch-icon" href="/img/logo.jpeg">
+  <meta name="theme-color" content="#d4af37">
   <style>
     .tip-btn{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;border-radius:50%;background:rgba(212,175,55,0.1);color:var(--color-accent);font-size:0.6rem;font-weight:700;cursor:help;position:relative;margin-left:4px;vertical-align:middle;flex-shrink:0;border:1px solid rgba(212,175,55,0.15);transition:box-shadow 0.15s ease;}
     .tip-btn:hover{box-shadow:0 0 8px rgba(212,175,55,0.2);}
@@ -89,6 +98,9 @@
           <a href="/download/MCT-AI-Trader-Guide.pptx" download class="btn btn-ghost btn-sm" style="font-size:0.78rem;border:1px solid var(--color-border);color:var(--color-accent);" title="Download Platform Guide">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:4px;vertical-align:-2px;"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>Guide
           </a>
+          <button id="pwa-install-btn" class="btn btn-ghost btn-sm" style="display:none;font-size:0.78rem;border:1px solid var(--color-border);color:var(--color-accent);" onclick="window.MCT_PWA.install()" title="Add MCT to your home screen">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:4px;vertical-align:-2px;"><path d="M12 2v13"/><path d="M8 11l4 4 4-4"/><rect x="2" y="17" width="20" height="5" rx="1"/></svg>Add to Home
+          </button>
           <button class="btn btn-primary btn-sm" onclick="window.CryptoBot.goToAuth()">Login / Sign Up</button>
         </div>
         <button class="landing-nav-toggle" aria-label="Toggle menu" aria-expanded="false">
@@ -100,6 +112,9 @@
         <a href="#features">Features</a>
         <a href="#pricing">Profit Split</a>
         <a href="/chart.html" style="color:var(--color-accent);">Chart</a>
+        <button id="pwa-install-btn-mobile" class="btn btn-ghost btn-sm landing-nav-mobile-btn" style="display:none;color:var(--color-accent);border:1px solid var(--color-border);" onclick="window.MCT_PWA.install()">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:4px;vertical-align:-2px;"><path d="M12 2v13"/><path d="M8 11l4 4 4-4"/><rect x="2" y="17" width="20" height="5" rx="1"/></svg>Add to Home Screen
+        </button>
         <button class="btn btn-primary btn-sm landing-nav-mobile-btn" onclick="window.CryptoBot.goToAuth()">Login / Sign Up</button>
       </div>
     </nav>
@@ -1160,6 +1175,9 @@
       </div>
       <div class="header-actions">
         <span id="user-email" class="user-email"></span>
+        <button id="pwa-install-btn-app" class="btn btn-ghost btn-sm" style="display:none;color:var(--color-accent);border:1px solid rgba(212,175,55,0.25);font-size:0.78rem;" onclick="window.MCT_PWA.install()" title="Add MCT to your home screen">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:4px;vertical-align:-2px;"><path d="M12 2v13"/><path d="M8 11l4 4 4-4"/><rect x="2" y="17" width="20" height="5" rx="1"/></svg>Install
+        </button>
         <button id="btn-logout" class="btn btn-ghost btn-sm" data-i18n="header.logout">Log Out</button>
       </div>
     </header>
@@ -1345,7 +1363,8 @@
         </div>
         <div id="trades-period-filter" style="display:flex;gap:8px;margin-bottom:var(--space-3);flex-wrap:wrap;align-items:center;">
           <button class="btn btn-sm period-btn active" data-period="all" data-i18n="period.all">All</button>
-          <button class="btn btn-sm period-btn" data-period="1d" data-i18n="period.1d">1 Day</button>
+          <button class="btn btn-sm period-btn" data-period="1d" data-i18n="period.1d">Today</button>
+          <button class="btn btn-sm period-btn" data-period="yesterday" data-i18n="period.yesterday">Yesterday</button>
           <button class="btn btn-sm period-btn" data-period="7d" data-i18n="period.7d">7 Days</button>
           <button class="btn btn-sm period-btn" data-period="30d" data-i18n="period.30d">30 Days</button>
           <button class="btn btn-sm period-btn" data-period="6m" data-i18n="period.6m">6 Months</button>
@@ -2697,6 +2716,7 @@ EMAIL_FROM=MCT &lt;a83c06001@smtp-brevo.com&gt;</pre>
             <option value="">Select platform...</option>
             <option value="binance">Binance</option>
             <option value="bitunix">Bitunix</option>
+            <option value="polymarket">🔮 Polymarket (Prediction Markets)</option>
           </select>
         </div>
 
@@ -2724,21 +2744,69 @@ EMAIL_FROM=MCT &lt;a83c06001@smtp-brevo.com&gt;</pre>
             </div>
           </div>
         </div>
-        <div class="form-group">
-          <label class="form-label" for="key-label">Label <span class="tip-btn">?<span class="tip-text">A friendly name for this API key, e.g. "Main account" or "Scalp key".</span></span></label>
-          <input class="form-input" type="text" id="key-label" placeholder="e.g. Main trading key" maxlength="40">
-        </div>
-        <div class="form-group">
-          <label class="form-label" for="key-api-key">API Key <span class="tip-btn">?<span class="tip-text">Your exchange API key. Only enable futures trading permissions — never enable withdrawal.</span></span></label>
-          <input class="form-input text-mono" type="text" id="key-api-key" placeholder="Paste your API key" required autocomplete="off">
-        </div>
-        <div class="form-group">
-          <label class="form-label" for="key-api-secret">API Secret <span class="tip-btn">?<span class="tip-text">Your exchange API secret. Encrypted at rest — we never store it in plain text.</span></span></label>
-          <div class="pw-wrap">
-            <input class="form-input text-mono" type="password" id="key-api-secret" placeholder="Paste your API secret" required autocomplete="off">
-            <button type="button" class="pw-toggle" tabindex="-1" aria-label="Show secret"></button>
+
+        <!-- Polymarket wallet guide -->
+        <div id="polymarket-setup-guide" class="hidden" style="background:var(--color-bg);border:1px solid #7c3aed;border-radius:var(--radius-md);padding:var(--space-3);margin-bottom:var(--space-3);">
+          <div style="font-size:var(--text-xs);margin-bottom:var(--space-2);">
+            <strong style="color:#a78bfa;">🔮 Polymarket Copy Trade — How it works:</strong>
+          </div>
+          <div style="font-size:var(--text-xs);color:var(--color-text-muted);line-height:1.7;">
+            <div style="margin-bottom:var(--space-2);">
+              The bot automatically finds the <strong style="color:#a78bfa;">#1 monthly profit trader</strong> on Polymarket and copies their BUY trades at <strong>10% of their size</strong> (max $50/trade by default).
+            </div>
+            <div style="margin-bottom:var(--space-2);">
+              <strong style="color:var(--color-success);">What you need:</strong><br>
+              • A <strong>Polygon wallet private key</strong> (MetaMask export or any EOA wallet)<br>
+              • <strong>USDC on Polygon</strong> network in that wallet to fund trades
+            </div>
+            <div style="background:rgba(124,58,237,0.15);border:1px solid #7c3aed;border-radius:var(--radius-sm);padding:var(--space-2);margin-top:var(--space-2);">
+              <strong style="color:#a78bfa;">How to export from MetaMask:</strong><br>
+              Account Menu → Account Details → Show Private Key → Enter password → Copy
+            </div>
+            <div style="background:var(--color-danger-bg, rgba(239,68,68,0.1));border:1px solid var(--color-danger);border-radius:var(--radius-sm);padding:var(--space-2);margin-top:var(--space-2);">
+              <strong style="color:var(--color-danger);">⚠️ Security:</strong> Use a <strong>dedicated wallet</strong> with only the USDC you want to trade. Never paste your main wallet key.
+            </div>
           </div>
         </div>
+
+        <!-- Exchange fields (Binance / Bitunix) -->
+        <div id="exchange-key-fields">
+          <div class="form-group">
+            <label class="form-label" for="key-label">Label <span class="tip-btn">?<span class="tip-text">A friendly name for this API key, e.g. "Main account" or "Scalp key".</span></span></label>
+            <input class="form-input" type="text" id="key-label" placeholder="e.g. Main trading key" maxlength="40">
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="key-api-key">API Key <span class="tip-btn">?<span class="tip-text">Your exchange API key. Only enable futures trading permissions — never enable withdrawal.</span></span></label>
+            <input class="form-input text-mono" type="text" id="key-api-key" placeholder="Paste your API key" autocomplete="off">
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="key-api-secret">API Secret <span class="tip-btn">?<span class="tip-text">Your exchange API secret. Encrypted at rest — we never store it in plain text.</span></span></label>
+            <div class="pw-wrap">
+              <input class="form-input text-mono" type="password" id="key-api-secret" placeholder="Paste your API secret" autocomplete="off">
+              <button type="button" class="pw-toggle" tabindex="-1" aria-label="Show secret"></button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Polymarket fields -->
+        <div id="polymarket-key-fields" class="hidden">
+          <div class="form-group">
+            <label class="form-label" for="key-pm-label">Wallet Label</label>
+            <input class="form-input" type="text" id="key-pm-label" placeholder="e.g. Polymarket Wallet" maxlength="40" value="Polymarket Wallet">
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="key-pm-private-key">
+              Polygon Private Key
+              <span class="tip-btn">?<span class="tip-text">Your Polygon (Ethereum-compatible) wallet private key. Encrypted with AES-256 — never stored in plain text. Use a dedicated wallet with only your trading USDC.</span></span>
+            </label>
+            <div class="pw-wrap">
+              <input class="form-input text-mono" type="password" id="key-pm-private-key" placeholder="0x... or 64-char hex key" autocomplete="off">
+              <button type="button" class="pw-toggle" tabindex="-1" aria-label="Show key"></button>
+            </div>
+          </div>
+          <div id="pm-wallet-preview" style="display:none;font-size:var(--text-xs);color:var(--color-success);margin-top:calc(var(--space-1)*-1);margin-bottom:var(--space-2);font-family:var(--font-mono);word-break:break-all;"></div>
+        </div>
+
         <div id="add-key-error" class="form-error" role="alert"></div>
         <button type="submit" id="btn-submit-key" class="btn btn-primary" style="width:100%; margin-top:var(--space-2);">
           Add Key
@@ -3377,6 +3445,101 @@ EMAIL_FROM=MCT &lt;a83c06001@smtp-brevo.com&gt;</pre>
           else{input.type='password';this.innerHTML=EYE;this.setAttribute('aria-label','Show password');}
         });
       });
+    })();
+  </script>
+
+  <!-- ── iOS "Add to Home Screen" banner ───────────────────────────────────── -->
+  <div id="ios-install-banner" style="
+    display:none;position:fixed;bottom:0;left:0;right:0;z-index:9999;
+    background:linear-gradient(135deg,#1a1408 0%,#0f0d06 100%);
+    border-top:1px solid rgba(212,175,55,0.3);
+    padding:14px 20px 20px;
+    box-shadow:0 -4px 32px rgba(0,0,0,0.6);
+    animation:slideUpBanner 0.3s ease;">
+    <div style="max-width:500px;margin:0 auto;">
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;">
+        <div style="display:flex;align-items:center;gap:12px;flex:1;">
+          <img src="/img/logo.jpeg" width="44" height="44" style="border-radius:10px;flex-shrink:0;">
+          <div>
+            <div style="color:#d4af37;font-weight:700;font-size:0.9rem;margin-bottom:2px;">Add MCT to your Home Screen</div>
+            <div style="color:#9a8e80;font-size:0.78rem;line-height:1.4;">
+              Tap <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#d4af37" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;"><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/></svg> Share → <strong style="color:#f0e8df;">Add to Home Screen</strong>
+            </div>
+          </div>
+        </div>
+        <button onclick="document.getElementById('ios-install-banner').style.display='none';localStorage.setItem('iosBannerDismissed','1')"
+          style="background:none;border:none;color:#9a8e80;font-size:1.2rem;cursor:pointer;padding:4px;line-height:1;flex-shrink:0;" aria-label="Dismiss">✕</button>
+      </div>
+    </div>
+  </div>
+  <style>
+    @keyframes slideUpBanner { from { transform: translateY(100%); } to { transform: translateY(0); } }
+  </style>
+
+  <!-- ── PWA Install Logic ──────────────────────────────────────────────────── -->
+  <script>
+    (function () {
+      'use strict';
+
+      const BTNS = ['pwa-install-btn', 'pwa-install-btn-mobile', 'pwa-install-btn-app'];
+      let _deferredPrompt = null;
+
+      function showBtns() {
+        BTNS.forEach(id => {
+          const el = document.getElementById(id);
+          if (el) el.style.display = '';
+        });
+      }
+
+      function hideBtns() {
+        BTNS.forEach(id => {
+          const el = document.getElementById(id);
+          if (el) el.style.display = 'none';
+        });
+      }
+
+      // Android / Chrome / Edge: browser fires this when app is installable
+      window.addEventListener('beforeinstallprompt', e => {
+        e.preventDefault();
+        _deferredPrompt = e;
+        showBtns();
+      });
+
+      // After install completes, hide the buttons
+      window.addEventListener('appinstalled', () => {
+        hideBtns();
+        _deferredPrompt = null;
+        document.getElementById('ios-install-banner').style.display = 'none';
+      });
+
+      window.MCT_PWA = {
+        install() {
+          if (_deferredPrompt) {
+            _deferredPrompt.prompt();
+            _deferredPrompt.userChoice.then(() => { _deferredPrompt = null; hideBtns(); });
+          }
+        },
+      };
+
+      // iOS Safari: no beforeinstallprompt — show manual instruction banner instead
+      const isIos = /iphone|ipad|ipod/i.test(navigator.userAgent);
+      const isStandalone = window.matchMedia('(display-mode: standalone)').matches
+                        || window.navigator.standalone === true;
+      const dismissed = localStorage.getItem('iosBannerDismissed') === '1';
+
+      if (isIos && !isStandalone && !dismissed) {
+        // Delay slightly so page renders first
+        setTimeout(() => {
+          document.getElementById('ios-install-banner').style.display = 'block';
+        }, 2500);
+      }
+
+      // Register service worker
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+          navigator.serviceWorker.register('/sw.js').catch(() => {});
+        });
+      }
     })();
   </script>
 

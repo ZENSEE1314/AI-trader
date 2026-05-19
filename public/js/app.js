@@ -573,7 +573,7 @@
     const grid = els.walletsGrid;
     if (!grid) return;
 
-    const platformIcon = (p) => p === 'binance' ? '🟡' : p === 'bitunix' ? '🔵' : '⚪';
+    const platformIcon = (p) => p === 'binance' ? '🟡' : p === 'bitunix' ? '🔵' : p === 'polymarket' ? '🔮' : '⚪';
 
     let html = `<div class="summary-card">
       <span class="summary-card-label">Total Futures Wallet <span class="tip-btn">?<span class="tip-text">Combined balance across all your connected exchange futures wallets.</span></span></span>
@@ -1351,23 +1351,38 @@
       e.preventDefault();
       hideError(els.addKeyError);
       els.btnSubmitKey.disabled = true;
-      els.btnSubmitKey.innerHTML = '<span class="spinner"></span> Validating...';
+
+      const platform = $('#key-platform').value;
+      const isPolymarket = platform === 'polymarket';
+
+      els.btnSubmitKey.innerHTML = isPolymarket
+        ? '<span class="spinner"></span> Saving wallet...'
+        : '<span class="spinner"></span> Validating...';
 
       try {
-        await api('POST', '/api/keys', {
-          platform: $('#key-platform').value,
-          label: $('#key-label').value.trim(),
-          apiKey: $('#key-api-key').value.trim(),
-          apiSecret: $('#key-api-secret').value.trim(),
-        });
-        closeModal();
-        showToast('API key added.', 'success');
+        if (isPolymarket) {
+          const privateKey = $('#key-pm-private-key').value.trim();
+          const label      = $('#key-pm-label').value.trim() || 'Polymarket Wallet';
+          if (!privateKey) throw new Error('Private key is required');
+          const result = await api('POST', '/api/keys/polymarket', { privateKey, label });
+          closeModal();
+          showToast(`Polymarket wallet saved ✓ Address: ${result.address}`, 'success');
+        } else {
+          await api('POST', '/api/keys', {
+            platform,
+            label:     ($('#key-label').value || '').trim(),
+            apiKey:    ($('#key-api-key').value || '').trim(),
+            apiSecret: ($('#key-api-secret').value || '').trim(),
+          });
+          closeModal();
+          showToast('API key added.', 'success');
+        }
         loadKeys();
       } catch (err) {
         showError(els.addKeyError, err.message);
       } finally {
         els.btnSubmitKey.disabled = false;
-        els.btnSubmitKey.textContent = 'Add Key';
+        els.btnSubmitKey.textContent = isPolymarket ? 'Save Wallet Key' : 'Add Key';
       }
     });
   }
@@ -5221,12 +5236,28 @@
   // ----- Platform change (show static IP info) -----
 
   function onPlatformChange(val) {
-    const guide = $('#bitunix-setup-guide');
-    if (!guide) return;
-    if (val === 'bitunix') {
-      guide.classList.remove('hidden');
-    } else {
-      guide.classList.add('hidden');
+    const bitunixGuide   = $('#bitunix-setup-guide');
+    const polyGuide      = $('#polymarket-setup-guide');
+    const exchangeFields = $('#exchange-key-fields');
+    const polyFields     = $('#polymarket-key-fields');
+    const btnSubmit      = $('#btn-submit-key');
+
+    // Bitunix guide
+    if (bitunixGuide) bitunixGuide.classList.toggle('hidden', val !== 'bitunix');
+
+    // Polymarket guide + field swap
+    if (polyGuide)      polyGuide.classList.toggle('hidden', val !== 'polymarket');
+    if (exchangeFields) exchangeFields.classList.toggle('hidden', val === 'polymarket');
+    if (polyFields)     polyFields.classList.toggle('hidden', val !== 'polymarket');
+
+    // Mark exchange fields required/not-required based on platform
+    const apiKeyInput    = $('#key-api-key');
+    const apiSecretInput = $('#key-api-secret');
+    if (apiKeyInput)    apiKeyInput.required    = val !== 'polymarket';
+    if (apiSecretInput) apiSecretInput.required = val !== 'polymarket';
+
+    if (btnSubmit) {
+      btnSubmit.textContent = val === 'polymarket' ? 'Save Wallet Key' : 'Add Key';
     }
   }
 
