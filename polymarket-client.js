@@ -11,7 +11,7 @@
 
 const fetch = require('node-fetch');
 const { ethers } = require('ethers');
-const { ClobClient } = require('@polymarket/clob-client');
+const { ClobClient, AssetType, SignatureType } = require('@polymarket/clob-client');
 
 const DATA_API  = 'https://data-api.polymarket.com';
 const CLOB_HOST = 'https://clob.polymarket.com';
@@ -274,8 +274,9 @@ async function getPolymarketWalletData(privateKey) {
   // ── CLOB balance (USDC inside Polymarket, ready to trade) ──
   let balance = 0;
   try {
-    const ba = await client.getBalanceAllowance({ asset_type: 'USDC', signature_type: 'EOA' });
-    // returns { balance: "12.34", allowance: "..." }
+    // AssetType.COLLATERAL = 'COLLATERAL' (USDC), SignatureType.EOA = 0
+    const ba = await client.getBalanceAllowance({ asset_type: AssetType.COLLATERAL, signature_type: SignatureType.EOA });
+    console.log('[polymarket] getBalanceAllowance raw:', JSON.stringify(ba));
     balance = parseFloat(ba?.balance || ba?.data?.balance || 0);
   } catch (e) {
     console.warn(`[polymarket] getBalanceAllowance failed: ${e.message}`);
