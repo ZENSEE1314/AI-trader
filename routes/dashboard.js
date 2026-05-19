@@ -400,33 +400,53 @@ router.get('/futures-wallet', async (req, res) => {
       if (key.platform === 'polymarket') {
         // Fetch USDC balance on Polygon for this wallet key
         try {
+          const fetch = require('node-fetch');
           const { ethers } = require('ethers');
           const privateKey = cryptoUtils.decrypt(key.api_key_enc, key.iv, key.auth_tag);
           const wallet = new ethers.Wallet(privateKey.startsWith('0x') ? privateKey : `0x${privateKey}`);
           const address = wallet.address;
 
           // Check both native USDC and bridged USDC.e on Polygon
-          const POLYGON_RPC = 'https://polygon-rpc.com';
+          // Multiple RPCs as fallbacks — polygon-rpc.com can be slow/blocked on some hosts
+          const POLYGON_RPCS = [
+            'https://polygon-rpc.com',
+            'https://rpc.ankr.com/polygon',
+            'https://polygon.llamarpc.com',
+          ];
           const USDC_NATIVE  = '0x3c499c542cef5e3811e1192ce70d8cc03d5c3359';
           const USDC_BRIDGED = '0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174';
 
           const balanceOf = async (tokenAddr) => {
             const data = '0x70a08231' + address.toLowerCase().replace('0x', '').padStart(64, '0');
-            const resp  = await fetch(POLYGON_RPC, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_call',
-                params: [{ to: tokenAddr, data }, 'latest'] }),
-            });
-            const json = await resp.json();
-            return json.result && json.result !== '0x'
-              ? parseFloat(ethers.formatUnits(BigInt(json.result), 6))
-              : 0;
+            for (const rpc of POLYGON_RPCS) {
+              try {
+                const resp = await fetch(rpc, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_call',
+                    params: [{ to: tokenAddr, data }, 'latest'] }),
+                  timeout: 8000,
+                });
+                const json = await resp.json();
+                if (json.result !== undefined) {
+                  // Valid RPC response — result present (even if 0x = zero balance)
+                  if (json.result && json.result !== '0x') {
+                    return parseFloat(ethers.formatUnits(BigInt(json.result), 6));
+                  }
+                  return 0;
+                }
+                // No result field = RPC returned an error; try next RPC
+              } catch (rpcErr) {
+                console.warn(`[dashboard] Polygon RPC ${rpc} failed: ${rpcErr.message}`);
+              }
+            }
+            return 0;
           };
 
           const [nat, bridged] = await Promise.all([balanceOf(USDC_NATIVE), balanceOf(USDC_BRIDGED)]);
           balance   = nat + bridged;
           available = balance;
+          console.log(`[dashboard] Polymarket wallet ${address} — native USDC: ${nat}, bridged USDC.e: ${bridged}, total: ${balance}`);
 
           // Count open Polymarket positions from DB
           const { query: dbQuery } = require('../db');
@@ -436,7 +456,9 @@ router.get('/futures-wallet', async (req, res) => {
             [key.id]
           ).catch(() => [{ cnt: 0 }]);
           positions = parseInt(posRows[0]?.cnt || 0);
-        } catch { /* leave zeros if RPC fails */ }
+        } catch (err) {
+          console.error(`[dashboard] Polymarket balance fetch failed: ${err.message}`);
+        }
 
         return { id: key.id, platform: key.platform, label: key.label || 'Polymarket Wallet', balance, available, unrealizedPnl, positions };
       }

@@ -48,9 +48,11 @@ const TRAILING_TIERS_100X = [
   { trigger: 3.01, lock: 3.00 },
 ];
 
-// 75x — SOL / ADA / AVAX
+// 75x — BTC / ETH / SOL (all symbols at uniform 75x)
+// Profit-lock: fires when price moves +0.21% from entry (~+16% capital at 75x),
+// locks SL to entry +0.40% (+30% capital) — matches backtest-proven trigger 0.5×SL.
 const TRAILING_TIERS_75X = [
-  { trigger: 0.31, lock: 0.30 }, // +31% → lock +30%
+  { trigger: 0.16, lock: 0.30 }, // +16% → lock +30% (profit-lock: ~+0.21% price → SL at entry+0.40%)
   { trigger: 0.41, lock: 0.40 }, // +41% → lock +40%
   { trigger: 0.51, lock: 0.50 }, // +51% → lock +50%
   { trigger: 0.61, lock: 0.60 },

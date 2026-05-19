@@ -37,7 +37,7 @@ async function loadTierConfig() {
         g('tsl_100x_step', 10)
       ),
       '75': buildTierTable(
-        g('tsl_75x_t1_trig', 31), g('tsl_75x_t1_lock', 30),
+        g('tsl_75x_t1_trig', 16), g('tsl_75x_t1_lock', 30),
         g('tsl_75x_t2_trig', 41), g('tsl_75x_t2_lock', 40),
         g('tsl_75x_t3_trig', 51), g('tsl_75x_t3_lock', 50),
         g('tsl_75x_step', 10)
@@ -204,7 +204,7 @@ async function runTrailCycle() {
     // the exchange is. DB only tells us the last SL we set.
     const dbTrades = await db.query(`
       SELECT t.id, t.symbol, t.direction, t.entry_price, t.sl_price,
-             t.trailing_sl_price, t.tp_price, t.leverage, t.api_key_id
+             t.trailing_sl_price, t.tp_price, t.leverage, t.api_key_id, t.setup
       FROM trades t
       WHERE t.status = 'OPEN'
     `);
@@ -291,7 +291,8 @@ async function runTrailCycle() {
             if (needsAdjust && !_widened.has(symbol)) {
               _widened.add(symbol);
               log(`[20%-FIX] ${symbol} ${isLong ? 'LONG' : 'SHORT'}: SL $${currentSl.toFixed(pricePrec)} → $${targetSl.toFixed(pricePrec)} (normalising to 20% capital)`);
-              const ok = await updateSlBitunix(posClient, symbol, targetSl, pricePrec, dbTrade?.tp_price, pos);
+              const hasHardTp20 = dbTrade?.setup === 'RANGE_BOUNCE' || dbTrade?.setup === 'SCENARIO_A';
+              const ok = await updateSlBitunix(posClient, symbol, targetSl, pricePrec, hasHardTp20 ? dbTrade?.tp_price : null, pos);
               if (ok && dbTrade) {
                 await db.query(
                   `UPDATE trades SET trailing_sl_price = $1, sl_price = $1 WHERE id = $2`,
@@ -325,7 +326,8 @@ async function runTrailCycle() {
 
           log(`${symbol} ${isLong ? 'LONG' : 'SHORT'} [${srcLabel}] SL: $${currentSl.toFixed(pricePrec)} → $${bestSl.toFixed(pricePrec)} | ${pctDisplay} capital`);
 
-          const updated = await updateSlBitunix(posClient, symbol, bestSl, pricePrec, dbTrade?.tp_price, pos);
+          const hasHardTp = dbTrade?.setup === 'RANGE_BOUNCE' || dbTrade?.setup === 'SCENARIO_A';
+          const updated = await updateSlBitunix(posClient, symbol, bestSl, pricePrec, hasHardTp ? dbTrade?.tp_price : null, pos);
 
           if (updated) {
             if (dbTrade) {
