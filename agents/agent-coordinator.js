@@ -23,6 +23,7 @@ const { StrategyAgent } = require('./strategy-agent');
 const { PoliceAgent } = require('./police-agent');
 const { CoderAgent } = require('./coder-agent');
 const { OptimizerAgent } = require('./optimizer-agent');
+const { PolymarketAgent } = require('./polymarket-agent');
 const { TradeConsensus, PatternLearner, encodeMarketState, extractIndicatorsFromKlines } = require('../ruflo-bridge');
 
 const SELF_IMPROVE_LESSONS = {
@@ -56,6 +57,7 @@ class AgentCoordinator extends BaseAgent {
     this.policeAgent = new PoliceAgent(options);
     this.coderAgent = new CoderAgent(options);
     this.optimizerAgent = new OptimizerAgent(options);
+    this.polymarketAgent = new PolymarketAgent(options);
 
     // Agent registry — order matters for display
     this._agents = new Map();
@@ -69,6 +71,7 @@ class AgentCoordinator extends BaseAgent {
     this._agents.set('police', this.policeAgent);
     this._agents.set('coder', this.coderAgent);
     this._agents.set('optimizer', this.optimizerAgent);
+    this._agents.set('polymarket', this.polymarketAgent);
 
     // Wire up inter-agent events
     this.chartAgent.on('signals', (data) => {
@@ -288,7 +291,7 @@ class AgentCoordinator extends BaseAgent {
     this.addActivity('info', 'CEO online — always-on mode activated');
 
     // Keep all core agents at their stations permanently
-    const coreAgents = [this.sentimentAgent, this.chartAgent, this.riskAgent, this.traderAgent, this.accountantAgent, this.kronosAgent, this.strategyAgent, this.policeAgent, this.coderAgent, this.optimizerAgent];
+    const coreAgents = [this.sentimentAgent, this.chartAgent, this.riskAgent, this.traderAgent, this.accountantAgent, this.kronosAgent, this.strategyAgent, this.policeAgent, this.coderAgent, this.optimizerAgent, this.polymarketAgent];
     for (const a of coreAgents) {
       if (!a.paused) {
         a.managedByCoordinator = true;
@@ -689,7 +692,7 @@ class AgentCoordinator extends BaseAgent {
     }
 
     // All agents stay permanently managed by CEO loop — just update their tasks
-    const coreAgents = [this.sentimentAgent, this.chartAgent, this.riskAgent, this.traderAgent, this.accountantAgent, this.kronosAgent, this.strategyAgent, this.policeAgent, this.coderAgent, this.optimizerAgent];
+    const coreAgents = [this.sentimentAgent, this.chartAgent, this.riskAgent, this.traderAgent, this.accountantAgent, this.kronosAgent, this.strategyAgent, this.policeAgent, this.coderAgent, this.optimizerAgent, this.polymarketAgent];
     for (const a of coreAgents) {
       if (!a.paused && a.state !== 'jailed') {
         a.managedByCoordinator = true;
@@ -932,6 +935,19 @@ class AgentCoordinator extends BaseAgent {
         }
       } else {
         this.addActivity('skip', 'TraderAgent paused — skipping execution');
+      }
+
+      // ── Step 5.5: PolymarketAgent copy-trade poll (every cycle — self-throttled) ──
+      if (!this.polymarketAgent.paused) {
+        this.polymarketAgent.currentTask = { description: 'Polling Polymarket top trader...', startedAt: Date.now() };
+        try {
+          const pmResult = await this.polymarketAgent.run();
+          if (pmResult?.executed > 0) {
+            this.addActivity('success', `PolymarketAgent copied ${pmResult.executed} trade(s)`);
+          }
+        } catch (err) {
+          this.addActivity('error', `PolymarketAgent error (non-fatal): ${err.message}`);
+        }
       }
 
       // ── Step 6: AccountantAgent auto-audit (every 10 cycles) ──

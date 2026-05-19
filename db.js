@@ -682,6 +682,42 @@ async function initAllTables() {
     `ALTER TABLE trades ADD COLUMN IF NOT EXISTS copied_from_trade_id INTEGER REFERENCES trades(id)`,
     // Trader Mode — user trades manually on exchange; bot mirrors to followers
     `ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS trader_mode BOOLEAN DEFAULT false`,
+
+    // ── Polymarket copy trade ─────────────────────────────────
+    `CREATE TABLE IF NOT EXISTS polymarket_trades (
+      id              SERIAL PRIMARY KEY,
+      api_key_id      INTEGER REFERENCES api_keys(id) ON DELETE CASCADE,
+      user_id         INTEGER REFERENCES users(id)    ON DELETE CASCADE,
+      target_address  TEXT    NOT NULL,
+      token_id        TEXT    NOT NULL,
+      market_slug     TEXT,
+      question        TEXT,
+      side            TEXT    NOT NULL,
+      price           NUMERIC(10,4) NOT NULL,
+      usdc_amount     NUMERIC(12,4) NOT NULL,
+      shares          NUMERIC(16,4),
+      order_id        TEXT,
+      status          TEXT    DEFAULT 'submitted',
+      outcome         TEXT,
+      resolved_pnl    NUMERIC(12,4),
+      created_at      TIMESTAMPTZ DEFAULT NOW(),
+      resolved_at     TIMESTAMPTZ
+    )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_pm_trades_uniq ON polymarket_trades (api_key_id, order_id) WHERE order_id IS NOT NULL`,
+    `CREATE INDEX IF NOT EXISTS idx_pm_trades_user   ON polymarket_trades (user_id, created_at DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_pm_trades_key    ON polymarket_trades (api_key_id)`,
+    `CREATE TABLE IF NOT EXISTS polymarket_leaderboard (
+      id         SERIAL PRIMARY KEY,
+      address    TEXT NOT NULL,
+      name       TEXT,
+      pnl        NUMERIC(16,2),
+      volume     NUMERIC(16,2),
+      trades     INTEGER,
+      window     TEXT DEFAULT '1m',
+      rank       INTEGER,
+      is_target  BOOLEAN DEFAULT false,
+      fetched_at TIMESTAMPTZ DEFAULT NOW()
+    )`,
   ];
 
   for (const sql of statements) {

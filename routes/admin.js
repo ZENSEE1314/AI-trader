@@ -4441,6 +4441,95 @@ router.post('/v4-config', async (req, res) => {
   }
 });
 
+// ── Polymarket leaderboard (admin view) ──────────────────────
+router.get('/polymarket/leaderboard', async (req, res) => {
+  try {
+    const { getLeaderboard } = require('../polymarket-client');
+    const window = req.query.window || '1m';
+    const board  = await getLeaderboard(window, 20);
+
+    // Persist snapshot to DB for history
+    if (board.length) {
+      await query('DELETE FROM polymarket_leaderboard WHERE window = $1', [window]).catch(() => {});
+      for (let i = 0; i < board.length; i++) {
+        const u = board[i];
+        await query(
+          `INSERT INTO polymarket_leaderboard (address, name, pnl, volume, trades, window, rank, is_target, fetched_at)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW())
+           ON CONFLICT DO NOTHING`,
+          [u.address, u.name, u.pnl, u.volume, u.trades, window, i + 1, i === 0]
+        ).catch(() => {});
+      }
+    }
+
+    res.json({ ok: true, window, count: board.length, leaderboard: board });
+  } catch (e) {
+    console.error('[ADMIN] polymarket leaderboard error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── Polymarket config (get) ───────────────────────────────────
+router.get('/polymarket/config', async (req, res) => {
+  try {
+    const rows = await query(`SELECT key, value FROM v4_config WHERE key LIKE 'polymarket_%'`);
+    const cfg  = {};
+    for (const r of rows) cfg[r.key] = r.value;
+    res.json({
+      enabled:      cfg.polymarket_enabled     === 'true',
+      target:       cfg.polymarket_target       || '',
+      multiplier:   parseFloat(cfg.polymarket_multiplier  || '0.1'),
+      maxUsdc:      parseFloat(cfg.polymarket_max_usdc    || '50'),
+      buyOnly:      cfg.polymarket_buy_only !== 'false',
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── Polymarket config (set) ───────────────────────────────────
+router.post('/polymarket/config', async (req, res) => {
+  try {
+    const { enabled, target, multiplier, maxUsdc, buyOnly } = req.body;
+    const pairs = [
+      ['polymarket_enabled',    String(!!enabled)],
+      ['polymarket_target',     target       || ''],
+      ['polymarket_multiplier', String(parseFloat(multiplier) || 0.1)],
+      ['polymarket_max_usdc',   String(parseFloat(maxUsdc)    || 50)],
+      ['polymarket_buy_only',   buyOnly === false ? 'false' : 'true'],
+    ];
+    for (const [k, v] of pairs) {
+      await query(
+        `INSERT INTO v4_config (key, value) VALUES ($1,$2)
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+        [k, v]
+      );
+    }
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── Polymarket copy-trade history ─────────────────────────────
+router.get('/polymarket/trades', async (req, res) => {
+  try {
+    const limit  = Math.min(parseInt(req.query.limit) || 50, 200);
+    const offset = parseInt(req.query.offset) || 0;
+    const rows = await query(
+      `SELECT pt.*, u.email
+       FROM polymarket_trades pt
+       JOIN users u ON u.id = pt.user_id
+       ORDER BY pt.created_at DESC
+       LIMIT $1 OFFSET $2`,
+      [limit, offset]
+    );
+    res.json({ ok: true, count: rows.length, trades: rows });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ── Manual: full Bitunix trade history hard-sync ─────────────
 // Triggers backfillFeesFromBitunix (all pages, all time) for every
 // Bitunix api_key in the DB. Updates exit_price, gross_pnl, pnl_usdt,

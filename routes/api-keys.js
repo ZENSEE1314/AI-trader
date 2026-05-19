@@ -284,4 +284,84 @@ router.delete('/:id', async (req, res) => {
   }
 });
 
+// ── Polymarket wallet key (private key for Polygon) ──────────
+// Stored encrypted exactly like exchange API keys.
+// The "api_key_enc" slot holds the private key; api_secret_enc is unused (set to '').
+router.post('/polymarket', async (req, res) => {
+  try {
+    const { privateKey, label } = req.body;
+    if (!privateKey) return res.status(400).json({ error: 'privateKey required' });
+
+    // Validate: must be a 32-byte hex string (with or without 0x)
+    const { ethers } = require('ethers');
+    let wallet;
+    try {
+      const pk = privateKey.startsWith('0x') ? privateKey : `0x${privateKey}`;
+      wallet = new ethers.Wallet(pk);
+    } catch {
+      return res.status(400).json({ error: 'Invalid private key — must be a valid Polygon/Ethereum private key' });
+    }
+
+    // One Polymarket key per user
+    const existing = await query(
+      `SELECT id FROM api_keys WHERE user_id = $1 AND platform = 'polymarket'`,
+      [req.userId]
+    );
+    if (existing.length) {
+      return res.status(400).json({ error: 'You already have a Polymarket wallet key. Delete the existing one first.' });
+    }
+
+    const keyEnc    = encrypt(privateKey);
+    const secretEnc = encrypt('');   // no secret for wallet-based auth
+
+    await query(
+      `INSERT INTO api_keys (user_id, platform, label, api_key_enc, api_secret_enc,
+         iv, auth_tag, secret_iv, secret_auth_tag, enabled)
+       VALUES ($1, 'polymarket', $2, $3, $4, $5, $6, $7, $8, true)`,
+      [req.userId, label || 'Polymarket Wallet',
+       keyEnc.encrypted, secretEnc.encrypted,
+       keyEnc.iv, keyEnc.authTag, secretEnc.iv, secretEnc.authTag]
+    );
+
+    res.json({ ok: true, address: wallet.address, message: 'Polymarket wallet key saved. Your wallet address: ' + wallet.address });
+  } catch (err) {
+    console.error('Polymarket key save error:', err.message);
+    res.status(500).json({ error: 'Failed to save wallet key' });
+  }
+});
+
+// ── GET user's Polymarket wallet address (masked, never returns key) ──
+router.get('/polymarket', async (req, res) => {
+  try {
+    const { decrypt } = require('../crypto-utils');
+    const { ethers } = require('ethers');
+
+    const rows = await query(
+      `SELECT id, label, enabled, created_at, api_key_enc, iv, auth_tag
+       FROM api_keys WHERE user_id = $1 AND platform = 'polymarket'`,
+      [req.userId]
+    );
+    if (!rows.length) return res.json({ configured: false });
+
+    const row = rows[0];
+    let address = '';
+    try {
+      const pk = decrypt(row.api_key_enc, row.iv, row.auth_tag);
+      const wallet = new ethers.Wallet(pk.startsWith('0x') ? pk : `0x${pk}`);
+      address = wallet.address;
+    } catch {}
+
+    res.json({
+      configured: true,
+      id:       row.id,
+      label:    row.label,
+      enabled:  row.enabled,
+      address,                         // public address only — key never returned
+      createdAt: row.created_at,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 module.exports = router;
