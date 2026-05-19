@@ -17,7 +17,7 @@ const { getBTCSignal } = require('../polymarket-btc-signal');
 const { log: bLog }   = require('../bot-logger');
 
 const TRADE_INTERVAL_MS = 15 * 60 * 1000;   // 15 minutes
-const TRADE_SIZE_USDT   = 5;                 // $5 margin per trade
+const TRADE_SIZE_USDT   = 1;                 // $1 margin per trade
 const LEVERAGE          = 20;                // 20× → $100 notional
 const MIN_CONFIDENCE    = 55;               // skip trades below this confidence
 const SYMBOL            = 'BTCUSDT';
