@@ -25,6 +25,7 @@ const { CoderAgent } = require('./coder-agent');
 const { OptimizerAgent } = require('./optimizer-agent');
 const { PolymarketAgent } = require('./polymarket-agent');
 const { SMCProAgent }     = require('./smc-pro-agent');
+const { PolyBTCAgent }    = require('./poly-btc-agent');
 const { TradeConsensus, PatternLearner, encodeMarketState, extractIndicatorsFromKlines } = require('../ruflo-bridge');
 
 const SELF_IMPROVE_LESSONS = {
@@ -60,6 +61,7 @@ class AgentCoordinator extends BaseAgent {
     this.optimizerAgent  = new OptimizerAgent(options);
     this.polymarketAgent = new PolymarketAgent(options);
     this.smcProAgent     = new SMCProAgent(options);
+    this.polyBtcAgent    = new PolyBTCAgent(options);
 
     // Agent registry — order matters for display
     this._agents = new Map();
@@ -75,6 +77,7 @@ class AgentCoordinator extends BaseAgent {
     this._agents.set('optimizer',  this.optimizerAgent);
     this._agents.set('polymarket', this.polymarketAgent);
     this._agents.set('smc-pro',    this.smcProAgent);
+    this._agents.set('poly-btc',   this.polyBtcAgent);
 
     // Wire up inter-agent events
     this.chartAgent.on('signals', (data) => {
@@ -448,6 +451,13 @@ class AgentCoordinator extends BaseAgent {
     if (!this.smcProAgent.paused) {
       this.smcProAgent.execute({ coordinator: this }).catch(err => {
         this.addActivity('error', `SMC Pro scan error: ${err.message}`);
+      });
+    }
+
+    // 6c. PolyBTC Agent — $5 BTC micro-trade every 15 min based on Polymarket signal
+    if (!this.polyBtcAgent.paused) {
+      this.polyBtcAgent.execute({ coordinator: this }).catch(err => {
+        this.addActivity('error', `PolyBTC trade error: ${err.message}`);
       });
     }
 

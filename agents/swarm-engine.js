@@ -9,11 +9,15 @@
 const aiBrain = require('./ai-brain');
 const hermes = require('../hermes-bridge');
 const { TradeConsensus } = require('../ruflo-bridge');
+const { getSwarmSeed } = require('../polymarket-btc-signal');
 
 // Singleton consensus engine for swarm decisions
 const swarmConsensus = new TradeConsensus({ threshold: 0.5, timeoutMs: 10000 });
 
 // ── Swarm Persona Configurations ──────────────────────────────
+// MiroFish-inspired: each persona is an "AI agent" with a distinct
+// personality and memory, simulating how different market participants
+// would respond to the same data. The consensus is the emergent prediction.
 
 const PERSONAS = {
   BULL_MOMENTUMIST: {
@@ -43,15 +47,45 @@ const PERSONAS = {
     Focus on volatility (ATR) and tight ranges.
     You prefer low-risk, high-probability micro-moves over long-term trends.`,
     weight: 0.8
-  }
+  },
+  POLYMARKET_ORACLE: {
+    name: 'Polymarket Oracle',
+    prompt: `You are a prediction-market analyst. You read crowd wisdom from
+    Polymarket — the world's largest prediction market — to forecast direction.
+    You treat the probability trend of BTC YES tokens as a leading indicator:
+    rising probability = informed money betting on BTC going up = LONG bias.
+    falling probability = informed money hedging downside = SHORT bias.
+    You weight this heavily because prediction markets aggregate thousands of
+    informed participants and are historically more accurate than retail indicators.
+    Your edge: you see what the crowd ACTUALLY bets, not what they say.`,
+    weight: 1.8   // highest weight — prediction markets are strong leading signals
+  },
 };
 
 // Expert mappings: specific personas that excel at specific symbols
 const EXPERT_MAPPING = {
-  'BTCUSDT': { SMC_PURIST: 1.5, BULL_MOMENTUMIST: 1.2 },
-  'ETHUSDT': { SMC_PURIST: 1.5, BEAR_CONTRARIAN: 1.3 },
-  'SOLUSDT': { BULL_MOMENTUMIST: 1.8, SCAUPER_RISK_AVERSIVE: 1.2 },
+  'BTCUSDT': { SMC_PURIST: 1.5, BULL_MOMENTUMIST: 1.2, POLYMARKET_ORACLE: 2.0 },
+  'ETHUSDT': { SMC_PURIST: 1.5, BEAR_CONTRARIAN: 1.3, POLYMARKET_ORACLE: 1.5 },
+  'SOLUSDT': { BULL_MOMENTUMIST: 1.8, SCAUPER_RISK_AVERSIVE: 1.2, POLYMARKET_ORACLE: 1.3 },
 };
+
+// ── Polymarket seed cache (refreshed per swarm run, shared across personas) ──
+let _polymarketSeedCache = null;
+let _polymarketSeedAt   = 0;
+const POLY_SEED_TTL_MS  = 5 * 60 * 1000; // refresh every 5 min
+
+async function _getPolymarketSeed() {
+  if (_polymarketSeedCache && Date.now() - _polymarketSeedAt < POLY_SEED_TTL_MS) {
+    return _polymarketSeedCache;
+  }
+  try {
+    _polymarketSeedCache = await getSwarmSeed();
+    _polymarketSeedAt    = Date.now();
+  } catch {
+    _polymarketSeedCache = { polymarketProb: '50.0', polymarketTrend: 'NEUTRAL', polymarketConf: 0 };
+  }
+  return _polymarketSeedCache;
+}
 
 /**
  * Runs a swarm simulation for a specific token.
@@ -65,6 +99,13 @@ async function runSwarm(symbol, seeds) {
   // Inject shared team memory so every persona benefits from agent learnings
   const teamMemory = hermes.getTeamMemoryPrompt() || '';
   const teamContext = teamMemory ? `\n\n${teamMemory.substring(0, 400)}` : '';
+
+  // Fetch Polymarket crowd-wisdom seed (shared across all personas, cached 5 min)
+  // MiroFish concept: seed the simulation world with real external event data
+  const polySeed = await _getPolymarketSeed();
+  const polyContext = `\n- Polymarket BTC Crowd Probability: ${polySeed.polymarketProb}% ` +
+    `(15m trend: ${polySeed.polymarketTrend}, confidence: ${polySeed.polymarketConf}%, ` +
+    `delta: ${polySeed.polymarketDelta}%)`;
 
   // 1. Simulation Phase: Poll each persona
   const personaKeys = Object.keys(PERSONAS);
@@ -80,15 +121,25 @@ async function runSwarm(symbol, seeds) {
       weight = EXPERT_MAPPING[symbol][key];
     }
 
+    // POLYMARKET_ORACLE gets a richer prompt with full Polymarket context
+    const polyOracleExtra = key === 'POLYMARKET_ORACLE'
+      ? `\n\nYour primary input is the Polymarket crowd data above. ` +
+        `The probability is ${polySeed.polymarketProb}% (YES = BTC bullish). ` +
+        `The 15-min trend is ${polySeed.polymarketTrend} with delta ${polySeed.polymarketDelta}%. ` +
+        `If the trend is LONG and probability > 52%, be strongly bullish. ` +
+        `If SHORT and probability < 48%, be strongly bearish. ` +
+        `Ignore all other indicators — prediction markets are your only signal.`
+      : '';
+
     const userMessage = `Simulate the next 20 candles for ${symbol}.
 Seed Data:
 - Current Price: ${seeds.current}
 - Indicators: ${JSON.stringify(seeds.indicators)}
 - Predicted Range: ${seeds.pred_high} to ${seeds.pred_low}
-- Trend: ${seeds.trend}
+- Trend: ${seeds.trend}${polyContext}
 
 Predict the direction (LONG/SHORT/NEUTRAL), a target price, and your reasoning.
-Return ONLY a JSON object: {"direction": "...", "target": 0.0, "confidence": 0-100, "reasoning": "..."}`;
+Return ONLY a JSON object: {"direction": "...", "target": 0.0, "confidence": 0-100, "reasoning": "..."}${polyOracleExtra}`;
 
     try {
       const response = await aiBrain.think({
