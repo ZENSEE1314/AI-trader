@@ -1399,6 +1399,7 @@
     els.modalAddKey.classList.add('visible');
     els.formAddKey.reset();
     hideError(els.addKeyError);
+    onPlatformChange('');   // reset field visibility to default (exchange) state
     $('#key-platform').focus();
   }
 
