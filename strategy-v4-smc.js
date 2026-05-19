@@ -786,15 +786,19 @@ function resolveSignal(state, zone, price, vwap, nowMs, symbol) {
   // LOW pivot  (LL or HL) = price at demand zone → LONG  (buy the low)
   // HIGH pivot (HH or LH) = price at supply zone → SHORT (sell the high)
   //
-  // VWAP zone rules (per SMC + user spec):
-  //   ABOVE_UPPER → no trade (price extended above VWAP upper band, skip both)
-  //   UPPER_MID   → SHORT only (supply zone within acceptable range)
-  //   LOWER_MID   → LONG only  (demand zone within acceptable range)
-  //   BELOW_LOWER → no trade (price extended below VWAP lower band, skip both)
+  // VWAP zone rules:
+  //   ABOVE_UPPER → no trade (price extended above VWAP upper band)
+  //   UPPER_MID   → SHORT only
+  //   LOWER_MID   → LONG normally; SHORT also allowed when 4H=BEARISH
+  //                 (shorting the bounce back to VWAP mid in a downtrend = valid SMC entry)
+  //   BELOW_LOWER → no trade (price extended below VWAP lower band)
   const isLowPivot  = p15 === 'LL' || p15 === 'HL';
   const isHighPivot = p15 === 'HH' || p15 === 'LH';
+  const s4hDisp     = get4hStructure(state, price);
   if (isLowPivot  && zone === 'LOWER_MID') return tryLong();
   if (isHighPivot && zone === 'UPPER_MID') return tryShort();
+  // 4H BEARISH + LOWER_MID + high pivot = bounce-short in downtrend (with-trend entry)
+  if (isHighPivot && zone === 'LOWER_MID' && s4hDisp === 'BEARISH') return tryShort();
   return null;
 }
 
@@ -1185,8 +1189,8 @@ async function analyze(symbol, log) {
             log(`[V4] LONG BLOCKED — ${symbol} 4H=BEARISH zone=${zone} (waiting for 4H to base before LONG)`);
           } else if (s4h === 'BULLISH' && !isDiscount) {
             log(`[V4] no signal — ${symbol} 4H=BULLISH zone=${zone} (need LOWER_MID for LONG)`);
-          } else if (s4h === 'BEARISH' && !isPremium) {
-            log(`[V4] no signal — ${symbol} 4H=BEARISH zone=${zone} (need ABOVE_UPPER/UPPER_MID for SHORT)`);
+          } else if (s4h === 'BEARISH' && zone === 'BELOW_LOWER') {
+            log(`[V4] no signal — ${symbol} 4H=BEARISH zone=BELOW_LOWER (too far at bottom, wait for bounce to LOWER_MID)`);
           } else if (s4h !== 'BULLISH' && s4h !== 'BEARISH' && s15 === 'BULLISH' && !isDiscount) {
             log(`[V4] no signal — ${symbol} 4H=MIXED 15m=BULLISH zone=${zone} (need discount zone for LONG)`);
           } else if (s4h !== 'BULLISH' && s4h !== 'BEARISH' && s15 === 'BEARISH' && !isPremium) {
