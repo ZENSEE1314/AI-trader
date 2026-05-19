@@ -183,11 +183,12 @@ async function buildClobClient(privateKey) {
     getAddresses:     async () => [wallet.address],
   };
 
-  const client = new ClobClient(CLOB_HOST, CHAIN_ID, signer);
+  // Derive L2 creds first, then pass into constructor (v5 API — no setApiCreds)
+  const tempClient = new ClobClient(CLOB_HOST, CHAIN_ID, signer);
+  const creds = await tempClient.createOrDeriveApiKey();
 
-  // Derive / create L2 credentials (cached by the SDK after first call)
-  const creds = await client.createOrDeriveApiKey();
-  client.setApiCreds(creds);
+  // Re-construct with creds as 4th arg so all authenticated calls work
+  const client = new ClobClient(CLOB_HOST, CHAIN_ID, signer, creds);
 
   return { client, address: wallet.address };
 }
