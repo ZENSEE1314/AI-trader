@@ -64,7 +64,7 @@ const ACTIVE_SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'SOLUSDT'];
 
 const SYMBOL_LEVERAGE = {
   BTCUSDT: 125,  // 31.3% risk/trade
-  ETHUSDT:  75,  // 30.0% risk/trade
+  ETHUSDT: 125,  // 31.3% risk/trade
   BNBUSDT: 200,  // 50.0% risk/trade
   SOLUSDT: 150,  // 30.0% risk/trade
 };
@@ -73,7 +73,7 @@ const SYMBOL_LEVERAGE = {
 // Decoupled from leverage so each symbol gets its own optimal stop width.
 const SYMBOL_SL_PCT = {
   BTCUSDT: 0.0025,  // 0.25% — tight, confirmed optimal from SL sweep
-  ETHUSDT: 0.0040,  // 0.40% — needs wider stop to survive ETH noise
+  ETHUSDT: 0.0025,  // 0.25% — tightened to match BTC risk at 125x (31.3% risk/trade)
   BNBUSDT: 0.0025,  // 0.25% — grid #3: SL 0.25% at 200x
   SOLUSDT: 0.0020,  // 0.20% — tight pivots, 49.2% WR confirmed
 };
@@ -147,6 +147,20 @@ function getState(symbol) {
       lastShortTime:  0,  // EXP-O: per-direction 3-hour cooldown
 
       ready: false,
+
+      // ── CHoCH (Change of Character) state ───────────────────────────────────────
+      // CHoCH SHORT: price breaks BELOW last confirmed 15m HL in a bullish structure
+      // CHoCH LONG:  price breaks ABOVE last confirmed 15m LH in a bearish structure
+      // These catch the BIG trend-reversal moves that normal pivot-confirmation misses.
+      // Levels update every time a new HL or LH is confirmed on the 15m.
+      // choch_bear_level: last 15m HL price — break below this = bearish CHoCH → SHORT
+      // choch_bull_level: last 15m LH price — break above this = bullish CHoCH → LONG
+      // choch_bear_fired: timestamp of last bearish CHoCH fire (cooldown guard)
+      // choch_bull_fired: timestamp of last bullish CHoCH fire (cooldown guard)
+      choch_bear_level: null,
+      choch_bull_level: null,
+      choch_bear_fired: 0,
+      choch_bull_fired: 0,
     };
   }
   return _state[symbol];
@@ -253,6 +267,12 @@ function update15m(state) {
     state.pivots15m.push({ type: 'H', price: p.bar.high, time: p.bar.openTime, label });
     state.last15mPivotType  = label;
     state.last15mPivotPrice = p.bar.high;
+    // LH = lower high → this is the CHoCH bullish level: break ABOVE = trend flipping LONG
+    // Reset fired flag so the new level can trigger a fresh CHoCH LONG signal
+    if (label === 'LH') {
+      state.choch_bull_level = p.bar.high;
+      state.choch_bull_fired = 0;
+    }
   }
   if (p.isLow) {
     // Find the last LOW in the pivot sequence to label correctly
@@ -263,6 +283,12 @@ function update15m(state) {
     state.pivots15m.push({ type: 'L', price: p.bar.low, time: p.bar.openTime, label });
     state.last15mPivotType  = label;
     state.last15mPivotPrice = p.bar.low;
+    // HL = higher low → this is the CHoCH bearish level: break BELOW = trend flipping SHORT
+    // Reset fired flag so the new level can trigger a fresh CHoCH SHORT signal
+    if (label === 'HL') {
+      state.choch_bear_level = p.bar.low;
+      state.choch_bear_fired = 0;
+    }
   }
 
   // Keep at most 50 pivot entries — covers ~50×15m = 12.5 hours of history
@@ -488,6 +514,163 @@ function get15mStructure(state, currentPrice) {
   return 'MIXED'; // diverging labels — zone decides direction
 }
 
+// ── Munehisa Homma Candlestick Pattern Detector ────────────────
+//
+//  Applied as a HARD GATE for BNBUSDT and SOLUSDT only.
+//  Candles array: most recent is last. Needs at least 3 bars.
+//  Each candle: { o, h, l, c } or { open, high, low, close }
+//
+//  LONG patterns (bullish reversal):
+//    - Hammer:           long lower wick (≥2× body), small upper wick (<50% body)
+//    - Inverted Hammer:  long upper wick (≥2× body), small lower wick (<50% body)
+//    - Bullish Engulfing: green candle fully engulfs previous red candle body
+//    - Morning Star:     [bearish] [small body doji/spinner] [bullish closes above mid-prev]
+//
+//  SHORT patterns (bearish reversal):
+//    - Hanging Man:      same shape as hammer (long lower wick) at supply zone
+//    - Shooting Star:    long upper wick (≥2× body), small lower wick (<50% body)
+//    - Bearish Engulfing: red candle fully engulfs previous green candle body
+//    - Evening Star:     [bullish] [small body doji/spinner] [bearish closes below mid-prev]
+//
+//  Returns: { pattern: string, isLong: bool } | null
+//
+//  offset: how many bars from the END to treat as "current".
+//    0 (default) = most recent bar is current.
+//    LBR_1M=1    = check at the PIVOT bar (1 bar before most recent confirmed bar,
+//                  because the pivot confirms 1 bar after the actual pivot bar).
+//    Use offset=LBR_1M when checking at pivot detection time so the pattern is
+//    evaluated ON the pivot bar, not on the trailing confirmation bar.
+function detectHommaPattern(candles, offset = 0) {
+  if (!candles || candles.length < 3 + offset) return null;
+
+  const n    = candles.length;
+  const norm = (c) => ({ o: c.o ?? c.open, h: c.h ?? c.high, l: c.l ?? c.low, c: c.c ?? c.close });
+
+  const cur  = norm(candles[n - 1 - offset]);
+  const prev = norm(candles[n - 2 - offset]);
+  const prev2= norm(candles[n - 3 - offset]);
+
+  const body    = (c) => Math.abs(c.c - c.o);
+  const upWick  = (c) => c.h - Math.max(c.o, c.c);
+  const dnWick  = (c) => Math.min(c.o, c.c) - c.l;
+  const range   = (c) => c.h - c.l;
+  const isBull  = (c) => c.c >= c.o;  // >= handles doji-like candles
+  const isBear  = (c) => c.c <= c.o;
+  const midBody = (c) => (c.o + c.c) / 2;
+  // On 1m crypto candles (no gaps, 24/7), bodies are small and wicks thin.
+  // Relaxed thresholds vs classical definitions — keeps the spirit of each pattern.
+  const isSmallBody = (c) => range(c) > 0 && body(c) / range(c) < 0.45;
+  const MIN_BODY_RATIO = 0.0001; // body ≥ 0.01% of price — allows small 1m bodies
+
+  const curBody = body(cur);
+  const prevBody = body(prev);
+
+  // ── Hammer (bullish): long lower wick ≥1.5× body, upper wick ≤100% of body ──
+  if (curBody > cur.o * MIN_BODY_RATIO && dnWick(cur) >= curBody * 1.5 && upWick(cur) <= curBody) {
+    return { pattern: 'Hammer', isLong: true };
+  }
+
+  // ── Inverted Hammer (bullish): long upper wick ≥1.5× body, lower wick ≤100% ─
+  if (curBody > cur.o * MIN_BODY_RATIO && upWick(cur) >= curBody * 1.5 && dnWick(cur) <= curBody) {
+    return { pattern: 'InvertedHammer', isLong: true };
+  }
+
+  // ── Bullish Engulfing: cur green body covers prev red body (gap-less crypto) ─
+  if (isBull(cur) && isBear(prev) && prevBody > prev.o * MIN_BODY_RATIO &&
+      cur.c >= prev.o && cur.o <= prev.c && curBody > prevBody * 0.8) {
+    return { pattern: 'BullishEngulfing', isLong: true };
+  }
+
+  // ── Morning Star: [bearish][small body][bullish above mid of first] ──────────
+  if (isBear(prev2) && isSmallBody(prev) && isBull(cur) &&
+      body(prev2) > prev2.o * MIN_BODY_RATIO && cur.c > midBody(prev2)) {
+    return { pattern: 'MorningStar', isLong: true };
+  }
+
+  // ── Wick Reversal (bullish): strong lower wick >55% of total range ───────────
+  if (isBull(cur) && dnWick(cur) > range(cur) * 0.55) {
+    return { pattern: 'WickReversal', isLong: true };
+  }
+
+  // ── Shooting Star (bearish): long upper wick ≥1.5× body, lower wick ≤100% ───
+  if (curBody > cur.o * MIN_BODY_RATIO && upWick(cur) >= curBody * 1.5 && dnWick(cur) <= curBody) {
+    return { pattern: 'ShootingStar', isLong: false };
+  }
+
+  // ── Hanging Man (bearish): long lower wick ≥1.5× body, upper wick ≤100% ─────
+  if (curBody > cur.o * MIN_BODY_RATIO && dnWick(cur) >= curBody * 1.5 && upWick(cur) <= curBody) {
+    return { pattern: 'HangingMan', isLong: false };
+  }
+
+  // ── Bearish Engulfing: cur red body covers prev green body (gap-less crypto) ─
+  if (isBear(cur) && isBull(prev) && prevBody > prev.o * MIN_BODY_RATIO &&
+      cur.c <= prev.o && cur.o >= prev.c && curBody > prevBody * 0.8) {
+    return { pattern: 'BearishEngulfing', isLong: false };
+  }
+
+  // ── Evening Star: [bullish][small body][bearish below mid of first] ──────────
+  if (isBull(prev2) && isSmallBody(prev) && isBear(cur) &&
+      body(prev2) > prev2.o * MIN_BODY_RATIO && cur.c < midBody(prev2)) {
+    return { pattern: 'EveningStar', isLong: false };
+  }
+
+  // ── Wick Rejection (bearish): strong upper wick >55% of total range ──────────
+  if (isBear(cur) && upWick(cur) > range(cur) * 0.55) {
+    return { pattern: 'WickRejection', isLong: false };
+  }
+
+  return null;
+}
+
+// Symbols that require a Homma candlestick confirmation as a hard gate
+// ── CHoCH (Change of Character) detection ──────────────────────────────────
+// CHoCH fires when the CURRENT TREND STRUCTURE IS BROKEN — the exact signal
+// that catches big waves BEFORE normal pivot confirmation would fire.
+//
+// Bearish CHoCH (→ SHORT): In a bullish market (HH+HL), price CLOSES BELOW last HL.
+//   The HL level is set every time a new 15m HL forms (update15m sets choch_bear_level).
+//   This is the "Change of Character" from bullish to bearish → enter SHORT immediately.
+//
+// Bullish CHoCH (→ LONG): In a bearish market (LH+LL), price CLOSES ABOVE last LH.
+//   The LH level is set every time a new 15m LH forms (update15m sets choch_bull_level).
+//   This is the "Change of Character" from bearish to bullish → enter LONG immediately.
+//
+// CHoCH still respects the 4H gate: LONG CHoCH blocked if 4H=BEARISH, SHORT CHoCH blocked if
+// 4H=BULLISH. A 15m structure break against the dominant 4H trend is usually a fake-out.
+// CHoCH bypasses the 1m pivot confirmation wait only (level break IS the signal).
+//
+// Cooldown: 3 hours per direction — prevents re-firing on same move.
+// Min break: 0.04% beyond the level — filters noise / wicks.
+const CHOCH_COOLDOWN_MS   = 3 * 60 * 60 * 1000;  // 3 hours per direction
+const CHOCH_MIN_BREAK_PCT = 0.0004;                // 0.04% clear break beyond level
+
+function detectCHoCH(state, bar, nowMs) {
+  if (!state.choch_bear_level && !state.choch_bull_level) return null;
+  const price = bar.close;
+
+  // Bearish CHoCH: 1m bar closes BELOW last 15m HL level
+  if (state.choch_bear_level && state.choch_bear_fired === 0) {
+    const breakFrac = (state.choch_bear_level - price) / state.choch_bear_level;
+    if (breakFrac >= CHOCH_MIN_BREAK_PCT) {
+      state.choch_bear_fired = nowMs;
+      return { direction: 'SHORT', type: 'CHoCH', level: state.choch_bear_level, breakPct: (breakFrac * 100).toFixed(3) };
+    }
+  }
+
+  // Bullish CHoCH: 1m bar closes ABOVE last 15m LH level
+  if (state.choch_bull_level && state.choch_bull_fired === 0) {
+    const breakFrac = (price - state.choch_bull_level) / state.choch_bull_level;
+    if (breakFrac >= CHOCH_MIN_BREAK_PCT) {
+      state.choch_bull_fired = nowMs;
+      return { direction: 'LONG', type: 'CHoCH', level: state.choch_bull_level, breakPct: (breakFrac * 100).toFixed(3) };
+    }
+  }
+
+  return null;
+}
+
+const HOMMA_GATE_SYMBOLS = new Set(['BNBUSDT', 'SOLUSDT']);
+
 // ── Signal logic ───────────────────────────────────────────────
 //
 //  Pivot type decides direction — zone gates extremes only:
@@ -505,9 +688,19 @@ function get15mStructure(state, currentPrice) {
 //    LONG:  15m HH or HL + 1m HH or HL  (bullish structure — confirmed up-pivots)
 //    SHORT: 15m LL or LH + 1m LL or LH  (bearish structure — confirmed down-pivots)
 //
+//  Homma gate (BNB + SOL only — hard gate):
+//    LONG:  requires a bullish Homma pattern on 1m (Hammer, InvHammer, BullEngulf, MorningStar)
+//    SHORT: requires a bearish Homma pattern on 1m (ShootingStar, HangingMan, BearEngulf, EveningStar)
+//
 //  Chase filter (LONG):  price within MAX_CHASE_PCT of last 1m swing HIGH.
 //  Chase filter (SHORT): price within MAX_SHORT_DROP_PCT of last 1m swing LOW.
-function resolveSignal(state, zone, price, vwap) {
+// Maximum time allowed between the 15m pivot bar's open and the 1m entry:
+// 30min (lbR=1 confirmation lag) + 10min (entry window) = 40min.
+// After 40 minutes the 15m pivot is stale — price has already moved too far
+// from the demand/supply zone for the entry to be meaningful.
+const MAX_15M_PIVOT_AGE_MS = 40 * 60 * 1000;
+
+function resolveSignal(state, zone, price, vwap, nowMs, symbol) {
   const p15 = state.last15mPivotType;
   const p1m = state.last1mPivotType;
 
@@ -520,19 +713,31 @@ function resolveSignal(state, zone, price, vwap) {
     const s4h   = get4hStructure(state, price);
     const s15chk = get15mStructure(state, price);
     if (s4h === 'BEARISH') return null;   // macro downtrend — demand zones fail
-    // When 4H is uncertain (MIXED/UNKNOWN), require 15m to also confirm bullish/recovering.
-    // 15m fully BEARISH (LH+LL) in a MIXED 4H = demand zone likely to fail — skip.
-    if ((s4h === 'MIXED' || s4h === 'UNKNOWN') && s15chk === 'BEARISH') return null;
+    // When 4H is uncertain (MIXED/UNKNOWN), require 15m to EXPLICITLY confirm bullish.
+    // MIXED 4H + MIXED/BEARISH 15m = no clear trend → skip entirely. Too many losers
+    // come from trading in no-man's land when both timeframes are uncertain.
+    if ((s4h === 'MIXED' || s4h === 'UNKNOWN') && s15chk !== 'BULLISH') return null;
     // Demand zone entry: both 15m and 1m must confirm price is AT A LOW
     const isDemand15 = p15 === 'LL' || p15 === 'HL';
     const isDemand1m = p1m === 'LL' || p1m === 'HL';
     if (!isDemand15 || !isDemand1m) return null;
+    // Freshness: 1m entry must be within 10 candles (10 min) after 15m pivot confirms.
+    // 15m pivot bar opens at last15mPivotTime → lbR=1 bar confirms ~30min later.
+    // Entry window = confirmation + 10min = pivot bar open + 40min.
+    // Beyond that, price has already bounced away from the demand zone — too late.
+    if (nowMs && state.last15mPivotTime && nowMs - state.last15mPivotTime > MAX_15M_PIVOT_AGE_MS) return null;
     // Chase filter: don't enter if price already bounced far above the 1m swing low
     if (isChasing(price, state.sh1m_1)) return null;
     // VWAP: block if price is already well above the upper band (too extended for a low entry)
     if (vwap && vwap.stddev > 0) {
       const distAboveUpper = (price - vwap.upper) / vwap.stddev;
       if (distAboveUpper > MIN_DIST_SIGMA * 2) return null;
+    }
+    // Homma gate: BNB and SOL require a bullish candlestick pattern at the pivot bar.
+    // offset=LBR_1M: check the pivot bar itself (1 bar before the latest confirmed bar).
+    if (symbol && HOMMA_GATE_SYMBOLS.has(symbol)) {
+      const homma = detectHommaPattern(state.candles1m, LBR_1M);
+      if (!homma || !homma.isLong) return null;
     }
     return { direction: 'LONG', type: `${p15}+${p1m}` };
   }
@@ -546,12 +751,16 @@ function resolveSignal(state, zone, price, vwap) {
     const s4h    = get4hStructure(state, price);
     const s15chk = get15mStructure(state, price);
     if (s4h === 'BULLISH') return null;   // macro uptrend — supply zones break
-    // When 4H is uncertain, require 15m to confirm bearish/rejecting.
-    if ((s4h === 'MIXED' || s4h === 'UNKNOWN') && s15chk === 'BULLISH') return null;
+    // When 4H is uncertain (MIXED/UNKNOWN), require 15m to EXPLICITLY confirm bearish.
+    // MIXED 4H + MIXED/BULLISH 15m = no clear trend → skip entirely. Don't short
+    // into uncertainty — supply zones break when trend is ambiguous.
+    if ((s4h === 'MIXED' || s4h === 'UNKNOWN') && s15chk !== 'BEARISH') return null;
     // Supply zone entry: both 15m and 1m must confirm price is AT A HIGH
     const isSupply15 = p15 === 'HH' || p15 === 'LH';
     const isSupply1m = p1m === 'HH' || p1m === 'LH';
     if (!isSupply15 || !isSupply1m) return null;
+    // Freshness: same 10-candle (10 min) window after 15m pivot confirms — see tryLong.
+    if (nowMs && state.last15mPivotTime && nowMs - state.last15mPivotTime > MAX_15M_PIVOT_AGE_MS) return null;
     // Chase filter: don't enter if price already dropped far below the 1m swing high
     if (isShortTooLate(price, state.last15mPivotPrice)) return null;
     if (isShort1mTooLate(price, state.sl1m_1)) return null;
@@ -559,6 +768,12 @@ function resolveSignal(state, zone, price, vwap) {
     if (vwap && vwap.stddev > 0) {
       const distBelowLower = (vwap.lower - price) / vwap.stddev;
       if (distBelowLower > MIN_DIST_SIGMA * 2) return null;
+    }
+    // Homma gate: BNB and SOL require a bearish candlestick pattern at the pivot bar.
+    // offset=LBR_1M: check the pivot bar itself (1 bar before the latest confirmed bar).
+    if (symbol && HOMMA_GATE_SYMBOLS.has(symbol)) {
+      const homma = detectHommaPattern(state.candles1m, LBR_1M);
+      if (!homma || homma.isLong) return null;
     }
     return { direction: 'SHORT', type: `${p15}+${p1m}` };
   }
@@ -601,11 +816,15 @@ async function analyze(symbol, log) {
           const pivotType = (st.sh15_1 === null || p.bar.high > st.sh15_1) ? 'HH' : 'LH';
           st.sh15_2 = st.sh15_1; st.sh15_1 = p.bar.high;
           st.last15mPivotType = pivotType; st.last15mPivotPrice = p.bar.high;
+          // Seed CHoCH bullish level: LH = break above this = bullish CHoCH → LONG
+          if (pivotType === 'LH') { st.choch_bull_level = p.bar.high; st.choch_bull_fired = 0; }
         }
         if (p.isLow) {
           const pivotType = (st.sl15_1 === null || p.bar.low > st.sl15_1) ? 'HL' : 'LL';
           st.sl15_2 = st.sl15_1; st.sl15_1 = p.bar.low;
           st.last15mPivotType = pivotType; st.last15mPivotPrice = p.bar.low;
+          // Seed CHoCH bearish level: HL = break below this = bearish CHoCH → SHORT
+          if (pivotType === 'HL') { st.choch_bear_level = p.bar.low; st.choch_bear_fired = 0; }
         }
       }
     }
@@ -745,27 +964,46 @@ async function analyze(symbol, log) {
 
         // Full re-validation via resolveSignal() — same function used at signal
         // creation, now evaluated against actual entry price and live state.
-        const resolved = resolveSignal(st, zoneNext, entryPrice, vwapNext);
-
-        // Frozen-ref chase/drop using pivot refs frozen at queue time.
-        const frozenRef = pending.direction === 'SHORT' ? pending.sh1m_1 : pending.sl1m_1;
-        const frozenOk  = pending.direction === 'SHORT'
-          ? !isShort1mTooLate(entryPrice, frozenRef)
-          : !isChasing(entryPrice, frozenRef);
+        // CHoCH entries bypass resolveSignal() re-validation — the level break IS the signal.
+        // Normal SMC entries go through full re-validation (4H gate + pivot type + chase filter).
+        let resolved, frozenOk;
+        if (pending.choch) {
+          // CHoCH: only check that price hasn't reversed hard against the direction
+          // (e.g., if CHoCH SHORT fired but price immediately shot back up 0.5%, abort)
+          const MAX_CHOCH_REVERSAL = 0.003;  // 0.3% reversal cancels CHoCH entry
+          const revPct = pending.direction === 'SHORT'
+            ? (entryPrice - pending.price) / pending.price   // SHORT: bad if price went UP
+            : (pending.price - entryPrice) / pending.price;  // LONG:  bad if price went DOWN
+          resolved = revPct < MAX_CHOCH_REVERSAL ? { direction: pending.direction, type: 'CHoCH' } : null;
+          frozenOk = true;
+          if (!resolved) log(`[V4-CHoCH] ${symbol} ${pending.direction} CHoCH entry CANCELLED — price reversed ${(revPct*100).toFixed(3)}% against direction`);
+        } else {
+          resolved = resolveSignal(st, zoneNext, entryPrice, vwapNext, bar.openTime, symbol);
+          // Frozen-ref chase/drop using pivot refs frozen at queue time.
+          const frozenRef = pending.direction === 'SHORT' ? pending.sh1m_1 : pending.sl1m_1;
+          frozenOk = pending.direction === 'SHORT'
+            ? !isShort1mTooLate(entryPrice, frozenRef)
+            : !isChasing(entryPrice, frozenRef);
+        }
 
         if (resolved && resolved.direction === pending.direction && frozenOk) {
           signal = { ...pending, price: entryPrice, zone: zoneNext };
           if (pending.direction === 'SHORT') {
+            const frozenRef = pending.sh1m_1;
             const dropPct = frozenRef ? ((frozenRef - entryPrice) / frozenRef * 100).toFixed(3) : 'n/a';
             log(`[V4] ✓ ${symbol} SHORT entry=$${entryPrice.toFixed(4)} zone=${zoneNext} type=${pending.type} drop=${dropPct}% vs sh1m_frozen=${frozenRef?.toFixed(4)} 4H=${get4hStructure(st, entryPrice)} vwap=OK`);
           } else {
+            const frozenRef = pending.sl1m_1;
             const chasePct = frozenRef ? ((entryPrice - frozenRef) / frozenRef * 100).toFixed(3) : 'n/a';
             log(`[V4] ✓ ${symbol} LONG  entry=$${entryPrice.toFixed(4)} zone=${zoneNext} type=${pending.type} chase=${chasePct}% vs sl1m_frozen=${frozenRef?.toFixed(4)} 4H=${get4hStructure(st, entryPrice)} vwap=OK`);
           }
         } else {
           // Diagnose exactly which check failed
           let cancelReason;
-          if (!resolved) {
+          if (!resolved && pending.choch) {
+            // CHoCH entry cancelled by reversal guard (price moved against direction before fill)
+            cancelReason = `CHoCH ${pending.direction} reversed before entry fill`;
+          } else if (!resolved) {
             const s4h  = get4hStructure(st, entryPrice);
             const p15  = st.last15mPivotType;
             const p1m  = st.last1mPivotType;
@@ -780,7 +1018,10 @@ async function analyze(symbol, log) {
             } else if (pending.direction === 'LONG') {
               const isDemand15 = p15 === 'LL' || p15 === 'HL';
               const isDemand1m = p1m === 'LL' || p1m === 'HL';
-              if (!isDemand15) {
+              const pivotAgeMs = st.last15mPivotTime ? bar.openTime - st.last15mPivotTime : 0;
+              if (pivotAgeMs > MAX_15M_PIVOT_AGE_MS) {
+                cancelReason = `15m pivot stale: ${Math.round(pivotAgeMs/60000)}min ago (limit=40min) — price already bounced, entry too late`;
+              } else if (!isDemand15) {
                 cancelReason = `15m pivot flipped to ${p15} — need LL or HL for LONG (demand zone)`;
               } else if (!isDemand1m) {
                 cancelReason = `1m pivot flipped to ${p1m} — need LL or HL for LONG (demand zone)`;
@@ -798,7 +1039,10 @@ async function analyze(symbol, log) {
               // SHORT
               const isSupply15 = p15 === 'HH' || p15 === 'LH';
               const isSupply1m = p1m === 'HH' || p1m === 'LH';
-              if (!isSupply15) {
+              const pivotAgeMs = st.last15mPivotTime ? bar.openTime - st.last15mPivotTime : 0;
+              if (pivotAgeMs > MAX_15M_PIVOT_AGE_MS) {
+                cancelReason = `15m pivot stale: ${Math.round(pivotAgeMs/60000)}min ago (limit=40min) — price already dropped, entry too late`;
+              } else if (!isSupply15) {
                 cancelReason = `15m pivot flipped to ${p15} — need HH or LH for SHORT (supply zone)`;
               } else if (!isSupply1m) {
                 cancelReason = `1m pivot flipped to ${p1m} — need HH or LH for SHORT (supply zone)`;
@@ -813,16 +1057,17 @@ async function analyze(symbol, log) {
                 cancelReason = `VWAP proximity ${dist.toFixed(2)}σ below upper band (limit=${MIN_DIST_SIGMA * 2}σ) — entry in the middle, not near resistance`;
               }
             }
-          } else if (resolved.direction !== pending.direction) {
+          } else if (resolved && resolved.direction !== pending.direction) {
             cancelReason = `resolveSignal wants ${resolved.direction} but pending was ${pending.direction}`;
-          } else {
-            // frozen-ref failed
+          } else if (!pending.choch) {
+            // frozen-ref failed (SMC entries only — CHoCH handles its own reversal check above)
+            const frozenRefDiag = pending.direction === 'SHORT' ? pending.sh1m_1 : pending.sl1m_1;
             if (pending.direction === 'SHORT') {
-              const d = frozenRef ? ((frozenRef - entryPrice) / frozenRef * 100).toFixed(3) : 'n/a';
-              cancelReason = `frozen drop=${d}% past sh1m_frozen=${frozenRef?.toFixed(4)} (limit=${MAX_SHORT_DROP_PCT}%)`;
+              const d = frozenRefDiag ? ((frozenRefDiag - entryPrice) / frozenRefDiag * 100).toFixed(3) : 'n/a';
+              cancelReason = `frozen drop=${d}% past sh1m_frozen=${frozenRefDiag?.toFixed(4)} (limit=${MAX_SHORT_DROP_PCT}%)`;
             } else {
-              const c = frozenRef ? ((entryPrice - frozenRef) / frozenRef * 100).toFixed(3) : 'n/a';
-              cancelReason = `frozen chase=${c}% above sl1m_frozen=${frozenRef?.toFixed(4)} (limit=${MAX_CHASE_PCT}%)`;
+              const c = frozenRefDiag ? ((entryPrice - frozenRefDiag) / frozenRefDiag * 100).toFixed(3) : 'n/a';
+              cancelReason = `frozen chase=${c}% above sl1m_frozen=${frozenRefDiag?.toFixed(4)} (limit=${MAX_CHASE_PCT}%)`;
             }
           }
           log(`[V4] pending ${symbol} ${pending.direction} CANCELLED — ${cancelReason} | zone=${pending.zone}→${zoneNext} 4H=${get4hStructure(st, entryPrice)} 15m=${st.last15mPivotType||'none'} 1m=${st.last1mPivotType||'none'}`);
@@ -832,6 +1077,53 @@ async function analyze(symbol, log) {
 
     // ── Step 2: Check for a new pivot confirmation on this bar ────
     const pivotTime = update1m(st);
+
+    // ── CHoCH Fast Entry: fires BEFORE normal pivot-based SMC ────────────────────
+    // CHoCH fires when the current market structure is BROKEN on the 15m level.
+    // Bypasses 4H gate (CHoCH IS the 4H-level structural break) and the 1m pivot wait.
+    // Only fires once per HL/LH level (resets when a new HL or LH forms on 15m).
+    // Does NOT fire if a signal is already pending or a position is already open (zoneTraded).
+    if (!st.pendingSignal && !signal) {
+      const choch = detectCHoCH(st, bar, bar.openTime);
+      if (choch) {
+        const vwapC = calcVwap(st.candles15m, bar.openTime);
+        const zoneC = vwapC ? getZone(bar.close, vwapC) : 'UNKNOWN';
+        // Soft VWAP zone guard: don't CHoCH SHORT when already at extreme lows (BELOW_LOWER),
+        // don't CHoCH LONG when already at extreme highs (ABOVE_UPPER) — those are traps.
+        const zoneOk = (choch.direction === 'SHORT' && zoneC !== 'BELOW_LOWER')
+                    || (choch.direction === 'LONG'  && zoneC !== 'ABOVE_UPPER');
+        // 4H gate: CHoCH LONG requires 4H not BEARISH; CHoCH SHORT requires 4H not BULLISH.
+        // CHoCH catches 15m structure breaks but should not fight the dominant 4H trend.
+        const h4 = get4hStructure(st, bar.close);
+        const trendOk = (choch.direction === 'LONG'  && h4 !== 'BEARISH')
+                     || (choch.direction === 'SHORT' && h4 !== 'BULLISH');
+        if (!trendOk) {
+          log(`[V4-CHoCH] ${symbol} ${choch.direction} CHoCH blocked — 4H=${h4} opposes trade direction`);
+        }
+        if (zoneOk && trendOk) {
+          log(`[V4-CHoCH] ⚡ ${symbol} ${choch.direction} — broke ${choch.direction === 'SHORT' ? 'HL' : 'LH'}@${choch.level.toFixed(2)} by ${choch.breakPct}% | price=${bar.close.toFixed(2)} zone=${zoneC} 4H=${get4hStructure(st, bar.close)} → queuing entry next candle`);
+          // Queue as pending so the deferred fire mechanism enters at next bar open.
+          // CHoCH entries bypass resolveSignal() re-validation at fire time (they have their own gate).
+          st.pendingSignal = {
+            direction: choch.direction,
+            type:      'CHoCH',
+            zone:      zoneC,
+            price:     bar.close,   // reference price (overwritten at fire time)
+            sh1m_1:    st.sh1m_1,
+            sl1m_1:    st.sl1m_1,
+            score:     75,
+            choch:     true,        // flag: skip resolveSignal() re-validation at fire time
+          };
+          // NOTE: intentionally NOT setting lastLongTime/lastShortTime for CHoCH.
+          // CHoCH has its own one-shot cooldown (choch_bear_fired/choch_bull_fired).
+          // Setting the 3h SMC cooldown here would block regular pivot entries for 3h after
+          // every CHoCH — that's too aggressive. The two systems run independently.
+          st.zoneTraded = true;
+        } else {
+          log(`[V4-CHoCH] ${symbol} ${choch.direction} CHoCH detected but zone=${zoneC} is extreme — skipping (trap risk)`);
+        }
+      }
+    }
 
     if (pivotTime && pivotTime !== st.lastSignalTime) {
       const vwap = calcVwap(st.candles15m, bar.openTime);
@@ -867,7 +1159,7 @@ async function analyze(symbol, log) {
         const nowMs = bar.openTime;
         const MIN_DIR_GAP = 3 * 60 * 60 * 1000;  // EXP-O: per-direction 3-hour cooldown
 
-        const sig = resolveSignal(st, zone, bar.close, vwap);
+        const sig = resolveSignal(st, zone, bar.close, vwap, bar.openTime, symbol);
 
         // Per-direction cooldown — allows opposite direction to fire independently
         if (sig && sig.direction === 'LONG'  && nowMs - st.lastLongTime  < MIN_DIR_GAP) continue;
