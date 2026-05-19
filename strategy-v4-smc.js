@@ -415,7 +415,7 @@ function is1mGapOk(sl1m_1, sl1m_2) {
 // Tightened from 0.20% (was 20% capital burned before even opening — too far
 // from the pivot, entering "in no where" as user described).
 // Entry MUST be within 0.08% of the actual swing low — if it moved more, skip.
-const MAX_CHASE_PCT = 0.08;
+const MAX_CHASE_PCT = 0.25;  // raised from 0.08 — 0.08% was ~$61 on BTC, too tight for pivot confirmation lag
 
 function isChasing(price, sl1m_1) {
   if (sl1m_1 === null) return false;
@@ -426,9 +426,9 @@ function isChasing(price, sl1m_1) {
 // SHORT proximity filter: reject SHORT if price has already dropped > MAX_SHORT_DROP_PCT
 // below the 15m HH/LH reference. The rejection already played out — we'd be
 // entering mid-fall, not at the top where the setup was valid.
-// Tightened from 0.30% to 0.12%: at 100x, 0.12% = 12% capital already moved.
-// Entry must be within 0.12% of the swing high — if it dropped more, skip.
-const MAX_SHORT_DROP_PCT = 0.12;
+// 0.12% was too tight — 15m pivot takes ~30 min (LBR bars) to confirm, during which
+// price easily drops 0.3–0.5%. Raised to 0.45% so the entry window survives confirmation lag.
+const MAX_SHORT_DROP_PCT = 0.45;
 
 function isShortTooLate(price, sh15_1) {
   if (sh15_1 === null) return false;  // no swing high reference — don't block
@@ -698,7 +698,7 @@ const HOMMA_GATE_SYMBOLS = new Set(['BNBUSDT', 'SOLUSDT']);
 // 30min (lbR=1 confirmation lag) + 10min (entry window) = 40min.
 // After 40 minutes the 15m pivot is stale — price has already moved too far
 // from the demand/supply zone for the entry to be meaningful.
-const MAX_15M_PIVOT_AGE_MS = 40 * 60 * 1000;
+const MAX_15M_PIVOT_AGE_MS = 75 * 60 * 1000;  // raised from 40min — LBR confirmation adds ~30min, leaving only 10min window at 40min
 
 function resolveSignal(state, zone, price, vwap, nowMs, symbol) {
   const p15 = state.last15mPivotType;
@@ -717,9 +717,11 @@ function resolveSignal(state, zone, price, vwap, nowMs, symbol) {
     // MIXED 4H + MIXED/BEARISH 15m = no clear trend → skip entirely. Too many losers
     // come from trading in no-man's land when both timeframes are uncertain.
     if ((s4h === 'MIXED' || s4h === 'UNKNOWN') && s15chk !== 'BULLISH') return null;
-    // Demand zone entry: both 15m and 1m must confirm price is AT A LOW
+    // Demand zone entry: 15m must be at a low; 1m can be LL/HL (at the low, classic)
+    // OR HH (price already bouncing from demand — confirms support, entry still valid).
+    // LH on 1m = price pulling back down toward demand still → skip (wait for bounce).
     const isDemand15 = p15 === 'LL' || p15 === 'HL';
-    const isDemand1m = p1m === 'LL' || p1m === 'HL';
+    const isDemand1m = p1m === 'LL' || p1m === 'HL' || p1m === 'HH';
     if (!isDemand15 || !isDemand1m) return null;
     // Freshness: 1m entry must be within 10 candles (10 min) after 15m pivot confirms.
     // 15m pivot bar opens at last15mPivotTime → lbR=1 bar confirms ~30min later.
@@ -755,9 +757,11 @@ function resolveSignal(state, zone, price, vwap, nowMs, symbol) {
     // MIXED 4H + MIXED/BULLISH 15m = no clear trend → skip entirely. Don't short
     // into uncertainty — supply zones break when trend is ambiguous.
     if ((s4h === 'MIXED' || s4h === 'UNKNOWN') && s15chk !== 'BEARISH') return null;
-    // Supply zone entry: both 15m and 1m must confirm price is AT A HIGH
+    // Supply zone entry: 15m must be at a high; 1m can be HH/LH (at the high, classic)
+    // OR LL (price already falling from supply — confirms rejection, entry still valid).
+    // HL on 1m = price bouncing up toward supply still → skip (wait for rejection).
     const isSupply15 = p15 === 'HH' || p15 === 'LH';
-    const isSupply1m = p1m === 'HH' || p1m === 'LH';
+    const isSupply1m = p1m === 'HH' || p1m === 'LH' || p1m === 'LL';
     if (!isSupply15 || !isSupply1m) return null;
     // Freshness: same 10-candle (10 min) window after 15m pivot confirms — see tryLong.
     if (nowMs && state.last15mPivotTime && nowMs - state.last15mPivotTime > MAX_15M_PIVOT_AGE_MS) return null;
