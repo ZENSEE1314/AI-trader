@@ -464,7 +464,7 @@
       const bearEl = document.getElementById('kronos-bear');
       const neutralEl = document.getElementById('kronos-neutral');
 
-      if (countEl) countEl.textContent = `(${data.total} tokens — BTC/ETH/SOL/BNB)`;
+      if (countEl) countEl.textContent = `(${data.total} tokens — BTC/ETH/SOL)`;
       const _tr = window.i18n ? window.i18n.t : function(k) { return k; };
       if (bullEl) bullEl.textContent = `📈 ${data.longs} ${_tr('kronos.bullish')}`;
       if (bearEl) bearEl.textContent = `📉 ${data.shorts} ${_tr('kronos.bearish')}`;
@@ -3376,7 +3376,7 @@
 
   // Load live prices for token cards
   async function loadTokenCardPrices() {
-    const symbols = ['BTCUSDT','ETHUSDT','SOLUSDT','BNBUSDT','XRPUSDT'];
+    const symbols = ['BTCUSDT','ETHUSDT','SOLUSDT'];
     for (const sym of symbols) {
       try {
         const res = await fetch(`https://fapi.binance.com/fapi/v1/ticker/price?symbol=${sym}`);

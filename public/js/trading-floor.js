@@ -2,7 +2,7 @@
  * Trading Floor — pixel-agents engine adapted for vanilla browser JS
  * Based on: https://github.com/pablodelucca/pixel-agents
  *
- * Characters: BTC / ETH / SOL / BNB agents with full walking/typing/idle
+ * Characters: BTC / ETH / SOL agents with full walking/typing/idle
  * state machine, BFS pathfinding, and z-sorted rendering.
  * Active = open position (isActive=true → sit at desk typing).
  * Inactive = no position (isActive=false → wander the office).
@@ -51,7 +51,7 @@
     every adjacent pair.
 
     Rooms:
-      1 Trader Hall (top-left)    cols 1-7,  rows 1-7   — BTC ETH SOL BNB XRP
+      1 Trader Hall (top-left)    cols 1-7,  rows 1-7   — BTC ETH SOL
       2 Coord Office (top-mid)    cols 9-15, rows 1-7   — COORD
       3 Coder Lab   (top-right)   cols 17-23,rows 1-7   — CODER
       4 Chart Room  (mid-left)    cols 1-7,  rows 9-15  — CHART
@@ -175,10 +175,6 @@
     { id: 0,  symbol: 'BTCUSDT',  label: 'BTC',   palette: 0, seatId: 'seat-btc',   role: 'trader' },
     { id: 1,  symbol: 'ETHUSDT',  label: 'ETH',   palette: 1, seatId: 'seat-eth',   role: 'trader' },
     { id: 2,  symbol: 'SOLUSDT',  label: 'SOL',   palette: 2, seatId: 'seat-sol',   role: 'trader' },
-    { id: 3,  symbol: 'BNBUSDT',  label: 'BNB',   palette: 3, seatId: 'seat-bnb',   role: 'trader' },
-    { id: 6,  symbol: 'XRPUSDT',  label: 'XRP',   palette: 0, seatId: 'seat-xrp',   role: 'trader' },
-    { id: 21, symbol: 'ADAUSDT',  label: 'ADA',   palette: 1, seatId: 'seat-ada',   role: 'trader' },
-    { id: 22, symbol: 'AVAXUSDT', label: 'AVAX',  palette: 2, seatId: 'seat-avax',  role: 'trader' },
     { id: 4,  symbol: null,      label: 'COORD',  palette: 4, seatId: 'seat-coord',  role: 'coordinator' },
     { id: 5,  symbol: null,      label: 'CODER',  palette: 5, seatId: 'seat-coder',  role: 'coder' },
     // ── AI Lab — backend agents ──────────────────────────────
@@ -870,10 +866,6 @@
         BTC: 'BTC',   BTCUSDT: 'BTC',
         ETH: 'ETH',   ETHUSDT: 'ETH',
         SOL: 'SOL',   SOLUSDT: 'SOL',
-        BNB: 'BNB',   BNBUSDT: 'BNB',
-        XRP: 'XRP',   XRPUSDT: 'XRP',
-        ADA: 'ADA',   ADAUSDT: 'ADA',
-        AVAX: 'AVAX', AVAXUSDT: 'AVAX',
         COORD: 'COORD', COORDINATOR: 'COORD',
         CODER: 'CODER', DEV: 'CODER',
         ALL: 'ALL', TEAM: 'ALL', EVERYONE: 'ALL',
@@ -885,14 +877,14 @@
       if (!target) {
         // No prefix: COORD broadcasts to traders
         this._dispatchTo('COORD', `relayed: "${directive}"`);
-        for (const t of ['BTC', 'ETH', 'SOL', 'BNB']) {
+        for (const t of ['BTC', 'ETH', 'SOL']) {
           setTimeout(() => this._dispatchTo(t, `acknowledged — ${this._shortAck(directive)}`), 400 + Math.random() * 800);
         }
         return;
       }
 
       if (target === 'ALL') {
-        for (const t of ['BTC', 'ETH', 'SOL', 'BNB', 'COORD', 'CODER']) {
+        for (const t of ['BTC', 'ETH', 'SOL', 'COORD', 'CODER']) {
           setTimeout(() => this._dispatchTo(t, `roger — ${this._shortAck(directive || text)}`), 200 + Math.random() * 1000);
         }
         return;
