@@ -81,6 +81,7 @@ class PolymarketAgent extends BaseAgent {
 
     if (!this._targetAddress) {
       this.addActivity('warning', 'No target trader found on leaderboard yet');
+      bLog.trade('[POLY] No target address — leaderboard fetch failed or returned empty');
       return { ok: false, reason: 'No target trader' };
     }
 
@@ -165,10 +166,13 @@ class PolymarketAgent extends BaseAgent {
 
   async _refreshLeaderboard() {
     this.addActivity('info', 'Refreshing Polymarket leaderboard...');
+    bLog.trade('[POLY] Fetching leaderboard...');
     try {
       const board = await getLeaderboard('1m', 20);
+      bLog.trade(`[POLY] Leaderboard returned ${board.length} traders`);
       if (!board.length) {
         this.addActivity('warning', 'Leaderboard returned 0 traders');
+        bLog.trade('[POLY] ⚠ Leaderboard empty — Polymarket API may have changed endpoints');
         return;
       }
 

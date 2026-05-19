@@ -108,17 +108,22 @@ async function getUserActivity(address, limit = 50, sinceMs = 0) {
 }
 
 function _normaliseActivity(t) {
+  // API actual fields (confirmed from live response 2026-05):
+  //   transactionHash, asset (token id), usdcSize, timestamp (seconds), side, conditionId
+  const rawTs = parseInt(t.timestamp || t.createdAt || t.ts || 0);
+  // Polymarket returns timestamp in SECONDS — convert to ms if it looks like seconds (<1e12)
+  const timestampMs = rawTs > 0 && rawTs < 1e12 ? rawTs * 1000 : (rawTs || Date.now());
   return {
-    id:          t.id || t.tradeId || '',
-    tokenId:     t.asset_id || t.assetId || t.tokenId || t.conditionId || '',
-    marketSlug:  t.market_slug || t.marketSlug || t.slug || '',
+    id:          t.transactionHash || t.id || t.tradeId || '',
+    tokenId:     t.asset || t.asset_id || t.assetId || t.tokenId || t.conditionId || '',
+    marketSlug:  t.slug || t.market_slug || t.marketSlug || t.eventSlug || '',
     question:    t.title || t.question || t.event_title || '',
-    side:        (t.side || t.type || '').toUpperCase() === 'BUY' ? 'BUY' : 'SELL',
+    side:        (t.side || '').toUpperCase() === 'BUY' ? 'BUY' : 'SELL',
     price:       parseFloat(t.price || t.avgPrice || 0),
     size:        parseFloat(t.size || t.shares || t.amount || 0),
-    usdcAmount:  parseFloat(t.usdcAmount || t.notional || (t.price * t.size) || 0),
+    usdcAmount:  parseFloat(t.usdcSize || t.usdcAmount || t.notional || (t.price * t.size) || 0),
     outcome:     t.outcome || t.outcomeIndex || '',
-    timestampMs: parseInt(t.timestamp || t.createdAt || t.ts || Date.now()),
+    timestampMs,
   };
 }
 
