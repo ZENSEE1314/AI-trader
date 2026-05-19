@@ -78,6 +78,8 @@ class AgentCoordinator extends BaseAgent {
 
     // Wire up inter-agent events
     this.chartAgent.on('signals', (data) => {
+      // SMC_ONLY_MODE: V4/chart signals are informational only — SMCProAgent handles execution.
+      if (this.smcOnlyMode) return;
       this.traderAgent.receive({
         from: 'ChartAgent',
         type: 'signals',
@@ -88,6 +90,10 @@ class AgentCoordinator extends BaseAgent {
 
     this.cycleRunning = false;
     this.tokenAgents = new Map(); // symbol → TokenAgent
+
+    // SMC-ONLY MODE — when true, only SMCProAgent signals reach the trader.
+    // V4 / TokenAgent signals are ignored for execution (still scanned for data).
+    this.smcOnlyMode = true;
 
     // CEO always-on state
     this._ceoTimer = null;
@@ -539,6 +545,12 @@ class AgentCoordinator extends BaseAgent {
     if (signals.length > 0) {
       this.addActivity('info', `Background scan: ${signals.length} signal(s) — ${signals.map(s => `${s.symbol} ${s.direction}`).join(', ')}`);
 
+      // SMC_ONLY_MODE: V4 token signals are informational only — SMCProAgent handles execution.
+      if (this.smcOnlyMode) {
+        bLog.scan(`[SMC-ONLY] Suppressed ${signals.length} V4 background signal(s) — awaiting SMC Pro confirmation`);
+        return;
+      }
+
       // Quick risk check + execute
       try {
         let approved = signals;
@@ -845,6 +857,13 @@ class AgentCoordinator extends BaseAgent {
         if (enriched.length) {
           this.addActivity('info', `Sentiment enriched ${enriched.length} signal(s): ${enriched.map(s => `${s.symbol.replace('USDT','')} ${s._sentimentModifier > 0 ? '+' : ''}${s._sentimentModifier}`).join(', ')}`);
         }
+      }
+
+      // SMC_ONLY_MODE: suppress all V4 signals before they reach RiskAgent / TraderAgent.
+      // SMCProAgent runs independently in step 6b and is the sole execution source.
+      if (this.smcOnlyMode && signals.length > 0) {
+        bLog.scan(`[SMC-ONLY] Suppressed ${signals.length} V4 full-cycle signal(s) — SMC Pro is in command`);
+        signals = [];
       }
 
       // ── Step 4: RiskAgent filters signals ──
