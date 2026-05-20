@@ -274,11 +274,12 @@ async function getPolymarketWalletData(privateKey) {
   const wallet  = new ethers.Wallet(pk);
   const address = wallet.address;
 
-  let balance       = 0;
+  let clobBalance   = 0;
+  let portfolioVal  = 0;
   let proxyWallet   = null;
   let positionCount = 0;
 
-  // ── 1. CLOB authenticated balance (most accurate) ─────────
+  // ── 1. CLOB authenticated balance (available USDC for trading) ──
   try {
     const { client } = await buildClobClient(privateKey);
     const ba = await client.getBalanceAllowance({
@@ -287,51 +288,52 @@ async function getPolymarketWalletData(privateKey) {
     });
     console.log('[polymarket] getBalanceAllowance raw:', JSON.stringify(ba));
 
-    // Balance may be returned as human-readable float or raw USDC units (6 decimals).
-    // Raw units: 1520000 = $1.52 — detect by magnitude and divide if needed.
+    // Balance may be human-readable float OR raw USDC units (6 decimals).
+    // Detect raw units by magnitude: 1350000 raw → $1.35
     const raw = parseFloat(ba?.balance ?? ba?.data?.balance ?? ba?.allowance ?? 0);
-    balance = raw > 10_000 ? raw / 1e6 : raw; // >10000 implies raw USDC units
-    console.log(`[polymarket] CLOB balance for ${address}: raw=${raw} → $${balance}`);
+    clobBalance = raw > 10_000 ? raw / 1e6 : raw;
+    console.log(`[polymarket] CLOB balance for ${address}: raw=${raw} → $${clobBalance}`);
   } catch (e) {
     console.warn(`[polymarket] CLOB balance failed: ${e.message}`);
   }
 
-  // ── 2. Gamma API proxy wallet lookup + Data API value ─────
-  // Polymarket uses proxy wallets — Data API /value only works for proxy wallets,
-  // not the EOA address derived from the private key.
-  if (balance === 0) {
-    try {
-      const GAMMA_API = 'https://gamma-api.polymarket.com';
-      // Look up the proxy wallet registered to this EOA
-      const profileRes = await fetch(
-        `${GAMMA_API}/profiles?address=${address}`,
-        { timeout: 8000 }
-      );
-      if (profileRes.ok) {
-        const profile = await profileRes.json();
-        const pData   = Array.isArray(profile) ? profile[0] : profile;
-        proxyWallet   = pData?.proxyWallet || pData?.proxy_wallet || null;
-        console.log(`[polymarket] Gamma profile for ${address}: proxyWallet=${proxyWallet}`);
-      }
-    } catch (e) {
-      console.warn(`[polymarket] Gamma profile lookup failed: ${e.message}`);
+  // ── 2. Gamma API proxy wallet + Data API portfolio value ──────
+  // The Polymarket UI shows portfolioValue = available USDC + open position values.
+  // This is what the user sees in their wallet, so we always fetch it.
+  try {
+    const GAMMA_API = 'https://gamma-api.polymarket.com';
+    const profileRes = await fetch(
+      `${GAMMA_API}/profiles?address=${address}`,
+      { timeout: 8000 }
+    );
+    if (profileRes.ok) {
+      const profile = await profileRes.json();
+      const pData   = Array.isArray(profile) ? profile[0] : profile;
+      proxyWallet   = pData?.proxyWallet || pData?.proxy_wallet || null;
+      console.log(`[polymarket] Gamma profile for ${address}: proxyWallet=${proxyWallet}`);
     }
-
-    // Try Data API /value with both EOA and proxy wallet
-    for (const addr of [proxyWallet, address].filter(Boolean)) {
-      try {
-        const data = await _get(`${DATA_API}/value?user=${addr}`);
-        const val  = parseFloat(
-          data?.portfolioValue ?? data?.portfolio_value ?? data?.value ?? data?.balance ?? 0
-        );
-        if (val > 0) {
-          balance = val;
-          console.log(`[polymarket] Data API value for ${addr}: $${balance}`);
-          break;
-        }
-      } catch {}
-    }
+  } catch (e) {
+    console.warn(`[polymarket] Gamma profile lookup failed: ${e.message}`);
   }
+
+  // Check Data API /value for total portfolio value (USDC + open positions)
+  for (const addr of [proxyWallet, address].filter(Boolean)) {
+    try {
+      const data = await _get(`${DATA_API}/value?user=${addr}`);
+      const val  = parseFloat(
+        data?.portfolioValue ?? data?.portfolio_value ?? data?.value ?? data?.balance ?? 0
+      );
+      if (val > 0) {
+        portfolioVal = val;
+        console.log(`[polymarket] Data API portfolio value for ${addr}: $${portfolioVal}`);
+        break;
+      }
+    } catch {}
+  }
+
+  // Use the higher of the two sources — CLOB gives available USDC,
+  // Data API gives total portfolio (USDC + position values)
+  let balance = Math.max(clobBalance, portfolioVal);
 
   // ── 3. On-chain USDC fallback (EOA + proxy wallet) ────────
   if (balance === 0) {
