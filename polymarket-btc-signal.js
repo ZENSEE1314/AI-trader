@@ -1,37 +1,20 @@
 // ============================================================
 // Polymarket BTC Signal Reader
 //
-// Reads the 15-min price history of the Polymarket BTC YES token
-// (currently "Will BTC hit $1M before GTA VI?" — the most liquid
-// BTC prediction market) and derives a directional momentum signal.
+// Two signal sources:
 //
-// The YES token price == crowd probability that BTC is rising.
-// When the probability TRENDS UP on the 15m chart → crowd is buying
-// BTC optimism → LONG signal.
-// When it TRENDS DOWN → crowd selling BTC optimism → SHORT signal.
+// 1. getBTCUpDownSignal() — tracks the live "BTC Up or Down 15m"
+//    market on Polymarket. The Up token price IS the crowd's
+//    probability that BTC goes up in the next 15 minutes.
+//    This is the primary source for PolyBTCAgent trades.
 //
-// Also used by swarm-engine.js to inject prediction-market
-// sentiment into the KronosAgent Swarm simulation.
+// 2. getBTCSignal() — longer-term composite from top liquid BTC
+//    markets (e.g. "Will BTC hit $1M?"). Used by swarm-engine.
 // ============================================================
 
-const CLOB_HOST   = 'https://clob.polymarket.com';
-const GAMMA_API   = 'https://gamma-api.polymarket.com';
-const TIMEOUT_MS  = 10_000;
-
-// ── BTC Market Registry ─────────────────────────────────────
-// Top liquid BTC prediction markets — YES token IDs (probability of BTC going up).
-// Updated programmatically at startup; seeded with known IDs for reliability.
-const BTC_YES_TOKENS = [
-  {
-    label:   'BTC hits $1M',
-    tokenId: '105267568073659068217311993901927962476298440625043565106676088842803600775810',
-    weight:  1.0,
-  },
-];
-
-// In-memory 15-min history buffer  { tokenId → [{ts, price}] }
-const _priceHistory = new Map();
-const HISTORY_MAX_AGE_MS = 4 * 60 * 60 * 1000; // keep 4 hours
+const CLOB_HOST  = 'https://clob.polymarket.com';
+const GAMMA_API  = 'https://gamma-api.polymarket.com';
+const TIMEOUT_MS = 10_000;
 
 // ── Helpers ──────────────────────────────────────────────────
 
@@ -44,8 +27,6 @@ async function _fetchJson(url) {
   return res.json();
 }
 
-// ── Live probability snapshot ─────────────────────────────────
-
 async function _getTokenMidPrice(tokenId) {
   try {
     const data = await _fetchJson(`${CLOB_HOST}/midpoint?token_id=${tokenId}`);
@@ -55,12 +36,8 @@ async function _getTokenMidPrice(tokenId) {
   }
 }
 
-// ── 15-min OHLC history from CLOB ─────────────────────────────
-// fidelity=15 → 15-minute buckets; returns [{t, p}] (unix timestamp, close price)
-
 async function _get15mHistory(tokenId, hoursBack = 4) {
   try {
-    // CLOB API requires 'market', 'startTs', 'endTs' (not token_id / start_ts)
     const endTs   = Math.floor(Date.now() / 1000);
     const startTs = endTs - hoursBack * 3600;
     const url = `${CLOB_HOST}/prices-history?market=${tokenId}&fidelity=15&startTs=${startTs}&endTs=${endTs}`;
@@ -75,7 +52,188 @@ async function _get15mHistory(tokenId, hoursBack = 4) {
   }
 }
 
-// ── Auto-discover additional liquid BTC markets ───────────────
+// ═══════════════════════════════════════════════════════════════
+// Part 1 — "BTC Up or Down 15m" market discovery + signal
+// ═══════════════════════════════════════════════════════════════
+
+// Cache: { upTokenId, downTokenId, question, slug, fetchedAt }
+let _btc15mMarket = null;
+const MARKET_REFRESH_MS = 12 * 60 * 1000; // refresh every 12 min (market resolves every 15m)
+
+// Rolling price history for the Up token  { ts_ms, price }[]
+const _upTokenHistory = [];
+const UP_HISTORY_MAX  = 30; // keep last 30 readings
+
+/**
+ * Find the current active "BTC Up or Down 15m" Polymarket market.
+ * Returns { upTokenId, downTokenId, question, slug } or null.
+ */
+async function getBTC15mMarket() {
+  const nowMs = Date.now();
+  if (_btc15mMarket && nowMs - _btc15mMarket.fetchedAt < MARKET_REFRESH_MS) {
+    return _btc15mMarket;
+  }
+
+  // Strategy 1: events endpoint — look for btc-updown slug family
+  try {
+    const events = await _fetchJson(
+      `${GAMMA_API}/events?active=true&closed=false&limit=50&tag_slug=bitcoin`
+    );
+    const evList = Array.isArray(events) ? events : (events?.data || events?.events || []);
+    for (const ev of evList) {
+      const slug = (ev.slug || '').toLowerCase();
+      if (!slug.includes('btc-updown') && !slug.includes('btc-up-or-down') && !slug.includes('updown')) continue;
+      if (!slug.includes('15')) continue;
+
+      // Events have nested markets
+      const mktList = ev.markets || [];
+      for (const mkt of mktList) {
+        const found = _extractUpDown(mkt, ev.slug, ev.title);
+        if (found) {
+          _btc15mMarket = { ...found, fetchedAt: nowMs };
+          return _btc15mMarket;
+        }
+      }
+
+      // Event itself may carry token data
+      const found = _extractUpDown(ev, ev.slug, ev.title);
+      if (found) {
+        _btc15mMarket = { ...found, fetchedAt: nowMs };
+        return _btc15mMarket;
+      }
+    }
+  } catch (_) {}
+
+  // Strategy 2: markets endpoint with question search
+  try {
+    const markets = await _fetchJson(
+      `${GAMMA_API}/markets?active=true&closed=false&limit=100&tag_slug=bitcoin`
+    );
+    const list = Array.isArray(markets) ? markets : (markets?.data || markets?.markets || []);
+    for (const m of list) {
+      const q    = (m.question || '').toLowerCase();
+      const slug = (m.slug    || '').toLowerCase();
+      const isUpDown = (q.includes('up or down') || slug.includes('updown')) && q.includes('15');
+      if (!isUpDown) continue;
+      const found = _extractUpDown(m, m.slug, m.question);
+      if (found) {
+        _btc15mMarket = { ...found, fetchedAt: nowMs };
+        return _btc15mMarket;
+      }
+    }
+  } catch (_) {}
+
+  console.warn('[poly-btc-signal] BTC Up or Down 15m market not found via Gamma API');
+  return null;
+}
+
+function _extractUpDown(obj, slug, question) {
+  const tokens = obj.tokens || obj.clobTokenIds || [];
+  if (!tokens.length) return null;
+
+  // tokens can be objects { outcome, token_id } or raw strings
+  let upTokenId   = null;
+  let downTokenId = null;
+
+  for (const t of tokens) {
+    const outcome = (t.outcome || t.name || '').toLowerCase();
+    const id      = t.token_id || t.id || t.tokenId || (typeof t === 'string' ? t : null);
+    if (!id) continue;
+    if (outcome === 'up'   || outcome === 'yes') upTokenId   = id;
+    if (outcome === 'down' || outcome === 'no')  downTokenId = id;
+  }
+
+  // Some markets only have 2 tokens without named outcomes — assign by index
+  if (!upTokenId && !downTokenId && tokens.length === 2) {
+    upTokenId   = tokens[0]?.token_id || tokens[0]?.id || tokens[0];
+    downTokenId = tokens[1]?.token_id || tokens[1]?.id || tokens[1];
+  }
+
+  if (!upTokenId || !downTokenId) return null;
+  return { upTokenId, downTokenId, slug: slug || '', question: question || '' };
+}
+
+/**
+ * Momentum signal based on the "BTC Up or Down 15m" Up-token price.
+ *
+ * The Up token price = crowd probability BTC rises in the next 15 min.
+ * Rising Up price → more bullish → LONG signal.
+ * Falling Up price → more bearish → SHORT signal.
+ *
+ * @returns {Promise<{
+ *   direction: 'LONG'|'SHORT'|'NEUTRAL',
+ *   confidence: number,       // 0–100
+ *   upPrice:    number,       // current Up token probability (0–1)
+ *   downPrice:  number,       // current Down token probability (0–1)
+ *   change:     number,       // Up price change vs lookback
+ *   market:     string,       // market question
+ *   upTokenId:  string,
+ *   downTokenId:string,
+ * }>}
+ */
+async function getBTCUpDownSignal({ lookbackReadings = 3, minChange = 0.005 } = {}) {
+  const NEUTRAL = (market = '', upTokenId = '', downTokenId = '') => ({
+    direction: 'NEUTRAL', confidence: 0, upPrice: 0.5, downPrice: 0.5,
+    change: 0, market, upTokenId, downTokenId,
+  });
+
+  const mkt = await getBTC15mMarket();
+  if (!mkt) return NEUTRAL();
+
+  // Get live mid-price for Up token
+  const upPrice = await _getTokenMidPrice(mkt.upTokenId);
+  if (!upPrice || upPrice <= 0 || upPrice >= 1) return NEUTRAL(mkt.question, mkt.upTokenId, mkt.downTokenId);
+
+  const downPrice = 1 - upPrice;
+
+  // Store in rolling history
+  _upTokenHistory.push({ ts_ms: Date.now(), price: upPrice });
+  if (_upTokenHistory.length > UP_HISTORY_MAX) _upTokenHistory.shift();
+
+  // Need at least 2 readings to compute direction
+  if (_upTokenHistory.length < 2) {
+    return { ...NEUTRAL(mkt.question, mkt.upTokenId, mkt.downTokenId), upPrice, downPrice };
+  }
+
+  // Use last N readings for slope
+  const window = _upTokenHistory.slice(-Math.max(lookbackReadings, 2));
+  const oldest = window[0].price;
+  const latest = window[window.length - 1].price;
+  const change = latest - oldest;
+
+  // Confidence: 0.02 change → 100 confidence
+  const confidence = Math.min(100, Math.round(Math.abs(change) / 0.02 * 100));
+
+  let direction = 'NEUTRAL';
+  if (change >  minChange) direction = 'LONG';
+  if (change < -minChange) direction = 'SHORT';
+
+  return {
+    direction,
+    confidence,
+    upPrice,
+    downPrice,
+    change,
+    market:      mkt.question,
+    upTokenId:   mkt.upTokenId,
+    downTokenId: mkt.downTokenId,
+  };
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Part 2 — longer-term composite BTC signal (existing)
+// ═══════════════════════════════════════════════════════════════
+
+const BTC_YES_TOKENS = [
+  {
+    label:   'BTC hits $1M',
+    tokenId: '105267568073659068217311993901927962476298440625043565106676088842803600775810',
+    weight:  1.0,
+  },
+];
+
+const _priceHistory  = new Map();
+const HISTORY_MAX_AGE_MS = 4 * 60 * 60 * 1000;
 
 async function refreshBTCMarkets() {
   try {
@@ -95,7 +253,7 @@ async function refreshBTCMarkets() {
         BTC_YES_TOKENS.push({
           label:   m.question?.slice(0, 50) || m.slug,
           tokenId: yesToken.token_id,
-          weight:  Math.min(2, parseFloat(m.volume) / 1_000_000), // volume-weighted
+          weight:  Math.min(2, parseFloat(m.volume) / 1_000_000),
         });
       }
     }
@@ -104,35 +262,13 @@ async function refreshBTCMarkets() {
   }
 }
 
-// ── Core signal computation ───────────────────────────────────
-
-/**
- * Returns the current Polymarket BTC directional signal.
- *
- * Uses 15-min CLOB history for each registered BTC YES token,
- * calculates slope over the last N candles, and returns a
- * volume-weighted composite direction.
- *
- * @param {Object} opts
- * @param {number} [opts.lookbackCandles=3]  how many 15m candles to use for slope
- * @param {number} [opts.minChange=0.003]    minimum prob change to avoid neutral
- * @returns {Promise<{
- *   direction: 'LONG'|'SHORT'|'NEUTRAL',
- *   confidence: number,       // 0-100
- *   probChange: number,       // weighted average 15m prob delta
- *   currentProb: number,      // latest composite probability (0-1)
- *   markets: string[],        // market labels used
- *   candles: number,          // candles analysed
- * }>}
- */
 async function getBTCSignal({ lookbackCandles = 3, minChange = 0.003 } = {}) {
   const results = [];
 
   for (const token of BTC_YES_TOKENS) {
     const candles = await _get15mHistory(token.tokenId, 2);
     if (candles.length < 2) {
-      // Fallback: compare live mid vs cached last reading
-      const now = await _getTokenMidPrice(token.tokenId);
+      const now  = await _getTokenMidPrice(token.tokenId);
       const hist = _priceHistory.get(token.tokenId) || [];
       const prev = hist.length > 0 ? hist[hist.length - 1].price : 0;
       if (now > 0 && prev > 0) {
@@ -146,11 +282,10 @@ async function getBTCSignal({ lookbackCandles = 3, minChange = 0.003 } = {}) {
       continue;
     }
 
-    // Use last N candles to compute slope
     const recent = candles.slice(-Math.max(lookbackCandles, 2));
     const oldest = recent[0].price;
     const latest = recent[recent.length - 1].price;
-    const change  = latest - oldest;
+    const change = latest - oldest;
 
     results.push({
       change,
@@ -169,8 +304,7 @@ async function getBTCSignal({ lookbackCandles = 3, minChange = 0.003 } = {}) {
   const weightedDelta = results.reduce((s, r) => s + r.change * r.weight, 0) / totalWeight;
   const avgProb       = results.reduce((s, r) => s + r.currentProb * r.weight, 0) / totalWeight;
 
-  // Confidence scales with signal strength — 0.02 prob change = 100 confidence
-  const rawConf = Math.min(100, Math.abs(weightedDelta) / 0.02 * 100);
+  const rawConf  = Math.min(100, Math.abs(weightedDelta) / 0.02 * 100);
   const confidence = Math.round(rawConf);
 
   let direction = 'NEUTRAL';
@@ -187,12 +321,6 @@ async function getBTCSignal({ lookbackCandles = 3, minChange = 0.003 } = {}) {
   };
 }
 
-// ── Single-call summary for swarm seed injection ──────────────
-
-/**
- * Returns a concise snapshot for the Swarm Engine persona prompt.
- * Includes current probability, 15-min trend, and market names.
- */
 async function getSwarmSeed() {
   const sig = await getBTCSignal({ lookbackCandles: 3 });
   return {
@@ -204,11 +332,14 @@ async function getSwarmSeed() {
   };
 }
 
-// Kick off market refresh (non-blocking)
+// Kick off refreshes (non-blocking)
 refreshBTCMarkets().catch(() => {});
+getBTC15mMarket().catch(() => {}); // warm the cache at startup
 
 module.exports = {
   getBTCSignal,
+  getBTCUpDownSignal,
+  getBTC15mMarket,
   getSwarmSeed,
   refreshBTCMarkets,
   BTC_YES_TOKENS,

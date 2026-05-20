@@ -1,54 +1,54 @@
 // ============================================================
-// PolyBTCAgent — Polymarket-driven BTC micro-trader
+// PolyBTCAgent — Trades directly on Polymarket "BTC Up or Down 15m"
 //
 // Every 15 minutes:
-//   1. Reads the 15-min probability trend of Polymarket BTC markets
-//   2. If crowd is getting more bullish (prob rising) → LONG BTC on Bitunix
-//      If crowd is getting more bearish (prob falling) → SHORT BTC on Bitunix
-//   3. Fixed $5 margin per trade (minimum viable on Bitunix futures)
-//   4. Uses 20× leverage → ~$100 notional, small but executable
+//   1. Finds the current active "BTC Up or Down 15m" market on Polymarket
+//   2. Reads the Up-token probability trend (rising = crowd bullish)
+//   3. If bullish → BUY Up tokens  ($1 USDC)
+//      If bearish → BUY Down tokens ($1 USDC)
 //
-// This agent is INDEPENDENT of SMC Pro. It's a pure sentiment
-// momentum play based on prediction-market crowd wisdom.
+// Trades ON Polymarket CLOB using the user's Polymarket private key.
+// No Bitunix. No futures. Pure prediction-market betting.
 // ============================================================
 
 const { BaseAgent } = require('./base-agent');
-const { getBTCSignal } = require('../polymarket-btc-signal');
-const { log: bLog }   = require('../bot-logger');
+const { getBTCUpDownSignal } = require('../polymarket-btc-signal');
+const { buildClobClient, getMidPrice, placeCopyOrder } = require('../polymarket-client');
+const { log: bLog } = require('../bot-logger');
 
-const TRADE_INTERVAL_MS = 15 * 60 * 1000;   // 15 minutes
-const TRADE_SIZE_USDT   = 1;                 // $1 margin per trade
-const LEVERAGE          = 20;                // 20× → $100 notional
-const MIN_CONFIDENCE    = 30;               // skip trades below this confidence
-const SYMBOL            = 'BTCUSDT';
-const COOLDOWN_AFTER_LOSS_MS = 30 * 60 * 1000; // 30-min pause after a loss
+const TRADE_INTERVAL_MS      = 15 * 60 * 1000; // 15 minutes
+const TRADE_SIZE_USDC        = 1;               // $1 USDC per bet
+const MIN_CONFIDENCE         = 25;              // minimum confidence to place trade
+const COOLDOWN_AFTER_LOSS_MS = 30 * 60 * 1000; // 30-min pause after 2 consecutive losses
 
 class PolyBTCAgent extends BaseAgent {
   constructor(options = {}) {
     super('PolyBTCAgent', options);
 
-    this._lastTradeAt      = 0;
-    this._lastSignal       = null;
-    this._totalTrades      = 0;
-    this._wins             = 0;
-    this._losses           = 0;
-    this._lastLossAt       = 0;
-    this._consecutiveLoss  = 0;
-    this._totalPnl         = 0;
+    this._lastTradeAt     = 0;
+    this._lastSignal      = null;
+    this._totalTrades     = 0;
+    this._wins            = 0;
+    this._losses          = 0;
+    this._lastLossAt      = 0;
+    this._consecutiveLoss = 0;
+    this._totalPnl        = 0;
+    this._clobClients     = new Map(); // key_id → { client, address }
 
     this._profile = {
-      description: 'Trades BTC every 15 min based on Polymarket prediction-market probability momentum.',
-      role: 'Polymarket BTC Sentiment Trader',
+      description: 'Bets UP/DOWN $1 USDC on the "BTC Up or Down 15m" Polymarket market using probability momentum.',
+      role: 'Polymarket BTC 15m Trader',
       icon: 'polymarket',
       skills: [
-        { id: 'poly_signal',  name: 'Poly Signal Reader', description: 'Reads 15-min YES-token momentum on Polymarket BTC markets', enabled: true },
-        { id: 'micro_trade',  name: 'Micro Trade',        description: `Places $${TRADE_SIZE_USDT} BTC trade every 15 min when signal is clear`, enabled: true },
-        { id: 'cooldown',     name: 'Loss Cooldown',      description: '30-min pause after a losing trade', enabled: true },
+        { id: 'market_scan', name: 'Market Scanner',   description: 'Finds the current active BTC Up or Down 15m market', enabled: true },
+        { id: 'poly_signal', name: 'Prob Signal',      description: 'Reads Up-token momentum — rising prob = LONG, falling = SHORT', enabled: true },
+        { id: 'poly_trade',  name: 'Poly Trade',       description: `Places $${TRADE_SIZE_USDC} USDC on Up or Down tokens via CLOB`, enabled: true },
+        { id: 'cooldown',    name: 'Loss Cooldown',    description: '30-min pause after 2 consecutive losses', enabled: true },
       ],
     };
   }
 
-  // ── Main execute (called from CEO micro-cycle) ─────────────
+  // ── Main execute cycle ────────────────────────────────────────
 
   async execute(context = {}) {
     const now = Date.now();
@@ -56,7 +56,7 @@ class PolyBTCAgent extends BaseAgent {
     // 15-min throttle
     if (now - this._lastTradeAt < TRADE_INTERVAL_MS) {
       const nextMins = Math.round((TRADE_INTERVAL_MS - (now - this._lastTradeAt)) / 60_000);
-      this.addActivity('info', `Next Poly scan in ${nextMins} min`);
+      this.addActivity('info', `Next BTC 15m scan in ${nextMins} min`);
       return { skipped: true, reason: 'throttled' };
     }
 
@@ -67,50 +67,46 @@ class PolyBTCAgent extends BaseAgent {
       return { skipped: true, reason: 'loss_cooldown' };
     }
 
-    // Read Polymarket signal
+    // Read the Up/Down signal for the current 15m market
     let signal;
     try {
-      signal = await getBTCSignal({ lookbackCandles: 3, minChange: 0.001 });
+      signal = await getBTCUpDownSignal({ lookbackReadings: 3, minChange: 0.005 });
     } catch (err) {
-      this.addActivity('error', `Poly signal fetch failed: ${err.message}`);
+      this.addActivity('error', `Signal fetch failed: ${err.message}`);
       return { ok: false, error: err.message };
     }
 
     this._lastSignal = signal;
-    const probPct = (signal.currentProb * 100).toFixed(1);
-    const deltaPct = (signal.probChange * 100).toFixed(2);
+
+    const upPct   = (signal.upPrice   * 100).toFixed(1);
+    const downPct = (signal.downPrice * 100).toFixed(1);
+    const chgPct  = (signal.change    * 100).toFixed(2);
     bLog.scan(
       `[POLY-BTC] Signal: ${signal.direction} conf=${signal.confidence}% ` +
-      `prob=${probPct}% Δ=${deltaPct}% candles=${signal.candles}`
+      `Up=${upPct}% Down=${downPct}% Δ=${chgPct}%`
     );
     this.addActivity('info',
-      `Polymarket BTC: ${signal.direction} ${signal.confidence}% conf | ` +
-      `prob ${probPct}% (Δ${deltaPct >= 0 ? '+' : ''}${deltaPct}%)`
+      `BTC 15m: ${signal.direction} ${signal.confidence}% conf | ` +
+      `Up ${upPct}% / Down ${downPct}% (Δ${Number(chgPct) >= 0 ? '+' : ''}${chgPct}%)`
     );
 
     if (signal.direction === 'NEUTRAL' || signal.confidence < MIN_CONFIDENCE) {
-      this.addActivity('skip', `Signal too weak (${signal.direction} ${signal.confidence}%) — sitting out`);
+      this.addActivity('skip', `Weak signal (${signal.direction} ${signal.confidence}%) — no trade`);
       return { ok: true, skipped: true, signal };
     }
 
-    // ── Place $5 BTC trade via BitunixClient ─────────────────
-    const coordinator = context.coordinator;
-    if (!coordinator) {
-      bLog.error('[POLY-BTC] No coordinator context — cannot place trade');
-      return { ok: false, error: 'No coordinator' };
-    }
-
+    // Place trade on Polymarket
     try {
-      const result = await this._placeTrade(signal, coordinator);
+      const result = await this._placePolyTrade(signal);
       this._lastTradeAt = now;
       this._totalTrades++;
       if (result.ok) {
         this._consecutiveLoss = 0;
+        const side = signal.direction === 'LONG' ? 'UP' : 'DOWN';
         this.addActivity('success',
-          `✅ Placed ${signal.direction} $${TRADE_SIZE_USDT} BTC | ` +
-          `entry≈${result.entry} SL=${result.sl} | orderId=${result.orderId}`
+          `✅ Bought ${side} $${TRADE_SIZE_USDC} | "${signal.market?.slice(0, 40)}" | orderId=${result.orderId}`
         );
-        bLog.scan(`[POLY-BTC] ✅ ${signal.direction} placed — orderId=${result.orderId} entry=${result.entry}`);
+        bLog.scan(`[POLY-BTC] ✅ ${side} placed — orderId=${result.orderId}`);
       }
       return result;
     } catch (err) {
@@ -120,100 +116,104 @@ class PolyBTCAgent extends BaseAgent {
     }
   }
 
-  // ── Trade placement ────────────────────────────────────────
+  // ── Place $1 on Up or Down token via Polymarket CLOB ─────────
 
-  async _placeTrade(signal, coordinator) {
-    // Load BitunixClient from the first available key
-    let BitunixClient, keys, db;
+  async _placePolyTrade(signal) {
+    // Load DB + crypto
+    let db, cryptoUtils;
     try {
-      BitunixClient = require('../bitunix-client');
-      db = require('../db');
+      db          = require('../db');
+      cryptoUtils = require('../crypto-utils');
     } catch (e) {
-      throw new Error(`Cannot load dependencies: ${e.message}`);
+      throw new Error(`Cannot load db/crypto: ${e.message}`);
     }
 
-    // Fetch enabled Bitunix keys
+    // Get the first enabled Polymarket key
     const rows = await db.query(
       `SELECT ak.id, ak.api_key_enc, ak.iv, ak.auth_tag, ak.label, u.email
        FROM api_keys ak
        JOIN users u ON u.id = ak.user_id
-       WHERE ak.platform = 'bitunix' AND ak.enabled = true
+       WHERE ak.platform = 'polymarket' AND ak.enabled = true
        ORDER BY ak.id ASC LIMIT 1`
     );
-    if (!rows.length) throw new Error('No enabled Bitunix keys found');
+    if (!rows.length) throw new Error('No Polymarket key configured — add one in API Settings');
 
-    const cryptoUtils = require('../crypto-utils');
-    const row = rows[0];
-    const { apiKey, secretKey } = cryptoUtils.decrypt(row.api_key_enc, row.iv, row.auth_tag);
-    const client = new BitunixClient({ apiKey, secretKey });
+    const row        = rows[0];
+    const privateKey = cryptoUtils.decrypt(row.api_key_enc, row.iv, row.auth_tag);
 
-    // Get current BTC price
-    const ticker = await client.getTicker(SYMBOL).catch(() => null);
-    const price  = parseFloat(ticker?.lastPrice || ticker?.price || 0);
-    if (!price) throw new Error('Cannot fetch BTC price from Bitunix');
+    // Build or reuse CLOB client
+    if (!this._clobClients.has(row.id)) {
+      const built = await buildClobClient(privateKey);
+      this._clobClients.set(row.id, built);
+      bLog.trade(`[POLY-BTC] CLOB client ready → ${built.address}`);
+    }
+    const { client } = this._clobClients.get(row.id);
 
-    // Calculate quantity from fixed margin size
-    // qty = (margin × leverage) / price
-    const notional = TRADE_SIZE_USDT * LEVERAGE;
-    const qty      = parseFloat((notional / price).toFixed(4));
+    // Pick token: LONG → buy Up token, SHORT → buy Down token
+    const isLong  = signal.direction === 'LONG';
+    const tokenId = isLong ? signal.upTokenId : signal.downTokenId;
+    const label   = isLong ? 'Up' : 'Down';
 
-    // SL: 3% price move against position (at 20x = 60% capital loss, caps at -$3)
-    const slPct    = 0.03;
-    const side     = signal.direction === 'LONG' ? 'BUY' : 'SELL';
-    const sl       = signal.direction === 'LONG'
-      ? parseFloat((price * (1 - slPct)).toFixed(2))
-      : parseFloat((price * (1 + slPct)).toFixed(2));
-    const tp       = signal.direction === 'LONG'
-      ? parseFloat((price * 1.04).toFixed(2))    // 4% TP = 2:1 RR vs 3% SL
-      : parseFloat((price * 0.96).toFixed(2));
+    if (!tokenId) throw new Error(`No ${label} token ID in signal — market not found`);
 
-    // Set leverage + margin mode
-    await client.changeMarginMode(SYMBOL, 'ISOLATION').catch(() => {});
-    await client.changeLeverage(SYMBOL, LEVERAGE).catch(() => {});
+    // Get live mid-price for this token
+    const midPrice = await getMidPrice(tokenId);
+    if (!midPrice || midPrice <= 0 || midPrice >= 1) {
+      throw new Error(`Invalid ${label} token mid-price: ${midPrice}`);
+    }
 
-    // Place order
-    const order = await client.placeOrder({
-      symbol:    SYMBOL,
-      side,
-      qty:       String(qty),
-      orderType: 'MARKET',
-      tradeSide: 'OPEN',
+    bLog.trade(
+      `[POLY-BTC] Placing BUY ${label} | tokenId=${tokenId.slice(0, 10)} ` +
+      `price=${midPrice} usdc=$${TRADE_SIZE_USDC}`
+    );
+
+    const result = await placeCopyOrder({
+      client,
+      tokenId,
+      side:       'BUY',
+      price:      midPrice,
+      usdcAmount: TRADE_SIZE_USDC,
     });
 
-    const orderId = order?.orderId || order?.data?.orderId || 'unknown';
+    // Persist to DB (best-effort)
+    await this._recordTrade({ signal, tokenId, label, midPrice, result, row }).catch(() => {});
 
-    // Record in DB
-    await this._recordTrade({ signal, price, qty, sl, tp, side, orderId, row }).catch(() => {});
-
-    return { ok: true, orderId, entry: price, sl, tp, qty, side };
+    return {
+      ok:      true,
+      orderId: result.orderId,
+      side:    label,
+      tokenId,
+      price:   midPrice,
+      shares:  result.shares,
+    };
   }
 
-  // ── DB persistence ─────────────────────────────────────────
+  // ── DB persistence ────────────────────────────────────────────
 
-  async _recordTrade({ signal, price, qty, sl, tp, side, orderId, row }) {
+  async _recordTrade({ signal, tokenId, label, midPrice, result, row }) {
     const db = require('../db');
     await db.query(
       `INSERT INTO trades
          (symbol, side, direction, entry_price, sl, tp, qty, leverage,
           status, setup_name, score, source, created_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'OPEN',$9,$10,'poly-btc',NOW())
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'OPEN',$9,$10,'poly-btc-direct',NOW())
        ON CONFLICT DO NOTHING`,
       [
-        SYMBOL,
-        side,
+        signal.market?.slice(0, 60) || 'btc-updown-15m',
+        'BUY',
         signal.direction,
-        price,
-        sl,
-        tp,
-        qty,
-        LEVERAGE,
-        `PolymarketMomentum`,
+        midPrice,
+        0,
+        0,
+        result.shares || 0,
+        1,
+        `PolyBTC15m_${label}`,
         signal.confidence,
       ]
     ).catch(() => {});
   }
 
-  // ── Record outcome (called by trade monitor on close) ──────
+  // ── Record outcome (called by trade monitor on close) ─────────
 
   recordOutcome(pnl) {
     this._totalPnl += pnl;
@@ -227,7 +227,7 @@ class PolyBTCAgent extends BaseAgent {
     }
   }
 
-  // ── Health ─────────────────────────────────────────────────
+  // ── Health ────────────────────────────────────────────────────
 
   getHealth() {
     const wr = this._totalTrades > 0
@@ -242,17 +242,18 @@ class PolyBTCAgent extends BaseAgent {
       totalPnl:        `$${this._totalPnl.toFixed(2)}`,
       lastSignal:      this._lastSignal,
       consecutiveLoss: this._consecutiveLoss,
+      currentMarket:   this._lastSignal?.market || null,
     };
   }
 
   async _getAIContext() {
     return {
-      totalTrades:  this._totalTrades,
-      winRate:      this._wins / Math.max(1, this._totalTrades),
-      totalPnl:     this._totalPnl,
-      lastSignal:   this._lastSignal,
-      tradeSize:    TRADE_SIZE_USDT,
-      leverage:     LEVERAGE,
+      totalTrades:   this._totalTrades,
+      winRate:       this._wins / Math.max(1, this._totalTrades),
+      totalPnl:      this._totalPnl,
+      lastSignal:    this._lastSignal,
+      tradeSize:     TRADE_SIZE_USDC,
+      currentMarket: this._lastSignal?.market || null,
     };
   }
 }

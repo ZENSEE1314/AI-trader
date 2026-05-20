@@ -275,10 +275,10 @@ async function getPolymarketWalletData(privateKey) {
   const address = wallet.address;
 
   let balance       = 0;
-  let unrealizedPnl = 0;
+  let proxyWallet   = null;
   let positionCount = 0;
 
-  // ── 1. CLOB authenticated balance ─────────────────────────
+  // ── 1. CLOB authenticated balance (most accurate) ─────────
   try {
     const { client } = await buildClobClient(privateKey);
     const ba = await client.getBalanceAllowance({
@@ -286,12 +286,54 @@ async function getPolymarketWalletData(privateKey) {
       signature_type: SignatureType.EOA,
     });
     console.log('[polymarket] getBalanceAllowance raw:', JSON.stringify(ba));
-    balance = parseFloat(ba?.balance ?? ba?.data?.balance ?? 0);
+
+    // Balance may be returned as human-readable float or raw USDC units (6 decimals).
+    // Raw units: 1520000 = $1.52 — detect by magnitude and divide if needed.
+    const raw = parseFloat(ba?.balance ?? ba?.data?.balance ?? ba?.allowance ?? 0);
+    balance = raw > 10_000 ? raw / 1e6 : raw; // >10000 implies raw USDC units
+    console.log(`[polymarket] CLOB balance for ${address}: raw=${raw} → $${balance}`);
   } catch (e) {
     console.warn(`[polymarket] CLOB balance failed: ${e.message}`);
   }
 
-  // ── 2. On-chain USDC fallback if CLOB returned 0 ──────────
+  // ── 2. Gamma API proxy wallet lookup + Data API value ─────
+  // Polymarket uses proxy wallets — Data API /value only works for proxy wallets,
+  // not the EOA address derived from the private key.
+  if (balance === 0) {
+    try {
+      const GAMMA_API = 'https://gamma-api.polymarket.com';
+      // Look up the proxy wallet registered to this EOA
+      const profileRes = await fetch(
+        `${GAMMA_API}/profiles?address=${address}`,
+        { timeout: 8000 }
+      );
+      if (profileRes.ok) {
+        const profile = await profileRes.json();
+        const pData   = Array.isArray(profile) ? profile[0] : profile;
+        proxyWallet   = pData?.proxyWallet || pData?.proxy_wallet || null;
+        console.log(`[polymarket] Gamma profile for ${address}: proxyWallet=${proxyWallet}`);
+      }
+    } catch (e) {
+      console.warn(`[polymarket] Gamma profile lookup failed: ${e.message}`);
+    }
+
+    // Try Data API /value with both EOA and proxy wallet
+    for (const addr of [proxyWallet, address].filter(Boolean)) {
+      try {
+        const data = await _get(`${DATA_API}/value?user=${addr}`);
+        const val  = parseFloat(
+          data?.portfolioValue ?? data?.portfolio_value ?? data?.value ?? data?.balance ?? 0
+        );
+        if (val > 0) {
+          balance = val;
+          console.log(`[polymarket] Data API value for ${addr}: $${balance}`);
+          break;
+        }
+      } catch {}
+    }
+  }
+
+  // ── 3. On-chain USDC fallback (EOA + proxy wallet) ────────
   if (balance === 0) {
     try {
       const POLYGON_RPCS = [
@@ -301,9 +343,9 @@ async function getPolymarketWalletData(privateKey) {
       ];
       const USDC_NATIVE  = '0x3c499c542cef5e3811e1192ce70d8cc03d5c3359';
       const USDC_BRIDGED = '0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174';
-      const data = '0x70a08231' + address.toLowerCase().replace('0x', '').padStart(64, '0');
 
-      const balanceOf = async (token) => {
+      const balanceOf = async (checkAddr, token) => {
+        const data = '0x70a08231' + checkAddr.toLowerCase().replace('0x', '').padStart(64, '0');
         for (const rpc of POLYGON_RPCS) {
           try {
             const r = await fetch(rpc, {
@@ -320,22 +362,29 @@ async function getPolymarketWalletData(privateKey) {
         return 0;
       };
 
-      const [nat, bridged] = await Promise.all([balanceOf(USDC_NATIVE), balanceOf(USDC_BRIDGED)]);
-      balance = nat + bridged;
-      console.log(`[polymarket] on-chain fallback ${address}: native=${nat} bridged=${bridged} total=${balance}`);
+      const addrsToCheck = [address, proxyWallet].filter(Boolean);
+      let total = 0;
+      for (const addr of addrsToCheck) {
+        const [nat, bridged] = await Promise.all([
+          balanceOf(addr, USDC_NATIVE),
+          balanceOf(addr, USDC_BRIDGED),
+        ]);
+        console.log(`[polymarket] on-chain ${addr}: native=${nat} bridged=${bridged}`);
+        total += nat + bridged;
+      }
+      balance = total;
     } catch (e) {
       console.warn(`[polymarket] on-chain fallback failed: ${e.message}`);
     }
   }
 
-  // ── 3. Open positions from DB (cheap, no API call needed) ─
+  // ── 4. Open positions from DB ──────────────────────────────
   try {
     const { query: dbQuery } = require('./db');
     const rows = await dbQuery(
-      `SELECT COUNT(*) as cnt,
-              COALESCE(SUM(CASE WHEN status NOT IN ('resolved','cancelled') THEN usdc_amount ELSE 0 END), 0) as deployed
+      `SELECT COUNT(*) as cnt
        FROM polymarket_trades WHERE status NOT IN ('resolved','cancelled')`,
-    ).catch(() => [{ cnt: 0, deployed: 0 }]);
+    ).catch(() => [{ cnt: 0 }]);
     positionCount = parseInt(rows[0]?.cnt || 0);
   } catch {}
 
@@ -345,6 +394,7 @@ async function getPolymarketWalletData(privateKey) {
     unrealizedPnl: 0,
     positions:     positionCount,
     address,
+    proxyWallet,
   };
   console.log(`[polymarket] wallet snapshot: ${JSON.stringify(result)}`);
   return result;
