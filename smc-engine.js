@@ -1046,9 +1046,335 @@ async function analyzeSMC(symbol, log = console.log) {
   }
 }
 
+// ═══════════════════════════════════════════════════════════════
+// BACKTESTED PATTERN ENGINE — v3 (90-day optimized)
+// HL/LL → LONG  |  LH/HH → SHORT
+// 4H EMA trend filter + fib50 zone for NEUTRAL markets
+// Token-specific SL & entry TF from 90-day backtest results
+// XRP removed (49% WR — below breakeven after fees)
+// ═══════════════════════════════════════════════════════════════
+
+// ── Token trading config ─────────────────────────────────────────
+// iv = entry timeframe interval (Bybit format)
+// slPct = stop-loss % from pattern level (optimized per token)
+// label = human-readable TF label
+const TRADING_CONFIG = {
+  BTCUSDT:  { iv:'15',  slPct:0.0025, label:'15M', name:'BTC'  },
+  ETHUSDT:  { iv:'60',  slPct:0.0020, label:'1H',  name:'ETH'  },
+  SOLUSDT:  { iv:'15',  slPct:0.0020, label:'15M', name:'SOL'  },
+  BNBUSDT:  { iv:'60',  slPct:0.0030, label:'1H',  name:'BNB'  },
+  ADAUSDT:  { iv:'15',  slPct:0.0020, label:'15M', name:'ADA'  },
+  DOTUSDT:  { iv:'15',  slPct:0.0020, label:'15M', name:'DOT'  },
+  LINKUSDT: { iv:'60',  slPct:0.0030, label:'1H',  name:'LINK' },
+  AVAXUSDT: { iv:'30',  slPct:0.0025, label:'30M', name:'AVAX' },
+  LTCUSDT:  { iv:'30',  slPct:0.0025, label:'30M', name:'LTC'  },
+  // XRP removed — 49% WR after fees, not profitable
+};
+
+// ── TP / lock constants (same for all tokens) ────────────────────
+const TP1_PCT   = 0.005;   // 0.5%  — close 50% of position at TP1
+const TP2_PCT   = 0.010;   // 1.0%  — close remaining 50% at TP2
+const LOCK_PCT  = 0.0025;  // +0.25% — slide SL to lock after TP1 hit
+const PAT_TOL   = 0.005;   // 0.5% retest tolerance around pattern level
+const PAT_WINGS = 3;       // bars each side required to confirm pivot
+const PAT_LKBK  = 60;     // bars lookback for pivot detection
+const PAT_CD    = 2 * 3_600_000; // 2-hour cooldown per pattern per symbol
+
+// ── EMA periods for trend state (4H chart) ───────────────────────
+const TREND_EMA_S = 20;
+const TREND_EMA_M = 50;
+const TREND_EMA_L = 200;
+
+// ── EMA calculator ────────────────────────────────────────────────
+function calcEMASeries(bars, period) {
+  const k   = 2 / (period + 1);
+  const out = new Array(bars.length).fill(null);
+  if (bars.length < period) return out;
+  let seed = 0;
+  for (let i = 0; i < period; i++) seed += bars[i].c;
+  out[period - 1] = seed / period;
+  for (let i = period; i < bars.length; i++) {
+    out[i] = bars[i].c * k + out[i - 1] * (1 - k);
+  }
+  return out;
+}
+
+// ── Trend state classifier (uses 4H bars) ────────────────────────
+// Returns: 'UP' | 'DOWN' | 'NEUTRAL'
+// UP:   EMA20 > EMA50 > EMA200 — all aligned bullish
+// DOWN: EMA20 < EMA50 < EMA200 — all aligned bearish
+// NEUTRAL: mixed (use fib50 to decide direction)
+function classifyTrend(bars4h) {
+  const eS = calcEMASeries(bars4h, TREND_EMA_S);
+  const eM = calcEMASeries(bars4h, TREND_EMA_M);
+  const eL = calcEMASeries(bars4h, TREND_EMA_L);
+  const last = bars4h.length - 1;
+  const s = eS[last], m = eM[last], l = eL[last];
+  if (s === null || m === null || l === null) return 'NEUTRAL';
+  if (s > m && m > l) return 'UP';
+  if (s < m && m < l) return 'DOWN';
+  return 'NEUTRAL';
+}
+
+// ── Trend filter (asymmetric — data-driven) ──────────────────────
+// LONG:  only in UP trend, or NEUTRAL when price below fib50
+// SHORT: allowed in ALL trends when price is at/above fib50
+//        even in UPTREND, fading premium still works
+function isTrendAligned(trend, dir, fib50, price) {
+  if (dir === 'LONG') {
+    if (trend === 'UP') return true;
+    if (trend === 'NEUTRAL' && (fib50 === null || price < fib50)) return true;
+    return false; // block LONG in DOWN or NEUTRAL-premium
+  }
+  // SHORT
+  if (trend === 'DOWN') return true;
+  if (trend === 'NEUTRAL' && (fib50 === null || price > fib50)) return true;
+  if (trend === 'UP'     && (fib50 === null || price > fib50)) return true;
+  return false;
+}
+
+// ── Pivot point helpers (for pattern detection) ──────────────────
+function _pivLows(bars) {
+  const pts = [];
+  for (let i = PAT_WINGS; i < bars.length - PAT_WINGS; i++) {
+    const lo = bars[i].l; let ok = true;
+    for (let j = 1; j <= PAT_WINGS; j++) {
+      if (bars[i-j].l <= lo || bars[i+j].l <= lo) { ok = false; break; }
+    }
+    if (ok) pts.push({ price: lo, idx: i });
+  }
+  return pts;
+}
+
+function _pivHighs(bars) {
+  const pts = [];
+  for (let i = PAT_WINGS; i < bars.length - PAT_WINGS; i++) {
+    const hi = bars[i].h; let ok = true;
+    for (let j = 1; j <= PAT_WINGS; j++) {
+      if (bars[i-j].h >= hi || bars[i+j].h >= hi) { ok = false; break; }
+    }
+    if (ok) pts.push({ price: hi, idx: i });
+  }
+  return pts;
+}
+
+// ── Pattern detectors ─────────────────────────────────────────────
+// Each returns signal object or null.
+// window = last PAT_LKBK bars | cur = current close price | slPct = token SL
+
+function detectHL(window, cur, slPct) {
+  // Higher Low → LONG: uptrend making HL retest
+  const lows = _pivLows(window);
+  if (lows.length < 2) return null;
+  const prev = lows[lows.length - 2];
+  const curr = lows[lows.length - 1];
+  if (curr.price <= prev.price) return null;        // must be higher low
+  if (curr.idx < window.length - 24) return null;  // must be recent
+  const above = (cur - curr.price) / curr.price;
+  if (above < 0 || above > PAT_TOL) return null;   // price must be just above level
+  return {
+    pattern:  'HL',
+    dir:      'LONG',
+    level:    curr.price,
+    slPrice:  curr.price * (1 - slPct),
+    tp1:      cur * (1 + TP1_PCT),
+    tp2:      cur * (1 + TP2_PCT),
+    lockAt:   cur * (1 + LOCK_PCT),
+  };
+}
+
+function detectLL(window, cur, slPct) {
+  // Lower Low → LONG: discount zone bounce
+  const lows = _pivLows(window);
+  if (lows.length < 2) return null;
+  const prev = lows[lows.length - 2];
+  const curr = lows[lows.length - 1];
+  if (curr.price >= prev.price) return null;        // must be lower low
+  if (curr.idx < window.length - 24) return null;
+  const above = (cur - curr.price) / curr.price;
+  if (above < 0 || above > PAT_TOL) return null;
+  return {
+    pattern:  'LL',
+    dir:      'LONG',
+    level:    curr.price,
+    slPrice:  curr.price * (1 - slPct),
+    tp1:      cur * (1 + TP1_PCT),
+    tp2:      cur * (1 + TP2_PCT),
+    lockAt:   cur * (1 + LOCK_PCT),
+  };
+}
+
+function detectLH(window, cur, slPct) {
+  // Lower High → SHORT: downtrend making LH retest
+  const highs = _pivHighs(window);
+  if (highs.length < 2) return null;
+  const prev = highs[highs.length - 2];
+  const curr = highs[highs.length - 1];
+  if (curr.price >= prev.price) return null;        // must be lower high
+  if (curr.idx < window.length - 24) return null;
+  const below = (curr.price - cur) / curr.price;
+  if (below < 0 || below > PAT_TOL) return null;   // price must be just below level
+  return {
+    pattern:  'LH',
+    dir:      'SHORT',
+    level:    curr.price,
+    slPrice:  curr.price * (1 + slPct),
+    tp1:      cur * (1 - TP1_PCT),
+    tp2:      cur * (1 - TP2_PCT),
+    lockAt:   cur * (1 - LOCK_PCT),
+  };
+}
+
+function detectHH(window, cur, slPct) {
+  // Higher High → SHORT: premium zone fade
+  const highs = _pivHighs(window);
+  if (highs.length < 2) return null;
+  const prev = highs[highs.length - 2];
+  const curr = highs[highs.length - 1];
+  if (curr.price <= prev.price) return null;        // must be higher high
+  if (curr.idx < window.length - 24) return null;
+  const below = (curr.price - cur) / curr.price;
+  if (below < 0 || below > PAT_TOL) return null;
+  return {
+    pattern:  'HH',
+    dir:      'SHORT',
+    level:    curr.price,
+    slPrice:  curr.price * (1 + slPct),
+    tp1:      cur * (1 - TP1_PCT),
+    tp2:      cur * (1 - TP2_PCT),
+    lockAt:   cur * (1 - LOCK_PCT),
+  };
+}
+
+// ── Main pattern scanner ─────────────────────────────────────────
+// Scans all 4 patterns on the current bar window.
+// Returns first valid trend-aligned signal or null.
+// cooldowns: Map<sym_pat → lastSignalTs> (passed in from caller to persist)
+
+function scanPatterns(sym, patBars, bars4h, cooldowns = new Map()) {
+  const cfg = TRADING_CONFIG[sym];
+  if (!cfg) return null;                            // symbol not in config (XRP removed)
+
+  const cur  = patBars[patBars.length - 1];
+  const now  = cur.t;
+  const price = cur.c;
+
+  // Build pattern window
+  if (patBars.length < PAT_LKBK + PAT_WINGS + 2) return null;
+  const window = patBars.slice(-(PAT_LKBK + PAT_WINGS + 1));
+
+  // Trend state from 4H EMA
+  const trend = classifyTrend(bars4h);
+
+  // Fib50 for NEUTRAL zone decisions
+  let fib50 = null;
+  try {
+    const s4h = analyzeStructure(bars4h, 5, 3);
+    const fz  = calcFibZones(s4h.swingHigh, s4h.swingLow);
+    if (fz) fib50 = fz.p500;
+  } catch (_) {}
+
+  const detectors = [
+    { key: 'HL', fn: detectHL },
+    { key: 'LL', fn: detectLL },
+    { key: 'LH', fn: detectLH },
+    { key: 'HH', fn: detectHH },
+  ];
+
+  for (const { key, fn } of detectors) {
+    const cdKey = `${sym}_${key}`;
+
+    // Cooldown: skip if fired within 2H
+    if (cooldowns.has(cdKey) && now - cooldowns.get(cdKey) < PAT_CD) continue;
+
+    const sig = fn(window, price, cfg.slPct);
+    if (!sig) continue;
+
+    // Trend alignment filter
+    if (!isTrendAligned(trend, sig.dir, fib50, price)) continue;
+
+    // Update cooldown
+    cooldowns.set(cdKey, now);
+
+    return {
+      symbol:   sym,
+      name:     cfg.name,
+      tf:       cfg.label,
+      iv:       cfg.iv,
+      pattern:  sig.pattern,
+      dir:      sig.dir,
+      side:     sig.dir === 'LONG' ? 'BUY' : 'SELL',
+      price,
+      level:    sig.level,
+      sl:       sig.slPrice,
+      tp1:      sig.tp1,
+      tp2:      sig.tp2,
+      lockAt:   sig.lockAt,
+      slPct:    (cfg.slPct * 100).toFixed(2) + '%',
+      tp1Pct:   (TP1_PCT  * 100).toFixed(2) + '%',
+      tp2Pct:   (TP2_PCT  * 100).toFixed(2) + '%',
+      trend,
+      fib50,
+      ts:       now,
+      signal:   `${sig.pattern}(${sig.dir}) on ${cfg.label} | trend=${trend} | entry=${price.toFixed(4)} sl=${sig.slPrice.toFixed(4)} tp1=${sig.tp1.toFixed(4)} tp2=${sig.tp2.toFixed(4)}`,
+    };
+  }
+
+  return null;
+}
+
+// ── TP management helper ─────────────────────────────────────────
+// Call on each new bar to check if TP1/TP2/SL/lock triggered.
+// trade = object from scanPatterns signal
+// bar   = { h, l } current bar
+// Returns updated trade state.
+function checkTradeState(trade, bar) {
+  if (!trade || trade.closed) return trade;
+  const { h, l } = bar;
+  const dir = trade.dir;
+  const state = { ...trade };
+
+  if (!state.tp1Hit) {
+    // Check TP1
+    const tp1Hit = dir === 'LONG' ? h >= state.tp1 : l <= state.tp1;
+    if (tp1Hit) {
+      state.tp1Hit    = true;
+      state.tp1HitTs  = bar.t;
+      state.sl        = state.lockAt; // slide SL to lock level
+    }
+    // Check SL before TP1
+    const slHit = dir === 'LONG' ? l <= state.sl : h >= state.sl;
+    if (slHit && !tp1Hit) {
+      state.closed    = true;
+      state.exitReason = 'LOSS';
+      state.exitPrice  = state.sl;
+      return state;
+    }
+  } else {
+    // TP1 already hit — runner active
+    const tp2Hit = dir === 'LONG' ? h >= state.tp2 : l <= state.tp2;
+    const lockHit = dir === 'LONG' ? l <= state.sl : h >= state.sl;
+    if (tp2Hit) {
+      state.closed    = true;
+      state.exitReason = 'FULL_WIN';
+      state.exitPrice  = state.tp2;
+      return state;
+    }
+    if (lockHit) {
+      state.closed    = true;
+      state.exitReason = 'LOCK_WIN';
+      state.exitPrice  = state.lockAt;
+      return state;
+    }
+  }
+
+  return state;
+}
+
 // ── Exports ──────────────────────────────────────────────────
 
 module.exports = {
+  // ── Existing ICT pipeline exports (unchanged) ────────────────
   fetchCandles,
   detectPivots,
   analyzeStructure,
@@ -1070,4 +1396,18 @@ module.exports = {
   analyzeSMC,
   MIN_RR,
   KILLZONES_UTC,
+
+  // ── Pattern engine exports (v3 backtested) ────────────────────
+  TRADING_CONFIG,   // token list with TF + SL settings (no XRP)
+  TP1_PCT,
+  TP2_PCT,
+  LOCK_PCT,
+  classifyTrend,    // 4H EMA trend state
+  isTrendAligned,   // asymmetric trend filter
+  detectHL,
+  detectLL,
+  detectLH,
+  detectHH,
+  scanPatterns,     // main scanner — call per symbol per bar
+  checkTradeState,  // TP/SL/lock manager — call per bar on open trade
 };

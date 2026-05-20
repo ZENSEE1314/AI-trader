@@ -26,6 +26,7 @@ const { OptimizerAgent } = require('./optimizer-agent');
 const { PolymarketAgent } = require('./polymarket-agent');
 const { SMCProAgent }     = require('./smc-pro-agent');
 const { PolyBTCAgent }    = require('./poly-btc-agent');
+const { SMCPatternAgent } = require('./smc-pattern-agent');
 const { TradeConsensus, PatternLearner, encodeMarketState, extractIndicatorsFromKlines } = require('../ruflo-bridge');
 
 const SELF_IMPROVE_LESSONS = {
@@ -62,6 +63,7 @@ class AgentCoordinator extends BaseAgent {
     this.polymarketAgent = new PolymarketAgent(options);
     this.smcProAgent     = new SMCProAgent(options);
     this.polyBtcAgent    = new PolyBTCAgent(options);
+    this.smcPatternAgent = new SMCPatternAgent(options);
 
     // Agent registry — order matters for display
     this._agents = new Map();
@@ -76,8 +78,9 @@ class AgentCoordinator extends BaseAgent {
     this._agents.set('coder',      this.coderAgent);
     this._agents.set('optimizer',  this.optimizerAgent);
     this._agents.set('polymarket', this.polymarketAgent);
-    this._agents.set('smc-pro',    this.smcProAgent);
-    this._agents.set('poly-btc',   this.polyBtcAgent);
+    this._agents.set('smc-pro',     this.smcProAgent);
+    this._agents.set('poly-btc',    this.polyBtcAgent);
+    this._agents.set('smc-pattern', this.smcPatternAgent);
 
     // Wire up inter-agent events
     this.chartAgent.on('signals', (data) => {
@@ -451,6 +454,14 @@ class AgentCoordinator extends BaseAgent {
     if (!this.smcProAgent.paused) {
       this.smcProAgent.execute({ coordinator: this }).catch(err => {
         this.addActivity('error', `SMC Pro scan error: ${err.message}`);
+      });
+    }
+
+    // 6c. SMC Pattern Agent — backtested HL/LL/LH/HH patterns on 9 tokens
+    // Has its own 30s internal throttle; handles 4H trend filter + cooldowns internally.
+    if (!this.smcPatternAgent.paused) {
+      this.smcPatternAgent.execute({ coordinator: this }).catch(err => {
+        this.addActivity('error', `SMC Pattern scan error: ${err.message}`);
       });
     }
 

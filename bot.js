@@ -225,6 +225,9 @@ async function handleCommand(text, fromChatId) {
       `/stats — AI learning stats &amp; performance\n` +
       `/sentiment — Current market sentiment\n` +
       `/agents — Agent framework health\n\n` +
+      `<b>Polymarket</b>\n` +
+      `/polytest — Diagnose Polymarket pipeline (key, signal, CLOB)\n` +
+      `/polytrade — Force one Polymarket trade now\n\n` +
       `<b>Control</b>\n` +
       `/pause — Pause auto trading\n` +
       `/resume — Resume auto trading\n` +
@@ -252,6 +255,10 @@ async function handleCommand(text, fromChatId) {
     await sendVoiceStatus(fromChatId);
   } else if (cmd === '/hermes') {
     await sendHermesStatus(fromChatId);
+  } else if (cmd === '/polytest') {
+    await sendPolyTest(fromChatId);
+  } else if (cmd === '/polytrade') {
+    await forcePolyTrade(fromChatId);
   } else {
     await tgSendTo(fromChatId, `Unknown command: <code>${e(cmd)}</code>\nSend /help for all commands.`);
   }
@@ -410,6 +417,103 @@ async function sendHermesStatus(chatId) {
     await tgSendTo(chatId, msg);
   } catch (err) {
     await tgSendTo(chatId, `<b>Hermes Status Error</b>\n<code>${e(err.message)}</code>`);
+  }
+}
+
+// ── /polytest — Polymarket pipeline diagnostic ────────────────
+async function sendPolyTest(chatId) {
+  await tgSendTo(chatId, `<b>Polymarket Diagnostic</b> — running...`);
+  const lines = [];
+  try {
+    // Step 1: Market
+    const { getBTC15mMarket, getBTCUpDownSignal } = require('./polymarket-btc-signal');
+    const mkt = await getBTC15mMarket();
+    if (!mkt) {
+      lines.push('❌ Market: not found — Polymarket may not have created the next 15m slot yet');
+    } else {
+      lines.push(`✅ Market: <b>${e(mkt.question)}</b>`);
+      lines.push(`   closed=${mkt.closed} negRisk=${mkt.negRisk}`);
+    }
+
+    // Step 2: Signal
+    const sig = await getBTCUpDownSignal();
+    const upPct   = (sig.upPrice   * 100).toFixed(1);
+    const downPct = (sig.downPrice * 100).toFixed(1);
+    if (sig.direction === 'NEUTRAL') {
+      lines.push(`⚠️  Signal: NEUTRAL — Up=${upPct}% Down=${downPct}% (need >51% edge to trade)`);
+    } else {
+      lines.push(`✅ Signal: <b>${sig.direction}</b> conf=${sig.confidence}% | Up=${upPct}% Down=${downPct}%`);
+    }
+
+    // Step 3: CLOB mid-price
+    if (mkt) {
+      const { getMidPrice } = require('./polymarket-client');
+      const isLong = sig.direction === 'LONG';
+      const tokenId = isLong ? sig.upTokenId : sig.downTokenId;
+      const mid = await getMidPrice(tokenId);
+      lines.push(mid > 0
+        ? `✅ CLOB mid-price: ${mid} → bid would be ${Math.min(0.99, +(mid + 0.02).toFixed(2))}`
+        : `❌ CLOB mid-price: 0 — market illiquid or CLOB offline`
+      );
+    }
+
+    // Step 4: API key in DB
+    try {
+      const db = require('./db');
+      const rows = await db.query(
+        "SELECT id, label, enabled FROM api_keys WHERE platform = 'polymarket' AND enabled = true LIMIT 5"
+      );
+      if (!rows.length) {
+        lines.push(`❌ Polymarket key: <b>NOT CONFIGURED</b>`);
+        lines.push(`   → Go to Mission Control → API Settings`);
+        lines.push(`   → Add key: platform=<code>polymarket</code>, paste private key`);
+      } else {
+        lines.push(`✅ Polymarket key: found (id=${rows[0].id} label="${e(rows[0].label || '')}")`);
+      }
+    } catch (dbErr) {
+      lines.push(`❌ DB error: ${e(dbErr.message)}`);
+    }
+
+    // Step 5: Agent state
+    try {
+      const { getCoordinator } = require('./agents');
+      const coord = getCoordinator();
+      const agent = coord.polyBtcAgent;
+      if (agent) {
+        const h = agent.getHealth();
+        lines.push(`\n<b>PolyBTC Agent</b>`);
+        lines.push(`   State: ${h.state} | Paused: ${agent.paused}`);
+        lines.push(`   Total trades: ${h.totalTrades} | WR: ${h.winRate}`);
+        lines.push(`   Consecutive losses: ${h._consecutiveLoss ?? 0}`);
+        lines.push(`   Last signal: ${h.lastSignal?.direction || 'none'} (${h.currentMarket || 'no market'})`);
+      }
+    } catch (_) {}
+
+  } catch (err) {
+    lines.push(`❌ Diagnostic error: ${e(err.message)}`);
+  }
+  await tgSendTo(chatId, `<b>Polymarket Diagnostic</b>\n━━━━━━━━━━━━━━━━━━\n` + lines.join('\n'));
+}
+
+// ── /polytrade — Force one Polymarket trade now ───────────────
+async function forcePolyTrade(chatId) {
+  await tgSendTo(chatId, `<b>Forcing Polymarket trade...</b>`);
+  try {
+    const { getCoordinator } = require('./agents');
+    const agent = getCoordinator().polyBtcAgent;
+    if (!agent) {
+      await tgSendTo(chatId, `❌ PolyBTCAgent not found`);
+      return;
+    }
+    // Reset scan throttle so execute() runs immediately
+    agent._lastScanAt  = 0;
+    agent._lastTradeAt = 0;
+    const result = await agent.execute({});
+    if (result?.skipped)      await tgSendTo(chatId, `⚠️  Skipped: ${result.reason || 'signal neutral'}`);
+    else if (result?.ok)      await tgSendTo(chatId, `✅ Trade fired — orderId: ${result.orderId || 'n/a'}`);
+    else                      await tgSendTo(chatId, `❌ Trade failed: ${result?.error || 'unknown'}`);
+  } catch (err) {
+    await tgSendTo(chatId, `❌ Error: ${e(err.message)}`);
   }
 }
 

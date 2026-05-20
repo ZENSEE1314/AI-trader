@@ -122,6 +122,7 @@ async function getBTC15mMarket() {
         question: mkt.question || event.title || slug,
         fetchedAt: nowMs,
         closed: mkt.closed || event.closed || false,
+        negRisk: !!(mkt.negRisk ?? mkt.neg_risk ?? event.negRisk ?? event.neg_risk ?? true),
       };
       console.log(
         `[poly-btc-signal] Market: "${_btc15mMarket.question}" ` +
@@ -189,10 +190,11 @@ async function getBTCUpDownSignal() {
 
   const downPrice = 1 - upPrice;
   const deviation = upPrice - 0.5; // positive = crowd leans up
-  const confidence = Math.min(100, Math.round(Math.abs(deviation) / 0.5 * 100));
+  // Scale: 51% → conf 10, 52% → conf 20, 55% → conf 50, 60% → conf 100
+  const confidence = Math.min(100, Math.round(Math.abs(deviation) * 1000));
 
-  // Need at least 52/48 to trade (deviation > 0.02)
-  const MIN_DEVIATION = 0.02;
+  // Trade at 51%+ edge — deviation of 0.01 means crowd leans 51/49
+  const MIN_DEVIATION = 0.01;
   let direction = 'NEUTRAL';
   if (deviation >  MIN_DEVIATION) direction = 'LONG';
   if (deviation < -MIN_DEVIATION) direction = 'SHORT';
@@ -211,6 +213,7 @@ async function getBTCUpDownSignal() {
     market:      mkt.question,
     upTokenId:   mkt.upTokenId,
     downTokenId: mkt.downTokenId,
+    negRisk:     mkt.negRisk,
   };
 }
 

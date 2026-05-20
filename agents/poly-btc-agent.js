@@ -16,9 +16,10 @@ const { getBTCUpDownSignal } = require('../polymarket-btc-signal');
 const { buildClobClient, getMidPrice, placeCopyOrder } = require('../polymarket-client');
 const { log: bLog } = require('../bot-logger');
 
-const TRADE_INTERVAL_MS      = 5 * 60 * 1000;  // 5 minutes — poll every 5m, bet when signal is clear
+const TRADE_INTERVAL_MS      = 5 * 60 * 1000;  // 5 minutes — minimum between actual trades
+const SCAN_INTERVAL_MS       = 2 * 60 * 1000;  // 2 minutes — re-check signal even on NEUTRAL
 const TRADE_SIZE_USDC        = 1;               // $1 USDC per bet
-const MIN_CONFIDENCE         = 10;              // 55/45 split or stronger is enough
+const MIN_CONFIDENCE         = 10;              // 51%+ crowd edge → conf≥10 with new formula
 const COOLDOWN_AFTER_LOSS_MS = 30 * 60 * 1000; // 30-min pause after 2 consecutive losses
 
 class PolyBTCAgent extends BaseAgent {
@@ -26,6 +27,7 @@ class PolyBTCAgent extends BaseAgent {
     super('PolyBTCAgent', options);
 
     this._lastTradeAt     = 0;
+    this._lastScanAt      = 0;  // throttle for API fetch (even on NEUTRAL)
     this._lastSignal      = null;
     this._totalTrades     = 0;
     this._wins            = 0;
@@ -53,16 +55,18 @@ class PolyBTCAgent extends BaseAgent {
   async execute(context = {}) {
     const now = Date.now();
 
-    // 15-min throttle
-    if (now - this._lastTradeAt < TRADE_INTERVAL_MS) {
-      const nextMins = Math.round((TRADE_INTERVAL_MS - (now - this._lastTradeAt)) / 60_000);
-      this.addActivity('info', `Next BTC 15m scan in ${nextMins} min`);
-      return { skipped: true, reason: 'throttled' };
+    // 2-min scan throttle — avoids hammering the API every 30s when NEUTRAL
+    if (now - this._lastScanAt < SCAN_INTERVAL_MS) {
+      return { skipped: true, reason: 'scan_throttled' };
     }
+    this._lastScanAt = now;
+
+    bLog.scan('[POLY-BTC] Tick — fetching signal...');
 
     // 30-min loss cooldown
     if (this._consecutiveLoss >= 2 && now - this._lastLossAt < COOLDOWN_AFTER_LOSS_MS) {
       const coolMins = Math.round((COOLDOWN_AFTER_LOSS_MS - (now - this._lastLossAt)) / 60_000);
+      bLog.scan(`[POLY-BTC] Loss cooldown active — resuming in ${coolMins} min`);
       this.addActivity('warning', `Loss cooldown active — resuming in ${coolMins} min`);
       return { skipped: true, reason: 'loss_cooldown' };
     }
@@ -72,7 +76,9 @@ class PolyBTCAgent extends BaseAgent {
     try {
       signal = await getBTCUpDownSignal();
     } catch (err) {
+      bLog.error(`[POLY-BTC] Signal fetch THREW: ${err.message}`);
       this.addActivity('error', `Signal fetch failed: ${err.message}`);
+      this._lastTradeAt = now; // back off 5 min after error to avoid spam
       return { ok: false, error: err.message };
     }
 
@@ -97,8 +103,18 @@ class PolyBTCAgent extends BaseAgent {
     );
 
     if (signal.direction === 'NEUTRAL' || signal.confidence < MIN_CONFIDENCE) {
-      this.addActivity('skip', `Weak signal (${signal.direction} ${signal.confidence}%) — no trade`);
+      this.addActivity('skip',
+        `Weak signal — ${signal.direction} conf=${signal.confidence}% ` +
+        `Up=${(signal.upPrice * 100).toFixed(1)}% (need >51% + conf≥${MIN_CONFIDENCE})`
+      );
       return { ok: true, skipped: true, signal };
+    }
+
+    // 5-min trade cooldown (separate from scan cooldown)
+    if (now - this._lastTradeAt < TRADE_INTERVAL_MS) {
+      const nextMins = Math.ceil((TRADE_INTERVAL_MS - (now - this._lastTradeAt)) / 60_000);
+      this.addActivity('info', `Trade cooldown — ${nextMins}m until next bet`);
+      return { skipped: true, reason: 'trade_cooldown' };
     }
 
     // Place trade on Polymarket
@@ -159,18 +175,27 @@ class PolyBTCAgent extends BaseAgent {
     const isLong  = signal.direction === 'LONG';
     const tokenId = isLong ? signal.upTokenId : signal.downTokenId;
     const label   = isLong ? 'Up' : 'Down';
-    // Use the ask price from signal (pre-fetched) so FOK order actually fills.
-    // Add 1 tick (0.01) buffer above ask as safety margin.
-    const askPrice = isLong ? signal.upAsk : signal.downAsk;
 
     if (!tokenId) throw new Error(`No ${label} token ID in signal`);
 
-    // Clamp price to valid prediction range
-    const bidPrice = Math.min(0.99, Math.max(0.01, parseFloat((askPrice + 0.01).toFixed(2))));
+    // Fetch a live ask price directly from CLOB orderbook for best fill chance.
+    // getMidPrice returns the mid; we add 0.02 buffer to cross the spread.
+    // If it fails, fall back to signal's pre-computed ask.
+    let liveMid = 0;
+    try {
+      liveMid = await getMidPrice(tokenId);
+    } catch (_) {}
+    const baseMid  = liveMid > 0 ? liveMid : (isLong ? signal.upPrice : signal.downPrice);
+    // Bid 2 ticks above mid so the FOK actually matches a resting ask
+    const bidPrice = Math.min(0.99, Math.max(0.01, parseFloat((baseMid + 0.02).toFixed(2))));
+
+    bLog.trade(
+      `[POLY-BTC] mid=${baseMid.toFixed(3)} liveMid=${liveMid.toFixed(3)} bidPrice=${bidPrice}`
+    );
 
     bLog.trade(
       `[POLY-BTC] Placing BUY ${label} | tokenId=${tokenId.slice(0, 10)}... ` +
-      `ask=${askPrice} bid=${bidPrice} usdc=$${TRADE_SIZE_USDC}`
+      `bid=${bidPrice} usdc=$${TRADE_SIZE_USDC}`
     );
 
     const result = await placeCopyOrder({
@@ -179,6 +204,7 @@ class PolyBTCAgent extends BaseAgent {
       side:       'BUY',
       price:      bidPrice,
       usdcAmount: TRADE_SIZE_USDC,
+      negRisk:    signal.negRisk !== false, // default true — most Polymarket markets use neg-risk exchange
     });
 
     // Persist to DB (best-effort)

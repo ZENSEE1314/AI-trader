@@ -181,24 +181,29 @@ async function buildClobClient(privateKey) {
     return { client: cached.client, address };
   }
 
-  // The @polymarket/clob-client SDK (>=5.x) checks for _signTypedData (ethers v5)
-  // OR signTypedData (viem). Ethers v6 has signTypedData but no account.address,
-  // so the SDK falls into the viem path and fails.
-  // Fix: expose a viem-compatible wrapper so the SDK finds account.address.
+  // The SDK checks for _signTypedData (ethers v5 API) first.
+  // Expose it so the SDK uses the ethers v5 code path, which passes only
+  // { [primaryType]: fields } — exactly what ethers v6 signTypedData expects.
+  // Also expose signTypedData (viem path) as fallback with EIP712Domain filtered.
   const signer = {
-    account:         { address },
-    signTypedData:   ({ domain, types, primaryType, message }) =>
-      wallet.signTypedData(domain, types, message),
+    account:          { address },
+    // ethers v5 path — SDK calls: signer._signTypedData(domain, {[primaryType]: fields}, value)
+    _signTypedData:   (domain, types, value) => wallet.signTypedData(domain, types, value),
+    // viem path fallback
+    signTypedData:    async ({ domain, types, primaryType, message }) => {
+      const t = Object.fromEntries(Object.entries(types).filter(([k]) => k !== 'EIP712Domain'));
+      return wallet.signTypedData(domain, t, message);
+    },
     requestAddresses: async () => [address],
     getAddresses:     async () => [address],
   };
 
-  // Derive L2 creds first, then pass into constructor (v5 API — no setApiCreds)
-  const tempClient = new ClobClient(CLOB_HOST, CHAIN_ID, signer);
+  // SignatureType.EOA (0) = direct EOA wallet, no Polymarket proxy contract.
+  const tempClient = new ClobClient(CLOB_HOST, CHAIN_ID, signer, undefined, SignatureType.EOA, address);
   const creds = await tempClient.createOrDeriveApiKey();
+  console.log(`[POLY-CLOB] L2 creds derived: key=${creds?.key?.slice(0,8)}... ok=${!!creds?.key}`);
 
-  // Re-construct with creds as 4th arg so all authenticated calls work
-  const client = new ClobClient(CLOB_HOST, CHAIN_ID, signer, creds);
+  const client = new ClobClient(CLOB_HOST, CHAIN_ID, signer, creds, SignatureType.EOA, address);
 
   _clobClientCache.set(address, { client, ts: Date.now() });
   return { client, address };
@@ -215,7 +220,7 @@ async function buildClobClient(privateKey) {
  * @param {number}     params.usdcAmount USDC notional to spend/receive
  * @param {number}     params.tickSize   Market tick size (default 0.01)
  */
-async function placeCopyOrder({ client, tokenId, side, price, usdcAmount, tickSize = 0.01 }) {
+async function placeCopyOrder({ client, tokenId, side, price, usdcAmount, tickSize = 0.01, negRisk = true }) {
   if (!tokenId || !price || !usdcAmount) throw new Error('Missing order params');
   if (price <= 0 || price >= 1) throw new Error(`Invalid prediction price: ${price}`);
 
@@ -226,12 +231,25 @@ async function placeCopyOrder({ client, tokenId, side, price, usdcAmount, tickSi
 
   const resp = await client.createAndPostOrder(
     { tokenID: tokenId, price, size: shares, side: orderSide },
-    { tickSize: String(tickSize), negRisk: false },
+    { tickSize: String(tickSize), negRisk },
     OrderType.FOK
   );
 
   // Log raw response so we can identify the correct orderId field
   console.log('[POLY-CLOB] Raw createAndPostOrder response:', JSON.stringify(resp));
+
+  // Throw on error responses so the caller sees the failure
+  if (resp?.error || resp?.status === 400 || resp?.status === 'failed') {
+    throw new Error(`CLOB order rejected: ${resp.error || JSON.stringify(resp)}`);
+  }
+
+  // FOK (Fill-or-Kill) orders get "unmatched" or "killed" when no counter-party exists.
+  // Treat these as a failure so the caller can log it correctly.
+  const status = (resp?.status || resp?.order?.status || '').toLowerCase();
+  if (status === 'unmatched' || status === 'killed' || status === 'cancelled') {
+    throw new Error(`FOK order not filled (${status}) — no counter-party at price=${price}. ` +
+                    `Try a higher bid or wait for more liquidity.`);
+  }
 
   // v5 SDK wraps the result differently depending on order outcome:
   //   { orderID, status, ... }  (direct)
