@@ -928,7 +928,7 @@ async function analyzeSMC(symbol, log = console.log) {
 
     if (choch15mRaw) {
       const ageMs    = nowMs - (choch15mRaw.candleTs || 0);
-      const isRecent = ageMs < 3 * 3_600_000; // within 3 hours
+      const isRecent = ageMs < 1 * 3_600_000; // within 1 hour — stale CHoCH defers to HTF bias
       const conflictsShort = direction === 'SHORT' && choch15mRaw.direction === 'BULLISH' && isRecent;
       const conflictsLong  = direction === 'LONG'  && choch15mRaw.direction === 'BEARISH' && isRecent;
 
