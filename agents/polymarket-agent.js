@@ -90,25 +90,12 @@ class PolymarketAgent extends BaseAgent {
     if (nowMs - this._lastPollMs < POLL_INTERVAL_MS) {
       return { ok: true, skipped: true, reason: 'Throttled' };
     }
+    // Save previous poll time BEFORE updating, so sinceMs looks back correctly
+    const prevPollMs = this._lastPollMs || (nowMs - POLL_INTERVAL_MS);
     this._lastPollMs = nowMs;
 
-    // First poll: seed seen-set from LOOKBACK_MS without copying anything.
-    // Prevents copying stale trades that happened before the agent started.
-    if (!this._firstPollDone) {
-      this._firstPollDone = true;
-      try {
-        const seed = await getUserActivity(this._targetAddress, 50, nowMs - LOOKBACK_MS);
-        for (const t of seed) this._seenTradeIds.add(t.id);
-        this.addActivity('info', `Seeded ${this._seenTradeIds.size} existing trade(s) — watching for NEW trades only`);
-        bLog.trade(`[POLY] First poll: seeded ${this._seenTradeIds.size} trade IDs, not copying`);
-      } catch (e) {
-        bLog.trade(`[POLY] Seed poll failed (non-fatal): ${e.message}`);
-      }
-      return { ok: true, newTrades: 0, seeded: true };
-    }
-
-    // Get new trades from the target wallet since last poll
-    const sinceMs = this._lastPollMs - POLL_INTERVAL_MS - 5000;
+    // Look back from the previous poll with a 5s overlap buffer
+    const sinceMs = prevPollMs - 5000;
 
     let newTrades;
     try {

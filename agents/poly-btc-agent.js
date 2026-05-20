@@ -19,7 +19,7 @@ const { log: bLog }   = require('../bot-logger');
 const TRADE_INTERVAL_MS = 15 * 60 * 1000;   // 15 minutes
 const TRADE_SIZE_USDT   = 1;                 // $1 margin per trade
 const LEVERAGE          = 20;                // 20× → $100 notional
-const MIN_CONFIDENCE    = 55;               // skip trades below this confidence
+const MIN_CONFIDENCE    = 30;               // skip trades below this confidence
 const SYMBOL            = 'BTCUSDT';
 const COOLDOWN_AFTER_LOSS_MS = 30 * 60 * 1000; // 30-min pause after a loss
 
@@ -70,7 +70,7 @@ class PolyBTCAgent extends BaseAgent {
     // Read Polymarket signal
     let signal;
     try {
-      signal = await getBTCSignal({ lookbackCandles: 3, minChange: 0.003 });
+      signal = await getBTCSignal({ lookbackCandles: 3, minChange: 0.001 });
     } catch (err) {
       this.addActivity('error', `Poly signal fetch failed: ${err.message}`);
       return { ok: false, error: err.message };
