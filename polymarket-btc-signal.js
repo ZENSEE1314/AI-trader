@@ -174,61 +174,44 @@ async function getBTC15mMarket() {
 async function getBTCUpDownSignal() {
   const NEUTRAL = (market = '', upTokenId = '', downTokenId = '') => ({
     direction: 'NEUTRAL', confidence: 0, upPrice: 0.5, downPrice: 0.5,
-    upAsk: 0.5, downAsk: 0.5, market, upTokenId, downTokenId,
+    upAsk: 0.52, downAsk: 0.52, market, upTokenId, downTokenId,
   });
 
   const mkt = await getBTC15mMarket();
-  if (!mkt)            return NEUTRAL();
-  if (mkt.closed)      return NEUTRAL(mkt.question, mkt.upTokenId, mkt.downTokenId);
+  if (!mkt)       return NEUTRAL();
+  if (mkt.closed) return NEUTRAL(mkt.question, mkt.upTokenId, mkt.downTokenId);
 
-  // Get live orderbook for both tokens in parallel
-  const [upData, downData] = await Promise.all([
-    _getTokenBook(mkt.upTokenId),
-    _getTokenBook(mkt.downTokenId),
-  ]);
-
-  const upPrice = upData.mid;
+  // Get mid-price for Up token (Down = 1 - Up for binary markets)
+  const upPrice = await _getTokenMidPrice(mkt.upTokenId);
   if (!upPrice || upPrice <= 0 || upPrice >= 1) {
     return NEUTRAL(mkt.question, mkt.upTokenId, mkt.downTokenId);
   }
 
   const downPrice = 1 - upPrice;
-  const deviation = upPrice - 0.5;                         // positive = crowd leans up
+  const deviation = upPrice - 0.5; // positive = crowd leans up
   const confidence = Math.min(100, Math.round(Math.abs(deviation) / 0.5 * 100));
 
-  const MIN_DEVIATION = 0.05; // need at least 55/45 split to trade
+  // Need at least 52/48 to trade (deviation > 0.02)
+  const MIN_DEVIATION = 0.02;
   let direction = 'NEUTRAL';
   if (deviation >  MIN_DEVIATION) direction = 'LONG';
   if (deviation < -MIN_DEVIATION) direction = 'SHORT';
+
+  // Ask price = mid + 0.03 fixed buffer (avoids needing separate orderbook API call)
+  const upAsk   = Math.min(0.99, parseFloat((upPrice   + 0.03).toFixed(2)));
+  const downAsk = Math.min(0.99, parseFloat((downPrice + 0.03).toFixed(2)));
 
   return {
     direction,
     confidence,
     upPrice,
     downPrice,
-    upAsk:   upData.ask,
-    downAsk: downData.ask,
-    market:  mkt.question,
+    upAsk,
+    downAsk,
+    market:      mkt.question,
     upTokenId:   mkt.upTokenId,
     downTokenId: mkt.downTokenId,
   };
-}
-
-/** Fetch mid + best ask for a token from the CLOB orderbook. */
-async function _getTokenBook(tokenId) {
-  try {
-    const [midData, bookData] = await Promise.all([
-      _fetchJson(`${CLOB_HOST}/midpoint?token_id=${tokenId}`).catch(() => null),
-      _fetchJson(`${CLOB_HOST}/book?token_id=${tokenId}`).catch(() => null),
-    ]);
-    const mid = parseFloat(midData?.mid || midData?.midpoint || 0);
-    // asks are sorted ascending — lowest ask first
-    const asks = bookData?.asks || bookData?.data?.asks || [];
-    const bestAsk = asks.length > 0 ? parseFloat(asks[0]?.price || asks[0] || 0) : mid + 0.01;
-    return { mid, ask: bestAsk || mid + 0.01 };
-  } catch {
-    return { mid: 0, ask: 0 };
-  }
 }
 
 // ═══════════════════════════════════════════════════════════════

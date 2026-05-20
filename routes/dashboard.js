@@ -536,6 +536,72 @@ router.get('/debug-poly', async (req, res) => {
   res.json(out);
 });
 
+// ── GET /debug-poly-btc — full diagnostic for PolyBTC agent ──
+router.get('/debug-poly-btc', async (req, res) => {
+  const out = { ts: new Date().toISOString(), steps: [] };
+  try {
+    const { getBTCUpDownSignal, getBTC15mMarket } = require('../polymarket-btc-signal');
+    const { getMidPrice } = require('../polymarket-client');
+    const CLOB_HOST = 'https://clob.polymarket.com';
+    const fetch = require('node-fetch');
+
+    // Step 1: compute current slug
+    const nowSec = Math.floor(Date.now() / 1000);
+    const slot   = Math.floor(nowSec / 900) * 900;
+    out.computedSlug = `btc-updown-15m-${slot}`;
+    out.steps.push({ step: 'computed_slug', slug: out.computedSlug, nowSec });
+
+    // Step 2: fetch market
+    const mkt = await getBTC15mMarket().catch(e => ({ error: e.message }));
+    out.market = mkt;
+    out.steps.push({ step: 'market_fetch', result: mkt });
+
+    if (mkt && mkt.upTokenId) {
+      // Step 3: mid-prices
+      const [upMid, downMid] = await Promise.all([
+        getMidPrice(mkt.upTokenId).catch(() => 0),
+        getMidPrice(mkt.downTokenId).catch(() => 0),
+      ]);
+      out.upMid   = upMid;
+      out.downMid = downMid;
+      out.steps.push({ step: 'mid_prices', upMid, downMid });
+
+      // Step 4: book (ask prices)
+      for (const [label, tokenId] of [['Up', mkt.upTokenId], ['Down', mkt.downTokenId]]) {
+        try {
+          const r = await fetch(`${CLOB_HOST}/book?token_id=${tokenId}`, { timeout: 6000 });
+          const body = await r.text();
+          out.steps.push({ step: `book_${label}`, status: r.status, body: body.slice(0, 400) });
+        } catch (e) {
+          out.steps.push({ step: `book_${label}`, error: e.message });
+        }
+      }
+    }
+
+    // Step 5: full signal
+    const signal = await getBTCUpDownSignal().catch(e => ({ error: e.message }));
+    out.signal = signal;
+    out.steps.push({ step: 'signal', signal });
+
+    // Step 6: agent state
+    const { getCoordinator } = require('../agents');
+    const coord = getCoordinator();
+    const agent = coord?._agents?.get('poly-btc');
+    out.agentState = agent ? {
+      paused:       agent.paused,
+      lastTradeAt:  agent._lastTradeAt,
+      msSinceTrade: Date.now() - (agent._lastTradeAt || 0),
+      totalTrades:  agent._totalTrades,
+      lastSignal:   agent._lastSignal,
+    } : 'not found';
+
+  } catch (e) {
+    out.error = e.message;
+    out.stack = e.stack?.slice(0, 500);
+  }
+  res.json(out);
+});
+
 // Weekly earnings with profit split (rolling 7-day window from last payment)
 router.get('/weekly-earnings', async (req, res) => {
   try {
