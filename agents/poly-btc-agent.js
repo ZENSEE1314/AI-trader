@@ -16,9 +16,9 @@ const { getBTCUpDownSignal } = require('../polymarket-btc-signal');
 const { buildClobClient, getMidPrice, placeCopyOrder } = require('../polymarket-client');
 const { log: bLog } = require('../bot-logger');
 
-const TRADE_INTERVAL_MS      = 15 * 60 * 1000; // 15 minutes
+const TRADE_INTERVAL_MS      = 5 * 60 * 1000;  // 5 minutes — poll every 5m, bet when signal is clear
 const TRADE_SIZE_USDC        = 1;               // $1 USDC per bet
-const MIN_CONFIDENCE         = 25;              // minimum confidence to place trade
+const MIN_CONFIDENCE         = 20;              // minimum confidence to place trade
 const COOLDOWN_AFTER_LOSS_MS = 30 * 60 * 1000; // 30-min pause after 2 consecutive losses
 
 class PolyBTCAgent extends BaseAgent {
@@ -41,8 +41,8 @@ class PolyBTCAgent extends BaseAgent {
       icon: 'polymarket',
       skills: [
         { id: 'market_scan', name: 'Market Scanner',   description: 'Finds the current active BTC Up or Down 15m market', enabled: true },
-        { id: 'poly_signal', name: 'Prob Signal',      description: 'Reads Up-token momentum — rising prob = LONG, falling = SHORT', enabled: true },
-        { id: 'poly_trade',  name: 'Poly Trade',       description: `Places $${TRADE_SIZE_USDC} USDC on Up or Down tokens via CLOB`, enabled: true },
+        { id: 'poly_signal', name: 'Prob Signal',      description: 'Extremity (Up<35% or >65%) + momentum slope — fires immediately without warm-up', enabled: true },
+        { id: 'poly_trade',  name: 'Poly Trade',       description: `Places $${TRADE_SIZE_USDC} USDC on Up or Down tokens via CLOB every 5 min`, enabled: true },
         { id: 'cooldown',    name: 'Loss Cooldown',    description: '30-min pause after 2 consecutive losses', enabled: true },
       ],
     };
@@ -70,10 +70,16 @@ class PolyBTCAgent extends BaseAgent {
     // Read the Up/Down signal for the current 15m market
     let signal;
     try {
-      signal = await getBTCUpDownSignal({ lookbackReadings: 3, minChange: 0.005 });
+      signal = await getBTCUpDownSignal({ lookbackReadings: 3, minChange: 0.003 });
     } catch (err) {
       this.addActivity('error', `Signal fetch failed: ${err.message}`);
       return { ok: false, error: err.message };
+    }
+
+    if (!signal.upTokenId) {
+      this.addActivity('warning', 'BTC Up/Down 15m market not found on Polymarket — retrying in 5 min');
+      bLog.error('[POLY-BTC] Market not found via Gamma API');
+      return { ok: false, reason: 'no_market' };
     }
 
     this._lastSignal = signal;

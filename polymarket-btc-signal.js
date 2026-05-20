@@ -67,6 +67,7 @@ const UP_HISTORY_MAX  = 30; // keep last 30 readings
 /**
  * Find the current active "BTC Up or Down 15m" Polymarket market.
  * Returns { upTokenId, downTokenId, question, slug } or null.
+ * Tries 4 progressively broader strategies so it always finds the market.
  */
 async function getBTC15mMarket() {
   const nowMs = Date.now();
@@ -74,56 +75,74 @@ async function getBTC15mMarket() {
     return _btc15mMarket;
   }
 
-  // Strategy 1: events endpoint — look for btc-updown slug family
-  try {
-    const events = await _fetchJson(
-      `${GAMMA_API}/events?active=true&closed=false&limit=50&tag_slug=bitcoin`
+  // Helper: check if a market/event is the BTC Up or Down 15m market
+  const isTarget = (slug = '', question = '') => {
+    const s = slug.toLowerCase();
+    const q = question.toLowerCase();
+    return (
+      (s.includes('btc-updown') || s.includes('btc-up-or-down') || s.includes('updown-15')) ||
+      (q.includes('up or down') && (q.includes('btc') || q.includes('bitcoin')) && q.includes('15'))
     );
-    const evList = Array.isArray(events) ? events : (events?.data || events?.events || []);
-    for (const ev of evList) {
-      const slug = (ev.slug || '').toLowerCase();
-      if (!slug.includes('btc-updown') && !slug.includes('btc-up-or-down') && !slug.includes('updown')) continue;
-      if (!slug.includes('15')) continue;
+  };
 
-      // Events have nested markets
-      const mktList = ev.markets || [];
-      for (const mkt of mktList) {
-        const found = _extractUpDown(mkt, ev.slug, ev.title);
+  // Strategy 1: events — bitcoin tag
+  // Strategy 2: events — crypto tag
+  // Strategy 3: events — no tag filter (broader)
+  // Strategy 4: markets — broad search
+  const eventUrls = [
+    `${GAMMA_API}/events?active=true&closed=false&limit=50&tag_slug=bitcoin`,
+    `${GAMMA_API}/events?active=true&closed=false&limit=50&tag_slug=crypto`,
+    `${GAMMA_API}/events?active=true&closed=false&limit=100`,
+  ];
+
+  for (const url of eventUrls) {
+    try {
+      const events = await _fetchJson(url);
+      const evList = Array.isArray(events) ? events : (events?.data || events?.events || []);
+      for (const ev of evList) {
+        if (!isTarget(ev.slug, ev.title || ev.question || '')) continue;
+
+        // Nested markets
+        for (const mkt of (ev.markets || [])) {
+          const found = _extractUpDown(mkt, ev.slug, ev.title || ev.question);
+          if (found) {
+            _btc15mMarket = { ...found, fetchedAt: nowMs };
+            console.log(`[poly-btc-signal] Found 15m market via events: "${found.question}"`);
+            return _btc15mMarket;
+          }
+        }
+        // Event-level tokens
+        const found = _extractUpDown(ev, ev.slug, ev.title || ev.question);
         if (found) {
           _btc15mMarket = { ...found, fetchedAt: nowMs };
+          console.log(`[poly-btc-signal] Found 15m market (event-level): "${found.question}"`);
           return _btc15mMarket;
         }
       }
+    } catch (_) {}
+  }
 
-      // Event itself may carry token data
-      const found = _extractUpDown(ev, ev.slug, ev.title);
-      if (found) {
-        _btc15mMarket = { ...found, fetchedAt: nowMs };
-        return _btc15mMarket;
+  // Strategy 4: markets endpoint — broader
+  for (const url of [
+    `${GAMMA_API}/markets?active=true&closed=false&limit=200&tag_slug=bitcoin`,
+    `${GAMMA_API}/markets?active=true&closed=false&limit=200&tag_slug=crypto`,
+  ]) {
+    try {
+      const markets = await _fetchJson(url);
+      const list = Array.isArray(markets) ? markets : (markets?.data || markets?.markets || []);
+      for (const m of list) {
+        if (!isTarget(m.slug, m.question || '')) continue;
+        const found = _extractUpDown(m, m.slug, m.question);
+        if (found) {
+          _btc15mMarket = { ...found, fetchedAt: nowMs };
+          console.log(`[poly-btc-signal] Found 15m market via markets: "${found.question}"`);
+          return _btc15mMarket;
+        }
       }
-    }
-  } catch (_) {}
+    } catch (_) {}
+  }
 
-  // Strategy 2: markets endpoint with question search
-  try {
-    const markets = await _fetchJson(
-      `${GAMMA_API}/markets?active=true&closed=false&limit=100&tag_slug=bitcoin`
-    );
-    const list = Array.isArray(markets) ? markets : (markets?.data || markets?.markets || []);
-    for (const m of list) {
-      const q    = (m.question || '').toLowerCase();
-      const slug = (m.slug    || '').toLowerCase();
-      const isUpDown = (q.includes('up or down') || slug.includes('updown')) && q.includes('15');
-      if (!isUpDown) continue;
-      const found = _extractUpDown(m, m.slug, m.question);
-      if (found) {
-        _btc15mMarket = { ...found, fetchedAt: nowMs };
-        return _btc15mMarket;
-      }
-    }
-  } catch (_) {}
-
-  console.warn('[poly-btc-signal] BTC Up or Down 15m market not found via Gamma API');
+  console.warn('[poly-btc-signal] BTC Up or Down 15m market not found — will retry next cycle');
   return null;
 }
 
@@ -171,7 +190,22 @@ function _extractUpDown(obj, slug, question) {
  *   downTokenId:string,
  * }>}
  */
-async function getBTCUpDownSignal({ lookbackReadings = 3, minChange = 0.005 } = {}) {
+/**
+ * Signal for the "BTC Up or Down 15m" market.
+ *
+ * Two independent signal layers — whichever is stronger wins:
+ *
+ * A) Extremity signal (fires immediately, no history needed):
+ *    If the Up-token price is extreme (crowd is very one-sided),
+ *    bet with the crowd. Up < 0.35 → SHORT (crowd says down),
+ *    Up > 0.65 → LONG (crowd says up).
+ *
+ * B) Momentum signal (requires ≥2 readings in rolling history):
+ *    If Up-token price is rising → LONG, falling → SHORT.
+ *
+ * Returns the stronger signal; falls back to NEUTRAL if both weak.
+ */
+async function getBTCUpDownSignal({ lookbackReadings = 3, minChange = 0.003 } = {}) {
   const NEUTRAL = (market = '', upTokenId = '', downTokenId = '') => ({
     direction: 'NEUTRAL', confidence: 0, upPrice: 0.5, downPrice: 0.5,
     change: 0, market, upTokenId, downTokenId,
@@ -186,27 +220,53 @@ async function getBTCUpDownSignal({ lookbackReadings = 3, minChange = 0.005 } = 
 
   const downPrice = 1 - upPrice;
 
-  // Store in rolling history
-  _upTokenHistory.push({ ts_ms: Date.now(), price: upPrice });
+  // Store in rolling history (keyed by market slug to avoid mixing markets)
+  _upTokenHistory.push({ ts_ms: Date.now(), price: upPrice, slug: mkt.slug });
   if (_upTokenHistory.length > UP_HISTORY_MAX) _upTokenHistory.shift();
 
-  // Need at least 2 readings to compute direction
-  if (_upTokenHistory.length < 2) {
-    return { ...NEUTRAL(mkt.question, mkt.upTokenId, mkt.downTokenId), upPrice, downPrice };
+  // ── Layer A: Extremity signal (immediate — no history needed) ──
+  // When crowd is ≥65% one-sided, bet with the crowd.
+  const EXTREME_THRESHOLD = 0.35; // fire if Up < 35% or Down < 35%
+  let extDirection  = 'NEUTRAL';
+  let extConfidence = 0;
+
+  if (upPrice < EXTREME_THRESHOLD) {
+    extDirection  = 'SHORT'; // crowd strongly expects DOWN
+    extConfidence = Math.round((EXTREME_THRESHOLD - upPrice) / EXTREME_THRESHOLD * 100);
+  } else if (upPrice > (1 - EXTREME_THRESHOLD)) {
+    extDirection  = 'LONG';  // crowd strongly expects UP
+    extConfidence = Math.round((upPrice - (1 - EXTREME_THRESHOLD)) / EXTREME_THRESHOLD * 100);
   }
 
-  // Use last N readings for slope
-  const window = _upTokenHistory.slice(-Math.max(lookbackReadings, 2));
-  const oldest = window[0].price;
-  const latest = window[window.length - 1].price;
-  const change = latest - oldest;
+  // ── Layer B: Momentum signal (slope over last N readings) ──
+  // Only use readings from the current market slug to avoid stale data
+  const sameMarket = _upTokenHistory.filter(h => h.slug === mkt.slug);
+  let momDirection  = 'NEUTRAL';
+  let momConfidence = 0;
+  let change        = 0;
 
-  // Confidence: 0.02 change → 100 confidence
-  const confidence = Math.min(100, Math.round(Math.abs(change) / 0.02 * 100));
+  if (sameMarket.length >= 2) {
+    const window = sameMarket.slice(-Math.max(lookbackReadings, 2));
+    const oldest = window[0].price;
+    const latest = window[window.length - 1].price;
+    change = latest - oldest;
+    // Confidence: 0.02 prob change = 100%
+    momConfidence = Math.min(100, Math.round(Math.abs(change) / 0.02 * 100));
+    if (change >  minChange) momDirection = 'LONG';
+    if (change < -minChange) momDirection = 'SHORT';
+  }
 
-  let direction = 'NEUTRAL';
-  if (change >  minChange) direction = 'LONG';
-  if (change < -minChange) direction = 'SHORT';
+  // ── Pick the stronger signal ──
+  let direction  = 'NEUTRAL';
+  let confidence = 0;
+
+  if (extConfidence >= momConfidence && extDirection !== 'NEUTRAL') {
+    direction  = extDirection;
+    confidence = extConfidence;
+  } else if (momDirection !== 'NEUTRAL') {
+    direction  = momDirection;
+    confidence = momConfidence;
+  }
 
   return {
     direction,
