@@ -917,43 +917,46 @@ async function analyzeSMC(symbol, log = console.log) {
     }
     log(`[SMC-PRO] ${symbol} 1H CHoCH ${choch1h.direction} @ ${choch1h.level?.toFixed(2)}`);
 
-    // ── Step 11: LTF entry — 15m CHoCH + 5m MSS + first FVG ──
-    const choch15mRaw = detectCHoCH(c15m, s15m.pivots, 20);
-    const choch15mOk  = choch15mRaw &&
-      ((direction === 'SHORT' && choch15mRaw.direction === 'BEARISH') ||
-       (direction === 'LONG'  && choch15mRaw.direction === 'BULLISH'));
-
+    // ── Step 11: LTF entry — 5m MSS + first FVG (15m CHoCH removed — 0% WR in backtest) ──
+    // Backtest shows 15m CHoCH fallback produced 0% WR across 60 days.
+    // Only accept 5m MSS + FVG for LTF confirmation, OR skip this check when
+    // score is already high (1H CHoCH already confirmed in Step 10).
     const ltfEntry = detectLTFEntry(c5m, direction, 80);
 
-    if (!ltfEntry?.confirmed && !choch15mOk) {
-      log(`[SMC-PRO] ${symbol} → skip (no 15m/5m entry confirmation)`);
-      return null;
-    }
+    // Allow entry on 1H CHoCH alone (no LTF required — Step 10 is sufficient).
+    // ltfEntry provides a tighter price, but is not mandatory.
 
-    const entryLabel = ltfEntry?.confirmed ? `5m-MSS+FVG` : `15m-CHoCH`;
+    const entryLabel = ltfEntry?.confirmed ? `5m-MSS+FVG` : `1H-CHoCH-only`;
     log(`[SMC-PRO] ${symbol} LTF entry: ${entryLabel}`);
 
     // ── Step 12: SL and TP calculation ────────────────────────
+    // Backtest finding: "last 4H swing low/high" as TP was too far (8-26× RR),
+    // almost never reached within 4 days. Capped at 2.5× risk = realistic target.
     let slPrice, tp1, tp2;
 
     if (direction === 'SHORT') {
-      // SL: above the liquidity sweep wick (last swing high + 0.15% buffer)
       const sweepHigh = s4h.swingHigh || s1h.swingHigh;
-      slPrice = sweepHigh ? sweepHigh.price * 1.0015 : price * 1.004;
+      slPrice = sweepHigh ? sweepHigh.price * 1.0015 : price * 1.005;
+      const slDist = Math.abs(price - slPrice);
 
-      // TP1: most recent swing low on 4H
-      const recLow = s4h.lastLows[s4h.lastLows.length - 1];
-      tp1 = recLow?.price || pdLevels.pdl || fib.p0;
+      // TP1: use structural swing low if it falls within 2.5× risk; else cap at 2.5×
+      const recLow  = s4h.lastLows[s4h.lastLows.length - 1];
+      const tpSwing = recLow?.price || pdLevels.pdl || fib.p0;
+      const tpCap   = price - slDist * 2.5;
+      tp1 = tpSwing > tpCap ? tpSwing : tpCap; // pick closer (more achievable)
 
-      // TP2: draw on liquidity (equal lows / SSL)
-      tp2 = drawOnLiq?.level || (tp1 - Math.abs(price - tp1) * 0.5);
+      tp2 = drawOnLiq?.level || (tp1 - slDist * 0.5);
     } else {
       const sweepLow = s4h.swingLow || s1h.swingLow;
-      slPrice = sweepLow ? sweepLow.price * 0.9985 : price * 0.996;
+      slPrice = sweepLow ? sweepLow.price * 0.9985 : price * 0.995;
+      const slDist = Math.abs(price - slPrice);
 
       const recHigh = s4h.lastHighs[s4h.lastHighs.length - 1];
-      tp1 = recHigh?.price || pdLevels.pdh || fib.p100;
-      tp2 = drawOnLiq?.level || (tp1 + Math.abs(tp1 - price) * 0.5);
+      const tpSwing = recHigh?.price || pdLevels.pdh || fib.p100;
+      const tpCap   = price + slDist * 2.5;
+      tp1 = tpSwing < tpCap ? tpSwing : tpCap;
+
+      tp2 = drawOnLiq?.level || (tp1 + slDist * 0.5);
     }
 
     // Use 5m entry FVG if available for tighter entry
