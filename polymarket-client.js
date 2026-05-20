@@ -194,6 +194,8 @@ async function buildClobClient(privateKey) {
       const t = Object.fromEntries(Object.entries(types).filter(([k]) => k !== 'EIP712Domain'));
       return wallet.signTypedData(domain, t, message);
     },
+    // ethers v5 compatibility — SDK calls signer.getAddress() internally
+    getAddress:       async () => address,
     requestAddresses: async () => [address],
     getAddresses:     async () => [address],
   };
