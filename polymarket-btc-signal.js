@@ -58,118 +58,84 @@ async function _get15mHistory(tokenId, hoursBack = 4) {
 
 // Cache: { upTokenId, downTokenId, question, slug, fetchedAt }
 let _btc15mMarket = null;
-const MARKET_REFRESH_MS = 12 * 60 * 1000; // refresh every 12 min (market resolves every 15m)
 
-// Rolling price history for the Up token  { ts_ms, price }[]
+// Rolling price history for the Up token — { ts_ms, price, slug }[]
 const _upTokenHistory = [];
-const UP_HISTORY_MAX  = 30; // keep last 30 readings
+const UP_HISTORY_MAX  = 30;
+
+// Slot size for "BTC Up or Down 15m" markets (seconds)
+const SLOT_SEC = 900; // 15 × 60
+
+/**
+ * Compute the slug for the 15m market that is active RIGHT NOW.
+ * Slug format: btc-updown-15m-{unix_start_of_current_slot}
+ * where start = floor(now_sec / 900) * 900  (UTC 15-min boundaries)
+ */
+function _currentSlugAndNeighbours() {
+  const nowSec     = Math.floor(Date.now() / 1000);
+  const currentStart = Math.floor(nowSec / SLOT_SEC) * SLOT_SEC;
+  return [
+    `btc-updown-15m-${currentStart}`,           // current window
+    `btc-updown-15m-${currentStart - SLOT_SEC}`, // previous (might still be tradeable)
+    `btc-updown-15m-${currentStart + SLOT_SEC}`, // next (might open early)
+  ];
+}
 
 /**
  * Find the current active "BTC Up or Down 15m" Polymarket market.
+ * Uses computed slug — no tag search needed.
  * Returns { upTokenId, downTokenId, question, slug } or null.
- * Tries 4 progressively broader strategies so it always finds the market.
  */
 async function getBTC15mMarket() {
   const nowMs = Date.now();
-  if (_btc15mMarket && nowMs - _btc15mMarket.fetchedAt < MARKET_REFRESH_MS) {
+  // Refresh every 13 min — well before next 15-min slot opens
+  if (_btc15mMarket && nowMs - _btc15mMarket.fetchedAt < 13 * 60_000) {
     return _btc15mMarket;
   }
 
-  // Helper: check if a market/event is the BTC Up or Down 15m market
-  const isTarget = (slug = '', question = '') => {
-    const s = slug.toLowerCase();
-    const q = question.toLowerCase();
-    return (
-      (s.includes('btc-updown') || s.includes('btc-up-or-down') || s.includes('updown-15')) ||
-      (q.includes('up or down') && (q.includes('btc') || q.includes('bitcoin')) && q.includes('15'))
-    );
-  };
+  const slugs = _currentSlugAndNeighbours();
 
-  // Strategy 1: events — bitcoin tag
-  // Strategy 2: events — crypto tag
-  // Strategy 3: events — no tag filter (broader)
-  // Strategy 4: markets — broad search
-  const eventUrls = [
-    `${GAMMA_API}/events?active=true&closed=false&limit=50&tag_slug=bitcoin`,
-    `${GAMMA_API}/events?active=true&closed=false&limit=50&tag_slug=crypto`,
-    `${GAMMA_API}/events?active=true&closed=false&limit=100`,
-  ];
-
-  for (const url of eventUrls) {
+  for (const slug of slugs) {
     try {
-      const events = await _fetchJson(url);
-      const evList = Array.isArray(events) ? events : (events?.data || events?.events || []);
-      for (const ev of evList) {
-        if (!isTarget(ev.slug, ev.title || ev.question || '')) continue;
+      const ev = await _fetchJson(`${GAMMA_API}/events?slug=${slug}`);
+      // Gamma returns an array when queried with ?slug=
+      const event = Array.isArray(ev) ? ev[0] : ev;
+      if (!event?.markets?.length) continue;
 
-        // Nested markets
-        for (const mkt of (ev.markets || [])) {
-          const found = _extractUpDown(mkt, ev.slug, ev.title || ev.question);
-          if (found) {
-            _btc15mMarket = { ...found, fetchedAt: nowMs };
-            console.log(`[poly-btc-signal] Found 15m market via events: "${found.question}"`);
-            return _btc15mMarket;
-          }
-        }
-        // Event-level tokens
-        const found = _extractUpDown(ev, ev.slug, ev.title || ev.question);
-        if (found) {
-          _btc15mMarket = { ...found, fetchedAt: nowMs };
-          console.log(`[poly-btc-signal] Found 15m market (event-level): "${found.question}"`);
-          return _btc15mMarket;
-        }
-      }
-    } catch (_) {}
+      const mkt      = event.markets[0];
+      const tokenIds = mkt.clobTokenIds || [];
+      const outcomes = mkt.outcomes     || [];
+
+      // Outcomes are ["Up","Down"] in index order matching clobTokenIds
+      const upIdx   = outcomes.findIndex(o => o.toLowerCase() === 'up');
+      const downIdx = outcomes.findIndex(o => o.toLowerCase() === 'down');
+
+      const upTokenId   = tokenIds[upIdx   >= 0 ? upIdx   : 0] || null;
+      const downTokenId = tokenIds[downIdx >= 0 ? downIdx : 1] || null;
+
+      if (!upTokenId || !downTokenId) continue;
+
+      _btc15mMarket = {
+        upTokenId,
+        downTokenId,
+        slug,
+        question: mkt.question || event.title || slug,
+        fetchedAt: nowMs,
+        closed: mkt.closed || event.closed || false,
+      };
+      console.log(
+        `[poly-btc-signal] Market: "${_btc15mMarket.question}" ` +
+        `Up=${upTokenId.slice(0, 10)}... Down=${downTokenId.slice(0, 10)}... ` +
+        `closed=${_btc15mMarket.closed}`
+      );
+      return _btc15mMarket;
+    } catch (e) {
+      console.warn(`[poly-btc-signal] slug ${slug} fetch failed: ${e.message}`);
+    }
   }
 
-  // Strategy 4: markets endpoint — broader
-  for (const url of [
-    `${GAMMA_API}/markets?active=true&closed=false&limit=200&tag_slug=bitcoin`,
-    `${GAMMA_API}/markets?active=true&closed=false&limit=200&tag_slug=crypto`,
-  ]) {
-    try {
-      const markets = await _fetchJson(url);
-      const list = Array.isArray(markets) ? markets : (markets?.data || markets?.markets || []);
-      for (const m of list) {
-        if (!isTarget(m.slug, m.question || '')) continue;
-        const found = _extractUpDown(m, m.slug, m.question);
-        if (found) {
-          _btc15mMarket = { ...found, fetchedAt: nowMs };
-          console.log(`[poly-btc-signal] Found 15m market via markets: "${found.question}"`);
-          return _btc15mMarket;
-        }
-      }
-    } catch (_) {}
-  }
-
-  console.warn('[poly-btc-signal] BTC Up or Down 15m market not found — will retry next cycle');
+  console.warn('[poly-btc-signal] No active BTC Up/Down 15m market found');
   return null;
-}
-
-function _extractUpDown(obj, slug, question) {
-  const tokens = obj.tokens || obj.clobTokenIds || [];
-  if (!tokens.length) return null;
-
-  // tokens can be objects { outcome, token_id } or raw strings
-  let upTokenId   = null;
-  let downTokenId = null;
-
-  for (const t of tokens) {
-    const outcome = (t.outcome || t.name || '').toLowerCase();
-    const id      = t.token_id || t.id || t.tokenId || (typeof t === 'string' ? t : null);
-    if (!id) continue;
-    if (outcome === 'up'   || outcome === 'yes') upTokenId   = id;
-    if (outcome === 'down' || outcome === 'no')  downTokenId = id;
-  }
-
-  // Some markets only have 2 tokens without named outcomes — assign by index
-  if (!upTokenId && !downTokenId && tokens.length === 2) {
-    upTokenId   = tokens[0]?.token_id || tokens[0]?.id || tokens[0];
-    downTokenId = tokens[1]?.token_id || tokens[1]?.id || tokens[1];
-  }
-
-  if (!upTokenId || !downTokenId) return null;
-  return { upTokenId, downTokenId, slug: slug || '', question: question || '' };
 }
 
 /**
