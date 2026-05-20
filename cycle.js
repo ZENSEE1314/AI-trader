@@ -107,9 +107,9 @@ function injectTVSignal(signal) {
 }
 
 let TOKEN_LEVERAGE = {
-  BTCUSDT: 75,  // 0.40% SL × 75 = 30% risk/trade (uniform 75x — backtest-proven)
-  ETHUSDT: 75,  // 0.40% SL × 75 = 30% risk/trade
-  SOLUSDT: 75,  // 0.40% SL × 75 = 30% risk/trade
+  BTCUSDT: 125, // 125x — higher return per TP hit
+  ETHUSDT: 125,
+  SOLUSDT: 125,
 };
 
 async function loadV4Config() {
