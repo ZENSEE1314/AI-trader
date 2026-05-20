@@ -917,6 +917,31 @@ async function analyzeSMC(symbol, log = console.log) {
     }
     log(`[SMC-PRO] ${symbol} 1H CHoCH ${choch1h.direction} @ ${choch1h.level?.toFixed(2)}`);
 
+    // ── Step 10b: 15M CHoCH — conflict guard ─────────────────────
+    // If the 15M structure recently flipped AGAINST our direction, skip.
+    // This is the most common cause of bad entries: 4H says SHORT but
+    // 15M has just made a BULLISH CHoCH (HL forming after LL) — entering
+    // SHORT there means trading into a confirmed LTF reversal.
+    // Only block if the CHoCH is recent (within last 3 hours = 12 bars on 15m).
+    const choch15mRaw = detectCHoCH(c15m, s15m.pivots, 30);
+    let choch15mOk = false;
+
+    if (choch15mRaw) {
+      const ageMs    = nowMs - (choch15mRaw.candleTs || 0);
+      const isRecent = ageMs < 3 * 3_600_000; // within 3 hours
+      const conflictsShort = direction === 'SHORT' && choch15mRaw.direction === 'BULLISH' && isRecent;
+      const conflictsLong  = direction === 'LONG'  && choch15mRaw.direction === 'BEARISH' && isRecent;
+
+      if (conflictsShort || conflictsLong) {
+        log(`[SMC-PRO] ${symbol} → skip (15M CHoCH=${choch15mRaw.direction} ${Math.round(ageMs/60000)}m ago conflicts ${direction} — LTF reversal against trade)`);
+        return null;
+      }
+
+      // Aligns with direction → bonus for score
+      choch15mOk = choch15mRaw.direction === (direction === 'LONG' ? 'BULLISH' : 'BEARISH');
+    }
+    log(`[SMC-PRO] ${symbol} 15M CHoCH: ${choch15mRaw ? `${choch15mRaw.direction} (${Math.round((nowMs - (choch15mRaw.candleTs||0))/60000)}m ago)` : 'none'} aligned=${choch15mOk}`);
+
     // ── Step 11: LTF entry — 5m MSS + first FVG (15m CHoCH removed — 0% WR in backtest) ──
     // Backtest shows 15m CHoCH fallback produced 0% WR across 60 days.
     // Only accept 5m MSS + FVG for LTF confirmation, OR skip this check when
