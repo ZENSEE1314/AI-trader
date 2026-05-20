@@ -202,8 +202,21 @@ async function buildClobClient(privateKey) {
 
   // SignatureType.EOA (0) = direct EOA wallet, no Polymarket proxy contract.
   const tempClient = new ClobClient(CLOB_HOST, CHAIN_ID, signer, undefined, SignatureType.EOA, address);
-  const creds = await tempClient.createOrDeriveApiKey();
-  console.log(`[POLY-CLOB] L2 creds derived: key=${creds?.key?.slice(0,8)}... ok=${!!creds?.key}`);
+
+  // Use deriveApiKey (GET /auth/derive-api-key) instead of createOrDeriveApiKey.
+  // createOrDeriveApiKey always POSTs a NEW key — every restart creates a fresh key,
+  // and distributed CLOB nodes may not have replicated it yet → order_version_mismatch.
+  // deriveApiKey is deterministic: same wallet + nonce=0 → same L2 creds every time.
+  let creds;
+  try {
+    creds = await tempClient.deriveApiKey();
+    console.log(`[POLY-CLOB] L2 creds derived (derive): key=${creds?.key?.slice(0,8)}... ok=${!!creds?.key}`);
+  } catch (deriveErr) {
+    // Brand-new wallet with no key yet — create one, then derive on next call
+    console.warn(`[POLY-CLOB] deriveApiKey failed (${deriveErr.message}), creating new key...`);
+    creds = await tempClient.createApiKey();
+    console.log(`[POLY-CLOB] L2 creds created: key=${creds?.key?.slice(0,8)}... ok=${!!creds?.key}`);
+  }
 
   const client = new ClobClient(CLOB_HOST, CHAIN_ID, signer, creds, SignatureType.EOA, address);
 
@@ -242,7 +255,13 @@ async function placeCopyOrder({ client, tokenId, side, price, usdcAmount, tickSi
 
   // Throw on error responses so the caller sees the failure
   if (resp?.error || resp?.status === 400 || resp?.status === 'failed') {
-    throw new Error(`CLOB order rejected: ${resp.error || JSON.stringify(resp)}`);
+    const errMsg = resp.error || JSON.stringify(resp);
+    // order_version_mismatch → stale L2 key cached, purge cache so next call re-derives
+    if (errMsg === 'order_version_mismatch') {
+      _clobClientCache.clear();
+      console.warn('[POLY-CLOB] order_version_mismatch — CLOB client cache cleared, will re-derive on next call');
+    }
+    throw new Error(`CLOB order rejected: ${errMsg}`);
   }
 
   // FOK (Fill-or-Kill) orders get "unmatched" or "killed" when no counter-party exists.

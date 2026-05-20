@@ -198,14 +198,24 @@ class PolyBTCAgent extends BaseAgent {
       `bid=${bidPrice} usdc=$${TRADE_SIZE_USDC}`
     );
 
-    const result = await placeCopyOrder({
-      client,
-      tokenId,
-      side:       'BUY',
-      price:      bidPrice,
-      usdcAmount: TRADE_SIZE_USDC,
-      negRisk:    signal.negRisk !== false, // default true — most Polymarket markets use neg-risk exchange
-    });
+    let result;
+    try {
+      result = await placeCopyOrder({
+        client,
+        tokenId,
+        side:       'BUY',
+        price:      bidPrice,
+        usdcAmount: TRADE_SIZE_USDC,
+        negRisk:    signal.negRisk !== false, // default true — most Polymarket markets use neg-risk exchange
+      });
+    } catch (orderErr) {
+      // If key mismatch, purge cached client so next call rebuilds with fresh deriveApiKey
+      if (orderErr.message.includes('order_version_mismatch')) {
+        this._clobClients.delete(row.id);
+        bLog.error('[POLY-BTC] order_version_mismatch — client cache cleared, will re-derive on next trade');
+      }
+      throw orderErr;
+    }
 
     // Persist to DB (best-effort)
     await this._recordTrade({ signal, tokenId, label, midPrice: bidPrice, result, row }).catch(() => {});
