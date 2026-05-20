@@ -399,14 +399,33 @@ router.get('/futures-wallet', async (req, res) => {
 
       if (key.platform === 'polymarket') {
         try {
-          const { getPolymarketWalletData } = require('../polymarket-client');
-          const privateKey = cryptoUtils.decrypt(key.api_key_enc, key.iv, key.auth_tag);
-          const snap = await getPolymarketWalletData(privateKey);
-          balance       = snap.balance;
-          available     = snap.available;
-          unrealizedPnl = snap.unrealizedPnl;
-          positions     = snap.positions;
-          console.log(`[dashboard] Polymarket ${snap.address} — CLOB balance: $${balance.toFixed(2)}, positions: ${positions}, uPnL: $${unrealizedPnl.toFixed(2)}`);
+          // Use the PolymarketAgent's existing CLOB client — it's already authenticated
+          // and has proven to work (copy trades fire through it).
+          const { getCoordinator } = require('../agents');
+          const coordinator = getCoordinator();
+          const polyAgent = coordinator?._agents?.get('polymarket');
+
+          if (polyAgent?.getWalletBalances) {
+            const balances = await polyAgent.getWalletBalances();
+            const keyBal   = balances.find(b => b.keyId === key.id);
+            if (keyBal) {
+              balance   = keyBal.balance;
+              available = keyBal.balance;
+              console.log(`[dashboard] Polymarket ${keyBal.address} balance via agent: $${balance}`);
+            }
+          }
+
+          if (balance === 0) {
+            // Fallback: build fresh CLOB client
+            const { getPolymarketWalletData } = require('../polymarket-client');
+            const privateKey = cryptoUtils.decrypt(key.api_key_enc, key.iv, key.auth_tag);
+            const snap = await getPolymarketWalletData(privateKey);
+            balance       = snap.balance;
+            available     = snap.available;
+            unrealizedPnl = snap.unrealizedPnl;
+            positions     = snap.positions;
+            console.log(`[dashboard] Polymarket fallback ${snap.address}: $${balance}`);
+          }
         } catch (err) {
           console.error(`[dashboard] Polymarket balance fetch failed: ${err.message}`);
         }

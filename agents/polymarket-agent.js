@@ -289,6 +289,42 @@ class PolymarketAgent extends BaseAgent {
     };
   }
 
+  // ── Wallet balance (for dashboard) ────────────────────────
+  // Reuses the already-connected CLOB client — no re-auth needed.
+
+  async getWalletBalances() {
+    const { AssetType, SignatureType } = require('@polymarket/clob-client');
+    const keys = await this._loadPolymarketKeys().catch(() => []);
+    const results = [];
+
+    for (const key of keys) {
+      let balance = 0;
+      let address = '';
+
+      try {
+        // Use cached client if available, else build it
+        if (!this._clobClients.has(key.id)) {
+          const built = await buildClobClient(key.privateKey);
+          this._clobClients.set(key.id, built);
+        }
+        const { client, address: addr } = this._clobClients.get(key.id);
+        address = addr;
+
+        const ba = await client.getBalanceAllowance({
+          asset_type:     AssetType.COLLATERAL,
+          signature_type: SignatureType.EOA,
+        });
+        bLog.trade(`[POLY] getBalanceAllowance for ${addr}: ${JSON.stringify(ba)}`);
+        balance = parseFloat(ba?.balance ?? ba?.data?.balance ?? 0);
+      } catch (e) {
+        bLog.error(`[POLY] getWalletBalances failed for key ${key.id}: ${e.message}`);
+      }
+
+      results.push({ keyId: key.id, label: key.label, address, balance });
+    }
+    return results;
+  }
+
   getHealth() {
     return {
       ...super.getHealth(),
