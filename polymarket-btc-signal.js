@@ -102,16 +102,16 @@ async function getBTC15mMarket() {
       const event = Array.isArray(ev) ? ev[0] : ev;
       if (!event?.markets?.length) continue;
 
-      const mkt      = event.markets[0];
-      const tokenIds = mkt.clobTokenIds || [];
-      const outcomes = mkt.outcomes     || [];
+      const mkt = event.markets[0];
+      // clobTokenIds can come back as a JSON string — parse if needed
+      let tokenIds = mkt.clobTokenIds || [];
+      if (typeof tokenIds === 'string') {
+        try { tokenIds = JSON.parse(tokenIds); } catch { tokenIds = []; }
+      }
 
-      // Outcomes are ["Up","Down"] in index order matching clobTokenIds
-      const upIdx   = outcomes.findIndex(o => o.toLowerCase() === 'up');
-      const downIdx = outcomes.findIndex(o => o.toLowerCase() === 'down');
-
-      const upTokenId   = tokenIds[upIdx   >= 0 ? upIdx   : 0] || null;
-      const downTokenId = tokenIds[downIdx >= 0 ? downIdx : 1] || null;
+      // BTC Up/Down 15m markets: Up = index 0, Down = index 1
+      const upTokenId   = tokenIds[0] || null;
+      const downTokenId = tokenIds[1] || null;
 
       if (!upTokenId || !downTokenId) continue;
 
