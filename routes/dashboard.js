@@ -476,6 +476,47 @@ router.get('/futures-wallet', async (req, res) => {
   }
 });
 
+// ── GET /debug-poly — diagnose Polymarket wallet balance (temp) ──
+router.get('/debug-poly', async (req, res) => {
+  const { ethers } = require('ethers');
+  const fetch = require('node-fetch');
+  const out = { steps: [] };
+  try {
+    const rows = await query(
+      `SELECT id, api_key_enc, iv, auth_tag FROM api_keys WHERE user_id=$1 AND platform='polymarket' AND enabled=true LIMIT 1`,
+      [req.userId]
+    );
+    if (!rows.length) return res.json({ error: 'No Polymarket key found in DB' });
+
+    const raw = cryptoUtils.decrypt(rows[0].api_key_enc, rows[0].iv, rows[0].auth_tag);
+    out.rawType = typeof raw;
+    out.rawPreview = String(raw).slice(0, 12) + '...';
+
+    const pk = String(raw).trim();
+    const finalKey = pk.startsWith('0x') ? pk : `0x${pk}`;
+    const wallet = new ethers.Wallet(finalKey);
+    out.address = wallet.address;
+
+    const DATA_API = 'https://data-api.polymarket.com';
+    const checks = [
+      `${DATA_API}/value?user=${wallet.address}`,
+      `${DATA_API}/positions?user=${wallet.address}&limit=5`,
+    ];
+    for (const url of checks) {
+      try {
+        const r = await fetch(url, { timeout: 8000 });
+        const body = await r.text();
+        out.steps.push({ url: url.replace(DATA_API, ''), status: r.status, body: body.slice(0, 300) });
+      } catch (e) {
+        out.steps.push({ url, error: e.message });
+      }
+    }
+  } catch (e) {
+    out.error = e.message;
+  }
+  res.json(out);
+});
+
 // Weekly earnings with profit split (rolling 7-day window from last payment)
 router.get('/weekly-earnings', async (req, res) => {
   try {
