@@ -156,15 +156,10 @@ class PolymarketAgent extends BaseAgent {
       }
 
       for (const key of keys) {
-        // Use per-key capital settings (fall back to agent-level defaults)
-        const keyMultiplier   = parseFloat(key.pm_multiplier    || this.multiplier);
-        const keyMaxPerTrade  = parseFloat(key.pm_max_per_trade  || this.maxUsdcPerTrade);
-        const usdcToCopy      = Math.min(trade.usdcAmount * keyMultiplier, keyMaxPerTrade);
-
-        if (usdcToCopy < 1) {
-          this.addActivity('skip', `Trade too small to copy for ${key.email}: $${usdcToCopy.toFixed(2)}`);
-          continue;
-        }
+        // Fixed USDC amount per copy — always trade exactly pm_max_per_trade ($1).
+        // We do NOT scale by the target's trade size; every detected trade gets a
+        // fixed flat bet so small target trades are never skipped.
+        const usdcToCopy = parseFloat(key.pm_max_per_trade || this.maxUsdcPerTrade);
 
         const result = await this._executeCopy(key, trade, usdcToCopy, midPrice || trade.price);
         results.push(result);
@@ -261,7 +256,7 @@ class PolymarketAgent extends BaseAgent {
       const rows = await db.query(
         `SELECT ak.id, ak.api_key_enc, ak.iv, ak.auth_tag, ak.label,
                 COALESCE(ak.pm_budget_usdc,   200) as pm_budget_usdc,
-                COALESCE(ak.pm_max_per_trade,  50) as pm_max_per_trade,
+                COALESCE(ak.pm_max_per_trade, 1) as pm_max_per_trade,
                 COALESCE(ak.pm_multiplier,    0.1) as pm_multiplier,
                 u.email, u.id as user_id
          FROM api_keys ak

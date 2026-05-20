@@ -60,11 +60,12 @@ async function _getTokenMidPrice(tokenId) {
 
 async function _get15mHistory(tokenId, hoursBack = 4) {
   try {
-    const startTs = Math.floor((Date.now() - hoursBack * 3600_000) / 1000);
-    const url = `${CLOB_HOST}/prices-history?token_id=${tokenId}&interval=max&fidelity=15&start_ts=${startTs}`;
+    // CLOB API requires 'market', 'startTs', 'endTs' (not token_id / start_ts)
+    const endTs   = Math.floor(Date.now() / 1000);
+    const startTs = endTs - hoursBack * 3600;
+    const url = `${CLOB_HOST}/prices-history?market=${tokenId}&fidelity=15&startTs=${startTs}&endTs=${endTs}`;
     const data = await _fetchJson(url);
     const candles = data?.history || data?.prices || [];
-    // Normalise to [{ts_ms, price}]
     return candles.map(c => ({
       ts_ms: (c.t || c.ts || 0) * 1000,
       price: parseFloat(c.p || c.price || c.c || 0),

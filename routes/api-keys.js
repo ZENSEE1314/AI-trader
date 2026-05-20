@@ -22,7 +22,7 @@ router.get('/', async (req, res) => {
                 COALESCE(rl.description, 'Balanced risk profile') as risk_level_description,
                 COALESCE(ak.trader_mode, false) as trader_mode,
                 COALESCE(ak.pm_budget_usdc,   200) as pm_budget_usdc,
-                COALESCE(ak.pm_max_per_trade,  50) as pm_max_per_trade,
+                COALESCE(ak.pm_max_per_trade, 1) as pm_max_per_trade,
                 COALESCE(ak.pm_multiplier,    0.1) as pm_multiplier,
                 substring(ak.api_key_enc, 1, 8) as key_preview, ak.created_at
          FROM api_keys ak
@@ -43,7 +43,7 @@ router.get('/', async (req, res) => {
                 'Balanced risk profile' as risk_level_description,
                 COALESCE(ak.trader_mode, false) as trader_mode,
                 COALESCE(ak.pm_budget_usdc,   200) as pm_budget_usdc,
-                COALESCE(ak.pm_max_per_trade,  50) as pm_max_per_trade,
+                COALESCE(ak.pm_max_per_trade, 1) as pm_max_per_trade,
                 COALESCE(ak.pm_multiplier,    0.1) as pm_multiplier,
                 substring(ak.api_key_enc, 1, 8) as key_preview, ak.created_at
          FROM api_keys ak
