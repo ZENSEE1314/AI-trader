@@ -260,54 +260,53 @@ async function placeCopyOrder({ client, tokenId, side, price, usdcAmount, tickSi
 }
 
 /**
- * Fetch the full Polymarket wallet snapshot for the dashboard:
- *   - USDC balance available in the CLOB (funds inside Polymarket)
- *   - Open positions with current market value
- *   - Unrealized PnL across open positions
+ * Fetch the full Polymarket wallet snapshot for the dashboard.
+ * Uses public Data API — no CLOB authentication required.
  *
  * @param {string} privateKey  Raw hex private key
- * @returns {Promise<{balance, available, unrealizedPnl, positions, positionList}>}
+ * @returns {Promise<{balance, available, unrealizedPnl, positions, address}>}
  */
 async function getPolymarketWalletData(privateKey) {
-  const { client, address } = await buildClobClient(privateKey);
+  const pk      = privateKey.startsWith('0x') ? privateKey : `0x${privateKey}`;
+  const address = new ethers.Wallet(pk).address;
 
-  // ── CLOB balance (USDC inside Polymarket, ready to trade) ──
-  let balance = 0;
+  let totalValue    = 0;
+  let unrealizedPnl = 0;
+  let positionCount = 0;
+  let positionValue = 0;
+
+  // ── Total portfolio value (public, no auth) ────────────────
   try {
-    // AssetType.COLLATERAL = 'COLLATERAL' (USDC), SignatureType.EOA = 0
-    const ba = await client.getBalanceAllowance({ asset_type: AssetType.COLLATERAL, signature_type: SignatureType.EOA });
-    console.log('[polymarket] getBalanceAllowance raw:', JSON.stringify(ba));
-    balance = parseFloat(ba?.balance || ba?.data?.balance || 0);
+    const vRes  = await _get(`${DATA_API}/value?user=${address}`);
+    const vList = Array.isArray(vRes) ? vRes : [vRes];
+    totalValue  = parseFloat(vList[0]?.value || vList[0]?.portfolioValue || 0);
   } catch (e) {
-    console.warn(`[polymarket] getBalanceAllowance failed: ${e.message}`);
+    console.warn(`[polymarket] /value fetch failed: ${e.message}`);
   }
 
-  // ── Open positions from Data API ───────────────────────────
-  let unrealizedPnl = 0;
-  let positionList  = [];
+  // ── Open positions (public, no auth) ──────────────────────
   try {
-    const positions = await getUserPositions(address);
-    positionList = positions;
-
-    for (const pos of positions) {
-      if (!pos.tokenId || pos.size <= 0) continue;
-      const mid = await getMidPrice(pos.tokenId).catch(() => 0);
-      if (mid > 0 && pos.avgPrice > 0) {
-        const currentVal = pos.size * mid;
-        const costBasis  = pos.size * pos.avgPrice;
-        unrealizedPnl += currentVal - costBasis;
-      }
+    const pRes  = await _get(`${DATA_API}/positions?user=${address}&limit=100`);
+    const pList = Array.isArray(pRes) ? pRes : (pRes?.data || pRes?.positions || []);
+    positionCount = pList.length;
+    for (const p of pList) {
+      unrealizedPnl += parseFloat(p.cashPnl || p.unrealizedPnl || 0);
+      positionValue += parseFloat(p.currentValue || p.value || 0);
     }
   } catch (e) {
-    console.warn(`[polymarket] positions fetch failed: ${e.message}`);
+    console.warn(`[polymarket] /positions fetch failed: ${e.message}`);
   }
 
+  // Available = total portfolio value minus capital tied up in positions
+  const available = Math.max(0, totalValue - positionValue);
+
+  console.log(`[polymarket] ${address} — total: $${totalValue.toFixed(2)}, pos: ${positionCount}, posVal: $${positionValue.toFixed(2)}, avail: $${available.toFixed(2)}, uPnL: $${unrealizedPnl.toFixed(2)}`);
+
   return {
-    balance,
-    available:     balance,
-    unrealizedPnl: parseFloat(unrealizedPnl.toFixed(4)),
-    positions:     positionList.length,
-    positionList,
+    balance:       totalValue,
+    available:     parseFloat(available.toFixed(2)),
+    unrealizedPnl: parseFloat(unrealizedPnl.toFixed(2)),
+    positions:     positionCount,
     address,
   };
 }
