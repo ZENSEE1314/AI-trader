@@ -2269,16 +2269,22 @@ async function executeForAllUsers(pick) {
             await notify(`*${symbol} ${pick.direction}*\nPosition opened but *SL failed to set!*\nSet manually on Binance NOW.`);
           }
 
-          const bnTpRef = bnTpPrice ?? fmtP(userTpPrice);
+          // SMC-PRO: store tp1 as soft target, tp2 as runner target (monitored in syncTradeStatus)
+          const isSmcProBn = (pick.setupName || pick.setup || '').includes('SMC');
+          const bnTpRef    = isSmcProBn && pick.tp1
+            ? fmtP(pick.tp1)
+            : (bnTpPrice ?? fmtP(userTpPrice));
+          const bnTp2Ref   = isSmcProBn && pick.tp2 ? fmtP(pick.tp2) : 0;
+
           await db.query(
             `INSERT INTO trades (api_key_id, user_id, symbol, direction, entry_price, sl_price, tp_price, quantity, leverage, status,
-             trailing_sl_price, trailing_sl_last_step, tf_15m, tf_3m, tf_1m, market_structure, key_trailing_sl_step, setup)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'OPEN', $10, 0, $11, $12, $13, $14, $15, $16)`,
+             trailing_sl_price, trailing_sl_last_step, tf_15m, tf_3m, tf_1m, market_structure, key_trailing_sl_step, setup, tp2_price)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'OPEN', $10, 0, $11, $12, $13, $14, $15, $16, $17)`,
             [key.id, key.user_id, symbol, pick.direction, price, fmtP(slPrice), bnTpRef, qty, userLev,
              fmtP(slPrice),
              null, pick.structure?.tf3m || null, pick.structure?.tf1m || null,
              pick.marketStructure || null, userTrailStep,
-             pick.setupName || pick.setup || null]
+             pick.setupName || pick.setup || null, bnTp2Ref]
           );
           userLog.trade(`Binance OK: ${key.email} ${symbol} ${pick.direction} x${userLev} qty=${qty} entry=$${fmtPrice(price)} SL=$${fmtPrice(slPrice)} ${bnTpPrice ? `TP=$${fmtPrice(bnTpPrice)}` : `TP(ref)=$${fmtPrice(userTpPrice)}`}`);
           log(`Binance OK: ${key.email} ${symbol} ${pick.direction} x${userLev}`);
@@ -2471,21 +2477,26 @@ async function executeForAllUsers(pick) {
             }
 
             // Hard TP: only RANGE_BOUNCE and SCENARIO_A have a ceiling — store the actual TP price.
-            // All other setups (V4-SMC, etc.) trail freely — store 0 so the trail watchdog
-            // never accidentally re-sets a TP on the exchange when updating the SL.
-            const tpRef = (isScenarioA || isRangeBounce) && bxTpPrice ? bxTpPrice : 0;
+            // SMC-PRO: store tp1 as tp_price (soft TP1 level, monitored in software for partial close)
+            //          and tp2 in tp2_price (runner target after SL moves to TP1).
+            // All other setups trail freely — store 0.
+            const isSmcPro = (pick.setupName || pick.setup || '').includes('SMC');
+            const tpRef = (isScenarioA || isRangeBounce) && bxTpPrice
+              ? bxTpPrice
+              : (isSmcPro && pick.tp1 ? parseFloat(parseFloat(pick.tp1).toFixed(8)) : 0);
+            const tp2Ref = isSmcPro && pick.tp2 ? parseFloat(parseFloat(pick.tp2).toFixed(8)) : 0;
 
             const insertedRows = await db.query(
               `INSERT INTO trades (api_key_id, user_id, symbol, direction, entry_price, sl_price, tp_price, quantity, leverage, status,
-               trailing_sl_price, trailing_sl_last_step, tf_15m, tf_3m, tf_1m, market_structure, key_trailing_sl_step, bitunix_position_id, setup)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'OPEN', $10, 0, $11, $12, $13, $14, $15, $16, $17)
+               trailing_sl_price, trailing_sl_last_step, tf_15m, tf_3m, tf_1m, market_structure, key_trailing_sl_step, bitunix_position_id, setup, tp2_price)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'OPEN', $10, 0, $11, $12, $13, $14, $15, $16, $17, $18)
                RETURNING id`,
               [key.id, key.user_id, symbol, pick.direction, actualEntry,
                slFmtActual || 0, parseFloat(tpRef.toFixed(8)), qty, userLev,
                slFmtActual || 0,
                null, pick.structure?.tf3m || null, pick.structure?.tf1m || null,
                pick.marketStructure || null, userTrailStep, posId || null,
-               pick.setupName || pick.setup || null]
+               pick.setupName || pick.setup || null, tp2Ref]
             );
             tradeDbInserted = true;
             const insertedTradeId = insertedRows[0]?.id || null;
@@ -2511,15 +2522,18 @@ async function executeForAllUsers(pick) {
             userLog.error(`Bitunix position not found after order — verify on exchange`);
             await notify(`*Bitunix ${symbol}*\nOrder placed but position not found. Check Bitunix manually.`);
 
+            const isSmcProFb = (pick.setupName || pick.setup || '').includes('SMC');
+            const tp1Fb  = isSmcProFb && pick.tp1 ? parseFloat(parseFloat(pick.tp1).toFixed(8)) : 0;
+            const tp2Fb  = isSmcProFb && pick.tp2 ? parseFloat(parseFloat(pick.tp2).toFixed(8)) : 0;
             await db.query(
               `INSERT INTO trades (api_key_id, user_id, symbol, direction, entry_price, sl_price, tp_price, quantity, leverage, status,
-               trailing_sl_price, trailing_sl_last_step, tf_15m, tf_3m, tf_1m, market_structure, key_trailing_sl_step, setup)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'OPEN', $10, 0, $11, $12, $13, $14, $15, $16)`,
+               trailing_sl_price, trailing_sl_last_step, tf_15m, tf_3m, tf_1m, market_structure, key_trailing_sl_step, setup, tp2_price)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'OPEN', $10, 0, $11, $12, $13, $14, $15, $16, $17)`,
               [key.id, key.user_id, symbol, pick.direction, price,
-               parseFloat(slPrice.toFixed(8)), 0, qty, userLev, parseFloat(slPrice.toFixed(8)),
+               parseFloat(slPrice.toFixed(8)), tp1Fb, qty, userLev, parseFloat(slPrice.toFixed(8)),
                null, pick.structure?.tf3m || null, pick.structure?.tf1m || null,
                pick.marketStructure || null, userTrailStep,
-               pick.setupName || pick.setup || null]
+               pick.setupName || pick.setup || null, tp2Fb]
             );
             tradeDbInserted = true;
           }
@@ -2887,6 +2901,75 @@ async function syncTradeStatus() {
               const currentSlBin = parseFloat(trade.trailing_sl_price) || parseFloat(trade.sl_price) || 0;
               bLog.trade(`Binance trail check: ${trade.symbol} cur=$${fmtPrice(curPrice)} entry=$${entryPrice} pricePct=${(pricePctDebug*100).toFixed(3)}% capitalPct=${(capitalPctDebug*100).toFixed(2)}% lev=${tradeLev}x currentSL=$${currentSlBin.toFixed(binSlPrec)}`);
 
+              // ── SMC TP1-hit (Binance): close 50%, lock SL at TP1, ride runner to TP2 ──
+              const bnSmcTp1 = parseFloat(trade.tp_price)  || 0;
+              const bnSmcTp2 = parseFloat(trade.tp2_price) || 0;
+              const bnTp1Hit = trade.smc_tp1_hit === true || trade.smc_tp1_hit === 't';
+
+              if (bnSmcTp1 > 0 && bnSmcTp2 > 0 && !bnTp1Hit) {
+                const tp1Reached = isLong ? curPrice >= bnSmcTp1 : curPrice <= bnSmcTp1;
+                if (tp1Reached) {
+                  bLog.trade(`[SMC-TP1-BN] ${trade.symbol} TP1 hit @ $${curPrice} — closing 50%, locking SL at TP1`);
+                  const closeSideBn = isLong ? 'SELL' : 'BUY';
+                  const curAmtBn    = Math.abs(exchangePos.amt);
+                  const closeQtyBn  = Math.floor(curAmtBn * 0.5 * 1e8) / 1e8;
+
+                  try {
+                    if (closeQtyBn > 0) {
+                      await userClient.submitNewOrder({ symbol: trade.symbol, side: closeSideBn, type: 'MARKET', quantity: closeQtyBn, reduceOnly: true });
+                      bLog.trade(`[SMC-TP1-BN] ${trade.symbol} 50% closed (qty=${closeQtyBn})`);
+                    }
+                  } catch (bnTp1CloseErr) {
+                    bLog.error(`[SMC-TP1-BN] ${trade.symbol} 50% close failed: ${bnTp1CloseErr.message}`);
+                  }
+
+                  try {
+                    const bnSlFmt = parseFloat(bnSmcTp1.toFixed(binSlPrec));
+                    await updateStopLoss(userClient, trade.symbol, bnSlFmt, closeSideBn, 'binance', binSlPrec, bnSmcTp2 || undefined);
+                    bLog.trade(`[SMC-TP1-BN] ${trade.symbol} SL locked at TP1=$${bnSlFmt}`);
+                  } catch (bnTp1SlErr) {
+                    bLog.error(`[SMC-TP1-BN] ${trade.symbol} SL move to TP1 failed: ${bnTp1SlErr.message}`);
+                  }
+
+                  try {
+                    await db.query(
+                      `UPDATE trades SET smc_tp1_hit = true, trailing_sl_price = $1, sl_price = $1, tp_price = $2 WHERE id = $3`,
+                      [bnSmcTp1, bnSmcTp2, trade.id]
+                    );
+                  } catch (bnTp1DbErr) {
+                    bLog.error(`[SMC-TP1-BN] ${trade.symbol} DB update failed: ${bnTp1DbErr.message}`);
+                  }
+
+                  await notify(
+                    `✅ *SMC TP1 Hit!* — *${trade.symbol}* ${isLong ? 'LONG' : 'SHORT'}\n` +
+                    `Closed 50% @ \`$${fmtPrice(curPrice)}\`\n` +
+                    `SL locked at TP1 \`$${fmtPrice(bnSmcTp1)}\` — zero-risk runner\n` +
+                    `Riding 50% → TP2 \`$${fmtPrice(bnSmcTp2)}\``
+                  );
+                  continue;
+                }
+              }
+
+              // ── SMC TP2-hit (Binance): close remaining runner ──
+              if (bnSmcTp1 > 0 && bnSmcTp2 > 0 && bnTp1Hit) {
+                const tp2Reached = isLong ? curPrice >= bnSmcTp2 : curPrice <= bnSmcTp2;
+                if (tp2Reached) {
+                  bLog.trade(`[SMC-TP2-BN] ${trade.symbol} TP2 hit @ $${curPrice} — closing remaining`);
+                  const closeSideBn2 = isLong ? 'SELL' : 'BUY';
+                  try {
+                    await userClient.submitNewOrder({ symbol: trade.symbol, side: closeSideBn2, type: 'MARKET', quantity: Math.abs(exchangePos.amt), reduceOnly: true });
+                    await db.query(`UPDATE trades SET status = 'CLOSED', exit_reason = 'smc_tp2', closed_at = NOW() WHERE id = $1`, [trade.id]);
+                    await notify(
+                      `🎯 *SMC TP2 Hit!* — *${trade.symbol}* ${isLong ? 'LONG' : 'SHORT'}\n` +
+                      `Runner closed @ \`$${fmtPrice(curPrice)}\` — trade complete`
+                    );
+                  } catch (bnTp2Err) {
+                    bLog.error(`[SMC-TP2-BN] ${trade.symbol} runner close failed: ${bnTp2Err.message}`);
+                  }
+                  continue;
+                }
+              }
+
               // ── Candle-low trail: move SL to last completed 15m candle low/high ──
               let binNewSl = null;
               let binSlSource = '';
@@ -3119,6 +3202,98 @@ async function syncTradeStatus() {
                 bLog.error(`WATCHDOG: ALL price methods failed for ${trade.symbol} — cannot trail SL!`);
                 await notify(`⚠️ *TRAILING SL BROKEN*\n${trade.symbol}: all price sources failed!\nManual check needed.`);
                 continue;
+              }
+
+              // ── SMC TP1-hit: close 50% and lock SL at TP1, ride runner to TP2 ──
+              // Triggered once per trade (smc_tp1_hit flag prevents repeat).
+              // When price reaches TP1: partial close 50%, SL moves to TP1 (zero-risk runner),
+              // tp_price updates to TP2 so the next check monitors for the final target.
+              const smcTp1Price = parseFloat(trade.tp_price)  || 0;
+              const smcTp2Price = parseFloat(trade.tp2_price) || 0;
+              const tp1AlreadyHit = trade.smc_tp1_hit === true || trade.smc_tp1_hit === 't';
+
+              if (smcTp1Price > 0 && smcTp2Price > 0 && !tp1AlreadyHit) {
+                const tp1Hit = isLong ? curPrice >= smcTp1Price : curPrice <= smcTp1Price;
+                if (tp1Hit) {
+                  bLog.trade(`[SMC-TP1] ${trade.symbol} TP1 hit @ $${curPrice} (TP1=$${smcTp1Price}) — closing 50%, locking SL at TP1`);
+                  const bxSlPrecTp = inferPricePrec(trade.sl_price);
+                  const closeSideTp = isLong ? 'SELL' : 'BUY';
+                  const curQtyTp = Math.abs(exchangePos.amt);
+                  const closeQtyTp = Math.floor(curQtyTp * 0.5 * 1e8) / 1e8; // 50%, floor to 8dp
+
+                  // 1. Close 50%
+                  try {
+                    if (closeQtyTp > 0) {
+                      await userClient.placeOrder({
+                        symbol: trade.symbol,
+                        side: closeSideTp,
+                        qty: String(closeQtyTp),
+                        orderType: 'MARKET',
+                        tradeSide: 'CLOSE',
+                      });
+                      bLog.trade(`[SMC-TP1] ${trade.symbol} 50% closed (qty=${closeQtyTp})`);
+                    }
+                  } catch (tp1CloseErr) {
+                    bLog.error(`[SMC-TP1] ${trade.symbol} 50% close failed: ${tp1CloseErr.message}`);
+                  }
+
+                  // 2. Move SL to TP1 (lock in profit on the runner)
+                  try {
+                    const slTp1Fmt = parseFloat(smcTp1Price.toFixed(bxSlPrecTp));
+                    await updateStopLoss(userClient, trade.symbol, slTp1Fmt, null, 'bitunix', bxSlPrecTp, smcTp2Price || undefined);
+                    bLog.trade(`[SMC-TP1] ${trade.symbol} SL locked at TP1=$${slTp1Fmt}`);
+                  } catch (tp1SlErr) {
+                    bLog.error(`[SMC-TP1] ${trade.symbol} SL move to TP1 failed: ${tp1SlErr.message}`);
+                  }
+
+                  // 3. Update DB: flag hit, advance tp_price → TP2, lock trailing_sl at TP1
+                  try {
+                    await db.query(
+                      `UPDATE trades SET smc_tp1_hit = true, trailing_sl_price = $1, sl_price = $1, tp_price = $2 WHERE id = $3`,
+                      [smcTp1Price, smcTp2Price, trade.id]
+                    );
+                  } catch (tp1DbErr) {
+                    bLog.error(`[SMC-TP1] ${trade.symbol} DB update failed: ${tp1DbErr.message}`);
+                  }
+
+                  await notify(
+                    `✅ *SMC TP1 Hit!* — *${trade.symbol}* ${isLong ? 'LONG' : 'SHORT'}\n` +
+                    `Closed 50% @ \`$${fmtPrice(curPrice)}\`\n` +
+                    `SL locked at TP1 \`$${fmtPrice(smcTp1Price)}\` — zero-risk runner\n` +
+                    `Riding 50% → TP2 \`$${fmtPrice(smcTp2Price)}\``
+                  );
+                  continue; // skip regular trailing SL this cycle — SL already updated
+                }
+              }
+
+              // ── SMC TP2-hit: close remaining 50% when TP2 reached ──
+              if (smcTp1Price > 0 && smcTp2Price > 0 && tp1AlreadyHit) {
+                const tp2Hit = isLong ? curPrice >= smcTp2Price : curPrice <= smcTp2Price;
+                if (tp2Hit) {
+                  bLog.trade(`[SMC-TP2] ${trade.symbol} TP2 hit @ $${curPrice} — closing remaining position`);
+                  const closeSideTp2 = isLong ? 'SELL' : 'BUY';
+                  try {
+                    await userClient.placeOrder({
+                      symbol: trade.symbol,
+                      side: closeSideTp2,
+                      qty: String(Math.abs(exchangePos.amt)),
+                      orderType: 'MARKET',
+                      tradeSide: 'CLOSE',
+                    });
+                    await db.query(
+                      `UPDATE trades SET status = 'CLOSED', exit_reason = 'smc_tp2', closed_at = NOW() WHERE id = $1`,
+                      [trade.id]
+                    );
+                    await notify(
+                      `🎯 *SMC TP2 Hit!* — *${trade.symbol}* ${isLong ? 'LONG' : 'SHORT'}\n` +
+                      `Full position closed @ \`$${fmtPrice(curPrice)}\`\n` +
+                      `TP2 \`$${fmtPrice(smcTp2Price)}\` reached — trade complete`
+                    );
+                  } catch (tp2Err) {
+                    bLog.error(`[SMC-TP2] ${trade.symbol} close failed: ${tp2Err.message}`);
+                  }
+                  continue;
+                }
               }
 
               // ── Step 2: Calculate profit & trailing step ──

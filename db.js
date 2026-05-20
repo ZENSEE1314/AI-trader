@@ -428,6 +428,9 @@ async function initAllTables() {
     `ALTER TABLE trades ADD COLUMN IF NOT EXISTS bitunix_position_id VARCHAR(64)`,
     // Exit reason — recorded when bot closes a trade (triple_ma, spike_hl, swarm, etc.)
     `ALTER TABLE trades ADD COLUMN IF NOT EXISTS exit_reason VARCHAR(100)`,
+    // SMC partial-TP runner: tp2 target price + flag that TP1 was already processed
+    `ALTER TABLE trades ADD COLUMN IF NOT EXISTS tp2_price NUMERIC DEFAULT 0`,
+    `ALTER TABLE trades ADD COLUMN IF NOT EXISTS smc_tp1_hit BOOLEAN DEFAULT false`,
     // User token watchlist (which tokens each user wants to trade)
     `CREATE TABLE IF NOT EXISTS user_watchlist (
       id SERIAL PRIMARY KEY,
