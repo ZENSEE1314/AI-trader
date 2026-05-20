@@ -159,91 +159,76 @@ async function getBTC15mMarket() {
 /**
  * Signal for the "BTC Up or Down 15m" market.
  *
- * Two independent signal layers — whichever is stronger wins:
+ * Strategy: bet WITH the crowd direction when it has any edge.
+ * The Up-token price = crowd probability BTC goes up.
  *
- * A) Extremity signal (fires immediately, no history needed):
- *    If the Up-token price is extreme (crowd is very one-sided),
- *    bet with the crowd. Up < 0.35 → SHORT (crowd says down),
- *    Up > 0.65 → LONG (crowd says up).
+ *   Up > 0.55 → crowd leans LONG  → BUY Up token
+ *   Up < 0.45 → crowd leans SHORT → BUY Down token
+ *   0.45–0.55 → too close to call → NEUTRAL (skip)
  *
- * B) Momentum signal (requires ≥2 readings in rolling history):
- *    If Up-token price is rising → LONG, falling → SHORT.
+ * Fires on FIRST call — no warm-up, no history needed.
+ * Confidence = how far the crowd is from 50/50 (0–100 scale).
  *
- * Returns the stronger signal; falls back to NEUTRAL if both weak.
+ * Also returns bestAsk for Up/Down so the caller can bid correctly.
  */
-async function getBTCUpDownSignal({ lookbackReadings = 3, minChange = 0.003 } = {}) {
+async function getBTCUpDownSignal() {
   const NEUTRAL = (market = '', upTokenId = '', downTokenId = '') => ({
     direction: 'NEUTRAL', confidence: 0, upPrice: 0.5, downPrice: 0.5,
-    change: 0, market, upTokenId, downTokenId,
+    upAsk: 0.5, downAsk: 0.5, market, upTokenId, downTokenId,
   });
 
   const mkt = await getBTC15mMarket();
-  if (!mkt) return NEUTRAL();
+  if (!mkt)            return NEUTRAL();
+  if (mkt.closed)      return NEUTRAL(mkt.question, mkt.upTokenId, mkt.downTokenId);
 
-  // Get live mid-price for Up token
-  const upPrice = await _getTokenMidPrice(mkt.upTokenId);
-  if (!upPrice || upPrice <= 0 || upPrice >= 1) return NEUTRAL(mkt.question, mkt.upTokenId, mkt.downTokenId);
+  // Get live orderbook for both tokens in parallel
+  const [upData, downData] = await Promise.all([
+    _getTokenBook(mkt.upTokenId),
+    _getTokenBook(mkt.downTokenId),
+  ]);
+
+  const upPrice = upData.mid;
+  if (!upPrice || upPrice <= 0 || upPrice >= 1) {
+    return NEUTRAL(mkt.question, mkt.upTokenId, mkt.downTokenId);
+  }
 
   const downPrice = 1 - upPrice;
+  const deviation = upPrice - 0.5;                         // positive = crowd leans up
+  const confidence = Math.min(100, Math.round(Math.abs(deviation) / 0.5 * 100));
 
-  // Store in rolling history (keyed by market slug to avoid mixing markets)
-  _upTokenHistory.push({ ts_ms: Date.now(), price: upPrice, slug: mkt.slug });
-  if (_upTokenHistory.length > UP_HISTORY_MAX) _upTokenHistory.shift();
-
-  // ── Layer A: Extremity signal (immediate — no history needed) ──
-  // When crowd is ≥65% one-sided, bet with the crowd.
-  const EXTREME_THRESHOLD = 0.35; // fire if Up < 35% or Down < 35%
-  let extDirection  = 'NEUTRAL';
-  let extConfidence = 0;
-
-  if (upPrice < EXTREME_THRESHOLD) {
-    extDirection  = 'SHORT'; // crowd strongly expects DOWN
-    extConfidence = Math.round((EXTREME_THRESHOLD - upPrice) / EXTREME_THRESHOLD * 100);
-  } else if (upPrice > (1 - EXTREME_THRESHOLD)) {
-    extDirection  = 'LONG';  // crowd strongly expects UP
-    extConfidence = Math.round((upPrice - (1 - EXTREME_THRESHOLD)) / EXTREME_THRESHOLD * 100);
-  }
-
-  // ── Layer B: Momentum signal (slope over last N readings) ──
-  // Only use readings from the current market slug to avoid stale data
-  const sameMarket = _upTokenHistory.filter(h => h.slug === mkt.slug);
-  let momDirection  = 'NEUTRAL';
-  let momConfidence = 0;
-  let change        = 0;
-
-  if (sameMarket.length >= 2) {
-    const window = sameMarket.slice(-Math.max(lookbackReadings, 2));
-    const oldest = window[0].price;
-    const latest = window[window.length - 1].price;
-    change = latest - oldest;
-    // Confidence: 0.02 prob change = 100%
-    momConfidence = Math.min(100, Math.round(Math.abs(change) / 0.02 * 100));
-    if (change >  minChange) momDirection = 'LONG';
-    if (change < -minChange) momDirection = 'SHORT';
-  }
-
-  // ── Pick the stronger signal ──
-  let direction  = 'NEUTRAL';
-  let confidence = 0;
-
-  if (extConfidence >= momConfidence && extDirection !== 'NEUTRAL') {
-    direction  = extDirection;
-    confidence = extConfidence;
-  } else if (momDirection !== 'NEUTRAL') {
-    direction  = momDirection;
-    confidence = momConfidence;
-  }
+  const MIN_DEVIATION = 0.05; // need at least 55/45 split to trade
+  let direction = 'NEUTRAL';
+  if (deviation >  MIN_DEVIATION) direction = 'LONG';
+  if (deviation < -MIN_DEVIATION) direction = 'SHORT';
 
   return {
     direction,
     confidence,
     upPrice,
     downPrice,
-    change,
-    market:      mkt.question,
+    upAsk:   upData.ask,
+    downAsk: downData.ask,
+    market:  mkt.question,
     upTokenId:   mkt.upTokenId,
     downTokenId: mkt.downTokenId,
   };
+}
+
+/** Fetch mid + best ask for a token from the CLOB orderbook. */
+async function _getTokenBook(tokenId) {
+  try {
+    const [midData, bookData] = await Promise.all([
+      _fetchJson(`${CLOB_HOST}/midpoint?token_id=${tokenId}`).catch(() => null),
+      _fetchJson(`${CLOB_HOST}/book?token_id=${tokenId}`).catch(() => null),
+    ]);
+    const mid = parseFloat(midData?.mid || midData?.midpoint || 0);
+    // asks are sorted ascending — lowest ask first
+    const asks = bookData?.asks || bookData?.data?.asks || [];
+    const bestAsk = asks.length > 0 ? parseFloat(asks[0]?.price || asks[0] || 0) : mid + 0.01;
+    return { mid, ask: bestAsk || mid + 0.01 };
+  } catch {
+    return { mid: 0, ask: 0 };
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════

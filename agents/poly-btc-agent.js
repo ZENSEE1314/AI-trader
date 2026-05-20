@@ -18,7 +18,7 @@ const { log: bLog } = require('../bot-logger');
 
 const TRADE_INTERVAL_MS      = 5 * 60 * 1000;  // 5 minutes — poll every 5m, bet when signal is clear
 const TRADE_SIZE_USDC        = 1;               // $1 USDC per bet
-const MIN_CONFIDENCE         = 20;              // minimum confidence to place trade
+const MIN_CONFIDENCE         = 10;              // 55/45 split or stronger is enough
 const COOLDOWN_AFTER_LOSS_MS = 30 * 60 * 1000; // 30-min pause after 2 consecutive losses
 
 class PolyBTCAgent extends BaseAgent {
@@ -70,14 +70,14 @@ class PolyBTCAgent extends BaseAgent {
     // Read the Up/Down signal for the current 15m market
     let signal;
     try {
-      signal = await getBTCUpDownSignal({ lookbackReadings: 3, minChange: 0.003 });
+      signal = await getBTCUpDownSignal();
     } catch (err) {
       this.addActivity('error', `Signal fetch failed: ${err.message}`);
       return { ok: false, error: err.message };
     }
 
     if (!signal.upTokenId) {
-      this.addActivity('warning', 'BTC Up/Down 15m market not found on Polymarket — retrying in 5 min');
+      this.addActivity('warning', 'BTC Up/Down 15m market not found — retrying in 5 min');
       bLog.error('[POLY-BTC] Market not found via Gamma API');
       return { ok: false, reason: 'no_market' };
     }
@@ -159,37 +159,37 @@ class PolyBTCAgent extends BaseAgent {
     const isLong  = signal.direction === 'LONG';
     const tokenId = isLong ? signal.upTokenId : signal.downTokenId;
     const label   = isLong ? 'Up' : 'Down';
+    // Use the ask price from signal (pre-fetched) so FOK order actually fills.
+    // Add 1 tick (0.01) buffer above ask as safety margin.
+    const askPrice = isLong ? signal.upAsk : signal.downAsk;
 
-    if (!tokenId) throw new Error(`No ${label} token ID in signal — market not found`);
+    if (!tokenId) throw new Error(`No ${label} token ID in signal`);
 
-    // Get live mid-price for this token
-    const midPrice = await getMidPrice(tokenId);
-    if (!midPrice || midPrice <= 0 || midPrice >= 1) {
-      throw new Error(`Invalid ${label} token mid-price: ${midPrice}`);
-    }
+    // Clamp price to valid prediction range
+    const bidPrice = Math.min(0.99, Math.max(0.01, parseFloat((askPrice + 0.01).toFixed(2))));
 
     bLog.trade(
-      `[POLY-BTC] Placing BUY ${label} | tokenId=${tokenId.slice(0, 10)} ` +
-      `price=${midPrice} usdc=$${TRADE_SIZE_USDC}`
+      `[POLY-BTC] Placing BUY ${label} | tokenId=${tokenId.slice(0, 10)}... ` +
+      `ask=${askPrice} bid=${bidPrice} usdc=$${TRADE_SIZE_USDC}`
     );
 
     const result = await placeCopyOrder({
       client,
       tokenId,
       side:       'BUY',
-      price:      midPrice,
+      price:      bidPrice,
       usdcAmount: TRADE_SIZE_USDC,
     });
 
     // Persist to DB (best-effort)
-    await this._recordTrade({ signal, tokenId, label, midPrice, result, row }).catch(() => {});
+    await this._recordTrade({ signal, tokenId, label, midPrice: bidPrice, result, row }).catch(() => {});
 
     return {
       ok:      true,
       orderId: result.orderId,
       side:    label,
       tokenId,
-      price:   midPrice,
+      price:   bidPrice,
       shares:  result.shares,
     };
   }
