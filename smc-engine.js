@@ -766,13 +766,27 @@ async function analyzeSMC(symbol, log = console.log) {
     const s15m    = analyzeStructure(c15m,    6, 2);
 
     // Primary bias: 4H (intermediate term) aligned with Daily
-    const bias4h    = s4h.bias;
+    let bias4h    = s4h.bias;
     const biasDaily = sDaily.bias;
+    const biasWeekly = sWeekly.bias;
 
-    // Skip if 4H is RANGING or 4H/Daily conflict strongly
+    // When 4H is RANGING, fall back to Daily + 1H consensus rather than skipping.
+    // SMC principle: higher-timeframe trending markets produce setups even on a
+    // ranging 4H (price consolidates before the next leg in the daily direction).
     if (bias4h === 'RANGING') {
-      log(`[SMC-PRO] ${symbol} → skip (4H=RANGING, no clear institutional bias)`);
-      return null;
+      const bias1h = s1h.bias;
+      // Use Daily bias if it is clear (not ranging) and 1H agrees or is neutral
+      if (biasDaily !== 'RANGING' && (bias1h === biasDaily || bias1h === 'RANGING')) {
+        bias4h = biasDaily; // promote Daily bias to drive direction
+        log(`[SMC-PRO] ${symbol} 4H=RANGING → using Daily bias (${biasDaily}) + 1H=${bias1h}`);
+      } else if (biasWeekly !== 'RANGING' && biasDaily !== 'RANGING' && biasWeekly === biasDaily) {
+        // Weekly + Daily both agree — strong HTF trend, promote anyway
+        bias4h = biasDaily;
+        log(`[SMC-PRO] ${symbol} 4H=RANGING but Weekly+Daily both ${biasDaily} → using that bias`);
+      } else {
+        log(`[SMC-PRO] ${symbol} → skip (4H=RANGING, Daily=${biasDaily} 1H=${bias1h} — no clear institutional bias)`);
+        return null;
+      }
     }
 
     const direction = bias4h === 'BULLISH' ? 'LONG' : 'SHORT';
@@ -827,12 +841,20 @@ async function analyzeSMC(symbol, log = console.log) {
     const inOTE      = fib.isOTE(price);
     const inDeepOTE  = fib.isDeepOTE(price);
 
-    if (direction === 'SHORT' && !inPremium) {
-      log(`[SMC-PRO] ${symbol} SHORT → skip (price=${price.toFixed(2)} NOT in PREMIUM, 50%=${fib.p500.toFixed(2)})`);
+    // Allow a 4% range buffer around the 50% line to account for microstructure noise.
+    // Price within 4% of range below 50% can still qualify for SHORT (and vice versa for LONG).
+    // This prevents missing setups where price is fractions below the midpoint.
+    const rangeSize    = fib.p100 - fib.p0;
+    const zoneBuffer   = rangeSize * 0.04;
+    const inPremiumBuf = price >= fib.p500 - zoneBuffer;
+    const inDiscountBuf= price <= fib.p500 + zoneBuffer;
+
+    if (direction === 'SHORT' && !inPremiumBuf) {
+      log(`[SMC-PRO] ${symbol} SHORT → skip (price=${price.toFixed(2)} NOT in PREMIUM, 50%=${fib.p500.toFixed(2)} buffer=${(fib.p500 - zoneBuffer).toFixed(2)})`);
       return null;
     }
-    if (direction === 'LONG' && !inDiscount) {
-      log(`[SMC-PRO] ${symbol} LONG → skip (price=${price.toFixed(2)} NOT in DISCOUNT, 50%=${fib.p500.toFixed(2)})`);
+    if (direction === 'LONG' && !inDiscountBuf) {
+      log(`[SMC-PRO] ${symbol} LONG → skip (price=${price.toFixed(2)} NOT in DISCOUNT, 50%=${fib.p500.toFixed(2)} buffer=${(fib.p500 + zoneBuffer).toFixed(2)})`);
       return null;
     }
     log(`[SMC-PRO] ${symbol} zone=${direction === 'SHORT' ? 'PREMIUM' : 'DISCOUNT'} OTE=${inOTE} DeepOTE=${inDeepOTE}`);

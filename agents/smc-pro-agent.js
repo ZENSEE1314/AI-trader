@@ -24,7 +24,7 @@ const { BaseAgent }  = require('./base-agent');
 const { analyzeSMC } = require('../smc-engine');
 const { log: bLog }  = require('../bot-logger');
 
-const ACTIVE_SYMBOLS   = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT'];
+const ACTIVE_SYMBOLS   = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'XRPUSDT', 'BNBUSDT'];
 const SCAN_INTERVAL_MS = 45_000;    // scan every 45 seconds
 const COOLDOWN_MS      = 3 * 3600_000; // 3-hour per-direction cooldown per symbol
 
@@ -80,7 +80,22 @@ class SMCProAgent extends BaseAgent {
     this._lastScanAt = now;
 
     this.currentTask = { description: 'Scanning 4H+1H+15m+5m SMC structure...', startedAt: now };
-    this.addActivity('info', `SMC scan — ${ACTIVE_SYMBOLS.join('/')} [4H+1H+15m+5m]`);
+
+    // Log session status so it is visible in every scan cycle
+    const utcHour = new Date().getUTCHours();
+    const utcMin  = new Date().getUTCMinutes();
+    const sessions = [
+      { name: 'Asian',    start:  1, end:  4 },
+      { name: 'London',   start:  7, end: 10 },
+      { name: 'NY-AM',    start: 12, end: 15 },
+      { name: 'NY-Silver',start: 15, end: 16 },
+      { name: 'NY-PM',    start: 18.5, end: 21 },
+    ];
+    const hFrac   = utcHour + utcMin / 60;
+    const session = sessions.find(s => hFrac >= s.start && hFrac < s.end);
+    const sessionLabel = session ? `🟢 ${session.name} KILLZONE` : `⚪ Off-session`;
+    bLog.scan(`[SMC-PRO] ${sessionLabel} — UTC ${String(utcHour).padStart(2,'0')}:${String(utcMin).padStart(2,'0')} — scanning ${ACTIVE_SYMBOLS.join('/')}`);
+    this.addActivity('info', `SMC scan ${sessionLabel} | ${ACTIVE_SYMBOLS.join('/')} [4H+1H+15m+5m]`);
 
     const signals = [];
 
@@ -122,7 +137,9 @@ class SMCProAgent extends BaseAgent {
     }
 
     // ── Route signals through coordinator's trade pipeline ────
-    // Same path as ChartAgent: RiskAgent → TraderAgent
+    // RiskAgent filters, then TraderAgent executes directly via execute().
+    // NOTE: traderAgent.receive() puts messages in an inbox that execute()
+    // never reads — must call execute({ signals }) directly instead.
     if (context.coordinator) {
       try {
         const riskAgent   = context.coordinator.riskAgent;
@@ -132,16 +149,15 @@ class SMCProAgent extends BaseAgent {
         if (riskAgent && !riskAgent.paused) {
           const riskResult = await riskAgent.run({ signals, openPositions: [] });
           approved = riskResult?.approved || signals; // fall back to all if risk unavailable
+          bLog.scan(`[SMC-PRO] RiskAgent: ${approved.length}/${signals.length} approved`);
         }
 
         if (approved.length && traderAgent && !traderAgent.paused) {
-          traderAgent.receive({
-            from:    'SMCProAgent',
-            type:    'signals',
-            payload: { signals: approved },
-            ts:      Date.now(),
-          });
-          this.addActivity('trade', `Routed ${approved.length} SMC signal(s) to TraderAgent`);
+          this.addActivity('trade', `Routing ${approved.length} SMC signal(s) → TraderAgent`);
+          bLog.trade(`[SMC-PRO] → TraderAgent.execute ${approved.length} signal(s): ${approved.map(s => `${s.symbol} ${s.direction} score=${s.score}`).join(', ')}`);
+          // Execute directly — traderAgent.receive() goes to an unread inbox
+          await traderAgent.execute({ signals: approved, mode: 'signals' });
+          this.addActivity('success', `TraderAgent executed ${approved.length} SMC signal(s)`);
         }
       } catch (err) {
         this.addActivity('error', `Signal routing failed: ${err.message}`);
