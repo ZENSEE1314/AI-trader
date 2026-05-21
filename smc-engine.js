@@ -1500,6 +1500,18 @@ function detectLH(window, curBar, slPct, ltfBars = null, ltfRecency = LTF_RECENC
   if (pivotBar.v < _avgVol(window) * 0.85) return null;
   if (curBar.bullish) return null;                         // entry bar must be falling
 
+  // ── HL escape hatch ────────────────────────────────────────
+  // If the most recent confirmed low is a HIGHER LOW (HL) that formed AFTER
+  // this LH pivot, the market already reversed upward — do NOT short.
+  // Pattern: LL → HL (rising lows) after LH means buyers absorbed the sell.
+  // The TV indicator shows "HL" on the right edge in exactly this scenario.
+  const allLows = _pivLows(window);
+  if (allLows.length >= 2) {
+    const lastL = allLows[allLows.length - 1];
+    const prevL = allLows[allLows.length - 2];
+    if (lastL.price > prevL.price && lastL.idx > curr.idx) return null; // HL post-dates LH → skip
+  }
+
   // ── LTF confirmation (cascade: 1m → 3m → pattern-only) ───────────
   if (ltfBars && !_confirmShortLTF(ltfBars, ltfRecency)) return null;
 
@@ -1547,6 +1559,15 @@ function detectHH(window, curBar, slPct, ltfBars = null, ltfRecency = LTF_RECENC
   if (!_isBearishRejection(pivotBar)) return null;
   if (pivotBar.v < _avgVol(window) * 0.85) return null;
   if (curBar.bullish) return null;
+
+  // ── HL escape hatch ────────────────────────────────────────
+  // If a higher low formed AFTER the HH pivot, buyers stepped in — don't short the HH fade.
+  const allLowsHH = _pivLows(window);
+  if (allLowsHH.length >= 2) {
+    const lastL = allLowsHH[allLowsHH.length - 1];
+    const prevL = allLowsHH[allLowsHH.length - 2];
+    if (lastL.price > prevL.price && lastL.idx > curr.idx) return null;
+  }
 
   // ── LTF confirmation (cascade: 1m → 3m → pattern-only) ───────────
   if (ltfBars && !_confirmShortLTF(ltfBars, ltfRecency)) return null;
@@ -1894,6 +1915,14 @@ function scan1mPatterns(sym, bars1m, bars4h, cooldowns = new Map()) {
     const dist = Math.abs(curr.price - c.c) / curr.price;
     if (dist > PAT_TOL) return null;
     if (c.bullish) return null; // entry bar must be falling
+    // HL escape hatch: if a higher low formed AFTER this LH, market reversed up — skip SHORT
+    // (TV indicator shows "HL" at the right edge — bot must agree and NOT short there)
+    const lows = _ind1mLows(w);
+    if (lows.length >= 2) {
+      const lastL = lows[lows.length - 1];
+      const prevL = lows[lows.length - 2];
+      if (lastL.price > prevL.price && lastL.idx > curr.idx) return null;
+    }
     return { pattern:'LH', dir:'SHORT', level:curr.price, slPrice:curr.price*(1+s), tp1:c.c*(1-TP1_PCT), tp2:c.c*(1-TP2_PCT), lockAt:c.c*(1-LOCK_PCT) };
   }
   function _1mHL(w, c, s) {
@@ -1918,6 +1947,13 @@ function scan1mPatterns(sym, bars1m, bars4h, cooldowns = new Map()) {
     const dist = Math.abs(curr.price - c.c) / curr.price;
     if (dist > PAT_TOL) return null;
     if (c.bullish) return null;
+    // HL escape hatch: if a higher low formed AFTER this HH, market reversed up — skip SHORT
+    const lows = _ind1mLows(w);
+    if (lows.length >= 2) {
+      const lastL = lows[lows.length - 1];
+      const prevL = lows[lows.length - 2];
+      if (lastL.price > prevL.price && lastL.idx > curr.idx) return null;
+    }
     return { pattern:'HH', dir:'SHORT', level:curr.price, slPrice:curr.price*(1+s), tp1:c.c*(1-TP1_PCT), tp2:c.c*(1-TP2_PCT), lockAt:c.c*(1-LOCK_PCT) };
   }
   function _1mLL(w, c, s) {
