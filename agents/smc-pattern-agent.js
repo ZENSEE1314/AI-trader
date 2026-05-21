@@ -400,20 +400,28 @@ class SMCPatternAgent extends BaseAgent {
         // ── Step A: Compute 1m pivot direction (1L/2R, matches TV indicator) ──
         // ANY low (HL or LL) as most recent pivot → LONG only (never short at a low)
         // ANY high (LH or HH) as most recent pivot → SHORT only (never long at a high)
+        // Also capture the pivot BAR TIMESTAMP so Step C can detect when a NEW pivot forms.
         let pivotGateDir = null; // 'LONG' | 'SHORT' | null
+        let lastPivotTs  = 0;   // ms timestamp of the most recent pivot bar
         if (bars1m && bars1m.length >= 8) {
           const ph = [], pl = [];
           for (let i = 1; i < bars1m.length - 2; i++) {
             if (bars1m[i].h > bars1m[i-1].h && bars1m[i].h > bars1m[i+1].h && bars1m[i].h > bars1m[i+2].h)
-              ph.push({ idx: i });
+              ph.push({ idx: i, ts: bars1m[i].t || 0 });
             if (bars1m[i].l < bars1m[i-1].l && bars1m[i].l < bars1m[i+1].l && bars1m[i].l < bars1m[i+2].l)
-              pl.push({ idx: i });
+              pl.push({ idx: i, ts: bars1m[i].t || 0 });
           }
           const lastH = ph[ph.length - 1];
           const lastL = pl[pl.length - 1];
           if (lastH && lastL) {
             // Whichever pivot type is more recent sets the allowed direction
-            pivotGateDir = lastL.idx > lastH.idx ? 'LONG' : 'SHORT';
+            if (lastL.idx > lastH.idx) {
+              pivotGateDir = 'LONG';
+              lastPivotTs  = lastL.ts;
+            } else {
+              pivotGateDir = 'SHORT';
+              lastPivotTs  = lastH.ts;
+            }
           }
         }
 
@@ -426,8 +434,11 @@ class SMCPatternAgent extends BaseAgent {
             const chochDir = r.pattern === 'CHoCH-BULL' ? 'LONG' : 'SHORT';
             const prev = this._chochWait.get(sym);
             if (!prev || prev.dir !== chochDir) {
-              this._chochWait.set(sym, { dir: chochDir, detectedAt: now });
-              bLog.scan(`[SMC-PAT] CHoCH ${sym}: ${r.pattern} → waiting for ${chochDir === 'LONG' ? 'HL/LL' : 'LH/HH'}`);
+              // pivotTsAtDetection: the timestamp of the CURRENT most-recent pivot.
+              // Step C will only confirm when a pivot with a NEWER timestamp appears,
+              // ensuring we waited for a genuine new LH/LL after the CHoCH candle.
+              this._chochWait.set(sym, { dir: chochDir, detectedAt: now, pivotTsAtDetection: lastPivotTs });
+              bLog.scan(`[SMC-PAT] CHoCH ${sym}: ${r.pattern} → waiting for ${chochDir === 'LONG' ? 'HL/LL' : 'LH/HH'} (pivotTs=${lastPivotTs})`);
               this.addActivity('info', `${sym} ${r.pattern} — waiting for next ${chochDir === 'LONG' ? 'HL or LL' : 'LH or HH'} to fire`);
             }
             // Also reset BMS on CHoCH
@@ -442,24 +453,30 @@ class SMCPatternAgent extends BaseAgent {
         }
 
         // ── Step C: Resolve _chochWait using current pivot gate ──
-        // When chochWait=LONG and current pivot is a LOW (HL/LL) → pivot confirmed, allow LONG
-        // When chochWait=SHORT and current pivot is a HIGH (LH/HH) → pivot confirmed, allow SHORT
-        // This fires the trade on the next HL/LL (for bull CHoCH) or LH/HH (for bear CHoCH)
+        // CHoCH-BULL fires → wait for a NEW HL or LL (LONG pivot) to form on 1m
+        // CHoCH-BEAR fires → wait for a NEW LH or HH (SHORT pivot) to form on 1m
+        //
+        // KEY: "new" means lastPivotTs > pivotTsAtDetection — the confirming pivot bar
+        // must have a timestamp AFTER the CHoCH was detected. This prevents the CHoCH
+        // from confirming itself using the pivot that already existed when it fired
+        // (which always matches direction and caused immediate same-cycle confirmation).
         const chochWait = this._chochWait.get(sym);
         if (chochWait) {
           if (now - chochWait.detectedAt > 15 * 60_000) {
             // Expire after 15 min — no confirming pivot arrived
             this._chochWait.delete(sym);
             bLog.scan(`[SMC-PAT] CHoCH wait ${sym} expired — no confirming pivot in 15 min`);
-          } else if (chochWait.dir === pivotGateDir) {
-            // Confirming pivot now present — clear wait so the signal fires this cycle
+          } else if (
+            chochWait.dir === pivotGateDir &&
+            lastPivotTs > chochWait.pivotTsAtDetection
+          ) {
+            // A genuinely NEW pivot formed in the correct direction AFTER the CHoCH
             this._chochWait.delete(sym);
-            bLog.scan(`[SMC-PAT] CHoCH ${sym}: pivot confirmed (${pivotGateDir}) — allowing signals`);
-            this.addActivity('info', `${sym} CHoCH confirmed by pivot — ${pivotGateDir} signal firing`);
-          }
-          // While chochWait is active and pivot not yet confirmed: override pivotGateDir
-          // to only allow the choch direction (prevents opposite signals while waiting)
-          else {
+            bLog.scan(`[SMC-PAT] CHoCH ${sym}: new ${pivotGateDir} pivot (ts=${lastPivotTs} > ${chochWait.pivotTsAtDetection}) — signal firing`);
+            this.addActivity('info', `${sym} CHoCH confirmed by new 1m pivot — ${pivotGateDir} signal firing`);
+          } else {
+            // Still waiting — override pivotGateDir to only allow the choch direction
+            // (prevents opposite signals while waiting for the confirming pivot)
             pivotGateDir = chochWait.dir;
           }
         }
