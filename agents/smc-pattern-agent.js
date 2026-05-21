@@ -238,58 +238,77 @@ class SMCPatternAgent extends BaseAgent {
 
         // ── Scan 2: 1m PRIMARY — BMS/CHoCH/LH/HL on 1m directly ──
         // This catches what the TradingView SMC indicator shows:
-        //   CHoCH-BULL = bullish reversal on 1m → LONG
-        //   CHoCH-BEAR = bearish reversal on 1m → SHORT
-        //   LH/HL/LL/HH on 1m = structure entries
+        //   CHoCH-BULL / CHoCH-BEAR = reversal → fire immediately (body already confirms)
+        //   HL / LH / LL / HH       = structure → 3-candle confirmation flow:
         //
-        // HL and LH signals are queued for one full 1m candle (60s) before firing.
-        // This gives one candle of confirmation that price is actually moving in the
-        // right direction — not just touching the level and reversing.
-        // CHoCH signals fire immediately (they already have body confirmation built in).
+        //   Candle 1: HL detected by scan1mPatterns → QUEUE, do not fire
+        //   Candle 2: check current price vs stored HL level (scan cooldown blocks re-detect):
+        //     · Price still at level (≤0.3% from HL) → CONFIRM, still don't fire
+        //     · Price moved away (>0.3% from HL)     → fire immediately (candle 2 FIRE)
+        //   Candle 3: always fire after candle 2 confirmed
         const rawDetected1m = valid1m ? scan1mPatterns(sym, valid1m, bars4h, this._cooldowns) : null;
         let raw1m = null;
 
-        if (rawDetected1m) {
+        // Current 1m close — used for candle-2 price check (bypasses cooldown issue)
+        const cur1mPrice = bars1m?.[bars1m.length - 1]?.c;
+
+        // ── Step 1: Advance any existing pending signal ──────────────
+        const pend = this._pending1m.get(sym);
+        if (pend) {
+          const age = now - pend.queuedAt;
+
+          if (pend.state === 'confirmed') {
+            // Candle 3: confirmed last scan → fire now
+            raw1m = { ...pend.raw, price: cur1mPrice ?? pend.raw.price };
+            this._pending1m.delete(sym);
+            bLog.scan(`[SMC-PAT] 1m ${sym} ${pend.raw.pattern}(${pend.raw.dir}) candle-3 FIRE`);
+            this.addActivity('trade', `${sym} ${pend.raw.pattern}(${pend.raw.dir}) — candle 3 FIRE`);
+
+          } else if (pend.state === 'pending' && age >= this.PENDING_1M_MS) {
+            // Candle 2: one full candle elapsed — check if price still at level
+            // scan1mPatterns has a 10-min cooldown so we check price directly here.
+            const level = pend.raw.level;
+            const TOL   = 0.003; // 0.3% — within 1 SL of the pivot level
+            const stillAtLevel = pend.raw.dir === 'LONG'
+              ? cur1mPrice <= level * (1 + TOL)   // hasn't bounced far yet
+              : cur1mPrice >= level * (1 - TOL);  // hasn't dropped far yet
+
+            if (stillAtLevel) {
+              // Price still near the HL/LH level → confirmed, fire on candle 3
+              this._pending1m.set(sym, { ...pend, state: 'confirmed', confirmedAt: now });
+              const pct = (((cur1mPrice / level) - 1) * 100).toFixed(2);
+              bLog.scan(`[SMC-PAT] 1m ${sym} ${pend.raw.pattern}(${pend.raw.dir}) candle-2 CONFIRMED (price ${pct}% from level) — fire next`);
+              this.addActivity('info', `${sym} ${pend.raw.pattern} candle 2 confirmed — firing next candle`);
+            } else {
+              // Price moved away from the level — HL/LH is now in the past, fire immediately
+              raw1m = { ...pend.raw, price: cur1mPrice ?? pend.raw.price };
+              this._pending1m.delete(sym);
+              const pct = (((cur1mPrice / level) - 1) * 100).toFixed(2);
+              bLog.scan(`[SMC-PAT] 1m ${sym} ${pend.raw.pattern}(${pend.raw.dir}) candle-2 FIRE (price moved ${pct}%)`);
+              this.addActivity('trade', `${sym} ${pend.raw.pattern}(${pend.raw.dir}) — candle 2 FIRE (not at level, price moved)`);
+            }
+
+          } else if (age > 3 * 60_000) {
+            // Stale — no follow-through in 3 min → expire
+            this._pending1m.delete(sym);
+            bLog.scan(`[SMC-PAT] 1m ${sym} ${pend.raw.pattern} pending expired (3 min no follow-through)`);
+            this.addActivity('skip', `${sym} ${pend.raw.pattern} pending expired — no follow-through`);
+          }
+        }
+
+        // ── Step 2: Queue new 1m detections (only if no pending firing this cycle) ──
+        if (!raw1m && rawDetected1m) {
           const isStructureEntry = rawDetected1m.pattern === 'HL' || rawDetected1m.pattern === 'LH' ||
                                    rawDetected1m.pattern === 'LL' || rawDetected1m.pattern === 'HH';
-          if (isStructureEntry) {
-            const p      = this._pending1m.get(sym);
-            const sameSignal = p &&
-              p.raw.pattern === rawDetected1m.pattern &&
-              p.raw.dir     === rawDetected1m.dir;
-
-            if (!sameSignal) {
-              // Candle 1: new signal — queue as pending, don't fire
-              this._pending1m.set(sym, { raw: rawDetected1m, queuedAt: now, state: 'pending' });
-              bLog.scan(`[SMC-PAT] 1m ${sym} ${rawDetected1m.pattern}(${rawDetected1m.dir}) candle-1 queued`);
-              this.addActivity('info', `${sym} ${rawDetected1m.pattern}(${rawDetected1m.dir}) — candle 1 queued, waiting candle 2`);
-
-            } else if (p.state === 'pending' && now - p.queuedAt >= this.PENDING_1M_MS) {
-              // Candle 2: same signal still present after one full candle → mark confirmed
-              // Still don't fire — fire on the NEXT scan (candle 3 opens)
-              this._pending1m.set(sym, { ...p, state: 'confirmed', confirmedAt: now });
-              bLog.scan(`[SMC-PAT] 1m ${sym} ${rawDetected1m.pattern}(${rawDetected1m.dir}) candle-2 confirmed — next scan fires`);
-              this.addActivity('info', `${sym} ${rawDetected1m.pattern}(${rawDetected1m.dir}) — candle 2 confirmed, firing next candle`);
-
-            } else if (p.state === 'confirmed') {
-              // Candle 3: confirmed on candle 2, now fire on candle 3
-              raw1m = rawDetected1m;
-              this._pending1m.delete(sym);
-              bLog.scan(`[SMC-PAT] 1m ${sym} ${rawDetected1m.pattern}(${rawDetected1m.dir}) candle-3 FIRE`);
-            }
-            // else: same signal but candle-1 timer not elapsed yet — still waiting
-          } else {
-            // CHoCH signals fire immediately — rejection candle already confirms direction
+          if (isStructureEntry && !this._pending1m.has(sym)) {
+            // Candle 1: queue — never fire structure entries immediately
+            this._pending1m.set(sym, { raw: rawDetected1m, queuedAt: now, state: 'pending' });
+            bLog.scan(`[SMC-PAT] 1m ${sym} ${rawDetected1m.pattern}(${rawDetected1m.dir}) candle-1 queued`);
+            this.addActivity('info', `${sym} ${rawDetected1m.pattern}(${rawDetected1m.dir}) — candle 1 queued`);
+          } else if (!isStructureEntry) {
+            // CHoCH: fire immediately — rejection candle body already confirms direction
             raw1m = rawDetected1m;
-            this._pending1m.delete(sym); // clear any stale pending for this sym
-          }
-        } else {
-          // No 1m signal this cycle — expire stale pending after 3 min
-          const p = this._pending1m.get(sym);
-          if (p && now - p.queuedAt > 3 * 60_000) {
             this._pending1m.delete(sym);
-            bLog.scan(`[SMC-PAT] 1m ${sym} pending ${p.raw.pattern} expired — no follow-through`);
-            this.addActivity('skip', `${sym} ${p.raw.pattern} pending expired — price moved away`);
           }
         }
 
