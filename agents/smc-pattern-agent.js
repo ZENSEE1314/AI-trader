@@ -242,11 +242,12 @@ class SMCPatternAgent extends BaseAgent {
       this._btcBiasAt = now;
       bLog.scan(`[SMC-PAT] BTC bias → ${this._btcBias} (from BTC ${btcSignalThisCycle.direction} signal)`);
       this.addActivity('info', `BTC market bias: ${this._btcBias} (${btcSignalThisCycle.smcContext?.pattern ?? btcSignalThisCycle.direction})`);
-    } else if (now - this._btcBiasAt > 30 * 60_000) {
-      // Bias expired — no BTC signal in last 30 min → go neutral
+    } else if (now - this._btcBiasAt > 15 * 60_000) {
+      // Bias expired — no BTC signal in last 15 min (one 15M candle) → go neutral
+      // Altcoins should not trade on stale BTC direction.
       if (this._btcBias !== null) {
-        bLog.scan('[SMC-PAT] BTC bias expired → NEUTRAL');
-        this.addActivity('info', 'BTC bias expired (30 min) → NEUTRAL');
+        bLog.scan('[SMC-PAT] BTC bias expired (15 min) → NEUTRAL');
+        this.addActivity('info', 'BTC bias expired (15 min) → NEUTRAL — altcoins wait for BTC');
       }
       this._btcBias = null;
     }
@@ -285,30 +286,41 @@ class SMCPatternAgent extends BaseAgent {
       this.addActivity('info', `Deduped ${signals.length} → ${uniqueSignals.length} signal(s) (one per symbol)`);
     }
 
-    // ── BTC bias filter — altcoins must follow BTC direction ──
-    // BTC is the market leader. If BTC shows HL/HH (BULLISH), only LONG on altcoins.
-    // If BTC shows LH/LL (BEARISH), only SHORT on altcoins.
-    // BTC itself is exempt — it always trades its own structure.
-    // Bias expires after 30 min (stale bias ignored).
-    const btcBiasAge = now - this._btcBiasAt;
-    const btcBiasValid = this._btcBias && btcBiasAge < 30 * 60_000;
-    const btcFiltered = btcBiasValid
-      ? uniqueSignals.filter(s => {
-          if (s.symbol === 'BTCUSDT') return true; // BTC trades its own structure
-          const blocked =
-            (this._btcBias === 'BULLISH' && s.direction === 'SHORT') ||
-            (this._btcBias === 'BEARISH' && s.direction === 'LONG');
-          if (blocked) {
-            bLog.scan(`[SMC-PAT] BTC-bias block: ${s.symbol} ${s.direction} vs BTC=${this._btcBias}`);
-            this.addActivity('skip', `${s.symbol} ${s.direction} blocked — BTC bias is ${this._btcBias}`);
-          }
-          return !blocked;
-        })
-      : uniqueSignals;
+    // ── BTC bias filter — altcoins must follow BTC 15m+1m direction ──
+    // BTC is the market leader. Altcoins only trade in BTC's direction.
+    // Bias comes from BTC's actual signal (not a separate calc) so they always agree.
+    // Bias expires after 15 min (one 15M candle) — stale = altcoins wait for BTC.
+    //
+    // NEUTRAL (no recent BTC signal): altcoin signals are held — don't trade in the dark.
+    // BULLISH (BTC fired LONG):  altcoins LONG only, SHORT blocked.
+    // BEARISH (BTC fired SHORT): altcoins SHORT only, LONG blocked.
+    const btcBiasAge   = now - this._btcBiasAt;
+    const btcBiasValid = this._btcBias && btcBiasAge < 15 * 60_000;
 
-    if (btcBiasValid && btcFiltered.length < uniqueSignals.length) {
+    const btcFiltered = uniqueSignals.filter(s => {
+      if (s.symbol === 'BTCUSDT') return true; // BTC always trades its own structure
+
+      // No active BTC bias → altcoins wait (don't trade without market context)
+      if (!btcBiasValid) {
+        bLog.scan(`[SMC-PAT] BTC-bias NEUTRAL: ${s.symbol} ${s.direction} held — no recent BTC signal`);
+        this.addActivity('skip', `${s.symbol} ${s.direction} held — waiting for BTC direction`);
+        return false;
+      }
+
+      // Direction conflict → block
+      const blocked =
+        (this._btcBias === 'BULLISH' && s.direction === 'SHORT') ||
+        (this._btcBias === 'BEARISH' && s.direction === 'LONG');
+      if (blocked) {
+        bLog.scan(`[SMC-PAT] BTC-bias block: ${s.symbol} ${s.direction} vs BTC=${this._btcBias}`);
+        this.addActivity('skip', `${s.symbol} ${s.direction} blocked — BTC is ${this._btcBias}`);
+      }
+      return !blocked;
+    });
+
+    if (btcFiltered.length < uniqueSignals.length) {
       this.addActivity('info',
-        `BTC bias (${this._btcBias}) filtered ${uniqueSignals.length - btcFiltered.length} signal(s)`
+        `BTC filter: ${uniqueSignals.length - btcFiltered.length} signal(s) blocked (BTC=${this._btcBias ?? 'NEUTRAL'})`
       );
     }
 

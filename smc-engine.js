@@ -1087,13 +1087,14 @@ const TRADING_CONFIG = {
   BTCUSDT:  { iv:'15',  slPct:0.0025, label:'15M', name:'BTC'  },
   ETHUSDT:  { iv:'15',  slPct:0.0020, label:'15M', name:'ETH'  },
   SOLUSDT:  { iv:'15',  slPct:0.0020, label:'15M', name:'SOL'  },
-  BNBUSDT:  { iv:'60',  slPct:0.0030, label:'1H',  name:'BNB'  },
+  BNBUSDT:  { iv:'15',  slPct:0.0030, label:'15M', name:'BNB'  },
   ADAUSDT:  { iv:'15',  slPct:0.0020, label:'15M', name:'ADA'  },
   DOTUSDT:  { iv:'15',  slPct:0.0020, label:'15M', name:'DOT'  },
-  LINKUSDT: { iv:'60',  slPct:0.0030, label:'1H',  name:'LINK' },
-  AVAXUSDT: { iv:'30',  slPct:0.0025, label:'30M', name:'AVAX' },
-  LTCUSDT:  { iv:'30',  slPct:0.0025, label:'30M', name:'LTC'  },
+  LINKUSDT: { iv:'15',  slPct:0.0030, label:'15M', name:'LINK' },
+  AVAXUSDT: { iv:'15',  slPct:0.0025, label:'15M', name:'AVAX' },
+  LTCUSDT:  { iv:'15',  slPct:0.0025, label:'15M', name:'LTC'  },
   // XRP removed — 49% WR after fees, not profitable
+  // All tokens: 15M primary + 1M LTF confirmation (follows BTC 15M+1M standard)
 };
 
 // ── TP / lock constants (same for all tokens) ────────────────────
