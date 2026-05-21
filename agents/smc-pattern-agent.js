@@ -35,6 +35,36 @@ const BARS_3M          = 480;       // 3m bars — 480×3min = 24h session VWAP 
 const SCORE            = 72;        // signal score (higher than SMCProAgent's default)
 const AGENT_NAME       = 'SMCPatternAgent';
 
+// ── 1m BMS (Break of Market Structure) detector ──────────────
+// Checks whether the current 1m bar closed above the last confirmed pivot HIGH
+// (bullish BMS) or below the last confirmed pivot LOW (bearish BMS).
+// Uses TV indicator's asymmetric pivot: 1 left bar, 2 right bars.
+// When bullish BMS is active → no SHORTs.  When bearish BMS → no LONGs.
+function detect1mBMS(bars) {
+  if (!bars || bars.length < 10) return null;
+  const last = bars[bars.length - 1]; // current (most recent closed) bar
+
+  // Pivot highs: bar[i].h must exceed 1 bar to the left and 2 bars to the right
+  let lastHighPrice = null;
+  for (let i = 1; i < bars.length - 2; i++) {
+    if (bars[i].h > bars[i - 1].h && bars[i].h > bars[i + 1].h && bars[i].h > bars[i + 2].h) {
+      lastHighPrice = bars[i].h;
+    }
+  }
+
+  // Pivot lows: bar[i].l must be under 1 bar to the left and 2 bars to the right
+  let lastLowPrice = null;
+  for (let i = 1; i < bars.length - 2; i++) {
+    if (bars[i].l < bars[i - 1].l && bars[i].l < bars[i + 1].l && bars[i].l < bars[i + 2].l) {
+      lastLowPrice = bars[i].l;
+    }
+  }
+
+  if (lastHighPrice !== null && last.c > lastHighPrice) return 'BULLISH'; // closed above swing high
+  if (lastLowPrice  !== null && last.c < lastLowPrice)  return 'BEARISH'; // closed below swing low
+  return null;
+}
+
 // ── Session VWAP + ±1σ bands ─────────────────────────────────
 // Computed from 3m bars (up to 24h of data).
 // Rule: price ≤ lower band → NO LONG (in downtrend territory)
@@ -157,6 +187,13 @@ class SMCPatternAgent extends BaseAgent {
     this._pending1m    = new Map();
     this.PENDING_1M_MS = 60_000; // one 1m candle
 
+    // BMS (Break of Market Structure) state per symbol.
+    // Bullish BMS (close above last swing high) → block all SHORTs.
+    // Bearish BMS (close below last swing low)  → block all LONGs.
+    // Cleared when CHoCH in the opposite direction fires, or expires after 2h.
+    // Map: symbol → { dir: 'BULLISH'|'BEARISH', detectedAt: timestamp }
+    this._bmsState = new Map();
+
     // Active virtual trades: signal.symbol+'_'+signal.smcContext.pattern → { ...signal, bars4hCache }
     // Used to run checkTradeState per bar and log outcomes.
     this._openTrades   = new Map();
@@ -232,6 +269,27 @@ class SMCPatternAgent extends BaseAgent {
 
         const ltfTag = valid1m ? '1m' : valid3m ? '3m' : '15m-only';
         bLog.scan(`[SMC-PAT] ${sym}: LTF=${ltfTag} (1m=${bars1m?.length ?? 0} 3m=${bars3m?.length ?? 0})`);
+
+        // ── BMS state update ──────────────────────────────────────
+        // Detect whether current 1m bar closed above/below last swing level.
+        // Bullish BMS → block shorts.  Bearish BMS → block longs.
+        // State persists until opposite CHoCH fires or expires after 2h.
+        if (bars1m && bars1m.length >= 10) {
+          const bms = detect1mBMS(bars1m);
+          if (bms) {
+            const prev = this._bmsState.get(sym);
+            if (!prev || prev.dir !== bms) {
+              this._bmsState.set(sym, { dir: bms, detectedAt: now });
+              bLog.scan(`[SMC-PAT] BMS ${sym}: ${bms} — ${bms === 'BULLISH' ? 'no SHORT' : 'no LONG'}`);
+              this.addActivity('info', `${sym} BMS ${bms} — ${bms === 'BULLISH' ? 'shorts blocked' : 'longs blocked'}`);
+            }
+          }
+          // Expire BMS state after 2h (structure has had time to reset)
+          const cur = this._bmsState.get(sym);
+          if (cur && now - cur.detectedAt > 2 * 60 * 60_000) {
+            this._bmsState.delete(sym);
+          }
+        }
 
         // ── Scan 1: HTF primary (15m/30m/1H) + LTF confirmation ───
         const raw = scanPatterns(sym, patBars, bars4h, this._cooldowns, valid1m, valid3m);
@@ -362,7 +420,39 @@ class SMCPatternAgent extends BaseAgent {
 
         if (!trendGated.length) continue;
 
-        for (const r of trendGated) {
+        // ── BMS filter: respect Break of Market Structure direction ──
+        // Bullish BMS (closed above last swing high) → no SHORTs — market is moving up.
+        // Bearish BMS (closed below last swing low)  → no LONGs  — market is moving down.
+        // CHoCH in the opposite direction resets the BMS state.
+        const bmsEntry = this._bmsState.get(sym);
+        const bmsFiltered = bmsEntry ? trendGated.filter(r => {
+          // CHoCH in the opposite direction clears the BMS
+          if (bmsEntry.dir === 'BULLISH' && r.pattern === 'CHoCH-BEAR') {
+            this._bmsState.delete(sym);
+            bLog.scan(`[SMC-PAT] BMS ${sym}: CHoCH-BEAR reset bullish BMS`);
+            return true; // allow the CHoCH-BEAR signal itself
+          }
+          if (bmsEntry.dir === 'BEARISH' && r.pattern === 'CHoCH-BULL') {
+            this._bmsState.delete(sym);
+            bLog.scan(`[SMC-PAT] BMS ${sym}: CHoCH-BULL reset bearish BMS`);
+            return true;
+          }
+          if (bmsEntry.dir === 'BULLISH' && r.dir === 'SHORT') {
+            bLog.scan(`[SMC-PAT] BMS block: ${sym} SHORT blocked — bullish BMS active`);
+            this.addActivity('skip', `${sym} SHORT blocked — BMS BULLISH (strong upward break)`);
+            return false;
+          }
+          if (bmsEntry.dir === 'BEARISH' && r.dir === 'LONG') {
+            bLog.scan(`[SMC-PAT] BMS block: ${sym} LONG blocked — bearish BMS active`);
+            this.addActivity('skip', `${sym} LONG blocked — BMS BEARISH (strong downward break)`);
+            return false;
+          }
+          return true;
+        }) : trendGated;
+
+        if (!bmsFiltered.length) continue;
+
+        for (const r of bmsFiltered) {
           const sig = formatSignal(r);
           signals.push(sig);
           this._signalCount++;
