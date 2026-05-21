@@ -1207,7 +1207,7 @@ function _pivHighs(bars) {
 // PAT_WINGS=2 on 1m means pivot confirms in just 2 minutes.
 
 const LTF_1M_WINDOW  = 40;   // look at last 40 1m bars (= 40 min) for LTF structure
-const LTF_1M_RECENCY = 20;   // 1m pivot must be within last 20 bars (= 20 min)
+const LTF_1M_RECENCY = 5;    // 1m pivot must be within last 5 bars (= 5 min) — "next candle" entry
 
 // LONG LTF check: 1m must show a recent Higher Low with bullish rejection
 function _confirm1mHL(bars1m) {
@@ -1303,14 +1303,17 @@ function detectHL(window, curBar, slPct, bars1m = null) {
   // 15m HL identified the zone — 1m HL must confirm the entry
   if (!_confirm1mHL(bars1m)) return null;
 
+  // "Next candle" entry price: use current 1m bar close; fall back to 15m close
+  const entry1mHL = (bars1m && bars1m.length > 0) ? bars1m[bars1m.length - 1].c : cur;
+
   return {
     pattern:  'HL',
     dir:      'LONG',
     level:    curr.price,
     slPrice:  curr.price * (1 - slPct),
-    tp1:      cur * (1 + TP1_PCT),
-    tp2:      cur * (1 + TP2_PCT),
-    lockAt:   cur * (1 + LOCK_PCT),
+    tp1:      entry1mHL * (1 + TP1_PCT),
+    tp2:      entry1mHL * (1 + TP2_PCT),
+    lockAt:   entry1mHL * (1 + LOCK_PCT),
   };
 }
 
@@ -1343,14 +1346,17 @@ function detectLL(window, curBar, slPct, bars1m = null) {
   // ── 1m LTF confirmation ────────────────────────────────────
   if (!_confirm1mHL(bars1m)) return null;
 
+  // "Next candle" entry price: use current 1m bar close; fall back to 15m close
+  const entry1mLL = (bars1m && bars1m.length > 0) ? bars1m[bars1m.length - 1].c : cur;
+
   return {
     pattern:  'LL',
     dir:      'LONG',
     level:    curr.price,
     slPrice:  curr.price * (1 - slPct),
-    tp1:      cur * (1 + TP1_PCT),
-    tp2:      cur * (1 + TP2_PCT),
-    lockAt:   cur * (1 + LOCK_PCT),
+    tp1:      entry1mLL * (1 + TP1_PCT),
+    tp2:      entry1mLL * (1 + TP2_PCT),
+    lockAt:   entry1mLL * (1 + LOCK_PCT),
   };
 }
 
@@ -1402,14 +1408,17 @@ function detectLH(window, curBar, slPct, bars1m = null) {
   // ── 1m LTF confirmation ────────────────────────────────────
   if (!_confirm1mLH(bars1m)) return null;
 
+  // "Next candle" entry price: use current 1m bar close; fall back to 15m close
+  const entry1mLH = (bars1m && bars1m.length > 0) ? bars1m[bars1m.length - 1].c : cur;
+
   return {
     pattern:  'LH',
     dir:      'SHORT',
     level:    curr.price,
     slPrice:  curr.price * (1 + slPct),
-    tp1:      cur * (1 - TP1_PCT),
-    tp2:      cur * (1 - TP2_PCT),
-    lockAt:   cur * (1 - LOCK_PCT),
+    tp1:      entry1mLH * (1 - TP1_PCT),
+    tp2:      entry1mLH * (1 - TP2_PCT),
+    lockAt:   entry1mLH * (1 - LOCK_PCT),
   };
 }
 
@@ -1448,14 +1457,17 @@ function detectHH(window, curBar, slPct, bars1m = null) {
   // ── 1m LTF confirmation ────────────────────────────────────
   if (!_confirm1mLH(bars1m)) return null;
 
+  // "Next candle" entry price: use current 1m bar close; fall back to 15m close
+  const entry1mHH = (bars1m && bars1m.length > 0) ? bars1m[bars1m.length - 1].c : cur;
+
   return {
     pattern:  'HH',
     dir:      'SHORT',
     level:    curr.price,
     slPrice:  curr.price * (1 + slPct),
-    tp1:      cur * (1 - TP1_PCT),
-    tp2:      cur * (1 - TP2_PCT),
-    lockAt:   cur * (1 - LOCK_PCT),
+    tp1:      entry1mHH * (1 - TP1_PCT),
+    tp2:      entry1mHH * (1 - TP2_PCT),
+    lockAt:   entry1mHH * (1 - LOCK_PCT),
   };
 }
 
@@ -1470,7 +1482,9 @@ function scanPatterns(sym, patBars, bars4h, cooldowns = new Map(), bars1m = null
 
   const cur  = patBars[patBars.length - 1];
   const now  = cur.t;
-  const price = cur.c;
+  // "Next candle" entry: use the current 1m bar close as entry price.
+  // After 15m LH + 1m LH confirm, we enter on the NEXT 1m bar — not the 15m close.
+  const price = (bars1m && bars1m.length > 0) ? bars1m[bars1m.length - 1].c : cur.c;
 
   // Build pattern window
   if (patBars.length < PAT_LKBK + PAT_WINGS + 2) return null;
