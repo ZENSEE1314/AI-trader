@@ -1327,6 +1327,11 @@ function detectLL(window, curBar, slPct, bars1m = null) {
   };
 }
 
+// SHORT proximity tolerance — LH/HH pivot must be within 0.5% of recent swing high.
+// Prevents mid-range shorts: if the structural high was $2,157 and the LH pivot is
+// at $2,143 (0.65% below), that's a mid-range entry — skip it. Only short at the top.
+const SHORT_PROX_TOL = 0.005;
+
 function detectLH(window, curBar, slPct, bars1m = null) {
   // Lower High → SHORT: downtrend making LH retest
   const cur   = curBar.c;
@@ -1338,6 +1343,12 @@ function detectLH(window, curBar, slPct, bars1m = null) {
   if (curr.idx < window.length - 36) return null;  // must be within last 36 bars
   const below = (curr.price - cur) / curr.price;
   if (below < 0 || below > PAT_TOL) return null;   // price must be just below level
+
+  // ── Short-at-the-top filter ────────────────────────────────
+  // LH pivot must be within 0.5% of the recent swing high.
+  // Stops mid-range shorts where price already fell far from the structural high.
+  const winHigh = Math.max(...window.slice(-30).map(b => b.h));
+  if ((winHigh - curr.price) / winHigh > SHORT_PROX_TOL) return null;
 
   // ── Big-wave quality gate ──────────────────────────────────
   const pivotBar = window[curr.idx];
@@ -1370,6 +1381,10 @@ function detectHH(window, curBar, slPct, bars1m = null) {
   if (curr.idx < window.length - 36) return null;  // must be within last 36 bars
   const below = (curr.price - cur) / curr.price;
   if (below < 0 || below > PAT_TOL) return null;
+
+  // ── Short-at-the-top filter ────────────────────────────────
+  const winHigh = Math.max(...window.slice(-30).map(b => b.h));
+  if ((winHigh - curr.price) / winHigh > SHORT_PROX_TOL) return null;
 
   // ── Big-wave quality gate ──────────────────────────────────
   const pivotBar = window[curr.idx];
