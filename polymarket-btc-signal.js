@@ -193,6 +193,37 @@ async function getBTCUpDownSignal() {
   if (!mkt)       return NEUTRAL();
   if (mkt.closed) return NEUTRAL(mkt.question, mkt.upTokenId, mkt.downTokenId);
 
+  // ── Window time-remaining guard ────────────────────────────
+  // Near the end of a 15m window the orderbook dies (bid=0.01, ask=0.99).
+  // FOK orders placed then are silently rejected — no fill is possible.
+  // Skip if < 5 min (300s) remain in the current slot AND > 30s remain
+  // in the next slot (so we don't also skip a fresh window accidentally).
+  const nowSec      = Math.floor(Date.now() / 1000);
+  const slotStart   = Math.floor(nowSec / SLOT_SEC) * SLOT_SEC;
+  const slotEnd     = slotStart + SLOT_SEC;
+  const secsLeft    = slotEnd - nowSec;
+  if (secsLeft < 300) {
+    console.log(`[poly-btc-signal] Window closing in ${secsLeft}s — skipping, waiting for next slot`);
+    return { ...NEUTRAL(mkt.question, mkt.upTokenId, mkt.downTokenId), windowClosing: true };
+  }
+
+  // ── Spread / liquidity guard ────────────────────────────────
+  // Check the CLOB orderbook. If best_ask − best_bid > 0.30
+  // the book is essentially empty and a FOK will never fill.
+  try {
+    const book = await _fetchJson(`${CLOB_HOST}/book?token_id=${mkt.upTokenId}`);
+    const bestBid = parseFloat(book?.bids?.[0]?.price || 0);
+    const bestAsk = parseFloat(book?.asks?.[0]?.price || 1);
+    const spread  = bestAsk - bestBid;
+    if (spread > 0.30) {
+      console.log(`[poly-btc-signal] Orderbook illiquid — spread=${spread.toFixed(2)} bid=${bestBid} ask=${bestAsk} — skipping`);
+      return { ...NEUTRAL(mkt.question, mkt.upTokenId, mkt.downTokenId), illiquid: true };
+    }
+    console.log(`[poly-btc-signal] Orderbook OK — spread=${spread.toFixed(2)} bid=${bestBid} ask=${bestAsk} secsLeft=${secsLeft}`);
+  } catch (e) {
+    console.warn(`[poly-btc-signal] Spread check failed: ${e.message} — proceeding anyway`);
+  }
+
   // Get mid-price for Up token — CLOB primary, Gamma API as fallback
   let upPrice = await _getTokenMidPrice(mkt.upTokenId);
   if (!upPrice || upPrice <= 0 || upPrice >= 1) {
