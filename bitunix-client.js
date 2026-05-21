@@ -138,6 +138,22 @@ class BitunixClient {
     return this._post('/api/v1/futures/trade/place_order', body);
   }
 
+  // ── Pending (open) orders ─────────────────────────────────
+  // Returns unfilled limit/stop orders still resting on the exchange.
+
+  async getPendingOrders(symbol) {
+    const params = { pageNum: 1, pageSize: 50 };
+    if (symbol) params.symbol = symbol;
+    const data = await this._get('/api/v1/futures/trade/get_pending_orders', params);
+    return Array.isArray(data) ? data : (data?.orderList || data?.list || []);
+  }
+
+  // ── Cancel a single open order ────────────────────────────
+
+  async cancelOrder({ symbol, orderId }) {
+    return this._post('/api/v1/futures/trade/cancel_order', { symbol, orderId: String(orderId) });
+  }
+
   // ── Flash Close (market close entire position) ─────────────
 
   async flashClose({ positionId }) {

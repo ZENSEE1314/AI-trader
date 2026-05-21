@@ -2385,9 +2385,25 @@ async function executeForAllUsers(pick) {
             return;
           }
 
-          // Scenario B is now MARKET on RSI<30 + BB lower touch (no longer 50% crash-buy)
-          const bxOrderType  = 'MARKET';
-          const bxLimitPrice = undefined;
+          // ── Order type: LIMIT at pattern level for SMC signals ──────
+          // SMC signals carry `pick.level` = the actual structural price
+          // (pivot low for LONG, pivot high for SHORT, break level for CHoCH).
+          // Using LIMIT at that level ensures we enter AT the structure,
+          // not wherever market is when the signal fires (avoids buying 77,200
+          // when the real support is 76,700).
+          //
+          // LONG  limit: fills when ask ≤ level (price comes DOWN to our buy)
+          // SHORT limit: fills when bid ≥ level (price comes UP to our sell)
+          //
+          // Limit orders expire automatically via the 15-min cancel check in
+          // trail-watchdog. If price never reaches the level → order cancelled,
+          // no loss taken. Better to miss a trade than enter at the wrong price.
+          const rawLevel    = parseFloat(pick.level || pick.entry || price || 0);
+          const hasLevel    = rawLevel > 0 && pick.setupName; // SMC signals only
+          const bxOrderType = hasLevel ? 'LIMIT' : 'MARKET';
+          const bxLimitPrice = hasLevel
+            ? parseFloat(rawLevel.toFixed(8))
+            : undefined;
 
           // TP: Range Bounce uses hard TP at opposite wall, Scenario A at +3.5%, others none
           const bxEntryRef = price;
@@ -2543,6 +2559,28 @@ async function executeForAllUsers(pick) {
             } catch (copyErr) {
               userLog.error(`Copy trade trigger failed: ${copyErr.message}`);
             }
+          } else if (bxOrderType === 'LIMIT' && bxLimitPrice) {
+            // ── LIMIT order placed but not yet filled ──────────────
+            // This is expected — position won't exist until price reaches the limit.
+            // Insert as PENDING_LIMIT so syncTradeStatus can promote it to OPEN when filled,
+            // or cancel it after 15 min (one 15M candle) if price never reaches the level.
+            // orderId stored in market_structure field for cancel lookup.
+            const isSmcPL = (pick.setupName || pick.setup || '').includes('SMC');
+            const tp1PL  = isSmcPL && pick.tp1 ? parseFloat(parseFloat(pick.tp1).toFixed(8)) : 0;
+            const tp2PL  = isSmcPL && pick.tp2 ? parseFloat(parseFloat(pick.tp2).toFixed(8)) : 0;
+            await db.query(
+              `INSERT INTO trades (api_key_id, user_id, symbol, direction, entry_price, sl_price, tp_price, quantity, leverage, status,
+               trailing_sl_price, trailing_sl_last_step, tf_15m, tf_3m, tf_1m, market_structure, key_trailing_sl_step, setup, tp2_price)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'PENDING_LIMIT', $10, 0, $11, $12, $13, $14, $15, $16, $17)`,
+              [key.id, key.user_id, symbol, pick.direction, bxLimitPrice,
+               parseFloat(slPrice.toFixed(8)), tp1PL, qty, userLev, parseFloat(slPrice.toFixed(8)),
+               null, pick.structure?.tf3m || null, pick.structure?.tf1m || null,
+               `LIMIT_ORDER:${order?.orderId || '?'}`, userTrailStep,
+               pick.setupName || pick.setup || null, tp2PL]
+            );
+            tradeDbInserted = true;
+            userLog.trade(`${key.email}: LIMIT order pending @ $${bxLimitPrice} — waiting for fill (orderId=${order?.orderId})`);
+            await notify(`*Bitunix ${symbol}*\nLimit ${isLong ? 'BUY' : 'SELL'} @ $${bxLimitPrice} — waiting for price to reach level`);
           } else {
             userLog.error(`Bitunix position not found after order — verify on exchange`);
             await notify(`*Bitunix ${symbol}*\nOrder placed but position not found. Check Bitunix manually.`);
@@ -2814,6 +2852,67 @@ async function syncTradeStatus() {
     cryptoUtils = require('./crypto-utils');
     BitunixClient = require('./bitunix-client').BitunixClient;
   } catch (e) { return; }
+
+  // ── PENDING_LIMIT: check if limit orders have filled or need cancelling ──
+  // Runs before the main OPEN trade sync. For each pending limit:
+  //   • If position now exists on exchange → promote to OPEN
+  //   • If order is > 15 min old and still pending → cancel on exchange + mark CANCELLED
+  try {
+    const pendingLimits = await db.query(
+      `SELECT t.*, ak.api_key_enc, ak.iv, ak.auth_tag,
+              ak.api_secret_enc, ak.secret_iv, ak.secret_auth_tag, ak.platform
+       FROM trades t
+       JOIN api_keys ak ON ak.id = t.api_key_id
+       WHERE t.status = 'PENDING_LIMIT' AND ak.platform = 'bitunix'`
+    );
+
+    for (const pl of pendingLimits) {
+      try {
+        const apiKey    = cryptoUtils.decrypt(pl.api_key_enc, pl.iv, pl.auth_tag);
+        const apiSecret = cryptoUtils.decrypt(pl.api_secret_enc, pl.secret_iv, pl.secret_auth_tag);
+        const client    = new BitunixClient({ apiKey, apiSecret });
+        const symbol    = pl.symbol;
+
+        // Check if the position opened (limit order filled)
+        const posRaw = await client.getOpenPositions(symbol).catch(() => []);
+        const posArr = Array.isArray(posRaw) ? posRaw : (posRaw?.positionList || posRaw?.list || []);
+        const pos    = posArr.find(p => p.symbol === symbol);
+
+        if (pos) {
+          // Limit order filled — promote to OPEN
+          const actualEntry = parseFloat(pos.avgOpenPrice || pos.entryPrice || pos.avgPrice) || parseFloat(pl.entry_price);
+          await db.query(
+            `UPDATE trades SET status='OPEN', entry_price=$1, trailing_sl_price=$2 WHERE id=$3`,
+            [actualEntry, actualEntry * (pl.direction === 'LONG' ? (1 - 0.002) : (1 + 0.002)), pl.id]
+          );
+          log(`LIMIT FILLED: ${symbol} ${pl.direction} @ $${actualEntry} — promoted to OPEN`);
+          await notify(`✅ *Limit filled*: ${symbol} ${pl.direction} @ $${actualEntry}`);
+          continue;
+        }
+
+        // Not filled — check age
+        const ageMs = Date.now() - new Date(pl.created_at).getTime();
+        if (ageMs > 15 * 60_000) {
+          // 15 min expired — cancel the order on exchange
+          const orderIdMatch = (pl.market_structure || '').match(/LIMIT_ORDER:(\S+)/);
+          if (orderIdMatch) {
+            try {
+              await client.cancelOrder({ symbol, orderId: orderIdMatch[1] });
+              log(`LIMIT CANCELLED (15 min expired): ${symbol} ${pl.direction} orderId=${orderIdMatch[1]}`);
+            } catch (cancelErr) {
+              log(`LIMIT cancel failed: ${symbol} ${cancelErr.message}`);
+            }
+          }
+          await db.query(`UPDATE trades SET status='CANCELLED', closed_at=NOW() WHERE id=$1`, [pl.id]);
+          await notify(`⏱ *Limit expired*: ${symbol} ${pl.direction} @ $${pl.entry_price} — cancelled (15 min, price never reached level)`);
+        }
+      } catch (plErr) {
+        log(`PENDING_LIMIT check error: ${pl.symbol} — ${plErr.message}`);
+      }
+    }
+  } catch (plBatchErr) {
+    log(`PENDING_LIMIT batch error: ${plBatchErr.message}`);
+  }
 
   try {
     const openTrades = await db.query(
