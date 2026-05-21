@@ -263,7 +263,29 @@ class SMCPatternAgent extends BaseAgent {
 
         if (!vwapFiltered.length) continue;
 
-        for (const r of vwapFiltered) {
+        // ── Trend gate: LL / HH are counter-trend — require alignment ─
+        // LL LONG: bounce play at new low — only valid when 4H trend is UP or NEUTRAL.
+        //          In a confirmed downtrend (trend=DOWN) the LL just becomes the next step down.
+        // HH SHORT: fade at new high — only valid when 4H trend is DOWN or NEUTRAL.
+        //           In a confirmed uptrend (trend=UP) the HH is just continuation.
+        // HL (LONG) and LH (SHORT) are already trend-following — no gate needed.
+        const trendGated = vwapFiltered.filter(r => {
+          if (r.pattern === 'LL' && r.dir === 'LONG' && r.trend === 'DOWN') {
+            bLog.scan(`[SMC-PAT] Trend gate: ${sym} LL LONG blocked — trend=DOWN (counter-trend bounce)`);
+            this.addActivity('skip', `${sym} LL LONG blocked — 4H trend DOWN (no counter-trend bounce)`);
+            return false;
+          }
+          if (r.pattern === 'HH' && r.dir === 'SHORT' && r.trend === 'UP') {
+            bLog.scan(`[SMC-PAT] Trend gate: ${sym} HH SHORT blocked — trend=UP (counter-trend fade)`);
+            this.addActivity('skip', `${sym} HH SHORT blocked — 4H trend UP (no counter-trend fade)`);
+            return false;
+          }
+          return true;
+        });
+
+        if (!trendGated.length) continue;
+
+        for (const r of trendGated) {
           const sig = formatSignal(r);
           signals.push(sig);
           this._signalCount++;
