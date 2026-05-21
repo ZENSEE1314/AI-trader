@@ -2044,12 +2044,12 @@ async function executeForAllUsers(pick) {
         // Check DB for existing open trade on same SYMBOL for this USER (across ALL their keys).
         // Previously checked api_key_id only — if a user has 3 keys, all 3 would open the same trade.
         const existingTrade = await db.query(
-          `SELECT id FROM trades WHERE user_id = $1 AND symbol = $2 AND status = 'OPEN' LIMIT 1`,
+          `SELECT id, status FROM trades WHERE user_id = $1 AND symbol = $2 AND status IN ('OPEN','PENDING_LIMIT') LIMIT 1`,
           [key.user_id, symbol]
         );
         if (existingTrade.length > 0) {
           _openTradeInProgress.delete(openLockKey);
-          userLog.trade(`User ${key.email}: already has OPEN trade on ${symbol} (user-wide check) — skipping duplicate`);
+          userLog.trade(`User ${key.email}: already has ${existingTrade[0].status} trade on ${symbol} — skipping duplicate`);
           return;
         }
 
@@ -2398,12 +2398,19 @@ async function executeForAllUsers(pick) {
           // Limit orders expire automatically via the 15-min cancel check in
           // trail-watchdog. If price never reaches the level → order cancelled,
           // no loss taken. Better to miss a trade than enter at the wrong price.
-          const rawLevel    = parseFloat(pick.level || pick.entry || price || 0);
-          const hasLevel    = rawLevel > 0 && pick.setupName; // SMC signals only
-          const bxOrderType = hasLevel ? 'LIMIT' : 'MARKET';
-          const bxLimitPrice = hasLevel
-            ? parseFloat(rawLevel.toFixed(8))
-            : undefined;
+          // ── Order type: LIMIT only for CHoCH (retest entry), MARKET for everything else ──
+          // CHoCH: price just BROKE a level → place LIMIT at that level to enter on the RETEST.
+          //        (e.g. price broke LH at 77,200 → LIMIT BUY at 77,200 waits for pullback)
+          // HL/LL/LH/HH: price is ALREADY AT the pivot level (bounced, confirmed).
+          //        PAT_TOL ensures signal fires only within 0.2% of the level.
+          //        → MARKET fills immediately at the correct structural price.
+          // Using LIMIT on HL/LL would never fill because price already bounced away.
+          const rawLevel   = parseFloat(pick.level || pick.entry || price || 0);
+          const isChoch    = (pick.smcContext?.pattern || pick.setupName || '').includes('CHoCH');
+          const hasLevel   = rawLevel > 0 && pick.setupName;
+          const useLimit   = hasLevel && isChoch;
+          const bxOrderType  = useLimit ? 'LIMIT' : 'MARKET';
+          const bxLimitPrice = useLimit ? parseFloat(rawLevel.toFixed(8)) : undefined;
 
           // TP: Range Bounce uses hard TP at opposite wall, Scenario A at +3.5%, others none
           const bxEntryRef = price;
@@ -2573,7 +2580,7 @@ async function executeForAllUsers(pick) {
                trailing_sl_price, trailing_sl_last_step, tf_15m, tf_3m, tf_1m, market_structure, key_trailing_sl_step, setup, tp2_price)
                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'PENDING_LIMIT', $10, 0, $11, $12, $13, $14, $15, $16, $17)`,
               [key.id, key.user_id, symbol, pick.direction, bxLimitPrice,
-               parseFloat(slPrice.toFixed(8)), tp1PL, qty, userLev, parseFloat(slPrice.toFixed(8)),
+               parseFloat((slPrice ?? 0).toFixed(8)), tp1PL, qty, userLev, parseFloat((slPrice ?? 0).toFixed(8)),
                null, pick.structure?.tf3m || null, pick.structure?.tf1m || null,
                `LIMIT_ORDER:${order?.orderId || '?'}`, userTrailStep,
                pick.setupName || pick.setup || null, tp2PL]
@@ -2593,7 +2600,7 @@ async function executeForAllUsers(pick) {
                trailing_sl_price, trailing_sl_last_step, tf_15m, tf_3m, tf_1m, market_structure, key_trailing_sl_step, setup, tp2_price)
                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'OPEN', $10, 0, $11, $12, $13, $14, $15, $16, $17)`,
               [key.id, key.user_id, symbol, pick.direction, price,
-               parseFloat(slPrice.toFixed(8)), tp1Fb, qty, userLev, parseFloat(slPrice.toFixed(8)),
+               parseFloat((slPrice ?? 0).toFixed(8)), tp1Fb, qty, userLev, parseFloat((slPrice ?? 0).toFixed(8)),
                null, pick.structure?.tf3m || null, pick.structure?.tf1m || null,
                pick.marketStructure || null, userTrailStep,
                pick.setupName || pick.setup || null, tp2Fb]
@@ -2881,9 +2888,11 @@ async function syncTradeStatus() {
         if (pos) {
           // Limit order filled — promote to OPEN
           const actualEntry = parseFloat(pos.avgOpenPrice || pos.entryPrice || pos.avgPrice) || parseFloat(pl.entry_price);
+          // Use the structural SL stored at PENDING_LIMIT insert time, not a hardcoded %.
+          // The sl_price from the signal already reflects the correct structural level.
           await db.query(
             `UPDATE trades SET status='OPEN', entry_price=$1, trailing_sl_price=$2 WHERE id=$3`,
-            [actualEntry, actualEntry * (pl.direction === 'LONG' ? (1 - 0.002) : (1 + 0.002)), pl.id]
+            [actualEntry, parseFloat(pl.sl_price || 0), pl.id]
           );
           log(`LIMIT FILLED: ${symbol} ${pl.direction} @ $${actualEntry} — promoted to OPEN`);
           await notify(`✅ *Limit filled*: ${symbol} ${pl.direction} @ $${actualEntry}`);

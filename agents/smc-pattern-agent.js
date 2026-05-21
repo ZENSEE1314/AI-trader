@@ -63,7 +63,9 @@ function computeVWAP(bars) {
   if (sumV === 0 || tps.length === 0) return null;
 
   const vwap = sumTPV / sumV;
-  const variance = tps.reduce((s, tp) => s + (tp - vwap) ** 2, 0) / tps.length;
+  // Volume-weighted variance — matches TradingView VWAP band calculation exactly.
+  // Simple (unweighted) variance produces bands that are too narrow vs TradingView.
+  const variance = vwapBars.reduce((s, b, i) => s + b.v * (tps[i] - vwap) ** 2, 0) / sumV;
   const stdDev = Math.sqrt(variance);
 
   return { vwap, upper: vwap + stdDev, lower: vwap - stdDev };
@@ -137,11 +139,12 @@ class SMCPatternAgent extends BaseAgent {
     this._lastError    = null;
     this._lastSignals  = [];
 
-    // BTC market bias — updated every scan from BTC 1m structure.
-    // 'BULLISH' (HL/HH on 1m) | 'BEARISH' (LH/LL on 1m) | null (unclear)
-    // Altcoin signals that conflict with BTC bias are dropped.
-    this._btcBias      = null;
-    this._btcBiasAt    = 0;
+    // BTC market bias — set from BTC's last signal direction.
+    // 'BULLISH' | 'BEARISH' | null (neutral)
+    // When signal bias expires (15 min), falls back to _btcTrendFallback (4H trend).
+    this._btcBias          = null;
+    this._btcBiasAt        = 0;
+    this._btcTrendFallback = null; // 'BULLISH'|'BEARISH' from BTC's last 4H classifyTrend
 
     // Cooldown map shared with scanPatterns: 'BTCUSDT_HL' → lastSignalTs
     this._cooldowns    = new Map();
@@ -295,20 +298,27 @@ class SMCPatternAgent extends BaseAgent {
     // If BTC has no signal this cycle, keep the last known bias (expires after 30 min).
     // Using BTC's signal direction (not a separate pivot calc) so bias always matches
     // the real trade the bot just fired on BTC — no contradictions possible.
+    // BTC signal → strongest source of truth
     const btcSignalThisCycle = signals.find(s => s.symbol === 'BTCUSDT');
     if (btcSignalThisCycle) {
-      this._btcBias   = btcSignalThisCycle.direction === 'LONG' ? 'BULLISH' : 'BEARISH';
-      this._btcBiasAt = now;
-      bLog.scan(`[SMC-PAT] BTC bias → ${this._btcBias} (from BTC ${btcSignalThisCycle.direction} signal)`);
-      this.addActivity('info', `BTC market bias: ${this._btcBias} (${btcSignalThisCycle.smcContext?.pattern ?? btcSignalThisCycle.direction})`);
+      this._btcBias    = btcSignalThisCycle.direction === 'LONG' ? 'BULLISH' : 'BEARISH';
+      this._btcBiasAt  = now;
+      // Also cache the 4H trend from the BTC signal as a persistent fallback
+      const btcTrend = btcSignalThisCycle.smcContext?.trend;
+      if (btcTrend === 'UP')   this._btcTrendFallback = 'BULLISH';
+      if (btcTrend === 'DOWN') this._btcTrendFallback = 'BEARISH';
+      bLog.scan(`[SMC-PAT] BTC bias → ${this._btcBias} (signal) fallback4H=${this._btcTrendFallback}`);
+      this.addActivity('info', `BTC bias: ${this._btcBias} | 4H trend: ${this._btcTrendFallback ?? 'unknown'}`);
     } else if (now - this._btcBiasAt > 15 * 60_000) {
-      // Bias expired — no BTC signal in last 15 min (one 15M candle) → go neutral
-      // Altcoins should not trade on stale BTC direction.
-      if (this._btcBias !== null) {
-        bLog.scan('[SMC-PAT] BTC bias expired (15 min) → NEUTRAL');
-        this.addActivity('info', 'BTC bias expired (15 min) → NEUTRAL — altcoins wait for BTC');
+      // Bias expired — fall back to 4H trend instead of blocking everything.
+      // The 4H trend doesn't change in 15 min — it's safe as a directional guard.
+      const prev = this._btcBias;
+      this._btcBias   = this._btcTrendFallback ?? null; // null = truly neutral
+      this._btcBiasAt = now; // reset so we don't log every cycle
+      if (prev !== this._btcBias) {
+        bLog.scan(`[SMC-PAT] BTC bias expired → fallback to 4H: ${this._btcBias ?? 'NEUTRAL'}`);
+        this.addActivity('info', `BTC bias expired → 4H fallback: ${this._btcBias ?? 'NEUTRAL (both sides open)'}`);
       }
-      this._btcBias = null;
     }
 
     // ── Update open trade states (outcome logging only) ────
@@ -359,12 +369,10 @@ class SMCPatternAgent extends BaseAgent {
     const btcFiltered = uniqueSignals.filter(s => {
       if (s.symbol === 'BTCUSDT') return true; // BTC always trades its own structure
 
-      // No active BTC bias → altcoins wait (don't trade without market context)
-      if (!btcBiasValid) {
-        bLog.scan(`[SMC-PAT] BTC-bias NEUTRAL: ${s.symbol} ${s.direction} held — no recent BTC signal`);
-        this.addActivity('skip', `${s.symbol} ${s.direction} held — waiting for BTC direction`);
-        return false;
-      }
+      // No active BTC bias (truly neutral) → allow both directions (4H is flat / unknown)
+      // Previously this blocked all altcoins — too aggressive. When we genuinely
+      // don't know BTC direction, let each altcoin's own structure decide.
+      if (!btcBiasValid) return true;
 
       // Direction conflict → block
       const blocked =

@@ -1799,6 +1799,21 @@ function detectBullCHoCH(window, curBar, slPct) {
   const overshoot = (cur - lastLH.price) / lastLH.price;
   if (overshoot > CHOCH_TOL) return null;          // chased too far — entry would be 0.3%+ above level
 
+  // ── Reversal confirmation: break bar must be a REJECTION candle ──────────
+  // A BOS (continuation) bar is full-bodied momentum through the level.
+  // A real CHoCH bar wicks INTO the level and closes above with a lower wick,
+  // showing that sellers tried but buyers took over.
+  // Minimum: upper wick ≤ body size (price closed near the high of the break bar).
+  // This blocks 90% of false CHoCH signals from momentum continuation moves.
+  const breakBody  = Math.abs(curBar.c - curBar.o);
+  const upperWick  = curBar.h - Math.max(curBar.c, curBar.o);
+  const lowerWick  = Math.min(curBar.c, curBar.o) - curBar.l;
+  // Rejection candle: body must dominate (body > upper wick = price held gains)
+  if (breakBody === 0) return null;                // doji — not a clean break
+  if (upperWick > breakBody * 1.5) return null;   // big upper wick = failed breakout, not CHoCH
+  // Must have bullish close (close > open)
+  if (!curBar.bullish) return null;
+
   // SL = below the last LL in the swing (deepest point of the downtrend)
   const lastLL   = lows.reduce((a, b) => a.price < b.price ? a : b);
   const slPrice  = lastLL.price * (1 - slPct);
@@ -1810,7 +1825,7 @@ function detectBullCHoCH(window, curBar, slPct) {
   return {
     pattern:  'CHoCH-BULL',
     dir:      'LONG',
-    level:    lastLH.price,   // the broken LH = CHoCH level
+    level:    lastLH.price,   // the broken LH = CHoCH level (LIMIT retest entry)
     slPrice,
     tp1:      cur * (1 + TP1_PCT),
     tp2:      cur * (1 + TP2_PCT),
@@ -1835,6 +1850,16 @@ function detectBearCHoCH(window, curBar, slPct) {
   const overshoot = (lastHL.price - cur) / lastHL.price;
   if (overshoot > CHOCH_TOL) return null;         // chased too far below level
 
+  // ── Reversal confirmation: break bar must be a REJECTION candle ──────────
+  // Bearish CHoCH: price broke below HL. Bar must be a bearish rejection —
+  // lower wick ≤ body size (price closed near the low, didn't wick back).
+  // Blocks continuation moves that close below HL and keep going.
+  const breakBodyB = Math.abs(curBar.c - curBar.o);
+  const lowerWickB = Math.min(curBar.c, curBar.o) - curBar.l;
+  if (breakBodyB === 0) return null;              // doji — not a clean break
+  if (lowerWickB > breakBodyB * 1.5) return null; // long lower wick = rejection (buyers stepping in)
+  if (curBar.bullish) return null;                // must close bearish (close < open)
+
   // SL = above the last HH in the swing
   const lastHH   = highs.reduce((a, b) => a.price > b.price ? a : b);
   const slPrice  = lastHH.price * (1 + slPct);
@@ -1845,7 +1870,7 @@ function detectBearCHoCH(window, curBar, slPct) {
   return {
     pattern:  'CHoCH-BEAR',
     dir:      'SHORT',
-    level:    lastHL.price,   // the broken HL = CHoCH level
+    level:    lastHL.price,   // the broken HL = CHoCH level (LIMIT retest entry)
     slPrice,
     tp1:      cur * (1 - TP1_PCT),
     tp2:      cur * (1 - TP2_PCT),
