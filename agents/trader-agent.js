@@ -170,6 +170,23 @@ class TraderAgent extends BaseAgent {
           continue;
         }
 
+        // Block if an open trade already exists for this symbol (any direction)
+        // Prevents the bot from opening LONG + SHORT on the same token simultaneously.
+        try {
+          const db = require('../db');
+          const existing = await db.query(
+            `SELECT id, direction FROM trades WHERE symbol = $1 AND status = 'OPEN' LIMIT 1`,
+            [(pick.symbol || '').toUpperCase()]
+          );
+          if (existing.length) {
+            const openDir = existing[0].direction;
+            this.logTrade(`${pick.symbol} already has OPEN ${openDir} trade — skipping ${pick.direction}`);
+            this.tradesSkipped++;
+            this.addActivity('skip', `${pick.symbol} already OPEN (${openDir}) — skip ${pick.direction}`);
+            continue;
+          }
+        } catch (_) { /* DB unavailable — proceed */ }
+
         // Check post-close cooldown (1 hour per token after any close)
         if (await this._isInCloseCooldown(pick.symbol)) {
           const sym = (pick.symbol || '').toUpperCase();

@@ -240,17 +240,35 @@ class SMCPatternAgent extends BaseAgent {
       return { ok: true, signals: 0 };
     }
 
+    // ── Deduplicate: one signal per symbol (1m always listed first → wins) ──
+    // Both scanners (1m primary + HTF) can fire for the same symbol in
+    // opposite directions. Keep only the first signal per symbol so TraderAgent
+    // never sees conflicting directions for the same token in one batch.
+    const seenSymbols = new Set();
+    const uniqueSignals = signals.filter(s => {
+      if (seenSymbols.has(s.symbol)) {
+        bLog.scan(`[SMC-PAT] Dedup: dropped ${s.symbol} ${s.direction} (${s.smcContext?.tf}) — ${s.symbol} already queued`);
+        return false;
+      }
+      seenSymbols.add(s.symbol);
+      return true;
+    });
+
+    if (uniqueSignals.length < signals.length) {
+      this.addActivity('info', `Deduped ${signals.length} → ${uniqueSignals.length} signal(s) (one per symbol)`);
+    }
+
     // ── Route signals: RiskAgent → TraderAgent ─────────────
     if (context.coordinator) {
       try {
         const riskAgent   = context.coordinator.riskAgent;
         const traderAgent = context.coordinator.traderAgent;
 
-        let approved = signals;
+        let approved = uniqueSignals;
         if (riskAgent && !riskAgent.paused) {
-          const riskResult = await riskAgent.run({ signals, openPositions: [] });
-          approved = riskResult?.approved || signals;
-          bLog.scan(`[SMC-PAT] RiskAgent: ${approved.length}/${signals.length} approved`);
+          const riskResult = await riskAgent.run({ signals: uniqueSignals, openPositions: [] });
+          approved = riskResult?.approved || uniqueSignals;
+          bLog.scan(`[SMC-PAT] RiskAgent: ${approved.length}/${uniqueSignals.length} approved`);
         }
 
         if (approved.length && traderAgent && !traderAgent.paused) {
