@@ -103,6 +103,12 @@ class SMCPatternAgent extends BaseAgent {
     this._lastError    = null;
     this._lastSignals  = [];
 
+    // BTC market bias — updated every scan from BTC 1m structure.
+    // 'BULLISH' (HL/HH on 1m) | 'BEARISH' (LH/LL on 1m) | null (unclear)
+    // Altcoin signals that conflict with BTC bias are dropped.
+    this._btcBias      = null;
+    this._btcBiasAt    = 0;
+
     // Cooldown map shared with scanPatterns: 'BTCUSDT_HL' → lastSignalTs
     this._cooldowns    = new Map();
 
@@ -182,6 +188,17 @@ class SMCPatternAgent extends BaseAgent {
         const ltfTag = valid1m ? '1m' : valid3m ? '3m' : '15m-only';
         bLog.scan(`[SMC-PAT] ${sym}: LTF=${ltfTag} (1m=${bars1m?.length ?? 0} 3m=${bars3m?.length ?? 0})`);
 
+        // ── BTC market bias — update whenever we scan BTCUSDT ─────
+        // Rule: BTC HL/HH → market BULLISH → altcoins: LONG only
+        //       BTC LH/LL → market BEARISH → altcoins: SHORT only
+        // BTC itself always trades its own structure (no filter applied to BTC).
+        if (sym === 'BTCUSDT' && valid1m && valid1m.length >= 20) {
+          this._btcBias   = this._deriveBtcBias(valid1m);
+          this._btcBiasAt = now;
+          bLog.scan(`[SMC-PAT] BTC bias: ${this._btcBias ?? 'NEUTRAL'}`);
+          this.addActivity('info', `BTC market bias: ${this._btcBias ?? 'NEUTRAL'}`);
+        }
+
         // ── Scan 1: HTF primary (15m/30m/1H) + LTF confirmation ───
         const raw = scanPatterns(sym, patBars, bars4h, this._cooldowns, valid1m, valid3m);
 
@@ -258,17 +275,44 @@ class SMCPatternAgent extends BaseAgent {
       this.addActivity('info', `Deduped ${signals.length} → ${uniqueSignals.length} signal(s) (one per symbol)`);
     }
 
+    // ── BTC bias filter — altcoins must follow BTC direction ──
+    // BTC is the market leader. If BTC shows HL/HH (BULLISH), only LONG on altcoins.
+    // If BTC shows LH/LL (BEARISH), only SHORT on altcoins.
+    // BTC itself is exempt — it always trades its own structure.
+    // Bias expires after 30 min (stale bias ignored).
+    const btcBiasAge = now - this._btcBiasAt;
+    const btcBiasValid = this._btcBias && btcBiasAge < 30 * 60_000;
+    const btcFiltered = btcBiasValid
+      ? uniqueSignals.filter(s => {
+          if (s.symbol === 'BTCUSDT') return true; // BTC trades its own structure
+          const blocked =
+            (this._btcBias === 'BULLISH' && s.direction === 'SHORT') ||
+            (this._btcBias === 'BEARISH' && s.direction === 'LONG');
+          if (blocked) {
+            bLog.scan(`[SMC-PAT] BTC-bias block: ${s.symbol} ${s.direction} vs BTC=${this._btcBias}`);
+            this.addActivity('skip', `${s.symbol} ${s.direction} blocked — BTC bias is ${this._btcBias}`);
+          }
+          return !blocked;
+        })
+      : uniqueSignals;
+
+    if (btcBiasValid && btcFiltered.length < uniqueSignals.length) {
+      this.addActivity('info',
+        `BTC bias (${this._btcBias}) filtered ${uniqueSignals.length - btcFiltered.length} signal(s)`
+      );
+    }
+
     // ── Route signals: RiskAgent → TraderAgent ─────────────
     if (context.coordinator) {
       try {
         const riskAgent   = context.coordinator.riskAgent;
         const traderAgent = context.coordinator.traderAgent;
 
-        let approved = uniqueSignals;
+        let approved = btcFiltered;
         if (riskAgent && !riskAgent.paused) {
-          const riskResult = await riskAgent.run({ signals: uniqueSignals, openPositions: [] });
-          approved = riskResult?.approved || uniqueSignals;
-          bLog.scan(`[SMC-PAT] RiskAgent: ${approved.length}/${uniqueSignals.length} approved`);
+          const riskResult = await riskAgent.run({ signals: btcFiltered, openPositions: [] });
+          approved = riskResult?.approved || btcFiltered;
+          bLog.scan(`[SMC-PAT] RiskAgent: ${approved.length}/${btcFiltered.length} approved`);
         }
 
         if (approved.length && traderAgent && !traderAgent.paused) {
@@ -328,6 +372,47 @@ class SMCPatternAgent extends BaseAgent {
     }
   }
 
+  // ── BTC bias detector ─────────────────────────────────────
+  // Reads the last 30 bars of BTC 1m and checks pivot low structure:
+  //   Last pivot low > prev pivot low → HL → BULLISH
+  //   Last pivot low < prev pivot low → LL → BEARISH
+  // Falls back to pivot highs if lows are unclear.
+  // Returns 'BULLISH' | 'BEARISH' | null (neutral / unclear)
+  _deriveBtcBias(bars1m) {
+    if (!bars1m || bars1m.length < 10) return null;
+    const win = bars1m.slice(-30);
+
+    // Find simple pivot lows (bar lower than both neighbours)
+    const pivLows = [];
+    for (let i = 1; i < win.length - 1; i++) {
+      if (win[i].l < win[i - 1].l && win[i].l < win[i + 1].l) {
+        pivLows.push({ price: win[i].l, idx: i });
+      }
+    }
+    if (pivLows.length >= 2) {
+      const last = pivLows[pivLows.length - 1];
+      const prev = pivLows[pivLows.length - 2];
+      if (last.price > prev.price) return 'BULLISH'; // HL → buyers stepping in higher
+      if (last.price < prev.price) return 'BEARISH'; // LL → sellers pushing lower
+    }
+
+    // Fallback: pivot highs
+    const pivHighs = [];
+    for (let i = 1; i < win.length - 1; i++) {
+      if (win[i].h > win[i - 1].h && win[i].h > win[i + 1].h) {
+        pivHighs.push({ price: win[i].h, idx: i });
+      }
+    }
+    if (pivHighs.length >= 2) {
+      const last = pivHighs[pivHighs.length - 1];
+      const prev = pivHighs[pivHighs.length - 2];
+      if (last.price > prev.price) return 'BULLISH'; // HH
+      if (last.price < prev.price) return 'BEARISH'; // LH
+    }
+
+    return null; // neutral — no clear bias
+  }
+
   // ── Health / context ───────────────────────────────────────
 
   async _getAIContext() {
@@ -355,6 +440,8 @@ class SMCPatternAgent extends BaseAgent {
       lastScanAt:   this._lastScanAt,
       signalCount:  this._signalCount,
       openTrades:   this._openTrades.size,
+      btcBias:      this._btcBias ?? 'NEUTRAL',
+      btcBiasAge:   this._btcBiasAt ? Math.round((Date.now() - this._btcBiasAt) / 1000) + 's ago' : 'never',
       lastSignals:  this._lastSignals.map(s => ({
         symbol:    s.symbol,
         direction: s.direction,
