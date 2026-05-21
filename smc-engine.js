@@ -1100,7 +1100,7 @@ const TRADING_CONFIG = {
 const TP1_PCT   = 0.005;   // 0.5%  — close 50% of position at TP1
 const TP2_PCT   = 0.010;   // 1.0%  — close remaining 50% at TP2
 const LOCK_PCT  = 0.0025;  // +0.25% — slide SL to lock after TP1 hit
-const PAT_TOL   = 0.005;   // 0.5% retest tolerance around pattern level
+const PAT_TOL   = 0.015;   // 1.5% retest tolerance — was 0.5%, too tight for crypto momentum
 const PAT_WINGS = 3;       // bars each side required to confirm pivot
 const PAT_LKBK  = 60;     // bars lookback for pivot detection
 const PAT_CD    = 2 * 3_600_000; // 2-hour cooldown per pattern per symbol
@@ -1126,18 +1126,34 @@ function calcEMASeries(bars, period) {
 
 // ── Trend state classifier (uses 4H bars) ────────────────────────
 // Returns: 'UP' | 'DOWN' | 'NEUTRAL'
-// UP:   EMA20 > EMA50 > EMA200 — all aligned bullish
-// DOWN: EMA20 < EMA50 < EMA200 — all aligned bearish
-// NEUTRAL: mixed (use fib50 to decide direction)
+// UP:   full stack EMA20 > EMA50 > EMA200, OR recovery phase (EMA20 > EMA50 + price > EMA200)
+// DOWN: full stack EMA20 < EMA50 < EMA200, OR distribution (EMA20 < EMA50 + price < EMA200)
+// NEUTRAL: mixed signals — use fib50 to decide direction
+//
+// NOTE: EMA200 is slow (200 bars = 33 days on 4H). During recovery from a downtrend,
+// EMA20 > EMA50 but EMA50 still < EMA200. If price has already crossed above EMA200,
+// the trend has flipped bullish — classify as UP so LONGs can fire.
 function classifyTrend(bars4h) {
   const eS = calcEMASeries(bars4h, TREND_EMA_S);
   const eM = calcEMASeries(bars4h, TREND_EMA_M);
   const eL = calcEMASeries(bars4h, TREND_EMA_L);
-  const last = bars4h.length - 1;
+  const last  = bars4h.length - 1;
   const s = eS[last], m = eM[last], l = eL[last];
   if (s === null || m === null || l === null) return 'NEUTRAL';
+
+  const price = bars4h[last].c;
+
+  // Full bullish stack
   if (s > m && m > l) return 'UP';
+  // Full bearish stack
   if (s < m && m < l) return 'DOWN';
+
+  // Recovery phase: short+medium EMA stack bullish AND price already above slow EMA
+  // EMA200 lags price by months — if price > EMA200 and EMA20 > EMA50, trend has flipped
+  if (s > m && price > l) return 'UP';
+  // Distribution phase: short+medium stack bearish AND price still below slow EMA
+  if (s < m && price < l) return 'DOWN';
+
   return 'NEUTRAL';
 }
 
@@ -1193,7 +1209,7 @@ function detectHL(window, cur, slPct) {
   const prev = lows[lows.length - 2];
   const curr = lows[lows.length - 1];
   if (curr.price <= prev.price) return null;        // must be higher low
-  if (curr.idx < window.length - 24) return null;  // must be recent
+  if (curr.idx < window.length - 36) return null;  // must be within last 36 bars
   const above = (cur - curr.price) / curr.price;
   if (above < 0 || above > PAT_TOL) return null;   // price must be just above level
   return {
@@ -1214,7 +1230,7 @@ function detectLL(window, cur, slPct) {
   const prev = lows[lows.length - 2];
   const curr = lows[lows.length - 1];
   if (curr.price >= prev.price) return null;        // must be lower low
-  if (curr.idx < window.length - 24) return null;
+  if (curr.idx < window.length - 36) return null;  // must be within last 36 bars
   const above = (cur - curr.price) / curr.price;
   if (above < 0 || above > PAT_TOL) return null;
   return {
@@ -1235,7 +1251,7 @@ function detectLH(window, cur, slPct) {
   const prev = highs[highs.length - 2];
   const curr = highs[highs.length - 1];
   if (curr.price >= prev.price) return null;        // must be lower high
-  if (curr.idx < window.length - 24) return null;
+  if (curr.idx < window.length - 36) return null;  // must be within last 36 bars
   const below = (curr.price - cur) / curr.price;
   if (below < 0 || below > PAT_TOL) return null;   // price must be just below level
   return {
@@ -1256,7 +1272,7 @@ function detectHH(window, cur, slPct) {
   const prev = highs[highs.length - 2];
   const curr = highs[highs.length - 1];
   if (curr.price <= prev.price) return null;        // must be higher high
-  if (curr.idx < window.length - 24) return null;
+  if (curr.idx < window.length - 36) return null;  // must be within last 36 bars
   const below = (curr.price - cur) / curr.price;
   if (below < 0 || below > PAT_TOL) return null;
   return {
