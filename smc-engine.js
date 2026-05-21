@@ -1100,7 +1100,7 @@ const TRADING_CONFIG = {
 const TP1_PCT   = 0.005;   // 0.5%  — close 50% of position at TP1
 const TP2_PCT   = 0.010;   // 1.0%  — close remaining 50% at TP2
 const LOCK_PCT  = 0.0025;  // +0.25% — slide SL to lock after TP1 hit
-const PAT_TOL   = 0.015;   // 1.5% retest tolerance — was 0.5%, too tight for crypto momentum
+const PAT_TOL   = 0.002;   // 0.2% proximity to pattern level — tight so bot enters AT the LH/HL, not after price already moved away
 const PAT_WINGS = 2;       // bars each side to confirm pivot — was 3 (45min lag), 2 = 30min on 15m
 const PAT_LKBK  = 60;     // bars lookback for pivot detection
 const PAT_CD    = 45 * 60_000;  // 45-min cooldown — was 2H, shortened so HL#1 + HL#2 both fire
@@ -1279,8 +1279,9 @@ function detectHL(window, curBar, slPct, bars1m = null) {
   const curr = lows[lows.length - 1];
   if (curr.price <= prev.price) return null;        // must be higher low
   if (curr.idx < window.length - 36) return null;  // must be within last 36 bars
-  const above = (cur - curr.price) / curr.price;
-  if (above < 0 || above > PAT_TOL) return null;   // price must be just above level
+  // Absolute distance — catches HL bounce at the level AND retest from above
+  const dist = Math.abs(cur - curr.price) / curr.price;
+  if (dist > PAT_TOL) return null;   // must be within 0.2% of HL level (either side)
 
   // ── Structural rally filter ────────────────────────────────
   // Between the previous low and this HL there must be a meaningful rally.
@@ -1322,12 +1323,11 @@ function detectLL(window, curBar, slPct, bars1m = null) {
   const curr = lows[lows.length - 1];
   if (curr.price >= prev.price) return null;        // must be lower low
   if (curr.idx < window.length - 36) return null;  // must be within last 36 bars
-  const above = (cur - curr.price) / curr.price;
-  if (above < 0 || above > PAT_TOL) return null;
+  // Absolute distance — LL bounce entry must be close to the actual LL level
+  const dist = Math.abs(cur - curr.price) / curr.price;
+  if (dist > PAT_TOL) return null;
 
   // ── Structural rally filter ────────────────────────────────
-  // Between the previous low and this LL there must be a meaningful bounce
-  // so the LL has real structure — not just price grinding sideways lower.
   const barsBetween = window.slice(prev.idx + 1, curr.idx);
   if (barsBetween.length < 3) return null;
   const highestBetween = Math.max(...barsBetween.map(b => b.h));
@@ -1368,8 +1368,12 @@ function detectLH(window, curBar, slPct, bars1m = null) {
   const curr = highs[highs.length - 1];
   if (curr.price >= prev.price) return null;        // must be lower high
   if (curr.idx < window.length - 36) return null;  // must be within last 36 bars
-  const below = (curr.price - cur) / curr.price;
-  if (below < 0 || below > PAT_TOL) return null;   // price must be just below level
+  // Use absolute distance so we catch BOTH:
+  //   a) price just broke below LH (direct entry)
+  //   b) price retesting LH from below (approaching from underneath = correct SMC retest short)
+  // Entering far below the LH = shorting near LL support = no room to fall.
+  const dist = Math.abs(curr.price - cur) / curr.price;
+  if (dist > PAT_TOL) return null;   // must be within 0.2% of LH level (either side)
 
   // ── Short-at-the-top filter ────────────────────────────────
   // LH pivot must be within 0.5% of the recent swing high.
@@ -1418,8 +1422,9 @@ function detectHH(window, curBar, slPct, bars1m = null) {
   const curr = highs[highs.length - 1];
   if (curr.price <= prev.price) return null;        // must be higher high
   if (curr.idx < window.length - 36) return null;  // must be within last 36 bars
-  const below = (curr.price - cur) / curr.price;
-  if (below < 0 || below > PAT_TOL) return null;
+  // Absolute distance — catches both direct breakdown and retest from below
+  const dist = Math.abs(curr.price - cur) / curr.price;
+  if (dist > PAT_TOL) return null;
 
   // ── Short-at-the-top filter ────────────────────────────────
   const winHigh = Math.max(...window.slice(-36).map(b => b.h)); // matches 36-bar recency window
