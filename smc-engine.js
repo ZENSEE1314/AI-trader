@@ -1999,24 +1999,48 @@ function scan1mPatterns(sym, bars1m, bars4h, cooldowns = new Map()) {
     return { pattern:'LL', dir:'LONG', level:curr.price, slPrice:curr.price*(1-s), tp1:c.c*(1+TP1_PCT), tp2:c.c*(1+TP2_PCT), lockAt:c.c*(1+LOCK_PCT) };
   }
 
-  // CHoCH first (strongest/earliest signal), then BMS-style LH/HL entries
-  const detectors = shortFirst
-    ? [
-        { key: 'CHoCH-BEAR', fn: detectBearCHoCH },
-        { key: 'LH',         fn: _1mLH },
-        { key: 'HH',         fn: _1mHH },
-        { key: 'CHoCH-BULL', fn: detectBullCHoCH },
-        { key: 'HL',         fn: _1mHL },
-        { key: 'LL',         fn: _1mLL },
-      ]
-    : [
-        { key: 'CHoCH-BULL', fn: detectBullCHoCH },
-        { key: 'HL',         fn: _1mHL },
-        { key: 'LL',         fn: _1mLL },
-        { key: 'CHoCH-BEAR', fn: detectBearCHoCH },
-        { key: 'LH',         fn: _1mLH },
-        { key: 'HH',         fn: _1mHH },
-      ];
+  // ── Current structure gate: most recent confirmed pivot decides direction ──
+  // The TV SMC indicator labels the MOST RECENT pivot (HL or LH) on the chart.
+  // If the last confirmed pivot is an HL → only LONG signals are valid right now.
+  // If the last confirmed pivot is an LH → only SHORT signals are valid right now.
+  // This prevents the old shortFirst ordering from firing LH(SHORT) when the chart
+  // clearly shows HL at the right edge — the root cause of "bot shorts at HL".
+  let structureOnlyDir = null; // null = allow both directions (LL/HH/ambiguous)
+  {
+    const latestHighs = _ind1mHighs(window);
+    const latestLows  = _ind1mLows(window);
+    const lastH = latestHighs[latestHighs.length - 1];
+    const lastL = latestLows[latestLows.length - 1];
+    const prevH = latestHighs[latestHighs.length - 2];
+    const prevL = latestLows[latestLows.length - 2];
+
+    if (lastH && lastL) {
+      if (lastL.idx > lastH.idx) {
+        // Most recent confirmed pivot is a LOW
+        if (prevL && lastL.price > prevL.price) {
+          structureOnlyDir = 'LONG';  // HL confirmed → only LONG
+        }
+        // LL: allow both (could still short on CHoCH-BEAR continuation)
+      } else {
+        // Most recent confirmed pivot is a HIGH
+        if (prevH && lastH.price < prevH.price) {
+          structureOnlyDir = 'SHORT'; // LH confirmed → only SHORT
+        }
+        // HH: allow both (could still long on CHoCH-BULL continuation)
+      }
+    }
+  }
+
+  // Fixed priority order — CHoCH reversals first, then structural entries.
+  // No longer use shortFirst (that was causing LH/SHORT to fire at HL price).
+  const detectors = [
+    { key: 'CHoCH-BULL', fn: detectBullCHoCH },
+    { key: 'CHoCH-BEAR', fn: detectBearCHoCH },
+    { key: 'HL',         fn: _1mHL },
+    { key: 'LH',         fn: _1mLH },
+    { key: 'LL',         fn: _1mLL },
+    { key: 'HH',         fn: _1mHH },
+  ];
 
   for (const { key, fn } of detectors) {
     // Use '1m_' prefix so 1m cooldowns don't block 15m signals and vice versa
@@ -2025,6 +2049,14 @@ function scan1mPatterns(sym, bars1m, bars4h, cooldowns = new Map()) {
 
     const sig = fn(window, cur, cfg.slPct);
     if (!sig) continue;
+
+    // Structure gate: if most recent pivot is HL, block any SHORT; if LH, block any LONG.
+    // CHoCH signals are exempt — a CHoCH-BEAR can legitimately fire at an HL (reversal candle
+    // broke below the HL low) and vice versa.
+    const isChoch = key === 'CHoCH-BULL' || key === 'CHoCH-BEAR';
+    if (!isChoch && structureOnlyDir && sig.dir !== structureOnlyDir) {
+      continue; // e.g. LH(SHORT) blocked when HL is the current confirmed structure
+    }
 
     // Trend alignment — uses full OTE fibZones (61.8/38.2% gates)
     if (!isTrendAligned(trend, sig.dir, fibZones ?? fib50, price)) continue;
