@@ -1229,7 +1229,11 @@ function isTrendAligned(trend, dir, fibZones, price) {
   }
 
   if (trend === 'DOWN') {
-    if (dir === 'SHORT') return true;         // always SHORT in downtrend
+    // SHORT only when price is in the UPPER half of the swing range (premium zone).
+    // HL forms in the lower half (discount) — shorting there means entering at support;
+    // price will bounce to LH first, stopping you out, then continue down.
+    // LH forms in the upper half (premium) — that is the correct short entry.
+    if (dir === 'SHORT') return aboveMid;     // SHORT only at/above 50% midline (LH zone)
     if (dir === 'LONG')  return inDiscount;   // LONG only at LL (below 38.2%) — NOT at LH bounce
     return false;
   }
