@@ -31,9 +31,43 @@ const SCAN_INTERVAL_MS = 30_000;    // 30s — catches new closes on all TFs
 const BARS_PATTERN     = 120;       // bars for pattern detection window
 const BARS_4H_TREND    = 250;       // bars for 4H EMA200 (needs 200 minimum)
 const BARS_1M          = 80;        // 1m bars for LTF confirmation (80 min coverage)
-const BARS_3M          = 60;        // 3m bars for LTF fallback (3hr coverage)
+const BARS_3M          = 480;       // 3m bars — 480×3min = 24h session VWAP coverage
 const SCORE            = 72;        // signal score (higher than SMCProAgent's default)
 const AGENT_NAME       = 'SMCPatternAgent';
+
+// ── Session VWAP + ±1σ bands ─────────────────────────────────
+// Computed from 3m bars (up to 24h of data).
+// Rule: price ≤ lower band → NO LONG (in downtrend territory)
+//       price ≥ upper band → NO SHORT (in uptrend territory)
+// This matches TradingView "VWAP Session" with standard deviation bands.
+function computeVWAP(bars) {
+  if (!bars || bars.length < 10) return null;
+
+  // Use bars from the current session (00:00 UTC today) for accurate VWAP.
+  // Fall back to all supplied bars if the session filter leaves too few.
+  const sessionStart = new Date();
+  sessionStart.setUTCHours(0, 0, 0, 0);
+  const sessionTs = sessionStart.getTime();
+  const sessionBars = bars.filter(b => b.t >= sessionTs);
+  const vwapBars = sessionBars.length >= 10 ? sessionBars : bars;
+
+  let sumTPV = 0, sumV = 0;
+  const tps = [];
+  for (const b of vwapBars) {
+    const tp = (b.h + b.l + b.c) / 3;
+    const vol = b.v || 1;
+    sumTPV += tp * vol;
+    sumV   += vol;
+    tps.push(tp);
+  }
+  if (sumV === 0 || tps.length === 0) return null;
+
+  const vwap = sumTPV / sumV;
+  const variance = tps.reduce((s, tp) => s + (tp - vwap) ** 2, 0) / tps.length;
+  const stdDev = Math.sqrt(variance);
+
+  return { vwap, upper: vwap + stdDev, lower: vwap - stdDev };
+}
 
 // Symbols to scan — pulled from TRADING_CONFIG (XRP excluded there)
 const SYMBOLS = Object.keys(TRADING_CONFIG);
@@ -202,15 +236,40 @@ class SMCPatternAgent extends BaseAgent {
         const raws = [raw1m, raw].filter(Boolean);
         if (!raws.length) continue;
 
-        for (const r of raws) {
+        // ── VWAP session filter ────────────────────────────────
+        // Compute session VWAP + ±1σ bands from 3m bars (up to 24h data).
+        // price ≤ lower band → NO LONG  (already in downtrend territory)
+        // price ≥ upper band → NO SHORT (already in uptrend territory)
+        const vwap = computeVWAP(bars3m);
+        const vwapFiltered = vwap
+          ? raws.filter(r => {
+              const p = r.price;
+              if (r.dir === 'LONG' && p <= vwap.lower) {
+                bLog.scan(`[SMC-PAT] VWAP block: ${sym} LONG p=${p.toFixed(2)} ≤ lower=${vwap.lower.toFixed(2)} vwap=${vwap.vwap.toFixed(2)}`);
+                this.addActivity('skip', `${sym} LONG blocked — price ${p.toFixed(2)} ≤ VWAP lower ${vwap.lower.toFixed(2)} (downtrend)`);
+                return false;
+              }
+              if (r.dir === 'SHORT' && p >= vwap.upper) {
+                bLog.scan(`[SMC-PAT] VWAP block: ${sym} SHORT p=${p.toFixed(2)} ≥ upper=${vwap.upper.toFixed(2)} vwap=${vwap.vwap.toFixed(2)}`);
+                this.addActivity('skip', `${sym} SHORT blocked — price ${p.toFixed(2)} ≥ VWAP upper ${vwap.upper.toFixed(2)} (uptrend)`);
+                return false;
+              }
+              return true;
+            })
+          : raws;
+
+        if (!vwapFiltered.length) continue;
+
+        for (const r of vwapFiltered) {
           const sig = formatSignal(r);
           signals.push(sig);
           this._signalCount++;
 
+          const vwapTag = vwap ? ` vwap=${vwap.vwap.toFixed(2)}[${vwap.lower.toFixed(2)}-${vwap.upper.toFixed(2)}]` : '';
           const tfLabel = r.tf === '1m' ? `1m(${r.pattern})` : `${cfg.label}+${r.ltfUsed ?? '?'}`;
           const msg = `${sig.symbol} ${sig.direction} pattern=${r.pattern} TF=${tfLabel} ` +
                       `trend=${r.trend} entry=${r.price.toFixed(4)} sl=${r.sl.toFixed(4)} ` +
-                      `tp1=${r.tp1.toFixed(4)} tp2=${r.tp2.toFixed(4)} RR=${sig.rr}`;
+                      `tp1=${r.tp1.toFixed(4)} tp2=${r.tp2.toFixed(4)} RR=${sig.rr}${vwapTag}`;
 
           this.addActivity('success', msg);
           bLog.trade(`[SMC-PAT] SIGNAL: ${msg}`);
