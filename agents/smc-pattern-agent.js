@@ -468,9 +468,12 @@ class SMCPatternAgent extends BaseAgent {
             bLog.scan(`[SMC-PAT] CHoCH wait ${sym} expired — no confirming pivot in 15 min`);
           } else if (
             chochWait.dir === pivotGateDir &&
+            lastPivotTs > 0 &&
+            chochWait.pivotTsAtDetection > 0 &&
             lastPivotTs > chochWait.pivotTsAtDetection
           ) {
-            // A genuinely NEW pivot formed in the correct direction AFTER the CHoCH
+            // A genuinely NEW pivot formed in the correct direction AFTER the CHoCH.
+            // Both timestamps must be > 0: if either is missing, keep waiting.
             this._chochWait.delete(sym);
             bLog.scan(`[SMC-PAT] CHoCH ${sym}: new ${pivotGateDir} pivot (ts=${lastPivotTs} > ${chochWait.pivotTsAtDetection}) — signal firing`);
             this.addActivity('info', `${sym} CHoCH confirmed by new 1m pivot — ${pivotGateDir} signal firing`);
