@@ -1101,9 +1101,9 @@ const TP1_PCT   = 0.005;   // 0.5%  — close 50% of position at TP1
 const TP2_PCT   = 0.010;   // 1.0%  — close remaining 50% at TP2
 const LOCK_PCT  = 0.0025;  // +0.25% — slide SL to lock after TP1 hit
 const PAT_TOL   = 0.015;   // 1.5% retest tolerance — was 0.5%, too tight for crypto momentum
-const PAT_WINGS = 3;       // bars each side required to confirm pivot
+const PAT_WINGS = 2;       // bars each side to confirm pivot — was 3 (45min lag), 2 = 30min on 15m
 const PAT_LKBK  = 60;     // bars lookback for pivot detection
-const PAT_CD    = 2 * 3_600_000; // 2-hour cooldown per pattern per symbol
+const PAT_CD    = 45 * 60_000;  // 45-min cooldown — was 2H, shortened so HL#1 + HL#2 both fire
 
 // ── EMA periods for trend state (4H chart) ───────────────────────
 const TREND_EMA_S = 20;
