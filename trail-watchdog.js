@@ -271,8 +271,36 @@ async function runTrailCycle() {
             ? Math.max(inferPricePrec(dbTrade.sl_price), inferPricePrec(dbTrade.entry_price))
             : inferPricePrec(entry);
 
+          // ── Exchange SL sync guard ─────────────────────────────────────
+          // Bitunix position data may include the current SL price on the exchange.
+          // If the exchange already has a more protective SL (e.g., from a previous
+          // trail cycle that DB didn't persist), use that instead of the DB value.
+          // This prevents the watchdog from downgrading a 45% lock back to 15%
+          // after a process restart when trailing_sl_price is null in DB.
+          const liveExchangeSl = parseFloat(
+            pos.slPrice || pos.stopLoss || pos.stopLossPrice || pos.sl || 0
+          );
+          if (liveExchangeSl > 0) {
+            // For LONG: keep whichever SL is HIGHER (closer to current price = more protective)
+            // For SHORT: keep whichever SL is LOWER
+            const exchangeBetter = isLong
+              ? liveExchangeSl > currentSl + 0.0001
+              : (currentSl === 0 || liveExchangeSl < currentSl - 0.0001);
+            if (exchangeBetter) {
+              log(`[SYNC] ${symbol} exchange SL=$${liveExchangeSl.toFixed(pricePrec)} better than DB SL=$${currentSl.toFixed(pricePrec)} — syncing DB`);
+              currentSl = liveExchangeSl;
+              // Persist so next restart doesn't lose this lock
+              if (dbTrade) {
+                await db.query(
+                  `UPDATE trades SET trailing_sl_price = $1 WHERE id = $2`,
+                  [liveExchangeSl, dbTrade.id]
+                ).catch(e => log(`[SYNC] DB update failed: ${e.message}`));
+              }
+            }
+          }
+
           const pctDisplay = `${capitalPct >= 0 ? '+' : ''}${(capitalPct * 100).toFixed(2)}%`;
-          log(`[DIAG] ${symbol} ${isLong ? 'LONG' : 'SHORT'} | entry=$${entry} livePrice=$${livePrice} | lev=${leverage}x | capital=${pctDisplay} | currentSL=$${currentSl} | DB=${dbTrade ? 'found' : 'ORPHAN'}`);
+          log(`[DIAG] ${symbol} ${isLong ? 'LONG' : 'SHORT'} | entry=$${entry} livePrice=$${livePrice} | lev=${leverage}x | capital=${pctDisplay} | currentSL=$${currentSl.toFixed(pricePrec)} | exchangeSL=$${liveExchangeSl > 0 ? liveExchangeSl.toFixed(pricePrec) : 'N/A'} | DB=${dbTrade ? 'found' : 'ORPHAN'}`);
 
           // ── Retro-adjust SL to 20% capital ────────────────
           // If a losing position's SL is tighter than 20% capital loss,
@@ -317,10 +345,20 @@ async function runTrailCycle() {
 
           const bestSl   = trailResult.newSlPrice;
           const srcLabel = `trail(${pctDisplay}→lock${(trailResult.newLastStep * 100).toFixed(0)}%)`;
-          const improved = currentSl === 0
+
+          // Ratchet guard: new SL must be strictly better than BOTH:
+          //   1. currentSl (already covers DB + exchange via the sync above)
+          //   2. liveExchangeSl directly (double-check, catches any race condition)
+          // For LONG: "better" = higher (more profit protected)
+          // For SHORT: "better" = lower (more profit protected)
+          const betterThanCurrent = currentSl === 0
             || (isLong ? bestSl > currentSl + 0.0001 : bestSl < currentSl - 0.0001);
+          const betterThanExchange = liveExchangeSl === 0
+            || (isLong ? bestSl > liveExchangeSl + 0.0001 : bestSl < liveExchangeSl - 0.0001);
+          const improved = betterThanCurrent && betterThanExchange;
+
           if (!improved) {
-            log(`[DIAG] ${symbol} trail ALREADY RATCHETED — bestSL=$${bestSl.toFixed(pricePrec)} currentSL=$${currentSl.toFixed(pricePrec)}`);
+            log(`[DIAG] ${symbol} trail ALREADY RATCHETED — bestSL=$${bestSl.toFixed(pricePrec)} currentSL=$${currentSl.toFixed(pricePrec)} exchangeSL=$${liveExchangeSl > 0 ? liveExchangeSl.toFixed(pricePrec) : 'N/A'}`);
             continue;
           }
 
