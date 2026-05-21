@@ -1198,12 +1198,39 @@ function _pivHighs(bars) {
   return pts;
 }
 
+// ── Big-wave quality helpers ──────────────────────────────────────
+// Three filters that separate institutional moves from weak bounces:
+//  1. Pivot bar REJECTION — did smart money step in with force?
+//  2. Pivot bar VOLUME    — was there real participation?
+//  3. Entry bar MOMENTUM  — is the move already starting right now?
+
+function _avgVol(bars) {
+  return bars.reduce((s, b) => s + b.v, 0) / bars.length;
+}
+
+// LONG rejection: pivot-low bar closes in the upper half of its range (bullish pin)
+function _isBullishRejection(bar) {
+  const range = bar.h - bar.l;
+  if (range <= 0) return true;   // doji — neutral, don't block
+  return (bar.c - bar.l) / range >= 0.45;
+}
+
+// SHORT rejection: pivot-high bar closes in the lower half of its range (bearish pin)
+function _isBearishRejection(bar) {
+  const range = bar.h - bar.l;
+  if (range <= 0) return true;
+  return (bar.c - bar.l) / range <= 0.55;
+}
+
 // ── Pattern detectors ─────────────────────────────────────────────
 // Each returns signal object or null.
-// window = last PAT_LKBK bars | cur = current close price | slPct = token SL
+// window  = last PAT_LKBK bars
+// curBar  = full current bar object (uses .c for close, .bullish for momentum)
+// slPct   = token SL
 
-function detectHL(window, cur, slPct) {
+function detectHL(window, curBar, slPct) {
   // Higher Low → LONG: uptrend making HL retest
+  const cur  = curBar.c;
   const lows = _pivLows(window);
   if (lows.length < 2) return null;
   const prev = lows[lows.length - 2];
@@ -1212,6 +1239,13 @@ function detectHL(window, cur, slPct) {
   if (curr.idx < window.length - 36) return null;  // must be within last 36 bars
   const above = (cur - curr.price) / curr.price;
   if (above < 0 || above > PAT_TOL) return null;   // price must be just above level
+
+  // ── Big-wave quality gate ──────────────────────────────────
+  const pivotBar = window[curr.idx];
+  if (!_isBullishRejection(pivotBar)) return null;        // weak close at the low → likely to drop
+  if (pivotBar.v < _avgVol(window) * 0.85) return null;  // low-volume bounce → not institutional
+  if (!curBar.bullish) return null;                        // entry bar must be rising right now
+
   return {
     pattern:  'HL',
     dir:      'LONG',
@@ -1223,8 +1257,9 @@ function detectHL(window, cur, slPct) {
   };
 }
 
-function detectLL(window, cur, slPct) {
+function detectLL(window, curBar, slPct) {
   // Lower Low → LONG: discount zone bounce
+  const cur  = curBar.c;
   const lows = _pivLows(window);
   if (lows.length < 2) return null;
   const prev = lows[lows.length - 2];
@@ -1233,6 +1268,13 @@ function detectLL(window, cur, slPct) {
   if (curr.idx < window.length - 36) return null;  // must be within last 36 bars
   const above = (cur - curr.price) / curr.price;
   if (above < 0 || above > PAT_TOL) return null;
+
+  // ── Big-wave quality gate ──────────────────────────────────
+  const pivotBar = window[curr.idx];
+  if (!_isBullishRejection(pivotBar)) return null;
+  if (pivotBar.v < _avgVol(window) * 0.85) return null;
+  if (!curBar.bullish) return null;
+
   return {
     pattern:  'LL',
     dir:      'LONG',
@@ -1244,8 +1286,9 @@ function detectLL(window, cur, slPct) {
   };
 }
 
-function detectLH(window, cur, slPct) {
+function detectLH(window, curBar, slPct) {
   // Lower High → SHORT: downtrend making LH retest
+  const cur   = curBar.c;
   const highs = _pivHighs(window);
   if (highs.length < 2) return null;
   const prev = highs[highs.length - 2];
@@ -1254,6 +1297,13 @@ function detectLH(window, cur, slPct) {
   if (curr.idx < window.length - 36) return null;  // must be within last 36 bars
   const below = (curr.price - cur) / curr.price;
   if (below < 0 || below > PAT_TOL) return null;   // price must be just below level
+
+  // ── Big-wave quality gate ──────────────────────────────────
+  const pivotBar = window[curr.idx];
+  if (!_isBearishRejection(pivotBar)) return null;
+  if (pivotBar.v < _avgVol(window) * 0.85) return null;
+  if (curBar.bullish) return null;                         // entry bar must be falling
+
   return {
     pattern:  'LH',
     dir:      'SHORT',
@@ -1265,8 +1315,9 @@ function detectLH(window, cur, slPct) {
   };
 }
 
-function detectHH(window, cur, slPct) {
+function detectHH(window, curBar, slPct) {
   // Higher High → SHORT: premium zone fade
+  const cur   = curBar.c;
   const highs = _pivHighs(window);
   if (highs.length < 2) return null;
   const prev = highs[highs.length - 2];
@@ -1275,6 +1326,12 @@ function detectHH(window, cur, slPct) {
   if (curr.idx < window.length - 36) return null;  // must be within last 36 bars
   const below = (curr.price - cur) / curr.price;
   if (below < 0 || below > PAT_TOL) return null;
+
+  // ── Big-wave quality gate ──────────────────────────────────
+  const pivotBar = window[curr.idx];
+  if (!_isBearishRejection(pivotBar)) return null;
+  if (pivotBar.v < _avgVol(window) * 0.85) return null;
+  if (curBar.bullish) return null;
   return {
     pattern:  'HH',
     dir:      'SHORT',
@@ -1327,7 +1384,7 @@ function scanPatterns(sym, patBars, bars4h, cooldowns = new Map()) {
     // Cooldown: skip if fired within 2H
     if (cooldowns.has(cdKey) && now - cooldowns.get(cdKey) < PAT_CD) continue;
 
-    const sig = fn(window, price, cfg.slPct);
+    const sig = fn(window, cur, cfg.slPct);   // cur = full bar object for quality filters
     if (!sig) continue;
 
     // Trend alignment filter
