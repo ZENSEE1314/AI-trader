@@ -1670,6 +1670,9 @@ router.post('/resync-bitunix', async (req, res) => {
   }
 });
 
+// Per-key pull lock — prevents concurrent calls from racing on the same key
+const _pullInProgress = new Set();
+
 // ── Pull recent 100 closed Bitunix positions → insert/update trade records ───
 // POST /api/dashboard/pull-bitunix-history
 // Fetches 1 page × 100 for each of the user's Bitunix keys and syncs to DB.
@@ -1678,9 +1681,28 @@ router.post('/pull-bitunix-history', async (req, res) => {
     const { BitunixClient } = require('../bitunix-client');
     const cryptoUtils2 = require('../crypto-utils');
 
-    // Ensure column exists — may be missing on older DB instances
+    // Ensure column + unique index exist — safe to run every call
     try {
       await query(`ALTER TABLE trades ADD COLUMN IF NOT EXISTS bitunix_position_id VARCHAR(64)`);
+    } catch (_) {}
+    try {
+      await query(
+        `CREATE UNIQUE INDEX IF NOT EXISTS trades_bitunix_pos_id_uniq
+         ON trades (bitunix_position_id)
+         WHERE bitunix_position_id IS NOT NULL`
+      );
+    } catch (_) {}
+    // One-time cleanup: remove duplicate rows, keeping the lowest id per positionId
+    try {
+      await query(
+        `DELETE FROM trades
+         WHERE bitunix_position_id IS NOT NULL
+           AND id NOT IN (
+             SELECT MIN(id) FROM trades
+             WHERE bitunix_position_id IS NOT NULL
+             GROUP BY bitunix_position_id
+           )`
+      );
     } catch (_) {}
 
     // Admin pulls history for ALL users; regular users pull only their own
@@ -1703,6 +1725,13 @@ router.post('/pull-bitunix-history', async (req, res) => {
     const errors = [];
 
     for (const key of keys) {
+      // Skip if another concurrent request is already pulling this key
+      if (_pullInProgress.has(key.id)) {
+        console.log(`[pull-bitunix-history] key ${key.id} pull already in progress — skipping`);
+        skipped++;
+        continue;
+      }
+      _pullInProgress.add(key.id);
       try {
         const apiKey    = cryptoUtils2.decrypt(key.api_key_enc, key.iv, key.auth_tag);
         const apiSecret = cryptoUtils2.decrypt(key.api_secret_enc, key.secret_iv, key.secret_auth_tag);
@@ -1851,7 +1880,7 @@ router.post('/pull-bitunix-history', async (req, res) => {
                  funding_fee, closed_at, created_at, trailing_sl_price, trailing_sl_last_step,
                  bitunix_position_id)
                  VALUES ($1,$2,$3,$4,$5,$6,0,0,$7,$8,$9,$10,$11,$12,$13,$14,$15,$5,0,$16)
-                 ON CONFLICT DO NOTHING`,
+                 ON CONFLICT (bitunix_position_id) WHERE bitunix_position_id IS NOT NULL DO NOTHING`,
                 [key.id, key.user_id, symbol, direction, entryPrice, exitPrice,
                  qty, leverage, status, pnlUsdt, grossPnl, tradingFee, fundingFee,
                  closeAt || new Date(), openAt || new Date(), posId || null]
@@ -1931,11 +1960,33 @@ router.post('/pull-bitunix-history', async (req, res) => {
 
       } catch (keyErr) {
         errors.push(`key ${key.id}: ${keyErr.message}`);
+      } finally {
+        _pullInProgress.delete(key.id);
       }
     }
 
     console.log(`[pull-bitunix-history] user ${req.userId} — inserted:${inserted} updated:${updated} skipped:${skipped}`);
     res.json({ inserted, updated, skipped, errors: errors.slice(0, 10) });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── Admin: delete a specific trade record ────────────────────────────────────
+// DELETE /api/dashboard/trades/:id  (admin only)
+router.delete('/trades/:id', async (req, res) => {
+  try {
+    const adminRow = await query('SELECT is_admin FROM users WHERE id = $1', [req.userId]);
+    if (!adminRow[0]?.is_admin) return res.status(403).json({ error: 'Admin only' });
+
+    const tradeId = parseInt(req.params.id);
+    if (!tradeId) return res.status(400).json({ error: 'Invalid trade id' });
+
+    const result = await query('DELETE FROM trades WHERE id = $1 RETURNING id', [tradeId]);
+    if (!result.length) return res.status(404).json({ error: 'Trade not found' });
+
+    console.log(`[delete-trade] Admin ${req.userId} deleted trade #${tradeId}`);
+    res.json({ deleted: tradeId });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
