@@ -253,33 +253,43 @@ class SMCPatternAgent extends BaseAgent {
           const isStructureEntry = rawDetected1m.pattern === 'HL' || rawDetected1m.pattern === 'LH' ||
                                    rawDetected1m.pattern === 'LL' || rawDetected1m.pattern === 'HH';
           if (isStructureEntry) {
-            const pending = this._pending1m.get(sym);
-            if (pending && pending.raw.pattern === rawDetected1m.pattern &&
-                pending.raw.dir === rawDetected1m.dir &&
-                now - pending.queuedAt >= this.PENDING_1M_MS) {
-              // One full candle has passed — promote to live signal
+            const p      = this._pending1m.get(sym);
+            const sameSignal = p &&
+              p.raw.pattern === rawDetected1m.pattern &&
+              p.raw.dir     === rawDetected1m.dir;
+
+            if (!sameSignal) {
+              // Candle 1: new signal — queue as pending, don't fire
+              this._pending1m.set(sym, { raw: rawDetected1m, queuedAt: now, state: 'pending' });
+              bLog.scan(`[SMC-PAT] 1m ${sym} ${rawDetected1m.pattern}(${rawDetected1m.dir}) candle-1 queued`);
+              this.addActivity('info', `${sym} ${rawDetected1m.pattern}(${rawDetected1m.dir}) — candle 1 queued, waiting candle 2`);
+
+            } else if (p.state === 'pending' && now - p.queuedAt >= this.PENDING_1M_MS) {
+              // Candle 2: same signal still present after one full candle → mark confirmed
+              // Still don't fire — fire on the NEXT scan (candle 3 opens)
+              this._pending1m.set(sym, { ...p, state: 'confirmed', confirmedAt: now });
+              bLog.scan(`[SMC-PAT] 1m ${sym} ${rawDetected1m.pattern}(${rawDetected1m.dir}) candle-2 confirmed — next scan fires`);
+              this.addActivity('info', `${sym} ${rawDetected1m.pattern}(${rawDetected1m.dir}) — candle 2 confirmed, firing next candle`);
+
+            } else if (p.state === 'confirmed') {
+              // Candle 3: confirmed on candle 2, now fire on candle 3
               raw1m = rawDetected1m;
               this._pending1m.delete(sym);
-              bLog.scan(`[SMC-PAT] 1m ${sym} ${rawDetected1m.pattern}(${rawDetected1m.dir}) promoted after 1-candle wait`);
-            } else if (!pending || pending.raw.pattern !== rawDetected1m.pattern || pending.raw.dir !== rawDetected1m.dir) {
-              // New signal — queue it, don't fire yet
-              this._pending1m.set(sym, { raw: rawDetected1m, queuedAt: now });
-              bLog.scan(`[SMC-PAT] 1m ${sym} ${rawDetected1m.pattern}(${rawDetected1m.dir}) queued — waiting 1 candle`);
-              this.addActivity('info', `${sym} ${rawDetected1m.pattern}(${rawDetected1m.dir}) queued — 1m candle confirmation pending`);
+              bLog.scan(`[SMC-PAT] 1m ${sym} ${rawDetected1m.pattern}(${rawDetected1m.dir}) candle-3 FIRE`);
             }
-            // else: same signal still pending, not yet ready — do nothing
+            // else: same signal but candle-1 timer not elapsed yet — still waiting
           } else {
             // CHoCH signals fire immediately — rejection candle already confirms direction
             raw1m = rawDetected1m;
             this._pending1m.delete(sym); // clear any stale pending for this sym
           }
         } else {
-          // No 1m signal this cycle — expire pending if direction invalidated
-          // (price moved away from the level; stale after 3 minutes)
-          const pending = this._pending1m.get(sym);
-          if (pending && now - pending.queuedAt > 3 * 60_000) {
+          // No 1m signal this cycle — expire stale pending after 3 min
+          const p = this._pending1m.get(sym);
+          if (p && now - p.queuedAt > 3 * 60_000) {
             this._pending1m.delete(sym);
-            bLog.scan(`[SMC-PAT] 1m ${sym} pending ${pending.raw.pattern} expired — no follow-through`);
+            bLog.scan(`[SMC-PAT] 1m ${sym} pending ${p.raw.pattern} expired — no follow-through`);
+            this.addActivity('skip', `${sym} ${p.raw.pattern} pending expired — price moved away`);
           }
         }
 
