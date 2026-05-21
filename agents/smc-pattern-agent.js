@@ -22,6 +22,7 @@ const {
   fetchCandles,
   TRADING_CONFIG,
   scanPatterns,
+  scan1mPatterns,
   checkTradeState,
 } = require('../smc-engine');
 
@@ -174,7 +175,6 @@ class SMCPatternAgent extends BaseAgent {
         if (!bars4h  || bars4h.length  < 210) continue;
 
         // LTF cascade: prefer 1m, fall back to 3m, fall back to pattern-only
-        // LTF_WINDOW = 40 bars minimum for structure detection
         const LTF_WINDOW = 40;
         const valid1m = bars1m?.length >= LTF_WINDOW ? bars1m : null;
         const valid3m = bars3m?.length >= LTF_WINDOW ? bars3m : null;
@@ -182,29 +182,41 @@ class SMCPatternAgent extends BaseAgent {
         const ltfTag = valid1m ? '1m' : valid3m ? '3m' : '15m-only';
         bLog.scan(`[SMC-PAT] ${sym}: LTF=${ltfTag} (1m=${bars1m?.length ?? 0} 3m=${bars3m?.length ?? 0})`);
 
-        // Run pattern scanner — passes both LTF options; engine picks best available
+        // ── Scan 1: HTF primary (15m/30m/1H) + LTF confirmation ───
         const raw = scanPatterns(sym, patBars, bars4h, this._cooldowns, valid1m, valid3m);
-        if (!raw) continue;
 
-        const sig = formatSignal(raw);
-        signals.push(sig);
-        this._signalCount++;
+        // ── Scan 2: 1m PRIMARY — BMS/CHoCH/LH/HL on 1m directly ──
+        // This catches what the TradingView SMC indicator shows:
+        //   CHoCH-BULL = bullish reversal on 1m → LONG
+        //   CHoCH-BEAR = bearish reversal on 1m → SHORT
+        //   LH/HL/LL/HH on 1m = structure entries
+        const raw1m = valid1m ? scan1mPatterns(sym, valid1m, bars4h, this._cooldowns) : null;
 
-        const msg = `${sig.symbol} ${sig.direction} pattern=${raw.pattern} TF=${cfg.label}+${raw.ltfUsed ?? '?'} ` +
-                    `trend=${raw.trend} entry=${raw.price.toFixed(4)} sl=${raw.sl.toFixed(4)} ` +
-                    `tp1=${raw.tp1.toFixed(4)} tp2=${raw.tp2.toFixed(4)} RR=${sig.rr}`;
+        // Process both signals — 1m primary first (highest precision), then HTF
+        const raws = [raw1m, raw].filter(Boolean);
+        if (!raws.length) continue;
 
-        this.addActivity('success', msg);
-        bLog.trade(`[SMC-PAT] SIGNAL: ${msg}`);
+        for (const r of raws) {
+          const sig = formatSignal(r);
+          signals.push(sig);
+          this._signalCount++;
 
-        // Track the open trade for outcome logging
-        const tradeKey = `${sym}_${raw.pattern}`;
-        this._openTrades.set(tradeKey, {
-          ...raw,
-          signalTs: now,
-          tp1Hit:   false,
-          closed:   false,
-        });
+          const tfLabel = r.tf === '1m' ? `1m(${r.pattern})` : `${cfg.label}+${r.ltfUsed ?? '?'}`;
+          const msg = `${sig.symbol} ${sig.direction} pattern=${r.pattern} TF=${tfLabel} ` +
+                      `trend=${r.trend} entry=${r.price.toFixed(4)} sl=${r.sl.toFixed(4)} ` +
+                      `tp1=${r.tp1.toFixed(4)} tp2=${r.tp2.toFixed(4)} RR=${sig.rr}`;
+
+          this.addActivity('success', msg);
+          bLog.trade(`[SMC-PAT] SIGNAL: ${msg}`);
+
+          const tradeKey = `${sym}_${r.pattern}`;
+          this._openTrades.set(tradeKey, {
+            ...r,
+            signalTs: now,
+            tp1Hit:   false,
+            closed:   false,
+          });
+        }
       } catch (err) {
         this._lastError = err.message;
         this.addActivity('error', `${sym} scan failed: ${err.message}`);

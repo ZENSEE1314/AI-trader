@@ -1633,6 +1633,195 @@ function checkTradeState(trade, bar) {
   return state;
 }
 
+// ── CHoCH pattern detectors ──────────────────────────────────────
+// Detects Change of Character (CHoCH) — the SMC reversal signal.
+//
+// Bullish CHoCH: price was making LH+LL (downtrend) → close breaks ABOVE last LH
+//   → smart money absorbed supply → LONG signal
+//
+// Bearish CHoCH: price was making HL+HH (uptrend) → close breaks BELOW last HL
+//   → smart money distributed → SHORT signal
+//
+// These are used by scan1mPatterns as the PRIMARY trade trigger,
+// exactly as shown on TradingView SMC indicator (BMS/CHoCH labels).
+
+// 1m-specific constants
+const CHOCH_LKBK    = 30;   // bars to scan for CHoCH structure (30 bars on 1m = 30 min)
+const CHOCH_WINGS   = 2;    // pivot confirmation wings for 1m
+const CHOCH_MAX_LAG = 5;    // CHoCH candle must be within last 5 bars to be tradeable
+const CHOCH_TOL     = 0.003; // 0.3% — max distance from broken level (don't chase)
+
+function detectBullCHoCH(window, curBar, slPct) {
+  // Requires: ≥2 lower highs (LH sequence) then price closes ABOVE last LH
+  const cur   = curBar.c;
+  const highs = _pivHighs(window);
+  const lows  = _pivLows(window);
+  if (highs.length < 2 || lows.length < 1) return null;
+
+  const lastLH = highs[highs.length - 1];
+  const prevLH = highs[highs.length - 2];
+  if (lastLH.price >= prevLH.price) return null;  // must be a lower high (downtrend confirmed)
+  if (lastLH.idx < window.length - CHOCH_LKBK) return null; // must be recent
+
+  // CHoCH trigger: current close must have just broken above the LH level
+  if (cur <= lastLH.price) return null;            // not yet broken
+  const overshoot = (cur - lastLH.price) / lastLH.price;
+  if (overshoot > CHOCH_TOL) return null;          // chased too far — entry would be 0.3%+ above level
+
+  // SL = below the last LL in the swing (deepest point of the downtrend)
+  const lastLL   = lows.reduce((a, b) => a.price < b.price ? a : b);
+  const slPrice  = lastLL.price * (1 - slPct);
+
+  // Require minimum R:R headroom — SL distance must be sane
+  const slDist = (cur - slPrice) / cur;
+  if (slDist <= 0 || slDist > 0.05) return null;  // SL too close or absurdly far
+
+  return {
+    pattern:  'CHoCH-BULL',
+    dir:      'LONG',
+    level:    lastLH.price,   // the broken LH = CHoCH level
+    slPrice,
+    tp1:      cur * (1 + TP1_PCT),
+    tp2:      cur * (1 + TP2_PCT),
+    lockAt:   cur * (1 + LOCK_PCT),
+  };
+}
+
+function detectBearCHoCH(window, curBar, slPct) {
+  // Requires: ≥2 higher lows (HL sequence) then price closes BELOW last HL
+  const cur   = curBar.c;
+  const highs = _pivHighs(window);
+  const lows  = _pivLows(window);
+  if (lows.length < 2 || highs.length < 1) return null;
+
+  const lastHL = lows[lows.length - 1];
+  const prevHL = lows[lows.length - 2];
+  if (lastHL.price <= prevHL.price) return null;  // must be a higher low (uptrend confirmed)
+  if (lastHL.idx < window.length - CHOCH_LKBK) return null; // must be recent
+
+  // CHoCH trigger: current close broke BELOW the HL level
+  if (cur >= lastHL.price) return null;
+  const overshoot = (lastHL.price - cur) / lastHL.price;
+  if (overshoot > CHOCH_TOL) return null;         // chased too far below level
+
+  // SL = above the last HH in the swing
+  const lastHH   = highs.reduce((a, b) => a.price > b.price ? a : b);
+  const slPrice  = lastHH.price * (1 + slPct);
+
+  const slDist = (slPrice - cur) / cur;
+  if (slDist <= 0 || slDist > 0.05) return null;
+
+  return {
+    pattern:  'CHoCH-BEAR',
+    dir:      'SHORT',
+    level:    lastHL.price,   // the broken HL = CHoCH level
+    slPrice,
+    tp1:      cur * (1 - TP1_PCT),
+    tp2:      cur * (1 - TP2_PCT),
+    lockAt:   cur * (1 - LOCK_PCT),
+  };
+}
+
+// ── 1m direct scanner ────────────────────────────────────────────
+// Scans 1m bars as the PRIMARY timeframe — no HTF pattern confirmation needed.
+// Catches: CHoCH-BULL, CHoCH-BEAR, HL, LL, LH, HH on 1m directly.
+// Called by SMCPatternAgent in parallel with scanPatterns (15m/30m primary).
+//
+// This is what the TradingView SMC indicator does:
+//   BMS  = HL/LL/LH/HH structure breaks on 1m
+//   CHoCH = trend reversal on 1m
+//
+// Uses separate cooldown keys (prefix '1m_') so 1m and 15m signals don't block each other.
+
+const SCAN1M_LKBK = 30;   // 30-bar lookback on 1m (= 30 min of structure)
+const SCAN1M_CD   = 10 * 60_000; // 10-min cooldown for 1m signals (much shorter than 15m's 45min)
+
+function scan1mPatterns(sym, bars1m, bars4h, cooldowns = new Map()) {
+  const cfg = TRADING_CONFIG[sym];
+  if (!cfg) return null;
+  if (!bars1m || bars1m.length < SCAN1M_LKBK + CHOCH_WINGS + 2) return null;
+  if (!bars4h  || bars4h.length < 50) return null;
+
+  const cur   = bars1m[bars1m.length - 1];
+  const now   = cur.t;
+  const price = cur.c;
+
+  // Build 1m window
+  const window = bars1m.slice(-(SCAN1M_LKBK + CHOCH_WINGS + 1));
+
+  // 4H trend + fib50 (same filter as 15m scanner)
+  const trend = classifyTrend(bars4h);
+  let fib50 = null;
+  try {
+    const s4h = analyzeStructure(bars4h, 5, 3);
+    const fz  = calcFibZones(s4h.swingHigh, s4h.swingLow);
+    if (fz) fib50 = fz.p500;
+  } catch (_) {}
+
+  // Detector order: trend-aligned first (same priority as scanPatterns)
+  const inPremium  = fib50 !== null && price >= fib50;
+  const shortFirst = trend === 'DOWN' || (trend === 'NEUTRAL' && inPremium);
+
+  // 1m detectors: CHoCH first (strongest signal), then structure patterns
+  const detectors = shortFirst
+    ? [
+        { key: 'CHoCH-BEAR', fn: detectBearCHoCH },
+        { key: 'LH',         fn: (w, c, s) => detectLH(w, c, s, null, LTF_RECENCY_1M) },
+        { key: 'HH',         fn: (w, c, s) => detectHH(w, c, s, null, LTF_RECENCY_1M) },
+        { key: 'CHoCH-BULL', fn: detectBullCHoCH },
+        { key: 'HL',         fn: (w, c, s) => detectHL(w, c, s, null, LTF_RECENCY_1M) },
+        { key: 'LL',         fn: (w, c, s) => detectLL(w, c, s, null, LTF_RECENCY_1M) },
+      ]
+    : [
+        { key: 'CHoCH-BULL', fn: detectBullCHoCH },
+        { key: 'HL',         fn: (w, c, s) => detectHL(w, c, s, null, LTF_RECENCY_1M) },
+        { key: 'LL',         fn: (w, c, s) => detectLL(w, c, s, null, LTF_RECENCY_1M) },
+        { key: 'CHoCH-BEAR', fn: detectBearCHoCH },
+        { key: 'LH',         fn: (w, c, s) => detectLH(w, c, s, null, LTF_RECENCY_1M) },
+        { key: 'HH',         fn: (w, c, s) => detectHH(w, c, s, null, LTF_RECENCY_1M) },
+      ];
+
+  for (const { key, fn } of detectors) {
+    // Use '1m_' prefix so 1m cooldowns don't block 15m signals and vice versa
+    const cdKey = `${sym}_1m_${key}`;
+    if (cooldowns.has(cdKey) && now - cooldowns.get(cdKey) < SCAN1M_CD) continue;
+
+    const sig = fn(window, cur, cfg.slPct);
+    if (!sig) continue;
+
+    // Same strict trend alignment as scanPatterns
+    if (!isTrendAligned(trend, sig.dir, fib50, price)) continue;
+
+    cooldowns.set(cdKey, now);
+
+    return {
+      symbol:  sym,
+      name:    cfg.name,
+      tf:      '1m',           // primary TF is 1m
+      iv:      '1',
+      pattern: sig.pattern,
+      dir:     sig.dir,
+      side:    sig.dir === 'LONG' ? 'BUY' : 'SELL',
+      price,
+      level:   sig.level,
+      sl:      sig.slPrice,
+      tp1:     sig.tp1,
+      tp2:     sig.tp2,
+      lockAt:  sig.lockAt,
+      slPct:   (cfg.slPct * 100).toFixed(2) + '%',
+      tp1Pct:  (TP1_PCT  * 100).toFixed(2) + '%',
+      tp2Pct:  (TP2_PCT  * 100).toFixed(2) + '%',
+      trend,
+      fib50,
+      ltfUsed: '1m-primary',
+      ts:      now,
+      signal:  `${sig.pattern}(${sig.dir}) on 1m | trend=${trend} | entry=${price.toFixed(4)} sl=${sig.slPrice.toFixed(4)} tp1=${sig.tp1.toFixed(4)} tp2=${sig.tp2.toFixed(4)}`,
+    };
+  }
+
+  return null;
+}
+
 // ── Exports ──────────────────────────────────────────────────
 
 module.exports = {
@@ -1670,6 +1859,9 @@ module.exports = {
   detectLL,
   detectLH,
   detectHH,
-  scanPatterns,     // main scanner — call per symbol per bar
+  detectBullCHoCH,
+  detectBearCHoCH,
+  scanPatterns,     // HTF scanner (15m/30m/1H primary TF)
+  scan1mPatterns,   // 1m primary scanner — BMS/CHoCH/LH/HL on 1m bars directly
   checkTradeState,  // TP/SL/lock manager — call per bar on open trade
 };
