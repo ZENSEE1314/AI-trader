@@ -194,6 +194,13 @@ class SMCPatternAgent extends BaseAgent {
     // Map: symbol → { dir: 'BULLISH'|'BEARISH', detectedAt: timestamp }
     this._bmsState = new Map();
 
+    // CHoCH wait state — when CHoCH fires, don't trade immediately.
+    // Wait for the next 1m confirming pivot then fire:
+    //   CHoCH-BULL → wait for HL or LL on 1m → LONG
+    //   CHoCH-BEAR → wait for LH or HH on 1m → SHORT
+    // Map: symbol → { dir: 'LONG'|'SHORT', detectedAt: timestamp }
+    this._chochWait = new Map();
+
     // Active virtual trades: signal.symbol+'_'+signal.smcContext.pattern → { ...signal, bars4hCache }
     // Used to run checkTradeState per bar and log outcomes.
     this._openTrades   = new Map();
@@ -375,62 +382,117 @@ class SMCPatternAgent extends BaseAgent {
         if (!raws.length) continue;
 
         // ── 1m pivot gate — applied to ALL signals (1m + HTF) ─────
-        // The most recent CONFIRMED 1m pivot determines the only valid direction.
-        //   HL (last low > prev low) → LONG only  — price is at support, no shorts
-        //   LH (last high < prev high) → SHORT only — price is at resistance, no longs
-        //   LL / HH / ambiguous → allow both directions
+        // ════════════════════════════════════════════════════════
+        // HARD SIGNAL RULES (applied to ALL signals — 1m + HTF):
         //
-        // No CHoCH exemption: if the chart shows HL, nothing shorts, period.
-        // (When CHoCH-BEAR breaks the HL, the pivot updates to LL → gate lifts automatically.)
-        let pivotGateDir = null;
+        //   HL → LONG only    LL → LONG only
+        //   LH → SHORT only   HH → SHORT only
+        //
+        //   CHoCH-BULL → set _chochWait=LONG, do NOT fire immediately
+        //                fire when next HL or LL forms on 1m
+        //   CHoCH-BEAR → set _chochWait=SHORT, do NOT fire immediately
+        //                fire when next LH or HH forms on 1m
+        //
+        //   BMS BULLISH (close above last swing high) → no SHORTs
+        //   BMS BEARISH (close below last swing low)  → no LONGs
+        // ════════════════════════════════════════════════════════
+
+        // ── Step A: Compute 1m pivot direction (1L/2R, matches TV indicator) ──
+        // ANY low (HL or LL) as most recent pivot → LONG only (never short at a low)
+        // ANY high (LH or HH) as most recent pivot → SHORT only (never long at a high)
+        let pivotGateDir = null; // 'LONG' | 'SHORT' | null
         if (bars1m && bars1m.length >= 8) {
           const ph = [], pl = [];
           for (let i = 1; i < bars1m.length - 2; i++) {
             if (bars1m[i].h > bars1m[i-1].h && bars1m[i].h > bars1m[i+1].h && bars1m[i].h > bars1m[i+2].h)
-              ph.push({ price: bars1m[i].h, idx: i });
+              ph.push({ idx: i });
             if (bars1m[i].l < bars1m[i-1].l && bars1m[i].l < bars1m[i+1].l && bars1m[i].l < bars1m[i+2].l)
-              pl.push({ price: bars1m[i].l, idx: i });
+              pl.push({ idx: i });
           }
-          const lastH = ph[ph.length - 1], prevH = ph[ph.length - 2];
-          const lastL = pl[pl.length - 1], prevL = pl[pl.length - 2];
+          const lastH = ph[ph.length - 1];
+          const lastL = pl[pl.length - 1];
           if (lastH && lastL) {
-            if (lastL.idx > lastH.idx && prevL && lastL.price > prevL.price)
-              pivotGateDir = 'LONG';   // HL is most recent confirmed pivot
-            else if (lastH.idx > lastL.idx && prevH && lastH.price < prevH.price)
-              pivotGateDir = 'SHORT';  // LH is most recent confirmed pivot
+            // Whichever pivot type is more recent sets the allowed direction
+            pivotGateDir = lastL.idx > lastH.idx ? 'LONG' : 'SHORT';
           }
         }
 
+        // ── Step B: Separate CHoCH signals from structure signals ──
+        // CHoCH does NOT fire as a trade. It sets _chochWait direction and waits
+        // for the next confirming pivot (HL/LL for bull, LH/HH for bear).
+        const nonChochRaws = [];
+        for (const r of raws) {
+          if (r.pattern === 'CHoCH-BULL' || r.pattern === 'CHoCH-BEAR') {
+            const chochDir = r.pattern === 'CHoCH-BULL' ? 'LONG' : 'SHORT';
+            const prev = this._chochWait.get(sym);
+            if (!prev || prev.dir !== chochDir) {
+              this._chochWait.set(sym, { dir: chochDir, detectedAt: now });
+              bLog.scan(`[SMC-PAT] CHoCH ${sym}: ${r.pattern} → waiting for ${chochDir === 'LONG' ? 'HL/LL' : 'LH/HH'}`);
+              this.addActivity('info', `${sym} ${r.pattern} — waiting for next ${chochDir === 'LONG' ? 'HL or LL' : 'LH or HH'} to fire`);
+            }
+            // Also reset BMS on CHoCH
+            const bms = this._bmsState.get(sym);
+            if (bms && ((bms.dir === 'BULLISH' && chochDir === 'SHORT') || (bms.dir === 'BEARISH' && chochDir === 'LONG'))) {
+              this._bmsState.delete(sym);
+              bLog.scan(`[SMC-PAT] BMS ${sym}: cleared by ${r.pattern}`);
+            }
+          } else {
+            nonChochRaws.push(r);
+          }
+        }
+
+        // ── Step C: Resolve _chochWait using current pivot gate ──
+        // When chochWait=LONG and current pivot is a LOW (HL/LL) → pivot confirmed, allow LONG
+        // When chochWait=SHORT and current pivot is a HIGH (LH/HH) → pivot confirmed, allow SHORT
+        // This fires the trade on the next HL/LL (for bull CHoCH) or LH/HH (for bear CHoCH)
+        const chochWait = this._chochWait.get(sym);
+        if (chochWait) {
+          if (now - chochWait.detectedAt > 15 * 60_000) {
+            // Expire after 15 min — no confirming pivot arrived
+            this._chochWait.delete(sym);
+            bLog.scan(`[SMC-PAT] CHoCH wait ${sym} expired — no confirming pivot in 15 min`);
+          } else if (chochWait.dir === pivotGateDir) {
+            // Confirming pivot now present — clear wait so the signal fires this cycle
+            this._chochWait.delete(sym);
+            bLog.scan(`[SMC-PAT] CHoCH ${sym}: pivot confirmed (${pivotGateDir}) — allowing signals`);
+            this.addActivity('info', `${sym} CHoCH confirmed by pivot — ${pivotGateDir} signal firing`);
+          }
+          // While chochWait is active and pivot not yet confirmed: override pivotGateDir
+          // to only allow the choch direction (prevents opposite signals while waiting)
+          else {
+            pivotGateDir = chochWait.dir;
+          }
+        }
+
+        // ── Step D: Pivot gate — block all signals against the current pivot direction ──
         const pivotGated = pivotGateDir
-          ? raws.filter(r => {
+          ? nonChochRaws.filter(r => {
               if (r.dir !== pivotGateDir) {
-                const pivotLabel = pivotGateDir === 'LONG' ? 'HL' : 'LH';
-                bLog.scan(`[SMC-PAT] Pivot gate: ${sym} ${r.pattern}(${r.dir}) blocked — 1m ${pivotLabel} is current structure`);
-                this.addActivity('skip', `${sym} ${r.pattern}(${r.dir}) blocked — 1m ${pivotLabel} = ${pivotGateDir} only`);
+                const label = pivotGateDir === 'LONG' ? 'LOW(HL/LL)' : 'HIGH(LH/HH)';
+                bLog.scan(`[SMC-PAT] Pivot gate: ${sym} ${r.pattern}(${r.dir}) blocked — 1m ${label} is current pivot`);
+                this.addActivity('skip', `${sym} ${r.pattern}(${r.dir}) blocked — pivot is ${label}`);
                 return false;
               }
               return true;
             })
-          : raws;
+          : nonChochRaws;
 
         if (!pivotGated.length) continue;
 
-        // ── VWAP session filter ────────────────────────────────
-        // Compute session VWAP + ±1σ bands from 3m bars (up to 24h data).
-        // price ≤ lower band → NO LONG  (already in downtrend territory)
-        // price ≥ upper band → NO SHORT (already in uptrend territory)
+        // ── Step E: VWAP session filter ───────────────────────────
+        // price ≤ lower band → NO LONG   price ≥ upper band → NO SHORT
         const vwap = computeVWAP(bars3m);
         const vwapFiltered = vwap
           ? pivotGated.filter(r => {
               const p = r.price;
               if (r.dir === 'LONG' && p <= vwap.lower) {
-                bLog.scan(`[SMC-PAT] VWAP block: ${sym} LONG p=${p.toFixed(2)} ≤ lower=${vwap.lower.toFixed(2)} vwap=${vwap.vwap.toFixed(2)}`);
-                this.addActivity('skip', `${sym} LONG blocked — price ${p.toFixed(2)} ≤ VWAP lower ${vwap.lower.toFixed(2)} (downtrend)`);
+                bLog.scan(`[SMC-PAT] VWAP block: ${sym} LONG p=${p.toFixed(2)} ≤ lower=${vwap.lower.toFixed(2)}`);
+                this.addActivity('skip', `${sym} LONG blocked — price ≤ VWAP lower`);
                 return false;
               }
               if (r.dir === 'SHORT' && p >= vwap.upper) {
-                bLog.scan(`[SMC-PAT] VWAP block: ${sym} SHORT p=${p.toFixed(2)} ≥ upper=${vwap.upper.toFixed(2)} vwap=${vwap.vwap.toFixed(2)}`);
-                this.addActivity('skip', `${sym} SHORT blocked — price ${p.toFixed(2)} ≥ VWAP upper ${vwap.upper.toFixed(2)} (uptrend)`);
+                bLog.scan(`[SMC-PAT] VWAP block: ${sym} SHORT p=${p.toFixed(2)} ≥ upper=${vwap.upper.toFixed(2)}`);
+                this.addActivity('skip', `${sym} SHORT blocked — price ≥ VWAP upper`);
                 return false;
               }
               return true;
@@ -439,57 +501,24 @@ class SMCPatternAgent extends BaseAgent {
 
         if (!vwapFiltered.length) continue;
 
-        // ── Trend gate: LL / HH are counter-trend — require alignment ─
-        // LL LONG: bounce play at new low — only valid when 4H trend is UP or NEUTRAL.
-        //          In a confirmed downtrend (trend=DOWN) the LL just becomes the next step down.
-        // HH SHORT: fade at new high — only valid when 4H trend is DOWN or NEUTRAL.
-        //           In a confirmed uptrend (trend=UP) the HH is just continuation.
-        // HL (LONG) and LH (SHORT) are already trend-following — no gate needed.
-        const trendGated = vwapFiltered.filter(r => {
-          if (r.pattern === 'LL' && r.dir === 'LONG' && r.trend === 'DOWN') {
-            bLog.scan(`[SMC-PAT] Trend gate: ${sym} LL LONG blocked — trend=DOWN (counter-trend bounce)`);
-            this.addActivity('skip', `${sym} LL LONG blocked — 4H trend DOWN (no counter-trend bounce)`);
-            return false;
-          }
-          if (r.pattern === 'HH' && r.dir === 'SHORT' && r.trend === 'UP') {
-            bLog.scan(`[SMC-PAT] Trend gate: ${sym} HH SHORT blocked — trend=UP (counter-trend fade)`);
-            this.addActivity('skip', `${sym} HH SHORT blocked — 4H trend UP (no counter-trend fade)`);
-            return false;
-          }
-          return true;
-        });
-
-        if (!trendGated.length) continue;
-
-        // ── BMS filter: respect Break of Market Structure direction ──
-        // Bullish BMS (closed above last swing high) → no SHORTs — market is moving up.
-        // Bearish BMS (closed below last swing low)  → no LONGs  — market is moving down.
-        // CHoCH in the opposite direction resets the BMS state.
+        // ── Step F: BMS filter ────────────────────────────────────
+        // Bullish BMS → no SHORTs.  Bearish BMS → no LONGs.
         const bmsEntry = this._bmsState.get(sym);
-        const bmsFiltered = bmsEntry ? trendGated.filter(r => {
-          // CHoCH in the opposite direction clears the BMS
-          if (bmsEntry.dir === 'BULLISH' && r.pattern === 'CHoCH-BEAR') {
-            this._bmsState.delete(sym);
-            bLog.scan(`[SMC-PAT] BMS ${sym}: CHoCH-BEAR reset bullish BMS`);
-            return true; // allow the CHoCH-BEAR signal itself
-          }
-          if (bmsEntry.dir === 'BEARISH' && r.pattern === 'CHoCH-BULL') {
-            this._bmsState.delete(sym);
-            bLog.scan(`[SMC-PAT] BMS ${sym}: CHoCH-BULL reset bearish BMS`);
-            return true;
-          }
-          if (bmsEntry.dir === 'BULLISH' && r.dir === 'SHORT') {
-            bLog.scan(`[SMC-PAT] BMS block: ${sym} SHORT blocked — bullish BMS active`);
-            this.addActivity('skip', `${sym} SHORT blocked — BMS BULLISH (strong upward break)`);
-            return false;
-          }
-          if (bmsEntry.dir === 'BEARISH' && r.dir === 'LONG') {
-            bLog.scan(`[SMC-PAT] BMS block: ${sym} LONG blocked — bearish BMS active`);
-            this.addActivity('skip', `${sym} LONG blocked — BMS BEARISH (strong downward break)`);
-            return false;
-          }
-          return true;
-        }) : trendGated;
+        const bmsFiltered = bmsEntry
+          ? vwapFiltered.filter(r => {
+              if (bmsEntry.dir === 'BULLISH' && r.dir === 'SHORT') {
+                bLog.scan(`[SMC-PAT] BMS block: ${sym} SHORT blocked — bullish BMS active`);
+                this.addActivity('skip', `${sym} SHORT blocked — BMS BULLISH`);
+                return false;
+              }
+              if (bmsEntry.dir === 'BEARISH' && r.dir === 'LONG') {
+                bLog.scan(`[SMC-PAT] BMS block: ${sym} LONG blocked — bearish BMS active`);
+                this.addActivity('skip', `${sym} LONG blocked — BMS BEARISH`);
+                return false;
+              }
+              return true;
+            })
+          : vwapFiltered;
 
         if (!bmsFiltered.length) continue;
 
