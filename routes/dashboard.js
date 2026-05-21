@@ -1491,8 +1491,13 @@ router.post('/resync-bitunix', async (req, res) => {
       FROM trades t
       JOIN api_keys ak ON t.api_key_id = ak.id
       WHERE ak.platform = 'bitunix'
-        AND t.status IN ('CLOSED','WIN','LOSS')
-        AND (t.exit_price IS NULL OR t.pnl_usdt IS NULL)
+        AND t.status IN ('CLOSED','WIN','LOSS','GHOST')
+        AND (
+          t.exit_price IS NULL OR t.pnl_usdt IS NULL
+          OR t.gross_pnl IS NULL
+          -- Estimated values (market-price fallback): trading_fee=0 AND bitunix_position_id missing
+          OR (t.trading_fee = 0 AND t.bitunix_position_id IS NULL)
+        )
       ORDER BY t.created_at DESC
       LIMIT 200
     `);
@@ -1594,15 +1599,35 @@ router.post('/resync-bitunix', async (req, res) => {
           continue;
         }
 
-        const p        = bestMatch;
-        const exitPrice  = parseFloat(p.closePrice || p.avgClosePrice || p.closedPrice || p.close_price || 0);
+        const p          = bestMatch;
+        let exitPrice    = parseFloat(p.closePrice || p.avgClosePrice || p.closedPrice || p.close_price || 0);
         const tradingFee = Math.abs(parseFloat(p.fee || p.tradingFee || p.commission || 0));
         const fundingFee = Math.abs(parseFloat(p.funding || p.fundingFee || p.fund_fee || 0));
         const pnlRaw     = p.realizedPNL ?? p.realizedPnl ?? p.pnl ?? p.profit ?? p.realPnl ?? null;
 
-        if (pnlRaw == null || exitPrice === 0) {
+        if (pnlRaw == null) {
           skipped++;
-          results.push({ id: trade.id, symbol: trade.symbol, result: 'missing_pnl_or_exit', raw: JSON.stringify(p).substring(0, 200) });
+          results.push({ id: trade.id, symbol: trade.symbol, result: 'missing_pnl', raw: JSON.stringify(p).substring(0, 200) });
+          continue;
+        }
+
+        // Derive exit price from PnL when exchange returns closePrice=0
+        if (exitPrice === 0) {
+          const tradeEntry = parseFloat(trade.entry_price);
+          const tradeQty   = parseFloat(trade.quantity) || 1;
+          const isLong     = trade.direction !== 'SHORT';
+          const pnlNet     = parseFloat(pnlRaw);
+          const grossEst   = pnlNet + tradingFee + fundingFee;
+          if (tradeEntry > 0 && tradeQty > 0 && grossEst !== 0) {
+            const derived = isLong ? tradeEntry + grossEst / tradeQty
+                                   : tradeEntry - grossEst / tradeQty;
+            if (derived > 0) exitPrice = parseFloat(derived.toFixed(4));
+          }
+        }
+
+        if (exitPrice === 0) {
+          skipped++;
+          results.push({ id: trade.id, symbol: trade.symbol, result: 'missing_exit', raw: JSON.stringify(p).substring(0, 200) });
           continue;
         }
 
@@ -1610,13 +1635,22 @@ router.post('/resync-bitunix', async (req, res) => {
         const grossPnl = parseFloat((pnlUsdt + tradingFee + fundingFee).toFixed(4));
         const status   = pnlUsdt > 0 ? 'WIN' : 'LOSS';
 
+        // Always override with real exchange data — even if the trade already
+        // has estimated values (set by syncTradeStatus market-price fallback).
+        // Real exchange PnL/fee/exit always supersedes any estimate.
         await query(`
           UPDATE trades
-          SET exit_price = $1, pnl_usdt = $2, gross_pnl = $3,
-              trading_fee = $4, funding_fee = $5, status = $6,
-              closed_at = COALESCE(closed_at, NOW())
+          SET exit_price  = $1,
+              pnl_usdt    = $2,
+              gross_pnl   = $3,
+              trading_fee = $4,
+              funding_fee = $5,
+              status      = $6,
+              closed_at   = COALESCE(closed_at, NOW()),
+              bitunix_position_id = COALESCE(bitunix_position_id, $8)
           WHERE id = $7
-        `, [exitPrice, pnlUsdt, grossPnl, tradingFee, fundingFee, status, trade.id]);
+        `, [exitPrice, pnlUsdt, grossPnl, tradingFee, fundingFee, status, trade.id,
+            bestMatch.positionId || bestMatch.id || null]);
 
         fixed++;
         results.push({
@@ -1719,29 +1753,34 @@ router.post('/pull-bitunix-history', async (req, res) => {
         console.log(`[pull-bitunix-history] key ${key.id}: fetched ${positions.length} positions across ${symbols.length} symbols`);
         if (!positions.length) continue;
 
-        // Batch lookup — one query for all positionIds, one for all key trades
+        // ── Batch lookup — keyed by posId AND by all key trades ──────────
         const posIds = positions
           .map(p => String(p.positionId || p.id || p.position_id || ''))
           .filter(Boolean);
         const existingByPosId = new Map();
         if (posIds.length) {
           const rows = await query(
-            `SELECT id, bitunix_position_id, exit_price, pnl_usdt FROM trades
+            `SELECT id, bitunix_position_id, exit_price, pnl_usdt, status FROM trades
              WHERE bitunix_position_id = ANY($1)`, [posIds]
           );
           for (const r of rows) existingByPosId.set(r.bitunix_position_id, r);
         }
+        // Fetch ALL trades for this key (including OPEN) so we can match + close them
         const allKeyTrades = await query(
-          `SELECT id, symbol, direction, entry_price, created_at, exit_price, pnl_usdt
+          `SELECT id, symbol, direction, entry_price, created_at, exit_price, pnl_usdt,
+                  status, trading_fee, funding_fee, bitunix_position_id
            FROM trades WHERE api_key_id = $1`, [key.id]
         );
 
+        // Track which DB trade IDs were matched in this batch (for stale-OPEN cleanup)
+        const matchedTradeIds = new Set();
+
         for (const p of positions) {
           try {
-            const symbol    = (p.symbol || '').toUpperCase();
-            const posId     = String(p.positionId || p.id || p.position_id || '');
-            const pSide     = (p.side || p.positionSide || '').toUpperCase();
-            const direction = (pSide === 'LONG' || pSide === 'BUY') ? 'LONG' : 'SHORT';
+            const symbol     = (p.symbol || '').toUpperCase();
+            const posId      = String(p.positionId || p.id || p.position_id || '');
+            const pSide      = (p.side || p.positionSide || '').toUpperCase();
+            const direction  = (pSide === 'LONG' || pSide === 'BUY') ? 'LONG' : 'SHORT';
             const entryPrice = parseFloat(p.avgOpenPrice  || p.entryPrice  || p.openPrice  || 0);
             const exitPrice  = parseFloat(p.avgClosePrice || p.closePrice  || p.closedPrice || 0);
             const leverage   = parseInt(p.leverage  || 20);
@@ -1759,9 +1798,12 @@ router.post('/pull-bitunix-history', async (req, res) => {
 
             if (!symbol || entryPrice <= 0 || exitPrice <= 0) { skipped++; continue; }
 
-            // Match existing record from in-memory batches (no per-row DB queries)
+            // ── Match existing record ──────────────────────────────────────────
+            // Priority 1: exact positionId match
             let existing = posId ? existingByPosId.get(posId) : null;
-            if (!existing && openAt) {
+
+            // Priority 2: entry price + time match (when Bitunix returns openTime)
+            if (!existing && openMs > 0) {
               existing = allKeyTrades.find(t =>
                 t.symbol === symbol && t.direction === direction &&
                 Math.abs(parseFloat(t.entry_price) - entryPrice) / entryPrice < 0.002 &&
@@ -1769,13 +1811,34 @@ router.post('/pull-bitunix-history', async (req, res) => {
               );
             }
 
+            // Priority 3: entry price match without time — prefer OPEN trades first.
+            // Bitunix sometimes omits openTime (openMs=0), causing false inserts.
+            // We try OPEN trades first (exact match), then any closed trade with no posId.
+            if (!existing) {
+              const entryMatches = allKeyTrades.filter(t =>
+                t.symbol === symbol && t.direction === direction &&
+                Math.abs(parseFloat(t.entry_price) - entryPrice) / entryPrice < 0.002
+              );
+              // Prefer: OPEN (bot-placed but not yet closed in DB) > already has this posId
+              existing = entryMatches.find(t => t.status === 'OPEN')
+                || entryMatches.find(t => !t.bitunix_position_id);
+            }
+
             if (existing) {
-              if (existing.exit_price == null || existing.pnl_usdt == null) {
+              matchedTradeIds.add(existing.id);
+              // Always update if: trade is OPEN, or exchange data is richer (has posId / real PnL)
+              const needsUpdate = existing.status === 'OPEN'
+                || existing.exit_price == null
+                || existing.pnl_usdt == null
+                || (posId && existing.bitunix_position_id !== posId)   // backfill posId
+                || (tradingFee > 0 && parseFloat(existing.trading_fee || 0) === 0); // real fee
+              if (needsUpdate) {
                 await query(
                   `UPDATE trades SET exit_price=$1, pnl_usdt=$2, gross_pnl=$3, trading_fee=$4,
                    funding_fee=$5, status=$6, closed_at=COALESCE(closed_at,$7),
                    bitunix_position_id=COALESCE(bitunix_position_id,$8) WHERE id=$9`,
-                  [exitPrice, pnlUsdt, grossPnl, tradingFee, fundingFee, status, closeAt, posId || null, existing.id]
+                  [exitPrice, pnlUsdt, grossPnl, tradingFee, fundingFee, status,
+                   closeAt, posId || null, existing.id]
                 );
                 updated++;
               } else {
@@ -1794,11 +1857,78 @@ router.post('/pull-bitunix-history', async (req, res) => {
                  closeAt || new Date(), openAt || new Date(), posId || null]
               );
               inserted++;
+
+              // Clean up any stale OPEN records for this symbol/direction/entry that
+              // weren't matched (e.g. posId missing) — the position is now confirmed closed.
+              const staleOpen = allKeyTrades.find(t =>
+                t.symbol === symbol && t.direction === direction && t.status === 'OPEN' &&
+                Math.abs(parseFloat(t.entry_price) - entryPrice) / entryPrice < 0.002 &&
+                !matchedTradeIds.has(t.id)
+              );
+              if (staleOpen) {
+                await query(
+                  `UPDATE trades SET status=$1, exit_price=COALESCE(exit_price,$2),
+                   pnl_usdt=COALESCE(pnl_usdt,$3), gross_pnl=COALESCE(gross_pnl,$4),
+                   trading_fee=COALESCE(trading_fee,$5), funding_fee=COALESCE(funding_fee,$6),
+                   closed_at=COALESCE(closed_at,$7),
+                   bitunix_position_id=COALESCE(bitunix_position_id,$8) WHERE id=$9`,
+                  [status, exitPrice, pnlUsdt, grossPnl, tradingFee, fundingFee,
+                   closeAt, posId || null, staleOpen.id]
+                );
+                matchedTradeIds.add(staleOpen.id);
+                updated++;
+                console.log(`[pull-bitunix-history] Closed stale OPEN trade #${staleOpen.id} ${symbol} ${direction}`);
+              }
             }
           } catch (posErr) {
             errors.push(posErr.message);
           }
         }
+
+        // ── Cleanup: OPEN trades with no live exchange position → mark GHOST ──
+        // Any OPEN trade > 5 min old that wasn't matched to any history position
+        // has no corresponding exchange record — likely SL/TP hit before we synced.
+        // We skip if exitPrice was already set (syncTradeStatus may have estimated it).
+        try {
+          const fiveMinsAgo = new Date(Date.now() - 5 * 60_000);
+          const staleOpens = allKeyTrades.filter(t =>
+            t.status === 'OPEN' &&
+            !matchedTradeIds.has(t.id) &&
+            new Date(t.created_at) < fiveMinsAgo
+          );
+
+          if (staleOpens.length) {
+            // Fetch live positions once to confirm none of these are actually open
+            let livePositions = [];
+            try {
+              const apiKey2    = cryptoUtils2.decrypt(key.api_key_enc, key.iv, key.auth_tag);
+              const apiSecret2 = cryptoUtils2.decrypt(key.api_secret_enc, key.secret_iv, key.secret_auth_tag);
+              const cli2 = new BitunixClient({ apiKey: apiKey2, apiSecret: apiSecret2 });
+              const openRaw = await cli2.getOpenPositions();
+              livePositions = Array.isArray(openRaw) ? openRaw : (openRaw?.positionList || openRaw?.list || []);
+            } catch (_) {}
+
+            const liveKeys = new Set(livePositions.map(p => `${(p.symbol||'').toUpperCase()}:${parseFloat(p.qty||0)>0?'LONG':'SHORT'}`));
+
+            for (const t of staleOpens) {
+              const lk = `${t.symbol}:${t.direction}`;
+              if (liveKeys.has(lk)) continue; // still open on exchange — leave it
+
+              // Not live on exchange — mark as GHOST (no position = truly gone)
+              const hasEstimatedExit = t.exit_price != null;
+              await query(
+                `UPDATE trades SET status='GHOST', closed_at=COALESCE(closed_at,NOW())
+                 WHERE id=$1`,
+                [t.id]
+              );
+              console.log(`[pull-bitunix-history] GHOST: #${t.id} ${t.symbol} ${t.direction} (stale OPEN, not on exchange, exitEstimated=${hasEstimatedExit})`);
+              updated++;
+            }
+          }
+        } catch (ghostErr) {
+          console.warn(`[pull-bitunix-history] Ghost cleanup error: ${ghostErr.message}`);
+        }
+
       } catch (keyErr) {
         errors.push(`key ${key.id}: ${keyErr.message}`);
       }
