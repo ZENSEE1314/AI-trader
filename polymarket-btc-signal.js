@@ -115,19 +115,30 @@ async function getBTC15mMarket() {
 
       if (!upTokenId || !downTokenId) continue;
 
+      // Extract prices from Gamma API as fallback for CLOB midpoint
+      let outcomePrices = mkt.outcomePrices || [];
+      if (typeof outcomePrices === 'string') {
+        try { outcomePrices = JSON.parse(outcomePrices); } catch { outcomePrices = []; }
+      }
+      const gammaUpPrice   = parseFloat(outcomePrices[0]) || 0;
+      const gammaDownPrice = parseFloat(outcomePrices[1]) || 0;
+
       _btc15mMarket = {
         upTokenId,
         downTokenId,
         slug,
-        question: mkt.question || event.title || slug,
-        fetchedAt: nowMs,
-        closed: mkt.closed || event.closed || false,
-        negRisk: !!(mkt.negRisk ?? mkt.neg_risk ?? event.negRisk ?? event.neg_risk ?? true),
+        question:     mkt.question || event.title || slug,
+        fetchedAt:    nowMs,
+        closed:       !!(mkt.closed || event.closed),
+        negRisk:      !!(mkt.negRisk ?? mkt.neg_risk ?? event.negRisk ?? event.neg_risk ?? false),
+        gammaUpPrice,
+        gammaDownPrice,
       };
       console.log(
         `[poly-btc-signal] Market: "${_btc15mMarket.question}" ` +
         `Up=${upTokenId.slice(0, 10)}... Down=${downTokenId.slice(0, 10)}... ` +
-        `closed=${_btc15mMarket.closed}`
+        `closed=${_btc15mMarket.closed} negRisk=${_btc15mMarket.negRisk} ` +
+        `gamma=${gammaUpPrice.toFixed(3)}/${gammaDownPrice.toFixed(3)}`
       );
       return _btc15mMarket;
     } catch (e) {
@@ -182,24 +193,32 @@ async function getBTCUpDownSignal() {
   if (!mkt)       return NEUTRAL();
   if (mkt.closed) return NEUTRAL(mkt.question, mkt.upTokenId, mkt.downTokenId);
 
-  // Get mid-price for Up token (Down = 1 - Up for binary markets)
-  const upPrice = await _getTokenMidPrice(mkt.upTokenId);
+  // Get mid-price for Up token — CLOB primary, Gamma API as fallback
+  let upPrice = await _getTokenMidPrice(mkt.upTokenId);
+  if (!upPrice || upPrice <= 0 || upPrice >= 1) {
+    // Fallback to Gamma API prices cached during market discovery
+    upPrice = mkt.gammaUpPrice || 0;
+    if (upPrice > 0) {
+      console.log(`[poly-btc-signal] CLOB midpoint unavailable — using Gamma price: ${upPrice}`);
+    }
+  }
   if (!upPrice || upPrice <= 0 || upPrice >= 1) {
     return NEUTRAL(mkt.question, mkt.upTokenId, mkt.downTokenId);
   }
 
   const downPrice = 1 - upPrice;
   const deviation = upPrice - 0.5; // positive = crowd leans up
-  // Scale: 51% → conf 10, 52% → conf 20, 55% → conf 50, 60% → conf 100
+
+  // confidence: 50.5% → 5, 51% → 10, 55% → 50, 60% → 100
   const confidence = Math.min(100, Math.round(Math.abs(deviation) * 1000));
 
-  // Trade at 51%+ edge — deviation of 0.01 means crowd leans 51/49
-  const MIN_DEVIATION = 0.01;
+  // Fire at 50.5%+ crowd edge — small but consistent directional lean
+  const MIN_DEVIATION = 0.005;
   let direction = 'NEUTRAL';
   if (deviation >  MIN_DEVIATION) direction = 'LONG';
   if (deviation < -MIN_DEVIATION) direction = 'SHORT';
 
-  // Ask price = mid + 0.03 fixed buffer (avoids needing separate orderbook API call)
+  // Aggressive ask: mid + 0.03 buffer to cross the spread on FOK
   const upAsk   = Math.min(0.99, parseFloat((upPrice   + 0.03).toFixed(2)));
   const downAsk = Math.min(0.99, parseFloat((downPrice + 0.03).toFixed(2)));
 
@@ -210,6 +229,7 @@ async function getBTCUpDownSignal() {
     downPrice,
     upAsk,
     downAsk,
+    change:      deviation, // crowd lean vs 50/50 (positive = bullish)
     market:      mkt.question,
     upTokenId:   mkt.upTokenId,
     downTokenId: mkt.downTokenId,

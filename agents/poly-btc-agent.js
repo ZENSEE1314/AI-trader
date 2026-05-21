@@ -18,8 +18,8 @@ const { log: bLog } = require('../bot-logger');
 
 const TRADE_INTERVAL_MS      = 5 * 60 * 1000;  // 5 minutes — minimum between actual trades
 const SCAN_INTERVAL_MS       = 2 * 60 * 1000;  // 2 minutes — re-check signal even on NEUTRAL
-const TRADE_SIZE_USDC        = 1;               // $1 USDC per bet
-const MIN_CONFIDENCE         = 10;              // 51%+ crowd edge → conf≥10 with new formula
+const TRADE_SIZE_USDC        = 5;               // $5 USDC per bet — min 2 shares on CLOB at $0.51
+const MIN_CONFIDENCE         = 5;               // 50.5%+ crowd lean → conf≥5 with new formula
 const COOLDOWN_AFTER_LOSS_MS = 30 * 60 * 1000; // 30-min pause after 2 consecutive losses
 
 class PolyBTCAgent extends BaseAgent {
@@ -44,7 +44,7 @@ class PolyBTCAgent extends BaseAgent {
       skills: [
         { id: 'market_scan', name: 'Market Scanner',   description: 'Finds the current active BTC Up or Down 15m market', enabled: true },
         { id: 'poly_signal', name: 'Prob Signal',      description: 'Extremity (Up<35% or >65%) + momentum slope — fires immediately without warm-up', enabled: true },
-        { id: 'poly_trade',  name: 'Poly Trade',       description: `Places $${TRADE_SIZE_USDC} USDC on Up or Down tokens via CLOB every 5 min`, enabled: true },
+        { id: 'poly_trade',  name: 'Poly Trade',       description: `Places $${TRADE_SIZE_USDC} USDC on Up/Down tokens via CLOB at 50.5%+ crowd edge`, enabled: true },
         { id: 'cooldown',    name: 'Loss Cooldown',    description: '30-min pause after 2 consecutive losses', enabled: true },
       ],
     };
@@ -92,20 +92,19 @@ class PolyBTCAgent extends BaseAgent {
 
     const upPct   = (signal.upPrice   * 100).toFixed(1);
     const downPct = (signal.downPrice * 100).toFixed(1);
-    const chgPct  = (signal.change    * 100).toFixed(2);
+    const chgPct  = ((signal.change ?? 0) * 100).toFixed(2);
     bLog.scan(
-      `[POLY-BTC] Signal: ${signal.direction} conf=${signal.confidence}% ` +
-      `Up=${upPct}% Down=${downPct}% Δ=${chgPct}%`
+      `[POLY-BTC] Signal: ${signal.direction} conf=${signal.confidence} ` +
+      `Up=${upPct}% Down=${downPct}% Δ=${Number(chgPct) >= 0 ? '+' : ''}${chgPct}%`
     );
     this.addActivity('info',
-      `BTC 15m: ${signal.direction} ${signal.confidence}% conf | ` +
+      `BTC 15m: ${signal.direction} conf=${signal.confidence} | ` +
       `Up ${upPct}% / Down ${downPct}% (Δ${Number(chgPct) >= 0 ? '+' : ''}${chgPct}%)`
     );
 
     if (signal.direction === 'NEUTRAL' || signal.confidence < MIN_CONFIDENCE) {
       this.addActivity('skip',
-        `Weak signal — ${signal.direction} conf=${signal.confidence}% ` +
-        `Up=${(signal.upPrice * 100).toFixed(1)}% (need >51% + conf≥${MIN_CONFIDENCE})`
+        `Neutral — conf=${signal.confidence} Up=${upPct}% (need conf≥${MIN_CONFIDENCE}, ~50.5%+ edge)`
       );
       return { ok: true, skipped: true, signal };
     }
@@ -138,7 +137,7 @@ class PolyBTCAgent extends BaseAgent {
     }
   }
 
-  // ── Place $1 on Up or Down token via Polymarket CLOB ─────────
+  // ── Place $5 on Up or Down token via Polymarket CLOB ─────────
 
   async _placePolyTrade(signal) {
     // Load DB + crypto
