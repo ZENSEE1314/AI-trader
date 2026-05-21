@@ -1198,6 +1198,40 @@ function _pivHighs(bars) {
   return pts;
 }
 
+// ── 1m LTF confirmation ───────────────────────────────────────────
+// Requires the 1m chart to ALSO be making an HL/LH before HTF signal fires.
+// This is the SMC "LTF entry" rule: HTF identifies the zone, LTF triggers the trade.
+// PAT_WINGS=2 on 1m means pivot confirms in just 2 minutes.
+
+const LTF_1M_WINDOW  = 40;   // look at last 40 1m bars (= 40 min) for LTF structure
+const LTF_1M_RECENCY = 20;   // 1m pivot must be within last 20 bars (= 20 min)
+
+// LONG LTF check: 1m must show a recent Higher Low with bullish rejection
+function _confirm1mHL(bars1m) {
+  if (!bars1m || bars1m.length < LTF_1M_WINDOW) return true;  // no data → don't block
+  const win  = bars1m.slice(-LTF_1M_WINDOW);
+  const lows = _pivLows(win);
+  if (lows.length < 2) return false;
+  const prev = lows[lows.length - 2];
+  const curr = lows[lows.length - 1];
+  if (curr.price <= prev.price) return false;               // must be higher low on 1m
+  if (curr.idx < win.length - LTF_1M_RECENCY) return false; // must be recent
+  return _isBullishRejection(win[curr.idx]);                // bullish pin on 1m pivot bar
+}
+
+// SHORT LTF check: 1m must show a recent Lower High with bearish rejection
+function _confirm1mLH(bars1m) {
+  if (!bars1m || bars1m.length < LTF_1M_WINDOW) return true;
+  const win   = bars1m.slice(-LTF_1M_WINDOW);
+  const highs = _pivHighs(win);
+  if (highs.length < 2) return false;
+  const prev = highs[highs.length - 2];
+  const curr = highs[highs.length - 1];
+  if (curr.price >= prev.price) return false;
+  if (curr.idx < win.length - LTF_1M_RECENCY) return false;
+  return _isBearishRejection(win[curr.idx]);
+}
+
 // ── Big-wave quality helpers ──────────────────────────────────────
 // Three filters that separate institutional moves from weak bounces:
 //  1. Pivot bar REJECTION — did smart money step in with force?
@@ -1228,7 +1262,7 @@ function _isBearishRejection(bar) {
 // curBar  = full current bar object (uses .c for close, .bullish for momentum)
 // slPct   = token SL
 
-function detectHL(window, curBar, slPct) {
+function detectHL(window, curBar, slPct, bars1m = null) {
   // Higher Low → LONG: uptrend making HL retest
   const cur  = curBar.c;
   const lows = _pivLows(window);
@@ -1246,6 +1280,10 @@ function detectHL(window, curBar, slPct) {
   if (pivotBar.v < _avgVol(window) * 0.85) return null;  // low-volume bounce → not institutional
   if (!curBar.bullish) return null;                        // entry bar must be rising right now
 
+  // ── 1m LTF confirmation ────────────────────────────────────
+  // 15m HL identified the zone — 1m HL must confirm the entry
+  if (!_confirm1mHL(bars1m)) return null;
+
   return {
     pattern:  'HL',
     dir:      'LONG',
@@ -1257,7 +1295,7 @@ function detectHL(window, curBar, slPct) {
   };
 }
 
-function detectLL(window, curBar, slPct) {
+function detectLL(window, curBar, slPct, bars1m = null) {
   // Lower Low → LONG: discount zone bounce
   const cur  = curBar.c;
   const lows = _pivLows(window);
@@ -1275,6 +1313,9 @@ function detectLL(window, curBar, slPct) {
   if (pivotBar.v < _avgVol(window) * 0.85) return null;
   if (!curBar.bullish) return null;
 
+  // ── 1m LTF confirmation ────────────────────────────────────
+  if (!_confirm1mHL(bars1m)) return null;
+
   return {
     pattern:  'LL',
     dir:      'LONG',
@@ -1286,7 +1327,7 @@ function detectLL(window, curBar, slPct) {
   };
 }
 
-function detectLH(window, curBar, slPct) {
+function detectLH(window, curBar, slPct, bars1m = null) {
   // Lower High → SHORT: downtrend making LH retest
   const cur   = curBar.c;
   const highs = _pivHighs(window);
@@ -1304,6 +1345,9 @@ function detectLH(window, curBar, slPct) {
   if (pivotBar.v < _avgVol(window) * 0.85) return null;
   if (curBar.bullish) return null;                         // entry bar must be falling
 
+  // ── 1m LTF confirmation ────────────────────────────────────
+  if (!_confirm1mLH(bars1m)) return null;
+
   return {
     pattern:  'LH',
     dir:      'SHORT',
@@ -1315,7 +1359,7 @@ function detectLH(window, curBar, slPct) {
   };
 }
 
-function detectHH(window, curBar, slPct) {
+function detectHH(window, curBar, slPct, bars1m = null) {
   // Higher High → SHORT: premium zone fade
   const cur   = curBar.c;
   const highs = _pivHighs(window);
@@ -1332,6 +1376,10 @@ function detectHH(window, curBar, slPct) {
   if (!_isBearishRejection(pivotBar)) return null;
   if (pivotBar.v < _avgVol(window) * 0.85) return null;
   if (curBar.bullish) return null;
+
+  // ── 1m LTF confirmation ────────────────────────────────────
+  if (!_confirm1mLH(bars1m)) return null;
+
   return {
     pattern:  'HH',
     dir:      'SHORT',
@@ -1348,7 +1396,7 @@ function detectHH(window, curBar, slPct) {
 // Returns first valid trend-aligned signal or null.
 // cooldowns: Map<sym_pat → lastSignalTs> (passed in from caller to persist)
 
-function scanPatterns(sym, patBars, bars4h, cooldowns = new Map()) {
+function scanPatterns(sym, patBars, bars4h, cooldowns = new Map(), bars1m = null) {
   const cfg = TRADING_CONFIG[sym];
   if (!cfg) return null;                            // symbol not in config (XRP removed)
 
@@ -1384,7 +1432,7 @@ function scanPatterns(sym, patBars, bars4h, cooldowns = new Map()) {
     // Cooldown: skip if fired within 2H
     if (cooldowns.has(cdKey) && now - cooldowns.get(cdKey) < PAT_CD) continue;
 
-    const sig = fn(window, cur, cfg.slPct);   // cur = full bar object for quality filters
+    const sig = fn(window, cur, cfg.slPct, bars1m);  // bars1m = 1m LTF confirmation
     if (!sig) continue;
 
     // Trend alignment filter

@@ -29,6 +29,7 @@ const {
 const SCAN_INTERVAL_MS = 30_000;    // 30s — catches new closes on all TFs
 const BARS_PATTERN     = 120;       // bars for pattern detection window
 const BARS_4H_TREND    = 250;       // bars for 4H EMA200 (needs 200 minimum)
+const BARS_1M          = 80;        // 1m bars for LTF confirmation (80 min coverage)
 const SCORE            = 72;        // signal score (higher than SMCProAgent's default)
 const AGENT_NAME       = 'SMCPatternAgent';
 
@@ -158,17 +159,19 @@ class SMCPatternAgent extends BaseAgent {
       try {
         const cfg = TRADING_CONFIG[sym];
 
-        // Parallel fetch: pattern TF bars + 4H bars
-        const [patBars, bars4h] = await Promise.all([
+        // Parallel fetch: pattern TF bars + 4H trend bars + 1m LTF confirmation
+        const [patBars, bars4h, bars1m] = await Promise.all([
           fetchCandles(sym, cfg.iv,    BARS_PATTERN),
           fetchCandles(sym, INTERVAL_4H, BARS_4H_TREND),
+          fetchCandles(sym, '1',       BARS_1M),
         ]);
 
         if (!patBars || patBars.length < 70) continue;
         if (!bars4h  || bars4h.length  < 210) continue;
+        // bars1m is optional — if fetch fails, scanPatterns falls back to no LTF check
 
-        // Run pattern scanner (handles cooldown + trend filter internally)
-        const raw = scanPatterns(sym, patBars, bars4h, this._cooldowns);
+        // Run pattern scanner (handles cooldown + trend filter + 1m confirmation internally)
+        const raw = scanPatterns(sym, patBars, bars4h, this._cooldowns, bars1m?.length >= 20 ? bars1m : null);
         if (!raw) continue;
 
         const sig = formatSignal(raw);
