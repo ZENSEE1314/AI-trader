@@ -1181,25 +1181,61 @@ function classifyTrend(bars4h) {
 //   15m uptrend → HH at 2147 (premium) → SHORT valid ✓
 //   15m uptrend → HL at 2120 (discount) → LONG valid ✓
 
-function isTrendAligned(trend, dir, fib50, price) {
-  const inPremium  = fib50 !== null && price >= fib50;
-  const inDiscount = fib50 !== null && price <= fib50;
+// isTrendAligned(trend, dir, fibZones, price)
+// fibZones = full object from calcFibZones (or null)
+//
+// OTE zone thresholds (tighter than 50%):
+//   SHORT allowed only when price >= fib61.8 (top 38.2% of range = true premium)
+//   LONG  allowed only when price <= fib38.2 (bottom 38.2% of range = true discount)
+//
+// Why 61.8% not 50%?
+//   At the midpoint the market is neutral — no edge.
+//   The HL pullback in an uptrend sits near the 50% line; shorting there
+//   means shorting INTO structural support → low win rate, big drawdown.
+//   Only above 61.8% (approaching HH) does a SHORT have a genuine edge.
+//
+// Example from chart: LL=2123, HH=2147, range=24
+//   fib61.8 = 2123 + 24×0.618 = 2137.8
+//   HL at 2137 < 2137.8 → SHORT blocked ✓ (it IS a LONG entry, not SHORT)
+//   HH at 2147 > 2137.8 → SHORT allowed  ✓ (the premium fade)
+
+function isTrendAligned(trend, dir, fibZones, price) {
+  // Support old callers that pass fib50 as a number
+  let fib618 = null, fib382 = null, fib50 = null;
+  if (fibZones !== null && typeof fibZones === 'object' && !Array.isArray(fibZones) && fibZones.p618 !== undefined) {
+    fib618 = fibZones.p618;   // 61.8% level from low = OTE premium line
+    fib382 = fibZones.p382;   // 38.2% level from low = OTE discount line
+    fib50  = fibZones.p500;
+  } else if (typeof fibZones === 'number') {
+    // Legacy: caller passed a plain fib50 number — fall back to 50% threshold
+    fib50  = fibZones;
+    fib618 = fibZones;
+    fib382 = fibZones;
+  }
+
+  // TRUE premium: above the 61.8% Fibonacci level (approaching HH, top 38.2%)
+  // TRUE discount: below the 38.2% Fibonacci level (approaching LL, bottom 38.2%)
+  const inPremium  = fib618 !== null && price >= fib618;
+  const inDiscount = fib382 !== null && price <= fib382;
+  // Neutral zone fallback (for NEUTRAL trend when fibZones not available)
+  const aboveMid   = fib50  !== null && price >= fib50;
+  const belowMid   = fib50  !== null && price <= fib50;
 
   if (trend === 'UP') {
-    if (dir === 'LONG')  return true;                   // always long in uptrend
-    if (dir === 'SHORT') return inPremium;              // short only at HH premium zone
+    if (dir === 'LONG')  return true;         // always LONG in uptrend
+    if (dir === 'SHORT') return inPremium;    // SHORT only at HH (above 61.8%) — NOT at HL pullback
     return false;
   }
 
   if (trend === 'DOWN') {
-    if (dir === 'SHORT') return true;                   // always short in downtrend
-    if (dir === 'LONG')  return inDiscount;             // long only at LL discount zone
+    if (dir === 'SHORT') return true;         // always SHORT in downtrend
+    if (dir === 'LONG')  return inDiscount;   // LONG only at LL (below 38.2%) — NOT at LH bounce
     return false;
   }
 
-  // NEUTRAL — strictly zone-based
-  if (dir === 'LONG')  return inDiscount;
-  if (dir === 'SHORT') return inPremium;
+  // NEUTRAL — OTE zones, fall back to midpoint if fib not available
+  if (dir === 'LONG')  return fib382 !== null ? inDiscount : belowMid;
+  if (dir === 'SHORT') return fib618 !== null ? inPremium  : aboveMid;
   return false;
 }
 
@@ -1568,12 +1604,13 @@ function scanPatterns(sym, patBars, bars4h, cooldowns = new Map(), bars1m = null
   // Trend state from 4H EMA
   const trend = classifyTrend(bars4h);
 
-  // Fib50 for NEUTRAL zone decisions
-  let fib50 = null;
+  // Full OTE fib zones — used by isTrendAligned for 61.8/38.2% premium/discount gates
+  let fib50    = null;
+  let fibZones = null;
   try {
     const s4h = analyzeStructure(bars4h, 5, 3);
     const fz  = calcFibZones(s4h.swingHigh, s4h.swingLow);
-    if (fz) fib50 = fz.p500;
+    if (fz) { fibZones = fz; fib50 = fz.p500; }
   } catch (_) {}
 
   // Prioritise detectors by trend direction so the trend-aligned pattern
@@ -1609,8 +1646,8 @@ function scanPatterns(sym, patBars, bars4h, cooldowns = new Map(), bars1m = null
     const sig = fn(window, cur, cfg.slPct, ltfBars, ltfRecency);
     if (!sig) continue;
 
-    // Trend alignment filter
-    if (!isTrendAligned(trend, sig.dir, fib50, price)) continue;
+    // Trend alignment filter — uses full fibZones (61.8/38.2% OTE gates)
+    if (!isTrendAligned(trend, sig.dir, fibZones ?? fib50, price)) continue;
 
     // Update cooldown
     cooldowns.set(cdKey, now);
@@ -1634,6 +1671,8 @@ function scanPatterns(sym, patBars, bars4h, cooldowns = new Map(), bars1m = null
       tp2Pct:   (TP2_PCT  * 100).toFixed(2) + '%',
       trend,
       fib50,
+      fib618:   fibZones?.p618 ?? null,  // OTE premium line — SHORT only above this
+      fib382:   fibZones?.p382 ?? null,  // OTE discount line — LONG only below this
       ltfUsed:  ltfLabel,   // which LTF confirmed: '1m' | '3m' | '15m(no-ltf)'
       ts:       now,
       signal:   `${sig.pattern}(${sig.dir}) on ${cfg.label}+${ltfLabel} | trend=${trend} | entry=${price.toFixed(4)} sl=${sig.slPrice.toFixed(4)} tp1=${sig.tp1.toFixed(4)} tp2=${sig.tp2.toFixed(4)}`,
@@ -1825,18 +1864,21 @@ function scan1mPatterns(sym, bars1m, bars4h, cooldowns = new Map()) {
   // Build 1m window using indicator's pivot length
   const window = bars1m.slice(-(SCAN1M_LKBK + IND_R_BARS + 1));
 
-  // 4H trend + fib50 (same filter as 15m scanner)
+  // 4H trend + full OTE fib zones (same filter as scanPatterns)
   const trend = classifyTrend(bars4h);
-  let fib50 = null;
+  let fib50    = null;
+  let fibZones = null;
   try {
     const s4h = analyzeStructure(bars4h, 5, 3);
     const fz  = calcFibZones(s4h.swingHigh, s4h.swingLow);
-    if (fz) fib50 = fz.p500;
+    if (fz) { fibZones = fz; fib50 = fz.p500; }
   } catch (_) {}
 
-  // Detector order: trend-aligned first (same priority as scanPatterns)
-  const inPremium  = fib50 !== null && price >= fib50;
-  const shortFirst = trend === 'DOWN' || (trend === 'NEUTRAL' && inPremium);
+  // Detector order: trend-aligned first
+  // Use fib61.8 for premium detection (same as isTrendAligned threshold)
+  const premiumLine = fibZones?.p618 ?? fib50;
+  const inPremium   = premiumLine !== null && price >= premiumLine;
+  const shortFirst  = trend === 'DOWN' || (trend === 'NEUTRAL' && inPremium);
 
   // ── 1m structure detectors using indicator's asymmetric pivots (1L/2R) ───
   // These detect LH/HL/HH/LL using _ind1mHighs/_ind1mLows instead of the HTF
@@ -1918,8 +1960,8 @@ function scan1mPatterns(sym, bars1m, bars4h, cooldowns = new Map()) {
     const sig = fn(window, cur, cfg.slPct);
     if (!sig) continue;
 
-    // Same strict trend alignment as scanPatterns
-    if (!isTrendAligned(trend, sig.dir, fib50, price)) continue;
+    // Trend alignment — uses full OTE fibZones (61.8/38.2% gates)
+    if (!isTrendAligned(trend, sig.dir, fibZones ?? fib50, price)) continue;
 
     cooldowns.set(cdKey, now);
 
