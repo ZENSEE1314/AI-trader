@@ -201,14 +201,13 @@ const _symbolLossCooldown = new Map();
 const _signalLossTracker = new Map();
 
 // ── SL/TP Config ──────────────────────────────────────────
-// System 5 — initial SL = 25% capital (margin).
-// Fees at 100x: 0.04% taker × 2 sides × 100 leverage = 8% of margin.
-// Fees at  50x: 0.04% taker × 2 sides ×  50 leverage = 4% of margin.
-// SL_PCT is price-loss fraction; capital loss = SL_PCT × leverage.
-//   100x: price SL = 0.25/100 = 0.25% price move → 25% capital loss
-//    50x: price SL = 0.25/50  = 0.50% price move → 25% capital loss
-//    20x: price SL = 0.25/20  = 1.25% price move → 25% capital loss
-const SL_PCT = 0.25;   // System 5: 25% capital initial SL
+// Max capital loss per trade = 20%.
+// SL_PCT is price-loss fraction; capital loss = SL_PCT (independent of leverage).
+//   125x: price SL = 0.20/125 = 0.16% price move → 20% capital loss
+//   100x: price SL = 0.20/100 = 0.20% price move → 20% capital loss
+//    75x: price SL = 0.20/75  = 0.27% price move → 20% capital loss
+//    50x: price SL = 0.20/50  = 0.40% price move → 20% capital loss
+const SL_PCT = 0.20;   // 20% max capital loss at any leverage
 const TP_PCT = 0.45;   // reference only — trailing SL handles the actual exit
 
 // ── Active AI Version params — loaded from settings table, refreshed every 60s ──

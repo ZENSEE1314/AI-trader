@@ -60,22 +60,22 @@ const DELTA_4H   =   3;  // bars fetched each subsequent 4H cycle (slow-moving T
 const DELTA_1D   =   2;  // bars fetched each subsequent daily cycle
 // ── Traded symbols, leverage and per-symbol SL distance ────────
 // BNB removed — consistent loser across all backtest configs.
-// Config from 60-day profit-lock grid: SL 0.40% / 75× uniform across BTC+ETH+SOL.
-// Results: BTC 75.6% WR +$954 | ETH 70.5% +$683 | SOL 70.6% +$499 = +$2,136 total.
+// Leverage raised to 125x (user approved). SL recalculated for 20% max capital loss:
+//   SL price % = max_capital_loss / leverage = 20% / 125 = 0.16%
+// Previously 0.40% SL at 75x = 30% loss; at 125x that becomes 50% loss — too large.
 const ACTIVE_SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT'];
 
 const SYMBOL_LEVERAGE = {
-  BTCUSDT: 75,  // 30% risk/trade at 0.40% SL
-  ETHUSDT: 75,  // 30% risk/trade at 0.40% SL
-  SOLUSDT: 75,  // 30% risk/trade at 0.40% SL
+  BTCUSDT: 125,  // 20% capital loss at 0.16% SL
+  ETHUSDT: 125,  // 20% capital loss at 0.16% SL
+  SOLUSDT: 125,  // 20% capital loss at 0.16% SL
 };
 
-// SL price distance: 0.40% uniform — sweet spot from 60-day SL-distance grid.
-// WR peaks at 0.40% (44.4% raw, 72.3% with profit-lock).
+// SL price distance: 0.16% = 20% capital loss at 125x (user-requested max).
 const SYMBOL_SL_PCT = {
-  BTCUSDT: 0.0040,  // 0.40%
-  ETHUSDT: 0.0040,  // 0.40%
-  SOLUSDT: 0.0040,  // 0.40%
+  BTCUSDT: 0.0016,  // 0.16% → 20% capital loss at 125x
+  ETHUSDT: 0.0016,  // 0.16% → 20% capital loss at 125x
+  SOLUSDT: 0.0016,  // 0.16% → 20% capital loss at 125x
 };
 
 // ── Profit-lock — replaces fixed TP ────────────────────────────
