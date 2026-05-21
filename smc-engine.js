@@ -1148,11 +1148,12 @@ function classifyTrend(bars4h) {
   // Full bearish stack
   if (s < m && m < l) return 'DOWN';
 
-  // Recovery phase: short+medium EMA stack bullish AND price already above slow EMA
-  // EMA200 lags price by months — if price > EMA200 and EMA20 > EMA50, trend has flipped
-  if (s > m && price > l) return 'UP';
-  // Distribution phase: short+medium stack bearish AND price still below slow EMA
-  if (s < m && price < l) return 'DOWN';
+  // Recovery phase: short+medium EMA stack bullish AND price already above slow EMA.
+  // Guard: EMA50 must be within 5% of EMA200 — if EMA50 is still deeply below EMA200
+  // (e.g. a brief bear-market relief rally), this is NOT a real recovery.
+  if (s > m && price > l && m > l * 0.95) return 'UP';
+  // Distribution phase: short+medium stack bearish AND price still below slow EMA.
+  if (s < m && price < l && m < l * 1.05) return 'DOWN';
 
   return 'NEUTRAL';
 }
@@ -1164,13 +1165,15 @@ function classifyTrend(bars4h) {
 function isTrendAligned(trend, dir, fib50, price) {
   if (dir === 'LONG') {
     if (trend === 'UP') return true;
-    if (trend === 'NEUTRAL' && (fib50 === null || price <= fib50)) return true;
-    return false; // block LONG in DOWN trend or NEUTRAL-premium
+    // NEUTRAL: only allow LONG in discount zone — if fib50 unknown, block (safer than guessing)
+    if (trend === 'NEUTRAL' && fib50 !== null && price <= fib50) return true;
+    return false;
   }
   // SHORT
   if (trend === 'DOWN') return true;
-  if (trend === 'NEUTRAL' && (fib50 === null || price >= fib50)) return true;
-  return false; // block SHORT in UP trend — was causing HH shorts in a bull rally
+  // NEUTRAL: only allow SHORT in premium zone — if fib50 unknown, block
+  if (trend === 'NEUTRAL' && fib50 !== null && price >= fib50) return true;
+  return false; // block SHORT in UP trend
 }
 
 // ── Pivot point helpers (for pattern detection) ──────────────────
@@ -1208,27 +1211,28 @@ const LTF_1M_RECENCY = 20;   // 1m pivot must be within last 20 bars (= 20 min)
 
 // LONG LTF check: 1m must show a recent Higher Low with bullish rejection
 function _confirm1mHL(bars1m) {
-  if (!bars1m || bars1m.length < LTF_1M_WINDOW) return true;  // no data → don't block
+  if (!bars1m || bars1m.length < LTF_1M_WINDOW) return false; // no data → block, not skip
   const win  = bars1m.slice(-LTF_1M_WINDOW);
   const lows = _pivLows(win);
   if (lows.length < 2) return false;
   const prev = lows[lows.length - 2];
   const curr = lows[lows.length - 1];
-  if (curr.price <= prev.price) return false;               // must be higher low on 1m
-  if (curr.idx < win.length - LTF_1M_RECENCY) return false; // must be recent
-  return _isBullishRejection(win[curr.idx]);                // bullish pin on 1m pivot bar
+  if (curr.price <= prev.price) return false;  // must be higher low on 1m
+  // Recency: pivot confirmation bar (curr.idx + PAT_WINGS) must be within last LTF_1M_RECENCY bars
+  if (curr.idx + PAT_WINGS < win.length - LTF_1M_RECENCY) return false;
+  return _isBullishRejection(win[curr.idx]);   // bullish pin on 1m pivot bar
 }
 
 // SHORT LTF check: 1m must show a recent Lower High with bearish rejection
 function _confirm1mLH(bars1m) {
-  if (!bars1m || bars1m.length < LTF_1M_WINDOW) return true;
+  if (!bars1m || bars1m.length < LTF_1M_WINDOW) return false; // no data → block
   const win   = bars1m.slice(-LTF_1M_WINDOW);
   const highs = _pivHighs(win);
   if (highs.length < 2) return false;
   const prev = highs[highs.length - 2];
   const curr = highs[highs.length - 1];
   if (curr.price >= prev.price) return false;
-  if (curr.idx < win.length - LTF_1M_RECENCY) return false;
+  if (curr.idx + PAT_WINGS < win.length - LTF_1M_RECENCY) return false;
   return _isBearishRejection(win[curr.idx]);
 }
 
@@ -1238,8 +1242,12 @@ function _confirm1mLH(bars1m) {
 //  2. Pivot bar VOLUME    — was there real participation?
 //  3. Entry bar MOMENTUM  — is the move already starting right now?
 
+// Median volume — resistant to single spike events that inflate the mean
+// and chronically block low-volume tokens (DOT/ADA/AVAX) from ever firing.
 function _avgVol(bars) {
-  return bars.reduce((s, b) => s + b.v, 0) / bars.length;
+  const sorted = bars.map(b => b.v).sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
 }
 
 // LONG rejection: pivot-low bar closes in the upper half of its range (bullish pin)
@@ -1347,7 +1355,7 @@ function detectLH(window, curBar, slPct, bars1m = null) {
   // ── Short-at-the-top filter ────────────────────────────────
   // LH pivot must be within 0.5% of the recent swing high.
   // Stops mid-range shorts where price already fell far from the structural high.
-  const winHigh = Math.max(...window.slice(-30).map(b => b.h));
+  const winHigh = Math.max(...window.slice(-36).map(b => b.h)); // matches 36-bar recency window
   if ((winHigh - curr.price) / winHigh > SHORT_PROX_TOL) return null;
 
   // ── Big-wave quality gate ──────────────────────────────────
@@ -1383,7 +1391,7 @@ function detectHH(window, curBar, slPct, bars1m = null) {
   if (below < 0 || below > PAT_TOL) return null;
 
   // ── Short-at-the-top filter ────────────────────────────────
-  const winHigh = Math.max(...window.slice(-30).map(b => b.h));
+  const winHigh = Math.max(...window.slice(-36).map(b => b.h)); // matches 36-bar recency window
   if ((winHigh - curr.price) / winHigh > SHORT_PROX_TOL) return null;
 
   // ── Big-wave quality gate ──────────────────────────────────

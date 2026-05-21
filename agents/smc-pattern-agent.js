@@ -117,7 +117,7 @@ class SMCPatternAgent extends BaseAgent {
         { id: 'll',      name: 'LL (Lower Low)',   description: 'Long on discount bounce — pivot low at new extreme',       enabled: true },
         { id: 'lh',      name: 'LH (Lower High)', description: 'Short on downtrend retest — pivot high must be falling',   enabled: true },
         { id: 'hh',      name: 'HH (Higher High)', description: 'Short fading premium — pivot high at new extreme',        enabled: true },
-        { id: 'trend',   name: '4H Trend Filter', description: 'EMA20/50/200 — asymmetric: LONG UP only, SHORT all trends', enabled: true },
+        { id: 'trend',   name: '4H Trend Filter', description: 'EMA20/50/200 — symmetric: LONG in UP/discount, SHORT in DOWN/premium, blocked across trend', enabled: true },
         { id: 'cooldown',name: '2H Cooldown',     description: 'Skip repeated signals on same sym×pattern within 2 hours', enabled: true },
       ],
       config: [
@@ -168,10 +168,12 @@ class SMCPatternAgent extends BaseAgent {
 
         if (!patBars || patBars.length < 70) continue;
         if (!bars4h  || bars4h.length  < 210) continue;
-        // bars1m is optional — if fetch fails, scanPatterns falls back to no LTF check
+        // bars1m requires >= BARS_1M (40) bars to run LTF confirmation — otherwise block
+        const valid1m = bars1m?.length >= BARS_1M ? bars1m : null;
+        if (!valid1m) bLog.scan(`[SMC-PAT] ${sym}: 1m bars thin (${bars1m?.length ?? 0}) — LTF confirmation blocked`);
 
         // Run pattern scanner (handles cooldown + trend filter + 1m confirmation internally)
-        const raw = scanPatterns(sym, patBars, bars4h, this._cooldowns, bars1m?.length >= 20 ? bars1m : null);
+        const raw = scanPatterns(sym, patBars, bars4h, this._cooldowns, valid1m);
         if (!raw) continue;
 
         const sig = formatSignal(raw);
@@ -280,8 +282,8 @@ class SMCPatternAgent extends BaseAgent {
           // Update TP1 flag if hit
           this._openTrades.set(key, updated);
         }
-      } catch (_) {
-        // Non-fatal — trade tracking is best-effort
+      } catch (err) {
+        bLog.error(`[SMC-PAT] _tickOpenTrades ${key}: ${err.message}`);
       }
     }
   }
