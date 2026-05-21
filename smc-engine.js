@@ -1085,7 +1085,7 @@ async function analyzeSMC(symbol, log = console.log) {
 // label = human-readable TF label
 const TRADING_CONFIG = {
   BTCUSDT:  { iv:'15',  slPct:0.0025, label:'15M', name:'BTC'  },
-  ETHUSDT:  { iv:'60',  slPct:0.0020, label:'1H',  name:'ETH'  },
+  ETHUSDT:  { iv:'15',  slPct:0.0020, label:'15M', name:'ETH'  },
   SOLUSDT:  { iv:'15',  slPct:0.0020, label:'15M', name:'SOL'  },
   BNBUSDT:  { iv:'60',  slPct:0.0030, label:'1H',  name:'BNB'  },
   ADAUSDT:  { iv:'15',  slPct:0.0020, label:'15M', name:'ADA'  },
