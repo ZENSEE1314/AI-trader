@@ -149,6 +149,14 @@ class SMCPatternAgent extends BaseAgent {
     // Cooldown map shared with scanPatterns: 'BTCUSDT_HL' → lastSignalTs
     this._cooldowns    = new Map();
 
+    // 1m signal pending cache — HL/LH signals are held for one full 1m candle (≥60s)
+    // before being promoted to live signals. This gives one candle of price confirmation:
+    // HL detected → next candle closes bullish → fire LONG
+    // LH detected → next candle closes bearish → fire SHORT
+    // Map: symbol → { raw, queuedAt }
+    this._pending1m    = new Map();
+    this.PENDING_1M_MS = 60_000; // one 1m candle
+
     // Active virtual trades: signal.symbol+'_'+signal.smcContext.pattern → { ...signal, bars4hCache }
     // Used to run checkTradeState per bar and log outcomes.
     this._openTrades   = new Map();
@@ -233,7 +241,47 @@ class SMCPatternAgent extends BaseAgent {
         //   CHoCH-BULL = bullish reversal on 1m → LONG
         //   CHoCH-BEAR = bearish reversal on 1m → SHORT
         //   LH/HL/LL/HH on 1m = structure entries
-        const raw1m = valid1m ? scan1mPatterns(sym, valid1m, bars4h, this._cooldowns) : null;
+        //
+        // HL and LH signals are queued for one full 1m candle (60s) before firing.
+        // This gives one candle of confirmation that price is actually moving in the
+        // right direction — not just touching the level and reversing.
+        // CHoCH signals fire immediately (they already have body confirmation built in).
+        const rawDetected1m = valid1m ? scan1mPatterns(sym, valid1m, bars4h, this._cooldowns) : null;
+        let raw1m = null;
+
+        if (rawDetected1m) {
+          const isStructureEntry = rawDetected1m.pattern === 'HL' || rawDetected1m.pattern === 'LH' ||
+                                   rawDetected1m.pattern === 'LL' || rawDetected1m.pattern === 'HH';
+          if (isStructureEntry) {
+            const pending = this._pending1m.get(sym);
+            if (pending && pending.raw.pattern === rawDetected1m.pattern &&
+                pending.raw.dir === rawDetected1m.dir &&
+                now - pending.queuedAt >= this.PENDING_1M_MS) {
+              // One full candle has passed — promote to live signal
+              raw1m = rawDetected1m;
+              this._pending1m.delete(sym);
+              bLog.scan(`[SMC-PAT] 1m ${sym} ${rawDetected1m.pattern}(${rawDetected1m.dir}) promoted after 1-candle wait`);
+            } else if (!pending || pending.raw.pattern !== rawDetected1m.pattern || pending.raw.dir !== rawDetected1m.dir) {
+              // New signal — queue it, don't fire yet
+              this._pending1m.set(sym, { raw: rawDetected1m, queuedAt: now });
+              bLog.scan(`[SMC-PAT] 1m ${sym} ${rawDetected1m.pattern}(${rawDetected1m.dir}) queued — waiting 1 candle`);
+              this.addActivity('info', `${sym} ${rawDetected1m.pattern}(${rawDetected1m.dir}) queued — 1m candle confirmation pending`);
+            }
+            // else: same signal still pending, not yet ready — do nothing
+          } else {
+            // CHoCH signals fire immediately — rejection candle already confirms direction
+            raw1m = rawDetected1m;
+            this._pending1m.delete(sym); // clear any stale pending for this sym
+          }
+        } else {
+          // No 1m signal this cycle — expire pending if direction invalidated
+          // (price moved away from the level; stale after 3 minutes)
+          const pending = this._pending1m.get(sym);
+          if (pending && now - pending.queuedAt > 3 * 60_000) {
+            this._pending1m.delete(sym);
+            bLog.scan(`[SMC-PAT] 1m ${sym} pending ${pending.raw.pattern} expired — no follow-through`);
+          }
+        }
 
         // Process both signals — 1m primary first (highest precision), then HTF
         const raws = [raw1m, raw].filter(Boolean);
