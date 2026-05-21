@@ -1141,21 +1141,20 @@ function classifyTrend(bars4h) {
   return 'NEUTRAL';
 }
 
-// ── Trend filter (asymmetric — data-driven) ──────────────────────
-// LONG:  only in UP trend, or NEUTRAL when price below fib50
-// SHORT: allowed in ALL trends when price is at/above fib50
-//        even in UPTREND, fading premium still works
+// ── Trend filter (symmetric — trade WITH the trend) ──────────────
+// LONG:  UP trend, or NEUTRAL when price in discount (below fib50)
+// SHORT: DOWN trend, or NEUTRAL when price in premium (above fib50)
+// BLOCKED: LONG in DOWN, SHORT in UP — never fade a strong trend
 function isTrendAligned(trend, dir, fib50, price) {
   if (dir === 'LONG') {
     if (trend === 'UP') return true;
-    if (trend === 'NEUTRAL' && (fib50 === null || price < fib50)) return true;
-    return false; // block LONG in DOWN or NEUTRAL-premium
+    if (trend === 'NEUTRAL' && (fib50 === null || price <= fib50)) return true;
+    return false; // block LONG in DOWN trend or NEUTRAL-premium
   }
   // SHORT
   if (trend === 'DOWN') return true;
-  if (trend === 'NEUTRAL' && (fib50 === null || price > fib50)) return true;
-  if (trend === 'UP'     && (fib50 === null || price > fib50)) return true;
-  return false;
+  if (trend === 'NEUTRAL' && (fib50 === null || price >= fib50)) return true;
+  return false; // block SHORT in UP trend — was causing HH shorts in a bull rally
 }
 
 // ── Pivot point helpers (for pattern detection) ──────────────────
