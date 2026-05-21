@@ -33,6 +33,45 @@ class TraderAgent extends BaseAgent {
     return true; // PERMISSIVE_MODE
   }
 
+  // ── Post-close cooldown helpers ────────────────────────────────
+  // Returns true if symbol is still in the 1-hour cooldown window.
+  // Checks in-memory map first, then falls back to DB (survives restarts).
+  async _isInCloseCooldown(symbol) {
+    const sym = (symbol || '').toUpperCase();
+    const now = Date.now();
+
+    // 1. In-memory hit (fast path)
+    const memTs = this._closedAt.get(sym);
+    if (memTs && now - memTs < this.CLOSE_COOLDOWN_MS) return true;
+
+    // 2. DB fallback — covers restarts and orphaned closes
+    try {
+      const db = require('../db');
+      const rows = await db.query(
+        `SELECT closed_at FROM trades
+         WHERE symbol = $1
+           AND status IN ('WIN','LOSS','TP','SL','CLOSED','GHOST','TIMEOUT')
+           AND closed_at > NOW() - INTERVAL '1 hour'
+         ORDER BY closed_at DESC LIMIT 1`,
+        [sym]
+      );
+      if (rows.length) {
+        const closeTs = new Date(rows[0].closed_at).getTime();
+        this._closedAt.set(sym, closeTs); // warm the in-memory cache
+        if (now - closeTs < this.CLOSE_COOLDOWN_MS) return true;
+      }
+    } catch (_) {
+      // DB unavailable — rely on in-memory map only
+    }
+
+    return false;
+  }
+
+  // Call this when a trade closes so the in-memory cooldown is updated immediately.
+  recordClose(symbol) {
+    this._closedAt.set((symbol || '').toUpperCase(), Date.now());
+  }
+
   constructor(options = {}) {
     super('TraderAgent', options);
     this.lastTradeResult = null;
@@ -43,6 +82,13 @@ class TraderAgent extends BaseAgent {
     this.lastSyncAt = null;
     this.tradesExecuted = 0;
     this.tradesSkipped = 0;
+
+    // ── Post-close cooldown ───────────────────────────────────────
+    // When a trade closes (any reason), the same token is blocked for 1 hour.
+    // Map: symbol (ETHUSDT) → closedAt timestamp (ms)
+    // Persisted in-memory; also checked against DB on each signal so restarts are safe.
+    this._closedAt = new Map(); // symbol → Date.now() when trade closed
+    this.CLOSE_COOLDOWN_MS = 60 * 60 * 1000; // 1 hour
 
     this._profile = {
       description: 'Executes approved trades on Binance & Bitunix for all users, manages trailing stops and position sync.',
@@ -121,6 +167,19 @@ class TraderAgent extends BaseAgent {
           this.logTrade(`${pick.symbol} globally banned — skipping`);
           this.tradesSkipped++;
           this.addActivity('skip', `${pick.symbol} banned — skipped`);
+          continue;
+        }
+
+        // Check post-close cooldown (1 hour per token after any close)
+        if (await this._isInCloseCooldown(pick.symbol)) {
+          const sym = (pick.symbol || '').toUpperCase();
+          const closedTs = this._closedAt.get(sym);
+          const minsLeft = closedTs
+            ? Math.ceil((this.CLOSE_COOLDOWN_MS - (Date.now() - closedTs)) / 60_000)
+            : 60;
+          this.logTrade(`${pick.symbol} in post-close cooldown — ${minsLeft}m remaining`);
+          this.tradesSkipped++;
+          this.addActivity('skip', `${pick.symbol} cooldown ${minsLeft}m — trade closed recently`);
           continue;
         }
 
