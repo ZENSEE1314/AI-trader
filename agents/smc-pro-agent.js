@@ -152,6 +152,26 @@ class SMCProAgent extends BaseAgent {
           bLog.scan(`[SMC-PRO] RiskAgent: ${approved.length}/${signals.length} approved`);
         }
 
+        // Cross-agent dedup: skip any symbol:direction that SMCPatternAgent (or any
+        // agent) already routed within the shared cooldown window.
+        const lock   = context.coordinator._sharedSignalLock;
+        const lockMs = context.coordinator.SHARED_SIGNAL_COOLDOWN_MS;
+        const now    = Date.now();
+        if (lock && lockMs) {
+          approved = approved.filter(s => {
+            const key    = `${s.symbol}:${s.direction}`;
+            const lastAt = lock.get(key) || 0;
+            if (now - lastAt < lockMs) {
+              const waitMin = Math.ceil((lockMs - (now - lastAt)) / 60_000);
+              bLog.scan(`[SMC-PRO] Cross-agent dedup: ${s.symbol} ${s.direction} locked (${waitMin}m) — skipping`);
+              this.addActivity('skip', `${s.symbol} ${s.direction} — SMCPattern fired recently (${waitMin}m cooldown)`);
+              return false;
+            }
+            lock.set(key, now); // claim the lock for this signal
+            return true;
+          });
+        }
+
         if (approved.length && traderAgent && !traderAgent.paused) {
           this.addActivity('trade', `Routing ${approved.length} SMC signal(s) → TraderAgent`);
           bLog.trade(`[SMC-PRO] → TraderAgent.execute ${approved.length} signal(s): ${approved.map(s => `${s.symbol} ${s.direction} score=${s.score}`).join(', ')}`);

@@ -101,6 +101,12 @@ class AgentCoordinator extends BaseAgent {
     // V4 / TokenAgent signals are ignored for execution (still scanned for data).
     this.smcOnlyMode = true;
 
+    // Cross-agent signal dedup — prevents SMCProAgent and SMCPatternAgent from
+    // both firing the same symbol:direction within the same window.
+    // Key: `${symbol}:${direction}`, value: ms timestamp of last signal routed.
+    this._sharedSignalLock = new Map();
+    this.SHARED_SIGNAL_COOLDOWN_MS = 20 * 60_000; // 20 minutes
+
     // CEO always-on state
     this._ceoTimer = null;
     this._microCycleRunning = false;
