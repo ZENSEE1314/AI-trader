@@ -1204,6 +1204,9 @@ function isTrendAligned(trend, dir, fib50, price) {
 }
 
 // ── Pivot point helpers (for pattern detection) ──────────────────
+
+// Symmetric pivot helpers — used by HTF scanner (15m/30m/1H)
+// PAT_WINGS bars on BOTH sides required before confirming a pivot.
 function _pivLows(bars) {
   const pts = [];
   for (let i = PAT_WINGS; i < bars.length - PAT_WINGS; i++) {
@@ -1223,6 +1226,34 @@ function _pivHighs(bars) {
     for (let j = 1; j <= PAT_WINGS; j++) {
       if (bars[i-j].h >= hi || bars[i+j].h >= hi) { ok = false; break; }
     }
+    if (ok) pts.push({ price: hi, idx: i });
+  }
+  return pts;
+}
+
+// Asymmetric pivot helpers — matches TradingView "SMC Expo 10 1 2" indicator exactly.
+// leftBars=1, rightBars=2: confirms pivot with only 1 bar to the left, 2 to the right.
+// This is FASTER than symmetric detection — pivots appear 1-2 bars sooner.
+// Used by scan1mPatterns so the bot sees the same BMS/CHoCH as the TV indicator.
+function _pivLowsLR(bars, lBars, rBars) {
+  const pts = [];
+  for (let i = lBars; i < bars.length - rBars; i++) {
+    const lo = bars[i].l; let ok = true;
+    for (let j = 1; j <= lBars; j++) { if (bars[i-j].l <= lo) { ok = false; break; } }
+    if (!ok) continue;
+    for (let j = 1; j <= rBars; j++) { if (bars[i+j].l <= lo) { ok = false; break; } }
+    if (ok) pts.push({ price: lo, idx: i });
+  }
+  return pts;
+}
+
+function _pivHighsLR(bars, lBars, rBars) {
+  const pts = [];
+  for (let i = lBars; i < bars.length - rBars; i++) {
+    const hi = bars[i].h; let ok = true;
+    for (let j = 1; j <= lBars; j++) { if (bars[i-j].h >= hi) { ok = false; break; } }
+    if (!ok) continue;
+    for (let j = 1; j <= rBars; j++) { if (bars[i+j].h >= hi) { ok = false; break; } }
     if (ok) pts.push({ price: hi, idx: i });
   }
   return pts;
@@ -1672,17 +1703,29 @@ function checkTradeState(trade, bar) {
 // These are used by scan1mPatterns as the PRIMARY trade trigger,
 // exactly as shown on TradingView SMC indicator (BMS/CHoCH labels).
 
-// 1m-specific constants
-const CHOCH_LKBK    = 30;   // bars to scan for CHoCH structure (30 bars on 1m = 30 min)
-const CHOCH_WINGS   = 2;    // pivot confirmation wings for 1m
-const CHOCH_MAX_LAG = 5;    // CHoCH candle must be within last 5 bars to be tradeable
-const CHOCH_TOL     = 0.003; // 0.3% — max distance from broken level (don't chase)
+// ── SMC Expo indicator parameters (matches TradingView "SMC Expo 10 1 2 20") ──
+// pivotLen=10: swing lookback — how many bars define a swing high/low
+// lBars=1, rBars=2: asymmetric pivot confirmation (1 left, 2 right)
+//   → confirms a pivot faster than symmetric detection (2+2)
+//   → bot sees the same BMS/CHoCH labels at the same time as the TV indicator
+// ema20: EMA(20) for the trend line shown on chart
+const IND_PIVOT_LEN = 10;   // swing lookback (indicator "10")
+const IND_L_BARS    = 1;    // left confirmation bars  (indicator "1")
+const IND_R_BARS    = 2;    // right confirmation bars (indicator "2")
+const IND_EMA_LEN   = 20;   // EMA period for trend line (indicator "20")
+const CHOCH_LKBK    = 20;   // bars to check for LH/HL sequence before CHoCH fires
+const CHOCH_TOL     = 0.003; // 0.3% max overshoot past broken level
+
+// Pivot helpers using indicator's exact asymmetric parameters
+function _ind1mHighs(bars) { return _pivHighsLR(bars, IND_L_BARS, IND_R_BARS); }
+function _ind1mLows(bars)  { return _pivLowsLR(bars,  IND_L_BARS, IND_R_BARS); }
 
 function detectBullCHoCH(window, curBar, slPct) {
   // Requires: ≥2 lower highs (LH sequence) then price closes ABOVE last LH
+  // Uses asymmetric pivots (1L/2R) to match the TV SMC indicator exactly
   const cur   = curBar.c;
-  const highs = _pivHighs(window);
-  const lows  = _pivLows(window);
+  const highs = _ind1mHighs(window);
+  const lows  = _ind1mLows(window);
   if (highs.length < 2 || lows.length < 1) return null;
 
   const lastLH = highs[highs.length - 1];
@@ -1717,8 +1760,8 @@ function detectBullCHoCH(window, curBar, slPct) {
 function detectBearCHoCH(window, curBar, slPct) {
   // Requires: ≥2 higher lows (HL sequence) then price closes BELOW last HL
   const cur   = curBar.c;
-  const highs = _pivHighs(window);
-  const lows  = _pivLows(window);
+  const highs = _ind1mHighs(window);
+  const lows  = _ind1mLows(window);
   if (lows.length < 2 || highs.length < 1) return null;
 
   const lastHL = lows[lows.length - 1];
@@ -1760,21 +1803,27 @@ function detectBearCHoCH(window, curBar, slPct) {
 //
 // Uses separate cooldown keys (prefix '1m_') so 1m and 15m signals don't block each other.
 
-const SCAN1M_LKBK = 30;   // 30-bar lookback on 1m (= 30 min of structure)
-const SCAN1M_CD   = 10 * 60_000; // 10-min cooldown for 1m signals (much shorter than 15m's 45min)
+// SCAN1M window = pivotLen(10) + rBars(2) + 1 slack = 13 bars minimum
+// Using 25 bars gives the indicator enough history to see 2 swings
+const SCAN1M_LKBK = 25;              // 25-bar window (= 25 min — matches indicator's 10-pivot lookback)
+const SCAN1M_CD   = 10 * 60_000;    // 10-min cooldown for 1m signals
+
+// 1m-specific LH/HL/HH/LL detectors using the indicator's asymmetric pivots.
+// These wrap the existing detectors but override the internal pivot calls to use _ind1mHighs/_ind1mLows.
+// We do this inline in scan1mPatterns below (see detector wrappers).
 
 function scan1mPatterns(sym, bars1m, bars4h, cooldowns = new Map()) {
   const cfg = TRADING_CONFIG[sym];
   if (!cfg) return null;
-  if (!bars1m || bars1m.length < SCAN1M_LKBK + CHOCH_WINGS + 2) return null;
+  if (!bars1m || bars1m.length < SCAN1M_LKBK + IND_R_BARS + 2) return null;
   if (!bars4h  || bars4h.length < 50) return null;
 
   const cur   = bars1m[bars1m.length - 1];
   const now   = cur.t;
   const price = cur.c;
 
-  // Build 1m window
-  const window = bars1m.slice(-(SCAN1M_LKBK + CHOCH_WINGS + 1));
+  // Build 1m window using indicator's pivot length
+  const window = bars1m.slice(-(SCAN1M_LKBK + IND_R_BARS + 1));
 
   // 4H trend + fib50 (same filter as 15m scanner)
   const trend = classifyTrend(bars4h);
@@ -1789,23 +1838,76 @@ function scan1mPatterns(sym, bars1m, bars4h, cooldowns = new Map()) {
   const inPremium  = fib50 !== null && price >= fib50;
   const shortFirst = trend === 'DOWN' || (trend === 'NEUTRAL' && inPremium);
 
-  // 1m detectors: CHoCH first (strongest signal), then structure patterns
+  // ── 1m structure detectors using indicator's asymmetric pivots (1L/2R) ───
+  // These detect LH/HL/HH/LL using _ind1mHighs/_ind1mLows instead of the HTF
+  // symmetric pivot helpers — this matches what the TV indicator draws on chart.
+  // No LTF confirmation needed (1m IS the primary TF here).
+  function _1mLH(w, c, s) {
+    const highs = _ind1mHighs(w);
+    if (highs.length < 2) return null;
+    const prev = highs[highs.length - 2];
+    const curr = highs[highs.length - 1];
+    if (curr.price >= prev.price) return null;
+    if (curr.idx < w.length - 20) return null;
+    const dist = Math.abs(curr.price - c.c) / curr.price;
+    if (dist > PAT_TOL) return null;
+    if (c.bullish) return null; // entry bar must be falling
+    return { pattern:'LH', dir:'SHORT', level:curr.price, slPrice:curr.price*(1+s), tp1:c.c*(1-TP1_PCT), tp2:c.c*(1-TP2_PCT), lockAt:c.c*(1-LOCK_PCT) };
+  }
+  function _1mHL(w, c, s) {
+    const lows = _ind1mLows(w);
+    if (lows.length < 2) return null;
+    const prev = lows[lows.length - 2];
+    const curr = lows[lows.length - 1];
+    if (curr.price <= prev.price) return null;
+    if (curr.idx < w.length - 20) return null;
+    const dist = Math.abs(c.c - curr.price) / curr.price;
+    if (dist > PAT_TOL) return null;
+    if (!c.bullish) return null; // entry bar must be rising
+    return { pattern:'HL', dir:'LONG', level:curr.price, slPrice:curr.price*(1-s), tp1:c.c*(1+TP1_PCT), tp2:c.c*(1+TP2_PCT), lockAt:c.c*(1+LOCK_PCT) };
+  }
+  function _1mHH(w, c, s) {
+    const highs = _ind1mHighs(w);
+    if (highs.length < 2) return null;
+    const prev = highs[highs.length - 2];
+    const curr = highs[highs.length - 1];
+    if (curr.price <= prev.price) return null;
+    if (curr.idx < w.length - 20) return null;
+    const dist = Math.abs(curr.price - c.c) / curr.price;
+    if (dist > PAT_TOL) return null;
+    if (c.bullish) return null;
+    return { pattern:'HH', dir:'SHORT', level:curr.price, slPrice:curr.price*(1+s), tp1:c.c*(1-TP1_PCT), tp2:c.c*(1-TP2_PCT), lockAt:c.c*(1-LOCK_PCT) };
+  }
+  function _1mLL(w, c, s) {
+    const lows = _ind1mLows(w);
+    if (lows.length < 2) return null;
+    const prev = lows[lows.length - 2];
+    const curr = lows[lows.length - 1];
+    if (curr.price >= prev.price) return null;
+    if (curr.idx < w.length - 20) return null;
+    const dist = Math.abs(c.c - curr.price) / curr.price;
+    if (dist > PAT_TOL) return null;
+    if (!c.bullish) return null;
+    return { pattern:'LL', dir:'LONG', level:curr.price, slPrice:curr.price*(1-s), tp1:c.c*(1+TP1_PCT), tp2:c.c*(1+TP2_PCT), lockAt:c.c*(1+LOCK_PCT) };
+  }
+
+  // CHoCH first (strongest/earliest signal), then BMS-style LH/HL entries
   const detectors = shortFirst
     ? [
         { key: 'CHoCH-BEAR', fn: detectBearCHoCH },
-        { key: 'LH',         fn: (w, c, s) => detectLH(w, c, s, null, LTF_RECENCY_1M) },
-        { key: 'HH',         fn: (w, c, s) => detectHH(w, c, s, null, LTF_RECENCY_1M) },
+        { key: 'LH',         fn: _1mLH },
+        { key: 'HH',         fn: _1mHH },
         { key: 'CHoCH-BULL', fn: detectBullCHoCH },
-        { key: 'HL',         fn: (w, c, s) => detectHL(w, c, s, null, LTF_RECENCY_1M) },
-        { key: 'LL',         fn: (w, c, s) => detectLL(w, c, s, null, LTF_RECENCY_1M) },
+        { key: 'HL',         fn: _1mHL },
+        { key: 'LL',         fn: _1mLL },
       ]
     : [
         { key: 'CHoCH-BULL', fn: detectBullCHoCH },
-        { key: 'HL',         fn: (w, c, s) => detectHL(w, c, s, null, LTF_RECENCY_1M) },
-        { key: 'LL',         fn: (w, c, s) => detectLL(w, c, s, null, LTF_RECENCY_1M) },
+        { key: 'HL',         fn: _1mHL },
+        { key: 'LL',         fn: _1mLL },
         { key: 'CHoCH-BEAR', fn: detectBearCHoCH },
-        { key: 'LH',         fn: (w, c, s) => detectLH(w, c, s, null, LTF_RECENCY_1M) },
-        { key: 'HH',         fn: (w, c, s) => detectHH(w, c, s, null, LTF_RECENCY_1M) },
+        { key: 'LH',         fn: _1mLH },
+        { key: 'HH',         fn: _1mHH },
       ];
 
   for (const { key, fn } of detectors) {
@@ -1888,7 +1990,11 @@ module.exports = {
   detectHH,
   detectBullCHoCH,
   detectBearCHoCH,
+  IND_PIVOT_LEN,    // indicator pivot length (10)
+  IND_L_BARS,       // indicator left bars  (1)
+  IND_R_BARS,       // indicator right bars (2)
+  IND_EMA_LEN,      // indicator EMA period (20)
   scanPatterns,     // HTF scanner (15m/30m/1H primary TF)
-  scan1mPatterns,   // 1m primary scanner — BMS/CHoCH/LH/HL on 1m bars directly
+  scan1mPatterns,   // 1m primary scanner — matches SMC Expo 10 1 2 20 indicator
   checkTradeState,  // TP/SL/lock manager — call per bar on open trade
 };
