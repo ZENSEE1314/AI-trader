@@ -121,7 +121,7 @@ class SMCPatternAgent extends BaseAgent {
         { id: 'll',      name: 'LL (Lower Low)',   description: 'Long on discount bounce — pivot low at new extreme',       enabled: true },
         { id: 'lh',      name: 'LH (Lower High)', description: 'Short on downtrend retest — pivot high must be falling',   enabled: true },
         { id: 'hh',      name: 'HH (Higher High)', description: 'Short fading premium — pivot high at new extreme',        enabled: true },
-        { id: 'trend',   name: '4H Trend Filter', description: 'EMA20/50/200 — LONG only in UP trend or NEUTRAL-discount, SHORT only in DOWN trend or NEUTRAL-premium. Counter-trend trades blocked.', enabled: true },
+        { id: 'trend',   name: '4H Trend Filter', description: 'EMA20/50/200 — UP trend: LONG always + SHORT at premium (HH fade). DOWN trend: SHORT always + LONG at discount (LL bounce). NEUTRAL: zone-only.', enabled: true },
         { id: 'cooldown',name: '2H Cooldown',     description: 'Skip repeated signals on same sym×pattern within 2 hours', enabled: true },
       ],
       config: [

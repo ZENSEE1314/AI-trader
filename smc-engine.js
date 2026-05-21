@@ -1158,22 +1158,49 @@ function classifyTrend(bars4h) {
   return 'NEUTRAL';
 }
 
-// ── Trend filter (strict — only trade WITH the trend) ────────────
-// LONG:  UP trend only, or NEUTRAL when price is in discount (below fib50)
-//        BLOCKED in DOWN trend — never buy into a confirmed downtrend
-// SHORT: DOWN trend only, or NEUTRAL when price is in premium (above fib50)
-//        BLOCKED in UP trend — never short into a confirmed uptrend
-// Counter-trend trades lose money. Always trade with the 4H trend.
+// ── Trend filter (SMC premium/discount zones) ────────────────────
+//
+// Core SMC rule: trade WITH the trend MOST of the time.
+// Exception: at EXTREME zones (premium/discount), fade the extension.
+//
+//   UP trend:
+//     LONG  at discount (price ≤ fib50) — continuation pullback entry  ← best trade
+//     LONG  at any level                — trend continuation always OK
+//     SHORT at premium (price ≥ fib50) — fade the HH / premium zone    ← allowed
+//     SHORT at discount                — BLOCKED (shorting into support)
+//
+//   DOWN trend:
+//     SHORT at premium (price ≥ fib50) — continuation pullback entry   ← best trade
+//     SHORT at any level               — trend continuation always OK
+//     LONG  at discount (price ≤ fib50)— fade the LL / discount zone   ← allowed
+//     LONG  at premium                 — BLOCKED (buying into resistance)
+//
+//   NEUTRAL: premium zone → SHORT, discount zone → LONG, midrange → skip
+//
+// This matches exactly what the 15m chart shows:
+//   15m uptrend → HH at 2147 (premium) → SHORT valid ✓
+//   15m uptrend → HL at 2120 (discount) → LONG valid ✓
+
 function isTrendAligned(trend, dir, fib50, price) {
-  if (dir === 'LONG') {
-    if (trend === 'UP') return true;
-    if (trend === 'NEUTRAL' && fib50 !== null && price <= fib50) return true;
-    return false; // block LONG in DOWN trend
+  const inPremium  = fib50 !== null && price >= fib50;
+  const inDiscount = fib50 !== null && price <= fib50;
+
+  if (trend === 'UP') {
+    if (dir === 'LONG')  return true;                   // always long in uptrend
+    if (dir === 'SHORT') return inPremium;              // short only at HH premium zone
+    return false;
   }
-  // SHORT
-  if (trend === 'DOWN') return true;
-  if (trend === 'NEUTRAL' && fib50 !== null && price >= fib50) return true;
-  return false; // block SHORT in UP trend
+
+  if (trend === 'DOWN') {
+    if (dir === 'SHORT') return true;                   // always short in downtrend
+    if (dir === 'LONG')  return inDiscount;             // long only at LL discount zone
+    return false;
+  }
+
+  // NEUTRAL — strictly zone-based
+  if (dir === 'LONG')  return inDiscount;
+  if (dir === 'SHORT') return inPremium;
+  return false;
 }
 
 // ── Pivot point helpers (for pattern detection) ──────────────────
