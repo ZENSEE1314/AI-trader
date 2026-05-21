@@ -374,13 +374,54 @@ class SMCPatternAgent extends BaseAgent {
         const raws = [raw1m, raw].filter(Boolean);
         if (!raws.length) continue;
 
+        // ── 1m pivot gate — applied to ALL signals (1m + HTF) ─────
+        // The most recent CONFIRMED 1m pivot determines the only valid direction.
+        //   HL (last low > prev low) → LONG only  — price is at support, no shorts
+        //   LH (last high < prev high) → SHORT only — price is at resistance, no longs
+        //   LL / HH / ambiguous → allow both directions
+        //
+        // No CHoCH exemption: if the chart shows HL, nothing shorts, period.
+        // (When CHoCH-BEAR breaks the HL, the pivot updates to LL → gate lifts automatically.)
+        let pivotGateDir = null;
+        if (bars1m && bars1m.length >= 8) {
+          const ph = [], pl = [];
+          for (let i = 1; i < bars1m.length - 2; i++) {
+            if (bars1m[i].h > bars1m[i-1].h && bars1m[i].h > bars1m[i+1].h && bars1m[i].h > bars1m[i+2].h)
+              ph.push({ price: bars1m[i].h, idx: i });
+            if (bars1m[i].l < bars1m[i-1].l && bars1m[i].l < bars1m[i+1].l && bars1m[i].l < bars1m[i+2].l)
+              pl.push({ price: bars1m[i].l, idx: i });
+          }
+          const lastH = ph[ph.length - 1], prevH = ph[ph.length - 2];
+          const lastL = pl[pl.length - 1], prevL = pl[pl.length - 2];
+          if (lastH && lastL) {
+            if (lastL.idx > lastH.idx && prevL && lastL.price > prevL.price)
+              pivotGateDir = 'LONG';   // HL is most recent confirmed pivot
+            else if (lastH.idx > lastL.idx && prevH && lastH.price < prevH.price)
+              pivotGateDir = 'SHORT';  // LH is most recent confirmed pivot
+          }
+        }
+
+        const pivotGated = pivotGateDir
+          ? raws.filter(r => {
+              if (r.dir !== pivotGateDir) {
+                const pivotLabel = pivotGateDir === 'LONG' ? 'HL' : 'LH';
+                bLog.scan(`[SMC-PAT] Pivot gate: ${sym} ${r.pattern}(${r.dir}) blocked — 1m ${pivotLabel} is current structure`);
+                this.addActivity('skip', `${sym} ${r.pattern}(${r.dir}) blocked — 1m ${pivotLabel} = ${pivotGateDir} only`);
+                return false;
+              }
+              return true;
+            })
+          : raws;
+
+        if (!pivotGated.length) continue;
+
         // ── VWAP session filter ────────────────────────────────
         // Compute session VWAP + ±1σ bands from 3m bars (up to 24h data).
         // price ≤ lower band → NO LONG  (already in downtrend territory)
         // price ≥ upper band → NO SHORT (already in uptrend territory)
         const vwap = computeVWAP(bars3m);
         const vwapFiltered = vwap
-          ? raws.filter(r => {
+          ? pivotGated.filter(r => {
               const p = r.price;
               if (r.dir === 'LONG' && p <= vwap.lower) {
                 bLog.scan(`[SMC-PAT] VWAP block: ${sym} LONG p=${p.toFixed(2)} ≤ lower=${vwap.lower.toFixed(2)} vwap=${vwap.vwap.toFixed(2)}`);
@@ -394,7 +435,7 @@ class SMCPatternAgent extends BaseAgent {
               }
               return true;
             })
-          : raws;
+          : pivotGated;
 
         if (!vwapFiltered.length) continue;
 
