@@ -188,17 +188,6 @@ class SMCPatternAgent extends BaseAgent {
         const ltfTag = valid1m ? '1m' : valid3m ? '3m' : '15m-only';
         bLog.scan(`[SMC-PAT] ${sym}: LTF=${ltfTag} (1m=${bars1m?.length ?? 0} 3m=${bars3m?.length ?? 0})`);
 
-        // ── BTC market bias — update whenever we scan BTCUSDT ─────
-        // Rule: BTC HL/HH → market BULLISH → altcoins: LONG only
-        //       BTC LH/LL → market BEARISH → altcoins: SHORT only
-        // BTC itself always trades its own structure (no filter applied to BTC).
-        if (sym === 'BTCUSDT' && valid1m && valid1m.length >= 20) {
-          this._btcBias   = this._deriveBtcBias(valid1m);
-          this._btcBiasAt = now;
-          bLog.scan(`[SMC-PAT] BTC bias: ${this._btcBias ?? 'NEUTRAL'}`);
-          this.addActivity('info', `BTC market bias: ${this._btcBias ?? 'NEUTRAL'}`);
-        }
-
         // ── Scan 1: HTF primary (15m/30m/1H) + LTF confirmation ───
         const raw = scanPatterns(sym, patBars, bars4h, this._cooldowns, valid1m, valid3m);
 
@@ -239,6 +228,27 @@ class SMCPatternAgent extends BaseAgent {
         this.addActivity('error', `${sym} scan failed: ${err.message}`);
         bLog.error(`[SMC-PAT] ${sym} error: ${err.message}`);
       }
+    }
+
+    // ── BTC bias — set from BTC's ACTUAL signal direction ─────
+    // BTC's signal is the ground truth. If BTC fires SHORT → BEARISH → altcoins SHORT only.
+    // If BTC fires LONG → BULLISH → altcoins LONG only.
+    // If BTC has no signal this cycle, keep the last known bias (expires after 30 min).
+    // Using BTC's signal direction (not a separate pivot calc) so bias always matches
+    // the real trade the bot just fired on BTC — no contradictions possible.
+    const btcSignalThisCycle = signals.find(s => s.symbol === 'BTCUSDT');
+    if (btcSignalThisCycle) {
+      this._btcBias   = btcSignalThisCycle.direction === 'LONG' ? 'BULLISH' : 'BEARISH';
+      this._btcBiasAt = now;
+      bLog.scan(`[SMC-PAT] BTC bias → ${this._btcBias} (from BTC ${btcSignalThisCycle.direction} signal)`);
+      this.addActivity('info', `BTC market bias: ${this._btcBias} (${btcSignalThisCycle.smcContext?.pattern ?? btcSignalThisCycle.direction})`);
+    } else if (now - this._btcBiasAt > 30 * 60_000) {
+      // Bias expired — no BTC signal in last 30 min → go neutral
+      if (this._btcBias !== null) {
+        bLog.scan('[SMC-PAT] BTC bias expired → NEUTRAL');
+        this.addActivity('info', 'BTC bias expired (30 min) → NEUTRAL');
+      }
+      this._btcBias = null;
     }
 
     // ── Update open trade states (outcome logging only) ────
