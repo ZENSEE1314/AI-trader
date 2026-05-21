@@ -1158,22 +1158,25 @@ function classifyTrend(bars4h) {
   return 'NEUTRAL';
 }
 
-// ── Trend filter (symmetric — trade WITH the trend) ──────────────
-// LONG:  UP trend, or NEUTRAL when price in discount (below fib50)
-// SHORT: DOWN trend, or NEUTRAL when price in premium (above fib50)
-// BLOCKED: LONG in DOWN, SHORT in UP — never fade a strong trend
+// ── Trend filter (asymmetric — SHORT allowed in all trends) ──────
+// LONG:  UP trend, or NEUTRAL when price is in discount (below fib50)
+//        BLOCKED in DOWN trend — never buy into a confirmed downtrend
+// SHORT: DOWN trend (always), NEUTRAL or UP when price is at premium (above fib50)
+//        NOT blocked in UP trend — LH/HH at premium are valid fades even in uptrends
+// This asymmetry reflects SMC: the market can make LH retests during bull runs.
 function isTrendAligned(trend, dir, fib50, price) {
   if (dir === 'LONG') {
     if (trend === 'UP') return true;
-    // NEUTRAL: only allow LONG in discount zone — if fib50 unknown, block (safer than guessing)
+    // NEUTRAL: only allow LONG in discount zone
     if (trend === 'NEUTRAL' && fib50 !== null && price <= fib50) return true;
-    return false;
+    return false; // block LONG in DOWN trend
   }
-  // SHORT
+
+  // SHORT — allowed in all trend states, but must be at premium in UP/NEUTRAL
   if (trend === 'DOWN') return true;
-  // NEUTRAL: only allow SHORT in premium zone — if fib50 unknown, block
-  if (trend === 'NEUTRAL' && fib50 !== null && price >= fib50) return true;
-  return false; // block SHORT in UP trend
+  // NEUTRAL or UP: only allow SHORT from premium zone (price above fib50)
+  if (fib50 !== null && price >= fib50) return true;
+  return false; // price is in discount — no short from here
 }
 
 // ── Pivot point helpers (for pattern detection) ──────────────────
@@ -1442,12 +1445,30 @@ function scanPatterns(sym, patBars, bars4h, cooldowns = new Map(), bars1m = null
     if (fz) fib50 = fz.p500;
   } catch (_) {}
 
-  const detectors = [
-    { key: 'HL', fn: detectHL },
-    { key: 'LL', fn: detectLL },
-    { key: 'LH', fn: detectLH },
-    { key: 'HH', fn: detectHH },
-  ];
+  // Prioritise detectors by trend direction so the trend-aligned pattern
+  // is always evaluated first.  If both an HL and an LH pass all their
+  // individual checks, we want the one that matches the trend to win —
+  // not whichever happened to be first in a hard-coded list.
+  //
+  // DOWN trend or NEUTRAL-premium: LH/HH first (short bias)
+  // UP   trend or NEUTRAL-discount: HL/LL first (long bias)
+  const inPremium = fib50 !== null && price >= fib50;
+  const shortFirst = trend === 'DOWN' || (trend === 'NEUTRAL' && inPremium)
+                     || (trend === 'UP' && inPremium);  // asymmetric: UP still lets short from premium
+
+  const detectors = shortFirst
+    ? [
+        { key: 'LH', fn: detectLH },
+        { key: 'HH', fn: detectHH },
+        { key: 'HL', fn: detectHL },
+        { key: 'LL', fn: detectLL },
+      ]
+    : [
+        { key: 'HL', fn: detectHL },
+        { key: 'LL', fn: detectLL },
+        { key: 'LH', fn: detectLH },
+        { key: 'HH', fn: detectHH },
+      ];
 
   for (const { key, fn } of detectors) {
     const cdKey = `${sym}_${key}`;
