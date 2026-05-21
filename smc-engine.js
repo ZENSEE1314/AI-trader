@@ -1201,38 +1201,40 @@ function _pivHighs(bars) {
   return pts;
 }
 
-// ── 1m LTF confirmation ───────────────────────────────────────────
-// Requires the 1m chart to ALSO be making an HL/LH before HTF signal fires.
-// This is the SMC "LTF entry" rule: HTF identifies the zone, LTF triggers the trade.
-// PAT_WINGS=2 on 1m means pivot confirms in just 2 minutes.
+// ── LTF confirmation (cascade: 1m → 3m → 15m pattern-only) ──────────
+// HTF identifies the zone; LTF triggers the trade.
+// Cascade: try 1m first, fall back to 3m, fall back to pattern-only (no block).
+// recency controls how fresh the LTF pivot must be:
+//   1m → recency=5 (last 5 bars = 5 min)
+//   3m → recency=2 (last 2 bars  = 6 min)
 
-const LTF_1M_WINDOW  = 40;   // look at last 40 1m bars (= 40 min) for LTF structure
-const LTF_1M_RECENCY = 5;    // 1m pivot must be within last 5 bars (= 5 min) — "next candle" entry
+const LTF_WINDOW       = 40;  // last N bars of LTF to scan for structure
+const LTF_RECENCY_1M   = 5;   // 1m: pivot must be within 5 bars
+const LTF_RECENCY_3M   = 2;   // 3m: pivot must be within 2 bars (~6 min)
 
-// LONG LTF check: 1m must show a recent Higher Low with bullish rejection
-function _confirm1mHL(bars1m) {
-  if (!bars1m || bars1m.length < LTF_1M_WINDOW) return false; // no data → block, not skip
-  const win  = bars1m.slice(-LTF_1M_WINDOW);
+// LONG LTF check: bars must show a recent HL with bullish rejection
+function _confirmLongLTF(bars, recency) {
+  if (!bars || bars.length < LTF_WINDOW) return false;
+  const win  = bars.slice(-LTF_WINDOW);
   const lows = _pivLows(win);
   if (lows.length < 2) return false;
   const prev = lows[lows.length - 2];
   const curr = lows[lows.length - 1];
-  if (curr.price <= prev.price) return false;  // must be higher low on 1m
-  // Recency: pivot confirmation bar (curr.idx + PAT_WINGS) must be within last LTF_1M_RECENCY bars
-  if (curr.idx + PAT_WINGS < win.length - LTF_1M_RECENCY) return false;
-  return _isBullishRejection(win[curr.idx]);   // bullish pin on 1m pivot bar
+  if (curr.price <= prev.price) return false;  // must be higher low
+  if (curr.idx + PAT_WINGS < win.length - recency) return false;  // must be fresh
+  return _isBullishRejection(win[curr.idx]);
 }
 
-// SHORT LTF check: 1m must show a recent Lower High with bearish rejection
-function _confirm1mLH(bars1m) {
-  if (!bars1m || bars1m.length < LTF_1M_WINDOW) return false; // no data → block
-  const win   = bars1m.slice(-LTF_1M_WINDOW);
+// SHORT LTF check: bars must show a recent LH with bearish rejection
+function _confirmShortLTF(bars, recency) {
+  if (!bars || bars.length < LTF_WINDOW) return false;
+  const win   = bars.slice(-LTF_WINDOW);
   const highs = _pivHighs(win);
   if (highs.length < 2) return false;
   const prev = highs[highs.length - 2];
   const curr = highs[highs.length - 1];
-  if (curr.price >= prev.price) return false;
-  if (curr.idx + PAT_WINGS < win.length - LTF_1M_RECENCY) return false;
+  if (curr.price >= prev.price) return false;  // must be lower high
+  if (curr.idx + PAT_WINGS < win.length - recency) return false;  // must be fresh
   return _isBearishRejection(win[curr.idx]);
 }
 
@@ -1270,7 +1272,7 @@ function _isBearishRejection(bar) {
 // curBar  = full current bar object (uses .c for close, .bullish for momentum)
 // slPct   = token SL
 
-function detectHL(window, curBar, slPct, bars1m = null) {
+function detectHL(window, curBar, slPct, ltfBars = null, ltfRecency = LTF_RECENCY_1M) {
   // Higher Low → LONG: uptrend making HL retest
   const cur  = curBar.c;
   const lows = _pivLows(window);
@@ -1299,25 +1301,25 @@ function detectHL(window, curBar, slPct, bars1m = null) {
   if (pivotBar.v < _avgVol(window) * 0.85) return null;  // low-volume bounce → not institutional
   if (!curBar.bullish) return null;                        // entry bar must be rising right now
 
-  // ── 1m LTF confirmation ────────────────────────────────────
-  // 15m HL identified the zone — 1m HL must confirm the entry
-  if (!_confirm1mHL(bars1m)) return null;
+  // ── LTF confirmation (cascade: 1m → 3m → pattern-only) ───────────
+  // ltfBars=null means no LTF available — trust the 15m pattern alone (don't block)
+  if (ltfBars && !_confirmLongLTF(ltfBars, ltfRecency)) return null;
 
-  // "Next candle" entry price: use current 1m bar close; fall back to 15m close
-  const entry1mHL = (bars1m && bars1m.length > 0) ? bars1m[bars1m.length - 1].c : cur;
+  // Entry price: LTF bar close for precision; fall back to 15m close
+  const entryHL = (ltfBars && ltfBars.length > 0) ? ltfBars[ltfBars.length - 1].c : cur;
 
   return {
     pattern:  'HL',
     dir:      'LONG',
     level:    curr.price,
     slPrice:  curr.price * (1 - slPct),
-    tp1:      entry1mHL * (1 + TP1_PCT),
-    tp2:      entry1mHL * (1 + TP2_PCT),
-    lockAt:   entry1mHL * (1 + LOCK_PCT),
+    tp1:      entryHL * (1 + TP1_PCT),
+    tp2:      entryHL * (1 + TP2_PCT),
+    lockAt:   entryHL * (1 + LOCK_PCT),
   };
 }
 
-function detectLL(window, curBar, slPct, bars1m = null) {
+function detectLL(window, curBar, slPct, ltfBars = null, ltfRecency = LTF_RECENCY_1M) {
   // Lower Low → LONG: discount zone bounce
   const cur  = curBar.c;
   const lows = _pivLows(window);
@@ -1343,20 +1345,19 @@ function detectLL(window, curBar, slPct, bars1m = null) {
   if (pivotBar.v < _avgVol(window) * 0.85) return null;
   if (!curBar.bullish) return null;
 
-  // ── 1m LTF confirmation ────────────────────────────────────
-  if (!_confirm1mHL(bars1m)) return null;
+  // ── LTF confirmation (cascade: 1m → 3m → pattern-only) ───────────
+  if (ltfBars && !_confirmLongLTF(ltfBars, ltfRecency)) return null;
 
-  // "Next candle" entry price: use current 1m bar close; fall back to 15m close
-  const entry1mLL = (bars1m && bars1m.length > 0) ? bars1m[bars1m.length - 1].c : cur;
+  const entryLL = (ltfBars && ltfBars.length > 0) ? ltfBars[ltfBars.length - 1].c : cur;
 
   return {
     pattern:  'LL',
     dir:      'LONG',
     level:    curr.price,
     slPrice:  curr.price * (1 - slPct),
-    tp1:      entry1mLL * (1 + TP1_PCT),
-    tp2:      entry1mLL * (1 + TP2_PCT),
-    lockAt:   entry1mLL * (1 + LOCK_PCT),
+    tp1:      entryLL * (1 + TP1_PCT),
+    tp2:      entryLL * (1 + TP2_PCT),
+    lockAt:   entryLL * (1 + LOCK_PCT),
   };
 }
 
@@ -1365,7 +1366,7 @@ function detectLL(window, curBar, slPct, bars1m = null) {
 // at $2,143 (0.65% below), that's a mid-range entry — skip it. Only short at the top.
 const SHORT_PROX_TOL = 0.005;
 
-function detectLH(window, curBar, slPct, bars1m = null) {
+function detectLH(window, curBar, slPct, ltfBars = null, ltfRecency = LTF_RECENCY_1M) {
   // Lower High → SHORT: downtrend making LH retest
   const cur   = curBar.c;
   const highs = _pivHighs(window);
@@ -1405,24 +1406,23 @@ function detectLH(window, curBar, slPct, bars1m = null) {
   if (pivotBar.v < _avgVol(window) * 0.85) return null;
   if (curBar.bullish) return null;                         // entry bar must be falling
 
-  // ── 1m LTF confirmation ────────────────────────────────────
-  if (!_confirm1mLH(bars1m)) return null;
+  // ── LTF confirmation (cascade: 1m → 3m → pattern-only) ───────────
+  if (ltfBars && !_confirmShortLTF(ltfBars, ltfRecency)) return null;
 
-  // "Next candle" entry price: use current 1m bar close; fall back to 15m close
-  const entry1mLH = (bars1m && bars1m.length > 0) ? bars1m[bars1m.length - 1].c : cur;
+  const entryLH = (ltfBars && ltfBars.length > 0) ? ltfBars[ltfBars.length - 1].c : cur;
 
   return {
     pattern:  'LH',
     dir:      'SHORT',
     level:    curr.price,
     slPrice:  curr.price * (1 + slPct),
-    tp1:      entry1mLH * (1 - TP1_PCT),
-    tp2:      entry1mLH * (1 - TP2_PCT),
-    lockAt:   entry1mLH * (1 - LOCK_PCT),
+    tp1:      entryLH * (1 - TP1_PCT),
+    tp2:      entryLH * (1 - TP2_PCT),
+    lockAt:   entryLH * (1 - LOCK_PCT),
   };
 }
 
-function detectHH(window, curBar, slPct, bars1m = null) {
+function detectHH(window, curBar, slPct, ltfBars = null, ltfRecency = LTF_RECENCY_1M) {
   // Higher High → SHORT: premium zone fade
   const cur   = curBar.c;
   const highs = _pivHighs(window);
@@ -1454,20 +1454,19 @@ function detectHH(window, curBar, slPct, bars1m = null) {
   if (pivotBar.v < _avgVol(window) * 0.85) return null;
   if (curBar.bullish) return null;
 
-  // ── 1m LTF confirmation ────────────────────────────────────
-  if (!_confirm1mLH(bars1m)) return null;
+  // ── LTF confirmation (cascade: 1m → 3m → pattern-only) ───────────
+  if (ltfBars && !_confirmShortLTF(ltfBars, ltfRecency)) return null;
 
-  // "Next candle" entry price: use current 1m bar close; fall back to 15m close
-  const entry1mHH = (bars1m && bars1m.length > 0) ? bars1m[bars1m.length - 1].c : cur;
+  const entryHH = (ltfBars && ltfBars.length > 0) ? ltfBars[ltfBars.length - 1].c : cur;
 
   return {
     pattern:  'HH',
     dir:      'SHORT',
     level:    curr.price,
     slPrice:  curr.price * (1 + slPct),
-    tp1:      entry1mHH * (1 - TP1_PCT),
-    tp2:      entry1mHH * (1 - TP2_PCT),
-    lockAt:   entry1mHH * (1 - LOCK_PCT),
+    tp1:      entryHH * (1 - TP1_PCT),
+    tp2:      entryHH * (1 - TP2_PCT),
+    lockAt:   entryHH * (1 - LOCK_PCT),
   };
 }
 
@@ -1476,15 +1475,33 @@ function detectHH(window, curBar, slPct, bars1m = null) {
 // Returns first valid trend-aligned signal or null.
 // cooldowns: Map<sym_pat → lastSignalTs> (passed in from caller to persist)
 
-function scanPatterns(sym, patBars, bars4h, cooldowns = new Map(), bars1m = null) {
+function scanPatterns(sym, patBars, bars4h, cooldowns = new Map(), bars1m = null, bars3m = null) {
   const cfg = TRADING_CONFIG[sym];
   if (!cfg) return null;                            // symbol not in config (XRP removed)
 
   const cur  = patBars[patBars.length - 1];
   const now  = cur.t;
-  // "Next candle" entry: use the current 1m bar close as entry price.
-  // After 15m LH + 1m LH confirm, we enter on the NEXT 1m bar — not the 15m close.
-  const price = (bars1m && bars1m.length > 0) ? bars1m[bars1m.length - 1].c : cur.c;
+
+  // ── LTF cascade: 1m preferred → 3m fallback → 15m pattern-only ──
+  // If 1m data is available and thick enough, use it. Fall back to 3m if not.
+  // If neither is available, ltfBars=null and detectors will not block the trade —
+  // the 15m pattern structure alone is sufficient.
+  let ltfBars    = null;
+  let ltfRecency = LTF_RECENCY_1M;
+  let ltfLabel   = '15m(no-ltf)';
+
+  if (bars1m && bars1m.length >= LTF_WINDOW) {
+    ltfBars    = bars1m;
+    ltfRecency = LTF_RECENCY_1M;
+    ltfLabel   = '1m';
+  } else if (bars3m && bars3m.length >= LTF_WINDOW) {
+    ltfBars    = bars3m;
+    ltfRecency = LTF_RECENCY_3M;
+    ltfLabel   = '3m';
+  }
+
+  // Entry price: LTF close for precision; fall back to 15m close when no LTF
+  const price = ltfBars ? ltfBars[ltfBars.length - 1].c : cur.c;
 
   // Build pattern window
   if (patBars.length < PAT_LKBK + PAT_WINGS + 2) return null;
@@ -1531,7 +1548,7 @@ function scanPatterns(sym, patBars, bars4h, cooldowns = new Map(), bars1m = null
     // Cooldown: skip if fired within 2H
     if (cooldowns.has(cdKey) && now - cooldowns.get(cdKey) < PAT_CD) continue;
 
-    const sig = fn(window, cur, cfg.slPct, bars1m);  // bars1m = 1m LTF confirmation
+    const sig = fn(window, cur, cfg.slPct, ltfBars, ltfRecency);
     if (!sig) continue;
 
     // Trend alignment filter
@@ -1559,8 +1576,9 @@ function scanPatterns(sym, patBars, bars4h, cooldowns = new Map(), bars1m = null
       tp2Pct:   (TP2_PCT  * 100).toFixed(2) + '%',
       trend,
       fib50,
+      ltfUsed:  ltfLabel,   // which LTF confirmed: '1m' | '3m' | '15m(no-ltf)'
       ts:       now,
-      signal:   `${sig.pattern}(${sig.dir}) on ${cfg.label} | trend=${trend} | entry=${price.toFixed(4)} sl=${sig.slPrice.toFixed(4)} tp1=${sig.tp1.toFixed(4)} tp2=${sig.tp2.toFixed(4)}`,
+      signal:   `${sig.pattern}(${sig.dir}) on ${cfg.label}+${ltfLabel} | trend=${trend} | entry=${price.toFixed(4)} sl=${sig.slPrice.toFixed(4)} tp1=${sig.tp1.toFixed(4)} tp2=${sig.tp2.toFixed(4)}`,
     };
   }
 

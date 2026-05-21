@@ -30,6 +30,7 @@ const SCAN_INTERVAL_MS = 30_000;    // 30s — catches new closes on all TFs
 const BARS_PATTERN     = 120;       // bars for pattern detection window
 const BARS_4H_TREND    = 250;       // bars for 4H EMA200 (needs 200 minimum)
 const BARS_1M          = 80;        // 1m bars for LTF confirmation (80 min coverage)
+const BARS_3M          = 60;        // 3m bars for LTF fallback (3hr coverage)
 const SCORE            = 72;        // signal score (higher than SMCProAgent's default)
 const AGENT_NAME       = 'SMCPatternAgent';
 
@@ -41,6 +42,7 @@ const SYMBOLS = Object.keys(TRADING_CONFIG);
 // Bybit uses the same minute values as strings, but '60' = '60' and '240' = '240'.
 // 4H on Bybit is interval='240'.
 const INTERVAL_4H = '240';
+const INTERVAL_3M = '3';
 
 // ── Signal formatter ─────────────────────────────────────────
 // Adapts scanPatterns output to the shape TraderAgent expects.
@@ -73,6 +75,7 @@ function formatSignal(raw) {
     smcContext: {
       pattern:  raw.pattern,
       tf:       raw.tf,
+      ltfUsed:  raw.ltfUsed,   // '1m' | '3m' | '15m(no-ltf)'
       trend:    raw.trend,
       fib50:    raw.fib50,
       level:    raw.level,
@@ -159,28 +162,35 @@ class SMCPatternAgent extends BaseAgent {
       try {
         const cfg = TRADING_CONFIG[sym];
 
-        // Parallel fetch: pattern TF bars + 4H trend bars + 1m LTF confirmation
-        const [patBars, bars4h, bars1m] = await Promise.all([
-          fetchCandles(sym, cfg.iv,    BARS_PATTERN),
+        // Parallel fetch: pattern TF + 4H trend + 1m LTF + 3m LTF fallback
+        const [patBars, bars4h, bars1m, bars3m] = await Promise.all([
+          fetchCandles(sym, cfg.iv,      BARS_PATTERN),
           fetchCandles(sym, INTERVAL_4H, BARS_4H_TREND),
-          fetchCandles(sym, '1',       BARS_1M),
+          fetchCandles(sym, '1',         BARS_1M),
+          fetchCandles(sym, INTERVAL_3M, BARS_3M),
         ]);
 
         if (!patBars || patBars.length < 70) continue;
         if (!bars4h  || bars4h.length  < 210) continue;
-        // bars1m requires >= BARS_1M (40) bars to run LTF confirmation — otherwise block
-        const valid1m = bars1m?.length >= BARS_1M ? bars1m : null;
-        if (!valid1m) bLog.scan(`[SMC-PAT] ${sym}: 1m bars thin (${bars1m?.length ?? 0}) — LTF confirmation blocked`);
 
-        // Run pattern scanner (handles cooldown + trend filter + 1m confirmation internally)
-        const raw = scanPatterns(sym, patBars, bars4h, this._cooldowns, valid1m);
+        // LTF cascade: prefer 1m, fall back to 3m, fall back to pattern-only
+        // LTF_WINDOW = 40 bars minimum for structure detection
+        const LTF_WINDOW = 40;
+        const valid1m = bars1m?.length >= LTF_WINDOW ? bars1m : null;
+        const valid3m = bars3m?.length >= LTF_WINDOW ? bars3m : null;
+
+        const ltfTag = valid1m ? '1m' : valid3m ? '3m' : '15m-only';
+        bLog.scan(`[SMC-PAT] ${sym}: LTF=${ltfTag} (1m=${bars1m?.length ?? 0} 3m=${bars3m?.length ?? 0})`);
+
+        // Run pattern scanner — passes both LTF options; engine picks best available
+        const raw = scanPatterns(sym, patBars, bars4h, this._cooldowns, valid1m, valid3m);
         if (!raw) continue;
 
         const sig = formatSignal(raw);
         signals.push(sig);
         this._signalCount++;
 
-        const msg = `${sig.symbol} ${sig.direction} pattern=${raw.pattern} TF=${cfg.label} ` +
+        const msg = `${sig.symbol} ${sig.direction} pattern=${raw.pattern} TF=${cfg.label}+${raw.ltfUsed ?? '?'} ` +
                     `trend=${raw.trend} entry=${raw.price.toFixed(4)} sl=${raw.sl.toFixed(4)} ` +
                     `tp1=${raw.tp1.toFixed(4)} tp2=${raw.tp2.toFixed(4)} RR=${sig.rr}`;
 
