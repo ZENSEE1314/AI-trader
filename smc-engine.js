@@ -1285,6 +1285,16 @@ function detectHL(window, curBar, slPct, bars1m = null) {
   const above = (cur - curr.price) / curr.price;
   if (above < 0 || above > PAT_TOL) return null;   // price must be just above level
 
+  // ── Structural rally filter ────────────────────────────────
+  // Between the previous low and this HL there must be a meaningful rally.
+  // Prevents buying a sideways drift where two lows are close together
+  // with no real bounce structure between them.
+  const barsBetween = window.slice(prev.idx + 1, curr.idx);
+  if (barsBetween.length < 3) return null;
+  const highestBetween = Math.max(...barsBetween.map(b => b.h));
+  const rallyPct       = (highestBetween - curr.price) / curr.price;
+  if (rallyPct < slPct * 3) return null; // rally must be ≥ 3× SL to be structural
+
   // ── Big-wave quality gate ──────────────────────────────────
   const pivotBar = window[curr.idx];
   if (!_isBullishRejection(pivotBar)) return null;        // weak close at the low → likely to drop
@@ -1317,6 +1327,15 @@ function detectLL(window, curBar, slPct, bars1m = null) {
   if (curr.idx < window.length - 36) return null;  // must be within last 36 bars
   const above = (cur - curr.price) / curr.price;
   if (above < 0 || above > PAT_TOL) return null;
+
+  // ── Structural rally filter ────────────────────────────────
+  // Between the previous low and this LL there must be a meaningful bounce
+  // so the LL has real structure — not just price grinding sideways lower.
+  const barsBetween = window.slice(prev.idx + 1, curr.idx);
+  if (barsBetween.length < 3) return null;
+  const highestBetween = Math.max(...barsBetween.map(b => b.h));
+  const rallyPct       = (highestBetween - curr.price) / curr.price;
+  if (rallyPct < slPct * 3) return null;
 
   // ── Big-wave quality gate ──────────────────────────────────
   const pivotBar = window[curr.idx];
@@ -1361,6 +1380,18 @@ function detectLH(window, curBar, slPct, bars1m = null) {
   const winHigh = Math.max(...window.slice(-36).map(b => b.h)); // matches 36-bar recency window
   if ((winHigh - curr.price) / winHigh > SHORT_PROX_TOL) return null;
 
+  // ── Structural pullback filter ─────────────────────────────
+  // Between the previous high and this LH there MUST be a meaningful pullback.
+  // Without this check, detectLH fires on a tiny bounce immediately after a HH
+  // (price just drifts sideways and any minor lower-high is called "LH").
+  // A real LH requires:  prev HIGH → significant drop → bounce → LH retest.
+  // Minimum pullback = 3× slPct so the structure is clearly formed.
+  const barsBetween = window.slice(prev.idx + 1, curr.idx);
+  if (barsBetween.length < 3) return null;  // at least 3 bars of structure required
+  const lowestBetween = Math.min(...barsBetween.map(b => b.l));
+  const pullbackPct   = (curr.price - lowestBetween) / curr.price;
+  if (pullbackPct < slPct * 3) return null; // pullback must be ≥ 3× SL to be structural
+
   // ── Big-wave quality gate ──────────────────────────────────
   const pivotBar = window[curr.idx];
   if (!_isBearishRejection(pivotBar)) return null;
@@ -1396,6 +1427,15 @@ function detectHH(window, curBar, slPct, bars1m = null) {
   // ── Short-at-the-top filter ────────────────────────────────
   const winHigh = Math.max(...window.slice(-36).map(b => b.h)); // matches 36-bar recency window
   if ((winHigh - curr.price) / winHigh > SHORT_PROX_TOL) return null;
+
+  // ── Structural pullback filter ─────────────────────────────
+  // HH must have had a meaningful pullback from the previous high before pushing to new HH.
+  // Prevents shorting a straight-up impulse move with no structure between the two highs.
+  const barsBetween = window.slice(prev.idx + 1, curr.idx);
+  if (barsBetween.length < 3) return null;
+  const lowestBetween = Math.min(...barsBetween.map(b => b.l));
+  const pullbackPct   = (curr.price - lowestBetween) / curr.price;
+  if (pullbackPct < slPct * 3) return null;
 
   // ── Big-wave quality gate ──────────────────────────────────
   const pivotBar = window[curr.idx];
