@@ -366,7 +366,7 @@ class AccountantAgent extends BaseAgent {
         // ── Extract PnL / fee from matched position ─────────────
         const tradingFee = Math.abs(parseFloat(bestMatch.fee || bestMatch.tradingFee || bestMatch.commission || 0));
         const fundingFee = Math.abs(parseFloat(bestMatch.funding || bestMatch.fundingFee || bestMatch.fund_fee || 0));
-        const pnlRaw     = bestMatch.realizedPNL ?? bestMatch.realizedPnl ?? bestMatch.pnl ?? bestMatch.profit ?? null;
+        const pnlRaw     = bestMatch.realizedPNL ?? bestMatch.realizedPnl ?? bestMatch.realPnl ?? bestMatch.pnl ?? bestMatch.profit ?? null;
         const netPnl     = pnlRaw != null ? parseFloat(pnlRaw) : null;
 
         if (tradingFee === 0 && netPnl === null) continue;
@@ -407,7 +407,8 @@ class AccountantAgent extends BaseAgent {
              gross_pnl   = $3,
              pnl_usdt    = $4,
              status      = COALESCE($5, status),
-             exit_price  = COALESCE($6, exit_price)
+             exit_price  = COALESCE($6, exit_price),
+             closed_at   = COALESCE(closed_at, NOW())
            WHERE id = $7`,
           [
             parseFloat(tradingFee.toFixed(4)),
@@ -430,15 +431,16 @@ class AccountantAgent extends BaseAgent {
     try {
       const fixed = await db.query(`
         UPDATE trades
-        SET pnl_usdt = ROUND((gross_pnl - trading_fee - COALESCE(funding_fee, 0))::numeric, 4),
-            status   = CASE
-                         WHEN (gross_pnl - trading_fee - COALESCE(funding_fee, 0)) > 0 THEN 'WIN'
-                         ELSE 'LOSS'
-                       END
-        WHERE status IN ('WIN', 'LOSS')
+        SET pnl_usdt  = ROUND((gross_pnl - trading_fee - COALESCE(funding_fee, 0))::numeric, 4),
+            status    = CASE
+                          WHEN (gross_pnl - trading_fee - COALESCE(funding_fee, 0)) > 0 THEN 'WIN'
+                          ELSE 'LOSS'
+                        END,
+            closed_at = COALESCE(closed_at, NOW())
+        WHERE status IN ('WIN', 'LOSS', 'CLOSED')
           AND gross_pnl   IS NOT NULL
           AND trading_fee IS NOT NULL
-          AND ABS(pnl_usdt - (gross_pnl - trading_fee - COALESCE(funding_fee, 0))) > 0.005
+          AND ABS(COALESCE(pnl_usdt, 0) - (gross_pnl - trading_fee - COALESCE(funding_fee, 0))) > 0.005
         RETURNING id
       `);
       const fixCount = Array.isArray(fixed) ? fixed.length : (fixed.rowCount ?? 0);

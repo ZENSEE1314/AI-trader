@@ -2195,10 +2195,21 @@ async function executeForAllUsers(pick) {
           const pricePrec = sinfo.pricePrecision ?? 2;
           const fmtP = (p) => parseFloat(p.toFixed(pricePrec));
 
-          // Position sizing: walletSizePct of wallet, adjusted by AI hour learning, capped by max_loss
-          const sizeMod = pick.sizeMod || 1.0;
+          // Position sizing: walletSizePct of wallet, adjusted by AI hour learning, capped by max_loss.
+          // Consecutive-loss soft reduction (Freqtrade drawdown-protection pattern):
+          //   1 loss  → 0.70× size (reduce before pausing)
+          //   2 losses → 0.50× size
+          //   ≥ max_consec_loss → pause (existing behaviour)
+          const consecData = _consecLosses.get(key.id) || { count: 0 };
+          const consecSizeMod = consecData.count >= 2 ? 0.50 : consecData.count >= 1 ? 0.70 : 1.0;
+          const sizeMod = (pick.sizeMod || 1.0) * consecSizeMod;
           let tradeUsdt = wallet * walletSizePct * sizeMod;
-          if (sizeMod !== 1.0) userLog.trade(`User ${key.email}: AI hour sizing ${sizeMod < 1 ? 'reduced' : 'boosted'} ×${sizeMod}`);
+          if (sizeMod !== 1.0) {
+            const reason = consecData.count > 0
+              ? `consec-loss(${consecData.count}) ×${consecSizeMod}`
+              : `score-confidence ×${(pick.sizeMod || 1.0).toFixed(2)}`;
+            userLog.trade(`User ${key.email}: sizing adjusted — ${reason} → final ×${sizeMod.toFixed(2)}`);
+          }
           // Cap by max loss: if user sets max loss per trade, limit margin so SL loss <= max_loss
           if (userMaxLoss > 0) {
             const maxMarginByLoss = userMaxLoss / slPricePct;
@@ -2224,7 +2235,14 @@ async function executeForAllUsers(pick) {
           }
 
           userLog.trade(`User ${key.email}: placing MARKET ${isLong ? 'BUY' : 'SELL'} ${symbol} qty=${qty}...`);
-          await userClient.submitNewOrder({ symbol, side: isLong ? 'BUY' : 'SELL', type: 'MARKET', quantity: qty });
+          // Paper trading mode (AI-Trader pattern) — simulate without real API calls.
+          // Enable with PAPER_TRADING=true env var. Logs to DB with paper flag so P&L can be tracked.
+          if (process.env.PAPER_TRADING === 'true') {
+            userLog.trade(`User ${key.email}: [PAPER] MARKET ${isLong ? 'BUY' : 'SELL'} ${symbol} qty=${qty} @ $${price} — skipping real order`);
+            await notify(`📄 *Paper Trade*: ${symbol} ${pick.direction} qty=${qty} @ $${price} (simulated)`);
+          } else {
+            await userClient.submitNewOrder({ symbol, side: isLong ? 'BUY' : 'SELL', type: 'MARKET', quantity: qty });
+          }
 
           // Mark dedup immediately after order — before DB INSERT so DB failure can't cause a second trade.
           executedUserSymbols.add(dedupKey);
@@ -2389,13 +2407,21 @@ async function executeForAllUsers(pick) {
           if (bxLimitPrice)                               orderPayload.price = String(bxLimitPrice);
           if (bxTpPrice && (isScenarioA || isRangeBounce)) { orderPayload.tpPrice = String(bxTpPrice); orderPayload.tpOrderType = 'MARKET'; orderPayload.tpStopType = 'MARK_PRICE'; }
 
-          const order = await userClient.placeOrder(orderPayload);
-          userLog.trade(`Bitunix order placed: ${JSON.stringify(order)}`);
+          // Paper trading mode — simulate without real API calls.
+          let order;
+          if (process.env.PAPER_TRADING === 'true') {
+            order = { orderId: `PAPER_${Date.now()}`, paper: true };
+            userLog.trade(`User ${key.email}: [PAPER] Bitunix ${bxOrderType} ${isLong ? 'BUY' : 'SELL'} ${symbol} qty=${qty} — skipping real order`);
+            await notify(`📄 *Paper Trade*: ${symbol} ${pick.direction} qty=${qty} @ $${price} (simulated)`);
+          } else {
+            order = await userClient.placeOrder(orderPayload);
+            userLog.trade(`Bitunix order placed: ${JSON.stringify(order)}`);
+          }
 
           // ── CRITICAL FLAG: order is on exchange — INSERT must happen ──────
           // Hoisted to outer try scope — outer catch reads these to do emergency INSERT
           // if placeOrder succeeded but anything below threw (EXCHANGE ONLY prevention).
-          orderOnExchange = true;
+          orderOnExchange = process.env.PAPER_TRADING !== 'true';
 
           // Mark dedup immediately after order — before DB INSERT.
           // Prevents a second key from opening the same trade if INSERT later fails.
@@ -2869,7 +2895,24 @@ async function syncTradeStatus() {
                     quantity: Math.abs(exchangePos.amt),
                     reduceOnly: true
                   });
-                  await db.query(`UPDATE trades SET status = 'CLOSED', exit_reason = 'swarm_consensus_shift', closed_at = NOW() WHERE id = $1`, [trade.id]);
+                  // Compute approximate exit price from Binance unrealized PnL
+                  const _swarmIsLong = trade.direction !== 'SHORT';
+                  const _swarmEntry  = parseFloat(trade.entry_price) || exchangePos.entryPrice || 0;
+                  const _swarmAmt    = Math.abs(exchangePos.amt) || 1;
+                  const _swarmCurPx  = _swarmEntry > 0
+                    ? (_swarmIsLong
+                        ? _swarmEntry + exchangePos.pnl / _swarmAmt
+                        : _swarmEntry - exchangePos.pnl / _swarmAmt)
+                    : null;
+                  const _swarmStatus = exchangePos.pnl >= 0 ? 'WIN' : 'LOSS';
+                  await db.query(
+                    `UPDATE trades SET status = $1, exit_reason = 'swarm_consensus_shift',
+                     exit_price = COALESCE($2, exit_price),
+                     pnl_usdt   = COALESCE(pnl_usdt, $3),
+                     closed_at  = NOW()
+                     WHERE id = $4`,
+                    [_swarmStatus, _swarmCurPx ? parseFloat(_swarmCurPx.toFixed(4)) : null, parseFloat(exchangePos.pnl.toFixed(4)), trade.id]
+                  );
                   await notify(`📉 *Dynamic AI Exit*\n${trade.symbol} ${trade.direction} closed early due to Swarm shift to ${swarm.direction} (${swarm.confidence}% confidence).`);
                   continue; // Move to next trade, position is now closed
                 }
@@ -2957,7 +3000,11 @@ async function syncTradeStatus() {
                   const closeSideBn2 = isLong ? 'SELL' : 'BUY';
                   try {
                     await userClient.submitNewOrder({ symbol: trade.symbol, side: closeSideBn2, type: 'MARKET', quantity: Math.abs(exchangePos.amt), reduceOnly: true });
-                    await db.query(`UPDATE trades SET status = 'CLOSED', exit_reason = 'smc_tp2', closed_at = NOW() WHERE id = $1`, [trade.id]);
+                    await db.query(
+                      `UPDATE trades SET status = 'WIN', exit_reason = 'smc_tp2',
+                       exit_price = $1, closed_at = NOW() WHERE id = $2`,
+                      [parseFloat(curPrice.toFixed(4)), trade.id]
+                    );
                     await notify(
                       `🎯 *SMC TP2 Hit!* — *${trade.symbol}* ${isLong ? 'LONG' : 'SHORT'}\n` +
                       `Runner closed @ \`$${fmtPrice(curPrice)}\` — trade complete`
@@ -3280,8 +3327,9 @@ async function syncTradeStatus() {
                       tradeSide: 'CLOSE',
                     });
                     await db.query(
-                      `UPDATE trades SET status = 'CLOSED', exit_reason = 'smc_tp2', closed_at = NOW() WHERE id = $1`,
-                      [trade.id]
+                      `UPDATE trades SET status = 'WIN', exit_reason = 'smc_tp2',
+                       exit_price = $1, closed_at = NOW() WHERE id = $2`,
+                      [parseFloat(curPrice.toFixed(4)), trade.id]
                     );
                     await notify(
                       `🎯 *SMC TP2 Hit!* — *${trade.symbol}* ${isLong ? 'LONG' : 'SHORT'}\n` +
@@ -4126,7 +4174,7 @@ async function backfillFeesFromBitunix() {
 
         const tradingFee = Math.abs(parseFloat(bestMatch.fee || bestMatch.tradingFee || bestMatch.commission || 0));
         const fundingFee = Math.abs(parseFloat(bestMatch.funding || bestMatch.fundingFee || bestMatch.fund_fee || 0));
-        const pnlRaw = bestMatch.realizedPNL ?? bestMatch.realizedPnl ?? bestMatch.pnl ?? bestMatch.profit ?? bestMatch.realPnl ?? null;
+        const pnlRaw = bestMatch.realizedPNL ?? bestMatch.realizedPnl ?? bestMatch.realPnl ?? bestMatch.pnl ?? bestMatch.profit ?? null;
         const netPnl = pnlRaw != null ? parseFloat(pnlRaw) : null;
 
         if (tradingFee === 0 && netPnl === null) {
@@ -4182,7 +4230,8 @@ async function backfillFeesFromBitunix() {
              gross_pnl   = $3,
              pnl_usdt    = $4,
              status      = COALESCE($5, status),
-             exit_price  = COALESCE($6, exit_price)
+             exit_price  = COALESCE($6, exit_price),
+             closed_at   = COALESCE(closed_at, NOW())
            WHERE id = $7`,
           [
             parseFloat(tradingFee.toFixed(4)),
@@ -4205,15 +4254,16 @@ async function backfillFeesFromBitunix() {
     // gross_pnl IS NOT NULL guaranteed for real wins/losses.
     const correctedWL = await db.query(`
       UPDATE trades
-      SET pnl_usdt = ROUND((gross_pnl - trading_fee - COALESCE(funding_fee, 0))::numeric, 4),
-          status   = CASE
-                       WHEN (gross_pnl - trading_fee - COALESCE(funding_fee, 0)) > 0 THEN 'WIN'
-                       ELSE 'LOSS'
-                     END
-      WHERE status IN ('WIN', 'LOSS')
+      SET pnl_usdt  = ROUND((gross_pnl - trading_fee - COALESCE(funding_fee, 0))::numeric, 4),
+          status    = CASE
+                        WHEN (gross_pnl - trading_fee - COALESCE(funding_fee, 0)) > 0 THEN 'WIN'
+                        ELSE 'LOSS'
+                      END,
+          closed_at = COALESCE(closed_at, NOW())
+      WHERE status IN ('WIN', 'LOSS', 'CLOSED')
         AND gross_pnl   IS NOT NULL
         AND trading_fee IS NOT NULL
-        AND ABS(pnl_usdt - (gross_pnl - trading_fee - COALESCE(funding_fee, 0))) > 0.005
+        AND ABS(COALESCE(pnl_usdt, 0) - (gross_pnl - trading_fee - COALESCE(funding_fee, 0))) > 0.005
       RETURNING id
     `);
     const fixedWL = Array.isArray(correctedWL) ? correctedWL.length : (correctedWL.rowCount ?? 0);
