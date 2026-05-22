@@ -2108,7 +2108,7 @@ function scan1mPatterns(sym, bars1m, bars4h, cooldowns = new Map()) {
 //   HIGH: bars[i].h > bars[i-1].h AND bars[i].h > bars[i+1].h AND bars[i].h > bars[i+2].h
 //   LOW : bars[i].l < bars[i-1].l AND bars[i].l < bars[i+1].l AND bars[i].l < bars[i+2].l
 
-const CONF_BARS_1M = 30; // 1m pivot must be within last 30 bars to count as confirmation
+const CONF_BARS_1M = 60; // 1m pivot must be within last 60 bars (60 min) — covers 30-min 15m lag
 
 function _allPivots(bars) {
   if (!bars || bars.length < 6) return { ph: [], pl: [] };

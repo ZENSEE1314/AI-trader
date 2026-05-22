@@ -32,7 +32,7 @@ const {
 const SCAN_INTERVAL_MS = 30_000;    // 30s scan cadence
 const BARS_15M         = 60;        // 15min bars — 60 bars = 15h of 15min data
 const BARS_4H_TREND    = 250;       // 4H bars for EMA200 trend
-const BARS_1M          = 30;        // 1m bars — need at least 6 for pivot detection
+const BARS_1M          = 90;        // 1m bars — 90 min covers the 30-min 15m confirmation lag + buffer
 const BARS_3M          = 480;       // 3m bars — 24h of 3min for VWAP
 const SCORE            = 72;        // signal score
 const AGENT_NAME       = 'SMCPatternAgent';
