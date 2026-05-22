@@ -17,9 +17,10 @@
 
 'use strict';
 
-const { BaseAgent }     = require('./base-agent');
-const { log: bLog }     = require('../bot-logger');
-const { query }         = require('../db');
+const { BaseAgent }        = require('./base-agent');
+const { log: bLog }        = require('../bot-logger');
+const { query }            = require('../db');
+const { getAIChartLearner } = require('./ai-chart-learner');
 const {
   fetchCandles,
   TRADING_CONFIG,
@@ -389,6 +390,15 @@ class SMCPatternAgent extends BaseAgent {
           const mem = this._patternMemory.get(`${sym}_${raw.pattern}`);
           bLog.scan(`[SMC-PAT] LEARN-BLOCK: ${sym} ${raw.pattern}(${raw.dir}) WR=${(mem.winRate*100).toFixed(0)}% ${mem.wins}W/${mem.losses}L`);
           this.addActivity('skip', `${sym} ${raw.pattern}(${raw.dir}) blocked by memory — WR=${(mem.winRate*100).toFixed(0)}%`);
+          continue;
+        }
+
+        // ── AI gate: Ollama retrospective analysis says avoid ──
+        const aiLearner = getAIChartLearner();
+        if (aiLearner.isAIBlocked(sym, raw.pattern)) {
+          const ins = aiLearner.getInsight(sym, raw.pattern);
+          bLog.scan(`[SMC-PAT] AI-BLOCK: ${sym} ${raw.pattern}(${raw.dir}) — ${ins?.retroLesson}`);
+          this.addActivity('skip', `${sym} ${raw.pattern}(${raw.dir}) AI blocked — ${ins?.retroLesson}`);
           continue;
         }
 

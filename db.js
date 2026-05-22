@@ -1125,6 +1125,38 @@ async function initAllTables() {
     `);
   } catch (e) { console.warn('[DB] smc_pattern_memory init warning:', e.message); }
 
+  // ── AI chart learning insights ────────────────────────────────
+  // Stores Ollama-generated chart analysis and retrospective lessons.
+  // Used by AIChartLearner to build long-term pattern intelligence.
+  try {
+    await query(`
+      CREATE TABLE IF NOT EXISTS ai_chart_insights (
+        id          SERIAL PRIMARY KEY,
+        symbol      VARCHAR(30)  NOT NULL,
+        pattern     VARCHAR(10)  NOT NULL,
+        direction   VARCHAR(10),
+        ai_pivot    VARCHAR(10),
+        ai_confidence INTEGER,
+        ai_reason   TEXT,
+        source      VARCHAR(30),
+        model_used  VARCHAR(80),
+        created_at  TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+      )
+    `);
+    await query(`
+      CREATE TABLE IF NOT EXISTS ai_retrospective (
+        id          SERIAL PRIMARY KEY,
+        symbol      VARCHAR(30)  NOT NULL,
+        pattern     VARCHAR(10)  NOT NULL,
+        outcome     VARCHAR(10)  NOT NULL,
+        lesson      TEXT,
+        conditions  TEXT,
+        model_used  VARCHAR(80),
+        created_at  TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+      )
+    `);
+  } catch (e) { console.warn('[DB] ai_chart_insights init warning:', e.message); }
+
   console.log('[DB] All tables verified');
 }
 

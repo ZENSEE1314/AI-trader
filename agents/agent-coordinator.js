@@ -27,6 +27,7 @@ const { PolymarketAgent } = require('./polymarket-agent');
 const { SMCProAgent }     = require('./smc-pro-agent');
 const { PolyBTCAgent }    = require('./poly-btc-agent');
 const { SMCPatternAgent } = require('./smc-pattern-agent');
+const { getAIChartLearner } = require('./ai-chart-learner');
 const { TradeConsensus, PatternLearner, encodeMarketState, extractIndicatorsFromKlines } = require('../ruflo-bridge');
 
 const SELF_IMPROVE_LESSONS = {
@@ -63,7 +64,8 @@ class AgentCoordinator extends BaseAgent {
     this.polymarketAgent = new PolymarketAgent(options);
     this.smcProAgent     = new SMCProAgent(options);
     this.polyBtcAgent    = new PolyBTCAgent(options);
-    this.smcPatternAgent = new SMCPatternAgent(options);
+    this.smcPatternAgent  = new SMCPatternAgent(options);
+    this.aiChartLearner   = getAIChartLearner(options);
 
     // Agent registry — order matters for display
     this._agents = new Map();
@@ -80,7 +82,8 @@ class AgentCoordinator extends BaseAgent {
     this._agents.set('polymarket', this.polymarketAgent);
     this._agents.set('smc-pro',     this.smcProAgent);
     this._agents.set('poly-btc',    this.polyBtcAgent);
-    this._agents.set('smc-pattern', this.smcPatternAgent);
+    this._agents.set('smc-pattern',  this.smcPatternAgent);
+    this._agents.set('ai-learner',   this.aiChartLearner);
 
     // Wire up inter-agent events
     this.chartAgent.on('signals', (data) => {
