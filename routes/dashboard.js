@@ -1480,9 +1480,9 @@ router.post('/resync-bitunix', async (req, res) => {
       await query(`ALTER TABLE trades ADD COLUMN IF NOT EXISTS bitunix_position_id VARCHAR(64)`);
     } catch (_) {}
 
-    // Only fetch trades that are missing exit data — already-synced WIN/LOSS trades are skipped.
-    // CLOSED = bot closed it but never got PnL from exchange.
-    // WIN/LOSS without exit_price = opened but never matched to exchange position.
+    // Re-sync ALL closed trades from last 30 days — no restrictions on what data they already have.
+    // This fixes estimated PnL (from market-price fallback), missing fees, wrong exit prices, and
+    // trades that have values but from a wrong Bitunix match. Force-overwrites everything.
     const trades = await query(`
       SELECT t.*,
              ak.id AS key_id,
@@ -1492,14 +1492,9 @@ router.post('/resync-bitunix', async (req, res) => {
       JOIN api_keys ak ON t.api_key_id = ak.id
       WHERE ak.platform = 'bitunix'
         AND t.status IN ('CLOSED','WIN','LOSS','GHOST')
-        AND (
-          t.exit_price IS NULL OR t.pnl_usdt IS NULL
-          OR t.gross_pnl IS NULL
-          -- Estimated values (market-price fallback): trading_fee=0 AND bitunix_position_id missing
-          OR (t.trading_fee = 0 AND t.bitunix_position_id IS NULL)
-        )
-      ORDER BY t.created_at DESC
-      LIMIT 200
+        AND COALESCE(t.closed_at, t.created_at) > NOW() - INTERVAL '30 days'
+      ORDER BY COALESCE(t.closed_at, t.created_at) DESC
+      LIMIT 500
     `);
 
     if (!trades.length) return res.json({ total: 0, fixed: 0, skipped: 0, failed: 0, results: [], errors: [] });
@@ -1600,10 +1595,10 @@ router.post('/resync-bitunix', async (req, res) => {
         }
 
         const p          = bestMatch;
-        let exitPrice    = parseFloat(p.closePrice || p.avgClosePrice || p.closedPrice || p.close_price || 0);
-        const tradingFee = Math.abs(parseFloat(p.fee || p.tradingFee || p.commission || 0));
-        const fundingFee = Math.abs(parseFloat(p.funding || p.fundingFee || p.fund_fee || 0));
-        const pnlRaw     = p.realizedPNL ?? p.realizedPnl ?? p.pnl ?? p.profit ?? p.realPnl ?? null;
+        let exitPrice    = parseFloat(p.closePrice || p.avgClosePrice || p.closedPrice || p.close_price || p.exitPrice || p.avg_close_price || 0);
+        const tradingFee = Math.abs(parseFloat(p.fee || p.tradingFee || p.tradeFee || p.trade_fee || p.closeFee || p.close_fee || p.commission || p.openFee || p.open_fee || 0));
+        const fundingFee = Math.abs(parseFloat(p.funding || p.fundingFee || p.fund_fee || p.fundFee || 0));
+        const pnlRaw     = p.realizedPNL ?? p.realizedPnl ?? p.realPNL ?? p.realPnl ?? p.pnl ?? p.profit ?? p.netPnl ?? p.net_pnl ?? null;
 
         if (pnlRaw == null) {
           skipped++;
@@ -1810,14 +1805,14 @@ router.post('/pull-bitunix-history', async (req, res) => {
             const posId      = String(p.positionId || p.id || p.position_id || '');
             const pSide      = (p.side || p.positionSide || '').toUpperCase();
             const direction  = (pSide === 'LONG' || pSide === 'BUY') ? 'LONG' : 'SHORT';
-            const entryPrice = parseFloat(p.avgOpenPrice  || p.entryPrice  || p.openPrice  || 0);
-            const exitPrice  = parseFloat(p.avgClosePrice || p.closePrice  || p.closedPrice || 0);
+            const entryPrice = parseFloat(p.avgOpenPrice  || p.entryPrice  || p.openPrice  || p.open_price  || 0);
+            const exitPrice  = parseFloat(p.avgClosePrice || p.closePrice  || p.closedPrice || p.exitPrice || p.close_price || p.avg_close_price || 0);
             const leverage   = parseInt(p.leverage  || 20);
             const qty        = parseFloat(p.qty || p.size || p.quantity || 0);
-            const pnlRaw     = p.realizedPNL ?? p.realizedPnl ?? p.pnl ?? p.profit ?? p.realPnl ?? null;
+            const pnlRaw     = p.realizedPNL ?? p.realizedPnl ?? p.realPNL ?? p.realPnl ?? p.pnl ?? p.profit ?? p.netPnl ?? p.net_pnl ?? null;
             const pnlUsdt    = pnlRaw != null ? parseFloat(parseFloat(pnlRaw).toFixed(4)) : null;
-            const tradingFee = Math.abs(parseFloat(p.fee || p.tradingFee || p.commission || 0));
-            const fundingFee = Math.abs(parseFloat(p.funding || p.fundingFee || p.fund_fee || 0));
+            const tradingFee = Math.abs(parseFloat(p.fee || p.tradingFee || p.tradeFee || p.trade_fee || p.closeFee || p.close_fee || p.commission || p.openFee || p.open_fee || 0));
+            const fundingFee = Math.abs(parseFloat(p.funding || p.fundingFee || p.fund_fee || p.fundFee || 0));
             const grossPnl   = pnlUsdt != null ? parseFloat((pnlUsdt + tradingFee + fundingFee).toFixed(4)) : null;
             const openMs     = parseInt(p.openTime  || p.ctime   || p.createTime  || 0);
             const closeMs    = parseInt(p.closeTime || p.mtime   || p.updateTime  || 0);
@@ -1855,31 +1850,24 @@ router.post('/pull-bitunix-history', async (req, res) => {
 
             if (existing) {
               matchedTradeIds.add(existing.id);
-              // Always update if: trade is OPEN, or exchange data is richer (has posId / real PnL)
-              const needsUpdate = existing.status === 'OPEN'
-                || existing.exit_price == null
-                || existing.pnl_usdt == null
-                || (posId && existing.bitunix_position_id !== posId)   // backfill posId
-                || (tradingFee > 0 && parseFloat(existing.trading_fee || 0) === 0); // real fee
-              if (needsUpdate) {
-                await query(
-                  `UPDATE trades SET exit_price=$1, pnl_usdt=$2, gross_pnl=$3, trading_fee=$4,
-                   funding_fee=$5, status=$6, closed_at=COALESCE(closed_at,$7),
-                   bitunix_position_id=COALESCE(bitunix_position_id,$8) WHERE id=$9`,
-                  [exitPrice, pnlUsdt, grossPnl, tradingFee, fundingFee, status,
-                   closeAt, posId || null, existing.id]
-                );
-                updated++;
-              } else {
-                skipped++;
-              }
+              // Always overwrite with real exchange data — never preserve estimated values.
+              // Estimated values (market-price fallback, price×qty) are always less accurate
+              // than real Bitunix position history data. Force-overwrite unconditionally.
+              await query(
+                `UPDATE trades SET exit_price=$1, pnl_usdt=$2, gross_pnl=$3, trading_fee=$4,
+                 funding_fee=$5, status=$6, closed_at=COALESCE(closed_at,$7),
+                 bitunix_position_id=COALESCE(bitunix_position_id,$8) WHERE id=$9`,
+                [exitPrice, pnlUsdt, grossPnl, tradingFee, fundingFee, status,
+                 closeAt, posId || null, existing.id]
+              );
+              updated++;
             } else {
               await query(
                 `INSERT INTO trades (api_key_id, user_id, symbol, direction, entry_price, exit_price,
                  sl_price, tp_price, quantity, leverage, status, pnl_usdt, gross_pnl, trading_fee,
                  funding_fee, closed_at, created_at, trailing_sl_price, trailing_sl_last_step,
                  bitunix_position_id)
-                 VALUES ($1,$2,$3,$4,$5,$6,0,0,$7,$8,$9,$10,$11,$12,$13,$14,$15,$5,0,$16)
+                 VALUES ($1,$2,$3,$4,$5,$6,0,0,$7,$8,$9,$10,$11,$12,$13,$14,$15,0,0,$16)
                  ON CONFLICT (bitunix_position_id) WHERE bitunix_position_id IS NOT NULL DO NOTHING`,
                 [key.id, key.user_id, symbol, direction, entryPrice, exitPrice,
                  qty, leverage, status, pnlUsdt, grossPnl, tradingFee, fundingFee,

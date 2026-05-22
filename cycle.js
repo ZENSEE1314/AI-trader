@@ -1771,6 +1771,15 @@ async function main() {
   await syncTradeStatus();
   await checkUsdtTopups();
 
+  // Periodic PnL backfill — re-syncs real PnL/fees from Bitunix for all closed trades.
+  // Fixes estimated values (market-price fallback) that syncTradeStatus wrote when
+  // the Bitunix API was unavailable at close time. Runs every 6 hours.
+  runCycle._lastBackfill = runCycle._lastBackfill || 0;
+  if (Date.now() - runCycle._lastBackfill > 6 * 60 * 60_000) {
+    runCycle._lastBackfill = Date.now();
+    backfillFeesFromBitunix().catch(e => bLog.error(`[FEE-BACKFILL] periodic error: ${e.message}`));
+  }
+
   // Also check owner tradeState positions (Binance direct / not stored in DB)
   try {
     if (API_KEY && API_SECRET && tradeState.size > 0) await checkTrailingStop(getClient());
@@ -3738,9 +3747,9 @@ async function syncTradeStatus() {
                   const p = bestMatch;
                   const cp  = parseFloat(p.closePrice  || p.avgClosePrice  || p.closedPrice || p.close_price || 0);
                   const ep  = parseFloat(p.entryPrice  || p.avgOpenPrice   || p.openPrice   || p.open_price  || 0);
-                  tradingFee  = Math.abs(parseFloat(p.fee          || p.tradingFee  || p.commission || 0));
-                  fundingFee  = Math.abs(parseFloat(p.funding      || p.fundingFee  || p.fund_fee   || 0));
-                  const pnlRaw = p.realizedPNL ?? p.realizedPnl ?? p.pnl ?? p.profit ?? p.realPnl ?? null;
+                  tradingFee  = Math.abs(parseFloat(p.fee || p.tradingFee || p.tradeFee || p.trade_fee || p.closeFee || p.close_fee || p.commission || p.openFee || p.open_fee || 0));
+                  fundingFee  = Math.abs(parseFloat(p.funding || p.fundingFee || p.fund_fee || p.fundFee || 0));
+                  const pnlRaw = p.realizedPNL ?? p.realizedPnl ?? p.realPNL ?? p.realPnl ?? p.pnl ?? p.profit ?? p.netPnl ?? p.net_pnl ?? null;
                   realizedPnl = pnlRaw != null ? parseFloat(pnlRaw) : null;
 
                   if (cp > 0) {
@@ -4235,7 +4244,7 @@ async function backfillFeesFromBitunix() {
       for (const trade of keyTrades) {
         if (!posCache[trade.symbol] && !symbolsDone.has(trade.symbol)) {
           try {
-            posCache[trade.symbol] = await bxClient.getHistoryPositions({ symbol: trade.symbol, pageSize: 100, all: true });
+            posCache[trade.symbol] = await bxClient.getHistoryPositions({ symbol: trade.symbol, pageSize: 200, all: true });
             bLog.system(`[FEE-BACKFILL] key#${keyId} ${trade.symbol}: ${posCache[trade.symbol].length} history positions`);
           } catch (e) {
             bLog.error(`[FEE-BACKFILL] key#${keyId} ${trade.symbol} fetch error: ${e.message}`);
@@ -4280,13 +4289,19 @@ async function backfillFeesFromBitunix() {
           continue;
         }
 
-        const tradingFee = Math.abs(parseFloat(bestMatch.fee || bestMatch.tradingFee || bestMatch.commission || 0));
-        const fundingFee = Math.abs(parseFloat(bestMatch.funding || bestMatch.fundingFee || bestMatch.fund_fee || 0));
-        const pnlRaw = bestMatch.realizedPNL ?? bestMatch.realizedPnl ?? bestMatch.realPnl ?? bestMatch.pnl ?? bestMatch.profit ?? null;
+        // Log raw fields on first match per symbol so we can diagnose field name mismatches
+        if (!posCache[`${trade.symbol}_logged`]) {
+          posCache[`${trade.symbol}_logged`] = true;
+          bLog.system(`[FEE-BACKFILL] raw fields for ${trade.symbol}: ${JSON.stringify(Object.keys(bestMatch))} | sample: ${JSON.stringify(bestMatch).substring(0, 400)}`);
+        }
+
+        const tradingFee = Math.abs(parseFloat(bestMatch.fee || bestMatch.tradingFee || bestMatch.tradeFee || bestMatch.trade_fee || bestMatch.closeFee || bestMatch.close_fee || bestMatch.commission || bestMatch.openFee || bestMatch.open_fee || 0));
+        const fundingFee = Math.abs(parseFloat(bestMatch.funding || bestMatch.fundingFee || bestMatch.fund_fee || bestMatch.fundFee || 0));
+        const pnlRaw = bestMatch.realizedPNL ?? bestMatch.realizedPnl ?? bestMatch.realPNL ?? bestMatch.realPnl ?? bestMatch.pnl ?? bestMatch.profit ?? bestMatch.netPnl ?? bestMatch.net_pnl ?? null;
         const netPnl = pnlRaw != null ? parseFloat(pnlRaw) : null;
 
-        if (tradingFee === 0 && netPnl === null) {
-          bLog.system(`[FEE-BACKFILL] trade#${trade.id} ${trade.symbol}: match found but fee=0 and no PnL — skipping`);
+        if (netPnl === null) {
+          bLog.system(`[FEE-BACKFILL] trade#${trade.id} ${trade.symbol}: match found but no PnL data — skipping`);
           continue;
         }
 
@@ -4302,8 +4317,8 @@ async function backfillFeesFromBitunix() {
 
         // Extract close price from Bitunix history position so exit_price is correct
         const closePrice = parseFloat(
-          bestMatch.closePrice || bestMatch.avgClosePrice || bestMatch.close_price ||
-          bestMatch.exitPrice  || bestMatch.avg_close_price || 0
+          bestMatch.closePrice || bestMatch.avgClosePrice || bestMatch.closedPrice ||
+          bestMatch.close_price || bestMatch.exitPrice || bestMatch.avg_close_price || 0
         ) || null;
 
         // Guard: if the API gave us nothing useful, skip rather than overwrite good data with NULL.
