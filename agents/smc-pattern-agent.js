@@ -402,7 +402,7 @@ class SMCPatternAgent extends BaseAgent {
           continue;
         }
 
-        bLog.scan(`[SMC-PAT] ${sym} MATCH: 15m=${raw.pivot15m?.toFixed(4)} 1m=${raw.pivot1m?.toFixed(4)} type=${raw.pattern} dir=${raw.dir}`);
+        bLog.scan(`[SMC-PAT] ${sym} KEY LEVEL HIT: key=${raw.keyLevel?.toFixed(4)} prox=${raw.proximity} 1m_piv=${raw.pivot1m?.toFixed(4)} type=${raw.pattern} dir=${raw.dir}`);
         const raws = [raw];
 
         // NOTE: Pivot gate removed — scanNearestPivotMatch already verifies the
