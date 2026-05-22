@@ -33,19 +33,28 @@ const SAFETY_GAP             = 0.10;   // gap between safety trigger and safety 
 // ── Hardcoded defaults — match the dashboard screenshot exactly ──
 
 // 100x — BTC / ETH / BNB
+// Gap fix: was T1=46% (21% dead zone after early lock at 20%).
+// New steps every +5% capital starting at +27%, so SMC scalp trades
+// that peak at 30–45% capital (0.24–0.36% price at 125x) are captured.
+// Price reference at BTC 125x: +5% cap = $0.04% = ~$31 per $77k BTC.
 const TRAILING_TIERS_100X = [
-  { trigger: 0.46, lock: 0.45 }, // +46% → lock +45%
-  { trigger: 0.51, lock: 0.50 }, // +51% → lock +50%
-  { trigger: 0.61, lock: 0.60 }, // +61% → lock +60%
-  { trigger: 0.71, lock: 0.70 },
-  { trigger: 0.81, lock: 0.80 },
-  { trigger: 0.91, lock: 0.90 },
-  { trigger: 1.01, lock: 1.00 },
-  { trigger: 1.11, lock: 1.10 },
-  { trigger: 1.21, lock: 1.20 },
-  { trigger: 1.51, lock: 1.50 },
-  { trigger: 2.01, lock: 2.00 },
-  { trigger: 3.01, lock: 3.00 },
+  { trigger: 0.27, lock: 0.25 }, // +27% → lock +25%  ← first step after early lock (20%)
+  { trigger: 0.32, lock: 0.30 }, // +32% → lock +30%
+  { trigger: 0.37, lock: 0.35 }, // +37% → lock +35%
+  { trigger: 0.42, lock: 0.40 }, // +42% → lock +40%
+  { trigger: 0.47, lock: 0.45 }, // +47% → lock +45%
+  { trigger: 0.52, lock: 0.50 }, // +52% → lock +50%
+  { trigger: 0.57, lock: 0.55 }, // +57% → lock +55%
+  { trigger: 0.62, lock: 0.60 }, // +62% → lock +60%
+  { trigger: 0.72, lock: 0.70 },
+  { trigger: 0.82, lock: 0.80 },
+  { trigger: 0.92, lock: 0.90 },
+  { trigger: 1.02, lock: 1.00 },
+  { trigger: 1.12, lock: 1.10 },
+  { trigger: 1.22, lock: 1.20 },
+  { trigger: 1.52, lock: 1.50 },
+  { trigger: 2.02, lock: 2.00 },
+  { trigger: 3.02, lock: 3.00 },
 ];
 
 // 75x — BTC / ETH / SOL (all symbols at uniform 75x)
