@@ -145,19 +145,13 @@ class SMCProAgent extends BaseAgent {
         const riskAgent   = context.coordinator.riskAgent;
         const traderAgent = context.coordinator.traderAgent;
 
-        // ── Hard guard: no new trades while ANY position is open ──
+        // Pass real open positions to RiskAgent for context (no hard block)
         let openPositions = [];
         try {
           const { query: dbQ } = require('../db');
           const openRows = await dbQ("SELECT symbol, direction FROM trades WHERE status = 'OPEN'");
           openPositions = openRows.rows.map(r => r.symbol);
         } catch (_) {}
-
-        if (openPositions.length > 0) {
-          bLog.scan(`[SMC-PRO] BLOCKED — ${openPositions.length} position(s) open: ${openPositions.join(', ')} — no new trades`);
-          this.addActivity('skip', `No new trades — position(s) open: ${openPositions.join(', ')}`);
-          return { ok: true, signals: 0, blocked: 'open_position' };
-        }
 
         let approved = signals;
         if (riskAgent && !riskAgent.paused) {
