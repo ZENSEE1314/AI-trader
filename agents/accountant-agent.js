@@ -40,6 +40,7 @@ class AccountantAgent extends BaseAgent {
 
     if (mode === 'audit') return this.runFullAudit();
     if (mode === 'report') return this.generateReport();
+    if (mode === 'sync') return this.syncBitunixHistory();
     return this.runFullAudit();
   }
 
@@ -320,7 +321,7 @@ class AccountantAgent extends BaseAgent {
         if (!fetched.has(trade.symbol)) {
           try {
             posCache[trade.symbol] = await client.getHistoryPositions({
-              symbol: trade.symbol, pageSize: 100, all: true,
+              symbol: trade.symbol, pageSize: 200, all: true,
             });
             bLog.system(`[ACCT-SYNC] key#${key.id} ${trade.symbol}: ${posCache[trade.symbol].length} history positions`);
           } catch (e) {
@@ -343,7 +344,7 @@ class AccountantAgent extends BaseAgent {
         let bestTimeDiff = Infinity;
 
         for (const p of positions) {
-          const ep     = parseFloat(p.entryPrice || p.avgOpenPrice || p.openPrice || 0);
+          const ep     = parseFloat(p.entryPrice || p.avgOpenPrice || p.openPrice || p.open_price || 0);
           const pid    = String(p.positionId || p.id || p.position_id || '');
           const pSide  = (p.side || p.positionSide || '').toUpperCase();
           const pLong  = pSide === 'LONG' || pSide === 'BUY';
@@ -364,12 +365,12 @@ class AccountantAgent extends BaseAgent {
         if (!bestMatch) continue;
 
         // ── Extract PnL / fee from matched position ─────────────
-        const tradingFee = Math.abs(parseFloat(bestMatch.fee || bestMatch.tradingFee || bestMatch.commission || 0));
-        const fundingFee = Math.abs(parseFloat(bestMatch.funding || bestMatch.fundingFee || bestMatch.fund_fee || 0));
-        const pnlRaw     = bestMatch.realizedPNL ?? bestMatch.realizedPnl ?? bestMatch.realPnl ?? bestMatch.pnl ?? bestMatch.profit ?? null;
+        const tradingFee = Math.abs(parseFloat(bestMatch.fee || bestMatch.tradingFee || bestMatch.tradeFee || bestMatch.trade_fee || bestMatch.closeFee || bestMatch.close_fee || bestMatch.commission || bestMatch.openFee || bestMatch.open_fee || 0));
+        const fundingFee = Math.abs(parseFloat(bestMatch.funding || bestMatch.fundingFee || bestMatch.fund_fee || bestMatch.fundFee || 0));
+        const pnlRaw     = bestMatch.realizedPNL ?? bestMatch.realizedPnl ?? bestMatch.realPNL ?? bestMatch.realPnl ?? bestMatch.pnl ?? bestMatch.profit ?? bestMatch.netPnl ?? bestMatch.net_pnl ?? null;
         const netPnl     = pnlRaw != null ? parseFloat(pnlRaw) : null;
 
-        if (tradingFee === 0 && netPnl === null) continue;
+        if (netPnl === null) continue;
 
         const grossPnl = netPnl != null
           ? parseFloat((netPnl + tradingFee + fundingFee).toFixed(4))
@@ -381,8 +382,8 @@ class AccountantAgent extends BaseAgent {
 
         // ── Extract exit price; derive from PnL if API returns 0 ─
         const rawClose = parseFloat(
-          bestMatch.closePrice || bestMatch.avgClosePrice || bestMatch.close_price ||
-          bestMatch.exitPrice  || bestMatch.avg_close_price || 0
+          bestMatch.closePrice || bestMatch.avgClosePrice || bestMatch.closedPrice ||
+          bestMatch.close_price || bestMatch.exitPrice || bestMatch.avg_close_price || 0
         ) || null;
 
         let exitPrice = rawClose;

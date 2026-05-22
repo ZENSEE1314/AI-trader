@@ -1359,6 +1359,10 @@
         <!-- Trade History -->
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--space-3);">
           <h2 class="section-heading" style="margin-bottom:0;">Trade History <span class="tip-btn">?<span class="tip-text">All your bot trades across exchanges. Filter by time period. Shows entry/exit prices, SL/TP, P&L, and status.</span></span></h2>
+          <div style="display:flex;align-items:center;gap:8px;">
+            <button id="btn-sync-history" class="btn btn-sm" style="font-size:0.75rem;background:rgba(212,175,55,0.15);color:var(--color-accent);border:1px solid rgba(212,175,55,0.3);" onclick="window.CryptoBot.syncTradeHistory(this)" title="Pull latest PnL from Bitunix and fix any wrong numbers">🔄 Sync PnL</button>
+            <span id="sync-history-status" style="font-size:0.72rem;color:var(--color-text-muted);"></span>
+          </div>
           <button id="btn-clear-errors" class="btn btn-danger btn-sm hidden" onclick="window.CryptoBot.clearErrors()">Clear Errors</button>
         </div>
         <div id="trades-period-filter" style="display:flex;gap:8px;margin-bottom:var(--space-3);flex-wrap:wrap;align-items:center;">

@@ -3936,6 +3936,15 @@ async function syncTradeStatus() {
             );
             bLog.trade(`DB synced: ${trade.symbol} -> ${status} gross=$${grossPnl} fee=$${tradingFee} funding=$${fundingFee} net=$${pnlUsdt} exit=$${fmtPrice(exitPrice)}`);
 
+            // Auto-sync: immediately re-fetch real PnL from Bitunix if we used estimated values.
+            // realizedPnl null = we used market price fallback (price×qty estimate). Schedule
+            // an immediate accountant sync so the wrong estimated PnL gets corrected fast.
+            if (realizedPnl === null) {
+              setImmediate(() => {
+                backfillFeesFromBitunix().catch(e => bLog.error(`[AUTO-SYNC] post-close backfill: ${e.message}`));
+              });
+            }
+
             // ── On LOSS: per-symbol 4h cooldown + signal-type block ──────
             try {
               const keyId  = trade.api_key_id;

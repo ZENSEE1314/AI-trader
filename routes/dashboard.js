@@ -1960,6 +1960,182 @@ router.post('/pull-bitunix-history', async (req, res) => {
   }
 });
 
+// POST /api/dashboard/sync-trade-history
+// Any user can call this to resync their own closed trade PnL from Bitunix.
+// Also used by the auto-sync trigger after each trade close.
+router.post('/sync-trade-history', async (req, res) => {
+  try {
+    const { BitunixClient } = require('../bitunix-client');
+    const cryptoUtils2 = require('../crypto-utils');
+
+    const adminRow = await query('SELECT is_admin FROM users WHERE id = $1', [req.userId]);
+    const isAdmin  = adminRow[0]?.is_admin;
+
+    // Admin: sync all users. Regular user: sync own keys only.
+    const keys = isAdmin
+      ? await query(
+          `SELECT ak.*, u.email FROM api_keys ak JOIN users u ON u.id = ak.user_id
+           WHERE ak.platform = 'bitunix' AND ak.enabled = true`
+        )
+      : await query(
+          `SELECT ak.*, u.email FROM api_keys ak JOIN users u ON u.id = ak.user_id
+           WHERE ak.user_id = $1 AND ak.platform = 'bitunix' AND ak.enabled = true`,
+          [req.userId]
+        );
+
+    if (!keys.length) return res.json({ ok: true, updated: 0, message: 'No Bitunix keys found' });
+
+    let totalUpdated = 0;
+    const errors = [];
+    const DEFAULT_SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'AVAXUSDT', 'LTCUSDT', 'DOTUSDT', 'ADAUSDT', 'LINKUSDT'];
+
+    for (const key of keys) {
+      let apiKey, apiSecret;
+      try {
+        apiKey    = cryptoUtils2.decrypt(key.api_key_enc,    key.iv,        key.auth_tag);
+        apiSecret = cryptoUtils2.decrypt(key.api_secret_enc, key.secret_iv, key.secret_auth_tag);
+      } catch (e) {
+        errors.push(`key #${key.id}: decrypt failed`);
+        continue;
+      }
+
+      const client = new BitunixClient({ apiKey, apiSecret });
+
+      // Closed trades for this key from last 30 days
+      const dbTrades = await query(
+        `SELECT id, symbol, direction, entry_price, exit_price, quantity,
+                pnl_usdt, gross_pnl, trading_fee, funding_fee,
+                bitunix_position_id, created_at, status
+         FROM trades
+         WHERE api_key_id = $1
+           AND status IN ('WIN','LOSS','CLOSED','GHOST')
+           AND COALESCE(closed_at, created_at) > NOW() - INTERVAL '30 days'
+         ORDER BY COALESCE(closed_at, created_at) DESC
+         LIMIT 500`,
+        [key.id]
+      );
+
+      if (!dbTrades.length) continue;
+
+      // Build symbol set from DB trades + defaults
+      const symbols = [...new Set([...DEFAULT_SYMBOLS, ...dbTrades.map(t => t.symbol)])];
+
+      // Fetch position history per symbol
+      const posCache = {};
+      for (const sym of symbols) {
+        try {
+          const raw = await client._rawGet('/api/v1/futures/position/get_history_positions', {
+            symbol: sym, pageNum: 1, pageSize: 100,
+          });
+          if (raw?.code !== 0) continue;
+          const d = raw?.data;
+          posCache[sym] = Array.isArray(d) ? d : (d?.positionList || d?.resultList || d?.list || d?.data || []);
+        } catch (_) {
+          posCache[sym] = [];
+        }
+      }
+
+      // Match each DB trade to a Bitunix position and update
+      for (const trade of dbTrades) {
+        const positions = posCache[trade.symbol] || [];
+        if (!positions.length) continue;
+
+        const tradeEntry    = parseFloat(trade.entry_price);
+        const tradeOpenMs   = trade.created_at ? new Date(trade.created_at).getTime() : 0;
+        const tradeSideLong = trade.direction !== 'SHORT';
+        const storedPosId   = trade.bitunix_position_id;
+
+        let bestMatch    = null;
+        let bestTimeDiff = Infinity;
+
+        for (const p of positions) {
+          const ep      = parseFloat(p.entryPrice || p.avgOpenPrice || p.openPrice || p.open_price || 0);
+          const pid     = String(p.positionId || p.id || p.position_id || '');
+          const pSide   = (p.side || p.positionSide || '').toUpperCase();
+          const pLong   = pSide === 'LONG' || pSide === 'BUY';
+          const closeMs = parseInt(p.closeTime || p.mtime || p.ctime || p.updateTime || 0);
+
+          if ((p.symbol || '').toUpperCase() !== trade.symbol || pLong !== tradeSideLong) continue;
+          if (storedPosId && pid === String(storedPosId)) { bestMatch = p; break; }
+
+          const entryMatch      = ep > 0 && Math.abs(ep - tradeEntry) / tradeEntry < 0.005;
+          const closedAfterOpen = !tradeOpenMs || !closeMs || closeMs >= tradeOpenMs;
+          if (entryMatch && closedAfterOpen) {
+            const diff = closeMs && tradeOpenMs ? Math.abs(closeMs - tradeOpenMs) : 9e12;
+            if (diff < bestTimeDiff) { bestTimeDiff = diff; bestMatch = p; }
+          }
+        }
+
+        if (!bestMatch) continue;
+
+        const tradingFee = Math.abs(parseFloat(bestMatch.fee || bestMatch.tradingFee || bestMatch.tradeFee || bestMatch.trade_fee || bestMatch.closeFee || bestMatch.close_fee || bestMatch.commission || bestMatch.openFee || bestMatch.open_fee || 0));
+        const fundingFee = Math.abs(parseFloat(bestMatch.funding || bestMatch.fundingFee || bestMatch.fund_fee || bestMatch.fundFee || 0));
+        const pnlRaw     = bestMatch.realizedPNL ?? bestMatch.realizedPnl ?? bestMatch.realPNL ?? bestMatch.realPnl ?? bestMatch.pnl ?? bestMatch.profit ?? bestMatch.netPnl ?? bestMatch.net_pnl ?? null;
+        const netPnl     = pnlRaw != null ? parseFloat(pnlRaw) : null;
+
+        if (netPnl === null) continue;
+
+        const grossPnl = parseFloat((netPnl + tradingFee + fundingFee).toFixed(4));
+        const pnlUsdt  = parseFloat(netPnl.toFixed(4));
+        const status   = pnlUsdt > 0 ? 'WIN' : 'LOSS';
+
+        let exitPrice = parseFloat(bestMatch.closePrice || bestMatch.avgClosePrice || bestMatch.closedPrice || bestMatch.close_price || bestMatch.exitPrice || bestMatch.avg_close_price || 0) || null;
+        if (!exitPrice && grossPnl !== 0) {
+          const qty = parseFloat(trade.quantity) || 0;
+          if (tradeEntry > 0 && qty > 0) {
+            const dp = tradeSideLong ? tradeEntry + grossPnl / qty : tradeEntry - grossPnl / qty;
+            if (dp > 0) exitPrice = parseFloat(dp.toFixed(4));
+          }
+        }
+
+        const posId = String(bestMatch.positionId || bestMatch.id || bestMatch.position_id || '');
+
+        await query(
+          `UPDATE trades SET
+             trading_fee = $1, funding_fee = $2, gross_pnl = $3, pnl_usdt = $4,
+             status = $5, exit_price = COALESCE($6, exit_price),
+             closed_at = COALESCE(closed_at, NOW()),
+             bitunix_position_id = COALESCE(bitunix_position_id, $7)
+           WHERE id = $8`,
+          [parseFloat(tradingFee.toFixed(4)), parseFloat(fundingFee.toFixed(4)),
+           grossPnl, pnlUsdt, status, exitPrice, posId || null, trade.id]
+        );
+        totalUpdated++;
+      }
+    }
+
+    // Corrective math pass — fix any pnl_usdt that drifted from gross−fee
+    try {
+      if (isAdmin) {
+        await query(`
+          UPDATE trades
+          SET pnl_usdt = ROUND((gross_pnl - trading_fee - COALESCE(funding_fee,0))::numeric, 4),
+              status   = CASE WHEN (gross_pnl - trading_fee - COALESCE(funding_fee,0)) > 0 THEN 'WIN' ELSE 'LOSS' END
+          WHERE status IN ('WIN','LOSS','CLOSED')
+            AND gross_pnl   IS NOT NULL
+            AND trading_fee IS NOT NULL
+            AND ABS(COALESCE(pnl_usdt,0) - (gross_pnl - trading_fee - COALESCE(funding_fee,0))) > 0.005
+        `);
+      } else {
+        await query(`
+          UPDATE trades
+          SET pnl_usdt = ROUND((gross_pnl - trading_fee - COALESCE(funding_fee,0))::numeric, 4),
+              status   = CASE WHEN (gross_pnl - trading_fee - COALESCE(funding_fee,0)) > 0 THEN 'WIN' ELSE 'LOSS' END
+          WHERE status IN ('WIN','LOSS','CLOSED')
+            AND user_id     = $1
+            AND gross_pnl   IS NOT NULL
+            AND trading_fee IS NOT NULL
+            AND ABS(COALESCE(pnl_usdt,0) - (gross_pnl - trading_fee - COALESCE(funding_fee,0))) > 0.005
+        `, [req.userId]);
+      }
+    } catch (_) {}
+
+    res.json({ ok: true, updated: totalUpdated, errors: errors.slice(0, 5) });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ── Admin: delete a specific trade record ────────────────────────────────────
 // DELETE /api/dashboard/trades/:id  (admin only)
 router.delete('/trades/:id', async (req, res) => {

@@ -4961,6 +4961,29 @@
     }
   }
 
+  async function syncTradeHistory(btn) {
+    const statusEl = document.getElementById('sync-history-status');
+    const setStatus = (msg, color = 'var(--color-text-muted)') => {
+      if (statusEl) { statusEl.textContent = msg; statusEl.style.color = color; }
+    };
+    if (btn) { btn.disabled = true; btn.textContent = '⏳ Syncing…'; }
+    setStatus('Fetching from Bitunix…');
+    try {
+      const r = await api('POST', '/api/dashboard/sync-trade-history');
+      if (r.error) throw new Error(r.error);
+      const msg = `✓ ${r.updated} trade${r.updated !== 1 ? 's' : ''} updated`;
+      setStatus(msg, r.updated > 0 ? 'var(--color-success)' : 'var(--color-text-muted)');
+      showToast(r.updated > 0 ? `Trade history synced — ${r.updated} updated` : 'Already up to date', r.updated > 0 ? 'success' : 'info');
+      if (r.updated > 0) setTimeout(() => loadTradeHistory?.(), 800);
+    } catch (e) {
+      setStatus(`Error: ${e.message}`, 'var(--color-danger)');
+      showToast(`Sync failed: ${e.message}`, 'error');
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = '🔄 Sync PnL'; }
+      setTimeout(() => setStatus(''), 8000);
+    }
+  }
+
   async function adminResyncFees() {} // kept for backwards compat — no-op
 
   async function adminPauseKey(keyId) {
@@ -5899,6 +5922,7 @@
     toggleStrategyToken, loadTokenCardPrices, loadTokenStats, editTokenCardLev,
     mcToggleSkill, mcUpdateConfig, mcCreateAgent, mcRemoveAgent, mcDownloadTrades,
     connectPolymarketWallet, skipMetaMask,
+    syncTradeHistory,
   };
 
   // ----- Init -----
