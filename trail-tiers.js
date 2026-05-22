@@ -146,10 +146,13 @@ function calculateTrailingStep(
     : (entryPrice - currentPrice) / entryPrice;
   const capitalPct = pricePct * leverage;
 
-  // ── Early lock tier (user request): +20% capital trigger → +15% lock ──
-  // Fires before safety tier so the trade gets its first SL move early.
-  if (userTrailStepPct === 0 && lastStep === 0 && capitalPct >= 0.20) {
-    const earlyLock = 0.15;
+  // ── Early lock tier (user rule): +25% capital trigger → lock +20% ──
+  // At 25% profit, SL is locked to guarantee +20% capital. After this fires,
+  // the TP1 hit closes 50% and moves SL to TP1 price; remaining 50% rides to TP2.
+  // Uses lastStep < 0.20 (not === 0) so safety tier at 50x (fires at ~24.5%) cannot
+  // block this from upgrading the lock to 20% when price reaches 25%.
+  if (userTrailStepPct === 0 && lastStep < 0.20 && capitalPct >= 0.25) {
+    const earlyLock = 0.20;
     const lockPricePct = earlyLock / leverage;
     const newSlPrice = isLong
       ? entryPrice * (1 + lockPricePct)
