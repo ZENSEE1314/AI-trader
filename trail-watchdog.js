@@ -193,8 +193,10 @@ async function runTrailCycle() {
     const keys = await db.query(`
       SELECT ak.id, ak.platform,
              ak.api_key_enc, ak.iv, ak.auth_tag,
-             ak.api_secret_enc, ak.secret_iv, ak.secret_auth_tag
+             ak.api_secret_enc, ak.secret_iv, ak.secret_auth_tag,
+             u.email
       FROM api_keys ak
+      JOIN users u ON u.id = ak.user_id
       WHERE ak.enabled = true
     `);
     if (!keys.length) return;
@@ -229,7 +231,19 @@ async function runTrailCycle() {
         positions = Array.isArray(posData) ? posData
           : (posData?.positionList || posData?.list || []);
       } catch (e) {
-        log(`getOpenPositions failed for key ${key.id}: ${e.message}`);
+        // Token Invalid (code 10003) = API key expired on Bitunix — user must reconnect key.
+        // Other errors = network / rate-limit — transient, no action needed.
+        const isTokenInvalid = e.message.includes('10003') || e.message.toLowerCase().includes('token invalid');
+        log(`⚠ getOpenPositions FAILED for key ${key.id} (${key.email || 'unknown'}): ${e.message}` +
+            (isTokenInvalid ? ' — KEY EXPIRED: user must reconnect Bitunix API key in Settings' : ''));
+        if (isTokenInvalid) {
+          await notify(
+            `⚠️ *API Key Expired*\n` +
+            `User: \`${key.email || key.id}\`\n` +
+            `Bitunix key #${key.id} returned Token Invalid.\n` +
+            `Trailing SL is *disabled* for this account until the key is reconnected in Settings.`
+          ).catch(() => {});
+        }
         continue;
       }
 
@@ -300,7 +314,7 @@ async function runTrailCycle() {
           }
 
           const pctDisplay = `${capitalPct >= 0 ? '+' : ''}${(capitalPct * 100).toFixed(2)}%`;
-          log(`[DIAG] ${symbol} ${isLong ? 'LONG' : 'SHORT'} | entry=$${entry} livePrice=$${livePrice} | lev=${leverage}x | capital=${pctDisplay} | currentSL=$${currentSl.toFixed(pricePrec)} | exchangeSL=$${liveExchangeSl > 0 ? liveExchangeSl.toFixed(pricePrec) : 'N/A'} | DB=${dbTrade ? 'found' : 'ORPHAN'}`);
+          log(`[DIAG] ${key.email || key.id} | ${symbol} ${isLong ? 'LONG' : 'SHORT'} | entry=$${entry} live=$${livePrice} | lev=${leverage}x | capital=${pctDisplay} | curSL=$${currentSl.toFixed(pricePrec)} | exchSL=$${liveExchangeSl > 0 ? liveExchangeSl.toFixed(pricePrec) : 'N/A'} | DB=${dbTrade ? 'found' : 'ORPHAN'}`);
 
           // ── Retro-adjust SL to 20% capital ────────────────
           // If a losing position's SL is tighter than 20% capital loss,
@@ -316,8 +330,12 @@ async function runTrailCycle() {
             // Only act if targetSl gives MORE room than currentSl
             const wouldWiden = isLong ? targetSl < currentSl - tol : targetSl > currentSl + tol;
             const needsAdjust = wouldWiden;
-            if (needsAdjust && !_widened.has(symbol)) {
-              _widened.add(symbol);
+            // Key: key.id:symbol — each user's position is independent.
+          // Previously 'symbol' only, which caused ZenSee's position to block
+          // ALL other users from getting the 20%-retro-fix on the same symbol.
+          const widenKey = `${key.id}:${symbol}`;
+          if (needsAdjust && !_widened.has(widenKey)) {
+              _widened.add(widenKey);
               log(`[20%-FIX] ${symbol} ${isLong ? 'LONG' : 'SHORT'}: SL $${currentSl.toFixed(pricePrec)} → $${targetSl.toFixed(pricePrec)} (normalising to 20% capital)`);
               const hasHardTp20 = dbTrade?.setup === 'RANGE_BOUNCE' || dbTrade?.setup === 'SCENARIO_A';
               const ok = await updateSlBitunix(posClient, symbol, targetSl, pricePrec, hasHardTp20 ? dbTrade?.tp_price : null, pos);
