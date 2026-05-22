@@ -2108,14 +2108,9 @@ function scan1mPatterns(sym, bars1m, bars4h, cooldowns = new Map()) {
 //   HIGH: bars[i].h > bars[i-1].h AND bars[i].h > bars[i+1].h AND bars[i].h > bars[i+2].h
 //   LOW : bars[i].l < bars[i-1].l AND bars[i].l < bars[i+1].l AND bars[i].l < bars[i+2].l
 
-// ── Key-level signal timing constants ────────────────────────────────
-// Step 1: find the most-recent confirmed 15m pivot (HIGH or LOW) — that sets direction.
-// Step 2: find a 1m pivot of matching type that formed within WINDOW_MS of the 15m bar.
-//         "If 8am is the 15m bar, the 1m pivot must be 8:00–8:30. Too far away → skip."
-// Step 3: entry fires on the next 1m bar after both are confirmed (1L/2R on 1m already
-//         ensures at least 2 right bars before detection).
-const CONF_BARS_15M = 8;           // 15m pivot recency: within last 8 bars (2 h) from end of data
-const WINDOW_MS     = 30 * 60_000; // 1m pivot must be within 30 min of the 15m pivot bar open time
+// ── Signal engine constants ───────────────────────────────────────────
+const STRUCT_BARS_15M = 12;        // structure window: LL→LH or HH→HL must be within last 12 bars (3 h)
+const WINDOW_MS       = 30 * 60_000; // 1m pivot must form within 30 min of the 15m pivot bar open
 
 function _allPivots(bars) {
   if (!bars || bars.length < 6) return { ph: [], pl: [] };
@@ -2149,91 +2144,131 @@ function _rawPivots(bars) {
   };
 }
 
+// ── _detect15mStructure ───────────────────────────────────────────────
+// Detects a complete 2-pivot trend structure on the 15m chart:
+//
+//   SHORT: LL → LH   (saw a Lower Low, then price bounced to a Lower High)
+//     Wait for LL first. When LH confirms → SHORT setup ready.
+//
+//   LONG:  HH → HL   (saw a Higher High, then price pulled back to a Higher Low)
+//     Wait for HH first. When HL confirms → LONG setup ready.
+//
+// Both pivots must be within STRUCT_BARS_15M bars (3 h) — no stale setups.
+// Sideways market (no LL→LH or HH→HL sequence) → returns null → no trade.
+function _detect15mStructure(ph15, pl15, bars15mLen) {
+  if (ph15.length < 2 || pl15.length < 2) return null;
+
+  const lastH = ph15[ph15.length - 1];  // most recent 15m pivot HIGH
+  const prevH = ph15[ph15.length - 2];  // previous 15m pivot HIGH
+  const lastL = pl15[pl15.length - 1];  // most recent 15m pivot LOW
+  const prevL = pl15[pl15.length - 2];  // previous 15m pivot LOW
+
+  // ── SHORT: sequence is LL → LH ───────────────────────────────────
+  // LH must be the most recent overall pivot (after the LL).
+  // The most recent LOW before that LH must be a LL.
+  const isLH = lastH.price < prevH.price;
+  if (isLH && lastH.barTs > lastL.barTs) {
+    const isLL    = lastL.price < prevL.price;
+    const lhAge   = (bars15mLen - 1) - lastH.idx;
+    const llAge   = (bars15mLen - 1) - lastL.idx;
+    if (isLL && lhAge <= STRUCT_BARS_15M && llAge <= STRUCT_BARS_15M) {
+      return { dir: 'SHORT', pivot15: lastH, preceding: lastL, label: 'LL→LH' };
+    }
+  }
+
+  // ── LONG: sequence is HH → HL ────────────────────────────────────
+  // HL must be the most recent overall pivot (after the HH).
+  // The most recent HIGH before that HL must be a HH.
+  const isHL = lastL.price > prevL.price;
+  if (isHL && lastL.barTs > lastH.barTs) {
+    const isHH    = lastH.price > prevH.price;
+    const hlAge   = (bars15mLen - 1) - lastL.idx;
+    const hhAge   = (bars15mLen - 1) - lastH.idx;
+    if (isHH && hlAge <= STRUCT_BARS_15M && hhAge <= STRUCT_BARS_15M) {
+      return { dir: 'LONG', pivot15: lastL, preceding: lastH, label: 'HH→HL' };
+    }
+  }
+
+  return null; // sideways / incomplete structure → no trade
+}
+
 function scanNearestPivotMatch(sym, bars15m, bars1m, bars4h, cooldowns) {
   return scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns);
 }
 
-// ── scanKeyLevelSignal — hard 3-step rule ────────────────────────────
+// ── scanKeyLevelSignal — strict 3-step SMC rule ──────────────────────
 //
-// STEP 1 — Direction from 15m:
-//   Find the absolute most-recent confirmed 15m pivot (HIGH or LOW).
-//   If that pivot is a HIGH (HH or LH) → only consider SHORT.
-//   If that pivot is a LOW  (HL or LL) → only consider LONG.
-//   This prevents firing LONG when the 15m has just printed a LH (bearish).
+// STEP 1 — 15m structure (sideways filter):
+//   Must see LL → LH on 15m to consider SHORT.
+//   Must see HH → HL on 15m to consider LONG.
+//   Any other 15m state (LL only, HH only, mixed, ranging) → no trade.
+//   Both pivots must be within last 3 hours (STRUCT_BARS_15M = 12 bars).
 //
-// STEP 2 — 1m confirmation in timing window:
-//   Find a 1m pivot of matching type (HIGH for SHORT, LOW for LONG) that formed
-//   within 30 min AFTER the 15m pivot bar open time.
-//   Outside that window → skip and wait for the next 15m bar.
+// STEP 2 — 1m confirmation in 30-min window:
+//   SHORT: find a 1m LH (lower than prev 1m high) within 30 min of the 15m LH bar.
+//   LONG:  find a 1m HL (higher than prev 1m low) within 30 min of the 15m HL bar.
+//   "If 15m LH is at 8:00, the 1m LH must be between 8:00 and 8:30."
+//   Outside that window → skip, wait for the next 15m candle.
 //
 // STEP 3 — Entry freshness:
-//   The 1m pivot must still be within the last 30 bars from NOW (≤ 30 min old).
-//   Prevents firing on a stale 1m pivot that matched hours ago.
+//   The 1m confirmation pivot must be within last 30 bars (30 min) from NOW.
+//   Prevents firing on a stale setup that matched hours ago.
 function scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns) {
   const cfg = TRADING_CONFIG[sym];
   if (!cfg) return null;
   if (!bars15m || bars15m.length < 6) return null;
   if (!bars1m  || bars1m.length  < 6) return null;
 
-  const cur    = bars1m[bars1m.length - 1];
-  const now    = cur.t;
-  const price  = cur.c;
+  const cur     = bars1m[bars1m.length - 1];
+  const now     = cur.t;
+  const price   = cur.c;
   const total1m = bars1m.length;
 
-  // ── STEP 1: Most-recent 15m pivot sets direction ─────────────────────
+  // ── STEP 1: 15m structure must be LL→LH (SHORT) or HH→HL (LONG) ────
   const { ph: ph15, pl: pl15 } = _allPivots(bars15m);
-  const last15High = ph15.length ? ph15[ph15.length - 1] : null;
-  const last15Low  = pl15.length ? pl15[pl15.length - 1] : null;
+  const structure = _detect15mStructure(ph15, pl15, bars15m.length);
+  if (!structure) return null; // sideways or incomplete — no trade
 
-  let pivot15 = null;
-  let dir     = null;
-  if (last15High && last15Low) {
-    // Whichever 15m pivot (high or low) is more recent wins
-    if (last15High.idx >= last15Low.idx) { pivot15 = last15High; dir = 'SHORT'; }
-    else                                  { pivot15 = last15Low;  dir = 'LONG';  }
-  } else if (last15High) { pivot15 = last15High; dir = 'SHORT'; }
-  else if  (last15Low)   { pivot15 = last15Low;  dir = 'LONG';  }
-  if (!pivot15) return null;
+  const { dir, pivot15, label } = structure;
 
-  // 15m pivot staleness guard: must be within last CONF_BARS_15M bars
-  const bars15mAge = (bars15m.length - 1) - pivot15.idx;
-  if (bars15mAge > CONF_BARS_15M) return null;
-
-  // ── STEP 2: Find 1m pivot within 30-min window of the 15m bar ────────
+  // ── STEP 2: Find 1m LH (SHORT) or 1m HL (LONG) in 30-min window ────
+  // The 1m pivot must specifically be a LH (for SHORT) or HL (for LONG),
+  // not just any swing high/low. This matches the user's rule exactly.
   const { ph: ph1, pl: pl1 } = _allPivots(bars1m);
-  const candidates = dir === 'SHORT' ? ph1 : pl1;
 
   let pivot1m = null;
-  // Search backward (most-recent first) — take the most recent 1m pivot in the window
-  for (let i = candidates.length - 1; i >= 0; i--) {
-    const diff = candidates[i].barTs - pivot15.barTs;
-    // 1m pivot must be AFTER the 15m bar open AND within 30 min
-    if (diff >= 0 && diff <= WINDOW_MS) {
-      pivot1m = candidates[i];
+
+  if (dir === 'SHORT') {
+    // Find the most-recent 1m LH within [pivot15.barTs, pivot15.barTs + 30min]
+    for (let i = ph1.length - 1; i >= 1; i--) {
+      const diff = ph1[i].barTs - pivot15.barTs;
+      if (diff < 0) break;                               // before the 15m bar — stop
+      if (diff > WINDOW_MS) continue;                   // too late after window — skip
+      if (ph1[i].price >= ph1[i - 1].price) continue;  // not a LH (it's a HH) — skip
+      pivot1m = ph1[i];
+      break;
+    }
+  } else {
+    // Find the most-recent 1m HL within [pivot15.barTs, pivot15.barTs + 30min]
+    for (let i = pl1.length - 1; i >= 1; i--) {
+      const diff = pl1[i].barTs - pivot15.barTs;
+      if (diff < 0) break;                               // before the 15m bar — stop
+      if (diff > WINDOW_MS) continue;                   // too late after window — skip
+      if (pl1[i].price <= pl1[i - 1].price) continue;  // not a HL (it's a LL) — skip
+      pivot1m = pl1[i];
       break;
     }
   }
   if (!pivot1m) return null;
 
-  // ── STEP 3: 1m pivot must still be fresh from NOW (≤ 30 bars = 30 min) ─
+  // ── STEP 3: 1m pivot freshness from NOW (≤ 30 bars = 30 min) ────────
   const bars1mNowAge = (total1m - 1) - pivot1m.idx;
   if (bars1mNowAge > 30) return null;
 
   // ── Cooldown: each 15m pivot bar fires at most once ──────────────────
-  const cdKey = `${sym}_KL_${dir === 'SHORT' ? 'HIGH' : 'LOW'}_${pivot15.barTs}`;
+  const cdKey = `${sym}_KL_${dir === 'SHORT' ? 'LH' : 'HL'}_${pivot15.barTs}`;
   if (cooldowns.has(cdKey)) return null;
   cooldowns.set(cdKey, now);
-
-  // ── Pattern label for logs ───────────────────────────────────────────
-  let pattern15 = dir === 'SHORT' ? 'HIGH' : 'LOW';
-  if (dir === 'SHORT' && ph15.length >= 2) {
-    const last = ph15[ph15.length - 1], prev = ph15[ph15.length - 2];
-    pattern15 = last.price > prev.price ? 'HH' : 'LH';
-  }
-  if (dir === 'LONG' && pl15.length >= 2) {
-    const last = pl15[pl15.length - 1], prev = pl15[pl15.length - 2];
-    pattern15 = last.price < prev.price ? 'LL' : 'HL';
-  }
 
   const sl   = dir === 'LONG' ? pivot1m.price * (1 - cfg.slPct) : pivot1m.price * (1 + cfg.slPct);
   const tp1  = dir === 'LONG' ? price * (1 + TP1_PCT)           : price * (1 - TP1_PCT);
@@ -2243,12 +2278,14 @@ function scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns) {
   let trend = 'UNKNOWN';
   try { trend = classifyTrend(bars4h ?? []); } catch (_) {}
 
+  const pattern15 = dir === 'SHORT' ? 'LH' : 'HL'; // confirmed: LH for SHORT, HL for LONG
+
   return {
     symbol:   sym,
     name:     cfg.name,
     tf:       '15m+1m',
     iv:       cfg.iv,
-    pattern:  dir === 'SHORT' ? 'LH' : 'HL',
+    pattern:  pattern15,
     pattern15,
     dir,
     side:     dir === 'LONG' ? 'BUY' : 'SELL',
@@ -2265,7 +2302,7 @@ function scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns) {
     pivot1m:  pivot1m.price,
     ltfUsed:  '1m',
     ts:       now,
-    signal:   `${pattern15}(${dir}) 15m=${pivot15.price.toFixed(4)} + 1m_${dir==='SHORT'?'HIGH':'LOW'}=${pivot1m.price.toFixed(4)} entry=${price.toFixed(4)} sl=${sl.toFixed(4)} tp1=${tp1.toFixed(4)} tp2=${tp2.toFixed(4)}`,
+    signal:   `${label} → 15m_${pattern15}=${pivot15.price.toFixed(4)} + 1m_${pattern15}=${pivot1m.price.toFixed(4)} entry=${price.toFixed(4)} sl=${sl.toFixed(4)}`,
   };
 }
 
