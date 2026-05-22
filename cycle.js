@@ -4659,6 +4659,127 @@ async function processTraderModeKeys() {
   }
 }
 
+// ── CLOSE POSITION FOR ALL USERS (reversal / manual) ─────────
+// Market-closes an open position across all active API keys for a given symbol.
+// Called by TraderAgent when an opposite-direction signal fires while a trade is open.
+// After close, the new signal is opened immediately (no post-close cooldown applied).
+//
+// Returns true if at least one position was closed successfully.
+async function closePositionForAllUsers(symbol, reason = 'reversal_signal') {
+  const sym = symbol.toUpperCase();
+  let db, cryptoUtils, BitunixClient;
+  try {
+    db           = require('./db');
+    cryptoUtils  = require('./crypto-utils');
+    BitunixClient = require('./bitunix-client').BitunixClient;
+  } catch (e) {
+    bLog.error(`[CLOSE-REVERSAL] Module load failed: ${e.message}`);
+    return false;
+  }
+
+  bLog.trade(`[CLOSE-REVERSAL] Closing ${sym} — reason: ${reason}`);
+  let anyClosed = false;
+
+  const keys = await db.query(`
+    SELECT ak.id, ak.platform, ak.user_id,
+           ak.api_key_enc, ak.iv, ak.auth_tag,
+           ak.api_secret_enc, ak.secret_iv, ak.secret_auth_tag,
+           u.email
+    FROM api_keys ak
+    JOIN users u ON u.id = ak.user_id
+    WHERE ak.enabled = true AND (ak.paused IS NULL OR ak.paused = false)
+  `).catch(() => []);
+
+  for (const key of keys) {
+    try {
+      const apiKey    = cryptoUtils.decrypt(key.api_key_enc,    key.iv,        key.auth_tag);
+      const apiSecret = cryptoUtils.decrypt(key.api_secret_enc, key.secret_iv, key.secret_auth_tag);
+      if (!apiKey || !apiSecret) continue;
+
+      if (key.platform === 'bitunix') {
+        const client = new BitunixClient({ apiKey, apiSecret });
+        const posRaw = await client.getOpenPositions(sym).catch(() => []);
+        const posArr = Array.isArray(posRaw) ? posRaw
+          : (posRaw?.positionList || posRaw?.list || []);
+        const pos = posArr.find(p => (p.symbol || '').toUpperCase() === sym);
+        if (!pos) continue;
+
+        const qty   = parseFloat(pos.qty || pos.size || pos.positionAmt || 0);
+        if (qty === 0) continue;
+
+        const isLong = (pos.side || '').toUpperCase() === 'BUY'
+                    || (pos.side || '').toUpperCase() === 'LONG';
+        const posId  = pos.positionId || pos.id;
+
+        // Use flashClose (single-call full close) — falls back to closePosition
+        let closed = false;
+        if (posId) {
+          try {
+            await client.flashClose({ positionId: posId });
+            closed = true;
+          } catch (_) {}
+        }
+        if (!closed) {
+          await client.closePosition({ symbol: sym, side: isLong ? 'BUY' : 'SELL', qty, positionId: posId });
+          closed = true;
+        }
+
+        // Mark DB trade closed — syncTradeStatus will fill in exit price and PnL
+        await db.query(
+          `UPDATE trades SET status = 'CLOSED', exit_reason = $1, closed_at = NOW()
+           WHERE symbol = $2 AND status = 'OPEN' AND api_key_id = $3`,
+          [reason, sym, key.id]
+        ).catch(() => {});
+
+        const livePrice = await getLivePrice(sym).catch(() => null);
+        const dir       = isLong ? 'LONG' : 'SHORT';
+        bLog.trade(`[CLOSE-REVERSAL] ✓ ${sym} ${dir} closed for ${key.email} @ ~$${livePrice ?? '?'}`);
+        await notify(
+          `🔄 *Reversal Exit*\n` +
+          `*${sym}* ${dir} closed\n` +
+          `Reason: opposite signal fired\n` +
+          `Exit: ~\`$${livePrice ? livePrice.toFixed(2) : '?'}\``
+        );
+        anyClosed = true;
+
+      } else if (key.platform === 'binance') {
+        const { USDMClient } = require('binance');
+        const bnClient = new USDMClient(
+          { api_key: apiKey, api_secret: apiSecret },
+          getBinanceRequestOptions()
+        );
+        const positions = await bnClient.getPositions({ symbol: sym }).catch(() => []);
+        const openPos   = (Array.isArray(positions) ? positions : [])
+          .find(p => Math.abs(parseFloat(p.positionAmt || 0)) > 0);
+        if (!openPos) continue;
+
+        const amt       = parseFloat(openPos.positionAmt || 0);
+        const isLong    = amt > 0;
+        const closeSide = isLong ? 'SELL' : 'BUY';
+
+        try { await bnClient.cancelAllOpenOrders({ symbol: sym }); } catch (_) {}
+        await bnClient.submitNewOrder({
+          symbol, side: closeSide, type: 'MARKET',
+          quantity: Math.abs(amt), reduceOnly: 'true',
+        });
+
+        await db.query(
+          `UPDATE trades SET status = 'CLOSED', exit_reason = $1, closed_at = NOW()
+           WHERE symbol = $2 AND status = 'OPEN' AND api_key_id = $3`,
+          [reason, sym, key.id]
+        ).catch(() => {});
+
+        bLog.trade(`[CLOSE-REVERSAL] ✓ ${sym} Binance ${isLong ? 'LONG' : 'SHORT'} closed for ${key.email}`);
+        anyClosed = true;
+      }
+    } catch (keyErr) {
+      bLog.error(`[CLOSE-REVERSAL] Key ${key.id} (${key.email || '?'}): ${keyErr.message}`);
+    }
+  }
+
+  return anyClosed;
+}
+
 async function run() {
   log(`AI Smart Trader v4 | Telegram: ${!!TELEGRAM_TOKEN} | Chats: ${PRIVATE_CHATS.join(', ') || 'NONE'}`);
   // Hard sync on startup: reconcile all Bitunix positions with DB,
@@ -4675,6 +4796,7 @@ module.exports = {
   run,
   // Exported for agent framework (Phase 2)
   executeForAllUsers,
+  closePositionForAllUsers,
   openTrade,
   checkTrailingStop,
   syncTradeStatus,

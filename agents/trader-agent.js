@@ -170,8 +170,8 @@ class TraderAgent extends BaseAgent {
           continue;
         }
 
-        // Block if an open trade already exists for this symbol (any direction)
-        // Prevents the bot from opening LONG + SHORT on the same token simultaneously.
+        // Block duplicate entries. Allow reversals (opposite direction → close first).
+        let isReversalEntry = false;
         try {
           const db = require('../db');
           const existing = await db.query(
@@ -180,15 +180,34 @@ class TraderAgent extends BaseAgent {
           );
           if (existing.length) {
             const openDir = existing[0].direction;
-            this.logTrade(`${pick.symbol} already has OPEN ${openDir} trade — skipping ${pick.direction}`);
-            this.tradesSkipped++;
-            this.addActivity('skip', `${pick.symbol} already OPEN (${openDir}) — skip ${pick.direction}`);
-            continue;
+            if (openDir === pick.direction) {
+              // Same direction — already in the trade
+              this.logTrade(`${pick.symbol} already OPEN ${openDir} — skip same-direction signal`);
+              this.tradesSkipped++;
+              this.addActivity('skip', `${pick.symbol} already OPEN ${openDir}`);
+              continue;
+            }
+            // Opposite direction: signal says market flipped — close existing, enter new
+            this.logTrade(`${pick.symbol} REVERSAL: ${openDir} open → ${pick.direction} signal — closing first`);
+            this.addActivity('trade', `${pick.symbol} reversal: closing ${openDir} → entering ${pick.direction}`);
+            try {
+              const { closePositionForAllUsers } = require('../cycle');
+              await closePositionForAllUsers(pick.symbol, 'reversal_signal');
+              // Give exchange 2s to settle the close before opening the new side
+              await new Promise(r => setTimeout(r, 2000));
+              isReversalEntry = true; // bypass post-close cooldown for this entry
+            } catch (closeErr) {
+              this.logTrade(`${pick.symbol} reversal close failed: ${closeErr.message} — skipping new entry`);
+              this.tradesSkipped++;
+              this.addActivity('error', `${pick.symbol} reversal close failed — skipping`);
+              continue;
+            }
           }
         } catch (_) { /* DB unavailable — proceed */ }
 
-        // Check post-close cooldown (1 hour per token after any close)
-        if (await this._isInCloseCooldown(pick.symbol)) {
+        // Check post-close cooldown (1 hour per token after any close).
+        // Reversal entries bypass this — we WANT to re-enter immediately on structure flip.
+        if (!isReversalEntry && await this._isInCloseCooldown(pick.symbol)) {
           const sym = (pick.symbol || '').toUpperCase();
           const closedTs = this._closedAt.get(sym);
           const minsLeft = closedTs

@@ -160,6 +160,27 @@ function calculateTrailingStep(
     return { stepped: true, newSlPrice, newLastStep: earlyLock };
   }
 
+  // ── Breakeven lock: +15% capital → lock +12% ─────────────────
+  // Fires well before the main safety tier. Locks SL above entry so a trade that
+  // reached +15% can never reverse into a loss worse than fees (~-2% net at 125x).
+  //
+  // At 125x: trigger = 0.12% price move. Lock at +12% → net ≈ +2% after fees.
+  // At 75x : trigger = 0.20% price move. Lock at +12% → net ≈ +6% after fees.
+  // At 50x : trigger = 0.30% price move. Lock at +12% → net ≈ +8% after fees.
+  //
+  // WHY separate from the safety tier:
+  //   Safety tier requires +31% at 125x before SL moves — a +9% trade was winning
+  //   and reversed to a loss because nothing locked in between. This tier catches
+  //   trades that peak in the +15–30% range and protect them.
+  if (userTrailStepPct === 0 && lastStep < 0.12 && capitalPct >= 0.15) {
+    const bevenLock    = 0.12;
+    const lockPricePct = bevenLock / leverage;
+    const newSlPrice   = isLong
+      ? entryPrice * (1 + lockPricePct)
+      : entryPrice * (1 - lockPricePct);
+    return { stepped: true, newSlPrice, newLastStep: bevenLock };
+  }
+
   // ── Safety tier: fee-aware lock guarantees +10% net capital after all fees ──
   // safetyLock  = NET_PROFIT_TARGET + taker fees (both legs) + 1 funding period
   // safetyTrigger = safetyLock + SAFETY_GAP  (always 10% above lock)
