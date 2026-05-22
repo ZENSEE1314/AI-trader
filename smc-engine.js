@@ -2087,34 +2087,34 @@ function scan1mPatterns(sym, bars1m, bars4h, cooldowns = new Map()) {
 
 // ── Exports ──────────────────────────────────────────────────
 
-// ── scanNearestPivotMatch / scanKeyLevelSignal ────────────────────
+// ── scanKeyLevelSignal ────────────────────────────────────────────
 //
-// USER RULE (from chart analysis):
-//   "Set the highest or lowest on 15min, then follow the 1min to short or long."
+// USER RULE:
+//   HH → LH = SHORT   (HH is the structural top, LH confirms rejection at top)
+//   LL → HL = LONG    (LL is the structural bottom, HL confirms bounce at bottom)
 //
-// Algorithm:
-//   1. Find the DOMINANT HIGH (highest confirmed pivot high in lookback) → key resistance
-//      Find the DOMINANT LOW  (lowest confirmed pivot low in lookback)  → key support
-//   2. Check if current price is TOUCHING that level (within KEY_PROX_PCT)
-//      Only when price is actually AT the level does a signal qualify.
-//   3. At key resistance + 1m LH confirmed → SHORT
-//      At key support   + 1m HL confirmed → LONG
+// Structure:
+//   SHORT: 15m must show HH followed by LH (bearish distribution).
+//          Entry is at the LH (the lower high rejecting from HH).
+//          1m LH at that same level confirms → SHORT.
 //
-// This produces very few trades per day — only from the most significant
-// structural levels, which is exactly what the chart shows.
+//   LONG:  15m must show LL followed by HL (bullish accumulation).
+//          Entry is at the HL (the higher low bouncing off LL).
+//          1m HL at that same level confirms → LONG.
+//
+// The HH/LL is the structural REFERENCE (the extreme).
+// The LH/HL is the ENTRY LEVEL (price comes back, forms lower high / higher low).
 //
 // Pivot detection (1L/2R asymmetric — matches TV SMC Expo indicator):
 //   pivot HIGH: h[i] > h[i-1] AND h[i] > h[i+1] AND h[i] > h[i+2]
 //   pivot LOW : l[i] < l[i-1] AND l[i] < l[i+1] AND l[i] < l[i+2]
-//   HL = rising low, LH = falling high
 
-const KEY_PROX_PCT     = 0.005;  // within 0.5% of key level = "price is at the level"
-const MAX_LEVEL_AGE_15M = 32;    // key level must be within last 32×15m bars (8 hours)
-const LH_MAX_BARS_1M   = 30;     // 1m LH confirmation must be within last 30 bars
-const HL_MAX_BARS_1M   = 30;
+const KEY_PROX_PCT      = 0.005;  // 0.5% proximity — price must be at the LH/HL level
+const MAX_LEVEL_AGE_15M = 32;     // entry level must be within last 32×15m bars (8H)
+const LH_MAX_BARS_1M    = 30;     // 1m LH must be within last 30 bars (~30 min)
+const HL_MAX_BARS_1M    = 30;
 
 function _allPivots(bars) {
-  // Returns all confirmed pivot highs and lows (1L/2R).
   if (!bars || bars.length < 6) return { ph: [], pl: [] };
   const ph = [], pl = [];
   for (let i = 1; i < bars.length - 2; i++) {
@@ -2127,7 +2127,7 @@ function _allPivots(bars) {
 }
 
 function _lastPivots(bars) {
-  // Returns last confirmed LH and HL (used by 1m confirmation check).
+  // Last confirmed LH and HL — used for 1m confirmation.
   const { ph, pl } = _allPivots(bars);
   const lastH = ph[ph.length - 1], prevH = ph[ph.length - 2];
   const lastL = pl[pl.length - 1], prevL = pl[pl.length - 2];
@@ -2138,20 +2138,45 @@ function _lastPivots(bars) {
   return { lh, hl };
 }
 
-function _keyLevels(bars) {
-  // Returns the dominant HIGH (highest pivot high) and dominant LOW (lowest pivot low)
-  // in the lookback window — these are THE key structural levels to trade from.
+function _structurePivots(bars) {
+  // Returns the structural setup for HH→LH (SHORT) and LL→HL (LONG).
+  //
+  // SHORT setup: find the highest pivot high (HH = structural top).
+  //   Then find the most recent confirmed LH that formed AFTER the HH.
+  //   Entry is at the LH price — this is where price returns to reject again.
+  //
+  // LONG setup: find the lowest pivot low (LL = structural bottom).
+  //   Then find the most recent confirmed HL that formed AFTER the LL.
+  //   Entry is at the HL price — this is where price returns to bounce again.
+
   const { ph, pl } = _allPivots(bars);
-  if (!ph.length || !pl.length) return { keyHigh: null, keyLow: null };
-  // Dominant high = highest confirmed pivot high (strongest resistance)
-  const keyHigh = ph.reduce((best, p) => p.price > best.price ? p : best);
-  // Dominant low  = lowest confirmed pivot low  (strongest support)
-  const keyLow  = pl.reduce((best, p) => p.price < best.price ? p : best);
-  return { keyHigh, keyLow };
+  if (ph.length < 2 || pl.length < 2) return { shortSetup: null, longSetup: null };
+
+  // ── SHORT: HH → LH ──────────────────────────────────────────
+  // HH = highest confirmed pivot high
+  const hh = ph.reduce((best, p) => p.price > best.price ? p : best);
+  // LH = the most recent pivot high AFTER hh whose price < hh.price
+  // (a lower high — price tried to reach HH again but failed)
+  const lhAfterHH = ph
+    .filter(p => p.idx > hh.idx && p.price < hh.price)
+    .slice(-1)[0] ?? null;
+
+  // ── LONG: LL → HL ──────────────────────────────────────────
+  // LL = lowest confirmed pivot low
+  const ll = pl.reduce((best, p) => p.price < best.price ? p : best);
+  // HL = the most recent pivot low AFTER ll whose price > ll.price
+  // (a higher low — price tried to break LL again but bounced)
+  const hlAfterLL = pl
+    .filter(p => p.idx > ll.idx && p.price > ll.price)
+    .slice(-1)[0] ?? null;
+
+  return {
+    shortSetup: lhAfterHH ? { ref: hh, entry: lhAfterHH } : null,
+    longSetup:  hlAfterLL ? { ref: ll, entry: hlAfterLL  } : null,
+  };
 }
 
 function scanNearestPivotMatch(sym, bars15m, bars1m, bars4h, cooldowns) {
-  // Alias — kept for backward compat. Delegates to the key-level engine.
   return scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns);
 }
 
@@ -2161,7 +2186,7 @@ function scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns) {
   if (!bars15m || bars15m.length < 10) return null;
   if (!bars1m  || bars1m.length  < 10) return null;
 
-  const { keyHigh, keyLow } = _keyLevels(bars15m);
+  const { shortSetup, longSetup } = _structurePivots(bars15m);
   const p1m     = _lastPivots(bars1m);
   const cur     = bars1m[bars1m.length - 1];
   const now     = cur.t;
@@ -2172,41 +2197,53 @@ function scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns) {
   let shortSig = null;
   let longSig  = null;
 
-  // ── SHORT: price touching dominant HIGH + 1m LH confirmed ──
-  // Dominant HIGH = strongest resistance in lookback.
-  // Price within KEY_PROX_PCT of that high = "price is at resistance".
-  // 1m LH formed there = buyers failed to break above = SHORT.
-  if (keyHigh && p1m.lh) {
-    const levelAge  = total15m - 1 - keyHigh.idx;
-    const proximity = Math.abs(price - keyHigh.price) / keyHigh.price;
-    const bars1mAge = total1m  - 1 - p1m.lh.idx;
+  // ── SHORT: HH established → LH formed after → price returns to LH → 1m LH ──
+  // The 15m LH is the entry level. Price must be within KEY_PROX of that LH.
+  // 1m LH at the same level = final confirmation (sellers rejecting again).
+  if (shortSetup && p1m.lh) {
+    const entryLH   = shortSetup.entry;                          // the 15m LH price
+    const levelAge  = total15m - 1 - entryLH.idx;
+    const proximity = Math.abs(price - entryLH.price) / entryLH.price;
+    const bars1mAge = total1m - 1 - p1m.lh.idx;
 
     if (levelAge <= MAX_LEVEL_AGE_15M && proximity <= KEY_PROX_PCT && bars1mAge <= LH_MAX_BARS_1M) {
-      const cdKey = `${sym}_KL_LH_${keyHigh.barTs}`;
+      const cdKey = `${sym}_KL_LH_${entryLH.barTs}`;
       if (!cooldowns.has(cdKey)) {
-        shortSig = { cdKey, type: 'LH', dir: 'SHORT', p15: keyHigh, p1: p1m.lh, proximity };
+        shortSig = {
+          cdKey, type: 'LH', dir: 'SHORT',
+          ref: shortSetup.ref,    // HH (structure reference)
+          p15: entryLH,           // LH (entry level)
+          p1:  p1m.lh,            // 1m LH (confirmation)
+          proximity,
+        };
       }
     }
   }
 
-  // ── LONG: price touching dominant LOW + 1m HL confirmed ──
-  // Dominant LOW = strongest support in lookback.
-  // Price within KEY_PROX_PCT of that low = "price is at support".
-  // 1m HL formed there = sellers failed to break below = LONG.
-  if (keyLow && p1m.hl) {
-    const levelAge  = total15m - 1 - keyLow.idx;
-    const proximity = Math.abs(price - keyLow.price) / keyLow.price;
-    const bars1mAge = total1m  - 1 - p1m.hl.idx;
+  // ── LONG: LL established → HL formed after → price returns to HL → 1m HL ──
+  // The 15m HL is the entry level. Price must be within KEY_PROX of that HL.
+  // 1m HL at the same level = final confirmation (buyers defending again).
+  if (longSetup && p1m.hl) {
+    const entryHL   = longSetup.entry;                           // the 15m HL price
+    const levelAge  = total15m - 1 - entryHL.idx;
+    const proximity = Math.abs(price - entryHL.price) / entryHL.price;
+    const bars1mAge = total1m - 1 - p1m.hl.idx;
 
     if (levelAge <= MAX_LEVEL_AGE_15M && proximity <= KEY_PROX_PCT && bars1mAge <= HL_MAX_BARS_1M) {
-      const cdKey = `${sym}_KL_HL_${keyLow.barTs}`;
+      const cdKey = `${sym}_KL_HL_${entryHL.barTs}`;
       if (!cooldowns.has(cdKey)) {
-        longSig = { cdKey, type: 'HL', dir: 'LONG', p15: keyLow, p1: p1m.hl, proximity };
+        longSig = {
+          cdKey, type: 'HL', dir: 'LONG',
+          ref: longSetup.ref,     // LL (structure reference)
+          p15: entryHL,           // HL (entry level)
+          p1:  p1m.hl,            // 1m HL (confirmation)
+          proximity,
+        };
       }
     }
   }
 
-  // If both qualify, take the one whose price is closest to its key level
+  // If both qualify, take the one closest to its entry level
   let chosen = null;
   if (shortSig && longSig) {
     chosen = shortSig.proximity <= longSig.proximity ? shortSig : longSig;
@@ -2215,7 +2252,7 @@ function scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns) {
   }
   if (!chosen) return null;
 
-  const { cdKey, type, dir, p15, p1, proximity } = chosen;
+  const { cdKey, type, dir, ref, p15, p1, proximity } = chosen;
   cooldowns.set(cdKey, now);
 
   const sl   = dir === 'LONG' ? p1.price * (1 - cfg.slPct) : p1.price * (1 + cfg.slPct);
@@ -2231,12 +2268,14 @@ function scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns) {
     name:      cfg.name,
     tf:        '15m+1m',
     iv:        cfg.iv,
-    pattern:   type,
+    pattern:   type,          // 'LH' (short entry) | 'HL' (long entry)
+    structure: dir === 'SHORT' ? 'HH→LH' : 'LL→HL',
     dir,
     side:      dir === 'LONG' ? 'BUY' : 'SELL',
     price,
-    level:     p1.price,
-    keyLevel:  p15.price,
+    level:     p1.price,      // 1m pivot (confirmation level)
+    keyLevel:  p15.price,     // 15m LH/HL (entry level)
+    refLevel:  ref.price,     // 15m HH/LL (structural reference)
     proximity: (proximity * 100).toFixed(3) + '%',
     sl, tp1, tp2,
     lockAt:    lock,
@@ -2248,7 +2287,7 @@ function scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns) {
     pivot1m:   p1.price,
     ltfUsed:   '1m',
     ts:        now,
-    signal:    `${type}(${dir}) KEY_LEVEL | 15m_key=${p15.price.toFixed(4)} prox=${(proximity*100).toFixed(2)}% 1m_piv=${p1.price.toFixed(4)} entry=${price.toFixed(4)} sl=${sl.toFixed(4)} tp1=${tp1.toFixed(4)} tp2=${tp2.toFixed(4)}`,
+    signal:    `${type}(${dir}) ${dir === 'SHORT' ? 'HH' : 'LL'}=${ref.price.toFixed(4)} → ${type}=${p15.price.toFixed(4)} prox=${(proximity*100).toFixed(2)}% 1m=${p1.price.toFixed(4)} entry=${price.toFixed(4)} sl=${sl.toFixed(4)} tp1=${tp1.toFixed(4)}`,
   };
 }
 
