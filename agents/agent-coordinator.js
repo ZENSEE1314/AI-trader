@@ -459,27 +459,18 @@ class AgentCoordinator extends BaseAgent {
       this.policeAgent.run({ coordinator: this }).catch(() => {});
     }
 
-    // 6b. SMC Pro Agent — runs every micro-cycle (has its own 45s internal throttle)
-    if (!this.smcProAgent.paused) {
-      this.smcProAgent.execute({ coordinator: this }).catch(err => {
-        this.addActivity('error', `SMC Pro scan error: ${err.message}`);
-      });
-    }
+    // 6b. SMC Pro Agent — DISABLED: only SMCPatternAgent (15m+1m rule) trades
+    // this.smcProAgent.execute({ coordinator: this }).catch(() => {});
 
-    // 6c. SMC Pattern Agent — backtested HL/LL/LH/HH patterns on 9 tokens
-    // Has its own 30s internal throttle; handles 4H trend filter + cooldowns internally.
+    // 6c. SMC Pattern Agent — SOLE trading engine: 15min HIGH/LOW + 1min HIGH/LOW
     if (!this.smcPatternAgent.paused) {
       this.smcPatternAgent.execute({ coordinator: this }).catch(err => {
         this.addActivity('error', `SMC Pattern scan error: ${err.message}`);
       });
     }
 
-    // 6c. PolyBTC Agent — $5 BTC micro-trade every 15 min based on Polymarket signal
-    if (!this.polyBtcAgent.paused) {
-      this.polyBtcAgent.execute({ coordinator: this }).catch(err => {
-        this.addActivity('error', `PolyBTC trade error: ${err.message}`);
-      });
-    }
+    // 6d. PolyBTC Agent — DISABLED: only SMCPatternAgent trades
+    // this.polyBtcAgent.execute({ coordinator: this }).catch(() => {});
 
     // 7. Agent self-reflection — every 60 micro-cycles (~30 min) one agent reflects
     if (this._microCycleCount % 60 === 0) {
