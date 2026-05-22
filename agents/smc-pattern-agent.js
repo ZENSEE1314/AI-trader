@@ -434,26 +434,65 @@ class SMCPatternAgent extends BaseAgent {
         // ANY low (HL or LL) as most recent pivot → LONG only (never short at a low)
         // ANY high (LH or HH) as most recent pivot → SHORT only (never long at a high)
         // Also capture the pivot BAR TIMESTAMP so Step C can detect when a NEW pivot forms.
+        //
+        // PULLBACK ZONE OVERRIDE:
+        //   Problem: after HH confirms, it becomes the most recent pivot → gate = SHORT.
+        //   But price then pulls BACK toward HL (which hasn't confirmed yet — needs 2 right bars).
+        //   During those 2 minutes the gate still says SHORT and a queued SHORT fires AT the HL.
+        //
+        //   Fix: if price has already dropped ≥0.2% from the last confirmed HIGH in a bullish
+        //   structure (HH + HL pattern), override gate → LONG. We're in the HL-forming zone.
+        //   Mirror logic: if price has bounced ≥0.2% from last confirmed LOW in a bearish
+        //   structure (LL + LH pattern), override gate → SHORT. LH-forming zone.
         let pivotGateDir = null; // 'LONG' | 'SHORT' | null
         let lastPivotTs  = 0;   // ms timestamp of the most recent pivot bar
         if (bars1m && bars1m.length >= 8) {
           const ph = [], pl = [];
           for (let i = 1; i < bars1m.length - 2; i++) {
             if (bars1m[i].h > bars1m[i-1].h && bars1m[i].h > bars1m[i+1].h && bars1m[i].h > bars1m[i+2].h)
-              ph.push({ idx: i, ts: bars1m[i].t || 0 });
+              ph.push({ idx: i, ts: bars1m[i].t || 0, price: bars1m[i].h });
             if (bars1m[i].l < bars1m[i-1].l && bars1m[i].l < bars1m[i+1].l && bars1m[i].l < bars1m[i+2].l)
-              pl.push({ idx: i, ts: bars1m[i].t || 0 });
+              pl.push({ idx: i, ts: bars1m[i].t || 0, price: bars1m[i].l });
           }
           const lastH = ph[ph.length - 1];
           const lastL = pl[pl.length - 1];
+
+          // Pre-compute structure for the pullback-zone override below
+          const gateStruct = classify1mStructure(bars1m);
+          const PULLBACK_THRESHOLD = 0.002; // 0.2% — HL/LH-forming zone
+
           if (lastH && lastL) {
-            // Whichever pivot type is more recent sets the allowed direction
             if (lastL.idx > lastH.idx) {
-              pivotGateDir = 'LONG';
-              lastPivotTs  = lastL.ts;
+              // Last confirmed pivot was a LOW (HL or LL) → normally LONG only
+              // Mirror check: in bearish structure, if price bounced ≥0.2% above the LOW,
+              // a LH is forming — override to SHORT to catch the turn from below.
+              const bouncePct = cur1mPrice > 0
+                ? (cur1mPrice - lastL.price) / lastL.price
+                : 0;
+              if (bouncePct >= PULLBACK_THRESHOLD && gateStruct.bearishStructure && !gateStruct.bullishStructure) {
+                pivotGateDir = 'SHORT'; // LH-forming zone in pure bearish structure
+                lastPivotTs  = lastL.ts;
+                bLog.scan(`[SMC-PAT] Pivot gate ${sym}: price +${(bouncePct*100).toFixed(2)}% above LL → LH-forming SHORT zone`);
+              } else {
+                pivotGateDir = 'LONG';
+                lastPivotTs  = lastL.ts;
+              }
             } else {
-              pivotGateDir = 'SHORT';
-              lastPivotTs  = lastH.ts;
+              // Last confirmed pivot was a HIGH (HH or LH) → normally SHORT only
+              // KEY FIX: in bullish structure, if price pulled back ≥0.2% from the HIGH,
+              // an HL is forming — override to LONG to stop shorting at the dip.
+              const pullbackPct = lastH.price > 0 && cur1mPrice > 0
+                ? (lastH.price - cur1mPrice) / lastH.price
+                : 0;
+              if (pullbackPct >= PULLBACK_THRESHOLD && gateStruct.bullishStructure && !gateStruct.bearishStructure) {
+                pivotGateDir = 'LONG'; // HL-forming zone in pure bullish structure — NO SHORTS
+                lastPivotTs  = lastH.ts;
+                bLog.scan(`[SMC-PAT] Pivot gate ${sym}: price -${(pullbackPct*100).toFixed(2)}% below HH → HL-forming zone, LONG only (no short at dip)`);
+                this.addActivity('skip', `${sym} pivot gate: pulled back ${(pullbackPct*100).toFixed(2)}% from HH → HL zone, SHORT blocked`);
+              } else {
+                pivotGateDir = 'SHORT';
+                lastPivotTs  = lastH.ts;
+              }
             }
           }
         }
