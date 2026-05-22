@@ -2090,29 +2090,25 @@ function scan1mPatterns(sym, bars1m, bars4h, cooldowns = new Map()) {
 // ── scanKeyLevelSignal ────────────────────────────────────────────
 //
 // USER RULE:
-//   HH → LH = SHORT   (HH is the structural top, LH confirms rejection at top)
-//   LL → HL = LONG    (LL is the structural bottom, HL confirms bounce at bottom)
+//   15m pivot HIGH (HH or LH) + 1m pivot HIGH (HH or LH) → SHORT next candle
+//   15m pivot LOW  (LL or HL) + 1m pivot LOW  (LL or HL) → LONG  next candle
 //
-// Structure:
-//   SHORT: 15m must show HH followed by LH (bearish distribution).
-//          Entry is at the LH (the lower high rejecting from HH).
-//          1m LH at that same level confirms → SHORT.
+// "HH or LH" simply means a confirmed swing HIGH on that timeframe.
+// "LL or HL" simply means a confirmed swing LOW  on that timeframe.
+// The type (HH vs LH, LL vs HL) does not matter — both are just "high pivot" or "low pivot".
 //
-//   LONG:  15m must show LL followed by HL (bullish accumulation).
-//          Entry is at the HL (the higher low bouncing off LL).
-//          1m HL at that same level confirms → LONG.
+// Both timeframes must agree on direction:
+//   Both show a recent swing HIGH → sellers in control → SHORT
+//   Both show a recent swing LOW  → buyers in control → LONG
 //
-// The HH/LL is the structural REFERENCE (the extreme).
-// The LH/HL is the ENTRY LEVEL (price comes back, forms lower high / higher low).
+// Cooldown keyed on 15m pivot bar timestamp — each new 15m pivot fires once.
+// 1m pivot must be within last 30 bars (~30 min) to be considered fresh.
 //
-// Pivot detection (1L/2R asymmetric — matches TV SMC Expo indicator):
-//   pivot HIGH: h[i] > h[i-1] AND h[i] > h[i+1] AND h[i] > h[i+2]
-//   pivot LOW : l[i] < l[i-1] AND l[i] < l[i+1] AND l[i] < l[i+2]
+// Pivot detection (1L/2R — matches TV SMC Expo indicator):
+//   HIGH: bars[i].h > bars[i-1].h AND bars[i].h > bars[i+1].h AND bars[i].h > bars[i+2].h
+//   LOW : bars[i].l < bars[i-1].l AND bars[i].l < bars[i+1].l AND bars[i].l < bars[i+2].l
 
-const KEY_PROX_PCT      = 0.005;  // 0.5% proximity — price must be at the LH/HL level
-const MAX_LEVEL_AGE_15M = 32;     // entry level must be within last 32×15m bars (8H)
-const LH_MAX_BARS_1M    = 30;     // 1m LH must be within last 30 bars (~30 min)
-const HL_MAX_BARS_1M    = 30;
+const CONF_BARS_1M = 30; // 1m pivot must be within last 30 bars to count as confirmation
 
 function _allPivots(bars) {
   if (!bars || bars.length < 6) return { ph: [], pl: [] };
@@ -2126,8 +2122,8 @@ function _allPivots(bars) {
   return { ph, pl };
 }
 
+// _lastPivots kept for internal use (1m confirmation helpers still reference it)
 function _lastPivots(bars) {
-  // Last confirmed LH and HL — used for 1m confirmation.
   const { ph, pl } = _allPivots(bars);
   const lastH = ph[ph.length - 1], prevH = ph[ph.length - 2];
   const lastL = pl[pl.length - 1], prevL = pl[pl.length - 2];
@@ -2138,41 +2134,12 @@ function _lastPivots(bars) {
   return { lh, hl };
 }
 
-function _structurePivots(bars) {
-  // Returns the structural setup for HH→LH (SHORT) and LL→HL (LONG).
-  //
-  // SHORT setup: find the highest pivot high (HH = structural top).
-  //   Then find the most recent confirmed LH that formed AFTER the HH.
-  //   Entry is at the LH price — this is where price returns to reject again.
-  //
-  // LONG setup: find the lowest pivot low (LL = structural bottom).
-  //   Then find the most recent confirmed HL that formed AFTER the LL.
-  //   Entry is at the HL price — this is where price returns to bounce again.
-
+function _rawPivots(bars) {
+  // Returns the most recent confirmed swing HIGH and swing LOW (any type — HH/LH or HL/LL).
   const { ph, pl } = _allPivots(bars);
-  if (ph.length < 2 || pl.length < 2) return { shortSetup: null, longSetup: null };
-
-  // ── SHORT: HH → LH ──────────────────────────────────────────
-  // HH = highest confirmed pivot high
-  const hh = ph.reduce((best, p) => p.price > best.price ? p : best);
-  // LH = the most recent pivot high AFTER hh whose price < hh.price
-  // (a lower high — price tried to reach HH again but failed)
-  const lhAfterHH = ph
-    .filter(p => p.idx > hh.idx && p.price < hh.price)
-    .slice(-1)[0] ?? null;
-
-  // ── LONG: LL → HL ──────────────────────────────────────────
-  // LL = lowest confirmed pivot low
-  const ll = pl.reduce((best, p) => p.price < best.price ? p : best);
-  // HL = the most recent pivot low AFTER ll whose price > ll.price
-  // (a higher low — price tried to break LL again but bounced)
-  const hlAfterLL = pl
-    .filter(p => p.idx > ll.idx && p.price > ll.price)
-    .slice(-1)[0] ?? null;
-
   return {
-    shortSetup: lhAfterHH ? { ref: hh, entry: lhAfterHH } : null,
-    longSetup:  hlAfterLL ? { ref: ll, entry: hlAfterLL  } : null,
+    high: ph[ph.length - 1] ?? null,  // last pivot high (HH or LH)
+    low:  pl[pl.length - 1] ?? null,  // last pivot low  (LL or HL)
   };
 }
 
@@ -2183,111 +2150,98 @@ function scanNearestPivotMatch(sym, bars15m, bars1m, bars4h, cooldowns) {
 function scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns) {
   const cfg = TRADING_CONFIG[sym];
   if (!cfg) return null;
-  if (!bars15m || bars15m.length < 10) return null;
-  if (!bars1m  || bars1m.length  < 10) return null;
+  if (!bars15m || bars15m.length < 6) return null;
+  if (!bars1m  || bars1m.length  < 6) return null;
 
-  const { shortSetup, longSetup } = _structurePivots(bars15m);
-  const p1m     = _lastPivots(bars1m);
-  const cur     = bars1m[bars1m.length - 1];
-  const now     = cur.t;
-  const price   = cur.c;
-  const total15m = bars15m.length;
-  const total1m  = bars1m.length;
+  const p15  = _rawPivots(bars15m);
+  const p1   = _rawPivots(bars1m);
+  const cur  = bars1m[bars1m.length - 1];
+  const now  = cur.t;
+  const price = cur.c;
+  const total1m = bars1m.length;
 
   let shortSig = null;
   let longSig  = null;
 
-  // ── SHORT: HH established → LH formed after → price returns to LH → 1m LH ──
-  // The 15m LH is the entry level. Price must be within KEY_PROX of that LH.
-  // 1m LH at the same level = final confirmation (sellers rejecting again).
-  if (shortSetup && p1m.lh) {
-    const entryLH   = shortSetup.entry;                          // the 15m LH price
-    const levelAge  = total15m - 1 - entryLH.idx;
-    const proximity = Math.abs(price - entryLH.price) / entryLH.price;
-    const bars1mAge = total1m - 1 - p1m.lh.idx;
-
-    if (levelAge <= MAX_LEVEL_AGE_15M && proximity <= KEY_PROX_PCT && bars1mAge <= LH_MAX_BARS_1M) {
-      const cdKey = `${sym}_KL_LH_${entryLH.barTs}`;
+  // ── SHORT: 15m pivot HIGH + fresh 1m pivot HIGH ──────────────
+  // Both timeframes show a swing HIGH → sellers in control → SHORT next candle.
+  if (p15.high && p1.high) {
+    const bars1mAge = total1m - 1 - p1.high.idx;  // how many 1m bars ago was the 1m high
+    if (bars1mAge <= CONF_BARS_1M) {
+      const cdKey = `${sym}_KL_HIGH_${p15.high.barTs}`;
       if (!cooldowns.has(cdKey)) {
-        shortSig = {
-          cdKey, type: 'LH', dir: 'SHORT',
-          ref: shortSetup.ref,    // HH (structure reference)
-          p15: entryLH,           // LH (entry level)
-          p1:  p1m.lh,            // 1m LH (confirmation)
-          proximity,
-        };
+        shortSig = { cdKey, dir: 'SHORT', pivot15: p15.high, pivot1m: p1.high };
       }
     }
   }
 
-  // ── LONG: LL established → HL formed after → price returns to HL → 1m HL ──
-  // The 15m HL is the entry level. Price must be within KEY_PROX of that HL.
-  // 1m HL at the same level = final confirmation (buyers defending again).
-  if (longSetup && p1m.hl) {
-    const entryHL   = longSetup.entry;                           // the 15m HL price
-    const levelAge  = total15m - 1 - entryHL.idx;
-    const proximity = Math.abs(price - entryHL.price) / entryHL.price;
-    const bars1mAge = total1m - 1 - p1m.hl.idx;
-
-    if (levelAge <= MAX_LEVEL_AGE_15M && proximity <= KEY_PROX_PCT && bars1mAge <= HL_MAX_BARS_1M) {
-      const cdKey = `${sym}_KL_HL_${entryHL.barTs}`;
+  // ── LONG: 15m pivot LOW + fresh 1m pivot LOW ─────────────────
+  // Both timeframes show a swing LOW → buyers in control → LONG next candle.
+  if (p15.low && p1.low) {
+    const bars1mAge = total1m - 1 - p1.low.idx;
+    if (bars1mAge <= CONF_BARS_1M) {
+      const cdKey = `${sym}_KL_LOW_${p15.low.barTs}`;
       if (!cooldowns.has(cdKey)) {
-        longSig = {
-          cdKey, type: 'HL', dir: 'LONG',
-          ref: longSetup.ref,     // LL (structure reference)
-          p15: entryHL,           // HL (entry level)
-          p1:  p1m.hl,            // 1m HL (confirmation)
-          proximity,
-        };
+        longSig = { cdKey, dir: 'LONG', pivot15: p15.low, pivot1m: p1.low };
       }
     }
   }
 
-  // If both qualify, take the one closest to its entry level
+  // If both qualify, take the one whose 1m pivot is more recent
   let chosen = null;
   if (shortSig && longSig) {
-    chosen = shortSig.proximity <= longSig.proximity ? shortSig : longSig;
+    chosen = p1.high.idx > p1.low.idx ? shortSig : longSig;
   } else {
     chosen = shortSig ?? longSig;
   }
   if (!chosen) return null;
 
-  const { cdKey, type, dir, ref, p15, p1, proximity } = chosen;
+  const { cdKey, dir, pivot15, pivot1m } = chosen;
   cooldowns.set(cdKey, now);
 
-  const sl   = dir === 'LONG' ? p1.price * (1 - cfg.slPct) : p1.price * (1 + cfg.slPct);
-  const tp1  = dir === 'LONG' ? price * (1 + TP1_PCT)      : price * (1 - TP1_PCT);
-  const tp2  = dir === 'LONG' ? price * (1 + TP2_PCT)      : price * (1 - TP2_PCT);
-  const lock = dir === 'LONG' ? price * (1 + LOCK_PCT)     : price * (1 - LOCK_PCT);
+  // Pattern label for logs: detect actual pivot type
+  const { ph: ph15, pl: pl15 } = _allPivots(bars15m);
+  let pattern15 = dir === 'SHORT' ? 'HIGH' : 'LOW';
+  if (dir === 'SHORT' && ph15.length >= 2) {
+    const last = ph15[ph15.length - 1], prev = ph15[ph15.length - 2];
+    pattern15 = last.price > prev.price ? 'HH' : 'LH';
+  }
+  if (dir === 'LONG' && pl15.length >= 2) {
+    const last = pl15[pl15.length - 1], prev = pl15[pl15.length - 2];
+    pattern15 = last.price < prev.price ? 'LL' : 'HL';
+  }
+
+  const sl   = dir === 'LONG' ? pivot1m.price * (1 - cfg.slPct) : pivot1m.price * (1 + cfg.slPct);
+  const tp1  = dir === 'LONG' ? price * (1 + TP1_PCT)           : price * (1 - TP1_PCT);
+  const tp2  = dir === 'LONG' ? price * (1 + TP2_PCT)           : price * (1 - TP2_PCT);
+  const lock = dir === 'LONG' ? price * (1 + LOCK_PCT)          : price * (1 - LOCK_PCT);
 
   let trend = 'UNKNOWN';
   try { trend = classifyTrend(bars4h ?? []); } catch (_) {}
 
   return {
-    symbol:    sym,
-    name:      cfg.name,
-    tf:        '15m+1m',
-    iv:        cfg.iv,
-    pattern:   type,          // 'LH' (short entry) | 'HL' (long entry)
-    structure: dir === 'SHORT' ? 'HH→LH' : 'LL→HL',
+    symbol:   sym,
+    name:     cfg.name,
+    tf:       '15m+1m',
+    iv:       cfg.iv,
+    pattern:  dir === 'SHORT' ? 'LH' : 'HL',  // signal type (for memory/AI keying)
+    pattern15,                                  // actual 15m pivot type: HH/LH or LL/HL
     dir,
-    side:      dir === 'LONG' ? 'BUY' : 'SELL',
+    side:     dir === 'LONG' ? 'BUY' : 'SELL',
     price,
-    level:     p1.price,      // 1m pivot (confirmation level)
-    keyLevel:  p15.price,     // 15m LH/HL (entry level)
-    refLevel:  ref.price,     // 15m HH/LL (structural reference)
-    proximity: (proximity * 100).toFixed(3) + '%',
+    level:    pivot1m.price,
+    keyLevel: pivot15.price,
     sl, tp1, tp2,
-    lockAt:    lock,
-    slPct:     (cfg.slPct * 100).toFixed(2) + '%',
-    tp1Pct:    (TP1_PCT  * 100).toFixed(2) + '%',
-    tp2Pct:    (TP2_PCT  * 100).toFixed(2) + '%',
+    lockAt:   lock,
+    slPct:    (cfg.slPct * 100).toFixed(2) + '%',
+    tp1Pct:   (TP1_PCT  * 100).toFixed(2) + '%',
+    tp2Pct:   (TP2_PCT  * 100).toFixed(2) + '%',
     trend,
-    pivot15m:  p15.price,
-    pivot1m:   p1.price,
-    ltfUsed:   '1m',
-    ts:        now,
-    signal:    `${type}(${dir}) ${dir === 'SHORT' ? 'HH' : 'LL'}=${ref.price.toFixed(4)} → ${type}=${p15.price.toFixed(4)} prox=${(proximity*100).toFixed(2)}% 1m=${p1.price.toFixed(4)} entry=${price.toFixed(4)} sl=${sl.toFixed(4)} tp1=${tp1.toFixed(4)}`,
+    pivot15m: pivot15.price,
+    pivot1m:  pivot1m.price,
+    ltfUsed:  '1m',
+    ts:       now,
+    signal:   `${pattern15}(${dir}) 15m=${pivot15.price.toFixed(4)} + 1m_${dir==='SHORT'?'HIGH':'LOW'}=${pivot1m.price.toFixed(4)} entry=${price.toFixed(4)} sl=${sl.toFixed(4)} tp1=${tp1.toFixed(4)} tp2=${tp2.toFixed(4)}`,
   };
 }
 
