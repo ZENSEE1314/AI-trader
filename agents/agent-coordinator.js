@@ -469,8 +469,12 @@ class AgentCoordinator extends BaseAgent {
       });
     }
 
-    // 6d. PolyBTC Agent — DISABLED: only SMCPatternAgent trades
-    // this.polyBtcAgent.execute({ coordinator: this }).catch(() => {});
+    // 6d. PolyBTC Agent — Polymarket prediction market (separate from futures, keep running)
+    if (!this.polyBtcAgent.paused) {
+      this.polyBtcAgent.execute({ coordinator: this }).catch(err => {
+        this.addActivity('error', `PolyBTC trade error: ${err.message}`);
+      });
+    }
 
     // 7. Agent self-reflection — every 60 micro-cycles (~30 min) one agent reflects
     if (this._microCycleCount % 60 === 0) {
