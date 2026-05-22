@@ -588,9 +588,23 @@ class SMCPatternAgent extends BaseAgent {
         const riskAgent   = context.coordinator.riskAgent;
         const traderAgent = context.coordinator.traderAgent;
 
+        // ── Hard guard: no new trades while ANY position is open ──
+        // Query real DB — both smc-pro and smc-pattern share the same trades table.
+        let openPositions = [];
+        try {
+          const openRows = await query("SELECT symbol, direction FROM trades WHERE status = 'OPEN'");
+          openPositions = openRows.rows.map(r => r.symbol);
+        } catch (_) {}
+
+        if (openPositions.length > 0) {
+          bLog.scan(`[SMC-PAT] BLOCKED — ${openPositions.length} position(s) already open: ${openPositions.join(', ')} — no new trades`);
+          this.addActivity('skip', `No new trades — ${openPositions.length} position(s) open (${openPositions.join(', ')})`);
+          return { ok: true, signals: 0, blocked: 'open_position' };
+        }
+
         let approved = btcFiltered;
         if (riskAgent && !riskAgent.paused) {
-          const riskResult = await riskAgent.run({ signals: btcFiltered, openPositions: [] });
+          const riskResult = await riskAgent.run({ signals: btcFiltered, openPositions });
           approved = riskResult?.approved || btcFiltered;
           bLog.scan(`[SMC-PAT] RiskAgent: ${approved.length}/${btcFiltered.length} approved`);
         }
