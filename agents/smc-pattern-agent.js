@@ -19,6 +19,7 @@
 
 const { BaseAgent }     = require('./base-agent');
 const { log: bLog }     = require('../bot-logger');
+const { query }         = require('../db');
 const {
   fetchCandles,
   TRADING_CONFIG,
@@ -34,6 +35,14 @@ const BARS_1M          = 30;        // 1m bars — need at least 6 for pivot det
 const BARS_3M          = 480;       // 3m bars — 24h of 3min for VWAP
 const SCORE            = 72;        // signal score
 const AGENT_NAME       = 'SMCPatternAgent';
+
+// ── Self-learning thresholds ─────────────────────────────────
+// After MIN_TRADES on a symbol+pattern combo, if win rate drops
+// below WIN_RATE_FLOOR, that combo is blocked (pattern "forgotten").
+// Block is lifted automatically when wins catch up above UNBLOCK_FLOOR.
+const MIN_TRADES       = 5;         // minimum trades before applying filter
+const WIN_RATE_FLOOR   = 0.40;      // < 40% WR → block
+const UNBLOCK_FLOOR    = 0.50;      // ≥ 50% WR → unblock
 
 // ── 1m BMS (Break of Market Structure) detector ──────────────
 // Checks whether the current 1m bar closed above the last confirmed pivot HIGH
@@ -223,6 +232,11 @@ class SMCPatternAgent extends BaseAgent {
     // Used to run checkTradeState per bar and log outcomes.
     this._openTrades   = new Map();
 
+    // Self-learning memory: 'BTCUSDT_LH' → { wins, losses, winRate }
+    // Loaded from DB on start, updated after every trade close.
+    // Blocks patterns with < 40% WR after 5+ trades.
+    this._patternMemory = new Map();
+
     this._profile = {
       description: `Nearest 15min pivot + nearest 1min pivot must match. ` +
                    `Both HL → LONG. Both LH → SHORT. Fires immediately on match. ` +
@@ -245,11 +259,73 @@ class SMCPatternAgent extends BaseAgent {
 
   async init() {
     await super.init();
+    await this._loadPatternMemory();
     this.addActivity('info',
-      `SMC Pattern Agent ready — ${SYMBOLS.length} tokens | HL/LL/LH/HH | 4H trend filter`
+      `SMC Pattern Agent ready — ${SYMBOLS.length} tokens | HL/LH | self-learning active`
     );
     bLog.scan(`[SMC-PAT] Ready — tokens: ${SYMBOLS.join('/')}`);
     bLog.scan(`[SMC-PAT] Per-token TFs: ${SYMBOLS.map(s => `${TRADING_CONFIG[s].name}=${TRADING_CONFIG[s].label}`).join(', ')}`);
+  }
+
+  // ── Pattern memory helpers ─────────────────────────────────
+
+  async _loadPatternMemory() {
+    try {
+      const rows = await query('SELECT symbol, pattern, wins, losses, win_rate FROM smc_pattern_memory');
+      for (const r of rows.rows) {
+        this._patternMemory.set(`${r.symbol}_${r.pattern}`, {
+          wins:    parseInt(r.wins,    10),
+          losses:  parseInt(r.losses,  10),
+          winRate: parseFloat(r.win_rate),
+        });
+      }
+      bLog.scan(`[SMC-PAT] Pattern memory loaded: ${this._patternMemory.size} entries`);
+    } catch (err) {
+      bLog.error(`[SMC-PAT] _loadPatternMemory: ${err.message}`);
+    }
+  }
+
+  // Returns true if the pattern+symbol combo should be blocked.
+  _isPatternBlocked(symbol, pattern) {
+    const mem = this._patternMemory.get(`${symbol}_${pattern}`);
+    if (!mem) return false;
+    const total = mem.wins + mem.losses;
+    if (total < MIN_TRADES) return false;
+    return mem.winRate < WIN_RATE_FLOOR;
+  }
+
+  async _recordOutcome(symbol, pattern, isWin) {
+    const key = `${symbol}_${pattern}`;
+    const mem = this._patternMemory.get(key) ?? { wins: 0, losses: 0, winRate: 0 };
+    if (isWin) mem.wins++;
+    else        mem.losses++;
+    const total = mem.wins + mem.losses;
+    mem.winRate = total > 0 ? mem.wins / total : 0;
+    this._patternMemory.set(key, mem);
+
+    const outcome = isWin ? 'WIN' : 'LOSS';
+    bLog.trade(`[SMC-PAT] Memory update: ${key} → ${outcome} | W=${mem.wins} L=${mem.losses} WR=${(mem.winRate*100).toFixed(0)}%`);
+    if (!isWin && total >= MIN_TRADES && mem.winRate < WIN_RATE_FLOOR) {
+      bLog.trade(`[SMC-PAT] ⚠ BLOCKED: ${key} WR=${(mem.winRate*100).toFixed(0)}% < ${(WIN_RATE_FLOOR*100).toFixed(0)}% threshold`);
+      this.addActivity('warning', `${symbol} ${pattern} BLOCKED — WR=${(mem.winRate*100).toFixed(0)}% (${mem.wins}W/${mem.losses}L)`);
+    } else if (isWin && total >= MIN_TRADES && mem.winRate >= UNBLOCK_FLOOR) {
+      this.addActivity('info', `${symbol} ${pattern} memory: WR=${(mem.winRate*100).toFixed(0)}% (${mem.wins}W/${mem.losses}L)`);
+    }
+
+    try {
+      await query(`
+        INSERT INTO smc_pattern_memory (symbol, pattern, wins, losses, win_rate, last_outcome, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, NOW())
+        ON CONFLICT (symbol, pattern) DO UPDATE
+          SET wins        = EXCLUDED.wins,
+              losses      = EXCLUDED.losses,
+              win_rate    = EXCLUDED.win_rate,
+              last_outcome = EXCLUDED.last_outcome,
+              updated_at  = NOW()
+      `, [symbol, pattern, mem.wins, mem.losses, mem.winRate, outcome]);
+    } catch (err) {
+      bLog.error(`[SMC-PAT] _recordOutcome DB write: ${err.message}`);
+    }
   }
 
   // ── Main execute — called by AgentCoordinator CEO loop ─────
@@ -307,6 +383,14 @@ class SMCPatternAgent extends BaseAgent {
         // Both HL → LONG.  Both LH → SHORT.  Mismatch → no trade.
         const raw = scanNearestPivotMatch(sym, bars15m, bars1m, bars4h, this._cooldowns);
         if (!raw) continue;
+
+        // ── Self-learning gate: block if WR < 40% after 5+ trades ──
+        if (this._isPatternBlocked(sym, raw.pattern)) {
+          const mem = this._patternMemory.get(`${sym}_${raw.pattern}`);
+          bLog.scan(`[SMC-PAT] LEARN-BLOCK: ${sym} ${raw.pattern}(${raw.dir}) WR=${(mem.winRate*100).toFixed(0)}% ${mem.wins}W/${mem.losses}L`);
+          this.addActivity('skip', `${sym} ${raw.pattern}(${raw.dir}) blocked by memory — WR=${(mem.winRate*100).toFixed(0)}%`);
+          continue;
+        }
 
         bLog.scan(`[SMC-PAT] ${sym} MATCH: 15m=${raw.pivot15m?.toFixed(4)} 1m=${raw.pivot1m?.toFixed(4)} type=${raw.pattern} dir=${raw.dir}`);
         const raws = [raw];
@@ -563,11 +647,14 @@ class SMCPatternAgent extends BaseAgent {
 
         if (updated.closed) {
           this._openTrades.delete(key);
-          const pnlSign = updated.exitReason === 'LOSS' ? '🔴' : '🟢';
+          const isWin  = updated.exitReason !== 'LOSS';
+          const pnlSign = isWin ? '🟢' : '🔴';
           const msg = `${pnlSign} ${trade.symbol} ${trade.pattern} → ${updated.exitReason} ` +
                       `exit=${updated.exitPrice?.toFixed(4)}`;
-          this.addActivity(updated.exitReason === 'LOSS' ? 'warning' : 'success', msg);
+          this.addActivity(isWin ? 'success' : 'warning', msg);
           bLog.trade(`[SMC-PAT] CLOSED: ${msg}`);
+          // Feed outcome into self-learning memory (fire-and-forget)
+          this._recordOutcome(trade.symbol, trade.pattern, isWin).catch(() => {});
         } else {
           // Update TP1 flag if hit
           this._openTrades.set(key, updated);

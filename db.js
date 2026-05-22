@@ -1106,6 +1106,25 @@ async function initAllTables() {
     console.log('[DB] v4_config table ready');
   } catch (e) { console.warn('[DB] v4_config init warning:', e.message); }
 
+  // ── SMC pattern self-learning memory ────────────────────────
+  // Persists win/loss outcomes per symbol+pattern so the agent
+  // can stop using patterns that consistently lose.
+  try {
+    await query(`
+      CREATE TABLE IF NOT EXISTS smc_pattern_memory (
+        id         SERIAL PRIMARY KEY,
+        symbol     VARCHAR(30) NOT NULL,
+        pattern    VARCHAR(10) NOT NULL,
+        wins       INTEGER     NOT NULL DEFAULT 0,
+        losses     INTEGER     NOT NULL DEFAULT 0,
+        win_rate   DECIMAL(5,4) NOT NULL DEFAULT 0,
+        last_outcome VARCHAR(10),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE(symbol, pattern)
+      )
+    `);
+  } catch (e) { console.warn('[DB] smc_pattern_memory init warning:', e.message); }
+
   console.log('[DB] All tables verified');
 }
 
