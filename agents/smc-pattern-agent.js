@@ -65,6 +65,39 @@ function detect1mBMS(bars) {
   return null;
 }
 
+// ── 1m structure classifier — used to validate CHoCH signals ─
+// CHoCH is only a valid REVERSAL when it breaks the PRIOR trend:
+//   CHoCH-BEAR (→ SHORT) requires prior BULLISH structure (HH or HL present)
+//   CHoCH-BULL (→ LONG)  requires prior BEARISH structure (LL or LH present)
+// If structure is already trending the same way → continuation, not reversal → skip.
+function classify1mStructure(bars1m) {
+  if (!bars1m || bars1m.length < 12) return { bullishStructure: false, bearishStructure: false };
+
+  const recent = bars1m.slice(-50); // last 50 bars ≈ 50 minutes of context
+  const ph = [], pl = [];
+  for (let i = 1; i < recent.length - 2; i++) {
+    if (recent[i].h > recent[i-1].h && recent[i].h > recent[i+1].h && recent[i].h > recent[i+2].h)
+      ph.push(recent[i].h);
+    if (recent[i].l < recent[i-1].l && recent[i].l < recent[i+1].l && recent[i].l < recent[i+2].l)
+      pl.push(recent[i].l);
+  }
+
+  // HH: last pivot high > second-last pivot high (rising highs)
+  const hasHH = ph.length >= 2 && ph[ph.length - 1] > ph[ph.length - 2];
+  // HL: last pivot low  > second-last pivot low  (rising lows)
+  const hasHL = pl.length >= 2 && pl[pl.length - 1] > pl[pl.length - 2];
+  // LH: last pivot high < second-last pivot high (falling highs)
+  const hasLH = ph.length >= 2 && ph[ph.length - 1] < ph[ph.length - 2];
+  // LL: last pivot low  < second-last pivot low  (falling lows)
+  const hasLL = pl.length >= 2 && pl[pl.length - 1] < pl[pl.length - 2];
+
+  return {
+    hasHH, hasHL, hasLH, hasLL,
+    bullishStructure: hasHH || hasHL, // at least one rising pivot = prior bullish structure
+    bearishStructure: hasLL || hasLH, // at least one falling pivot = prior bearish structure
+  };
+}
+
 // ── Session VWAP + ±1σ bands ─────────────────────────────────
 // Computed from 3m bars (up to 24h of data).
 // Rule: price ≤ lower band → NO LONG (in downtrend territory)
@@ -432,13 +465,31 @@ class SMCPatternAgent extends BaseAgent {
         for (const r of raws) {
           if (r.pattern === 'CHoCH-BULL' || r.pattern === 'CHoCH-BEAR') {
             const chochDir = r.pattern === 'CHoCH-BULL' ? 'LONG' : 'SHORT';
+
+            // ── Structure validation: CHoCH must REVERSE a prior trend ──
+            // CHoCH-BEAR (SHORT) only fires when prior structure had HH or HL (bullish).
+            // CHoCH-BULL (LONG)  only fires when prior structure had LL or LH (bearish).
+            // If structure is PURE bearish (only LL+LH, no HH/HL) → CHoCH-BEAR is just
+            // continuation, not reversal — skip it entirely. Same logic for bull.
+            const struct = classify1mStructure(bars1m);
+            if (chochDir === 'SHORT' && !struct.bullishStructure) {
+              bLog.scan(`[SMC-PAT] CHoCH-BEAR ${sym}: SKIPPED — no HH/HL in structure (pure LL+LH downtrend, not a reversal)`);
+              this.addActivity('skip', `${sym} CHoCH-BEAR skipped — pure LL+LH structure, no bullish trend to break`);
+              continue; // don't set _chochWait — this CHoCH is invalid
+            }
+            if (chochDir === 'LONG' && !struct.bearishStructure) {
+              bLog.scan(`[SMC-PAT] CHoCH-BULL ${sym}: SKIPPED — no LL/LH in structure (pure HH+HL uptrend, not a reversal)`);
+              this.addActivity('skip', `${sym} CHoCH-BULL skipped — pure HH+HL structure, no bearish trend to break`);
+              continue; // don't set _chochWait — this CHoCH is invalid
+            }
+
             const prev = this._chochWait.get(sym);
             if (!prev || prev.dir !== chochDir) {
               // pivotTsAtDetection: the timestamp of the CURRENT most-recent pivot.
               // Step C will only confirm when a pivot with a NEWER timestamp appears,
               // ensuring we waited for a genuine new LH/LL after the CHoCH candle.
               this._chochWait.set(sym, { dir: chochDir, detectedAt: now, pivotTsAtDetection: lastPivotTs });
-              bLog.scan(`[SMC-PAT] CHoCH ${sym}: ${r.pattern} → waiting for ${chochDir === 'LONG' ? 'HL/LL' : 'LH/HH'} (pivotTs=${lastPivotTs})`);
+              bLog.scan(`[SMC-PAT] CHoCH ${sym}: ${r.pattern} → waiting for ${chochDir === 'LONG' ? 'HL/LL' : 'LH/HH'} (pivotTs=${lastPivotTs}) struct=HH${struct.hasHH} HL${struct.hasHL} LL${struct.hasLL} LH${struct.hasLH}`);
               this.addActivity('info', `${sym} ${r.pattern} — waiting for next ${chochDir === 'LONG' ? 'HL or LL' : 'LH or HH'} to fire`);
             }
             // Also reset BMS on CHoCH
