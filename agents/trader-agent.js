@@ -203,7 +203,13 @@ class TraderAgent extends BaseAgent {
               continue;
             }
           }
-        } catch (_) { /* DB unavailable — proceed */ }
+        } catch (dbCheckErr) {
+          // DB unavailable — skip for safety. Cannot verify no open position exists.
+          this.logTrade(`${pick.symbol} DB check failed (${dbCheckErr.message}) — skipping for safety`);
+          this.tradesSkipped++;
+          this.addActivity('skip', `${pick.symbol} DB unavailable — skip to avoid duplicate`);
+          continue;
+        }
 
         // Check post-close cooldown (1 hour per token after any close).
         // Reversal entries bypass this — we WANT to re-enter immediately on structure flip.
