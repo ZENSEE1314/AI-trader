@@ -2019,14 +2019,24 @@ function scan1mPatterns(sym, bars1m, bars4h, cooldowns = new Map()) {
         // Most recent confirmed pivot is a LOW
         if (prevL && lastL.price > prevL.price) {
           structureOnlyDir = 'LONG';  // HL confirmed → only LONG
+        } else if (prevL && lastL.price < prevL.price) {
+          // LL confirmed — LONG only. Never SHORT at a pivot LOW.
+          // CHoCH-BEAR at an LL is just continuation, not reversal; the
+          // agent-level CHoCH validation (requires prior bullish structure) handles
+          // whether to set a wait. But we must not allow a SHORT signal to fire HERE
+          // (price is at the bottom — only bounce/LONG makes sense as an entry).
+          structureOnlyDir = 'LONG';
         }
-        // LL: allow both (could still short on CHoCH-BEAR continuation)
+        // Neither HL nor LL (ambiguous / only one low data point) → null = allow both
       } else {
         // Most recent confirmed pivot is a HIGH
         if (prevH && lastH.price < prevH.price) {
           structureOnlyDir = 'SHORT'; // LH confirmed → only SHORT
+        } else if (prevH && lastH.price > prevH.price) {
+          // HH confirmed — SHORT only. Never LONG at a pivot HIGH.
+          structureOnlyDir = 'SHORT';
         }
-        // HH: allow both (could still long on CHoCH-BULL continuation)
+        // Ambiguous → null = allow both
       }
     }
   }

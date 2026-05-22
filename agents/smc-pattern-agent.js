@@ -568,9 +568,16 @@ class SMCPatternAgent extends BaseAgent {
             bLog.scan(`[SMC-PAT] CHoCH ${sym}: new ${pivotGateDir} pivot (ts=${lastPivotTs} > ${chochWait.pivotTsAtDetection}) — signal firing`);
             this.addActivity('info', `${sym} CHoCH confirmed by new 1m pivot — ${pivotGateDir} signal firing`);
           } else {
-            // Still waiting — override pivotGateDir to only allow the choch direction
-            // (prevents opposite signals while waiting for the confirming pivot)
-            pivotGateDir = chochWait.dir;
+            // Still waiting. Only override the gate if the current pivot AGREES with the
+            // CHoCH direction (or is unknown). If the pivot is in the OPPOSITE direction,
+            // keep it — e.g. CHoCH-BEAR waiting for LH but price just made an LL:
+            // don't force gate → SHORT here or the HTF scan will SHORT right at the bottom.
+            // A CHoCH-BEAR confirmation requires an LH (pivot HIGH), not an LL.
+            if (pivotGateDir === null || pivotGateDir === chochWait.dir) {
+              pivotGateDir = chochWait.dir;
+            } else {
+              bLog.scan(`[SMC-PAT] CHoCH wait ${sym} ${chochWait.dir}: pivot is ${pivotGateDir} (opposite) — not overriding gate, waiting for ${chochWait.dir === 'SHORT' ? 'LH/HH' : 'HL/LL'}`);
+            }
           }
         }
 
