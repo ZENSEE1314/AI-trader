@@ -1,17 +1,18 @@
 // ============================================================
-// SMCPatternAgent — Backtested Pattern Engine (v3)
+// SMCPatternAgent — Nearest-Pivot Match Engine
 //
-// Uses the HL/LL/LH/HH pivot-retest patterns validated across
-// 90 days + Feb–Apr 2025 downtrend on 9 tokens.
+// Signal rule: nearest 15min confirmed pivot + nearest 1min confirmed pivot
+// must be the same type (both HL or both LH).
+//   Both HL → LONG   |   Both LH → SHORT
+//   LL / HH / mismatch → no trade
 //
-// Key characteristics vs SMCProAgent:
-//  · 9 tokens from TRADING_CONFIG (XRP removed — 49% WR)
-//  · Per-token optimal timeframe (15M / 1H / 30M)
-//  · Per-token SL: SOL/DOT/ETH/ADA=0.20%, BTC/AVAX/LTC=0.25%, BNB/LINK=0.30%
-//  · 4H EMA20/50/200 trend filter — asymmetric (SHORT allowed in all trends)
-//  · 2H per-symbol×pattern cooldown (built into scanPatterns)
-//  · TP1=0.5% (close 50%), TP2=1.0% (close 50%), lock at +0.25% after TP1
-//  · Backtest WR: 51–59% per token, avg +$22K/90 days at $100/trade
+// Pivot detection: 1L/2R asymmetric (matches TradingView SMC Expo indicator).
+// Fires immediately on match. SL at 1m pivot level ± per-token slPct.
+//
+// Tokens: 9 from TRADING_CONFIG (XRP removed)
+// Per-token SL: SOL/DOT/ETH/ADA=0.20%, BTC/AVAX/LTC=0.25%, BNB/LINK=0.30%
+// TP1=0.5% (close 50%), TP2=1.0% (close 50%)
+// Filters: 4H EMA trend, 45-min cooldown, VWAP session bands, BMS
 // ============================================================
 
 'use strict';
@@ -21,18 +22,17 @@ const { log: bLog }     = require('../bot-logger');
 const {
   fetchCandles,
   TRADING_CONFIG,
-  scanPatterns,
-  scan1mPatterns,
+  scanNearestPivotMatch,
   checkTradeState,
 } = require('../smc-engine');
 
 // ── Constants ────────────────────────────────────────────────
-const SCAN_INTERVAL_MS = 30_000;    // 30s — catches new closes on all TFs
-const BARS_PATTERN     = 120;       // bars for pattern detection window
-const BARS_4H_TREND    = 250;       // bars for 4H EMA200 (needs 200 minimum)
-const BARS_1M          = 80;        // 1m bars for LTF confirmation (80 min coverage)
-const BARS_3M          = 480;       // 3m bars — 480×3min = 24h session VWAP coverage
-const SCORE            = 72;        // signal score (higher than SMCProAgent's default)
+const SCAN_INTERVAL_MS = 30_000;    // 30s scan cadence
+const BARS_15M         = 60;        // 15min bars — 60 bars = 15h of 15min data
+const BARS_4H_TREND    = 250;       // 4H bars for EMA200 trend
+const BARS_1M          = 30;        // 1m bars — need at least 6 for pivot detection
+const BARS_3M          = 480;       // 3m bars — 24h of 3min for VWAP
+const SCORE            = 72;        // signal score
 const AGENT_NAME       = 'SMCPatternAgent';
 
 // ── 1m BMS (Break of Market Structure) detector ──────────────
@@ -209,16 +209,8 @@ class SMCPatternAgent extends BaseAgent {
     this._btcBiasAt        = 0;
     this._btcTrendFallback = null; // 'BULLISH'|'BEARISH' from BTC's last 4H classifyTrend
 
-    // Cooldown map shared with scanPatterns: 'BTCUSDT_HL' → lastSignalTs
+    // Cooldown map: 'BTCUSDT_NP_HL' → lastSignalTs (45-min, shared with scanNearestPivotMatch)
     this._cooldowns    = new Map();
-
-    // 1m signal pending cache — HL/LH signals are held for one full 1m candle (≥60s)
-    // before being promoted to live signals. This gives one candle of price confirmation:
-    // HL detected → next candle closes bullish → fire LONG
-    // LH detected → next candle closes bearish → fire SHORT
-    // Map: symbol → { raw, queuedAt }
-    this._pending1m    = new Map();
-    this.PENDING_1M_MS = 60_000; // one 1m candle
 
     // BMS (Break of Market Structure) state per symbol.
     // Bullish BMS (close above last swing high) → block all SHORTs.
@@ -232,14 +224,14 @@ class SMCPatternAgent extends BaseAgent {
     this._openTrades   = new Map();
 
     this._profile = {
-      description: `15min HL/LH patterns with 1min same-direction confirmation. ` +
-                   `HL+1mHL → LONG next candle. LH+1mLH → SHORT next candle. ` +
+      description: `Nearest 15min pivot + nearest 1min pivot must match. ` +
+                   `Both HL → LONG. Both LH → SHORT. Fires immediately on match. ` +
                    `4H trend filter. Per-token SL (0.20–0.30%).`,
       role:   'Pattern Engine Trader',
       icon:   'pattern',
       skills: [
-        { id: 'hl', name: 'HL (Higher Low)',  description: '15min HL + 1min HL confirmation → LONG on next 1min candle', enabled: true },
-        { id: 'lh', name: 'LH (Lower High)', description: '15min LH + 1min LH confirmation → SHORT on next 1min candle', enabled: true },
+        { id: 'hl', name: 'HL (Higher Low)',  description: 'Nearest 15min HL + nearest 1min HL → LONG', enabled: true },
+        { id: 'lh', name: 'LH (Lower High)', description: 'Nearest 15min LH + nearest 1min LH → SHORT', enabled: true },
         { id: 'trend',   name: '4H Trend Filter', description: 'EMA20/50/200 — gates direction alignment', enabled: true },
         { id: 'cooldown',name: '2H Cooldown',     description: 'Skip repeated signals on same sym×pattern within 2 hours', enabled: true },
       ],
@@ -282,209 +274,59 @@ class SMCPatternAgent extends BaseAgent {
       try {
         const cfg = TRADING_CONFIG[sym];
 
-        // Parallel fetch: pattern TF + 4H trend + 1m LTF + 3m LTF fallback
-        const [patBars, bars4h, bars1m, bars3m] = await Promise.all([
-          fetchCandles(sym, cfg.iv,      BARS_PATTERN),
+        // Parallel fetch: 15m + 4H trend + 1m + 3m VWAP
+        const [bars15m, bars4h, bars1m, bars3m] = await Promise.all([
+          fetchCandles(sym, '15',        BARS_15M),
           fetchCandles(sym, INTERVAL_4H, BARS_4H_TREND),
           fetchCandles(sym, '1',         BARS_1M),
           fetchCandles(sym, INTERVAL_3M, BARS_3M),
         ]);
 
-        if (!patBars || patBars.length < 70) continue;
-        if (!bars4h  || bars4h.length  < 210) continue;
+        if (!bars15m || bars15m.length < 10) continue;
+        if (!bars4h  || bars4h.length  < 50) continue;
+        if (!bars1m  || bars1m.length  <  6) continue;
 
-        // LTF cascade: prefer 1m, fall back to 3m, fall back to pattern-only
-        const LTF_WINDOW = 40;
-        const valid1m = bars1m?.length >= LTF_WINDOW ? bars1m : null;
-        const valid3m = bars3m?.length >= LTF_WINDOW ? bars3m : null;
+        bLog.scan(`[SMC-PAT] ${sym}: 15m=${bars15m.length} 1m=${bars1m.length}`);
 
-        const ltfTag = valid1m ? '1m' : valid3m ? '3m' : '15m-only';
-        bLog.scan(`[SMC-PAT] ${sym}: LTF=${ltfTag} (1m=${bars1m?.length ?? 0} 3m=${bars3m?.length ?? 0})`);
-
-        // ── BMS state update ──────────────────────────────────────
-        // Detect whether current 1m bar closed above/below last swing level.
-        // Bullish BMS → block shorts.  Bearish BMS → block longs.
-        // State persists until opposite CHoCH fires or expires after 2h.
-        if (bars1m && bars1m.length >= 10) {
+        // ── BMS state update ─────────────────────────────────────────
+        if (bars1m.length >= 10) {
           const bms = detect1mBMS(bars1m);
           if (bms) {
             const prev = this._bmsState.get(sym);
             if (!prev || prev.dir !== bms) {
               this._bmsState.set(sym, { dir: bms, detectedAt: now });
-              bLog.scan(`[SMC-PAT] BMS ${sym}: ${bms} — ${bms === 'BULLISH' ? 'no SHORT' : 'no LONG'}`);
+              bLog.scan(`[SMC-PAT] BMS ${sym}: ${bms}`);
               this.addActivity('info', `${sym} BMS ${bms} — ${bms === 'BULLISH' ? 'shorts blocked' : 'longs blocked'}`);
             }
           }
-          // Expire BMS state after 2h (structure has had time to reset)
           const cur = this._bmsState.get(sym);
-          if (cur && now - cur.detectedAt > 2 * 60 * 60_000) {
-            this._bmsState.delete(sym);
-          }
+          if (cur && now - cur.detectedAt > 2 * 60 * 60_000) this._bmsState.delete(sym);
         }
 
-        // ── Scan 1: HTF primary (15m/30m/1H) + LTF confirmation ───
-        const raw = scanPatterns(sym, patBars, bars4h, this._cooldowns, valid1m, valid3m);
+        // ── Core signal: nearest 15m pivot + nearest 1m pivot must match ──
+        // Both HL → LONG.  Both LH → SHORT.  Mismatch → no trade.
+        const raw = scanNearestPivotMatch(sym, bars15m, bars1m, bars4h, this._cooldowns);
+        if (!raw) continue;
 
-        // ── Scan 2: 1m PRIMARY — BMS/CHoCH/LH/HL on 1m directly ──
-        // This catches what the TradingView SMC indicator shows:
-        //   CHoCH-BULL / CHoCH-BEAR = reversal → fire immediately (body already confirms)
-        //   HL / LH / LL / HH       = structure → 3-candle confirmation flow:
-        //
-        //   Candle 1: HL detected by scan1mPatterns → QUEUE, do not fire
-        //   Candle 2: check current price vs stored HL level (scan cooldown blocks re-detect):
-        //     · Price still at level (≤0.3% from HL) → CONFIRM, still don't fire
-        //     · Price moved away (>0.3% from HL)     → fire immediately (candle 2 FIRE)
-        //   Candle 3: always fire after candle 2 confirmed
-        const rawDetected1m = valid1m ? scan1mPatterns(sym, valid1m, bars4h, this._cooldowns) : null;
-        let raw1m = null;
+        bLog.scan(`[SMC-PAT] ${sym} MATCH: 15m=${raw.pivot15m?.toFixed(4)} 1m=${raw.pivot1m?.toFixed(4)} type=${raw.pattern} dir=${raw.dir}`);
+        const raws = [raw];
 
-        // Current 1m close — used for candle-2 price check (bypasses cooldown issue)
-        const cur1mPrice = bars1m?.[bars1m.length - 1]?.c;
-
-        // ── Step 1: Advance any existing pending signal ──────────────
-        const pend = this._pending1m.get(sym);
-        if (pend) {
-          const age = now - pend.queuedAt;
-
-          if (pend.state === 'confirmed') {
-            // Candle 3: confirmed last scan → fire now
-            raw1m = { ...pend.raw, price: cur1mPrice ?? pend.raw.price };
-            this._pending1m.delete(sym);
-            bLog.scan(`[SMC-PAT] 1m ${sym} ${pend.raw.pattern}(${pend.raw.dir}) candle-3 FIRE`);
-            this.addActivity('trade', `${sym} ${pend.raw.pattern}(${pend.raw.dir}) — candle 3 FIRE`);
-
-          } else if (pend.state === 'pending' && age >= this.PENDING_1M_MS) {
-            // Candle 2: one full candle elapsed — check if price still at level
-            // scan1mPatterns has a 10-min cooldown so we check price directly here.
-            const level = pend.raw.level;
-            const TOL   = 0.003; // 0.3% — within 1 SL of the pivot level
-            const stillAtLevel = pend.raw.dir === 'LONG'
-              ? cur1mPrice <= level * (1 + TOL)   // hasn't bounced far yet
-              : cur1mPrice >= level * (1 - TOL);  // hasn't dropped far yet
-
-            if (stillAtLevel) {
-              // Price still near the HL/LH level → confirmed, fire on candle 3
-              this._pending1m.set(sym, { ...pend, state: 'confirmed', confirmedAt: now });
-              const pct = (((cur1mPrice / level) - 1) * 100).toFixed(2);
-              bLog.scan(`[SMC-PAT] 1m ${sym} ${pend.raw.pattern}(${pend.raw.dir}) candle-2 CONFIRMED (price ${pct}% from level) — fire next`);
-              this.addActivity('info', `${sym} ${pend.raw.pattern} candle 2 confirmed — firing next candle`);
-            } else {
-              // Price moved away from the level — HL/LH is now in the past, fire immediately
-              raw1m = { ...pend.raw, price: cur1mPrice ?? pend.raw.price };
-              this._pending1m.delete(sym);
-              const pct = (((cur1mPrice / level) - 1) * 100).toFixed(2);
-              bLog.scan(`[SMC-PAT] 1m ${sym} ${pend.raw.pattern}(${pend.raw.dir}) candle-2 FIRE (price moved ${pct}%)`);
-              this.addActivity('trade', `${sym} ${pend.raw.pattern}(${pend.raw.dir}) — candle 2 FIRE (not at level, price moved)`);
-            }
-
-          } else if (age > 3 * 60_000) {
-            // Stale — no follow-through in 3 min → expire
-            this._pending1m.delete(sym);
-            bLog.scan(`[SMC-PAT] 1m ${sym} ${pend.raw.pattern} pending expired (3 min no follow-through)`);
-            this.addActivity('skip', `${sym} ${pend.raw.pattern} pending expired — no follow-through`);
-          }
-        }
-
-        // ── Step 2: Queue new 1m detections (only if no pending firing this cycle) ──
-        if (!raw1m && rawDetected1m) {
-          const isStructureEntry = rawDetected1m.pattern === 'HL' || rawDetected1m.pattern === 'LH' ||
-                                   rawDetected1m.pattern === 'LL' || rawDetected1m.pattern === 'HH';
-          if (isStructureEntry && !this._pending1m.has(sym)) {
-            // Candle 1: queue — never fire structure entries immediately
-            this._pending1m.set(sym, { raw: rawDetected1m, queuedAt: now, state: 'pending' });
-            bLog.scan(`[SMC-PAT] 1m ${sym} ${rawDetected1m.pattern}(${rawDetected1m.dir}) candle-1 queued`);
-            this.addActivity('info', `${sym} ${rawDetected1m.pattern}(${rawDetected1m.dir}) — candle 1 queued`);
-          } else if (!isStructureEntry) {
-            // CHoCH: fire immediately — rejection candle body already confirms direction
-            raw1m = rawDetected1m;
-            this._pending1m.delete(sym);
-          }
-        }
-
-        // Process both signals — 1m primary first (highest precision), then HTF
-        const raws = [raw1m, raw].filter(Boolean);
-        if (!raws.length) continue;
-
-        // ── 1m pivot gate — applied to ALL signals (1m + HTF) ─────
-        // ════════════════════════════════════════════════════════
-        // HARD SIGNAL RULES (applied to ALL signals — 1m + HTF):
-        //
-        //   HL → LONG only    LL → LONG only
-        //   LH → SHORT only   HH → SHORT only
-        //
-        //   CHoCH-BULL → set _chochWait=LONG, do NOT fire immediately
-        //                fire when next HL or LL forms on 1m
-        //   CHoCH-BEAR → set _chochWait=SHORT, do NOT fire immediately
-        //                fire when next LH or HH forms on 1m
-        //
-        //   BMS BULLISH (close above last swing high) → no SHORTs
-        //   BMS BEARISH (close below last swing low)  → no LONGs
-        // ════════════════════════════════════════════════════════
-
-        // ── Step A: Compute 1m pivot direction (1L/2R, matches TV indicator) ──
-        // ANY low (HL or LL) as most recent pivot → LONG only (never short at a low)
-        // ANY high (LH or HH) as most recent pivot → SHORT only (never long at a high)
-        // Also capture the pivot BAR TIMESTAMP so Step C can detect when a NEW pivot forms.
-        //
-        // PULLBACK ZONE OVERRIDE:
-        //   Problem: after HH confirms, it becomes the most recent pivot → gate = SHORT.
-        //   But price then pulls BACK toward HL (which hasn't confirmed yet — needs 2 right bars).
-        //   During those 2 minutes the gate still says SHORT and a queued SHORT fires AT the HL.
-        //
-        //   Fix: if price has already dropped ≥0.2% from the last confirmed HIGH in a bullish
-        //   structure (HH + HL pattern), override gate → LONG. We're in the HL-forming zone.
-        //   Mirror logic: if price has bounced ≥0.2% from last confirmed LOW in a bearish
-        //   structure (LL + LH pattern), override gate → SHORT. LH-forming zone.
-        let pivotGateDir = null; // 'LONG' | 'SHORT' | null
-        let lastPivotTs  = 0;   // ms timestamp of the most recent pivot bar
-        if (bars1m && bars1m.length >= 8) {
+        // ── 1m pivot gate — last confirmed 1m pivot must agree with signal direction ──
+        // Last pivot LOW (HL) → LONG only.  Last pivot HIGH (LH) → SHORT only.
+        // scanNearestPivotMatch already checked this (both TFs match), but the gate
+        // acts as a final safety check using the raw 1m bar data.
+        let pivotGateDir = null;
+        if (bars1m.length >= 6) {
           const ph = [], pl = [];
           for (let i = 1; i < bars1m.length - 2; i++) {
             if (bars1m[i].h > bars1m[i-1].h && bars1m[i].h > bars1m[i+1].h && bars1m[i].h > bars1m[i+2].h)
-              ph.push({ idx: i, ts: bars1m[i].t || 0, price: bars1m[i].h });
+              ph.push({ idx: i, price: bars1m[i].h });
             if (bars1m[i].l < bars1m[i-1].l && bars1m[i].l < bars1m[i+1].l && bars1m[i].l < bars1m[i+2].l)
-              pl.push({ idx: i, ts: bars1m[i].t || 0, price: bars1m[i].l });
+              pl.push({ idx: i, price: bars1m[i].l });
           }
-          const lastH = ph[ph.length - 1];
-          const lastL = pl[pl.length - 1];
-
-          // Pre-compute structure for the pullback-zone override below
-          const gateStruct = classify1mStructure(bars1m);
-          const PULLBACK_THRESHOLD = 0.002; // 0.2% — HL/LH-forming zone
-
+          const lastH = ph[ph.length - 1], lastL = pl[pl.length - 1];
           if (lastH && lastL) {
-            if (lastL.idx > lastH.idx) {
-              // Last confirmed pivot was a LOW (HL or LL) → normally LONG only
-              // Mirror check: in bearish structure, if price bounced ≥0.2% above the LOW,
-              // a LH is forming — override to SHORT to catch the turn from below.
-              const bouncePct = cur1mPrice > 0
-                ? (cur1mPrice - lastL.price) / lastL.price
-                : 0;
-              if (bouncePct >= PULLBACK_THRESHOLD && gateStruct.bearishStructure && !gateStruct.bullishStructure) {
-                pivotGateDir = 'SHORT'; // LH-forming zone in pure bearish structure
-                lastPivotTs  = lastL.ts;
-                bLog.scan(`[SMC-PAT] Pivot gate ${sym}: price +${(bouncePct*100).toFixed(2)}% above LL → LH-forming SHORT zone`);
-              } else {
-                pivotGateDir = 'LONG';
-                lastPivotTs  = lastL.ts;
-              }
-            } else {
-              // Last confirmed pivot was a HIGH (HH or LH) → normally SHORT only
-              // KEY FIX: in bullish structure, if price pulled back ≥0.2% from the HIGH,
-              // an HL is forming — override to LONG to stop shorting at the dip.
-              const pullbackPct = lastH.price > 0 && cur1mPrice > 0
-                ? (lastH.price - cur1mPrice) / lastH.price
-                : 0;
-              if (pullbackPct >= PULLBACK_THRESHOLD && gateStruct.bullishStructure && !gateStruct.bearishStructure) {
-                pivotGateDir = 'LONG'; // HL-forming zone in pure bullish structure — NO SHORTS
-                lastPivotTs  = lastH.ts;
-                bLog.scan(`[SMC-PAT] Pivot gate ${sym}: price -${(pullbackPct*100).toFixed(2)}% below HH → HL-forming zone, LONG only (no short at dip)`);
-                this.addActivity('skip', `${sym} pivot gate: pulled back ${(pullbackPct*100).toFixed(2)}% from HH → HL zone, SHORT blocked`);
-              } else {
-                pivotGateDir = 'SHORT';
-                lastPivotTs  = lastH.ts;
-              }
-            }
+            pivotGateDir = lastL.idx > lastH.idx ? 'LONG' : 'SHORT';
           }
         }
 
