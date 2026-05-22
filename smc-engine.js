@@ -2088,108 +2088,136 @@ function scan1mPatterns(sym, bars1m, bars4h, cooldowns = new Map()) {
 // ── Exports ──────────────────────────────────────────────────
 
 // ── scanNearestPivotMatch ─────────────────────────────────────────
-// Core signal rule (user): nearest 15min pivot + nearest 1min pivot must match.
-//   Both HL → LONG   Both LH → SHORT   LL/HH → no trade
+// Core signal rule: last 15min pivot + last 1min pivot of the same type → fire.
+//   Both HL → LONG   Both LH → SHORT
 //
-// Uses 1L/2R asymmetric pivots (same as TV SMC Expo indicator) on both TFs.
-// Fires immediately when match is confirmed — no extra waiting needed since
-// both pivots are already confirmed by definition (1L/2R confirmation).
+// KEY CHANGE from v1: we track the LAST LH and LAST HL on each TF separately.
+// The old _nearestPivot returned only the single most-recent pivot — so when a
+// 15min LH confirmed (2R = 30min wait) and a new 1min HL had already formed,
+// the type comparison failed and the SHORT never fired.
 //
-// Pivot detection: bar[i] is a pivot HIGH when h[i] > h[i-1] AND h[i] > h[i+1] AND h[i] > h[i+2]
-//                 bar[i] is a pivot LOW  when l[i] < l[i-1] AND l[i] < l[i+1] AND l[i] < l[i+2]
-// Then: HL = rising low (lastLow > prevLow), LH = falling high (lastHigh < prevHigh)
+// Now: _lastPivots returns { lh, hl } each with { price, idx, barTs }.
+// Cooldowns are keyed on the 15min pivot's bar timestamp so each new 15min
+// pivot fires exactly once regardless of what formed after it.
+// No 4H trend gate — the HL/LH pattern IS the signal.
+//
+// Pivot detection (1L/2R asymmetric — matches TV SMC Expo indicator):
+//   pivot HIGH: h[i] > h[i-1] AND h[i] > h[i+1] AND h[i] > h[i+2]
+//   pivot LOW : l[i] < l[i-1] AND l[i] < l[i+1] AND l[i] < l[i+2]
+//   HL = rising low  (lastLow  > prevLow)
+//   LH = falling high (lastHigh < prevHigh)
 
-function _nearestPivot(bars) {
-  // Returns { type: 'HL'|'LH', pivotPrice } for the most recent confirmed pivot, or null.
-  if (!bars || bars.length < 6) return null;
+const LH_MAX_BARS_1M = 30; // 1m LH must be within the last 30 bars (~30 min)
+const HL_MAX_BARS_1M = 30; // 1m HL must be within the last 30 bars
+
+function _lastPivots(bars) {
+  // Returns { lh: { price, idx, barTs }|null, hl: { price, idx, barTs }|null }
+  if (!bars || bars.length < 6) return { lh: null, hl: null };
   const ph = [], pl = [];
-  // 1L/2R asymmetric — matches TV indicator
   for (let i = 1; i < bars.length - 2; i++) {
     if (bars[i].h > bars[i-1].h && bars[i].h > bars[i+1].h && bars[i].h > bars[i+2].h)
-      ph.push({ idx: i, price: bars[i].h });
+      ph.push({ idx: i, price: bars[i].h, barTs: bars[i].t });
     if (bars[i].l < bars[i-1].l && bars[i].l < bars[i+1].l && bars[i].l < bars[i+2].l)
-      pl.push({ idx: i, price: bars[i].l });
+      pl.push({ idx: i, price: bars[i].l, barTs: bars[i].t });
   }
   const lastH = ph[ph.length - 1], prevH = ph[ph.length - 2];
   const lastL = pl[pl.length - 1], prevL = pl[pl.length - 2];
-  if (!lastH || !lastL || !prevH || !prevL) return null;
 
-  if (lastL.idx > lastH.idx) {
-    // Most recent pivot is a LOW
-    return lastL.price > prevL.price ? { type: 'HL', pivotPrice: lastL.price } : null; // HL only, skip LL
-  } else {
-    // Most recent pivot is a HIGH
-    return lastH.price < prevH.price ? { type: 'LH', pivotPrice: lastH.price } : null; // LH only, skip HH
-  }
+  const lh = (lastH && prevH && lastH.price < prevH.price)
+    ? { price: lastH.price, idx: lastH.idx, barTs: lastH.barTs }
+    : null;
+  const hl = (lastL && prevL && lastL.price > prevL.price)
+    ? { price: lastL.price, idx: lastL.idx, barTs: lastL.barTs }
+    : null;
+
+  return { lh, hl };
 }
 
 function scanNearestPivotMatch(sym, bars15m, bars1m, bars4h, cooldowns) {
   const cfg = TRADING_CONFIG[sym];
   if (!cfg) return null;
   if (!bars15m || bars15m.length < 10) return null;
-  if (!bars1m  || bars1m.length  <  6) return null;
-  if (!bars4h  || bars4h.length  < 50) return null;
+  if (!bars1m  || bars1m.length  < 10) return null;
 
-  const p15m = _nearestPivot(bars15m);
-  const p1m  = _nearestPivot(bars1m);
+  const p15m = _lastPivots(bars15m);
+  const p1m  = _lastPivots(bars1m);
 
-  // Both timeframes must have the same pivot type
-  if (!p15m || !p1m)             return null;
-  if (p15m.type !== p1m.type)    return null;
-
-  const dir = p15m.type === 'HL' ? 'LONG' : 'SHORT';
-  const cur  = bars1m[bars1m.length - 1];
-  const now  = cur.t;
+  const cur   = bars1m[bars1m.length - 1];
+  const now   = cur.t;
   const price = cur.c;
+  const total1m = bars1m.length;
 
-  // 45-min cooldown per symbol+direction (same as PAT_CD)
-  const cdKey = `${sym}_NP_${p15m.type}`;
-  if (cooldowns.has(cdKey) && now - cooldowns.get(cdKey) < PAT_CD) return null;
+  // Check SHORT: 15m LH + recent 1m LH
+  let shortSig = null;
+  if (p15m.lh && p1m.lh) {
+    const bars1mAge = total1m - 1 - p1m.lh.idx; // bars since 1m LH confirmed
+    if (bars1mAge <= LH_MAX_BARS_1M) {
+      const cdKey = `${sym}_NP_LH_${p15m.lh.barTs}`;
+      if (!cooldowns.has(cdKey)) {
+        shortSig = { cdKey, type: 'LH', dir: 'SHORT', p15: p15m.lh, p1: p1m.lh };
+      }
+    }
+  }
 
-  // 4H trend alignment
-  const trend = classifyTrend(bars4h);
-  let fibZones = null;
-  try {
-    const s4h = analyzeStructure(bars4h, 5, 3);
-    const fz  = calcFibZones(s4h.swingHigh, s4h.swingLow);
-    if (fz) fibZones = fz;
-  } catch (_) {}
-  if (!isTrendAligned(trend, dir, fibZones, price)) return null;
+  // Check LONG: 15m HL + recent 1m HL
+  let longSig = null;
+  if (p15m.hl && p1m.hl) {
+    const bars1mAge = total1m - 1 - p1m.hl.idx;
+    if (bars1mAge <= HL_MAX_BARS_1M) {
+      const cdKey = `${sym}_NP_HL_${p15m.hl.barTs}`;
+      if (!cooldowns.has(cdKey)) {
+        longSig = { cdKey, type: 'HL', dir: 'LONG', p15: p15m.hl, p1: p1m.hl };
+      }
+    }
+  }
 
+  // If both fire, take the one whose 1m pivot is more recent
+  let chosen = null;
+  if (shortSig && longSig) {
+    chosen = p1m.lh.idx > p1m.hl.idx ? shortSig : longSig;
+  } else {
+    chosen = shortSig ?? longSig;
+  }
+  if (!chosen) return null;
+
+  const { cdKey, type, dir, p15, p1 } = chosen;
   cooldowns.set(cdKey, now);
 
-  // SL at the 1m pivot level ± per-token slPct
   const sl   = dir === 'LONG'
-    ? p1m.pivotPrice * (1 - cfg.slPct)
-    : p1m.pivotPrice * (1 + cfg.slPct);
+    ? p1.price * (1 - cfg.slPct)
+    : p1.price * (1 + cfg.slPct);
   const tp1  = dir === 'LONG' ? price * (1 + TP1_PCT) : price * (1 - TP1_PCT);
   const tp2  = dir === 'LONG' ? price * (1 + TP2_PCT) : price * (1 - TP2_PCT);
   const lock = dir === 'LONG' ? price * (1 + LOCK_PCT) : price * (1 - LOCK_PCT);
 
+  // NOTE: 4H trend gate removed — HL/LH pattern is the signal regardless of trend.
+  // Trend is still logged for information.
+  let trend = 'UNKNOWN';
+  try { trend = classifyTrend(bars4h ?? []); } catch (_) {}
+
   return {
-    symbol:  sym,
-    name:    cfg.name,
-    tf:      '15m+1m',
-    iv:      cfg.iv,
-    pattern: p15m.type,          // 'HL' | 'LH'
+    symbol:   sym,
+    name:     cfg.name,
+    tf:       '15m+1m',
+    iv:       cfg.iv,
+    pattern:  type,
     dir,
-    side:    dir === 'LONG' ? 'BUY' : 'SELL',
+    side:     dir === 'LONG' ? 'BUY' : 'SELL',
     price,
-    level:   p1m.pivotPrice,     // 1m pivot level (SL reference)
+    level:    p1.price,
     sl,
     tp1,
     tp2,
-    lockAt:  lock,
-    slPct:   (cfg.slPct * 100).toFixed(2) + '%',
-    tp1Pct:  (TP1_PCT  * 100).toFixed(2) + '%',
-    tp2Pct:  (TP2_PCT  * 100).toFixed(2) + '%',
+    lockAt:   lock,
+    slPct:    (cfg.slPct * 100).toFixed(2) + '%',
+    tp1Pct:   (TP1_PCT  * 100).toFixed(2) + '%',
+    tp2Pct:   (TP2_PCT  * 100).toFixed(2) + '%',
     trend,
-    fib50:   fibZones?.p500 ?? null,
-    pivot15m: p15m.pivotPrice,   // for logging
-    pivot1m:  p1m.pivotPrice,    // for logging
-    ltfUsed: '1m',
-    ts:      now,
-    signal:  `${p15m.type}(${dir}) 15m+1m nearest-pivot | 15m=${p15m.pivotPrice.toFixed(4)} 1m=${p1m.pivotPrice.toFixed(4)} entry=${price.toFixed(4)} sl=${sl.toFixed(4)} tp1=${tp1.toFixed(4)} tp2=${tp2.toFixed(4)}`,
+    pivot15m: p15.price,
+    pivot1m:  p1.price,
+    ltfUsed:  '1m',
+    ts:       now,
+    signal:   `${type}(${dir}) 15m+1m | 15m=${p15.price.toFixed(4)} 1m=${p1.price.toFixed(4)} entry=${price.toFixed(4)} sl=${sl.toFixed(4)} tp1=${tp1.toFixed(4)} tp2=${tp2.toFixed(4)}`,
   };
 }
 

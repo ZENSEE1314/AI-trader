@@ -311,41 +311,11 @@ class SMCPatternAgent extends BaseAgent {
         bLog.scan(`[SMC-PAT] ${sym} MATCH: 15m=${raw.pivot15m?.toFixed(4)} 1m=${raw.pivot1m?.toFixed(4)} type=${raw.pattern} dir=${raw.dir}`);
         const raws = [raw];
 
-        // ── 1m pivot gate — last confirmed 1m pivot must agree with signal direction ──
-        // Last pivot LOW (HL) → LONG only.  Last pivot HIGH (LH) → SHORT only.
-        // scanNearestPivotMatch already checked this (both TFs match), but the gate
-        // acts as a final safety check using the raw 1m bar data.
-        let pivotGateDir = null;
-        if (bars1m.length >= 6) {
-          const ph = [], pl = [];
-          for (let i = 1; i < bars1m.length - 2; i++) {
-            if (bars1m[i].h > bars1m[i-1].h && bars1m[i].h > bars1m[i+1].h && bars1m[i].h > bars1m[i+2].h)
-              ph.push({ idx: i, price: bars1m[i].h });
-            if (bars1m[i].l < bars1m[i-1].l && bars1m[i].l < bars1m[i+1].l && bars1m[i].l < bars1m[i+2].l)
-              pl.push({ idx: i, price: bars1m[i].l });
-          }
-          const lastH = ph[ph.length - 1], lastL = pl[pl.length - 1];
-          if (lastH && lastL) {
-            pivotGateDir = lastL.idx > lastH.idx ? 'LONG' : 'SHORT';
-          }
-        }
-
-        // ── Step B: Pivot gate — only HL (LONG) and LH (SHORT), CHoCH removed ──
-        // 15min HL + 1min HL → LONG   |   15min LH + 1min LH → SHORT
-        // Last confirmed 1m pivot LOW → LONG only. HIGH → SHORT only.
-        const pivotGated = pivotGateDir
-          ? raws.filter(r => {
-              if (r.dir !== pivotGateDir) {
-                const label = pivotGateDir === 'LONG' ? 'LOW(HL)' : 'HIGH(LH)';
-                bLog.scan(`[SMC-PAT] Pivot gate: ${sym} ${r.pattern}(${r.dir}) blocked — 1m ${label} is current pivot`);
-                this.addActivity('skip', `${sym} ${r.pattern}(${r.dir}) blocked — pivot is ${label}`);
-                return false;
-              }
-              return true;
-            })
-          : raws;
-
-        if (!pivotGated.length) continue;
+        // NOTE: Pivot gate removed — scanNearestPivotMatch already verifies the
+        // 1m LH/HL was formed within the last 30 bars. Adding a second gate here
+        // caused SHORTs to be blocked when a new 1m HL formed after the 1m LH
+        // (price bounced during the 30-min 15m confirmation delay).
+        const pivotGated = raws;
 
         // ── Step E: VWAP session filter ───────────────────────────
         // price ≤ lower band → NO LONG   price ≥ upper band → NO SHORT
