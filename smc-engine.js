@@ -1649,18 +1649,15 @@ function scanPatterns(sym, patBars, bars4h, cooldowns = new Map(), bars1m = null
   const inPremium = fib50 !== null && price >= fib50;
   const shortFirst = trend === 'DOWN' || (trend === 'NEUTRAL' && inPremium);
 
+  // Only HL (LONG) and LH (SHORT) — user rule: no LL bounce trades, no HH fade trades.
   const detectors = shortFirst
     ? [
         { key: 'LH', fn: detectLH },
-        { key: 'HH', fn: detectHH },
         { key: 'HL', fn: detectHL },
-        { key: 'LL', fn: detectLL },
       ]
     : [
         { key: 'HL', fn: detectHL },
-        { key: 'LL', fn: detectLL },
         { key: 'LH', fn: detectLH },
-        { key: 'HH', fn: detectHH },
       ];
 
   for (const { key, fn } of detectors) {
@@ -2019,37 +2016,24 @@ function scan1mPatterns(sym, bars1m, bars4h, cooldowns = new Map()) {
         // Most recent confirmed pivot is a LOW
         if (prevL && lastL.price > prevL.price) {
           structureOnlyDir = 'LONG';  // HL confirmed → only LONG
-        } else if (prevL && lastL.price < prevL.price) {
-          // LL confirmed — LONG only. Never SHORT at a pivot LOW.
-          // CHoCH-BEAR at an LL is just continuation, not reversal; the
-          // agent-level CHoCH validation (requires prior bullish structure) handles
-          // whether to set a wait. But we must not allow a SHORT signal to fire HERE
-          // (price is at the bottom — only bounce/LONG makes sense as an entry).
-          structureOnlyDir = 'LONG';
         }
-        // Neither HL nor LL (ambiguous / only one low data point) → null = allow both
+        // LL: no trade on 1m (LL removed from detectors) → null, no restriction needed
       } else {
         // Most recent confirmed pivot is a HIGH
         if (prevH && lastH.price < prevH.price) {
           structureOnlyDir = 'SHORT'; // LH confirmed → only SHORT
-        } else if (prevH && lastH.price > prevH.price) {
-          // HH confirmed — SHORT only. Never LONG at a pivot HIGH.
-          structureOnlyDir = 'SHORT';
         }
-        // Ambiguous → null = allow both
+        // HH: no trade on 1m (HH removed from detectors) → null, no restriction needed
       }
     }
   }
 
-  // Fixed priority order — CHoCH reversals first, then structural entries.
-  // No longer use shortFirst (that was causing LH/SHORT to fire at HL price).
+  // Only HL (LONG) and LH (SHORT). CHoCH, LL, HH removed — user rule:
+  // 15min LH + 1min LH → SHORT on next candle
+  // 15min HL + 1min HL → LONG on next candle
   const detectors = [
-    { key: 'CHoCH-BULL', fn: detectBullCHoCH },
-    { key: 'CHoCH-BEAR', fn: detectBearCHoCH },
-    { key: 'HL',         fn: _1mHL },
-    { key: 'LH',         fn: _1mLH },
-    { key: 'LL',         fn: _1mLL },
-    { key: 'HH',         fn: _1mHH },
+    { key: 'HL', fn: _1mHL },
+    { key: 'LH', fn: _1mLH },
   ];
 
   for (const { key, fn } of detectors) {

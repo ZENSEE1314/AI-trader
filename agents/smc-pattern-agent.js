@@ -223,33 +223,24 @@ class SMCPatternAgent extends BaseAgent {
     // BMS (Break of Market Structure) state per symbol.
     // Bullish BMS (close above last swing high) → block all SHORTs.
     // Bearish BMS (close below last swing low)  → block all LONGs.
-    // Cleared when CHoCH in the opposite direction fires, or expires after 2h.
+    // Expires after 2h.
     // Map: symbol → { dir: 'BULLISH'|'BEARISH', detectedAt: timestamp }
     this._bmsState = new Map();
-
-    // CHoCH wait state — when CHoCH fires, don't trade immediately.
-    // Wait for the next 1m confirming pivot then fire:
-    //   CHoCH-BULL → wait for HL or LL on 1m → LONG
-    //   CHoCH-BEAR → wait for LH or HH on 1m → SHORT
-    // Map: symbol → { dir: 'LONG'|'SHORT', detectedAt: timestamp }
-    this._chochWait = new Map();
 
     // Active virtual trades: signal.symbol+'_'+signal.smcContext.pattern → { ...signal, bars4hCache }
     // Used to run checkTradeState per bar and log outcomes.
     this._openTrades   = new Map();
 
     this._profile = {
-      description: `Backtested pivot-retest patterns (HL/LL/LH/HH) on 9 tokens. ` +
-                   `EMA20/50/200 trend filter. Per-token SL (0.20–0.30%). ` +
-                   `WR 51–59%, avg +$22K/90d at $100/trade.`,
+      description: `15min HL/LH patterns with 1min same-direction confirmation. ` +
+                   `HL+1mHL → LONG next candle. LH+1mLH → SHORT next candle. ` +
+                   `4H trend filter. Per-token SL (0.20–0.30%).`,
       role:   'Pattern Engine Trader',
       icon:   'pattern',
       skills: [
-        { id: 'hl',      name: 'HL (Higher Low)',  description: 'Long on uptrend retest — pivot low must be rising',        enabled: true },
-        { id: 'll',      name: 'LL (Lower Low)',   description: 'Long on discount bounce — pivot low at new extreme',       enabled: true },
-        { id: 'lh',      name: 'LH (Lower High)', description: 'Short on downtrend retest — pivot high must be falling',   enabled: true },
-        { id: 'hh',      name: 'HH (Higher High)', description: 'Short fading premium — pivot high at new extreme',        enabled: true },
-        { id: 'trend',   name: '4H Trend Filter', description: 'EMA20/50/200 — UP trend: LONG always + SHORT at premium (HH fade). DOWN trend: SHORT always + LONG at discount (LL bounce). NEUTRAL: zone-only.', enabled: true },
+        { id: 'hl', name: 'HL (Higher Low)',  description: '15min HL + 1min HL confirmation → LONG on next 1min candle', enabled: true },
+        { id: 'lh', name: 'LH (Lower High)', description: '15min LH + 1min LH confirmation → SHORT on next 1min candle', enabled: true },
+        { id: 'trend',   name: '4H Trend Filter', description: 'EMA20/50/200 — gates direction alignment', enabled: true },
         { id: 'cooldown',name: '2H Cooldown',     description: 'Skip repeated signals on same sym×pattern within 2 hours', enabled: true },
       ],
       config: [
@@ -497,77 +488,20 @@ class SMCPatternAgent extends BaseAgent {
           }
         }
 
-        // ── Step B: CHoCH signals fire immediately (no wait for confirming pivot) ──
-        // CHoCH-BEAR at HH: the break-below candle IS the signal → SHORT now.
-        // CHoCH-BULL at LL: the break-above candle IS the signal → LONG now.
-        //
-        // CHoCH bypasses the pivot gate (Step D) because at the moment it fires the
-        // OLD pivot (HL in bull structure, LH in bear structure) has just been broken —
-        // the pivot gate still points to that stale broken pivot and would wrongly block it.
-        // CHoCH still goes through VWAP (Step E) and BMS (Step F).
-        const nonChochRaws   = [];
-        const chochImmediates = []; // fire through E+F but skip Step D gate
-        for (const r of raws) {
-          if (r.pattern === 'CHoCH-BULL' || r.pattern === 'CHoCH-BEAR') {
-            const chochDir = r.pattern === 'CHoCH-BULL' ? 'LONG' : 'SHORT';
-
-            // ── Structure validation: CHoCH must REVERSE a prior trend ──
-            // CHoCH-BEAR (→SHORT) only valid when prior 1m structure had HH or HL (bullish).
-            // CHoCH-BULL (→LONG)  only valid when prior 1m structure had LL or LH (bearish).
-            const struct = classify1mStructure(bars1m);
-            if (chochDir === 'SHORT' && !struct.bullishStructure) {
-              bLog.scan(`[SMC-PAT] CHoCH-BEAR ${sym}: SKIPPED — no HH/HL in structure`);
-              this.addActivity('skip', `${sym} CHoCH-BEAR skipped — pure LL+LH, not a reversal`);
-              continue;
-            }
-            if (chochDir === 'LONG' && !struct.bearishStructure) {
-              bLog.scan(`[SMC-PAT] CHoCH-BULL ${sym}: SKIPPED — no LL/LH in structure`);
-              this.addActivity('skip', `${sym} CHoCH-BULL skipped — pure HH+HL, not a reversal`);
-              continue;
-            }
-
-            // Reset BMS when CHoCH fires in the opposite direction
-            const bms = this._bmsState.get(sym);
-            if (bms && ((bms.dir === 'BULLISH' && chochDir === 'SHORT') || (bms.dir === 'BEARISH' && chochDir === 'LONG'))) {
-              this._bmsState.delete(sym);
-              bLog.scan(`[SMC-PAT] BMS ${sym}: cleared by ${r.pattern}`);
-            }
-
-            // Clear any stale CHoCH wait from before (no longer used)
-            this._chochWait.delete(sym);
-
-            bLog.scan(`[SMC-PAT] CHoCH ${sym}: ${r.pattern} → ${chochDir} FIRE IMMEDIATELY struct=HH${struct.hasHH} HL${struct.hasHL} LL${struct.hasLL} LH${struct.hasLH}`);
-            this.addActivity('trade', `${sym} ${r.pattern} → ${chochDir} — firing immediately`);
-            chochImmediates.push(r);
-          } else {
-            nonChochRaws.push(r);
-          }
-        }
-
-        // ── Step C: Expire any stale _chochWait entries (legacy cleanup only) ──
-        const chochWait = this._chochWait.get(sym);
-        if (chochWait && now - chochWait.detectedAt > 15 * 60_000) {
-          this._chochWait.delete(sym);
-          bLog.scan(`[SMC-PAT] CHoCH wait ${sym} expired (stale cleanup)`);
-        }
-
-        // ── Step D: Pivot gate — block all signals against the current pivot direction ──
-        // ── Step D: Pivot gate — block non-CHoCH signals against current pivot direction ──
-        // CHoCH signals bypass this gate (they ARE the pivot break — old pivot is stale).
-        const gateFiltered = pivotGateDir
-          ? nonChochRaws.filter(r => {
+        // ── Step B: Pivot gate — only HL (LONG) and LH (SHORT), CHoCH removed ──
+        // 15min HL + 1min HL → LONG   |   15min LH + 1min LH → SHORT
+        // Last confirmed 1m pivot LOW → LONG only. HIGH → SHORT only.
+        const pivotGated = pivotGateDir
+          ? raws.filter(r => {
               if (r.dir !== pivotGateDir) {
-                const label = pivotGateDir === 'LONG' ? 'LOW(HL/LL)' : 'HIGH(LH/HH)';
+                const label = pivotGateDir === 'LONG' ? 'LOW(HL)' : 'HIGH(LH)';
                 bLog.scan(`[SMC-PAT] Pivot gate: ${sym} ${r.pattern}(${r.dir}) blocked — 1m ${label} is current pivot`);
                 this.addActivity('skip', `${sym} ${r.pattern}(${r.dir}) blocked — pivot is ${label}`);
                 return false;
               }
               return true;
             })
-          : nonChochRaws;
-
-        // Merge: CHoCH immediates + gate-filtered structure signals
-        const pivotGated = [...chochImmediates, ...gateFiltered];
+          : raws;
 
         if (!pivotGated.length) continue;
 
