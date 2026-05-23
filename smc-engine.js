@@ -2109,8 +2109,9 @@ function scan1mPatterns(sym, bars1m, bars4h, cooldowns = new Map()) {
 //   LOW : bars[i].l < bars[i-1].l AND bars[i].l < bars[i+1].l AND bars[i].l < bars[i+2].l
 
 // ── Signal engine constants ───────────────────────────────────────────
-const STRUCT_BARS_15M = 12;        // structure window: LL→LH or HH→HL must be within last 12 bars (3 h)
-const WINDOW_MS       = 30 * 60_000; // 1m pivot must form within 30 min of the 15m pivot bar open
+const STRUCT_BARS_15M  = 12;        // structure context: HH (for LONG) or LL (for SHORT) can be up to 3 h old
+const PIVOT_FRESH_BARS = 4;         // entry pivot freshness: HL (LONG) or LH (SHORT) must be ≤4 bars = 60 min old
+const WINDOW_MS        = 30 * 60_000; // 1m pivot must form within 30 min of the 15m pivot bar open
 
 // Pivot detection: 2L/2R — matches the TradingView SMC indicator "∨ 2" setting.
 // A pivot HIGH at bar i requires bars[i-2], bars[i-1] both lower on the left
@@ -2184,7 +2185,7 @@ function _detect15mStructure(ph15, pl15, bars15mLen, minBouncePct) {
     const lhAge     = (bars15mLen - 1) - lastH.idx;
     const llAge     = (bars15mLen - 1) - lastL.idx;
     const bouncePct = (lastH.price - lastL.price) / lastL.price;
-    if (isLL && lhAge <= STRUCT_BARS_15M && llAge <= STRUCT_BARS_15M &&
+    if (isLL && lhAge <= PIVOT_FRESH_BARS && llAge <= STRUCT_BARS_15M &&
         bouncePct >= minBouncePct) {
       return { dir: 'SHORT', pivot15: lastH, preceding: lastL, label: 'LL→LH' };
     }
@@ -2200,7 +2201,7 @@ function _detect15mStructure(ph15, pl15, bars15mLen, minBouncePct) {
     const hlAge      = (bars15mLen - 1) - lastL.idx;
     const hhAge      = (bars15mLen - 1) - lastH.idx;
     const pullbackPct = (lastH.price - lastL.price) / lastH.price;
-    if (isHH && hlAge <= STRUCT_BARS_15M && hhAge <= STRUCT_BARS_15M &&
+    if (isHH && hlAge <= PIVOT_FRESH_BARS && hhAge <= STRUCT_BARS_15M &&
         pullbackPct >= minBouncePct) {
       return { dir: 'LONG', pivot15: lastL, preceding: lastH, label: 'HH→HL' };
     }
