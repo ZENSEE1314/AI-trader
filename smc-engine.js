@@ -2155,7 +2155,11 @@ function _rawPivots(bars) {
 //
 // Both pivots must be within STRUCT_BARS_15M bars (3 h) — no stale setups.
 // Sideways market (no LL→LH or HH→HL sequence) → returns null → no trade.
-function _detect15mStructure(ph15, pl15, bars15mLen) {
+// minBouncePct: minimum price swing between the two pivots, expressed as a
+// fraction of the lower price.  Prevents dead-cat micro-bounces (e.g. 0.16%)
+// from being treated as valid structural pivots.  Caller passes cfg.slPct * 2
+// so the required swing is always at least 2× the SL distance.
+function _detect15mStructure(ph15, pl15, bars15mLen, minBouncePct) {
   if (ph15.length < 2 || pl15.length < 2) return null;
 
   const lastH = ph15[ph15.length - 1];  // most recent 15m pivot HIGH
@@ -2166,12 +2170,16 @@ function _detect15mStructure(ph15, pl15, bars15mLen) {
   // ── SHORT: sequence is LL → LH ───────────────────────────────────
   // LH must be the most recent overall pivot (after the LL).
   // The most recent LOW before that LH must be a LL.
+  // Bounce (LH - LL) / LL must be at least minBouncePct — blocks dead-cat
+  // micro-bounces that technically form a LH but are meaningless in structure.
   const isLH = lastH.price < prevH.price;
   if (isLH && lastH.barTs > lastL.barTs) {
-    const isLL    = lastL.price < prevL.price;
-    const lhAge   = (bars15mLen - 1) - lastH.idx;
-    const llAge   = (bars15mLen - 1) - lastL.idx;
-    if (isLL && lhAge <= STRUCT_BARS_15M && llAge <= STRUCT_BARS_15M) {
+    const isLL      = lastL.price < prevL.price;
+    const lhAge     = (bars15mLen - 1) - lastH.idx;
+    const llAge     = (bars15mLen - 1) - lastL.idx;
+    const bouncePct = (lastH.price - lastL.price) / lastL.price;
+    if (isLL && lhAge <= STRUCT_BARS_15M && llAge <= STRUCT_BARS_15M &&
+        bouncePct >= minBouncePct) {
       return { dir: 'SHORT', pivot15: lastH, preceding: lastL, label: 'LL→LH' };
     }
   }
@@ -2179,12 +2187,15 @@ function _detect15mStructure(ph15, pl15, bars15mLen) {
   // ── LONG: sequence is HH → HL ────────────────────────────────────
   // HL must be the most recent overall pivot (after the HH).
   // The most recent HIGH before that HL must be a HH.
+  // Pullback (HH - HL) / HH must be at least minBouncePct.
   const isHL = lastL.price > prevL.price;
   if (isHL && lastL.barTs > lastH.barTs) {
-    const isHH    = lastH.price > prevH.price;
-    const hlAge   = (bars15mLen - 1) - lastL.idx;
-    const hhAge   = (bars15mLen - 1) - lastH.idx;
-    if (isHH && hlAge <= STRUCT_BARS_15M && hhAge <= STRUCT_BARS_15M) {
+    const isHH       = lastH.price > prevH.price;
+    const hlAge      = (bars15mLen - 1) - lastL.idx;
+    const hhAge      = (bars15mLen - 1) - lastH.idx;
+    const pullbackPct = (lastH.price - lastL.price) / lastH.price;
+    if (isHH && hlAge <= STRUCT_BARS_15M && hhAge <= STRUCT_BARS_15M &&
+        pullbackPct >= minBouncePct) {
       return { dir: 'LONG', pivot15: lastL, preceding: lastH, label: 'HH→HL' };
     }
   }
@@ -2226,7 +2237,10 @@ function scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns) {
 
   // ── STEP 1: 15m structure must be LL→LH (SHORT) or HH→HL (LONG) ────
   const { ph: ph15, pl: pl15 } = _allPivots(bars15m);
-  const structure = _detect15mStructure(ph15, pl15, bars15m.length);
+  // Minimum bounce = 2× SL distance so micro-bounces can't trigger structure.
+  // BTC example: slPct=0.0025 → minBouncePct=0.005 (0.5%).
+  // A 0.16% dead-cat bounce (75,303→75,424) is blocked; a real LH swing is not.
+  const structure = _detect15mStructure(ph15, pl15, bars15m.length, cfg.slPct * 2);
   if (!structure) return null; // sideways or incomplete — no trade
 
   const { dir, pivot15, label } = structure;
