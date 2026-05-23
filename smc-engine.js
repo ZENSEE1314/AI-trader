@@ -2174,6 +2174,14 @@ function scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns) {
   }
   if (!pivot1m) return null;
 
+  // ── STEP 2b: 1m pivot must be at the same price level as the 15m pivot ──
+  // "if too far away for the 15min HL n 1min HL or LH LH reset and find new LL or HH"
+  // The 1m confirmation must be at the same structural zone — not a different level.
+  // Tolerance = 2× slPct so it's proportional to the trade's risk distance.
+  const LEVEL_TOL = cfg.slPct * 2;
+  const levelDiff = Math.abs(pivot1m.price - pivot15.price) / pivot15.price;
+  if (levelDiff > LEVEL_TOL) return null;
+
   // ── STEP 3: 1m pivot freshness from NOW (≤ 30 bars = 30 min) ────────
   const bars1mNowAge = (total1m - 1) - pivot1m.idx;
   if (bars1mNowAge > 30) return null;
