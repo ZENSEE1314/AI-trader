@@ -1753,17 +1753,9 @@ function checkTradeState(trade, bar) {
   return state;
 }
 
-// ── CHoCH pattern detectors ──────────────────────────────────────
-// Detects Change of Character (CHoCH) — the SMC reversal signal.
-//
-// Bullish CHoCH: price was making LH+LL (downtrend) → close breaks ABOVE last LH
-//   → smart money absorbed supply → LONG signal
-//
-// Bearish CHoCH: price was making HL+HH (uptrend) → close breaks BELOW last HL
-//   → smart money distributed → SHORT signal
-//
-// These are used by scan1mPatterns as the PRIMARY trade trigger,
-// exactly as shown on TradingView SMC indicator (BMS/CHoCH labels).
+// CHoCH pattern detectors removed — do not re-add.
+// CHoCH (BullCHoCH / BearCHoCH) was removed because it fires at breakout tops/bottoms,
+// producing entries that look like "buying at the top." HL/LH structure is sufficient.
 
 // ── SMC Expo indicator parameters (matches TradingView "SMC Expo 10 1 2 20") ──
 // pivotLen=10: swing lookback — how many bars define a swing high/low
@@ -1782,107 +1774,10 @@ const CHOCH_TOL     = 0.003; // 0.3% max overshoot past broken level
 function _ind1mHighs(bars) { return _pivHighsLR(bars, IND_L_BARS, IND_R_BARS); }
 function _ind1mLows(bars)  { return _pivLowsLR(bars,  IND_L_BARS, IND_R_BARS); }
 
-function detectBullCHoCH(window, curBar, slPct) {
-  // Requires: ≥2 lower highs (LH sequence) then price closes ABOVE last LH
-  // Uses asymmetric pivots (1L/2R) to match the TV SMC indicator exactly
-  const cur   = curBar.c;
-  const highs = _ind1mHighs(window);
-  const lows  = _ind1mLows(window);
-  if (highs.length < 2 || lows.length < 1) return null;
 
-  const lastLH = highs[highs.length - 1];
-  const prevLH = highs[highs.length - 2];
-  if (lastLH.price >= prevLH.price) return null;  // must be a lower high (downtrend confirmed)
-  if (lastLH.idx < window.length - CHOCH_LKBK) return null; // must be recent
-
-  // CHoCH trigger: current close must have just broken above the LH level
-  if (cur <= lastLH.price) return null;            // not yet broken
-  const overshoot = (cur - lastLH.price) / lastLH.price;
-  if (overshoot > CHOCH_TOL) return null;          // chased too far — entry would be 0.3%+ above level
-
-  // ── Reversal confirmation: break bar must be a REJECTION candle ──────────
-  // A BOS (continuation) bar is full-bodied momentum through the level.
-  // A real CHoCH bar wicks INTO the level and closes above with a lower wick,
-  // showing that sellers tried but buyers took over.
-  // Minimum: upper wick ≤ body size (price closed near the high of the break bar).
-  // This blocks 90% of false CHoCH signals from momentum continuation moves.
-  const breakBody  = Math.abs(curBar.c - curBar.o);
-  const upperWick  = curBar.h - Math.max(curBar.c, curBar.o);
-  const lowerWick  = Math.min(curBar.c, curBar.o) - curBar.l;
-  // Rejection candle: body must dominate (body > upper wick = price held gains)
-  if (breakBody === 0) return null;                // doji — not a clean break
-  if (upperWick > breakBody * 1.5) return null;   // big upper wick = failed breakout, not CHoCH
-  // Must have bullish close (close > open)
-  if (!curBar.bullish) return null;
-
-  // SL = below the last LL in the swing (deepest point of the downtrend)
-  const lastLL   = lows.reduce((a, b) => a.price < b.price ? a : b);
-  const slPrice  = lastLL.price * (1 - slPct);
-
-  // Require minimum R:R headroom — SL distance must be sane
-  const slDist = (cur - slPrice) / cur;
-  if (slDist <= 0 || slDist > 0.05) return null;  // SL too close or absurdly far
-
-  return {
-    pattern:  'CHoCH-BULL',
-    dir:      'LONG',
-    level:    lastLH.price,   // the broken LH = CHoCH level (LIMIT retest entry)
-    slPrice,
-    tp1:      cur * (1 + TP1_PCT),
-    tp2:      cur * (1 + TP2_PCT),
-    lockAt:   cur * (1 + LOCK_PCT),
-  };
-}
-
-function detectBearCHoCH(window, curBar, slPct) {
-  // Requires: ≥2 higher lows (HL sequence) then price closes BELOW last HL
-  const cur   = curBar.c;
-  const highs = _ind1mHighs(window);
-  const lows  = _ind1mLows(window);
-  if (lows.length < 2 || highs.length < 1) return null;
-
-  const lastHL = lows[lows.length - 1];
-  const prevHL = lows[lows.length - 2];
-  if (lastHL.price <= prevHL.price) return null;  // must be a higher low (uptrend confirmed)
-  if (lastHL.idx < window.length - CHOCH_LKBK) return null; // must be recent
-
-  // CHoCH trigger: current close broke BELOW the HL level
-  if (cur >= lastHL.price) return null;
-  const overshoot = (lastHL.price - cur) / lastHL.price;
-  if (overshoot > CHOCH_TOL) return null;         // chased too far below level
-
-  // ── Reversal confirmation: break bar must be a REJECTION candle ──────────
-  // Bearish CHoCH: price broke below HL. Bar must be a bearish rejection —
-  // lower wick ≤ body size (price closed near the low, didn't wick back).
-  // Blocks continuation moves that close below HL and keep going.
-  const breakBodyB = Math.abs(curBar.c - curBar.o);
-  const lowerWickB = Math.min(curBar.c, curBar.o) - curBar.l;
-  if (breakBodyB === 0) return null;              // doji — not a clean break
-  if (lowerWickB > breakBodyB * 1.5) return null; // long lower wick = rejection (buyers stepping in)
-  if (curBar.bullish) return null;                // must close bearish (close < open)
-
-  // SL = above the last HH in the swing
-  const lastHH   = highs.reduce((a, b) => a.price > b.price ? a : b);
-  const slPrice  = lastHH.price * (1 + slPct);
-
-  const slDist = (slPrice - cur) / cur;
-  if (slDist <= 0 || slDist > 0.05) return null;
-
-  return {
-    pattern:  'CHoCH-BEAR',
-    dir:      'SHORT',
-    level:    lastHL.price,   // the broken HL = CHoCH level (LIMIT retest entry)
-    slPrice,
-    tp1:      cur * (1 - TP1_PCT),
-    tp2:      cur * (1 - TP2_PCT),
-    lockAt:   cur * (1 - LOCK_PCT),
-  };
-}
-
-// ── 1m direct scanner ────────────────────────────────────────────
-// Scans 1m bars as the PRIMARY timeframe — no HTF pattern confirmation needed.
-// Catches: CHoCH-BULL, CHoCH-BEAR, HL, LL, LH, HH on 1m directly.
-// Called by SMCPatternAgent in parallel with scanPatterns (15m/30m primary).
+// ── 1m direct scanner (reference / unused) ───────────────────────
+// Scans 1m bars for HL and LH patterns. Not called by any active agent — kept for reference.
+// Active scanner is scanKeyLevelSignal (15m+1m structure).
 //
 // This is what the TradingView SMC indicator does:
 //   BMS  = HL/LL/LH/HH structure breaks on 1m
@@ -2028,7 +1923,7 @@ function scan1mPatterns(sym, bars1m, bars4h, cooldowns = new Map()) {
     }
   }
 
-  // Only HL (LONG) and LH (SHORT). CHoCH, LL, HH removed — user rule:
+  // Only HL (LONG) and LH (SHORT):
   // 15min LH + 1min LH → SHORT on next candle
   // 15min HL + 1min HL → LONG on next candle
   const detectors = [
@@ -2045,10 +1940,7 @@ function scan1mPatterns(sym, bars1m, bars4h, cooldowns = new Map()) {
     if (!sig) continue;
 
     // Structure gate: if most recent pivot is HL, block any SHORT; if LH, block any LONG.
-    // CHoCH signals are exempt — a CHoCH-BEAR can legitimately fire at an HL (reversal candle
-    // broke below the HL low) and vice versa.
-    const isChoch = key === 'CHoCH-BULL' || key === 'CHoCH-BEAR';
-    if (!isChoch && structureOnlyDir && sig.dir !== structureOnlyDir) {
+    if (structureOnlyDir && sig.dir !== structureOnlyDir) {
       continue; // e.g. LH(SHORT) blocked when HL is the current confirmed structure
     }
 
@@ -2286,6 +2178,13 @@ function scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns) {
   const bars1mNowAge = (total1m - 1) - pivot1m.idx;
   if (bars1mNowAge > 30) return null;
 
+  // ── STEP 4: Chase filter — entry must be within PAT_TOL of the 1m pivot ──
+  // Blocks entry if price has already bounced far from the HL (LONG) or dropped
+  // far from the LH (SHORT). Prevents "buying at the top" when the 1m pivot is
+  // 10–30 min stale and price has already run away from the structural level.
+  if (dir === 'LONG'  && price > pivot1m.price * (1 + PAT_TOL)) return null;
+  if (dir === 'SHORT' && price < pivot1m.price * (1 - PAT_TOL)) return null;
+
   // ── Cooldown: each 15m pivot bar fires at most once ──────────────────
   const cdKey = `${sym}_KL_${dir === 'SHORT' ? 'LH' : 'HL'}_${pivot15.barTs}`;
   if (cooldowns.has(cdKey)) return null;
@@ -2362,8 +2261,6 @@ module.exports = {
   detectLL,
   detectLH,
   detectHH,
-  detectBullCHoCH,
-  detectBearCHoCH,
   IND_PIVOT_LEN,    // indicator pivot length (10)
   IND_L_BARS,       // indicator left bars  (1)
   IND_R_BARS,       // indicator right bars (2)
