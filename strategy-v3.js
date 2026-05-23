@@ -429,104 +429,6 @@ function detectVWAPFade(klines1m, vwapLower, vwapUpper, vwap, bias, price) {
   return null;
 }
 
-// ── Setup 7: StructureShift (CHoCH retest) ──────────────────
-// Detects a Change of Character (CHoCH) on 1m — the point where
-// market structure flips — and enters on the retest of the broken level.
-//
-// Bullish CHoCH: price was making LH/LL (downtrend), then breaks ABOVE
-//   the last LH → structure flip confirmed → enter LONG on the retest
-//   of that broken LH (it now acts as support).
-//
-// Bearish CHoCH: price was making HH/HL (uptrend), then breaks BELOW
-//   the last HL → structure flip confirmed → enter SHORT on the retest
-//   of that broken HL (it now acts as resistance).
-//
-// Why it works: after a CHoCH, smart money sweeps liquidity above/below
-// the structural level, then retests it before continuing. The retest
-// is the low-risk entry — tight SL just beyond the CHoCH level,
-// and the whole prior trend range is the reward target.
-//
-// 24/7 — CHoCH retests fire in both SMC sessions and off-hours.
-function detectStructureShift(klines1m, bias, price) {
-  const swingLen = 3;
-  const len = klines1m.length;
-  if (len < swingLen * 10) return null;
-
-  // Build chronological swing high/low list (confirmed = has right side).
-  // Each swing is tagged with its bar index so we can check recency.
-  const highs = []; // { idx, price }
-  const lows  = [];
-  for (let i = swingLen; i < len - swingLen; i++) {
-    const h = parseFloat(klines1m[i][2]);
-    const l = parseFloat(klines1m[i][3]);
-    let isHigh = true, isLow = true;
-    for (let j = i - swingLen; j <= i + swingLen; j++) {
-      if (j === i) continue;
-      if (parseFloat(klines1m[j][2]) >= h) isHigh = false;
-      if (parseFloat(klines1m[j][3]) <= l) isLow  = false;
-    }
-    if (isHigh) highs.push({ idx: i, price: h });
-    if (isLow)  lows.push({ idx: i, price: l });
-  }
-
-  if (highs.length < 2 || lows.length < 2) return null;
-
-  const last1m   = klines1m[klines1m.length - 1];
-  const isBull1m = parseFloat(last1m[4]) > parseFloat(last1m[1]);
-
-  if (bias === 'long') {
-    if (!isBull1m) return null;
-    // Walk backwards through swing highs to find the most recent one where:
-    // 1) price has broken above it (CHoCH confirmed on that bar)
-    // 2) price is now within 0.6% above (retesting the broken level as support)
-    // 3) there is at least one higher swing high before it (= it was an LH in context)
-    for (let i = highs.length - 1; i >= 0; i--) {
-      const swingH = highs[i];
-
-      // Swing must be in the lookback window
-      if (len - 1 - swingH.idx > 60) break;
-
-      // CHoCH confirmed: current price has broken above this swing high
-      if (price <= swingH.price) continue;
-
-      // Retest zone: within 0.6% above the broken level
-      const distPct = (price - swingH.price) / swingH.price;
-      if (distPct > 0.006) continue;
-
-      // Context: at least one prior high was higher → this swing was an LH
-      // (ensures we're catching a structural flip, not just any micro-breakout)
-      const hasHigherPrior = highs.slice(0, i).some(h => h.price > swingH.price);
-      if (!hasHigherPrior) continue;
-
-      return { setupName: 'StructureShift', level: swingH.price, levelType: 'CHoCH+BullFlip' };
-    }
-  }
-
-  if (bias === 'short') {
-    if (isBull1m) return null;
-    // Walk backwards through swing lows to find a HL broken below (bearish CHoCH)
-    for (let i = lows.length - 1; i >= 0; i--) {
-      const swingL = lows[i];
-
-      if (len - 1 - swingL.idx > 60) break;
-
-      // CHoCH confirmed: current price has broken below this swing low
-      if (price >= swingL.price) continue;
-
-      // Retest zone: within 0.6% below the broken level
-      const distPct = (swingL.price - price) / swingL.price;
-      if (distPct > 0.006) continue;
-
-      // Context: at least one prior low was lower → this swing was an HL
-      const hasLowerPrior = lows.slice(0, i).some(l => l.price < swingL.price);
-      if (!hasLowerPrior) continue;
-
-      return { setupName: 'StructureShift', level: swingL.price, levelType: 'CHoCH+BearFlip' };
-    }
-  }
-
-  return null;
-}
 
 // ── Market structure detection (HH / HL / LH / LL) ──────────
 //
@@ -1314,7 +1216,7 @@ async function analyzeV3(ticker, opts = {}) {
 
     // Computed here so the score gate and all downstream filters can use them.
     const isVWAPFade       = setup.setupName === 'VWAPFade';
-    const isStructureShift = setup.setupName === 'StructureShift';
+    const isStructureShift = false; // StructureShift (CHoCH retest) removed
 
     // ── Extra confirmation flags ──────────────────────────────
     const lastCandle  = klines15m[klines15m.length - 1];

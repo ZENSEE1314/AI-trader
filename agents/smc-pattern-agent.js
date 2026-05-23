@@ -377,7 +377,7 @@ class SMCPatternAgent extends BaseAgent {
             }
           }
           const cur = this._bmsState.get(sym);
-          if (cur && now - cur.detectedAt > 2 * 60 * 60_000) this._bmsState.delete(sym);
+          if (cur && now - cur.detectedAt > 45 * 60_000) this._bmsState.delete(sym); // 45-min expiry (was 2h — too long, blocked good setups)
         }
 
         // ── Core signal: nearest 15m pivot + nearest 1m pivot must match ──

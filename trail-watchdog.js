@@ -7,11 +7,11 @@
 //
 // Initial SL: 20% capital
 // Trail logic:
-//   Below +21% capital profit → no movement, trade breathes freely
-//   +21% capital profit       → SL locked at +20% (profit secured)
-//   +30% capital profit       → SL moves to +30%
-//   +40% capital profit       → SL moves to +40%
-//   ... steps up every +10% capital gain, always locking in the milestone
+//   Below +25% capital profit → no movement, trade breathes freely
+//   +25% capital profit       → SL locked at +20% (profit secured, fees covered)
+//   +27% capital profit       → SL moves to +25%
+//   +32% capital profit       → SL moves to +30%
+//   ... steps up every +5–10% capital gain, always locking in the milestone
 // ============================================================
 
 const fetch = require('node-fetch');
