@@ -2112,13 +2112,19 @@ function scan1mPatterns(sym, bars1m, bars4h, cooldowns = new Map()) {
 const STRUCT_BARS_15M = 12;        // structure window: LL→LH or HH→HL must be within last 12 bars (3 h)
 const WINDOW_MS       = 30 * 60_000; // 1m pivot must form within 30 min of the 15m pivot bar open
 
+// Pivot detection: 2L/2R — matches the TradingView SMC indicator "∨ 2" setting.
+// A pivot HIGH at bar i requires bars[i-2], bars[i-1] both lower on the left
+// AND bars[i+1], bars[i+2] both lower on the right.
+// 1L/2R (old) fired on micro-bounces TV never labeled; 2L/2R matches TV exactly.
 function _allPivots(bars) {
   if (!bars || bars.length < 6) return { ph: [], pl: [] };
   const ph = [], pl = [];
-  for (let i = 1; i < bars.length - 2; i++) {
-    if (bars[i].h > bars[i-1].h && bars[i].h > bars[i+1].h && bars[i].h > bars[i+2].h)
+  for (let i = 2; i < bars.length - 2; i++) {
+    if (bars[i].h > bars[i-1].h && bars[i].h > bars[i-2].h &&
+        bars[i].h > bars[i+1].h && bars[i].h > bars[i+2].h)
       ph.push({ idx: i, price: bars[i].h, barTs: bars[i].t });
-    if (bars[i].l < bars[i-1].l && bars[i].l < bars[i+1].l && bars[i].l < bars[i+2].l)
+    if (bars[i].l < bars[i-1].l && bars[i].l < bars[i-2].l &&
+        bars[i].l < bars[i+1].l && bars[i].l < bars[i+2].l)
       pl.push({ idx: i, price: bars[i].l, barTs: bars[i].t });
   }
   return { ph, pl };
