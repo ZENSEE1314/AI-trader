@@ -2003,7 +2003,10 @@ function scan1mPatterns(sym, bars1m, bars4h, cooldowns = new Map()) {
 // ── Signal engine constants ───────────────────────────────────────────
 const STRUCT_BARS_15M  = 12;        // structure context: HH (for LONG) or LL (for SHORT) can be up to 3 h old
 const PIVOT_FRESH_BARS = 4;         // entry pivot freshness: HL (LONG) or LH (SHORT) must be ≤4 bars = 60 min old
-const WINDOW_MS        = 30 * 60_000; // 1m pivot must form within 30 min of the 15m pivot bar open
+const WINDOW_MS        = 45 * 60_000; // 1m pivot must form within 45 min of the 15m pivot bar open
+const ENTRY_TOL        = 0.004;     // 0.4% — max price drift above 1m HL (LONG) or below 1m LH (SHORT) at entry
+                                    // wider than PAT_TOL (0.2%) so the next candle after HL can fire even if
+                                    // price has moved $8 from the HL before the scan runs
 
 // Pivot detection: 2L/2R — matches the TradingView SMC indicator "∨ 2" setting.
 // A pivot HIGH at bar i requires bars[i-2], bars[i-1] both lower on the left
@@ -2174,16 +2177,27 @@ function scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns) {
   }
   if (!pivot1m) return null;
 
+  // ── STEP 2b: 1m pivot must be at the same price level as the 15m pivot ──
+  // "if too far away for the 15min HL n 1min HL or LH LH reset and find new LL or HH"
+  // The 1m confirmation must be at the same structural zone — not a different level.
+  // Tolerance = 2× slPct so it's proportional to the trade's risk distance.
+  const LEVEL_TOL = cfg.slPct * 2;
+  const levelDiff = Math.abs(pivot1m.price - pivot15.price) / pivot15.price;
+  if (levelDiff > LEVEL_TOL) return null;
+
   // ── STEP 3: 1m pivot freshness from NOW (≤ 30 bars = 30 min) ────────
   const bars1mNowAge = (total1m - 1) - pivot1m.idx;
   if (bars1mNowAge > 30) return null;
 
-  // ── STEP 4: Chase filter — entry must be within PAT_TOL of the 1m pivot ──
+  // ── STEP 4: Chase filter — entry must be within ENTRY_TOL of the 1m pivot ──
   // Blocks entry if price has already bounced far from the HL (LONG) or dropped
-  // far from the LH (SHORT). Prevents "buying at the top" when the 1m pivot is
-  // 10–30 min stale and price has already run away from the structural level.
-  if (dir === 'LONG'  && price > pivot1m.price * (1 + PAT_TOL)) return null;
-  if (dir === 'SHORT' && price < pivot1m.price * (1 - PAT_TOL)) return null;
+  // far from the LH (SHORT).
+  // ENTRY_TOL (0.4%) is wider than PAT_TOL (0.2%) so the next candle after the 1m HL
+  // can fire even when the pump opens $8 above the HL — normal for a strong momentum
+  // candle. LEVEL_TOL (step 2b) already ensures the 1m HL is at the right price zone,
+  // so widening ENTRY_TOL here does NOT let "buying at the top" back in.
+  if (dir === 'LONG'  && price > pivot1m.price * (1 + ENTRY_TOL)) return null;
+  if (dir === 'SHORT' && price < pivot1m.price * (1 - ENTRY_TOL)) return null;
 
   // ── Cooldown: each 15m pivot bar fires at most once ──────────────────
   const cdKey = `${sym}_KL_${dir === 'SHORT' ? 'LH' : 'HL'}_${pivot15.barTs}`;
