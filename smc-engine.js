@@ -2240,8 +2240,9 @@ function scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns) {
   if (dir === 'SHORT' && price < pivot1m.price * (1 - ENTRY_TOL)) return null;
 
   // ── Cooldown: each 15m pivot bar fires at most once ──────────────────
-  const cdKey = `${sym}_KL_${dir === 'SHORT' ? 'LH' : 'HL'}_${pivot15.barTs}`;
-  if (cooldowns.has(cdKey)) return null;
+  const cdKey = `${sym}_KL`;               // one cooldown slot per symbol
+  const SYMBOL_CD = 60 * 60_000;           // 1 hour — no refire after close
+  if (cooldowns.has(cdKey) && now - cooldowns.get(cdKey) < SYMBOL_CD) return null;
   cooldowns.set(cdKey, now);
 
   const sl   = dir === 'LONG' ? pivot1m.price * (1 - cfg.slPct) : pivot1m.price * (1 + cfg.slPct);
