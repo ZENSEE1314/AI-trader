@@ -2149,8 +2149,8 @@ function scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns) {
   const total1m = bars1m.length;
 
   // ── STEP 1: 15m structure must be LL→LH (SHORT) or HH→HL (LONG) ────
-  // Two guards: MIN_BOUNCE_PCT (0.3%) + MIN_PIVOT_GAP_MS (30 min).
-  // See _detect15mStructure for full reasoning.
+  // One guard: MIN_PIVOT_GAP_MS (30 min between LL barTs and LH barTs).
+  // No bounce % filter — 2L/2R pivot detection is the sole structural judge.
   const { ph: ph15, pl: pl15 } = _allPivots(bars15m);
   const structure = _detect15mStructure(ph15, pl15, bars15m.length);
   if (!structure) return null; // no valid LL→LH or HH→HL — no trade
