@@ -2057,10 +2057,8 @@ function _rawPivots(bars) {
 //
 // Both pivots must be within STRUCT_BARS_15M bars (3 h) — no stale setups.
 // Sideways market (no LL→LH or HH→HL sequence) → returns null → no trade.
-// minBouncePct: minimum price swing between the two pivots, expressed as a
-// fraction of the lower price.  Prevents dead-cat micro-bounces (e.g. 0.16%)
-// from being treated as valid structural pivots.  Caller passes cfg.slPct * 2
-// so the required swing is always at least 2× the SL distance.
+// minBouncePct: pass 0 — 2L/2R pivot detection on 15m candles is the sole judge.
+// The lowest candle in a 60-min window IS the HL; no artificial % filter on top.
 function _detect15mStructure(ph15, pl15, bars15mLen, minBouncePct) {
   if (ph15.length < 2 || pl15.length < 2) return null;
 
@@ -2139,12 +2137,11 @@ function scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns) {
 
   // ── STEP 1: 15m structure must be LL→LH (SHORT) or HH→HL (LONG) ────
   const { ph: ph15, pl: pl15 } = _allPivots(bars15m);
-  // Minimum bounce = 3× SL distance.
-  // At ETH slPct=0.002 → minBouncePct=0.6%.  The 15m HL must be at least 0.6%
-  // below the HH (≈$13 at $2,120) before the setup is valid.
-  // Old value (2× = 0.4%) allowed HLs just $8 from the HH — visually "at the top."
-  const structure = _detect15mStructure(ph15, pl15, bars15m.length, cfg.slPct * 3);
-  if (!structure) return null; // sideways or insufficient pullback — no trade
+  // Pass 0 for minBouncePct — candle-based 2L/2R detection is the sole judge.
+  // A pivot LOW confirmed by 2L/2R (lowest price in a 60-min window on 15m) IS the HL.
+  // Percentage thresholds override what the candles actually say and produce wrong signals.
+  const structure = _detect15mStructure(ph15, pl15, bars15m.length, 0);
+  if (!structure) return null; // no HH→HL or LL→LH sequence — no trade
 
   const { dir, pivot15, label } = structure;
 
