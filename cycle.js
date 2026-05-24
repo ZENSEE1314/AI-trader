@@ -2150,7 +2150,25 @@ async function executeForAllUsers(pick) {
           slPricePct = maxSlPct;
         }
 
-        const initialSlPrice = isLong ? price * (1 - slPricePct) : price * (1 + slPricePct);
+        // ── SMC pivot anchor: SL placed beyond the 1m structural pivot, not at entry ──
+        // At 125x, SL_PCT/lev = 0.12% from entry. If entry is $2,100 and the 1m LH
+        // pivot is at $2,102, old SL = $2,102.52 — only $0.52 above LH. The confirming
+        // wick (next 1-2 bars after LH forms) easily hits it, stopping a correct trade.
+        // Fix: anchor SL to the pivot price so SL is always 0.12% BEYOND the structural
+        // level, not right at it. pick.smcContext.level = 1m LH (for SHORT) / HL (for LONG).
+        const smcPivotPrice = pick.smcContext?.level ?? null;
+        const slAnchor = smcPivotPrice ?? price;
+        if (smcPivotPrice) {
+          const pivotGap = isLong
+            ? (price - smcPivotPrice) / price   // LONG: how far above HL pivot
+            : (smcPivotPrice - price) / price;  // SHORT: how far below LH pivot
+          userLog.trade(
+            `User ${key.email}: SMC pivot anchor — ${isLong ? 'HL' : 'LH'}=${smcPivotPrice.toFixed(4)} ` +
+            `entry=${price.toFixed(4)} gap=${(pivotGap * 100).toFixed(3)}% ` +
+            `SL anchored to pivot (not entry)`
+          );
+        }
+        const initialSlPrice = isLong ? slAnchor * (1 - slPricePct) : slAnchor * (1 + slPricePct);
         const userTpPrice = isLong ? price * (1 + tpPricePct) : price * (1 - tpPricePct);
         const userTp3Price = isLong ? price * (1 + tpPricePct * 2.0) : price * (1 - tpPricePct * 2.0);
 
