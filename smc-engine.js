@@ -2004,9 +2004,9 @@ function scan1mPatterns(sym, bars1m, bars4h, cooldowns = new Map()) {
 const STRUCT_BARS_15M  = 12;        // structure context: HH (for LONG) or LL (for SHORT) can be up to 3 h old
 const PIVOT_FRESH_BARS = 4;         // entry pivot freshness: HL (LONG) or LH (SHORT) must be ≤4 bars = 60 min old
 const WINDOW_MS        = 45 * 60_000; // 1m pivot must form within 45 min of the 15m pivot bar open
-const ENTRY_TOL        = 0.004;     // 0.4% — max price drift above 1m HL (LONG) or below 1m LH (SHORT) at entry
-                                    // wider than PAT_TOL (0.2%) so the next candle after HL can fire even if
-                                    // price has moved $8 from the HL before the scan runs
+const ENTRY_TOL        = 0.002;     // MUST equal slPct — entry must be within slPct% of the 1m HL/LH.
+                                    // If ENTRY_TOL > slPct the SL would float above the structural HL when
+                                    // entering at max drift, blowing out capital by 2× slPct × leverage.
 
 // Pivot detection: 2L/2R — matches the TradingView SMC indicator "∨ 2" setting.
 // A pivot HIGH at bar i requires bars[i-2], bars[i-1] both lower on the left
@@ -2190,12 +2190,10 @@ function scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns) {
   if (bars1mNowAge > 30) return null;
 
   // ── STEP 4: Chase filter — entry must be within ENTRY_TOL of the 1m pivot ──
-  // Blocks entry if price has already bounced far from the HL (LONG) or dropped
-  // far from the LH (SHORT).
-  // ENTRY_TOL (0.4%) is wider than PAT_TOL (0.2%) so the next candle after the 1m HL
-  // can fire even when the pump opens $8 above the HL — normal for a strong momentum
-  // candle. LEVEL_TOL (step 2b) already ensures the 1m HL is at the right price zone,
-  // so widening ENTRY_TOL here does NOT let "buying at the top" back in.
+  // ENTRY_TOL = slPct = 0.2%. This keeps the total entry-to-SL gap ≤ 0.4%
+  // (slPct below HL + at most slPct above HL at entry = 2 × slPct = 30% cap at 75x).
+  // If the 1m HL already ran away > 0.2% before the scan hits, skip the trade —
+  // entering further from the structural level worsens R:R and is not worth it.
   if (dir === 'LONG'  && price > pivot1m.price * (1 + ENTRY_TOL)) return null;
   if (dir === 'SHORT' && price < pivot1m.price * (1 - ENTRY_TOL)) return null;
 
