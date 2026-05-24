@@ -2139,11 +2139,12 @@ function scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns) {
 
   // ── STEP 1: 15m structure must be LL→LH (SHORT) or HH→HL (LONG) ────
   const { ph: ph15, pl: pl15 } = _allPivots(bars15m);
-  // Minimum bounce = 2× SL distance so micro-bounces can't trigger structure.
-  // BTC example: slPct=0.0025 → minBouncePct=0.005 (0.5%).
-  // A 0.16% dead-cat bounce (75,303→75,424) is blocked; a real LH swing is not.
-  const structure = _detect15mStructure(ph15, pl15, bars15m.length, cfg.slPct * 2);
-  if (!structure) return null; // sideways or incomplete — no trade
+  // Minimum bounce = 3× SL distance.
+  // At ETH slPct=0.002 → minBouncePct=0.6%.  The 15m HL must be at least 0.6%
+  // below the HH (≈$13 at $2,120) before the setup is valid.
+  // Old value (2× = 0.4%) allowed HLs just $8 from the HH — visually "at the top."
+  const structure = _detect15mStructure(ph15, pl15, bars15m.length, cfg.slPct * 3);
+  if (!structure) return null; // sideways or insufficient pullback — no trade
 
   const { dir, pivot15, label } = structure;
 
