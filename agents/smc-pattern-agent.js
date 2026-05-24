@@ -222,6 +222,14 @@ class SMCPatternAgent extends BaseAgent {
     // Cooldown map: 'BTCUSDT_NP_HL' → lastSignalTs (45-min, shared with scanNearestPivotMatch)
     this._cooldowns    = new Map();
 
+    // ── "Next candle" pending signals ──────────────────────────────────
+    // User rule: "find 1m LH/HL → fire on the NEXT candle"
+    // When a signal fires, store it here instead of executing immediately.
+    // On the next execute() that sees a NEW 1m candle has opened (bar.t > pending.barTs),
+    // the pending signal is promoted and executed.
+    // Key: symbol → { signal, barTs (1m bar open time when detected), dir, detectedAt }
+    this._pendingSignals = new Map();
+
     // BMS (Break of Market Structure) state per symbol.
     // Bullish BMS (close above last swing high) → block all SHORTs.
     // Bearish BMS (close below last swing low)  → block all LONGs.
@@ -523,7 +531,39 @@ class SMCPatternAgent extends BaseAgent {
       startedAt: Date.now(),
     };
 
-    if (!signals.length) {
+    // ── Promote any pending signals where a new 1m candle has opened ────
+    // User rule: "fire on the NEXT candle after 1m LH/HL is detected"
+    // When a signal is stored as pending, we wait until the NEXT 1m bar opens
+    // (barTs + 60s has passed) before executing. This prevents entering on the
+    // same candle where the pivot is first confirmed — that candle may still be
+    // moving. The next candle's open is a cleaner, less chased entry.
+    //
+    // "if next candle still same LH or HL wait for next candle" → handled by
+    // the 60-second check: if the pending signal's candle hasn't closed yet,
+    // we keep waiting. We only promote when a genuinely new candle has opened.
+    const pendingToExecute = [];
+    for (const [sym, pending] of this._pendingSignals.entries()) {
+      // Expire after 3 candles (3 min) — if market didn't move, signal is stale
+      if (now - pending.detectedAt > 3 * 60_000) {
+        bLog.scan(`[SMC-PAT] PENDING ${sym} ${pending.dir}: expired (3-min timeout) — reset structure`);
+        this.addActivity('skip', `${sym} ${pending.dir} — pending expired, waiting for new 15m structure`);
+        this._pendingSignals.delete(sym);
+        continue;
+      }
+      // 1m bars open at UTC minute boundaries. pending.barTs = bar open time.
+      // If now ≥ pending.barTs + 60_000 → a new 1m candle has opened → promote.
+      if (now >= pending.barTs + 60_000) {
+        bLog.scan(`[SMC-PAT] PENDING ${sym} ${pending.dir}: new candle opened → promoting to execute`);
+        this.addActivity('trade', `${sym} ${pending.dir} — next candle opened, executing`);
+        pendingToExecute.push(pending.signal);
+        this._pendingSignals.delete(sym);
+      } else {
+        const waitMs = (pending.barTs + 60_000) - now;
+        bLog.scan(`[SMC-PAT] PENDING ${sym} ${pending.dir}: waiting ${(waitMs/1000).toFixed(0)}s for next candle`);
+      }
+    }
+
+    if (!signals.length && !pendingToExecute.length) {
       this.addActivity('info', 'No pattern setups this cycle — waiting for pivot retest');
       return { ok: true, signals: 0 };
     }
@@ -622,12 +662,47 @@ class SMCPatternAgent extends BaseAgent {
           });
         }
 
-        if (approved.length && traderAgent && !traderAgent.paused) {
-          this.addActivity('trade', `Routing ${approved.length} pattern signal(s) → TraderAgent`);
-          bLog.trade(`[SMC-PAT] → TraderAgent.execute ${approved.length} signal(s): ` +
-            approved.map(s => `${s.symbol} ${s.direction} score=${s.score}`).join(', '));
-          await traderAgent.execute({ signals: approved, mode: 'signals' });
-          this.addActivity('success', `TraderAgent executed ${approved.length} pattern signal(s)`);
+        // ── Store new signals as PENDING — execute on next candle ──────────
+        // User rule: "fire on the NEXT candle after 1m LH/HL signal"
+        // Don't route to TraderAgent immediately. Store with the current 1m
+        // bar timestamp. The pending check at the top of execute() will promote
+        // these once a new 1m bar opens (barTs + 60s elapsed).
+        for (const sig of approved) {
+          const sym = sig.symbol;
+          // If there's already a pending signal for this symbol in the OPPOSITE
+          // direction, it means structure changed — cancel old, store new.
+          const existing = this._pendingSignals.get(sym);
+          if (existing && existing.dir !== sig.direction) {
+            bLog.scan(`[SMC-PAT] PENDING ${sym}: direction flipped ${existing.dir}→${sig.direction} — replacing`);
+            this._pendingSignals.delete(sym);
+          }
+          if (!this._pendingSignals.has(sym)) {
+            const barTs = sig.ts ?? now; // sig.ts = 1m bar open time from smc-engine
+            this._pendingSignals.set(sym, {
+              signal:      sig,
+              dir:         sig.direction,
+              level:       sig.smcContext?.level ?? null, // 1m LH/HL pivot price
+              barTs,       // 1m bar open time when signal was detected
+              detectedAt:  now,
+            });
+            bLog.trade(
+              `[SMC-PAT] PENDING: ${sym} ${sig.direction} — waiting for next 1m candle ` +
+              `(barTs=${new Date(barTs).toISOString().slice(11,19)} UTC, ` +
+              `entry in ~${Math.max(0, Math.ceil((barTs + 60_000 - now)/1000))}s)`
+            );
+            this.addActivity('info',
+              `${sym} ${sig.direction} signal stored — enters on next candle open`
+            );
+          }
+        }
+
+        // ── Execute promoted signals (waited one full candle) ──────────────
+        if (pendingToExecute.length && traderAgent && !traderAgent.paused) {
+          this.addActivity('trade', `Executing ${pendingToExecute.length} next-candle signal(s) → TraderAgent`);
+          bLog.trade(`[SMC-PAT] → TraderAgent.execute ${pendingToExecute.length} next-candle signal(s): ` +
+            pendingToExecute.map(s => `${s.symbol} ${s.direction} score=${s.score}`).join(', '));
+          await traderAgent.execute({ signals: pendingToExecute, mode: 'signals' });
+          this.addActivity('success', `TraderAgent executed ${pendingToExecute.length} next-candle signal(s)`);
         }
       } catch (err) {
         this.addActivity('error', `Signal routing failed: ${err.message}`);

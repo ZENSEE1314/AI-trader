@@ -2059,20 +2059,20 @@ function _rawPivots(bars) {
 // Sideways market (no LL→LH or HH→HL sequence) → returns null → no trade.
 // _detect15mStructure — strict 15m structure: LL→LH (SHORT) or HH→HL (LONG)
 //
-// Two guards stop dead-cat bounces and immediate post-crash entries:
+// Rule (user): "see LL on 15m → WAIT for LH on 15m → find 1m LH → SHORT"
+//              "see HH on 15m → WAIT for HL on 15m → find 1m HL → LONG"
 //
-// 1. MIN_BOUNCE_PCT (0.3%): the move from LL to LH must be at least 0.3%.
-//    A dead-cat bounce is typically 0.05–0.15%. A real structural bounce
-//    that gives a SHORT entry is at minimum 0.3% (= 37.5% capital at 125x).
-//    Without this, the bot shorts the very first recovery tick after a crash.
+// Both pivots must exist AND be confirmed by the 2L/2R detection in _allPivots.
+// No bounce % filter — 2L/2R candle structure is the sole judge of whether
+// a pivot is real. A pivot that clears 2 bars on both sides IS structural.
 //
-// 2. MIN_PIVOT_GAP_MS (2 bars = 30 min): the LH barTs must be at least 30 min
-//    AFTER the LL barTs. The user's rule says "see LL → WAIT for LH". If the
-//    LH forms within 1 bar of the LL it is the same impulse, not a separate
-//    structural pivot. The 30-min gap enforces the "wait" in that rule.
-//
-// Same logic applies symmetrically to HH→HL for LONGs.
-const MIN_BOUNCE_PCT   = 0.003;           // 0.3% price move between LL and LH
+// ONE timing guard: MIN_PIVOT_GAP_MS (2 bars = 30 min).
+// The LH barTs must be at least 30 min AFTER the LL barTs (and vice versa).
+// Reason: if the LH peak bar is only 1 bar after the LL peak bar, they are
+// the same impulse — not a separate bounce that qualifies as structure.
+// With 2L/2R requiring 2 right-bars after the pivot, the LH is never confirmed
+// until at least 2 bars after its own peak, so the effective real gap is larger.
+// This 30-min check on the PEAK bars stops the absolute minimum edge case.
 const MIN_PIVOT_GAP_MS = 2 * 15 * 60_000; // 30 min between LL barTs and LH barTs
 
 function _detect15mStructure(ph15, pl15, bars15mLen) {
@@ -2084,37 +2084,31 @@ function _detect15mStructure(ph15, pl15, bars15mLen) {
   const prevL = pl15[pl15.length - 2];  // previous 15m pivot LOW
 
   // ── SHORT: sequence is LL → LH ───────────────────────────────────
-  // LH must be the most recent overall pivot (after the LL).
-  // The most recent LOW before that LH must be a LL.
-  // Bounce (LH - LL) / LL ≥ MIN_BOUNCE_PCT: blocks dead-cat micro-bounces.
-  // LH barTs - LL barTs ≥ MIN_PIVOT_GAP_MS: enforces "wait for LH" rule.
+  // LH must come after LL. LH must be a lower high (< prevH). LL must be a lower low.
+  // Both must be within their staleness windows.
+  // 30-min minimum gap between LL barTs and LH barTs: they are separate pivots.
   const isLH = lastH.price < prevH.price;
   if (isLH && lastH.barTs > lastL.barTs) {
     const isLL       = lastL.price < prevL.price;
     const lhAge      = (bars15mLen - 1) - lastH.idx;
     const llAge      = (bars15mLen - 1) - lastL.idx;
-    const bouncePct  = (lastH.price - lastL.price) / lastL.price;
     const pivotGapMs = lastH.barTs - lastL.barTs;
     if (isLL && lhAge <= PIVOT_FRESH_BARS && llAge <= STRUCT_BARS_15M &&
-        bouncePct >= MIN_BOUNCE_PCT && pivotGapMs >= MIN_PIVOT_GAP_MS) {
+        pivotGapMs >= MIN_PIVOT_GAP_MS) {
       return { dir: 'SHORT', pivot15: lastH, preceding: lastL, label: 'LL→LH' };
     }
   }
 
   // ── LONG: sequence is HH → HL ────────────────────────────────────
-  // HL must be the most recent overall pivot (after the HH).
-  // The most recent HIGH before that HL must be a HH.
-  // Pullback (HH - HL) / HH ≥ MIN_BOUNCE_PCT: blocks shallow micro-pullbacks.
-  // HL barTs - HH barTs ≥ MIN_PIVOT_GAP_MS: enforces "wait for HL" rule.
+  // HL must come after HH. HL must be a higher low (> prevL). HH must be a higher high.
   const isHL = lastL.price > prevL.price;
   if (isHL && lastL.barTs > lastH.barTs) {
-    const isHH        = lastH.price > prevH.price;
-    const hlAge       = (bars15mLen - 1) - lastL.idx;
-    const hhAge       = (bars15mLen - 1) - lastH.idx;
-    const pullbackPct = (lastH.price - lastL.price) / lastH.price;
-    const pivotGapMs  = lastL.barTs - lastH.barTs;
+    const isHH       = lastH.price > prevH.price;
+    const hlAge      = (bars15mLen - 1) - lastL.idx;
+    const hhAge      = (bars15mLen - 1) - lastH.idx;
+    const pivotGapMs = lastL.barTs - lastH.barTs;
     if (isHH && hlAge <= PIVOT_FRESH_BARS && hhAge <= STRUCT_BARS_15M &&
-        pullbackPct >= MIN_BOUNCE_PCT && pivotGapMs >= MIN_PIVOT_GAP_MS) {
+        pivotGapMs >= MIN_PIVOT_GAP_MS) {
       return { dir: 'LONG', pivot15: lastL, preceding: lastH, label: 'HH→HL' };
     }
   }
