@@ -71,11 +71,11 @@ const SYMBOL_LEVERAGE = {
   SOLUSDT: 125,  // 20% capital loss at 0.16% SL
 };
 
-// SL price distance: 0.16% = 20% capital loss at 125x (user-requested max).
+// SL price distance: 0.12% = 15% capital loss at 125x (user-requested max).
 const SYMBOL_SL_PCT = {
-  BTCUSDT: 0.0016,  // 0.16% → 20% capital loss at 125x
-  ETHUSDT: 0.0016,  // 0.16% → 20% capital loss at 125x
-  SOLUSDT: 0.0016,  // 0.16% → 20% capital loss at 125x
+  BTCUSDT: 0.0012,  // 0.12% → 15% capital loss at 125x
+  ETHUSDT: 0.0012,  // 0.12% → 15% capital loss at 125x
+  SOLUSDT: 0.0012,  // 0.12% → 15% capital loss at 125x
 };
 
 // ── Profit-lock — replaces fixed TP ────────────────────────────

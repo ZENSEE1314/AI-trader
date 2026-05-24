@@ -205,9 +205,9 @@ const _signalLossTracker = new Map();
 // SL_PCT is price-loss fraction; capital loss = SL_PCT (independent of leverage).
 //   125x: price SL = 0.20/125 = 0.16% price move → 20% capital loss
 //   100x: price SL = 0.20/100 = 0.20% price move → 20% capital loss
-//    75x: price SL = 0.20/75  = 0.27% price move → 20% capital loss
-//    50x: price SL = 0.20/50  = 0.40% price move → 20% capital loss
-const SL_PCT = 0.20;   // 20% max capital loss at any leverage
+//    75x: price SL = 0.15/75  = 0.20% price move → 15% capital loss
+//    50x: price SL = 0.15/50  = 0.30% price move → 15% capital loss
+const SL_PCT = 0.15;   // 15% max capital loss at any leverage
 const TP_PCT = 0.45;   // reference only — trailing SL handles the actual exit
 
 // ── Active AI Version params — loaded from settings table, refreshed every 60s ──
@@ -1533,20 +1533,12 @@ async function main() {
       _tvSignalQueue.clear();
     }
 
-    // ── Internal strategy scans ──
-    // BTC/ETH → V4 SMC (1m trigger + trailing SL tiers)
-    // BNB/SOL → Rev SMC (5m trigger + structure-reversal exit)
-    const tvSymbols = new Set(signals.map(s => s.symbol));
-    try {
-      const rawV4 = await scanV4SMC(msg => bLog.scan(msg));
-      const rawHomma = await scanHommaSMC(msg => bLog.scan(msg));
-      const v4Filtered = (rawV4 || []).filter(s => !tvSymbols.has(s.symbol) && (s.symbol === 'BTCUSDT' || s.symbol === 'ETHUSDT'));
-      const hommaFiltered = (rawHomma || []).filter(s => !tvSymbols.has(s.symbol) && (s.symbol === 'BNBUSDT' || s.symbol === 'SOLUSDT'));
-      signals.push(...v4Filtered, ...hommaFiltered);
-      bLog.scan(`V4-SMC: ${v4Filtered.length} signal(s) | Rev-SMC: ${revFiltered.length} signal(s)`);
-    } catch (tErr) {
-      bLog.error(`Strategy scan failed: ${tErr.message}`);
-    }
+    // ── Internal strategy scans DISABLED ──
+    // All signals now come exclusively from SMCPatternAgent (smc-engine.js)
+    // which enforces the strict 15m LL→LH→1m LH→SHORT / HH→HL→1m HL→LONG rule.
+    // The old scanV4SMC and scanHommaSMC have been removed to prevent
+    // them firing trades without proper 15m confirmation.
+    bLog.scan('Internal scan: disabled — signals from SMCPatternAgent only');
 
     if (!signals.length) {
       log('No AI signals found this cycle — agents still learning.');
@@ -2158,7 +2150,25 @@ async function executeForAllUsers(pick) {
           slPricePct = maxSlPct;
         }
 
-        const initialSlPrice = isLong ? price * (1 - slPricePct) : price * (1 + slPricePct);
+        // ── SMC pivot anchor: SL placed beyond the 1m structural pivot, not at entry ──
+        // At 125x, SL_PCT/lev = 0.12% from entry. If entry is $2,100 and the 1m LH
+        // pivot is at $2,102, old SL = $2,102.52 — only $0.52 above LH. The confirming
+        // wick (next 1-2 bars after LH forms) easily hits it, stopping a correct trade.
+        // Fix: anchor SL to the pivot price so SL is always 0.12% BEYOND the structural
+        // level, not right at it. pick.smcContext.level = 1m LH (for SHORT) / HL (for LONG).
+        const smcPivotPrice = pick.smcContext?.level ?? null;
+        const slAnchor = smcPivotPrice ?? price;
+        if (smcPivotPrice) {
+          const pivotGap = isLong
+            ? (price - smcPivotPrice) / price   // LONG: how far above HL pivot
+            : (smcPivotPrice - price) / price;  // SHORT: how far below LH pivot
+          userLog.trade(
+            `User ${key.email}: SMC pivot anchor — ${isLong ? 'HL' : 'LH'}=${smcPivotPrice.toFixed(4)} ` +
+            `entry=${price.toFixed(4)} gap=${(pivotGap * 100).toFixed(3)}% ` +
+            `SL anchored to pivot (not entry)`
+          );
+        }
+        const initialSlPrice = isLong ? slAnchor * (1 - slPricePct) : slAnchor * (1 + slPricePct);
         const userTpPrice = isLong ? price * (1 + tpPricePct) : price * (1 - tpPricePct);
         const userTp3Price = isLong ? price * (1 + tpPricePct * 2.0) : price * (1 - tpPricePct * 2.0);
 
@@ -3383,7 +3393,7 @@ async function syncTradeStatus() {
               // At  75x: TP1 = +0.80% price (+60% cap), TP2 = +1.33% price (+100% cap).
               const TP1_CAPITAL = 0.60; // +60% capital
               const TP2_CAPITAL = 1.00; // +100% capital
-              const SL_AT_TP1   = 0.59; // lock SL at +59% capital after TP1 hit
+              const SL_AT_TP1   = 0.45; // lock SL at +45% capital after TP1 hit
 
               const tp1AlreadyHit = trade.smc_tp1_hit === true || trade.smc_tp1_hit === 't';
 
@@ -3469,172 +3479,42 @@ async function syncTradeStatus() {
                 continue;
               }
 
-              // Legacy TRIPLE_MA / SPIKE_HL trail/exit blocks removed — those
-              // strategies are no longer used as signal sources, and any
-              // remaining open trades with those market_structure tags will
-              // fall through to the standard v3 trailing logic below.
-              const bxSlPrec = inferPricePrec(trade.sl_price);
-              const currentSl = parseFloat(trade.trailing_sl_price) || parseFloat(trade.sl_price) || 0;
-              bLog.trade(`Bitunix trail check: ${trade.symbol} cur=$${fmtPrice(curPrice)} entry=$${entryPrice} pricePct=${(profitPct*100).toFixed(3)}% capitalPct=${(capitalPct*100).toFixed(2)}% lev=${tradeLev}x currentSL=$${currentSl.toFixed(bxSlPrec)}`);
+              // ── Step lock: +35% capital → SL moves to +20% capital ──────
+              // One move only. No tier table. SL stays at +20% until TP1.
+              const STEP_TRIGGER = 0.35;
+              const STEP_LOCK    = 0.20;
+              if (!tp1AlreadyHit && lastStep < STEP_LOCK && capitalPct >= STEP_TRIGGER) {
+                const bxSlPrecStep  = inferPricePrec(trade.sl_price);
+                const stepSlPricePct = STEP_LOCK / tradeLev;
+                const stepSlPrice    = isLong
+                  ? entryPrice * (1 + stepSlPricePct)
+                  : entryPrice * (1 - stepSlPricePct);
+                const stepSlFmt = parseFloat(stepSlPrice.toFixed(bxSlPrecStep));
 
-              // ── Bitunix trailing SL calculation ──────────────────────────────
-              // Rules:
-              //   • Only fire once profit is meaningful (>= 0.5% price from entry, i.e. ~10% capital at 20x)
-              //   • SL must be at least MIN_TRAIL_DIST below current price (Bitunix rejects closer)
-              //   • SL can never go backwards (only improves vs current SL)
-              //   • Lock in progressively more profit as price climbs
-              //
-              // Strategy: trail at TRAIL_LOCK_BEHIND (0.5% of current price) behind current price,
-              // but no closer than MIN_TRAIL_DIST.  This fires reliably and Bitunix always accepts it.
-              const MIN_TRAIL_DIST  = 0.005;  // 0.5% from current price minimum (exchange requirement)
-              const TRAIL_LOCK_PCT  = 0.008;  // lock SL 0.8% behind current price for LONG
-
-              let newSlPrice = null;
-              let slSource = '';
-              let tierLastStep = null;
-
-              // ── Tier-based trail (TRAILING_TIERS, capital %) ──────
-              // +21%→+20%, +31%→+30%, +41%→+40%, ... regardless of leverage.
-              // The previous price-based gate (0.5% price = 50% capital at
-              // 100x) never fired at the user's requested +21% capital
-              // milestone on high-leverage trades. This path uses capital%
-              // so 100x ETH at +21% locks +20% the same as 20x BTC at +21%.
-              const lastStepCap  = parseFloat(trade.trailing_sl_last_step) || 0;
-              // smcMode disabled: V4 SMC fires all tiers every step (smcMode was for 3-timing only).
-              const tierResult   = calculateTrailingStep(entryPrice, curPrice, isLong, lastStepCap, tradeLev, 0, false);
-              if (tierResult) {
-                const tierSl = tierResult.newSlPrice;
-                // Reject if SL would be on the wrong side of current price
-                // (immediate trigger). Real-world: at 100x +21% peak, +20%
-                // lock is 0.01% price below current — fine. Edge case:
-                // price retraced below the lock level → skip and let the
-                // fallback handle it.
-                const validSide = isLong ? tierSl < curPrice : tierSl > curPrice;
-                const wouldImprove = isLong ? tierSl > currentSl : tierSl < currentSl;
-                if (validSide && wouldImprove) {
-                  // Enforce Bitunix MIN_TRAIL_DIST (0.5% from current price).
-                  // Short positions with high capital gain have tier SL very
-                  // close to current price (e.g. SHORT 75x +31%: only 0.1%
-                  // away). Bitunix rejects SL updates that are too close.
-                  // Clamp outward to exactly MIN_TRAIL_DIST so the update lands.
-                  const minDistSl = isLong
-                    ? curPrice * (1 - MIN_TRAIL_DIST)  // LONG: SL must be ≤ this
-                    : curPrice * (1 + MIN_TRAIL_DIST);  // SHORT: SL must be ≥ this
-                  const tooClose = isLong
-                    ? tierSl > minDistSl   // LONG: tier SL above the floor → too close
-                    : tierSl < minDistSl;  // SHORT: tier SL below the ceiling → too close
-                  const clampedTierSl = tooClose ? minDistSl : tierSl;
-                  if (tooClose) {
-                    bLog.trade(`Bitunix trail: ${trade.symbol} tier SL ${tierSl.toFixed(bxSlPrec)} too close to current ${curPrice.toFixed(bxSlPrec)} (<${MIN_TRAIL_DIST * 100}%), clamped to ${clampedTierSl.toFixed(bxSlPrec)}`);
-                  }
-                  newSlPrice    = clampedTierSl;
-                  slSource      = `tier+${Math.round(tierResult.newLastStep * 100)}%${tooClose ? '+minDist' : ''}`;
-                  tierLastStep  = tierResult.newLastStep;
+                try {
+                  await updateStopLoss(userClient, trade.symbol, stepSlFmt, null, 'bitunix', bxSlPrecStep);
+                  bLog.trade(`[STEP-LOCK] ${trade.symbol} +35% capital → SL locked at +20% capital = $${stepSlFmt}`);
+                } catch (stepErr) {
+                  bLog.error(`[STEP-LOCK] ${trade.symbol} SL update failed: ${stepErr.message}`);
                 }
-              }
-
-              // ── Fallback: 0.8% behind current price ─────────────
-              // Only runs if tier trail didn't produce an improvement.
-              // Threshold: +10% capital gain minimum (not fixed 0.5% price,
-              // which at 100x = 50% capital — far too late for a fallback).
-              const fallbackCapThreshold = 0.10; // +10% capital minimum
-              if (!newSlPrice && (bxProfitPct * tradeLev) >= fallbackCapThreshold) {
-                const rawTrailSl = isLong
-                  ? curPrice * (1 - TRAIL_LOCK_PCT)
-                  : curPrice * (1 + TRAIL_LOCK_PCT);
-
-                // Enforce minimum distance from current price
-                const minSl = isLong
-                  ? curPrice * (1 - MIN_TRAIL_DIST)
-                  : curPrice * (1 + MIN_TRAIL_DIST);
-                const candidateSl = isLong
-                  ? Math.min(rawTrailSl, minSl)   // LONG: SL must be ≤ minSl (further from current)
-                  : Math.max(rawTrailSl, minSl);
-
-                // Must improve current SL (never go backwards)
-                const wouldImprove = isLong
-                  ? candidateSl > currentSl
-                  : candidateSl < currentSl;
-
-                if (wouldImprove) {
-                  newSlPrice = candidateSl;
-                  slSource = 'price_trail';
+                try {
+                  await db.query(
+                    `UPDATE trades SET trailing_sl_price = $1, sl_price = $1, trailing_sl_last_step = $2 WHERE id = $3`,
+                    [stepSlFmt, STEP_LOCK, trade.id]
+                  );
+                } catch (stepDbErr) {
+                  bLog.error(`[STEP-LOCK] ${trade.symbol} DB update failed: ${stepDbErr.message}`);
                 }
-              }
-
-              // ── Candle-low fallback: use 15m candle low if it's better ──
-              const candleTrail = await calcCandleTrailSl(trade.symbol, isLong, currentSl);
-              if (candleTrail) {
-                const candidateCandle = candleTrail.newSl;
-                // Candle trail must also respect minimum distance
-                const candleTooClose = isLong
-                  ? candidateCandle > curPrice * (1 - MIN_TRAIL_DIST)
-                  : candidateCandle < curPrice * (1 + MIN_TRAIL_DIST);
-                if (!candleTooClose) {
-                  const candleImproves = isLong
-                    ? candidateCandle > (newSlPrice || currentSl)
-                    : candidateCandle < (newSlPrice || currentSl);
-                  if (candleImproves && bxProfitPct > 0.002) {
-                    newSlPrice = candidateCandle;
-                    slSource = candleTrail.source;
-                  }
-                }
-              }
-
-              if (!newSlPrice) {
-                bLog.trade(`Bitunix trail: ${trade.symbol} no improvement (capitalPct=${(bxProfitPct*tradeLev*100).toFixed(1)}% currentSL=$${currentSl.toFixed(bxSlPrec)}) — skipping`);
+                await notify(
+                  `🔒 *Step Lock* — *${trade.symbol}* ${isLong ? 'LONG' : 'SHORT'}\n` +
+                  `+${(capitalPct*100).toFixed(1)}% capital reached\n` +
+                  `SL locked at +${STEP_LOCK*100}% capital \`$${fmtPrice(stepSlFmt)}\``
+                );
                 continue;
               }
-              bLog.trade(`Bitunix trailing SL (${slSource}): ${trade.symbol} → newSL=$${newSlPrice.toFixed(bxSlPrec)}`);
-              await notify(`🔧 *Trail SL*\n${trade.symbol} ${isLong ? 'LONG' : 'SHORT'}\n+${(bxProfitPct*tradeLev*100).toFixed(1)}% capital\nSL → \`$${newSlPrice.toFixed(bxSlPrec)}\` (was $${currentSl.toFixed(bxSlPrec)})\ncur=$${curPrice.toFixed(bxSlPrec)}`);
 
-              // ── Update SL on exchange (retry up to 3 times) ──
-              let slUpdated = false;
-              let slLastError = '';
-              for (let attempt = 1; attempt <= 3; attempt++) {
-                try {
-                  // Only pass TP for hard-TP setups (RANGE_BOUNCE / SCENARIO_A).
-                  // SMC/V4 trailing SL has NO ceiling — let winners run freely.
-                  const hasHardTp = trade.setup === 'RANGE_BOUNCE' || trade.setup === 'SCENARIO_A';
-                  const existingTp = hasHardTp ? (parseFloat(trade.tp_price) || 0) : 0;
-                  slUpdated = await updateStopLoss(userClient, trade.symbol, newSlPrice, null, 'bitunix', bxSlPrec, existingTp || undefined);
-                  if (slUpdated) break;
-                  slLastError = 'updateStopLoss returned false';
-                  bLog.error(`WATCHDOG: updateStopLoss returned false for ${trade.symbol} (attempt ${attempt}/3)`);
-                } catch (e) {
-                  slLastError = e.message;
-                  bLog.error(`WATCHDOG: updateStopLoss failed for ${trade.symbol} attempt ${attempt}/3: ${e.message}`);
-                  if (attempt < 3) await new Promise(r => setTimeout(r, 1000));
-                }
-              }
-
-              if (slUpdated) {
-                // Store the tier's lock level when tier-trail fired (so the
-                // tier table doesn't re-trigger the same step); otherwise
-                // store the raw capital % so future tier comparisons still
-                // know how far we've already trailed.
-                const newLastStep = tierLastStep != null ? tierLastStep : (bxProfitPct * tradeLev);
-                await db.query(
-                  `UPDATE trades SET trailing_sl_price = $1, trailing_sl_last_step = $2 WHERE id = $3`,
-                  [newSlPrice, newLastStep, trade.id]
-                );
-                bLog.trade(`✓ Trailing SL (Bitunix/${slSource}): ${trade.symbol} SL=$${newSlPrice.toFixed(bxSlPrec)}`);
-                await notify(
-                  `📈 *Trailing SL Moved*\n` +
-                  `*${trade.symbol}* ${isLong ? 'LONG' : 'SHORT'}\n` +
-                  `SL → \`$${newSlPrice.toFixed(bxSlPrec)}\` (${slSource})`
-                );
-              } else {
-                bLog.error(`WATCHDOG ALERT: Failed to set trailing SL for ${trade.symbol} after 3 attempts! Last error: ${slLastError}`);
-                await notify(
-                  `🚨 *TRAILING SL FAILED*\n` +
-                  `*${trade.symbol}* ${isLong ? 'LONG' : 'SHORT'}\n` +
-                  `Profit: +${(bxProfitPct*tradeLev*100).toFixed(1)}% capital\n` +
-                  `SL=$${newSlPrice.toFixed(bxSlPrec)} (${slSource})\n` +
-                  `Error: \`${slLastError.substring(0, 150)}\`\n` +
-                  `⚠️ Check position manually!`
-                );
-              }
+              // SL stays fixed — waiting for TP1
+              bLog.trade(`Bitunix: ${trade.symbol} waiting for TP1 (${(capitalPct*100).toFixed(1)}%/${TP1_CAPITAL*100}% capital) — SL fixed`);
             }
           }
         }

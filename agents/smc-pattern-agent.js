@@ -50,99 +50,6 @@ const UNBLOCK_FLOOR    = 0.50;      // ≥ 50% WR → unblock
 // (bullish BMS) or below the last confirmed pivot LOW (bearish BMS).
 // Uses TV indicator's asymmetric pivot: 1 left bar, 2 right bars.
 // When bullish BMS is active → no SHORTs.  When bearish BMS → no LONGs.
-function detect1mBMS(bars) {
-  if (!bars || bars.length < 10) return null;
-  const last = bars[bars.length - 1]; // current (most recent closed) bar
-
-  // Pivot highs: bar[i].h must exceed 1 bar to the left and 2 bars to the right
-  let lastHighPrice = null;
-  for (let i = 1; i < bars.length - 2; i++) {
-    if (bars[i].h > bars[i - 1].h && bars[i].h > bars[i + 1].h && bars[i].h > bars[i + 2].h) {
-      lastHighPrice = bars[i].h;
-    }
-  }
-
-  // Pivot lows: bar[i].l must be under 1 bar to the left and 2 bars to the right
-  let lastLowPrice = null;
-  for (let i = 1; i < bars.length - 2; i++) {
-    if (bars[i].l < bars[i - 1].l && bars[i].l < bars[i + 1].l && bars[i].l < bars[i + 2].l) {
-      lastLowPrice = bars[i].l;
-    }
-  }
-
-  if (lastHighPrice !== null && last.c > lastHighPrice) return 'BULLISH'; // closed above swing high
-  if (lastLowPrice  !== null && last.c < lastLowPrice)  return 'BEARISH'; // closed below swing low
-  return null;
-}
-
-// ── 1m structure classifier — used to validate CHoCH signals ─
-// CHoCH is only a valid REVERSAL when it breaks the PRIOR trend:
-//   CHoCH-BEAR (→ SHORT) requires prior BULLISH structure (HH or HL present)
-//   CHoCH-BULL (→ LONG)  requires prior BEARISH structure (LL or LH present)
-// If structure is already trending the same way → continuation, not reversal → skip.
-function classify1mStructure(bars1m) {
-  if (!bars1m || bars1m.length < 12) return { bullishStructure: false, bearishStructure: false };
-
-  const recent = bars1m.slice(-50); // last 50 bars ≈ 50 minutes of context
-  const ph = [], pl = [];
-  for (let i = 1; i < recent.length - 2; i++) {
-    if (recent[i].h > recent[i-1].h && recent[i].h > recent[i+1].h && recent[i].h > recent[i+2].h)
-      ph.push(recent[i].h);
-    if (recent[i].l < recent[i-1].l && recent[i].l < recent[i+1].l && recent[i].l < recent[i+2].l)
-      pl.push(recent[i].l);
-  }
-
-  // HH: last pivot high > second-last pivot high (rising highs)
-  const hasHH = ph.length >= 2 && ph[ph.length - 1] > ph[ph.length - 2];
-  // HL: last pivot low  > second-last pivot low  (rising lows)
-  const hasHL = pl.length >= 2 && pl[pl.length - 1] > pl[pl.length - 2];
-  // LH: last pivot high < second-last pivot high (falling highs)
-  const hasLH = ph.length >= 2 && ph[ph.length - 1] < ph[ph.length - 2];
-  // LL: last pivot low  < second-last pivot low  (falling lows)
-  const hasLL = pl.length >= 2 && pl[pl.length - 1] < pl[pl.length - 2];
-
-  return {
-    hasHH, hasHL, hasLH, hasLL,
-    bullishStructure: hasHH || hasHL, // at least one rising pivot = prior bullish structure
-    bearishStructure: hasLL || hasLH, // at least one falling pivot = prior bearish structure
-  };
-}
-
-// ── Session VWAP + ±1σ bands ─────────────────────────────────
-// Computed from 3m bars (up to 24h of data).
-// Rule: price ≤ lower band → NO LONG (in downtrend territory)
-//       price ≥ upper band → NO SHORT (in uptrend territory)
-// This matches TradingView "VWAP Session" with standard deviation bands.
-function computeVWAP(bars) {
-  if (!bars || bars.length < 10) return null;
-
-  // Use bars from the current session (00:00 UTC today) for accurate VWAP.
-  // Fall back to all supplied bars if the session filter leaves too few.
-  const sessionStart = new Date();
-  sessionStart.setUTCHours(0, 0, 0, 0);
-  const sessionTs = sessionStart.getTime();
-  const sessionBars = bars.filter(b => b.t >= sessionTs);
-  const vwapBars = sessionBars.length >= 10 ? sessionBars : bars;
-
-  let sumTPV = 0, sumV = 0;
-  const tps = [];
-  for (const b of vwapBars) {
-    const tp = (b.h + b.l + b.c) / 3;
-    const vol = b.v || 1;
-    sumTPV += tp * vol;
-    sumV   += vol;
-    tps.push(tp);
-  }
-  if (sumV === 0 || tps.length === 0) return null;
-
-  const vwap = sumTPV / sumV;
-  // Volume-weighted variance — matches TradingView VWAP band calculation exactly.
-  // Simple (unweighted) variance produces bands that are too narrow vs TradingView.
-  const variance = vwapBars.reduce((s, b, i) => s + b.v * (tps[i] - vwap) ** 2, 0) / sumV;
-  const stdDev = Math.sqrt(variance);
-
-  return { vwap, upper: vwap + stdDev, lower: vwap - stdDev };
-}
 
 // Symbols to scan — pulled from TRADING_CONFIG (XRP excluded there)
 const SYMBOLS = Object.keys(TRADING_CONFIG);
@@ -152,7 +59,6 @@ const SYMBOLS = Object.keys(TRADING_CONFIG);
 // Bybit uses the same minute values as strings, but '60' = '60' and '240' = '240'.
 // 4H on Bybit is interval='240'.
 const INTERVAL_4H = '240';
-const INTERVAL_3M = '3';
 
 // ── Signal formatter ─────────────────────────────────────────
 // Adapts scanPatterns output to the shape TraderAgent expects.
@@ -222,12 +128,14 @@ class SMCPatternAgent extends BaseAgent {
     // Cooldown map: 'BTCUSDT_NP_HL' → lastSignalTs (45-min, shared with scanNearestPivotMatch)
     this._cooldowns    = new Map();
 
-    // BMS (Break of Market Structure) state per symbol.
-    // Bullish BMS (close above last swing high) → block all SHORTs.
-    // Bearish BMS (close below last swing low)  → block all LONGs.
-    // Expires after 2h.
-    // Map: symbol → { dir: 'BULLISH'|'BEARISH', detectedAt: timestamp }
-    this._bmsState = new Map();
+    // ── "Next candle" pending signals ──────────────────────────────────
+    // User rule: "find 1m LH/HL → fire on the NEXT candle"
+    // When a signal fires, store it here instead of executing immediately.
+    // On the next execute() that sees a NEW 1m candle has opened (bar.t > pending.barTs),
+    // the pending signal is promoted and executed.
+    // Key: symbol → { signal, barTs (1m bar open time when detected), dir, detectedAt }
+    this._pendingSignals = new Map();
+
 
     // Active virtual trades: signal.symbol+'_'+signal.smcContext.pattern → { ...signal, bars4hCache }
     // Used to run checkTradeState per bar and log outcomes.
@@ -365,7 +273,7 @@ class SMCPatternAgent extends BaseAgent {
         bLog.scan(`[SMC-PAT] ${sym}: 15m=${bars15m.length} 1m=${bars1m.length}`);
 
         // ── Core signal: 15m LL→LH (SHORT) or 15m HH→HL (LONG) + 1m confirmation ──
-        const raw = scanNearestPivotMatch(sym, bars15m, bars1m, bars4h, this._cooldowns);
+        const raw = scanNearestPivotMatch(sym, bars15m, bars1m, bars4h, this._cooldowns, bLog.scan);
         if (!raw) continue;
 
         bLog.scan(`[SMC-PAT] ${sym} SIGNAL: key=${raw.keyLevel?.toFixed(4)} 1m_piv=${raw.pivot1m?.toFixed(4)} type=${raw.pattern} dir=${raw.dir}`);
@@ -407,7 +315,134 @@ class SMCPatternAgent extends BaseAgent {
       startedAt: Date.now(),
     };
 
-    if (!signals.length) {
+    // ── Step 4: Promote pending signals only when next candle confirms "not LH/HL" ────
+    //
+    // 4-step rule:
+    //   1. 15m LL (SHORT) or HH (LONG)
+    //   2. 15m LH (SHORT) or HL (LONG)
+    //   3. 1m  LH (SHORT) or HL (LONG)   ← stored as pending at this point
+    //   4. NEXT 1m candle must NOT be a LH/HL (must respect the pivot level):
+    //        SHORT: next bar HIGH < 1m LH level → fire.  HIGH ≥ level → still LH → wait.
+    //        LONG:  next bar LOW  > 1m HL level → fire.  LOW  ≤ level → still HL → wait.
+    //      Cancel if structure is broken (price blows through the pivot by >0.1%).
+    //      Fire only when the candle that opens AFTER the pivot candle respects it.
+    //      Update entry price to current candle close when promoting.
+    const pendingToExecute = [];
+    for (const [sym, pending] of this._pendingSignals.entries()) {
+      // Expire after 5 candles (5 min) — if market doesn't confirm, signal is stale
+      if (now - pending.detectedAt > 5 * 60_000) {
+        bLog.scan(`[SMC-PAT] PENDING ${sym} ${pending.dir}: expired (5-min timeout) — reset structure`);
+        this.addActivity('skip', `${sym} ${pending.dir} — step-4 expired, waiting for new 15m structure`);
+        this._pendingSignals.delete(sym);
+        continue;
+      }
+
+      // Wait until the signal's 1m candle has fully closed (barTs + 60s elapsed)
+      if (now < pending.barTs + 60_000) {
+        const waitMs = (pending.barTs + 60_000) - now;
+        bLog.scan(`[SMC-PAT] PENDING ${sym} ${pending.dir}: waiting ${(waitMs/1000).toFixed(0)}s for candle close`);
+        continue;
+      }
+
+      // ── New candle has opened — fetch fresh 1m bars for step-4 check ──
+      let freshBars;
+      try {
+        freshBars = await fetchCandles(sym, '1', 5);
+      } catch (e) {
+        bLog.scan(`[SMC-PAT] PENDING ${sym} ${pending.dir}: bar fetch failed (${e.message}) — will retry next cycle`);
+        continue;
+      }
+      if (!freshBars || freshBars.length < 2) {
+        bLog.scan(`[SMC-PAT] PENDING ${sym} ${pending.dir}: insufficient bars — will retry next cycle`);
+        continue;
+      }
+
+      // The most-recently CLOSED bar (not still-forming) is the "next candle"
+      // freshBars[last] = still-forming (current), freshBars[last-1] = last closed.
+      // We need the bar that OPENED after the signal's pivot candle (barTs).
+      // Find the first bar whose open time > pending.barTs.
+      const nextBar = freshBars.find(b => b.t > pending.barTs);
+      if (!nextBar) {
+        bLog.scan(`[SMC-PAT] PENDING ${sym} ${pending.dir}: no bar found after barTs ${pending.barTs} — retrying`);
+        continue;
+      }
+
+      const pivotLevel = pending.level; // 1m LH price (SHORT) or 1m HL price (LONG)
+      const isShort    = pending.dir === 'SHORT';
+
+      if (!pivotLevel) {
+        // No pivot level stored → can't check → promote immediately
+        bLog.scan(`[SMC-PAT] PENDING ${sym} ${pending.dir}: no pivot level — promoting directly`);
+        pending.signal.price     = nextBar.c;
+        pending.signal.lastPrice = nextBar.c;
+        pendingToExecute.push(pending.signal);
+        this._pendingSignals.delete(sym);
+        continue;
+      }
+
+      if (isShort) {
+        // SHORT: next candle HIGH must be BELOW the 1m LH pivot (bar is not a new LH)
+        if (nextBar.h > pivotLevel * 1.001) {
+          // Structure broken — price punched above LH, invalidate signal
+          bLog.scan(
+            `[SMC-PAT] PENDING ${sym} SHORT: CANCELLED — next bar HIGH ${nextBar.h.toFixed(4)} ` +
+            `broke above LH pivot ${pivotLevel.toFixed(4)} — structure invalid`
+          );
+          this.addActivity('skip', `${sym} SHORT — step-4 failed: price broke above 1m LH, resetting`);
+          this._pendingSignals.delete(sym);
+        } else if (nextBar.h >= pivotLevel) {
+          // Still forming a LH — wait for the next candle
+          bLog.scan(
+            `[SMC-PAT] PENDING ${sym} SHORT: WAIT — next bar HIGH ${nextBar.h.toFixed(4)} ` +
+            `still at LH level ${pivotLevel.toFixed(4)} — waiting another candle`
+          );
+          // Advance barTs to this candle so we wait for the NEXT one
+          pending.barTs = nextBar.t;
+        } else {
+          // next bar HIGH < LH pivot → confirmed "not LH" → fire
+          bLog.scan(
+            `[SMC-PAT] PENDING ${sym} SHORT: CONFIRMED — next bar HIGH ${nextBar.h.toFixed(4)} ` +
+            `below LH ${pivotLevel.toFixed(4)} — step 4 passed, firing`
+          );
+          this.addActivity('trade', `${sym} SHORT — step 4 confirmed: next candle respected LH pivot`);
+          pending.signal.price     = nextBar.c;
+          pending.signal.lastPrice = nextBar.c;
+          pendingToExecute.push(pending.signal);
+          this._pendingSignals.delete(sym);
+        }
+      } else {
+        // LONG: next candle LOW must be ABOVE the 1m HL pivot (bar is not a new HL)
+        if (nextBar.l < pivotLevel * 0.999) {
+          // Structure broken — price dropped below HL, invalidate signal
+          bLog.scan(
+            `[SMC-PAT] PENDING ${sym} LONG: CANCELLED — next bar LOW ${nextBar.l.toFixed(4)} ` +
+            `broke below HL pivot ${pivotLevel.toFixed(4)} — structure invalid`
+          );
+          this.addActivity('skip', `${sym} LONG — step-4 failed: price broke below 1m HL, resetting`);
+          this._pendingSignals.delete(sym);
+        } else if (nextBar.l <= pivotLevel) {
+          // Still forming a HL — wait for the next candle
+          bLog.scan(
+            `[SMC-PAT] PENDING ${sym} LONG: WAIT — next bar LOW ${nextBar.l.toFixed(4)} ` +
+            `still at HL level ${pivotLevel.toFixed(4)} — waiting another candle`
+          );
+          pending.barTs = nextBar.t;
+        } else {
+          // next bar LOW > HL pivot → confirmed "not HL" → fire
+          bLog.scan(
+            `[SMC-PAT] PENDING ${sym} LONG: CONFIRMED — next bar LOW ${nextBar.l.toFixed(4)} ` +
+            `above HL ${pivotLevel.toFixed(4)} — step 4 passed, firing`
+          );
+          this.addActivity('trade', `${sym} LONG — step 4 confirmed: next candle respected HL pivot`);
+          pending.signal.price     = nextBar.c;
+          pending.signal.lastPrice = nextBar.c;
+          pendingToExecute.push(pending.signal);
+          this._pendingSignals.delete(sym);
+        }
+      }
+    }
+
+    if (!signals.length && !pendingToExecute.length) {
       this.addActivity('info', 'No pattern setups this cycle — waiting for pivot retest');
       return { ok: true, signals: 0 };
     }
@@ -460,12 +495,47 @@ class SMCPatternAgent extends BaseAgent {
           });
         }
 
-        if (approved.length && traderAgent && !traderAgent.paused) {
-          this.addActivity('trade', `Routing ${approved.length} pattern signal(s) → TraderAgent`);
-          bLog.trade(`[SMC-PAT] → TraderAgent.execute ${approved.length} signal(s): ` +
-            approved.map(s => `${s.symbol} ${s.direction} score=${s.score}`).join(', '));
-          await traderAgent.execute({ signals: approved, mode: 'signals' });
-          this.addActivity('success', `TraderAgent executed ${approved.length} pattern signal(s)`);
+        // ── Store new signals as PENDING — execute on next candle ──────────
+        // User rule: "fire on the NEXT candle after 1m LH/HL signal"
+        // Don't route to TraderAgent immediately. Store with the current 1m
+        // bar timestamp. The pending check at the top of execute() will promote
+        // these once a new 1m bar opens (barTs + 60s elapsed).
+        for (const sig of approved) {
+          const sym = sig.symbol;
+          // If there's already a pending signal for this symbol in the OPPOSITE
+          // direction, it means structure changed — cancel old, store new.
+          const existing = this._pendingSignals.get(sym);
+          if (existing && existing.dir !== sig.direction) {
+            bLog.scan(`[SMC-PAT] PENDING ${sym}: direction flipped ${existing.dir}→${sig.direction} — replacing`);
+            this._pendingSignals.delete(sym);
+          }
+          if (!this._pendingSignals.has(sym)) {
+            const barTs = sig.ts ?? now; // sig.ts = 1m bar open time from smc-engine
+            this._pendingSignals.set(sym, {
+              signal:      sig,
+              dir:         sig.direction,
+              level:       sig.smcContext?.level ?? null, // 1m LH/HL pivot price
+              barTs,       // 1m bar open time when signal was detected
+              detectedAt:  now,
+            });
+            bLog.trade(
+              `[SMC-PAT] PENDING: ${sym} ${sig.direction} — waiting for next 1m candle ` +
+              `(barTs=${new Date(barTs).toISOString().slice(11,19)} UTC, ` +
+              `entry in ~${Math.max(0, Math.ceil((barTs + 60_000 - now)/1000))}s)`
+            );
+            this.addActivity('info',
+              `${sym} ${sig.direction} signal stored — enters on next candle open`
+            );
+          }
+        }
+
+        // ── Execute promoted signals (waited one full candle) ──────────────
+        if (pendingToExecute.length && traderAgent && !traderAgent.paused) {
+          this.addActivity('trade', `Executing ${pendingToExecute.length} next-candle signal(s) → TraderAgent`);
+          bLog.trade(`[SMC-PAT] → TraderAgent.execute ${pendingToExecute.length} next-candle signal(s): ` +
+            pendingToExecute.map(s => `${s.symbol} ${s.direction} score=${s.score}`).join(', '));
+          await traderAgent.execute({ signals: pendingToExecute, mode: 'signals' });
+          this.addActivity('success', `TraderAgent executed ${pendingToExecute.length} next-candle signal(s)`);
         }
       } catch (err) {
         this.addActivity('error', `Signal routing failed: ${err.message}`);
