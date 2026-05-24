@@ -2001,9 +2001,9 @@ function scan1mPatterns(sym, bars1m, bars4h, cooldowns = new Map()) {
 //   LOW : bars[i].l < bars[i-1].l AND bars[i].l < bars[i+1].l AND bars[i].l < bars[i+2].l
 
 // ── Signal engine constants ───────────────────────────────────────────
-const STRUCT_BARS_15M  = 12;        // structure context: HH (for LONG) or LL (for SHORT) can be up to 3 h old
-const PIVOT_FRESH_BARS = 4;         // entry pivot freshness: HL (LONG) or LH (SHORT) must be ≤4 bars = 60 min old
-const WINDOW_MS        = 45 * 60_000; // 1m pivot must form within 45 min of the 15m pivot bar open
+const STRUCT_BARS_15M  = 16;        // structure context: HH (for LONG) or LL (for SHORT) can be up to 4 h old
+const PIVOT_FRESH_BARS = 8;         // entry pivot freshness: HL (LONG) or LH (SHORT) must be ≤8 bars = 2 h old
+const WINDOW_MS        = 2 * 60 * 60_000; // 1m pivot must form within 2 h of the 15m pivot bar open
 const ENTRY_TOL        = 0.002;     // MUST equal slPct — entry must be within slPct% of the 1m HL/LH.
                                     // If ENTRY_TOL > slPct the SL would float above the structural HL when
                                     // entering at max drift, blowing out capital by 2× slPct × leverage.
@@ -2059,44 +2059,66 @@ function _rawPivots(bars) {
 // Sideways market (no LL→LH or HH→HL sequence) → returns null → no trade.
 // minBouncePct: pass 0 — 2L/2R pivot detection on 15m candles is the sole judge.
 // The lowest candle in a 60-min window IS the HL; no artificial % filter on top.
-function _detect15mStructure(ph15, pl15, bars15mLen, minBouncePct) {
+function _detect15mStructure(ph15, pl15, bars15m, minBouncePct) {
   if (ph15.length < 2 || pl15.length < 2) return null;
+  if (!bars15m || bars15m.length < 6) return null;
 
-  const lastH = ph15[ph15.length - 1];  // most recent 15m pivot HIGH
-  const prevH = ph15[ph15.length - 2];  // previous 15m pivot HIGH
-  const lastL = pl15[pl15.length - 1];  // most recent 15m pivot LOW
-  const prevL = pl15[pl15.length - 2];  // previous 15m pivot LOW
+  const bars15mLen = bars15m.length;
 
-  // ── SHORT: sequence is LL → LH ───────────────────────────────────
-  // LH must be the most recent overall pivot (after the LL).
-  // The most recent LOW before that LH must be a LL.
-  // Bounce (LH - LL) / LL must be at least minBouncePct — blocks dead-cat
-  // micro-bounces that technically form a LH but are meaningless in structure.
-  const isLH = lastH.price < prevH.price;
-  if (isLH && lastH.barTs > lastL.barTs) {
-    const isLL      = lastL.price < prevL.price;
-    const lhAge     = (bars15mLen - 1) - lastH.idx;
-    const llAge     = (bars15mLen - 1) - lastL.idx;
-    const bouncePct = (lastH.price - lastL.price) / lastL.price;
-    if (isLL && lhAge <= PIVOT_FRESH_BARS && llAge <= STRUCT_BARS_15M &&
-        bouncePct >= minBouncePct) {
-      return { dir: 'SHORT', pivot15: lastH, preceding: lastL, label: 'LL→LH' };
+  // Use actual candle data for global extremes — catches spiky moves that aren't 2L/2R pivots.
+  // This prevents treating a local LH as HH when an older HH candle exists in the window.
+  const globalMaxH = Math.max(...bars15m.map(b => b.h));
+  const globalMinL = Math.min(...bars15m.map(b => b.l));
+  const EXTREME_TOL = 0.002; // 0.2% — candle must be within this of true extreme to count
+
+  // ── SHORT: LL → LH ───────────────────────────────────────────────
+  // Find the TRUE LL: pivot low nearest the global candle minimum.
+  // Then find the most recent pivot HIGH after it that is a genuine LH
+  // (below the global candle max — not the new HH).
+  const llPivot = pl15.reduce((min, p) => p.price < min.price ? p : min, pl15[0]);
+  const llAge   = (bars15mLen - 1) - llPivot.idx;
+
+  if (llAge <= STRUCT_BARS_15M) {
+    const lhCandidates = ph15.filter(p =>
+      p.barTs > llPivot.barTs &&                        // LH formed AFTER the LL
+      p.price < globalMaxH * (1 - EXTREME_TOL)          // NOT the global max → genuine LH
+    );
+    if (lhCandidates.length > 0) {
+      const lh    = lhCandidates[lhCandidates.length - 1]; // most recent valid LH
+      const lhAge = (bars15mLen - 1) - lh.idx;
+      if (lhAge <= PIVOT_FRESH_BARS) {
+        return { dir: 'SHORT', pivot15: lh, preceding: llPivot, label: 'LL→LH' };
+      }
     }
   }
 
-  // ── LONG: sequence is HH → HL ────────────────────────────────────
-  // HL must be the most recent overall pivot (after the HH).
-  // The most recent HIGH before that HL must be a HH.
-  // Pullback (HH - HL) / HH must be at least minBouncePct.
-  const isHL = lastL.price > prevL.price;
-  if (isHL && lastL.barTs > lastH.barTs) {
-    const isHH       = lastH.price > prevH.price;
-    const hlAge      = (bars15mLen - 1) - lastL.idx;
-    const hhAge      = (bars15mLen - 1) - lastH.idx;
-    const pullbackPct = (lastH.price - lastL.price) / lastH.price;
-    if (isHH && hlAge <= PIVOT_FRESH_BARS && hhAge <= STRUCT_BARS_15M &&
-        pullbackPct >= minBouncePct) {
-      return { dir: 'LONG', pivot15: lastL, preceding: lastH, label: 'HH→HL' };
+  // ── LONG: HH → HL ────────────────────────────────────────────────
+  // Find the TRUE HH: pivot high nearest the global candle maximum.
+  // Then find the most recent pivot LOW after it that is a genuine HL
+  // (above the global candle min — not a new LL).
+  // Extra guard: if any pivot low between the HH and HL went below the pre-HH
+  // minimum → structure broke → LONG invalid.
+  const hhPivot = ph15.reduce((max, p) => p.price > max.price ? p : max, ph15[0]);
+  const hhAge   = (bars15mLen - 1) - hhPivot.idx;
+
+  if (hhAge <= STRUCT_BARS_15M) {
+    const hlCandidates = pl15.filter(p =>
+      p.barTs > hhPivot.barTs &&                        // HL formed AFTER the HH
+      p.price > globalMinL * (1 + EXTREME_TOL)          // NOT the global min → genuine HL
+    );
+    if (hlCandidates.length > 0) {
+      const hl    = hlCandidates[hlCandidates.length - 1]; // most recent valid HL
+      const hlAge = (bars15mLen - 1) - hl.idx;
+
+      // Reject if a LL was made between HH and HL (bearish structure break)
+      const lowestBetween = hlCandidates.reduce(
+        (min, p) => p.price < min ? p.price : min, Infinity
+      );
+      const noLLbreak = lowestBetween >= globalMinL * (1 + EXTREME_TOL);
+
+      if (hlAge <= PIVOT_FRESH_BARS && noLLbreak) {
+        return { dir: 'LONG', pivot15: hl, preceding: hhPivot, label: 'HH→HL' };
+      }
     }
   }
 
@@ -2140,7 +2162,7 @@ function scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns) {
   // Pass 0 for minBouncePct — candle-based 2L/2R detection is the sole judge.
   // A pivot LOW confirmed by 2L/2R (lowest price in a 60-min window on 15m) IS the HL.
   // Percentage thresholds override what the candles actually say and produce wrong signals.
-  const structure = _detect15mStructure(ph15, pl15, bars15m.length, 0);
+  const structure = _detect15mStructure(ph15, pl15, bars15m, 0);
   if (!structure) return null; // no HH→HL or LL→LH sequence — no trade
 
   const { dir, pivot15, label } = structure;

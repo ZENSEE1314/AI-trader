@@ -30,9 +30,9 @@ const {
 
 // ── Constants ────────────────────────────────────────────────
 const SCAN_INTERVAL_MS = 30_000;    // 30s scan cadence
-const BARS_15M         = 60;        // 15min bars — 60 bars = 15h of 15min data
+const BARS_15M         = 200;       // 15min bars — 200 bars = 50h of history (captures HH/LL context)
 const BARS_4H_TREND    = 250;       // 4H bars for EMA200 trend
-const BARS_1M          = 90;        // 1m bars — 90 min covers the 30-min 15m confirmation lag + buffer
+const BARS_1M          = 180;       // 1m bars — 180 min covers the 2h WINDOW_MS confirmation window
 const BARS_3M          = 480;       // 3m bars — 24h of 3min for VWAP
 const SCORE            = 72;        // signal score
 const AGENT_NAME       = 'SMCPatternAgent';
@@ -351,12 +351,11 @@ class SMCPatternAgent extends BaseAgent {
       try {
         const cfg = TRADING_CONFIG[sym];
 
-        // Parallel fetch: 15m + 4H trend + 1m + 3m VWAP
-        const [bars15m, bars4h, bars1m, bars3m] = await Promise.all([
+        // Parallel fetch: 15m + 4H + 1m
+        const [bars15m, bars4h, bars1m] = await Promise.all([
           fetchCandles(sym, '15',        BARS_15M),
           fetchCandles(sym, INTERVAL_4H, BARS_4H_TREND),
           fetchCandles(sym, '1',         BARS_1M),
-          fetchCandles(sym, INTERVAL_3M, BARS_3M),
         ]);
 
         if (!bars15m || bars15m.length < 10) continue;
@@ -365,105 +364,21 @@ class SMCPatternAgent extends BaseAgent {
 
         bLog.scan(`[SMC-PAT] ${sym}: 15m=${bars15m.length} 1m=${bars1m.length}`);
 
-        // ── BMS state update ─────────────────────────────────────────
-        if (bars1m.length >= 10) {
-          const bms = detect1mBMS(bars1m);
-          if (bms) {
-            const prev = this._bmsState.get(sym);
-            if (!prev || prev.dir !== bms) {
-              this._bmsState.set(sym, { dir: bms, detectedAt: now });
-              bLog.scan(`[SMC-PAT] BMS ${sym}: ${bms}`);
-              this.addActivity('info', `${sym} BMS ${bms} — ${bms === 'BULLISH' ? 'shorts blocked' : 'longs blocked'}`);
-            }
-          }
-          const cur = this._bmsState.get(sym);
-          if (cur && now - cur.detectedAt > 45 * 60_000) this._bmsState.delete(sym); // 45-min expiry (was 2h — too long, blocked good setups)
-        }
-
-        // ── Core signal: nearest 15m pivot + nearest 1m pivot must match ──
-        // Both HL → LONG.  Both LH → SHORT.  Mismatch → no trade.
+        // ── Core signal: 15m LL→LH (SHORT) or 15m HH→HL (LONG) + 1m confirmation ──
         const raw = scanNearestPivotMatch(sym, bars15m, bars1m, bars4h, this._cooldowns);
         if (!raw) continue;
 
-        // ── Self-learning gate: block if WR < 40% after 5+ trades ──
-        if (this._isPatternBlocked(sym, raw.pattern)) {
-          const mem = this._patternMemory.get(`${sym}_${raw.pattern}`);
-          bLog.scan(`[SMC-PAT] LEARN-BLOCK: ${sym} ${raw.pattern}(${raw.dir}) WR=${(mem.winRate*100).toFixed(0)}% ${mem.wins}W/${mem.losses}L`);
-          this.addActivity('skip', `${sym} ${raw.pattern}(${raw.dir}) blocked by memory — WR=${(mem.winRate*100).toFixed(0)}%`);
-          continue;
-        }
+        bLog.scan(`[SMC-PAT] ${sym} SIGNAL: key=${raw.keyLevel?.toFixed(4)} 1m_piv=${raw.pivot1m?.toFixed(4)} type=${raw.pattern} dir=${raw.dir}`);
 
-        // ── AI gate: Ollama retrospective analysis says avoid ──
-        const aiLearner = getAIChartLearner();
-        if (aiLearner.isAIBlocked(sym, raw.pattern)) {
-          const ins = aiLearner.getInsight(sym, raw.pattern);
-          bLog.scan(`[SMC-PAT] AI-BLOCK: ${sym} ${raw.pattern}(${raw.dir}) — ${ins?.retroLesson}`);
-          this.addActivity('skip', `${sym} ${raw.pattern}(${raw.dir}) AI blocked — ${ins?.retroLesson}`);
-          continue;
-        }
-
-        bLog.scan(`[SMC-PAT] ${sym} KEY LEVEL HIT: key=${raw.keyLevel?.toFixed(4)} prox=${raw.proximity} 1m_piv=${raw.pivot1m?.toFixed(4)} type=${raw.pattern} dir=${raw.dir}`);
-        const raws = [raw];
-
-        // NOTE: Pivot gate removed — scanNearestPivotMatch already verifies the
-        // 1m LH/HL was formed within the last 30 bars. Adding a second gate here
-        // caused SHORTs to be blocked when a new 1m HL formed after the 1m LH
-        // (price bounced during the 30-min 15m confirmation delay).
-        const pivotGated = raws;
-
-        // ── Step E: VWAP session filter ───────────────────────────
-        // price ≤ lower band → NO LONG   price ≥ upper band → NO SHORT
-        const vwap = computeVWAP(bars3m);
-        const vwapFiltered = vwap
-          ? pivotGated.filter(r => {
-              const p = r.price;
-              if (r.dir === 'LONG' && p <= vwap.lower) {
-                bLog.scan(`[SMC-PAT] VWAP block: ${sym} LONG p=${p.toFixed(2)} ≤ lower=${vwap.lower.toFixed(2)}`);
-                this.addActivity('skip', `${sym} LONG blocked — price ≤ VWAP lower`);
-                return false;
-              }
-              if (r.dir === 'SHORT' && p >= vwap.upper) {
-                bLog.scan(`[SMC-PAT] VWAP block: ${sym} SHORT p=${p.toFixed(2)} ≥ upper=${vwap.upper.toFixed(2)}`);
-                this.addActivity('skip', `${sym} SHORT blocked — price ≥ VWAP upper`);
-                return false;
-              }
-              return true;
-            })
-          : pivotGated;
-
-        if (!vwapFiltered.length) continue;
-
-        // ── Step F: BMS filter ────────────────────────────────────
-        // Bullish BMS → no SHORTs.  Bearish BMS → no LONGs.
-        const bmsEntry = this._bmsState.get(sym);
-        const bmsFiltered = bmsEntry
-          ? vwapFiltered.filter(r => {
-              if (bmsEntry.dir === 'BULLISH' && r.dir === 'SHORT') {
-                bLog.scan(`[SMC-PAT] BMS block: ${sym} SHORT blocked — bullish BMS active`);
-                this.addActivity('skip', `${sym} SHORT blocked — BMS BULLISH`);
-                return false;
-              }
-              if (bmsEntry.dir === 'BEARISH' && r.dir === 'LONG') {
-                bLog.scan(`[SMC-PAT] BMS block: ${sym} LONG blocked — bearish BMS active`);
-                this.addActivity('skip', `${sym} LONG blocked — BMS BEARISH`);
-                return false;
-              }
-              return true;
-            })
-          : vwapFiltered;
-
-        if (!bmsFiltered.length) continue;
-
-        for (const r of bmsFiltered) {
+        {
+          const r = raw;
           const sig = formatSignal(r);
           signals.push(sig);
           this._signalCount++;
 
-          const vwapTag = vwap ? ` vwap=${vwap.vwap.toFixed(2)}[${vwap.lower.toFixed(2)}-${vwap.upper.toFixed(2)}]` : '';
-          const tfLabel = r.tf === '1m' ? `1m(${r.pattern})` : `${cfg.label}+${r.ltfUsed ?? '?'}`;
-          const msg = `${sig.symbol} ${sig.direction} pattern=${r.pattern} TF=${tfLabel} ` +
-                      `trend=${r.trend} entry=${r.price.toFixed(4)} sl=${r.sl.toFixed(4)} ` +
-                      `tp1=${r.tp1.toFixed(4)} tp2=${r.tp2.toFixed(4)} RR=${sig.rr}${vwapTag}`;
+          const msg = `${sig.symbol} ${sig.direction} pattern=${r.pattern} ` +
+                      `entry=${r.price.toFixed(4)} sl=${r.sl.toFixed(4)} ` +
+                      `tp1=${r.tp1.toFixed(4)} tp2=${r.tp2.toFixed(4)} RR=${sig.rr}`;
 
           this.addActivity('success', msg);
           bLog.trade(`[SMC-PAT] SIGNAL: ${msg}`);
