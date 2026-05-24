@@ -531,35 +531,130 @@ class SMCPatternAgent extends BaseAgent {
       startedAt: Date.now(),
     };
 
-    // ── Promote any pending signals where a new 1m candle has opened ────
-    // User rule: "fire on the NEXT candle after 1m LH/HL is detected"
-    // When a signal is stored as pending, we wait until the NEXT 1m bar opens
-    // (barTs + 60s has passed) before executing. This prevents entering on the
-    // same candle where the pivot is first confirmed — that candle may still be
-    // moving. The next candle's open is a cleaner, less chased entry.
+    // ── Step 4: Promote pending signals only when next candle confirms "not LH/HL" ────
     //
-    // "if next candle still same LH or HL wait for next candle" → handled by
-    // the 60-second check: if the pending signal's candle hasn't closed yet,
-    // we keep waiting. We only promote when a genuinely new candle has opened.
+    // 4-step rule:
+    //   1. 15m LL (SHORT) or HH (LONG)
+    //   2. 15m LH (SHORT) or HL (LONG)
+    //   3. 1m  LH (SHORT) or HL (LONG)   ← stored as pending at this point
+    //   4. NEXT 1m candle must NOT be a LH/HL (must respect the pivot level):
+    //        SHORT: next bar HIGH < 1m LH level → fire.  HIGH ≥ level → still LH → wait.
+    //        LONG:  next bar LOW  > 1m HL level → fire.  LOW  ≤ level → still HL → wait.
+    //      Cancel if structure is broken (price blows through the pivot by >0.1%).
+    //      Fire only when the candle that opens AFTER the pivot candle respects it.
+    //      Update entry price to current candle close when promoting.
     const pendingToExecute = [];
     for (const [sym, pending] of this._pendingSignals.entries()) {
-      // Expire after 3 candles (3 min) — if market didn't move, signal is stale
-      if (now - pending.detectedAt > 3 * 60_000) {
-        bLog.scan(`[SMC-PAT] PENDING ${sym} ${pending.dir}: expired (3-min timeout) — reset structure`);
-        this.addActivity('skip', `${sym} ${pending.dir} — pending expired, waiting for new 15m structure`);
+      // Expire after 5 candles (5 min) — if market doesn't confirm, signal is stale
+      if (now - pending.detectedAt > 5 * 60_000) {
+        bLog.scan(`[SMC-PAT] PENDING ${sym} ${pending.dir}: expired (5-min timeout) — reset structure`);
+        this.addActivity('skip', `${sym} ${pending.dir} — step-4 expired, waiting for new 15m structure`);
         this._pendingSignals.delete(sym);
         continue;
       }
-      // 1m bars open at UTC minute boundaries. pending.barTs = bar open time.
-      // If now ≥ pending.barTs + 60_000 → a new 1m candle has opened → promote.
-      if (now >= pending.barTs + 60_000) {
-        bLog.scan(`[SMC-PAT] PENDING ${sym} ${pending.dir}: new candle opened → promoting to execute`);
-        this.addActivity('trade', `${sym} ${pending.dir} — next candle opened, executing`);
+
+      // Wait until the signal's 1m candle has fully closed (barTs + 60s elapsed)
+      if (now < pending.barTs + 60_000) {
+        const waitMs = (pending.barTs + 60_000) - now;
+        bLog.scan(`[SMC-PAT] PENDING ${sym} ${pending.dir}: waiting ${(waitMs/1000).toFixed(0)}s for candle close`);
+        continue;
+      }
+
+      // ── New candle has opened — fetch fresh 1m bars for step-4 check ──
+      let freshBars;
+      try {
+        freshBars = await fetchCandles(sym, '1', 5);
+      } catch (e) {
+        bLog.scan(`[SMC-PAT] PENDING ${sym} ${pending.dir}: bar fetch failed (${e.message}) — will retry next cycle`);
+        continue;
+      }
+      if (!freshBars || freshBars.length < 2) {
+        bLog.scan(`[SMC-PAT] PENDING ${sym} ${pending.dir}: insufficient bars — will retry next cycle`);
+        continue;
+      }
+
+      // The most-recently CLOSED bar (not still-forming) is the "next candle"
+      // freshBars[last] = still-forming (current), freshBars[last-1] = last closed.
+      // We need the bar that OPENED after the signal's pivot candle (barTs).
+      // Find the first bar whose open time > pending.barTs.
+      const nextBar = freshBars.find(b => b.t > pending.barTs);
+      if (!nextBar) {
+        bLog.scan(`[SMC-PAT] PENDING ${sym} ${pending.dir}: no bar found after barTs ${pending.barTs} — retrying`);
+        continue;
+      }
+
+      const pivotLevel = pending.level; // 1m LH price (SHORT) or 1m HL price (LONG)
+      const isShort    = pending.dir === 'SHORT';
+
+      if (!pivotLevel) {
+        // No pivot level stored → can't check → promote immediately
+        bLog.scan(`[SMC-PAT] PENDING ${sym} ${pending.dir}: no pivot level — promoting directly`);
+        pending.signal.price     = nextBar.c;
+        pending.signal.lastPrice = nextBar.c;
         pendingToExecute.push(pending.signal);
         this._pendingSignals.delete(sym);
+        continue;
+      }
+
+      if (isShort) {
+        // SHORT: next candle HIGH must be BELOW the 1m LH pivot (bar is not a new LH)
+        if (nextBar.h > pivotLevel * 1.001) {
+          // Structure broken — price punched above LH, invalidate signal
+          bLog.scan(
+            `[SMC-PAT] PENDING ${sym} SHORT: CANCELLED — next bar HIGH ${nextBar.h.toFixed(4)} ` +
+            `broke above LH pivot ${pivotLevel.toFixed(4)} — structure invalid`
+          );
+          this.addActivity('skip', `${sym} SHORT — step-4 failed: price broke above 1m LH, resetting`);
+          this._pendingSignals.delete(sym);
+        } else if (nextBar.h >= pivotLevel) {
+          // Still forming a LH — wait for the next candle
+          bLog.scan(
+            `[SMC-PAT] PENDING ${sym} SHORT: WAIT — next bar HIGH ${nextBar.h.toFixed(4)} ` +
+            `still at LH level ${pivotLevel.toFixed(4)} — waiting another candle`
+          );
+          // Advance barTs to this candle so we wait for the NEXT one
+          pending.barTs = nextBar.t;
+        } else {
+          // next bar HIGH < LH pivot → confirmed "not LH" → fire
+          bLog.scan(
+            `[SMC-PAT] PENDING ${sym} SHORT: CONFIRMED — next bar HIGH ${nextBar.h.toFixed(4)} ` +
+            `below LH ${pivotLevel.toFixed(4)} — step 4 passed, firing`
+          );
+          this.addActivity('trade', `${sym} SHORT — step 4 confirmed: next candle respected LH pivot`);
+          pending.signal.price     = nextBar.c;
+          pending.signal.lastPrice = nextBar.c;
+          pendingToExecute.push(pending.signal);
+          this._pendingSignals.delete(sym);
+        }
       } else {
-        const waitMs = (pending.barTs + 60_000) - now;
-        bLog.scan(`[SMC-PAT] PENDING ${sym} ${pending.dir}: waiting ${(waitMs/1000).toFixed(0)}s for next candle`);
+        // LONG: next candle LOW must be ABOVE the 1m HL pivot (bar is not a new HL)
+        if (nextBar.l < pivotLevel * 0.999) {
+          // Structure broken — price dropped below HL, invalidate signal
+          bLog.scan(
+            `[SMC-PAT] PENDING ${sym} LONG: CANCELLED — next bar LOW ${nextBar.l.toFixed(4)} ` +
+            `broke below HL pivot ${pivotLevel.toFixed(4)} — structure invalid`
+          );
+          this.addActivity('skip', `${sym} LONG — step-4 failed: price broke below 1m HL, resetting`);
+          this._pendingSignals.delete(sym);
+        } else if (nextBar.l <= pivotLevel) {
+          // Still forming a HL — wait for the next candle
+          bLog.scan(
+            `[SMC-PAT] PENDING ${sym} LONG: WAIT — next bar LOW ${nextBar.l.toFixed(4)} ` +
+            `still at HL level ${pivotLevel.toFixed(4)} — waiting another candle`
+          );
+          pending.barTs = nextBar.t;
+        } else {
+          // next bar LOW > HL pivot → confirmed "not HL" → fire
+          bLog.scan(
+            `[SMC-PAT] PENDING ${sym} LONG: CONFIRMED — next bar LOW ${nextBar.l.toFixed(4)} ` +
+            `above HL ${pivotLevel.toFixed(4)} — step 4 passed, firing`
+          );
+          this.addActivity('trade', `${sym} LONG — step 4 confirmed: next candle respected HL pivot`);
+          pending.signal.price     = nextBar.c;
+          pending.signal.lastPrice = nextBar.c;
+          pendingToExecute.push(pending.signal);
+          this._pendingSignals.delete(sym);
+        }
       }
     }
 
