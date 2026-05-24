@@ -2057,9 +2057,25 @@ function _rawPivots(bars) {
 //
 // Both pivots must be within STRUCT_BARS_15M bars (3 h) — no stale setups.
 // Sideways market (no LL→LH or HH→HL sequence) → returns null → no trade.
-// minBouncePct: pass 0 — 2L/2R pivot detection on 15m candles is the sole judge.
-// The lowest candle in a 60-min window IS the HL; no artificial % filter on top.
-function _detect15mStructure(ph15, pl15, bars15mLen, minBouncePct) {
+// _detect15mStructure — strict 15m structure: LL→LH (SHORT) or HH→HL (LONG)
+//
+// Two guards stop dead-cat bounces and immediate post-crash entries:
+//
+// 1. MIN_BOUNCE_PCT (0.3%): the move from LL to LH must be at least 0.3%.
+//    A dead-cat bounce is typically 0.05–0.15%. A real structural bounce
+//    that gives a SHORT entry is at minimum 0.3% (= 37.5% capital at 125x).
+//    Without this, the bot shorts the very first recovery tick after a crash.
+//
+// 2. MIN_PIVOT_GAP_MS (2 bars = 30 min): the LH barTs must be at least 30 min
+//    AFTER the LL barTs. The user's rule says "see LL → WAIT for LH". If the
+//    LH forms within 1 bar of the LL it is the same impulse, not a separate
+//    structural pivot. The 30-min gap enforces the "wait" in that rule.
+//
+// Same logic applies symmetrically to HH→HL for LONGs.
+const MIN_BOUNCE_PCT   = 0.003;           // 0.3% price move between LL and LH
+const MIN_PIVOT_GAP_MS = 2 * 15 * 60_000; // 30 min between LL barTs and LH barTs
+
+function _detect15mStructure(ph15, pl15, bars15mLen) {
   if (ph15.length < 2 || pl15.length < 2) return null;
 
   const lastH = ph15[ph15.length - 1];  // most recent 15m pivot HIGH
@@ -2070,16 +2086,17 @@ function _detect15mStructure(ph15, pl15, bars15mLen, minBouncePct) {
   // ── SHORT: sequence is LL → LH ───────────────────────────────────
   // LH must be the most recent overall pivot (after the LL).
   // The most recent LOW before that LH must be a LL.
-  // Bounce (LH - LL) / LL must be at least minBouncePct — blocks dead-cat
-  // micro-bounces that technically form a LH but are meaningless in structure.
+  // Bounce (LH - LL) / LL ≥ MIN_BOUNCE_PCT: blocks dead-cat micro-bounces.
+  // LH barTs - LL barTs ≥ MIN_PIVOT_GAP_MS: enforces "wait for LH" rule.
   const isLH = lastH.price < prevH.price;
   if (isLH && lastH.barTs > lastL.barTs) {
-    const isLL      = lastL.price < prevL.price;
-    const lhAge     = (bars15mLen - 1) - lastH.idx;
-    const llAge     = (bars15mLen - 1) - lastL.idx;
-    const bouncePct = (lastH.price - lastL.price) / lastL.price;
+    const isLL       = lastL.price < prevL.price;
+    const lhAge      = (bars15mLen - 1) - lastH.idx;
+    const llAge      = (bars15mLen - 1) - lastL.idx;
+    const bouncePct  = (lastH.price - lastL.price) / lastL.price;
+    const pivotGapMs = lastH.barTs - lastL.barTs;
     if (isLL && lhAge <= PIVOT_FRESH_BARS && llAge <= STRUCT_BARS_15M &&
-        bouncePct >= minBouncePct) {
+        bouncePct >= MIN_BOUNCE_PCT && pivotGapMs >= MIN_PIVOT_GAP_MS) {
       return { dir: 'SHORT', pivot15: lastH, preceding: lastL, label: 'LL→LH' };
     }
   }
@@ -2087,15 +2104,17 @@ function _detect15mStructure(ph15, pl15, bars15mLen, minBouncePct) {
   // ── LONG: sequence is HH → HL ────────────────────────────────────
   // HL must be the most recent overall pivot (after the HH).
   // The most recent HIGH before that HL must be a HH.
-  // Pullback (HH - HL) / HH must be at least minBouncePct.
+  // Pullback (HH - HL) / HH ≥ MIN_BOUNCE_PCT: blocks shallow micro-pullbacks.
+  // HL barTs - HH barTs ≥ MIN_PIVOT_GAP_MS: enforces "wait for HL" rule.
   const isHL = lastL.price > prevL.price;
   if (isHL && lastL.barTs > lastH.barTs) {
-    const isHH       = lastH.price > prevH.price;
-    const hlAge      = (bars15mLen - 1) - lastL.idx;
-    const hhAge      = (bars15mLen - 1) - lastH.idx;
+    const isHH        = lastH.price > prevH.price;
+    const hlAge       = (bars15mLen - 1) - lastL.idx;
+    const hhAge       = (bars15mLen - 1) - lastH.idx;
     const pullbackPct = (lastH.price - lastL.price) / lastH.price;
+    const pivotGapMs  = lastL.barTs - lastH.barTs;
     if (isHH && hlAge <= PIVOT_FRESH_BARS && hhAge <= STRUCT_BARS_15M &&
-        pullbackPct >= minBouncePct) {
+        pullbackPct >= MIN_BOUNCE_PCT && pivotGapMs >= MIN_PIVOT_GAP_MS) {
       return { dir: 'LONG', pivot15: lastL, preceding: lastH, label: 'HH→HL' };
     }
   }
@@ -2136,12 +2155,11 @@ function scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns) {
   const total1m = bars1m.length;
 
   // ── STEP 1: 15m structure must be LL→LH (SHORT) or HH→HL (LONG) ────
+  // Two guards: MIN_BOUNCE_PCT (0.3%) + MIN_PIVOT_GAP_MS (30 min).
+  // See _detect15mStructure for full reasoning.
   const { ph: ph15, pl: pl15 } = _allPivots(bars15m);
-  // Pass 0 for minBouncePct — candle-based 2L/2R detection is the sole judge.
-  // A pivot LOW confirmed by 2L/2R (lowest price in a 60-min window on 15m) IS the HL.
-  // Percentage thresholds override what the candles actually say and produce wrong signals.
-  const structure = _detect15mStructure(ph15, pl15, bars15m.length, 0);
-  if (!structure) return null; // no HH→HL or LL→LH sequence — no trade
+  const structure = _detect15mStructure(ph15, pl15, bars15m.length);
+  if (!structure) return null; // no valid LL→LH or HH→HL — no trade
 
   const { dir, pivot15, label } = structure;
 
