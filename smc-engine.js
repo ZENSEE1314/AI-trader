@@ -2071,6 +2071,12 @@ function _detect15mStructure(ph15, pl15, bars15m, minBouncePct) {
   const globalMinL = Math.min(...bars15m.map(b => b.l));
   const EXTREME_TOL = 0.002; // 0.2% — candle must be within this of true extreme to count
 
+  // Index of the bar containing the global minimum low (for LONG guard below)
+  const globalMinIdx = bars15m.reduce(
+    (minIdx, b, i) => b.l < bars15m[minIdx].l ? i : minIdx, 0
+  );
+  const globalMinAge = (bars15mLen - 1) - globalMinIdx;
+
   // ── SHORT: LL → LH ───────────────────────────────────────────────
   // Find the TRUE LL: pivot low nearest the global candle minimum.
   // Then find the most recent pivot HIGH after it that is a genuine LH
@@ -2086,6 +2092,18 @@ function _detect15mStructure(ph15, pl15, bars15m, minBouncePct) {
     if (lhCandidates.length > 0) {
       const lh    = lhCandidates[lhCandidates.length - 1]; // most recent valid LH
       const lhAge = (bars15mLen - 1) - lh.idx;
+
+      // CHoCH guard: if the bounce from LL to LH broke above the last pivot high
+      // that existed BEFORE the LL, a CHoCH (trend flip) happened in between.
+      // LL + CHoCH + LH = ambiguous structure → user rule: reset, no trade.
+      const highsBeforeLL = ph15.filter(p => p.barTs < llPivot.barTs);
+      const prevHHprice   = highsBeforeLL.length > 0
+        ? Math.max(...highsBeforeLL.map(p => p.price))
+        : globalMaxH; // no prior high → use global max as guard level
+      const barsInBounce  = bars15m.filter(b => b.t > llPivot.barTs && b.t < lh.barTs);
+      const chochHappened = barsInBounce.some(b => b.h > prevHHprice);
+      if (chochHappened) return null; // CHoCH between LL and LH → reset
+
       if (lhAge <= PIVOT_FRESH_BARS) {
         return { dir: 'SHORT', pivot15: lh, preceding: llPivot, label: 'LL→LH' };
       }
@@ -2098,6 +2116,12 @@ function _detect15mStructure(ph15, pl15, bars15m, minBouncePct) {
   // (above the global candle min — not a new LL).
   // Extra guard: if any pivot low between the HH and HL went below the pre-HH
   // minimum → structure broke → LONG invalid.
+  //
+  // LL guard: if the global minimum low (LL) formed within STRUCT_BARS_15M bars,
+  // the market is in a reversal-bounce context (LL + CHoCH → LH masquerading as HH).
+  // User rule: "LL with CHoCH uptrend, if shows LH → no trade, reset."
+  if (globalMinAge <= STRUCT_BARS_15M) return null; // recent LL → reversal bounce → no LONG
+
   const hhPivot = ph15.reduce((max, p) => p.price > max.price ? p : max, ph15[0]);
   const hhAge   = (bars15mLen - 1) - hhPivot.idx;
 
