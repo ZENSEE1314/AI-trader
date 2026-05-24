@@ -205,9 +205,9 @@ const _signalLossTracker = new Map();
 // SL_PCT is price-loss fraction; capital loss = SL_PCT (independent of leverage).
 //   125x: price SL = 0.20/125 = 0.16% price move → 20% capital loss
 //   100x: price SL = 0.20/100 = 0.20% price move → 20% capital loss
-//    75x: price SL = 0.20/75  = 0.27% price move → 20% capital loss
-//    50x: price SL = 0.20/50  = 0.40% price move → 20% capital loss
-const SL_PCT = 0.20;   // 20% max capital loss at any leverage
+//    75x: price SL = 0.15/75  = 0.20% price move → 15% capital loss
+//    50x: price SL = 0.15/50  = 0.30% price move → 15% capital loss
+const SL_PCT = 0.15;   // 15% max capital loss at any leverage
 const TP_PCT = 0.45;   // reference only — trailing SL handles the actual exit
 
 // ── Active AI Version params — loaded from settings table, refreshed every 60s ──
@@ -3469,10 +3469,42 @@ async function syncTradeStatus() {
                 continue;
               }
 
-              // No trailing SL — SL stays fixed at entry level until TP1 fires.
-              // TP1 (+60% capital) closes 50% and moves SL to +45% capital.
-              // TP2 (+100% capital) closes remaining 50%.
-              bLog.trade(`Bitunix: ${trade.symbol} waiting for TP1 (${(capitalPct*100).toFixed(1)}%/${TP1_CAPITAL*100}% capital) — SL fixed at entry level`);
+              // ── Step lock: +35% capital → SL moves to +20% capital ──────
+              // One move only. No tier table. SL stays at +20% until TP1.
+              const STEP_TRIGGER = 0.35;
+              const STEP_LOCK    = 0.20;
+              if (!tp1AlreadyHit && lastStep < STEP_LOCK && capitalPct >= STEP_TRIGGER) {
+                const bxSlPrecStep  = inferPricePrec(trade.sl_price);
+                const stepSlPricePct = STEP_LOCK / tradeLev;
+                const stepSlPrice    = isLong
+                  ? entryPrice * (1 + stepSlPricePct)
+                  : entryPrice * (1 - stepSlPricePct);
+                const stepSlFmt = parseFloat(stepSlPrice.toFixed(bxSlPrecStep));
+
+                try {
+                  await updateStopLoss(userClient, trade.symbol, stepSlFmt, null, 'bitunix', bxSlPrecStep);
+                  bLog.trade(`[STEP-LOCK] ${trade.symbol} +35% capital → SL locked at +20% capital = $${stepSlFmt}`);
+                } catch (stepErr) {
+                  bLog.error(`[STEP-LOCK] ${trade.symbol} SL update failed: ${stepErr.message}`);
+                }
+                try {
+                  await db.query(
+                    `UPDATE trades SET trailing_sl_price = $1, sl_price = $1, trailing_sl_last_step = $2 WHERE id = $3`,
+                    [stepSlFmt, STEP_LOCK, trade.id]
+                  );
+                } catch (stepDbErr) {
+                  bLog.error(`[STEP-LOCK] ${trade.symbol} DB update failed: ${stepDbErr.message}`);
+                }
+                await notify(
+                  `🔒 *Step Lock* — *${trade.symbol}* ${isLong ? 'LONG' : 'SHORT'}\n` +
+                  `+${(capitalPct*100).toFixed(1)}% capital reached\n` +
+                  `SL locked at +${STEP_LOCK*100}% capital \`$${fmtPrice(stepSlFmt)}\``
+                );
+                continue;
+              }
+
+              // SL stays fixed — waiting for TP1
+              bLog.trade(`Bitunix: ${trade.symbol} waiting for TP1 (${(capitalPct*100).toFixed(1)}%/${TP1_CAPITAL*100}% capital) — SL fixed`);
             }
           }
         }
