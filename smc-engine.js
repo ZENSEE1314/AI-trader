@@ -2153,24 +2153,22 @@ function scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns) {
   let pivot1m = null;
 
   if (dir === 'SHORT') {
-    // Find the most-recent 1m LH within [pivot15.barTs, pivot15.barTs + 30min]
+    // Find the HIGHEST 1m LH in window — real structural resistance, not first near the top
     for (let i = ph1.length - 1; i >= 1; i--) {
       const diff = ph1[i].barTs - pivot15.barTs;
       if (diff < 0) break;                               // before the 15m bar — stop
       if (diff > WINDOW_MS) continue;                   // too late after window — skip
       if (ph1[i].price >= ph1[i - 1].price) continue;  // not a LH (it's a HH) — skip
-      pivot1m = ph1[i];
-      break;
+      if (!pivot1m || ph1[i].price > pivot1m.price) pivot1m = ph1[i];
     }
   } else {
-    // Find the most-recent 1m HL within [pivot15.barTs, pivot15.barTs + 30min]
+    // Find the LOWEST 1m HL in window — real structural support, not first near the high
     for (let i = pl1.length - 1; i >= 1; i--) {
       const diff = pl1[i].barTs - pivot15.barTs;
       if (diff < 0) break;                               // before the 15m bar — stop
       if (diff > WINDOW_MS) continue;                   // too late after window — skip
       if (pl1[i].price <= pl1[i - 1].price) continue;  // not a HL (it's a LL) — skip
-      pivot1m = pl1[i];
-      break;
+      if (!pivot1m || pl1[i].price < pivot1m.price) pivot1m = pl1[i];
     }
   }
   if (!pivot1m) return null;
