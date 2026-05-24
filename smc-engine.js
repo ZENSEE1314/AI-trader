@@ -2116,8 +2116,8 @@ function _detect15mStructure(ph15, pl15, bars15mLen) {
   return null; // sideways / incomplete structure → no trade
 }
 
-function scanNearestPivotMatch(sym, bars15m, bars1m, bars4h, cooldowns) {
-  return scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns);
+function scanNearestPivotMatch(sym, bars15m, bars1m, bars4h, cooldowns, log = null) {
+  return scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns, log);
 }
 
 // ── scanKeyLevelSignal — strict 3-step SMC rule ──────────────────────
@@ -2137,7 +2137,9 @@ function scanNearestPivotMatch(sym, bars15m, bars1m, bars4h, cooldowns) {
 // STEP 3 — Entry freshness:
 //   The 1m confirmation pivot must be within last 30 bars (30 min) from NOW.
 //   Prevents firing on a stale setup that matched hours ago.
-function scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns) {
+function scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns, log = null) {
+  const L = (msg) => log && log(`[SMC-STEP] ${sym}: ${msg}`);
+
   const cfg = TRADING_CONFIG[sym];
   if (!cfg) return null;
   if (!bars15m || bars15m.length < 6) return null;
@@ -2152,10 +2154,26 @@ function scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns) {
   // One guard: MIN_PIVOT_GAP_MS (30 min between LL barTs and LH barTs).
   // No bounce % filter — 2L/2R pivot detection is the sole structural judge.
   const { ph: ph15, pl: pl15 } = _allPivots(bars15m);
+
+  // Log what the 15m pivots look like (last 2 highs and lows)
+  const lastH = ph15[ph15.length - 1], prevH = ph15[ph15.length - 2];
+  const lastL = pl15[pl15.length - 1], prevL = pl15[pl15.length - 2];
+  if (lastH && prevH && lastL && prevL) {
+    const lhStr = lastH.price < prevH.price ? 'LH' : 'HH';
+    const llStr = lastL.price < prevL.price ? 'LL' : 'HL';
+    L(`Step1 15m pivots — H: ${lhStr}@${lastH.price.toFixed(2)} L: ${llStr}@${lastL.price.toFixed(2)}`);
+  } else {
+    L(`Step1 — insufficient 15m pivots (H:${ph15.length} L:${pl15.length})`);
+  }
+
   const structure = _detect15mStructure(ph15, pl15, bars15m.length);
-  if (!structure) return null; // no valid LL→LH or HH→HL — no trade
+  if (!structure) {
+    L(`Step1 FAIL — no LL→LH or HH→HL structure on 15m`);
+    return null;
+  }
 
   const { dir, pivot15, label } = structure;
+  L(`Step1 PASS ✓ — ${label} dir=${dir} pivot15=${pivot15.price.toFixed(2)}`);
 
   // ── STEP 2: Find 1m LH (SHORT) or 1m HL (LONG) in 30-min window ────
   // The 1m pivot must specifically be a LH (for SHORT) or HL (for LONG),
@@ -2185,31 +2203,44 @@ function scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns) {
       break;
     }
   }
-  if (!pivot1m) return null;
+  if (!pivot1m) {
+    L(`Step2 WAIT — no 1m ${dir === 'SHORT' ? 'LH' : 'HL'} found within 45-min window of 15m pivot`);
+    return null;
+  }
+  L(`Step2 PASS ✓ — 1m ${dir === 'SHORT' ? 'LH' : 'HL'}@${pivot1m.price.toFixed(2)}`);
 
   // ── STEP 2b: 1m pivot must be at the same price level as the 15m pivot ──
-  // "if too far away for the 15min HL n 1min HL or LH LH reset and find new LL or HH"
-  // The 1m confirmation must be at the same structural zone — not a different level.
-  // Tolerance = 2× slPct so it's proportional to the trade's risk distance.
   const LEVEL_TOL = cfg.slPct * 2;
   const levelDiff = Math.abs(pivot1m.price - pivot15.price) / pivot15.price;
-  if (levelDiff > LEVEL_TOL) return null;
+  if (levelDiff > LEVEL_TOL) {
+    L(`Step2b FAIL — 1m pivot ${pivot1m.price.toFixed(2)} too far from 15m pivot ${pivot15.price.toFixed(2)} (${(levelDiff*100).toFixed(2)}% > ${(LEVEL_TOL*100).toFixed(2)}%)`);
+    return null;
+  }
 
   // ── STEP 3: 1m pivot freshness from NOW (≤ 30 bars = 30 min) ────────
   const bars1mNowAge = (total1m - 1) - pivot1m.idx;
-  if (bars1mNowAge > 30) return null;
+  if (bars1mNowAge > 30) {
+    L(`Step3 FAIL — 1m pivot is ${bars1mNowAge} bars old (max 30)`);
+    return null;
+  }
+  L(`Step3 PASS ✓ — 1m pivot is ${bars1mNowAge} bars old`);
 
   // ── STEP 4: Chase filter — entry must be within ENTRY_TOL of the 1m pivot ──
-  // ENTRY_TOL = slPct = 0.2%. This keeps the total entry-to-SL gap ≤ 0.4%
-  // (slPct below HL + at most slPct above HL at entry = 2 × slPct = 30% cap at 75x).
-  // If the 1m HL already ran away > 0.2% before the scan hits, skip the trade —
-  // entering further from the structural level worsens R:R and is not worth it.
-  if (dir === 'LONG'  && price > pivot1m.price * (1 + ENTRY_TOL)) return null;
-  if (dir === 'SHORT' && price < pivot1m.price * (1 - ENTRY_TOL)) return null;
+  if (dir === 'LONG'  && price > pivot1m.price * (1 + ENTRY_TOL)) {
+    L(`Step4 FAIL — price ${price.toFixed(2)} chased too far above HL ${pivot1m.price.toFixed(2)}`);
+    return null;
+  }
+  if (dir === 'SHORT' && price < pivot1m.price * (1 - ENTRY_TOL)) {
+    L(`Step4 FAIL — price ${price.toFixed(2)} chased too far below LH ${pivot1m.price.toFixed(2)}`);
+    return null;
+  }
 
   // ── Cooldown: each 15m pivot bar fires at most once ──────────────────
   const cdKey = `${sym}_KL_${dir === 'SHORT' ? 'LH' : 'HL'}_${pivot15.barTs}`;
-  if (cooldowns.has(cdKey)) return null;
+  if (cooldowns.has(cdKey)) {
+    L(`Cooldown — already fired for this pivot bar`);
+    return null;
+  }
   cooldowns.set(cdKey, now);
 
   const sl   = dir === 'LONG' ? pivot1m.price * (1 - cfg.slPct) : pivot1m.price * (1 + cfg.slPct);

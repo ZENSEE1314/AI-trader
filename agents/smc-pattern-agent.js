@@ -390,7 +390,7 @@ class SMCPatternAgent extends BaseAgent {
 
         // ── Core signal: nearest 15m pivot + nearest 1m pivot must match ──
         // Both HL → LONG.  Both LH → SHORT.  Mismatch → no trade.
-        const raw = scanNearestPivotMatch(sym, bars15m, bars1m, bars4h, this._cooldowns);
+        const raw = scanNearestPivotMatch(sym, bars15m, bars1m, bars4h, this._cooldowns, bLog.scan);
         if (!raw) continue;
 
         // ── Self-learning gate: block if WR < 40% after 5+ trades ──
