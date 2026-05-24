@@ -30,9 +30,10 @@ const {
 
 // ── Constants ────────────────────────────────────────────────
 const SCAN_INTERVAL_MS = 30_000;    // 30s scan cadence
-const BARS_15M         = 100;       // 15min bars — 100 bars = 25h (covers 6h LL→LH gap + history)
+const BARS_15M         = 200;       // 15min bars — 200 bars = 50h of history (captures HH/LL context)
 const BARS_4H_TREND    = 250;       // 4H bars for EMA200 trend
-const BARS_1M          = 30;        // 1m bars — 30 bars = 30 min (15-min window + buffer)
+const BARS_1M          = 180;       // 1m bars — 180 min covers the 2h WINDOW_MS confirmation window
+const BARS_3M          = 480;       // 3m bars — 24h of 3min for VWAP
 const SCORE            = 72;        // signal score
 const AGENT_NAME       = 'SMCPatternAgent';
 
@@ -258,7 +259,7 @@ class SMCPatternAgent extends BaseAgent {
       try {
         const cfg = TRADING_CONFIG[sym];
 
-        // Parallel fetch: 15m + 4H trend + 1m
+        // Parallel fetch: 15m + 4H + 1m
         const [bars15m, bars4h, bars1m] = await Promise.all([
           fetchCandles(sym, '15',        BARS_15M),
           fetchCandles(sym, INTERVAL_4H, BARS_4H_TREND),
@@ -271,42 +272,20 @@ class SMCPatternAgent extends BaseAgent {
 
         bLog.scan(`[SMC-PAT] ${sym}: 15m=${bars15m.length} 1m=${bars1m.length}`);
 
-        // ── Pure 4-step scan: 15m structure → 1m confirmation → next candle ──
+        // ── Core signal: 15m LL→LH (SHORT) or 15m HH→HL (LONG) + 1m confirmation ──
         const raw = scanNearestPivotMatch(sym, bars15m, bars1m, bars4h, this._cooldowns, bLog.scan);
         if (!raw) continue;
 
-        // ── Self-learning gate: block if WR < 40% after 5+ trades ──
-        if (this._isPatternBlocked(sym, raw.pattern)) {
-          const mem = this._patternMemory.get(`${sym}_${raw.pattern}`);
-          bLog.scan(`[SMC-PAT] LEARN-BLOCK: ${sym} ${raw.pattern}(${raw.dir}) WR=${(mem.winRate*100).toFixed(0)}% ${mem.wins}W/${mem.losses}L`);
-          this.addActivity('skip', `${sym} ${raw.pattern}(${raw.dir}) blocked by memory — WR=${(mem.winRate*100).toFixed(0)}%`);
-          continue;
-        }
+        bLog.scan(`[SMC-PAT] ${sym} SIGNAL: key=${raw.keyLevel?.toFixed(4)} 1m_piv=${raw.pivot1m?.toFixed(4)} type=${raw.pattern} dir=${raw.dir}`);
 
-        // ── AI gate: Ollama retrospective analysis says avoid ──
-        const aiLearner = getAIChartLearner();
-        if (aiLearner.isAIBlocked(sym, raw.pattern)) {
-          const ins = aiLearner.getInsight(sym, raw.pattern);
-          bLog.scan(`[SMC-PAT] AI-BLOCK: ${sym} ${raw.pattern}(${raw.dir}) — ${ins?.retroLesson}`);
-          this.addActivity('skip', `${sym} ${raw.pattern}(${raw.dir}) AI blocked — ${ins?.retroLesson}`);
-          continue;
-        }
-
-        bLog.scan(`[SMC-PAT] ${sym} KEY LEVEL HIT: key=${raw.keyLevel?.toFixed(4)} prox=${raw.proximity} 1m_piv=${raw.pivot1m?.toFixed(4)} type=${raw.pattern} dir=${raw.dir}`);
-        const raws = [raw];
-
-        // NOTE: Pivot gate removed — scanNearestPivotMatch already verifies the
-        // 1m LH/HL was formed within the last 30 bars. Adding a second gate here
-        // caused SHORTs to be blocked when a new 1m HL formed after the 1m LH
-        // (price bounced during the 30-min 15m confirmation delay).
-        for (const r of raws) {
+        {
+          const r = raw;
           const sig = formatSignal(r);
           signals.push(sig);
           this._signalCount++;
 
-          const tfLabel = r.tf === '1m' ? `1m(${r.pattern})` : `${cfg.label}+${r.ltfUsed ?? '?'}`;
-          const msg = `${sig.symbol} ${sig.direction} pattern=${r.pattern} TF=${tfLabel} ` +
-                      `trend=${r.trend} entry=${r.price.toFixed(4)} sl=${r.sl.toFixed(4)} ` +
+          const msg = `${sig.symbol} ${sig.direction} pattern=${r.pattern} ` +
+                      `entry=${r.price.toFixed(4)} sl=${r.sl.toFixed(4)} ` +
                       `tp1=${r.tp1.toFixed(4)} tp2=${r.tp2.toFixed(4)} RR=${sig.rr}`;
 
           this.addActivity('success', msg);
@@ -327,38 +306,7 @@ class SMCPatternAgent extends BaseAgent {
       }
     }
 
-    // ── BTC bias — set from BTC's ACTUAL signal direction ─────
-    // BTC's signal is the ground truth. If BTC fires SHORT → BEARISH → altcoins SHORT only.
-    // If BTC fires LONG → BULLISH → altcoins LONG only.
-    // If BTC has no signal this cycle, keep the last known bias (expires after 30 min).
-    // Using BTC's signal direction (not a separate pivot calc) so bias always matches
-    // the real trade the bot just fired on BTC — no contradictions possible.
-    // BTC signal → strongest source of truth
-    const btcSignalThisCycle = signals.find(s => s.symbol === 'BTCUSDT');
-    if (btcSignalThisCycle) {
-      this._btcBias    = btcSignalThisCycle.direction === 'LONG' ? 'BULLISH' : 'BEARISH';
-      this._btcBiasAt  = now;
-      // Also cache the 4H trend from the BTC signal as a persistent fallback
-      const btcTrend = btcSignalThisCycle.smcContext?.trend;
-      if (btcTrend === 'UP')   this._btcTrendFallback = 'BULLISH';
-      if (btcTrend === 'DOWN') this._btcTrendFallback = 'BEARISH';
-      bLog.scan(`[SMC-PAT] BTC bias → ${this._btcBias} (signal) fallback4H=${this._btcTrendFallback}`);
-      this.addActivity('info', `BTC bias: ${this._btcBias} | 4H trend: ${this._btcTrendFallback ?? 'unknown'}`);
-    } else if (now - this._btcBiasAt > 15 * 60_000) {
-      // Bias expired — fall back to 4H trend instead of blocking everything.
-      // The 4H trend doesn't change in 15 min — it's safe as a directional guard.
-      const prev = this._btcBias;
-      this._btcBias   = this._btcTrendFallback ?? null; // null = truly neutral
-      this._btcBiasAt = now; // reset so we don't log every cycle
-      if (prev !== this._btcBias) {
-        bLog.scan(`[SMC-PAT] BTC bias expired → fallback to 4H: ${this._btcBias ?? 'NEUTRAL'}`);
-        this.addActivity('info', `BTC bias expired → 4H fallback: ${this._btcBias ?? 'NEUTRAL (both sides open)'}`);
-      }
-    }
-
     // ── Update open trade states (outcome logging only) ────
-    // Real position management is in TraderAgent + trail-watchdog.
-    // This loop tracks virtual outcomes for the activity feed.
     await this._tickOpenTrades();
 
     this._lastSignals = signals;
@@ -499,59 +447,13 @@ class SMCPatternAgent extends BaseAgent {
       return { ok: true, signals: 0 };
     }
 
-    // ── Deduplicate: one signal per symbol (1m always listed first → wins) ──
-    // Both scanners (1m primary + HTF) can fire for the same symbol in
-    // opposite directions. Keep only the first signal per symbol so TraderAgent
-    // never sees conflicting directions for the same token in one batch.
+    // ── Deduplicate: one signal per symbol ───────────────────
     const seenSymbols = new Set();
-    const uniqueSignals = signals.filter(s => {
-      if (seenSymbols.has(s.symbol)) {
-        bLog.scan(`[SMC-PAT] Dedup: dropped ${s.symbol} ${s.direction} (${s.smcContext?.tf}) — ${s.symbol} already queued`);
-        return false;
-      }
+    const btcFiltered = signals.filter(s => {
+      if (seenSymbols.has(s.symbol)) return false;
       seenSymbols.add(s.symbol);
       return true;
     });
-
-    if (uniqueSignals.length < signals.length) {
-      this.addActivity('info', `Deduped ${signals.length} → ${uniqueSignals.length} signal(s) (one per symbol)`);
-    }
-
-    // ── BTC bias filter — altcoins must follow BTC 15m+1m direction ──
-    // BTC is the market leader. Altcoins only trade in BTC's direction.
-    // Bias comes from BTC's actual signal (not a separate calc) so they always agree.
-    // Bias expires after 15 min (one 15M candle) — stale = altcoins wait for BTC.
-    //
-    // NEUTRAL (no recent BTC signal): altcoin signals are held — don't trade in the dark.
-    // BULLISH (BTC fired LONG):  altcoins LONG only, SHORT blocked.
-    // BEARISH (BTC fired SHORT): altcoins SHORT only, LONG blocked.
-    const btcBiasAge   = now - this._btcBiasAt;
-    const btcBiasValid = this._btcBias && btcBiasAge < 15 * 60_000;
-
-    const btcFiltered = uniqueSignals.filter(s => {
-      if (s.symbol === 'BTCUSDT') return true; // BTC always trades its own structure
-
-      // No active BTC bias (truly neutral) → allow both directions (4H is flat / unknown)
-      // Previously this blocked all altcoins — too aggressive. When we genuinely
-      // don't know BTC direction, let each altcoin's own structure decide.
-      if (!btcBiasValid) return true;
-
-      // Direction conflict → block
-      const blocked =
-        (this._btcBias === 'BULLISH' && s.direction === 'SHORT') ||
-        (this._btcBias === 'BEARISH' && s.direction === 'LONG');
-      if (blocked) {
-        bLog.scan(`[SMC-PAT] BTC-bias block: ${s.symbol} ${s.direction} vs BTC=${this._btcBias}`);
-        this.addActivity('skip', `${s.symbol} ${s.direction} blocked — BTC is ${this._btcBias}`);
-      }
-      return !blocked;
-    });
-
-    if (btcFiltered.length < uniqueSignals.length) {
-      this.addActivity('info',
-        `BTC filter: ${uniqueSignals.length - btcFiltered.length} signal(s) blocked (BTC=${this._btcBias ?? 'NEUTRAL'})`
-      );
-    }
 
     // ── Route signals: RiskAgent → TraderAgent ─────────────
     if (context.coordinator) {
