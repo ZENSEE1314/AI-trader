@@ -2059,7 +2059,7 @@ function _rawPivots(bars) {
 // Sideways market (no LL→LH or HH→HL sequence) → returns null → no trade.
 // minBouncePct: pass 0 — 2L/2R pivot detection on 15m candles is the sole judge.
 // The lowest candle in a 60-min window IS the HL; no artificial % filter on top.
-function _detect15mStructure(ph15, pl15, bars15m, minBouncePct) {
+function _detect15mStructure(ph15, pl15, bars15m, minBouncePct, slPct = 0.002) {
   if (ph15.length < 2 || pl15.length < 2) return null;
   if (!bars15m || bars15m.length < 6) return null;
 
@@ -2104,6 +2104,11 @@ function _detect15mStructure(ph15, pl15, bars15m, minBouncePct) {
       const chochHappened = barsInBounce.some(b => b.h > prevHHprice);
       if (chochHappened) return null; // CHoCH between LL and LH → reset
 
+      // Minimum bounce: LL→LH must span at least 2×slPct or the range is too tight
+      // (a ranging market produces many micro LL→LH patterns that aren't real downtrends)
+      const bouncePct = (lh.price - llPivot.price) / llPivot.price;
+      if (bouncePct < slPct * 2) return null;
+
       if (lhAge <= PIVOT_FRESH_BARS) {
         return { dir: 'SHORT', pivot15: lh, preceding: llPivot, label: 'LL→LH' };
       }
@@ -2140,7 +2145,9 @@ function _detect15mStructure(ph15, pl15, bars15m, minBouncePct) {
       );
       const noLLbreak = lowestBetween >= globalMinL * (1 + EXTREME_TOL);
 
-      if (hlAge <= PIVOT_FRESH_BARS && noLLbreak) {
+      // Minimum pullback: HH→HL must span at least 2×slPct or the range is too tight
+      const pullbackPct = (hhPivot.price - hl.price) / hhPivot.price;
+      if (hlAge <= PIVOT_FRESH_BARS && noLLbreak && pullbackPct >= slPct * 2) {
         return { dir: 'LONG', pivot15: hl, preceding: hhPivot, label: 'HH→HL' };
       }
     }
@@ -2186,7 +2193,7 @@ function scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns) {
   // Pass 0 for minBouncePct — candle-based 2L/2R detection is the sole judge.
   // A pivot LOW confirmed by 2L/2R (lowest price in a 60-min window on 15m) IS the HL.
   // Percentage thresholds override what the candles actually say and produce wrong signals.
-  const structure = _detect15mStructure(ph15, pl15, bars15m, 0);
+  const structure = _detect15mStructure(ph15, pl15, bars15m, 0, cfg.slPct);
   if (!structure) return null; // no HH→HL or LL→LH sequence — no trade
 
   const { dir, pivot15, label } = structure;
