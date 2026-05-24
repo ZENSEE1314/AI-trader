@@ -1533,20 +1533,12 @@ async function main() {
       _tvSignalQueue.clear();
     }
 
-    // ── Internal strategy scans ──
-    // BTC/ETH → V4 SMC (1m trigger + trailing SL tiers)
-    // BNB/SOL → Rev SMC (5m trigger + structure-reversal exit)
-    const tvSymbols = new Set(signals.map(s => s.symbol));
-    try {
-      const rawV4 = await scanV4SMC(msg => bLog.scan(msg));
-      const rawHomma = await scanHommaSMC(msg => bLog.scan(msg));
-      const v4Filtered = (rawV4 || []).filter(s => !tvSymbols.has(s.symbol) && (s.symbol === 'BTCUSDT' || s.symbol === 'ETHUSDT'));
-      const hommaFiltered = (rawHomma || []).filter(s => !tvSymbols.has(s.symbol) && (s.symbol === 'BNBUSDT' || s.symbol === 'SOLUSDT'));
-      signals.push(...v4Filtered, ...hommaFiltered);
-      bLog.scan(`V4-SMC: ${v4Filtered.length} signal(s) | Rev-SMC: ${revFiltered.length} signal(s)`);
-    } catch (tErr) {
-      bLog.error(`Strategy scan failed: ${tErr.message}`);
-    }
+    // ── Internal strategy scans DISABLED ──
+    // All signals now come exclusively from SMCPatternAgent (smc-engine.js)
+    // which enforces the strict 15m LL→LH→1m LH→SHORT / HH→HL→1m HL→LONG rule.
+    // The old scanV4SMC and scanHommaSMC have been removed to prevent
+    // them firing trades without proper 15m confirmation.
+    bLog.scan('Internal scan: disabled — signals from SMCPatternAgent only');
 
     if (!signals.length) {
       log('No AI signals found this cycle — agents still learning.');
