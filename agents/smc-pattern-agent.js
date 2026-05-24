@@ -30,9 +30,9 @@ const {
 
 // ── Constants ────────────────────────────────────────────────
 const SCAN_INTERVAL_MS = 30_000;    // 30s scan cadence
-const BARS_15M         = 60;        // 15min bars — 60 bars = 15h of 15min data
+const BARS_15M         = 100;       // 15min bars — 100 bars = 25h (covers 6h LL→LH gap + history)
 const BARS_4H_TREND    = 250;       // 4H bars for EMA200 trend
-const BARS_1M          = 90;        // 1m bars — 90 min covers the 30-min 15m confirmation lag + buffer
+const BARS_1M          = 30;        // 1m bars — 30 bars = 30 min (15-min window + buffer)
 const SCORE            = 72;        // signal score
 const AGENT_NAME       = 'SMCPatternAgent';
 

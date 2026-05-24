@@ -2001,9 +2001,9 @@ function scan1mPatterns(sym, bars1m, bars4h, cooldowns = new Map()) {
 //   LOW : bars[i].l < bars[i-1].l AND bars[i].l < bars[i+1].l AND bars[i].l < bars[i+2].l
 
 // ── Signal engine constants ───────────────────────────────────────────
-const STRUCT_BARS_15M  = 12;        // structure context: HH (for LONG) or LL (for SHORT) can be up to 3 h old
-const PIVOT_FRESH_BARS = 4;         // entry pivot freshness: HL (LONG) or LH (SHORT) must be ≤4 bars = 60 min old
-const WINDOW_MS        = 45 * 60_000; // 1m pivot must form within 45 min of the 15m pivot bar open
+const STRUCT_BARS_15M  = 96;        // step 1: LL/HH can be up to 24h old (generous — gap is controlled by MAX_PIVOT_GAP_MS)
+const PIVOT_FRESH_BARS = 24;        // step 2: LH/HL must be within last 6h (24 bars × 15m = 6h)
+const WINDOW_MS        = 15 * 60_000; // step 3: 1m pivot must form within 15 min of the 15m LH/HL bar
 const ENTRY_TOL        = 0.002;     // MUST equal slPct — entry must be within slPct% of the 1m HL/LH.
                                     // If ENTRY_TOL > slPct the SL would float above the structural HL when
                                     // entering at max drift, blowing out capital by 2× slPct × leverage.
@@ -2073,7 +2073,8 @@ function _rawPivots(bars) {
 // With 2L/2R requiring 2 right-bars after the pivot, the LH is never confirmed
 // until at least 2 bars after its own peak, so the effective real gap is larger.
 // This 30-min check on the PEAK bars stops the absolute minimum edge case.
-const MIN_PIVOT_GAP_MS = 2 * 15 * 60_000; // 30 min between LL barTs and LH barTs
+const MIN_PIVOT_GAP_MS = 2 * 15 * 60_000;   // step 2 minimum: 30 min from LL to LH (separate pivots)
+const MAX_PIVOT_GAP_MS = 6 * 60 * 60_000;   // step 2 maximum: 6 hours from LL to LH
 
 function _detect15mStructure(ph15, pl15, bars15mLen) {
   if (ph15.length < 2 || pl15.length < 2) return null;
@@ -2084,9 +2085,9 @@ function _detect15mStructure(ph15, pl15, bars15mLen) {
   const prevL = pl15[pl15.length - 2];  // previous 15m pivot LOW
 
   // ── SHORT: sequence is LL → LH ───────────────────────────────────
-  // LH must come after LL. LH must be a lower high (< prevH). LL must be a lower low.
-  // Both must be within their staleness windows.
-  // 30-min minimum gap between LL barTs and LH barTs: they are separate pivots.
+  // Step 1: LL confirmed. Step 2: LH confirmed after LL.
+  // Gap between LL and LH: min 30 min, max 6 hours.
+  // LH freshness: within last 6h (PIVOT_FRESH_BARS=24 bars).
   const isLH = lastH.price < prevH.price;
   if (isLH && lastH.barTs > lastL.barTs) {
     const isLL       = lastL.price < prevL.price;
@@ -2094,13 +2095,14 @@ function _detect15mStructure(ph15, pl15, bars15mLen) {
     const llAge      = (bars15mLen - 1) - lastL.idx;
     const pivotGapMs = lastH.barTs - lastL.barTs;
     if (isLL && lhAge <= PIVOT_FRESH_BARS && llAge <= STRUCT_BARS_15M &&
-        pivotGapMs >= MIN_PIVOT_GAP_MS) {
+        pivotGapMs >= MIN_PIVOT_GAP_MS && pivotGapMs <= MAX_PIVOT_GAP_MS) {
       return { dir: 'SHORT', pivot15: lastH, preceding: lastL, label: 'LL→LH' };
     }
   }
 
   // ── LONG: sequence is HH → HL ────────────────────────────────────
-  // HL must come after HH. HL must be a higher low (> prevL). HH must be a higher high.
+  // Step 1: HH confirmed. Step 2: HL confirmed after HH.
+  // Gap between HH and HL: min 30 min, max 6 hours.
   const isHL = lastL.price > prevL.price;
   if (isHL && lastL.barTs > lastH.barTs) {
     const isHH       = lastH.price > prevH.price;
@@ -2108,7 +2110,7 @@ function _detect15mStructure(ph15, pl15, bars15mLen) {
     const hhAge      = (bars15mLen - 1) - lastH.idx;
     const pivotGapMs = lastL.barTs - lastH.barTs;
     if (isHH && hlAge <= PIVOT_FRESH_BARS && hhAge <= STRUCT_BARS_15M &&
-        pivotGapMs >= MIN_PIVOT_GAP_MS) {
+        pivotGapMs >= MIN_PIVOT_GAP_MS && pivotGapMs <= MAX_PIVOT_GAP_MS) {
       return { dir: 'LONG', pivot15: lastL, preceding: lastH, label: 'HH→HL' };
     }
   }
@@ -2217,10 +2219,10 @@ function scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns, log = null)
     return null;
   }
 
-  // ── STEP 3: 1m pivot freshness from NOW (≤ 30 bars = 30 min) ────────
+  // ── STEP 3: 1m pivot freshness from NOW (≤ 15 bars = 15 min) ────────
   const bars1mNowAge = (total1m - 1) - pivot1m.idx;
-  if (bars1mNowAge > 30) {
-    L(`Step3 FAIL — 1m pivot is ${bars1mNowAge} bars old (max 30)`);
+  if (bars1mNowAge > 15) {
+    L(`Step3 FAIL — 1m pivot is ${bars1mNowAge} bars old (max 15)`);
     return null;
   }
   L(`Step3 PASS ✓ — 1m pivot is ${bars1mNowAge} bars old`);
