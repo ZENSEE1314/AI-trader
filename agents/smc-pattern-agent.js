@@ -33,7 +33,6 @@ const SCAN_INTERVAL_MS = 30_000;    // 30s scan cadence
 const BARS_15M         = 60;        // 15min bars — 60 bars = 15h of 15min data
 const BARS_4H_TREND    = 250;       // 4H bars for EMA200 trend
 const BARS_1M          = 90;        // 1m bars — 90 min covers the 30-min 15m confirmation lag + buffer
-const BARS_3M          = 480;       // 3m bars — 24h of 3min for VWAP
 const SCORE            = 72;        // signal score
 const AGENT_NAME       = 'SMCPatternAgent';
 
@@ -50,99 +49,6 @@ const UNBLOCK_FLOOR    = 0.50;      // ≥ 50% WR → unblock
 // (bullish BMS) or below the last confirmed pivot LOW (bearish BMS).
 // Uses TV indicator's asymmetric pivot: 1 left bar, 2 right bars.
 // When bullish BMS is active → no SHORTs.  When bearish BMS → no LONGs.
-function detect1mBMS(bars) {
-  if (!bars || bars.length < 10) return null;
-  const last = bars[bars.length - 1]; // current (most recent closed) bar
-
-  // Pivot highs: bar[i].h must exceed 1 bar to the left and 2 bars to the right
-  let lastHighPrice = null;
-  for (let i = 1; i < bars.length - 2; i++) {
-    if (bars[i].h > bars[i - 1].h && bars[i].h > bars[i + 1].h && bars[i].h > bars[i + 2].h) {
-      lastHighPrice = bars[i].h;
-    }
-  }
-
-  // Pivot lows: bar[i].l must be under 1 bar to the left and 2 bars to the right
-  let lastLowPrice = null;
-  for (let i = 1; i < bars.length - 2; i++) {
-    if (bars[i].l < bars[i - 1].l && bars[i].l < bars[i + 1].l && bars[i].l < bars[i + 2].l) {
-      lastLowPrice = bars[i].l;
-    }
-  }
-
-  if (lastHighPrice !== null && last.c > lastHighPrice) return 'BULLISH'; // closed above swing high
-  if (lastLowPrice  !== null && last.c < lastLowPrice)  return 'BEARISH'; // closed below swing low
-  return null;
-}
-
-// ── 1m structure classifier — used to validate CHoCH signals ─
-// CHoCH is only a valid REVERSAL when it breaks the PRIOR trend:
-//   CHoCH-BEAR (→ SHORT) requires prior BULLISH structure (HH or HL present)
-//   CHoCH-BULL (→ LONG)  requires prior BEARISH structure (LL or LH present)
-// If structure is already trending the same way → continuation, not reversal → skip.
-function classify1mStructure(bars1m) {
-  if (!bars1m || bars1m.length < 12) return { bullishStructure: false, bearishStructure: false };
-
-  const recent = bars1m.slice(-50); // last 50 bars ≈ 50 minutes of context
-  const ph = [], pl = [];
-  for (let i = 1; i < recent.length - 2; i++) {
-    if (recent[i].h > recent[i-1].h && recent[i].h > recent[i+1].h && recent[i].h > recent[i+2].h)
-      ph.push(recent[i].h);
-    if (recent[i].l < recent[i-1].l && recent[i].l < recent[i+1].l && recent[i].l < recent[i+2].l)
-      pl.push(recent[i].l);
-  }
-
-  // HH: last pivot high > second-last pivot high (rising highs)
-  const hasHH = ph.length >= 2 && ph[ph.length - 1] > ph[ph.length - 2];
-  // HL: last pivot low  > second-last pivot low  (rising lows)
-  const hasHL = pl.length >= 2 && pl[pl.length - 1] > pl[pl.length - 2];
-  // LH: last pivot high < second-last pivot high (falling highs)
-  const hasLH = ph.length >= 2 && ph[ph.length - 1] < ph[ph.length - 2];
-  // LL: last pivot low  < second-last pivot low  (falling lows)
-  const hasLL = pl.length >= 2 && pl[pl.length - 1] < pl[pl.length - 2];
-
-  return {
-    hasHH, hasHL, hasLH, hasLL,
-    bullishStructure: hasHH || hasHL, // at least one rising pivot = prior bullish structure
-    bearishStructure: hasLL || hasLH, // at least one falling pivot = prior bearish structure
-  };
-}
-
-// ── Session VWAP + ±1σ bands ─────────────────────────────────
-// Computed from 3m bars (up to 24h of data).
-// Rule: price ≤ lower band → NO LONG (in downtrend territory)
-//       price ≥ upper band → NO SHORT (in uptrend territory)
-// This matches TradingView "VWAP Session" with standard deviation bands.
-function computeVWAP(bars) {
-  if (!bars || bars.length < 10) return null;
-
-  // Use bars from the current session (00:00 UTC today) for accurate VWAP.
-  // Fall back to all supplied bars if the session filter leaves too few.
-  const sessionStart = new Date();
-  sessionStart.setUTCHours(0, 0, 0, 0);
-  const sessionTs = sessionStart.getTime();
-  const sessionBars = bars.filter(b => b.t >= sessionTs);
-  const vwapBars = sessionBars.length >= 10 ? sessionBars : bars;
-
-  let sumTPV = 0, sumV = 0;
-  const tps = [];
-  for (const b of vwapBars) {
-    const tp = (b.h + b.l + b.c) / 3;
-    const vol = b.v || 1;
-    sumTPV += tp * vol;
-    sumV   += vol;
-    tps.push(tp);
-  }
-  if (sumV === 0 || tps.length === 0) return null;
-
-  const vwap = sumTPV / sumV;
-  // Volume-weighted variance — matches TradingView VWAP band calculation exactly.
-  // Simple (unweighted) variance produces bands that are too narrow vs TradingView.
-  const variance = vwapBars.reduce((s, b, i) => s + b.v * (tps[i] - vwap) ** 2, 0) / sumV;
-  const stdDev = Math.sqrt(variance);
-
-  return { vwap, upper: vwap + stdDev, lower: vwap - stdDev };
-}
 
 // Symbols to scan — pulled from TRADING_CONFIG (XRP excluded there)
 const SYMBOLS = Object.keys(TRADING_CONFIG);
@@ -152,7 +58,6 @@ const SYMBOLS = Object.keys(TRADING_CONFIG);
 // Bybit uses the same minute values as strings, but '60' = '60' and '240' = '240'.
 // 4H on Bybit is interval='240'.
 const INTERVAL_4H = '240';
-const INTERVAL_3M = '3';
 
 // ── Signal formatter ─────────────────────────────────────────
 // Adapts scanPatterns output to the shape TraderAgent expects.
@@ -230,12 +135,6 @@ class SMCPatternAgent extends BaseAgent {
     // Key: symbol → { signal, barTs (1m bar open time when detected), dir, detectedAt }
     this._pendingSignals = new Map();
 
-    // BMS (Break of Market Structure) state per symbol.
-    // Bullish BMS (close above last swing high) → block all SHORTs.
-    // Bearish BMS (close below last swing low)  → block all LONGs.
-    // Expires after 2h.
-    // Map: symbol → { dir: 'BULLISH'|'BEARISH', detectedAt: timestamp }
-    this._bmsState = new Map();
 
     // Active virtual trades: signal.symbol+'_'+signal.smcContext.pattern → { ...signal, bars4hCache }
     // Used to run checkTradeState per bar and log outcomes.
@@ -359,12 +258,11 @@ class SMCPatternAgent extends BaseAgent {
       try {
         const cfg = TRADING_CONFIG[sym];
 
-        // Parallel fetch: 15m + 4H trend + 1m + 3m VWAP
-        const [bars15m, bars4h, bars1m, bars3m] = await Promise.all([
+        // Parallel fetch: 15m + 4H trend + 1m
+        const [bars15m, bars4h, bars1m] = await Promise.all([
           fetchCandles(sym, '15',        BARS_15M),
           fetchCandles(sym, INTERVAL_4H, BARS_4H_TREND),
           fetchCandles(sym, '1',         BARS_1M),
-          fetchCandles(sym, INTERVAL_3M, BARS_3M),
         ]);
 
         if (!bars15m || bars15m.length < 10) continue;
@@ -373,23 +271,7 @@ class SMCPatternAgent extends BaseAgent {
 
         bLog.scan(`[SMC-PAT] ${sym}: 15m=${bars15m.length} 1m=${bars1m.length}`);
 
-        // ── BMS state update ─────────────────────────────────────────
-        if (bars1m.length >= 10) {
-          const bms = detect1mBMS(bars1m);
-          if (bms) {
-            const prev = this._bmsState.get(sym);
-            if (!prev || prev.dir !== bms) {
-              this._bmsState.set(sym, { dir: bms, detectedAt: now });
-              bLog.scan(`[SMC-PAT] BMS ${sym}: ${bms}`);
-              this.addActivity('info', `${sym} BMS ${bms} — ${bms === 'BULLISH' ? 'shorts blocked' : 'longs blocked'}`);
-            }
-          }
-          const cur = this._bmsState.get(sym);
-          if (cur && now - cur.detectedAt > 45 * 60_000) this._bmsState.delete(sym); // 45-min expiry (was 2h — too long, blocked good setups)
-        }
-
-        // ── Core signal: nearest 15m pivot + nearest 1m pivot must match ──
-        // Both HL → LONG.  Both LH → SHORT.  Mismatch → no trade.
+        // ── Pure 4-step scan: 15m structure → 1m confirmation → next candle ──
         const raw = scanNearestPivotMatch(sym, bars15m, bars1m, bars4h, this._cooldowns, bLog.scan);
         if (!raw) continue;
 
@@ -417,61 +299,15 @@ class SMCPatternAgent extends BaseAgent {
         // 1m LH/HL was formed within the last 30 bars. Adding a second gate here
         // caused SHORTs to be blocked when a new 1m HL formed after the 1m LH
         // (price bounced during the 30-min 15m confirmation delay).
-        const pivotGated = raws;
-
-        // ── Step E: VWAP session filter ───────────────────────────
-        // price ≤ lower band → NO LONG   price ≥ upper band → NO SHORT
-        const vwap = computeVWAP(bars3m);
-        const vwapFiltered = vwap
-          ? pivotGated.filter(r => {
-              const p = r.price;
-              if (r.dir === 'LONG' && p <= vwap.lower) {
-                bLog.scan(`[SMC-PAT] VWAP block: ${sym} LONG p=${p.toFixed(2)} ≤ lower=${vwap.lower.toFixed(2)}`);
-                this.addActivity('skip', `${sym} LONG blocked — price ≤ VWAP lower`);
-                return false;
-              }
-              if (r.dir === 'SHORT' && p >= vwap.upper) {
-                bLog.scan(`[SMC-PAT] VWAP block: ${sym} SHORT p=${p.toFixed(2)} ≥ upper=${vwap.upper.toFixed(2)}`);
-                this.addActivity('skip', `${sym} SHORT blocked — price ≥ VWAP upper`);
-                return false;
-              }
-              return true;
-            })
-          : pivotGated;
-
-        if (!vwapFiltered.length) continue;
-
-        // ── Step F: BMS filter ────────────────────────────────────
-        // Bullish BMS → no SHORTs.  Bearish BMS → no LONGs.
-        const bmsEntry = this._bmsState.get(sym);
-        const bmsFiltered = bmsEntry
-          ? vwapFiltered.filter(r => {
-              if (bmsEntry.dir === 'BULLISH' && r.dir === 'SHORT') {
-                bLog.scan(`[SMC-PAT] BMS block: ${sym} SHORT blocked — bullish BMS active`);
-                this.addActivity('skip', `${sym} SHORT blocked — BMS BULLISH`);
-                return false;
-              }
-              if (bmsEntry.dir === 'BEARISH' && r.dir === 'LONG') {
-                bLog.scan(`[SMC-PAT] BMS block: ${sym} LONG blocked — bearish BMS active`);
-                this.addActivity('skip', `${sym} LONG blocked — BMS BEARISH`);
-                return false;
-              }
-              return true;
-            })
-          : vwapFiltered;
-
-        if (!bmsFiltered.length) continue;
-
-        for (const r of bmsFiltered) {
+        for (const r of raws) {
           const sig = formatSignal(r);
           signals.push(sig);
           this._signalCount++;
 
-          const vwapTag = vwap ? ` vwap=${vwap.vwap.toFixed(2)}[${vwap.lower.toFixed(2)}-${vwap.upper.toFixed(2)}]` : '';
           const tfLabel = r.tf === '1m' ? `1m(${r.pattern})` : `${cfg.label}+${r.ltfUsed ?? '?'}`;
           const msg = `${sig.symbol} ${sig.direction} pattern=${r.pattern} TF=${tfLabel} ` +
                       `trend=${r.trend} entry=${r.price.toFixed(4)} sl=${r.sl.toFixed(4)} ` +
-                      `tp1=${r.tp1.toFixed(4)} tp2=${r.tp2.toFixed(4)} RR=${sig.rr}${vwapTag}`;
+                      `tp1=${r.tp1.toFixed(4)} tp2=${r.tp2.toFixed(4)} RR=${sig.rr}`;
 
           this.addActivity('success', msg);
           bLog.trade(`[SMC-PAT] SIGNAL: ${msg}`);
