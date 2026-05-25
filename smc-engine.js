@@ -2191,22 +2191,67 @@ function _detect15mStructure(ph15, pl15, bars15m, minBouncePct, slPct = 0.002) {
   return null; // sideways / incomplete structure → no trade
 }
 
+// ── _detect15mPivot ───────────────────────────────────────────────────
+// Simplified single-pivot 15m detector — replaces the two-pivot sequence.
+//
+// Rule:
+//   HH (Higher High) or HL (Higher Low) on 15m → LONG
+//   LH (Lower High)  or LL (Lower Low)  on 15m → SHORT
+//
+// Picks the freshest pivot (HIGH or LOW) within PIVOT_FRESH_BARS.
+// If both are equally fresh, prefers the LOW pivot (entry at support/resistance).
+function _detect15mPivot(ph15, pl15, bars15mLen) {
+  if (ph15.length < 2 || pl15.length < 2) return null;
+
+  const lastHigh = ph15[ph15.length - 1];
+  const prevHigh = ph15[ph15.length - 2];
+  const lastLow  = pl15[pl15.length - 1];
+  const prevLow  = pl15[pl15.length - 2];
+
+  const highAge = (bars15mLen - 1) - lastHigh.idx;
+  const lowAge  = (bars15mLen - 1) - lastLow.idx;
+
+  const candidates = [];
+
+  if (lowAge <= PIVOT_FRESH_BARS) {
+    const isHL  = lastLow.price > prevLow.price;
+    candidates.push({
+      dir:     isHL ? 'LONG' : 'SHORT',
+      pivot15: lastLow,
+      label:   isHL ? 'HL' : 'LL',
+      age:     lowAge,
+    });
+  }
+  if (highAge <= PIVOT_FRESH_BARS) {
+    const isHH  = lastHigh.price > prevHigh.price;
+    candidates.push({
+      dir:     isHH ? 'LONG' : 'SHORT',
+      pivot15: lastHigh,
+      label:   isHH ? 'HH' : 'LH',
+      age:     highAge,
+    });
+  }
+
+  if (candidates.length === 0) return null;
+  // Fresher pivot wins; tie → prefer LOW (entry at support/resistance level)
+  candidates.sort((a, b) => a.age !== b.age ? a.age - b.age : (a.label === 'HL' || a.label === 'LL' ? -1 : 1));
+  return candidates[0];
+}
+
 function scanNearestPivotMatch(sym, bars15m, bars1m, bars4h, cooldowns, log = null) {
   return scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns, log);
 }
 
-// ── scanKeyLevelSignal — strict 3-step SMC rule ──────────────────────
+// ── scanKeyLevelSignal — 3-step SMC rule ────────────────────────────
 //
-// STEP 1 — 15m structure (sideways filter):
-//   Must see LL → LH on 15m to consider SHORT.
-//   Must see HH → HL on 15m to consider LONG.
-//   Any other 15m state (LL only, HH only, mixed, ranging) → no trade.
-//   Both pivots must be within last 3 hours (STRUCT_BARS_15M = 12 bars).
+// STEP 1 — 15m pivot (direction filter):
+//   HH or HL on 15m → LONG  (uptrend pivot, find 1m HL)
+//   LH or LL on 15m → SHORT (downtrend pivot, find 1m LH)
+//   Pivot must be within PIVOT_FRESH_BARS (2 h). Ranging/no-pivot → no trade.
 //
-// STEP 2 — 1m confirmation in 30-min window:
-//   SHORT: find a 1m LH (lower than prev 1m high) within 30 min of the 15m LH bar.
-//   LONG:  find a 1m HL (higher than prev 1m low) within 30 min of the 15m HL bar.
-//   "If 15m LH is at 8:00, the 1m LH must be between 8:00 and 8:30."
+// STEP 2 — 1m confirmation in WINDOW_MS window:
+//   SHORT: find a 1m LH within WINDOW_MS of the 15m pivot bar.
+//   LONG:  find a 1m HL within WINDOW_MS of the 15m pivot bar.
 //   Outside that window → skip, wait for the next 15m candle.
 //
 // STEP 3 — Entry freshness:
@@ -2225,15 +2270,13 @@ function scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns, log = null)
   const price   = cur.c;
   const total1m = bars1m.length;
 
-  // ── STEP 1: 15m structure must be LL→LH (SHORT) or HH→HL (LONG) ────
-  // One guard: MIN_PIVOT_GAP_MS (30 min between LL barTs and LH barTs).
-  // No bounce % filter — 2L/2R pivot detection is the sole structural judge.
+  // ── STEP 1: 15m pivot — HH/HL → LONG, LH/LL → SHORT ────────────────
+  // Single fresh pivot on 15m is sufficient to determine direction.
+  // HH or HL = uptrend pivot → look for 1m HL → LONG
+  // LH or LL = downtrend pivot → look for 1m LH → SHORT
   const { ph: ph15, pl: pl15 } = _allPivots(bars15m);
-  // Pass 0 for minBouncePct — candle-based 2L/2R detection is the sole judge.
-  // A pivot LOW confirmed by 2L/2R (lowest price in a 60-min window on 15m) IS the HL.
-  // Percentage thresholds override what the candles actually say and produce wrong signals.
-  const structure = _detect15mStructure(ph15, pl15, bars15m, 0, cfg.slPct);
-  if (!structure) return null; // no HH→HL or LL→LH sequence — no trade
+  const structure = _detect15mPivot(ph15, pl15, bars15m.length);
+  if (!structure) return null; // no fresh 15m pivot — no trade
 
   const { dir, pivot15, label } = structure;
   L(`Step1 PASS ✓ — ${label} dir=${dir} pivot15=${pivot15.price.toFixed(2)}`);
@@ -2378,7 +2421,7 @@ function scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns, log = null)
   let trend = 'UNKNOWN';
   try { trend = classifyTrend(bars4h ?? []); } catch (_) {}
 
-  const pattern15 = dir === 'SHORT' ? 'LH' : 'HL'; // confirmed: LH for SHORT, HL for LONG
+  const pattern15 = label; // actual 15m pivot type: HH | HL | LH | LL
 
   return {
     symbol:   sym,
