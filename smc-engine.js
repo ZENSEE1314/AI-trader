@@ -2081,10 +2081,15 @@ function _detect15mStructure(ph15, pl15, bars15m, minBouncePct, slPct = 0.002) {
   // Find the TRUE LL: pivot low nearest the global candle minimum.
   // Then find the most recent pivot HIGH after it that is a genuine LH
   // (below the global candle max — not the new HH).
+  // llPivot must also be LOWER than the previous pivot low (genuine LL, not HL bounce).
   const llPivot = pl15.reduce((min, p) => p.price < min.price ? p : min, pl15[0]);
   const llAge   = (bars15mLen - 1) - llPivot.idx;
 
   if (llAge <= STRUCT_BARS_15M) {
+    // llPivot must be lower than the pivot low before it (real LL, not a HL in uptrend)
+    const prevLL = pl15.filter(p => p.barTs < llPivot.barTs).slice(-1)[0];
+    if (prevLL && llPivot.price >= prevLL.price) return null; // HL masquerading as LL → no SHORT
+
     const lhCandidates = ph15.filter(p =>
       p.barTs > llPivot.barTs &&                        // LH formed AFTER the LL
       p.price < globalMaxH * (1 - EXTREME_TOL)          // NOT the global max → genuine LH
@@ -2092,6 +2097,10 @@ function _detect15mStructure(ph15, pl15, bars15m, minBouncePct, slPct = 0.002) {
     if (lhCandidates.length > 0) {
       const lh    = lhCandidates[lhCandidates.length - 1]; // most recent valid LH
       const lhAge = (bars15mLen - 1) - lh.idx;
+
+      // After LH forms, no 15m bar should have closed ABOVE the LH (structure still intact)
+      const barsAfterLH = bars15m.filter(b => b.t > lh.barTs);
+      if (barsAfterLH.some(b => b.c > lh.price * (1 + EXTREME_TOL))) return null;
 
       // CHoCH guard: if the bounce from LL to LH broke above the last pivot high
       // that existed BEFORE the LL, a CHoCH (trend flip) happened in between.
@@ -2116,33 +2125,44 @@ function _detect15mStructure(ph15, pl15, bars15m, minBouncePct, slPct = 0.002) {
   }
 
   // ── LONG: HH → HL ────────────────────────────────────────────────
-  // Find the TRUE HH: pivot high nearest the global candle maximum.
-  // Then find the most recent pivot LOW after it that is a genuine HL
-  // (above the global candle min — not a new LL).
-  // Extra guard: if any pivot low between the HH and HL went below the pre-HH
-  // minimum → structure broke → LONG invalid.
-  //
-  // LL guard: if the global minimum low (LL) formed within STRUCT_BARS_15M bars,
-  // the market is in a reversal-bounce context (LL + CHoCH → LH masquerading as HH).
-  // User rule: "LL with CHoCH uptrend, if shows LH → no trade, reset."
+  // LONG rules (all must pass):
+  //   1. No recent LL (globalMinAge > STRUCT_BARS_15M) — avoids bounce in downtrend
+  //   2. hhPivot must be HIGHER than the previous pivot high (genuine HH, not a LH)
+  //   3. HL must form AFTER the HH and be ABOVE the pivot low that preceded the HH
+  //      (genuine HL — price respected the prior low)
+  //   4. After HL forms, no 15m bar closed BELOW the HL (structure still intact)
+  //   5. No LL break between HH and HL (bearish structure break)
   if (globalMinAge <= STRUCT_BARS_15M) return null; // recent LL → reversal bounce → no LONG
 
-  const hhPivot = ph15.reduce((max, p) => p.price > max.price ? p : max, ph15[0]);
-  const hhAge   = (bars15mLen - 1) - hhPivot.idx;
+  const hhPivot  = ph15.reduce((max, p) => p.price > max.price ? p : max, ph15[0]);
+  const hhAge    = (bars15mLen - 1) - hhPivot.idx;
 
   if (hhAge <= STRUCT_BARS_15M) {
+    // Rule 2: hhPivot must be higher than the pivot high before it (real HH, not LH)
+    const prevHH = ph15.filter(p => p.barTs < hhPivot.barTs).slice(-1)[0];
+    if (prevHH && hhPivot.price <= prevHH.price) return null; // LH masquerading as HH → no LONG
+
+    // Rule 3: HL must be above the pivot low that preceded the HH
+    const prevHL = pl15.filter(p => p.barTs < hhPivot.barTs).slice(-1)[0];
+
     const hlCandidates = pl15.filter(p =>
-      p.barTs > hhPivot.barTs &&                        // HL formed AFTER the HH
-      p.price > globalMinL * (1 + EXTREME_TOL)          // NOT the global min → genuine HL
+      p.barTs > hhPivot.barTs &&                              // HL formed AFTER the HH
+      p.price > globalMinL * (1 + EXTREME_TOL) &&            // NOT the global min → genuine HL
+      (!prevHL || p.price > prevHL.price)                     // above the prior swing low (real HL)
     );
     if (hlCandidates.length > 0) {
       const hl    = hlCandidates[hlCandidates.length - 1]; // most recent valid HL
       const hlAge = (bars15mLen - 1) - hl.idx;
 
-      // Reject if a LL was made between HH and HL (bearish structure break)
-      const lowestBetween = hlCandidates.reduce(
-        (min, p) => p.price < min ? p.price : min, Infinity
-      );
+      // Rule 4: After HL formed, no 15m bar closed BELOW HL — structure must still be intact
+      const barsAfterHL = bars15m.filter(b => b.t > hl.barTs);
+      const structureBroken = barsAfterHL.some(b => b.c < hl.price * (1 - EXTREME_TOL));
+      if (structureBroken) return null; // price already broke below HL → no LONG
+
+      // Rule 5: Reject if a LL was made between HH and HL (bearish structure break)
+      const lowestBetween = pl15
+        .filter(p => p.barTs > hhPivot.barTs && p.barTs < hl.barTs)
+        .reduce((min, p) => p.price < min ? p.price : min, Infinity);
       const noLLbreak = lowestBetween >= globalMinL * (1 + EXTREME_TOL);
 
       // Minimum pullback: HH→HL must span at least 2×slPct or the range is too tight
@@ -2202,6 +2222,22 @@ function scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns, log = null)
 
   const { dir, pivot15, label } = structure;
   L(`Step1 PASS ✓ — ${label} dir=${dir} pivot15=${pivot15.price.toFixed(2)}`);
+
+  // ── 4H trend gate — only trade with the macro trend ─────────────────
+  // DOWN on 4H → reject LONGs (counter-trend against macro sellers)
+  // UP   on 4H → reject SHORTs (counter-trend against macro buyers)
+  // NEUTRAL → allow both directions (ranging market, let 15m structure decide)
+  let trend4h = 'NEUTRAL';
+  try { trend4h = classifyTrend(bars4h ?? []); } catch (_) {}
+  if (dir === 'LONG'  && trend4h === 'DOWN') {
+    L(`Step1b FAIL — 4H trend is DOWN, rejecting LONG`);
+    return null;
+  }
+  if (dir === 'SHORT' && trend4h === 'UP') {
+    L(`Step1b FAIL — 4H trend is UP, rejecting SHORT`);
+    return null;
+  }
+  L(`Step1b PASS ✓ — 4H trend=${trend4h} allows ${dir}`);
 
   // ── STEP 2: Find 1m LH (SHORT) or 1m HL (LONG) in 30-min window ────
   // The 1m pivot must specifically be a LH (for SHORT) or HL (for LONG),
