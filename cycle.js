@@ -1359,7 +1359,7 @@ async function main() {
 
   // ── Maintenance & Sync ───────────────────────────────────────
   const now = Date.now();
-  if (!lastBitunixSync || now - lastBitunixSync > 12 * 60 * 60 * 1000) {
+  if (!lastBitunixSync || now - lastBitunixSync > 30 * 60_000) {
     bLog.info('Running periodic Bitunix trade history sync...');
     try {
       const { AccountantAgent } = require('./agents/accountant-agent');

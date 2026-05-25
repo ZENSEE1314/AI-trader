@@ -174,6 +174,74 @@ router.put('/bitunix-referral-link', async (req, res) => {
   }
 });
 
+// Background pull throttle — one pull per user per 5 min so page flips don't spam the exchange
+const _bgPullLastRun = new Map();
+const BG_PULL_COOLDOWN_MS = 5 * 60_000;
+
+function _triggerBackgroundPull(userId) {
+  const last = _bgPullLastRun.get(userId) || 0;
+  if (Date.now() - last < BG_PULL_COOLDOWN_MS) return;
+  _bgPullLastRun.set(userId, Date.now());
+
+  // Fire-and-forget — response already sent, this runs in the background
+  setImmediate(async () => {
+    try {
+      const { BitunixClient } = require('../bitunix-client');
+      const cryptoUtils2 = require('../crypto-utils');
+      const keys = await query(
+        `SELECT id, encrypted_api_key, encrypted_api_secret FROM api_keys
+         WHERE user_id = $1 AND platform = 'bitunix' AND is_active = true`,
+        [userId]
+      );
+      if (!keys.length) return;
+
+      for (const key of keys) {
+        try {
+          const apiKey    = cryptoUtils2.decrypt(key.encrypted_api_key);
+          const apiSecret = cryptoUtils2.decrypt(key.encrypted_api_secret);
+          const client = new BitunixClient(apiKey, apiSecret);
+
+          // Pull last 2 pages (100 positions) per symbol — fast background refresh
+          const { ACTIVE_SYMBOLS: syms } = require('../strategy-v4-smc');
+          for (const sym of syms) {
+            try {
+              const raw = await client._rawGet('/api/v1/futures/position/get_history_positions', {
+                symbol: sym, pageNum: 1, pageSize: 50,
+              });
+              if (raw?.code !== 0) continue;
+              const d = raw?.data;
+              const list = Array.isArray(d) ? d
+                : (d?.positionList || d?.resultList || d?.list || d?.data || d?.records || []);
+              // Minimal upsert — just mark closed trades with exit data if missing
+              for (const pos of list) {
+                const posId = pos.positionId || pos.id;
+                if (!posId) continue;
+                await query(
+                  `UPDATE trades SET
+                     exit_price   = COALESCE(exit_price, $2),
+                     pnl_usdt     = COALESCE(pnl_usdt,   $3),
+                     status       = CASE WHEN status = 'OPEN' THEN
+                                      CASE WHEN $3::numeric >= 0 THEN 'WIN' ELSE 'LOSS' END
+                                    ELSE status END,
+                     updated_at   = NOW()
+                   WHERE bitunix_position_id = $1 AND status = 'OPEN'`,
+                  [
+                    String(posId),
+                    pos.closePrice != null ? String(pos.closePrice) : null,
+                    pos.pnl        != null ? String(pos.pnl)        : null,
+                  ]
+                );
+              }
+            } catch (_) { /* skip symbol on error */ }
+          }
+        } catch (_) { /* skip key on error */ }
+      }
+    } catch (err) {
+      console.warn(`[bg-pull] user ${userId} error: ${err.message}`);
+    }
+  });
+}
+
 // Trade history
 router.get('/trades', async (req, res) => {
   try {
@@ -199,6 +267,9 @@ router.get('/trades', async (req, res) => {
       [req.userId]
     );
     res.json({ trades: rows, total: parseInt(countRes[0].cnt), page, pages: Math.ceil(countRes[0].cnt / limit) });
+
+    // Background: keep trade data fresh without blocking the response
+    _triggerBackgroundPull(req.userId);
   } catch (err) {
     console.error('Trades error:', err.message);
     res.status(500).json({ error: 'Server error' });
