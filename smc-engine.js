@@ -2265,10 +2265,9 @@ function scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns, log = null)
   if (!bars15m || bars15m.length < 6) return null;
   if (!bars1m  || bars1m.length  < 6) return null;
 
-  const cur     = bars1m[bars1m.length - 1];
-  const now     = cur.t;
-  const price   = cur.c;
-  const total1m = bars1m.length;
+  const cur   = bars1m[bars1m.length - 1];
+  const now   = cur.t;
+  const price = cur.c;
 
   // ── STEP 1: 15m pivot — HH/HL → LONG, LH/LL → SHORT ────────────────
   // Single fresh pivot on 15m is sufficient to determine direction.
@@ -2349,61 +2348,43 @@ function scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns, log = null)
     }
   }
 
-  // ── STEP 2: Find 1m LH (SHORT) or 1m HL (LONG) in 30-min window ────
-  // The 1m pivot must specifically be a LH (for SHORT) or HL (for LONG),
-  // not just any swing high/low. This matches the user's rule exactly.
-  const { ph: ph1, pl: pl1 } = _allPivots(bars1m);
+  // ── STEP 2: 1m CHoCH is the entry trigger ───────────────────────────
+  // 15m HH/HL + 1m BULLISH CHoCH → LONG
+  // 15m LH/LL + 1m BEARISH CHoCH → SHORT
+  // CHoCH must have happened after the 15m pivot bar and within WINDOW_MS.
+  const expectedChoch = dir === 'LONG' ? 'BULLISH' : 'BEARISH';
+  const choch1mEntry  = detectCHoCH(bars1m, _toPivotsForCHoCH(bars1m), 90);
 
-  let pivot1m = null;
-
-  if (dir === 'SHORT') {
-    // Find the HIGHEST 1m LH in window — real structural resistance, not first near the top
-    for (let i = ph1.length - 1; i >= 1; i--) {
-      const diff = ph1[i].barTs - pivot15.barTs;
-      if (diff < 0) break;                               // before the 15m bar — stop
-      if (diff > WINDOW_MS) continue;                   // too late after window — skip
-      if (ph1[i].price >= ph1[i - 1].price) continue;  // not a LH (it's a HH) — skip
-      if (!pivot1m || ph1[i].price > pivot1m.price) pivot1m = ph1[i];
-    }
-  } else {
-    // Find the LOWEST 1m HL in window — real structural support, not first near the high
-    for (let i = pl1.length - 1; i >= 1; i--) {
-      const diff = pl1[i].barTs - pivot15.barTs;
-      if (diff < 0) break;                               // before the 15m bar — stop
-      if (diff > WINDOW_MS) continue;                   // too late after window — skip
-      if (pl1[i].price <= pl1[i - 1].price) continue;  // not a HL (it's a LL) — skip
-      if (!pivot1m || pl1[i].price < pivot1m.price) pivot1m = pl1[i];
-    }
-  }
-  if (!pivot1m) {
-    L(`Step2 WAIT — no 1m ${dir === 'SHORT' ? 'LH' : 'HL'} found within 45-min window of 15m pivot`);
+  if (!choch1mEntry) {
+    L(`Step2 WAIT — no 1m CHoCH detected`);
     return null;
   }
-  L(`Step2 PASS ✓ — 1m ${dir === 'SHORT' ? 'LH' : 'HL'}@${pivot1m.price.toFixed(2)}`);
-
-  // ── STEP 2b: 1m pivot must be at the same price level as the 15m pivot ──
-  const LEVEL_TOL = cfg.slPct * 2;
-  const levelDiff = Math.abs(pivot1m.price - pivot15.price) / pivot15.price;
-  if (levelDiff > LEVEL_TOL) {
-    L(`Step2b FAIL — 1m pivot ${pivot1m.price.toFixed(2)} too far from 15m pivot ${pivot15.price.toFixed(2)} (${(levelDiff*100).toFixed(2)}% > ${(LEVEL_TOL*100).toFixed(2)}%)`);
+  if (choch1mEntry.direction !== expectedChoch) {
+    L(`Step2 FAIL — 1m CHoCH=${choch1mEntry.direction}, need ${expectedChoch}`);
     return null;
   }
-
-  // ── STEP 3: 1m pivot freshness from NOW (≤ 30 bars = 30 min) ────────
-  const bars1mNowAge = (total1m - 1) - pivot1m.idx;
-  if (bars1mNowAge > 30) {
-    L(`Step3 FAIL — 1m pivot is ${bars1mNowAge} bars old (max 30)`);
+  const chochDiff = choch1mEntry.candleTs - pivot15.barTs;
+  if (chochDiff < 0 || chochDiff > WINDOW_MS) {
+    L(`Step2 FAIL — 1m CHoCH outside ${WINDOW_MS / 60_000}min window of 15m pivot`);
     return null;
   }
-  L(`Step3 PASS ✓ — 1m pivot is ${bars1mNowAge} bars old`);
+  L(`Step2 PASS ✓ — 1m ${expectedChoch} CHoCH @ ${choch1mEntry.level.toFixed(2)}`);
 
-  // ── STEP 4: Chase filter — entry must be within ENTRY_TOL of the 1m pivot ──
-  if (dir === 'LONG'  && price > pivot1m.price * (1 + ENTRY_TOL)) {
-    L(`Step4 FAIL — price ${price.toFixed(2)} chased too far above HL ${pivot1m.price.toFixed(2)}`);
+  // ── STEP 3: CHoCH freshness from NOW (≤ 30 min) ──────────────────────
+  const chochAgeMs = now - choch1mEntry.candleTs;
+  if (chochAgeMs > 30 * 60_000) {
+    L(`Step3 FAIL — 1m CHoCH is ${Math.round(chochAgeMs / 60_000)}min old (max 30)`);
     return null;
   }
-  if (dir === 'SHORT' && price < pivot1m.price * (1 - ENTRY_TOL)) {
-    L(`Step4 FAIL — price ${price.toFixed(2)} chased too far below LH ${pivot1m.price.toFixed(2)}`);
+  L(`Step3 PASS ✓ — 1m CHoCH is ${Math.round(chochAgeMs / 60_000)}min old`);
+
+  // ── STEP 4: Chase filter — don't enter far past the CHoCH level ──────
+  if (dir === 'LONG'  && price > choch1mEntry.level * (1 + ENTRY_TOL * 3)) {
+    L(`Step4 FAIL — price ${price.toFixed(2)} chased too far above CHoCH ${choch1mEntry.level.toFixed(2)}`);
+    return null;
+  }
+  if (dir === 'SHORT' && price < choch1mEntry.level * (1 - ENTRY_TOL * 3)) {
+    L(`Step4 FAIL — price ${price.toFixed(2)} chased too far below CHoCH ${choch1mEntry.level.toFixed(2)}`);
     return null;
   }
 
@@ -2413,10 +2394,11 @@ function scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns, log = null)
   if (cooldowns.has(cdKey) && now - cooldowns.get(cdKey) < SYMBOL_CD) return null;
   cooldowns.set(cdKey, now);
 
-  const sl   = dir === 'LONG' ? pivot1m.price * (1 - cfg.slPct) : pivot1m.price * (1 + cfg.slPct);
-  const tp1  = dir === 'LONG' ? price * (1 + TP1_PCT)           : price * (1 - TP1_PCT);
-  const tp2  = dir === 'LONG' ? price * (1 + TP2_PCT)           : price * (1 - TP2_PCT);
-  const lock = dir === 'LONG' ? price * (1 + LOCK_PCT)          : price * (1 - LOCK_PCT);
+  // SL anchored to CHoCH level — invalidated if price returns past the broken level
+  const sl   = dir === 'LONG' ? choch1mEntry.level * (1 - cfg.slPct) : choch1mEntry.level * (1 + cfg.slPct);
+  const tp1  = dir === 'LONG' ? price * (1 + TP1_PCT)                : price * (1 - TP1_PCT);
+  const tp2  = dir === 'LONG' ? price * (1 + TP2_PCT)                : price * (1 - TP2_PCT);
+  const lock = dir === 'LONG' ? price * (1 + LOCK_PCT)               : price * (1 - LOCK_PCT);
 
   let trend = 'UNKNOWN';
   try { trend = classifyTrend(bars4h ?? []); } catch (_) {}
@@ -2424,28 +2406,29 @@ function scanKeyLevelSignal(sym, bars15m, bars1m, bars4h, cooldowns, log = null)
   const pattern15 = label; // actual 15m pivot type: HH | HL | LH | LL
 
   return {
-    symbol:   sym,
-    name:     cfg.name,
-    tf:       '15m+1m',
-    iv:       cfg.iv,
-    pattern:  pattern15,
+    symbol:    sym,
+    name:      cfg.name,
+    tf:        '15m+1m',
+    iv:        cfg.iv,
+    pattern:   pattern15,
     pattern15,
     dir,
-    side:     dir === 'LONG' ? 'BUY' : 'SELL',
+    side:      dir === 'LONG' ? 'BUY' : 'SELL',
     price,
-    level:    pivot1m.price,
-    keyLevel: pivot15.price,
+    level:     choch1mEntry.level,
+    keyLevel:  pivot15.price,
     sl, tp1, tp2,
-    lockAt:   lock,
-    slPct:    (cfg.slPct * 100).toFixed(2) + '%',
-    tp1Pct:   (TP1_PCT  * 100).toFixed(2) + '%',
-    tp2Pct:   (TP2_PCT  * 100).toFixed(2) + '%',
+    lockAt:    lock,
+    slPct:     (cfg.slPct * 100).toFixed(2) + '%',
+    tp1Pct:    (TP1_PCT  * 100).toFixed(2) + '%',
+    tp2Pct:    (TP2_PCT  * 100).toFixed(2) + '%',
     trend,
-    pivot15m: pivot15.price,
-    pivot1m:  pivot1m.price,
-    ltfUsed:  '1m',
-    ts:       now,
-    signal:   `${label} → 15m_${pattern15}=${pivot15.price.toFixed(4)} + 1m_${pattern15}=${pivot1m.price.toFixed(4)} entry=${price.toFixed(4)} sl=${sl.toFixed(4)}`,
+    pivot15m:  pivot15.price,
+    choch1m:   choch1mEntry.level,
+    chochDir:  choch1mEntry.direction,
+    ltfUsed:   '1m-CHoCH',
+    ts:        now,
+    signal:    `${label}@${pivot15.price.toFixed(4)} + 1m_${expectedChoch}_CHoCH@${choch1mEntry.level.toFixed(4)} entry=${price.toFixed(4)} sl=${sl.toFixed(4)}`,
   };
 }
 
