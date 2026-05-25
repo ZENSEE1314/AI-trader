@@ -291,16 +291,15 @@ class AccountantAgent extends BaseAgent {
 
       const client = new BitunixClient({ apiKey, apiSecret });
 
-      // Fetch ALL DB trades for this key (no date cap — hard sync everything)
+      // Fetch ALL DB trades for this key — include OPEN so we can close them from exchange
       let dbTrades;
       try {
         dbTrades = await db.query(
           `SELECT id, symbol, direction, entry_price, exit_price, quantity,
                   pnl_usdt, trading_fee, funding_fee, gross_pnl,
-                  bitunix_position_id, created_at
+                  bitunix_position_id, created_at, status
            FROM trades
            WHERE api_key_id = $1
-             AND status IN ('WIN','LOSS','CLOSED')
            ORDER BY created_at DESC
            LIMIT 2000`,
           [key.id]
@@ -310,27 +309,141 @@ class AccountantAgent extends BaseAgent {
         continue;
       }
 
-      if (!dbTrades.length) continue;
       this.addActivity('info', `${key.email}: ${dbTrades.length} DB trades to reconcile`);
+
+      // Always fetch the 4 default symbols plus any extras in DB
+      const DEFAULT_SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT'];
+      const allSymbols = [...new Set([...DEFAULT_SYMBOLS, ...dbTrades.map(t => t.symbol)])];
 
       // Per-symbol position cache — fetches ALL pages for each symbol once
       const posCache  = {};
       const fetched   = new Set();
 
-      for (const trade of dbTrades) {
-        if (!fetched.has(trade.symbol)) {
+      for (const sym of allSymbols) {
+        if (!fetched.has(sym)) {
           try {
-            posCache[trade.symbol] = await client.getHistoryPositions({
-              symbol: trade.symbol, pageSize: 200, all: true,
+            posCache[sym] = await client.getHistoryPositions({
+              symbol: sym, pageSize: 200, all: true,
             });
-            bLog.system(`[ACCT-SYNC] key#${key.id} ${trade.symbol}: ${posCache[trade.symbol].length} history positions`);
+            bLog.system(`[ACCT-SYNC] key#${key.id} ${sym}: ${posCache[sym].length} history positions`);
           } catch (e) {
-            bLog.error(`[ACCT-SYNC] key#${key.id} ${trade.symbol} fetch error: ${e.message}`);
-            posCache[trade.symbol] = [];
+            bLog.error(`[ACCT-SYNC] key#${key.id} ${sym} fetch error: ${e.message}`);
+            posCache[sym] = [];
           }
-          fetched.add(trade.symbol);
+          fetched.add(sym);
         }
+      }
 
+      // Build quick lookup: positionId → DB trade (for INSERT dedup)
+      const dbByPosId = new Map();
+      for (const t of dbTrades) {
+        if (t.bitunix_position_id) dbByPosId.set(String(t.bitunix_position_id), t);
+      }
+
+      // ── Pass 1: Bitunix-first — insert missing positions & close stale OPEN trades ──
+      const matchedDbIds = new Set();
+      for (const sym of allSymbols) {
+        const positions = posCache[sym] || [];
+        for (const p of positions) {
+          try {
+            const posId      = String(p.positionId || p.id || p.position_id || '');
+            const pSide      = (p.side || p.positionSide || '').toUpperCase();
+            const direction  = (pSide === 'LONG' || pSide === 'BUY') ? 'LONG' : 'SHORT';
+            const entryPrice = parseFloat(p.avgOpenPrice || p.entryPrice || p.openPrice || p.open_price || 0);
+            const exitPrice  = parseFloat(p.avgClosePrice || p.closePrice || p.closedPrice || p.exitPrice || p.close_price || 0);
+            const qty        = parseFloat(p.qty || p.size || p.quantity || 0);
+            const leverage   = parseInt(p.leverage || 20);
+            const pnlRaw     = p.realizedPNL ?? p.realizedPnl ?? p.realPNL ?? p.realPnl ?? p.pnl ?? p.profit ?? p.netPnl ?? p.net_pnl ?? null;
+            const pnlUsdt    = pnlRaw != null ? parseFloat(parseFloat(pnlRaw).toFixed(4)) : null;
+            const tradingFee = Math.abs(parseFloat(p.fee || p.tradingFee || p.tradeFee || p.trade_fee || p.closeFee || p.close_fee || p.commission || p.openFee || p.open_fee || 0));
+            const fundingFee = Math.abs(parseFloat(p.funding || p.fundingFee || p.fund_fee || p.fundFee || 0));
+            const grossPnl   = pnlUsdt != null ? parseFloat((pnlUsdt + tradingFee + fundingFee).toFixed(4)) : null;
+            const openMs     = parseInt(p.openTime || p.ctime || p.createTime || 0);
+            const closeMs    = parseInt(p.closeTime || p.mtime || p.updateTime || 0);
+            const openAt     = openMs  ? new Date(openMs)  : null;
+            const closeAt    = closeMs ? new Date(closeMs) : null;
+            const status     = pnlUsdt != null ? (pnlUsdt > 0 ? 'WIN' : 'LOSS') : 'CLOSED';
+
+            if (!sym || entryPrice <= 0 || exitPrice <= 0) continue;
+
+            // Find matching DB trade: posId first, then entry price + time
+            let existing = posId ? dbByPosId.get(posId) : null;
+            if (!existing && openMs > 0) {
+              existing = dbTrades.find(t =>
+                t.symbol === sym && t.direction === direction &&
+                Math.abs(parseFloat(t.entry_price) - entryPrice) / entryPrice < 0.003 &&
+                Math.abs(new Date(t.created_at).getTime() - openMs) < 300_000
+              );
+            }
+            if (!existing) {
+              existing = dbTrades.find(t =>
+                t.symbol === sym && t.direction === direction && t.status === 'OPEN' &&
+                Math.abs(parseFloat(t.entry_price) - entryPrice) / entryPrice < 0.003
+              ) || dbTrades.find(t =>
+                t.symbol === sym && t.direction === direction &&
+                !t.bitunix_position_id &&
+                Math.abs(parseFloat(t.entry_price) - entryPrice) / entryPrice < 0.003
+              );
+            }
+
+            if (existing) {
+              matchedDbIds.add(existing.id);
+              // Update: force-write real exchange data for any status
+              await db.query(
+                `UPDATE trades SET
+                   exit_price  = $1, pnl_usdt = $2, gross_pnl = $3,
+                   trading_fee = $4, funding_fee = $5, status = $6,
+                   closed_at   = COALESCE(closed_at, $7),
+                   bitunix_position_id = COALESCE(bitunix_position_id, $8)
+                 WHERE id = $9`,
+                [exitPrice, pnlUsdt, grossPnl, tradingFee, fundingFee, status,
+                 closeAt, posId || null, existing.id]
+              );
+              totalUpdated++;
+              bLog.system(`[ACCT-SYNC] Updated trade#${existing.id} ${sym} ${direction}: exit=${exitPrice} net=${pnlUsdt} status=${status}`);
+            } else {
+              // No matching DB trade → INSERT (ON CONFLICT do nothing if posId already exists)
+              try {
+                await db.query(
+                  `INSERT INTO trades
+                     (api_key_id, user_id, symbol, direction, entry_price, exit_price,
+                      sl_price, tp_price, quantity, leverage, status, pnl_usdt, gross_pnl,
+                      trading_fee, funding_fee, closed_at, created_at,
+                      trailing_sl_price, trailing_sl_last_step, bitunix_position_id)
+                   VALUES ($1,$2,$3,$4,$5,$6,0,0,$7,$8,$9,$10,$11,$12,$13,$14,$15,0,0,$16)
+                   ON CONFLICT (bitunix_position_id) WHERE bitunix_position_id IS NOT NULL DO NOTHING`,
+                  [key.id, key.user_id, sym, direction, entryPrice, exitPrice,
+                   qty, leverage, status, pnlUsdt, grossPnl, tradingFee, fundingFee,
+                   closeAt || new Date(), openAt || new Date(), posId || null]
+                );
+                totalSynced++;
+                bLog.system(`[ACCT-SYNC] Inserted missing trade ${sym} ${direction} entry=${entryPrice} exit=${exitPrice} net=${pnlUsdt}`);
+              } catch (_) { /* duplicate — already exists */ }
+            }
+          } catch (posErr) {
+            bLog.error(`[ACCT-SYNC] position loop error: ${posErr.message}`);
+          }
+        }
+      }
+
+      // Mark stale OPEN trades > 5 min old with no exchange match as GHOST
+      const fiveMinsAgo = new Date(Date.now() - 5 * 60_000);
+      const staleOpens = dbTrades.filter(t =>
+        t.status === 'OPEN' && !matchedDbIds.has(t.id) && new Date(t.created_at) < fiveMinsAgo
+      );
+      for (const t of staleOpens) {
+        try {
+          await db.query(
+            `UPDATE trades SET status = 'GHOST', closed_at = COALESCE(closed_at, NOW()) WHERE id = $1`,
+            [t.id]
+          );
+          totalUpdated++;
+          bLog.system(`[ACCT-SYNC] GHOST: trade#${t.id} ${t.symbol} ${t.direction} — not on exchange`);
+        } catch (_) {}
+      }
+
+      // ── Pass 2: DB-first reconciliation for existing closed trades (fee/PnL fix) ──
+      for (const trade of dbTrades.filter(t => ['WIN','LOSS','CLOSED'].includes(t.status))) {
         const positions    = posCache[trade.symbol] || [];
         const tradeEntry   = parseFloat(trade.entry_price);
         const tradeOpenMs  = trade.created_at ? new Date(trade.created_at).getTime() : 0;
